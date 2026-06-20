@@ -1,0 +1,136 @@
+<!--
+  搜索参数：antidetect / 浏览器 / WAF
+  P3-UX-13：每个字段 label 旁加 ⏪ 按钮（仅在"与原值不同"时显示），点击即把该字段写回原值
+-->
+<div x-data>
+  <h3 style="margin-top: 0;">反爬节奏</h3>
+  <p class="muted">控制请求频率和延迟。值越小越快但越容易被识别。</p>
+
+  <div class="field-row">
+    <div class="field">
+      <label>
+        每秒请求上限 (QPS)
+        <!-- P3-UX-13：内联回滚按钮 -->
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('antidetect.qps')" x-cloak
+                @click="window._cfgPage.cfgRollback('antidetect.qps')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('antidetect.qps'))"
+                type="button">⏪</button>
+      </label>
+      <input type="number" min="1" max="10" x-model.number="$store.cfg.antidetect.qps">
+      <span class="help">推荐 1（最安全）</span>
+    </div>
+    <div class="field">
+      <label>
+        最小延迟（ms）
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('antidetect.min_delay_ms')" x-cloak
+                @click="window._cfgPage.cfgRollback('antidetect.min_delay_ms')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('antidetect.min_delay_ms'))"
+                type="button">⏪</button>
+      </label>
+      <input type="number" min="0" step="50" x-model.number="$store.cfg.antidetect.min_delay_ms">
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>
+        最大延迟（ms）
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('antidetect.max_delay_ms')" x-cloak
+                @click="window._cfgPage.cfgRollback('antidetect.max_delay_ms')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('antidetect.max_delay_ms'))"
+                type="button">⏪</button>
+      </label>
+      <input type="number" min="0" step="100" x-model.number="$store.cfg.antidetect.max_delay_ms">
+    </div>
+    <div class="field">
+      <label>
+        失败暂停阈值
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('antidetect.fail_pause_threshold')" x-cloak
+                @click="window._cfgPage.cfgRollback('antidetect.fail_pause_threshold')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('antidetect.fail_pause_threshold'))"
+                type="button">⏪</button>
+      </label>
+      <input type="number" min="1" x-model.number="$store.cfg.antidetect.fail_pause_threshold">
+      <span class="help">连续失败几次触发熔断</span>
+    </div>
+  </div>
+  <div class="field">
+    <label>
+      失败窗口（秒）
+      <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('antidetect.fail_window_sec')" x-cloak
+              @click="window._cfgPage.cfgRollback('antidetect.fail_window_sec')"
+              :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('antidetect.fail_window_sec'))"
+              type="button">⏪</button>
+    </label>
+    <input type="number" min="60" x-model.number="$store.cfg.antidetect.fail_window_sec">
+  </div>
+
+  <h3>浏览器</h3>
+  <div class="field-row">
+    <div class="field">
+      <label class="toggle">
+        <input type="checkbox" x-model="$store.cfg.browser.headless">
+        无头模式（不显示窗口）
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('browser.headless')" x-cloak
+                @click="window._cfgPage.cfgRollback('browser.headless')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('browser.headless'))"
+                type="button">⏪</button>
+      </label>
+    </div>
+    <div class="field">
+      <label>
+        用户数据目录
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('browser.user_data_dir')" x-cloak
+                @click="window._cfgPage.cfgRollback('browser.user_data_dir')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('browser.user_data_dir'))"
+                type="button">⏪</button>
+      </label>
+      <input type="text" x-model="$store.cfg.browser.user_data_dir">
+    </div>
+  </div>
+  <div class="field-row">
+    <div class="field">
+      <label>
+        视口宽度
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('browser.viewport_width')" x-cloak
+                @click="window._cfgPage.cfgRollback('browser.viewport_width')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('browser.viewport_width'))"
+                type="button">⏪</button>
+      </label>
+      <input type="number" x-model.number="$store.cfg.browser.viewport_width">
+    </div>
+    <div class="field">
+      <label>
+        视口高度
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('browser.viewport_height')" x-cloak
+                @click="window._cfgPage.cfgRollback('browser.viewport_height')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('browser.viewport_height'))"
+                type="button">⏪</button>
+      </label>
+      <input type="number" x-model.number="$store.cfg.browser.viewport_height">
+    </div>
+  </div>
+
+  <h3>WAF 防护</h3>
+  <div class="field-row">
+    <div class="field">
+      <label class="toggle">
+        <input type="checkbox" x-model="$store.cfg.waf.enabled">
+        启用 WAF 检测
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('waf.enabled')" x-cloak
+                @click="window._cfgPage.cfgRollback('waf.enabled')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('waf.enabled'))"
+                type="button">⏪</button>
+      </label>
+    </div>
+    <div class="field">
+      <label>
+        登录态检查间隔（分钟）
+        <button class="cfg-rollback" x-show="window._cfgPage?.cfgChanged('waf.login_check_interval_min')" x-cloak
+                @click="window._cfgPage.cfgRollback('waf.login_check_interval_min')"
+                :title="'⏪ 恢复为: ' + window._cfgPage.fmtCfgVal(window._cfgPage.cfgOriginalOf('waf.login_check_interval_min'))"
+                type="button">⏪</button>
+      </label>
+      <input type="number" min="5" x-model.number="$store.cfg.waf.login_check_interval_min">
+    </div>
+  </div>
+</div>

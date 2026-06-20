@@ -1,0 +1,170 @@
+<!-- 通知通道：3 个渠道 + 密钥管理 -->
+<div x-data="cfgNotifier()">
+  <h3 style="margin-top: 0;">事件订阅规则</h3>
+  <p class="muted">选择哪些事件类型触发通知推送。未勾选的事件不会推送，但仍会记录到事件中心。</p>
+
+  <div class="card mb-16" style="background: var(--bg-2);">
+    <!-- 全选/取消全选 -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border);">
+      <label class="toggle" style="margin: 0;">
+        <input type="checkbox" :checked="allEventsSelected" @change="toggleAllEvents($event)">
+        <strong>全选所有事件</strong>
+      </label>
+      <span class="muted" style="font-size: 11px;"
+            x-text="subscribedEvents.length + ' / ' + allEventTypes.length + ' 已订阅'"></span>
+    </div>
+
+    <!-- 按严重度分组显示 -->
+    <template x-for="group in eventGroups" :key="group.severity">
+      <div style="margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+          <span class="pill" :class="group.severity === 'critical' ? 'err' : group.severity === 'important' ? 'warn' : 'info'"
+                style="font-size: 10px; padding: 1px 6px;"
+                x-text="group.severity === 'critical' ? '🔴 必须' : group.severity === 'important' ? '⚠️ 重要' : 'ℹ️ 参考'"></span>
+          <span class="muted" style="font-size: 11px;" x-text="group.label"></span>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; padding-left: 8px;">
+          <template x-for="evt in group.events" :key="evt.value">
+            <label class="toggle" style="font-size: 12px; margin: 0;">
+              <input type="checkbox" :checked="subscribedEvents.includes(evt.value)"
+                     @change="toggleEvent(evt.value)">
+              <span x-text="evt.label"></span>
+            </label>
+          </template>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <h3>通知通道</h3>
+  <p class="muted">评估通过 / 抢单成功 / 异常时推送通知。至少启用 1 个通道。</p>
+
+  <div class="card mb-16" style="background: var(--bg-2);">
+    <label class="toggle">
+      <input type="checkbox" x-model="$store.cfg.notifier.channels.serverchan">
+      <strong>Server酱</strong>
+      <span class="muted" style="margin-left: 8px;">微信推送</span>
+    </label>
+    <div class="field mt-8" x-show="$store.cfg.notifier.channels.serverchan">
+      <label>SendKey</label>
+      <input type="text" x-model="$store.cfg.serverchan_send_key" placeholder="SCT123456...">
+      <span class="help">申请地址：<a href="https://sct.ftqq.com" target="_blank">sct.ftqq.com</a></span>
+    </div>
+  </div>
+
+  <div class="card mb-16" style="background: var(--bg-2);">
+    <label class="toggle">
+      <input type="checkbox" x-model="$store.cfg.notifier.channels.pushplus">
+      <strong>PushPlus</strong>
+      <span class="muted" style="margin-left: 8px;">微信推送（支持一对多）</span>
+    </label>
+    <div class="field mt-8" x-show="$store.cfg.notifier.channels.pushplus">
+      <label>Token</label>
+      <input type="text" x-model="$store.cfg.pushplus_token" placeholder="abc123...">
+    </div>
+  </div>
+
+  <div class="card mb-16" style="background: var(--bg-2);">
+    <label class="toggle">
+      <input type="checkbox" x-model="$store.cfg.notifier.channels.bark">
+      <strong>Bark</strong>
+      <span class="muted" style="margin-left: 8px;">iOS 推送</span>
+    </label>
+    <div class="field-row mt-8" x-show="$store.cfg.notifier.channels.bark">
+      <div class="field">
+        <label>Server URL</label>
+        <input type="text" x-model="$store.cfg.bark_server" placeholder="https://api.day.app">
+      </div>
+      <div class="field">
+        <label>Device Key</label>
+        <input type="text" x-model="$store.cfg.bark_key" placeholder="bark device key">
+      </div>
+    </div>
+  </div>
+
+  <h3>默认通道顺序</h3>
+  <p class="muted">按顺序尝试推送，失败则降级到下一个。</p>
+  <div class="field">
+    <input type="text" x-model="$store.cfg.notifier.default_channels.join(',')"
+           @input="$store.cfg.notifier.default_channels = $event.target.value.split(',').map(s => s.trim()).filter(Boolean)">
+    <span class="help">例：serverchan, pushplus, bark</span>
+  </div>
+
+  <div class="mt-16">
+    <button class="btn" @click="testPush()">📤 发送测试推送</button>
+  </div>
+</div>
+
+<script>
+function cfgNotifier() {
+  return {
+    // 所有事件类型定义（与 domain/events.py EventType 枚举对齐）
+    allEventTypes: [
+      { value: 'ITEM_DISCOVERED', label: '发现商品', severity: 'info' },
+      { value: 'EVAL_PASSED', label: '评估通过', severity: 'important' },
+      { value: 'EVAL_REJECTED', label: '评估拒绝', severity: 'info' },
+      { value: 'BUY_REQUESTED', label: '请求购买', severity: 'info' },
+      { value: 'BUY_SUCCEEDED', label: '购买成功', severity: 'critical' },
+      { value: 'BUY_FAILED', label: '购买失败', severity: 'important' },
+      { value: 'NOTIFY_SENT', label: '通知已发送', severity: 'info' },
+      { value: 'WAF_TRIGGERED', label: '风控触发', severity: 'critical' },
+      { value: 'LOGIN_EXPIRED', label: '登录过期', severity: 'critical' },
+      { value: 'TASK_STARTED', label: '任务启动', severity: 'info' },
+      { value: 'TASK_PAUSED', label: '任务暂停', severity: 'info' },
+      { value: 'TASK_ERROR', label: '任务异常', severity: 'critical' },
+    ],
+
+    // 按严重度分组
+    get eventGroups() {
+      return [
+        { severity: 'critical', label: '必须送达（免打扰期间仍推送）',
+          events: this.allEventTypes.filter(e => e.severity === 'critical') },
+        { severity: 'important', label: '重要事件（免打扰期间降级为摘要）',
+          events: this.allEventTypes.filter(e => e.severity === 'important') },
+        { severity: 'info', label: '参考事件（免打扰期间静默）',
+          events: this.allEventTypes.filter(e => e.severity === 'info') },
+      ];
+    },
+
+    // 从 Alpine store 读取已订阅事件列表
+    get subscribedEvents() {
+      return Alpine.store('cfg')?.notifier?.subscribed_events || [];
+    },
+    set subscribedEvents(val) {
+      if (Alpine.store('cfg')?.notifier) {
+        Alpine.store('cfg').notifier.subscribed_events = val;
+      }
+    },
+
+    get allEventsSelected() {
+      return this.subscribedEvents.length === this.allEventTypes.length;
+    },
+
+    toggleAllEvents(evt) {
+      if (evt.target.checked) {
+        this.subscribedEvents = this.allEventTypes.map(e => e.value);
+      } else {
+        // 取消全选时保留 critical 级别（安全兜底）
+        this.subscribedEvents = this.allEventTypes
+          .filter(e => e.severity === 'critical')
+          .map(e => e.value);
+      }
+    },
+
+    toggleEvent(eventValue) {
+      const current = [...this.subscribedEvents];
+      const idx = current.indexOf(eventValue);
+      if (idx >= 0) {
+        current.splice(idx, 1);
+      } else {
+        current.push(eventValue);
+      }
+      this.subscribedEvents = current;
+    },
+
+    async testPush() {
+      alert('请先保存配置，然后在终端执行:\npython -c "from xianyu_hunter.modules.notifier.hub import NotifierHub; ..."');
+    },
+  };
+}
+</script>

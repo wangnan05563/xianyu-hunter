@@ -1,0 +1,433 @@
+"""Task Links 领域数据访问 - 任务关联 CRUD
+
+提供：
+- upsert_task_link / list_task_links / count_task_links / delete_task_link
+- lookup_task_links / search_task_links / auto_migrate_task_links
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from typing import Any
+
+from sqlalchemy import select
+# 别名与其他 repo_*.py 统一为 sqlite_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from xianyu_hunter.domain.urls import build_item_url
+from xianyu_hunter.infra.db_models import ItemRow, TaskLinkRow, TaskRow
+from xianyu_hunter.infra.repository_base import RepositoryBase, _escape_like
+
+
+_WORD_RE = re.compile(r"[0-9a-zA-Z]+|[\u4e00-\u9fff]+")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _normalize_for_match(value: str | None) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+
+def _keyword_parts(keyword: str) -> list[str]:
+    return [part for part in re.split(r"[\s,，/、|]+", keyword) if part]
+
+
+def _cjk_chars(value: str) -> list[str]:
+    return _CJK_RE.findall(value)
+
+
+def _token_matches_title(token: str, title: str) -> bool:
+    if not token:
+        return True
+    if token in title:
+        return True
+    words = _WORD_RE.findall(token)
+    if len(words) > 1:
+        return all(word in title for word in words if word)
+    cjk_chars = _cjk_chars(token)
+    if len(cjk_chars) >= 4:
+        return all(ch in title for ch in cjk_chars)
+    return False
+
+
+def task_keyword_matches_title(keyword: str | None, title: str | None) -> bool:
+    """Return True when an auto-linked item title still matches the task keyword."""
+    keyword = _normalize_for_match(keyword)
+    if not keyword:
+        return True
+    title = _normalize_for_match(title)
+    if not title:
+        return False
+    if keyword in title:
+        return True
+
+    tokens = _keyword_parts(keyword)
+    if not tokens:
+        return True
+    matches = sum(1 for token in tokens if _token_matches_title(token, title))
+    if len(tokens) <= 2:
+        return matches == len(tokens)
+    return matches >= len(tokens) - 1
+
+
+def xianyu_item_url(item_id: str) -> str:
+    # 委托给 domain.urls 统一入口，保持本函数签名以兼容现有调用
+    return build_item_url(item_id)
+
+
+class TaskLinksMixin:
+    """Task Links 领域的 Repository 方法"""
+
+    def _task_link_matches_task(self, row: dict, task: dict | None) -> bool:
+        # 按关键词过滤：只展示标题匹配关键词的关联数据，
+        # 避免因闲鱼反爬返回的不相关商品污染关联面板
+        if not task:
+            return True
+        keyword = task.get("keyword")
+        if not keyword:
+            return True
+        display = row.get("display")
+        if isinstance(display, str):
+            try:
+                display = json.loads(display)
+            except (json.JSONDecodeError, TypeError):
+                display = {}
+        # seller 行的 title 是"卖家 xxx"，不匹配关键词；
+        # 但 item_title 字段保存了原商品标题，应该也参与匹配
+        title = (display or {}).get("title") or ""
+        item_title = (display or {}).get("item_title") or ""
+        return (task_keyword_matches_title(keyword, title)
+                or task_keyword_matches_title(keyword, item_title))
+
+    def _build_item_link_rows(
+        self,
+        task_id: str,
+        item_id: str,
+        title: str | None,
+        price: float | None = None,
+        thumb_url: str | None = None,
+        seller_id: str | None = None,
+        region: str | None = None,
+        publish_time: datetime | None = None,
+        want_cnt: int | None = None,
+        view_cnt: int | None = None,
+        is_sold: bool | None = None,
+        seller_nick: str | None = None,
+    ) -> list[tuple[str, str, dict]]:
+        item_url = xianyu_item_url(item_id)
+        rows: list[tuple[str, str, dict]] = [
+            (
+                "item",
+                item_id,
+                {
+                    "title": title,
+                    "price": price,
+                    "thumb_url": thumb_url,
+                    "seller_id": seller_id,
+                    "seller_nick": seller_nick or "",
+                    "url": item_url,
+                    "region": region,
+                    "publish_time": publish_time.isoformat() if publish_time else None,
+                    "want_cnt": want_cnt,
+                    "view_cnt": view_cnt,
+                    "is_sold": bool(is_sold) if is_sold is not None else False,
+                },
+            ),
+        ]
+        if seller_id:
+            rows.append(
+                (
+                    "seller",
+                    seller_id,
+                    {
+                        "title": seller_nick or f"卖家 {seller_id}",
+                        "nick": seller_nick or seller_id,
+                        "seller_nick": seller_nick or "",
+                        "item_title": title,
+                        "item_id": item_id,
+                        "region": region,
+                    },
+                )
+            )
+        return rows
+
+    def upsert_item_task_links(
+        self,
+        task_id: str,
+        item_id: str,
+        title: str | None,
+        price: float | None = None,
+        thumb_url: str | None = None,
+        seller_id: str | None = None,
+        source: str = "auto",
+        region: str | None = None,
+        publish_time: datetime | None = None,
+        want_cnt: int | None = None,
+        view_cnt: int | None = None,
+        is_sold: bool | None = None,
+        seller_nick: str | None = None,
+    ) -> int:
+        written = 0
+        for link_type, link_key, display in self._build_item_link_rows(
+            task_id=task_id,
+            item_id=item_id,
+            title=title,
+            price=price,
+            thumb_url=thumb_url,
+            seller_id=seller_id,
+            region=region,
+            publish_time=publish_time,
+            want_cnt=want_cnt,
+            view_cnt=view_cnt,
+            is_sold=is_sold,
+            seller_nick=seller_nick,
+        ):
+            self.upsert_task_link(
+                task_id=task_id,
+                link_type=link_type,
+                link_key=link_key,
+                display=display,
+                source=source,
+            )
+            written += 1
+        return written
+
+    def upsert_task_link(
+        self,
+        task_id: str,
+        link_type: str,
+        link_key: str,
+        display: dict | None = None,
+        source: str = "auto",
+        note: str | None = None,
+    ) -> int | None:
+        """插入或忽略重复，返回行 id。已存在则仅更新 display / note。"""
+        with self.engine.begin() as conn:
+            stmt = sqlite_insert(TaskLinkRow).values(
+                task_id=task_id,
+                link_type=link_type,
+                link_key=link_key,
+                display=json.dumps(display, ensure_ascii=False) if display else None,
+                source=source,
+                note=note,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["task_id", "link_type", "link_key"],
+                set_={"display": stmt.excluded["display"], "note": stmt.excluded["note"]},
+            )
+            result = conn.execute(stmt)
+            row = conn.execute(
+                select(TaskLinkRow.id)
+                .where(TaskLinkRow.task_id == task_id)
+                .where(TaskLinkRow.link_type == link_type)
+                .where(TaskLinkRow.link_key == link_key)
+            ).first()
+            return int(row[0]) if row else None
+
+    def _filter_task_links(self, rows: list[dict], task: dict | None) -> list[dict]:
+        """统一过滤逻辑：关键词 + 价格 + 发布天数
+
+        list_task_links 和 count_task_links 共用此方法，确保两者结果一致。
+        """
+        # 关键词过滤
+        rows = [r for r in rows if self._task_link_matches_task(r, task)]
+        # 价格过滤
+        min_price = (task or {}).get("min_price")
+        max_price = (task or {}).get("max_price")
+        max_publish_days = (task or {}).get("max_publish_days")
+        if min_price is not None or max_price is not None or max_publish_days is not None:
+            filtered = []
+            # 与 db_models._utcnow 保持一致：publish_time 存储为 UTC，比较时也用 UTC
+            now = datetime.now(timezone.utc)
+            for r in rows:
+                display = r.get("display")
+                if isinstance(display, str):
+                    try:
+                        display = json.loads(display)
+                    except (json.JSONDecodeError, TypeError):
+                        display = {}
+                # 价格过滤（price 为空时保留，兼容 url/seller 类型）
+                if min_price is not None or max_price is not None:
+                    price_val = (display or {}).get("price") if isinstance(display, dict) else None
+                    if price_val is not None:
+                        try:
+                            p = float(price_val)
+                            if min_price is not None and p < min_price:
+                                continue
+                            if max_price is not None and p > max_price:
+                                continue
+                        except (ValueError, TypeError):
+                            pass
+                # 发布天数过滤（publish_time 为空时保留，兼容旧数据）
+                if max_publish_days is not None and isinstance(display, dict):
+                    pub = display.get("publish_time")
+                    if pub:
+                        try:
+                            pub_dt = datetime.fromisoformat(str(pub).replace("Z", "+00:00"))
+                            if (now - pub_dt).days > max_publish_days:
+                                continue
+                        except (ValueError, TypeError):
+                            pass
+                filtered.append(r)
+            rows = filtered
+        return rows
+
+    def list_task_links(
+        self,
+        task_id: str,
+        link_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        with self.engine.connect() as conn:
+            task_row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
+            task = self._row_to_dict(task_row) if task_row else None
+            stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
+            if link_type:
+                stmt = stmt.where(TaskLinkRow.link_type == link_type)
+            stmt = stmt.order_by(TaskLinkRow.created_at.desc())
+            rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
+            rows = self._filter_task_links(rows, task)
+            return rows[offset:offset + limit]
+
+    def count_task_links(
+        self,
+        task_id: str,
+        link_type: str | None = None,
+    ) -> dict[str, int]:
+        """按类型返回关联计数（与 list_task_links 的过滤逻辑保持一致）"""
+        with self.engine.connect() as conn:
+            task_row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
+            task = self._row_to_dict(task_row) if task_row else None
+            stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
+            if link_type:
+                stmt = stmt.where(TaskLinkRow.link_type == link_type)
+            rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
+            rows = self._filter_task_links(rows, task)
+            result = {"item": 0, "seller": 0, "url": 0, "total": 0}
+            for row in rows:
+                lt = row.get("link_type")
+                if lt in result:
+                    result[lt] += 1
+                    result["total"] += 1
+            return result
+
+    def delete_task_link(self, link_id: int) -> bool:
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                TaskLinkRow.__table__.delete().where(TaskLinkRow.id == link_id)
+            )
+            return (result.rowcount or 0) > 0
+
+    def delete_task_links_by_task(self, task_id: str, source: str | None = None) -> int:
+        """按任务删除关联数据；source 可选过滤（'auto' 只删自动采集的）"""
+        with self.engine.begin() as conn:
+            stmt = TaskLinkRow.__table__.delete().where(TaskLinkRow.task_id == task_id)
+            if source:
+                stmt = stmt.where(TaskLinkRow.source == source)
+            result = conn.execute(stmt)
+            return result.rowcount or 0
+
+    def lookup_task_links(
+        self,
+        link_type: str,
+        link_key: str,
+    ) -> list[dict]:
+        """反查：给定 (type, key)，返回所有关联该 key 的任务链接行"""
+        with self.engine.connect() as conn:
+            stmt = (
+                select(TaskLinkRow)
+                .where(TaskLinkRow.link_type == link_type)
+                .where(TaskLinkRow.link_key == link_key)
+            )
+            return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
+
+    def search_task_links(
+        self,
+        q: str,
+        link_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """跨任务模糊搜索 link_key / display"""
+        like = f"%{_escape_like(q)}%"
+        with self.engine.connect() as conn:
+            stmt = select(TaskLinkRow)
+            if link_type:
+                stmt = stmt.where(TaskLinkRow.link_type == link_type)
+            stmt = stmt.where(
+                (TaskLinkRow.link_key.like(like, escape="/")) | (TaskLinkRow.display.like(like, escape="/"))
+            )
+            stmt = stmt.order_by(TaskLinkRow.created_at.desc()).limit(limit)
+            return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
+
+    def auto_migrate_task_links(self) -> int:
+        """一次性把 items 表里已有的隐式关联搬到 task_links"""
+        inserted = 0
+        with self.engine.begin() as conn:
+            def insert_link(task_id: str, link_type: str, link_key: str, display: dict) -> None:
+                nonlocal inserted
+                stmt = sqlite_insert(TaskLinkRow).values(
+                    task_id=task_id,
+                    link_type=link_type,
+                    link_key=link_key,
+                    display=json.dumps(display, ensure_ascii=False),
+                    source="auto",
+                )
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["task_id", "link_type", "link_key"]
+                )
+                result = conn.execute(stmt)
+                inserted += result.rowcount or 0
+
+            rows = conn.execute(
+                select(
+                    ItemRow.id,
+                    ItemRow.task_id,
+                    ItemRow.title,
+                    ItemRow.price,
+                    ItemRow.thumb_url,
+                    ItemRow.seller_id,
+                    TaskRow.keyword,
+                )
+                .join(TaskRow, TaskRow.id == ItemRow.task_id)
+                .where(ItemRow.task_id.is_not(None))
+            ).all()
+            for item_id, tid, title, price, thumb, seller_id, keyword in rows:
+                # 不按关键词过滤：搜索结果可能因反爬返回不相关商品，
+                # 但前端需要展示所有采集到的数据
+                for link_type, link_key, display in self._build_item_link_rows(
+                    task_id=tid,
+                    item_id=item_id,
+                    title=title,
+                    price=price,
+                    thumb_url=thumb,
+                    seller_id=seller_id,
+                ):
+                    insert_link(tid, link_type, link_key, display)
+
+            legacy_rows = conn.execute(
+                select(TaskLinkRow.task_id, TaskLinkRow.link_key, TaskLinkRow.display, TaskRow.keyword)
+                .join(TaskRow, TaskRow.id == TaskLinkRow.task_id)
+                .where(TaskLinkRow.link_type == "item")
+                .where(TaskLinkRow.source == "auto")
+            ).all()
+            for tid, item_id, raw_display, keyword in legacy_rows:
+                try:
+                    display = json.loads(raw_display) if isinstance(raw_display, str) and raw_display else {}
+                except json.JSONDecodeError:
+                    display = {}
+                title = display.get("title") or display.get("item_title")
+                if not task_keyword_matches_title(keyword, title):
+                    continue
+                for link_type, link_key, derived_display in self._build_item_link_rows(
+                    task_id=tid,
+                    item_id=item_id,
+                    title=title,
+                    price=display.get("price"),
+                    thumb_url=display.get("thumb_url"),
+                    seller_id=display.get("seller_id"),
+                ):
+                    if link_type == "item":
+                        continue
+                    insert_link(tid, link_type, link_key, derived_display)
+        return inserted

@@ -1,0 +1,1064 @@
+{% extends "base.html" %}
+{% block content %}
+<div x-data="evaluationsList()" x-init="init()">
+  <div class="page-header">
+    <div>
+      <h1>评估明细</h1>
+      <div class="subtitle">全量评估记录 · 按评分排序</div>
+    </div>
+    <div>
+      <button class="btn" @click="refresh()">↻ 刷新</button>
+      <button class="btn btn-primary" style="margin-left: 8px;"
+              :disabled="batchEvalRunning"
+              @click="batchEval()">
+        <span x-show="!batchEvalRunning">AI 批量评估</span>
+        <span x-show="batchEvalRunning" x-text="'评估中 ' + batchEvalProgress + '/' + batchEvalTotal"></span>
+      </button>
+    </div>
+  </div>
+
+    <!-- P3-UX-09：评估分 × 价格 二维分布热力图
+    - X 轴 = 价格（对数刻度 10 桶，闲鱼价格跨 1~10000 元，线性桶会全集中在低价）
+    - Y 轴 = 评估分（10 桶，每桶 10 分）
+    - 颜色 = 桶内总件数（深浅）+ 三色块（通过/可抢/驳回）显示
+    - 范围按钮 24h/3d/7d/30d
+  -->
+  <div class="card" x-show="items.length > 0" x-cloak>
+    <div class="card-h" style="display: flex; align-items: center; gap: 12px;">
+      <span>评估分布</span>
+      <span class="muted" style="font-size: 11px; margin-left: auto;" x-text="'共 ' + (dist?.total ?? 0) + ' 条' + (dist && dist.price_range && dist.price_range[1] > 0 ? ' · 价格区间 ¥' + dist.price_range[0] + ' ~ ¥' + dist.price_range[1] : '')"></span>
+      <div class="range-toggle" style="display: inline-flex; gap: 4px;">
+        <button class="btn btn-xs" :class="distRange === 24 ? 'btn-primary' : 'btn-ghost'" @click="setDistRange(24)">24h</button>
+        <button class="btn btn-xs" :class="distRange === 72 ? 'btn-primary' : 'btn-ghost'" @click="setDistRange(72)">3d</button>
+        <button class="btn btn-xs" :class="distRange === 168 ? 'btn-primary' : 'btn-ghost'" @click="setDistRange(168)">7d</button>
+        <button class="btn btn-xs" :class="distRange === 720 ? 'btn-primary' : 'btn-ghost'" @click="setDistRange(720)">30d</button>
+      </div>
+    </div>
+    <div class="dist-layout" style="display: grid; grid-template-columns: 2fr 1fr; gap: 16px;">
+      <!-- 左：二维热力图（无价格数据时显示分数分布替代） -->
+      <div>
+        <template x-if="dist && (!dist.buckets || dist.buckets.length === 0)">
+          <div>
+            <div class="muted" style="text-align: center; padding: 40px 0; font-size: 12px;">
+              热力图需要商品价格数据，当前评估记录未关联到价格信息<br>
+              <span x-show="dist.insufficient_count > 0" style="color: var(--warn);">
+                其中 <span x-text="dist.insufficient_count"></span> 条评估因卖家数据不足无法计算评分
+              </span>
+            </div>
+            <!-- 无价格时显示分数分布直方图替代 -->
+            <div x-show="dist && dist.distribution && dist.distribution.length > 0" style="margin-top: 16px;">
+              <div class="muted" style="font-size: 11px; margin-bottom: 8px; text-align: center;">分数分布</div>
+              <div style="display: flex; align-items: flex-end; gap: 4px; height: 120px; padding: 0 20px;">
+                <template x-for="(bin, i) in (dist?.distribution || [])" :key="'dist-bar-' + i">
+                  <div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;">
+                    <span class="muted" style="font-size: 10px;" x-text="bin.count"></span>
+                    <div :style="'width: 100%; height: ' + (dist.total > 0 ? Math.max(2, bin.count / Math.max(1, ...((dist?.distribution || []).map(b => b.count))) * 100) : 0) + '%; border-radius: 3px 3px 0 0; background: ' + ['var(--err)', '#F97316', 'var(--warn)', '#86EFAC', 'var(--ok)'][i] + '; opacity: 0.8;'"></div>
+                    <span class="muted" style="font-size: 9px;" x-text="bin.range"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+        <template x-if="!dist || (dist.buckets && dist.buckets.length > 0)">
+          <div>
+            <div class="muted" style="font-size: 11px; margin-bottom: 4px; text-align: center;">价格（对数）→</div>
+            <svg class="heatmap" :viewBox="`0 0 ${heatW} ${heatH}`" preserveAspectRatio="none" x-ref="heatmap"></svg>
+            <!-- X 轴价格标签 -->
+            <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--text-3); margin-top: 2px;">
+              <span x-text="'¥' + (dist?.price_range?.[0] ?? 0)"></span>
+              <span x-text="'¥' + Math.round((dist?.price_range?.[0] ?? 0) * Math.pow((dist?.price_range?.[1] ?? 1) / Math.max(1, dist?.price_range?.[0] ?? 1), 0.5))"></span>
+              <span x-text="'¥' + (dist?.price_range?.[1] ?? 0)"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+      <!-- 右：结果饼图柱状（3 段） -->
+      <div>
+        <div class="muted" style="font-size: 11px; margin-bottom: 4px;">结果分布</div>
+        <div class="result-bar-wrap" style="display: flex; flex-direction: column; gap: 8px;">
+          <div>
+            <div class="result-row"><span class="result-pill auto" aria-label="结果: 可抢"><span class="status-icon" aria-hidden="true">✓</span>可抢</span><span class="result-count" x-text="(dist?.marginals?.result?.auto ?? 0) + ' 条'"></span></div>
+            <div class="result-track">
+              <div class="result-fill auto" :style="'width: ' + resultPct('auto') + '%'" :title="'可抢: ' + (dist?.marginals?.result?.auto ?? 0)"></div>
+            </div>
+          </div>
+          <div>
+            <div class="result-row"><span class="result-pill pass" aria-label="结果: 通过"><span class="status-icon" aria-hidden="true">⚠</span>通过</span><span class="result-count" x-text="(dist?.marginals?.result?.pass ?? 0) + ' 条'"></span></div>
+            <div class="result-track">
+              <div class="result-fill pass" :style="'width: ' + resultPct('pass') + '%'" :title="'通过: ' + (dist?.marginals?.result?.pass ?? 0)"></div>
+            </div>
+          </div>
+          <div>
+            <div class="result-row"><span class="result-pill fail" aria-label="结果: 驳回"><span class="status-icon" aria-hidden="true">✕</span>驳回</span><span class="result-count" x-text="(dist?.marginals?.result?.fail ?? 0) + ' 条'"></span></div>
+            <div class="result-track">
+              <div class="result-fill fail" :style="'width: ' + resultPct('fail') + '%'" :title="'驳回: ' + (dist?.marginals?.result?.fail ?? 0)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- F-15：评估分布折叠面板 + 阈值建议 -->
+  <div class="card eval-dist-panel" x-show="items.length > 0" x-cloak>
+    <div class="card-h" style="cursor: pointer; user-select: none;" @click="toggleDistPanel()">
+      <span>分数分布</span>
+      <span class="muted" style="font-size: 11px;" x-text="'5 档分布 · 共 ' + (dist?.total ?? 0) + ' 条'"></span>
+      <!-- 折叠指示器 -->
+      <span style="margin-left: auto; font-size: 12px; color: var(--text-2);"
+            x-text="distPanelOpen ? '收起 ▴' : '展开 ▾'"></span>
+    </div>
+    <!-- 折叠内容：展开时才渲染 -->
+    <div x-show="distPanelOpen" x-transition>
+      <div class="dist-layout" style="display: grid; grid-template-columns: 2fr 1fr; gap: 16px;">
+        <!-- 左：SVG 5 档直方图 -->
+        <div>
+          <svg class="eval-dist-svg" :viewBox="'0 0 ' + distSvgW + ' ' + distSvgH" preserveAspectRatio="xMidYMid meet"
+               x-ref="distSvg"></svg>
+        </div>
+        <!-- 右：阈值通过率计算器 + F-15 阈值建议 -->
+        <div>
+          <div class="muted" style="font-size: 11px; margin-bottom: 8px;">阈值通过率</div>
+          <div class="threshold-calc">
+            <div style="text-align: center;">
+              <span class="threshold-num" x-text="thresholdScore"></span>
+              <span class="threshold-unit">分</span>
+            </div>
+            <div style="text-align: center; margin-top: 8px;">
+              <span class="pass-rate-num"
+                    :class="passRateAtThreshold(thresholdScore) >= 60 ? 'ok-text' : (passRateAtThreshold(thresholdScore) >= 30 ? 'warn-text' : 'err-text')"
+                    x-text="passRateAtThreshold(thresholdScore)"></span>
+              <span class="pass-rate-unit">% 通过</span>
+            </div>
+            <div style="width: 100%; margin-top: 12px;">
+              <input type="range" min="0" max="100" step="1" x-model="thresholdScore" class="threshold-slider eval-dist-slider">
+              <div class="threshold-range-labels">
+                <span>0</span>
+                <span>50</span>
+                <span>100</span>
+              </div>
+            </div>
+          </div>
+          <!-- F-15：阈值建议区域 -->
+          <div x-show="thresholdSuggestion" x-cloak style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border);">
+            <div class="muted" style="font-size: 11px; margin-bottom: 8px;">系统建议阈值</div>
+            <div style="text-align: center;">
+              <span style="font-size: 24px; font-weight: 700; color: var(--ok);" x-text="thresholdSuggestion?.suggested_threshold ?? '—'"></span>
+              <span style="font-size: 12px; color: var(--text-3);">分</span>
+            </div>
+            <div style="margin-top: 8px;">
+              <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3); margin-bottom: 4px;">
+                <span>目标通过率</span>
+                <span x-text="Math.round((targetPassRate ?? 0.7) * 100) + '%'"></span>
+              </div>
+              <input type="range" min="10" max="95" step="5" x-model.number="targetPassRate" class="threshold-slider eval-dist-slider"
+                     style="width: 100%;" @input="loadThresholdSuggestion()">
+            </div>
+            <div style="margin-top: 8px; font-size: 11px; color: var(--text-3);" x-text="thresholdSuggestion?.analysis ?? ''"></div>
+            <div style="margin-top: 4px; font-size: 11px;">
+              <span style="color: var(--text-3);">当前通过率: </span>
+              <span :class="(thresholdSuggestion?.current_pass_rate ?? 0) >= 0.6 ? 'ok-text' : 'warn-text'"
+                    x-text="Math.round((thresholdSuggestion?.current_pass_rate ?? 0) * 100) + '%'"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <!-- 查询条件 -->
+    <div class="filter-bar" style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border);">
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <label class="muted" style="font-size: 11px;">商品 ID</label>
+        <input type="text" x-model="filterItemId" @keyup.enter="applyFilter()" placeholder="模糊匹配" class="filter-input" style="width: 160px;">
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <label class="muted" style="font-size: 11px;">任务</label>
+        <input type="text" x-model="filterTaskId" @keyup.enter="applyFilter()" placeholder="模糊匹配" class="filter-input" style="width: 160px;">
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <label class="muted" style="font-size: 11px;">评分范围</label>
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <input type="number" x-model.number="filterMinScore" min="0" max="100" placeholder="最低" class="filter-input" style="width: 70px;">
+          <span class="muted">~</span>
+          <input type="number" x-model.number="filterMaxScore" min="0" max="100" placeholder="最高" class="filter-input" style="width: 70px;">
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <label class="muted" style="font-size: 11px;">时间范围</label>
+        <div style="display: flex; align-items: center; gap: 4px;">
+          <input type="date" x-model="filterStartDate" class="filter-input" style="width: 140px;">
+          <span class="muted">~</span>
+          <input type="date" x-model="filterEndDate" class="filter-input" style="width: 140px;">
+        </div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button class="btn btn-primary btn-sm" @click="applyFilter()">查询</button>
+        <button class="btn btn-sm" @click="resetFilter()">重置</button>
+      </div>
+      <span class="muted" style="font-size: 12px; margin-left: auto;" x-text="'共 ' + filterTotal + ' 条'"></span>
+    </div>
+
+    <!-- 加载态 -->
+    <div class="eval-loading" x-show="loading" x-cloak>
+      <span class="spinner-sm"></span> 加载中...
+    </div>
+
+    <table class="data" x-show="!loading">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>商品</th>
+          <th>价格</th>
+          <th>卖家</th>
+          <th>评分</th>
+          <th>结果</th>
+          <th>AI 成色</th>
+          <th>详情</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="(e, idx) in sortedItems()" :key="e.id ?? ('eval-' + idx)">
+          <!-- 主行 -->
+          <tr>
+            <td class="muted mono" x-text="(e.created_at || '').slice(0, 19)"></td>
+            <td>
+              <div style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                   :title="e.payload?.title || e.payload?.item_id || '—'"
+                   x-text="e.payload?.title || e.payload?.item_id || '—'"></div>
+            </td>
+            <td class="num" x-text="e.payload?.price ? ('¥' + e.payload.price) : '—'"></td>
+            <td class="mono" style="max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                :title="e.payload?.seller_nick || e.payload?.seller_id || '—'"
+                x-text="e.payload?.seller_nick || e.payload?.seller_id || '—'"></td>
+            <td class="num" x-text="isDataInsufficient(e) ? '数据不足' : (e.payload?.score ?? '—')"></td>
+            <td>
+              <!-- 数据充足时显示评分 pill，数据不足时显示警告 -->
+              <template x-if="!isDataInsufficient(e)">
+                <span class="pill" :class="scoreClass(e.payload?.score ?? 0)" :aria-label="'风险: ' + scoreLabel(e.payload?.score ?? 0)">
+                  <span class="status-icon" aria-hidden="true" x-text="scoreIcon(e.payload?.score ?? 0)"></span>
+                  <span x-text="scoreLabel(e.payload?.score ?? 0)"></span>
+                </span>
+              </template>
+              <template x-if="isDataInsufficient(e)">
+                <span class="pill pending" title="卖家数据采集失败，无法准确评估">
+                  <span class="status-icon" aria-hidden="true">⚠</span>
+                  <span>数据不足</span>
+                </span>
+              </template>
+            </td>
+            <td>
+              <!-- F-06 AI 成色评估：仅在评分 >= 60 且数据充足时显示评估按钮 -->
+              <template x-if="!isDataInsufficient(e) && (e.payload?.score ?? 0) >= 60">
+                <div class="ai-eval-cell">
+                  <!-- 未评估：显示按钮 -->
+                  <button x-show="!e.ai_eval && !e.ai_eval_loading"
+                          class="btn btn-sm ai-eval-btn"
+                          @click="evalCondition(e)">AI 评估</button>
+                  <!-- 加载中 -->
+                  <span x-show="e.ai_eval_loading" class="ai-eval-loading">
+                    <span class="spinner-sm"></span> 分析中...
+                  </span>
+                  <!-- 评估结果 -->
+                  <div x-show="e.ai_eval" class="ai-eval-result">
+                    <div class="ai-verdict" :class="e.ai_eval?.verdict">
+                      <span x-text="e.ai_eval?.verdict === 'recommend' ? '✓ 推荐' : '✗ 谨慎'"></span>
+                      <span class="ai-score" x-text="'成色 ' + (e.ai_eval?.condition_score ?? '-') + '/10'"></span>
+                    </div>
+                    <p class="ai-reason" x-text="e.ai_eval?.reason"></p>
+                    <template x-if="e.ai_eval?.risk_signals?.length">
+                      <div class="ai-risks">
+                        <template x-for="sig in (e.ai_eval?.risk_signals || [])" :key="sig">
+                          <span class="ai-risk-tag" x-text="sig"></span>
+                        </template>
+                      </div>
+                    </template>
+                    <details x-show="e.ai_eval?.detail" class="ai-detail-wrap">
+                      <summary>详细分析</summary>
+                      <p class="ai-detail" x-text="e.ai_eval?.detail"></p>
+                    </details>
+                    <span x-show="e.ai_eval?.source === 'rule'" class="ai-source-tag">模拟评估</span>
+                    <span x-show="e.ai_eval?.cached" class="ai-source-tag cached">缓存</span>
+                  </div>
+                </div>
+              </template>
+              <span x-show="(e.payload?.score ?? 0) < 60" class="muted" style="font-size: 11px;">—</span>
+            </td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <a class="mono" x-show="e.payload?.item_id"
+                   :href="'https://www.goofish.com/item?id=' + (e.payload?.item_id || '')"
+                   target="_blank">↗ 闲鱼</a>
+                <!-- F-12：卖家趋势折叠按钮 -->
+                <button x-show="e.payload?.item_id || e.item_id"
+                        class="btn btn-xs btn-ghost seller-trend-toggle"
+                        :class="{ 'is-open': e._trendOpen }"
+                        @click="toggleSellerTrend(e)">
+                  <span x-show="!e._trendOpen">趋势 ▾</span>
+                  <span x-show="e._trendOpen">收起 ▴</span>
+                </button>
+                <span class="muted" x-show="e.payload?.reason" x-text="e.payload?.reason" style="font-size: 11px; display: block;"></span>
+              </div>
+            </td>
+          </tr>
+          <!-- F-12：卖家价格趋势折叠面板行 -->
+          <tr x-show="e._trendOpen" x-cloak class="seller-trend-row">
+            <td colspan="8">
+              <div class="seller-trend-panel">
+                <!-- 加载中 -->
+                <div x-show="e._trendLoading" class="loading" style="padding: 16px;">
+                  <span class="spinner-sm"></span> 加载卖家价格趋势...
+                </div>
+                <!-- 加载失败 -->
+                <div x-show="e._trendError" class="err-box" style="margin: 0;" x-text="e._trendError"></div>
+                <!-- 趋势数据 -->
+                <template x-if="e._trendData">
+                  <div>
+                    <div class="seller-trend-header">
+                      <span class="muted" style="font-size: 11px;"
+                            x-text="'卖家 ' + (e._trendData?.seller_id ?? '—') + ' · ' + (e._trendData?.price_stats?.count ?? 0) + ' 件商品'"></span>
+                      <!-- 涨价趋势警告标签 -->
+                      <span x-show="e._trendData?.price_stats?.trend_direction === 'up'"
+                            class="pill failed seller-trend-warn" aria-label="趋势: 涨价"><span class="status-icon" aria-hidden="true">↑</span>涨价趋势</span>
+                      <span x-show="e._trendData?.price_stats?.trend_direction === 'down'"
+                            class="pill succeeded" aria-label="趋势: 降价"><span class="status-icon" aria-hidden="true">↓</span>降价趋势</span>
+                      <span x-show="e._trendData?.price_stats?.trend_direction === 'stable'"
+                            class="pill pending" aria-label="趋势: 稳定"><span class="status-icon" aria-hidden="true">→</span>价格稳定</span>
+                    </div>
+                    <!-- 统计信息 -->
+                    <div class="seller-trend-stats">
+                      <div class="seller-trend-stat">
+                        <span class="seller-trend-stat-label">最低价</span>
+                        <span class="seller-trend-stat-value" x-text="'¥' + (e._trendData?.price_stats?.min ?? 0)"></span>
+                      </div>
+                      <div class="seller-trend-stat">
+                        <span class="seller-trend-stat-label">最高价</span>
+                        <span class="seller-trend-stat-value" x-text="'¥' + (e._trendData?.price_stats?.max ?? 0)"></span>
+                      </div>
+                      <div class="seller-trend-stat">
+                        <span class="seller-trend-stat-label">均价</span>
+                        <span class="seller-trend-stat-value" x-text="'¥' + (e._trendData?.price_stats?.avg ?? 0)"></span>
+                      </div>
+                      <div class="seller-trend-stat">
+                        <span class="seller-trend-stat-label">商品数</span>
+                        <span class="seller-trend-stat-value" x-text="e._trendData?.price_stats?.count ?? 0"></span>
+                      </div>
+                    </div>
+                    <!-- SVG sparkline 折线图 -->
+                    <div x-show="e._trendData?.items?.length > 0" class="seller-trend-chart-wrap">
+                      <svg class="seller-trend-spark"
+                           :viewBox="'0 0 ' + sparkW + ' ' + sparkH"
+                           preserveAspectRatio="xMidYMid meet"
+                           :id="'spark-' + (e.payload?.item_id || e.item_id || '')"></svg>
+                    </div>
+                    <!-- 无数据提示 -->
+                    <div x-show="e._trendData && (!e._trendData.items || e._trendData.items.length === 0)"
+                         class="muted" style="font-size: 12px; padding: 8px 0;">
+                      该卖家暂无价格数据
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+
+    <!-- 分页控件：数据不足一页时自动隐藏 -->
+    <div class="eval-pagination" x-show="!loading && filterTotal > pageSize" x-cloak>
+      <div class="eval-pag-info">
+        共 <span x-text="filterTotal"></span> 条 ·
+        第 <span x-text="pageNum"></span> / <span x-text="totalPages"></span> 页 ·
+        每页
+        <select x-model.number="pageSize" @change="onPageSizeChange()" class="filter-sel eval-pag-sel">
+          <option value="5">5</option>
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="50">50</option>
+        </select>
+        条
+      </div>
+      <div class="eval-pag-nav">
+        <button class="btn btn-sm" @click="gotoPage(1)" :disabled="pageNum === 1" title="首页">« 首页</button>
+        <button class="btn btn-sm" @click="gotoPage(pageNum - 1)" :disabled="pageNum === 1" title="上一页">‹ 上一页</button>
+        <!-- 页码按钮：显示当前页前后各1页，首尾页始终显示，中间用省略号 -->
+        <template x-for="p in pageNumbers()" :key="'pag-' + p">
+          <span class="eval-pag-cell" :class="p === '...' ? 'eval-pag-ellipsis' : ''">
+            <button x-show="p !== '...'" class="btn btn-sm eval-pag-num" :class="p === pageNum ? 'btn-primary' : ''"
+                    @click="gotoPage(p)" :disabled="p === pageNum" x-text="p"></button>
+            <span x-show="p === '...'">…</span>
+          </span>
+        </template>
+        <button class="btn btn-sm" @click="gotoPage(pageNum + 1)" :disabled="pageNum >= totalPages" title="下一页">下一页 ›</button>
+        <button class="btn btn-sm" @click="gotoPage(totalPages)" :disabled="pageNum >= totalPages" title="末页">末页 »</button>
+      </div>
+      <div class="eval-pag-jump">
+        跳至
+        <input type="number" x-model="pageInput" @keyup.enter="jumpToPage()"
+               min="1" :max="totalPages" class="filter-input eval-pag-input" placeholder="页码">
+        页
+        <button class="btn btn-sm" @click="jumpToPage()">跳转</button>
+      </div>
+    </div>
+
+    <div class="empty" x-show="!loading && items.length === 0">
+      <div class="ico">▱</div>
+      <h3>暂无评估</h3>
+      <p class="muted">任务运行后会逐步出现</p>
+    </div>
+  </div>
+</div>
+
+<script>
+function evaluationsList() {
+  return {
+    items: [],
+    // 查询条件状态
+    filterItemId: '',
+    filterTaskId: '',
+    filterMinScore: null,
+    filterMaxScore: null,
+    filterStartDate: '',
+    filterEndDate: '',
+    filterTotal: 0,
+    // 分页状态
+    pageNum: 1,
+    pageSize: 20,
+    pageInput: '',
+    loading: false,
+    // P3-UX-09：分布图状态
+    dist: null,             // /api/evaluations/distribution 响应
+    distRange: 168,         // 默认 7 天
+    heatW: 480,             // 热力图 SVG 宽
+    heatH: 240,             // 热力图 SVG 高（10 桶 × 24px = 240）
+    thresholdScore: 60,     // O-05：阈值通过率计算器默认阈值
+    // F-06：批量评估状态
+    batchEvalRunning: false,
+    batchEvalProgress: 0,
+    batchEvalTotal: 0,
+    // F-12：sparkline 尺寸
+    sparkW: 480,
+    sparkH: 120,
+    // F-15：阈值建议
+    thresholdSuggestion: null,  // /api/evaluations/threshold-suggestion 响应
+    targetPassRate: 0.7,        // 目标通过率（滑块绑定）
+    // F-15：折叠面板状态
+    distPanelOpen: false,
+    // F-15：SVG 直方图尺寸
+    distSvgW: 480,
+    distSvgH: 200,
+    SVG_NS: 'http://www.w3.org/2000/svg',
+    async init() {
+      await this.refresh();
+      await this.loadDistribution();
+      await this.loadThresholdSuggestion();
+      // F-15：阈值变化时重新渲染 SVG 直方图
+      this.$watch('thresholdScore', () => {
+        if (this.distPanelOpen && this.dist) {
+          this.$nextTick(() => this.renderDistHistogram());
+        }
+      });
+    },
+    // 构建查询参数字符串（供 refresh 和 distribution 共用）
+    _buildFilterParams() {
+      const params = new URLSearchParams();
+      if (this.filterItemId.trim()) params.set('item_id', this.filterItemId.trim());
+      if (this.filterTaskId.trim()) params.set('task_id', this.filterTaskId.trim());
+      if (this.filterMinScore != null && this.filterMinScore !== '') params.set('min_score', String(this.filterMinScore));
+      if (this.filterMaxScore != null && this.filterMaxScore !== '') params.set('max_score', String(this.filterMaxScore));
+      if (this.filterStartDate) params.set('start_time', this.filterStartDate);
+      if (this.filterEndDate) params.set('end_time', this.filterEndDate);
+      return params;
+    },
+    async refresh() {
+      this.loading = true;
+      try {
+        const params = this._buildFilterParams();
+        params.set('page_num', String(this.pageNum));
+        params.set('page_size', String(this.pageSize));
+        const r = await fetch('/api/evaluations?' + params.toString(), { credentials: 'include' }).then(r => r.json());
+        this.items = r.items || [];
+        this.filterTotal = r.total || r.count || this.items.length;
+        // 筛选后总页数减少时，修正当前页码避免空页
+        const tp = this.totalPages;
+        if (this.pageNum > tp && tp > 0) {
+          this.pageNum = tp;
+          return this.refresh();
+        }
+      } finally {
+        this.loading = false;
+      }
+    },
+    get totalPages() {
+      return Math.max(1, Math.ceil(this.filterTotal / this.pageSize));
+    },
+    gotoPage(p) {
+      if (p < 1 || p > this.totalPages || p === this.pageNum) return;
+      this.pageNum = p;
+      this.refresh();
+    },
+    onPageSizeChange() {
+      this.pageNum = 1;
+      this.refresh();
+    },
+    jumpToPage() {
+      const p = parseInt(this.pageInput, 10);
+      if (!isNaN(p) && p >= 1 && p <= this.totalPages) {
+        this.gotoPage(p);
+      }
+      this.pageInput = '';
+    },
+    // 生成页码按钮列表：当前页前后各1页，首尾页始终显示，中间用省略号
+    pageNumbers() {
+      const tp = this.totalPages;
+      const cur = this.pageNum;
+      if (tp <= 7) {
+        return Array.from({ length: tp }, (_, i) => i + 1);
+      }
+      const pages = new Set([1, tp, cur]);
+      if (cur > 1) pages.add(cur - 1);
+      if (cur < tp) pages.add(cur + 1);
+      // 在不连续的页码之间插入省略号标记 '...'
+      const sorted = [...pages].sort((a, b) => a - b);
+      const result = [];
+      for (let i = 0; i < sorted.length; i++) {
+        if (i > 0 && sorted[i] - sorted[i - 1] > 1) {
+          result.push('...');
+        }
+        result.push(sorted[i]);
+      }
+      return result;
+    },
+    // 点击查询按钮：重新加载列表（筛选变更时重置到第1页）
+    applyFilter() {
+      this.pageNum = 1;
+      this.refresh();
+    },
+    // 重置所有查询条件
+    resetFilter() {
+      this.filterItemId = '';
+      this.filterTaskId = '';
+      this.filterMinScore = null;
+      this.filterMaxScore = null;
+      this.filterStartDate = '';
+      this.filterEndDate = '';
+      this.pageNum = 1;
+      this.refresh();
+    },
+    // F-06：单条 AI 成色评估
+    async evalCondition(e) {
+      const itemId = e.payload?.item_id || e.item_id;
+      if (!itemId) return;
+      e.ai_eval_loading = true;
+      e.ai_eval = null;
+      try {
+        const r = await fetch('/api/ai/evaluate-condition', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ item_id: itemId }),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          e.ai_eval = {
+            verdict: 'caution',
+            condition_score: 0,
+            reason: err.detail || '评估失败',
+            risk_signals: [],
+            source: 'error',
+          };
+        } else {
+          e.ai_eval = await r.json();
+        }
+      } catch (err) {
+        e.ai_eval = {
+          verdict: 'caution',
+          condition_score: 0,
+          reason: '网络错误: ' + err.message,
+          risk_signals: [],
+          source: 'error',
+        };
+      } finally {
+        e.ai_eval_loading = false;
+      }
+    },
+    // F-06：批量评估（当前页面所有评分 >= 60 且未评估的商品）
+    async batchEval() {
+      const candidates = this.sortedItems().filter(e => {
+        const score = e.payload?.score ?? 0;
+        return score >= 60 && !e.ai_eval && !e.ai_eval_loading;
+      });
+      if (candidates.length === 0) {
+        alert('没有需要评估的商品（评分 >= 60 且未评估）');
+        return;
+      }
+      this.batchEvalRunning = true;
+      this.batchEvalProgress = 0;
+      this.batchEvalTotal = candidates.length;
+      for (const e of candidates) {
+        await this.evalCondition(e);
+        this.batchEvalProgress++;
+      }
+      this.batchEvalRunning = false;
+    },
+    // P3-UX-09：拉取并渲染分布
+    async loadDistribution() {
+      try {
+        const r = await fetch('/api/evaluations/distribution?range_hours=' + this.distRange, { credentials: 'include' }).then(r => r.json());
+        this.dist = r;
+        this.$nextTick(() => this.renderHeatmap());
+        // F-15：面板展开时同步渲染 SVG 直方图
+        if (this.distPanelOpen) {
+          this.$nextTick(() => this.renderDistHistogram());
+        }
+      } catch (e) {
+        console.warn('loadDistribution failed:', e);
+      }
+    },
+    setDistRange(h) {
+      if (h === this.distRange) return;
+      this.distRange = h;
+      this.loadDistribution();
+    },
+    // 三类结果占比（%）
+    resultPct(key) {
+      const m = this.dist?.marginals?.result || {};
+      const total = (m.pass || 0) + (m.auto || 0) + (m.fail || 0);
+      if (total === 0) return 0;
+      return Math.round((m[key] || 0) / total * 100);
+    },
+    // O-05：10 桶合并为 5 档（0-20/20-40/40-60/60-80/80-100）
+    scoreBins5() {
+      const s = this.dist?.marginals?.score || [];
+      const total = this.dist?.total || 0;
+      const bins = [
+        { label: '0-20', count: (s[0] || 0) + (s[1] || 0) },
+        { label: '20-40', count: (s[2] || 0) + (s[3] || 0) },
+        { label: '40-60', count: (s[4] || 0) + (s[5] || 0) },
+        { label: '60-80', count: (s[6] || 0) + (s[7] || 0) },
+        { label: '80-100', count: (s[8] || 0) + (s[9] || 0) },
+      ];
+      const maxCount = Math.max(1, ...bins.map(b => b.count));
+      return bins.map(b => ({
+        ...b,
+        pct: total > 0 ? Math.round(b.count / total * 100) : 0,
+        height: Math.round(b.count / maxCount * 100),
+      }));
+    },
+    // O-05：阈值 t 时的通过率（score >= t 的占比，桶内线性插值估算）
+    passRateAtThreshold(t) {
+      const s = this.dist?.marginals?.score || [];
+      const total = this.dist?.total || 0;
+      if (total === 0) return 0;
+      let passing = 0;
+      for (let i = 0; i < s.length; i++) {
+        const binLow = i * 10;
+        const binHigh = (i + 1) * 10;
+        if (t <= binLow) {
+          passing += s[i] || 0;
+        } else if (t < binHigh) {
+          passing += (s[i] || 0) * (binHigh - t) / 10;
+        }
+      }
+      return Math.round(passing / total * 100);
+    },
+    // P3-UX-09：渲染 10x10 热力图
+    renderHeatmap() {
+      const svg = this.$refs.heatmap;
+      if (!svg || !this.dist) return;
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      const buckets = this.dist.buckets || [];
+      const rows = this.dist.score_bin_count;
+      const cols = this.dist.price_bin_count;
+      if (rows === 0 || cols === 0) {
+        const empty = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        empty.setAttribute('x', this.heatW / 2);
+        empty.setAttribute('y', this.heatH / 2);
+        empty.setAttribute('text-anchor', 'middle');
+        empty.setAttribute('class', 'spark-empty-text');
+        empty.textContent = '— 暂无评估数据';
+        svg.appendChild(empty);
+        return;
+      }
+      const cellW = this.heatW / cols;
+      const cellH = this.heatH / rows;
+      const maxCount = Math.max(1, ...buckets.flat().filter(Boolean).map(b => b.count || 0));
+      for (let si = 0; si < rows; si++) {
+        const row = buckets[si] || [];
+        for (let pi = 0; pi < cols; pi++) {
+          const b = row[pi] || { count: 0, pass: 0, auto: 0, fail: 0 };
+          const x = pi * cellW;
+          const y = (rows - 1 - si) * cellH;
+          if (!b.count) {
+            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            rect.setAttribute('x', x);
+            rect.setAttribute('y', y);
+            rect.setAttribute('width', cellW);
+            rect.setAttribute('height', cellH);
+            rect.setAttribute('fill', 'transparent');
+            rect.setAttribute('stroke', 'var(--border)');
+            rect.setAttribute('stroke-width', '0.5');
+            svg.appendChild(rect);
+            continue;
+          }
+          const max = Math.max(b.pass, b.auto, b.fail);
+          let color = 'var(--text-3)';
+          if (max === b.auto) color = 'var(--ok)';
+          else if (max === b.pass) color = 'var(--warn)';
+          else if (max === b.fail) color = 'var(--err)';
+          const alpha = 0.3 + 0.7 * (b.count / maxCount);
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', x);
+          rect.setAttribute('y', y);
+          rect.setAttribute('width', cellW - 1);
+          rect.setAttribute('height', cellH - 1);
+          rect.setAttribute('fill', color);
+          rect.setAttribute('fill-opacity', alpha);
+          rect.setAttribute('stroke', 'var(--bg-card)');
+          rect.setAttribute('stroke-width', '0.5');
+          const scoreLabel = '分数 ' + (si * 10) + '-' + ((si + 1) * 10);
+          const ratio = b.count > 0 ? Math.round(max / b.count * 100) : 0;
+          const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+          title.textContent = scoreLabel + ' · 计数 ' + b.count + ' · ' + ratio + '% 主导';
+          rect.appendChild(title);
+          svg.appendChild(rect);
+        }
+      }
+    },
+    sortedItems() {
+      // 按 score 降序排列后，仅取当前页的数据（分页切片）
+      // 数据不足的记录（score=null）排到最后
+      const sorted = [...this.items].sort((a, b) => {
+        const scoreA = a.payload?.score ?? -1;  // null/undefined 排到后面
+        const scoreB = b.payload?.score ?? -1;
+        return scoreB - scoreA;
+      });
+      const start = (this.pageNum - 1) * this.pageSize;
+      return sorted.slice(start, start + this.pageSize);
+    },
+    // 检测评估数据是否不足（卖家数据采集失败）
+    isDataInsufficient(e) {
+      const payload = e.payload || {};
+      // 1. score 为 null 表示数据不足
+      if (payload.score === null || payload.score === undefined) return true;
+      // 2. data_quality 字段明确标记
+      if (payload.data_quality === 'insufficient') return true;
+      // 3. risk_level 为 unknown
+      if (payload.risk_level === 'unknown') return true;
+      return false;
+    },
+    scoreClass(s) { return s >= 80 ? 'succeeded' : (s >= 60 ? 'pending' : 'failed'); },
+    scoreLabel(s) { return s >= 80 ? '可抢' : (s >= 60 ? '通过' : '驳回'); },
+    // O-14：风险等级图标，颜色+图标双通道
+    scoreIcon(s) { return s >= 80 ? '✓' : (s >= 60 ? '⚠' : '✕'); },
+
+    // ============== F-12 卖家价格趋势 ==============
+
+    // 折叠面板切换：点击展开/收起
+    async toggleSellerTrend(e) {
+      if (e._trendOpen) {
+        e._trendOpen = false;
+        return;
+      }
+      // 首次展开时加载数据
+      e._trendOpen = true;
+      if (!e._trendData) {
+        await this.loadSellerTrend(e);
+      }
+    },
+
+    // 加载卖家价格趋势数据（通过 item_id 查 seller_id 再查趋势）
+    async loadSellerTrend(e) {
+      const itemId = e.payload?.item_id || e.item_id;
+      if (!itemId) {
+        e._trendError = '缺少商品 ID';
+        return;
+      }
+      e._trendLoading = true;
+      e._trendError = null;
+      try {
+        const r = await fetch('/api/evaluations/' + encodeURIComponent(itemId) + '/seller-trend', { credentials: 'include' });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          e._trendError = err.detail || '加载失败';
+          return;
+        }
+        e._trendData = await r.json();
+        // 数据加载后渲染 sparkline
+        this.$nextTick(() => this.renderSparkline(e));
+      } catch (err) {
+        e._trendError = '网络错误: ' + err.message;
+      } finally {
+        e._trendLoading = false;
+      }
+    },
+
+    // 渲染 sparkline 折线图（复用项目已有的 sparkline 风格）
+    renderSparkline(e) {
+      const itemId = e.payload?.item_id || e.item_id || '';
+      const svg = document.getElementById('spark-' + itemId);
+      if (!svg || !e._trendData) return;
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+      const items = e._trendData.items || [];
+      if (items.length === 0) return;
+
+      const W = this.sparkW, H = this.sparkH;
+      const padL = 50, padR = 16, padT = 12, padB = 24;
+      const chartW = W - padL - padR, chartH = H - padT - padB;
+
+      // 按 publish_time 排序（API 已排序，这里做保险）
+      const sorted = [...items].sort((a, b) => (a.publish_time || '').localeCompare(b.publish_time || ''));
+      const prices = sorted.map(it => it.price);
+      const pMin = Math.min(...prices) * 0.9;
+      const pMax = Math.max(...prices) * 1.1;
+      const priceRange = Math.max(1, pMax - pMin);
+
+      // 坐标映射
+      const xScale = (i) => padL + (i / Math.max(1, sorted.length - 1)) * chartW;
+      const yScale = (v) => padT + chartH - ((v - pMin) / priceRange) * chartH;
+
+      // Y 轴网格线（3 条）
+      for (let i = 0; i <= 3; i++) {
+        const val = pMin + (priceRange * i / 3);
+        const y = yScale(val);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', padL); line.setAttribute('y1', y);
+        line.setAttribute('x2', W - padR); line.setAttribute('y2', y);
+        line.setAttribute('class', 'spark-grid-line');
+        svg.appendChild(line);
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', padL - 4); label.setAttribute('y', y + 3);
+        label.setAttribute('text-anchor', 'end');
+        label.setAttribute('class', 'spark-axis-label');
+        label.textContent = '¥' + Math.round(val);
+        svg.appendChild(label);
+      }
+
+      // X 轴日期标签（最多 5 个，避免重叠）
+      const labelStep = Math.max(1, Math.floor(sorted.length / 5));
+      for (let i = 0; i < sorted.length; i += labelStep) {
+        const x = xScale(i);
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', x); label.setAttribute('y', H - 4);
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('class', 'spark-axis-label');
+        const pt = sorted[i].publish_time || '';
+        label.textContent = pt.slice(5, 10);  // MM-DD
+        svg.appendChild(label);
+      }
+
+      // 渐变填充区域
+      const areaD = sorted.map((it, i) =>
+        `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(it.price).toFixed(1)}`
+      ).join(' ')
+        + ` L${xScale(sorted.length - 1).toFixed(1)},${yScale(pMin).toFixed(1)}`
+        + ` L${xScale(0).toFixed(1)},${yScale(pMin).toFixed(1)} Z`;
+      const area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      area.setAttribute('d', areaD);
+      area.setAttribute('class', 'spark-area seller-trend-area');
+      svg.appendChild(area);
+
+      // 折线
+      const lineD = sorted.map((it, i) =>
+        `${i === 0 ? 'M' : 'L'}${xScale(i).toFixed(1)},${yScale(it.price).toFixed(1)}`
+      ).join(' ');
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      line.setAttribute('d', lineD);
+      line.setAttribute('class', 'spark-line seller-trend-line');
+      svg.appendChild(line);
+
+      // 数据点（hover 显示详情）
+      sorted.forEach((it, i) => {
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('cx', xScale(i));
+        circle.setAttribute('cy', yScale(it.price));
+        circle.setAttribute('r', '3');
+        circle.setAttribute('class', 'spark-dot seller-trend-dot');
+        const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+        title.textContent = `${it.title || it.item_id} · ¥${it.price} · ${(it.publish_time || '').slice(0, 10)}`;
+        circle.appendChild(title);
+        svg.appendChild(circle);
+      });
+
+      // 末尾点加大（"现在"标记）
+      if (sorted.length > 0) {
+        const last = sorted[sorted.length - 1];
+        const lastCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        lastCircle.setAttribute('cx', xScale(sorted.length - 1));
+        lastCircle.setAttribute('cy', yScale(last.price));
+        lastCircle.setAttribute('r', '5');
+        lastCircle.setAttribute('class', 'spark-dot seller-trend-dot-last');
+        svg.appendChild(lastCircle);
+      }
+    },
+
+    // F-15：SVG 辅助方法（与 dashboard renderHistogram 同风格）
+    _svg(tag, attrs) {
+      const el = document.createElementNS(this.SVG_NS, tag);
+      if (attrs) for (const k in attrs) el.setAttribute(k, attrs[k]);
+      return el;
+    },
+
+    // F-15：渲染 5 档 SVG 直方图（复用项目已有的 renderHistogram 风格）
+    renderDistHistogram() {
+      const svg = this.$refs.distSvg;
+      if (!svg || !this.dist) return;
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+      const bins = this.dist.distribution || [];
+      const total = this.dist.total || 0;
+      if (total === 0 || bins.length === 0) {
+        const empty = this._svg('text', {
+          x: this.distSvgW / 2, y: this.distSvgH / 2,
+          'text-anchor': 'middle', class: 'spark-empty-text',
+        });
+        empty.textContent = '— 暂无评估数据';
+        svg.appendChild(empty);
+        return;
+      }
+
+      const W = this.distSvgW, H = this.distSvgH;
+      const pL = 40, pR = 16, pT = 12, pB = 28;
+      const innerW = W - pL - pR, innerH = H - pT - pB;
+      const n = bins.length;
+      const barW = innerW / n;
+
+      // Y 轴 nice scale
+      const maxCount = Math.max(1, ...bins.map(b => b.count || 0));
+      const niceMax = Math.max(1, Math.ceil(maxCount / 5) * 5);
+      const step = niceMax / 4;
+
+      // Y 网格线 + 标签
+      for (let i = 0; i <= 4; i++) {
+        const y = pT + (1 - i / 4) * innerH;
+        svg.appendChild(this._svg('line', {
+          class: 'grid-line', x1: pL, x2: W - pR, y1: y, y2: y,
+        }));
+        const txt = this._svg('text', {
+          class: 'label', x: pL - 6, y: y + 3, 'text-anchor': 'end',
+        });
+        txt.textContent = String(Math.round(step * i));
+        svg.appendChild(txt);
+      }
+
+      // X 轴基线
+      svg.appendChild(this._svg('line', {
+        class: 'axis-line', x1: pL, x2: W - pR, y1: H - pB, y2: H - pB,
+      }));
+
+      // 5 档柱体颜色（与原 CSS bin-0~4 一致：红/橙/黄/浅绿/深绿）
+      const barColors = ['var(--err)', '#F97316', 'var(--warn)', '#86EFAC', 'var(--ok)'];
+
+      bins.forEach((b, i) => {
+        const count = b.count || 0;
+        const hPx = Math.max(0, (count / niceMax) * innerH);
+        const x = pL + i * barW + 3;
+        const y = pT + (innerH - hPx);
+
+        // 柱体
+        const rect = this._svg('rect', {
+          class: 'eval-dist-bar', x, y,
+          width: Math.max(2, barW - 6), height: hPx,
+          fill: barColors[i], 'fill-opacity': 0.8, rx: 3,
+        });
+        // hover 提示
+        const title = this._svg('title');
+        const pct = total > 0 ? Math.round(count / total * 100) : 0;
+        title.textContent = b.range + ' 分: ' + count + ' 条 (' + pct + '%)';
+        rect.appendChild(title);
+        svg.appendChild(rect);
+
+        // 柱顶计数标签
+        const countTxt = this._svg('text', {
+          x: pL + i * barW + barW / 2, y: y - 4,
+          'text-anchor': 'middle', class: 'eval-dist-bar-label',
+        });
+        countTxt.textContent = count;
+        svg.appendChild(countTxt);
+
+        // X 轴分段标签
+        const label = this._svg('text', {
+          x: pL + i * barW + barW / 2, y: H - pB + 14,
+          'text-anchor': 'middle', class: 'label',
+        });
+        label.textContent = b.range;
+        svg.appendChild(label);
+      });
+
+      // 用户阈值虚线（品牌色）
+      this._renderThresholdLine(svg, this.thresholdScore, 'var(--brand)', '阈值: ' + this.thresholdScore + ' 分', pL, pR, pT, innerH);
+
+      // F-15：建议阈值虚线（红色）+ 标签
+      const suggested = this.dist.suggested_threshold;
+      if (suggested && suggested.score > 0) {
+        this._renderThresholdLine(svg, suggested.score, 'var(--err)',
+          '建议阈值: ' + suggested.score + ' 分（通过率 ' + Math.round(suggested.pass_rate * 100) + '%）',
+          pL, pR, pT, innerH, true);
+      }
+    },
+
+    // F-15：在 SVG 中渲染阈值垂直线 + 标签
+    _renderThresholdLine(svg, score, color, labelText, pL, pR, pT, innerH, isSuggested = false) {
+      const W = this.distSvgW;
+      // score 0-100 映射到图表 X 轴
+      const x = pL + (score / 100) * (W - pL - pR);
+      const y1 = pT, y2 = pT + innerH;
+
+      svg.appendChild(this._svg('line', {
+        x1: x, x2: x, y1, y2,
+        stroke: color, 'stroke-width': isSuggested ? 2 : 1.5,
+        'stroke-dasharray': isSuggested ? '6 4' : '4 3',
+        opacity: 0.85,
+      }));
+
+      // 顶部标记：建议阈值用三角，用户阈值用圆点
+      if (isSuggested) {
+        svg.appendChild(this._svg('polygon', {
+          points: (x - 5) + ',' + (y1 - 1) + ' ' + (x + 5) + ',' + (y1 - 1) + ' ' + x + ',' + (y1 + 6),
+          fill: color, opacity: 0.9,
+        }));
+      } else {
+        svg.appendChild(this._svg('circle', {
+          cx: x, cy: y1 + 2, r: 4, fill: color,
+        }));
+      }
+
+      // 标签文字
+      const txt = this._svg('text', {
+        x: x + 4, y: isSuggested ? y1 + 18 : y1 + 14,
+        class: 'eval-dist-threshold-label',
+        fill: color, 'font-size': '10px', 'font-family': 'var(--font-mono)',
+        'font-weight': '600',
+      });
+      txt.textContent = labelText;
+      svg.appendChild(txt);
+    },
+
+    // F-15：折叠面板切换，展开时触发 SVG 渲染
+    toggleDistPanel() {
+      this.distPanelOpen = !this.distPanelOpen;
+      if (this.distPanelOpen && this.dist) {
+        this.$nextTick(() => this.renderDistHistogram());
+      }
+    },
+
+    // F-15：加载阈值建议
+    async loadThresholdSuggestion() {
+      try {
+        const r = await fetch('/api/evaluations/threshold-suggestion?target_pass_rate=' + this.targetPassRate, { credentials: 'include' }).then(r => r.json());
+        this.thresholdSuggestion = r;
+        // 建议阈值变化后重新渲染 SVG 直方图
+        if (this.distPanelOpen && this.dist) {
+          this.$nextTick(() => this.renderDistHistogram());
+        }
+      } catch (e) {
+        console.warn('loadThresholdSuggestion failed:', e);
+      }
+    },
+  };
+}
+</script>
+{% endblock %}

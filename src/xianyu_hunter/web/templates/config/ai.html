@@ -1,0 +1,333 @@
+<!-- AI 服务配置：全局开关 / API Key / Base URL / Model / Usage Dashboard -->
+<div x-data="cfgAI()">
+  <!-- ============== 全局开关（最醒目位置） ============== -->
+  <div class="card mb-16" style="background: var(--bg-2); border: 2px solid var(--border); padding: 20px;">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <h3 style="margin: 0; display: flex; align-items: center; gap: 10px;">
+          AI 功能总开关
+          <span x-show="aiConfig.ai_enabled" style="background: #22c55e; color: white; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;">已开启</span>
+          <span x-show="!aiConfig.ai_enabled" style="background: #ef4444; color: white; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;">已关闭</span>
+        </h3>
+        <p class="muted" style="margin-top: 4px;">关闭后所有 AI 功能将降级到规则模式，不消耗任何 token</p>
+      </div>
+      <button :class="aiConfig.ai_enabled ? 'btn' : 'btn btn-primary'"
+              @click="toggleAI()"
+              x-text="aiConfig.ai_enabled ? '关闭 AI' : '开启 AI'"
+              style="min-width: 100px; font-size: 16px; padding: 8px 20px;">
+      </button>
+    </div>
+  </div>
+
+  <!-- 关闭 AI 时的遮罩提示 -->
+  <div x-show="!aiConfig.ai_enabled" x-cloak
+       style="position: relative; opacity: 0.5; pointer-events: none;">
+    <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 10;
+                display: flex; align-items: center; justify-content: center;
+                background: rgba(0,0,0,0.1); border-radius: 8px; pointer-events: auto;">
+      <p style="font-size: 18px; font-weight: 600; color: var(--text-2);">AI 功能已关闭，以下配置不可用</p>
+    </div>
+
+  <h3>AI 服务配置</h3>
+  <p class="muted">配置 AI 评估和自然语言解析所需的 LLM 服务。支持 OpenAI / DeepSeek / 智谱等 OpenAI 兼容接口。</p>
+
+  <div class="card mb-16" style="background: var(--bg-2);">
+    <div class="field">
+      <label>API Base URL</label>
+      <input type="text" x-model="aiConfig.base_url" placeholder="https://api.openai.com/v1">
+      <span class="help">OpenAI 兼容端点。DeepSeek: https://api.deepseek.com/v1 &nbsp; 智谱: https://open.bigmodel.cn/api/paas/v4</span>
+    </div>
+
+    <div class="field">
+      <label>API Key</label>
+      <div style="display: flex; gap: 8px;">
+        <input :type="showKey ? 'text' : 'password'" x-model="aiConfig.api_key"
+               placeholder="sk-..." style="flex: 1;">
+        <button class="btn btn-ghost btn-sm" @click="showKey = !showKey"
+                x-text="showKey ? '隐藏' : '显示'"></button>
+      </div>
+      <span class="help">密钥通过系统密钥库（keyring）安全存储，不写入配置文件</span>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label>文本解析模型</label>
+        <input type="text" x-model="aiConfig.model" placeholder="gpt-4o-mini">
+        <span class="help">自然语言解析 + 任务字段提取</span>
+      </div>
+      <div class="field">
+        <label>Vision 模型</label>
+        <input type="text" x-model="aiConfig.vision_model" placeholder="gpt-4o">
+        <span class="help">图片成色评估 + 深度多模态分析</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 预设快捷切换 -->
+  <h3>快捷预设</h3>
+  <p class="muted">一键切换到常用 AI 服务商（仅修改 URL 和模型名称，需自行配置 API Key）。</p>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+    <button class="btn btn-sm" @click="applyPreset('openai')">OpenAI</button>
+    <button class="btn btn-sm" @click="applyPreset('deepseek')">DeepSeek</button>
+    <button class="btn btn-sm" @click="applyPreset('zhipu')">智谱 GLM</button>
+    <button class="btn btn-sm" @click="applyPreset('moonshot')">Moonshot</button>
+  </div>
+
+  <!-- 连接测试 -->
+  <div class="mt-16" style="margin-bottom: 24px;">
+    <button class="btn" @click="testConnection()" :disabled="testing">
+      <span x-show="!testing">🔗 测试连接</span>
+      <span x-show="testing" x-cloak>测试中…</span>
+    </button>
+    <span class="muted" style="margin-left: 8px;" x-show="testResult" x-text="testResult"></span>
+  </div>
+
+  </div><!-- end 遮罩 -->
+
+  <!-- ============== 用量仪表盘（始终可见） ============== -->
+  <h3>用量仪表盘</h3>
+  <p class="muted">今日 AI 调用统计与费用估算（基于模型公开定价）。</p>
+
+  <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px;">
+    <div class="card" style="background: var(--bg-2); text-align: center; padding: 16px;">
+      <div style="font-size: 28px; font-weight: 700;" x-text="usage.today.total_calls">0</div>
+      <div class="muted" style="font-size: 12px;">今日调用</div>
+    </div>
+    <div class="card" style="background: var(--bg-2); text-align: center; padding: 16px;">
+      <div style="font-size: 28px; font-weight: 700;" x-text="formatTokens(usage.today.total_tokens)">0</div>
+      <div class="muted" style="font-size: 12px;">今日 Token</div>
+    </div>
+    <div class="card" style="background: var(--bg-2); text-align: center; padding: 16px;">
+      <div style="font-size: 28px; font-weight: 700;" x-text="'$' + (usage.today.total_cost_usd || 0).toFixed(4)">$0</div>
+      <div class="muted" style="font-size: 12px;">今日费用 (USD)</div>
+    </div>
+    <div class="card" style="background: var(--bg-2); text-align: center; padding: 16px;">
+      <div style="font-size: 28px; font-weight: 700;" x-text="'¥' + (usage.today.total_cost_cny || 0).toFixed(2)">¥0</div>
+      <div class="muted" style="font-size: 12px;">今日费用 (CNY)</div>
+    </div>
+  </div>
+
+  <!-- 预算进度条 -->
+  <div class="card mb-16" style="background: var(--bg-2);">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <strong>Token 预算</strong>
+      <span class="muted" x-text="formatTokens(usage.today.total_tokens) + ' / ' + formatTokens(usage.budget.daily_token_limit)"></span>
+    </div>
+    <div style="background: var(--bg-1); border-radius: 4px; height: 8px; overflow: hidden;">
+      <div :style="'width:' + Math.min(usage.budget.token_usage_pct, 100) + '%; height: 100%; border-radius: 4px; transition: width 0.3s; background:' + barColor(usage.budget.token_usage_pct)"></div>
+    </div>
+    <div style="display: flex; justify-content: space-between; margin-top: 4px;">
+      <span class="muted" style="font-size: 11px;" x-text="usage.budget.token_usage_pct + '% 已用'"></span>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; margin-bottom: 8px;">
+      <strong>费用预算</strong>
+      <span class="muted" x-text="'$' + (usage.today.total_cost_usd || 0).toFixed(2) + ' / $' + (usage.budget.daily_cost_limit_usd || 0).toFixed(2)"></span>
+    </div>
+    <div style="background: var(--bg-1); border-radius: 4px; height: 8px; overflow: hidden;">
+      <div :style="'width:' + Math.min(usage.budget.cost_usage_pct, 100) + '%; height: 100%; border-radius: 4px; transition: width 0.3s; background:' + barColor(usage.budget.cost_usage_pct)"></div>
+    </div>
+    <div style="display: flex; justify-content: space-between; margin-top: 4px;">
+      <span class="muted" style="font-size: 11px;" x-text="usage.budget.cost_usage_pct + '% 已用'"></span>
+    </div>
+  </div>
+
+  <!-- 按端点分布 -->
+  <div class="card mb-16" style="background: var(--bg-2);" x-show="Object.keys(usage.today.by_endpoint).length > 0">
+    <strong>调用分布</strong>
+    <div style="margin-top: 8px;">
+      <template x-for="[ep, count] in Object.entries(usage.today.by_endpoint)" :key="ep">
+        <div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--border);">
+          <span x-text="endpointLabel(ep)"></span>
+          <span x-text="count + ' 次'"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- 7天趋势 -->
+  <div class="card mb-16" style="background: var(--bg-2);" x-show="usage.history.length > 0">
+    <strong>近 7 天趋势</strong>
+    <div style="margin-top: 8px;">
+      <template x-for="day in usage.history" :key="day.date">
+        <div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--border);">
+          <span x-text="day.date"></span>
+          <span>
+            <span x-text="day.total_calls + ' 次'"></span>
+            <span class="muted" style="margin-left: 8px;" x-text="formatTokens(day.total_input_tokens + day.total_output_tokens) + ' tokens'"></span>
+            <span class="muted" style="margin-left: 8px;" x-text="'¥' + (day.total_cost_cny || 0).toFixed(2)"></span>
+          </span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- 预算配置 -->
+  <h3>预算控制</h3>
+  <p class="muted">超出预算后 AI 调用自动降级到规则模式，不影响系统正常使用。</p>
+  <div class="field-row">
+    <div class="field">
+      <label>每日 Token 上限</label>
+      <input type="number" x-model.number="budget.daily_token_limit" placeholder="500000">
+    </div>
+    <div class="field">
+      <label>每日费用上限 (USD)</label>
+      <input type="number" step="0.1" x-model.number="budget.daily_cost_limit_usd" placeholder="5.0">
+    </div>
+    <div class="field">
+      <label>每分钟调用上限</label>
+      <input type="number" x-model.number="budget.rate_limit_per_min" placeholder="20">
+    </div>
+  </div>
+  <button class="btn btn-sm" @click="saveBudget()">保存预算设置</button>
+</div>
+
+<script>
+function cfgAI() {
+  return {
+    aiConfig: { ai_enabled: true, base_url: '', api_key: '', model: '', vision_model: '' },
+    showKey: false,
+    testing: false,
+    testResult: '',
+    pendingToggle: null,  // 确认弹窗状态
+    usage: {
+      today: { total_calls: 0, total_tokens: 0, total_cost_usd: 0, total_cost_cny: 0, by_endpoint: {}, by_model: {} },
+      budget: { daily_token_limit: 500000, daily_cost_limit_usd: 5, rate_limit_per_min: 20, token_usage_pct: 0, cost_usage_pct: 0 },
+      history: [],
+    },
+    budget: { daily_token_limit: 500000, daily_cost_limit_usd: 5, rate_limit_per_min: 20 },
+
+    async init() {
+      // 并行加载配置和用量
+      const [configR, usageR] = await Promise.all([
+        fetch('/api/ai/config', { credentials: 'include' }).catch(() => null),
+        fetch('/api/ai/usage', { credentials: 'include' }).catch(() => null),
+      ]);
+      if (configR && configR.ok) {
+        const d = await configR.json();
+        this.aiConfig.ai_enabled = d.ai_enabled !== false;
+        this.aiConfig.base_url = d.base_url || '';
+        this.aiConfig.api_key = d.api_key || '';
+        this.aiConfig.model = d.model || '';
+        this.aiConfig.vision_model = d.vision_model || '';
+      }
+      if (usageR && usageR.ok) {
+        const d = await usageR.json();
+        this.usage = d;
+        this.budget.daily_token_limit = d.budget.daily_token_limit;
+        this.budget.daily_cost_limit_usd = d.budget.daily_cost_limit_usd;
+        this.budget.rate_limit_per_min = d.budget.rate_limit_per_min;
+      }
+    },
+
+    async toggleAI() {
+      const newVal = !this.aiConfig.ai_enabled;
+      // 确认机制：关闭时二次确认
+      if (!newVal) {
+        if (!confirm('确定要关闭 AI 功能吗？\n\n关闭后所有 AI 评估、解析、分析将降级到规则模式，不消耗任何 token。\n可随时重新开启。')) {
+          return;
+        }
+      }
+      try {
+        const r = await fetch('/api/ai/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ ai_enabled: newVal }),
+        });
+        if (r.ok) {
+          this.aiConfig.ai_enabled = newVal;
+          xhToast(newVal ? 'AI 功能已开启' : 'AI 功能已关闭', newVal ? 'ok' : 'warn');
+        } else {
+          xhToast('操作失败', 'err');
+        }
+      } catch (err) {
+        xhToast('网络错误: ' + err.message, 'err');
+      }
+    },
+
+    applyPreset(provider) {
+      const presets = {
+        openai: { base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini', vision_model: 'gpt-4o' },
+        deepseek: { base_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', vision_model: 'deepseek-chat' },
+        zhipu: { base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash', vision_model: 'glm-4v-flash' },
+        moonshot: { base_url: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k', vision_model: 'moonshot-v1-8k' },
+      };
+      const p = presets[provider];
+      if (p) {
+        this.aiConfig.base_url = p.base_url;
+        this.aiConfig.model = p.model;
+        this.aiConfig.vision_model = p.vision_model;
+        xhToast('已切换到 ' + provider + ' 预设', 'ok');
+      }
+    },
+
+    async testConnection() {
+      this.testing = true;
+      this.testResult = '';
+      try {
+        const saveR = await fetch('/api/ai/config', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', body: JSON.stringify(this.aiConfig),
+        });
+        if (!saveR.ok) {
+          const e = await saveR.json().catch(() => ({}));
+          this.testResult = '❌ 保存失败: ' + (e.detail || saveR.statusText);
+          return;
+        }
+        const r = await fetch('/api/ai/test-connection', { method: 'POST', credentials: 'include' });
+        const data = await r.json();
+        this.testResult = (r.ok && data.ok) ? '✅ 连接成功 (' + (data.model || '') + ')' : '❌ ' + (data.detail || '连接失败');
+        // 测试连接后刷新用量数据
+        if (r.ok && data.ok) {
+          const ur = await fetch('/api/ai/usage', { credentials: 'include' });
+          if (ur.ok) this.usage = await ur.json();
+        }
+      } catch (err) {
+        this.testResult = '❌ 网络错误: ' + err.message;
+      } finally {
+        this.testing = false;
+      }
+    },
+
+    async saveBudget() {
+      const r = await fetch('/api/ai/budget', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        credentials: 'include', body: JSON.stringify(this.budget),
+      });
+      if (r.ok) {
+        xhToast('预算设置已保存', 'ok');
+        // 刷新用量数据
+        const ur = await fetch('/api/ai/usage', { credentials: 'include' });
+        if (ur.ok) this.usage = await ur.json();
+      } else {
+        xhToast('保存失败', 'err');
+      }
+    },
+
+    formatTokens(n) {
+      if (!n) return '0';
+      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+      if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+      return n.toString();
+    },
+
+    barColor(pct) {
+      if (pct >= 90) return '#ef4444';
+      if (pct >= 70) return '#f59e0b';
+      return '#22c55e';
+    },
+
+    endpointLabel(ep) {
+      const labels = {
+        parse_task: '自然语言解析',
+        evaluate_condition: '成色评估',
+        deep_analyze: '深度分析',
+        seller_template_check: '模板检测',
+        test_connection: '连接测试',
+      };
+      return labels[ep] || ep;
+    },
+  };
+}
+</script>

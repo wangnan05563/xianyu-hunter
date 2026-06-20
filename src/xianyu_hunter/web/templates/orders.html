@@ -1,0 +1,752 @@
+{% extends "base.html" %}
+{% block content %}
+<div x-data="ordersList()" x-init="init()">
+  <div class="page-header">
+    <div>
+      <h1>抢单记录</h1>
+      <div class="subtitle">订单状态流转 · 人工接管</div>
+    </div>
+    <div>
+      <button class="btn" @click="refresh()">↻ 刷新</button>
+    </div>
+  </div>
+
+  <div class="grid-3 mb-16">
+    <div class="card stat ok">
+      <div class="l">成功</div>
+      <div class="v" x-text="stats.succeeded"></div>
+    </div>
+    <div class="card stat warn">
+      <div class="l">待支付（含接管中）</div>
+      <div class="v" x-text="stats.pending"></div>
+      <div class="d muted" x-show="stats.takeover > 0" x-cloak>
+        <span x-text="stats.takeover"></span> 单人工接管中 →
+      </div>
+    </div>
+    <div class="card stat err">
+      <div class="l">失败</div>
+      <div class="v" x-text="stats.failed"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <table class="data order-table-desktop">
+      <thead>
+        <tr>
+          <th>订单 ID</th>
+          <!--
+            P3-UX-02：增加"商品"列，从 _itemCache[item_id] 异步取标题
+            - 之前只有 item_id 链接 → "我想要的到底是哪一单"得逐条点开
+            - 列表首批加载完后批量调 /api/items/batch?ids=...，标题一次性补全
+            - sessionStorage 缓存：减少同 item_id 重复拉（避免刷新就重拉）
+          -->
+          <th>商品</th>
+          <th>价格</th>
+          <th>状态</th>
+          <th>创建时间</th>
+          <th style="text-align: right;">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="o in items" :key="o.id ?? o.order_id">
+          <tr :class="o.status === 'takeover_pending' ? 'row-takeover' : ''">
+            <td class="id mono" x-text="o.id || o.order_id"></td>
+            <td>
+              <!-- 标题 + item_id 链接同行展示，标题缺失时回退到原 item_id -->
+              <div class="item-cell">
+                <a class="item-title" x-show="o.item_id && getItemTitle(o.item_id)"
+                   :href="'https://www.goofish.com/item?id=' + o.item_id" target="_blank"
+                   :title="o.item_id"
+                   x-text="getItemTitle(o.item_id)"></a>
+                <a class="mono muted item-id-fallback" x-show="o.item_id && !getItemTitle(o.item_id)"
+                   :href="'https://www.goofish.com/item?id=' + o.item_id" target="_blank"
+                   x-text="o.item_id"></a>
+                <span class="muted" x-show="!o.item_id">—</span>
+              </div>
+            </td>
+            <td class="num">
+              <span x-text="o.amount ? '¥' + o.amount : '—'"></span>
+              <!-- F-13 利润计算器：扣完闲鱼手续费后的净赚
+                - 鱼小铺（职业卖家）1.6%，普通 C2C 0.6%
+                - 默认按普通计算（大多数捡漏场景），用户可切换
+                - 仅 succeeded 订单显示（未成交的算利润无意义）
+              -->
+              <template x-if="o.amount && o.status === 'succeeded'">
+                <span class="profit-hint" :class="calcProfit(o.amount) > 0 ? 'profit-pos' : 'profit-neg'"
+                      @click="toggleProfitMode()"
+                      x-text="'净赚 ¥' + calcProfit(o.amount).toFixed(1)"
+                      :title="'闲鱼手续费 ' + (profitMode === 'pro' ? '1.6%（鱼小铺）' : '0.6%（普通）') + ' · 点击切换'">
+                </span>
+              </template>
+            </td>
+            <td><span class="pill" :class="o.status" :aria-label="'状态: ' + statusLabel(o.status)"><span class="status-icon" aria-hidden="true" x-text="statusIcon(o.status)"></span><span x-text="statusLabel(o.status)"></span></span></td>
+            <td class="muted mono" x-text="(o.created_at || '').slice(0, 19)"></td>
+            <td style="text-align: right;">
+              <button class="btn btn-sm" @click="openTakeover(o)" x-show="o.status === 'pending' || o.status === 'submitting'">
+                🖐 人工接管
+              </button>
+              <button class="btn btn-sm btn-primary" @click="openTakeover(o)" x-show="o.status === 'takeover_pending'">
+                ⏱ 继续支付
+              </button>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+
+    <!--
+      移动端卡片视图（≤900px 显示，P1-5）
+      桌面表格列数多到小屏会挤；卡片把核心信息（订单号/商品/金额/状态/创建时间）压成单列
+      操作按钮跟着订单走，单手易点
+    -->
+    <div class="order-cards-mobile">
+      <template x-for="o in items" :key="'m'+(o.id ?? o.order_id)">
+        <div class="order-card" :class="o.status === 'takeover_pending' ? 'row-takeover' : ''">
+          <div class="order-card-h">
+            <span class="order-card-id mono" x-text="o.id || o.order_id"></span>
+            <span class="pill" :class="o.status" :aria-label="'状态: ' + statusLabel(o.status)"><span class="status-icon" aria-hidden="true" x-text="statusIcon(o.status)"></span><span x-text="statusLabel(o.status)"></span></span>
+          </div>
+          <div class="order-card-body">
+            <div class="order-card-meta order-card-item">
+              <span class="muted">商品</span>
+              <a class="item-title" x-show="o.item_id && getItemTitle(o.item_id)"
+                 :href="'https://www.goofish.com/item?id=' + o.item_id" target="_blank"
+                 x-text="getItemTitle(o.item_id)"></a>
+              <a class="mono muted" x-show="o.item_id && !getItemTitle(o.item_id)"
+                 :href="'https://www.goofish.com/item?id=' + o.item_id" target="_blank"
+                 x-text="o.item_id" style="word-break: break-all;"></a>
+              <span class="muted" x-show="!o.item_id">—</span>
+            </div>
+            <div class="order-card-meta">
+              <span class="muted">金额</span>
+              <span class="mono" x-text="o.amount ? '¥' + o.amount : '—'"></span>
+              <template x-if="o.amount && o.status === 'succeeded'">
+                <span class="profit-hint" :class="calcProfit(o.amount) > 0 ? 'profit-pos' : 'profit-neg'"
+                      x-text="'净赚 ¥' + calcProfit(o.amount).toFixed(1)"></span>
+              </template>
+            </div>
+            <div class="order-card-meta">
+              <span class="muted">创建</span>
+              <span class="muted mono" style="font-size: 11px;" x-text="(o.created_at || '').slice(0, 16)"></span>
+            </div>
+          </div>
+          <div class="order-card-foot">
+            <button class="btn btn-sm" @click="openTakeover(o)" x-show="o.status === 'pending' || o.status === 'submitting'">🖐 人工接管</button>
+            <!-- F-14：移动端"继续支付"直接跳闲鱼 App deep link，不打开完整 Modal
+                 - 移动端打开完整 Modal 体验差（键盘遮挡、步骤多）
+                 - deep link 直接拉起闲鱼 App 到订单页，用户一步完成支付
+                 - 同时静默调 takeover API 确保状态已切换 -->
+            <a class="btn btn-sm btn-primary"
+               x-show="o.status === 'takeover_pending'"
+               :href="'goofish://item?id=' + (o.item_id || '')"
+               @click.prevent="mobileTakeover(o)"
+               target="_blank">⏱ 继续支付</a>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <div class="empty" x-show="items.length === 0">
+      <div class="ico">▱</div>
+      <h3>暂无订单</h3>
+      <p class="muted">成功抢单后订单会出现在这里</p>
+    </div>
+  </div>
+
+    <!-- F-14：移动端简化版接管 Modal
+         - 手机屏幕空间有限，完整 Modal 步骤多、文字密、按钮小
+         - 简化版只保留"商品名 + 价格 + 状态"三个核心字段 + 大按钮
+         - 桌面端详细步骤/利润计算器/倒计时进度条在移动端隐藏
+    -->
+    <div class="modal mobile-takeover" x-show="takeover.open" x-cloak
+         @click.self="closeTakeover()">
+      <header class="modal-h">
+        <span x-text="takeover.stage === 'confirm' ? '🖐 接管' : (takeover.stage === 'progress' ? '⏱ 等待支付' : '✓ 完成')"></span>
+        <button class="btn btn-ghost btn-sm" @click="closeTakeover()">×</button>
+      </header>
+      <div class="modal-b">
+        <!-- 关键信息：商品名 + 价格 + 状态，移动端三行紧凑排列 -->
+        <div class="mobile-tk-key">
+          <div class="mobile-tk-row">
+            <span class="muted">商品</span>
+            <span x-text="takeover.order?.item_id ? getItemTitle(takeover.order.item_id) || takeover.order.item_id : '—'"></span>
+          </div>
+          <div class="mobile-tk-row">
+            <span class="muted">价格</span>
+            <span class="mono" x-text="takeover.order?.amount ? '¥' + takeover.order.amount : '—'"></span>
+          </div>
+          <div class="mobile-tk-row">
+            <span class="muted">状态</span>
+            <span class="pill" :class="takeover.order?.status" :aria-label="'状态: ' + statusLabel(takeover.order?.status || '')"><span class="status-icon" aria-hidden="true" x-text="statusIcon(takeover.order?.status || '')"></span><span x-text="statusLabel(takeover.order?.status || '')"></span></span>
+          </div>
+        </div>
+        <!-- progress 阶段：只显示倒计时数字，隐藏步骤清单 -->
+        <div x-show="takeover.stage === 'progress'" x-cloak class="mobile-tk-countdown">
+          <span class="mobile-tk-cd-v" :class="countdownClass()" x-text="formatCountdown()"></span>
+          <span class="muted" style="font-size: 11px;"
+                x-text="takeover.remaining_sec <= 60 ? '⚠ 即将超时' : '剩余支付时间'"></span>
+        </div>
+        <!-- done 阶段：结果图标 + 文字 -->
+        <div x-show="takeover.stage === 'done'" x-cloak class="mobile-tk-done">
+          <span x-text="takeover.result === 'confirmed' ? '✓' : '↺'" style="font-size: 36px;"></span>
+          <span x-text="takeover.result === 'confirmed' ? '支付已确认' : '已取消接管'"></span>
+        </div>
+      </div>
+      <footer class="modal-f">
+        <button class="btn btn-ghost" @click="closeTakeover()"
+                x-text="takeover.stage === 'done' ? '关闭' : '稍后'"></button>
+        <button class="btn btn-primary btn-lg" @click="confirmTakeover()"
+                x-show="takeover.stage === 'confirm'"
+                :disabled="takeover.busy">开始接管</button>
+        <template x-if="takeover.stage === 'progress'">
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-warn" @click="cancelTakeover()"
+                    :disabled="takeover.busy">取消</button>
+            <button class="btn btn-primary btn-lg" @click="confirmPaid()"
+                    :disabled="takeover.busy">✓ 已支付</button>
+          </div>
+        </template>
+        <button class="btn btn-primary" @click="closeTakeover()" x-show="takeover.stage === 'done'">完成</button>
+      </footer>
+    </div>
+
+  <!-- ================== 人工接管 Modal（P1-2）桌面端完整版 ================== -->
+  <!--
+    三态：confirm（首次接管确认） / progress（接管中带倒计时） / done（已支付/已取消）
+    倒计时由 Alpine x-init + setInterval 推进；每秒重算 remaining。
+    倒计时低于 5min 变橙、低于 1min 变红 + pulse，提示用户赶紧操作。
+  -->
+  <div class="modal-mask desktop-takeover" x-show="takeover.open" x-cloak
+       @click.self="closeTakeover()" @keydown.escape.window="closeTakeover()">
+    <!-- P3-O-08：mouseenter 暂停 auto-close，mouseleave 恢复（仅在 done 阶段有意义） -->
+    <div class="modal" role="dialog" aria-label="人工接管"
+         @mouseenter="takeover.stage === 'done' && _pauseAutoClose()"
+         @mouseleave="takeover.stage === 'done' && _resumeAutoClose()">
+      <header class="modal-h">
+        <span>
+          <span x-show="takeover.stage === 'confirm'">🖐 人工接管订单</span>
+          <span x-show="takeover.stage === 'progress'" x-cloak>⏱ 等待您在闲鱼 App 完成支付</span>
+          <span x-show="takeover.stage === 'done'" x-cloak>✓ 已完成</span>
+        </span>
+        <button class="btn btn-ghost btn-sm" @click="closeTakeover()">×</button>
+      </header>
+      <div class="modal-b">
+        <!-- 订单信息：所有阶段都显示，方便核对 -->
+        <div class="tk-info">
+          <div class="tk-info-row">
+            <span class="muted">订单</span>
+            <span class="mono" x-text="takeover.order?.id || '—'"></span>
+          </div>
+          <div class="tk-info-row">
+            <span class="muted">商品</span>
+            <a class="mono" x-show="takeover.order?.item_id"
+               :href="'https://www.goofish.com/item?id=' + takeover.order.item_id" target="_blank"
+               x-text="takeover.order?.item_id"></a>
+            <span class="muted" x-show="!takeover.order?.item_id">—</span>
+          </div>
+          <div class="tk-info-row">
+            <span class="muted">金额</span>
+            <span class="mono" x-text="takeover.order?.amount ? '¥' + takeover.order.amount : '—'"></span>
+            <template x-if="takeover.order?.amount && takeover.order?.status === 'succeeded'">
+              <span class="profit-hint profit-pos" x-text="'净赚 ¥' + calcProfit(takeover.order.amount).toFixed(1)"></span>
+            </template>
+          </div>
+        </div>
+
+        <!-- F-13 利润计算器：扣完闲鱼手续费后的净赚
+          - 鱼小铺（职业卖家）1.6%，普通 C2C 0.6%，支持自定义费率
+          - 买入价由用户手动填入（系统不知道实际采购成本）
+          - 净赚 = 卖出价 - 买入价 - 手续费（手续费 = 卖出价 × 费率）
+        -->
+        <div class="tk-profit-calc" x-show="takeover.order?.amount">
+          <div class="tk-info-row">
+            <span class="muted">手续费率</span>
+            <select x-model="profitRate" style="width: auto;">
+              <option value="0.006">普通 0.6%</option>
+              <option value="0.016">鱼小铺 1.6%</option>
+              <option value="custom">自定义</option>
+            </select>
+            <input type="number" x-show="profitRate === 'custom'" x-model.number="customRate"
+                   step="0.001" min="0" max="0.1" placeholder="0.010" style="width: 80px;">
+          </div>
+          <div class="tk-info-row">
+            <span class="muted">买入价</span>
+            <input type="number" x-model.number="buyPrice" placeholder="填入实际买入价" style="width: 120px;">
+          </div>
+          <div class="tk-profit-result" x-show="buyPrice > 0 && takeover.order?.amount > 0">
+            <span class="muted">净赚</span>
+            <span class="profit-value" :class="netProfit >= 0 ? 'profit-positive' : 'profit-negative'"
+                  x-text="'¥' + netProfit.toFixed(2)"></span>
+            <span class="muted" x-text="'(手续费 ¥' + feeAmount.toFixed(2) + ')'"></span>
+          </div>
+        </div>
+
+        <!-- 阶段 1：首次接管确认 -->
+        <div x-show="takeover.stage === 'confirm'">
+          <p class="muted" style="font-size: 13px; line-height: 1.6; margin: 12px 0;">
+            把订单状态切换为 <b>人工接管</b>，您需要打开 <b>闲鱼 App</b> 在 30 分钟内完成手动支付。<br>
+            系统会停止自动重试，避免重复下单。
+          </p>
+          <ol class="tk-steps">
+            <li>点击下方"开始接管"按钮</li>
+            <li>打开手机闲鱼 App → "我的订单" → 找到该订单</li>
+            <li>在 <b>30 分钟</b> 内完成支付</li>
+            <li>返回此处点击"我已支付"完成闭环</li>
+          </ol>
+        </div>
+
+        <!-- 阶段 2：接管中：倒计时 + 步骤清单 + 行动按钮 -->
+        <div x-show="takeover.stage === 'progress'" x-cloak>
+          <!-- 倒计时大圆环：用 mm:ss 形式显示 -->
+          <div class="tk-countdown" :class="countdownClass()">
+            <div class="tk-countdown-v" x-text="formatCountdown()"></div>
+            <div class="tk-countdown-l">
+              <span x-show="takeover.remaining_sec > 60">剩余支付时间</span>
+              <span x-show="takeover.remaining_sec <= 60 && takeover.remaining_sec > 0" x-cloak>⚠ 即将超时</span>
+              <span x-show="takeover.remaining_sec <= 0" x-cloak>已超时</span>
+            </div>
+            <div class="tk-countdown-bar">
+              <div class="tk-countdown-bar-fill" :style="`width: ${countdownPct()}%`"></div>
+            </div>
+            <div class="muted" style="font-size: 11px; margin-top: 6px;"
+                 x-text="'接管开始于 ' + (takeover.takeover_at || '').slice(0, 19)"></div>
+          </div>
+
+          <ol class="tk-steps" style="margin-top: 16px;">
+            <li :class="true ? 'done' : ''">✓ 已切换为人工接管</li>
+            <li>打开手机 <b>闲鱼 App</b>，进入"我的订单"</li>
+            <li>找到该订单（编号 <span class="mono" x-text="takeover.order?.id"></span>）并完成支付</li>
+            <li>返回本页面点击"我已支付"</li>
+          </ol>
+        </div>
+
+        <!-- 阶段 3：完成 -->
+        <div x-show="takeover.stage === 'done'" x-cloak>
+          <div class="tk-done">
+            <div class="big-ico" x-text="takeover.result === 'confirmed' ? '✓' : '↺'"></div>
+            <h3 x-text="takeover.result === 'confirmed' ? '支付已确认' : '已取消接管'"></h3>
+            <p class="muted" x-text="takeover.result === 'confirmed' ? '订单已标记为成功' : '订单回到待处理状态'"></p>
+          </div>
+          <!-- P3-O-08：自动关闭倒计时提示
+            - 鼠标在 Modal 内：显示"已暂停 · 移出后继续"
+            - 鼠标在 Modal 外：显示"Ns 后自动关闭"
+            - _auto_close_remaining > 0 才显示（防止 X 关闭后残留 UI） -->
+          <div class="muted tk-auto-close-hint"
+               x-show="takeover._auto_close_remaining > 0"
+               :class="takeover._auto_close_paused ? 'is-paused' : ''"
+               x-text="takeover._auto_close_paused
+                 ? '⏸ 已暂停 · 鼠标移出后继续倒计时'
+                 : ('⏱ ' + takeover._auto_close_remaining + 's 后自动关闭 · 移入暂停')"></div>
+        </div>
+      </div>
+      <footer class="modal-f">
+        <button class="btn btn-ghost" @click="closeTakeover()"
+                x-text="takeover.stage === 'done' ? '关闭' : '稍后处理'"></button>
+        <button class="btn btn-primary" @click="confirmTakeover()"
+                x-show="takeover.stage === 'confirm'"
+                :disabled="takeover.busy">开始接管</button>
+        <template x-if="takeover.stage === 'progress'">
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-warn" @click="cancelTakeover()"
+                    :disabled="takeover.busy">取消接管</button>
+            <button class="btn btn-primary" @click="confirmPaid()"
+                    :disabled="takeover.busy">✓ 我已支付</button>
+          </div>
+        </template>
+        <button class="btn" @click="closeTakeover()" x-show="takeover.stage === 'done'">完成</button>
+      </footer>
+    </div>
+  </div>
+</div>
+
+<script>
+function ordersList() {
+  return {
+    items: [],
+    stats: { succeeded: 0, pending: 0, failed: 0, takeover: 0 },
+    // F-13 利润计算器：'normal'=普通C2C 0.6%, 'pro'=鱼小铺 1.6%
+    // 默认普通（捡漏场景绝大多数是 C2C），点击利润数字可切换
+    profitMode: 'normal',
+    // F-13 接管 Modal 利润计算器：支持选择费率+填入买入价
+    profitRate: '0.006',
+    customRate: 0.01,
+    buyPrice: 0,
+    get effectiveRate() {
+      return this.profitRate === 'custom' ? this.customRate : parseFloat(this.profitRate);
+    },
+    get feeAmount() {
+      const amount = this.takeover.order?.amount || 0;
+      return amount * this.effectiveRate;
+    },
+    get netProfit() {
+      const amount = this.takeover.order?.amount || 0;
+      return amount - this.buyPrice - this.feeAmount;
+    },
+    // 接管 Modal 状态机：confirm → progress → done
+    // P3-O-08：接管 Modal done 阶段自动关闭倒计时（秒）
+    // - 设为 0 = 关闭自动关闭功能
+    // - 鼠标移入 Modal 时暂停（让用户看清确认结果），移出恢复
+    // - 用户点 × / 关闭 / 完成 都会清掉这个 timer（走 closeTakeover()）
+    takeover: {
+      open: false,
+      stage: 'confirm',  // 'confirm' | 'progress' | 'done'
+      order: null,       // 当前正在接管的订单
+      takeover_at: null,
+      remaining_sec: 0,
+      busy: false,
+      result: null,      // 'confirmed' | 'cancelled'
+      _timer: null,
+      _auto_close_remaining: 0,  // 自动关闭倒计时（秒），0 = 未启动
+      _auto_close_paused: false, // 鼠标在 Modal 内时为 true
+      _auto_close_timer: null,   // setInterval 句柄
+    },
+    // P3-UX-02：商品标题缓存 + 异步拉取
+    // - 内存 + sessionStorage 双层：刷新页面 30 分钟内不重复拉
+    // - _loading 防止并发：批量拉一次，多个订单共享结果
+    _itemCache: {},
+    _itemPending: {},   // {item_id: Promise} 防止同一 item_id 多次 in-flight
+    _itemCacheKey: 'xh.order_items_titles',
+    _itemCacheTs: 0,
+    async init() {
+      this._loadItemCacheFromStorage();
+      await this.refresh();
+    },
+    async refresh() {
+      const r = await fetch('/api/orders?limit=100').then(r => r.json());
+      this.items = r.items || [];
+      this.stats = {
+        succeeded: this.items.filter(o => o.status === 'succeeded').length,
+        pending: this.items.filter(o => ['pending','submitting','paying','takeover_pending'].includes(o.status)).length,
+        takeover: this.items.filter(o => o.status === 'takeover_pending').length,
+        failed: this.items.filter(o => o.status === 'failed').length,
+      };
+      // 异步补全商品标题（失败静默：旧数据没有 title 时不影响主列表）
+      this._loadItemTitles();
+    },
+
+    // ----- P3-UX-02: 商品标题缓存 -----
+    /**
+     _loadItemCacheFromStorage: 启动时把 sessionStorage 里的旧缓存读进内存
+     - 30 分钟 TTL 过期（时间戳跟着缓存一起存），避免长期用陈旧标题
+    */
+    _loadItemCacheFromStorage() {
+      try {
+        const raw = sessionStorage.getItem(this._itemCacheKey);
+        if (!raw) return;
+        const obj = JSON.parse(raw);
+        if (!obj || typeof obj !== 'object') return;
+        const now = Date.now();
+        // 超过 30 分钟视为过期
+        if (now - (obj._ts || 0) > 30 * 60 * 1000) return;
+        this._itemCache = obj.data || {};
+        this._itemCacheTs = obj._ts || 0;
+      } catch (_) {
+        // sessionStorage 不可用（隐私模式）→ 内存缓存仍工作
+      }
+    },
+    /** 把内存缓存持久化到 sessionStorage（每次拉完批量接口后写一次） */
+    _saveItemCacheToStorage() {
+      try {
+        sessionStorage.setItem(this._itemCacheKey, JSON.stringify({
+          _ts: Date.now(),
+          data: this._itemCache,
+        }));
+      } catch (_) {}
+    },
+    /**
+     getItemTitle: 模板里调用的 getter
+     - 命中缓存 → 返回标题
+     - 未命中 → 返回空字符串，模板走"显示 item_id 灰链"回退
+    */
+    getItemTitle(itemId) {
+      if (!itemId) return '';
+      return this._itemCache[itemId] || '';
+    },
+    /**
+     _loadItemTitles: 找出所有还没缓存的 item_id，批量调一次 /api/items/batch
+     - 上限 50：超过时分批
+     - 拉完后写 sessionStorage 缓存
+     - 失败静默：toast 不弹（用户更关心订单状态，不关心"这个订单的商品标题没拉到"）
+    */
+    async _loadItemTitles() {
+      const need = new Set();
+      for (const o of this.items) {
+        if (o.item_id && !this._itemCache[o.item_id] && !this._itemPending[o.item_id]) {
+          need.add(o.item_id);
+        }
+      }
+      if (need.size === 0) return;
+      // 标记为 in-flight（防止同一 item_id 在 200ms 内被多次拉）
+      const ids = Array.from(need);
+      for (const id of ids) this._itemPending[id] = true;
+      // 分批（每批 50）
+      for (let i = 0; i < ids.length; i += 50) {
+        const chunk = ids.slice(i, i + 50);
+        try {
+          const r = await fetch('/api/items/batch?ids=' + chunk.map(encodeURIComponent).join(','), { credentials: 'include' })
+            .then(r => r.json());
+          for (const [iid, sum] of Object.entries(r.summaries || {})) {
+            this._itemCache[iid] = sum.title || '';
+          }
+          // 缺失的 item_id 缓存为空字符串，下次不再拉
+          for (const iid of (r.missing || [])) {
+            this._itemCache[iid] = '';
+          }
+          this._saveItemCacheToStorage();
+        } catch (_) {
+          // 静默：下次 refresh 会重试
+        }
+      }
+      // 清理 in-flight 标记
+      for (const id of ids) delete this._itemPending[id];
+    },
+    // ----- 接管 Modal 控制 -----
+    openTakeover(o) {
+      this.takeover.open = true;
+      this.takeover.order = o;
+      this.takeover.busy = false;
+      this.takeover.result = null;
+      // F-13：每次打开接管 Modal 时重置利润计算器（避免残留上一单的买入价）
+      this.buyPrice = 0;
+      this.profitRate = '0.006';
+      // 已有 takeover_pending：直接进入 progress 阶段
+      // 否则：进入 confirm 阶段
+      if (o.status === 'takeover_pending') {
+        this.takeover.stage = 'progress';
+        this.takeover.takeover_at = o.confirmed_at || null;
+        // 服务端给的 takeover_remaining_sec 是列表生成时刻的值，
+        // 简单起见：前端从 confirmed_at 重新算（不依赖后端字段）
+        this._recomputeRemaining();
+        this._startCountdown();
+      } else {
+        this.takeover.stage = 'confirm';
+        this._stopCountdown();
+      }
+    },
+    closeTakeover() {
+      this._stopCountdown();
+      this._stopAutoClose();
+      // 关闭时如果订单是 takeover_pending 则让后台静默刷新
+      this.takeover.open = false;
+      this.takeover.order = null;
+      // 列表数据已可能变化，触发一次刷新
+      this.refresh();
+    },
+    async confirmTakeover() {
+      const id = this.takeover.order?.id || this.takeover.order?.order_id;
+      if (!id) return;
+      this.takeover.busy = true;
+      try {
+        const r = await fetch('/api/orders/' + id + '/takeover', { method: 'POST', credentials: 'include' });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          this.toast('接管失败: ' + (err.detail || r.status), 'err');
+          return;
+        }
+        const data = await r.json();
+        this.takeover.stage = 'progress';
+        this.takeover.takeover_at = data.takeover_at;
+        this.takeover.remaining_sec = (data.timeout_min || 30) * 60;
+        this._startCountdown();
+        this.toast('✓ 已转人工接管', 'ok');
+        // 静默更新本条订单
+        await this.refresh();
+        // 同步 takeover.order 的最新状态
+        const updated = this.items.find(x => (x.id || x.order_id) === id);
+        if (updated) this.takeover.order = updated;
+      } catch (e) {
+        this.toast('请求失败: ' + e.message, 'err');
+      } finally {
+        this.takeover.busy = false;
+      }
+    },
+    async confirmPaid() {
+      const id = this.takeover.order?.id || this.takeover.order?.order_id;
+      if (!id) return;
+      this.takeover.busy = true;
+      try {
+        const r = await fetch('/api/orders/' + id + '/takeover/confirm', { method: 'POST', credentials: 'include' });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          this.toast('确认失败: ' + (err.detail || r.status), 'err');
+          return;
+        }
+        this.takeover.stage = 'done';
+        this.takeover.result = 'confirmed';
+        this._stopCountdown();
+        // P3-O-08：done 阶段 3s 后自动关闭（鼠标移入暂停）
+        this._startAutoClose(3);
+        this.toast('✓ 支付已确认', 'ok');
+        await this.refresh();
+        const updated = this.items.find(x => (x.id || x.order_id) === id);
+        if (updated) this.takeover.order = updated;
+      } catch (e) {
+        this.toast('请求失败: ' + e.message, 'err');
+      } finally {
+        this.takeover.busy = false;
+      }
+    },
+    async cancelTakeover() {
+      const id = this.takeover.order?.id || this.takeover.order?.order_id;
+      if (!id) return;
+      if (!window.confirm('确认取消接管？订单会回到待处理状态，系统可能再次尝试自动下单。')) return;
+      this.takeover.busy = true;
+      try {
+        const r = await fetch('/api/orders/' + id + '/takeover/cancel', { method: 'POST', credentials: 'include' });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          this.toast('取消失败: ' + (err.detail || r.status), 'err');
+          return;
+        }
+        this.takeover.stage = 'done';
+        this.takeover.result = 'cancelled';
+        this._stopCountdown();
+        // P3-O-08：done 阶段 3s 后自动关闭
+        this._startAutoClose(3);
+        this.toast('已取消接管', 'ok');
+        await this.refresh();
+        const updated = this.items.find(x => (x.id || x.order_id) === id);
+        if (updated) this.takeover.order = updated;
+      } catch (e) {
+        this.toast('请求失败: ' + e.message, 'err');
+      } finally {
+        this.takeover.busy = false;
+      }
+    },
+    // ----- 倒计时 -----
+    _recomputeRemaining() {
+      const at = this.takeover.takeover_at;
+      if (!at) { this.takeover.remaining_sec = 0; return; }
+      const start = new Date(at);
+      if (isNaN(start.getTime())) { this.takeover.remaining_sec = 0; return; }
+      const deadline = start.getTime() + 30 * 60 * 1000;
+      const now = Date.now();
+      this.takeover.remaining_sec = Math.max(0, Math.floor((deadline - now) / 1000));
+    },
+    _startCountdown() {
+      this._stopCountdown();
+      this.takeover._timer = setInterval(() => {
+        if (this.takeover.remaining_sec > 0) this.takeover.remaining_sec -= 1;
+        else this._stopCountdown();
+      }, 1000);
+    },
+    _stopCountdown() {
+      if (this.takeover._timer) {
+        clearInterval(this.takeover._timer);
+        this.takeover._timer = null;
+      }
+    },
+    // ----- P3-O-08：done 阶段自动关闭（默认 3s） -----
+    /**
+     * _startAutoClose(sec): 启动 done 阶段倒计时关闭
+     * - sec=0 → 不启动（也用于测试 / 调试）
+     * - 启动前先 _stopAutoClose 防止叠加
+     * - 鼠标在 Modal 内时倒计时不递减（_pauseAutoClose 把 _auto_close_paused=true）
+     */
+    _startAutoClose(sec) {
+      this._stopAutoClose();
+      if (!sec || sec <= 0) return;
+      this.takeover._auto_close_remaining = sec;
+      this.takeover._auto_close_paused = false;
+      this.takeover._auto_close_timer = setInterval(() => {
+        if (this.takeover._auto_close_paused) return;  // 鼠标在 Modal 内不递减
+        this.takeover._auto_close_remaining -= 1;
+        if (this.takeover._auto_close_remaining <= 0) {
+          this._stopAutoClose();
+          this.closeTakeover();
+        }
+      }, 1000);
+    },
+    _stopAutoClose() {
+      if (this.takeover._auto_close_timer) {
+        clearInterval(this.takeover._auto_close_timer);
+        this.takeover._auto_close_timer = null;
+      }
+      this.takeover._auto_close_remaining = 0;
+      this.takeover._auto_close_paused = false;
+    },
+    _pauseAutoClose() {
+      // 鼠标在 Modal 内 → 暂停倒计时（不清零，移出后继续）
+      if (this.takeover._auto_close_timer) this.takeover._auto_close_paused = true;
+    },
+    _resumeAutoClose() {
+      // 鼠标移出 Modal → 恢复倒计时
+      this.takeover._auto_close_paused = false;
+    },
+    formatCountdown() {
+      const s = this.takeover.remaining_sec;
+      const m = Math.floor(s / 60);
+      const ss = s % 60;
+      return String(m).padStart(2, '0') + ':' + String(ss).padStart(2, '0');
+    },
+    countdownPct() {
+      // 总时长 30 分钟，按比例换算填充条
+      return Math.max(0, Math.min(100, (this.takeover.remaining_sec / (30 * 60)) * 100));
+    },
+    countdownClass() {
+      const s = this.takeover.remaining_sec;
+      if (s <= 0) return 'is-expired';
+      if (s <= 60) return 'is-critical pulse';
+      if (s <= 300) return 'is-warning';
+      return 'is-ok';
+    },
+    statusLabel(s) {
+      return {
+        pending: '待提交', submitting: '提交中', paying: '待支付',
+        succeeded: '已支付', failed: '失败', takeover_pending: '人工接管',
+      }[s] || s;
+    },
+    // O-14：订单状态图标，颜色+图标双通道
+    statusIcon(s) {
+      return {
+        pending: '◷', submitting: '↑', paying: '¥',
+        succeeded: '✓', failed: '✕', takeover_pending: '⤴',
+      }[s] || '';
+    },
+    // F-14：移动端简化接管 - 直接跳闲鱼 App 而非打开完整 Modal
+    // 先静默调 takeover API 确保状态已切换，再尝试 deep link 拉起 App
+    // deep link 失败时回退到网页版闲鱼
+    async mobileTakeover(o) {
+      const id = o.id || o.order_id;
+      if (!id) return;
+      try {
+        // 如果还不是 takeover_pending，先接管
+        if (o.status !== 'takeover_pending') {
+          const r = await fetch('/api/orders/' + id + '/takeover', { method: 'POST', credentials: 'include' });
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            this.toast('接管失败: ' + (err.detail || r.status), 'err');
+            return;
+          }
+          this.toast('已转人工接管，正在跳转闲鱼…', 'ok');
+        }
+        // 尝试 deep link 拉起闲鱼 App
+        const deepLink = 'goofish://item?id=' + (o.item_id || '');
+        const webLink = 'https://www.goofish.com/item?id=' + (o.item_id || '');
+        // 用 location.href 跳转 deep link；1.5s 后如果还在本页则回退到网页版
+        window.location.href = deepLink;
+        setTimeout(() => {
+          // 如果页面没被切走（deep link 失败），回退到网页版
+          if (!document.hidden) {
+            window.open(webLink, '_blank', 'noopener,noreferrer');
+          }
+        }, 1500);
+        await this.refresh();
+      } catch (e) {
+        this.toast('请求失败: ' + e.message, 'err');
+      }
+    },
+    // F-13 利润计算器
+    calcProfit(amount) {
+      // 闲鱼手续费：普通 C2C 0.6%，鱼小铺 1.6%
+      // 净赚 = 成交价 - 手续费（手续费 = 成交价 × 费率）
+      const rate = this.profitMode === 'pro' ? 0.016 : 0.006;
+      return amount - amount * rate;
+    },
+    toggleProfitMode() {
+      this.profitMode = this.profitMode === 'pro' ? 'normal' : 'pro';
+    },
+  };
+}
+</script>
+{% endblock %}

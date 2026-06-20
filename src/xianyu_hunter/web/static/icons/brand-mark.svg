@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  XianyuHunter 品牌符号
+  设计灵感：Michelin Guide 封面风格 — "指南圆环 + 三星徽章"
+  - 外圈：暗色描边圆环（"指南"）
+  - 内圈：米其林红实心
+  - 中心：3 颗星（米其林三星）
+  颜色使用 currentColor 兼容主题切换
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-label="XianyuHunter">
+  <!-- 外圈描边（指南圆环） -->
+  <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="1.5" fill="none" opacity="0.85"/>
+  <!-- 内圈米其林红 -->
+  <circle cx="16" cy="16" r="10" fill="#E20613"/>
+  <!-- 三颗金星（米其林三星） -->
+  <g fill="#C9A961">
+    <!-- 顶星 -->
+    <path d="M16 9.5 L17 11.6 L19.3 11.9 L17.6 13.5 L18 15.7 L16 14.6 L14 15.7 L14.4 13.5 L12.7 11.9 L15 11.6 Z" transform="translate(0,-1)"/>
+    <!-- 左下星 -->
+    <path d="M12.5 16.5 L13.2 17.9 L14.7 18.1 L13.6 19.2 L13.9 20.7 L12.5 20 L11.1 20.7 L11.4 19.2 L10.3 18.1 L11.8 17.9 Z"/>
+    <!-- 右下星 -->
+    <path d="M19.5 16.5 L20.2 17.9 L21.7 18.1 L20.6 19.2 L20.9 20.7 L19.5 20 L18.1 20.7 L18.4 19.2 L17.3 18.1 L18.8 17.9 Z"/>
+  </g>
+</svg>

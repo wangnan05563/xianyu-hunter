@@ -1,0 +1,24 @@
+<!-- 价格过滤（在任务级覆盖全局；这里只展示全局默认） -->
+<div x-data>
+  <h3 style="margin-top: 0;">价格过滤（全局默认）</h3>
+  <p class="muted">这里的设置作为默认值；每个任务可在新增时覆盖。</p>
+
+  <div class="field">
+    <label>价格过滤说明</label>
+    <p class="muted">当前项目没有全局价格配置，价格过滤在任务级 <code class="mono">min_price</code> / <code class="mono">max_price</code> 中设置。
+    此页面仅展示说明。</p>
+  </div>
+
+  <h3>价格策略（modules/price_strategy.py）</h3>
+  <p class="muted">系统在评估时按"市场价比例"过滤过高/过低的商品。可在 <code class="mono">config/config.yaml</code> 中加入：</p>
+  <pre class="mono" style="background: var(--bg-0); padding: 12px; border-radius: var(--r-md); border: 1px solid var(--border); overflow-x: auto;">price_strategy:
+  market_ratio: 0.8        # 高于市场价 80% 视为过高
+  min_ratio: 0.3            # 低于市场价 30% 视为过低（疑似骗子）</pre>
+
+  <h3>建议</h3>
+  <ul>
+    <li>在 <a href="/tasks">任务管理</a> 里设置每个任务的 <code class="mono">min_price</code> / <code class="mono">max_price</code></li>
+    <li>避免价格区间过大（容易被低质商品淹没）</li>
+    <li>对高单价商品，<code class="mono">market_ratio</code> 调到 0.6 更安全</li>
+  </ul>
+</div>

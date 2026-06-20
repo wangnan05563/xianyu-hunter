@@ -1,0 +1,78 @@
+server:
+  host: 127.0.0.1
+  port: 8000
+browser:
+  headless: true
+  user_data_dir: ./browser-data
+  viewport_width: 1024
+  viewport_height: 768
+  user_agent: smoke-d-314261547
+antidetect:
+  qps: 1
+  min_delay_ms: 200
+  max_delay_ms: 1500
+  fail_pause_threshold: 3
+  fail_window_sec: 3600
+waf:
+  enabled: true
+  login_check_interval_min: 30
+notifier:
+  default_channels:
+  - serverchan
+  - pushplus
+  - bark
+  channels:
+    serverchan: true
+    pushplus: true
+    bark: true
+  quiet_hours:
+    enabled: false
+    start: '23:00'
+    end: 07:00
+    critical_only: true
+    weekend_only: false
+  subscribed_events:
+  - EVAL_PASSED
+  - BUY_SUCCEEDED
+  - TASK_STARTED
+  - TASK_STOPPED
+  - TASK_PAUSED
+  - TASK_SEARCH_DONE
+  - ITEM_FOUND
+  - EVAL_REJECTED
+  - BUY_FAILED
+  - AUTH_EXPIRED
+  - WAF_BLOCKED
+  - SYSTEM_ERROR
+eval:
+  weights:
+    professional: 30
+    credit: 30
+    dispute: 25
+    price: 15
+  thresholds:
+    on_sale_count: 30
+    post_count_30d: 15
+    top_category_ratio: 0.8
+    credit_score_min: 600
+    bad_review_max: 3
+    register_days_min: 30
+  professional_keywords:
+  - 批发
+  - 代理
+  - 代购
+  - 大量
+  - 店铺
+  - 厂家
+  - 直发
+  - 一手
+  - 现货
+  - 大量有货
+  pass_score: 60
+  auto_buy_score: 80
+  ai_auto_eval: false
+  ai_auto_deep_analyze: false
+serverchan_send_key: ''
+pushplus_token: ''
+bark_server: ''
+bark_key: ''

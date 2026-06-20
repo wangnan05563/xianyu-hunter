@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+.coverage_html/
+coverage.xml
+coverage*.json
+htmlcov/
+
+# Node.js
+node_modules/
+
+# 截图和图片
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# 项目
+browser-data/
+browser-data.bak/
+data/
+!data/.gitkeep
+backup/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+.trae/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
+*.out
+*.err
+
+# 临时调试脚本（以 _ 开头的根目录文件）
+/_*.py
+/_*.ps1
+/_*.bat
+
+# 测试截图和可视化产物
+*_shots/
+screenshots/
+tests/screenshots/
+tests/visual/
+scripts/.screenshots/
+
+# 临时文件
+*.tmp
+*.bak
+*.orig
+*~
+trace/
+
+# 前端构建产物
+src/xianyu_hunter/web/static/spa/
+
+# 配置备份
+config/backups/
+
+# 临时测试文件
+test_pw*.py
+test_pw*.txt
+_test_result.txt
+config_resp.jsonclear
+
+# TypeScript 构建信息
+frontend/tsconfig.tsbuildinfo
+
+# 临时文件列表
+_filelist.txt
+_git_status.txt

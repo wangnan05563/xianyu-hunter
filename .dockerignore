@@ -1,0 +1,54 @@
+# XianyuHunter .dockerignore
+# 减少构建上下文体积，加速 Docker build
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# 文档
+docs/
+*.md
+
+# Git
+.git/
+.gitignore
+
+# 运行时数据（避免打包进镜像）
+data/
+*.db
+*.log
+run.stdout.log
+run.stderr.log
+
+# Docker 自身
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# 操作系统
+.DS_Store
+Thumbs.db

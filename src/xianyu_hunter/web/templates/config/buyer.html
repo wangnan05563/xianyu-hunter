@@ -1,0 +1,38 @@
+<!-- 抢单策略：auto 模式才有意义 -->
+<div x-data>
+  <h3 style="margin-top: 0;">抢单策略</h3>
+  <p class="muted">这些参数控制 auto 模式下的抢单行为。notify / confirm 模式不受影响。</p>
+
+  <div class="field-row">
+    <div class="field">
+      <label>抢单最低分数 (auto_buy_score)</label>
+      <input type="number" min="0" max="100" x-model.number="$store.cfg.eval.auto_buy_score">
+      <span class="help">≥ 此分数才会自动拍下（在 <a href="/config/eval">评估权重</a> 设置）</span>
+    </div>
+    <div class="field">
+      <label>通过分数 (pass_score)</label>
+      <input type="number" min="0" max="100" x-model.number="$store.cfg.eval.pass_score">
+      <span class="help">≥ 此分数会推送给用户确认</span>
+    </div>
+  </div>
+
+  <h3>任务级模式</h3>
+  <p class="muted">每个任务可独立设置执行模式（在 <a href="/tasks">任务管理</a> 中）：</p>
+  <ul>
+    <li><span class="pill pending" aria-label="模式: 仅通知"><span class="status-icon" aria-hidden="true">🔔</span>notify</span> 仅推送通知，不抢单（最安全）</li>
+    <li><span class="pill paused" aria-label="模式: 通知+确认"><span class="status-icon" aria-hidden="true">✋</span>confirm</span> 推送后等待用户确认（推荐日常）</li>
+    <li><span class="pill running" aria-label="模式: 全自动"><span class="status-icon" aria-hidden="true">⚡</span>auto</span> 全自动抢单（仅在 auto_buy_score 足够高时使用）</li>
+  </ul>
+
+  <h3>安全护栏</h3>
+  <p class="muted">建议：</p>
+  <ul>
+    <li>auto_buy_score ≥ 80 才启用 auto 模式</li>
+    <li>单日抢单数量上限：在 <code class="mono">buyer_config.py</code> 中配置（待 UI 化）</li>
+    <li>支付前暂停：默认开启（在 dashboard 可手动接管）</li>
+  </ul>
+
+  <div class="mt-16 warn-text">
+    ⚠️ <strong>谨慎使用 auto 模式</strong>：自动拍下会立即锁定你的资金，请确认已充分测试。
+  </div>
+</div>
