@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -10,12 +11,154 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
 from xianyu_hunter.container import Container
-from xianyu_hunter.infra.db_models import _utcnow, ItemRow
+from xianyu_hunter.domain.evaluation import RiskLevel
+from xianyu_hunter.infra.db_models import _utcnow, EventRow, ItemRow, SellerRow
 from xianyu_hunter.infra.yaml_config import get_config
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import to_datetime
 
 router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
+
+
+# 已知污染模式：早期 DOM 解析脚本错误写入的字段值
+_REGION_PATTERNS = re.compile(r"^[\u4e00-\u9fa5]{2,4}$")  # 纯 2-4 字中文（省/市）
+_CREDIT_PATTERNS = re.compile(r"^.*(信用|极好|良好|优秀|信誉).*$")
+_PUBLISH_TIME_PATTERNS = re.compile(
+    r".*(周内|天内|小时前|分钟前|月前|刚刚|今天|昨天|前天|秒前|\d+\s*(分钟|小时|天|周|月)前).*"
+)
+# 卖家昵称脏数据识别用的关键词集合
+# 必须包含所有可能的污染值（如"几乎全新"、"全新"等成色关键词）
+_POLLUTED_NICK_KEYWORDS = {
+    "全新", "未拆封", "未使用", "未拆", "99新", "95新", "9成新", "几乎全新",
+    "近全新", "近新", "9.5新", "9.9新", "8成新", "8.5新", "85新", "7成新",
+    "正常使用", "使用过", "有使用痕迹", "明显使用", "外观磨损", "有划痕", "磕碰",
+    "维修", "维修过", "拆修", "故障", "损坏", "已坏", "屏幕破损", "进水", "摔过",
+    "原装", "原厂", "正品", "原盒", "原包装", "带发票", "带保修", "在保",
+    "裸机", "无包装", "无配件",
+    "全新未拆", "未拆封未使用", "未激活", "国行未激活",
+    "轻微使用", "保养好", "使用痕迹少", "成色新",
+    "成色一般", "使用痕迹明显", "老化", "非全新", "不能用", "进水机",
+    "全套", "配件齐全", "带原盒", "保修中", "保修卡", "原装盒", "全套包装",
+    "无充电器", "无原盒", "无发票", "无保修卡", "配件不全", "缺包装",
+}
+
+
+def _is_polluted_seller_nick(value: str) -> tuple[bool, str]:
+    """检测 seller_nick 是否为脏数据
+
+    返回 (is_polluted, pollution_type)：
+    - pollution_type: "region" | "credit" | "publish_time" | "condition" | "combined" | ""
+    """
+    if not value or not isinstance(value, str):
+        return False, ""
+    s = value.strip()
+    if not s:
+        return False, ""
+
+    # 1. 复合污染：包含 \n 分隔的多个字段（地区+信用度）
+    if "\n" in s or "\\n" in s:
+        return True, "combined"
+
+    # 2. 地区污染：纯 2-4 字中文
+    if _REGION_PATTERNS.match(s) and s in {"河北", "山西", "山东", "河南", "江苏", "浙江",
+                                              "安徽", "福建", "江西", "湖北", "湖南", "广东",
+                                              "广西", "海南", "四川", "贵州", "云南", "陕西",
+                                              "甘肃", "青海", "台湾", "北京", "天津", "上海",
+                                              "重庆", "唐山", "石家庄", "保定", "邯郸", "秦皇岛",
+                                              "广州", "深圳", "杭州", "南京", "苏州", "成都",
+                                              "武汉", "西安", "郑州", "济南", "青岛", "厦门",
+                                              "福州", "合肥", "南昌", "长沙", "太原"}:
+        return True, "region"
+
+    # 3. 信用度污染
+    if _CREDIT_PATTERNS.match(s) and len(s) <= 20:
+        return True, "credit"
+
+    # 4. 发布时间污染（"一周内发布"、"x小时前"等）
+    if _PUBLISH_TIME_PATTERNS.match(s) and len(s) <= 20:
+        return True, "publish_time"
+
+    # 5. 成色关键词污染（"几乎全新"等）
+    if s in _POLLUTED_NICK_KEYWORDS:
+        return True, "condition"
+
+    return False, ""
+
+
+def _clean_dirty_seller_nick(payload: dict, item_map: dict[str, dict]) -> None:
+    """清洗历史评估数据中 seller_nick 字段被污染的问题
+
+    历史 bug 总结（多种污染模式）：
+    1. 早期 DOM 解析脚本用宽泛的 [class*="seller"] 选择器，导致 seller_nick 字段
+       被写入了"地区\\n\\n卖家信用度"格式的脏数据
+    2. 部分历史代码从商品标题/描述中错误地提取了"几乎全新"、"一周内发布"等
+       成色/时间关键词作为 seller_nick
+    3. 部分记录 seller_nick 字段是纯地区名（"河北"、"唐山"等）
+
+    本函数通过白名单+模式识别检测污染，并尝试将脏数据分离到正确的字段：
+    - 地区 → region
+    - 信用度 → seller_credit
+    - 发布时间短语 → publish_time_text（前端兜底展示）
+    - 成色关键词 → condition_label（覆盖自动计算结果）
+    """
+    nick = payload.get("seller_nick", "")
+    is_polluted, pollution_type = _is_polluted_seller_nick(nick)
+
+    if not is_polluted:
+        return
+
+    if pollution_type == "combined":
+        # 复合污染：分离"地区\n信用度"格式
+        parts = [s.strip() for s in nick.replace("\\n", "\n").split("\n") if s.strip()]
+        region = ""
+        credit = ""
+        for p in parts:
+            _, sub_type = _is_polluted_seller_nick(p)
+            if sub_type == "region" and not region:
+                region = p
+            elif sub_type == "credit" and not credit:
+                credit = p
+        if region and not payload.get("region"):
+            payload["region"] = region
+        if credit and not payload.get("seller_credit"):
+            payload["seller_credit"] = credit
+        # 剩余部分作为 seller_nick
+        real_nick = " ".join(p for p in parts if p != region and p != credit).strip()
+        payload["seller_nick"] = real_nick
+
+    elif pollution_type == "region":
+        if not payload.get("region"):
+            payload["region"] = nick.strip()
+        payload["seller_nick"] = ""
+
+    elif pollution_type == "credit":
+        if not payload.get("seller_credit"):
+            payload["seller_credit"] = nick.strip()
+        payload["seller_nick"] = ""
+
+    elif pollution_type == "publish_time":
+        # 把发布时间短语保存为 publish_time_text，前端发布时间为空时兜底显示
+        if not payload.get("publish_time_text"):
+            payload["publish_time_text"] = nick.strip()
+        payload["seller_nick"] = ""
+
+    elif pollution_type == "condition":
+        # 把成色关键词保存为 condition_label_override，覆盖自动计算结果
+        if not payload.get("condition_label_override"):
+            payload["condition_label_override"] = nick.strip()
+        payload["seller_nick"] = ""
+    else:
+        # 兜底：未识别的污染模式，清空 seller_nick
+        payload["seller_nick"] = ""
+
+    # 调试日志：记录脏数据清洗情况（生产环境可通过日志级别控制）
+    import logging
+    logging.getLogger(__name__).info(
+        "Cleaned dirty seller_nick: type=%s, original=%r, new_nick=%r, region=%r, credit=%r, publish_text=%r, override=%r",
+        pollution_type, nick, payload.get("seller_nick"),
+        payload.get("region"), payload.get("seller_credit"),
+        payload.get("publish_time_text"), payload.get("condition_label_override"),
+    )
 
 
 def _enrich_eval_with_item(payload: dict, item_map: dict[str, dict]) -> dict:
@@ -28,17 +171,23 @@ def _enrich_eval_with_item(payload: dict, item_map: dict[str, dict]) -> dict:
     if not item:
         return payload
 
+    # 清洗历史脏数据：seller_nick 字段可能包含"地区+信用度"组合
+    _clean_dirty_seller_nick(payload, item_map)
+
     # 仅补充 payload 中缺失的字段（不覆盖已有值）
+    # 注意：脏数据清洗可能把 seller_nick 设为空字符串，不能用 `not` 判定缺失
     if not payload.get("item_title") and item.get("title"):
         payload["item_title"] = item["title"]
-    if not payload.get("item_price") and item.get("price") is not None:
+    if payload.get("item_price") is None and item.get("price") is not None:
         try:
             payload["item_price"] = float(item["price"])
         except (TypeError, ValueError):
             pass
     if not payload.get("seller_id") and item.get("seller_id"):
         payload["seller_id"] = str(item["seller_id"])
-    if not payload.get("seller_nick") and item.get("seller_nick"):
+    # 关键修复：脏数据清洗后 seller_nick 为空字符串（falsy），
+    # 不能用 `not payload.get("seller_nick")` 判定缺失，否则会被 items 表回填错误数据
+    if payload.get("seller_nick") is None and item.get("seller_nick"):
         payload["seller_nick"] = item["seller_nick"]
     if not payload.get("thumb_url") and item.get("thumb_url"):
         payload["thumb_url"] = item["thumb_url"]
@@ -89,14 +238,30 @@ def list_evaluations(
         if iid:
             item_map[iid] = it
 
+    # 预加载 sellers 表数据（items 表无 seller_nick，需从 sellers 表补充）
+    # 收集所有 item 中出现的 seller_id，批量查询 sellers 表
+    engine = container.repo.engine
+    seller_map: dict[str, str] = {}  # seller_id -> nick
+    with engine.connect() as conn:
+        seller_rows = conn.execute(select(SellerRow.id, SellerRow.nick)).fetchall()
+        for sr in seller_rows:
+            if sr.id and sr.nick:
+                seller_map[sr.id] = sr.nick
+
     evals = []
     for r in rows:
         if not str(r.get("type", "")).startswith("eval."):
             continue
         payload = r.get("payload") or {}
 
-        # 用 items 表数据丰富 payload（补充标题、价格、卖家等）
+        # 用 items 表数据丰富 payload（补充标题、价格、卖家ID等）
         _enrich_eval_with_item(payload, item_map)
+
+        # 用 sellers 表补充卖家昵称（items 表无 seller_nick 字段）
+        # 关键修复：脏数据清洗后 seller_nick 为空字符串，不能用 `not` 判定缺失
+        sid = payload.get("seller_id") or r.get("seller_id")
+        if sid and payload.get("seller_nick") is None and str(sid) in seller_map:
+            payload["seller_nick"] = seller_map[str(sid)]
 
         # 确保顶层 item_id 有值（兼容旧事件：EventRow.item_id 列可能为空）
         if not r.get("item_id") and payload.get("item_id"):
@@ -138,12 +303,145 @@ def list_evaluations(
                 continue
 
         evals.append(r)
-
+    # 计算成色判断标签（基于商品标题和描述文本，帮助用户判断商品新旧程度）
+    _enrich_condition_tags(evals)
     total = len(evals)
     # 始终使用 page_num/page_size 分页
     actual_offset = (page_num - 1) * page_size
     paged = evals[actual_offset:actual_offset + page_size]
     return {"items": paged, "count": len(paged), "total": total}
+
+
+# 商品成色判断关键词库（用户购物时关注的核心维度）
+_CONDITION_KEYWORDS = {
+    "newness": {  # 成色新
+        "labels": ["全新", "未拆封", "未使用", "未拆", "全新未拆", "99新", "95新", "9成新", "几乎全新",
+                   "未激活", "国行未激活", "原装", "原厂", "正品", "未拆封未使用"],
+        "score_bonus": 1,  # 每命中 1 个 +1 分
+    },
+    "newness_worn": {  # 轻度使用
+        "labels": ["9成新", "9.5新", "95新", "9.9新", "轻微使用", "近全新", "保养好", "使用痕迹少", "成色新"],
+        "score_bonus": 0,
+    },
+    "used": {  # 中度使用
+        "labels": ["8成新", "8.5新", "85新", "9成新以下", "正常使用", "使用过", "有使用痕迹"],
+        "score_bonus": -1,
+    },
+    "worn": {  # 明显使用
+        "labels": ["7成新", "成色一般", "使用痕迹明显", "外观磨损", "有划痕", "磕碰", "老化"],
+        "score_bonus": -2,
+    },
+    "broken": {  # 故障/维修
+        "labels": ["维修", "维修过", "拆修", "非全新", "故障", "损坏", "不能用", "已坏",
+                   "屏幕破损", "进水", "摔过", "进水机"],
+        "score_bonus": -3,
+    },
+    "completeness": {  # 配件完整度
+        "labels": ["全套", "配件齐全", "原盒", "原包装", "带发票", "带保修", "带原盒",
+                   "在保", "保修中", "保修卡", "原装盒", "全套包装"],
+        "score_bonus": 1,
+    },
+    "completeness_missing": {  # 配件缺失
+        "labels": ["无包装", "无配件", "无充电器", "无原盒", "裸机", "无发票",
+                   "无保修卡", "配件不全", "缺包装"],
+        "score_bonus": -1,
+    },
+}
+
+
+def _enrich_condition_tags(evals: list[dict]) -> None:
+    """为每条评估记录添加商品成色判断标签
+
+    基于商品标题/描述文本扫描关键词库，识别成色状态（全新/轻度使用/明显使用/故障/维修等），
+    同时给出 condition_score 调整分（叠加到评估分数上），帮助用户判断商品价值。
+
+    新增字段：
+    - condition_tags: 成色标签列表（如 ["全新", "配件齐全"]）
+    - condition_label: 综合成色描述（全新/近全新/正常使用/明显使用/有故障）
+    - condition_score: 成色调整分（-3 ~ +2，叠加到评估分数）
+    - is_branded_new: 是否全新（布尔值）
+    - has_repair: 是否有维修记录（布尔值）
+    """
+    for r in evals:
+        # 跳过已存在 condition_tags 的记录（避免重复计算）
+        if r.get("condition_tags"):
+            continue
+        payload = r.get("payload") or {}
+        # 合并标题和描述作为扫描文本
+        text_parts = [
+            payload.get("item_title", "") or "",
+            payload.get("description", "") or "",
+            payload.get("item_description", "") or "",
+        ]
+        text = " ".join(text_parts).strip()
+        if not text:
+            r["condition_tags"] = []
+            r["condition_label"] = "未知"
+            r["condition_score"] = 0
+            r["is_branded_new"] = False
+            r["has_repair"] = False
+            continue
+
+        tags = []
+        score = 0
+        # 扫描各类关键词
+        for category, info in _CONDITION_KEYWORDS.items():
+            for label in info["labels"]:
+                if label in text:
+                    tags.append({"category": category, "label": label})
+                    score += info["score_bonus"]
+                    break  # 每个 category 只算一次（避免重复加分）
+
+        # 计算综合成色描述
+        if any(t["category"] == "broken" for t in tags):
+            condition_label = "有故障/维修"
+        elif any(t["category"] == "worn" for t in tags):
+            condition_label = "明显使用"
+        elif any(t["category"] == "used" for t in tags):
+            condition_label = "正常使用"
+        elif any(t["category"] == "newness_worn" for t in tags):
+            condition_label = "近全新"
+        elif any(t["category"] == "newness" for t in tags):
+            condition_label = "全新"
+        else:
+            condition_label = "未注明"
+
+        # 兜底覆盖：若历史数据清洗后从 seller_nick 提取到了成色关键词
+        # 则用其覆盖自动计算结果（保证脏数据恢复后展示正确）
+        override = payload.get("condition_label_override")
+        if override and override in _CONDITION_KEYWORDS_LABEL_MAP:
+            condition_label = _CONDITION_KEYWORDS_LABEL_MAP[override]
+            # 修正 is_branded_new 和 has_repair
+            if condition_label == "全新":
+                score = max(score, 1)
+            r["is_branded_new"] = condition_label == "全新"
+            r["has_repair"] = condition_label == "有故障/维修"
+            # 把 override 关键词也加入 tags（方便用户看到原始信息）
+            if not any(t["label"] == override for t in tags):
+                tags.append({"category": "newness" if condition_label in ("全新", "近全新") else "used", "label": override})
+
+        r["condition_tags"] = tags
+        r["condition_label"] = condition_label
+        r["condition_score"] = score
+        r["is_branded_new"] = condition_label == "全新"
+        r["has_repair"] = any(t["category"] == "broken" for t in tags)
+
+
+# 关键词 → 成色描述的映射（用于 condition_label_override 覆盖）
+_CONDITION_KEYWORDS_LABEL_MAP = {
+    "全新": "全新", "未拆封": "全新", "未使用": "全新", "未拆": "全新",
+    "99新": "近全新", "95新": "近全新", "9成新": "近全新", "几乎全新": "近全新",
+    "近全新": "近全新", "近新": "近全新", "9.5新": "近全新", "9.9新": "近全新",
+    "8成新": "正常使用", "8.5新": "正常使用", "85新": "正常使用", "7成新": "明显使用",
+    "正常使用": "正常使用", "使用过": "正常使用", "有使用痕迹": "正常使用",
+    "明显使用": "明显使用", "外观磨损": "明显使用", "有划痕": "明显使用", "磕碰": "明显使用",
+    "维修": "有故障/维修", "维修过": "有故障/维修", "拆修": "有故障/维修",
+    "故障": "有故障/维修", "损坏": "有故障/维修", "已坏": "有故障/维修",
+    "屏幕破损": "有故障/维修", "进水": "有故障/维修", "摔过": "有故障/维修",
+    "原装": "全新", "原厂": "全新", "正品": "全新",  # 单独成色描述时归为全新
+    "原盒": "全新", "原包装": "全新", "带发票": "全新", "带保修": "全新", "在保": "全新",
+    "裸机": "明显使用", "无包装": "正常使用", "无配件": "正常使用",
+}
 
 
 @router.get("/latest/{item_id}")
@@ -590,19 +888,41 @@ def seller_trend_for_item(
 
     前端在评估明细页点击"卖家价格趋势"时调用，无需用户手动输入 seller_id。
     先通过 item_id 查出 seller_id，再复用本模块的 seller_price_trend。
+    优先从 items 表查询，若商品未入库则回退到事件 payload 中提取 seller_id。
     """
     engine = container.repo.engine
+    seller_id: str | None = None
+
+    # 策略1：优先从 items 表查询（数据更完整）
     with engine.connect() as conn:
         row = conn.execute(
             select(ItemRow.seller_id)
             .where(ItemRow.id == item_id)
             .limit(1)
         ).first()
+        if row and row.seller_id:
+            seller_id = row.seller_id
 
-    if not row or not row.seller_id:
-        raise HTTPException(status_code=404, detail="未找到该商品或卖家信息")
+    # 策略2：items 表无记录时，从事件 payload 回退（评估事件中包含 seller_id）
+    if not seller_id:
+        with engine.connect() as conn:
+            evt_row = conn.execute(
+                select(EventRow.payload)
+                .where(
+                    EventRow.item_id == item_id,
+                    EventRow.type.like("eval.%"),
+                )
+                .limit(1)
+            ).first()
+            if evt_row and evt_row.payload:
+                try:
+                    payload = json.loads(evt_row.payload) if isinstance(evt_row.payload, str) else evt_row.payload
+                    seller_id = payload.get("seller_id")
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
-    seller_id = row.seller_id
+    if not seller_id:
+        raise HTTPException(status_code=404, detail="未找到该商品的卖家信息（商品未入库且无评估事件）")
 
     # 复用本模块的 seller_price_trend（同返回格式，避免跨路由耦合）
     return seller_price_trend(
@@ -639,7 +959,87 @@ def recompute_evaluations(
         eval_events = [e for e in eval_events if e.get("task_id") == task_id]
 
     if not eval_events:
-        return {"ok": True, "recomputed": 0, "message": "无评估记录需要重新计算"}
+        # 没有 eval.* 事件时，从 task_links 生成评估
+        # 覆盖场景：live_search 写入了 task_links 但未触发评估（旧版本）
+        link_rows = []
+        if task_id:
+            link_rows = container.repo.list_task_links(
+                task_id=task_id, link_type="item", limit=500
+            )
+        if not link_rows:
+            return {"ok": True, "recomputed": 0, "message": "无评估记录需要重新计算，且无 task_links 可生成评估"}
+
+        evaluator = container.evaluator
+        generated = 0
+        errors = 0
+        for link in link_rows:
+            display = link.get("display") or {}
+            item_id = link.get("link_key") or ""
+            if not item_id:
+                continue
+            try:
+                price_val = display.get("price")
+                price_float = float(price_val) if price_val is not None else 0.0
+                detail = ItemDetail(
+                    id=str(item_id),
+                    title=str(display.get("title") or ""),
+                    price=price_float,
+                    region=str(display.get("region") or ""),
+                    seller_id=str(display.get("seller_id") or ""),
+                    seller_nick=str(display.get("seller_nick") or ""),
+                    thumb_url=str(display.get("thumb_url") or ""),
+                    is_sold=bool(display.get("is_sold", False)),
+                    want_cnt=int(display.get("want_cnt") or 0),
+                    view_cnt=int(display.get("view_cnt") or 0),
+                    description="",
+                )
+                seller = SellerProfile(
+                    id=detail.seller_id or "unknown",
+                    nick=detail.seller_nick or "",
+                    credit_score=None,
+                    register_days=0,
+                    on_sale_count=0,
+                    sold_count=0,
+                )
+                eval_result = evaluator.evaluate(detail, seller)
+                score_display = eval_result.score if eval_result.score is not None else "N/A"
+                level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
+                if eval_result.risk_level == RiskLevel.UNKNOWN:
+                    level = "warn"
+                # 使用 upsert 按 task_id+item_id 去重，防止重复评估
+                container.repo.upsert_eval_event({
+                    "type": "eval.scored",
+                    "task_id": link.get("task_id") or task_id or "",
+                    "item_id": detail.id,
+                    "stage": "eval",
+                    "level": level,
+                    "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
+                    "payload": _json.dumps({
+                        "item_id": detail.id,
+                        "item_title": detail.title,
+                        "item_price": detail.price,
+                        "seller_id": detail.seller_id,
+                        "seller_nick": detail.seller_nick,
+                        "score": eval_result.score,
+                        "risk_level": eval_result.risk_level.value,
+                        "dimension_scores": eval_result.dimension_scores,
+                        "reject_reasons": eval_result.reject_reasons,
+                        "is_passed": eval_result.is_passed,
+                        "data_quality": eval_result.data_quality,
+                    }, ensure_ascii=False, default=str),
+                })
+                generated += 1
+            except Exception:
+                errors += 1
+                continue
+        return {
+            "ok": True,
+            "recomputed": generated,
+            "skipped": 0,
+            "errors": errors,
+            "total": generated,
+            "message": f"从 task_links 生成 {generated} 条评估记录（错误 {errors}）",
+        }
 
     # 预加载 items 和 sellers 数据
     item_rows = container.repo.list_items(limit=10000) or []

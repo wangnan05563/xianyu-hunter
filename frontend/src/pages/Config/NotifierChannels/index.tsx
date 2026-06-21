@@ -2,132 +2,27 @@ import { useEffect, useState } from 'react'
 import {
   Card,
   Switch,
-  Input,
   Button,
   Space,
   message,
   Row,
   Col,
-  Slider,
   TimePicker,
   Checkbox,
   Divider,
   Tag,
 } from 'antd'
-import {
-  SaveOutlined,
-  UndoOutlined,
-  HolderOutlined,
-  BellOutlined,
-  SendOutlined,
-} from '@ant-design/icons'
+import { SaveOutlined, UndoOutlined, BellOutlined } from '@ant-design/icons'
 import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
-import { SortableContext, useSortable, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { CSS } from '@dnd-kit/utilities'
+import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import dayjs from 'dayjs'
-import { useConfigStore } from '../../stores/configStore'
-import api from '../../api/client'
-import type { AppConfig } from '../../api'
-
-// 渠道定义
-interface ChannelDef {
-  key: string
-  name: string
-  icon: string
-  desc: string
-  enabled: boolean
-  fields: { key: string; label: string; placeholder: string; secret?: boolean }[]
-}
-
-const defaultChannels: ChannelDef[] = [
-  {
-    key: 'serverchan',
-    name: 'Server酱',
-    icon: '💬',
-    desc: '微信推送',
-    enabled: true,
-    fields: [{ key: 'serverchan_send_key', label: 'SendKey', placeholder: 'SCT123456...' }],
-  },
-  {
-    key: 'pushplus',
-    name: 'PushPlus',
-    icon: '📱',
-    desc: '微信推送（支持一对多）',
-    enabled: true,
-    fields: [{ key: 'pushplus_token', label: 'Token', placeholder: 'abc123...' }],
-  },
-  {
-    key: 'bark',
-    name: 'Bark',
-    icon: '🍎',
-    desc: 'iOS 推送',
-    enabled: true,
-    fields: [
-      { key: 'bark_server', label: 'Server URL', placeholder: 'https://api.day.app' },
-      { key: 'bark_key', label: 'Device Key', placeholder: 'bark device key', secret: true },
-    ],
-  },
-  {
-    key: 'telegram',
-    name: 'Telegram',
-    icon: '✈️',
-    desc: '跨平台推送',
-    enabled: false,
-    fields: [
-      { key: 'telegram_bot_token', label: 'Bot Token', placeholder: '123456:ABC-DEF...', secret: true },
-      { key: 'telegram_chat_id', label: 'Chat ID', placeholder: '@channel 或 123456789' },
-    ],
-  },
-  {
-    key: 'wecom',
-    name: '企业微信',
-    icon: '🏢',
-    desc: '企业群推送',
-    enabled: false,
-    fields: [{ key: 'wecom_webhook', label: 'Webhook URL', placeholder: 'https://qyapi.weixin.qq.com/...' }],
-  },
-  {
-    key: 'dingtalk',
-    name: '钉钉',
-    icon: '📌',
-    desc: '钉钉群推送',
-    enabled: false,
-    fields: [
-      { key: 'dingtalk_webhook', label: 'Webhook URL', placeholder: 'https://oapi.dingtalk.com/...' },
-      { key: 'dingtalk_secret', label: 'Secret', placeholder: 'SEC...', secret: true },
-    ],
-  },
-  {
-    key: 'webhook',
-    name: '自定义 Webhook',
-    icon: '🔗',
-    desc: '自定义 HTTP 推送',
-    enabled: false,
-    fields: [{ key: 'webhook_url', label: 'URL', placeholder: 'https://your-server.com/hook' }],
-  },
-]
-
-// 事件类型定义（12 种）
-const eventTypes = [
-  { key: 'TASK_STARTED', label: '任务启动', severity: 'info' },
-  { key: 'TASK_STOPPED', label: '任务停止', severity: 'info' },
-  { key: 'TASK_PAUSED', label: '任务暂停', severity: 'info' },
-  { key: 'TASK_SEARCH_DONE', label: '搜索完成', severity: 'info' },
-  { key: 'ITEM_FOUND', label: '发现新商品', severity: 'info' },
-  { key: 'EVAL_PASSED', label: '评估通过', severity: 'important', defaultNotify: true },
-  { key: 'EVAL_REJECTED', label: '评估拒绝', severity: 'info' },
-  { key: 'BUY_SUCCEEDED', label: '抢单成功', severity: 'critical', defaultNotify: true },
-  { key: 'BUY_FAILED', label: '抢单失败', severity: 'important' },
-  { key: 'AUTH_EXPIRED', label: '登录态失效', severity: 'important' },
-  { key: 'WAF_BLOCKED', label: 'WAF 拦截', severity: 'critical' },
-  { key: 'SYSTEM_ERROR', label: '系统错误', severity: 'critical' },
-]
-
-const severityColors: Record<string, string> = {
-  info: 'blue',
-  important: 'orange',
-  critical: 'red',
-}
+import { useConfigStore } from '../../../stores/configStore'
+import api from '../../../api/client'
+import type { AppConfig } from '../../../api'
+import { defaultChannels, eventTypes, severityColors, type ChannelDef } from './constants'
+import ChannelCard from './components/ChannelCard'
+import SortableChannelItem from './components/SortableChannelItem'
+import QuietHoursTimeline from './components/QuietHoursTimeline'
 
 export default function NotifierChannels() {
   const { config, load, save, hasChanges, reset, update } = useConfigStore()
@@ -183,7 +78,8 @@ export default function NotifierChannels() {
 
   const updateChannelField = (channelKey: string, fieldKey: string, value: string) => {
     if (!config) return
-    // 敏感字段直接更新到 config 根级
+    // 敏感字段直接更新到 config 根级（channelKey 当前未使用，保留以匹配子组件回调签名）
+    void channelKey
     update({ [fieldKey]: value } as Partial<typeof config>)
   }
 
@@ -296,49 +192,15 @@ export default function NotifierChannels() {
             <Row gutter={[12, 12]}>
               {channels.map((ch) => (
                 <Col span={12} key={ch.key}>
-                  <Card
-                    size="small"
-                    className={`channel-card ${!ch.enabled ? 'channel-card-disabled' : ''}`}
-                    style={{ border: ch.enabled ? '1px solid #1677ff' : '1px solid #d9d9d9' }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Space>
-                        <span style={{ fontSize: 20 }}>{ch.icon}</span>
-                        <div>
-                          <div style={{ fontWeight: 600 }}>{ch.name}</div>
-                          <div style={{ fontSize: 11, color: '#999' }}>{ch.desc}</div>
-                        </div>
-                      </Space>
-                      <Switch checked={ch.enabled} onChange={(v) => toggleChannel(ch.key, v)} />
-                    </div>
-
-                    {ch.enabled && (
-                      <div style={{ marginTop: 12 }}>
-                        {ch.fields.map((field) => (
-                          <div key={field.key} style={{ marginBottom: 8 }}>
-                            <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{field.label}</div>
-                            <Input.Password
-                              placeholder={field.placeholder}
-                              value={(config as unknown as Record<string, unknown>)[field.key] as string}
-                              onChange={(e) => updateChannelField(ch.key, field.key, e.target.value)}
-                              size="small"
-                            />
-                          </div>
-                        ))}
-                        <Button
-                          size="small"
-                          type="dashed"
-                          icon={<SendOutlined />}
-                          onClick={() => handleTest(ch.key)}
-                          block
-                          loading={testingChannel === ch.key}
-                          disabled={testingChannel !== null && testingChannel !== ch.key}
-                        >
-                          {testingChannel === ch.key ? '发送中...' : '发送测试'}
-                        </Button>
-                      </div>
-                    )}
-                  </Card>
+                  <ChannelCard
+                    channel={ch}
+                    config={config}
+                    testing={testingChannel === ch.key}
+                    anyTesting={testingChannel !== null}
+                    onToggle={toggleChannel}
+                    onFieldChange={updateChannelField}
+                    onTest={handleTest}
+                  />
                 </Col>
               ))}
             </Row>
@@ -460,91 +322,6 @@ export default function NotifierChannels() {
           </div>
         </Col>
       </Row>
-    </div>
-  )
-}
-
-// ============== 可拖拽渠道项 ==============
-function SortableChannelItem({ channel, index }: { channel: ChannelDef; index: number }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: channel.key,
-  })
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
-  }
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={{
-        ...style,
-        display: 'flex',
-        alignItems: 'center',
-        padding: '8px 12px',
-        marginBottom: 4,
-        background: '#fafafa',
-        border: '1px solid #d9d9d9',
-        borderRadius: 4,
-      }}
-    >
-      <span {...attributes} {...listeners} className="drag-handle" style={{ marginRight: 8 }}>
-        <HolderOutlined />
-      </span>
-      <Tag color="blue">{index}</Tag>
-      <span style={{ fontSize: 18, marginRight: 8 }}>{channel.icon}</span>
-      <span style={{ fontWeight: 500 }}>{channel.name}</span>
-      <span style={{ fontSize: 11, color: '#999', marginLeft: 8 }}>{channel.desc}</span>
-      <Tag color={channel.enabled ? 'green' : 'default'} style={{ marginLeft: 'auto' }}>
-        {channel.enabled ? '启用' : '禁用'}
-      </Tag>
-    </div>
-  )
-}
-
-// ============== 免打扰时段时间轴预览 ==============
-function QuietHoursTimeline({ start, end }: { start: string; end: string }) {
-  const startHour = parseInt(start.split(':')[0])
-  const endHour = parseInt(end.split(':')[0])
-  const isCrossMidnight = startHour > endHour
-
-  // 生成 24 小时间轴
-  const hours = Array.from({ length: 24 }, (_, i) => i)
-  const isQuiet = (hour: number) => {
-    if (isCrossMidnight) {
-      return hour >= startHour || hour < endHour
-    }
-    return hour >= startHour && hour < endHour
-  }
-
-  return (
-    <div>
-      <div style={{ display: 'flex', height: 24, borderRadius: 4, overflow: 'hidden' }}>
-        {hours.map((h) => (
-          <div
-            key={h}
-            style={{
-              flex: 1,
-              background: isQuiet(h) ? '#ff4d4f' : '#52c41a',
-              opacity: isQuiet(h) ? 0.7 : 0.5,
-            }}
-            title={`${h}:00 - ${h + 1}:00 ${isQuiet(h) ? '（静默）' : '（推送）'}`}
-          />
-        ))}
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999', marginTop: 4 }}>
-        <span>00:00</span>
-        <span>06:00</span>
-        <span>12:00</span>
-        <span>18:00</span>
-        <span>24:00</span>
-      </div>
-      <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
-        <span style={{ color: '#ff4d4f' }}>■</span> 静默时段 &nbsp;
-        <span style={{ color: '#52c41a' }}>■</span> 推送时段
-      </div>
     </div>
   )
 }

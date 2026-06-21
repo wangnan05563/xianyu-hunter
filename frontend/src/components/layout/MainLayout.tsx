@@ -148,16 +148,16 @@ export default function MainLayout() {
     )
   }
 
-  // 未登录：显示提示页，引导用户去旧版登录
+  // 未登录：引导到新版登录页
   if (!loggedIn) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <Result
           icon={<LoginOutlined style={{ color: '#FF6200' }} />}
           title="需要登录"
-          subTitle="请先通过控制台完成闲鱼登录，即可使用新版全部功能"
+          subTitle="请先完成闲鱼账号认证，即可使用全部功能"
           extra={[
-            <Button type="primary" key="login" href="/?onboard=1" style={{ background: '#FF6200' }}>
+            <Button type="primary" key="login" onClick={() => navigate('/login')} style={{ background: '#FF6200' }}>
               前往登录
             </Button>,
             <Button key="retry" onClick={() => setAuthChecked(false)}>
@@ -233,13 +233,24 @@ export default function MainLayout() {
             />
             <Breadcrumb items={breadcrumbItems} className="app-breadcrumb" />
           </div>
-          <a
-            href="/"
-            style={{ fontSize: 12, color: themeToken.colorTextSecondary }}
-            title="返回旧版控制台"
-          >
-            ← 返回旧版
-          </a>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Button
+              type="text"
+              size="small"
+              icon={<LoginOutlined />}
+              onClick={() => navigate('/login')}
+              style={{ fontSize: 12, color: themeToken.colorTextSecondary }}
+            >
+              登录管理
+            </Button>
+            <a
+              href="/"
+              style={{ fontSize: 12, color: themeToken.colorTextSecondary }}
+              title="返回旧版控制台"
+            >
+              ← 返回旧版
+            </a>
+          </div>
         </Header>
         <Content style={{ overflow: 'auto', background: '#f5f7fa' }}>
           <div className="fade-in-up" key={location.pathname}>

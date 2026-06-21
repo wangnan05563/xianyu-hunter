@@ -591,9 +591,11 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
     if not requested_keys:
         return JSONResponse(content={"ok": False, "error": "未指定要查询的 cookie key"})
 
-    # ===== 策略：先尝试系统浏览器 SQLite（用户期望读取系统浏览器的最新登录状态） =====
-    # Playwright CDP 作为最后兜底，因为其 cookie 可能是旧的或过期的
+    # ===== 策略：系统浏览器 SQLite（最新登录）→ JSON 降级（v20加密时）→ CDP 兜底 =====
+    # 系统浏览器优先：用户期望读取浏览器最新登录状态
+    # JSON 降级：当系统浏览器 v20 加密不可读时，回退到之前浏览器登录保存的明文
     cfg = get_config()
+
     local_appdata = os.environ.get("LOCALAPPDATA", "")
 
     # 候选 DB 路径列表：(路径, 是否尝试复制)
@@ -730,7 +732,37 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
                 except OSError:
                     pass
 
-    # ===== SQLite 候选都失败 → Playwright CDP 兜底（读取项目浏览器的 cookie） =====
+    # ===== SQLite 候选都失败 → JSON 降级（v20 加密时读取之前保存的明文） =====
+    try:
+        store = get_cookie_store()
+        json_data = store._read_json()
+        if json_data and json_data.get("cookies"):
+            json_result: dict[str, str] = {}
+            for c in json_data["cookies"]:
+                name = c.get("name", "")
+                domain = c.get("domain", "")
+                if name in requested_keys and any(
+                    d in domain for d in ("goofish.com", "taobao.com")
+                ):
+                    if name not in json_result:
+                        json_result[name] = c.get("value", "")
+            if json_result:
+                logger.info(
+                    "SQLite 不可读，从 CookieStore JSON 降级获取 %d 个 cookie 值: %s",
+                    len(json_result), list(json_result.keys()),
+                )
+                return make_auth_response({
+                    "ok": True,
+                    "cookies": json_result,
+                    "found": list(json_result.keys()),
+                    "missing": [k for k in requested_keys if k not in json_result],
+                    "source": "cookie_store_json_fallback",
+                    "hint": "系统浏览器 Cookie 加密不可读，已回退到上次保存的 Cookie。如需更新，请使用「浏览器登录」功能重新扫码登录。",
+                })
+    except Exception as e:
+        logger.warning("CookieStore JSON 降级读取失败: %s", e)
+
+    # ===== JSON 也不可用 → Playwright CDP 兜底（读取项目浏览器的 cookie） =====
     try:
         browser = container.browser
         if browser and browser._context:

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Steps, Card, Form, Input, InputNumber, Slider, Button, Space, Radio, message, Result } from 'antd'
+import { Steps, Card, Form, Input, InputNumber, Slider, Button, Space, Radio, message, Result, Spin } from 'antd'
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import TagEditor from '../../components/editors/TagEditor'
@@ -31,6 +31,7 @@ export default function TaskEditor() {
   const isEdit = !!id
   const [current, setCurrent] = useState(0)
   const [loading, setLoading] = useState(false)
+  const [loadingEditData, setLoadingEditData] = useState(false)  // 编辑模式数据加载
   const [form] = Form.useForm()
 
   // 表单状态
@@ -47,27 +48,51 @@ export default function TaskEditor() {
   })
   const [cron, setCron] = useState('*/5 * * * *')
 
-  // 编辑模式：加载现有任务
+  // 编辑模式：加载现有任务数据
+  const [loadError, setLoadError] = useState<string | null>(null)
+
   useEffect(() => {
     if (id) {
-      taskApi.get(id).then((task) => {
-        const data: TaskCreateBody = {
-          keyword: task.keyword,
-          name: task.name,
-          min_price: task.min_price,
-          max_price: task.max_price,
-          max_publish_days: task.max_publish_days,
-          mode: task.mode,
-          region: task.region || '',
-          exclude_words: task.exclude_words ? JSON.parse(task.exclude_words) : [],
-          search_filters: task.search_filters ? JSON.parse(task.search_filters) : [],
-        }
-        setFormData(data)
-        setCron(task.cron)
-        form.setFieldsValue(data)
-      })
+      setLoadingEditData(true)
+      setLoadError(null)
+      taskApi.get(id)
+        .then((task) => {
+          // 后端可能返回 JSON 字符串或已解析的数组/对象，统一安全解析
+          const safeParse = (v: unknown): string[] => {
+            if (Array.isArray(v)) return v
+            if (typeof v === 'string' && v.trim()) {
+              try { return JSON.parse(v) } catch { return [] }
+            }
+            return []
+          }
+          const data: TaskCreateBody = {
+            keyword: task.keyword || '',
+            name: task.name || '',
+            min_price: task.min_price,
+            max_price: task.max_price,
+            max_publish_days: task.max_publish_days,
+            mode: task.mode || 'confirm',
+            region: task.region || '',
+            exclude_words: safeParse(task.exclude_words),
+            search_filters: safeParse(task.search_filters),
+          }
+          setFormData(data)
+          setCron(task.cron || '*/5 * * * *')
+        })
+        .catch((err) => {
+          console.error('加载任务失败:', err)
+          const status = err?.response?.status
+          if (status === 401) {
+            setLoadError('登录已过期，请先登录后重试')
+          } else if (status === 404) {
+            setLoadError('任务不存在，可能已被删除')
+          } else {
+            setLoadError(err?.response?.data?.detail || '加载失败，请返回列表重试')
+          }
+        })
+        .finally(() => setLoadingEditData(false))
     }
-  }, [id, form])
+  }, [id])
 
   const steps = [
     { title: '基础信息', desc: '关键词与模式' },
@@ -129,7 +154,31 @@ export default function TaskEditor() {
 
       <h2>{isEdit ? '编辑任务' : '新增任务（向导）'}</h2>
 
-      <Steps current={current} items={steps} style={{ marginBottom: 24 }} />
+      {/* 编辑模式：数据加载中显示 spinner */}
+      {isEdit && loadingEditData ? (
+        <div style={{ textAlign: 'center', padding: 60 }}>
+          <Spin size="large" tip="正在加载任务信息..." />
+        </div>
+      ) : isEdit && loadError ? (
+        <div style={{ textAlign: 'center', padding: 60 }}>
+          <Result
+            status={loadError.includes('登录') ? 'warning' : 'error'}
+            title={loadError}
+            extra={
+              <Space>
+                <Button onClick={() => navigate('/tasks')}>返回列表</Button>
+                {loadError.includes('登录') && (
+                  <Button type="primary" onClick={() => navigate('/login')} style={{ background: '#FF6200', borderColor: '#FF6200' }}>
+                    前往登录
+                  </Button>
+                )}
+              </Space>
+            }
+          />
+        </div>
+      ) : (
+        <>
+          <Steps current={current} items={steps} style={{ marginBottom: 24 }} />
 
       {/* Step 1: 基础信息 */}
       {current === 0 && (
@@ -320,6 +369,8 @@ export default function TaskEditor() {
           )}
         </Space>
       </div>
+      </>
+      )}
     </div>
   )
 }

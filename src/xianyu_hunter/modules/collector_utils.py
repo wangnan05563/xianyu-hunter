@@ -118,9 +118,13 @@ def parse_search_api_result(result: dict) -> list[dict]:
     if isinstance(data, dict):
         inner = data.get("data", data)
         if isinstance(inner, dict):
-            for key in ("itemsList", "itemList", "items", "list", "result"):
+            for key in ("itemsList", "itemList", "items", "list", "result", "resultList"):
                 items_list = inner.get(key)
                 if isinstance(items_list, list) and items_list:
+                    # 记录第一个元素的 keys，便于排查字段名不匹配问题
+                    if isinstance(items_list[0], dict):
+                        logger.info("parse_search_api_result: key='{}', count={}, sample keys={}",
+                                    key, len(items_list), list(items_list[0].keys())[:20])
                     return items_list
             # 调试：记录实际响应结构（loguru 使用 {} 格式化，不是 %s）
             logger.info(
@@ -133,7 +137,7 @@ def parse_search_api_result(result: dict) -> list[dict]:
                 logger.info("parse_search_api_result: 递归搜索找到 {} 个商品", len(found))
                 return found
             return []
-        for key in ("itemsList", "itemList", "items", "list", "result"):
+        for key in ("itemsList", "itemList", "items", "list", "result", "resultList"):
             items_list = data.get(key)
             if isinstance(items_list, list) and items_list:
                 return items_list
@@ -152,17 +156,24 @@ def parse_search_api_result(result: dict) -> list[dict]:
 
 
 def _find_items_recursive(obj: Any, depth: int = 0, max_depth: int = 4) -> list[dict]:
-    """递归搜索 dict/list 结构中包含 itemId 或 title 的商品列表
+    """递归搜索 dict/list 结构中包含商品特征的列表
 
     闲鱼 API 可能嵌套在不同层级，此函数做兜底搜索。
     """
+    _item_keys = ("itemId", "id", "item_id", "auctionId", "auction_id")
     if depth > max_depth:
         return []
     if isinstance(obj, list):
-        # 检查列表元素是否像商品（含 itemId 或 id + title）
+        # 检查列表元素是否像商品（含 itemId/id/auctionId 等标识字段）
+        # 闲鱼 resultList 元素可能将商品字段包裹在 data 子字典中
         if obj and isinstance(obj[0], dict):
-            if any("itemId" in item or "id" in item for item in obj[:3]):
-                return obj
+            for item in obj[:3]:
+                if any(k in item for k in _item_keys):
+                    return obj
+                # 检查 data 子字典中的商品字段
+                sub = item.get("data")
+                if isinstance(sub, dict) and any(k in sub for k in _item_keys):
+                    return obj
         # 继续搜索子元素
         for item in obj:
             found = _find_items_recursive(item, depth + 1, max_depth)

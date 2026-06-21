@@ -40,8 +40,21 @@ def make_seller(
     )
 
 
-def make_item(price: float = 100.0, title: str = "iPhone 13") -> ItemDetail:
-    return ItemDetail(id="i1", title=title, price=price, seller_id="u1")
+def make_item(
+    price: float = 100.0,
+    title: str = "iPhone 13",
+    description: str = "",
+    image_urls: list[str] | None = None,
+) -> ItemDetail:
+    # 默认提供 1 张图片，避免无图扣分干扰维度测试
+    return ItemDetail(
+        id="i1",
+        title=title,
+        price=price,
+        seller_id="u1",
+        description=description,
+        image_urls=image_urls if image_urls is not None else ["https://example.com/1.jpg"],
+    )
 
 
 # ============== 一票否决 ==============
@@ -225,3 +238,137 @@ def test_eval_result_is_auto_buy() -> None:
     result = ev.evaluate(make_item(), make_seller())
     # 默认完美卖家分数不一定到 80
     assert isinstance(result.is_auto_buy, bool)
+
+
+# ============== P0: 数据质量三级分级 ==============
+
+
+def test_full_quality_evaluation() -> None:
+    """full 质量：卖家数据完整 → 4 维正常评估"""
+    ev = Evaluator()
+    seller = make_seller(
+        on_sale_count=5,
+        sold_count=10,
+        register_days=365,
+        credit_score=750,
+    )
+    result = ev.evaluate(make_item(price=1000), seller)
+    assert result.data_quality == "full"
+    assert "professional" in result.dimension_scores
+    assert "credit" in result.dimension_scores
+    assert "dispute" in result.dimension_scores
+    assert "price" in result.dimension_scores
+
+
+def test_partial_quality_only_on_sale() -> None:
+    """partial 质量：仅有 on_sale_count → professional+dispute+price 有效"""
+    ev = Evaluator()
+    # 降级卖家：只有 on_sale_count，无信用分和注册天数
+    seller = SellerProfile(
+        id="u2",
+        nick="降级卖家",
+        on_sale_count=3,
+        credit_score=None,
+        register_days=0,
+        sold_count=0,
+    )
+    result = ev.evaluate(make_item(price=500), seller)
+    assert result.data_quality == "partial"
+    # professional 和 price 维度应有得分
+    assert "professional" in result.dimension_scores
+    assert "price" in result.dimension_scores
+    # credit 维度不应有得分（数据无效）
+    assert "credit" not in result.dimension_scores
+    # partial 模式 3 维有效 → partial 惩罚后上限 80 分
+    assert result.score <= 80
+
+
+def test_partial_quality_score_has_variance() -> None:
+    """partial 质量评分有区分度（不再全部 40 分）"""
+    ev = Evaluator()
+    # 卖家 A：在售 3 件，正常价格
+    seller_a = SellerProfile(id="a", on_sale_count=3, credit_score=None, register_days=0)
+    result_a = ev.evaluate(make_item(price=500), seller_a)
+    # 卖家 B：在售 100 件（职业卖家），正常价格
+    seller_b = SellerProfile(id="b", on_sale_count=100, credit_score=None, register_days=0)
+    result_b = ev.evaluate(make_item(price=500), seller_b)
+
+    # 两个卖家评分应有明显差异（职业卖家更低）
+    assert result_a.score > result_b.score
+    assert result_a.score - result_b.score >= 10
+
+
+def test_insufficient_quality_empty_seller() -> None:
+    """insufficient 质量：卖家数据全空 → 仅价格保守评分"""
+    ev = Evaluator()
+    seller = SellerProfile(id="empty", on_sale_count=0, credit_score=None, register_days=0)
+    result = ev.evaluate(make_item(price=100), seller)
+    assert result.data_quality == "insufficient"
+    assert result.score <= 40
+    assert "price" in result.dimension_scores
+    assert "insufficient_seller_data" in result.reject_reasons
+
+
+# ============== P0: 价格维度增强 ==============
+
+
+def test_price_suspicious_low_under_1_yuan() -> None:
+    """引流价格（< 1 元）扣 50 分"""
+    ev = Evaluator()
+    result = ev.evaluate(make_item(price=0.5), make_seller())
+    assert result.dimension_scores["price"] <= 50
+    assert any("price_suspicious_low" in r for r in result.reject_reasons)
+
+
+def test_price_abnormal_low_non_accessory() -> None:
+    """异常低价（< 10 元且非配件）扣 30 分"""
+    ev = Evaluator()
+    result = ev.evaluate(make_item(price=5, title="iPhone 13"), make_seller())
+    assert result.dimension_scores["price"] <= 70
+    assert any("price_abnormal_low" in r for r in result.reject_reasons)
+
+
+def test_price_low_accessory_no_penalty() -> None:
+    """配件类低价不扣分"""
+    ev = Evaluator()
+    result = ev.evaluate(make_item(price=5, title="手机壳"), make_seller())
+    # 配件类 5 元是正常的，不应触发异常低价扣分
+    assert not any("price_abnormal_low" in r for r in result.reject_reasons)
+    assert result.dimension_scores["price"] == 100
+
+
+def test_price_bait_detection() -> None:
+    """价格诱饵检测（标题含"不单卖"等）"""
+    ev = Evaluator()
+    result = ev.evaluate(make_item(price=100, title="iPhone 不单卖"), make_seller())
+    assert any("price_bait" in r for r in result.reject_reasons)
+    assert result.dimension_scores["price"] <= 80
+
+
+def test_shipping_trap_detection() -> None:
+    """邮费陷阱检测（到付）"""
+    ev = Evaluator()
+    result = ev.evaluate(
+        make_item(price=100, title="iPhone 13", description="运费到付"),
+        make_seller(),
+    )
+    assert any("shipping_trap" in r for r in result.reject_reasons)
+
+
+def test_no_image_penalty() -> None:
+    """无图片扣 10 分"""
+    ev = Evaluator()
+    result = ev.evaluate(
+        make_item(price=100, image_urls=[]),
+        make_seller(),
+    )
+    assert any("no_image_for_condition" in r for r in result.reject_reasons)
+    assert result.dimension_scores["price"] <= 90
+
+
+def test_normal_price_no_penalty() -> None:
+    """正常价格无扣分"""
+    ev = Evaluator()
+    result = ev.evaluate(make_item(price=2000, title="iPhone 13"), make_seller())
+    assert result.dimension_scores["price"] == 100
+    assert not any(r.startswith("price_") for r in result.reject_reasons)

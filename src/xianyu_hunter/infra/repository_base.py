@@ -79,7 +79,7 @@ class RepositoryBase:
             if isinstance(val, str) and col in (
                 "exclude_words", "notifier_channels", "image_urls",
                 "raw_json", "recent_posts_json", "dimension_scores",
-                "reject_reasons", "payload", "display"
+                "reject_reasons", "payload", "display", "search_filters",
             ):
                 try:
                     val = json.loads(val) if val else None

@@ -124,19 +124,23 @@ class TaskWorker:
                 skipped += 1
                 continue
             try:
+                # 方案B改进：空字符串 seller_id 转为 None，避免覆盖详情页阶段已写入的非空值
+                raw_seller_id = getattr(item, "seller_id", None)
+                seller_id = raw_seller_id if raw_seller_id else None
                 self.repo.upsert_item_task_links(
                     task_id=self.task.id,
                     item_id=item.id,
                     title=title,
                     price=getattr(item, "price", None),
                     thumb_url=getattr(item, "thumb_url", None),
-                    seller_id=getattr(item, "seller_id", None),
+                    seller_id=seller_id,
                     source="auto",
                     region=getattr(item, "region", None),
                     publish_time=getattr(item, "publish_time", None),
                     want_cnt=getattr(item, "want_cnt", None),
                     view_cnt=getattr(item, "view_cnt", None),
                     is_sold=getattr(item, "is_sold", False),
+                    seller_nick=getattr(item, "seller_nick", None),
                 )
                 saved += 1
             except Exception as e:
@@ -167,24 +171,30 @@ class TaskWorker:
         eval_cfg = get_config().eval
 
         try:
-            # 1. 搜索（传递任务配置的筛选标签）
+            # 1. 搜索（传递任务配置的筛选标签 + 全局搜索参数配置）
             logger.info(f"[Task {self.task.id}] 搜索「{self.task.keyword}」")
-            # 加 60 秒超时保护 + 跳过 RGV587 重试：
-            # RGV587 重试需要 75 秒且通常无效（需重新登录），跳过后 Worker 搜索最多 ~30 秒，
-            # 避免长时间占用 browser_lock 阻塞 live 端点的实时搜索请求
+            # 合并任务级 search_filters 和全局 search_filter_tags 配置
+            # 任务级优先（用户创建任务时指定的筛选），全局配置作为补充
+            task_filters = getattr(self.task, 'search_filters', None) or []
+            global_filters = self.config.search_filter_tags or []
+            combined_filters = list(set(task_filters + global_filters))
+            # 搜索超时使用用户配置（默认 30s），RGV587 重试跳过（Worker 不做重试）
+            search_timeout = self.config.search_timeout
             try:
                 items = await asyncio.wait_for(
                     self.collector.search(
                         self.task.keyword,
-                        search_filters=getattr(self.task, 'search_filters', None) or [],
+                        search_filters=combined_filters,
+                        # Worker 不使用 fast 模式：需要刷新 _m_h5_tk token 避免会话失效
+                        # 搜索超时由外层 asyncio.wait_for 控制（默认 30s）
                         skip_rgv587_retry=True,
                     ),
-                    timeout=60.0,
+                    timeout=float(search_timeout),
                 )
             except asyncio.TimeoutError:
                 # 搜索超时通常意味着浏览器卡住或网络异常，继续循环只会再次超时
                 # 持续占用 browser_lock 阻塞 live 端点，因此暂停任务
-                logger.warning(f"[Task {self.task.id}] 搜索超时（60秒），自动暂停任务")
+                logger.warning(f"[Task {self.task.id}] 搜索超时（{search_timeout}秒），自动暂停任务")
                 stats.finished_at = datetime.now(timezone.utc)
                 return RunResult(stats=stats, should_pause=True)
             stats.found = len(items)
@@ -205,8 +215,10 @@ class TaskWorker:
                 stats.finished_at = datetime.now(timezone.utc)
                 return RunResult(stats=stats)
 
-            # 限制每轮条数
-            new_items = new_items[: self.config.max_items_per_run]
+            # 限制每轮条数：使用用户配置的 page_size（默认 20）
+            # 避免处理过多商品导致 OOM 或超时
+            max_items = self.config.search_page_size or self.config.max_items_per_run
+            new_items = new_items[:max_items]
 
             # 立即写入 task_links（搜索完成后直接存储，不等详情爬取）
             # 这样用户可以在"闲鱼内容关联"面板立即看到搜索结果
@@ -307,7 +319,7 @@ class TaskWorker:
                                 level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
                                 if eval_result.risk_level == RiskLevel.UNKNOWN:
                                     level = "warn"  # 数据不足用 warn 级别，避免误报为错误
-                                self.repo.save_event({
+                                self.repo.upsert_eval_event({
                                     "type": "eval.scored",
                                     "task_id": self.task.id,
                                     "item_id": detail.id,  # 顶层 item_id 供前端 dataIndex 直接读取

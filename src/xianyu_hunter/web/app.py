@@ -92,8 +92,8 @@ def create_app() -> FastAPI:
         async def spa_index(full_path: str) -> Response:
             """SPA catch-all：所有 /app/* 路径，静态文件直接返回，其余返回 index.html
 
-            未登录时在 index.html 中注入登录引导浮层（SPA 本身无登录功能），
-            引导用户跳转到 /dashboard 完成登录后返回 /app。
+            未登录时在 index.html 中注入登录引导浮层，
+            引导用户跳转到 /app/login 完成登录后返回 /app。
             """
             if full_path:
                 file_path = spa_dir / full_path
@@ -233,13 +233,15 @@ _SPA_LOGIN_OVERLAY = """<style>
 #xh-login-overlay .xh-login-icon{font-size:48px;margin-bottom:12px}
 #xh-login-overlay .xh-login-title{font-size:18px;font-weight:600;margin-bottom:8px;color:#1a1a1a}
 #xh-login-overlay .xh-login-desc{font-size:13px;color:#666;margin-bottom:20px;line-height:1.6}
-#xh-login-overlay .xh-login-btn{display:inline-block;padding:10px 28px;background:#1677ff;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer;text-decoration:none;transition:background 0.2s}
-#xh-login-overlay .xh-login-btn:hover{background:#0958d9}
+#xh-login-overlay .xh-login-btn{display:inline-block;padding:10px 28px;background:#FF6200;color:#fff;border:none;border-radius:6px;font-size:14px;cursor:pointer;text-decoration:none;transition:background 0.2s}
+#xh-login-overlay .xh-login-btn:hover{background:#e55a00}
 #xh-login-overlay .xh-login-checking{color:#999;font-size:13px}
 </style>
-<div id="xh-login-overlay" style="display:none"><div class="xh-login-card"><div class="xh-login-icon">🔑</div><div class="xh-login-title">需要登录闲鱼账号</div><div class="xh-login-desc">SPA 控制台需要登录后才能使用<br>点击下方按钮前往登录页面</div><a class="xh-login-btn" href="/dashboard?redirect=/app/">前往登录</a></div></div>
+<div id="xh-login-overlay" style="display:none"><div class="xh-login-card"><div class="xh-login-icon">🔑</div><div class="xh-login-title">需要登录闲鱼账号</div><div class="xh-login-desc">控制台需要登录后才能使用<br>点击下方按钮前往登录页面</div><a class="xh-login-btn" href="/app/login">前往登录</a></div></div>
 <script>
 (function(){
+  // 已在登录页时不显示浮层，避免遮挡前端登录界面
+  if(window.location.pathname.indexOf('/app/login')!==-1)return;
   var overlay=document.getElementById('xh-login-overlay');
   if(!overlay)return;
   // 检查登录状态：/api/auth/me 在白名单中，无需 token 即可调用

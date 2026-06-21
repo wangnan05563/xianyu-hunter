@@ -1237,8 +1237,16 @@ function dashboard() {
           }
           this.syncCookieInput();
           if (filled > 0) {
-            this.cookieAutoFillResult = `成功获取 ${filled} 个 Cookie 值，请核对后点击注入`;
-            this.cookieAutoFillError = false;
+            // 显示数据来源，让用户知道是浏览器直读还是 JSON 降级
+            const srcLabel = data.source === 'cookie_store_json_fallback'
+              ? '（回退到上次保存的 Cookie，系统浏览器加密不可读）'
+              : data.source && data.source.includes('Chrome') ? '（来源: Chrome）'
+              : data.source && data.source.includes('Edge') ? '（来源: Edge）'
+              : data.source === 'playwright_cdp' ? '（来源: 项目浏览器）'
+              : '';
+            this.cookieAutoFillResult = `成功获取 ${filled} 个 Cookie 值${srcLabel}，请核对后点击注入`;
+            // JSON 降级时显示警告色（数据可能过期）
+            this.cookieAutoFillError = data.source === 'cookie_store_json_fallback';
           } else {
             // 有 cookie 记录但值为空（如 v20 加密），优先显示后端诊断 hint
             this.cookieAutoFillResult = data.hint || '未找到闲鱼 Cookie，请先在 Chrome/Edge 中登录 goofish.com';

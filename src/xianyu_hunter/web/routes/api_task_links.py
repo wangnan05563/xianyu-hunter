@@ -174,9 +174,10 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
                 display = {}
         if not isinstance(display, dict):
             display = {}
-        # 仅补全缺失的字段（不覆盖已有值，不补全 is_sold 避免误标）
+        # 补全缺失或无效的字段（"None" 字符串/null/空字符串视为无效，用 items 表正确值覆盖）
         for k, v in extra.items():
-            if k not in display:
+            existing = display.get(k)
+            if k not in display or existing is None or existing == "" or existing == "None":
                 display[k] = v
         r["display"] = display
     return links
@@ -259,6 +260,9 @@ async def refresh_links(
     if not keyword:
         raise HTTPException(status_code=400, detail="任务无关键词")
 
+    # 读取任务筛选标签，传递给搜索 URL（如个人闲置、包邮等）
+    task_search_filters = task.get("search_filters") or []
+
     # 清除该任务旧的 auto 来源关联（manual 来源保留）
     container.repo.delete_task_links_by_task(task_id, source="auto")
 
@@ -269,7 +273,7 @@ async def refresh_links(
         async with container.browser_lock:
             try:
                 # skip_lock=True：外层已持有 browser_lock，search 内部不再获取，避免死锁
-                items = await container.collector.search(keyword, max_pages=2, skip_lock=True)
+                items = await container.collector.search(keyword, max_pages=2, skip_lock=True, search_filters=task_search_filters)
             except Exception as e:
                 logger.exception(f"refresh_links 搜索失败 task={task_id}: {e}")
                 err_msg = str(e)
@@ -355,6 +359,8 @@ async def live_links(
     min_price = task.get("min_price")
     max_price = task.get("max_price")
     max_publish_days = task.get("max_publish_days")
+    # 读取任务筛选标签，传递给搜索 URL（如个人闲置、包邮等）
+    task_search_filters = task.get("search_filters") or []
 
     # 使用互斥锁防止并发操作浏览器，设 10 秒超时避免长时间卡住
     raw_results: list[dict] = []
@@ -368,13 +374,14 @@ async def live_links(
             )
         try:
             # 快速搜索：max_pages=1 减少翻页等待，skip_m5tk=True 跳过 token 刷新（Worker 会处理）
-            # 加 30 秒超时保护：浏览器实例损坏或 page.goto 卡住时避免请求无限等待
+            # 20 秒超时：API 拦截 ~3s + DOM 批量解析 ~3s + 页面加载 ~10s = ~16s 上限
             try:
                 raw_results = await asyncio.wait_for(
                     container.collector.live_search(
                         keyword, max_pages=1, collect_sellers=False, fast=True,
+                        search_filters=task_search_filters,
                     ),
-                    timeout=30.0,
+                    timeout=20.0,
                 )
             except asyncio.TimeoutError:
                 raise HTTPException(status_code=504, detail="实时搜索超时，请稍后重试或重启服务")
@@ -418,6 +425,7 @@ async def live_links(
                 "publish_time": r.get("publish_time"),
                 "seller_id": r.get("seller_id", ""),
                 "seller_nick": r.get("seller_nick", ""),
+                "seller_credit": r.get("seller_credit", ""),
                 "want_cnt": r.get("want_cnt"),
                 "view_cnt": r.get("view_cnt"),
             },
@@ -435,9 +443,25 @@ async def live_links(
     if skipped:
         logger.info("live_links 关键词过滤跳过了 %d 条无关结果", skipped)
 
-    # 按价格过滤（与 Worker 的 price.check 逻辑保持一致）
+    # 按价格过滤（整合任务级 min/max 和全局 price_strategy 配置）
+    # 任务级优先级高于全局配置：任务设置 min_price=500 时，即使全局禁用下限也生效
     price_filtered = 0
-    if min_price is not None or max_price is not None:
+    # 读取全局价格策略配置（用于实时搜索联动）
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        global_ps = get_config().price_strategy
+    except Exception:
+        global_ps = None
+
+    # 计算生效的价格范围：任务级覆盖全局配置
+    effective_min = min_price
+    effective_max = max_price
+    if effective_min is None and global_ps and global_ps.enabled_min:
+        effective_min = global_ps.min_price
+    if effective_max is None and global_ps and global_ps.enabled_max:
+        effective_max = global_ps.max_price
+
+    if effective_min is not None or effective_max is not None:
         _filtered = []
         for r in filtered:
             price = (r.get("display") or {}).get("price")
@@ -449,16 +473,16 @@ async def live_links(
             except (ValueError, TypeError):
                 _filtered.append(r)
                 continue
-            if min_price is not None and p < min_price:
+            if effective_min is not None and p < effective_min:
                 price_filtered += 1
                 continue
-            if max_price is not None and p > max_price:
+            if effective_max is not None and p > effective_max:
                 price_filtered += 1
                 continue
             _filtered.append(r)
         filtered = _filtered
         if price_filtered:
-            logger.info("live_links 价格过滤跳过了 {} 条 (min={}, max={})", price_filtered, min_price, max_price)
+            logger.info("live_links 价格过滤跳过了 {} 条 (min={}, max={})", price_filtered, effective_min, effective_max)
 
     # 按发布天数过滤（仅展示最近 N 天内发布的商品）
     days_filtered = 0
@@ -487,6 +511,40 @@ async def live_links(
     items = [r for r in filtered if r["link_type"] == "item"]
     sellers = [r for r in filtered if r["link_type"] == "seller"]
 
+    # 将实时搜索结果写入 DB（source="live"），让商品列表页面和 Worker 评估都能看到
+    # 不覆盖 auto/manual 来源的记录（upsert 按 task_id+item_id 去重）
+    if items:
+        saved_live = 0
+        for r in items:
+            try:
+                display = r.get("display") or {}
+                container.repo.upsert_item_task_links(
+                    task_id=task_id,
+                    item_id=r.get("link_key", ""),
+                    title=display.get("title", ""),
+                    price=display.get("price"),
+                    thumb_url=display.get("thumb_url", ""),
+                    seller_id=display.get("seller_id", "") or "",
+                    source="live",
+                    region=display.get("region"),
+                    publish_time=display.get("publish_time"),
+                    want_cnt=display.get("want_cnt"),
+                    view_cnt=display.get("view_cnt"),
+                    is_sold=display.get("is_sold", False),
+                )
+                saved_live += 1
+            except Exception as e:
+                logger.warning("live_links 写入 DB 失败 item=%s: %s", r.get("link_key", "?"), e)
+        if saved_live:
+            logger.info("live_links 已写入 %d 条记录到 DB (task=%s)", saved_live, task_id)
+
+        # 触发轻量级评估：基于搜索结果构造降级 ItemDetail 和 SellerProfile
+        # 不拉取详情页和卖家主页，评估结果标记为"数据不足"但仍有评分
+        try:
+            _trigger_live_evaluation(container, task_id, items)
+        except Exception as e:
+            logger.warning("live_links 触发评估失败 task=%s: %s", task_id, e)
+
     # 检测 Cookie 失效：搜索结果为空且 collector 标记会话失效
     # last_session_invalid 由 search() 在 RGV587_ERROR 时设置
     session_expired = (
@@ -513,6 +571,102 @@ async def live_links(
         "sellers": sellers,
         "all": filtered,
     }
+
+
+def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
+    """对 live 搜索结果触发轻量级评估
+
+    基于搜索结果构造降级 ItemDetail 和 SellerProfile（不拉取详情页和卖家主页），
+    调用 Evaluator.evaluate 生成评分，写入 events 表供评估明细页面展示。
+    评估结果标记为"数据不足"，Worker 后续会拉取详情重新评估覆盖。
+    """
+    from xianyu_hunter.domain.item import ItemDetail, ItemSummary
+    from xianyu_hunter.domain.seller import SellerProfile
+    from xianyu_hunter.domain.evaluation import RiskLevel
+    from xianyu_hunter.modules.evaluator import Evaluator
+
+    # 构造 Evaluator（复用容器配置）
+    # Evaluator 每次 evaluate 时从 get_config() 实时读取配置，无需传参
+    evaluator = getattr(container, "evaluator", None) or Evaluator()
+
+    evaluated = 0
+    for r in items:
+        display = r.get("display") or {}
+        item_id = r.get("link_key", "")
+        if not item_id:
+            continue
+
+        # 从搜索结果构造 ItemSummary → ItemDetail（降级，无详情页数据）
+        try:
+            price_val = display.get("price")
+            price_float = float(price_val) if price_val is not None else 0.0
+            summary = ItemSummary(
+                id=str(item_id),
+                title=display.get("title", ""),
+                price=price_float,
+                region=display.get("region", "") or "",
+                seller_id=display.get("seller_id", "") or "",
+                seller_nick=display.get("seller_nick", "") or "",
+                thumb_url=display.get("thumb_url", "") or "",
+                is_sold=display.get("is_sold", False),
+                want_cnt=display.get("want_cnt") or 0,
+                view_cnt=display.get("view_cnt") or 0,
+            )
+            detail = ItemDetail(
+                **{k: getattr(summary, k) for k in summary.__dataclass_fields__},
+                description="",
+            )
+        except Exception as e:
+            logger.warning("构造 ItemDetail 失败 item=%s: %s", item_id, e)
+            continue
+
+        # 构造降级 SellerProfile（无卖家主页数据，标记为数据不足）
+        seller = SellerProfile(
+            id=summary.seller_id or "unknown",
+            nick=summary.seller_nick or "",
+            credit_score=None,
+            register_days=0,
+            on_sale_count=0,
+            sold_count=0,
+        )
+
+        # 评估
+        try:
+            eval_result = evaluator.evaluate(detail, seller)
+            evaluated += 1
+
+            # 写入 events 表（使用 upsert 按 task_id+item_id 去重，防止重复评估）
+            import json as _json
+            score_display = eval_result.score if eval_result.score is not None else "N/A"
+            level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
+            if eval_result.risk_level == RiskLevel.UNKNOWN:
+                level = "warn"
+            container.repo.upsert_eval_event({
+                "type": "eval.scored",
+                "task_id": task_id,
+                "item_id": detail.id,
+                "stage": "eval",
+                "level": level,
+                "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
+                "payload": _json.dumps({
+                    "item_id": detail.id,
+                    "item_title": detail.title,
+                    "item_price": detail.price,
+                    "seller_id": detail.seller_id,
+                    "seller_nick": detail.detail_seller_nick or summary.seller_nick or "",
+                    "score": eval_result.score,
+                    "risk_level": eval_result.risk_level.value,
+                    "dimension_scores": eval_result.dimension_scores,
+                    "reject_reasons": eval_result.reject_reasons,
+                    "is_passed": eval_result.is_passed,
+                    "data_quality": eval_result.data_quality,
+                }, ensure_ascii=False, default=str),
+            })
+        except Exception as e:
+            logger.warning("live 评估失败 item=%s: %s", item_id, e)
+
+    if evaluated:
+        logger.info("live_links 触发轻量级评估 %d 条 (task=%s)", evaluated, task_id)
 
 
 # ============== 反查 / 搜索（跨任务） ==============

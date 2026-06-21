@@ -26,8 +26,9 @@ from pydantic import BaseModel, Field
 from xianyu_hunter.config import get_settings, update_ai_config
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.ai_usage import check_budget, record_usage
-from xianyu_hunter.infra.db_models import _utcnow, EvaluationRow
+from xianyu_hunter.infra.db_models import _utcnow, EvaluationRow, EventRow
 from xianyu_hunter.web.deps import get_container
+from sqlalchemy import select
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -586,7 +587,39 @@ async def evaluate_condition(
     """
     _check_ai_enabled()
     # 1. 获取商品信息
+    # 策略1：优先从 items 表查询（数据最完整，含 description 和 image_urls）
     item = container.repo.get_item(body.item_id)
+
+    # 策略2：items 表无记录时，从评估事件 payload 回退
+    # 场景：实时搜索(live_links)或轻量评估生成的 eval.scored 事件
+    #       商品未写入 items 表，但 payload 中有 item_title / item_price
+    if not item:
+        engine = container.repo.engine
+        with engine.connect() as conn:
+            evt_row = conn.execute(
+                select(EventRow.payload)
+                .where(
+                    EventRow.item_id == body.item_id,
+                    EventRow.type.like("eval.%"),
+                )
+                .order_by(EventRow.created_at.desc())
+                .limit(1)
+            ).first()
+        if evt_row and evt_row.payload:
+            try:
+                payload = json.loads(evt_row.payload) if isinstance(evt_row.payload, str) else evt_row.payload
+                # 用 payload 字段构造伪 item dict，字段名对齐 items 表结构
+                item = {
+                    "id": body.item_id,
+                    "title": payload.get("item_title") or payload.get("title") or "",
+                    "price": payload.get("item_price") or payload.get("price") or 0,
+                    "description": "",   # payload 不含 description，LLM 仅基于标题+价格评估
+                    "image_urls": [],    # payload 不含 image_urls，无图走规则模拟
+                }
+                logger.info(f"[F-06] items 表无记录，从 eval 事件 payload 回退: item_id={body.item_id}")
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(f"[F-06] payload 解析失败: item_id={body.item_id}, error={e}")
+
     if not item:
         raise HTTPException(status_code=404, detail=f"商品 {body.item_id} 不存在")
 

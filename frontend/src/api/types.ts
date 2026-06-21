@@ -46,6 +46,25 @@ export interface AppConfig {
     pass_score: number
     auto_buy_score: number
   }
+  // 搜索参数配置（对应后端 SearchConfig 模型）
+  search: {
+    page_size: number
+    sort_type: string
+    timeout: number
+    regions: string
+    filter_tags: string[]
+  }
+  // 价格策略配置（对应后端 PriceStrategyConfig 模型）
+  price_strategy: {
+    enabled_max: boolean
+    max_price: number
+    enabled_min: boolean
+    min_price: number
+    enabled_market_ratio: boolean
+    market_ratio: number
+    enabled_top_n: boolean
+    top_n: number
+  }
   // 敏感字段（脱敏后为 ***）
   serverchan_send_key?: string
   pushplus_token?: string
@@ -121,6 +140,7 @@ export interface TaskLink {
     region?: string
     seller_id?: string
     seller_nick?: string
+    seller_credit?: string  // 卖家信用度（极好/良好/优秀），用于发布时间兜底显示
     want_cnt?: number
     view_cnt?: number
     publish_time?: string

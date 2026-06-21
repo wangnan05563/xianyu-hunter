@@ -16,7 +16,7 @@ from sqlalchemy import func, select, text as sa_text
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import EventRow, TaskRow, OrderRow, _utcnow
-from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.deps import get_container, _should_start_scheduler
 
 router = APIRouter(prefix="/api", tags=["stats-overview"])
 
@@ -102,7 +102,8 @@ def _overview(container: Container) -> dict[str, Any]:
         # 系统状态：数据库大小 + 浏览器数据目录 + 调度器状态
         "db_size": _calc_db_size(container),
         "browser_dir": _get_browser_dir(container),
-        "scheduler_running": container.scheduler is not None and len(container.scheduler._workers) > 0,
+        # 调度器状态：--with-scheduler 模式即视为运行中（即使无 RUNNING 任务）
+        "scheduler_running": _should_start_scheduler(),
         "ts": _utcnow().isoformat(timespec="seconds"),
     }
 

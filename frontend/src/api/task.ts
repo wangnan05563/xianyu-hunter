@@ -15,7 +15,7 @@ export const taskApi = {
   create: (body: TaskCreateBody) => client.post('/api/tasks', body).then((r) => r.data),
 
   update: (id: string, body: Partial<TaskCreateBody>) =>
-    client.put(`/api/tasks/${id}`, body).then((r) => r.data),
+    client.patch(`/api/tasks/${id}`, body).then((r) => r.data),
 
   delete: (id: string) => client.delete(`/api/tasks/${id}`).then((r) => r.data),
 
@@ -67,6 +67,10 @@ export const taskLinkApi = {
   // 长轮询实时拉取，超时放宽到 120s（闲鱼搜索+DOM解析耗时较长）
   live: (taskId: string) =>
     client.get<{ items: TaskLink[]; session_expired?: boolean }>(`/api/tasks/${taskId}/links/live`, { timeout: 120000 }).then((r) => r.data),
+
+  // 实时搜索并写入 DB，返回写入统计（刷新数据源用）
+  refresh: (taskId: string) =>
+    client.post<{ ok: boolean; found: number; saved: number; counts: Record<string, number> }>(`/api/tasks/${taskId}/links/refresh`, {}, { timeout: 120000 }).then((r) => r.data),
 
   remove: (taskId: string, linkId: number) =>
     client.delete(`/api/tasks/${taskId}/links/${linkId}`).then((r) => r.data),

@@ -1,7 +1,7 @@
 """Events 领域数据访问 - 事件 CRUD + 运行历史聚合
 
 提供：
-- save_event / list_events / get_event / update_event_payload / max_event_id
+- save_event / upsert_eval_event / list_events / get_event / update_event_payload / max_event_id
 - get_task_runs / _aggregate_bucket（F-09 时间窗聚合）
 """
 from __future__ import annotations
@@ -20,6 +20,30 @@ class EventsMixin:
 
     def save_event(self, event: dict) -> int:
         with self.engine.begin() as conn:
+            result = conn.execute(EventRow.__table__.insert().values(**event))
+            return result.inserted_primary_key[0]
+
+    def upsert_eval_event(self, event: dict) -> int:
+        """评估事件 upsert：按 (task_id, item_id, type) 去重
+
+        防止 live_links 多次触发或 recompute 多次调用产生重复评估记录。
+        利用数据库唯一索引 idx_eval_scored_unique 自动去重：
+        - 先 DELETE 已有的相同 (task_id, item_id) eval.scored 记录
+        - 再 INSERT 新记录，确保 payload 完全更新
+        """
+        task_id = event.get("task_id")
+        item_id = event.get("item_id")
+        event_type = event.get("type", "eval.scored")
+        with self.engine.begin() as conn:
+            # 先删除已有的相同 (task_id, item_id) eval.scored 记录
+            conn.execute(
+                EventRow.__table__.delete().where(
+                    EventRow.task_id == task_id,
+                    EventRow.item_id == item_id,
+                    EventRow.type == event_type,
+                )
+            )
+            # 插入新记录
             result = conn.execute(EventRow.__table__.insert().values(**event))
             return result.inserted_primary_key[0]
 

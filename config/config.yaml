@@ -6,11 +6,12 @@ browser:
   user_data_dir: ./browser-data
   viewport_width: 1024
   viewport_height: 768
-  user_agent: smoke-d-314261547
+  user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+    like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0
 antidetect:
-  qps: 1
-  min_delay_ms: 200
-  max_delay_ms: 1500
+  qps: 6
+  min_delay_ms: 10000
+  max_delay_ms: 15000
   fail_pause_threshold: 3
   fail_window_sec: 3600
 waf:
@@ -76,3 +77,18 @@ serverchan_send_key: ''
 pushplus_token: ''
 bark_server: ''
 bark_key: ''
+search:
+  page_size: 20
+  sort_type: default
+  timeout: 60
+  regions: ''
+  filter_tags: []
+price_strategy:
+  enabled_max: true
+  max_price: 800
+  enabled_min: true
+  min_price: 100
+  enabled_market_ratio: true
+  market_ratio: 0.8
+  enabled_top_n: true
+  top_n: 5

@@ -1,56 +1,22 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
-  Card, Table, Tag, Button, Space, Spin, Input, Slider, Row, Col, message,
-  Empty, Tooltip, DatePicker, Modal, Collapse, Badge, Statistic, Segmented, Image,
+  Card, Table, Tag, Button, Space, Spin, Input, Select, Slider, Row, Col, message,
+  Empty, DatePicker, Modal, Collapse, Statistic, Image, Tooltip, Alert,
 } from 'antd'
 import {
   ReloadOutlined, AimOutlined, RobotOutlined, LinkOutlined,
-  LineChartOutlined, SearchOutlined, UndoOutlined, RetweetOutlined,
+  SearchOutlined, UndoOutlined, RetweetOutlined,
 } from '@ant-design/icons'
-import ReactECharts from '../../components/charts/EChart'
 import dayjs from 'dayjs'
-import { evalApi, aiApi, type EvalItem, type AIConditionResult } from '../../api'
+import { evalApi, aiApi, taskApi, type EvalItem, type AIConditionResult, type Task } from '../../api'
 import { RISK_LEVEL_CONFIG } from '../../constants/riskLevels'
+import { isDataInsufficient, getInsufficientReason, type DistResponse, type SellerTrendData } from './utils'
+import EvalHeatmap from './components/EvalHeatmap'
+import ResultBarChart from './components/ResultBarChart'
+import PriceHistogram from './components/PriceHistogram'
+import TrendSparkline from './components/TrendSparkline'
 
 const { RangePicker } = DatePicker
-
-const RANGE_OPTIONS = [
-  { label: '24h', value: 24 },
-  { label: '3天', value: 72 },
-  { label: '7天', value: 168 },
-  { label: '30天', value: 720 },
-]
-
-// 分布 API 返回的完整类型
-interface DistResponse {
-  buckets: Array<Array<{ count: number; pass: number; auto: number; fail: number }>>
-  marginals: {
-    price: number[]
-    score: number[]
-    result: { pass: number; auto: number; fail: number }
-  }
-  distribution: Array<{ range: string; count: number }>
-  suggested_threshold: { score: number; pass_rate: number }
-  total: number
-  insufficient_count: number
-  price_range: [number, number]
-  // 后端返回的当前生效阈值，前端据此动态显示分类标签
-  thresholds?: { pass_score: number; auto_buy_score: number }
-}
-
-// 卖家价格趋势数据
-interface SellerTrendData {
-  seller_id: string
-  items_count: number
-  price_points: Array<{ date: string; avg_price: number; min_price: number; max_price: number; count: number }>
-  current_avg: number
-  trend: 'up' | 'down' | 'stable'
-}
-
-// 检测数据不足（score=null / data_quality=insufficient / risk_level=unknown）
-function isDataInsufficient(r: EvalItem): boolean {
-  return r.payload.score == null || r.payload.risk_level === 'unknown'
-}
 
 export default function Evaluations() {
   // === 列表数据 ===
@@ -61,6 +27,7 @@ export default function Evaluations() {
   // === 查询条件 ===
   const [itemId, setItemId] = useState<string>('')
   const [taskId, setTaskId] = useState<string>('')
+  const [tasks, setTasks] = useState<Task[]>([])
   const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100])
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
 
@@ -145,6 +112,12 @@ export default function Evaluations() {
 
   useEffect(() => { load() }, [load])
   useEffect(() => { loadDist() }, [loadDist])
+  // 加载任务列表（供下拉选择器使用）
+  useEffect(() => {
+    taskApi.list({ limit: 200 }).then((res) => {
+      setTasks(res.items || [])
+    }).catch(() => {})
+  }, [])
 
   // 查询/重置
   const onSearch = () => { setPage(1); load() }
@@ -192,161 +165,34 @@ export default function Evaluations() {
   }
 
   // 卖家价格趋势
+  const [trendError, setTrendError] = useState<Record<string, string>>({})
   const loadSellerTrend = async (itemId: string) => {
     if (trendCache[itemId]) return
     setTrendLoading(itemId)
+    setTrendError((prev) => ({ ...prev, [itemId]: '' }))
     try {
       const data: SellerTrendData = await evalApi.sellerTrend(itemId)
       setTrendCache((prev) => ({ ...prev, [itemId]: data }))
-    } catch {
-      message.error('加载卖家趋势失败')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // 404: 商品未入库或无卖家信息
+      if (msg.includes('404') || msg.includes('未找到')) {
+        setTrendError((prev) => ({ ...prev, [itemId]: '该商品未入库，无法查询卖家趋势' }))
+      } else {
+        setTrendError((prev) => ({ ...prev, [itemId]: '加载失败：' + msg.slice(0, 50) }))
+      }
     } finally {
       setTrendLoading('')
     }
   }
 
-  // === 热力图辅助函数：生成价格/评分区间标签 ===
-  const buildHeatmapLabels = () => {
-    if (!dist) return { xLabels: [], yLabels: [] }
-    const pBins = dist.buckets[0]?.length || 10
-    const sBins = dist.buckets.length || 10
-    const [pMin, pMax] = dist.price_range || [0, 5000]
-    const pStep = (pMax - pMin) / pBins
-    // X轴：价格等分区间
-    const xLabels = Array.from({ length: pBins }, (_, i) => {
-      const lo = Math.round(pMin + i * pStep)
-      const hi = Math.round(pMin + (i + 1) * pStep)
-      return `¥${lo}~${hi}`
-    })
-    // Y轴：评分区间，从高到低（索引0=顶部=最高分）
-    const sStep = 100 / sBins
-    const yLabels = Array.from({ length: sBins }, (_, i) => {
-      const hi = Math.round(100 - i * sStep)
-      const lo = Math.round(100 - (i + 1) * sStep)
-      return `${lo}-${hi}分`
-    })
-    return { xLabels, yLabels }
-  }
-
-  // 动态计算热力图最大值，避免颜色全白或全深
-  const heatmapMax = (() => {
-    if (!dist) return 1
-    let maxVal = 1
-    dist.buckets.forEach((row) =>
-      row.forEach((b) => { if (b.count > maxVal) maxVal = b.count })
-    )
-    return maxVal
-  })()
-
-  const { xLabels, yLabels } = buildHeatmapLabels()
-
-  // === 分布热力图 ===
-  const heatmapOption = dist && dist.buckets?.length ? {
-    tooltip: {
-      position: 'top',
-      formatter: (p: { dataIndex: [number, number]; value: number }) => {
-        const [pi, si] = p.dataIndex
-        const bucket = dist.buckets[si]?.[pi]
-        if (!bucket || bucket.count === 0) return '该区间暂无商品'
-        return `${xLabels[pi]} × ${yLabels[si]}<br/>` +
-          `<b>商品数：${bucket.count}</b><br/>` +
-          `可抢：${bucket.auto} / 通过：${bucket.pass} / 驳回：${bucket.fail}`
-      },
-    },
-    grid: { left: 65, right: 20, top: 20, bottom: 70, containLabel: true },
-    xAxis: {
-      type: 'category', name: '价格区间', nameLocation: 'end', nameGap: 8,
-      nameTextStyle: { fontSize: 11, color: '#8c8c8c' },
-      data: xLabels,
-      splitArea: { show: true }, axisLabel: { fontSize: 9, rotate: 30 },
-    },
-    yAxis: {
-      type: 'category', name: '评分区间',
-      nameTextStyle: { fontSize: 11, color: '#8c8c8c' },
-      data: yLabels,
-      splitArea: { show: true }, axisLabel: { fontSize: 9 },
-    },
-    visualMap: {
-      min: 0, max: heatmapMax, calculable: true,
-      orient: 'horizontal', left: 'center', bottom: 5,
-      inRange: { color: ['#f5f5f5', '#bae7ff', '#69c0ff', '#1890ff', '#003a8c'] },
-      textStyle: { fontSize: 10 },
-      formatter: (v: number) => `${v}件`,
-    },
-    series: [{
-      type: 'heatmap',
-      data: (() => {
-        const data: Array<[number, number, number]> = []
-        dist.buckets.forEach((row, si) => row.forEach((bucket, pi) => data.push([pi, si, bucket.count])))
-        return data
-      })(),
-      label: {
-        show: true,
-        formatter: (p: { value: number }) => p.value > 0 ? String(p.value) : '',
-        fontSize: 9,
-      },
-      emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.4)' } },
-    }],
-  } : null
-
-  // === 结果分布柱状图 ===
-  const resultBarOption = dist ? {
-    tooltip: { trigger: 'item' },
-    legend: { bottom: 0, textStyle: { fontSize: 11 } },
-    series: [{
-      type: 'pie', radius: ['40%', '70%'], center: ['50%', '45%'],
-      data: [
-        { value: dist.marginals.result.auto, name: `可抢(≥${autoBuyScore})`, itemStyle: { color: '#52c41a' } },
-        { value: dist.marginals.result.pass, name: `通过(${passScore}-${autoBuyScore - 1})`, itemStyle: { color: '#1890ff' } },
-        { value: dist.marginals.result.fail, name: `驳回(<${passScore})`, itemStyle: { color: '#ff4d4f' } },
-      ],
-      label: { formatter: '{b}: {c}' },
-    }],
-  } : null
-
-  // === 5档分数分布直方图 ===
-  const histogramOption = dist ? {
-    tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 20, top: 20, bottom: 40 },
-    xAxis: {
-      type: 'category', data: dist.distribution?.map((d) => d.range) || [],
-      axisLabel: { fontSize: 10 },
-    },
-    yAxis: { type: 'value', minInterval: 1 },
-    series: [{
-      type: 'bar', barWidth: '60%',
-      data: dist.distribution?.map((d) => d.count) || [],
-      itemStyle: { color: '#1890ff', borderRadius: [4, 4, 0, 0] },
-      label: { show: true, position: 'top', fontSize: 10 },
-    }],
-  } : null
-
-  // === 卖家趋势 sparkline ===
-  const trendSparkline = (data: SellerTrendData) => {
-    const points = data.price_points
-    if (!points.length) return null
-    const prices = points.map((p) => p.avg_price)
-    return {
-      tooltip: { trigger: 'axis', formatter: (params: Array<{ dataIndex: number; data: number }>) => {
-        const p = params[0]
-        if (!p) return ''
-        const point = points[p.dataIndex]
-        return point ? `${point.date}<br/>均价: ¥${point.avg_price}<br/>范围: ¥${point.min_price}~¥${point.max_price}<br/>商品数: ${point.count}` : ''
-      }},
-      grid: { left: 40, right: 10, top: 10, bottom: 25 },
-      xAxis: { type: 'category', data: points.map((p) => p.date), axisLabel: { fontSize: 9 } },
-      yAxis: { type: 'value', axisLabel: { fontSize: 9 } },
-      series: [{
-        type: 'line', data: prices, smooth: true,
-        lineStyle: { width: 2, color: '#1890ff' },
-        areaStyle: { color: 'rgba(24,144,255,0.15)' },
-        symbol: 'circle', symbolSize: 4,
-      }],
-    }
-  }
-
   // === 表格列定义（与商品列表页对齐） ===
   const columns = [
+    {
+      title: '任务ID', dataIndex: 'task_id', key: 'task_id', width: 120,
+      ellipsis: true,
+      render: (v: string) => <Tooltip title={v}>{v?.slice(0, 10)}...</Tooltip>,
+    },
     {
       title: '图片', key: 'thumb', width: 70,
       render: (_: unknown, r: EvalItem) => {
@@ -374,22 +220,95 @@ export default function Evaluations() {
         : '—',
     },
     {
-      title: '卖家', key: 'seller', width: 110, ellipsis: true,
-      render: (_: unknown, r: EvalItem) => r.payload?.seller_nick || r.payload?.seller_id || '—',
+      // 卖家列：参考闲鱼商品详情页风格，昵称+信用度合并显示
+      title: '卖家', key: 'seller', width: 160, ellipsis: true,
+      render: (_: unknown, r: EvalItem) => {
+        const nick = r.payload?.seller_nick as string | undefined
+        const id = r.payload?.seller_id as string | undefined
+        const credit = r.payload?.seller_credit as string | undefined
+        // 真实昵称优先级：清洗后的 seller_nick > seller_id（截短）> '—'
+        const displayName = nick && nick.trim() ? nick : (id ? `用户 ${id.slice(0, 8)}` : '—')
+        return (
+          <div>
+            <div>{displayName}</div>
+            {credit && <div style={{ fontSize: 11, color: '#52c41a' }}>信用 {credit}</div>}
+          </div>
+        )
+      },
     },
     {
+      // 地区列：清洗后从脏数据恢复的 region，缺则 '—'
       title: '地区', key: 'region', width: 80,
       render: (_: unknown, r: EvalItem) => (r.payload?.region as string) || '—',
     },
     {
+      // 想要数
       title: '想要', key: 'want', width: 60,
       render: (_: unknown, r: EvalItem) => (r.payload?.want_cnt as number) ?? '—',
     },
     {
+      // 发布时间列：优先级 = 完整时间戳 > 历史数据中的发布时间短语 > '—'
+      // 兜底显示"一周内发布"等从 seller_nick 脏数据中恢复的原文
       title: '发布时间', key: 'publish', width: 150,
       render: (_: unknown, r: EvalItem) => {
         const t = r.payload?.publish_time as string | undefined
-        return t ? new Date(t).toLocaleString('zh-CN') : '—'
+        if (t) return new Date(t).toLocaleString('zh-CN')
+        const text = r.payload?.publish_time_text as string | undefined
+        if (text) return <span style={{ color: '#faad14' }}>{text}</span>
+        return '—'
+      },
+    },
+    {
+      title: '成色', key: 'condition', width: 110,
+      filters: [
+        { text: '全新', value: '全新' },
+        { text: '近全新', value: '近全新' },
+        { text: '正常使用', value: '正常使用' },
+        { text: '明显使用', value: '明显使用' },
+        { text: '有故障/维修', value: '有故障/维修' },
+        { text: '未注明', value: '未注明' },
+        { text: '未知', value: '未知' },
+      ],
+      onFilter: (val: unknown, r: EvalItem) => (r as { condition_label?: string }).condition_label === val,
+      render: (_: unknown, r: EvalItem & { condition_label?: string; condition_score?: number; is_branded_new?: boolean; has_repair?: boolean }) => {
+        const label = r.condition_label || '未知'
+        const score = r.condition_score || 0
+        // 颜色：全新=绿、近全新=蓝、正常使用=灰、明显使用=橙、故障=红
+        const colorMap: Record<string, string> = {
+          '全新': 'green',
+          '近全新': 'cyan',
+          '正常使用': 'default',
+          '明显使用': 'orange',
+          '有故障/维修': 'red',
+          '未注明': 'default',
+          '未知': 'default',
+        }
+        return (
+          <div>
+            <Tag color={colorMap[label] || 'default'}>{label}</Tag>
+            {score !== 0 && (
+              <span style={{ fontSize: 11, marginLeft: 4, color: score > 0 ? '#52c41a' : '#ff4d4f' }}>
+                {score > 0 ? `+${score}` : score}分
+              </span>
+            )}
+          </div>
+        )
+      },
+    },
+    {
+      title: '成色标签', key: 'condition_tags', width: 150,
+      render: (_: unknown, r: EvalItem & { condition_tags?: Array<{ category: string; label: string }> }) => {
+        const tags = r.condition_tags || []
+        if (tags.length === 0) return '—'
+        // 显示具体命中的关键词（限制最多 3 个，避免列表过长）
+        return (
+          <span style={{ fontSize: 11 }}>
+            {tags.slice(0, 3).map((t, i) => (
+              <Tag key={i} style={{ marginBottom: 2 }} color="blue">{t.label}</Tag>
+            ))}
+            {tags.length > 3 && <span style={{ color: '#999' }}>+{tags.length - 3}</span>}
+          </span>
+        )
       },
     },
     {
@@ -397,7 +316,8 @@ export default function Evaluations() {
       sorter: (a: EvalItem, b: EvalItem) => (a.payload.score ?? 0) - (b.payload.score ?? 0),
       render: (_: unknown, r: EvalItem) => {
         if (isDataInsufficient(r)) {
-          return <Tag color="default">数据不足</Tag>
+          // 方案C改进：显示具体原因而非笼统的"数据不足"
+          return <Tag color="default">{getInsufficientReason(r)}</Tag>
         }
         const s = r.payload.score
         const color = s >= autoBuyScore ? '#52c41a' : s >= passScore ? '#faad14' : '#ff4d4f'
@@ -408,7 +328,8 @@ export default function Evaluations() {
       title: '风险', key: 'risk', width: 70,
       render: (_: unknown, r: EvalItem) => {
         const level = r.payload?.risk_level || 'unknown'
-        return <Tag color={RISK_LEVEL_CONFIG[level]?.color || 'default'}>{level}</Tag>
+        const cfg = RISK_LEVEL_CONFIG[level] || RISK_LEVEL_CONFIG.unknown
+        return <Tag color={cfg.color}>{cfg.label}</Tag>
       },
     },
     {
@@ -424,46 +345,15 @@ export default function Evaluations() {
     },
   ]
 
-  // 展开行：卖家价格趋势
-  const expandedRowRender = (r: EvalItem) => {
-    const trend = trendCache[r.item_id]
-    const isLoading = trendLoading === r.item_id
-
-    return (
-      <div style={{ padding: '8px 0' }}>
-        {!trend && !isLoading && (
-          <Button size="small" icon={<LineChartOutlined />} onClick={() => loadSellerTrend(r.item_id)}>
-            加载卖家价格趋势
-          </Button>
-        )}
-        {isLoading && <Spin size="small" />}
-        {trend && (
-          <Row gutter={16} align="middle">
-            <Col span={6}>
-              <Statistic title="卖家" value={trend.seller_id} valueStyle={{ fontSize: 14 }} />
-              <div style={{ marginTop: 4 }}>
-                <Badge status={
-                  trend.trend === 'up' ? 'error' : trend.trend === 'down' ? 'success' : 'default'
-                } text={
-                  trend.trend === 'up' ? '涨价 ↑' : trend.trend === 'down' ? '降价 ↓' : '稳定 →'
-                } />
-                <span style={{ marginLeft: 12, fontSize: 12, color: '#999' }}>
-                  {trend.items_count} 件商品 / 均价 ¥{trend.current_avg}
-                </span>
-              </div>
-            </Col>
-            <Col span={18}>
-              {trend.price_points.length > 0 ? (
-                <ReactECharts option={trendSparkline(trend)} style={{ height: 120 }} />
-              ) : (
-                <Empty description="暂无价格趋势数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-              )}
-            </Col>
-          </Row>
-        )}
-      </div>
-    )
-  }
+  // 展开行：卖家价格趋势（委托给 TrendSparkline 组件）
+  const expandedRowRender = (r: EvalItem) => (
+    <TrendSparkline
+      trend={trendCache[r.item_id]}
+      loading={trendLoading === r.item_id}
+      error={trendError[r.item_id]}
+      onLoad={() => loadSellerTrend(r.item_id)}
+    />
+  )
 
   return (
     <div className="page-container">
@@ -479,10 +369,20 @@ export default function Evaluations() {
             onPressEnter={onSearch}
           />
           <span>任务ID：</span>
-          <Input
-            placeholder="模糊匹配" allowClear style={{ width: 160 }}
-            value={taskId} onChange={(e) => setTaskId(e.target.value)}
-            onPressEnter={onSearch}
+          <Select
+            placeholder="选择任务" allowClear showSearch
+            style={{ width: 260 }}
+            value={taskId || undefined}
+            onChange={(v) => { setTaskId(v || ''); setPage(1); }}
+            onClear={() => setTaskId('')}
+            filterOption={(input, option) =>
+              (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
+            }
+            options={tasks.map((t) => ({
+              label: `${t.name}（${t.keyword}）`,
+              value: t.id,
+            }))}
+            notFoundContent="暂无任务"
           />
           <span>评分范围：</span>
           <Slider
@@ -501,6 +401,17 @@ export default function Evaluations() {
           <Button icon={<RetweetOutlined />} onClick={onRecompute} loading={recomputing}>重新评估</Button>
         </Space>
       </Card>
+
+      {/* 方案C改进：数据不足时显示引导提示 */}
+      {dist && dist.insufficient_count > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`有 ${dist.insufficient_count} 条评估记录因卖家信息缺失仅基于价格评估`}
+          description="建议在 Dashboard 页面重新登录闲鱼后，点击上方「重新评估」按钮获取完整评估结果。"
+        />
+      )}
 
       {/* 统计卡片 */}
       {dist && (
@@ -564,56 +475,16 @@ export default function Evaluations() {
 
         {/* 右侧：图表 */}
         <Col span={8}>
-          {/* 热力图 */}
-          <Card
-            title="评估分布热力图"
-            extra={
-              <Segmented
-                size="small"
-                options={RANGE_OPTIONS}
-                value={distRange}
-                onChange={(v) => setDistRange(v as number)}
-              />
-            }
-            style={{ marginBottom: 16 }}
-          >
-            <Spin spinning={distLoading}>
-              {heatmapOption ? (
-                <>
-                  <ReactECharts option={heatmapOption} style={{ height: 300 }} />
-                  <div style={{
-                    marginTop: 8, padding: '8px 12px', background: '#fafafa',
-                    borderRadius: 4, fontSize: 12, color: '#666', lineHeight: 1.8,
-                  }}>
-                    <b>图表说明：</b>热力图展示商品在「价格区间 × 评分区间」中的分布密度。
-                    颜色越深表示该区间内商品越多。
-                    右上角（高评分 + 高价）为理想区域，左下角（低评分 + 低价）需谨慎。
-                    悬停单元格可查看具体数量和通过/驳回明细。
-                  </div>
-                </>
-              ) : (
-                <Empty description="暂无分布数据" />
-              )}
-            </Spin>
-          </Card>
+          <EvalHeatmap
+            dist={dist}
+            distRange={distRange}
+            distLoading={distLoading}
+            onRangeChange={setDistRange}
+          />
 
-          {/* 结果分布 */}
-          <Card title="结果分布" style={{ marginBottom: 16 }}>
-            {resultBarOption ? (
-              <ReactECharts option={resultBarOption} style={{ height: 200 }} />
-            ) : (
-              <Empty description="暂无数据" />
-            )}
-          </Card>
+          <ResultBarChart dist={dist} passScore={passScore} autoBuyScore={autoBuyScore} />
 
-          {/* 5档分数分布 */}
-          <Card title="分数分布" style={{ marginBottom: 16 }}>
-            {histogramOption ? (
-              <ReactECharts option={histogramOption} style={{ height: 180 }} />
-            ) : (
-              <Empty description="暂无数据" />
-            )}
-          </Card>
+          <PriceHistogram dist={dist} />
 
           {/* 阈值建议 */}
           <Card title="阈值建议">

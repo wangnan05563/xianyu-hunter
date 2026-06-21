@@ -28,7 +28,7 @@ const defaultConfig: PriceStrategyConfig = {
 }
 
 export default function PriceStrategy() {
-  const { config, load, save, hasChanges, reset } = useConfigStore()
+  const { config, load, save, update, hasChanges, reset } = useConfigStore()
   const [strategy, setStrategy] = useState<PriceStrategyConfig>(defaultConfig)
   const [histogram, setHistogram] = useState<{ bins: string[]; counts: number[]; prices: number[] } | null>(null)
   const [previewing, setPreviewing] = useState(false)
@@ -37,6 +37,13 @@ export default function PriceStrategy() {
   useEffect(() => {
     load()
   }, [load])
+
+  // 配置加载完成后，将 price_strategy 同步到本地 state
+  useEffect(() => {
+    if (config?.price_strategy) {
+      setStrategy(config.price_strategy)
+    }
+  }, [config])
 
   // 加载价格直方图数据
   useEffect(() => {
@@ -59,7 +66,8 @@ export default function PriceStrategy() {
 
   const handleSave = async () => {
     try {
-      // 将策略写入配置（price_strategy 是任务级配置，这里保存为全局默认）
+      // 将本地 strategy 修改同步到 configStore 后再保存
+      update({ price_strategy: strategy })
       await save()
       message.success('价格策略已保存')
     } catch {

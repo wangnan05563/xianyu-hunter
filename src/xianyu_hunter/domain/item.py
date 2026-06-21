@@ -23,6 +23,7 @@ class ItemSummary:
     seller_credit_score: int | None = None  # 芝麻信用分
     seller_on_sale_count: int = 0  # 在售商品数
     seller_sold_count: int = 0  # 已售商品数
+    seller_credit: str = ""  # 卖家信用度描述（如"极好/良好/优秀"，从搜索卡片提取）
 
 
 @dataclass

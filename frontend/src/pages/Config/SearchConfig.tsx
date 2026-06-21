@@ -19,6 +19,15 @@ import TagEditor from '../../components/editors/TagEditor'
 
 const { Text } = Typography
 
+// 搜索配置字段（对应后端 SearchConfig 模型）
+interface SearchConfigFields {
+  page_size: number
+  sort_type: string
+  timeout: number
+  regions: string
+  filter_tags: string[]
+}
+
 // 排序方式选项（闲鱼搜索支持）
 const SORT_OPTIONS = [
   { label: '默认综合', value: 'default' },
@@ -65,6 +74,15 @@ export default function SearchConfig() {
       setSearchInterval(delaySec)
       // 重试次数从 fail_pause_threshold 推断（或使用默认值）
       setRetryCount(config.antidetect.fail_pause_threshold || 3)
+      // 从 search 配置块加载搜索专用参数
+      const sc = (config as { search?: SearchConfigFields }).search
+      if (sc) {
+        setPageSize(sc.page_size ?? 20)
+        setSortType(sc.sort_type ?? 'default')
+        setTimeout(sc.timeout ?? 30)
+        setRegions(sc.regions ?? '')
+        setFilterTags(sc.filter_tags ?? [])
+      }
     }
   }, [config])
 
@@ -76,7 +94,9 @@ export default function SearchConfig() {
   const handleSave = async () => {
     try {
       setLoading(true)
-      // 构建更新 payload：搜索间隔转回毫秒写入 antidetect
+      // 构建更新 payload：
+      // 1. antidetect: 搜索间隔和重试次数（通用反检测参数）
+      // 2. search: 搜索专用参数（page_size/sort_type/timeout/regions/filter_tags）
       update({
         antidetect: {
           ...config.antidetect,
@@ -85,6 +105,13 @@ export default function SearchConfig() {
           qps: Math.round(60 / searchInterval), // 根据 QPS 反推
           fail_pause_threshold: retryCount,
         },
+        search: {
+          page_size: pageSize,
+          sort_type: sortType,
+          timeout: timeout,
+          regions: regions,
+          filter_tags: filterTags,
+        } as SearchConfigFields,
       })
       // 等待 store 更新
       await save()

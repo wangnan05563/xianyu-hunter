@@ -6,5 +6,5 @@ export const RISK_LEVEL_CONFIG: Record<string, { color: string; label: string }>
   high: { color: 'red', label: '高风险' },
   extreme: { color: 'red', label: '极高风险' },
   critical: { color: 'red', label: '极高风险' },
-  unknown: { color: 'default', label: '数据不足' },
+  unknown: { color: 'default', label: '卖家信息缺失' },
 }

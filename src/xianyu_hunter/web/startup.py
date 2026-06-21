@@ -24,6 +24,7 @@ async def start_scheduler_in_background(container: Any) -> None:
     from xianyu_hunter.domain.task import Task, TaskMode, TaskConfig
     from xianyu_hunter.modules.worker import TaskWorker
     from xianyu_hunter.modules.price_strategy import PriceConfig
+    from xianyu_hunter.infra.yaml_config import get_config
 
     if not container.collector:
         logger.warning("调度器模式需要浏览器，但 collector 未初始化（请确认已登录闲鱼）")
@@ -37,6 +38,15 @@ async def start_scheduler_in_background(container: Any) -> None:
         except Exception as e:
             logger.error("浏览器启动失败: %s（实时搜索功能将不可用）", e)
             # 不 return——允许其他功能继续工作，只是实时搜索不可用
+
+    # 读取用户在 /app/config/search 页面保存的搜索参数
+    # 这些参数会注入到每个 TaskWorker 的 TaskConfig 中，控制 collector.search() 行为
+    search_cfg = get_config().search
+    logger.info(
+        f"搜索参数配置: page_size={search_cfg.page_size}, sort_type={search_cfg.sort_type}, "
+        f"timeout={search_cfg.timeout}s, regions='{search_cfg.regions}', "
+        f"filter_tags={search_cfg.filter_tags}"
+    )
 
     raw_tasks = container.repo.list_tasks()
     workers: list[TaskWorker] = []
@@ -52,6 +62,7 @@ async def start_scheduler_in_background(container: Any) -> None:
             exclude_words=raw.get("exclude_words") or [],
             region=raw.get("region"),
             mode=TaskMode(raw.get("mode", "confirm")),
+            search_filters=raw.get("search_filters") or [],
         )
         # 按任务维度设置价格策略
         if task.min_price is not None or task.max_price is not None:
@@ -64,6 +75,15 @@ async def start_scheduler_in_background(container: Any) -> None:
                     else 0.8,
                 )
             )
+        # 从 AppConfig.search 注入搜索参数到 TaskConfig
+        # 这样 Worker.run_once() 调用 collector.search() 时会使用用户配置的参数
+        task_config = TaskConfig(
+            search_page_size=search_cfg.page_size,
+            search_sort_type=search_cfg.sort_type,
+            search_timeout=search_cfg.timeout,
+            search_regions=search_cfg.regions,
+            search_filter_tags=search_cfg.filter_tags,
+        )
         worker = TaskWorker(
             task=task,
             collector=container.collector,
@@ -71,7 +91,7 @@ async def start_scheduler_in_background(container: Any) -> None:
             price_strategy=container.price_strategy,
             evaluator=container.evaluator,
             buyer=container.buyer,
-            config=TaskConfig(),
+            config=task_config,
             repo=container.repo,
         )
         await container.scheduler.register(task, worker)
@@ -178,6 +198,27 @@ def run_migrations(container: Any) -> None:
                     "ALTER TABLE notifications ADD COLUMN read_at DATETIME DEFAULT NULL"
                 )
             logger.info("notifications 表已新增 read_at 列（C-04 迁移）")
+
+    # C-05 迁移：eval.scored 事件去重 + 添加部分唯一索引
+    # 防止 live_links 多次触发或 recompute 多次调用产生重复评估记录
+    if insp.has_table("events"):
+        with container.repo.engine.begin() as conn:
+            # 1. 清理已有的重复 eval.scored 记录（每个 task_id+item_id 只保留最新一条）
+            conn.exec_driver_sql("""
+                DELETE FROM events
+                WHERE id NOT IN (
+                    SELECT MAX(id) FROM events
+                    WHERE type = 'eval.scored'
+                    GROUP BY task_id, item_id
+                )
+                AND type = 'eval.scored'
+            """)
+            # 2. 创建部分唯一索引（仅对 eval.scored 类型生效）
+            conn.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_scored_unique "
+                "ON events (task_id, item_id) WHERE type = 'eval.scored'"
+            )
+        logger.info("eval.scored 事件去重 + 唯一索引已创建（C-05 迁移）")
 
 
 def setup_startup_hooks(app: FastAPI) -> None:

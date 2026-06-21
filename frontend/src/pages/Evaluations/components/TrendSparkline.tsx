@@ -1,0 +1,98 @@
+import { Button, Spin, Row, Col, Statistic, Badge, Empty, Alert } from 'antd'
+import { LineChartOutlined } from '@ant-design/icons'
+import ReactECharts from '../../../components/charts/EChart'
+import type { SellerTrendData } from '../utils'
+
+interface TrendSparklineProps {
+  trend: SellerTrendData | undefined
+  loading: boolean
+  error?: string
+  onLoad: () => void
+}
+
+// 卖家趋势 sparkline option 构造
+// tooltip 需要访问原始 price_points（含 min/max/count），故通过闭包持有 points 引用
+function buildTrendOption(data: SellerTrendData) {
+  const points = data.price_points
+  if (!points.length) return null
+  const prices = points.map((p) => p.avg_price)
+  return {
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: Array<{ dataIndex: number; data: number }>) => {
+        const p = params[0]
+        if (!p) return ''
+        const point = points[p.dataIndex]
+        return point ? `${point.date}<br/>均价: ¥${point.avg_price}<br/>范围: ¥${point.min_price}~¥${point.max_price}<br/>商品数: ${point.count}` : ''
+      },
+    },
+    grid: { left: 40, right: 10, top: 10, bottom: 25 },
+    xAxis: { type: 'category', data: points.map((p) => p.date), axisLabel: { fontSize: 9 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 9 } },
+    series: [{
+      type: 'line', data: prices, smooth: true,
+      lineStyle: { width: 2, color: '#1890ff' },
+      areaStyle: { color: 'rgba(24,144,255,0.15)' },
+      symbol: 'circle', symbolSize: 4,
+    }],
+  }
+}
+
+// 展开行：卖家价格趋势
+// 四种状态：未加载（显示按钮）、加载中（Spin）、已加载（统计 + sparkline）、错误（Alert）
+export default function TrendSparkline({ trend, loading, error, onLoad }: TrendSparklineProps) {
+  if (error) {
+    return (
+      <div style={{ padding: '8px 0' }}>
+        <Alert type="warning" showIcon message={error} style={{ maxWidth: 500 }} />
+      </div>
+    )
+  }
+
+  if (!trend && !loading) {
+    return (
+      <div style={{ padding: '8px 0' }}>
+        <Button size="small" icon={<LineChartOutlined />} onClick={onLoad}>
+          加载卖家价格趋势
+        </Button>
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div style={{ padding: '8px 0' }}>
+        <Spin size="small" />
+      </div>
+    )
+  }
+
+  if (!trend) return null
+
+  return (
+    <div style={{ padding: '8px 0' }}>
+      <Row gutter={16} align="middle">
+        <Col span={6}>
+          <Statistic title="卖家" value={trend.seller_id} valueStyle={{ fontSize: 14 }} />
+          <div style={{ marginTop: 4 }}>
+            <Badge status={
+              trend.trend === 'up' ? 'error' : trend.trend === 'down' ? 'success' : 'default'
+            } text={
+              trend.trend === 'up' ? '涨价 ↑' : trend.trend === 'down' ? '降价 ↓' : '稳定 →'
+            } />
+            <span style={{ marginLeft: 12, fontSize: 12, color: '#999' }}>
+              {trend.items_count} 件商品 / 均价 ¥{trend.current_avg}
+            </span>
+          </div>
+        </Col>
+        <Col span={18}>
+          {trend.price_points.length > 0 ? (
+            <ReactECharts option={buildTrendOption(trend)} style={{ height: 120 }} />
+          ) : (
+            <Empty description="暂无价格趋势数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          )}
+        </Col>
+      </Row>
+    </div>
+  )
+}

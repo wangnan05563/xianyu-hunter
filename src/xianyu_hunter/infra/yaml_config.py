@@ -128,6 +128,42 @@ class EvalConfig(BaseModel):
         return self
 
 
+class SearchConfig(BaseModel):
+    """搜索参数配置（对应前端 /app/config/search 页面）
+
+    独立于 antidetect（通用反检测），专门控制闲鱼搜索行为：
+    - page_size: 单次搜索请求返回的商品条目数
+    - sort_type: 搜索结果排序方式（default/newest/price_asc/price_desc/want_count）
+    - timeout: 单次搜索请求的最大等待秒数
+    - regions: 地区过滤（逗号分隔，空字符串表示全国）
+    - filter_tags: 闲鱼筛选标签列表（如包邮、信用极好等）
+    """
+    page_size: int = 20
+    sort_type: str = "default"
+    timeout: int = 30
+    regions: str = ""
+    filter_tags: list[str] = Field(default_factory=list)
+
+
+class PriceStrategyConfig(BaseModel):
+    """价格策略配置（对应前端 /app/config/price 页面）
+
+    4 种策略独立开关，与 PriceConfig（运行时 dataclass）对齐：
+    - enabled_max / max_price: 硬性价格上限
+    - enabled_min / min_price: 硬性价格下限（防 1 元引流）
+    - enabled_market_ratio / market_ratio: 低于市场参考价比例
+    - enabled_top_n / top_n: 同类低价 TopN
+    """
+    enabled_max: bool = True
+    max_price: int = 10000
+    enabled_min: bool = True
+    min_price: int = 100
+    enabled_market_ratio: bool = False
+    market_ratio: float = 0.8
+    enabled_top_n: bool = False
+    top_n: int = 5
+
+
 class AppConfig(BaseModel):
     """根配置"""
     server: ServerConfig = ServerConfig()
@@ -136,6 +172,8 @@ class AppConfig(BaseModel):
     waf: WAFConfig = WAFConfig()
     notifier: NotifierConfig = NotifierConfig()
     eval: EvalConfig = EvalConfig()
+    search: SearchConfig = SearchConfig()
+    price_strategy: PriceStrategyConfig = PriceStrategyConfig()
 
 
 # ============== 加载逻辑 ==============

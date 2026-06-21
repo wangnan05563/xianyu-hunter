@@ -126,7 +126,7 @@ class TaskLinksMixin:
                     "seller_id": seller_id,
                     "seller_nick": seller_nick or "",
                     "url": item_url,
-                    "region": region,
+                    "region": region or "",
                     "publish_time": publish_time.isoformat() if publish_time else None,
                     "want_cnt": want_cnt,
                     "view_cnt": view_cnt,
@@ -145,7 +145,7 @@ class TaskLinksMixin:
                         "seller_nick": seller_nick or "",
                         "item_title": title,
                         "item_id": item_id,
-                        "region": region,
+                        "region": region or "",
                     },
                 )
             )

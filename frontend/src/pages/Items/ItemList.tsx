@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, Table, Tag, Select, Button, Input, Space, Spin, Image, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert } from 'antd'
 import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { AxiosError } from 'axios'
 import { taskApi, taskLinkApi, type Task, type TaskLink } from '../../api'
+import LazyImage from '../../components/LazyImage'
 
 type ViewMode = 'table' | 'card'
 
@@ -40,6 +41,14 @@ export default function ItemList() {
     }).catch(() => message.error('加载任务列表失败'))
   }, [])
 
+  // 切换任务时退出实时模式并清空旧数据，避免不同任务结果混在一起
+  useEffect(() => {
+    setLiveMode(false)
+    setItems([])
+    setTotal(0)
+    setPage(1)
+  }, [selectedTask])
+
   // 加载商品列表
   const loadItems = useCallback(() => {
     if (!selectedTask) return
@@ -57,6 +66,46 @@ export default function ItemList() {
       .finally(() => setLoading(false))
   }, [selectedTask, page, pageSize])
 
+  // 刷新数据源：非 liveMode 时先调用 refresh 端点实时搜索并写入 DB，再加载 DB 数据
+  // 这样确保"刷新"按钮获取的是最新商品，而非 DB 中的旧缓存
+  const handleRefresh = useCallback(() => {
+    if (!selectedTask) return
+    if (liveMode) {
+      loadLive()
+      return
+    }
+    setLoading(true)
+    const progressTimer = setTimeout(() => {
+      message.loading({ content: '正在从闲鱼刷新数据...', key: 'refresh', duration: 0 })
+    }, 2000)
+    taskLinkApi.refresh(selectedTask)
+      .then((res) => {
+        clearTimeout(progressTimer)
+        message.destroy('refresh')
+        if (res.saved > 0) {
+          message.success(`已刷新 ${res.saved} 条商品`)
+        } else {
+          message.warning('未获取到新商品，可能是闲鱼会话失效或无匹配结果')
+        }
+        // 刷新后重新加载 DB 数据（page 重置到第 1 页，确保看到最新结果）
+        setPage(1)
+        loadItems()
+      })
+      .catch((err) => {
+        clearTimeout(progressTimer)
+        message.destroy('refresh')
+        const detail = errDetail(err)
+        if (detail.includes('登录已过期') || detail.includes('重新登录')) {
+          setSessionExpired(true)
+        } else if (detail.includes('超时')) {
+          message.error('刷新超时，请稍后重试')
+        } else {
+          message.error(detail || '刷新失败')
+        }
+      })
+      .finally(() => setLoading(false))
+  }, [selectedTask, liveMode, loadItems])
+
   useEffect(() => {
     if (!liveMode) loadItems()
   }, [liveMode, loadItems])
@@ -66,10 +115,10 @@ export default function ItemList() {
     if (!selectedTask) return
     setLiveLoading(true)
     setSessionExpired(false)  // 重置上次的状态
-    // 进度提示：3 秒后显示"正在搜索闲鱼..."
+    // 进度提示：2 秒后显示"正在搜索闲鱼..."，更快的反馈
     const progressTimer = setTimeout(() => {
       message.loading({ content: '正在搜索闲鱼，请稍候...', key: 'live-search', duration: 0 })
-    }, 3000)
+    }, 2000)
     taskLinkApi.live(selectedTask)
       .then((res) => {
         clearTimeout(progressTimer)
@@ -128,7 +177,7 @@ export default function ItemList() {
       dataIndex: 'display',
       key: 'thumb',
       width: 80,
-      render: (d: TaskLink['display']) => d?.thumb_url ? <Image src={d.thumb_url} referrerPolicy="no-referrer" width={60} height={60} style={{ objectFit: 'cover', borderRadius: 6 }} /> : '—',
+      render: (d: TaskLink['display']) => d?.thumb_url ? <LazyImage src={d.thumb_url} referrerPolicy="no-referrer" width={60} height={60} style={{ borderRadius: 6 }} /> : '—',
     },
     {
       title: '标题',
@@ -157,7 +206,14 @@ export default function ItemList() {
       dataIndex: 'display',
       key: 'seller',
       width: 140,
-      render: (d: TaskLink['display']) => d?.seller_nick || d?.seller_id || '—',
+      render: (d: TaskLink['display']) => (
+        <div>
+          <div>{d?.seller_nick || d?.seller_id || '—'}</div>
+          {d?.seller_credit && (
+            <div style={{ fontSize: 11, color: '#52c41a' }}>信用 {d.seller_credit}</div>
+          )}
+        </div>
+      ),
     },
     {
       title: '地区',
@@ -184,7 +240,12 @@ export default function ItemList() {
         const tb = b.display?.publish_time ? new Date(b.display.publish_time).getTime() : 0
         return tb - ta  // 降序：最新在前
       },
-      render: (d: TaskLink['display']) => d?.publish_time ? new Date(d.publish_time).toLocaleString('zh-CN') : '—',
+      // 优先级：有发布时间显示时间；否则显示卖家信用度；都没有显示"—"
+      render: (d: TaskLink['display']) => {
+        if (d?.publish_time) return new Date(d.publish_time).toLocaleString('zh-CN')
+        if (d?.seller_credit) return <span style={{ color: '#52c41a' }}>{d.seller_credit}</span>
+        return '—'
+      },
     },
     {
       title: '状态',
@@ -244,7 +305,12 @@ export default function ItemList() {
           >
             实时搜索
           </Button>
-          <Button icon={<ReloadOutlined />} onClick={loadItems} loading={loading} disabled={!selectedTask || liveMode}>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={handleRefresh}
+            loading={loading || liveLoading}
+            disabled={!selectedTask}
+          >
             刷新
           </Button>
           <Input
@@ -315,6 +381,24 @@ export default function ItemList() {
                   const d = item.display
                   return (
                     <Col xs={12} sm={8} md={6} lg={4} xl={4} key={item.link_id}>
+                      <Tooltip
+                        title={
+                          <div style={{ maxWidth: 300 }}>
+                            <div style={{ fontWeight: 600, marginBottom: 4 }}>{d?.title || '—'}</div>
+                            <div style={{ color: '#ff4d4f' }}>¥{d?.price?.toFixed(2) ?? '—'}</div>
+                            <div style={{ color: '#999', fontSize: 12, marginTop: 4 }}>
+                              {d?.region || '—'} · 想要 {d?.want_cnt ?? 0} · {d?.seller_nick || d?.seller_id || '—'}
+                            </div>
+                            {d?.publish_time && (
+                              <div style={{ color: '#999', fontSize: 12 }}>
+                                发布: {new Date(d.publish_time).toLocaleString('zh-CN')}
+                              </div>
+                            )}
+                          </div>
+                        }
+                        placement="right"
+                        mouseEnterDelay={0.3}
+                      >
                       <Card
                         className="item-card"
                         size="small"
@@ -322,12 +406,11 @@ export default function ItemList() {
                         cover={
                           <div className="item-card-image">
                             {d?.thumb_url ? (
-                              <Image
+                              <LazyImage
                                 src={d.thumb_url}
                                 alt={d?.title || '商品图片'}
                                 referrerPolicy="no-referrer"
-                                preview={{ src: d?.url || d?.thumb_url }}
-                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                style={{ width: '100%', height: '100%' }}
                               />
                             ) : (
                               <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#bfbfbf', fontSize: 24 }}>🖼️</div>
@@ -353,6 +436,7 @@ export default function ItemList() {
                           <span>想要 {d?.want_cnt ?? 0}</span>
                         </div>
                       </Card>
+                      </Tooltip>
                     </Col>
                   )
                 })}

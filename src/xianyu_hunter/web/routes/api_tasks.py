@@ -34,12 +34,16 @@ class TaskCreate(BaseModel):
 
 class TaskUpdate(BaseModel):
     name: str | None = None
+    keyword: str | None = None
     min_price: float | None = None
     max_price: float | None = None
+    max_publish_days: int | None = None
     mode: str | None = None
     status: str | None = None
-    # 与 TaskCreate 对齐：允许编辑闲鱼筛选标签
+    region: str | None = None
+    # 与 TaskCreate 对齐：允许编辑闲鱼筛选标签和排除词（JSON 序列化存入 DB）
     search_filters: list[str] | None = None
+    exclude_words: list[str] | None = None
 
 
 @router.get("")
@@ -125,9 +129,11 @@ def update_task(
             updates["mode"] = TaskMode(updates["mode"]).value
         except ValueError:
             raise HTTPException(status_code=400, detail=f"未知 mode: {updates['mode']}")
-    # search_filters 需 JSON 序列化后存入 DB（与 create_task 保持一致）
+    # search_filters 和 exclude_words 需 JSON 序列化后存入 DB（与 create_task 保持一致）
     if "search_filters" in updates:
         updates["search_filters"] = json.dumps(updates["search_filters"], ensure_ascii=False)
+    if "exclude_words" in updates:
+        updates["exclude_words"] = json.dumps(updates["exclude_words"], ensure_ascii=False)
     t.update(updates)
     container.repo.upsert_task(t)
     return {"ok": True, "task": t}

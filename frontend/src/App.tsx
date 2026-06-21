@@ -4,14 +4,15 @@ import { Spin } from 'antd'
 import MainLayout from './components/layout/MainLayout'
 
 // 路由懒加载：按需加载页面组件，减小首屏 bundle 体积
+const Login = lazy(() => import('./pages/Login'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const TaskList = lazy(() => import('./pages/Tasks/TaskList'))
 const TaskEditor = lazy(() => import('./pages/Tasks/TaskEditor'))
 const TaskDetail = lazy(() => import('./pages/Tasks/TaskDetail'))
 const ItemList = lazy(() => import('./pages/Items/ItemList'))
 const Orders = lazy(() => import('./pages/Orders/Orders'))
-const Evaluations = lazy(() => import('./pages/Evaluations/Evaluations'))
-const Timeline = lazy(() => import('./pages/Timeline/Timeline'))
+const Evaluations = lazy(() => import('./pages/Evaluations/index'))
+const Timeline = lazy(() => import('./pages/Timeline'))
 const Logs = lazy(() => import('./pages/Logs/Logs'))
 const PriceStrategy = lazy(() => import('./pages/Config/PriceStrategy'))
 const EvalRules = lazy(() => import('./pages/Config/EvalRules'))
@@ -39,6 +40,8 @@ function LazyRoute({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <Routes>
+      {/* 登录页独立路由，不嵌套在 MainLayout 中 */}
+      <Route path="/login" element={<LazyRoute><Login /></LazyRoute>} />
       <Route path="/" element={<MainLayout />}>
         <Route index element={<LazyRoute><Dashboard /></LazyRoute>} />
         <Route path="tasks" element={<LazyRoute><TaskList /></LazyRoute>} />
