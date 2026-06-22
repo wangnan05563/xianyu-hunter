@@ -1,4 +1,4 @@
-import { Card, Segmented, Spin, Empty } from 'antd'
+import { Card, Segmented, Spin, Empty, theme } from 'antd'
 import ReactECharts from '../../../components/charts/EChart'
 import {
   RANGE_OPTIONS, buildHeatmapLabels, calcHeatmapMax, type DistResponse,
@@ -14,6 +14,8 @@ interface EvalHeatmapProps {
 export default function EvalHeatmap({
   dist, distRange, distLoading, onRangeChange,
 }: EvalHeatmapProps) {
+  // 在 ConfigProvider 内部读取 token，让 ECharts 跟随主题
+  const { token } = theme.useToken()
   // 标签与颜色最大值依赖 dist，dist 为 null 时回退到空数组与最小值
   const { xLabels, yLabels } = dist ? buildHeatmapLabels(dist) : { xLabels: [], yLabels: [] }
   const heatmapMax = dist ? calcHeatmapMax(dist) : 1
@@ -21,6 +23,9 @@ export default function EvalHeatmap({
   const heatmapOption = dist && dist.buckets?.length ? {
     tooltip: {
       position: 'top',
+      backgroundColor: token.colorBgElevated,
+      borderColor: token.colorBorderSecondary,
+      textStyle: { color: token.colorText },
       formatter: (p: { dataIndex: [number, number]; value: number }) => {
         const [pi, si] = p.dataIndex
         const bucket = dist.buckets[si]?.[pi]
@@ -33,21 +38,21 @@ export default function EvalHeatmap({
     grid: { left: 65, right: 20, top: 20, bottom: 70, containLabel: true },
     xAxis: {
       type: 'category', name: '价格区间', nameLocation: 'end', nameGap: 8,
-      nameTextStyle: { fontSize: 11, color: '#8c8c8c' },
+      nameTextStyle: { fontSize: 11, color: token.colorTextTertiary },
       data: xLabels,
-      splitArea: { show: true }, axisLabel: { fontSize: 9, rotate: 30 },
+      splitArea: { show: true }, axisLabel: { fontSize: 9, rotate: 30, color: token.colorTextTertiary },
     },
     yAxis: {
       type: 'category', name: '评分区间',
-      nameTextStyle: { fontSize: 11, color: '#8c8c8c' },
+      nameTextStyle: { fontSize: 11, color: token.colorTextTertiary },
       data: yLabels,
-      splitArea: { show: true }, axisLabel: { fontSize: 9 },
+      splitArea: { show: true }, axisLabel: { fontSize: 9, color: token.colorTextTertiary },
     },
     visualMap: {
       min: 0, max: heatmapMax, calculable: true,
       orient: 'horizontal', left: 'center', bottom: 5,
       inRange: { color: ['#f5f5f5', '#bae7ff', '#69c0ff', '#1890ff', '#003a8c'] },
-      textStyle: { fontSize: 10 },
+      textStyle: { fontSize: 10, color: token.colorTextTertiary },
       formatter: (v: number) => `${v}件`,
     },
     series: [{
@@ -61,6 +66,7 @@ export default function EvalHeatmap({
         show: true,
         formatter: (p: { value: number }) => p.value > 0 ? String(p.value) : '',
         fontSize: 9,
+        color: token.colorText,
       },
       emphasis: { itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0, 0, 0, 0.4)' } },
     }],
@@ -84,8 +90,8 @@ export default function EvalHeatmap({
           <>
             <ReactECharts option={heatmapOption} style={{ height: 300 }} />
             <div style={{
-              marginTop: 8, padding: '8px 12px', background: '#fafafa',
-              borderRadius: 4, fontSize: 12, color: '#666', lineHeight: 1.8,
+              marginTop: 8, padding: '8px 12px', background: 'var(--xh-bg-spotlight)',
+              borderRadius: 4, fontSize: 12, color: 'var(--xh-text-secondary)', lineHeight: 1.8,
             }}>
               <b>图表说明：</b>热力图展示商品在「价格区间 × 评分区间」中的分布密度。
               颜色越深表示该区间内商品越多。

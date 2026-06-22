@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from 'react'
-import { Card, Switch, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Statistic } from 'antd'
+import { Card, Switch, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Statistic, Modal, Table, Tag } from 'antd'
 import { SaveOutlined, UndoOutlined, ExperimentOutlined } from '@ant-design/icons'
 import ReactECharts, { type EChartRef } from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
+import type { DiffChange } from '../../stores/configStore'
 import { priceApi } from '../../api'
 
 interface PriceStrategyConfig {
@@ -28,11 +29,15 @@ const defaultConfig: PriceStrategyConfig = {
 }
 
 export default function PriceStrategy() {
-  const { config, load, save, update, hasChanges, reset } = useConfigStore()
+  const { config, load, update, hasChanges, reset, previewSave, confirmSave, getFieldOriginal } = useConfigStore()
   const [strategy, setStrategy] = useState<PriceStrategyConfig>(defaultConfig)
   const [histogram, setHistogram] = useState<{ bins: string[]; counts: number[]; prices: number[] } | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const chartRef = useRef<EChartRef>(null)
+  // Diff 预览
+  const [diffModalOpen, setDiffModalOpen] = useState(false)
+  const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     load()
@@ -66,12 +71,33 @@ export default function PriceStrategy() {
 
   const handleSave = async () => {
     try {
-      // 将本地 strategy 修改同步到 configStore 后再保存
+      // 将本地 strategy 修改同步到 configStore 后再预览
       update({ price_strategy: strategy })
-      await save()
+      setSaving(true)
+      const changes = await previewSave()
+      if (changes.length === 0) {
+        message.info('配置未变更')
+        return
+      }
+      setDiffChanges(changes)
+      setDiffModalOpen(true)
+    } catch {
+      message.error('预览失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleConfirmSave = async () => {
+    try {
+      setSaving(true)
+      await confirmSave()
+      setDiffModalOpen(false)
       message.success('价格策略已保存')
     } catch {
       message.error('保存失败')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -149,7 +175,7 @@ export default function PriceStrategy() {
           <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置
           </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={useConfigStore((s) => s.loading)}>
+          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             保存
           </Button>
         </Space>
@@ -170,6 +196,9 @@ export default function PriceStrategy() {
                     onChange={(v) => setStrategy({ ...strategy, enabled_max: v })}
                   />
                   <span>🚫 硬性上限</span>
+                  {strategy.max_price !== getFieldOriginal('price_strategy.max_price') && (
+                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, max_price: getFieldOriginal('price_strategy.max_price') as number })} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                  )}
                 </Space>
               }
             >
@@ -189,7 +218,7 @@ export default function PriceStrategy() {
                   onChange={(v) => setStrategy({ ...strategy, max_price: v || 0 })}
                   style={{ width: '100%' }}
                 />
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
                   超过此价格的商品将被过滤
                 </div>
               </div>
@@ -206,6 +235,9 @@ export default function PriceStrategy() {
                     onChange={(v) => setStrategy({ ...strategy, enabled_min: v })}
                   />
                   <span>⚠️ 硬性下限（防 1 元引流）</span>
+                  {strategy.min_price !== getFieldOriginal('price_strategy.min_price') && (
+                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, min_price: getFieldOriginal('price_strategy.min_price') as number })} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                  )}
                 </Space>
               }
             >
@@ -225,7 +257,7 @@ export default function PriceStrategy() {
                   onChange={(v) => setStrategy({ ...strategy, min_price: v || 0 })}
                   style={{ width: '100%' }}
                 />
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
                   低于此价格视为引流陷阱，过滤
                 </div>
               </div>
@@ -242,6 +274,9 @@ export default function PriceStrategy() {
                     onChange={(v) => setStrategy({ ...strategy, enabled_market_ratio: v })}
                   />
                   <span>📊 低于市场参考价</span>
+                  {strategy.market_ratio !== getFieldOriginal('price_strategy.market_ratio') && (
+                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, market_ratio: getFieldOriginal('price_strategy.market_ratio') as number })} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                  )}
                 </Space>
               }
             >
@@ -255,7 +290,7 @@ export default function PriceStrategy() {
                   marks={{ 0.3: '30%', 0.5: '50%', 0.7: '70%', 1.0: '100%' }}
                   tooltip={{ formatter: (v) => `${((v ?? 0) * 100).toFixed(0)}%` }}
                 />
-                <div style={{ fontSize: 12, color: '#999' }}>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
                   价格高于「市场价 × {strategy.market_ratio}」的商品将被过滤（需 ≥3 个样本）
                 </div>
               </div>
@@ -271,6 +306,9 @@ export default function PriceStrategy() {
                     onChange={(v) => setStrategy({ ...strategy, enabled_top_n: v })}
                   />
                   <span>🏆 同类低价 TopN</span>
+                  {strategy.top_n !== getFieldOriginal('price_strategy.top_n') && (
+                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, top_n: getFieldOriginal('price_strategy.top_n') as number })} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                  )}
                 </Space>
               }
             >
@@ -282,7 +320,7 @@ export default function PriceStrategy() {
                   onChange={(v) => setStrategy({ ...strategy, top_n: v })}
                   marks={{ 1: 'Top1', 5: 'Top5', 10: 'Top10', 20: 'Top20' }}
                 />
-                <div style={{ fontSize: 12, color: '#999' }}>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
                   只保留同类商品中价格最低的前 {strategy.top_n} 个
                 </div>
               </div>
@@ -295,7 +333,7 @@ export default function PriceStrategy() {
           <div className="preview-panel">
             <Card title="📈 实时预览：价格分布直方图" style={{ marginBottom: 16 }}>
               <ReactECharts ref={chartRef} option={chartOption} style={{ height: 300 }} />
-              <div style={{ fontSize: 11, color: '#999', marginTop: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 8 }}>
                 <span style={{ color: '#52c41a' }}>■</span> 通过 &nbsp;
                 <span style={{ color: '#ff4d4f' }}>■</span> 被过滤 &nbsp;
                 <span style={{ color: '#faad14' }}>┃</span> 下限 &nbsp;
@@ -345,6 +383,44 @@ export default function PriceStrategy() {
           </div>
         </Col>
       </Row>
+
+      {/* Diff 预览 Modal */}
+      <Modal
+        title="配置变更预览"
+        open={diffModalOpen}
+        onCancel={() => setDiffModalOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>
+            取消
+          </Button>,
+          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>
+            确认保存
+          </Button>,
+        ]}
+        width={700}
+      >
+        <Table
+          dataSource={diffChanges}
+          rowKey="path"
+          pagination={false}
+          size="small"
+          columns={[
+            { title: '路径', dataIndex: 'path', key: 'path' },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
+            {
+              title: '操作',
+              dataIndex: 'op',
+              key: 'op',
+              render: (op: string) => (
+                <Tag color={op === 'add' ? 'green' : op === 'delete' ? 'red' : 'orange'}>
+                  {op === 'add' ? '新增' : op === 'delete' ? '删除' : '修改'}
+                </Tag>
+              ),
+            },
+          ]}
+        />
+      </Modal>
     </div>
   )
 }

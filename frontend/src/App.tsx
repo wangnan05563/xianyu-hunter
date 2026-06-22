@@ -19,9 +19,12 @@ const EvalRules = lazy(() => import('./pages/Config/EvalRules'))
 const NotifierChannels = lazy(() => import('./pages/Config/NotifierChannels'))
 const VersionManager = lazy(() => import('./pages/Config/VersionManager'))
 const AIConfig = lazy(() => import('./pages/Config/AIConfig'))
-const Maintenance = lazy(() => import('./pages/Config/Maintenance'))
+const Maintenance = lazy(() => import('./pages/Maintenance/Cleanup'))
+const DatabaseAdmin = lazy(() => import('./pages/Maintenance/DatabaseAdmin'))
 const SearchConfig = lazy(() => import('./pages/Config/SearchConfig'))
 const BuyerStrategy = lazy(() => import('./pages/Config/BuyerStrategy'))
+const Onboarding = lazy(() => import('./pages/Onboarding'))
+const AntiCrawl = lazy(() => import('./pages/AntiCrawl'))
 
 // 全局 fallback 加载组件：懒加载页面未就绪时展示
 function PageLoading() {
@@ -42,6 +45,8 @@ export default function App() {
     <Routes>
       {/* 登录页独立路由，不嵌套在 MainLayout 中 */}
       <Route path="/login" element={<LazyRoute><Login /></LazyRoute>} />
+      {/* 引导页独立路由，不嵌套在 MainLayout 中 */}
+      <Route path="/onboarding" element={<LazyRoute><Onboarding /></LazyRoute>} />
       <Route path="/" element={<MainLayout />}>
         <Route index element={<LazyRoute><Dashboard /></LazyRoute>} />
         <Route path="tasks" element={<LazyRoute><TaskList /></LazyRoute>} />
@@ -61,6 +66,8 @@ export default function App() {
         <Route path="config/search" element={<LazyRoute><SearchConfig /></LazyRoute>} />
         <Route path="config/buyer" element={<LazyRoute><BuyerStrategy /></LazyRoute>} />
         <Route path="maintenance" element={<LazyRoute><Maintenance /></LazyRoute>} />
+        <Route path="maintenance/db" element={<LazyRoute><DatabaseAdmin /></LazyRoute>} />
+        <Route path="anticrawl" element={<LazyRoute><AntiCrawl /></LazyRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -95,10 +95,10 @@ export default function TrendModal({
         <>
           <ReactECharts option={trendOption} style={{ height: 320 }} />
           {trendData?.summary && (
-            <div style={{ display: 'flex', gap: 24, marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
-              <span>最低 <b style={{ color: '#262626' }}>{trendMetric === 'success_rate' ? trendData.summary.min.toFixed(1) + '%' : Math.round(trendData.summary.min)}</b></span>
-              <span>最高 <b style={{ color: '#262626' }}>{trendMetric === 'success_rate' ? trendData.summary.max.toFixed(1) + '%' : Math.round(trendData.summary.max)}</b></span>
-              <span>均值 <b style={{ color: '#262626' }}>{trendMetric === 'success_rate' ? trendData.summary.avg.toFixed(1) + '%' : Math.round(trendData.summary.avg)}</b></span>
+            <div style={{ display: 'flex', gap: 24, marginTop: 8, fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+              <span>最低 <b style={{ color: 'var(--xh-text-primary)' }}>{trendMetric === 'success_rate' ? trendData.summary.min.toFixed(1) + '%' : Math.round(trendData.summary.min)}</b></span>
+              <span>最高 <b style={{ color: 'var(--xh-text-primary)' }}>{trendMetric === 'success_rate' ? trendData.summary.max.toFixed(1) + '%' : Math.round(trendData.summary.max)}</b></span>
+              <span>均值 <b style={{ color: 'var(--xh-text-primary)' }}>{trendMetric === 'success_rate' ? trendData.summary.avg.toFixed(1) + '%' : Math.round(trendData.summary.avg)}</b></span>
               <span>当前 <b style={{ color: '#FF6200' }}>{trendMetric === 'success_rate' ? trendData.summary.current.toFixed(1) + '%' : Math.round(trendData.summary.current)}</b></span>
             </div>
           )}

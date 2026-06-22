@@ -1,7 +1,95 @@
 /* =====================================================
    全局样式 - 闲鱼猎人 SPA
    设计语言：干净明亮的扁平化 + 卡片式布局
+   暗色主题：通过 [data-theme="dark"] 切换 CSS 变量
    ===================================================== */
+
+:root {
+  --xh-bg-layout: #f5f7fa;
+  --xh-bg-container: #ffffff;
+  --xh-bg-elevated: #ffffff;
+  --xh-bg-spotlight: #fafafa;
+  --xh-bg-code: #f5f5f5;
+  --xh-bg-info: #e6f7ff;
+  --xh-bg-warning: #fff7e6;
+  --xh-text-primary: #262626;
+  --xh-text-secondary: #595959;
+  --xh-text-tertiary: #8c8c8c;
+  --xh-text-quaternary: #bfbfbf;
+  --xh-border: #f0f0f0;
+  --xh-border-secondary: #d9d9d9;
+  --xh-border-info: #91d5ff;
+  --xh-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --xh-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --xh-shadow-strong: 0 12px 32px rgba(0, 0, 0, 0.1);
+  --xh-scrollbar-thumb: rgba(0, 0, 0, 0.15);
+  --xh-scrollbar-thumb-hover: rgba(0, 0, 0, 0.25);
+  --xh-skeleton-from: #f0f0f0;
+  --xh-skeleton-mid: #e0e0e0;
+  --xh-card-bg-hover: #fafafa;
+}
+
+[data-theme="dark"] {
+  --xh-bg-layout: #141414;
+  --xh-bg-container: #1f1f1f;
+  --xh-bg-elevated: #262626;
+  --xh-bg-spotlight: #2a2a2a;
+  --xh-bg-code: #2a2a2a;
+  --xh-bg-info: rgba(22, 119, 255, 0.12);
+  --xh-bg-warning: rgba(250, 140, 22, 0.12);
+  --xh-text-primary: rgba(255, 255, 255, 0.88);
+  --xh-text-secondary: rgba(255, 255, 255, 0.65);
+  --xh-text-tertiary: rgba(255, 255, 255, 0.45);
+  --xh-text-quaternary: rgba(255, 255, 255, 0.25);
+  --xh-border: #303030;
+  --xh-border-secondary: #404040;
+  --xh-border-info: rgba(22, 119, 255, 0.4);
+  --xh-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --xh-shadow-hover: 0 8px 24px rgba(0, 0, 0, 0.55);
+  --xh-shadow-strong: 0 12px 32px rgba(0, 0, 0, 0.65);
+  --xh-scrollbar-thumb: rgba(255, 255, 255, 0.15);
+  --xh-scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
+  --xh-skeleton-from: #2a2a2a;
+  --xh-skeleton-mid: #1f1f1f;
+  --xh-card-bg-hover: #2a2a2a;
+}
+
+/* 暗色主题下 Ant Design 组件的硬覆盖
+   原因：某些 antd 组件的子元素（如 Table 表头、Modal/Drawer 背景、Segmented 选中态）
+   在 darkAlgorithm 下偶尔仍渲染为亮色，这里用 CSS 变量强制覆盖。 */
+[data-theme="dark"] {
+  /* Table 表头：与卡片背景同色，避免亮色头 */
+  --ant-table-header-bg: #1f1f1f;
+  --ant-table-header-color: rgba(255, 255, 255, 0.88);
+  --ant-table-header-sort-active-bg: #262626;
+  --ant-table-header-sort-hover-bg: #262626;
+  --ant-table-header-cell-split-color: transparent;
+  --ant-table-cell-padding-block: 12px;
+  --ant-table-row-hover-bg: #262626;
+  --ant-table-header-filter-hover-bg: #262626;
+}
+[data-theme="dark"] .ant-table-thead > tr > th {
+  background: var(--ant-table-header-bg) !important;
+  color: var(--ant-table-header-color) !important;
+  border-bottom: 1px solid var(--xh-border) !important;
+}
+[data-theme="dark"] .ant-table-thead > tr > th .ant-table-column-sort {
+  background: transparent !important;
+}
+/* 固定列：表头与左侧固定列在暗色下需无缝衔接 */
+[data-theme="dark"] .ant-table-cell-fix-left,
+[data-theme="dark"] .ant-table-cell-fix-right {
+  background: #1f1f1f !important;
+}
+[data-theme="dark"] .ant-table-tbody > tr > td {
+  border-bottom: 1px solid var(--xh-border) !important;
+}
+/* 表头筛选下拉、列设置面板等浮层 */
+[data-theme="dark"] .ant-table-filter-dropdown,
+[data-theme="dark"] .ant-table-column-sort,
+[data-theme="dark"] .ant-table-filter-trigger-container {
+  background: #262626 !important;
+}
 
 * {
   margin: 0;
@@ -18,8 +106,9 @@ body {
     Arial, 'Noto Sans', sans-serif, 'PingFang SC', 'Microsoft YaHei';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #f5f7fa;
-  color: #262626;
+  background: var(--xh-bg-layout);
+  color: var(--xh-text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 /* ============ 页面容器 ============ */
@@ -54,7 +143,7 @@ body {
   top: 24px;
 }
 
-/* ============ 权重指示器 ============ */
+/* ============ 权重指示器（业务色保留：绿/橙） ============ */
 .weight-total-indicator {
   display: inline-flex;
   align-items: center;
@@ -65,15 +154,15 @@ body {
 }
 
 .weight-total-ok {
-  background: #f6ffed;
+  background: rgba(82, 196, 26, 0.12);
   color: #52c41a;
-  border: 1px solid #b7eb8f;
+  border: 1px solid rgba(82, 196, 26, 0.3);
 }
 
 .weight-total-warn {
-  background: #fffbe6;
+  background: rgba(250, 173, 20, 0.12);
   color: #faad14;
-  border: 1px solid #ffe58f;
+  border: 1px solid rgba(250, 173, 20, 0.3);
 }
 
 /* ============ 通道卡片 ============ */
@@ -82,7 +171,7 @@ body {
 }
 
 .channel-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--xh-shadow);
 }
 
 .channel-card-disabled {
@@ -91,7 +180,7 @@ body {
 
 .drag-handle {
   cursor: grab;
-  color: #999;
+  color: var(--xh-text-tertiary);
 }
 
 .drag-handle:active {
@@ -109,13 +198,13 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--xh-scrollbar-thumb);
   border-radius: 4px;
   transition: background 0.2s;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--xh-scrollbar-thumb-hover);
 }
 
 /* ============ 动画 ============ */
@@ -149,12 +238,12 @@ body {
   position: relative;
   overflow: hidden;
   transition: all 0.3s ease;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--xh-border);
 }
 
 .stat-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--xh-shadow-hover);
 }
 
 .stat-card-icon {
@@ -169,13 +258,13 @@ body {
 /* ============ 商品卡片网格 ============ */
 .item-card {
   transition: all 0.3s ease;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--xh-border);
   height: 100%;
 }
 
 .item-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--xh-shadow-strong);
   border-color: #ffd9b3;
 }
 
@@ -183,7 +272,7 @@ body {
   position: relative;
   overflow: hidden;
   border-radius: 8px 8px 0 0;
-  background: #fafafa;
+  background: var(--xh-bg-spotlight);
   aspect-ratio: 1;
 }
 
@@ -226,7 +315,7 @@ body {
   text-overflow: ellipsis;
   line-height: 1.4;
   min-height: 2.8em;
-  color: #262626;
+  color: var(--xh-text-primary);
   font-size: 14px;
 }
 
@@ -235,7 +324,7 @@ body {
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
-  color: #8c8c8c;
+  color: var(--xh-text-tertiary);
   margin-top: 8px;
 }
 
@@ -244,7 +333,7 @@ body {
   cursor: pointer;
   transition: all 0.3s ease;
   text-align: center;
-  border: 1px solid #f0f0f0;
+  border: 1px solid var(--xh-border);
 }
 
 .quick-entry-card:hover {
@@ -268,7 +357,7 @@ body {
 
 /* ============ 骨架屏 ============ */
 .skeleton-shimmer {
-  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background: linear-gradient(90deg, var(--xh-skeleton-from) 25%, var(--xh-skeleton-mid) 50%, var(--xh-skeleton-from) 75%);
   background-size: 1000px 100%;
   animation: shimmer 1.5s infinite linear;
 }
@@ -292,11 +381,11 @@ body {
   align-items: center;
   gap: 4px;
   font-size: 14px;
-  color: #595959;
+  color: var(--xh-text-secondary);
 }
 
 .app-breadcrumb a {
-  color: #595959;
+  color: var(--xh-text-secondary);
   transition: color 0.2s;
 }
 
@@ -305,7 +394,7 @@ body {
 }
 
 .app-breadcrumb .current {
-  color: #262626;
+  color: var(--xh-text-primary);
   font-weight: 500;
 }
 
@@ -316,7 +405,7 @@ body {
   gap: 8px;
   padding: 16px;
   height: 64px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--xh-border);
 }
 
 .brand-logo {
@@ -341,12 +430,12 @@ body {
 .brand-name {
   font-size: 15px;
   font-weight: 700;
-  color: #262626;
+  color: var(--xh-text-primary);
   line-height: 1.2;
 }
 
 .brand-tagline {
   font-size: 11px;
-  color: #8c8c8c;
+  color: var(--xh-text-tertiary);
   line-height: 1.2;
 }

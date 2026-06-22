@@ -199,19 +199,50 @@ def get_config() -> AppConfig:
 
 
 def _load_all() -> AppConfig:
-    """合并 config/*.yaml 全部内容"""
+    """合并 config/*.yaml 全部内容
+
+    加载顺序与合并策略：
+    1. 先加载子配置（eval.yaml / notifier.yaml / browser.yaml）作为默认值基线
+    2. 最后加载主配置（config.yaml），用深度合并覆盖子配置
+
+    为什么要这样：修复"抢单策略页面保存后刷新参数被重置"问题。
+    旧实现用 data.update() 浅合并且 config.yaml 先加载，导致 eval.yaml 顶层
+    整体覆盖 config.yaml 的 eval 块 → 用户在 /app/config/buyer 修改的
+    pass_score / auto_buy_score 保存到 config.yaml 后，下次加载被 eval.yaml
+    的默认值覆盖，表现为"保存后刷新参数被重置"。
+
+    改用深度合并后：config.yaml 与 eval.yaml 同一字段，config.yaml 优先；
+    两边都有的字段（weights / thresholds）保留 config.yaml；只在 eval.yaml
+    出现的字段（如历史遗留的 ai_auto_eval）仍能加载到 AppConfig。
+    """
     base = Path("config")
     data: dict[str, Any] = {}
 
-    # 主配置
-    data.update(load_yaml(base / "config.yaml"))
-    # 子配置（如果存在则覆盖）
-    for name in ("notifier.yaml", "eval.yaml", "browser.yaml"):
+    # 1) 先加载子配置（默认值基线）
+    for name in ("eval.yaml", "notifier.yaml", "browser.yaml"):
         section_data = load_yaml(base / name)
         if section_data:
-            data.update(section_data)
+            _deep_merge_yaml(data, section_data)
+
+    # 2) 主配置最后加载（用户修改覆盖子配置）
+    main_data = load_yaml(base / "config.yaml")
+    if main_data:
+        _deep_merge_yaml(data, main_data)
 
     return AppConfig.model_validate(data)
+
+
+def _deep_merge_yaml(target: dict[str, Any], source: dict[str, Any]) -> None:
+    """深度合并：source 的字段覆盖 target 同名字段
+
+    与 api_config.py 中 _deep_merge 的区别：函数同名但语义一致（patch 覆盖 target），
+    单独命名是为了避免 yaml_config.py 依赖 web 层的工具。
+    """
+    for k, v in source.items():
+        if isinstance(v, dict) and isinstance(target.get(k), dict):
+            _deep_merge_yaml(target[k], v)
+        else:
+            target[k] = v
 
 
 def reload_config() -> AppConfig:

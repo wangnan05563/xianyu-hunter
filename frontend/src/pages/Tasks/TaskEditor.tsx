@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
-import { Steps, Card, Form, Input, InputNumber, Slider, Button, Space, Radio, message, Result, Spin } from 'antd'
+import { useEffect, useState, useRef } from 'react'
+import { Steps, Card, Form, Input, InputNumber, Slider, Button, Space, Radio, message, Result, Spin, Alert } from 'antd'
 import { ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined } from '@ant-design/icons'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import TagEditor from '../../components/editors/TagEditor'
 import CronEditor from '../../components/editors/CronEditor'
 import { taskApi, TaskCreateBody } from '../../api'
@@ -28,25 +28,69 @@ const modeOptions = [
 export default function TaskEditor() {
   const navigate = useNavigate()
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
   const isEdit = !!id
   const [current, setCurrent] = useState(0)
   const [loading, setLoading] = useState(false)
   const [loadingEditData, setLoadingEditData] = useState(false)  // 编辑模式数据加载
   const [form] = Form.useForm()
 
+  // 从 URL search params 读取 AI/模板预填充数据
+  const prefillKeyword = searchParams.get('keyword') || ''
+  const prefillName = searchParams.get('name') || ''
+  const prefillMode = searchParams.get('mode') || ''
+  const prefillMinPrice = searchParams.get('min_price')
+  const prefillMaxPrice = searchParams.get('max_price')
+
   // 表单状态
   const [formData, setFormData] = useState<TaskCreateBody>({
-    keyword: '',
-    name: '',
-    min_price: null,
-    max_price: null,
+    keyword: prefillKeyword,
+    name: prefillName || prefillKeyword,
+    min_price: prefillMinPrice ? Number(prefillMinPrice) : null,
+    max_price: prefillMaxPrice ? Number(prefillMaxPrice) : null,
     max_publish_days: 7,
-    mode: 'confirm',
+    mode: (['auto', 'semi_auto', 'confirm', 'notify'].includes(prefillMode) ? prefillMode : 'confirm') as TaskCreateBody['mode'],
     region: '',
     exclude_words: [],
     search_filters: [],
   })
   const [cron, setCron] = useState('*/5 * * * *')
+
+  // 草稿自动保存/恢复
+  const DRAFT_KEY = 'xh.task-draft.v1'
+  const [draftRestored, setDraftRestored] = useState(false)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 新建模式下首次加载恢复草稿
+  useEffect(() => {
+    if (isEdit) return
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY)
+      if (!raw) return
+      const draft = JSON.parse(raw) as { formData: TaskCreateBody; cron: string }
+      // 仅在 URL 未提供预填充时恢复草稿，避免覆盖 AI/模板传入的数据
+      if (draft.formData?.keyword && !prefillKeyword) {
+        setFormData(draft.formData)
+        setCron(draft.cron || '*/5 * * * *')
+        setDraftRestored(true)
+      }
+    } catch { /* 草稿损坏则忽略 */ }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 监听 formData/cron 变更，防抖 500ms 自动保存草稿（仅新建模式）
+  useEffect(() => {
+    if (isEdit) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ formData, cron }))
+    }, 500)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [formData, cron, isEdit])
+
+  const clearDraft = () => {
+    localStorage.removeItem(DRAFT_KEY)
+    setDraftRestored(false)
+  }
 
   // 编辑模式：加载现有任务数据
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -115,9 +159,10 @@ export default function TaskEditor() {
     }
     setLoading(true)
     try {
-      const body: TaskCreateBody = {
+      const body: TaskCreateBody & { cron?: string } = {
         ...formData,
         name: formData.name || formData.keyword,
+        cron,
       }
       if (isEdit) {
         await taskApi.update(id!, body)
@@ -125,6 +170,7 @@ export default function TaskEditor() {
       } else {
         await taskApi.create(body)
         message.success('任务已创建')
+        clearDraft()
       }
       navigate('/tasks')
     } catch {
@@ -152,12 +198,27 @@ export default function TaskEditor() {
         返回列表
       </Button>
 
-      <h2>{isEdit ? '编辑任务' : '新增任务（向导）'}</h2>
+      <h2>{isEdit ? '编辑任务' : prefillKeyword ? '新增任务（已预填充）' : '新增任务（向导）'}</h2>
+
+      {/* 草稿恢复提示 */}
+      {!isEdit && draftRestored && (
+        <Alert
+          message="已恢复上次未提交的草稿"
+          type="info"
+          showIcon
+          closable
+          onClose={() => setDraftRestored(false)}
+          action={
+            <Button size="small" danger onClick={clearDraft}>清除草稿</Button>
+          }
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       {/* 编辑模式：数据加载中显示 spinner */}
       {isEdit && loadingEditData ? (
         <div style={{ textAlign: 'center', padding: 60 }}>
-          <Spin size="large" tip="正在加载任务信息..." />
+          <Spin size="large" tip="正在加载任务信息..."><div /></Spin>
         </div>
       ) : isEdit && loadError ? (
         <div style={{ textAlign: 'center', padding: 60 }}>
@@ -215,7 +276,7 @@ export default function TaskEditor() {
                     >
                       <div>
                         <div style={{ fontWeight: 600 }}>{opt.label}</div>
-                        <div style={{ fontSize: 11, color: '#999' }}>{opt.desc}</div>
+                        <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{opt.desc}</div>
                       </div>
                     </Radio.Button>
                   ))}
@@ -226,7 +287,7 @@ export default function TaskEditor() {
 
           {/* 实时预览：搜索 URL */}
           {formData.keyword && (
-            <Card size="small" style={{ background: '#f0f5ff', marginTop: 16 }} title="🔍 实时预览：搜索 URL">
+            <Card size="small" style={{ background: 'rgba(22, 119, 255, 0.06)', marginTop: 16 }} title="🔍 实时预览：搜索 URL">
               <code style={{ fontSize: 12, wordBreak: 'break-all' }}>{searchUrl}</code>
             </Card>
           )}
@@ -276,12 +337,12 @@ export default function TaskEditor() {
                       style={{
                         width: 140,
                         cursor: 'pointer',
-                        border: selected ? '2px solid #1677ff' : '1px solid #d9d9d9',
-                        background: selected ? '#e6f4ff' : '#fff',
+                        border: selected ? '2px solid #1677ff' : '1px solid var(--xh-border-secondary)',
+                        background: selected ? 'var(--xh-bg-info)' : 'var(--xh-bg-container)',
                       }}
                     >
                       <div style={{ fontWeight: 600, fontSize: 13 }}>{opt.label}</div>
-                      <div style={{ fontSize: 11, color: '#999' }}>{opt.desc}</div>
+                      <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{opt.desc}</div>
                     </Card>
                   )
                 })}
@@ -317,7 +378,7 @@ export default function TaskEditor() {
             </Form.Item>
 
             {/* 配置预览 */}
-            <Card size="small" style={{ background: '#fafafa', marginTop: 16 }} title="📋 配置预览">
+            <Card size="small" style={{ background: 'var(--xh-bg-spotlight)', marginTop: 16 }} title="📋 配置预览">
               <pre style={{ fontSize: 12, margin: 0 }}>
 {JSON.stringify(
   {

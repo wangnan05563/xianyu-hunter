@@ -63,7 +63,7 @@ export default function TimelineList({
                     width: 120,
                     textAlign: 'right',
                     fontSize: 11,
-                    color: '#999',
+                    color: 'var(--xh-text-tertiary)',
                     lineHeight: '20px',
                     paddingTop: 2,
                   }}>

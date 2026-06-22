@@ -71,7 +71,7 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
             </Tag>
           </Tooltip>
         )}
-        <span style={{ color: '#999', fontSize: 11, marginLeft: 'auto' }}>
+        <span style={{ color: 'var(--xh-text-tertiary)', fontSize: 11, marginLeft: 'auto' }}>
           {formatRelativeTime(item._ts)}
         </span>
       </div>
@@ -88,7 +88,7 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
 
       {/* 第三行：关键指标 */}
       {payload && (
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: '#666' }}>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: 'var(--xh-text-secondary)' }}>
           {payload.score !== undefined && payload.score !== null && (
             <span>
               评分：<strong style={{ color: (payload.score as number) >= 80 ? '#52c41a' : (payload.score as number) >= 60 ? '#faad14' : '#ff4d4f' }}>
@@ -142,7 +142,7 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
           <Button
             type="link"
             size="small"
-            style={{ padding: 0, fontSize: 11, color: '#999' }}
+            style={{ padding: 0, fontSize: 11, color: 'var(--xh-text-tertiary)' }}
             onClick={() => onToggleExpand(idx)}
           >
             {isExpanded ? '收起详情' : '查看详情'}
@@ -151,7 +151,7 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
             <div style={{
               marginTop: 8,
               padding: 8,
-              background: '#fafafa',
+              background: 'var(--xh-bg-spotlight)',
               borderRadius: 4,
               fontSize: 11,
               fontFamily: 'monospace',
@@ -198,7 +198,7 @@ function OrderDetail({ item, taskMap }: OrderDetailProps) {
             </Tag>
           </Tooltip>
         )}
-        <span style={{ color: '#999', fontSize: 11, marginLeft: 'auto' }}>
+        <span style={{ color: 'var(--xh-text-tertiary)', fontSize: 11, marginLeft: 'auto' }}>
           {formatRelativeTime(item._ts)}
         </span>
       </div>
@@ -209,7 +209,7 @@ function OrderDetail({ item, taskMap }: OrderDetailProps) {
       </div>
 
       {/* 第三行：金额 + 其他信息 */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: '#666' }}>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, color: 'var(--xh-text-secondary)' }}>
         {item.amount !== undefined && item.amount !== null && (
           <span style={{ color: '#f5222d', fontWeight: 600 }}>
             ¥{item.amount.toFixed(2)}

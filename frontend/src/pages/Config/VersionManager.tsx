@@ -22,6 +22,8 @@ import {
   UploadOutlined,
   ReloadOutlined,
   CheckCircleOutlined,
+  ShareAltOutlined,
+  CopyOutlined,
 } from '@ant-design/icons'
 import { configApi, BackupItem } from '../../api'
 
@@ -34,6 +36,10 @@ export default function VersionManager() {
   const [selectedBackup, setSelectedBackup] = useState<BackupItem | null>(null)
   const [diffModalVisible, setDiffModalVisible] = useState(false)
   const [page, setPage] = useState(1)
+  // 分享配置
+  const [shareModalOpen, setShareModalOpen] = useState(false)
+  const [shareText, setShareText] = useState('')
+  const [shareLoading, setShareLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -109,6 +115,38 @@ export default function VersionManager() {
     }
   }
 
+  // 需要脱敏的敏感字段列表
+  const SENSITIVE_KEYS = ['serverchan_send_key', 'pushplus_token', 'bark_server', 'bark_key']
+
+  const handleShare = async () => {
+    setShareLoading(true)
+    try {
+      const data = await configApi.export()
+      // 深拷贝后对敏感字段脱敏
+      const sanitized = JSON.parse(JSON.stringify(data))
+      for (const key of SENSITIVE_KEYS) {
+        if (sanitized[key] != null && sanitized[key] !== '') {
+          sanitized[key] = '***'
+        }
+      }
+      setShareText(JSON.stringify(sanitized, null, 2))
+      setShareModalOpen(true)
+    } catch {
+      message.error('获取配置失败')
+    } finally {
+      setShareLoading(false)
+    }
+  }
+
+  const handleCopyShare = async () => {
+    try {
+      await navigator.clipboard.writeText(shareText)
+      message.success('已复制到剪贴板')
+    } catch {
+      message.error('复制失败，请手动选择复制')
+    }
+  }
+
   const handleImport = async (file: File) => {
     try {
       const text = await file.text()
@@ -125,14 +163,14 @@ export default function VersionManager() {
         content: (
           <div>
             <p>将改动 <strong>{previewRes.diff_count}</strong> 处配置项：</p>
-            <div style={{ maxHeight: 300, overflow: 'auto', background: '#fafafa', padding: 12, fontSize: 12 }}>
+            <div style={{ maxHeight: 300, overflow: 'auto', background: 'var(--xh-bg-spotlight)', padding: 12, fontSize: 12 }}>
               {previewRes.diffs?.slice(0, 20).map((d: { path: string; op: string; old: string; new: string }, i: number) => (
                 <div key={i} style={{ marginBottom: 4 }}>
                   <Tag color={d.op === 'add' ? 'green' : d.op === 'remove' ? 'red' : 'orange'}>
                     {d.op}
                   </Tag>
                   <code>{d.path}</code>
-                  {d.old && <span style={{ color: '#999' }}> {d.old} →</span>}
+                  {d.old && <span style={{ color: 'var(--xh-text-tertiary)' }}> {d.old} →</span>}
                   <span style={{ color: '#1677ff' }}> {d.new}</span>
                 </div>
               ))}
@@ -177,6 +215,9 @@ export default function VersionManager() {
           </Button>
           <Button icon={<DownloadOutlined />} onClick={handleExport}>
             导出配置
+          </Button>
+          <Button icon={<ShareAltOutlined />} onClick={handleShare} loading={shareLoading}>
+            分享配置
           </Button>
           <Upload beforeUpload={handleImport} accept=".json" showUploadList={false}>
             <Button icon={<UploadOutlined />}>导入配置</Button>
@@ -247,7 +288,7 @@ export default function VersionManager() {
                             {globalIndex === 0 ? '最新' : `v${backups.length - globalIndex}`}
                           </Tag>
                           <strong>{new Date(backup.ts).toLocaleString('zh-CN')}</strong>
-                          <span style={{ fontSize: 12, color: '#999' }}>{formatSize(backup.size)}</span>
+                          <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>{formatSize(backup.size)}</span>
                         </Space>
                       </div>
                       <Space>
@@ -336,6 +377,32 @@ export default function VersionManager() {
             </Row>
           </div>
         )}
+      </Modal>
+
+      {/* 分享配置 Modal */}
+      <Modal
+        title="分享配置（已脱敏）"
+        open={shareModalOpen}
+        onCancel={() => setShareModalOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setShareModalOpen(false)}>
+            关闭
+          </Button>,
+          <Button key="copy" type="primary" icon={<CopyOutlined />} onClick={handleCopyShare}>
+            复制到剪贴板
+          </Button>,
+        ]}
+        width={700}
+      >
+        <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+          敏感字段（serverchan_send_key、pushplus_token、bark_server、bark_key）已替换为 ***
+        </div>
+        <Input.TextArea
+          value={shareText}
+          readOnly
+          autoSize={{ minRows: 10, maxRows: 25 }}
+          style={{ fontFamily: 'monospace', fontSize: 12 }}
+        />
       </Modal>
     </div>
   )

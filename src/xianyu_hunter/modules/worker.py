@@ -188,6 +188,8 @@ class TaskWorker:
                         # Worker 不使用 fast 模式：需要刷新 _m_h5_tk token 避免会话失效
                         # 搜索超时由外层 asyncio.wait_for 控制（默认 30s）
                         skip_rgv587_retry=True,
+                        sort_type=self.config.search_sort_type,
+                        regions=self.config.search_regions,
                     ),
                     timeout=float(search_timeout),
                 )

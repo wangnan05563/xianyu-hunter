@@ -24,7 +24,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
         </span>
       }
       extra={
-        <span style={{ fontSize: 11, color: '#8c8c8c' }}>
+        <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>
           今日 {alertData?.today?.orders ?? 0} 单 / {alertData?.today?.events ?? 0} 事件
           <Button type="text" size="small" icon={<ReloadOutlined />} onClick={onReload} style={{ marginLeft: 4 }} />
         </span>

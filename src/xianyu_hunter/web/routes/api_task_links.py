@@ -17,13 +17,14 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.domain.urls import build_item_url
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repo_links import task_keyword_matches_title
+from xianyu_hunter.modules.collector_utils import normalize_display_fields
 from xianyu_hunter.web.deps import get_container
 
 logger = get_logger()
@@ -33,6 +34,7 @@ router = APIRouter(prefix="/api/tasks", tags=["task-links"])
 # url 类型已废弃（项目决策只保留 item/seller），保留 item/seller 两个有效类型
 _VALID_TYPES = {"item", "seller"}
 _VALID_SOURCES = {"auto", "manual"}
+_LIVE_SEARCH_IDENTITY_COOKIES = ("cookie2", "sgcookie", "unb")
 
 
 class LinkCreate(BaseModel):
@@ -43,70 +45,111 @@ class LinkCreate(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+def _missing_live_search_cookie_names(cookie_names: set[str]) -> list[str]:
+    """Return identity cookies required by Xianyu search but absent in the browser context."""
+    return [name for name in _LIVE_SEARCH_IDENTITY_COOKIES if name not in cookie_names]
+
+
+async def _ensure_live_search_cookies(container: Container) -> None:
+    """Fail fast when the running browser no longer has enough Xianyu login cookies."""
+    if not container.browser:
+        return
+    try:
+        cookies = await container.browser.get_cookies()
+    except Exception as e:
+        logger.warning("读取浏览器 Cookie 失败: %s", e)
+        return
+
+    names = {str(c.get("name") or "") for c in cookies}
+    missing = _missing_live_search_cookie_names(names)
+    if missing:
+        raise HTTPException(
+            status_code=401,
+            detail=f"闲鱼登录 Cookie 不完整（缺少 {', '.join(missing)}），实时搜索不可用，请重新登录闲鱼",
+        )
+
+
 @router.get("/{task_id}/links")
 def list_links(
     task_id: str,
     type: str | None = Query(None, description="item | seller | url"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    keyword: str | None = Query(None, description="标题关键词模糊匹配（仅 type=item 有效）"),
+    region: str | None = Query(None, description="地区精确匹配（仅 type=item 有效）"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """列出任务的关联内容（懒加载用：前端分页拉取）"""
+    """列出任务的关联内容（懒加载用：前端分页拉取）
+
+    支持按 keyword/region 过滤：之前前端只对当前页数据做过滤，跨页搜索不可用。
+    现在改为后端全量加载后过滤再分页，确保 total 准确。
+    单任务商品数通常不超过几百，全量加载性能可接受。
+    """
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
     if not container.repo.get_task(task_id):
         raise HTTPException(status_code=404, detail="任务不存在")
-    items = container.repo.list_task_links(
-        task_id=task_id, link_type=type, limit=limit, offset=offset
-    )
+
+    # 是否启用关键词/地区过滤：启用时需全量加载再分页
+    has_search = bool(keyword or region) and (type is None or type == "item")
+    if has_search:
+        items = container.repo.list_task_links(
+            task_id=task_id, link_type=type, limit=100000, offset=0
+        )
+    else:
+        items = container.repo.list_task_links(
+            task_id=task_id, link_type=type, limit=limit, offset=offset
+        )
     # 获取该类型的真实总数（不受 limit/offset 影响），供前端分页计算
     counts = container.repo.count_task_links(task_id, link_type=type)
     total_for_type = counts.get(type, len(items)) if type else counts.get("total", len(items))
 
-    # 按价格过滤（与 live_links 保持一致，确保 DB 数据也遵守任务价格区间）
-    task = container.repo.get_task(task_id)
-    min_price = (task or {}).get("min_price") if task else None
-    max_price = (task or {}).get("max_price") if task else None
-    if (min_price is not None or max_price is not None) and items:
-        _filtered = []
-        pf_count = 0
+    # 价格过滤已由 repo._filter_task_links 在 list_task_links/count_task_links 内部完成
+    # 之前这里重复过滤一次，导致代码冗余且可能与 repo 逻辑不一致
+
+    # 关键词/地区过滤（仅对 item 类型生效）
+    if has_search:
+        search_filtered = []
+        kw_lower = (keyword or "").lower()
         for r in items:
-            # DB 数据的 price 在 display JSON 中
-            price_val = r.get("display")
-            if isinstance(price_val, str):
-                try: price_val = json.loads(price_val)
-                except: pass
-            if isinstance(price_val, dict):
-                price_val = price_val.get("price")
-            if price_val is None:
-                _filtered.append(r)
-                continue
-            try:
-                p = float(price_val)
-            except (ValueError, TypeError):
-                _filtered.append(r)
-                continue
-            if min_price is not None and p < min_price:
-                pf_count += 1; continue
-            if max_price is not None and p > max_price:
-                pf_count += 1; continue
-            _filtered.append(r)
-        if pf_count:
-            logger.info("list_links 价格过滤跳过 %d 条 (min=%s, max=%s)", pf_count, min_price, max_price)
-            items = _filtered
-            # 过滤后总数也需要更新（分页基于过滤后数据）
-            total_for_type = len(_filtered)
+            display = r.get("display")
+            if isinstance(display, str):
+                try: display = json.loads(display)
+                except: display = {}
+            if not isinstance(display, dict):
+                display = {}
+            # 关键词匹配标题
+            if kw_lower:
+                title = str(display.get("title") or "").lower()
+                if kw_lower not in title:
+                    continue
+            # 地区精确匹配
+            if region:
+                item_region = str(display.get("region") or "")
+                if item_region != region:
+                    continue
+            search_filtered.append(r)
+        items = search_filtered
+        total_for_type = len(search_filtered)
+        # 全量加载后在此分页
+        items = items[offset:offset + limit]
 
     # 统一字段名为 link_id（前端接口定义用 link_id，后端 DB 主键为 id）
+    # 同步对每行 display 做字段语义校正：DB 中可能存了错位的 seller_nick/region/seller_credit，
+    # 校正后传给前端，避免"卖家"列显示地区、"地区"列显示昵称等视觉错位
     result_items = []
     for r in _enrich_with_item_data(items, container):
         r["link_id"] = r.pop("id", 0)  # id → link_id 映射，确保前端 rowKey/delete 正常工作
+        display = r.get("display")
+        if isinstance(display, dict):
+            corrected_display, _ = normalize_display_fields(display)
+            r["display"] = corrected_display
         result_items.append(r)
 
     return {
         "items": result_items,
         "count": len(items),
-        "total": total_for_type,
+        "total_for_type": total_for_type,
         "task_id": task_id,
         "type": type,
         "limit": limit,
@@ -224,11 +267,40 @@ def delete_link(
     link_id: int,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """解除关联"""
+    """解除关联
+
+    联动清理：删除 item 类型关联时，同步删除 events 表中对应的 eval.* 评估事件，
+    避免 task_links 已删但评估明细残留导致的垃圾数据。
+    """
+    # 删除前先查出关联信息，用于判断是否需要联动清理评估事件
+    # 为什么不用 delete_task_link 直接删：它只返回 bool，拿不到 link_type/link_key
+    from sqlalchemy import select as _select
+    from xianyu_hunter.infra.db_models import TaskLinkRow
+
+    with container.repo.engine.connect() as conn:
+        row = conn.execute(
+            _select(TaskLinkRow.link_type, TaskLinkRow.link_key)
+            .where(TaskLinkRow.id == link_id)
+            .where(TaskLinkRow.task_id == task_id)
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="关联不存在")
+        # 必须在 with 块内提取值，连接关闭后 Row 对象可能失效
+        link_type: str = row.link_type
+        link_key: str = row.link_key
     ok = container.repo.delete_task_link(link_id)
     if not ok:
         raise HTTPException(status_code=404, detail="关联不存在")
-    return {"ok": True, "id": link_id, "task_id": task_id}
+
+    # 联动清理：item 类型关联删除时，同步删除该任务下该商品的评估明细事件
+    deleted_events = 0
+    if link_type == "item" and link_key:
+        deleted_events = container.repo.delete_eval_events_by_task_item(task_id, str(link_key))
+        if deleted_events:
+            logger.info("删除关联 link_id=%s 时联动清理 %d 条评估事件 (task=%s, item=%s)",
+                        link_id, deleted_events, task_id, link_key)
+
+    return {"ok": True, "id": link_id, "task_id": task_id, "deleted_events": deleted_events}
 
 
 @router.post("/{task_id}/links/refresh")
@@ -255,6 +327,7 @@ async def refresh_links(
             status_code=503,
             detail="浏览器实例未初始化，请重启服务",
         )
+    await _ensure_live_search_cookies(container)
 
     keyword = task.get("keyword", "")
     if not keyword:
@@ -262,6 +335,15 @@ async def refresh_links(
 
     # 读取任务筛选标签，传递给搜索 URL（如个人闲置、包邮等）
     task_search_filters = task.get("search_filters") or []
+    # 读取全局搜索配置的排序方式和地区过滤，与 Worker 保持一致
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        _search_cfg = get_config().search
+        _search_sort_type = _search_cfg.sort_type
+        _search_regions = _search_cfg.regions
+    except Exception:
+        _search_sort_type = "default"
+        _search_regions = ""
 
     # 清除该任务旧的 auto 来源关联（manual 来源保留）
     container.repo.delete_task_links_by_task(task_id, source="auto")
@@ -273,14 +355,18 @@ async def refresh_links(
         async with container.browser_lock:
             try:
                 # skip_lock=True：外层已持有 browser_lock，search 内部不再获取，避免死锁
-                items = await container.collector.search(keyword, max_pages=2, skip_lock=True, search_filters=task_search_filters)
+                items = await container.collector.search(
+                    keyword, max_pages=2, skip_lock=True,
+                    search_filters=task_search_filters,
+                    sort_type=_search_sort_type, regions=_search_regions,
+                )
             except Exception as e:
                 logger.exception(f"refresh_links 搜索失败 task={task_id}: {e}")
                 err_msg = str(e)
                 if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
                     raise HTTPException(status_code=502, detail="浏览器连接已断开，请重启服务后重试")
                 if "RGV587" in err_msg:
-                    raise HTTPException(status_code=401, detail="闲鱼登录已过期，请通过「浏览器登录」重新登录")
+                    raise HTTPException(status_code=401, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
                 if "Connection closed" in err_msg:
                     raise HTTPException(status_code=502, detail="浏览器连接异常，请重启服务后重试")
                 raise HTTPException(status_code=502, detail=f"闲鱼搜索失败: {err_msg}")
@@ -327,6 +413,7 @@ async def refresh_links(
 @router.get("/{task_id}/links/live")
 async def live_links(
     task_id: str,
+    background_tasks: BackgroundTasks,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """实时从闲鱼搜索并直接返回结果（不经过数据库）
@@ -350,6 +437,7 @@ async def live_links(
             status_code=503,
             detail="浏览器实例未初始化，请重启服务",
         )
+    await _ensure_live_search_cookies(container)
 
     keyword = task.get("keyword", "")
     if not keyword:
@@ -361,6 +449,15 @@ async def live_links(
     max_publish_days = task.get("max_publish_days")
     # 读取任务筛选标签，传递给搜索 URL（如个人闲置、包邮等）
     task_search_filters = task.get("search_filters") or []
+    # 读取全局搜索配置的排序方式和地区过滤，与 Worker 保持一致
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        search_cfg = get_config().search
+        search_sort_type = search_cfg.sort_type
+        search_regions = search_cfg.regions
+    except Exception:
+        search_sort_type = "default"
+        search_regions = ""
 
     # 使用互斥锁防止并发操作浏览器，设 10 秒超时避免长时间卡住
     raw_results: list[dict] = []
@@ -373,18 +470,46 @@ async def live_links(
                 detail="系统正在执行后台搜索任务，请稍后重试",
             )
         try:
-            # 快速搜索：max_pages=1 减少翻页等待，skip_m5tk=True 跳过 token 刷新（Worker 会处理）
+            # 快速搜索：max_pages=1 减少翻页等待
             # 20 秒超时：API 拦截 ~3s + DOM 批量解析 ~3s + 页面加载 ~10s = ~16s 上限
+            # 重置 last_session_invalid，避免上一次搜索的残留标志污染本次判断
+            container.collector.last_session_invalid = False
             try:
                 raw_results = await asyncio.wait_for(
                     container.collector.live_search(
                         keyword, max_pages=1, collect_sellers=False, fast=True,
                         search_filters=task_search_filters,
+                        sort_type=search_sort_type, regions=search_regions,
                     ),
                     timeout=20.0,
                 )
             except asyncio.TimeoutError:
                 raise HTTPException(status_code=504, detail="实时搜索超时，请稍后重试或重启服务")
+
+            # RGV587 时 fast 模式跳过了 token 刷新重试，此处补一次：
+            # 为什么要在 retry 前额外调一次 force 刷新：search() 内部的
+            # _ensure_fresh_m5tk 有 45 分钟缓存，若 Worker 刚刷新过 token
+            # 但实际已过期，缓存会跳过刷新导致 retry 仍然失败。
+            # 此处用临时页面强制刷新 token（绕过缓存），确保 retry 拿到有效令牌。
+            if not raw_results and getattr(container.collector, "last_session_invalid", False):
+                logger.info("实时搜索触发 RGV587，强制刷新 token 后重试: task=%s", task_id)
+                try:
+                    # 用临时页面强制刷新 _m_h5_tk（force=True 绕过 45 分钟缓存）
+                    refresh_page = await container.browser.new_page()
+                    try:
+                        await container.collector._ensure_fresh_m5tk(refresh_page, force=True)
+                    finally:
+                        await refresh_page.close()
+                    raw_results = await asyncio.wait_for(
+                        container.collector.live_search(
+                            keyword, max_pages=1, collect_sellers=False, fast=False,
+                            search_filters=task_search_filters,
+                            sort_type=search_sort_type, regions=search_regions,
+                        ),
+                        timeout=45.0,
+                    )
+                except asyncio.TimeoutError:
+                    raise HTTPException(status_code=504, detail="实时搜索重试超时，请稍后再试")
         except HTTPException:
             raise
         except Exception as e:
@@ -393,7 +518,7 @@ async def live_links(
             if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
                 raise HTTPException(status_code=502, detail="浏览器连接已断开，请重启服务后重试")
             if "RGV587" in err_msg:
-                raise HTTPException(status_code=401, detail="闲鱼登录已过期，请通过「浏览器登录」重新登录")
+                raise HTTPException(status_code=401, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
             if "Connection closed" in err_msg:
                 raise HTTPException(status_code=502, detail="浏览器连接异常，请重启服务后重试")
             raise HTTPException(status_code=502, detail=f"闲鱼搜索失败: {err_msg}")
@@ -406,29 +531,38 @@ async def live_links(
         raise HTTPException(status_code=502, detail=f"实时搜索异常: {str(e)}")
 
     # 格式化为前端期望的 task_links 行格式（与 DB 查询结果一致）
+    # 对 display 字段做全面语义校正，并收集字段元数据供前端动态渲染列
     now = datetime.now(timezone.utc).isoformat()
     results: list[dict] = []
+    merged_field_map: dict[str, dict[str, Any]] = {}
     for r in raw_results:
+        display = {
+            "title": r.get("title", ""),
+            "price": r.get("price"),
+            "thumb_url": r.get("thumb_url", ""),
+            "region": r.get("region", ""),
+            "url": r.get("url", ""),
+            "is_sold": r.get("is_sold", False),
+            "publish_time": r.get("publish_time"),
+            "seller_id": r.get("seller_id", ""),
+            "seller_nick": r.get("seller_nick", ""),
+            "seller_credit": r.get("seller_credit", ""),
+            "want_cnt": r.get("want_cnt"),
+            "view_cnt": r.get("view_cnt"),
+        }
+        # 对 display 字段做全面语义校正，处理字段错位
+        # 同时获取 field_map（字段元数据），前端根据此动态渲染列
+        corrected_display, field_map = normalize_display_fields(display)
+        # 合并 field_map：取所有商品字段的并集
+        # 不同商品可能有不同的字段（如部分商品无 seller_credit），取并集确保列头完整
+        merged_field_map.update(field_map)
         results.append({
             "link_id": 0,  # 实时数据无DB id，用0占位（前端需link_id字段）
             "task_id": task_id,
             "link_type": r["link_type"],
             "link_key": r["link_key"],
             "source": "live",
-            "display": {
-                "title": r.get("title", ""),
-                "price": r.get("price"),
-                "thumb_url": r.get("thumb_url", ""),
-                "region": r.get("region", ""),
-                "url": r.get("url", ""),
-                "is_sold": r.get("is_sold", False),
-                "publish_time": r.get("publish_time"),
-                "seller_id": r.get("seller_id", ""),
-                "seller_nick": r.get("seller_nick", ""),
-                "seller_credit": r.get("seller_credit", ""),
-                "want_cnt": r.get("want_cnt"),
-                "view_cnt": r.get("view_cnt"),
-            },
+            "display": corrected_display,
             "note": None,
             "created_at": now,
         })
@@ -540,22 +674,15 @@ async def live_links(
 
         # 触发轻量级评估：基于搜索结果构造降级 ItemDetail 和 SellerProfile
         # 不拉取详情页和卖家主页，评估结果标记为"数据不足"但仍有评分
-        try:
-            _trigger_live_evaluation(container, task_id, items)
-        except Exception as e:
-            logger.warning("live_links 触发评估失败 task=%s: %s", task_id, e)
+        # 修复：之前同步调用会阻塞 HTTP 响应（50 条商品评估+写库可能耗时数秒）
+        # 改为 BackgroundTasks 异步执行，让前端立即拿到搜索结果
+        background_tasks.add_task(_safe_trigger_live_evaluation, container, task_id, items)
 
-    # 检测 Cookie 失效：搜索结果为空且 collector 标记会话失效
-    # last_session_invalid 由 search() 在 RGV587_ERROR 时设置
-    session_expired = (
-        not raw_results
-        and getattr(container.collector, "last_session_invalid", False)
-    )
-    # 额外检测：API 响应被捕获但解析为 0 个商品（可能是登录墙响应）
-    if not session_expired and not raw_results:
-        api_captured = getattr(container.collector, "_last_api_captured", False)
-        if api_captured:
-            session_expired = True
+    # 检测搜索令牌过期：仅当 API 明确返回 RGV587/TOKEN_ILLEGAL 等标志时判定
+    # last_session_invalid 由 search() 在 API 响应包含会话失效标志时设置
+    # 注意：搜索结果为空不等于会话失效，可能是关键词无匹配或 API 响应格式变化
+    # 重试成功后 last_session_invalid 会被重置为 False，此处只在重试仍失败时才标记
+    session_expired = getattr(container.collector, "last_session_invalid", False)
 
     return {
         "ok": True,
@@ -567,10 +694,25 @@ async def live_links(
             "seller": len(sellers),
             "total": len(filtered),
         },
-        "items": filtered,
-        "sellers": sellers,
-        "all": filtered,
+        "items": items,  # 仅含 link_type=item 的行，避免 seller 行被错位渲染
+        "sellers": sellers,  # 卖家行单独返回
+        "all": filtered,  # 保留合并视图（向后兼容）
+        # 字段元数据：前端根据此动态渲染列头，当接口字段变化时前端展示自动调整
+        # 避免"列头显示卖家但实际展示信用信息"等错位问题
+        "field_map": merged_field_map,
     }
+
+
+def _safe_trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
+    """_trigger_live_evaluation 的安全包装，用于 BackgroundTasks
+
+    BackgroundTasks 在响应返回后执行，异常不会反馈给客户端，需在此捕获并记录日志，
+    避免未捕获异常导致任务静默失败。
+    """
+    try:
+        _trigger_live_evaluation(container, task_id, items)
+    except Exception as e:
+        logger.warning("live_links 后台触发评估失败 task=%s: %s", task_id, e)
 
 
 def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:

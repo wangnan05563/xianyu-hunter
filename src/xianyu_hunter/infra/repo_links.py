@@ -213,7 +213,13 @@ class TaskLinksMixin:
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["task_id", "link_type", "link_key"],
-                set_={"display": stmt.excluded["display"], "note": stmt.excluded["note"]},
+                # 修复：之前不更新 source，导致 live 搜索命中的商品若已存在 auto 来源，
+                # source 仍为 "auto"，后续 refresh_links 删除 auto 时会误删 live 数据。
+                set_={
+                    "display": stmt.excluded["display"],
+                    "note": stmt.excluded["note"],
+                    "source": stmt.excluded["source"],
+                },
             )
             result = conn.execute(stmt)
             row = conn.execute(
@@ -341,6 +347,47 @@ class TaskLinksMixin:
                 .where(TaskLinkRow.link_key == link_key)
             )
             return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
+
+    def list_link_displays_by_keys(
+        self,
+        link_keys: list[str],
+        link_type: str = "item",
+    ) -> dict[str, dict]:
+        """按 link_key 批量查询 display，返回 {link_key: display_dict}
+
+        评估明细接口需要按评估事件涉及的 item_id 批量查询 task_links.display，
+        之前路由层直接访问 engine 绕过 Repository，这里提供正式方法。
+        同一 item_id 可能关联到多个任务，选择字段最完整的 display
+        （老任务可能字段缺失，新任务字段更完整）。
+        """
+        if not link_keys:
+            return {}
+        # 先收集每个 key 的所有 display 候选
+        candidates: dict[str, list[dict]] = {}
+        batch_size = 500
+        with self.engine.connect() as conn:
+            for i in range(0, len(link_keys), batch_size):
+                batch = link_keys[i:i + batch_size]
+                rows = conn.execute(
+                    select(TaskLinkRow.link_key, TaskLinkRow.display)
+                    .where(TaskLinkRow.link_type == link_type)
+                    .where(TaskLinkRow.link_key.in_(batch))
+                ).fetchall()
+                for lk, display_json in rows:
+                    if not lk:
+                        continue
+                    key = str(lk)
+                    try:
+                        d = json.loads(display_json) if isinstance(display_json, str) else (display_json or {})
+                    except (json.JSONDecodeError, TypeError):
+                        d = {}
+                    if d:
+                        candidates.setdefault(key, []).append(d)
+        # 每个 key 选择非空字段最多的 display
+        result: dict[str, dict] = {}
+        for key, display_list in candidates.items():
+            result[key] = max(display_list, key=lambda d: sum(1 for v in d.values() if v not in (None, "", False, 0)))
+        return result
 
     def search_task_links(
         self,

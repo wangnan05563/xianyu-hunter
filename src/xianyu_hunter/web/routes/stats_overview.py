@@ -55,7 +55,7 @@ def _overview(container: Container) -> dict[str, Any]:
     """
     engine = container.repo.engine
     with engine.connect() as conn:
-        # 1. 任务统计：一次查询搞定 4 个状态计数
+        # 1. 任务统计：一次查询搞定 4 个状态计数（排除软删除的任务）
         task_row = conn.execute(sa_text("""
             SELECT
                 COUNT(*) AS total,
@@ -63,6 +63,7 @@ def _overview(container: Container) -> dict[str, Any]:
                 SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END) AS paused,
                 SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END) AS stopped
             FROM tasks
+            WHERE status != 'deleted'
         """)).one()
 
         # 2. 订单统计：一次查询搞定 4 个状态计数

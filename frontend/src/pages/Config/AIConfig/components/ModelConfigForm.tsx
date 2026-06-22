@@ -42,11 +42,11 @@ export default function ModelConfigForm({
   return (
     <>
       <h3 style={{ marginBottom: 8 }}>AI 服务配置</h3>
-      <p style={{ color: '#999', marginBottom: 16 }}>
+      <p style={{ color: 'var(--xh-text-tertiary)', marginBottom: 16 }}>
         配置 AI 评估和自然语言解析所需的 LLM 服务。支持 OpenAI / DeepSeek / 智谱等 OpenAI 兼容接口。
       </p>
 
-      <Card style={{ marginBottom: 16, background: '#fafafa' }}>
+      <Card style={{ marginBottom: 16, background: 'var(--xh-bg-spotlight)' }}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           {/* API Base URL */}
           <div>
@@ -57,7 +57,7 @@ export default function ModelConfigForm({
               placeholder="https://api.openai.com/v1"
               style={{ maxWidth: 600 }}
             />
-            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
               OpenAI 兼容端点。DeepSeek: https://api.deepseek.com/v1 &nbsp;&nbsp; 智谱: https://open.bigmodel.cn/api/paas/v4
             </div>
           </div>
@@ -82,7 +82,7 @@ export default function ModelConfigForm({
                 </Button>
               }
             />
-            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
               密钥通过系统密钥库（keyring）安全存储，不写入配置文件
             </div>
           </div>
@@ -97,7 +97,7 @@ export default function ModelConfigForm({
                   onChange={(e) => onConfigChange({ model: e.target.value })}
                   placeholder="gpt-4o-mini"
                 />
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
                   自然语言解析 + 任务字段提取
                 </div>
               </div>
@@ -110,7 +110,7 @@ export default function ModelConfigForm({
                   onChange={(e) => onConfigChange({ vision_model: e.target.value })}
                   placeholder="gpt-4o"
                 />
-                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
                   图片成色评估 + 深度多模态分析
                 </div>
               </div>
@@ -121,7 +121,7 @@ export default function ModelConfigForm({
 
       {/* 快捷预设按钮行 */}
       <h3 style={{ marginBottom: 8 }}>快捷预设</h3>
-      <p style={{ color: '#999', marginBottom: 16 }}>
+      <p style={{ color: 'var(--xh-text-tertiary)', marginBottom: 16 }}>
         一键切换到常用 AI 服务商（仅修改 URL 和模型名称，需自行配置 API Key）。
       </p>
       <Space wrap style={{ marginBottom: 24 }}>

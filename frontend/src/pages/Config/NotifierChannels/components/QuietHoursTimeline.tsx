@@ -33,14 +33,14 @@ export default function QuietHoursTimeline({ start, end }: QuietHoursTimelinePro
           />
         ))}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#999', marginTop: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
         <span>00:00</span>
         <span>06:00</span>
         <span>12:00</span>
         <span>18:00</span>
         <span>24:00</span>
       </div>
-      <div style={{ fontSize: 11, color: '#999', marginTop: 4 }}>
+      <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
         <span style={{ color: '#ff4d4f' }}>■</span> 静默时段 &nbsp;
         <span style={{ color: '#52c41a' }}>■</span> 推送时段
       </div>

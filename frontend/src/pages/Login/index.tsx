@@ -300,9 +300,9 @@ export default function Login() {
     return (
       <div style={{
         display: 'flex', justifyContent: 'center', alignItems: 'center',
-        height: '100vh', background: '#f5f7fa',
+        height: '100vh', background: 'var(--xh-bg-layout)',
       }}>
-        <Spin size="large" tip="正在检查登录状态..." />
+        <Spin size="large" tip="正在检查登录状态..."><div /></Spin>
       </div>
     )
   }
@@ -363,7 +363,7 @@ export default function Login() {
               <div key={ck.key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Tag color="blue" style={{ fontSize: 11, fontFamily: 'monospace' }}>{ck.key}</Tag>
-                  <span style={{ fontSize: 11, color: '#8c8c8c' }}>{ck.label}</span>
+                  <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{ck.label}</span>
                 </div>
                 <Input
                   placeholder={`粘贴 ${ck.key} 的值`}
@@ -381,7 +381,7 @@ export default function Login() {
 
           {/* 高级：整段粘贴（兼容旧格式） */}
           <details style={{ marginTop: 4 }}>
-            <summary style={{ fontSize: 11, color: '#8c8c8c', cursor: 'pointer' }}>
+            <summary style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', cursor: 'pointer' }}>
               高级：粘贴整段 Cookie 文本
             </summary>
             <TextArea
@@ -597,7 +597,7 @@ export default function Login() {
   return (
     <div style={{
       display: 'flex', justifyContent: 'center', alignItems: 'center',
-      minHeight: '100vh', background: '#f5f7fa', padding: 24,
+      minHeight: '100vh', background: 'var(--xh-bg-layout)', padding: 24,
     }}>
       <Card
         style={{

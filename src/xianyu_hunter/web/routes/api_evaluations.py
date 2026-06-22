@@ -8,11 +8,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.domain.evaluation import RiskLevel
-from xianyu_hunter.infra.db_models import _utcnow, EventRow, ItemRow, SellerRow
+from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.infra.yaml_config import get_config
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import to_datetime
@@ -161,43 +160,82 @@ def _clean_dirty_seller_nick(payload: dict, item_map: dict[str, dict]) -> None:
     )
 
 
-def _enrich_eval_with_item(payload: dict, item_map: dict[str, dict]) -> dict:
-    """用 items 表数据丰富评估记录（补充标题、价格、卖家等缺失字段）
+def _enrich_eval_with_item(
+    payload: dict, item_map: dict[str, dict], link_map: dict[str, dict] | None = None
+) -> dict:
+    """用 items 表或 task_links 表数据丰富评估记录（补充标题、价格、地区、图片等缺失字段）
 
-    字段名与前端 EvalItem 接口对齐，同时补充商品列表页展示所需的字段。
+    数据源优先级：
+    1. items 表（结构化字段最完整，包含 publish_time 等）
+    2. task_links.display（任务关联冗余字段，弥补评估事件未入 items 表的常见场景）
+
+    字段名与前端 EvalItem 接口对齐：
+    - item_title / item_price / seller_id / seller_nick / thumb_url
+    - region / publish_time / want_cnt
     """
     item_id = str(payload.get("item_id") or "")
-    item = item_map.get(item_id, {})
-    if not item:
-        return payload
+    item = item_map.get(item_id, {}) if item_id else {}
+    link = (link_map or {}).get(item_id, {}) if item_id else {}
 
-    # 清洗历史脏数据：seller_nick 字段可能包含"地区+信用度"组合
-    _clean_dirty_seller_nick(payload, item_map)
-
-    # 仅补充 payload 中缺失的字段（不覆盖已有值）
-    # 注意：脏数据清洗可能把 seller_nick 设为空字符串，不能用 `not` 判定缺失
-    if not payload.get("item_title") and item.get("title"):
-        payload["item_title"] = item["title"]
-    if payload.get("item_price") is None and item.get("price") is not None:
+    # 兼容 task_links.display 的键名：title -> item_title, price 字符串转 float
+    def _coerce_price(v: object) -> float | None:
+        if v is None or v == "":
+            return None
         try:
-            payload["item_price"] = float(item["price"])
+            return float(v)
         except (TypeError, ValueError):
-            pass
-    if not payload.get("seller_id") and item.get("seller_id"):
-        payload["seller_id"] = str(item["seller_id"])
+            return None
+
+    # 取 title：items.title > link.title > link.item_title
+    title_candidate = (
+        item.get("title") or link.get("title") or link.get("item_title") or ""
+    )
+    # 取 price：items.price > link.price
+    price_candidate = item.get("price")
+    if price_candidate is None:
+        price_candidate = _coerce_price(link.get("price"))
+    # 取 thumb_url：items.thumb_url > link.thumb_url
+    thumb_candidate = item.get("thumb_url") or link.get("thumb_url")
+    # 取 region：items.region > link.region
+    region_candidate = item.get("region") or link.get("region")
+    # 取 want_cnt：items.want_cnt > link.want_cnt
+    want_candidate = item.get("want_cnt")
+    if want_candidate is None and link.get("want_cnt") is not None:
+        try:
+            want_candidate = int(link["want_cnt"])
+        except (TypeError, ValueError):
+            want_candidate = None
+    # 取 publish_time：items.publish_time > link.publish_time
+    publish_candidate = item.get("publish_time") or link.get("publish_time")
+
+    # 脏数据清洗：seller_nick 字段可能包含"地区+信用度"组合
+    if item or link:
+        _clean_dirty_seller_nick(payload, item_map)
+
+    # 补充字段：仅当 payload 中缺失时填充（不覆盖已有值）
+    if not payload.get("item_title") and title_candidate:
+        payload["item_title"] = title_candidate
+    if payload.get("item_price") is None and price_candidate is not None:
+        payload["item_price"] = price_candidate
+    if not payload.get("seller_id"):
+        # 优先 items.seller_id，其次 link.seller_id
+        sid = item.get("seller_id") or link.get("seller_id")
+        if sid:
+            payload["seller_id"] = str(sid)
     # 关键修复：脏数据清洗后 seller_nick 为空字符串（falsy），
     # 不能用 `not payload.get("seller_nick")` 判定缺失，否则会被 items 表回填错误数据
-    if payload.get("seller_nick") is None and item.get("seller_nick"):
-        payload["seller_nick"] = item["seller_nick"]
-    if not payload.get("thumb_url") and item.get("thumb_url"):
-        payload["thumb_url"] = item["thumb_url"]
-    # 补充商品列表页展示字段
-    if not payload.get("region") and item.get("region"):
-        payload["region"] = item["region"]
-    if not payload.get("want_cnt") and item.get("want_cnt") is not None:
-        payload["want_cnt"] = item["want_cnt"]
-    if not payload.get("publish_time") and item.get("publish_time"):
-        payload["publish_time"] = str(item["publish_time"])
+    if payload.get("seller_nick") is None:
+        nick = link.get("seller_nick") or item.get("seller_nick")
+        if nick:
+            payload["seller_nick"] = nick
+    if not payload.get("thumb_url") and thumb_candidate:
+        payload["thumb_url"] = thumb_candidate
+    if not payload.get("region") and region_candidate:
+        payload["region"] = region_candidate
+    if payload.get("want_cnt") is None and want_candidate is not None:
+        payload["want_cnt"] = want_candidate
+    if not payload.get("publish_time") and publish_candidate:
+        payload["publish_time"] = str(publish_candidate)
     return payload
 
 
@@ -228,25 +266,51 @@ def list_evaluations(
     if end_dt:
         end_dt = end_dt.replace(hour=23, minute=59, second=59)
 
-    rows = container.repo.list_events(limit=limit * 4) or []
+    # 修复：之前用 list_events(limit=limit*4) 在 Python 端过滤 eval.*，
+    # 当非 eval 事件多时会遗漏数据且 total 不准。改为 SQL 端按 type 前缀过滤。
+    # 不传 limit/offset，全量加载 eval.* 事件（评估事件已按 task_id+item_id 去重，量级可控），
+    # 后续在 Python 端做 item_id/task_id 模糊匹配、score/time 范围过滤，再分页。
+    rows, _ = container.repo.list_events_by_type_prefix(type_prefix="eval.")
+
+    # 收集本批评估事件涉及的所有 item_id，用于批量查询 items / task_links
+    event_item_ids: set[str] = set()
+    for r in rows:
+        payload = r.get("payload") or {}
+        iid = str(payload.get("item_id") or r.get("item_id") or "")
+        if iid:
+            event_item_ids.add(iid)
 
     # 预加载 items 表数据，用于丰富评估记录
-    item_rows = container.repo.list_items(limit=5000) or []
+    # 修复：之前用 list_items(limit=5000) 全量加载，超过 5000 行会遗漏。
+    # 改为按评估事件涉及的 item_id 批量查询，既省内存又不会遗漏。
+    item_rows = container.repo.list_items_by_ids(list(event_item_ids)) if event_item_ids else []
     item_map: dict[str, dict] = {}
     for it in item_rows:
         iid = str(it.get("item_id") or it.get("id") or "")
         if iid:
             item_map[iid] = it
 
+    # 预加载 task_links.display 数据（弥补 items 表缺失的常见场景：评估事件未入 items 但已关联到任务）
+    # 修复：之前直接访问 container.repo.engine 绕过 Repository，改为调用正式方法
+    link_map: dict[str, dict] = container.repo.list_link_displays_by_keys(
+        list(event_item_ids), link_type="item"
+    ) if event_item_ids else {}
+
     # 预加载 sellers 表数据（items 表无 seller_nick，需从 sellers 表补充）
-    # 收集所有 item 中出现的 seller_id，批量查询 sellers 表
-    engine = container.repo.engine
+    # 修复：之前直接访问 engine 查询所有 sellers，改为按 item_map 中的 seller_id 批量查询
+    seller_ids_from_items = {
+        str(it.get("seller_id") or "")
+        for it in item_map.values()
+        if it.get("seller_id")
+    }
     seller_map: dict[str, str] = {}  # seller_id -> nick
-    with engine.connect() as conn:
-        seller_rows = conn.execute(select(SellerRow.id, SellerRow.nick)).fetchall()
-        for sr in seller_rows:
-            if sr.id and sr.nick:
-                seller_map[sr.id] = sr.nick
+    if seller_ids_from_items:
+        seller_rows = container.repo.list_sellers_by_ids(list(seller_ids_from_items))
+        for s in seller_rows:
+            sid = str(s.get("id") or "")
+            nick = s.get("nick")
+            if sid and nick:
+                seller_map[sid] = nick
 
     evals = []
     for r in rows:
@@ -254,8 +318,8 @@ def list_evaluations(
             continue
         payload = r.get("payload") or {}
 
-        # 用 items 表数据丰富 payload（补充标题、价格、卖家ID等）
-        _enrich_eval_with_item(payload, item_map)
+        # 用 items 表 / task_links 数据丰富 payload（补充标题、价格、地区、图片、卖家ID等）
+        _enrich_eval_with_item(payload, item_map, link_map)
 
         # 用 sellers 表补充卖家昵称（items 表无 seller_nick 字段）
         # 关键修复：脏数据清洗后 seller_nick 为空字符串，不能用 `not` 判定缺失
@@ -349,6 +413,24 @@ _CONDITION_KEYWORDS = {
 }
 
 
+# 关键词 → 成色描述的映射（用于 condition_label_override 覆盖）
+# 放在 _enrich_condition_tags 之前，避免使用时还未定义（虽然模块级变量在函数调用时已加载，但顺序更清晰）
+_CONDITION_KEYWORDS_LABEL_MAP = {
+    "全新": "全新", "未拆封": "全新", "未使用": "全新", "未拆": "全新",
+    "99新": "近全新", "95新": "近全新", "9成新": "近全新", "几乎全新": "近全新",
+    "近全新": "近全新", "近新": "近全新", "9.5新": "近全新", "9.9新": "近全新",
+    "8成新": "正常使用", "8.5新": "正常使用", "85新": "正常使用", "7成新": "明显使用",
+    "正常使用": "正常使用", "使用过": "正常使用", "有使用痕迹": "正常使用",
+    "明显使用": "明显使用", "外观磨损": "明显使用", "有划痕": "明显使用", "磕碰": "明显使用",
+    "维修": "有故障/维修", "维修过": "有故障/维修", "拆修": "有故障/维修",
+    "故障": "有故障/维修", "损坏": "有故障/维修", "已坏": "有故障/维修",
+    "屏幕破损": "有故障/维修", "进水": "有故障/维修", "摔过": "有故障/维修",
+    "原装": "全新", "原厂": "全新", "正品": "全新",  # 单独成色描述时归为全新
+    "原盒": "全新", "原包装": "全新", "带发票": "全新", "带保修": "全新", "在保": "全新",
+    "裸机": "明显使用", "无包装": "正常使用", "无配件": "正常使用",
+}
+
+
 def _enrich_condition_tags(evals: list[dict]) -> None:
     """为每条评估记录添加商品成色判断标签
 
@@ -423,25 +505,11 @@ def _enrich_condition_tags(evals: list[dict]) -> None:
         r["condition_tags"] = tags
         r["condition_label"] = condition_label
         r["condition_score"] = score
+        # is_branded_new：综合判断，override 命中"全新"或自动识别为"全新"时为 True
         r["is_branded_new"] = condition_label == "全新"
-        r["has_repair"] = any(t["category"] == "broken" for t in tags)
-
-
-# 关键词 → 成色描述的映射（用于 condition_label_override 覆盖）
-_CONDITION_KEYWORDS_LABEL_MAP = {
-    "全新": "全新", "未拆封": "全新", "未使用": "全新", "未拆": "全新",
-    "99新": "近全新", "95新": "近全新", "9成新": "近全新", "几乎全新": "近全新",
-    "近全新": "近全新", "近新": "近全新", "9.5新": "近全新", "9.9新": "近全新",
-    "8成新": "正常使用", "8.5新": "正常使用", "85新": "正常使用", "7成新": "明显使用",
-    "正常使用": "正常使用", "使用过": "正常使用", "有使用痕迹": "正常使用",
-    "明显使用": "明显使用", "外观磨损": "明显使用", "有划痕": "明显使用", "磕碰": "明显使用",
-    "维修": "有故障/维修", "维修过": "有故障/维修", "拆修": "有故障/维修",
-    "故障": "有故障/维修", "损坏": "有故障/维修", "已坏": "有故障/维修",
-    "屏幕破损": "有故障/维修", "进水": "有故障/维修", "摔过": "有故障/维修",
-    "原装": "全新", "原厂": "全新", "正品": "全新",  # 单独成色描述时归为全新
-    "原盒": "全新", "原包装": "全新", "带发票": "全新", "带保修": "全新", "在保": "全新",
-    "裸机": "明显使用", "无包装": "正常使用", "无配件": "正常使用",
-}
+        # has_repair：override 命中故障类关键词或自动识别到 broken category 时为 True
+        # 之前用 any(t["category"] == "broken") 单独判断会覆盖 override 的正确结果
+        r["has_repair"] = condition_label == "有故障/维修" or any(t["category"] == "broken" for t in tags)
 
 
 @router.get("/latest/{item_id}")
@@ -497,8 +565,17 @@ def evaluations_distribution(
     cutoff = now - timedelta(hours=range_hours)
 
     # 从 events 拉 eval.*，并 join items 拿价格（item_id 在 payload.item_id）
-    events = container.repo.list_events(limit=5000) or []
-    items = container.repo.list_items(limit=5000) or []
+    # 修复：之前用 list_events(limit=5000) + list_items(limit=5000) 全量加载，
+    # 改为按 type 前缀过滤 events，按涉及 item_id 批量查询 items
+    events, _ = container.repo.list_events_by_type_prefix(type_prefix="eval.")
+    # 收集涉及的 item_id 用于批量查询 items
+    dist_item_ids: set[str] = set()
+    for ev in events:
+        ev_payload = ev.get("payload") or {}
+        iid = str(ev_payload.get("item_id") or ev.get("item_id") or "")
+        if iid:
+            dist_item_ids.add(iid)
+    items = container.repo.list_items_by_ids(list(dist_item_ids)) if dist_item_ids else []
     item_price_map: dict[str, float] = {}
     for it in items:
         iid = it.get("item_id") or it.get("id")
@@ -890,36 +967,19 @@ def seller_trend_for_item(
     先通过 item_id 查出 seller_id，再复用本模块的 seller_price_trend。
     优先从 items 表查询，若商品未入库则回退到事件 payload 中提取 seller_id。
     """
-    engine = container.repo.engine
     seller_id: str | None = None
 
     # 策略1：优先从 items 表查询（数据更完整）
-    with engine.connect() as conn:
-        row = conn.execute(
-            select(ItemRow.seller_id)
-            .where(ItemRow.id == item_id)
-            .limit(1)
-        ).first()
-        if row and row.seller_id:
-            seller_id = row.seller_id
+    # 修复：之前直接访问 engine，改为调用 Repository 方法
+    item = container.repo.get_item(item_id)
+    if item and item.get("seller_id"):
+        seller_id = str(item["seller_id"])
 
     # 策略2：items 表无记录时，从事件 payload 回退（评估事件中包含 seller_id）
     if not seller_id:
-        with engine.connect() as conn:
-            evt_row = conn.execute(
-                select(EventRow.payload)
-                .where(
-                    EventRow.item_id == item_id,
-                    EventRow.type.like("eval.%"),
-                )
-                .limit(1)
-            ).first()
-            if evt_row and evt_row.payload:
-                try:
-                    payload = json.loads(evt_row.payload) if isinstance(evt_row.payload, str) else evt_row.payload
-                    seller_id = payload.get("seller_id")
-                except (json.JSONDecodeError, TypeError):
-                    pass
+        payload = container.repo.get_eval_payload_by_item(item_id)
+        if payload:
+            seller_id = payload.get("seller_id")
 
     if not seller_id:
         raise HTTPException(status_code=404, detail="未找到该商品的卖家信息（商品未入库且无评估事件）")
@@ -951,12 +1011,11 @@ def recompute_evaluations(
     evaluator = container.evaluator
 
     # 拉取所有评估事件
-    events = container.repo.list_events(limit=10000) or []
-    eval_events = [e for e in events if str(e.get("type", "")).startswith("eval.")]
-
-    # 按需过滤任务
-    if task_id:
-        eval_events = [e for e in eval_events if e.get("task_id") == task_id]
+    # 修复：之前用 list_events(limit=10000) 在 Python 端过滤，改为 SQL 端按 type 前缀过滤
+    all_eval_events, _ = container.repo.list_events_by_type_prefix(
+        type_prefix="eval.", task_id=task_id
+    )
+    eval_events = all_eval_events
 
     if not eval_events:
         # 没有 eval.* 事件时，从 task_links 生成评估
@@ -1042,7 +1101,14 @@ def recompute_evaluations(
         }
 
     # 预加载 items 和 sellers 数据
-    item_rows = container.repo.list_items(limit=10000) or []
+    # 修复：之前用 list_items(limit=10000) 全量加载，改为按评估事件涉及的 item_id 批量查询
+    recompute_item_ids = set()
+    for e in eval_events:
+        payload = e.get("payload") or {}
+        iid = str(payload.get("item_id") or e.get("item_id") or "")
+        if iid:
+            recompute_item_ids.add(iid)
+    item_rows = container.repo.list_items_by_ids(list(recompute_item_ids)) if recompute_item_ids else []
     item_map: dict[str, dict] = {}
     for it in item_rows:
         iid = str(it.get("item_id") or it.get("id") or "")
@@ -1050,12 +1116,19 @@ def recompute_evaluations(
             item_map[iid] = it
 
     # 预加载 sellers
-    seller_map: dict[str, dict] = {}
+    # 修复：之前对每个 item 的 seller_id 单独调用 get_seller（N+1 查询），
+    # 改为收集所有 seller_id 后批量查询
+    seller_ids_set: set[str] = set()
     for it in item_rows:
         sid = str(it.get("seller_id") or "")
-        if sid and sid not in seller_map:
-            s = container.repo.get_seller(sid)
-            if s:
+        if sid:
+            seller_ids_set.add(sid)
+    seller_map: dict[str, dict] = {}
+    if seller_ids_set:
+        seller_rows = container.repo.list_sellers_by_ids(list(seller_ids_set))
+        for s in seller_rows:
+            sid = str(s.get("id") or "")
+            if sid:
                 seller_map[sid] = s
 
     recomputed = 0
@@ -1075,20 +1148,28 @@ def recompute_evaluations(
 
             item_data = item_map.get(item_id)
             if not item_data:
-                skipped += 1
-                continue
+                # 修复：之前直接 skip，导致 live 搜索写入 task_links 但未入 items 表的商品无法重算评估
+                # 回退到 payload 中的字段（由 _enrich_eval_with_item 从 task_links.display 补充）
+                item_data = {
+                    "title": payload.get("item_title") or "",
+                    "price": payload.get("item_price") or 0,
+                    "region": payload.get("region") or "",
+                    "seller_id": payload.get("seller_id") or "",
+                    "seller_nick": payload.get("seller_nick") or "",
+                }
 
             seller_id = str(item_data.get("seller_id") or payload.get("seller_id") or "")
             seller_data = seller_map.get(seller_id, {})
 
             # 重建 ItemDetail（仅包含评估所需字段）
+            # seller_nick 优先从 sellers 表取（ItemRow 无此字段），回退到 payload
             detail = ItemDetail(
                 id=item_id,
                 title=str(item_data.get("title") or payload.get("item_title") or ""),
                 price=float(item_data.get("price") or 0),
                 region=str(item_data.get("region") or ""),
                 seller_id=seller_id,
-                seller_nick=str(item_data.get("seller_nick") or ""),
+                seller_nick=str(seller_data.get("nick") or payload.get("seller_nick") or ""),
             )
 
             # 重建 SellerProfile

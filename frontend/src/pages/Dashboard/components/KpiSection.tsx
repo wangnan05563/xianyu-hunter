@@ -18,7 +18,7 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
 
   return (
     <Card style={{ marginTop: 16 }} title={<span><RiseOutlined /> 业务 KPI（近 30 天）</span>}
-      extra={<span style={{ fontSize: 11, color: '#8c8c8c' }}>基于 {kpiCards[0]?.sample_size || 0} 条 · {kpiCards[0]?.range_days || 30} 天</span>}>
+      extra={<span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>基于 {kpiCards[0]?.sample_size || 0} 条 · {kpiCards[0]?.range_days || 30} 天</span>}>
       <Row gutter={[16, 16]}>
         {kpiCards.map((k) => {
           const delta = k.delta_pct
@@ -36,7 +36,7 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
                   suffix={isInverted ? '%' : k.unit}
                   precision={k.is_pct && k.value !== 0 && k.value !== 100 ? 1 : 0}
                   valueStyle={stars === 5 ? { color: '#faad14' } : undefined}
-                  prefix={hasDelta ? (deltaUp ? <ArrowUpOutlined style={{ color: isInverted ? '#ff4d4f' : '#52c41a' }} /> : <ArrowDownOutlined style={{ color: isInverted ? '#52c41a' : '#ff4d4f' }} />) : <MinusOutlined style={{ color: '#8c8c8c' }} />}
+                  prefix={hasDelta ? (deltaUp ? <ArrowUpOutlined style={{ color: isInverted ? '#ff4d4f' : '#52c41a' }} /> : <ArrowDownOutlined style={{ color: isInverted ? '#52c41a' : '#ff4d4f' }} />) : <MinusOutlined style={{ color: 'var(--xh-text-tertiary)' }} />}
                 />
                 <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
                   {hasDelta && (
@@ -51,7 +51,7 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
                     </span>
                   </Tooltip>
                 </div>
-                <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{k.hint}</div>
+                <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 2 }}>{k.hint}</div>
               </div>
             </Col>
           )

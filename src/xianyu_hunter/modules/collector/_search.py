@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import asyncio
+from http.cookies import CookieError, SimpleCookie
 import time
 from datetime import datetime, timezone
+from typing import Any
+from urllib.parse import urlparse
 
 from playwright.async_api import Page
 
@@ -24,6 +27,87 @@ from xianyu_hunter.infra.repo_links import task_keyword_matches_title
 from xianyu_hunter.modules.collector_utils import check_item_sold, extract_seller_nick
 
 logger = get_logger()
+
+
+def _set_cookie_headers_from_response(response: Any) -> list[str]:
+    """Extract Set-Cookie headers from a Playwright APIResponse."""
+    headers: list[str] = []
+    try:
+        raw_headers = getattr(response, "headers_array", None)
+        if callable(raw_headers):
+            raw_headers = raw_headers()
+        for h in raw_headers or []:
+            if str(h.get("name", "")).lower() == "set-cookie" and h.get("value"):
+                headers.append(str(h["value"]))
+    except Exception:
+        pass
+
+    if headers:
+        return headers
+
+    try:
+        header_map = getattr(response, "headers", None)
+        if callable(header_map):
+            header_map = header_map()
+        for name, value in (header_map or {}).items():
+            if str(name).lower() == "set-cookie" and value:
+                headers.append(str(value))
+    except Exception:
+        pass
+    return headers
+
+
+def _cookies_from_set_cookie_headers(headers: list[str], response_url: str) -> list[dict[str, Any]]:
+    """Convert Set-Cookie headers to Playwright add_cookies() payloads."""
+    parsed = urlparse(response_url or "")
+    origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else ""
+    cookies: list[dict[str, Any]] = []
+
+    for header in headers:
+        jar = SimpleCookie()
+        try:
+            jar.load(header)
+        except CookieError:
+            continue
+        for morsel in jar.values():
+            cookie: dict[str, Any] = {
+                "name": morsel.key,
+                "value": morsel.value,
+                "path": morsel["path"] or "/",
+            }
+            domain = morsel["domain"]
+            if domain:
+                cookie["domain"] = domain
+            elif origin:
+                cookie["url"] = origin
+            else:
+                continue
+
+            if morsel["secure"]:
+                cookie["secure"] = True
+            if morsel["httponly"]:
+                cookie["httpOnly"] = True
+            same_site = (morsel["samesite"] or "").lower()
+            if same_site in {"lax", "strict", "none"}:
+                cookie["sameSite"] = {"lax": "Lax", "strict": "Strict", "none": "None"}[same_site]
+            cookies.append(cookie)
+    return cookies
+
+
+async def _sync_response_cookies_to_context(page: Page, response: Any) -> int:
+    """Persist MTOP Set-Cookie headers seen via route.fetch() into the browser context."""
+    headers = _set_cookie_headers_from_response(response)
+    if not headers:
+        return 0
+    cookies = _cookies_from_set_cookie_headers(headers, getattr(response, "url", ""))
+    if not cookies:
+        return 0
+    await page.context.add_cookies(cookies)
+    logger.info(
+        "已同步 MTOP Set-Cookie 到浏览器上下文: %s",
+        sorted({c["name"] for c in cookies}),
+    )
+    return len(cookies)
 
 # 批量解析脚本：在浏览器中一次性提取所有搜索卡片的商品数据
 # 替代逐个 query_selector 的串行模式，将 150+ 次 DOM 往返压缩为 1 次 evaluate 调用
@@ -121,11 +205,29 @@ _BATCH_PARSE_SCRIPT = r"""
         if (el && el.innerText.trim()) { sellerNick = el.innerText.trim(); break; }
       }
       if (!sellerNick) {
-        // 兜底：从段落中找非地区、非信用、非价格的卖家昵称
+        // 兜底：从段落中找非地区、非信用、非价格、非发布时间描述的卖家昵称
+        // 闲鱼卡片段落可能包含"一周内发布"、"3天前发布"等时间描述，
+        // 这些文本是纯中文且长度 2-12，会被误认为昵称，必须显式排除
+        // 同时支持脱敏昵称：闲鱼 API 返回的昵称常是"嘟***子"格式（含 *），
+        // 之前的纯中文正则不识别，导致 sellerNick 兜底失败被清空
+        const maskedNick = /^[\u4e00-\u9fa5*]+\*{2,}[\u4e00-\u9fa5*]*$/.test;  // 模式：脱敏昵称如"嘟***子"
         for (const p of paragraphs) {
           if (p === region) continue;
           if (/[¥]|想要|已售|信用|极好|良好|\d+\s*人/.test(p)) continue;
+          // 排除发布时间描述：含"发布"、"X天前"、"X小时前"、"X分钟前"等
+          if (/发布|分钟前|小时前|天前|周前|月前|刚发/.test(p)) continue;
+          // 排除商品成色描述（"几乎全新"、"全新"、"9成新"等）
+          if (/几乎全新|^全新$|^充新$|\d{1,2}新|\d成新/.test(p)) continue;
+          // 排除交易描述（"急售"、"包邮"、"秒发"等）
+          if (/急售|包邮|秒发|正品|自提|议价|小刀|大刀/.test(p)) continue;
+          // 排除商品描述片段（"功能完好无维修"、"直接拍不议价"等）
+          // 闲鱼 DOM 提取时标题/描述文本可能被截取为段落，误当昵称
+          if (/功能完好|无损|无维修|拆机|原装|配件|直接拍|不议价|不退|非诚勿扰|喜欢可以|需要|感兴趣/.test(p)) continue;
           if (/^[\u4e00-\u9fa5]+$/.test(p) && p.length >= 2 && p.length <= 12) {
+            sellerNick = p; break;
+          }
+          // 脱敏昵称：以中文开头、含 2+ 个 *、以中文或 * 结尾
+          if (maskedNick(p) && p.length >= 3 && p.length <= 20) {
             sellerNick = p; break;
           }
         }
@@ -223,6 +325,8 @@ class SearchMixin:
         fast: bool = False,
         skip_lock: bool = False,
         skip_rgv587_retry: bool = False,
+        sort_type: str = "default",
+        regions: str = "",
     ) -> list[ItemSummary]:
         """关键词搜索 + 滚动加载完整列表
 
@@ -235,6 +339,8 @@ class SearchMixin:
             fast: 快速模式——跳过 token 刷新（Worker 会处理）、RGV587 时不重试
             skip_lock: 跳过 browser_lock 获取（调用方已持有锁时使用）
             skip_rgv587_retry: 跳过 RGV587 重试（Worker 用，避免 75 秒重试占用锁）
+            sort_type: 排序方式（default/newest/price_asc/price_desc/want_count）
+            regions: 地区过滤（逗号分隔，空字符串表示全国）
 
         Returns:
             搜索结果 ItemSummary 列表（已去重）
@@ -258,7 +364,7 @@ class SearchMixin:
                 filter_params = [XIANYU_FILTER_MAP[f] for f in search_filters if f in XIANYU_FILTER_MAP]
                 if filter_params:
                     logger.info("搜索筛选参数: {}", ", ".join(search_filters))
-            url = build_search_url(keyword, filter_params=filter_params)
+            url = build_search_url(keyword, filter_params=filter_params, sort_type=sort_type, regions=regions)
             logger.info(f"搜索: {url}")
             await self.ad.throttle()
 
@@ -267,7 +373,7 @@ class SearchMixin:
                 await self._ensure_fresh_m5tk(page)
 
             # 优先通过 route 拦截捕获 API 响应获取结构化数据
-            api_items, session_invalid = await self._call_search_api(page, keyword, max_pages, fast=fast, skip_rgv587_retry=skip_rgv587_retry)
+            api_items, session_invalid = await self._call_search_api(page, keyword, max_pages, fast=fast, skip_rgv587_retry=skip_rgv587_retry, sort_type=sort_type, regions=regions)
             # 记录会话失效状态，供 Worker 检测后暂停任务
             self.last_session_invalid = session_invalid
             if api_items:
@@ -300,6 +406,12 @@ class SearchMixin:
                             cards = []
                         else:
                             logger.info("DOM 回退: 检测到 {} 个卡片，开始解析", card_count)
+                            # 检测到卡片说明页面正常渲染了搜索结果，会话实际有效
+                            # 重置 session_invalid 标志，避免 live_links 误报"令牌过期"
+                            # 即使后续解析提取到 0 个商品（DOM 选择器失效或关键词过滤），也不应判定为会话失效
+                            if session_invalid:
+                                self.last_session_invalid = False
+                                logger.info("DOM 回退检测到卡片，重置会话失效标志")
                             cards = await asyncio.wait_for(self._find_cards(page), timeout=8.0)
                 except asyncio.TimeoutError:
                     logger.warning("DOM 回退查找卡片超时，放弃: keyword={}", keyword)
@@ -387,7 +499,7 @@ class SearchMixin:
                 self._browser_lock.release()
         return items
 
-    async def _call_search_api(self, page: Page, keyword: str, max_pages: int = 3, fast: bool = False, skip_rgv587_retry: bool = False) -> tuple[list[ItemSummary], bool]:
+    async def _call_search_api(self, page: Page, keyword: str, max_pages: int = 3, fast: bool = False, skip_rgv587_retry: bool = False, sort_type: str = "default", regions: str = "") -> tuple[list[ItemSummary], bool]:
         """通过 Playwright route 拦截捕获搜索 API 响应
 
         页面加载时会自然发起 mtop API 请求获取搜索结果。
@@ -397,6 +509,8 @@ class SearchMixin:
         Args:
             fast: 快速模式——RGV587 时不重试、减少等待时间（8秒 vs 15秒）
             skip_rgv587_retry: 跳过 RGV587 重试（Worker 用，避免 75 秒重试占用 browser_lock）
+            sort_type: 排序方式（default/newest/price_asc/price_desc/want_count）
+            regions: 地区过滤（逗号分隔，空字符串表示全国）
 
         Returns:
             (items, session_invalid): items 为搜索结果列表，session_invalid 表示
@@ -414,6 +528,7 @@ class SearchMixin:
             if self._SEARCH_API_PATH in req_url:
                 try:
                     response = await route.fetch()
+                    await _sync_response_cookies_to_context(page, response)
                     body = await response.json()
                     ret = body.get("ret", [])
                     if ret and isinstance(ret, list):
@@ -422,7 +537,14 @@ class SearchMixin:
                         # FAIL_SYS_TOKEN_ILLEGAL 表示 _m_h5_tk 令牌非法，与 RGV587 同属会话过期
                         token_invalid = any(
                             keyword in ret_str
-                            for keyword in ("RGV587", "TOKEN_ILLEGAL", "TOKEN_EXPIRED", "TOKEN_INVALID", "SYS_ILLEGAL_ACCESS")
+                            for keyword in (
+                                "RGV587",
+                                "TOKEN_EMPTY",
+                                "TOKEN_ILLEGAL",
+                                "TOKEN_EXPIRED",
+                                "TOKEN_INVALID",
+                                "SYS_ILLEGAL_ACCESS",
+                            )
                         )
                         if token_invalid:
                             # 会话失效／反爬检测／token 过期，非普通限流
@@ -459,7 +581,7 @@ class SearchMixin:
 
         try:
             # 导航到搜索页（页面会自然发起 API 请求）
-            url = build_search_url(keyword)
+            url = build_search_url(keyword, sort_type=sort_type, regions=regions)
             # 快速模式使用 15 秒超时（vs 默认 30 秒），减少卡死风险
             goto_timeout = 15000 if fast else 30000
             await page.goto(url, wait_until="domcontentloaded", timeout=goto_timeout)
@@ -532,6 +654,14 @@ class SearchMixin:
                                 logger.info("resultList data 子字典 keys={}, value_types={}", list(sub.keys())[:20], _type_info)
                                 raw = sub
                         # 提取卖家昵称和地区（委托到 collector_utils，处理 region 误存为 nick 的情况）
+                        # 调试日志：记录 API 原始字段值，便于排查字段错位
+                        _raw_nick = raw.get("userNick") or raw.get("sellerNick") or raw.get("nick") or ""
+                        _raw_region_val = raw.get("region", "")
+                        if _raw_nick or _raw_region_val:
+                            logger.debug(
+                                "商品 {} 原始字段 userNick={!r} region={!r}",
+                                raw.get("itemId", "?"), _raw_nick, _raw_region_val,
+                            )
                         nick, _raw_region = extract_seller_nick(raw)
                         # 闲鱼 API 可能用不同字段名返回卖家ID和发布时间
                         # 方案B改进：扩展字段路径，覆盖闲鱼API各种命名风格
@@ -641,6 +771,8 @@ class SearchMixin:
         max_seller_details: int = 5,
         fast: bool = False,
         search_filters: list[str] | None = None,
+        sort_type: str = "default",
+        regions: str = "",
     ) -> list[dict]:
         """实时搜索并返回前端可直接展示的结果（不经过数据库）
 
@@ -653,8 +785,10 @@ class SearchMixin:
         Args:
             fast: 快速模式——跳过 token 刷新、RGV587 时不重试、减少等待时间
             search_filters: 闲鱼筛选标签（如 personal_idle, free_shipping）
+            sort_type: 排序方式（default/newest/price_asc/price_desc/want_count）
+            regions: 地区过滤（逗号分隔，空字符串表示全国）
         """
-        items = await self.search(keyword, max_pages=max_pages, page=page, fast=fast, skip_lock=True, search_filters=search_filters)
+        items = await self.search(keyword, max_pages=max_pages, page=page, fast=fast, skip_lock=True, search_filters=search_filters, sort_type=sort_type, regions=regions)
         results: list[dict] = []
         # 优先从搜索结果中收集已有的 seller_id（API 响应中包含此字段）
         sellers_from_search: dict[str, dict] = {}
@@ -681,7 +815,11 @@ class SearchMixin:
             # item 类型（url 已可由前端从 item_id 自动拼接，无需单独存储）
             results.append({**base, "link_type": "item", "link_key": item.id})
             # 搜索 API 已返回 seller_id 时直接收集，无需访问详情页
+            # seller 行的字段结构必须与 item 行对称（同一份前端表格渲染），
+            # 否则会出现"卖家"列与"发布时间"列错位显示同一 seller_credit 的问题
             if getattr(item, "seller_id", None) and item.seller_id not in sellers_from_search:
+                item_seller_credit = getattr(item, "seller_credit", "") or ""
+                item_publish_time = getattr(item, "publish_time", None)
                 sellers_from_search[item.seller_id] = {
                     "item_id": item.id,
                     "title": seller_nick or f"卖家 {item.seller_id}",
@@ -689,10 +827,15 @@ class SearchMixin:
                     "thumb_url": "",
                     "region": item.region,
                     "url": build_seller_url(item.seller_id),
-                    "link_type": "seller",
-                    "link_key": item.seller_id,
+                    "is_sold": False,
+                    "publish_time": item_publish_time.isoformat() if item_publish_time else None,
                     "seller_id": item.seller_id,
                     "seller_nick": seller_nick,
+                    "seller_credit": item_seller_credit,
+                    "want_cnt": 0,
+                    "view_cnt": 0,
+                    "link_type": "seller",
+                    "link_key": item.seller_id,
                 }
                 logger.debug(f"live_search 从搜索结果提取卖家: {item.seller_id} (来自商品 {item.id})")
 
@@ -719,6 +862,8 @@ class SearchMixin:
                             seen_sellers.add(detail.seller_id)
                             # DOM 回退模式下 detail() 不返回 nick（需访问卖家主页），
                             # 此处保持空字符串，前端会回退到 seller_id 展示
+                            # seller 行的 display 字段需要与 item 行对称，
+                            # 避免前端表格"卖家"列与"发布时间"列错位渲染
                             results.append({
                                 "item_id": item.id,
                                 "title": f"卖家 {detail.seller_id}",
@@ -726,10 +871,15 @@ class SearchMixin:
                                 "thumb_url": "",
                                 "region": item.region,
                                 "url": build_seller_url(detail.seller_id),
-                                "link_type": "seller",
-                                "link_key": detail.seller_id,
+                                "is_sold": False,
+                                "publish_time": None,
                                 "seller_id": detail.seller_id,
                                 "seller_nick": "",
+                                "seller_credit": "",
+                                "want_cnt": 0,
+                                "view_cnt": 0,
+                                "link_type": "seller",
+                                "link_key": detail.seller_id,
                             })
                             logger.debug(f"live_search 提取卖家: {detail.seller_id} (来自商品 {item.id})")
                     except Exception as e:

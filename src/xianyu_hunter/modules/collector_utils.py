@@ -78,12 +78,17 @@ def is_region_like(text: str) -> bool:
 def extract_seller_nick(raw: dict) -> tuple[str, str]:
     """从搜索 API 响应中提取卖家昵称和地区
 
-    闲鱼 API 对部分商品不返回独立的 userNick/sellerNick 字段，
-    而是将卖家昵称放在 region 字段中（非地理地区）。
+    闲鱼搜索 API 在不同商品上的字段语义并不稳定，至少观察到两种异常：
 
-    Returns:
-        (nick, region): 提取到的昵称和清洗后的地区
-        如果所有 nick 候选字段为空且 region 不像地名，则将 region 视为 nick
+    1. region 字段实际是用户昵称（如"芯***鱼"），无独立 nick 字段
+       → 表现为"地区"列显示脱敏昵称，"卖家"列空
+    2. userNick/sellerNick 字段实际是发布时间描述（如"一周内发布"），
+       region 字段才是真实昵称
+       → 表现为"卖家"列显示"一周内发布"，"地区"列显示脱敏昵称
+
+    这两种情况都会导致 seller/region/publish_time 三列整体错位。
+    这里做两层校验：先按候选字段顺序取 nick；再对结果做语义校验，
+    若 nick 看起来像时间描述/价格/标签而 region 看起来像昵称，则交换。
     """
     nick = ""
     for nk in ("userNick", "sellerNick", "nick", "userNickname", "sellerNickName"):
@@ -93,12 +98,221 @@ def extract_seller_nick(raw: dict) -> tuple[str, str]:
             break
 
     raw_region = raw.get("region", "")
+
+    # 场景 1：nick 为空且 region 不像地名 → 把 region 当 nick
     if not nick and raw_region:
         if not is_region_like(raw_region):
             nick = raw_region.strip()
             raw_region = ""
 
+    # 场景 2：nick 不为空但看起来不像昵称（时间描述/价格/标签），
+    # 且 region 看起来像昵称 → 交换两者
+    # 不依赖 _looks_like_nick 的绝对判断，而是双向校验：
+    # - nick 命中"非昵称"关键词 + region 不像地名 + 长度看起来像昵称 → 交换
+    if nick and raw_region:
+        if _looks_like_publish_label(nick) and not is_region_like(raw_region) and _looks_like_nick(raw_region):
+            nick, raw_region = raw_region, nick
+
     return nick, raw_region
+
+
+# 闲鱼搜索结果中常混入"非昵称"字段的关键词：
+# - 时间描述：N分钟/小时/天/周/月前发布
+# - 价格标签：含 ¥、元
+# - 通用标签：包邮、已售、信用、极好、良好、优秀
+# - 商品成色描述：几乎全新 / 全新 / 充新 / 99新 / 9X新 / X成新（这些是描述商品状态的标签，不应作为昵称）
+# - 交易描述：急售、秒发、正品、自提、议价、小刀
+# - 商品描述片段：功能/完好/无损/维修/拆机/原装/配件/直接拍/不议价等
+#   （闲鱼 DOM 提取时，标题或描述文本可能被误截取为 seller_nick 段落，
+#    如"功能完好无维修"、"直接拍不议价"等，这些不是昵称）
+_NON_NICK_PATTERN = re.compile(
+    r"(?:分钟前|小时前|天前|周前|月前|前发布|内发布|包邮|已售|信用|极好|良好|优秀|¥|元"
+    r"|几乎全新|^全新$|^充新$|\d{1,2}新|\d成新|\d\.\d成新"
+    r"|急售|秒发|正品|自提|议价|小刀|大刀"
+    r"|功能完好|无损|无维修|拆机|原装|配件"
+    r"|直接拍|不议价|不退|非诚勿扰|喜欢可以"
+    r"|需要|想要|感兴趣)"
+)
+
+# 闲鱼脱敏昵称的典型模式：1-2个汉字 + 至少2个* + 1-2个汉字
+_MASKED_NICK_PATTERN = re.compile(
+    r"^[\u4e00-\u9fa5A-Za-z0-9_]{1,3}\*{2,}[\u4e00-\u9fa5A-Za-z0-9_]*$"
+)
+
+
+def _looks_like_publish_label(text: str) -> bool:
+    """判断文本是否是发布时间/价格/标签描述（不应该是昵称）"""
+    if not text:
+        return False
+    return bool(_NON_NICK_PATTERN.search(text))
+
+
+def _looks_like_nick(text: str) -> bool:
+    """判断文本是否像昵称（含被脱敏的"x***y"格式）"""
+    if not text:
+        return False
+    # 脱敏昵称：芯***鱼 / 买***家 / 数码***爱好者
+    if _MASKED_NICK_PATTERN.match(text):
+        return True
+    # 短字符串（2-20 字符），无明显时间/价格关键词
+    if 2 <= len(text) <= 20 and not _NON_NICK_PATTERN.search(text):
+        return True
+    return False
+
+
+# 信用度关键词：闲鱼 API 返回的卖家信用度通常是"极好/良好/优秀/信誉极好"等
+_CREDIT_PATTERN = re.compile(r"(?:信用|极好|良好|优秀|信誉)")
+
+
+def _looks_like_credit(text: str) -> bool:
+    """判断文本是否像信用度描述"""
+    if not text:
+        return False
+    return bool(_CREDIT_PATTERN.search(text))
+
+
+# 发布时间描述：闲鱼 API 可能返回"X天前发布"、"一周内发布"等时间描述
+_PUBLISH_LABEL_PATTERN = re.compile(
+    r"(?:\d+\s*(?:分钟|小时|天|周|月)前|一周内|\d+\s*天内|刚发|前发布|内发布)"
+)
+
+
+def _looks_like_publish_time(text: str) -> bool:
+    """判断文本是否像发布时间描述（相对时间或 ISO 时间戳）"""
+    if not text:
+        return False
+    # ISO 时间戳格式：2024-01-01T12:00:00
+    if re.match(r"^\d{4}-\d{2}-\d{2}T", text):
+        return True
+    # 相对时间描述：X天前发布、一周内发布等
+    return bool(_PUBLISH_LABEL_PATTERN.search(text))
+
+
+# 字段元数据：描述每个字段的显示方式（标签、类型、宽度）
+# 前端根据此元数据动态渲染列，当接口字段变化时前端展示自动调整
+FIELD_METADATA: dict[str, dict[str, Any]] = {
+    "thumb_url": {"label": "图片", "type": "image", "width": 80},
+    "title": {"label": "标题", "type": "link", "width": None},
+    "price": {"label": "价格", "type": "price", "width": 100},
+    "seller_nick": {"label": "卖家", "type": "seller", "width": 140},
+    "seller_credit": {"label": "信用", "type": "tag", "color": "green", "width": 80},
+    "region": {"label": "地区", "type": "text", "width": 100},
+    "want_cnt": {"label": "想要", "type": "number", "width": 70},
+    "publish_time": {"label": "发布时间", "type": "datetime", "width": 160},
+    "is_sold": {"label": "状态", "type": "status", "width": 80},
+}
+
+
+def normalize_display_fields(display: dict) -> tuple[dict, dict]:
+    """对 display 字段做全面语义校正，并返回字段元数据
+
+    闲鱼搜索 API 在不同商品上字段语义并不稳定，已观察到以下错位场景：
+    1. seller_nick 字段实际是发布时间描述（如"一周内发布"），region 才是真实昵称
+    2. seller_nick 字段实际是信用度描述（如"信用极好"），region 才是真实昵称
+    3. region 字段实际是用户昵称（如"芯***鱼"），无独立 nick 字段
+    4. publish_time 字段为空，但 seller_nick 包含时间描述
+
+    本函数对 display 字段做全面语义校正，确保每个字段都符合其语义：
+    - seller_nick 必须是昵称（不能是时间描述/价格/标签/信用度）
+    - region 必须是地名（不能是昵称）
+    - publish_time 必须是时间（不能是昵称或地区）
+    - seller_credit 必须是信用度描述（不能是昵称）
+
+    Args:
+        display: 原始 display 字典
+
+    Returns:
+        (corrected_display, field_map)
+        - corrected_display: 校正后的 display 字典
+        - field_map: 字段元数据，描述每个字段的显示方式
+    """
+    if not isinstance(display, dict):
+        return {}, {}
+
+    corrected = dict(display)
+    seller_nick = str(corrected.get("seller_nick", "") or "").strip()
+    region = str(corrected.get("region", "") or "").strip()
+    publish_time = str(corrected.get("publish_time", "") or "").strip()
+    seller_credit = str(corrected.get("seller_credit", "") or "").strip()
+
+    # 场景 1：seller_nick 像信用度描述，且 seller_credit 为空 → 移动到 seller_credit
+    if seller_nick and not seller_credit and _looks_like_credit(seller_nick):
+        seller_credit = seller_nick
+        seller_nick = ""
+
+    # 场景 2：seller_nick 像发布时间描述，且 publish_time 为空 → 移动到 publish_time
+    if seller_nick and not publish_time and _looks_like_publish_time(seller_nick):
+        publish_time = seller_nick
+        seller_nick = ""
+
+    # 场景 3：seller_nick 不像昵称，且 region 像昵称 → 交换
+    if seller_nick and region:
+        if not _looks_like_nick(seller_nick) and _looks_like_nick(region):
+            # 进一步校验：seller_nick 是否像时间/信用/价格
+            if _looks_like_publish_time(seller_nick) or _looks_like_credit(seller_nick) or _NON_NICK_PATTERN.search(seller_nick):
+                # 如果 seller_nick 像时间且 publish_time 为空，移到 publish_time
+                if _looks_like_publish_time(seller_nick) and not publish_time:
+                    publish_time = seller_nick
+                # 如果 seller_nick 像信用且 seller_credit 为空，移到 seller_credit
+                elif _looks_like_credit(seller_nick) and not seller_credit:
+                    seller_credit = seller_nick
+                seller_nick = region
+                region = ""
+
+    # 场景 4：seller_nick 为空，且 region 是脱敏昵称 → 把 region 当 seller_nick
+    # 只在 region 明显是脱敏昵称（如"芯***鱼"）时才交换，避免误伤简短城市名（如"杭州"、"深圳"）
+    # 之前用 `not is_region_like(region) and _looks_like_nick(region)` 判断过于宽松：
+    # "杭州"/"深圳" 不带行政区划后缀，is_region_like 返回 False，
+    # 但 _looks_like_nick 返回 True（2-20 字符且无非昵称关键词），导致 region 被错误清空
+    if not seller_nick and region:
+        if _MASKED_NICK_PATTERN.match(region):
+            seller_nick = region
+            region = ""
+
+    # 场景 5：region 不像地名，且 seller_nick 像地名 → 交换
+    if region and seller_nick:
+        if not is_region_like(region) and is_region_like(seller_nick):
+            seller_nick, region = region, seller_nick
+
+    # 场景 6：seller_nick 命中"非昵称"关键词但没有合适的归属字段 → 清空
+    # 例如 seller_nick='几乎全新'/'9成新'，既不是时间也不是信用度，
+    # 前面场景已尝试纠正但仍然无法识别时应清空，避免前端误显示
+    # 触发条件：seller_nick 命中 _NON_NICK_PATTERN 且 region 没有有效值
+    if seller_nick and _NON_NICK_PATTERN.search(seller_nick):
+        if not region:
+            # 无 region 可填补时，清空 seller_nick
+            seller_nick = ""
+
+    # 写回校正后的字段
+    corrected["seller_nick"] = seller_nick
+    corrected["region"] = region
+    corrected["publish_time"] = publish_time or None
+    corrected["seller_credit"] = seller_credit
+
+    # 构建字段元数据：只包含实际有值的字段
+    field_map: dict[str, dict[str, Any]] = {}
+    for field, meta in FIELD_METADATA.items():
+        # 字段不在 display 中时跳过（如空字典输入时 is_sold 不存在）
+        if field not in corrected:
+            continue
+        value = corrected.get(field)
+        # 判断字段是否有值（None/空字符串/空数字视为无值）
+        has_value = False
+        if meta["type"] == "image":
+            has_value = bool(value)
+        elif meta["type"] == "price":
+            has_value = value is not None and value != 0
+        elif meta["type"] == "number":
+            has_value = value is not None
+        elif meta["type"] == "status":
+            # 状态字段：只要字段存在就显示（False 表示"在售"，是有效值）
+            has_value = True
+        else:
+            has_value = bool(value)
+        if has_value:
+            field_map[field] = meta
+
+    return corrected, field_map
 
 
 def parse_search_api_result(result: dict) -> list[dict]:

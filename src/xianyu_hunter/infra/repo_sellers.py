@@ -26,3 +26,20 @@ class SellersMixin:
         with self.engine.connect() as conn:
             row = conn.execute(select(SellerRow).where(SellerRow.id == seller_id)).first()
             return self._row_to_dict(row) if row else None
+
+    def list_sellers_by_ids(self, seller_ids: list[str]) -> list[dict]:
+        """按 seller_id 批量查询卖家（避免 N+1 查询）
+
+        recompute_evaluations 之前对每个 item 的 seller_id 单独调用 get_seller，
+        当 item 数量多时会产生大量数据库查询。这里提供批量查询方法。
+        """
+        if not seller_ids:
+            return []
+        result: list[dict] = []
+        batch_size = 500  # 避免 SQLite IN 子句参数上限
+        with self.engine.connect() as conn:
+            for i in range(0, len(seller_ids), batch_size):
+                batch = seller_ids[i:i + batch_size]
+                rows = conn.execute(select(SellerRow).where(SellerRow.id.in_(batch))).all()
+                result.extend(self._row_to_dict(r) for r in rows)
+        return result

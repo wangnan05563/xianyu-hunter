@@ -1,4 +1,4 @@
-import { Layout, Menu, theme, Breadcrumb, Spin, Result, Button } from 'antd'
+import { Layout, Menu, theme, Breadcrumb, Spin, Result, Button, Badge, Drawer, Collapse, List, Tag, Tooltip, ConfigProvider, Modal, Input } from 'antd'
 import {
   DashboardOutlined,
   UnorderedListOutlined,
@@ -21,10 +21,20 @@ import {
   MenuUnfoldOutlined,
   AppstoreOutlined,
   SettingOutlined,
+  DatabaseOutlined,
+  ClearOutlined,
+  WarningOutlined,
+  ClockCircleOutlined,
+  StarOutlined,
+  MacCommandOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom'
-import { useMemo, useState, useEffect } from 'react'
-import { authApi } from '../../api'
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
+import type React from 'react'
+import type { MenuProps } from 'antd'
+import { authApi, statsApi } from '../../api'
+import type { TodayAlert } from '../../api/types'
 
 const { Header, Sider, Content } = Layout
 
@@ -61,7 +71,16 @@ const menuItems = [
     ],
   },
   { type: 'divider' as const },
-  { key: '/maintenance', icon: <ToolOutlined />, label: '系统维护' },
+  {
+    key: 'sub-maintenance',
+    icon: <ToolOutlined />,
+    label: '系统维护',
+    children: [
+      { key: '/maintenance', icon: <ClearOutlined />, label: '系统清理' },
+      { key: '/maintenance/db', icon: <DatabaseOutlined />, label: '数据库维护' },
+      { key: '/anticrawl', icon: <ExperimentOutlined />, label: '反爬登录管理' },
+    ],
+  },
 ]
 
 // 路由 → 面包屑映射
@@ -81,13 +100,48 @@ const ROUTE_LABELS: Record<string, string> = {
   '/config/notifier': '通知渠道',
   '/config/ai': 'AI 服务',
   '/config/version': '配置版本',
-  '/maintenance': '系统维护',
+  '/maintenance': '系统清理',
+  '/maintenance/db': '数据库维护',
+  '/anticrawl': '反爬登录管理',
+}
+
+// Command Palette 可搜索的命令列表（扁平化所有页面导航项）
+const COMMAND_ITEMS = [
+  { key: '/', label: '仪表盘', icon: <DashboardOutlined /> },
+  { key: '/tasks', label: '任务管理', icon: <UnorderedListOutlined /> },
+  { key: '/items', label: '商品列表', icon: <ShoppingOutlined /> },
+  { key: '/orders', label: '抢单记录', icon: <ThunderboltOutlined /> },
+  { key: '/evaluations', label: '评估明细', icon: <AuditOutlined /> },
+  { key: '/timeline', label: '事件时间线', icon: <FieldTimeOutlined /> },
+  { key: '/logs', label: '实时日志', icon: <FileTextOutlined /> },
+  { key: '/config/price', label: '价格策略', icon: <DollarOutlined /> },
+  { key: '/config/eval', label: '评估规则', icon: <SafetyCertificateOutlined /> },
+  { key: '/config/buyer', label: '抢单策略', icon: <AimOutlined /> },
+  { key: '/config/search', label: '搜索参数', icon: <SearchOutlined /> },
+  { key: '/config/notifier', label: '通知渠道', icon: <BellOutlined /> },
+  { key: '/config/ai', label: 'AI 服务', icon: <RobotOutlined /> },
+  { key: '/config/version', label: '配置版本', icon: <HistoryOutlined /> },
+  { key: '/maintenance', label: '系统清理', icon: <ClearOutlined /> },
+  { key: '/maintenance/db', label: '数据库维护', icon: <DatabaseOutlined /> },
+  { key: '/anticrawl', label: '反爬登录管理', icon: <ExperimentOutlined /> },
+]
+
+// g+X 全局快捷键映射
+const G_PREFIX_MAP: Record<string, string> = {
+  d: '/',
+  t: '/tasks',
+  o: '/orders',
+  e: '/evaluations',
+  i: '/timeline',
+  c: '/config/price',
+  l: '/logs',
 }
 
 export default function MainLayout() {
   const location = useLocation()
   const navigate = useNavigate()
-  const { token: themeToken } = theme.useToken()
+  // 注意：theme.useToken() 必须在 ConfigProvider 内部调用才能响应暗色算法，
+  // 因此 useToken 的调用被移到下面的 LayoutContent 子组件中。
 
   // 认证状态：SPA 静态文件不需要认证，但 API 调用需要 xh_token cookie
   // 首次加载时调用 /api/auth/me 触发后端设置认证 cookie
@@ -95,6 +149,49 @@ export default function MainLayout() {
   const [loggedIn, setLoggedIn] = useState(false)
   // 侧边栏收缩状态
   const [collapsed, setCollapsed] = useState(false)
+  // 暗色主题：从 localStorage 读取初始值
+  const [isDark, setIsDark] = useState(() => localStorage.getItem('xh.theme') === 'dark')
+
+  // 调度器运行状态（30秒轮询）
+  const [schedulerRunning, setSchedulerRunning] = useState<boolean | null>(null)
+  // 通知抽屉与今日告警
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [todayAlert, setTodayAlert] = useState<TodayAlert | null>(null)
+  const alertCount = todayAlert
+    ? todayAlert.alerts.counts.failed + todayAlert.alerts.counts.timeout + todayAlert.alerts.counts.low_eval
+    : 0
+  // 用 ref 持有轮询定时器，避免组件卸载后仍触发 setState
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Command Palette 状态
+  const [cmdOpen, setCmdOpen] = useState(false)
+  const [cmdSearch, setCmdSearch] = useState('')
+  const [cmdActive, setCmdActive] = useState(0)
+  // g 前缀快捷键：记录是否处于 g 等待第二键的状态
+  const gPrefixRef = useRef(false)
+  const gTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 轮询调度器状态
+  const fetchSchedulerStatus = useCallback(() => {
+    statsApi.overview().then((data) => setSchedulerRunning(data.scheduler_running)).catch(() => setSchedulerRunning(null))
+  }, [])
+
+  // 拉取今日告警
+  const fetchTodayAlert = useCallback(() => {
+    statsApi.today().then(setTodayAlert).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    // 未登录时不启动轮询，避免 401 请求
+    if (!loggedIn) return
+    fetchSchedulerStatus()
+    fetchTodayAlert()
+    pollRef.current = setInterval(() => {
+      fetchSchedulerStatus()
+      fetchTodayAlert()
+    }, 30_000)
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [fetchSchedulerStatus, fetchTodayAlert, loggedIn])
 
   useEffect(() => {
     authApi.getMe().then((data) => {
@@ -103,6 +200,55 @@ export default function MainLayout() {
       .finally(() => setAuthChecked(true))
   }, [])
 
+  // 全局快捷键监听：Ctrl+K 打开 Command Palette，g+X 导航
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // 输入框内不触发快捷键，避免干扰正常输入
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement).isContentEditable) return
+
+      // Ctrl+K：打开 Command Palette
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setCmdOpen(true)
+        setCmdSearch('')
+        setCmdActive(0)
+        return
+      }
+
+      // Escape：关闭 Command Palette
+      if (e.key === 'Escape' && cmdOpen) {
+        e.preventDefault()
+        setCmdOpen(false)
+        return
+      }
+
+      // g 前缀序列：先按 g，500ms 内再按第二个键
+      if (e.key === 'g' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        gPrefixRef.current = true
+        // 超时自动重置 g 前缀状态
+        if (gTimerRef.current) clearTimeout(gTimerRef.current)
+        gTimerRef.current = setTimeout(() => { gPrefixRef.current = false }, 500)
+        return
+      }
+
+      // 处于 g 等待态时，第二个键触发导航
+      if (gPrefixRef.current && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const target = G_PREFIX_MAP[e.key]
+        if (target) {
+          e.preventDefault()
+          navigate(target)
+        }
+        gPrefixRef.current = false
+        if (gTimerRef.current) clearTimeout(gTimerRef.current)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [navigate, cmdOpen])
+
+  // Command Palette 模糊搜索过滤（移到 LayoutContent 内部，因为依赖 ConfigProvider 上下文）
+
   // 所有 hooks 必须在条件性 return 之前调用，否则 React hooks 数量不一致会触发 Error #310
   const allLeafKeys = menuItems.flatMap((item) => {
     if ('children' in item && Array.isArray(item.children)) {
@@ -110,11 +256,16 @@ export default function MainLayout() {
     }
     return item.key && item.key !== '/' ? [item.key] : []
   })
-  const matchedKey = allLeafKeys.find((k) => location.pathname.startsWith(k))
-  const selectedKey = matchedKey || (location.pathname === '/' ? '/' : '/')
+  // 优先精确匹配，其次取最长前缀匹配（避免 /maintenance/db 误匹配到 /maintenance）
+  const matchedKey =
+    allLeafKeys.find((k) => k === location.pathname) ||
+    allLeafKeys
+      .filter((k) => location.pathname.startsWith(k + '/') || location.pathname === k)
+      .sort((a, b) => b.length - a.length)[0]
+  const selectedKey = matchedKey || '/'
 
-  // 根据当前路由自动展开对应的 SubMenu 分组
-  const defaultOpenKeys = useMemo(() => {
+  // 根据当前路由计算应该自动展开的 SubMenu 分组
+  const autoOpenKeys = useMemo(() => {
     const keys: string[] = []
     for (const item of menuItems) {
       if ('children' in item && Array.isArray(item.children) && item.key) {
@@ -125,6 +276,11 @@ export default function MainLayout() {
     }
     return keys
   }, [location.pathname])
+
+  // 受控 openKeys：用户可手动展开/折叠，路由变化时自动展开对应分组
+  const [openKeys, setOpenKeys] = useState<string[]>(autoOpenKeys)
+  // 路由变化时同步自动展开
+  useEffect(() => { setOpenKeys(autoOpenKeys) }, [autoOpenKeys])
 
   const breadcrumbItems = useMemo(() => {
     const items = [{ title: <Link to="/"><HomeOutlined /> 首页</Link> }]
@@ -143,7 +299,7 @@ export default function MainLayout() {
   if (!authChecked) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <Spin size="large" tip="正在验证登录状态..." />
+        <Spin size="large" tip="正在验证登录状态..."><div /></Spin>
       </div>
     )
   }
@@ -170,6 +326,89 @@ export default function MainLayout() {
   }
 
   return (
+    <ConfigProvider theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
+      <LayoutContent
+        isDark={isDark}
+        setIsDark={setIsDark}
+        loggedIn={loggedIn}
+        collapsed={collapsed}
+        setCollapsed={setCollapsed}
+        location={location}
+        navigate={navigate}
+        schedulerRunning={schedulerRunning}
+        todayAlert={todayAlert}
+        alertCount={alertCount}
+        cmdOpen={cmdOpen}
+        setCmdOpen={setCmdOpen}
+        cmdSearch={cmdSearch}
+        setCmdSearch={setCmdSearch}
+        cmdActive={cmdActive}
+        setCmdActive={setCmdActive}
+        breadcrumbItems={breadcrumbItems}
+        selectedKey={selectedKey}
+        openKeys={openKeys}
+        setOpenKeys={setOpenKeys}
+        menuItems={menuItems}
+        gPrefixRef={gPrefixRef}
+        gTimerRef={gTimerRef}
+        drawerOpen={drawerOpen}
+        setDrawerOpen={setDrawerOpen}
+      />
+    </ConfigProvider>
+  )
+}
+
+// 内部子组件：在 ConfigProvider 内部消费 themeToken，确保暗色主题正确应用
+interface LayoutContentProps {
+  isDark: boolean
+  setIsDark: React.Dispatch<React.SetStateAction<boolean>>
+  loggedIn: boolean
+  collapsed: boolean
+  setCollapsed: React.Dispatch<React.SetStateAction<boolean>>
+  location: ReturnType<typeof useLocation>
+  navigate: ReturnType<typeof useNavigate>
+  schedulerRunning: boolean | null
+  todayAlert: TodayAlert | null
+  alertCount: number
+  cmdOpen: boolean
+  setCmdOpen: React.Dispatch<React.SetStateAction<boolean>>
+  cmdSearch: string
+  setCmdSearch: React.Dispatch<React.SetStateAction<string>>
+  cmdActive: number
+  setCmdActive: React.Dispatch<React.SetStateAction<number>>
+  breadcrumbItems: { title: React.ReactNode }[]
+  selectedKey: string
+  openKeys: string[]
+  setOpenKeys: React.Dispatch<React.SetStateAction<string[]>>
+  menuItems: NonNullable<MenuProps['items']>
+  gPrefixRef: React.MutableRefObject<boolean>
+  gTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>
+  drawerOpen: boolean
+  setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
+}
+
+function LayoutContent({
+  isDark, setIsDark, loggedIn, collapsed, setCollapsed, location, navigate,
+  schedulerRunning, todayAlert, alertCount,
+  cmdOpen, setCmdOpen, cmdSearch, setCmdSearch, cmdActive, setCmdActive,
+  breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems,
+  gPrefixRef, gTimerRef, drawerOpen, setDrawerOpen,
+}: LayoutContentProps) {
+  // 必须在 ConfigProvider 内部调用，token 才会响应暗色算法
+  const { token: themeToken } = theme.useToken()
+  // 同步主题到 document.documentElement，便于自定义 CSS（如 .page-container 等）响应主题
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
+  }, [isDark])
+
+  // Command Palette 模糊搜索过滤
+  const filteredCommands = useMemo(() => {
+    if (!cmdSearch.trim()) return COMMAND_ITEMS
+    const kw = cmdSearch.toLowerCase()
+    return COMMAND_ITEMS.filter((item) => item.label.toLowerCase().includes(kw))
+  }, [cmdSearch])
+
+  return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider
         collapsible
@@ -178,6 +417,7 @@ export default function MainLayout() {
         collapsedWidth={64}
         breakpoint="lg"
         trigger={null}
+        theme={isDark ? 'dark' : 'light'}
         style={{
           background: themeToken.colorBgContainer,
           boxShadow: '2px 0 8px rgba(0, 0, 0, 0.04)',
@@ -200,9 +440,17 @@ export default function MainLayout() {
         <Menu
           mode="inline"
           selectedKeys={[selectedKey]}
-          defaultOpenKeys={defaultOpenKeys}
+          openKeys={openKeys}
+          onOpenChange={setOpenKeys}
           items={menuItems}
-          onClick={({ key }) => navigate(key)}
+          onClick={({ key }) => {
+            // SubMenu 父项的 key 是 'sub-data'/'sub-config'/'sub-maintenance'，
+            // 不以 / 开头，antd 在某些版本仍会触发 onClick。
+            // 这里只对路径型 key 调 navigate，避免点击 SubMenu 标题时跳到非法 URL。
+            if (typeof key === 'string' && key.startsWith('/')) {
+              navigate(key)
+            }
+          }}
           inlineCollapsed={collapsed}
           style={{ borderRight: 0 }}
         />
@@ -234,6 +482,67 @@ export default function MainLayout() {
             <Breadcrumb items={breadcrumbItems} className="app-breadcrumb" />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Command Palette 触发按钮 */}
+            <Tooltip title="命令面板 (Ctrl+K)">
+              <Button
+                type="text"
+                shape="circle"
+                size="small"
+                icon={<MacCommandOutlined />}
+                style={{ fontSize: 16, width: 28, height: 28 }}
+                onClick={() => { setCmdOpen(true); setCmdSearch(''); setCmdActive(0) }}
+              />
+            </Tooltip>
+            {/* 调度器状态指示灯：绿色=运行中，红色=已停止 */}
+            <Tooltip title={schedulerRunning === null ? '加载中…' : schedulerRunning ? '调度器运行中' : '调度器已停止'}>
+              <Button
+                type="text"
+                shape="circle"
+                size="small"
+                style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                onClick={() => navigate('/')}
+              >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    background: schedulerRunning === null ? '#d9d9d9' : schedulerRunning ? '#52c41a' : '#ff4d4f',
+                    display: 'inline-block',
+                  }}
+                />
+              </Button>
+            </Tooltip>
+
+            {/* 通知铃铛：Badge 显示今日告警总数 */}
+            <Badge count={alertCount} size="small" offset={[-2, 2]}>
+              <Button
+                type="text"
+                shape="circle"
+                size="small"
+                icon={<BellOutlined />}
+                style={{ fontSize: 16, width: 28, height: 28 }}
+                onClick={() => setDrawerOpen(true)}
+              />
+            </Badge>
+
+            {/* 主题切换按钮 */}
+            <Tooltip title={isDark ? '切换亮色主题' : '切换暗色主题'}>
+              <Button
+                type="text"
+                shape="circle"
+                size="small"
+                style={{ fontSize: 16, width: 28, height: 28 }}
+                onClick={() => {
+                  const next = !isDark
+                  setIsDark(next)
+                  localStorage.setItem('xh.theme', next ? 'dark' : 'light')
+                }}
+              >
+                {isDark ? '☀️' : '🌙'}
+              </Button>
+            </Tooltip>
+
             <Button
               type="text"
               size="small"
@@ -252,12 +561,174 @@ export default function MainLayout() {
             </a>
           </div>
         </Header>
-        <Content style={{ overflow: 'auto', background: '#f5f7fa' }}>
+        <Content style={{ overflow: 'auto', background: themeToken.colorBgLayout }}>
           <div className="fade-in-up" key={location.pathname}>
             <Outlet />
           </div>
         </Content>
       </Layout>
+
+      {/* 通知抽屉：展示今日告警分类列表 */}
+      <Drawer
+        title="今日告警"
+        placement="right"
+        onClose={() => setDrawerOpen(false)}
+        open={drawerOpen}
+        width={420}
+        styles={{ body: { paddingTop: 12 } }}
+      >
+        {todayAlert ? (
+          <>
+            <Collapse
+              defaultActiveKey={['failed', 'timeout', 'low_eval']}
+              ghost
+              items={[
+                {
+                  key: 'failed',
+                  label: (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <WarningOutlined style={{ color: '#ff4d4f' }} />
+                      失败订单
+                      <Tag color="red">{todayAlert.alerts.counts.failed}</Tag>
+                    </span>
+                  ),
+                  children: todayAlert.alerts.failed_orders.length > 0 ? (
+                    <List
+                      size="small"
+                      dataSource={todayAlert.alerts.failed_orders}
+                      renderItem={(o) => (
+                        <List.Item>
+                          <List.Item.Meta
+                            title={<span>#{o.id} {o.title}</span>}
+                            description={`¥${o.amount} · ${o.created_at}`}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  ) : <div style={{ color: themeToken.colorTextSecondary }}>暂无失败订单</div>,
+                },
+                {
+                  key: 'timeout',
+                  label: (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <ClockCircleOutlined style={{ color: '#faad14' }} />
+                      待支付超时
+                      <Tag color="orange">{todayAlert.alerts.counts.timeout}</Tag>
+                    </span>
+                  ),
+                  children: todayAlert.alerts.timeout_pending.length > 0 ? (
+                    <List
+                      size="small"
+                      dataSource={todayAlert.alerts.timeout_pending}
+                      renderItem={(o) => (
+                        <List.Item>
+                          <List.Item.Meta
+                            title={<span>#{o.id} {o.title}</span>}
+                            description={`¥${o.amount} · 超时 ${o.age_sec}s`}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  ) : <div style={{ color: themeToken.colorTextSecondary }}>暂无超时订单</div>,
+                },
+                {
+                  key: 'low_eval',
+                  label: (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <StarOutlined style={{ color: '#722ed1' }} />
+                      低分评估
+                      <Tag color="purple">{todayAlert.alerts.counts.low_eval}</Tag>
+                    </span>
+                  ),
+                  children: todayAlert.alerts.low_evaluations.length > 0 ? (
+                    <List
+                      size="small"
+                      dataSource={todayAlert.alerts.low_evaluations}
+                      renderItem={(e) => (
+                        <List.Item>
+                          <List.Item.Meta
+                            title={<span>{e.message}</span>}
+                            description={<span><Tag>{e.type}</Tag> 评分 {e.score} · {e.created_at}</span>}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  ) : <div style={{ color: themeToken.colorTextSecondary }}>暂无低分评估</div>,
+                },
+              ]}
+            />
+            <div style={{ textAlign: 'center', marginTop: 16 }}>
+              <Link to="/orders" onClick={() => setDrawerOpen(false)}>查看全部 →</Link>
+            </div>
+          </>
+        ) : (
+          <Spin />
+        )}
+      </Drawer>
+
+      {/* Command Palette：Ctrl+K 打开，模糊搜索导航命令 */}
+      <Modal
+        open={cmdOpen}
+        onCancel={() => setCmdOpen(false)}
+        footer={null}
+        closable={false}
+        centered
+        width={520}
+        styles={{ body: { padding: 0 } }}
+      >
+        <div style={{ padding: '12px 16px 0' }}>
+          <Input
+            placeholder="搜索命令…"
+            value={cmdSearch}
+            onChange={(e) => { setCmdSearch(e.target.value); setCmdActive(0) }}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setCmdActive((prev) => Math.min(prev + 1, Math.max(0, filteredCommands.length - 1)))
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setCmdActive((prev) => Math.max(prev - 1, 0))
+              } else if (e.key === 'Enter' && filteredCommands[cmdActive]) {
+                navigate(filteredCommands[cmdActive].key)
+                setCmdOpen(false)
+              } else if (e.key === 'Escape') {
+                setCmdOpen(false)
+              }
+            }}
+            prefix={<SearchOutlined style={{ color: themeToken.colorTextQuaternary }} />}
+            allowClear
+            onClear={() => { setCmdSearch(''); setCmdActive(0) }}
+          />
+        </div>
+        <div style={{ maxHeight: 320, overflowY: 'auto', padding: '8px 0' }}>
+          {filteredCommands.length === 0 ? (
+            <div style={{ textAlign: 'center', color: themeToken.colorTextSecondary, padding: 24 }}>无匹配命令</div>
+          ) : (
+            filteredCommands.map((item, idx) => (
+              <div
+                key={item.key}
+                onClick={() => { navigate(item.key); setCmdOpen(false) }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '8px 16px',
+                  cursor: 'pointer',
+                  background: idx === cmdActive ? themeToken.colorPrimaryBg : undefined,
+                  borderRadius: 4,
+                  margin: '0 8px',
+                }}
+                onMouseEnter={() => setCmdActive(idx)}
+              >
+                <span style={{ fontSize: 16, color: themeToken.colorTextSecondary }}>{item.icon}</span>
+                <span>{item.label}</span>
+                <span style={{ marginLeft: 'auto', fontSize: 12, color: themeToken.colorTextQuaternary }}>{item.key}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </Modal>
     </Layout>
   )
 }

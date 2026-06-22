@@ -11,12 +11,15 @@ import {
   Checkbox,
   Divider,
   Tag,
+  Modal,
+  Table,
 } from 'antd'
 import { SaveOutlined, UndoOutlined, BellOutlined } from '@ant-design/icons'
 import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import dayjs from 'dayjs'
 import { useConfigStore } from '../../../stores/configStore'
+import type { DiffChange } from '../../../stores/configStore'
 import api from '../../../api/client'
 import type { AppConfig } from '../../../api'
 import { defaultChannels, eventTypes, severityColors, type ChannelDef } from './constants'
@@ -25,7 +28,7 @@ import SortableChannelItem from './components/SortableChannelItem'
 import QuietHoursTimeline from './components/QuietHoursTimeline'
 
 export default function NotifierChannels() {
-  const { config, load, save, hasChanges, reset, update } = useConfigStore()
+  const { config, load, save, hasChanges, reset, update, previewSave, confirmSave } = useConfigStore()
   const [channels, setChannels] = useState<ChannelDef[]>(defaultChannels)
   const [channelOrder, setChannelOrder] = useState<string[]>(defaultChannels.map((c) => c.key))
   const [subscribedEvents, setSubscribedEvents] = useState<string[]>(
@@ -33,6 +36,9 @@ export default function NotifierChannels() {
   )
   const [loading, setLoading] = useState(false)
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
+  // Diff 预览
+  const [diffModalOpen, setDiffModalOpen] = useState(false)
+  const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
 
   useEffect(() => {
     load()
@@ -114,7 +120,25 @@ export default function NotifierChannels() {
   const handleSave = async () => {
     try {
       setLoading(true)
-      await save()
+      const changes = await previewSave()
+      if (changes.length === 0) {
+        message.info('配置未变更')
+        return
+      }
+      setDiffChanges(changes)
+      setDiffModalOpen(true)
+    } catch {
+      message.error('预览失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleConfirmSave = async () => {
+    try {
+      setLoading(true)
+      await confirmSave()
+      setDiffModalOpen(false)
       message.success('通知配置已保存')
     } catch {
       message.error('保存失败')
@@ -215,7 +239,7 @@ export default function NotifierChannels() {
                 ))}
               </SortableContext>
             </DndContext>
-            <div style={{ fontSize: 12, color: '#999', marginTop: 12 }}>
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 12 }}>
               按顺序尝试推送，失败则降级到下一个渠道。
             </div>
           </Card>
@@ -277,7 +301,7 @@ export default function NotifierChannels() {
             </Card>
 
             <Card title="事件订阅规则（12 种事件）">
-              <div style={{ marginBottom: 8, fontSize: 12, color: '#999' }}>
+              <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
                 勾选需要推送通知的事件类型：
               </div>
               <Checkbox.Group
@@ -315,13 +339,51 @@ export default function NotifierChannels() {
 
               <Divider />
 
-              <div style={{ fontSize: 12, color: '#999' }}>
+              <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
                 <BellOutlined /> 已订阅 {subscribedEvents.length} / {eventTypes.length} 种事件
               </div>
             </Card>
           </div>
         </Col>
       </Row>
+
+      {/* Diff 预览 Modal */}
+      <Modal
+        title="配置变更预览"
+        open={diffModalOpen}
+        onCancel={() => setDiffModalOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>
+            取消
+          </Button>,
+          <Button key="confirm" type="primary" loading={loading} onClick={handleConfirmSave}>
+            确认保存
+          </Button>,
+        ]}
+        width={700}
+      >
+        <Table
+          dataSource={diffChanges}
+          rowKey="path"
+          pagination={false}
+          size="small"
+          columns={[
+            { title: '路径', dataIndex: 'path', key: 'path' },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
+            {
+              title: '操作',
+              dataIndex: 'op',
+              key: 'op',
+              render: (op: string) => (
+                <Tag color={op === 'add' ? 'green' : op === 'delete' ? 'red' : 'orange'}>
+                  {op === 'add' ? '新增' : op === 'delete' ? '删除' : '修改'}
+                </Tag>
+              ),
+            },
+          ]}
+        />
+      </Modal>
     </div>
   )
 }

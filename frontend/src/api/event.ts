@@ -19,10 +19,11 @@ export const logApi = {
   search: (params: { q?: string; level?: string; tag?: string; task_id?: string; start?: string; limit?: number; offset?: number }) =>
     client
       .get<{
-        results: LogEntry[]
-        matched_levels: string[]
-        matched_tags: string[]
-        total: number
+        items: LogEntry[]
+        count: number
+        matched_levels: Record<string, number>
+        matched_tags: Record<string, number>
+        total_estimate: number
       }>('/api/logs/search', { params })
       .then((r) => r.data),
 

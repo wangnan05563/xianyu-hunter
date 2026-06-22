@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Card, Select, Empty, Button, Tag, Spin, Alert } from 'antd'
+import { Card, Select, Empty, Button, Tag, Spin, Alert, theme } from 'antd'
 import { RobotOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
 import type { HistogramData } from '../../../api'
@@ -20,6 +20,8 @@ export default function PriceHistogramCard({
   histogram, histoTaskId, histoTasks, aiAnalysis, aiLoading,
   onHistoTaskChange, onAiAnalyze, onClearAiAnalysis, onNavigate,
 }: PriceHistogramCardProps) {
+  // 在 ConfigProvider 内部读取 token，让 ECharts 跟随主题
+  const { token } = theme.useToken()
   // 价格直方图（增强版：时间对比基线 + 分位数标线）
   const histogramOption = useMemo(() => {
     if (!histogram?.bins?.length) return null
@@ -53,15 +55,15 @@ export default function PriceHistogramCard({
           }
           return html
         },
-        backgroundColor: 'rgba(255, 255, 255, 0.96)',
-        borderColor: '#f0f0f0',
-        textStyle: { color: '#262626' },
+        backgroundColor: token.colorBgElevated,
+        borderColor: token.colorBorderSecondary,
+        textStyle: { color: token.colorText },
       },
       xAxis: {
         type: 'value',
         name: '价格 (¥)',
-        nameTextStyle: { color: '#8c8c8c' },
-        axisLabel: { color: '#8c8c8c', formatter: (v: number) => v >= 1000 ? (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + 'k' : v },
+        nameTextStyle: { color: token.colorTextTertiary },
+        axisLabel: { color: token.colorTextTertiary, formatter: (v: number) => v >= 1000 ? (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + 'k' : v },
         splitLine: { show: false },
         // 两侧留白，确保边界 markLine 标签不被截断
         boundaryGap: ['3%', '3%'],
@@ -69,9 +71,9 @@ export default function PriceHistogramCard({
       yAxis: {
         type: 'value',
         name: '商品数',
-        nameTextStyle: { color: '#8c8c8c' },
-        axisLabel: { color: '#8c8c8c' },
-        splitLine: { lineStyle: { color: '#f5f5f5' } },
+        nameTextStyle: { color: token.colorTextTertiary },
+        axisLabel: { color: token.colorTextTertiary },
+        splitLine: { lineStyle: { color: token.colorBorderSecondary } },
       },
       series: [{
         type: 'bar',
@@ -91,7 +93,7 @@ export default function PriceHistogramCard({
       // 右侧留出足够空间显示 markLine 标签，避免被截断
       grid: { left: 50, right: 60, bottom: 45, top: 45 },
     }
-  }, [histogram])
+  }, [histogram, token])
 
   return (
     <Card style={{ marginTop: 16 }}
@@ -104,7 +106,7 @@ export default function PriceHistogramCard({
             options={[{ value: 'all', label: '全部任务' }, ...histoTasks.map(t => ({ value: t.id, label: `${t.name || t.keyword || t.id}`.slice(0, 30) }))]}
           />
           {histogram && (
-            <span style={{ fontSize: 11, color: '#8c8c8c' }}>
+            <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>
               均价 ¥{histogram.summary.mean} · 中位 ¥{histogram.summary.median} · {histogram.summary.count} 件
               {histogram.summary.compare.diff_pct !== 0 && (
                 <span style={{ marginLeft: 6, color: histogram.summary.compare.diff_pct > 0 ? '#ff4d4f' : '#52c41a' }}>
@@ -126,26 +128,26 @@ export default function PriceHistogramCard({
       {histogram && histogram.summary.count > 0 && (
         <div style={{ marginTop: 16 }}>
           {/* 快速统计指标 */}
-          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, padding: '8px 12px', background: '#fafafa', borderRadius: 6 }}>
-            <span style={{ fontSize: 12, color: '#595959' }}>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, padding: '8px 12px', background: 'var(--xh-bg-spotlight)', borderRadius: 6 }}>
+            <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
               <Tag color="blue">P25</Tag> ¥{histogram.summary.p25}
             </span>
-            <span style={{ fontSize: 12, color: '#595959' }}>
+            <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
               <Tag color="green">中位数</Tag> ¥{histogram.summary.median}
             </span>
-            <span style={{ fontSize: 12, color: '#595959' }}>
+            <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
               <Tag color="orange">P75</Tag> ¥{histogram.summary.p75}
             </span>
-            <span style={{ fontSize: 12, color: '#595959' }}>
+            <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
               <Tag color="purple">IQR</Tag> ¥{histogram.summary.p25} ~ ¥{histogram.summary.p75}
-              <span style={{ color: '#8c8c8c', marginLeft: 4 }}>
+              <span style={{ color: 'var(--xh-text-tertiary)', marginLeft: 4 }}>
                 ({histogram.summary.p75 - histogram.summary.p25 > 0
                   ? `${((histogram.summary.p75 - histogram.summary.p25) / histogram.summary.median * 100).toFixed(0)}% 离散度`
                   : '低离散'})
               </span>
             </span>
             {histogram.summary.compare.last7d > 0 && (
-              <span style={{ fontSize: 12, color: '#595959' }}>
+              <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
                 <Tag color={histogram.summary.compare.diff_pct > 5 ? 'red' : histogram.summary.compare.diff_pct < -5 ? 'green' : 'default'}>
                   较7日
                 </Tag>
@@ -170,10 +172,10 @@ export default function PriceHistogramCard({
               {aiAnalysis && (
                 <Button type="link" size="small" onClick={onClearAiAnalysis}>清除</Button>
               )}
-              <span style={{ fontSize: 11, color: '#bfbfbf' }}>基于价格分布数据，AI 生成参考建议</span>
+              <span style={{ fontSize: 11, color: 'var(--xh-text-quaternary)' }}>基于价格分布数据，AI 生成参考建议</span>
             </div>
             {aiLoading && (
-              <div style={{ padding: '12px 16px', background: '#fff7e6', borderRadius: 6, fontSize: 13, color: '#d48806' }}>
+              <div style={{ padding: '12px 16px', background: 'var(--xh-bg-warning)', borderRadius: 6, fontSize: 13, color: '#d48806' }}>
                 <Spin size="small" /> AI 正在分析价格数据…
               </div>
             )}

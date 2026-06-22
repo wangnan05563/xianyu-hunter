@@ -2,8 +2,16 @@
 
 提供：
 - save_evaluation / get_latest_evaluation / delete_evaluations_by_task
+- update_evaluation_dimension_scores
+
+定位说明：
+- evaluations 表是 AI 成色评估的缓存（dimension_scores.ai_condition_eval），
+  仅由 F-06 AI 成色评估接口写入，不是评估明细的主数据源。
+- 评估明细、分布、阈值建议等读取 events 表中 type=eval.* 的事件流。
 """
 from __future__ import annotations
+
+import json
 
 from sqlalchemy import delete, select
 
@@ -28,6 +36,20 @@ class EvaluationsMixin:
                 .limit(1)
             ).first()
             return self._row_to_dict(row) if row else None
+
+    def update_evaluation_dimension_scores(self, eval_id: int, dimension_scores: dict) -> None:
+        """更新评估记录的 dimension_scores 字段（用于 AI 成色评估缓存）
+
+        Args:
+            eval_id: evaluations 表主键
+            dimension_scores: 完整的 dimension_scores dict（会序列化为 JSON）
+        """
+        with self.engine.begin() as conn:
+            conn.execute(
+                EvaluationRow.__table__.update()
+                .where(EvaluationRow.id == eval_id)
+                .values(dimension_scores=json.dumps(dimension_scores, ensure_ascii=False))
+            )
 
     def delete_evaluations_by_task(self, task_id: str) -> int:
         """按任务删除评估记录（通过 item_id 间接关联）

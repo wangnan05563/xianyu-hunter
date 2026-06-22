@@ -22,9 +22,11 @@ from xianyu_hunter.web.middleware.exception_handler import register_exception_ha
 from xianyu_hunter.web.startup import setup_startup_hooks
 from xianyu_hunter.web.routes import (
     api_ai,
+    api_anticrawl,
     api_auth,
     api_config,
     api_cron,
+    api_db_admin,
     api_evaluations,
     api_export,
     api_ai_deep,
@@ -128,6 +130,7 @@ def create_app() -> FastAPI:
     app.include_router(api_orders.router)
     app.include_router(api_evaluations.router)
     app.include_router(api_auth.router)
+    app.include_router(api_anticrawl.router)  # 反爬登录管理：策略/会话/健康/Cookie 分层
     app.include_router(api_notifications.router)
     app.include_router(api_items.router)  # P3-UX-02：商品 summary 批量接口（抢单记录列表）
     app.include_router(api_ai.router)  # F-01：AI 自然语言建任务（OpenAI 兼容 + 规则 fallback）
@@ -140,6 +143,7 @@ def create_app() -> FastAPI:
     app.include_router(api_cron.router)  # P1-7：Cron 表达式校验
     app.include_router(price_dashboard.router)  # P1-6：价格行情看板增强
     app.include_router(api_maintenance.router)  # 系统维护：缓存/数据库/日志清理
+    app.include_router(api_db_admin.router)  # 系统维护 → 数据库维护：业务表在线 CRUD
 
     @app.get("/healthz", tags=["meta"])
     def healthz() -> JSONResponse:

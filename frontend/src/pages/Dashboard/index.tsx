@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Spin, Card, Col, Row } from 'antd'
+import { Spin, Card, Col, Row, Alert, Button, Space } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
   taskApi, configApi, statsApi, priceApi,
@@ -168,6 +168,38 @@ export default function Dashboard() {
   return (
     <div className="page-container">
       <Spin spinning={loading}>
+        {/* 引导 Banner：无任务时显示欢迎引导 */}
+        {overview && overview.tasks.total === 0 && overview.tasks.running === 0 && (
+          <Alert
+            type="info"
+            message="欢迎使用闲鱼猎人！"
+            description="还没有任务，创建第一个任务开始监控吧"
+            showIcon
+            style={{ marginBottom: 16 }}
+            action={
+              <Space direction="vertical">
+                <Button size="small" type="primary" onClick={() => navigate('/tasks/new')}>
+                  创建任务
+                </Button>
+                <Button size="small" onClick={() => navigate('/onboarding')}>
+                  查看引导
+                </Button>
+              </Space>
+            }
+          />
+        )}
+
+        {/* 调度器未运行警告 */}
+        {overview && !overview.scheduler_running && (
+          <Alert
+            type="warning"
+            message="调度器未运行"
+            description="调度器未运行，任务不会自动执行。请启动调度器。"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+        )}
+
         {/* 统计卡 + Sparkline */}
         <StatCardsSection overview={overview} sparklines={sparklines} onNavigate={navigate} />
 
@@ -210,28 +242,70 @@ export default function Dashboard() {
               <Card className="quick-entry-card" size="small" onClick={() => navigate('/tasks/new')}>
                 <QuickEntryIcon type="task" size={48} />
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>任务创建</div>
-                <div style={{ fontSize: 12, color: '#8c8c8c' }}>向导式配置</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>向导式配置</div>
               </Card>
             </Col>
             <Col xs={12} md={6}>
               <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/price')}>
                 <QuickEntryIcon type="price" size={48} />
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>价格策略</div>
-                <div style={{ fontSize: 12, color: '#8c8c8c' }}>滑块 + 预览</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>滑块 + 预览</div>
               </Card>
             </Col>
             <Col xs={12} md={6}>
               <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/eval')}>
                 <QuickEntryIcon type="eval" size={48} />
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>评估规则</div>
-                <div style={{ fontSize: 12, color: '#8c8c8c' }}>雷达图可视化</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>雷达图可视化</div>
               </Card>
             </Col>
             <Col xs={12} md={6}>
               <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/notifier')}>
                 <QuickEntryIcon type="notifier" size={48} />
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>通知渠道</div>
-                <div style={{ fontSize: 12, color: '#8c8c8c' }}>拖拽排序</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>拖拽排序</div>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/ai')}>
+                <QuickEntryIcon type="ai" size={48} />
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>AI 服务</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>模型与深度分析</div>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/buyer')}>
+                <QuickEntryIcon type="buyer" size={48} />
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>抢单策略</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>极速抢占配置</div>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/search')}>
+                <QuickEntryIcon type="search" size={48} />
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>搜索参数</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>筛选与过滤</div>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/version')}>
+                <QuickEntryIcon type="version" size={48} />
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>配置版本</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>版本回滚管理</div>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card className="quick-entry-card" size="small" onClick={() => navigate('/maintenance')}>
+                <QuickEntryIcon type="cleanup" size={48} />
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>系统清理</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>缓存与日志维护</div>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card className="quick-entry-card" size="small" onClick={() => navigate('/maintenance/db')}>
+                <QuickEntryIcon type="dbAdmin" size={48} />
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>数据库维护</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>业务表在线管理</div>
               </Card>
             </Col>
           </Row>

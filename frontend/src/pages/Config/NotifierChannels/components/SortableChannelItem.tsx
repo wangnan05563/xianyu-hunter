@@ -29,8 +29,8 @@ export default function SortableChannelItem({ channel, index }: SortableChannelI
         alignItems: 'center',
         padding: '8px 12px',
         marginBottom: 4,
-        background: '#fafafa',
-        border: '1px solid #d9d9d9',
+        background: 'var(--xh-bg-spotlight)',
+        border: '1px solid var(--xh-border-secondary)',
         borderRadius: 4,
       }}
     >
@@ -40,7 +40,7 @@ export default function SortableChannelItem({ channel, index }: SortableChannelI
       <Tag color="blue">{index}</Tag>
       <span style={{ fontSize: 18, marginRight: 8 }}>{channel.icon}</span>
       <span style={{ fontWeight: 500 }}>{channel.name}</span>
-      <span style={{ fontSize: 11, color: '#999', marginLeft: 8 }}>{channel.desc}</span>
+      <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginLeft: 8 }}>{channel.desc}</span>
       <Tag color={channel.enabled ? 'green' : 'default'} style={{ marginLeft: 'auto' }}>
         {channel.enabled ? '启用' : '禁用'}
       </Tag>

@@ -157,8 +157,8 @@ export default function AIConfig() {
       <Card
         style={{
           marginBottom: 16,
-          border: '2px solid #d9d9d9',
-          background: '#fafafa',
+          border: '2px solid var(--xh-border-secondary)',
+          background: 'var(--xh-bg-spotlight)',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -169,7 +169,7 @@ export default function AIConfig() {
                 {config.ai_enabled ? '已开启' : '已关闭'}
               </Tag>
             </h3>
-            <p style={{ marginTop: 4, color: '#999', margin: '4px 0 0' }}>
+            <p style={{ marginTop: 4, color: 'var(--xh-text-tertiary)', margin: '4px 0 0' }}>
               关闭后所有 AI 功能将降级到规则模式，不消耗任何 token
             </p>
           </div>
@@ -203,7 +203,7 @@ export default function AIConfig() {
               pointerEvents: 'auto',
             }}
           >
-            <Text strong style={{ fontSize: 18, color: '#999' }}>
+            <Text strong style={{ fontSize: 18, color: 'var(--xh-text-tertiary)' }}>
               AI 功能已关闭，以下配置不可用
             </Text>
           </div>

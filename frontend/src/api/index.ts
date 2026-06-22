@@ -11,8 +11,22 @@ export { statsApi } from './stats'
 export { aiApi } from './ai'
 export { priceApi } from './price'
 export { authApi } from './auth'
+export { anticrawlApi } from './anticrawl'
+export type {
+  StrategyEvaluation,
+  InitializeResult,
+  SessionStatus,
+  FingerprintInfo,
+  FreqStats,
+  CookieLayersResult,
+  HealthReport,
+  OperationResult,
+} from './anticrawl'
 export { maintenanceApi } from './maintenance'
+export { dbAdminApi } from './dbAdmin'
 export { orderApi } from './order'
 export { evalApi } from './evaluation'
 export { timelineApi, logApi } from './event'
 export { itemApi } from './item'
+export { templateApi } from './template'
+export type { TaskTemplate, TemplateCreateBody } from './template'

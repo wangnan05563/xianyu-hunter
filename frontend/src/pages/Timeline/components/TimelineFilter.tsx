@@ -47,7 +47,7 @@ export default function TimelineFilter({
       </Space>
 
       {/* 事件类型过滤（与通知订阅联动） */}
-      <div style={{ marginBottom: 16, padding: '8px 12px', background: '#fafafa', borderRadius: 6 }}>
+      <div style={{ marginBottom: 16, padding: '8px 12px', background: 'var(--xh-bg-spotlight)', borderRadius: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontWeight: 500, fontSize: 13 }}>事件类型过滤</span>
           <Button size="small" icon={<SyncOutlined />} onClick={onSyncFromNotifier} title="从通知配置同步订阅规则">
@@ -58,7 +58,7 @@ export default function TimelineFilter({
               清除过滤
             </Button>
           )}
-          <span style={{ color: '#999', fontSize: 11, marginLeft: 'auto' }}>
+          <span style={{ color: 'var(--xh-text-tertiary)', fontSize: 11, marginLeft: 'auto' }}>
             {eventTypeFilter.length > 0
               ? `已选 ${eventTypeFilter.length} / ${EVENT_TYPE_OPTIONS.length} 种`
               : '显示全部事件类型'}

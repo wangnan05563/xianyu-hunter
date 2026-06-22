@@ -80,7 +80,7 @@ export default function TrendSparkline({ trend, loading, error, onLoad }: TrendS
             } text={
               trend.trend === 'up' ? '涨价 ↑' : trend.trend === 'down' ? '降价 ↓' : '稳定 →'
             } />
-            <span style={{ marginLeft: 12, fontSize: 12, color: '#999' }}>
+            <span style={{ marginLeft: 12, fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
               {trend.items_count} 件商品 / 均价 ¥{trend.current_avg}
             </span>
           </div>

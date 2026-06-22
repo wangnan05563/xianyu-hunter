@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Card, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Tag, Alert, Spin, Empty } from 'antd'
+import { Card, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Tag, Alert, Spin, Empty, Modal, Table } from 'antd'
 import { SaveOutlined, UndoOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import ReactECharts from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
+import type { DiffChange } from '../../stores/configStore'
 import { evalApi } from '../../api'
 import TagEditor from '../../components/editors/TagEditor'
 
 export default function EvalRules() {
-  const { config, load, save, hasChanges, reset, update } = useConfigStore()
+  const { config, load, save, hasChanges, reset, update, previewSave, confirmSave, getFieldOriginal, revertField } = useConfigStore()
   const [loading, setLoading] = useState(false)
   const [distData, setDistData] = useState<{
     buckets: Array<Array<{ count: number; pass: number; auto: number; fail: number }>>
@@ -15,6 +16,10 @@ export default function EvalRules() {
     total: number
   } | null>(null)
   const [distLoading, setDistLoading] = useState(false)
+  // Diff 预览
+  const [diffModalOpen, setDiffModalOpen] = useState(false)
+  const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     load()
@@ -203,13 +208,31 @@ export default function EvalRules() {
       return
     }
     try {
-      setLoading(true)
-      await save()
+      setSaving(true)
+      const changes = await previewSave()
+      if (changes.length === 0) {
+        message.info('配置未变更')
+        return
+      }
+      setDiffChanges(changes)
+      setDiffModalOpen(true)
+    } catch {
+      message.error('预览失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleConfirmSave = async () => {
+    try {
+      setSaving(true)
+      await confirmSave()
+      setDiffModalOpen(false)
       message.success('评估规则已保存')
     } catch {
       message.error('保存失败')
     } finally {
-      setLoading(false)
+      setSaving(false)
     }
   }
 
@@ -221,7 +244,7 @@ export default function EvalRules() {
           <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置
           </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={loading}>
+          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             保存
           </Button>
         </Space>
@@ -255,24 +278,36 @@ export default function EvalRules() {
               value={weights.professional}
               onChange={(v) => updateWeight('professional', v)}
               help="在售商品 / 30天发布 / 描述中含职业关键词 → 扣分"
+              revertPath="eval.weights.professional"
+              originalValue={getFieldOriginal('eval.weights.professional')}
+              onRevert={revertField}
             />
             <WeightSlider
               label="信誉权重"
               value={weights.credit}
               onChange={(v) => updateWeight('credit', v)}
               help="芝麻信用 / 实名认证 / 注册天数 → 加分"
+              revertPath="eval.weights.credit"
+              originalValue={getFieldOriginal('eval.weights.credit')}
+              onRevert={revertField}
             />
             <WeightSlider
               label="纠纷权重"
               value={weights.dispute}
               onChange={(v) => updateWeight('dispute', v)}
               help="差评数 / 退款率 / 投诉 → 减分"
+              revertPath="eval.weights.dispute"
+              originalValue={getFieldOriginal('eval.weights.dispute')}
+              onRevert={revertField}
             />
             <WeightSlider
               label="价格权重"
               value={weights.price}
               onChange={(v) => updateWeight('price', v)}
               help="商品价 / 市场价比例 → 加分"
+              revertPath="eval.weights.price"
+              originalValue={getFieldOriginal('eval.weights.price')}
+              onRevert={revertField}
             />
 
             <Divider />
@@ -361,9 +396,14 @@ export default function EvalRules() {
               )}
               <div style={{ marginBottom: 16 }}>
                 <div style={{ marginBottom: 8 }}>
-                  <strong>通过分数（pass_score）：</strong>
-                  <Tag color="green">{evalConfig.pass_score}</Tag>
-                  <span style={{ fontSize: 12, color: '#999' }}>≥ 此分数：通知用户</span>
+                  <Space>
+                    <strong>通过分数（pass_score）：</strong>
+                    <Tag color="green">{evalConfig.pass_score}</Tag>
+                    {evalConfig.pass_score !== getFieldOriginal('eval.pass_score') && (
+                      <Button size="small" type="link" onClick={() => revertField('eval.pass_score')} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                    )}
+                  </Space>
+                  <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>≥ 此分数：通知用户</span>
                 </div>
                 <Slider
                   min={0}
@@ -380,9 +420,14 @@ export default function EvalRules() {
 
               <div>
                 <div style={{ marginBottom: 8 }}>
-                  <strong>自动抢单分数（auto_buy_score）：</strong>
-                  <Tag color="orange">{evalConfig.auto_buy_score}</Tag>
-                  <span style={{ fontSize: 12, color: '#999' }}>≥ 此分数：全自动拍下</span>
+                  <Space>
+                    <strong>自动抢单分数（auto_buy_score）：</strong>
+                    <Tag color="orange">{evalConfig.auto_buy_score}</Tag>
+                    {evalConfig.auto_buy_score !== getFieldOriginal('eval.auto_buy_score') && (
+                      <Button size="small" type="link" onClick={() => revertField('eval.auto_buy_score')} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                    )}
+                  </Space>
+                  <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>≥ 此分数：全自动拍下</span>
                 </div>
                 <Slider
                   min={0}
@@ -403,7 +448,7 @@ export default function EvalRules() {
                 {heatmapOption ? (
                   <>
                     <ReactECharts option={heatmapOption} style={{ height: 280 }} />
-                    <div style={{ fontSize: 11, color: '#999' }}>
+                    <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>
                       颜色越深表示该区间的商品数越多（近 7 天数据）。绿色区=通过，橙色区=自动抢单。
                     </div>
                   </>
@@ -424,13 +469,51 @@ export default function EvalRules() {
                 placeholder="输入职业关键词后回车，如：批发、代理"
                 color="orange"
               />
-              <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>
+              <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 8 }}>
                 商品描述中包含这些关键词时，职业度评分会被扣减。
               </div>
             </Card>
           </div>
         </Col>
       </Row>
+
+      {/* Diff 预览 Modal */}
+      <Modal
+        title="配置变更预览"
+        open={diffModalOpen}
+        onCancel={() => setDiffModalOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>
+            取消
+          </Button>,
+          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>
+            确认保存
+          </Button>,
+        ]}
+        width={700}
+      >
+        <Table
+          dataSource={diffChanges}
+          rowKey="path"
+          pagination={false}
+          size="small"
+          columns={[
+            { title: '路径', dataIndex: 'path', key: 'path' },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
+            {
+              title: '操作',
+              dataIndex: 'op',
+              key: 'op',
+              render: (op: string) => (
+                <Tag color={op === 'add' ? 'green' : op === 'delete' ? 'red' : 'orange'}>
+                  {op === 'add' ? '新增' : op === 'delete' ? '删除' : '修改'}
+                </Tag>
+              ),
+            },
+          ]}
+        />
+      </Modal>
     </div>
   )
 }
@@ -445,6 +528,9 @@ function WeightSlider({
   step = 1,
   help,
   formatter,
+  revertPath,
+  originalValue,
+  onRevert,
 }: {
   label: string
   value: number
@@ -454,21 +540,33 @@ function WeightSlider({
   step?: number
   help?: string
   formatter?: (v: number) => string
+  revertPath?: string
+  originalValue?: unknown
+  onRevert?: (path: string) => void
 }) {
+  // 仅当值与原始值不同时显示回滚按钮
+  const showRevert = revertPath && originalValue !== undefined && value !== originalValue
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
         <span style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
-        <InputNumber
-          size="small"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(v) => onChange(v || 0)}
-          style={{ width: 80 }}
-          formatter={formatter ? (v) => formatter(v || 0) : undefined}
-        />
+        <Space size={4}>
+          {showRevert && (
+            <Button size="small" type="link" onClick={() => onRevert?.(revertPath)} style={{ padding: 0, fontSize: 12 }}>
+              ⏪
+            </Button>
+          )}
+          <InputNumber
+            size="small"
+            min={min}
+            max={max}
+            step={step}
+            value={value}
+            onChange={(v) => onChange(v || 0)}
+            style={{ width: 80 }}
+            formatter={formatter ? (v) => formatter(v || 0) : undefined}
+          />
+        </Space>
       </div>
       <Slider
         min={min}
@@ -478,7 +576,7 @@ function WeightSlider({
         onChange={onChange}
         tooltip={{ formatter: formatter ? (v) => formatter(v || 0) : undefined }}
       />
-      {help && <div style={{ fontSize: 11, color: '#999' }}>{help}</div>}
+      {help && <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{help}</div>}
     </div>
   )
 }

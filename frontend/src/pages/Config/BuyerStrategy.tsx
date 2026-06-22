@@ -10,9 +10,12 @@ import {
   Typography,
   Row,
   Col,
+  Modal,
+  Table,
 } from 'antd'
 import { SaveOutlined, UndoOutlined, BellOutlined, AimOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons'
 import { useConfigStore } from '../../stores/configStore'
+import type { DiffChange } from '../../stores/configStore'
 
 const { Text, Paragraph } = Typography
 
@@ -45,8 +48,12 @@ const MODES = [
 ] as const
 
 export default function BuyerStrategy() {
-  const { config, load, save, hasChanges, reset, update } = useConfigStore()
+  const { config, load, save, hasChanges, reset, update, previewSave, confirmSave } = useConfigStore()
   const [loading, setLoading] = useState(false)
+  // Diff 预览
+  const [diffModalOpen, setDiffModalOpen] = useState(false)
+  const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     load()
@@ -86,13 +93,31 @@ export default function BuyerStrategy() {
 
   const handleSave = async () => {
     try {
-      setLoading(true)
-      await save()
+      setSaving(true)
+      const changes = await previewSave()
+      if (changes.length === 0) {
+        message.info('配置未变更')
+        return
+      }
+      setDiffChanges(changes)
+      setDiffModalOpen(true)
+    } catch {
+      message.error('预览失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleConfirmSave = async () => {
+    try {
+      setSaving(true)
+      await confirmSave()
+      setDiffModalOpen(false)
       message.success('抢单策略已保存')
     } catch {
       message.error('保存失败')
     } finally {
-      setLoading(false)
+      setSaving(false)
     }
   }
 
@@ -108,7 +133,7 @@ export default function BuyerStrategy() {
           <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置
           </Button>
-          <Button type="primary" style={{ backgroundColor: '#FF6200' }} icon={<SaveOutlined />} onClick={handleSave} loading={loading}>
+          <Button type="primary" style={{ backgroundColor: '#FF6200' }} icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             保存
           </Button>
         </Space>
@@ -180,7 +205,7 @@ export default function BuyerStrategy() {
                 >
                   {mode.label}
                 </Tag>
-                <p style={{ margin: '8px 0 0', color: '#555', fontSize: 13 }}>{mode.desc}</p>
+                <p style={{ margin: '8px 0 0', color: 'var(--xh-text-secondary)', fontSize: 13 }}>{mode.desc}</p>
               </Card>
             </Col>
           ))}
@@ -193,7 +218,7 @@ export default function BuyerStrategy() {
           <li><Text>auto_buy_score ≥ 80 才启用 auto 模式</Text></li>
           <li>
             <Text>单日抢单数量上限：在 </Text>
-            <code style={{ background: '#f5f5f5', padding: '2px 6px', borderRadius: 3 }}>buyer_config.py</code>
+            <code style={{ background: 'var(--xh-bg-code)', padding: '2px 6px', borderRadius: 3 }}>buyer_config.py</code>
             <Text> 中配置（待 UI 化）</Text>
           </li>
           <li><Text>支付前暂停：默认开启（在 Dashboard 可手动接管）</Text></li>
@@ -211,6 +236,44 @@ export default function BuyerStrategy() {
           style={{ marginTop: 16 }}
         />
       </Card>
+
+      {/* Diff 预览 Modal */}
+      <Modal
+        title="配置变更预览"
+        open={diffModalOpen}
+        onCancel={() => setDiffModalOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>
+            取消
+          </Button>,
+          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>
+            确认保存
+          </Button>,
+        ]}
+        width={700}
+      >
+        <Table
+          dataSource={diffChanges}
+          rowKey="path"
+          pagination={false}
+          size="small"
+          columns={[
+            { title: '路径', dataIndex: 'path', key: 'path' },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
+            {
+              title: '操作',
+              dataIndex: 'op',
+              key: 'op',
+              render: (op: string) => (
+                <Tag color={op === 'add' ? 'green' : op === 'delete' ? 'red' : 'orange'}>
+                  {op === 'add' ? '新增' : op === 'delete' ? '删除' : '修改'}
+                </Tag>
+              ),
+            },
+          ]}
+        />
+      </Modal>
     </div>
   )
 }

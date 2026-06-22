@@ -13,11 +13,11 @@ export default function BudgetSettings({ budget, onBudgetChange, saving, onSave 
   return (
     <>
       <h3 style={{ marginBottom: 8 }}>预算控制</h3>
-      <p style={{ color: '#999', marginBottom: 16 }}>
+      <p style={{ color: 'var(--xh-text-tertiary)', marginBottom: 16 }}>
         超出预算后 AI 调用自动降级到规则模式，不影响系统正常使用。
       </p>
 
-      <Card style={{ background: '#fafafa' }}>
+      <Card style={{ background: 'var(--xh-bg-spotlight)' }}>
         <Row gutter={16}>
           <Col span={8}>
             <div>

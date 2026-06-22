@@ -26,9 +26,8 @@ from pydantic import BaseModel, Field
 from xianyu_hunter.config import get_settings, update_ai_config
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.ai_usage import check_budget, record_usage
-from xianyu_hunter.infra.db_models import _utcnow, EvaluationRow, EventRow
+from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.web.deps import get_container
-from sqlalchemy import select
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -594,31 +593,17 @@ async def evaluate_condition(
     # 场景：实时搜索(live_links)或轻量评估生成的 eval.scored 事件
     #       商品未写入 items 表，但 payload 中有 item_title / item_price
     if not item:
-        engine = container.repo.engine
-        with engine.connect() as conn:
-            evt_row = conn.execute(
-                select(EventRow.payload)
-                .where(
-                    EventRow.item_id == body.item_id,
-                    EventRow.type.like("eval.%"),
-                )
-                .order_by(EventRow.created_at.desc())
-                .limit(1)
-            ).first()
-        if evt_row and evt_row.payload:
-            try:
-                payload = json.loads(evt_row.payload) if isinstance(evt_row.payload, str) else evt_row.payload
-                # 用 payload 字段构造伪 item dict，字段名对齐 items 表结构
-                item = {
-                    "id": body.item_id,
-                    "title": payload.get("item_title") or payload.get("title") or "",
-                    "price": payload.get("item_price") or payload.get("price") or 0,
-                    "description": "",   # payload 不含 description，LLM 仅基于标题+价格评估
-                    "image_urls": [],    # payload 不含 image_urls，无图走规则模拟
-                }
-                logger.info(f"[F-06] items 表无记录，从 eval 事件 payload 回退: item_id={body.item_id}")
-            except (json.JSONDecodeError, TypeError) as e:
-                logger.warning(f"[F-06] payload 解析失败: item_id={body.item_id}, error={e}")
+        payload = container.repo.get_eval_payload_by_item(body.item_id)
+        if payload:
+            # 用 payload 字段构造伪 item dict，字段名对齐 items 表结构
+            item = {
+                "id": body.item_id,
+                "title": payload.get("item_title") or payload.get("title") or "",
+                "price": payload.get("item_price") or payload.get("price") or 0,
+                "description": "",   # payload 不含 description，LLM 仅基于标题+价格评估
+                "image_urls": [],    # payload 不含 image_urls，无图走规则模拟
+            }
+            logger.info(f"[F-06] items 表无记录，从 eval 事件 payload 回退: item_id={body.item_id}")
 
     if not item:
         raise HTTPException(status_code=404, detail=f"商品 {body.item_id} 不存在")
@@ -686,14 +671,10 @@ async def evaluate_condition(
                 except (json.JSONDecodeError, TypeError):
                     dim_scores = {}
             dim_scores["ai_condition_eval"] = result
-            # 通过 update_event_payload 的方式更新（evaluations 表没有直接 update 方法，
-            # 所以用 raw SQL 更新 dimension_scores 字段）
-            with container.repo.engine.begin() as conn:
-                conn.execute(
-                    EvaluationRow.__table__.update()
-                    .where(EvaluationRow.id == existing_eval["id"])
-                    .values(dimension_scores=json.dumps(dim_scores, ensure_ascii=False))
-                )
+            # 通过 Repository 方法更新 dimension_scores 字段
+            container.repo.update_evaluation_dimension_scores(
+                existing_eval["id"], dim_scores
+            )
         else:
             # 创建新的评估记录（仅 AI 成色评估，score 用 condition_score * 10 映射到 0-100）
             eval_data = {

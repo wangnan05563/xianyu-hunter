@@ -149,6 +149,18 @@ export interface TaskLink {
   }
 }
 
+// 字段元数据：描述每个字段的显示方式（标签、类型、宽度）
+// 前端根据此元数据动态渲染列，当接口字段变化时前端展示自动调整
+export interface FieldMeta {
+  label: string  // 列标题
+  type: 'image' | 'link' | 'price' | 'seller' | 'tag' | 'text' | 'number' | 'datetime' | 'status'
+  width?: number  // 列宽度（px），undefined 表示自适应
+  color?: string  // Tag 颜色（type='tag' 时使用）
+}
+
+// 字段映射表：字段名 → 字段元数据
+export type FieldMap = Record<string, FieldMeta>
+
 // ============== 商品 ==============
 
 export interface ItemSummary {
@@ -239,6 +251,10 @@ export interface AIParseTaskResult {
   min_price: number | null
   max_price: number | null
   mode: string
+  exclude_words?: string[]
+  notes?: string
+  reason?: string
+  source?: 'llm' | 'rule'
   [k: string]: unknown
 }
 
@@ -379,6 +395,68 @@ export interface CleanupBody {
   target: string
   days?: number
   dry_run: boolean
+}
+
+// ============== 数据库维护（系统维护 → 数据库维护）==============
+
+// 表结构中的单列描述
+export interface DbColumn {
+  name: string
+  type: string
+  nullable: boolean
+  default: string | null
+  primary_key: boolean
+  label: string  // 中文语义标注（业务含义+数据类型+使用场景+约束条件）
+}
+
+export interface DbSchema {
+  table: string
+  columns: DbColumn[]
+}
+
+export interface DbTableInfo {
+  name: string
+  rows: number
+}
+
+export interface DbTablesResponse {
+  tables: DbTableInfo[]
+}
+
+export interface DbRowListResponse {
+  table: string
+  total: number
+  limit: number
+  offset: number
+  rows: Record<string, unknown>[]
+}
+
+export interface DbAuditLogItem {
+  id: number
+  type: string
+  level: string
+  message: string
+  payload: string | null
+  created_at: string
+}
+
+export interface DbAuditLogResponse {
+  items: DbAuditLogItem[]
+}
+
+// 级联影响预览
+export interface CascadeRelation {
+  table: string
+  fk: string
+  action: 'cascade' | 'set_null'
+  count: number
+  description: string
+}
+
+export interface CascadePreviewResponse {
+  table: string
+  relations: CascadeRelation[]
+  total_affected: number
 }
 
 // ============== 认证 ==============

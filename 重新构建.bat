@@ -1,13 +1,14 @@
 @echo off
-REM 指定 Node.js 24 路径，避免使用系统 PATH 中的旧版本
-set PATH=D:\code\nodejs24;%PATH%
+REM Prepend Node.js 24 to PATH so all child processes (vite, esbuild, rollup,
+REM tsc, etc.) resolve "node" to v24 instead of the legacy v14 on system PATH.
+set "PATH=D:\code\nodejs24;%PATH%"
 
 echo ============================================
 echo   Xianyu Hunter - Frontend Rebuild
 echo ============================================
 echo.
-echo Node: 
-call node --version
+echo Node:
+D:\code\nodejs24\node.exe --version
 echo.
 
 cd /d "%~dp0frontend"
@@ -20,7 +21,7 @@ if exist "..\src\xianyu_hunter\web\static\spa" (
 
 echo.
 echo [2/2] Building frontend...
-call npx vite build
+D:\code\nodejs24\node.exe "node_modules\vite\bin\vite.js" build
 
 if %ERRORLEVEL% NEQ 0 (
     echo.

@@ -152,9 +152,13 @@ export default function Maintenance() {
         dry_run: logForm.dry_run,
       })
       setLogResult(result)
+      // 预览模式也必须给出明确反馈，否则用户无法判断是否有可清理内容
+      const count = result.cleaned?.length ?? 0
       if (!logForm.dry_run) {
         await loadStatus()
-        message.success('日志清理完成')
+        message.success(count > 0 ? `日志清理完成，共处理 ${count} 项` : '没有需要清理的日志文件')
+      } else {
+        message.info(count > 0 ? `预览完成：将处理 ${count} 项日志` : '预览完成：无需要清理的日志文件')
       }
     } catch (error) {
       setLogResult({ errors: ['清理失败：' + String(error)] })
@@ -220,7 +224,7 @@ export default function Maintenance() {
               suffix="MB"
               valueStyle={{ color: '#FF6200' }}
             />
-            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
               {status?.db?.tasks ?? 0} 任务 · {status?.db?.items ?? 0} 商品 · {status?.db?.events ?? 0} 事件
             </div>
           </Col>
@@ -233,7 +237,7 @@ export default function Maintenance() {
               suffix="MB"
               valueStyle={{ color: '#FF6200' }}
             />
-            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
               {status?.logs?.file_count ?? 0} 个文件{status?.logs?.oldest ? ` · 最早 ${status.logs.oldest}` : ''}
             </div>
           </Col>
@@ -246,7 +250,7 @@ export default function Maintenance() {
               suffix="MB"
               valueStyle={{ color: '#FF6200' }}
             />
-            <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
               浏览器 {status?.cache?.browser_data_mb ?? 0}MB · Py缓存 {status?.cache?.pycache_count ?? 0}个/{status?.cache?.pycache_mb ?? 0}MB
             </div>
           </Col>

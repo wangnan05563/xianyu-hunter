@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Card, Descriptions, Tag, Button, Space, Spin, Row, Col, Table, Empty, message, Statistic, Tabs, List,
+  Select, Popconfirm, Radio,
 } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined,
+  SearchOutlined, SyncOutlined, DeleteOutlined, PlusOutlined,
 } from '@ant-design/icons'
 import ReactECharts from '../../components/charts/EChart'
-import { taskApi, taskDetailApi, evalApi, type Task, type TaskRun, type TaskDep, type EvalItem } from '../../api'
+import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
 import { STATUS_COLOR } from '../../constants/statusColors'
 
 export default function TaskDetail() {
@@ -21,6 +23,41 @@ export default function TaskDetail() {
   const [evals, setEvals] = useState<EvalItem[]>([])
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
+
+  // 商品链接 Tab 状态
+  const [linkType, setLinkType] = useState<'item' | 'seller'>('item')
+  const [links, setLinks] = useState<TaskLink[]>([])
+  const [linkTotal, setLinkTotal] = useState(0)
+  const [linkPage, setLinkPage] = useState(1)
+  const [linkLoading, setLinkLoading] = useState(false)
+  const [liveLoading, setLiveLoading] = useState(false)
+  const [refreshLoading, setRefreshLoading] = useState(false)
+  const linkPageSize = 20
+
+  // 依赖关系管理状态
+  const [allTasks, setAllTasks] = useState<Task[]>([])
+  const [addDepTaskId, setAddDepTaskId] = useState<string | null>(null)
+  const [addDepLoading, setAddDepLoading] = useState(false)
+
+  // 趋势线状态
+  const [trendRange, setTrendRange] = useState<24 | 72 | 168>(24)
+  const [evalTrend, setEvalTrend] = useState<TrendSeries | null>(null)
+  const [eventsTrend, setEventsTrend] = useState<TrendSeries | null>(null)
+  const [trendLoading, setTrendLoading] = useState(false)
+
+  const loadTrends = useCallback(() => {
+    if (!id) return
+    setTrendLoading(true)
+    Promise.all([
+      statsApi.trend({ metric: 'eval_score', task_id: id, range_hours: trendRange }).catch(() => null),
+      statsApi.trend({ metric: 'events', task_id: id, range_hours: trendRange }).catch(() => null),
+    ]).then(([ev, evs]) => {
+      setEvalTrend(ev as TrendSeries | null)
+      setEventsTrend(evs as TrendSeries | null)
+    }).finally(() => setTrendLoading(false))
+  }, [id, trendRange])
+
+  useEffect(() => { loadTrends() }, [loadTrends])
 
   const load = () => {
     if (!id) return
@@ -42,7 +79,102 @@ export default function TaskDetail() {
     })
   }
 
+  // 加载商品链接
+  const loadLinks = useCallback(() => {
+    if (!id) return
+    setLinkLoading(true)
+    const offset = (linkPage - 1) * linkPageSize
+    taskLinkApi.list(id, { type: linkType, limit: linkPageSize, offset })
+      .then((res) => {
+        setLinks(res.items)
+        setLinkTotal(res.total_for_type)
+      })
+      .catch(() => message.error('加载链接失败'))
+      .finally(() => setLinkLoading(false))
+  }, [id, linkType, linkPage])
+
   useEffect(() => { load() }, [id])
+  useEffect(() => { loadLinks() }, [loadLinks])
+
+  // 切换类型时重置页码
+  const handleLinkTypeChange = (type: 'item' | 'seller') => {
+    setLinkType(type)
+    setLinkPage(1)
+  }
+
+  // 删除关联链接
+  const handleRemoveLink = (linkId: number) => {
+    if (!id) return
+    taskLinkApi.remove(id, linkId).then(() => {
+      message.success('已删除')
+      loadLinks()
+    }).catch(() => message.error('删除失败'))
+  }
+
+  // 实时查询
+  const handleLive = () => {
+    if (!id) return
+    setLiveLoading(true)
+    taskLinkApi.live(id)
+      .then(() => {
+        message.success('实时查询完成')
+        loadLinks()
+      })
+      .catch(() => message.error('实时查询失败'))
+      .finally(() => setLiveLoading(false))
+  }
+
+  // 刷新数据源
+  const handleRefresh = () => {
+    if (!id) return
+    setRefreshLoading(true)
+    taskLinkApi.refresh(id)
+      .then((res) => {
+        message.success(`刷新完成：发现 ${res.found} 条，保存 ${res.saved} 条`)
+        loadLinks()
+      })
+      .catch(() => message.error('刷新失败'))
+      .finally(() => setRefreshLoading(false))
+  }
+
+  // 加载可选任务列表（添加依赖时用）
+  const loadAllTasks = () => {
+    taskApi.list({ limit: 200 })
+      .then((res) => setAllTasks(res.items))
+      .catch(() => message.error('加载任务列表失败'))
+  }
+
+  // 添加上游依赖
+  const handleAddDep = () => {
+    if (!id || !addDepTaskId) return
+    setAddDepLoading(true)
+    taskDetailApi.addDep(id, addDepTaskId)
+      .then(() => {
+        message.success('添加依赖成功')
+        setAddDepTaskId(null)
+        // 刷新依赖列表
+        Promise.all([
+          taskDetailApi.deps(id).catch(() => []),
+          taskDetailApi.dependents(id).catch(() => []),
+        ]).then(([d, dep]) => {
+          setDeps((d as TaskDep[]) || [])
+          setDependents((dep as TaskDep[]) || [])
+        })
+      })
+      .catch(() => message.error('添加依赖失败'))
+      .finally(() => setAddDepLoading(false))
+  }
+
+  // 移除上游依赖
+  const handleRemoveDep = (dependsOn: string) => {
+    if (!id) return
+    taskDetailApi.removeDep(id, dependsOn)
+      .then(() => {
+        message.success('移除依赖成功')
+        setDeps((prev) => prev.filter((d) => d.depends_on !== dependsOn))
+      })
+      .catch(() => message.error('移除依赖失败'))
+  }
 
   const handleControl = (action: 'pause' | 'resume' | 'stop' | 'restart') => {
     if (!id) return
@@ -98,6 +230,46 @@ export default function TaskDetail() {
     { title: '警告', dataIndex: 'warn_count', key: 'warn_count', width: 80, render: (v: number) => v > 0 ? <Tag color="orange">{v}</Tag> : v },
   ]
 
+  // 商品链接表格列
+  const linkColumns = [
+    {
+      title: '标题', key: 'title', ellipsis: true,
+      render: (_: unknown, r: TaskLink) => r.display?.title || '—',
+    },
+    {
+      title: '价格', key: 'price', width: 100,
+      render: (_: unknown, r: TaskLink) => r.display?.price != null ? `¥${r.display.price}` : '—',
+    },
+    {
+      title: '卖家昵称', key: 'seller_nick', width: 120, ellipsis: true,
+      render: (_: unknown, r: TaskLink) => r.display?.seller_nick || '—',
+    },
+    {
+      title: '地区', key: 'region', width: 80,
+      render: (_: unknown, r: TaskLink) => r.display?.region || '—',
+    },
+    {
+      title: '发布时间', key: 'publish_time', width: 170,
+      render: (_: unknown, r: TaskLink) => r.display?.publish_time ? new Date(r.display.publish_time).toLocaleString('zh-CN') : '—',
+    },
+    {
+      title: '来源', key: 'source', width: 80,
+      render: (_: unknown, r: TaskLink) => <Tag>{r.source}</Tag>,
+    },
+    {
+      title: '操作', key: 'action', width: 80,
+      render: (_: unknown, r: TaskLink) => (
+        <Popconfirm title="确认删除此关联？" onConfirm={() => handleRemoveLink(r.link_id)} okText="删除" cancelText="取消">
+          <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除</Button>
+        </Popconfirm>
+      ),
+    },
+  ]
+
+  // 过滤掉当前任务和已有的上游依赖，避免重复添加
+  const depIds = new Set(deps.map((d) => d.depends_on))
+  const availableTasks = allTasks.filter((t) => t.id !== id && !depIds.has(t.id))
+
   return (
     <div className="page-container">
       <Space style={{ marginBottom: 16 }}>
@@ -132,6 +304,65 @@ export default function TaskDetail() {
               </Descriptions>
             </Card>
 
+            {/* 趋势线卡片：评估分 + 事件密度双 sparkline */}
+            <Card
+              title="趋势概览"
+              style={{ marginBottom: 16 }}
+              extra={
+                <Radio.Group
+                  value={trendRange}
+                  onChange={(e) => setTrendRange(e.target.value)}
+                  size="small"
+                  optionType="button"
+                  buttonStyle="solid"
+                  options={[
+                    { value: 24, label: '24h' },
+                    { value: 72, label: '3d' },
+                    { value: 168, label: '7d' },
+                  ]}
+                />
+              }
+            >
+              <Spin spinning={trendLoading}>
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <div style={{ textAlign: 'center', marginBottom: 4, color: 'var(--xh-text-secondary)', fontSize: 13 }}>评估分趋势</div>
+                    {evalTrend && evalTrend.series.length > 0 ? (
+                      <ReactECharts
+                        option={{
+                          tooltip: { trigger: 'axis' },
+                          grid: { left: 40, right: 10, top: 10, bottom: 24 },
+                          xAxis: { type: 'category', data: evalTrend.series.map((p) => new Date(p.ts).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })), show: true, axisLabel: { fontSize: 10 } },
+                          yAxis: { type: 'value', min: (value: { min: number }) => Math.floor(value.min * 0.9), axisLabel: { fontSize: 10 } },
+                          series: [{ type: 'line', data: evalTrend.series.map((p) => p.value), smooth: true, symbol: 'none', lineStyle: { width: 2, color: '#1890ff' }, areaStyle: { color: 'rgba(24,144,255,0.1)' } }],
+                        }}
+                        style={{ height: 120 }}
+                      />
+                    ) : (
+                      <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    )}
+                  </Col>
+                  <Col span={12}>
+                    <div style={{ textAlign: 'center', marginBottom: 4, color: 'var(--xh-text-secondary)', fontSize: 13 }}>事件密度趋势</div>
+                    {eventsTrend && eventsTrend.series.length > 0 ? (
+                      <ReactECharts
+                        option={{
+                          tooltip: { trigger: 'axis' },
+                          grid: { left: 40, right: 10, top: 10, bottom: 24 },
+                          xAxis: { type: 'category', data: eventsTrend.series.map((p) => new Date(p.ts).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })), show: true, axisLabel: { fontSize: 10 } },
+                          yAxis: { type: 'value', axisLabel: { fontSize: 10 } },
+                          series: [{ type: 'line', data: eventsTrend.series.map((p) => p.count), smooth: true, symbol: 'none', lineStyle: { width: 2, color: '#52c41a' }, areaStyle: { color: 'rgba(82,196,26,0.1)' } }],
+                        }}
+                        style={{ height: 120 }}
+                      />
+                    ) : (
+                      <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    )}
+                  </Col>
+                </Row>
+              </Spin>
+            </Card>
+
             <Tabs
               items={[
                 {
@@ -147,7 +378,7 @@ export default function TaskDetail() {
                         <div style={{ marginTop: 16 }}>
                           <h4>空闲间隔（{idleGaps.length}）</h4>
                           {idleGaps.slice(0, 5).map((g, i) => (
-                            <div key={i} style={{ fontSize: 12, color: '#999' }}>
+                            <div key={i} style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
                               {new Date(g.from).toLocaleString('zh-CN')} → {new Date(g.to).toLocaleString('zh-CN')}（{Math.floor(g.duration_s / 60)}分钟）
                             </div>
                           ))}
@@ -173,13 +404,55 @@ export default function TaskDetail() {
                   children: (
                     <Row gutter={16}>
                       <Col span={12}>
-                        <Card title="上游依赖（本任务依赖的任务）" size="small">
+                        <Card
+                          title="上游依赖（本任务依赖的任务）"
+                          size="small"
+                          extra={
+                            <Button
+                              type="link"
+                              size="small"
+                              icon={<PlusOutlined />}
+                              onClick={loadAllTasks}
+                            >
+                              添加依赖
+                            </Button>
+                          }
+                        >
+                          {/* 添加依赖的输入行 */}
+                          {allTasks.length > 0 && (
+                            <div style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
+                              <Select
+                                placeholder="选择任务"
+                                style={{ flex: 1 }}
+                                value={addDepTaskId}
+                                onChange={setAddDepTaskId}
+                                showSearch
+                                optionFilterProp="label"
+                                options={availableTasks.map((t) => ({ value: t.id, label: `${t.name} (${t.keyword})` }))}
+                              />
+                              <Button
+                                type="primary"
+                                size="small"
+                                loading={addDepLoading}
+                                disabled={!addDepTaskId}
+                                onClick={handleAddDep}
+                              >
+                                添加
+                              </Button>
+                            </div>
+                          )}
                           {deps.length === 0 ? <Empty description="无上游依赖" /> : (
                             <List
                               size="small"
                               dataSource={deps}
                               renderItem={(d) => (
-                                <List.Item>
+                                <List.Item
+                                  extra={
+                                    <Popconfirm title="确认移除此依赖？" onConfirm={() => handleRemoveDep(d.depends_on)} okText="移除" cancelText="取消">
+                                      <Button type="link" danger size="small">移除</Button>
+                                    </Popconfirm>
+                                  }
+                                >
                                   <Space>
                                     <Tag color="blue">{d.depends_on}</Tag>
                                     {d.depends_on_name || '—'}
@@ -209,6 +482,57 @@ export default function TaskDetail() {
                         </Card>
                       </Col>
                     </Row>
+                  ),
+                },
+                {
+                  key: 'links',
+                  label: '商品链接',
+                  children: (
+                    <Card>
+                      <Space style={{ marginBottom: 16 }} wrap>
+                        {/* 商品/卖家类型切换 */}
+                        <Select
+                          value={linkType}
+                          onChange={handleLinkTypeChange}
+                          style={{ width: 120 }}
+                          options={[
+                            { value: 'item', label: '商品' },
+                            { value: 'seller', label: '卖家' },
+                          ]}
+                        />
+                        {/* 实时查询：长轮询拉取最新数据 */}
+                        <Button
+                          icon={<SearchOutlined />}
+                          loading={liveLoading}
+                          onClick={handleLive}
+                        >
+                          实时查询
+                        </Button>
+                        {/* 刷新数据源：触发后端重新搜索并写入 */}
+                        <Button
+                          icon={<SyncOutlined />}
+                          loading={refreshLoading}
+                          onClick={handleRefresh}
+                        >
+                          刷新数据源
+                        </Button>
+                      </Space>
+                      <Table
+                        columns={linkColumns}
+                        dataSource={links}
+                        rowKey="link_id"
+                        size="small"
+                        loading={linkLoading}
+                        pagination={{
+                          current: linkPage,
+                          pageSize: linkPageSize,
+                          total: linkTotal,
+                          showSizeChanger: false,
+                          showTotal: (total) => `共 ${total} 条`,
+                          onChange: (page) => setLinkPage(page),
+                        }}
+                      />
+                    </Card>
                   ),
                 },
               ]}

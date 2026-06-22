@@ -262,13 +262,18 @@ class TaskScheduler:
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"[Task {task_id}] run_once 异常: {e}")
                 h.task.status = TaskStatus.ERROR
-                # M-01 修复：增加连续失败计数器，超过阈值自动暂停并告警
+                # 连续失败计数：超过阈值自动暂停（阈值由 antidetect.fail_pause_threshold 配置）
                 h.consecutive_errors = getattr(h, 'consecutive_errors', 0) + 1
-                MAX_CONSECUTIVE_ERRORS = 10
-                if h.consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                # 读取用户配置的失败暂停阈值（默认 3），而非硬编码 10
+                try:
+                    from xianyu_hunter.infra.yaml_config import get_config
+                    max_errors = get_config().antidetect.fail_pause_threshold
+                except Exception:
+                    max_errors = 3
+                if h.consecutive_errors >= max_errors:
                     logger.error(
                         f"[Task {task_id}] 连续失败 {h.consecutive_errors} 次，"
-                        f"达到阈值 {MAX_CONSECUTIVE_ERRORS}，自动暂停任务"
+                        f"达到阈值 {max_errors}，自动暂停任务"
                     )
                     h.task.status = TaskStatus.PAUSED
                     break

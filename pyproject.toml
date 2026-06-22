@@ -41,10 +41,6 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
-# 已废弃：WebView2 登录方式（仅 webview_login.py 引用，建议移除）
-webview = [
-    "pywebview>=5.0",
-]
 
 [project.scripts]
 xianyu-hunter = "xianyu_hunter.__main__:app"

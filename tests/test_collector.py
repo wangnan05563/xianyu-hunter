@@ -9,6 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from xianyu_hunter.modules.collector import Collector
+from xianyu_hunter.modules.collector._search import (
+    _cookies_from_set_cookie_headers,
+    _sync_response_cookies_to_context,
+)
 
 
 class FakeElement:
@@ -110,6 +114,42 @@ class FakePage:
         return None
 
 
+class FakeContext:
+    """模拟 Playwright BrowserContext 的 cookie 写入能力"""
+
+    def __init__(self):
+        self.added_cookies: list[dict[str, Any]] = []
+
+    async def add_cookies(self, cookies: list[dict[str, Any]]) -> None:
+        self.added_cookies.extend(cookies)
+
+
+class FakeCookiePage:
+    """用于测试 route.fetch() 响应 cookie 同步的 Page 子集"""
+
+    def __init__(self):
+        self.context = FakeContext()
+
+
+class FakeApiResponse:
+    """模拟 Playwright APIResponse 的响应头接口"""
+
+    url = "https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/"
+
+    @property
+    def headers_array(self) -> list[dict[str, str]]:
+        return [
+            {
+                "name": "set-cookie",
+                "value": "_m_h5_tk=token_1700000000000; Domain=.goofish.com; Path=/; Secure; HttpOnly; SameSite=None",
+            },
+            {
+                "name": "set-cookie",
+                "value": "_m_h5_tk_enc=enc_value; Domain=.goofish.com; Path=/; Secure",
+            },
+        ]
+
+
 @pytest.fixture
 def fake_browser() -> Any:
     """Mock BrowserManager"""
@@ -158,6 +198,39 @@ def test_extract_item_id_no_match() -> None:
 def test_extract_item_id_userId_distinguished() -> None:
     """不应把 userId 当 itemId"""
     assert Collector._extract_item_id("/user/12345") == ""
+
+
+def test_parse_mtop_set_cookie_headers_for_browser_context() -> None:
+    """MTOP 下发的新 token cookie 应能转换为 Playwright cookie 结构"""
+    cookies = _cookies_from_set_cookie_headers(
+        [
+            "_m_h5_tk=token_1700000000000; Domain=.goofish.com; Path=/; Secure; HttpOnly; SameSite=None",
+        ],
+        "https://h5api.m.goofish.com/h5/test/1.0/",
+    )
+
+    assert cookies == [
+        {
+            "name": "_m_h5_tk",
+            "value": "token_1700000000000",
+            "path": "/",
+            "domain": ".goofish.com",
+            "secure": True,
+            "httpOnly": True,
+            "sameSite": "None",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_sync_mtop_set_cookie_response_to_context() -> None:
+    """route.fetch() 捕获到的 Set-Cookie 应手动写回浏览器上下文"""
+    page = FakeCookiePage()
+
+    synced = await _sync_response_cookies_to_context(page, FakeApiResponse())
+
+    assert synced == 2
+    assert [c["name"] for c in page.context.added_cookies] == ["_m_h5_tk", "_m_h5_tk_enc"]
 
 
 # ============== 集成测试（mock page） ==============

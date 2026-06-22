@@ -176,7 +176,13 @@ class BrowserManager:
             await self._start_launch()
 
     async def _start_launch(self) -> None:
-        """launch 模式：Playwright 直接启动 Chromium + stealth 脚本"""
+        """launch 模式：Playwright 直接启动 Chromium + stealth 脚本
+
+        集成 LoginOrchestrator 的 FingerprintProfile：
+        - 若 orchestrator 已初始化（launch 模式），使用 profile 生成的一致指纹脚本
+          和 profile 的 UA/viewport，保证指纹内部一致（UA ↔ GPU ↔ 屏幕）
+        - 若 orchestrator 未初始化，回退到原有 STEALTH_SCRIPT_V2，保持向后兼容
+        """
         # 反爬启动参数：--headless=new（Chromium ≥128）比旧 headless 更难检测
         launch_args = [
             "--headless=new",
@@ -200,22 +206,62 @@ class BrowserManager:
             "--disable-gpu",
         ]
 
+        # 尝试从 LoginOrchestrator 获取指纹 profile
+        # 若 orchestrator 已初始化且为 launch 模式，使用 profile 的 UA 和 viewport
+        # 保证 UA ↔ GPU ↔ 屏幕分辨率三者一致，避免被 AWSC fireyejs 识破
+        effective_ua = self.user_agent
+        effective_viewport = self.viewport
+        stealth_scripts: list[str] = []
+
+        try:
+            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+            orch = get_orchestrator()
+            profile = orch.get_fingerprint_profile()
+            if profile is not None:
+                # 使用 profile 的 UA 和 viewport，保证一致性
+                effective_ua = profile.ua
+                effective_viewport = {
+                    "width": profile.screen_width,
+                    "height": profile.screen_height,
+                }
+                stealth_scripts = orch.get_stealth_scripts()
+                logger.info(
+                    "使用 FingerprintProfile: name=%s, ua=%s, viewport=%s",
+                    profile.name, profile.ua[:50], effective_viewport,
+                )
+        except Exception as e:
+            logger.debug("未使用 LoginOrchestrator 指纹（回退到默认）: %s", e)
+
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(self.user_data_dir),
             headless=self.headless,
-            user_agent=self.user_agent,
-            viewport=self.viewport,
+            user_agent=effective_ua,
+            viewport=effective_viewport,
             locale="zh-CN",
             timezone_id="Asia/Shanghai",
             args=launch_args,
         )
-        # 注入增强版 stealth 脚本（延迟 import，避开循环依赖）
+
+        # 注入 stealth 脚本
+        # 优先使用 orchestrator 提供的脚本（基于 FingerprintProfile），
+        # 否则回退到原有 STEALTH_SCRIPT_V2 + M5TK_AUTO_REFRESH_SCRIPT
         from xianyu_hunter.modules.anti_detect import STEALTH_SCRIPT_V2, M5TK_AUTO_REFRESH_SCRIPT
 
-        await self._context.add_init_script(STEALTH_SCRIPT_V2)
-        await self._context.add_init_script(M5TK_AUTO_REFRESH_SCRIPT)
+        if stealth_scripts:
+            for script in stealth_scripts:
+                await self._context.add_init_script(script)
+            # M5TK 自动刷新脚本与指纹无关，始终注入
+            await self._context.add_init_script(M5TK_AUTO_REFRESH_SCRIPT)
+            logger.info(
+                "浏览器启动完成，已注入 %d 个指纹脚本 + m5tk 自动刷新脚本",
+                len(stealth_scripts),
+            )
+        else:
+            await self._context.add_init_script(STEALTH_SCRIPT_V2)
+            await self._context.add_init_script(M5TK_AUTO_REFRESH_SCRIPT)
+            logger.info("浏览器启动完成，stealth + m5tk 自动刷新脚本已注入（默认）")
+
         self._browser = self._context.browser
-        logger.info("浏览器启动完成，stealth + m5tk 自动刷新脚本已注入")
 
     @staticmethod
     def _find_edge() -> str | None:

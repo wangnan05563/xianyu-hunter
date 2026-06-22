@@ -70,7 +70,7 @@ eval:
   - 现货
   - 大量有货
   pass_score: 60
-  auto_buy_score: 80
+  auto_buy_score: 79
   ai_auto_eval: false
   ai_auto_deep_analyze: false
 serverchan_send_key: ''

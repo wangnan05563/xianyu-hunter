@@ -5,7 +5,7 @@ import {
 } from '@ant-design/icons'
 import { timelineApi, taskApi, configApi, type TimelineEntry, type Task } from '../../api'
 import {
-  EVENT_TYPE_OPTIONS, ENUM_TO_DOT,
+  EVENT_TYPE_OPTIONS, EVENT_TYPE_VALUES, ENUM_TO_DOT,
 } from '../../constants/eventTypes'
 import TimelineFilter from './components/TimelineFilter'
 import TimelineList from './components/TimelineList'
@@ -29,16 +29,37 @@ export default function TimelinePage() {
   }, [])
 
   // 从通知配置同步事件订阅规则到过滤条件
+  // 三段式判断，避免"配置映射出无效类型"导致所有事件被过滤掉的回归：
+  //   1) 配置中没有合法枚举 → 不过滤（兜底，避免空过滤反而误过滤）
+  //   2) 配置订阅了所有合法类型 → 不过滤（无需过滤）
+  //   3) 部分订阅 → 仅保留 EVENT_TYPE_VALUES 中真实存在的值作为过滤项
+  // 额外把无法识别的枚举打印到 console，让用户/开发者知道配置漂移
   const syncFromNotifier = useCallback(async () => {
     try {
       const cfg = await configApi.get()
       const subscribed: string[] = cfg?.notifier?.subscribed_events || []
-      const mapped = subscribed.map(e => ENUM_TO_DOT[e]).filter(Boolean) as string[]
-      if (mapped.length > 0 && mapped.length < EVENT_TYPE_OPTIONS.length) {
-        setEventTypeFilter(mapped)
-      } else {
-        // 全部订阅或空订阅 → 不过滤
+      const validEnums = new Set(Object.keys(ENUM_TO_DOT))
+      const recognized = subscribed.filter((e) => validEnums.has(e))
+      const unknown = subscribed.filter((e) => !validEnums.has(e))
+      if (unknown.length > 0) {
+        console.warn(
+          '[Timeline] subscribed_events 中存在无法识别的枚举，已忽略:',
+          unknown,
+        )
+      }
+      const mapped = recognized
+        .map((e) => ENUM_TO_DOT[e])
+        // 二次校验：mapped 的 value 必须落在 EVENT_TYPE_OPTIONS 中，
+        // 否则同步后会导致 eventTypeFilter 包含"无人能匹配"的 type
+        .filter((v) => EVENT_TYPE_VALUES.has(v))
+
+      if (mapped.length === 0) {
         setEventTypeFilter([])
+      } else if (mapped.length >= EVENT_TYPE_OPTIONS.length) {
+        // 全部合法类型都订阅了 → 无需过滤
+        setEventTypeFilter([])
+      } else {
+        setEventTypeFilter(mapped)
       }
     } catch { /* 静默忽略，保持当前过滤状态 */ }
   }, [])

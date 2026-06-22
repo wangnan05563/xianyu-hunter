@@ -1,0 +1,100 @@
+import client from './client'
+import type {
+  DbColumn,
+  DbSchema,
+  DbTableInfo,
+  DbRowListResponse,
+  DbTablesResponse,
+  DbAuditLogResponse,
+  CascadePreviewResponse,
+} from './types'
+
+// 数据库维护 API：业务表在线 CRUD（系统维护 → 数据库维护）
+// 所有危险操作（删除/批量删除/导入）必须传 confirm_token=CONFIRM_DELETE
+export const CONFIRM_TOKEN = 'CONFIRM_DELETE'
+
+export const dbAdminApi = {
+  // 列出表白名单及行数（侧边栏数据）
+  listTables: () => client.get<DbTablesResponse>('/api/db-admin/tables').then((r) => r.data),
+
+  // 取表结构（动态生成编辑表单用）
+  getSchema: (table: string) =>
+    client.get<DbSchema>(`/api/db-admin/tables/${table}/schema`).then((r) => r.data),
+
+  // 分页查询（支持 search/order_by）
+  listRows: (
+    table: string,
+    params: { limit?: number; offset?: number; order_by?: string; search?: string } = {},
+  ) =>
+    client
+      .get<DbRowListResponse>(`/api/db-admin/tables/${table}/rows`, { params })
+      .then((r) => r.data),
+
+  // 新增一行
+  createRow: (table: string, values: Record<string, unknown>) =>
+    client.post<{ ok: boolean; table: string }>(`/api/db-admin/tables/${table}/rows`, { values }).then((r) => r.data),
+
+  // 按主键更新
+  updateRow: (table: string, pkValue: string | number, values: Record<string, unknown>) =>
+    client
+      .patch<{ ok: boolean; affected: number }>(`/api/db-admin/tables/${table}/rows/${encodeURIComponent(String(pkValue))}`, {
+        values,
+      })
+      .then((r) => r.data),
+
+  // 删除单行（query 传 confirm_token，返回含级联影响）
+  deleteRow: (table: string, pkValue: string | number) =>
+    client
+      .delete<{ ok: boolean; affected: number; cascade: Record<string, number> }>(
+        `/api/db-admin/tables/${table}/rows/${encodeURIComponent(String(pkValue))}`,
+        { params: { confirm_token: CONFIRM_TOKEN } },
+      )
+      .then((r) => r.data),
+
+  // 批量删除（返回含级联影响）
+  batchDelete: (table: string, ids: Array<string | number>) =>
+    client
+      .post<{ ok: boolean; requested: number; affected: number; cascade: Record<string, number> }>(
+        `/api/db-admin/tables/${table}/rows/batch-delete`,
+        { ids, confirm_token: CONFIRM_TOKEN },
+      )
+      .then((r) => r.data),
+
+  // 级联影响预览（删除前调用，返回各关联表将被影响的行数）
+  cascadePreview: (table: string, ids: Array<string | number>) =>
+    client
+      .post<CascadePreviewResponse>(`/api/db-admin/tables/${table}/cascade-preview`, { ids })
+      .then((r) => r.data),
+
+  // 导出（返回 blob，浏览器侧触发下载）
+  exportRows: async (table: string, format: 'csv' | 'json') => {
+    const res = await client.get(`/api/db-admin/tables/${table}/export`, {
+      params: { format },
+      responseType: 'blob',
+    })
+    return res.data as Blob
+  },
+
+  // 导入（二维数组 + 表头）
+  importRows: (
+    table: string,
+    rows: unknown[][],
+    headers?: string[],
+    mode: 'insert' | 'replace' = 'insert',
+  ) =>
+    client
+      .post<{ ok: boolean; total: number; inserted: number; skipped: number; errors: string[] }>(
+        `/api/db-admin/tables/${table}/import`,
+        { rows, headers, mode, confirm_token: CONFIRM_TOKEN },
+      )
+      .then((r) => r.data),
+
+  // 审计日志
+  getAuditLog: (limit = 100) =>
+    client.get<DbAuditLogResponse>('/api/db-admin/audit-log', { params: { limit } }).then((r) => r.data),
+}
+
+// 重新导出类型便于前端页面 import
+// 用 `export type { ... } from` 转发可避免 isolatedModules 下
+// 「declares locally, but it is not exported」误报（import 的类型无法被 re-export）
+export type { DbColumn, DbTableInfo, CascadePreviewResponse } from './types'

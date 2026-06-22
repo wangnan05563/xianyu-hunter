@@ -1,5 +1,5 @@
 import client from './client'
-import type { Task, TaskCreateBody, TaskRun, TaskDep, TaskLink } from './types'
+import type { Task, TaskCreateBody, TaskRun, TaskDep, TaskLink, FieldMap } from './types'
 
 // 任务 API：负责任务的 CRUD 与运行控制
 // start/pause/resume/stop 统一委托 control 端点，避免后端多次实现相似逻辑
@@ -25,8 +25,12 @@ export const taskApi = {
 
   start: (id: string) => taskApi.control(id, 'restart'),
   pause: (id: string) => taskApi.control(id, 'pause'),
-  resume: (id: string) => taskApi.control(id, 'restart'),
+  resume: (id: string) => taskApi.control(id, 'resume'),
   stop: (id: string) => taskApi.control(id, 'stop'),
+
+  // 批量操作：对多个任务同时执行 pause/resume/stop/restart/delete
+  batchControl: (taskIds: string[], action: 'pause' | 'resume' | 'stop' | 'restart' | 'delete') =>
+    client.post('/api/tasks/batch-control', { task_ids: taskIds, action }).then((r) => r.data),
 }
 
 // Cron 校验 API：独立于任务 CRUD，专用于表达式校验与下次触发预览
@@ -48,15 +52,25 @@ export const taskDetailApi = {
       )
       .then((r) => r.data),
 
-  deps: (taskId: string) => client.get<TaskDep[]>(`/api/tasks/${taskId}/deps`).then((r) => r.data),
+  deps: (taskId: string) =>
+    client.get<{ task_id: string; deps: TaskDep[] }>(`/api/tasks/${taskId}/deps`).then((r) => r.data.deps),
 
   dependents: (taskId: string) =>
-    client.get<TaskDep[]>(`/api/tasks/${taskId}/dependents`).then((r) => r.data),
+    client.get<{ task_id: string; dependents: TaskDep[] }>(`/api/tasks/${taskId}/dependents`).then((r) => r.data.dependents),
+
+  addDep: (taskId: string, dependsOn: string) =>
+    client.post(`/api/tasks/${taskId}/deps`, { depends_on: dependsOn }).then((r) => r.data),
+
+  removeDep: (taskId: string, dependsOn: string) =>
+    client.delete(`/api/tasks/${taskId}/deps`, { data: { depends_on: dependsOn } }).then((r) => r.data),
 }
 
 // 任务关联（商品列表）API：管理任务下挂载的商品/卖家链接
 export const taskLinkApi = {
-  list: (taskId: string, params: { type?: string; limit?: number; offset?: number }) =>
+  list: (
+    taskId: string,
+    params: { type?: string; limit?: number; offset?: number; keyword?: string; region?: string },
+  ) =>
     client
       .get<{ items: TaskLink[]; total: number; total_for_type: number }>(`/api/tasks/${taskId}/links`, { params })
       .then((r) => r.data),
@@ -65,8 +79,9 @@ export const taskLinkApi = {
     client.get<{ item: number; seller: number; total: number }>(`/api/tasks/${taskId}/links/count`).then((r) => r.data),
 
   // 长轮询实时拉取，超时放宽到 120s（闲鱼搜索+DOM解析耗时较长）
+  // field_map: 字段元数据，前端根据此动态渲染列头，避免列头与内容不匹配
   live: (taskId: string) =>
-    client.get<{ items: TaskLink[]; session_expired?: boolean }>(`/api/tasks/${taskId}/links/live`, { timeout: 120000 }).then((r) => r.data),
+    client.get<{ items: TaskLink[]; session_expired?: boolean; field_map?: FieldMap }>(`/api/tasks/${taskId}/links/live`, { timeout: 120000 }).then((r) => r.data),
 
   // 实时搜索并写入 DB，返回写入统计（刷新数据源用）
   refresh: (taskId: string) =>
@@ -74,4 +89,8 @@ export const taskLinkApi = {
 
   remove: (taskId: string, linkId: number) =>
     client.delete(`/api/tasks/${taskId}/links/${linkId}`).then((r) => r.data),
+
+  // 手动添加关联（商品 ID / 卖家 ID）
+  create: (taskId: string, body: { link_type: string; link_key: string; note?: string }) =>
+    client.post(`/api/tasks/${taskId}/links`, body).then((r) => r.data),
 }

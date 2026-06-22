@@ -35,7 +35,7 @@ export default function ChannelCard({
           <span style={{ fontSize: 20 }}>{ch.icon}</span>
           <div>
             <div style={{ fontWeight: 600 }}>{ch.name}</div>
-            <div style={{ fontSize: 11, color: '#999' }}>{ch.desc}</div>
+            <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{ch.desc}</div>
           </div>
         </Space>
         <Switch checked={ch.enabled} onChange={(v) => onToggle(ch.key, v)} />
@@ -45,7 +45,7 @@ export default function ChannelCard({
         <div style={{ marginTop: 12 }}>
           {ch.fields.map((field) => (
             <div key={field.key} style={{ marginBottom: 8 }}>
-              <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{field.label}</div>
+              <div style={{ fontSize: 12, color: 'var(--xh-text-secondary)', marginBottom: 4 }}>{field.label}</div>
               <Input.Password
                 placeholder={field.placeholder}
                 value={(config as unknown as Record<string, unknown>)[field.key] as string}

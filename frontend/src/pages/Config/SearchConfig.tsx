@@ -12,9 +12,13 @@ import {
   Col,
   Divider,
   Typography,
+  Modal,
+  Table,
+  Tag,
 } from 'antd'
 import { SaveOutlined, UndoOutlined, SearchOutlined } from '@ant-design/icons'
 import { useConfigStore } from '../../stores/configStore'
+import type { DiffChange } from '../../stores/configStore'
 import TagEditor from '../../components/editors/TagEditor'
 
 const { Text } = Typography
@@ -50,8 +54,12 @@ const PAGE_SIZE_OPTIONS = [
  * 控制闲鱼搜索行为：间隔、排序、过滤、超时、重试等
  */
 export default function SearchConfig() {
-  const { config, load, save, hasChanges, reset, update } = useConfigStore()
+  const { config, load, save, hasChanges, reset, update, previewSave, confirmSave } = useConfigStore()
   const [loading, setLoading] = useState(false)
+  // Diff 预览
+  const [diffModalOpen, setDiffModalOpen] = useState(false)
+  const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
+  const [saving, setSaving] = useState(false)
 
   // 本地状态：搜索配置字段（部分来自 antidetect，部分为搜索专用）
   const [searchInterval, setSearchInterval] = useState(3) // 搜索间隔（秒）
@@ -93,7 +101,6 @@ export default function SearchConfig() {
   // 保存配置：将搜索参数写回 AppConfig 的对应字段
   const handleSave = async () => {
     try {
-      setLoading(true)
       // 构建更新 payload：
       // 1. antidetect: 搜索间隔和重试次数（通用反检测参数）
       // 2. search: 搜索专用参数（page_size/sort_type/timeout/regions/filter_tags）
@@ -113,13 +120,31 @@ export default function SearchConfig() {
           filter_tags: filterTags,
         } as SearchConfigFields,
       })
-      // 等待 store 更新
-      await save()
+      setSaving(true)
+      const changes = await previewSave()
+      if (changes.length === 0) {
+        message.info('配置未变更')
+        return
+      }
+      setDiffChanges(changes)
+      setDiffModalOpen(true)
+    } catch {
+      message.error('预览失败，请重试')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleConfirmSave = async () => {
+    try {
+      setSaving(true)
+      await confirmSave()
+      setDiffModalOpen(false)
       message.success('搜索参数配置已保存')
     } catch {
-      message.error('保存失败，请重试')
+      message.error('保存失败')
     } finally {
-      setLoading(false)
+      setSaving(false)
     }
   }
 
@@ -135,7 +160,7 @@ export default function SearchConfig() {
           <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置
           </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={loading}>
+          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             保存配置
           </Button>
         </Space>
@@ -145,8 +170,8 @@ export default function SearchConfig() {
         {/* 左列：基础搜索参数 */}
         <Col span={12}>
           <Card title="🔍 基础搜索参数" style={{ marginBottom: 16 }}>
-            {/* 搜索间隔 */}
-            <Form.Item label="搜索间隔" extra="两次搜索之间的等待时间，避免被风控（建议 ≥2 秒）">
+            {/* 操作延迟（原"搜索间隔"，实际是单次操作间的人类行为模拟延迟，非任务循环间隔） */}
+            <Form.Item label="操作延迟" extra="模拟人类操作的间隔时间（非任务循环间隔），避免被风控（建议 ≥2 秒）">
               <InputNumber
                 min={1}
                 max={30}
@@ -280,7 +305,7 @@ export default function SearchConfig() {
           <Card title="📋 当前配置摘要">
             <div style={{ fontSize: 13, lineHeight: 2 }}>
               <div>
-                <Text strong>搜索间隔：</Text>
+                <Text strong>操作延迟：</Text>
                 <Text>{searchInterval}s（最大 {Math.round(searchInterval * 1.5)}s）</Text>
               </div>
               <div>
@@ -311,6 +336,44 @@ export default function SearchConfig() {
           </Card>
         </Col>
       </Row>
+
+      {/* Diff 预览 Modal */}
+      <Modal
+        title="配置变更预览"
+        open={diffModalOpen}
+        onCancel={() => setDiffModalOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>
+            取消
+          </Button>,
+          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>
+            确认保存
+          </Button>,
+        ]}
+        width={700}
+      >
+        <Table
+          dataSource={diffChanges}
+          rowKey="path"
+          pagination={false}
+          size="small"
+          columns={[
+            { title: '路径', dataIndex: 'path', key: 'path' },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
+            {
+              title: '操作',
+              dataIndex: 'op',
+              key: 'op',
+              render: (op: string) => (
+                <Tag color={op === 'add' ? 'green' : op === 'delete' ? 'red' : 'orange'}>
+                  {op === 'add' ? '新增' : op === 'delete' ? '删除' : '修改'}
+                </Tag>
+              ),
+            },
+          ]}
+        />
+      </Modal>
     </div>
   )
 }

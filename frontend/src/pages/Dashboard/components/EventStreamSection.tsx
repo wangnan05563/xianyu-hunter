@@ -103,7 +103,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
         <Card title={<span>事件流 <Badge count={events.length} style={{ marginLeft: 6, backgroundColor: '#1677ff' }} /></span>}
           extra={
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 11, color: streamStatus.includes('已连接') ? '#52c41a' : '#8c8c8c' }}>{streamStatus}</span>
+              <span style={{ fontSize: 11, color: streamStatus.includes('已连接') ? '#52c41a' : 'var(--xh-text-tertiary)' }}>{streamStatus}</span>
               <Button size="small" onClick={() => onNavigate('/timeline')}>查看全部</Button>
             </span>
           }>
@@ -116,7 +116,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
                 <List.Item style={{ padding: '4px 0' }}>
                   <List.Item.Meta
                     avatar={<Tag color={EVENT_COLOR[e.type] || 'default'} style={{ fontSize: 10 }}>{evTypeLabel(e.type)}</Tag>}
-                    title={<span style={{ fontSize: 11, color: '#8c8c8c' }}>{new Date(e.created_at).toLocaleString('zh-CN')}</span>}
+                    title={<span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{new Date(e.created_at).toLocaleString('zh-CN')}</span>}
                     description={<span style={{ fontSize: 12 }}>{evMsg(e)}</span>}
                   />
                 </List.Item>
@@ -129,14 +129,14 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
       {/* 系统状态 */}
       <Col xs={24} lg={9}>
         <Card title={<span><SettingOutlined /> 系统状态</span>}
-          extra={<span style={{ fontSize: 11, color: '#8c8c8c' }}>{overview?.ts || ''}</span>}>
+          extra={<span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{overview?.ts || ''}</span>}>
 
           {/* 登录账户 — 参考旧版 dashboard 设计 */}
           <div style={{
-            background: '#fafafa', borderRadius: 6, padding: '10px 12px',
-            marginBottom: 12, border: '1px solid #f0f0f0',
+            background: 'var(--xh-bg-spotlight)', borderRadius: 6, padding: '10px 12px',
+            marginBottom: 12, border: '1px solid var(--xh-border)',
           }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>登录账户</div>
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginBottom: 6 }}>登录账户</div>
             {authLoading ? (
               <Spin size="small" />
             ) : auth?.logged_in ? (
@@ -147,7 +147,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
                     <div style={{ fontWeight: 600, fontSize: 13 }}>
                       {auth.nick || (`用户 ${(auth.user_id || '').slice(0, 6)}`)}
                     </div>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', fontFamily: 'monospace' }}>
+                    <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', fontFamily: 'monospace' }}>
                       {(auth.user_id || '').slice(0, 12)}
                     </div>
                   </div>
@@ -178,7 +178,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
                 {tokenExpanded && (
                   <div style={{
                     marginTop: 8, padding: '8px 10px',
-                    background: '#fff8e1', border: '1px solid #ffc107', borderRadius: 6,
+                    background: 'rgba(245, 124, 0, 0.08)', border: '1px solid rgba(245, 124, 0, 0.3)', borderRadius: 6,
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                       <span style={{ fontWeight: 600, color: '#f57c00', fontSize: 11 }}>
@@ -217,7 +217,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
                       </div>
                     )}
                     {tokenValue && !tokenResult && (
-                      <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 2 }}>
+                      <div style={{ fontSize: 10, color: 'var(--xh-text-tertiary)', marginTop: 2 }}>
                         当前值: {displayToken(tokenValue)}
                       </div>
                     )}
@@ -226,7 +226,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
               </>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ color: '#8c8c8c' }}>未登录</span>
+                <span style={{ color: 'var(--xh-text-tertiary)' }}>未登录</span>
                 <Button size="small" type="primary" icon={<LoginOutlined />} onClick={() => navigate('/login')}
                   style={{ background: '#FF6200', borderColor: '#FF6200' }}>
                   前往登录
@@ -235,7 +235,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
             )}
           </div>
 
-          <Descriptions size="small" column={1} colon={false} labelStyle={{ width: 80, color: '#8c8c8c' }} contentStyle={{ fontSize: 12 }}>
+          <Descriptions size="small" column={1} colon={false} labelStyle={{ width: 80, color: 'var(--xh-text-tertiary)' }} contentStyle={{ fontSize: 12 }}>
             <Descriptions.Item label={<><DatabaseOutlined /> 数据库</>}>
               {overview?.db_size || '—'}
             </Descriptions.Item>

@@ -1,11 +1,12 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Table, Tag, Button, Space, Spin, Input, Select, Slider, Row, Col, message,
-  Empty, DatePicker, Modal, Collapse, Statistic, Image, Tooltip, Alert,
+  Empty, DatePicker, Modal, Collapse, Statistic, Image, Tooltip, Alert, Progress,
 } from 'antd'
 import {
   ReloadOutlined, AimOutlined, RobotOutlined, LinkOutlined,
-  SearchOutlined, UndoOutlined, RetweetOutlined,
+  SearchOutlined, UndoOutlined, RetweetOutlined, EnvironmentOutlined,
+  ClockCircleOutlined, UserOutlined, PictureOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { evalApi, aiApi, taskApi, type EvalItem, type AIConditionResult, type Task } from '../../api'
@@ -17,6 +18,50 @@ import PriceHistogram from './components/PriceHistogram'
 import TrendSparkline from './components/TrendSparkline'
 
 const { RangePicker } = DatePicker
+
+// === 响应式断点（与 Ant Design 默认一致） ===
+// xs < 576, sm ≥ 576, md ≥ 768, lg ≥ 992, xl ≥ 1200, xxl ≥ 1600
+// 评估明细页主要面向桌面端，移动端走横向滚动 + 列隐藏
+const SCROLL_X = 1400
+
+// 把任意时间格式化为 zh-CN 友好的本地时间；无法解析时返回 null
+function formatPublishTime(raw: string | number | null | undefined): string | null {
+  if (raw === null || raw === undefined || raw === '') return null
+  const d = new Date(raw)
+  if (isNaN(d.getTime())) return null
+  return d.toLocaleString('zh-CN', { hour12: false })
+}
+
+// 缩略图兜底：URL 为空或加载失败时显示占位符
+function ThumbCell({ url, title }: { url?: string | null; title?: string | null }) {
+  const [errored, setErrored] = useState(false)
+  if (!url || errored) {
+    return (
+      <div
+        style={{
+          width: 50, height: 50, borderRadius: 6,
+          background: '#f5f5f5', color: 'var(--xh-text-quaternary)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+        title={title || '暂无图片'}
+      >
+        <PictureOutlined style={{ fontSize: 20 }} />
+      </div>
+    )
+  }
+  return (
+    <Image
+      src={url}
+      referrerPolicy="no-referrer"
+      width={50}
+      height={50}
+      style={{ objectFit: 'cover', borderRadius: 6, background: 'var(--xh-bg-code)' }}
+      preview={{ mask: '预览' }}
+      onError={() => setErrored(true)}
+      alt={title || ''}
+    />
+  )
+}
 
 export default function Evaluations() {
   // === 列表数据 ===
@@ -61,6 +106,15 @@ export default function Evaluations() {
   // === 重新评估 ===
   const [recomputing, setRecomputing] = useState(false)
 
+  // === 阈值通过率计算器 ===
+  const [thresholdValue, setThresholdValue] = useState(60)
+  const [targetPassRate, setTargetPassRate] = useState(70)
+
+  // === 批量 AI 评估 ===
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
+  const [batchEvaluating, setBatchEvaluating] = useState(false)
+  const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 })
+
   // 用当前配置重新计算历史评估
   const onRecompute = async () => {
     setRecomputing(true)
@@ -77,20 +131,66 @@ export default function Evaluations() {
     }
   }
 
+  // === 阈值通过率计算：当前页面评分 >= 阈值的比例 ===
+  const thresholdPassCount = items.filter(item => (item.payload.score ?? 0) >= thresholdValue).length
+  const thresholdPassRate = items.length > 0 ? (thresholdPassCount / items.length * 100) : 0
+
+  // 根据目标通过率自动推算建议阈值（从当前页面数据降序排列取分位点）
+  const computeSuggestedThreshold = (targetRate: number): number => {
+    if (items.length === 0) return 0
+    const sortedScores = [...items.map(item => item.payload.score ?? 0)].sort((a, b) => b - a)
+    const targetCount = Math.ceil(items.length * targetRate / 100)
+    return sortedScores[Math.min(targetCount - 1, sortedScores.length - 1)] ?? 0
+  }
+  const autoSuggestedThreshold = computeSuggestedThreshold(targetPassRate)
+
+  // === 批量 AI 成色评估 ===
+  const onBatchAIEval = async () => {
+    // 从选中行中提取 item_id
+    const ids = items
+      .filter(item => selectedRowKeys.includes(`${item.item_id}-${item.created_at}`))
+      .map(item => item.item_id)
+    if (ids.length === 0) return
+
+    setBatchEvaluating(true)
+    setBatchProgress({ done: 0, total: ids.length })
+
+    let done = 0
+    for (const id of ids) {
+      try {
+        await aiApi.evaluateCondition(id)
+      } catch {
+        // 单个失败不中断整体流程，继续评估下一项
+      }
+      done++
+      setBatchProgress({ done, total: ids.length })
+    }
+
+    setBatchEvaluating(false)
+    setSelectedRowKeys([])
+    message.success(`批量评估完成，共处理 ${ids.length} 项`)
+    load()
+  }
+
   // 加载评估列表
+  // 用 ref 持有筛选条件最新值，避免每次键入触发 API 请求
+  const filtersRef = useRef({ itemId, taskId, scoreRange, dateRange })
+  filtersRef.current = { itemId, taskId, scoreRange, dateRange }
+
   const load = useCallback(() => {
     setLoading(true)
+    const { itemId: fItemId, taskId: fTaskId, scoreRange: fScore, dateRange: fDate } = filtersRef.current
     const params: Record<string, unknown> = {
       page_num: page,
       page_size: pageSize,
       limit: pageSize * 4,
     }
-    if (itemId) params.item_id = itemId
-    if (taskId) params.task_id = taskId
-    if (scoreRange[0] > 0) params.min_score = scoreRange[0]
-    if (scoreRange[1] < 100) params.max_score = scoreRange[1]
-    if (dateRange && dateRange[0]) params.start_time = dateRange[0].format('YYYY-MM-DD')
-    if (dateRange && dateRange[1]) params.end_time = dateRange[1].format('YYYY-MM-DD')
+    if (fItemId) params.item_id = fItemId
+    if (fTaskId) params.task_id = fTaskId
+    if (fScore[0] > 0) params.min_score = fScore[0]
+    if (fScore[1] < 100) params.max_score = fScore[1]
+    if (fDate && fDate[0]) params.start_time = fDate[0].format('YYYY-MM-DD')
+    if (fDate && fDate[1]) params.end_time = fDate[1].format('YYYY-MM-DD')
 
     evalApi.list(params)
       .then((res) => {
@@ -99,7 +199,7 @@ export default function Evaluations() {
       })
       .catch(() => message.error('加载评估列表失败'))
       .finally(() => setLoading(false))
-  }, [page, pageSize, itemId, taskId, scoreRange, dateRange])
+  }, [page, pageSize])
 
   // 加载分布数据
   const loadDist = useCallback(() => {
@@ -120,9 +220,24 @@ export default function Evaluations() {
   }, [])
 
   // 查询/重置
-  const onSearch = () => { setPage(1); load() }
+  // 修复：之前 setPage(1) + load() 会用旧 page 闭包加载一次，导致双重请求
+  // 改为：page 变化时由 useEffect 自动触发 load；page 未变时手动调用 load
+  const onSearch = () => {
+    if (page !== 1) {
+      setPage(1)  // useEffect 会自动触发 load（filtersRef.current 已是最新）
+    } else {
+      load()
+    }
+  }
   const onReset = () => {
-    setItemId(''); setTaskId(''); setScoreRange([0, 100]); setDateRange(null); setPage(1)
+    setItemId(''); setTaskId(''); setScoreRange([0, 100]); setDateRange(null)
+    // 重置后需要用新条件重新加载
+    filtersRef.current = { itemId: '', taskId: '', scoreRange: [0, 100] as [number, number], dateRange: null }
+    if (page !== 1) {
+      setPage(1)  // useEffect 会自动触发 load
+    } else {
+      load()
+    }
   }
 
   // 阈值建议
@@ -187,28 +302,36 @@ export default function Evaluations() {
   }
 
   // === 表格列定义（与商品列表页对齐） ===
+  // 列宽考虑响应式：固定宽度列（任务ID/图片/价格/想要/评分/风险/AI）保留，
+  // 自适应列（标题/卖家）通过 ellipsis 处理；窄屏下整体走横向滚动
   const columns = [
     {
       title: '任务ID', dataIndex: 'task_id', key: 'task_id', width: 120,
       ellipsis: true,
+      // 任务 ID 在窄屏下隐藏，避免占用关键展示位
+      responsive: ['sm'] as ('sm' | 'md')[],
       render: (v: string) => <Tooltip title={v}>{v?.slice(0, 10)}...</Tooltip>,
     },
     {
       title: '图片', key: 'thumb', width: 70,
       render: (_: unknown, r: EvalItem) => {
         const url = r.payload?.thumb_url as string | undefined
-        return url ? (
-          <Image src={url} referrerPolicy="no-referrer" width={50} height={50}
-            style={{ objectFit: 'cover', borderRadius: 6 }} preview={false} />
-        ) : '—'
+        return <ThumbCell url={url} title={r.payload?.item_title as string | undefined} />
       },
     },
     {
       title: '标题', key: 'title', ellipsis: true,
+      // 标题列在极窄屏保留 ellipsis + tooltip，宽屏完整显示
       render: (_: unknown, r: EvalItem) => {
         const title = r.payload?.item_title || '—'
         const url = `https://www.goofish.com/item?id=${r.item_id}`
-        return <a href={url} target="_blank" rel="noopener noreferrer">{title} <LinkOutlined /></a>
+        return (
+          <Tooltip title={title}>
+            <a href={url} target="_blank" rel="noopener noreferrer">
+              {title} <LinkOutlined />
+            </a>
+          </Tooltip>
+        )
       },
     },
     {
@@ -217,45 +340,84 @@ export default function Evaluations() {
         (a.payload?.item_price ?? 0) - (b.payload?.item_price ?? 0),
       render: (_: unknown, r: EvalItem) => r.payload?.item_price != null
         ? <span style={{ color: '#f5222d', fontWeight: 600 }}>¥{Number(r.payload.item_price).toFixed(2)}</span>
-        : '—',
+        : <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>,
     },
     {
       // 卖家列：参考闲鱼商品详情页风格，昵称+信用度合并显示
-      title: '卖家', key: 'seller', width: 160, ellipsis: true,
+      // 视觉权重：昵称 > 信用度；缺数据时显示 ID 后备文案，避免空荡荡
+      title: '卖家', key: 'seller', width: 170, ellipsis: true,
       render: (_: unknown, r: EvalItem) => {
         const nick = r.payload?.seller_nick as string | undefined
         const id = r.payload?.seller_id as string | undefined
         const credit = r.payload?.seller_credit as string | undefined
         // 真实昵称优先级：清洗后的 seller_nick > seller_id（截短）> '—'
-        const displayName = nick && nick.trim() ? nick : (id ? `用户 ${id.slice(0, 8)}` : '—')
+        const hasNick = !!(nick && nick.trim())
+        const displayName = hasNick
+          ? nick
+          : (id ? `用户 ${id.slice(0, 8)}` : '—')
         return (
-          <div>
-            <div>{displayName}</div>
-            {credit && <div style={{ fontSize: 11, color: '#52c41a' }}>信用 {credit}</div>}
+          <div style={{ lineHeight: 1.3 }}>
+            <div>
+              <UserOutlined style={{ marginRight: 4, color: hasNick ? '#1890ff' : 'var(--xh-text-quaternary)' }} />
+              <Tooltip title={hasNick ? nick : (id || '无卖家信息')}>
+                <span>{displayName}</span>
+              </Tooltip>
+            </div>
+            {credit && (
+              <div style={{ fontSize: 11, color: '#52c41a', marginTop: 2 }}>
+                信用 {credit}
+              </div>
+            )}
           </div>
         )
       },
     },
     {
-      // 地区列：清洗后从脏数据恢复的 region，缺则 '—'
-      title: '地区', key: 'region', width: 80,
-      render: (_: unknown, r: EvalItem) => (r.payload?.region as string) || '—',
+      // 地区列：优先用后端清洗后的 region；空值显示"—"避免布局跳动
+      title: '地区', key: 'region', width: 90,
+      render: (_: unknown, r: EvalItem) => {
+        const region = r.payload?.region as string | undefined
+        if (!region) return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
+        return (
+          <span>
+            <EnvironmentOutlined style={{ marginRight: 4, color: '#fa8c16' }} />
+            {region}
+          </span>
+        )
+      },
     },
     {
-      // 想要数
+      // 想要数：仅在有数据时显示，无数据灰色"—"
       title: '想要', key: 'want', width: 60,
-      render: (_: unknown, r: EvalItem) => (r.payload?.want_cnt as number) ?? '—',
+      render: (_: unknown, r: EvalItem) => {
+        const w = r.payload?.want_cnt as number | undefined
+        return w != null ? <span>{w}</span> : <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
+      },
     },
     {
       // 发布时间列：优先级 = 完整时间戳 > 历史数据中的发布时间短语 > '—'
       // 兜底显示"一周内发布"等从 seller_nick 脏数据中恢复的原文
-      title: '发布时间', key: 'publish', width: 150,
+      title: '发布时间', key: 'publish', width: 160,
+      // 窄屏下隐藏发布时间（信息密度高，窄屏优先看评分/风险）
+      responsive: ['md'] as ('sm' | 'md')[],
       render: (_: unknown, r: EvalItem) => {
-        const t = r.payload?.publish_time as string | undefined
-        if (t) return new Date(t).toLocaleString('zh-CN')
+        const formatted = formatPublishTime(r.payload?.publish_time as string | undefined)
+        if (formatted) {
+          return (
+            <Tooltip title={formatted}>
+              <span>
+                <ClockCircleOutlined style={{ marginRight: 4, color: '#1890ff' }} />
+                {formatted}
+              </span>
+            </Tooltip>
+          )
+        }
+        // 兜底：从脏数据中恢复的发布时间短语（如"一周内发布"）
         const text = r.payload?.publish_time_text as string | undefined
-        if (text) return <span style={{ color: '#faad14' }}>{text}</span>
-        return '—'
+        if (text) {
+          return <span style={{ color: '#faad14' }}>{text}</span>
+        }
+        return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
       },
     },
     {
@@ -306,7 +468,7 @@ export default function Evaluations() {
             {tags.slice(0, 3).map((t, i) => (
               <Tag key={i} style={{ marginBottom: 2 }} color="blue">{t.label}</Tag>
             ))}
-            {tags.length > 3 && <span style={{ color: '#999' }}>+{tags.length - 3}</span>}
+            {tags.length > 3 && <span style={{ color: 'var(--xh-text-tertiary)' }}>+{tags.length - 3}</span>}
           </span>
         )
       },
@@ -373,7 +535,7 @@ export default function Evaluations() {
             placeholder="选择任务" allowClear showSearch
             style={{ width: 260 }}
             value={taskId || undefined}
-            onChange={(v) => { setTaskId(v || ''); setPage(1); }}
+            onChange={(v) => { setTaskId(v || ''); setPage(1); setTimeout(load, 0) }}
             onClear={() => setTaskId('')}
             filterOption={(input, option) =>
               (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
@@ -429,7 +591,7 @@ export default function Evaluations() {
             <Card size="small"><Statistic title={`驳回(<${passScore})`} value={dist.marginals.result.fail} valueStyle={{ color: '#ff4d4f' }} /></Card>
           </Col>
           <Col span={4}>
-            <Card size="small"><Statistic title="数据不足" value={dist.insufficient_count} valueStyle={{ color: '#999' }} /></Card>
+            <Card size="small"><Statistic title="数据不足" value={dist.insufficient_count} valueStyle={{ color: 'var(--xh-text-tertiary)' }} /></Card>
           </Col>
           <Col span={4}>
             <Card size="small">
@@ -443,6 +605,36 @@ export default function Evaluations() {
         {/* 左侧：列表 */}
         <Col span={16}>
           <Card>
+            {/* 批量操作工具条：选中行后显示 */}
+            {selectedRowKeys.length > 0 && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={
+                  <Space>
+                    <span>已选择 <b>{selectedRowKeys.length}</b> 项</span>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<RobotOutlined />}
+                      loading={batchEvaluating}
+                      onClick={onBatchAIEval}
+                    >
+                      批量 AI 评估 ({selectedRowKeys.length} 项)
+                    </Button>
+                    <Button size="small" onClick={() => setSelectedRowKeys([])}>取消选择</Button>
+                  </Space>
+                }
+                description={batchEvaluating && (
+                  <Progress
+                    percent={Math.round(batchProgress.done / batchProgress.total * 100)}
+                    size="small"
+                    format={() => `${batchProgress.done}/${batchProgress.total}`}
+                  />
+                )}
+              />
+            )}
             <Spin spinning={loading}>
               {items.length === 0 ? (
                 <Empty description="暂无评估数据" />
@@ -452,7 +644,13 @@ export default function Evaluations() {
                   dataSource={items}
                   rowKey={(r) => `${r.item_id}-${r.created_at}`}
                   size="middle"
-                  scroll={{ x: 1200 }}
+                  rowSelection={{
+                    selectedRowKeys,
+                    onChange: (keys) => setSelectedRowKeys(keys),
+                  }}
+                  // 横向滚动：保证窄屏（< SCROLL_X）下所有列仍可访问；
+                  // 列上的 responsive 会在 >= sm/md 时自动展开
+                  scroll={{ x: SCROLL_X }}
                   expandable={{
                     expandedRowRender,
                     rowExpandable: () => true,
@@ -464,6 +662,8 @@ export default function Evaluations() {
                     showSizeChanger: true,
                     showQuickJumper: true,
                     pageSizeOptions: ['10', '20', '50', '100'],
+                    // 极窄屏隐藏快速跳转，避免按钮溢出
+                    showLessItems: true,
                     onChange: (p, ps) => { setPage(p); setPageSize(ps) },
                     showTotal: (t) => `共 ${t} 条`,
                   }}
@@ -494,12 +694,60 @@ export default function Evaluations() {
               计算建议阈值
             </Button>
             {suggestion && (
-              <div style={{ marginTop: 16, padding: 12, background: '#f6ffed', borderRadius: 4 }}>
+              <div style={{ marginTop: 16, padding: 12, background: 'rgba(82, 196, 26, 0.08)', borderRadius: 4 }}>
                 <div>建议阈值：<b style={{ color: '#52c41a' }}>{suggestion.suggested_threshold}</b></div>
-                <div style={{ fontSize: 12, color: '#999' }}>当前通过率：{(suggestion.current_pass_rate * 100).toFixed(1)}%</div>
-                <div style={{ fontSize: 12, color: '#999' }}>样本数：{dist?.total ?? '—'}</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>当前通过率：{(suggestion.current_pass_rate * 100).toFixed(1)}%</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>样本数：{dist?.total ?? '—'}</div>
               </div>
             )}
+          </Card>
+
+          {/* 阈值通过率计算器：拖动阈值滑块实时查看通过率 */}
+          <Card title="阈值通过率计算器" style={{ marginTop: 16 }}>
+            <div style={{ marginBottom: 8 }}>
+              当前阈值：<b style={{ color: '#1890ff' }}>{thresholdValue}</b> 分
+            </div>
+            <Slider
+              value={thresholdValue}
+              onChange={setThresholdValue}
+              min={0} max={100} step={1}
+              marks={{ 0: '0', 60: '60', 80: '80', 100: '100' }}
+            />
+            <Row gutter={16} style={{ marginTop: 12 }}>
+              <Col span={8}>
+                <Statistic
+                  title="通过率"
+                  value={thresholdPassRate.toFixed(1)}
+                  suffix="%"
+                  valueStyle={{ color: thresholdPassRate >= 60 ? '#52c41a' : '#ff4d4f' }}
+                />
+              </Col>
+              <Col span={8}>
+                <Statistic title="通过数" value={thresholdPassCount} valueStyle={{ color: '#1890ff' }} />
+              </Col>
+              <Col span={8}>
+                <Statistic title="总数" value={items.length} />
+              </Col>
+            </Row>
+
+            {/* 目标通过率：设定目标后自动推算建议阈值 */}
+            <div style={{ marginTop: 20, paddingTop: 12, borderTop: '1px solid #f0f0f0' }}>
+              <div style={{ marginBottom: 8 }}>
+                目标通过率：<b style={{ color: '#faad14' }}>{targetPassRate}%</b>
+              </div>
+              <Slider
+                value={targetPassRate}
+                onChange={setTargetPassRate}
+                min={10} max={100} step={5}
+                marks={{ 10: '10%', 50: '50%', 70: '70%', 100: '100%' }}
+              />
+              <div style={{ marginTop: 8, padding: 12, background: 'rgba(250, 140, 22, 0.08)', borderRadius: 4 }}>
+                <div>建议阈值：<b style={{ color: '#fa8c16' }}>{autoSuggestedThreshold.toFixed(1)}</b> 分</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                  即评分 ≥ {autoSuggestedThreshold.toFixed(1)} 时，约 {targetPassRate}% 的评估可通过
+                </div>
+              </div>
+            </div>
           </Card>
         </Col>
       </Row>
@@ -551,7 +799,7 @@ export default function Evaluations() {
                   size="small"
                 />
               )}
-              <div style={{ marginTop: 12, fontSize: 12, color: '#999' }}>
+              <div style={{ marginTop: 12, fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
                 来源：{aiResult.source === 'llm' ? 'AI 视觉分析' : '规则模拟'}
                 {aiResult.cached ? '（缓存）' : ''}
               </div>

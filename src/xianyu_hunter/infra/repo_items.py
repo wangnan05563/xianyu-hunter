@@ -79,6 +79,23 @@ class ItemsMixin:
             rows = conn.execute(stmt).all()
             return [self._row_to_dict(r) for r in rows]
 
+    def list_items_by_ids(self, item_ids: list[str]) -> list[dict]:
+        """按 item_id 批量查询商品（避免 list_items(limit=N) 在大数据量下遗漏）
+
+        评估明细相关接口需要按评估事件涉及的 item_id 精确查询，
+        之前用 list_items(limit=5000/10000) 全量加载再过滤，既浪费内存又可能遗漏。
+        """
+        if not item_ids:
+            return []
+        result: list[dict] = []
+        batch_size = 500  # 与 items_exist 保持一致，避免 SQLite IN 子句参数上限
+        with self.engine.connect() as conn:
+            for i in range(0, len(item_ids), batch_size):
+                batch = item_ids[i:i + batch_size]
+                rows = conn.execute(select(ItemRow).where(ItemRow.id.in_(batch))).all()
+                result.extend(self._row_to_dict(r) for r in rows)
+        return result
+
     def items_exist(self, item_ids: list[str]) -> set[str]:
         """批量检查商品ID是否已存在（分批查询避免SQLite IN子句参数上限）"""
         if not item_ids:

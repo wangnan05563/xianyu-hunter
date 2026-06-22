@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -70,11 +71,62 @@ class EventsMixin:
             stmt = stmt.limit(limit).offset(offset)
             return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
 
+    def list_events_by_type_prefix(
+        self,
+        type_prefix: str,
+        task_id: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        """按 type 前缀过滤事件，返回 (rows, total)
+
+        为什么单独提供此方法：list_evaluations 需要按 eval.* 前缀过滤，
+        之前用 list_events(limit=N*4) 在 Python 端过滤，当非 eval 事件多时
+        会遗漏数据且 total 不准。这里在 SQL 端用 LIKE 过滤并返回准确 total。
+        """
+        with self.engine.connect() as conn:
+            stmt = select(EventRow).where(EventRow.type.like(f"{type_prefix}%"))
+            if task_id:
+                stmt = stmt.where(EventRow.task_id == task_id)
+            stmt = stmt.order_by(EventRow.created_at.desc()).limit(limit).offset(offset)
+            rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
+
+            count_stmt = select(func.count()).select_from(EventRow).where(
+                EventRow.type.like(f"{type_prefix}%")
+            )
+            if task_id:
+                count_stmt = count_stmt.where(EventRow.task_id == task_id)
+            total = int(conn.execute(count_stmt).scalar() or 0)
+            return rows, total
+
     def get_event(self, event_id: int) -> dict | None:
         """获取单条事件"""
         with self.engine.connect() as conn:
             row = conn.execute(select(EventRow).where(EventRow.id == event_id)).first()
             return self._row_to_dict(row) if row else None
+
+    def get_eval_payload_by_item(self, item_id: str) -> dict | None:
+        """按 item_id 查询最新评估事件的 payload
+
+        seller_trend_for_item 在 items 表无记录时，从评估事件 payload 回退提取 seller_id。
+        之前路由层直接访问 engine 查询 EventRow，这里提供正式方法。
+        """
+        if not item_id:
+            return None
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(EventRow.payload)
+                .where(EventRow.item_id == item_id)
+                .where(EventRow.type.like("eval.%"))
+                .order_by(EventRow.created_at.desc())
+                .limit(1)
+            ).first()
+            if not row or not row.payload:
+                return None
+            try:
+                return json.loads(row.payload) if isinstance(row.payload, str) else row.payload
+            except (json.JSONDecodeError, TypeError):
+                return None
 
     def update_event_payload(self, event_id: int, payload: str) -> None:
         """更新事件的 payload JSON"""
@@ -95,6 +147,26 @@ class EventsMixin:
         with self.engine.begin() as conn:
             result = conn.execute(
                 EventRow.__table__.delete().where(EventRow.task_id == task_id)
+            )
+            return result.rowcount or 0
+
+    def delete_eval_events_by_task_item(self, task_id: str, item_id: str) -> int:
+        """删除指定任务+商品的评估事件（联动清理垃圾数据）
+
+        使用场景：删除 task_links 中 item 类型关联时，联动删除 events 表中
+        对应的 eval.* 事件，避免评估明细残留垃圾数据。
+        为什么按 task_id + item_id 双键：同一商品可能被多个任务关联，
+        只按 item_id 删除会误清其他任务的评估记录。
+        """
+        if not task_id or not item_id:
+            return 0
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                EventRow.__table__.delete().where(
+                    EventRow.task_id == task_id,
+                    EventRow.item_id == item_id,
+                    EventRow.type.like("eval.%"),
+                )
             )
             return result.rowcount or 0
 
