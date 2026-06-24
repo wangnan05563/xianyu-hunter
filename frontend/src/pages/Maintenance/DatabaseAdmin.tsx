@@ -163,10 +163,11 @@ export default function DatabaseAdmin() {
     setTablesLoading(true)
     try {
       const data = await dbAdminApi.listTables()
-      setTables(data.tables)
-      // 默认选中第一个表
-      if (!activeTable && data.tables.length > 0) {
-        setActiveTable(data.tables[0].name)
+      const tables = data.tables || []
+      setTables(tables)
+      // 默认选中第一个表（防御性检查：避免 data.tables 为 undefined 抛错）
+      if (!activeTable && tables.length > 0) {
+        setActiveTable(tables[0].name)
       }
     } catch (e) {
       message.error('加载表列表失败')

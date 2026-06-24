@@ -29,16 +29,16 @@ export default function PriceHistogramCard({
     const compare = histogram.summary.compare
     // 标线标签交替使用 start/end 位置，避免数值接近时重叠
     const markLines: Array<{ xAxis?: number; name?: string; label: { formatter: string; color: string; position: string; distance: number; fontSize: number }; lineStyle: { color: string; type: string } }> = []
-    // P25 标线（底部）
-    if (histogram.summary.p25) markLines.push({ xAxis: histogram.summary.p25, name: 'P25', label: { formatter: 'P25 ¥{c}', color: '#faad14', position: 'start', distance: 6, fontSize: 10 }, lineStyle: { color: '#faad14', type: 'dashed' } })
-    // P50 标线（顶部）
-    if (histogram.summary.median) markLines.push({ xAxis: histogram.summary.median, name: 'P50', label: { formatter: 'P50 ¥{c}', color: '#1677ff', position: 'end', distance: 6, fontSize: 10 }, lineStyle: { color: '#1677ff', type: 'dashed' } })
-    // P75 标线（底部）
-    if (histogram.summary.p75) markLines.push({ xAxis: histogram.summary.p75, name: 'P75', label: { formatter: 'P75 ¥{c}', color: '#ff4d4f', position: 'start', distance: 20, fontSize: 10 }, lineStyle: { color: '#ff4d4f', type: 'dashed' } })
-    // 时间对比基线（7日均价 - 顶部）
-    if (compare.last7d > 0) markLines.push({ xAxis: compare.last7d, name: '7日均价', label: { formatter: '7日 ¥{c}', color: '#fa8c16', position: 'end', distance: 20, fontSize: 10 }, lineStyle: { color: '#fa8c16', type: 'dashed' } })
-    // 今日均价（底部）
-    if (compare.yesterday > 0) markLines.push({ xAxis: compare.yesterday, name: '今日均价', label: { formatter: '今日 ¥{c}', color: '#ff4d4f', position: 'start', distance: 34, fontSize: 10 }, lineStyle: { color: '#ff4d4f', type: 'solid' } })
+    // P25 标线（底部）— 使用 token 的 warning 色（深色主题下会自动变亮）
+    if (histogram.summary.p25) markLines.push({ xAxis: histogram.summary.p25, name: 'P25', label: { formatter: 'P25 ¥{c}', color: token.colorWarning, position: 'start', distance: 6, fontSize: 10 }, lineStyle: { color: token.colorWarning, type: 'dashed' } })
+    // P50 标线（顶部）— 使用 token 的 info 色
+    if (histogram.summary.median) markLines.push({ xAxis: histogram.summary.median, name: 'P50', label: { formatter: 'P50 ¥{c}', color: token.colorInfo, position: 'end', distance: 6, fontSize: 10 }, lineStyle: { color: token.colorInfo, type: 'dashed' } })
+    // P75 标线（底部）— 使用 token 的 error 色
+    if (histogram.summary.p75) markLines.push({ xAxis: histogram.summary.p75, name: 'P75', label: { formatter: 'P75 ¥{c}', color: token.colorError, position: 'start', distance: 20, fontSize: 10 }, lineStyle: { color: token.colorError, type: 'dashed' } })
+    // 时间对比基线（7日均价 - 顶部）— 使用 token 的 primary 色
+    if (compare.last7d > 0) markLines.push({ xAxis: compare.last7d, name: '7日均价', label: { formatter: '7日 ¥{c}', color: token.colorPrimary, position: 'end', distance: 20, fontSize: 10 }, lineStyle: { color: token.colorPrimary, type: 'dashed' } })
+    // 今日均价（底部）— 使用 token 的 error 色（实线）
+    if (compare.yesterday > 0) markLines.push({ xAxis: compare.yesterday, name: '今日均价', label: { formatter: '今日 ¥{c}', color: token.colorError, position: 'start', distance: 34, fontSize: 10 }, lineStyle: { color: token.colorError, type: 'solid' } })
 
     return {
       tooltip: {
@@ -51,7 +51,9 @@ export default function PriceHistogramCard({
           if (compare.last7d > 0) {
             const diff = ((mid - compare.last7d) / compare.last7d * 100)
             const sign = diff > 0 ? '+' : ''
-            html += `<br/>vs 7日均价: <span style="color:${diff > 5 ? '#ff4d4f' : diff < -5 ? '#52c41a' : '#8c8c8c'}">${sign}${diff.toFixed(1)}%</span>`
+            // 涨跌色使用 token 的语义色，自动适配主题
+            const diffColor = diff > 5 ? token.colorError : diff < -5 ? token.colorSuccess : token.colorTextTertiary
+            html += `<br/>vs 7日均价: <span style="color:${diffColor}">${sign}${diff.toFixed(1)}%</span>`
           }
           return html
         },
@@ -78,12 +80,12 @@ export default function PriceHistogramCard({
       series: [{
         type: 'bar',
         data: bins.map(b => [((b.min ?? 0) + (b.max ?? b.min ?? 0)) / 2, b.count]),
-        // 高于均价柱子用主色，低于均价的用浅色
+        // 高于均价柱子用主色，低于均价的用浅色（浅色主题下用橙色调和）
         itemStyle: {
           color: (p: { dataIndex: number }) => {
             const b = bins[p.dataIndex]
             const mid = ((b.min ?? 0) + (b.max ?? b.min ?? 0)) / 2
-            return mid >= (histogram.summary.mean || 0) ? '#FF6200' : '#FFB380'
+            return mid >= (histogram.summary.mean || 0) ? token.colorPrimary : token.colorPrimaryBg
           },
           borderRadius: [4, 4, 0, 0],
         },
@@ -109,7 +111,7 @@ export default function PriceHistogramCard({
             <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>
               均价 ¥{histogram.summary.mean} · 中位 ¥{histogram.summary.median} · {histogram.summary.count} 件
               {histogram.summary.compare.diff_pct !== 0 && (
-                <span style={{ marginLeft: 6, color: histogram.summary.compare.diff_pct > 0 ? '#ff4d4f' : '#52c41a' }}>
+                <span style={{ marginLeft: 6, color: histogram.summary.compare.diff_pct > 0 ? token.colorError : token.colorSuccess }}>
                   较7日 {histogram.summary.compare.diff_pct > 0 ? '+' : ''}{histogram.summary.compare.diff_pct}%
                 </span>
               )}
@@ -175,7 +177,7 @@ export default function PriceHistogramCard({
               <span style={{ fontSize: 11, color: 'var(--xh-text-quaternary)' }}>基于价格分布数据，AI 生成参考建议</span>
             </div>
             {aiLoading && (
-              <div style={{ padding: '12px 16px', background: 'var(--xh-bg-warning)', borderRadius: 6, fontSize: 13, color: '#d48806' }}>
+              <div style={{ padding: '12px 16px', background: token.colorWarningBg, borderRadius: 6, fontSize: 13, color: token.colorWarning }}>
                 <Spin size="small" /> AI 正在分析价格数据…
               </div>
             )}

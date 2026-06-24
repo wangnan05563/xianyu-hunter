@@ -1,0 +1,91 @@
+# XianyuHunter 主配置模板
+#
+# 使用方式：
+#   copy config\config.example.yaml config\config.yaml
+#   然后按需修改 config.yaml
+#
+# 说明：
+# - config.yaml 为实际运行配置（可被 Web UI 修改并自动备份到 config/backups/）
+# - 本模板包含全部配置项及默认值，供新部署参考
+# - 敏感字段（推送 Key）请通过 .env 或 keyring 配置，不写入此文件
+
+server:
+  host: 127.0.0.1        # Web 服务监听地址
+  port: 8000             # Web 服务端口
+
+browser:
+  headless: true         # 无头模式（生产建议 true；调试时 false 可见浏览器）
+  user_data_dir: ./browser-data  # 浏览器用户数据目录（登录态持久化）
+  viewport_width: 1024
+  viewport_height: 768
+  user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+    like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0
+
+# 反检测策略：控制请求频率与行为模拟
+antidetect:
+  qps: 6                       # 全局每秒请求上限
+  min_delay_ms: 10000          # 页面操作最小间隔（毫秒）
+  max_delay_ms: 15000          # 页面操作最大间隔（毫秒）
+  fail_pause_threshold: 3      # 连续失败 N 次触发熔断
+  fail_window_sec: 3600        # 失败计数窗口（秒）
+
+# WAF 风控检测
+waf:
+  enabled: true                       # 启用 WAF 检测
+  login_check_interval_min: 30        # 登录态检查间隔（分钟）
+
+# 推送通知配置
+notifier:
+  default_channels: [serverchan, pushplus, bark]  # 默认推送渠道
+  channels:
+    serverchan: true    # Server 酱（需配置 SERVERCHAN_KEY）
+    pushplus: true       # PushPlus（需配置 PUSHPLUS_TOKEN）
+    bark: true           # Bark（需配置 BARK_KEY）
+
+  # 免打扰时段
+  quiet_hours:
+    enabled: false       # 总开关
+    start: '23:00'       # 开始时间（24h 制）
+    end: 07:00           # 结束时间（支持跨午夜）
+    critical_only: true  # 免打扰时段仅推送 critical 级别事件
+    weekend_only: false  # 仅周末启用免打扰
+
+  # 事件订阅：勾选的事件类型才会推送
+  subscribed_events:
+    - EVAL_PASSED
+    - BUY_SUCCEEDED
+    - TASK_STARTED
+    - TASK_STOPPED
+    - TASK_PAUSED
+    - TASK_SEARCH_DONE
+    - ITEM_FOUND
+    - EVAL_REJECTED
+    - BUY_FAILED
+    - AUTH_EXPIRED
+    - WAF_BLOCKED
+    - SYSTEM_ERROR
+
+# 以下字段为兼容旧配置保留，实际 Key 从 .env / keyring 读取
+serverchan_send_key: ''
+pushplus_token: ''
+bark_server: ''
+bark_key: ''
+
+# 搜索参数
+search:
+  page_size: 20          # 单次搜索返回条目数
+  sort_type: default      # 排序：default/newest/price_asc/price_desc/want_count
+  timeout: 60             # 搜索超时（秒）
+  regions: ''             # 地区过滤（逗号分隔，空=全国）
+  filter_tags: []         # 闲鱼筛选标签
+
+# 价格策略（4 种独立开关）
+price_strategy:
+  enabled_max: true       # 启用价格上限
+  max_price: 800           # 最高可接受价格
+  enabled_min: true       # 启用价格下限（防 1 元引流）
+  min_price: 100           # 最低价格
+  enabled_market_ratio: true  # 启用市场参考价比例
+  market_ratio: 0.8        # 低于市场参考价的比例阈值
+  enabled_top_n: true      # 启用同类低价 TopN
+  top_n: 5                 # 保留前 N 个低价商品

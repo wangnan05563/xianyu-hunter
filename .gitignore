@@ -1,4 +1,9 @@
-# Python
+# ============================================================
+# XianyuHunter .gitignore
+# 规则按类别分组，每段附说明
+# ============================================================
+
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -12,82 +17,90 @@ env/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+.eggs/
+dist/
+build/
 .coverage
 .coverage_html/
 coverage.xml
 coverage*.json
 htmlcov/
 
-# Node.js
+# ---------- Node.js ----------
 node_modules/
+frontend/tsconfig.tsbuildinfo
 
-# 截图和图片
-*.png
-*.jpg
-*.jpeg
-*.gif
-
-# 项目
-browser-data/
-browser-data.bak/
-data/
-!data/.gitkeep
-backup/
+# ---------- 运行时数据（不纳入版本控制）----------
+# SQLite 数据库
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# 浏览器用户数据（登录态/Cookie）
+browser-data/
+browser-data.bak/
+
+# 应用运行时数据目录（仅保留 .gitkeep 占位）
+data/
+!data/.gitkeep
+
+# 备份目录
+backup/
+config/backups/
+
+# ---------- 敏感配置 ----------
 .env
 .env.local
 
-# IDE
-.idea/
-.vscode/
-.trae/
-*.swp
-.DS_Store
-Thumbs.db
-
-# 日志
+# ---------- 日志 ----------
 *.log
-logs/
 *.out
 *.err
+logs/
+# 运行时日志文件（loguru SSE 流输出，根目录）
+run.stdout.log
+run.stderr.log
 
-# 临时调试脚本（以 _ 开头的根目录文件）
-/_*.py
-/_*.ps1
-/_*.bat
-
-# 测试截图和可视化产物
+# ---------- 截图与可视化产物 ----------
+*.png
+*.jpg
+*.jpeg
+*.gif
 *_shots/
 screenshots/
 tests/screenshots/
 tests/visual/
 scripts/.screenshots/
 
-# 临时文件
+# ---------- 临时文件 ----------
 *.tmp
 *.bak
 *.orig
 *~
 trace/
+_filelist.txt
+_git_status.txt
 
-# 前端构建产物
-src/xianyu_hunter/web/static/spa/
+# ---------- 临时调试脚本（根目录以 _ 开头）----------
+/_*.py
+/_*.ps1
+/_*.bat
 
-# 配置备份
-config/backups/
-
-# 临时测试文件
+# ---------- 历史遗留临时测试文件（预防再次创建）----------
 test_pw*.py
 test_pw*.txt
 _test_result.txt
 config_resp.jsonclear
 
-# TypeScript 构建信息
-frontend/tsconfig.tsbuildinfo
+# ---------- 前端构建产物 ----------
+src/xianyu_hunter/web/static/spa/
 
-# 临时文件列表
-_filelist.txt
-_git_status.txt
+# ---------- IDE ----------
+.idea/
+.vscode/
+.trae/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

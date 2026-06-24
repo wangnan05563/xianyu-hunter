@@ -24,6 +24,7 @@ _mixin_modules = [
     'xianyu_hunter.infra.repo_tasks',
     'xianyu_hunter.infra.repo_items',
     'xianyu_hunter.infra.repo_events',
+    'xianyu_hunter.infra.repo_error_logs',
     'xianyu_hunter.infra.repo_deps',
     'xianyu_hunter.infra.repo_links',
     'xianyu_hunter.infra.repo_evaluations',
@@ -37,8 +38,8 @@ def _get_repository_class():
     """延迟构建 Repository 类，避免模块级循环导入"""
     mixin_classes = []
     for mod_name, cls_name in zip(_mixin_modules, [
-        'TasksMixin', 'ItemsMixin', 'EventsMixin', 'TaskDepsMixin',
-        'TaskLinksMixin', 'EvaluationsMixin', 'OrdersMixin',
+        'TasksMixin', 'ItemsMixin', 'EventsMixin', 'ErrorLogsMixin',
+        'TaskDepsMixin', 'TaskLinksMixin', 'EvaluationsMixin', 'OrdersMixin',
         'NotificationsMixin', 'SellersMixin',
     ]):
         mod = importlib.import_module(mod_name)

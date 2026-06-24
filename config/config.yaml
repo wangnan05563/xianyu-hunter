@@ -9,9 +9,9 @@ browser:
   user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0
 antidetect:
-  qps: 6
-  min_delay_ms: 10000
-  max_delay_ms: 15000
+  qps: 15
+  min_delay_ms: 4000
+  max_delay_ms: 6000
   fail_pause_threshold: 3
   fail_window_sec: 3600
 waf:
@@ -79,10 +79,11 @@ bark_server: ''
 bark_key: ''
 search:
   page_size: 20
-  sort_type: default
+  sort_type: newest
   timeout: 60
   regions: ''
-  filter_tags: []
+  filter_tags:
+  - 包邮
 price_strategy:
   enabled_max: true
   max_price: 800

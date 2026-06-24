@@ -3,10 +3,12 @@
 在 F-12 价格直方图基础上，增加品类维度的深度统计：
 - 均价 / 中位数 / 历史最低价 / 价格分位数（P10/P25/P75/P90）
 - 多品类横向对比（按任务关键词聚合，支持排序）
+- 同类物品已售价格区间（捡漏价格参考）
 
 端点：
 - GET /api/prices/category-stats        单品类或全品类价格统计
 - GET /api/prices/category-comparison   多品类横向对比
+- GET /api/prices/sold-range            同类物品已售价格区间（捡漏价格参考）
 """
 from __future__ import annotations
 
@@ -15,10 +17,10 @@ from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from xianyu_hunter.container import Container
-from xianyu_hunter.infra.db_models import ItemRow, TaskRow, _utcnow
+from xianyu_hunter.infra.db_models import ItemRow, TaskLinkRow, TaskRow, _utcnow
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import to_datetime
 
@@ -246,4 +248,146 @@ def category_comparison(
         "order": order,
         "range_days": range_days,
         "total_categories": len(categories),
+    }
+
+
+# ============== 同类物品已售价格区间（捡漏价格参考）=============
+
+# 已售样本不足时的回退阈值：低于此值时回退到全部商品价格
+_MIN_SOLD_SAMPLES = 3
+
+
+def _load_sold_prices_from_links(
+    conn, task_id: str | None, range_days: int
+) -> list[float]:
+    """从 task_links 表加载已售商品价格
+
+    闲鱼搜索 API 返回 is_sold 字段标识商品是否已售，该字段冗余存储在
+    task_links.display JSON 中。已售商品的 price 可近似视为"成交价"。
+
+    注意：闲鱼不公开实际成交价，此处的 price 是商品标价，is_sold=true
+    表示商品已被买家拍下，标价即近似成交价。
+    """
+    # json_extract 提取 display 中的 is_sold 和 price 字段
+    sold_flag = func.json_extract(TaskLinkRow.display, '$.is_sold')
+    price_expr = func.json_extract(TaskLinkRow.display, '$.price')
+
+    stmt = (
+        select(price_expr)
+        .where(TaskLinkRow.link_type == "item")
+        .where(sold_flag == 1)  # SQLite json_extract 返回 1/0
+    )
+    if task_id:
+        stmt = stmt.where(TaskLinkRow.task_id == task_id)
+    if range_days > 0:
+        cutoff = _utcnow() - timedelta(days=range_days)
+        stmt = stmt.where(TaskLinkRow.updated_at >= cutoff)
+
+    rows = conn.execute(stmt).all()
+    prices: list[float] = []
+    for r in rows:
+        if r[0] is None:
+            continue
+        try:
+            p = float(r[0])
+            if p > 0:
+                prices.append(p)
+        except (TypeError, ValueError):
+            continue
+    return prices
+
+
+def _load_all_prices_from_items(
+    conn, task_id: str | None, range_days: int
+) -> list[float]:
+    """从 items 表加载全部商品价格（已售样本不足时的回退数据源）
+
+    items 表不区分已售/在售，包含所有采集到的商品。作为已售数据的回退，
+    提供更充分的市场价格参考样本。
+    """
+    stmt = select(ItemRow.price)
+    if task_id:
+        stmt = stmt.where(ItemRow.task_id == task_id)
+    if range_days > 0:
+        cutoff = _utcnow() - timedelta(days=range_days)
+        stmt = stmt.where(ItemRow.publish_time >= cutoff)
+
+    rows = conn.execute(stmt).all()
+    return [float(r[0]) for r in rows if r and r[0] is not None and float(r[0]) > 0]
+
+
+@router.get("/prices/sold-range")
+def sold_range(
+    task_id: str | None = Query(None, description="任务 ID；不传则统计全部任务"),
+    range_days: int = Query(30, ge=0, description="仅统计最近 N 天；0=全部，默认 30 天"),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """同类物品已售价格区间（捡漏价格参考）
+
+    返回指定品类下近期已售商品的最低价/最高价/中位数/样本数。
+    最低价作为"捡漏价格"参考指标，用于判断当前商品价格是否低于市场成交价。
+
+    数据来源策略（反映近期市场实际交易情况）：
+    1. 优先使用 task_links 中 is_sold=true 的商品价格（近似成交价）
+    2. 已售样本不足（<3）时回退到 items 表全部商品价格（市场参考价）
+    3. 两者均无数据时返回空结果与友好提示
+
+    注意：闲鱼不公开实际成交价，is_sold=true 的商品标价近似为成交价。
+    """
+    engine = container.repo.engine
+    with engine.connect() as conn:
+        sold_prices = _load_sold_prices_from_links(conn, task_id, range_days)
+
+        source = "sold"
+        prices = sold_prices
+        # 已售样本不足时回退到全部商品价格
+        if len(sold_prices) < _MIN_SOLD_SAMPLES:
+            all_prices = _load_all_prices_from_items(conn, task_id, range_days)
+            if len(all_prices) >= _MIN_SOLD_SAMPLES:
+                prices = all_prices
+                source = "all_fallback"
+            elif all_prices:
+                # 全部商品样本也不足，但仍返回（有总比无好）
+                prices = all_prices
+                source = "all_fallback_insufficient"
+
+    # 无数据时的友好响应
+    if not prices:
+        return {
+            "min_price": None,
+            "max_price": None,
+            "median_price": None,
+            "bargain_price": None,
+            "sample_size": 0,
+            "source": "empty",
+            "task_id": task_id,
+            "range_days": range_days,
+            "message": "暂无同类物品的已售价格数据，建议先执行实时搜索采集更多商品",
+        }
+
+    sorted_p = sorted(prices)
+    n = len(sorted_p)
+    min_p = round(sorted_p[0], 2)
+    max_p = round(sorted_p[-1], 2)
+    median_p = round(_percentile(sorted_p, 0.5), 2)
+
+    # 捡漏价格 = 已售商品中的最低价（低于此价视为捡漏机会）
+    bargain_p = min_p
+
+    source_label = {
+        "sold": "已售商品成交价",
+        "all_fallback": "全部商品参考价（已售样本不足）",
+        "all_fallback_insufficient": "全部商品参考价（样本较少）",
+    }.get(source, source)
+
+    return {
+        "min_price": min_p,
+        "max_price": max_p,
+        "median_price": median_p,
+        "bargain_price": bargain_p,
+        "sample_size": n,
+        "source": source,
+        "source_label": source_label,
+        "task_id": task_id,
+        "range_days": range_days,
     }

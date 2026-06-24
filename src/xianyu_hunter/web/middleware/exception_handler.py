@@ -42,6 +42,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
     返回统一的 500 响应，不向前端暴露内部堆栈（防止信息泄露）。
     完整异常信息写入日志便于事后排查。
+    同时捕获到 error_logs 表，供错误日志页面展示和 AI 诊断。
     """
     logger.exception(
         "未处理异常 path={path} method={method} headers={headers} | {exc}",
@@ -50,6 +51,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         headers=_sanitize_headers(request.headers),
         exc=exc,
     )
+    # 捕获到 error_logs 表（失败不阻断主流程）
+    try:
+        from xianyu_hunter.web.middleware.error_capture import capture_request_error
+        await capture_request_error(request, exc)
+    except Exception:
+        logger.warning("error_logs 捕获失败，跳过")
     return JSONResponse(
         status_code=500,
         content={"detail": "内部服务器错误", "code": "internal_error"},

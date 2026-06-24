@@ -1,4 +1,4 @@
-import { Card, Col, Row, Statistic } from 'antd'
+import { Card, Col, Row, Statistic, theme } from 'antd'
 import {
   ThunderboltOutlined,
   ClockCircleOutlined,
@@ -33,58 +33,61 @@ function sparklineOption(series: TrendSeries | null, color: string) {
 }
 
 export default function StatCardsSection({ overview, sparklines, onNavigate }: StatCardsSectionProps) {
+  // 从 antd token 读取主题色，自动响应浅色/暗色主题切换
+  const { token } = theme.useToken()
+
   return (
     <Row gutter={[16, 16]}>
       <Col xs={12} sm={12} md={6}>
         <Card className="stat-card" hoverable onClick={() => onNavigate('/tasks')}>
-          <ThunderboltOutlined className="stat-card-icon" style={{ color: '#FF6200' }} />
+          <ThunderboltOutlined className="stat-card-icon" style={{ color: token.colorPrimary }} />
           <Statistic
             title="运行中任务"
             value={overview?.tasks?.running ?? 0}
             suffix={`/ ${overview?.tasks?.total ?? 0}`}
-            valueStyle={{ color: '#FF6200' }}
+            valueStyle={{ color: token.colorPrimary }}
           />
           <div style={{ height: 40, marginTop: -8 }}>
-            <ReactECharts option={sparklineOption(sparklines.tasks, '#FF6200')} style={{ height: 40 }} />
+            <ReactECharts option={sparklineOption(sparklines.tasks, token.colorPrimary)} style={{ height: 40 }} />
           </div>
         </Card>
       </Col>
       <Col xs={12} sm={12} md={6}>
         <Card className="stat-card" hoverable onClick={() => onNavigate('/orders')}>
-          <ClockCircleOutlined className="stat-card-icon" style={{ color: '#faad14' }} />
+          <ClockCircleOutlined className="stat-card-icon" style={{ color: token.colorWarning }} />
           <Statistic
             title="待支付订单"
             value={overview?.orders?.pending ?? 0}
-            valueStyle={{ color: '#faad14' }}
+            valueStyle={{ color: token.colorWarning }}
           />
           <div style={{ height: 40, marginTop: -8 }}>
-            <ReactECharts option={sparklineOption(sparklines.orders, '#faad14')} style={{ height: 40 }} />
+            <ReactECharts option={sparklineOption(sparklines.orders, token.colorWarning)} style={{ height: 40 }} />
           </div>
         </Card>
       </Col>
       <Col xs={12} sm={12} md={6}>
         <Card className="stat-card" hoverable onClick={() => onNavigate('/orders')}>
-          <CheckCircleOutlined className="stat-card-icon" style={{ color: '#52c41a' }} />
+          <CheckCircleOutlined className="stat-card-icon" style={{ color: token.colorSuccess }} />
           <Statistic
             title="成功抢单"
             value={overview?.orders?.succeeded ?? 0}
-            valueStyle={{ color: '#52c41a' }}
+            valueStyle={{ color: token.colorSuccess }}
           />
           <div style={{ height: 40, marginTop: -8 }}>
-            <ReactECharts option={sparklineOption(sparklines.orders, '#52c41a')} style={{ height: 40 }} />
+            <ReactECharts option={sparklineOption(sparklines.orders, token.colorSuccess)} style={{ height: 40 }} />
           </div>
         </Card>
       </Col>
       <Col xs={12} sm={12} md={6}>
         <Card className="stat-card" hoverable onClick={() => onNavigate('/orders')}>
-          <CloseCircleOutlined className="stat-card-icon" style={{ color: '#ff4d4f' }} />
+          <CloseCircleOutlined className="stat-card-icon" style={{ color: token.colorError }} />
           <Statistic
             title="抢单失败"
             value={overview?.orders?.failed ?? 0}
-            valueStyle={{ color: '#ff4d4f' }}
+            valueStyle={{ color: token.colorError }}
           />
           <div style={{ height: 40, marginTop: -8 }}>
-            <ReactECharts option={sparklineOption(sparklines.orders, '#ff4d4f')} style={{ height: 40 }} />
+            <ReactECharts option={sparklineOption(sparklines.orders, token.colorError)} style={{ height: 40 }} />
           </div>
         </Card>
       </Col>

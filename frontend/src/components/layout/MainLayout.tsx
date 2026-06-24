@@ -20,6 +20,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   AppstoreOutlined,
+  ApiOutlined,
   SettingOutlined,
   DatabaseOutlined,
   ClearOutlined,
@@ -28,6 +29,10 @@ import {
   StarOutlined,
   MacCommandOutlined,
   ExperimentOutlined,
+  SunOutlined,
+  MoonOutlined,
+  BugOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom'
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
@@ -35,6 +40,8 @@ import type React from 'react'
 import type { MenuProps } from 'antd'
 import { authApi, statsApi } from '../../api'
 import type { TodayAlert } from '../../api/types'
+import { useTheme } from '../../contexts/ThemeContext'
+import { ErrorBoundary } from '../ErrorBoundary'
 
 const { Header, Sider, Content } = Layout
 
@@ -53,6 +60,7 @@ const menuItems = [
       { key: '/evaluations', icon: <AuditOutlined />, label: '评估明细' },
       { key: '/timeline', icon: <FieldTimeOutlined />, label: '事件时间线' },
       { key: '/logs', icon: <FileTextOutlined />, label: '实时日志' },
+      { key: '/logs/errors', icon: <BugOutlined />, label: '错误日志' },
     ],
   },
   { type: 'divider' as const },
@@ -93,6 +101,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/evaluations': '评估明细',
   '/timeline': '事件时间线',
   '/logs': '实时日志',
+  '/logs/errors': '错误日志',
   '/config/price': '价格策略',
   '/config/eval': '评估规则',
   '/config/buyer': '抢单策略',
@@ -103,6 +112,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/maintenance': '系统清理',
   '/maintenance/db': '数据库维护',
   '/anticrawl': '反爬登录管理',
+  '/help': '帮助文档',
 }
 
 // Command Palette 可搜索的命令列表（扁平化所有页面导航项）
@@ -114,6 +124,7 @@ const COMMAND_ITEMS = [
   { key: '/evaluations', label: '评估明细', icon: <AuditOutlined /> },
   { key: '/timeline', label: '事件时间线', icon: <FieldTimeOutlined /> },
   { key: '/logs', label: '实时日志', icon: <FileTextOutlined /> },
+  { key: '/logs/errors', label: '错误日志', icon: <BugOutlined /> },
   { key: '/config/price', label: '价格策略', icon: <DollarOutlined /> },
   { key: '/config/eval', label: '评估规则', icon: <SafetyCertificateOutlined /> },
   { key: '/config/buyer', label: '抢单策略', icon: <AimOutlined /> },
@@ -124,6 +135,7 @@ const COMMAND_ITEMS = [
   { key: '/maintenance', label: '系统清理', icon: <ClearOutlined /> },
   { key: '/maintenance/db', label: '数据库维护', icon: <DatabaseOutlined /> },
   { key: '/anticrawl', label: '反爬登录管理', icon: <ExperimentOutlined /> },
+  { key: '/help', label: '帮助文档', icon: <QuestionCircleOutlined /> },
 ]
 
 // g+X 全局快捷键映射
@@ -140,8 +152,8 @@ const G_PREFIX_MAP: Record<string, string> = {
 export default function MainLayout() {
   const location = useLocation()
   const navigate = useNavigate()
-  // 注意：theme.useToken() 必须在 ConfigProvider 内部调用才能响应暗色算法，
-  // 因此 useToken 的调用被移到下面的 LayoutContent 子组件中。
+  // 主题状态来自全局 Context（与顶层 ConfigProvider、Login 页面共享）
+  const { isDark, toggle } = useTheme()
 
   // 认证状态：SPA 静态文件不需要认证，但 API 调用需要 xh_token cookie
   // 首次加载时调用 /api/auth/me 触发后端设置认证 cookie
@@ -149,8 +161,6 @@ export default function MainLayout() {
   const [loggedIn, setLoggedIn] = useState(false)
   // 侧边栏收缩状态
   const [collapsed, setCollapsed] = useState(false)
-  // 暗色主题：从 localStorage 读取初始值
-  const [isDark, setIsDark] = useState(() => localStorage.getItem('xh.theme') === 'dark')
 
   // 调度器运行状态（30秒轮询）
   const [schedulerRunning, setSchedulerRunning] = useState<boolean | null>(null)
@@ -295,6 +305,14 @@ export default function MainLayout() {
     return items
   }, [location.pathname])
 
+  // 未登录：自动跳转到登录页（保存当前路径，登录后跳转回来）
+  useEffect(() => {
+    if (authChecked && !loggedIn) {
+      const currentPath = location.pathname + location.search
+      navigate(`/login?redirect=${encodeURIComponent(currentPath)}`, { replace: true })
+    }
+  }, [authChecked, loggedIn, navigate, location.pathname, location.search])
+
   // 认证检查中：显示加载
   if (!authChecked) {
     return (
@@ -304,64 +322,50 @@ export default function MainLayout() {
     )
   }
 
-  // 未登录：引导到新版登录页
+  // 未登录：显示跳转中状态（useEffect 会自动跳转到登录页）
   if (!loggedIn) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <Result
-          icon={<LoginOutlined style={{ color: '#FF6200' }} />}
-          title="需要登录"
-          subTitle="请先完成闲鱼账号认证，即可使用全部功能"
-          extra={[
-            <Button type="primary" key="login" onClick={() => navigate('/login')} style={{ background: '#FF6200' }}>
-              前往登录
-            </Button>,
-            <Button key="retry" onClick={() => setAuthChecked(false)}>
-              重试
-            </Button>,
-          ]}
-        />
+        <Spin size="large" tip="正在跳转到登录页..."><div /></Spin>
       </div>
     )
   }
 
   return (
-    <ConfigProvider theme={{ algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm }}>
-      <LayoutContent
-        isDark={isDark}
-        setIsDark={setIsDark}
-        loggedIn={loggedIn}
-        collapsed={collapsed}
-        setCollapsed={setCollapsed}
-        location={location}
-        navigate={navigate}
-        schedulerRunning={schedulerRunning}
-        todayAlert={todayAlert}
-        alertCount={alertCount}
-        cmdOpen={cmdOpen}
-        setCmdOpen={setCmdOpen}
-        cmdSearch={cmdSearch}
-        setCmdSearch={setCmdSearch}
-        cmdActive={cmdActive}
-        setCmdActive={setCmdActive}
-        breadcrumbItems={breadcrumbItems}
-        selectedKey={selectedKey}
-        openKeys={openKeys}
-        setOpenKeys={setOpenKeys}
-        menuItems={menuItems}
-        gPrefixRef={gPrefixRef}
-        gTimerRef={gTimerRef}
-        drawerOpen={drawerOpen}
-        setDrawerOpen={setDrawerOpen}
-      />
-    </ConfigProvider>
+    <LayoutContent
+      isDark={isDark}
+      onToggleTheme={toggle}
+      loggedIn={loggedIn}
+      collapsed={collapsed}
+      setCollapsed={setCollapsed}
+      location={location}
+      navigate={navigate}
+      schedulerRunning={schedulerRunning}
+      todayAlert={todayAlert}
+      alertCount={alertCount}
+      cmdOpen={cmdOpen}
+      setCmdOpen={setCmdOpen}
+      cmdSearch={cmdSearch}
+      setCmdSearch={setCmdSearch}
+      cmdActive={cmdActive}
+      setCmdActive={setCmdActive}
+      breadcrumbItems={breadcrumbItems}
+      selectedKey={selectedKey}
+      openKeys={openKeys}
+      setOpenKeys={setOpenKeys}
+      menuItems={menuItems}
+      gPrefixRef={gPrefixRef}
+      gTimerRef={gTimerRef}
+      drawerOpen={drawerOpen}
+      setDrawerOpen={setDrawerOpen}
+    />
   )
 }
 
 // 内部子组件：在 ConfigProvider 内部消费 themeToken，确保暗色主题正确应用
 interface LayoutContentProps {
   isDark: boolean
-  setIsDark: React.Dispatch<React.SetStateAction<boolean>>
+  onToggleTheme: () => void
   loggedIn: boolean
   collapsed: boolean
   setCollapsed: React.Dispatch<React.SetStateAction<boolean>>
@@ -388,7 +392,7 @@ interface LayoutContentProps {
 }
 
 function LayoutContent({
-  isDark, setIsDark, loggedIn, collapsed, setCollapsed, location, navigate,
+  isDark, onToggleTheme, loggedIn, collapsed, setCollapsed, location, navigate,
   schedulerRunning, todayAlert, alertCount,
   cmdOpen, setCmdOpen, cmdSearch, setCmdSearch, cmdActive, setCmdActive,
   breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems,
@@ -396,10 +400,6 @@ function LayoutContent({
 }: LayoutContentProps) {
   // 必须在 ConfigProvider 内部调用，token 才会响应暗色算法
   const { token: themeToken } = theme.useToken()
-  // 同步主题到 document.documentElement，便于自定义 CSS（如 .page-container 等）响应主题
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
-  }, [isDark])
 
   // Command Palette 模糊搜索过滤
   const filteredCommands = useMemo(() => {
@@ -530,17 +530,23 @@ function LayoutContent({
             <Tooltip title={isDark ? '切换亮色主题' : '切换暗色主题'}>
               <Button
                 type="text"
-                shape="circle"
+                icon={isDark ? <SunOutlined /> : <MoonOutlined />}
                 size="small"
                 style={{ fontSize: 16, width: 28, height: 28 }}
-                onClick={() => {
-                  const next = !isDark
-                  setIsDark(next)
-                  localStorage.setItem('xh.theme', next ? 'dark' : 'light')
-                }}
-              >
-                {isDark ? '☀️' : '🌙'}
-              </Button>
+                onClick={onToggleTheme}
+              />
+            </Tooltip>
+
+            {/* 帮助文档入口：跳转到独立 /help 路由（不嵌套在 MainLayout 中） */}
+            <Tooltip title="帮助文档">
+              <Button
+                type="text"
+                shape="circle"
+                size="small"
+                icon={<QuestionCircleOutlined />}
+                style={{ fontSize: 16, width: 28, height: 28 }}
+                onClick={() => navigate('/help')}
+              />
             </Tooltip>
 
             <Button
@@ -553,6 +559,15 @@ function LayoutContent({
               登录管理
             </Button>
             <a
+              href="/api/docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ fontSize: 12, color: themeToken.colorTextSecondary, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+              title="API 文档（新窗口打开）"
+            >
+              <ApiOutlined /> API 文档
+            </a>
+            <a
               href="/"
               style={{ fontSize: 12, color: themeToken.colorTextSecondary }}
               title="返回旧版控制台"
@@ -562,9 +577,13 @@ function LayoutContent({
           </div>
         </Header>
         <Content style={{ overflow: 'auto', background: themeToken.colorBgLayout }}>
-          <div className="fade-in-up" key={location.pathname}>
-            <Outlet />
-          </div>
+          {/* 路由级 ErrorBoundary：页面渲染错误不会波及菜单和布局
+              key 驱动重渲染：路由切换时 div 重新挂载，触发淡入动画 */}
+          <ErrorBoundary resetKeys={[location.pathname]}>
+            <div className="fade-in-up" key={location.pathname}>
+              <Outlet />
+            </div>
+          </ErrorBoundary>
         </Content>
       </Layout>
 

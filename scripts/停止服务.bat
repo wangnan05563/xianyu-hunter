@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul 2>&1
-cd /d "%~dp0"
+REM 脚本位于 scripts/ 子目录，需回到项目根目录
+cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
 echo ========================================
@@ -48,7 +49,7 @@ taskkill /F /IM chrome.exe >nul 2>&1
 
 timeout /t 1 >nul 2>&1
 
-REM [3/3] Verify shutdown 鈥?port released and no xianyu_hunter process remaining
+REM [3/3] Verify shutdown - port released and no xianyu_hunter process remaining
 echo [3/3] Verifying shutdown...
 
 set PORT_FREE=1

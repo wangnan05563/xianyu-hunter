@@ -1,6 +1,51 @@
 import client from './client'
 import type { EvalItem } from './types'
 
+// 官方采集返回的采集数据维度
+export interface OfficialCollectResult {
+  ok: boolean
+  item_id: string
+  collected: boolean
+  item: {
+    title: string
+    price: number
+    description: string
+    image_urls: string[]
+    thumb_url: string
+    region: string
+    seller_id: string
+    want_cnt: number
+    view_cnt: number
+  }
+  seller: {
+    id: string
+    nick: string
+    credit_score: number | null
+    register_days: number
+    on_sale_count: number
+    sold_count: number
+  }
+  reviews: string[]
+  evaluation: {
+    score: number | null
+    risk_level: string
+    dimension_scores: Record<string, number>
+    reject_reasons: string[]
+    is_passed: boolean
+    data_quality: string
+    data_source: string
+  }
+}
+
+export interface BatchCollectResult {
+  ok: boolean
+  total: number
+  succeeded: number
+  failed: number
+  results: Array<OfficialCollectResult | { ok: false; item_id: string; error: string }>
+  message: string
+}
+
 // 评估 API：查询商品评估记录、分布与阈值建议
 export const evalApi = {
   list: (params?: {
@@ -37,5 +82,39 @@ export const evalApi = {
         null,
         { params: taskId ? { task_id: taskId } : {} },
       )
+      .then((r) => r.data),
+
+  // P3: 提交评估准确率反馈
+  submitFeedback: (itemId: string, feedback: 'accurate' | 'inaccurate' | 'partial', note?: string, taskId?: string) =>
+    client
+      .post<{ ok: boolean; item_id: string; feedback: string }>(
+        `/api/evaluations/${itemId}/feedback`,
+        null,
+        { params: { feedback, note: note || undefined, task_id: taskId } },
+      )
+      .then((r) => r.data),
+
+  // P3: 获取评估反馈统计
+  feedbackStats: () =>
+    client
+      .get<{ stats: Record<string, number>; total_feedback: number; accuracy_rate: number }>(
+        '/api/evaluations/feedback/stats',
+      )
+      .then((r) => r.data),
+
+  // 官方页面采集+评估：访问闲鱼商品详情页和卖家主页，获取完整数据后重新评估
+  collectOfficial: (itemId: string, taskId?: string) =>
+    client
+      .post<OfficialCollectResult>(
+        `/api/evaluations/${itemId}/collect-official`,
+        null,
+        { params: taskId ? { task_id: taskId } : {} },
+      )
+      .then((r) => r.data),
+
+  // 批量官方采集+评估：串行采集多个商品，单个失败不中断
+  batchCollectOfficial: (itemIds: string[]) =>
+    client
+      .post<BatchCollectResult>('/api/evaluations/batch-collect-official', { item_ids: itemIds })
       .then((r) => r.data),
 }

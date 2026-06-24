@@ -1,0 +1,92 @@
+import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { Result, Button, Space, Typography } from 'antd'
+
+const { Paragraph, Text } = Typography
+
+interface ErrorBoundaryProps {
+  children: ReactNode
+  // 自定义错误渲染；不传则使用默认 antd Result
+  fallback?: (error: Error, reset: () => void) => ReactNode
+  // 错误回调：可用于上报日志
+  onError?: (error: Error, info: ErrorInfo) => void
+  // 重置时机：当 resetKeys 变化时自动重置内部错误状态
+  resetKeys?: unknown[]
+}
+
+interface ErrorBoundaryState {
+  error: Error | null
+}
+
+/**
+ * 全局错误边界
+ *
+ * 为什么需要：
+ * React 默认行为是渲染期间抛错会卸载整个组件树，导致白屏。
+ * ErrorBoundary 捕获子树渲染错误，展示友好界面并提供"重试"入口，
+ * 避免单点错误让整个应用不可用。
+ *
+ * 局限：无法捕获事件回调、setTimeout、异步 Promise 中的错误，
+ * 这些场景需在调用处自行 try/catch。
+ */
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // 输出到控制台便于排查，避免引入日志采集依赖
+    console.error('[ErrorBoundary] 捕获渲染错误:', error, info)
+    this.props.onError?.(error, info)
+  }
+
+  componentDidUpdate(prevProps: ErrorBoundaryProps) {
+    // resetKeys 变化时清除错误状态，常用于路由切换后自动恢复
+    if (this.state.error && prevProps.resetKeys !== this.props.resetKeys) {
+      this.setState({ error: null })
+    }
+  }
+
+  reset = () => {
+    this.setState({ error: null })
+  }
+
+  render() {
+    const { error } = this.state
+    if (!error) return this.props.children
+
+    if (this.props.fallback) {
+      return this.props.fallback(error, this.reset)
+    }
+
+    return (
+      <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}>
+        <Result
+          status="error"
+          title="页面渲染异常"
+          subTitle="页面在渲染过程中发生错误，可以尝试重试或刷新页面。"
+          extra={
+            <Space>
+              <Button type="primary" onClick={this.reset}>重试</Button>
+              <Button onClick={() => window.location.reload()}>刷新页面</Button>
+            </Space>
+          }
+        >
+          <div style={{ textAlign: 'left', maxWidth: 640, margin: '0 auto' }}>
+            <Paragraph>
+              <Text strong>错误信息：</Text>
+            </Paragraph>
+            <Paragraph>
+              <Text code style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {error.message}
+              </Text>
+            </Paragraph>
+          </div>
+        </Result>
+      </div>
+    )
+  }
+}
+
+export default ErrorBoundary

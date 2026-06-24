@@ -261,6 +261,14 @@ class TaskScheduler:
                 h.consecutive_errors = 0  # 成功后重置连续失败计数
             except Exception as e:  # noqa: BLE001
                 logger.exception(f"[Task {task_id}] run_once 异常: {e}")
+                # 捕获到 error_logs 表，供错误日志页面展示和 AI 诊断
+                # 之所以放在 scheduler 层而非 worker 层，是因为这里是后台任务异常的统一兜底点，
+                # 能覆盖 worker.run_once 中所有未被内部 try-except 消化的异常
+                try:
+                    from xianyu_hunter.web.middleware.error_capture import capture_background_error
+                    capture_background_error(e, context={"source": "scheduler.run_once", "task_id": task_id})
+                except Exception:
+                    logger.warning("error_logs 捕获失败，跳过")
                 h.task.status = TaskStatus.ERROR
                 # 连续失败计数：超过阈值自动暂停（阈值由 antidetect.fail_pause_threshold 配置）
                 h.consecutive_errors = getattr(h, 'consecutive_errors', 0) + 1

@@ -112,10 +112,11 @@ export const authApi = {
     client.get<BrowserImportStatus>('/api/auth/import-from-browser/status').then((r) => r.data),
 
   // 从指定浏览器导入 Cookie
-  importFromBrowser: (browser: 'edge' | 'chrome') =>
+  // auto_close: 检测到文件锁定时自动关闭浏览器进程后重试
+  importFromBrowser: (browser: 'edge' | 'chrome', autoClose: boolean = false) =>
     client
       .post<CookieInjectResult>('/api/auth/import-from-browser', null, {
-        params: { browser },
+        params: { browser, auto_close: autoClose },
       })
       .then((r) => r.data),
 

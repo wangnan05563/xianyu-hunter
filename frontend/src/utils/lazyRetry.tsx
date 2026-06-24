@@ -1,0 +1,122 @@
+import { lazy, Component, type ReactNode } from 'react'
+
+/**
+ * 懒加载重试包装器
+ *
+ * 为什么需要：
+ * Vite 打包后每个页面是一个独立 chunk。当网络抖动、后端重启或部署时
+ * 旧 chunk 文件名失效，import() 会失败并抛出 ChunkLoadError。
+ * 默认情况下该错误会冒泡到 Suspense 之外导致白屏。
+ *
+ * 这里在 import 失败时自动重试若干次，并在最终失败时刷新页面
+ * （刷新后会加载最新的 index.html，获取新的 chunk 清单）。
+ */
+
+const MAX_RETRIES = 3
+
+interface RetryOptions {
+  retries?: number
+}
+
+export function lazyRetry<T extends { default: React.ComponentType<any> }>(
+  factory: () => Promise<T>,
+  options: RetryOptions = {},
+) {
+  const { retries = MAX_RETRIES } = options
+
+  return lazy(() =>
+    retryImport(factory, retries),
+  )
+}
+
+async function retryImport<T extends { default: React.ComponentType<any> }>(
+  factory: () => Promise<T>,
+  retries: number,
+): Promise<T> {
+  try {
+    return await factory()
+  } catch (err) {
+    // 仅对 chunk 加载失败重试，避免对业务代码错误无意义重试
+    if (!isChunkLoadError(err) || retries <= 0) {
+      throw err
+    }
+
+    // 等待一小段时间再重试，给网络一点恢复时间
+    await new Promise((r) => setTimeout(r, 300))
+
+    // 最后一次重试仍失败：刷新页面以获取最新 chunk 清单
+    if (retries === 1) {
+      console.error('[lazyRetry] chunk 加载失败，即将刷新页面:', err)
+      // 给控制台日志一点时间输出再刷新
+      setTimeout(() => window.location.reload(), 200)
+      // 返回一个永不 resolve 的 Promise，避免在刷新前抛出二次错误
+      return new Promise<T>(() => {})
+    }
+
+    console.warn(`[lazyRetry] chunk 加载失败，剩余重试次数 ${retries - 1}:`, err)
+    return retryImport(factory, retries - 1)
+  }
+}
+
+export function isChunkLoadError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const msg = err.message || ''
+  // Vite/Webpack chunk 加载失败的常见错误信息
+  return (
+    msg.includes('Failed to fetch dynamically imported module') ||
+    msg.includes('Importing a module script failed') ||
+    msg.includes('Loading chunk') ||
+    msg.includes('Loading CSS chunk') ||
+    msg.includes('ChunkLoadError')
+  )
+}
+
+/**
+ * Suspense 失败兜底组件
+ *
+ * 当懒加载组件在重试后仍失败（且未触发页面刷新），Suspense 无法捕获
+ * 同步错误。此组件作为 ErrorBoundary 的轻量替代，用于包裹懒加载路由。
+ */
+export class LazyErrorBoundary extends Component<
+  { children: ReactNode; resetKey?: string },
+  { hasError: boolean }
+> {
+  state = { hasError: false }
+
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+
+  componentDidUpdate(prevProps: { resetKey?: string }) {
+    // 路由切换时重置错误状态
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false })
+    }
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('[LazyErrorBoundary] 懒加载失败:', error)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 48, textAlign: 'center' }}>
+          <p style={{ marginBottom: 16, color: 'var(--xh-text-secondary)' }}>
+            页面加载失败，请重试。
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              padding: '6px 16px', borderRadius: 6, cursor: 'pointer',
+              border: '1px solid var(--xh-border)', background: 'var(--xh-bg-spotlight)',
+            }}
+          >
+            刷新页面
+          </button>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}

@@ -5,6 +5,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import TagEditor from '../../components/editors/TagEditor'
 import CronEditor from '../../components/editors/CronEditor'
 import { taskApi, TaskCreateBody } from '../../api'
+import { storage } from '../../utils/storage'
 
 // 闲鱼筛选标签（与后端 XIANYU_FILTER_MAP 对齐）
 const searchFilterOptions = [
@@ -56,25 +57,27 @@ export default function TaskEditor() {
   })
   const [cron, setCron] = useState('*/5 * * * *')
 
-  // 草稿自动保存/恢复
-  const DRAFT_KEY = 'xh.task-draft.v1'
+  // 草稿自动保存/恢复（迁移到统一 storage 工具，v2 格式与旧版不兼容，旧草稿自动失效）
+  const DRAFT_KEY = 'xh.task-draft.v2'
   const [draftRestored, setDraftRestored] = useState(false)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 新建模式下首次加载恢复草稿
   useEffect(() => {
     if (isEdit) return
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY)
-      if (!raw) return
-      const draft = JSON.parse(raw) as { formData: TaskCreateBody; cron: string }
-      // 仅在 URL 未提供预填充时恢复草稿，避免覆盖 AI/模板传入的数据
-      if (draft.formData?.keyword && !prefillKeyword) {
-        setFormData(draft.formData)
-        setCron(draft.cron || '*/5 * * * *')
-        setDraftRestored(true)
-      }
-    } catch { /* 草稿损坏则忽略 */ }
+    // storage.get 内部处理 JSON 解析和错误，validator 确保数据结构正确
+    const draft = storage.get<{ formData: TaskCreateBody; cron: string } | null>(
+      DRAFT_KEY, null,
+      (v): v is { formData: TaskCreateBody; cron: string } =>
+        v !== null && typeof v === 'object' && 'formData' in v && 'cron' in v,
+    )
+    if (!draft) return
+    // 仅在 URL 未提供预填充时恢复草稿，避免覆盖 AI/模板传入的数据
+    if (draft.formData?.keyword && !prefillKeyword) {
+      setFormData(draft.formData)
+      setCron(draft.cron || '*/5 * * * *')
+      setDraftRestored(true)
+    }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 监听 formData/cron 变更，防抖 500ms 自动保存草稿（仅新建模式）
@@ -82,13 +85,13 @@ export default function TaskEditor() {
     if (isEdit) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
-      localStorage.setItem(DRAFT_KEY, JSON.stringify({ formData, cron }))
+      storage.set(DRAFT_KEY, { formData, cron })
     }, 500)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
   }, [formData, cron, isEdit])
 
   const clearDraft = () => {
-    localStorage.removeItem(DRAFT_KEY)
+    storage.remove(DRAFT_KEY)
     setDraftRestored(false)
   }
 

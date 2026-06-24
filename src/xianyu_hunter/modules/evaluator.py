@@ -12,10 +12,15 @@
 - full：3+ 维度有效 → 正常 4 维加权评估
 - partial：1-2 维度有效 → 仅有效维度评估，按有效维度权重归一化
 - insufficient：0 维度有效 → 不评估，返回 UNKNOWN
+
+P1 优化：
+- 职业卖家识别：Sigmoid 渐进式扣分替代硬阈值，避免阈值附近的评分跳变
+- 防高分掩盖：基于维度方差的动态缓冲，离散度越大缓冲越小
 """
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
@@ -173,7 +178,7 @@ class Evaluator:
         scores["price"] = price_score
         reasons.extend(price_reasons)
 
-        # 3. 加权汇总 + 任意一维过低时拉低总分（防"高分掩盖职业卖家"作弊）
+        # 3. 加权汇总 + 防高分掩盖（P1 优化：基于维度方差的动态缓冲）
         weight_sum = sum(self.weights.values())
         if weight_sum == 0:
             weighted_total = sum(scores.values()) // len(scores) if scores else 0
@@ -181,8 +186,21 @@ class Evaluator:
             weighted_total = sum(
                 scores[k] * self.weights[k] for k in scores
             ) // weight_sum
+
+        # 动态缓冲：维度间离散度越大，缓冲越小（风险暴露越充分）
+        # - 各维度分数接近时（std 小）→ buffer=50，允许高分
+        # - 某维度远低于其他时（std 大）→ buffer=30，严格拉低总分
         min_dim = min(scores.values()) if scores else 100
-        total = min(weighted_total, min_dim + 40)
+        score_values = list(scores.values())
+        if len(score_values) >= 2:
+            mean_score = sum(score_values) / len(score_values)
+            variance = sum((s - mean_score) ** 2 for s in score_values) / len(score_values)
+            std = math.sqrt(variance)
+            # std 范围约 0-50，映射到 buffer 50→30
+            buffer = max(30, int(50 - std * 0.4))
+        else:
+            buffer = 40  # 单维度时回退到固定值
+        total = min(weighted_total, min_dim + buffer)
 
         # 4. 风险等级
         risk = self._score_to_risk(total)
@@ -275,6 +293,67 @@ class Evaluator:
         else:
             return RiskLevel.EXTREME
 
+    def apply_ai_eval(self, result: EvalResult, ai_verdict: str, ai_condition_score: int) -> EvalResult:
+        """将 AI 成色评估结果集成到规则评估结果中（P2 优化）
+
+        AI 评估使用 1-10 分制，规则评估使用 0-100 分制。
+        本方法将 AI 评估结果映射到 0-100 并调整总分：
+
+        - ai_verdict="reject" → 总分降至 0，风险等级 EXTREME
+        - ai_verdict="caution" → 总分 * 0.85，风险等级至少 MEDIUM
+        - ai_condition_score >= 8 → 总分 +5（奖励，最高 100）
+        - ai_condition_score <= 3 → 总分 * 0.7（惩罚）
+
+        返回新的 EvalResult（不修改原始对象）。
+        """
+        # 记录 AI 维度分数到 dimension_scores
+        new_dim_scores = dict(result.dimension_scores)
+        new_dim_scores["ai_condition"] = ai_condition_score
+        new_dim_scores["ai_verdict"] = ai_verdict
+
+        new_reasons = list(result.reject_reasons)
+
+        # AI 拒绝 → 直接 0 分
+        if ai_verdict == "reject":
+            new_reasons.append(f"ai_reject(score={ai_condition_score})")
+            return EvalResult(
+                score=0,
+                risk_level=RiskLevel.EXTREME,
+                dimension_scores=new_dim_scores,
+                reject_reasons=new_reasons,
+                data_quality=result.data_quality,
+            )
+
+        total = result.score or 0
+
+        # AI 谨慎 → 总分 * 0.85
+        if ai_verdict == "caution":
+            total = int(total * 0.85)
+            new_reasons.append(f"ai_caution(score={ai_condition_score})")
+
+        # AI 成色评分极端值调整
+        if ai_condition_score >= 8:
+            # 高分成色奖励（+5，最高 100）
+            total = min(100, total + 5)
+        elif ai_condition_score <= 3:
+            # 低分成色惩罚（* 0.7）
+            total = int(total * 0.7)
+            new_reasons.append(f"ai_low_condition(score={ai_condition_score})")
+
+        # 重新计算风险等级
+        risk = self._score_to_risk(total)
+        # AI caution 时风险等级至少为 MEDIUM
+        if ai_verdict == "caution" and risk == RiskLevel.LOW:
+            risk = RiskLevel.MEDIUM
+
+        return EvalResult(
+            score=total,
+            risk_level=risk,
+            dimension_scores=new_dim_scores,
+            reject_reasons=new_reasons,
+            data_quality=result.data_quality,
+        )
+
     def _get_valid_dimensions(self, seller: SellerProfile) -> set[str]:
         """检测卖家数据哪些维度有效，返回有效维度名集合
 
@@ -322,22 +401,47 @@ class Evaluator:
 
     # ============== 1. 职业卖家识别 ==============
 
+    @staticmethod
+    def _sigmoid_deduction(value: float, threshold: float, max_deduction: float, k: float = 0.15) -> float:
+        """Sigmoid 渐进式扣分
+
+        在阈值附近平滑过渡，避免硬阈值导致的评分跳变。
+        - value << threshold 时扣分趋近 0
+        - value == threshold 时扣分 = max_deduction / 2
+        - value >> threshold 时扣分趋近 max_deduction
+
+        k 控制过渡陡峭度：k 越小过渡越平缓
+        """
+        return max_deduction / (1 + math.exp(-k * (value - threshold)))
+
     def _eval_professional(self, seller: SellerProfile) -> tuple[int, list[str]]:
         score = 100
         reasons: list[str] = []
 
-        if seller.on_sale_count > self.thresholds.on_sale_count:
-            score -= 40
-            reasons.append(
-                f"on_sale {seller.on_sale_count} > {self.thresholds.on_sale_count}"
+        # 在售数：Sigmoid 渐进式扣分（阈值 30，最大扣 40）
+        # on_sale=10 → 扣 ~1 分，on_sale=30 → 扣 20 分，on_sale=50 → 扣 ~38 分
+        if seller.on_sale_count > 0:
+            ded = self._sigmoid_deduction(
+                seller.on_sale_count, self.thresholds.on_sale_count, 40
             )
+            if ded >= 1:
+                score -= int(ded)
+                reasons.append(
+                    f"on_sale {seller.on_sale_count} (ded={int(ded)})"
+                )
 
-        if seller.post_count_30d > self.thresholds.post_count_30d:
-            score -= 30
-            reasons.append(
-                f"30d_post {seller.post_count_30d} > {self.thresholds.post_count_30d}"
+        # 30 天发布数：Sigmoid 渐进式扣分（阈值 15，最大扣 30）
+        if seller.post_count_30d > 0:
+            ded = self._sigmoid_deduction(
+                seller.post_count_30d, self.thresholds.post_count_30d, 30
             )
+            if ded >= 1:
+                score -= int(ded)
+                reasons.append(
+                    f"30d_post {seller.post_count_30d} (ded={int(ded)})"
+                )
 
+        # 类目集中度：保持硬阈值（ratio 是比例值，0.8 是明确的职业信号）
         if (
             seller.top_category_ratio > 0
             and seller.top_category_ratio > self.thresholds.top_category_ratio
@@ -347,7 +451,7 @@ class Evaluator:
                 f"top_category_ratio {seller.top_category_ratio:.0%} > {self.thresholds.top_category_ratio:.0%}"
             )
 
-        # 描述关键词
+        # 描述关键词：保持硬扣分（关键词命中是明确的职业信号）
         for post in seller.recent_posts:
             for kw in self.professional_keywords:
                 if post.title and kw in post.title:

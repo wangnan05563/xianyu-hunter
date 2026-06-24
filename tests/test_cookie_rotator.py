@@ -304,8 +304,7 @@ def test_batch_write_cookie_object_format() -> None:
     assert cookie["name"] == "unb"
     assert cookie["value"] == "123"
     assert cookie["path"] == "/"
-    assert cookie["secure"] is True
-    assert cookie["httpOnly"] is True
+    # 不硬编码 httpOnly/secure：identity 层 Cookie 是 JS 可读的
 
 
 # ============== 线程安全测试 ==============
@@ -342,3 +341,74 @@ def test_thread_safety() -> None:
     assert len(errors) == 0
     assert rotator.is_layer_valid(CookieLayer.IDENTITY)
     assert rotator.is_layer_valid(CookieLayer.TRACKING)
+
+
+# ============== sync_state_from_cookies 测试 ==============
+
+
+def test_sync_state_from_cookies_initializes_layers() -> None:
+    """sync_state_from_cookies 应根据 Cookie 内容初始化层状态
+
+    复现场景：登录路径只写 JSON 未调用 atomic_update，层状态为默认 False。
+    sync_state_from_cookies 应根据实际 Cookie 内容将层状态更新为有效。
+    """
+    rotator = CookieRotator()
+
+    # 初始状态：所有层无效
+    assert not rotator.is_layer_valid(CookieLayer.IDENTITY)
+    assert not rotator.is_layer_valid(CookieLayer.SESSION)
+    assert not rotator.is_layer_valid(CookieLayer.TRACKING)
+
+    # 同步状态（模拟从 JSON 读取的 Cookie）
+    rotator.sync_state_from_cookies({
+        "unb": "123456",
+        "cookie2": "abc",
+        "_m_h5_tk": "token_123",
+        "_m_h5_tk_enc": "enc",
+        "cna": "xyz",
+    })
+
+    # 所有包含 Cookie 的层应变为有效
+    assert rotator.is_layer_valid(CookieLayer.IDENTITY)
+    assert rotator.is_layer_valid(CookieLayer.SESSION)
+    assert rotator.is_layer_valid(CookieLayer.TRACKING)
+
+    # cookie_count 应正确反映各层 Cookie 数量
+    identity_state = rotator.get_layer_state(CookieLayer.IDENTITY)
+    assert identity_state.cookie_count == 2  # unb, cookie2
+    session_state = rotator.get_layer_state(CookieLayer.SESSION)
+    assert session_state.cookie_count == 2  # _m_h5_tk, _m_h5_tk_enc
+
+
+def test_sync_state_from_cookies_partial_layers() -> None:
+    """sync_state_from_cookies 只更新有 Cookie 的层"""
+    rotator = CookieRotator()
+
+    # 只有 identity 层 Cookie
+    rotator.sync_state_from_cookies({"unb": "123"})
+
+    assert rotator.is_layer_valid(CookieLayer.IDENTITY)
+    assert not rotator.is_layer_valid(CookieLayer.SESSION)
+    assert not rotator.is_layer_valid(CookieLayer.TRACKING)
+
+
+def test_sync_state_from_cookies_does_not_call_writer() -> None:
+    """sync_state_from_cookies 不应触发 writer（只更新状态）"""
+    rotator = CookieRotator()
+    writer = MagicMock(return_value=1)
+    rotator.set_writer(writer)
+
+    rotator.sync_state_from_cookies({"unb": "123"})
+
+    writer.assert_not_called()
+
+
+def test_sync_state_from_cookies_empty_dict() -> None:
+    """空 Cookie 字典不应更新任何层状态"""
+    rotator = CookieRotator()
+
+    rotator.sync_state_from_cookies({})
+
+    assert not rotator.is_layer_valid(CookieLayer.IDENTITY)
+    assert not rotator.is_layer_valid(CookieLayer.SESSION)
+    assert not rotator.is_layer_valid(CookieLayer.TRACKING)

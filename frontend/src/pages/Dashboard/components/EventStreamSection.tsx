@@ -1,4 +1,4 @@
-import { Card, Col, Row, List, Tag, Empty, Button, Badge, Descriptions, Input, Space, Spin } from 'antd'
+import { Card, Col, Row, List, Tag, Empty, Button, Badge, Descriptions, Input, Space, Spin, theme } from 'antd'
 import {
   SettingOutlined,
   DatabaseOutlined,
@@ -30,6 +30,8 @@ interface EventStreamSectionProps {
 
 export default function EventStreamSection({ events, streamStatus, overview, onNavigate }: EventStreamSectionProps) {
   const navigate = useNavigate()
+  // 从 antd token 读取主题色，自动响应主题切换
+  const { token } = theme.useToken()
 
   // 登录账户状态
   const [auth, setAuth] = useState<AuthMe | null>(null)
@@ -100,10 +102,10 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
   return (
     <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
       <Col xs={24} lg={15}>
-        <Card title={<span>事件流 <Badge count={events.length} style={{ marginLeft: 6, backgroundColor: '#1677ff' }} /></span>}
+        <Card title={<span>事件流 <Badge count={events.length} style={{ marginLeft: 6, backgroundColor: token.colorInfo }} /></span>}
           extra={
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 11, color: streamStatus.includes('已连接') ? '#52c41a' : 'var(--xh-text-tertiary)' }}>{streamStatus}</span>
+              <span style={{ fontSize: 11, color: streamStatus.includes('已连接') ? token.colorSuccess : 'var(--xh-text-tertiary)' }}>{streamStatus}</span>
               <Button size="small" onClick={() => onNavigate('/timeline')}>查看全部</Button>
             </span>
           }>
@@ -142,7 +144,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
             ) : auth?.logged_in ? (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <UserOutlined style={{ color: '#FF6200', fontSize: 18 }} />
+                  <UserOutlined style={{ color: token.colorPrimary, fontSize: 18 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 13 }}>
                       {auth.nick || (`用户 ${(auth.user_id || '').slice(0, 6)}`)}
@@ -159,7 +161,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
                         size="small"
                         icon={<ThunderboltOutlined />}
                         onClick={() => setTokenExpanded(true)}
-                        style={{ fontSize: 10, color: '#e65100', borderColor: '#ffc107' }}
+                        style={{ fontSize: 10, color: token.colorWarning, borderColor: token.colorWarning }}
                       >
                         Token
                       </Button>
@@ -178,10 +180,10 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
                 {tokenExpanded && (
                   <div style={{
                     marginTop: 8, padding: '8px 10px',
-                    background: 'rgba(245, 124, 0, 0.08)', border: '1px solid rgba(245, 124, 0, 0.3)', borderRadius: 6,
+                    background: token.colorWarningBg, border: `1px solid ${token.colorWarningBorder}`, borderRadius: 6,
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontWeight: 600, color: '#f57c00', fontSize: 11 }}>
+                      <span style={{ fontWeight: 600, color: token.colorWarning, fontSize: 11 }}>
                         <ThunderboltOutlined /> 更新 _m_h5_tk
                       </span>
                       <Space size={4}>
@@ -206,13 +208,13 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
                         loading={tokenUpdating}
                         onClick={handleInjectToken}
                         disabled={!tokenValue.trim()}
-                        style={{ background: '#FF6200', borderColor: '#FF6200', fontSize: 11 }}
+                        style={{ background: token.colorPrimary, borderColor: token.colorPrimary, fontSize: 11 }}
                       >
                         更新
                       </Button>
                     </Space.Compact>
                     {tokenResult && (
-                      <div style={{ fontSize: 10, marginTop: 4, color: tokenResult.error ? '#ff4d4f' : '#52c41a' }}>
+                      <div style={{ fontSize: 10, marginTop: 4, color: tokenResult.error ? token.colorError : token.colorSuccess }}>
                         {tokenResult.text}
                       </div>
                     )}
@@ -228,7 +230,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ color: 'var(--xh-text-tertiary)' }}>未登录</span>
                 <Button size="small" type="primary" icon={<LoginOutlined />} onClick={() => navigate('/login')}
-                  style={{ background: '#FF6200', borderColor: '#FF6200' }}>
+                  style={{ background: token.colorPrimary, borderColor: token.colorPrimary }}>
                   前往登录
                 </Button>
               </div>

@@ -888,6 +888,1358 @@ export const DatabaseAdminIcon: React.FC<IconProps> = ({ size = 48, className })
 }
 
 /* ══════════════════════════════════════
+   11. 反爬登录 — AntiCrawlIcon
+   概念：身份伪装与防护突破
+   色调：靛紫 #6366F1 → #8B5CF6
+   几何：盾牌 + 指纹螺旋 + 伪装马赛克
+   ══════════════════════════════════════ */
+export const AntiCrawlIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 盾牌主体渐变 —— 深靛表达隐身防护 */}
+        <linearGradient id="acShield" x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0%" stopColor="#A5B4FC" />
+          <stop offset="60%" stopColor="#6366F1" />
+          <stop offset="100%" stopColor="#4338CA" />
+        </linearGradient>
+        <linearGradient id="acRim" x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0%" stopColor="#C7D2FE" />
+          <stop offset="100%" stopColor="#3730A3" />
+        </linearGradient>
+        <radialGradient id="acGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#8B5CF6" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#6366F1" stopOpacity="0" />
+        </radialGradient>
+        <filter id="acShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="#6366F1" floodOpacity="0.25" />
+        </filter>
+      </defs>
+
+      {/* 盾牌轮廓 —— 防护载体 */}
+      <path
+        d="M24 4 L38 10 Q39 11 39 13 L39 26 Q39 36 24 43 Q9 36 9 26 L9 13 Q9 11 10 10 Z"
+        fill="url(#acShield)" stroke="url(#acRim)" strokeWidth={stroke * 1.1}
+        filter="url(#acShadow)"
+      />
+
+      {/* 指纹螺旋 —— 同心椭圆弧表达身份伪装 */}
+      <path d="M24 14 Q16 14 16 22 Q16 30 24 30 Q32 30 32 22" fill="none"
+        stroke="#C7D2FE" strokeWidth={stroke * 0.5} strokeLinecap="round" opacity="0.9" />
+      <path d="M24 18 Q20 18 20 22 Q20 26 24 26 Q28 26 28 22" fill="none"
+        stroke="#A5B4FC" strokeWidth={stroke * 0.45} strokeLinecap="round" opacity="0.8" />
+      <path d="M24 21 Q22 21 22 22 Q22 23 24 23" fill="none"
+        stroke="#818CF8" strokeWidth={stroke * 0.4} strokeLinecap="round" opacity="0.7" />
+
+      {/* 伪装马赛克点 —— 盾牌边缘的隐身效果 */}
+      <circle cx="14" cy="16" r="1" fill="#A5B4FC" opacity="0.6" />
+      <circle cx="33" cy="17" r="0.8" fill="#8B5CF6" opacity="0.5" />
+      <circle cx="15" cy="32" r="0.7" fill="#6366F1" opacity="0.4" />
+      <circle cx="32" cy="31" r="0.9" fill="#A5B4FC" opacity="0.5" />
+
+      {/* 顶部高光 */}
+      <path d="M24 4 L38 10 Q39 11 39 13 L39 15 Q39 13 38 12 L24 6 L10 12 Q9 13 9 15 L9 13 Q9 11 10 10 Z"
+        fill="#FFF" opacity="0.15" />
+    </svg>
+  )
+}
+
+/* ══════════════════════════════════════
+   价格策略子图标族 — Price Strategy Sub-Icons
+   概念：价格策略页面内各类子功能的几何表达
+   色调：统一琥珀金 #D97706 → #F59E0B（与 PriceStrategyIcon 同色系）
+   设计 token：与主图标集一致，确保视觉连贯
+   ══════════════════════════════════════ */
+
+/* ─── 12. 硬性上限 — PriceCeilingIcon
+   概念：价格的天花板阻挡
+   几何：金币 + 上方阻挡线 + 向下压制箭头
+   ─── */
+export const PriceCeilingIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 金币主体渐变 —— 与 PriceStrategyIcon 同色系 */}
+        <linearGradient id="ceilingCoin" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FEF3C7" />
+          <stop offset="50%" stopColor="#FCD34D" />
+          <stop offset="100%" stopColor="#D97706" />
+        </linearGradient>
+        {/* 天花板阻挡线渐变 —— 红色表达"禁止超过" */}
+        <linearGradient id="ceilingBar" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#F87171" stopOpacity="0" />
+          <stop offset="50%" stopColor="#DC2626" />
+          <stop offset="100%" stopColor="#F87171" stopOpacity="0" />
+        </linearGradient>
+        {/* 阻挡箭头渐变 */}
+        <linearGradient id="ceilingArrow" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#EF4444" />
+          <stop offset="100%" stopColor="#DC2626" />
+        </linearGradient>
+        <filter id="ceilingShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#D97706" floodOpacity="0.25" />
+        </filter>
+      </defs>
+
+      {/* 天花板阻挡线 —— 水平红线表达"上限" */}
+      <line x1="6" y1="14" x2="42" y2="14" stroke="url(#ceilingBar)" strokeWidth={stroke * 1.5} strokeLinecap="round" />
+
+      {/* 阻挡箭头 —— 向下压制，表达"不能超过" */}
+      <g transform="translate(24, 6)">
+        <path d="M0 0 L0 5 M-3 2 L0 5 L3 2" fill="none" stroke="url(#ceilingArrow)" strokeWidth={stroke * 0.9} strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+
+      {/* 金币主体 —— 居中下方 */}
+      <g filter="url(#ceilingShadow)">
+        <circle cx="24" cy="30" r="11" fill="url(#ceilingCoin)" stroke="#D97706" strokeWidth={stroke * 0.8} />
+        {/* 内圈齿纹装饰 */}
+        <circle cx="24" cy="30" r="8" fill="none" stroke="#D97706" strokeWidth={stroke * 0.3} strokeDasharray="1.5 2.5" opacity="0.4" />
+      </g>
+
+      {/* ¥ 符号 */}
+      <text x="24" y="34" textAnchor="middle" fontSize="12" fontWeight="700" fill="#92400E" fontFamily="system-ui, sans-serif">¥</text>
+
+      {/* 金币高光 —— 左上反光 */}
+      <ellipse cx="19" cy="25" rx="3" ry="2" fill="#FFF" opacity="0.3" transform="rotate(-30, 19, 25)" />
+    </svg>
+  )
+}
+
+/* ─── 13. 硬性下限 — PriceFloorIcon
+   概念：价格的地面支撑
+   几何：金币 + 下方支撑线 + 向上托举箭头
+   ─── */
+export const PriceFloorIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="floorCoin" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FEF3C7" />
+          <stop offset="50%" stopColor="#FCD34D" />
+          <stop offset="100%" stopColor="#D97706" />
+        </linearGradient>
+        {/* 支撑线渐变 —— 琥珀色表达"防护底线" */}
+        <linearGradient id="floorBar" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#FBBF24" stopOpacity="0" />
+          <stop offset="50%" stopColor="#D97706" />
+          <stop offset="100%" stopColor="#FBBF24" stopOpacity="0" />
+        </linearGradient>
+        {/* 托举箭头渐变 */}
+        <linearGradient id="floorArrow" x1="0%" y1="100%" x2="0%" y2="0%">
+          <stop offset="0%" stopColor="#D97706" />
+          <stop offset="100%" stopColor="#F59E0B" />
+        </linearGradient>
+        <filter id="floorShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#D97706" floodOpacity="0.25" />
+        </filter>
+      </defs>
+
+      {/* 金币主体 —— 居中上方 */}
+      <g filter="url(#floorShadow)">
+        <circle cx="24" cy="18" r="11" fill="url(#floorCoin)" stroke="#D97706" strokeWidth={stroke * 0.8} />
+        <circle cx="24" cy="18" r="8" fill="none" stroke="#D97706" strokeWidth={stroke * 0.3} strokeDasharray="1.5 2.5" opacity="0.4" />
+      </g>
+
+      {/* ¥ 符号 */}
+      <text x="24" y="22" textAnchor="middle" fontSize="12" fontWeight="700" fill="#92400E" fontFamily="system-ui, sans-serif">¥</text>
+
+      {/* 金币高光 */}
+      <ellipse cx="19" cy="13" rx="3" ry="2" fill="#FFF" opacity="0.3" transform="rotate(-30, 19, 13)" />
+
+      {/* 支撑线 —— 下方水平线 */}
+      <line x1="6" y1="34" x2="42" y2="34" stroke="url(#floorBar)" strokeWidth={stroke * 1.5} strokeLinecap="round" />
+
+      {/* 托举箭头 —— 向上，表达"支撑" */}
+      <g transform="translate(24, 42)">
+        <path d="M0 0 L0 -5 M-3 -2 L0 -5 L3 -2" fill="none" stroke="url(#floorArrow)" strokeWidth={stroke * 0.9} strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 14. 市场参考价 — MarketRatioIcon
+   概念：与市场价的对比度量
+   几何：双柱对比 + 百分比刻度
+   ─── */
+export const MarketRatioIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 市场价柱（参考基准）—— 琥珀金 */}
+        <linearGradient id="marketBar" x1="0%" y1="100%" x2="0%" y2="0%">
+          <stop offset="0%" stopColor="#D97706" />
+          <stop offset="100%" stopColor="#FCD34D" />
+        </linearGradient>
+        {/* 当前价柱（对比项）—— 浅金 */}
+        <linearGradient id="currentBar" x1="0%" y1="100%" x2="0%" y2="0%">
+          <stop offset="0%" stopColor="#F59E0B" />
+          <stop offset="100%" stopColor="#FDE68A" />
+        </linearGradient>
+        {/* 基准线渐变 */}
+        <linearGradient id="baseLine" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#D97706" stopOpacity="0" />
+          <stop offset="50%" stopColor="#D97706" />
+          <stop offset="100%" stopColor="#D97706" stopOpacity="0" />
+        </linearGradient>
+        <filter id="marketShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" floodColor="#D97706" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 基准线 —— 底部刻度线 */}
+      <line x1="6" y1="38" x2="42" y2="38" stroke="url(#baseLine)" strokeWidth={stroke * 0.8} strokeLinecap="round" />
+
+      {/* 市场价柱（左，较高）—— 参考基准 */}
+      <g filter="url(#marketShadow)">
+        <rect x="12" y="14" width="8" height="24" rx="1.5" fill="url(#marketBar)" stroke="#D97706" strokeWidth={stroke * 0.4} />
+      </g>
+      {/* 市场价柱顶饰 —— 小三角表示"基准" */}
+      <path d="M16 11 L13 14 L19 14 Z" fill="#D97706" opacity="0.7" />
+
+      {/* 当前价柱（右，较低）—— 对比项 */}
+      <g filter="url(#marketShadow)">
+        <rect x="28" y="22" width="8" height="16" rx="1.5" fill="url(#currentBar)" stroke="#F59E0B" strokeWidth={stroke * 0.4} />
+      </g>
+      {/* 当前价柱顶饰 */}
+      <path d="M32 19 L29 22 L35 22 Z" fill="#F59E0B" opacity="0.7" />
+
+      {/* 对比连线 —— 表达"比例"关系 */}
+      <path d="M20 18 Q24 18 28 26" fill="none" stroke="#92400E" strokeWidth={stroke * 0.3} strokeDasharray="2 2" opacity="0.5" />
+
+      {/* 百分比标识 —— 右上角小标记 */}
+      <text x="38" y="12" textAnchor="middle" fontSize="6" fontWeight="600" fill="#92400E" fontFamily="system-ui, sans-serif">%</text>
+
+      {/* 装饰星芒 */}
+      <g transform="translate(10, 10)" opacity="0.5">
+        <line x1="0" y1="-2" x2="0" y2="2" stroke="#F59E0B" strokeWidth="0.8" strokeLinecap="round" />
+        <line x1="-2" y1="0" x2="2" y2="0" stroke="#F59E0B" strokeWidth="0.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 15. 同类低价 TopN — TopNIcon
+   概念：排名筛选与优胜提取
+   几何：排名柱 + 星标 + 筛选漏斗
+   ─── */
+export const TopNIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 排名柱渐变 —— 金色梯度 */}
+        <linearGradient id="rankBar1" x1="0%" y1="100%" x2="0%" y2="0%">
+          <stop offset="0%" stopColor="#D97706" />
+          <stop offset="100%" stopColor="#FCD34D" />
+        </linearGradient>
+        <linearGradient id="rankBar2" x1="0%" y1="100%" x2="0%" y2="0%">
+          <stop offset="0%" stopColor="#B45309" />
+          <stop offset="100%" stopColor="#F59E0B" />
+        </linearGradient>
+        <linearGradient id="rankBar3" x1="0%" y1="100%" x2="0%" y2="0%">
+          <stop offset="0%" stopColor="#92400E" />
+          <stop offset="100%" stopColor="#D97706" />
+        </linearGradient>
+        {/* 星标渐变 */}
+        <radialGradient id="topStar" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#FEF3C7" />
+          <stop offset="60%" stopColor="#FBBF24" />
+          <stop offset="100%" stopColor="#D97706" />
+        </radialGradient>
+        <filter id="rankShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" floodColor="#D97706" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 排名柱 —— 三根高低递减，表达"Top N 筛选" */}
+      {/* 第一名（最高，居中偏左）—— 带星标 */}
+      <g filter="url(#rankShadow)">
+        <rect x="11" y="14" width="8" height="26" rx="1.5" fill="url(#rankBar1)" stroke="#D97706" strokeWidth={stroke * 0.4} />
+      </g>
+      {/* 第二名 */}
+      <g filter="url(#rankShadow)">
+        <rect x="21" y="20" width="8" height="20" rx="1.5" fill="url(#rankBar2)" stroke="#B45309" strokeWidth={stroke * 0.4} />
+      </g>
+      {/* 第三名 */}
+      <g filter="url(#rankShadow)">
+        <rect x="31" y="26" width="8" height="14" rx="1.5" fill="url(#rankBar3)" stroke="#92400E" strokeWidth={stroke * 0.4} />
+      </g>
+
+      {/* 星标 —— 第一名顶部的金色五角星 */}
+      <g transform="translate(15, 9)">
+        <path
+          d="M0 -4 L1.2 -1.2 L4 -1 L2 1 L2.6 4 L0 2.4 L-2.6 4 L-2 1 L-4 -1 L-1.2 -1.2 Z"
+          fill="url(#topStar)" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinejoin="round"
+        />
+      </g>
+
+      {/* 筛选漏斗暗示 —— 顶部虚线弧 */}
+      <path d="M8 10 Q24 6 40 10" fill="none" stroke="#D97706" strokeWidth={stroke * 0.3} strokeDasharray="2 2" opacity="0.4" />
+
+      {/* 底部基准线 */}
+      <line x1="6" y1="42" x2="42" y2="42" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.3" />
+    </svg>
+  )
+}
+
+/* ─── 16. 实时预览 — TrendPreviewIcon
+   概念：数据趋势的可视化预览
+   几何：柱状图 + 趋势折线 + 预览框
+   ─── */
+export const TrendPreviewIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 柱状图渐变 */}
+        <linearGradient id="trendBar" x1="0%" y1="100%" x2="0%" y2="0%">
+          <stop offset="0%" stopColor="#D97706" />
+          <stop offset="100%" stopColor="#FCD34D" />
+        </linearGradient>
+        {/* 趋势线渐变 */}
+        <linearGradient id="trendLine" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#F59E0B" />
+          <stop offset="100%" stopColor="#D97706" />
+        </linearGradient>
+        {/* 预览框渐变 */}
+        <linearGradient id="previewFrame" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.8" />
+          <stop offset="100%" stopColor="#D97706" stopOpacity="0.4" />
+        </linearGradient>
+        <filter id="trendShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" floodColor="#D97706" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 预览框 —— 外层圆角矩形 */}
+      <rect x="6" y="8" width="36" height="32" rx="2" fill="none" stroke="url(#previewFrame)" strokeWidth={stroke * 0.6} strokeDasharray="3 2" opacity="0.6" />
+
+      {/* 柱状图 —— 三根递增柱子 */}
+      <g filter="url(#trendShadow)">
+        <rect x="11" y="28" width="6" height="8" rx="1" fill="url(#trendBar)" opacity="0.7" />
+        <rect x="21" y="22" width="6" height="14" rx="1" fill="url(#trendBar)" opacity="0.8" />
+        <rect x="31" y="16" width="6" height="20" rx="1" fill="url(#trendBar)" />
+      </g>
+
+      {/* 趋势折线 —— 连接柱顶，表达"增长趋势" */}
+      <path d="M14 28 L24 22 L34 16" fill="none" stroke="url(#trendLine)" strokeWidth={stroke * 0.9} strokeLinecap="round" strokeLinejoin="round" />
+
+      {/* 趋势线端点 —— 数据点高亮 */}
+      <circle cx="14" cy="28" r="1.5" fill="#F59E0B" stroke="#D97706" strokeWidth={stroke * 0.2} />
+      <circle cx="24" cy="22" r="1.5" fill="#F59E0B" stroke="#D97706" strokeWidth={stroke * 0.2} />
+      <circle cx="34" cy="16" r="1.8" fill="#FEF3C7" stroke="#D97706" strokeWidth={stroke * 0.3} />
+
+      {/* 上升箭头 —— 右上角表达"增长" */}
+      <g transform="translate(38, 12)">
+        <path d="M0 4 L0 0 M-2 2 L0 0 L2 2" fill="none" stroke="#10B981" strokeWidth={stroke * 0.8} strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+
+      {/* 底部坐标轴 */}
+      <line x1="8" y1="38" x2="40" y2="38" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.3" />
+    </svg>
+  )
+}
+
+/* ─── 17. 策略命中 — TargetHitIcon
+   概念：目标命中与统计
+   几何：靶心 + 命中标记 + 统计暗示
+   ─── */
+export const TargetHitIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 靶心环渐变 */}
+        <radialGradient id="targetRing1" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#FEF3C7" />
+          <stop offset="100%" stopColor="#FCD34D" />
+        </radialGradient>
+        <radialGradient id="targetRing2" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#F59E0B" />
+          <stop offset="100%" stopColor="#D97706" />
+        </radialGradient>
+        {/* 命中标记渐变 */}
+        <linearGradient id="hitMark" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#34D399" />
+          <stop offset="100%" stopColor="#10B981" />
+        </linearGradient>
+        {/* 命中发光 */}
+        <radialGradient id="hitGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#10B981" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#10B981" stopOpacity="0" />
+        </radialGradient>
+        <filter id="targetShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#D97706" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 靶心系统 —— 同心圆表达"精确命中" */}
+      <g filter="url(#targetShadow)">
+        <circle cx="22" cy="24" r="14" fill="none" stroke="#D97706" strokeWidth={stroke * 0.5} opacity="0.3" />
+        <circle cx="22" cy="24" r="11" fill="url(#targetRing1)" stroke="#D97706" strokeWidth={stroke * 0.6} opacity="0.7" />
+        <circle cx="22" cy="24" r="7" fill="url(#targetRing2)" stroke="#B45309" strokeWidth={stroke * 0.5} />
+        <circle cx="22" cy="24" r="3" fill="#FEF3C7" stroke="#92400E" strokeWidth={stroke * 0.4} />
+      </g>
+
+      {/* 十字准星 —— 靶心定位线 */}
+      <line x1="22" y1="8" x2="22" y2="12" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" />
+      <line x1="22" y1="36" x2="22" y2="40" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" />
+      <line x1="6" y1="24" x2="10" y2="24" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" />
+      <line x1="34" y1="24" x2="38" y2="24" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" />
+
+      {/* 命中发光 —— 靶心右侧的命中点 */}
+      <circle cx="28" cy="20" r="5" fill="url(#hitGlow)" />
+
+      {/* 命中标记 —— 绿色对勾，表达"命中通过" */}
+      <g transform="translate(28, 20)">
+        <circle cx="0" cy="0" r="4" fill="#ECFDF5" stroke="url(#hitMark)" strokeWidth={stroke * 0.5} />
+        <path d="M-2 0 L-0.5 1.5 L2.5 -2" fill="none" stroke="url(#hitMark)" strokeWidth={stroke * 0.8} strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+
+      {/* 统计暗示 —— 右下角小柱状图，表达"命中统计" */}
+      <g transform="translate(36, 36)" opacity="0.6">
+        <rect x="-4" y="-2" width="1.5" height="2" fill="#D97706" />
+        <rect x="-1.5" y="-4" width="1.5" height="4" fill="#D97706" />
+        <rect x="1" y="-3" width="1.5" height="3" fill="#D97706" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 18. 撤销恢复 — RevertIcon
+   概念：恢复原值的回退动作
+   几何：逆时针弧形箭头 + 原点标记
+   ─── */
+export const RevertIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 回退箭头渐变 —— 琥珀色表达"恢复" */}
+        <linearGradient id="revertArc" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FCD34D" />
+          <stop offset="100%" stopColor="#D97706" />
+        </linearGradient>
+        {/* 原点标记渐变 */}
+        <radialGradient id="originDot" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#FEF3C7" />
+          <stop offset="100%" stopColor="#F59E0B" />
+        </radialGradient>
+        <filter id="revertShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" floodColor="#D97706" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 回退弧线 —— 逆时针 3/4 圆弧 */}
+      <g filter="url(#revertShadow)">
+        <path
+          d="M36 24 Q36 14 26 10 Q14 10 10 22 Q8 32 18 38"
+          fill="none" stroke="url(#revertArc)" strokeWidth={stroke * 1.4} strokeLinecap="round"
+        />
+      </g>
+
+      {/* 箭头头部 —— 左上角，指向弧线起点 */}
+      <g transform="translate(10, 22)">
+        <path d="M0 0 L5 -3 L5 3 Z" fill="#D97706" stroke="#92400E" strokeWidth={stroke * 0.3} strokeLinejoin="round" />
+      </g>
+
+      {/* 原点标记 —— 弧线终点，表达"恢复到原值" */}
+      <circle cx="18" cy="38" r="3" fill="url(#originDot)" stroke="#D97706" strokeWidth={stroke * 0.5} />
+      <circle cx="18" cy="38" r="1.2" fill="#92400E" />
+
+      {/* 中心装饰 —— 小金币暗示"价值恢复" */}
+      <circle cx="24" cy="24" r="2" fill="none" stroke="#D97706" strokeWidth={stroke * 0.3} opacity="0.4" strokeDasharray="1 1" />
+
+      {/* 时间暗示 —— 右上角小时钟刻度 */}
+      <g transform="translate(36, 14)" opacity="0.5">
+        <circle cx="0" cy="0" r="3" fill="none" stroke="#D97706" strokeWidth={stroke * 0.3} />
+        <line x1="0" y1="0" x2="0" y2="-2" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinecap="round" />
+        <line x1="0" y1="0" x2="1.5" y2="0" stroke="#D97706" strokeWidth={stroke * 0.3} strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ══════════════════════════════════════
+   菜单导航图标族 — Navigation Icons
+   概念：系统导航各功能模块的几何表达
+   设计 token：与主图标集一致，确保视觉连贯
+   ══════════════════════════════════════ */
+
+/* ─── 19. 仪表盘 — DashboardIcon
+   概念：总览·监控·数据中枢
+   色调：品牌橙 #FF6200 → #FF8533
+   几何：仪表盘表盘 + 指针 + 数据节点
+   ─── */
+export const DashboardIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 表盘主体渐变 —— 品牌橙色调 */}
+        <linearGradient id="dashDial" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FFF7ED" />
+          <stop offset="50%" stopColor="#FED7AA" />
+          <stop offset="100%" stopColor="#FF8533" />
+        </linearGradient>
+        {/* 表盘边缘渐变 */}
+        <linearGradient id="dashRim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FF8533" />
+          <stop offset="100%" stopColor="#EA580C" />
+        </linearGradient>
+        {/* 指针渐变 —— 深橙强调 */}
+        <linearGradient id="dashNeedle" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FF6200" />
+          <stop offset="100%" stopColor="#C2410C" />
+        </linearGradient>
+        {/* 数据点发光 */}
+        <radialGradient id="dashGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#FF6200" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#FF6200" stopOpacity="0" />
+        </radialGradient>
+        <filter id="dashShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#FF6200" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 表盘主体 —— 半圆仪表盘形态 */}
+      <g filter="url(#dashShadow)">
+        {/* 外圈表盘 */}
+        <path d="M8 32 Q8 14 24 14 Q40 14 40 32" fill="url(#dashDial)" stroke="url(#dashRim)" strokeWidth={stroke * 1.1} strokeLinecap="round" />
+        {/* 内圈刻度环 */}
+        <path d="M12 32 Q12 18 24 18 Q36 18 36 32" fill="none" stroke="#FF8533" strokeWidth={stroke * 0.3} strokeDasharray="1.5 2" opacity="0.5" />
+      </g>
+
+      {/* 刻度线 —— 5 个主刻度 */}
+      {[
+        { x1: 10, y1: 28, x2: 12, y2: 26 },
+        { x1: 16, y1: 19, x2: 17.5, y2: 21 },
+        { x1: 24, y1: 16, x2: 24, y2: 18 },
+        { x1: 32, y1: 19, x2: 30.5, y2: 21 },
+        { x1: 38, y1: 28, x2: 36, y2: 26 },
+      ].map((tick, i) => (
+        <line key={i} x1={tick.x1} y1={tick.y1} x2={tick.x2} y2={tick.y2}
+          stroke="#EA580C" strokeWidth={stroke * 0.5} strokeLinecap="round" opacity="0.7" />
+      ))}
+
+      {/* 指针 —— 从中心指向右上，表达"健康运行" */}
+      <g transform="translate(24, 32)">
+        <line x1="0" y1="0" x2="10" y2="-12" stroke="url(#dashNeedle)" strokeWidth={stroke * 1.3} strokeLinecap="round" />
+        {/* 指针尖端高光点 */}
+        <circle cx="10" cy="-12" r="1.5" fill="#FF6200" />
+        <circle cx="10" cy="-12" r="3" fill="url(#dashGlow)" />
+      </g>
+
+      {/* 中心轴 —— 仪表盘指针转轴 */}
+      <circle cx="24" cy="32" r="2.5" fill="#EA580C" stroke="#9A3412" strokeWidth={stroke * 0.3} />
+      <circle cx="24" cy="32" r="1" fill="#FED7AA" />
+
+      {/* 底部数据条 —— 表达"数据汇总" */}
+      <rect x="14" y="36" width="20" height="3" rx="1.5" fill="url(#dashNeedle)" opacity="0.6" />
+      <line x1="16" y1="37.5" x2="18" y2="37.5" stroke="#FFF" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" />
+      <line x1="22" y1="37.5" x2="28" y2="37.5" stroke="#FFF" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" />
+
+      {/* 左上高光 —— 表盘反光 */}
+      <path d="M12 28 Q12 18 20 16 Q16 18 14 24 Z" fill="#FFF" opacity="0.25" />
+
+      {/* 装饰星芒 —— 右上角小闪光 */}
+      <g transform="translate(38, 12)" opacity="0.6">
+        <line x1="0" y1="-2.5" x2="0" y2="2.5" stroke="#FF6200" strokeWidth="1" strokeLinecap="round" />
+        <line x1="-2.5" y1="0" x2="2.5" y2="0" stroke="#FF6200" strokeWidth="1" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 20. 数据查看分组 — DataOverviewIcon
+   概念：数据聚合·多维查看
+   色调：中性蓝灰 #64748B → #94A3B8
+   几何：网格 + 数据块 + 聚合箭头
+   ─── */
+export const DataOverviewIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+  const r = s * 0.1
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 网格背景渐变 */}
+        <linearGradient id="dataGrid" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#F1F5F9" />
+          <stop offset="100%" stopColor="#CBD5E1" />
+        </linearGradient>
+        {/* 数据块渐变 —— 蓝灰色调 */}
+        <linearGradient id="dataBlock" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#94A3B8" />
+          <stop offset="100%" stopColor="#475569" />
+        </linearGradient>
+        {/* 高亮数据块 —— 品牌橙点缀 */}
+        <linearGradient id="dataHighlight" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FF8533" />
+          <stop offset="100%" stopColor="#FF6200" />
+        </linearGradient>
+        <filter id="dataShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" floodColor="#475569" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 网格背景 —— 4x4 网格表达"数据矩阵" */}
+      <rect x="6" y="6" width="36" height="36" rx={r} fill="url(#dataGrid)" stroke="#94A3B8" strokeWidth={stroke * 0.5} opacity="0.5" />
+      {/* 网格线 */}
+      <line x1="6" y1="15" x2="42" y2="15" stroke="#94A3B8" strokeWidth={stroke * 0.2} opacity="0.4" />
+      <line x1="6" y1="24" x2="42" y2="24" stroke="#94A3B8" strokeWidth={stroke * 0.2} opacity="0.4" />
+      <line x1="6" y1="33" x2="42" y2="33" stroke="#94A3B8" strokeWidth={stroke * 0.2} opacity="0.4" />
+      <line x1="15" y1="6" x2="15" y2="42" stroke="#94A3B8" strokeWidth={stroke * 0.2} opacity="0.4" />
+      <line x1="24" y1="6" x2="24" y2="42" stroke="#94A3B8" strokeWidth={stroke * 0.2} opacity="0.4" />
+      <line x1="33" y1="6" x2="33" y2="42" stroke="#94A3B8" strokeWidth={stroke * 0.2} opacity="0.4" />
+
+      {/* 数据块 —— 3 个数据块表达"聚合" */}
+      <g filter="url(#dataShadow)">
+        {/* 左上数据块 */}
+        <rect x="8" y="8" width="5" height="5" rx="1" fill="url(#dataBlock)" opacity="0.8" />
+        {/* 中心高亮块 —— 品牌橙强调 */}
+        <rect x="17" y="17" width="6" height="6" rx="1" fill="url(#dataHighlight)" />
+        {/* 右下数据块 */}
+        <rect x="34" y="34" width="5" height="5" rx="1" fill="url(#dataBlock)" opacity="0.8" />
+        {/* 右上数据块 */}
+        <rect x="34" y="8" width="5" height="5" rx="1" fill="url(#dataBlock)" opacity="0.6" />
+        {/* 左下数据块 */}
+        <rect x="8" y="34" width="5" height="5" rx="1" fill="url(#dataBlock)" opacity="0.6" />
+      </g>
+
+      {/* 聚合连线 —— 从四角向中心高亮块汇聚 */}
+      <line x1="10.5" y1="10.5" x2="17" y2="17" stroke="#FF6200" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" strokeDasharray="1.5 1.5" />
+      <line x1="36.5" y1="10.5" x2="23" y2="17" stroke="#FF6200" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" strokeDasharray="1.5 1.5" />
+      <line x1="10.5" y1="36.5" x2="17" y2="23" stroke="#FF6200" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" strokeDasharray="1.5 1.5" />
+      <line x1="36.5" y1="36.5" x2="23" y2="23" stroke="#FF6200" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.5" strokeDasharray="1.5 1.5" />
+
+      {/* 中心高亮块的脉冲光环 */}
+      <circle cx="20" cy="20" r="5.5" fill="none" stroke="#FF6200" strokeWidth={stroke * 0.15} opacity="0.3" />
+
+      {/* 装饰星芒 —— 右上角 */}
+      <g transform="translate(40, 14)" opacity="0.5">
+        <line x1="0" y1="-2" x2="0" y2="2" stroke="#FF6200" strokeWidth="0.8" strokeLinecap="round" />
+        <line x1="-2" y1="0" x2="2" y2="0" stroke="#FF6200" strokeWidth="0.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 21. 商品列表 — ItemListIcon
+   概念：商品陈列·货架展示
+   色调：青绿 #14B8A6 → #2DD4BF
+   几何：商品卡片 + 标签 + 图片占位
+   ─── */
+export const ItemListIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+  const r = s * 0.1
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 卡片背景渐变 */}
+        <linearGradient id="itemCard" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#F0FDFA" />
+          <stop offset="100%" stopColor="#CCFBF1" />
+        </linearGradient>
+        {/* 卡片边缘渐变 */}
+        <linearGradient id="itemRim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#2DD4BF" />
+          <stop offset="100%" stopColor="#0F766E" />
+        </linearGradient>
+        {/* 图片占位渐变 */}
+        <linearGradient id="itemImage" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#5EEAD4" />
+          <stop offset="100%" stopColor="#14B8A6" />
+        </linearGradient>
+        {/* 标签渐变 —— 品牌橙点缀 */}
+        <linearGradient id="itemTag" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#FF8533" />
+          <stop offset="100%" stopColor="#FF6200" />
+        </linearGradient>
+        <filter id="itemShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#14B8A6" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 后排卡片 —— 错位排列表达"列表" */}
+      <g filter="url(#itemShadow)" opacity="0.5">
+        <rect x="14" y="6" width="26" height="32" rx={r} fill="url(#itemCard)" stroke="url(#itemRim)" strokeWidth={stroke * 0.6} />
+      </g>
+
+      {/* 前排主卡片 —— 完整商品卡 */}
+      <g filter="url(#itemShadow)">
+        <rect x="8" y="10" width="26" height="32" rx={r} fill="url(#itemCard)" stroke="url(#itemRim)" strokeWidth={stroke * 0.9} />
+      </g>
+
+      {/* 商品图片占位 —— 卡片顶部图片区 */}
+      <rect x="11" y="13" width="20" height="14" rx="1.5" fill="url(#itemImage)" opacity="0.7" />
+      {/* 图片中央的图标暗示 —— 山脉+太阳 */}
+      <circle cx="16" cy="18" r="2" fill="#FEF3C7" opacity="0.8" />
+      <path d="M11 27 L17 21 L22 25 L27 19 L31 27 Z" fill="#0F766E" opacity="0.5" />
+
+      {/* 商品标题行 —— 两条横线 */}
+      <line x1="11" y1="31" x2="26" y2="31" stroke="#0F766E" strokeWidth={stroke * 0.5} strokeLinecap="round" opacity="0.7" />
+      <line x1="11" y1="34" x2="22" y2="34" stroke="#0F766E" strokeWidth={stroke * 0.4} strokeLinecap="round" opacity="0.4" />
+
+      {/* 价格标签 —— 右下角品牌橙标签 */}
+      <g transform="translate(26, 36)">
+        <rect x="0" y="0" width="8" height="5" rx="1" fill="url(#itemTag)" />
+        <text x="4" y="3.8" textAnchor="middle" fontSize="3.5" fontWeight="700" fill="#FFF" fontFamily="system-ui, sans-serif">¥</text>
+      </g>
+
+      {/* 左上高光 —— 卡片反光 */}
+      <path d="M10 12 Q10 11 11 11 L20 11 Q14 12 12 16 L10 20 Z" fill="#FFF" opacity="0.3" />
+
+      {/* 装饰星芒 —— 右上角 */}
+      <g transform="translate(38, 14)" opacity="0.5">
+        <line x1="0" y1="-2" x2="0" y2="2" stroke="#14B8A6" strokeWidth="0.8" strokeLinecap="round" />
+        <line x1="-2" y1="0" x2="2" y2="0" stroke="#14B8A6" strokeWidth="0.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 22. 抢单记录 — OrderRecordIcon
+   概念：成交记录·订单流转
+   色调：炽红 #EF4444 → #F97316
+   几何：订单单据 + 成交勾选 + 流转箭头
+   ─── */
+export const OrderRecordIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+  const r = s * 0.1
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 单据主体渐变 —— 炽红表达"成交" */}
+        <linearGradient id="orderPaper" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FFF7ED" />
+          <stop offset="50%" stopColor="#FED7AA" />
+          <stop offset="100%" stopColor="#FB923C" />
+        </linearGradient>
+        {/* 单据边缘渐变 */}
+        <linearGradient id="orderRim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FB923C" />
+          <stop offset="100%" stopColor="#DC2626" />
+        </linearGradient>
+        {/* 成交勾选渐变 —— 绿色表达"成功" */}
+        <linearGradient id="orderCheck" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#34D399" />
+          <stop offset="100%" stopColor="#10B981" />
+        </linearGradient>
+        {/* 流转箭头渐变 */}
+        <linearGradient id="orderFlow" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#F97316" stopOpacity="0" />
+          <stop offset="50%" stopColor="#EF4444" stopOpacity="0.8" />
+          <stop offset="100%" stopColor="#EF4444" stopOpacity="0" />
+        </linearGradient>
+        <filter id="orderShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#EF4444" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 流转箭头 —— 背景水平流动线 */}
+      <path d="M4 32 Q24 28 44 32" fill="none" stroke="url(#orderFlow)" strokeWidth={stroke * 0.8} strokeLinecap="round" opacity="0.5" />
+
+      {/* 单据主体 —— 带折角的订单纸 */}
+      <g filter="url(#orderShadow)">
+        <path
+          d={`M10 6 L34 6 L38 10 L38 42 L10 42 Z`}
+          fill="url(#orderPaper)" stroke="url(#orderRim)" strokeWidth={stroke * 0.9} strokeLinejoin="round"
+        />
+        {/* 折角效果 */}
+        <path d="M34 6 L34 10 L38 10" fill="none" stroke="url(#orderRim)" strokeWidth={stroke * 0.6} strokeLinejoin="round" />
+        <path d="M34 6 L38 10 L34 10 Z" fill="#FED7AA" opacity="0.8" />
+      </g>
+
+      {/* 订单内容行 —— 三条横线表达"订单项" */}
+      <line x1="14" y1="16" x2="30" y2="16" stroke="#DC2626" strokeWidth={stroke * 0.5} strokeLinecap="round" opacity="0.6" />
+      <line x1="14" y1="20" x2="26" y2="20" stroke="#DC2626" strokeWidth={stroke * 0.4} strokeLinecap="round" opacity="0.4" />
+      <line x1="14" y1="24" x2="28" y2="24" stroke="#DC2626" strokeWidth={stroke * 0.4} strokeLinecap="round" opacity="0.4" />
+
+      {/* 订单金额 —— 居中显示 */}
+      <text x="24" y="33" textAnchor="middle" fontSize="7" fontWeight="700" fill="#92400E" fontFamily="system-ui, sans-serif">¥</text>
+
+      {/* 成交勾选印章 —— 右下角绿色对勾，表达"已成交" */}
+      <g transform="translate(33, 36)">
+        <circle cx="0" cy="0" r="6" fill="#ECFDF5" stroke="url(#orderCheck)" strokeWidth={stroke * 0.6} opacity="0.95" />
+        <path d="M-3 0 L-1 2 L3 -2.5" fill="none" stroke="url(#orderCheck)" strokeWidth={stroke * 1} strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+
+      {/* 左上高光 —— 单据反光 */}
+      <path d="M12 8 Q12 7 13 7 L28 7 Q18 8 14 14 L12 18 Z" fill="#FFF" opacity="0.3" />
+
+      {/* 装饰星芒 —— 左上角小闪光 */}
+      <g transform="translate(8, 10)" opacity="0.5">
+        <line x1="0" y1="-2" x2="0" y2="2" stroke="#EF4444" strokeWidth="0.8" strokeLinecap="round" />
+        <line x1="-2" y1="0" x2="2" y2="0" stroke="#EF4444" strokeWidth="0.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 23. 评估明细 — EvalDetailIcon
+   概念：评估历史·多维评分
+   色调：靛蓝 #4F46E5 → #6366F1
+   几何：评估表 + 星级 + 评分条
+   ─── */
+export const EvalDetailIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+  const r = s * 0.1
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 评估表主体渐变 —— 靛蓝色调 */}
+        <linearGradient id="evalSheet" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#EEF2FF" />
+          <stop offset="100%" stopColor="#C7D2FE" />
+        </linearGradient>
+        {/* 评估表边缘渐变 */}
+        <linearGradient id="evalRim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#818CF8" />
+          <stop offset="100%" stopColor="#4338CA" />
+        </linearGradient>
+        {/* 星级渐变 —— 金色表达"评分" */}
+        <radialGradient id="evalStar" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#FEF3C7" />
+          <stop offset="60%" stopColor="#FBBF24" />
+          <stop offset="100%" stopColor="#D97706" />
+        </radialGradient>
+        {/* 评分条渐变 */}
+        <linearGradient id="evalBar" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#6366F1" />
+          <stop offset="100%" stopColor="#4F46E5" />
+        </linearGradient>
+        <filter id="evalShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#4F46E5" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 评估表主体 —— 圆角矩形 */}
+      <g filter="url(#evalShadow)">
+        <rect x="8" y="6" width="32" height="36" rx={r} fill="url(#evalSheet)" stroke="url(#evalRim)" strokeWidth={stroke * 0.9} />
+      </g>
+
+      {/* 评估表头部 —— 标题栏 */}
+      <rect x="8" y="6" width="32" height="6" rx={r} fill="url(#evalBar)" opacity="0.8" />
+      <rect x="8" y="10" width="32" height="2" fill="url(#evalBar)" opacity="0.6" />
+      {/* 头部标题点 */}
+      <circle cx="12" cy="9" r="1" fill="#FFF" opacity="0.8" />
+      <circle cx="16" cy="9" r="1" fill="#FFF" opacity="0.6" />
+      <circle cx="20" cy="9" r="1" fill="#FFF" opacity="0.4" />
+
+      {/* 星级评分 —— 三颗星表达"多维评估" */}
+      <g transform="translate(24, 19)">
+        {/* 左星 */}
+        <g transform="translate(-8, 0)">
+          <path d="M0 -3 L0.9 -0.9 L3 -0.75 L1.5 0.75 L2 2.8 L0 1.8 L-2 2.8 L-1.5 0.75 L-3 -0.75 L-0.9 -0.9 Z"
+            fill="url(#evalStar)" stroke="#D97706" strokeWidth={stroke * 0.2} strokeLinejoin="round" />
+        </g>
+        {/* 中星（最大，居中高亮） */}
+        <g transform="scale(1.2)">
+          <path d="M0 -3 L0.9 -0.9 L3 -0.75 L1.5 0.75 L2 2.8 L0 1.8 L-2 2.8 L-1.5 0.75 L-3 -0.75 L-0.9 -0.9 Z"
+            fill="url(#evalStar)" stroke="#D97706" strokeWidth={stroke * 0.25} strokeLinejoin="round" />
+        </g>
+        {/* 右星 */}
+        <g transform="translate(8, 0)">
+          <path d="M0 -3 L0.9 -0.9 L3 -0.75 L1.5 0.75 L2 2.8 L0 1.8 L-2 2.8 L-1.5 0.75 L-3 -0.75 L-0.9 -0.9 Z"
+            fill="url(#evalStar)" stroke="#D97706" strokeWidth={stroke * 0.2} strokeLinejoin="round" opacity="0.7" />
+        </g>
+      </g>
+
+      {/* 评分条 —— 三条递增的评分进度条 */}
+      {[
+        { y: 28, width: 14, opacity: 0.5 },
+        { y: 32, width: 18, opacity: 0.7 },
+        { y: 36, width: 22, opacity: 0.9 },
+      ].map((bar, i) => (
+        <g key={i}>
+          {/* 背景条 */}
+          <rect x="13" y={bar.y} width="22" height="2.5" rx="1" fill="#E0E7FF" opacity="0.6" />
+          {/* 填充条 */}
+          <rect x="13" y={bar.y} width={bar.width} height="2.5" rx="1" fill="url(#evalBar)" opacity={bar.opacity} />
+        </g>
+      ))}
+
+      {/* 左上高光 —— 评估表反光 */}
+      <path d="M10 8 Q10 7 11 7 L20 7 Q14 8 12 14 L10 18 Z" fill="#FFF" opacity="0.3" />
+
+      {/* 装饰星芒 —— 右上角 */}
+      <g transform="translate(38, 14)" opacity="0.5">
+        <line x1="0" y1="-2" x2="0" y2="2" stroke="#4F46E5" strokeWidth="0.8" strokeLinecap="round" />
+        <line x1="-2" y1="0" x2="2" y2="0" stroke="#4F46E5" strokeWidth="0.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 24. 事件时间线 — TimelineIcon
+   概念：时间序列·事件流转
+   色调：青绿 #14B8A6 → #2DD4BF
+   几何：时间轴 + 事件节点 + 流转连线
+   ─── */
+export const TimelineIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 时间轴主干渐变 */}
+        <linearGradient id="tlAxis" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#5EEAD4" />
+          <stop offset="50%" stopColor="#2DD4BF" />
+          <stop offset="100%" stopColor="#14B8A6" />
+        </linearGradient>
+        {/* 事件节点渐变 */}
+        <radialGradient id="tlNode" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#CCFBF1" />
+          <stop offset="60%" stopColor="#2DD4BF" />
+          <stop offset="100%" stopColor="#0F766E" />
+        </radialGradient>
+        {/* 当前事件高亮 —— 品牌橙强调 */}
+        <radialGradient id="tlCurrent" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#FED7AA" />
+          <stop offset="50%" stopColor="#FF8533" />
+          <stop offset="100%" stopColor="#EA580C" />
+        </radialGradient>
+        {/* 连线渐变 */}
+        <linearGradient id="tlBranch" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#2DD4BF" stopOpacity="0.6" />
+          <stop offset="100%" stopColor="#2DD4BF" stopOpacity="0.2" />
+        </linearGradient>
+        <filter id="tlShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="1.5" floodColor="#14B8A6" floodOpacity="0.2" />
+        </filter>
+      </defs>
+
+      {/* 时间轴主干 —— 垂直贯穿 */}
+      <line x1="16" y1="6" x2="16" y2="42" stroke="url(#tlAxis)" strokeWidth={stroke * 1.3} strokeLinecap="round" />
+
+      {/* 事件分支线 —— 右侧延伸 */}
+      <path d="M16 14 Q22 14 26 10" fill="none" stroke="url(#tlBranch)" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      <path d="M16 24 Q22 24 26 24" fill="none" stroke="url(#tlBranch)" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      <path d="M16 34 Q22 34 26 38" fill="none" stroke="url(#tlBranch)" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+
+      {/* 事件节点 1（顶部，已过去） */}
+      <g filter="url(#tlShadow)">
+        <circle cx="16" cy="10" r="3" fill="url(#tlNode)" stroke="#0F766E" strokeWidth={stroke * 0.4} opacity="0.7" />
+      </g>
+
+      {/* 事件节点 2（中部，当前 —— 品牌橙高亮） */}
+      <g filter="url(#tlShadow)">
+        <circle cx="16" cy="24" r="4" fill="url(#tlCurrent)" stroke="#C2410C" strokeWidth={stroke * 0.5} />
+        {/* 当前事件脉冲环 */}
+        <circle cx="16" cy="24" r="6.5" fill="none" stroke="#FF8533" strokeWidth={stroke * 0.2} opacity="0.4" />
+        <circle cx="16" cy="24" r="8.5" fill="none" stroke="#FF8533" strokeWidth={stroke * 0.15} opacity="0.2" />
+      </g>
+
+      {/* 事件节点 3（底部，未来） */}
+      <g filter="url(#tlShadow)">
+        <circle cx="16" cy="38" r="3" fill="url(#tlNode)" stroke="#0F766E" strokeWidth={stroke * 0.4} opacity="0.5" />
+      </g>
+
+      {/* 分支端点 —— 右侧小节点 */}
+      <circle cx="28" cy="10" r="2" fill="url(#tlNode)" stroke="#0F766E" strokeWidth={stroke * 0.3} opacity="0.7" />
+      <circle cx="28" cy="24" r="2.5" fill="url(#tlCurrent)" stroke="#C2410C" strokeWidth={stroke * 0.3} />
+      <circle cx="28" cy="38" r="2" fill="url(#tlNode)" stroke="#0F766E" strokeWidth={stroke * 0.3} opacity="0.5" />
+
+      {/* 事件标签暗示 —— 右侧短横线 */}
+      <line x1="32" y1="10" x2="40" y2="10" stroke="#0F766E" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.4" />
+      <line x1="32" y1="24" x2="42" y2="24" stroke="#C2410C" strokeWidth={stroke * 0.4} strokeLinecap="round" opacity="0.6" />
+      <line x1="32" y1="38" x2="38" y2="38" stroke="#0F766E" strokeWidth={stroke * 0.3} strokeLinecap="round" opacity="0.3" />
+
+      {/* 时间轴底部端点 */}
+      <circle cx="16" cy="42" r="1.5" fill="#14B8A6" opacity="0.5" />
+
+      {/* 装饰星芒 —— 右上角 */}
+      <g transform="translate(38, 8)" opacity="0.5">
+        <line x1="0" y1="-2" x2="0" y2="2" stroke="#14B8A6" strokeWidth="0.8" strokeLinecap="round" />
+        <line x1="-2" y1="0" x2="2" y2="0" stroke="#14B8A6" strokeWidth="0.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 25. 实时日志 — LogsIcon
+   概念：滚动文本流·终端输出
+   色调：灰蓝 #64748B → #475569
+   几何：终端窗口 + 文本行 + 光标
+   ─── */
+export const LogsIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+  const r = s * 0.1
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 终端窗口主体渐变 —— 深色背景 */}
+        <linearGradient id="logWin" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#1E293B" />
+          <stop offset="100%" stopColor="#0F172A" />
+        </linearGradient>
+        {/* 窗口边缘渐变 */}
+        <linearGradient id="logRim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#64748B" />
+          <stop offset="100%" stopColor="#334155" />
+        </linearGradient>
+        {/* 标题栏渐变 */}
+        <linearGradient id="logTitle" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#475569" />
+          <stop offset="100%" stopColor="#334155" />
+        </linearGradient>
+        {/* 文本行渐变 —— 不同颜色表达日志级别 */}
+        <linearGradient id="logLine1" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#10B981" />
+          <stop offset="100%" stopColor="#34D399" stopOpacity="0.4" />
+        </linearGradient>
+        <linearGradient id="logLine2" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#FBBF24" />
+          <stop offset="100%" stopColor="#F59E0B" stopOpacity="0.4" />
+        </linearGradient>
+        <linearGradient id="logLine3" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#60A5FA" />
+          <stop offset="100%" stopColor="#3B82F6" stopOpacity="0.4" />
+        </linearGradient>
+        {/* 光标发光 */}
+        <radialGradient id="logCursor" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#10B981" stopOpacity="0.8" />
+          <stop offset="100%" stopColor="#10B981" stopOpacity="0" />
+        </radialGradient>
+        <filter id="logShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="#1E293B" floodOpacity="0.3" />
+        </filter>
+      </defs>
+
+      {/* 终端窗口主体 —— 圆角矩形 */}
+      <g filter="url(#logShadow)">
+        <rect x="6" y="8" width="36" height="32" rx={r} fill="url(#logWin)" stroke="url(#logRim)" strokeWidth={stroke * 0.9} />
+      </g>
+
+      {/* 标题栏 —— 顶部深色条 */}
+      <path d="M6 12 Q6 8 10 8 L38 8 Q42 8 42 12 L42 14 L6 14 Z" fill="url(#logTitle)" opacity="0.8" />
+      <line x1="6" y1="14" x2="42" y2="14" stroke="#64748B" strokeWidth={stroke * 0.2} opacity="0.5" />
+
+      {/* 窗口控制按钮 —— 左上三圆点（macOS 风格） */}
+      <circle cx="10" cy="11" r="1.2" fill="#EF4444" opacity="0.8" />
+      <circle cx="14" cy="11" r="1.2" fill="#FBBF24" opacity="0.8" />
+      <circle cx="18" cy="11" r="1.2" fill="#10B981" opacity="0.8" />
+
+      {/* 日志文本行 —— 不同颜色表达不同级别 */}
+      {/* INFO 行（绿色） */}
+      <line x1="10" y1="20" x2="14" y2="20" stroke="url(#logLine1)" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      <line x1="16" y1="20" x2="32" y2="20" stroke="#34D399" strokeWidth={stroke * 0.4} strokeLinecap="round" opacity="0.6" />
+
+      {/* WARN 行（黄色） */}
+      <line x1="10" y1="25" x2="14" y2="25" stroke="url(#logLine2)" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      <line x1="16" y1="25" x2="28" y2="25" stroke="#FBBF24" strokeWidth={stroke * 0.4} strokeLinecap="round" opacity="0.6" />
+
+      {/* INFO 行（蓝色） */}
+      <line x1="10" y1="30" x2="14" y2="30" stroke="url(#logLine3)" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      <line x1="16" y1="30" x2="34" y2="30" stroke="#60A5FA" strokeWidth={stroke * 0.4} strokeLinecap="round" opacity="0.6" />
+
+      {/* 当前光标行 —— 闪烁光标 */}
+      <line x1="10" y1="35" x2="14" y2="35" stroke="url(#logLine1)" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      <rect x="16" y="33.5" width="2" height="3" rx="0.5" fill="#10B981" />
+      <circle cx="17" cy="35" r="3" fill="url(#logCursor)" />
+
+      {/* 左上高光 —— 窗口反光 */}
+      <path d="M8 10 Q8 9 9 9 L14 9 Q10 10 9 13 L8 15 Z" fill="#FFF" opacity="0.15" />
+
+      {/* 装饰星芒 —— 右上角 */}
+      <g transform="translate(38, 18)" opacity="0.4">
+        <line x1="0" y1="-1.5" x2="0" y2="1.5" stroke="#64748B" strokeWidth="0.8" strokeLinecap="round" />
+        <line x1="-1.5" y1="0" x2="1.5" y2="0" stroke="#64748B" strokeWidth="0.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 26. 错误日志 — ErrorLogIcon
+   概念：错误警示·异常追踪
+   色调：红色 #EF4444 → #DC2626
+   几何：警告三角 + 虫子 + 错误标记
+   ─── */
+export const ErrorLogIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 警告三角主体渐变 —— 红色调 */}
+        <linearGradient id="errTriangle" x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0%" stopColor="#FECACA" />
+          <stop offset="50%" stopColor="#F87171" />
+          <stop offset="100%" stopColor="#DC2626" />
+        </linearGradient>
+        {/* 三角边缘渐变 */}
+        <linearGradient id="errRim" x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0%" stopColor="#FCA5A5" />
+          <stop offset="100%" stopColor="#991B1B" />
+        </linearGradient>
+        {/* 感叹号渐变 */}
+        <linearGradient id="errMark" x1="50%" y1="0%" x2="50%" y2="100%">
+          <stop offset="0%" stopColor="#FEF2F2" />
+          <stop offset="100%" stopColor="#FECACA" />
+        </linearGradient>
+        {/* 错误发光 */}
+        <radialGradient id="errGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#EF4444" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#EF4444" stopOpacity="0" />
+        </radialGradient>
+        <filter id="errShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="#DC2626" floodOpacity="0.3" />
+        </filter>
+      </defs>
+
+      {/* 错误发光背景 */}
+      <circle cx="24" cy="24" r="20" fill="url(#errGlow)" />
+
+      {/* 警告三角主体 —— 经典警告标志 */}
+      <g filter="url(#errShadow)">
+        <path
+          d="M24 6 L42 38 L6 38 Z"
+          fill="url(#errTriangle)" stroke="url(#errRim)" strokeWidth={stroke * 1.1} strokeLinejoin="round"
+        />
+      </g>
+
+      {/* 三角内圈装饰 —— 双层表达"警示" */}
+      <path d="M24 12 L37 35 L11 35 Z" fill="none" stroke="#FECACA" strokeWidth={stroke * 0.25} opacity="0.5" />
+
+      {/* 感叹号主体 —— 居中竖线 */}
+      <rect x="22.5" y="18" width="3" height="11" rx="1.5" fill="url(#errMark)" stroke="#991B1B" strokeWidth={stroke * 0.2} />
+
+      {/* 感叹号底部圆点 */}
+      <circle cx="24" cy="33" r="2" fill="url(#errMark)" stroke="#991B1B" strokeWidth={stroke * 0.2} />
+
+      {/* 错误追踪线 —— 右下角的追踪轨迹，表达"追踪错误来源" */}
+      <path d="M38 38 Q40 40 42 42" fill="none" stroke="#DC2626" strokeWidth={stroke * 0.4} strokeLinecap="round" strokeDasharray="1.5 1.5" opacity="0.6" />
+      <circle cx="42" cy="42" r="1" fill="#DC2626" opacity="0.7" />
+
+      {/* 左上高光 —— 三角反光 */}
+      <path d="M24 6 L36 28 Q30 14 24 10 Z" fill="#FFF" opacity="0.25" />
+
+      {/* 装饰星芒 —— 右上角小闪光，表达"警示" */}
+      <g transform="translate(38, 14)" opacity="0.6">
+        <line x1="0" y1="-2.5" x2="0" y2="2.5" stroke="#EF4444" strokeWidth="1" strokeLinecap="round" />
+        <line x1="-2.5" y1="0" x2="2.5" y2="0" stroke="#EF4444" strokeWidth="1" strokeLinecap="round" />
+      </g>
+
+      {/* 左下角小错误粒子 —— 表达"错误扩散" */}
+      <circle cx="8" cy="34" r="0.8" fill="#DC2626" opacity="0.5" />
+      <circle cx="6" cy="38" r="0.6" fill="#EF4444" opacity="0.3" />
+    </svg>
+  )
+}
+
+/* ─── 27. 配置管理分组 — ConfigIcon
+   概念：齿轮设置·系统配置
+   色调：中性灰 #6B7280 → #4B5563
+   几何：齿轮 + 滑块 + 配置项
+   ─── */
+export const ConfigIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 齿轮主体渐变 —— 中性灰色调 */}
+        <linearGradient id="cfgGear" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#D1D5DB" />
+          <stop offset="50%" stopColor="#9CA3AF" />
+          <stop offset="100%" stopColor="#4B5563" />
+        </linearGradient>
+        {/* 齿轮边缘渐变 */}
+        <linearGradient id="cfgRim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#E5E7EB" />
+          <stop offset="100%" stopColor="#374151" />
+        </linearGradient>
+        {/* 中心孔渐变 */}
+        <radialGradient id="cfgCenter" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#F3F4F6" />
+          <stop offset="100%" stopColor="#D1D5DB" />
+        </radialGradient>
+        {/* 滑块渐变 —— 品牌橙点缀 */}
+        <linearGradient id="cfgSlider" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#FF8533" />
+          <stop offset="100%" stopColor="#FF6200" />
+        </linearGradient>
+        <filter id="cfgShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#4B5563" floodOpacity="0.25" />
+        </filter>
+      </defs>
+
+      {/* 齿轮主体 —— 居中大齿轮 */}
+      <g filter="url(#cfgShadow)">
+        {/* 齿轮齿 —— 8 个齿均匀分布 */}
+        {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => {
+          const rad = (angle * Math.PI) / 180
+          const x1 = 24 + Math.cos(rad) * 13
+          const y1 = 24 + Math.sin(rad) * 13
+          const x2 = 24 + Math.cos(rad) * 17
+          const y2 = 24 + Math.sin(rad) * 17
+          return (
+            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke="url(#cfgRim)" strokeWidth={stroke * 1.8} strokeLinecap="round" />
+          )
+        })}
+        {/* 齿轮主圆 */}
+        <circle cx="24" cy="24" r="13" fill="url(#cfgGear)" stroke="url(#cfgRim)" strokeWidth={stroke * 0.9} />
+      </g>
+
+      {/* 齿轮内圈装饰 —— 同心圆 */}
+      <circle cx="24" cy="24" r="10" fill="none" stroke="#6B7280" strokeWidth={stroke * 0.25} opacity="0.4" strokeDasharray="1.5 2" />
+
+      {/* 齿轮中心孔 */}
+      <circle cx="24" cy="24" r="4" fill="url(#cfgCenter)" stroke="#4B5563" strokeWidth={stroke * 0.4} />
+      <circle cx="24" cy="24" r="1.5" fill="#4B5563" opacity="0.6" />
+
+      {/* 配置滑块 —— 右下角品牌橙滑块，表达"参数调节" */}
+      <g transform="translate(36, 38)">
+        {/* 滑块轨道 */}
+        <line x1="-6" y1="0" x2="6" y2="0" stroke="#9CA3AF" strokeWidth={stroke * 0.8} strokeLinecap="round" opacity="0.6" />
+        {/* 滑块手柄 */}
+        <circle cx="2" cy="0" r="2.5" fill="url(#cfgSlider)" stroke="#C2410C" strokeWidth={stroke * 0.3} />
+      </g>
+
+      {/* 左上高光 —— 齿轮反光 */}
+      <path d="M16 16 Q14 18 14 22 Q14 16 20 14 Q18 15 16 16 Z" fill="#FFF" opacity="0.3" />
+
+      {/* 装饰星芒 —— 右上角 */}
+      <g transform="translate(40, 12)" opacity="0.5">
+        <line x1="0" y1="-2" x2="0" y2="2" stroke="#6B7280" strokeWidth="0.8" strokeLinecap="round" />
+        <line x1="-2" y1="0" x2="2" y2="0" stroke="#6B7280" strokeWidth="0.8" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ─── 28. 系统维护分组 — MaintenanceIcon
+   概念：工具维护·系统保养
+   色调：橙黄 #F59E0B → #D97706
+   几何：扳手 + 齿轮 + 维护标记
+   ─── */
+export const MaintenanceIcon: React.FC<IconProps> = ({ size = 48, className }) => {
+  const s = size
+  const stroke = s * 0.055
+
+  return (
+    <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        {/* 扳手主体渐变 —— 橙黄色调 */}
+        <linearGradient id="mntWrench" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FDE68A" />
+          <stop offset="50%" stopColor="#FBBF24" />
+          <stop offset="100%" stopColor="#D97706" />
+        </linearGradient>
+        {/* 扳手边缘渐变 */}
+        <linearGradient id="mntRim" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FCD34D" />
+          <stop offset="100%" stopColor="#92400E" />
+        </linearGradient>
+        {/* 齿轮渐变 —— 辅助元素 */}
+        <linearGradient id="mntGear" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#FBBF24" />
+          <stop offset="100%" stopColor="#B45309" />
+        </linearGradient>
+        {/* 维护标记发光 */}
+        <radialGradient id="mntGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.4" />
+          <stop offset="100%" stopColor="#F59E0B" stopOpacity="0" />
+        </radialGradient>
+        <filter id="mntShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="2.5" floodColor="#D97706" floodOpacity="0.3" />
+        </filter>
+      </defs>
+
+      {/* 维护发光背景 */}
+      <circle cx="24" cy="24" r="18" fill="url(#mntGlow)" />
+
+      {/* 扳手主体 —— 经典扳手形态，斜向放置 */}
+      <g filter="url(#mntShadow)" transform="rotate(-45, 24, 24)">
+        {/* 扳手手柄 —— 长矩形 */}
+        <rect x="22" y="14" width="4" height="22" rx="1.5" fill="url(#mntWrench)" stroke="url(#mntRim)" strokeWidth={stroke * 0.5} />
+        {/* 扳手头部 —— 开口端 */}
+        <path
+          d="M18 8 Q18 6 20 6 L28 6 Q30 6 30 8 L30 14 Q30 16 28 16 L26 16 L26 12 Q26 11 25 11 L23 11 Q22 11 22 12 L22 16 L20 16 Q18 16 18 14 Z"
+          fill="url(#mntWrench)" stroke="url(#mntRim)" strokeWidth={stroke * 0.6} strokeLinejoin="round"
+        />
+        {/* 扳手头部开口 —— U 形缺口 */}
+        <path d="M23 8 L23 13 L25 13 L25 8 Z" fill="#1E293B" opacity="0.3" />
+
+        {/* 手柄末端圆点装饰 */}
+        <circle cx="24" cy="36" r="1.5" fill="#92400E" opacity="0.6" />
+      </g>
+
+      {/* 辅助齿轮 —— 右下角小齿轮，表达"维护对象" */}
+      <g transform="translate(36, 36)">
+        {/* 齿轮齿 */}
+        {[0, 60, 120, 180, 240, 300].map((angle, i) => {
+          const rad = (angle * Math.PI) / 180
+          const x1 = Math.cos(rad) * 3.5
+          const y1 = Math.sin(rad) * 3.5
+          const x2 = Math.cos(rad) * 5
+          const y2 = Math.sin(rad) * 5
+          return (
+            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke="url(#mntGear)" strokeWidth={stroke * 0.8} strokeLinecap="round" />
+          )
+        })}
+        {/* 齿轮主体 */}
+        <circle cx="0" cy="0" r="3.5" fill="url(#mntGear)" stroke="#92400E" strokeWidth={stroke * 0.3} />
+        {/* 齿轮中心孔 */}
+        <circle cx="0" cy="0" r="1.2" fill="#FEF3C7" stroke="#D97706" strokeWidth={stroke * 0.2} />
+      </g>
+
+      {/* 维护标记粒子 —— 表达"维护中"的动态感 */}
+      <circle cx="10" cy="14" r="1.2" fill="#F59E0B" opacity="0.7" />
+      <circle cx="8" cy="18" r="0.8" fill="#FBBF24" opacity="0.5" />
+      <circle cx="12" cy="10" r="0.6" fill="#D97706" opacity="0.4" />
+
+      {/* 左上高光 —— 扳手反光 */}
+      <path d="M14 14 Q12 16 12 20 L14 18 Q14 16 16 14 Z" fill="#FFF" opacity="0.3" />
+
+      {/* 装饰星芒 —— 右上角 */}
+      <g transform="translate(40, 12)" opacity="0.6">
+        <line x1="0" y1="-2.5" x2="0" y2="2.5" stroke="#F59E0B" strokeWidth="1" strokeLinecap="round" />
+        <line x1="-2.5" y1="0" x2="2.5" y2="0" stroke="#F59E0B" strokeWidth="1" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/* ══════════════════════════════════════
    统一导出 & QuickEntryIcon 组合组件
    ══════════════════════════════════════ */
 
@@ -903,6 +2255,7 @@ export const QUICK_ENTRY_ICONS: Record<string, React.FC<IconProps>> = {
   version: VersionManagerIcon,
   cleanup: CleanupIcon,
   dbAdmin: DatabaseAdminIcon,
+  antiCrawl: AntiCrawlIcon,
 }
 
 /**
@@ -910,7 +2263,7 @@ export const QUICK_ENTRY_ICONS: Record<string, React.FC<IconProps>> = {
  * 用法：<QuickEntryIcon type="task" size={48} />
  */
 interface QuickEntryIconProps extends IconProps {
-  type: 'task' | 'price' | 'eval' | 'notifier' | 'ai' | 'buyer' | 'search' | 'version' | 'cleanup' | 'dbAdmin'
+  type: 'task' | 'price' | 'eval' | 'notifier' | 'ai' | 'buyer' | 'search' | 'version' | 'cleanup' | 'dbAdmin' | 'antiCrawl'
 }
 
 export const QuickEntryIcon: React.FC<QuickEntryIconProps> = ({ type, ...rest }) => {

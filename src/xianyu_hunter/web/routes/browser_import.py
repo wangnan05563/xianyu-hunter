@@ -49,6 +49,7 @@ def copy_file_with_share(src: str, dst: str) -> bool:
 
     优先使用 robocopy（Windows 内置，专门支持复制锁定的文件），
     如果 robocopy 不可用则回退到 CreateFileW 共享模式。
+    同时复制 WAL/SHM 辅助文件以确保数据完整性。
     """
     os.makedirs(os.path.dirname(dst), exist_ok=True)
 
@@ -62,8 +63,10 @@ def copy_file_with_share(src: str, dst: str) -> bool:
         )
         if rc.returncode <= 1:
             if os.path.exists(dst) and os.path.getsize(dst) > 0:
+                _copy_wal_shm_files(src, dst)
                 return True
         if os.path.exists(dst) and os.path.getsize(dst) > 0:
+            _copy_wal_shm_files(src, dst)
             return True
     except Exception:
         pass
@@ -94,9 +97,37 @@ def copy_file_with_share(src: str, dst: str) -> bool:
                 if not success or bytes_read.value == 0:
                     break
                 f_out.write(buf.raw[:bytes_read.value])
+        _copy_wal_shm_files(src, dst)
         return True
     finally:
         kernel32.CloseHandle(h_src)
+
+
+def _copy_wal_shm_files(src_db: str, dst_db: str) -> None:
+    """复制 SQLite 的 WAL 和 SHM 辅助文件
+
+    Edge/Chrome 的 Cookie 数据库使用 WAL 模式，运行时最新的 Cookie 可能
+    还在 WAL 文件中未提交到主数据库。只复制主文件会导致数据不完整，
+    因此需要同时复制 -wal 和 -shm 文件。
+    """
+    for suffix in ("-wal", "-shm"):
+        src_aux = src_db + suffix
+        dst_aux = dst_db + suffix
+        if os.path.exists(src_aux):
+            try:
+                # WAL/SHM 文件同样可能被锁定，使用 robocopy 复制
+                rc = subprocess.run(
+                    ["robocopy", os.path.dirname(src_aux), os.path.dirname(dst_aux),
+                     os.path.basename(src_aux), "/R:0", "/W:0", "/NJH", "/NJS", "/NDL", "/NC"],
+                    capture_output=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                )
+                # robocopy 返回码 <= 1 表示成功（0=有文件复制，1=文件已存在）
+                if rc.returncode > 1 and not os.path.exists(dst_aux):
+                    # robocopy 失败时尝试普通复制
+                    shutil.copy2(src_aux, dst_aux)
+            except Exception:
+                pass
 
 
 def decrypt_dpapi(encrypted_bytes: bytes) -> bytes | None:
@@ -274,25 +305,74 @@ def _do_import_from_browser(browser: str, auto_close: bool = False) -> dict:
         tmp_dir = Path(tempfile.mkdtemp(prefix="xh_cookie_"))
         db_copy = tmp_dir / "Cookies_copy"
 
+        # 文件复制策略（4级降级）：
+        # 1. SQLite immutable=1 + backup（完全绕过文件锁，最优先尝试）
+        # 2. SQLite mode=ro&nolock=1 + backup（兼容旧版 SQLite）
+        # 3. copy_file_with_share（robocopy + CreateFileW 共享模式）
+        # 4. 检测到锁定时自动关闭浏览器并重试（仅当 auto_close=True 或首次失败）
         copy_ok = False
+        copy_error = ""
+
+        # 策略1：immutable=1（SQLite 假设文件不会被修改，完全不需要文件锁）
         try:
-            _src = sqlite3.connect(f"file:{source_db}?mode=ro&nolock=1", uri=True)
+            _src = sqlite3.connect(f"file:{source_db}?immutable=1", uri=True)
             _dst = sqlite3.connect(str(db_copy))
             _src.backup(_dst)
             _dst.close(); _src.close()
             copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
-        except Exception:
-            pass
+        except Exception as e:
+            copy_error = str(e)
 
+        # 策略2：mode=ro&nolock=1（兼容旧版 SQLite，忽略文件锁）
+        if not copy_ok:
+            try:
+                _src = sqlite3.connect(f"file:{source_db}?mode=ro&nolock=1", uri=True)
+                _dst = sqlite3.connect(str(db_copy))
+                _src.backup(_dst)
+                _dst.close(); _src.close()
+                copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
+            except Exception as e:
+                copy_error = str(e)
+
+        # 策略3：copy_file_with_share（robocopy + CreateFileW 共享模式 + WAL/SHM）
         if not copy_ok:
             copy_ok = copy_file_with_share(str(source_db), str(db_copy))
 
+        # 策略4：检测到锁定时自动关闭浏览器并重试（即使 auto_close=False 也尝试一次）
+        if not copy_ok and not auto_close and _is_file_locked(source_db):
+            exe_name = "msedge.exe" if browser == "edge" else "chrome.exe"
+            killed_pids = _kill_browser(exe_name)
+            if killed_pids:
+                logger.info("检测到 %s 文件锁定，已自动关闭 %s 进程重试", browser, exe_name)
+                time.sleep(2)
+                # 关闭后重新尝试复制
+                try:
+                    _src = sqlite3.connect(f"file:{source_db}?immutable=1", uri=True)
+                    _dst = sqlite3.connect(str(db_copy))
+                    _src.backup(_dst)
+                    _dst.close(); _src.close()
+                    copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
+                except Exception:
+                    pass
+                if not copy_ok:
+                    copy_ok = copy_file_with_share(str(source_db), str(db_copy))
+
         if not copy_ok or not db_copy.exists() or db_copy.stat().st_size == 0:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+            # 提供更详细的错误信息和解决方案
+            is_locked = _is_file_locked(source_db)
             return {
                 "ok": False,
-                "error": f"无法读取 {browser} 的 Cookie 文件（{browser} 正在运行时文件被锁定）",
-                "hint": f"请暂时关闭 {browser} 浏览器窗口后点击「重新开始」",
+                "error": f"无法读取 {browser} 的 Cookie 文件"
+                         + (f"（{browser} 正在运行时文件被锁定）" if is_locked else "（文件读取失败）"),
+                "hint": (
+                    f"请尝试以下解决方案：\n"
+                    f"1. 完全关闭 {browser} 浏览器（包括后台进程）后重试\n"
+                    f"2. 使用「自动关闭浏览器并导入」按钮\n"
+                    f"3. 改用「Cookie 注入」标签页手动粘贴 Cookie\n"
+                    f"4. 改用「浏览器登录」标签页启动独立窗口登录"
+                ) if is_locked else f"请检查 {browser} 是否正常安装，或改用手动粘贴 Cookie 方式",
+                "error_detail": copy_error if copy_error else None,
             }
 
         with sqlite3.connect(f"file:{db_copy}?mode=ro", uri=True) as src_conn:

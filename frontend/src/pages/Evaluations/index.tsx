@@ -7,11 +7,14 @@ import {
   ReloadOutlined, AimOutlined, RobotOutlined, LinkOutlined,
   SearchOutlined, UndoOutlined, RetweetOutlined, EnvironmentOutlined,
   ClockCircleOutlined, UserOutlined, PictureOutlined,
+  CheckCircleOutlined, CloseCircleOutlined, WarningOutlined,
+  CloudDownloadOutlined, GlobalOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { evalApi, aiApi, taskApi, type EvalItem, type AIConditionResult, type Task } from '../../api'
+import { evalApi, aiApi, taskApi, type EvalItem, type AIConditionResult, type Task, type OfficialCollectResult } from '../../api'
 import { RISK_LEVEL_CONFIG } from '../../constants/riskLevels'
 import { isDataInsufficient, getInsufficientReason, type DistResponse, type SellerTrendData } from './utils'
+import { usePersistentState } from '../../hooks/usePersistentState'
 import EvalHeatmap from './components/EvalHeatmap'
 import ResultBarChart from './components/ResultBarChart'
 import PriceHistogram from './components/PriceHistogram'
@@ -22,7 +25,7 @@ const { RangePicker } = DatePicker
 // === 响应式断点（与 Ant Design 默认一致） ===
 // xs < 576, sm ≥ 576, md ≥ 768, lg ≥ 992, xl ≥ 1200, xxl ≥ 1600
 // 评估明细页主要面向桌面端，移动端走横向滚动 + 列隐藏
-const SCROLL_X = 1400
+const SCROLL_X = 1610
 
 // 把任意时间格式化为 zh-CN 友好的本地时间；无法解析时返回 null
 function formatPublishTime(raw: string | number | null | undefined): string | null {
@@ -78,7 +81,9 @@ export default function Evaluations() {
 
   // === 分页 ===
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = usePersistentState<number>('xh.evals.pageSize', 20, {
+    validator: (v): v is number => typeof v === 'number' && v > 0 && Number.isFinite(v),
+  })
 
   // === 分布图 ===
   const [dist, setDist] = useState<DistResponse | null>(null)
@@ -114,6 +119,16 @@ export default function Evaluations() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
   const [batchEvaluating, setBatchEvaluating] = useState(false)
   const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 })
+
+  // === 官方页面采集+评估 ===
+  // 单条采集 loading 状态（按 item_id 索引，支持多行独立 loading）
+  const [collecting, setCollecting] = useState<Record<string, boolean>>({})
+  // 采集结果弹窗
+  const [collectResult, setCollectResult] = useState<OfficialCollectResult | null>(null)
+  const [collectModalOpen, setCollectModalOpen] = useState(false)
+  // 批量官方采集
+  const [batchCollecting, setBatchCollecting] = useState(false)
+  const [batchCollectProgress, setBatchCollectProgress] = useState({ done: 0, total: 0 })
 
   // 用当前配置重新计算历史评估
   const onRecompute = async () => {
@@ -169,6 +184,68 @@ export default function Evaluations() {
     setBatchEvaluating(false)
     setSelectedRowKeys([])
     message.success(`批量评估完成，共处理 ${ids.length} 项`)
+    load()
+  }
+
+  // === 官方页面采集+评估（单条）===
+  // 访问闲鱼官方商品详情页+卖家主页，用完整数据重新评估
+  const onCollectOfficial = async (r: EvalItem) => {
+    const itemId = r.item_id
+    setCollecting((prev) => ({ ...prev, [itemId]: true }))
+    try {
+      const result = await evalApi.collectOfficial(itemId, r.task_id)
+      setCollectResult(result)
+      setCollectModalOpen(true)
+      message.success(`官方采集评估完成，评分：${result.evaluation.score ?? 'N/A'}`)
+      load()  // 刷新列表以展示更新后的评估结果
+    } catch (err: unknown) {
+      const error = err as { response?: { status?: number; data?: { detail?: string } } }
+      const status = error?.response?.status
+      const detail = error?.response?.data?.detail
+      if (status === 503) {
+        message.error(detail || '官方采集需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动')
+      } else if (status === 403) {
+        // 403 表示闲鱼 Cookie 失效（非系统登录失效），不能用 401 以免触发 axios 全局登出
+        message.error(detail || '闲鱼登录已过期，请重新登录闲鱼')
+      } else if (status === 502) {
+        message.error(detail || '浏览器连接异常，请重启服务后重试')
+      } else {
+        message.error(detail || '官方采集失败，请稍后重试')
+      }
+    } finally {
+      setCollecting((prev) => ({ ...prev, [itemId]: false }))
+    }
+  }
+
+  // === 批量官方采集+评估 ===
+  // 逐个调用单条端点以展示实时进度，单个失败不中断
+  const onBatchCollectOfficial = async () => {
+    const ids = items
+      .filter(item => selectedRowKeys.includes(`${item.item_id}-${item.created_at}`))
+      .map(item => item.item_id)
+    if (ids.length === 0) return
+
+    setBatchCollecting(true)
+    setBatchCollectProgress({ done: 0, total: ids.length })
+
+    let done = 0
+    let succeeded = 0
+    let failed = 0
+    for (const id of ids) {
+      try {
+        await evalApi.collectOfficial(id)
+        succeeded++
+      } catch {
+        // 单个失败不中断，继续采集下一项
+        failed++
+      }
+      done++
+      setBatchCollectProgress({ done, total: ids.length })
+    }
+
+    setBatchCollecting(false)
+    setSelectedRowKeys([])
+    message.success(`批量官方采集完成：成功 ${succeeded}，失败 ${failed}`)
     load()
   }
 
@@ -276,6 +353,36 @@ export default function Evaluations() {
       setAiModalOpen(false)
     } finally {
       setAiLoading(false)
+    }
+  }
+
+  // P3: 评估准确率反馈——写入 events.payload.feedback，用于阈值自动优化
+  // 反馈类型：accurate（准确）/ inaccurate（不准确）/ partial（部分准确）
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState<Record<string, boolean>>({})
+  const onFeedback = async (r: EvalItem, feedback: 'accurate' | 'inaccurate' | 'partial') => {
+    const itemId = r.item_id
+    const taskId = r.task_id
+    setFeedbackSubmitting((prev) => ({ ...prev, [itemId]: true }))
+    try {
+      await evalApi.submitFeedback(itemId, feedback, undefined, taskId)
+      // 本地同步更新 payload.feedback，避免重新拉取列表
+      setItems((prev) =>
+        prev.map((it) =>
+          it.item_id === itemId && it.created_at === r.created_at
+            ? { ...it, payload: { ...it.payload, feedback } }
+            : it,
+        ),
+      )
+      message.success('反馈已提交，感谢您的评价')
+    } catch (err: unknown) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status === 404) {
+        message.error('评估记录不存在，可能已被重新计算')
+      } else {
+        message.error('反馈提交失败')
+      }
+    } finally {
+      setFeedbackSubmitting((prev) => ({ ...prev, [itemId]: false }))
     }
   }
 
@@ -431,8 +538,8 @@ export default function Evaluations() {
         { text: '未注明', value: '未注明' },
         { text: '未知', value: '未知' },
       ],
-      onFilter: (val: unknown, r: EvalItem) => (r as { condition_label?: string }).condition_label === val,
-      render: (_: unknown, r: EvalItem & { condition_label?: string; condition_score?: number; is_branded_new?: boolean; has_repair?: boolean }) => {
+      onFilter: (val: unknown, r: EvalItem) => r.condition_label === val,
+      render: (_: unknown, r: EvalItem) => {
         const label = r.condition_label || '未知'
         const score = r.condition_score || 0
         // 颜色：全新=绿、近全新=蓝、正常使用=灰、明显使用=橙、故障=红
@@ -459,7 +566,7 @@ export default function Evaluations() {
     },
     {
       title: '成色标签', key: 'condition_tags', width: 150,
-      render: (_: unknown, r: EvalItem & { condition_tags?: Array<{ category: string; label: string }> }) => {
+      render: (_: unknown, r: EvalItem) => {
         const tags = r.condition_tags || []
         if (tags.length === 0) return '—'
         // 显示具体命中的关键词（限制最多 3 个，避免列表过长）
@@ -504,6 +611,55 @@ export default function Evaluations() {
           disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
         />
       ),
+    },
+    {
+      // 官方采集：访问闲鱼官方商品详情页+卖家主页，用完整数据重新评估
+      // 解决本地采集数据有限的问题，获取权威数据提升评估准确性
+      title: '官方采集', key: 'collect', width: 90,
+      render: (_: unknown, r: EvalItem) => (
+        <Tooltip title="访问闲鱼官方页面采集完整数据并重新评估">
+          <Button
+            size="small"
+            type="default"
+            icon={<CloudDownloadOutlined />}
+            loading={collecting[r.item_id]}
+            onClick={() => onCollectOfficial(r)}
+          />
+        </Tooltip>
+      ),
+    },
+    {
+      // P3: 评估准确率反馈列——三档反馈按钮，已反馈时高亮当前选项
+      title: '反馈', key: 'feedback', width: 110,
+      render: (_: unknown, r: EvalItem) => {
+        const current = r.payload?.feedback as 'accurate' | 'inaccurate' | 'partial' | undefined
+        const submitting = feedbackSubmitting[r.item_id]
+        const btn = (
+          type: 'accurate' | 'inaccurate' | 'partial',
+          icon: React.ReactNode,
+          color: string,
+          title: string,
+        ) => (
+          <Tooltip title={title}>
+            <Button
+              size="small"
+              type={current === type ? 'primary' : 'text'}
+              ghost={current === type}
+              icon={icon}
+              loading={submitting}
+              onClick={() => onFeedback(r, type)}
+              style={current === type ? { background: color, borderColor: color } : { color }}
+            />
+          </Tooltip>
+        )
+        return (
+          <Space size={2}>
+            {btn('accurate', <CheckCircleOutlined />, '#52c41a', '准确')}
+            {btn('partial', <WarningOutlined />, '#faad14', '部分准确')}
+            {btn('inaccurate', <CloseCircleOutlined />, '#ff4d4f', '不准确')}
+          </Space>
+        )
+      },
     },
   ]
 
@@ -623,14 +779,27 @@ export default function Evaluations() {
                     >
                       批量 AI 评估 ({selectedRowKeys.length} 项)
                     </Button>
+                    <Button
+                      size="small"
+                      icon={<CloudDownloadOutlined />}
+                      loading={batchCollecting}
+                      onClick={onBatchCollectOfficial}
+                    >
+                      批量官方采集 ({selectedRowKeys.length} 项)
+                    </Button>
                     <Button size="small" onClick={() => setSelectedRowKeys([])}>取消选择</Button>
                   </Space>
                 }
-                description={batchEvaluating && (
+                description={(batchEvaluating || batchCollecting) && (
                   <Progress
-                    percent={Math.round(batchProgress.done / batchProgress.total * 100)}
+                    percent={Math.round(
+                      (batchCollecting ? batchCollectProgress.done : batchProgress.done) /
+                      (batchCollecting ? batchCollectProgress.total : batchProgress.total) * 100
+                    )}
                     size="small"
-                    format={() => `${batchProgress.done}/${batchProgress.total}`}
+                    format={() =>
+                      `${batchCollecting ? batchCollectProgress.done : batchProgress.done}/${batchCollecting ? batchCollectProgress.total : batchProgress.total}`
+                    }
                   />
                 )}
               />
@@ -783,6 +952,61 @@ export default function Evaluations() {
                 <strong>评估理由：</strong>
                 <p style={{ marginTop: 4 }}>{aiResult.reason}</p>
               </div>
+              {/* 同类物品价格区间（捡漏价格参考）
+                  后端在 AI 评估时查询同类已售商品价格区间并注入评估逻辑，
+                  此处展示价格区间供用户判断当前商品价格是否合理可拾。
+                  当无数据时显示友好提示，不阻断评估流程。 */}
+              {aiResult.price_range && aiResult.price_range.sample_size > 0 ? (
+                <div style={{
+                  marginBottom: 12, padding: 12, borderRadius: 6,
+                  background: 'rgba(82, 196, 26, 0.06)', border: '1px solid #d9f7be',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <strong style={{ color: '#389e0d' }}>同类物品价格参考</strong>
+                    <Tag color="green" style={{ fontSize: 11 }}>
+                      {aiResult.price_range.source_label || aiResult.price_range.source}
+                    </Tag>
+                  </div>
+                  <Row gutter={8}>
+                    <Col span={8}>
+                      <Statistic
+                        title="捡漏价格"
+                        value={aiResult.price_range.bargain_price != null ? `¥${aiResult.price_range.bargain_price}` : '—'}
+                        valueStyle={{ color: '#52c41a', fontSize: 18 }}
+                      />
+                    </Col>
+                    <Col span={8}>
+                      <Statistic
+                        title="价格区间"
+                        value={aiResult.price_range.min_price != null && aiResult.price_range.max_price != null
+                          ? `¥${aiResult.price_range.min_price}~${aiResult.price_range.max_price}`
+                          : '—'}
+                        valueStyle={{ fontSize: 14 }}
+                      />
+                    </Col>
+                    <Col span={8}>
+                      <Statistic
+                        title="中位数"
+                        value={aiResult.price_range.median_price != null ? `¥${aiResult.price_range.median_price}` : '—'}
+                        valueStyle={{ fontSize: 14 }}
+                      />
+                    </Col>
+                  </Row>
+                  <div style={{ marginTop: 8, fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                    样本数：{aiResult.price_range.sample_size}
+                    {aiResult.price_range.range_days ? ` · 近${aiResult.price_range.range_days}天` : ''}
+                    {' · 低于捡漏价格的商品可能为真捡漏，也需警惕假货风险'}
+                  </div>
+                </div>
+              ) : (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="暂无同类物品价格参考"
+                  description={aiResult.price_range?.message || '当前商品无关联任务或暂无已售数据，建议先执行实时搜索采集更多商品以获取价格参考。'}
+                />
+              )}
               {aiResult.risk_signals?.length > 0 && (
                 <div style={{ marginBottom: 12 }}>
                   <strong>风险信号：</strong>
@@ -808,6 +1032,162 @@ export default function Evaluations() {
             !aiLoading && <Empty description="点击评估按钮开始 AI 分析" />
           )}
         </Spin>
+      </Modal>
+
+      {/* 官方采集结果弹窗：展示从闲鱼官方页面采集的完整数据 + 重新评估结果 */}
+      <Modal
+        title={
+          <Space>
+            <GlobalOutlined style={{ color: '#1890ff' }} />
+            <span>官方采集结果 - {collectResult?.item_id}</span>
+            <Tag color="blue">官方数据</Tag>
+          </Space>
+        }
+        open={collectModalOpen}
+        onCancel={() => setCollectModalOpen(false)}
+        footer={<Button onClick={() => setCollectModalOpen(false)}>关闭</Button>}
+        width={720}
+      >
+        {collectResult && (
+          <div>
+            {/* 评估结果摘要 */}
+            <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col span={6}>
+                <Card size="small">
+                  <Statistic
+                    title="评估评分"
+                    value={collectResult.evaluation.score ?? 'N/A'}
+                    valueStyle={{
+                      color: collectResult.evaluation.score != null
+                        ? (collectResult.evaluation.score >= 80 ? '#52c41a'
+                          : collectResult.evaluation.score >= 60 ? '#faad14' : '#ff4d4f')
+                        : '#999',
+                      fontSize: 24,
+                    }}
+                  />
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small">
+                  <Statistic
+                    title="风险等级"
+                    value={collectResult.evaluation.risk_level}
+                    valueStyle={{ fontSize: 16 }}
+                  />
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small">
+                  <Statistic
+                    title="数据质量"
+                    value={collectResult.evaluation.data_quality}
+                    valueStyle={{ fontSize: 16 }}
+                  />
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small">
+                  <Statistic
+                    title="是否通过"
+                    value={collectResult.evaluation.is_passed ? '通过' : '未通过'}
+                    valueStyle={{
+                      color: collectResult.evaluation.is_passed ? '#52c41a' : '#ff4d4f',
+                      fontSize: 16,
+                    }}
+                  />
+                </Card>
+              </Col>
+            </Row>
+
+            {/* 商品基本信息 */}
+            <Card title="商品信息" size="small" style={{ marginBottom: 12 }}>
+              <Row gutter={[8, 8]}>
+                <Col span={12}><strong>标题：</strong>{collectResult.item.title || '—'}</Col>
+                <Col span={6}><strong>价格：</strong><span style={{ color: '#f5222d', fontWeight: 600 }}>¥{collectResult.item.price?.toFixed(2)}</span></Col>
+                <Col span={6}><strong>地区：</strong>{collectResult.item.region || '—'}</Col>
+                <Col span={6}><strong>想要数：</strong>{collectResult.item.want_cnt}</Col>
+                <Col span={6}><strong>浏览数：</strong>{collectResult.item.view_cnt}</Col>
+                <Col span={24}>
+                  <strong>描述：</strong>
+                  <p style={{ marginTop: 4, maxHeight: 100, overflow: 'auto', color: 'var(--xh-text-secondary)' }}>
+                    {collectResult.item.description || '暂无描述'}
+                  </p>
+                </Col>
+                {collectResult.item.image_urls.length > 0 && (
+                  <Col span={24}>
+                    <strong>商品图片：</strong>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                      {collectResult.item.image_urls.slice(0, 6).map((url, i) => (
+                        <Image
+                          key={i}
+                          src={url}
+                          referrerPolicy="no-referrer"
+                          width={80}
+                          height={80}
+                          style={{ objectFit: 'cover', borderRadius: 4 }}
+                          alt={`图片${i + 1}`}
+                        />
+                      ))}
+                    </div>
+                  </Col>
+                )}
+              </Row>
+            </Card>
+
+            {/* 卖家信息 */}
+            <Card title="卖家信息" size="small" style={{ marginBottom: 12 }}>
+              <Row gutter={[8, 8]}>
+                <Col span={8}><strong>昵称：</strong>{collectResult.seller.nick || '—'}</Col>
+                <Col span={8}><strong>信用分：</strong>{collectResult.seller.credit_score ?? '—'}</Col>
+                <Col span={8}><strong>注册天数：</strong>{collectResult.seller.register_days}天</Col>
+                <Col span={8}><strong>在售数：</strong>{collectResult.seller.on_sale_count}</Col>
+                <Col span={8}><strong>已售数：</strong>{collectResult.seller.sold_count}</Col>
+                <Col span={8}><strong>卖家ID：</strong>{collectResult.seller.id || '—'}</Col>
+              </Row>
+            </Card>
+
+            {/* 评价信息 */}
+            {collectResult.reviews.length > 0 && (
+              <Card title={`评价/留言 (${collectResult.reviews.length})`} size="small" style={{ marginBottom: 12 }}>
+                {collectResult.reviews.map((review, i) => (
+                  <div key={i} style={{
+                    padding: '6px 0', borderBottom: i < collectResult.reviews.length - 1 ? '1px solid #f0f0f0' : 'none',
+                    fontSize: 13,
+                  }}>
+                    {review}
+                  </div>
+                ))}
+              </Card>
+            )}
+
+            {/* 评估维度详情 */}
+            <Card title="评估维度详情" size="small" style={{ marginBottom: 12 }}>
+              <Row gutter={[8, 8]}>
+                {Object.entries(collectResult.evaluation.dimension_scores).map(([dim, score]) => (
+                  <Col key={dim} span={8}>
+                    <Statistic
+                      title={dim}
+                      value={score}
+                      valueStyle={{ fontSize: 16, color: score >= 70 ? '#52c41a' : score >= 40 ? '#faad14' : '#ff4d4f' }}
+                    />
+                  </Col>
+                ))}
+              </Row>
+              {collectResult.evaluation.reject_reasons.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <strong>拒绝原因：</strong>
+                  {collectResult.evaluation.reject_reasons.map((reason, i) => (
+                    <Tag key={i} color="orange" style={{ marginBottom: 4 }}>{reason}</Tag>
+                  ))}
+                </div>
+              )}
+            </Card>
+
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', textAlign: 'center' }}>
+              数据来源：闲鱼官方页面采集 · 采集时间：{new Date().toLocaleString('zh-CN', { hour12: false })}
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )

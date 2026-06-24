@@ -290,8 +290,9 @@ export default function SearchConfig() {
                     }}
                     style={{
                       fontSize: 12,
-                      borderColor: filterTags.includes(tag) ? '#FF6200' : undefined,
-                      color: filterTags.includes(tag) ? '#FF6200' : undefined,
+                      // 选中时由 type="primary" 提供橙底白字；未选中时用橙色描边+文字做主题暗示
+                      borderColor: filterTags.includes(tag) ? undefined : '#FF6200',
+                      color: filterTags.includes(tag) ? undefined : '#FF6200',
                     }}
                   >
                     {tag}

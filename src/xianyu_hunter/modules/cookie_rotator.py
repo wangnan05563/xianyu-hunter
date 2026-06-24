@@ -185,9 +185,10 @@ class CookieRotator:
             # 4. 批量写入所有域名
             written = self._batch_write(layer_cookies)
 
-            # 5. 更新层状态
+            # 5. 更新层状态（写入成功或无 writer 时标记有效）
+            # 为什么无 writer 也标记有效：测试/只读场景下，层状态仍需要更新
             self._layer_states[layer] = LayerState(
-                valid=True,
+                valid=(written > 0 or self._writer is None),
                 updated_at=time.time(),
                 cookie_count=len(layer_cookies),
             )
@@ -218,6 +219,31 @@ class CookieRotator:
             for layer in CookieLayer:
                 self._layer_states[layer].valid = False
             logger.warning("所有 Cookie 层已标记失效")
+
+    def sync_state_from_cookies(self, cookies: dict[str, str]) -> None:
+        """根据实际 Cookie 内容同步层状态（不触发 writer）
+
+        为什么需要此方法：browser_login / auth_helper / browser_import / cookie_inject
+        等登录路径只调用 CookieStore.export_cookies 写入 JSON，未调用 on_login_success，
+        导致 CookieRotator 层状态保持默认 False，引发健康检查误判 Cookie 无效。
+        此方法根据 Cookie 实际内容更新层状态，修复状态不一致。
+
+        Args:
+            cookies: Cookie 名称到值的映射（通常从 JSON 文件读取）
+        """
+        with self._lock:
+            for layer, layer_def in LAYER_DEFINITIONS.items():
+                layer_cookie_names = layer_def.cookies & set(cookies.keys())
+                if layer_cookie_names:
+                    self._layer_states[layer] = LayerState(
+                        valid=True,
+                        updated_at=time.time(),
+                        cookie_count=len(layer_cookie_names),
+                    )
+                    logger.info(
+                        "Cookie 层 %s 状态已同步: %d 个 Cookie",
+                        layer.value, len(layer_cookie_names),
+                    )
 
     # ============== 状态查询 ==============
 
@@ -275,8 +301,9 @@ class CookieRotator:
                     "value": value,
                     "domain": domain,
                     "path": "/",
-                    "secure": True,
-                    "httpOnly": True,
+                    # 不硬编码 httpOnly/secure：identity 层 Cookie（如 unb）
+                    # 是 JS 可读的，强制 httpOnly 会触发闲鱼检测异常
+                    "sameSite": "Lax",
                 })
 
         try:

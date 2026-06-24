@@ -31,6 +31,7 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import { anticrawlApi } from '../../api'
+import { usePersistentState } from '../../hooks/usePersistentState'
 import type {
   StrategyEvaluation,
   SessionStatus,
@@ -89,8 +90,10 @@ export default function AntiCrawl() {
   const [loadingHealth, setLoadingHealth] = useState(false)
   const [loadingLayers, setLoadingLayers] = useState(false)
 
-  // CDP 模式开关
-  const [useCdp, setUseCdp] = useState(false)
+  // CDP 模式开关（持久化：刷新后保持上次设置）
+  const [useCdp, setUseCdp] = usePersistentState<boolean>('xh.anticrawl.useCdp', false, {
+    validator: (v): v is boolean => typeof v === 'boolean',
+  })
 
   // Cookie 更新弹窗
   const [cookieModalOpen, setCookieModalOpen] = useState(false)
@@ -228,7 +231,15 @@ export default function AntiCrawl() {
   const handleHealthCheck = async () => {
     try {
       setLoadingHealth(true)
-      const result = await anticrawlApi.checkHealth()
+      let result = await anticrawlApi.checkHealth()
+      // 未配置检查器时自动初始化后重试
+      if (!result.ok && result.error?.includes('initialize')) {
+        const initResult = await anticrawlApi.initialize(useCdp)
+        if (initResult.ok) {
+          await loadAll()
+          result = await anticrawlApi.checkHealth()
+        }
+      }
       setHealth(result)
       if (result.ok) {
         if (result.is_healthy) {

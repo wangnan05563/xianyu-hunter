@@ -177,6 +177,12 @@ export interface EvalItem {
   item_id: string
   task_id: string
   created_at: string
+  // 后端 _enrich_condition_tags 添加的成色评估字段（顶级，非 payload 内）
+  condition_label?: string
+  condition_score?: number
+  condition_tags?: Array<{ category: string; label: string }>
+  is_branded_new?: boolean
+  has_repair?: boolean
   payload: {
     score: number
     risk_level: string
@@ -190,6 +196,23 @@ export interface EvalItem {
 
 // ============== AI ==============
 
+// 同类物品已售价格区间（捡漏价格参考）
+// 后端 GET /api/prices/sold-range 返回结构
+export interface SoldPriceRange {
+  min_price: number | null
+  max_price: number | null
+  median_price: number | null
+  // 捡漏价格 = 已售商品最低价，低于此价视为捡漏机会
+  bargain_price: number | null
+  sample_size: number
+  // 数据来源：sold=已售成交价 / all_fallback=全部商品参考价 / empty=无数据
+  source: 'sold' | 'all_fallback' | 'all_fallback_insufficient' | 'empty'
+  source_label?: string
+  task_id?: string | null
+  range_days?: number
+  message?: string  // 无数据时的友好提示
+}
+
 export interface AIConditionResult {
   verdict: 'recommend' | 'caution'
   condition_score: number
@@ -198,6 +221,8 @@ export interface AIConditionResult {
   detail?: string
   source: 'llm' | 'rule'
   cached?: boolean
+  // 同类物品价格区间（捡漏价格参考），仅当后端查询到数据时存在
+  price_range?: SoldPriceRange
 }
 
 export interface AIConfig {
@@ -360,6 +385,25 @@ export interface LogEntry {
   task_id?: string
   message: string
   payload?: Record<string, unknown>
+}
+
+export interface ErrorLog {
+  id: number
+  timestamp: string
+  error_type: string
+  error_message: string
+  stack_trace?: string
+  request_method?: string
+  request_path?: string
+  request_params?: Record<string, unknown>
+  request_headers?: Record<string, string>
+  client_ip?: string
+  user_agent?: string
+  server_env?: Record<string, string>
+  ai_context_json?: string
+  ai_context_md?: string
+  status: 'new' | 'resolved' | 'ignored'
+  created_at: string
 }
 
 // ============== 系统维护 ==============

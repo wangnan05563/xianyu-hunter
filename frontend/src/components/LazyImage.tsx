@@ -1,11 +1,21 @@
 import { useState, useRef, useEffect, type ImgHTMLAttributes } from 'react'
 
+// 阿里云占位图特征标记：2x2 或 1x1 透明 PNG
+// 闲鱼搜索 API 对部分商品只返回这类占位图，前端需检测并显示占位符
+const PLACEHOLDER_MARKS = ['tps-2-2', '2-2.png', '1x1.png']
+
+function isPlaceholderUrl(url: string): boolean {
+  return PLACEHOLDER_MARKS.some(m => url.includes(m))
+}
+
 /**
  * 懒加载图片组件
  *
  * 使用 Intersection Observer 仅在图片进入视口时加载，
  * 避免一次性加载几十张图片导致的网络拥塞和渲染卡顿。
  * 配合占位符实现平滑过渡。
+ *
+ * 特殊处理：检测阿里云2x2占位图URL，直接显示占位符而非加载透明像素
  */
 export default function LazyImage({
   src,
@@ -18,6 +28,9 @@ export default function LazyImage({
   const [loaded, setLoaded] = useState(false)
   const [inView, setInView] = useState(false)
   const imgRef = useRef<HTMLDivElement>(null)
+
+  // 检测占位图URL：如果是2x2占位图，直接显示占位符
+  const isPlaceholder = src ? isPlaceholderUrl(src) : false
 
   useEffect(() => {
     const el = imgRef.current
@@ -39,6 +52,30 @@ export default function LazyImage({
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
+
+  // 占位图直接显示占位符，不加载2x2透明图
+  if (isPlaceholder) {
+    return (
+      <div
+        ref={imgRef}
+        style={{
+          width,
+          height,
+          position: 'relative',
+          overflow: 'hidden',
+          background: '#f5f5f5',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: '#bfbfbf',
+          fontSize: 20,
+          ...style,
+        }}
+      >
+        🖼️
+      </div>
+    )
+  }
 
   return (
     <div

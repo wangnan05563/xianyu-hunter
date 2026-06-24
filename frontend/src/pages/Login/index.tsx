@@ -14,6 +14,8 @@ import {
   Tag,
   Divider,
   Progress,
+  Modal,
+  theme,
 } from 'antd'
 import {
   LoginOutlined,
@@ -28,18 +30,60 @@ import {
   SwapOutlined,
   ThunderboltOutlined,
   ClearOutlined,
+  QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { authApi } from '../../api'
 import type { LoginStatus, SavedCookieInfo } from '../../api/auth'
+import TidalForagers from '../../components/TidalForagers'
+import { useTheme } from '../../contexts/ThemeContext'
 
 const { TextArea } = Input
 const { Text, Title } = Typography
+
+// 解析 Cookie 文本，支持多种粘贴格式：
+// - 标准 Cookie 头：key1=value1; key2=value2
+// - 换行分隔（从开发者工具表格复制）：key1=value1\nkey2=value2
+// - 带前缀的请求头：Cookie: key1=value1; key2=value2
+// - 末尾分号：key1=value1; key2=value2;
+// 值中可能包含 = 号，所以只按第一个 = 分割
+const parseCookieText = (text: string): Record<string, string> => {
+  const result: Record<string, string> = {}
+  if (!text) return result
+
+  // 移除可能的 "Cookie:" 前缀（从请求头复制的情况）
+  const cleaned = text.replace(/^Cookie:\s*/i, '').trim()
+  if (!cleaned) return result
+
+  // 支持分号、换行、逗号作为键值对分隔符
+  const parts = cleaned.split(/[;\n\r,]+/)
+  for (const part of parts) {
+    const trimmed = part.trim()
+    if (!trimmed) continue
+
+    const eqIndex = trimmed.indexOf('=')
+    if (eqIndex === -1) continue
+
+    const key = trimmed.substring(0, eqIndex).trim()
+    const value = trimmed.substring(eqIndex + 1).trim()
+
+    // 过滤无效 key（必须符合 Cookie 命名规范）和空值
+    if (!key || !/^[a-zA-Z0-9_\-]+$/.test(key)) continue
+    if (!value) continue
+
+    result[key] = value
+  }
+
+  return result
+}
 
 // 登录页面：独立于 MainLayout，提供多种登录方式
 export default function Login() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const redirect = searchParams.get('redirect') || '/'
+  // 主题适配：玻璃态卡片颜色、Cookie 字段标签背景等都需要跟随主题
+  const { isDark } = useTheme()
+  const { token: themeToken } = theme.useToken()
 
   // 当前登录态信息
   const [cookieInfo, setCookieInfo] = useState<SavedCookieInfo | null>(null)
@@ -59,6 +103,14 @@ export default function Login() {
   const [autoFilling, setAutoFilling] = useState(false)
   const [autoFillResult, setAutoFillResult] = useState<{ text: string; error: boolean } | null>(null)
 
+  // 快速粘贴：用户可从浏览器开发者工具全量复制 Cookie 键值对后直接粘贴
+  const [pasteText, setPasteText] = useState('')
+  const [parseResult, setParseResult] = useState<{
+    total: number
+    matched: string[]
+    missing: string[]
+  } | null>(null)
+
   // 浏览器导入 Tab 状态
   const [browserStatus, setBrowserStatus] = useState<{
     edge: { exists: boolean; has_goofish_cookie: boolean }
@@ -70,6 +122,9 @@ export default function Login() {
   // 浏览器窗口登录 Tab 状态
   const [loginStatus, setLoginStatus] = useState<LoginStatus | null>(null)
   const [pollTimer, setPollTimer] = useState<ReturnType<typeof setInterval> | null>(null)
+
+  // Cookie 教程 Modal
+  const [tutorialVisible, setTutorialVisible] = useState(false)
 
   const pollRef = useRef(pollTimer)
   pollRef.current = pollTimer
@@ -154,6 +209,49 @@ export default function Login() {
   const handleClearCookies = () => {
     setCookieFields({ _m_h5_tk: '', cookie2: '', sgcookie: '', unb: '' })
     setAutoFillResult(null)
+    setPasteText('')
+    setParseResult(null)
+  }
+
+  // 解析粘贴的 Cookie 文本，提取关键键值对并填充到分字段输入框
+  const handleParsePaste = (text: string) => {
+    setPasteText(text)
+    const trimmed = text.trim()
+    if (!trimmed) {
+      setParseResult(null)
+      return
+    }
+
+    const parsed = parseCookieText(trimmed)
+    const allKeys = Object.keys(parsed)
+    if (allKeys.length === 0) {
+      setParseResult({ total: 0, matched: [], missing: [...COOKIE_KEYS.map((ck) => ck.key)] })
+      return
+    }
+
+    // 将解析出的关键 Cookie 填充到分字段输入框
+    const updated = { ...cookieFields }
+    const matched: string[] = []
+    for (const ck of COOKIE_KEYS) {
+      if (parsed[ck.key]) {
+        updated[ck.key] = parsed[ck.key]
+        matched.push(ck.key)
+      }
+    }
+    setCookieFields(updated)
+
+    const missing = COOKIE_KEYS.map((ck) => ck.key).filter((k) => !matched.includes(k))
+    setParseResult({ total: allKeys.length, matched, missing })
+  }
+
+  // 粘贴事件处理：实时解析剪贴板内容
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    // 使用剪贴板原始文本，确保解析准确性
+    const text = e.clipboardData.getData('text')
+    if (text) {
+      e.preventDefault()
+      handleParsePaste(text)
+    }
   }
 
   // 从浏览器自动获取（填充到各字段）
@@ -210,22 +308,27 @@ export default function Login() {
   }
 
   // ===== 浏览器导入 =====
-  const handleImportFromBrowser = async (browser: 'edge' | 'chrome') => {
+  // autoClose: 检测到文件锁定时自动关闭浏览器进程后重试
+  const handleImportFromBrowser = async (browser: 'edge' | 'chrome', autoClose: boolean = false) => {
     setImporting(true)
     setImportResult(null)
     try {
-      const result = await authApi.importFromBrowser(browser)
+      const result = await authApi.importFromBrowser(browser, autoClose)
       if (result.ok) {
         setImportResult(result.message || `成功从 ${browser} 导入 ${result.injected} 个 Cookie`)
-        message.success(setImportResult as unknown as string)
+        message.success(result.message || '导入成功')
         onLoginSuccess()
       } else {
-        setImportResult(result.error || '导入失败')
-        message.error(result.error || '导入失败')
+        // 格式化错误提示，支持多行 hint 显示
+        const errMsg = result.error || '导入失败'
+        const hint = result.hint || ''
+        setImportResult(hint ? `${errMsg}\n${hint}` : errMsg)
+        message.error(errMsg)
       }
     } catch (err: any) {
       const errMsg = err?.response?.data?.error || '请求失败'
-      setImportResult(errMsg)
+      const hint = err?.response?.data?.hint || ''
+      setImportResult(hint ? `${errMsg}\n${hint}` : errMsg)
       message.error(errMsg)
     } finally {
       setImporting(false)
@@ -298,12 +401,15 @@ export default function Login() {
 
   if (checkingAuth) {
     return (
-      <div style={{
-        display: 'flex', justifyContent: 'center', alignItems: 'center',
-        height: '100vh', background: 'var(--xh-bg-layout)',
-      }}>
-        <Spin size="large" tip="正在检查登录状态..."><div /></Spin>
-      </div>
+      <>
+        <TidalForagers />
+        <div style={{
+          display: 'flex', justifyContent: 'center', alignItems: 'center',
+          height: '100vh', position: 'relative', zIndex: 1,
+        }}>
+          <Spin size="large" tip="正在检查登录状态..."><div /></Spin>
+        </div>
+      </>
     )
   }
 
@@ -311,7 +417,7 @@ export default function Login() {
     {
       key: 'cookie-inject',
       label: (
-        <span><KeyOutlined /> Cookie 注入</span>
+        <span style={{ fontWeight: 500 }}><KeyOutlined /> Cookie 注入</span>
       ),
       children: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -326,7 +432,7 @@ export default function Login() {
               {autoFilling ? '读取中…' : '从浏览器自动获取'}
             </Button>
             {autoFillResult && (
-              <span style={{ fontSize: 12, color: autoFillResult.error ? '#e65100' : '#52c41a' }}>
+              <span style={{ fontSize: 12, color: autoFillResult.error ? themeToken.colorError : themeToken.colorSuccess }}>
                 {autoFillResult.text}
               </span>
             )}
@@ -355,7 +461,60 @@ export default function Login() {
             />
           )}
 
-          {/* 分字段输入 */}
+          {/* 快速粘贴：从浏览器开发者工具全量复制 Cookie 键值对后直接粘贴 */}
+          <div style={{
+            padding: 12,
+            borderRadius: 8,
+            background: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.02)',
+            border: `1px dashed ${themeToken.colorBorder}`,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: themeToken.colorText }}>
+                <CopyOutlined style={{ marginRight: 4 }} />
+                快速粘贴 Cookie
+              </span>
+              <Text type="secondary" style={{ fontSize: 10 }}>
+                支持格式：key=value; key=value 或换行分隔
+              </Text>
+            </div>
+            <TextArea
+              rows={3}
+              placeholder="从此处粘贴从浏览器复制的 Cookie，例如：&#10;_m_h5_tk=xxx; cookie2=xxx; sgcookie=xxx; unb=xxx"
+              value={pasteText}
+              onChange={(e) => handleParsePaste(e.target.value)}
+              onPaste={handlePaste}
+              style={{ fontFamily: 'monospace', fontSize: 11 }}
+              disabled={injecting}
+            />
+            {/* 解析结果反馈 */}
+            {parseResult && (
+              <div style={{ marginTop: 6, fontSize: 11 }}>
+                {parseResult.total > 0 ? (
+                  <Space size={4} wrap>
+                    <span style={{ color: themeToken.colorTextSecondary }}>
+                      识别到 <strong style={{ color: themeToken.colorPrimary }}>{parseResult.total}</strong> 个 Cookie
+                    </span>
+                    {parseResult.matched.length > 0 && (
+                      <span style={{ color: themeToken.colorSuccess }}>
+                        ✓ 已填充: {parseResult.matched.join(', ')}
+                      </span>
+                    )}
+                    {parseResult.missing.length > 0 && (
+                      <span style={{ color: themeToken.colorWarning }}>
+                        ⚠ 未找到: {parseResult.missing.join(', ')}
+                      </span>
+                    )}
+                  </Space>
+                ) : (
+                  <span style={{ color: themeToken.colorError }}>
+                    未识别到有效的 Cookie 键值对，请检查格式
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* 分字段输入（用于精细调整） */}
           <div style={{
             display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10,
           }}>
@@ -363,7 +522,7 @@ export default function Login() {
               <div key={ck.key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Tag color="blue" style={{ fontSize: 11, fontFamily: 'monospace' }}>{ck.key}</Tag>
-                  <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{ck.label}</span>
+                  <span style={{ fontSize: 11, color: themeToken.colorTextSecondary, fontWeight: 500 }}>{ck.label}</span>
                 </div>
                 <Input
                   placeholder={`粘贴 ${ck.key} 的值`}
@@ -373,33 +532,11 @@ export default function Login() {
                   disabled={injecting}
                 />
                 {ck.hint && (
-                  <span style={{ fontSize: 10, color: '#e65100' }}>{ck.hint}</span>
+                  <span style={{ fontSize: 10, color: themeToken.colorWarning, fontWeight: 500 }}>{ck.hint}</span>
                 )}
               </div>
             ))}
           </div>
-
-          {/* 高级：整段粘贴（兼容旧格式） */}
-          <details style={{ marginTop: 4 }}>
-            <summary style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', cursor: 'pointer' }}>
-              高级：粘贴整段 Cookie 文本
-            </summary>
-            <TextArea
-              rows={3}
-              placeholder="_m_h5_tk=xxx; cookie2=xxx; sgcookie=xxx; unb=xxx"
-              onBlur={(e) => {
-                const text = e.target.value.trim()
-                if (!text) return
-                const updated = { ...cookieFields }
-                for (const ck of COOKIE_KEYS) {
-                  const match = text.match(new RegExp(`${ck.key}=([^;\\s]+)`))
-                  if (match?.[1]) updated[ck.key] = match[1]
-                }
-                setCookieFields(updated)
-              }}
-              style={{ fontFamily: 'monospace', fontSize: 11, marginTop: 6 }}
-            />
-          </details>
 
           {/* 操作按钮 */}
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -435,7 +572,7 @@ export default function Login() {
     {
       key: 'browser-import',
       label: (
-        <span><ChromeOutlined /> 浏览器导入</span>
+        <span style={{ fontWeight: 500 }}><ChromeOutlined /> 浏览器导入</span>
       ),
       children: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -489,11 +626,53 @@ export default function Login() {
             </Button>
           </Space>
 
-          {/* 导入结果提示 */}
+          {/* 文件锁定时的解决方案 */}
+          <Alert
+            type="warning"
+            showIcon
+            message="遇到「文件被锁定」错误？"
+            description={
+              <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+                <p style={{ margin: '4px 0' }}>Edge/Chrome 运行时会锁定 Cookie 文件。如果导入失败，请尝试：</p>
+                <ol style={{ margin: '4px 0 4px 20px', padding: 0 }}>
+                  <li>点击下方「自动关闭浏览器并导入」按钮（会自动关闭浏览器进程后重试）</li>
+                  <li>或手动完全关闭浏览器（包括任务栏托盘后台进程）后重试</li>
+                  <li>或改用「Cookie 注入」标签页，从浏览器开发者工具复制 Cookie 后粘贴</li>
+                </ol>
+              </div>
+            }
+            style={{ marginBottom: 8 }}
+          />
+
+          {/* 自动关闭浏览器并导入按钮 */}
+          <Space wrap>
+            <Button
+              icon={<ThunderboltOutlined />}
+              loading={importing}
+              onClick={() => handleImportFromBrowser('edge', true)}
+              disabled={!browserStatus?.edge?.exists}
+              danger
+            >
+              自动关闭 Edge 并导入
+            </Button>
+            <Button
+              icon={<ThunderboltOutlined />}
+              loading={importing}
+              onClick={() => handleImportFromBrowser('chrome', true)}
+              disabled={!browserStatus?.chrome?.exists}
+              danger
+            >
+              自动关闭 Chrome 并导入
+            </Button>
+          </Space>
+
+          {/* 导入结果提示（支持多行显示） */}
           {importResult && (
             <Alert
               type={importResult.includes('成功') ? 'success' : 'error'}
-              message={importResult}
+              message={importResult.split('\n').map((line, i) => (
+                <div key={i} style={{ fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{line}</div>
+              ))}
               showIcon
               closable
               onClose={() => setImportResult(null)}
@@ -518,7 +697,7 @@ export default function Login() {
     {
       key: 'browser-login',
       label: (
-        <span><LoginOutlined /> 浏览器登录</span>
+        <span style={{ fontWeight: 500 }}><GlobalOutlined /> 浏览器登录</span>
       ),
       children: (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -550,7 +729,7 @@ export default function Login() {
                 <Space direction="vertical" style={{ width: '100%' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     {loginStatus.status === 'success' ? (
-                      <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 20 }} />
+                      <CheckCircleOutlined style={{ color: themeToken.colorSuccess, fontSize: 20 }} />
                     ) : (
                       <Spin size="small" />
                     )}
@@ -595,36 +774,107 @@ export default function Login() {
   ]
 
   return (
-    <div style={{
-      display: 'flex', justifyContent: 'center', alignItems: 'center',
-      minHeight: '100vh', background: 'var(--xh-bg-layout)', padding: 24,
-    }}>
-      <Card
-        style={{
-          width: '100%', maxWidth: 560,
-          borderRadius: 12,
-          boxShadow: '0 4px 24px rgba(0,0,0,0.08)',
-        }}
-        styles={{ body: { padding: '32px 24px 24px' } }}
-      >
-        {/* 品牌头部 */}
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <div style={{
-            width: 56, height: 56, borderRadius: 16,
-            background: 'linear-gradient(135deg, #FF6200, #FF8C00)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            margin: '0 auto 12px', fontSize: 28, color: '#fff', fontWeight: 700,
-          }}>
-            闲
-          </div>
-          <Title level={4} style={{ margin: 0 }}>闲鱼猎人 - 登录</Title>
-          <Text type="secondary" style={{ fontSize: 13 }}>
-            选择一种方式完成闲鱼账号认证
-          </Text>
-        </div>
+    <>
+      {/* 生成艺术背景：Tidal Foragers 鱼群流场 */}
+      <TidalForagers />
 
-        <Tabs items={tabItems} centered />
-      </Card>
-    </div>
+      <div style={{
+        display: 'flex', justifyContent: 'center', alignItems: 'center',
+        minHeight: '100vh', padding: '24px 16px',
+        position: 'relative', zIndex: 1,
+      }}>
+        <Card
+          style={{
+            width: '100%', maxWidth: 560,
+            borderRadius: 16,
+            // 玻璃态设计：随主题切换
+            // - 暗色主题：半透明深色 + 模糊，文字用浅色
+            // - 亮色主题：白色半透明 + 模糊 + 阴影，文字用深色
+            background: isDark ? 'rgba(15, 25, 45, 0.65)' : 'rgba(255, 255, 255, 0.85)',
+            backdropFilter: 'blur(20px)',
+            WebkitBackdropFilter: 'blur(20px)',
+            border: isDark ? '1px solid rgba(255, 255, 255, 0.12)' : '1px solid rgba(255, 255, 255, 0.6)',
+            boxShadow: isDark
+              ? '0 8px 32px rgba(0, 0, 0, 0.4)'
+              : '0 8px 32px rgba(31, 119, 180, 0.15), 0 2px 8px rgba(0, 0, 0, 0.08)',
+          }}
+          styles={{ body: { padding: '32px 24px 24px' } }}
+        >
+          {/* 品牌头部 */}
+          <div style={{ textAlign: 'center', marginBottom: 24 }}>
+            <div style={{
+              width: 64, height: 64, borderRadius: 18,
+              background: 'linear-gradient(135deg, #FF6200, #FF8C00)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              margin: '0 auto 12px', fontSize: 32, color: '#fff', fontWeight: 700,
+              boxShadow: '0 4px 20px rgba(255, 98, 0, 0.4)',
+            }}>
+              闲
+            </div>
+            <Title level={4} style={{ margin: 0, color: themeToken.colorTextHeading, fontWeight: 600 }}>闲鱼猎人 - 登录</Title>
+            <Text style={{ fontSize: 13, color: themeToken.colorTextSecondary }}>
+              选择一种方式完成闲鱼账号认证
+            </Text>
+          </div>
+
+          <Tabs items={tabItems} centered />
+
+          {/* 辅助功能：获取 Cookie 教程 */}
+          <div style={{ textAlign: 'center', marginTop: 16 }}>
+            <Button
+              type="link"
+              size="small"
+              icon={<QuestionCircleOutlined />}
+              onClick={() => setTutorialVisible(true)}
+              style={{ color: themeToken.colorTextSecondary }}
+            >
+              如何获取 Cookie？
+            </Button>
+          </div>
+        </Card>
+      </div>
+
+      {/* Cookie 教程 Modal */}
+      <Modal
+        title="如何获取闲鱼 Cookie"
+        open={tutorialVisible}
+        onCancel={() => setTutorialVisible(false)}
+        footer={[
+          <Button key="close" onClick={() => setTutorialVisible(false)}>知道了</Button>,
+        ]}
+      >
+        <div style={{ lineHeight: 1.8 }}>
+          <p><strong>方法一：浏览器开发者工具（推荐）</strong></p>
+          <ol>
+            <li>在浏览器中打开 <a href="https://www.goofish.com" target="_blank" rel="noopener noreferrer">闲鱼官网</a> 并登录</li>
+            <li>按 <kbd>F12</kbd> 打开开发者工具，切换到「Application」标签</li>
+            <li>左侧选择「Cookies」→ 找到 goofish.com 域名</li>
+            <li><strong>方式 A（快速）</strong>：全选 Cookie 列表，右键复制后，直接粘贴到「快速粘贴 Cookie」输入框，系统会自动识别并填充关键字段</li>
+            <li><strong>方式 B（手动）</strong>：分别复制以下 4 个字段的值到对应输入框：
+              <ul>
+                <li><code>_m_h5_tk</code>（安全令牌）</li>
+                <li><code>cookie2</code>（会话ID）</li>
+                <li><code>sgcookie</code>（安全Cookie）</li>
+                <li><code>unb</code>（用户ID）</li>
+              </ul>
+            </li>
+            <li>点击「注入 Cookie 登录」</li>
+          </ol>
+
+          <p><strong>方法二：浏览器导入（自动）</strong></p>
+          <p>切换到「浏览器导入」标签页，系统会自动从 Edge/Chrome 提取 Cookie。</p>
+
+          <p><strong>方法三：浏览器窗口登录</strong></p>
+          <p>切换到「浏览器登录」标签页，启动 Playwright 浏览器窗口手动登录。</p>
+
+          <Alert
+            type="warning"
+            showIcon
+            message="Cookie 有效期约 30 天，过期后需重新获取"
+            style={{ marginTop: 16 }}
+          />
+        </div>
+      </Modal>
+    </>
   )
 }

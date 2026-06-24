@@ -65,7 +65,7 @@ class DetailMixin:
                     if price > 0:
                         break
 
-            # 描述
+            # 描述（已用排除运费/服务条款的精细选择器）
             desc = ""
             for sel in [self.selectors.DETAIL_DESC_MAIN, self.selectors.DETAIL_DESC_ALT]:
                 el = await page.query_selector(sel)
@@ -84,6 +84,61 @@ class DetailMixin:
                         images.append(src)
                 if images:
                     break
+
+            # 缩略图/主图（thumb_url）：取主图区的第一张图 src
+            # 与 image_urls 区别：thumb_url 必须是详情页顶部主图，避免被推荐/广告图污染
+            thumb_url = ""
+            for sel in [self.selectors.DETAIL_THUMB_MAIN, self.selectors.DETAIL_THUMB_ALT]:
+                thumb_el = await page.query_selector(sel)
+                if thumb_el:
+                    src = await thumb_el.get_attribute("src")
+                    if src:
+                        thumb_url = src.strip()
+                        break
+            # 兜底：若主图选择器都失败，从 images 列表取首张
+            if not thumb_url and images:
+                thumb_url = images[0]
+
+            # 地区：选择器匹配后的 inner_text 通常是省份/城市名（如"浙江 杭州"）
+            region = ""
+            for sel in [self.selectors.DETAIL_REGION_MAIN, self.selectors.DETAIL_REGION_ALT]:
+                region_el = await page.query_selector(sel)
+                if region_el:
+                    region = (await region_el.inner_text()).strip()
+                    if region:
+                        # 清洗：去除换行/多余空白
+                        region = re.sub(r"\s+", " ", region)
+                        break
+
+            # 想要数：通常文本为"1234人想要"或 class 含 want/favor
+            want_cnt = 0
+            for sel in [self.selectors.DETAIL_WANT_MAIN, self.selectors.DETAIL_WANT_ALT]:
+                want_cnt = await self._extract_count(page, sel)
+                if want_cnt > 0:
+                    break
+
+            # 浏览数：通常文本为"5678人看过"或"浏览 5678 次"
+            view_cnt = 0
+            for sel in [self.selectors.DETAIL_VIEW_MAIN, self.selectors.DETAIL_VIEW_ALT]:
+                view_cnt = await self._extract_count(page, sel)
+                if view_cnt > 0:
+                    break
+
+            # 发布时间：通常文本为"3天前发布"或"2024-01-01 发布"
+            publish_time: datetime | None = None
+            publish_time_text = ""
+            for sel in [self.selectors.DETAIL_PUBLISH_TIME_MAIN, self.selectors.DETAIL_PUBLISH_TIME_ALT]:
+                time_el = await page.query_selector(sel)
+                if time_el:
+                    text = (await time_el.inner_text()).strip()
+                    if text:
+                        publish_time_text = text
+                        publish_time = self._parse_publish_time(text)
+                        if publish_time is not None:
+                            break
+            # 时间解析失败的兜底：用当前时间（保证字段非空，避免评估/展示出现 None）
+            if publish_time is None:
+                publish_time = datetime.now(timezone.utc)
 
             # 卖家 ID（从卖家链接提取，尝试多个选择器）
             seller_id = ""
@@ -135,14 +190,29 @@ class DetailMixin:
                 except Exception:
                     continue
 
+            # P0 修复：如果核心字段（标题）未提取成功，主动返回 None 让上游感知失败
+            # 避免超时后仍返回默认值，导致半残数据污染 items 表与评估结果
+            if not title:
+                logger.warning(f"详情页 {item_id} 标题提取失败（页面可能未加载/已下架/选择器失效），主动返回 None")
+                return None
+            if price <= 0:
+                # 价格未命中通常意味着详情页未正常加载（404/SPA 未渲染）
+                logger.warning(f"详情页 {item_id} 价格提取失败（价格={price}），主动返回 None")
+                return None
+
             return ItemDetail(
                 id=item_id,
                 title=title,
                 price=price,
                 description=desc,
                 image_urls=images,
+                # P1 字段补齐：从详情页提取的结构化字段
+                thumb_url=thumb_url,
+                region=region,
+                want_cnt=want_cnt,
+                view_cnt=view_cnt,
                 seller_id=seller_id,
-                publish_time=datetime.now(timezone.utc),  # 详情页可补充
+                publish_time=publish_time,  # 已从详情页解析，无则兜底为 now()
                 # 填充从详情页提取的卖家信息
                 detail_seller_nick=detail_seller_nick,
                 detail_credit_score=detail_credit_score,
@@ -381,3 +451,88 @@ class DetailMixin:
         if m:
             return int(m.group(1))
         return 0
+
+    @staticmethod
+    def _parse_publish_time(text: str) -> datetime | None:
+        """从发布时间文本解析为 datetime
+
+        支持闲鱼详情页常见格式：
+        - "刚刚" / "X秒前" / "X分钟前" / "X小时前" → 减去对应时间
+        - "今天 HH:MM" / "昨天 HH:MM" → 当天/前一天 + 时间
+        - "X天前" → 当前时间 - X 天
+        - "YYYY-MM-DD HH:MM" / "YYYY-MM-DD" / "YYYY/MM/DD"
+        - "X周前" / "X月前" / "X年前" → 估算时间
+
+        返回带 timezone.utc 的 datetime（统一时区便于排序/比较）。
+        解析失败返回 None。
+        """
+        from datetime import datetime as _dt, timedelta
+
+        if not text:
+            return None
+        s = text.strip()
+        if not s:
+            return None
+
+        now = _dt.now(timezone.utc)
+
+        # 1. 相对时间
+        # 刚刚 / X秒前
+        m = re.search(r"(\d+)\s*秒前", s)
+        if m or s == "刚刚":
+            return now - timedelta(seconds=int(m.group(1)) if m else 0)
+        # X分钟前
+        m = re.search(r"(\d+)\s*分钟前", s)
+        if m:
+            return now - timedelta(minutes=int(m.group(1)))
+        # X小时前
+        m = re.search(r"(\d+)\s*小时前", s)
+        if m:
+            return now - timedelta(hours=int(m.group(1)))
+        # 今天 HH:MM
+        m = re.search(r"今天\s*(\d{1,2}):(\d{1,2})", s)
+        if m:
+            return now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        # 昨天 HH:MM
+        m = re.search(r"昨天\s*(\d{1,2}):(\d{1,2})", s)
+        if m:
+            t = now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+            return t - timedelta(days=1)
+        # X天前
+        m = re.search(r"(\d+)\s*天前", s)
+        if m:
+            return now - timedelta(days=int(m.group(1)))
+        # X周前
+        m = re.search(r"(\d+)\s*周前", s)
+        if m:
+            return now - timedelta(weeks=int(m.group(1)))
+        # X个月前
+        m = re.search(r"(\d+)\s*个?月前", s)
+        if m:
+            return now - timedelta(days=int(m.group(1)) * 30)
+        # X年前
+        m = re.search(r"(\d+)\s*年前", s)
+        if m:
+            return now - timedelta(days=int(m.group(1)) * 365)
+
+        # 2. 绝对时间：YYYY-MM-DD HH:MM[:SS] 或 YYYY/MM/DD HH:MM
+        m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?", s)
+        if m:
+            try:
+                y, mo, d, h, mi, se = m.groups()
+                return datetime(
+                    int(y), int(mo), int(d), int(h), int(mi), int(se or 0),
+                    tzinfo=timezone.utc,
+                )
+            except ValueError:
+                pass
+        # 3. 纯日期：YYYY-MM-DD 或 YYYY/MM/DD
+        m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+        if m:
+            try:
+                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+            except ValueError:
+                pass
+
+        # 解析失败
+        return None

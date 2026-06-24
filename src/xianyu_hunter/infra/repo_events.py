@@ -31,6 +31,13 @@ class EventsMixin:
         利用数据库唯一索引 idx_eval_scored_unique 自动去重：
         - 先 DELETE 已有的相同 (task_id, item_id) eval.scored 记录
         - 再 INSERT 新记录，确保 payload 完全更新
+
+        为什么用 DELETE+INSERT 而非 ON CONFLICT DO UPDATE：
+        idx_eval_scored_unique 是部分唯一索引（WHERE type='eval.scored'），
+        SQLite 的 UPSERT（ON CONFLICT）不支持部分唯一索引，
+        因此用 DELETE+INSERT 实现 upsert 语义。
+        整个操作在 engine.begin() 事务内执行，SQLite 序列化写入，
+        不存在并发 DELETE+INSERT 导致的重复插入问题。
         """
         task_id = event.get("task_id")
         item_id = event.get("item_id")
@@ -75,7 +82,7 @@ class EventsMixin:
         self,
         type_prefix: str,
         task_id: str | None = None,
-        limit: int = 100,
+        limit: int = 50000,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
         """按 type 前缀过滤事件，返回 (rows, total)
@@ -83,6 +90,7 @@ class EventsMixin:
         为什么单独提供此方法：list_evaluations 需要按 eval.* 前缀过滤，
         之前用 list_events(limit=N*4) 在 Python 端过滤，当非 eval 事件多时
         会遗漏数据且 total 不准。这里在 SQL 端用 LIKE 过滤并返回准确 total。
+        默认 limit=50000 是评估事件量级的上限（按 task_id+item_id 去重后可控）。
         """
         with self.engine.connect() as conn:
             stmt = select(EventRow).where(EventRow.type.like(f"{type_prefix}%"))
@@ -110,12 +118,15 @@ class EventsMixin:
 
         seller_trend_for_item 在 items 表无记录时，从评估事件 payload 回退提取 seller_id。
         之前路由层直接访问 engine 查询 EventRow，这里提供正式方法。
+
+        返回的 payload dict 中会注入 task_id 字段（若事件表有值），
+        供 AI 评估回退场景查询同类物品价格区间使用。
         """
         if not item_id:
             return None
         with self.engine.connect() as conn:
             row = conn.execute(
-                select(EventRow.payload)
+                select(EventRow.payload, EventRow.task_id)
                 .where(EventRow.item_id == item_id)
                 .where(EventRow.type.like("eval.%"))
                 .order_by(EventRow.created_at.desc())
@@ -124,9 +135,13 @@ class EventsMixin:
             if not row or not row.payload:
                 return None
             try:
-                return json.loads(row.payload) if isinstance(row.payload, str) else row.payload
+                payload = json.loads(row.payload) if isinstance(row.payload, str) else row.payload
             except (json.JSONDecodeError, TypeError):
                 return None
+            # 注入 task_id 到 payload，供 items 表无记录时的回退场景使用
+            if isinstance(payload, dict) and row.task_id:
+                payload.setdefault("task_id", row.task_id)
+            return payload
 
     def update_event_payload(self, event_id: int, payload: str) -> None:
         """更新事件的 payload JSON"""
@@ -136,6 +151,39 @@ class EventsMixin:
                 .where(EventRow.id == event_id)
                 .values(payload=payload)
             )
+
+    def update_eval_payload_by_keys(
+        self, task_id: str, item_id: str, event_type: str, payload_updates: dict
+    ) -> bool:
+        """按 (task_id, item_id, type) 查找评估事件并合并更新 payload
+
+        payload_updates 中的键值对会合并到现有 payload 中（不覆盖整个 payload）。
+        返回是否成功更新（未找到记录时返回 False）。
+        """
+        with self.engine.begin() as conn:
+            row = conn.execute(
+                select(EventRow.id, EventRow.payload)
+                .where(
+                    EventRow.task_id == task_id,
+                    EventRow.item_id == item_id,
+                    EventRow.type == event_type,
+                )
+                .order_by(EventRow.created_at.desc())
+                .limit(1)
+            ).first()
+            if not row:
+                return False
+            try:
+                payload = json.loads(row.payload) if isinstance(row.payload, str) else (row.payload or {})
+            except (json.JSONDecodeError, TypeError):
+                payload = {}
+            payload.update(payload_updates)
+            conn.execute(
+                EventRow.__table__.update()
+                .where(EventRow.id == row.id)
+                .values(payload=json.dumps(payload, ensure_ascii=False, default=str))
+            )
+            return True
 
     def max_event_id(self) -> int:
         """获取当前 events 表最大 id（不存在时返回 0）"""
@@ -263,7 +311,7 @@ class EventsMixin:
         hit_count = 0
         err_count = 0
         warn_count = 0
-        first_event_type = events[0].get("stage", "")
+        first_event_stage = events[0].get("stage", "")  # API 字段名 first_event_type 实际取 stage 值
 
         for ev in events:
             level = (ev.get("level") or "").lower()
@@ -293,5 +341,5 @@ class EventsMixin:
             "err_count": err_count,
             "warn_count": warn_count,
             "duration_s": round(duration_s, 1),
-            "first_event_type": first_event_type,
+            "first_event_type": first_event_stage,
         }

@@ -28,6 +28,7 @@ from xianyu_hunter.infra.repo_sellers import SellersMixin
 from xianyu_hunter.infra.repo_evaluations import EvaluationsMixin
 from xianyu_hunter.infra.repo_orders import OrdersMixin
 from xianyu_hunter.infra.repo_events import EventsMixin
+from xianyu_hunter.infra.repo_error_logs import ErrorLogsMixin
 from xianyu_hunter.infra.repo_links import TaskLinksMixin
 from xianyu_hunter.infra.repo_deps import TaskDepsMixin
 from xianyu_hunter.infra.repo_notifications import NotificationsMixin
@@ -41,6 +42,7 @@ class Repository(
     EvaluationsMixin,
     OrdersMixin,
     EventsMixin,
+    ErrorLogsMixin,
     TaskLinksMixin,
     TaskDepsMixin,
     NotificationsMixin,

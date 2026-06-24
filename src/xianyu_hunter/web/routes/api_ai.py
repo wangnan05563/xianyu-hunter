@@ -376,6 +376,25 @@ _CONDITION_SYSTEM_PROMPT = """你是一个闲鱼二手商品成色鉴定专家�
 3. **价格合理性**：价格是否与声称的成色匹配（如声称"全新"但价格远低于市场价 → 可疑）
 4. **风险信号**：图片模糊/过少、描述含糊、价格异常低等
 
+评分标准（condition_score 1-10）：
+- 9-10：全新/未拆封，图片清晰多角度，描述详细可信
+- 7-8：95新-99新，轻微使用痕迹，描述与图片一致
+- 5-6：正常使用磨损，功能正常，价格与成色匹配
+- 3-4：明显磨损/划痕，可能影响使用，价格偏低
+- 1-2：严重损坏/维修过/描述与图片严重不符
+
+判定规则：
+- verdict="recommend"：condition_score >= 7 且无重大风险信号
+- verdict="caution"：condition_score < 7 或存在重大风险信号
+- 如果图片无法加载或不存在，仅基于文字描述评估，risk_signals 加入"无图片参考"
+
+示例：
+输入：标题="iPhone 13 99新 自用" 描述="无划痕无磕碰，电池健康92%" 价格=2800 图片=[清晰多角度]
+输出：{"verdict":"recommend","condition_score":8,"appearance_score":8,"consistency_score":9,"price_reasonability":8,"risk_signals":[],"reason":"99新自用，描述详细，图片清晰","detail":"商品成色良好，描述与图片一致，价格合理"}
+
+输入：标题="iPhone 13 便宜卖" 描述="" 价格=800 图片=[模糊1张]
+输出：{"verdict":"caution","condition_score":3,"appearance_score":3,"consistency_score":2,"price_reasonability":2,"risk_signals":["图片模糊","价格异常低","描述过于简略"],"reason":"价格远低于市场价，图片模糊，描述缺失","detail":"多个风险信号叠加，价格仅为市场价30%，疑似有问题"}
+
 请输出以下 JSON（不要 Markdown 代码块包裹，不要解释）：
 {
   "verdict": "recommend" | "caution",
@@ -388,11 +407,6 @@ _CONDITION_SYSTEM_PROMPT = """你是一个闲鱼二手商品成色鉴定专家�
   "detail": string                 // 详细分析（≤200字）
 }
 
-判定规则：
-- verdict="recommend"：condition_score >= 7 且无重大风险信号
-- verdict="caution"：condition_score < 7 或存在重大风险信号（图片与描述严重不符/价格异常低/图片模糊无法判断）
-- 如果图片无法加载或不存在，仅基于文字描述评估，risk_signals 加入"无图片参考"
-
 只输出 JSON，不要其它任何内容。
 """
 
@@ -402,10 +416,12 @@ async def _call_llm_vision(
     description: str,
     price: float,
     image_urls: list[str],
+    price_range: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """调 OpenAI 兼容 Vision API 分析商品图片 + 描述
 
     使用 httpx.AsyncClient 避免阻塞事件循环（Vision 调用最长 60s）。
+    price_range 为同类物品已售价格区间，注入 prompt 增强 price_reasonability 判定。
     失败抛 RuntimeError，错误信息对用户友好。
     """
     settings = get_settings()
@@ -425,6 +441,17 @@ async def _call_llm_vision(
 
     # 构建 user message：文字描述 + 图片 URL
     text_content = f"商品标题：{title}\n商品描述：{description}\n商品价格：¥{price}"
+    # 注入同类物品价格区间，让 LLM 判断当前价格是否合理可拾
+    if price_range and price_range.get("sample_size", 0) > 0:
+        text_content += (
+            f"\n\n同类物品近期成交价格参考："
+            f"\n- 最低价（捡漏价格）：¥{price_range.get('bargain_price')}"
+            f"\n- 最高价：¥{price_range.get('max_price')}"
+            f"\n- 中位数：¥{price_range.get('median_price')}"
+            f"\n- 样本数：{price_range.get('sample_size')}"
+            f"\n- 数据来源：{price_range.get('source_label', price_range.get('source', ''))}"
+            f"\n请结合此价格区间判断当前商品价格是否处于合理可拾区间。"
+        )
     user_content: list[dict[str, Any]] = [
         {"type": "text", "text": text_content},
     ]
@@ -475,6 +502,7 @@ def _rule_eval_condition(
     description: str,
     price: float,
     image_urls: list[str],
+    price_range: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """规则模拟评估：无 LLM Key 时基于规则判断成色
 
@@ -483,13 +511,14 @@ def _rule_eval_condition(
     - 描述含"全新/未拆/仅拆"等 → 成色加分
     - 描述含"划痕/磕碰/维修/进水"等 → 成色减分
     - 无图片 → 风险信号
+    - price_range 提供同类物品价格区间时，判断当前价格是否处于合理可拾区间
     """
     # 成色评分基准
     condition_score = 7  # 默认 7 分（闲鱼商品普遍 7 成新）
     risk_signals: list[str] = []
     detail_parts: list[str] = []
 
-    # 描述关键词加分
+    # 描述关键词加分（命中一个即停，避免一个商品因多个近义词过度加分）
     good_keywords = ["全新", "未拆封", "仅拆封", "99新", "98新", "未使用", "自用", "国行"]
     for kw in good_keywords:
         if kw in title or kw in (description or ""):
@@ -497,7 +526,7 @@ def _rule_eval_condition(
             detail_parts.append(f"描述含'{kw}'")
             break
 
-    # 描述关键词减分
+    # 描述关键词减分（不 break，每个故障关键词都累计减分，因为多个故障信号意味着更差的成色）
     bad_keywords = ["划痕", "磕碰", "维修", "进水", "碎屏", "开胶", "变形", "故障", "修过", "换过"]
     for kw in bad_keywords:
         if kw in title or kw in (description or ""):
@@ -517,6 +546,36 @@ def _rule_eval_condition(
         risk_signals.append("价格异常低")
         condition_score = max(1, condition_score - 1)
         detail_parts.append("价格低于100元")
+
+    # 基于同类物品价格区间判断价格合理性（捡漏价格参考）
+    # 当有价格区间数据时，判断当前商品是否处于"捡漏"区间
+    if price_range and price_range.get("sample_size", 0) > 0:
+        bargain_price = price_range.get("bargain_price") or 0
+        median_price = price_range.get("median_price") or 0
+        max_price = price_range.get("max_price") or 0
+        sample = price_range.get("sample_size", 0)
+        source_label = price_range.get("source_label", price_range.get("source", ""))
+
+        if bargain_price > 0 and median_price > 0:
+            # 价格低于捡漏价格 → 极佳捡漏机会，但需警惕假货风险
+            if price < bargain_price:
+                detail_parts.append(
+                    f"价格¥{price}低于同类最低价¥{bargain_price}（捡漏机会，样本{sample}）"
+                )
+                # 不加分也不减分：低于最低价可能是真捡漏，也可能是假货/问题机
+                # 让用户结合其他维度判断
+            # 价格在中位数以下 → 性价比良好
+            elif price < median_price * 0.85:
+                detail_parts.append(
+                    f"价格¥{price}低于同类中位数¥{median_price}的85%（性价比良好）"
+                )
+            # 价格高于最高价 → 价格偏高
+            elif max_price > 0 and price > max_price:
+                risk_signals.append(f"价格¥{price}高于同类最高价¥{max_price}")
+                condition_score = max(1, condition_score - 1)
+                detail_parts.append("价格高于同类最高价")
+            # 数据来源说明
+            detail_parts.append(f"价格参考来源：{source_label}")
 
     # 判定
     verdict = "recommend" if condition_score >= 7 else "caution"
@@ -538,8 +597,10 @@ def _normalize_condition_result(raw: dict[str, Any], source: str) -> dict[str, A
     """归一化成色评估结果，保证前端拿到的字段稳定"""
     verdict = str(raw.get("verdict") or "").strip().lower()
     if verdict not in ("recommend", "caution"):
-        # 尝试从 condition_score 推断
-        score = raw.get("condition_score", 5)
+        # 尝试从 condition_score 推断（处理 None 情况，避免 int(None) 报错）
+        score = raw.get("condition_score")
+        if score is None:
+            score = 5
         verdict = "recommend" if int(score) >= 7 else "caution"
 
     condition_score = raw.get("condition_score")
@@ -602,6 +663,7 @@ async def evaluate_condition(
                 "price": payload.get("item_price") or payload.get("price") or 0,
                 "description": "",   # payload 不含 description，LLM 仅基于标题+价格评估
                 "image_urls": [],    # payload 不含 image_urls，无图走规则模拟
+                "task_id": payload.get("task_id"),  # 从事件 payload 回退提取 task_id
             }
             logger.info(f"[F-06] items 表无记录，从 eval 事件 payload 回退: item_id={body.item_id}")
 
@@ -636,6 +698,33 @@ async def evaluate_condition(
             logger.info(f"[F-06] 命中缓存: item_id={body.item_id}")
             return {**cached_ai_eval, "cached": True}
 
+    # 2.5 查询同类物品已售价格区间（捡漏价格参考）
+    # 从 item 中提取 task_id，查询该任务下近期已售商品价格区间
+    # 价格区间作为 AI 评估 price_reasonability 维度的重要参考依据
+    # 策略：优先查近30天数据；若为空则回退到全部历史数据，确保有数据时总能提供参考
+    price_range: dict[str, Any] | None = None
+    task_id = item.get("task_id")
+    if task_id:
+        try:
+            from xianyu_hunter.web.routes.price_dashboard import sold_range as _sold_range
+            price_range = _sold_range(
+                task_id=task_id, range_days=30, container=container
+            )
+            # 近30天无数据时回退到全部历史数据，避免价格参考缺失
+            if price_range.get("source") == "empty":
+                price_range = _sold_range(
+                    task_id=task_id, range_days=0, container=container
+                )
+            logger.info(
+                f"[F-06] 价格区间查询完成: item_id={body.item_id}, "
+                f"task_id={task_id}, source={price_range.get('source')}, "
+                f"sample_size={price_range.get('sample_size')}"
+            )
+        except Exception as e:  # noqa: BLE001
+            # 价格区间查询失败不阻断 AI 评估主流程
+            logger.warning(f"[F-06] 价格区间查询失败（不影响评估）: {e}")
+            price_range = None
+
     # 3. 调用 LLM Vision 或规则模拟
     settings = get_settings()
     used_source = "llm"
@@ -643,7 +732,9 @@ async def evaluate_condition(
 
     if settings.openai_api_key:
         try:
-            raw_result = await _call_llm_vision(title, description, price, image_urls)
+            raw_result = await _call_llm_vision(
+                title, description, price, image_urls, price_range
+            )
             logger.info(f"[F-06] LLM Vision 评估完成: item_id={body.item_id}")
         except RuntimeError as e:
             logger.warning(f"[F-06] LLM Vision 失败，降级规则模拟: {e}")
@@ -653,12 +744,18 @@ async def evaluate_condition(
 
     # 降级到规则模拟
     if raw_result is None:
-        raw_result = _rule_eval_condition(title, description, price, image_urls)
+        raw_result = _rule_eval_condition(
+            title, description, price, image_urls, price_range
+        )
         used_source = "rule"
         logger.info(f"[F-06] 规则模拟评估完成: item_id={body.item_id}")
 
     # 4. 归一化结果
     result = _normalize_condition_result(raw_result, used_source)
+
+    # 附带价格区间信息到返回结果（供前端展示捡漏价格参考）
+    if price_range and price_range.get("sample_size", 0) > 0:
+        result["price_range"] = price_range
 
     # 5. 缓存到 evaluations 表
     try:

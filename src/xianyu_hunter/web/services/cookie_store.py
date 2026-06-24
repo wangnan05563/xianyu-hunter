@@ -60,6 +60,36 @@ class CookieStore:
         # 兜底：JSON 为空时检查 SQLite
         return self._check_sqlite()
 
+    def validate_cookies_with_expiry(self) -> tuple[bool, str]:
+        """检查 Cookie 是否有效（含过期时间判断）
+
+        为什么需要此方法：has_valid_cookies 只检查 Cookie 是否存在，
+        无法识别已过期的 Cookie。此方法补充过期时间判断，供健康检查使用。
+
+        Returns:
+            (is_valid, reason) 元组。reason 为失败原因或 "ok"
+        """
+        data = self._read_json()
+        if not data or not data.get("cookies"):
+            return False, "no_cookie_data"
+
+        cookies_list = data["cookies"]
+        names = {c.get("name", "") for c in cookies_list}
+
+        # 检查关键 Cookie 是否存在
+        if not (_GOOFISH_KEY_COOKIES & names):
+            return False, "no_key_cookies"
+
+        # 过期时间检查（兼容旧数据：无 expires 字段视为 session cookie，不过期）
+        # Playwright 的 expires 为 Unix 时间戳（秒），-1 或 0 表示 session cookie
+        now = time.time()
+        for c in cookies_list:
+            expires = c.get("expires", -1)
+            if expires and expires > 0 and expires < now:
+                return False, f"cookie_expired:{c.get('name')}"
+
+        return True, "ok"
+
     def get_cookie_info(self) -> dict:
         """获取 Cookie 摘要信息（供 /api/auth/me 使用）"""
         data = self._read_json()
@@ -95,6 +125,9 @@ class CookieStore:
                     "value": c.get("value", ""),
                     "domain": c.get("domain", ""),
                     "path": c.get("path", "/"),
+                    # 保存过期时间用于健康检查的有效性判断
+                    # Playwright 的 expires 为 Unix 时间戳（秒），-1 表示 session cookie
+                    "expires": c.get("expires", -1),
                 }
                 for c in cookies
             ],

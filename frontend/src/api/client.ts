@@ -16,13 +16,27 @@ client.interceptors.request.use((config) => {
   return config
 })
 
-// 响应拦截器：401 跳转登录
+// 401 跳转防抖标记：避免并发请求同时返回 401 时触发多次跳转，
+// 多次 location.href 跳转会在渲染过程中断页面，可能造成白屏
+let isRedirecting = false
+
+// 响应拦截器：401 自动跳转登录页
 client.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('xh_token')
-      // 不强制跳转，让用户在当前页面看到未登录提示
+      // 避免在登录页本身触发跳转（防止死循环）
+      const currentPath = window.location.pathname + window.location.search
+      const isLoginPage = currentPath.startsWith('/app/login') || currentPath.startsWith('/login')
+      if (!isLoginPage && !isRedirecting) {
+        isRedirecting = true
+        // 保存当前路径，登录后跳转回来
+        const redirect = encodeURIComponent(currentPath)
+        // 使用 replace 避免在历史记录中留下当前页面，
+        // 防止用户后退回到已失效的认证态页面
+        window.location.replace(`/app/login?redirect=${redirect}`)
+      }
     }
     return Promise.reject(error)
   },

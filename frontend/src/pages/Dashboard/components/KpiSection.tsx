@@ -1,4 +1,4 @@
-import { Card, Col, Row, Statistic, Tag, Tooltip } from 'antd'
+import { Card, Col, Row, Statistic, Tag, Tooltip, theme } from 'antd'
 import {
   ArrowUpOutlined,
   ArrowDownOutlined,
@@ -13,6 +13,9 @@ interface KpiSectionProps {
 }
 
 export default function KpiSection({ kpiCards }: KpiSectionProps) {
+  // 从 antd token 读取主题色，自动响应主题切换
+  const { token } = theme.useToken()
+
   // 无 KPI 数据时不渲染整块卡片，避免空容器占用布局
   if (kpiCards.length === 0) return null
 
@@ -27,16 +30,21 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
           const stars = kpiStar(k)
           // 反向指标（失败率）方向取反：上升为坏，下降为好
           const isInverted = k.id === 'notify_failure_rate'
+          // KPI 满分高亮色：浅色主题用 #faad14，深色主题用 #FFD666 提亮
+          const starColor = token.colorWarning
+          // 上升/下降箭头色：使用 token 中的语义色
+          const upColor = isInverted ? token.colorError : token.colorSuccess
+          const downColor = isInverted ? token.colorSuccess : token.colorError
           return (
             <Col xs={12} md={6} key={k.id}>
-              <div style={{ borderLeft: stars === 5 ? '3px solid #faad14' : '3px solid transparent', paddingLeft: 8 }}>
+              <div style={{ borderLeft: stars === 5 ? `3px solid ${starColor}` : '3px solid transparent', paddingLeft: 8 }}>
                 <Statistic
                   title={k.title}
                   value={isInverted ? k.value : fmtKpiValue(k)}
                   suffix={isInverted ? '%' : k.unit}
                   precision={k.is_pct && k.value !== 0 && k.value !== 100 ? 1 : 0}
-                  valueStyle={stars === 5 ? { color: '#faad14' } : undefined}
-                  prefix={hasDelta ? (deltaUp ? <ArrowUpOutlined style={{ color: isInverted ? '#ff4d4f' : '#52c41a' }} /> : <ArrowDownOutlined style={{ color: isInverted ? '#52c41a' : '#ff4d4f' }} />) : <MinusOutlined style={{ color: 'var(--xh-text-tertiary)' }} />}
+                  valueStyle={stars === 5 ? { color: starColor } : undefined}
+                  prefix={hasDelta ? (deltaUp ? <ArrowUpOutlined style={{ color: upColor }} /> : <ArrowDownOutlined style={{ color: downColor }} />) : <MinusOutlined style={{ color: 'var(--xh-text-tertiary)' }} />}
                 />
                 <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
                   {hasDelta && (
@@ -46,7 +54,7 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
                   )}
                   {/* 米其林 5 星评级 */}
                   <Tooltip title={kpiStarTip(k)}>
-                    <span style={{ color: '#faad14', fontSize: 12, letterSpacing: 1 }}>
+                    <span style={{ color: starColor, fontSize: 12, letterSpacing: 1 }}>
                       {'★'.repeat(stars)}{'☆'.repeat(5 - stars)}
                     </span>
                   </Tooltip>

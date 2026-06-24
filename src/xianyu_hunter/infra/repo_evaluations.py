@@ -69,3 +69,16 @@ class EvaluationsMixin:
                 )
             )
             return result.rowcount or 0
+
+    def delete_evaluation_by_item(self, item_id: str) -> int:
+        """按 item_id 删除评估记录（删除商品时联动清理）
+
+        闲鱼商品 ID 全局唯一，不会跨任务重复，按 item_id 删除安全。
+        """
+        if not item_id:
+            return 0
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                delete(EvaluationRow).where(EvaluationRow.item_id == item_id)
+            )
+            return result.rowcount or 0

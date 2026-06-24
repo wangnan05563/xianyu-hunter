@@ -122,25 +122,49 @@ AWSC_SPOOF_SCRIPT = """
     // fireyejs 采集到的指纹会与 ET Token 一致
 
     // 6. 监听 baxia 验证码触发事件
-    // 如果 baxia 决定渲染验证码（renderNC=true），
-    // 通过 CustomEvent 通知外部处理
-    var origDefineProperty = Object.defineProperty;
-    try {
-        var baxiaProxy = new Proxy(window.__baxia__, {
-            set: function(target, prop, value) {
-                if (prop === 'renderNC' && value === true) {
-                    // 通知外部验证码被触发
-                    window.dispatchEvent(new CustomEvent('xh_captcha_triggered', {
-                        detail: { type: 'slider', source: 'baxia' }
-                    }));
-                }
-                target[prop] = value;
-                return true;
-            },
-        });
-        // 不能直接替换 __baxia__（已定义为不可配置），
-        // 但可以通过其他方式监听
-    } catch(e) {}
+    // 通过重写 renderNC 的 setter 来监听（Object.defineProperty 方式）
+    // 如果原始 __baxia__ 已存在且不可配置，则监听 DOM 变化作为兜底
+    if (window.__baxia__) {
+        try {
+            var _baxia = window.__baxia__;
+            var _renderNC = _baxia.renderNC;
+            // 尝试重定义 renderNC 属性的 setter 来监听变化
+            Object.defineProperty(_baxia, 'renderNC', {
+                get: function() { return _renderNC; },
+                set: function(value) {
+                    if (value === true) {
+                        window.dispatchEvent(new CustomEvent('xh_captcha_triggered', {
+                            detail: { type: 'slider', source: 'baxia' }
+                        }));
+                    }
+                    _renderNC = value;
+                    return _renderNC;
+                },
+                configurable: true,
+                enumerable: true,
+            });
+        } catch(e) {
+            // __baxia__ 不可配置时，回退到 DOM 监听
+            // MutationObserver 监听验证码 DOM 的插入
+            try {
+                var observer = new MutationObserver(function(mutations) {
+                    mutations.forEach(function(mutation) {
+                        mutation.addedNodes.forEach(function(node) {
+                            if (node.id === 'baxia-dialog' || node.id === 'nc_1_wrapper') {
+                                window.dispatchEvent(new CustomEvent('xh_captcha_triggered', {
+                                    detail: { type: 'slider', source: 'dom' }
+                                }));
+                            }
+                        });
+                    });
+                });
+                observer.observe(document.documentElement || document.body, {
+                    childList: true,
+                    subtree: true,
+                });
+            } catch(e2) {}
+        }
+    }
 
     console.log('[AWSC Spoof] 环境伪装脚本已注入');
 })();

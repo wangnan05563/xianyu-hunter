@@ -13,12 +13,15 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from starlette.responses import StreamingResponse
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.domain.urls import build_item_url
@@ -28,6 +31,11 @@ from xianyu_hunter.modules.collector_utils import normalize_display_fields
 from xianyu_hunter.web.deps import get_container
 
 logger = get_logger()
+
+# 实时搜索结果缓存：task_id -> (monotonic_timestamp, result_dict)
+# 60 秒 TTL：避免短时间重复搜索闲鱼（每次搜索 15-20s），60 秒内返回缓存结果
+_live_cache: dict[str, tuple[float, dict]] = {}
+_LIVE_CACHE_TTL = 60
 
 router = APIRouter(prefix="/api/tasks", tags=["task-links"])
 
@@ -57,7 +65,7 @@ async def _ensure_live_search_cookies(container: Container) -> None:
     try:
         cookies = await container.browser.get_cookies()
     except Exception as e:
-        logger.warning("读取浏览器 Cookie 失败: %s", e)
+        logger.warning("读取浏览器 Cookie 失败: {}", e)
         return
 
     names = {str(c.get("name") or "") for c in cookies}
@@ -81,58 +89,25 @@ def list_links(
 ) -> dict[str, Any]:
     """列出任务的关联内容（懒加载用：前端分页拉取）
 
-    支持按 keyword/region 过滤：之前前端只对当前页数据做过滤，跨页搜索不可用。
-    现在改为后端全量加载后过滤再分页，确保 total 准确。
-    单任务商品数通常不超过几百，全量加载性能可接受。
+    支持按 keyword/region 过滤：过滤已下推 SQL 层（json_extract + LIKE），
+    避免 has_search 时全量加载到内存再 Python 过滤。
     """
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
     if not container.repo.get_task(task_id):
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    # 是否启用关键词/地区过滤：启用时需全量加载再分页
+    # 关键词/地区过滤仅对 item 类型生效（seller 行通常无 title/region 字段）
     has_search = bool(keyword or region) and (type is None or type == "item")
-    if has_search:
-        items = container.repo.list_task_links(
-            task_id=task_id, link_type=type, limit=100000, offset=0
-        )
-    else:
-        items = container.repo.list_task_links(
-            task_id=task_id, link_type=type, limit=limit, offset=offset
-        )
-    # 获取该类型的真实总数（不受 limit/offset 影响），供前端分页计算
-    counts = container.repo.count_task_links(task_id, link_type=type)
+    search_keyword = keyword if has_search else None
+    search_region = region if has_search else None
+
+    # 过滤与分页均在 SQL 层完成，无需全量加载
+    items, counts = container.repo.list_and_count_task_links(
+        task_id=task_id, link_type=type, limit=limit, offset=offset,
+        search_keyword=search_keyword, search_region=search_region,
+    )
     total_for_type = counts.get(type, len(items)) if type else counts.get("total", len(items))
-
-    # 价格过滤已由 repo._filter_task_links 在 list_task_links/count_task_links 内部完成
-    # 之前这里重复过滤一次，导致代码冗余且可能与 repo 逻辑不一致
-
-    # 关键词/地区过滤（仅对 item 类型生效）
-    if has_search:
-        search_filtered = []
-        kw_lower = (keyword or "").lower()
-        for r in items:
-            display = r.get("display")
-            if isinstance(display, str):
-                try: display = json.loads(display)
-                except: display = {}
-            if not isinstance(display, dict):
-                display = {}
-            # 关键词匹配标题
-            if kw_lower:
-                title = str(display.get("title") or "").lower()
-                if kw_lower not in title:
-                    continue
-            # 地区精确匹配
-            if region:
-                item_region = str(display.get("region") or "")
-                if item_region != region:
-                    continue
-            search_filtered.append(r)
-        items = search_filtered
-        total_for_type = len(search_filtered)
-        # 全量加载后在此分页
-        items = items[offset:offset + limit]
 
     # 统一字段名为 link_id（前端接口定义用 link_id，后端 DB 主键为 id）
     # 同步对每行 display 做字段语义校正：DB 中可能存了错位的 seller_nick/region/seller_credit，
@@ -174,32 +149,26 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
             item_ids.add(str(r["link_key"]))
     if not item_ids:
         return links
-    # 批量查询 items 表
-    from xianyu_hunter.infra.db_models import ItemRow
-    from sqlalchemy import select
+    # 批量查询 items 表（通过 Repository 方法，不直接访问 engine）
     try:
-        with container.repo.engine.connect() as conn:
-            rows = conn.execute(
-                select(ItemRow).where(ItemRow.id.in_(item_ids))
-            ).all()
-            # 构建 item_id -> 字段映射
-            item_map: dict[str, dict] = {}
-            for raw in rows:
-                row = container.repo._row_to_dict(raw)
-                if row and row.get("id"):
-                    item_map[str(row["id"])] = {
-                        "region": row.get("region") or "",
-                        "seller_id": row.get("seller_id") or "",
-                        "seller_nick": row.get("seller_nick") or row.get("seller_id") or "",  # 优先昵称，回退到 ID
-                        "want_cnt": row.get("want_cnt") or 0,
-                        "view_cnt": row.get("view_cnt") or 0,
-                        "publish_time": row.get("publish_time").isoformat() if row.get("publish_time") else None,
-                        # 图片和链接：旧 task_links.display 可能缺少这些字段，从 items 表补全
-                        "thumb_url": row.get("thumb_url") or "",
-                        "url": build_item_url(str(row["id"])) if row.get("id") else "",
-                    }
+        rows = container.repo.list_items_by_ids(list(item_ids))
+        # 构建 item_id -> 字段映射
+        item_map: dict[str, dict] = {}
+        for row in rows:
+            if row and row.get("id"):
+                item_map[str(row["id"])] = {
+                    "region": row.get("region") or "",
+                    "seller_id": row.get("seller_id") or "",
+                    "seller_nick": row.get("seller_nick") or row.get("seller_id") or "",  # 优先昵称，回退到 ID
+                    "want_cnt": row.get("want_cnt") or 0,
+                    "view_cnt": row.get("view_cnt") or 0,
+                    "publish_time": row.get("publish_time").isoformat() if row.get("publish_time") else None,
+                    # 图片和链接：旧 task_links.display 可能缺少这些字段，从 items 表补全
+                    "thumb_url": row.get("thumb_url") or "",
+                    "url": build_item_url(str(row["id"])) if row.get("id") else "",
+                }
     except Exception as e:
-        logger.warning("从 items 表补全字段失败: %s", e)
+        logger.warning("从 items 表补全字段失败: {}", e)
         return links
     # 补全 display JSON
     for r in links:
@@ -292,15 +261,19 @@ def delete_link(
     if not ok:
         raise HTTPException(status_code=404, detail="关联不存在")
 
-    # 联动清理：item 类型关联删除时，同步删除该任务下该商品的评估明细事件
+    # 联动清理：item 类型关联删除时，同步删除该商品关联的评估数据
+    # events 表存评估事件流（eval.*），evaluations 表存 AI 成色评估缓存
+    # 两个表都需要清理，否则删除商品后评估明细仍会残留
     deleted_events = 0
+    deleted_evaluations = 0
     if link_type == "item" and link_key:
         deleted_events = container.repo.delete_eval_events_by_task_item(task_id, str(link_key))
-        if deleted_events:
-            logger.info("删除关联 link_id=%s 时联动清理 %d 条评估事件 (task=%s, item=%s)",
-                        link_id, deleted_events, task_id, link_key)
+        deleted_evaluations = container.repo.delete_evaluation_by_item(str(link_key))
+        if deleted_events or deleted_evaluations:
+            logger.info("删除关联 link_id={} 联动清理: {} 条评估事件 + {} 条评估记录 (task={}, item={})",
+                        link_id, deleted_events, deleted_evaluations, task_id, link_key)
 
-    return {"ok": True, "id": link_id, "task_id": task_id, "deleted_events": deleted_events}
+    return {"ok": True, "id": link_id, "task_id": task_id, "deleted_events": deleted_events, "deleted_evaluations": deleted_evaluations}
 
 
 @router.post("/{task_id}/links/refresh")
@@ -361,7 +334,7 @@ async def refresh_links(
                     sort_type=_search_sort_type, regions=_search_regions,
                 )
             except Exception as e:
-                logger.exception(f"refresh_links 搜索失败 task={task_id}: {e}")
+                logger.exception("refresh_links 搜索失败 task={}: {}", task_id, e)
                 err_msg = str(e)
                 if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
                     raise HTTPException(status_code=502, detail="浏览器连接已断开，请重启服务后重试")
@@ -373,30 +346,33 @@ async def refresh_links(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"refresh_links 未预期异常 task={task_id}: {e}")
+        logger.exception("refresh_links 未预期异常 task={}: {}", task_id, e)
         raise HTTPException(status_code=502, detail=f"刷新搜索异常: {str(e)}")
 
     # 写入新关联
-    saved = 0
-    for item in items:
-        try:
-            container.repo.upsert_item_task_links(
-                task_id=task_id,
-                item_id=item.id,
-                title=item.title,
-                price=item.price,
-                thumb_url=item.thumb_url,
-                seller_id=getattr(item, "seller_id", None) or "",
-                source="auto",
-                region=getattr(item, "region", None),
-                publish_time=getattr(item, "publish_time", None),
-                want_cnt=getattr(item, "want_cnt", None),
-                view_cnt=getattr(item, "view_cnt", None),
-                is_sold=getattr(item, "is_sold", False),
-            )
-            saved += 1
-        except Exception as e:
-            logger.warning("写入关联失败 item=%s: %s", getattr(item, "id", "?"), e)
+    # 批量写入：将 N 次独立事务合并为 1 次，减少 SQLite fsync 开销
+    items_data = [
+        {
+            "item_id": item.id,
+            "title": item.title,
+            "price": item.price,
+            "thumb_url": item.thumb_url,
+            "seller_id": getattr(item, "seller_id", None) or "",
+            "region": getattr(item, "region", None),
+            "publish_time": getattr(item, "publish_time", None),
+            "want_cnt": getattr(item, "want_cnt", None),
+            "view_cnt": getattr(item, "view_cnt", None),
+            "is_sold": getattr(item, "is_sold", False),
+        }
+        for item in items
+    ]
+    try:
+        saved = container.repo.batch_upsert_item_task_links(
+            task_id=task_id, items_data=items_data, source="auto"
+        )
+    except Exception as e:
+        logger.warning("批量写入关联失败: {}", e)
+        saved = 0
 
     # 返回刷新后的统计
     counts = container.repo.count_task_links(task_id)
@@ -415,15 +391,15 @@ async def live_links(
     task_id: str,
     background_tasks: BackgroundTasks,
     container: Container = Depends(get_container),
-) -> dict[str, Any]:
-    """实时从闲鱼搜索并直接返回结果（不经过数据库）
+):
+    """实时从闲鱼搜索并直接返回结果（SSE 流式响应）
 
-    与 /links/refresh 的区别：
-    - refresh: 搜索 → 写入DB → 返回计数（前端再调 /links 读DB）
-    - live: 搜索 → 直接返回结果列表（完全不依赖数据库）
-
-    仅在 Web 进程持有浏览器实例时可用（XH_WITH_SCHEDULER=1 模式）。
+    通过 SSE 推送搜索进度，前端可实时显示当前阶段。
+    支持 60 秒结果缓存，避免短时间重复搜索。
+    使用高优先级浏览器锁，优先于 Worker 后台搜索。
+    同步 DB 调用通过 run_in_executor 异步化，避免阻塞事件循环。
     """
+    # 前置检查（快速失败，返回正常 HTTP 错误码）
     task = container.repo.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -437,7 +413,6 @@ async def live_links(
             status_code=503,
             detail="浏览器实例未初始化，请重启服务",
         )
-    await _ensure_live_search_cookies(container)
 
     keyword = task.get("keyword", "")
     if not keyword:
@@ -447,9 +422,7 @@ async def live_links(
     min_price = task.get("min_price")
     max_price = task.get("max_price")
     max_publish_days = task.get("max_publish_days")
-    # 读取任务筛选标签，传递给搜索 URL（如个人闲置、包邮等）
     task_search_filters = task.get("search_filters") or []
-    # 读取全局搜索配置的排序方式和地区过滤，与 Worker 保持一致
     try:
         from xianyu_hunter.infra.yaml_config import get_config
         search_cfg = get_config().search
@@ -459,20 +432,48 @@ async def live_links(
         search_sort_type = "default"
         search_regions = ""
 
-    # 使用互斥锁防止并发操作浏览器，设 10 秒超时避免长时间卡住
-    raw_results: list[dict] = []
-    try:
+    async def event_stream():
+        """SSE 事件流：分阶段推送搜索进度和最终结果"""
+        # 性能埋点：记录 live 搜索整体耗时，便于分析缓存命中率和搜索性能
+        live_start = time.monotonic()
+        def sse(data: dict) -> str:
+            return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        # 阶段 1：检查缓存
+        yield sse({"stage": "checking_cache"})
+        cached = _live_cache.get(task_id)
+        if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
+            logger.info("live_links 命中缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
+            yield sse({"stage": "done", **cached[1]})
+            return
+
+        # 阶段 2：Cookie 检查
+        yield sse({"stage": "checking_cookies"})
         try:
-            await asyncio.wait_for(container.browser_lock.acquire(), timeout=10.0)
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=503,
-                detail="系统正在执行后台搜索任务，请稍后重试",
+            await _ensure_live_search_cookies(container)
+        except HTTPException as e:
+            yield sse({"stage": "error", "detail": e.detail, "status": e.status_code})
+            return
+        except Exception as e:
+            logger.exception("live_links cookie 检查异常 task={}: {}", task_id, e)
+            yield sse({"stage": "error", "detail": f"Cookie 检查异常: {e}", "status": 502})
+            return
+
+        # 阶段 3：获取浏览器锁（高优先级，优先于 Worker 后台搜索）
+        yield sse({"stage": "acquiring_lock"})
+        try:
+            await asyncio.wait_for(
+                container.browser_lock.acquire(priority="high"),
+                timeout=10.0,
             )
+        except asyncio.TimeoutError:
+            yield sse({"stage": "error", "detail": "系统正在执行后台搜索任务，请稍后重试", "status": 503})
+            return
+
+        # 阶段 4：搜索
+        raw_results: list[dict] = []
         try:
-            # 快速搜索：max_pages=1 减少翻页等待
-            # 20 秒超时：API 拦截 ~3s + DOM 批量解析 ~3s + 页面加载 ~10s = ~16s 上限
-            # 重置 last_session_invalid，避免上一次搜索的残留标志污染本次判断
+            yield sse({"stage": "searching"})
             container.collector.last_session_invalid = False
             try:
                 raw_results = await asyncio.wait_for(
@@ -484,22 +485,20 @@ async def live_links(
                     timeout=20.0,
                 )
             except asyncio.TimeoutError:
-                raise HTTPException(status_code=504, detail="实时搜索超时，请稍后重试或重启服务")
+                yield sse({"stage": "error", "detail": "实时搜索超时，请稍后重试或重启服务", "status": 504})
+                return
 
-            # RGV587 时 fast 模式跳过了 token 刷新重试，此处补一次：
-            # 为什么要在 retry 前额外调一次 force 刷新：search() 内部的
-            # _ensure_fresh_m5tk 有 45 分钟缓存，若 Worker 刚刷新过 token
-            # 但实际已过期，缓存会跳过刷新导致 retry 仍然失败。
-            # 此处用临时页面强制刷新 token（绕过缓存），确保 retry 拿到有效令牌。
+            # RGV587 时 fast 模式跳过了 token 刷新重试，此处补一次
             if not raw_results and getattr(container.collector, "last_session_invalid", False):
-                logger.info("实时搜索触发 RGV587，强制刷新 token 后重试: task=%s", task_id)
+                yield sse({"stage": "refreshing_token"})
+                logger.info("实时搜索触发 RGV587，强制刷新 token 后重试: task={}", task_id)
                 try:
-                    # 用临时页面强制刷新 _m_h5_tk（force=True 绕过 45 分钟缓存）
                     refresh_page = await container.browser.new_page()
                     try:
                         await container.collector._ensure_fresh_m5tk(refresh_page, force=True)
                     finally:
                         await refresh_page.close()
+                    yield sse({"stage": "searching_retry"})
                     raw_results = await asyncio.wait_for(
                         container.collector.live_search(
                             keyword, max_pages=1, collect_sellers=False, fast=False,
@@ -509,198 +508,180 @@ async def live_links(
                         timeout=45.0,
                     )
                 except asyncio.TimeoutError:
-                    raise HTTPException(status_code=504, detail="实时搜索重试超时，请稍后再试")
-        except HTTPException:
-            raise
+                    yield sse({"stage": "error", "detail": "实时搜索重试超时，请稍后再试", "status": 504})
+                    return
         except Exception as e:
-            logger.exception(f"实时搜索失败 task={task_id}: {e}")
+            logger.exception("实时搜索失败 task={}: {}", task_id, e)
             err_msg = str(e)
             if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
-                raise HTTPException(status_code=502, detail="浏览器连接已断开，请重启服务后重试")
-            if "RGV587" in err_msg:
-                raise HTTPException(status_code=401, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
-            if "Connection closed" in err_msg:
-                raise HTTPException(status_code=502, detail="浏览器连接异常，请重启服务后重试")
-            raise HTTPException(status_code=502, detail=f"闲鱼搜索失败: {err_msg}")
+                yield sse({"stage": "error", "detail": "浏览器连接已断开，请重启服务后重试", "status": 502})
+            elif "RGV587" in err_msg:
+                yield sse({"stage": "error", "detail": "搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼", "status": 401})
+            elif "Connection closed" in err_msg:
+                yield sse({"stage": "error", "detail": "浏览器连接异常，请重启服务后重试", "status": 502})
+            else:
+                yield sse({"stage": "error", "detail": f"闲鱼搜索失败: {err_msg}", "status": 502})
+            return
         finally:
             container.browser_lock.release()
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"live_links 未预期异常 task={task_id}: {e}")
-        raise HTTPException(status_code=502, detail=f"实时搜索异常: {str(e)}")
 
-    # 格式化为前端期望的 task_links 行格式（与 DB 查询结果一致）
-    # 对 display 字段做全面语义校正，并收集字段元数据供前端动态渲染列
-    now = datetime.now(timezone.utc).isoformat()
-    results: list[dict] = []
-    merged_field_map: dict[str, dict[str, Any]] = {}
-    for r in raw_results:
-        display = {
-            "title": r.get("title", ""),
-            "price": r.get("price"),
-            "thumb_url": r.get("thumb_url", ""),
-            "region": r.get("region", ""),
-            "url": r.get("url", ""),
-            "is_sold": r.get("is_sold", False),
-            "publish_time": r.get("publish_time"),
-            "seller_id": r.get("seller_id", ""),
-            "seller_nick": r.get("seller_nick", ""),
-            "seller_credit": r.get("seller_credit", ""),
-            "want_cnt": r.get("want_cnt"),
-            "view_cnt": r.get("view_cnt"),
-        }
-        # 对 display 字段做全面语义校正，处理字段错位
-        # 同时获取 field_map（字段元数据），前端根据此动态渲染列
-        corrected_display, field_map = normalize_display_fields(display)
-        # 合并 field_map：取所有商品字段的并集
-        # 不同商品可能有不同的字段（如部分商品无 seller_credit），取并集确保列头完整
-        merged_field_map.update(field_map)
-        results.append({
-            "link_id": 0,  # 实时数据无DB id，用0占位（前端需link_id字段）
-            "task_id": task_id,
-            "link_type": r["link_type"],
-            "link_key": r["link_key"],
-            "source": "live",
-            "display": corrected_display,
-            "note": None,
-            "created_at": now,
-        })
+        # 阶段 5：格式化 + 过滤
+        yield sse({"stage": "filtering", "count": len(raw_results)})
+        now = datetime.now(timezone.utc).isoformat()
+        results: list[dict] = []
+        merged_field_map: dict[str, dict[str, Any]] = {}
+        for r in raw_results:
+            display = {
+                "title": r.get("title", ""),
+                "price": r.get("price"),
+                "thumb_url": r.get("thumb_url", ""),
+                "region": r.get("region", ""),
+                "url": r.get("url", ""),
+                "is_sold": r.get("is_sold", False),
+                "publish_time": r.get("publish_time"),
+                "seller_id": r.get("seller_id", ""),
+                "seller_nick": r.get("seller_nick", ""),
+                "seller_credit": r.get("seller_credit", ""),
+                "want_cnt": r.get("want_cnt"),
+                "view_cnt": r.get("view_cnt"),
+            }
+            corrected_display, field_map = normalize_display_fields(display)
+            merged_field_map.update(field_map)
+            results.append({
+                "link_id": 0,
+                "task_id": task_id,
+                "link_type": r["link_type"],
+                "link_key": r["link_key"],
+                "source": "live",
+                "display": corrected_display,
+                "note": None,
+                "created_at": now,
+            })
 
-    # 按关键词过滤：即使搜索API返回相关结果，也作为安全兜底过滤无关商品
-    filtered = []
-    for r in results:
-        title = (r.get("display") or {}).get("title", "")
-        if task_keyword_matches_title(keyword, title):
-            filtered.append(r)
-    skipped = len(results) - len(filtered)
-    if skipped:
-        logger.info("live_links 关键词过滤跳过了 %d 条无关结果", skipped)
+        # 关键词过滤（安全兜底）
+        filtered = []
+        for r in results:
+            title = (r.get("display") or {}).get("title", "")
+            if task_keyword_matches_title(keyword, title):
+                filtered.append(r)
+        skipped = len(results) - len(filtered)
+        if skipped:
+            logger.info("live_links 关键词过滤跳过了 {} 条无关结果", skipped)
 
-    # 按价格过滤（整合任务级 min/max 和全局 price_strategy 配置）
-    # 任务级优先级高于全局配置：任务设置 min_price=500 时，即使全局禁用下限也生效
-    price_filtered = 0
-    # 读取全局价格策略配置（用于实时搜索联动）
-    try:
-        from xianyu_hunter.infra.yaml_config import get_config
-        global_ps = get_config().price_strategy
-    except Exception:
-        global_ps = None
-
-    # 计算生效的价格范围：任务级覆盖全局配置
-    effective_min = min_price
-    effective_max = max_price
-    if effective_min is None and global_ps and global_ps.enabled_min:
-        effective_min = global_ps.min_price
-    if effective_max is None and global_ps and global_ps.enabled_max:
-        effective_max = global_ps.max_price
-
-    if effective_min is not None or effective_max is not None:
-        _filtered = []
-        for r in filtered:
-            price = (r.get("display") or {}).get("price")
-            if price is None:
-                _filtered.append(r)  # 无价格信息不过滤
-                continue
-            try:
-                p = float(price)
-            except (ValueError, TypeError):
-                _filtered.append(r)
-                continue
-            if effective_min is not None and p < effective_min:
-                price_filtered += 1
-                continue
-            if effective_max is not None and p > effective_max:
-                price_filtered += 1
-                continue
-            _filtered.append(r)
-        filtered = _filtered
-        if price_filtered:
-            logger.info("live_links 价格过滤跳过了 {} 条 (min={}, max={})", price_filtered, effective_min, effective_max)
-
-    # 按发布天数过滤（仅展示最近 N 天内发布的商品）
-    days_filtered = 0
-    if max_publish_days is not None:
-        from datetime import datetime as _dt
-        _now = _dt.now()
-        _filtered = []
-        for r in filtered:
-            pub = (r.get("display") or {}).get("publish_time")
-            if not pub:
-                _filtered.append(r)  # 无发布时间不过滤
-                continue
-            try:
-                pub_dt = _dt.fromisoformat(str(pub).replace("Z", "+00:00"))
-                if (_now - pub_dt).days > max_publish_days:
-                    days_filtered += 1
+        # 价格过滤（任务级 + 全局 price_strategy）
+        try:
+            from xianyu_hunter.infra.yaml_config import get_config
+            global_ps = get_config().price_strategy
+        except Exception:
+            global_ps = None
+        effective_min = min_price
+        effective_max = max_price
+        if effective_min is None and global_ps and global_ps.enabled_min:
+            effective_min = global_ps.min_price
+        if effective_max is None and global_ps and global_ps.enabled_max:
+            effective_max = global_ps.max_price
+        if effective_min is not None or effective_max is not None:
+            _filtered = []
+            for r in filtered:
+                price = (r.get("display") or {}).get("price")
+                if price is None:
+                    _filtered.append(r)
                     continue
-            except (ValueError, TypeError):
-                pass
-            _filtered.append(r)
-        filtered = _filtered
-        if days_filtered:
-            logger.info("live_links 发布天数过滤跳过了 {} 条 (max_days={})", days_filtered, max_publish_days)
+                try:
+                    p = float(price)
+                except (ValueError, TypeError):
+                    _filtered.append(r)
+                    continue
+                if effective_min is not None and p < effective_min:
+                    continue
+                if effective_max is not None and p > effective_max:
+                    continue
+                _filtered.append(r)
+            filtered = _filtered
 
-    # 按类型分组（url 类型已废弃，item 的 link_key 可由前端自动拼接为完整 URL）
-    items = [r for r in filtered if r["link_type"] == "item"]
-    sellers = [r for r in filtered if r["link_type"] == "seller"]
+        # 发布天数过滤
+        if max_publish_days is not None:
+            from datetime import datetime as _dt
+            _now = _dt.now()
+            _filtered = []
+            for r in filtered:
+                pub = (r.get("display") or {}).get("publish_time")
+                if not pub:
+                    _filtered.append(r)
+                    continue
+                try:
+                    pub_dt = _dt.fromisoformat(str(pub).replace("Z", "+00:00"))
+                    if (_now - pub_dt).days > max_publish_days:
+                        continue
+                except (ValueError, TypeError):
+                    pass
+                _filtered.append(r)
+            filtered = _filtered
 
-    # 将实时搜索结果写入 DB（source="live"），让商品列表页面和 Worker 评估都能看到
-    # 不覆盖 auto/manual 来源的记录（upsert 按 task_id+item_id 去重）
-    if items:
-        saved_live = 0
-        for r in items:
+        items = [r for r in filtered if r["link_type"] == "item"]
+        sellers = [r for r in filtered if r["link_type"] == "seller"]
+
+        # 阶段 6：批量写入 DB（run_in_executor 避免阻塞事件循环）
+        if items:
+            yield sse({"stage": "writing_db", "count": len(items)})
+            items_data = [
+                {
+                    "item_id": r.get("link_key", ""),
+                    "title": (r.get("display") or {}).get("title", ""),
+                    "price": (r.get("display") or {}).get("price"),
+                    "thumb_url": (r.get("display") or {}).get("thumb_url", ""),
+                    "seller_id": (r.get("display") or {}).get("seller_id", "") or "",
+                    "region": (r.get("display") or {}).get("region"),
+                    "publish_time": (r.get("display") or {}).get("publish_time"),
+                    "want_cnt": (r.get("display") or {}).get("want_cnt"),
+                    "view_cnt": (r.get("display") or {}).get("view_cnt"),
+                    "is_sold": (r.get("display") or {}).get("is_sold", False),
+                }
+                for r in items
+            ]
             try:
-                display = r.get("display") or {}
-                container.repo.upsert_item_task_links(
-                    task_id=task_id,
-                    item_id=r.get("link_key", ""),
-                    title=display.get("title", ""),
-                    price=display.get("price"),
-                    thumb_url=display.get("thumb_url", ""),
-                    seller_id=display.get("seller_id", "") or "",
-                    source="live",
-                    region=display.get("region"),
-                    publish_time=display.get("publish_time"),
-                    want_cnt=display.get("want_cnt"),
-                    view_cnt=display.get("view_cnt"),
-                    is_sold=display.get("is_sold", False),
+                loop = asyncio.get_event_loop()
+                saved_live = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        container.repo.batch_upsert_item_task_links,
+                        task_id=task_id,
+                        items_data=items_data,
+                        source="live",
+                    ),
                 )
-                saved_live += 1
+                if saved_live:
+                    logger.info("live_links 已写入 {} 条记录到 DB (task={})", saved_live, task_id)
             except Exception as e:
-                logger.warning("live_links 写入 DB 失败 item=%s: %s", r.get("link_key", "?"), e)
-        if saved_live:
-            logger.info("live_links 已写入 %d 条记录到 DB (task=%s)", saved_live, task_id)
+                logger.warning("live_links 批量写入 DB 失败: {}", e)
 
-        # 触发轻量级评估：基于搜索结果构造降级 ItemDetail 和 SellerProfile
-        # 不拉取详情页和卖家主页，评估结果标记为"数据不足"但仍有评分
-        # 修复：之前同步调用会阻塞 HTTP 响应（50 条商品评估+写库可能耗时数秒）
-        # 改为 BackgroundTasks 异步执行，让前端立即拿到搜索结果
-        background_tasks.add_task(_safe_trigger_live_evaluation, container, task_id, items)
+            background_tasks.add_task(_safe_trigger_live_evaluation, container, task_id, items)
 
-    # 检测搜索令牌过期：仅当 API 明确返回 RGV587/TOKEN_ILLEGAL 等标志时判定
-    # last_session_invalid 由 search() 在 API 响应包含会话失效标志时设置
-    # 注意：搜索结果为空不等于会话失效，可能是关键词无匹配或 API 响应格式变化
-    # 重试成功后 last_session_invalid 会被重置为 False，此处只在重试仍失败时才标记
-    session_expired = getattr(container.collector, "last_session_invalid", False)
+        # 阶段 7：完成
+        session_expired = getattr(container.collector, "last_session_invalid", False)
+        result = {
+            "ok": True,
+            "task_id": task_id,
+            "keyword": keyword,
+            "session_expired": session_expired,
+            "counts": {
+                "item": len(items),
+                "seller": len(sellers),
+                "total": len(filtered),
+            },
+            "items": items,
+            "sellers": sellers,
+            "all": filtered,
+            "field_map": merged_field_map,
+        }
+        # 写入缓存：仅当查询结果非空时缓存，0 条记录不缓存以便下次请求重新触发实时查询
+        if filtered:
+            _live_cache[task_id] = (time.monotonic(), result)
+        elapsed = time.monotonic() - live_start
+        logger.info("live_links 完成 task={}, {} 个商品, 耗时 {:.1f}s", task_id, len(items), elapsed)
+        yield sse({"stage": "done", **result})
 
-    return {
-        "ok": True,
-        "task_id": task_id,
-        "keyword": keyword,
-        "session_expired": session_expired,
-        "counts": {
-            "item": len(items),
-            "seller": len(sellers),
-            "total": len(filtered),
-        },
-        "items": items,  # 仅含 link_type=item 的行，避免 seller 行被错位渲染
-        "sellers": sellers,  # 卖家行单独返回
-        "all": filtered,  # 保留合并视图（向后兼容）
-        # 字段元数据：前端根据此动态渲染列头，当接口字段变化时前端展示自动调整
-        # 避免"列头显示卖家但实际展示信用信息"等错位问题
-        "field_map": merged_field_map,
-    }
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def _safe_trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
@@ -712,7 +693,7 @@ def _safe_trigger_live_evaluation(container: Container, task_id: str, items: lis
     try:
         _trigger_live_evaluation(container, task_id, items)
     except Exception as e:
-        logger.warning("live_links 后台触发评估失败 task=%s: %s", task_id, e)
+        logger.warning("live_links 后台触发评估失败 task={}: {}", task_id, e)
 
 
 def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
@@ -759,7 +740,7 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
                 description="",
             )
         except Exception as e:
-            logger.warning("构造 ItemDetail 失败 item=%s: %s", item_id, e)
+            logger.warning("构造 ItemDetail 失败 item={}: {}", item_id, e)
             continue
 
         # 构造降级 SellerProfile（无卖家主页数据，标记为数据不足）
@@ -805,10 +786,10 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
                 }, ensure_ascii=False, default=str),
             })
         except Exception as e:
-            logger.warning("live 评估失败 item=%s: %s", item_id, e)
+            logger.warning("live 评估失败 item={}: {}", item_id, e)
 
     if evaluated:
-        logger.info("live_links 触发轻量级评估 %d 条 (task=%s)", evaluated, task_id)
+        logger.info("live_links 触发轻量级评估 {} 条 (task={})", evaluated, task_id)
 
 
 # ============== 反查 / 搜索（跨任务） ==============

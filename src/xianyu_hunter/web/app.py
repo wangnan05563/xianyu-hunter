@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from xianyu_hunter.web.middleware.auth import setup_auth_middleware
@@ -27,6 +27,7 @@ from xianyu_hunter.web.routes import (
     api_config,
     api_cron,
     api_db_admin,
+    api_error_logs,
     api_evaluations,
     api_export,
     api_ai_deep,
@@ -53,7 +54,8 @@ def create_app() -> FastAPI:
         title="XianyuHunter Web",
         description="闲鱼自动捡漏与抢单系统 - Web 控制台",
         version="0.1.0",
-        docs_url="/api/docs",
+        # 禁用默认 docs，使用自定义 Swagger UI（顶部含帮助文档入口按钮）
+        docs_url=None,
         redoc_url=None,
     )
 
@@ -69,6 +71,18 @@ def create_app() -> FastAPI:
     # 静态资源
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    # /app/docs 重定向到 FastAPI 内置的 API 文档（docs_url=/api/docs）
+    # 避免被下方 SPA catch-all 捕获后返回 index.html，导致前端路由跳回首页
+    @app.get("/app/docs", include_in_schema=False)
+    async def redirect_app_docs() -> RedirectResponse:
+        return RedirectResponse(url="/api/docs", status_code=302)
+
+    # 自定义 Swagger UI 页面：在顶部导航栏注入「帮助文档」入口按钮
+    # docs_url=None 禁用默认 docs，由本路由提供含帮助入口的增强版 Swagger UI
+    @app.get("/api/docs", include_in_schema=False)
+    async def custom_docs() -> HTMLResponse:
+        return HTMLResponse(_SWAGGER_UI_HTML)
 
     # SPA 可视化配置控制台（React 构建产物）
     # 访问 /app/* 时服务 SPA，支持客户端路由
@@ -144,6 +158,7 @@ def create_app() -> FastAPI:
     app.include_router(price_dashboard.router)  # P1-6：价格行情看板增强
     app.include_router(api_maintenance.router)  # 系统维护：缓存/数据库/日志清理
     app.include_router(api_db_admin.router)  # 系统维护 → 数据库维护：业务表在线 CRUD
+    app.include_router(api_error_logs.router)  # 后台错误日志：异常捕获 + AI 诊断上下文
 
     @app.get("/healthz", tags=["meta"])
     def healthz() -> JSONResponse:
@@ -261,6 +276,75 @@ _SPA_LOGIN_OVERLAY = """<style>
   });
 })();
 </script>"""
+
+
+# 自定义 Swagger UI 页面：在标准 Swagger UI 基础上注入顶部导航栏
+# 导航栏含「帮助文档」和「返回控制台」入口，使用闲鱼品牌橙配色
+_SWAGGER_UI_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XianyuHunter Web - API 文档</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+<link rel="icon" href="/static/icons/icon-dashboard.svg">
+<style>
+  body { margin: 0; }
+  /* 顶部导航栏：固定定位，不随页面滚动 */
+  .xh-docs-header {
+    position: fixed; top: 0; left: 0; right: 0; height: 56px;
+    background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    z-index: 1000; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  }
+  .xh-docs-header .xh-title { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; color: #262626; }
+  .xh-docs-header .xh-logo {
+    width: 32px; height: 32px; border-radius: 8px;
+    background: linear-gradient(135deg, #FF6200, #FF8533);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 16px;
+    box-shadow: 0 2px 8px rgba(255,98,0,0.25);
+  }
+  .xh-docs-header .xh-actions { display: flex; gap: 10px; align-items: center; }
+  .xh-docs-header .xh-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 16px; border-radius: 6px; font-size: 14px;
+    text-decoration: none; cursor: pointer; border: none;
+    transition: all 0.2s; font-weight: 500;
+  }
+  .xh-docs-header .xh-btn-primary { background: #FF6200; color: #fff; }
+  .xh-docs-header .xh-btn-primary:hover { background: #e55a00; box-shadow: 0 2px 8px rgba(255,98,0,0.3); }
+  .xh-docs-header .xh-btn-default { background: transparent; color: #595959; border: 1px solid #d9d9d9; }
+  .xh-docs-header .xh-btn-default:hover { color: #FF6200; border-color: #FF6200; }
+  /* Swagger UI 偏移，避免被固定导航栏遮挡 */
+  .swagger-ui { margin-top: 56px; }
+</style>
+</head>
+<body>
+<div class="xh-docs-header">
+  <div class="xh-title">
+    <div class="xh-logo">闲</div>
+    <span>闲鱼猎人 · API 文档</span>
+  </div>
+  <div class="xh-actions">
+    <a class="xh-btn xh-btn-default" href="/app/" target="_blank">控制台</a>
+    <a class="xh-btn xh-btn-primary" href="/app/help" target="_blank">📖 帮助文档</a>
+  </div>
+</div>
+<div id="swagger-ui"></div>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+  SwaggerUIBundle({
+    url: '/openapi.json',
+    dom_id: '#swagger-ui',
+    deepLinking: true,
+    presets: [SwaggerUIBundle.presets.apis],
+    layout: 'BaseLayout',
+    defaultModelsExpandDepth: 2,
+  });
+</script>
+</body>
+</html>"""
 
 
 # uvicorn 直接调用入口

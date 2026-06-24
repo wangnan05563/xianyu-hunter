@@ -1,6 +1,6 @@
 @echo off
-REM Prepend Node.js 24 to PATH so all child processes (vite, esbuild, rollup,
-REM tsc, etc.) resolve "node" to v24 instead of the legacy v14 on system PATH.
+chcp 65001 >nul 2>&1
+REM Prepend Node.js 24 to PATH so all child processes resolve node to v24
 set "PATH=D:\code\nodejs24;%PATH%"
 
 echo ============================================
@@ -11,7 +11,8 @@ echo Node:
 D:\code\nodejs24\node.exe --version
 echo.
 
-cd /d "%~dp0frontend"
+REM Script is in scripts/ subdirectory, change to frontend dir
+cd /d "%~dp0..\frontend"
 
 echo [1/2] Cleaning old build...
 if exist "..\src\xianyu_hunter\web\static\spa" (

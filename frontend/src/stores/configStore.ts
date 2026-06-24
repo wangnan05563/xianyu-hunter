@@ -86,7 +86,21 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     const { config } = get()
     if (!config) return []
     const res = await configApi.save(config, true)
-    return (res?.changes || []) as DiffChange[]
+    // 后端返回 { diffs: [{path, op, old, new}] }，op 取值 'add'|'modify'|'remove'
+    // 前端 DiffChange 期望 {path, op, old_value, new_value}，op 取值 'add'|'modify'|'delete'
+    // 在此做一次字段映射，避免每个配置页都要适配后端格式
+    const diffs = (res?.diffs ?? []) as Array<{
+      path: string
+      op: string
+      old: unknown
+      new: unknown
+    }>
+    return diffs.map((d) => ({
+      path: d.path,
+      op: (d.op === 'remove' ? 'delete' : d.op) as DiffChange['op'],
+      old_value: d.old,
+      new_value: d.new,
+    }))
   },
 
   confirmSave: async () => {

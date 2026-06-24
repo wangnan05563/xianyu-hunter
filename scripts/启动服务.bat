@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul 2>&1
-cd /d "%~dp0"
+REM 脚本位于 scripts/ 子目录，需回到项目根目录
+cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
 echo ========================================
@@ -49,9 +50,10 @@ if errorlevel 1 (
 )
 
 REM [3/4] Start Web server with scheduler (browser + task engine in same process)
-REM 实时搜索 API 需�?container.collector 不为 None，只�?--with-scheduler 模式才满�?echo [3/4] Starting Web server with scheduler...
+REM Live search API requires container.collector != None, only --with-scheduler satisfies this
+echo [3/4] Starting Web server with scheduler...
 
-start "XianyuHunter-Web" /min cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web --with-scheduler > logs\web.log 2> logs\web.err"
+start "XianyuHunter-Web" cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web --with-scheduler 2>&1 & pause"
 
 REM Wait for Web port to be ready (up to 30 seconds)
 echo Waiting for Web server...
@@ -104,7 +106,7 @@ echo   Web:  http://127.0.0.1:8000
 echo   Mode: Web + Scheduler (with browser)
 echo   Log:  logs\web.log
 echo.
-echo To stop: double-click 停止服务.bat
+echo To stop: double-click scripts\停止服务.bat
 echo.
 
 start "" http://127.0.0.1:8000/app/

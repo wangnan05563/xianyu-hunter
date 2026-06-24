@@ -1,10 +1,12 @@
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Card, Table, Tag, Select, Button, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert } from 'antd'
-import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined } from '@ant-design/icons'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { Card, Table, Tag, Select, Button, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
+import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined, ThunderboltOutlined, ClockCircleOutlined, LoadingOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { AxiosError } from 'axios'
-import { taskApi, taskLinkApi, type Task, type TaskLink, type FieldMap, type FieldMeta } from '../../api'
+import { taskApi, taskLinkApi, type Task, type TaskLink, type FieldMap } from '../../api'
 import LazyImage from '../../components/LazyImage'
+import { useAutoRefresh, DEFAULT_INTERVAL, MIN_INTERVAL, MAX_INTERVAL } from '../../hooks/useAutoRefresh'
+import { usePersistentState } from '../../hooks/usePersistentState'
 
 type ViewMode = 'table' | 'card'
 
@@ -35,6 +37,62 @@ function errDetail(err: unknown): string {
   return axiosErr?.response?.data?.detail || String(err)
 }
 
+// 数据变化检测：对比新旧数据的价格/状态/想要数签名，返回变化的 link_key 集合
+// 既用于高亮展示，也用于判断是否需要显示"数据已更新"提示
+function detectChanges(
+  newItems: TaskLink[],
+  prevMap: Map<string, string>,
+): { changedKeys: Set<string>; newMap: Map<string, string> } {
+  const changedKeys = new Set<string>()
+  const newMap = new Map<string, string>()
+  for (const item of newItems) {
+    const key = item.link_key
+    if (!key) continue  // 跳过无 link_key 的异常行
+    const sig = `${item.display?.price ?? ''}|${item.display?.is_sold ?? ''}|${item.display?.want_cnt ?? ''}`
+    newMap.set(key, sig)
+    const prevSig = prevMap.get(key)
+    if (prevSig !== undefined && prevSig !== sig) {
+      changedKeys.add(key)
+    }
+  }
+  return { changedKeys, newMap }
+}
+
+/** 检测数据变化并触发高亮 + 提示（loadItems 和自动刷新共用） */
+function applyChangeHighlight(
+  newItems: TaskLink[],
+  prevItemsRef: React.MutableRefObject<Map<string, string>>,
+  setHighlightRows: React.Dispatch<React.SetStateAction<Set<string>>>,
+  setShowUpdateToast: React.Dispatch<React.SetStateAction<boolean>>,
+) {
+  const { changedKeys, newMap } = detectChanges(newItems, prevItemsRef.current)
+  prevItemsRef.current = newMap
+  if (changedKeys.size > 0) {
+    setHighlightRows(changedKeys)
+    setShowUpdateToast(true)
+    setTimeout(() => setHighlightRows(new Set()), 3000)
+    setTimeout(() => setShowUpdateToast(false), 2000)
+  }
+}
+
+// 实时搜索结果客户端过滤：后端 live 端点不接受 keyword/region 参数，
+// 前端在拿到全量结果后按当前筛选条件过滤，确保两种模式下参数一致生效
+function applyClientFilters(
+  rows: TaskLink[],
+  search: string,
+  region: string | undefined,
+): TaskLink[] {
+  let filtered = rows
+  if (search) {
+    const kwLower = search.toLowerCase()
+    filtered = filtered.filter(r => (r.display?.title || '').toLowerCase().includes(kwLower))
+  }
+  if (region) {
+    filtered = filtered.filter(r => r.display?.region === region)
+  }
+  return filtered
+}
+
 export default function ItemList() {
   const navigate = useNavigate()
   const [tasks, setTasks] = useState<Task[]>([])
@@ -42,13 +100,17 @@ export default function ItemList() {
   const [items, setItems] = useState<TaskLink[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = usePersistentState<number>('xh.items.pageSize', 20, {
+    validator: (v): v is number => typeof v === 'number' && v > 0 && Number.isFinite(v),
+  })
   const [loading, setLoading] = useState(false)
   const [liveMode, setLiveMode] = useState(false)
   const [liveLoading, setLiveLoading] = useState(false)
   const [search, setSearch] = useState('')
-  const [viewMode, setViewMode] = useState<ViewMode>('card')
-  const [regionFilter, setRegionFilter] = useState<string | undefined>(undefined)
+  const [viewMode, setViewMode] = usePersistentState<ViewMode>('xh.items.viewMode', 'card', {
+    validator: (v): v is ViewMode => v === 'table' || v === 'card',
+  })
+  const [regionFilter, setRegionFilter] = usePersistentState<string | undefined>('xh.items.regionFilter', undefined)
   // 登录态/搜索令牌不可用标识：后端检测到身份 Cookie 缺失或 token 过期
   const [sessionExpired, setSessionExpired] = useState(false)
   // 字段元数据：后端返回的 field_map，描述每个字段的显示方式
@@ -56,12 +118,36 @@ export default function ItemList() {
   // 当接口字段变化时，前端根据此动态渲染列，无需修改代码
   const [fieldMap, setFieldMap] = useState<FieldMap | null>(null)
 
+  // ===== 实时更新（触发式刷新）相关状态 =====
+  // 使用 usePersistentState 自动持久化，刷新页面后恢复上次设置
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = usePersistentState<boolean>(
+    'xh.items.autoRefreshEnabled', false,
+    { validator: (v): v is boolean => typeof v === 'boolean' },
+  )
+  const [refreshInterval, setRefreshInterval] = usePersistentState<number>(
+    'xh.items.refreshInterval', DEFAULT_INTERVAL,
+    {
+      validator: (v): v is number =>
+        typeof v === 'number' && Number.isFinite(v) && v >= MIN_INTERVAL && v <= MAX_INTERVAL,
+    },
+  )
+  // 数据变化高亮：记录哪些行发生了变化（link_key → 变化字段集合）
+  const [highlightRows, setHighlightRows] = useState<Set<string>>(new Set())
+  // 上一次的数据快照，用于对比检测变化
+  const prevItemsRef = useRef<Map<string, string>>(new Map())
+  // 实时搜索原始结果：保存未过滤的全量数据，供实时模式下 search/region 变化时重新过滤
+  const liveItemsRef = useRef<TaskLink[]>([])
+  // "数据已更新"淡入提示的显示控制
+  const [showUpdateToast, setShowUpdateToast] = useState(false)
+
   // 加载任务列表
   useEffect(() => {
     taskApi.list({ limit: 200 }).then((res) => {
-      setTasks(res.items || [])
-      if (res.items.length > 0 && !selectedTask) {
-        setSelectedTask(res.items[0].id)
+      const items = res.items || []
+      setTasks(items)
+      // 防御性检查：避免 res.items 为 undefined 时访问 length 抛错导致白屏
+      if (items.length > 0 && !selectedTask) {
+        setSelectedTask(items[0].id)
       }
     }).catch(() => message.error('加载任务列表失败'))
   }, [])
@@ -72,7 +158,9 @@ export default function ItemList() {
     setItems([])
     setTotal(0)
     setPage(1)
-    setFieldMap(null)  // 切换任务时清除字段元数据，避免上一个任务的列定义残留
+    setFieldMap(null)
+    prevItemsRef.current = new Map()  // 切换任务时重置变化检测快照，避免跨任务误判
+    liveItemsRef.current = []  // 清空实时搜索原始结果，避免跨任务残留
   }, [selectedTask])
 
   // 加载商品列表
@@ -88,8 +176,10 @@ export default function ItemList() {
       region: regionFilter || undefined,
     })
       .then((res) => {
-        setItems(res.items || [])
+        const newItems = res.items || []
+        setItems(newItems)
         setTotal(res.total_for_type || 0)
+        applyChangeHighlight(newItems, prevItemsRef, setHighlightRows, setShowUpdateToast)
       })
       .catch((err) => {
         message.error(errDetail(err) || '加载商品列表失败')
@@ -98,6 +188,88 @@ export default function ItemList() {
       })
       .finally(() => setLoading(false))
   }, [selectedTask, page, pageSize, search, regionFilter])
+
+  // 触发式实时刷新：SSE 事件驱动为主，定时兜底轮询为辅
+  // 仅在非实时搜索模式（liveMode=false）下生效，避免与实时搜索冲突
+  // 筛选条件变化（page/search/region）由 loadItems 的 useEffect 负责加载，此处不重复
+  const { lastRefreshAt, refreshing, nextRefreshAt, triggerRefresh } = useAutoRefresh({
+    enabled: autoRefreshEnabled,
+    intervalSec: refreshInterval,
+    paused: liveMode || !selectedTask || loading,
+    refresh: async () => {
+      // 静默刷新（不显示全局 loading，避免每次触发都闪 Spin）
+      // 但保留 refreshing 状态用于指示器
+      if (!selectedTask) return
+      await taskLinkApi.list(selectedTask, {
+        type: 'item',
+        limit: pageSize,
+        offset: (page - 1) * pageSize,
+        keyword: search || undefined,
+        region: regionFilter || undefined,
+      }).then((res) => {
+        const newItems = res.items || []
+        setItems(newItems)
+        setTotal(res.total_for_type || 0)
+        applyChangeHighlight(newItems, prevItemsRef, setHighlightRows, setShowUpdateToast)
+      })
+    },
+  })
+
+  // 兜底轮询倒计时：显示距下次定时刷新的秒数
+  // 只依赖 nextRefreshAt，不依赖 refreshing（避免刷新过程中倒计时闪烁）
+  const [countdownSec, setCountdownSec] = useState<number | null>(null)
+  useEffect(() => {
+    if (!nextRefreshAt) {
+      setCountdownSec(null)
+      return
+    }
+    const calc = () => Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000))
+    setCountdownSec(calc())
+    const timer = setInterval(() => {
+      const left = calc()
+      setCountdownSec(left)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [nextRefreshAt])
+
+  // SSE 订阅：监听 task.search_done 事件，Worker 搜索完成时自动刷新商品列表
+  // 仅订阅当前选中任务的事件，避免无关任务触发不必要的刷新
+  // 断线 3 秒后自动重连，页面不可见时不建立连接（节省资源）
+  const sseRef = useRef<EventSource | null>(null)
+  const selectedTaskRef = useRef(selectedTask)
+  selectedTaskRef.current = selectedTask
+  const triggerRefreshRef = useRef(triggerRefresh)
+  triggerRefreshRef.current = triggerRefresh
+  useEffect(() => {
+    if (!autoRefreshEnabled || liveMode || !selectedTask) return
+    const connect = () => {
+      if (sseRef.current) sseRef.current.close()
+      if (document.visibilityState !== 'visible') return
+      const es = new EventSource('/api/events/stream')
+      sseRef.current = es
+      es.addEventListener('app_event', (e) => {
+        try {
+          const ev = JSON.parse(e.data)
+          // 只处理当前任务的搜索完成事件
+          if (ev.type === 'task.search_done' && ev.task_id === selectedTaskRef.current) {
+            triggerRefreshRef.current()
+          }
+        } catch { /* 忽略解析错误 */ }
+      })
+      es.addEventListener('error', () => {
+        try { es.close() } catch { /* */ }
+        sseRef.current = null
+        if (document.visibilityState === 'visible') setTimeout(connect, 3000)
+      })
+    }
+    connect()
+    return () => {
+      if (sseRef.current) {
+        sseRef.current.close()
+        sseRef.current = null
+      }
+    }
+  }, [autoRefreshEnabled, liveMode, selectedTask])
 
   // 刷新数据源：非 liveMode 时先调用 refresh 端点实时搜索并写入 DB，再加载 DB 数据
   // 这样确保"刷新"按钮获取的是最新商品，而非 DB 中的旧缓存
@@ -142,11 +314,20 @@ export default function ItemList() {
         }
       })
       .finally(() => setLoading(false))
-  }, [selectedTask, liveMode, loadItems])
+  }, [selectedTask, liveMode, page, loadItems])
 
   useEffect(() => {
     if (!liveMode) loadItems()
   }, [liveMode, loadItems])
+
+  // 实时模式下搜索条件变化时在客户端重新过滤（不重新请求闲鱼 API）
+  // liveItemsRef 保存了实时搜索的原始全量结果，每次筛选条件变化时从中重新过滤
+  useEffect(() => {
+    if (!liveMode) return
+    const filtered = applyClientFilters(liveItemsRef.current, search, regionFilter)
+    setItems(filtered)
+    setTotal(filtered.length)
+  }, [liveMode, search, regionFilter])
 
   // 实时搜索
   const loadLive = () => {
@@ -168,9 +349,13 @@ export default function ItemList() {
         // 防御性过滤：只取 item 类型行。seller 行在另一张表/分页渲染，
         // 避免与 item 行共用同一表格列时出现字段错位
         const itemRows = (res.items || []).filter((r: TaskLink) => r.link_type === 'item' || !r.link_type)
-        setItems(itemRows)
-        setTotal(itemRows.length)
-        const count = itemRows.length
+        // 保存原始结果供实时模式下 search/region 变化时重新过滤
+        liveItemsRef.current = itemRows
+        // 应用前端筛选条件（实时搜索结果在客户端过滤，确保与 DB 模式参数一致）
+        const filteredRows = applyClientFilters(itemRows, search, regionFilter)
+        setItems(filteredRows)
+        setTotal(filteredRows.length)
+        const count = filteredRows.length
         if (count > 0) {
           message.success(`实时搜索到 ${count} 个商品`)
         } else if (res.session_expired) {
@@ -197,17 +382,21 @@ export default function ItemList() {
   }
 
   // 删除关联（仅 DB 数据可删除，实时搜索结果 link_id=0 无需删除）
-  const handleDelete = (linkId: number) => {
+  const handleDelete = useCallback((linkId: number) => {
     if (!selectedTask || !linkId) return
     taskLinkApi.remove(selectedTask, linkId).then(() => {
       message.success('已删除')
       loadItems()
     }).catch((err) => message.error(errDetail(err) || '删除失败'))
-  }
+  }, [selectedTask, loadItems])
 
   // 过滤已下推到后端（keyword/region 参数），前端直接使用 items
-  // 地区选项从当前页数据提取（跨页场景需用户清空地区筛选后重新选择）
-  const regionOptions = [...new Set(items.map((i) => i.display?.region).filter(Boolean))].sort()
+  // 地区选项：实时模式下从原始全量结果提取，避免筛选后选项减少；
+  // DB 模式下从当前页 items 提取（跨页场景需用户清空地区筛选后重新选择）
+  const regionOptions = [...new Set(
+    (liveMode ? liveItemsRef.current : items)
+      .map((i) => i.display?.region).filter(Boolean)
+  )].sort()
 
   // 动态生成列定义：根据后端返回的 field_map 自动调整列头和渲染方式
   // 当接口字段变化时，前端根据 field_map 自动调整列，无需修改代码
@@ -308,7 +497,7 @@ export default function ItemList() {
     })
 
     return cols
-  }, [fieldMap, liveMode])
+  }, [fieldMap, liveMode, handleDelete])
 
   return (
     <div className="page-container">
@@ -353,7 +542,7 @@ export default function ItemList() {
           <Button
             icon={<ReloadOutlined />}
             onClick={handleRefresh}
-            loading={loading || liveLoading}
+            loading={loading || liveLoading || refreshing}
             disabled={!selectedTask}
           >
             刷新
@@ -375,6 +564,35 @@ export default function ItemList() {
             onChange={(v) => { setRegionFilter(v); setPage(1) }}
             options={regionOptions.map((r) => ({ label: r, value: r }))}
           />
+          {/* 实时更新开关 + 兜底轮询间隔配置 */}
+          <Tooltip title={`实时更新（设置已保存：${autoRefreshEnabled ? '开' : '关'}）。SSE 事件驱动 + ${refreshInterval}秒兜底轮询`}>
+            <Space size={4}>
+              <ThunderboltOutlined style={{ color: autoRefreshEnabled ? '#1677ff' : undefined }} />
+              <Switch
+                checked={autoRefreshEnabled}
+                onChange={setAutoRefreshEnabled}
+                size="small"
+                disabled={liveMode}
+              />
+            </Space>
+          </Tooltip>
+          {autoRefreshEnabled && (
+            <Tooltip title={liveMode ? '实时搜索模式下轮询已暂停，退出后自动恢复' : `兜底轮询间隔（${MIN_INTERVAL}-${MAX_INTERVAL}秒），SSE 断线时保底刷新`}>
+              <Space size={4}>
+                <InputNumber
+                  size="small"
+                  min={MIN_INTERVAL}
+                  max={MAX_INTERVAL}
+                  value={refreshInterval}
+                  onChange={(v) => setRefreshInterval(v || DEFAULT_INTERVAL)}
+                  addonAfter="秒"
+                  style={{ width: 90 }}
+                  disabled={liveMode}
+                />
+              </Space>
+            </Tooltip>
+          )}
+          {/* 上次刷新时间已移至商品列表 Card 顶部的醒目指示器中，避免工具栏信息冗余 */}
           <Button type="link" icon={<LinkOutlined />} onClick={() => navigate('/tasks')}>
             管理任务
           </Button>
@@ -391,7 +609,55 @@ export default function ItemList() {
         </Space>
       </Card>
 
-      <Card>
+      <Card style={{ position: 'relative' }}>
+        {/* 实时更新指示器：仅在实时更新启用且非实时模式下显示
+            提供刷新中/已更新/兜底倒计时三态反馈 */}
+        {autoRefreshEnabled && !liveMode && selectedTask && (
+          <div className={`xh-refresh-indicator ${refreshing ? 'xh-refresh-indicator--active' : ''}`}>
+            {/* 顶部进度条：刷新中时显示 indeterminate 动画条 */}
+            {refreshing && <div className="xh-refresh-progress-bar" />}
+            <div className="xh-refresh-indicator__content">
+              {refreshing ? (
+                <>
+                  <LoadingOutlined spin style={{ color: '#1677ff' }} />
+                  <span className="xh-refresh-indicator__text" style={{ color: '#1677ff' }}>
+                    正在获取最新数据...
+                  </span>
+                </>
+              ) : lastRefreshAt ? (
+                <>
+                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                  <span className="xh-refresh-indicator__text">
+                    已更新于 {new Date(lastRefreshAt).toLocaleTimeString('zh-CN')}
+                  </span>
+                  {countdownSec !== null && countdownSec > 0 && (
+                    <span className="xh-refresh-indicator__countdown">
+                      · {countdownSec}s 后兜底刷新
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <ClockCircleOutlined style={{ color: '#faad14' }} />
+                  <span className="xh-refresh-indicator__text">
+                    等待数据更新...
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+        {/* "数据已更新"淡入提示：检测到数据变化时短暂显示 */}
+        {showUpdateToast && (
+          <div style={{
+            position: 'absolute', top: 8, right: 16, zIndex: 10,
+            background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 6,
+            padding: '4px 12px', fontSize: 12, color: '#52c41a',
+            animation: 'xh-fade-in 0.3s ease',
+          }}>
+            数据已更新
+          </div>
+        )}
         <Spin spinning={loading || liveLoading}>
           {items.length === 0 ? (
             <Empty description={selectedTask ? '暂无商品数据，可尝试实时搜索' : '请先选择任务'} />
@@ -404,6 +670,7 @@ export default function ItemList() {
                 pagination={false}
                 size="middle"
                 scroll={{ x: 1000 }}
+                rowClassName={(record) => highlightRows.has(record.link_key) ? 'xh-row-highlight' : ''}
               />
               {!liveMode && (
                 <div style={{ marginTop: 16, textAlign: 'right' }}>
@@ -450,6 +717,11 @@ export default function ItemList() {
                         className="item-card"
                         size="small"
                         bodyStyle={{ padding: 12 }}
+                        style={highlightRows.has(item.link_key) ? {
+                          boxShadow: '0 0 0 2px #52c41a',
+                          borderRadius: 8,
+                          transition: 'box-shadow 0.3s ease',
+                        } : undefined}
                         cover={
                           <div className="item-card-image">
                             {d?.thumb_url ? (

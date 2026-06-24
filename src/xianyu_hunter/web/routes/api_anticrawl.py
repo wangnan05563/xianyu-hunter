@@ -20,19 +20,107 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
 
-from xianyu_hunter.modules.cookie_rotator import CookieLayer
+from xianyu_hunter.modules.cookie_rotator import CookieLayer, LAYER_DEFINITIONS
 from xianyu_hunter.modules.freq_disguise import ActionType
 from xianyu_hunter.modules.login_orchestrator import get_orchestrator
 from xianyu_hunter.modules.login_strategy import LoginStrategy
+from xianyu_hunter.modules.session_health import WAFStatus
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/anticrawl", tags=["anticrawl"])
+
+
+def _configure_default_health_checkers(orch) -> None:
+    """为协调器配置默认健康检查器
+
+    为什么在 initialize 时自动配置：避免前端需要额外调用 configure 端点，
+    初始化后健康检查即可直接使用。api/page 维度未配置时默认通过，
+    主要依赖 cookie（权重40）和 waf（权重10）维度。
+    """
+    # Cookie 检查器：基于 JSON 实际内容判断 + 自动同步层状态
+    # 为什么不依赖 CookieRotator 内存状态：browser_login / auth_helper /
+    # browser_import / cookie_inject 等登录路径只调用 export_cookies 写入 JSON，
+    # 未调用 on_login_success，导致层状态为默认 False，引发误判
+    def cookie_checker() -> bool:
+        try:
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+            store = get_cookie_store()
+            data = store._read_json()
+            if not data or not data.get("cookies"):
+                logger.debug("cookie_checker: JSON 无 Cookie 数据")
+                return False
+
+            cookies_list = data["cookies"]
+            names = {c.get("name", "") for c in cookies_list}
+
+            # 1. session 层：_m_h5_tk 必须存在且有值
+            has_token = any(
+                c.get("name") == "_m_h5_tk" and c.get("value")
+                for c in cookies_list
+            )
+            if not has_token:
+                logger.debug("cookie_checker: _m_h5_tk 缺失或无值")
+                return False
+
+            # 2. identity 层：至少一个身份 Cookie 存在
+            # 为什么用"至少一个"而非"全部"：不同登录方式返回的 Cookie 集合不同，
+            # 扫码登录可能不返回 sgcookie，强制要求全部会导致误判
+            identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
+            has_identity = bool(identity_cookies & names)
+            if not has_identity:
+                logger.debug("cookie_checker: identity 层 Cookie 缺失 (names=%s)", names)
+                return False
+
+            # 3. 过期时间检查（兼容旧数据：无 expires 字段视为 session cookie）
+            now = time.time()
+            for c in cookies_list:
+                expires = c.get("expires", -1)
+                if expires and expires > 0 and expires < now:
+                    logger.warning(
+                        "cookie_checker: Cookie 已过期: %s (expires=%d, now=%d)",
+                        c.get("name"), expires, now,
+                    )
+                    return False
+
+            # 4. 自动同步层状态（修复状态不一致）
+            # 为什么需要：登录路径只写 JSON 未更新层状态，导致 /cookies/layers 误显示无效
+            states = orch.cookie_rotator.get_all_states()
+            identity_state = states.get(CookieLayer.IDENTITY)
+            if not identity_state or not identity_state.valid:
+                logger.info("cookie_checker: Cookie 有效但层状态未初始化，自动同步")
+                cookie_map = {c.get("name", ""): c.get("value", "") for c in cookies_list}
+                orch.cookie_rotator.sync_state_from_cookies(cookie_map)
+
+            return True
+        except Exception as e:
+            logger.warning("cookie_checker 失败: %s", e)
+            return False
+
+    # WAF 状态提供器：基于验证码处理统计推断风控状态
+    def waf_provider() -> WAFStatus:
+        stats = orch.captcha_handler.get_stats()
+        failed = stats.get("failed", 0)
+        total = stats.get("total_detected", 0)
+        if total == 0:
+            return WAFStatus.CLEAR
+        fail_rate = failed / total
+        if fail_rate > 0.5:
+            return WAFStatus.BLOCKED
+        if fail_rate > 0.2:
+            return WAFStatus.WARNING
+        return WAFStatus.CLEAR
+
+    orch.configure_health_checkers(
+        cookie_checker=cookie_checker,
+        waf_provider=waf_provider,
+    )
 
 
 # ============================================================
@@ -76,6 +164,7 @@ def initialize(request: dict = Body(...)) -> JSONResponse:
     use_cdp = bool(request.get("use_cdp", False))
     orch = get_orchestrator()
     orch.initialize(use_cdp=use_cdp)
+    _configure_default_health_checkers(orch)
 
     profile = orch.get_fingerprint_profile()
     return JSONResponse(content={
@@ -112,7 +201,7 @@ def get_session_status() -> dict:
 
 
 @router.post("/session/start")
-async def start_session(request: dict = Body(default={})) -> JSONResponse:
+async def start_session(request: dict = Body(default_factory=dict)) -> JSONResponse:
     """启动会话管理（TokenRenewer 后台续期）
 
     Request body (可选):
@@ -159,6 +248,7 @@ async def start_session(request: dict = Body(default={})) -> JSONResponse:
         为什么用导航而非 API：导航是用户自然行为，
         风控压力低于直接调用 getTimestamp API。
         """
+        page = None
         try:
             from xianyu_hunter.web.deps import get_container
             container = get_container()
@@ -225,8 +315,8 @@ async def check_health() -> JSONResponse:
     if not orch.health_checker._cookie_checker and not orch.health_checker._api_checker:
         return JSONResponse(content={
             "ok": False,
-            "error": "未配置健康检查器，请先调用 /api/anticrawl/health/configure",
-            "hint": "至少需要配置 cookie_checker 或 api_checker",
+            "error": "未配置健康检查器，请先调用 POST /api/anticrawl/initialize",
+            "hint": "initialize 会自动配置默认的 cookie 和 waf 检查器",
         })
 
     try:
@@ -349,66 +439,40 @@ def update_cookies(request: dict = Body(...)) -> JSONResponse:
 
     orch = get_orchestrator()
 
-    # 设置 writer：通过浏览器 context 写入
+    # 设置 writer：优先使用 CookieStore JSON 持久化
+    # 为什么不用浏览器写入：跨线程调用 Playwright add_cookies 存在死锁风险
+    # CookieStore JSON 已经是浏览器启动时的 Cookie 来源，保持一致
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store
+    cookie_store = get_cookie_store()
+
+    def json_writer(cookies_list: list[dict]) -> int:
+        cookie_store.export_cookies(cookies_list, method="orchestrator_api")
+        return len(cookies_list)
+
+    orch.set_cookie_writer(json_writer)
+
+    # 如果浏览器上下文可用，异步写入浏览器（best-effort，非阻塞）
     try:
         from xianyu_hunter.web.deps import get_container
         container = get_container()
-
         if container.browser and container.browser._context:
-            async def writer(cookies_list: list[dict]) -> int:
-                """通过浏览器 context.add_cookies 写入
-
-                为什么用 async：Playwright 的 add_cookies 是协程，
-                但 CookieRotator 的 writer 接口是同步的，
-                这里通过 asyncio.run_coroutine_threadsafe 桥接。
-                """
-                import asyncio
+            import asyncio
+            cookies_copy = [
+                {"name": c["name"], "value": c["value"], "domain": c.get("domain", ".goofish.com"),
+                 "path": c.get("path", "/")}
+                for c in cookies_list
+            ]
+            try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # 已在事件循环中，用 ensure_future
-                    future = asyncio.ensure_future(
-                        container.browser._context.add_cookies(cookies_list)
+                    # 不等待结果，fire-and-forget 避免死锁
+                    asyncio.ensure_future(
+                        container.browser._context.add_cookies(cookies_copy)
                     )
-                    await future
-                else:
-                    await container.browser._context.add_cookies(cookies_list)
-                return len(cookies_list)
-
-            # CookieRotator 的 writer 是同步接口，需要包装
-            def sync_writer(cookies_list: list[dict]) -> int:
-                """同步包装：在事件循环中执行异步 add_cookies"""
-                import asyncio
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # 在运行中的事件循环里调度协程并等待
-                        future = asyncio.run_coroutine_threadsafe(
-                            container.browser._context.add_cookies(cookies_list),
-                            loop,
-                        )
-                        future.result(timeout=10)
-                    else:
-                        loop.run_until_complete(
-                            container.browser._context.add_cookies(cookies_list)
-                        )
-                    return len(cookies_list)
-                except Exception as e:
-                    logger.warning("浏览器写入 Cookie 失败，回退到 JSON: %s", e)
-                    # 回退到 JSON
-                    from xianyu_hunter.web.services.cookie_store import get_cookie_store
-                    get_cookie_store().export_cookies(cookies_list, method="orchestrator")
-                    return len(cookies_list)
-
-            orch.set_cookie_writer(sync_writer)
-        else:
-            # 浏览器不可用，用 JSON writer 兜底
-            def json_writer(cookies_list: list[dict]) -> int:
-                from xianyu_hunter.web.services.cookie_store import get_cookie_store
-                get_cookie_store().export_cookies(cookies_list, method="orchestrator")
-                return len(cookies_list)
-            orch.set_cookie_writer(json_writer)
-    except Exception as e:
-        logger.warning("设置 cookie writer 失败: %s", e)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     try:
         written = orch.on_login_success(cookies)

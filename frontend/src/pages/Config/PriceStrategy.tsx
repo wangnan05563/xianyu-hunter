@@ -1,10 +1,20 @@
 import { useEffect, useState, useRef } from 'react'
 import { Card, Switch, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Statistic, Modal, Table, Tag } from 'antd'
-import { SaveOutlined, UndoOutlined, ExperimentOutlined } from '@ant-design/icons'
+import { SaveOutlined, ExperimentOutlined } from '@ant-design/icons'
 import ReactECharts, { type EChartRef } from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
 import type { DiffChange } from '../../stores/configStore'
 import { priceApi } from '../../api'
+import {
+  PriceStrategyIcon,
+  PriceCeilingIcon,
+  PriceFloorIcon,
+  MarketRatioIcon,
+  TopNIcon,
+  TrendPreviewIcon,
+  TargetHitIcon,
+  RevertIcon,
+} from '../../components/icons/GeometricIcons'
 
 interface PriceStrategyConfig {
   enabled_max: boolean
@@ -170,9 +180,12 @@ export default function PriceStrategy() {
   return (
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2>💰 价格策略可视化配置</h2>
+        <h2 style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <PriceStrategyIcon size={28} />
+          <span>价格策略可视化配置</span>
+        </h2>
         <Space>
-          <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
+          <Button icon={<RevertIcon size={16} />} onClick={reset} disabled={!hasChanges()}>
             重置
           </Button>
           <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
@@ -195,9 +208,14 @@ export default function PriceStrategy() {
                     checked={strategy.enabled_max}
                     onChange={(v) => setStrategy({ ...strategy, enabled_max: v })}
                   />
-                  <span>🚫 硬性上限</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <PriceCeilingIcon size={20} />
+                    硬性上限
+                  </span>
                   {strategy.max_price !== getFieldOriginal('price_strategy.max_price') && (
-                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, max_price: getFieldOriginal('price_strategy.max_price') as number })} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, max_price: getFieldOriginal('price_strategy.max_price') as number })} style={{ padding: 0, fontSize: 12 }}>
+                      <RevertIcon size={12} />
+                    </Button>
                   )}
                 </Space>
               }
@@ -234,9 +252,14 @@ export default function PriceStrategy() {
                     checked={strategy.enabled_min}
                     onChange={(v) => setStrategy({ ...strategy, enabled_min: v })}
                   />
-                  <span>⚠️ 硬性下限（防 1 元引流）</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <PriceFloorIcon size={20} />
+                    硬性下限（防 1 元引流）
+                  </span>
                   {strategy.min_price !== getFieldOriginal('price_strategy.min_price') && (
-                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, min_price: getFieldOriginal('price_strategy.min_price') as number })} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, min_price: getFieldOriginal('price_strategy.min_price') as number })} style={{ padding: 0, fontSize: 12 }}>
+                      <RevertIcon size={12} />
+                    </Button>
                   )}
                 </Space>
               }
@@ -273,9 +296,14 @@ export default function PriceStrategy() {
                     checked={strategy.enabled_market_ratio}
                     onChange={(v) => setStrategy({ ...strategy, enabled_market_ratio: v })}
                   />
-                  <span>📊 低于市场参考价</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <MarketRatioIcon size={20} />
+                    低于市场参考价
+                  </span>
                   {strategy.market_ratio !== getFieldOriginal('price_strategy.market_ratio') && (
-                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, market_ratio: getFieldOriginal('price_strategy.market_ratio') as number })} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, market_ratio: getFieldOriginal('price_strategy.market_ratio') as number })} style={{ padding: 0, fontSize: 12 }}>
+                      <RevertIcon size={12} />
+                    </Button>
                   )}
                 </Space>
               }
@@ -305,9 +333,14 @@ export default function PriceStrategy() {
                     checked={strategy.enabled_top_n}
                     onChange={(v) => setStrategy({ ...strategy, enabled_top_n: v })}
                   />
-                  <span>🏆 同类低价 TopN</span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <TopNIcon size={20} />
+                    同类低价 TopN
+                  </span>
                   {strategy.top_n !== getFieldOriginal('price_strategy.top_n') && (
-                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, top_n: getFieldOriginal('price_strategy.top_n') as number })} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, top_n: getFieldOriginal('price_strategy.top_n') as number })} style={{ padding: 0, fontSize: 12 }}>
+                      <RevertIcon size={12} />
+                    </Button>
                   )}
                 </Space>
               }
@@ -331,7 +364,7 @@ export default function PriceStrategy() {
         {/* 右侧：实时预览 */}
         <Col span={12}>
           <div className="preview-panel">
-            <Card title="📈 实时预览：价格分布直方图" style={{ marginBottom: 16 }}>
+            <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><TrendPreviewIcon size={20} /> 实时预览：价格分布直方图</span>} style={{ marginBottom: 16 }}>
               <ReactECharts ref={chartRef} option={chartOption} style={{ height: 300 }} />
               <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 8 }}>
                 <span style={{ color: '#52c41a' }}>■</span> 通过 &nbsp;
@@ -341,7 +374,7 @@ export default function PriceStrategy() {
               </div>
             </Card>
 
-            <Card title="🎯 策略命中预览">
+            <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><TargetHitIcon size={20} /> 策略命中预览</span>}>
               <Row gutter={16}>
                 <Col span={8}>
                   <Statistic title="总商品数" value={previewResults.total} />

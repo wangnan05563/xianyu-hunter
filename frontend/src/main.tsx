@@ -1,9 +1,10 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
-import { ConfigProvider } from 'antd'
+import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import App from './App'
+import { ThemeProvider, useTheme } from './contexts/ThemeContext'
 import './index.css'
 
 // 主题令牌：干净明亮的扁平化设计语言
@@ -12,7 +13,7 @@ import './index.css'
 // 2. 圆角统一 8px，现代感且不过于圆润
 // 3. 阴影克制，仅 hover 时强化，避免视觉噪音
 // 4. 字体栈优先系统字体，保证渲染性能
-const theme = {
+const baseTheme = {
   token: {
     colorPrimary: '#FF6200',
     colorSuccess: '#52c41a',
@@ -56,12 +57,31 @@ const theme = {
   },
 }
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ConfigProvider locale={zhCN} theme={theme}>
+// 顶层 ConfigProvider 包装：根据主题应用 algorithm
+// 关键修复：之前 main.tsx 的 ConfigProvider 没有 algorithm，
+// 导致 Login 页（独立路由，不在 MainLayout 内）永远使用默认浅色主题。
+// 现在让顶层 ConfigProvider 也响应 useTheme，让所有路由都能切换主题。
+function ThemedRoot() {
+  const { isDark } = useTheme()
+  return (
+    <ConfigProvider
+      locale={zhCN}
+      theme={{
+        ...baseTheme,
+        algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+      }}
+    >
       <BrowserRouter basename="/app">
         <App />
       </BrowserRouter>
     </ConfigProvider>
+  )
+}
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <ThemeProvider>
+      <ThemedRoot />
+    </ThemeProvider>
   </React.StrictMode>,
 )

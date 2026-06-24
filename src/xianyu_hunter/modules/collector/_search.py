@@ -296,13 +296,20 @@ class SearchMixin:
         _m_h5_tk 有 1 小时 TTL，过期后搜索 API 返回 RGV587_ERROR。
         访问 goofish.com 主页可触发服务端 Set-Cookie 续期。
         带 45 分钟缓存避免频繁刷新（force=True 时跳过缓存）。
+        force=True 时仍有 5 分钟最小间隔，避免 RGV587 连续触发时反复打开临时页面。
 
         Returns:
             True 表示执行了刷新，False 表示跳过（缓存未过期）
         """
+        elapsed = time.monotonic() - self._last_m5tk_refresh
         if not force:
-            elapsed = time.monotonic() - self._last_m5tk_refresh
             if elapsed < 2700:  # 45 分钟
+                return False
+        else:
+            # force 刷新 5 分钟内不重复执行：刚刷新过的 token 不会立即过期，
+            # 连续 RGV587 更可能是 Cookie 失效而非 token 过期，反复刷新无益
+            if elapsed < 300:  # 5 分钟
+                logger.debug("force 刷新被跳过：距上次刷新仅 {:.0f}s".format(elapsed))
                 return False
         try:
             logger.debug("刷新 _m_h5_tk token: 导航到 goofish.com 主页")
@@ -313,7 +320,7 @@ class SearchMixin:
             logger.info("_m_h5_tk token 已刷新")
             return True
         except Exception as e:
-            logger.warning("刷新 _m_h5_tk token 失败: %s", e)
+            logger.warning("刷新 _m_h5_tk token 失败: {}", e)
             return False
 
     async def search(
@@ -356,6 +363,10 @@ class SearchMixin:
         if self._browser_lock is not None and own_page and not skip_lock:
             await self._browser_lock.acquire()
             release_lock = True
+        # 性能埋点：记录搜索耗时和搜索方式（api 拦截 / dom 回退），
+        # 便于后续日志分析定位性能瓶颈
+        search_start = time.monotonic()
+        search_via = "unknown"
         try:
             # H-06 修复：keyword 需做 URL 编码，避免 & # % % 等特殊字符破坏查询语义
             # 追加筛选标签对应的 URL 参数（映射关系见 domain/task.py XIANYU_FILTER_MAP）
@@ -365,12 +376,13 @@ class SearchMixin:
                 if filter_params:
                     logger.info("搜索筛选参数: {}", ", ".join(search_filters))
             url = build_search_url(keyword, filter_params=filter_params, sort_type=sort_type, regions=regions)
-            logger.info(f"搜索: {url}")
+            logger.info("搜索: {}", url)
             await self.ad.throttle()
 
-            # 快速模式跳过 token 刷新——Worker 调度器会定期刷新，无需每次实时搜索都刷新
-            if not fast:
-                await self._ensure_fresh_m5tk(page)
+            # 始终检查 token 有效性（由 45 分钟缓存决定是否真正刷新）
+            # 之前 fast 模式完全跳过，导致 token 过期后 RGV587 频繁触发
+            # _ensure_fresh_m5tk 内部有缓存判断，未过期时直接返回 False，不增加耗时
+            await self._ensure_fresh_m5tk(page)
 
             # 优先通过 route 拦截捕获 API 响应获取结构化数据
             api_items, session_invalid = await self._call_search_api(page, keyword, max_pages, fast=fast, skip_rgv587_retry=skip_rgv587_retry, sort_type=sort_type, regions=regions)
@@ -378,7 +390,9 @@ class SearchMixin:
             self.last_session_invalid = session_invalid
             if api_items:
                 items = api_items
+                search_via = "api"
             else:
+                search_via = "dom"
                 # API 不可用或会话失效时，均尝试 DOM 解析作为兜底
                 # RGV587_ERROR 时页面仍可能渲染搜索结果（10:06 验证可行），不应直接放弃
                 if session_invalid:
@@ -395,12 +409,27 @@ class SearchMixin:
                         cards = []
                     else:
                         # 先用 evaluate 检查卡片数量（不会卡住），再决定是否执行 query_selector_all
+                        # 多选择器容错：闲鱼前端可能调整 class 命名，覆盖多种历史与当前结构
+                        card_selectors = (
+                            "[class*='feeds-item-wrap'], [class*='feeds-item'], "
+                            "[class*='item-card'], [class*='search-item'], "
+                            "[class*='product-card'], [data-spm*='item']"
+                        )
                         card_count = await asyncio.wait_for(
                             page.evaluate(
-                                "() => document.querySelectorAll(\"[class*='feeds-item-wrap'], [class*='feeds-item']\").length"
+                                f"() => document.querySelectorAll(\"{card_selectors}\").length"
                             ),
                             timeout=5.0,
                         )
+                        # 首次未检测到卡片时，等待 2 秒后重试一次（页面可能仍在异步渲染）
+                        if card_count == 0:
+                            await asyncio.sleep(2)
+                            card_count = await asyncio.wait_for(
+                                page.evaluate(
+                                    f"() => document.querySelectorAll(\"{card_selectors}\").length"
+                                ),
+                                timeout=5.0,
+                            )
                         if card_count == 0:
                             logger.info("DOM 回退: 页面无搜索卡片 (RGV587 可能阻止了渲染)")
                             cards = []
@@ -486,9 +515,11 @@ class SearchMixin:
                 if not items:
                     logger.info("搜索无结果: {}", keyword)
 
-            logger.info(f"搜索完成: 共 {len(items)} 个商品")
+            elapsed = time.monotonic() - search_start
+            logger.info("搜索完成: 共 {} 个商品, 耗时 {:.1f}s, 方式={}", len(items), elapsed, search_via)
         except Exception as e:
-            logger.exception(f"搜索失败 {keyword}: {e}")
+            elapsed = time.monotonic() - search_start
+            logger.exception("搜索失败 {}: {}, 耗时 {:.1f}s", keyword, e, elapsed)
         finally:
             if own_page:
                 try:
@@ -685,17 +716,30 @@ class SearchMixin:
                                     publish_time = datetime.fromtimestamp(int(pt_raw) / 1000, tz=timezone.utc)
                             except Exception:
                                 pass
-                        # 缩略图 URL 补全协议头（API 返回 //img.alicdn.com 格式）
-                        thumb_url = raw.get("picUrl", "")
-                        if thumb_url and not thumb_url.startswith(("http://", "https://")):
-                            thumb_url = "https:" + thumb_url
+                        # 缩略图 URL：优先取真实图片，跳过阿里云2x2占位图
+                        # 闲鱼搜索 API 对部分商品只返回 2x2 透明占位图（tps-2-2.png），
+                        # 需要尝试多个图片字段，找到第一个非占位图的 URL
+                        _PLACEHOLDER_MARKS = ("tps-2-2", "2-2.png", "1x1.png")
+                        thumb_url = ""
+                        for _field in ("picUrl", "mainPicUrl", "pic", "imageUrl", "mainPic"):
+                            _val = raw.get(_field, "")
+                            if _val and not _val.startswith("data:"):
+                                if not _val.startswith(("http://", "https://")):
+                                    _val = "https:" + _val if _val.startswith("//") else "https://" + _val
+                                # 跳过占位图（2x2 或 1x1 透明 PNG）
+                                if not any(m in _val for m in _PLACEHOLDER_MARKS):
+                                    thumb_url = _val
+                                    break
+                                # 占位图也保留作为兜底，避免完全无图
+                                if not thumb_url:
+                                    thumb_url = _val
                         # 一次性构造 ItemSummary
                         # 闲鱼搜索API可能返回多个价格字段，优先取实际售价（promoPrice），
                         # 其次取 price，最后取 originalPrice，确保与详情页一致
                         # 调试日志：记录所有价格相关字段，便于排查价格不一致问题
                         price_fields = {k: raw.get(k) for k in raw if "price" in k.lower() or "Price" in k}
                         if price_fields:
-                            logger.debug(f"商品 {raw.get('itemId', '?')} 价格字段: {price_fields}")
+                            logger.debug("商品 {} 价格字段: {}", raw.get('itemId', '?'), price_fields)
                         price_val = (
                             raw.get("promoPrice")
                             or raw.get("promotionPrice")
@@ -837,7 +881,7 @@ class SearchMixin:
                     "link_type": "seller",
                     "link_key": item.seller_id,
                 }
-                logger.debug(f"live_search 从搜索结果提取卖家: {item.seller_id} (来自商品 {item.id})")
+                logger.debug("live_search 从搜索结果提取卖家: {} (来自商品 {})", item.seller_id, item.id)
 
         # 将搜索结果中已获取的卖家加入 results
         for seller_data in sellers_from_search.values():
@@ -881,7 +925,7 @@ class SearchMixin:
                                 "link_type": "seller",
                                 "link_key": detail.seller_id,
                             })
-                            logger.debug(f"live_search 提取卖家: {detail.seller_id} (来自商品 {item.id})")
+                            logger.debug("live_search 提取卖家: {} (来自商品 {})", detail.seller_id, item.id)
                     except Exception as e:
                         logger.warning(f"live_search 提取卖家失败 item={item.id}: {e}")
             finally:
@@ -889,5 +933,5 @@ class SearchMixin:
                     await detail_page.close()
 
         seller_count = len([r for r in results if r.get("link_type") == "seller"])
-        logger.info(f"live_search 完成: {len(items)} 个商品, {seller_count} 个卖家, {len(results)} 条总结果")
+        logger.info("live_search 完成: {} 个商品, {} 个卖家, {} 条总结果", len(items), seller_count, len(results))
         return results

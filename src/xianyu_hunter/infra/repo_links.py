@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, func, cast, Float
 # 别名与其他 repo_*.py 统一为 sqlite_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -230,6 +230,78 @@ class TaskLinksMixin:
             ).first()
             return int(row[0]) if row else None
 
+    def batch_upsert_task_links(self, batch: list[dict]) -> int:
+        """批量 upsert task_links，单事务提交
+
+        替代逐条 upsert_task_link 调用，将 N 次独立事务合并为 1 次，
+        减少 SQLite fsync 开销（50 条商品从 ~100 次事务降至 1 次）。
+        """
+        if not batch:
+            return 0
+        written = 0
+        with self.engine.begin() as conn:
+            for row in batch:
+                display = row.get("display")
+                if isinstance(display, dict):
+                    display = json.dumps(display, ensure_ascii=False)
+                stmt = sqlite_insert(TaskLinkRow).values(
+                    task_id=row["task_id"],
+                    link_type=row["link_type"],
+                    link_key=row["link_key"],
+                    display=display,
+                    source=row.get("source", "auto"),
+                    note=row.get("note"),
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["task_id", "link_type", "link_key"],
+                    set_={
+                        "display": stmt.excluded["display"],
+                        "note": stmt.excluded["note"],
+                        "source": stmt.excluded["source"],
+                    },
+                )
+                result = conn.execute(stmt)
+                written += result.rowcount or 0
+        return written
+
+    def batch_upsert_item_task_links(
+        self,
+        task_id: str,
+        items_data: list[dict],
+        source: str = "auto",
+    ) -> int:
+        """批量写入 item + seller 关联，单事务提交
+
+        替代逐条 upsert_item_task_links 调用。
+        items_data 格式：[{item_id, title, price, thumb_url, seller_id, region, ...}, ...]
+        """
+        if not items_data:
+            return 0
+        batch: list[dict] = []
+        for data in items_data:
+            for link_type, link_key, display in self._build_item_link_rows(
+                task_id=task_id,
+                item_id=data["item_id"],
+                title=data.get("title"),
+                price=data.get("price"),
+                thumb_url=data.get("thumb_url"),
+                seller_id=data.get("seller_id"),
+                region=data.get("region"),
+                publish_time=data.get("publish_time"),
+                want_cnt=data.get("want_cnt"),
+                view_cnt=data.get("view_cnt"),
+                is_sold=data.get("is_sold"),
+                seller_nick=data.get("seller_nick"),
+            ):
+                batch.append({
+                    "task_id": task_id,
+                    "link_type": link_type,
+                    "link_key": link_key,
+                    "display": display,
+                    "source": source,
+                })
+        return self.batch_upsert_task_links(batch)
+
     def _filter_task_links(self, rows: list[dict], task: dict | None) -> list[dict]:
         """统一过滤逻辑：关键词 + 价格 + 发布天数
 
@@ -291,10 +363,90 @@ class TaskLinksMixin:
             stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
             if link_type:
                 stmt = stmt.where(TaskLinkRow.link_type == link_type)
+
+            # 价格过滤下推 SQL：减少全量加载的行数
+            # 关键词/发布天数过滤保留 Python 层（中文分词 + 时间计算兼容性）
+            min_price = (task or {}).get("min_price")
+            max_price = (task or {}).get("max_price")
+            if min_price is not None or max_price is not None:
+                price_expr = func.json_extract(TaskLinkRow.display, '$.price')
+                if min_price is not None:
+                    stmt = stmt.where(
+                        (price_expr.is_(None)) | (cast(price_expr, Float) >= min_price)
+                    )
+                if max_price is not None:
+                    stmt = stmt.where(
+                        (price_expr.is_(None)) | (cast(price_expr, Float) <= max_price)
+                    )
+
             stmt = stmt.order_by(TaskLinkRow.created_at.desc())
             rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
             rows = self._filter_task_links(rows, task)
             return rows[offset:offset + limit]
+
+    def list_and_count_task_links(
+        self,
+        task_id: str,
+        link_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        search_keyword: str | None = None,
+        search_region: str | None = None,
+    ) -> tuple[list[dict], dict[str, int]]:
+        """单次查询同时返回列表和计数，避免 list + count 两次全量加载
+
+        替代分别调用 list_task_links + count_task_links，
+        将两次全量加载合并为一次，DB 查询耗时减半。
+
+        search_keyword/search_region：将关键词/地区过滤下推 SQL 层，
+        避免 has_search 时全量加载到内存再 Python 过滤。
+        """
+        with self.engine.connect() as conn:
+            task_row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
+            task = self._row_to_dict(task_row) if task_row else None
+            stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
+            if link_type:
+                stmt = stmt.where(TaskLinkRow.link_type == link_type)
+
+            # 价格过滤下推 SQL（与 list_task_links 保持一致）
+            min_price = (task or {}).get("min_price")
+            max_price = (task or {}).get("max_price")
+            if min_price is not None or max_price is not None:
+                price_expr = func.json_extract(TaskLinkRow.display, '$.price')
+                if min_price is not None:
+                    stmt = stmt.where(
+                        (price_expr.is_(None)) | (cast(price_expr, Float) >= min_price)
+                    )
+                if max_price is not None:
+                    stmt = stmt.where(
+                        (price_expr.is_(None)) | (cast(price_expr, Float) <= max_price)
+                    )
+
+            # 关键词/地区过滤下推 SQL：避免 has_search 时全量加载到内存再 Python 过滤
+            # json_extract 对 NULL display 返回 NULL，NULL LIKE '%kw%' 为 NULL（非 true），
+            # 行被自动排除，与原 Python 逻辑（空 title 不匹配）一致
+            if search_keyword:
+                kw_pattern = f'%{search_keyword.lower()}%'
+                title_expr = func.lower(func.json_extract(TaskLinkRow.display, '$.title'))
+                stmt = stmt.where(title_expr.like(kw_pattern))
+            if search_region:
+                region_expr = func.json_extract(TaskLinkRow.display, '$.region')
+                stmt = stmt.where(region_expr == search_region)
+
+            stmt = stmt.order_by(TaskLinkRow.created_at.desc())
+            all_rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
+            filtered = self._filter_task_links(all_rows, task)
+
+            # 一次遍历同时产出分页列表和各类型计数
+            counts: dict[str, int] = {"item": 0, "seller": 0, "url": 0, "total": 0}
+            for row in filtered:
+                lt = row.get("link_type")
+                if lt in counts:
+                    counts[lt] += 1
+                    counts["total"] += 1
+
+            page_rows = filtered[offset:offset + limit]
+            return page_rows, counts
 
     def count_task_links(
         self,

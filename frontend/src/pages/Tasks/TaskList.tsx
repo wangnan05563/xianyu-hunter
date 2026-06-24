@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Table, Button, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, SearchOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { taskApi, aiApi, templateApi, taskLinkApi, Task, TaskCreateBody, TaskTemplate, AIParseTaskResult, TaskLink } from '../../api'
+import { taskApi, aiApi, templateApi, taskLinkApi, Task, TaskCreateBody, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress } from '../../api'
 import { STATUS_COLOR as statusColors } from '../../constants/statusColors'
+import { usePersistentState } from '../../hooks/usePersistentState'
 
 const statusLabels: Record<string, string> = {
   running: '运行中',
@@ -28,7 +29,9 @@ export default function TaskList() {
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = usePersistentState<number>('xh.tasks.pageSize', 20, {
+    validator: (v): v is number => typeof v === 'number' && v > 0 && Number.isFinite(v),
+  })
   const [statusFilter, setStatusFilter] = useState<string>('')
 
   // ---- 智能建任务状态 ----
@@ -49,7 +52,12 @@ export default function TaskList() {
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
 
   // ---- 视图模式：桌面默认表格，移动默认卡片 ----
-  const [viewMode, setViewMode] = useState<'table' | 'card'>(window.innerWidth < 768 ? 'card' : 'table')
+  // 为什么用 usePersistentState：用户切换视图模式后刷新应保持，但首次访问需根据屏幕宽度决定默认值
+  const [viewMode, setViewMode] = usePersistentState<'table' | 'card'>(
+    'xh.tasks.viewMode',
+    window.innerWidth < 768 ? 'card' : 'table',
+    { validator: (v): v is 'table' | 'card' => v === 'table' || v === 'card' },
+  )
 
   // ---- 行内二次确认状态机 ----
   // 结构：{ taskId: { action, label, hint, armed_at } }
@@ -124,6 +132,8 @@ export default function TaskList() {
   const [linkLoading, setLinkLoading] = useState(false)
   const [liveLoading, setLiveLoading] = useState(false)
   const [liveItems, setLiveItems] = useState<TaskLink[]>([])
+  // SSE 进度阶段：用于实时显示搜索当前步骤
+  const [liveStage, setLiveStage] = useState<string>('')
   // 手动添加 Modal
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [addForm] = Form.useForm()
@@ -380,17 +390,17 @@ export default function TaskList() {
 
   useEffect(() => { loadLinks() }, [loadLinks])
 
-  // 跨任务搜索过滤
-  const filteredLinkItems = linkItems.filter((item) => {
+  // 跨任务搜索过滤（useMemo 避免每次渲染重新计算）
+  const filteredLinkItems = useMemo(() => linkItems.filter((item) => {
     if (!linkSearch) return true
     const q = linkSearch.toLowerCase()
     return (
       item.link_key.toLowerCase().includes(q) ||
       (item.display.title || '').toLowerCase().includes(q)
     )
-  })
+  }), [linkItems, linkSearch])
 
-  // 实时查询
+  // 实时查询（SSE 流式接收进度）
   const handleLive = () => {
     if (!linkTaskId) {
       message.warning('请先选择任务')
@@ -398,12 +408,32 @@ export default function TaskList() {
     }
     setLiveLoading(true)
     setLiveItems([])
-    taskLinkApi.live(linkTaskId)
+    setLiveStage('正在检查缓存...')
+    // SSE 进度阶段中文映射
+    const stageLabels: Record<string, string> = {
+      checking_cache: '正在检查缓存...',
+      checking_cookies: '正在检查登录状态...',
+      acquiring_lock: '正在获取浏览器锁...',
+      searching: '正在搜索闲鱼...',
+      refreshing_token: '正在刷新搜索令牌...',
+      searching_retry: '正在重试搜索...',
+      filtering: '正在过滤结果...',
+      writing_db: '正在写入数据库...',
+    }
+    taskLinkApi.live(linkTaskId, (data: LiveProgress) => {
+      if (data.stage && stageLabels[data.stage]) {
+        setLiveStage(stageLabels[data.stage])
+      }
+    })
       .then((res) => {
         setLiveItems(res.items || [])
+        setLiveStage('')
         message.success(`实时查询完成，获取 ${res.items?.length || 0} 条`)
       })
-      .catch(() => message.error('实时查询失败'))
+      .catch(() => {
+        setLiveStage('')
+        message.error('实时查询失败')
+      })
       .finally(() => setLiveLoading(false))
   }
 
@@ -443,14 +473,14 @@ export default function TaskList() {
     }
   }
 
-  // 合并 DB 数据与实时数据用于展示
-  const mergedLinkData = [
+  // 合并 DB 数据与实时数据用于展示（useMemo 避免每次渲染重新合并数组）
+  const mergedLinkData = useMemo(() => [
     ...liveItems.map((item) => ({ ...item, _isLive: true })),
     ...filteredLinkItems.map((item) => ({ ...item, _isLive: false })),
-  ]
+  ], [liveItems, filteredLinkItems])
 
-  // 关联列表列定义
-  const linkColumns = [
+  // 关联列表列定义（useMemo 保持稳定引用，避免 Table 不必要的重渲染）
+  const linkColumns = useMemo(() => [
     {
       title: '标题',
       dataIndex: ['display', 'title'],
@@ -528,7 +558,7 @@ export default function TaskList() {
         </Space>
       ),
     },
-  ]
+  ], [])
 
   const columns = [
     {
@@ -826,6 +856,12 @@ export default function TaskList() {
                   >
                     实时查询
                   </Button>
+                  {liveLoading && liveStage && (
+                    <span style={{ color: '#1677ff', fontSize: 13 }}>
+                      <Spin size="small" style={{ marginRight: 6 }} />
+                      {liveStage}
+                    </span>
+                  )}
                   <Button
                     icon={<PlusOutlined />}
                     onClick={() => setAddModalOpen(true)}

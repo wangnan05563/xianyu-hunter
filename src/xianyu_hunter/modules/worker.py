@@ -202,6 +202,13 @@ class TaskWorker:
             stats.found = len(items)
             logger.info(f"[Task {self.task.id}] 搜索到 {stats.found} 件")
 
+            # 优先级锁让出：搜索完成后锁已释放，如果有 live 端点在等待，
+            # 延迟 3 秒让 live 请求优先获取锁（减少实时查询等待时间）
+            _lock = getattr(self.collector, '_browser_lock', None)
+            if _lock is not None and getattr(_lock, 'has_high_priority_waiting', False):
+                logger.info(f"[Task {self.task.id}] 检测到实时查询等待中，延迟 3 秒让出浏览器")
+                await asyncio.sleep(3)
+
             # RGV587 会话失效时通知 Scheduler 暂停任务
             # 避免无效搜索持续占用 browser_lock，阻塞 live 端点的实时搜索
             if getattr(self.collector, 'last_session_invalid', False):
@@ -359,13 +366,45 @@ class TaskWorker:
                                     detail.price or 0, detail.image_urls or [],
                                 )
                                 ai_verdict = ai_result.get("verdict", "")
+                                ai_condition_score = ai_result.get("condition_score", 0)
+
+                                # P2 优化：AI 评估结果实质性地影响总分
+                                # 旧逻辑仅追加到 dimension_scores 不影响总分，
+                                # 新逻辑通过 apply_ai_eval 调整总分和风险等级
+                                eval_result = self.evaluator.apply_ai_eval(
+                                    eval_result, ai_verdict, ai_condition_score
+                                )
+
                                 if ai_verdict == "reject":
-                                    logger.info("[Task %s] AI 评估拒绝 %s，跳过", self.task.id, detail.id)
+                                    logger.info("[Task %s] AI 评估拒绝 %s (score=%s)，跳过", self.task.id, detail.id, ai_condition_score)
+                                    # 更新 events 表中的评估记录
+                                    if self.repo:
+                                        try:
+                                            self.repo.update_eval_payload_by_keys(
+                                                self.task.id, detail.id, "eval.scored",
+                                                {"score": eval_result.score,
+                                                 "risk_level": eval_result.risk_level.value,
+                                                 "dimension_scores": eval_result.dimension_scores,
+                                                 "reject_reasons": eval_result.reject_reasons,
+                                                 "is_passed": False},
+                                            )
+                                        except Exception:
+                                            pass
                                     continue
-                                # 将 AI 评估结果追加到 dimension_scores
-                                if "detail" in ai_result:
-                                    eval_result.dimension_scores["ai_condition"] = ai_result.get("condition_score", 0)
-                                    eval_result.dimension_scores["ai_verdict"] = ai_verdict
+
+                                # 更新 events 表中的评估记录（AI 调整后的分数）
+                                if self.repo:
+                                    try:
+                                        self.repo.update_eval_payload_by_keys(
+                                            self.task.id, detail.id, "eval.scored",
+                                            {"score": eval_result.score,
+                                             "risk_level": eval_result.risk_level.value,
+                                             "dimension_scores": eval_result.dimension_scores,
+                                             "reject_reasons": eval_result.reject_reasons,
+                                             "is_passed": eval_result.is_passed},
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"[Task {self.task.id}] 更新 AI 评估事件失败: {e}")
                             except Exception as e:
                                 logger.warning("[Task %s] AI 自动评估失败，继续规则评估: %s", self.task.id, e)
 
@@ -386,6 +425,13 @@ class TaskWorker:
 
                         # 6. 落单
                         if not self._should_buy():
+                            continue
+                        # buyer 未注入时跳过落单：with_browser=False 模式下 container.buyer 为 None，
+                        # 或浏览器启动失败后 Buyer 仍可能未就绪。此时不应抛出 AttributeError 中断流程
+                        if self.buyer is None:
+                            logger.warning(
+                                f"[Task {self.task.id}] buyer 未注入（with_browser=False 或初始化失败），跳过落单 {detail.id}"
+                            )
                             continue
                         if self._in_cooldown():
                             logger.info(
@@ -411,6 +457,17 @@ class TaskWorker:
                             stats.failed += 1
                     except Exception as e:  # noqa: BLE001
                         logger.exception(f"[Task {self.task.id}] 处理 {summary.id} 出错: {e}")
+                        # 捕获到 error_logs 表，供错误日志页面展示
+                        # 这里是单商品处理异常，记录后 continue 跳过该商品，不影响整体流程
+                        try:
+                            from xianyu_hunter.web.middleware.error_capture import capture_background_error
+                            capture_background_error(e, context={
+                                "source": "worker.run_once.process_item",
+                                "task_id": self.task.id,
+                                "item_id": getattr(summary, 'id', None),
+                            })
+                        except Exception:
+                            pass
                         continue
             finally:
                 # 关闭复用的详情页和卖家页，避免页面泄漏

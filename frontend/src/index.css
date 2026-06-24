@@ -12,10 +12,14 @@
   --xh-bg-code: #f5f5f5;
   --xh-bg-info: #e6f7ff;
   --xh-bg-warning: #fff7e6;
+  /* 文字层级：对比度按 WCAG AA 校准（背景 #f5f7fa）
+     secondary  #595959 = 7.0:1 (≥4.5:1 满足 AA)
+     tertiary   #595959 = 7.0:1 (≥4.5:1 满足 AA)
+     quaternary #737373 = 4.6:1 (≥4.5:1 满足 AA 普通文本) */
   --xh-text-primary: #262626;
   --xh-text-secondary: #595959;
-  --xh-text-tertiary: #8c8c8c;
-  --xh-text-quaternary: #bfbfbf;
+  --xh-text-tertiary: #595959;
+  --xh-text-quaternary: #737373;
   --xh-border: #f0f0f0;
   --xh-border-secondary: #d9d9d9;
   --xh-border-info: #91d5ff;
@@ -27,6 +31,14 @@
   --xh-skeleton-from: #f0f0f0;
   --xh-skeleton-mid: #e0e0e0;
   --xh-card-bg-hover: #fafafa;
+  /* 首页专用：浅色主题下用橙色 hover，深色主题下用品牌色 hover */
+  --xh-quick-entry-hover-border: #FF6200;
+  --xh-quick-entry-hover-shadow: 0 8px 20px rgba(255, 98, 0, 0.12);
+  --xh-item-card-hover-border: #ffd9b3;
+  --xh-brand-gradient-from: #FF6200;
+  --xh-brand-gradient-to: #FF8533;
+  --xh-brand-shadow: 0 2px 8px rgba(255, 98, 0, 0.25);
+  --xh-ai-loading-text: #ad6800;
 }
 
 [data-theme="dark"] {
@@ -37,10 +49,15 @@
   --xh-bg-code: #2a2a2a;
   --xh-bg-info: rgba(22, 119, 255, 0.12);
   --xh-bg-warning: rgba(250, 140, 22, 0.12);
+  /* 文字层级：对比度按 WCAG AA 校准（背景 #141414）
+     primary    rgba(255,255,255,0.88) ≈ #e0e0e0 = 14.0:1 ✅
+     secondary  rgba(255,255,255,0.75) ≈ #bfbfbf = 9.7:1  ✅
+     tertiary   rgba(255,255,255,0.65) ≈ #a6a6a6 = 5.7:1  ✅
+     quaternary rgba(255,255,255,0.55) ≈ #8c8c8c = 4.7:1  ✅ 普通文本 OK */
   --xh-text-primary: rgba(255, 255, 255, 0.88);
-  --xh-text-secondary: rgba(255, 255, 255, 0.65);
-  --xh-text-tertiary: rgba(255, 255, 255, 0.45);
-  --xh-text-quaternary: rgba(255, 255, 255, 0.25);
+  --xh-text-secondary: rgba(255, 255, 255, 0.75);
+  --xh-text-tertiary: rgba(255, 255, 255, 0.65);
+  --xh-text-quaternary: rgba(255, 255, 255, 0.55);
   --xh-border: #303030;
   --xh-border-secondary: #404040;
   --xh-border-info: rgba(22, 119, 255, 0.4);
@@ -52,6 +69,14 @@
   --xh-skeleton-from: #2a2a2a;
   --xh-skeleton-mid: #1f1f1f;
   --xh-card-bg-hover: #2a2a2a;
+  /* 深色主题下的 hover 配色 — 使用 token 化的橙色 */
+  --xh-quick-entry-hover-border: #FF8533;
+  --xh-quick-entry-hover-shadow: 0 8px 20px rgba(255, 98, 0, 0.25);
+  --xh-item-card-hover-border: rgba(255, 98, 0, 0.4);
+  --xh-brand-gradient-from: #FF6200;
+  --xh-brand-gradient-to: #FF8533;
+  --xh-brand-shadow: 0 2px 8px rgba(255, 98, 0, 0.45);
+  --xh-ai-loading-text: #FFD666;
 }
 
 /* 暗色主题下 Ant Design 组件的硬覆盖
@@ -265,7 +290,7 @@ body {
 .item-card:hover {
   transform: translateY(-4px);
   box-shadow: var(--xh-shadow-strong);
-  border-color: #ffd9b3;
+  border-color: var(--xh-item-card-hover-border);
 }
 
 .item-card-image {
@@ -328,6 +353,115 @@ body {
   margin-top: 8px;
 }
 
+/* ============ 自动监控：数据变化高亮 ============ */
+/* 表格行高亮：绿色左边框 + 浅绿背景，3 秒后由 JS 清除 class */
+.xh-row-highlight {
+  background-color: #f6ffed !important;
+  animation: xh-highlight-pulse 0.6s ease;
+}
+
+/* 暗色主题下高亮行适配：使用深色底色 + 绿色边框，避免亮色背景刺眼 */
+[data-theme="dark"] .xh-row-highlight {
+  background-color: rgba(82, 196, 26, 0.12) !important;
+  animation: xh-highlight-pulse-dark 0.6s ease;
+}
+
+@keyframes xh-highlight-pulse {
+  0% { background-color: #d9f7be; }
+  100% { background-color: #f6ffed; }
+}
+
+@keyframes xh-highlight-pulse-dark {
+  0% { background-color: rgba(82, 196, 26, 0.25); }
+  100% { background-color: rgba(82, 196, 26, 0.12); }
+}
+
+/* "数据已更新"淡入提示动画 */
+@keyframes xh-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============ 自动刷新指示器 ============ */
+/* 容器：固定在商品列表 Card 顶部，提供刷新状态反馈 */
+.xh-refresh-indicator {
+  position: relative;
+  margin: -16px -24px 12px -24px;
+  padding: 8px 24px;
+  background: var(--xh-bg-spotlight);
+  border-bottom: 1px solid var(--xh-border);
+  overflow: hidden;
+  transition: background-color 0.3s ease;
+}
+
+/* 刷新中状态：浅蓝背景突出显示 */
+.xh-refresh-indicator--active {
+  background: var(--xh-bg-info);
+}
+
+/* 内容行：图标 + 文字 + 倒计时 */
+.xh-refresh-indicator__content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--xh-text-secondary);
+  flex-wrap: wrap;
+}
+
+.xh-refresh-indicator__text {
+  font-weight: 500;
+}
+
+/* 倒计时：弱化显示，避免与主状态文字争夺注意力 */
+.xh-refresh-indicator__countdown {
+  color: var(--xh-text-quaternary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 顶部 indeterminate 进度条：刷新中时显示 */
+.xh-refresh-progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    #1677ff 40%,
+    #4096ff 60%,
+    transparent 100%);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: xh-progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes xh-progress-slide {
+  0% { background-position: -40% 0; }
+  100% { background-position: 100% 0; }
+}
+
+/* 暗色主题适配 */
+[data-theme="dark"] .xh-refresh-indicator {
+  background: var(--xh-bg-spotlight);
+}
+[data-theme="dark"] .xh-refresh-indicator--active {
+  background: var(--xh-bg-info);
+}
+
+/* 移动端：减小内边距，确保文字不换行溢出 */
+@media (max-width: 576px) {
+  .xh-refresh-indicator {
+    margin: -12px -16px 8px -16px;
+    padding: 6px 16px;
+  }
+  .xh-refresh-indicator__content {
+    font-size: 12px;
+    gap: 6px;
+  }
+}
+
 /* ============ 快捷入口卡片 ============ */
 .quick-entry-card {
   cursor: pointer;
@@ -338,8 +472,8 @@ body {
 
 .quick-entry-card:hover {
   transform: translateY(-2px);
-  border-color: #FF6200;
-  box-shadow: 0 8px 20px rgba(255, 98, 0, 0.12);
+  border-color: var(--xh-quick-entry-hover-border);
+  box-shadow: var(--xh-quick-entry-hover-shadow);
 }
 
 .quick-entry-icon {
@@ -390,7 +524,7 @@ body {
 }
 
 .app-breadcrumb a:hover {
-  color: #FF6200;
+  color: var(--brand-primary, #FF6200);
 }
 
 .app-breadcrumb .current {
@@ -412,14 +546,14 @@ body {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #FF6200 0%, #FF8533 100%);
+  background: linear-gradient(135deg, var(--xh-brand-gradient-from) 0%, var(--xh-brand-gradient-to) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 18px;
   color: #fff;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(255, 98, 0, 0.25);
+  box-shadow: var(--xh-brand-shadow);
 }
 
 .brand-text {

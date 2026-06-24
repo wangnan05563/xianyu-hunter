@@ -65,6 +65,20 @@ export const taskDetailApi = {
     client.delete(`/api/tasks/${taskId}/deps`, { data: { depends_on: dependsOn } }).then((r) => r.data),
 }
 
+// SSE 实时搜索进度事件类型
+export interface LiveProgress {
+  stage: 'checking_cache' | 'checking_cookies' | 'acquiring_lock' | 'searching' | 'refreshing_token' | 'searching_retry' | 'filtering' | 'writing_db' | 'done' | 'error'
+  detail?: string
+  status?: number
+  count?: number
+  // done 阶段携带的完整结果
+  ok?: boolean
+  items?: TaskLink[]
+  sellers?: TaskLink[]
+  session_expired?: boolean
+  field_map?: FieldMap
+}
+
 // 任务关联（商品列表）API：管理任务下挂载的商品/卖家链接
 export const taskLinkApi = {
   list: (
@@ -78,10 +92,54 @@ export const taskLinkApi = {
   count: (taskId: string) =>
     client.get<{ item: number; seller: number; total: number }>(`/api/tasks/${taskId}/links/count`).then((r) => r.data),
 
-  // 长轮询实时拉取，超时放宽到 120s（闲鱼搜索+DOM解析耗时较长）
-  // field_map: 字段元数据，前端根据此动态渲染列头，避免列头与内容不匹配
-  live: (taskId: string) =>
-    client.get<{ items: TaskLink[]; session_expired?: boolean; field_map?: FieldMap }>(`/api/tasks/${taskId}/links/live`, { timeout: 120000 }).then((r) => r.data),
+  // SSE 流式实时搜索：通过 fetch + ReadableStream 接收进度事件
+  // onProgress 回调接收每个阶段的进度（checking_cache / searching / writing_db / done / error）
+  // 返回最终 done 阶段的完整数据（与旧接口格式兼容）
+  live: (
+    taskId: string,
+    onProgress?: (data: LiveProgress) => void,
+  ): Promise<{ items: TaskLink[]; session_expired?: boolean; field_map?: FieldMap }> => {
+    const token = localStorage.getItem('xh_token')
+    return fetch(`/api/tasks/${taskId}/links/live`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }).then(async (response) => {
+      // 前置检查失败（HTTP 错误码），按 axios 兼容格式抛出
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: response.statusText }))
+        throw { response: { status: response.status, data: errorData } }
+      }
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let finalData: any = null
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        // SSE 事件以 \n\n 分隔
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+        for (const evt of events) {
+          const line = evt.trim()
+          if (!line.startsWith('data: ')) continue
+          try {
+            const data = JSON.parse(line.slice(6)) as LiveProgress
+            if (data.stage === 'done') {
+              finalData = data
+            } else if (data.stage === 'error') {
+              // SSE 错误事件：按 axios 兼容格式抛出，触发 401 拦截器
+              throw { response: { status: data.status || 502, data: { detail: data.detail } } }
+            }
+            onProgress?.(data)
+          } catch (e) {
+            // 传播已构造的 axios 兼容错误
+            if (e && typeof e === 'object' && 'response' in e) throw e
+          }
+        }
+      }
+      return finalData
+    })
+  },
 
   // 实时搜索并写入 DB，返回写入统计（刷新数据源用）
   refresh: (taskId: string) =>

@@ -372,3 +372,184 @@ def test_normal_price_no_penalty() -> None:
     result = ev.evaluate(make_item(price=2000, title="iPhone 13"), make_seller())
     assert result.dimension_scores["price"] == 100
     assert not any(r.startswith("price_") for r in result.reject_reasons)
+
+
+# ============== P1: Sigmoid 渐进式扣分 ==============
+
+
+def test_sigmoid_low_on_sale_minimal_penalty() -> None:
+    """在售数远低于阈值时扣分极小（Sigmoid 平滑过渡）"""
+    ev = Evaluator()
+    # on_sale=5，阈值 30，应只扣很小分数（旧逻辑扣 0，新逻辑扣 ~0）
+    seller = make_seller(on_sale_count=5)
+    result = ev.evaluate(make_item(), seller)
+    # professional 维度应接近 100（扣分 < 5）
+    assert result.dimension_scores["professional"] >= 95
+
+
+def test_sigmoid_near_threshold_half_penalty() -> None:
+    """在售数接近阈值时扣分约为最大值的一半"""
+    ev = Evaluator()
+    # on_sale=30（等于阈值），Sigmoid 扣分 = 40/2 = 20
+    seller = make_seller(on_sale_count=30)
+    result = ev.evaluate(make_item(), seller)
+    # professional 维度应约为 80（100 - 20）
+    assert 70 <= result.dimension_scores["professional"] <= 85
+
+
+def test_sigmoid_far_above_threshold_near_max_penalty() -> None:
+    """在售数远超阈值时扣分接近最大值"""
+    ev = Evaluator()
+    # on_sale=100，远超阈值 30，扣分接近 40
+    seller = make_seller(on_sale_count=100)
+    result = ev.evaluate(make_item(), seller)
+    # professional 维度应 <= 65（扣分 >= 35）
+    assert result.dimension_scores["professional"] <= 65
+
+
+def test_sigmoid_no_jump_at_threshold() -> None:
+    """阈值附近无评分跳变（Sigmoid 平滑过渡的核心特性）"""
+    ev = Evaluator()
+    # on_sale=29 和 on_sale=31 的 professional 分数差应很小（< 10）
+    seller_below = make_seller(on_sale_count=29)
+    seller_above = make_seller(on_sale_count=31)
+    score_below = ev.evaluate(make_item(), seller_below).dimension_scores["professional"]
+    score_above = ev.evaluate(make_item(), seller_above).dimension_scores["professional"]
+    # 旧硬阈值逻辑：29→100, 31→60，差 40 分
+    # 新 Sigmoid 逻辑：差值应 < 10
+    assert abs(score_below - score_above) < 10
+
+
+def test_sigmoid_post_count_30d_smooth() -> None:
+    """30 天发布数渐进式扣分"""
+    ev = Evaluator()
+    # post_count_30d=14（接近阈值 15）和 post_count_30d=16 的分数差应很小
+    seller_below = make_seller(post_count_30d=14)
+    seller_above = make_seller(post_count_30d=16)
+    score_below = ev.evaluate(make_item(), seller_below).dimension_scores["professional"]
+    score_above = ev.evaluate(make_item(), seller_above).dimension_scores["professional"]
+    assert abs(score_below - score_above) < 10
+
+
+# ============== P1: 动态缓冲防高分掩盖 ==============
+
+
+def test_dynamic_buffer_uniform_scores_allow_high() -> None:
+    """各维度分数接近时，动态缓冲允许高分"""
+    ev = Evaluator()
+    # 完美卖家：4 维都接近 100，std 小 → buffer 大 → 允许高分
+    seller = make_seller(
+        on_sale_count=2,
+        sold_count=20,
+        register_days=1000,
+        credit_score=750,
+        post_count_30d=0,  # 避免触发 Sigmoid 扣分
+    )
+    result = ev.evaluate(make_item(price=2000), seller)
+    assert result.score >= 95
+
+
+def test_dynamic_buffer_spread_scores_strict_cap() -> None:
+    """某维度远低于其他时，动态缓冲更严格地拉低总分"""
+    ev = Evaluator()
+    # 职业卖家：professional 低，其他维度高 → std 大 → buffer 小
+    seller = make_seller(
+        on_sale_count=100,      # professional ~60
+        sold_count=20,
+        register_days=1000,
+        credit_score=750,
+    )
+    result = ev.evaluate(make_item(price=2000), seller)
+    # 维度离散度大，buffer 应 < 40，总分被更严格限制
+    assert result.score <= 95
+
+
+def test_dynamic_buffer_better_than_fixed() -> None:
+    """动态缓冲比固定 buffer=40 更能暴露风险"""
+    ev = Evaluator()
+    # 极端职业卖家：professional 很低（on_sale=500 + post_30d=200 + 关键词），
+    # 其他维度满分 → std 很大 → buffer 很小 → 总分被严格拉低
+    from xianyu_hunter.domain.item import ItemSummary
+    seller = make_seller(
+        on_sale_count=500,       # Sigmoid 扣 ~40
+        post_count_30d=200,      # Sigmoid 扣 ~30
+        sold_count=20,
+        register_days=1000,
+        credit_score=750,
+        recent_posts=[ItemSummary(id="p1", title="批发 全新 iPhone", price=0)],  # 关键词 -15
+    )
+    result = ev.evaluate(make_item(price=2000), seller)
+    # professional ≈ 15, 其他维度 100
+    # std 大 → buffer 小 → total 被 min_dim + buffer 限制
+    # 确保低分维度有效拉低了总分
+    assert result.score < 70
+
+
+# ============== P2: AI 评估与规则评估集成 ==============
+
+
+def test_ai_eval_reject_zero_score() -> None:
+    """AI 评估 reject → 总分降至 0"""
+    ev = Evaluator()
+    base = ev.evaluate(make_item(price=2000), make_seller())
+    assert base.score > 0  # 确保基础分大于 0
+    result = ev.apply_ai_eval(base, "reject", 2)
+    assert result.score == 0
+    assert result.risk_level == RiskLevel.EXTREME
+    assert any("ai_reject" in r for r in result.reject_reasons)
+    assert result.dimension_scores["ai_condition"] == 2
+    assert result.dimension_scores["ai_verdict"] == "reject"
+
+
+def test_ai_eval_caution_reduces_score() -> None:
+    """AI 评估 caution → 总分 * 0.85"""
+    ev = Evaluator()
+    base = ev.evaluate(make_item(price=2000), make_seller())
+    result = ev.apply_ai_eval(base, "caution", 5)
+    expected = int(base.score * 0.85)
+    assert result.score == expected
+    # caution 时风险等级至少 MEDIUM
+    assert result.risk_level in (RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.EXTREME)
+    assert any("ai_caution" in r for r in result.reject_reasons)
+
+
+def test_ai_eval_high_score_bonus() -> None:
+    """AI 成色评分 >= 8 → 总分 +5 奖励"""
+    ev = Evaluator()
+    base = ev.evaluate(make_item(price=2000), make_seller())
+    result = ev.apply_ai_eval(base, "recommend", 9)
+    expected = min(100, base.score + 5)
+    assert result.score == expected
+
+
+def test_ai_eval_low_condition_penalty() -> None:
+    """AI 成色评分 <= 3 → 总分 * 0.7 惩罚"""
+    ev = Evaluator()
+    base = ev.evaluate(make_item(price=2000), make_seller())
+    result = ev.apply_ai_eval(base, "caution", 2)
+    # caution 先 * 0.85，再 low_condition * 0.7
+    expected = int(int(base.score * 0.85) * 0.7)
+    assert result.score == expected
+    assert any("ai_low_condition" in r for r in result.reject_reasons)
+
+
+def test_ai_eval_recommend_no_penalty() -> None:
+    """AI 评估 recommend + 中等分数 → 不奖不罚"""
+    ev = Evaluator()
+    base = ev.evaluate(make_item(price=2000), make_seller())
+    result = ev.apply_ai_eval(base, "recommend", 6)
+    # 6 分不触发奖励(>=8)也不触发惩罚(<=3)
+    assert result.score == base.score
+    assert result.risk_level == base.risk_level
+
+
+def test_ai_eval_preserves_original() -> None:
+    """apply_ai_eval 不修改原始 EvalResult"""
+    ev = Evaluator()
+    base = ev.evaluate(make_item(price=2000), make_seller())
+    original_score = base.score
+    original_dims = dict(base.dimension_scores)
+    _ = ev.apply_ai_eval(base, "reject", 1)
+    # 原始对象不受影响
+    assert base.score == original_score
+    assert base.dimension_scores == original_dims

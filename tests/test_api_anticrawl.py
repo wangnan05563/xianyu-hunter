@@ -4,8 +4,11 @@
 1. 路由注册完整性
 2. 各端点响应格式
 3. LoginOrchestrator 集成正确性
+4. Cookie 健康检查修复验证
 """
 from __future__ import annotations
+
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -396,3 +399,226 @@ class TestSessionStartStop:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
+
+
+# ============== 辅助函数 ==============
+
+def _make_mock_cookie_data(expires_offset: float = 3600, include_identity: bool = True,
+                           include_token: bool = True, extra_expired: list[str] | None = None):
+    """构造模拟的 Cookie JSON 数据
+
+    Args:
+        expires_offset: Cookie 过期时间偏移（秒），正数表示未来过期
+        include_identity: 是否包含 identity 层 Cookie
+        include_token: 是否包含 _m_h5_tk
+        extra_expired: 额外需要标记为已过期的 Cookie 名称列表
+    """
+    now = time.time()
+    cookies = []
+    if include_token:
+        cookies.append({"name": "_m_h5_tk", "value": "token_123", "domain": ".goofish.com",
+                        "path": "/", "expires": now + expires_offset})
+        cookies.append({"name": "_m_h5_tk_enc", "value": "enc_123", "domain": ".goofish.com",
+                        "path": "/", "expires": now + expires_offset})
+    if include_identity:
+        cookies.append({"name": "unb", "value": "123456", "domain": ".goofish.com",
+                        "path": "/", "expires": now + expires_offset})
+        cookies.append({"name": "cookie2", "value": "abc", "domain": ".goofish.com",
+                        "path": "/", "expires": now + expires_offset})
+        cookies.append({"name": "sgcookie", "value": "sg", "domain": ".goofish.com",
+                        "path": "/", "expires": now + expires_offset})
+    # 额外的已过期 Cookie
+    if extra_expired:
+        for name in extra_expired:
+            cookies.append({"name": name, "value": "expired_val", "domain": ".goofish.com",
+                            "path": "/", "expires": now - 100})
+    return {
+        "exported_at": now,
+        "method": "browser",
+        "cookie_count": len(cookies),
+        "cookies": cookies,
+    }
+
+
+class TestCookieCheckerFix:
+    """Cookie 健康检查修复测试
+
+    验证修复：Cookie 有效但 CookieRotator 层状态未初始化时，
+    健康检查应正确判定 Cookie 有效（而非误判为无效）。
+
+    根因：browser_login / auth_helper / browser_import / cookie_inject 等登录路径
+    只调用 export_cookies 写入 JSON，未调用 on_login_success 更新层状态，
+    导致 cookie_checker 依赖的 identity_state.valid 始终为 False。
+    """
+
+    def test_cookie_valid_when_layer_not_initialized(self, monkeypatch):
+        """Cookie 在 JSON 中有效但层状态未初始化时应判定为有效
+
+        复现用户报告的问题：Cookie 处于有效期内，点击检查按钮显示"Cookie无效"。
+        """
+        _reset_orchestrator()
+
+        mock_data = _make_mock_cookie_data(expires_offset=3600)
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        # 初始化协调器（配置健康检查器）
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        # 不调用 on_login_success，模拟浏览器登录路径
+        # CookieRotator 的 identity 层状态仍为默认 False
+
+        resp = client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
+        data = resp.json()
+
+        assert data["ok"] is True
+        assert data["cookie_valid"] is True, "Cookie 有效期内应判定为有效"
+
+    def test_cookie_invalid_when_expired(self, monkeypatch):
+        """Cookie 已过期时应判定为无效"""
+        _reset_orchestrator()
+
+        # expires_offset 为负数表示已过期
+        mock_data = _make_mock_cookie_data(expires_offset=-100)
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        resp = client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
+        data = resp.json()
+
+        assert data["ok"] is True
+        assert data["cookie_valid"] is False, "已过期 Cookie 应判定为无效"
+
+    def test_cookie_invalid_when_no_token(self, monkeypatch):
+        """缺少 _m_h5_tk 时应判定为无效"""
+        _reset_orchestrator()
+
+        mock_data = _make_mock_cookie_data(include_token=False)
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        resp = client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
+        data = resp.json()
+
+        assert data["ok"] is True
+        assert data["cookie_valid"] is False
+
+    def test_cookie_invalid_when_no_identity(self, monkeypatch):
+        """缺少 identity 层 Cookie 时应判定为无效"""
+        _reset_orchestrator()
+
+        mock_data = _make_mock_cookie_data(include_identity=False)
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        resp = client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
+        data = resp.json()
+
+        assert data["ok"] is True
+        assert data["cookie_valid"] is False
+
+    def test_cookie_invalid_when_no_data(self, monkeypatch):
+        """JSON 无 Cookie 数据时应判定为无效"""
+        _reset_orchestrator()
+
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: None)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        resp = client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
+        data = resp.json()
+
+        assert data["ok"] is True
+        assert data["cookie_valid"] is False
+
+    def test_layer_state_auto_synced(self, monkeypatch):
+        """Cookie 有效时层状态应自动同步"""
+        _reset_orchestrator()
+
+        mock_data = _make_mock_cookie_data(expires_offset=3600)
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        # 健康检查前，层状态应为默认 False
+        layers_before = client.get(
+            "/api/anticrawl/cookies/layers",
+            cookies=_AUTH_COOKIE,
+        ).json()["layers"]
+        assert layers_before["identity"]["valid"] is False
+
+        # 执行健康检查（触发自动同步）
+        client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
+
+        # 健康检查后，identity 和 session 层应已同步为有效
+        layers_after = client.get(
+            "/api/anticrawl/cookies/layers",
+            cookies=_AUTH_COOKIE,
+        ).json()["layers"]
+        assert layers_after["identity"]["valid"] is True
+        assert layers_after["session"]["valid"] is True
+
+    def test_cookie_valid_with_legacy_data_no_expires(self, monkeypatch):
+        """旧版数据（无 expires 字段）应兼容处理，视为 session cookie 不过期"""
+        _reset_orchestrator()
+
+        now = time.time()
+        # 旧版格式：无 expires 字段
+        mock_data = {
+            "exported_at": now,
+            "method": "browser",
+            "cookie_count": 5,
+            "cookies": [
+                {"name": "_m_h5_tk", "value": "token_123", "domain": ".goofish.com", "path": "/"},
+                {"name": "_m_h5_tk_enc", "value": "enc_123", "domain": ".goofish.com", "path": "/"},
+                {"name": "unb", "value": "123456", "domain": ".goofish.com", "path": "/"},
+                {"name": "cookie2", "value": "abc", "domain": ".goofish.com", "path": "/"},
+                {"name": "sgcookie", "value": "sg", "domain": ".goofish.com", "path": "/"},
+            ],
+        }
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        resp = client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
+        data = resp.json()
+
+        assert data["ok"] is True
+        assert data["cookie_valid"] is True, "旧版数据无 expires 字段应视为有效"

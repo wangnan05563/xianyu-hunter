@@ -151,6 +151,50 @@ CLI (__main__.py)
 
 事件由 `EventBus` 解耦，Buyer 发布 `BUY_SUCCEEDED`，NotifierHub 订阅并消费。
 
+## 目录结构
+
+```
+17_xianyu/
+├── src/xianyu_hunter/      # Python 后端源码（主包）
+│   ├── domain/             # 领域模型（item/order/seller/task/events）
+│   ├── infra/              # 基础设施（db/browser/logger/secrets/repository）
+│   ├── modules/            # 业务模块（collector/notifier/buyer/evaluator/scheduler）
+│   ├── web/                # FastAPI Web 层（routes/services/templates/static）
+│   ├── __main__.py         # CLI 入口（typer）
+│   ├── config.py           # .env 配置加载（pydantic-settings）
+│   └── container.py        # 依赖注入容器
+├── frontend/               # React + TypeScript 前端（Vite）
+│   └── src/                # 前端源码（api/components/pages/stores）
+├── config/                 # 配置文件目录
+│   ├── config.yaml         # 主配置（运行时可被 Web UI 修改）
+│   ├── eval.yaml           # 卖家评估配置
+│   ├── *.example.yaml      # 配置模板（供新部署参考）
+│   └── backups/            # 配置自动备份（gitignore）
+├── tests/                  # 测试代码（148 个用例，含 E2E）
+├── scripts/                # 启动/构建/部署脚本
+│   ├── 启动服务.bat         # 启动 Web + 调度器
+│   ├── 停止服务.bat         # 停止服务
+│   ├── 重新构建.bat         # 前端构建
+│   ├── 静默启动.vbs         # 静默启动（无黑框）
+│   └── *.py                # 辅助脚本（cookie 提取等）
+├── docs/                   # 项目文档（需求/设计/迭代记录）
+├── data/                   # 运行时数据（gitignore，仅保留 .gitkeep）
+│   ├── xianyu.db           # SQLite 数据库
+│   ├── logs/               # loguru 日志（按日滚动）
+│   └── prompts/            # AI Prompt 文件
+├── browser-data/           # 浏览器用户数据（gitignore）
+├── logs/                   # 启动脚本日志/PID（gitignore）
+├── .env                    # 环境变量（gitignore，从 .env.example 复制）
+├── .env.example            # 环境变量模板
+├── 静默启动.vbs             # 根目录快捷入口（调用 scripts/静默启动.vbs）
+├── pyproject.toml          # Python 项目配置
+├── requirements.txt        # Python 依赖
+├── Dockerfile              # Docker 镜像构建
+└── docker-compose.yml      # Docker Compose 部署
+```
+
+详细规范见 [项目目录结构规范](docs/directory-structure.md)。
+
 ## 数据与日志
 
 | 路径 | 说明 |

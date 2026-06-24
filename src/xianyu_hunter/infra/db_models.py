@@ -176,6 +176,40 @@ class EventRow(Base):
     )
 
 
+# 5.6.1 后台错误日志（独立表：捕获未处理异常 + 请求上下文 + AI 诊断上下文）
+# 与 events 表解耦：error_logs 专供技术维护人员排查问题，
+# 包含完整堆栈/请求参数/服务器环境等异常专用字段
+class ErrorLogRow(Base):
+    __tablename__ = "error_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, index=True)
+    error_type: Mapped[str] = mapped_column(String, nullable=False)
+    error_message: Mapped[str] = mapped_column(Text, nullable=False)
+    stack_trace: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # 请求上下文（异常发生在 HTTP 请求中时填充）
+    request_method: Mapped[str | None] = mapped_column(String, nullable=True)
+    request_path: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    request_params: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON: query + body（脱敏）
+    request_headers: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON: 脱敏后的 headers
+
+    # 来源标识（单 token 认证体系下用请求来源代替用户身份）
+    client_ip: Mapped[str | None] = mapped_column(String, nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # 服务器环境快照
+    server_env: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+
+    # AI 诊断上下文（双格式：结构化 JSON + Markdown 报告）
+    ai_context_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_context_md: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # 状态管理：new / resolved / ignored
+    status: Mapped[str] = mapped_column(String, nullable=False, default="new", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
 # 5.7 任务-内容关联（支持 Items / Sellers / URL）
 # 设计：link_type + link_key 联合唯一，避免重复关联。
 # source 区分 auto（Worker 抓到自动写入）/ manual（用户在 Web 端手动添加）。
@@ -185,6 +219,8 @@ class TaskLinkRow(Base):
         UniqueConstraint("task_id", "link_type", "link_key", name="uq_task_link"),
         # 联合索引：按 link_type+link_key 反查任务关联是常用查询路径
         Index("ix_task_links_type_key", "link_type", "link_key"),
+        # refresh_links 按 task_id + source='auto' 批量删除，复合索引避免全表扫描
+        Index("ix_task_links_task_source", "task_id", "source"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -316,12 +352,14 @@ def create_sqlite_engine(db_path: str = "data/xianyu.db"):
 
 
 def init_db(db_path: str = "data/xianyu.db") -> None:
-    """初始化数据库（创建所有表 + 增量迁移缺失列）"""
+    """初始化数据库（创建所有表 + 增量迁移缺失列/索引）"""
     engine = create_sqlite_engine(db_path)
     Base.metadata.create_all(engine)
     # 增量迁移：为已有表添加 ORM 中新增但数据库中缺失的列
     _migrate_add_column(engine, "events", "type", "TEXT")
     _migrate_add_column(engine, "tasks", "max_publish_days", "INTEGER")
+    # 增量迁移：为 task_links 添加 task_id+source 复合索引（refresh_links 批量删除用）
+    _migrate_create_index(engine, "task_links", "ix_task_links_task_source", "task_id, source")
 
 
 def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) -> None:
@@ -339,4 +377,24 @@ def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) 
         existing = {row[1] for row in conn.execute(sa_text(f"PRAGMA table_info({table})")).all()}
         if column not in existing:
             conn.execute(sa_text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
+            conn.commit()
+
+
+def _migrate_create_index(engine: Engine, table: str, index_name: str, columns: str) -> None:
+    """安全地为已有表创建索引（索引已存在则跳过）
+
+    columns 为逗号分隔的列名列表，如 "task_id, source"。
+    """
+    import re
+    _IDENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
+    if not _IDENT_RE.match(table) or not _IDENT_RE.match(index_name):
+        return
+    # 校验每个列名
+    for col in columns.split(","):
+        if not _IDENT_RE.match(col.strip()):
+            return
+    with engine.connect() as conn:
+        existing = {row[1] for row in conn.execute(sa_text(f"PRAGMA index_list({table})")).all()}
+        if index_name not in existing:
+            conn.execute(sa_text(f"CREATE INDEX {index_name} ON {table} ({columns})"))
             conn.commit()

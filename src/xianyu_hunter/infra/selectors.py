@@ -46,11 +46,37 @@ class SelectorRepo:
     DETAIL_PRICE_MAIN = "[class*='price--']"
     DETAIL_PRICE_ALT = "[class*='Price']"
 
-    DETAIL_DESC_MAIN = "[class*='description']"
-    DETAIL_DESC_ALT = "[class*='desc']"
+    # 描述：必须排除运费/服务条款区域（如 class 含 'postage' / 'shippingFee' / 'service'）
+    # 闲鱼详情页会把"运费说明"、"七天无理由"等内容放在与描述同级的块里，
+    # 通用 [class*='description'] 会误抓，必须限定到商品描述主容器
+    DETAIL_DESC_MAIN = "[class*='desc-content'] [class*='content'], [class*='detailDesc']"
+    DETAIL_DESC_ALT = "[class*='description-content'], [class*='description']:not([class*='postage']):not([class*='service']):not([class*='shipping'])"
 
     DETAIL_IMAGES_MAIN = "[class*='image'] img"
     DETAIL_IMAGES_ALT = "[class*='Pic'] img"
+
+    # 主图（详情页顶部缩略图/封面），用于 thumb_url
+    # 注意：必须限定为详情页主图区，避免匹配到卖家头像/推荐位
+    DETAIL_THUMB_MAIN = "[class*='mainPic'] img, [class*='detailPic'] img, [class*='picMain'] img"
+    DETAIL_THUMB_ALT = "[class*='detailImage'] img:first-child, [class*='picContainer'] img:first-child"
+
+    # 地区：闲鱼详情页通常在"商品信息"区块显示地区
+    # className 常见模式：item-user-info-label--XXX / region / area / location
+    DETAIL_REGION_MAIN = "[class*='item-user-info-label']"
+    DETAIL_REGION_ALT = "[class*='region'], [class*='userArea'], [class*='itemArea']"
+
+    # 想要数：通常文本包含"X人想要"或 class 含 want/favor/like
+    DETAIL_WANT_MAIN = "[class*='want--']"
+    DETAIL_WANT_ALT = "[class*='want'], [class*='favor']"
+    # 文本模式：作为 _detail.py 数字提取失败的回退（不放在选择器里）
+
+    # 浏览数：通常文本包含"X人看过"或"浏览X次"，class 含 view/pv/browse
+    DETAIL_VIEW_MAIN = "[class*='view--']"
+    DETAIL_VIEW_ALT = "[class*='view'], [class*='browse'], [class*='pv']"
+
+    # 发布时间：通常显示"X天前发布"，class 含 time/publish/release
+    DETAIL_PUBLISH_TIME_MAIN = "[class*='publishTime']"
+    DETAIL_PUBLISH_TIME_ALT = "[class*='releaseTime'], [class*='pubTime'], [class*='itemTime']"
 
     # 详情页上的卖家信息块
     DETAIL_SELLER_NAME = "[class*='sellerName'], [class*='userNick']"

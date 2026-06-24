@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Spin, Card, Col, Row, Alert, Button, Space } from 'antd'
+import { Spin, Card, Col, Row, Alert, Button, Space, theme } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
   taskApi, configApi, statsApi, priceApi,
@@ -15,6 +15,8 @@ import TrendModal from './components/TrendModal'
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  // 从 antd token 读取主题色，让快捷入口图标背景等跟随主题
+  const { token } = theme.useToken()
   const [loading, setLoading] = useState(true)
   const [overview, setOverview] = useState<StatsOverview | null>(null)
   const [kpiCards, setKpiCards] = useState<KpiCard[]>([])
@@ -306,6 +308,13 @@ export default function Dashboard() {
                 <QuickEntryIcon type="dbAdmin" size={48} />
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>数据库维护</div>
                 <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>业务表在线管理</div>
+              </Card>
+            </Col>
+            <Col xs={12} md={6}>
+              <Card className="quick-entry-card" size="small" onClick={() => navigate('/anticrawl')}>
+                <QuickEntryIcon type="antiCrawl" size={48} />
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>反爬登录管理</div>
+                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>策略与会话监控</div>
               </Card>
             </Col>
           </Row>

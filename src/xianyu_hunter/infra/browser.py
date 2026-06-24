@@ -83,7 +83,7 @@ class BrowserManager:
         for attempt in range(max_retries + 1):
             try:
                 logger.info(
-                    "Starting browser: mode=%s, headless=%s, data=%s (attempt %d/%d)",
+                    "Starting browser: mode={}, headless={}, data={} (attempt {}/{})",
                     "cdp" if self.use_cdp else "launch", self.headless,
                     self.user_data_dir, attempt + 1, max_retries + 1,
                 )
@@ -92,7 +92,7 @@ class BrowserManager:
             except Exception as e:
                 if attempt < max_retries:
                     logger.warning(
-                        "Browser start failed (attempt %d/%d): %s, cleaning up...",
+                        "Browser start failed (attempt {}/{}): {}, cleaning up...",
                         attempt + 1, max_retries + 1, e,
                     )
                     self._cleanup_orphan_processes()
@@ -130,7 +130,7 @@ class BrowserManager:
             "--start-minimized",  # 最小化启动，避免 new_page() 时弹出可见窗口
             "about:blank",
         ]
-        logger.info("启动系统 Edge (CDP): %s", " ".join(cmd[:4]))
+        logger.info("启动系统 Edge (CDP): {}", " ".join(cmd[:4]))
         # CDP Edge 使用 STARTUPINFO 隐藏控制台窗口（不需要像 WebView2 那样用 CREATE_NEW_CONSOLE）
         _si = sp.STARTUPINFO()
         _si.dwFlags |= sp.STARTF_USESHOWWINDOW
@@ -152,7 +152,7 @@ class BrowserManager:
                 await asyncio.sleep(0.5)
 
         if not cdp_ready:
-            logger.error("Edge CDP 端口 %d 未就绪，回退到 launch 模式", _CDP_PORT)
+            logger.error("Edge CDP 端口 {} 未就绪，回退到 launch 模式", _CDP_PORT)
             self._kill_cdp_process()
             self.use_cdp = False
             await self._start_launch()
@@ -170,7 +170,7 @@ class BrowserManager:
                 self._context = await self._browser.new_context()
             logger.info("CDP 连接成功，使用系统 Edge 浏览器（指纹真实）")
         except Exception as e:
-            logger.error("CDP 连接失败: %s，回退到 launch 模式", e)
+            logger.error("CDP 连接失败: {}，回退到 launch 模式", e)
             self._kill_cdp_process()
             self.use_cdp = False
             await self._start_launch()
@@ -226,11 +226,11 @@ class BrowserManager:
                 }
                 stealth_scripts = orch.get_stealth_scripts()
                 logger.info(
-                    "使用 FingerprintProfile: name=%s, ua=%s, viewport=%s",
+                    "使用 FingerprintProfile: name={}, ua={}, viewport={}",
                     profile.name, profile.ua[:50], effective_viewport,
                 )
         except Exception as e:
-            logger.debug("未使用 LoginOrchestrator 指纹（回退到默认）: %s", e)
+            logger.debug("未使用 LoginOrchestrator 指纹（回退到默认）: {}", e)
 
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(self.user_data_dir),
@@ -253,7 +253,7 @@ class BrowserManager:
             # M5TK 自动刷新脚本与指纹无关，始终注入
             await self._context.add_init_script(M5TK_AUTO_REFRESH_SCRIPT)
             logger.info(
-                "浏览器启动完成，已注入 %d 个指纹脚本 + m5tk 自动刷新脚本",
+                "浏览器启动完成，已注入 {} 个指纹脚本 + m5tk 自动刷新脚本",
                 len(stealth_scripts),
             )
         else:
@@ -298,7 +298,7 @@ class BrowserManager:
             return await self._context.new_page()
         except Exception as e:
             # TargetClosedError / 任何浏览器已关闭的异常：重启后重试一次
-            logger.warning("new_page 失败 (%s)，重启浏览器后重试...", type(e).__name__)
+            logger.warning("new_page 失败 ({})，重启浏览器后重试...", type(e).__name__)
             try:
                 await self.close()
             except Exception:
@@ -346,7 +346,7 @@ class BrowserManager:
         try:
             return await self._context.cookies(domains or [])
         except Exception as e:
-            logger.warning("get_cookies 失败: %s", e)
+            logger.warning("get_cookies 失败: {}", e)
             return []
 
     async def is_alive(self) -> bool:
@@ -382,7 +382,7 @@ class BrowserManager:
             )
             logger.info("Cleaned orphan msedge processes")
         except Exception as e:
-            logger.warning("Failed to clean orphan processes: %s", e)
+            logger.warning("Failed to clean orphan processes: {}", e)
 
     def _cleanup_lock_files(self) -> None:
         """清理 browser-data 中的残留锁文件
@@ -407,7 +407,7 @@ class BrowserManager:
                 except OSError:
                     pass
         if cleaned:
-            logger.info("Removed %d stale lock files from %s", cleaned, self.user_data_dir)
+            logger.info("Removed {} stale lock files from {}", cleaned, self.user_data_dir)
 
     async def is_alive(self) -> bool:
         """检查浏览器是否还活着"""
