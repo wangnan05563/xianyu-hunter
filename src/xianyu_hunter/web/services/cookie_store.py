@@ -106,6 +106,29 @@ class CookieStore:
             "method": data.get("method", "unknown"),
         }
 
+    def get_cookie_expiry(self) -> float | None:
+        """获取最早过期的闲鱼关键 Cookie 的过期时间
+
+        用于定时同步判断是否即将过期。
+        返回 Unix 时间戳（秒），无 Cookie 或 session cookie 返回 None。
+        """
+        data = self._read_json()
+        if not data or not data.get("cookies"):
+            return None
+        # 只看闲鱼关键 Cookie 的过期时间
+        key_cookies = [
+            c for c in data["cookies"]
+            if c.get("name") in _GOOFISH_KEY_COOKIES
+        ]
+        if not key_cookies:
+            return None
+        # 取最早的过期时间（排除 session cookie 的 -1/0）
+        expiries = [
+            c.get("expires", -1) for c in key_cookies
+            if c.get("expires", -1) and c.get("expires", -1) > 0
+        ]
+        return min(expiries) if expiries else None
+
     def export_cookies(self, cookies: list[dict], method: str = "unknown") -> bool:
         """导出 Cookie 到 JSON 文件（登录成功后由子进程调用）
 
