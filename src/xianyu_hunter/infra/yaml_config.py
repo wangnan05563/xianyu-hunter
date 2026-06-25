@@ -25,6 +25,11 @@ class BrowserConfig(BaseModel):
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
     )
+    # Cookie 定时自动同步配置
+    auto_sync: bool = False                     # 默认关闭，需显式启用
+    auto_sync_interval: int = 30                # 同步间隔（分钟）
+    auto_sync_expiry_threshold: int = 10        # Cookie 剩余有效期阈值（分钟）
+    cdp_port: int = 9222                        # CDP 调试端口
 
 
 class AntiDetectConfig(BaseModel):
