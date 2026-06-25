@@ -348,9 +348,17 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   font-size: 12px;
   color: var(--xh-text-tertiary);
   margin-top: 8px;
+}
+
+.item-card-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ============ 自动监控：数据变化高亮 ============ */

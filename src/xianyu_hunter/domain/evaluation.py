@@ -40,14 +40,44 @@ class EvalResult:
 
     @property
     def is_passed(self) -> bool:
-        """是否通过基本门槛（score >= 60）"""
+        """是否通过基本门槛（score >= 60）
+
+        用于推送通知门槛。硬编码 60 作为保底默认值，
+        具体阈值由调用方通过 should_pass() 传入。
+        """
         if self.score is None or self.risk_level == RiskLevel.UNKNOWN:
             return False
         return self.score >= 60 and self.risk_level != RiskLevel.EXTREME
 
+    def should_pass(self, pass_score: int = 60) -> bool:
+        """是否通过推送门槛（可自定义阈值）
+
+        为什么需要独立方法：property 无法接收参数，而 pass_score
+        需要从配置读取以支持热更新，故提供此方法供 worker 调用。
+        """
+        if self.score is None or self.risk_level == RiskLevel.UNKNOWN:
+            return False
+        return self.score >= pass_score and self.risk_level != RiskLevel.EXTREME
+
     @property
     def is_auto_buy(self) -> bool:
-        """是否允许全自动拍下（score >= 80 且低风险）"""
+        """是否允许全自动拍下（score >= 80 且低风险）
+
+        硬编码 80 作为保底默认值，具体阈值由调用方通过
+        should_auto_buy() 传入配置中的 auto_buy_score。
+        """
         if self.score is None or self.risk_level == RiskLevel.UNKNOWN:
             return False
         return self.score >= 80 and self.risk_level == RiskLevel.LOW
+
+    def should_auto_buy(self, auto_buy_score: int = 80) -> bool:
+        """是否允许全自动拍下（可自定义阈值）
+
+        为什么需要独立方法：auto_buy_score 需从配置读取（默认 75，
+        见 config.yaml），property 无法传参，故提供此方法。
+        风险等级需为 LOW（由 evaluator._score_to_risk 根据
+        auto_buy_score 划分），确保高风商品不会被自动拍下。
+        """
+        if self.score is None or self.risk_level == RiskLevel.UNKNOWN:
+            return False
+        return self.score >= auto_buy_score and self.risk_level == RiskLevel.LOW

@@ -172,7 +172,7 @@ def _enrich_eval_with_item(
 
     字段名与前端 EvalItem 接口对齐：
     - item_title / item_price / seller_id / seller_nick / thumb_url
-    - region / publish_time / want_cnt
+    - region / publish_time / want_cnt / view_cnt
     """
     item_id = str(payload.get("item_id") or "")
     item = item_map.get(item_id, {}) if item_id else {}
@@ -206,6 +206,13 @@ def _enrich_eval_with_item(
             want_candidate = int(link["want_cnt"])
         except (TypeError, ValueError):
             want_candidate = None
+    # 取 view_cnt：items.view_cnt > link.view_cnt（曝光度，用于辅助判断商品热度）
+    view_candidate = item.get("view_cnt")
+    if view_candidate is None and link.get("view_cnt") is not None:
+        try:
+            view_candidate = int(link["view_cnt"])
+        except (TypeError, ValueError):
+            view_candidate = None
     # 取 publish_time：items.publish_time > link.publish_time
     publish_candidate = item.get("publish_time") or link.get("publish_time")
 
@@ -235,6 +242,8 @@ def _enrich_eval_with_item(
         payload["region"] = region_candidate
     if payload.get("want_cnt") is None and want_candidate is not None:
         payload["want_cnt"] = want_candidate
+    if payload.get("view_cnt") is None and view_candidate is not None:
+        payload["view_cnt"] = view_candidate
     if not payload.get("publish_time") and publish_candidate:
         payload["publish_time"] = str(publish_candidate)
     return payload
@@ -748,7 +757,8 @@ def evaluations_distribution(
                 passing += (marginal_score[i] or 0) * (bin_high - suggested_score) / 10
         actual_pass_rate = round(passing / total, 2)
     else:
-        suggested_score = 60
+        # 无数据时使用配置的 pass_score，避免硬编码导致与实际配置不一致
+        suggested_score = get_config().eval.pass_score
         actual_pass_rate = 0.75
 
     suggested_threshold = {"score": suggested_score, "pass_rate": actual_pass_rate}
@@ -1124,6 +1134,10 @@ def recompute_evaluations(
         evaluator = container.evaluator
         generated = 0
         errors = 0
+        # 批量检查哪些 item_id 还不在 items 表，避免逐条查询
+        # recompute 从 task_links 生成评估时，需同步补写 items 表，防止孤儿数据
+        all_link_item_ids = [link.get("link_key") for link in link_rows if link.get("link_key")]
+        existing_item_ids = container.repo.items_exist(all_link_item_ids) if all_link_item_ids else set()
         for link in link_rows:
             display = link.get("display") or {}
             item_id = link.get("link_key") or ""
@@ -1158,6 +1172,28 @@ def recompute_evaluations(
                 level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
                 if eval_result.risk_level == RiskLevel.UNKNOWN:
                     level = "warn"
+                # 补写 items 表：recompute 从 task_links 生成评估时同步写入 items 表，
+                # 避免 eval.* 事件引用的 item_id 在 items 表中不存在（孤儿数据）
+                if item_id not in existing_item_ids:
+                    try:
+                        container.repo.upsert_item({
+                            "id": str(item_id),
+                            "task_id": link.get("task_id") or task_id or "",
+                            "title": str(display.get("title") or ""),
+                            "price": price_float,
+                            "region": str(display.get("region") or ""),
+                            "seller_id": str(display.get("seller_id") or ""),
+                            "want_cnt": int(display.get("want_cnt") or 0),
+                            "view_cnt": int(display.get("view_cnt") or 0),
+                            "thumb_url": str(display.get("thumb_url") or ""),
+                            "image_urls": "[]",
+                            "description": "",
+                            "first_seen": _utcnow(),
+                            "last_seen": _utcnow(),
+                        })
+                        existing_item_ids.add(item_id)
+                    except Exception as e:
+                        logger.warning(f"补写 items 表失败 item_id={item_id}: {e}")
                 # 使用 upsert 按 task_id+item_id 去重，防止重复评估
                 container.repo.upsert_eval_event({
                     "type": "eval.scored",
@@ -1167,6 +1203,7 @@ def recompute_evaluations(
                     "level": level,
                     "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
                     "payload": _json.dumps({
+                        "task_id": link.get("task_id") or task_id or "",  # 写入 payload 供官方采集回查
                         "item_id": detail.id,
                         "item_title": detail.title,
                         "item_price": detail.price,
@@ -1312,6 +1349,145 @@ def recompute_evaluations(
     }
 
 
+@router.post("/batch-evaluate-unevaluated")
+def batch_evaluate_unevaluated(
+    task_id: str | None = Query(None, description="可选：仅评估指定任务的商品"),
+    limit: int = Query(200, ge=1, le=1000, description="单次最大评估数量"),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """批量评估 items 表中未被评估的商品
+
+    解决商品采集与评估是独立流程导致的大量商品未被评估的问题。
+    查询 items 表中不在 eval.* 事件中的商品，用当前评估规则批量评估。
+    """
+    import json as _json
+    from xianyu_hunter.domain.item import ItemDetail
+    from xianyu_hunter.domain.seller import SellerProfile
+
+    evaluator = container.evaluator
+
+    # 1. 获取所有已评估的 item_id 集合
+    eval_events, _ = container.repo.list_events_by_type_prefix(type_prefix="eval.")
+    evaluated_ids: set[str] = set()
+    for e in eval_events:
+        payload = e.get("payload") or {}
+        if isinstance(payload, str):
+            try:
+                payload = _json.loads(payload)
+            except (ValueError, TypeError):
+                payload = {}
+        iid = str(payload.get("item_id") or e.get("item_id") or "")
+        if iid:
+            evaluated_ids.add(iid)
+
+    # 2. 获取 items 表中所有商品（按 task_id 过滤）
+    # items 表量级可控（通常 < 1000），一次查询即可
+    all_items = container.repo.list_items(task_id=task_id, limit=5000, offset=0)
+    unevaluated = [it for it in all_items if str(it.get("id") or "") not in evaluated_ids]
+
+    if not unevaluated:
+        return {
+            "ok": True,
+            "evaluated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "total": 0,
+            "message": "所有商品均已评估，无需批量评估",
+        }
+
+    # 限制单次评估数量，避免长时间阻塞
+    to_evaluate = unevaluated[:limit]
+    skipped = len(unevaluated) - len(to_evaluate)
+
+    # 3. 预加载 sellers 数据（批量查询避免 N+1）
+    seller_ids_set: set[str] = set()
+    for it in to_evaluate:
+        sid = str(it.get("seller_id") or "")
+        if sid:
+            seller_ids_set.add(sid)
+    seller_map: dict[str, dict] = {}
+    if seller_ids_set:
+        seller_rows = container.repo.list_sellers_by_ids(list(seller_ids_set))
+        for s in seller_rows:
+            sid = str(s.get("id") or "")
+            if sid:
+                seller_map[sid] = s
+
+    # 4. 遍历评估并写入 eval.* 事件
+    evaluated = 0
+    errors = 0
+    for it in to_evaluate:
+        try:
+            item_id = str(it.get("id") or "")
+            if not item_id:
+                continue
+            seller_id = str(it.get("seller_id") or "")
+            seller_data = seller_map.get(seller_id, {})
+
+            detail = ItemDetail(
+                id=item_id,
+                title=str(it.get("title") or ""),
+                price=float(it.get("price") or 0),
+                region=str(it.get("region") or ""),
+                seller_id=seller_id,
+                seller_nick=str(seller_data.get("nick") or ""),
+                thumb_url=str(it.get("thumb_url") or ""),
+                want_cnt=int(it.get("want_cnt") or 0),
+                view_cnt=int(it.get("view_cnt") or 0),
+            )
+            seller = SellerProfile(
+                id=seller_id or "unknown",
+                nick=str(seller_data.get("nick") or ""),
+                credit_score=seller_data.get("credit_score"),
+                register_days=int(seller_data.get("register_days") or 0),
+                on_sale_count=int(seller_data.get("on_sale_count") or 0),
+                sold_count=int(seller_data.get("sold_count") or 0),
+            )
+            eval_result = evaluator.evaluate(detail, seller)
+            score_display = eval_result.score if eval_result.score is not None else "N/A"
+            level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
+            if eval_result.risk_level == RiskLevel.UNKNOWN:
+                level = "warn"
+            effective_task_id = str(it.get("task_id") or task_id or "")
+            container.repo.upsert_eval_event({
+                "type": "eval.scored",
+                "task_id": effective_task_id,
+                "item_id": item_id,
+                "stage": "eval",
+                "level": level,
+                "message": f"商品 {item_id} 批量评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
+                "payload": _json.dumps({
+                    "task_id": effective_task_id,
+                    "item_id": item_id,
+                    "item_title": detail.title,
+                    "item_price": detail.price,
+                    "seller_id": detail.seller_id,
+                    "seller_nick": detail.seller_nick,
+                    "score": eval_result.score,
+                    "risk_level": eval_result.risk_level.value,
+                    "dimension_scores": eval_result.dimension_scores,
+                    "reject_reasons": eval_result.reject_reasons,
+                    "is_passed": eval_result.is_passed,
+                    "data_quality": eval_result.data_quality,
+                    "data_source": "batch_unevaluated",
+                }, ensure_ascii=False, default=str),
+            })
+            evaluated += 1
+        except Exception as e:
+            logger.warning(f"批量评估失败 item_id={it.get('id')}: {e}")
+            errors += 1
+            continue
+
+    return {
+        "ok": True,
+        "evaluated": evaluated,
+        "skipped": skipped,
+        "errors": errors,
+        "total": evaluated,
+        "message": f"已批量评估 {evaluated} 条未评估商品（跳过 {skipped}，错误 {errors}）",
+    }
+
+
 # ============== 官方页面采集 + 重新评估 ==============
 # 解决评估明细页依赖本地采集数据信息有限的问题：
 # 优先访问闲鱼官方商品详情页+卖家主页，获取完整权威数据后重新评估
@@ -1321,16 +1497,52 @@ _OFFICIAL_COLLECT_IDENTITY_COOKIES = ("cookie2", "sgcookie", "unb")
 
 
 async def _ensure_official_collect_cookies(container: Container) -> None:
-    """检查浏览器是否持有有效的闲鱼登录 Cookie，无效时快速失败"""
+    """检查浏览器是否持有有效的闲鱼登录 Cookie，无效时尝试从 JSON 补注入
+
+    为什么需要 JSON 补注入：服务重启后浏览器实例从 SQLite 加载 cookies，
+    但 SQLite 可能被锁或同步失败，导致 cookies 仅存在于 JSON 文件中。
+    此时通过 Playwright context.add_cookies() 直接注入到浏览器内存。
+    """
     if not container.browser:
         return
-    try:
-        cookies = await container.browser.get_cookies()
-    except Exception as e:
-        logger.warning("读取浏览器 Cookie 失败: {}", e)
+
+    async def _get_missing() -> list[str]:
+        try:
+            cookies = await container.browser.get_cookies()
+        except Exception as e:
+            logger.warning("读取浏览器 Cookie 失败: {}", e)
+            return list(_OFFICIAL_COLLECT_IDENTITY_COOKIES)
+        names = {str(c.get("name") or "") for c in cookies}
+        return [n for n in _OFFICIAL_COLLECT_IDENTITY_COOKIES if n not in names]
+
+    missing = await _get_missing()
+    if not missing:
         return
-    names = {str(c.get("name") or "") for c in cookies}
-    missing = [n for n in _OFFICIAL_COLLECT_IDENTITY_COOKIES if n not in names]
+
+    # 浏览器缺少关键 cookie 时，尝试从 CookieStore JSON 补注入
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store
+    store = get_cookie_store()
+    json_data = store._read_json()
+    if json_data and json_data.get("cookies"):
+        pw_cookies = []
+        for c in json_data["cookies"]:
+            name = c.get("name", "")
+            if name in missing:
+                pw_cookies.append({
+                    "name": name,
+                    "value": c.get("value", ""),
+                    "domain": c.get("domain", ".goofish.com"),
+                    "path": c.get("path", "/"),
+                })
+        if pw_cookies and container.browser._context:
+            try:
+                await container.browser._context.add_cookies(pw_cookies)
+                logger.info("从 CookieStore JSON 补注入 {} 个 cookie 到浏览器", len(pw_cookies))
+            except Exception as e:
+                logger.warning("从 JSON 补注入 cookie 失败: {}", e)
+
+    # 重新检查补注入后是否仍缺少
+    missing = await _get_missing()
     if missing:
         raise HTTPException(
             status_code=403,
@@ -1394,9 +1606,35 @@ async def _collect_official_and_evaluate(
     try:
         detail = await container.collector.detail(item_id, page=own_page)
         if detail is None:
-            # P0 修复：detail() 提取失败时（标题/价格未命中）主动抛 502
-            # 前端 onCollectOfficial 会显示「采集失败，请稍后重试」并支持重试
-            logger.warning("官方采集失败：detail() 返回 None，item_id={}", item_id)
+            # 尝试从页面 URL/标题获取更精准的失败原因
+            page_url = ""
+            page_title = ""
+            try:
+                page_url = own_page.url
+                page_title = await own_page.title()
+            except Exception:
+                pass
+            logger.warning(
+                "官方采集失败：detail() 返回 None，item_id={}, page_url={}, page_title={}",
+                item_id, page_url, page_title,
+            )
+            # 根据页面 URL/标题 区分用户可操作的失败原因
+            if "login" in page_url.lower() or "passport" in page_url.lower():
+                raise HTTPException(
+                    status_code=502,
+                    detail="采集商品详情失败：页面被重定向到登录页，请重新登录闲鱼后重试",
+                )
+            if "verify" in page_url.lower() or "captcha" in page_url.lower():
+                raise HTTPException(
+                    status_code=502,
+                    detail="采集商品详情失败：触发闲鱼验证码，请手动完成验证后重试",
+                )
+            # 首页标题检测：cookie 失效后闲鱼 SPA 在商品 URL 下渲染首页内容
+            if page_title and ("闲不住" in page_title or page_title.strip() == "闲鱼"):
+                raise HTTPException(
+                    status_code=502,
+                    detail="采集商品详情失败：闲鱼登录已过期，页面被重定向到首页，请重新登录闲鱼后重试",
+                )
             raise HTTPException(
                 status_code=502,
                 detail=f"采集商品 {item_id} 详情失败：页面可能未正常加载（标题/价格未提取到），请稍后重试",
@@ -1416,6 +1654,18 @@ async def _collect_official_and_evaluate(
     # 卖家主页采集失败时降级：用详情页中提取的卖家信息构建基本画像
     if seller is None:
         seller = await container.collector.seller_profile_fallback(None, detail)
+    else:
+        # 卖家主页采集成功但部分字段为空时，用详情页数据补充
+        # 新版闲鱼卖家主页信用分通过图片显示，无法文本提取；注册天数已从卖家主页移除
+        if not seller.nick and detail.detail_seller_nick:
+            seller.nick = detail.detail_seller_nick
+        if seller.credit_score is None and detail.detail_credit_score is not None:
+            seller.credit_score = detail.detail_credit_score
+        if not seller.sold_count and detail.detail_sold_count:
+            seller.sold_count = detail.detail_sold_count
+        # 注册天数：新版闲鱼卖家主页已无此字段，从详情页的"来闲鱼X天"补充
+        if not seller.register_days and detail.detail_register_days:
+            seller.register_days = detail.detail_register_days
 
     # 3. 持久化到 items 表
     import json as _json
@@ -1441,8 +1691,8 @@ async def _collect_official_and_evaluate(
             return True
         if isinstance(v, str) and v == "":
             return True
-        if isinstance(v, (int, float)) and v == 0:
-            return True
+        # 仅当新值为 None 或空字符串时视为 blank；数字 0 是合法值
+        # （如新发布商品浏览数 0、卖家在售数 0 等），不能被当成"缺失"
         return False
 
     def _coalesce(new_val: object, old_val: object) -> object:
@@ -1450,7 +1700,9 @@ async def _collect_official_and_evaluate(
         return old_val if _is_blank(new_val) else new_val
 
     # 允许覆盖的字段（官方采集应优先更新采集时刻 + 来源信息）
-    _ALWAYS_OVERWRITE = {"task_id", "publish_time", "image_urls"}
+    # 数字 0 是合法值（_is_blank 已修正不再当作 blank），所以这些字段
+    # 走 ALWAYS_OVERWRITE 不会因新值为 0 而误判为"缺失"
+    _ALWAYS_OVERWRITE = {"task_id", "publish_time", "image_urls", "view_cnt", "want_cnt", "region", "seller_id"}
 
     try:
         old_item = container.repo.get_item(item_id) or {}
@@ -1496,6 +1748,7 @@ async def _collect_official_and_evaluate(
             effective_task_id = existing_payload.get("task_id", "")
 
     eval_payload = {
+        "task_id": effective_task_id or "",  # 写入 payload 保持与其他路径一致
         "item_id": item_id,
         "item_title": detail.title,
         "item_price": detail.price,

@@ -21,6 +21,7 @@ SEARCH_PY = REPO / "src" / "xianyu_hunter" / "modules" / "collector" / "_search.
 # 字段名清单：item 行和 seller 行都必须具备（值允许为空）
 REQUIRED_DISPLAY_FIELDS = {
     "title",
+    "brand",
     "price",
     "thumb_url",
     "region",

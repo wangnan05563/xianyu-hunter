@@ -270,15 +270,28 @@ class Evaluator:
         )
 
     def _evaluate_insufficient(self, item: ItemDetail) -> EvalResult:
-        """数据严重不足时的保守评估（仅价格维度）"""
+        """数据严重不足时的保守评估（价格 + 热度维度）
+
+        当卖家数据完全缺失时，利用商品本身的数据做基础评估：
+        - 价格维度（来自 item.price / title / image_urls）
+        - 热度维度（来自 item.want_cnt，搜索 API 87% 填充率）
+
+        评分上限 65 分：可以 pass(60) 但不能 auto_buy(80)，
+        确保数据不足的卖家不会触发自动下单，但允许用户手动审查。
+        """
         price_score, price_reasons = self._eval_price(item)
-        # 保守评分上限 40 分
-        total = min(40, int(price_score * 0.4))
+        popularity_score, popularity_reasons = self._eval_popularity(item)
+
+        # 两维度加权：price 60% + popularity 40%
+        weighted = int(price_score * 0.6 + popularity_score * 0.4)
+        # 上限 65：不足以 auto_buy(80)，但可 pass(60)
+        total = min(65, weighted)
+
         return EvalResult(
             score=total,
-            risk_level=RiskLevel.HIGH,
-            dimension_scores={"price": price_score},
-            reject_reasons=["insufficient_seller_data", *price_reasons],
+            risk_level=self._score_to_risk(total),
+            dimension_scores={"price": price_score, "popularity": popularity_score},
+            reject_reasons=["insufficient_seller_data", *price_reasons, *popularity_reasons],
             data_quality="insufficient",
         )
 
@@ -555,3 +568,30 @@ class Evaluator:
             reasons.append("no_image_for_condition")
 
         return max(score, 0), reasons
+
+    # ============== 5. 商品热度（insufficient 模式专用） ==============
+
+    def _eval_popularity(self, item: ItemDetail) -> tuple[int, list[str]]:
+        """商品热度评估（基于想要数 want_cnt）
+
+        want_cnt 来自搜索 API（87% 填充率），是卖家数据缺失时唯一可靠的辅助维度。
+        逻辑：
+        - want_cnt = 0：无人问津，可能有问题 → 扣 30 分
+        - want_cnt 1-5：关注度低 → 扣 10 分
+        - want_cnt 6-49：正常范围 → 不扣分
+        - want_cnt >= 50：受欢迎 → 加 10 分（上限 100）
+        """
+        score = 100
+        reasons: list[str] = []
+
+        if item.want_cnt == 0:
+            score -= 30
+            reasons.append("zero_want_count")
+        elif item.want_cnt <= 5:
+            score -= 10
+            reasons.append(f"low_want_count({item.want_cnt})")
+        elif item.want_cnt >= 50:
+            score = min(100, score + 10)
+            reasons.append(f"high_want_count({item.want_cnt})")
+
+        return max(0, score), reasons

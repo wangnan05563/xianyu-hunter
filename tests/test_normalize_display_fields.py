@@ -319,3 +319,45 @@ def test_seller_nick_is_product_description_cleared() -> None:
         assert corrected.get("seller_nick") != desc, \
             f"商品描述 {desc!r} 不应作为 seller_nick"
 
+
+# 场景 15：seller_nick 是简短城市名，region 是脱敏昵称 → 应交换
+# 复现用户反馈：实时查询时卖家昵称显示"杭州"，地区显示"芯***鱼"（错位）
+# 修复前：_looks_like_nick("杭州")=True → not _looks_like_nick("杭州")=False → 场景 3 不触发
+# 修复后：region 是脱敏昵称且 seller_nick 像地名时强制交换，城市名移到 region 保留
+def test_seller_nick_is_short_city_region_is_masked_nick_swap() -> None:
+    """seller_nick 是简短城市名（如'杭州'），region 是脱敏昵称 → 应交换，城市名移到 region"""
+    for city, nick in [("杭州", "芯***鱼"), ("深圳", "买***家"), ("广州", "数***好")]:
+        display = {
+            "title": "测试商品",
+            "price": 100.0,
+            "seller_nick": city,  # 简短城市名，被 _looks_like_nick 误判为昵称
+            "region": nick,       # 脱敏昵称，一定是昵称
+            "publish_time": None,
+            "seller_credit": "",
+        }
+        corrected, field_map = normalize_display_fields(display)
+        # seller_nick 应被校正为脱敏昵称
+        assert corrected["seller_nick"] == nick, \
+            f"城市名 {city!r} + 脱敏昵称 {nick!r} 时，seller_nick 应为 {nick!r}，但得到 {corrected['seller_nick']!r}"
+        # region 应保留城市名（地名信息移到 region，不丢弃）
+        assert corrected["region"] == city, \
+            f"region 应保留城市名 {city!r}，但得到 {corrected['region']!r}"
+
+
+# 场景 16：seller_nick 是普通昵称，region 是脱敏昵称 → 保持 seller_nick（不交换）
+# 双昵称冗余时，seller_nick 已是有效昵称，无需用 region 覆盖
+def test_seller_nick_normal_region_masked_nick_keep() -> None:
+    """seller_nick 是普通昵称，region 是脱敏昵称 → 保持 seller_nick"""
+    display = {
+        "title": "测试商品",
+        "price": 100.0,
+        "seller_nick": "小明",      # 普通昵称
+        "region": "芯***鱼",       # 脱敏昵称（冗余）
+        "publish_time": None,
+        "seller_credit": "",
+    }
+    corrected, field_map = normalize_display_fields(display)
+    # seller_nick 应保持原值（已是有效昵称）
+    assert corrected["seller_nick"] == "小明", \
+        f"seller_nick 已是普通昵称，应保持，但得到 {corrected['seller_nick']!r}"
+

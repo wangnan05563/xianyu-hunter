@@ -15,7 +15,10 @@ function isPlaceholderUrl(url: string): boolean {
  * 避免一次性加载几十张图片导致的网络拥塞和渲染卡顿。
  * 配合占位符实现平滑过渡。
  *
- * 特殊处理：检测阿里云2x2占位图URL，直接显示占位符而非加载透明像素
+ * 特殊处理：
+ * - 检测阿里云2x2占位图URL，直接显示占位符而非加载透明像素
+ * - src 变化时重置加载状态，避免旧图片状态影响新图片
+ * - onError 处理：图片加载失败时显示错误占位符，不再无限等待
  */
 export default function LazyImage({
   src,
@@ -26,11 +29,19 @@ export default function LazyImage({
   ...rest
 }: ImgHTMLAttributes<HTMLImageElement> & { width?: number | string; height?: number | string }) {
   const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState(false)
   const [inView, setInView] = useState(false)
   const imgRef = useRef<HTMLDivElement>(null)
 
   // 检测占位图URL：如果是2x2占位图，直接显示占位符
   const isPlaceholder = src ? isPlaceholderUrl(src) : false
+
+  // src 变化时重置加载状态：实时搜索返回新数据时，旧图片的 loaded/error
+  // 状态不应影响新图片，否则会出现新图片 opacity:0 永远不显示的问题
+  useEffect(() => {
+    setLoaded(false)
+    setError(false)
+  }, [src])
 
   useEffect(() => {
     const el = imgRef.current
@@ -89,7 +100,7 @@ export default function LazyImage({
         ...style,
       }}
     >
-      {!loaded && (
+      {(!loaded || error) && (
         <div
           style={{
             position: 'absolute',
@@ -101,15 +112,16 @@ export default function LazyImage({
             fontSize: 20,
           }}
         >
-          🖼️
+          {error ? '⚠️' : '🖼️'}
         </div>
       )}
-      {inView && src && (
+      {inView && src && !error && (
         <img
           src={src}
           alt={alt || ''}
           loading="lazy"
           onLoad={() => setLoaded(true)}
+          onError={() => setError(true)}
           style={{
             width: '100%',
             height: '100%',

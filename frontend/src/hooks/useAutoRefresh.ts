@@ -23,6 +23,8 @@ interface AutoRefreshOptions {
   refresh: () => Promise<void>
   /** 是否暂停刷新（如实时搜索模式下不需要刷新 DB） */
   paused?: boolean
+  /** 依赖项：这些值变化时防抖后立即触发一次刷新并重置计时器 */
+  deps?: unknown[]
 }
 
 interface AutoRefreshState {
@@ -50,7 +52,7 @@ interface AutoRefreshState {
  * - 组件卸载时自动清理所有 timer
  */
 export function useAutoRefresh(opts: AutoRefreshOptions) {
-  const { enabled, intervalSec = DEFAULT_INTERVAL, refresh, paused = false } = opts
+  const { enabled, intervalSec = DEFAULT_INTERVAL, refresh, paused = false, deps } = opts
 
   const [state, setState] = useState<AutoRefreshState>({
     lastRefreshAt: null,
@@ -90,7 +92,7 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
     }
   }, [])
 
-  const doRefresh = useCallback(async () => {
+  const doRefresh = useCallback(async (isRetry = false) => {
     if (!enabledRef.current || !mountedRef.current) return
     if (pausedRef.current) {
       // paused 时跳过本次刷新，但仍调度下一次兜底轮询
@@ -98,7 +100,8 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
       return
     }
     // 并发保护：已有刷新在进行中时跳过，避免重复请求
-    if (refreshingRef.current) return
+    // 重试时跳过此检查（isRetry=true），因为锁在重试期间保持以防止其他触发源干扰
+    if (!isRetry && refreshingRef.current) return
 
     refreshingRef.current = true
     setState((s) => ({ ...s, refreshing: true }))
@@ -112,7 +115,8 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
       retryRef.current += 1
       if (retryRef.current <= MAX_RETRIES) {
         const delay = RETRY_BASE_MS * retryRef.current
-        retryTimerRef.current = setTimeout(() => doRefresh(), delay)
+        // 传 isRetry=true 跳过并发锁检查，否则 doRefresh 会被 refreshingRef 挡住永远无法执行
+        retryTimerRef.current = setTimeout(() => doRefresh(true), delay)
         return
       } else {
         retryRef.current = 0
@@ -177,6 +181,22 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
       doRefresh()
     }, DEBOUNCE_MS)
   }, [doRefresh])
+
+  // deps 变化时防抖触发一次立即刷新 + 重置计时器
+  // 用户输入搜索内容时暂停轮询，停止输入 500ms 后恢复轮询
+  useEffect(() => {
+    if (!deps || deps.length === 0) return
+    if (!enabledRef.current || pausedRef.current) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      doRefresh()
+      scheduleNext()
+    }, DEBOUNCE_MS)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
 
   return { ...state, triggerRefresh }
 }

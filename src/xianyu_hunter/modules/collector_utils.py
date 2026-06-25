@@ -67,12 +67,150 @@ _REGION_PATTERN = re.compile(
     r'^(?:北京|天津|上海|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|广东|广西|海南|四川|贵州|云南|西藏|陕西|甘肃|青海|宁夏|新疆|香港|澳门|台湾|内蒙古)'
 )
 
+# 常见城市名（省会城市 + 计划单列市）
+# 闲鱼 API 的 region 经常是简短城市名（如"杭州"、"深圳"），不带行政区划后缀，
+# 但确实是地名，不应被误判为昵称。维护此列表以补充 _REGION_PATTERN 的不足。
+_COMMON_CITIES = {
+    # 直辖市
+    "北京", "天津", "上海", "重庆",
+    # 省会城市
+    "石家庄", "太原", "沈阳", "长春", "哈尔滨", "南京", "杭州", "合肥", "福州", "南昌",
+    "济南", "郑州", "武汉", "长沙", "广州", "海口", "成都", "贵阳", "昆明", "拉萨",
+    "西安", "兰州", "西宁", "银川", "乌鲁木齐", "南宁", "呼和浩特",
+    # 计划单列市
+    "深圳", "大连", "青岛", "宁波", "厦门",
+}
+
 
 def is_region_like(text: str) -> bool:
-    """判断文本是否像中国地名（省份/直辖市开头或含行政区划后缀）"""
+    """判断文本是否像中国地名（省份/直辖市开头或含行政区划后缀，或常见城市名）"""
     if not text:
         return False
+    if text in _COMMON_CITIES:
+        return True
     return bool(_REGION_PATTERN.match(text))
+
+
+# 常见品牌别名：用于两类兜底
+# 1. 搜索 API 没有独立 brand 字段时，从标题推断品牌
+# 2. API 把品牌/店铺标签误放进 seller_nick，且 region 是脱敏昵称时识别错位
+_BRAND_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("SK海力士", ("sk海力士", "海力士", "hynix", "skhynix", "现代海力士")),
+    ("镁光", ("镁光", "美光", "micron")),
+    ("英睿达", ("英睿达", "crucial")),
+    ("三星", ("三星", "samsung")),
+    ("联想", ("联想", "lenovo", "thinkpad", "thinkplus")),
+    ("记忆科技", ("记忆科技", "ramaxel")),
+    ("金士顿", ("金士顿", "kingston")),
+    ("威刚", ("威刚", "adata")),
+    ("光威", ("光威", "gloway")),
+    ("亿捷", ("亿捷", "eaget")),
+    ("全兴", ("全兴",)),
+    ("苹果", ("苹果", "apple", "iphone", "ipad", "macbook")),
+    ("任天堂", ("任天堂", "nintendo", "switch")),
+    ("索尼", ("索尼", "sony")),
+    ("华为", ("华为", "huawei")),
+    ("小米", ("小米", "xiaomi", "redmi")),
+    ("戴尔", ("戴尔", "dell")),
+    ("惠普", ("惠普", "hp")),
+    ("华硕", ("华硕", "asus")),
+    ("宏碁", ("宏碁", "acer")),
+)
+
+_BRAND_GENERIC_SUFFIXES = (
+    "官方旗舰店", "旗舰店", "专卖店", "专营店", "官方店", "官方",
+    "数码优品", "数码", "优品", "严选", "正品", "科技", "电子",
+    "电脑", "手机", "配件", "小店", "店铺", "店",
+)
+
+
+def _compact_text(text: str) -> str:
+    """压缩文本用于宽松匹配：去掉空白/常见分隔符并转小写。"""
+    return re.sub(r"[\s\-_·•/|,，.。:：;；()（）【】\[\]{}]+", "", (text or "").lower())
+
+
+def _strip_brand_suffix(value: str) -> str:
+    candidate = (value or "").strip()
+    for suffix in _BRAND_GENERIC_SUFFIXES:
+        if candidate.endswith(suffix) and len(candidate) > len(suffix):
+            candidate = candidate[: -len(suffix)].strip()
+            break
+    return candidate
+
+
+def _brand_candidate_matches_title(candidate: str, title: str) -> bool:
+    """判断候选文本是否更像商品品牌，而不是卖家昵称。"""
+    candidate = (candidate or "").strip()
+    title = (title or "").strip()
+    if not candidate or not title:
+        return False
+    if is_region_like(candidate) or _MASKED_NICK_PATTERN.match(candidate):
+        return False
+
+    compact_title = _compact_text(title)
+    compact_candidate = _compact_text(_strip_brand_suffix(candidate) or candidate)
+    if len(compact_candidate) >= 2 and compact_candidate in compact_title:
+        return True
+
+    compact_raw_candidate = _compact_text(candidate)
+    for _canonical, aliases in _BRAND_ALIASES:
+        alias_hits_candidate = any(_compact_text(a) in compact_raw_candidate for a in aliases)
+        alias_hits_title = any(_compact_text(a) in compact_title for a in aliases)
+        if alias_hits_candidate and alias_hits_title:
+            return True
+    return False
+
+
+def infer_brand_from_title(title: str) -> str:
+    """从标题中推断常见品牌；无命中时返回空字符串。"""
+    compact_title = _compact_text(title)
+    if not compact_title:
+        return ""
+    for canonical, aliases in _BRAND_ALIASES:
+        if any(_compact_text(alias) in compact_title for alias in aliases):
+            return canonical
+    return ""
+
+
+def _find_first_text_by_keys(obj: Any, keys: set[str], depth: int = 0, max_depth: int = 3) -> str:
+    if depth > max_depth:
+        return ""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+            if normalized_key in keys and isinstance(value, str) and value.strip():
+                return value.strip()
+        for value in obj.values():
+            found = _find_first_text_by_keys(value, keys, depth + 1, max_depth)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for value in obj[:20]:
+            found = _find_first_text_by_keys(value, keys, depth + 1, max_depth)
+            if found:
+                return found
+    return ""
+
+
+def extract_brand(raw: dict | None, title: str = "", seller_candidate: str = "") -> str:
+    """提取商品品牌。
+
+    优先读取搜索 API 的品牌字段；没有稳定字段时，从标题和 seller_candidate
+    做保守推断。seller_candidate 只有在它明显出现在标题/品牌别名里时才会被当作品牌，
+    避免把普通卖家昵称误标为品牌。
+    """
+    brand_keys = {
+        "brand", "brandname", "brandtext", "brandtitle", "brandvalue",
+        "branddesc", "manufacturer", "maker",
+    }
+    raw_brand = _find_first_text_by_keys(raw or {}, brand_keys)
+    if raw_brand and raw_brand not in {"其他", "其它", "other", "OTHER"}:
+        return raw_brand
+
+    if _brand_candidate_matches_title(seller_candidate, title):
+        return seller_candidate.strip()
+
+    return infer_brand_from_title(title)
 
 
 def extract_seller_nick(raw: dict) -> tuple[str, str]:
@@ -105,12 +243,24 @@ def extract_seller_nick(raw: dict) -> tuple[str, str]:
             nick = raw_region.strip()
             raw_region = ""
 
-    # 场景 2：nick 不为空但看起来不像昵称（时间描述/价格/标签），
+    # 场景 2：nick 不为空但看起来不像昵称（时间描述/价格/标签/地名），
     # 且 region 看起来像昵称 → 交换两者
-    # 不依赖 _looks_like_nick 的绝对判断，而是双向校验：
-    # - nick 命中"非昵称"关键词 + region 不像地名 + 长度看起来像昵称 → 交换
+    # 修复：region 是脱敏昵称（如"芯***鱼"）时，一定是昵称
+    # 但只有当 nick 明显不是昵称时才交换：
+    # - nick 像地名（如"杭州"、"浙江杭州"）
+    # - nick 像时间/价格/标签（如"一周内发布"、"¥699"、"包邮"）
+    # 例外：nick 也是脱敏昵称时，视为数据冗余，不交换（两个都是昵称）
+    # 之前的判断条件 `_looks_like_publish_label(nick)` 过于严格：
+    # "杭州"等简短城市名不会命中发布标签关键词，导致 nick="杭州" + region="芯***鱼" 不交换
     if nick and raw_region:
-        if _looks_like_publish_label(nick) and not is_region_like(raw_region) and _looks_like_nick(raw_region):
+        region_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(raw_region))
+        nick_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(nick))
+        nick_is_non_nick = is_region_like(nick) or _looks_like_publish_label(nick)
+        should_swap = (
+            (region_is_masked_nick and not nick_is_masked_nick and nick_is_non_nick)
+            or (_looks_like_publish_label(nick) and not is_region_like(raw_region) and _looks_like_nick(raw_region))
+        )
+        if should_swap:
             nick, raw_region = raw_region, nick
 
     return nick, raw_region
@@ -193,6 +343,7 @@ def _looks_like_publish_time(text: str) -> bool:
 FIELD_METADATA: dict[str, dict[str, Any]] = {
     "thumb_url": {"label": "图片", "type": "image", "width": 80},
     "title": {"label": "标题", "type": "link", "width": None},
+    "brand": {"label": "品牌", "type": "text", "width": 100},
     "price": {"label": "价格", "type": "price", "width": 100},
     "seller_nick": {"label": "卖家", "type": "seller", "width": 140},
     "seller_credit": {"label": "信用", "type": "tag", "color": "green", "width": 80},
@@ -230,10 +381,29 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
         return {}, {}
 
     corrected = dict(display)
+    title = str(corrected.get("title", "") or "").strip()
+    brand = str(corrected.get("brand", "") or "").strip()
     seller_nick = str(corrected.get("seller_nick", "") or "").strip()
     region = str(corrected.get("region", "") or "").strip()
     publish_time = str(corrected.get("publish_time", "") or "").strip()
     seller_credit = str(corrected.get("seller_credit", "") or "").strip()
+
+    if not brand:
+        brand = extract_brand(None, title, seller_candidate=seller_nick)
+
+    # 场景 0：seller_nick 实际是品牌/店铺标签，region 是脱敏卖家昵称。
+    # 近期实时搜索可见：seller_nick="镁光数码"/"现代海力士"，region="牧***蓉"/"行***三"。
+    # 这种情况下把 seller_nick 移到 brand，region 移到 seller_nick，真实地区未知则留空。
+    if (
+        seller_nick
+        and region
+        and _MASKED_NICK_PATTERN.match(region)
+        and not _MASKED_NICK_PATTERN.match(seller_nick)
+        and _brand_candidate_matches_title(seller_nick, title)
+    ):
+        brand = brand or seller_nick
+        seller_nick = region
+        region = ""
 
     # 场景 1：seller_nick 像信用度描述，且 seller_credit 为空 → 移动到 seller_credit
     if seller_nick and not seller_credit and _looks_like_credit(seller_nick):
@@ -246,18 +416,45 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
         seller_nick = ""
 
     # 场景 3：seller_nick 不像昵称，且 region 像昵称 → 交换
+    # 修复：region 是脱敏昵称（如"芯***鱼"）时，一定是昵称
+    # 但只有当 seller_nick 明显不是昵称时才交换：
+    # - seller_nick 像地名（如"杭州"、"浙江杭州"）
+    # - seller_nick 像时间/信用/价格/标签/商品描述
+    # 例外：seller_nick 也是脱敏昵称时，视为数据冗余，不交换（两个都是昵称）
+    # 之前的判断条件 `not _looks_like_nick(seller_nick)` 过于宽松：
+    # "杭州"等简短城市名会被 _looks_like_nick 误判为昵称（2-20 字符且无非昵称关键词），
+    # 导致 seller_nick="杭州" + region="芯***鱼" 时不会交换，前端显示错位
     if seller_nick and region:
-        if not _looks_like_nick(seller_nick) and _looks_like_nick(region):
-            # 进一步校验：seller_nick 是否像时间/信用/价格
-            if _looks_like_publish_time(seller_nick) or _looks_like_credit(seller_nick) or _NON_NICK_PATTERN.search(seller_nick):
-                # 如果 seller_nick 像时间且 publish_time 为空，移到 publish_time
-                if _looks_like_publish_time(seller_nick) and not publish_time:
-                    publish_time = seller_nick
-                # 如果 seller_nick 像信用且 seller_credit 为空，移到 seller_credit
-                elif _looks_like_credit(seller_nick) and not seller_credit:
-                    seller_credit = seller_nick
-                seller_nick = region
-                region = ""
+        region_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(region))
+        seller_nick_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(seller_nick))
+        # 判断 seller_nick 是否明显不是昵称
+        seller_nick_is_non_nick = (
+            is_region_like(seller_nick)
+            or _looks_like_publish_time(seller_nick)
+            or _looks_like_credit(seller_nick)
+            or bool(_NON_NICK_PATTERN.search(seller_nick))
+        )
+        # region 是脱敏昵称且 seller_nick 明显不是昵称 → 强制交换
+        # 或 seller_nick 不像昵称且 region 像昵称 → 交换（原逻辑）
+        should_swap = (
+            (region_is_masked_nick and not seller_nick_is_masked_nick and seller_nick_is_non_nick)
+            or (not _looks_like_nick(seller_nick) and _looks_like_nick(region))
+        )
+        if should_swap:
+            # 交换时，seller_nick 的原始值移到合适的字段
+            old_seller_nick = seller_nick
+            seller_nick = region
+            region = ""
+            # 如果 old_seller_nick 像时间且 publish_time 为空，移到 publish_time
+            if _looks_like_publish_time(old_seller_nick) and not publish_time:
+                publish_time = old_seller_nick
+            # 如果 old_seller_nick 像信用且 seller_credit 为空，移到 seller_credit
+            elif _looks_like_credit(old_seller_nick) and not seller_credit:
+                seller_credit = old_seller_nick
+            # 如果 old_seller_nick 像地名，移到 region（保留地名信息）
+            elif is_region_like(old_seller_nick):
+                region = old_seller_nick
+            # 否则丢弃（old_seller_nick 是非昵称关键词，如"几乎全新"）
 
     # 场景 4：seller_nick 为空，且 region 是脱敏昵称 → 把 region 当 seller_nick
     # 只在 region 明显是脱敏昵称（如"芯***鱼"）时才交换，避免误伤简短城市名（如"杭州"、"深圳"）
@@ -288,6 +485,7 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
     corrected["region"] = region
     corrected["publish_time"] = publish_time or None
     corrected["seller_credit"] = seller_credit
+    corrected["brand"] = brand
 
     # 构建字段元数据：只包含实际有值的字段
     field_map: dict[str, dict[str, Any]] = {}

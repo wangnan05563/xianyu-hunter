@@ -19,6 +19,7 @@ import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import dayjs from 'dayjs'
 import { useConfigStore } from '../../../stores/configStore'
+import { extractApiError } from '../../../utils/apiError'
 import type { DiffChange } from '../../../stores/configStore'
 import api from '../../../api/client'
 import type { AppConfig } from '../../../api'
@@ -127,8 +128,8 @@ export default function NotifierChannels() {
       }
       setDiffChanges(changes)
       setDiffModalOpen(true)
-    } catch {
-      message.error('预览失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setLoading(false)
     }
@@ -140,8 +141,8 @@ export default function NotifierChannels() {
       await confirmSave()
       setDiffModalOpen(false)
       message.success('通知配置已保存')
-    } catch {
-      message.error('保存失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setLoading(false)
     }

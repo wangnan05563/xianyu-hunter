@@ -18,6 +18,7 @@ import {
 } from 'antd'
 import { SaveOutlined, UndoOutlined, SearchOutlined } from '@ant-design/icons'
 import { useConfigStore } from '../../stores/configStore'
+import { extractApiError } from '../../utils/apiError'
 import type { DiffChange } from '../../stores/configStore'
 import TagEditor from '../../components/editors/TagEditor'
 
@@ -141,8 +142,8 @@ export default function SearchConfig() {
       await confirmSave()
       setDiffModalOpen(false)
       message.success('搜索参数配置已保存')
-    } catch {
-      message.error('保存失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setSaving(false)
     }

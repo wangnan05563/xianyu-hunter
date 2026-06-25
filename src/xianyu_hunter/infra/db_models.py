@@ -221,6 +221,9 @@ class TaskLinkRow(Base):
         Index("ix_task_links_type_key", "link_type", "link_key"),
         # refresh_links 按 task_id + source='auto' 批量删除，复合索引避免全表扫描
         Index("ix_task_links_task_source", "task_id", "source"),
+        # 商品列表查询核心索引：list_and_count_task_links 按 task_id+link_type 过滤并按 created_at 降序排序，
+        # 三元组复合索引使查询走 covering index scan，避免临时 B-Tree 排序
+        Index("ix_task_links_task_type_created", "task_id", "link_type", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -360,6 +363,20 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     _migrate_add_column(engine, "tasks", "max_publish_days", "INTEGER")
     # 增量迁移：为 task_links 添加 task_id+source 复合索引（refresh_links 批量删除用）
     _migrate_create_index(engine, "task_links", "ix_task_links_task_source", "task_id, source")
+
+    # 性能优化：补建 items 表缺失的索引
+    # 为什么需要：Base.metadata.create_all 只对新建表生效，已有数据库不会自动补建索引。
+    # 实测发现 items 表只有主键索引，导致 list_items_by_seller / list_items 全表扫描。
+    _migrate_create_index(engine, "items", "ix_items_task_first_seen", "task_id, first_seen")
+    _migrate_create_index(engine, "items", "ix_items_seller", "seller_id")
+    _migrate_create_index(engine, "items", "ix_items_publish_time", "publish_time")
+
+    # 性能优化：补建 task_links 缺失的复合索引
+    # ix_task_links_type_key：lookup_task_links 反查使用 (link_type, link_key)
+    _migrate_create_index(engine, "task_links", "ix_task_links_type_key", "link_type, link_key")
+    # ix_task_links_task_type_created：list_and_count_task_links 核心查询路径使用
+    # 覆盖 (task_id, link_type, created_at) 三元组，避免 ORDER BY 临时 B-Tree 排序
+    _migrate_create_index(engine, "task_links", "ix_task_links_task_type_created", "task_id, link_type, created_at")
 
 
 def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) -> None:

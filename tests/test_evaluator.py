@@ -45,6 +45,7 @@ def make_item(
     title: str = "iPhone 13",
     description: str = "",
     image_urls: list[str] | None = None,
+    want_cnt: int = 0,
 ) -> ItemDetail:
     # 默认提供 1 张图片，避免无图扣分干扰维度测试
     return ItemDetail(
@@ -54,6 +55,7 @@ def make_item(
         seller_id="u1",
         description=description,
         image_urls=image_urls if image_urls is not None else ["https://example.com/1.jpg"],
+        want_cnt=want_cnt,
     )
 
 
@@ -299,14 +301,63 @@ def test_partial_quality_score_has_variance() -> None:
 
 
 def test_insufficient_quality_empty_seller() -> None:
-    """insufficient 质量：卖家数据全空 → 仅价格保守评分"""
+    """insufficient 质量：卖家数据全空 → 价格+热度保守评分（上限 65）"""
     ev = Evaluator()
     seller = SellerProfile(id="empty", on_sale_count=0, credit_score=None, register_days=0)
     result = ev.evaluate(make_item(price=100), seller)
     assert result.data_quality == "insufficient"
-    assert result.score <= 40
+    # 上限 65：可 pass(60) 但不可 auto_buy(80)
+    assert result.score <= 65
     assert "price" in result.dimension_scores
+    assert "popularity" in result.dimension_scores
     assert "insufficient_seller_data" in result.reject_reasons
+
+
+def test_insufficient_zero_want_count_penalty() -> None:
+    """insufficient 模式：want_cnt=0 → 热度扣 30 分"""
+    ev = Evaluator()
+    seller = SellerProfile(id="empty", on_sale_count=0, credit_score=None, register_days=0)
+    result = ev.evaluate(make_item(price=100, want_cnt=0), seller)
+    assert result.dimension_scores["popularity"] == 70
+    assert any("zero_want_count" in r for r in result.reject_reasons)
+
+
+def test_insufficient_low_want_count_penalty() -> None:
+    """insufficient 模式：want_cnt=1-5 → 热度扣 10 分"""
+    ev = Evaluator()
+    seller = SellerProfile(id="empty", on_sale_count=0, credit_score=None, register_days=0)
+    result = ev.evaluate(make_item(price=100, want_cnt=3), seller)
+    assert result.dimension_scores["popularity"] == 90
+    assert any("low_want_count" in r for r in result.reject_reasons)
+
+
+def test_insufficient_normal_want_count_no_penalty() -> None:
+    """insufficient 模式：want_cnt=6-49 → 热度不扣分"""
+    ev = Evaluator()
+    seller = SellerProfile(id="empty", on_sale_count=0, credit_score=None, register_days=0)
+    result = ev.evaluate(make_item(price=100, want_cnt=20), seller)
+    assert result.dimension_scores["popularity"] == 100
+    assert not any("want_count" in r for r in result.reject_reasons)
+
+
+def test_insufficient_high_want_count_bonus() -> None:
+    """insufficient 模式：want_cnt>=50 → 热度加 10 分"""
+    ev = Evaluator()
+    seller = SellerProfile(id="empty", on_sale_count=0, credit_score=None, register_days=0)
+    result = ev.evaluate(make_item(price=100, want_cnt=50), seller)
+    assert result.dimension_scores["popularity"] == 100
+    assert any("high_want_count" in r for r in result.reject_reasons)
+
+
+def test_insufficient_can_pass_but_not_auto_buy() -> None:
+    """insufficient 模式：高分场景可 pass(60) 但不可 auto_buy(80)"""
+    ev = Evaluator()
+    seller = SellerProfile(id="empty", on_sale_count=0, credit_score=None, register_days=0)
+    # 正常价格 + 高热度 → 应可 pass 但不可 auto_buy
+    result = ev.evaluate(make_item(price=2000, want_cnt=50), seller)
+    assert result.score <= 65, f"insufficient 模式上限 65，实际 {result.score}"
+    assert result.score >= 60, f"高分场景应可 pass，实际 {result.score}"
+    assert not result.is_auto_buy, "insufficient 模式不应触发自动下单"
 
 
 # ============== P0: 价格维度增强 ==============

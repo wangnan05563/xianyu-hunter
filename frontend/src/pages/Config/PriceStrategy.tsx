@@ -3,6 +3,7 @@ import { Card, Switch, Slider, InputNumber, Row, Col, Button, Space, message, Di
 import { SaveOutlined, ExperimentOutlined } from '@ant-design/icons'
 import ReactECharts, { type EChartRef } from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
+import { extractApiError } from '../../utils/apiError'
 import type { DiffChange } from '../../stores/configStore'
 import { priceApi } from '../../api'
 import {
@@ -91,8 +92,8 @@ export default function PriceStrategy() {
       }
       setDiffChanges(changes)
       setDiffModalOpen(true)
-    } catch {
-      message.error('预览失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setSaving(false)
     }
@@ -104,8 +105,8 @@ export default function PriceStrategy() {
       await confirmSave()
       setDiffModalOpen(false)
       message.success('价格策略已保存')
-    } catch {
-      message.error('保存失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setSaving(false)
     }

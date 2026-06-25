@@ -3,6 +3,7 @@ import { Card, Slider, InputNumber, Row, Col, Button, Space, message, Divider, T
 import { SaveOutlined, UndoOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import ReactECharts from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
+import { extractApiError } from '../../utils/apiError'
 import type { DiffChange } from '../../stores/configStore'
 import { evalApi } from '../../api'
 import TagEditor from '../../components/editors/TagEditor'
@@ -216,8 +217,8 @@ export default function EvalRules() {
       }
       setDiffChanges(changes)
       setDiffModalOpen(true)
-    } catch {
-      message.error('预览失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setSaving(false)
     }
@@ -229,8 +230,8 @@ export default function EvalRules() {
       await confirmSave()
       setDiffModalOpen(false)
       message.success('评估规则已保存')
-    } catch {
-      message.error('保存失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setSaving(false)
     }

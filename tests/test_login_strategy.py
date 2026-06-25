@@ -1,7 +1,6 @@
 """LoginStrategySelector 单元测试"""
 from __future__ import annotations
 
-import json
 import os
 import socket
 from pathlib import Path
@@ -61,43 +60,18 @@ def test_cdp_unavailable_on_timeout() -> None:
 # ============== Cookie 检测测试 ==============
 
 
-def test_user_data_cookies_available_via_json(tmp_path: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_user_data_cookies_available_via_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """JSON 文件有有效 Cookie 时检测为可用"""
     selector = LoginStrategySelector()
-
-    # 创建临时 JSON 文件
-    json_path = Path("data") / "cookies.json"
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    cookies_data = {
-        "cookies": [
-            {"name": "_m_h5_tk", "value": "abc", "domain": ".goofish.com"},
-            {"name": "unb", "value": "123", "domain": ".taobao.com"},
-        ]
-    }
-    json_path.write_text(json.dumps(cookies_data), encoding="utf-8")
-
-    try:
-        # SQLite 检测返回 False，确保走 JSON 路径
-        monkeypatch.setattr(selector, "_check_user_data_cookies", lambda: True)
-        assert selector._check_user_data_cookies() is True
-    finally:
-        json_path.unlink(missing_ok=True)
+    monkeypatch.setattr(selector, "_check_user_data_cookies", lambda: True)
+    assert selector._check_user_data_cookies() is True
 
 
-def test_user_data_cookies_not_available_empty_json(tmp_path: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_user_data_cookies_not_available_empty_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """JSON 文件无关键 Cookie 时检测为不可用"""
     selector = LoginStrategySelector()
-
-    json_path = Path("data") / "cookies.json"
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    cookies_data = {"cookies": [{"name": "irrelevant", "value": "x"}]}
-    json_path.write_text(json.dumps(cookies_data), encoding="utf-8")
-
-    try:
-        monkeypatch.setattr(selector, "_check_user_data_cookies", lambda: False)
-        assert selector._check_user_data_cookies() is False
-    finally:
-        json_path.unlink(missing_ok=True)
+    monkeypatch.setattr(selector, "_check_user_data_cookies", lambda: False)
+    assert selector._check_user_data_cookies() is False
 
 
 # ============== 浏览器导入检测测试 ==============

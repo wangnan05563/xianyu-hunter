@@ -9,9 +9,9 @@ browser:
   user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0
 antidetect:
-  qps: 15
-  min_delay_ms: 4000
-  max_delay_ms: 6000
+  qps: 20
+  min_delay_ms: 3000
+  max_delay_ms: 4500
   fail_pause_threshold: 3
   fail_window_sec: 3600
 waf:
@@ -55,7 +55,7 @@ eval:
     on_sale_count: 30
     post_count_30d: 15
     top_category_ratio: 0.8
-    credit_score_min: 600
+    credit_score_min: 60
     bad_review_max: 3
     register_days_min: 30
   professional_keywords:
@@ -70,7 +70,7 @@ eval:
   - 现货
   - 大量有货
   pass_score: 60
-  auto_buy_score: 79
+  auto_buy_score: 75
   ai_auto_eval: false
   ai_auto_deep_analyze: false
 serverchan_send_key: ''

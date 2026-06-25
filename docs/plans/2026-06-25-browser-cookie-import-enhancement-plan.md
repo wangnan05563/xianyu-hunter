@@ -1,0 +1,1448 @@
+# 浏览器 Cookie 导入功能完善 - 实施计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 完善 browser_import 模块，支持 v20 加密（CDP 方式）、多 Profile 遍历、定时自动同步，并补齐测试覆盖。
+
+**Architecture:** 新增 3 个模块（browser_profile.py / browser_import_cdp.py / cookie_sync_scheduler.py），修改 browser_import.py 增加 v20 检测委托，复用现有 CookieStore 写入逻辑。定时同步使用 APScheduler 独立调度，不干扰现有任务调度系统。
+
+**Tech Stack:** Python 3.14、FastAPI、Playwright（connect_over_cdp）、APScheduler、pytest、SQLite
+
+**关联设计文档:** [2026-06-25-browser-cookie-import-enhancement-design.md](file:///d:/code/otherProjects/17_xianyu/docs/plans/2026-06-25-browser-cookie-import-enhancement-design.md)
+
+---
+
+## 文件结构
+
+| 操作 | 文件路径 | 职责 |
+|---|---|---|
+| 新增 | `src/xianyu_hunter/web/services/browser_profile.py` | Profile 发现与遍历 |
+| 新增 | `src/xianyu_hunter/web/routes/browser_import_cdp.py` | CDP 在线导入 |
+| 新增 | `src/xianyu_hunter/modules/cookie_sync_scheduler.py` | 定时同步调度 |
+| 修改 | `src/xianyu_hunter/web/routes/browser_import.py` | v20 检测委托 + 多 Profile 集成 |
+| 修改 | `src/xianyu_hunter/web/routes/api_auth.py` | 注册 CDP 路由 |
+| 修改 | `src/xianyu_hunter/infra/yaml_config.py` | 新增 auto_sync 配置项 |
+| 修改 | `src/xianyu_hunter/web/startup.py` | 启动定时同步 |
+| 新增 | `scripts/start_edge_debug.ps1` | 一键启动调试 Edge |
+| 新增 | `tests/test_browser_profile.py` | Profile 发现测试 |
+| 新增 | `tests/test_browser_import_cdp.py` | CDP 导入测试 |
+| 新增 | `tests/test_cookie_sync_scheduler.py` | 调度测试 |
+| 新增 | `tests/test_browser_import.py` | 离线导入测试 |
+
+---
+
+### Task 1: browser_profile.py - Profile 发现模块
+
+**Files:**
+- Create: `src/xianyu_hunter/web/services/browser_profile.py`
+- Test: `tests/test_browser_profile.py`
+
+- [ ] **Step 1: 编写 Profile 发现的失败测试**
+
+创建 `tests/test_browser_profile.py`：
+
+```python
+"""browser_profile 模块单元测试"""
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from xianyu_hunter.web.services.browser_profile import (
+    BrowserProfile,
+    discover_profiles,
+)
+
+
+def _create_cookie_db(db_path: Path, has_xianyu: bool = True) -> None:
+    """创建测试用的 Cookie 数据库"""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE cookies (
+            host_key TEXT, name TEXT, encrypted_value BLOB,
+            value TEXT, path TEXT, expires_utc INTEGER,
+            is_secure INTEGER, is_httponly INTEGER
+        )
+    """)
+    if has_xianyu:
+        conn.execute(
+            "INSERT INTO cookies (host_key, name) VALUES ('.goofish.com', '_m_h5_tk')"
+        )
+    else:
+        conn.execute(
+            "INSERT INTO cookies (host_key, name) VALUES ('.example.com', 'other')"
+        )
+    conn.commit()
+    conn.close()
+
+
+def _create_local_state(user_data_dir: Path, profiles: list[str]) -> None:
+    """创建测试用的 Local State 文件"""
+    user_data_dir.mkdir(parents=True, exist_ok=True)
+    info_cache = {p: {"name": p} for p in profiles}
+    (user_data_dir / "Local State").write_text(
+        json.dumps({"profile": {"info_cache": info_cache}}), encoding="utf-8"
+    )
+
+
+def test_discover_profiles_default_only(tmp_path: Path):
+    """只有 Default 目录时能正确发现"""
+    user_data = tmp_path / "Edge" / "User Data"
+    _create_local_state(user_data, ["Default"])
+    _create_cookie_db(user_data / "Default" / "Network" / "Cookies", has_xianyu=True)
+
+    with patch.dict("os.environ", {"LOCALAPPDATA": str(tmp_path / "Edge")}):
+        profiles = discover_profiles("edge")
+
+    assert len(profiles) == 1
+    assert profiles[0].name == "Default"
+    assert profiles[0].has_xianyu_cookie is True
+
+
+def test_discover_profiles_multiple(tmp_path: Path):
+    """Default + Profile 1/2 都能被发现"""
+    user_data = tmp_path / "Edge" / "User Data"
+    _create_local_state(user_data, ["Default", "Profile 1", "Profile 2"])
+    _create_cookie_db(user_data / "Default" / "Network" / "Cookies", has_xianyu=False)
+    _create_cookie_db(user_data / "Profile 1" / "Network" / "Cookies", has_xianyu=True)
+    _create_cookie_db(user_data / "Profile 2" / "Network" / "Cookies", has_xianyu=False)
+
+    with patch.dict("os.environ", {"LOCALAPPDATA": str(tmp_path / "Edge")}):
+        profiles = discover_profiles("edge")
+
+    assert len(profiles) == 3
+    names = [p.name for p in profiles]
+    assert "Default" in names
+    assert "Profile 1" in names
+    assert "Profile 2" in names
+
+
+def test_discover_profiles_priority(tmp_path: Path):
+    """含闲鱼 Cookie 的 Profile 排在前"""
+    user_data = tmp_path / "Edge" / "User Data"
+    _create_local_state(user_data, ["Default", "Profile 1"])
+    _create_cookie_db(user_data / "Default" / "Network" / "Cookies", has_xianyu=False)
+    _create_cookie_db(user_data / "Profile 1" / "Network" / "Cookies", has_xianyu=True)
+
+    with patch.dict("os.environ", {"LOCALAPPDATA": str(tmp_path / "Edge")}):
+        profiles = discover_profiles("edge")
+
+    # Profile 1 含闲鱼 Cookie，应排在前
+    assert profiles[0].name == "Profile 1"
+    assert profiles[0].has_xianyu_cookie is True
+    assert profiles[1].name == "Default"
+    assert profiles[1].has_xianyu_cookie is False
+
+
+def test_discover_profiles_no_xianyu(tmp_path: Path):
+    """无闲鱼 Cookie 的 Profile 也返回，但 has_xianyu_cookie 为 False"""
+    user_data = tmp_path / "Edge" / "User Data"
+    _create_local_state(user_data, ["Default"])
+    _create_cookie_db(user_data / "Default" / "Network" / "Cookies", has_xianyu=False)
+
+    with patch.dict("os.environ", {"LOCALAPPDATA": str(tmp_path / "Edge")}):
+        profiles = discover_profiles("edge")
+
+    assert len(profiles) == 1
+    assert profiles[0].has_xianyu_cookie is False
+
+
+def test_discover_profiles_fallback_scan(tmp_path: Path):
+    """Local State 无 info_cache 时，兜底扫描目录"""
+    user_data = tmp_path / "Edge" / "User Data"
+    user_data.mkdir(parents=True)
+    # 不写 Local State，只创建目录
+    _create_cookie_db(user_data / "Default" / "Network" / "Cookies", has_xianyu=True)
+
+    with patch.dict("os.environ", {"LOCALAPPDATA": str(tmp_path / "Edge")}):
+        profiles = discover_profiles("edge")
+
+    assert len(profiles) >= 1
+    assert any(p.name == "Default" for p in profiles)
+```
+
+- [ ] **Step 2: 运行测试验证失败**
+
+Run: `python -m pytest tests/test_browser_profile.py -v`
+Expected: FAIL with `ModuleNotFoundError: No module named 'xianyu_hunter.web.services.browser_profile'`
+
+- [ ] **Step 3: 实现 browser_profile.py**
+
+创建 `src/xianyu_hunter/web/services/browser_profile.py`：
+
+```python
+"""浏览器 Profile 发现与遍历
+
+职责：发现浏览器所有 Profile，找出含闲鱼 Cookie 的 Profile。
+不做解密，只做检测（查询 _m_h5_tk 是否存在）。
+
+优先级排序：
+1. 含闲鱼 Cookie 的 Profile 排在前
+2. 同等条件下 Default 排在前
+3. 其余按 Profile N 数字升序
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# 浏览器 User Data 根目录映射
+_BROWSER_USER_DATA = {
+    "edge": lambda lad: Path(lad) / "Microsoft" / "Edge" / "User Data",
+    "chrome": lambda lad: Path(lad) / "Google" / "Chrome" / "User Data",
+}
+
+# 闲鱼关键 Cookie 名称（用于检测 Profile 是否登录过闲鱼）
+_XIANYU_COOKIE_NAMES = {"_m_h5_tk", "_m_h5_tk_enc", "unb", "sgcookie", "cookie2"}
+
+# Profile 目录名匹配（Default 或 Profile N）
+_PROFILE_PATTERN = re.compile(r"^(Default|Profile\s+\d+)$")
+
+
+@dataclass
+class BrowserProfile:
+    """浏览器单个 Profile 的元信息"""
+    name: str           # "Default" / "Profile 1" / "Profile 2"
+    user_data_dir: Path # User Data 根目录
+    cookies_db: Path    # .../Default|Profile N/Network/Cookies
+    local_state: Path   # .../Local State（AES 密钥）
+    has_xianyu_cookie: bool  # 是否含 _m_h5_tk 等闲鱼 Cookie
+
+
+def discover_profiles(browser: str) -> list[BrowserProfile]:
+    """遍历 User Data 下所有 Profile 目录
+
+    Args:
+        browser: "edge" 或 "chrome"
+
+    Returns:
+        按优先级排序的 Profile 列表（含闲鱼 Cookie 的在前）
+    """
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if not local_app_data:
+        return []
+
+    user_data_dir = _BROWSER_USER_DATA.get(browser.lower(), lambda _: None)(local_app_data)
+    if not user_data_dir or not user_data_dir.exists():
+        return []
+
+    local_state = user_data_dir / "Local State"
+    profile_names = _read_profile_names(local_state)
+
+    # 兜底：Local State 无 info_cache 时扫描目录
+    if not profile_names:
+        profile_names = _scan_profile_dirs(user_data_dir)
+
+    profiles: list[BrowserProfile] = []
+    for name in profile_names:
+        profile_dir = user_data_dir / name
+        cookies_db = profile_dir / "Network" / "Cookies"
+        if not cookies_db.exists():
+            continue
+        has_xianyu = _check_xianyu_cookie(cookies_db)
+        profiles.append(BrowserProfile(
+            name=name,
+            user_data_dir=user_data_dir,
+            cookies_db=cookies_db,
+            local_state=local_state,
+            has_xianyu_cookie=has_xianyu,
+        ))
+
+    # 排序：含闲鱼 Cookie 的在前，Default 次之，其余按名称
+    profiles.sort(key=lambda p: (
+        not p.has_xianyu_cookie,  # False(含闲鱼) 排前
+        p.name != "Default",      # Default 排前
+        p.name,                   # 其余按名称
+    ))
+    return profiles
+
+
+def _read_profile_names(local_state: Path) -> list[str]:
+    """从 Local State 的 profile.info_cache 读取 Profile 名称"""
+    if not local_state.exists():
+        return []
+    try:
+        data = json.loads(local_state.read_text(encoding="utf-8"))
+        info_cache = data.get("profile", {}).get("info_cache", {})
+        return list(info_cache.keys())
+    except Exception as e:
+        logger.debug("读取 Local State info_cache 失败: %s", e)
+        return []
+
+
+def _scan_profile_dirs(user_data_dir: Path) -> list[str]:
+    """兜底：扫描 User Data 下匹配 Default|Profile N 的目录"""
+    names = []
+    if not user_data_dir.exists():
+        return names
+    for entry in user_data_dir.iterdir():
+        if entry.is_dir() and _PROFILE_PATTERN.match(entry.name):
+            names.append(entry.name)
+    return names
+
+
+def _check_xianyu_cookie(cookies_db: Path) -> bool:
+    """检测 Profile 是否含闲鱼 Cookie（只看 name，不解密）"""
+    try:
+        # immutable=1 完全绕过文件锁，适合只读检测
+        conn = sqlite3.connect(f"file:{cookies_db}?immutable=1", uri=True)
+        try:
+            placeholders = ",".join("?" for _ in _XIANYU_COOKIE_NAMES)
+            row = conn.execute(
+                f"""SELECT 1 FROM cookies
+                    WHERE (host_key LIKE '%goofish%' OR host_key LIKE '%taobao%')
+                      AND name IN ({placeholders})
+                    LIMIT 1""",
+                tuple(_XIANYU_COOKIE_NAMES),
+            ).fetchone()
+            return row is not None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.debug("检测闲鱼 Cookie 失败 (%s): %s", cookies_db, e)
+        return False
+```
+
+- [ ] **Step 4: 运行测试验证通过**
+
+Run: `python -m pytest tests/test_browser_profile.py -v`
+Expected: 5 passed
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/xianyu_hunter/web/services/browser_profile.py tests/test_browser_profile.py
+git commit -m "feat: 新增 browser_profile 模块，支持多 Profile 发现"
+```
+
+---
+
+### Task 2: browser_import_cdp.py - CDP 在线导入模块
+
+**Files:**
+- Create: `src/xianyu_hunter/web/routes/browser_import_cdp.py`
+- Test: `tests/test_browser_import_cdp.py`
+
+- [ ] **Step 1: 编写 CDP 导入的失败测试**
+
+创建 `tests/test_browser_import_cdp.py`：
+
+```python
+"""browser_import_cdp 模块单元测试"""
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+from fastapi.responses import JSONResponse
+
+from xianyu_hunter.web.routes.browser_import_cdp import (
+    _check_cdp_reachable,
+    _collect_cookies_via_cdp,
+    _filter_xianyu_cookies,
+    import_via_cdp,
+)
+
+
+def test_filter_xianyu_cookies():
+    """只保留闲鱼/淘宝/支付宝域名的 Cookie"""
+    cookies = [
+        {"name": "_m_h5_tk", "value": "abc", "domain": ".goofish.com"},
+        {"name": "unb", "value": "123", "domain": ".taobao.com"},
+        {"name": "other", "value": "xyz", "domain": ".example.com"},
+        {"name": "cna", "value": "def", "domain": ".alipay.com"},
+    ]
+    result = _filter_xianyu_cookies(cookies)
+    assert len(result) == 3
+    names = [c["name"] for c in result]
+    assert "_m_h5_tk" in names
+    assert "unb" in names
+    assert "cna" in names
+    assert "other" not in names
+
+
+def test_cdp_port_not_reachable():
+    """CDP 端口未启动时返回 False"""
+    with patch("httpx.get", side_effect=Exception("connection refused")):
+        result = _check_cdp_reachable(9222)
+    assert result is False
+
+
+def test_cdp_port_reachable():
+    """CDP 端口可达时返回 True"""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    with patch("httpx.get", return_value=mock_response):
+        result = _check_cdp_reachable(9222)
+    assert result is True
+
+
+def test_cdp_no_xianyu_cookie():
+    """浏览器未登录闲鱼时返回空列表"""
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_context.cookies.return_value = [
+        {"name": "other", "value": "xyz", "domain": ".example.com"}
+    ]
+    mock_browser.contexts = [mock_context]
+
+    with patch("playwright.sync_api.sync_playwright") as mock_pw:
+        mock_pw.return_value.__enter__.return_value.chromium.connect_over_cdp.return_value = mock_browser
+        result = _collect_cookies_via_cdp(9222)
+
+    assert result == []
+
+
+def test_cdp_connect_success():
+    """CDP 连接成功获取闲鱼 Cookie"""
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_context.cookies.return_value = [
+        {"name": "_m_h5_tk", "value": "abc", "domain": ".goofish.com", "path": "/"},
+        {"name": "unb", "value": "123", "domain": ".taobao.com", "path": "/"},
+    ]
+    mock_browser.contexts = [mock_context]
+
+    with patch("playwright.sync_api.sync_playwright") as mock_pw:
+        mock_pw.return_value.__enter__.return_value.chromium.connect_over_cdp.return_value = mock_browser
+        result = _collect_cookies_via_cdp(9222)
+
+    assert len(result) == 2
+    assert result[0]["name"] == "_m_h5_tk"
+
+
+def test_import_via_cdp_endpoint_not_reachable():
+    """CDP 端点不可达时返回错误响应"""
+    with patch("xianyu_hunter.web.routes.browser_import_cdp._check_cdp_reachable", return_value=False):
+        response = import_via_cdp(port=9222)
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 200
+    import json
+    data = json.loads(response.body)
+    assert data["ok"] is False
+    assert "9222" in data["error"]
+```
+
+- [ ] **Step 2: 运行测试验证失败**
+
+Run: `python -m pytest tests/test_browser_import_cdp.py -v`
+Expected: FAIL with `ModuleNotFoundError`
+
+- [ ] **Step 3: 实现 browser_import_cdp.py**
+
+创建 `src/xianyu_hunter/web/routes/browser_import_cdp.py`：
+
+```python
+"""浏览器 Cookie 导入 - CDP 方式（方案 A：v20 加密的解决方案）
+
+端点：
+- POST /api/auth/import-from-browser/cdp   通过 CDP 协议从运行中的浏览器获取明文 Cookie
+
+原理：
+- 用户以 --remote-debugging-port=9222 启动 Edge/Chrome
+- 项目通过 Playwright connect_over_cdp 连接浏览器
+- 调用 context.cookies() 获取明文 Cookie，完全绕过 v20 加密
+
+前置条件：
+- 浏览器以调试端口启动（参见 scripts/start_edge_debug.ps1）
+- Chrome 136+ 需配合 --user-data-dir 指向非标准目录
+"""
+from __future__ import annotations
+
+import logging
+
+import httpx
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+
+from xianyu_hunter.web.routes.auth_helpers import make_auth_response
+from xianyu_hunter.web.services.cookie_store import get_cookie_store
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["browser-import-cdp"])
+
+# 闲鱼相关域名（用于过滤 Cookie）
+_XIANYU_DOMAINS = ("goofish", "taobao", "alipay")
+
+
+def _check_cdp_reachable(port: int) -> bool:
+    """检测 CDP 端点是否可达
+
+    先用 httpx 探测，避免 Playwright 连接超时（默认 30 秒）
+    """
+    try:
+        resp = httpx.get(f"http://localhost:{port}/json/version", timeout=3.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def _filter_xianyu_cookies(cookies: list[dict]) -> list[dict]:
+    """过滤出闲鱼/淘宝/支付宝域名的 Cookie"""
+    return [
+        c for c in cookies
+        if any(domain in c.get("domain", "") for domain in _XIANYU_DOMAINS)
+    ]
+
+
+def _collect_cookies_via_cdp(port: int) -> list[dict]:
+    """通过 CDP 协议从运行中的浏览器获取明文 Cookie
+
+    Args:
+        port: CDP 调试端口
+
+    Returns:
+        过滤后的闲鱼相关 Cookie 列表
+    """
+    from playwright.sync_api import sync_playwright
+
+    all_cookies: list[dict] = []
+    with sync_playwright() as p:
+        browser = p.chromium.connect_over_cdp(f"http://localhost:{port}")
+        try:
+            # 遍历所有浏览器上下文（每个 Profile 对应一个 context）
+            for context in browser.contexts:
+                all_cookies.extend(context.cookies())
+        finally:
+            # connect_over_cdp 不需要 close（会断开连接但浏览器继续运行）
+            pass
+
+    return _filter_xianyu_cookies(all_cookies)
+
+
+@router.post("/import-from-browser/cdp")
+def import_via_cdp(port: int = 9222) -> JSONResponse:
+    """通过 CDP 协议从运行中的浏览器获取明文 Cookie
+
+    前置条件：浏览器以 --remote-debugging-port=9222 启动
+    """
+    if not _check_cdp_reachable(port):
+        return JSONResponse(content={
+            "ok": False,
+            "error": f"CDP 端点 localhost:{port} 不可达",
+            "hint": (
+                "请先运行调试浏览器脚本：\n"
+                "  powershell -File scripts/start_edge_debug.ps1\n"
+                "然后在浏览器中登录闲鱼，再重试此操作"
+            ),
+        })
+
+    try:
+        cookies = _collect_cookies_via_cdp(port)
+    except Exception as e:
+        logger.exception("CDP 获取 Cookie 失败")
+        return JSONResponse(content={
+            "ok": False,
+            "error": f"CDP 连接失败: {e}",
+            "hint": "请确认浏览器以 --remote-debugging-port 参数启动",
+        })
+
+    if not cookies:
+        return JSONResponse(content={
+            "ok": False,
+            "error": "未在浏览器中找到闲鱼相关 Cookie",
+            "hint": "请先在浏览器中访问 https://www.goofish.com 并登录",
+        })
+
+    # 写入 CookieStore（JSON + SQLite）
+    success = get_cookie_store().export_cookies(cookies, method="cdp_import")
+    if not success:
+        return JSONResponse(content={
+            "ok": False,
+            "error": "Cookie 写入存储失败",
+        })
+
+    result = {
+        "ok": True,
+        "imported_count": len(cookies),
+        "imported_cookies": [f"{c['name']}@{c.get('domain', '')}" for c in cookies],
+        "source": "cdp",
+        "message": f"通过 CDP 成功导入 {len(cookies)} 个 Cookie",
+    }
+    return make_auth_response(result)
+```
+
+- [ ] **Step 4: 运行测试验证通过**
+
+Run: `python -m pytest tests/test_browser_import_cdp.py -v`
+Expected: 6 passed
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/xianyu_hunter/web/routes/browser_import_cdp.py tests/test_browser_import_cdp.py
+git commit -m "feat: 新增 browser_import_cdp 模块，支持 CDP 方式获取明文 Cookie"
+```
+
+---
+
+### Task 3: 修改 browser_import.py - v20 检测委托 + 多 Profile 集成
+
+**Files:**
+- Modify: `src/xianyu_hunter/web/routes/browser_import.py`
+- Test: `tests/test_browser_import.py`
+
+- [ ] **Step 1: 编写 v20 检测和离线导入的失败测试**
+
+创建 `tests/test_browser_import.py`：
+
+```python
+"""browser_import 模块单元测试（解密逻辑 + v20 检测）"""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from xianyu_hunter.web.routes.browser_import import (
+    decrypt_cookie_value,
+    decrypt_dpapi,
+    _decrypt_aes_gcm,
+)
+
+
+def test_decrypt_plaintext():
+    """明文 Cookie 直接返回"""
+    result = decrypt_cookie_value(b"", "plain_value", None)
+    assert result == "plain_value"
+
+
+def test_decrypt_empty():
+    """空值返回 None"""
+    result = decrypt_cookie_value(b"", None, None)
+    assert result is None
+
+
+def test_decrypt_aes_gcm_v10():
+    """v10 加密格式能正确解密（mock AESGCM）"""
+    # 构造 v10 格式：v10(3) + nonce(12) + ciphertext + tag(16)
+    enc_bytes = b"v10" + b"\x00" * 12 + b"ciphertext" + b"\x00" * 16
+    mock_aesgcm = patch("cryptography.hazmat.primitives.ciphers.aead.AESGCM")
+    with mock_aesgcm as mock_cls:
+        mock_instance = mock_cls.return_value
+        mock_instance.decrypt.return_value = b"decrypted_value"
+        result = _decrypt_aes_gcm(b"\x00" * 32, enc_bytes)
+    assert result == "decrypted_value"
+
+
+def test_decrypt_aes_gcm_v20_detected():
+    """v20 加密格式检测到后返回 None（不崩溃）"""
+    enc_bytes = b"v20" + b"\x00" * 12 + b"ciphertext" + b"\x00" * 16
+    # v20 传入 _decrypt_aes_gcm 时，由于密钥不匹配会解密失败返回 None
+    result = _decrypt_aes_gcm(b"\x00" * 32, enc_bytes)
+    assert result is None
+
+
+def test_decrypt_v20_without_aes_key():
+    """v20 加密但无 AES 密钥时返回 None"""
+    enc_bytes = b"v20" + b"\x00" * 12 + b"ciphertext" + b"\x00" * 16
+    result = decrypt_cookie_value(enc_bytes, None, None)
+    assert result is None
+
+
+def test_decrypt_dpapi_success():
+    """DPAPI 解密成功路径（mock CryptUnprotectData）"""
+    # DPAPI 解密在非 Windows 环境会返回 None，这里只验证不崩溃
+    result = decrypt_dpapi(b"test_data")
+    # 在 Windows 上可能成功，非 Windows 返回 None
+    assert result is None or isinstance(result, bytes)
+
+
+def test_copy_file_with_share_locked(tmp_path: Path):
+    """文件锁规避逻辑（mock robocopy）"""
+    from xianyu_hunter.web.routes.browser_import import copy_file_with_share
+
+    src = tmp_path / "src.db"
+    dst = tmp_path / "sub" / "dst.db"
+    src.write_bytes(b"test content")
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        result = copy_file_with_share(str(src), str(dst))
+
+    # robocopy 返回码 0 表示成功
+    assert result is True
+    assert dst.exists()
+    assert dst.read_bytes() == b"test content"
+```
+
+- [ ] **Step 2: 运行测试验证失败**
+
+Run: `python -m pytest tests/test_browser_import.py -v`
+Expected: 部分测试 FAIL（v20 测试可能因密钥不匹配而失败）
+
+- [ ] **Step 3: 修改 browser_import.py 增加 v20 检测委托**
+
+在 `src/xianyu_hunter/web/routes/browser_import.py` 的 `_do_import_from_browser` 函数中，修改 v20 检测逻辑（约第 417-422 行）：
+
+```python
+# 修改前（第 417-422 行）：
+if not cookie_value:
+    enc_bytes = bytes(enc_val) if enc_val else b""
+    if enc_bytes[:3] == b"v20":
+        errors.append(f"{name}@{host_key}: v20加密不支持")
+    else:
+        errors.append(f"{name}@{host_key}: 无法解密")
+    continue
+
+# 修改后：
+if not cookie_value:
+    enc_bytes = bytes(enc_val) if enc_val else b""
+    if enc_bytes[:3] == b"v20":
+        errors.append(f"{name}@{host_key}: v20加密不支持")
+        has_v20 = True
+    else:
+        errors.append(f"{name}@{host_key}: 无法解密")
+    continue
+```
+
+在函数开头初始化 `has_v20` 标志（在 `errors = []` 后添加）：
+
+```python
+errors = []
+has_v20 = False  # 新增：跟踪是否检测到 v20 加密
+```
+
+在函数返回结果中增加 v20 标志（约第 448-453 行）：
+
+```python
+result = {
+    "ok": len(imported_names) > 0,
+    "imported_count": len(imported_names),
+    "imported_cookies": imported_names,
+    "source_browser": browser,
+}
+if has_v20:
+    result["has_v20"] = True
+    result["v20_hint"] = (
+        "检测到 Chrome/Edge v127+ 的 App-Bound Encryption (v20)，"
+        "无法离线解密。请改用 CDP 方式：先运行 scripts/start_edge_debug.ps1 "
+        "启动调试浏览器，然后调用 /api/auth/import-from-browser/cdp"
+    )
+if errors:
+    result["errors"] = errors[:10]
+```
+
+- [ ] **Step 4: 集成多 Profile 支持**
+
+修改 `_do_import_from_browser` 函数，在定位 source_db 后增加 Profile 遍历逻辑。在函数开头（约第 267-280 行）替换为：
+
+```python
+def _do_import_from_browser(browser: str, auto_close: bool = False) -> dict:
+    """从系统浏览器导入 Cookie 的核心逻辑（返回 dict，由端点包装为 JSONResponse）"""
+    from xianyu_hunter.web.services.browser_profile import discover_profiles
+
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if not local_app_data:
+        return {"ok": False, "error": "无法确定 %LOCALAPPDATA% 路径"}
+
+    # 多 Profile 支持：遍历所有 Profile，优先使用含闲鱼 Cookie 的
+    profiles = discover_profiles(browser)
+    if not profiles:
+        return {
+            "ok": False,
+            "error": f"{browser} 浏览器的 Cookie 文件不存在",
+            "hint": "请确认浏览器已安装并访问过闲鱼",
+        }
+
+    # 选取第一个（已按优先级排序：含闲鱼 Cookie 的在前）
+    selected_profile = profiles[0]
+    source_db = selected_profile.cookies_db
+    logger.info(
+        "选择 Profile: %s (含闲鱼Cookie: %s)",
+        selected_profile.name, selected_profile.has_xianyu_cookie
+    )
+```
+
+删除原来的单 Profile 路径查找逻辑（第 273-280 行的 `_BROWSER_PATHS` 查找部分）。
+
+- [ ] **Step 5: 运行测试验证通过**
+
+Run: `python -m pytest tests/test_browser_import.py tests/test_browser_profile.py -v`
+Expected: all passed
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add src/xianyu_hunter/web/routes/browser_import.py tests/test_browser_import.py
+git commit -m "feat: browser_import 增加 v20 检测委托和多 Profile 支持"
+```
+
+---
+
+### Task 4: cookie_sync_scheduler.py - 定时同步模块
+
+**Files:**
+- Create: `src/xianyu_hunter/modules/cookie_sync_scheduler.py`
+- Modify: `src/xianyu_hunter/web/services/cookie_store.py`（新增 `get_cookie_expiry` 方法）
+- Test: `tests/test_cookie_sync_scheduler.py`
+
+- [ ] **Step 1: 给 CookieStore 新增 get_cookie_expiry 方法**
+
+在 `src/xianyu_hunter/web/services/cookie_store.py` 的 `get_cookie_info` 方法后（约第 107 行）新增：
+
+```python
+def get_cookie_expiry(self) -> float | None:
+    """获取最早过期的闲鱼关键 Cookie 的过期时间
+
+    用于定时同步判断是否即将过期。
+    返回 Unix 时间戳（秒），无 Cookie 或 session cookie 返回 None。
+    """
+    data = self._read_json()
+    if not data or not data.get("cookies"):
+        return None
+    # 只看闲鱼关键 Cookie 的过期时间
+    key_cookies = [
+        c for c in data["cookies"]
+        if c.get("name") in _GOOFISH_KEY_COOKIES
+    ]
+    if not key_cookies:
+        return None
+    # 取最早的过期时间（排除 session cookie 的 -1/0）
+    expiries = [
+        c.get("expires", -1) for c in key_cookies
+        if c.get("expires", -1) and c.get("expires", -1) > 0
+    ]
+    return min(expiries) if expiries else None
+```
+
+- [ ] **Step 2: 编写定时同步的失败测试**
+
+创建 `tests/test_cookie_sync_scheduler.py`：
+
+```python
+"""cookie_sync_scheduler 模块单元测试"""
+from __future__ import annotations
+
+import time
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from xianyu_hunter.modules.cookie_sync_scheduler import CookieSyncScheduler
+
+
+def _make_cookie_store(valid: bool, expiring: bool = False) -> MagicMock:
+    """创建 mock cookie_store"""
+    store = MagicMock()
+    store.has_valid_cookies.return_value = valid
+    if expiring:
+        store.get_cookie_expiry.return_value = time.time() + 300  # 5 分钟后过期
+    else:
+        store.get_cookie_expiry.return_value = time.time() + 3600  # 1 小时后过期
+    return store
+
+
+def test_sync_job_cookies_valid():
+    """Cookie 有效且未即将过期时不触发同步"""
+    store = _make_cookie_store(valid=True, expiring=False)
+    scheduler = CookieSyncScheduler(store, auto_sync_interval=30, expiry_threshold=10)
+
+    with patch("xianyu_hunter.web.routes.browser_import._do_import_from_browser") as mock_import:
+        scheduler._run_sync_job()
+    mock_import.assert_not_called()
+
+
+def test_sync_job_cookies_expiring():
+    """Cookie 即将过期时触发同步"""
+    store = _make_cookie_store(valid=True, expiring=True)
+    scheduler = CookieSyncScheduler(store, auto_sync_interval=30, expiry_threshold=10)
+
+    with patch("xianyu_hunter.web.routes.browser_import._do_import_from_browser") as mock_import:
+        mock_import.return_value = {"ok": True, "imported_count": 5}
+        scheduler._run_sync_job()
+    mock_import.assert_called_once()
+
+
+def test_sync_job_no_cookies():
+    """无 Cookie 时触发同步"""
+    store = _make_cookie_store(valid=False)
+    scheduler = CookieSyncScheduler(store, auto_sync_interval=30, expiry_threshold=10)
+
+    with patch("xianyu_hunter.web.routes.browser_import._do_import_from_browser") as mock_import:
+        mock_import.return_value = {"ok": True, "imported_count": 5}
+        scheduler._run_sync_job()
+    mock_import.assert_called_once()
+
+
+def test_sync_job_fallback_to_cdp():
+    """离线导入失败时降级到 CDP"""
+    store = _make_cookie_store(valid=False)
+    scheduler = CookieSyncScheduler(store, auto_sync_interval=30, expiry_threshold=10)
+
+    with patch("xianyu_hunter.web.routes.browser_import._do_import_from_browser") as mock_offline, \
+         patch("xianyu_hunter.web.routes.browser_import_cdp._check_cdp_reachable") as mock_cdp_check, \
+         patch("xianyu_hunter.web.routes.browser_import_cdp._collect_cookies_via_cdp") as mock_cdp_collect:
+        mock_offline.return_value = {"ok": False, "has_v20": True}
+        mock_cdp_check.return_value = True
+        mock_cdp_collect.return_value = [{"name": "_m_h5_tk", "value": "abc", "domain": ".goofish.com"}]
+        scheduler._run_sync_job()
+
+    mock_offline.assert_called_once()
+    mock_cdp_check.assert_called_once()
+
+
+def test_sync_job_all_failed_backoff():
+    """全部失败时触发退避（连续失败计数增加）"""
+    store = _make_cookie_store(valid=False)
+    scheduler = CookieSyncScheduler(store, auto_sync_interval=30, expiry_threshold=10)
+
+    with patch("xianyu_hunter.web.routes.browser_import._do_import_from_browser") as mock_offline, \
+         patch("xianyu_hunter.web.routes.browser_import_cdp._check_cdp_reachable") as mock_cdp_check:
+        mock_offline.return_value = {"ok": False}
+        mock_cdp_check.return_value = False
+        # 模拟连续 3 次失败
+        for _ in range(3):
+            scheduler._run_sync_job()
+
+    assert scheduler._consecutive_failures == 3
+    assert scheduler._current_interval > 30  # 间隔已翻倍
+```
+
+- [ ] **Step 3: 运行测试验证失败**
+
+Run: `python -m pytest tests/test_cookie_sync_scheduler.py -v`
+Expected: FAIL with `ModuleNotFoundError`
+
+- [ ] **Step 4: 实现 cookie_sync_scheduler.py**
+
+创建 `src/xianyu_hunter/modules/cookie_sync_scheduler.py`：
+
+```python
+"""Cookie 定时同步调度器
+
+职责：定时检查 Cookie 有效性，过期前自动触发导入流程。
+不做具体导入逻辑，委托给 browser_import（离线）或 browser_import_cdp（在线）。
+
+降级策略：
+1. 优先尝试离线导入（browser_import.py，支持 v10/DPAPI/明文）
+2. 离线失败（v20 或文件锁）则尝试 CDP 导入（需浏览器以调试端口运行）
+3. 都失败则记录日志，等待下次重试
+4. 连续 3 次失败后降低频率（间隔翻倍，上限 2 小时）
+"""
+from __future__ import annotations
+
+import logging
+import time
+
+from apscheduler.schedulers.background import BackgroundScheduler
+
+logger = logging.getLogger(__name__)
+
+# 退避上限（秒）= 2 小时
+_MAX_BACKOFF_INTERVAL = 7200
+# 触发退避的失败次数阈值
+_BACKOFF_THRESHOLD = 3
+
+
+class CookieSyncScheduler:
+    """Cookie 定时同步调度器
+
+    使用 APScheduler 的 BackgroundScheduler 独立运行，
+    不干扰项目现有的任务调度系统。
+    """
+
+    def __init__(
+        self,
+        cookie_store,
+        auto_sync_interval: int = 30,
+        expiry_threshold: int = 10,
+        cdp_port: int = 9222,
+    ) -> None:
+        self._cookie_store = cookie_store
+        self._base_interval = auto_sync_interval
+        self._expiry_threshold = expiry_threshold  # 分钟
+        self._cdp_port = cdp_port
+        self._consecutive_failures = 0
+        self._current_interval = auto_sync_interval
+        self._scheduler: BackgroundScheduler | None = None
+
+    def start(self) -> None:
+        """启动定时调度"""
+        if self._scheduler:
+            return
+        self._scheduler = BackgroundScheduler(daemon=True)
+        self._scheduler.add_job(
+            self._run_sync_job,
+            "interval",
+            minutes=self._current_interval,
+            id="cookie_sync",
+            replace_existing=True,
+        )
+        self._scheduler.start()
+        logger.info("Cookie 同步调度器已启动，间隔 %d 分钟", self._current_interval)
+
+    def stop(self) -> None:
+        """停止定时调度"""
+        if self._scheduler:
+            self._scheduler.shutdown(wait=False)
+            self._scheduler = None
+            logger.info("Cookie 同步调度器已停止")
+
+    def _run_sync_job(self) -> None:
+        """定时任务：检查并同步 Cookie
+
+        1. 检查当前 Cookie 是否即将过期
+        2. 若即将过期或无效，触发导入流程
+        3. 优先离线导入，失败则降级到 CDP
+        4. 全部失败则记录日志
+        """
+        if not self._should_sync():
+            return
+
+        success = self._try_offline_import()
+        if not success:
+            success = self._try_cdp_import()
+
+        if success:
+            self._consecutive_failures = 0
+            self._current_interval = self._base_interval
+            self._reschedule()
+        else:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= _BACKOFF_THRESHOLD:
+                self._current_interval = min(
+                    self._current_interval * 2,
+                    _MAX_BACKOFF_INTERVAL,
+                )
+                self._reschedule()
+                logger.warning(
+                    "Cookie 同步连续失败 %d 次，间隔调整为 %d 分钟",
+                    self._consecutive_failures,
+                    self._current_interval,
+                )
+
+    def _should_sync(self) -> bool:
+        """判断是否需要同步（Cookie 无效或即将过期）"""
+        if not self._cookie_store.has_valid_cookies():
+            return True
+        expiry = self._cookie_store.get_cookie_expiry()
+        if expiry is None:
+            return True
+        # 剩余有效期低于阈值时触发同步
+        remaining_min = (expiry - time.time()) / 60
+        return remaining_min < self._expiry_threshold
+
+    def _try_offline_import(self) -> bool:
+        """尝试离线导入（v10/DPAPI/明文）"""
+        try:
+            from xianyu_hunter.web.routes.browser_import import _do_import_from_browser
+            result = _do_import_from_browser("edge", auto_close=False)
+            if result.get("ok") and result.get("imported_count", 0) > 0:
+                logger.info("离线导入成功，导入 %d 个 Cookie", result["imported_count"])
+                return True
+            if result.get("has_v20"):
+                logger.info("检测到 v20 加密，降级到 CDP 方式")
+            return False
+        except Exception as e:
+            logger.warning("离线导入异常: %s", e)
+            return False
+
+    def _try_cdp_import(self) -> bool:
+        """尝试 CDP 导入（需浏览器以调试端口运行）"""
+        try:
+            from xianyu_hunter.web.routes.browser_import_cdp import (
+                _check_cdp_reachable,
+                _collect_cookies_via_cdp,
+            )
+            if not _check_cdp_reachable(self._cdp_port):
+                logger.info("CDP 端口不可达，跳过 CDP 导入")
+                return False
+            cookies = _collect_cookies_via_cdp(self._cdp_port)
+            if not cookies:
+                return False
+            success = self._cookie_store.export_cookies(cookies, method="cdp_sync")
+            if success:
+                logger.info("CDP 导入成功，导入 %d 个 Cookie", len(cookies))
+            return success
+        except Exception as e:
+            logger.warning("CDP 导入异常: %s", e)
+            return False
+
+    def _reschedule(self) -> None:
+        """用新间隔重新调度"""
+        if not self._scheduler:
+            return
+        self._scheduler.reschedule_job(
+            "cookie_sync",
+            trigger="interval",
+            minutes=self._current_interval,
+        )
+```
+
+- [ ] **Step 5: 运行测试验证通过**
+
+Run: `python -m pytest tests/test_cookie_sync_scheduler.py -v`
+Expected: 5 passed
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add src/xianyu_hunter/modules/cookie_sync_scheduler.py src/xianyu_hunter/web/services/cookie_store.py tests/test_cookie_sync_scheduler.py
+git commit -m "feat: 新增 cookie_sync_scheduler 模块，支持定时自动同步"
+```
+
+---
+
+### Task 5: 配置变更
+
+**Files:**
+- Modify: `src/xianyu_hunter/infra/yaml_config.py`
+- Modify: `config/config.yaml`
+
+- [ ] **Step 1: 修改 BrowserConfig 增加 auto_sync 配置项**
+
+在 `src/xianyu_hunter/infra/yaml_config.py` 的 `BrowserConfig` 类中新增字段（第 18-27 行）：
+
+```python
+class BrowserConfig(BaseModel):
+    headless: bool = False  # 非 headless 模式避免闲鱼 RGV587_ERROR 反爬检测
+    user_data_dir: str = "./browser-data"
+    viewport_width: int = 1920
+    viewport_height: int = 1080
+    user_agent: str = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    )
+    # Cookie 定时自动同步配置
+    auto_sync: bool = False                     # 默认关闭，需显式启用
+    auto_sync_interval: int = 30                # 同步间隔（分钟）
+    auto_sync_expiry_threshold: int = 10        # Cookie 剩余有效期阈值（分钟）
+    cdp_port: int = 9222                        # CDP 调试端口
+```
+
+- [ ] **Step 2: 更新 config.yaml 示例配置**
+
+在 `config/config.yaml` 的 `browser` 节点下新增（如果文件存在）：
+
+```yaml
+browser:
+  headless: false
+  user_data_dir: "./browser-data"
+  viewport_width: 1920
+  viewport_height: 1080
+  # Cookie 定时自动同步（默认关闭）
+  auto_sync: false
+  auto_sync_interval: 30
+  auto_sync_expiry_threshold: 10
+  cdp_port: 9222
+```
+
+- [ ] **Step 3: 验证配置加载**
+
+Run: `python -c "from xianyu_hunter.infra.yaml_config import get_config; c = get_config(); print(c.browser.auto_sync, c.browser.cdp_port)"`
+Expected: `False 9222`
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add src/xianyu_hunter/infra/yaml_config.py config/config.yaml
+git commit -m "feat: BrowserConfig 新增 auto_sync 定时同步配置项"
+```
+
+---
+
+### Task 6: 一键启动脚本
+
+**Files:**
+- Create: `scripts/start_edge_debug.ps1`
+
+- [ ] **Step 1: 创建启动脚本**
+
+创建 `scripts/start_edge_debug.ps1`：
+
+```powershell
+# 以调试端口启动 Edge，用于 CDP 方式导入 Cookie
+#
+# 使用独立 Debug 目录避免与用户日常浏览器冲突
+# Chrome 136+ 要求 --remote-debugging-port 必须配合 --user-data-dir 指向非标准目录
+#
+# 首次运行需在打开的浏览器中登录闲鱼，之后 Cookie 会持久化在 Debug 目录
+
+$debugProfile = "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Debug"
+
+# 查找 Edge 可执行文件
+$edgePaths = @(
+    "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+    "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+)
+$edgePath = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+if (-not $edgePath) {
+    Write-Host "未找到 Edge 浏览器，请确认已安装 Microsoft Edge" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "启动 Edge 调试实例..." -ForegroundColor Green
+Write-Host "  端口: 9222" -ForegroundColor Cyan
+Write-Host "  Profile: $debugProfile" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "浏览器启动后，请登录闲鱼，然后调用:" -ForegroundColor Yellow
+Write-Host "  POST http://localhost:8000/api/auth/import-from-browser/cdp" -ForegroundColor Yellow
+
+& $edgePath `
+    --remote-debugging-port=9222 `
+    --user-data-dir="$debugProfile" `
+    --remote-allow-origins=* `
+    "https://www.goofish.com/"
+```
+
+- [ ] **Step 2: 提交**
+
+```bash
+git add scripts/start_edge_debug.ps1
+git commit -m "feat: 新增 start_edge_debug.ps1 一键启动调试 Edge 脚本"
+```
+
+---
+
+### Task 7: 路由注册与启动集成
+
+**Files:**
+- Modify: `src/xianyu_hunter/web/routes/api_auth.py`
+- Modify: `src/xianyu_hunter/web/startup.py`
+
+- [ ] **Step 1: 注册 CDP 路由**
+
+修改 `src/xianyu_hunter/web/routes/api_auth.py`，在 import 和 include_router 部分新增：
+
+```python
+# 在 import 部分新增（第 24 行后）：
+from xianyu_hunter.web.routes.browser_import_cdp import router as browser_import_cdp_router
+
+# 在 include_router 部分新增（第 32 行后）：
+router.include_router(browser_import_cdp_router)
+```
+
+- [ ] **Step 2: 在 startup.py 中启动定时同步**
+
+修改 `src/xianyu_hunter/web/startup.py`，在 `start_scheduler_in_background` 函数后新增：
+
+```python
+# 全局 Cookie 同步调度器实例
+_cookie_sync_scheduler: CookieSyncScheduler | None = None
+
+
+def start_cookie_sync_scheduler(container: Any) -> None:
+    """启动 Cookie 定时同步调度器（如果配置启用）"""
+    global _cookie_sync_scheduler
+    from xianyu_hunter.infra.yaml_config import get_config
+    from xianyu_hunter.modules.cookie_sync_scheduler import CookieSyncScheduler
+
+    cfg = get_config()
+    if not cfg.browser.auto_sync:
+        logger.info("Cookie 自动同步未启用（browser.auto_sync=false）")
+        return
+
+    _cookie_sync_scheduler = CookieSyncScheduler(
+        cookie_store=container.cookie_store,
+        auto_sync_interval=cfg.browser.auto_sync_interval,
+        expiry_threshold=cfg.browser.auto_sync_expiry_threshold,
+        cdp_port=cfg.browser.cdp_port,
+    )
+    _cookie_sync_scheduler.start()
+```
+
+在 `shutdown` 函数中新增停止逻辑：
+
+```python
+# 在现有 shutdown 逻辑中新增：
+global _cookie_sync_scheduler
+if _cookie_sync_scheduler:
+    _cookie_sync_scheduler.stop()
+    _cookie_sync_scheduler = None
+```
+
+在 lifespan 的 startup 部分调用（在 `start_scheduler_in_background(container)` 调用后）：
+
+```python
+# 启动 Cookie 定时同步（如果配置启用）
+start_cookie_sync_scheduler(container)
+```
+
+- [ ] **Step 3: 验证应用能正常启动**
+
+Run: `python -c "from xianyu_hunter.web.app import app; print('app loaded')"`
+Expected: `app loaded`（无导入错误）
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add src/xianyu_hunter/web/routes/api_auth.py src/xianyu_hunter/web/startup.py
+git commit -m "feat: 注册 CDP 路由并集成 Cookie 定时同步到启动流程"
+```
+
+---
+
+### Task 8: 集成测试
+
+**Files:**
+- Create: `tests/test_browser_import_integration.py`
+
+- [ ] **Step 1: 编写集成测试**
+
+创建 `tests/test_browser_import_integration.py`：
+
+```python
+"""浏览器 Cookie 导入集成测试"""
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from xianyu_hunter.web.services.browser_profile import discover_profiles
+
+
+def _create_full_browser_env(tmp_path: Path, browser: str = "edge") -> Path:
+    """创建完整的模拟浏览器环境（含 Profile + Cookie DB）"""
+    user_data = tmp_path / browser.title() / "User Data"
+    user_data.mkdir(parents=True)
+
+    # Local State
+    info_cache = {"Default": {"name": "Default"}, "Profile 1": {"name": "Profile 1"}}
+    (user_data / "Local State").write_text(
+        json.dumps({"profile": {"info_cache": info_cache}}), encoding="utf-8"
+    )
+
+    # Default Profile（无闲鱼 Cookie）
+    default_db = user_data / "Default" / "Network" / "Cookies"
+    default_db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(default_db))
+    conn.execute("""
+        CREATE TABLE cookies (
+            host_key TEXT, name TEXT, encrypted_value BLOB,
+            value TEXT, path TEXT, expires_utc INTEGER,
+            is_secure INTEGER, is_httponly INTEGER
+        )
+    """)
+    conn.execute(
+        "INSERT INTO cookies (host_key, name, value) VALUES ('.example.com', 'other', 'val')"
+    )
+    conn.commit()
+    conn.close()
+
+    # Profile 1（含闲鱼 Cookie）
+    profile1_db = user_data / "Profile 1" / "Network" / "Cookies"
+    profile1_db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(str(profile1_db))
+    conn.execute("""
+        CREATE TABLE cookies (
+            host_key TEXT, name TEXT, encrypted_value BLOB,
+            value TEXT, path TEXT, expires_utc INTEGER,
+            is_secure INTEGER, is_httponly INTEGER
+        )
+    """)
+    conn.execute(
+        "INSERT INTO cookies (host_key, name, value) VALUES ('.goofish.com', '_m_h5_tk', 'plain_token')"
+    )
+    conn.commit()
+    conn.close()
+
+    return tmp_path / browser.title()
+
+
+def test_import_multi_profile_e2e(tmp_path: Path):
+    """多 Profile 场景：Profile 1 含闲鱼 Cookie，应优先选择"""
+    browser_env = _create_full_browser_env(tmp_path, "edge")
+
+    with patch.dict("os.environ", {"LOCALAPPDATA": str(browser_env)}):
+        profiles = discover_profiles("edge")
+
+    assert len(profiles) == 2
+    # Profile 1 含闲鱼 Cookie，应排在前
+    assert profiles[0].name == "Profile 1"
+    assert profiles[0].has_xianyu_cookie is True
+    assert profiles[1].name == "Default"
+    assert profiles[1].has_xianyu_cookie is False
+
+
+def test_import_cdp_e2e():
+    """CDP 导入端到端（mock Playwright）"""
+    mock_browser = MagicMock()
+    mock_context = MagicMock()
+    mock_context.cookies.return_value = [
+        {"name": "_m_h5_tk", "value": "cdp_token", "domain": ".goofish.com", "path": "/"},
+        {"name": "unb", "value": "12345", "domain": ".taobao.com", "path": "/"},
+        {"name": "other", "value": "xyz", "domain": ".example.com", "path": "/"},
+    ]
+    mock_browser.contexts = [mock_context]
+
+    with patch("xianyu_hunter.web.routes.browser_import_cdp._check_cdp_reachable", return_value=True), \
+         patch("playwright.sync_api.sync_playwright") as mock_pw, \
+         patch("xianyu_hunter.web.routes.browser_import_cdp.get_cookie_store") as mock_store:
+        mock_pw.return_value.__enter__.return_value.chromium.connect_over_cdp.return_value = mock_browser
+        mock_store.return_value.export_cookies.return_value = True
+
+        from xianyu_hunter.web.routes.browser_import_cdp import import_via_cdp
+        response = import_via_cdp(port=9222)
+
+    import json
+    data = json.loads(response.body)
+    assert data["ok"] is True
+    assert data["imported_count"] == 2  # 过滤掉 other
+    assert data["source"] == "cdp"
+
+
+def test_import_v10_e2e(tmp_path: Path):
+    """v10 加密端到端导入（mock SQLite + 解密）"""
+    from xianyu_hunter.web.routes.browser_import import decrypt_cookie_value
+
+    # 模拟 v10 解密
+    enc_val = b"v10" + b"\x00" * 12 + b"ciphertext" + b"\x00" * 16
+    with patch("xianyu_hunter.web.routes.browser_import_cdp._decrypt_aes_gcm") as mock_decrypt:
+        mock_decrypt.return_value = "decrypted_value"
+        result = decrypt_cookie_value(enc_val, None, b"\x00" * 32)
+
+    assert result == "decrypted_value"
+```
+
+- [ ] **Step 2: 运行所有测试**
+
+Run: `python -m pytest tests/test_browser_import.py tests/test_browser_profile.py tests/test_browser_import_cdp.py tests/test_cookie_sync_scheduler.py tests/test_browser_import_integration.py -v`
+Expected: all passed
+
+- [ ] **Step 3: 运行全量测试确保无回归**
+
+Run: `python -m pytest tests/ -v --timeout=60`
+Expected: 无新增失败（已有的测试不受影响）
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add tests/test_browser_import_integration.py
+git commit -m "test: 新增浏览器 Cookie 导入集成测试"
+```
+
+---
+
+## 验收清单
+
+- [ ] `python -m pytest tests/test_browser_profile.py -v` 全部通过
+- [ ] `python -m pytest tests/test_browser_import_cdp.py -v` 全部通过
+- [ ] `python -m pytest tests/test_browser_import.py -v` 全部通过
+- [ ] `python -m pytest tests/test_cookie_sync_scheduler.py -v` 全部通过
+- [ ] `python -m pytest tests/test_browser_import_integration.py -v` 全部通过
+- [ ] 现有的 v10/DPAPI/明文解密导入流程不受影响
+- [ ] 配置 `auto_sync: true` 后调度器能启动
+- [ ] CDP 端点 `/api/auth/import-from-browser/cdp` 可访问

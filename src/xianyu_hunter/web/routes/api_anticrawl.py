@@ -98,6 +98,20 @@ def _configure_default_health_checkers(orch) -> None:
                 cookie_map = {c.get("name", ""): c.get("value", "") for c in cookies_list}
                 orch.cookie_rotator.sync_state_from_cookies(cookie_map)
 
+            # 5. 检查 collector 的会话失效标志
+            # 为什么需要：cookie 存在不代表服务端仍认可，RGV587_ERROR 表示
+            # 服务端已注销会话，此时 cookie 虽在本地但已失效
+            try:
+                from xianyu_hunter.web.deps import get_container
+                container = get_container()
+                if container.collector and getattr(container.collector, 'last_session_invalid', False):
+                    logger.warning("cookie_checker: collector 检测到 RGV587_ERROR，会话已失效")
+                    # 主动失效 identity 层，让 /cookies/layers 也能反映真实状态
+                    orch.cookie_rotator.invalidate_layer(CookieLayer.IDENTITY)
+                    return False
+            except Exception:
+                pass
+
             return True
         except Exception as e:
             logger.warning("cookie_checker 失败: %s", e)

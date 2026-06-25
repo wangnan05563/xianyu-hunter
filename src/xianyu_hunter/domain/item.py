@@ -12,6 +12,7 @@ class ItemSummary:
     title: str
     price: float
     region: str = ""
+    brand: str = ""  # 商品品牌（从搜索 API 或标题兜底推断）
     seller_id: str = ""
     seller_nick: str = ""  # 卖家昵称（从搜索结果提取）
     want_cnt: int = 0
@@ -37,3 +38,4 @@ class ItemDetail(ItemSummary):
     detail_credit_score: int | None = None  # 详情页中的信用分
     detail_on_sale_count: int = 0      # 在售数（从详情页）
     detail_sold_count: int = 0         # 已售数（从详情页）
+    detail_register_days: int = 0      # 注册天数（从详情页"来闲鱼X天"）

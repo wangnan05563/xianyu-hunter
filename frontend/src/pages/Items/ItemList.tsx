@@ -13,8 +13,8 @@ type ViewMode = 'table' | 'card'
 // 默认字段顺序：当后端未返回 field_map 时（如从 DB 加载的旧数据）使用此顺序
 // 与后端 FIELD_METADATA 保持一致，确保无 field_map 时也能正常渲染
 const DEFAULT_FIELD_ORDER: string[] = [
-  'thumb_url', 'title', 'price', 'seller_nick', 'seller_credit',
-  'region', 'want_cnt', 'publish_time', 'is_sold',
+  'thumb_url', 'title', 'brand', 'price', 'seller_nick', 'seller_credit',
+  'region', 'want_cnt', 'view_cnt', 'publish_time', 'is_sold',
 ]
 
 // 默认字段元数据：与后端 FIELD_METADATA 保持一致
@@ -22,11 +22,13 @@ const DEFAULT_FIELD_ORDER: string[] = [
 const DEFAULT_FIELD_META: FieldMap = {
   thumb_url: { label: '图片', type: 'image', width: 80 },
   title: { label: '标题', type: 'link' },
+  brand: { label: '品牌', type: 'text', width: 100 },
   price: { label: '价格', type: 'price', width: 100 },
   seller_nick: { label: '卖家', type: 'seller', width: 140 },
   seller_credit: { label: '信用', type: 'tag', color: 'green', width: 80 },
   region: { label: '地区', type: 'text', width: 100 },
   want_cnt: { label: '想要', type: 'number', width: 70 },
+  view_cnt: { label: '浏览', type: 'number', width: 70 },
   publish_time: { label: '发布时间', type: 'datetime', width: 160 },
   is_sold: { label: '状态', type: 'status', width: 80 },
 }
@@ -96,7 +98,9 @@ function applyClientFilters(
 export default function ItemList() {
   const navigate = useNavigate()
   const [tasks, setTasks] = useState<Task[]>([])
-  const [selectedTask, setSelectedTask] = useState<string | null>(null)
+  // 持久化 selectedTask：页面刷新或实时搜索无结果后恢复上次选择的任务
+  // 避免每次加载都跳回第一个任务，保持用户操作一致性
+  const [selectedTask, setSelectedTask] = usePersistentState<string | null>('xh.items.selectedTask', null)
   const [items, setItems] = useState<TaskLink[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -131,6 +135,15 @@ export default function ItemList() {
         typeof v === 'number' && Number.isFinite(v) && v >= MIN_INTERVAL && v <= MAX_INTERVAL,
     },
   )
+  // 实时搜索模式下的轮询间隔（默认 15 秒，独立于 DB 模式的间隔）
+  // 实时搜索耗时较长，间隔太短会导致请求堆积
+  const [liveRefreshInterval, setLiveRefreshInterval] = usePersistentState<number>(
+    'xh.items.liveRefreshInterval', 15,
+    {
+      validator: (v): v is number =>
+        typeof v === 'number' && Number.isFinite(v) && v >= MIN_INTERVAL && v <= MAX_INTERVAL,
+    },
+  )
   // 数据变化高亮：记录哪些行发生了变化（link_key → 变化字段集合）
   const [highlightRows, setHighlightRows] = useState<Set<string>>(new Set())
   // 上一次的数据快照，用于对比检测变化
@@ -141,12 +154,14 @@ export default function ItemList() {
   const [showUpdateToast, setShowUpdateToast] = useState(false)
 
   // 加载任务列表
+  // 依赖数组为 []：仅在挂载时加载一次，避免重复请求
+  // 使用 selectedTaskRef 读取最新值，避免闭包捕获初始 null 导致覆盖已恢复的任务
   useEffect(() => {
     taskApi.list({ limit: 200 }).then((res) => {
       const items = res.items || []
       setTasks(items)
-      // 防御性检查：避免 res.items 为 undefined 时访问 length 抛错导致白屏
-      if (items.length > 0 && !selectedTask) {
+      // 仅在未选择任务时自动选中第一个（首次访问或持久化值为 null）
+      if (items.length > 0 && !selectedTaskRef.current) {
         setSelectedTask(items[0].id)
       }
     }).catch(() => message.error('加载任务列表失败'))
@@ -190,28 +205,62 @@ export default function ItemList() {
   }, [selectedTask, page, pageSize, search, regionFilter])
 
   // 触发式实时刷新：SSE 事件驱动为主，定时兜底轮询为辅
-  // 仅在非实时搜索模式（liveMode=false）下生效，避免与实时搜索冲突
+  // DB 模式和实时模式都支持轮询，通过 liveModeRef 选择不同的数据源
   // 筛选条件变化（page/search/region）由 loadItems 的 useEffect 负责加载，此处不重复
+  const liveModeRef = useRef(liveMode)
+  liveModeRef.current = liveMode
+  const searchRef = useRef(search)
+  searchRef.current = search
+  const regionFilterRef = useRef(regionFilter)
+  regionFilterRef.current = regionFilter
+
+  // 静默实时搜索：轮询回调专用，不显示进度提示和错误消息
+  // 错误抛出由 useAutoRefresh 的重试机制处理（最多3次，间隔递增）
+  const silentLiveRefresh = useCallback(async () => {
+    if (!selectedTask) return
+    const res = await taskLinkApi.live(selectedTask)
+    if (!res) return
+    const itemRows = (res.items || []).filter(
+      (r: TaskLink) => r.link_type === 'item' || !r.link_type,
+    )
+    liveItemsRef.current = itemRows
+    const filteredRows = applyClientFilters(
+      itemRows,
+      searchRef.current,
+      regionFilterRef.current,
+    )
+    setItems(filteredRows)
+    setTotal(filteredRows.length)
+    applyChangeHighlight(filteredRows, prevItemsRef, setHighlightRows, setShowUpdateToast)
+  }, [selectedTask])
+
   const { lastRefreshAt, refreshing, nextRefreshAt, triggerRefresh } = useAutoRefresh({
     enabled: autoRefreshEnabled,
-    intervalSec: refreshInterval,
-    paused: liveMode || !selectedTask || loading,
+    // 实时模式使用独立的轮询间隔（默认15秒），DB模式使用 refreshInterval
+    intervalSec: liveMode ? liveRefreshInterval : refreshInterval,
+    // 移除 liveMode 暂停：实时模式下也轮询，仅在没有任务或正在加载时暂停
+    paused: !selectedTask || loading || liveLoading,
+    deps: [selectedTask, page, pageSize, search, regionFilter, liveMode],
     refresh: async () => {
-      // 静默刷新（不显示全局 loading，避免每次触发都闪 Spin）
-      // 但保留 refreshing 状态用于指示器
       if (!selectedTask) return
-      await taskLinkApi.list(selectedTask, {
-        type: 'item',
-        limit: pageSize,
-        offset: (page - 1) * pageSize,
-        keyword: search || undefined,
-        region: regionFilter || undefined,
-      }).then((res) => {
-        const newItems = res.items || []
-        setItems(newItems)
-        setTotal(res.total_for_type || 0)
-        applyChangeHighlight(newItems, prevItemsRef, setHighlightRows, setShowUpdateToast)
-      })
+      if (liveModeRef.current) {
+        // 实时模式：静默调用 live API（SSE 流），不显示进度提示
+        await silentLiveRefresh()
+      } else {
+        // DB 模式：静默读取 DB 数据
+        await taskLinkApi.list(selectedTask, {
+          type: 'item',
+          limit: pageSize,
+          offset: (page - 1) * pageSize,
+          keyword: search || undefined,
+          region: regionFilter || undefined,
+        }).then((res) => {
+          const newItems = res.items || []
+          setItems(newItems)
+          setTotal(res.total_for_type || 0)
+          applyChangeHighlight(newItems, prevItemsRef, setHighlightRows, setShowUpdateToast)
+        })
+      }
     },
   })
 
@@ -242,13 +291,31 @@ export default function ItemList() {
   triggerRefreshRef.current = triggerRefresh
   useEffect(() => {
     if (!autoRefreshEnabled || liveMode || !selectedTask) return
+
+    // P2: 重连次数上限，超限后放弃 SSE 退化为纯轮询
+    // 为什么 10 次：3s 间隔 × 10 = 30s，覆盖短暂网络抖动；超限说明服务端不可用
+    const MAX_RECONNECT = 10
+    let reconnectAttempts = 0
+    // P1: 记录最后收到的事件 ID，断线重连时传给后端触发回放
+    // 浏览器原生 EventSource 自动重连会携带 Last-Event-ID header，
+    // 但手动 close + new 重建不会，需显式传递
+    let lastEventId = 0
+
     const connect = () => {
       if (sseRef.current) sseRef.current.close()
       if (document.visibilityState !== 'visible') return
-      const es = new EventSource('/api/events/stream')
+      if (reconnectAttempts >= MAX_RECONNECT) return
+
+      // P1: 传递 last_event_id 启用断线回放，后端会推送此 ID 之后的所有事件
+      const url = lastEventId > 0
+        ? `/api/events/stream?last_event_id=${lastEventId}`
+        : '/api/events/stream'
+      const es = new EventSource(url)
       sseRef.current = es
-      es.addEventListener('app_event', (e) => {
+      es.addEventListener('app_event', (e: MessageEvent) => {
         try {
+          // 浏览器自动维护 lastEventId（对应 SSE 帧的 id 字段）
+          lastEventId = parseInt(e.lastEventId) || lastEventId
           const ev = JSON.parse(e.data)
           // 只处理当前任务的搜索完成事件
           if (ev.type === 'task.search_done' && ev.task_id === selectedTaskRef.current) {
@@ -257,13 +324,31 @@ export default function ItemList() {
         } catch { /* 忽略解析错误 */ }
       })
       es.addEventListener('error', () => {
+        // lastEventId 已在 app_event 中更新，此处直接使用
         try { es.close() } catch { /* */ }
         sseRef.current = null
-        if (document.visibilityState === 'visible') setTimeout(connect, 3000)
+        reconnectAttempts++
+        // P2: 未超限且页面可见时重连，否则放弃（退化为纯轮询）
+        if (reconnectAttempts < MAX_RECONNECT && document.visibilityState === 'visible') {
+          setTimeout(connect, 3000)
+        }
       })
     }
+
+    // P0: 页面恢复可见时重建 SSE 连接
+    // 为什么需要：页面不可见时 selectedTask 变化会触发 useEffect 重执行，
+    // connect() 检测不可见直接 return，恢复可见后无机制触发 connect()
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !sseRef.current) {
+        reconnectAttempts = 0  // 恢复可见时重置计数，给新一轮重连机会
+        connect()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
     connect()
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       if (sseRef.current) {
         sseRef.current.close()
         sseRef.current = null
@@ -342,6 +427,12 @@ export default function ItemList() {
       .then((res) => {
         clearTimeout(progressTimer)
         message.destroy('live-search')
+        // 防御：SSE 流未收到 done 事件时 res 为 null（如后端异常关闭连接）
+        if (!res) {
+          setLiveMode(false)
+          message.info('未搜索到匹配商品，可尝试更换关键词')
+          return
+        }
         setLiveMode(true)  // 进入实时模式：隐藏分页、禁用删除/刷新
         // 保存后端返回的字段元数据，用于动态渲染列
         // 当接口字段变化时，前端根据此自动调整列头，无需修改代码
@@ -564,30 +655,33 @@ export default function ItemList() {
             onChange={(v) => { setRegionFilter(v); setPage(1) }}
             options={regionOptions.map((r) => ({ label: r, value: r }))}
           />
-          {/* 实时更新开关 + 兜底轮询间隔配置 */}
-          <Tooltip title={`实时更新（设置已保存：${autoRefreshEnabled ? '开' : '关'}）。SSE 事件驱动 + ${refreshInterval}秒兜底轮询`}>
+          {/* 实时更新开关 + 轮询间隔配置
+              DB 模式和实时模式各自有独立的间隔设置 */}
+          <Tooltip title={`自动轮询（设置已保存：${autoRefreshEnabled ? '开' : '关'}）。${liveMode ? `实时模式 ${liveRefreshInterval}秒` : `DB模式 ${refreshInterval}秒`}轮询一次`}>
             <Space size={4}>
               <ThunderboltOutlined style={{ color: autoRefreshEnabled ? '#1677ff' : undefined }} />
               <Switch
                 checked={autoRefreshEnabled}
                 onChange={setAutoRefreshEnabled}
                 size="small"
-                disabled={liveMode}
               />
             </Space>
           </Tooltip>
           {autoRefreshEnabled && (
-            <Tooltip title={liveMode ? '实时搜索模式下轮询已暂停，退出后自动恢复' : `兜底轮询间隔（${MIN_INTERVAL}-${MAX_INTERVAL}秒），SSE 断线时保底刷新`}>
+            <Tooltip title={`${liveMode ? '实时搜索' : 'DB'}轮询间隔（${MIN_INTERVAL}-${MAX_INTERVAL}秒），设置已自动保存`}>
               <Space size={4}>
                 <InputNumber
                   size="small"
                   min={MIN_INTERVAL}
                   max={MAX_INTERVAL}
-                  value={refreshInterval}
-                  onChange={(v) => setRefreshInterval(v || DEFAULT_INTERVAL)}
+                  value={liveMode ? liveRefreshInterval : refreshInterval}
+                  onChange={(v) => {
+                    const val = v || DEFAULT_INTERVAL
+                    if (liveMode) setLiveRefreshInterval(val)
+                    else setRefreshInterval(val)
+                  }}
                   addonAfter="秒"
                   style={{ width: 90 }}
-                  disabled={liveMode}
                 />
               </Space>
             </Tooltip>
@@ -610,9 +704,9 @@ export default function ItemList() {
       </Card>
 
       <Card style={{ position: 'relative' }}>
-        {/* 实时更新指示器：仅在实时更新启用且非实时模式下显示
-            提供刷新中/已更新/兜底倒计时三态反馈 */}
-        {autoRefreshEnabled && !liveMode && selectedTask && (
+        {/* 实时更新指示器：自动刷新启用时始终显示
+            DB 模式和实时模式都显示轮询状态和倒计时 */}
+        {autoRefreshEnabled && selectedTask && (
           <div className={`xh-refresh-indicator ${refreshing ? 'xh-refresh-indicator--active' : ''}`}>
             {/* 顶部进度条：刷新中时显示 indeterminate 动画条 */}
             {refreshing && <div className="xh-refresh-progress-bar" />}
@@ -621,18 +715,18 @@ export default function ItemList() {
                 <>
                   <LoadingOutlined spin style={{ color: '#1677ff' }} />
                   <span className="xh-refresh-indicator__text" style={{ color: '#1677ff' }}>
-                    正在获取最新数据...
+                    {liveMode ? '正在实时搜索...' : '正在获取最新数据...'}
                   </span>
                 </>
               ) : lastRefreshAt ? (
                 <>
                   <CheckCircleOutlined style={{ color: '#52c41a' }} />
                   <span className="xh-refresh-indicator__text">
-                    已更新于 {new Date(lastRefreshAt).toLocaleTimeString('zh-CN')}
+                    {liveMode ? '实时' : 'DB'}已更新于 {new Date(lastRefreshAt).toLocaleTimeString('zh-CN')}
                   </span>
                   {countdownSec !== null && countdownSec > 0 && (
                     <span className="xh-refresh-indicator__countdown">
-                      · {countdownSec}s 后兜底刷新
+                      · {countdownSec}s 后{liveMode ? '实时搜索' : '兜底刷新'}
                     </span>
                   )}
                 </>
@@ -640,7 +734,7 @@ export default function ItemList() {
                 <>
                   <ClockCircleOutlined style={{ color: '#faad14' }} />
                   <span className="xh-refresh-indicator__text">
-                    等待数据更新...
+                    等待{liveMode ? '实时搜索' : '数据更新'}...
                   </span>
                 </>
               )}
@@ -700,7 +794,7 @@ export default function ItemList() {
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{d?.title || '—'}</div>
                             <div style={{ color: '#ff4d4f' }}>¥{d?.price?.toFixed(2) ?? '—'}</div>
                             <div style={{ color: 'var(--xh-text-tertiary)', fontSize: 12, marginTop: 4 }}>
-                              {d?.region || '—'} · 想要 {d?.want_cnt ?? 0} · {d?.seller_nick || d?.seller_id || '—'}
+                              {d?.brand ? `${d.brand} · ` : ''}{d?.region || '—'} · 想要 {d?.want_cnt ?? 0} · 浏览 {d?.view_cnt ?? 0} · {d?.seller_nick || d?.seller_id || '—'}
                               {d?.seller_credit && <span style={{ color: '#52c41a', marginLeft: 4 }}>[{d.seller_credit}]</span>}
                             </div>
                             {d?.publish_time && (
@@ -751,8 +845,10 @@ export default function ItemList() {
                           {d?.title || '—'}
                         </div>
                         <div className="item-card-meta">
+                          {d?.brand && <span>{d.brand}</span>}
                           <span>{d?.region || '—'}</span>
                           <span>想要 {d?.want_cnt ?? 0}</span>
+                          <span>浏览 {d?.view_cnt ?? 0}</span>
                         </div>
                       </Card>
                       </Tooltip>

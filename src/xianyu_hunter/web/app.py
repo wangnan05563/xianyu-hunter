@@ -72,6 +72,26 @@ def create_app() -> FastAPI:
     static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    # 浏览器访问任何页面都会默认请求 /favicon.ico，需显式提供避免 404 噪音
+    # 优先从 SPA 构建产物读取，回退到 frontend/public 源文件
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        spa_favicon = static_dir / "spa" / "favicon.ico"
+        if spa_favicon.is_file():
+            return Response(
+                content=spa_favicon.read_bytes(),
+                media_type="image/x-icon",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        frontend_favicon = Path(__file__).resolve().parents[3] / "frontend" / "public" / "favicon.ico"
+        if frontend_favicon.is_file():
+            return Response(
+                content=frontend_favicon.read_bytes(),
+                media_type="image/x-icon",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        return JSONResponse({"detail": "favicon not found"}, status_code=404)
+
     # /app/docs 重定向到 FastAPI 内置的 API 文档（docs_url=/api/docs）
     # 避免被下方 SPA catch-all 捕获后返回 index.html，导致前端路由跳回首页
     @app.get("/app/docs", include_in_schema=False)

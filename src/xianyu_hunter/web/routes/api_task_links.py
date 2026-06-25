@@ -77,6 +77,45 @@ async def _ensure_live_search_cookies(container: Container) -> None:
         )
 
 
+def _normalize_task_link_rows(rows: list[dict]) -> tuple[list[dict], dict[str, dict[str, Any]]]:
+    """Normalize display payloads and collect field metadata for frontend columns."""
+    normalized: list[dict] = []
+    merged_field_map: dict[str, dict[str, Any]] = {}
+    for row in rows or []:
+        item = dict(row)
+        display = item.get("display")
+        if isinstance(display, dict):
+            corrected_display, field_map = normalize_display_fields(display)
+            item["display"] = corrected_display
+            merged_field_map.update(field_map)
+        normalized.append(item)
+    return normalized, merged_field_map
+
+
+def _normalize_live_result(result: dict) -> dict:
+    """Re-normalize live result payloads, including cached responses."""
+    out = dict(result or {})
+    rows = out.get("all")
+    if not isinstance(rows, list):
+        rows = []
+        for key in ("items", "sellers"):
+            value = out.get(key)
+            if isinstance(value, list):
+                rows.extend(value)
+    normalized_rows, field_map = _normalize_task_link_rows(rows)
+    if normalized_rows:
+        out["all"] = normalized_rows
+        out["items"] = [r for r in normalized_rows if r.get("link_type") == "item"]
+        out["sellers"] = [r for r in normalized_rows if r.get("link_type") == "seller"]
+        out["counts"] = {
+            "item": len(out["items"]),
+            "seller": len(out["sellers"]),
+            "total": len(normalized_rows),
+        }
+    out["field_map"] = field_map or out.get("field_map") or {}
+    return out
+
+
 @router.get("/{task_id}/links")
 def list_links(
     task_id: str,
@@ -92,6 +131,9 @@ def list_links(
     支持按 keyword/region 过滤：过滤已下推 SQL 层（json_extract + LIKE），
     避免 has_search 时全量加载到内存再 Python 过滤。
     """
+    # 性能埋点：记录端到端耗时（含 DB 查询 + 字段补全 + 序列化），用于长期监控
+    _list_start = time.monotonic()
+
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
     if not container.repo.get_task(task_id):
@@ -120,6 +162,19 @@ def list_links(
             corrected_display, _ = normalize_display_fields(display)
             r["display"] = corrected_display
         result_items.append(r)
+
+    # 性能埋点：端到端耗时记录（>200ms 告警，覆盖 DB + enrich + 序列化全链路）
+    _elapsed_ms = (time.monotonic() - _list_start) * 1000
+    if _elapsed_ms > 200:
+        logger.warning(
+            "list_links 慢响应: task={}, type={}, limit={}, offset={}, items={}, elapsed={:.1f}ms",
+            task_id, type, limit, offset, len(result_items), _elapsed_ms,
+        )
+    else:
+        logger.debug(
+            "list_links: task={}, type={}, items={}, elapsed={:.1f}ms",
+            task_id, type, len(result_items), _elapsed_ms,
+        )
 
     return {
         "items": result_items,
@@ -357,7 +412,10 @@ async def refresh_links(
             "title": item.title,
             "price": item.price,
             "thumb_url": item.thumb_url,
+            "brand": getattr(item, "brand", None) or "",
             "seller_id": getattr(item, "seller_id", None) or "",
+            # 修复：之前漏写 seller_nick，导致 list_links 从 items 表回退到 seller_id 展示
+            "seller_nick": getattr(item, "seller_nick", None) or "",
             "region": getattr(item, "region", None),
             "publish_time": getattr(item, "publish_time", None),
             "want_cnt": getattr(item, "want_cnt", None),
@@ -444,7 +502,7 @@ async def live_links(
         cached = _live_cache.get(task_id)
         if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
             logger.info("live_links 命中缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
-            yield sse({"stage": "done", **cached[1]})
+            yield sse({"stage": "done", **_normalize_live_result(cached[1])})
             return
 
         # 阶段 2：Cookie 检查
@@ -510,6 +568,10 @@ async def live_links(
                 except asyncio.TimeoutError:
                     yield sse({"stage": "error", "detail": "实时搜索重试超时，请稍后再试", "status": 504})
                     return
+            logger.info(
+                "live_links 搜索返回 raw_results={} task={} keyword={} filters={} sort={} regions={}",
+                len(raw_results), task_id, keyword, task_search_filters, search_sort_type, search_regions,
+            )
         except Exception as e:
             logger.exception("实时搜索失败 task={}: {}", task_id, e)
             err_msg = str(e)
@@ -530,11 +592,19 @@ async def live_links(
         now = datetime.now(timezone.utc).isoformat()
         results: list[dict] = []
         merged_field_map: dict[str, dict[str, Any]] = {}
+        filter_summary: dict[str, Any] = {
+            "raw": len(raw_results),
+            "formatted": 0,
+            "keyword_skipped": 0,
+            "price_skipped": 0,
+            "publish_days_skipped": 0,
+        }
         for r in raw_results:
             display = {
                 "title": r.get("title", ""),
                 "price": r.get("price"),
                 "thumb_url": r.get("thumb_url", ""),
+                "brand": r.get("brand", ""),
                 "region": r.get("region", ""),
                 "url": r.get("url", ""),
                 "is_sold": r.get("is_sold", False),
@@ -557,16 +627,21 @@ async def live_links(
                 "note": None,
                 "created_at": now,
             })
+        filter_summary["formatted"] = len(results)
 
         # 关键词过滤（安全兜底）
         filtered = []
+        keyword_skipped_titles: list[str] = []
         for r in results:
             title = (r.get("display") or {}).get("title", "")
             if task_keyword_matches_title(keyword, title):
                 filtered.append(r)
+            else:
+                keyword_skipped_titles.append(str(title)[:60])
         skipped = len(results) - len(filtered)
+        filter_summary["keyword_skipped"] = skipped
         if skipped:
-            logger.info("live_links 关键词过滤跳过了 {} 条无关结果", skipped)
+            logger.info("live_links 关键词过滤跳过了 {} 条无关结果，样例={}", skipped, keyword_skipped_titles[:5])
 
         # 价格过滤（任务级 + 全局 price_strategy）
         try:
@@ -582,6 +657,7 @@ async def live_links(
             effective_max = global_ps.max_price
         if effective_min is not None or effective_max is not None:
             _filtered = []
+            price_skipped = 0
             for r in filtered:
                 price = (r.get("display") or {}).get("price")
                 if price is None:
@@ -593,17 +669,26 @@ async def live_links(
                     _filtered.append(r)
                     continue
                 if effective_min is not None and p < effective_min:
+                    price_skipped += 1
                     continue
                 if effective_max is not None and p > effective_max:
+                    price_skipped += 1
                     continue
                 _filtered.append(r)
             filtered = _filtered
+            filter_summary["price_skipped"] = price_skipped
+            if price_skipped:
+                logger.info(
+                    "live_links 价格过滤跳过了 {} 条 (min={}, max={})",
+                    price_skipped, effective_min, effective_max,
+                )
 
         # 发布天数过滤
         if max_publish_days is not None:
             from datetime import datetime as _dt
             _now = _dt.now()
             _filtered = []
+            publish_days_skipped = 0
             for r in filtered:
                 pub = (r.get("display") or {}).get("publish_time")
                 if not pub:
@@ -612,14 +697,25 @@ async def live_links(
                 try:
                     pub_dt = _dt.fromisoformat(str(pub).replace("Z", "+00:00"))
                     if (_now - pub_dt).days > max_publish_days:
+                        publish_days_skipped += 1
                         continue
                 except (ValueError, TypeError):
                     pass
                 _filtered.append(r)
             filtered = _filtered
+            filter_summary["publish_days_skipped"] = publish_days_skipped
+            if publish_days_skipped:
+                logger.info(
+                    "live_links 发布时间过滤跳过了 {} 条 (max_publish_days={})",
+                    publish_days_skipped, max_publish_days,
+                )
 
         items = [r for r in filtered if r["link_type"] == "item"]
         sellers = [r for r in filtered if r["link_type"] == "seller"]
+        filter_summary["final_total"] = len(filtered)
+        filter_summary["final_items"] = len(items)
+        filter_summary["final_sellers"] = len(sellers)
+        logger.info("live_links 过滤汇总 task={}: {}", task_id, filter_summary)
 
         # 阶段 6：批量写入 DB（run_in_executor 避免阻塞事件循环）
         if items:
@@ -630,7 +726,10 @@ async def live_links(
                     "title": (r.get("display") or {}).get("title", ""),
                     "price": (r.get("display") or {}).get("price"),
                     "thumb_url": (r.get("display") or {}).get("thumb_url", ""),
+                    "brand": (r.get("display") or {}).get("brand", "") or "",
                     "seller_id": (r.get("display") or {}).get("seller_id", "") or "",
+                    # 修复：之前漏写 seller_nick，导致 list_links 从 items 表回退到 seller_id 展示
+                    "seller_nick": (r.get("display") or {}).get("seller_nick", "") or "",
                     "region": (r.get("display") or {}).get("region"),
                     "publish_time": (r.get("display") or {}).get("publish_time"),
                     "want_cnt": (r.get("display") or {}).get("want_cnt"),
@@ -673,7 +772,9 @@ async def live_links(
             "sellers": sellers,
             "all": filtered,
             "field_map": merged_field_map,
+            "filter_summary": filter_summary,
         }
+        result = _normalize_live_result(result)
         # 写入缓存：仅当查询结果非空时缓存，0 条记录不缓存以便下次请求重新触发实时查询
         if filtered:
             _live_cache[task_id] = (time.monotonic(), result)
@@ -728,6 +829,7 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
                 title=display.get("title", ""),
                 price=price_float,
                 region=display.get("region", "") or "",
+                brand=display.get("brand", "") or "",
                 seller_id=display.get("seller_id", "") or "",
                 seller_nick=display.get("seller_nick", "") or "",
                 thumb_url=display.get("thumb_url", "") or "",

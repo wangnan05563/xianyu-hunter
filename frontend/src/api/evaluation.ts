@@ -84,6 +84,16 @@ export const evalApi = {
       )
       .then((r) => r.data),
 
+  // 批量评估 items 表中未被评估的商品
+  batchEvaluateUnevaluated: (taskId?: string, limit?: number) =>
+    client
+      .post<{ ok: boolean; evaluated: number; skipped: number; errors: number; total: number; message: string }>(
+        '/api/evaluations/batch-evaluate-unevaluated',
+        null,
+        { params: { ...(taskId ? { task_id: taskId } : {}), ...(limit ? { limit } : {}) } },
+      )
+      .then((r) => r.data),
+
   // P3: 提交评估准确率反馈
   submitFeedback: (itemId: string, feedback: 'accurate' | 'inaccurate' | 'partial', note?: string, taskId?: string) =>
     client

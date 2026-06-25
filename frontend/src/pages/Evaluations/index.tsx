@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Table, Tag, Button, Space, Spin, Input, Select, Slider, Row, Col, message,
   Empty, DatePicker, Modal, Collapse, Statistic, Image, Tooltip, Alert, Progress,
+  Descriptions,
 } from 'antd'
 import {
   ReloadOutlined, AimOutlined, RobotOutlined, LinkOutlined,
@@ -110,6 +111,8 @@ export default function Evaluations() {
 
   // === 重新评估 ===
   const [recomputing, setRecomputing] = useState(false)
+  // === 批量评估未评估商品 ===
+  const [batchEvaluating, setBatchEvaluating] = useState(false)
 
   // === 阈值通过率计算器 ===
   const [thresholdValue, setThresholdValue] = useState(60)
@@ -117,7 +120,7 @@ export default function Evaluations() {
 
   // === 批量 AI 评估 ===
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([])
-  const [batchEvaluating, setBatchEvaluating] = useState(false)
+  const [batchAIEvaluating, setBatchAIEvaluating] = useState(false)
   const [batchProgress, setBatchProgress] = useState({ done: 0, total: 0 })
 
   // === 官方页面采集+评估 ===
@@ -146,6 +149,21 @@ export default function Evaluations() {
     }
   }
 
+  // 批量评估 items 表中未被评估的商品
+  const onBatchEvaluateUnevaluated = async () => {
+    setBatchEvaluating(true)
+    try {
+      const res = await evalApi.batchEvaluateUnevaluated(taskId || undefined)
+      message.success(res.message)
+      load()
+      loadDist()
+    } catch {
+      message.error('批量评估失败')
+    } finally {
+      setBatchEvaluating(false)
+    }
+  }
+
   // === 阈值通过率计算：当前页面评分 >= 阈值的比例 ===
   const thresholdPassCount = items.filter(item => (item.payload.score ?? 0) >= thresholdValue).length
   const thresholdPassRate = items.length > 0 ? (thresholdPassCount / items.length * 100) : 0
@@ -167,7 +185,7 @@ export default function Evaluations() {
       .map(item => item.item_id)
     if (ids.length === 0) return
 
-    setBatchEvaluating(true)
+    setBatchAIEvaluating(true)
     setBatchProgress({ done: 0, total: ids.length })
 
     let done = 0
@@ -181,7 +199,7 @@ export default function Evaluations() {
       setBatchProgress({ done, total: ids.length })
     }
 
-    setBatchEvaluating(false)
+    setBatchAIEvaluating(false)
     setSelectedRowKeys([])
     message.success(`批量评估完成，共处理 ${ids.length} 项`)
     load()
@@ -502,6 +520,14 @@ export default function Evaluations() {
       },
     },
     {
+      // 浏览数：展示商品曝光度，辅助判断热度
+      title: '浏览', key: 'view', width: 60,
+      render: (_: unknown, r: EvalItem) => {
+        const v = r.payload?.view_cnt as number | undefined
+        return v != null ? <span>{v}</span> : <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
+      },
+    },
+    {
       // 发布时间列：优先级 = 完整时间戳 > 历史数据中的发布时间短语 > '—'
       // 兜底显示"一周内发布"等从 seller_nick 脏数据中恢复的原文
       title: '发布时间', key: 'publish', width: 160,
@@ -560,6 +586,13 @@ export default function Evaluations() {
                 {score > 0 ? `+${score}` : score}分
               </span>
             )}
+            {/* 维修历史/全新标识：帮助用户快速判断商品成色风险 */}
+            {r.is_branded_new && (
+              <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: '2px 0 0 0' }}>全新</Tag>
+            )}
+            {r.has_repair && (
+              <Tag color="red" style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: '2px 0 0 4px' }}>有维修</Tag>
+            )}
           </div>
         )
       },
@@ -590,7 +623,22 @@ export default function Evaluations() {
         }
         const s = r.payload.score
         const color = s >= autoBuyScore ? '#52c41a' : s >= passScore ? '#faad14' : '#ff4d4f'
-        return <span style={{ color, fontWeight: 600, fontSize: 15 }}>{s.toFixed(1)}</span>
+        // 数据质量标识：让用户了解评分的可靠性（full=完整数据/partial=部分数据/insufficient=数据不足）
+        const dq = r.payload?.data_quality as string | undefined
+        const dqColorMap: Record<string, string> = { full: 'green', partial: 'orange', insufficient: 'red' }
+        const dqLabelMap: Record<string, string> = { full: '完整', partial: '部分', insufficient: '不足' }
+        return (
+          <div>
+            <span style={{ color, fontWeight: 600, fontSize: 15 }}>{s.toFixed(1)}</span>
+            {dq && dqLabelMap[dq] && (
+              <div>
+                <Tag color={dqColorMap[dq]} style={{ fontSize: 10, lineHeight: '14px', padding: '0 4px', margin: 0 }}>
+                  {dqLabelMap[dq]}
+                </Tag>
+              </div>
+            )}
+          </div>
+        )
       },
     },
     {
@@ -663,15 +711,216 @@ export default function Evaluations() {
     },
   ]
 
-  // 展开行：卖家价格趋势（委托给 TrendSparkline 组件）
-  const expandedRowRender = (r: EvalItem) => (
-    <TrendSparkline
-      trend={trendCache[r.item_id]}
-      loading={trendLoading === r.item_id}
-      error={trendError[r.item_id]}
-      onLoad={() => loadSellerTrend(r.item_id)}
-    />
-  )
+  // 展开行：详细信息 + 卖家价格趋势
+  // 展示接口返回但主表格未显示的完整字段，帮助用户做购买决策
+  const expandedRowRender = (r: EvalItem) => {
+    // 从 payload 提取详细信息字段（collect-official 流程会写入这些字段）
+    const description = r.payload?.item_description as string | undefined
+    const imageUrls = r.payload?.image_urls as string[] | undefined
+    const reviews = r.payload?.reviews as string[] | undefined
+    const sellerCreditScore = r.payload?.seller_credit_score as number | undefined
+    const sellerOnSaleCount = r.payload?.seller_on_sale_count as number | undefined
+    const sellerSoldCount = r.payload?.seller_sold_count as number | undefined
+    const sellerRegisterDays = r.payload?.seller_register_days as number | undefined
+    const dataSource = r.payload?.data_source as string | undefined
+
+    // 从 dimension_scores 提取 AI 成色评估详情
+    const dimScores = r.payload?.dimension_scores as Record<string, unknown> | undefined
+    const aiEval = dimScores?.ai_condition_eval as Record<string, unknown> | undefined
+
+    // 从 dimension_scores 提取规则评估维度分数
+    const ruleDims: Array<[string, number]> = []
+    if (dimScores) {
+      for (const [k, v] of Object.entries(dimScores)) {
+        if (k === 'ai_condition_eval') continue
+        if (typeof v === 'number') ruleDims.push([k, v])
+      }
+    }
+
+    // 从 reject_reasons 提取拒绝原因
+    const rejectReasons = r.payload?.reject_reasons as string[] | undefined
+
+    // 判断是否有任何详细信息可显示
+    const hasDetail = description || imageUrls?.length || reviews?.length ||
+      sellerCreditScore != null || sellerOnSaleCount != null ||
+      sellerSoldCount != null || sellerRegisterDays != null ||
+      aiEval || ruleDims.length > 0 || rejectReasons?.length
+
+    return (
+      <div>
+        {/* 详细信息区域：仅在有任何可展示数据时渲染 */}
+        {hasDetail && (
+          <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+            {/* 商品详情卡片 */}
+            {(description || imageUrls?.length) && (
+              <Col span={24}>
+                <Card size="small" title="商品详情" style={{ marginBottom: 8 }}>
+                  {description && (
+                    <div style={{ marginBottom: 8, color: 'var(--xh-text-secondary)', fontSize: 13, whiteSpace: 'pre-wrap' }}>
+                      {description}
+                    </div>
+                  )}
+                  {imageUrls && imageUrls.length > 0 && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {imageUrls.slice(0, 6).map((url, i) => (
+                        <Image
+                          key={i}
+                          src={url}
+                          width={80}
+                          height={80}
+                          style={{ objectFit: 'cover', borderRadius: 6 }}
+                          referrerPolicy="no-referrer"
+                        />
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </Col>
+            )}
+
+            {/* 卖家信息卡片 */}
+            {(sellerCreditScore != null || sellerOnSaleCount != null || sellerSoldCount != null || sellerRegisterDays != null) && (
+              <Col xs={24} md={12}>
+                <Card size="small" title="卖家信息" style={{ marginBottom: 8 }}>
+                  <Descriptions column={2} size="small" labelStyle={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                    {sellerCreditScore != null && (
+                      <Descriptions.Item label="芝麻信用">{sellerCreditScore}</Descriptions.Item>
+                    )}
+                    {sellerRegisterDays != null && (
+                      <Descriptions.Item label="注册天数">{sellerRegisterDays} 天</Descriptions.Item>
+                    )}
+                    {sellerOnSaleCount != null && (
+                      <Descriptions.Item label="在售数">{sellerOnSaleCount}</Descriptions.Item>
+                    )}
+                    {sellerSoldCount != null && (
+                      <Descriptions.Item label="已售数">{sellerSoldCount}</Descriptions.Item>
+                    )}
+                  </Descriptions>
+                </Card>
+              </Col>
+            )}
+
+            {/* 评估维度卡片 */}
+            {(ruleDims.length > 0 || rejectReasons?.length) && (
+              <Col xs={24} md={12}>
+                <Card size="small" title="评估维度" style={{ marginBottom: 8 }}>
+                  {ruleDims.length > 0 && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                      {ruleDims.map(([k, v]) => (
+                        <Tag key={k} color="blue">
+                          {k}: {v}
+                        </Tag>
+                      ))}
+                    </div>
+                  )}
+                  {rejectReasons && rejectReasons.length > 0 && (
+                    <div style={{ fontSize: 12 }}>
+                      <span style={{ color: 'var(--xh-text-tertiary)' }}>拒绝原因: </span>
+                      {rejectReasons.map((reason, i) => (
+                        <Tag key={i} color="orange" style={{ fontSize: 11, marginBottom: 2 }}>{reason}</Tag>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </Col>
+            )}
+
+            {/* AI 成色评估卡片 */}
+            {aiEval && (
+              <Col span={24}>
+                <Card size="small" title="AI 成色评估" style={{ marginBottom: 8 }}>
+                  <Row gutter={[16, 8]}>
+                    {typeof aiEval.verdict === 'string' && aiEval.verdict.length > 0 && (
+                      <Col span={6}>
+                        <Statistic
+                          title="结论"
+                          value={aiEval.verdict === 'recommend' ? '推荐' : '谨慎'}
+                          valueStyle={{ color: aiEval.verdict === 'recommend' ? '#52c41a' : '#faad14', fontSize: 16 }}
+                        />
+                      </Col>
+                    )}
+                    {typeof aiEval.condition_score === 'number' && (
+                      <Col span={6}>
+                        <Statistic title="成色评分" value={`${aiEval.condition_score}/10`} valueStyle={{ fontSize: 16 }} />
+                      </Col>
+                    )}
+                    {typeof aiEval.appearance_score === 'number' && (
+                      <Col span={6}>
+                        <Statistic title="外观成色" value={`${aiEval.appearance_score}/10`} valueStyle={{ fontSize: 16 }} />
+                      </Col>
+                    )}
+                    {typeof aiEval.consistency_score === 'number' && (
+                      <Col span={6}>
+                        <Statistic title="描述一致性" value={`${aiEval.consistency_score}/10`} valueStyle={{ fontSize: 16 }} />
+                      </Col>
+                    )}
+                    {typeof aiEval.price_reasonability === 'number' && (
+                      <Col span={6}>
+                        <Statistic title="价格合理性" value={`${aiEval.price_reasonability}/10`} valueStyle={{ fontSize: 16 }} />
+                      </Col>
+                    )}
+                  </Row>
+                  {typeof aiEval.reason === 'string' && aiEval.reason.length > 0 && (
+                    <div style={{ marginTop: 8, color: 'var(--xh-text-secondary)', fontSize: 13 }}>
+                      {aiEval.reason}
+                    </div>
+                  )}
+                  {Array.isArray(aiEval.risk_signals) && aiEval.risk_signals.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      {aiEval.risk_signals.map((sig, i) => (
+                        <Tag key={i} color="orange" style={{ marginBottom: 2 }}>{String(sig)}</Tag>
+                      ))}
+                    </div>
+                  )}
+                  {typeof aiEval.detail === 'string' && aiEval.detail.length > 0 && (
+                    <Collapse
+                      ghost
+                      size="small"
+                      style={{ marginTop: 8 }}
+                      items={[{ key: 'detail', label: '详细分析', children: <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{aiEval.detail}</pre> }]}
+                    />
+                  )}
+                </Card>
+              </Col>
+            )}
+
+            {/* 评价列表 */}
+            {reviews && reviews.length > 0 && (
+              <Col span={24}>
+                <Card size="small" title={`评价/留言 (${reviews.length})`} style={{ marginBottom: 8 }}>
+                  {reviews.slice(0, 5).map((review, i) => (
+                    <div key={i} style={{ padding: '4px 0', borderBottom: i < Math.min(reviews.length, 5) - 1 ? '1px solid var(--xh-border-secondary)' : 'none', fontSize: 13 }}>
+                      {review}
+                    </div>
+                  ))}
+                  {reviews.length > 5 && (
+                    <div style={{ color: 'var(--xh-text-tertiary)', fontSize: 12, marginTop: 4 }}>
+                      还有 {reviews.length - 5} 条评价
+                    </div>
+                  )}
+                </Card>
+              </Col>
+            )}
+
+            {/* 数据来源 */}
+            {dataSource && (
+              <Col span={24}>
+                <Tag color="blue">数据来源: {dataSource}</Tag>
+              </Col>
+            )}
+          </Row>
+        )}
+
+        {/* 卖家价格趋势（原有功能） */}
+        <TrendSparkline
+          trend={trendCache[r.item_id]}
+          loading={trendLoading === r.item_id}
+          error={trendError[r.item_id]}
+          onLoad={() => loadSellerTrend(r.item_id)}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="page-container">
@@ -717,6 +966,7 @@ export default function Evaluations() {
           <Button icon={<UndoOutlined />} onClick={onReset}>重置</Button>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
           <Button icon={<RetweetOutlined />} onClick={onRecompute} loading={recomputing}>重新评估</Button>
+          <Button icon={<RetweetOutlined />} onClick={onBatchEvaluateUnevaluated} loading={batchEvaluating}>批量评估未评估商品</Button>
         </Space>
       </Card>
 
@@ -774,7 +1024,7 @@ export default function Evaluations() {
                       type="primary"
                       size="small"
                       icon={<RobotOutlined />}
-                      loading={batchEvaluating}
+                      loading={batchAIEvaluating}
                       onClick={onBatchAIEval}
                     >
                       批量 AI 评估 ({selectedRowKeys.length} 项)
@@ -790,7 +1040,7 @@ export default function Evaluations() {
                     <Button size="small" onClick={() => setSelectedRowKeys([])}>取消选择</Button>
                   </Space>
                 }
-                description={(batchEvaluating || batchCollecting) && (
+                description={(batchAIEvaluating || batchCollecting) && (
                   <Progress
                     percent={Math.round(
                       (batchCollecting ? batchCollectProgress.done : batchProgress.done) /

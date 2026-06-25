@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
@@ -18,6 +19,14 @@ from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.modules.collector_utils import parse_price_from_text
 
 logger = get_logger()
+
+# P2 调试：每个 seller_id 只 dump 一次 innerText，避免日志/文件爆炸
+_DUMPED_SELLER_IDS: set[str] = set()
+# P2 调试：每个 item_id 只 dump 一次详情页卖家链接候选，避免日志/文件爆炸
+_DUMPED_ITEM_IDS: set[str] = set()
+# 首页标题特征：cookie 失效后 SPA 在当前 URL 渲染首页内容，URL 不变但标题是首页标题
+# 此时 URL 校验无法检测，需要通过标题内容判断
+_HOME_PAGE_TITLE_MARKERS = ("闲鱼 - 闲不住", "闲鱼-闲不住", "闲不住？上闲鱼")
 
 
 class DetailMixin:
@@ -36,17 +45,35 @@ class DetailMixin:
             await self.ad.throttle()
             url = build_item_url(item_id)
             logger.debug(f"详情: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-            # 等待标题
+            # 检查 HTTP 状态码：404/403/302 等异常状态提前返回 None
+            if response is not None:
+                http_status = response.status
+                if http_status >= 400:
+                    logger.warning(
+                        f"详情页 {item_id} HTTP {http_status}（页面可能已下架/被限制），主动返回 None"
+                    )
+                    return None
+                if http_status >= 300:
+                    redirect_url = response.headers.get("location", "")
+                    logger.warning(
+                        f"详情页 {item_id} 被重定向 HTTP {http_status} → {redirect_url}，主动返回 None"
+                    )
+                    return None
+
+            # 等待标题（新版闲鱼详情页已移除 h1，主选择器可能失效，
+            # 用价格元素作为页面已渲染的信号更可靠）
             try:
                 await page.wait_for_selector(
                     self.selectors.DETAIL_TITLE_MAIN, timeout=10000
                 )
             except PlaywrightTimeout:
-                logger.warning(f"详情页 {item_id} 标题未出现")
+                # 标题选择器未命中不代表页面没加载，继续尝试其他提取方式
+                logger.warning(f"详情页 {item_id} 标题选择器未出现，尝试备用提取")
 
             # 解析标题
+            # 优先用 DOM 选择器，失败时从 document.title 兜底（去掉 "_闲鱼" 后缀）
             title = ""
             for sel in [self.selectors.DETAIL_TITLE_MAIN, self.selectors.DETAIL_TITLE_ALT]:
                 el = await page.query_selector(sel)
@@ -54,6 +81,22 @@ class DetailMixin:
                     title = (await el.inner_text()).strip()
                     if title:
                         break
+            # 新版闲鱼详情页没有 h1 标题元素，document.title 是最后的可靠来源
+            # 格式："商品标题_闲鱼"，需去掉 "_闲鱼" 后缀
+            if not title:
+                try:
+                    doc_title = await page.title()
+                    if doc_title:
+                        # 兼容 "_闲鱼" 和 " - 闲鱼" 两种后缀格式
+                        for suffix in ("_闲鱼", " - 闲鱼", " | 闲鱼"):
+                            if doc_title.endswith(suffix):
+                                doc_title = doc_title[: -len(suffix)]
+                                break
+                        title = doc_title.strip()
+                        if title:
+                            logger.debug(f"详情页 {item_id} 标题从 document.title 兜底提取: {title}")
+                except Exception as e:
+                    logger.warning(f"详情页 {item_id} document.title 提取失败: {e}")
 
             # 价格
             price = 0.0
@@ -110,19 +153,37 @@ class DetailMixin:
                         region = re.sub(r"\s+", " ", region)
                         break
 
-            # 想要数：通常文本为"1234人想要"或 class 含 want/favor
+            # 想要数 + 浏览数：闲鱼详情页两者共享父元素 [class*='want--']
+            # DOM 结构：<div class="want--XXX"><div>45人想要</div><div>1472浏览</div></div>
+            # 子元素无 class，无法单独选中，需从父元素 inner_text 中用正则分别提取
             want_cnt = 0
-            for sel in [self.selectors.DETAIL_WANT_MAIN, self.selectors.DETAIL_WANT_ALT]:
-                want_cnt = await self._extract_count(page, sel)
-                if want_cnt > 0:
-                    break
-
-            # 浏览数：通常文本为"5678人看过"或"浏览 5678 次"
             view_cnt = 0
-            for sel in [self.selectors.DETAIL_VIEW_MAIN, self.selectors.DETAIL_VIEW_ALT]:
-                view_cnt = await self._extract_count(page, sel)
-                if view_cnt > 0:
-                    break
+            try:
+                want_parent = await page.query_selector("[class*='want--']")
+                if want_parent:
+                    want_text = await want_parent.inner_text()
+                    # 想要数："45人想要"
+                    m_want = re.search(r"(\d+)\s*人想要", want_text)
+                    if m_want:
+                        want_cnt = int(m_want.group(1))
+                    # 浏览数："1472浏览"
+                    m_view = re.search(r"(\d+)\s*浏览", want_text)
+                    if m_view:
+                        view_cnt = int(m_view.group(1))
+            except Exception as e:
+                logger.debug(f"详情页 {item_id} 想要数/浏览数从 want-- 父元素提取失败: {e}")
+
+            # 兜底：父元素提取失败时用原有选择器尝试
+            if want_cnt == 0:
+                for sel in [self.selectors.DETAIL_WANT_MAIN, self.selectors.DETAIL_WANT_ALT]:
+                    want_cnt = await self._extract_count(page, sel)
+                    if want_cnt > 0:
+                        break
+            if view_cnt == 0:
+                for sel in [self.selectors.DETAIL_VIEW_MAIN, self.selectors.DETAIL_VIEW_ALT]:
+                    view_cnt = await self._extract_count(page, sel)
+                    if view_cnt > 0:
+                        break
 
             # 发布时间：通常文本为"3天前发布"或"2024-01-01 发布"
             publish_time: datetime | None = None
@@ -160,11 +221,44 @@ class DetailMixin:
                         logger.debug("通过选择器 %s 提取卖家ID: %s", sel, seller_id)
                         break
 
+            # P2 调试：详情页 seller_id 提取失败时 dump 页面所有 a[href] 含 user/seller 的元素
+            # 辅助人工定位新版闲鱼详情页的卖家链接真实 className/属性
+            if not seller_id and item_id not in _DUMPED_ITEM_IDS:
+                try:
+                    hrefs = await page.evaluate(
+                        """() => {
+                            const out = [];
+                            const links = document.querySelectorAll('a[href]');
+                            for (const a of links) {
+                                const h = a.getAttribute('href') || '';
+                                if (h.includes('user') || h.includes('seller') || h.includes('shop')) {
+                                    out.push({href: h, cls: a.className || '', text: (a.innerText || '').slice(0, 50)});
+                                }
+                            }
+                            return out.slice(0, 30);
+                        }"""
+                    )
+                    dump_path = Path("logs") / f"detail_dom_{item_id}.json"
+                    dump_path.parent.mkdir(parents=True, exist_ok=True)
+                    import json as _json
+                    dump_path.write_text(
+                        _json.dumps(hrefs, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
+                    _DUMPED_ITEM_IDS.add(item_id)
+                    logger.warning(
+                        "[P2 调试] 详情页 {} 卖家ID未提取，已 dump {} 个候选链接到 {}",
+                        item_id, len(hrefs), dump_path,
+                    )
+                except Exception as e:
+                    # 不再静默吞异常，输出错误原因便于诊断
+                    logger.error("[P2 调试] 详情页 {} dump 失败: {}", item_id, e)
+
             # 从详情页DOM提取卖家信息（用于降级评估，避免必须访问卖家主页）
             detail_seller_nick = ""
             detail_credit_score: int | None = None
             detail_on_sale_count = 0
             detail_sold_count = 0
+            detail_register_days = 0
 
             # 提取卖家昵称（详情页通常显示卖家名称）
             for nick_sel in [self.selectors.DETAIL_SELLER_NAME]:
@@ -177,28 +271,104 @@ class DetailMixin:
                 except Exception:
                     continue
 
-            # 提取信用分（如果详情页有显示）
-            for credit_sel in [self.selectors.SELLER_CREDIT_MAIN, self.selectors.SELLER_CREDIT_ALT]:
+            # 从详情页的卖家信息标签提取结构化数据
+            # 新版闲鱼详情页在 item-user-info-label 中显示：
+            # 地区 / 活跃时间 / 注册时间("来闲鱼X天"/"来闲鱼X年") / 已售数("卖出X件宝贝") / 好评率("好评率X%")
+            # 关键：SPA 页面异步渲染，标题出现后这些元素可能还未渲染，需显式等待
+            try:
+                # 等待卖家信息标签出现（5s 超时，足够 SPA hydration 完成）
+                # 不阻塞太久，超时后仍尝试提取（可能部分元素已渲染）
                 try:
-                    credit_el = await page.query_selector(credit_sel)
-                    if credit_el:
-                        credit_text = (await credit_el.inner_text()).strip()
-                        m = re.search(r"\d{3,4}", credit_text)
-                        if m:
-                            detail_credit_score = int(m.group())
-                            break
-                except Exception:
-                    continue
+                    await page.wait_for_selector(
+                        self.selectors.DETAIL_REGION_MAIN, timeout=5000
+                    )
+                except PlaywrightTimeout:
+                    logger.warning(f"详情页 {item_id} 卖家信息标签未出现（5s 超时），尝试继续提取")
+
+                info_labels = await page.query_selector_all(self.selectors.DETAIL_REGION_MAIN)
+                logger.debug(f"详情页 {item_id} 提取到 {len(info_labels)} 个 item-user-info-label 元素")
+                for label_el in info_labels:
+                    text = (await label_el.inner_text()).strip()
+                    if not text:
+                        continue
+                    # 解析已售数："卖出11件宝贝"
+                    m = re.search(r"卖出(\d+)件", text)
+                    if m:
+                        detail_sold_count = int(m.group(1))
+                        continue
+                    # 解析在售数："在售11件" 或 "在售11"
+                    m = re.search(r"在售(\d+)", text)
+                    if m:
+                        detail_on_sale_count = int(m.group(1))
+                        continue
+                    # 解析注册天数："来闲鱼179天" / "来闲鱼3年" / "来闲鱼2个月"
+                    m = re.search(r"来闲鱼(\d+)\s*天", text)
+                    if m:
+                        detail_register_days = int(m.group(1))
+                        continue
+                    m = re.search(r"来闲鱼(\d+)\s*年", text)
+                    if m:
+                        detail_register_days = int(m.group(1)) * 365
+                        continue
+                    m = re.search(r"来闲鱼(\d+)\s*个月", text)
+                    if m:
+                        detail_register_days = int(m.group(1)) * 30
+                        continue
+                    # 解析好评率："好评率100%" → 作为信用分参考（百分比数值）
+                    m = re.search(r"好评率(\d+)%?", text)
+                    if m:
+                        detail_credit_score = int(m.group(1))
+                        continue
+                # 提取结果汇总日志（便于诊断字段缺失问题）
+                logger.info(
+                    f"详情页 {item_id} 卖家信息提取: register_days={detail_register_days}, "
+                    f"sold_count={detail_sold_count}, on_sale_count={detail_on_sale_count}, "
+                    f"credit_score={detail_credit_score}, nick={detail_seller_nick}"
+                )
+            except Exception as e:
+                # 不再静默吞异常，记录错误原因便于诊断
+                logger.warning(f"详情页 {item_id} 卖家信息标签提取异常: {e}")
 
             # P0 修复：如果核心字段（标题）未提取成功，主动返回 None 让上游感知失败
             # 避免超时后仍返回默认值，导致半残数据污染 items 表与评估结果
             if not title:
-                logger.warning(f"详情页 {item_id} 标题提取失败（页面可能未加载/已下架/选择器失效），主动返回 None")
+                # 检查页面是否被重定向到登录/验证页（通过 URL 判断）
+                try:
+                    current_url = page.url
+                    if "login" in current_url.lower() or "passport" in current_url.lower():
+                        logger.warning(f"详情页 {item_id} 被重定向到登录页，请重新登录闲鱼")
+                    elif "verify" in current_url.lower() or "captcha" in current_url.lower():
+                        logger.warning(f"详情页 {item_id} 触发验证码，请手动完成验证后重试")
+                    else:
+                        logger.warning(f"详情页 {item_id} 标题提取失败（页面可能未加载/已下架/选择器失效），current_url={current_url}")
+                except Exception:
+                    logger.warning(f"详情页 {item_id} 标题提取失败（页面可能未加载/已下架/选择器失效），主动返回 None")
+                return None
+            # 首页标题检测：cookie 失效后闲鱼 SPA 可能在当前 URL 渲染首页内容
+            # URL 校验无法检测（URL 未改变），通过标题内容判断是否为首页
+            if any(marker in title for marker in _HOME_PAGE_TITLE_MARKERS):
+                logger.warning(
+                    f"详情页 {item_id} 提取到首页标题（title={title}），cookie 可能失效被重定向到首页，主动返回 None"
+                )
                 return None
             if price <= 0:
                 # 价格未命中通常意味着详情页未正常加载（404/SPA 未渲染）
-                logger.warning(f"详情页 {item_id} 价格提取失败（价格={price}），主动返回 None")
+                logger.warning(f"详情页 {item_id} 价格提取失败（title={title}, price={price}），主动返回 None")
                 return None
+
+            # P0 增强：校验当前 URL 仍是商品页，否则视为采集失败
+            # 场景：cookie 失效后 page.goto(goofish.com/item?id=...) 被闲鱼重定向到首页
+            # 此时 page.url 变为 goofish.com（不带 /item），但 title 仍能取到 document.title="闲鱼 - 闲不住？上闲鱼！"
+            # 之前会误把首页装饰数据当商品数据返回，污染 items 表
+            try:
+                current_url = page.url
+                if "/item" not in current_url or f"id={item_id}" not in current_url:
+                    logger.warning(
+                        f"详情页 {item_id} 被重定向到非商品页（current_url={current_url}），主动返回 None"
+                    )
+                    return None
+            except Exception:
+                pass
 
             return ItemDetail(
                 id=item_id,
@@ -218,6 +388,7 @@ class DetailMixin:
                 detail_credit_score=detail_credit_score,
                 detail_on_sale_count=detail_on_sale_count,
                 detail_sold_count=detail_sold_count,
+                detail_register_days=detail_register_days,
             )
         except Exception as e:
             logger.exception(f"采集详情失败 {item_id}: {e}")
@@ -251,6 +422,18 @@ class DetailMixin:
                     nick = (await el.inner_text()).strip()
                     if nick:
                         break
+            # 昵称兜底：从 document.title 提取（格式："昵称_闲鱼"）
+            # 新版卖家主页可能因选择器改版导致昵称为空，但 document.title 始终可用
+            if not nick:
+                try:
+                    doc_title = await page.title()
+                    if doc_title:
+                        for suffix in ("_闲鱼", " - 闲鱼", " | 闲鱼"):
+                            if doc_title.endswith(suffix):
+                                nick = doc_title[: -len(suffix)].strip()
+                                break
+                except Exception:
+                    pass
 
             # 信用分
             credit_score: int | None = None
@@ -264,8 +447,55 @@ class DetailMixin:
                         break
 
             # 在售数、已售数
-            on_sale = await self._extract_count(page, self.selectors.SELLER_ON_SALE_MAIN)
-            sold = await self._extract_count(page, self.selectors.SELLER_SOLD_MAIN)
+            # 新版闲鱼卖家主页用 tabItem 类，3 个 tab 文本分别为 "全部351"/"在售9"/"已售出342"
+            # 旧版用 onSale/sold + count 子元素
+            # 由于新版 className 是哈希化的 tabItem--HiFOTMcp，无法用 CSS 选择器区分，
+            # 直接遍历 tabItem 按文本前缀匹配
+            on_sale = 0
+            sold = 0
+            try:
+                tab_texts = await page.evaluate(
+                    """() => {
+                        const tabs = document.querySelectorAll('[class*="tabItem"]');
+                        return Array.from(tabs).map(t => (t.innerText || '').trim());
+                    }"""
+                )
+                for text in tab_texts or []:
+                    if text.startswith("在售"):
+                        m = re.search(r"(\d+)", text)
+                        if m:
+                            on_sale = int(m.group(1))
+                    elif text.startswith("已售出") or text.startswith("已售"):
+                        m = re.search(r"(\d+)", text)
+                        if m:
+                            sold = int(m.group(1))
+            except Exception as e:
+                logger.debug(f"tabItem 文本提取失败: {e}")
+
+            # 旧版兜底：新版未命中时尝试旧版选择器
+            if on_sale == 0:
+                on_sale = await self._extract_count(page, self.selectors.SELLER_ON_SALE_ALT)
+            if sold == 0:
+                sold = await self._extract_count(page, self.selectors.SELLER_SOLD_ALT)
+
+            # P2 调试：每个 seller_id 只 dump 一次 innerText 到 logs/seller_dom_<id>.txt
+            # 当 on_sale 或 sold 选择器失效时（如新版闲鱼改 className），
+            # 文本含"在售 X 件"或"卖出 X 件"模式可辅助人工更新 selectors.py
+            if (on_sale == 0 or sold == 0) and seller_id not in _DUMPED_SELLER_IDS:
+                try:
+                    body_text = await page.evaluate(
+                        "() => document.body ? document.body.innerText : ''"
+                    )
+                    dump_path = Path("logs") / f"seller_dom_{seller_id}.txt"
+                    dump_path.parent.mkdir(parents=True, exist_ok=True)
+                    dump_path.write_text(body_text, encoding="utf-8")
+                    _DUMPED_SELLER_IDS.add(seller_id)
+                    logger.warning(
+                        "[P2 调试] 卖家 {} 提取异常（on_sale={}, sold={}）已 dump 到 {}",
+                        seller_id, on_sale, sold, dump_path,
+                    )
+                except Exception:
+                    pass
 
             # 注册天数：从注册时间文本解析（如"2020-01-01注册"或"3年前注册"）
             register_days = 0
@@ -368,13 +598,17 @@ class DetailMixin:
             bool(nick),
         ])
 
+        # register_days 优先取详情页的"来闲鱼X天"（新版闲鱼卖家主页已无此字段）
+        # 卖家主页未访问到且详情页也无时保持 0（真实未知）
+        fallback_register_days = 0
+        if detail and detail.detail_register_days > 0:
+            fallback_register_days = detail.detail_register_days
+
         result = SellerProfile(
             id=seller_id or "unknown",
             nick=nick,
             credit_score=credit_score,
-            # 方案A改进：有基本信息时给 30 天默认值，使降级数据至少有 1/3 字段有效
-            # 避免评估器直接判定为"数据不足"导致所有评估记录显示 unknown
-            register_days=30 if has_basic_info else 0,
+            register_days=fallback_register_days,
             on_sale_count=on_sale_count,
             sold_count=sold_count,
         )

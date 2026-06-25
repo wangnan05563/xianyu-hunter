@@ -16,6 +16,7 @@ import {
 import { SaveOutlined, UndoOutlined, BellOutlined, AimOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons'
 import { useConfigStore } from '../../stores/configStore'
 import type { DiffChange } from '../../stores/configStore'
+import { extractApiError } from '../../utils/apiError'
 
 const { Text, Paragraph } = Typography
 
@@ -101,8 +102,8 @@ export default function BuyerStrategy() {
       }
       setDiffChanges(changes)
       setDiffModalOpen(true)
-    } catch {
-      message.error('预览失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setSaving(false)
     }
@@ -114,8 +115,8 @@ export default function BuyerStrategy() {
       await confirmSave()
       setDiffModalOpen(false)
       message.success('抢单策略已保存')
-    } catch {
-      message.error('保存失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setSaving(false)
     }

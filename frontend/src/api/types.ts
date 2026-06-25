@@ -137,6 +137,7 @@ export interface TaskLink {
     title: string
     price: number
     thumb_url?: string
+    brand?: string
     region?: string
     seller_id?: string
     seller_nick?: string

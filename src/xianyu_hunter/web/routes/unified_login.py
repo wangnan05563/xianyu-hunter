@@ -90,12 +90,47 @@ def _kill_proc(proc) -> None:
 
 
 def _trigger_userinfo_refresh() -> None:
-    """登录成功后触发用户信息刷新"""
+    """登录成功后触发用户信息刷新 + Cookie 注入到 Playwright 浏览器上下文"""
     try:
         from xianyu_hunter.web.services.auth_manager import get_auth_manager
         get_auth_manager().trigger_refresh_userinfo_async()
     except Exception as e:
         logger.debug("触发用户信息刷新失败: %s", e)
+
+    # 登录成功后把 Cookie 同步注入到后端 Playwright 浏览器上下文
+    # 否则 Playwright 内存中的 cookie 仍是旧的/空的，采集时会被闲鱼重定向到首页
+    try:
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store
+        from xianyu_hunter.web.deps import get_container
+        import asyncio
+
+        store = get_cookie_store()
+        data = store._read_json()
+        if not data or not data.get("cookies"):
+            return
+
+        container = get_container()
+        if not container.browser or not container.browser._context:
+            return
+
+        pw_cookies = []
+        for c in data["cookies"]:
+            pw_cookies.append({
+                "name": c["name"],
+                "value": c["value"],
+                "domain": c.get("domain", ".goofish.com"),
+                "path": c.get("path", "/"),
+            })
+
+        if pw_cookies:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(
+                    container.browser._context.add_cookies(pw_cookies)
+                )
+                logger.info("已注入 %d 个 Cookie 到 Playwright 浏览器上下文", len(pw_cookies))
+    except Exception as e:
+        logger.debug("Cookie 注入 Playwright 上下文失败: %s", e)
 
 
 def _read_status_file(status_file: str | None) -> dict:

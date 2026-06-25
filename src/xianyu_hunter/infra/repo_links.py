@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, func, cast, Float
@@ -113,6 +113,7 @@ class TaskLinksMixin:
         view_cnt: int | None = None,
         is_sold: bool | None = None,
         seller_nick: str | None = None,
+        brand: str | None = None,
     ) -> list[tuple[str, str, dict]]:
         item_url = xianyu_item_url(item_id)
         rows: list[tuple[str, str, dict]] = [
@@ -121,6 +122,7 @@ class TaskLinksMixin:
                 item_id,
                 {
                     "title": title,
+                    "brand": brand or "",
                     "price": price,
                     "thumb_url": thumb_url,
                     "seller_id": seller_id,
@@ -145,6 +147,7 @@ class TaskLinksMixin:
                         "seller_nick": seller_nick or "",
                         "item_title": title,
                         "item_id": item_id,
+                        "brand": brand or "",
                         "region": region or "",
                     },
                 )
@@ -166,6 +169,7 @@ class TaskLinksMixin:
         view_cnt: int | None = None,
         is_sold: bool | None = None,
         seller_nick: str | None = None,
+        brand: str | None = None,
     ) -> int:
         written = 0
         for link_type, link_key, display in self._build_item_link_rows(
@@ -181,6 +185,7 @@ class TaskLinksMixin:
             view_cnt=view_cnt,
             is_sold=is_sold,
             seller_nick=seller_nick,
+            brand=brand,
         ):
             self.upsert_task_link(
                 task_id=task_id,
@@ -292,6 +297,7 @@ class TaskLinksMixin:
                 view_cnt=data.get("view_cnt"),
                 is_sold=data.get("is_sold"),
                 seller_nick=data.get("seller_nick"),
+                brand=data.get("brand"),
             ):
                 batch.append({
                     "task_id": task_id,
@@ -401,6 +407,12 @@ class TaskLinksMixin:
         search_keyword/search_region：将关键词/地区过滤下推 SQL 层，
         避免 has_search 时全量加载到内存再 Python 过滤。
         """
+        # 性能埋点：记录查询耗时，用于长期监控商品列表查询性能
+        import time as _time
+        from xianyu_hunter.infra.logger import get_logger as _get_logger
+        _perf_logger = _get_logger()
+        _perf_start = _time.monotonic()
+
         with self.engine.connect() as conn:
             task_row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
             task = self._row_to_dict(task_row) if task_row else None
@@ -433,6 +445,22 @@ class TaskLinksMixin:
                 region_expr = func.json_extract(TaskLinkRow.display, '$.region')
                 stmt = stmt.where(region_expr == search_region)
 
+            # 发布天数过滤下推 SQL：减少 Python 层处理的数据行数
+            # publish_time 存储为 ISO 字符串（UTC），substr 截取前 19 字符去掉时区后缀，
+            # datetime() 将字符串转为可比较的时间值
+            # 为什么下推：原 Python 层过滤需全量加载到内存再逐行解析，SQL 层过滤直接减少返回行数
+            max_publish_days = (task or {}).get("max_publish_days")
+            if max_publish_days is not None:
+                pub_expr = func.json_extract(TaskLinkRow.display, '$.publish_time')
+                # substr(..., 1, 19) 截取 "YYYY-MM-DDTHH:MM:SS"，datetime() 解析为时间值
+                pub_dt_expr = func.datetime(func.substr(pub_expr, 1, 19))
+                cutoff_dt = datetime.now(timezone.utc) - timedelta(days=max_publish_days)
+                cutoff_str = cutoff_dt.strftime('%Y-%m-%d %H:%M:%S')
+                # publish_time 为 NULL 或解析失败时保留行（兼容旧数据，与 Python 逻辑一致）
+                stmt = stmt.where(
+                    (pub_expr.is_(None)) | (pub_dt_expr.is_(None)) | (pub_dt_expr >= cutoff_str)
+                )
+
             stmt = stmt.order_by(TaskLinkRow.created_at.desc())
             all_rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
             filtered = self._filter_task_links(all_rows, task)
@@ -446,6 +474,20 @@ class TaskLinksMixin:
                     counts["total"] += 1
 
             page_rows = filtered[offset:offset + limit]
+
+            # 性能埋点：慢查询告警（>100ms 记录 warning，便于持续监控）
+            _elapsed_ms = (_time.monotonic() - _perf_start) * 1000
+            if _elapsed_ms > 100:
+                _perf_logger.warning(
+                    "list_and_count_task_links 慢查询: task={}, type={}, rows={}, filtered={}, elapsed={:.1f}ms",
+                    task_id, link_type, len(all_rows), len(filtered), _elapsed_ms,
+                )
+            else:
+                _perf_logger.debug(
+                    "list_and_count_task_links: task={}, type={}, rows={}, elapsed={:.1f}ms",
+                    task_id, link_type, len(all_rows), _elapsed_ms,
+                )
+
             return page_rows, counts
 
     def count_task_links(

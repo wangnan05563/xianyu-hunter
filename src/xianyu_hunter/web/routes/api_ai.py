@@ -435,9 +435,26 @@ async def _call_llm_vision(
 
     url = settings.openai_base_url.rstrip("/") + "/chat/completions"
 
+    # 检测当前模型是否支持 vision：
+    # 纯文本模型（deepseek-chat / gpt-3.5-turbo 等）不支持 image_url 字段，
+    # 强行传图会被服务商报 400（unknown variant `image_url`）导致降级规则模拟。
+    model_name = (settings.openai_vision_model or "").lower()
+    vision_capable = any(
+        kw in model_name
+        for kw in ("vision", "gpt-4o", "gpt-4-vision", "qvq", "qwen-vl", "glm-4v", "claude-3", "opus", "sonnet", "haiku")
+    )
+
     # P1-8：从 Prompt 编辑器读取最新内容（支持热更新，无需重启）
     from xianyu_hunter.web.routes.api_prompts import get_active_prompt
     condition_prompt = get_active_prompt("evaluate_condition")
+    # 纯文本模型（无 vision 能力）时，移除 prompt 中"看图"相关要求，
+    # 避免 LLM 强行编造"我看了图片"导致评估失真
+    if not vision_capable:
+        condition_prompt = (
+            condition_prompt
+            + "\n\n【特别说明】当前模型不支持图片分析，请仅基于标题、描述、价格"
+              "和同类物品价格区间进行评估，risk_signals 中加入'无图片参考'。"
+        )
 
     # 构建 user message：文字描述 + 图片 URL
     text_content = f"商品标题：{title}\n商品描述：{description}\n商品价格：¥{price}"
@@ -457,10 +474,18 @@ async def _call_llm_vision(
     ]
 
     # 最多传入 4 张图片（避免 token 过多 + 超时）
+    # 闲鱼图片 URL 常为协议相对路径（//img.alicdn.com/...），LLM 端无法解析，
+    # 需补全为 https://，否则会被 vision 服务报 400 失败并降级规则模拟
     for img_url in image_urls[:4]:
+        if not vision_capable:
+            # 纯文本模型不接图，避免 400 报错 + 用量浪费
+            break
+        normalized = img_url
+        if normalized.startswith("//"):
+            normalized = "https:" + normalized
         user_content.append({
             "type": "image_url",
-            "image_url": {"url": img_url},
+            "image_url": {"url": normalized},
         })
 
     payload = {

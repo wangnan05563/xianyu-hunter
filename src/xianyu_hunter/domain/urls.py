@@ -26,10 +26,10 @@ def build_item_url(item_id: str) -> str:
 def build_seller_url(seller_id: str) -> str:
     """构建卖家主页 URL
 
-    闲鱼卖家主页采用路径参数形式：/user/<seller_id>
-    （历史代码中 live_search 使用此格式，保持一致以兼容前端渲染）
+    闲鱼卖家主页采用查询参数形式：/personal?userId=<seller_id>
+    （旧版 /user/<seller_id> 已失效返回 404，2026-06-25 验证确认）
     """
-    return f"{get_base_url()}/user/{seller_id}"
+    return f"{get_base_url()}/personal?userId={seller_id}"
 
 
 def build_search_url(

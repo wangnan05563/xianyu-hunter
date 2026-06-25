@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Card, Switch, Tag, message, Typography } from 'antd'
 import { aiApi, type AIConfig as AIConfigData, type AIUsage } from '../../../api'
+import { extractApiError } from '../../../utils/apiError'
 import { PRESETS } from './constants'
 import ModelConfigForm, { type TestResult } from './components/ModelConfigForm'
 import UsageStats from './components/UsageStats'
@@ -144,8 +145,8 @@ export default function AIConfig() {
       // 刷新用量数据以获取最新预算状态
       const freshUsage = await aiApi.getUsage()
       if (freshUsage) setUsage(freshUsage)
-    } catch {
-      message.error('保存失败')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
     } finally {
       setSaving(false)
     }

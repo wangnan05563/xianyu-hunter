@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from http.cookies import CookieError, SimpleCookie
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -24,9 +25,182 @@ from xianyu_hunter.domain.urls import (
 )
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repo_links import task_keyword_matches_title
-from xianyu_hunter.modules.collector_utils import check_item_sold, extract_seller_nick
+from xianyu_hunter.modules.collector_utils import check_item_sold, extract_brand, extract_seller_nick
 
 logger = get_logger()
+
+_ITEM_ID_KEYS = ("itemId", "item_id", "auctionId", "auction_id", "itemID", "id")
+_TITLE_KEYS = ("title", "itemTitle", "item_title", "name", "subject")
+_PRICE_KEYS = ("promoPrice", "promotionPrice", "price", "soldPrice", "originalPrice")
+_THUMB_KEYS = ("picUrl", "mainPicUrl", "pic", "imageUrl", "mainPic", "cover", "pic_url")
+_SELLER_ID_KEYS = (
+    "sellerId", "userId", "sellerIdNum", "sellerOpenId", "openId", "openUid",
+    "sellerOpenUid", "userIdStr", "sellerUserId", "shopId",
+)
+_SELLER_NICK_KEYS = ("userNick", "sellerNick", "nick", "userNickname", "sellerNickName")
+_REGION_KEYS = ("region", "location", "area", "city", "province", "areaName")
+_PUBLISH_TIME_KEYS = ("publishTime", "gmtCreate", "publishTimeStr", "publish_time")
+_WANT_KEYS = ("wantCnt", "wantCount", "want_cnt", "want")
+_VIEW_KEYS = ("viewCnt", "viewCount", "view_cnt", "browseCnt")
+_CREDIT_KEYS = ("sellerCredit", "seller_credit", "credit", "creditText")
+_PREFERRED_NESTED_KEYS = (
+    "item", "itemInfo", "itemDO", "auction", "auctionInfo", "main", "data",
+    "sellerInfo", "userInfo", "ownerInfo",
+)
+
+
+def _normalize_key(key: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
+def _is_scalar(value: Any) -> bool:
+    return isinstance(value, (str, int, float, bool)) and value not in ("", None)
+
+
+def _find_value_by_key(obj: Any, key: str, depth: int = 0, max_depth: int = 6) -> Any:
+    if depth > max_depth:
+        return None
+    target = _normalize_key(key)
+    if isinstance(obj, dict):
+        for raw_key, value in obj.items():
+            if _normalize_key(raw_key) == target and _is_scalar(value):
+                return value
+
+        preferred_values = [
+            obj[k] for k in _PREFERRED_NESTED_KEYS
+            if k in obj and isinstance(obj[k], (dict, list))
+        ]
+        other_values = [
+            v for k, v in obj.items()
+            if k not in _PREFERRED_NESTED_KEYS and isinstance(v, (dict, list))
+        ]
+        for value in preferred_values + other_values:
+            found = _find_value_by_key(value, key, depth + 1, max_depth)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for value in obj[:40]:
+            found = _find_value_by_key(value, key, depth + 1, max_depth)
+            if found is not None:
+                return found
+    return None
+
+
+def _first_value(obj: Any, keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        found = _find_value_by_key(obj, key)
+        if found is not None:
+            return found
+    return None
+
+
+def _first_text(obj: Any, keys: tuple[str, ...]) -> str:
+    value = _first_value(obj, keys)
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _coerce_int(value: Any) -> int:
+    if value is None or value == "":
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).replace(",", "").strip()
+    match = re.search(r"\d+", text)
+    return int(match.group()) if match else 0
+
+
+def _coerce_price(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).replace(",", "").strip()
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if not match:
+        return 0.0
+    price = float(match.group())
+    if "万" in text:
+        price *= 10000
+    return price
+
+
+def _normalize_image_url(value: Any) -> str:
+    if not value:
+        return ""
+    url = str(value).strip()
+    if not url or url.startswith("data:"):
+        return ""
+    if not url.startswith(("http://", "https://")):
+        url = "https:" + url if url.startswith("//") else "https://" + url
+    return url
+
+
+def _parse_api_publish_time(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            ts = float(value)
+            if ts > 10_000_000_000:
+                ts /= 1000
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        text = str(value).strip()
+        if text.isdigit():
+            ts = int(text)
+            if ts > 10_000_000_000:
+                ts /= 1000
+            return datetime.fromtimestamp(ts, tz=timezone.utc)
+        if re.match(r"^\d{4}-\d{2}-\d{2}", text):
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    return None
+
+
+def _extract_api_item_fields(raw: dict) -> dict[str, Any]:
+    """Extract item fields from current and nested Goofish search API shapes."""
+    source: Any = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else raw
+    item_id = _first_text(source, _ITEM_ID_KEYS)
+    title = _first_text(source, _TITLE_KEYS)
+
+    semantic_raw = {
+        "itemId": item_id,
+        "title": title,
+        "price": _first_value(source, _PRICE_KEYS),
+        "userNick": _first_text(source, _SELLER_NICK_KEYS),
+        "region": _first_text(source, _REGION_KEYS),
+        "sellerId": _first_text(source, _SELLER_ID_KEYS),
+        "sellerCredit": _first_text(source, _CREDIT_KEYS),
+        "wantCnt": _first_value(source, _WANT_KEYS),
+        "viewCnt": _first_value(source, _VIEW_KEYS),
+        "publishTime": _first_value(source, _PUBLISH_TIME_KEYS),
+    }
+    if isinstance(source, dict):
+        for key, value in source.items():
+            semantic_raw.setdefault(key, value)
+
+    thumb_url = ""
+    for key in _THUMB_KEYS:
+        thumb_url = _normalize_image_url(_find_value_by_key(source, key))
+        if thumb_url and not any(mark in thumb_url for mark in ("tps-2-2", "2-2.png", "1x1.png")):
+            break
+
+    return {
+        "item_id": item_id,
+        "title": title,
+        "price": _coerce_price(semantic_raw["price"]),
+        "thumb_url": thumb_url,
+        "seller_id": semantic_raw["sellerId"],
+        "want_cnt": _coerce_int(semantic_raw["wantCnt"]),
+        "view_cnt": _coerce_int(semantic_raw["viewCnt"]),
+        "publish_time": _parse_api_publish_time(semantic_raw["publishTime"]),
+        "seller_credit": semantic_raw["sellerCredit"],
+        "semantic_raw": semantic_raw,
+    }
 
 
 def _set_cookie_headers_from_response(response: Any) -> list[str]:
@@ -144,13 +318,22 @@ _BATCH_PARSE_SCRIPT = r"""
         }
       }
 
-      // 缩略图：优先 src，回退 data-src（懒加载）
+      // 缩略图：优先 <img> src，回退 data-src（懒加载），最后回退 background-image
       let thumb = '';
       const img = card.querySelector('img');
       if (img) {
-        for (const attr of ['src', 'data-src', 'data-original', 'data-lazy-src']) {
+        for (const attr of ['src', 'data-src', 'data-original', 'data-lazy-src', 'lazy-src']) {
           thumb = img.getAttribute(attr) || '';
           if (thumb && !thumb.startsWith('data:')) break;
+        }
+      }
+      // 兜底：从 background-image 提取图片 URL（闲鱼部分卡片用 CSS 背景图而非 <img>）
+      if (!thumb) {
+        const bgEls = card.querySelectorAll('[style*="background-image"], [style*="background"]');
+        for (const bgEl of bgEls) {
+          const bgStyle = bgEl.getAttribute('style') || '';
+          const bgMatch = bgStyle.match(/url\(["']?(\/\/[^"')]+)["']?\)/) || bgStyle.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/);
+          if (bgMatch) { thumb = bgMatch[1]; break; }
         }
       }
 
@@ -367,6 +550,7 @@ class SearchMixin:
         # 便于后续日志分析定位性能瓶颈
         search_start = time.monotonic()
         search_via = "unknown"
+        self._last_search_error = ""
         try:
             # H-06 修复：keyword 需做 URL 编码，避免 & # % % 等特殊字符破坏查询语义
             # 追加筛选标签对应的 URL 参数（映射关系见 domain/task.py XIANYU_FILTER_MAP）
@@ -487,16 +671,27 @@ class SearchMixin:
                                     pt_val = datetime.fromisoformat(pt_str.replace('Z', '+00:00'))
                                 except Exception:
                                     pass
+                            # 通过 extract_seller_nick 校验卖家昵称和地区
+                            # DOM 提取的段落匹配可能将昵称和地区搞反，
+                            # 复用 API 路径的校验逻辑确保字段一致性
+                            dom_nick = d.get("seller_nick", "") or ""
+                            dom_region = d.get("region", "") or ""
+                            nick, region = extract_seller_nick({
+                                "userNick": dom_nick,
+                                "region": dom_region,
+                            })
+                            brand = extract_brand(None, title, seller_candidate=nick)
                             items.append(ItemSummary(
                                 id=item_id,
                                 title=title,
                                 price=float(d.get("price", 0) or 0),
                                 thumb_url=thumb,
-                                region=d.get("region", ""),
+                                region=region,
+                                brand=brand,
                                 is_sold=d.get("is_sold", False),
                                 want_cnt=int(d.get("want_cnt", 0) or 0),
                                 seller_id=d.get("seller_id", "") or "",
-                                seller_nick=d.get("seller_nick", "") or "",
+                                seller_nick=nick,
                                 seller_credit=d.get("seller_credit", "") or "",
                                 publish_time=pt_val,
                             ))
@@ -519,6 +714,7 @@ class SearchMixin:
             logger.info("搜索完成: 共 {} 个商品, 耗时 {:.1f}s, 方式={}", len(items), elapsed, search_via)
         except Exception as e:
             elapsed = time.monotonic() - search_start
+            self._last_search_error = str(e)
             logger.exception("搜索失败 {}: {}, 耗时 {:.1f}s", keyword, e, elapsed)
         finally:
             if own_page:
@@ -581,7 +777,7 @@ class SearchMixin:
                             # 会话失效／反爬检测／token 过期，非普通限流
                             # 此时闲鱼要求重新登录，DOM 回退也无法获取搜索结果
                             logger.warning(
-                                "搜索 API 会话失效 (%s)，需重新登录闲鱼: keyword=%s",
+                                "搜索 API 会话失效 ({})，需重新登录闲鱼: keyword={}",
                                 ret_str[:60], keyword,
                             )
                             session_invalid = True
@@ -662,118 +858,53 @@ class SearchMixin:
                     logger.info("搜索API原始字段 keys={}", list(sample.keys())[:30])
                 for raw in raw_items:
                     try:
-                        # 闲鱼 resultList 元素将商品字段包裹在 data 子字典中
-                        # 检查 data 子字典是否包含商品标识字段
-                        if "data" in raw and isinstance(raw["data"], dict):
-                            sub = raw["data"]
-                            # 闲鱼 API 结构：resultList 元素 = {data: {item: {...}, template, templateSingle}, style, type}
-                            # data.item 可能是 dict（商品字段集合）或字符串（HTML 模板）
-                            # 递归查找 data 子字典中包含商品标识字段的 dict
-                            found_item = None
-                            for _k, _v in sub.items():
-                                if isinstance(_v, dict) and any(
-                                    k in _v for k in ("itemId", "id", "item_id", "auctionId", "title", "price")
-                                ):
-                                    found_item = _v
-                                    break
-                            if found_item:
-                                raw = found_item
-                            elif not any(k in raw for k in ("itemId", "id", "title", "price")):
-                                # raw 本身不含商品字段，使用 data 子字典
-                                # 记录 data 子字典中每个 key 的 value 类型，便于排查商品字段位置
-                                _type_info = {k: type(v).__name__ for k, v in sub.items()}
-                                logger.info("resultList data 子字典 keys={}, value_types={}", list(sub.keys())[:20], _type_info)
-                                raw = sub
+                        fields = _extract_api_item_fields(raw)
+                        semantic_raw = fields["semantic_raw"]
+                        if not fields["item_id"] or not fields["title"]:
+                            data = raw.get("data") if isinstance(raw, dict) else None
+                            type_info = {k: type(v).__name__ for k, v in data.items()} if isinstance(data, dict) else {}
+                            logger.debug(
+                                "跳过搜索 API 条目：缺少 item_id/title, raw_keys={}, data_types={}",
+                                list(raw.keys())[:20] if isinstance(raw, dict) else type(raw).__name__,
+                                type_info,
+                            )
+                            continue
                         # 提取卖家昵称和地区（委托到 collector_utils，处理 region 误存为 nick 的情况）
                         # 调试日志：记录 API 原始字段值，便于排查字段错位
-                        _raw_nick = raw.get("userNick") or raw.get("sellerNick") or raw.get("nick") or ""
-                        _raw_region_val = raw.get("region", "")
+                        _raw_nick = semantic_raw.get("userNick") or semantic_raw.get("sellerNick") or semantic_raw.get("nick") or ""
+                        _raw_region_val = semantic_raw.get("region", "")
                         if _raw_nick or _raw_region_val:
                             logger.debug(
                                 "商品 {} 原始字段 userNick={!r} region={!r}",
-                                raw.get("itemId", "?"), _raw_nick, _raw_region_val,
+                                fields["item_id"], _raw_nick, _raw_region_val,
                             )
-                        nick, _raw_region = extract_seller_nick(raw)
-                        # 闲鱼 API 可能用不同字段名返回卖家ID和发布时间
-                        # 方案B改进：扩展字段路径，覆盖闲鱼API各种命名风格
-                        seller_info = raw.get("sellerInfo")
-                        seller_id = str(
-                            raw.get("sellerId") or raw.get("userId") or raw.get("sellerIdNum")
-                            or raw.get("sellerOpenId") or raw.get("openId") or raw.get("openUid")
-                            or raw.get("sellerOpenUid") or raw.get("userIdStr")
-                            or raw.get("sellerUserId") or raw.get("shopId")
-                            or (seller_info.get("sellerId", "") if isinstance(seller_info, dict) else "")
-                            or ""
-                        )
-                        # publishTime 为毫秒时间戳，需转换为 datetime
-                        publish_time = None
-                        pt_raw = raw.get("publishTime") or raw.get("gmtCreate") or raw.get("publishTimeStr")
-                        if pt_raw:
-                            try:
-                                if isinstance(pt_raw, (int, float)):
-                                    publish_time = datetime.fromtimestamp(pt_raw / 1000, tz=timezone.utc)
-                                elif isinstance(pt_raw, str) and pt_raw.isdigit():
-                                    publish_time = datetime.fromtimestamp(int(pt_raw) / 1000, tz=timezone.utc)
-                            except Exception:
-                                pass
-                        # 缩略图 URL：优先取真实图片，跳过阿里云2x2占位图
-                        # 闲鱼搜索 API 对部分商品只返回 2x2 透明占位图（tps-2-2.png），
-                        # 需要尝试多个图片字段，找到第一个非占位图的 URL
-                        _PLACEHOLDER_MARKS = ("tps-2-2", "2-2.png", "1x1.png")
-                        thumb_url = ""
-                        for _field in ("picUrl", "mainPicUrl", "pic", "imageUrl", "mainPic"):
-                            _val = raw.get(_field, "")
-                            if _val and not _val.startswith("data:"):
-                                if not _val.startswith(("http://", "https://")):
-                                    _val = "https:" + _val if _val.startswith("//") else "https://" + _val
-                                # 跳过占位图（2x2 或 1x1 透明 PNG）
-                                if not any(m in _val for m in _PLACEHOLDER_MARKS):
-                                    thumb_url = _val
-                                    break
-                                # 占位图也保留作为兜底，避免完全无图
-                                if not thumb_url:
-                                    thumb_url = _val
+                        nick, _raw_region = extract_seller_nick(semantic_raw)
+                        brand = extract_brand(semantic_raw, fields["title"], seller_candidate=nick)
                         # 一次性构造 ItemSummary
-                        # 闲鱼搜索API可能返回多个价格字段，优先取实际售价（promoPrice），
-                        # 其次取 price，最后取 originalPrice，确保与详情页一致
-                        # 调试日志：记录所有价格相关字段，便于排查价格不一致问题
-                        price_fields = {k: raw.get(k) for k in raw if "price" in k.lower() or "Price" in k}
-                        if price_fields:
-                            logger.debug("商品 {} 价格字段: {}", raw.get('itemId', '?'), price_fields)
-                        price_val = (
-                            raw.get("promoPrice")
-                            or raw.get("promotionPrice")
-                            or raw.get("price")
-                            or raw.get("originalPrice")
-                            or 0
-                        )
-                        # 价格可能是字符串（如 "693.00"）或数字
-                        try:
-                            price = float(price_val)
-                        except (TypeError, ValueError):
-                            price = 0.0
                         item = ItemSummary(
-                            id=str(raw.get("itemId", "")),
-                            title=raw.get("title", ""),
-                            price=price,
+                            id=fields["item_id"],
+                            title=fields["title"],
+                            price=fields["price"],
                             region=_raw_region,
-                            seller_id=seller_id,
+                            brand=brand,
+                            seller_id=fields["seller_id"],
                             seller_nick=nick or "",
-                            want_cnt=int(raw.get("wantCnt", 0) or 0),
-                            view_cnt=int(raw.get("viewCnt", 0) or 0),
-                            thumb_url=thumb_url,
-                            is_sold=check_item_sold(raw),
-                            publish_time=publish_time,
+                            want_cnt=fields["want_cnt"],
+                            view_cnt=fields["view_cnt"],
+                            thumb_url=fields["thumb_url"],
+                            is_sold=check_item_sold(semantic_raw),
+                            publish_time=fields["publish_time"],
                             # 尝试从搜索API提取卖家基本信息（用于降级评估）
-                            seller_credit_score=self._extract_credit_from_api_raw(raw),
-                            seller_on_sale_count=int(raw.get("onSaleCount", raw.get("itemCount", 0)) or 0),
-                            seller_sold_count=int(raw.get("soldCount", 0) or 0),
+                            seller_credit_score=self._extract_credit_from_api_raw(semantic_raw),
+                            seller_on_sale_count=_coerce_int(_first_value(semantic_raw, ("onSaleCount", "itemCount"))),
+                            seller_sold_count=_coerce_int(_first_value(semantic_raw, ("soldCount",))),
                         )
                         if nick and item.seller_id:
                             self._seller_nicks[item.seller_id] = nick
                         if item.id and not any(i.id == item.id for i in items):
                             items.append(item)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("解析搜索 API 条目失败: {}", str(e)[:120])
                         continue
 
                 # 翻页：滚动以触发更多 API 请求
@@ -833,6 +964,9 @@ class SearchMixin:
             regions: 地区过滤（逗号分隔，空字符串表示全国）
         """
         items = await self.search(keyword, max_pages=max_pages, page=page, fast=fast, skip_lock=True, search_filters=search_filters, sort_type=sort_type, regions=regions)
+        search_error = getattr(self, "_last_search_error", "")
+        if search_error and not items:
+            raise RuntimeError(f"实时搜索采集失败: {search_error}")
         results: list[dict] = []
         # 优先从搜索结果中收集已有的 seller_id（API 响应中包含此字段）
         sellers_from_search: dict[str, dict] = {}
@@ -844,6 +978,7 @@ class SearchMixin:
             base = {
                 "item_id": item.id,
                 "title": item.title,
+                "brand": getattr(item, "brand", ""),
                 "price": item.price,
                 "thumb_url": item.thumb_url,
                 "region": item.region,
@@ -867,6 +1002,7 @@ class SearchMixin:
                 sellers_from_search[item.seller_id] = {
                     "item_id": item.id,
                     "title": seller_nick or f"卖家 {item.seller_id}",
+                    "brand": getattr(item, "brand", ""),
                     "price": None,
                     "thumb_url": "",
                     "region": item.region,
@@ -911,6 +1047,7 @@ class SearchMixin:
                             results.append({
                                 "item_id": item.id,
                                 "title": f"卖家 {detail.seller_id}",
+                                "brand": getattr(item, "brand", ""),
                                 "price": None,
                                 "thumb_url": "",
                                 "region": item.region,

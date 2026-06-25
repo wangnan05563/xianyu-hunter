@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from xianyu_hunter.domain.evaluation import EvalResult
+from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
 from xianyu_hunter.domain.item import ItemDetail, ItemSummary
 from xianyu_hunter.domain.order import BuyOutcome, BuyResult
 from xianyu_hunter.domain.seller import SellerProfile
@@ -141,6 +141,7 @@ class TaskWorker:
                     view_cnt=getattr(item, "view_cnt", None),
                     is_sold=getattr(item, "is_sold", False),
                     seller_nick=getattr(item, "seller_nick", None),
+                    brand=getattr(item, "brand", None),
                 )
                 saved += 1
             except Exception as e:
@@ -213,6 +214,15 @@ class TaskWorker:
             # 避免无效搜索持续占用 browser_lock，阻塞 live 端点的实时搜索
             if getattr(self.collector, 'last_session_invalid', False):
                 logger.warning(f"[Task {self.task.id}] 闲鱼会话失效（RGV587_ERROR），自动暂停任务，请重新登录闲鱼")
+                # 主动失效 orchestrator 的 identity 层，让健康检查也能反映真实状态
+                # 为什么需要：cookie 本地仍存在但服务端已注销，
+                # 健康检查器需要感知此状态才能给出正确的 RELOGIN 建议
+                try:
+                    from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+                    from xianyu_hunter.modules.cookie_rotator import CookieLayer
+                    get_orchestrator().cookie_rotator.invalidate_layer(CookieLayer.IDENTITY)
+                except Exception:
+                    pass
                 stats.finished_at = datetime.now(timezone.utc)
                 return RunResult(stats=stats, should_pause=True)
 
@@ -257,7 +267,7 @@ class TaskWorker:
                             shared_detail_page = await self.collector.browser.new_page()
                         detail = await self.collector.detail(summary.id, page=shared_detail_page)
                         if not detail:
-                            logger.warning("[Task %s] 详情页获取失败，跳过 %s", self.task.id, summary.id)
+                            logger.warning("[Task {}] 详情页获取失败，跳过 {}", self.task.id, summary.id)
                             continue
                         # 复用卖家页（首次创建，后续复用）
                         # seller_profile 失败时使用降级策略（搜索页+详情页信息），而非空默认值
@@ -267,11 +277,11 @@ class TaskWorker:
                                 shared_seller_page = await self.collector.browser.new_page()
                             seller = await self.collector.seller_profile(detail.seller_id, page=shared_seller_page)
                         if not seller:
-                            logger.info("[Task %s] 卖家主页获取失败，使用降级策略评估 %s", self.task.id, summary.id)
+                            logger.info("[Task {}] 卖家主页获取失败，使用降级策略评估 {}", self.task.id, summary.id)
                             # 降级策略：合并搜索结果+详情页的卖家信息构建基本画像
                             seller = await self.collector.seller_profile_fallback(summary=summary, detail=detail)
                     except Exception as e:
-                        logger.warning("[Task %s] 采集异常 %s: %s", self.task.id, summary.id, e)
+                        logger.warning("[Task {}] 采集异常 {}: {}", self.task.id, summary.id, e)
                         detail = None
                         # 异常时也尝试用搜索结果构建降级 SellerProfile（如果有 summary）
                         if not seller and hasattr(self, 'collector'):
@@ -299,10 +309,11 @@ class TaskWorker:
                                 want_cnt=getattr(detail, "want_cnt", None),
                                 view_cnt=getattr(detail, "view_cnt", None),
                                 is_sold=getattr(summary, "is_sold", False),
+                                brand=getattr(detail, "brand", None) or getattr(summary, "brand", None),
                             )
                         except Exception as e:
                             logger.warning(
-                                "[Task %s] 更新卖家关联失败 %s: %s",
+                                "[Task {}] 更新卖家关联失败 {}: {}",
                                 self.task.id, detail.id, e,
                             )
 
@@ -336,6 +347,7 @@ class TaskWorker:
                                     "level": level,
                                     "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
                                     "payload": _json.dumps({
+                                        "task_id": self.task.id,  # 写入 payload 供官方采集回查 effective_task_id
                                         "item_id": detail.id,
                                         "item_title": detail.title,       # 前端期望 item_title
                                         "item_price": detail.price,       # 前端期望 item_price
@@ -352,7 +364,11 @@ class TaskWorker:
                             except Exception as e:
                                 logger.warning(f"[Task {self.task.id}] 写入评估事件失败: {e}")
 
-                        if not eval_result.is_passed:
+                        # 推送门槛：使用配置的 pass_score（默认 60）
+                        # 通过此门槛的商品会进入 AI 评估和推送通知流程
+                        # 但不一定会触发抢单（抢单需达到 auto_buy_score，见下方落单判断）
+                        _pass_score = eval_cfg.pass_score if eval_cfg else 60
+                        if not eval_result.should_pass(_pass_score):
                             continue
                         stats.passed += 1
 
@@ -376,7 +392,7 @@ class TaskWorker:
                                 )
 
                                 if ai_verdict == "reject":
-                                    logger.info("[Task %s] AI 评估拒绝 %s (score=%s)，跳过", self.task.id, detail.id, ai_condition_score)
+                                    logger.info("[Task {}] AI 评估拒绝 {} (score={})，跳过", self.task.id, detail.id, ai_condition_score)
                                     # 更新 events 表中的评估记录
                                     if self.repo:
                                         try:
@@ -406,7 +422,7 @@ class TaskWorker:
                                     except Exception as e:
                                         logger.warning(f"[Task {self.task.id}] 更新 AI 评估事件失败: {e}")
                             except Exception as e:
-                                logger.warning("[Task %s] AI 自动评估失败，继续规则评估: %s", self.task.id, e)
+                                logger.warning("[Task {}] AI 自动评估失败，继续规则评估: {}", self.task.id, e)
 
                         # 5.6 AI 深度分析（可选，消耗更多 token）
                         if _has_browser and settings.ai_enabled and eval_cfg.ai_auto_deep_analyze and settings.openai_api_key:
@@ -418,13 +434,24 @@ class TaskWorker:
                                 )
                                 overall = deep_result.get("overall", {})
                                 if overall.get("verdict") == "reject":
-                                    logger.info("[Task %s] AI 深度分析拒绝 %s，跳过", self.task.id, detail.id)
+                                    logger.info("[Task {}] AI 深度分析拒绝 {}，跳过", self.task.id, detail.id)
                                     continue
                             except Exception as e:
-                                logger.warning("[Task %s] AI 深度分析失败，继续: %s", self.task.id, e)
+                                logger.warning("[Task {}] AI 深度分析失败，继续: {}", self.task.id, e)
 
                         # 6. 落单
                         if not self._should_buy():
+                            continue
+                        # 区分推送门槛与抢单门槛：
+                        # - pass_score(60) 用于推送通知（is_passed 已在上方检查）
+                        # - auto_buy_score(75) 用于全自动拍下，避免 60-74 分中等分数商品被误抢单
+                        # 77 分 >= auto_buy_score(75) 且风险等级 LOW，应触发抢单
+                        _auto_buy_score = eval_cfg.auto_buy_score if eval_cfg else 80
+                        if not eval_result.should_auto_buy(_auto_buy_score):
+                            logger.info(
+                                f"[Task {self.task.id}] {detail.id} 评估分 {eval_result.score} "
+                                f"未达 auto_buy_score({_auto_buy_score}) 或非低风险({eval_result.risk_level.value})，跳过抢单"
+                            )
                             continue
                         # buyer 未注入时跳过落单：with_browser=False 模式下 container.buyer 为 None，
                         # 或浏览器启动失败后 Buyer 仍可能未就绪。此时不应抛出 AttributeError 中断流程
@@ -485,7 +512,7 @@ class TaskWorker:
                 try:
                     await self.dedup.save(new_items, task_id=self.task.id)
                 except Exception as e:
-                    logger.warning("[Task %s] 持久化 items 失败: %s", self.task.id, e)
+                    logger.warning("[Task {}] 持久化 items 失败: {}", self.task.id, e)
             # 兜底：如果 try 块因异常未执行 _save_task_links，在 finally 中补调用
             # 使用 new_items（已去重）而非 items（原始），避免保存无关默认推荐
             if stats.linked == 0 and new_items:

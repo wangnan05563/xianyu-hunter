@@ -49,7 +49,7 @@ class SelectorRepo:
     # 描述：必须排除运费/服务条款区域（如 class 含 'postage' / 'shippingFee' / 'service'）
     # 闲鱼详情页会把"运费说明"、"七天无理由"等内容放在与描述同级的块里，
     # 通用 [class*='description'] 会误抓，必须限定到商品描述主容器
-    DETAIL_DESC_MAIN = "[class*='desc-content'] [class*='content'], [class*='detailDesc']"
+    DETAIL_DESC_MAIN = "[class*='desc-content'] [class*='content'], [class*='detailDesc'], [class*='desc--']"
     DETAIL_DESC_ALT = "[class*='description-content'], [class*='description']:not([class*='postage']):not([class*='service']):not([class*='shipping'])"
 
     DETAIL_IMAGES_MAIN = "[class*='image'] img"
@@ -79,7 +79,8 @@ class SelectorRepo:
     DETAIL_PUBLISH_TIME_ALT = "[class*='releaseTime'], [class*='pubTime'], [class*='itemTime']"
 
     # 详情页上的卖家信息块
-    DETAIL_SELLER_NAME = "[class*='sellerName'], [class*='userNick']"
+    # 新版闲鱼详情页卖家昵称 class 为 item-user-info-nick--XXXX
+    DETAIL_SELLER_NAME = "[class*='sellerName'], [class*='userNick'], [class*='user-info-nick']"
     # 卖家链接选择器（多个 fallback，闲鱼改版时常变）
     DETAIL_SELLER_LINK = "a[href*='userId']"
     DETAIL_SELLER_LINK_ALT1 = "a[href*='user']"
@@ -105,16 +106,23 @@ class SelectorRepo:
     ORDER_NO_ALT = "[class*='orderNumber']"
 
     # ===== 卖家主页 =====
-    SELLER_NICK_MAIN = "[class*='nick']"
-    SELLER_NICK_ALT = "[class*='userName']"
+    # 昵称：限定在 infoTop 容器内，避免匹配到页头的"登录"按钮（nick--RyNYtDXM）
+    SELLER_NICK_MAIN = "[class*='infoTop'] [class*='nick']"
+    SELLER_NICK_ALT = "[class*='userName'], [class*='personalWrap'] [class*='nick']"
 
     SELLER_CREDIT_MAIN = "[class*='credit']"
     SELLER_CREDIT_ALT = "[class*='zhima']"
 
-    SELLER_ON_SALE_MAIN = "[class*='onSale'] [class*='count']"
-    SELLER_SOLD_MAIN = "[class*='sold'] [class*='count']"
+    # 在售数/已售数：新版闲鱼用 tabItem 类，文本格式 "在售9" / "已售出342"
+    # 旧版用 onSale/sold + count 子元素，新版改为 tabItem 直接包含数字
+    SELLER_ON_SALE_MAIN = "[class*='tabItem']"
+    SELLER_ON_SALE_ALT = "[class*='onSale'] [class*='count']"
+    SELLER_SOLD_MAIN = "[class*='tabItem']"
+    SELLER_SOLD_ALT = "[class*='sold'] [class*='count']"
 
+    # 注册时间：新版闲鱼卖家主页已移除该字段，保留旧版选择器兼容
     SELLER_REGISTER_MAIN = "[class*='registerTime']"
+    SELLER_REGISTER_ALT = "[class*='register'], [class*='joinTime']"
     SELLER_BAD_REVIEW_MAIN = "[class*='badReview'], [class*='negative']"
 
     # 卖家在售列表

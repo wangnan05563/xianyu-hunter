@@ -12,6 +12,8 @@ export function parsePayload(item: TimelineEntry) {
 }
 
 // 格式化相对时间：1 分钟内显示"刚刚"，之后按粒度递增
+// 后端返回的 _ts 带 'Z' 后缀（UTC），new Date() 会自动转为本地时间
+// 兼容旧数据（无 Z 后缀的空格分隔格式）：replace 后仍能被 Date 解析
 export function formatRelativeTime(ts: string): string {
   const d = new Date(ts.replace(' ', 'T'))
   if (isNaN(d.getTime())) return ts.slice(0, 19)

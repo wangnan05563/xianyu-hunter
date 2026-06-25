@@ -108,3 +108,28 @@ def test_swap_user_nick_with_sold_label() -> None:
     nick, region = extract_seller_nick(raw)
     assert nick == "买***家"
     assert region == "已售"
+
+
+# 场景 11：userNick 是简短城市名，region 是脱敏昵称 → 应交换
+# 复现用户反馈：实时查询时 seller_nick 显示"杭州"，region 显示"芯***鱼"（错位）
+# 修复前：_looks_like_publish_label("杭州")=False → 场景 2 不触发，不交换
+# 修复后：region 是脱敏昵称时强制交换，不再依赖 _looks_like_publish_label(nick) 的判断
+def test_swap_user_nick_short_city_region_masked_nick() -> None:
+    """userNick 是简短城市名（如'杭州'），region 是脱敏昵称 → 应交换"""
+    for city, masked_nick in [("杭州", "芯***鱼"), ("深圳", "买***家"), ("广州", "数***好")]:
+        raw = {"userNick": city, "region": masked_nick}
+        nick, region = extract_seller_nick(raw)
+        assert nick == masked_nick, \
+            f"userNick={city!r} + region={masked_nick!r} 时，nick 应为 {masked_nick!r}，但得到 {nick!r}"
+        assert region == city, \
+            f"region 应为原 userNick 值 {city!r}，但得到 {region!r}"
+
+
+# 场景 12：userNick 是普通昵称，region 是脱敏昵称 → 保持 userNick（不交换）
+# 双昵称冗余时，userNick 已是有效昵称，无需用 region 覆盖
+def test_no_swap_when_user_nick_normal_region_masked() -> None:
+    """userNick 是普通昵称，region 是脱敏昵称 → 保持 userNick"""
+    raw = {"userNick": "小明", "region": "芯***鱼"}
+    nick, region = extract_seller_nick(raw)
+    # userNick 已是有效昵称，应保持
+    assert nick == "小明", f"userNick 已是普通昵称，应保持，但得到 {nick!r}"

@@ -12,7 +12,7 @@ eval:
     on_sale_count: 30            # 超过此值视为职业卖家
     post_count_30d: 15           # 月发布超过此值视为职业
     top_category_ratio: 0.8      # 单一类目占比超过 80% 视为职业
-    credit_score_min: 600        # 低于此分一票否决
+    credit_score_min: 60         # 闲鱼信用分0-100，低于此值一票否决
     bad_review_max: 3            # 差评超过此值一票否决
     register_days_min: 30        # 注册不满此天数加风险分
 
