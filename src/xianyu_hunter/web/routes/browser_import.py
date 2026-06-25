@@ -266,21 +266,35 @@ _TARGET_COOKIE_NAMES = {"_m_h5_tk", "_m_h5_tk_enc", "cookie2", "sgcookie", "unb"
 
 def _do_import_from_browser(browser: str, auto_close: bool = False) -> dict:
     """从系统浏览器导入 Cookie 的核心逻辑（返回 dict，由端点包装为 JSONResponse）"""
+    from xianyu_hunter.web.services.browser_profile import discover_profiles
+
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     if not local_app_data:
         return {"ok": False, "error": "无法确定 %LOCALAPPDATA% 路径"}
 
-    source_db = _BROWSER_PATHS.get(browser.lower(), lambda _: None)(local_app_data)
-    if not source_db or not source_db.exists():
-        available = [k for k, v in _BROWSER_PATHS.items() if v(local_app_data).exists()]
+    # 多 Profile 支持：遍历所有 Profile，优先使用含闲鱼 Cookie 的
+    profiles = discover_profiles(browser)
+    if not profiles:
+        available = []
+        for k, v in _BROWSER_PATHS.items():
+            if v(local_app_data).exists():
+                available.append(k)
         return {
             "ok": False,
             "error": f"{browser} 浏览器的 Cookie 文件不存在",
             "hint": f"可用浏览器: {available}" if available else "未检测到已安装的 Edge 或 Chrome",
         }
 
+    # 选取第一个（已按优先级排序：含闲鱼 Cookie 的在前）
+    selected_profile = profiles[0]
+    source_db = selected_profile.cookies_db
+    user_data_dir = selected_profile.user_data_dir
+    logger.info(
+        "选择 Profile: %s (含闲鱼Cookie: %s)",
+        selected_profile.name, selected_profile.has_xianyu_cookie
+    )
+
     # 从 Local State 获取 AES 密钥（Chrome v80+ / Edge 加密所需）
-    user_data_dir = _BROWSER_USER_DATA.get(browser.lower(), lambda _: None)(local_app_data)
     aes_key = _get_browser_aes_key(user_data_dir) if user_data_dir else None
     if aes_key:
         logger.info("成功获取 %s AES 密钥（Chrome v80+ 加密格式）", browser)
@@ -300,6 +314,7 @@ def _do_import_from_browser(browser: str, auto_close: bool = False) -> dict:
     imported_cookies: list[dict] = []  # [{name, value, domain, path}, ...]
     imported_names: list[str] = []     # ["name@domain", ...] 用于显示
     errors = []
+    has_v20 = False  # 跟踪是否检测到 v20 加密，用于引导用户使用 CDP 方式
 
     try:
         tmp_dir = Path(tempfile.mkdtemp(prefix="xh_cookie_"))
@@ -418,6 +433,7 @@ def _do_import_from_browser(browser: str, auto_close: bool = False) -> dict:
                             enc_bytes = bytes(enc_val) if enc_val else b""
                             if enc_bytes[:3] == b"v20":
                                 errors.append(f"{name}@{host_key}: v20加密不支持")
+                                has_v20 = True
                             else:
                                 errors.append(f"{name}@{host_key}: 无法解密")
                             continue
@@ -451,6 +467,13 @@ def _do_import_from_browser(browser: str, auto_close: bool = False) -> dict:
             "imported_cookies": imported_names,
             "source_browser": browser,
         }
+        if has_v20:
+            result["has_v20"] = True
+            result["v20_hint"] = (
+                "检测到 Chrome/Edge v127+ 的 App-Bound Encryption (v20)，"
+                "无法离线解密。请改用 CDP 方式：先运行 scripts/start_edge_debug.ps1 "
+                "启动调试浏览器，然后调用 /api/auth/import-from-browser/cdp"
+            )
         if errors:
             result["errors"] = errors[:10]
         if imported_names:
