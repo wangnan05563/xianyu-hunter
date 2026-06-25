@@ -22,6 +22,7 @@ from xianyu_hunter.web.routes.unified_login import router as unified_login_route
 from xianyu_hunter.web.routes.browser_login import router as browser_login_router
 from xianyu_hunter.web.routes.cookie_inject import router as cookie_inject_router
 from xianyu_hunter.web.routes.browser_import import router as browser_import_router
+from xianyu_hunter.web.routes.browser_import_cdp import router as browser_import_cdp_router
 
 # 聚合所有子模块路由（保持原有 URL 路径不变）
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -30,3 +31,4 @@ router.include_router(unified_login_router)
 router.include_router(browser_login_router)
 router.include_router(cookie_inject_router)
 router.include_router(browser_import_router)
+router.include_router(browser_import_cdp_router)

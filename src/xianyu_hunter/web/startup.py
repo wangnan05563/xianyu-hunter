@@ -14,6 +14,34 @@ from fastapi import FastAPI
 # 调度器后台任务引用（用于 shutdown 时优雅停止）
 _scheduler_task: asyncio.Task | None = None
 
+# Cookie 定时同步调度器引用（用于 shutdown 时优雅停止）
+_cookie_sync_scheduler = None
+
+
+def start_cookie_sync_scheduler(container: Any) -> None:
+    """启动 Cookie 定时同步调度器（如果配置启用）
+
+    独立于项目主任务调度器，使用 APScheduler BackgroundScheduler 运行。
+    仅当 browser.auto_sync=true 时启动。
+    """
+    global _cookie_sync_scheduler
+    from loguru import logger
+    from xianyu_hunter.infra.yaml_config import get_config
+    from xianyu_hunter.modules.cookie_sync_scheduler import CookieSyncScheduler
+
+    cfg = get_config()
+    if not cfg.browser.auto_sync:
+        logger.info("Cookie 自动同步未启用（browser.auto_sync=false）")
+        return
+
+    _cookie_sync_scheduler = CookieSyncScheduler(
+        cookie_store=container.cookie_store,
+        auto_sync_interval=cfg.browser.auto_sync_interval,
+        expiry_threshold=cfg.browser.auto_sync_expiry_threshold,
+        cdp_port=cfg.browser.cdp_port,
+    )
+    _cookie_sync_scheduler.start()
+
 
 async def start_scheduler_in_background(container: Any) -> None:
     """在 FastAPI 事件循环中启动调度器后台任务
@@ -247,10 +275,16 @@ def setup_startup_hooks(app: FastAPI) -> None:
         if _should_start_scheduler():
             await start_scheduler_in_background(container)
 
+        # 启动 Cookie 定时同步（如果配置启用）
+        start_cookie_sync_scheduler(container)
+
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:
         """优雅停止调度器后台任务"""
-        global _scheduler_task
+        global _scheduler_task, _cookie_sync_scheduler
+        if _cookie_sync_scheduler:
+            _cookie_sync_scheduler.stop()
+            _cookie_sync_scheduler = None
         if _scheduler_task and not _scheduler_task.done():
             _scheduler_task.cancel()
             try:
