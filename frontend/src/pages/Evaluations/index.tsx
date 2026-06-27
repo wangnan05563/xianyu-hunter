@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Table, Tag, Button, Space, Spin, Input, Select, Slider, Row, Col, message,
   Empty, DatePicker, Modal, Collapse, Statistic, Image, Tooltip, Alert, Progress,
@@ -9,24 +9,90 @@ import {
   SearchOutlined, UndoOutlined, RetweetOutlined, EnvironmentOutlined,
   ClockCircleOutlined, UserOutlined, PictureOutlined,
   CheckCircleOutlined, CloseCircleOutlined, WarningOutlined,
-  CloudDownloadOutlined, GlobalOutlined,
+  CloudDownloadOutlined, GlobalOutlined, SettingOutlined,
+  ThunderboltOutlined, LeftOutlined, RightOutlined, CalculatorOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { evalApi, aiApi, taskApi, type EvalItem, type AIConditionResult, type Task, type OfficialCollectResult } from '../../api'
+import { evalApi, aiApi, taskApi, orderApi, itemApi, type EvalItem, type AIConditionResult, type Task, type OfficialCollectResult } from '../../api'
 import { RISK_LEVEL_CONFIG } from '../../constants/riskLevels'
 import { isDataInsufficient, getInsufficientReason, type DistResponse, type SellerTrendData } from './utils'
+import { translateDimension, translateRejectReason } from './dimensionLabels'
 import { usePersistentState } from '../../hooks/usePersistentState'
+import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import EvalHeatmap from './components/EvalHeatmap'
 import ResultBarChart from './components/ResultBarChart'
 import PriceHistogram from './components/PriceHistogram'
 import TrendSparkline from './components/TrendSparkline'
+import ColumnSettingsModal from './components/ColumnSettingsModal'
+import CollapsibleRail from './components/CollapsibleRail'
 
 const { RangePicker } = DatePicker
 
 // === 响应式断点（与 Ant Design 默认一致） ===
 // xs < 576, sm ≥ 576, md ≥ 768, lg ≥ 992, xl ≥ 1200, xxl ≥ 1600
 // 评估明细页主要面向桌面端，移动端走横向滚动 + 列隐藏
-const SCROLL_X = 1610
+// SCROLL_X 调整：所有固定宽度列总和约 1790px（含标题列 width=200），
+// 新增订单列(90)+操作列(80)=170px，预留 60px 缓冲，避免窄屏滚动时列被压缩至不可见
+const SCROLL_X = 2020
+
+// P3：官方采集重试退避工具
+// 仅对临时性错误（410/441/502/超时）重试 1 次，避免偶发失败打扰用户
+// 不可重试错误（403/440/503）直接抛出，需用户操作（重新登录/重启服务）
+const RETRYABLE_STATUSES = new Set([410, 441, 502])
+const RETRY_DELAYS: Record<string, number> = {
+  '410': 1000,   // 页面未加载，快速重试
+  '441': 3000,   // 反爬触发，需 3s 冷却
+  '502': 1000,   // 连接异常，快速重试
+  'timeout': 2000,  // 超时，2s 后重试
+}
+
+async function collectOfficialWithRetry(itemId: string, taskId?: string): Promise<OfficialCollectResult> {
+  const MAX_RETRIES = 1
+  let lastErr: unknown
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await evalApi.collectOfficial(itemId, taskId)
+    } catch (err: unknown) {
+      lastErr = err
+      if (attempt >= MAX_RETRIES) break
+      // 判断是否可重试
+      const e = err as { response?: { status?: number }; code?: string; message?: string }
+      const status = e?.response?.status
+      const isTimeout = e?.code === 'ECONNABORTED' || /timeout/i.test(e?.message || '')
+      const retryable = isTimeout || (status !== undefined && RETRYABLE_STATUSES.has(status))
+      if (!retryable) break
+      // 计算退避时间
+      const delayKey = isTimeout ? 'timeout' : String(status)
+      const delay = RETRY_DELAYS[delayKey] ?? 2000
+      await new Promise(resolve => setTimeout(resolve, delay))
+      // 重试时不弹消息，避免打扰用户（仅在最终失败时展示错误）
+    }
+  }
+  throw lastErr
+}
+
+// === 列元数据定义：用于配置面板（拖拽排序与显示/隐藏） ===
+// key 必须与下方 columns 中每列的 key 一致
+// locked=true 的列禁止隐藏（标题、评分等核心展示列）
+const COLUMN_DEFINITIONS: ColumnConfig[] = [
+  { key: 'task_id', label: '任务ID' },
+  { key: 'thumb', label: '图片' },
+  { key: 'title', label: '标题', locked: true },
+  { key: 'price', label: '价格' },
+  { key: 'seller', label: '卖家' },
+  { key: 'region', label: '地区' },
+  { key: 'brand', label: '品牌' },
+  { key: 'want', label: '想要' },
+  { key: 'view', label: '浏览' },
+  { key: 'publish', label: '发布时间' },
+  { key: 'condition', label: '成色' },
+  { key: 'condition_tags', label: '成色标签' },
+  { key: 'score', label: '评分', locked: true },
+  { key: 'risk', label: '风险' },
+  { key: 'ai', label: 'AI' },
+  { key: 'collect', label: '官方采集' },
+  { key: 'feedback', label: '反馈' },
+]
 
 // 把任意时间格式化为 zh-CN 友好的本地时间；无法解析时返回 null
 function formatPublishTime(raw: string | number | null | undefined): string | null {
@@ -39,6 +105,9 @@ function formatPublishTime(raw: string | number | null | undefined): string | nu
 // 缩略图兜底：URL 为空或加载失败时显示占位符
 function ThumbCell({ url, title }: { url?: string | null; title?: string | null }) {
   const [errored, setErrored] = useState(false)
+  // url 变化时重置 errored：官方采集更新图片后需重新尝试加载，
+  // 否则旧失败状态残留导致 React 复用实例时永远显示占位图
+  useEffect(() => { setErrored(false) }, [url])
   if (!url || errored) {
     return (
       <div
@@ -79,6 +148,8 @@ export default function Evaluations() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100])
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
+  // 品牌筛选：与商品列表对齐，从当前页 items 提取选项
+  const [brandFilter, setBrandFilter] = useState<string | undefined>(undefined)
 
   // === 分页 ===
   const [page, setPage] = useState(1)
@@ -132,6 +203,29 @@ export default function Evaluations() {
   // 批量官方采集
   const [batchCollecting, setBatchCollecting] = useState(false)
   const [batchCollectProgress, setBatchCollectProgress] = useState({ done: 0, total: 0 })
+
+  // === 手动抢单 ===
+  // 按 item_id 索引 loading 状态，支持多行独立 loading
+  const [manualTaking, setManualTaking] = useState<Record<string, boolean>>({})
+
+  // === 列配置（拖拽排序 + 显示/隐藏，持久化到 localStorage） ===
+  const [columnConfigOpen, setColumnConfigOpen] = useState(false)
+  const {
+    order: columnOrder,
+    hidden: hiddenColumns,
+    toggleHidden: toggleColumnHidden,
+    moveColumn: moveColumnOrder,
+    reset: resetColumnConfig,
+    applyConfig: applyColumnConfig,
+  } = useColumnConfig('xh.evals.columns', COLUMN_DEFINITIONS)
+
+  // === 右侧分析面板折叠状态 ===
+  // 持久化用户偏好：专注列表浏览时折叠，分析时展开
+  // 默认展开保持与历史行为一致，避免老用户升级后面板"消失"的困惑
+  const [panelCollapsed, setPanelCollapsed] = usePersistentState<boolean>(
+    'xh.evals.panelCollapsed', false,
+    { validator: (v): v is boolean => typeof v === 'boolean' },
+  )
 
   // 用当前配置重新计算历史评估
   const onRecompute = async () => {
@@ -211,20 +305,31 @@ export default function Evaluations() {
     const itemId = r.item_id
     setCollecting((prev) => ({ ...prev, [itemId]: true }))
     try {
-      const result = await evalApi.collectOfficial(itemId, r.task_id)
+      // P3：对临时性错误（410/441/502/超时）自动退避重试 1 次
+      // 避免页面偶发未加载/反爬瞬时触发打扰用户
+      const result = await collectOfficialWithRetry(itemId, r.task_id)
       setCollectResult(result)
       setCollectModalOpen(true)
       message.success(`官方采集评估完成，评分：${result.evaluation.score ?? 'N/A'}`)
       load()  // 刷新列表以展示更新后的评估结果
     } catch (err: unknown) {
-      const error = err as { response?: { status?: number; data?: { detail?: string } } }
+      const error = err as { response?: { status?: number; data?: { detail?: string } }; code?: string; message?: string }
       const status = error?.response?.status
       const detail = error?.response?.data?.detail
-      if (status === 503) {
+      // axios 超时无 response.status，需通过 code 识别，避免误报为「官方采集失败」
+      if (error?.code === 'ECONNABORTED' || /timeout/i.test(error?.message || '')) {
+        message.error('官方采集超时（详情页+卖家主页加载缓慢），请稍后重试或检查网络')
+      } else if (status === 503) {
         message.error(detail || '官方采集需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动')
-      } else if (status === 403) {
-        // 403 表示闲鱼 Cookie 失效（非系统登录失效），不能用 401 以免触发 axios 全局登出
+      } else if (status === 403 || status === 440) {
+        // 403=cookie缺失、440=cookie失效被重定向，均不能使用 401 以免触发 axios 全局登出
         message.error(detail || '闲鱼登录已过期，请重新登录闲鱼')
+      } else if (status === 441) {
+        // 441=反爬触发（验证码/RGV587）
+        message.error(detail || '触发闲鱼反爬限制，请稍后重试或手动完成验证')
+      } else if (status === 410) {
+        // 410=商品下架/详情页未正常加载，提示用户重试或检查商品
+        message.error(detail || '商品详情页加载失败或已下架，请稍后重试')
       } else if (status === 502) {
         message.error(detail || '浏览器连接异常，请重启服务后重试')
       } else {
@@ -267,14 +372,77 @@ export default function Evaluations() {
     load()
   }
 
+  // === 手动抢单 ===
+  // 让用户在评估明细页面主动触发抢单，突破纯自动模式限制
+  // 前置条件：服务以 XH_WITH_SCHEDULER=1 模式启动以注入浏览器实例
+  const onManualTakeover = async (r: EvalItem) => {
+    const itemId = r.item_id
+    setManualTaking((prev) => ({ ...prev, [itemId]: true }))
+    try {
+      const result = await orderApi.manualTakeover(itemId, r.task_id)
+      if (result.outcome === 'success') {
+        message.success(result.message || '抢单成功')
+      } else if (result.outcome === 'skipped_duplicate') {
+        message.info(result.message || '商品已下过单，幂等跳过')
+      }
+      // 刷新列表以展示最新订单状态
+      load()
+    } catch (err: unknown) {
+      const error = err as { response?: { status?: number; data?: { detail?: string } }; code?: string; message?: string }
+      const status = error?.response?.status
+      const detail = error?.response?.data?.detail
+      // 超时错误（ECONNABORTED）：axios 超时后 response 为 undefined
+      if (error?.code === 'ECONNABORTED' || (error?.message || '').includes('timeout')) {
+        message.error('抢单超时：浏览器自动化流程耗时过长，请检查网络后重试')
+      } else if (status === 503) {
+        message.error(detail || '抢单功能未启用：需要以 XH_WITH_SCHEDULER=1 模式启动服务')
+      } else if (status === 403) {
+        // 403 表示闲鱼 Cookie 失效（非系统登录失效），不能用 401 以免触发 axios 全局登出
+        message.error(detail || '闲鱼登录已过期，请先在「Cookie 注入」页面重新登录闲鱼')
+      } else if (status === 404) {
+        message.error(detail || '商品不存在于数据库中')
+      } else if (status === 502) {
+        message.error(detail || '抢单失败：未找到提交订单按钮，可能商品已下架或页面结构变化')
+      } else {
+        message.error(detail || '抢单失败，请稍后重试')
+      }
+    } finally {
+      setManualTaking((prev) => ({ ...prev, [itemId]: false }))
+    }
+  }
+
+  // === 标题点击异步采集 + 打开新标签页 ===
+  // 复用 ItemList 页面的 handleItemClick 模式：preventDefault 阻止默认跳转，
+  // 异步调用 /api/items/{id}/refresh 触发后端采集（更新 brand 等字段到 task_links.display），
+  // 同时 window.open 打开新标签页，让用户既能看商品页又能后台采集数据。
+  // 采集完成后刷新列表，让 brand 等字段在前端展示。
+  const onTitleClick = (e: React.MouseEvent, r: EvalItem, url: string) => {
+    e.preventDefault()
+    const itemId = r.item_id
+    if (!itemId) return
+    // loading 提示让用户感知后台正在采集，避免「点击后无反馈」的体验
+    // 失败时显示错误：detail 卡住/超时是浏览器实例异常的常见症状，需要告知用户
+    const hide = message.loading(`正在采集 ${itemId.slice(0, 8)}...`, 0)
+    itemApi.refresh(itemId).then(() => {
+      hide()
+      message.success(`已更新商品信息：${itemId.slice(0, 8)}...`)
+      load()  // 刷新列表以展示更新后的 brand 等字段
+    }).catch((err: unknown) => {
+      hide()
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      message.error(detail || `采集失败：${itemId.slice(0, 8)}...，请稍后重试`)
+    })
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   // 加载评估列表
   // 用 ref 持有筛选条件最新值，避免每次键入触发 API 请求
-  const filtersRef = useRef({ itemId, taskId, scoreRange, dateRange })
-  filtersRef.current = { itemId, taskId, scoreRange, dateRange }
+  const filtersRef = useRef({ itemId, taskId, scoreRange, dateRange, brandFilter })
+  filtersRef.current = { itemId, taskId, scoreRange, dateRange, brandFilter }
 
   const load = useCallback(() => {
     setLoading(true)
-    const { itemId: fItemId, taskId: fTaskId, scoreRange: fScore, dateRange: fDate } = filtersRef.current
+    const { itemId: fItemId, taskId: fTaskId, scoreRange: fScore, dateRange: fDate, brandFilter: fBrand } = filtersRef.current
     const params: Record<string, unknown> = {
       page_num: page,
       page_size: pageSize,
@@ -286,6 +454,7 @@ export default function Evaluations() {
     if (fScore[1] < 100) params.max_score = fScore[1]
     if (fDate && fDate[0]) params.start_time = fDate[0].format('YYYY-MM-DD')
     if (fDate && fDate[1]) params.end_time = fDate[1].format('YYYY-MM-DD')
+    if (fBrand) params.brand = fBrand
 
     evalApi.list(params)
       .then((res) => {
@@ -325,9 +494,9 @@ export default function Evaluations() {
     }
   }
   const onReset = () => {
-    setItemId(''); setTaskId(''); setScoreRange([0, 100]); setDateRange(null)
+    setItemId(''); setTaskId(''); setScoreRange([0, 100]); setDateRange(null); setBrandFilter(undefined)
     // 重置后需要用新条件重新加载
-    filtersRef.current = { itemId: '', taskId: '', scoreRange: [0, 100] as [number, number], dateRange: null }
+    filtersRef.current = { itemId: '', taskId: '', scoreRange: [0, 100] as [number, number], dateRange: null, brandFilter: undefined }
     if (page !== 1) {
       setPage(1)  // useEffect 会自动触发 load
     } else {
@@ -445,14 +614,22 @@ export default function Evaluations() {
       },
     },
     {
-      title: '标题', key: 'title', ellipsis: true,
+      title: '标题', key: 'title', width: 200, ellipsis: true,
       // 标题列在极窄屏保留 ellipsis + tooltip，宽屏完整显示
+      // 必须设 width：原代码无 width 导致与其他固定宽度列总和过近，
+      // 标题列剩余空间被压缩为 0 实际不可见
+      // 点击行为：异步触发后端采集（更新 brand 等字段到 task_links.display），
+      // 同时打开新标签页让用户浏览商品页，采集完成后刷新列表
       render: (_: unknown, r: EvalItem) => {
         const title = r.payload?.item_title || '—'
         const url = `https://www.goofish.com/item?id=${r.item_id}`
         return (
-          <Tooltip title={title}>
-            <a href={url} target="_blank" rel="noopener noreferrer">
+          <Tooltip title={`${title}（点击采集更新品牌等字段）`}>
+            <a
+              href={url}
+              onClick={(e) => onTitleClick(e, r, url)}
+              style={{ cursor: 'pointer' }}
+            >
               {title} <LinkOutlined />
             </a>
           </Tooltip>
@@ -509,6 +686,16 @@ export default function Evaluations() {
             {region}
           </span>
         )
+      },
+    },
+    {
+      // 品牌列：由后端 _enrich_eval_with_item 从 task_links.display 补充
+      // 空值显示"—"，与商品列表页对齐
+      title: '品牌', key: 'brand', width: 90, ellipsis: true,
+      render: (_: unknown, r: EvalItem) => {
+        const brand = r.payload?.brand as string | undefined
+        if (!brand) return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
+        return <Tooltip title={brand}>{brand}</Tooltip>
       },
     },
     {
@@ -709,7 +896,90 @@ export default function Evaluations() {
         )
       },
     },
+    {
+      // 订单状态列：显示商品是否已被抢单，让用户无需切换到 Orders 页面即可看到结果
+      // 数据来源：后端 _enrich_eval_with_item 实时关联 orders 表注入的 order_status 字段
+      title: '订单', key: 'order_status', width: 90,
+      render: (_: unknown, r: EvalItem) => {
+        const status = r.payload?.order_status as string | undefined
+        if (!status) {
+          return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
+        }
+        // 订单状态映射：颜色与文案与 Orders 页面保持一致
+        const statusMap: Record<string, { color: string; label: string }> = {
+          pending_pay: { color: 'orange', label: '待支付' },
+          paid: { color: 'blue', label: '已支付' },
+          succeeded: { color: 'green', label: '已成功' },
+          takeover_pending: { color: 'gold', label: '接管中' },
+          cancelled: { color: 'default', label: '已取消' },
+          failed: { color: 'red', label: '失败' },
+        }
+        const cfg = statusMap[status] || { color: 'default', label: status }
+        return <Tag color={cfg.color}>{cfg.label}</Tag>
+      },
+    },
+    {
+      // 手动抢单操作列：仅在评分≥auto_buy_score（默认80）且无订单时显示
+      // 突破纯自动模式限制，让用户保留抢单决策权
+      title: '操作', key: 'action', width: 80, fixed: 'right' as const,
+      render: (_: unknown, r: EvalItem) => {
+        const score = r.payload.score ?? 0
+        const orderStatus = r.payload?.order_status as string | undefined
+        // 已有订单时不显示抢单按钮（避免重复下单）
+        if (orderStatus && orderStatus !== 'failed' && orderStatus !== 'cancelled') {
+          return <span style={{ color: 'var(--xh-text-quaternary)', fontSize: 11 }}>已下单</span>
+        }
+        // 评分低于阈值时不显示（避免误操作）
+        if (score < autoBuyScore) {
+          return <span style={{ color: 'var(--xh-text-quaternary)', fontSize: 11 }}>未达阈值</span>
+        }
+        return (
+          <Tooltip title={`手动抢单（评分 ${score.toFixed(0)} ≥ ${autoBuyScore}）`}>
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              icon={<ThunderboltOutlined />}
+              loading={manualTaking[r.item_id]}
+              onClick={() => onManualTakeover(r)}
+            />
+          </Tooltip>
+        )
+      },
+    },
   ]
+
+  // 列宽自适应：折叠右侧面板时，列表获得更多空间，
+  // 移除 task_id/publish 的 responsive 限制强制显示，并加宽 title/seller/condition_tags
+  // 为什么用 useMemo 派生而非修改 useColumnConfig：折叠列宽是系统行为，
+  // 与用户手动配置的显隐/排序正交，保持 hook 通用性
+  const adaptedColumns = useMemo(() => {
+    if (!panelCollapsed) return columns
+    return columns.map((col) => {
+      switch (col.key) {
+        case 'task_id': return { ...col, responsive: undefined }
+        case 'title': return { ...col, width: 280 }
+        case 'seller': return { ...col, width: 220 }
+        case 'publish': return { ...col, responsive: undefined }
+        case 'condition_tags': return { ...col, width: 180 }
+        default: return col
+      }
+    })
+  }, [columns, panelCollapsed])
+
+  // 应用列配置：根据用户拖拽顺序重排 + 跳过已隐藏的列
+  // 为什么在 columns 之后派生：columns 中所有列都有 key，applyConfig 依赖 key 重排
+  const visibleColumns = applyColumnConfig(adaptedColumns)
+
+  // 折叠态下列宽总和增加（title+80, seller+50, condition_tags+30 = 160），
+  // 同步扩展横向滚动宽度避免列被压缩
+  const scrollX = panelCollapsed ? 2180 : SCROLL_X
+
+  // 品牌选项：从当前已加载的评估列表中提取（payload.brand 由后端 enrich 补充）
+  // 分页场景下选项可能不完整，用户可清空筛选后重新选择，与商品列表页策略一致
+  const brandOptions = [...new Set(
+    items.map((i) => i.payload?.brand as string | undefined).filter(Boolean)
+  )].sort()
 
   // 展开行：详细信息 + 卖家价格趋势
   // 展示接口返回但主表格未显示的完整字段，帮助用户做购买决策
@@ -808,7 +1078,7 @@ export default function Evaluations() {
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                       {ruleDims.map(([k, v]) => (
                         <Tag key={k} color="blue">
-                          {k}: {v}
+                          {translateDimension(k)}: {v}
                         </Tag>
                       ))}
                     </div>
@@ -817,7 +1087,7 @@ export default function Evaluations() {
                     <div style={{ fontSize: 12 }}>
                       <span style={{ color: 'var(--xh-text-tertiary)' }}>拒绝原因: </span>
                       {rejectReasons.map((reason, i) => (
-                        <Tag key={i} color="orange" style={{ fontSize: 11, marginBottom: 2 }}>{reason}</Tag>
+                        <Tag key={i} color="orange" style={{ fontSize: 11, marginBottom: 2 }}>{translateRejectReason(reason)}</Tag>
                       ))}
                     </div>
                   )}
@@ -962,11 +1232,28 @@ export default function Evaluations() {
             value={dateRange as [dayjs.Dayjs, dayjs.Dayjs] | null}
             onChange={(v) => setDateRange(v as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null)}
           />
+          <span>品牌：</span>
+          <Select
+            placeholder="选择品牌"
+            allowClear
+            showSearch
+            style={{ width: 160 }}
+            value={brandFilter}
+            onChange={(v) => { setBrandFilter(v); setPage(1); setTimeout(load, 0) }}
+            onClear={() => setBrandFilter(undefined)}
+            filterOption={(input, option) =>
+              (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
+            }
+            options={brandOptions.map((b) => ({ label: b, value: b }))}
+            notFoundContent="暂无品牌"
+          />
           <Button type="primary" icon={<SearchOutlined />} onClick={onSearch}>查询</Button>
           <Button icon={<UndoOutlined />} onClick={onReset}>重置</Button>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
           <Button icon={<RetweetOutlined />} onClick={onRecompute} loading={recomputing}>重新评估</Button>
           <Button icon={<RetweetOutlined />} onClick={onBatchEvaluateUnevaluated} loading={batchEvaluating}>批量评估未评估商品</Button>
+          {/* 列配置：拖拽调整列顺序 + 显示/隐藏字段，配置持久化到 localStorage */}
+          <Button icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)}>列配置</Button>
         </Space>
       </Card>
 
@@ -1008,9 +1295,20 @@ export default function Evaluations() {
       )}
 
       <Row gutter={16}>
-        {/* 左侧：列表 */}
-        <Col span={16}>
-          <Card>
+        {/* 左侧：列表 —— 折叠右侧面板时自动扩展到 23/24 宽度 */}
+        <Col span={panelCollapsed ? 23 : 16}>
+          <Card
+            extra={
+              <Tooltip title={panelCollapsed ? '展开分析面板' : '收起分析面板'}>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={panelCollapsed ? <RightOutlined /> : <LeftOutlined />}
+                  onClick={() => setPanelCollapsed(!panelCollapsed)}
+                />
+              </Tooltip>
+            }
+          >
             {/* 批量操作工具条：选中行后显示 */}
             {selectedRowKeys.length > 0 && (
               <Alert
@@ -1059,7 +1357,7 @@ export default function Evaluations() {
                 <Empty description="暂无评估数据" />
               ) : (
                 <Table
-                  columns={columns}
+                  columns={visibleColumns}
                   dataSource={items}
                   rowKey={(r) => `${r.item_id}-${r.created_at}`}
                   size="middle"
@@ -1067,9 +1365,9 @@ export default function Evaluations() {
                     selectedRowKeys,
                     onChange: (keys) => setSelectedRowKeys(keys),
                   }}
-                  // 横向滚动：保证窄屏（< SCROLL_X）下所有列仍可访问；
-                  // 列上的 responsive 会在 >= sm/md 时自动展开
-                  scroll={{ x: SCROLL_X }}
+                  // 横向滚动：保证窄屏下所有列仍可访问；
+                  // 折叠右侧面板时列宽总和增加，scrollX 同步扩展
+                  scroll={{ x: scrollX }}
                   expandable={{
                     expandedRowRender,
                     rowExpandable: () => true,
@@ -1092,82 +1390,88 @@ export default function Evaluations() {
           </Card>
         </Col>
 
-        {/* 右侧：图表 */}
-        <Col span={8}>
-          <EvalHeatmap
-            dist={dist}
-            distRange={distRange}
-            distLoading={distLoading}
-            onRangeChange={setDistRange}
-          />
-
-          <ResultBarChart dist={dist} passScore={passScore} autoBuyScore={autoBuyScore} />
-
-          <PriceHistogram dist={dist} />
-
-          {/* 阈值建议 */}
-          <Card title="阈值建议">
-            <div style={{ marginBottom: 8 }}>目标通过率：{thresholdTarget}%</div>
-            <Slider value={thresholdTarget} onChange={(v) => setThresholdTarget(v)} min={10} max={90} step={5} />
-            <Button type="primary" icon={<AimOutlined />} onClick={fetchSuggestion} style={{ marginTop: 8 }} block>
-              计算建议阈值
-            </Button>
-            {suggestion && (
-              <div style={{ marginTop: 16, padding: 12, background: 'rgba(82, 196, 26, 0.08)', borderRadius: 4 }}>
-                <div>建议阈值：<b style={{ color: '#52c41a' }}>{suggestion.suggested_threshold}</b></div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>当前通过率：{(suggestion.current_pass_rate * 100).toFixed(1)}%</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>样本数：{dist?.total ?? '—'}</div>
-              </div>
-            )}
-          </Card>
-
-          {/* 阈值通过率计算器：拖动阈值滑块实时查看通过率 */}
-          <Card title="阈值通过率计算器" style={{ marginTop: 16 }}>
-            <div style={{ marginBottom: 8 }}>
-              当前阈值：<b style={{ color: '#1890ff' }}>{thresholdValue}</b> 分
-            </div>
-            <Slider
-              value={thresholdValue}
-              onChange={setThresholdValue}
-              min={0} max={100} step={1}
-              marks={{ 0: '0', 60: '60', 80: '80', 100: '100' }}
-            />
-            <Row gutter={16} style={{ marginTop: 12 }}>
-              <Col span={8}>
-                <Statistic
-                  title="通过率"
-                  value={thresholdPassRate.toFixed(1)}
-                  suffix="%"
-                  valueStyle={{ color: thresholdPassRate >= 60 ? '#52c41a' : '#ff4d4f' }}
-                />
-              </Col>
-              <Col span={8}>
-                <Statistic title="通过数" value={thresholdPassCount} valueStyle={{ color: '#1890ff' }} />
-              </Col>
-              <Col span={8}>
-                <Statistic title="总数" value={items.length} />
-              </Col>
-            </Row>
-
-            {/* 目标通过率：设定目标后自动推算建议阈值 */}
-            <div style={{ marginTop: 20, paddingTop: 12, borderTop: '1px solid #f0f0f0' }}>
-              <div style={{ marginBottom: 8 }}>
-                目标通过率：<b style={{ color: '#faad14' }}>{targetPassRate}%</b>
-              </div>
-              <Slider
-                value={targetPassRate}
-                onChange={setTargetPassRate}
-                min={10} max={100} step={5}
-                marks={{ 10: '10%', 50: '50%', 70: '70%', 100: '100%' }}
+        {/* 右侧：分析面板 —— 折叠时变为窄竖条，展开时显示完整图表列 */}
+        <Col span={panelCollapsed ? 1 : 8}>
+          {panelCollapsed ? (
+            <CollapsibleRail onExpand={() => setPanelCollapsed(false)} />
+          ) : (
+            <>
+              <EvalHeatmap
+                dist={dist}
+                distRange={distRange}
+                distLoading={distLoading}
+                onRangeChange={setDistRange}
               />
-              <div style={{ marginTop: 8, padding: 12, background: 'rgba(250, 140, 22, 0.08)', borderRadius: 4 }}>
-                <div>建议阈值：<b style={{ color: '#fa8c16' }}>{autoSuggestedThreshold.toFixed(1)}</b> 分</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
-                  即评分 ≥ {autoSuggestedThreshold.toFixed(1)} 时，约 {targetPassRate}% 的评估可通过
+
+              <ResultBarChart dist={dist} passScore={passScore} autoBuyScore={autoBuyScore} />
+
+              <PriceHistogram dist={dist} />
+
+              {/* 阈值建议 */}
+              <Card title={<><AimOutlined style={{ marginRight: 6 }} />阈值建议</>} style={{ marginTop: 16 }}>
+                <div style={{ marginBottom: 8 }}>目标通过率：{thresholdTarget}%</div>
+                <Slider value={thresholdTarget} onChange={(v) => setThresholdTarget(v)} min={10} max={90} step={5} />
+                <Button type="primary" icon={<AimOutlined />} onClick={fetchSuggestion} style={{ marginTop: 8 }} block>
+                  计算建议阈值
+                </Button>
+                {suggestion && (
+                  <div style={{ marginTop: 16, padding: 12, background: 'rgba(82, 196, 26, 0.08)', borderRadius: 4 }}>
+                    <div>建议阈值：<b style={{ color: '#52c41a' }}>{suggestion.suggested_threshold}</b></div>
+                    <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>当前通过率：{(suggestion.current_pass_rate * 100).toFixed(1)}%</div>
+                    <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>样本数：{dist?.total ?? '—'}</div>
+                  </div>
+                )}
+              </Card>
+
+              {/* 阈值通过率计算器：拖动阈值滑块实时查看通过率 */}
+              <Card title={<><CalculatorOutlined style={{ marginRight: 6 }} />阈值通过率计算器</>} style={{ marginTop: 16 }}>
+                <div style={{ marginBottom: 8 }}>
+                  当前阈值：<b style={{ color: '#1890ff' }}>{thresholdValue}</b> 分
                 </div>
-              </div>
-            </div>
-          </Card>
+                <Slider
+                  value={thresholdValue}
+                  onChange={setThresholdValue}
+                  min={0} max={100} step={1}
+                  marks={{ 0: '0', 60: '60', 80: '80', 100: '100' }}
+                />
+                <Row gutter={16} style={{ marginTop: 12 }}>
+                  <Col span={8}>
+                    <Statistic
+                      title="通过率"
+                      value={thresholdPassRate.toFixed(1)}
+                      suffix="%"
+                      valueStyle={{ color: thresholdPassRate >= 60 ? '#52c41a' : '#ff4d4f' }}
+                    />
+                  </Col>
+                  <Col span={8}>
+                    <Statistic title="通过数" value={thresholdPassCount} valueStyle={{ color: '#1890ff' }} />
+                  </Col>
+                  <Col span={8}>
+                    <Statistic title="总数" value={items.length} />
+                  </Col>
+                </Row>
+
+                {/* 目标通过率：设定目标后自动推算建议阈值 */}
+                <div style={{ marginTop: 20, paddingTop: 12, borderTop: '1px solid #f0f0f0' }}>
+                  <div style={{ marginBottom: 8 }}>
+                    目标通过率：<b style={{ color: '#faad14' }}>{targetPassRate}%</b>
+                  </div>
+                  <Slider
+                    value={targetPassRate}
+                    onChange={setTargetPassRate}
+                    min={10} max={100} step={5}
+                    marks={{ 10: '10%', 50: '50%', 70: '70%', 100: '100%' }}
+                  />
+                  <div style={{ marginTop: 8, padding: 12, background: 'rgba(250, 140, 22, 0.08)', borderRadius: 4 }}>
+                    <div>建议阈值：<b style={{ color: '#fa8c16' }}>{autoSuggestedThreshold.toFixed(1)}</b> 分</div>
+                    <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                      即评分 ≥ {autoSuggestedThreshold.toFixed(1)} 时，约 {targetPassRate}% 的评估可通过
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            </>
+          )}
         </Col>
       </Row>
 
@@ -1416,9 +1720,10 @@ export default function Evaluations() {
                 {Object.entries(collectResult.evaluation.dimension_scores).map(([dim, score]) => (
                   <Col key={dim} span={8}>
                     <Statistic
-                      title={dim}
+                      // 翻译维度 key 为中文，保留原 key 在后缀括号内供调试定位
+                      title={`${translateDimension(dim)} (${dim})`}
                       value={score}
-                      valueStyle={{ fontSize: 16, color: score >= 70 ? '#52c41a' : score >= 40 ? '#faad14' : '#ff4d4f' }}
+                      valueStyle={{ fontSize: 16, color: Number(score) >= 70 ? '#52c41a' : Number(score) >= 40 ? '#faad14' : '#ff4d4f' }}
                     />
                   </Col>
                 ))}
@@ -1427,7 +1732,9 @@ export default function Evaluations() {
                 <div style={{ marginTop: 8 }}>
                   <strong>拒绝原因：</strong>
                   {collectResult.evaluation.reject_reasons.map((reason, i) => (
-                    <Tag key={i} color="orange" style={{ marginBottom: 4 }}>{reason}</Tag>
+                    <Tag key={i} color="orange" style={{ marginBottom: 4 }} title={reason}>
+                      {translateRejectReason(reason)}
+                    </Tag>
                   ))}
                 </div>
               )}
@@ -1439,6 +1746,18 @@ export default function Evaluations() {
           </div>
         )}
       </Modal>
+
+      {/* 列配置弹窗：拖拽调整列顺序 + 显示/隐藏字段 */}
+      <ColumnSettingsModal
+        open={columnConfigOpen}
+        onClose={() => setColumnConfigOpen(false)}
+        definitions={COLUMN_DEFINITIONS}
+        order={columnOrder}
+        hidden={hiddenColumns}
+        onToggleHidden={toggleColumnHidden}
+        onMove={moveColumnOrder}
+        onReset={resetColumnConfig}
+      />
     </div>
   )
 }

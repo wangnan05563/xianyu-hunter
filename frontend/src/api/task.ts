@@ -67,7 +67,8 @@ export const taskDetailApi = {
 
 // SSE 实时搜索进度事件类型
 export interface LiveProgress {
-  stage: 'checking_cache' | 'checking_cookies' | 'acquiring_lock' | 'searching' | 'refreshing_token' | 'searching_retry' | 'filtering' | 'writing_db' | 'done' | 'error'
+  // waiting_inflight: 已有搜索在进行中，等待复用结果（避免并发竞争 browser_lock）
+  stage: 'checking_cache' | 'checking_cookies' | 'waiting_inflight' | 'acquiring_lock' | 'searching' | 'refreshing_token' | 'searching_retry' | 'filtering' | 'writing_db' | 'done' | 'error'
   detail?: string
   status?: number
   count?: number
@@ -77,13 +78,40 @@ export interface LiveProgress {
   sellers?: TaskLink[]
   session_expired?: boolean
   field_map?: FieldMap
+  // done 阶段携带的过滤汇总信息
+  // 为什么需要：final_total=0 时让用户看到 raw/keyword_skipped/price_skipped 的分布，
+  // 从而判断是搜索不到内容还是被过滤条件筛掉，并提供"显示被过滤结果"入口
+  filter_summary?: LiveFilterSummary
+}
+
+// 实时搜索过滤汇总：后端返回的 raw_results → 过滤后 final_total 链路统计
+export interface LiveFilterSummary {
+  raw: number
+  formatted: number
+  keyword_skipped: number
+  price_skipped: number
+  publish_days_skipped: number
+  final_total: number
+  final_items: number
+  final_sellers: number
+  // 被过滤的商品列表（限制 50 条，避免响应过大）
+  filtered_out: LiveFilteredItem[]
+}
+
+// 被过滤的单条商品记录，供前端 Modal 展示
+export interface LiveFilteredItem {
+  link_type: string
+  link_key: string
+  display?: Partial<TaskLink['display']> & Record<string, any>
+  filter_reason: 'keyword' | 'price' | 'publish_days'
+  filter_detail: string
 }
 
 // 任务关联（商品列表）API：管理任务下挂载的商品/卖家链接
 export const taskLinkApi = {
   list: (
     taskId: string,
-    params: { type?: string; limit?: number; offset?: number; keyword?: string; region?: string },
+    params: { type?: string; limit?: number; offset?: number; keyword?: string; region?: string; brand?: string },
   ) =>
     client
       .get<{ items: TaskLink[]; total: number; total_for_type: number }>(`/api/tasks/${taskId}/links`, { params })
@@ -95,10 +123,11 @@ export const taskLinkApi = {
   // SSE 流式实时搜索：通过 fetch + ReadableStream 接收进度事件
   // onProgress 回调接收每个阶段的进度（checking_cache / searching / writing_db / done / error）
   // 返回最终 done 阶段的完整数据（与旧接口格式兼容）
+  // 为什么包含 filter_summary：done 阶段后端会返回过滤统计，前端用于判断是否被过滤条件筛掉
   live: (
     taskId: string,
     onProgress?: (data: LiveProgress) => void,
-  ): Promise<{ items: TaskLink[]; session_expired?: boolean; field_map?: FieldMap }> => {
+  ): Promise<{ items: TaskLink[]; session_expired?: boolean; field_map?: FieldMap; filter_summary?: LiveFilterSummary }> => {
     const token = localStorage.getItem('xh_token')
     return fetch(`/api/tasks/${taskId}/links/live`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},

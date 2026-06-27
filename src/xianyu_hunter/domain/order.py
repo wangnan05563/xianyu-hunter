@@ -71,3 +71,8 @@ class OutOfStockError(BuyerError):
 class ButtonNotFoundError(BuyerError):
     """找不到「立即购买」按钮（页面结构变化）"""
     pass
+
+
+class ItemSoldError(BuyerError):
+    """商品已售出，不可抢购（与 ButtonNotFoundError 区分，便于返回明确错误）"""
+    pass

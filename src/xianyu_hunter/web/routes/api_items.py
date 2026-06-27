@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -75,3 +76,117 @@ def items_batch(
             "seller_id": item.get("seller_id"),
         }
     return {"summaries": summaries, "missing": missing, "count": len(summaries)}
+
+
+@router.post("/{item_id}/refresh")
+async def refresh_item(
+    item_id: str,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """刷新单个商品详情：采集详情页并更新 items 表 + task_links.display
+
+    触发场景：
+    - 前端商品列表点击商品链接时异步调用
+    - 官方采集流程复用
+    - 抢单失败回退刷新
+    """
+    from loguru import logger
+
+    # 校验 collector 是否可用（Web 进程 with_browser=False 时为 None）
+    if container.collector is None:
+        raise HTTPException(
+            status_code=503,
+            detail="需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动",
+        )
+
+    item = container.repo.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="商品不存在")
+
+    # detail() 内部 page.goto 已有 30s 超时，但 page.query_selector 等无 timeout 参数，
+    # 浏览器实例异常（页面/上下文已关闭）时会无限挂起。
+    # 这里加 60s 整体超时：detail 正常应在 30s 内完成，60s 是合理上限；
+    # 超时说明浏览器实例异常或闲鱼反爬拦截，返回 504 让客户端知道是网关超时而非业务错误
+    try:
+        detail = await asyncio.wait_for(
+            container.collector.detail(item_id), timeout=60.0
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"[RefreshItem] 采集超时 item={item_id}（60s），浏览器实例可能异常")
+        raise HTTPException(
+            status_code=504,
+            detail="采集超时：浏览器实例异常或闲鱼反爬拦截，请稍后重试或重启服务",
+        )
+    except Exception as e:
+        logger.warning(f"[RefreshItem] 采集失败 item={item_id}: {e}")
+        raise HTTPException(status_code=502, detail=f"采集失败：{e}")
+
+    if detail is None:
+        raise HTTPException(status_code=502, detail="采集商品详情失败：页面不可达或登录已过期")
+
+    # 更新 items 表（复用官方采集的旧值保留策略，避免清空已有字段）
+    new_row = {
+        "id": item_id,
+        "task_id": item.get("task_id") or "",
+        "title": detail.title,
+        "price": detail.price,
+        "seller_id": detail.seller_id or "",
+        "region": detail.region or "",
+        "want_cnt": detail.want_cnt,
+        "view_cnt": detail.view_cnt,
+        "thumb_url": detail.thumb_url or "",
+        "is_sold": 1 if detail.is_sold else 0,
+    }
+    container.repo.upsert_item(new_row)
+    # 已售时通过 mark_sold 补写 sold_detected_at + 同步 task_links.display
+    if detail.is_sold:
+        container.repo.mark_sold(item_id)
+
+    # 同步 task_links.display：评估明细页 brand 等字段从此处读取
+    # 为什么不全量覆盖 display：worker.py 写入的 seller_credit 等字段不在 detail 中，
+    # 直接 upsert 会丢失。改为读取现有 display 后按字段合并，仅当新值非空时覆盖。
+    task_id = item.get("task_id") or ""
+    if task_id:
+        existing_map = container.repo.list_link_displays_by_keys([item_id], link_type="item")
+        existing_display = existing_map.get(item_id, {})
+        merged_display = dict(existing_display)
+        # 用 detail 采集到的字段覆盖（非空才覆盖，避免清空已有有效值）
+        if detail.title:
+            merged_display["title"] = detail.title
+        if detail.price is not None:
+            merged_display["price"] = detail.price
+        if detail.seller_id:
+            merged_display["seller_id"] = detail.seller_id
+        if detail.region:
+            merged_display["region"] = detail.region
+        if detail.thumb_url:
+            merged_display["thumb_url"] = detail.thumb_url
+        if detail.want_cnt is not None:
+            merged_display["want_cnt"] = detail.want_cnt
+        if detail.view_cnt is not None:
+            merged_display["view_cnt"] = detail.view_cnt
+        if detail.publish_time is not None:
+            merged_display["publish_time"] = detail.publish_time.isoformat()
+        if detail.is_sold is not None:
+            merged_display["is_sold"] = detail.is_sold
+        # brand 字段：仅当 detail 提取/推断到非空 brand 时覆盖原有值
+        # 避免详情页未识别到品牌时清空已有的搜索 API brand
+        if detail.brand:
+            merged_display["brand"] = detail.brand
+        container.repo.upsert_task_link(
+            task_id=task_id,
+            link_type="item",
+            link_key=item_id,
+            display=merged_display,
+            source="auto",
+        )
+
+    logger.info(f"[RefreshItem] 刷新成功 item={item_id} is_sold={detail.is_sold} brand={detail.brand!r}")
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "is_sold": detail.is_sold,
+        "title": detail.title,
+        "price": detail.price,
+        "brand": detail.brand,
+    }

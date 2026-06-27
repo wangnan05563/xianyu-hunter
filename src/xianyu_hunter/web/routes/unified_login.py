@@ -97,6 +97,14 @@ def _trigger_userinfo_refresh() -> None:
     except Exception as e:
         logger.debug("触发用户信息刷新失败: %s", e)
 
+    # 同步 CookieRotator 层状态：登录子进程已写 JSON，但 CookieRotator 层状态
+    # 不会自动同步（on_login_success 是死代码），需主动调用以避免 /cookies/layers 显示失效
+    try:
+        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+        sync_cookie_layers_from_json()
+    except Exception as e:
+        logger.debug("登录后同步 Cookie 层状态失败: %s", e)
+
     # 登录成功后把 Cookie 同步注入到后端 Playwright 浏览器上下文
     # 否则 Playwright 内存中的 cookie 仍是旧的/空的，采集时会被闲鱼重定向到首页
     try:
@@ -131,6 +139,12 @@ def _trigger_userinfo_refresh() -> None:
                 logger.info("已注入 %d 个 Cookie 到 Playwright 浏览器上下文", len(pw_cookies))
     except Exception as e:
         logger.debug("Cookie 注入 Playwright 上下文失败: %s", e)
+
+
+def _trigger_session_start() -> None:
+    """登录成功后自动启动会话管理（TokenRenewer 后台续期）"""
+    from xianyu_hunter.web.services.session_starter import trigger_session_start
+    trigger_session_start()
 
 
 def _read_status_file(status_file: str | None) -> dict:
@@ -382,6 +396,7 @@ def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
             _session["status"] = "success"
             _session["message"] = "扫码登录成功"
             _trigger_userinfo_refresh()
+            _trigger_session_start()
         elif final_state == "timeout":
             _session["status"] = "timeout"
             _session["message"] = "扫码超时，请重试"
@@ -439,6 +454,7 @@ def _background_wait(proc: subprocess.Popen, status_file: Path, method: str) -> 
 
     if file_status == "success":
         _trigger_userinfo_refresh()
+        _trigger_session_start()
         logger.info("浏览器登录成功 (cookie_count=%s)", data.get("cookie_count", "?"))
     else:
         logger.info("浏览器登录结束，状态: %s", file_status)
@@ -478,6 +494,7 @@ def login_status() -> dict:
                     _session["message"] = data.get("message", "")
                     if file_status == "success":
                         _trigger_userinfo_refresh()
+                        _trigger_session_start()
 
         result = {
             "method": _session["method"],

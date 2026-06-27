@@ -248,6 +248,91 @@ class LoginOrchestrator:
 
         logger.info("会话管理已启动")
 
+    # ============== 默认会话启动（登录后自动调用） ==============
+
+    def _default_cookie_provider(self) -> str | None:
+        """默认 token provider：从 CookieStore 读取 _m_h5_tk
+
+        为什么抽到协调器上：登录入口（unified_login/browser_login/
+        browser_import/cookie_inject）都会调起会话，需要统一实现避免分散。
+        cookie_store 延迟导入避免 LoginOrchestrator 引入 web 层编译期依赖。
+        """
+        try:
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+            store = get_cookie_store()
+            data = store._read_json()
+            if not data or not data.get("cookies"):
+                return None
+            for c in data["cookies"]:
+                if c.get("name") == "_m_h5_tk":
+                    return c.get("value", "")
+            return None
+        except Exception as e:
+            logger.debug("默认 cookie_provider 读取失败: %s", e)
+            return None
+
+    async def _default_renew_callback(self) -> bool:
+        """默认 token 续期回调：通过浏览器导航到 m.taobao.com 触发
+
+        为什么用导航而非 API：导航是用户自然行为，
+        风控压力低于直接调用 getTimestamp API。
+        浏览器不可用时返回 False（TokenRenewer 续期失败会触发 on_renew_fail）。
+
+        为什么续期后要回写 Cookie：导航触发的 Set-Cookie 会更新 Worker 浏览器
+        内存中的 _m_h5_tk 等 token，但 CookieStore JSON 仍是登录时的旧值。
+        不回写会导致健康检查误判 token 过期、实时搜索从 JSON 补注入旧 token。
+        回写后形成完整闭环：登录（全量）→ 续期（增量同步）→ 失效重新登录。
+        """
+        page = None
+        try:
+            from xianyu_hunter.web.deps import get_container
+            container = get_container()
+            if not container.browser or not container.browser._context:
+                logger.debug("默认 renew_callback: 浏览器不可用")
+                return False
+            page = await container.browser.new_page()
+            try:
+                await page.goto("https://h5.m.taobao.com/", wait_until="domcontentloaded", timeout=10000)
+            finally:
+                await page.close()
+
+            # 导航成功后提取完整 Cookie 回写 CookieStore，保持 JSON 与浏览器内存一致
+            # 只提取 goofish/taobao 域，避免写入无关域的 Cookie
+            try:
+                cookies = await container.browser.get_cookies(["goofish.com", "taobao.com"])
+                if cookies:
+                    from xianyu_hunter.web.services.cookie_store import get_cookie_store
+                    get_cookie_store().export_cookies(cookies, method="renew")
+                    logger.debug("token 续期后已同步 {} 个 cookie 到 CookieStore", len(cookies))
+            except Exception as e:
+                # 回写失败不影响续期成功状态（token 已在浏览器内存中刷新）
+                logger.warning("token 续期后回写 CookieStore 失败: {}", e)
+            return True
+        except Exception as e:
+            logger.debug("默认 token 续期回调失败: %s", e)
+            return False
+
+    async def start_session_default(self) -> bool:
+        """使用默认 cookie_provider + renew_callback 启动会话
+
+        用于登录成功后自动启动会话管理（TokenRenewer 后台续期）。
+        失败仅记录日志，不抛异常（避免影响登录成功的返回路径）。
+
+        Returns:
+            True 启动成功或会话已活跃；False 启动失败
+        """
+        if self._session_active:
+            return True
+        try:
+            await self.start_session(
+                cookie_provider=self._default_cookie_provider,
+                renew_callback=self._default_renew_callback,
+            )
+            return True
+        except Exception as e:
+            logger.error("自动启动会话失败: %s", e)
+            return False
+
     async def stop_session(self) -> None:
         """停止会话管理"""
         if not self._session_active:
@@ -379,3 +464,44 @@ def get_orchestrator() -> LoginOrchestrator:
     if _orchestrator is None:
         _orchestrator = LoginOrchestrator()
     return _orchestrator
+
+
+def sync_cookie_layers_from_json() -> bool:
+    """从 CookieStore JSON 同步 CookieRotator 层状态
+
+    在所有登录路径（browser_login / auth_helper / cookie_inject / browser_import）
+    成功写入 JSON 后调用，确保层状态与 JSON 实际内容一致。
+
+    为什么需要此函数：on_login_success 从未被调用，导致登录后层状态保持初始 False，
+    /cookies/layers 显示失效。此函数作为统一补救入口，替代 on_login_success 的职责。
+
+    与 /cookies/layers 端点的同步逻辑一致：
+    1. 重新读 JSON 构造 cookie_map（export_cookies 内部已过滤测试数据）
+    2. 过滤已过期的 cookie（expires > 0 且 < now），避免过期 cookie 误标层为 valid
+
+    Returns:
+        True 表示同步成功，False 表示同步失败或无数据
+    """
+    try:
+        import time as _time
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store
+        store = get_cookie_store()
+        data = store._read_json()
+        if not data or not data.get("cookies"):
+            return False
+        # 过滤过期 cookie：与 /cookies/layers 端点保持一致
+        # expires <= 0 视为 session cookie（不过期），expires > 0 且 < now 视为已过期
+        now = _time.time()
+        cookie_map = {
+            c.get("name", ""): c.get("value", "")
+            for c in data["cookies"]
+            if c.get("name") and c.get("value")
+            and not (c.get("expires", -1) and c.get("expires", -1) > 0 and c.get("expires", -1) < now)
+        }
+        if not cookie_map:
+            return False
+        get_orchestrator().cookie_rotator.sync_state_from_cookies(cookie_map)
+        return True
+    except Exception as e:
+        logger.warning("同步 Cookie 层状态失败: %s", e)
+        return False

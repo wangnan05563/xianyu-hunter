@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from xianyu_hunter.domain.item import ItemDetail, ItemSummary
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.domain.urls import build_item_url, build_seller_url
 from xianyu_hunter.infra.logger import get_logger
-from xianyu_hunter.modules.collector_utils import parse_price_from_text
+from xianyu_hunter.modules.collector_utils import extract_brand, parse_price_from_text
 
 logger = get_logger()
 
@@ -45,7 +46,10 @@ class DetailMixin:
             await self.ad.throttle()
             url = build_item_url(item_id)
             logger.debug(f"详情: {url}")
+            _t0 = time.perf_counter()
             response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            _t_goto = time.perf_counter() - _t0
+            logger.debug(f"详情页 {item_id} page.goto 耗时 {_t_goto:.2f}s")
 
             # 检查 HTTP 状态码：404/403/302 等异常状态提前返回 None
             if response is not None:
@@ -64,6 +68,7 @@ class DetailMixin:
 
             # 等待标题（新版闲鱼详情页已移除 h1，主选择器可能失效，
             # 用价格元素作为页面已渲染的信号更可靠）
+            _t1 = time.perf_counter()
             try:
                 await page.wait_for_selector(
                     self.selectors.DETAIL_TITLE_MAIN, timeout=10000
@@ -71,9 +76,13 @@ class DetailMixin:
             except PlaywrightTimeout:
                 # 标题选择器未命中不代表页面没加载，继续尝试其他提取方式
                 logger.warning(f"详情页 {item_id} 标题选择器未出现，尝试备用提取")
+            _t_wait_title = time.perf_counter() - _t1
+            logger.debug(f"详情页 {item_id} wait_for_selector(title) 耗时 {_t_wait_title:.2f}s")
 
             # 解析标题
-            # 优先用 DOM 选择器，失败时从 document.title 兜底（去掉 "_闲鱼" 后缀）
+            # 优先用 DOM 选择器，失败时依次从 og:title meta、document.title 兜底
+            # og:title 是 SPA 框架（React/Vue）通用注入的 meta，不依赖业务 className
+            # 当闲鱼改版导致 h1/[class*='title'] 失效时，og:title 仍可作可靠中间层
             title = ""
             for sel in [self.selectors.DETAIL_TITLE_MAIN, self.selectors.DETAIL_TITLE_ALT]:
                 el = await page.query_selector(sel)
@@ -81,8 +90,19 @@ class DetailMixin:
                     title = (await el.inner_text()).strip()
                     if title:
                         break
-            # 新版闲鱼详情页没有 h1 标题元素，document.title 是最后的可靠来源
-            # 格式："商品标题_闲鱼"，需去掉 "_闲鱼" 后缀
+            # 兜底1：og:title meta（SPA 通常会注入，比 document.title 更纯粹的商品标题）
+            if not title:
+                try:
+                    og_el = await page.query_selector("meta[property='og:title']")
+                    if og_el:
+                        og_title = await og_el.get_attribute("content") or ""
+                        og_title = og_title.strip()
+                        if og_title:
+                            title = og_title
+                            logger.debug(f"详情页 {item_id} 标题从 og:title 兜底提取: {title}")
+                except Exception as e:
+                    logger.debug(f"详情页 {item_id} og:title 提取失败: {e}")
+            # 兜底2：document.title（格式 "商品标题_闲鱼"，需去掉后缀）
             if not title:
                 try:
                     doc_title = await page.title()
@@ -343,6 +363,21 @@ class DetailMixin:
                         logger.warning(f"详情页 {item_id} 标题提取失败（页面可能未加载/已下架/选择器失效），current_url={current_url}")
                 except Exception:
                     logger.warning(f"详情页 {item_id} 标题提取失败（页面可能未加载/已下架/选择器失效），主动返回 None")
+                # P2 增强：dump 页面 HTML 便于事后分析选择器失效根因
+                # 每个 item_id 仅 dump 一次，避免日志爆炸；与 _DUMPED_ITEM_IDS 复用集合
+                if item_id not in _DUMPED_ITEM_IDS:
+                    try:
+                        html_content = await page.content()
+                        dump_path = Path("logs") / f"detail_html_{item_id}.html"
+                        dump_path.parent.mkdir(parents=True, exist_ok=True)
+                        dump_path.write_text(html_content, encoding="utf-8")
+                        _DUMPED_ITEM_IDS.add(item_id)
+                        logger.warning(
+                            "[P2 调试] 详情页 {} 标题提取失败已 dump HTML 到 {}（{} 字符）",
+                            item_id, dump_path, len(html_content),
+                        )
+                    except Exception as dump_err:
+                        logger.error("[P2 调试] 详情页 {} dump HTML 失败: {}", item_id, dump_err)
                 return None
             # 首页标题检测：cookie 失效后闲鱼 SPA 可能在当前 URL 渲染首页内容
             # URL 校验无法检测（URL 未改变），通过标题内容判断是否为首页
@@ -370,6 +405,30 @@ class DetailMixin:
             except Exception:
                 pass
 
+            # 已售检测：采集页面文字，判断商品是否已售出
+            # 为什么在采集侧也检测：官方采集和刷新接口复用此方法，
+            # 在此检测可统一覆盖三个入口（链接刷新/官方采集/抢单前的 detail 调用）
+            is_sold = False
+            try:
+                body_text = await page.text_content("body") or ""
+                is_sold = any(kw in body_text for kw in (
+                    "已售出", "已售完", "已售罄", "宝贝已售", "商品已售",
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+
+            # 品牌字段：详情页 DOM 通常无独立 brand 元素，复用 extract_brand 兜底链路
+            # 优先级：搜索 API brand > 卖家昵称匹配标题 > 标题关键词推断
+            # 为什么不在 DOM 中查找 brand 元素：闲鱼详情页 className 是哈希值，
+            # 无稳定选择器；从标题/卖家昵称推断已是搜索链路的成熟兜底，复用最稳
+            brand = extract_brand(None, title, seller_candidate=detail_seller_nick)
+
+            # P3 埋点：成功路径总耗时（DEBUG 级别，便于诊断慢节点）
+            _t_total = time.perf_counter() - _t0
+            logger.debug(
+                f"详情页 {item_id} 采集完成总耗时 {_t_total:.2f}s "
+                f"(goto={_t_goto:.2f}s, wait_title={_t_wait_title:.2f}s)"
+            )
             return ItemDetail(
                 id=item_id,
                 title=title,
@@ -382,6 +441,7 @@ class DetailMixin:
                 want_cnt=want_cnt,
                 view_cnt=view_cnt,
                 seller_id=seller_id,
+                brand=brand,
                 publish_time=publish_time,  # 已从详情页解析，无则兜底为 now()
                 # 填充从详情页提取的卖家信息
                 detail_seller_nick=detail_seller_nick,
@@ -389,6 +449,7 @@ class DetailMixin:
                 detail_on_sale_count=detail_on_sale_count,
                 detail_sold_count=detail_sold_count,
                 detail_register_days=detail_register_days,
+                is_sold=is_sold,
             )
         except Exception as e:
             logger.exception(f"采集详情失败 {item_id}: {e}")

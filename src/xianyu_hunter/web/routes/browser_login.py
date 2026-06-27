@@ -53,7 +53,7 @@ def _cleanup_dead_process() -> None:
     # 检查 subprocess.Popen 对象
     if proc is not None and proc.poll() is not None:
         logger.warning("浏览器登录子进程已退出（exitcode=%d），强制重置", proc.returncode)
-        _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None}
+        _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
         return
     # 检查 pid
     if pid:
@@ -61,7 +61,7 @@ def _cleanup_dead_process() -> None:
             import psutil
             if not psutil.pid_exists(pid):
                 logger.warning("浏览器登录子进程 pid=%d 已不存在，强制重置", pid)
-                _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None}
+                _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
         except ImportError:
             pass
 
@@ -98,7 +98,9 @@ def start_browser_login() -> JSONResponse:
                 "--status-file", str(status_file),
                 "--timeout", "300",
             ],
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            # 必须使用 CREATE_NEW_CONSOLE 而非 CREATE_NO_WINDOW
+            # CREATE_NO_WINDOW 会导致 GUI 子进程（Playwright 浏览器）不稳定或闪退
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -114,6 +116,7 @@ def start_browser_login() -> JSONResponse:
         "status_file": str(status_file),
         "pid": proc.pid,
         "proc": proc,
+        "cookies_injected": False,
     }
 
     # 后台线程：等待子进程退出后处理终态
@@ -161,6 +164,7 @@ def _background_wait_browser_login(proc: subprocess.Popen, status_file: Path) ->
             if final_status == "success":
                 # 触发用户信息刷新
                 _trigger_userinfo_refresh()
+                _trigger_session_start()
                 logger.info("浏览器登录成功，Cookie 已写入 browser-data (count=%s)", data.get("cookie_count", "?"))
             else:
                 logger.info("浏览器登录结束，状态: %s, 消息: %s", final_status, data.get("message", ""))
@@ -172,8 +176,12 @@ def _background_wait_browser_login(proc: subprocess.Popen, status_file: Path) ->
 
 
 @router.get("/browser-login/status")
-def browser_login_status() -> dict:
-    """轮询浏览器登录状态"""
+async def browser_login_status() -> dict:
+    """轮询浏览器登录状态
+
+    登录成功时，自动将 Cookie 注入到 Worker 浏览器实例中，
+    解决 Worker 在登录前已启动、内存中缺少登录 Cookie 的问题。
+    """
     global _browser_login_state
 
     _cleanup_dead_process()
@@ -200,10 +208,52 @@ def browser_login_status() -> dict:
         if _browser_login_state["status"] != file_status:
             _browser_login_state["status"] = file_status
         if file_status == "success":
+            # 登录成功：将 Cookie 注入到 Worker 浏览器实例
+            # Worker 的 BrowserManager 在登录前就已启动，内存中没有登录 Cookie，
+            # 需要主动注入才能让实时搜索立即可用
+            if not _browser_login_state.get("cookies_injected"):
+                await _inject_cookies_to_worker()
+                _browser_login_state["cookies_injected"] = True
             # 登录成功时设置 xh_token cookie
             return make_auth_response(data)
 
     return data
+
+
+async def _inject_cookies_to_worker() -> None:
+    """从 last_login_cookies.json 读取 Cookie 并注入到 Worker 浏览器实例"""
+    try:
+        from xianyu_hunter.web.deps import get_container
+        container = get_container()
+        if not container.browser:
+            logger.warning("Worker 浏览器实例未初始化，跳过 Cookie 注入")
+            return
+
+        cookie_file = _REPO / "data" / "last_login_cookies.json"
+        if not cookie_file.exists():
+            logger.warning("Cookie 文件不存在: %s，跳过注入", cookie_file)
+            return
+
+        cookies = json.loads(cookie_file.read_text(encoding="utf-8"))
+        if not cookies:
+            logger.warning("Cookie 文件为空，跳过注入")
+            return
+
+        logger.info("开始向 Worker 浏览器实例注入 %d 个 Cookie...", len(cookies))
+        success = await container.browser.add_cookies(cookies)
+        if success:
+            logger.info("Cookie 注入成功，实时搜索现在可用")
+            # 同步 CookieRotator 层状态：浏览器登录子进程已写 JSON，
+            # 需主动同步层状态以避免 /cookies/layers 显示失效
+            try:
+                from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                sync_cookie_layers_from_json()
+            except Exception as e:
+                logger.debug("浏览器登录后同步层状态失败: %s", e)
+        else:
+            logger.error("Cookie 注入失败：关键 Cookie 验证未通过")
+    except Exception as e:
+        logger.error("Cookie 注入异常: %s", e)
 
 
 @router.post("/browser-login/cancel")
@@ -222,7 +272,7 @@ def cancel_browser_login() -> dict:
                 proc.kill()
         except OSError:
             pass
-    _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None}
+    _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
     return {"ok": True, "message": "已取消"}
 
 
@@ -233,3 +283,9 @@ def _trigger_userinfo_refresh() -> None:
         get_auth_manager().trigger_refresh_userinfo_async()
     except Exception as e:
         logger.debug("触发用户信息刷新失败: %s", e)
+
+
+def _trigger_session_start() -> None:
+    """登录成功后自动启动会话管理（TokenRenewer 后台续期）"""
+    from xianyu_hunter.web.services.session_starter import trigger_session_start
+    trigger_session_start()

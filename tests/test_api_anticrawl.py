@@ -8,7 +8,9 @@
 """
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,11 +26,36 @@ client = TestClient(app)
 # 认证 cookie：所有 /api/anticrawl/* 端点都需要 xh_token
 _AUTH_COOKIE = {"xh_token": get_settings().web_token}
 
+# Cookie JSON 文件路径（与 cookie_store.py 中保持一致）
+_COOKIE_JSON = Path("data") / "cookies.json"
+
 
 def _reset_orchestrator():
     """重置单例，确保每个测试干净启动"""
     import xianyu_hunter.modules.login_orchestrator as orch_mod
     orch_mod._orchestrator = None
+
+
+def _backup_json() -> dict | None:
+    """备份当前 JSON 数据，测试后恢复（防止测试污染生产数据）"""
+    if _COOKIE_JSON.exists():
+        return json.loads(_COOKIE_JSON.read_text(encoding="utf-8"))
+    return None
+
+
+def _restore_json(data: dict | None) -> None:
+    """恢复 JSON 数据并清除 CookieStore 缓存"""
+    if data is None:
+        if _COOKIE_JSON.exists():
+            _COOKIE_JSON.unlink()
+    else:
+        _COOKIE_JSON.parent.mkdir(parents=True, exist_ok=True)
+        _COOKIE_JSON.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 清除 CookieStore 缓存，确保下次读取到最新数据
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store
+    store = get_cookie_store()
+    store._cache = None
+    store._cache_ts = 0.0
 
 
 class TestRouteRegistration:
@@ -260,9 +287,20 @@ class TestFreqStatsEndpoint:
 class TestCookieLayersEndpoint:
     """Cookie 层管理端点测试"""
 
+    def setup_method(self):
+        """每个测试前备份 JSON，防止测试数据污染生产环境"""
+        self._backup = _backup_json()
+        _reset_orchestrator()
+
+    def teardown_method(self):
+        """测试后恢复 JSON 并重置协调器"""
+        _restore_json(self._backup)
+        _reset_orchestrator()
+
     def test_get_cookie_layers_default(self):
         """GET /api/anticrawl/cookies/layers 应返回三层状态"""
-        _reset_orchestrator()
+        # 清空 JSON，确保测试在无 cookie 的默认状态下运行
+        _restore_json(None)
 
         resp = client.get("/api/anticrawl/cookies/layers", cookies=_AUTH_COOKIE)
         assert resp.status_code == 200
@@ -300,8 +338,6 @@ class TestCookieLayersEndpoint:
 
     def test_invalidate_identity_cascades(self):
         """失效 identity 层应级联失效 session 层"""
-        _reset_orchestrator()
-
         # 先设置 identity 有效
         orch = get_orchestrator()
         orch.set_cookie_writer(lambda c: len(c))
@@ -330,6 +366,16 @@ class TestCookieLayersEndpoint:
 class TestCookiesUpdateEndpoint:
     """Cookie 更新端点测试"""
 
+    def setup_method(self):
+        """每个测试前备份 JSON，防止测试数据污染生产环境"""
+        self._backup = _backup_json()
+        _reset_orchestrator()
+
+    def teardown_method(self):
+        """测试后恢复 JSON 并重置协调器"""
+        _restore_json(self._backup)
+        _reset_orchestrator()
+
     def test_update_cookies_empty(self):
         """空 cookies 应返回错误"""
         resp = client.post(
@@ -342,10 +388,15 @@ class TestCookiesUpdateEndpoint:
         assert data["ok"] is False
 
     def test_update_cookies_identity_only(self):
-        """仅 identity 层 Cookie 应成功更新"""
-        _reset_orchestrator()
+        """仅 identity 层 Cookie 应成功更新
 
-        cookies = {"unb": "123456", "cookie2": "abc"}
+        注意：cookie 值必须符合真实格式（unb 8位以上数字，cookie2 32位以上hex），
+        否则会被 is_test_cookie 格式校验拦截导致写入失败
+        """
+        cookies = {
+            "unb": "2209384756290",  # 13位数字，通过格式校验
+            "cookie2": "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d",  # 32位hex，通过格式校验
+        }
         resp = client.post(
             "/api/anticrawl/cookies/update",
             json={"cookies": cookies},
@@ -559,7 +610,11 @@ class TestCookieCheckerFix:
         assert data["cookie_valid"] is False
 
     def test_layer_state_auto_synced(self, monkeypatch):
-        """Cookie 有效时层状态应自动同步"""
+        """Cookie 有效时层状态应自动同步
+
+        验证修复后行为：/cookies/layers 端点也会自动同步层状态
+        （原本只有 /health 端点会同步）。
+        """
         _reset_orchestrator()
 
         mock_data = _make_mock_cookie_data(expires_offset=3600)
@@ -572,17 +627,19 @@ class TestCookieCheckerFix:
             cookies=_AUTH_COOKIE,
         )
 
-        # 健康检查前，层状态应为默认 False
+        # /cookies/layers 现在会自动同步从未初始化的层（updated_at=0）
+        # 所以调用后 identity 和 session 层应已同步为有效
         layers_before = client.get(
             "/api/anticrawl/cookies/layers",
             cookies=_AUTH_COOKIE,
         ).json()["layers"]
-        assert layers_before["identity"]["valid"] is False
+        assert layers_before["identity"]["valid"] is True, "identity 层应自动同步为有效"
+        assert layers_before["session"]["valid"] is True, "session 层应自动同步为有效"
 
-        # 执行健康检查（触发自动同步）
+        # 执行健康检查（同样会触发自动同步）
         client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
 
-        # 健康检查后，identity 和 session 层应已同步为有效
+        # 健康检查后，状态保持有效
         layers_after = client.get(
             "/api/anticrawl/cookies/layers",
             cookies=_AUTH_COOKIE,

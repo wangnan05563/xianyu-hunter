@@ -51,8 +51,9 @@ class FakeLocator:
             from playwright.async_api import TimeoutError as PlaywrightTimeout
             raise PlaywrightTimeout(f"click timeout: {self.selector}")
         self.owner.clicks.append(self.selector)
+        self.owner._after_click(self.selector)
 
-    async def wait_for(self, timeout: float = 5000) -> None:
+    async def wait_for(self, state: str | None = None, timeout: float = 5000) -> None:
         # 模拟等待：找到则 ok
         if not self.owner._matches(self.selector):
             from playwright.async_api import TimeoutError as PlaywrightTimeout
@@ -62,12 +63,27 @@ class FakeLocator:
         return self.owner.text_map.get(self.selector)
 
 
+class FakeMouse:
+    def __init__(self, owner):
+        self.owner = owner
+
+    async def click(self, x: float, y: float) -> None:
+        text = self.owner.last_coordinate_text or "mouse"
+        self.owner.clicks.append(f"{text}(mouse:{x:.0f},{y:.0f})")
+        self.owner._after_click(text)
+
+
 @dataclass
 class _BuyScenario:
     """可配置的单次落单场景"""
     out_of_stock: bool = False
     buy_button_missing: bool = False
+    buy_selector_missing: bool = False
     submit_button_missing: bool = False
+    submit_selector_missing: bool = False
+    submit_button_text: str = "提交订单"
+    buy_click_enters_order_page: bool = True
+    order_page_url: str = "https://www.goofish.com/order/confirm"
     actual_price: float | None = None
     order_no: str | None = "202606030001"
 
@@ -86,12 +102,66 @@ class FakePage:
             self.text_map[SelectorRepo.DETAIL_PRICE_MAIN] = f"¥{scenario.actual_price}"
         self.goto_calls: list[str] = []
         self.closed = False
+        self.url = ""
+        self.order_page_ready = False
+        self.mouse = FakeMouse(self)
+        self.last_coordinate_text = ""
 
     def locator(self, selector: str) -> FakeLocator:
         return FakeLocator(self, selector)
 
     async def goto(self, url: str, **kwargs) -> None:
         self.goto_calls.append(url)
+        self.url = url
+
+    async def wait_for_load_state(self, state: str, timeout: float = 5000) -> None:
+        return None
+
+    def is_closed(self) -> bool:
+        return self.closed
+
+    async def title(self) -> str:
+        return "fake title"
+
+    async def evaluate(self, script: str, *args):
+        if "document.body" in script:
+            return ""
+        text = args[0] if args else ""
+        if text == "立即购买" and not self.scenario.buy_button_missing:
+            self.last_coordinate_text = text
+            return [{
+                "raw": "立即购买",
+                "tag": "div",
+                "className": "buy--fake",
+                "x": 123,
+                "y": 456,
+                "width": 160,
+                "height": 44,
+                "score": 1,
+            }]
+        if (
+            text == self.scenario.submit_button_text
+            and self.order_page_ready
+            and not self.scenario.submit_button_missing
+        ):
+            self.last_coordinate_text = text
+            return [{
+                "raw": text,
+                "tag": "div",
+                "className": "submit--fake",
+                "x": 321,
+                "y": 654,
+                "width": 180,
+                "height": 48,
+                "score": 1,
+            }]
+        return []
+
+    def _after_click(self, selector: str) -> None:
+        if "立即购买" in selector or "buy-now" in selector:
+            if self.scenario.buy_click_enters_order_page:
+                self.order_page_ready = True
+                self.url = self.scenario.order_page_url
 
     async def text_content(self, selector: str) -> str | None:
         # 模拟"已下架"提示检测
@@ -108,10 +178,16 @@ class FakePage:
             return False  # 我们没有"已下架"专用 selector
         # 立即购买按钮
         if "立即购买" in selector or "buy-now" in selector:
-            return not s.buy_button_missing
-        # 提交订单按钮
-        if "提交订单" in selector or "submit" in selector:
-            return not s.submit_button_missing
+            return not s.buy_button_missing and not s.buy_selector_missing
+        # 提交订单/确认购买按钮
+        submit_texts = ("提交订单", "确认购买", "确认订单")
+        if any(text in selector for text in submit_texts) or "submit" in selector or "confirm" in selector:
+            if s.submit_button_missing or s.submit_selector_missing or not self.order_page_ready:
+                return False
+            # class 兜底选择器只要出现就认为可命中；文本选择器需匹配当前场景文案。
+            if "submit" in selector or "confirm" in selector:
+                return True
+            return s.submit_button_text in selector
         # 订单号/价格等文本
         return selector in self.text_map
 
@@ -197,6 +273,70 @@ async def test_buy_success() -> None:
     await bus.publish(  # 显式 publish 测试订阅路径
         type("E", (), {"type": EventType.BUY_SUCCEEDED})()
     )
+
+
+@pytest.mark.asyncio
+async def test_buy_success_with_confirm_purchase_button() -> None:
+    """订单确认页按钮文案为「确认购买」时也能落单成功。"""
+    scenario = _BuyScenario(actual_price=1999.0, submit_button_text="确认购买")
+    buyer, _, browser, _ = make_buyer(scenario)
+
+    result = await buyer.buy(task_id="t1", item_id="i1", expected_price=1999.0, page=browser.page)
+
+    assert result.outcome.value == "success"
+    assert any("确认购买" in click for click in browser.page.clicks)
+
+
+@pytest.mark.asyncio
+async def test_buy_success_with_submit_dom_coordinate_fallback() -> None:
+    """订单确认按钮 selector 未命中时，DOM 坐标扫描仍能点击。"""
+    scenario = _BuyScenario(
+        actual_price=1999.0,
+        submit_button_text="确认购买",
+        submit_selector_missing=True,
+    )
+    buyer, _, browser, _ = make_buyer(scenario)
+
+    result = await buyer.buy(task_id="t1", item_id="i1", expected_price=1999.0, page=browser.page)
+
+    assert result.outcome.value == "success"
+    assert any("确认购买(mouse" in click for click in browser.page.clicks)
+
+
+@pytest.mark.asyncio
+async def test_buy_success_with_create_order_url_containing_item_id() -> None:
+    """create-order URL 会带 itemId，不能误判为仍停留在详情页。"""
+    scenario = _BuyScenario(
+        actual_price=1999.0,
+        order_page_url="https://www.goofish.com/create-order?spm=x&itemId=i1",
+    )
+    buyer, _, browser, _ = make_buyer(scenario)
+
+    result = await buyer.buy(task_id="t1", item_id="i1", expected_price=1999.0, page=browser.page)
+
+    assert result.outcome.value == "success"
+    assert "create-order" in browser.page.url
+
+
+@pytest.mark.asyncio
+async def test_buy_fail_when_buy_click_stays_on_detail_page() -> None:
+    """点到「立即购买」但仍停留详情页时，错误应指向未进入确认页。"""
+    scenario = _BuyScenario(actual_price=1999.0, buy_click_enters_order_page=False)
+    buyer, _, browser, _ = make_buyer(
+        scenario,
+        config=BuyerConfig(
+            click_retry_times=1,
+            click_retry_interval=0.01,
+            confirm_button_timeout=0.1,
+            min_interval_between_orders=0.0,
+        ),
+    )
+
+    result = await buyer.buy(task_id="t1", item_id="i1", expected_price=1999.0, page=browser.page)
+
+    assert result.outcome.value == "failed"
+    assert "未进入订单确认页" in result.error
+    assert any("立即购买" in click for click in browser.page.clicks)
 
 
 @pytest.mark.asyncio

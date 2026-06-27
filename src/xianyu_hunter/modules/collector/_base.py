@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.infra.browser import BrowserManager
@@ -49,3 +50,29 @@ class CollectorBase:
         # 上次搜索是否捕获到 API 响应但解析为 0 个商品（可能是登录墙/会话过期）
         # 供 live_links 端点判断是否需要提示用户重新登录
         self._last_api_captured: bool = False
+
+    # ============== _m_h5_tk 刷新时间戳的公共访问接口 ==============
+    # 为什么需要封装：_last_m5tk_refresh 是私有属性，但 web 路由层
+    # （api_task_links.py）需要读写它来协调"补注入身份 Cookie 后强制刷新 token"。
+    # 直接读写私有属性破坏封装性，且若内部重命名会静默失效。封装为公共方法
+    # 让 web 层只依赖稳定的接口而非实现细节。
+
+    def force_refresh_m5tk_next(self) -> None:
+        """标记下次搜索强制刷新 _m_h5_tk token
+
+        通过将 _last_m5tk_refresh 置为 0.0，使 _ensure_fresh_m5tk 的
+        elapsed 判断（time.monotonic() - 0.0 = 巨大值 > 2700s）必然触发刷新。
+        """
+        self._last_m5tk_refresh = 0.0
+
+    def should_reset_m5tk(self, threshold: float = 300.0) -> bool:
+        """判断是否需要重置 token 刷新时间戳
+
+        Args:
+            threshold: 距上次刷新超过此秒数则返回 True（默认 5 分钟）
+
+        为什么默认 5 分钟：覆盖 Worker 浏览器启动时的匿名 token 场景
+        （启动后 5 分钟内首次实时搜索会触发刷新），同时避免短时间连续
+        实时搜索反复刷新（每次约 4s 主页导航）。
+        """
+        return (time.monotonic() - self._last_m5tk_refresh) > threshold

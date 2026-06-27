@@ -194,7 +194,7 @@ class CookieRotator:
             )
 
             logger.info(
-                "Cookie 层 %s 原子更新: %d 个 Cookie, 写入 %d 个域名",
+                "Cookie 层 {} 原子更新: {} 个 Cookie, 写入 {} 个域名",
                 layer.value, len(layer_cookies), len(self.DOMAINS),
             )
             return written
@@ -206,12 +206,13 @@ class CookieRotator:
         """
         with self._lock:
             self._layer_states[layer].valid = False
-            logger.warning("Cookie 层 %s 已标记失效", layer.value)
+            # 为什么用 {} 而非 %s：loguru 占位符是 {}，%s 会被原样输出导致日志难以排查
+            logger.warning("Cookie 层 {} 已标记失效", layer.value)
 
             # 级联失效：identity 失效 → session 失效
             if layer == CookieLayer.IDENTITY:
                 self._layer_states[CookieLayer.SESSION].valid = False
-                logger.warning("Cookie 层 %s 级联失效", CookieLayer.SESSION.value)
+                logger.warning("Cookie 层 {} 级联失效", CookieLayer.SESSION.value)
 
     def invalidate_all(self) -> None:
         """使所有层失效（如检测到登出）"""
@@ -241,7 +242,7 @@ class CookieRotator:
                         cookie_count=len(layer_cookie_names),
                     )
                     logger.info(
-                        "Cookie 层 %s 状态已同步: %d 个 Cookie",
+                        "Cookie 层 {} 状态已同步: {} 个 Cookie",
                         layer.value, len(layer_cookie_names),
                     )
 
@@ -309,7 +310,7 @@ class CookieRotator:
         try:
             return self._writer(cookie_objects)
         except Exception as e:
-            logger.error("Cookie 批量写入失败: %s", e)
+            logger.error("Cookie 批量写入失败: {}", e)
             return 0
 
 

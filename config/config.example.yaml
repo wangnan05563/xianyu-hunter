@@ -20,6 +20,11 @@ browser:
   viewport_height: 768
   user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0
+  # Cookie 定时自动同步（详见 docs/plans/2026-06-25-browser-cookie-import-enhancement-design.md）
+  auto_sync: false                    # 默认关闭，需显式启用
+  auto_sync_interval: 30              # 同步间隔（分钟）
+  auto_sync_expiry_threshold: 10      # Cookie 剩余有效期阈值（分钟），低于此值触发同步
+  cdp_port: 9222                      # CDP 调试端口
 
 # 反检测策略：控制请求频率与行为模拟
 antidetect:

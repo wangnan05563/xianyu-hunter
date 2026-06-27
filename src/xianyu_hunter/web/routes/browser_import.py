@@ -264,8 +264,15 @@ _TARGET_DOMAINS = ("%goofish%", "%taobao%", "%alipay%")
 _TARGET_COOKIE_NAMES = {"_m_h5_tk", "_m_h5_tk_enc", "cookie2", "sgcookie", "unb", "lg2", "tracknick"}
 
 
-def _do_import_from_browser(browser: str, auto_close: bool = False) -> dict:
-    """从系统浏览器导入 Cookie 的核心逻辑（返回 dict，由端点包装为 JSONResponse）"""
+def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: bool = False) -> dict:
+    """从系统浏览器导入 Cookie 的核心逻辑（返回 dict，由端点包装为 JSONResponse）
+
+    Args:
+        browser: 浏览器类型（edge/chrome）
+        auto_close: 文件被锁定时是否自动关闭浏览器
+        dry_run: True 时只解密读取、不写入 CookieStore，并在结果中返回 cookies 字典
+                 供前端"从浏览器导入预览"使用
+    """
     from xianyu_hunter.web.services.browser_profile import discover_profiles
 
     local_app_data = os.environ.get("LOCALAPPDATA", "")
@@ -478,8 +485,27 @@ def _do_import_from_browser(browser: str, auto_close: bool = False) -> dict:
             result["errors"] = errors[:10]
         if imported_names:
             result["message"] = f"成功从 {browser} 导入 {len(imported_names)} 个 Cookie"
-            # 传入实际解密后的 cookie 值（之前 bug 是传空值）
-            get_cookie_store().export_cookies(imported_cookies, method="import")
+            # dry_run 模式：跳过持久化，把 cookie 字典返回给调用方做预览
+            if dry_run:
+                cookies_map = {c["name"]: c["value"] for c in imported_cookies if c.get("name")}
+                result["cookies"] = cookies_map
+                result["dry_run"] = True
+            else:
+                # 传入实际解密后的 cookie 值（之前 bug 是传空值）
+                json_written = get_cookie_store().export_cookies(imported_cookies, method="import")
+                # 同步 CookieRotator 层状态，避免 /cookies/layers 仍显示失效
+                if json_written:
+                    try:
+                        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                        sync_cookie_layers_from_json()
+                    except Exception as e:
+                        logger.debug("浏览器导入后同步层状态失败: %s", e)
+                # 导入成功后自动启动会话管理：与登录入口行为一致
+                try:
+                    from xianyu_hunter.web.services.session_starter import trigger_session_start
+                    trigger_session_start()
+                except Exception as e:
+                    logger.debug("自动启动会话失败: %s", e)
         else:
             result["message"] = "未能导入任何 Cookie（可能解密失败）"
             result["ok"] = False

@@ -269,7 +269,11 @@ def _cookies_from_set_cookie_headers(headers: list[str], response_url: str) -> l
 
 
 async def _sync_response_cookies_to_context(page: Page, response: Any) -> int:
-    """Persist MTOP Set-Cookie headers seen via route.fetch() into the browser context."""
+    """Persist MTOP Set-Cookie headers seen via route.fetch() into the browser context.
+
+    同时将关键 cookie（_m_h5_tk / _m_h5_tk_enc 等 session 层 token）回写到 JSON，
+    避免重启后浏览器从 JSON 加载旧 token 导致 session 层状态失效。
+    """
     headers = _set_cookie_headers_from_response(response)
     if not headers:
         return 0
@@ -278,9 +282,26 @@ async def _sync_response_cookies_to_context(page: Page, response: Any) -> int:
         return 0
     await page.context.add_cookies(cookies)
     logger.info(
-        "已同步 MTOP Set-Cookie 到浏览器上下文: %s",
+        "已同步 MTOP Set-Cookie 到浏览器上下文: {}",
         sorted({c["name"] for c in cookies}),
     )
+
+    # 回写关键 cookie 到 JSON：MTOP 返回的 _m_h5_tk 等 token 会定期刷新，
+    # 若不回写，重启后浏览器从 JSON 加载旧 token，导致 session 层失效、签名错误
+    # 为什么只回写关键 cookie：避免全量覆盖丢失其他 cookie，且减少 JSON 写入开销
+    key_cookie_names = {"_m_h5_tk", "_m_h5_tk_enc", "unb", "sgcookie", "cookie2", "lg2"}
+    updates = {
+        c["name"]: c["value"]
+        for c in cookies
+        if c.get("name") in key_cookie_names and c.get("value")
+    }
+    if updates:
+        try:
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+            get_cookie_store().update_cookie_values(updates)
+        except Exception as e:
+            logger.debug("MTOP Set-Cookie 回写 JSON 失败: {}", e)
+
     return len(cookies)
 
 # 批量解析脚本：在浏览器中一次性提取所有搜索卡片的商品数据
@@ -496,7 +517,8 @@ class SearchMixin:
                 return False
         try:
             logger.debug("刷新 _m_h5_tk token: 导航到 goofish.com 主页")
-            await page.goto(f"{get_base_url()}/", wait_until="domcontentloaded", timeout=15000)
+            # 25 秒超时：闲鱼主页资源多，15 秒可能不够
+            await page.goto(f"{get_base_url()}/", wait_until="domcontentloaded", timeout=25000)
             # 等待 Set-Cookie 响应被浏览器处理
             await asyncio.sleep(1.5)
             self._last_m5tk_refresh = time.monotonic()
@@ -619,12 +641,9 @@ class SearchMixin:
                             cards = []
                         else:
                             logger.info("DOM 回退: 检测到 {} 个卡片，开始解析", card_count)
-                            # 检测到卡片说明页面正常渲染了搜索结果，会话实际有效
-                            # 重置 session_invalid 标志，避免 live_links 误报"令牌过期"
-                            # 即使后续解析提取到 0 个商品（DOM 选择器失效或关键词过滤），也不应判定为会话失效
-                            if session_invalid:
-                                self.last_session_invalid = False
-                                logger.info("DOM 回退检测到卡片，重置会话失效标志")
+                            # 注意：此处不重置 session_invalid 标志
+                            # 检测到卡片不等于会话有效，可能页面渲染了卡片但 API 令牌仍失效
+                            # 重置时机推迟到成功提取商品后（见下方 items 非空时）
                             cards = await asyncio.wait_for(self._find_cards(page), timeout=8.0)
                 except asyncio.TimeoutError:
                     logger.warning("DOM 回退查找卡片超时，放弃: keyword={}", keyword)
@@ -707,6 +726,13 @@ class SearchMixin:
                     if filtered_out:
                         logger.info("DOM 回退过滤掉 {} 个标题 (关键词={}): {}", len(filtered_out), keyword, filtered_out)
                     logger.info("DOM 解析有效结果: {} 个", len(items))
+                    # DOM 回退成功提取到商品才重置会话失效标志：
+                    # 此时页面能正常渲染搜索结果且解析有效，说明会话实际可用
+                    # 如果解析到 0 个商品（选择器失效/关键词过滤），保持标志为 True，
+                    # 让 live_links 触发令牌刷新重试，避免持续走 DOM 回退
+                    if session_invalid and items:
+                        self.last_session_invalid = False
+                        logger.info("DOM 回退成功提取 {} 个商品，重置会话失效标志", len(items))
                 if not items:
                     logger.info("搜索无结果: {}", keyword)
 
@@ -809,9 +835,35 @@ class SearchMixin:
         try:
             # 导航到搜索页（页面会自然发起 API 请求）
             url = build_search_url(keyword, sort_type=sort_type, regions=regions)
-            # 快速模式使用 15 秒超时（vs 默认 30 秒），减少卡死风险
-            goto_timeout = 15000 if fast else 30000
-            await page.goto(url, wait_until="domcontentloaded", timeout=goto_timeout)
+            # 使用 wait_until="commit"：HTTP 响应头到达即返回，不等待 SPA 水合
+            # 闲鱼搜索页是 SPA，domcontentloaded 事件需等待水合完成，网络波动时易超时
+            # commit 后 route 拦截器仍可捕获后续 API 请求，等待逻辑由下方轮询负责
+            goto_timeout = 15000 if fast else 20000
+            try:
+                await page.goto(url, wait_until="commit", timeout=goto_timeout)
+            except Exception as goto_err:
+                # goto 超时后主动检测会话失效：闲鱼可能将失效会话重定向到登录/验证页
+                # 重定向时 page.url 不再是搜索页，此时 DOM 回退也无法成功
+                try:
+                    current_url = page.url or ""
+                except Exception:
+                    current_url = ""
+                # 仅当 URL 确实是 goofish.com 的非搜索页时才判定为会话失效：
+                # about:blank（导航未开始）或空 URL 更可能是网络/浏览器问题，不误判
+                if (
+                    current_url
+                    and "goofish.com" in current_url
+                    and "goofish.com/search" not in current_url
+                ):
+                    logger.warning(
+                        "goto 超时且页面已跳转至非搜索页，判定为会话失效: url={}",
+                        current_url[:120],
+                    )
+                    session_invalid = True
+                    self._last_api_captured = False
+                    return items, session_invalid
+                # 未跳转则重新抛出，由上层处理（可能是单纯网络慢）
+                raise goto_err
 
             # 等待 API 响应：快速模式最多 8 秒，正常模式最多 15 秒
             wait_rounds = 8 if fast else 15
@@ -821,8 +873,10 @@ class SearchMixin:
                 await asyncio.sleep(1)
 
             # 会话失效时尝试刷新 token 后重试一次
-            # fast 模式或 skip_rgv587_retry 时跳过重试，直接返回（避免 75 秒重试占用 browser_lock）
-            if session_invalid and not fast and not skip_rgv587_retry:
+            # skip_rgv587_retry 时跳过重试（Worker 专用，避免 75 秒重试占用 browser_lock）
+            # fast 模式也重试：_ensure_fresh_m5tk(force=True) 有 5 分钟最小间隔保护，
+            # 不会频繁刷新；令牌失效后不重试会导致每次搜索都走 DOM 回退，性能差且易超时
+            if session_invalid and not skip_rgv587_retry:
                 logger.warning("搜索 API 会话失效，尝试强制刷新 _m_h5_tk 后重试: keyword={}", keyword)
                 # 强制刷新 token（跳过缓存）
                 refreshed = await self._ensure_fresh_m5tk(page, force=True)
@@ -831,7 +885,8 @@ class SearchMixin:
                     session_invalid = False
                     captured_responses.clear()
                     try:
-                        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        # 同步使用 wait_until="commit" 加速重试导航
+                        await page.goto(url, wait_until="commit", timeout=20000)
                         # 等待 API 响应（最多等 15 秒）
                         for _ in range(15):
                             if captured_responses or session_invalid:
@@ -924,8 +979,9 @@ class SearchMixin:
         finally:
             # 页面可能已损坏（TargetClosedError），unroute 需超时+异常保护避免卡住
             # 不传 handler，直接移除所有匹配 url 的路由，避免 handler 匹配导致的卡住
+            # 超时从 5s 缩短到 2s：goto 失败后页面通常已无活动，长时间等待无意义
             try:
-                await asyncio.wait_for(page.unroute("**/*"), timeout=5.0)
+                await asyncio.wait_for(page.unroute("**/*"), timeout=2.0)
                 logger.info("page.unroute 完成")
             except asyncio.TimeoutError:
                 logger.warning("page.unroute 超时，可能影响后续 DOM 解析")

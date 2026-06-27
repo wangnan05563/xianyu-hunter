@@ -9,5 +9,6 @@ export const ORDER_STATUS_CONFIG: Record<string, { color: string; label: string 
   paying: { color: 'blue', label: '支付中' },
   failed: { color: 'red', label: '失败' },
   cancelled: { color: 'default', label: '已取消' },
-  takeover: { color: 'blue', label: '人工接管' },
+  // 后端 api_orders.takeover_order 实际写入的状态是 takeover_pending（非 takeover）
+  takeover_pending: { color: 'blue', label: '人工接管' },
 }

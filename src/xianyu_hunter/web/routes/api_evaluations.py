@@ -1,6 +1,7 @@
 """评估明细 API"""
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -162,7 +163,8 @@ def _clean_dirty_seller_nick(payload: dict) -> None:
 
 
 def _enrich_eval_with_item(
-    payload: dict, item_map: dict[str, dict], link_map: dict[str, dict] | None = None
+    payload: dict, item_map: dict[str, dict], link_map: dict[str, dict] | None = None,
+    order_map: dict[str, dict] | None = None,
 ) -> dict:
     """用 items 表或 task_links 表数据丰富评估记录（补充标题、价格、地区、图片等缺失字段）
 
@@ -173,6 +175,7 @@ def _enrich_eval_with_item(
     字段名与前端 EvalItem 接口对齐：
     - item_title / item_price / seller_id / seller_nick / thumb_url
     - region / publish_time / want_cnt / view_cnt
+    - order_status（来自 order_map，标记商品是否已被抢单）
     """
     item_id = str(payload.get("item_id") or "")
     item = item_map.get(item_id, {}) if item_id else {}
@@ -199,6 +202,8 @@ def _enrich_eval_with_item(
     thumb_candidate = item.get("thumb_url") or link.get("thumb_url")
     # 取 region：items.region > link.region
     region_candidate = item.get("region") or link.get("region")
+    # 取 brand：items.brand > link.brand（品牌由 extract_brand 推断，存于 task_links.display）
+    brand_candidate = item.get("brand") or link.get("brand")
     # 取 want_cnt：items.want_cnt > link.want_cnt
     want_candidate = item.get("want_cnt")
     if want_candidate is None and link.get("want_cnt") is not None:
@@ -240,12 +245,24 @@ def _enrich_eval_with_item(
         payload["thumb_url"] = thumb_candidate
     if not payload.get("region") and region_candidate:
         payload["region"] = region_candidate
+    if not payload.get("brand") and brand_candidate:
+        payload["brand"] = brand_candidate
     if payload.get("want_cnt") is None and want_candidate is not None:
         payload["want_cnt"] = want_candidate
     if payload.get("view_cnt") is None and view_candidate is not None:
         payload["view_cnt"] = view_candidate
     if not payload.get("publish_time") and publish_candidate:
         payload["publish_time"] = str(publish_candidate)
+    # 注入订单状态：让评估明细页面能直接展示商品是否已被抢单
+    # 为什么不写入 payload 原始事件：order_status 是实时查询的派生字段，不应污染 events 表
+    if order_map is not None and item_id:
+        order = order_map.get(item_id)
+        if order:
+            payload["order_status"] = order.get("status")
+            payload["order_id"] = order.get("id")
+        else:
+            payload["order_status"] = None
+            payload["order_id"] = None
     return payload
 
 
@@ -261,6 +278,7 @@ def list_evaluations(
     max_score: int | None = Query(None, ge=0, le=100, description="最高评分"),
     start_time: str | None = Query(None, description="开始时间 (YYYY-MM-DD)"),
     end_time: str | None = Query(None, description="结束时间 (YYYY-MM-DD)"),
+    brand: str | None = Query(None, description="品牌精确匹配（从 items/task_links.display 补充后过滤）"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """从 events 表中读 eval.* 事件（与 list_events 共享存储）
@@ -268,6 +286,7 @@ def list_evaluations(
     支持按商品 ID、任务 ID 模糊查询，按评分范围、时间范围过滤。
     支持 page_num/page_size 分页（优先于旧版 limit/offset）。
     自动关联 items 表补充标题、价格、卖家等字段。
+    brand 过滤在 enrich 之后执行（品牌字段从 task_links.display 补充）。
     """
     # 预解析时间范围边界（避免在循环内反复解析）
     start_dt = to_datetime(start_time) if start_time else None
@@ -322,6 +341,18 @@ def list_evaluations(
             if sid and nick:
                 seller_map[sid] = nick
 
+    # 批量预加载订单状态：避免 N+1 查询，评估明细列表展示「订单状态」列使用
+    # 为什么放在主流程：order_status 是派生字段，不写入 events 表，每次查询时实时关联
+    # 为什么 include_failed=True：评估明细需要展示失败订单记录，否则用户
+    # 点击抢单失败后刷新页面看到「—」，会误以为没下过单而反复触发抢单
+    order_map = (
+        container.repo.list_orders_by_item_ids(
+            list(event_item_ids), include_failed=True
+        )
+        if event_item_ids
+        else {}
+    )
+
     evals = []
     for r in rows:
         if not str(r.get("type", "")).startswith("eval."):
@@ -329,7 +360,7 @@ def list_evaluations(
         payload = r.get("payload") or {}
 
         # 用 items 表 / task_links 数据丰富 payload（补充标题、价格、地区、图片、卖家ID等）
-        _enrich_eval_with_item(payload, item_map, link_map)
+        _enrich_eval_with_item(payload, item_map, link_map, order_map)
 
         # 用 sellers 表补充卖家昵称（items 表无 seller_nick 字段）
         # 关键修复：脏数据清洗后 seller_nick 为空字符串，不能用 `not` 判定缺失
@@ -351,6 +382,12 @@ def list_evaluations(
         if task_id:
             tid = str(payload.get("task_id") or r.get("task_id") or "")
             if task_id.lower() not in tid.lower():
+                continue
+
+        # 品牌精确匹配：brand 字段已由 _enrich_eval_with_item 从 task_links.display 补充
+        # 为什么放在 enrich 之后：评估事件本身不存 brand，必须先补全再过滤
+        if brand:
+            if str(payload.get("brand") or "") != brand:
                 continue
 
         # 评分范围过滤
@@ -1502,35 +1539,74 @@ async def _ensure_official_collect_cookies(container: Container) -> None:
     为什么需要 JSON 补注入：服务重启后浏览器实例从 SQLite 加载 cookies，
     但 SQLite 可能被锁或同步失败，导致 cookies 仅存在于 JSON 文件中。
     此时通过 Playwright context.add_cookies() 直接注入到浏览器内存。
+
+    P3 增强：除了检查 cookie 存在性，还检查 expires 字段判断是否过期。
+    过期 cookie 会导致 page.goto 被 30s 超时浪费，前置检查可快速失败返回 440。
     """
     if not container.browser:
         return
 
-    async def _get_missing() -> list[str]:
+    async def _get_cookies() -> list[dict]:
         try:
-            cookies = await container.browser.get_cookies()
+            return await container.browser.get_cookies()
         except Exception as e:
             logger.warning("读取浏览器 Cookie 失败: {}", e)
-            return list(_OFFICIAL_COLLECT_IDENTITY_COOKIES)
+            return []
+
+    async def _get_missing() -> list[str]:
+        cookies = await _get_cookies()
         names = {str(c.get("name") or "") for c in cookies}
         return [n for n in _OFFICIAL_COLLECT_IDENTITY_COOKIES if n not in names]
 
+    async def _get_expired() -> list[str]:
+        """检查关键 cookie 的 expires 字段，返回已过期的 cookie 名列表
+
+        Playwright cookie.expires 是 Unix 时间戳（秒），-1 表示 session cookie。
+        仅对 persistent cookie（expires > 0）做过期检查，避免误判 session cookie。
+        """
+        import time as _time
+        cookies = await _get_cookies()
+        now = _time.time()
+        expired = []
+        for c in cookies:
+            name = str(c.get("name") or "")
+            if name not in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
+                continue
+            expires = c.get("expires", -1)
+            # 仅 persistent cookie 且已过期才记录；session cookie（expires<=0）跳过
+            if expires > 0 and expires < now:
+                expired.append(name)
+        return expired
+
     missing = await _get_missing()
     if not missing:
+        # P3：cookie 存在但仍可能过期，前置检查避免浪费 30s page.goto
+        expired = await _get_expired()
+        if expired:
+            logger.warning("官方采集：关键 Cookie 已过期 {}，需重新登录闲鱼", expired)
+            raise HTTPException(
+                status_code=440,
+                detail=f"闲鱼登录 Cookie 已过期（{', '.join(expired)}），请重新登录闲鱼",
+            )
         return
 
     # 浏览器缺少关键 cookie 时，尝试从 CookieStore JSON 补注入
-    from xianyu_hunter.web.services.cookie_store import get_cookie_store
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
     store = get_cookie_store()
     json_data = store._read_json()
     if json_data and json_data.get("cookies"):
         pw_cookies = []
         for c in json_data["cookies"]:
             name = c.get("name", "")
+            value = c.get("value", "")
             if name in missing:
+                # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
+                if is_test_cookie(name, value):
+                    logger.warning("官方采集：跳过测试 Cookie {}={}，不注入浏览器", name, value)
+                    continue
                 pw_cookies.append({
                     "name": name,
-                    "value": c.get("value", ""),
+                    "value": value,
                     "domain": c.get("domain", ".goofish.com"),
                     "path": c.get("path", "/"),
                 })
@@ -1538,6 +1614,13 @@ async def _ensure_official_collect_cookies(container: Container) -> None:
             try:
                 await container.browser._context.add_cookies(pw_cookies)
                 logger.info("从 CookieStore JSON 补注入 {} 个 cookie 到浏览器", len(pw_cookies))
+                # 同步 CookieRotator 层状态：补注入成功说明 JSON 持有有效 cookie，
+                # 若层状态从未初始化（updated_at==0.0），此处补救同步避免 /cookies/layers 误显示失效
+                try:
+                    from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                    sync_cookie_layers_from_json()
+                except Exception as e:
+                    logger.debug("官方采集补注入后同步层状态失败: {}", e)
             except Exception as e:
                 logger.warning("从 JSON 补注入 cookie 失败: {}", e)
 
@@ -1603,6 +1686,7 @@ async def _collect_official_and_evaluate(
     own_page = await container.browser.new_page()
     detail: ItemDetail | None = None
     reviews: list[str] = []
+    seller: SellerProfile | None = None
     try:
         detail = await container.collector.detail(item_id, page=own_page)
         if detail is None:
@@ -1619,38 +1703,48 @@ async def _collect_official_and_evaluate(
                 item_id, page_url, page_title,
             )
             # 根据页面 URL/标题 区分用户可操作的失败原因
+            # 差异化状态码：440=cookie失效、441=反爬触发、410=商品下架/未加载
+            # 仍保留 502 仅给浏览器断连等系统级故障，避免用户误以为是系统问题
             if "login" in page_url.lower() or "passport" in page_url.lower():
                 raise HTTPException(
-                    status_code=502,
+                    status_code=440,
                     detail="采集商品详情失败：页面被重定向到登录页，请重新登录闲鱼后重试",
                 )
             if "verify" in page_url.lower() or "captcha" in page_url.lower():
                 raise HTTPException(
-                    status_code=502,
+                    status_code=441,
                     detail="采集商品详情失败：触发闲鱼验证码，请手动完成验证后重试",
                 )
             # 首页标题检测：cookie 失效后闲鱼 SPA 在商品 URL 下渲染首页内容
             if page_title and ("闲不住" in page_title or page_title.strip() == "闲鱼"):
                 raise HTTPException(
-                    status_code=502,
+                    status_code=440,
                     detail="采集商品详情失败：闲鱼登录已过期，页面被重定向到首页，请重新登录闲鱼后重试",
                 )
             raise HTTPException(
-                status_code=502,
-                detail=f"采集商品 {item_id} 详情失败：页面可能未正常加载（标题/价格未提取到），请稍后重试",
+                status_code=410,
+                detail=f"采集商品 {item_id} 详情失败：页面可能未正常加载或商品已下架（标题/价格未提取到），请稍后重试",
             )
-        # 用同一个 page 提取评价信息（detail() 已完成 DOM 加载）
-        reviews = await _extract_reviews_from_page(own_page)
+
+        # 2. 并行执行：评价提取（依赖 own_page）+ 卖家主页采集（独立 page）
+        # 两者无依赖关系，并行可节省 1-3s（卖家主页 page.goto 与 reviews DOM 提取重叠）
+        # 注意：reviews 必须在 own_page 关闭前完成，所以放在同一个 try-finally 内
+        async def _safe_seller_profile() -> SellerProfile | None:
+            if not detail or not detail.seller_id:
+                return None
+            try:
+                return await container.collector.seller_profile(detail.seller_id)
+            except Exception as e:
+                logger.warning("采集卖家主页失败 seller={}: {}", detail.seller_id, e)
+                return None
+
+        reviews, seller = await asyncio.gather(
+            _extract_reviews_from_page(own_page),
+            _safe_seller_profile(),
+        )
     finally:
         await own_page.close()
 
-    # 2. 采集卖家主页（获取完整画像）
-    seller: SellerProfile | None = None
-    if detail.seller_id:
-        try:
-            seller = await container.collector.seller_profile(detail.seller_id)
-        except Exception as e:
-            logger.warning("采集卖家主页失败 seller={}: {}", detail.seller_id, e)
     # 卖家主页采集失败时降级：用详情页中提取的卖家信息构建基本画像
     if seller is None:
         seller = await container.collector.seller_profile_fallback(None, detail)
@@ -1682,6 +1776,8 @@ async def _collect_official_and_evaluate(
         "view_cnt": detail.view_cnt,
         "thumb_url": detail.thumb_url or "",
         "publish_time": detail.publish_time,
+        # 销售状态：来自采集侧 detail() 的页面已售关键词检测
+        "is_sold": 1 if detail.is_sold else 0,
     }
     # P0 修复：官方采集不应清空已有非空字段
     # 旧值保留策略：新值为 None/空字符串/0 时保留旧值
@@ -1702,7 +1798,9 @@ async def _collect_official_and_evaluate(
     # 允许覆盖的字段（官方采集应优先更新采集时刻 + 来源信息）
     # 数字 0 是合法值（_is_blank 已修正不再当作 blank），所以这些字段
     # 走 ALWAYS_OVERWRITE 不会因新值为 0 而误判为"缺失"
-    _ALWAYS_OVERWRITE = {"task_id", "publish_time", "image_urls", "view_cnt", "want_cnt", "region", "seller_id"}
+    # 注意：image_urls 不在此集合中——采集未获取到图片时应保留旧值，
+    # 而非用 None 覆盖清空已有图片数据（走 _coalesce 逻辑）
+    _ALWAYS_OVERWRITE = {"task_id", "publish_time", "view_cnt", "want_cnt", "region", "seller_id", "is_sold"}
 
     try:
         old_item = container.repo.get_item(item_id) or {}
@@ -1711,6 +1809,9 @@ async def _collect_official_and_evaluate(
             for k in new_item_row.keys()
         }
         container.repo.upsert_item(item_row)
+        # 已售时同步 task_links.display.is_sold（前端列表读 display）
+        if detail.is_sold:
+            container.repo.mark_sold(item_id)
     except Exception as e:
         logger.warning("更新 items 表失败 item={}: {}", item_id, e)
 
@@ -1919,7 +2020,8 @@ async def collect_official(
         if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
             raise HTTPException(status_code=502, detail="浏览器连接已断开，请重启服务后重试")
         if "RGV587" in err_msg:
-            raise HTTPException(status_code=403, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
+            # 反爬触发统一用 441，区别于 403（cookie 缺失）和 502（系统故障）
+            raise HTTPException(status_code=441, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
         if "Connection closed" in err_msg:
             raise HTTPException(status_code=502, detail="浏览器连接异常，请重启服务后重试")
         raise HTTPException(status_code=502, detail=f"官方采集失败: {err_msg}")

@@ -1,12 +1,29 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent } from 'react'
 import { Card, Table, Tag, Select, Button, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
-import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined, ThunderboltOutlined, ClockCircleOutlined, LoadingOutlined, CheckCircleOutlined } from '@ant-design/icons'
+import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined, ThunderboltOutlined, ClockCircleOutlined, LoadingOutlined, CheckCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { AxiosError } from 'axios'
 import { taskApi, taskLinkApi, type Task, type TaskLink, type FieldMap } from '../../api'
+import { itemApi } from '../../api/item'
 import LazyImage from '../../components/LazyImage'
 import { useAutoRefresh, DEFAULT_INTERVAL, MIN_INTERVAL, MAX_INTERVAL } from '../../hooks/useAutoRefresh'
 import { usePersistentState } from '../../hooks/usePersistentState'
+import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
+import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
+
+// 点击商品链接：异步触发刷新（不阻塞跳转），再打开闲鱼原帖
+// 为什么不直接 href：直接跳转不会更新本地商品信息（销售状态等），
+// 异步刷新让下次列表加载时反映最新状态
+const handleItemClick = (e: MouseEvent, itemId: string | undefined, url: string | undefined) => {
+  e.preventDefault()
+  // 异步刷新，失败静默忽略（不阻塞跳转）
+  if (itemId) {
+    itemApi.refresh(itemId).catch(() => {})
+  }
+  if (url) {
+    window.open(url, '_blank')
+  }
+}
 
 type ViewMode = 'table' | 'card'
 
@@ -77,12 +94,13 @@ function applyChangeHighlight(
   }
 }
 
-// 实时搜索结果客户端过滤：后端 live 端点不接受 keyword/region 参数，
+// 实时搜索结果客户端过滤：后端 live 端点不接受 keyword/region/brand 参数，
 // 前端在拿到全量结果后按当前筛选条件过滤，确保两种模式下参数一致生效
 function applyClientFilters(
   rows: TaskLink[],
   search: string,
   region: string | undefined,
+  brand: string | undefined,
 ): TaskLink[] {
   let filtered = rows
   if (search) {
@@ -91,6 +109,9 @@ function applyClientFilters(
   }
   if (region) {
     filtered = filtered.filter(r => r.display?.region === region)
+  }
+  if (brand) {
+    filtered = filtered.filter(r => r.display?.brand === brand)
   }
   return filtered
 }
@@ -115,6 +136,8 @@ export default function ItemList() {
     validator: (v): v is ViewMode => v === 'table' || v === 'card',
   })
   const [regionFilter, setRegionFilter] = usePersistentState<string | undefined>('xh.items.regionFilter', undefined)
+  // 品牌筛选：与地区筛选对齐，持久化以保留用户偏好
+  const [brandFilter, setBrandFilter] = usePersistentState<string | undefined>('xh.items.brandFilter', undefined)
   // 登录态/搜索令牌不可用标识：后端检测到身份 Cookie 缺失或 token 过期
   const [sessionExpired, setSessionExpired] = useState(false)
   // 字段元数据：后端返回的 field_map，描述每个字段的显示方式
@@ -179,7 +202,7 @@ export default function ItemList() {
   }, [selectedTask])
 
   // 加载商品列表
-  // 修复：把 keyword/region 传给后端过滤，避免前端只过滤当前页导致跨页搜索失效
+  // 修复：把 keyword/region/brand 传给后端过滤，避免前端只过滤当前页导致跨页搜索失效
   const loadItems = useCallback(() => {
     if (!selectedTask) return
     setLoading(true)
@@ -189,6 +212,7 @@ export default function ItemList() {
       offset: (page - 1) * pageSize,
       keyword: search || undefined,
       region: regionFilter || undefined,
+      brand: brandFilter || undefined,
     })
       .then((res) => {
         const newItems = res.items || []
@@ -202,7 +226,7 @@ export default function ItemList() {
         setTotal(0)
       })
       .finally(() => setLoading(false))
-  }, [selectedTask, page, pageSize, search, regionFilter])
+  }, [selectedTask, page, pageSize, search, regionFilter, brandFilter])
 
   // 触发式实时刷新：SSE 事件驱动为主，定时兜底轮询为辅
   // DB 模式和实时模式都支持轮询，通过 liveModeRef 选择不同的数据源
@@ -213,6 +237,8 @@ export default function ItemList() {
   searchRef.current = search
   const regionFilterRef = useRef(regionFilter)
   regionFilterRef.current = regionFilter
+  const brandFilterRef = useRef(brandFilter)
+  brandFilterRef.current = brandFilter
 
   // 静默实时搜索：轮询回调专用，不显示进度提示和错误消息
   // 错误抛出由 useAutoRefresh 的重试机制处理（最多3次，间隔递增）
@@ -228,6 +254,7 @@ export default function ItemList() {
       itemRows,
       searchRef.current,
       regionFilterRef.current,
+      brandFilterRef.current,
     )
     setItems(filteredRows)
     setTotal(filteredRows.length)
@@ -240,7 +267,7 @@ export default function ItemList() {
     intervalSec: liveMode ? liveRefreshInterval : refreshInterval,
     // 移除 liveMode 暂停：实时模式下也轮询，仅在没有任务或正在加载时暂停
     paused: !selectedTask || loading || liveLoading,
-    deps: [selectedTask, page, pageSize, search, regionFilter, liveMode],
+    deps: [selectedTask, page, pageSize, search, regionFilter, brandFilter, liveMode],
     refresh: async () => {
       if (!selectedTask) return
       if (liveModeRef.current) {
@@ -254,6 +281,7 @@ export default function ItemList() {
           offset: (page - 1) * pageSize,
           keyword: search || undefined,
           region: regionFilter || undefined,
+          brand: brandFilter || undefined,
         }).then((res) => {
           const newItems = res.items || []
           setItems(newItems)
@@ -409,10 +437,10 @@ export default function ItemList() {
   // liveItemsRef 保存了实时搜索的原始全量结果，每次筛选条件变化时从中重新过滤
   useEffect(() => {
     if (!liveMode) return
-    const filtered = applyClientFilters(liveItemsRef.current, search, regionFilter)
+    const filtered = applyClientFilters(liveItemsRef.current, search, regionFilter, brandFilter)
     setItems(filtered)
     setTotal(filtered.length)
-  }, [liveMode, search, regionFilter])
+  }, [liveMode, search, regionFilter, brandFilter])
 
   // 实时搜索
   const loadLive = () => {
@@ -440,10 +468,10 @@ export default function ItemList() {
         // 防御性过滤：只取 item 类型行。seller 行在另一张表/分页渲染，
         // 避免与 item 行共用同一表格列时出现字段错位
         const itemRows = (res.items || []).filter((r: TaskLink) => r.link_type === 'item' || !r.link_type)
-        // 保存原始结果供实时模式下 search/region 变化时重新过滤
+        // 保存原始结果供实时模式下 search/region/brand 变化时重新过滤
         liveItemsRef.current = itemRows
         // 应用前端筛选条件（实时搜索结果在客户端过滤，确保与 DB 模式参数一致）
-        const filteredRows = applyClientFilters(itemRows, search, regionFilter)
+        const filteredRows = applyClientFilters(itemRows, search, regionFilter, brandFilter)
         setItems(filteredRows)
         setTotal(filteredRows.length)
         const count = filteredRows.length
@@ -481,13 +509,40 @@ export default function ItemList() {
     }).catch((err) => message.error(errDetail(err) || '删除失败'))
   }, [selectedTask, loadItems])
 
-  // 过滤已下推到后端（keyword/region 参数），前端直接使用 items
-  // 地区选项：实时模式下从原始全量结果提取，避免筛选后选项减少；
-  // DB 模式下从当前页 items 提取（跨页场景需用户清空地区筛选后重新选择）
+  // 过滤已下推到后端（keyword/region/brand 参数），前端直接使用 items
+  // 地区/品牌选项：实时模式下从原始全量结果提取，避免筛选后选项减少；
+  // DB 模式下从当前页 items 提取（跨页场景需用户清空筛选后重新选择）
   const regionOptions = [...new Set(
     (liveMode ? liveItemsRef.current : items)
       .map((i) => i.display?.region).filter(Boolean)
   )].sort()
+  const brandOptions = [...new Set(
+    (liveMode ? liveItemsRef.current : items)
+      .map((i) => i.display?.brand).filter(Boolean)
+  )].sort()
+
+  // ===== 列配置（拖拽排序 + 显示/隐藏，持久化到 localStorage） =====
+  // 复用评估明细页的 useColumnConfig + ColumnSettingsModal，保持交互一致性
+  const [columnConfigOpen, setColumnConfigOpen] = useState(false)
+  // 列定义基于字段元数据动态生成：fieldMap 变化时（实时搜索 vs DB 模式）自动合并新列
+  const columnDefinitions = useMemo<ColumnConfig[]>(() => {
+    const meta = fieldMap || DEFAULT_FIELD_META
+    const order = fieldMap ? Object.keys(fieldMap) : DEFAULT_FIELD_ORDER
+    return order.map((key) => ({
+      key,
+      label: meta[key]?.label || key,
+      // 标题列锁定不可隐藏：核心展示字段，隐藏后无法识别商品
+      locked: key === 'title',
+    }))
+  }, [fieldMap])
+  const {
+    order: columnOrder,
+    hidden: hiddenColumns,
+    toggleHidden: toggleColumnHidden,
+    moveColumn: moveColumnOrder,
+    reset: resetColumnConfig,
+    applyConfig: applyColumnConfig,
+  } = useColumnConfig('xh.items.columns', columnDefinitions)
 
   // 动态生成列定义：根据后端返回的 field_map 自动调整列头和渲染方式
   // 当接口字段变化时，前端根据 field_map 自动调整列，无需修改代码
@@ -517,10 +572,10 @@ export default function ItemList() {
           col.render = (d: TaskLink['display']) => d?.thumb_url ? <LazyImage src={d.thumb_url} referrerPolicy="no-referrer" width={60} height={60} style={{ borderRadius: 6 }} /> : '—'
           break
         case 'link':
-          col.render = (d: TaskLink['display']) => (
+          col.render = (d: TaskLink['display'], record: TaskLink) => (
             <Tooltip title={d?.url ? '点击打开原帖' : ''}>
               {d?.url ? (
-                <a href={d.url} target="_blank" rel="noreferrer">{d?.title || '—'}</a>
+                <a onClick={(e) => handleItemClick(e, record.link_key ?? '', d.url)} style={{ cursor: 'pointer' }}>{d?.title || '—'}</a>
               ) : (
                 d?.title || '—'
               )}
@@ -577,8 +632,10 @@ export default function ItemList() {
       cols.push(col)
     }
 
-    // 添加操作列（始终显示）
-    cols.push({
+    // 应用列配置：按用户拖拽顺序重排 + 跳过隐藏列
+    // 操作列不参与配置，始终追加在最后
+    const visibleCols = applyColumnConfig(cols)
+    visibleCols.push({
       title: '操作',
       key: 'action',
       width: 80,
@@ -587,8 +644,8 @@ export default function ItemList() {
       ),
     })
 
-    return cols
-  }, [fieldMap, liveMode, handleDelete])
+    return visibleCols
+  }, [fieldMap, liveMode, handleDelete, applyColumnConfig])
 
   return (
     <div className="page-container">
@@ -655,6 +712,14 @@ export default function ItemList() {
             onChange={(v) => { setRegionFilter(v); setPage(1) }}
             options={regionOptions.map((r) => ({ label: r, value: r }))}
           />
+          <Select
+            placeholder="筛选品牌"
+            style={{ width: 140 }}
+            allowClear
+            value={brandFilter}
+            onChange={(v) => { setBrandFilter(v); setPage(1) }}
+            options={brandOptions.map((b) => ({ label: b, value: b }))}
+          />
           {/* 实时更新开关 + 轮询间隔配置
               DB 模式和实时模式各自有独立的间隔设置 */}
           <Tooltip title={`自动轮询（设置已保存：${autoRefreshEnabled ? '开' : '关'}）。${liveMode ? `实时模式 ${liveRefreshInterval}秒` : `DB模式 ${refreshInterval}秒`}轮询一次`}>
@@ -689,6 +754,14 @@ export default function ItemList() {
           {/* 上次刷新时间已移至商品列表 Card 顶部的醒目指示器中，避免工具栏信息冗余 */}
           <Button type="link" icon={<LinkOutlined />} onClick={() => navigate('/tasks')}>
             管理任务
+          </Button>
+          {/* 列配置：拖拽调整列顺序 + 显示/隐藏字段，配置持久化到 localStorage（仅表格模式生效） */}
+          <Button
+            icon={<SettingOutlined />}
+            onClick={() => setColumnConfigOpen(true)}
+            disabled={viewMode !== 'table'}
+          >
+            列配置
           </Button>
           <div style={{ marginLeft: 'auto' }}>
             <Segmented
@@ -833,7 +906,7 @@ export default function ItemList() {
                         }
                         actions={[
                           d?.url ? (
-                            <a key="link" href={d.url} target="_blank" rel="noreferrer" title="打开原帖">
+                            <a key="link" onClick={(e) => handleItemClick(e, item.link_key ?? '', d.url)} title="打开原帖" style={{ cursor: 'pointer' }}>
                               <LinkOutlined />
                             </a>
                           ) : <span key="nolink" style={{ color: '#d9d9d9' }}><LinkOutlined /></span>,
@@ -873,6 +946,18 @@ export default function ItemList() {
           )}
         </Spin>
       </Card>
+
+      {/* 列配置弹窗：拖拽调整列顺序 + 显示/隐藏字段 */}
+      <ColumnSettingsModal
+        open={columnConfigOpen}
+        onClose={() => setColumnConfigOpen(false)}
+        definitions={columnDefinitions}
+        order={columnOrder}
+        hidden={hiddenColumns}
+        onToggleHidden={toggleColumnHidden}
+        onMove={moveColumnOrder}
+        onReset={resetColumnConfig}
+      />
     </div>
   )
 }

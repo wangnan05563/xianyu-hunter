@@ -87,15 +87,26 @@ class SelectorRepo:
     DETAIL_SELLER_LINK_ALT2 = "[class*='seller'] a, [class*='user'] a"
 
     # 立即购买/我想要 按钮
-    BTN_BUY_NOW_MAIN = "button:has-text('立即购买')"
+    # 闲鱼详情页的「立即购买」实际是 <a> 标签（class 含 buy--XXXX），而非 <button>
+    BTN_BUY_NOW_TEXT = "text=\"立即购买\""
+    BTN_BUY_NOW_MAIN = "a:has-text('立即购买')"
     BTN_BUY_NOW_ALT = "[class*='buy']:has-text('立即购买')"
+    BTN_BUY_NOW_ALT2 = "button:has-text('立即购买')"
 
-    BTN_IWANT_MAIN = "button:has-text('我想要')"
+    BTN_IWANT_MAIN = "a:has-text('我想要')"
     BTN_IWANT_ALT = "[class*='iwant']"
+    BTN_IWANT_ALT2 = "button:has-text('我想要')"
 
-    # 提交订单
+    # 提交订单/确认购买（多档选择器，覆盖闲鱼不同版本的订单确认页文案）
     SUBMIT_ORDER_BTN_MAIN = "button:has-text('提交订单')"
-    SUBMIT_ORDER_BTN_ALT = "[class*='submit']"
+    SUBMIT_ORDER_BTN_CONFIRM_BUY = (
+        "button:has-text('确认购买'), a:has-text('确认购买'), [role='button']:has-text('确认购买')"
+    )
+    SUBMIT_ORDER_BTN_ALT = "[class*='submit']:has-text('提交订单'), [class*='submit']:has-text('确认购买')"
+    SUBMIT_ORDER_BTN_ALT2 = "button:has-text('确认订单')"
+    SUBMIT_ORDER_BTN_ALT3 = (
+        "[class*='confirm']:has-text('确认购买'), [class*='confirm']:has-text('确认订单')"
+    )
 
     # 收货地址
     ADDRESS_MAIN = "[class*='address']"
@@ -146,3 +157,29 @@ class SelectorRepo:
     @classmethod
     def price_candidates(cls) -> list[str]:
         return [cls.CARD_PRICE_MAIN, cls.CARD_PRICE_ALT]
+
+    @classmethod
+    def submit_order_candidates(cls) -> list[str]:
+        """订单确认页最终确认按钮候选选择器。"""
+        return [
+            cls.SUBMIT_ORDER_BTN_MAIN,
+            cls.SUBMIT_ORDER_BTN_CONFIRM_BUY,
+            cls.SUBMIT_ORDER_BTN_ALT,
+            cls.SUBMIT_ORDER_BTN_ALT2,
+            cls.SUBMIT_ORDER_BTN_ALT3,
+        ]
+
+    @classmethod
+    def submit_order_text_candidates(cls) -> list[str]:
+        """订单确认页最终确认按钮文案候选。"""
+        return ["提交订单", "确认购买", "确认订单", "确认下单"]
+
+    @classmethod
+    def buy_now_candidates(cls) -> list[str]:
+        """详情页「立即购买」按钮候选选择器。"""
+        return [
+            cls.BTN_BUY_NOW_TEXT,
+            cls.BTN_BUY_NOW_MAIN,
+            cls.BTN_BUY_NOW_ALT,
+            cls.BTN_BUY_NOW_ALT2,
+        ]

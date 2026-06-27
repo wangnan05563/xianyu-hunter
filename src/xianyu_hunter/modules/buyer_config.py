@@ -20,6 +20,7 @@ class BuyerConfig:
     """
     click_retry_times: int = 2
     click_retry_interval: float = 1.0
-    confirm_button_timeout: float = 5.0
+    # 闲鱼订单确认页 SPA 加载较慢，5 秒在弱网/高负载下不够
+    confirm_button_timeout: float = 10.0
     price_tolerance: float = 0.05
     min_interval_between_orders: float = 0.0

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Table, Button, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, SearchOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { taskApi, aiApi, templateApi, taskLinkApi, Task, TaskCreateBody, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress } from '../../api'
+import { taskApi, aiApi, templateApi, taskLinkApi, Task, TaskCreateBody, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary } from '../../api'
 import { STATUS_COLOR as statusColors } from '../../constants/statusColors'
 import { usePersistentState } from '../../hooks/usePersistentState'
 
@@ -134,6 +134,10 @@ export default function TaskList() {
   const [liveItems, setLiveItems] = useState<TaskLink[]>([])
   // SSE 进度阶段：用于实时显示搜索当前步骤
   const [liveStage, setLiveStage] = useState<string>('')
+  // 实时搜索过滤汇总：done 阶段由后端返回，用于在 final_total=0 时展示过滤原因
+  const [liveFilterSummary, setLiveFilterSummary] = useState<LiveFilterSummary | null>(null)
+  // "显示被过滤结果" Modal 开关
+  const [filteredModalOpen, setFilteredModalOpen] = useState(false)
   // 手动添加 Modal
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [addForm] = Form.useForm()
@@ -408,6 +412,7 @@ export default function TaskList() {
     }
     setLiveLoading(true)
     setLiveItems([])
+    setLiveFilterSummary(null)
     setLiveStage('正在检查缓存...')
     // SSE 进度阶段中文映射
     const stageLabels: Record<string, string> = {
@@ -428,7 +433,25 @@ export default function TaskList() {
       .then((res) => {
         setLiveItems(res.items || [])
         setLiveStage('')
-        message.success(`实时查询完成，获取 ${res.items?.length || 0} 条`)
+        // 保存过滤汇总，供"显示被过滤结果"按钮使用
+        const fs = res.filter_summary
+        setLiveFilterSummary(fs || null)
+        const itemCount = res.items?.length || 0
+        if (itemCount > 0) {
+          message.success(`实时查询完成，获取 ${itemCount} 条`)
+        } else if (fs && fs.raw > 0) {
+          // 搜索有结果但全被过滤掉：提示用户调整过滤条件，而非显示"获取 0 条"
+          // 为什么区分：raw=0 表示闲鱼本身搜不到，raw>0 final_total=0 表示被任务过滤条件筛掉
+          const reasons: string[] = []
+          if (fs.keyword_skipped) reasons.push(`关键词 ${fs.keyword_skipped}`)
+          if (fs.price_skipped) reasons.push(`价格 ${fs.price_skipped}`)
+          if (fs.publish_days_skipped) reasons.push(`发布时间 ${fs.publish_days_skipped}`)
+          message.warning(
+            `搜索到 ${fs.raw} 条，但全部被过滤条件筛掉（${reasons.join('、') || '未知原因'}），请调整任务过滤配置`,
+          )
+        } else {
+          message.info('实时查询完成，未找到匹配商品')
+        }
       })
       .catch(() => {
         setLiveStage('')
@@ -862,6 +885,16 @@ export default function TaskList() {
                       {liveStage}
                     </span>
                   )}
+                  {/* 被过滤结果入口：仅当存在 filtered_out 时显示，避免无谓按钮 */}
+                  {liveFilterSummary && liveFilterSummary.filtered_out?.length > 0 && (
+                    <Button
+                      size="small"
+                      type="link"
+                      onClick={() => setFilteredModalOpen(true)}
+                    >
+                      查看被过滤的 {liveFilterSummary.filtered_out.length} 条结果
+                    </Button>
+                  )}
                   <Button
                     icon={<PlusOutlined />}
                     onClick={() => setAddModalOpen(true)}
@@ -922,6 +955,76 @@ export default function TaskList() {
             <Input.TextArea rows={2} placeholder="可选备注" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ===== 实时搜索被过滤结果 Modal ===== */}
+      {/* 为什么单独 Modal：让用户看到被过滤掉的商品详情，判断是否需要调整任务的过滤条件 */}
+      <Modal
+        title="被过滤的结果"
+        open={filteredModalOpen}
+        onCancel={() => setFilteredModalOpen(false)}
+        footer={null}
+        width={900}
+        destroyOnHidden
+      >
+        {liveFilterSummary && (
+          <>
+            {/* 过滤统计概览：raw → keyword/price/publish_days → final_total 链路 */}
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={`原始 ${liveFilterSummary.raw} 条 → 关键词过滤 ${liveFilterSummary.keyword_skipped}、价格过滤 ${liveFilterSummary.price_skipped}、发布时间过滤 ${liveFilterSummary.publish_days_skipped} → 最终保留 ${liveFilterSummary.final_total} 条`}
+            />
+            <Table
+              size="small"
+              rowKey={(r, idx) => `${r.link_type}-${r.link_key}-${idx}`}
+              dataSource={liveFilterSummary.filtered_out}
+              pagination={{ pageSize: 10 }}
+              columns={[
+                {
+                  title: '标题',
+                  dataIndex: ['display', 'title'],
+                  key: 'title',
+                  ellipsis: true,
+                  render: (v: string) => v || '-',
+                },
+                {
+                  title: '价格',
+                  dataIndex: ['display', 'price'],
+                  key: 'price',
+                  width: 90,
+                  render: (v: number) => v != null ? `¥${v}` : '-',
+                },
+                {
+                  title: '过滤原因',
+                  dataIndex: 'filter_reason',
+                  key: 'filter_reason',
+                  width: 110,
+                  render: (reason: string) => {
+                    const colorMap: Record<string, string> = {
+                      keyword: 'orange',
+                      price: 'red',
+                      publish_days: 'volcano',
+                    }
+                    const labelMap: Record<string, string> = {
+                      keyword: '关键词',
+                      price: '价格',
+                      publish_days: '发布时间',
+                    }
+                    return <Tag color={colorMap[reason] || 'default'}>{labelMap[reason] || reason}</Tag>
+                  },
+                },
+                {
+                  title: '详情',
+                  dataIndex: 'filter_detail',
+                  key: 'filter_detail',
+                  ellipsis: true,
+                },
+              ]}
+            />
+          </>
+        )}
       </Modal>
 
       {/* ===== 智能建任务 Modal ===== */}

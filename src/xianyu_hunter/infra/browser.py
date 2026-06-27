@@ -349,6 +349,40 @@ class BrowserManager:
             logger.warning("get_cookies 失败: {}", e)
             return []
 
+    async def add_cookies(self, cookies: list[dict]) -> bool:
+        """向浏览器 context 注入 cookies（登录成功后同步到 Worker 实例）
+
+        解决 browser_login.py 子进程写入 browser-data SQLite 后，
+        Worker 已运行的浏览器实例内存中缺少登录 Cookie 的问题。
+
+        Args:
+            cookies: Playwright cookie 对象列表
+
+        Returns:
+            True 表示注入成功
+        """
+        if self._context is None:
+            logger.warning("add_cookies: 浏览器 context 未初始化，跳过注入")
+            return False
+        if not cookies:
+            return False
+        try:
+            await self._context.add_cookies(cookies)
+            # 验证关键 Cookie 是否已注入
+            injected = await self._context.cookies()
+            names = {c["name"] for c in injected}
+            key_cookies = {"cookie2", "sgcookie", "unb"}
+            found = key_cookies & names
+            logger.info(
+                "add_cookies: 注入 {} 个 Cookie，关键 Cookie 验证: {}",
+                len(cookies),
+                f"✓ {found}" if found else "✗ 未找到关键 Cookie",
+            )
+            return bool(found)
+        except Exception as e:
+            logger.error("add_cookies 失败: {}", e)
+            return False
+
     async def is_alive(self) -> bool:
         """检查浏览器是否还活着
 

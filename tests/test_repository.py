@@ -148,6 +148,48 @@ def test_order_upsert_and_list(tmp_repo: Repository) -> None:
     assert paid[0]["price"] == 300.0
 
 
+def test_list_orders_by_item_ids_failed_filter(tmp_repo: Repository) -> None:
+    """list_orders_by_item_ids 的 include_failed 参数控制 failed 订单可见性
+
+    回归测试：修复「评估明细看不到失败订单导致用户误以为没下过单」问题。
+    - include_failed=False（默认）：跳过 failed，符合「是否允许重新抢单」语义
+    - include_failed=True：保留 failed，符合「评估明细展示完整订单历史」语义
+    """
+    # 同一 item 先失败后成功，再加一个纯失败的 item
+    tmp_repo.upsert_order({
+        "id": "o_failed_first", "item_id": "i_mixed",
+        "price": 100.0, "status": "failed", "task_id": "t1",
+    })
+    tmp_repo.upsert_order({
+        "id": "o_success_later", "item_id": "i_mixed",
+        "price": 200.0, "status": "succeeded", "task_id": "t1",
+    })
+    tmp_repo.upsert_order({
+        "id": "o_only_fail", "item_id": "i_only_fail",
+        "price": 50.0, "status": "failed", "task_id": "t1",
+    })
+
+    # 默认：跳过 failed，i_mixed 应取 succeeded（最新非 failed），
+    # i_only_fail 因只有 failed 记录应不在结果中
+    default_map = tmp_repo.list_orders_by_item_ids(
+        ["i_mixed", "i_only_fail", "i_not_exist"]
+    )
+    assert "i_mixed" in default_map
+    assert default_map["i_mixed"]["status"] == "succeeded"
+    assert default_map["i_mixed"]["id"] == "o_success_later"
+    assert "i_only_fail" not in default_map
+    assert "i_not_exist" not in default_map
+
+    # include_failed=True：i_only_fail 也应返回最新 failed 订单
+    include_map = tmp_repo.list_orders_by_item_ids(
+        ["i_mixed", "i_only_fail"], include_failed=True
+    )
+    # i_mixed 最新一条是 succeeded，应保留 succeeded（按 created_at desc 取首条）
+    assert include_map["i_mixed"]["status"] == "succeeded"
+    assert include_map["i_only_fail"]["status"] == "failed"
+    assert include_map["i_only_fail"]["id"] == "o_only_fail"
+
+
 def test_json_field_parsing(tmp_repo: Repository) -> None:
     """JSON 字段自动解析"""
     tmp_repo.upsert_task({

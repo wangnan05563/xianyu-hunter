@@ -89,12 +89,15 @@ def _configure_default_health_checkers(orch) -> None:
                     )
                     return False
 
-            # 4. 自动同步层状态（修复状态不一致）
-            # 为什么需要：登录路径只写 JSON 未更新层状态，导致 /cookies/layers 误显示无效
+            # 4. 自动同步层状态（仅当从未初始化时）
+            # 为什么用 updated_at==0.0 而非 not valid：
+            # invalidate_layer 主动失效后 updated_at 保持 >0.0 但 valid=False，
+            # 此状态需保留以反映 collector 检测到的 RGV587 会话失效；
+            # updated_at==0.0 才表示从未初始化，此时才需补救同步
             states = orch.cookie_rotator.get_all_states()
             identity_state = states.get(CookieLayer.IDENTITY)
-            if not identity_state or not identity_state.valid:
-                logger.info("cookie_checker: Cookie 有效但层状态未初始化，自动同步")
+            if not identity_state or identity_state.updated_at == 0.0:
+                logger.info("cookie_checker: Cookie 有效但层状态从未初始化，自动同步")
                 cookie_map = {c.get("name", ""): c.get("value", "") for c in cookies_list}
                 orch.cookie_rotator.sync_state_from_cookies(cookie_map)
 
@@ -437,15 +440,57 @@ def get_request_delay(action: str = "browse") -> dict:
 # ============================================================
 # Cookie 分层管理
 # ============================================================
+@router.get("/cookies/current")
+def get_current_cookies() -> dict:
+    """读取当前 CookieStore JSON 中的全部 Cookie（供更新弹窗自动预填）
+
+    为什么用此接口而不是直接读 layers：layers 端点只返回每层是否有效与数量，
+    不包含 cookie 明文。前端"更新 Cookie"弹窗需要 name=>value 字典来预填文本框。
+    """
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store
+    store = get_cookie_store()
+    data = store._read_json()
+    if not data or not data.get("cookies"):
+        return {"ok": True, "cookies": {}, "count": 0}
+    cookies = {
+        c["name"]: c["value"]
+        for c in data["cookies"]
+        if c.get("name")
+    }
+    return {"ok": True, "cookies": cookies, "count": len(cookies)}
+
+
+@router.post("/cookies/import-from-browser/preview")
+def import_from_browser_preview(request: dict = Body(...)) -> JSONResponse:
+    """从系统已登录浏览器（Edge/Chrome）读取 Cookie，仅返回不写入
+
+    Request body:
+        {"browser": "edge", "auto_close": false}
+
+    与 /api/auth/import-from-browser 的区别：那个端点读取后会立即 export_cookies
+    写入 CookieStore，覆盖现有登录态；本接口仅返回 cookie 字典供前端预填文本框，
+    由用户确认后调 /cookies/update 才会真正分层写入。
+    """
+    browser = request.get("browser", "edge")
+    auto_close = bool(request.get("auto_close", False))
+    # 避免循环导入：放在函数内延迟导入
+    from xianyu_hunter.web.routes.browser_import import _do_import_from_browser
+    result = _do_import_from_browser(browser, auto_close=auto_close, dry_run=True)
+    return JSONResponse(content=result)
+
+
 @router.post("/cookies/update")
 def update_cookies(request: dict = Body(...)) -> JSONResponse:
-    """登录成功后分层更新 Cookie
+    """分层更新 Cookie（合并写入，不丢失已有 Cookie）
 
     Request body:
         {"cookies": {"unb": "123", "_m_h5_tk": "tk_123", ...}}
 
-    自动将 Cookie 分类到 identity/session/tracking 三层并原子更新。
-    更新顺序：identity → session → tracking，保证依赖关系。
+    与 on_login_success 的区别：
+    - on_login_success 分3次调用 atomic_update，每次触发 export_cookies 覆盖写 JSON，
+      导致只有最后一层的 Cookie 被保留，且 session 层因 identity 层未更新而抛异常。
+    - 本端点改为：先读取现有 JSON 全量 Cookie，合并传入值后一次性写入，
+      再用 sync_state_from_cookies 同步所有层状态，避免覆盖丢失和依赖检查失败。
     """
     cookies = request.get("cookies", {})
     if not cookies:
@@ -453,64 +498,164 @@ def update_cookies(request: dict = Body(...)) -> JSONResponse:
 
     orch = get_orchestrator()
 
-    # 设置 writer：优先使用 CookieStore JSON 持久化
-    # 为什么不用浏览器写入：跨线程调用 Playwright add_cookies 存在死锁风险
-    # CookieStore JSON 已经是浏览器启动时的 Cookie 来源，保持一致
     from xianyu_hunter.web.services.cookie_store import get_cookie_store
     cookie_store = get_cookie_store()
 
-    def json_writer(cookies_list: list[dict]) -> int:
-        cookie_store.export_cookies(cookies_list, method="orchestrator_api")
-        return len(cookies_list)
+    # 1. 读取现有 JSON 中的全部 Cookie（保留 domain/path/expires 等元信息）
+    existing_data = cookie_store._read_json()
+    existing_cookies: list[dict] = existing_data.get("cookies", []) if existing_data else []
 
-    orch.set_cookie_writer(json_writer)
+    # name => cookie_obj 映射（同名取第一条，丢弃其他域名的重复项）
+    existing_map: dict[str, dict] = {}
+    for c in existing_cookies:
+        name = c.get("name", "")
+        if name and name not in existing_map:
+            existing_map[name] = dict(c)
 
-    # 如果浏览器上下文可用，异步写入浏览器（best-effort，非阻塞）
-    try:
-        from xianyu_hunter.web.deps import get_container
-        container = get_container()
-        if container.browser and container.browser._context:
-            import asyncio
-            cookies_copy = [
-                {"name": c["name"], "value": c["value"], "domain": c.get("domain", ".goofish.com"),
-                 "path": c.get("path", "/")}
-                for c in cookies_list
-            ]
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # 不等待结果，fire-and-forget 避免死锁
-                    asyncio.ensure_future(
-                        container.browser._context.add_cookies(cookies_copy)
-                    )
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # 2. 合并：传入的 cookie 覆盖同名 value，新增的用默认元信息
+    for name, value in cookies.items():
+        if name in existing_map:
+            existing_map[name]["value"] = value
+        else:
+            existing_map[name] = {
+                "name": name,
+                "value": value,
+                "domain": ".goofish.com",
+                "path": "/",
+                "expires": -1,
+            }
 
-    try:
-        written = orch.on_login_success(cookies)
-        return JSONResponse(content={
-            "ok": True,
-            "written": written,
-            "message": f"已分层更新 {written} 个 Cookie",
-        })
-    except Exception as e:
-        logger.error("Cookie 分层更新失败: %s", e)
+    merged_list = list(existing_map.values())
+
+    # 3. 一次性写入合并后的完整列表（export_cookies 内部会过滤测试数据）
+    success = cookie_store.export_cookies(merged_list, method="orchestrator_api")
+    if not success:
         return JSONResponse(content={
             "ok": False,
-            "error": f"Cookie 更新失败: {e}",
-            "hint": "可能是依赖层未先更新（session 层需 identity 层先有效）",
+            "error": "Cookie 写入失败（可能全部被识别为测试数据）",
         })
+
+    # 4. 直接同步所有层状态，不走 atomic_update 的依赖检查
+    # 为什么不用 on_login_success：它会分3次覆盖写 JSON，且 session 层因
+    # identity 层未更新而抛 SessionExpiredError，导致只有 tracking 层写入
+    # 为什么重新读 JSON 而非用 merged_list：export_cookies 内部会过滤测试数据，
+    # 用 merged_list 构造 cookie_map 会包含被过滤的测试数据，导致层状态与 JSON
+    # 实际内容不一致（如 unb=123456 被过滤但层状态仍标记 identity 有效）
+    fresh_data = cookie_store._read_json()
+    fresh_cookies = fresh_data.get("cookies", []) if fresh_data else []
+    cookie_map = {
+        c.get("name", ""): c.get("value", "")
+        for c in fresh_cookies
+        if c.get("name") and c.get("value")
+    }
+    orch.cookie_rotator.sync_state_from_cookies(cookie_map)
+
+    written = len(fresh_cookies)
+    logger.info("Cookie 分层更新完成: 写入后 %d 个 Cookie，已同步层状态", written)
+
+    return JSONResponse(content={
+        "ok": True,
+        "written": written,
+        "message": f"已分层更新 {written} 个 Cookie",
+    })
 
 
 @router.get("/cookies/layers")
-def get_cookie_layers() -> dict:
+async def get_cookie_layers() -> dict:
     """获取 Cookie 各层状态
 
     返回三层（identity/session/tracking）的有效性、更新时间、Cookie 数量。
+
+    为什么需要自动同步：服务重启或协调器初始化后，内存层状态默认全 False，
+    即使 JSON 中有有效 Cookie 也会显示失效。这里读取 JSON 实际内容并同步层状态，
+    保证返回的状态与 JSON 真实内容一致（与 /health 中 cookie_checker 同样的同步策略）。
+
+    同步条件：只同步 updated_at=0 的层（从未初始化过的层）。
+    为什么不全量同步：invalidate_layer 是用户主动失效某层的操作，
+    若全量同步会从 JSON 重新读取 cookie 覆盖失效状态，导致级联失效失效。
+
+    浏览器内存兜底：JSON 可能缺少某些 cookie（如 MTOP token 未回写、登录路径
+    只写了部分 cookie），但浏览器内存中有有效 cookie（功能正常）。
+    当 JSON 同步后仍有层失效时，从浏览器内存读取 cookie 作为兜底同步源，
+    确保层状态反映浏览器实际状态。
     """
     orch = get_orchestrator()
+
+    # 第一步：从 JSON 同步（仅对从未初始化的层）
+    # 为什么这样设计：避免覆盖 invalidate_layer 的手动失效状态
+    try:
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store
+        from xianyu_hunter.modules.cookie_rotator import LAYER_DEFINITIONS
+
+        store = get_cookie_store()
+        data = store._read_json()
+        if data and data.get("cookies"):
+            current_states = orch.cookie_rotator.get_all_states()
+            never_initialized_layers = {
+                layer for layer, state in current_states.items()
+                if state.updated_at == 0.0
+            }
+            if never_initialized_layers:
+                now = time.time()
+                needed_names: set[str] = set()
+                for layer in never_initialized_layers:
+                    needed_names |= LAYER_DEFINITIONS[layer].cookies
+
+                valid_cookies = {
+                    c.get("name", ""): c.get("value", "")
+                    for c in data["cookies"]
+                    if c.get("name") and c.get("value")
+                    and c.get("name") in needed_names
+                    and not (c.get("expires", -1) and c.get("expires", -1) > 0 and c.get("expires", -1) < now)
+                }
+                if valid_cookies:
+                    orch.cookie_rotator.sync_state_from_cookies(valid_cookies)
+    except Exception as e:
+        logger.warning("get_cookie_layers JSON 同步失败: %s", e)
+
+    # 第二步：浏览器内存兜底同步
+    # 为什么需要：JSON 可能缺少 MTOP token（_m_h5_tk）或部分 identity cookie，
+    # 但浏览器内存中有（功能正常）。从浏览器读取后同步层状态 + 回写 JSON
+    try:
+        current_states = orch.cookie_rotator.get_all_states()
+        still_invalid_layers = {
+            layer for layer, state in current_states.items()
+            if state.updated_at == 0.0 and not state.valid
+        }
+        if still_invalid_layers:
+            from xianyu_hunter.web.deps import get_container
+            container = get_container()
+            if container.browser and container.browser._context:
+                # 从浏览器内存读取所有 goofish/taobao 域 cookie
+                browser_cookies = await container.browser.get_cookies(
+                    ["goofish.com", "taobao.com"]
+                )
+                if browser_cookies:
+                    from xianyu_hunter.modules.cookie_rotator import LAYER_DEFINITIONS
+                    now = time.time()
+                    needed_names: set[str] = set()
+                    for layer in still_invalid_layers:
+                        needed_names |= LAYER_DEFINITIONS[layer].cookies
+
+                    # 构造 cookie_map（过滤过期 cookie）
+                    browser_cookie_map = {
+                        c.get("name", ""): c.get("value", "")
+                        for c in browser_cookies
+                        if c.get("name") and c.get("value")
+                        and c.get("name") in needed_names
+                        and not (c.get("expires", -1) and c.get("expires", -1) > 0 and c.get("expires", -1) < now)
+                    }
+                    if browser_cookie_map:
+                        orch.cookie_rotator.sync_state_from_cookies(browser_cookie_map)
+                        # 回写浏览器内存中的关键 cookie 到 JSON，避免下次再兜底
+                        _write_browser_cookies_to_json(browser_cookies, needed_names)
+                        logger.info(
+                            "浏览器内存兜底同步: 从浏览器读取 %d 个 cookie 同步层状态",
+                            len(browser_cookie_map),
+                        )
+    except Exception as e:
+        logger.debug("get_cookie_layers 浏览器兜底同步失败: %s", e)
+
     states = orch.cookie_rotator.get_all_states()
 
     return {
@@ -524,6 +669,35 @@ def get_cookie_layers() -> dict:
             for layer, state in states.items()
         },
     }
+
+
+def _write_browser_cookies_to_json(browser_cookies: list[dict], needed_names: set[str]) -> None:
+    """将浏览器内存中缺失的关键 cookie 回写到 JSON
+
+    为什么需要：JSON 可能缺少某些 cookie（如 MTOP token），导致每次 /cookies/layers
+    都要从浏览器兜底。回写后 JSON 数据完整，后续可直接从 JSON 同步。
+    只回写 needed_names 中的 cookie，避免全量覆盖。
+    用 upsert 而非 update：JSON 中可能完全不存在该 cookie 条目，需要能新增。
+    """
+    try:
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store
+        store = get_cookie_store()
+        # 构造 upserts 字典：包含 value/domain/path/expires 完整信息
+        upserts = {
+            c.get("name", ""): {
+                "value": c.get("value", ""),
+                "domain": c.get("domain", ".goofish.com"),
+                "path": c.get("path", "/"),
+                "expires": c.get("expires", -1),
+            }
+            for c in browser_cookies
+            if c.get("name") in needed_names and c.get("value")
+        }
+        if upserts:
+            store.upsert_cookie_values(upserts)
+    except Exception:
+        # 回写失败不影响层状态同步（层状态已通过 sync_state_from_cookies 更新）
+        pass
 
 
 @router.post("/cookies/invalidate")

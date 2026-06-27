@@ -58,6 +58,7 @@ export const evalApi = {
     end_time?: string
     page_num?: number
     page_size?: number
+    brand?: string
   }) => client.get<{ items: EvalItem[]; count: number; total: number }>('/api/evaluations', { params }).then((r) => r.data),
 
   distribution: (params: { range_hours?: number; price_bin_count?: number; score_bin_count?: number }) =>
@@ -113,18 +114,21 @@ export const evalApi = {
       .then((r) => r.data),
 
   // 官方页面采集+评估：访问闲鱼商品详情页和卖家主页，获取完整数据后重新评估
+  // 超时设为 90s：后端最坏路径含两次 page.goto(30s) + 多个 wait_for_selector，
+  // 默认 30s 会被前端 axios 提前超时，触发兜底文案「官方采集失败，请稍后重试」
   collectOfficial: (itemId: string, taskId?: string) =>
     client
       .post<OfficialCollectResult>(
         `/api/evaluations/${itemId}/collect-official`,
         null,
-        { params: taskId ? { task_id: taskId } : {} },
+        { params: taskId ? { task_id: taskId } : {}, timeout: 90000 },
       )
       .then((r) => r.data),
 
   // 批量官方采集+评估：串行采集多个商品，单个失败不中断
+  // 单条最坏 90s × 50 条 = 4500s，取整 5400s（90min）作为上限
   batchCollectOfficial: (itemIds: string[]) =>
     client
-      .post<BatchCollectResult>('/api/evaluations/batch-collect-official', { item_ids: itemIds })
+      .post<BatchCollectResult>('/api/evaluations/batch-collect-official', { item_ids: itemIds }, { timeout: 5400000 })
       .then((r) => r.data),
 }

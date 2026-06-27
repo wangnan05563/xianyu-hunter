@@ -202,3 +202,49 @@ def test_list_links_corrects_seller_nick_to_publish_time(client: TestClient, tmp
         f"发布时间描述不应作为 seller_nick，但得到 {display.get('seller_nick')!r}"
     assert display["publish_time"] == "一周内发布", \
         f"发布时间描述应被移到 publish_time，但得到 {display.get('publish_time')!r}"
+
+
+def test_batch_upsert_accepts_string_publish_time(tmp_repo: Repository) -> None:
+    """回归测试：batch_upsert_item_task_links 接受字符串类型的 publish_time
+
+    复现 bug：live_search 结果中 publish_time 已被转为 ISO 字符串，
+    但 _build_item_link_rows 调用 publish_time.isoformat() 期望 datetime 对象，
+    导致 'str' object has no attribute 'isoformat' 错误。
+    """
+    tmp_repo.upsert_task({"id": "t1", "name": "测试任务", "keyword": "DDR4"})
+
+    # 模拟 live_search 传入的 items_data：publish_time 是 ISO 字符串
+    items_data = [
+        {
+            "item_id": "item_str_pt",
+            "title": "DDR4 32G 内存条",
+            "price": 680.0,
+            "thumb_url": "https://example.com/img.jpg",
+            "brand": "",
+            "seller_id": "seller_1",
+            "seller_nick": "小明",
+            "region": "天津",
+            "publish_time": "2026-06-27T10:30:00",  # 字符串，非 datetime
+            "want_cnt": 5,
+            "view_cnt": 100,
+            "is_sold": False,
+        },
+    ]
+
+    # 不应抛出 'str' object has no attribute 'isoformat'
+    saved = tmp_repo.batch_upsert_item_task_links(
+        task_id="t1",
+        items_data=items_data,
+        source="live",
+    )
+    assert saved >= 1, "应至少写入 1 条记录"
+
+    # 验证 publish_time 被正确存储为字符串
+    rows = tmp_repo.list_task_links(task_id="t1")
+    item_row = next(r for r in rows if r["link_type"] == "item")
+    display = item_row["display"]
+    if isinstance(display, str):
+        import json
+        display = json.loads(display)
+    assert display["publish_time"] == "2026-06-27T10:30:00", \
+        f"publish_time 应原样存储为字符串，但得到 {display.get('publish_time')!r}"

@@ -56,6 +56,31 @@ def _export_cookies_to_json(cookies: list[dict], method: str) -> None:
         print(f"[browser_login] Cookie JSON 导出失败: {e}", file=sys.stderr)
 
 
+def _save_playwright_cookies(cookies: list[dict]) -> None:
+    """保存 Playwright 格式的 Cookie 到文件，供 Worker 浏览器实例注入
+
+    Worker 的 BrowserManager 在登录前就已启动，内存中没有登录 Cookie。
+    登录成功后需要将 Cookie 注入到 Worker 实例中，否则实时搜索会报
+    "闲鱼登录 Cookie 不完整"。
+    """
+    try:
+        _repo = Path(__file__).resolve().parents[1]
+        cookie_file = _repo / "data" / "last_login_cookies.json"
+        cookie_file.parent.mkdir(parents=True, exist_ok=True)
+        # 只保存 goofish.com / taobao.com 域的 Cookie，减少文件大小
+        domain_cookies = [
+            c for c in cookies
+            if any(d in c.get("domain", "") for d in ("goofish.com", "taobao.com"))
+        ]
+        cookie_file.write_text(
+            json.dumps(domain_cookies, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        print(f"[browser_login] Playwright Cookie 已保存到 {cookie_file} (count={len(domain_cookies)})", file=sys.stderr)
+    except Exception as e:
+        print(f"[browser_login] 保存 Playwright Cookie 失败: {e}", file=sys.stderr)
+
+
 def _get_edge_path() -> str | None:
     """查找系统 Edge 浏览器路径"""
     import shutil
@@ -71,6 +96,38 @@ def _get_edge_path() -> str | None:
     if edge:
         return edge
     return None
+
+
+def _validate_login_cookies(cookies: list[dict]) -> bool:
+    """严格验证 Cookie 是否表示真正登录成功
+
+    仅检测 Cookie 名称存在是不够的（_m_h5_tk 访问首页就会设置），
+    必须验证关键登录 Cookie 的值有效：
+    - unb: 闲鱼用户ID，必须是纯数字且长度 >= 6
+    - cookie2: 会话ID，必须存在且非空、非测试值
+    """
+    cookie_map = {c["name"]: c.get("value", "") for c in cookies}
+
+    unb = cookie_map.get("unb", "")
+    cookie2 = cookie_map.get("cookie2", "")
+
+    # unb 必须是纯数字且长度 >= 6（真实用户ID）
+    if not unb or not unb.isdigit() or len(unb) < 6:
+        return False
+
+    # 过滤已知测试值（unb=123456 等）
+    if unb in ("123456", "123"):
+        return False
+
+    # cookie2 必须存在且长度 >= 10（真实会话ID）
+    if not cookie2 or len(cookie2) < 10:
+        return False
+
+    # 过滤测试值
+    if cookie2 == "abc":
+        return False
+
+    return True
 
 
 async def _cmd_login(status_file: Path, timeout: int) -> int:
@@ -128,14 +185,13 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                 )
                 await page.wait_for_timeout(3000)
 
-                # 检查是否已登录（通过 cookie 检测，比 DOM 选择器更可靠）
+                # 检查是否已登录（严格验证 Cookie 值，而非仅检测名称存在）
+                # _m_h5_tk 访问首页就会自动设置，不能作为登录判据
                 cookies = await bc.cookies()
                 cookie_names = {c["name"] for c in cookies}
-                login_indicators = {"_m_h5_tk", "unb", "sgcookie"}
-                already_logged = bool(login_indicators & cookie_names)
 
-                if already_logged:
-                    # 进一步验证：尝试访问 personal 页面确认登录态有效
+                if _validate_login_cookies(cookies):
+                    # Cookie 值验证通过，进一步访问 personal 页面确认登录态有效
                     try:
                         personal_page = await bc.new_page()
                         await personal_page.goto(
@@ -150,11 +206,18 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                         if not is_login_page:
                             _set_status(status_file, status="already_logged", message="检测到已登录状态")
                             _set_status(status_file, status="success", message="已处于登录状态")
+                            # 导出 Cookie 到 JSON 供后端验证
+                            final_cookies = await bc.cookies()
+                            _export_cookies_to_json(final_cookies, "browser")
+                            # 保存 Playwright 格式 Cookie 供 Worker 注入
+                            _save_playwright_cookies(final_cookies)
                             await personal_page.close()
                             return 0
+                        else:
+                            print("[browser_login] Cookie 存在但 personal 页面重定向到登录页，Cookie 可能已过期", file=sys.stderr)
                         await personal_page.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[browser_login] 验证登录态失败: {e}", file=sys.stderr)
 
                 _set_status(
                     status_file,
@@ -162,16 +225,14 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                     message=f"请在浏览器窗口中登录闲鱼（{timeout}s 超时）",
                 )
 
-                # 轮询检测 Cookie（检查关键闲鱼 Cookie 是否出现）
+                # 轮询检测 Cookie（严格验证 Cookie 值，而非仅检测名称存在）
                 start = time.monotonic()
-                prev_cookie_names: set[str] = set(cookie_names)
 
                 while time.monotonic() - start < timeout:
                     await asyncio.sleep(2)
                     cookies = await bc.cookies()
-                    names = {c["name"] for c in cookies}
 
-                    if login_indicators & names:
+                    if _validate_login_cookies(cookies):
                         # 登录成功：显式等待确保 Cookie 刷入磁盘
                         await page.wait_for_timeout(3000)
                         # 强制保存浏览器存储状态，确保 Cookie 写入 SQLite
@@ -183,6 +244,8 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                         final_cookies = await bc.cookies()
                         final_count = len(final_cookies)
                         _export_cookies_to_json(final_cookies, "browser")
+                        # 保存 Playwright 格式 Cookie 供 Worker 注入
+                        _save_playwright_cookies(final_cookies)
                         _set_status(
                             status_file,
                             status="success",
@@ -193,8 +256,8 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                         await asyncio.sleep(3)
                         return 0
 
-                    # 更新已知 Cookie 集合（避免重复提醒）
-                    prev_cookie_names = names
+                    # 更新状态消息
+                    names = {c["name"] for c in cookies}
 
                     # 每10秒更新一次状态消息
                     elapsed = int(time.monotonic() - start)

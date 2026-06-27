@@ -94,6 +94,10 @@ class ItemRow(Base):
     last_seen: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow
     )
+    # 销售状态：0=在售，1=已售。由 buyer/collector 检测写入
+    is_sold: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 检测到已售的时间戳，便于排查检测来源
+    sold_detected_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 # 5.3 卖家表
@@ -361,6 +365,9 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     # 增量迁移：为已有表添加 ORM 中新增但数据库中缺失的列
     _migrate_add_column(engine, "events", "type", "TEXT")
     _migrate_add_column(engine, "tasks", "max_publish_days", "INTEGER")
+    # 增量迁移：items 表新增销售状态字段（buyer/collector 检测写入）
+    _migrate_add_column(engine, "items", "is_sold", "INTEGER")
+    _migrate_add_column(engine, "items", "sold_detected_at", "TEXT")
     # 增量迁移：为 task_links 添加 task_id+source 复合索引（refresh_links 批量删除用）
     _migrate_create_index(engine, "task_links", "ix_task_links_task_source", "task_id, source")
 

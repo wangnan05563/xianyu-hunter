@@ -17,6 +17,8 @@ import {
   Input,
   Divider,
   Alert,
+  Select,
+  Spin,
 } from 'antd'
 import {
   ReloadOutlined,
@@ -29,6 +31,7 @@ import {
   HeartOutlined,
   ExperimentOutlined,
   ExclamationCircleOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons'
 import { anticrawlApi } from '../../api'
 import { usePersistentState } from '../../hooks/usePersistentState'
@@ -99,6 +102,12 @@ export default function AntiCrawl() {
   const [cookieModalOpen, setCookieModalOpen] = useState(false)
   const [cookieInput, setCookieInput] = useState('')
   const [loadingUpdate, setLoadingUpdate] = useState(false)
+  // 弹窗预填：从后端读 cookie 写入文本框的过程状态
+  const [loadingPrefill, setLoadingPrefill] = useState(false)
+  const [prefillHint, setPrefillHint] = useState('')
+  // 「从浏览器导入」按钮：选择浏览器类型
+  const [importBrowser, setImportBrowser] = useState<string>('edge')
+  const [loadingImport, setLoadingImport] = useState(false)
 
   // ============== 数据加载 ==============
 
@@ -280,6 +289,71 @@ export default function AntiCrawl() {
     })
   }
 
+  /**
+   * 打开 Cookie 更新弹窗：自动从后端读取当前 cookie 预填文本框
+   *
+   * 为什么自动预填：旧版本要求用户手动粘贴体验差，常见诉求只是想"重新分层"
+   * 同步层状态而已；预填后用户可直接点更新或在文本框上做局部修改。
+   */
+  const openCookieModal = async () => {
+    setCookieModalOpen(true)
+    setCookieInput('')
+    setPrefillHint('')
+    setLoadingPrefill(true)
+    try {
+      const result = await anticrawlApi.getCurrentCookies()
+      const cookies = result.cookies || {}
+      const text = Object.entries(cookies)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('; ')
+      setCookieInput(text)
+      if (result.count > 0) {
+        setPrefillHint(`已自动读取 ${result.count} 个 Cookie，可直接点「更新」或编辑后再提交`)
+      } else {
+        setPrefillHint('当前没有 Cookie 数据，可点击下方「从浏览器导入」按钮')
+      }
+    } catch (error) {
+      setPrefillHint('读取当前 Cookie 失败，可手动粘贴或从浏览器导入')
+      console.error(error)
+    } finally {
+      setLoadingPrefill(false)
+    }
+  }
+
+  /**
+   * 「从浏览器导入」按钮：从已登录的 Edge/Chrome 读取 cookie 覆盖文本框
+   *
+   * 与 /api/auth/import-from-browser 的区别：那个端点读取后立即写入 CookieStore，
+   * 容易覆盖仍在用的有效登录态；本操作仅在文本框内预览，由用户确认后再调 update。
+   */
+  const handleImportFromBrowser = async () => {
+    try {
+      setLoadingImport(true)
+      const result = await anticrawlApi.importFromBrowserPreview(importBrowser, false)
+      if (result.ok && result.cookies) {
+        const text = Object.entries(result.cookies)
+          .map(([k, v]) => `${k}=${v}`)
+          .join('; ')
+        setCookieInput(text)
+        setPrefillHint(
+          `从 ${importBrowser === 'edge' ? 'Edge' : 'Chrome'} 导入 ${result.imported_count ?? 0} 个 Cookie，可直接点「更新」`
+        )
+        message.success(result.message || '已导入到文本框')
+      } else {
+        const detail = [result.error, result.hint].filter(Boolean).join('\n')
+        message.error(detail || '从浏览器导入失败')
+        if (result.error_detail) {
+          console.error('import error detail:', result.error_detail)
+        }
+      }
+    } catch (error) {
+      message.error('从浏览器导入失败')
+      console.error(error)
+    } finally {
+      setLoadingImport(false)
+    }
+  }
+
   const handleUpdateCookies = async () => {
     if (!cookieInput.trim()) {
       message.warning('请输入 Cookie')
@@ -401,6 +475,15 @@ export default function AntiCrawl() {
               </Space>
             }
           >
+            {session && !session.active && session.cookie_layers?.identity && (
+              <Alert
+                type="warning"
+                showIcon
+                message="检测到有效 Cookie 但会话未启动"
+                description="正常情况下登录/导入/注入完成后会自动启动 TokenRenewer 后台续期。如未自动启动，可点击下方按钮手动启用。"
+                style={{ marginBottom: 12 }}
+              />
+            )}
             {session && (
               <Row gutter={[16, 16]}>
                 <Col span={8}>
@@ -541,7 +624,7 @@ export default function AntiCrawl() {
               <Space>
                 <Button
                   size="small"
-                  onClick={() => setCookieModalOpen(true)}
+                  onClick={openCookieModal}
                 >
                   更新 Cookie
                 </Button>
@@ -748,23 +831,54 @@ export default function AntiCrawl() {
         onCancel={() => {
           setCookieModalOpen(false)
           setCookieInput('')
+          setPrefillHint('')
         }}
         confirmLoading={loadingUpdate}
         okText="更新"
         cancelText="取消"
-        width={600}
+        width={640}
       >
-        <Paragraph type="secondary" style={{ fontSize: 12 }}>
-          输入 Cookie 字符串（格式：<code>name=value; name2=value2</code>），
-          系统会自动分类到 identity / session / tracking 三层并原子更新。
+        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+          系统已自动从 CookieStore 读取当前 Cookie 预填到下方文本框。
+          提交后会自动分类到 identity / session / tracking 三层并原子更新。
         </Paragraph>
-        <Input.TextArea
-          value={cookieInput}
-          onChange={(e) => setCookieInput(e.target.value)}
-          placeholder="_m_h5_tk=token_123; _m_h5_tk_enc=enc_123; unb=123456; cookie2=abc; sgcookie=sg; ..."
-          rows={6}
-          style={{ fontFamily: 'monospace', fontSize: 12 }}
-        />
+
+        {/* 浏览器导入工具栏 */}
+        <Space.Compact style={{ width: '100%', marginBottom: 8 }}>
+          <Select
+            value={importBrowser}
+            onChange={setImportBrowser}
+            style={{ width: 120 }}
+            options={[
+              { value: 'edge', label: 'Edge' },
+              { value: 'chrome', label: 'Chrome' },
+            ]}
+          />
+          <Button
+            icon={<DownloadOutlined />}
+            loading={loadingImport}
+            onClick={handleImportFromBrowser}
+            style={{ flex: 1 }}
+          >
+            从浏览器导入（覆盖文本框）
+          </Button>
+        </Space.Compact>
+
+        <Spin spinning={loadingPrefill} tip="正在读取当前 Cookie...">
+          <Input.TextArea
+            value={cookieInput}
+            onChange={(e) => setCookieInput(e.target.value)}
+            placeholder="_m_h5_tk=token_123; _m_h5_tk_enc=enc_123; unb=123456; ..."
+            rows={8}
+            style={{ fontFamily: 'monospace', fontSize: 12 }}
+          />
+        </Spin>
+
+        {prefillHint && (
+          <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+            {prefillHint}
+          </Paragraph>
+        )}
       </Modal>
     </div>
   )

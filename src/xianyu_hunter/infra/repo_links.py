@@ -129,7 +129,13 @@ class TaskLinksMixin:
                     "seller_nick": seller_nick or "",
                     "url": item_url,
                     "region": region or "",
-                    "publish_time": publish_time.isoformat() if publish_time else None,
+                    # publish_time 可能是 datetime 对象（upsert_item_task_links 调用方）
+                    # 或 ISO 字符串（live_search 结果经 display 字典传入），
+                    # 统一转为 ISO 字符串存储
+                    "publish_time": (
+                        publish_time.isoformat() if isinstance(publish_time, datetime)
+                        else (str(publish_time) if publish_time else None)
+                    ),
                     "want_cnt": want_cnt,
                     "view_cnt": view_cnt,
                     "is_sold": bool(is_sold) if is_sold is not None else False,
@@ -398,13 +404,14 @@ class TaskLinksMixin:
         offset: int = 0,
         search_keyword: str | None = None,
         search_region: str | None = None,
+        search_brand: str | None = None,
     ) -> tuple[list[dict], dict[str, int]]:
         """单次查询同时返回列表和计数，避免 list + count 两次全量加载
 
         替代分别调用 list_task_links + count_task_links，
         将两次全量加载合并为一次，DB 查询耗时减半。
 
-        search_keyword/search_region：将关键词/地区过滤下推 SQL 层，
+        search_keyword/search_region/search_brand：将关键词/地区/品牌过滤下推 SQL 层，
         避免 has_search 时全量加载到内存再 Python 过滤。
         """
         # 性能埋点：记录查询耗时，用于长期监控商品列表查询性能
@@ -444,6 +451,10 @@ class TaskLinksMixin:
             if search_region:
                 region_expr = func.json_extract(TaskLinkRow.display, '$.region')
                 stmt = stmt.where(region_expr == search_region)
+            if search_brand:
+                # 品牌精确匹配（与地区过滤一致），空品牌自动排除
+                brand_expr = func.json_extract(TaskLinkRow.display, '$.brand')
+                stmt = stmt.where(brand_expr == search_brand)
 
             # 发布天数过滤下推 SQL：减少 Python 层处理的数据行数
             # publish_time 存储为 ISO 字符串（UTC），substr 截取前 19 字符去掉时区后缀，

@@ -123,6 +123,26 @@ export interface OperationResult {
   valid_layers?: string[]
 }
 
+/** 当前 Cookie 字典（供更新弹窗预填） */
+export interface CurrentCookiesResult {
+  ok: boolean
+  cookies: Record<string, string>
+  count: number
+}
+
+/** 从浏览器导入预览结果 */
+export interface ImportFromBrowserPreviewResult {
+  ok: boolean
+  message?: string
+  error?: string
+  hint?: string
+  error_detail?: string
+  cookies?: Record<string, string>
+  dry_run?: boolean
+  imported_count?: number
+  errors?: string[]
+}
+
 // ============== API 封装 ==============
 
 /** 反爬登录管理 API */
@@ -174,4 +194,17 @@ export const anticrawlApi = {
 
   invalidateLayer: (layer: string) =>
     client.post<OperationResult>('/api/anticrawl/cookies/invalidate', { layer }).then((r) => r.data),
+
+  // 弹窗自动预填：从 CookieStore JSON 读取当前 cookie 明文
+  getCurrentCookies: () =>
+    client.get<CurrentCookiesResult>('/api/anticrawl/cookies/current').then((r) => r.data),
+
+  // 弹窗「从浏览器导入」：仅返回浏览器 cookie，不写入 CookieStore
+  importFromBrowserPreview: (browser: string = 'edge', auto_close: boolean = false) =>
+    client
+      .post<ImportFromBrowserPreviewResult>('/api/anticrawl/cookies/import-from-browser/preview', {
+        browser,
+        auto_close,
+      })
+      .then((r) => r.data),
 }

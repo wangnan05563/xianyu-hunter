@@ -32,10 +32,13 @@ class NotificationsMixin:
 
         with self.engine.begin() as conn:
             now = _utcnow()
+            # INSERT 的 VALUES 中不能引用目标表本身的列（SQLite 限制，与 PostgreSQL 不同）。
+            # 因此 read_at 始终用 None 占位；保留旧值的语义改由 ON CONFLICT DO UPDATE
+            # 子句实现——该子句中允许引用 <table>.col（旧值）和 excluded.col（新值）。
             stmt = sqlite_insert(NotificationRow).values(
                 level=level, category=category, title=title, message=message,
                 link=link, dedup_key=dedup_key,
-                read_at=None if reset_read else NotificationRow.read_at,
+                read_at=None,
                 created_at=now,
             )
             stmt = stmt.on_conflict_do_update(
@@ -46,6 +49,8 @@ class NotificationsMixin:
                     "title": stmt.excluded.title,
                     "message": stmt.excluded.message,
                     "link": stmt.excluded.link,
+                    # reset_read=True → 用新值（None）重置为未读
+                    # reset_read=False → 保留原值（引用现有行的 read_at）
                     "read_at": None if reset_read else NotificationRow.read_at,
                     "created_at": stmt.excluded.created_at,
                 },

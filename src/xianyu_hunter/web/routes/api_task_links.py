@@ -37,6 +37,24 @@ logger = get_logger()
 _live_cache: dict[str, tuple[float, dict]] = {}
 _LIVE_CACHE_TTL = 60
 
+# 实时搜索 in-flight 去重：task_id -> asyncio.Event
+# 当搜索正在进行时，后续请求等待 Event 完成后复用缓存结果，避免并发竞争 browser_lock
+# 为什么需要：前端轮询（15s）与用户点击可能同时发起 live 请求，第二个请求会因
+# browser_lock 被持有而等待 10s 超时，返回"系统正在执行后台搜索任务"错误
+_live_inflight: dict[str, asyncio.Event] = {}
+# 等待 in-flight 搜索完成的超时时间：覆盖正常搜索（30s）+ 缓冲（5s）
+_LIVE_INFLIGHT_WAIT_TIMEOUT = 35.0
+
+
+def _clear_live_inflight(task_id: str, event: asyncio.Event) -> None:
+    """清除 in-flight 标记并通知所有等待者
+
+    在搜索的所有退出路径（成功/失败/异常）调用，确保后续请求不会卡在等待逻辑。
+    为什么需要：in-flight Event 未 set 时，后续请求会等待 35s 超时，导致用户体验差。
+    """
+    _live_inflight.pop(task_id, None)
+    event.set()
+
 router = APIRouter(prefix="/api/tasks", tags=["task-links"])
 
 # url 类型已废弃（项目决策只保留 item/seller），保留 item/seller 两个有效类型
@@ -59,22 +77,95 @@ def _missing_live_search_cookie_names(cookie_names: set[str]) -> list[str]:
 
 
 async def _ensure_live_search_cookies(container: Container) -> None:
-    """Fail fast when the running browser no longer has enough Xianyu login cookies."""
+    """检查浏览器是否持有有效的闲鱼登录 Cookie，无效时尝试从 JSON 补注入
+
+    为什么需要 JSON 补注入：Worker 浏览器实例在登录前已启动，
+    登录通过 LoginOrchestrator(CDP) 或 browser-login 子进程完成时，
+    Cookie 写入了 JSON/SQLite 但未同步到 Worker 浏览器内存。
+    此时通过 Playwright context.add_cookies() 直接注入到浏览器内存，
+    避免用户重新登录后实时搜索仍报"Cookie 不完整"。
+
+    _m_h5_tk 重置策略：仅在 Cookie 补注入成功或距上次刷新超过 5 分钟时重置。
+    - 补注入时重置：身份 Cookie 变更后，旧 token 必然失效
+    - 5 分钟阈值：覆盖 Worker 浏览器启动时的匿名 token 场景（启动后 5 分钟内
+      首次实时搜索会触发刷新），同时避免短时间连续实时搜索反复刷新（每次约 4s）
+    - _ensure_fresh_m5tk 内部还有 45 分钟缓存，未过期时直接返回 False
+    """
     if not container.browser:
         return
-    try:
-        cookies = await container.browser.get_cookies()
-    except Exception as e:
-        logger.warning("读取浏览器 Cookie 失败: {}", e)
-        return
 
-    names = {str(c.get("name") or "") for c in cookies}
-    missing = _missing_live_search_cookie_names(names)
+    async def _get_missing() -> list[str]:
+        try:
+            cookies = await container.browser.get_cookies()
+        except Exception as e:
+            logger.warning("读取浏览器 Cookie 失败: {}", e)
+            return list(_LIVE_SEARCH_IDENTITY_COOKIES)
+        names = {str(c.get("name") or "") for c in cookies}
+        return _missing_live_search_cookie_names(names)
+
+    missing = await _get_missing()
+    cookies_injected = False  # 标记是否进行了 Cookie 补注入
     if missing:
-        raise HTTPException(
-            status_code=401,
-            detail=f"闲鱼登录 Cookie 不完整（缺少 {', '.join(missing)}），实时搜索不可用，请重新登录闲鱼",
-        )
+        # 浏览器缺少关键 Cookie 时，尝试从 CookieStore JSON 补注入
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
+        store = get_cookie_store()
+        json_data = store._read_json()
+        if json_data and json_data.get("cookies"):
+            pw_cookies = []
+            for c in json_data["cookies"]:
+                name = c.get("name", "")
+                value = c.get("value", "")
+                if name in missing:
+                    # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
+                    if is_test_cookie(name, value):
+                        logger.warning("实时搜索：跳过测试 Cookie {}={}，不注入浏览器", name, value)
+                        continue
+                    pw_cookies.append({
+                        "name": name,
+                        "value": value,
+                        "domain": c.get("domain", ".goofish.com"),
+                        "path": c.get("path", "/"),
+                    })
+            if pw_cookies and container.browser._context:
+                try:
+                    await container.browser._context.add_cookies(pw_cookies)
+                    cookies_injected = True
+                    # 为什么记录具体名称：排查"补注入 2 个 cookie"时无法定位是哪两个
+                    # cookie 的关键信息，便于日志审计与问题复现
+                    logger.info(
+                        "实时搜索：从 CookieStore JSON 补注入 {} 个 cookie 到浏览器: {}",
+                        len(pw_cookies), [c["name"] for c in pw_cookies],
+                    )
+                    # 同步 CookieRotator 层状态：补注入成功说明 JSON 持有有效 cookie，
+                    # 若层状态从未初始化（updated_at==0.0），此处补救同步避免 /cookies/layers 误显示失效
+                    try:
+                        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                        sync_cookie_layers_from_json()
+                    except Exception as e:
+                        logger.debug("实时搜索补注入后同步层状态失败: {}", e)
+                except Exception as e:
+                    logger.warning("实时搜索：从 JSON 补注入 cookie 失败: {}", e)
+
+        # 重新检查补注入后是否仍缺少
+        missing = await _get_missing()
+        if missing:
+            raise HTTPException(
+                status_code=403,
+                detail=f"闲鱼登录 Cookie 不完整（缺少 {', '.join(missing)}），实时搜索不可用，请重新登录闲鱼",
+            )
+
+    # 仅在以下情况重置 _m_h5_tk 刷新时间戳：
+    # 1. 刚进行了 Cookie 补注入：身份 Cookie 变更后，旧 token 必然失效，需强制刷新
+    # 2. 距上次刷新超过 5 分钟：避免短时间连续实时搜索反复刷新 token（每次刷新约 4s）
+    # 不再无条件重置：原逻辑导致每次实时搜索都额外 4s 主页导航，60s 缓存命中也无效
+    if container.collector:
+        # 通过封装方法访问 _last_m5tk_refresh，避免破坏 collector 私有属性封装性
+        # （历史问题：原代码直接读写 _last_m5tk_refresh 私有属性，collector 内部
+        #  重命名会导致此处的重置逻辑静默失效）
+        if cookies_injected or container.collector.should_reset_m5tk():
+            container.collector.force_refresh_m5tk_next()
+            reason = "Cookie 补注入" if cookies_injected else "距上次刷新超过 5 分钟"
+            logger.info("已重置 _m_h5_tk 刷新时间戳（{}），下次搜索将强制刷新 token", reason)
 
 
 def _normalize_task_link_rows(rows: list[dict]) -> tuple[list[dict], dict[str, dict[str, Any]]]:
@@ -124,11 +215,12 @@ def list_links(
     offset: int = Query(0, ge=0),
     keyword: str | None = Query(None, description="标题关键词模糊匹配（仅 type=item 有效）"),
     region: str | None = Query(None, description="地区精确匹配（仅 type=item 有效）"),
+    brand: str | None = Query(None, description="品牌精确匹配（仅 type=item 有效）"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """列出任务的关联内容（懒加载用：前端分页拉取）
 
-    支持按 keyword/region 过滤：过滤已下推 SQL 层（json_extract + LIKE），
+    支持按 keyword/region/brand 过滤：过滤已下推 SQL 层（json_extract + LIKE/=），
     避免 has_search 时全量加载到内存再 Python 过滤。
     """
     # 性能埋点：记录端到端耗时（含 DB 查询 + 字段补全 + 序列化），用于长期监控
@@ -139,15 +231,17 @@ def list_links(
     if not container.repo.get_task(task_id):
         raise HTTPException(status_code=404, detail="任务不存在")
 
-    # 关键词/地区过滤仅对 item 类型生效（seller 行通常无 title/region 字段）
-    has_search = bool(keyword or region) and (type is None or type == "item")
+    # 关键词/地区/品牌过滤仅对 item 类型生效（seller 行通常无 title/region/brand 字段）
+    has_search = bool(keyword or region or brand) and (type is None or type == "item")
     search_keyword = keyword if has_search else None
     search_region = region if has_search else None
+    search_brand = brand if has_search else None
 
     # 过滤与分页均在 SQL 层完成，无需全量加载
     items, counts = container.repo.list_and_count_task_links(
         task_id=task_id, link_type=type, limit=limit, offset=offset,
         search_keyword=search_keyword, search_region=search_region,
+        search_brand=search_brand,
     )
     total_for_type = counts.get(type, len(items)) if type else counts.get("total", len(items))
 
@@ -394,7 +488,7 @@ async def refresh_links(
                 if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
                     raise HTTPException(status_code=502, detail="浏览器连接已断开，请重启服务后重试")
                 if "RGV587" in err_msg:
-                    raise HTTPException(status_code=401, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
+                    raise HTTPException(status_code=403, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
                 if "Connection closed" in err_msg:
                     raise HTTPException(status_code=502, detail="浏览器连接异常，请重启服务后重试")
                 raise HTTPException(status_code=502, detail=f"闲鱼搜索失败: {err_msg}")
@@ -505,15 +599,47 @@ async def live_links(
             yield sse({"stage": "done", **_normalize_live_result(cached[1])})
             return
 
+        # 阶段 1.5：in-flight 去重
+        # 如果该 task 的搜索正在进行，等待其完成后复用缓存结果
+        # 避免并发请求竞争 browser_lock 导致"系统正在执行后台搜索任务"错误
+        inflight_event = _live_inflight.get(task_id)
+        if inflight_event is not None and not inflight_event.is_set():
+            yield sse({"stage": "waiting_inflight"})
+            logger.info("live_links 等待 in-flight 搜索完成 task={}", task_id)
+            try:
+                await asyncio.wait_for(inflight_event.wait(), timeout=_LIVE_INFLIGHT_WAIT_TIMEOUT)
+            except asyncio.TimeoutError:
+                # 等待超时：in-flight 搜索耗时过长，放弃等待让客户端重试
+                yield sse({"stage": "error", "detail": "搜索耗时较长，请稍后重试", "status": 503})
+                return
+            # in-flight 搜索完成，检查缓存是否已写入
+            cached = _live_cache.get(task_id)
+            if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
+                logger.info("live_links 命中 in-flight 缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
+                yield sse({"stage": "done", **_normalize_live_result(cached[1])})
+                return
+            # in-flight 搜索完成但缓存未命中（搜索失败或 0 结果未缓存）：
+            # 不再重复搜索，返回空结果避免再次竞争锁
+            logger.warning("live_links in-flight 搜索未产生缓存结果 task={}", task_id)
+            yield sse({"stage": "done", "items": [], "sellers": [], "all": [], "counts": {"item": 0, "seller": 0, "total": 0}, "field_map": {}, "filter_summary": {}})
+            return
+
+        # 创建 in-flight Event，标记搜索开始
+        # 在所有退出路径调用 _clear_live_inflight 确保标记被清除，避免后续请求卡在等待逻辑
+        inflight_event = asyncio.Event()
+        _live_inflight[task_id] = inflight_event
+
         # 阶段 2：Cookie 检查
         yield sse({"stage": "checking_cookies"})
         try:
             await _ensure_live_search_cookies(container)
         except HTTPException as e:
+            _clear_live_inflight(task_id, inflight_event)
             yield sse({"stage": "error", "detail": e.detail, "status": e.status_code})
             return
         except Exception as e:
             logger.exception("live_links cookie 检查异常 task={}: {}", task_id, e)
+            _clear_live_inflight(task_id, inflight_event)
             yield sse({"stage": "error", "detail": f"Cookie 检查异常: {e}", "status": 502})
             return
 
@@ -525,6 +651,7 @@ async def live_links(
                 timeout=10.0,
             )
         except asyncio.TimeoutError:
+            _clear_live_inflight(task_id, inflight_event)
             yield sse({"stage": "error", "detail": "系统正在执行后台搜索任务，请稍后重试", "status": 503})
             return
 
@@ -534,13 +661,15 @@ async def live_links(
             yield sse({"stage": "searching"})
             container.collector.last_session_invalid = False
             try:
+                # 整体超时 30s：goto(15s) + token 刷新(4s) + API 等待(8s) + unroute(2s) ≈ 29s
+                # 优化后各阶段耗时缩短，30s 足够覆盖正常流程，超时则快速失败
                 raw_results = await asyncio.wait_for(
                     container.collector.live_search(
                         keyword, max_pages=1, collect_sellers=False, fast=True,
                         search_filters=task_search_filters,
                         sort_type=search_sort_type, regions=search_regions,
                     ),
-                    timeout=20.0,
+                    timeout=30.0,
                 )
             except asyncio.TimeoutError:
                 yield sse({"stage": "error", "detail": "实时搜索超时，请稍后重试或重启服务", "status": 504})
@@ -578,7 +707,7 @@ async def live_links(
             if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
                 yield sse({"stage": "error", "detail": "浏览器连接已断开，请重启服务后重试", "status": 502})
             elif "RGV587" in err_msg:
-                yield sse({"stage": "error", "detail": "搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼", "status": 401})
+                yield sse({"stage": "error", "detail": "搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼", "status": 403})
             elif "Connection closed" in err_msg:
                 yield sse({"stage": "error", "detail": "浏览器连接异常，请重启服务后重试", "status": 502})
             else:
@@ -586,6 +715,9 @@ async def live_links(
             return
         finally:
             container.browser_lock.release()
+            # 搜索阶段结束：清除 in-flight 标记，通知等待者检查缓存
+            # 此时搜索数据已获取，后续格式化/写入DB（阶段5-7）不涉及锁竞争
+            _clear_live_inflight(task_id, inflight_event)
 
         # 阶段 5：格式化 + 过滤
         yield sse({"stage": "filtering", "count": len(raw_results)})
@@ -598,6 +730,9 @@ async def live_links(
             "keyword_skipped": 0,
             "price_skipped": 0,
             "publish_days_skipped": 0,
+            # 被过滤的商品列表（带过滤原因），供前端"显示被过滤结果"使用
+            # 为什么限制 50 条：避免响应体积过大（59 条约 30KB），50 条足够用户判断是否需调整过滤条件
+            "filtered_out": [],
         }
         for r in raw_results:
             display = {
@@ -632,12 +767,22 @@ async def live_links(
         # 关键词过滤（安全兜底）
         filtered = []
         keyword_skipped_titles: list[str] = []
+        _filtered_out = filter_summary["filtered_out"]
         for r in results:
             title = (r.get("display") or {}).get("title", "")
             if task_keyword_matches_title(keyword, title):
                 filtered.append(r)
             else:
                 keyword_skipped_titles.append(str(title)[:60])
+                # 记录被过滤的商品（限制总量避免响应过大）
+                if len(_filtered_out) < 50:
+                    _filtered_out.append({
+                        "link_type": r.get("link_type"),
+                        "link_key": r.get("link_key"),
+                        "display": r.get("display"),
+                        "filter_reason": "keyword",
+                        "filter_detail": f"标题不匹配关键词「{keyword}」",
+                    })
         skipped = len(results) - len(filtered)
         filter_summary["keyword_skipped"] = skipped
         if skipped:
@@ -670,9 +815,25 @@ async def live_links(
                     continue
                 if effective_min is not None and p < effective_min:
                     price_skipped += 1
+                    if len(_filtered_out) < 50:
+                        _filtered_out.append({
+                            "link_type": r.get("link_type"),
+                            "link_key": r.get("link_key"),
+                            "display": r.get("display"),
+                            "filter_reason": "price",
+                            "filter_detail": f"价格 {p} 低于下限 {effective_min}",
+                        })
                     continue
                 if effective_max is not None and p > effective_max:
                     price_skipped += 1
+                    if len(_filtered_out) < 50:
+                        _filtered_out.append({
+                            "link_type": r.get("link_type"),
+                            "link_key": r.get("link_key"),
+                            "display": r.get("display"),
+                            "filter_reason": "price",
+                            "filter_detail": f"价格 {p} 超出上限 {effective_max}",
+                        })
                     continue
                 _filtered.append(r)
             filtered = _filtered
@@ -698,6 +859,14 @@ async def live_links(
                     pub_dt = _dt.fromisoformat(str(pub).replace("Z", "+00:00"))
                     if (_now - pub_dt).days > max_publish_days:
                         publish_days_skipped += 1
+                        if len(_filtered_out) < 50:
+                            _filtered_out.append({
+                                "link_type": r.get("link_type"),
+                                "link_key": r.get("link_key"),
+                                "display": r.get("display"),
+                                "filter_reason": "publish_days",
+                                "filter_detail": f"发布 {(_now - pub_dt).days} 天，超过上限 {max_publish_days} 天",
+                            })
                         continue
                 except (ValueError, TypeError):
                     pass

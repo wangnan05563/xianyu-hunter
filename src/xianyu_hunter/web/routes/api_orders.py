@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import _utcnow
@@ -23,9 +23,28 @@ TAKEOVER_TIMEOUT_MIN = 30
 def list_orders(
     status: str | None = None,
     limit: int = 100,
+    page_num: int = Query(1, ge=1, description="页码（从1开始）"),
+    page_size: int = Query(20, ge=1, le=200, description="每页条数"),
+    task_id: str | None = Query(None, description="任务 ID 精确匹配"),
+    item_id: str | None = Query(None, description="商品 ID 精确匹配"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    rows = container.repo.list_orders(status=status, limit=limit)
+    # 后端分页：page_num/page_size 优先于 limit（limit 为旧版兼容参数）
+    # 当使用分页参数时，offset 由 page_num 计算；否则用旧版 limit 直出
+    use_pagination = page_num > 1 or page_size != 20
+    if use_pagination:
+        offset = (page_num - 1) * page_size
+        actual_limit = page_size
+    else:
+        offset = 0
+        actual_limit = limit
+
+    rows = container.repo.list_orders(
+        status=status, limit=actual_limit, offset=offset,
+        task_id=task_id, item_id=item_id,
+    )
+    total = container.repo.count_orders(status=status, task_id=task_id, item_id=item_id)
+
     # 给 takeover_pending 订单附加"剩余倒计时秒数"，前端 modal 直接读 deadline。
     # 为什么不后端算 deadline_at 再返回：少一个字段耦合，deadline_sec 已经够用，
     # 前端按需自己拼 deadline_at 字符串展示。
@@ -53,7 +72,7 @@ def list_orders(
     # H-05 修复：通知扫描从 list_orders 移至按需端点，避免每次列表请求都触发全量扫描。
     # scan_and_notify 现在仅由 /api/notifications/scan 显式触发或定时任务调用，
     # 不再随订单列表请求自动执行（消除不必要的 DB 开销）。
-    return {"items": rows, "count": len(rows)}
+    return {"items": rows, "count": len(rows), "total": total}
 
 
 @router.get("/{order_id}")
@@ -65,6 +84,24 @@ def get_order(
     if not o:
         raise HTTPException(status_code=404, detail="订单不存在")
     return o
+
+
+@router.delete("/{order_id}")
+def delete_order(
+    order_id: str,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """删除订单记录
+
+    为什么允许删除而非仅软删除：
+    1. 失败/测试订单无审计价值，用户需要清理
+    2. 删除后 buyer._task_item_set 仍在内存中（进程未重启时幂等仍生效）
+    3. DB 层 hard delete 保持简单，与 delete_orders_by_task 一致
+    """
+    deleted = container.repo.delete_order_by_id(order_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    return {"ok": True, "id": order_id, "deleted": deleted}
 
 
 @router.post("/{order_id}/takeover")
@@ -205,4 +242,107 @@ def _trigger_dependent_tasks(container: Container, order: dict) -> None:
         })
         logger.info(
             f"[F-16] 上游任务 {upstream_task_id} 订单成功 → 自动激活下游任务 {downstream_task_id}"
+        )
+
+
+@router.post("/manual-takeover")
+async def manual_takeover(
+    payload: dict[str, Any],
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """手动触发抢单：突破纯自动模式限制，让用户在评估明细页面主动触发
+
+    为什么需要手动抢单：
+    1. 自动抢单要求 with_browser=True（XH_WITH_SCHEDULER=1 模式），用户可能未启用
+    2. 评分>=80 但风险等级非 LOW 时不会自动抢单，用户可能仍想尝试
+    3. 提供半自动模式，让用户保留决策权
+
+    前置条件：
+    - buyer 已注入（with_browser=True）
+    - 商品存在于 items 表（用于读取价格）
+    """
+    from loguru import logger
+
+    item_id = str(payload.get("item_id") or "").strip()
+    task_id = str(payload.get("task_id") or "").strip()
+    if not item_id:
+        raise HTTPException(status_code=422, detail="item_id 不能为空")
+
+    # 检查 buyer 是否注入：Web 进程默认 with_browser=False，buyer 为 None
+    if container.buyer is None:
+        raise HTTPException(
+            status_code=503,
+            detail="抢单功能未启用：需要以 XH_WITH_SCHEDULER=1 模式启动服务以注入浏览器实例",
+        )
+
+    # 闲鱼登录态前置检查：未登录时点击「立即购买」会跳转到登录页，
+    # 导致找不到「提交订单」按钮，浪费一次浏览器自动化流程
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store
+
+    if not get_cookie_store().has_valid_cookies():
+        raise HTTPException(
+            status_code=403,
+            detail="闲鱼登录已过期，请先在「Cookie 注入」页面重新登录闲鱼",
+        )
+
+    # 查询商品信息：用于读取 expected_price 和补充 task_id
+    item = container.repo.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"商品 {item_id} 不存在于数据库中")
+
+    expected_price = float(item.get("price") or 0)
+    if not task_id:
+        task_id = str(item.get("task_id") or "")
+
+    # 幂等检查：避免重复抢单
+    existing = container.repo.find_order_by_task_item(task_id, item_id) if task_id else None
+    if existing:
+        return {
+            "ok": True,
+            "outcome": "skipped_duplicate",
+            "order": existing,
+            "message": f"商品已存在订单 {existing.get('id')}，状态：{existing.get('status')}",
+        }
+
+    logger.info(f"[ManualTakeover] 用户手动触发抢单：task={task_id} item={item_id} price={expected_price}")
+
+    from xianyu_hunter.domain.order import ItemSoldError
+
+    try:
+        result = await container.buyer.buy(
+            task_id=task_id,
+            item_id=item_id,
+            expected_price=expected_price,
+        )
+    except ItemSoldError as e:
+        # 已售出：返回 409 而非 500，区分业务错误与系统异常
+        logger.info(f"[ManualTakeover] 商品已售出 item={item_id}: {e}")
+        raise HTTPException(status_code=409, detail="商品已售出")
+    except Exception as e:
+        logger.exception(f"[ManualTakeover] 抢单异常：{e}")
+        raise HTTPException(status_code=500, detail=f"抢单失败：{e}")
+
+    if result.outcome.value == "success" and result.order:
+        # buyer.buy() 内部已调用 repo.upsert_order 写库，这里只返回结果
+        return {
+            "ok": True,
+            "outcome": "success",
+            "order": {
+                "order_no": result.order.order_no,
+                "price": result.order.price,
+                "status": result.order.status.value,
+            },
+            "message": "抢单成功，订单已创建",
+        }
+    elif result.outcome.value == "skipped_duplicate":
+        return {
+            "ok": True,
+            "outcome": "skipped_duplicate",
+            "message": "商品已下过单，幂等跳过",
+        }
+    else:
+        # 失败：buyer._save_failed_order 已写库，这里只返回结果
+        raise HTTPException(
+            status_code=502,
+            detail=f"抢单失败：{result.error or '未知原因'}",
         )

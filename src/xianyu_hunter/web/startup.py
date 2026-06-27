@@ -161,92 +161,113 @@ def run_migrations(container: Any) -> None:
 
     包含 task_links 表重建、orders.task_id、tasks.search_filters、
     notifications.read_at 等历史迁移逻辑。
+
+    每个迁移块独立 try/except：历史教训——auto_migrate_task_links 抛异常会让
+    C-04 等后续迁移全部跳过，外层 try/except 又吞掉异常，最终数据库 schema 与
+    ORM 不一致，运行时 INSERT 才报 "no such column"。
     """
     from loguru import logger
     from sqlalchemy import inspect as sa_inspect, text as sa_text
     from xianyu_hunter.infra.db_models import TaskLinkRow
 
     insp = sa_inspect(container.repo.engine)
-    needs_rebuild = False
 
-    if not insp.has_table("task_links"):
-        # 表不存在，create_all 会建
+    # C-01: task_links 表重建（含 UNIQUE 约束）+ 历史数据回填
+    try:
         needs_rebuild = False
-    else:
-        # 表存在，检查是否有 uq_task_link 唯一约束
-        uq_names = {uq["name"] for uq in insp.get_unique_constraints("task_links")}
-        if "uq_task_link" not in uq_names:
-            needs_rebuild = True
-            logger.info("task_links 缺少 UNIQUE 约束，将重建表")
+        if not insp.has_table("task_links"):
+            # 表不存在，create_all 会建
+            needs_rebuild = False
+        else:
+            # 表存在，检查是否有 uq_task_link 唯一约束
+            uq_names = {uq["name"] for uq in insp.get_unique_constraints("task_links")}
+            if "uq_task_link" not in uq_names:
+                needs_rebuild = True
+                logger.info("task_links 缺少 UNIQUE 约束，将重建表")
 
-    if needs_rebuild:
-        # C-03 修复：DROP 前记录数据量，避免静默丢失
-        with container.repo.engine.connect() as conn:
-            count_result = conn.execute(sa_text("SELECT COUNT(*) FROM task_links")).scalar()
-            logger.warning(
-                f"task_links 缺少 UNIQUE 约束，将重建表（当前 {count_result} 条数据将被清除）"
-            )
-        with container.repo.engine.begin() as conn:
-            conn.exec_driver_sql("DROP TABLE IF EXISTS task_links")
-        TaskLinkRow.__table__.create(container.repo.engine, checkfirst=True)
-        logger.info("task_links 表已重建（含 UNIQUE 约束）")
-    else:
-        # 确保表存在（首次启动时）
-        TaskLinkRow.__table__.create(container.repo.engine, checkfirst=True)
+        if needs_rebuild:
+            # C-03 修复：DROP 前记录数据量，避免静默丢失
+            with container.repo.engine.connect() as conn:
+                count_result = conn.execute(sa_text("SELECT COUNT(*) FROM task_links")).scalar()
+                logger.warning(
+                    f"task_links 缺少 UNIQUE 约束，将重建表（当前 {count_result} 条数据将被清除）"
+                )
+            with container.repo.engine.begin() as conn:
+                conn.exec_driver_sql("DROP TABLE IF EXISTS task_links")
+            TaskLinkRow.__table__.create(container.repo.engine, checkfirst=True)
+            logger.info("task_links 表已重建（含 UNIQUE 约束）")
+        else:
+            # 确保表存在（首次启动时）
+            TaskLinkRow.__table__.create(container.repo.engine, checkfirst=True)
 
-    inserted = container.repo.auto_migrate_task_links()
-    logger.info(f"task_links auto-migrate: 新增 {inserted} 条")
+        inserted = container.repo.auto_migrate_task_links()
+        logger.info(f"task_links auto-migrate: 新增 {inserted} 条")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"C-01 task_links 迁移失败（忽略，不影响后续迁移）: {e}")
 
     # C-02 迁移：确保 orders 表含 task_id 列
-    if insp.has_table("orders"):
-        order_cols = {c["name"] for c in insp.get_columns("orders")}
-        if "task_id" not in order_cols:
-            with container.repo.engine.begin() as conn:
-                conn.exec_driver_sql(
-                    "ALTER TABLE orders ADD COLUMN task_id TEXT DEFAULT NULL"
-                )
-            logger.info("orders 表已新增 task_id 列（C-02 迁移）")
+    try:
+        if insp.has_table("orders"):
+            order_cols = {c["name"] for c in insp.get_columns("orders")}
+            if "task_id" not in order_cols:
+                with container.repo.engine.begin() as conn:
+                    conn.exec_driver_sql(
+                        "ALTER TABLE orders ADD COLUMN task_id TEXT DEFAULT NULL"
+                    )
+                logger.info("orders 表已新增 task_id 列（C-02 迁移）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"C-02 orders.task_id 迁移失败（忽略）: {e}")
 
     # C-03 迁移：确保 tasks 表含 search_filters 列（闲鱼筛选标签）
-    if insp.has_table("tasks"):
-        task_cols = {c["name"] for c in insp.get_columns("tasks")}
-        if "search_filters" not in task_cols:
-            with container.repo.engine.begin() as conn:
-                conn.exec_driver_sql(
-                    "ALTER TABLE tasks ADD COLUMN search_filters TEXT DEFAULT NULL"
-                )
-            logger.info("tasks 表已新增 search_filters 列（C-03 迁移）")
+    try:
+        if insp.has_table("tasks"):
+            task_cols = {c["name"] for c in insp.get_columns("tasks")}
+            if "search_filters" not in task_cols:
+                with container.repo.engine.begin() as conn:
+                    conn.exec_driver_sql(
+                        "ALTER TABLE tasks ADD COLUMN search_filters TEXT DEFAULT NULL"
+                    )
+                logger.info("tasks 表已新增 search_filters 列（C-03 迁移）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"C-03 tasks.search_filters 迁移失败（忽略）: {e}")
 
     # C-04 迁移：确保 notifications 表含 read_at 列
-    if insp.has_table("notifications"):
-        notif_cols = {c["name"] for c in insp.get_columns("notifications")}
-        if "read_at" not in notif_cols:
-            with container.repo.engine.begin() as conn:
-                conn.exec_driver_sql(
-                    "ALTER TABLE notifications ADD COLUMN read_at DATETIME DEFAULT NULL"
-                )
-            logger.info("notifications 表已新增 read_at 列（C-04 迁移）")
+    # 关键迁移：缺此列会导致 add_notification 的 UPSERT 完全失败，所有告警丢失
+    try:
+        if insp.has_table("notifications"):
+            notif_cols = {c["name"] for c in insp.get_columns("notifications")}
+            if "read_at" not in notif_cols:
+                with container.repo.engine.begin() as conn:
+                    conn.exec_driver_sql(
+                        "ALTER TABLE notifications ADD COLUMN read_at DATETIME DEFAULT NULL"
+                    )
+                logger.info("notifications 表已新增 read_at 列（C-04 迁移）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"C-04 notifications.read_at 迁移失败（忽略）: {e}")
 
     # C-05 迁移：eval.scored 事件去重 + 添加部分唯一索引
     # 防止 live_links 多次触发或 recompute 多次调用产生重复评估记录
-    if insp.has_table("events"):
-        with container.repo.engine.begin() as conn:
-            # 1. 清理已有的重复 eval.scored 记录（每个 task_id+item_id 只保留最新一条）
-            conn.exec_driver_sql("""
-                DELETE FROM events
-                WHERE id NOT IN (
-                    SELECT MAX(id) FROM events
-                    WHERE type = 'eval.scored'
-                    GROUP BY task_id, item_id
+    try:
+        if insp.has_table("events"):
+            with container.repo.engine.begin() as conn:
+                # 1. 清理已有的重复 eval.scored 记录（每个 task_id+item_id 只保留最新一条）
+                conn.exec_driver_sql("""
+                    DELETE FROM events
+                    WHERE id NOT IN (
+                        SELECT MAX(id) FROM events
+                        WHERE type = 'eval.scored'
+                        GROUP BY task_id, item_id
+                    )
+                    AND type = 'eval.scored'
+                """)
+                # 2. 创建部分唯一索引（仅对 eval.scored 类型生效）
+                conn.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_scored_unique "
+                    "ON events (task_id, item_id) WHERE type = 'eval.scored'"
                 )
-                AND type = 'eval.scored'
-            """)
-            # 2. 创建部分唯一索引（仅对 eval.scored 类型生效）
-            conn.exec_driver_sql(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_eval_scored_unique "
-                "ON events (task_id, item_id) WHERE type = 'eval.scored'"
-            )
-        logger.info("eval.scored 事件去重 + 唯一索引已创建（C-05 迁移）")
+            logger.info("eval.scored 事件去重 + 唯一索引已创建（C-05 迁移）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"C-05 eval.scored 去重迁移失败（忽略）: {e}")
 
 
 def setup_startup_hooks(app: FastAPI) -> None:

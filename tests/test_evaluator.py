@@ -74,7 +74,8 @@ def test_blacklist_veto() -> None:
 def test_low_credit_veto() -> None:
     """低信用一票否决"""
     ev = Evaluator()
-    result = ev.evaluate(make_item(), make_seller(credit_score=500))
+    # 闲鱼信用分范围 0-100，阈值 60，用 50 触发否决
+    result = ev.evaluate(make_item(), make_seller(credit_score=50))
     assert result.score == 0
     assert result.risk_level == RiskLevel.EXTREME
     assert any("credit_score" in r for r in result.reject_reasons)

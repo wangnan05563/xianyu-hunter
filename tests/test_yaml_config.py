@@ -54,7 +54,8 @@ def test_eval_thresholds_have_sensible_values() -> None:
     """阈值合理"""
     cfg = get_config()
     t = cfg.eval.thresholds
-    assert t.credit_score_min >= 500  # 不应太低
+    # 闲鱼信用分范围 0-100（非芝麻信用 350-950），60 为合理阈值
+    assert 50 <= t.credit_score_min <= 100  # 不应太低也不应超出闲鱼范围
     assert t.on_sale_count >= 10      # 不应太宽松
     assert 0.0 <= t.top_category_ratio <= 1.0
 

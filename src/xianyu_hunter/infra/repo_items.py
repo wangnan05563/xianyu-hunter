@@ -116,3 +116,36 @@ class ItemsMixin:
                 ItemRow.__table__.delete().where(ItemRow.task_id == task_id)
             )
             return result.rowcount or 0
+
+    def mark_sold(self, item_id: str) -> None:
+        """标记商品为已售出，同步更新 items 表 + task_links.display
+
+        为什么同步 task_links：前端列表读 task_links.display.is_sold，
+        DB 模式下旧数据缺失该字段会导致显示"在售"，需同步修正。
+        """
+        import json as _json
+        from xianyu_hunter.infra.db_models import _utcnow
+
+        now = _utcnow()
+        # 1. 更新 items 表
+        with self.engine.begin() as conn:
+            conn.execute(
+                ItemRow.__table__.update()
+                .where(ItemRow.id == item_id)
+                .values(is_sold=1, sold_detected_at=now)
+            )
+        # 2. 同步 task_links.display.is_sold
+        links = self.lookup_task_links("item", item_id)
+        for link in links:
+            display = link.get("display")
+            if isinstance(display, str):
+                display = _json.loads(display) if display else {}
+            elif display is None:
+                display = {}
+            display["is_sold"] = True
+            self.upsert_task_link(
+                task_id=link["task_id"],
+                link_type="item",
+                link_key=item_id,
+                display=display,
+            )

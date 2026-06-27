@@ -191,6 +191,8 @@ export interface EvalItem {
     item_price?: number
     seller_id?: string
     seller_nick?: string
+    // 后端 _enrich_eval_with_item 从 items/task_links.display 补充的品牌字段
+    brand?: string
     [k: string]: unknown
   }
 }
@@ -286,15 +288,24 @@ export interface AIParseTaskResult {
 
 // ============== 订单 ==============
 
+// 字段与后端 OrderRow 模型 + api_orders.list_orders 返回对齐
+// id 为字符串组合键（item_id:timestamp:rand），不是自增数字
 export interface OrderItem {
-  id: number
+  id: string
+  task_id?: string | null
   item_id: string
-  amount: number
+  seller_id?: string | null
+  order_no?: string | null
+  price: number
   status: string
+  screenshot?: string | null
+  error?: string | null
   created_at: string
   confirmed_at: string | null
+  paid_at?: string | null
+  // 仅 takeover_pending 订单由 list_orders 端点附加（后端按需注入，非数据库列）
   takeover_deadline?: string | null
-  remaining_sec?: number | null
+  takeover_remaining_sec?: number | null
 }
 
 // ============== 统计 ==============

@@ -265,7 +265,10 @@ export default function Login() {
       const data = await r.json()
       if (data.ok && data.cookies) {
         let filled = 0
-        const updated = { ...cookieFields }
+        // 先清空所有字段，防止浏览器自动填充的残留值干扰
+        const updated: Record<string, string> = {
+          _m_h5_tk: '', cookie2: '', sgcookie: '', unb: '',
+        }
         for (const ck of COOKIE_KEYS) {
           if (data.cookies[ck.key]) {
             updated[ck.key] = data.cookies[ck.key]
@@ -275,6 +278,8 @@ export default function Login() {
         setCookieFields(updated)
         const srcLabel = data.source === 'cookie_store_json_fallback'
           ? '（回退到上次保存的 Cookie）'
+          : data.source === 'playwright_cdp'
+          ? '（来自项目浏览器）'
           : ''
         setAutoFillResult({ text: `成功获取 ${filled} 个 Cookie 值${srcLabel}`, error: data.source === 'cookie_store_json_fallback' })
       } else {
@@ -485,6 +490,9 @@ export default function Login() {
               onPaste={handlePaste}
               style={{ fontFamily: 'monospace', fontSize: 11 }}
               disabled={injecting}
+              autoComplete="off"
+              name="cookie-paste-area"
+              spellCheck={false}
             />
             {/* 解析结果反馈 */}
             {parseResult && (
@@ -530,6 +538,9 @@ export default function Login() {
                   onChange={(e) => setCookieFields((prev) => ({ ...prev, [ck.key]: e.target.value }))}
                   style={{ fontFamily: 'monospace', fontSize: 12 }}
                   disabled={injecting}
+                  autoComplete="off"
+                  name={`cookie-${ck.key}`}
+                  spellCheck={false}
                 />
                 {ck.hint && (
                   <span style={{ fontSize: 10, color: themeToken.colorWarning, fontWeight: 500 }}>{ck.hint}</span>

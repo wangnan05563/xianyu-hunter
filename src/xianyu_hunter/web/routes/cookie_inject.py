@@ -172,6 +172,14 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
         if json_written and injected == 0:
             injected = len(cookies_to_inject)
             method = "json_fallback"
+        # 同步 CookieRotator 层状态：与 /cookies/update 端点行为一致，
+        # 避免注入后 /cookies/layers 仍显示 identity/session/tracking 失效
+        if json_written:
+            try:
+                from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                sync_cookie_layers_from_json()
+            except Exception as e:
+                logger.debug("cookie 注入后同步层状态失败: %s", e)
 
     # 构建响应
     if injected > 0:
@@ -184,6 +192,12 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
         }
         if errors:
             result["errors"] = errors[:5]
+        # 注入成功后自动启动会话管理：与登录入口行为一致
+        try:
+            from xianyu_hunter.web.services.session_starter import trigger_session_start
+            trigger_session_start()
+        except Exception as e:
+            logger.debug("自动启动会话失败: %s", e)
         return make_auth_response(result)
 
     # 全部失败
@@ -396,10 +410,19 @@ async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONR
 
     # 策略2：写入 JSON（即使 browser+sqlite 都失败，JSON 兜底也能独立工作）
     if cookies_to_inject:
-        get_cookie_store().export_cookies(goofish_cookies, method=source)
-        if injected == 0:
+        json_written = get_cookie_store().export_cookies(goofish_cookies, method=source)
+        # 必须检查 json_written：export_cookies 返回 False 时 JSON 未写入，
+        # 不应报告 json_fallback 成功（修复原有 BUG：原代码未检查 json_written）
+        if json_written and injected == 0:
             injected = len(cookies_to_inject)
             method = "json_fallback"
+        # 同步 CookieRotator 层状态，避免 /cookies/layers 仍显示失效
+        if json_written:
+            try:
+                from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                sync_cookie_layers_from_json()
+            except Exception as e:
+                logger.debug("cookie 导入后同步层状态失败: %s", e)
 
     if injected > 0:
         result = {
@@ -412,6 +435,12 @@ async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONR
         }
         if errors:
             result["errors"] = errors[:5]
+        # 导入成功后自动启动会话管理：与登录入口行为一致
+        try:
+            from xianyu_hunter.web.services.session_starter import trigger_session_start
+            trigger_session_start()
+        except Exception as e:
+            logger.debug("自动启动会话失败: %s", e)
         return make_auth_response(result)
 
     return JSONResponse(content={
@@ -734,6 +763,7 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
 
     # ===== SQLite 候选都失败 → JSON 降级（v20 加密时读取之前保存的明文） =====
     try:
+        from xianyu_hunter.web.services.cookie_store import is_test_cookie
         store = get_cookie_store()
         json_data = store._read_json()
         if json_data and json_data.get("cookies"):
@@ -741,11 +771,19 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
             for c in json_data["cookies"]:
                 name = c.get("name", "")
                 domain = c.get("domain", "")
+                value = c.get("value", "")
                 if name in requested_keys and any(
                     d in domain for d in ("goofish.com", "taobao.com")
                 ):
                     if name not in json_result:
-                        json_result[name] = c.get("value", "")
+                        # 过滤掉测试数据（unb=123456 / cookie2=abc 等）
+                        if is_test_cookie(name, value):
+                            logger.warning(
+                                "fetch_cookie_keys: 跳过测试 Cookie %s=%s",
+                                name, value,
+                            )
+                            continue
+                        json_result[name] = value
             if json_result:
                 logger.info(
                     "SQLite 不可读，从 CookieStore JSON 降级获取 %d 个 cookie 值: %s",
