@@ -28,7 +28,9 @@ def _check_cookies() -> bool:
     CookieStore 内部优先读取 JSON 文件（登录子进程立即写入），
     JSON 不可用时回退到 SQLite 检查。
     """
-    return get_cookie_store().has_valid_cookies()
+    store = get_cookie_store()
+    store.invalidate_cache()
+    return store.has_valid_cookies()
 
 
 @router.get("/me")

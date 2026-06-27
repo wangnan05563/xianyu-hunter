@@ -94,6 +94,10 @@ export interface Task {
   exclude_words: string
   search_filters: string
   cron: string
+  // 调度模式：DB 存 int(0/1)，前端读取后用 Boolean() 转 bool
+  use_cron: number
+  // 固定间隔调度模式下的循环间隔（秒），仅 use_cron=false 时生效
+  interval_seconds: number
   status: string
   created_at: string
   updated_at: string
@@ -109,6 +113,10 @@ export interface TaskCreateBody {
   region?: string | null
   exclude_words?: string[]
   search_filters?: string[]
+  // 调度配置：与后端 TaskCreate 对齐
+  cron?: string
+  use_cron?: boolean
+  interval_seconds?: number
 }
 
 export interface TaskRun {

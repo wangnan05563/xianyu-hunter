@@ -493,6 +493,7 @@ class SearchMixin:
 
     # 搜索 API 精确匹配的端点路径（避免误匹配 shade/activate 等子 API）
     _SEARCH_API_PATH = "mtop.taobao.idlemtopsearch.pc.search/1.0"
+    _SEARCH_API_ROUTE_PATTERN = f"**/*{_SEARCH_API_PATH}*"
 
     async def _ensure_fresh_m5tk(self, page: Page, force: bool = False) -> bool:
         """导航到闲鱼主页刷新 _m_h5_tk token
@@ -777,60 +778,54 @@ class SearchMixin:
             """拦截搜索 API 请求，捕获响应体"""
             nonlocal session_invalid
             req_url = route.request.url
-            # 精确匹配搜索 API 端点，排除 shade/activate 等子 API
-            if self._SEARCH_API_PATH in req_url:
-                try:
-                    response = await route.fetch()
-                    await _sync_response_cookies_to_context(page, response)
-                    body = await response.json()
-                    ret = body.get("ret", [])
-                    if ret and isinstance(ret, list):
-                        ret_str = str(ret[0]) if ret else ""
-                        # 会话失效判定：RGV587_ERROR 或 token 非法/过期
-                        # FAIL_SYS_TOKEN_ILLEGAL 表示 _m_h5_tk 令牌非法，与 RGV587 同属会话过期
-                        token_invalid = any(
-                            keyword in ret_str
-                            for keyword in (
-                                "RGV587",
-                                "TOKEN_EMPTY",
-                                "TOKEN_ILLEGAL",
-                                "TOKEN_EXPIRED",
-                                "TOKEN_INVALID",
-                                "SYS_ILLEGAL_ACCESS",
-                            )
+            try:
+                response = await route.fetch()
+                await _sync_response_cookies_to_context(page, response)
+                body = await response.json()
+                ret = body.get("ret", [])
+                if ret and isinstance(ret, list):
+                    ret_str = str(ret[0]) if ret else ""
+                    # 会话失效判定：RGV587_ERROR 或 token 非法/过期
+                    # FAIL_SYS_TOKEN_ILLEGAL 表示 _m_h5_tk 令牌非法，与 RGV587 同属会话过期
+                    token_invalid = any(
+                        keyword in ret_str
+                        for keyword in (
+                            "RGV587",
+                            "TOKEN_EMPTY",
+                            "TOKEN_ILLEGAL",
+                            "TOKEN_EXPIRED",
+                            "TOKEN_INVALID",
+                            "SYS_ILLEGAL_ACCESS",
                         )
-                        if token_invalid:
-                            # 会话失效／反爬检测／token 过期，非普通限流
-                            # 此时闲鱼要求重新登录，DOM 回退也无法获取搜索结果
-                            logger.warning(
-                                "搜索 API 会话失效 ({})，需重新登录闲鱼: keyword={}",
-                                ret_str[:60], keyword,
-                            )
-                            session_invalid = True
-                            await route.fulfill(response=response)
-                            return
-                        if "ERROR" in ret_str or "FAIL" in ret_str:
-                            logger.warning("搜索 API 返回错误 (可能限流/未登录): {}", ret_str[:100])
-                            await route.fulfill(response=response)
-                            return
-                    captured_responses.append(body)
-                    body_str = str(body)
-                    logger.info("route 拦截捕获搜索 API 响应，大小: {} bytes", len(body_str))
-                    logger.info("API 响应前500字符: {}", body_str[:500])
-                    await route.fulfill(response=response)
-                except Exception as e:
-                    logger.warning("route 拦截处理失败: {}", str(e)[:80])
-                    try:
-                        await route.continue_()
-                    except Exception:
-                        pass
-            else:
+                    )
+                    if token_invalid:
+                        # 会话失效／反爬检测／token 过期，非普通限流
+                        # 此时闲鱼要求重新登录，DOM 回退也无法获取搜索结果
+                        logger.warning(
+                            "搜索 API 会话失效 ({})，需重新登录闲鱼: keyword={}",
+                            ret_str[:60], keyword,
+                        )
+                        session_invalid = True
+                        await route.fulfill(response=response)
+                        return
+                    if "ERROR" in ret_str or "FAIL" in ret_str:
+                        logger.warning("搜索 API 返回错误 (可能限流/未登录): {}", ret_str[:100])
+                        await route.fulfill(response=response)
+                        return
+                captured_responses.append(body)
+                body_str = str(body)
+                logger.info("route 拦截捕获搜索 API 响应，大小: {} bytes", len(body_str))
+                logger.info("API 响应前500字符: {}", body_str[:500])
+                await route.fulfill(response=response)
+            except Exception as e:
+                logger.warning("route 拦截处理失败: {}", str(e)[:80])
                 try:
                     await route.continue_()
                 except Exception:
-                    pass  # 某些内部路由（如 service worker）可能已被处理
+                    pass
 
-        await page.route("**/*", _handle_route)
+        route_pattern = self._SEARCH_API_ROUTE_PATTERN
+        await page.route(route_pattern, _handle_route)
 
         try:
             # 导航到搜索页（页面会自然发起 API 请求）
@@ -871,6 +866,8 @@ class SearchMixin:
                 if captured_responses or session_invalid:
                     break
                 await asyncio.sleep(1)
+            if not captured_responses and not session_invalid:
+                logger.info("搜索 API 未捕获响应，等待 {}s 后回退 DOM: keyword={}", wait_rounds, keyword)
 
             # 会话失效时尝试刷新 token 后重试一次
             # skip_rgv587_retry 时跳过重试（Worker 专用，避免 75 秒重试占用 browser_lock）
@@ -978,10 +975,9 @@ class SearchMixin:
 
         finally:
             # 页面可能已损坏（TargetClosedError），unroute 需超时+异常保护避免卡住
-            # 不传 handler，直接移除所有匹配 url 的路由，避免 handler 匹配导致的卡住
-            # 超时从 5s 缩短到 2s：goto 失败后页面通常已无活动，长时间等待无意义
+            # 只解除当前搜索 API handler，避免 page.unroute("**/*") 等待页面所有路由清理。
             try:
-                await asyncio.wait_for(page.unroute("**/*"), timeout=2.0)
+                await asyncio.wait_for(page.unroute(route_pattern, _handle_route), timeout=1.0)
                 logger.info("page.unroute 完成")
             except asyncio.TimeoutError:
                 logger.warning("page.unroute 超时，可能影响后续 DOM 解析")

@@ -88,10 +88,18 @@ class SessionExpiredError(Exception):
 
 @dataclass
 class LayerState:
-    """层状态"""
+    """层状态
+
+    manual_invalidate 字段语义：
+    - True: 用户通过 /cookies/invalidate 端点主动失效，自动同步应跳过此层
+    - False: 系统失效（RGV587/续期失败等）或从未失效，自动同步可恢复
+    为什么需要此字段：避免系统失效（cookie 实际有效但被 worker.py 标记失效）
+    被永久锁定，同时保留用户主动失效的语义
+    """
     valid: bool = False
     updated_at: float = 0.0
     cookie_count: int = 0
+    manual_invalidate: bool = False
 
 
 class CookieRotator:
@@ -199,20 +207,30 @@ class CookieRotator:
             )
             return written
 
-    def invalidate_layer(self, layer: CookieLayer) -> None:
+    def invalidate_layer(self, layer: CookieLayer, manual: bool = False) -> None:
         """使某层失效
 
         identity 层失效时，依赖它的 session 层自动失效。
+
+        Args:
+            manual: 是否为用户主动失效。
+                - True: /cookies/invalidate 端点调用，自动同步应跳过此层
+                - False: 系统失效（RGV587/续期失败），自动同步可恢复
+                为什么需要此参数：系统失效后即使 cookie 实际仍有效，
+                也应能被 /cookies/layers 自动同步恢复，避免状态永久锁定
         """
         with self._lock:
             self._layer_states[layer].valid = False
+            self._layer_states[layer].manual_invalidate = manual
             # 为什么用 {} 而非 %s：loguru 占位符是 {}，%s 会被原样输出导致日志难以排查
-            logger.warning("Cookie 层 {} 已标记失效", layer.value)
+            logger.warning("Cookie 层 {} 已标记失效 (manual={})", layer.value, manual)
 
             # 级联失效：identity 失效 → session 失效
+            # 级联失效继承 manual 语义：用户主动失效 identity 时，session 也应被视为主动失效
             if layer == CookieLayer.IDENTITY:
                 self._layer_states[CookieLayer.SESSION].valid = False
-                logger.warning("Cookie 层 {} 级联失效", CookieLayer.SESSION.value)
+                self._layer_states[CookieLayer.SESSION].manual_invalidate = manual
+                logger.warning("Cookie 层 {} 级联失效 (manual={})", CookieLayer.SESSION.value, manual)
 
     def invalidate_all(self) -> None:
         """使所有层失效（如检测到登出）"""

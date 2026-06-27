@@ -75,8 +75,8 @@ def _inject_to_sqlite(cookie_db: Path, cookies_to_inject: list[tuple[str, str]])
 async def _inject_via_browser(cookies_to_inject: list[tuple[str, str]]) -> tuple[int, list[str], str]:
     """通过运行中的浏览器上下文注入 Cookie
 
-    浏览器运行时 SQLite 被锁定且加密存储，只有通过 Playwright 的 context.add_cookies()
-    才能正确注入（Chromium 会在内存中接受并适时持久化）。
+    浏览器运行时 SQLite 被锁定且加密存储，需通过 BrowserManager.add_cookies()
+    注入到 Playwright context（Chromium 会在内存中接受并适时持久化）。
     """
     from xianyu_hunter.web.deps import get_container
 
@@ -84,7 +84,6 @@ async def _inject_via_browser(cookies_to_inject: list[tuple[str, str]]) -> tuple
     if not container.browser or not container.browser._context:
         raise RuntimeError("浏览器实例不可用（browser 或 _context 为空）")
 
-    ctx = container.browser._context
     injected = 0
     errors = []
     pw_cookies = []
@@ -98,7 +97,10 @@ async def _inject_via_browser(cookies_to_inject: list[tuple[str, str]]) -> tuple
             })
         injected += 1
 
-    await ctx.add_cookies(pw_cookies)
+    success = await container.browser.add_cookies(pw_cookies)
+    if not success:
+        errors.append("浏览器上下文注入后目标 Cookie 验证未通过")
+        return 0, errors, "browser_context"
     return injected, errors, "browser_context"
 
 
@@ -111,7 +113,7 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
 
     注入策略（按优先级尝试）：
     1. 直接写入 SQLite（浏览器未运行时成功）
-    2. 通过运行中的浏览器 context.add_cookies() 注入（浏览器运行时使用）
+    2. 通过运行中的浏览器 BrowserManager.add_cookies() 注入（浏览器运行时使用）
     3. 仅写入 JSON 文件（最终兜底，下次浏览器启动时可读取）
     """
     if not cookie_string or not cookie_string.strip():
@@ -180,6 +182,11 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
                 sync_cookie_layers_from_json()
             except Exception as e:
                 logger.debug("cookie 注入后同步层状态失败: %s", e)
+            try:
+                from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+                await inject_cookie_store_to_worker_browser("手动 Cookie 注入")
+            except Exception as e:
+                logger.debug("cookie 注入后同步 Worker 浏览器失败: %s", e)
 
     # 构建响应
     if injected > 0:
@@ -423,6 +430,11 @@ async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONR
                 sync_cookie_layers_from_json()
             except Exception as e:
                 logger.debug("cookie 导入后同步层状态失败: %s", e)
+            try:
+                from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+                await inject_cookie_store_to_worker_browser("Cookie 文件导入")
+            except Exception as e:
+                logger.debug("cookie 导入后同步 Worker 浏览器失败: %s", e)
 
     if injected > 0:
         result = {
@@ -528,6 +540,7 @@ def get_saved_cookie_info() -> dict:
     不返回 cookie 值（安全考虑）。
     """
     store = get_cookie_store()
+    store.invalidate_cache()
     data = store._read_json()
     if not data or not data.get("cookies"):
         return {"has_cookies": False, "logged_in": False}
@@ -765,6 +778,7 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
     try:
         from xianyu_hunter.web.services.cookie_store import is_test_cookie
         store = get_cookie_store()
+        store.invalidate_cache()
         json_data = store._read_json()
         if json_data and json_data.get("cookies"):
             json_result: dict[str, str] = {}

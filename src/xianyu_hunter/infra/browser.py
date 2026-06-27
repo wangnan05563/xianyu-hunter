@@ -368,17 +368,19 @@ class BrowserManager:
             return False
         try:
             await self._context.add_cookies(cookies)
-            # 验证关键 Cookie 是否已注入
+            # 验证目标 Cookie 是否已进入浏览器；同时记录关键身份 Cookie，便于排查登录态问题。
             injected = await self._context.cookies()
             names = {c["name"] for c in injected}
+            requested = {str(c.get("name") or "") for c in cookies if c.get("name")}
             key_cookies = {"cookie2", "sgcookie", "unb"}
             found = key_cookies & names
             logger.info(
-                "add_cookies: 注入 {} 个 Cookie，关键 Cookie 验证: {}",
+                "add_cookies: 注入 {} 个 Cookie，目标 Cookie 验证: {}，关键身份 Cookie: {}",
                 len(cookies),
-                f"✓ {found}" if found else "✗ 未找到关键 Cookie",
+                f"✓ {requested & names}" if requested & names else "✗ 未找到目标 Cookie",
+                f"✓ {found}" if found else "✗ 未找到关键身份 Cookie",
             )
-            return bool(found)
+            return bool(requested & names)
         except Exception as e:
             logger.error("add_cookies 失败: {}", e)
             return False

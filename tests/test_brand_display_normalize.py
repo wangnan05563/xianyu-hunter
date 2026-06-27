@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from xianyu_hunter.modules.collector_utils import normalize_display_fields
+from xianyu_hunter.modules.collector_utils import extract_brand, normalize_display_fields
 
 
 def test_brand_like_seller_nick_region_masked_nick_moves_to_brand() -> None:
@@ -54,3 +54,40 @@ def test_brand_inferred_from_title_without_moving_normal_seller() -> None:
     assert corrected["brand"] == "三星"
     assert corrected["seller_nick"] == "小明"
     assert corrected["region"] == "天津"
+
+
+def test_stale_display_brand_is_cleared_when_title_does_not_match() -> None:
+    display = {
+        "title": "#笔记本电脑配件 DDR4-3200-32G笔记本内存#笔记",
+        "brand": "联想",
+        "price": 650.0,
+        "seller_nick": "我喜欢工作",
+        "region": "广州",
+        "seller_credit": "",
+        "is_sold": False,
+    }
+
+    corrected, field_map = normalize_display_fields(display)
+
+    assert corrected["brand"] == ""
+    assert "brand" not in field_map
+
+
+def test_raw_brand_is_ignored_when_title_does_not_match() -> None:
+    brand = extract_brand(
+        {"brand": "联想"},
+        title="#笔记本电脑配件 DDR4-3200-32G笔记本内存#笔记",
+        seller_candidate="我喜欢工作",
+    )
+
+    assert brand == ""
+
+
+def test_raw_brand_is_kept_when_title_alias_matches() -> None:
+    brand = extract_brand(
+        {"brand": "联想"},
+        title="ThinkPad T14 笔记本内存",
+        seller_candidate="我喜欢工作",
+    )
+
+    assert brand == "联想"

@@ -11,19 +11,8 @@ import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
 
-// 点击商品链接：异步触发刷新（不阻塞跳转），再打开闲鱼原帖
-// 为什么不直接 href：直接跳转不会更新本地商品信息（销售状态等），
-// 异步刷新让下次列表加载时反映最新状态
-const handleItemClick = (e: MouseEvent, itemId: string | undefined, url: string | undefined) => {
-  e.preventDefault()
-  // 异步刷新，失败静默忽略（不阻塞跳转）
-  if (itemId) {
-    itemApi.refresh(itemId).catch(() => {})
-  }
-  if (url) {
-    window.open(url, '_blank')
-  }
-}
+// 点击商品链接的采集逻辑已移入组件内 handleTitleClick，
+// 以便访问 message 和 loadItems 实现采集后刷新列表
 
 type ViewMode = 'table' | 'card'
 
@@ -239,6 +228,31 @@ export default function ItemList() {
   regionFilterRef.current = regionFilter
   const brandFilterRef = useRef(brandFilter)
   brandFilterRef.current = brandFilter
+
+  // 点击标题超链接：异步触发后端采集（更新 brand/price/is_sold 等字段），
+  // 同时打开闲鱼原帖。采集完成后刷新列表展示最新数据。
+  // 参照评估明细页 onTitleClick 的交互模式：loading 提示 + 成功/失败反馈
+  const handleTitleClick = (e: MouseEvent, itemId: string | undefined, url: string | undefined) => {
+    e.preventDefault()
+    if (!itemId) {
+      if (url) window.open(url, '_blank', 'noopener,noreferrer')
+      return
+    }
+    const shortId = itemId.slice(0, 8)
+    const hide = message.loading(`正在采集 ${shortId}...`, 0)
+    itemApi.refresh(itemId).then(() => {
+      hide()
+      message.success(`已更新商品信息：${shortId}...`)
+      loadItems()  // 刷新列表以展示更新后的字段
+    }).catch((err: unknown) => {
+      hide()
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      message.error(detail || `采集失败：${shortId}...，请稍后重试`)
+    })
+    if (url) {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    }
+  }
 
   // 静默实时搜索：轮询回调专用，不显示进度提示和错误消息
   // 错误抛出由 useAutoRefresh 的重试机制处理（最多3次，间隔递增）
@@ -573,9 +587,9 @@ export default function ItemList() {
           break
         case 'link':
           col.render = (d: TaskLink['display'], record: TaskLink) => (
-            <Tooltip title={d?.url ? '点击打开原帖' : ''}>
+            <Tooltip title={d?.url ? '点击采集更新商品信息并打开原帖' : ''}>
               {d?.url ? (
-                <a onClick={(e) => handleItemClick(e, record.link_key ?? '', d.url)} style={{ cursor: 'pointer' }}>{d?.title || '—'}</a>
+                <a onClick={(e) => handleTitleClick(e, record.link_key ?? '', d.url)} style={{ cursor: 'pointer' }}>{d?.title || '—'}</a>
               ) : (
                 d?.title || '—'
               )}
@@ -906,7 +920,7 @@ export default function ItemList() {
                         }
                         actions={[
                           d?.url ? (
-                            <a key="link" onClick={(e) => handleItemClick(e, item.link_key ?? '', d.url)} title="打开原帖" style={{ cursor: 'pointer' }}>
+                            <a key="link" onClick={(e) => handleTitleClick(e, item.link_key ?? '', d.url)} title="采集更新并打开原帖" style={{ cursor: 'pointer' }}>
                               <LinkOutlined />
                             </a>
                           ) : <span key="nolink" style={{ color: '#d9d9d9' }}><LinkOutlined /></span>,

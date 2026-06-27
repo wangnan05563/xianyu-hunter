@@ -150,6 +150,62 @@ class FakeApiResponse:
         ]
 
 
+class FakeSearchApiResponse:
+    """用于测试搜索 API route 拦截的最小响应对象"""
+
+    url = "https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/"
+
+    async def json(self) -> dict[str, Any]:
+        return {"ret": ["SUCCESS::调用成功"], "data": {}}
+
+
+class FakeSearchRoute:
+    """用于模拟 Playwright Route"""
+
+    def __init__(self, url: str):
+        self.request = MagicMock(url=url)
+        self.fulfilled = False
+        self.continued = False
+
+    async def fetch(self) -> FakeSearchApiResponse:
+        return FakeSearchApiResponse()
+
+    async def fulfill(self, **kwargs: Any) -> None:
+        self.fulfilled = True
+
+    async def continue_(self) -> None:
+        self.continued = True
+
+
+class FakeSearchApiPage:
+    """模拟会发起搜索 API 请求的 Page"""
+
+    def __init__(self):
+        self.context = FakeContext()
+        self.route_calls: list[tuple[str, Any]] = []
+        self.unroute_calls: list[tuple[str, Any]] = []
+        self.url = "https://www.goofish.com/search"
+        self._handler = None
+
+    async def route(self, pattern: str, handler: Any) -> None:
+        self.route_calls.append((pattern, handler))
+        self._handler = handler
+
+    async def unroute(self, pattern: str, handler: Any | None = None) -> None:
+        self.unroute_calls.append((pattern, handler))
+
+    async def goto(self, url: str, **kwargs: Any) -> None:
+        self.url = url
+        assert self._handler is not None
+        route = FakeSearchRoute(
+            "https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/?data=%7B%7D"
+        )
+        await self._handler(route)
+
+    async def evaluate(self, script: str) -> Any:
+        return None
+
+
 @pytest.fixture
 def fake_browser() -> Any:
     """Mock BrowserManager"""
@@ -220,6 +276,23 @@ def test_parse_mtop_set_cookie_headers_for_browser_context() -> None:
             "sameSite": "None",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_search_api_route_uses_narrow_pattern(fake_browser: Any, fake_ad: Any) -> None:
+    """搜索 API 拦截不应使用 **/* 全量路由，避免拖慢页面资源和 unroute。"""
+    collector = Collector(browser=fake_browser, antidetect=fake_ad)
+    page = FakeSearchApiPage()
+
+    items, session_invalid = await collector._call_search_api(page, "DDR4", max_pages=1)
+
+    assert items == []
+    assert session_invalid is False
+    assert page.route_calls, "应注册 route handler"
+    pattern, handler = page.route_calls[0]
+    assert pattern != "**/*"
+    assert "mtop.taobao.idlemtopsearch.pc.search/1.0" in pattern
+    assert page.unroute_calls == [(pattern, handler)]
 
 
 @pytest.mark.asyncio

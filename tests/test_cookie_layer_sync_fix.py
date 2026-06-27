@@ -532,8 +532,8 @@ class TestEnsureLiveSearchCookiesSync:
             {"name": "_m_h5_tk_enc", "value": "abc123enc456def789", "domain": ".goofish.com"},
         ]
         mock_browser.get_cookies = AsyncMock(side_effect=[cookies_before, cookies_after])
-        # add_cookies 也是 async 方法
-        mock_context.add_cookies = AsyncMock(return_value=None)
+        # add_cookies 也是 async 方法；实时搜索通过 BrowserManager 封装注入，避免绕过统一校验。
+        mock_browser.add_cookies = AsyncMock(return_value=True)
         mock_browser._context = mock_context
         mock_container.browser = mock_browser
         mock_container.collector = None
@@ -659,3 +659,183 @@ class TestBrowserFallbackSync:
         # JSON 有完整 cookie，JSON 同步应该生效（不依赖浏览器）
         assert result["layers"]["identity"]["valid"] is True
         assert result["layers"]["session"]["valid"] is True
+
+
+# ============== 跨进程缓存一致性 ==============
+
+
+class TestCrossProcessCacheInvalidation:
+    """验证浏览器登录子进程写入 JSON 后，主进程不会读到旧缓存
+
+    场景：浏览器登录子进程是独立 Python 进程，写入 cookies.json 后只更新
+    子进程自己的 CookieStore 单例缓存，主进程的 30 秒 TTL 缓存仍是旧数据。
+    修复后 sync_cookie_layers_from_json / /cookies/layers / /cookies/update
+    在读取 JSON 前必须先调用 invalidate_cache() 清除旧缓存。
+
+    若不修复：登录成功后层状态仍显示失效，且 /cookies/update 会用旧缓存覆盖
+    子进程刚写入的新 cookie，导致用户报告"更新后还是失效状态"。
+    """
+
+    def setup_method(self):
+        _reset_orchestrator()
+
+    def teardown_method(self):
+        _reset_orchestrator()
+
+    def _simulate_subprocess_write(self, cookies: list[dict]) -> None:
+        """模拟浏览器登录子进程写入 JSON（不通过主进程的 CookieStore）
+
+        子进程是独立 Python 进程，只写文件不会更新主进程的 _cache/_cache_ts。
+        直接调用 _write_json 会更新主进程缓存，无法复现跨进程问题，
+        所以这里直接写文件并故意不清除主进程缓存（模拟真实跨进程场景）。
+        """
+        _COOKIE_JSON.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "exported_at": time.time(),
+            "method": "browser_login_subprocess",
+            "cookie_count": len(cookies),
+            "cookies": cookies,
+        }
+        _COOKIE_JSON.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        # 故意不清除主进程缓存：模拟子进程写入后主进程缓存仍是旧数据的状态
+        # （这是真实跨进程场景的关键特征）
+
+    def test_sync_invalidates_stale_cache_after_subprocess_write(self):
+        """关键场景：主进程缓存空数据，子进程写入新数据，sync 应读到新数据
+
+        复现路径：服务启动后从未读取过 JSON（缓存为空），浏览器登录子进程
+        写入新 cookies.json，调用 sync_cookie_layers_from_json 应读到新数据
+        而非旧缓存，层状态应正确同步为 valid。
+        """
+        # Step 1: 主进程首次读取（缓存空数据，此时文件不存在）
+        store = get_cookie_store()
+        store._cache = None
+        store._cache_ts = 0.0
+        if _COOKIE_JSON.exists():
+            _COOKIE_JSON.unlink()
+        # 触发一次读取，让缓存记录"空数据"
+        store._read_json()  # 返回 None，但 _cache 仍为 None
+        # 模拟主进程曾经读取过空数据：手工设置空缓存
+        store._cache = {"cookies": []}
+        store._cache_ts = time.time()
+
+        # Step 2: 子进程写入新数据（不清除主进程缓存）
+        self._simulate_subprocess_write(_real_cookie_sample())
+
+        # 验证：未修复前，主进程直接 _read_json 仍读到空缓存
+        # （因为 30 秒 TTL 内未过期）
+        stale = store._read_json()
+        assert stale is not None and len(stale.get("cookies", [])) == 0, \
+            "测试前置：未 invalidate_cache 时应读到旧空缓存"
+
+        # Step 3: 调用 sync_cookie_layers_from_json（修复后会先 invalidate_cache）
+        result = sync_cookie_layers_from_json()
+        assert result is True
+
+        # 验证：层状态已正确同步为 valid（说明读到了子进程写入的新数据）
+        orch = get_orchestrator()
+        states = orch.cookie_rotator.get_all_states()
+        assert states[CookieLayer.IDENTITY].valid is True, \
+            "invalidate_cache 修复后，应读到子进程写入的新数据，identity 层应 valid"
+        assert states[CookieLayer.SESSION].valid is True
+        assert states[CookieLayer.TRACKING].valid is True
+
+    def test_cookies_layers_endpoint_invalidates_stale_cache(self):
+        """关键场景：/cookies/layers 端点应读到子进程写入的新数据
+
+        用户在前端轮询 /cookies/layers 查看层状态，主进程缓存可能为旧数据，
+        端点必须先 invalidate_cache 才能反映子进程的最新写入。
+        """
+        # Step 1: 主进程缓存空数据
+        store = get_cookie_store()
+        if _COOKIE_JSON.exists():
+            _COOKIE_JSON.unlink()
+        store._read_json()
+        store._cache = {"cookies": []}
+        store._cache_ts = time.time()
+
+        # Step 2: 子进程写入新数据
+        self._simulate_subprocess_write(_real_cookie_sample())
+
+        # Step 3: 调用 /cookies/layers 端点
+        response = client.get("/api/anticrawl/cookies/layers", cookies=_AUTH_COOKIE)
+        assert response.status_code == 200
+        result = response.json()
+
+        # 验证：端点读到子进程写入的新数据，三层应 valid
+        assert result["layers"]["identity"]["valid"] is True, \
+            "/cookies/layers 端点应通过 invalidate_cache 读到子进程写入的新数据"
+        assert result["layers"]["session"]["valid"] is True
+        assert result["layers"]["tracking"]["valid"] is True
+
+    def test_health_endpoint_invalidates_stale_cache(self):
+        """关键场景：/health 的 cookie_checker 应读到子进程写入的新数据"""
+        # Step 1: 主进程缓存空数据
+        store = get_cookie_store()
+        if _COOKIE_JSON.exists():
+            _COOKIE_JSON.unlink()
+        store._read_json()
+        store._cache = {"cookies": []}
+        store._cache_ts = time.time()
+
+        # Step 2: 子进程写入新数据（不清除主进程缓存）
+        self._simulate_subprocess_write(_real_cookie_sample())
+
+        # Step 3: 初始化健康检查器并调用 /health
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+        response = client.get("/api/anticrawl/health", cookies=_AUTH_COOKIE)
+        assert response.status_code == 200
+        result = response.json()
+
+        assert result["ok"] is True
+        assert result["cookie_valid"] is True, "/health 应通过 invalidate_cache 读到最新 Cookie"
+
+    def test_cookies_update_endpoint_invalidates_stale_cache(self):
+        """关键场景：/cookies/update 端点不应丢失子进程写入的 cookie
+
+        用户报告"点击更新Cookie后还是失效状态"的根因：主进程缓存为空（旧数据），
+        合并写入时会用空缓存 + 用户传入的少量 cookie 覆盖丢失子进程刚写入的
+        全量 cookie。修复后端点先 invalidate_cache 读到子进程的数据，再合并。
+        """
+        # Step 1: 主进程缓存空数据
+        store = get_cookie_store()
+        if _COOKIE_JSON.exists():
+            _COOKIE_JSON.unlink()
+        store._read_json()
+        store._cache = {"cookies": []}
+        store._cache_ts = time.time()
+
+        # Step 2: 子进程写入完整 cookie（含 identity + session + tracking）
+        self._simulate_subprocess_write(_real_cookie_sample())
+
+        # Step 3: 用户在前端只传入少量 cookie（如刷新 _m_h5_tk）
+        # 修复前：合并时会用主进程缓存的空数据作为 base，导致其他 cookie 全部丢失
+        # 修复后：先 invalidate_cache 读到子进程写入的全量 cookie，再合并
+        # 注意：token 必须符合真实格式（32hex_13timestamp），否则会被 is_test_cookie 过滤
+        new_token = "abcdef1234567890abcdef1234567890_1782550000000"
+        response = client.post(
+            "/api/anticrawl/cookies/update",
+            json={"cookies": {"_m_h5_tk": new_token}},
+            cookies=_AUTH_COOKIE,
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result["ok"] is True
+
+        # 验证：JSON 中应保留子进程写入的其他 cookie（unb/cookie2/sgcookie）
+        store._cache = None
+        store._cache_ts = 0.0
+        data = store._read_json()
+        names = {c["name"] for c in data["cookies"]}
+        assert "unb" in names, "修复前会用空缓存覆盖丢失 unb，修复后应保留"
+        assert "cookie2" in names, "修复前会用空缓存覆盖丢失 cookie2，修复后应保留"
+        assert "sgcookie" in names, "修复前会用空缓存覆盖丢失 sgcookie，修复后应保留"
+        # 用户传入的新值应被合并写入
+        tk = next(c for c in data["cookies"] if c["name"] == "_m_h5_tk")
+        assert tk["value"] == new_token

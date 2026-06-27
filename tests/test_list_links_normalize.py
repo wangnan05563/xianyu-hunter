@@ -248,3 +248,53 @@ def test_batch_upsert_accepts_string_publish_time(tmp_repo: Repository) -> None:
         display = json.loads(display)
     assert display["publish_time"] == "2026-06-27T10:30:00", \
         f"publish_time 应原样存储为字符串，但得到 {display.get('publish_time')!r}"
+
+
+def test_list_links_enriches_is_sold_from_items_table(client: TestClient, tmp_repo: Repository) -> None:
+    """回归测试：items 表 is_sold=1 时，list_links 必须将 display.is_sold 补全为 True
+
+    复现 bug：_enrich_with_item_data 曾因过时注释"is_sold 不在 items 表中"而不补全 is_sold，
+    导致 refresh_item/mark_sold 已将 items.is_sold 更新为 1，但前端仍显示"在售"。
+    修复后 is_sold 总是以 items 表为准，即使 display 中已有 is_sold=False 也会被覆盖。
+    """
+    tmp_repo.upsert_task({"id": "t1", "name": "测试任务", "keyword": "DDR4"})
+
+    # 1. 写入 items 表：商品已售（is_sold=1）
+    tmp_repo.upsert_item({
+        "id": "item_sold_001",
+        "task_id": "t1",
+        "title": "DDR4 已售内存条",
+        "price": 200.0,
+        "is_sold": 0,  # 初始未售
+    })
+    tmp_repo.mark_sold("item_sold_001")  # 标记为已售，items.is_sold=1
+
+    # 2. 写入 task_links.display：is_sold=False（旧值，模拟采集前的数据）
+    tmp_repo.upsert_task_link(
+        task_id="t1",
+        link_type="item",
+        link_key="item_sold_001",
+        display={
+            "title": "DDR4 已售内存条",
+            "price": 200.0,
+            "is_sold": False,  # 旧值，与 items 表不一致
+            "url": "https://www.goofish.com/item?id=item_sold_001",
+        },
+        source="auto",
+    )
+
+    # 3. 调用 list_links 端点
+    resp = client.get("/api/tasks/t1/links", headers=_auth_headers())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) > 0, "应至少返回 1 条记录"
+
+    item_row = data["items"][0]
+    display = item_row["display"]
+    if isinstance(display, str):
+        import json
+        display = json.loads(display)
+
+    # 4. 验证 is_sold 被 _enrich_with_item_data 从 items 表补全为 True
+    assert display.get("is_sold") is True, \
+        f"items 表 is_sold=1 时，display.is_sold 应被补全为 True，但得到 {display.get('is_sold')!r}"

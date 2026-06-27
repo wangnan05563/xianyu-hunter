@@ -408,14 +408,19 @@ class DetailMixin:
             # 已售检测：采集页面文字，判断商品是否已售出
             # 为什么在采集侧也检测：官方采集和刷新接口复用此方法，
             # 在此检测可统一覆盖三个入口（链接刷新/官方采集/抢单前的 detail 调用）
+            # 关键词覆盖"已售"两字作为兜底：与搜索 DOM 检测（text.includes('已售')）保持一致，
+            # 避免闲鱼文案变体（如"该商品已售"、"宝贝已下架"等）漏检
             is_sold = False
             try:
                 body_text = await page.text_content("body") or ""
-                is_sold = any(kw in body_text for kw in (
+                is_sold = "已售" in body_text or any(kw in body_text for kw in (
                     "已售出", "已售完", "已售罄", "宝贝已售", "商品已售",
+                    "已下架", "已卖出",
                 ))
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                # 静默失败会导致 is_sold 默认 False，已售商品被误判为在售
+                # 记录 warning 便于排查页面崩溃/Playwright 异常导致的检测失败
+                logger.warning("详情页 {} is_sold 检测失败: {}", item_id, e)
 
             # 品牌字段：详情页 DOM 通常无独立 brand 元素，复用 extract_brand 兜底链路
             # 优先级：搜索 API brand > 卖家昵称匹配标题 > 标题关键词推断

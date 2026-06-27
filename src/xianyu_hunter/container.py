@@ -24,7 +24,7 @@ from xianyu_hunter.modules.buyer import Buyer
 from xianyu_hunter.modules.buyer_config import BuyerConfig
 from xianyu_hunter.modules.collector import Collector
 from xianyu_hunter.modules.dedup import ItemDedup
-from xianyu_hunter.modules.evaluator import Evaluator, EvaluationThresholds
+from xianyu_hunter.modules.evaluator import Evaluator
 from xianyu_hunter.modules.notifier import NotifierHub
 from xianyu_hunter.modules.price_strategy import PriceConfig, PriceStrategy
 from xianyu_hunter.modules.scheduler import TaskScheduler
@@ -182,24 +182,16 @@ def build_default_container(
         market_ratio=0.8,
         top_n=None,
     ))
-    thresholds = EvaluationThresholds(
-        on_sale_count=cfg.eval.thresholds.on_sale_count,
-        post_count_30d=cfg.eval.thresholds.post_count_30d,
-        top_category_ratio=cfg.eval.thresholds.top_category_ratio,
-        credit_score_min=cfg.eval.thresholds.credit_score_min,
-        bad_review_max=cfg.eval.thresholds.bad_review_max,
-        register_days_min=cfg.eval.thresholds.register_days_min,
-    )
-    evaluator = Evaluator(
-        thresholds=thresholds,
-        weights={
-            "professional": cfg.eval.weights.professional,
-            "credit": cfg.eval.weights.credit,
-            "dispute": cfg.eval.weights.dispute,
-            "price": cfg.eval.weights.price,
-        },
-        professional_keywords=cfg.eval.professional_keywords,
-    )
+    # Evaluator 不接收 thresholds/weights/keywords 覆盖参数：
+    # 为什么：Evaluator.__init__ 会把传入的参数存为 _override_*，
+    # 一旦不为 None，_get_thresholds() 等方法就永远返回覆盖值，
+    # 不再从 get_config() 实时读取。这会导致：
+    # 1. 用户在配置页面修改 pass_score/auto_buy_score 后不生效
+    # 2. evaluator._score_to_risk() 用固定阈值划分 risk_level，
+    #    而 worker.should_auto_buy() 用实时配置值，两者不一致
+    # 3. 评分达标的商品因 risk_level != LOW 被错误跳过抢单
+    # 正确做法：让 Evaluator 每次 evaluate() 时从 get_config() 实时读取
+    evaluator = Evaluator()
 
     container = Container(
         config=cfg,

@@ -44,6 +44,10 @@ def _set_status(status_file: Path, **kw) -> None:
     status_file.write_text(json.dumps(s, ensure_ascii=False), encoding="utf-8")
 
 
+def _elapsed_sec(start: float) -> float:
+    return round(time.monotonic() - start, 2)
+
+
 def _export_cookies_to_json(cookies: list[dict], method: str) -> None:
     """登录成功后导出 Cookie 到 JSON 文件（供 Web 后端立即验证）"""
     try:
@@ -134,8 +138,19 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
     """启动有头浏览器，等待用户登录"""
     from playwright.async_api import async_playwright
 
+    flow_start = time.monotonic()
+    timings: dict[str, float] = {}
+
+    def set_status(**kw) -> None:
+        _set_status(
+            status_file,
+            elapsed=_elapsed_sec(flow_start),
+            timings=timings,
+            **kw,
+        )
+
     cfg = _get_browser_cfg()
-    _set_status(status_file, status="starting", message="正在启动浏览器...")
+    set_status(status="starting", message="正在启动浏览器...")
 
     # 检测可用浏览器：优先 Edge（Windows 自带），其次 Chromium
     edge_path = _get_edge_path()
@@ -155,6 +170,14 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                 "viewport": {"width": 1280, "height": 800},
                 "locale": "zh-CN",
                 "timezone_id": "Asia/Shanghai",
+                "args": [
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-background-networking",
+                    "--disable-component-update",
+                    "--disable-default-apps",
+                    "--disable-extensions",
+                ],
             }
             if edge_path:
                 # 系统 Edge：干净启动，最不容易被风控检测
@@ -162,55 +185,67 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                 launch_kwargs["channel"] = "msedge"
             else:
                 # Playwright 内置 Chromium：需要反检测参数
-                launch_kwargs["args"] = [
+                launch_kwargs["args"].extend([
                     "--disable-blink-features=AutomationControlled",
-                    "--no-first-run",
-                    "--no-default-browser-check",
                     "--disable-infobars",
-                ]
+                ])
 
             # 统一使用指定 user_data_dir，确保 Cookie 写入正确位置
             launch_kwargs["user_data_dir"] = str(user_data_dir)
+            launch_start = time.monotonic()
             bc = await pw.chromium.launch_persistent_context(**launch_kwargs)
+            timings["launch_context_sec"] = _elapsed_sec(launch_start)
 
             try:
-                _set_status(status_file, status="opening", message="正在打开闲鱼...")
+                set_status(status="opening", message="正在打开闲鱼...")
+                page_start = time.monotonic()
                 page = await bc.new_page()
+                timings["new_page_sec"] = _elapsed_sec(page_start)
 
                 # 导航到闲鱼首页
+                goto_start = time.monotonic()
                 await page.goto(
                     "https://www.goofish.com",
                     wait_until="domcontentloaded",
-                    timeout=30000,
+                    timeout=20000,
                 )
-                await page.wait_for_timeout(3000)
+                timings["goto_home_sec"] = _elapsed_sec(goto_start)
 
                 # 检查是否已登录（严格验证 Cookie 值，而非仅检测名称存在）
                 # _m_h5_tk 访问首页就会自动设置，不能作为登录判据
+                cookie_start = time.monotonic()
                 cookies = await bc.cookies()
+                timings["initial_cookie_read_sec"] = _elapsed_sec(cookie_start)
                 cookie_names = {c["name"] for c in cookies}
 
                 if _validate_login_cookies(cookies):
                     # Cookie 值验证通过，进一步访问 personal 页面确认登录态有效
                     try:
+                        verify_start = time.monotonic()
                         personal_page = await bc.new_page()
                         await personal_page.goto(
                             "https://www.goofish.com/personal",
                             wait_until="domcontentloaded",
-                            timeout=15000,
+                            timeout=8000,
                         )
-                        await personal_page.wait_for_timeout(2000)
+                        timings["verify_personal_sec"] = _elapsed_sec(verify_start)
                         cur_url = personal_page.url.lower()
                         # 如果没被重定向到登录页，说明登录态有效
                         is_login_page = any(k in cur_url for k in ("/login", "passport", "mini_login"))
                         if not is_login_page:
-                            _set_status(status_file, status="already_logged", message="检测到已登录状态")
-                            _set_status(status_file, status="success", message="已处于登录状态")
+                            set_status(status="already_logged", message="检测到已登录状态")
                             # 导出 Cookie 到 JSON 供后端验证
+                            export_start = time.monotonic()
                             final_cookies = await bc.cookies()
                             _export_cookies_to_json(final_cookies, "browser")
                             # 保存 Playwright 格式 Cookie 供 Worker 注入
                             _save_playwright_cookies(final_cookies)
+                            timings["export_cookies_sec"] = _elapsed_sec(export_start)
+                            set_status(
+                                status="success",
+                                message="已处于登录状态",
+                                cookie_count=len(final_cookies),
+                            )
                             await personal_page.close()
                             return 0
                         else:
@@ -219,8 +254,7 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                     except Exception as e:
                         print(f"[browser_login] 验证登录态失败: {e}", file=sys.stderr)
 
-                _set_status(
-                    status_file,
+                set_status(
                     status="waiting",
                     message=f"请在浏览器窗口中登录闲鱼（{timeout}s 超时）",
                 )
@@ -229,31 +263,30 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                 start = time.monotonic()
 
                 while time.monotonic() - start < timeout:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(1)
                     cookies = await bc.cookies()
 
                     if _validate_login_cookies(cookies):
-                        # 登录成功：显式等待确保 Cookie 刷入磁盘
-                        await page.wait_for_timeout(3000)
                         # 强制保存浏览器存储状态，确保 Cookie 写入 SQLite
+                        storage_start = time.monotonic()
                         try:
                             await bc.storage_state()
                         except Exception:
                             pass
+                        timings["storage_state_sec"] = _elapsed_sec(storage_start)
                         # 再次读取 Cookie 并导出到 JSON（主验证数据源）
+                        export_start = time.monotonic()
                         final_cookies = await bc.cookies()
                         final_count = len(final_cookies)
                         _export_cookies_to_json(final_cookies, "browser")
                         # 保存 Playwright 格式 Cookie 供 Worker 注入
                         _save_playwright_cookies(final_cookies)
-                        _set_status(
-                            status_file,
+                        timings["export_cookies_sec"] = _elapsed_sec(export_start)
+                        set_status(
                             status="success",
                             message="检测到登录成功，Cookie 已保存",
                             cookie_count=final_count,
                         )
-                        # 等待足够时间确保 Cookie 写入 SQLite 数据库
-                        await asyncio.sleep(3)
                         return 0
 
                     # 更新状态消息
@@ -262,20 +295,25 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                     # 每10秒更新一次状态消息
                     elapsed = int(time.monotonic() - start)
                     if elapsed % 10 < 2:
-                        _set_status(
-                            status_file,
+                        set_status(
                             status="waiting",
                             message=f"等待登录中... 剩余 {timeout - elapsed}s",
-                            elapsed=elapsed,
+                            wait_elapsed=elapsed,
                         )
 
-                _set_status(status_file, status="timeout", message=f"登录超时（{timeout}s）")
+                set_status(status="timeout", message=f"登录超时（{timeout}s）")
                 return 2
 
             finally:
                 await bc.close()
     except Exception as e:
-        _set_status(status_file, status="error", message=f"浏览器启动失败: {e}")
+        _set_status(
+            status_file,
+            status="error",
+            message=f"浏览器启动失败: {e}",
+            elapsed=_elapsed_sec(flow_start),
+            timings=timings,
+        )
         return 1
 
 

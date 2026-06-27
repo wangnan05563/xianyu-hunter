@@ -1272,22 +1272,22 @@ export default function Evaluations() {
       {dist && (
         <Row gutter={12} style={{ marginBottom: 16 }}>
           <Col span={4}>
-            <Card size="small"><Statistic title="评估总数" value={dist.total} /></Card>
+            <Card size="small" hoverable><Statistic title="评估总数" value={dist.total} /></Card>
           </Col>
           <Col span={4}>
-            <Card size="small"><Statistic title={`可抢(≥${autoBuyScore})`} value={dist.marginals.result.auto} valueStyle={{ color: '#52c41a' }} /></Card>
+            <Card size="small" hoverable><Statistic title={`可抢(≥${autoBuyScore})`} value={dist.marginals.result.auto} valueStyle={{ color: '#52c41a' }} /></Card>
           </Col>
           <Col span={4}>
-            <Card size="small"><Statistic title={`通过(${passScore}-${autoBuyScore - 1})`} value={dist.marginals.result.pass} valueStyle={{ color: '#1890ff' }} /></Card>
+            <Card size="small" hoverable><Statistic title={`通过(${passScore}-${autoBuyScore - 1})`} value={dist.marginals.result.pass} valueStyle={{ color: '#1890ff' }} /></Card>
           </Col>
           <Col span={4}>
-            <Card size="small"><Statistic title={`驳回(<${passScore})`} value={dist.marginals.result.fail} valueStyle={{ color: '#ff4d4f' }} /></Card>
+            <Card size="small" hoverable><Statistic title={`驳回(<${passScore})`} value={dist.marginals.result.fail} valueStyle={{ color: '#ff4d4f' }} /></Card>
           </Col>
           <Col span={4}>
-            <Card size="small"><Statistic title="数据不足" value={dist.insufficient_count} valueStyle={{ color: 'var(--xh-text-tertiary)' }} /></Card>
+            <Card size="small" hoverable><Statistic title="数据不足" value={dist.insufficient_count} valueStyle={{ color: 'var(--xh-text-tertiary)' }} /></Card>
           </Col>
           <Col span={4}>
-            <Card size="small">
+            <Card size="small" hoverable>
               <Statistic title="价格区间" value={dist.price_range[0] > 0 ? `¥${dist.price_range[0]}~${dist.price_range[1]}` : '—'} />
             </Card>
           </Col>
@@ -1298,6 +1298,8 @@ export default function Evaluations() {
         {/* 左侧：列表 —— 折叠右侧面板时自动扩展到 23/24 宽度 */}
         <Col span={panelCollapsed ? 23 : 16}>
           <Card
+            // 折叠/展开时 Col span 离散跳变，给 Card 加过渡柔化宽度突变
+            style={{ transition: 'all 0.2s ease' }}
             extra={
               <Tooltip title={panelCollapsed ? '展开分析面板' : '收起分析面板'}>
                 <Button

@@ -166,8 +166,9 @@ async def test_wecom_send_success() -> None:
     assert result.success is True
     assert result.channel == "wecom"
     args, kwargs = session.post.call_args
-    assert kwargs["json"]["msgtype"] == "text"
-    assert "iPhone 13" in kwargs["json"]["text"]["content"]
+    # markdown 格式：标题加粗，body 保持 markdown 语法
+    assert kwargs["json"]["msgtype"] == "markdown"
+    assert "iPhone 13" in kwargs["json"]["markdown"]["content"]
 
 
 @pytest.mark.asyncio

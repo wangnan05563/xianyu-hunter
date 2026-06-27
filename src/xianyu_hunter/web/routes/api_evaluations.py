@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field
 from xianyu_hunter.container import Container
 from xianyu_hunter.domain.evaluation import RiskLevel
 from xianyu_hunter.infra.db_models import _utcnow
+from xianyu_hunter.infra.item_display_sync import sync_item_display_from_detail
 from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.modules.collector_utils import normalize_display_fields
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import to_datetime
 
@@ -180,6 +182,8 @@ def _enrich_eval_with_item(
     item_id = str(payload.get("item_id") or "")
     item = item_map.get(item_id, {}) if item_id else {}
     link = (link_map or {}).get(item_id, {}) if item_id else {}
+    if link:
+        link, _ = normalize_display_fields(link)
 
     # 兼容 task_links.display 的键名：title -> item_title, price 字符串转 float
     def _coerce_price(v: object) -> float | None:
@@ -1553,24 +1557,22 @@ async def _ensure_official_collect_cookies(container: Container) -> None:
             logger.warning("读取浏览器 Cookie 失败: {}", e)
             return []
 
-    async def _get_missing() -> list[str]:
-        cookies = await _get_cookies()
-        names = {str(c.get("name") or "") for c in cookies}
-        return [n for n in _OFFICIAL_COLLECT_IDENTITY_COOKIES if n not in names]
+    def _cookie_by_name(cookies: list[dict]) -> dict[str, dict]:
+        return {
+            str(c.get("name") or ""): c
+            for c in cookies
+            if str(c.get("name") or "")
+        }
 
-    async def _get_expired() -> list[str]:
-        """检查关键 cookie 的 expires 字段，返回已过期的 cookie 名列表
-
-        Playwright cookie.expires 是 Unix 时间戳（秒），-1 表示 session cookie。
-        仅对 persistent cookie（expires > 0）做过期检查，避免误判 session cookie。
-        """
+    def _expired_identity_cookies(cookies_by_name: dict[str, dict]) -> list[str]:
+        """检查关键 cookie 的 expires 字段，返回已过期的 cookie 名列表。"""
         import time as _time
-        cookies = await _get_cookies()
+
         now = _time.time()
         expired = []
-        for c in cookies:
-            name = str(c.get("name") or "")
-            if name not in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
+        for name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
+            c = cookies_by_name.get(name)
+            if not c:
                 continue
             expires = c.get("expires", -1)
             # 仅 persistent cookie 且已过期才记录；session cookie（expires<=0）跳过
@@ -1578,42 +1580,67 @@ async def _ensure_official_collect_cookies(container: Container) -> None:
                 expired.append(name)
         return expired
 
-    missing = await _get_missing()
-    if not missing:
-        # P3：cookie 存在但仍可能过期，前置检查避免浪费 30s page.goto
-        expired = await _get_expired()
-        if expired:
-            logger.warning("官方采集：关键 Cookie 已过期 {}，需重新登录闲鱼", expired)
-            raise HTTPException(
-                status_code=440,
-                detail=f"闲鱼登录 Cookie 已过期（{', '.join(expired)}），请重新登录闲鱼",
-            )
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
+
+    def _cookies_from_json() -> tuple[list[dict], dict[str, str]]:
+        """读取 CookieStore JSON，返回可注入 cookie 和关键 cookie 最新值。"""
+        store = get_cookie_store()
+        store.invalidate_cache()
+        json_data = store._read_json()
+        if not json_data or not json_data.get("cookies"):
+            return [], {}
+
+        pw_cookies: list[dict] = []
+        identity_values: dict[str, str] = {}
+        for c in json_data["cookies"]:
+            name = str(c.get("name") or "")
+            value = str(c.get("value") or "")
+            if not name or not value:
+                continue
+            # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
+            if is_test_cookie(name, value):
+                logger.warning("官方采集：跳过测试 Cookie {}={}，不注入浏览器", name, value)
+                continue
+
+            item = {
+                "name": name,
+                "value": value,
+                "domain": c.get("domain") or ".goofish.com",
+                "path": c.get("path") or "/",
+            }
+            expires = c.get("expires", -1)
+            if expires and expires > 0:
+                item["expires"] = expires
+            pw_cookies.append(item)
+            if name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
+                identity_values[name] = value
+        return pw_cookies, identity_values
+
+    async def _cookie_issues(json_identity_values: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
+        cookies_by_name = _cookie_by_name(await _get_cookies())
+        missing = [n for n in _OFFICIAL_COLLECT_IDENTITY_COOKIES if n not in cookies_by_name]
+        expired = _expired_identity_cookies(cookies_by_name)
+        stale = [
+            n for n, value in json_identity_values.items()
+            if n in cookies_by_name and cookies_by_name[n].get("value") != value
+        ]
+        return missing, expired, stale
+
+    pw_cookies, json_identity_values = _cookies_from_json()
+    missing, expired, stale = await _cookie_issues(json_identity_values)
+    if not missing and not expired and not stale:
         return
 
-    # 浏览器缺少关键 cookie 时，尝试从 CookieStore JSON 补注入
-    from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
-    store = get_cookie_store()
-    json_data = store._read_json()
-    if json_data and json_data.get("cookies"):
-        pw_cookies = []
-        for c in json_data["cookies"]:
-            name = c.get("name", "")
-            value = c.get("value", "")
-            if name in missing:
-                # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
-                if is_test_cookie(name, value):
-                    logger.warning("官方采集：跳过测试 Cookie {}={}，不注入浏览器", name, value)
-                    continue
-                pw_cookies.append({
-                    "name": name,
-                    "value": value,
-                    "domain": c.get("domain", ".goofish.com"),
-                    "path": c.get("path", "/"),
-                })
-        if pw_cookies and container.browser._context:
-            try:
-                await container.browser._context.add_cookies(pw_cookies)
-                logger.info("从 CookieStore JSON 补注入 {} 个 cookie 到浏览器", len(pw_cookies))
+    # 浏览器缺少、过期或仍持有旧关键 cookie 时，尝试从 CookieStore JSON 补/替换注入。
+    if pw_cookies:
+        logger.info(
+            "官方采集：准备从 CookieStore JSON 注入 cookie，missing={}, expired={}, stale={}",
+            missing, expired, stale,
+        )
+        try:
+            success = await container.browser.add_cookies(pw_cookies)
+            if success:
+                logger.info("从 CookieStore JSON 补注入/替换 {} 个 cookie 到浏览器", len(pw_cookies))
                 # 同步 CookieRotator 层状态：补注入成功说明 JSON 持有有效 cookie，
                 # 若层状态从未初始化（updated_at==0.0），此处补救同步避免 /cookies/layers 误显示失效
                 try:
@@ -1621,11 +1648,24 @@ async def _ensure_official_collect_cookies(container: Container) -> None:
                     sync_cookie_layers_from_json()
                 except Exception as e:
                     logger.debug("官方采集补注入后同步层状态失败: {}", e)
-            except Exception as e:
-                logger.warning("从 JSON 补注入 cookie 失败: {}", e)
+            else:
+                logger.warning("从 CookieStore JSON 注入 cookie 后关键 Cookie 验证未通过")
+        except Exception as e:
+            logger.warning("从 JSON 补注入 cookie 失败: {}", e)
 
-    # 重新检查补注入后是否仍缺少
-    missing = await _get_missing()
+    # 重新检查补注入后是否仍缺少/过期/陈旧
+    missing, expired, stale = await _cookie_issues(json_identity_values)
+    if expired:
+        logger.warning("官方采集：关键 Cookie 已过期 {}，需重新登录闲鱼", expired)
+        raise HTTPException(
+            status_code=440,
+            detail=f"闲鱼登录 Cookie 已过期（{', '.join(expired)}），请重新登录闲鱼",
+        )
+    if stale:
+        raise HTTPException(
+            status_code=440,
+            detail=f"闲鱼登录 Cookie 未刷新到采集浏览器（{', '.join(stale)}），请重新登录闲鱼",
+        )
     if missing:
         raise HTTPException(
             status_code=403,
@@ -1763,9 +1803,18 @@ async def _collect_official_and_evaluate(
 
     # 3. 持久化到 items 表
     import json as _json
+    existing_item = container.repo.get_item(item_id) or {}
+    effective_task_id = task_id or ""
+    if not effective_task_id:
+        existing_payload = container.repo.get_eval_payload_by_item(item_id)
+        if existing_payload:
+            effective_task_id = existing_payload.get("task_id", "") or ""
+    if not effective_task_id:
+        effective_task_id = str(existing_item.get("task_id") or "")
+
     new_item_row = {
         "id": item_id,
-        "task_id": task_id or "",
+        "task_id": effective_task_id,
         "title": detail.title,
         "price": detail.price,
         "description": detail.description or "",
@@ -1803,7 +1852,7 @@ async def _collect_official_and_evaluate(
     _ALWAYS_OVERWRITE = {"task_id", "publish_time", "view_cnt", "want_cnt", "region", "seller_id", "is_sold"}
 
     try:
-        old_item = container.repo.get_item(item_id) or {}
+        old_item = existing_item
         item_row = {
             k: (new_item_row[k] if k in _ALWAYS_OVERWRITE else _coalesce(new_item_row[k], old_item.get(k)))
             for k in new_item_row.keys()
@@ -1814,6 +1863,14 @@ async def _collect_official_and_evaluate(
             container.repo.mark_sold(item_id)
     except Exception as e:
         logger.warning("更新 items 表失败 item={}: {}", item_id, e)
+
+    # 官方采集完成后也要同步 task_links.display。brand 为空时代表详情页无法验证旧品牌，
+    # 必须写回空值，避免评估明细继续从旧 display 读到错误品牌。
+    if effective_task_id:
+        try:
+            sync_item_display_from_detail(container.repo, effective_task_id, item_id, detail, source="auto")
+        except Exception as e:
+            logger.warning("同步 task_links.display 失败 item={}: {}", item_id, e)
 
     # 4. 持久化到 sellers 表
     if seller and seller.id and seller.id != "unknown":
@@ -1840,13 +1897,6 @@ async def _collect_official_and_evaluate(
     level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
     if eval_result.risk_level == RiskLevel.UNKNOWN:
         level = "warn"
-
-    # 如果未传 task_id，从现有评估事件中查找
-    effective_task_id = task_id
-    if not effective_task_id:
-        existing_payload = container.repo.get_eval_payload_by_item(item_id)
-        if existing_payload:
-            effective_task_id = existing_payload.get("task_id", "")
 
     eval_payload = {
         "task_id": effective_task_id or "",  # 写入 payload 保持与其他路径一致

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Card,
   Switch,
@@ -13,6 +13,7 @@ import {
   Tag,
   Modal,
   Table,
+  Segmented,
 } from 'antd'
 import { SaveOutlined, UndoOutlined, BellOutlined } from '@ant-design/icons'
 import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
@@ -23,10 +24,12 @@ import { extractApiError } from '../../../utils/apiError'
 import type { DiffChange } from '../../../stores/configStore'
 import api from '../../../api/client'
 import type { AppConfig } from '../../../api'
-import { defaultChannels, eventTypes, severityColors, type ChannelDef } from './constants'
+import { defaultChannels, eventTypes, severityColors, pricingMeta, type ChannelDef, type Pricing } from './constants'
 import ChannelCard from './components/ChannelCard'
 import SortableChannelItem from './components/SortableChannelItem'
 import QuietHoursTimeline from './components/QuietHoursTimeline'
+
+type SortMode = 'category' | 'custom'
 
 export default function NotifierChannels() {
   const { config, load, save, hasChanges, reset, update, previewSave, confirmSave } = useConfigStore()
@@ -37,6 +40,8 @@ export default function NotifierChannels() {
   )
   const [loading, setLoading] = useState(false)
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
+  // 排序模式：category=按免费/限额/收费分类，custom=按通道顺序
+  const [sortMode, setSortMode] = useState<SortMode>('category')
   // Diff 预览
   const [diffModalOpen, setDiffModalOpen] = useState(false)
   const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
@@ -185,13 +190,36 @@ export default function NotifierChannels() {
     }
   }
 
+  // 分类排序：免费 → 限额 → 收费，类内按启用状态 + 功能完整性降序
+  const groupedChannels = useMemo(() => {
+    const sorted = [...channels].sort((a, b) => {
+      const priceDiff = pricingMeta[a.pricing].order - pricingMeta[b.pricing].order
+      if (priceDiff !== 0) return priceDiff
+      // 已启用的渠道排在前面（使用频率代理）
+      if (a.enabled !== b.enabled) return a.enabled ? -1 : 1
+      // 功能完整性评分降序
+      return b.featureScore - a.featureScore
+    })
+    // 按 pricing 分组，保持排序后的顺序
+    const groups: Record<Pricing, ChannelDef[]> = { free: [], freemium: [], paid: [] }
+    for (const ch of sorted) groups[ch.pricing].push(ch)
+    return groups
+  }, [channels])
+
+  // 统计各类别渠道数量
+  const channelCounts = useMemo(() => {
+    const counts = { free: 0, freemium: 0, paid: 0 }
+    for (const ch of channels) counts[ch.pricing]++
+    return counts
+  }, [channels])
+
   if (!config) {
     return <div className="page-container">加载中...</div>
   }
 
   const quietHours = config.notifier.quiet_hours
 
-  // 按排序顺序获取渠道
+  // 按排序顺序获取渠道（用于自定义排序模式 + 拖拽列表）
   const orderedChannels = channelOrder
     .map((key) => channels.find((c) => c.key === key))
     .filter(Boolean) as ChannelDef[]
@@ -213,22 +241,73 @@ export default function NotifierChannels() {
       <Row gutter={24}>
         {/* 左侧：渠道卡片墙 */}
         <Col span={14}>
-          <Card title="渠道卡片墙（7 个渠道）" style={{ marginBottom: 16 }}>
-            <Row gutter={[12, 12]}>
-              {channels.map((ch) => (
-                <Col span={12} key={ch.key}>
-                  <ChannelCard
-                    channel={ch}
-                    config={config}
-                    testing={testingChannel === ch.key}
-                    anyTesting={testingChannel !== null}
-                    onToggle={toggleChannel}
-                    onFieldChange={updateChannelField}
-                    onTest={handleTest}
-                  />
-                </Col>
-              ))}
-            </Row>
+          <Card
+            style={{ marginBottom: 16 }}
+            title={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span>渠道卡片墙</span>
+                <Tag>{channels.length} 个渠道</Tag>
+                <Segmented
+                  size="small"
+                  value={sortMode}
+                  onChange={(v) => setSortMode(v as SortMode)}
+                  options={[
+                    { label: '分类排序', value: 'category' },
+                    { label: '自定义', value: 'custom' },
+                  ]}
+                />
+              </div>
+            }
+          >
+            {sortMode === 'category' ? (
+              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                {(Object.keys(groupedChannels) as Pricing[])
+                  .filter((p) => groupedChannels[p].length > 0)
+                  .map((pricing) => (
+                    <div key={pricing}>
+                      <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Tag color={pricingMeta[pricing].color}>
+                          {pricingMeta[pricing].label}
+                        </Tag>
+                        <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                          {channelCounts[pricing]} 个渠道
+                        </span>
+                      </div>
+                      <Row gutter={[12, 12]}>
+                        {groupedChannels[pricing].map((ch) => (
+                          <Col span={12} key={ch.key}>
+                            <ChannelCard
+                              channel={ch}
+                              config={config}
+                              testing={testingChannel === ch.key}
+                              anyTesting={testingChannel !== null}
+                              onToggle={toggleChannel}
+                              onFieldChange={updateChannelField}
+                              onTest={handleTest}
+                            />
+                          </Col>
+                        ))}
+                      </Row>
+                    </div>
+                  ))}
+              </Space>
+            ) : (
+              <Row gutter={[12, 12]}>
+                {orderedChannels.map((ch) => (
+                  <Col span={12} key={ch.key}>
+                    <ChannelCard
+                      channel={ch}
+                      config={config}
+                      testing={testingChannel === ch.key}
+                      anyTesting={testingChannel !== null}
+                      onToggle={toggleChannel}
+                      onFieldChange={updateChannelField}
+                      onTest={handleTest}
+                    />
+                  </Col>
+                ))}
+              </Row>
+            )}
           </Card>
 
           {/* 通道顺序拖拽排序 */}

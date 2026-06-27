@@ -2,7 +2,8 @@
 
 API 文档：https://developer.work.weixin.qq.com/document/path/91770
 - 端点：POST {webhook_url}
-- 参数：msgtype=text, content
+- 参数：msgtype=markdown, markdown.content
+- markdown 类型支持加粗/链接/列表/字体颜色，可读性优于 text
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from xianyu_hunter.modules.notifier.templates import render
 
 
 class WeComNotifier(BaseNotifier):
-    """企业微信机器人推送"""
+    """企业微信机器人推送（markdown 格式）"""
 
     name = "wecom"
 
@@ -27,14 +28,14 @@ class WeComNotifier(BaseNotifier):
         if not self.webhook_url:
             raise ValueError("企业微信 webhook_url 未配置（keyring 缺失或为空）")
         title, body = render(event)
-        # 企业微信 text 消息：content 单段文本
-        content = f"{title}\n\n{body}"
+        # 标题加粗，body 本身已是 markdown（render 输出 ###/**/- 等语法）
+        content = f"**{title}**\n\n{body}"
         async with aiohttp.ClientSession(timeout=self._client_timeout()) as session:
             async with session.post(
                 self.webhook_url,
                 json={
-                    "msgtype": "text",
-                    "text": {"content": content},
+                    "msgtype": "markdown",
+                    "markdown": {"content": content},
                 },
             ) as resp:
                 text = await resp.text()

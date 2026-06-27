@@ -38,6 +38,11 @@ class Task:
     # 存储为字符串列表，搜索时映射为 URL 查询参数
     search_filters: list[str] = field(default_factory=list)
     cron: str = "*/1 * * * *"
+    # 调度模式开关：True 时按 cron 表达式调度，False 时按 interval_seconds 固定间隔
+    # 持久化到 DB，避免之前 TaskConfig.use_cron 与 Task.cron 分裂脑导致 cron 永远不生效
+    use_cron: bool = False
+    # 固定间隔调度模式下的循环间隔（秒），仅 use_cron=False 时生效
+    interval_seconds: float = 60.0
     mode: TaskMode = TaskMode.CONFIRM
     notifier_channels: list[str] = field(default_factory=lambda: ["serverchan"])
     ai_prompt: str | None = None

@@ -238,7 +238,8 @@ class LoginOrchestrator:
 
         # 设置续期失败回调：标记 Cookie 层失效
         def on_renew_fail():
-            self._cookie_rotator.invalidate_layer(CookieLayer.SESSION)
+            # manual=False：系统失效可被 /cookies/layers 自动同步恢复（cookie 实际有效时）
+            self._cookie_rotator.invalidate_layer(CookieLayer.SESSION, manual=False)
             logger.warning("Token 续期失败，session 层已标记失效")
 
         self._token_renewer.set_renew_fail_callback(on_renew_fail)
@@ -260,6 +261,7 @@ class LoginOrchestrator:
         try:
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
             store = get_cookie_store()
+            store.invalidate_cache()
             data = store._read_json()
             if not data or not data.get("cookies"):
                 return None
@@ -486,6 +488,10 @@ def sync_cookie_layers_from_json() -> bool:
         import time as _time
         from xianyu_hunter.web.services.cookie_store import get_cookie_store
         store = get_cookie_store()
+        # 必须先清除缓存再读取：浏览器登录子进程是独立 Python 进程，
+        # 写入 cookies.json 后只更新子进程自己的缓存，主进程的 30 秒 TTL 缓存仍是旧数据。
+        # 不清除缓存会读到旧的空数据/失效数据，导致层状态无法及时更新
+        store.invalidate_cache()
         data = store._read_json()
         if not data or not data.get("cookies"):
             return False

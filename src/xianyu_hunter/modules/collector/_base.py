@@ -10,6 +10,7 @@ import time
 
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.infra.browser import BrowserManager
+from xianyu_hunter.infra.lru import LRUDict
 from xianyu_hunter.infra.selectors import SelectorRepo
 from xianyu_hunter.modules.anti_detect import AntiDetect
 
@@ -37,10 +38,12 @@ class CollectorBase:
         # 卖家昵称缓存：seller_id -> nick
         # 搜索 API 响应中可能包含昵称，但 ItemSummary 领域模型不存储此字段，
         # 这里暂存供 live_search 组装 seller 数据时使用
-        self._seller_nicks: dict[str, str] = {}
+        # LRUDict 防止长跑进程累积过多卖家昵称，未命中时回退到 ItemSummary 字段
+        self._seller_nicks: LRUDict[str, str] = LRUDict(maxsize=2000)
         # 卖家画像降级缓存：seller_id -> SellerProfile
         # 避免同一卖家的多个商品重复计算降级结果（提升性能）
-        self._seller_profile_cache: dict[str, SellerProfile] = {}
+        # LRU 驱逐后会重新执行 seller_profile_fallback，性能损失但无正确性问题
+        self._seller_profile_cache: LRUDict[str, SellerProfile] = LRUDict(maxsize=2000)
         # _m_h5_tk 上次刷新时间戳（monotonic），避免每次搜索都刷新
         # token TTL=1h，45 分钟刷新一次留 15 分钟安全余量
         self._last_m5tk_refresh: float = 0.0

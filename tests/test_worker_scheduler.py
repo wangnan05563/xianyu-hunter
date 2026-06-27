@@ -481,3 +481,261 @@ async def test_scheduler_unregister_running_raises() -> None:
     with pytest.raises(RuntimeError, match="仍在运行"):
         await sch.unregister("t1")
     await sch.stop("t1")
+
+
+# ============== 评分达标→自动抢单 多场景集成测试 ==============
+#
+# 覆盖 worker.run_once() 内「评估→抢单门槛检查→落单」完整链路
+# 修复回归：container.py 修复前 Evaluator 用固定 thresholds 划分 risk，
+# 导致 score=77、auto_buy_score=75 时 risk=MEDIUM（按 80 划分）→ 不抢单
+
+
+class ScoreableFakeEvaluator:
+    """可精确控制 score 与 risk 的 Evaluator 替身
+
+    FakeEvaluator 默认 score=85 risk=LOW，无法覆盖边界场景。
+    本类允许测试用例独立设置 score 和 risk_level，验证 worker 的抢单门槛判断。
+    """
+
+    def __init__(self, score: int, risk: RiskLevel):
+        self.score = score
+        self.risk = risk
+
+    def evaluate(self, item: ItemDetail, seller: SellerProfile) -> EvalResult:
+        return EvalResult(
+            score=self.score,
+            risk_level=self.risk,
+            dimension_scores={"professional": self.score},
+        )
+
+
+def _build_worker_with_score(
+    score: int,
+    risk: RiskLevel,
+    mode: TaskMode = TaskMode.AUTO,
+    buyer: FakeBuyer | None = None,
+    cooldown_after_buy: float = 0.0,
+) -> TaskWorker:
+    """构造指定 score/risk 的 worker，便于多场景测试"""
+    items = [make_item(0)]
+    details = {"i0": make_detail(0)}
+    sellers = {"s0": make_seller(0)}
+    collector = FakeCollector(items, details, sellers)
+    dedup = FakeDedup()
+    price = FakePriceStrategy(allow=True)
+    evaluator = ScoreableFakeEvaluator(score=score, risk=risk)
+    task = make_task(mode=mode)
+    config = TaskConfig(
+        interval_seconds=0.1,
+        cooldown_after_buy=cooldown_after_buy,
+        stop_on_first_buy=False,
+    )
+    return TaskWorker(
+        task=task,
+        collector=collector,
+        dedup=dedup,
+        price_strategy=price,
+        evaluator=evaluator,
+        buyer=buyer,
+        config=config,
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_triggered_when_score_meets_threshold() -> None:
+    """场景1：AUTO 模式 + score=80(=auto_buy_score) + LOW → 抢单成功
+
+    这是用户问题的核心场景：评分达标且 LOW 风险时应触发抢单。
+    """
+    from xianyu_hunter.infra.yaml_config import get_config
+
+    auto_buy_score = get_config().eval.auto_buy_score
+    buyer = FakeBuyer(outcome=BuyOutcome.SUCCESS)
+    worker = _build_worker_with_score(
+        score=auto_buy_score,
+        risk=RiskLevel.LOW,
+        mode=TaskMode.AUTO,
+        buyer=buyer,
+    )
+    result = await worker.run_once()
+    assert result.stats.bought == 1, f"score={auto_buy_score}+LOW+AUTO 应抢单"
+    assert len(buyer.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_skipped_when_score_below_threshold() -> None:
+    """场景2：AUTO 模式 + score=auto_buy_score-1 + MEDIUM → 不抢单
+
+    边界条件：恰好低于抢单门槛 1 分。
+    """
+    from xianyu_hunter.infra.yaml_config import get_config
+
+    auto_buy_score = get_config().eval.auto_buy_score
+    buyer = FakeBuyer(outcome=BuyOutcome.SUCCESS)
+    worker = _build_worker_with_score(
+        score=auto_buy_score - 1,
+        risk=RiskLevel.MEDIUM,
+        mode=TaskMode.AUTO,
+        buyer=buyer,
+    )
+    result = await worker.run_once()
+    assert result.stats.bought == 0, f"score={auto_buy_score - 1} 不应抢单"
+    assert len(buyer.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_skipped_in_confirm_mode_even_if_score_high() -> None:
+    """场景3：CONFIRM 模式 + score=95 + LOW → 不抢单（默认模式仅推送）
+
+    TaskMode 默认 CONFIRM，这是高频失败原因：评分达标但模式不对。
+    """
+    buyer = FakeBuyer(outcome=BuyOutcome.SUCCESS)
+    worker = _build_worker_with_score(
+        score=95,
+        risk=RiskLevel.LOW,
+        mode=TaskMode.CONFIRM,
+        buyer=buyer,
+    )
+    result = await worker.run_once()
+    assert result.stats.bought == 0, "CONFIRM 模式不应自动抢单"
+    assert len(buyer.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_skipped_in_notify_only_mode() -> None:
+    """场景4：NOTIFY_ONLY 模式 + score=95 + LOW → 不抢单"""
+    buyer = FakeBuyer(outcome=BuyOutcome.SUCCESS)
+    worker = _build_worker_with_score(
+        score=95,
+        risk=RiskLevel.LOW,
+        mode=TaskMode.NOTIFY_ONLY,
+        buyer=buyer,
+    )
+    result = await worker.run_once()
+    assert result.stats.bought == 0, "NOTIFY_ONLY 模式不应抢单"
+    assert len(buyer.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_skipped_when_buyer_not_injected() -> None:
+    """场景5：AUTO 模式 + score 达标 + LOW + buyer=None → 不抢单
+
+    模拟 with_browser=False 场景：Web 进程不启动浏览器，container.buyer=None。
+    worker 应跳过落单而非抛 AttributeError。
+    """
+    worker = _build_worker_with_score(
+        score=95,
+        risk=RiskLevel.LOW,
+        mode=TaskMode.AUTO,
+        buyer=None,
+    )
+    result = await worker.run_once()
+    assert result.stats.bought == 0, "buyer 未注入时不应抢单"
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_skipped_during_cooldown() -> None:
+    """场景6：AUTO 模式 + score 达标 + LOW + 冷却中 → 不抢单
+
+    冷却期内即使评分达标也不重复抢单。
+    """
+    buyer = FakeBuyer(outcome=BuyOutcome.SUCCESS)
+    # cooldown_after_buy=3600 模拟刚抢单后的冷却状态
+    worker = _build_worker_with_score(
+        score=95,
+        risk=RiskLevel.LOW,
+        mode=TaskMode.AUTO,
+        buyer=buyer,
+        cooldown_after_buy=3600.0,
+    )
+    # 手动设置 _last_buy_at 模拟刚抢单
+    import time
+    worker._last_buy_at = time.monotonic()
+    result = await worker.run_once()
+    assert result.stats.bought == 0, "冷却期内不应抢单"
+    assert len(buyer.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_skipped_when_high_risk() -> None:
+    """场景7：AUTO 模式 + score=95 + HIGH risk → 不抢单
+
+    风险等级非 LOW 时即使分数达标也不抢单（should_auto_buy 要求 LOW）。
+    """
+    buyer = FakeBuyer(outcome=BuyOutcome.SUCCESS)
+    worker = _build_worker_with_score(
+        score=95,
+        risk=RiskLevel.HIGH,
+        mode=TaskMode.AUTO,
+        buyer=buyer,
+    )
+    result = await worker.run_once()
+    assert result.stats.bought == 0, "HIGH 风险不应抢单"
+    assert len(buyer.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_skipped_when_extreme_risk() -> None:
+    """场景8：AUTO 模式 + score=95 + EXTREME risk → 不抢单（一票否决）"""
+    buyer = FakeBuyer(outcome=BuyOutcome.SUCCESS)
+    worker = _build_worker_with_score(
+        score=95,
+        risk=RiskLevel.EXTREME,
+        mode=TaskMode.AUTO,
+        buyer=buyer,
+    )
+    result = await worker.run_once()
+    assert result.stats.bought == 0, "EXTREME 风险不应抢单"
+    assert len(buyer.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_auto_buy_high_score_above_threshold() -> None:
+    """场景9：AUTO 模式 + score=100(满分) + LOW → 抢单成功"""
+    buyer = FakeBuyer(outcome=BuyOutcome.SUCCESS)
+    worker = _build_worker_with_score(
+        score=100,
+        risk=RiskLevel.LOW,
+        mode=TaskMode.AUTO,
+        buyer=buyer,
+    )
+    result = await worker.run_once()
+    assert result.stats.bought == 1, "满分+LOW+AUTO 应抢单"
+    assert len(buyer.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_real_evaluator_score_risk_consistency_in_worker_flow() -> None:
+    """场景10：端到端集成——真实 Evaluator + 真实配置，验证 score↔risk 一致性
+
+    回归 container.py 修复：确保 Evaluator 不带覆盖参数时，
+    _score_to_risk 与 should_auto_buy 使用同一份 auto_buy_score。
+    """
+    from xianyu_hunter.infra.yaml_config import get_config
+    from xianyu_hunter.modules.evaluator import Evaluator
+
+    ev = Evaluator()
+    # 模拟 evaluate() 内部赋值 self.thresholds 的过程
+    ev.thresholds = ev._get_thresholds()
+    ev.weights = ev._get_weights()
+    ev.professional_keywords = ev._get_keywords()
+
+    auto_buy_score = ev.thresholds.auto_buy_score
+    config_auto_buy = get_config().eval.auto_buy_score
+    # 关键断言：evaluator 用的阈值 == worker 用的阈值
+    assert auto_buy_score == config_auto_buy, (
+        f"evaluator.thresholds.auto_buy_score({auto_buy_score}) "
+        f"必须等于 config.eval.auto_buy_score({config_auto_buy})"
+    )
+
+    # 边界1：刚好达标
+    risk_at = ev._score_to_risk(auto_buy_score)
+    assert risk_at == RiskLevel.LOW
+    result_at = EvalResult(score=auto_buy_score, risk_level=risk_at)
+    assert result_at.should_auto_buy(config_auto_buy) is True
+
+    # 边界2：刚好未达标
+    risk_below = ev._score_to_risk(auto_buy_score - 1)
+    assert risk_below != RiskLevel.LOW
+    result_below = EvalResult(score=auto_buy_score - 1, risk_level=risk_below)
+    assert result_below.should_auto_buy(config_auto_buy) is False

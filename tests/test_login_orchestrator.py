@@ -347,7 +347,11 @@ class TestSessionLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_session_sets_renew_fail_callback(self):
-        """start_session 应设置 renew_fail_callback 触发 session 层失效"""
+        """start_session 应设置 renew_fail_callback 触发 session 层失效
+
+        manual=False：系统失效可被 /cookies/layers 自动同步恢复（cookie 实际有效时），
+        与手动失效（manual=True）区分，避免 cookie_checker 覆盖手动失效标记。
+        """
         orch = LoginOrchestrator()
 
         with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
@@ -358,7 +362,7 @@ class TestSessionLifecycle:
                 callback = mock_set.call_args[0][0]
                 with patch.object(orch._cookie_rotator, "invalidate_layer") as mock_inv:
                     callback()
-                    mock_inv.assert_called_once_with(CookieLayer.SESSION)
+                    mock_inv.assert_called_once_with(CookieLayer.SESSION, manual=False)
 
     @pytest.mark.asyncio
     async def test_start_session_idempotent(self):

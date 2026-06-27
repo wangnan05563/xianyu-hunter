@@ -56,6 +56,10 @@ export default function TaskEditor() {
     search_filters: [],
   })
   const [cron, setCron] = useState('*/5 * * * *')
+  // 调度模式：false=固定间隔（interval_seconds），true=Cron 表达式
+  // 与后端 Task.use_cron 字段对齐，修复之前前端配 cron 但 use_cron 恒 False 的断层
+  const [useCron, setUseCron] = useState(false)
+  const [intervalSeconds, setIntervalSeconds] = useState(60)
 
   // 草稿自动保存/恢复（迁移到统一 storage 工具，v2 格式与旧版不兼容，旧草稿自动失效）
   const DRAFT_KEY = 'xh.task-draft.v2'
@@ -66,9 +70,9 @@ export default function TaskEditor() {
   useEffect(() => {
     if (isEdit) return
     // storage.get 内部处理 JSON 解析和错误，validator 确保数据结构正确
-    const draft = storage.get<{ formData: TaskCreateBody; cron: string } | null>(
+    const draft = storage.get<{ formData: TaskCreateBody; cron: string; useCron: boolean; intervalSeconds: number } | null>(
       DRAFT_KEY, null,
-      (v): v is { formData: TaskCreateBody; cron: string } =>
+      (v): v is { formData: TaskCreateBody; cron: string; useCron: boolean; intervalSeconds: number } =>
         v !== null && typeof v === 'object' && 'formData' in v && 'cron' in v,
     )
     if (!draft) return
@@ -76,6 +80,8 @@ export default function TaskEditor() {
     if (draft.formData?.keyword && !prefillKeyword) {
       setFormData(draft.formData)
       setCron(draft.cron || '*/5 * * * *')
+      setUseCron(draft.useCron ?? false)
+      setIntervalSeconds(draft.intervalSeconds ?? 60)
       setDraftRestored(true)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -85,10 +91,10 @@ export default function TaskEditor() {
     if (isEdit) return
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => {
-      storage.set(DRAFT_KEY, { formData, cron })
+      storage.set(DRAFT_KEY, { formData, cron, useCron, intervalSeconds })
     }, 500)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
-  }, [formData, cron, isEdit])
+  }, [formData, cron, useCron, intervalSeconds, isEdit])
 
   const clearDraft = () => {
     storage.remove(DRAFT_KEY)
@@ -125,6 +131,11 @@ export default function TaskEditor() {
           }
           setFormData(data)
           setCron(task.cron || '*/5 * * * *')
+          // 兼容旧任务：use_cron / interval_seconds 可能未持久化，回退默认值
+          setUseCron(Boolean(task.use_cron))
+          setIntervalSeconds(
+            typeof task.interval_seconds === 'number' ? task.interval_seconds : 60
+          )
         })
         .catch((err) => {
           console.error('加载任务失败:', err)
@@ -162,10 +173,13 @@ export default function TaskEditor() {
     }
     setLoading(true)
     try {
-      const body: TaskCreateBody & { cron?: string } = {
+      // 调度配置直接放入 TaskCreateBody（types.ts 已声明），不再用交集类型绕过
+      const body: TaskCreateBody = {
         ...formData,
         name: formData.name || formData.keyword,
         cron,
+        use_cron: useCron,
+        interval_seconds: intervalSeconds,
       }
       if (isEdit) {
         await taskApi.update(id!, body)
@@ -376,9 +390,32 @@ export default function TaskEditor() {
       {current === 2 && (
         <Card title="Step 3 · 调度与确认">
           <Form layout="vertical">
-            <Form.Item label="Cron 表达式（可视化编辑器）">
-              <CronEditor value={cron} onChange={setCron} />
+            <Form.Item label="调度模式" tooltip="固定间隔：每 N 秒执行一次；Cron：按表达式定时执行（如每天 9:00）">
+              <Radio.Group value={useCron} onChange={(e) => setUseCron(e.target.value)}>
+                <Radio.Button value={false}>⏱ 固定间隔</Radio.Button>
+                <Radio.Button value={true}>📅 Cron 表达式</Radio.Button>
+              </Radio.Group>
             </Form.Item>
+
+            {!useCron ? (
+              <Form.Item
+                label="执行间隔（秒）"
+                tooltip="过短易触发反爬，过长可能错过抢单窗口。建议 60-300 秒"
+              >
+                <InputNumber
+                  min={30}
+                  max={3600}
+                  value={intervalSeconds}
+                  onChange={(v) => setIntervalSeconds(v ?? 60)}
+                  addonAfter="秒"
+                  style={{ width: 200 }}
+                />
+              </Form.Item>
+            ) : (
+              <Form.Item label="Cron 表达式（可视化编辑器）" tooltip="启用 Cron 模式后按表达式调度，忽略固定间隔">
+                <CronEditor value={cron} onChange={setCron} />
+              </Form.Item>
+            )}
 
             {/* 配置预览 */}
             <Card size="small" style={{ background: 'var(--xh-bg-spotlight)', marginTop: 16 }} title="📋 配置预览">
@@ -394,6 +431,8 @@ export default function TaskEditor() {
     region: formData.region,
     exclude_words: formData.exclude_words,
     search_filters: formData.search_filters,
+    use_cron: useCron,
+    interval_seconds: intervalSeconds,
     cron,
   },
   null,

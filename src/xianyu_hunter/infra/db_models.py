@@ -56,6 +56,10 @@ class TaskRow(Base):
     # 闲鱼筛选标签（JSON 数组，如 ["personal_idle", "free_shipping"]）
     search_filters: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     cron: Mapped[str] = mapped_column(String, nullable=False, default="*/1 * * * *")
+    # 调度模式开关：True=cron 表达式，False=interval_seconds 固定间隔
+    use_cron: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 固定间隔调度模式下的循环间隔（秒），仅 use_cron=0 时生效
+    interval_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=60.0)
     mode: Mapped[str] = mapped_column(String, nullable=False, default="confirm")
     notifier_channels: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     ai_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -365,6 +369,15 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     # 增量迁移：为已有表添加 ORM 中新增但数据库中缺失的列
     _migrate_add_column(engine, "events", "type", "TEXT")
     _migrate_add_column(engine, "tasks", "max_publish_days", "INTEGER")
+    # 调度模式字段：修复前端 cron 配置断层（之前 use_cron 始终为 False，所有任务走 60s interval）
+    _migrate_add_column(engine, "tasks", "use_cron", "INTEGER")
+    _migrate_add_column(engine, "tasks", "interval_seconds", "REAL")
+    # 回填 NULL 行：ALTER TABLE 对已有行填 NULL，读取端 float(None) 会抛 TypeError 导致 scheduler 启动崩溃
+    # 必须在迁移后立即 UPDATE，保证 DB 数据干净
+    with engine.connect() as conn:
+        conn.execute(sa_text("UPDATE tasks SET use_cron=0 WHERE use_cron IS NULL"))
+        conn.execute(sa_text("UPDATE tasks SET interval_seconds=60.0 WHERE interval_seconds IS NULL"))
+        conn.commit()
     # 增量迁移：items 表新增销售状态字段（buyer/collector 检测写入）
     _migrate_add_column(engine, "items", "is_sold", "INTEGER")
     _migrate_add_column(engine, "items", "sold_detected_at", "TEXT")

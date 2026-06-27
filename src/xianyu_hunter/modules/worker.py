@@ -174,6 +174,17 @@ class TaskWorker:
         try:
             # 1. 搜索（传递任务配置的筛选标签 + 全局搜索参数配置）
             logger.info(f"[Task {self.task.id}] 搜索「{self.task.keyword}」")
+            try:
+                from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_browser
+
+                await inject_cookie_store_to_browser(
+                    getattr(self.collector, "browser", None),
+                    "后台任务搜索前 Cookie 同步",
+                    collector=self.collector,
+                    force_refresh_m5tk=False,
+                )
+            except Exception as e:
+                logger.debug(f"[Task {self.task.id}] 搜索前 Cookie 同步失败: {e}")
             # 合并任务级 search_filters 和全局 search_filter_tags 配置
             # 任务级优先（用户创建任务时指定的筛选），全局配置作为补充
             task_filters = getattr(self.task, 'search_filters', None) or []
@@ -217,10 +228,12 @@ class TaskWorker:
                 # 主动失效 orchestrator 的 identity 层，让健康检查也能反映真实状态
                 # 为什么需要：cookie 本地仍存在但服务端已注销，
                 # 健康检查器需要感知此状态才能给出正确的 RELOGIN 建议
+                # 为什么 manual=False：系统检测到的失效应能被 cookie_checker
+                # 在 cookie 实际恢复有效时自动同步恢复，避免状态永久锁定
                 try:
                     from xianyu_hunter.modules.login_orchestrator import get_orchestrator
                     from xianyu_hunter.modules.cookie_rotator import CookieLayer
-                    get_orchestrator().cookie_rotator.invalidate_layer(CookieLayer.IDENTITY)
+                    get_orchestrator().cookie_rotator.invalidate_layer(CookieLayer.IDENTITY, manual=False)
                 except Exception:
                     pass
                 stats.finished_at = datetime.now(timezone.utc)
@@ -309,7 +322,7 @@ class TaskWorker:
                                 want_cnt=getattr(detail, "want_cnt", None),
                                 view_cnt=getattr(detail, "view_cnt", None),
                                 is_sold=getattr(summary, "is_sold", False),
-                                brand=getattr(detail, "brand", None) or getattr(summary, "brand", None),
+                                brand=getattr(detail, "brand", None),
                             )
                         except Exception as e:
                             logger.warning(
@@ -441,6 +454,11 @@ class TaskWorker:
 
                         # 6. 落单
                         if not self._should_buy():
+                            # 为什么加日志：非 AUTO 模式跳过抢单是高频原因，
+                            # 缺少日志时用户无法定位"评分达标却未抢单"的根因
+                            logger.info(
+                                f"[Task {self.task.id}] 任务模式 {self.task.mode.value} 非自动抢单(AUTO)，跳过 {detail.id}"
+                            )
                             continue
                         # 区分推送门槛与抢单门槛：
                         # - pass_score(60) 用于推送通知（is_passed 已在上方检查）

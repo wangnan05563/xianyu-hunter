@@ -7,6 +7,10 @@ export interface LoginStatus {
   status: 'idle' | 'running' | 'qr_ready' | 'success' | 'cancelled' | 'error' | 'timeout'
   message: string
   elapsed: number
+  phase?: 'pending' | 'starting' | 'opening' | 'waiting' | 'already_logged' | 'running'
+  child_elapsed?: number
+  wait_elapsed?: number
+  timings?: Record<string, number>
   qr_png_b64?: string
 }
 

@@ -679,3 +679,118 @@ class TestCookieCheckerFix:
 
         assert data["ok"] is True
         assert data["cookie_valid"] is True, "旧版数据无 expires 字段应视为有效"
+
+
+class TestManualInvalidateSemantic:
+    """手动失效与系统失效的语义区分测试
+
+    验证修复：
+    - 用户通过 /cookies/invalidate 主动失效（manual=True）：/cookies/layers 自动同步应跳过
+    - 系统失效（worker.py/cookie_checker，manual=False）：/cookies/layers 自动同步应能恢复
+    - /cookies/update 应能恢复用户主动失效的层（用户更新 cookie 后失效状态应清除）
+    """
+
+    def setup_method(self):
+        self._backup = _backup_json()
+        _reset_orchestrator()
+
+    def teardown_method(self):
+        _restore_json(self._backup)
+        _reset_orchestrator()
+
+    def test_system_invalidate_can_be_recovered(self, monkeypatch):
+        """系统失效（manual=False）后 /cookies/layers 应能自动同步恢复"""
+        mock_data = _make_mock_cookie_data(expires_offset=3600)
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        # 第一次调用让层状态被同步为 valid=True
+        layers = client.get("/api/anticrawl/cookies/layers", cookies=_AUTH_COOKIE).json()["layers"]
+        assert layers["identity"]["valid"] is True
+
+        # 模拟系统失效（worker.py 检测到 RGV587 调用 invalidate_layer(manual=False)）
+        orch = get_orchestrator()
+        from xianyu_hunter.modules.cookie_rotator import CookieLayer
+        orch.cookie_rotator.invalidate_layer(CookieLayer.IDENTITY, manual=False)
+
+        # 系统失效后，层状态应被 /cookies/layers 自动同步恢复
+        layers_after = client.get("/api/anticrawl/cookies/layers", cookies=_AUTH_COOKIE).json()["layers"]
+        assert layers_after["identity"]["valid"] is True, "系统失效后 cookie 实际有效时应自动恢复"
+        assert layers_after["session"]["valid"] is True, "session 层也应随 identity 恢复"
+
+    def test_manual_invalidate_not_overridden(self, monkeypatch):
+        """用户主动失效（manual=True）后 /cookies/layers 自动同步应跳过"""
+        mock_data = _make_mock_cookie_data(expires_offset=3600)
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        # 第一次调用让层状态被同步为 valid=True
+        layers = client.get("/api/anticrawl/cookies/layers", cookies=_AUTH_COOKIE).json()["layers"]
+        assert layers["identity"]["valid"] is True
+
+        # 用户通过端点主动失效（manual=True）
+        resp = client.post(
+            "/api/anticrawl/cookies/invalidate",
+            json={"layer": "identity"},
+            cookies=_AUTH_COOKIE,
+        )
+        assert resp.json()["ok"] is True
+
+        # /cookies/layers 自动同步应跳过 manual_invalidate=True 的层
+        layers_after = client.get("/api/anticrawl/cookies/layers", cookies=_AUTH_COOKIE).json()["layers"]
+        assert layers_after["identity"]["valid"] is False, "用户主动失效不应被自动同步覆盖"
+        assert layers_after["session"]["valid"] is False, "级联失效的 session 也不应被覆盖"
+
+    def test_update_cookies_recovers_manual_invalidate(self, monkeypatch):
+        """/cookies/update 应能恢复用户主动失效的层
+
+        用户主动失效后重新登录/更新 Cookie，sync_state_from_cookies 创建新 LayerState
+        会重置 manual_invalidate=False，恢复层状态。
+        """
+        mock_data = _make_mock_cookie_data(expires_offset=3600)
+        from xianyu_hunter.web.services import cookie_store as cs_module
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+
+        client.post(
+            "/api/anticrawl/initialize",
+            json={"use_cdp": False},
+            cookies=_AUTH_COOKIE,
+        )
+
+        # 用户主动失效 identity
+        client.post(
+            "/api/anticrawl/cookies/invalidate",
+            json={"layer": "identity"},
+            cookies=_AUTH_COOKIE,
+        )
+        layers = client.get("/api/anticrawl/cookies/layers", cookies=_AUTH_COOKIE).json()["layers"]
+        assert layers["identity"]["valid"] is False
+
+        # 调用 /cookies/update（传入符合真实格式的 cookie 触发 sync_state_from_cookies）
+        cookies = {
+            "unb": "2209384756290",
+            "cookie2": "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d",
+        }
+        resp = client.post(
+            "/api/anticrawl/cookies/update",
+            json={"cookies": cookies},
+            cookies=_AUTH_COOKIE,
+        )
+        assert resp.json()["ok"] is True
+
+        # update 后层状态应被恢复（sync_state_from_cookies 重置 manual_invalidate）
+        layers_after = client.get("/api/anticrawl/cookies/layers", cookies=_AUTH_COOKIE).json()["layers"]
+        assert layers_after["identity"]["valid"] is True, "update 后应恢复用户主动失效的层"
+

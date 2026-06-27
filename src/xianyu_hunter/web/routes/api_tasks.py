@@ -30,6 +30,11 @@ class TaskCreate(BaseModel):
     # 可选值：personal_idle, verified, account_guarantee, free_shipping,
     #         super_shop, brand_new, strict_select, resale
     search_filters: list[str] = []
+    # 调度配置：修复前端 cron 配置断层（之前字段被 Pydantic 静默丢弃）
+    cron: str = "*/5 * * * *"
+    use_cron: bool = False
+    # interval_seconds 范围 30-3600s：过短易触发反爬，过长错过抢单窗口
+    interval_seconds: float = Field(60.0, ge=30.0, le=3600.0)
 
 
 class TaskUpdate(BaseModel):
@@ -44,6 +49,10 @@ class TaskUpdate(BaseModel):
     # 与 TaskCreate 对齐：允许编辑闲鱼筛选标签和排除词（JSON 序列化存入 DB）
     search_filters: list[str] | None = None
     exclude_words: list[str] | None = None
+    # 调度配置：允许编辑 cron / use_cron / interval_seconds
+    cron: str | None = None
+    use_cron: bool | None = None
+    interval_seconds: float | None = Field(None, ge=30.0, le=3600.0)
 
 
 @router.get("")
@@ -98,6 +107,10 @@ def create_task(
         "region": body.region,
         "exclude_words": json.dumps(body.exclude_words, ensure_ascii=False),
         "search_filters": json.dumps(body.search_filters, ensure_ascii=False),
+        # 持久化调度配置，scheduler 启动时从 DB 读取并注入 TaskConfig
+        "cron": body.cron,
+        "use_cron": 1 if body.use_cron else 0,
+        "interval_seconds": body.interval_seconds,
     }
     container.repo.upsert_task(task)
     return {"ok": True, "id": tid, "task": task}
@@ -134,6 +147,9 @@ def update_task(
         updates["search_filters"] = json.dumps(updates["search_filters"], ensure_ascii=False)
     if "exclude_words" in updates:
         updates["exclude_words"] = json.dumps(updates["exclude_words"], ensure_ascii=False)
+    # use_cron 在 DB 中是 INTEGER（0/1），Pydantic 收到的是 bool，需转换
+    if "use_cron" in updates:
+        updates["use_cron"] = 1 if updates["use_cron"] else 0
     t.update(updates)
     container.repo.upsert_task(t)
     return {"ok": True, "task": t}
@@ -210,15 +226,15 @@ def get_task_runs(
 
 
 @router.post("/{task_id}/control")
-def control_task(
+async def control_task(
     task_id: str,
     action: str = "pause",
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """控制任务：pause / resume / stop / restart
 
-    注意：Web 进程无法直接控制 run 进程内的 scheduler 内存对象。
-    这里只改 DB 中的 status 字段，run 进程下次重启会读取新状态。
+    XH_WITH_SCHEDULER=1 模式下直接操作 scheduler 内存对象实时生效；
+    纯 web 模式下仅改 DB（scheduler 未启动，需以 scheduler 模式重启才生效）。
     """
     t = container.repo.get_task(task_id)
     if not t:
@@ -228,11 +244,47 @@ def control_task(
         raise HTTPException(status_code=400, detail=f"未知 action: {action}")
     new_status = valid[action]
     container.repo.update_task_status(task_id, new_status)
+
+    # scheduler 模式下实时唤醒/暂停/停止内存对象，避免"必须重启才生效"痛点
+    # 纯 web 模式下 collector 为 None，跳过 scheduler 调用，仅 DB 写入已足够
+    scheduler_note = "状态已写入数据库"
+    if container.collector is not None:
+        try:
+            if action == "pause":
+                await container.scheduler.pause(task_id)
+                scheduler_note = "已暂停调度器中的任务"
+            elif action == "resume":
+                await container.scheduler.resume(task_id)
+                scheduler_note = "已恢复调度器中的任务"
+            elif action == "stop":
+                await container.scheduler.stop(task_id)
+                scheduler_note = "已停止调度器中的任务"
+            elif action == "restart":
+                # restart = stop + start，仅对已注册任务生效
+                # 未注册任务（新建后未重启服务）需重启服务才会被加载
+                # list_tasks 返回 Task 对象列表，需按 id 比较而非直接 in
+                # （Task 是 dataclass，in 会触发全字段 __eq__，字符串永不相等）
+                registered_ids = {t.id for t in container.scheduler.list_tasks()}
+                if task_id in registered_ids:
+                    is_running = container.scheduler.is_running(task_id)
+                    if is_running:
+                        await container.scheduler.stop(task_id)
+                    await container.scheduler.start(task_id)
+                    scheduler_note = "已重启调度器中的任务"
+                else:
+                    scheduler_note = "任务未注册到调度器，需重启服务加载"
+        except KeyError as e:
+            # 任务未注册到 scheduler：仅 DB 状态生效，不阻断请求
+            scheduler_note = f"调度器未注册该任务，仅 DB 状态已更新：{e}"
+        except Exception as e:  # noqa: BLE001 - 兜底防止 scheduler 异常导致 500
+            # scheduler 内部异常（如 loop 关闭、协程取消）：DB 状态已更新，不阻断
+            scheduler_note = f"调度器操作异常，仅 DB 状态已更新：{type(e).__name__}: {e}"
+
     return {
         "ok": True,
         "id": task_id,
         "status": new_status,
-        "note": "状态已写入数据库；如需立即生效请重启 run 调度器",
+        "note": scheduler_note,
     }
 
 
@@ -259,6 +311,12 @@ def batch_control_tasks(
     - 原因：用户选了 5 个任务，其中 1 个被别人删了，剩下 4 个必须还能成功
     - 失败原因存到 results[].reason，前端可下钻展示
     - 上限 200 个：避免前端"全选 1k 任务"瞬间打爆 DB
+
+    与单任务 control_task 的差异：
+    - 批量操作仅改 DB status，不同步 scheduler 内存对象
+    - 原因：批量调用 scheduler.pause/start 会串行 await N 次，N=200 时阻塞事件循环
+    - scheduler 模式下批量暂停的任务会在下一轮 run_once 检测 status 时退出循环
+    - 如需实时生效，前端应逐个调用单任务 control 端点
     """
     valid = {"pause": "paused", "resume": "running", "stop": "stopped", "restart": "running", "delete": "deleted"}
     if body.action not in valid:

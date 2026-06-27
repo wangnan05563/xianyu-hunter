@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import ctypes
 import ctypes.wintypes
@@ -520,10 +521,16 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
 
 
 @router.post("/import-from-browser")
-def import_from_browser(browser: str = "edge", auto_close: bool = False) -> JSONResponse:
+async def import_from_browser(browser: str = "edge", auto_close: bool = False) -> JSONResponse:
     """从系统已登录的浏览器中自动提取闲鱼/淘宝 Cookie 并注入到项目 browser-data"""
-    result = _do_import_from_browser(browser, auto_close)
+    result = await asyncio.to_thread(_do_import_from_browser, browser, auto_close)
     if result.get("ok"):
+        try:
+            from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+
+            await inject_cookie_store_to_worker_browser("浏览器离线导入")
+        except Exception as e:
+            logger.debug("浏览器离线导入后同步 Worker 浏览器失败: %s", e)
         return make_auth_response(result)
     return JSONResponse(content=result)
 
@@ -562,12 +569,18 @@ def open_browser_login() -> JSONResponse:
 
 
 @router.post("/import-from-browser/auto")
-def auto_import() -> JSONResponse:
+async def auto_import() -> JSONResponse:
     """自动尝试从 Edge 和 Chrome 导入 Cookie（优先 Edge，失败则尝试 Chrome）"""
     all_errors: list[str] = []
     for browser in ["edge", "chrome"]:
-        result = _do_import_from_browser(browser, auto_close=False)
+        result = await asyncio.to_thread(_do_import_from_browser, browser, False)
         if result.get("ok") and result.get("imported_count", 0) > 0:
+            try:
+                from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+
+                await inject_cookie_store_to_worker_browser("浏览器自动导入")
+            except Exception as e:
+                logger.debug("浏览器自动导入后同步 Worker 浏览器失败: %s", e)
             return make_auth_response(result)
         all_errors.extend(result.get("errors", []))
 

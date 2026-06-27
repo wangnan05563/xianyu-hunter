@@ -38,6 +38,8 @@ logger = logging.getLogger(__name__)
 _REPO = Path(__file__).resolve().parents[4]
 _BROWSER_LOGIN_SCRIPT = _REPO / "scripts" / "browser_login.py"
 _AUTH_HELPER_SCRIPT = _REPO / "scripts" / "auth_helper.py"
+_TERMINAL_STATUSES = {"success", "cancelled", "error", "timeout"}
+_LIVE_STATUSES = {"pending", "starting", "opening", "waiting", "already_logged", "running"}
 
 router = APIRouter(tags=["unified-login"])
 
@@ -53,6 +55,7 @@ _session: dict = {
     "pid": None,
     "qr_png_b64": None,    # QR 码 base64（qr_ready 时填充）
     "started_at": 0.0,
+    "cookies_injected": False,
 }
 _session_lock = threading.Lock()
 
@@ -72,6 +75,7 @@ def _reset_session() -> None:
             "pid": None,
             "qr_png_b64": None,
             "started_at": 0.0,
+            "cookies_injected": False,
         }
 
 
@@ -90,7 +94,7 @@ def _kill_proc(proc) -> None:
 
 
 def _trigger_userinfo_refresh() -> None:
-    """登录成功后触发用户信息刷新 + Cookie 注入到 Playwright 浏览器上下文"""
+    """登录成功后触发用户信息刷新和 Cookie 层状态同步。"""
     try:
         from xianyu_hunter.web.services.auth_manager import get_auth_manager
         get_auth_manager().trigger_refresh_userinfo_async()
@@ -105,40 +109,89 @@ def _trigger_userinfo_refresh() -> None:
     except Exception as e:
         logger.debug("登录后同步 Cookie 层状态失败: %s", e)
 
-    # 登录成功后把 Cookie 同步注入到后端 Playwright 浏览器上下文
-    # 否则 Playwright 内存中的 cookie 仍是旧的/空的，采集时会被闲鱼重定向到首页
+
+def _cookies_from_store_for_playwright() -> list[dict]:
+    """读取 CookieStore 最新 JSON，并转换成 Playwright add_cookies 入参。"""
     try:
-        from xianyu_hunter.web.services.cookie_store import get_cookie_store
-        from xianyu_hunter.web.deps import get_container
-        import asyncio
+        from xianyu_hunter.web.services.cookie_store import is_test_cookie
 
         store = get_cookie_store()
+        store.invalidate_cache()
         data = store._read_json()
         if not data or not data.get("cookies"):
-            return
+            return []
+
+        pw_cookies: list[dict] = []
+        for c in data["cookies"]:
+            name = str(c.get("name") or "")
+            value = str(c.get("value") or "")
+            if not name or not value:
+                continue
+            if is_test_cookie(name, value):
+                logger.warning("登录后注入：跳过测试 Cookie %s=%s", name, value)
+                continue
+            item = {
+                "name": name,
+                "value": value,
+                "domain": c.get("domain") or ".goofish.com",
+                "path": c.get("path") or "/",
+            }
+            expires = c.get("expires", -1)
+            if expires and expires > 0:
+                item["expires"] = expires
+            pw_cookies.append(item)
+        return pw_cookies
+    except Exception as e:
+        logger.debug("读取 CookieStore JSON 失败，无法注入 Playwright: %s", e)
+        return []
+
+
+async def _inject_cookies_to_worker_from_store() -> bool:
+    """把最新登录 Cookie 注入长期运行的 Worker 浏览器实例。"""
+    try:
+        from xianyu_hunter.web.deps import get_container
 
         container = get_container()
-        if not container.browser or not container.browser._context:
-            return
+        browser = getattr(container, "browser", None)
+        if not browser:
+            logger.warning("Worker 浏览器实例未初始化，跳过 Cookie 注入")
+            return False
 
-        pw_cookies = []
-        for c in data["cookies"]:
-            pw_cookies.append({
-                "name": c["name"],
-                "value": c["value"],
-                "domain": c.get("domain", ".goofish.com"),
-                "path": c.get("path", "/"),
-            })
+        pw_cookies = _cookies_from_store_for_playwright()
+        if not pw_cookies:
+            logger.warning("CookieStore 中没有可注入的 Cookie")
+            return False
 
-        if pw_cookies:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(
-                    container.browser._context.add_cookies(pw_cookies)
-                )
-                logger.info("已注入 %d 个 Cookie 到 Playwright 浏览器上下文", len(pw_cookies))
+        success = await browser.add_cookies(pw_cookies)
+        if success:
+            logger.info("已注入 %d 个 Cookie 到 Worker 浏览器上下文", len(pw_cookies))
+            try:
+                from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                sync_cookie_layers_from_json()
+            except Exception as e:
+                logger.debug("Cookie 注入后同步层状态失败: %s", e)
+        else:
+            logger.warning("Cookie 注入 Worker 浏览器后关键 Cookie 验证未通过")
+        return success
     except Exception as e:
         logger.debug("Cookie 注入 Playwright 上下文失败: %s", e)
+        return False
+
+
+async def _ensure_session_cookies_injected() -> None:
+    """让登录状态轮询等待 worker 浏览器真正拿到新 Cookie。"""
+    with _session_lock:
+        should_inject = (
+            _session.get("status") == "success"
+            and not _session.get("cookies_injected")
+        )
+    if not should_inject:
+        return
+
+    success = await _inject_cookies_to_worker_from_store()
+    if success:
+        with _session_lock:
+            _session["cookies_injected"] = True
 
 
 def _trigger_session_start() -> None:
@@ -168,6 +221,7 @@ def _verify_cookies(max_retries: int = 10, delay: float = 1.0) -> bool:
     """
     store = get_cookie_store()
     for attempt in range(max_retries):
+        store.invalidate_cache()
         if store.has_valid_cookies():
             logger.info("Cookie 验证成功 (attempt=%d)", attempt + 1)
             return True
@@ -217,6 +271,7 @@ def start_login(request: dict = Body(...)) -> JSONResponse:
         _session["status"] = "running"
         _session["message"] = "正在启动..."
         _session["started_at"] = time.time()
+        _session["cookies_injected"] = False
 
     if method == "browser":
         return _start_browser_login()
@@ -263,7 +318,7 @@ def _start_browser_login() -> JSONResponse:
         _session["proc"] = proc
         _session["pid"] = proc.pid
         _session["status"] = "running"
-        _session["message"] = "浏览器窗口已启动，请在窗口中完成登录"
+        _session["message"] = "正在启动浏览器窗口..."
 
     # 后台线程：等待子进程退出
     threading.Thread(
@@ -277,7 +332,7 @@ def _start_browser_login() -> JSONResponse:
         "ok": True,
         "method": "browser",
         "status": "running",
-        "message": "浏览器窗口已启动",
+        "message": "正在启动浏览器窗口...",
     })
 
 
@@ -464,7 +519,7 @@ def _background_wait(proc: subprocess.Popen, status_file: Path, method: str) -> 
 # GET /api/auth/login/status - 轮询登录状态
 # ============================================================
 @router.get("/login/status")
-def login_status() -> dict:
+async def login_status() -> dict:
     """轮询当前登录会话状态
 
     返回字段：
@@ -477,34 +532,62 @@ def login_status() -> dict:
     global _session
 
     with _session_lock:
-        # 检查子进程是否还活着（防止僵尸状态）
         proc = _session.get("proc")
-        if proc is not None and proc.poll() is not None:
-            # 子进程已退出但状态未更新（后台线程可能还没执行）
-            status_file = _session.get("status_file")
-            if status_file:
-                data = _read_status_file(status_file)
-                file_status = data.get("status") or data.get("state", "")
-                if file_status in ("success", "cancelled", "error", "timeout"):
-                    # 如果状态文件显示 success，验证 Cookie 是否已导出到 JSON
-                    if file_status == "success" and not _verify_cookies(max_retries=3, delay=0.5):
-                        file_status = "error"
-                        data["message"] = "登录似乎成功，但 Cookie 未持久化，请重试"
-                    _session["status"] = file_status
-                    _session["message"] = data.get("message", "")
-                    if file_status == "success":
-                        _trigger_userinfo_refresh()
-                        _trigger_session_start()
-
+        status_file = _session.get("status_file")
+        started_at = _session.get("started_at") or 0
+        session_status = _session["status"]
+        already_success = session_status == "success"
         result = {
             "method": _session["method"],
-            "status": _session["status"],
+            "status": session_status,
             "message": _session["message"],
-            "elapsed": round(time.time() - _session["started_at"], 1) if _session["started_at"] else 0,
+            "elapsed": round(time.time() - started_at, 1) if started_at else 0,
         }
 
-        if _session["status"] == "qr_ready":
+        if session_status == "qr_ready":
             result["qr_png_b64"] = _session.get("qr_png_b64")
+
+    data = _read_status_file(status_file)
+    file_status = data.get("status") or data.get("state") or ""
+    should_start_hooks = False
+
+    if file_status in _TERMINAL_STATUSES:
+        normalized_status = file_status
+        if normalized_status == "success" and not _verify_cookies(max_retries=3, delay=0.5):
+            normalized_status = "error"
+            data["message"] = "登录似乎成功，但 Cookie 未持久化，请重试"
+
+        with _session_lock:
+            _session["status"] = normalized_status
+            _session["message"] = data.get("message", "")
+            result.update({
+                "status": normalized_status,
+                "message": _session["message"],
+                "elapsed": round(time.time() - (_session.get("started_at") or 0), 1)
+                if _session.get("started_at") else 0,
+            })
+            should_start_hooks = normalized_status == "success" and not already_success
+    elif file_status in _LIVE_STATUSES and result["status"] not in _TERMINAL_STATUSES:
+        # 子进程运行中也会持续写 status_file。实时透传这些阶段，便于定位
+        # launch / goto / 等待用户登录分别耗时多少。
+        result["status"] = "running"
+        result["phase"] = file_status
+        result["message"] = data.get("message") or result["message"]
+
+    if data:
+        if data.get("elapsed") is not None:
+            result["child_elapsed"] = data.get("elapsed")
+        if data.get("wait_elapsed") is not None:
+            result["wait_elapsed"] = data.get("wait_elapsed")
+        if data.get("timings") is not None:
+            result["timings"] = data.get("timings")
+
+    if should_start_hooks:
+        _trigger_userinfo_refresh()
+        _trigger_session_start()
+
+    if result["status"] == "success":
+        await _ensure_session_cookies_injected()
 
     # 登录成功时设置 xh_token cookie
     if result["status"] == "success":

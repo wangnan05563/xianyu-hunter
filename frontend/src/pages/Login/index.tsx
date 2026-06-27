@@ -76,6 +76,36 @@ const parseCookieText = (text: string): Record<string, string> => {
   return result
 }
 
+const phaseLabel = (phase?: LoginStatus['phase']) => {
+  switch (phase) {
+    case 'pending': return '初始化'
+    case 'starting': return '启动浏览器'
+    case 'opening': return '打开闲鱼'
+    case 'waiting': return '等待登录'
+    case 'already_logged': return '验证已有登录'
+    case 'running': return '处理中'
+    default: return ''
+  }
+}
+
+const timingLabel: Record<string, string> = {
+  launch_context_sec: '启动浏览器',
+  new_page_sec: '新建页面',
+  goto_home_sec: '打开闲鱼',
+  initial_cookie_read_sec: '读取 Cookie',
+  verify_personal_sec: '验证登录',
+  storage_state_sec: '保存状态',
+  export_cookies_sec: '导出 Cookie',
+}
+
+const formatTimings = (timings?: Record<string, number>) => {
+  if (!timings) return ''
+  return Object.entries(timings)
+    .filter(([, value]) => Number.isFinite(value))
+    .map(([key, value]) => `${timingLabel[key] || key} ${Number(value).toFixed(1)}s`)
+    .join(' · ')
+}
+
 // 登录页面：独立于 MainLayout，提供多种登录方式
 export default function Login() {
   const navigate = useNavigate()
@@ -359,7 +389,13 @@ export default function Login() {
     try {
       const result = await authApi.startBrowserLogin()
       if (result.ok) {
-        message.info('浏览器窗口已启动，请在窗口中完成登录')
+        setLoginStatus({
+          method: 'browser',
+          status: 'running',
+          message: result.message || '正在启动浏览器窗口...',
+          elapsed: 0,
+        })
+        message.info(result.message || '正在启动浏览器窗口...')
         startPolling()
       } else {
         message.error(result.error || '启动失败')
@@ -372,7 +408,7 @@ export default function Login() {
   // 开始轮询登录状态
   const startPolling = () => {
     if (pollRef.current) clearInterval(pollRef.current)
-    const timer = setInterval(async () => {
+    const tick = async () => {
       try {
         const status = await authApi.getLoginStatus()
         setLoginStatus(status)
@@ -385,7 +421,9 @@ export default function Login() {
       } catch {
         // 轮询失败不中断，继续尝试
       }
-    }, 2000)
+    }
+    void tick()
+    const timer = setInterval(tick, 2000)
     setPollTimer(timer)
   }
 
@@ -419,6 +457,98 @@ export default function Login() {
   }
 
   const tabItems = [
+    {
+      key: 'browser-login',
+      label: (
+        <span style={{ fontWeight: 600 }}>
+          <GlobalOutlined /> 浏览器登录
+          <Tag color="orange" style={{ marginLeft: 6, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>推荐</Tag>
+        </span>
+      ),
+      children: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Alert
+            type="info"
+            showIcon
+            message="弹出浏览器窗口登录"
+            description="启动 Playwright 浏览器窗口，在窗口中手动登录闲鱼。适合浏览器导入失败或需要重新登录的场景。"
+          />
+
+          {!loginStatus || loginStatus.status === 'idle' ? (
+            <Button
+              type="primary"
+              size="large"
+              icon={<LoginOutlined />}
+              onClick={handleStartBrowserLogin}
+              style={{ background: '#FF6200', borderColor: '#FF6200', width: 'fit-content' }}
+            >
+              启动浏览器窗口登录
+            </Button>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* 登录进度 */}
+              <div style={{
+                padding: 16, borderRadius: 8,
+                background: loginStatus.status === 'success' ? '#f6ffed' : '#fffbe6',
+                border: `1px solid ${loginStatus.status === 'success' ? '#b7eb8f' : '#ffe58f'}`,
+              }}>
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {loginStatus.status === 'success' ? (
+                      <CheckCircleOutlined style={{ color: themeToken.colorSuccess, fontSize: 20 }} />
+                    ) : (
+                      <Spin size="small" />
+                    )}
+                    <Text strong>{loginStatus.message}</Text>
+                  </div>
+                  {loginStatus.elapsed > 0 && (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      已用时 {Math.floor(loginStatus.elapsed / 60)}分{Math.floor(loginStatus.elapsed % 60)}秒
+                    </Text>
+                  )}
+                  {(loginStatus.phase || loginStatus.child_elapsed != null) && (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {phaseLabel(loginStatus.phase) || '当前阶段'}
+                      {loginStatus.child_elapsed != null ? ` ${Number(loginStatus.child_elapsed).toFixed(1)}秒` : ''}
+                      {loginStatus.wait_elapsed != null ? `（等待登录 ${loginStatus.wait_elapsed}秒）` : ''}
+                    </Text>
+                  )}
+                  {formatTimings(loginStatus.timings) && (
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      阶段耗时：{formatTimings(loginStatus.timings)}
+                    </Text>
+                  )}
+                  {/* 进度条：给用户视觉反馈 */}
+                  {loginStatus.status === 'running' && (
+                    <Progress
+                      percent={Math.min(95, Math.floor((loginStatus.elapsed / 300) * 100))}
+                      showInfo={false}
+                      strokeColor="#FF6200"
+                      size="small"
+                    />
+                  )}
+                </Space>
+              </div>
+
+              {/* 取消按钮 */}
+              {!['success', 'cancelled', 'error', 'timeout'].includes(loginStatus.status) && (
+                <Button icon={<SwapOutlined />} onClick={handleCancelLogin}>
+                  取消登录
+                </Button>
+              )}
+
+              {/* 错误/超时重试 */}
+              {['error', 'timeout'].includes(loginStatus.status) && (
+                <Button type="primary" icon={<ReloadOutlined />} onClick={handleStartBrowserLogin}
+                  style={{ background: '#FF6200', borderColor: '#FF6200' }}>
+                  重新登录
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+      ),
+    },
     {
       key: 'cookie-inject',
       label: (
@@ -705,83 +835,6 @@ export default function Login() {
         </div>
       ),
     },
-    {
-      key: 'browser-login',
-      label: (
-        <span style={{ fontWeight: 500 }}><GlobalOutlined /> 浏览器登录</span>
-      ),
-      children: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Alert
-            type="info"
-            showIcon
-            message="弹出浏览器窗口登录"
-            description="启动 Playwright 浏览器窗口，在窗口中手动登录闲鱼。适合浏览器导入失败或需要重新登录的场景。"
-          />
-
-          {!loginStatus || loginStatus.status === 'idle' ? (
-            <Button
-              type="primary"
-              size="large"
-              icon={<LoginOutlined />}
-              onClick={handleStartBrowserLogin}
-              style={{ background: '#FF6200', borderColor: '#FF6200', width: 'fit-content' }}
-            >
-              启动浏览器窗口登录
-            </Button>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {/* 登录进度 */}
-              <div style={{
-                padding: 16, borderRadius: 8,
-                background: loginStatus.status === 'success' ? '#f6ffed' : '#fffbe6',
-                border: `1px solid ${loginStatus.status === 'success' ? '#b7eb8f' : '#ffe58f'}`,
-              }}>
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {loginStatus.status === 'success' ? (
-                      <CheckCircleOutlined style={{ color: themeToken.colorSuccess, fontSize: 20 }} />
-                    ) : (
-                      <Spin size="small" />
-                    )}
-                    <Text strong>{loginStatus.message}</Text>
-                  </div>
-                  {loginStatus.elapsed > 0 && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      已用时 {Math.floor(loginStatus.elapsed / 60)}分{Math.floor(loginStatus.elapsed % 60)}秒
-                    </Text>
-                  )}
-                  {/* 进度条：给用户视觉反馈 */}
-                  {loginStatus.status === 'running' && (
-                    <Progress
-                      percent={Math.min(95, Math.floor((loginStatus.elapsed / 300) * 100))}
-                      showInfo={false}
-                      strokeColor="#FF6200"
-                      size="small"
-                    />
-                  )}
-                </Space>
-              </div>
-
-              {/* 取消按钮 */}
-              {!['success', 'cancelled', 'error', 'timeout'].includes(loginStatus.status) && (
-                <Button icon={<SwapOutlined />} onClick={handleCancelLogin}>
-                  取消登录
-                </Button>
-              )}
-
-              {/* 错误/超时重试 */}
-              {['error', 'timeout'].includes(loginStatus.status) && (
-                <Button type="primary" icon={<ReloadOutlined />} onClick={handleStartBrowserLogin}
-                  style={{ background: '#FF6200', borderColor: '#FF6200' }}>
-                  重新登录
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      ),
-    },
   ]
 
   return (
@@ -855,7 +908,10 @@ export default function Login() {
         ]}
       >
         <div style={{ lineHeight: 1.8 }}>
-          <p><strong>方法一：浏览器开发者工具（推荐）</strong></p>
+          <p><strong>方法一：浏览器窗口登录（推荐）</strong></p>
+          <p>切换到「浏览器登录」标签页，启动 Playwright 浏览器窗口手动登录。</p>
+
+          <p><strong>方法二：浏览器开发者工具（Cookie 注入）</strong></p>
           <ol>
             <li>在浏览器中打开 <a href="https://www.goofish.com" target="_blank" rel="noopener noreferrer">闲鱼官网</a> 并登录</li>
             <li>按 <kbd>F12</kbd> 打开开发者工具，切换到「Application」标签</li>
@@ -872,11 +928,8 @@ export default function Login() {
             <li>点击「注入 Cookie 登录」</li>
           </ol>
 
-          <p><strong>方法二：浏览器导入（自动）</strong></p>
+          <p><strong>方法三：浏览器导入（自动）</strong></p>
           <p>切换到「浏览器导入」标签页，系统会自动从 Edge/Chrome 提取 Cookie。</p>
-
-          <p><strong>方法三：浏览器窗口登录</strong></p>
-          <p>切换到「浏览器登录」标签页，启动 Playwright 浏览器窗口手动登录。</p>
 
           <Alert
             type="warning"

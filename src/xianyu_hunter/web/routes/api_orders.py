@@ -279,11 +279,20 @@ async def manual_takeover(
     # 导致找不到「提交订单」按钮，浪费一次浏览器自动化流程
     from xianyu_hunter.web.services.cookie_store import get_cookie_store
 
-    if not get_cookie_store().has_valid_cookies():
+    cookie_store = get_cookie_store()
+    cookie_store.invalidate_cache()
+    if not cookie_store.has_valid_cookies():
         raise HTTPException(
             status_code=403,
             detail="闲鱼登录已过期，请先在「Cookie 注入」页面重新登录闲鱼",
         )
+
+    try:
+        from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+
+        await inject_cookie_store_to_worker_browser("手动抢单前 Cookie 同步", force_refresh_m5tk=False)
+    except Exception as e:
+        logger.debug(f"[ManualTakeover] Cookie 同步到 Worker 浏览器失败: {e}")
 
     # 查询商品信息：用于读取 expected_price 和补充 task_id
     item = container.repo.get_item(item_id)

@@ -118,6 +118,19 @@ def import_via_cdp(port: int = 9222) -> JSONResponse:
             "error": "Cookie 写入存储失败",
         })
 
+    try:
+        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+
+        sync_cookie_layers_from_json()
+    except Exception as e:
+        logger.debug("CDP 导入后同步层状态失败: %s", e)
+    try:
+        from xianyu_hunter.web.services.session_starter import trigger_session_start
+
+        trigger_session_start()
+    except Exception as e:
+        logger.debug("CDP 导入后自动启动会话失败: %s", e)
+
     result = {
         "ok": True,
         "imported_count": len(cookies),

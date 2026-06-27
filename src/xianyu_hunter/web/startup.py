@@ -91,6 +91,11 @@ async def start_scheduler_in_background(container: Any) -> None:
             region=raw.get("region"),
             mode=TaskMode(raw.get("mode", "confirm")),
             search_filters=raw.get("search_filters") or [],
+            # 调度配置：从 DB 读取，scheduler._run_loop 据此决定 cron 或 interval 模式
+            # 用 or 防御 NULL：迁移后的旧行可能为 None，dict.get(key, default) 在 key 存在但值为 None 时返回 None
+            cron=raw.get("cron") or "*/1 * * * *",
+            use_cron=bool(raw.get("use_cron") or 0),
+            interval_seconds=float(raw.get("interval_seconds") or 60.0),
         )
         # 按任务维度设置价格策略
         if task.min_price is not None or task.max_price is not None:
@@ -104,13 +109,15 @@ async def start_scheduler_in_background(container: Any) -> None:
                 )
             )
         # 从 AppConfig.search 注入搜索参数到 TaskConfig
-        # 这样 Worker.run_once() 调用 collector.search() 时会使用用户配置的参数
+        # 调度参数（use_cron / interval_seconds）从 Task 字段读取，与 Task 领域模型保持单一数据源
         task_config = TaskConfig(
             search_page_size=search_cfg.page_size,
             search_sort_type=search_cfg.sort_type,
             search_timeout=search_cfg.timeout,
             search_regions=search_cfg.regions,
             search_filter_tags=search_cfg.filter_tags,
+            use_cron=task.use_cron,
+            interval_seconds=task.interval_seconds,
         )
         worker = TaskWorker(
             task=task,

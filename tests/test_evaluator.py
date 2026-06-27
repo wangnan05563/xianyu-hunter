@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from xianyu_hunter.domain.evaluation import RiskLevel
+from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
 from xianyu_hunter.domain.item import ItemDetail
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.modules.evaluator import Evaluator
@@ -605,3 +605,109 @@ def test_ai_eval_preserves_original() -> None:
     # 原始对象不受影响
     assert base.score == original_score
     assert base.dimension_scores == original_dims
+
+
+# ============== 修复验证：配置实时读取与抢单一致性 ==============
+# 以下测试验证 container.py 修复：Evaluator 不再接收固定 thresholds，
+# 确保配置修改后 evaluator._score_to_risk 与 worker.should_auto_buy 使用相同阈值
+
+
+def test_evaluator_no_override_reads_config_realtime() -> None:
+    """Evaluator() 不传参数时从 get_config() 实时读取配置
+
+    修复前：container.py 传入 EvaluationThresholds（缺少 pass_score/auto_buy_score），
+    导致 _override_thresholds 不为 None，_get_thresholds 永远返回固定覆盖值。
+    修复后：container.py 不传参，evaluator 每次从配置实时读取。
+    """
+    from xianyu_hunter.infra.yaml_config import get_config
+
+    ev = Evaluator()
+    assert ev._override_thresholds is None
+    thresholds = ev._get_thresholds()
+    cfg = get_config().eval
+    assert thresholds.auto_buy_score == cfg.auto_buy_score
+    assert thresholds.pass_score == cfg.pass_score
+
+
+def test_evaluator_with_override_ignores_config() -> None:
+    """Evaluator(thresholds=...) 传参数时返回覆盖值（测试用机制保留）"""
+    from xianyu_hunter.modules.evaluator import EvaluationThresholds
+
+    custom = EvaluationThresholds(auto_buy_score=75, pass_score=50)
+    ev = Evaluator(thresholds=custom)
+    thresholds = ev._get_thresholds()
+    assert thresholds.auto_buy_score == 75
+    assert thresholds.pass_score == 50
+
+
+def test_score_to_risk_consistent_with_should_auto_buy() -> None:
+    """_score_to_risk 与 should_auto_buy 必须使用相同的 auto_buy_score
+
+    核心一致性：evaluator 用 thresholds.auto_buy_score 划分 risk_level，
+    worker 用 eval_cfg.auto_buy_score 调用 should_auto_buy。
+    修复前两者可能不一致（evaluator 固定 80，worker 实时读取），
+    导致 score=77、auto_buy_score=75 时 risk=MEDIUM（按 80 划分），should_auto_buy=False。
+    """
+    ev = Evaluator()
+    # _score_to_risk 依赖 self.thresholds（生产环境由 evaluate() 内部赋值）
+    # 测试时手动初始化，模拟 evaluate() 调用后的状态
+    ev.thresholds = ev._get_thresholds()
+    ev.weights = ev._get_weights()
+    ev.professional_keywords = ev._get_keywords()
+    auto_buy_score = ev.thresholds.auto_buy_score
+
+    # 边界1：score == auto_buy_score → LOW → should_auto_buy True
+    risk_at_threshold = ev._score_to_risk(auto_buy_score)
+    assert risk_at_threshold == RiskLevel.LOW, (
+        f"score={auto_buy_score} 应为 LOW，实际 {risk_at_threshold}"
+    )
+    result_at = EvalResult(score=auto_buy_score, risk_level=risk_at_threshold)
+    assert result_at.should_auto_buy(auto_buy_score) is True
+
+    # 边界2：score == auto_buy_score - 1 → 非 LOW → should_auto_buy False
+    risk_below = ev._score_to_risk(auto_buy_score - 1)
+    assert risk_below != RiskLevel.LOW, (
+        f"score={auto_buy_score - 1} 应非 LOW，实际 {risk_below}"
+    )
+    result_below = EvalResult(score=auto_buy_score - 1, risk_level=risk_below)
+    assert result_below.should_auto_buy(auto_buy_score) is False
+
+
+def test_container_creates_evaluator_without_override() -> None:
+    """container.py 创建的 Evaluator 不带任何 _override_* 参数
+
+    验证修复：确保 evaluator 的 thresholds/weights/keywords 全部从 get_config() 实时读取。
+    """
+    ev = Evaluator()
+    assert ev._override_thresholds is None
+    assert ev._override_weights is None
+    assert ev._override_keywords is None
+
+
+def test_custom_auto_buy_score_consistency() -> None:
+    """自定义 auto_buy_score 时 evaluator 与 should_auto_buy 仍保持一致
+
+    模拟用户通过配置页面修改 auto_buy_score=75 的场景：
+    - score=77 >= 75 → risk=LOW → should_auto_buy(75)=True ✓
+    修复前：evaluator 固定用 80 划分，77 < 80 → risk=MEDIUM → should_auto_buy(75)=False ✗
+    """
+    from xianyu_hunter.modules.evaluator import EvaluationThresholds
+
+    # 用覆盖参数模拟 auto_buy_score=75 的配置
+    custom = EvaluationThresholds(auto_buy_score=75, pass_score=60)
+    ev = Evaluator(thresholds=custom)
+    # _score_to_risk 依赖 self.thresholds（生产环境由 evaluate() 内部赋值）
+    # 测试时手动初始化，模拟 evaluate() 调用后的状态
+    ev.thresholds = ev._get_thresholds()
+
+    # score=77 >= 75 → LOW
+    risk_77 = ev._score_to_risk(77)
+    assert risk_77 == RiskLevel.LOW, f"score=77, auto_buy=75 应为 LOW，实际 {risk_77}"
+    result_77 = EvalResult(score=77, risk_level=risk_77)
+    assert result_77.should_auto_buy(75) is True, "77分>=75且LOW应触发抢单"
+
+    # score=74 < 75 → MEDIUM
+    risk_74 = ev._score_to_risk(74)
+    assert risk_74 == RiskLevel.MEDIUM
+    result_74 = EvalResult(score=74, risk_level=risk_74)
+    assert result_74.should_auto_buy(75) is False

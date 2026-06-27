@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from playwright.async_api import Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeout
 
 from xianyu_hunter.infra.db_models import _utcnow
+from xianyu_hunter.infra.lru import LRUDict
 from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.domain.order import (
     BuyOutcome,
@@ -76,7 +77,9 @@ class Buyer:
         # 串行锁：同账号同时只能落 1 单
         self._lock = asyncio.Lock()
         # 任务内幂等：记录本次进程内已下过单的 item_id
-        self._task_item_set: set[tuple[str, str]] = set()
+        # 使用 LRUDict[tuple[str,str], None] 模拟 set 语义并带上限，
+        # 防止长跑进程内存无限增长。即便 LRU 驱逐后，DB 幂等兜底仍能拦截重复下单。
+        self._task_item_set: LRUDict[tuple[str, str], None] = LRUDict(maxsize=10000)
         # 上次落单时间（用于节流）
         self._last_buy_at: float = 0.0
 
@@ -106,7 +109,8 @@ class Buyer:
             # DB 幂等：跨进程重启后仍能识别
             existing = self.repo.find_order_by_task_item(task_id, item_id)
             if existing:
-                self._task_item_set.add(key)
+                # set 语义用 LRUDict[key]=None 模拟（值无意义）
+                self._task_item_set[key] = None
                 logger.info(
                     f"[Buyer] DB 已存在订单 {existing.get('id')}，幂等跳过"
                 )
@@ -166,7 +170,7 @@ class Buyer:
 
             # 5. 持久化 + 发布事件
             self.repo.upsert_order(order)
-            self._task_item_set.add(key)
+            self._task_item_set[key] = None
             self._last_buy_at = time.monotonic()
             self._publish_buy_succeeded(task_id, item_id, order)
             return BuyResult(

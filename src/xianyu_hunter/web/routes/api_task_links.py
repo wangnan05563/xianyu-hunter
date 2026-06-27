@@ -94,46 +94,101 @@ async def _ensure_live_search_cookies(container: Container) -> None:
     if not container.browser:
         return
 
-    async def _get_missing() -> list[str]:
+    async def _get_cookie_by_name() -> dict[str, dict]:
         try:
             cookies = await container.browser.get_cookies()
         except Exception as e:
             logger.warning("读取浏览器 Cookie 失败: {}", e)
-            return list(_LIVE_SEARCH_IDENTITY_COOKIES)
-        names = {str(c.get("name") or "") for c in cookies}
-        return _missing_live_search_cookie_names(names)
+            return {}
+        return {
+            str(c.get("name") or ""): c
+            for c in cookies
+            if str(c.get("name") or "")
+        }
 
-    missing = await _get_missing()
-    cookies_injected = False  # 标记是否进行了 Cookie 补注入
-    if missing:
-        # 浏览器缺少关键 Cookie 时，尝试从 CookieStore JSON 补注入
-        from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
+    def _expired_identity_cookies(cookies_by_name: dict[str, dict]) -> list[str]:
+        now = time.time()
+        expired = []
+        for name in _LIVE_SEARCH_IDENTITY_COOKIES:
+            c = cookies_by_name.get(name)
+            if not c:
+                continue
+            try:
+                expires = float(c.get("expires", -1) or -1)
+            except (TypeError, ValueError):
+                expires = -1
+            # session cookie（expires <= 0）不按过期处理
+            if expires > 0 and expires < now:
+                expired.append(name)
+        return expired
+
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
+
+    def _cookies_from_json() -> tuple[list[dict], dict[str, str]]:
         store = get_cookie_store()
+        store.invalidate_cache()
         json_data = store._read_json()
-        if json_data and json_data.get("cookies"):
-            pw_cookies = []
-            for c in json_data["cookies"]:
-                name = c.get("name", "")
-                value = c.get("value", "")
-                if name in missing:
-                    # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
-                    if is_test_cookie(name, value):
-                        logger.warning("实时搜索：跳过测试 Cookie {}={}，不注入浏览器", name, value)
-                        continue
-                    pw_cookies.append({
-                        "name": name,
-                        "value": value,
-                        "domain": c.get("domain", ".goofish.com"),
-                        "path": c.get("path", "/"),
-                    })
-            if pw_cookies and container.browser._context:
-                try:
-                    await container.browser._context.add_cookies(pw_cookies)
+        if not json_data or not json_data.get("cookies"):
+            return [], {}
+
+        pw_cookies: list[dict] = []
+        identity_values: dict[str, str] = {}
+        for c in json_data["cookies"]:
+            name = str(c.get("name") or "")
+            value = str(c.get("value") or "")
+            if not name or not value:
+                continue
+            # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
+            if is_test_cookie(name, value):
+                logger.warning("实时搜索：跳过测试 Cookie {}={}，不注入浏览器", name, value)
+                continue
+
+            item = {
+                "name": name,
+                "value": value,
+                "domain": c.get("domain") or ".goofish.com",
+                "path": c.get("path") or "/",
+            }
+            try:
+                expires = float(c.get("expires", -1) or -1)
+            except (TypeError, ValueError):
+                expires = -1
+            if expires > 0:
+                item["expires"] = expires
+            pw_cookies.append(item)
+            if name in _LIVE_SEARCH_IDENTITY_COOKIES:
+                identity_values[name] = value
+        return pw_cookies, identity_values
+
+    async def _cookie_issues(json_identity_values: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
+        cookies_by_name = await _get_cookie_by_name()
+        names = set(cookies_by_name)
+        missing = _missing_live_search_cookie_names(names)
+        expired = _expired_identity_cookies(cookies_by_name)
+        stale = [
+            name for name, value in json_identity_values.items()
+            if name in cookies_by_name and cookies_by_name[name].get("value") != value
+        ]
+        return missing, expired, stale
+
+    pw_cookies, json_identity_values = _cookies_from_json()
+    missing, expired, stale = await _cookie_issues(json_identity_values)
+    cookies_injected = False  # 标记是否进行了 Cookie 补注入
+    if missing or expired or stale:
+        # 浏览器缺少、过期或仍持有旧关键 Cookie 时，尝试从 CookieStore JSON 补/替换注入。
+        if pw_cookies:
+            logger.info(
+                "实时搜索：准备从 CookieStore JSON 注入 cookie，missing={}, expired={}, stale={}",
+                missing, expired, stale,
+            )
+            try:
+                success = await container.browser.add_cookies(pw_cookies)
+                if success:
                     cookies_injected = True
                     # 为什么记录具体名称：排查"补注入 2 个 cookie"时无法定位是哪两个
                     # cookie 的关键信息，便于日志审计与问题复现
                     logger.info(
-                        "实时搜索：从 CookieStore JSON 补注入 {} 个 cookie 到浏览器: {}",
+                        "实时搜索：从 CookieStore JSON 补注入/替换 {} 个 cookie 到浏览器: {}",
                         len(pw_cookies), [c["name"] for c in pw_cookies],
                     )
                     # 同步 CookieRotator 层状态：补注入成功说明 JSON 持有有效 cookie，
@@ -143,11 +198,24 @@ async def _ensure_live_search_cookies(container: Container) -> None:
                         sync_cookie_layers_from_json()
                     except Exception as e:
                         logger.debug("实时搜索补注入后同步层状态失败: {}", e)
-                except Exception as e:
-                    logger.warning("实时搜索：从 JSON 补注入 cookie 失败: {}", e)
+                else:
+                    logger.warning("实时搜索：从 CookieStore JSON 注入 cookie 后关键 Cookie 验证未通过")
+            except Exception as e:
+                logger.warning("实时搜索：从 JSON 补注入 cookie 失败: {}", e)
 
-        # 重新检查补注入后是否仍缺少
-        missing = await _get_missing()
+        # 重新检查补注入后是否仍缺少/过期/陈旧
+        missing, expired, stale = await _cookie_issues(json_identity_values)
+        if expired:
+            logger.warning("实时搜索：关键 Cookie 已过期 {}，需重新登录闲鱼", expired)
+            raise HTTPException(
+                status_code=440,
+                detail=f"闲鱼登录 Cookie 已过期（{', '.join(expired)}），实时搜索不可用，请重新登录闲鱼",
+            )
+        if stale:
+            raise HTTPException(
+                status_code=440,
+                detail=f"闲鱼登录 Cookie 未刷新到实时搜索浏览器（{', '.join(stale)}），请重新登录闲鱼",
+            )
         if missing:
             raise HTTPException(
                 status_code=403,
@@ -282,12 +350,12 @@ def list_links(
 
 
 def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict]:
-    """从 items 表补充 task_links.display 中缺失的字段（region/seller_id/want_cnt/view_cnt/publish_time）
+    """从 items 表补充 task_links.display 中缺失的字段（region/seller_id/want_cnt/view_cnt/publish_time/is_sold）
 
     旧数据写入 task_links 时未包含这些字段，这里从 items 表实时补全，
     避免悬停摘要和地区筛选因旧数据缺字段而无法展示。
-    注意：is_sold 字段不在 items 表中（来自搜索 API 实时数据），
-    此处不补全 is_sold，避免把旧数据误标为未售。
+    is_sold 字段从 items 表补全：refresh_item 和 mark_sold 会将最新售出状态写入 items 表，
+    补全到 display 确保前端展示与实际库存一致。
     """
     if not links:
         return links
@@ -315,6 +383,8 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
                     # 图片和链接：旧 task_links.display 可能缺少这些字段，从 items 表补全
                     "thumb_url": row.get("thumb_url") or "",
                     "url": build_item_url(str(row["id"])) if row.get("id") else "",
+                    # is_sold：items 表存 int(0/1)，转为 bool 给前端 truthy 判断
+                    "is_sold": bool(row.get("is_sold")),
                 }
     except Exception as e:
         logger.warning("从 items 表补全字段失败: {}", e)
@@ -338,7 +408,11 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
         # 补全缺失或无效的字段（"None" 字符串/null/空字符串视为无效，用 items 表正确值覆盖）
         for k, v in extra.items():
             existing = display.get(k)
-            if k not in display or existing is None or existing == "" or existing == "None":
+            # is_sold 总是以 items 表为准：items 表由 refresh_item/mark_sold 更新，
+            # 比 task_links.display 中的旧值更准确，避免已售商品仍显示在售
+            if k == "is_sold":
+                display[k] = v
+            elif k not in display or existing is None or existing == "" or existing == "None":
                 display[k] = v
         r["display"] = display
     return links

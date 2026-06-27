@@ -1,11 +1,30 @@
 // 渠道定义：每个通知渠道的元信息 + 凭据字段配置
+export type Pricing = 'free' | 'freemium' | 'paid'
+
 export interface ChannelDef {
   key: string
   name: string
   icon: string
   desc: string
   enabled: boolean
+  // 定价模式：free=完全免费 / freemium=免费有额度限制 / paid=纯收费
+  pricing: Pricing
+  // 限额说明（仅 freemium/paid 渠道展示）
+  limits?: string
+  // 推荐渠道标记（卡片显示"推荐"徽章，分类排序时优先）
+  recommended?: boolean
+  // 功能完整性评分 1-5（消息格式丰富度 + 平台覆盖 + 安全特性 + 可配置性）
+  featureScore: number
+  // 凭据获取地址（卡片显示"获取"链接，新标签页打开）
+  obtainUrl?: string
   fields: { key: string; label: string; placeholder: string; secret?: boolean }[]
+}
+
+// 定价分类元信息：用于分类标题与排序
+export const pricingMeta: Record<Pricing, { label: string; color: string; order: number }> = {
+  free: { label: '免费', color: 'green', order: 0 },
+  freemium: { label: '免费（有限额）', color: 'orange', order: 1 },
+  paid: { label: '收费', color: 'red', order: 2 },
 }
 
 // 默认渠道列表：开关状态会被后端配置覆盖，这里仅提供结构定义
@@ -16,6 +35,9 @@ export const defaultChannels: ChannelDef[] = [
     icon: '💬',
     desc: '微信推送',
     enabled: true,
+    pricing: 'freemium',
+    limits: '免费 5 条/天，Turbo 版需付费',
+    featureScore: 3,
     fields: [{ key: 'serverchan_send_key', label: 'SendKey', placeholder: 'SCT123456...' }],
   },
   {
@@ -24,14 +46,20 @@ export const defaultChannels: ChannelDef[] = [
     icon: '📱',
     desc: '微信推送（支持一对多）',
     enabled: true,
+    pricing: 'freemium',
+    limits: '免费额度有限，VIP 解除限制',
+    featureScore: 3,
+    obtainUrl: 'https://www.pushplus.plus/doc/',
     fields: [{ key: 'pushplus_token', label: 'Token', placeholder: 'abc123...' }],
   },
   {
     key: 'bark',
     name: 'Bark',
     icon: '🍎',
-    desc: 'iOS 推送',
+    desc: 'iOS 推送（自建服务，无限制）',
     enabled: true,
+    pricing: 'free',
+    featureScore: 2,
     fields: [
       { key: 'bark_server', label: 'Server URL', placeholder: 'https://api.day.app' },
       { key: 'bark_key', label: 'Device Key', placeholder: 'bark device key', secret: true },
@@ -41,8 +69,11 @@ export const defaultChannels: ChannelDef[] = [
     key: 'telegram',
     name: 'Telegram',
     icon: '✈️',
-    desc: '跨平台推送',
+    desc: '跨平台推送（Markdown）',
     enabled: false,
+    pricing: 'free',
+    featureScore: 4,
+    obtainUrl: 'https://core.telegram.org/bots',
     fields: [
       { key: 'telegram_bot_token', label: 'Bot Token', placeholder: '123456:ABC-DEF...', secret: true },
       { key: 'telegram_chat_id', label: 'Chat ID', placeholder: '@channel 或 123456789' },
@@ -52,16 +83,21 @@ export const defaultChannels: ChannelDef[] = [
     key: 'wecom',
     name: '企业微信',
     icon: '🏢',
-    desc: '企业群推送',
+    desc: '微信推送（Markdown，无每日限制）',
     enabled: false,
+    pricing: 'free',
+    recommended: true,
+    featureScore: 4,
     fields: [{ key: 'wecom_webhook', label: 'Webhook URL', placeholder: 'https://qyapi.weixin.qq.com/...' }],
   },
   {
     key: 'dingtalk',
     name: '钉钉',
     icon: '📌',
-    desc: '钉钉群推送',
+    desc: '钉钉群推送（含签名验证）',
     enabled: false,
+    pricing: 'free',
+    featureScore: 3,
     fields: [
       { key: 'dingtalk_webhook', label: 'Webhook URL', placeholder: 'https://oapi.dingtalk.com/...' },
       { key: 'dingtalk_secret', label: 'Secret', placeholder: 'SEC...', secret: true },
@@ -71,8 +107,11 @@ export const defaultChannels: ChannelDef[] = [
     key: 'webhook',
     name: '自定义 Webhook',
     icon: '🔗',
-    desc: '自定义 HTTP 推送',
+    desc: '自定义 HTTP 推送（含事件原始数据）',
     enabled: false,
+    pricing: 'free',
+    featureScore: 5,
+    obtainUrl: 'https://webhook.site/',
     fields: [{ key: 'webhook_url', label: 'URL', placeholder: 'https://your-server.com/hook' }],
   },
 ]

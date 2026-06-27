@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.infra.item_display_sync import sync_item_display_from_detail
 from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/items", tags=["items"])
@@ -103,6 +104,13 @@ async def refresh_item(
     if not item:
         raise HTTPException(status_code=404, detail="商品不存在")
 
+    try:
+        from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+
+        await inject_cookie_store_to_worker_browser("刷新商品详情前 Cookie 同步", force_refresh_m5tk=False)
+    except Exception as e:
+        logger.debug(f"[RefreshItem] Cookie 同步到 Worker 浏览器失败: {e}")
+
     # detail() 内部 page.goto 已有 30s 超时，但 page.query_selector 等无 timeout 参数，
     # 浏览器实例异常（页面/上下文已关闭）时会无限挂起。
     # 这里加 60s 整体超时：detail 正常应在 30s 内完成，60s 是合理上限；
@@ -142,44 +150,11 @@ async def refresh_item(
     if detail.is_sold:
         container.repo.mark_sold(item_id)
 
-    # 同步 task_links.display：评估明细页 brand 等字段从此处读取
-    # 为什么不全量覆盖 display：worker.py 写入的 seller_credit 等字段不在 detail 中，
-    # 直接 upsert 会丢失。改为读取现有 display 后按字段合并，仅当新值非空时覆盖。
+    # 同步 task_links.display：评估明细页 brand 等字段从此处读取。
+    # 其中 brand 以详情页推断结果为准；空 brand 也要写回，用于清掉历史错误品牌。
     task_id = item.get("task_id") or ""
     if task_id:
-        existing_map = container.repo.list_link_displays_by_keys([item_id], link_type="item")
-        existing_display = existing_map.get(item_id, {})
-        merged_display = dict(existing_display)
-        # 用 detail 采集到的字段覆盖（非空才覆盖，避免清空已有有效值）
-        if detail.title:
-            merged_display["title"] = detail.title
-        if detail.price is not None:
-            merged_display["price"] = detail.price
-        if detail.seller_id:
-            merged_display["seller_id"] = detail.seller_id
-        if detail.region:
-            merged_display["region"] = detail.region
-        if detail.thumb_url:
-            merged_display["thumb_url"] = detail.thumb_url
-        if detail.want_cnt is not None:
-            merged_display["want_cnt"] = detail.want_cnt
-        if detail.view_cnt is not None:
-            merged_display["view_cnt"] = detail.view_cnt
-        if detail.publish_time is not None:
-            merged_display["publish_time"] = detail.publish_time.isoformat()
-        if detail.is_sold is not None:
-            merged_display["is_sold"] = detail.is_sold
-        # brand 字段：仅当 detail 提取/推断到非空 brand 时覆盖原有值
-        # 避免详情页未识别到品牌时清空已有的搜索 API brand
-        if detail.brand:
-            merged_display["brand"] = detail.brand
-        container.repo.upsert_task_link(
-            task_id=task_id,
-            link_type="item",
-            link_key=item_id,
-            display=merged_display,
-            source="auto",
-        )
+        sync_item_display_from_detail(container.repo, task_id, item_id, detail, source="auto")
 
     logger.info(f"[RefreshItem] 刷新成功 item={item_id} is_sold={detail.is_sold} brand={detail.brand!r}")
     return {

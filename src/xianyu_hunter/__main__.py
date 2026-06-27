@@ -66,6 +66,11 @@ async def _load_tasks_from_repo(container: Container) -> list[Task]:
             exclude_words=raw.get("exclude_words") or [],
             region=raw.get("region"),
             mode=TaskMode(raw.get("mode", "confirm")),
+            # 调度配置：从 DB 读取，与 web/startup.py 保持一致
+            # 用 or 防御 NULL：迁移后的旧行可能为 None，dict.get(key, default) 在 key 存在但值为 None 时返回 None
+            cron=raw.get("cron") or "*/1 * * * *",
+            use_cron=bool(raw.get("use_cron") or 0),
+            interval_seconds=float(raw.get("interval_seconds") or 60.0),
         )
         from xianyu_hunter.domain.task import TaskConfig
 
@@ -89,7 +94,11 @@ async def _load_tasks_from_repo(container: Container) -> list[Task]:
             price_strategy=container.price_strategy,
             evaluator=container.evaluator,
             buyer=container.buyer,
-            config=TaskConfig(),
+            # 调度参数从 Task 字段读取，避免 use_cron 恒为 False 的断层
+            config=TaskConfig(
+                use_cron=task.use_cron,
+                interval_seconds=task.interval_seconds,
+            ),
             repo=container.repo,
         )
         await container.scheduler.register(task, worker)

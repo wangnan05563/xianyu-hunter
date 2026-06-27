@@ -172,6 +172,31 @@ def infer_brand_from_title(title: str) -> str:
     return ""
 
 
+def normalize_display_brand(
+    brand: str | None,
+    title: str = "",
+    seller_candidate: str = "",
+) -> str:
+    """校验展示层品牌，避免旧搜索/任务关键词品牌污染当前商品。
+
+    task_links.display.brand 是冗余展示字段，可能来自搜索 API、标题推断或历史旧值。
+    当当前标题已经可用时，品牌必须能被标题或标题中的别名解释；否则重新按标题/卖家候选
+    推断，仍无命中则清空。
+    """
+    brand = str(brand or "").strip()
+    title = str(title or "").strip()
+    seller_candidate = str(seller_candidate or "").strip()
+
+    if brand and (not title or _brand_candidate_matches_title(brand, title)):
+        return brand
+    if _brand_candidate_matches_title(seller_candidate, title):
+        return seller_candidate
+    inferred = infer_brand_from_title(title)
+    if inferred:
+        return inferred
+    return "" if title else brand
+
+
 def _find_first_text_by_keys(obj: Any, keys: set[str], depth: int = 0, max_depth: int = 3) -> str:
     if depth > max_depth:
         return ""
@@ -205,7 +230,9 @@ def extract_brand(raw: dict | None, title: str = "", seller_candidate: str = "")
     }
     raw_brand = _find_first_text_by_keys(raw or {}, brand_keys)
     if raw_brand and raw_brand not in {"其他", "其它", "other", "OTHER"}:
-        return raw_brand
+        raw_brand = raw_brand.strip()
+        if not title or _brand_candidate_matches_title(raw_brand, title):
+            return raw_brand
 
     if _brand_candidate_matches_title(seller_candidate, title):
         return seller_candidate.strip()
@@ -388,8 +415,7 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
     publish_time = str(corrected.get("publish_time", "") or "").strip()
     seller_credit = str(corrected.get("seller_credit", "") or "").strip()
 
-    if not brand:
-        brand = extract_brand(None, title, seller_candidate=seller_nick)
+    brand = normalize_display_brand(brand, title, seller_candidate=seller_nick)
 
     # 场景 0：seller_nick 实际是品牌/店铺标签，region 是脱敏卖家昵称。
     # 近期实时搜索可见：seller_nick="镁光数码"/"现代海力士"，region="牧***蓉"/"行***三"。

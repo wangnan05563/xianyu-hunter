@@ -103,6 +103,7 @@ class CookieSyncScheduler:
 
     def _should_sync(self) -> bool:
         """判断是否需要同步（Cookie 无效或即将过期）"""
+        self._cookie_store.invalidate_cache()
         if not self._cookie_store.has_valid_cookies():
             return True
         expiry = self._cookie_store.get_cookie_expiry()

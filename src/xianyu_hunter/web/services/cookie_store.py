@@ -347,6 +347,18 @@ class CookieStore:
 
     # ---------- 内部方法 ----------
 
+    def invalidate_cache(self) -> None:
+        """清除内存缓存，强制下次 _read_json 重新读取文件
+
+        为什么需要此方法：浏览器登录子进程是独立 Python 进程，
+        写入 cookies.json 后只更新子进程自己的缓存，主进程的缓存仍是旧数据。
+        主进程在调用 sync_cookie_layers_from_json 等"读后同步"操作前必须先清除缓存，
+        否则会读到 30 秒 TTL 内的旧缓存，导致层状态无法及时更新。
+        """
+        with self._lock:
+            self._cache = None
+            self._cache_ts = 0.0
+
     def _read_json(self) -> dict | None:
         """读取 JSON Cookie 文件（带缓存）"""
         with self._lock:

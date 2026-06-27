@@ -69,6 +69,18 @@ function ThemedRoot() {
       theme={{
         ...baseTheme,
         algorithm: isDark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+        components: {
+          ...baseTheme.components,
+          Table: {
+            ...baseTheme.components.Table,
+            // 暗色主题下：baseTheme 的 rowHoverBg '#fff7f0' 是接近白色的淡橙，
+            // 与暗色文字 rgba(255,255,255,0.88)≈#e0e0e0 对比度极低，hover 时文字几乎看不见。
+            // 改用品牌色淡橙透明叠加：与卡片背景 #1f1f1f 形成明显对比、文字仍清晰可读，
+            // 同时与浅色主题 #fff7f0 淡橙 hover 风格保持一致。
+            // darkAlgorithm 不会重算显式指定的 token，故必须在此处动态覆盖。
+            rowHoverBg: isDark ? 'rgba(255, 98, 0, 0.08)' : '#fff7f0',
+          },
+        },
       }}
     >
       <BrowserRouter basename="/app">

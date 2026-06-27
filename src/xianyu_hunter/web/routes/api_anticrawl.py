@@ -52,6 +52,7 @@ def _configure_default_health_checkers(orch) -> None:
         try:
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
             store = get_cookie_store()
+            store.invalidate_cache()
             data = store._read_json()
             if not data or not data.get("cookies"):
                 logger.debug("cookie_checker: JSON 无 Cookie 数据")
@@ -89,15 +90,18 @@ def _configure_default_health_checkers(orch) -> None:
                     )
                     return False
 
-            # 4. 自动同步层状态（仅当从未初始化时）
-            # 为什么用 updated_at==0.0 而非 not valid：
-            # invalidate_layer 主动失效后 updated_at 保持 >0.0 但 valid=False，
-            # 此状态需保留以反映 collector 检测到的 RGV587 会话失效；
-            # updated_at==0.0 才表示从未初始化，此时才需补救同步
+            # 4. 自动同步层状态（对所有非用户主动失效的层）
+            # 为什么不再只检查 updated_at==0：被系统失效的层（RGV587/续期失败）
+            # updated_at>0 但 valid=False，需能被自动同步恢复。
+            # 仅跳过 manual_invalidate=True 的层（用户通过 /cookies/invalidate 主动失效）
             states = orch.cookie_rotator.get_all_states()
             identity_state = states.get(CookieLayer.IDENTITY)
-            if not identity_state or identity_state.updated_at == 0.0:
-                logger.info("cookie_checker: Cookie 有效但层状态从未初始化，自动同步")
+            needs_sync = (
+                not identity_state
+                or (not identity_state.valid and not identity_state.manual_invalidate)
+            )
+            if needs_sync:
+                logger.info("cookie_checker: Cookie 有效但层状态失效，自动同步")
                 cookie_map = {c.get("name", ""): c.get("value", "") for c in cookies_list}
                 orch.cookie_rotator.sync_state_from_cookies(cookie_map)
 
@@ -108,10 +112,21 @@ def _configure_default_health_checkers(orch) -> None:
                 from xianyu_hunter.web.deps import get_container
                 container = get_container()
                 if container.collector and getattr(container.collector, 'last_session_invalid', False):
-                    logger.warning("cookie_checker: collector 检测到 RGV587_ERROR，会话已失效")
-                    # 主动失效 identity 层，让 /cookies/layers 也能反映真实状态
-                    orch.cookie_rotator.invalidate_layer(CookieLayer.IDENTITY)
-                    return False
+                    # 粘性标志清理：_m_h5_tk 实际有效时清除标志，避免反复触发 invalidate
+                    # 为什么需要：DOM 回退失败时 last_session_invalid 保持 True，
+                    # 但 cookie 实际可能仍有效（详情页等流程正常），此时不应反复失效 identity
+                    has_valid_token = any(
+                        c.get("name") == "_m_h5_tk" and c.get("value")
+                        for c in cookies_list
+                    )
+                    if has_valid_token:
+                        logger.info("cookie_checker: last_session_invalid=True 但 _m_h5_tk 实际有效，清除粘性标志")
+                        container.collector.last_session_invalid = False
+                    else:
+                        logger.warning("cookie_checker: collector 检测到 RGV587_ERROR，会话已失效")
+                        # 主动失效 identity 层（manual=False，可被自动同步恢复）
+                        orch.cookie_rotator.invalidate_layer(CookieLayer.IDENTITY, manual=False)
+                        return False
             except Exception:
                 pass
 
@@ -247,6 +262,7 @@ async def start_session(request: dict = Body(default_factory=dict)) -> JSONRespo
         try:
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
             store = get_cookie_store()
+            store.invalidate_cache()
             data = store._read_json()
             if not data or not data.get("cookies"):
                 return None
@@ -449,6 +465,7 @@ def get_current_cookies() -> dict:
     """
     from xianyu_hunter.web.services.cookie_store import get_cookie_store
     store = get_cookie_store()
+    store.invalidate_cache()
     data = store._read_json()
     if not data or not data.get("cookies"):
         return {"ok": True, "cookies": {}, "count": 0}
@@ -480,7 +497,7 @@ def import_from_browser_preview(request: dict = Body(...)) -> JSONResponse:
 
 
 @router.post("/cookies/update")
-def update_cookies(request: dict = Body(...)) -> JSONResponse:
+async def update_cookies(request: dict = Body(...)) -> JSONResponse:
     """分层更新 Cookie（合并写入，不丢失已有 Cookie）
 
     Request body:
@@ -502,6 +519,10 @@ def update_cookies(request: dict = Body(...)) -> JSONResponse:
     cookie_store = get_cookie_store()
 
     # 1. 读取现有 JSON 中的全部 Cookie（保留 domain/path/expires 等元信息）
+    # 必须先清除缓存：浏览器登录子进程写入 JSON 后只更新子进程自己的缓存，
+    # 主进程 30 秒 TTL 缓存仍是旧数据（空数据或旧 cookie）。
+    # 若不清除，合并时会用旧缓存覆盖丢失子进程刚写入的新 cookie，导致层状态失效
+    cookie_store.invalidate_cache()
     existing_data = cookie_store._read_json()
     existing_cookies: list[dict] = existing_data.get("cookies", []) if existing_data else []
 
@@ -553,9 +574,18 @@ def update_cookies(request: dict = Body(...)) -> JSONResponse:
     written = len(fresh_cookies)
     logger.info("Cookie 分层更新完成: 写入后 %d 个 Cookie，已同步层状态", written)
 
+    worker_injected = False
+    try:
+        from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+
+        worker_injected = await inject_cookie_store_to_worker_browser("Cookie 分层更新")
+    except Exception as e:
+        logger.debug("Cookie 分层更新后注入 Worker 浏览器失败: %s", e)
+
     return JSONResponse(content={
         "ok": True,
         "written": written,
+        "worker_injected": worker_injected,
         "message": f"已分层更新 {written} 个 Cookie",
     })
 
@@ -581,24 +611,31 @@ async def get_cookie_layers() -> dict:
     """
     orch = get_orchestrator()
 
-    # 第一步：从 JSON 同步（仅对从未初始化的层）
-    # 为什么这样设计：避免覆盖 invalidate_layer 的手动失效状态
+    # 第一步：从 JSON 同步（对所有非用户主动失效的层）
+    # 为什么不再只检查 updated_at==0：被 worker.py/cookie_checker 系统失效的层
+    # updated_at>0 但 valid=False，自动同步需能恢复这些层（cookie 实际仍有效时）。
+    # 仅跳过 manual_invalidate=True 的层：用户通过 /cookies/invalidate 主动失效的层
+    # 不应被自动同步覆盖，需用户重新调用 /cookies/update 才能恢复
     try:
         from xianyu_hunter.web.services.cookie_store import get_cookie_store
         from xianyu_hunter.modules.cookie_rotator import LAYER_DEFINITIONS
 
         store = get_cookie_store()
+        # 先清除缓存再读取：浏览器登录子进程写入 JSON 后只更新子进程自己的缓存，
+        # 主进程的 30 秒 TTL 缓存仍是旧数据。此端点会被前端轮询，必须读到最新 JSON
+        store.invalidate_cache()
         data = store._read_json()
         if data and data.get("cookies"):
             current_states = orch.cookie_rotator.get_all_states()
-            never_initialized_layers = {
+            # 筛选需要同步的层：排除用户主动失效的层
+            sync_needed_layers = {
                 layer for layer, state in current_states.items()
-                if state.updated_at == 0.0
+                if not state.manual_invalidate
             }
-            if never_initialized_layers:
+            if sync_needed_layers:
                 now = time.time()
                 needed_names: set[str] = set()
-                for layer in never_initialized_layers:
+                for layer in sync_needed_layers:
                     needed_names |= LAYER_DEFINITIONS[layer].cookies
 
                 valid_cookies = {
@@ -618,9 +655,10 @@ async def get_cookie_layers() -> dict:
     # 但浏览器内存中有（功能正常）。从浏览器读取后同步层状态 + 回写 JSON
     try:
         current_states = orch.cookie_rotator.get_all_states()
+        # 兜底同步也排除用户主动失效的层
         still_invalid_layers = {
             layer for layer, state in current_states.items()
-            if state.updated_at == 0.0 and not state.valid
+            if not state.manual_invalidate and not state.valid
         }
         if still_invalid_layers:
             from xianyu_hunter.web.deps import get_container
@@ -720,11 +758,13 @@ def invalidate_cookie_layer(request: dict = Body(...)) -> JSONResponse:
         })
 
     orch = get_orchestrator()
-    orch.cookie_rotator.invalidate_layer(layer)
+    # 为什么 manual=True：用户主动失效需被保留，避免 /cookies/layers 自动同步覆盖
+    # 用户主动失效后通常需重新登录或调用 /cookies/update 才能恢复层状态
+    orch.cookie_rotator.invalidate_layer(layer, manual=True)
 
     return JSONResponse(content={
         "ok": True,
-        "message": f"层 {layer_name} 已标记失效",
+        "message": f"层 {layer_name} 已标记失效（主动失效，需重新登录或更新 Cookie 恢复）",
         "cascaded": layer == CookieLayer.IDENTITY,
     })
 
