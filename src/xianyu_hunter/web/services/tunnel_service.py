@@ -98,6 +98,9 @@ class TunnelService:
         found_url: list[str] = []
 
         def read_output():
+            # 防御：若 Popen 未成功设置 PIPE，stdout 可能为 None
+            if self._process.stdout is None:
+                return
             while time.time() < deadline and not found_url:
                 line = self._process.stdout.readline()
                 if not line:

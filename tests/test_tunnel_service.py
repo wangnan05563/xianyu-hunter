@@ -1,7 +1,7 @@
 # tests/test_tunnel_service.py
 """TunnelService 单元测试：验证 cloudflare-tunnel 生命周期管理"""
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 
