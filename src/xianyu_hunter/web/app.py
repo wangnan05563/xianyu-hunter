@@ -52,6 +52,7 @@ from xianyu_hunter.web.routes import (
     api_task_links,
     api_tasks,
     api_templates,
+    api_tunnel,
     pages,
     price_dashboard,
 )
@@ -192,6 +193,7 @@ def create_app() -> FastAPI:
     app.include_router(api_vector_admin.router)  # 系统维护 → 向量数据库维护：ChromaDB 快照/清理/监控
     app.include_router(api_error_logs.router)  # 后台错误日志：异常捕获 + AI 诊断上下文
     app.include_router(api_batch_refresh.router)  # 批量采集调度器：定时刷新在售商品详情
+    app.include_router(api_tunnel.router)  # 内网穿透：一键远程访问
     # 智能客服模块路由：api_chatbot（会话/消息/SSE/反馈）、api_kb（知识库版本/重建）、api_chatbot_config（热更新配置）
     # 为什么放在最后：chatbot 为可选模块，容器构造时若依赖缺失返回 None，
     # 路由内通过 get_container().chatbot 判空返回 503，不影响主系统路由注册

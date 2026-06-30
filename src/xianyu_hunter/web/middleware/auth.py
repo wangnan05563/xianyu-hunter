@@ -31,6 +31,7 @@ PUBLIC_PREFIXES = (
     "/api/notifier/",            # 通知器配置（免打扰等）
     "/api/docs", "/openapi.json",
     "/api/about",                # 关于菜单：系统元信息 + 检查更新
+    "/api/tunnel",               # 内网穿透：未登录也需可查询/控制隧道（远程访问引导）
 )
 
 
