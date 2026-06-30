@@ -64,7 +64,14 @@ def _diff(a: dict[str, Any], b: dict[str, Any], prefix: str = "") -> list[dict[s
         if isinstance(av, dict) and isinstance(bv, dict):
             out.extend(_diff(av, bv, path))
         elif av != bv:
-            out.append({"path": path, "op": "modify" if (av and bv) else ("add" if bv else "remove"),
+            # av/bv 均非空为 modify；只剩 bv 为 add；只剩 av 为 remove
+            if av and bv:
+                op = "modify"
+            elif bv:
+                op = "add"
+            else:
+                op = "remove"
+            out.append({"path": path, "op": op,
                         "old": "" if av is None else json.dumps(av, ensure_ascii=False),
                         "new": "" if bv is None else json.dumps(bv, ensure_ascii=False)})
     return out
@@ -135,6 +142,26 @@ def _resolve_backup(filename: str) -> Path:
     if not p.is_file():
         raise HTTPException(status_code=404, detail=f"备份 {filename} 不存在")
     return p
+
+
+def _safe_app_version() -> str:
+    """读取系统真实版本号，失败时回退为 'unknown'。
+
+    与 api_about._safe_build_info 同源：__init__.py 的 __version__ 是单一源头，
+    _build_info.py 由 scripts/build_info.py 重新生成。开发环境 _build_info 可能
+    未生成，所以优先读 __init__.py 的 __version__，再回退到 _build_info。
+    """
+    try:
+        from xianyu_hunter import __version__  # type: ignore[attr-defined]
+        if __version__:
+            return __version__
+    except Exception:
+        pass
+    try:
+        from xianyu_hunter import _build_info  # type: ignore[attr-defined]
+        return getattr(_build_info, "__version__", "unknown") or "unknown"
+    except Exception:
+        return "unknown"
 
 
 # ============== API ==============
@@ -254,6 +281,12 @@ _SHARE_REDACT_PATHS = [
     ("pushplus_token",),
     ("bark_server",),
     ("bark_key",),
+    ("telegram_bot_token",),
+    ("telegram_chat_id",),
+    ("wecom_webhook",),
+    ("dingtalk_webhook",),
+    ("dingtalk_secret",),
+    ("webhook_url",),
     ("browser", "user_data_dir"),    # 路径（可能暴露机器/用户名）
 ]
 
@@ -356,7 +389,8 @@ def export_config() -> Any:
         "exported_at": datetime.now().isoformat(timespec="seconds"),
         "app": {
             "name": "xianyu_hunter",
-            "version": "1.0",  # 占位；后续引入 __version__ 再接
+            # 读取真实系统版本号（与 /api/about 一致），便于导入方识别配置来源版本
+            "version": _safe_app_version(),
         },
         "config": _sanitize_dict(raw),
     }
@@ -555,9 +589,11 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
 
 # 需要脱敏的配置键名：前端展示时替换为 "***"
 # - 不含 user_agent（前端需编辑该字段，脱敏会引入假 diff）
+# - 不含通知渠道凭据（serverchan_send_key / pushplus_token / bark_* / telegram_* / wecom_* /
+#   dingtalk_* / webhook_url）：前端通过 Input.Password 组件回显已配置值，脱敏会导致
+#   用户无法看到已保存的凭据，误以为未持久化
 # - 不含 openai_api_key（该字段走 config.py Settings，不经过 YAML）
 _REDACT_KEYS = frozenset({
-    "serverchan_key", "pushplus_token", "bark_key", "bark_server",
     "cookie", "cookies", "session_id",
 })
 
@@ -578,7 +614,8 @@ def _redact(data: dict[str, Any]) -> dict[str, Any]:
 
 def _redact_recursive(d: dict) -> None:
     """递归脱敏字典中的敏感字段"""
-    for k in list(d.keys()):
+    # S7504: 直接迭代字典键即可；循环体只改值不增删键，无需 list() 快照
+    for k in d:
         if k in _REDACT_KEYS and isinstance(d[k], str) and d[k]:
             d[k] = "***"
         elif isinstance(d[k], dict):
@@ -587,7 +624,10 @@ def _redact_recursive(d: dict) -> None:
 
 # /raw 和 /export 专用脱敏：保留末4位，便于用户辨识而不泄露完整凭证
 _SENSITIVE_KEYS = frozenset({
-    "serverchan_key", "pushplus_token", "bark_key", "openai_api_key",
+    "serverchan_send_key", "pushplus_token", "bark_key", "bark_server",
+    "telegram_bot_token", "telegram_chat_id", "wecom_webhook",
+    "dingtalk_webhook", "dingtalk_secret", "webhook_url",
+    "openai_api_key",
 })
 
 

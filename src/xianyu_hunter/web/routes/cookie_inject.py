@@ -34,6 +34,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["cookie-inject"])
 
+# S1192: 提取重复的域名常量，便于统一维护
+# 注入时需同时覆盖淘宝系多域名（闲鱼共享淘宝认证）
+_DOMAIN_GOOFISH = "goofish.com"
+_DOMAIN_GOOFISH_DOT = ".goofish.com"
+_DOMAIN_TAOBAO = "taobao.com"
+_DOMAIN_TAOBAO_DOT = ".taobao.com"
+_DOMAIN_ALIPAY = "alipay.com"
+_DOMAIN_ALIPAY_DOT = ".alipay.com"
+_DOMAIN_LOGIN_TAOBAO = "login.taobao.com"
+_DOMAIN_LOGIN_TAOBAO_DOT = ".login.taobao.com"
+
+_INJECT_DOMAINS = (
+    _DOMAIN_GOOFISH_DOT, _DOMAIN_GOOFISH,
+    _DOMAIN_TAOBAO_DOT, _DOMAIN_ALIPAY_DOT,
+)
+_DEFAULT_DOMAIN = _DOMAIN_GOOFISH_DOT
+
 
 def _inject_to_sqlite(cookie_db: Path, cookies_to_inject: list[tuple[str, str]]) -> tuple[int, list[str]]:
     """直接写入 SQLite 数据库（浏览器未运行时可用）
@@ -44,31 +61,29 @@ def _inject_to_sqlite(cookie_db: Path, cookies_to_inject: list[tuple[str, str]])
     now_utc = int(time.time()) + 11644473600  # Chrome 时间戳（Windows epoch）
     injected = 0
     errors = []
-    try:
-        with sqlite3.connect(str(cookie_db)) as conn:
-            init_cookie_table(conn)
-            for name, value in cookies_to_inject:
-                try:
-                    # 同一 cookie 写入多个域名：闲鱼共享淘宝系认证，
-                    # 需同时覆盖 .goofish.com / goofish.com / .taobao.com / .alipay.com
-                    for domain in (".goofish.com", "goofish.com", ".taobao.com", ".alipay.com"):
-                        upsert_cookie(conn, {
-                            "host_key": domain,
-                            "name": name,
-                            "value": value,
-                            "path": "/",
-                            "expires_utc": now_utc + 86400 * 365,
-                            "is_secure": 1,
-                            "is_httponly": 1,
-                            "creation_utc": now_utc,
-                            "last_access_utc": now_utc,
-                        })
-                    injected += 1
-                except Exception as e:
-                    errors.append(f"{name}: {e}")
-            conn.commit()
-    except Exception as e:
-        raise e
+    # S2737: 原外层 try-except 仅做 raise e，无任何处理，删除以避免冗余
+    with sqlite3.connect(str(cookie_db)) as conn:
+        init_cookie_table(conn)
+        for name, value in cookies_to_inject:
+            try:
+                # 同一 cookie 写入多个域名：闲鱼共享淘宝系认证，
+                # 需同时覆盖 .goofish.com / goofish.com / .taobao.com / .alipay.com
+                for domain in _INJECT_DOMAINS:
+                    upsert_cookie(conn, {
+                        "host_key": domain,
+                        "name": name,
+                        "value": value,
+                        "path": "/",
+                        "expires_utc": now_utc + 86400 * 365,
+                        "is_secure": 1,
+                        "is_httponly": 1,
+                        "creation_utc": now_utc,
+                        "last_access_utc": now_utc,
+                    })
+                injected += 1
+            except Exception as e:
+                errors.append(f"{name}: {e}")
+        conn.commit()
     return injected, errors
 
 
@@ -88,7 +103,7 @@ async def _inject_via_browser(cookies_to_inject: list[tuple[str, str]]) -> tuple
     errors = []
     pw_cookies = []
     for name, value in cookies_to_inject:
-        for domain in [".goofish.com", "goofish.com", ".taobao.com", ".alipay.com"]:
+        for domain in _INJECT_DOMAINS:
             pw_cookies.append({
                 "name": name,
                 "value": value,
@@ -117,8 +132,7 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
     3. 仅写入 JSON 文件（最终兜底，下次浏览器启动时可读取）
     """
     if not cookie_string or not cookie_string.strip():
-        from fastapi.responses import JSONResponse as _JR
-        return _JR(content={"ok": False, "error": "Cookie 字符串为空"})
+        return JSONResponse(content={"ok": False, "error": "Cookie 字符串为空"})
 
     cfg = get_config()
     cookie_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
@@ -139,8 +153,7 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
                 cookies_to_inject.append((name, value))
 
     if not cookies_to_inject:
-        from fastapi.responses import JSONResponse as _JR
-        return _JR(content={"ok": False, "error": "未能解析出有效的 cookie 键值对"})
+        return JSONResponse(content={"ok": False, "error": "未能解析出有效的 cookie 键值对"})
 
     # 确保 Cookies 数据库目录存在
     cookie_db.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +180,7 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
     json_written = False
     if cookies_to_inject:
         json_written = get_cookie_store().export_cookies([
-            {"name": n, "value": v, "domain": ".goofish.com", "path": "/"}
+            {"name": n, "value": v, "domain": _DEFAULT_DOMAIN, "path": "/"}
             for n, v in cookies_to_inject
         ], method="cookie")
         # JSON 写入成功时，即使 browser+sqlite 都没写入成功，也算注入完成
@@ -208,9 +221,8 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
         return make_auth_response(result)
 
     # 全部失败
-    from fastapi.responses import JSONResponse as _JR
     error_detail = browser_error or "浏览器不可用"
-    return _JR(content={
+    return JSONResponse(content={
         "ok": False,
         "error": f"Cookie 注入失败: {error_detail}",
         "hint": "请使用「扫码登录」方式，或先停止服务再注入 Cookie",
@@ -252,10 +264,7 @@ def _parse_netscape_cookies(text: str) -> list[dict]:
         parts = line.split("\t")
         if len(parts) >= 7:
             domain = parts[0]
-            # include_subdomains = parts[1].upper() == "TRUE"
             path = parts[2]
-            # secure = parts[3].upper() == "TRUE"
-            # expiry = parts[4]
             name = parts[5]
             value = parts[6]
             if name and value:
@@ -303,7 +312,7 @@ def _parse_json_cookies(text: str) -> list[dict]:
         cookies.append({
             "name": name,
             "value": value,
-            "domain": item.get("domain", ".goofish.com"),
+            "domain": item.get("domain", _DEFAULT_DOMAIN),
             "path": item.get("path", "/"),
         })
     return cookies
@@ -324,7 +333,7 @@ def _parse_header_cookies(text: str) -> list[dict]:
                 cookies.append({
                     "name": name,
                     "value": value,
-                    "domain": ".goofish.com",
+                    "domain": _DEFAULT_DOMAIN,
                     "path": "/",
                 })
     return cookies
@@ -356,9 +365,13 @@ def _parse_cookie_file(text: str) -> list[dict]:
     return []
 
 
-# 只导入闲鱼相关的域名
-_GOOFISH_DOMAINS = {"goofish.com", ".goofish.com", "taobao.com", ".taobao.com",
-                    "alipay.com", ".alipay.com", "login.taobao.com", ".login.taobao.com"}
+# 只导入闲鱼相关的域名（引用常量避免重复字面量）
+_GOOFISH_DOMAINS = {
+    _DOMAIN_GOOFISH, _DOMAIN_GOOFISH_DOT,
+    _DOMAIN_TAOBAO, _DOMAIN_TAOBAO_DOT,
+    _DOMAIN_ALIPAY, _DOMAIN_ALIPAY_DOT,
+    _DOMAIN_LOGIN_TAOBAO, _DOMAIN_LOGIN_TAOBAO_DOT,
+}
 
 
 def _filter_goofish_cookies(cookies: list[dict]) -> list[dict]:
@@ -371,7 +384,7 @@ def _filter_goofish_cookies(cookies: list[dict]) -> list[dict]:
                for d in _GOOFISH_DOMAINS):
             filtered.append(c)
         # 也保留没有明确域名但名字匹配闲鱼关键 cookie 的条目
-        elif not c.get("domain") or c["domain"] == ".goofish.com":
+        elif not c.get("domain") or c["domain"] == _DEFAULT_DOMAIN:
             filtered.append(c)
     return filtered
 
@@ -626,7 +639,8 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
         try:
             shutil.copy2(src, dst)
             return True
-        except (OSError, PermissionError):
+        # S5713: PermissionError 是 OSError 的子类，仅保留父类
+        except OSError:
             return False
 
     requested_keys = [k.strip() for k in keys.split(",") if k.strip()] if keys else []
@@ -787,7 +801,7 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
                 domain = c.get("domain", "")
                 value = c.get("value", "")
                 if name in requested_keys and any(
-                    d in domain for d in ("goofish.com", "taobao.com")
+                    d in domain for d in (_DOMAIN_GOOFISH, _DOMAIN_TAOBAO)
                 ):
                     if name not in json_result:
                         # 过滤掉测试数据（unb=123456 / cookie2=abc 等）
@@ -824,7 +838,7 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
                 name = c.get("name", "")
                 domain = c.get("domain", "")
                 if name in requested_keys and any(
-                    d in domain for d in ("goofish.com", "taobao.com")
+                    d in domain for d in (_DOMAIN_GOOFISH, _DOMAIN_TAOBAO)
                 ):
                     if name not in cdp_result:
                         cdp_result[name] = c.get("value", "")

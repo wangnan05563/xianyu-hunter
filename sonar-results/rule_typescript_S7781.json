@@ -1,0 +1,62 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S7781",
+                 "repo":  "typescript",
+                 "name":  "Strings should use \"replaceAll()\" instead of \"replace()\" with global regex",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "readability",
+                                 "es2021"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "introduction",
+                                                 "content":  "\u003cp\u003eThis rule flags when \u003ccode\u003eString#replace()\u003c/code\u003e is used with a global regex pattern, or when \u003ccode\u003eString#replaceAll()\u003c/code\u003e is used with a\nglobal regex flag.\u003c/p\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eThe \u003ccode\u003eString#replaceAll()\u003c/code\u003e method was introduced in ES2021 to provide a clearer and safer way to replace all occurrences of a pattern in\na string.\u003c/p\u003e\n\u003cp\u003eWhen using \u003ccode\u003eString#replace()\u003c/code\u003e with a global regex, developers must remember to include the global flag (\u003ccode\u003eg\u003c/code\u003e) and properly\nescape special regex characters if the search pattern contains them. This can lead to bugs when special characters are not escaped correctly.\u003c/p\u003e\n\u003cp\u003eFor example, if you want to replace all dots in a string, using \u003ccode\u003estring.replace(/./g, \u0027\u0027)\u003c/code\u003e will actually replace all characters (since\n\u003ccode\u003e.\u003c/code\u003e matches any character in regex), not just literal dots. You would need \u003ccode\u003estring.replace(/\\./g, \u0027\u0027)\u003c/code\u003e instead.\u003c/p\u003e\n\u003cp\u003eWith \u003ccode\u003eString#replaceAll()\u003c/code\u003e, you can simply use \u003ccode\u003estring.replaceAll(\u0027.\u0027, \u0027\u0027)\u003c/code\u003e which is both safer and more readable. The method\nname clearly indicates that all occurrences will be replaced.\u003c/p\u003e\n\u003cp\u003eWhen \u003ccode\u003eString#replaceAll()\u003c/code\u003e is used with a regex, the global flag is required, or a \u003ccode\u003eTypeError\u003c/code\u003e will be thrown.\u003c/p\u003e\n\u003ch3\u003eWhat is the potential impact?\u003c/h3\u003e\n\u003cp\u003eUsing the wrong replacement method can lead to unexpected behavior:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e Incorrect replacements when special regex characters are not properly escaped \u003c/li\u003e\n  \u003cli\u003e Performance issues due to unnecessary regex compilation \u003c/li\u003e\n  \u003cli\u003e Reduced code readability and maintainability \u003c/li\u003e\n  \u003cli\u003e Potential security vulnerabilities if user input is used in regex patterns without proper escaping \u003c/li\u003e\n\u003c/ul\u003e\n\u003ch3\u003eHow to fix?\u003c/h3\u003e\n\u003cp\u003eReplace \u003ccode\u003eString#replace()\u003c/code\u003e with global regex with \u003ccode\u003eString#replaceAll()\u003c/code\u003e using a string literal when the pattern doesnât need\nregex features.\u003c/p\u003e\n\u003ch4\u003eNon-compliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nconst result = text.replace(/hello/g, \u0027hi\u0027); // Noncompliant\n\u003c/pre\u003e\n\u003ch4\u003eCompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nconst result = text.replaceAll(\u0027hello\u0027, \u0027hi\u0027);\n\u003c/pre\u003e\n\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\"https://github.com/sindresorhus/eslint-plugin-unicorn#readme\"\u003eeslint-plugin-unicorn\u003c/a\u003e - Rule \u003ca\n  href=\"https://github.com/sindresorhus/eslint-plugin-unicorn/blob/HEAD/docs/rules/prefer-string-replace-all.md\"\u003eprefer-string-replace-all\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN: String.prototype.replaceAll() - \u003ca\n  href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/replaceAll\"\u003eOfficial documentation for the\n  String.replaceAll() method\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN: String.prototype.replace() - \u003ca\n  href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/replace\"\u003eOfficial documentation for the\n  String.replace() method\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "RELIABILITY",
+                                     "severity":  "LOW"
+                                 },
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

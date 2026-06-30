@@ -1,0 +1,53 @@
+﻿{
+    "rule":  {
+                 "key":  "python:S6353",
+                 "repo":  "python",
+                 "name":  "Regular expression quantifiers and character classes should be used concisely",
+                 "createdAt":  "2026-03-11T22:20:44+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "regex"
+                             ],
+                 "lang":  "py",
+                 "langName":  "Python",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eA regular expression is a sequence of characters that specifies a match pattern in text. Among the most important concepts are:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e Character classes: defines a set of characters, any one of which can occur in an input string for a match to succeed. \u003c/li\u003e\n  \u003cli\u003e Quantifiers: used to specify how many instances of a character, group, or character class must be present in the input for a match. \u003c/li\u003e\n  \u003cli\u003e Wildcard (\u003ccode\u003e.\u003c/code\u003e): matches all characters except line terminators (also matches them if the \u003ccode\u003es\u003c/code\u003e flag is set). \u003c/li\u003e\n\u003c/ul\u003e\n\u003cp\u003eMany of these features include shortcuts of widely used expressions, so there is more than one way to construct a regular expression to achieve the\nsame results. For example, to match a two-digit number, one could write \u003ccode\u003e[0-9]{2,2}\u003c/code\u003e or \u003ccode\u003e\\d{2}\u003c/code\u003e. The latter is not only shorter\nbut easier to read and thus to maintain.\u003c/p\u003e\n\u003cp\u003eThis rule recommends replacing some quantifiers and character classes with more concise equivalents:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ccode\u003e\\d\u003c/code\u003e for \u003ccode\u003e[0-9]\u003c/code\u003e and \u003ccode\u003e\\D\u003c/code\u003e for \u003ccode\u003e[^0-9]\u003c/code\u003e \u003c/li\u003e\n  \u003cli\u003e \u003ccode\u003e\\w\u003c/code\u003e for \u003ccode\u003e[A-Za-z0-9_]\u003c/code\u003e and \u003ccode\u003e\\W\u003c/code\u003e for \u003ccode\u003e[^A-Za-z0-9_]\u003c/code\u003e \u003c/li\u003e\n  \u003cli\u003e \u003ccode\u003e.\u003c/code\u003e for character classes matching everything (e.g. \u003ccode\u003e[\\w\\W]\u003c/code\u003e, \u003ccode\u003e[\\d\\D]\u003c/code\u003e, or \u003ccode\u003e[\\s\\S]\u003c/code\u003e with\n  \u003ccode\u003es\u003c/code\u003e flag) \u003c/li\u003e\n  \u003cli\u003e \u003ccode\u003ex?\u003c/code\u003e for \u003ccode\u003ex{0,1}\u003c/code\u003e, \u003ccode\u003ex*\u003c/code\u003e for \u003ccode\u003ex{0,}\u003c/code\u003e, \u003ccode\u003ex+\u003c/code\u003e for \u003ccode\u003ex{1,}\u003c/code\u003e, \u003ccode\u003ex{N}\u003c/code\u003e for\n  \u003ccode\u003ex{N,N}\u003c/code\u003e \u003c/li\u003e\n\u003c/ul\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nr\"[0-9]\"        # Noncompliant - same as r\"\\d\"\nr\"[^0-9]\"       # Noncompliant - same as r\"\\D\"\nr\"[A-Za-z0-9_]\" # Noncompliant - same as r\"\\w\"\nr\"[\\w\\W]\"       # Noncompliant - same as r\".\"\nr\"a{0,}\"        # Noncompliant - same as r\"a*\"\n\u003c/pre\u003e\n\u003cp\u003eUse the more concise version to make the regex expression more readable.\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nr\"\\d\"\nr\"\\D\"\nr\"\\w\"\nr\".\"\nr\"a*\"\n\u003c/pre\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:44+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

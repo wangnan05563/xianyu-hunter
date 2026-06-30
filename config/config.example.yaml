@@ -46,6 +46,11 @@ notifier:
     serverchan: true    # Server 酱（需配置 SERVERCHAN_KEY）
     pushplus: true       # PushPlus（需配置 PUSHPLUS_TOKEN）
     bark: true           # Bark（需配置 BARK_KEY）
+    telegram: false      # Telegram Bot（需配置 TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID）
+    wecom: false         # 企业微信机器人（需配置 WECOM_WEBHOOK_URL）
+    dingtalk: false      # 钉钉机器人（需配置 DINGTALK_WEBHOOK_URL + DINGTALK_SECRET）
+    webhook: false       # 自定义 Webhook（需配置 WEBHOOK_URL + WEBHOOK_TOKEN）
+    ntfy: false          # ntfy 跨平台推送（需配置 NTFY_TOPIC，可选 NTFY_SERVER/NTFY_TOKEN）
 
   # 免打扰时段
   quiet_hours:
@@ -60,21 +65,23 @@ notifier:
     - EVAL_PASSED
     - BUY_SUCCEEDED
     - TASK_STARTED
-    - TASK_STOPPED
     - TASK_PAUSED
-    - TASK_SEARCH_DONE
-    - ITEM_FOUND
     - EVAL_REJECTED
     - BUY_FAILED
-    - AUTH_EXPIRED
-    - WAF_BLOCKED
-    - SYSTEM_ERROR
+    - ITEM_DISCOVERED
+    - BUY_REQUESTED
+    - WAF_TRIGGERED
+    - LOGIN_EXPIRED
+    - TASK_ERROR
 
 # 以下字段为兼容旧配置保留，实际 Key 从 .env / keyring 读取
 serverchan_send_key: ''
 pushplus_token: ''
 bark_server: ''
 bark_key: ''
+ntfy_server: ''        # ntfy 服务器地址（默认 https://ntfy.sh，可自托管）
+ntfy_topic: ''          # ntfy topic（必填，建议使用不易被猜到的字符串）
+ntfy_token: ''          # ntfy 鉴权 token（可选，自托管或公共实例私有 topic 需要）
 
 # 搜索参数
 search:
@@ -94,3 +101,56 @@ price_strategy:
   market_ratio: 0.8        # 低于市场参考价的比例阈值
   enabled_top_n: true      # 启用同类低价 TopN
   top_n: 5                 # 保留前 N 个低价商品
+
+# 批量采集调度器：定时刷新在售商品详情（检测已售状态、补全字段）
+batch_refresh:
+  enabled: true                # 总开关
+  interval_minutes: 30         # 定时触发间隔（分钟）
+  batch_size: 50               # 每批从 DB 拉取的最大商品数
+  max_items_per_run: 100       # 单次运行最多采集的商品数
+  history_retention_days: 90   # 执行历史保留天数（0=永不清理）
+
+# 评估配置：商品评估打分阈值与 AI 自动化开关
+eval:
+  weights:                          # 评估维度权重（和应为 100）
+    professional: 30                # 职业卖家维度权重
+    credit: 30                      # 信用维度权重
+    dispute: 25                     # 纠纷维度权重
+    price: 15                       # 价格维度权重
+  thresholds:                       # 评估阈值（任一命中视为风险）
+    on_sale_count: 30               # 在售商品数超过此值视为职业
+    post_count_30d: 15              # 近 30 天发帖数阈值
+    top_category_ratio: 0.8         # 主营类目占比阈值
+    credit_score_min: 600           # 信用分低于此值一票否决
+    bad_review_max: 3               # 差评数上限
+    register_days_min: 30           # 注册天数下限
+  professional_keywords:            # 职业卖家关键词命中列表
+    - 批发
+    - 代理
+    - 代购
+    - 大量
+    - 店铺
+    - 厂家
+    - 直发
+    - 一手
+  # 以下两个为预留字段，当前未在 EvalConfig 中定义，后续启用
+  filter_tags: []                   # 评估过滤标签列表
+  exclude_keywords: []              # 评估排除关键词列表
+  pass_score: 60                    # 通过分数（≥此值通过，范围 0-100）
+  auto_buy_score: 80                # 自动拍下分数（≥此值全自动拍下，须 ≥ pass_score）
+  ai_auto_eval: false               # 调度流程中自动调用 AI 评估（消耗 token）
+  ai_auto_deep_analyze: false       # 调度流程中自动深度分析（消耗更多 token）
+  # 自动官方采集：对通过 pass_score 的商品自动调用官方采集做深度验证
+  auto_collect_official: false
+  # 每轮 run_once 最多自动官方采集的商品数（避免拖慢 + 反爬）
+  auto_collect_max_per_run: 3
+  # 自动官方采集去重窗口（分钟）：同一商品在窗口内不被重复采集
+  # 默认 30 分钟，避免短时间内重复采集浪费配额
+  auto_collect_dedup_window_minutes: 30
+  # 自动官方采集失败退避阈值：连续失败达到此次数后暂停本轮自动采集
+  # 默认 3 次，避免连续失败浪费配额；通过 notifier 发送告警
+  auto_collect_fail_pause_threshold: 3
+  # AI 多轮优化建议：累积 N 轮后调用 LLM 生成自然语言优化建议
+  ai_multi_run_suggestion: false
+  # 每隔多少轮生成一次 AI 建议（太小浪费 token，太大反馈滞后）
+  ai_suggestion_interval: 5

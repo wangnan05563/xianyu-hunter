@@ -1,0 +1,57 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S2310",
+                 "repo":  "typescript",
+                 "name":  "Loop counters should not be assigned within the loop body",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MAJOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eLoop counters, such as variables used to track the iteration count in loops, should not be assigned from within the loop body to avoid unexpected\nbehavior and bugs. It can inadvertently lead to an infinite loop or make the loop behavior more complex and harder to reason about.\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nconst names = [ \"Jack\", \"Jim\", \"\", \"John\" ];\nfor (let i = 0; i \u0026lt; names.length; i++) {\n  if (!names[i]) {\n    i = names.length; // Noncompliant: The loop counter i is assigned within the loop body\n  } else {\n    console.log(names[i]);\n  }\n}\n\u003c/pre\u003e\n\u003cp\u003eTo avoid these issues, you should update the loop counter only in the loopâs update statement, typically located at the end of the loop body or\nwithin the loop header.\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nconst names = [ \"Jack\", \"Jim\", \"\", \"John\" ];\nfor (let i = 0; i \u0026lt; names.length; i++) {\n  if (!names[i]) {\n    break;\n  } else {\n    console.log(names[i]);\n  }\n}\n\u003c/pre\u003e\n\u003cp\u003eAlternatively, you should use the \u003ccode\u003eforâ¦âof\u003c/code\u003e statement if your intention is only to iterate over the values of an iterable object.\u003c/p\u003e\n\u003cpre\u003e\nconst names = [ \"Jack\", \"Jim\", \"\", \"John\" ];\nfor (const name of names) {\n  if (!name) {\n    break;\n  } else {\n    console.log(name);\n  }\n}\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e MDN web docs - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/for\"\u003efor\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN web docs - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/for...of\"\u003e\u003ccode\u003efor...of\u003c/code\u003e\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN web docs - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols\"\u003eIteration protocols\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "RELIABILITY",
+                                     "severity":  "MEDIUM"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

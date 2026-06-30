@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Awaitable
@@ -164,17 +165,16 @@ class TokenRenewer:
             return
         self._running = True
         self._task = asyncio.create_task(self._renew_loop())
-        logger.info("TokenRenewer 已启动，检查间隔=%ds", self.config.check_interval_sec)
+        logger.info("TokenRenewer 已启动，检查间隔={}s", self.config.check_interval_sec)
 
     async def stop(self) -> None:
         """停止续期循环"""
         self._running = False
         if self._task and not self._task.done():
             self._task.cancel()
-            try:
+            # shutdown 中 await 已取消的子任务，使用 suppress 避免 CancelledError 中断 cleanup
+            with suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         self._task = None
         logger.info("TokenRenewer 已停止")
 
@@ -190,9 +190,10 @@ class TokenRenewer:
             try:
                 await self.check_and_renew()
             except asyncio.CancelledError:
-                break
+                # 任务被取消时重新抛出，符合 asyncio 任务取消标准模式（S7497）
+                raise
             except Exception as e:
-                logger.error("续期循环异常: %s", e)
+                logger.error("续期循环异常: {}", e)
             await asyncio.sleep(self.config.check_interval_sec)
 
     async def check_and_renew(self) -> RenewResult:
@@ -234,7 +235,7 @@ class TokenRenewer:
 
         # 3. 已过期？
         if token_info.is_expired(self.config.token_ttl_sec):
-            logger.warning("_m_h5_tk 已过期（age=%.0fs），需重新登录", age)
+            logger.warning("_m_h5_tk 已过期（age={:.0f}s），需重新登录", age)
             self._last_renew_result = RenewResult.SESSION_EXPIRED
             self._stats["total_failed"] += 1
             if self._renew_fail_callback:
@@ -242,7 +243,7 @@ class TokenRenewer:
             return RenewResult.SESSION_EXPIRED
 
         # 4. 执行续期
-        logger.info("_m_h5_tk age=%.0fs，触发续期", age)
+        logger.info("_m_h5_tk age={:.0f}s，触发续期", age)
         result = await self._do_renew()
         self._last_renew_at = time.time()
         self._last_renew_result = result
@@ -255,7 +256,7 @@ class TokenRenewer:
             self._stats["total_failed"] += 1
             if self._consecutive_failures >= self.config.max_renew_attempts:
                 logger.error(
-                    "连续 %d 次续期失败，触发重新登录",
+                    "连续 {} 次续期失败，触发重新登录",
                     self._consecutive_failures,
                 )
                 if self._renew_fail_callback:
@@ -278,7 +279,7 @@ class TokenRenewer:
                 logger.warning("_m_h5_tk 续期失败（回调返回 False）")
                 return RenewResult.FAILED
         except Exception as e:
-            logger.error("_m_h5_tk 续期异常: %s", e)
+            logger.error("_m_h5_tk 续期异常: {}", e)
             return RenewResult.FAILED
 
     # ============== 状态查询 ==============

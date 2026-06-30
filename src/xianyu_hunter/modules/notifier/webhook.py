@@ -37,6 +37,10 @@ class WebhookNotifier(BaseNotifier):
         self.webhook_url = webhook_url or get_secret(KEY_WEBHOOK_URL) or ""
         self.token = token or get_secret(KEY_WEBHOOK_TOKEN) or ""
 
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.webhook_url)
+
     async def _do_send(self, event: Event) -> str:
         if not self.webhook_url:
             raise ValueError("Webhook URL 未配置（keyring 缺失或为空）")

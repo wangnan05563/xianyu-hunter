@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -77,6 +77,31 @@ class ErrorLogsMixin:
             )
             return result.rowcount > 0
 
+    def batch_update_error_log_status(self, ids: list[int], status: str) -> int:
+        """批量更新错误日志状态
+
+        统一一次事务处理，避免循环单条更新产生的多次事务开销
+        """
+        if not ids:
+            return 0
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                ErrorLogRow.__table__.update()
+                .where(ErrorLogRow.id.in_(ids))
+                .values(status=status)
+            )
+            return result.rowcount
+
+    def batch_delete_error_logs(self, ids: list[int]) -> int:
+        """批量删除错误日志"""
+        if not ids:
+            return 0
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                ErrorLogRow.__table__.delete().where(ErrorLogRow.id.in_(ids))
+            )
+            return result.rowcount
+
     def count_error_logs_by_status(self) -> dict[str, int]:
         """按状态统计错误日志数量"""
         with self.engine.connect() as conn:
@@ -88,7 +113,9 @@ class ErrorLogsMixin:
 
     def cleanup_old_error_logs(self, days: int = 30) -> int:
         """清理指定天数前的已解决/已忽略错误日志"""
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        # S6903: 使用时区感知的 UTC 时间，避免 datetime.utcnow() 返回 naive datetime
+        # 导致与数据库中 tz-aware 时间戳比较时出现隐式时区错位
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         with self.engine.begin() as conn:
             result = conn.execute(
                 ErrorLogRow.__table__.delete().where(

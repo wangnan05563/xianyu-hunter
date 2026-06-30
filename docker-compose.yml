@@ -1,36 +1,126 @@
 # XianyuHunter Docker Compose 一键部署
 #
 # 使用方式：
-#   docker compose up -d          # 启动（后台）
-#   docker compose logs -f        # 查看日志
-#   docker compose down           # 停止
+#   docker compose up -d                        # 启动（默认 prod profile，Web+Scheduler 一体）
+#   docker compose --profile dev up -d          # 启动开发模式（仅 Web，无调度器，便于本机调试）
+#   docker compose --profile split up -d        # 启动分离模式（Web 与 Scheduler 分别运行）
+#   docker compose logs -f                      # 查看日志
+#   docker compose down                         # 停止
+#   docker compose down -v                      # 停止并清除卷（谨慎！会删除数据）
 #
 # 数据持久化：
-#   ./data 目录挂载到容器 /app/data，包含 SQLite 数据库、日志、prompts
+#   ./data     → /app/data     SQLite 数据库、日志、prompts、cookies.json
+#   ./config   → /app/config   config.yaml、eval.yaml（首次启动会从 config.example.yaml 复制）
 #
 # 环境变量：
 #   通过 .env 文件配置（自动加载），或直接在 environment 中设置
 
 services:
+  # ============== 默认服务：Web+Scheduler 一体 ==============
   xianyu-hunter:
     build: .
+    image: xianyu-hunter:latest
     container_name: xianyu-hunter
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${XH_PORT:-8000}:8000"
     volumes:
-      # 数据持久化：SQLite + 日志 + prompts
+      # 数据持久化：SQLite + 日志 + prompts + cookies.json
       - ./data:/app/data
-      # 配置文件（.env 自动加载）
+      # 配置持久化：config.yaml + eval.yaml
+      - ./config:/app/config
+      # .env 文件挂载为只读
       - ./.env:/app/.env:ro
     environment:
       - XH_WITH_SCHEDULER=1
       - PYTHONUNBUFFERED=1
-    # Playwright 需要共享内存
+      - TZ=${TZ:-Asia/Shanghai}
+    # Playwright 需要共享内存（Chromium 渲染崩溃时 OOM）
     shm_size: "1gb"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+    profiles:
+      - ""
+      - prod
+
+  # ============== 开发模式：仅 Web，无调度器 ==============
+  # 用法：docker compose --profile dev up
+  # 适用：本机调试时，调度器由 IDE 单独启动
+  xianyu-hunter-dev:
+    image: xianyu-hunter:latest
+    build: .
+    container_name: xianyu-hunter-dev
+    restart: unless-stopped
+    ports:
+      - "${XH_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./.env:/app/.env:ro
+    environment:
+      - XH_WITH_SCHEDULER=0
+      - PYTHONUNBUFFERED=1
+      - TZ=${TZ:-Asia/Shanghai}
+    shm_size: "1gb"
+    # 开发模式覆盖启动命令：不启用调度器
+    command: ["python", "-m", "xianyu_hunter", "web", "--port", "8000", "--host", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - dev
+
+  # ============== 分离模式：Web 服务 ==============
+  # 用法：docker compose --profile split up -d
+  # 适用：生产环境水平扩展 Web 服务，调度器独立运行避免单点
+  web:
+    image: xianyu-hunter:latest
+    build: .
+    container_name: xianyu-hunter-web
+    restart: unless-stopped
+    ports:
+      - "${XH_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./.env:/app/.env:ro
+    environment:
+      - XH_WITH_SCHEDULER=0
+      - PYTHONUNBUFFERED=1
+      - TZ=${TZ:-Asia/Shanghai}
+    shm_size: "1gb"
+    command: ["python", "-m", "xianyu_hunter", "web", "--port", "8000", "--host", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - split
+
+  # ============== 分离模式：Scheduler 服务 ==============
+  scheduler:
+    image: xianyu-hunter:latest
+    build: .
+    container_name: xianyu-hunter-scheduler
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./.env:/app/.env:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=${TZ:-Asia/Shanghai}
+    shm_size: "1gb"
+    # 调度器独立运行，不开放端口
+    command: ["python", "-m", "xianyu_hunter", "run"]
+    profiles:
+      - split

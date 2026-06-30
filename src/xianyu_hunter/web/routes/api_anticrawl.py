@@ -26,7 +26,7 @@ from typing import Any
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
 
-from xianyu_hunter.modules.cookie_rotator import CookieLayer, LAYER_DEFINITIONS
+from xianyu_hunter.modules.cookie_rotator import CookieLayer, LAYER_DEFINITIONS, is_m5tk_expired
 from xianyu_hunter.modules.freq_disguise import ActionType
 from xianyu_hunter.modules.login_orchestrator import get_orchestrator
 from xianyu_hunter.modules.login_strategy import LoginStrategy
@@ -61,13 +61,17 @@ def _configure_default_health_checkers(orch) -> None:
             cookies_list = data["cookies"]
             names = {c.get("name", "") for c in cookies_list}
 
-            # 1. session 层：_m_h5_tk 必须存在且有值
+            # 1. session 层：_m_h5_tk 必须存在且有值，且未过期
+            # 为什么检查 timestamp 过期：_m_h5_tk 的 cookie.expires=-1 无法判断真实过期，
+            # 但 token 内嵌 timestamp + 服务端 TTL 决定真实有效期。
+            # 若不检查，cookie_checker 会把过期的旧 token 当作有效，导致健康检查误判为健康
             has_token = any(
                 c.get("name") == "_m_h5_tk" and c.get("value")
+                and not is_m5tk_expired(c.get("value", ""))
                 for c in cookies_list
             )
             if not has_token:
-                logger.debug("cookie_checker: _m_h5_tk 缺失或无值")
+                logger.debug("cookie_checker: _m_h5_tk 缺失、无值或已过期")
                 return False
 
             # 2. identity 层：至少一个身份 Cookie 存在
@@ -644,6 +648,9 @@ async def get_cookie_layers() -> dict:
                     if c.get("name") and c.get("value")
                     and c.get("name") in needed_names
                     and not (c.get("expires", -1) and c.get("expires", -1) > 0 and c.get("expires", -1) < now)
+                    # _m_h5_tk 特殊处理：cookie.expires=-1（session cookie）无法判断真实过期，
+                    # 需检查内嵌 timestamp 是否过期，否则会与 TokenRenewer 失效标记振荡
+                    and not (c.get("name") == "_m_h5_tk" and is_m5tk_expired(c.get("value", "")))
                 }
                 if valid_cookies:
                     orch.cookie_rotator.sync_state_from_cookies(valid_cookies)
@@ -682,6 +689,8 @@ async def get_cookie_layers() -> dict:
                         if c.get("name") and c.get("value")
                         and c.get("name") in needed_names
                         and not (c.get("expires", -1) and c.get("expires", -1) > 0 and c.get("expires", -1) < now)
+                        # _m_h5_tk 同样检查内嵌 timestamp 过期（与第一步一致）
+                        and not (c.get("name") == "_m_h5_tk" and is_m5tk_expired(c.get("value", "")))
                     }
                     if browser_cookie_map:
                         orch.cookie_rotator.sync_state_from_cookies(browser_cookie_map)
@@ -694,7 +703,96 @@ async def get_cookie_layers() -> dict:
     except Exception as e:
         logger.debug("get_cookie_layers 浏览器兜底同步失败: %s", e)
 
+    # 第三步：功能可用性兜底——前两步同步后仍有层失效时，基于实际功能状态恢复
+    # 为什么需要：JSON 可能缺少某些 cookie（子进程只写了部分），浏览器也可能未初始化，
+    # 但实际功能正常（搜索/采集都能用），此时应反映真实可用性而非机械地依赖 cookie 检测
+    try:
+        current_states = orch.cookie_rotator.get_all_states()
+        still_invalid = {
+            layer for layer, state in current_states.items()
+            if not state.manual_invalidate and not state.valid
+        }
+        if still_invalid:
+            # 收集功能可用信号：任一信号为真即认为功能正常
+            functional_signals: set[str] = set()
+
+            # 信号1：collector 至少搜索过一次且未检测到会话失效
+            # 为什么需要 has_searched：last_session_invalid 初始值为 False，
+            # collector 刚启动还没搜索过时 False 不代表"功能正常"，只代表"还没机会检测到失效"
+            try:
+                from xianyu_hunter.web.deps import get_container
+                container = get_container()
+                if container.collector:
+                    # _last_m5tk_refresh 是 monotonic 时间戳，初始 0.0，搜索后 >0
+                    # 访问私有属性是防御性编程：Collector 未提供公共 getter
+                    has_searched = getattr(container.collector, '_last_m5tk_refresh', 0.0) > 0
+                    session_ok = not getattr(container.collector, 'last_session_invalid', True)
+                    if has_searched and session_ok:
+                        functional_signals.add("collector.last_session_invalid=False")
+            except Exception:
+                pass
+
+            # 信号2：JSON 中存在未过期的 _m_h5_tk（session token 有效说明登录态仍有效）
+            # 为什么检查 timestamp 过期：_m_h5_tk 可能存在但已过期（cookie.expires=-1 无法判断），
+            # 此时不能作为"功能正常"的信号恢复 session 层，否则会与 TokenRenewer 振荡
+            try:
+                store_for_check = get_cookie_store()
+                json_data = store_for_check._read_json()
+                if json_data and json_data.get("cookies"):
+                    has_m5tk = any(
+                        c.get("name") == "_m_h5_tk" and c.get("value")
+                        and not is_m5tk_expired(c.get("value", ""))
+                        for c in json_data["cookies"]
+                    )
+                    if has_m5tk:
+                        functional_signals.add("json_has_valid_m5tk")
+            except Exception:
+                pass
+
+            if functional_signals:
+                # 不同信号能恢复的层范围不同（避免用 session 信号恢复 identity 层）：
+                # - collector.last_session_invalid=False: collector 实际搜索成功，
+                #   说明整个登录链路有效，可恢复所有层
+                # - json_has_valid_m5tk: _m_h5_tk 属于 SESSION 层，
+                #   只能证明 session 有效，且需 IDENTITY 已有效（SESSION 依赖 IDENTITY）
+                if "collector.last_session_invalid=False" in functional_signals:
+                    layers_to_restore = still_invalid
+                elif "json_has_valid_m5tk" in functional_signals:
+                    if CookieLayer.IDENTITY in still_invalid:
+                        # IDENTITY 无效时 SESSION 也不能恢复（依赖关系）
+                        layers_to_restore = set()
+                    else:
+                        layers_to_restore = still_invalid & {CookieLayer.SESSION}
+                else:
+                    # 防御性：未来新增信号未在此处处理时不应默认恢复所有层
+                    logger.warning("未识别的功能信号组合: %s", functional_signals)
+                    layers_to_restore = set()
+
+                if layers_to_restore:
+                    restored = orch.cookie_rotator.force_restore_layers(
+                        layers_to_restore,
+                        reason=f"functional_signals={functional_signals}",
+                    )
+                    if restored:
+                        logger.info(
+                            "功能可用性兜底恢复: {} 个层已恢复 (signals={})",
+                            len(restored), functional_signals,
+                        )
+    except Exception as e:
+        logger.warning("get_cookie_layers 功能可用性兜底失败: %s", e)
+
     states = orch.cookie_rotator.get_all_states()
+
+    # 状态汇总日志：便于排查"功能正常但状态失效"问题
+    states_summary = {
+        layer.value: {
+            "valid": state.valid,
+            "cookies": state.cookie_count,
+            "manual": state.manual_invalidate,
+        }
+        for layer, state in states.items()
+    }
+    logger.debug("Cookie 层状态返回: {}", states_summary)
 
     return {
         "ok": True,

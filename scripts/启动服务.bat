@@ -49,11 +49,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM [3/4] Start Web server with scheduler (browser + task engine in same process)
-REM Live search API requires container.collector != None, only --with-scheduler satisfies this
-echo [3/4] Starting Web server with scheduler...
+REM [3/4] Start Web server (默认调度器模式：浏览器 + 任务引擎 + 批量采集同进程)
+REM 自 xianyu web 命令默认启用 --with-scheduler，无需显式传参
+REM 若需纯 Web 模式（不启动浏览器），改用: -m xianyu_hunter web --no-with-scheduler
+echo [3/4] Starting Web server (default: with scheduler)...
 
-start "XianyuHunter-Web" cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web --with-scheduler 2>&1 & pause"
+start "XianyuHunter-Web" cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web 2>&1 & pause"
 
 REM Wait for Web port to be ready (up to 30 seconds)
 echo Waiting for Web server...

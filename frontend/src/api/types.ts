@@ -22,7 +22,15 @@ export interface AppConfig {
   waf: { enabled: boolean; login_check_interval_min: number }
   notifier: {
     default_channels: string[]
-    channels: { serverchan: boolean; pushplus: boolean; bark: boolean }
+    channels: {
+      serverchan: boolean
+      pushplus: boolean
+      bark: boolean
+      telegram: boolean
+      wecom: boolean
+      dingtalk: boolean
+      webhook: boolean
+    }
     quiet_hours: {
       enabled: boolean
       start: string
@@ -45,6 +53,19 @@ export interface AppConfig {
     professional_keywords: string[]
     pass_score: number
     auto_buy_score: number
+    // AI 评估配置
+    ai_auto_eval: boolean
+    ai_auto_deep_analyze: boolean
+    // 自动官方采集配置
+    auto_collect_official: boolean
+    auto_collect_max_per_run: number
+    /** 自动官方采集去重窗口（分钟） */
+    auto_collect_dedup_window_minutes?: number
+    /** 自动官方采集失败退避阈值 */
+    auto_collect_fail_pause_threshold?: number
+    // P3: AI 多轮优化建议配置
+    ai_multi_run_suggestion: boolean
+    ai_suggestion_interval: number
   }
   // 搜索参数配置（对应后端 SearchConfig 模型）
   search: {
@@ -65,11 +86,24 @@ export interface AppConfig {
     enabled_top_n: boolean
     top_n: number
   }
-  // 敏感字段（脱敏后为 ***）
-  serverchan_send_key?: string
-  pushplus_token?: string
-  bark_server?: string
-  bark_key?: string
+  // 批量采集调度器配置（对应后端 BatchRefreshConfig 模型）
+  batch_refresh: {
+    enabled: boolean
+    interval_minutes: number
+    batch_size: number
+    max_items_per_run: number
+  }
+  // 通知渠道凭据（明文存到 yaml，前端用 Input.Password 组件回显）
+  serverchan_send_key: string
+  pushplus_token: string
+  bark_server: string
+  bark_key: string
+  telegram_bot_token: string
+  telegram_chat_id: string
+  wecom_webhook: string
+  dingtalk_webhook: string
+  dingtalk_secret: string
+  webhook_url: string
 }
 
 export interface BackupItem {
@@ -81,6 +115,46 @@ export interface BackupItem {
 }
 
 // ============== 任务 ==============
+
+// 任务级搜索参数覆盖：null 表示沿用全局 AppConfig.search
+// 与后端 SearchConfig 字段对齐，所有字段可选（仅覆盖用户指定项）
+export interface TaskSearchOverride {
+  page_size?: number
+  sort_type?: string
+  timeout?: number
+  regions?: string
+  filter_tags?: string[]
+}
+
+// 任务级价格策略覆盖：null 表示沿用全局 AppConfig.price_strategy
+// 与后端 PriceStrategyConfig 字段对齐
+export interface TaskPriceOverride {
+  enabled_max?: boolean
+  max_price?: number
+  enabled_min?: boolean
+  min_price?: number
+  enabled_market_ratio?: boolean
+  market_ratio?: number
+  enabled_top_n?: boolean
+  top_n?: number
+}
+
+// 任务级反检测参数覆盖：null 表示沿用全局 AppConfig.antidetect
+// 与后端 AntiDetectConfig 字段对齐
+export interface TaskAntidetectOverride {
+  qps?: number
+  min_delay_ms?: number
+  max_delay_ms?: number
+  fail_pause_threshold?: number
+  fail_window_sec?: number
+}
+
+// 任务级 eval 配置覆盖：null 表示沿用全局 AppConfig.eval
+// 与后端 EvalConfig 字段对齐，仅暴露需要任务级覆盖的字段
+export interface TaskEvalOverride {
+  auto_collect_official?: boolean
+  auto_collect_max_per_run?: number
+}
 
 export interface Task {
   id: string
@@ -98,6 +172,15 @@ export interface Task {
   use_cron: number
   // 固定间隔调度模式下的循环间隔（秒），仅 use_cron=false 时生效
   interval_seconds: number
+  // AI 评估任务级配置：null/undefined 表示沿用全局 eval.pass_score
+  // 注意：DB 默认值 60（NOT NULL），此处类型仍允许 null 以支持"未设置"语义
+  eval_threshold: number | null
+  ai_prompt: string | null
+  // 任务级配置覆盖（JSON 字段，后端 get_task 已解析为对象；null 表示沿用全局）
+  search_config: TaskSearchOverride | null
+  price_config: TaskPriceOverride | null
+  antidetect_config: TaskAntidetectOverride | null
+  eval_config: TaskEvalOverride | null
   status: string
   created_at: string
   updated_at: string
@@ -117,6 +200,14 @@ export interface TaskCreateBody {
   cron?: string
   use_cron?: boolean
   interval_seconds?: number
+  // AI 评估任务级配置：undefined=不更新（编辑模式），null=清除覆盖沿用全局
+  eval_threshold?: number | null
+  ai_prompt?: string | null
+  // 任务级配置覆盖：undefined=不更新，null/{}=清除覆盖，对象=应用覆盖
+  search_config?: TaskSearchOverride | null
+  price_config?: TaskPriceOverride | null
+  antidetect_config?: TaskAntidetectOverride | null
+  eval_config?: TaskEvalOverride | null
 }
 
 export interface TaskRun {
@@ -141,10 +232,13 @@ export interface TaskLink {
   link_key: string
   link_type: string
   source: string
+  // DB 顶层字段：task_links 行的最近更新时间，DB 模式下由后端返回，live 模式无此字段
+  updated_at?: string
   display: {
     title: string
     price: number
     thumb_url?: string
+    image_urls?: string[]  // 详情页采集的图片列表（主图+细节图）
     brand?: string
     region?: string
     seller_id?: string
@@ -242,6 +336,14 @@ export interface AIConfig {
   api_key: string
   model: string
   vision_model: string
+  // Embedding 配置（独立于 LLM，DeepSeek 等厂商不支持 /embeddings 时需单独配置）
+  // 留空时后端 fallback 到 LLM 配置（向后兼容）
+  embedding_base_url?: string
+  embedding_api_key?: string
+  embedding_model?: string
+  // 0 表示由模型决定（Ollama 等本地模型不接受 dimensions 参数）
+  embedding_dimensions?: number
+  embedding_has_key?: boolean
 }
 
 export interface AIUsage {
@@ -275,6 +377,14 @@ export interface AITestConnectionResult {
   detail?: string
 }
 
+// Embedding 连接测试结果：额外返回 dimensions 便于前端展示模型实际维度
+export interface AITestEmbeddingResult {
+  ok: boolean
+  model?: string
+  dimensions?: number
+  detail?: string
+}
+
 export interface AIBudgetBody {
   daily_token_limit: number
   daily_cost_limit_usd: number
@@ -292,6 +402,49 @@ export interface AIParseTaskResult {
   reason?: string
   source?: 'llm' | 'rule'
   [k: string]: unknown
+}
+
+// ============== AI 深度分析（O-13-26 接入 api_ai_deep）==============
+
+// 单个维度的检查结果（stolen_image / damage / consistency / template）
+export interface DeepCheckResult {
+  score: number              // 1-10，10=最好
+  risk_level: 'low' | 'medium' | 'high'
+  signals?: string[]         // 检测到的风险信号
+  damages?: string[]         // damage 维度：损坏类型
+  inconsistencies?: string[] // consistency 维度：不一致项
+  detail: string
+}
+
+// POST /api/ai/deep-analyze 响应
+export interface DeepAnalyzeResult {
+  item_id: string
+  checks_performed: string[]
+  source: 'llm' | 'rule'
+  // 4 个维度的检查结果（按 checks_performed 过滤）
+  stolen_image?: DeepCheckResult
+  damage?: DeepCheckResult
+  consistency?: DeepCheckResult
+  template?: DeepCheckResult
+  // 全局字段
+  overall_verdict: 'recommend' | 'caution' | 'reject'
+  overall_score: number      // 1-10
+  summary: string            // 一句话总结
+  image_hashes?: Array<{ url: string; hash: string }>
+}
+
+// POST /api/ai/seller-template-check 响应
+export interface SellerTemplateCheckResult {
+  seller_id: string
+  sample_count: number
+  template_score: number     // 1-10，10=个性化文案
+  is_dealer: boolean
+  risk_level: 'low' | 'medium' | 'high'
+  signals: string[]
+  keyword_freq?: Record<string, number>
+  shared_sentences_count?: number
+  desc_length_variance?: number
+  detail: string
 }
 
 // ============== 订单 ==============
@@ -368,15 +521,62 @@ export interface TodayAlert {
   ts: string
 }
 
+// O-08-26 评估漏斗
+export interface EvalFunnelStage {
+  key: string
+  label: string
+  count: number
+  // 相对第一阶段（采集商品数）的占比，用于展示整体转化
+  pct_of_first: number
+  // 相对上一阶段的占比，用于展示阶段间流失
+  pct_of_prev: number
+}
+
+export interface EvalFunnelMetrics {
+  // 命中率：评估通过率 = eval_pass / evaluated
+  hit_rate: number
+  // 误报率：抢单失败数 / 抢单触发数
+  false_positive_rate: number
+  // 转化率：抢单成功率 = order_succeeded / order_triggered
+  conversion_rate: number
+  // 端到端成功率 = order_succeeded / discovered
+  overall_rate: number
+}
+
+export interface EvalFunnelData {
+  range_days: number
+  generated_at: string
+  stages: EvalFunnelStage[]
+  metrics: EvalFunnelMetrics
+}
+
 export interface HistogramData {
   bins: Array<{ min: number; max: number | null; count: number }>
   summary: {
     count: number; min: number; max: number; mean: number; median: number
     p25: number; p75: number
-    compare: { yesterday: number; last7d: number; diff_pct: number }
+    // O-09-26 扩展：新增 last30d 字段用于 30 日均价基线
+    compare: { yesterday: number; last7d: number; last30d: number; diff_pct: number }
+    // P-09-30 新增：任务定价范围，用于在直方图上显示定价上下限标线
+    // mode=all 时两个字段均为 null；mode=task 且任务未设置定价范围时也为 null
+    task_price_range: { min_price: number | null; max_price: number | null }
   }
   scope: { mode: string; task_id: string | null; label: string }
   mode: string
+}
+
+// O-09-26 价格趋势对比基线
+export interface PriceTrendData {
+  task_id: string | null
+  generated_at: string
+  today_avg: number
+  d7_avg: number
+  d30_avg: number
+  // 今日相对 7 日均价的涨跌幅（短期趋势）
+  delta_pct_7d: number
+  // 今日相对 30 日均价的涨跌幅（中长期趋势）
+  delta_pct_30d: number
+  sample_size: { today: number; d7: number; d30: number }
 }
 
 // ============== 时间线 / 日志 ==============

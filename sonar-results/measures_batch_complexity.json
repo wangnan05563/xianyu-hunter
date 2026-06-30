@@ -1,0 +1,19 @@
+﻿{
+    "component":  {
+                      "key":  "xianyu_hunter",
+                      "name":  "Xianyu Hunter",
+                      "description":  "Multi-component project: Python FastAPI backend + React TypeScript frontend",
+                      "qualifier":  "TRK",
+                      "measures":  [
+                                       {
+                                           "metric":  "complexity",
+                                           "value":  "9381"
+                                       },
+                                       {
+                                           "metric":  "cognitive_complexity",
+                                           "value":  "8734",
+                                           "bestValue":  false
+                                       }
+                                   ]
+                  }
+}

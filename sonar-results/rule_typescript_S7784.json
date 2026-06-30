@@ -1,0 +1,59 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S7784",
+                 "repo":  "typescript",
+                 "name":  "\"structuredClone()\" should be used instead of other deep cloning methods",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "performance",
+                                 "modernize",
+                                 "es2021"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003e\u003ccode\u003estructuredClone()\u003c/code\u003e is the modern, standardized way to create deep clones in JavaScript. Itâs part of the web platform and provides\nseveral advantages over alternative approaches.\u003c/p\u003e\n\u003cp\u003eThe \u003ccode\u003eJSON.parse(JSON.stringify())\u003c/code\u003e pattern has significant limitations. It cannot handle functions, undefined values, symbols, or Date\nobjects correctly. It also fails with circular references and loses prototype information.\u003c/p\u003e\n\u003cp\u003eLibrary-based solutions like \u003ccode\u003e_.cloneDeep()\u003c/code\u003e work correctly but add external dependencies to your project. They increase bundle size and\ncreate maintenance overhead.\u003c/p\u003e\n\u003cp\u003e\u003ccode\u003estructuredClone()\u003c/code\u003e handles these cases properly. It supports a wide range of data types including Date objects, RegExp, Maps, Sets, and\neven handles circular references. Itâs also faster than JSON-based approaches and doesnât require external libraries.\u003c/p\u003e\n\u003ch3\u003eWhat is the potential impact?\u003c/h3\u003e\n\u003cp\u003eUsing inferior cloning methods can lead to subtle bugs when the cloned objects donât behave as expected. The JSON approach can silently corrupt\ndata by dropping properties or changing types. External libraries increase bundle size and create dependency management overhead.\u003c/p\u003e\n\u003ch3\u003eHow to fix?\u003c/h3\u003e\n\u003cp\u003eReplace \u003ccode\u003eJSON.parse(JSON.stringify())\u003c/code\u003e with \u003ccode\u003estructuredClone()\u003c/code\u003e. This provides proper deep cloning without the limitations of\nJSON serialization.\u003c/p\u003e\n\u003ch4\u003eNon-compliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nconst clone = JSON.parse(JSON.stringify(originalObject)); // Noncompliant\n\u003c/pre\u003e\n\u003ch4\u003eCompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nconst clone = structuredClone(originalObject);\n\u003c/pre\u003e\n\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\"https://github.com/sindresorhus/eslint-plugin-unicorn#readme\"\u003eeslint-plugin-unicorn\u003c/a\u003e - Rule \u003ca\n  href=\"https://github.com/sindresorhus/eslint-plugin-unicorn/blob/HEAD/docs/rules/prefer-structured-clone.md\"\u003eprefer-structured-clone\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN: structuredClone() - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/API/structuredClone\"\u003eOfficial documentation for the\n  structuredClone() API\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN: Structured Clone Algorithm - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Structured_clone_algorithm\"\u003eDetails\n  about the structured clone algorithm and supported data types\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "introduction",
+                                                 "content":  "\u003cp\u003eThis rule flags code that uses \u003ccode\u003eJSON.parse(JSON.stringify())\u003c/code\u003e or library functions like \u003ccode\u003e_.cloneDeep()\u003c/code\u003e to create deep clones\nof objects.\u003c/p\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "EFFICIENT",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

@@ -83,6 +83,13 @@ class TaskScheduler:
             h = self._workers[task_id]
             if h.loop_task and not h.loop_task.done():
                 raise RuntimeError(f"任务 {task_id} 仍在运行，请先 stop")
+            # 清理 Worker 的异步任务，防止内存泄漏
+            cleanup = getattr(h.worker, "cleanup", None)
+            if cleanup:
+                try:
+                    await cleanup()
+                except Exception as e:
+                    logger.warning(f"[Task {task_id}] Worker cleanup 失败: {e}")
             del self._workers[task_id]
 
     # ============== 启停控制 ==============
@@ -283,7 +290,15 @@ class TaskScheduler:
                         f"[Task {task_id}] 连续失败 {h.consecutive_errors} 次，"
                         f"达到阈值 {max_errors}，自动暂停任务"
                     )
+                    h.pause_event.clear()
                     h.task.status = TaskStatus.PAUSED
+                    # 同步数据库状态，确保 API 读取到正确的 paused 状态
+                    # 与 should_pause 分支（L248-251）保持一致
+                    if self._repo:
+                        try:
+                            self._repo.update_task_status(task_id, "paused")
+                        except Exception as db_err:
+                            logger.warning(f"[Task {task_id}] 暂停状态同步 DB 失败: {db_err}")
                     break
                 # 出错后等待 5 分钟再试（避免刷错误日志）
                 try:

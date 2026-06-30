@@ -1,0 +1,1 @@
+﻿26 failed, 1208 passed, 81 warnings, 24 errors in 597.68s (0:09:57)

@@ -4,7 +4,9 @@
 // 因此 Orders.tsx 仍保留自己的 STATUS_TEXT，仅颜色从此处统一获取
 export const ORDER_STATUS_CONFIG: Record<string, { color: string; label: string }> = {
   succeeded: { color: 'green', label: '成功' },
-  pending: { color: 'orange', label: '待处理' },
+  // 与后端 OrderStatus.PENDING_PAY.value = "pending_pay" 对齐
+  pending_pay: { color: 'orange', label: '待支付' },
+  paid: { color: 'blue', label: '已支付' },
   submitting: { color: 'blue', label: '提交中' },
   paying: { color: 'blue', label: '支付中' },
   failed: { color: 'red', label: '失败' },

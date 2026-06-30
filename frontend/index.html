@@ -2,11 +2,20 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>XianyuHunter 闲鱼猎人</title>
     <!-- Favicon：仅引用实际存在的 favicon.ico，避免 png 资源 404 -->
     <link rel="icon" type="image/x-icon" href="./favicon.ico" />
     <link rel="shortcut icon" href="./favicon.ico" />
+    <!-- O-12-26 PWA 移动端优化 meta -->
+    <!-- theme-color：浏览器地址栏配色，与 manifest 一致使用品牌橙 -->
+    <meta name="theme-color" content="#FF6200" />
+    <!-- iOS Safari 全屏 PWA 模式 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="闲鱼猎人" />
+    <!-- iOS 主屏图标：SVG 不被支持，必须 PNG -->
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   </head>
   <body>
     <div id="root"></div>

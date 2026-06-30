@@ -507,7 +507,7 @@ async def _call_llm_vision(
     except httpx.TimeoutException:
         raise RuntimeError("AI 成色评估超时（>60s），图片分析较慢请稍后重试") from None
     except httpx.HTTPError as e:
-        raise RuntimeError("AI 成色评估网络错误: " + str(e)) from None
+        raise RuntimeError(f"AI 成色评估网络错误: {e}") from None
     if r.status_code != 200:
         snippet = r.text[:300]
         raise RuntimeError(f"AI 服务返回 {r.status_code}: {snippet}")
@@ -830,24 +830,41 @@ class AIConfigBody(BaseModel):
     api_key: str | None = None
     model: str | None = None
     vision_model: str | None = None
+    # Embedding 配置（独立于 LLM，DeepSeek 等厂商不支持 /embeddings 时需单独配置）
+    embedding_base_url: str | None = None
+    embedding_api_key: str | None = None
+    embedding_model: str | None = None
+    embedding_dimensions: int | None = None
+
+
+def _mask_key(key: str) -> str:
+    """API Key 脱敏：仅保留末 4 位"""
+    if not key:
+        return ""
+    return "****" + key[-4:] if len(key) > 4 else "****"
 
 
 @router.get("/config")
 def get_ai_config() -> dict[str, Any]:
-    """获取当前 AI 配置（API Key 脱敏显示）"""
+    """获取当前 AI 配置（API Key 脱敏显示）
+
+    返回 LLM 和 Embedding 两组配置。Embedding 留空时前端应提示
+    "未配置则复用 LLM 设置"，避免用户误以为配置丢失。
+    """
     settings = get_settings()
-    key = settings.openai_api_key
-    # 脱敏：仅保留末4位
-    masked_key = ""
-    if key:
-        masked_key = "****" + key[-4:] if len(key) > 4 else "****"
     return {
         "ai_enabled": settings.ai_enabled,
         "base_url": settings.openai_base_url,
-        "api_key": masked_key,
+        "api_key": _mask_key(settings.openai_api_key),
         "model": settings.openai_model,
         "vision_model": settings.openai_vision_model,
         "has_key": bool(settings.openai_api_key),
+        # Embedding 配置：留空表示 fallback 到 LLM（向后兼容）
+        "embedding_base_url": settings.embedding_base_url,
+        "embedding_api_key": _mask_key(settings.embedding_api_key),
+        "embedding_model": settings.embedding_model,
+        "embedding_dimensions": settings.embedding_dimensions,
+        "embedding_has_key": bool(settings.embedding_api_key),
     }
 
 
@@ -856,6 +873,7 @@ def save_ai_config(body: AIConfigBody) -> dict[str, Any]:
     """保存 AI 配置（热更新，无需重启服务）
 
     API Key 通过 keyring 安全存储，其余配置写入 .env。
+    embedding_* 字段全为 None 时跳过更新（前端只改 LLM 部分时不影响 embedding）。
     """
     # API Key 特殊处理：空字符串表示清除，"****xxxx" 表示未修改
     api_key = body.api_key
@@ -869,18 +887,27 @@ def save_ai_config(body: AIConfigBody) -> dict[str, Any]:
             sec.delete_secret(sec.KEY_OPENAI_API_KEY)
             api_key = ""  # 写入 .env 为空
 
+    # Embedding API Key 同样处理：脱敏值跳过，空字符串清除
+    emb_api_key = body.embedding_api_key
+    if emb_api_key is not None:
+        if emb_api_key.startswith("****"):
+            emb_api_key = None
+        elif emb_api_key == "":
+            from xianyu_hunter.infra import secrets as sec
+            sec.delete_secret(sec.KEY_EMBEDDING_API_KEY)
+            emb_api_key = ""
+
     update_ai_config(
         ai_enabled=body.ai_enabled,
         base_url=body.base_url,
         api_key=api_key,
         model=body.model,
         vision_model=body.vision_model,
+        embedding_base_url=body.embedding_base_url,
+        embedding_api_key=emb_api_key,
+        embedding_model=body.embedding_model,
+        embedding_dimensions=body.embedding_dimensions,
     )
-
-    # 如果有新 API Key，同步到 keyring
-    if api_key and not api_key.startswith("****"):
-        from xianyu_hunter.infra import secrets as sec
-        sec.set_secret(sec.KEY_OPENAI_API_KEY, api_key)
 
     logger.info("[AI Config] 配置已更新（热更新，无需重启）")
     return {"ok": True, "message": "AI 配置已保存并即时生效"}
@@ -925,6 +952,91 @@ def test_ai_connection() -> dict[str, Any]:
         except Exception:
             record_usage("test_connection", settings.openai_model)
             return {"ok": True, "model": settings.openai_model}
+    else:
+        snippet = r.text[:200]
+        return {"ok": False, "detail": f"API 返回 {r.status_code}: {snippet}"}
+
+
+@router.post("/test-embedding")
+def test_embedding_connection() -> dict[str, Any]:
+    """测试 Embedding 服务连接
+
+    发送一个最小化 embedding 请求验证端点和模型是否可用。
+    与 LLM 测试分离：embedding 端点可能完全不同（如本地 Ollama）。
+
+    支持两种 backend：
+    - 本地：EMBEDDING_BASE_URL 为空或 "local"，调用 sentence-transformers
+    - 远程：OpenAI 兼容 /v1/embeddings 协议
+    """
+    settings = get_settings()
+    base_url = (settings.embedding_base_url or "").strip()
+    # 与 container.py 的 fallback 逻辑保持一致：settings 优先，空时读 cfg.kb
+    # 避免硬编码 "text-embedding-3-small" 导致本地模式加载错误模型
+    from xianyu_hunter.infra.yaml_config import get_config
+    cfg = get_config()
+    model = settings.embedding_model or cfg.kb.embedding_model
+    dimensions = (
+        settings.embedding_dimensions
+        if settings.embedding_dimensions > 0
+        else cfg.kb.embedding_dimensions
+    )
+
+    # 本地模式：直接调用 LocalEmbeddingBackend
+    # 首次调用会触发模型下载（约 95MB for bge-small-zh-v1.5），可能耗时较久
+    if not base_url or base_url.lower() == "local":
+        try:
+            from xianyu_hunter.modules.chatbot.local_embedding import LocalEmbeddingBackend
+            backend = LocalEmbeddingBackend(model)
+            vec = backend.embed("test")
+            return {
+                "ok": True,
+                "model": model,
+                "dimensions": len(vec),
+            }
+        except ImportError as e:
+            return {
+                "ok": False,
+                "detail": f"sentence-transformers 未安装: {e}",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "detail": f"本地 embedding 加载失败: {type(e).__name__}: {e}",
+            }
+
+    # 远程模式：OpenAI 兼容 /v1/embeddings 协议
+    api_key = settings.embedding_api_key or settings.openai_api_key
+    if not api_key:
+        return {"ok": False, "detail": "未配置 API Key（embedding 与 LLM 均为空）"}
+
+    url = base_url.rstrip("/") + "/embeddings"
+    payload: dict[str, Any] = {"model": model, "input": "test"}
+    # dimensions=0 表示由模型决定（Ollama 等本地模型不接受该参数）
+    if settings.embedding_dimensions > 0:
+        payload["dimensions"] = settings.embedding_dimensions
+    headers = {
+        "Authorization": "Bearer " + api_key,
+        "Content-Type": "application/json",
+    }
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            r = client.post(url, json=payload, headers=headers)
+    except httpx.TimeoutException:
+        return {"ok": False, "detail": "连接超时（>15s），请检查 embedding 服务是否运行"}
+    except httpx.HTTPError as e:
+        return {"ok": False, "detail": f"网络错误: {e}"}
+
+    if r.status_code == 200:
+        try:
+            data = r.json()
+            vec = data["data"][0]["embedding"]
+            return {
+                "ok": True,
+                "model": data.get("model", model),
+                "dimensions": len(vec),
+            }
+        except (KeyError, IndexError) as e:
+            return {"ok": False, "detail": f"响应格式异常: {e}"}
     else:
         snippet = r.text[:200]
         return {"ok": False, "detail": f"API 返回 {r.status_code}: {snippet}"}

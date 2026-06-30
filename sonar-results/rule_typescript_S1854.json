@@ -1,0 +1,62 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S1854",
+                 "repo":  "typescript",
+                 "name":  "Unused assignments should be removed",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MAJOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "cwe",
+                                 "unused"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "1min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "1min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eStandards\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e CWE - \u003ca href=\"https://cwe.mitre.org/data/definitions/563\"\u003eCWE-563 - Assignment to Variable without Use (\u0027Unused Variable\u0027)\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e\n\u003ch3\u003eRelated rules\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\u0027/coding_rules#rule_key=javascript%3AS1763\u0027\u003eS1763\u003c/a\u003e - All code should be reachable \u003c/li\u003e\n  \u003cli\u003e \u003ca href=\u0027/coding_rules#rule_key=javascript%3AS2589\u0027\u003eS2589\u003c/a\u003e - Boolean expressions should not be gratuitous \u003c/li\u003e\n  \u003cli\u003e \u003ca href=\u0027/coding_rules#rule_key=javascript%3AS3516\u0027\u003eS3516\u003c/a\u003e - Function returns should not be invariant \u003c/li\u003e\n  \u003cli\u003e \u003ca href=\u0027/coding_rules#rule_key=javascript%3AS3626\u0027\u003eS3626\u003c/a\u003e - Jump statements should not be redundant \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eDead stores refer to assignments made to local variables that are subsequently never used or immediately overwritten. Such assignments are\nunnecessary and donât contribute to the functionality or clarity of the code. They may even negatively impact performance. Removing them enhances code\ncleanliness and readability. Even if the unnecessary operations do not do any harm in terms of the programâs correctness, they are - at best - a waste\nof computing resources.\u003c/p\u003e\n\u003ch3\u003eExceptions\u003c/h3\u003e\n\u003cp\u003eThe rule ignores\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e Initializations to \u003ccode\u003e-1\u003c/code\u003e, \u003ccode\u003e0\u003c/code\u003e, \u003ccode\u003e1\u003c/code\u003e, \u003ccode\u003eundefined\u003c/code\u003e, \u003ccode\u003e[]\u003c/code\u003e, \u003ccode\u003e{}\u003c/code\u003e,\n  \u003ccode\u003etrue\u003c/code\u003e, \u003ccode\u003efalse\u003c/code\u003e and \u003ccode\u003e\"\"\u003c/code\u003e. \u003c/li\u003e\n  \u003cli\u003e Variables that start with an underscore (e.g. \u003ccode\u003e_unused\u003c/code\u003e) are ignored. \u003c/li\u003e\n  \u003cli\u003e Assignment of \u003ccode\u003enull\u003c/code\u003e is ignored because it is sometimes used to help garbage collection \u003c/li\u003e\n  \u003cli\u003e Increment and decrement expressions are ignored because they are often used idiomatically instead of \u003ccode\u003ex+1\u003c/code\u003e \u003c/li\u003e\n  \u003cli\u003e This rule also ignores variables declared with object destructuring using rest syntax (used to exclude some properties from object) \u003c/li\u003e\n\u003c/ul\u003e\n\u003cpre\u003e\nlet {a, b, ...rest} = obj;  // \u0027a\u0027 and \u0027b\u0027 are compliant\ndoSomething(rest);\n\nlet [x1, x2, x3] = arr;     // \u0027x1\u0027 is noncompliant, as omitting syntax can be used: \"let [, x2, x3] = arr;\"\ndoSomething(x2, x3);\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003cp\u003eRemove the unnecessary assignment, then test the code to make sure that the right-hand side of a given assignment had no side effects (e.g. a\nmethod that writes certain data to a file and returns the number of written bytes).\u003c/p\u003e\n\n\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nfunction foo(y) {\n  let x = 100; // Noncompliant: dead store\n  x = 150;     // Noncompliant: dead store\n  x = 200;\n  return x + y;\n}\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nfunction foo(y) {\n  let x = 200; // Compliant: no unnecessary assignment\n  return x + y;\n}\n\u003c/pre\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "LOGICAL",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "MEDIUM"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

@@ -31,6 +31,10 @@ class TelegramNotifier(BaseNotifier):
         self.bot_token = bot_token or get_secret(KEY_TELEGRAM_TOKEN) or ""
         self.chat_id = chat_id or get_secret(KEY_TELEGRAM_CHAT) or ""
 
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.bot_token and self.chat_id)
+
     async def _do_send(self, event: Event) -> str:
         if not self.bot_token:
             raise ValueError("Telegram bot_token 未配置（keyring 缺失或为空）")

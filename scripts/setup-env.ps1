@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     XianyuHunter 一键环境配置脚本
 .DESCRIPTION
@@ -369,6 +369,15 @@ Invoke-Safe { & $VenvPython -m pip @pipArgs } "安装 requirements.txt"
 
 # 以可编辑模式安装项目本体，让 `import xianyu_hunter` 生效（pyproject.toml 配置 src 布局）
 Invoke-Safe { & $VenvPython -m pip install -e $ProjectRoot } "安装项目本体（可编辑模式）"
+
+# chromadb 是 pyproject.toml 主依赖（智能客服 RAG 向量库），但 requirements.txt 由 pip freeze
+# 生成可能滞后；pip install -e . 在项目已以可编辑模式安装时会跳过依赖重检，导致 chromadb 缺失。
+# 此处显式安装作为保障；失败不阻断主流程（chromadb 缺失时 chatbot 子容器自动降级为 None）
+try {
+    Invoke-Safe { & $VenvPython -m pip install "chromadb>=1.0.0" } "安装 chromadb（智能客服向量库）"
+} catch {
+    Write-Warn "chromadb 安装失败（智能客服功能将不可用）：$_"
+}
 
 # 核心模块导入冒烟测试，提前发现依赖缺失或路径错误
 # 用 -join 合并可能的数组输出，-notmatch 避免 stderr 警告干扰判断

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xianyu-hunter"
-version = "0.1.0"
+version = "0.2.0"
 description = "闲鱼自动捡漏与抢单系统"
 requires-python = ">=3.10"
 dependencies = [
@@ -35,6 +35,8 @@ dependencies = [
     "keyring>=24.0",                # Windows DPAPI 密钥存储
     "tenacity>=8.2",                # 重试机制
     "cryptography>=42.0",           # Chrome v80+ Cookie AES-256-GCM 解密
+    # Chatbot RAG 向量库
+    "chromadb>=1.0.0",              # 1.x 提供 cp39-abi3 预编译 wheel，兼容 Python 3.14 且无需 C++ 编译
 ]
 
 [project.optional-dependencies]

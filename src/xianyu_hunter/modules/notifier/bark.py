@@ -37,6 +37,10 @@ class BarkNotifier(BaseNotifier):
         self.server = (server or get_secret(KEY_BARK_SERVER) or DEFAULT_SERVER).rstrip("/")
         self.key = key or get_secret(KEY_BARK_KEY) or ""
 
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.key)
+
     async def _do_send(self, event: Event) -> str:
         if not self.key:
             raise ValueError("Bark key 未配置（keyring 缺失或为空）")

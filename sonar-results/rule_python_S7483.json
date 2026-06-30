@@ -1,0 +1,88 @@
+﻿{
+    "rule":  {
+                 "key":  "python:S7483",
+                 "repo":  "python",
+                 "name":  "Asynchronous functions should not accept timeout parameters",
+                 "createdAt":  "2026-03-11T22:20:44+0800",
+                 "severity":  "MAJOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "async",
+                                 "trio",
+                                 "asyncio",
+                                 "anyio"
+                             ],
+                 "lang":  "py",
+                 "langName":  "Python",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "ALL",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "introduction",
+                                                 "content":  "\u003cp\u003eThis rule raises an issue when an asynchronous function accepts a \u003ccode\u003etimeout\u003c/code\u003e parameter instead of using the timeout context managers.\u003c/p\u003e"
+                                             },
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nimport asyncio\n\nasync def example_function(timeout): # Noncompliant\n    await asyncio.sleep(timeout)\n\nasync def main():\n    await example_function(5)\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nimport asyncio\n\nasync def example_function():\n    await asyncio.sleep(5)\n\nasync def main():\n    async with asyncio.timeout(5): # Compliant\n        await example_function()\n\u003c/pre\u003e",
+                                                 "context":  {
+                                                                 "displayName":  "Asyncio",
+                                                                 "key":  "asyncio"
+                                                             }
+                                             },
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e Asyncio documentation - \u003ca href=\"https://docs.python.org/3/library/asyncio-task.html#asyncio.timeout\"\u003eTimeouts\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e Trio documentation - \u003ca href=\"https://trio.readthedocs.io/en/stable/reference-core.html#cancellation-and-timeouts\"\u003eCancellation and\n  timeouts\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e AnyIO documentation - \u003ca href=\"https://anyio.readthedocs.io/en/stable/cancellation.html#timeouts\"\u003eTimeouts\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"3\" data-diff-type=\"noncompliant\"\u003e\nimport anyio\n\nasync def example_function(timeout): # Noncompliant\n    await anyio.sleep(timeout)\n\nasync def main():\n    await example_function(5)\n\nanyio.run(main)\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"3\" data-diff-type=\"compliant\"\u003e\nimport anyio\n\nasync def example_function():\n    await anyio.sleep(5)\n\nasync def main():\n    with anyio.move_on_after(5): # Compliant\n        await example_function()\n\nanyio.run(main)\n\u003c/pre\u003e",
+                                                 "context":  {
+                                                                 "displayName":  "AnyIO",
+                                                                 "key":  "anyio"
+                                                             }
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eModern asynchronous Python libraries like \u003ccode\u003easyncio\u003c/code\u003e, \u003ccode\u003eanyio\u003c/code\u003e, and \u003ccode\u003etrio\u003c/code\u003e promote a principle called\n\u003cstrong\u003estructured concurrency\u003c/strong\u003e. A key aspect of this is that the caller of an asynchronous function should be responsible for managing\ntimeouts and cancellation, not the callee.\u003c/p\u003e\n\u003cp\u003eWhen an \u003ccode\u003easync\u003c/code\u003e function accepts a \u003ccode\u003etimeout\u003c/code\u003e parameter, it violates this principle:\u003c/p\u003e\n\u003col\u003e\n  \u003cli\u003e \u003cstrong\u003eCoupling between logic and timeout handling\u003c/strong\u003e: The function dictates how the timeout is handled internally, rather than letting\n  the caller decide. \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003ePreempting caller control\u003c/strong\u003e: The caller might want to enforce a different timeout duration or coordinate timeouts across several\n  concurrent operations. An internal timeout parameter makes this difficult or impossible. \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eReducing composability\u003c/strong\u003e: Combining functions that manage their own timeouts can lead to complex and unpredictable behavior,\n  especially when nesting calls or running tasks concurrently under a shared deadline. \u003c/li\u003e\n\u003c/ol\u003e\n\u003cp\u003eInstead, the caller should use the timeout features provided by the concurrency library (e.g., \u003ccode\u003easync with asyncio.timeout()\u003c/code\u003e or\n\u003ccode\u003ewith trio.move_on_after()\u003c/code\u003e). This separates the concern of what the function does from how long the caller is willing to wait for it.\u003c/p\u003e"
+                                             },
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"2\" data-diff-type=\"noncompliant\"\u003e\nimport trio\n\nasync def example_function(timeout): # Noncompliant\n    await trio.sleep(timeout)\n\nasync def main():\n    await example_function(5)\n\ntrio.run(main)\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"2\" data-diff-type=\"compliant\"\u003e\nimport trio\n\nasync def example_function():\n    await trio.sleep(5)\n\nasync def main():\n    with trio.move_on_after(5): # Compliant\n        await example_function()\n\ntrio.run(main)\n\u003c/pre\u003e",
+                                                 "context":  {
+                                                                 "displayName":  "Trio",
+                                                                 "key":  "trio"
+                                                             }
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:44+0800",
+                 "cleanCodeAttribute":  "FOCUSED",
+                 "cleanCodeAttributeCategory":  "ADAPTABLE",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "MEDIUM"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

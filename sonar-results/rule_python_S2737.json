@@ -1,0 +1,56 @@
+﻿{
+    "rule":  {
+                 "key":  "python:S2737",
+                 "repo":  "python",
+                 "name":  "\"except\" clauses should do more than raise the same issue",
+                 "createdAt":  "2026-03-11T22:20:44+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "error-handling",
+                                 "unused",
+                                 "finding",
+                                 "clumsy"
+                             ],
+                 "lang":  "py",
+                 "langName":  "Python",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eAn \u003ccode\u003eexcept\u003c/code\u003e clause that only rethrows the caught exception has the same effect as omitting the \u003ccode\u003eexcept\u003c/code\u003e altogether and\nletting it bubble up automatically.\u003c/p\u003e\n\u003cpre\u003e\na = {}\ntry:\n    a[5]\nexcept KeyError:\n    raise  # Noncompliant\n\u003c/pre\u003e\n\u003cp\u003eSuch clauses should either be removed or populated with the appropriate logic.\u003c/p\u003e\n\u003cpre\u003e\na = {}\ntry:\n    a[5]\nexcept KeyError as e:\n    logging.exception(\u0027error while accessing the dict\u0027)\n    raise e\n\u003c/pre\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:44+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Table, Tag, Button, Space, Spin, Input, Select, Slider, Row, Col, message,
   Empty, DatePicker, Modal, Collapse, Statistic, Image, Tooltip, Alert, Progress,
-  Descriptions,
+  Descriptions, Tabs,
 } from 'antd'
 import {
   ReloadOutlined, AimOutlined, RobotOutlined, LinkOutlined,
@@ -13,7 +13,7 @@ import {
   ThunderboltOutlined, LeftOutlined, RightOutlined, CalculatorOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { evalApi, aiApi, taskApi, orderApi, itemApi, type EvalItem, type AIConditionResult, type Task, type OfficialCollectResult } from '../../api'
+import { evalApi, aiApi, taskApi, orderApi, itemApi, type EvalItem, type AIConditionResult, type DeepAnalyzeResult, type DeepCheckResult, type Task, type OfficialCollectResult } from '../../api'
 import { RISK_LEVEL_CONFIG } from '../../constants/riskLevels'
 import { isDataInsufficient, getInsufficientReason, type DistResponse, type SellerTrendData } from './utils'
 import { translateDimension, translateRejectReason } from './dimensionLabels'
@@ -25,6 +25,7 @@ import PriceHistogram from './components/PriceHistogram'
 import TrendSparkline from './components/TrendSparkline'
 import ColumnSettingsModal from './components/ColumnSettingsModal'
 import CollapsibleRail from './components/CollapsibleRail'
+import { ExportButton } from '../../components/ExportButton'
 
 const { RangePicker } = DatePicker
 
@@ -33,7 +34,8 @@ const { RangePicker } = DatePicker
 // 评估明细页主要面向桌面端，移动端走横向滚动 + 列隐藏
 // SCROLL_X 调整：所有固定宽度列总和约 1790px（含标题列 width=200），
 // 新增订单列(90)+操作列(80)=170px，预留 60px 缓冲，避免窄屏滚动时列被压缩至不可见
-const SCROLL_X = 2020
+// O-13-26 AI 列从 70 增至 110（加深度鉴伪按钮），SCROLL_X 同步 +40
+const SCROLL_X = 2060
 
 // P3：官方采集重试退避工具
 // 仅对临时性错误（410/441/502/超时）重试 1 次，避免偶发失败打扰用户
@@ -85,6 +87,7 @@ const COLUMN_DEFINITIONS: ColumnConfig[] = [
   { key: 'want', label: '想要' },
   { key: 'view', label: '浏览' },
   { key: 'publish', label: '发布时间' },
+  { key: 'is_sold', label: '状态' },
   { key: 'condition', label: '成色' },
   { key: 'condition_tags', label: '成色标签' },
   { key: 'score', label: '评分', locked: true },
@@ -136,6 +139,70 @@ function ThumbCell({ url, title }: { url?: string | null; title?: string | null 
   )
 }
 
+// O-13-26 深度分析单维度展示：score + risk_level + 信号列表 + 详情
+// 后端 _normalize_deep_result 已把 signals/damages/inconsistencies 统一归并到 signals 字段，
+// 所以前端只需消费 check.signals，不需要按维度区分字段名
+type DeepCheckPanelProps = {
+  title: string
+  check: DeepCheckResult
+  signalLabel: string
+}
+function DeepCheckPanel({ title, check, signalLabel }: DeepCheckPanelProps) {
+  const riskColor = (() => {
+    if (check.risk_level === 'low') return 'success'
+    if (check.risk_level === 'medium') return 'warning'
+    return 'error'
+  })()
+  const scoreColor = (() => {
+    if (check.score >= 7) return '#52c41a'
+    if (check.score >= 4) return '#faad14'
+    return '#ff4d4f'
+  })()
+  // 后端归一化保证 signals 总是数组（可能为空）；types 中 damages/inconsistencies 仅作兼容保留
+  const signals = check.signals ?? []
+  return (
+    <div>
+      <Row gutter={16} style={{ marginBottom: 12 }}>
+        <Col span={12}>
+          <Statistic
+            title={`${title} 评分`}
+            value={`${check.score}/10`}
+            valueStyle={{ color: scoreColor, fontSize: 20 }}
+          />
+        </Col>
+        <Col span={12} style={{ display: 'flex', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginBottom: 4 }}>风险等级</div>
+            <Tag color={riskColor} style={{ fontSize: 14, padding: '2px 12px' }}>
+              {(() => {
+                if (check.risk_level === 'low') return '低'
+                if (check.risk_level === 'medium') return '中'
+                return '高'
+              })()}
+            </Tag>
+          </div>
+        </Col>
+      </Row>
+      {signals.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginBottom: 4 }}>{signalLabel}：</div>
+          <div>
+            {signals.map((s, i) => (
+              <Tag key={`${s}-${i}`} color="orange" style={{ marginBottom: 4 }}>{s}</Tag>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{
+        padding: 10, borderRadius: 6, background: 'var(--xh-bg-code)',
+        fontSize: 13, color: 'var(--xh-text-secondary)', lineHeight: 1.6,
+      }}>
+        {check.detail || '无详细分析'}
+      </div>
+    </div>
+  )
+}
+
 export default function Evaluations() {
   // === 列表数据 ===
   const [items, setItems] = useState<EvalItem[]>([])
@@ -143,13 +210,42 @@ export default function Evaluations() {
   const [loading, setLoading] = useState(false)
 
   // === 查询条件 ===
-  const [itemId, setItemId] = useState<string>('')
-  const [taskId, setTaskId] = useState<string>('')
+  // 筛选条件持久化：刷新或切换页面后恢复上次筛选，减少重复输入
+  const [itemId, setItemId] = usePersistentState<string>('xh.evals.itemId', '')
+  const [taskId, setTaskId] = usePersistentState<string>('xh.evals.taskId', '')
   const [tasks, setTasks] = useState<Task[]>([])
-  const [scoreRange, setScoreRange] = useState<[number, number]>([0, 100])
-  const [dateRange, setDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(null)
+  const [scoreRange, setScoreRange] = usePersistentState<[number, number]>(
+    'xh.evals.scoreRange', [0, 100],
+    {
+      validator: (v): v is [number, number] =>
+        Array.isArray(v) && v.length === 2 && v.every(n => typeof n === 'number' && Number.isFinite(n)),
+    },
+  )
+  // dayjs 对象无法直接 JSON 序列化（反序列化后丢失 dayjs 方法），
+  // 持久化 ISO 字符串数组，使用时转回 dayjs 对象供 RangePicker 使用
+  const [dateRangeIso, setDateRange] = usePersistentState<[string, string] | null>(
+    'xh.evals.dateRange', null,
+    {
+      validator: (v): v is [string, string] | null =>
+        v === null || (Array.isArray(v) && v.length === 2 && v.every(s => typeof s === 'string')),
+    },
+  )
+  const dateRange = useMemo<[dayjs.Dayjs | null, dayjs.Dayjs | null] | null>(
+    () => dateRangeIso
+      ? [dateRangeIso[0] ? dayjs(dateRangeIso[0]) : null, dateRangeIso[1] ? dayjs(dateRangeIso[1]) : null]
+      : null,
+    [dateRangeIso],
+  )
   // 品牌筛选：与商品列表对齐，从当前页 items 提取选项
-  const [brandFilter, setBrandFilter] = useState<string | undefined>(undefined)
+  const [brandFilter, setBrandFilter] = usePersistentState<string>('xh.evals.brandFilter', '')
+  // 状态筛选：评估页默认看全部（含已售），与商品列表默认 onsale 区分；
+  // 持久化保留用户偏好，validator 防止脏数据导致 UI 异常
+  const [soldFilter, setSoldFilter] = usePersistentState<'all' | 'onsale' | 'sold'>(
+    'xh.evals.soldFilter', 'all',
+    {
+      validator: (v): v is 'all' | 'onsale' | 'sold' => v === 'all' || v === 'onsale' || v === 'sold',
+    },
+  )
 
   // === 分页 ===
   const [page, setPage] = useState(1)
@@ -175,6 +271,13 @@ export default function Evaluations() {
   const [aiLoading, setAiLoading] = useState(false)
   const [aiResult, setAiResult] = useState<AIConditionResult | null>(null)
   const [aiItemId, setAiItemId] = useState('')
+
+  // === O-13-26 AI 深度多模态分析 ===
+  // 与 AI 成色评估（evaluateCondition）区别：深度分析做 4 维 Vision 鉴伪（盗图/损坏/一致性/模板）
+  const [deepModalOpen, setDeepModalOpen] = useState(false)
+  const [deepLoading, setDeepLoading] = useState(false)
+  const [deepResult, setDeepResult] = useState<DeepAnalyzeResult | null>(null)
+  const [deepItemId, setDeepItemId] = useState('')
 
   // === 卖家趋势（展开行） ===
   const [trendCache, setTrendCache] = useState<Record<string, SellerTrendData>>({})
@@ -226,6 +329,17 @@ export default function Evaluations() {
     'xh.evals.panelCollapsed', false,
     { validator: (v): v is boolean => typeof v === 'boolean' },
   )
+
+  // === 统计卡片过滤 ===
+  // 点击统计卡片触发后端按 result_category 过滤，返回全量匹配记录并支持分页
+  // 为什么不持久化：过滤是临时浏览操作，刷新或切换任务后应回到全量视图
+  // 为什么改用后端过滤：之前在前端过滤当前页 items，当当前页无匹配记录时显示空，
+  // 与统计卡片显示的全量数量矛盾，用户误以为"查不到记录"
+  type ResultCategory = 'auto' | 'pass' | 'fail' | 'insufficient' | null
+  const [resultCategory, setResultCategory] = useState<ResultCategory>(null)
+  const toggleResultCategory = useCallback((c: ResultCategory) => {
+    setResultCategory(prev => prev === c ? null : c)
+  }, [])
 
   // 用当前配置重新计算历史评估
   const onRecompute = async () => {
@@ -423,7 +537,8 @@ export default function Evaluations() {
     // loading 提示让用户感知后台正在采集，避免「点击后无反馈」的体验
     // 失败时显示错误：detail 卡住/超时是浏览器实例异常的常见症状，需要告知用户
     const hide = message.loading(`正在采集 ${itemId.slice(0, 8)}...`, 0)
-    itemApi.refresh(itemId).then(() => {
+    // 传 task_id：items 表无记录时后端用它回填 task_links.display
+    itemApi.refresh(itemId, r.task_id || undefined).then(() => {
       hide()
       message.success(`已更新商品信息：${itemId.slice(0, 8)}...`)
       load()  // 刷新列表以展示更新后的 brand 等字段
@@ -432,17 +547,17 @@ export default function Evaluations() {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
       message.error(detail || `采集失败：${itemId.slice(0, 8)}...，请稍后重试`)
     })
-    window.open(url, '_blank', 'noopener,noreferrer')
+    globalThis.open(url, '_blank', 'noopener,noreferrer')
   }
 
   // 加载评估列表
   // 用 ref 持有筛选条件最新值，避免每次键入触发 API 请求
-  const filtersRef = useRef({ itemId, taskId, scoreRange, dateRange, brandFilter })
-  filtersRef.current = { itemId, taskId, scoreRange, dateRange, brandFilter }
+  const filtersRef = useRef({ itemId, taskId, scoreRange, dateRange, brandFilter, soldFilter, resultCategory })
+  filtersRef.current = { itemId, taskId, scoreRange, dateRange, brandFilter, soldFilter, resultCategory }
 
   const load = useCallback(() => {
     setLoading(true)
-    const { itemId: fItemId, taskId: fTaskId, scoreRange: fScore, dateRange: fDate, brandFilter: fBrand } = filtersRef.current
+    const { itemId: fItemId, taskId: fTaskId, scoreRange: fScore, dateRange: fDate, brandFilter: fBrand, soldFilter: fSold, resultCategory: fResultCategory } = filtersRef.current
     const params: Record<string, unknown> = {
       page_num: page,
       page_size: pageSize,
@@ -455,6 +570,10 @@ export default function Evaluations() {
     if (fDate && fDate[0]) params.start_time = fDate[0].format('YYYY-MM-DD')
     if (fDate && fDate[1]) params.end_time = fDate[1].format('YYYY-MM-DD')
     if (fBrand) params.brand = fBrand
+    // 'all' 时不传给后端，等价于不过滤，减少参数传输
+    if (fSold !== 'all') params.sold_filter = fSold
+    // result_category 由统计卡片点击触发，后端按配置阈值精确分类过滤
+    if (fResultCategory) params.result_category = fResultCategory
 
     evalApi.list(params)
       .then((res) => {
@@ -494,9 +613,9 @@ export default function Evaluations() {
     }
   }
   const onReset = () => {
-    setItemId(''); setTaskId(''); setScoreRange([0, 100]); setDateRange(null); setBrandFilter(undefined)
+    setItemId(''); setTaskId(''); setScoreRange([0, 100]); setDateRange(null); setBrandFilter(''); setSoldFilter('all'); setResultCategory(null)
     // 重置后需要用新条件重新加载
-    filtersRef.current = { itemId: '', taskId: '', scoreRange: [0, 100] as [number, number], dateRange: null, brandFilter: undefined }
+    filtersRef.current = { itemId: '', taskId: '', scoreRange: [0, 100] as [number, number], dateRange: null, brandFilter: '', soldFilter: 'all', resultCategory: null }
     if (page !== 1) {
       setPage(1)  // useEffect 会自动触发 load
     } else {
@@ -511,35 +630,83 @@ export default function Evaluations() {
       .catch(() => message.error('获取阈值建议失败'))
   }
 
+  // AI 成色评估 race condition 防护：单维评估 60s，期间用户可能切换商品
+  // aiItemIdRef 跟踪最新请求，旧请求结果/错误/loading 全部丢弃避免污染新商品展示
+  const aiItemIdRef = useRef('')
+  // AI 错误统一处理：onAIEval/onDeepAnalyze 共用，避免 403/404/422 三段 if-else 重复
+  const handleAiError = (err: unknown, fallbackMsg: string, closeModal: () => void) => {
+    const error = err as { response?: { status?: number; data?: { detail?: string } } }
+    const status = error?.response?.status
+    const detail = error?.response?.data?.detail
+    if (status === 403) {
+      message.error('AI 功能未开启，请在配置页面开启')
+    } else if (status === 404) {
+      message.error('商品不存在于数据库中')
+    } else if (status === 422) {
+      message.error('请求参数错误：商品 ID 为空')
+    } else {
+      message.error(detail || fallbackMsg)
+    }
+    closeModal()
+  }
+
   // AI 成色评估
   const onAIEval = async (itemId: string) => {
     if (!itemId) {
       message.error('商品 ID 为空，无法评估')
       return
     }
+    aiItemIdRef.current = itemId
     setAiItemId(itemId)
     setAiModalOpen(true)
     setAiLoading(true)
     setAiResult(null)
     try {
       const result = await aiApi.evaluateCondition(itemId)
+      // 校验：若用户已切换到其他商品，丢弃本次过期结果
+      if (aiItemIdRef.current !== itemId) return
       setAiResult(result)
     } catch (err: unknown) {
-      const error = err as { response?: { status?: number; data?: { detail?: string } } }
-      const status = error?.response?.status
-      const detail = error?.response?.data?.detail
-      if (status === 403) {
-        message.error('AI 功能未开启，请在配置页面开启')
-      } else if (status === 404) {
-        message.error('商品不存在于数据库中')
-      } else if (status === 422) {
-        message.error('请求参数错误：商品 ID 为空')
-      } else {
-        message.error(detail || 'AI 评估失败，请检查 AI 配置')
-      }
-      setAiModalOpen(false)
+      // 旧请求的错误不处理，避免覆盖新请求的 UI 状态
+      if (aiItemIdRef.current !== itemId) return
+      handleAiError(err, 'AI 评估失败，请检查 AI 配置', () => setAiModalOpen(false))
     } finally {
-      setAiLoading(false)
+      // 仅当本次请求仍是最新时才结束 loading，避免提前关闭新请求的 loading
+      if (aiItemIdRef.current === itemId) {
+        setAiLoading(false)
+      }
+    }
+  }
+
+  // O-13-26 AI 深度多模态分析：盗图/损坏/一致性/模板四维鉴伪
+  // 与 onAIEval 区别：onAIEval 单维成色评估，deepAnalyze 多维鉴伪更耗时
+  // 用 ref 跟踪最新请求 itemId：Vision 推理 90s，期间用户可能切换商品，
+  // 旧请求的结果/错误/loading 状态若不校验会污染新商品的展示
+  const deepItemIdRef = useRef('')
+  const onDeepAnalyze = async (itemId: string) => {
+    if (!itemId) {
+      message.error('商品 ID 为空，无法分析')
+      return
+    }
+    deepItemIdRef.current = itemId
+    setDeepItemId(itemId)
+    setDeepModalOpen(true)
+    setDeepLoading(true)
+    setDeepResult(null)
+    try {
+      const result = await aiApi.deepAnalyze(itemId)
+      // 校验：若用户已切换到其他商品，丢弃本次过期结果
+      if (deepItemIdRef.current !== itemId) return
+      setDeepResult(result)
+    } catch (err: unknown) {
+      // 旧请求的错误不处理，避免覆盖新请求的 UI 状态
+      if (deepItemIdRef.current !== itemId) return
+      handleAiError(err, '深度分析失败，请稍后重试', () => setDeepModalOpen(false))
+    } finally {
+      // 仅当本次请求仍是最新时才结束 loading，避免提前关闭新请求的 loading
+      if (deepItemIdRef.current === itemId) {
+        setDeepLoading(false)
+      }
     }
   }
 
@@ -654,9 +821,11 @@ export default function Evaluations() {
         const credit = r.payload?.seller_credit as string | undefined
         // 真实昵称优先级：清洗后的 seller_nick > seller_id（截短）> '—'
         const hasNick = !!(nick && nick.trim())
-        const displayName = hasNick
-          ? nick
-          : (id ? `用户 ${id.slice(0, 8)}` : '—')
+        const displayName = (() => {
+          if (hasNick) return nick
+          if (id) return `用户 ${id.slice(0, 8)}`
+          return '—'
+        })()
         return (
           <div style={{ lineHeight: 1.3 }}>
             <div>
@@ -741,6 +910,15 @@ export default function Evaluations() {
       },
     },
     {
+      // 状态列：与商品列表对齐，已售红色、在售绿色
+      // 数据来源：后端 _enrich_eval_with_item 注入到 payload.is_sold
+      title: '状态', key: 'is_sold', width: 80,
+      render: (_: unknown, r: EvalItem) => {
+        const isSold = r.payload?.is_sold
+        return isSold ? <Tag color="red">已售</Tag> : <Tag color="green">在售</Tag>
+      },
+    },
+    {
       title: '成色', key: 'condition', width: 110,
       filters: [
         { text: '全新', value: '全新' },
@@ -793,7 +971,7 @@ export default function Evaluations() {
         return (
           <span style={{ fontSize: 11 }}>
             {tags.slice(0, 3).map((t, i) => (
-              <Tag key={i} style={{ marginBottom: 2 }} color="blue">{t.label}</Tag>
+              <Tag key={`${t.label}-${i}`} style={{ marginBottom: 2 }} color="blue">{t.label}</Tag>
             ))}
             {tags.length > 3 && <span style={{ color: 'var(--xh-text-tertiary)' }}>+{tags.length - 3}</span>}
           </span>
@@ -809,7 +987,11 @@ export default function Evaluations() {
           return <Tag color="default">{getInsufficientReason(r)}</Tag>
         }
         const s = r.payload.score
-        const color = s >= autoBuyScore ? '#52c41a' : s >= passScore ? '#faad14' : '#ff4d4f'
+        const color = (() => {
+          if (s >= autoBuyScore) return '#52c41a'
+          if (s >= passScore) return '#faad14'
+          return '#ff4d4f'
+        })()
         // 数据质量标识：让用户了解评分的可靠性（full=完整数据/partial=部分数据/insufficient=数据不足）
         const dq = r.payload?.data_quality as string | undefined
         const dqColorMap: Record<string, string> = { full: 'green', partial: 'orange', insufficient: 'red' }
@@ -837,14 +1019,27 @@ export default function Evaluations() {
       },
     },
     {
-      title: 'AI', key: 'ai', width: 70,
+      title: 'AI', key: 'ai', width: 110,
       render: (_: unknown, r: EvalItem) => (
-        <Button
-          size="small"
-          icon={<RobotOutlined />}
-          onClick={() => onAIEval(r.item_id)}
-          disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
-        />
+        <Space size={4}>
+          <Tooltip title="AI 成色评估">
+            <Button
+              size="small"
+              icon={<RobotOutlined />}
+              onClick={() => onAIEval(r.item_id)}
+              disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
+            />
+          </Tooltip>
+          {/* O-13-26 深度多模态鉴伪：盗图/损坏/一致性/模板，与单维成色评估区分 */}
+          <Tooltip title="深度鉴伪（盗图/损坏/一致性/模板）">
+            <Button
+              size="small"
+              icon={<ThunderboltOutlined />}
+              onClick={() => onDeepAnalyze(r.item_id)}
+              disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
+            />
+          </Tooltip>
+        </Space>
       ),
     },
     {
@@ -979,7 +1174,7 @@ export default function Evaluations() {
   // 分页场景下选项可能不完整，用户可清空筛选后重新选择，与商品列表页策略一致
   const brandOptions = [...new Set(
     items.map((i) => i.payload?.brand as string | undefined).filter(Boolean)
-  )].sort()
+  )].sort((a, b) => String(a).localeCompare(String(b)))
 
   // 展开行：详细信息 + 卖家价格趋势
   // 展示接口返回但主表格未显示的完整字段，帮助用户做购买决策
@@ -1034,7 +1229,7 @@ export default function Evaluations() {
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       {imageUrls.slice(0, 6).map((url, i) => (
                         <Image
-                          key={i}
+                          key={`${url}-${i}`}
                           src={url}
                           width={80}
                           height={80}
@@ -1087,7 +1282,7 @@ export default function Evaluations() {
                     <div style={{ fontSize: 12 }}>
                       <span style={{ color: 'var(--xh-text-tertiary)' }}>拒绝原因: </span>
                       {rejectReasons.map((reason, i) => (
-                        <Tag key={i} color="orange" style={{ fontSize: 11, marginBottom: 2 }}>{translateRejectReason(reason)}</Tag>
+                        <Tag key={`${reason}-${i}`} color="orange" style={{ fontSize: 11, marginBottom: 2 }}>{translateRejectReason(reason)}</Tag>
                       ))}
                     </div>
                   )}
@@ -1138,7 +1333,7 @@ export default function Evaluations() {
                   {Array.isArray(aiEval.risk_signals) && aiEval.risk_signals.length > 0 && (
                     <div style={{ marginTop: 8 }}>
                       {aiEval.risk_signals.map((sig, i) => (
-                        <Tag key={i} color="orange" style={{ marginBottom: 2 }}>{String(sig)}</Tag>
+                        <Tag key={`${sig}-${i}`} color="orange" style={{ marginBottom: 2 }}>{String(sig)}</Tag>
                       ))}
                     </div>
                   )}
@@ -1159,7 +1354,7 @@ export default function Evaluations() {
               <Col span={24}>
                 <Card size="small" title={`评价/留言 (${reviews.length})`} style={{ marginBottom: 8 }}>
                   {reviews.slice(0, 5).map((review, i) => (
-                    <div key={i} style={{ padding: '4px 0', borderBottom: i < Math.min(reviews.length, 5) - 1 ? '1px solid var(--xh-border-secondary)' : 'none', fontSize: 13 }}>
+                    <div key={`${review}-${i}`} style={{ padding: '4px 0', borderBottom: i < Math.min(reviews.length, 5) - 1 ? '1px solid var(--xh-border-secondary)' : 'none', fontSize: 13 }}>
                       {review}
                     </div>
                   ))}
@@ -1230,7 +1425,7 @@ export default function Evaluations() {
           <span>时间范围：</span>
           <RangePicker
             value={dateRange as [dayjs.Dayjs, dayjs.Dayjs] | null}
-            onChange={(v) => setDateRange(v as [dayjs.Dayjs | null, dayjs.Dayjs | null] | null)}
+            onChange={(v) => setDateRange(v ? [v[0]?.toISOString() ?? '', v[1]?.toISOString() ?? ''] : null)}
           />
           <span>品牌：</span>
           <Select
@@ -1239,13 +1434,26 @@ export default function Evaluations() {
             showSearch
             style={{ width: 160 }}
             value={brandFilter}
-            onChange={(v) => { setBrandFilter(v); setPage(1); setTimeout(load, 0) }}
-            onClear={() => setBrandFilter(undefined)}
+            onChange={(v) => { setBrandFilter(v || ''); setPage(1); setTimeout(load, 0) }}
+            onClear={() => setBrandFilter('')}
             filterOption={(input, option) =>
               (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
             }
             options={brandOptions.map((b) => ({ label: b, value: b }))}
             notFoundContent="暂无品牌"
+          />
+          <span>状态：</span>
+          <Select
+            placeholder="状态筛选"
+            style={{ width: 100 }}
+            allowClear
+            value={soldFilter}
+            onChange={(v) => { setSoldFilter(v || 'all'); setPage(1); setTimeout(load, 0) }}
+            options={[
+              { label: '全部', value: 'all' },
+              { label: '在售', value: 'onsale' },
+              { label: '已售', value: 'sold' },
+            ]}
           />
           <Button type="primary" icon={<SearchOutlined />} onClick={onSearch}>查询</Button>
           <Button icon={<UndoOutlined />} onClick={onReset}>重置</Button>
@@ -1254,6 +1462,8 @@ export default function Evaluations() {
           <Button icon={<RetweetOutlined />} onClick={onBatchEvaluateUnevaluated} loading={batchEvaluating}>批量评估未评估商品</Button>
           {/* 列配置：拖拽调整列顺序 + 显示/隐藏字段，配置持久化到 localStorage */}
           <Button icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)}>列配置</Button>
+          {/* O-05-26 数据导出：按当前任务过滤导出评估记录 CSV */}
+          <ExportButton dataset="evaluations" params={{ task_id: taskId || undefined }} />
         </Space>
       </Card>
 
@@ -1268,23 +1478,53 @@ export default function Evaluations() {
         />
       )}
 
-      {/* 统计卡片 */}
+      {/* 统计卡片 —— 前5个可点击触发后端过滤，选中态高亮 */}
       {dist && (
         <Row gutter={12} style={{ marginBottom: 16 }}>
           <Col span={4}>
-            <Card size="small" hoverable><Statistic title="评估总数" value={dist.total} /></Card>
+            <Card
+              size="small" hoverable
+              onClick={() => { toggleResultCategory(null); setPage(1); setTimeout(load, 0) }}
+              style={resultCategory === null ? { borderColor: '#1890ff', background: 'rgba(24,144,255,0.06)' } : {}}
+            >
+              <Statistic title="评估总数" value={dist.total} />
+            </Card>
           </Col>
           <Col span={4}>
-            <Card size="small" hoverable><Statistic title={`可抢(≥${autoBuyScore})`} value={dist.marginals.result.auto} valueStyle={{ color: '#52c41a' }} /></Card>
+            <Card
+              size="small" hoverable
+              onClick={() => { toggleResultCategory('auto'); setPage(1); setTimeout(load, 0) }}
+              style={resultCategory === 'auto' ? { borderColor: '#52c41a', background: 'rgba(82,196,26,0.06)' } : {}}
+            >
+              <Statistic title={`可抢(≥${autoBuyScore})`} value={dist.marginals.result.auto} valueStyle={{ color: '#52c41a' }} />
+            </Card>
           </Col>
           <Col span={4}>
-            <Card size="small" hoverable><Statistic title={`通过(${passScore}-${autoBuyScore - 1})`} value={dist.marginals.result.pass} valueStyle={{ color: '#1890ff' }} /></Card>
+            <Card
+              size="small" hoverable
+              onClick={() => { toggleResultCategory('pass'); setPage(1); setTimeout(load, 0) }}
+              style={resultCategory === 'pass' ? { borderColor: '#1890ff', background: 'rgba(24,144,255,0.06)' } : {}}
+            >
+              <Statistic title={`通过(${passScore}-${autoBuyScore - 1})`} value={dist.marginals.result.pass} valueStyle={{ color: '#1890ff' }} />
+            </Card>
           </Col>
           <Col span={4}>
-            <Card size="small" hoverable><Statistic title={`驳回(<${passScore})`} value={dist.marginals.result.fail} valueStyle={{ color: '#ff4d4f' }} /></Card>
+            <Card
+              size="small" hoverable
+              onClick={() => { toggleResultCategory('fail'); setPage(1); setTimeout(load, 0) }}
+              style={resultCategory === 'fail' ? { borderColor: '#ff4d4f', background: 'rgba(255,77,79,0.06)' } : {}}
+            >
+              <Statistic title={`驳回(<${passScore})`} value={dist.marginals.result.fail} valueStyle={{ color: '#ff4d4f' }} />
+            </Card>
           </Col>
           <Col span={4}>
-            <Card size="small" hoverable><Statistic title="数据不足" value={dist.insufficient_count} valueStyle={{ color: 'var(--xh-text-tertiary)' }} /></Card>
+            <Card
+              size="small" hoverable
+              onClick={() => { toggleResultCategory('insufficient'); setPage(1); setTimeout(load, 0) }}
+              style={resultCategory === 'insufficient' ? { borderColor: '#faad14', background: 'rgba(250,173,20,0.06)' } : {}}
+            >
+              <Statistic title="数据不足" value={dist.insufficient_count} valueStyle={{ color: 'var(--xh-text-tertiary)' }} />
+            </Card>
           </Col>
           <Col span={4}>
             <Card size="small" hoverable>
@@ -1356,7 +1596,7 @@ export default function Evaluations() {
             )}
             <Spin spinning={loading}>
               {items.length === 0 ? (
-                <Empty description="暂无评估数据" />
+                <Empty description={resultCategory ? '当前过滤条件下无匹配记录' : '暂无评估数据'} />
               ) : (
                 <Table
                   columns={visibleColumns}
@@ -1375,16 +1615,17 @@ export default function Evaluations() {
                     rowExpandable: () => true,
                   }}
                   pagination={{
+                    // 后端按 result_category 过滤后已分页返回，前端直接消费 page/total
                     current: page,
-                    pageSize,
-                    total,
+                    pageSize: pageSize,
+                    total: total,
                     showSizeChanger: true,
                     showQuickJumper: true,
                     pageSizeOptions: ['10', '20', '50', '100'],
                     // 极窄屏隐藏快速跳转，避免按钮溢出
                     showLessItems: true,
                     onChange: (p, ps) => { setPage(p); setPageSize(ps) },
-                    showTotal: (t) => `共 ${t} 条`,
+                    showTotal: (t) => resultCategory ? `过滤后 ${t} 条` : `共 ${t} 条`,
                   }}
                 />
               )}
@@ -1568,7 +1809,7 @@ export default function Evaluations() {
                   <strong>风险信号：</strong>
                   <div style={{ marginTop: 4 }}>
                     {aiResult.risk_signals.map((sig, i) => (
-                      <Tag key={i} color="orange" style={{ marginBottom: 4 }}>{sig}</Tag>
+                      <Tag key={`${sig}-${i}`} color="orange" style={{ marginBottom: 4 }}>{sig}</Tag>
                     ))}
                   </div>
                 </div>
@@ -1586,6 +1827,149 @@ export default function Evaluations() {
             </div>
           ) : (
             !aiLoading && <Empty description="点击评估按钮开始 AI 分析" />
+          )}
+        </Spin>
+      </Modal>
+
+      {/* O-13-26 AI 深度多模态分析弹窗：4 维鉴伪 */}
+      <Modal
+        title={`AI 深度鉴伪 - ${deepItemId}`}
+        open={deepModalOpen}
+        onCancel={() => setDeepModalOpen(false)}
+        footer={<Button onClick={() => setDeepModalOpen(false)}>关闭</Button>}
+        width={720}
+      >
+        <Spin spinning={deepLoading} tip="多模态分析中，最多 90s...">
+          {deepResult ? (
+            <div>
+              {/* 顶部：综合结论 */}
+              <Descriptions
+                size="small"
+                column={3}
+                bordered
+                style={{ marginBottom: 12 }}
+                items={[
+                  {
+                    key: 'verdict',
+                    label: '综合结论',
+                    children: (
+                      (() => {
+                        const verdict = deepResult.overall_verdict
+                        let tagColor: string
+                        let label: string
+                        if (verdict === 'recommend') {
+                          tagColor = 'success'
+                          label = '推荐'
+                        } else if (verdict === 'caution') {
+                          tagColor = 'warning'
+                          label = '谨慎'
+                        } else {
+                          tagColor = 'error'
+                          label = '拒绝'
+                        }
+                        return (
+                          <Tag color={tagColor}>
+                            {label}
+                          </Tag>
+                        )
+                      })()
+                    ),
+                  },
+                  {
+                    key: 'score',
+                    label: '综合评分',
+                    children: (
+                      <span style={{ fontWeight: 600 }}>
+                        {deepResult.overall_score}/10
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'source',
+                    label: '数据来源',
+                    children: deepResult.source === 'llm' ? 'AI Vision' : '规则模拟',
+                  },
+                ]}
+              />
+              <Alert
+                type={(() => {
+                  const verdict = deepResult.overall_verdict
+                  if (verdict === 'recommend') return 'success'
+                  if (verdict === 'caution') return 'warning'
+                  return 'error'
+                })()}
+                showIcon
+                message={deepResult.summary}
+                style={{ marginBottom: 12 }}
+              />
+              {/* 四维分析 Tab：仅展示 checks_performed 中实际执行的维度 */}
+              <Tabs
+                items={[
+                  ...(deepResult.stolen_image ? [{
+                    key: 'stolen_image',
+                    label: '盗图检测',
+                    children: (
+                      <DeepCheckPanel
+                        title="盗图检测"
+                        check={deepResult.stolen_image}
+                        signalLabel="风险信号"
+                      />
+                    ),
+                  }] : []),
+                  ...(deepResult.damage ? [{
+                    key: 'damage',
+                    label: '物理损坏',
+                    children: (
+                      <DeepCheckPanel
+                        title="物理损坏识别"
+                        check={deepResult.damage}
+                        signalLabel="损坏类型"
+                      />
+                    ),
+                  }] : []),
+                  ...(deepResult.consistency ? [{
+                    key: 'consistency',
+                    label: '一致性',
+                    children: (
+                      <DeepCheckPanel
+                        title="描述与图片一致性"
+                        check={deepResult.consistency}
+                        signalLabel="不一致项"
+                      />
+                    ),
+                  }] : []),
+                  ...(deepResult.template ? [{
+                    key: 'template',
+                    label: '文案模板化',
+                    children: (
+                      <DeepCheckPanel
+                        title="文案模板化检测"
+                        check={deepResult.template}
+                        signalLabel="风险信号"
+                      />
+                    ),
+                  }] : []),
+                ]}
+              />
+              {/* 图片哈希列表（调试/取证用，折叠隐藏） */}
+              {deepResult.image_hashes && deepResult.image_hashes.length > 0 && (
+                <Collapse
+                  size="small"
+                  style={{ marginTop: 8 }}
+                  items={[{
+                    key: 'hashes',
+                    label: `图片哈希（${deepResult.image_hashes.length}）`,
+                    children: (
+                      <pre style={{ fontSize: 11, whiteSpace: 'pre-wrap', margin: 0 }}>
+                        {deepResult.image_hashes.map(h => `${h.url}\n  → ${h.hash}`).join('\n')}
+                      </pre>
+                    ),
+                  }]}
+                />
+              )}
+            </div>
+          ) : (
+            !deepLoading && <Empty description="点击闪电按钮开始 AI 深度鉴伪" />
           )}
         </Spin>
       </Modal>
@@ -1614,10 +1998,13 @@ export default function Evaluations() {
                     title="评估评分"
                     value={collectResult.evaluation.score ?? 'N/A'}
                     valueStyle={{
-                      color: collectResult.evaluation.score != null
-                        ? (collectResult.evaluation.score >= 80 ? '#52c41a'
-                          : collectResult.evaluation.score >= 60 ? '#faad14' : '#ff4d4f')
-                        : '#999',
+                      color: (() => {
+                        const score = collectResult.evaluation.score
+                        if (score == null) return '#999'
+                        if (score >= 80) return '#52c41a'
+                        if (score >= 60) return '#faad14'
+                        return '#ff4d4f'
+                      })(),
                       fontSize: 24,
                     }}
                   />
@@ -1675,7 +2062,7 @@ export default function Evaluations() {
                     <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
                       {collectResult.item.image_urls.slice(0, 6).map((url, i) => (
                         <Image
-                          key={i}
+                          key={`${url}-${i}`}
                           src={url}
                           referrerPolicy="no-referrer"
                           width={80}
@@ -1706,7 +2093,7 @@ export default function Evaluations() {
             {collectResult.reviews.length > 0 && (
               <Card title={`评价/留言 (${collectResult.reviews.length})`} size="small" style={{ marginBottom: 12 }}>
                 {collectResult.reviews.map((review, i) => (
-                  <div key={i} style={{
+                  <div key={`${review}-${i}`} style={{
                     padding: '6px 0', borderBottom: i < collectResult.reviews.length - 1 ? '1px solid #f0f0f0' : 'none',
                     fontSize: 13,
                   }}>
@@ -1725,7 +2112,12 @@ export default function Evaluations() {
                       // 翻译维度 key 为中文，保留原 key 在后缀括号内供调试定位
                       title={`${translateDimension(dim)} (${dim})`}
                       value={score}
-                      valueStyle={{ fontSize: 16, color: Number(score) >= 70 ? '#52c41a' : Number(score) >= 40 ? '#faad14' : '#ff4d4f' }}
+                      valueStyle={{ fontSize: 16, color: (() => {
+                        const num = Number(score)
+                        if (num >= 70) return '#52c41a'
+                        if (num >= 40) return '#faad14'
+                        return '#ff4d4f'
+                      })() }}
                     />
                   </Col>
                 ))}
@@ -1734,7 +2126,7 @@ export default function Evaluations() {
                 <div style={{ marginTop: 8 }}>
                   <strong>拒绝原因：</strong>
                   {collectResult.evaluation.reject_reasons.map((reason, i) => (
-                    <Tag key={i} color="orange" style={{ marginBottom: 4 }} title={reason}>
+                    <Tag key={`${reason}-${i}`} color="orange" style={{ marginBottom: 4 }} title={reason}>
                       {translateRejectReason(reason)}
                     </Tag>
                   ))}

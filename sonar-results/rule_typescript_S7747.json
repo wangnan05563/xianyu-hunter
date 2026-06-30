@@ -1,0 +1,58 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S7747",
+                 "repo":  "typescript",
+                 "name":  "Spread syntax should not be used unnecessarily",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "readability",
+                                 "performance"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eThe spread operator (\u003ccode\u003eâ¦â\u003c/code\u003e) is a powerful JavaScript feature for expanding arrays and objects. However, using it unnecessarily can make\ncode harder to read and potentially less efficient.\u003c/p\u003e\n\u003cp\u003eThere are several common patterns where spread syntax adds no value:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003cstrong\u003eSpreading literals\u003c/strong\u003e: When you spread an array literal \u003ccode\u003e[item]\u003c/code\u003e directly into another array or function call, you can\n  simply write the item directly. \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eRedundant array conversion\u003c/strong\u003e: Many JavaScript built-ins like \u003ccode\u003eSet\u003c/code\u003e, \u003ccode\u003eMap\u003c/code\u003e, \u003ccode\u003ePromise.all()\u003c/code\u003e, and\n  \u003ccode\u003eArray.from()\u003c/code\u003e accept any iterable object, not just arrays. Converting an iterable to an array first using spread syntax is unnecessary.\n  \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eIteration contexts\u003c/strong\u003e: Language features like \u003ccode\u003eforâ¦âof\u003c/code\u003e loops and \u003ccode\u003eyield*\u003c/code\u003e expressions work directly with\n  iterables, so spreading them into arrays first is redundant. \u003c/li\u003e\n\u003c/ul\u003e\n\u003cp\u003eThese unnecessary uses of spread syntax can:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e Make code more verbose and harder to read \u003c/li\u003e\n  \u003cli\u003e Create unnecessary intermediate arrays, potentially impacting performance \u003c/li\u003e\n  \u003cli\u003e Obscure the intent of the code \u003c/li\u003e\n  \u003cli\u003e Add cognitive overhead for developers reading the code \u003c/li\u003e\n\u003c/ul\u003e\n\u003ch3\u003eWhat is the potential impact?\u003c/h3\u003e\n\u003cp\u003eUsing unnecessary spread syntax makes code less readable and may create performance overhead by creating intermediate arrays when theyâre not\nneeded. While the performance impact is typically minimal, the readability impact can be significant, especially in codebases with many such\noccurrences.\u003c/p\u003e\n\u003ch3\u003eHow to fix?\u003c/h3\u003e\n\u003cp\u003eRemove unnecessary spread syntax when spreading array literals directly into arrays or function calls.\u003c/p\u003e\n\u003ch4\u003eNon-compliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nconst array = [firstElement, ...[secondElement], thirdElement]; // Noncompliant\nfoo(firstArgument, ...[secondArgument], thirdArgument); // Noncompliant\n\u003c/pre\u003e\n\u003ch4\u003eCompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nconst array = [firstElement, secondElement, thirdElement];\nfoo(firstArgument, secondArgument, thirdArgument);\n\u003c/pre\u003e\n\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\"https://github.com/sindresorhus/eslint-plugin-unicorn#readme\"\u003eeslint-plugin-unicorn\u003c/a\u003e - Rule \u003ca\n  href=\"https://github.com/sindresorhus/eslint-plugin-unicorn/blob/HEAD/docs/rules/no-useless-spread.md\"\u003eno-useless-spread\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN - Spread syntax - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Spread_syntax\"\u003eComprehensive guide\n  to JavaScript spread syntax\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN - Iteration protocols - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Iteration_protocols\"\u003eUnderstanding\n  iterables and iterators in JavaScript\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "introduction",
+                                                 "content":  "\u003cp\u003eThis rule raises an issue when the spread operator (\u003ccode\u003eâ¦â\u003c/code\u003e) is used in cases where it provides no benefit, such as spreading array\nliterals directly into arrays, spreading object literals into objects, or converting iterables to arrays when the target already accepts\niterables.\u003c/p\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

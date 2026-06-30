@@ -10,6 +10,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 
@@ -17,7 +18,7 @@ from xianyu_hunter.domain.item import ItemDetail, ItemSummary
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.domain.urls import build_item_url, build_seller_url
 from xianyu_hunter.infra.logger import get_logger
-from xianyu_hunter.modules.collector_utils import extract_brand, parse_price_from_text
+from xianyu_hunter.modules.collector_utils import check_text_sold, extract_brand, infer_brand_from_title, parse_price_from_text
 
 logger = get_logger()
 
@@ -36,13 +37,51 @@ class DetailMixin:
     依赖 CollectorBase 的状态（browser/ad/selectors/_seller_profile_cache 等）。
     """
 
+    async def _wait_for_detail_render_signal(self, page: Page, timeout_ms: int = 2500) -> str:
+        """等待详情页出现任一可用渲染信号，避免标题选择器固定等满 10s。"""
+        signal = await page.wait_for_function(
+            """(selectors) => {
+                const hasText = (selector) => {
+                    const el = document.querySelector(selector);
+                    return !!(el && (el.textContent || '').trim());
+                };
+                if (hasText(selectors.titleMain)) return 'title';
+                if (hasText(selectors.priceMain) || hasText(selectors.priceAlt)) return 'price';
+                const og = document.querySelector("meta[property='og:title']");
+                if (og && (og.getAttribute('content') || '').trim()) return 'og:title';
+                if ((document.title || '').trim()) return 'document.title';
+                return false;
+            }""",
+            {
+                "titleMain": self.selectors.DETAIL_TITLE_MAIN,
+                "priceMain": self.selectors.DETAIL_PRICE_MAIN,
+                "priceAlt": self.selectors.DETAIL_PRICE_ALT,
+            },
+            timeout=timeout_ms,
+        )
+        return str(await signal.json_value())
+
     async def detail(self, item_id: str, page: Page | None = None) -> ItemDetail | None:
         """商品详情"""
         own_page = page is None
         if own_page:
             page = await self.browser.new_page()
+            # 注册为外部 page，防止 scheduler.close_all_pages 误关
+            # 场景：BatchRefreshScheduler 并发调用 detail() 时，主任务 run_once 结束清理会误关此 page
+            self.browser.register_external_page(page)
         assert page is not None
         try:
+            # 防御性检查：page 可能在 new_page() 的 await 返回前被 close_all_pages 并发关闭
+            # 时序：new_page await 期间事件循环切换到 TaskScheduler.run_once 结束清理，
+            # close_all_pages 遍历 context.pages 看到新 page（还未 register）将其关闭
+            if page.is_closed():
+                logger.warning(f"详情页 {item_id} page 已关闭（并发清理或浏览器崩溃），跳过采集")
+                return None
+            # 频率伪装：详情请求前按对数正态分布等待，统计计数器同步累加
+            # 延迟导入避免循环依赖
+            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+            from xianyu_hunter.modules.freq_disguise import ActionType
+            await get_orchestrator().apply_freq_delay(ActionType.DETAIL)
             await self.ad.throttle()
             url = build_item_url(item_id)
             logger.debug(f"详情: {url}")
@@ -66,18 +105,16 @@ class DetailMixin:
                     )
                     return None
 
-            # 等待标题（新版闲鱼详情页已移除 h1，主选择器可能失效，
-            # 用价格元素作为页面已渲染的信号更可靠）
+            # 等待任一详情页渲染信号。新版闲鱼详情页经常没有 h1，固定等标题会让
+            # 每个详情页白白耗满 10s；后续仍会做标题、价格、URL、首页标题校验。
             _t1 = time.perf_counter()
             try:
-                await page.wait_for_selector(
-                    self.selectors.DETAIL_TITLE_MAIN, timeout=10000
-                )
+                render_signal = await self._wait_for_detail_render_signal(page)
             except PlaywrightTimeout:
-                # 标题选择器未命中不代表页面没加载，继续尝试其他提取方式
-                logger.warning(f"详情页 {item_id} 标题选择器未出现，尝试备用提取")
+                render_signal = "timeout"
+                logger.debug(f"详情页 {item_id} 渲染信号未出现，尝试备用提取")
             _t_wait_title = time.perf_counter() - _t1
-            logger.debug(f"详情页 {item_id} wait_for_selector(title) 耗时 {_t_wait_title:.2f}s")
+            logger.debug(f"详情页 {item_id} wait_for_render_signal({render_signal}) 耗时 {_t_wait_title:.2f}s")
 
             # 解析标题
             # 优先用 DOM 选择器，失败时依次从 og:title meta、document.title 兜底
@@ -119,14 +156,20 @@ class DetailMixin:
                     logger.warning(f"详情页 {item_id} document.title 提取失败: {e}")
 
             # 价格
+            # 为什么添加详细日志：排查"本地价格与官网不一致"问题，
+            # 需要确认 DOM 选择器取到的元素文本和解析后的价格
             price = 0.0
-            for sel in [self.selectors.DETAIL_PRICE_MAIN, self.selectors.DETAIL_PRICE_ALT]:
+            for sel_idx, sel in enumerate([self.selectors.DETAIL_PRICE_MAIN, self.selectors.DETAIL_PRICE_ALT]):
                 el = await page.query_selector(sel)
                 if el:
                     text = (await el.inner_text()).strip()
                     price = parse_price_from_text(text)
+                    logger.debug(f"详情页 {item_id} 价格选择器[{sel_idx}] sel={sel!r} text={text!r} price={price}")
                     if price > 0:
                         break
+                else:
+                    logger.debug(f"详情页 {item_id} 价格选择器[{sel_idx}] sel={sel!r} 未匹配到元素")
+            logger.info(f"详情页 {item_id} 最终采用价格: {price}")
 
             # 描述（已用排除运费/服务条款的精细选择器）
             desc = ""
@@ -138,12 +181,34 @@ class DetailMixin:
                         break
 
             # 图片
+            # 闲鱼详情页图片可能使用懒加载：src 为占位符（data: URL），
+            # 真实 URL 在 data-src/data-original/data-lazy-src 属性中
+            _LAZY_SRC_ATTRS = ("data-src", "data-original", "data-lazy-src", "data-img")
+            # 占位图标记：搜索 API 返回的 1x1 透明 PNG，详情页也可能出现
+            _PLACEHOLDER_MARKS = ("tps-2-2", "2-2.png", "1x1.png")
+
+            async def _resolve_img_src(el: Any) -> str:
+                """从 img 元素解析真实图片 URL，处理懒加载和占位符"""
+                src = await el.get_attribute("src")
+                # src 为空或 data: URL（base64 占位符）时，尝试懒加载属性
+                if not src or src.startswith("data:"):
+                    for attr in _LAZY_SRC_ATTRS:
+                        src = await el.get_attribute(attr)
+                        if src and not src.startswith("data:"):
+                            return src
+                    return ""
+                return src
+
             images: list[str] = []
             for sel in [self.selectors.DETAIL_IMAGES_MAIN, self.selectors.DETAIL_IMAGES_ALT]:
                 img_els = await page.query_selector_all(sel)
                 for img in img_els[:10]:  # 最多取 10 张
-                    src = await img.get_attribute("src")
-                    if src and src not in images:
+                    src = await _resolve_img_src(img)
+                    if not src or src.startswith("data:"):
+                        continue
+                    if any(mark in src for mark in _PLACEHOLDER_MARKS):
+                        continue
+                    if src not in images:
                         images.append(src)
                 if images:
                     break
@@ -154,8 +219,8 @@ class DetailMixin:
             for sel in [self.selectors.DETAIL_THUMB_MAIN, self.selectors.DETAIL_THUMB_ALT]:
                 thumb_el = await page.query_selector(sel)
                 if thumb_el:
-                    src = await thumb_el.get_attribute("src")
-                    if src:
+                    src = await _resolve_img_src(thumb_el)
+                    if src and not src.startswith("data:") and not any(mark in src for mark in _PLACEHOLDER_MARKS):
                         thumb_url = src.strip()
                         break
             # 兜底：若主图选择器都失败，从 images 列表取首张
@@ -241,7 +306,7 @@ class DetailMixin:
                         logger.debug("通过选择器 %s 提取卖家ID: %s", sel, seller_id)
                         break
 
-            # P2 调试：详情页 seller_id 提取失败时 dump 页面所有 a[href] 含 user/seller 的元素
+            # P2 调试：详情页 seller_id 提取失败时 dump 页面诊断信息
             # 辅助人工定位新版闲鱼详情页的卖家链接真实 className/属性
             if not seller_id and item_id not in _DUMPED_ITEM_IDS:
                 try:
@@ -261,8 +326,25 @@ class DetailMixin:
                     dump_path = Path("logs") / f"detail_dom_{item_id}.json"
                     dump_path.parent.mkdir(parents=True, exist_ok=True)
                     import json as _json
+                    # hrefs 为空时补充页面上下文，避免 dump 文件仅 "[]" 无法诊断
+                    # 场景：SPA 未渲染完成、页面被反爬拦截、详情页结构改版
+                    dump_payload = {
+                        "item_id": item_id,
+                        "url": url,
+                        "page_title": await page.title(),
+                        "candidate_links": hrefs,
+                    }
+                    if not hrefs:
+                        # 无候选链接时 dump body innerText 片段，辅助判断页面状态
+                        try:
+                            body_text = await page.evaluate(
+                                "() => (document.body && document.body.innerText || '').slice(0, 500)"
+                            )
+                            dump_payload["body_text_preview"] = body_text
+                        except Exception:
+                            pass
                     dump_path.write_text(
-                        _json.dumps(hrefs, ensure_ascii=False, indent=2), encoding="utf-8"
+                        _json.dumps(dump_payload, ensure_ascii=False, indent=2), encoding="utf-8"
                     )
                     _DUMPED_ITEM_IDS.add(item_id)
                     logger.warning(
@@ -405,28 +487,28 @@ class DetailMixin:
             except Exception:
                 pass
 
-            # 已售检测：采集页面文字，判断商品是否已售出
-            # 为什么在采集侧也检测：官方采集和刷新接口复用此方法，
-            # 在此检测可统一覆盖三个入口（链接刷新/官方采集/抢单前的 detail 调用）
-            # 关键词覆盖"已售"两字作为兜底：与搜索 DOM 检测（text.includes('已售')）保持一致，
-            # 避免闲鱼文案变体（如"该商品已售"、"宝贝已下架"等）漏检
+            # 已售/已删除检测：采集页面文字，判断商品是否已售出或被卖家删除
+            # 为什么复用 check_text_sold：闲鱼前端文案多次变更（如"已售"→"卖掉了"），
+            # 分散维护会导致漏检。统一函数确保任一处发现新文案后全局生效
             is_sold = False
             try:
                 body_text = await page.text_content("body") or ""
-                is_sold = "已售" in body_text or any(kw in body_text for kw in (
-                    "已售出", "已售完", "已售罄", "宝贝已售", "商品已售",
-                    "已下架", "已卖出",
-                ))
+                is_sold = check_text_sold(body_text)
             except Exception as e:  # noqa: BLE001
                 # 静默失败会导致 is_sold 默认 False，已售商品被误判为在售
                 # 记录 warning 便于排查页面崩溃/Playwright 异常导致的检测失败
                 logger.warning("详情页 {} is_sold 检测失败: {}", item_id, e)
 
             # 品牌字段：详情页 DOM 通常无独立 brand 元素，复用 extract_brand 兜底链路
-            # 优先级：搜索 API brand > 卖家昵称匹配标题 > 标题关键词推断
+            # 优先级：搜索 API brand > 卖家昵称匹配标题 > 标题关键词推断 > 描述推断
             # 为什么不在 DOM 中查找 brand 元素：闲鱼详情页 className 是哈希值，
             # 无稳定选择器；从标题/卖家昵称推断已是搜索链路的成熟兜底，复用最稳
             brand = extract_brand(None, title, seller_candidate=detail_seller_nick)
+            # 兜底：标题未命中品牌别名表时，从描述中继续推断
+            # 闲鱼卖家常在描述开头写"品牌：联想"或"联想 ThinkPad X1"等关键词，
+            # 描述长度比标题更长，品牌命中率更高；但只取首个命中，避免长描述误命中
+            if not brand and desc:
+                brand = infer_brand_from_title(desc[:200])
 
             # P3 埋点：成功路径总耗时（DEBUG 级别，便于诊断慢节点）
             _t_total = time.perf_counter() - _t0
@@ -457,11 +539,22 @@ class DetailMixin:
                 is_sold=is_sold,
             )
         except Exception as e:
-            logger.exception(f"采集详情失败 {item_id}: {e}")
+            err_msg = str(e)
+            # TargetClosedError 是已知并发场景（BatchRefreshScheduler 与 TaskScheduler.run_once 并发清理），
+            # 降级为 WARNING 避免污染 ERROR 日志；page 已不可用，直接返回 None
+            if "Target" in err_msg and "closed" in err_msg:
+                logger.warning(f"详情页 {item_id} 采集失败（页面被并发关闭）: {e}")
+            else:
+                logger.exception(f"采集详情失败 {item_id}: {e}")
             return None
         finally:
             if own_page:
-                await page.close()
+                self.browser.unregister_external_page(page)
+                # page 可能已被并发关闭，close() 需异常保护避免 finally 抛错掩盖原异常
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     async def seller_profile(
         self, seller_id: str, page: Page | None = None
@@ -473,8 +566,14 @@ class DetailMixin:
         own_page = page is None
         if own_page:
             page = await self.browser.new_page()
+            # 同 detail()：注册外部 page 防止并发清理误关
+            self.browser.register_external_page(page)
         assert page is not None
         try:
+            # 防御性检查：同 detail()，page 可能在 new_page await 期间被并发关闭
+            if page.is_closed():
+                logger.warning(f"卖家主页 {seller_id} page 已关闭（并发清理或浏览器崩溃），跳过采集")
+                return None
             await self.ad.throttle()
             url = build_seller_url(seller_id)
             logger.debug(f"卖家主页: {url}")
@@ -593,11 +692,20 @@ class DetailMixin:
                 last_visited=datetime.now(timezone.utc),
             )
         except Exception as e:
-            logger.exception(f"采集卖家主页失败 {seller_id}: {e}")
+            err_msg = str(e)
+            # 同 detail()：TargetClosedError 降级为 WARNING
+            if "Target" in err_msg and "closed" in err_msg:
+                logger.warning(f"卖家主页 {seller_id} 采集失败（页面被并发关闭）: {e}")
+            else:
+                logger.exception(f"采集卖家主页失败 {seller_id}: {e}")
             return None
         finally:
             if own_page:
-                await page.close()
+                self.browser.unregister_external_page(page)
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     async def seller_profile_fallback(
         self,

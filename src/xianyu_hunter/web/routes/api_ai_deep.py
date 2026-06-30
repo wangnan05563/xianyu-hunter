@@ -206,7 +206,7 @@ def _parse_llm_response(r: httpx.Response) -> dict[str, Any]:
         data = r.json()
         content = data["choices"][0]["message"]["content"]
     except (KeyError, ValueError, IndexError) as e:
-        raise RuntimeError("AI 返回结构异常: " + str(e)) from None
+        raise RuntimeError(f"AI 返回结构异常: {e}") from None
     content = content.strip()
     if content.startswith("```"):
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.MULTILINE).strip()
@@ -301,10 +301,13 @@ def _rule_deep_analyze(
     has_medium = any(3 < s < 7 for s in scores)
     if has_high:
         overall_verdict = "reject"
+        verdict_text = "拒绝"
     elif has_medium:
         overall_verdict = "caution"
+        verdict_text = "谨慎"
     else:
         overall_verdict = "recommend"
+        verdict_text = "购买"
 
     def _risk(score: int) -> str:
         if score <= 3:
@@ -340,7 +343,7 @@ def _rule_deep_analyze(
         },
         "overall_verdict": overall_verdict,
         "overall_score": overall_score,
-        "summary": f"规则模拟综合评分 {overall_score}/10，建议{'购买' if overall_verdict == 'recommend' else '谨慎' if overall_verdict == 'caution' else '拒绝'}",
+        "summary": f"规则模拟综合评分 {overall_score}/10，建议{verdict_text}",
     }
 
 
@@ -356,7 +359,13 @@ def _normalize_deep_result(raw: dict[str, Any], source: str) -> dict[str, Any]:
             score = 5
         risk = str(d.get("risk_level") or "").strip().lower()
         if risk not in ("low", "medium", "high"):
-            risk = "high" if score <= 3 else ("medium" if score < 7 else "low")
+            # 根据 score 兜底推断风险等级
+            if score <= 3:
+                risk = "high"
+            elif score < 7:
+                risk = "medium"
+            else:
+                risk = "low"
         # 统一 signals/damages/inconsistencies 字段为 signals
         signals = d.get("signals") or d.get("damages") or d.get("inconsistencies") or []
         return {
@@ -369,7 +378,13 @@ def _normalize_deep_result(raw: dict[str, Any], source: str) -> dict[str, Any]:
     verdict = str(raw.get("overall_verdict") or "").strip().lower()
     if verdict not in ("recommend", "caution", "reject"):
         score = raw.get("overall_score", 5)
-        verdict = "reject" if score <= 3 else ("caution" if score < 7 else "recommend")
+        # 根据 score 兜底推断 verdict
+        if score <= 3:
+            verdict = "reject"
+        elif score < 7:
+            verdict = "caution"
+        else:
+            verdict = "recommend"
 
     try:
         overall_score = max(1, min(10, float(raw.get("overall_score", 5))))
@@ -389,13 +404,14 @@ def _normalize_deep_result(raw: dict[str, Any], source: str) -> dict[str, Any]:
 
 
 # ============== 图片哈希工具 ==============
-def _compute_image_url_hash(image_urls: list[str]) -> list[str]:
+def _compute_image_url_hash(image_urls: list[str]) -> list[dict]:
     """计算图片 URL 的 MD5 哈希，用于盗图比对
 
-    返回哈希列表（与 image_urls 一一对应）。
+    返回 [{url, hash}, ...] 列表（与 image_urls 一一对应）。
+    同时保留原 URL，便于前端展示 url → hash 的对应关系。
     实际盗图检测需要下载图片计算感知哈希，这里用 URL 哈希作为轻量级替代。
     """
-    return [hashlib.md5(url.encode()).hexdigest()[:12] for url in image_urls]
+    return [{"url": url, "hash": hashlib.md5(url.encode()).hexdigest()[:12]} for url in image_urls]
 
 
 # ============== 端点 ==============
@@ -514,7 +530,6 @@ def seller_template_check(
 
     # 2. 提取描述
     descriptions = [it.get("description", "") for it in items if it.get("description")]
-    titles = [it.get("title", "") for it in items]
 
     # 3. 模板词频率统计
     template_keywords = [
@@ -567,7 +582,13 @@ def seller_template_check(
 
     # 6. 判定
     is_dealer = template_score <= 4
-    risk_level = "high" if template_score <= 3 else ("medium" if template_score < 7 else "low")
+    # 根据 template_score 推断风险等级
+    if template_score <= 3:
+        risk_level = "high"
+    elif template_score < 7:
+        risk_level = "medium"
+    else:
+        risk_level = "low"
 
     return {
         "seller_id": body.seller_id,

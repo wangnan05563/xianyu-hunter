@@ -1,8 +1,8 @@
 # 闲鱼自动捡漏系统 - 技术设计说明书
 
 > 项目代号：**XianyuHunter**
-> 文档版本：v1.0
-> 编写日期：2026-06-03
+> 文档版本：v2.0
+> 编写日期：2026-06-30
 > 配套文档：[requirements.md](./requirements.md)
 
 ---
@@ -29,7 +29,7 @@
 │  表示层 (Presentation)                                          │
 │  ┌─────────────────────┐  ┌──────────────────────────────┐    │
 │  │  Web UI (127.0.0.1)  │  │  CLI (xianyu-hunter)         │    │
-│  │  FastAPI + Vue3 SPA  │  │  Typer / Click               │    │
+│  │  FastAPI + React SPA  │  │  Typer / Click               │    │
 │  └──────────┬───────────┘  └────────────┬─────────────────┘    │
 │             │              HTTP/WS       │                     │
 ├─────────────┼────────────────────────────┼─────────────────────┤
@@ -71,6 +71,13 @@
 | `WebServer` | Web UI 后端（FastAPI） | Repository, TaskScheduler |
 | `EventBus` | 进程内事件分发（asyncio） | - |
 | `Repository` | SQLite 读写 | sqlite3 |
+| `ChatbotOrchestrator` | 智能客服对话编排 | RAGEngine, Agent, FAQMatcher |
+| `RAGEngine` | 检索增强生成 | EmbeddingService, VectorStore |
+| `KBManager` | 知识库管理 | VectorStore, ChromaDB |
+| `AboutService` | 关于菜单服务 | BuildInfo, Repository |
+| `DashboardService` | 仪表盘统计服务 | Repository, EventBus |
+| `BatchRefreshScheduler` | 批量刷新调度 | APScheduler, Collector |
+| `ConfigVersionManager` | 配置版本管理 | YAML, FileSystem |
 
 ### 2.3 目录结构
 
@@ -98,14 +105,26 @@ d:\code\otherProjects\17_xianyu\
 │   │   │   ├── evaluator.py
 │   │   │   ├── buyer.py
 │   │   │   ├── notifier.py
-│   │   │   └── antidetect.py
+│   │   │   ├── antidetect.py
+│   │   │   ├── chatbot/       # 智能客服模块
+│   │   │   │   ├── orchestrator.py
+│   │   │   │   ├── rag_engine.py
+│   │   │   │   ├── agent.py
+│   │   │   │   ├── intent_classifier.py
+│   │   │   │   ├── kb_manager.py
+│   │   │   │   ├── faq_matcher.py
+│   │   │   │   ├── context_manager.py
+│   │   │   │   └── escalation.py
 │   │   ├── infra\
 │   │   │   ├── browser.py     # Playwright 封装
 │   │   │   ├── repository.py  # SQLite DAO
 │   │   │   ├── event_bus.py
 │   │   │   ├── logger.py
 │   │   │   ├── secrets.py     # DPAPI 加密
-│   │   │   └── selectors.py   # 选择器集中管理
+│   │   │   ├── selectors.py   # 选择器集中管理
+│   │   │   ├── embedding.py       # 向量化服务
+│   │   │   ├── vector_store.py    # ChromaDB 适配器
+│   │   │   └── repo_chatbot.py    # 对话仓储
 │   │   ├── notifiers\
 │   │   │   ├── base.py
 │   │   │   ├── serverchan.py
@@ -117,7 +136,10 @@ d:\code\otherProjects\17_xianyu\
 │   │   │   │   ├── tasks.py
 │   │   │   │   ├── items.py
 │   │   │   │   ├── logs.py
-│   │   │   │   └── ws.py      # WebSocket 日志
+│   │   │   │   ├── ws.py      # WebSocket 日志
+│   │   │   │   ├── api_chatbot.py     # 智能客服 API
+│   │   │   │   ├── api_kb.py          # 知识库管理 API
+│   │   │   │   └── api_about.py       # 关于菜单 API
 │   │   │   └── static\        # Vue 编译产物
 │   │   └── utils\
 │   │       ├── retry.py
@@ -139,6 +161,13 @@ d:\code\otherProjects\17_xianyu\
 │   └── logs\                  # 日志目录（.gitignore）
 ├── .env.example               # 环境变量示例
 ├── .gitignore
+├── frontend/                  # React 前端（SPA）
+│   ├── src/
+│   │   ├── pages/
+│   │   │   ├── Dashboard/     # 仪表盘
+│   │   │   ├── Chatbot/       # 智能客服
+│   │   │   └── About/         # 关于
+│   │   └── components/
 └── README.md
 ```
 
@@ -1200,7 +1229,7 @@ async def health_check():
 | **S5 Notifier** | 三渠道适配器 | 三种渠道各推送一次成功 | 0.5d |
 | **S6 Buyer** | 拍下流程（含确认态） | 真实跑通 1 单（dry-run 模式） | 1.5d |
 | **S7 Scheduler** | Cron 调度、任务生命周期 | 多任务并行跑 1h 无异常 | 1d |
-| **S8 WebServer** | FastAPI 后端 + Vue 前端 | UI 可配置任务、看日志、看商品 | 2d |
+| **S8 WebServer** | FastAPI 后端 + React 前端 | UI 可配置任务、看日志、看商品 | 2d |
 | **S9 集成测试** | 端到端 dry-run | 全流程稳定 1 天 | 1d |
 | **总计** | | | **~12d** |
 
@@ -1216,6 +1245,15 @@ async def health_check():
 | 议价机器人 | Buyer.send_message 接 LLM | 中 |
 | 跨平台比价 | 新增 Collector 子类（转转/爱回收） | 大 |
 | 订阅付费化 | WebServer 加 Stripe 集成 | 大 |
+
+---
+
+## 13. 修订记录
+
+| 版本 | 日期 | 修订内容 |
+|------|------|----------|
+| v1.0 | 2026-06-03 | 初始版本，基于 Playwright + FastAPI + Vue3 架构 |
+| v2.0 | 2026-06-30 | 前端迁移至 React + Ant Design；新增智能客服模块（RAG+Agent）；新增关于菜单；新增仪表盘KPI/漏斗/雷达；新增配置版本管理；新增向量数据库维护；新增批量采集；新增钉钉通知渠道；架构调整为 DDD 分层 |
 
 ---
 

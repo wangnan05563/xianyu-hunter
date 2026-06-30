@@ -22,28 +22,28 @@
   </div>
 
   <div class="steps" x-show="step < 5">
-    <div class="step {{ 'done' if step_index >= 1 else ('active' if step_index == 0 else '') }}">
+    <div class="step {{ 'done' if step_index >= 1 else '' }}{{ 'active' if step_index == 0 else '' }}">
       <div class="num">{{ '✓' if step_index >= 1 else '1' }}</div>
       <div>
         <div style="font-weight: 600;">扫码登录闲鱼</div>
         <div class="muted" style="font-size: 11px;">{{ '已检测到登录态' if has_login else '需运行 CLI: python -m xianyu_hunter login' }}</div>
       </div>
     </div>
-    <div class="step {{ 'done' if step_index >= 2 else ('active' if step_index == 1 else '') }}">
+    <div class="step {{ 'done' if step_index >= 2 else '' }}{{ 'active' if step_index == 1 else '' }}">
       <div class="num">{{ '✓' if step_index >= 2 else '2' }}</div>
       <div>
         <div style="font-weight: 600;">添加第一个任务</div>
         <div class="muted" style="font-size: 11px;">{{ task_count }} 个任务</div>
       </div>
     </div>
-    <div class="step {{ 'done' if step_index >= 3 else ('active' if step_index == 2 else '') }}">
+    <div class="step {{ 'done' if step_index >= 3 else '' }}{{ 'active' if step_index == 2 else '' }}">
       <div class="num">{{ '✓' if step_index >= 3 else '3' }}</div>
       <div>
         <div style="font-weight: 600;">配置通知通道</div>
         <div class="muted" style="font-size: 11px;">Server酱 / PushPlus / Bark</div>
       </div>
     </div>
-    <div class="step {{ 'done' if step_index >= 4 else ('active' if step_index == 3 else '') }}">
+    <div class="step {{ 'done' if step_index >= 4 else '' }}{{ 'active' if step_index == 3 else '' }}">
       <div class="num">{{ '✓' if step_index >= 4 else '4' }}</div>
       <div>
         <div style="font-weight: 600;">启动调度器</div>

@@ -1,0 +1,59 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S2486",
+                 "repo":  "typescript",
+                 "name":  "Exceptions should not be ignored",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "cwe",
+                                 "error-handling",
+                                 "suspicious"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "1h",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "1h",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eWhen exceptions occur, it is usually a bad idea to simply ignore them. Instead, it is better to handle them properly, or at least to log them.\u003c/p\u003e\n\u003ch3\u003eNoncompliant code example\u003c/h3\u003e\n\u003cpre\u003e\nfunction f() {\n  try {\n    doSomething();\n  } catch (err) {\n  }\n}\n\u003c/pre\u003e\n\u003ch3\u003eCompliant solution\u003c/h3\u003e\n\u003cpre\u003e\nfunction f() {\n  try {\n    doSomething();\n  } catch (err) {\n    console.log(`Exception while doing something: ${err}`);\n  }\n}\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003cul\u003e\n  \u003cli\u003e OWASP - \u003ca href=\"https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/\"\u003eTop 10 2021 Category A9 - Security Logging and\n  Monitoring Failures\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e OWASP - \u003ca href=\"https://owasp.org/www-project-top-ten/2017/A10_2017-Insufficient_Logging%2526Monitoring\"\u003eTop 10 2017 Category A10 -\n  Insufficient Logging \u0026amp; Monitoring\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e CWE - \u003ca href=\"https://cwe.mitre.org/data/definitions/390\"\u003eCWE-390 - Detection of Error Condition Without Action\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

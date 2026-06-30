@@ -4,7 +4,7 @@ import {
 // 使用 echarts/core 按需导入，仅注册项目实际使用的图表类型和组件
 // 相比全量导入 echarts，可显著降低 bundle 体积（从 ~1000kB 降至 ~300kB）
 import * as echarts from 'echarts/core'
-import { BarChart, LineChart, HeatmapChart, RadarChart, PieChart } from 'echarts/charts'
+import { BarChart, LineChart, HeatmapChart, RadarChart, PieChart, FunnelChart } from 'echarts/charts'
 import {
   TooltipComponent,
   GridComponent,
@@ -23,7 +23,7 @@ import type {
 
 // 一次性注册所有项目用到的图表与组件，后续 echarts.init 只会包含这些能力
 echarts.use([
-  BarChart, LineChart, HeatmapChart, RadarChart, PieChart,
+  BarChart, LineChart, HeatmapChart, RadarChart, PieChart, FunnelChart,
   TooltipComponent, GridComponent, LegendComponent,
   MarkLineComponent, VisualMapComponent, RadarComponent,
   CanvasRenderer,

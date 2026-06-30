@@ -1,0 +1,58 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S4624",
+                 "repo":  "typescript",
+                 "name":  "Template literals should not be nested",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MAJOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "brain-overload",
+                                 "confusing"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "10min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "10min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e MDN web docs - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Template_literals\"\u003eTemplate literals (Template\n  strings)\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eTemplate literals, also known as template strings, allow for string interpolation and multiline strings in JavaScript. They provide a more\nconvenient and flexible way to work with strings compared to traditional string concatenation or manipulation.\u003c/p\u003e\n\u003cp\u003eTemplate literals are delimited with the backtick \u003ccode\u003e(`)\u003c/code\u003e character. They are a convenient way to include variables or expressions within\na string using placeholders \u003ccode\u003e`${expression}`\u003c/code\u003e in the string and evaluate them dynamically.\u003c/p\u003e\n\u003cp\u003eHowever, nesting template literals can make the code less readable. With each nested template literal, the code becomes more complex and harder to\nunderstand. It can be challenging to keep track of the opening and closing backticks and properly escape characters if needed.\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nconst color = \"red\";\nconst count = 3;\nconst message = `I have ${color ? `${count} ${color}` : count} apples`; // Noncompliant: nested template strings not easy to read\n\u003c/pre\u003e\n\u003cp\u003eIn such situations, moving the nested template into a separate statement is preferable.\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nconst color = \"red\";\nconst count = 3;\nconst apples = color ? `${count} ${color}` : count;\nconst message = `I have ${apples} apples`;\n\u003c/pre\u003e\n\u003cp\u003eThe rule makes an exception for nested template literals spanning multiple lines. It allows you to visually separate different sections and gives\nyou more freedom in formatting your text, including line breaks, indentation, and other formatting elements, enhancing readability.\u003c/p\u003e\n\u003cpre\u003e\nconst name = \u0027John\u0027;\nconst age = 42;\n\nconst message = `Hello ${name}!\nYou are ${age} years old.\n${`This is a nested template literal.`}\nIt can span multiple lines.`;\n\u003c/pre\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "MEDIUM"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

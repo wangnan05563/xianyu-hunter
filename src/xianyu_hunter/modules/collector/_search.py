@@ -31,7 +31,10 @@ logger = get_logger()
 
 _ITEM_ID_KEYS = ("itemId", "item_id", "auctionId", "auction_id", "itemID", "id")
 _TITLE_KEYS = ("title", "itemTitle", "item_title", "name", "subject")
-_PRICE_KEYS = ("promoPrice", "promotionPrice", "price", "soldPrice", "originalPrice")
+# 优先取当前挂牌价 price（与官网展示一致），促销价作为兜底
+# 为什么调整：promoPrice 是促销价（可能临时降价），官网展示的是 price（挂牌价），
+# 两者不一致会导致用户点击跳转后看到不同金额
+_PRICE_KEYS = ("price", "promoPrice", "promotionPrice", "soldPrice", "originalPrice")
 _THUMB_KEYS = ("picUrl", "mainPicUrl", "pic", "imageUrl", "mainPic", "cover", "pic_url")
 _SELLER_ID_KEYS = (
     "sellerId", "userId", "sellerIdNum", "sellerOpenId", "openId", "openUid",
@@ -183,10 +186,15 @@ def _extract_api_item_fields(raw: dict) -> dict[str, Any]:
         for key, value in source.items():
             semantic_raw.setdefault(key, value)
 
+    # 占位图标记：闲鱼搜索 API 经常返回 1x1 透明 PNG 占位图，
+    # 必须跳过否则前端显示为空白图片
+    _PLACEHOLDER_MARKS = ("tps-2-2", "2-2.png", "1x1.png")
     thumb_url = ""
     for key in _THUMB_KEYS:
-        thumb_url = _normalize_image_url(_find_value_by_key(source, key))
-        if thumb_url and not any(mark in thumb_url for mark in ("tps-2-2", "2-2.png", "1x1.png")):
+        candidate = _normalize_image_url(_find_value_by_key(source, key))
+        # 仅当候选 URL 非空且非占位图时才赋值，避免最后一个 key 的占位图覆盖之前的空值
+        if candidate and not any(mark in candidate for mark in _PLACEHOLDER_MARKS):
+            thumb_url = candidate
             break
 
     return {
@@ -308,19 +316,58 @@ async def _sync_response_cookies_to_context(page: Page, response: Any) -> int:
 # 替代逐个 query_selector 的串行模式，将 150+ 次 DOM 往返压缩为 1 次 evaluate 调用
 _BATCH_PARSE_SCRIPT = r"""
 () => {
+  // 选择器必须与 _find_cards 的 card_selectors 保持一致
+  // 为什么：之前只用 2 种选择器（feeds-item-wrap/feeds-item），
+  // 而 _find_cards 用 6 种。闲鱼搜索页大量卡片使用 item-card/search-item/product-card 等其他 class，
+  // 批量脚本与 _find_cards 不一致导致 31 个卡片只提取到 1 条
   const cards = document.querySelectorAll(
-    "[class*='feeds-item-wrap'], [class*='feeds-item']"
+    "[class*='feeds-item-wrap'], [class*='feeds-item'], " +
+    "[class*='item-card'], [class*='search-item'], " +
+    "[class*='product-card'], [data-spm*='item']"
   );
   const results = [];
   cards.forEach(card => {
     try {
-      // 链接与商品ID
-      const link = card.tagName === 'A' ? card : card.querySelector('a');
-      if (!link) return;
-      const href = link.getAttribute('href') || '';
-      const idMatch = href.match(/id=(\d+)/) || href.match(/\/(\d{6,})/);
-      if (!idMatch) return;
-      const id = idMatch[1];
+      // 链接与商品ID：多路径兜底
+      // 为什么增加兜底：闲鱼 SPA 部分卡片用 onclick 跳转而非 <a href>，
+      // 仅靠 a[href] 会导致大量卡片提取失败
+      const link = card.tagName === 'A' ? card : card.querySelector('a[href*="item"], a[href*="goods"], a[href*="product"], a');
+      let href = link ? (link.getAttribute('href') || '') : '';
+      let id = '';
+      // 优先从 URL 提取：id=xxx 或 /item/xxx 或 /数字
+      let idMatch = href.match(/id=(\d+)/) || href.match(/\/item\/(\d+)/) || href.match(/\/(\d{6,})/);
+      if (idMatch) {
+        id = idMatch[1];
+      } else {
+        // 兜底1：从 data-itemid / data-id / data-spm 等属性提取
+        for (const attr of ['data-itemid', 'data-id', 'data-spm', 'data-iid', 'data-aid']) {
+          const v = card.getAttribute(attr) || '';
+          const m = v.match(/(\d{6,})/);
+          if (m) { id = m[1]; break; }
+        }
+      }
+      // 兜底2：从 card 内部任意元素的 data-* 属性中查找商品ID
+      if (!id) {
+        const idEls = card.querySelectorAll('[data-itemid], [data-id], [data-iid], [data-aid], [data-spm]');
+        idEls.forEach(el => {
+          if (id) return;
+          for (const attr of ['data-itemid', 'data-id', 'data-iid', 'data-aid', 'data-spm']) {
+            const v = el.getAttribute(attr) || '';
+            const m = v.match(/(\d{6,})/);
+            if (m) { id = m[1]; return; }
+          }
+        });
+      }
+      // 兜底3：从 card 内部任意 <a> 的 href 中提取 ID（不限制第一个 link）
+      if (!id) {
+        const allLinks = card.querySelectorAll('a');
+        for (let i = 0; i < allLinks.length && !id; i++) {
+          const h = allLinks[i].getAttribute('href') || '';
+          const m = h.match(/id=(\d+)/) || h.match(/\/item\/(\d+)/) || h.match(/\/(\d{6,})/);
+          if (m) { id = m[1]; }
+        }
+      }
+      if (!id) return;
 
       // 标题
       let title = '';
@@ -329,13 +376,21 @@ _BATCH_PARSE_SCRIPT = r"""
         if (el) { title = el.innerText.trim(); if (title) break; }
       }
 
-      // 价格
+      // 价格：排除原价/划线价/运费等干扰元素，支持"万"单位
+      // 为什么排除：搜索卡片中可能有原价（划线）、当前价、促销价等多个含 price 的元素，
+      // querySelector 取第一个匹配可能不是当前价，导致采集金额与官网不一致
       let price = 0;
-      for (const sel of ['[class*="price"]', '.price']) {
+      const priceSel = '[class*="price"]:not([class*="original"]):not([class*="Original"]):not([class*="postage"]):not([class*="shipping"]):not([class*="line-through"])';
+      for (const sel of [priceSel, '[class*="price"]', '.price']) {
         const el = card.querySelector(sel);
         if (el) {
-          const m = el.innerText.match(/[\d.]+/);
-          if (m) { price = parseFloat(m[0]); if (price > 0) break; }
+          let txt = el.innerText.replace(/[\s,]+/g, '');
+          const m = txt.match(/\d+\.?\d*/);
+          if (m) {
+            price = parseFloat(m[0]);
+            if (/万/.test(txt)) price *= 10000;
+            if (price > 0) break;
+          }
         }
       }
 
@@ -493,7 +548,11 @@ class SearchMixin:
 
     # 搜索 API 精确匹配的端点路径（避免误匹配 shade/activate 等子 API）
     _SEARCH_API_PATH = "mtop.taobao.idlemtopsearch.pc.search/1.0"
-    _SEARCH_API_ROUTE_PATTERN = f"**/*{_SEARCH_API_PATH}*"
+    # 为什么用 ** 而非 *：Playwright glob 中 * 不跨 / 匹配，
+    # 而 URL 是 https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/...
+    # mtop 前面有 /h5/，用 * 无法跨 / 匹配导致 route 拦截器从未被触发
+    # ** 匹配包括 / 在内的任意字符，能正确匹配跨路径的 API URL
+    _SEARCH_API_ROUTE_PATTERN = f"**{_SEARCH_API_PATH}**"
 
     async def _ensure_fresh_m5tk(self, page: Page, force: bool = False) -> bool:
         """导航到闲鱼主页刷新 _m_h5_tk token
@@ -518,8 +577,10 @@ class SearchMixin:
                 return False
         try:
             logger.debug("刷新 _m_h5_tk token: 导航到 goofish.com 主页")
-            # 25 秒超时：闲鱼主页资源多，15 秒可能不够
-            await page.goto(f"{get_base_url()}/", wait_until="domcontentloaded", timeout=25000)
+            # 35 秒超时：闲鱼主页资源多，网络波动时 15-25s 可能不够
+            # 为什么 35s：日志显示 36 次 token 刷新都成功（25s 内），
+            # 但接近阈值的刷新在网络波动时可能超时；35s 给予足够缓冲避免连锁失效
+            await page.goto(f"{get_base_url()}/", wait_until="domcontentloaded", timeout=35000)
             # 等待 Set-Cookie 响应被浏览器处理
             await asyncio.sleep(1.5)
             self._last_m5tk_refresh = time.monotonic()
@@ -561,6 +622,9 @@ class SearchMixin:
         own_page = page is None
         if own_page:
             page = await self.browser.new_page()
+            # 注册外部 page，防止与 scheduler.close_all_pages 并发时被误关
+            # 场景：live_search 端点调用 search() 时，主任务 run_once 可能同时清理 page
+            self.browser.register_external_page(page)
         assert page is not None
         items: list[ItemSummary] = []
         # Worker 搜索时获取 browser_lock，与 live 端点互斥
@@ -584,6 +648,12 @@ class SearchMixin:
                     logger.info("搜索筛选参数: {}", ", ".join(search_filters))
             url = build_search_url(keyword, filter_params=filter_params, sort_type=sort_type, regions=regions)
             logger.info("搜索: {}", url)
+            # 频率伪装：搜索前按对数正态分布等待，统计计数器同步累加
+            # 延迟导入避免循环依赖；fast 模式跳过伪装保持抢单速度
+            if not fast:
+                from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+                from xianyu_hunter.modules.freq_disguise import ActionType
+                await get_orchestrator().apply_freq_delay(ActionType.SEARCH)
             await self.ad.throttle()
 
             # 始终检查 token 有效性（由 45 分钟缓存决定是否真正刷新）
@@ -734,6 +804,62 @@ class SearchMixin:
                     if session_invalid and items:
                         self.last_session_invalid = False
                         logger.info("DOM 回退成功提取 {} 个商品，重置会话失效标志", len(items))
+                # DOM 翻页：首屏解析后，若 max_pages > 1 则滚动加载更多屏
+                # 为什么需要：DOM 回退原仅取首屏 26 条，650 元商品可能在第 2 屏
+                if items and max_pages > 1:
+                    seen_ids = {i.id for i in items}
+                    for dom_page in range(1, max_pages):
+                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        await self.ad.human_delay(2000, 4000)
+                        try:
+                            batch_data = await asyncio.wait_for(
+                                page.evaluate(_BATCH_PARSE_SCRIPT),
+                                timeout=10.0,
+                            )
+                        except (asyncio.TimeoutError, Exception) as e:
+                            logger.warning("DOM 翻页第 {} 屏解析失败: {}", dom_page + 1, str(e)[:80])
+                            break
+                        new_count = 0
+                        for d in (batch_data or []):
+                            item_id = d.get("id", "")
+                            if not item_id or item_id in seen_ids:
+                                continue
+                            title = d.get("title", "")
+                            if keyword and title and not task_keyword_matches_title(keyword, title):
+                                continue
+                            thumb = d.get("thumb", "")
+                            if thumb and thumb.startswith("//"):
+                                thumb = "https:" + thumb
+                            pt_str = d.get("publish_time")
+                            pt_val = None
+                            if pt_str:
+                                try:
+                                    pt_val = datetime.fromisoformat(pt_str.replace('Z', '+00:00'))
+                                except Exception:
+                                    pass
+                            dom_nick = d.get("seller_nick", "") or ""
+                            dom_region = d.get("region", "") or ""
+                            nick, region = extract_seller_nick({"userNick": dom_nick, "region": dom_region})
+                            brand = extract_brand(None, title, seller_candidate=nick)
+                            items.append(ItemSummary(
+                                id=item_id,
+                                title=title,
+                                price=float(d.get("price", 0) or 0),
+                                thumb_url=thumb,
+                                region=region,
+                                brand=brand,
+                                is_sold=d.get("is_sold", False),
+                                want_cnt=int(d.get("want_cnt", 0) or 0),
+                                seller_id=d.get("seller_id", "") or "",
+                                seller_nick=nick,
+                                seller_credit=d.get("seller_credit", "") or "",
+                                publish_time=pt_val,
+                            ))
+                            seen_ids.add(item_id)
+                            new_count += 1
+                        logger.info("DOM 翻页第 {} 屏新增 {} 个商品", dom_page + 1, new_count)
+                        if new_count == 0:
+                            break
                 if not items:
                     logger.info("搜索无结果: {}", keyword)
 
@@ -746,6 +872,7 @@ class SearchMixin:
         finally:
             if own_page:
                 try:
+                    self.browser.unregister_external_page(page)
                     await page.close()
                 except Exception:
                     pass  # 页面可能已被取消，忽略关闭异常
@@ -899,9 +1026,14 @@ class SearchMixin:
                 logger.warning("搜索 API 会话失效，将尝试 DOM 回退: keyword={}", keyword)
 
             # 解析捕获到的 API 响应
-            for resp in captured_responses:
+            # 为什么用 while 而非 for：翻页后新捕获的响应需被继续处理，
+            # for 循环基于原始迭代器，遍历完后不会处理新增元素
+            api_page_idx = 0
+            while captured_responses and api_page_idx < max_pages:
+                resp = captured_responses.pop(0)
                 raw_items = self._parse_search_api_result(resp)
                 if not raw_items:
+                    api_page_idx += 1
                     continue
                 logger.info("route 拦截获取到 {} 个商品", len(raw_items))
                 if raw_items:
@@ -960,18 +1092,15 @@ class SearchMixin:
                         continue
 
                 # 翻页：滚动以触发更多 API 请求
-                if len(raw_items) >= 20 and len(captured_responses) < max_pages:
-                    # 清空旧的响应，准备捕获下一页
-                    captured_responses.clear()
+                if len(raw_items) >= 20 and api_page_idx + 1 < max_pages:
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                     await self.ad.human_delay(2000, 4000)
-                    # 等待下一页 API 响应
+                    # 等待下一页 API 响应（新响应会通过 route 拦截器追加到 captured_responses）
                     for _ in range(10):
                         if captured_responses:
                             break
                         await asyncio.sleep(1)
-                else:
-                    break
+                api_page_idx += 1
 
         finally:
             # 页面可能已损坏（TargetClosedError），unroute 需超时+异常保护避免卡住
@@ -1083,6 +1212,8 @@ class SearchMixin:
             try:
                 if own_page:
                     detail_page = await self.browser.new_page()
+                    # 同 search()：注册外部 page 防止并发清理误关
+                    self.browser.register_external_page(detail_page)
                 assert detail_page is not None
 
                 for item in items[:max_seller_details]:
@@ -1119,6 +1250,7 @@ class SearchMixin:
                         logger.warning(f"live_search 提取卖家失败 item={item.id}: {e}")
             finally:
                 if own_page and detail_page:
+                    self.browser.unregister_external_page(detail_page)
                     await detail_page.close()
 
         seller_count = len([r for r in results if r.get("link_type") == "seller"])

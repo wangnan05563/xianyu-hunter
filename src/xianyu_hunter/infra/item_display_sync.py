@@ -8,9 +8,10 @@ from typing import Any
 def merge_item_display_from_detail(existing_display: dict | None, detail: Any) -> dict[str, Any]:
     """Merge detail fields into an existing task_links.display dict.
 
-    Most fields only overwrite when detail collected a non-empty value. Brand is different:
-    an empty detail.brand means the current official/detail page did not support the old
-    inferred brand, so it must clear stale display.brand values.
+    所有字段统一采用 set_if_present 策略：仅当 detail 采集到非空值时才覆盖。
+    brand 字段不再强制清空——detail 流程的 extract_brand(raw=None, ...) 仅做标题推断，
+    空返回不代表"权威判定无品牌"，只是"标题未命中有限别名表"。
+    若旧 brand 确实是搜索 API 污染，评估列表读取时的 normalize_display_brand 会兜底校验。
     """
     merged: dict[str, Any] = dict(existing_display or {})
 
@@ -26,6 +27,11 @@ def merge_item_display_from_detail(existing_display: dict | None, detail: Any) -
     set_if_present("want_cnt", getattr(detail, "want_cnt", None))
     set_if_present("view_cnt", getattr(detail, "view_cnt", None))
 
+    # 详情页图片列表：前端商品详情和评估页可用此列表展示多图
+    image_urls = getattr(detail, "image_urls", None)
+    if image_urls:
+        merged["image_urls"] = image_urls
+
     publish_time = getattr(detail, "publish_time", None)
     if isinstance(publish_time, datetime):
         merged["publish_time"] = publish_time.isoformat()
@@ -36,7 +42,7 @@ def merge_item_display_from_detail(existing_display: dict | None, detail: Any) -
     if is_sold is not None:
         merged["is_sold"] = bool(is_sold)
 
-    merged["brand"] = getattr(detail, "brand", "") or ""
+    set_if_present("brand", getattr(detail, "brand", ""))
     return merged
 
 

@@ -50,6 +50,11 @@ class NotifierChannelsConfig(BaseModel):
     serverchan: bool = True
     pushplus: bool = True
     bark: bool = True
+    telegram: bool = False
+    wecom: bool = False
+    dingtalk: bool = False
+    webhook: bool = False
+    ntfy: bool = False
 
 
 class QuietHoursConfig(BaseModel):
@@ -121,6 +126,22 @@ class EvalConfig(BaseModel):
     auto_buy_score: int = 80              # 大于等于全自动拍下
     ai_auto_eval: bool = False            # 调度流程中自动调用 AI 评估（消耗 token）
     ai_auto_deep_analyze: bool = False    # 调度流程中自动深度分析（消耗更多 token）
+    # P1: 自动官方采集——对通过 pass_score 的商品自动调用官方采集做深度验证
+    # 关闭时仅靠爬虫方式采集详情+卖家主页；开启后额外提取评价/留言等官方数据
+    auto_collect_official: bool = False
+    # 每轮 run_once 最多自动官方采集的商品数（避免拖慢+反爬）
+    auto_collect_max_per_run: int = 3
+    # 自动官方采集去重窗口（分钟）：同一商品在窗口内不被重复采集
+    # 默认 30 分钟，避免短时间内重复采集浪费配额
+    auto_collect_dedup_window_minutes: int = 30
+    # 自动官方采集失败退避阈值：连续失败达到此次数后暂停本轮自动采集
+    # 默认 3 次，避免连续失败浪费配额；通过 notifier 发送告警
+    auto_collect_fail_pause_threshold: int = 3
+    # P3: AI 多轮优化建议——累积 N 轮后调用 LLM 生成自然语言优化建议
+    # 与单轮结论(_save_run_conclusion)互补：单轮给即时反馈，多轮给趋势洞察
+    ai_multi_run_suggestion: bool = False
+    # 每隔多少轮生成一次 AI 建议（太小浪费 token，太大反馈滞后）
+    ai_suggestion_interval: int = 5
 
     @model_validator(mode="after")
     def _check_score_order(self) -> "EvalConfig":
@@ -129,6 +150,23 @@ class EvalConfig(BaseModel):
             raise ValueError(
                 f"通过分数 pass_score({self.pass_score}) 不能大于 "
                 f"自动抢单分数 auto_buy_score({self.auto_buy_score})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_interval_range(self) -> "EvalConfig":
+        # ai_suggestion_interval 必须 >= 1：worker.py 用 len(history) % interval 触发，
+        # interval=0 会抛 ZeroDivisionError；同时 max_history = interval*2 = 0 会导致
+        # self._run_history[-0:] 等价于 [0:]（不截断），内存无限增长
+        if self.ai_suggestion_interval < 1:
+            raise ValueError(
+                f"ai_suggestion_interval 必须 >= 1，实际 {self.ai_suggestion_interval}"
+            )
+        # auto_collect_max_per_run 不能为负：worker.py 用 stats.official_collected < max 判断，
+        # 负数会让条件永远 False，官方采集静默禁用且语义不清
+        if self.auto_collect_max_per_run < 0:
+            raise ValueError(
+                f"auto_collect_max_per_run 不能为负，实际 {self.auto_collect_max_per_run}"
             )
         return self
 
@@ -169,6 +207,104 @@ class PriceStrategyConfig(BaseModel):
     top_n: int = 5
 
 
+class BatchRefreshConfig(BaseModel):
+    """批量采集调度器配置
+
+    定时刷新在售商品详情，用于检测已售状态、补全字段。
+    - interval_minutes: 定时触发间隔
+    - batch_size: 每批从 DB 拉取的最大商品数（分页控制）
+    - max_items_per_run: 单次运行最多采集的商品数（防止长时间占用浏览器）
+    - history_retention_days: 执行历史保留天数，启动时清理超过此天数的记录
+      （0 表示永不清理；默认 90 天平衡排查需求与磁盘占用）
+    """
+    enabled: bool = True
+    interval_minutes: int = 30
+    batch_size: int = 50
+    max_items_per_run: int = 100
+    history_retention_days: int = Field(default=90, ge=0, le=3650)
+
+
+# ============== 智能客服模块配置 ==============
+# 设计文档：docs/chatbot-详细设计.md §3.1
+# 所有配置类用 Pydantic BaseModel（与上方现有配置类一致），不用 @dataclass
+
+class ChatbotRAGConfig(BaseModel):
+    """RAG 检索配置"""
+    top_k: int = Field(5, ge=1, le=20, description="检索返回的片段数量")
+    similarity_threshold: float = Field(0.65, ge=0.0, le=1.0, description="相似度阈值，低于此值的片段丢弃")
+    max_context_chars: int = Field(8000, ge=500, le=32000, description="context 最大字符数，超出则整片丢弃最低相似度片段")
+
+
+class ChatbotLLMConfig(BaseModel):
+    """LLM 调用配置"""
+    model: str = Field("gpt-4o-mini", description="OpenAI 模型名")
+    temperature: float = Field(0.3, ge=0.0, le=2.0, description="采样温度，0=确定性，2=最大随机")
+    max_tokens: int = Field(2000, ge=1, le=4096, description="单次回复最大 token 数")
+    http_timeout_sec: int = Field(25, ge=5, le=120, description="HTTP 总超时")
+    first_token_timeout_sec: int = Field(15, ge=3, le=60, description="首 token 超时")
+    vision_model: str | None = Field(
+        None,
+        description="多模态视觉模型名（如 gpt-4o、qwen-vl-max）；None 表示用 model 处理图片（可能不支持）",
+    )
+
+
+class ChatbotAgentConfig(BaseModel):
+    """AGENT 工具调用配置"""
+    enable_tools: bool = Field(True, description="是否启用 AGENT 工具调用")
+    max_tool_rounds: int = Field(3, ge=1, le=10, description="最大工具调用轮数")
+    tool_trigger_mode: str = Field("function_calling", description="工具触发模式：function_calling 优先 / fallback 兜底")
+    tool_call_timeout_sec: int = Field(5, ge=1, le=30, description="单轮工具本地执行超时")
+    tool_llm_timeout_sec: int = Field(15, ge=5, le=60, description="单轮 LLM 决策超时")
+    tool_total_timeout_sec: int = Field(30, ge=10, le=120, description="AGENT 总超时")
+
+
+class ChatbotKBConfig(BaseModel):
+    """知识库构建与更新配置"""
+    auto_update_enabled: bool = Field(True, description="是否启用定时自动更新")
+    update_interval_hours: int = Field(6, ge=1, le=168, description="自动更新间隔（小时）")
+    doc_paths: list[str] = Field(
+        default_factory=lambda: ["docs/", "src/xianyu_hunter/"],
+        description="文档扫描路径列表",
+    )
+    embedding_concurrency: int = Field(5, ge=1, le=20, description="Embedding 并发数")
+    embedding_model: str = Field("text-embedding-3-small", description="OpenAI Embedding 模型名")
+    embedding_dimensions: int = Field(1536, ge=256, le=3072, description="向量维度")
+    chunk_size: int = Field(500, ge=100, le=2000, description="分块字符数")
+    chunk_overlap: int = Field(50, ge=0, le=500, description="分块重叠字符数")
+    snapshot_max_keep: int = Field(10, ge=1, le=50, description="快照保留数量上限")
+
+
+class ChatbotFAQConfig(BaseModel):
+    """FAQ 匹配配置"""
+    similarity_threshold: float = Field(0.85, ge=0.0, le=1.0, description="≥ 此值直接返回")
+    confirm_threshold: float = Field(0.65, ge=0.0, le=1.0, description="此值 ~ similarity_threshold 区间需确认")
+
+
+class ChatbotEscalationConfig(BaseModel):
+    """转人工配置"""
+    feedback_threshold: int = Field(2, ge=1, le=10, description="触发转人工的点踩次数")
+    feedback_window_min: int = Field(30, ge=5, le=1440, description="点踩统计时间窗口（分钟）")
+    contact: str = Field("", description="转人工联系方式（空则显示'请联系管理员'）")
+    sanitize_pii: bool = Field(True, description="是否脱敏 PII")
+
+
+class ChatbotConfig(BaseModel):
+    """智能客服总配置（对应 yaml 中 chatbot 段）
+
+    静态配置：启动时从 yaml 加载，修改需重启
+    动态配置：存 chatbot_config 表，通过 PUT /api/chatbot/config 热更新
+    """
+    enabled: bool = Field(True, description="智能客服总开关（支持热更新）")
+    max_history_turns: int = Field(10, ge=1, le=20, description="上下文历史最大轮数")
+    session_timeout_min: int = Field(30, ge=5, le=1440, description="会话超时时间（分钟）")
+    rag: ChatbotRAGConfig = Field(default_factory=ChatbotRAGConfig)
+    llm: ChatbotLLMConfig = Field(default_factory=ChatbotLLMConfig)
+    agent: ChatbotAgentConfig = Field(default_factory=ChatbotAgentConfig)
+    kb: ChatbotKBConfig = Field(default_factory=ChatbotKBConfig)
+    faq: ChatbotFAQConfig = Field(default_factory=ChatbotFAQConfig)
+    escalation: ChatbotEscalationConfig = Field(default_factory=ChatbotEscalationConfig)
+
+
 class AppConfig(BaseModel):
     """根配置"""
     server: ServerConfig = ServerConfig()
@@ -179,6 +315,20 @@ class AppConfig(BaseModel):
     eval: EvalConfig = EvalConfig()
     search: SearchConfig = SearchConfig()
     price_strategy: PriceStrategyConfig = PriceStrategyConfig()
+    batch_refresh: BatchRefreshConfig = BatchRefreshConfig()
+    chatbot: ChatbotConfig = ChatbotConfig()
+    # 通知渠道凭据（明文存到 yaml，前端用 Input.Password 组件隐藏）
+    # keyring 是设计首选，但前端需要回显已配置值，暂存 yaml
+    serverchan_send_key: str = ""
+    pushplus_token: str = ""
+    bark_server: str = ""
+    bark_key: str = ""
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    wecom_webhook: str = ""
+    dingtalk_webhook: str = ""
+    dingtalk_secret: str = ""
+    webhook_url: str = ""
 
 
 # ============== 加载逻辑 ==============

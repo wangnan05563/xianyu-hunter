@@ -1,0 +1,2274 @@
+﻿{
+    "total":  34,
+    "p":  1,
+    "ps":  20,
+    "paging":  {
+                   "pageIndex":  1,
+                   "pageSize":  20,
+                   "total":  34
+               },
+    "effortTotal":  290,
+    "issues":  [
+                   {
+                       "key":  "6f1a616f-0da5-48aa-9efe-c7b859a332fb",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/infra/db_models.py",
+                       "project":  "xianyu_hunter",
+                       "line":  447,
+                       "textRange":  {
+                                         "startLine":  447,
+                                         "endLine":  447,
+                                         "startOffset":  27,
+                                         "endOffset":  54
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/infra/db_models.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  464,
+                                                                                 "endLine":  464,
+                                                                                 "startOffset":  27,
+                                                                                 "endOffset":  54
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/infra/db_models.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  489,
+                                                                                 "endLine":  489,
+                                                                                 "startOffset":  27,
+                                                                                 "endOffset":  54
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal r\u0027^[A-Za-z_][A-Za-z0-9_]*$\u0027 3 times.",
+                       "effort":  "6min",
+                       "debt":  "6min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "c0cd719d-75e8-4db1-9ac9-3d28925b8d2b",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/modules/buyer.py",
+                       "project":  "xianyu_hunter",
+                       "line":  420,
+                       "hash":  "54154f9f04d46f50a38108b81909cbe3",
+                       "textRange":  {
+                                         "startLine":  420,
+                                         "endLine":  420,
+                                         "startOffset":  63,
+                                         "endOffset":  84
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/buyer.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  422,
+                                                                                 "endLine":  422,
+                                                                                 "startOffset":  67,
+                                                                                 "endOffset":  88
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/buyer.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  423,
+                                                                                 "endLine":  423,
+                                                                                 "startOffset":  60,
+                                                                                 "endOffset":  81
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"get_by_text(\u0027ç«å³è´­ä¹°\u0027)\" 3 times.",
+                       "effort":  "6min",
+                       "debt":  "6min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "7415084d-0428-4b3d-a2a4-2390f95a5b0b",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/modules/collector/_detail.py",
+                       "project":  "xianyu_hunter",
+                       "line":  542,
+                       "hash":  "87efbf320e74451d2e6f2fe2538ee1ec",
+                       "textRange":  {
+                                         "startLine":  542,
+                                         "endLine":  542,
+                                         "startOffset":  38,
+                                         "endOffset":  46
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/collector/_detail.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  546,
+                                                                                 "endLine":  546,
+                                                                                 "startOffset":  38,
+                                                                                 "endOffset":  46
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/collector/_detail.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  762,
+                                                                                 "endLine":  762,
+                                                                                 "startOffset":  22,
+                                                                                 "endOffset":  30
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal r\"(\\d+)\" 3 times.",
+                       "effort":  "6min",
+                       "debt":  "6min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "e0067069-59e6-4386-b81a-d505e91a4093",
+                       "rule":  "python:S1871",
+                       "severity":  "MAJOR",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/modules/evaluator.py",
+                       "project":  "xianyu_hunter",
+                       "line":  390,
+                       "hash":  "c25b63c0fb0a28decab0f0561c2f7e57",
+                       "textRange":  {
+                                         "startLine":  390,
+                                         "endLine":  390,
+                                         "startOffset":  12,
+                                         "endOffset":  37
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/evaluator.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  388,
+                                                                                 "endLine":  388,
+                                                                                 "startOffset":  12,
+                                                                                 "endOffset":  37
+                                                                             },
+                                                               "msg":  "Original",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Either merge this branch with the identical one on line \"388\" or change one of the implementations.",
+                       "effort":  "10min",
+                       "debt":  "10min",
+                       "author":  "",
+                       "tags":  [
+                                    "design",
+                                    "suspicious"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "MEDIUM"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "151da801-b153-4612-802c-64136549e70c",
+                       "rule":  "python:S1871",
+                       "severity":  "MAJOR",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/modules/evaluator.py",
+                       "project":  "xianyu_hunter",
+                       "line":  396,
+                       "hash":  "c9b52b2e08afd7290e822187c35e8446",
+                       "textRange":  {
+                                         "startLine":  396,
+                                         "endLine":  396,
+                                         "startOffset":  12,
+                                         "endOffset":  31
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/evaluator.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  394,
+                                                                                 "endLine":  394,
+                                                                                 "startOffset":  12,
+                                                                                 "endOffset":  31
+                                                                             },
+                                                               "msg":  "Original",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Either merge this branch with the identical one on line \"394\" or change one of the implementations.",
+                       "effort":  "10min",
+                       "debt":  "10min",
+                       "author":  "",
+                       "tags":  [
+                                    "design",
+                                    "suspicious"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "MEDIUM"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "9b046b35-52a2-4835-90da-c955d2d80350",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/modules/worker.py",
+                       "project":  "xianyu_hunter",
+                       "line":  451,
+                       "hash":  "2b293ec5e477e7077d9e9e65c63da25f",
+                       "textRange":  {
+                                         "startLine":  451,
+                                         "endLine":  451,
+                                         "startOffset":  44,
+                                         "endOffset":  57
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/worker.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  633,
+                                                                                 "endLine":  633,
+                                                                                 "startOffset":  73,
+                                                                                 "endOffset":  86
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/worker.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  648,
+                                                                                 "endLine":  648,
+                                                                                 "startOffset":  69,
+                                                                                 "endOffset":  82
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"eval.scored\" 3 times.",
+                       "effort":  "6min",
+                       "debt":  "6min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "fd3760a0-a964-42f5-ab93-917115390e1d",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                       "project":  "xianyu_hunter",
+                       "line":  38,
+                       "hash":  "692e6c92bce64b8990010a95043443dd",
+                       "textRange":  {
+                                         "startLine":  38,
+                                         "endLine":  38,
+                                         "startOffset":  19,
+                                         "endOffset":  26
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  502,
+                                                                                 "endLine":  502,
+                                                                                 "startOffset":  65,
+                                                                                 "endOffset":  72
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  533,
+                                                                                 "endLine":  533,
+                                                                                 "startOffset":  35,
+                                                                                 "endOffset":  42
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"æä½¿ç¨çè¿¹\" 3 times.",
+                       "effort":  "6min",
+                       "debt":  "6min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "41ed7261-1a7f-42a8-8b96-0a110b16e2fa",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                       "project":  "xianyu_hunter",
+                       "line":  324,
+                       "hash":  "d997cd62f434bc68f29498228b7a1b8f",
+                       "textRange":  {
+                                         "startLine":  324,
+                                         "endLine":  324,
+                                         "startOffset":  68,
+                                         "endOffset":  75
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  389,
+                                                                                 "endLine":  389,
+                                                                                 "startOffset":  49,
+                                                                                 "endOffset":  56
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  801,
+                                                                                 "endLine":  801,
+                                                                                 "startOffset":  70,
+                                                                                 "endOffset":  77
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  827,
+                                                                                 "endLine":  827,
+                                                                                 "startOffset":  49,
+                                                                                 "endOffset":  56
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  1339,
+                                                                                 "endLine":  1339,
+                                                                                 "startOffset":  20,
+                                                                                 "endOffset":  27
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  1590,
+                                                                                 "endLine":  1590,
+                                                                                 "startOffset":  75,
+                                                                                 "endOffset":  82
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"eval.\" 6 times.",
+                       "effort":  "12min",
+                       "debt":  "12min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "062e2c9e-6fad-4650-9464-5ac7bac0f246",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                       "project":  "xianyu_hunter",
+                       "line":  535,
+                       "hash":  "6d80e226ecf146b804dd7ae568f0b6b5",
+                       "textRange":  {
+                                         "startLine":  535,
+                                         "endLine":  535,
+                                         "startOffset":  10,
+                                         "endOffset":  18
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  535,
+                                                                                 "endLine":  535,
+                                                                                 "startOffset":  27,
+                                                                                 "endOffset":  35
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  535,
+                                                                                 "endLine":  535,
+                                                                                 "startOffset":  43,
+                                                                                 "endOffset":  51
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  536,
+                                                                                 "endLine":  536,
+                                                                                 "startOffset":  10,
+                                                                                 "endOffset":  18
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  536,
+                                                                                 "endLine":  536,
+                                                                                 "startOffset":  26,
+                                                                                 "endOffset":  34
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  536,
+                                                                                 "endLine":  536,
+                                                                                 "startOffset":  42,
+                                                                                 "endOffset":  50
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  537,
+                                                                                 "endLine":  537,
+                                                                                 "startOffset":  12,
+                                                                                 "endOffset":  20
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  537,
+                                                                                 "endLine":  537,
+                                                                                 "startOffset":  28,
+                                                                                 "endOffset":  36
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  537,
+                                                                                 "endLine":  537,
+                                                                                 "startOffset":  44,
+                                                                                 "endOffset":  52
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  589,
+                                                                                 "endLine":  589,
+                                                                                 "startOffset":  30,
+                                                                                 "endOffset":  38
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  609,
+                                                                                 "endLine":  609,
+                                                                                 "startOffset":  36,
+                                                                                 "endOffset":  44
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  612,
+                                                                                 "endLine":  612,
+                                                                                 "startOffset":  49,
+                                                                                 "endOffset":  57
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  624,
+                                                                                 "endLine":  624,
+                                                                                 "startOffset":  45,
+                                                                                 "endOffset":  53
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"ææ\u0085é/ç»´ä¿®\" 13 times.",
+                       "effort":  "26min",
+                       "debt":  "26min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "d40f0f31-21cd-4b23-9cda-060f7ca8469b",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                       "project":  "xianyu_hunter",
+                       "line":  695,
+                       "hash":  "445c71286a5477087f41f390fe1081c7",
+                       "textRange":  {
+                                         "startLine":  695,
+                                         "endLine":  695,
+                                         "startOffset":  36,
+                                         "endOffset":  49
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  1251,
+                                                                                 "endLine":  1251,
+                                                                                 "startOffset":  17,
+                                                                                 "endOffset":  30
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  1293,
+                                                                                 "endLine":  1293,
+                                                                                 "startOffset":  56,
+                                                                                 "endOffset":  69
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  1419,
+                                                                                 "endLine":  1419,
+                                                                                 "startOffset":  28,
+                                                                                 "endOffset":  41
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  1673,
+                                                                                 "endLine":  1673,
+                                                                                 "startOffset":  24,
+                                                                                 "endOffset":  37
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  2141,
+                                                                                 "endLine":  2141,
+                                                                                 "startOffset":  24,
+                                                                                 "endOffset":  37
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"eval.scored\" 6 times.",
+                       "effort":  "12min",
+                       "debt":  "12min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "ba4e0e25-7a5e-4da6-a648-01076d9b138b",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_orders.py",
+                       "project":  "xianyu_hunter",
+                       "line":  86,
+                       "hash":  "19e23cd791e2153537de59b2ff51c17b",
+                       "textRange":  {
+                                         "startLine":  86,
+                                         "endLine":  86,
+                                         "startOffset":  52,
+                                         "endOffset":  59
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_orders.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  104,
+                                                                                 "endLine":  104,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_orders.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  121,
+                                                                                 "endLine":  121,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_orders.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  155,
+                                                                                 "endLine":  155,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_orders.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  182,
+                                                                                 "endLine":  182,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"è®¢åä¸å­å¨\" 5 times.",
+                       "effort":  "10min",
+                       "debt":  "10min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "617c032d-8533-4090-bc39-00801152feca",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                       "project":  "xianyu_hunter",
+                       "line":  311,
+                       "hash":  "c2c0708475635f63b0209be190e1b2ff",
+                       "textRange":  {
+                                         "startLine":  311,
+                                         "endLine":  311,
+                                         "startOffset":  52,
+                                         "endOffset":  59
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  439,
+                                                                                 "endLine":  439,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  455,
+                                                                                 "endLine":  455,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  526,
+                                                                                 "endLine":  526,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  642,
+                                                                                 "endLine":  642,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"ä»»å¡ä¸å­å¨\" 5 times.",
+                       "effort":  "10min",
+                       "debt":  "10min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "23279560-df17-4aac-b4a8-0b04a59bf6d8",
+                       "rule":  "python:S3516",
+                       "severity":  "BLOCKER",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                       "project":  "xianyu_hunter",
+                       "line":  363,
+                       "hash":  "b79add44740394f3511559c8cf2df832",
+                       "textRange":  {
+                                         "startLine":  363,
+                                         "endLine":  363,
+                                         "startOffset":  4,
+                                         "endOffset":  26
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  429,
+                                                                                 "endLine":  429,
+                                                                                 "startOffset":  4,
+                                                                                 "endOffset":  16
+                                                                             },
+                                                               "msg":  "returned value",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  402,
+                                                                                 "endLine":  402,
+                                                                                 "startOffset":  8,
+                                                                                 "endOffset":  20
+                                                                             },
+                                                               "msg":  "returned value",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  379,
+                                                                                 "endLine":  379,
+                                                                                 "startOffset":  8,
+                                                                                 "endOffset":  20
+                                                                             },
+                                                               "msg":  "returned value",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  372,
+                                                                                 "endLine":  372,
+                                                                                 "startOffset":  8,
+                                                                                 "endOffset":  20
+                                                                             },
+                                                               "msg":  "returned value",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Refactor this method to not always return the same value.",
+                       "effort":  "2min",
+                       "debt":  "2min",
+                       "author":  "",
+                       "tags":  [
+                                    "design",
+                                    "confusing"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "LOGICAL",
+                       "cleanCodeAttributeCategory":  "INTENTIONAL",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "BLOCKER"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "c7e00f59-e253-4c94-b254-dc6cd5f0440d",
+                       "rule":  "python:S1871",
+                       "severity":  "MAJOR",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                       "project":  "xianyu_hunter",
+                       "line":  427,
+                       "hash":  "bc1fca5d4ce3128b60100279d8a25ca3",
+                       "textRange":  {
+                                         "startLine":  427,
+                                         "endLine":  427,
+                                         "startOffset":  16,
+                                         "endOffset":  30
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  425,
+                                                                                 "endLine":  425,
+                                                                                 "startOffset":  16,
+                                                                                 "endOffset":  30
+                                                                             },
+                                                               "msg":  "Original",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Either merge this branch with the identical one on line \"425\" or change one of the implementations.",
+                       "effort":  "10min",
+                       "debt":  "10min",
+                       "author":  "",
+                       "tags":  [
+                                    "design",
+                                    "suspicious"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "MEDIUM"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "4c1b70d2-50c8-489c-8fa7-4ae2d78d0614",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_tasks.py",
+                       "project":  "xianyu_hunter",
+                       "line":  158,
+                       "hash":  "c2c0708475635f63b0209be190e1b2ff",
+                       "textRange":  {
+                                         "startLine":  158,
+                                         "endLine":  158,
+                                         "startOffset":  52,
+                                         "endOffset":  59
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_tasks.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  181,
+                                                                                 "endLine":  181,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_tasks.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  233,
+                                                                                 "endLine":  233,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_tasks.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  288,
+                                                                                 "endLine":  288,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_tasks.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  305,
+                                                                                 "endLine":  305,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  59
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"ä»»å¡ä¸å­å¨\" 5 times.",
+                       "effort":  "10min",
+                       "debt":  "10min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "753cbc19-8158-4c46-9ee7-e4b75f7ba620",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/unified_login.py",
+                       "project":  "xianyu_hunter",
+                       "line":  448,
+                       "hash":  "7bd68efb1eaae62fdc3097cfc5530c5a",
+                       "textRange":  {
+                                         "startLine":  448,
+                                         "endLine":  448,
+                                         "startOffset":  30,
+                                         "endOffset":  56
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/unified_login.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  503,
+                                                                                 "endLine":  503,
+                                                                                 "startOffset":  30,
+                                                                                 "endOffset":  56
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/unified_login.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  561,
+                                                                                 "endLine":  561,
+                                                                                 "startOffset":  30,
+                                                                                 "endOffset":  56
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"ç»å½ä¼¼ä¹æåï¼ä½ Cookie æªæä¹\u0085åï¼è¯·éè¯\" 3 times.",
+                       "effort":  "6min",
+                       "debt":  "6min",
+                       "author":  "",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "1aaa575e-6850-463c-87a0-33d99413f65d",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/services/cookie_runtime_sync.py",
+                       "project":  "xianyu_hunter",
+                       "line":  15,
+                       "hash":  "d3b2ec24ed73b3994fcd75b11ff4738b",
+                       "textRange":  {
+                                         "startLine":  15,
+                                         "endLine":  15,
+                                         "startOffset":  56,
+                                         "endOffset":  67
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/services/cookie_runtime_sync.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  57,
+                                                                                 "endLine":  57,
+                                                                                 "startOffset":  22,
+                                                                                 "endOffset":  33
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/services/cookie_runtime_sync.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  91,
+                                                                                 "endLine":  91,
+                                                                                 "startOffset":  22,
+                                                                                 "endOffset":  33
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"Cookie åæ­¥\" 3 times.",
+                       "effort":  "6min",
+                       "debt":  "6min",
+                       "author":  "wangnan@hundsun.com",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-27T21:10:03+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "4a155d72-c8bb-49f7-b1a1-555a892d3b06",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_error_logs.py",
+                       "project":  "xianyu_hunter",
+                       "line":  78,
+                       "hash":  "d26578bd21158b4e92829caea818777e",
+                       "textRange":  {
+                                         "startLine":  78,
+                                         "endLine":  78,
+                                         "startOffset":  52,
+                                         "endOffset":  61
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_error_logs.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  94,
+                                                                                 "endLine":  94,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  61
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_error_logs.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  113,
+                                                                                 "endLine":  113,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  61
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_error_logs.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  125,
+                                                                                 "endLine":  125,
+                                                                                 "startOffset":  52,
+                                                                                 "endOffset":  61
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"éè¯¯æ¥å¿ä¸å­å¨\" 4 times.",
+                       "effort":  "8min",
+                       "debt":  "8min",
+                       "author":  "wangnan@hundsun.com",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-24T21:34:41+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "bf579823-93bd-4f60-bcad-ad787e32bf10",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                       "project":  "xianyu_hunter",
+                       "line":  39,
+                       "hash":  "ee51d2a84ed0e652c1f081cc82bff4c8",
+                       "textRange":  {
+                                         "startLine":  39,
+                                         "endLine":  39,
+                                         "startOffset":  18,
+                                         "endOffset":  31
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  61,
+                                                                                 "endLine":  61,
+                                                                                 "startOffset":  18,
+                                                                                 "endOffset":  31
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  83,
+                                                                                 "endLine":  83,
+                                                                                 "startOffset":  18,
+                                                                                 "endOffset":  31
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  105,
+                                                                                 "endLine":  105,
+                                                                                 "startOffset":  18,
+                                                                                 "endOffset":  31
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  127,
+                                                                                 "endLine":  127,
+                                                                                 "startOffset":  18,
+                                                                                 "endOffset":  31
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  157,
+                                                                                 "endLine":  157,
+                                                                                 "startOffset":  18,
+                                                                                 "endOffset":  31
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"Google Inc.\" 6 times.",
+                       "effort":  "12min",
+                       "debt":  "12min",
+                       "author":  "wangnan@hundsun.com",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-23T01:08:56+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "e42a9848-01b8-48cc-b4d6-e3b0739469ba",
+                       "rule":  "python:S1192",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                       "project":  "xianyu_hunter",
+                       "line":  42,
+                       "hash":  "c6bda0ed4e4cfeb60b176c912d0fac3b",
+                       "textRange":  {
+                                         "startLine":  42,
+                                         "endLine":  42,
+                                         "startOffset":  22,
+                                         "endOffset":  34
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  86,
+                                                                                 "endLine":  86,
+                                                                                 "startOffset":  22,
+                                                                                 "endOffset":  34
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  108,
+                                                                                 "endLine":  108,
+                                                                                 "startOffset":  22,
+                                                                                 "endOffset":  34
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                                                               "textRange":  {
+                                                                                 "startLine":  162,
+                                                                                 "endLine":  162,
+                                                                                 "startOffset":  22,
+                                                                                 "endOffset":  34
+                                                                             },
+                                                               "msg":  "Duplication",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Define a constant instead of duplicating this literal \"Intel Inc.\" 4 times.",
+                       "effort":  "8min",
+                       "debt":  "8min",
+                       "author":  "wangnan@hundsun.com",
+                       "tags":  [
+                                    "design"
+                                ],
+                       "creationDate":  "2026-06-23T01:08:56+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "DISTINCT",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   }
+               ],
+    "components":  [
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_error_logs.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "api_error_logs.py",
+                           "longName":  "src/xianyu_hunter/web/routes/api_error_logs.py",
+                           "path":  "src/xianyu_hunter/web/routes/api_error_logs.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/modules/collector/_detail.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "_detail.py",
+                           "longName":  "src/xianyu_hunter/modules/collector/_detail.py",
+                           "path":  "src/xianyu_hunter/modules/collector/_detail.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/modules/fingerprint.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "fingerprint.py",
+                           "longName":  "src/xianyu_hunter/modules/fingerprint.py",
+                           "path":  "src/xianyu_hunter/modules/fingerprint.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_task_links.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "api_task_links.py",
+                           "longName":  "src/xianyu_hunter/web/routes/api_task_links.py",
+                           "path":  "src/xianyu_hunter/web/routes/api_task_links.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/modules/evaluator.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "evaluator.py",
+                           "longName":  "src/xianyu_hunter/modules/evaluator.py",
+                           "path":  "src/xianyu_hunter/modules/evaluator.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_tasks.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "api_tasks.py",
+                           "longName":  "src/xianyu_hunter/web/routes/api_tasks.py",
+                           "path":  "src/xianyu_hunter/web/routes/api_tasks.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/modules/buyer.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "buyer.py",
+                           "longName":  "src/xianyu_hunter/modules/buyer.py",
+                           "path":  "src/xianyu_hunter/modules/buyer.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/modules/worker.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "worker.py",
+                           "longName":  "src/xianyu_hunter/modules/worker.py",
+                           "path":  "src/xianyu_hunter/modules/worker.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/infra/db_models.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "db_models.py",
+                           "longName":  "src/xianyu_hunter/infra/db_models.py",
+                           "path":  "src/xianyu_hunter/infra/db_models.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/web/services/cookie_runtime_sync.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "cookie_runtime_sync.py",
+                           "longName":  "src/xianyu_hunter/web/services/cookie_runtime_sync.py",
+                           "path":  "src/xianyu_hunter/web/services/cookie_runtime_sync.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter",
+                           "enabled":  true,
+                           "qualifier":  "TRK",
+                           "name":  "Xianyu Hunter",
+                           "longName":  "Xianyu Hunter"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_orders.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "api_orders.py",
+                           "longName":  "src/xianyu_hunter/web/routes/api_orders.py",
+                           "path":  "src/xianyu_hunter/web/routes/api_orders.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/web/routes/api_evaluations.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "api_evaluations.py",
+                           "longName":  "src/xianyu_hunter/web/routes/api_evaluations.py",
+                           "path":  "src/xianyu_hunter/web/routes/api_evaluations.py"
+                       },
+                       {
+                           "key":  "xianyu_hunter:src/xianyu_hunter/web/routes/unified_login.py",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "unified_login.py",
+                           "longName":  "src/xianyu_hunter/web/routes/unified_login.py",
+                           "path":  "src/xianyu_hunter/web/routes/unified_login.py"
+                       }
+                   ],
+    "facets":  [
+
+               ]
+}

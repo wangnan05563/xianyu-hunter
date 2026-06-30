@@ -1,0 +1,30 @@
+﻿{
+    "component":  {
+                      "key":  "xianyu_hunter",
+                      "name":  "Xianyu Hunter",
+                      "description":  "Multi-component project: Python FastAPI backend + React TypeScript frontend",
+                      "qualifier":  "TRK",
+                      "measures":  [
+                                       {
+                                           "metric":  "duplicated_lines_density",
+                                           "value":  "1.4",
+                                           "bestValue":  false
+                                       },
+                                       {
+                                           "metric":  "duplicated_lines",
+                                           "value":  "858",
+                                           "bestValue":  false
+                                       },
+                                       {
+                                           "metric":  "duplicated_blocks",
+                                           "value":  "57",
+                                           "bestValue":  false
+                                       },
+                                       {
+                                           "metric":  "duplicated_files",
+                                           "value":  "17",
+                                           "bestValue":  false
+                                       }
+                                   ]
+                  }
+}

@@ -1,0 +1,1060 @@
+"""任务 Worker：单任务的「搜索→评估→下单」流水线
+
+设计文档 §3.8 - TaskWorker 是纯编排，业务逻辑全部委托给现有模块：
+- Collector（搜索/详情/卖家）
+- ItemDedup（去重）
+- PriceStrategy（价格过滤）
+- Evaluator（卖家评估）
+- Buyer（落单）
+
+Worker 不持任何状态，调度由 TaskScheduler 负责。
+"""
+from __future__ import annotations
+
+import asyncio
+import re
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
+
+from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
+from xianyu_hunter.domain.item import ItemDetail, ItemSummary
+from xianyu_hunter.domain.order import BuyOutcome, BuyResult
+from xianyu_hunter.domain.seller import SellerProfile
+from xianyu_hunter.domain.task import Task, TaskConfig, TaskMode
+from xianyu_hunter.config import get_settings
+from xianyu_hunter.infra.logger import get_logger
+from xianyu_hunter.infra.repo_links import task_keyword_matches_title
+from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.modules.buyer import Buyer
+from xianyu_hunter.modules.collector import Collector
+from xianyu_hunter.modules.dedup import ItemDedup
+from xianyu_hunter.modules.evaluator import Evaluator
+from xianyu_hunter.modules.price_strategy import MarketContext, PriceStrategy
+
+logger = get_logger()
+
+# 敏感信息脱敏正则：匹配 URL token 参数、Cookie 头、闲鱼特定 cookie 字段
+# 为什么需要脱敏：异常消息会写入 events.payload.error 并展示到前端，
+# 可能包含 token/Cookie 等凭证，截图或日志泄露后存在安全风险
+_SENSITIVE_PATTERNS = [
+    re.compile(r'(token=)[^&\s"\'<>]+', re.IGNORECASE),
+    re.compile(r'((?:[Cc]ookie)\s*:\s*)[^\r\n]+'),
+    re.compile(r'(_m_h5_tk=)[^;]+'),
+    re.compile(r'(unb=)[^;]+'),
+    re.compile(r'(cookie2=)[^;]+'),
+    re.compile(r'(sgcookie=)[^;]+'),
+]
+
+
+def _sanitize_error(text: str, max_len: int = 500) -> str:
+    """对异常消息脱敏后截断，避免 token/Cookie 泄露到 events 表和前端"""
+    sanitized = text
+    for pattern in _SENSITIVE_PATTERNS:
+        sanitized = pattern.sub(r'\1***', sanitized)
+    return sanitized[:max_len]
+
+
+@dataclass
+class RunStats:
+    """一轮 run_once 的统计"""
+    found: int = 0           # 搜索结果数
+    deduped: int = 0         # 去重过滤掉
+    price_filtered: int = 0  # 价格过滤掉
+    evaluated: int = 0       # 评估数
+    passed: int = 0          # 评估通过数
+    bought: int = 0          # 成功落单数
+    failed: int = 0          # 落单失败数
+    linked: int = 0          # 写入 task_links 数
+    official_collected: int = 0  # P1: 自动官方采集数
+    # Task 8: 去重窗口内跳过的采集次数（衡量去重效果，便于调优窗口大小）
+    official_collect_skipped_dedup: int = 0
+    # Task 9: 退避暂停标识——置 True 后本轮剩余商品跳过采集块
+    # 为什么用 stats 而非实例属性：状态需跟随单轮 run_once，新一轮自然重置
+    official_collect_paused: bool = False
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime | None = None
+
+
+@dataclass
+class RunResult:
+    """run_once 完整结果"""
+    stats: RunStats
+    evaluations: list[EvalResult] = field(default_factory=list)
+    buy_results: list[BuyResult] = field(default_factory=list)
+    # RGV587 会话失效时设为 True，Scheduler 检测后自动暂停任务
+    # 避免无效搜索持续占用 browser_lock，阻塞 live 端点
+    should_pause: bool = False
+
+    @property
+    def has_bought(self) -> bool:
+        return any(r.outcome == BuyOutcome.SUCCESS for r in self.buy_results)
+
+
+class TaskWorker:
+    """单任务 Worker
+
+    使用方式：
+        worker = TaskWorker(task=task, collector=..., ...)
+        result = await worker.run_once()        # 跑一轮
+        # 循环由 Scheduler 调用
+    """
+
+    def __init__(
+        self,
+        task: Task,
+        collector: Collector,
+        dedup: ItemDedup,
+        price_strategy: PriceStrategy,
+        evaluator: Evaluator,
+        buyer: Buyer | None = None,  # 评估通过后是否真拍，模式 AUTO 时必传
+        config: TaskConfig | None = None,
+        repo: Any | None = None,  # 注入 repo 以写入 task_links
+        # P1: 可选的官方采集回调，由 container 在 startup 时注入
+        # 签名: (item_id, task_id) -> dict（含采集数据和评估结果）
+        # 为什么用回调而非直接传 container：避免 worker 依赖 web 层的 Container 类型，
+        # 保持 worker 的"纯编排"设计；container 在构造 worker 时闭包绑定
+        official_collect_fn: Callable[[str, str | None], Awaitable[dict[str, Any]]] | None = None,
+        # Task 9: 可选的 notifier hub，由 container 在 startup 时注入
+        # 为什么用单独参数而非通过 repo 间接访问：保持 repo 的纯数据访问职责，
+        # worker 是编排层，直接持有 notifier 用于异常告警更清晰
+        notifier: Any | None = None,
+    ):
+        self.task = task
+        self.collector = collector
+        self.dedup = dedup
+        self.price = price_strategy
+        self.evaluator = evaluator
+        self.buyer = buyer
+        self.config = config or TaskConfig()
+        self.repo = repo
+        self.official_collect_fn = official_collect_fn
+        self.notifier = notifier
+        # 上次落单时间（用于冷却）
+        self._last_buy_at: float = 0.0
+        # Task 9: 连续失败计数器，达到阈值后暂停本轮剩余采集
+        # 为什么不在 stats 里：跨商品累积，不属于"单商品统计"
+        # 新一轮 run_once 开始时会重置（避免上一轮的失败延续到本轮）
+        self._consecutive_collect_failures: int = 0
+        # P3: 多轮统计历史（内存，不持久化；进程重启后重新累积）
+        # 仅在 ai_multi_run_suggestion 开启时使用，存最近 N 轮的 stats 摘要
+        self._run_history: list[dict[str, Any]] = []
+        # AI 多轮建议任务集合：持有 task 引用避免被 GC 回收，完成后自动移除
+        self._ai_suggestion_tasks: set[asyncio.Task] = set()
+
+    def _should_buy(self) -> bool:
+        """根据模式判断本轮是否执行真拍"""
+        if self.task.mode == TaskMode.AUTO:
+            return True
+        if self.task.mode == TaskMode.NOTIFY_ONLY:
+            return False
+        # CONFIRM / SEMI_AUTO 都不在 Worker 拍（由用户在 App 内确认）
+        return False
+
+    def _effective_eval_cfg(self):
+        """返回合并任务级覆盖后的 EvalConfig
+
+        任务级 eval_config 优先于全局 AppConfig.eval：
+        - task.eval_config 为 None → 直接返回全局 eval_cfg（绝大多数任务走此路径）
+        - task.eval_config 非空 → 用 model_copy 生成副本，仅覆盖 dict 中非 None 的字段
+        - 仅覆盖 EvalConfig 已知字段，忽略未知键避免污染
+        - 为什么用 model_copy 而非原地修改：EvalConfig 是 pydantic 单例，
+          原地修改会污染全局配置影响其他任务
+        """
+        eval_cfg = get_config().eval
+        override = getattr(self.task, "eval_config", None)
+        if not override:
+            return eval_cfg
+        # 仅取 EvalConfig 已知字段且值非 None 的键，避免未知字段污染或误把 None 写入
+        # model_fields 须从类访问：pydantic v2.11+ 弃用了实例访问
+        valid_fields = type(eval_cfg).model_fields
+        updates = {
+            k: v for k, v in override.items()
+            if v is not None and k in valid_fields
+        }
+        if not updates:
+            return eval_cfg
+        return eval_cfg.model_copy(update=updates)
+
+    def _in_cooldown(self) -> bool:
+        return (time.monotonic() - self._last_buy_at) < self.config.cooldown_after_buy
+
+    def _save_task_links(self, items: list[ItemSummary]) -> None:
+        """将搜索到的商品批量写入 task_links，供前端关联面板展示
+
+        按关键词过滤：闲鱼搜索页可能返回默认推荐商品而非真实搜索结果，
+        只有标题匹配任务关键词的商品才写入数据库，避免无关数据污染。
+        """
+        if not self.repo or not items:
+            return
+        saved = 0
+        skipped = 0
+        for item in items:
+            title = getattr(item, "title", None) or ""
+            if not task_keyword_matches_title(self.task.keyword, title):
+                skipped += 1
+                continue
+            try:
+                # 方案B改进：空字符串 seller_id 转为 None，避免覆盖详情页阶段已写入的非空值
+                raw_seller_id = getattr(item, "seller_id", None)
+                seller_id = raw_seller_id if raw_seller_id else None
+                self.repo.upsert_item_task_links(
+                    task_id=self.task.id,
+                    item_id=item.id,
+                    title=title,
+                    price=getattr(item, "price", None),
+                    thumb_url=getattr(item, "thumb_url", None),
+                    seller_id=seller_id,
+                    source="auto",
+                    region=getattr(item, "region", None),
+                    publish_time=getattr(item, "publish_time", None),
+                    want_cnt=getattr(item, "want_cnt", None),
+                    view_cnt=getattr(item, "view_cnt", None),
+                    is_sold=getattr(item, "is_sold", False),
+                    seller_nick=getattr(item, "seller_nick", None),
+                    brand=getattr(item, "brand", None),
+                )
+                saved += 1
+            except Exception as e:
+                logger.warning(f"[Task {self.task.id}] 写入 task_links 失败 {getattr(item, 'id', '?')}: {e}")
+        if skipped > 0:
+            logger.info(f"[Task {self.task.id}] 关键词过滤跳过了 {skipped} 条无关商品")
+        if saved > 0:
+            logger.info(f"[Task {self.task.id}] 已写入 {saved} 条关联到 task_links")
+
+    async def run_once(self) -> RunResult:
+        """执行一轮完整流水线
+
+        流程：
+        1. 搜索
+        2. 去重
+        3. 拉详情 + 卖家主页
+        4. 价格过滤
+        5. 评估
+        6. 落单（仅 AUTO 模式）
+        7. 写入 task_links
+        """
+        stats = RunStats()
+        evaluations: list[EvalResult] = []
+        buy_results: list[BuyResult] = []
+        # Task 9: 新一轮重置上一轮的连续失败计数
+        # 为什么不延续：新一轮可能已修复问题（如 Cookie 刷新/网络恢复），
+        # 应给重新尝试的机会；上一轮的失败状态不应阻塞本轮采集
+        self._consecutive_collect_failures = 0
+        # 显式初始化，避免 finally 块中 dir() 反模式检查变量是否存在
+        new_items: list[ItemSummary] | None = None
+        settings = get_settings()
+        # 合并任务级 eval_config 覆盖（None 时直接返回全局 eval_cfg）
+        eval_cfg = self._effective_eval_cfg()
+
+        try:
+            # 1. 搜索（传递任务配置的筛选标签 + 全局搜索参数配置）
+            logger.info(f"[Task {self.task.id}] 搜索「{self.task.keyword}」")
+            try:
+                from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_browser
+
+                await inject_cookie_store_to_browser(
+                    getattr(self.collector, "browser", None),
+                    "后台任务搜索前 Cookie 同步",
+                    collector=self.collector,
+                    force_refresh_m5tk=False,
+                )
+            except Exception as e:
+                logger.debug(f"[Task {self.task.id}] 搜索前 Cookie 同步失败: {e}")
+            # 合并任务级 search_filters 和全局 search_filter_tags 配置
+            # 任务级优先（用户创建任务时指定的筛选），全局配置作为补充
+            task_filters = getattr(self.task, 'search_filters', None) or []
+            global_filters = self.config.search_filter_tags or []
+            combined_filters = list(set(task_filters + global_filters))
+            # 搜索超时使用用户配置（默认 30s），RGV587 重试跳过（Worker 不做重试）
+            search_timeout = self.config.search_timeout
+            try:
+                items = await asyncio.wait_for(
+                    self.collector.search(
+                        self.task.keyword,
+                        search_filters=combined_filters,
+                        # Worker 不使用 fast 模式：需要刷新 _m_h5_tk token 避免会话失效
+                        # 搜索超时由外层 asyncio.wait_for 控制（默认 30s）
+                        skip_rgv587_retry=True,
+                        sort_type=self.config.search_sort_type,
+                        regions=self.config.search_regions,
+                    ),
+                    timeout=float(search_timeout),
+                )
+            except asyncio.TimeoutError:
+                # 搜索超时通常意味着浏览器卡住或网络异常，继续循环只会再次超时
+                # 持续占用 browser_lock 阻塞 live 端点，因此暂停任务
+                logger.warning(f"[Task {self.task.id}] 搜索超时（{search_timeout}秒），自动暂停任务")
+                stats.finished_at = datetime.now(timezone.utc)
+                return RunResult(stats=stats, should_pause=True)
+            stats.found = len(items)
+            logger.info(f"[Task {self.task.id}] 搜索到 {stats.found} 件")
+
+            # 优先级锁让出：搜索完成后锁已释放，如果有 live 端点在等待，
+            # 延迟 3 秒让 live 请求优先获取锁（减少实时查询等待时间）
+            _lock = getattr(self.collector, '_browser_lock', None)
+            if _lock is not None and getattr(_lock, 'has_high_priority_waiting', False):
+                logger.info(f"[Task {self.task.id}] 检测到实时查询等待中，延迟 3 秒让出浏览器")
+                await asyncio.sleep(3)
+
+            # RGV587 会话失效时通知 Scheduler 暂停任务
+            # 避免无效搜索持续占用 browser_lock，阻塞 live 端点的实时搜索
+            if getattr(self.collector, 'last_session_invalid', False):
+                logger.warning(f"[Task {self.task.id}] 闲鱼会话失效（RGV587_ERROR），自动暂停任务，请重新登录闲鱼")
+                # 主动失效 orchestrator 的 identity 层，让健康检查也能反映真实状态
+                # 为什么需要：cookie 本地仍存在但服务端已注销，
+                # 健康检查器需要感知此状态才能给出正确的 RELOGIN 建议
+                # 为什么 manual=False：系统检测到的失效应能被 cookie_checker
+                # 在 cookie 实际恢复有效时自动同步恢复，避免状态永久锁定
+                try:
+                    from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+                    from xianyu_hunter.modules.cookie_rotator import CookieLayer
+                    get_orchestrator().cookie_rotator.invalidate_layer(CookieLayer.IDENTITY, manual=False)
+                except Exception:
+                    pass
+                stats.finished_at = datetime.now(timezone.utc)
+                return RunResult(stats=stats, should_pause=True)
+
+            # 2. 去重
+            new_items = await self.dedup.filter_new(items)
+            stats.deduped = stats.found - len(new_items)
+            if not new_items:
+                logger.info(f"[Task {self.task.id}] 全部已看过，本轮跳过")
+                stats.finished_at = datetime.now(timezone.utc)
+                return RunResult(stats=stats)
+
+            # 限制每轮条数：使用用户配置的 page_size（默认 20）
+            # 避免处理过多商品导致 OOM 或超时
+            max_items = self.config.search_page_size or self.config.max_items_per_run
+            new_items = new_items[:max_items]
+
+            # Task 8 优化：批量预查询去重状态，避免循环内 N+1 查询
+            # 为什么放在循环前：此时 new_items 已截断为最终列表，eval_cfg 已获取
+            # None 表示未预查询（降级为循环内逐个查询）；空 set 表示预查询成功但无近期采集
+            recent_collected_cache: set[str] | None = None
+            if (eval_cfg and eval_cfg.auto_collect_official
+                    and self.official_collect_fn
+                    and self.repo is not None):
+                try:
+                    all_item_ids = [item.id for item in new_items if item.id]
+                    if all_item_ids:
+                        recent_collected_cache = self.repo.get_recently_collected_item_ids(
+                            all_item_ids,
+                            eval_cfg.auto_collect_dedup_window_minutes,
+                        )
+                except Exception as e:
+                    logger.warning(f"[Task {self.task.id}] 批量去重预查询失败，降级为逐个查询: {e}")
+                    # recent_collected_cache 保持 None，循环内降级为逐个查询
+
+            # 立即写入 task_links（搜索完成后直接存储，不等详情爬取）
+            # 这样用户可以在"闲鱼内容关联"面板立即看到搜索结果
+            self._save_task_links(new_items)
+            stats.linked = sum(
+                1 for item in new_items
+                if task_keyword_matches_title(self.task.keyword, getattr(item, "title", None))
+            )
+
+            market_ctx = self._compute_market_context(new_items)
+
+            # 3. 串行拉取详情 + 卖家主页（复用单个页面，避免并发打开多个浏览器窗口）
+            # 原实现用 Semaphore(3) + gather 并发，每个 detail/seller_profile 都 new_page，
+            # 导致 scheduler 每轮触发时同时弹出 6 个窗口（3 详情 + 3 卖家主页）。
+            # 改为串行复用单个详情页 + 单个卖家页，窗口数从 6 降到 2，且不会并发弹出。
+            shared_detail_page = None
+            shared_seller_page = None
+            # collector.browser 可能为 None（测试环境），此时不创建复用页面
+            _has_browser = getattr(self.collector, 'browser', None) is not None
+            try:
+                for summary in new_items:
+                    if not summary.id:
+                        continue
+                    try:
+                        # 复用详情页（首次创建，后续复用）
+                        if _has_browser and shared_detail_page is None:
+                            shared_detail_page = await self.collector.browser.new_page()
+                        detail = await self.collector.detail(summary.id, page=shared_detail_page)
+                        if not detail:
+                            logger.warning("[Task {}] 详情页获取失败，跳过 {}", self.task.id, summary.id)
+                            continue
+                        # 复用卖家页（首次创建，后续复用）
+                        # seller_profile 失败时使用降级策略（搜索页+详情页信息），而非空默认值
+                        seller = None
+                        if detail.seller_id:
+                            if _has_browser and shared_seller_page is None:
+                                shared_seller_page = await self.collector.browser.new_page()
+                            seller = await self.collector.seller_profile(detail.seller_id, page=shared_seller_page)
+                        if not seller:
+                            logger.info("[Task {}] 卖家主页获取失败，使用降级策略评估 {}", self.task.id, summary.id)
+                            # 降级策略：合并搜索结果+详情页的卖家信息构建基本画像
+                            seller = await self.collector.seller_profile_fallback(summary=summary, detail=detail)
+                    except Exception as e:
+                        logger.warning("[Task {}] 采集异常 {}: {}", self.task.id, summary.id, e)
+                        detail = None
+                        # 异常时也尝试用搜索结果构建降级 SellerProfile（如果有 summary）
+                        if not seller and hasattr(self, 'collector'):
+                            seller = await self.collector.seller_profile_fallback(summary=summary, detail=detail)
+
+                    if not detail or not seller:
+                        continue
+
+                    # 用详情页采集到的 seller_id 更新 task_links（搜索页卡片通常不含卖家信息）
+                    # 详情页阶段也需关键词过滤：_save_task_links 已过滤过一轮，
+                    # 但 new_items 中可能包含被 _save_task_links 跳过的 noise 商品，
+                    # 此处再次过滤避免写入无关关联
+                    if detail.seller_id and self.repo and task_keyword_matches_title(self.task.keyword, detail.title):
+                        try:
+                            self.repo.upsert_item_task_links(
+                                task_id=self.task.id,
+                                item_id=detail.id,
+                                title=detail.title,
+                                price=detail.price,
+                                thumb_url=summary.thumb_url,
+                                seller_id=detail.seller_id,
+                                source="auto",
+                                region=getattr(detail, "region", None),
+                                publish_time=getattr(detail, "publish_time", None),
+                                want_cnt=getattr(detail, "want_cnt", None),
+                                view_cnt=getattr(detail, "view_cnt", None),
+                                is_sold=getattr(summary, "is_sold", False),
+                                brand=getattr(detail, "brand", None),
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "[Task {}] 更新卖家关联失败 {}: {}",
+                                self.task.id, detail.id, e,
+                            )
+
+                    try:
+
+                        # 4. 价格过滤
+                        verdict = self.price.check(detail, market_ctx)
+                        if not verdict.pass_:
+                            stats.price_filtered += 1
+                            continue
+
+                        # 5. 评估
+                        eval_result = self.evaluator.evaluate(detail, seller)
+                        stats.evaluated += 1
+                        evaluations.append(eval_result)
+
+                        # 写入 events 表，供评估明细/事件中心展示
+                        # 不写入则前端评估明细和事件中心页面永远无数据
+                        if self.repo:
+                            try:
+                                import json as _json
+                                score_display = eval_result.score if eval_result.score is not None else "N/A"
+                                if eval_result.is_passed:
+                                    level = "info"
+                                elif eval_result.risk_level != RiskLevel.EXTREME:
+                                    level = "warn"
+                                else:
+                                    level = "err"
+                                if eval_result.risk_level == RiskLevel.UNKNOWN:
+                                    level = "warn"  # 数据不足用 warn 级别，避免误报为错误
+                                self.repo.upsert_eval_event({
+                                    "type": "eval.scored",
+                                    "task_id": self.task.id,
+                                    "item_id": detail.id,  # 顶层 item_id 供前端 dataIndex 直接读取
+                                    "stage": "eval",
+                                    "level": level,
+                                    "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
+                                    "payload": _json.dumps({
+                                        "task_id": self.task.id,  # 写入 payload 供官方采集回查 effective_task_id
+                                        "item_id": detail.id,
+                                        "item_title": detail.title,       # 前端期望 item_title
+                                        "item_price": detail.price,       # 前端期望 item_price
+                                        "seller_id": detail.seller_id,   # 卖家ID（详情页采集）
+                                        "seller_nick": detail.detail_seller_nick or "",  # 卖家昵称
+                                        "score": eval_result.score,  # 可能为 None
+                                        "risk_level": eval_result.risk_level.value,
+                                        "dimension_scores": eval_result.dimension_scores,
+                                        "reject_reasons": eval_result.reject_reasons,
+                                        "is_passed": eval_result.is_passed,
+                                        "data_quality": eval_result.data_quality,
+                                    }, ensure_ascii=False, default=str),  # default=str 处理 None 值
+                                })
+                            except Exception as e:
+                                logger.warning(f"[Task {self.task.id}] 写入评估事件失败: {e}")
+
+                        # 推送门槛：任务级 eval_threshold 优先，None 时回退全局 eval.pass_score
+                        # 通过此门槛的商品会进入 AI 评估和推送通知流程
+                        # 但不一定会触发抢单（抢单需达到 auto_buy_score，见下方落单判断）
+                        if self.task.eval_threshold is not None:
+                            _pass_score = self.task.eval_threshold
+                        elif eval_cfg:
+                            _pass_score = eval_cfg.pass_score
+                        else:
+                            _pass_score = 60
+                        if not eval_result.should_pass(_pass_score):
+                            continue
+                        stats.passed += 1
+
+                        # P1: 自动官方采集（可选，对通过 pass_score 的商品深度验证）
+                        # 官方采集会提取评价/留言等爬虫无法获取的数据，并更新 items/sellers 表
+                        # 限制每轮最多 N 条，避免拖慢 run_once + 频繁访问评价页触发反爬
+                        # Task 8: 增加去重检查（短窗口内已采集过的商品跳过）
+                        # Task 9: 失败退避——连续失败达阈值后通过 stats.official_collect_paused
+                        # 短路后续商品的采集条件（不 break 循环，商品仍走评估/通知流程）
+                        if (eval_cfg and eval_cfg.auto_collect_official
+                                and self.official_collect_fn
+                                and not stats.official_collect_paused
+                                and stats.official_collected < eval_cfg.auto_collect_max_per_run):
+                            # Task 8: 去重检查——优先用循环前批量预查询的缓存
+                            # 为什么用缓存：避免 N+1 查询，批量预查询已在循环前完成
+                            # 降级策略：预查询失败时（cache is None）逐个查询作为兜底
+                            if recent_collected_cache is not None:
+                                recent_ids = recent_collected_cache
+                            elif self.repo is not None:
+                                try:
+                                    recent_ids = self.repo.get_recently_collected_item_ids(
+                                        [detail.id],
+                                        eval_cfg.auto_collect_dedup_window_minutes,
+                                    )
+                                except Exception as dedup_err:
+                                    # 去重查询失败不应阻塞采集本身，降级为"不跳过"继续尝试
+                                    logger.warning(
+                                        f"[Task {self.task.id}] 去重查询失败 {detail.id}: {dedup_err}"
+                                    )
+                                    recent_ids = set()
+                            else:
+                                recent_ids = set()
+
+                            if detail.id in recent_ids:
+                                stats.official_collect_skipped_dedup += 1
+                                logger.info(
+                                    f"[Task {self.task.id}] 跳过 {detail.id} "
+                                    f"({eval_cfg.auto_collect_dedup_window_minutes}分钟内已采集)"
+                                )
+                            else:
+                                try:
+                                    await self.official_collect_fn(detail.id, self.task.id)
+                                    stats.official_collected += 1
+                                    # 成功时清零连续失败计数器：退避语义是"连续失败"而非"累计失败"
+                                    # 不清零会导致"失败2次→成功1次→失败1次"误触发暂停（实际只连续失败1次）
+                                    self._consecutive_collect_failures = 0
+                                    logger.info(
+                                        f"[Task {self.task.id}] 自动官方采集完成 {detail.id} "
+                                        f"({stats.official_collected}/{eval_cfg.auto_collect_max_per_run})"
+                                    )
+                                except Exception as e:
+                                    # Task 9: 失败计数与退避
+                                    self._consecutive_collect_failures += 1
+                                    logger.warning(
+                                        f"[Task {self.task.id}] 自动官方采集失败 {detail.id} "
+                                        f"(连续失败 {self._consecutive_collect_failures}/"
+                                        f"{eval_cfg.auto_collect_fail_pause_threshold}): {e}"
+                                    )
+                                    # Task 11: 写入失败事件供统计端点聚合
+                                    # 为什么用独立 type 而非复用 eval.scored：
+                                    # 成功/失败语义不同，混合会污染评估分布；
+                                    # 为什么放在暂停判断之前：无论是否触发暂停都应记录失败事件，
+                                    # 让 /auto-collect-stats 能完整统计失败次数与原因
+                                    # error 字段经 _sanitize_error 脱敏：移除 token/Cookie 等凭证
+                                    if self.repo:
+                                        try:
+                                            import json as _json
+                                            safe_err = _sanitize_error(str(e))
+                                            self.repo.upsert_eval_event({
+                                                "type": "collect.official.failed",
+                                                "task_id": self.task.id,
+                                                "item_id": detail.id,
+                                                "stage": "collect",
+                                                "level": "warn",
+                                                "message": f"自动官方采集失败 {detail.id}: {_sanitize_error(str(e), 200)}",
+                                                "payload": _json.dumps({
+                                                    "task_id": self.task.id,
+                                                    "item_id": detail.id,
+                                                    "error": safe_err,
+                                                    "consecutive_failures": self._consecutive_collect_failures,
+                                                }, ensure_ascii=False, default=str),
+                                            })
+                                        except Exception as ev_err:
+                                            logger.warning(
+                                                f"[Task {self.task.id}] 写入采集失败事件异常: {ev_err}"
+                                            )
+                                    if (self._consecutive_collect_failures
+                                            >= eval_cfg.auto_collect_fail_pause_threshold):
+                                        stats.official_collect_paused = True
+                                        logger.error(
+                                            f"[Task {self.task.id}] 自动官方采集已暂停"
+                                            f"（连续失败 {self._consecutive_collect_failures} 次 ≥ 阈值 "
+                                            f"{eval_cfg.auto_collect_fail_pause_threshold}），"
+                                            f"剩余商品跳过采集"
+                                        )
+                                        # 通过 notifier 发送告警，让用户感知采集异常并介入
+                                        # 为什么放在这里：日志用户不一定看，
+                                        # 告警能主动触达，避免采集长期失效未察觉
+                                        if self.notifier is not None:
+                                            try:
+                                                from xianyu_hunter.domain.events import Event, EventType
+                                                # TASK_ERROR 是最接近的语义类型
+                                                # severity=critical 确保免打扰时段也能触达
+                                                evt = Event(
+                                                    type=EventType.TASK_ERROR,
+                                                    task_id=self.task.id,
+                                                    payload={
+                                                        "title": f"任务 {self.task.name} 自动采集已暂停",
+                                                        "message": (
+                                                            f"连续失败 {self._consecutive_collect_failures} 次，"
+                                                            f"最后失败: {str(e)[:200]}"
+                                                        ),
+                                                        "reason": "auto_collect_paused",
+                                                    },
+                                                    severity="critical",
+                                                )
+                                                await self.notifier.send(evt)
+                                            except Exception as notify_err:
+                                                logger.warning(
+                                                    f"[Task {self.task.id}] 告警发送失败: {notify_err}"
+                                                )
+                                        # 不 break 整个 for 循环：商品仍需走完评估/通知流程，
+                                        # 通过 stats.official_collect_paused 让后续商品的采集条件短路
+
+                        # 5.5 AI 自动评估（可选，消耗 token）
+                        # 开启后对通过规则评估的商品自动调用 AI 二次确认
+                        if _has_browser and settings.ai_enabled and eval_cfg.ai_auto_eval and settings.openai_api_key:
+                            try:
+                                from xianyu_hunter.web.routes.api_ai import _call_llm_vision, _rule_eval_condition
+                                ai_result = await _call_llm_vision(
+                                    detail.title, detail.description or "",
+                                    detail.price or 0, detail.image_urls or [],
+                                )
+                                ai_verdict = ai_result.get("verdict", "")
+                                ai_condition_score = ai_result.get("condition_score", 0)
+
+                                # P2 优化：AI 评估结果实质性地影响总分
+                                # 旧逻辑仅追加到 dimension_scores 不影响总分，
+                                # 新逻辑通过 apply_ai_eval 调整总分和风险等级
+                                eval_result = self.evaluator.apply_ai_eval(
+                                    eval_result, ai_verdict, ai_condition_score
+                                )
+
+                                if ai_verdict == "reject":
+                                    logger.info("[Task {}] AI 评估拒绝 {} (score={})，跳过", self.task.id, detail.id, ai_condition_score)
+                                    # 更新 events 表中的评估记录
+                                    if self.repo:
+                                        try:
+                                            self.repo.update_eval_payload_by_keys(
+                                                self.task.id, detail.id, "eval.scored",
+                                                {"score": eval_result.score,
+                                                 "risk_level": eval_result.risk_level.value,
+                                                 "dimension_scores": eval_result.dimension_scores,
+                                                 "reject_reasons": eval_result.reject_reasons,
+                                                 "is_passed": False},
+                                            )
+                                        except Exception:
+                                            pass
+                                    continue
+
+                                # 更新 events 表中的评估记录（AI 调整后的分数）
+                                if self.repo:
+                                    try:
+                                        self.repo.update_eval_payload_by_keys(
+                                            self.task.id, detail.id, "eval.scored",
+                                            {"score": eval_result.score,
+                                             "risk_level": eval_result.risk_level.value,
+                                             "dimension_scores": eval_result.dimension_scores,
+                                             "reject_reasons": eval_result.reject_reasons,
+                                             "is_passed": eval_result.is_passed},
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"[Task {self.task.id}] 更新 AI 评估事件失败: {e}")
+                            except Exception as e:
+                                logger.warning("[Task {}] AI 自动评估失败，继续规则评估: {}", self.task.id, e)
+
+                        # 5.6 AI 深度分析（可选，消耗更多 token）
+                        if _has_browser and settings.ai_enabled and eval_cfg.ai_auto_deep_analyze and settings.openai_api_key:
+                            try:
+                                from xianyu_hunter.web.routes.api_ai_deep import _call_llm_deep_analyze, _fallback_deep_analyze
+                                deep_result = await _call_llm_deep_analyze(
+                                    detail.title, detail.description or "",
+                                    detail.price or 0, detail.image_urls or [],
+                                )
+                                overall = deep_result.get("overall", {})
+                                if overall.get("verdict") == "reject":
+                                    logger.info("[Task {}] AI 深度分析拒绝 {}，跳过", self.task.id, detail.id)
+                                    continue
+                            except Exception as e:
+                                logger.warning("[Task {}] AI 深度分析失败，继续: {}", self.task.id, e)
+
+                        # 6. 落单
+                        if not self._should_buy():
+                            # 为什么加日志：非 AUTO 模式跳过抢单是高频原因，
+                            # 缺少日志时用户无法定位"评分达标却未抢单"的根因
+                            logger.info(
+                                f"[Task {self.task.id}] 任务模式 {self.task.mode.value} 非自动抢单(AUTO)，跳过 {detail.id}"
+                            )
+                            continue
+                        # 区分推送门槛与抢单门槛：
+                        # - pass_score(60) 用于推送通知（is_passed 已在上方检查）
+                        # - auto_buy_score(75) 用于全自动拍下，避免 60-74 分中等分数商品被误抢单
+                        # 77 分 >= auto_buy_score(75) 且风险等级 LOW，应触发抢单
+                        _auto_buy_score = eval_cfg.auto_buy_score if eval_cfg else 80
+                        if not eval_result.should_auto_buy(_auto_buy_score):
+                            logger.info(
+                                f"[Task {self.task.id}] {detail.id} 评估分 {eval_result.score} "
+                                f"未达 auto_buy_score({_auto_buy_score}) 或非低风险({eval_result.risk_level.value})，跳过抢单"
+                            )
+                            continue
+                        # buyer 未注入时跳过落单：with_browser=False 模式下 container.buyer 为 None，
+                        # 或浏览器启动失败后 Buyer 仍可能未就绪。此时不应抛出 AttributeError 中断流程
+                        if self.buyer is None:
+                            logger.warning(
+                                f"[Task {self.task.id}] buyer 未注入（with_browser=False 或初始化失败），跳过落单 {detail.id}"
+                            )
+                            continue
+                        if self._in_cooldown():
+                            logger.info(
+                                f"[Task {self.task.id}] 冷却中，跳过 {detail.id}"
+                            )
+                            continue
+
+                        buy_result = await self.buyer.buy(  # type: ignore[misc]
+                            task_id=self.task.id,
+                            item_id=detail.id,
+                            expected_price=detail.price,
+                        )
+                        buy_results.append(buy_result)
+                        if buy_result.outcome == BuyOutcome.SUCCESS:
+                            stats.bought += 1
+                            self._last_buy_at = time.monotonic()
+                            if self.config.stop_on_first_buy:
+                                logger.info(
+                                    f"[Task {self.task.id}] 抢到 1 单，按策略停止本轮"
+                                )
+                                break
+                        else:
+                            stats.failed += 1
+                    except Exception as e:  # noqa: BLE001
+                        logger.exception(f"[Task {self.task.id}] 处理 {summary.id} 出错: {e}")
+                        # 捕获到 error_logs 表，供错误日志页面展示
+                        # 这里是单商品处理异常，记录后 continue 跳过该商品，不影响整体流程
+                        try:
+                            from xianyu_hunter.web.middleware.error_capture import capture_background_error
+                            capture_background_error(e, context={
+                                "source": "worker.run_once.process_item",
+                                "task_id": self.task.id,
+                                "item_id": getattr(summary, 'id', None),
+                            })
+                        except Exception:
+                            pass
+                        continue
+            finally:
+                # 关闭复用的详情页和卖家页，避免页面泄漏
+                for _p in (shared_detail_page, shared_seller_page):
+                    if _p is not None:
+                        try:
+                            await _p.close()
+                        except Exception:
+                            pass
+
+        finally:
+            stats.finished_at = datetime.now(timezone.utc)
+            # 确保商品持久化到 items 表（去重 + 关联查询依赖此数据）
+            if new_items:
+                try:
+                    await self.dedup.save(new_items, task_id=self.task.id)
+                except Exception as e:
+                    logger.warning("[Task {}] 持久化 items 失败: {}", self.task.id, e)
+            # 兜底：如果 try 块因异常未执行 _save_task_links，在 finally 中补调用
+            # 使用 new_items（已去重）而非 items（原始），避免保存无关默认推荐
+            if stats.linked == 0 and new_items:
+                self._save_task_links(new_items)
+            # 写入搜索完成事件，供事件中心/时间线展示
+            if self.repo:
+                try:
+                    import json as _json
+                    self.repo.save_event({
+                        "type": "task.search_done",
+                        "task_id": self.task.id,
+                        "stage": "search",
+                        "level": "info",
+                        "message": f"搜索完成: 找到{stats.found}/去重{stats.deduped}/评估{stats.evaluated}/通过{stats.passed}",
+                        "payload": _json.dumps({
+                            "found": stats.found,
+                            "deduped": stats.deduped,
+                            "price_filtered": stats.price_filtered,
+                            "evaluated": stats.evaluated,
+                            "passed": stats.passed,
+                            "bought": stats.bought,
+                            "failed": stats.failed,
+                            "linked": stats.linked,
+                            "official_collected": stats.official_collected,
+                        }, ensure_ascii=False),
+                    })
+                except Exception as e:
+                    logger.warning(f"[Task {self.task.id}] 写入搜索事件失败: {e}")
+
+                # P2+P3: 生成本轮结论摘要 + 优化建议
+                # 基于 RunStats 生成可操作的结论性文字，帮助用户理解本轮表现和调优方向
+                try:
+                    self._save_run_conclusion(stats, evaluations)
+                except Exception as e:
+                    logger.warning(f"[Task {self.task.id}] 写入结论事件失败: {e}")
+
+                # P3: AI 多轮优化建议——累积 N 轮后调用 LLM 生成趋势洞察
+                # 用 fire-and-forget：AI 调用最多 30s，不应阻塞 run_once 返回影响下一轮调度
+                # 任务引用由 _ai_suggestion_tasks 集合持有，避免被 GC 回收（Python 官方警告）
+                try:
+                    task = asyncio.create_task(self._maybe_generate_ai_suggestion(stats))
+                    self._ai_suggestion_tasks.add(task)
+                    task.add_done_callback(self._ai_suggestion_tasks.discard)
+                except Exception as e:
+                    logger.warning(f"[Task {self.task.id}] AI 多轮建议任务创建失败: {e}")
+
+        logger.info(
+            f"[Task {self.task.id}] 本轮完成: 找到 {stats.found} / "
+            f"去重 {stats.deduped} / 价格过滤 {stats.price_filtered} / "
+            f"评估 {stats.evaluated} / 通过 {stats.passed} / "
+            f"落单 {stats.bought} / 失败 {stats.failed} / 关联 {stats.linked} / "
+            f"官方采集 {stats.official_collected}"
+        )
+        return RunResult(stats=stats, evaluations=evaluations, buy_results=buy_results)
+
+    def _save_run_conclusion(self, stats: RunStats, evaluations: list[EvalResult]) -> None:
+        """P2+P3: 基于本轮统计生成本轮结论摘要 + 优化建议
+
+        结论分两部分：
+        1. 本轮表现摘要（发现/评估/通过/落单的结论性描述）
+        2. 优化建议（基于统计数据给出的可操作调优方向）
+
+        写入 events 表 type=task.run_conclusion，供前端事件中心/时间线展示。
+        """
+        if not self.repo:
+            return
+
+        import json as _json
+
+        # ---- 1. 本轮表现摘要 ----
+        if stats.found == 0:
+            summary = "搜索无结果，建议检查关键词是否过于冷门或扩大筛选范围"
+            level = "warn"
+        elif stats.evaluated == 0 and stats.deduped > 0:
+            dedup_ratio = stats.deduped / max(stats.found, 1)
+            if dedup_ratio > 0.8:
+                summary = f"本轮 {stats.found} 件商品中 {stats.deduped} 件已看过（去重率 {dedup_ratio:.0%}），无新商品需评估"
+                level = "info"
+            else:
+                summary = f"本轮 {stats.found} 件商品全部被价格过滤，建议放宽价格区间"
+                level = "warn"
+        elif stats.passed == 0 and stats.evaluated > 0:
+            avg_score = sum(e.score or 0 for e in evaluations) / max(len(evaluations), 1)
+            summary = (
+                f"评估 {stats.evaluated} 件商品均未达标（平均分 {avg_score:.0f}），"
+                f"建议降低 pass_score 或调整关键词匹配更优质的商品"
+            )
+            level = "warn"
+        elif stats.bought == 0 and stats.passed > 0:
+            summary = (
+                f"本轮 {stats.passed} 件商品通过评估但未抢单"
+                f"（任务模式 {self.task.mode.value}），"
+            )
+            if self.task.mode != TaskMode.AUTO:
+                summary += "切换为 AUTO 模式或手动在评估明细页确认落单"
+            else:
+                summary += "未达 auto_buy_score，建议降低自动抢单门槛"
+            level = "info"
+        else:
+            summary = (
+                f"本轮完成：找到 {stats.found} / 评估 {stats.evaluated} / "
+                f"通过 {stats.passed} / 落单 {stats.bought}"
+            )
+            if stats.official_collected > 0:
+                summary += f" / 官方采集 {stats.official_collected}"
+            level = "info"
+
+        # ---- 2. 优化建议（基于统计比率的可操作建议）----
+        suggestions: list[str] = []
+
+        if stats.found > 0 and stats.deduped / max(stats.found, 1) > 0.8:
+            suggestions.append("去重率过高，说明关键词覆盖的商品池较小或搜索结果重复，建议调整关键词")
+
+        if stats.evaluated > 0 and stats.price_filtered > 0:
+            price_filter_rate = stats.price_filtered / max(stats.evaluated + stats.price_filtered, 1)
+            if price_filter_rate > 0.5:
+                suggestions.append(f"价格过滤率 {price_filter_rate:.0%}，建议放宽价格区间或调整市场参考价比例")
+
+        if stats.evaluated > 0 and stats.passed / max(stats.evaluated, 1) < 0.1:
+            suggestions.append("评估通过率低于 10%，建议降低 pass_score 或调整评估权重/阈值")
+
+        if stats.failed > 0 and stats.bought == 0:
+            suggestions.append(f"本轮落单失败 {stats.failed} 次，建议检查 cookie 有效性或网络状况")
+
+        if not suggestions and stats.passed > 0:
+            suggestions.append("各项指标正常，当前策略运行良好")
+
+        message = summary
+        if suggestions:
+            message += " | 建议: " + "; ".join(suggestions)
+
+        self.repo.save_event({
+            "type": "task.run_conclusion",
+            "task_id": self.task.id,
+            "stage": "conclusion",
+            "level": level,
+            "message": message,
+            "payload": _json.dumps({
+                "summary": summary,
+                "suggestions": suggestions,
+                "stats": {
+                    "found": stats.found,
+                    "deduped": stats.deduped,
+                    "price_filtered": stats.price_filtered,
+                    "evaluated": stats.evaluated,
+                    "passed": stats.passed,
+                    "bought": stats.bought,
+                    "failed": stats.failed,
+                    "official_collected": stats.official_collected,
+                },
+            }, ensure_ascii=False, default=str),
+        })
+
+    async def _maybe_generate_ai_suggestion(self, stats: RunStats) -> None:
+        """P3: 累积 N 轮后调用 LLM 生成多轮优化建议
+
+        与 _save_run_conclusion（单轮规则建议）互补：
+        - 单轮建议基于固定阈值规则，即时但缺乏趋势视角
+        - 多轮建议基于历史统计趋势，由 LLM 生成更自然的语言洞察
+
+        触发条件：ai_multi_run_suggestion=true 且累积轮数达 ai_suggestion_interval
+        失败处理：AI 调用失败时静默降级（已有单轮建议兜底），不影响任务主流程
+        """
+        if not self.repo:
+            return
+
+        # 合并任务级 eval_config 覆盖，与 run_once 保持一致
+        eval_cfg = self._effective_eval_cfg()
+
+        if not eval_cfg.ai_multi_run_suggestion:
+            return
+
+        # 追加本轮 stats 摘要到历史（只保留必要字段，避免内存膨胀）
+        self._run_history.append({
+            "found": stats.found,
+            "deduped": stats.deduped,
+            "price_filtered": stats.price_filtered,
+            "evaluated": stats.evaluated,
+            "passed": stats.passed,
+            "bought": stats.bought,
+            "failed": stats.failed,
+            "official_collected": stats.official_collected,
+        })
+        # 仅保留最近 interval*2 轮，足够 AI 分析趋势且内存可控
+        max_history = eval_cfg.ai_suggestion_interval * 2
+        if len(self._run_history) > max_history:
+            self._run_history = self._run_history[-max_history:]
+
+        # 未达间隔轮数，跳过
+        if len(self._run_history) < eval_cfg.ai_suggestion_interval:
+            return
+        # 仅在 interval 的整数倍触发（避免每轮都调用）
+        if len(self._run_history) % eval_cfg.ai_suggestion_interval != 0:
+            return
+
+        # 检查 AI 配置（与 worker.run_once 中的 AI 评估使用相同的门控）
+        settings = get_settings()
+        if not settings.ai_enabled or not settings.openai_api_key:
+            return
+
+        # 预算检查
+        from xianyu_hunter.infra.ai_usage import check_budget
+        allowed, reason = check_budget()
+        if not allowed:
+            logger.info(f"[Task {self.task.id}] AI 多轮建议跳过（预算受限: {reason}）")
+            return
+
+        # 构造多轮统计摘要供 LLM 分析
+        import json as _json
+        rounds = len(self._run_history)
+        totals = {k: sum(r[k] for r in self._run_history) for k in self._run_history[0]}
+        avgs = {k: round(v / rounds, 1) for k, v in totals.items()}
+
+        # 通过率/去重率/价格过滤率等关键比率
+        pass_rate = round(totals["passed"] / max(totals["evaluated"], 1), 2)
+        dedup_rate = round(totals["deduped"] / max(totals["found"], 1), 2)
+
+        user_content = _json.dumps({
+            "task": {"id": self.task.id, "keyword": self.task.keyword, "mode": self.task.mode.value},
+            "rounds": rounds,
+            "totals": totals,
+            "averages_per_round": avgs,
+            "key_ratios": {"pass_rate": pass_rate, "dedup_rate": dedup_rate},
+            "recent_trend": self._run_history[-3:],
+        }, ensure_ascii=False)
+
+        system_prompt = (
+            "你是闲鱼捡漏助手的优化顾问。基于任务多轮运行的统计数据，"
+            "给出 3-5 条具体可操作的优化建议。每条建议包含：问题诊断 + 建议动作。"
+            "用中文回答，简洁直接，不要客套话。"
+        )
+
+        try:
+            import httpx
+            url = settings.openai_base_url.rstrip("/") + "/chat/completions"
+            payload = {
+                "model": settings.openai_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.4,
+                "max_tokens": 600,
+            }
+            headers = {
+                # S3457: 字符串拼接改 f-string
+                "Authorization": f"Bearer {settings.openai_api_key}",
+                "Content-Type": "application/json",
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(url, json=payload, headers=headers)
+                r.raise_for_status()
+                resp_data = r.json()
+
+            # 防御性解析：OpenAI 兼容服务可能返回错误格式、空 choices、或 None content
+            choices = resp_data.get("choices") or []
+            if not choices:
+                logger.warning(f"[Task {self.task.id}] AI 多轮建议返回空 choices: {resp_data}")
+                return
+            message = choices[0].get("message") or {}
+            content = message.get("content")
+            if not content or not content.strip():
+                logger.warning(f"[Task {self.task.id}] AI 多轮建议返回空 content")
+                return
+            suggestion_text = content.strip()
+
+            self.repo.save_event({
+                "type": "task.ai_suggestion",
+                "task_id": self.task.id,
+                "stage": "ai_suggestion",
+                "level": "info",
+                "message": f"AI 多轮优化建议（基于最近 {rounds} 轮）: {suggestion_text[:200]}",
+                "payload": _json.dumps({
+                    "rounds": rounds,
+                    "suggestion": suggestion_text,
+                    "key_ratios": {"pass_rate": pass_rate, "dedup_rate": dedup_rate},
+                }, ensure_ascii=False),
+            })
+            logger.info(f"[Task {self.task.id}] AI 多轮建议已生成（基于 {rounds} 轮统计）")
+            # 记账单独 try-except：避免 record_usage 异常导致已保存的建议事件丢失
+            try:
+                from xianyu_hunter.infra.ai_usage import record_usage
+                record_usage("multi_run_suggestion", settings.openai_model, resp_data)
+            except Exception as usage_err:
+                logger.warning(f"[Task {self.task.id}] AI 多轮建议记账失败: {usage_err}")
+        except Exception as e:
+            logger.warning(f"[Task {self.task.id}] AI 多轮建议调用失败: {e}")
+
+    def _compute_market_context(self, items: list) -> MarketContext | None:
+        """从当前批次的商品中估算市场参考价（中位数 + 全量价格列表）"""
+        prices = [
+            i.price for i in items
+            if getattr(i, "price", None) is not None
+        ]
+        if len(prices) < 3:
+            return None
+        prices.sort()
+        n = len(prices)
+        median = prices[n // 2] if n % 2 == 1 else (prices[n // 2 - 1] + prices[n // 2]) / 2
+        # 传入 all_prices 供 TopN 策略逐商品计算 cheaper_seller_count
+        return MarketContext(median_price=median, sample_size=n, all_prices=prices)

@@ -60,7 +60,14 @@ config/backups/
 logs/
 # 运行时日志文件（loguru SSE 流输出，根目录）
 run.stdout.log
+run.stdout.*.log
 run.stderr.log
+# Jenkins 构建日志
+jenkins_build_*.log
+
+# ---------- SonarQube 扫描缓存 ----------
+.scannerwork/
+sonar-scan.log
 
 # ---------- 截图与可视化产物 ----------
 *.png
@@ -82,10 +89,30 @@ trace/
 _filelist.txt
 _git_status.txt
 
+# 误重定向产生的根目录垃圾文件（如 less/命令输出被重定向）
+/0
+/17_xianyu
+/17_xianyufrontend
+/_r.json
+/.tmp_diff.txt
+/.s3358_lines.txt
+
+# 测试输出（根目录）
+/test_result.txt
+/test_debug_output.txt
+/pytest_result.txt
+/pytest_output.txt
+
 # ---------- 临时调试脚本（根目录以 _ 开头）----------
 /_*.py
 /_*.ps1
 /_*.bat
+
+# SonarQube 调试脚本（根目录）
+/check-scan*.ps1
+/diagnose-api.ps1
+/run-scan.ps1
+/query-*.ps1
 
 # ---------- 历史遗留临时测试文件（预防再次创建）----------
 test_pw*.py

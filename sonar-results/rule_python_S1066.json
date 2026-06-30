@@ -1,0 +1,57 @@
+﻿{
+    "rule":  {
+                 "key":  "python:S1066",
+                 "repo":  "python",
+                 "name":  "Mergeable \"if\" statements should be combined",
+                 "createdAt":  "2026-03-11T22:20:44+0800",
+                 "severity":  "MAJOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "clumsy"
+                             ],
+                 "lang":  "py",
+                 "langName":  "Python",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "ALL",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003cp\u003eIf merging the conditions seems to result in a more complex code, extracting the condition or part of it in a named function or variable is a\nbetter approach to fix readability.\u003c/p\u003e\n\n\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre\u003e\nif file.isValid():\n  if file.isfile() or file.isdir():     # Noncompliant\n    # ...\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre\u003e\ndef isFileOrDirectory(File file):\n  return file.isFile() or file.isDirectory()\n\nif file.isValid() and isFileOrDirectory(file): # Compliant\n  # ...\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eNested code - blocks of code inside blocks of code - is eventually necessary, but increases complexity. This is why keeping the code as flat as\npossible, by avoiding unnecessary nesting, is considered a good practice.\u003c/p\u003e\n\u003cp\u003eMerging \u003ccode\u003eif\u003c/code\u003e statements when possible will decrease the nesting of the code and improve its readability.\u003c/p\u003e\n\u003cp\u003eCode like\u003c/p\u003e\n\u003cpre\u003e\nif condition1:\n    if condition2:             # Noncompliant\n        # ...\n\u003c/pre\u003e\n\u003cp\u003eWill be more readable as\u003c/p\u003e\n\u003cpre\u003e\nif condition1 and condition2:  # Compliant\n    # ...\n\u003c/pre\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:44+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "MEDIUM"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

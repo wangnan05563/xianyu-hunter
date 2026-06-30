@@ -1,0 +1,483 @@
+﻿{
+    "total":  736,
+    "p":  1,
+    "ps":  5,
+    "paging":  {
+                   "pageIndex":  1,
+                   "pageSize":  5,
+                   "total":  736
+               },
+    "effortTotal":  6453,
+    "issues":  [
+                   {
+                       "key":  "d011fe11-09b1-44a0-bbb7-7109d135ea9e",
+                       "rule":  "typescript:S6759",
+                       "severity":  "MINOR",
+                       "component":  "xianyu_hunter:frontend/src/App.tsx",
+                       "project":  "xianyu_hunter",
+                       "line":  47,
+                       "hash":  "d89f65a9c83ce56cc0f9cf59526d6fc7",
+                       "textRange":  {
+                                         "startLine":  47,
+                                         "endLine":  47,
+                                         "startOffset":  19,
+                                         "endOffset":  56
+                                     },
+                       "flows":  [
+
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Mark the props of the component as read-only.",
+                       "effort":  "5min",
+                       "debt":  "5min",
+                       "author":  "",
+                       "tags":  [
+                                    "type-dependent",
+                                    "react"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  true,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "CONVENTIONAL",
+                       "cleanCodeAttributeCategory":  "CONSISTENT",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "LOW"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "160f1693-555d-48d8-9959-2b4cfa26da71",
+                       "rule":  "typescript:S4624",
+                       "severity":  "MAJOR",
+                       "component":  "xianyu_hunter:frontend/src/api/export.ts",
+                       "project":  "xianyu_hunter",
+                       "line":  54,
+                       "hash":  "a57198d1fa56d8fc39acf968ce7875d7",
+                       "textRange":  {
+                                         "startLine":  54,
+                                         "endLine":  54,
+                                         "startOffset":  41,
+                                         "endOffset":  49
+                                     },
+                       "flows":  [
+
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Refactor this code to not use nested template literals.",
+                       "effort":  "10min",
+                       "debt":  "10min",
+                       "author":  "",
+                       "tags":  [
+                                    "brain-overload",
+                                    "confusing"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "CLEAR",
+                       "cleanCodeAttributeCategory":  "INTENTIONAL",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "MEDIUM"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "002b76d4-696f-4c73-9649-0ef57d2023a4",
+                       "rule":  "typescript:S7764",
+                       "severity":  "MINOR",
+                       "component":  "xianyu_hunter:frontend/src/api/export.ts",
+                       "project":  "xianyu_hunter",
+                       "line":  59,
+                       "hash":  "cf420c7e9dd24737c9495d9beb1c81db",
+                       "textRange":  {
+                                         "startLine":  59,
+                                         "endLine":  59,
+                                         "startOffset":  4,
+                                         "endOffset":  10
+                                     },
+                       "flows":  [
+
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Prefer `globalThis` over `window`.",
+                       "effort":  "2min",
+                       "debt":  "2min",
+                       "author":  "",
+                       "tags":  [
+                                    "portability",
+                                    "es2020"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  true,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "CONVENTIONAL",
+                       "cleanCodeAttributeCategory":  "CONSISTENT",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "LOW"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "07a59990-0dbd-41a6-b687-345d84f4bdd0",
+                       "rule":  "typescript:S3776",
+                       "severity":  "CRITICAL",
+                       "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                       "project":  "xianyu_hunter",
+                       "line":  134,
+                       "hash":  "6797862a61277b2cf362282bdbd34a75",
+                       "textRange":  {
+                                         "startLine":  134,
+                                         "endLine":  134,
+                                         "startOffset":  29,
+                                         "endOffset":  31
+                                     },
+                       "flows":  [
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  136,
+                                                                                 "endLine":  136,
+                                                                                 "startOffset":  6,
+                                                                                 "endOffset":  8
+                                                                             },
+                                                               "msg":  "+1",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  144,
+                                                                                 "endLine":  144,
+                                                                                 "startOffset":  6,
+                                                                                 "endOffset":  9
+                                                                             },
+                                                               "msg":  "+1",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  146,
+                                                                                 "endLine":  146,
+                                                                                 "startOffset":  8,
+                                                                                 "endOffset":  10
+                                                                             },
+                                                               "msg":  "+2 (incl. 1 for nesting)",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  151,
+                                                                                 "endLine":  151,
+                                                                                 "startOffset":  8,
+                                                                                 "endOffset":  11
+                                                                             },
+                                                               "msg":  "+2 (incl. 1 for nesting)",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  153,
+                                                                                 "endLine":  153,
+                                                                                 "startOffset":  10,
+                                                                                 "endOffset":  12
+                                                                             },
+                                                               "msg":  "+3 (incl. 2 for nesting)",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  156,
+                                                                                 "endLine":  156,
+                                                                                 "startOffset":  12,
+                                                                                 "endOffset":  14
+                                                                             },
+                                                               "msg":  "+3 (incl. 2 for nesting)",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  158,
+                                                                                 "endLine":  158,
+                                                                                 "startOffset":  19,
+                                                                                 "endOffset":  21
+                                                                             },
+                                                               "msg":  "+1",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  163,
+                                                                                 "endLine":  163,
+                                                                                 "startOffset":  12,
+                                                                                 "endOffset":  17
+                                                                             },
+                                                               "msg":  "+3 (incl. 2 for nesting)",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  165,
+                                                                                 "endLine":  165,
+                                                                                 "startOffset":  12,
+                                                                                 "endOffset":  14
+                                                                             },
+                                                               "msg":  "+4 (incl. 3 for nesting)",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     },
+                                     {
+                                         "locations":  [
+                                                           {
+                                                               "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                                                               "textRange":  {
+                                                                                 "startLine":  165,
+                                                                                 "endLine":  165,
+                                                                                 "startOffset":  18,
+                                                                                 "endOffset":  20
+                                                                             },
+                                                               "msg":  "+1",
+                                                               "msgFormattings":  [
+
+                                                                                  ]
+                                                           }
+                                                       ]
+                                     }
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Refactor this function to reduce its Cognitive Complexity from 21 to the 15 allowed.",
+                       "effort":  "11min",
+                       "debt":  "11min",
+                       "author":  "",
+                       "tags":  [
+                                    "brain-overload"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "FOCUSED",
+                       "cleanCodeAttributeCategory":  "ADAPTABLE",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "HIGH"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   },
+                   {
+                       "key":  "dcbb15c4-d8fe-4fb6-a46c-134a009bc572",
+                       "rule":  "typescript:S3696",
+                       "severity":  "MAJOR",
+                       "component":  "xianyu_hunter:frontend/src/api/task.ts",
+                       "project":  "xianyu_hunter",
+                       "line":  138,
+                       "hash":  "66ea06e8aae5187737828160eb488ed2",
+                       "textRange":  {
+                                         "startLine":  138,
+                                         "endLine":  138,
+                                         "startOffset":  8,
+                                         "endOffset":  72
+                                     },
+                       "flows":  [
+
+                                 ],
+                       "status":  "OPEN",
+                       "message":  "Expected an error object to be thrown.",
+                       "effort":  "20min",
+                       "debt":  "20min",
+                       "author":  "",
+                       "tags":  [
+                                    "error-handling",
+                                    "api-design",
+                                    "type-dependent"
+                                ],
+                       "creationDate":  "2026-06-28T11:38:27+0800",
+                       "updateDate":  "2026-06-28T11:38:27+0800",
+                       "type":  "CODE_SMELL",
+                       "scope":  "MAIN",
+                       "quickFixAvailable":  false,
+                       "messageFormattings":  [
+
+                                              ],
+                       "codeVariants":  [
+
+                                        ],
+                       "cleanCodeAttribute":  "CONVENTIONAL",
+                       "cleanCodeAttributeCategory":  "CONSISTENT",
+                       "impacts":  [
+                                       {
+                                           "softwareQuality":  "MAINTAINABILITY",
+                                           "severity":  "MEDIUM"
+                                       }
+                                   ],
+                       "issueStatus":  "OPEN",
+                       "prioritizedRule":  false,
+                       "fromSonarQubeUpdate":  false,
+                       "internalTags":  [
+
+                                        ],
+                       "linkedTicketStatus":  "NOT_LINKED"
+                   }
+               ],
+    "components":  [
+                       {
+                           "key":  "xianyu_hunter:frontend/src/App.tsx",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "App.tsx",
+                           "longName":  "frontend/src/App.tsx",
+                           "path":  "frontend/src/App.tsx"
+                       },
+                       {
+                           "key":  "xianyu_hunter",
+                           "enabled":  true,
+                           "qualifier":  "TRK",
+                           "name":  "Xianyu Hunter",
+                           "longName":  "Xianyu Hunter"
+                       },
+                       {
+                           "key":  "xianyu_hunter:frontend/src/api/task.ts",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "task.ts",
+                           "longName":  "frontend/src/api/task.ts",
+                           "path":  "frontend/src/api/task.ts"
+                       },
+                       {
+                           "key":  "xianyu_hunter:frontend/src/api/export.ts",
+                           "enabled":  true,
+                           "qualifier":  "FIL",
+                           "name":  "export.ts",
+                           "longName":  "frontend/src/api/export.ts",
+                           "path":  "frontend/src/api/export.ts"
+                       }
+                   ],
+    "facets":  [
+
+               ]
+}

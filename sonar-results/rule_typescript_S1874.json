@@ -1,0 +1,59 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S1874",
+                 "repo":  "typescript",
+                 "name":  "Deprecated APIs should not be used",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "cwe",
+                                 "type-dependent",
+                                 "obsolete"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "15min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "15min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eCode is sometimes annotated as deprecated by developers maintaining libraries or APIs to indicate that the method, class, or other programming\nelement is no longer recommended for use. This is typically due to the introduction of a newer or more effective alternative. For example, when a\nbetter solution has been identified, or when the existing code presents potential errors or security risks.\u003c/p\u003e\n\u003cp\u003eDeprecation is a good practice because it helps to phase out obsolete code in a controlled manner, without breaking existing software that may\nstill depend on it. It is a way to warn other developers not to use the deprecated element in new code, and to replace it in existing code when\npossible.\u003c/p\u003e\n\u003cp\u003eDeprecated classes, interfaces, and their members should not be used, inherited or extended because they will eventually be removed. The\ndeprecation period allows you to make a smooth transition away from the aging, soon-to-be-retired technology.\u003c/p\u003e\n\u003cp\u003eCheck the documentation or the deprecation message to understand why the code was deprecated and what the recommended alternative is.\u003c/p\u003e\n\u003cpre\u003e\n/**\n * @deprecated Use newFunction instead.\n */\nfunction oldFunction() {\n  console.log(\"This is the old function.\");\n}\n\nfunction newFunction() {\n  console.log(\"This is the new function.\");\n}\noldFunction(); // Noncompliant: \"oldFunction is deprecated\"\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e CWE - \u003ca href=\"https://cwe.mitre.org/data/definitions/477\"\u003eCWE-477 - Use of Obsolete Functions\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CONVENTIONAL",
+                 "cleanCodeAttributeCategory":  "CONSISTENT",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

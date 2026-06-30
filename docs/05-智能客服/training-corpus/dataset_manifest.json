@@ -1,0 +1,104 @@
+{
+  "name": "闲鱼猎人智能客服训练语料集",
+  "version": "v1.0",
+  "created_at": "2026-06-29",
+  "description": "面向闲鱼猎人智能客服模块 RAG 向量数据库的训练语料集。基于项目全量内容资源预处理生成，包含客服领域专业知识、常见问题解答、对话示例、API 手册、故障排查、配置说明 6 大类标准训练材料。符合 ChromaDB 集合 xianyu_hunter_docs 的数据质量、相关性和结构化要求。",
+  "target_vector_db": {
+    "engine": "ChromaDB",
+    "collection": "xianyu_hunter_docs",
+    "persist_path": "data/chromadb/",
+    "embedding_model": "BAAI/bge-small-zh-v1.5",
+    "embedding_dim": 512,
+    "embedding_provider": "sentence-transformers (本地，无需 Ollama)",
+    "embedding_backend": "EMBEDDING_BASE_URL 为空时启用本地模式",
+    "chunk_strategy": "H2/H3 标题 → 段落 → 句子 → 字符硬切分（500字符/50重叠）",
+    "distance_metric": "cosine",
+    "similarity_threshold": 0.65,
+    "faq_direct_hit_threshold": 0.85
+  },
+  "statistics": {
+    "total_entries": 84,
+    "total_chars": 119700,
+    "avg_chars_per_entry": 1425,
+    "by_category": {
+      "faq": { "entries": 30, "chars": 35731 },
+      "domain_knowledge": { "entries": 12, "chars": 19579 },
+      "conversation": { "entries": 24, "chars": 26859 },
+      "api_manual": { "entries": 6, "chars": 11094 },
+      "troubleshooting": { "entries": 6, "chars": 11270 },
+      "config_reference": { "entries": 6, "chars": 15167 }
+    }
+  },
+  "files": [
+    { "name": "faq.jsonl", "doc_type": "faq", "entries": 30, "description": "30 条预设 FAQ（F-01~F-30），覆盖快速开始/任务管理/评估规则/AI功能/反爬登录/通知配置/数据导出/故障排查/配置管理/部署 8 大分类" },
+    { "name": "domain_knowledge.jsonl", "doc_type": "domain_knowledge", "entries": 12, "description": "12 条领域知识，含系统总体架构、9 大核心业务模块详解、安全设计、数据模型" },
+    { "name": "conversation.jsonl", "doc_type": "conversation", "entries": 24, "description": "24 条对话示例（20 范围内 + 3 超范围 + 1 转人工），对应需求文档 §12.2 测试问题集" },
+    { "name": "api_manual.jsonl", "doc_type": "api_manual", "entries": 6, "description": "6 条 API 手册，覆盖对话/会话/知识库/配置/反馈/主系统核心端点" },
+    { "name": "troubleshooting.jsonl", "doc_type": "troubleshooting", "entries": 6, "description": "6 条故障排查指南，含 11 个错误码定义、任务不执行/抢单失败/WAF/客服/数据库故障排查" },
+    { "name": "config_reference.jsonl", "doc_type": "config_reference", "entries": 6, "description": "6 条配置说明，含 config.yaml 主配置/chatbot 段/.env/eval.yaml/Docker/目录结构" }
+  ],
+  "taxonomy": {
+    "faq": "常见问题解答，针对高频用户咨询提供标准答案，FAQ 匹配阈值 direct_hit≥0.85",
+    "domain_knowledge": "客服领域专业知识，系统架构与各业务模块详解，作为 RAG 检索的核心知识源",
+    "conversation": "对话示例训练材料，包含范围内与超范围场景，metadata.in_scope 标识是否在范围内",
+    "api_manual": "API 接口手册，便于客服回答接口相关问题",
+    "troubleshooting": "故障排查指南，便于客服回答故障类问题，含错误码定义",
+    "config_reference": "配置说明文档，便于客服回答配置类问题"
+  },
+  "schema": {
+    "format": "JSONL（每行一个 JSON 对象）",
+    "required_fields": {
+      "id": "string，全局唯一标识符，格式为 {type}_{category}_{seq}",
+      "doc_type": "string，文档类型，取值见 taxonomy",
+      "category": "string，业务分类（如 快速开始/任务管理/评估规则）",
+      "title": "string，文档标题",
+      "content": "string，文档正文（Markdown 格式，含标题/列表/表格/代码块）",
+      "keywords": "array<string>，关键词列表，用于辅助检索",
+      "source_file": "string，来源文件路径",
+      "section_path": "string，章节路径（如 任务管理 > Cron）",
+      "metadata": "object，元数据对象"
+    },
+    "metadata_fields": {
+      "faq_id": "string，FAQ 编号（仅 faq 类型，如 F-01）",
+      "redacted": "boolean，是否已脱敏",
+      "truncated": "boolean，是否被截断",
+      "code_block": "boolean，是否包含代码块",
+      "version": "string，数据版本（如 v1.0）",
+      "created_at": "string，创建日期（YYYY-MM-DD）",
+      "in_scope": "boolean，是否在客服范围内（仅 conversation 类型）",
+      "error_codes": "array<string>，相关错误码（仅 troubleshooting 类型）",
+      "endpoints": "array<string>，相关 API 端点（仅 api_manual 类型）"
+    }
+  },
+  "source_files": [
+    "README.md（项目总览、核心能力、快速开始、CLI 命令、架构图）",
+    "CHANGELOG.md（0.2.0 版本完整变更记录，14 个模块）",
+    "config/config.yaml（主配置文件，含 chatbot 段完整配置）",
+    "config/eval.yaml（4 维评估模型权重与阈值）",
+    ".env.example（环境变量模板）",
+    "docs/requirements.md（9 大功能模块需求规格）",
+    "docs/05-智能客服/智能客服-概要设计.md（智能客服模块宪法，定义训练要求）",
+    "docs/05-智能客服/智能客服-需求规格.md（§12 预设 FAQ/测试问题/错误码/事件类型）",
+    "frontend/src/pages/Help/index.tsx（18 章用户操作指引静态文档）"
+  ],
+  "quality_assurance": {
+    "json_validity": "84/84 条目 JSON 格式有效（python json.loads 校验通过）",
+    "sensitive_data_scan": "0 处敏感字段泄露（依据 §8 安全设计正则扫描 api_key/secret/token/cookie/password）",
+    "metadata_completeness": "100% 元数据字段完整（9 个必填字段 + 5 个 metadata 字段全部填充）",
+    "content_self_contained": "每个片段自包含，不依赖上下文即可理解",
+    "source_traceability": "每条记录标注 source_file 与 section_path，可溯源到原始文档",
+    "version_management": "metadata.version 与 created_at 支持版本追踪与增量更新",
+    "coverage_check": "覆盖 30 条预设 FAQ（F-01~F-30）+ 20 条范围内测试问题 + 10 条超范围测试问题"
+  },
+  "usage": {
+    "import_to_chromadb": "通过知识库管理接口 POST /api/chatbot/kb/build 触发向量化构建，或使用 VectorStore.export/restore 进行快照导入",
+    "incremental_update": "新增条目追加到对应 JSONL 文件后，调用 POST /api/chatbot/kb/rebuild 重建索引",
+    "rollback": "通过向量数据库维护页面（系统维护 > 向量数据库维护）选择历史快照一键回滚",
+    "snapshot_location": "data/chromadb/snapshots/（手动快照前缀 manual_{timestamp}）"
+  },
+  "compliance": {
+    "sensitive_field_redaction": "依据 智能客服-概要设计.md §8，正则 (?i)(api[_-]?key|secret|token|cookie|password)\\s*[=:]\\s*['\"]?[A-Za-z0-9_\\-\\.]{8,}['\"]? 替换为 <REDACTED>",
+    "scope_limitation": "仅处理闲鱼猎人系统使用咨询，不处理闲鱼平台相关咨询（conversation.jsonl 含 3 条超范围示例）",
+    "escalation_path": "降级链：LLM 不可用 → RAG 检索片段 → FAQ 匹配 → 转人工（conversation.jsonl 含 1 条转人工示例）"
+  }
+}

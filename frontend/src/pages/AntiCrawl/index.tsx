@@ -42,7 +42,6 @@ import type {
   FreqStats,
   CookieLayersResult,
   HealthReport,
-  OperationResult,
 } from '../../api'
 
 const { Text, Paragraph } = Typography
@@ -62,13 +61,6 @@ const ACTION_LABELS: Record<string, string> = {
   renew_token: '续期 Token',
   relogin: '重新登录',
   pause: '暂停 + 通知',
-}
-
-// WAF 状态颜色映射
-const WAF_COLORS: Record<string, string> = {
-  clear: 'green',
-  warning: 'orange',
-  blocked: 'red',
 }
 
 const WAF_LABELS: Record<string, string> = {
@@ -124,10 +116,24 @@ export default function AntiCrawl() {
   useEffect(() => {
     loadAll()
     // 会话活跃时每 10 秒刷新状态
-    const interval = setInterval(() => {
+    const sessionInterval = setInterval(() => {
       loadSession()
     }, 10000)
-    return () => clearInterval(interval)
+    // 频率伪装统计每 10 秒刷新：业务模块持续调用 apply_freq_delay/record_freq_request，
+    // 前端需定时拉取才能反映最新请求节奏
+    const freqInterval = setInterval(() => {
+      loadFreqStats()
+    }, 10000)
+    // Cookie 层状态轮询：后端会基于 JSON 实际内容、浏览器内存、功能信号同步层状态，
+    // 前端不轮询会停留在某个时刻的快照（如刚重启时的全失效状态），无法反映后续恢复
+    const layersInterval = setInterval(() => {
+      loadCookieLayers()
+    }, 30000)
+    return () => {
+      clearInterval(sessionInterval)
+      clearInterval(freqInterval)
+      clearInterval(layersInterval)
+    }
   }, [loadAll])
 
   const loadStrategy = async () => {
@@ -558,9 +564,12 @@ export default function AntiCrawl() {
               <>
                 <Progress
                   percent={health.score}
-                  status={
-                    health.score >= 80 ? 'success' : health.score >= 60 ? 'normal' : 'exception'
-                  }
+                  status={(() => {
+                    // 健康分等级：≥80 成功，≥60 正常，否则异常
+                    if (health.score >= 80) return 'success'
+                    if (health.score >= 60) return 'normal'
+                    return 'exception'
+                  })()}
                   format={(percent) => `${percent}分`}
                   style={{ marginBottom: 16 }}
                 />
@@ -652,7 +661,13 @@ export default function AntiCrawl() {
                       />
                       <div style={{ marginTop: 8 }}>
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          {state.valid ? `${state.cookie_count} 个 Cookie` : '未初始化'}
+                          {/* valid 但 cookie_count=0 是 force_restore 强制恢复的，
+                              显示"已恢复"避免误以为有有效 cookie */}
+                          {!state.valid
+                            ? '未初始化'
+                            : state.cookie_count > 0
+                            ? `${state.cookie_count} 个 Cookie`
+                            : '已恢复（无 Cookie）'}
                         </Text>
                       </div>
                       {state.valid && (
@@ -660,10 +675,11 @@ export default function AntiCrawl() {
                           size="small"
                           danger
                           type="link"
+                          icon={<StopOutlined />}
                           onClick={() => handleInvalidateLayer(layer)}
                           style={{ padding: '4px 0', fontSize: 12 }}
                         >
-                          失效
+                          主动失效
                         </Button>
                       )}
                     </Card>

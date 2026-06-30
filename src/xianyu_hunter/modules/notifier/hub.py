@@ -49,6 +49,7 @@ class NotifierHub:
     2. fan-out 推送：把同一事件并发送到所有渠道
     3. 可选 attach 到 EventBus，自动消费事件
     4. P3-F-10：quiet hours 静默（critical 仍可达）
+    5. 写入推送结果到 events 表（stage='notify'），供仪表盘 KPI 统计
     """
 
     def __init__(
@@ -56,20 +57,33 @@ class NotifierHub:
         channels: list[str] | None = None,
         registry: NotifierRegistry | None = None,
         quiet_hours: "QuietHoursConfig | None" = None,
+        repo=None,
     ):
         # channels 为 None 时不创建任何 Notifier（hub 仅作容器使用）
         self._registry = registry or NotifierRegistry.default()
         self._notifiers: list = []
         for name in channels or []:
             try:
-                self._notifiers.append(self._registry.create(name))
+                notifier = self._registry.create(name)
             except KeyError as e:
                 logger.error(f"NotifierHub 初始化失败: {e}")
+                continue
+            # 启动期过滤未配置凭证的渠道：避免每次事件都触发"未配置"ERROR
+            # 仅在启动时记录一次 WARNING，运行时不再调用其 send
+            if not getattr(notifier, "is_configured", True):
+                logger.warning(
+                    f"[{name}] 渠道凭证未配置，已跳过（请在 keyring 中配置后重启生效）"
+                )
+                continue
+            self._notifiers.append(notifier)
         # P3-F-10：免打扰配置 + 状态
         self._quiet_hours = quiet_hours
         self._suppressed_lock = threading.Lock()
         self._suppressed_count: int = 0  # 进程内累计被静默的事件数
         self._suppressed_last_at = None    # 最近一次静默的时间
+        # 可选：写入推送结果到 events 表，供 business_kpi 推送失败率 KPI 统计
+        # 不传 repo 时（如单元测试）跳过落库，保持向后兼容
+        self._repo = repo
 
     @property
     def notifiers(self) -> list:
@@ -150,6 +164,32 @@ class NotifierHub:
         logger.info(
             f"推送 {event.type.value} → {ok}/{len(results)} 渠道成功"
         )
+        # 写入推送结果到 events 表，供 business_kpi 推送失败率 KPI 统计
+        # 为什么落库：原 KPI 查询 stage like '%notify%' 永远命中 0 行，因为推送
+        # 流程从未写入 EventRow。此处补齐数据采集，让仪表盘能反映真实推送成功率。
+        # 静默（quiet hours）和未配置渠道的场景不写入，避免污染统计。
+        # 用 getattr 兼容测试中 __new__ 跳过 __init__ 的场景
+        repo = getattr(self, "_repo", None)
+        if repo is not None:
+            try:
+                failed_channels = [r.channel for r in results if not r.success]
+                is_any_failed = bool(failed_channels)
+                level = "err" if is_any_failed else "info"
+                message = f"{event.type.value} → {ok}/{len(results)} 渠道成功"
+                if is_any_failed:
+                    message += f"，失败渠道: {','.join(failed_channels)}"
+                repo.save_event({
+                    "type": event.type.value,
+                    "task_id": event.task_id,
+                    "item_id": event.item_id,
+                    "stage": "notify",
+                    "level": level,
+                    "message": message,
+                    "payload": None,
+                })
+            except Exception as log_err:
+                # 落库失败不影响推送主流程，仅记录告警
+                logger.warning(f"[NotifierHub] 写入 notify 事件失败: {log_err}")
         return list(results)
 
     def attach(self, bus: "EventBus", events: set[EventType] | None = None) -> None:

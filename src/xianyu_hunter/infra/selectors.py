@@ -43,8 +43,11 @@ class SelectorRepo:
     DETAIL_TITLE_MAIN = "h1[class*='title'], [class*='detail-title']"
     DETAIL_TITLE_ALT = "h1"
 
-    DETAIL_PRICE_MAIN = "[class*='price--']"
-    DETAIL_PRICE_ALT = "[class*='Price']"
+    # 详情页主价格：排除原价/划线价/运费等干扰元素
+    # 为什么需要排除：详情页通常有原价（划线）、当前价、促销价、运费等多个含 price 的元素，
+    # 通用 [class*='price--'] 会取到第一个匹配（可能是原价），导致采集金额与官网不一致
+    DETAIL_PRICE_MAIN = "[class*='price--']:not([class*='original']):not([class*='Original']):not([class*='postage']):not([class*='shipping']):not([class*='line-through'])"
+    DETAIL_PRICE_ALT = "[class*='Price']:not([class*='original']):not([class*='Original']):not([class*='postage']):not([class*='shipping']):not([class*='line-through'])"
 
     # 描述：必须排除运费/服务条款区域（如 class 含 'postage' / 'shippingFee' / 'service'）
     # 闲鱼详情页会把"运费说明"、"七天无理由"等内容放在与描述同级的块里，

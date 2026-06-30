@@ -1,12 +1,13 @@
 """后台错误日志 API
 
-提供错误日志的 CRUD + AI 上下文导出 + 批量清理功能。
+提供错误日志的 CRUD + AI 上下文导出 + 批量清理 + 批量状态更新功能。
 
 设计要点：
 - 列表支持按 status/error_type/request_path/时间范围 过滤
 - AI 上下文导出支持 JSON 和 Markdown 两种格式
 - 状态管理：new → resolved / ignored
 - 批量清理：按天数清理已解决/已忽略的记录
+- 批量操作：一次性对多条记录执行 删除/状态变更
 """
 from __future__ import annotations
 
@@ -15,12 +16,22 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import parse_iso_datetime
 
 router = APIRouter(prefix="/api/error-logs", tags=["error-logs"])
+
+
+class BatchActionRequest(BaseModel):
+    """批量操作请求体
+
+    将删除与状态变更统一聚合为单一 action，避免前端为每种操作分别建路由
+    """
+    ids: list[int] = Field(..., min_length=1, max_length=500)
+    action: str = Field(..., pattern="^(delete|resolve|ignore|new)$")
 
 
 def _parse_json_fields(item: dict) -> dict:
@@ -77,6 +88,26 @@ def get_error_log(
     if not item:
         raise HTTPException(status_code=404, detail="错误日志不存在")
     return _parse_json_fields(item)
+
+
+@router.post("/batch")
+def batch_action(
+    payload: BatchActionRequest,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """批量操作错误日志
+
+    支持一次性对多条记录执行删除或状态变更，减少前端循环请求次数
+    action: delete | resolve | ignore | new
+    """
+    ids = payload.ids
+    action = payload.action
+    if action == "delete":
+        affected = container.repo.batch_delete_error_logs(ids)
+    else:
+        # action 与 status 字段值一一对应（resolve/ignore/new）
+        affected = container.repo.batch_update_error_log_status(ids, action)
+    return {"affected": affected, "status": "ok"}
 
 
 @router.get("/{error_log_id}/ai-context")

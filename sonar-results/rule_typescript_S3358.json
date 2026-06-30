@@ -1,0 +1,57 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S3358",
+                 "repo":  "typescript",
+                 "name":  "Ternary operators should not be nested",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MAJOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "confusing"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eNested ternaries are hard to read and can make the order of operations complex to understand.\u003c/p\u003e\n\u003cpre\u003e\nfunction getReadableStatus(job) {\n  return job.isRunning() ? \"Running\" : job.hasErrors() ? \"Failed\" : \"Succeeded \";  // Noncompliant\n}\n\u003c/pre\u003e\n\u003cp\u003eInstead, use another line to express the nested operation in a separate statement.\u003c/p\u003e\n\u003cpre\u003e\nfunction getReadableStatus(job) {\n  if (job.isRunning()) {\n    return \"Running\";\n  }\n  return job.hasErrors() ? \"Failed\" : \"Succeeded\";\n}\n\u003c/pre\u003e\n\u003ch3\u003eExceptions\u003c/h3\u003e\n\u003cp\u003eThis rule does not apply in JSX expressions to support conditional rendering and conditional attributes as long as the nesting happens in separate\nJSX expression containers, i.e. JSX elements embedding JavaScript code, as shown below:\u003c/p\u003e\n\u003cpre\u003e\nreturn (\n\u0026lt;\u0026gt;\n  {isLoading ? (\n    \u0026lt;Loader active /\u0026gt;\n  ) : (\n    \u0026lt;Panel label={isEditing ? \u0027Open\u0027 : \u0027Not open\u0027}\u0026gt;\n      \u0026lt;a\u0026gt;{isEditing ? \u0027Close now\u0027 : \u0027Start now\u0027}\u0026lt;/a\u0026gt;\n      \u0026lt;Checkbox onClick={!saving ? setSaving(saving =\u0026gt; !saving) : null} /\u0026gt;\n    \u0026lt;/Panel\u0026gt;\n  )}\n\u0026lt;/\u0026gt;\n);\n\u003c/pre\u003e\n\u003cp\u003eIf you have nested ternaries in the same JSX expression container, refactor your logic into a separate function like that:\u003c/p\u003e\n\u003cpre\u003e\nfunction myComponent(condition) {\n  if (condition \u0026lt; 0) {\n    return \u0027\u0026lt;DownSign\u0026gt;it is negative\u0026lt;/DownSign\u0026gt;\u0027;\n  } else if (condition \u0026gt; 0) {\n    return \u0027\u0026lt;UpSign\u0026gt;it is positive\u0026lt;/UpSign\u0026gt;\u0027;\n  } else {\n    return \u0027\u0026lt;BarSign\u0026gt;it is zero\u0026lt;/BarSign\u0026gt;\u0027;\n  }\n}\n\nreturn (\n  {myComponent(foo)}\n);\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eArticles \u0026amp; blog posts\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e Sonar - \u003ca href=\"https://www.sonarsource.com/blog/stop-nesting-ternaries-javascript/\"\u003eStop nesting ternaries in JavaScript\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "MEDIUM"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

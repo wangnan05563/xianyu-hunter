@@ -2,7 +2,8 @@
 
 支持事件类型：
 - EVAL_PASSED: 评估通过，提示用户拍下
-- ORDER_PLACED: 已拍下未支付，提示用户尽快支付
+- BUY_SUCCEEDED: 已拍下未支付，提示用户尽快支付
+- TASK_ERROR: 任务异常（如自动采集暂停），告警用户排查
 
 每种事件返回 (title, body)：
 - title: 简短一行（Server酱/PushPlus 用于消息标题）
@@ -26,6 +27,8 @@ def render(event: Event) -> tuple[str, str]:
         return _eval_passed(event)
     if event.type == EventType.BUY_SUCCEEDED:
         return _order_placed(event)
+    if event.type == EventType.TASK_ERROR:
+        return _task_error(event)
     # 未支持的事件：退化为通用提示
     return _generic(event)
 
@@ -76,6 +79,24 @@ def _order_placed(event: Event) -> tuple[str, str]:
         f"- 金额：¥{price}",
         f"- 过期时间：{expire_at}" if expire_at else "",
         f"\n请打开闲鱼 App 在 **5 分钟内** 完成支付，否则订单自动释放。",
+    ]
+    return head, "\n".join(line for line in body_lines if line)
+
+
+def _task_error(event: Event) -> tuple[str, str]:
+    """任务异常模板（如自动采集暂停告警）"""
+    p = event.payload
+    title = p.get("title", "任务异常")
+    message = p.get("message", "")
+    reason = p.get("reason", "")
+
+    head = f"[告警] {title}"
+    body_lines = [
+        f"### ⚠️ 任务异常",
+        f"- 任务：`{event.task_id}`" if event.task_id else "",
+        f"- 详情：{message}" if message else "",
+        f"- 原因：`{reason}`" if reason else "",
+        f"\n请尽快检查任务状态和 Cookie 有效性。",
     ]
     return head, "\n".join(line for line in body_lines if line)
 

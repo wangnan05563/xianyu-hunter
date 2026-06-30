@@ -3,6 +3,9 @@ import { Card, Table, Tag, Select, Button, Input, Space, Spin, Tooltip, message,
 import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined, ThunderboltOutlined, ClockCircleOutlined, LoadingOutlined, CheckCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { AxiosError } from 'axios'
+import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
+import relativeTime from 'dayjs/plugin/relativeTime'
 import { taskApi, taskLinkApi, type Task, type TaskLink, type FieldMap } from '../../api'
 import { itemApi } from '../../api/item'
 import LazyImage from '../../components/LazyImage'
@@ -10,6 +13,12 @@ import { useAutoRefresh, DEFAULT_INTERVAL, MIN_INTERVAL, MAX_INTERVAL } from '..
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
+import { ExportButton } from '../../components/ExportButton'
+
+// 相对时间插件：用于 updated_at 列渲染"3分钟前"等格式
+// dayjs 默认不包含 fromNow()，需 extend 插件并切换中文 locale
+dayjs.extend(relativeTime)
+dayjs.locale('zh-cn')
 
 // 点击商品链接的采集逻辑已移入组件内 handleTitleClick，
 // 以便访问 message 和 loadItems 实现采集后刷新列表
@@ -18,9 +27,10 @@ type ViewMode = 'table' | 'card'
 
 // 默认字段顺序：当后端未返回 field_map 时（如从 DB 加载的旧数据）使用此顺序
 // 与后端 FIELD_METADATA 保持一致，确保无 field_map 时也能正常渲染
+// updated_at 为 DB 顶层字段（非 display 内），追加在末尾作为商品最近更新时间
 const DEFAULT_FIELD_ORDER: string[] = [
   'thumb_url', 'title', 'brand', 'price', 'seller_nick', 'seller_credit',
-  'region', 'want_cnt', 'view_cnt', 'publish_time', 'is_sold',
+  'region', 'want_cnt', 'view_cnt', 'publish_time', 'is_sold', 'updated_at',
 ]
 
 // 默认字段元数据：与后端 FIELD_METADATA 保持一致
@@ -37,6 +47,7 @@ const DEFAULT_FIELD_META: FieldMap = {
   view_cnt: { label: '浏览', type: 'number', width: 70 },
   publish_time: { label: '发布时间', type: 'datetime', width: 160 },
   is_sold: { label: '状态', type: 'status', width: 80 },
+  updated_at: { label: '更新时间', type: 'datetime', width: 120 },
 }
 
 // 从 axios 错误中提取后端返回的具体错误信息
@@ -83,13 +94,14 @@ function applyChangeHighlight(
   }
 }
 
-// 实时搜索结果客户端过滤：后端 live 端点不接受 keyword/region/brand 参数，
+// 实时搜索结果客户端过滤：后端 live 端点不接受 keyword/region/brand/sold_filter 参数，
 // 前端在拿到全量结果后按当前筛选条件过滤，确保两种模式下参数一致生效
 function applyClientFilters(
   rows: TaskLink[],
   search: string,
   region: string | undefined,
   brand: string | undefined,
+  sold: 'all' | 'onsale' | 'sold',
 ): TaskLink[] {
   let filtered = rows
   if (search) {
@@ -101,6 +113,13 @@ function applyClientFilters(
   }
   if (brand) {
     filtered = filtered.filter(r => r.display?.brand === brand)
+  }
+  // 状态过滤：onsale 时未售（含 undefined 兜底为在售）显示，sold 时仅已售显示
+  // 与卡片渲染 {d?.is_sold && <已售>} 的 truthy 判定保持一致
+  if (sold === 'onsale') {
+    filtered = filtered.filter(r => !r.display?.is_sold)
+  } else if (sold === 'sold') {
+    filtered = filtered.filter(r => !!r.display?.is_sold)
   }
   return filtered
 }
@@ -127,6 +146,10 @@ export default function ItemList() {
   const [regionFilter, setRegionFilter] = usePersistentState<string | undefined>('xh.items.regionFilter', undefined)
   // 品牌筛选：与地区筛选对齐，持久化以保留用户偏好
   const [brandFilter, setBrandFilter] = usePersistentState<string | undefined>('xh.items.brandFilter', undefined)
+  // 状态筛选：默认仅看在售商品，避免已售商品干扰捡漏决策；持久化保留用户偏好
+  const [soldFilter, setSoldFilter] = usePersistentState<'all' | 'onsale' | 'sold'>('xh.items.soldFilter', 'onsale', {
+    validator: (v): v is 'all' | 'onsale' | 'sold' => v === 'all' || v === 'onsale' || v === 'sold',
+  })
   // 登录态/搜索令牌不可用标识：后端检测到身份 Cookie 缺失或 token 过期
   const [sessionExpired, setSessionExpired] = useState(false)
   // 字段元数据：后端返回的 field_map，描述每个字段的显示方式
@@ -202,6 +225,8 @@ export default function ItemList() {
       keyword: search || undefined,
       region: regionFilter || undefined,
       brand: brandFilter || undefined,
+      // 'all' 时不传给后端，等价于不过滤，减少参数传输
+      sold_filter: soldFilter === 'all' ? undefined : soldFilter,
     })
       .then((res) => {
         const newItems = res.items || []
@@ -215,7 +240,7 @@ export default function ItemList() {
         setTotal(0)
       })
       .finally(() => setLoading(false))
-  }, [selectedTask, page, pageSize, search, regionFilter, brandFilter])
+  }, [selectedTask, page, pageSize, search, regionFilter, brandFilter, soldFilter])
 
   // 触发式实时刷新：SSE 事件驱动为主，定时兜底轮询为辅
   // DB 模式和实时模式都支持轮询，通过 liveModeRef 选择不同的数据源
@@ -228,31 +253,8 @@ export default function ItemList() {
   regionFilterRef.current = regionFilter
   const brandFilterRef = useRef(brandFilter)
   brandFilterRef.current = brandFilter
-
-  // 点击标题超链接：异步触发后端采集（更新 brand/price/is_sold 等字段），
-  // 同时打开闲鱼原帖。采集完成后刷新列表展示最新数据。
-  // 参照评估明细页 onTitleClick 的交互模式：loading 提示 + 成功/失败反馈
-  const handleTitleClick = (e: MouseEvent, itemId: string | undefined, url: string | undefined) => {
-    e.preventDefault()
-    if (!itemId) {
-      if (url) window.open(url, '_blank', 'noopener,noreferrer')
-      return
-    }
-    const shortId = itemId.slice(0, 8)
-    const hide = message.loading(`正在采集 ${shortId}...`, 0)
-    itemApi.refresh(itemId).then(() => {
-      hide()
-      message.success(`已更新商品信息：${shortId}...`)
-      loadItems()  // 刷新列表以展示更新后的字段
-    }).catch((err: unknown) => {
-      hide()
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      message.error(detail || `采集失败：${shortId}...，请稍后重试`)
-    })
-    if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer')
-    }
-  }
+  const soldFilterRef = useRef(soldFilter)
+  soldFilterRef.current = soldFilter
 
   // 静默实时搜索：轮询回调专用，不显示进度提示和错误消息
   // 错误抛出由 useAutoRefresh 的重试机制处理（最多3次，间隔递增）
@@ -269,11 +271,76 @@ export default function ItemList() {
       searchRef.current,
       regionFilterRef.current,
       brandFilterRef.current,
+      soldFilterRef.current,
     )
     setItems(filteredRows)
     setTotal(filteredRows.length)
     applyChangeHighlight(filteredRows, prevItemsRef, setHighlightRows, setShowUpdateToast)
   }, [selectedTask])
+
+  // 点击标题超链接：异步触发后端采集（更新 brand/price/is_sold 等字段），
+  // 同时打开闲鱼原帖。采集完成后刷新列表展示最新数据。
+  // 参照评估明细页 onTitleClick 的交互模式：loading 提示 + 成功/失败反馈
+  const handleTitleClick = (e: MouseEvent, itemId: string | undefined, url: string | undefined) => {
+    e.preventDefault()
+    if (!itemId) {
+      if (url) globalThis.open(url, '_blank', 'noopener,noreferrer')
+      return
+    }
+    const shortId = itemId.slice(0, 8)
+    const hide = message.loading(`正在采集 ${shortId}...`, 0)
+    // 传入 task_id：items 表无记录时后端用其回填 task_links.display
+    // 不传则 task_links.display 不会被同步，采集的字段更新无法反映到列表
+    itemApi.refresh(itemId, selectedTask || undefined).then((res) => {
+      hide()
+      message.success(`已更新商品信息：${shortId}...`)
+      if (liveModeRef.current) {
+        // 实时模式：用采集结果直接更新 liveItemsRef，不重新搜索
+        // 为什么不用 silentLiveRefresh：重新搜索会返回搜索 API 数据，
+        // 覆盖详情页采集到的最新字段（价格/标题/品牌等），导致只有图片更新
+        const idx = liveItemsRef.current.findIndex((r) => r.link_key === itemId)
+        if (idx >= 0) {
+          const item = liveItemsRef.current[idx]
+          const d = { ...(item.display || {}) }
+          // 用采集结果覆盖非空字段（与后端 set_if_present 策略一致）
+          if (res.title) d.title = res.title
+          if (res.price > 0) d.price = res.price
+          if (res.brand) d.brand = res.brand
+          if (res.seller_id) d.seller_id = res.seller_id
+          if (res.region) d.region = res.region
+          if (res.thumb_url) d.thumb_url = res.thumb_url
+          if (res.image_urls && res.image_urls.length > 0) d.image_urls = res.image_urls
+          if (res.want_cnt > 0) d.want_cnt = res.want_cnt
+          if (res.view_cnt > 0) d.view_cnt = res.view_cnt
+          if (res.seller_nick) d.seller_nick = res.seller_nick
+          if (res.seller_credit != null) d.seller_credit = String(res.seller_credit)
+          if (res.publish_time) d.publish_time = res.publish_time
+          d.is_sold = res.is_sold
+          liveItemsRef.current[idx] = { ...item, display: d }
+          // 重新应用客户端筛选条件
+          const filteredRows = applyClientFilters(
+            liveItemsRef.current,
+            searchRef.current,
+            regionFilterRef.current,
+            brandFilterRef.current,
+            soldFilterRef.current,
+          )
+          setItems(filteredRows)
+          setTotal(filteredRows.length)
+        }
+      } else {
+        // DB 模式：从数据库加载（task_links.display 已被后端同步更新）
+        loadItems()
+      }
+    }).catch((err: unknown) => {
+      hide()
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      message.error(detail || `采集失败：${shortId}...，请稍后重试`)
+    })
+    if (url) {
+      globalThis.open(url, '_blank', 'noopener,noreferrer')
+    }
+  }
 
   const { lastRefreshAt, refreshing, nextRefreshAt, triggerRefresh } = useAutoRefresh({
     enabled: autoRefreshEnabled,
@@ -281,7 +348,7 @@ export default function ItemList() {
     intervalSec: liveMode ? liveRefreshInterval : refreshInterval,
     // 移除 liveMode 暂停：实时模式下也轮询，仅在没有任务或正在加载时暂停
     paused: !selectedTask || loading || liveLoading,
-    deps: [selectedTask, page, pageSize, search, regionFilter, brandFilter, liveMode],
+    deps: [selectedTask, page, pageSize, search, regionFilter, brandFilter, soldFilter, liveMode],
     refresh: async () => {
       if (!selectedTask) return
       if (liveModeRef.current) {
@@ -296,6 +363,7 @@ export default function ItemList() {
           keyword: search || undefined,
           region: regionFilter || undefined,
           brand: brandFilter || undefined,
+          sold_filter: soldFilter === 'all' ? undefined : soldFilter,
         }).then((res) => {
           const newItems = res.items || []
           setItems(newItems)
@@ -357,7 +425,7 @@ export default function ItemList() {
       es.addEventListener('app_event', (e: MessageEvent) => {
         try {
           // 浏览器自动维护 lastEventId（对应 SSE 帧的 id 字段）
-          lastEventId = parseInt(e.lastEventId) || lastEventId
+          lastEventId = Number.parseInt(e.lastEventId) || lastEventId
           const ev = JSON.parse(e.data)
           // 只处理当前任务的搜索完成事件
           if (ev.type === 'task.search_done' && ev.task_id === selectedTaskRef.current) {
@@ -451,10 +519,10 @@ export default function ItemList() {
   // liveItemsRef 保存了实时搜索的原始全量结果，每次筛选条件变化时从中重新过滤
   useEffect(() => {
     if (!liveMode) return
-    const filtered = applyClientFilters(liveItemsRef.current, search, regionFilter, brandFilter)
+    const filtered = applyClientFilters(liveItemsRef.current, search, regionFilter, brandFilter, soldFilter)
     setItems(filtered)
     setTotal(filtered.length)
-  }, [liveMode, search, regionFilter, brandFilter])
+  }, [liveMode, search, regionFilter, brandFilter, soldFilter])
 
   // 实时搜索
   const loadLive = () => {
@@ -485,7 +553,7 @@ export default function ItemList() {
         // 保存原始结果供实时模式下 search/region/brand 变化时重新过滤
         liveItemsRef.current = itemRows
         // 应用前端筛选条件（实时搜索结果在客户端过滤，确保与 DB 模式参数一致）
-        const filteredRows = applyClientFilters(itemRows, search, regionFilter, brandFilter)
+        const filteredRows = applyClientFilters(itemRows, search, regionFilter, brandFilter, soldFilter)
         setItems(filteredRows)
         setTotal(filteredRows.length)
         const count = filteredRows.length
@@ -529,11 +597,11 @@ export default function ItemList() {
   const regionOptions = [...new Set(
     (liveMode ? liveItemsRef.current : items)
       .map((i) => i.display?.region).filter(Boolean)
-  )].sort()
+  )].sort((a, b) => String(a).localeCompare(String(b)))
   const brandOptions = [...new Set(
     (liveMode ? liveItemsRef.current : items)
       .map((i) => i.display?.brand).filter(Boolean)
-  )].sort()
+  )].sort((a, b) => String(a).localeCompare(String(b)))
 
   // ===== 列配置（拖拽排序 + 显示/隐藏，持久化到 localStorage） =====
   // 复用评估明细页的 useColumnConfig + ColumnSettingsModal，保持交互一致性
@@ -627,14 +695,31 @@ export default function ItemList() {
           break
         case 'datetime':
           col.defaultSortOrder = 'descend' as const
-          col.sorter = (a: TaskLink, b: TaskLink) => {
-            const ta = a.display?.publish_time ? new Date(a.display.publish_time).getTime() : 0
-            const tb = b.display?.publish_time ? new Date(b.display.publish_time).getTime() : 0
-            return tb - ta  // 降序：最新在前
+          // updated_at 在 record 顶层（DB 字段，记录行最近更新时间），
+          // publish_time 在 display 内（采集字段，商品发布时间）。
+          // 通过 field 区分数据来源，避免 datetime 列统一硬编码 publish_time
+          if (field === 'updated_at') {
+            col.sorter = (a: TaskLink, b: TaskLink) => {
+              const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0
+              const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0
+              return tb - ta  // 降序：最新在前
+            }
+            // 相对时间便于快速判断数据新鲜度，Tooltip 保留绝对时间便于精确核对
+            col.render = (_d: TaskLink['display'], record: TaskLink) => {
+              if (!record.updated_at) return '—'
+              const t = dayjs(record.updated_at)
+              return <Tooltip title={t.format('YYYY-MM-DD HH:mm:ss')}>{t.fromNow()}</Tooltip>
+            }
+          } else {
+            col.sorter = (a: TaskLink, b: TaskLink) => {
+              const ta = a.display?.publish_time ? new Date(a.display.publish_time).getTime() : 0
+              const tb = b.display?.publish_time ? new Date(b.display.publish_time).getTime() : 0
+              return tb - ta  // 降序：最新在前
+            }
+            // 发布时间列只显示时间，不再回退渲染 seller_credit，
+            // 避免"卖家"列与"发布时间"列错位显示同一字段
+            col.render = (d: TaskLink['display']) => d?.publish_time ? new Date(d.publish_time).toLocaleString('zh-CN') : '—'
           }
-          // 发布时间列只显示时间，不再回退渲染 seller_credit，
-          // 避免"卖家"列与"发布时间"列错位显示同一字段
-          col.render = (d: TaskLink['display']) => d?.publish_time ? new Date(d.publish_time).toLocaleString('zh-CN') : '—'
           break
         case 'status':
           col.render = (d: TaskLink['display']) => d?.is_sold ? <Tag color="red">已售</Tag> : <Tag color="green">在售</Tag>
@@ -734,6 +819,18 @@ export default function ItemList() {
             onChange={(v) => { setBrandFilter(v); setPage(1) }}
             options={brandOptions.map((b) => ({ label: b, value: b }))}
           />
+          {/* 状态筛选：固定三档选项，与地区/品牌筛选并列排放 */}
+          <Select
+            placeholder="状态筛选"
+            style={{ width: 100 }}
+            value={soldFilter}
+            onChange={(v) => { setSoldFilter(v); setPage(1) }}
+            options={[
+              { label: '全部', value: 'all' },
+              { label: '在售', value: 'onsale' },
+              { label: '已售', value: 'sold' },
+            ]}
+          />
           {/* 实时更新开关 + 轮询间隔配置
               DB 模式和实时模式各自有独立的间隔设置 */}
           <Tooltip title={`自动轮询（设置已保存：${autoRefreshEnabled ? '开' : '关'}）。${liveMode ? `实时模式 ${liveRefreshInterval}秒` : `DB模式 ${refreshInterval}秒`}轮询一次`}>
@@ -777,6 +874,8 @@ export default function ItemList() {
           >
             列配置
           </Button>
+          {/* O-05-26 数据导出：按当前选中任务过滤导出商品 CSV */}
+          <ExportButton dataset="items" params={{ task_id: selectedTask || undefined }} />
           <div style={{ marginLeft: 'auto' }}>
             <Segmented
               value={viewMode}
@@ -798,33 +897,42 @@ export default function ItemList() {
             {/* 顶部进度条：刷新中时显示 indeterminate 动画条 */}
             {refreshing && <div className="xh-refresh-progress-bar" />}
             <div className="xh-refresh-indicator__content">
-              {refreshing ? (
-                <>
-                  <LoadingOutlined spin style={{ color: '#1677ff' }} />
-                  <span className="xh-refresh-indicator__text" style={{ color: '#1677ff' }}>
-                    {liveMode ? '正在实时搜索...' : '正在获取最新数据...'}
-                  </span>
-                </>
-              ) : lastRefreshAt ? (
-                <>
-                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
-                  <span className="xh-refresh-indicator__text">
-                    {liveMode ? '实时' : 'DB'}已更新于 {new Date(lastRefreshAt).toLocaleTimeString('zh-CN')}
-                  </span>
-                  {countdownSec !== null && countdownSec > 0 && (
-                    <span className="xh-refresh-indicator__countdown">
-                      · {countdownSec}s 后{liveMode ? '实时搜索' : '兜底刷新'}
+              {(() => {
+                // 刷新状态三态：刷新中 / 已就绪 / 等待中
+                if (refreshing) {
+                  return (
+                    <>
+                      <LoadingOutlined spin style={{ color: '#1677ff' }} />
+                      <span className="xh-refresh-indicator__text" style={{ color: '#1677ff' }}>
+                        {liveMode ? '正在实时搜索...' : '正在获取最新数据...'}
+                      </span>
+                    </>
+                  )
+                }
+                if (lastRefreshAt) {
+                  return (
+                    <>
+                      <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                      <span className="xh-refresh-indicator__text">
+                        {liveMode ? '实时' : 'DB'}已更新于 {new Date(lastRefreshAt).toLocaleTimeString('zh-CN')}
+                      </span>
+                      {countdownSec !== null && countdownSec > 0 && (
+                        <span className="xh-refresh-indicator__countdown">
+                          · {countdownSec}s 后{liveMode ? '实时搜索' : '兜底刷新'}
+                        </span>
+                      )}
+                    </>
+                  )
+                }
+                return (
+                  <>
+                    <ClockCircleOutlined style={{ color: '#faad14' }} />
+                    <span className="xh-refresh-indicator__text">
+                      等待{liveMode ? '实时搜索' : '数据更新'}...
                     </span>
-                  )}
-                </>
-              ) : (
-                <>
-                  <ClockCircleOutlined style={{ color: '#faad14' }} />
-                  <span className="xh-refresh-indicator__text">
-                    等待{liveMode ? '实时搜索' : '数据更新'}...
-                  </span>
-                </>
-              )}
+                  </>
+                )
+              })()}
             </div>
           </div>
         )}
@@ -840,14 +948,18 @@ export default function ItemList() {
           </div>
         )}
         <Spin spinning={loading || liveLoading}>
-          {items.length === 0 ? (
-            <Empty description={selectedTask ? '暂无商品数据，可尝试实时搜索' : '请先选择任务'} />
-          ) : viewMode === 'table' ? (
-            <>
-              <Table
-                columns={columns}
-                dataSource={items}
-                rowKey="link_id"
+          {(() => {
+            // 列表展示：空数据 / 表格 / 卡片
+            if (items.length === 0) {
+              return <Empty description={selectedTask ? '暂无商品数据，可尝试实时搜索' : '请先选择任务'} />
+            }
+            if (viewMode === 'table') {
+              return (
+                <>
+                  <Table
+                    columns={columns}
+                    dataSource={items}
+                    rowKey="link_id"
                 pagination={false}
                 size="middle"
                 scroll={{ x: 1000 }}
@@ -866,9 +978,11 @@ export default function ItemList() {
                   />
                 </div>
               )}
-            </>
-          ) : (
-            <>
+                </>
+              )
+            }
+            return (
+              <>
               {/* 卡片网格视图：大图 + 价格 + 标题 + 元信息 */}
               <Row gutter={[16, 16]}>
                 {items.map((item) => {
@@ -897,7 +1011,7 @@ export default function ItemList() {
                       <Card
                         className="item-card"
                         size="small"
-                        bodyStyle={{ padding: 12 }}
+                        styles={{ body: { padding: 12 } }}
                         style={highlightRows.has(item.link_key) ? {
                           boxShadow: '0 0 0 2px #52c41a',
                           borderRadius: 8,
@@ -956,8 +1070,9 @@ export default function ItemList() {
                   />
                 </div>
               )}
-            </>
-          )}
+              </>
+            )
+          })()}
         </Spin>
       </Card>
 

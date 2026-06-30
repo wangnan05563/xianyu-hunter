@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    PWA 应用图标：与 MainLayout 品牌区保持一致的"闲"字标识。
+    圆角矩形背景使用闲鱼品牌橙 (#FF6200)，白色"闲"字居中，
+    在 Android 主屏 / iOS 添加到桌面 / 桌面 PWA 中均可清晰识别。
+    作为 maskable 图标使用时，关键内容应位于安全区 (中间 80%) 内。
+  -->
+  <rect width="512" height="512" rx="96" fill="#FF6200"/>
+  <text x="256" y="256"
+        font-family="-apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif"
+        font-size="320" font-weight="700"
+        text-anchor="middle" dominant-baseline="central"
+        fill="#FFFFFF">闲</text>
+</svg>

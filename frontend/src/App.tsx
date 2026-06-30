@@ -1,9 +1,10 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { Suspense, type ReactNode } from 'react'
-import { Spin } from 'antd'
+import { App as AntdApp, Spin } from 'antd'
 import MainLayout from './components/layout/MainLayout'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { lazyRetry, LazyErrorBoundary } from './utils/lazyRetry'
+import ReloadPrompt from './components/ReloadPrompt'
 
 // 路由懒加载：按需加载页面组件，减小首屏 bundle 体积
 // 使用 lazyRetry 包装：网络抖动或部署时 chunk 失效可自动重试，避免白屏
@@ -25,11 +26,18 @@ const VersionManager = lazyRetry(() => import('./pages/Config/VersionManager'))
 const AIConfig = lazyRetry(() => import('./pages/Config/AIConfig'))
 const Maintenance = lazyRetry(() => import('./pages/Maintenance/Cleanup'))
 const DatabaseAdmin = lazyRetry(() => import('./pages/Maintenance/DatabaseAdmin'))
+const VectorAdmin = lazyRetry(() => import('./pages/Maintenance/VectorAdmin'))
+const BatchRefresh = lazyRetry(() => import('./pages/Maintenance/BatchRefresh'))
 const SearchConfig = lazyRetry(() => import('./pages/Config/SearchConfig'))
 const BuyerStrategy = lazyRetry(() => import('./pages/Config/BuyerStrategy'))
 const Onboarding = lazyRetry(() => import('./pages/Onboarding'))
 const AntiCrawl = lazyRetry(() => import('./pages/AntiCrawl'))
 const Help = lazyRetry(() => import('./pages/Help'))
+// 关于菜单：系统元信息 + 文档资源统一入口（独立路由，与 /help 同级）
+const About = lazyRetry(() => import('./pages/About'))
+// 智能客服模块：对话主页 + 配置页
+const Chatbot = lazyRetry(() => import('./pages/Chatbot'))
+const ChatbotConfig = lazyRetry(() => import('./pages/Chatbot/Config'))
 
 // 全局 fallback 加载组件：懒加载页面未就绪时展示
 function PageLoading() {
@@ -54,38 +62,50 @@ function LazyRoute({ children }: { children: ReactNode }) {
 export default function App() {
   return (
     <ErrorBoundary>
-      <Routes>
-        {/* 登录页独立路由，不嵌套在 MainLayout 中 */}
-        <Route path="/login" element={<LazyRoute><Login /></LazyRoute>} />
-        {/* 引导页独立路由，不嵌套在 MainLayout 中 */}
-        <Route path="/onboarding" element={<LazyRoute><Onboarding /></LazyRoute>} />
-        {/* 帮助文档独立路由，不嵌套在 MainLayout 中（含自有顶部导航） */}
-        <Route path="/help" element={<LazyRoute><Help /></LazyRoute>} />
-        <Route path="/" element={<MainLayout />}>
-          <Route index element={<LazyRoute><Dashboard /></LazyRoute>} />
-          <Route path="tasks" element={<LazyRoute><TaskList /></LazyRoute>} />
-          <Route path="tasks/new" element={<LazyRoute><TaskEditor /></LazyRoute>} />
-          <Route path="tasks/:id/edit" element={<LazyRoute><TaskEditor /></LazyRoute>} />
-          <Route path="tasks/:id" element={<LazyRoute><TaskDetail /></LazyRoute>} />
-          <Route path="items" element={<LazyRoute><ItemList /></LazyRoute>} />
-          <Route path="orders" element={<LazyRoute><Orders /></LazyRoute>} />
-          <Route path="evaluations" element={<LazyRoute><Evaluations /></LazyRoute>} />
-          <Route path="timeline" element={<LazyRoute><Timeline /></LazyRoute>} />
-          <Route path="logs" element={<LazyRoute><Logs /></LazyRoute>} />
-          <Route path="logs/errors" element={<LazyRoute><ErrorLogs /></LazyRoute>} />
-          <Route path="config/price" element={<LazyRoute><PriceStrategy /></LazyRoute>} />
-          <Route path="config/eval" element={<LazyRoute><EvalRules /></LazyRoute>} />
-          <Route path="config/notifier" element={<LazyRoute><NotifierChannels /></LazyRoute>} />
-          <Route path="config/version" element={<LazyRoute><VersionManager /></LazyRoute>} />
-          <Route path="config/ai" element={<LazyRoute><AIConfig /></LazyRoute>} />
-          <Route path="config/search" element={<LazyRoute><SearchConfig /></LazyRoute>} />
-          <Route path="config/buyer" element={<LazyRoute><BuyerStrategy /></LazyRoute>} />
-          <Route path="maintenance" element={<LazyRoute><Maintenance /></LazyRoute>} />
-          <Route path="maintenance/db" element={<LazyRoute><DatabaseAdmin /></LazyRoute>} />
-          <Route path="anticrawl" element={<LazyRoute><AntiCrawl /></LazyRoute>} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
+      {/* AntdApp 提供 App.useApp() 上下文，让 ReloadPrompt 能用主题化的 notification */}
+      <AntdApp>
+        <Routes>
+          {/* 登录页独立路由，不嵌套在 MainLayout 中 */}
+          <Route path="/login" element={<LazyRoute><Login /></LazyRoute>} />
+          {/* 引导页独立路由，不嵌套在 MainLayout 中 */}
+          <Route path="/onboarding" element={<LazyRoute><Onboarding /></LazyRoute>} />
+          {/* 帮助文档独立路由，不嵌套在 MainLayout 中（含自有顶部导航） */}
+          <Route path="/help" element={<LazyRoute><Help /></LazyRoute>} />
+          {/* 关于菜单独立路由，不嵌套在 MainLayout 中（与 /help 同级） */}
+          <Route path="/about" element={<LazyRoute><About /></LazyRoute>} />
+          <Route path="/" element={<MainLayout />}>
+            <Route index element={<LazyRoute><Dashboard /></LazyRoute>} />
+            <Route path="tasks" element={<LazyRoute><TaskList /></LazyRoute>} />
+            <Route path="tasks/new" element={<LazyRoute><TaskEditor /></LazyRoute>} />
+            <Route path="tasks/:id/edit" element={<LazyRoute><TaskEditor /></LazyRoute>} />
+            <Route path="tasks/:id" element={<LazyRoute><TaskDetail /></LazyRoute>} />
+            <Route path="items" element={<LazyRoute><ItemList /></LazyRoute>} />
+            <Route path="orders" element={<LazyRoute><Orders /></LazyRoute>} />
+            <Route path="evaluations" element={<LazyRoute><Evaluations /></LazyRoute>} />
+            <Route path="timeline" element={<LazyRoute><Timeline /></LazyRoute>} />
+            <Route path="logs" element={<LazyRoute><Logs /></LazyRoute>} />
+            <Route path="logs/errors" element={<LazyRoute><ErrorLogs /></LazyRoute>} />
+            <Route path="config/price" element={<LazyRoute><PriceStrategy /></LazyRoute>} />
+            <Route path="config/eval" element={<LazyRoute><EvalRules /></LazyRoute>} />
+            <Route path="config/notifier" element={<LazyRoute><NotifierChannels /></LazyRoute>} />
+            <Route path="config/version" element={<LazyRoute><VersionManager /></LazyRoute>} />
+            <Route path="config/ai" element={<LazyRoute><AIConfig /></LazyRoute>} />
+            <Route path="config/search" element={<LazyRoute><SearchConfig /></LazyRoute>} />
+            <Route path="config/buyer" element={<LazyRoute><BuyerStrategy /></LazyRoute>} />
+            <Route path="maintenance" element={<LazyRoute><Maintenance /></LazyRoute>} />
+            <Route path="maintenance/db" element={<LazyRoute><DatabaseAdmin /></LazyRoute>} />
+            <Route path="maintenance/vector" element={<LazyRoute><VectorAdmin /></LazyRoute>} />
+            <Route path="batch-refresh" element={<LazyRoute><BatchRefresh /></LazyRoute>} />
+            <Route path="anticrawl" element={<LazyRoute><AntiCrawl /></LazyRoute>} />
+            {/* 智能客服：对话主页 + 配置页（含知识库管理） */}
+            <Route path="chatbot" element={<LazyRoute><Chatbot /></LazyRoute>} />
+            <Route path="config/chatbot" element={<LazyRoute><ChatbotConfig /></LazyRoute>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+        {/* O-12-26 PWA 更新/离线就绪提示，放在 AntdApp 内以使用主题 notification */}
+        <ReloadPrompt />
+      </AntdApp>
     </ErrorBoundary>
   )
 }

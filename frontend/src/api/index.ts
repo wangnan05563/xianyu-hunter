@@ -5,6 +5,8 @@
 export * from './types'
 
 // 业务域 API
+export { aboutApi } from './about'
+export type { AboutInfo, UpdateCheckResult } from './about'
 export { configApi } from './config'
 export { taskApi, cronApi, taskDetailApi, taskLinkApi } from './task'
 export type { LiveProgress, LiveFilterSummary, LiveFilteredItem } from './task'
@@ -34,3 +36,24 @@ export { errorLogApi } from './errorLogs'
 export { itemApi } from './item'
 export { templateApi } from './template'
 export type { TaskTemplate, TemplateCreateBody } from './template'
+export { exportApi } from './export'
+export type { ExportDataset, ExportDatasetInfo, ExportParams } from './export'
+export { batchRefreshApi } from './batchRefresh'
+export type {
+  BatchRefreshStatus,
+  BatchRefreshConfigPatch,
+  BatchRefreshConfigResult,
+  BatchRefreshTriggerResult,
+  BatchRefreshControlResult,
+  BatchRefreshChangeLogEntry,
+  BatchRefreshProgress,
+  BatchRefreshHistoryItem,
+  BatchRefreshHistoryQuery,
+  BatchRefreshHistoryListResult,
+  BatchRefreshHistoryStatus,
+  BatchRefreshTriggerSource,
+  BatchRefreshErrorMessage,
+  BatchRefreshHistoryStat,
+  BatchRefreshHistoryStatsResult,
+  BatchRefreshHistoryCleanupResult,
+} from './batchRefresh'

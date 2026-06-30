@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_vision_model: str = "gpt-4o"
 
+    # Embedding 服务独立配置（与 LLM 解耦）：
+    # - 留空时 fallback 到 OPENAI_* 配置（向后兼容）
+    # - 配置后 KB/FAQ 向量化走独立 endpoint，避免 DeepSeek 等不支持 /embeddings 的服务商
+    embedding_base_url: str = ""
+    embedding_api_key: str = ""
+    embedding_model: str = ""
+    # 0 表示未配置，由 cfg.kb.embedding_dimensions 兜底
+    embedding_dimensions: int = 0
+
     # Web 认证：留空则首次启动自动生成并写入 .env
     # 本地个人工具场景下，token 防止同网络其他设备随意访问
     web_token: str = ""
@@ -80,6 +89,11 @@ def _load_secrets_from_keyring(s: Settings) -> None:
     api_key = _secret_store.get_secret(_secret_store.KEY_OPENAI_API_KEY)
     if api_key:
         s.openai_api_key = api_key
+    # Embedding API Key 独立存储：DeepSeek 等不支持 /embeddings 时需切换到
+    # Ollama/Jina 等服务，凭证不应与 LLM 混用
+    emb_key = _secret_store.get_secret(_secret_store.KEY_EMBEDDING_API_KEY)
+    if emb_key:
+        s.embedding_api_key = emb_key
 
 
 def update_ai_config(
@@ -88,11 +102,17 @@ def update_ai_config(
     api_key: str | None = None,
     model: str | None = None,
     vision_model: str | None = None,
+    embedding_base_url: str | None = None,
+    embedding_api_key: str | None = None,
+    embedding_model: str | None = None,
+    embedding_dimensions: int | None = None,
 ) -> None:
     """热更新 AI 配置（无需重启服务）
 
     同时更新内存中的 Settings 单例和 .env 文件，
     确保下次启动也能读到最新值。
+
+    注意：embedding_* 参数为 None 表示不修改；空字符串表示清除该字段。
     """
     s = get_settings()
     env_updates: dict[str, str] = {}
@@ -114,6 +134,21 @@ def update_ai_config(
     if vision_model is not None:
         s.openai_vision_model = vision_model
         env_updates["OPENAI_VISION_MODEL"] = vision_model
+
+    # Embedding 配置独立处理：留空时 fallback 到 OPENAI_*（向后兼容）
+    if embedding_base_url is not None:
+        s.embedding_base_url = embedding_base_url
+        env_updates["EMBEDDING_BASE_URL"] = embedding_base_url
+    if embedding_api_key is not None:
+        s.embedding_api_key = embedding_api_key
+        from xianyu_hunter.infra import secrets as _secret_store
+        _secret_store.set_secret(_secret_store.KEY_EMBEDDING_API_KEY, embedding_api_key)
+    if embedding_model is not None:
+        s.embedding_model = embedding_model
+        env_updates["EMBEDDING_MODEL"] = embedding_model
+    if embedding_dimensions is not None:
+        s.embedding_dimensions = embedding_dimensions
+        env_updates["EMBEDDING_DIMENSIONS"] = str(embedding_dimensions)
 
     if env_updates:
         _persist_to_env(env_updates)

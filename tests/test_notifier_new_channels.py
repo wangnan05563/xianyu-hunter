@@ -12,8 +12,9 @@ from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.modules.notifier import NotifierRegistry, create_notifier
 from xianyu_hunter.modules.notifier.dingtalk import DingTalkNotifier
 from xianyu_hunter.modules.notifier.telegram import TelegramNotifier
-from xianyu_hunter.modules.notifier.wecom import WeComNotifier
+from xianyu_hunter.modules.notifier.wecom import WeComNotifier, _to_wecom_markdown
 from xianyu_hunter.modules.notifier.webhook import WebhookNotifier
+from xianyu_hunter.web.routes.api_notifier import _map_credentials_to_notifier_params
 
 
 # ============== 工具：构造 mock aiohttp 响应 ==============
@@ -70,17 +71,46 @@ def make_eval_event() -> Event:
     )
 
 
+# ============== 字段映射测试（前端字段名 → Notifier 参数名） ==============
+
+def test_map_credentials_dingtalk() -> None:
+    """钉钉渠道字段映射：dingtalk_webhook/dingtalk_secret → webhook_url/secret"""
+    creds = {"dingtalk_webhook": "https://oapi.dingtalk.com/x", "dingtalk_secret": "SECxxx"}
+    mapped = _map_credentials_to_notifier_params(creds)
+    assert mapped == {"webhook_url": "https://oapi.dingtalk.com/x", "secret": "SECxxx"}
+    # 映射后应能成功创建 DingTalkNotifier（不再触发 BaseNotifier TypeError）
+    notifier = DingTalkNotifier(**mapped)
+    assert notifier.webhook_url == "https://oapi.dingtalk.com/x"
+    assert notifier.secret == "SECxxx"
+
+
+def test_map_credentials_all_channels() -> None:
+    """所有渠道字段映射正确性回归测试"""
+    cases = [
+        ({"serverchan_send_key": "SCT1"}, {"send_key": "SCT1"}),
+        ({"pushplus_token": "abc"}, {"token": "abc"}),
+        ({"bark_server": "https://api.day.app", "bark_key": "k"}, {"server": "https://api.day.app", "key": "k"}),
+        ({"telegram_bot_token": "123:ABC", "telegram_chat_id": "@c"}, {"bot_token": "123:ABC", "chat_id": "@c"}),
+        ({"wecom_webhook": "https://qyapi..."}, {"webhook_url": "https://qyapi..."}),
+        ({"dingtalk_webhook": "https://...", "dingtalk_secret": "SEC"}, {"webhook_url": "https://...", "secret": "SEC"}),
+        # webhook 渠道的 webhook_url 字段名与 Notifier 参数名一致，应保持原样
+        ({"webhook_url": "https://hook"}, {"webhook_url": "https://hook"}),
+    ]
+    for input_creds, expected in cases:
+        assert _map_credentials_to_notifier_params(input_creds) == expected
+
+
 # ============== 注册表测试 ==============
 
 def test_registry_includes_new_channels() -> None:
-    """注册表应包含 7 个渠道（原 3 + 新 4）"""
+    """注册表应包含 8 个渠道（原 3 + P1-3 新增 4 + ntfy 新增 1）"""
     registry = NotifierRegistry.default()
     channels = registry.available()
     assert "telegram" in channels
     assert "wecom" in channels
     assert "dingtalk" in channels
     assert "webhook" in channels
-    assert len(channels) == 7
+    assert len(channels) == 8
 
 
 def test_create_telegram_notifier() -> None:
@@ -177,6 +207,74 @@ async def test_wecom_missing_url_raises() -> None:
     notifier = WeComNotifier(webhook_url="")
     result = await notifier.send(make_eval_event())
     assert result.success is False
+
+
+def test_to_wecom_markdown_converts_lists() -> None:
+    """无序列表 - 应转换为项目符号 •"""
+    body = "- 卖家：张三\n- 价格：¥100"
+    result = _to_wecom_markdown(body)
+    assert "- " not in result
+    assert "• 卖家：张三" in result
+    assert "• 价格：¥100" in result
+
+
+def test_to_wecom_markdown_removes_images() -> None:
+    """图片语法 ![alt](url) 应被移除"""
+    body = "### 评估通过\n![商品图](https://example.com/img.jpg)\n[查看](https://example.com)"
+    result = _to_wecom_markdown(body)
+    assert "![" not in result
+    assert "[查看](https://example.com)" in result  # 普通链接保留
+
+
+def test_to_wecom_markdown_removes_italics() -> None:
+    """斜体 _text_ 应转为纯文本"""
+    body = "系统自动发送，_请 5 分钟内确认_"
+    result = _to_wecom_markdown(body)
+    assert "_" not in result
+    assert "请 5 分钟内确认" in result
+
+
+def test_to_wecom_markdown_removes_separators() -> None:
+    """分割线 --- 应被移除，多余空行压缩"""
+    body = "标题\n\n---\n\n正文"
+    result = _to_wecom_markdown(body)
+    assert "---" not in result
+    assert "\n\n\n" not in result  # 无 3+ 连续换行
+
+
+@pytest.mark.asyncio
+async def test_wecom_send_uses_converted_markdown() -> None:
+    """发送时应使用降级转换后的 markdown（不含 - 列表 / ![] 图片 / _ 斜体）"""
+    notifier = WeComNotifier(webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send")
+    resp = make_response(200, '{"errcode":0}')
+    session = make_session([resp])
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        await notifier.send(make_eval_event())
+
+    _, kwargs = session.post.call_args
+    content = kwargs["json"]["markdown"]["content"]
+    # 标题加粗
+    assert content.startswith("**")
+    # 不应包含企业微信不支持的语法
+    assert "\n- " not in content  # 无序列表
+    assert "![" not in content  # 图片
+    assert "_系统自动" not in content  # 斜体（_ 已被移除）
+
+
+@pytest.mark.asyncio
+async def test_wecom_4xx_response_raises() -> None:
+    """企业微信 4xx 响应应抛异常，重试 3 次后 result.success 为 False"""
+    notifier = WeComNotifier(webhook_url="https://qyapi.weixin.qq.com/cgi-bin/webhook/send")
+    # BaseNotifier 默认重试 3 次，需提供 3 个相同 4xx 响应
+    resp = make_response(400, '{"errcode":40001,"errmsg":"invalid webhook url"}')
+    session = make_session([resp, resp, resp])
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        result = await notifier.send(make_eval_event())
+
+    assert result.success is False
+    assert result.attempts == 3
     assert "webhook" in result.error
 
 

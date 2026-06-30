@@ -8,6 +8,7 @@ from __future__ import annotations
 from xianyu_hunter.modules.notifier.base import INotifier
 from xianyu_hunter.modules.notifier.bark import BarkNotifier
 from xianyu_hunter.modules.notifier.dingtalk import DingTalkNotifier
+from xianyu_hunter.modules.notifier.ntfy import NtfyNotifier
 from xianyu_hunter.modules.notifier.pushplus import PushPlusNotifier
 from xianyu_hunter.modules.notifier.serverchan import ServerChanNotifier
 from xianyu_hunter.modules.notifier.telegram import TelegramNotifier
@@ -32,6 +33,8 @@ class NotifierRegistry:
         "wecom": WeComNotifier,
         "dingtalk": DingTalkNotifier,
         "webhook": WebhookNotifier,
+        # ntfy：免费跨平台推送（Android/iOS/Web/CLI），填补 Bark 仅 iOS 的缺口
+        "ntfy": NtfyNotifier,
     }
 
     @classmethod

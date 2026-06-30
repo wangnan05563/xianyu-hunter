@@ -1,0 +1,58 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S7770",
+                 "repo":  "typescript",
+                 "name":  "Wrapper functions around built-in type conversion functions should be avoided",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "performance",
+                                 "unnecessary"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "introduction",
+                                                 "content":  "\u003cp\u003eThis is an issue when a function only calls a built-in type conversion function (\u003ccode\u003eString\u003c/code\u003e, \u003ccode\u003eNumber\u003c/code\u003e, \u003ccode\u003eBigInt\u003c/code\u003e,\n\u003ccode\u003eBoolean\u003c/code\u003e, or \u003ccode\u003eSymbol\u003c/code\u003e) without adding any additional logic.\u003c/p\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eCreating wrapper functions around built-in type conversion functions is unnecessary and adds complexity without benefit.\u003c/p\u003e\n\u003cp\u003eJavaScriptâs built-in functions like \u003ccode\u003eString()\u003c/code\u003e, \u003ccode\u003eNumber()\u003c/code\u003e, \u003ccode\u003eBoolean()\u003c/code\u003e, \u003ccode\u003eBigInt()\u003c/code\u003e, and\n\u003ccode\u003eSymbol()\u003c/code\u003e can be used directly as callbacks or assigned to variables. When you wrap these functions in arrow functions or function\ndeclarations that only pass through arguments, you create:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003cstrong\u003eUnnecessary function call overhead\u003c/strong\u003e: Each wrapper adds an extra function call in the execution stack \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eReduced readability\u003c/strong\u003e: The wrapper obscures the intent and makes the code longer \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eMaintenance burden\u003c/strong\u003e: More code to maintain without functional benefit \u003c/li\u003e\n\u003c/ul\u003e\n\u003cp\u003eThe built-in functions are designed to work directly in contexts where callbacks are expected, such as with array methods like \u003ccode\u003emap()\u003c/code\u003e,\n\u003ccode\u003efilter()\u003c/code\u003e, or \u003ccode\u003esome()\u003c/code\u003e.\u003c/p\u003e\n\u003ch3\u003eWhat is the potential impact?\u003c/h3\u003e\n\u003cp\u003eThis issue impacts code maintainability and performance. The unnecessary wrapper functions create additional function calls that could be avoided,\nand they make the codebase more verbose without providing any functional benefit. While the performance impact is typically minimal, the readability\nand maintainability improvements from using built-in functions directly are significant.\u003c/p\u003e\n\u003ch3\u003eHow to fix?\u003c/h3\u003e\n\u003cp\u003eReplace wrapper functions with direct references to built-in type conversion functions. Instead of creating a function that only calls the\nbuilt-in, use the built-in function directly.\u003c/p\u003e\n\u003ch4\u003eNon-compliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nconst toBoolean = value =\u0026gt; Boolean(value); // Noncompliant\nconst numbers = strings.map(str =\u0026gt; Number(str)); // Noncompliant\n\nfunction toString(value) { // Noncompliant\n  return String(value);\n}\n\u003c/pre\u003e\n\u003ch4\u003eCompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nconst toBoolean = Boolean;\nconst numbers = strings.map(Number);\n\nconst toString = String;\n\u003c/pre\u003e\n\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\"https://github.com/sindresorhus/eslint-plugin-unicorn#readme\"\u003eeslint-plugin-unicorn\u003c/a\u003e - Rule \u003ca\n  href=\"https://github.com/sindresorhus/eslint-plugin-unicorn/blob/HEAD/docs/rules/prefer-native-coercion-functions.md\"\u003eprefer-native-coercion-functions\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN - String - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String\"\u003eDocumentation for JavaScriptâs\n  built-in String function\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN - Number - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number\"\u003eDocumentation for JavaScriptâs\n  built-in Number function\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN - Boolean - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Boolean\"\u003eDocumentation for\n  JavaScriptâs built-in Boolean function\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN - BigInt - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt\"\u003eDocumentation for JavaScriptâs\n  built-in BigInt function\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN - Symbol - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol\"\u003eDocumentation for JavaScriptâs\n  built-in Symbol function\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

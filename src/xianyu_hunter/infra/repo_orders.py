@@ -127,3 +127,53 @@ class OrdersMixin:
                 OrderRow.__table__.delete().where(OrderRow.task_id == task_id)
             )
             return result.rowcount or 0
+
+    def expire_takeover_pending_orders(self, timeout_minutes: int) -> list[dict]:
+        """将超时未确认支付的 takeover_pending 订单批量标记为 failed
+
+        业务背景：用户点击「接管」后有 timeout_minutes（默认 30 分钟）在闲鱼 App
+        完成支付。超时后闲鱼订单已被自动关闭，系统需同步状态避免用户误支付已关闭订单。
+
+        状态机：takeover_pending → failed
+        清空 confirmed_at：与 takeover_cancel 一致，让订单可被重新接管
+
+        返回被超时清理的订单列表，供调用方发布事件/通知下游
+        为什么一次 SQL 而非逐条 update：避免长事务和 N+1，且批量场景下性能更好
+        """
+        from datetime import timedelta
+        from sqlalchemy import update
+        from xianyu_hunter.infra.db_models import _utcnow
+
+        cutoff = _utcnow().replace(tzinfo=None) - timedelta(minutes=timeout_minutes)
+
+        with self.engine.begin() as conn:
+            # 先查询将要超时的订单（供返回）
+            select_stmt = (
+                select(OrderRow)
+                .where(OrderRow.status == "takeover_pending")
+                .where(OrderRow.confirmed_at.is_not(None))
+                .where(OrderRow.confirmed_at < cutoff)
+            )
+            expired_orders = [self._row_to_dict(r) for r in conn.execute(select_stmt).all()]
+
+            if not expired_orders:
+                return []
+
+            # 批量 update：status=failed, error=超时原因, confirmed_at=None
+            update_stmt = (
+                update(OrderRow)
+                .where(OrderRow.id.in_([o["id"] for o in expired_orders]))
+                .values(
+                    status="failed",
+                    error=f"接管超时未支付（{timeout_minutes} 分钟）",
+                    confirmed_at=None,
+                )
+            )
+            conn.execute(update_stmt)
+
+        # 同步内存中的字段，供调用方使用
+        for o in expired_orders:
+            o["status"] = "failed"
+            o["error"] = f"接管超时未支付（{timeout_minutes} 分钟）"
+            o["confirmed_at"] = None
+        return expired_orders

@@ -1,0 +1,59 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S3696",
+                 "repo":  "typescript",
+                 "name":  "Literals should not be thrown",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MAJOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "error-handling",
+                                 "api-design",
+                                 "type-dependent"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "20min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "20min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eIn JavaScript, throwing literals (primitive values like strings, numbers, booleans, etc.) as exceptions is generally discouraged. While it is\nsyntactically valid to throw literals, it is considered a best practice to throw instances of the \u003ccode\u003eError\u003c/code\u003e class or its subclasses\ninstead.\u003c/p\u003e\n\u003cp\u003eThrowing an instance of the \u003ccode\u003eError\u003c/code\u003e class allows you to provide more meaningful information about the error.\u003c/p\u003e\n\u003cp\u003eThe \u003ccode\u003eError\u003c/code\u003e class and its subclasses provide properties like \u003ccode\u003emessage\u003c/code\u003e and \u003ccode\u003estack\u003c/code\u003e that can be used to convey\nuseful details about the error, such as a description of the problem, the context in which it occurred, or a stack trace for debugging.\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nthrow 404;                              // Noncompliant\nthrow \"Invalid negative index.\";        // Noncompliant\n\u003c/pre\u003e\n\u003cp\u003eThrowing literals can make it harder to handle and differentiate between different types of errors. Instead, you should use one of the exception\ntypes specifically created for the purpose or define your own subclass of the \u003ccode\u003eError\u003c/code\u003e class.\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nthrow new Error(\"Status: \" + 404);\nthrow new RangeError(\"Invalid negative index.\");\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\"https://eslint.org\"\u003eeslint\u003c/a\u003e - Rule \u003ca href=\"https://eslint.org/docs/latest/rules/no-throw-literal\"\u003eno-throw-literal\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN web docs - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/throw\"\u003e\u003ccode\u003ethrow\u003c/code\u003e\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN web docs - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error\"\u003eError\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CONVENTIONAL",
+                 "cleanCodeAttributeCategory":  "CONSISTENT",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "MEDIUM"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

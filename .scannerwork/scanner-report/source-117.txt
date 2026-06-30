@@ -1,0 +1,170 @@
+"""批量采集调度器 API
+
+提供 3 个端点：
+- GET /api/batch-refresh/status — 当前状态、上次执行时间、结果统计、变更日志
+- POST /api/batch-refresh/trigger — 手动触发一次批量采集，返回任务 ID
+- PATCH /api/batch-refresh/config — 运行时热更新配置（interval_minutes、enabled）
+
+认证：由 BearerAuthMiddleware 统一处理（/api/batch-refresh/* 不在 PUBLIC_PREFIXES 中），
+路由内部不再做 token 校验，避免重复逻辑。
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+router = APIRouter(prefix="/api/batch-refresh", tags=["batch-refresh"])
+
+
+class BatchRefreshConfigPatch(BaseModel):
+    """PATCH /config 请求体（所有字段可选）"""
+    interval_minutes: int | None = Field(default=None, ge=1, le=1440)
+    enabled: bool | None = None
+
+
+def _get_scheduler():
+    """获取调度器实例（延迟导入避免循环依赖）
+
+    调度器实例由 startup.py 在启动时创建并维护为模块级变量。
+    """
+    from xianyu_hunter.web.startup import get_batch_refresh_scheduler
+    return get_batch_refresh_scheduler()
+
+
+@router.get("/status")
+def get_status() -> dict[str, Any]:
+    """返回调度器当前状态、上次执行结果和最近变更日志
+
+    调度器未启动时返回 status=unavailable，便于前端区分"未启动"与"空闲"。
+    """
+    scheduler = _get_scheduler()
+    if scheduler is None:
+        return {
+            "status": "unavailable",
+            "last_run_at": None,
+            "last_result": None,
+            "change_log": [],
+            "enabled": False,
+            "interval_minutes": None,
+        }
+    return scheduler.get_status()
+
+
+@router.post("/trigger")
+def trigger_batch() -> dict[str, Any]:
+    """手动触发一次批量采集
+
+    返回 task_id（正整数）。如果调度器未启动或已有批次在运行，返回 409/503。
+    """
+    scheduler = _get_scheduler()
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503,
+            detail="批量采集调度器未启动（需 XH_WITH_SCHEDULER=1 且 batch_refresh.enabled=true）",
+        )
+    task_id = scheduler.trigger_now()
+    if task_id < 0:
+        raise HTTPException(
+            status_code=409,
+            detail="已有批量采集任务正在运行，请稍后重试",
+        )
+    return {"ok": True, "task_id": task_id}
+
+
+@router.patch("/config")
+def patch_config(body: BatchRefreshConfigPatch) -> dict[str, Any]:
+    """运行时热更新配置
+
+    - interval_minutes: 修改后立即 reschedule 定时任务
+    - enabled: 仅修改标志位（不影响已注册的 job，下次启动时按此标志决定）
+    """
+    scheduler = _get_scheduler()
+
+    # 调度器未启动时，仍允许更新全局 config 单例，下次启动时生效
+    from xianyu_hunter.infra.yaml_config import get_config
+    cfg = get_config().batch_refresh
+
+    if body.interval_minutes is not None:
+        cfg.interval_minutes = body.interval_minutes
+    if body.enabled is not None:
+        cfg.enabled = body.enabled
+
+    if scheduler is not None:
+        scheduler.update_config(
+            interval_minutes=body.interval_minutes,
+            enabled=body.enabled,
+        )
+
+    return {
+        "ok": True,
+        "enabled": cfg.enabled,
+        "interval_minutes": cfg.interval_minutes,
+        "batch_size": cfg.batch_size,
+        "max_items_per_run": cfg.max_items_per_run,
+    }
+
+
+# ============== 任务控制端点（pause/resume/stop） ==============
+# 三个端点均立即返回（<500ms），实际暂停/停止在当前 item 处理完成后生效。
+# 这样保证当前 item 的数据库写入完整，避免数据不一致。
+
+
+@router.post("/pause")
+def pause_batch() -> dict[str, Any]:
+    """暂停当前批次
+
+    立即更新状态为 paused 并 clear event，但实际暂停在当前 item 处理完成
+    后生效（await event.wait() 阻塞）。
+    """
+    scheduler = _get_scheduler()
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503,
+            detail="批量采集调度器未启动（需 XH_WITH_SCHEDULER=1 且 batch_refresh.enabled=true）",
+        )
+    if not scheduler.pause():
+        raise HTTPException(
+            status_code=409,
+            detail="当前状态不允许暂停（仅 running 态可暂停）",
+        )
+    return {"ok": True, "status": "paused"}
+
+
+@router.post("/resume")
+def resume_batch() -> dict[str, Any]:
+    """继续执行已暂停的批次"""
+    scheduler = _get_scheduler()
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503,
+            detail="批量采集调度器未启动",
+        )
+    if not scheduler.resume():
+        raise HTTPException(
+            status_code=409,
+            detail="当前状态不允许继续（仅 paused 态可继续）",
+        )
+    return {"ok": True, "status": "running"}
+
+
+@router.post("/stop")
+def stop_batch() -> dict[str, Any]:
+    """停止当前批次
+
+    立即更新状态为 stopping 并 set event（解除暂停阻塞），未处理的 items
+    会持久化以便下次续传。
+    """
+    scheduler = _get_scheduler()
+    if scheduler is None:
+        raise HTTPException(
+            status_code=503,
+            detail="批量采集调度器未启动",
+        )
+    if not scheduler.stop_current():
+        raise HTTPException(
+            status_code=409,
+            detail="当前状态不允许停止（仅 running/paused 态可停止）",
+        )
+    return {"ok": True, "status": "stopping"}

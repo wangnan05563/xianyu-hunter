@@ -14,6 +14,7 @@ from xianyu_hunter.domain.item import ItemSummary
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.modules.collector_utils import (
     check_item_sold,
+    check_text_sold,
     extract_item_id,
     parse_price_from_text,
     parse_search_api_result,
@@ -143,14 +144,14 @@ class ParserMixin:
         """从 DOM 卡片中检测商品是否已售出
 
         闲鱼搜索结果中已售商品通常有：
-        - "已售" 文字标记
+        - "已售"/"卖掉了" 文字标记（详情页文案变更后新增"卖掉了"）
         - 特殊 CSS 类名（如 sold, sold-out）
         - 灰色价格或"已售"标签
         """
         try:
-            # 方法1：检查卡片文本是否包含"已售"
+            # 方法1：检查卡片文本是否包含已售关键词（复用统一列表）
             text = (await card.inner_text()) if hasattr(card, 'inner_text') else ""
-            if "已售" in text:
+            if check_text_sold(text):
                 return True
 
             # 方法2：检查是否有已售相关的 CSS 类

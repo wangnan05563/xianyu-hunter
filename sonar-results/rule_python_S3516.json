@@ -1,0 +1,55 @@
+﻿{
+    "rule":  {
+                 "key":  "python:S3516",
+                 "repo":  "python",
+                 "name":  "Functions returns should not be invariant",
+                 "createdAt":  "2026-03-11T22:20:44+0800",
+                 "severity":  "BLOCKER",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "design",
+                                 "confusing"
+                             ],
+                 "lang":  "py",
+                 "langName":  "Python",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "LINEAR",
+                 "debtRemFnType":  "LINEAR",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "LINEAR",
+                 "defaultRemFnGapMultiplier":  "2min",
+                 "remFnType":  "LINEAR",
+                 "remFnGapMultiplier":  "2min",
+                 "remFnOverloaded":  false,
+                 "gapDescription":  "Per number of return statements",
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eWhen a function is designed to return an invariant value, it may be poor design, but it shouldnât adversely affect the outcome of your program.\nHowever, when it happens on all paths through the logic, it is surely a bug.\u003c/p\u003e\n\u003cp\u003eThis rule raises an issue when a function contains several return statements that all return the same value.\u003c/p\u003e\n\u003ch3\u003eNoncompliant code example\u003c/h3\u003e\n\u003cpre\u003e\ndef foo(a):  # NonCompliant\n    b = 12\n    if a == 1:\n        return b\n    return b\n\u003c/pre\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:44+0800",
+                 "cleanCodeAttribute":  "LOGICAL",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "BLOCKER"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

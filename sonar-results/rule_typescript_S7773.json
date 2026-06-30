@@ -1,0 +1,62 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S7773",
+                 "repo":  "typescript",
+                 "name":  "Number static methods and properties should be preferred over global equivalents",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "convention",
+                                 "es2015"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "2min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "2min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "introduction",
+                                                 "content":  "\u003cp\u003eThis rule raises an issue when global functions like \u003ccode\u003eparseInt()\u003c/code\u003e, \u003ccode\u003eparseFloat()\u003c/code\u003e, \u003ccode\u003eisNaN()\u003c/code\u003e,\n\u003ccode\u003eisFinite()\u003c/code\u003e or global values like \u003ccode\u003eNaN\u003c/code\u003e, \u003ccode\u003eInfinity\u003c/code\u003e are used instead of their \u003ccode\u003eNumber\u003c/code\u003e constructor\nequivalents.\u003c/p\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eECMAScript 2015 introduced static methods and properties on the \u003ccode\u003eNumber\u003c/code\u003e constructor to replace several global functions and values.\nUsing these \u003ccode\u003eNumber\u003c/code\u003e equivalents provides several benefits:\u003c/p\u003e\n\u003cp\u003e\u003cstrong\u003eConsistency and Organization\u003c/strong\u003e: All number-related utilities are grouped under the \u003ccode\u003eNumber\u003c/code\u003e namespace, making the code\nmore organized and easier to understand.\u003c/p\u003e\n\u003cp\u003e\u003cstrong\u003eReduced Global Namespace Pollution\u003c/strong\u003e: By using \u003ccode\u003eNumber\u003c/code\u003e methods instead of globals, you help keep the global namespace\ncleaner and reduce the risk of naming conflicts.\u003c/p\u003e\n\u003cp\u003e\u003cstrong\u003eImproved Behavior\u003c/strong\u003e: Some \u003ccode\u003eNumber\u003c/code\u003e methods have better behavior than their global counterparts:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ccode\u003eNumber.isNaN()\u003c/code\u003e only returns \u003ccode\u003etrue\u003c/code\u003e for actual \u003ccode\u003eNaN\u003c/code\u003e values, while global \u003ccode\u003eisNaN()\u003c/code\u003e coerces\n  non-numbers to numbers first, leading to unexpected results \u003c/li\u003e\n  \u003cli\u003e \u003ccode\u003eNumber.isFinite()\u003c/code\u003e only returns \u003ccode\u003etrue\u003c/code\u003e for finite numbers, while global \u003ccode\u003eisFinite()\u003c/code\u003e coerces non-numbers\n  first \u003c/li\u003e\n\u003c/ul\u003e\n\u003cp\u003e\u003cstrong\u003eModern JavaScript Standards\u003c/strong\u003e: Using \u003ccode\u003eNumber\u003c/code\u003e methods aligns with modern JavaScript practices and demonstrates\nfamiliarity with ES2015+ features.\u003c/p\u003e\n\u003cp\u003eThe global functions still exist for backward compatibility, but the \u003ccode\u003eNumber\u003c/code\u003e equivalents are the recommended approach in modern\nJavaScript development.\u003c/p\u003e\n\u003ch3\u003eWhat is the potential impact?\u003c/h3\u003e\n\u003cp\u003eUsing global functions instead of \u003ccode\u003eNumber\u003c/code\u003e methods can lead to:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003cstrong\u003eUnexpected behavior\u003c/strong\u003e: Global \u003ccode\u003eisNaN()\u003c/code\u003e and \u003ccode\u003eisFinite()\u003c/code\u003e perform type coercion, which can cause bugs when\n  checking non-number values \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eCode inconsistency\u003c/strong\u003e: Mixing global and \u003ccode\u003eNumber\u003c/code\u003e methods makes the codebase less uniform \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eMaintainability issues\u003c/strong\u003e: Code that doesnât follow modern standards may be harder for other developers to understand and\n  maintain \u003c/li\u003e\n\u003c/ul\u003e\n\u003ch3\u003eHow to fix?\u003c/h3\u003e\n\u003cp\u003eReplace global parsing functions with their Number equivalents. The behavior is identical, but the Number methods are more explicit and\norganized.\u003c/p\u003e\n\u003ch4\u003eNon-compliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nconst num1 = parseInt(\u002742\u0027, 10); // Noncompliant\nconst num2 = parseFloat(\u00273.14\u0027); // Noncompliant\n\u003c/pre\u003e\n\u003ch4\u003eCompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nconst num1 = Number.parseInt(\u002742\u0027, 10);\nconst num2 = Number.parseFloat(\u00273.14\u0027);\n\u003c/pre\u003e\n\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\"https://github.com/sindresorhus/eslint-plugin-unicorn#readme\"\u003eeslint-plugin-unicorn\u003c/a\u003e - Rule \u003ca\n  href=\"https://github.com/sindresorhus/eslint-plugin-unicorn/blob/HEAD/docs/rules/prefer-number-properties.md\"\u003eprefer-number-properties\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e Number.parseInt() - MDN - \u003ca\n  href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/parseInt\"\u003eDocumentation for Number.parseInt()\n  method\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e Number.parseFloat() - MDN - \u003ca\n  href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/parseFloat\"\u003eDocumentation for Number.parseFloat()\n  method\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e Number.isNaN() - MDN - \u003ca href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/isNaN\"\u003eDocumentation\n  for Number.isNaN() method and its differences from global isNaN()\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e Number.isFinite() - MDN - \u003ca\n  href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/isFinite\"\u003eDocumentation for Number.isFinite() method\n  and its differences from global isFinite()\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CONVENTIONAL",
+                 "cleanCodeAttributeCategory":  "CONSISTENT",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "RELIABILITY",
+                                     "severity":  "MEDIUM"
+                                 },
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

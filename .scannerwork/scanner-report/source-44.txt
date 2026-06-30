@@ -1,0 +1,217 @@
+"""上下文管理器：会话上下文加载、历史消息裁剪、会话超时管理、标题生成
+
+职责：
+- 加载/创建会话上下文（Context）
+- 持久化消息并刷新会话活跃时间
+- 构建 OpenAI Chat API 格式的历史消息（按 max_history_turns 截断）
+- 检测会话超时并自动结束
+- 根据首条消息生成会话标题
+
+设计要点（见详细设计 §5.7、状态机 §6.1）：
+- messages 用 dict 而非自定义数据类，保持与 OpenAI Chat API 格式直接对齐
+- 超时检测基于 session.last_active_at（DB 持久化），服务重启后仍可判定
+- 标题生成不调用 LLM，取首条消息前 20 字符，避免额外开销与延迟
+- ended 会话不复用历史（状态机约束：ended 不可恢复为 active）
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+
+from loguru import logger
+
+from xianyu_hunter.infra.repo_chatbot import ChatbotRepository
+from xianyu_hunter.infra.yaml_config import ChatbotConfig
+
+
+@dataclass
+class Context:
+    """会话上下文
+
+    messages 元素结构：{"role", "content", "created_at"}
+    与 OpenAI Chat API 的 message 格式兼容，额外保留 created_at 用于排序/展示。
+    """
+    session_id: str
+    messages: list[dict] = field(default_factory=list)
+    is_new: bool = False
+    is_timeout: bool = False
+    title: str = ""
+    status: str = "active"  # active / ended / escalated
+
+
+class ContextManager:
+    """上下文管理器"""
+
+    def __init__(self, repo: ChatbotRepository, config: ChatbotConfig) -> None:
+        self._repo = repo
+        self._config = config
+
+    def load_context(self, session_id: str | None) -> Context:
+        """加载会话上下文
+
+        - session_id=None：创建新会话（is_new=True）
+        - session_id 存在：加载会话与最近 max_history_turns*2 条消息，并检测超时
+        - ended 会话不复用历史（状态机约束），但保留 status 供上层拒绝处理
+        """
+        if not session_id:
+            session = self._repo.create_session()
+            return Context(
+                session_id=session["id"],
+                messages=[],
+                is_new=True,
+                is_timeout=False,
+                title=session.get("title", ""),
+                status=session.get("status", "active"),
+            )
+
+        session = self._repo.get_session(session_id)
+        if session is None:
+            # 会话不存在则新建，避免上层因传错 id 直接报错
+            new_session = self._repo.create_session()
+            return Context(
+                session_id=new_session["id"],
+                messages=[],
+                is_new=True,
+                is_timeout=False,
+                title=new_session.get("title", ""),
+                status=new_session.get("status", "active"),
+            )
+
+        status = session.get("status", "active")
+        title = session.get("title", "")
+        is_timeout = self._is_session_timed_out(session)
+
+        messages: list[dict] = []
+        # 仅 active/escalated 加载历史：ended 为终态不复用，escalated 仍可继续对话
+        if status in ("active", "escalated"):
+            messages = self._load_recent_messages(session_id)
+
+        return Context(
+            session_id=session_id,
+            messages=messages,
+            is_new=False,
+            is_timeout=is_timeout,
+            title=title,
+            status=status,
+        )
+
+    def save_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        metadata: dict | None = None,
+        tokens_used: int | None = None,
+    ) -> dict:
+        """保存消息并刷新会话活跃时间
+
+        add_message 内部已同步更新 message_count 与 last_active_at，
+        这里仍显式调用 touch_session 保证语义独立：未来若 add_message
+        拆分计数与时间更新，本方法行为不变。
+        """
+        msg = self._repo.add_message(
+            session_id=session_id,
+            role=role,
+            content=content,
+            metadata=metadata,
+            tokens_used=tokens_used,
+        )
+        self._repo.touch_session(session_id)
+        return msg
+
+    def build_history_messages(self, context: Context) -> list[dict]:
+        """构建 OpenAI Chat API 格式的历史消息列表
+
+        截断策略：保留最近 max_history_turns*2 条（user+assistant 成对），
+        超长单条用 _truncate_message 截断以控制 context 长度。
+        """
+        if not context.messages:
+            return []
+
+        max_msgs = self._config.max_history_turns * 2
+        # messages 已按时间正序，取末尾保留最近的成对消息
+        recent = (
+            context.messages[-max_msgs:]
+            if len(context.messages) > max_msgs
+            else context.messages
+        )
+
+        result: list[dict] = []
+        for m in recent:
+            content = self._truncate_message(m.get("content", ""))
+            result.append({"role": m.get("role", "user"), "content": content})
+        return result
+
+    def check_and_mark_timeout(self, context: Context) -> bool:
+        """检测会话超时，超时则将 active 会话标记为 ended
+
+        基于 Context.is_timeout（load_context 时已计算）判定，避免重复查 DB。
+        escalated 会话超时仅返回 True，不覆盖状态（保留 escalated 供审计，
+        见状态机 §6.4 转人工后会话超时）。
+        """
+        if not context.is_timeout:
+            return False
+        if context.status == "ended":
+            return True  # 幂等：已结束不再重复更新
+        if context.status == "active":
+            self._repo.update_session_status(context.session_id, "ended")
+            context.status = "ended"
+            logger.info(f"会话 {context.session_id} 超时，已标记 ended")
+            return True
+        # escalated：超时但保留状态用于审计
+        return True
+
+    def generate_title(self, session_id: str, first_message: str) -> str:
+        """根据首条用户消息生成会话标题
+
+        规则：取前 20 字符，超长则追加 "..."（不调用 LLM，避免额外开销）。
+        """
+        if len(first_message) > 20:
+            title = first_message[:20] + "..."
+        else:
+            title = first_message
+        self._repo.update_session_title(session_id, title)
+        return title
+
+    def _truncate_message(self, content: str, max_chars: int = 500) -> str:
+        """超长消息截断：保留前 250 + 后 250 字符
+
+        仅当超过 max_chars 时截断，保留首尾以维持语义关键信息。
+        """
+        if len(content) <= max_chars:
+            return content
+        half = max_chars // 2  # 250
+        return content[:half] + "..." + content[-half:]
+
+    def _load_recent_messages(self, session_id: str) -> list[dict]:
+        """加载最近 max_history_turns*2 条消息（按时间正序）
+
+        repo.list_messages 按 created_at ASC 返回最早的消息，
+        取较大批量后切片末尾，确保获得最近 N 条而非最早 N 条。
+        """
+        limit = self._config.max_history_turns * 2
+        # 批量取较近的历史（chatbot 会话通常较短，200 条足够覆盖）
+        rows = self._repo.list_messages(session_id, limit=200)
+        recent_rows = rows[-limit:] if len(rows) > limit else rows
+        return [
+            {
+                "role": r["role"],
+                "content": r["content"],
+                "created_at": r["created_at"],
+            }
+            for r in recent_rows
+        ]
+
+    def _is_session_timed_out(self, session: dict) -> bool:
+        """根据 last_active_at 判定会话是否超时"""
+        last_active = session.get("last_active_at")
+        if not last_active:
+            return False
+        try:
+            last_dt = datetime.fromisoformat(last_active)
+        except (ValueError, TypeError):
+            return False
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        timeout = timedelta(minutes=self._config.session_timeout_min)
+        return datetime.now(timezone.utc) - last_dt > timeout

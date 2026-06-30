@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -82,14 +83,45 @@ def items_batch(
 @router.post("/{item_id}/refresh")
 async def refresh_item(
     item_id: str,
+    task_id: str | None = Query(None, description="可选：指定任务 ID，items 表无记录时用于回填 task_links.display"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """刷新单个商品详情：采集详情页并更新 items 表 + task_links.display
+    """轻量刷新：仅采集商品详情页并 upsert 到 items + task_links.display
 
-    触发场景：
-    - 前端商品列表点击商品链接时异步调用
-    - 官方采集流程复用
-    - 抢单失败回退刷新
+    语义：
+        轻量刷新，只调用 ``collector.detail(item_id)`` 采集商品详情，
+        然后 ``upsert_item`` 写回 items 表，并 ``sync_item_display_from_detail``
+        同步 task_links.display。已售时额外 ``mark_sold`` 补写 sold_detected_at。
+
+    不做什么（与完整官方采集的语义边界）：
+        - 不触发 ``evaluator.evaluate`` 重新评估
+        - 不采集卖家主页（``seller_profile``）
+        - 不提取评价/留言（``_extract_reviews_from_page``）
+        - 不写 ``eval.scored`` 事件、不更新 sellers 表
+
+    用途：
+        用户在商品列表点击商品标题链接时手动触发，用于快速更新商品基础信息
+        （标题、价格、已售状态、品牌等），不做重计算。
+
+    完整官方采集：
+        若需要 detail + seller + reviews + 重新评估 + events 写入的端到端流程，
+        请改用 ``POST /api/evaluations/{item_id}/collect-official`` 端点
+        （对应 ``_collect_official_and_evaluate``）。
+
+    为什么允许 items 表无记录：
+        评估列表的 item_id 来自 events 表（eval.* 事件），常见场景是评估事件
+        已写入但 items 表尚未入库。本端点本身就是为了采集并写入 items 表，
+        若要求 items 表必须已有记录则自相矛盾，且会让"评估列表点击标题"
+        在首条采集前直接 404，无法触发采集。
+
+    Args:
+        item_id: 商品 ID。
+        task_id: 可选任务 ID，items 表无记录时用于回填 task_links.display。
+        container: 应用容器，提供 ``collector`` / ``repo`` 等依赖。
+
+    Returns:
+        dict: 包含 ``ok`` / ``item_id`` / ``is_sold`` / ``title`` / ``price`` /
+        ``brand`` 的轻量结果。``brand`` 为详情页推断的品牌（可能为空字符串）。
     """
     from loguru import logger
 
@@ -100,9 +132,8 @@ async def refresh_item(
             detail="需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动",
         )
 
-    item = container.repo.get_item(item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="商品不存在")
+    # items 表无记录时不阻断采集：refresh 的目的就是采集后写入 items 表
+    item = container.repo.get_item(item_id) or {}
 
     try:
         from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
@@ -132,10 +163,14 @@ async def refresh_item(
     if detail is None:
         raise HTTPException(status_code=502, detail="采集商品详情失败：页面不可达或登录已过期")
 
+    # task_id 优先级：items 表已有 > 查询参数 > 空字符串
+    # 空 task_id 时跳过 sync_item_display_from_detail，避免写空 task_links 关联
+    resolved_task_id = item.get("task_id") or task_id or ""
+
     # 更新 items 表（复用官方采集的旧值保留策略，避免清空已有字段）
     new_row = {
         "id": item_id,
-        "task_id": item.get("task_id") or "",
+        "task_id": resolved_task_id,
         "title": detail.title,
         "price": detail.price,
         "seller_id": detail.seller_id or "",
@@ -143,20 +178,28 @@ async def refresh_item(
         "want_cnt": detail.want_cnt,
         "view_cnt": detail.view_cnt,
         "thumb_url": detail.thumb_url or "",
+        "image_urls": json.dumps(detail.image_urls, ensure_ascii=False) if detail.image_urls else None,
         "is_sold": 1 if detail.is_sold else 0,
     }
     container.repo.upsert_item(new_row)
+    # 标记采集来源为 live（用户手动触发刷新），与自动 search 区分
+    # 失败不阻断主流程：update_data_source 失败仅记录日志
+    try:
+        container.repo.update_data_source(item_id, "live")
+    except Exception as ds_err:
+        logger.warning("更新 data_source=live 失败 item={}: {}", item_id, ds_err)
     # 已售时通过 mark_sold 补写 sold_detected_at + 同步 task_links.display
     if detail.is_sold:
         container.repo.mark_sold(item_id)
 
     # 同步 task_links.display：评估明细页 brand 等字段从此处读取。
     # 其中 brand 以详情页推断结果为准；空 brand 也要写回，用于清掉历史错误品牌。
-    task_id = item.get("task_id") or ""
-    if task_id:
-        sync_item_display_from_detail(container.repo, task_id, item_id, detail, source="auto")
+    if resolved_task_id:
+        sync_item_display_from_detail(container.repo, resolved_task_id, item_id, detail, source="auto")
 
     logger.info(f"[RefreshItem] 刷新成功 item={item_id} is_sold={detail.is_sold} brand={detail.brand!r}")
+    # 返回完整采集字段：前端实时模式下用此结果直接更新 liveItemsRef，
+    # 避免重新实时搜索（silentLiveRefresh）用搜索 API 旧数据覆盖详情页采集结果
     return {
         "ok": True,
         "item_id": item_id,
@@ -164,4 +207,13 @@ async def refresh_item(
         "title": detail.title,
         "price": detail.price,
         "brand": detail.brand,
+        "seller_id": detail.seller_id or "",
+        "region": detail.region or "",
+        "want_cnt": detail.want_cnt,
+        "view_cnt": detail.view_cnt,
+        "thumb_url": detail.thumb_url or "",
+        "image_urls": detail.image_urls or [],
+        "publish_time": detail.publish_time.isoformat() if detail.publish_time else None,
+        "seller_nick": detail.detail_seller_nick or "",
+        "seller_credit": detail.detail_credit_score,
     }

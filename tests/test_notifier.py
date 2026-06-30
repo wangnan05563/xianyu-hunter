@@ -323,10 +323,10 @@ def test_registry_create_unknown_raises() -> None:
 
 
 def test_registry_list_all() -> None:
-    """默认注册表含 7 渠道（P1-3 新增 telegram/wecom/dingtalk/webhook）"""
+    """默认注册表含 8 渠道（P1-3 新增 telegram/wecom/dingtalk/webhook，ntfy 新增）"""
     reg = NotifierRegistry.default()
     names = reg.available()
-    assert set(names) == {"serverchan", "pushplus", "bark", "telegram", "wecom", "dingtalk", "webhook"}
+    assert set(names) == {"serverchan", "pushplus", "bark", "telegram", "wecom", "dingtalk", "webhook", "ntfy"}
 
 
 # ============== Hub ==============
@@ -343,7 +343,14 @@ async def test_hub_no_channels_warning() -> None:
 @pytest.mark.asyncio
 async def test_hub_unknown_channel_skipped() -> None:
     """未知渠道被跳过（不抛错）"""
-    hub = NotifierHub(channels=["nonexistent_xyz", "serverchan"])
+    # mock get_secret 让 serverchan 视为已配置：
+    # serverchan.is_configured 依赖 keyring 中的 send_key，
+    # 测试环境未配置会导致 hub 启动期过滤掉它，与本测试"未知渠道被跳过"的关注点无关
+    with patch(
+        "xianyu_hunter.modules.notifier.serverchan.get_secret",
+        return_value="k1",
+    ):
+        hub = NotifierHub(channels=["nonexistent_xyz", "serverchan"])
     # nonexistent_xyz 不存在 → 只剩 serverchan
     assert len(hub.notifiers) == 1
     assert hub.notifiers[0].name == "serverchan"

@@ -1,4 +1,4 @@
-import { Layout, Menu, theme, Breadcrumb, Spin, Result, Button, Badge, Drawer, Collapse, List, Tag, Tooltip, ConfigProvider, Modal, Input } from 'antd'
+import { Layout, Menu, theme, Breadcrumb, Spin, Button, Badge, Drawer, Collapse, List, Tag, Tooltip, Modal, Input } from 'antd'
 import {
   DashboardOutlined,
   UnorderedListOutlined,
@@ -12,6 +12,7 @@ import {
   BellOutlined,
   HistoryOutlined,
   HomeOutlined,
+  InfoCircleOutlined,
   ToolOutlined,
   RobotOutlined,
   SearchOutlined,
@@ -33,6 +34,9 @@ import {
   MoonOutlined,
   BugOutlined,
   QuestionCircleOutlined,
+  CloudDownloadOutlined,
+  MessageOutlined,
+  BlockOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom'
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
@@ -75,6 +79,7 @@ const menuItems = [
       { key: '/config/search', icon: <SearchOutlined />, label: '搜索参数' },
       { key: '/config/notifier', icon: <BellOutlined />, label: '通知渠道' },
       { key: '/config/ai', icon: <RobotOutlined />, label: 'AI 服务' },
+      { key: '/config/chatbot', icon: <MessageOutlined />, label: '客服配置' },
       { key: '/config/version', icon: <HistoryOutlined />, label: '配置版本' },
     ],
   },
@@ -86,8 +91,18 @@ const menuItems = [
     children: [
       { key: '/maintenance', icon: <ClearOutlined />, label: '系统清理' },
       { key: '/maintenance/db', icon: <DatabaseOutlined />, label: '数据库维护' },
+      { key: '/batch-refresh', icon: <CloudDownloadOutlined />, label: '批量采集' },
       { key: '/anticrawl', icon: <ExperimentOutlined />, label: '反爬登录管理' },
     ],
+  },
+  { type: 'divider' as const },
+  // 智能客服：独立一级菜单，对话入口（配置在"配置管理"分组中）
+  { key: '/chatbot', icon: <MessageOutlined />, label: '智能客服' },
+  { type: 'divider' as const },
+  {
+    key: '/about',
+    icon: <InfoCircleOutlined />,
+    label: '关于',
   },
 ]
 
@@ -111,8 +126,13 @@ const ROUTE_LABELS: Record<string, string> = {
   '/config/version': '配置版本',
   '/maintenance': '系统清理',
   '/maintenance/db': '数据库维护',
+  '/maintenance/vector': '向量数据库维护',
+  '/batch-refresh': '批量采集',
   '/anticrawl': '反爬登录管理',
+  '/chatbot': '智能客服',
+  '/config/chatbot': '客服配置',
   '/help': '帮助文档',
+  '/about': '关于',
 }
 
 // Command Palette 可搜索的命令列表（扁平化所有页面导航项）
@@ -134,8 +154,12 @@ const COMMAND_ITEMS = [
   { key: '/config/version', label: '配置版本', icon: <HistoryOutlined /> },
   { key: '/maintenance', label: '系统清理', icon: <ClearOutlined /> },
   { key: '/maintenance/db', label: '数据库维护', icon: <DatabaseOutlined /> },
+  { key: '/batch-refresh', label: '批量采集', icon: <CloudDownloadOutlined /> },
   { key: '/anticrawl', label: '反爬登录管理', icon: <ExperimentOutlined /> },
+  { key: '/chatbot', label: '智能客服', icon: <MessageOutlined /> },
+  { key: '/config/chatbot', label: '客服配置', icon: <MessageOutlined /> },
   { key: '/help', label: '帮助文档', icon: <QuestionCircleOutlined /> },
+  { key: '/about', label: '关于', icon: <InfoCircleOutlined /> },
 ]
 
 // g+X 全局快捷键映射
@@ -147,6 +171,8 @@ const G_PREFIX_MAP: Record<string, string> = {
   i: '/timeline',
   c: '/config/price',
   l: '/logs',
+  a: '/about',
+  m: '/chatbot',
 }
 
 export default function MainLayout() {
@@ -253,8 +279,8 @@ export default function MainLayout() {
         if (gTimerRef.current) clearTimeout(gTimerRef.current)
       }
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    globalThis.addEventListener('keydown', handler)
+    return () => globalThis.removeEventListener('keydown', handler)
   }, [navigate, cmdOpen])
 
   // Command Palette 模糊搜索过滤（移到 LayoutContent 内部，因为依赖 ConfigProvider 上下文）
@@ -335,7 +361,6 @@ export default function MainLayout() {
     <LayoutContent
       isDark={isDark}
       onToggleTheme={toggle}
-      loggedIn={loggedIn}
       collapsed={collapsed}
       setCollapsed={setCollapsed}
       location={location}
@@ -354,8 +379,6 @@ export default function MainLayout() {
       openKeys={openKeys}
       setOpenKeys={setOpenKeys}
       menuItems={menuItems}
-      gPrefixRef={gPrefixRef}
-      gTimerRef={gTimerRef}
       drawerOpen={drawerOpen}
       setDrawerOpen={setDrawerOpen}
     />
@@ -366,7 +389,6 @@ export default function MainLayout() {
 interface LayoutContentProps {
   isDark: boolean
   onToggleTheme: () => void
-  loggedIn: boolean
   collapsed: boolean
   setCollapsed: React.Dispatch<React.SetStateAction<boolean>>
   location: ReturnType<typeof useLocation>
@@ -385,18 +407,16 @@ interface LayoutContentProps {
   openKeys: string[]
   setOpenKeys: React.Dispatch<React.SetStateAction<string[]>>
   menuItems: NonNullable<MenuProps['items']>
-  gPrefixRef: React.MutableRefObject<boolean>
-  gTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>
   drawerOpen: boolean
   setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
 }
 
 function LayoutContent({
-  isDark, onToggleTheme, loggedIn, collapsed, setCollapsed, location, navigate,
+  isDark, onToggleTheme, collapsed, setCollapsed, location, navigate,
   schedulerRunning, todayAlert, alertCount,
   cmdOpen, setCmdOpen, cmdSearch, setCmdSearch, cmdActive, setCmdActive,
   breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems,
-  gPrefixRef, gTimerRef, drawerOpen, setDrawerOpen,
+  drawerOpen, setDrawerOpen,
 }: LayoutContentProps) {
   // 必须在 ConfigProvider 内部调用，token 才会响应暗色算法
   const { token: themeToken } = theme.useToken()
@@ -407,6 +427,18 @@ function LayoutContent({
     const kw = cmdSearch.toLowerCase()
     return COMMAND_ITEMS.filter((item) => item.label.toLowerCase().includes(kw))
   }, [cmdSearch])
+
+  // 路由切换时重置外层 Content 的滚动位置到顶部
+  // 修复：默认情况下外层 Content 的 scrollTop 不会随路由变化重置，
+  // 从其他页面跳转过来时新页面会显示在错误的滚动位置（如 /chatbot 顶部被截断）。
+  // 用 rAF 确保在 Outlet 渲染完成、DOM 高度更新后再重置，避免时序问题。
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      const el = document.getElementById('main-content')
+      if (el) el.scrollTo({ top: 0, behavior: 'auto' })
+    })
+    return () => cancelAnimationFrame(id)
+  }, [location.pathname])
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -494,7 +526,12 @@ function LayoutContent({
               />
             </Tooltip>
             {/* 调度器状态指示灯：绿色=运行中，红色=已停止 */}
-            <Tooltip title={schedulerRunning === null ? '加载中…' : schedulerRunning ? '调度器运行中' : '调度器已停止'}>
+            <Tooltip title={(() => {
+              // 调度器三态文案：null=加载中 true=运行 false=停止
+              if (schedulerRunning === null) return '加载中…'
+              if (schedulerRunning) return '调度器运行中'
+              return '调度器已停止'
+            })()}>
               <Button
                 type="text"
                 shape="circle"
@@ -507,7 +544,11 @@ function LayoutContent({
                     width: 10,
                     height: 10,
                     borderRadius: '50%',
-                    background: schedulerRunning === null ? '#d9d9d9' : schedulerRunning ? '#52c41a' : '#ff4d4f',
+                    background: (() => {
+                      if (schedulerRunning === null) return '#d9d9d9'
+                      if (schedulerRunning) return '#52c41a'
+                      return '#ff4d4f'
+                    })(),
                     display: 'inline-block',
                   }}
                 />
@@ -549,6 +590,18 @@ function LayoutContent({
               />
             </Tooltip>
 
+            {/* 关于入口：跳转到独立 /about 路由，展示版本/许可/文档资源 */}
+            <Tooltip title="关于">
+              <Button
+                type="text"
+                shape="circle"
+                size="small"
+                icon={<InfoCircleOutlined />}
+                style={{ fontSize: 16, width: 28, height: 28 }}
+                onClick={() => navigate('/about')}
+              />
+            </Tooltip>
+
             <Button
               type="text"
               size="small"
@@ -576,7 +629,7 @@ function LayoutContent({
             </a>
           </div>
         </Header>
-        <Content style={{ overflow: 'auto', background: themeToken.colorBgLayout }}>
+        <Content id="main-content" style={{ overflow: 'auto', background: themeToken.colorBgLayout }}>
           {/* 路由级 ErrorBoundary：页面渲染错误不会波及菜单和布局
               key 驱动重渲染：路由切换时 div 重新挂载，触发淡入动画 */}
           <ErrorBoundary resetKeys={[location.pathname]}>

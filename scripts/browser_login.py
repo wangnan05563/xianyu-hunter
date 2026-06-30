@@ -196,6 +196,15 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
             bc = await pw.chromium.launch_persistent_context(**launch_kwargs)
             timings["launch_context_sec"] = _elapsed_sec(launch_start)
 
+            # 拦截字体、媒体资源，加速页面加载
+            # 不拦截 image：闲鱼扫码登录需要二维码图片，拦截会导致用户无法登录
+            async def _block_resources(route):
+                if route.request.resource_type in ("font", "media"):
+                    await route.abort()
+                else:
+                    await route.continue_()
+            await bc.route("**/*", _block_resources)
+
             try:
                 set_status(status="opening", message="正在打开闲鱼...")
                 page_start = time.monotonic()

@@ -12,7 +12,10 @@ from fastapi import APIRouter, Depends
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import _utcnow, EvaluationRow, OrderRow, EventRow, ItemRow, TaskLinkRow
+from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.web.deps import get_container
+
+logger = get_logger()
 
 router = APIRouter(prefix="/api", tags=["business-kpi"])
 
@@ -102,32 +105,65 @@ def business_kpi(
     ))
 
     # 3) 抢单成功率
+    # 修复：原查询 status in ('paid','confirmed') 永远命中 0 行，因为生产代码
+    # 抢单成功写入 'pending_pay'（已拍下待支付），人工接管确认支付后写入 'succeeded'。
+    # 'paid'/'confirmed' 这两个值在整个代码库中从未被写入 orders 表。
+    # 此处 'succeeded' 与 stats_overview.py 的统计口径保持一致。
     cur_paid, cur_total = repo.db_count_by_predicate(
-        OrderRow, cur_start, now, extra_where=[OrderRow.status.in_(["paid", "confirmed"])],
+        OrderRow, cur_start, now, extra_where=[OrderRow.status == "succeeded"],
     )
     prev_paid, prev_total = repo.db_count_by_predicate(
-        OrderRow, prev_start, prev_end, extra_where=[OrderRow.status.in_(["paid", "confirmed"])],
+        OrderRow, prev_start, prev_end, extra_where=[OrderRow.status == "succeeded"],
     )
+    if cur_total == 0:
+        logger.warning(
+            f"[business_kpi] 抢单成功率分母为 0：近 {range_days} 天无订单记录，"
+            f"可能抢单未触发或订单数据采集异常"
+        )
     cur_order_rate = (cur_paid / cur_total * 100) if cur_total else 0.0
     prev_order_rate = (prev_paid / prev_total * 100) if prev_total else 0.0
     kpis.append(_kpi_block(
         kpi_id="order_success_rate", title="抢单成功率", value=round(cur_order_rate, 1), unit="%",
         delta_pct=_safe_pct_change(cur_order_rate, prev_order_rate), sample_size=cur_total,
-        hint="已支付/已确认订单 / 总订单", is_pct=True,
+        hint="已支付订单 / 总订单", is_pct=True,
     ))
 
     # 4) 推送失败率
-    cur_fail, cur_total = repo.db_count_by_predicate(
+    # 修复 1：原分母用 EventRow 全量事件数，与 hint 文案"总通知事件"不符。
+    #   现分母单独查询 stage like '%notify%' 的事件总数，保证分子分母口径一致。
+    # 修复 2：NotifierHub 现在会在推送成功/失败时写入 stage='notify' 的 EventRow，
+    #   否则此 KPI 永远为 0（无数据可查）。
+    from sqlalchemy import func as sa_func, select as sa_select
+    cur_fail, _ = repo.db_count_by_predicate(
         EventRow, cur_start, now, extra_where=[EventRow.stage.like("%notify%"), EventRow.level == "err"],
     )
-    prev_fail, prev_total = repo.db_count_by_predicate(
+    prev_fail, _ = repo.db_count_by_predicate(
         EventRow, prev_start, prev_end, extra_where=[EventRow.stage.like("%notify%"), EventRow.level == "err"],
     )
-    cur_fail_rate = (cur_fail / cur_total * 100) if cur_total else 0.0
-    prev_fail_rate = (prev_fail / prev_total * 100) if prev_total else 0.0
+    # 分母：stage 含 notify 的事件总数（成功+失败），与 hint 文案一致
+    with repo.engine.connect() as conn:
+        cur_notify_total = int(conn.execute(
+            sa_select(sa_func.count()).select_from(EventRow)
+            .where(EventRow.created_at >= cur_start)
+            .where(EventRow.created_at <= now)
+            .where(EventRow.stage.like("%notify%"))
+        ).scalar() or 0)
+        prev_notify_total = int(conn.execute(
+            sa_select(sa_func.count()).select_from(EventRow)
+            .where(EventRow.created_at >= prev_start)
+            .where(EventRow.created_at <= prev_end)
+            .where(EventRow.stage.like("%notify%"))
+        ).scalar() or 0)
+    if cur_notify_total == 0:
+        logger.warning(
+            f"[business_kpi] 推送失败率分母为 0：近 {range_days} 天无 notify 事件，"
+            f"可能 NotifierHub 未写入推送记录或无推送任务"
+        )
+    cur_fail_rate = (cur_fail / cur_notify_total * 100) if cur_notify_total else 0.0
+    prev_fail_rate = (prev_fail / prev_notify_total * 100) if prev_notify_total else 0.0
     kpis.append(_kpi_block(
         kpi_id="notify_failure_rate", title="推送失败率", value=round(cur_fail_rate, 1), unit="%",
-        delta_pct=_safe_pct_change(cur_fail_rate, prev_fail_rate), sample_size=cur_total,
+        delta_pct=_safe_pct_change(cur_fail_rate, prev_fail_rate), sample_size=cur_notify_total,
         hint="失败通知事件 / 总通知事件（越低越好）", is_pct=True,
     ))
 

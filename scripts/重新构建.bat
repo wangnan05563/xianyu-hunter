@@ -32,6 +32,14 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
+echo [3/3] Generating build info (version + git sha)...
+cd /d "%~dp0.."
+python scripts\build_info.py
+if errorlevel 1 (
+    echo [WARN] build_info.py failed; About page will show "unknown"
+)
+
+echo.
 echo ============================================
 echo   Build complete! Restart service and Ctrl+F5
 echo ============================================

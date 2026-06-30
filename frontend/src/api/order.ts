@@ -46,6 +46,15 @@ export const orderApi = {
   delete: (id: string) =>
     client.delete<{ ok: boolean; id: string; deleted: number }>(`/api/orders/${id}`).then((r) => r.data),
 
+  // 修改订单状态：用户官网支付后标记为 succeeded，评估明细自动联动
+  updateStatus: (id: string, status: string) =>
+    client
+      .patch<{ ok: boolean; id: string; old_status: string; new_status: string; changed: boolean }>(
+        `/api/orders/${id}/status`,
+        { status },
+      )
+      .then((r) => r.data),
+
   // 手动触发抢单：突破纯自动模式，让用户在评估明细页面主动触发
   // 前置条件：服务以 XH_WITH_SCHEDULER=1 模式启动以注入浏览器实例
   // 超时 120 秒：浏览器自动化流程（导航+点击+等待）需要 60-90 秒

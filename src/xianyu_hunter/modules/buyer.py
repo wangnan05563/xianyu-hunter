@@ -18,7 +18,6 @@ import asyncio
 import re
 import time
 import uuid
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 from playwright.async_api import Error as PlaywrightError, Page, TimeoutError as PlaywrightTimeout
@@ -42,6 +41,7 @@ from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repository import Repository
 from xianyu_hunter.infra.selectors import SelectorRepo
 from xianyu_hunter.modules.buyer_config import BuyerConfig
+from xianyu_hunter.modules.collector_utils import check_text_sold
 
 if TYPE_CHECKING:
     from xianyu_hunter.infra.event_bus import EventBus
@@ -130,6 +130,16 @@ class Buyer:
             if wait > 0:
                 await asyncio.sleep(wait)
 
+            # 频率伪装统计：记录落单请求，但不引入额外延迟
+            # 抢单是秒级竞争，LOGIN 类型 5-60s 延迟会导致抢单失败，故仅记录统计
+            # try-except 防止 orchestrator 初始化异常影响抢单主流程
+            try:
+                from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+                from xianyu_hunter.modules.freq_disguise import ActionType
+                get_orchestrator().record_freq_request(ActionType.LOGIN)
+            except Exception:  # noqa: BLE001
+                logger.debug("[Buyer] record_freq_request 失败，忽略不影响抢单")
+
             # 4. 实际落单流程（90 秒总体超时：防止浏览器操作无限阻塞）
             try:
                 order = await asyncio.wait_for(
@@ -199,11 +209,17 @@ class Buyer:
         own_page = page is None
         if own_page:
             page = await self.browser.new_page()  # type: ignore[attr-defined]
+            if hasattr(self.browser, "register_external_page"):
+                self.browser.register_external_page(page)  # type: ignore[attr-defined]
 
         try:
             # 1. 导航到详情页
             logger.info(f"[Buyer] 步骤1/4 导航详情页 item={item_id}")
             await self._navigate(page, item_id)  # type: ignore[arg-type]
+            try:
+                logger.info(f"[Buyer] detail navigation completed item={item_id} url={page.url}")
+            except Exception:
+                pass
 
             # 阶段一已售检测：导航后、点击立即购买前，先检测是否已售
             # 为什么在此处检测：导航完成页面已渲染，此时检测最准；
@@ -260,7 +276,15 @@ class Buyer:
             }
         finally:
             if own_page and page is not None:
-                await page.close()
+                if hasattr(self.browser, "unregister_external_page"):
+                    try:
+                        self.browser.unregister_external_page(page)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
     async def _navigate(self, page: Page, item_id: str) -> None:
         url = build_item_url(item_id)
@@ -437,7 +461,8 @@ class Buyer:
                 # 本轮没点中，间隔后重试
                 if attempt < self.config.click_retry_times:
                     await asyncio.sleep(self.config.click_retry_interval)
-            except (OutOfStockError, BuyerError):
+            # S5713: OutOfStockError 是 BuyerError 的子类，仅保留父类
+            except BuyerError:
                 raise
         return False
 
@@ -770,14 +795,19 @@ class Buyer:
         return None
 
     async def _extract_actual_price(self, page: Page) -> float | None:
-        """从提交订单页面提取实际价格"""
+        """从提交订单页面提取实际价格
+
+        为什么取最后一个数字：订单页价格文本可能含多个数字（如"原价 1000 现价 500"），
+        实际成交价通常出现在最后。取第一个数字会误取原价导致价格校验失败。
+        """
         try:
             el = page.locator(self.selectors.DETAIL_PRICE_MAIN).first
             if await el.count() > 0:
                 text = (await el.text_content() or "").strip()
-                m = re.search(r"\d+(?:\.\d+)?", text.replace(",", ""))
-                if m:
-                    return float(m.group(0))
+                # findall 取所有数字，取最后一个作为实际成交价
+                numbers = re.findall(r"\d+(?:\.\d+)?", text.replace(",", ""))
+                if numbers:
+                    return float(numbers[-1])
         except Exception:  # noqa: BLE001
             pass
         return None
@@ -798,12 +828,12 @@ class Buyer:
         参照 _is_out_of_stock 的页面文字检测模式，独立检测已售关键词。
         为什么不复用 _is_out_of_stock：已售与已下架是不同业务语义，
         标记的目标字段（is_sold）和返回给用户的错误信息也不同。
+        为什么复用 check_text_sold：与详情页采集、DOM 卡片检测共用统一关键词列表，
+        避免闲鱼文案变更时漏改某处导致检测失效（如"卖掉了"曾遗漏）
         """
         try:
             text = await self._read_body_text(page, timeout=2.0)
-            return any(kw in text for kw in (
-                "已售出", "已售完", "已售罄", "宝贝已售", "商品已售",
-            ))
+            return check_text_sold(text)
         except Exception:  # noqa: BLE001
             return False
 

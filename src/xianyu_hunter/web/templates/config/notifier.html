@@ -82,6 +82,29 @@
     </div>
   </div>
 
+  <div class="card mb-16" style="background: var(--bg-2);">
+    <label class="toggle">
+      <input type="checkbox" x-model="$store.cfg.notifier.channels.ntfy">
+      <strong>ntfy</strong>
+      <span class="muted" style="margin-left: 8px;">跨平台推送（Android/iOS/Web/CLI，免费）</span>
+    </label>
+    <div class="field mt-8" x-show="$store.cfg.notifier.channels.ntfy">
+      <label>Topic <span style="color: var(--err);">*</span></label>
+      <input type="text" x-model="$store.cfg.ntfy_topic" placeholder="my-xianyu-alerts-abc123">
+      <span class="help">订阅名即推送通道，建议使用不易被猜到的字符串。<a href="https://ntfy.sh" target="_blank">ntfy.sh</a> 注册账号或直接使用公共实例。</span>
+    </div>
+    <div class="field-row mt-8" x-show="$store.cfg.notifier.channels.ntfy">
+      <div class="field">
+        <label>Server URL</label>
+        <input type="text" x-model="$store.cfg.ntfy_server" placeholder="https://ntfy.sh（留空使用默认）">
+      </div>
+      <div class="field">
+        <label>Token（可选）</label>
+        <input type="text" x-model="$store.cfg.ntfy_token" placeholder="tk_xxx（公共实例可留空）">
+      </div>
+    </div>
+  </div>
+
   <h3>默认通道顺序</h3>
   <p class="muted">按顺序尝试推送，失败则降级到下一个。</p>
   <div class="field">

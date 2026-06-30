@@ -398,6 +398,29 @@ class LoginOrchestrator:
         """是否应插入噪声请求"""
         return self._freq_disguiser.should_insert_noise()
 
+    async def apply_freq_delay(self, action: ActionType) -> tuple[float, bool]:
+        """应用频率伪装延迟（业务模块集成入口）
+
+        统一封装"获取延迟 + sleep + 噪声判断"，让 collector/buyer 等业务模块
+        一行调用即可完成频率伪装。统计计数器在 next_interval/should_insert_noise
+        内部累加，确保统计数据准确反映实际请求节奏。
+
+        Returns:
+            (delay_sec, should_noise): 实际等待秒数 + 是否应插入噪声请求
+        """
+        delay = self._freq_disguiser.next_interval(action)
+        await asyncio.sleep(delay)
+        should_noise = self._freq_disguiser.should_insert_noise()
+        return delay, should_noise
+
+    def record_freq_request(self, action: ActionType) -> bool:
+        """仅记录请求统计（不 sleep）
+
+        用于抢单等时间敏感场景：统计计数器累加，但不引入额外延迟。
+        """
+        self._freq_disguiser.record_request(action)
+        return self._freq_disguiser.should_insert_noise()
+
     # ============== 验证码处理 ==============
 
     @property
@@ -487,6 +510,7 @@ def sync_cookie_layers_from_json() -> bool:
     try:
         import time as _time
         from xianyu_hunter.web.services.cookie_store import get_cookie_store
+        from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
         store = get_cookie_store()
         # 必须先清除缓存再读取：浏览器登录子进程是独立 Python 进程，
         # 写入 cookies.json 后只更新子进程自己的缓存，主进程的 30 秒 TTL 缓存仍是旧数据。
@@ -497,12 +521,15 @@ def sync_cookie_layers_from_json() -> bool:
             return False
         # 过滤过期 cookie：与 /cookies/layers 端点保持一致
         # expires <= 0 视为 session cookie（不过期），expires > 0 且 < now 视为已过期
+        # _m_h5_tk 特殊处理：cookie.expires=-1 无法判断真实过期，需检查内嵌 timestamp，
+        # 否则登录后旧 token 仍会同步给 CookieRotator，与 TokenRenewer 失效标记振荡
         now = _time.time()
         cookie_map = {
             c.get("name", ""): c.get("value", "")
             for c in data["cookies"]
             if c.get("name") and c.get("value")
             and not (c.get("expires", -1) and c.get("expires", -1) > 0 and c.get("expires", -1) < now)
+            and not (c.get("name") == "_m_h5_tk" and is_m5tk_expired(c.get("value", "")))
         }
         if not cookie_map:
             return False

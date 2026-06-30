@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { Card, Switch, Tag, message, Typography } from 'antd'
 import { aiApi, type AIConfig as AIConfigData, type AIUsage } from '../../../api'
 import { extractApiError } from '../../../utils/apiError'
-import { PRESETS } from './constants'
+import { PRESETS, EMBEDDING_PRESETS } from './constants'
 import ModelConfigForm, { type TestResult } from './components/ModelConfigForm'
+import EmbeddingConfigForm, { type EmbeddingTestResult } from './components/EmbeddingConfigForm'
 import UsageStats from './components/UsageStats'
 import BudgetSettings from './components/BudgetSettings'
 
@@ -11,12 +12,17 @@ const { Text } = Typography
 
 export default function AIConfig() {
   // AI 配置状态
+  // embedding_* 字段默认空/0：未配置时后端 fallback 到 LLM 配置（向后兼容）
   const [config, setConfig] = useState<AIConfigData>({
     ai_enabled: true,
     base_url: '',
     api_key: '',
     model: '',
     vision_model: '',
+    embedding_base_url: '',
+    embedding_api_key: '',
+    embedding_model: '',
+    embedding_dimensions: 0,
   })
 
   // 用量数据状态
@@ -43,6 +49,9 @@ export default function AIConfig() {
   const [showApiKey, setShowApiKey] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
+  // Embedding 测试状态独立于 LLM：两端点可能完全不同，需分别验证
+  const [embTesting, setEmbTesting] = useState(false)
+  const [embTestResult, setEmbTestResult] = useState<EmbeddingTestResult | null>(null)
   const [saving, setSaving] = useState(false)
 
   // 初始化加载配置和用量数据
@@ -58,6 +67,11 @@ export default function AIConfig() {
           api_key: configData.api_key ?? '',
           model: configData.model ?? '',
           vision_model: configData.vision_model ?? '',
+          // embedding 字段：后端可能不返回（旧版本），用 ?? 兜底
+          embedding_base_url: configData.embedding_base_url ?? '',
+          embedding_api_key: configData.embedding_api_key ?? '',
+          embedding_model: configData.embedding_model ?? '',
+          embedding_dimensions: configData.embedding_dimensions ?? 0,
         })
       }
       if (usageData) {
@@ -70,7 +84,7 @@ export default function AIConfig() {
   const handleToggleAI = async (checked: boolean) => {
     // 关闭时二次确认，防止误操作导致所有 AI 功能降级
     if (!checked) {
-      const confirmed = window.confirm(
+      const confirmed = globalThis.confirm(
         '确定要关闭 AI 功能吗？\n\n关闭后所有 AI 评估、解析、分析将降级到规则模式，不消耗任何 token。\n可随时重新开启。'
       )
       if (!confirmed) return
@@ -90,17 +104,24 @@ export default function AIConfig() {
     setConfig((prev) => ({ ...prev, ...patch }))
   }
 
-  // 应用预设配置（仅修改 URL 和模型，API Key 需用户自行填写）
-  const applyPreset = (presetKey: keyof typeof PRESETS) => {
+  // 应用预设配置：仅修改 URL 和模型，API Key 需用户自行填写
+  // 必须持久化到后端，否则刷新页面后预设丢失，且 message.success 会误导用户
+  const applyPreset = async (presetKey: keyof typeof PRESETS) => {
     const preset = PRESETS[presetKey]
     if (!preset) return
-    setConfig((prev) => ({
-      ...prev,
+    const patch: Partial<AIConfigData> = {
       base_url: preset.base_url,
       model: preset.model,
       vision_model: preset.vision_model,
-    }))
-    message.success(`已切换到 ${preset.label} 预设`)
+    }
+    try {
+      // 先落库再更新本地状态，确保 UI 与后端一致
+      await aiApi.putConfig(patch)
+      setConfig((prev) => ({ ...prev, ...patch }))
+      message.success(`已切换到 ${preset.label} 预设`)
+    } catch {
+      message.error('切换预设失败')
+    }
   }
 
   // 测试连接：先保存当前配置，再调用测试接口
@@ -124,6 +145,54 @@ export default function AIConfig() {
       setTestResult({ success: false, text: `网络错误: ${errorMsg}` })
     } finally {
       setTesting(false)
+    }
+  }
+
+  // 应用 Embedding 预设：仅修改 embedding_* 字段，不影响 LLM 配置
+  // "复用 LLM 配置" 预设会把 embedding 字段清空，触发后端 fallback 逻辑
+  const applyEmbeddingPreset = async (presetKey: keyof typeof EMBEDDING_PRESETS) => {
+    const preset = EMBEDDING_PRESETS[presetKey]
+    if (!preset) return
+    const patch: Partial<AIConfigData> = {
+      embedding_base_url: preset.embedding_base_url,
+      embedding_model: preset.embedding_model,
+      embedding_dimensions: preset.embedding_dimensions,
+    }
+    try {
+      await aiApi.putConfig(patch)
+      setConfig((prev) => ({ ...prev, ...patch }))
+      message.success(`已切换到 ${preset.label} 预设`)
+    } catch {
+      message.error('切换 Embedding 预设失败')
+    }
+  }
+
+  // 测试 Embedding 连接：独立于 LLM 测试，验证向量端点可用性
+  const handleTestEmbeddingConnection = async () => {
+    setEmbTesting(true)
+    setEmbTestResult(null)
+    try {
+      // 先保存当前 embedding 配置，确保测试使用最新参数
+      await aiApi.putConfig({
+        embedding_base_url: config.embedding_base_url,
+        embedding_api_key: config.embedding_api_key,
+        embedding_model: config.embedding_model,
+        embedding_dimensions: config.embedding_dimensions,
+      })
+      const data = await aiApi.testEmbedding()
+      if (data.ok) {
+        setEmbTestResult({
+          success: true,
+          text: `连接成功 (${data.model || ''}, ${data.dimensions || 0} 维)`,
+        })
+      } else {
+        setEmbTestResult({ success: false, text: data.detail || '连接失败' })
+      }
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : '网络错误'
+      setEmbTestResult({ success: false, text: `网络错误: ${errorMsg}` })
+    } finally {
+      setEmbTesting(false)
     }
   }
 
@@ -219,6 +288,18 @@ export default function AIConfig() {
           testing={testing}
           testResult={testResult}
           onTestConnection={handleTestConnection}
+        />
+
+        {/* Embedding 配置区：与 LLM 同属"AI 服务"配置域，但端点可独立 */}
+        <EmbeddingConfigForm
+          config={config}
+          onConfigChange={updateConfig}
+          showApiKey={showApiKey}
+          onToggleShowApiKey={() => setShowApiKey(!showApiKey)}
+          onApplyPreset={applyEmbeddingPreset}
+          testing={embTesting}
+          testResult={embTestResult}
+          onTestConnection={handleTestEmbeddingConnection}
         />
       </div>{/* end 遮罩容器 */}
 

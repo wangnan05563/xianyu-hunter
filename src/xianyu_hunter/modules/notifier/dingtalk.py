@@ -40,6 +40,10 @@ class DingTalkNotifier(BaseNotifier):
         self.webhook_url = webhook_url or get_secret(KEY_DINGTALK_WEBHOOK) or ""
         self.secret = secret or get_secret(KEY_DINGTALK_SECRET) or ""
 
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.webhook_url)
+
     def _sign(self, timestamp: int) -> str:
         """生成钉钉机器人签名
 

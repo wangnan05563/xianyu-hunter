@@ -1,0 +1,70 @@
+﻿{
+    "rule":  {
+                 "key":  "python:S1192",
+                 "repo":  "python",
+                 "name":  "String literals should not be duplicated",
+                 "createdAt":  "2026-03-11T22:20:44+0800",
+                 "severity":  "CRITICAL",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "design"
+                             ],
+                 "lang":  "py",
+                 "langName":  "Python",
+                 "params":  [
+                                {
+                                    "key":  "exclusionRegex",
+                                    "htmlDesc":  "RegEx matching literals to exclude from triggering an issue",
+                                    "type":  "STRING"
+                                },
+                                {
+                                    "key":  "threshold",
+                                    "htmlDesc":  "Number of times a literal must be duplicated to trigger an issue",
+                                    "defaultValue":  "3",
+                                    "type":  "INTEGER"
+                                }
+                            ],
+                 "defaultDebtRemFnType":  "LINEAR_OFFSET",
+                 "debtRemFnType":  "LINEAR_OFFSET",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "LINEAR_OFFSET",
+                 "defaultRemFnGapMultiplier":  "2min",
+                 "defaultRemFnBaseEffort":  "2min",
+                 "remFnType":  "LINEAR_OFFSET",
+                 "remFnGapMultiplier":  "2min",
+                 "remFnBaseEffort":  "2min",
+                 "remFnOverloaded":  false,
+                 "gapDescription":  "per duplicate instance",
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003cp\u003eUse constants to replace the duplicated string literals. Constants can be referenced from many places, but only need to be updated in a single\nplace.\u003c/p\u003e\n\n\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cp\u003eWith the default threshold of 3:\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\ndef run():\n    prepare(\"action1\")  # Noncompliant - \"action1\" is duplicated 3 times\n    execute(\"action1\")\n    release(\"action1\")\n\n@app.route(\"/api/users/\", methods=[\u0027GET\u0027, \u0027POST\u0027, \u0027PUT\u0027])\ndef users():\n    pass\n\n@app.route(\"/api/projects/\", methods=[\u0027GET\u0027, \u0027POST\u0027, \u0027PUT\u0027])  # Compliant - strings inside decorators are ignored\ndef projects():\n    pass\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nACTION_1 = \"action1\"\n\ndef run():\n    prepare(ACTION_1)\n    execute(ACTION_1)\n    release(ACTION_1)\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eDuplicated string literals make the process of refactoring complex and error-prone, as any change would need to be propagated on all\noccurrences.\u003c/p\u003e\n\u003ch3\u003eExceptions\u003c/h3\u003e\n\u003cp\u003eNo issue will be raised on:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e duplicated string in decorators \u003c/li\u003e\n  \u003cli\u003e strings with less than 5 characters \u003c/li\u003e\n  \u003cli\u003e strings with only letters, numbers and underscores \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:44+0800",
+                 "cleanCodeAttribute":  "DISTINCT",
+                 "cleanCodeAttributeCategory":  "ADAPTABLE",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "HIGH"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

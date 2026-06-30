@@ -1,0 +1,66 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S1082",
+                 "repo":  "typescript",
+                 "name":  "Mouse events should have corresponding keyboard events",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "accessibility",
+                                 "react"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "BUG",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\"https://github.com/jsx-eslint/eslint-plugin-jsx-a11y\"\u003eeslint-plugin-jsx-a11y\u003c/a\u003e - Rule \u003ca\n  href=\"https://github.com/jsx-eslint/eslint-plugin-jsx-a11y/blob/HEAD/docs/rules/mouse-events-have-key-events.md\"\u003emouse-events-have-key-events\u003c/a\u003e\n  \u003c/li\u003e\n  \u003cli\u003e \u003ca href=\"https://github.com/jsx-eslint/eslint-plugin-jsx-a11y\"\u003eeslint-plugin-jsx-a11y\u003c/a\u003e - Rule \u003ca\n  href=\"https://github.com/jsx-eslint/eslint-plugin-jsx-a11y/blob/HEAD/docs/rules/click-events-have-key-events.md\"\u003eclick-events-have-key-events\u003c/a\u003e\n  \u003c/li\u003e\n  \u003cli\u003e SCR2 - \u003ca href=\"https://www.w3.org/TR/WCAG20-TECHS/SCR2.html\"\u003eUsing redundant keyboard and mouse event handlers\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e G90 - \u003ca href=\"https://www.w3.org/TR/WCAG20-TECHS/G90.html\"\u003eProviding keyboard-triggered event handlers\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eOffering the same experience with the mouse and the keyboard allow users to pick their preferred devices.\u003c/p\u003e\n\u003cp\u003eAdditionally, users of assistive technology will also be able to browse the site even if they cannot use the mouse.\u003c/p\u003e\n\u003cp\u003eThis rules detects the following issues:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e when \u003ccode\u003eonClick\u003c/code\u003e is not accompanied by at least one of the following: \u003ccode\u003eonKeyUp\u003c/code\u003e, \u003ccode\u003eonKeyDown\u003c/code\u003e,\n  \u003ccode\u003eonKeyPress\u003c/code\u003e. \u003c/li\u003e\n  \u003cli\u003e when \u003ccode\u003eonmouseover\u003c/code\u003e/\u003ccode\u003eonmouseout\u003c/code\u003e are not paired by \u003ccode\u003eonfocus\u003c/code\u003e/\u003ccode\u003eonblur\u003c/code\u003e. \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003cp\u003eAdd at least one of the following event handlers \u003ccode\u003eonKeyUp\u003c/code\u003e, \u003ccode\u003eonKeyDown\u003c/code\u003e, \u003ccode\u003eonKeyPress\u003c/code\u003e to the element when using\n\u003ccode\u003eonClick\u003c/code\u003e event handler. Add corresponding event handlers \u003ccode\u003eonfocus\u003c/code\u003e/\u003ccode\u003eonblur\u003c/code\u003e to the element when using\n\u003ccode\u003eonmouseover\u003c/code\u003e/\u003ccode\u003eonmouseout\u003c/code\u003e event handlers.\u003c/p\u003e\n\n\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\n\u0026lt;div onClick={() =\u0026gt; {}} /\u0026gt;\n\n\u0026lt;div onMouseOver={ () =\u0026gt; {}} }  /\u0026gt;\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\n\u0026lt;div onClick={() =\u0026gt; {}} onKeyDown={this.handleKeyDown} /\u0026gt;\n\n\u0026lt;div onMouseOver={ () =\u0026gt; {} } onFocus={ () =\u0026gt; {} } /\u0026gt;\n\u003c/pre\u003e\n\u003ch2\u003eExceptions\u003c/h2\u003e\n\u003cp\u003eThis does not apply for interactive or hidden elements, eg. when using \u003ccode\u003earia-hidden=\"true\"\u003c/code\u003e attribute.\u003c/p\u003e",
+                                                 "context":  {
+                                                                 "displayName":  "JSX",
+                                                                 "key":  "jsx"
+                                                             }
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "COMPLETE",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "RELIABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

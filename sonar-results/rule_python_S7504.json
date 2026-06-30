@@ -1,0 +1,65 @@
+﻿{
+    "rule":  {
+                 "key":  "python:S7504",
+                 "repo":  "python",
+                 "name":  "When iterating over an iterable object, using \"list()\" should be avoided",
+                 "createdAt":  "2026-03-11T22:20:44+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+
+                             ],
+                 "lang":  "py",
+                 "langName":  "Python",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "ALL",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e Python Documentation - \u003ca href=\"https://docs.python.org/3/glossary.html#term-iterable\"\u003eIterable Glossary Entry\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e Python Documentation - \u003ca href=\"https://docs.python.domainunion.de/3/library/stdtypes.html#list\"\u003elist()\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003cp\u003eRemove the redundant \u003ccode\u003elist()\u003c/code\u003e call and iterate directly over the original iterable.\u003c/p\u003e\n\n\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nsome_iterable = range(10)\nfor i in list(some_iterable): # Noncompliant: unnecessary list() call\n    print(i)\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nsome_iterable = range(10)\nfor i in some_iterable: # Compliant\n    print(i)\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eWhen iterating over an already iterable object with a for loop or a comprehension, wrapping it with \u003ccode\u003elist()\u003c/code\u003e adds meaningless clutter\nthat doesnât provide any functional value. Additionally, it creates unnecessary overhead by generating an intermediate list in memory, which\ninefficiently consumes memory and can degrade performance, especially with large data structures. Iterating directly over the original object is\ncleaner and more efficient.\u003c/p\u003e"
+                                             },
+                                             {
+                                                 "key":  "introduction",
+                                                 "content":  "\u003cp\u003eThis rule raises an issue when \u003ccode\u003elist()\u003c/code\u003e calls are applied to types that are already directly iterable with for-loops or\ncomprehensions.\u003c/p\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:44+0800",
+                 "cleanCodeAttribute":  "CONVENTIONAL",
+                 "cleanCodeAttributeCategory":  "CONSISTENT",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "LOW"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

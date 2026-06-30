@@ -1,0 +1,40 @@
+﻿{
+    "component":  {
+                      "key":  "xianyu_hunter",
+                      "name":  "Xianyu Hunter",
+                      "description":  "Multi-component project: Python FastAPI backend + React TypeScript frontend",
+                      "qualifier":  "TRK",
+                      "measures":  [
+                                       {
+                                           "metric":  "blocker_violations",
+                                           "value":  "4",
+                                           "bestValue":  false
+                                       },
+                                       {
+                                           "metric":  "info_violations",
+                                           "value":  "0",
+                                           "bestValue":  true
+                                       },
+                                       {
+                                           "metric":  "minor_violations",
+                                           "value":  "254",
+                                           "bestValue":  false
+                                       },
+                                       {
+                                           "metric":  "major_violations",
+                                           "value":  "335",
+                                           "bestValue":  false
+                                       },
+                                       {
+                                           "metric":  "violations",
+                                           "value":  "736",
+                                           "bestValue":  false
+                                       },
+                                       {
+                                           "metric":  "critical_violations",
+                                           "value":  "143",
+                                           "bestValue":  false
+                                       }
+                                   ]
+                  }
+}

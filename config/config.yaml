@@ -8,13 +8,12 @@ browser:
   viewport_height: 768
   user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0
-  # Cookie 定时自动同步配置（详见 docs/plans/2026-06-25-browser-cookie-import-enhancement-design.md）
-  auto_sync: false                    # 默认关闭，需显式启用
-  auto_sync_interval: 30              # 同步间隔（分钟）
-  auto_sync_expiry_threshold: 10      # Cookie 剩余有效期阈值（分钟），低于此值触发同步
-  cdp_port: 9222                      # CDP 调试端口
+  auto_sync: false
+  auto_sync_interval: 30
+  auto_sync_expiry_threshold: 10
+  cdp_port: 9222
 antidetect:
-  qps: 20
+  qps: 10
   min_delay_ms: 3000
   max_delay_ms: 4500
   fail_pause_threshold: 3
@@ -30,7 +29,12 @@ notifier:
   channels:
     serverchan: true
     pushplus: true
-    bark: true
+    bark: false
+    telegram: false
+    wecom: false
+    dingtalk: true
+    webhook: false
+    ntfy: false
   quiet_hours:
     enabled: false
     start: '23:00'
@@ -41,15 +45,14 @@ notifier:
   - EVAL_PASSED
   - BUY_SUCCEEDED
   - TASK_STARTED
-  - TASK_STOPPED
   - TASK_PAUSED
-  - TASK_SEARCH_DONE
-  - ITEM_FOUND
   - EVAL_REJECTED
   - BUY_FAILED
-  - AUTH_EXPIRED
-  - WAF_BLOCKED
-  - SYSTEM_ERROR
+  - ITEM_DISCOVERED
+  - BUY_REQUESTED
+  - WAF_TRIGGERED
+  - LOGIN_EXPIRED
+  - TASK_ERROR
 eval:
   weights:
     professional: 30
@@ -60,7 +63,7 @@ eval:
     on_sale_count: 30
     post_count_30d: 15
     top_category_ratio: 0.8
-    credit_score_min: 60          # 闲鱼信用分0-100，低于此值一票否决
+    credit_score_min: 60
     bad_review_max: 3
     register_days_min: 30
   professional_keywords:
@@ -74,10 +77,17 @@ eval:
   - 一手
   - 现货
   - 大量有货
-  pass_score: 60
-  auto_buy_score: 75
+  - 全新
+  pass_score: 70
+  auto_buy_score: 80
   ai_auto_eval: false
   ai_auto_deep_analyze: false
+  auto_collect_official: true
+  auto_collect_max_per_run: 3
+  auto_collect_dedup_window_minutes: 30
+  auto_collect_fail_pause_threshold: 3
+  ai_multi_run_suggestion: true
+  ai_suggestion_interval: 5
 serverchan_send_key: ''
 pushplus_token: ''
 bark_server: ''
@@ -85,16 +95,72 @@ bark_key: ''
 search:
   page_size: 20
   sort_type: newest
-  timeout: 60
+  timeout: 90
   regions: ''
   filter_tags:
-  - 包邮
+  - personal_idle
+  - verified
+  - free_shipping
 price_strategy:
   enabled_max: true
-  max_price: 800
+  max_price: 700
   enabled_min: true
-  min_price: 100
+  min_price: 510
   enabled_market_ratio: true
   market_ratio: 0.8
   enabled_top_n: true
   top_n: 5
+batch_refresh:
+  enabled: true
+  interval_minutes: 30
+  batch_size: 50
+  max_items_per_run: 100
+  history_retention_days: 90
+chatbot:
+  enabled: true
+  max_history_turns: 10
+  session_timeout_min: 30
+  rag:
+    top_k: 5
+    similarity_threshold: 0.65
+    max_context_chars: 8000
+  llm:
+    model: deepseek-chat
+    temperature: 0.3
+    max_tokens: 2000
+    http_timeout_sec: 25
+    first_token_timeout_sec: 15
+    vision_model: null
+  agent:
+    enable_tools: true
+    max_tool_rounds: 3
+    tool_trigger_mode: function_calling
+    tool_call_timeout_sec: 5
+    tool_llm_timeout_sec: 15
+    tool_total_timeout_sec: 30
+  kb:
+    auto_update_enabled: true
+    update_interval_hours: 6
+    doc_paths:
+    - docs/
+    - src/xianyu_hunter/
+    embedding_concurrency: 5
+    embedding_model: BAAI/bge-small-zh-v1.5
+    embedding_dimensions: 512
+    chunk_size: 500
+    chunk_overlap: 50
+    snapshot_max_keep: 10
+  faq:
+    similarity_threshold: 0.85
+    confirm_threshold: 0.65
+  escalation:
+    feedback_threshold: 2
+    feedback_window_min: 30
+    contact: ''
+    sanitize_pii: true
+dingtalk_secret: SECad1146208ef20707cdeba125721d26a1364a7227824be5a00a2755cb8adbd182
+dingtalk_webhook: https://oapi.dingtalk.com/robot/send?access_token=60f73cc0e418be854bf6e4c780fcf6ec211fc6a76afc856e7508aad473c032f0
+telegram_bot_token: ''
+telegram_chat_id: ''
+wecom_webhook: ''
+webhook_url: ''

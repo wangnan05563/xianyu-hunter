@@ -1,6 +1,7 @@
 """订单 API"""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -17,6 +18,9 @@ router = APIRouter(prefix="/api/orders", tags=["orders"])
 # 留足时间给用户切到 App 完成支付，又不至于无限等待
 # 把订单卡在 takeover_pending 让异常雷达"超时"列永远有数据。
 TAKEOVER_TIMEOUT_MIN = 30
+
+# S1192: 提取重复的错误消息常量
+_ORDER_NOT_FOUND = "订单不存在"
 
 
 @router.get("")
@@ -48,7 +52,9 @@ def list_orders(
     # 给 takeover_pending 订单附加"剩余倒计时秒数"，前端 modal 直接读 deadline。
     # 为什么不后端算 deadline_at 再返回：少一个字段耦合，deadline_sec 已经够用，
     # 前端按需自己拼 deadline_at 字符串展示。
-    now = _utcnow()
+    # SQLite 读回的 confirmed_at 是 naive datetime，_utcnow() 须同步去时区，
+    # 否则 deadline(naive) - now(aware) 会抛 TypeError（与 repo_chatbot.recall_message 同根因）
+    now = _utcnow().replace(tzinfo=None)
     for o in rows:
         if o.get("status") == "takeover_pending":
             ts = o.get("confirmed_at")
@@ -82,7 +88,7 @@ def get_order(
 ) -> dict[str, Any]:
     o = container.repo.get_order(order_id)
     if not o:
-        raise HTTPException(status_code=404, detail="订单不存在")
+        raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     return o
 
 
@@ -100,7 +106,7 @@ def delete_order(
     """
     deleted = container.repo.delete_order_by_id(order_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail="订单不存在")
+        raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     return {"ok": True, "id": order_id, "deleted": deleted}
 
 
@@ -114,14 +120,24 @@ def takeover_order(
     - 复用 upsert_order 写库，但只写 OrderRow 实际存在的列。
     - confirmed_at 记录"用户已确认接管"的时间点。
     - 返回 deadline 让前端 modal 启动倒计时，无需再拉一次详情。
+
+    状态机白名单：仅 pending_pay 可被接管。
+    - 拒绝 takeover_pending → takeover_pending：避免用户无限点击重置 30 分钟倒计时，
+      违背"30 分钟内必须完成支付"的业务约束
+    - 拒绝 succeeded/failed/cancelled → takeover_pending：终态订单不可复活
+    - 用户若需重新接管已 cancel 的订单，需先确保状态回退到 pending_pay
     """
     o = container.repo.get_order(order_id)
     if not o:
-        raise HTTPException(status_code=404, detail="订单不存在")
-    if o.get("status") in ("succeeded", "failed"):
+        raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
+    current_status = o.get("status")
+    if current_status != "pending_pay":
         raise HTTPException(
             status_code=409,
-            detail=f"订单已 {o['status']}，无法接管",
+            detail=(
+                f"订单当前状态 {current_status}，无法接管（仅 pending_pay 可接管）。"
+                f"如需重新接管，请先通过状态修改回退到 pending_pay"
+            ),
         )
     now = _utcnow()
     o["status"] = "takeover_pending"
@@ -151,7 +167,7 @@ def takeover_confirm(
     """
     o = container.repo.get_order(order_id)
     if not o:
-        raise HTTPException(status_code=404, detail="订单不存在")
+        raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     if o.get("status") != "takeover_pending":
         raise HTTPException(
             status_code=409,
@@ -178,16 +194,59 @@ def takeover_cancel(
     """
     o = container.repo.get_order(order_id)
     if not o:
-        raise HTTPException(status_code=404, detail="订单不存在")
+        raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     if o.get("status") != "takeover_pending":
         raise HTTPException(
             status_code=409,
             detail=f"订单当前状态 {o.get('status')}，不能取消接管（仅 takeover_pending 可取消）",
         )
-    o["status"] = "pending"
+    o["status"] = "pending_pay"
     o["confirmed_at"] = None
     container.repo.upsert_order(o)
-    return {"ok": True, "id": order_id, "status": "pending"}
+    return {"ok": True, "id": order_id, "status": "pending_pay"}
+
+
+@router.patch("/{order_id}/status")
+def update_order_status(
+    order_id: str,
+    payload: dict[str, Any],
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """修改订单状态
+
+    用户在闲鱼官网完成支付后，可手动将订单从 pending_pay 改为 succeeded。
+    评估明细页面的 order_status 实时关联 orders 表，状态会自动联动更新。
+
+    支持的目标状态：pending_pay / succeeded / cancelled / failed
+    """
+    new_status = str(payload.get("status") or "").strip()
+    # takeover_pending 是流程中间态，不允许手动设置（必须走 takeover 端点）
+    valid_statuses = {"pending_pay", "succeeded", "cancelled", "failed"}
+    if new_status not in valid_statuses:
+        raise HTTPException(
+            status_code=422,
+            detail=f"无效状态值: {new_status}，允许: {', '.join(sorted(valid_statuses))}",
+        )
+
+    o = container.repo.get_order(order_id)
+    if not o:
+        raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
+
+    old_status = o.get("status", "")
+    if old_status == new_status:
+        return {"ok": True, "id": order_id, "old_status": old_status, "new_status": new_status, "changed": False}
+
+    o["status"] = new_status
+    # succeeded 时记录支付时间，与 takeover_confirm 行为一致
+    if new_status == "succeeded":
+        o["paid_at"] = _utcnow()
+    container.repo.upsert_order(o)
+
+    # 状态变为 succeeded 时触发下游依赖任务（与 takeover_confirm 一致）
+    if new_status == "succeeded" and old_status != "succeeded":
+        _trigger_dependent_tasks(container, o)
+
+    return {"ok": True, "id": order_id, "old_status": old_status, "new_status": new_status, "changed": True}
 
 
 def _trigger_dependent_tasks(container: Container, order: dict) -> None:
@@ -287,13 +346,6 @@ async def manual_takeover(
             detail="闲鱼登录已过期，请先在「Cookie 注入」页面重新登录闲鱼",
         )
 
-    try:
-        from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
-
-        await inject_cookie_store_to_worker_browser("手动抢单前 Cookie 同步", force_refresh_m5tk=False)
-    except Exception as e:
-        logger.debug(f"[ManualTakeover] Cookie 同步到 Worker 浏览器失败: {e}")
-
     # 查询商品信息：用于读取 expected_price 和补充 task_id
     item = container.repo.get_item(item_id)
     if not item:
@@ -317,7 +369,27 @@ async def manual_takeover(
 
     from xianyu_hunter.domain.order import ItemSoldError
 
+    acquired_browser_lock = False
     try:
+        await asyncio.wait_for(
+            container.browser_lock.acquire(priority="high"),
+            timeout=10.0,
+        )
+        acquired_browser_lock = True
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail="系统正在执行后台浏览器任务，请稍后重试手动抢单",
+        )
+
+    try:
+        try:
+            from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+
+            await inject_cookie_store_to_worker_browser("手动抢单前 Cookie 同步", force_refresh_m5tk=False)
+        except Exception as e:
+            logger.debug(f"[ManualTakeover] Cookie 同步到 Worker 浏览器失败: {e}")
+
         result = await container.buyer.buy(
             task_id=task_id,
             item_id=item_id,
@@ -330,6 +402,9 @@ async def manual_takeover(
     except Exception as e:
         logger.exception(f"[ManualTakeover] 抢单异常：{e}")
         raise HTTPException(status_code=500, detail=f"抢单失败：{e}")
+    finally:
+        if acquired_browser_lock:
+            container.browser_lock.release()
 
     if result.outcome.value == "success" and result.order:
         # buyer.buy() 内部已调用 repo.upsert_order 写库，这里只返回结果

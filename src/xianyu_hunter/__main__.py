@@ -20,6 +20,7 @@ import asyncio
 import signal
 import sys
 import uuid
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,8 @@ from xianyu_hunter.container import Container, build_default_container
 from xianyu_hunter.infra.yaml_config import get_config
 from xianyu_hunter.modules.scheduler import TaskScheduler
 from xianyu_hunter.modules.worker import TaskWorker
+# P1: 官方采集回调（延迟导入 _collect_official_and_evaluate 的包装函数）
+from xianyu_hunter.web.startup import _call_official_collect
 
 app = typer.Typer(help="XianyuHunter - 闲鱼自动捡漏与抢单系统")
 control_app = typer.Typer(help="任务控制")
@@ -100,6 +103,12 @@ async def _load_tasks_from_repo(container: Container) -> list[Task]:
                 interval_seconds=task.interval_seconds,
             ),
             repo=container.repo,
+            # P1: 注入官方采集回调（与 web/startup.py 保持一致）
+            official_collect_fn=(
+                lambda iid, tid: _call_official_collect(container, iid, tid)
+            ),
+            # Task 9: 注入 notifier 用于自动采集暂停告警
+            notifier=container.notifier_hub,
         )
         await container.scheduler.register(task, worker)
         workers.append(worker)
@@ -261,10 +270,9 @@ def run(
             await container.scheduler.stop_all()
             container.event_bus.stop()
             bus_task.cancel()
-            try:
+            # shutdown 中 await 已取消的子任务，使用 suppress 避免 CancelledError 中断 cleanup
+            with suppress(asyncio.CancelledError):
                 await bus_task
-            except asyncio.CancelledError:
-                pass
 
     try:
         asyncio.run(_run())
@@ -316,11 +324,18 @@ def web(
     host: str = typer.Option("127.0.0.1", help="监听地址"),
     port: int = typer.Option(8000, help="监听端口"),
     reload: bool = typer.Option(False, help="开发模式（自动重载）"),
-    with_scheduler: bool = typer.Option(False, help="同时启动任务调度器（一键启动 Web + 搜索引擎）"),
+    # 默认启用调度器：实时搜索/批量采集/自动抢单等核心功能都依赖浏览器实例
+    # 使用 --no-with-scheduler 可在纯 Web 模式下启动（仅查看数据，不采集）
+    with_scheduler: bool = typer.Option(
+        True,
+        "--with-scheduler/--no-with-scheduler",
+        help="同时启动任务调度器与浏览器实例（默认启用，使用 --no-with-scheduler 关闭）",
+    ),
 ) -> None:
     """启动 Web 控制台（FastAPI + htmx）
 
-    加 --with-scheduler 可同时启动任务调度器，无需再单独运行 `xianyu run`。
+    默认以调度器模式启动（Web + 浏览器 + 任务引擎同进程），
+    加 --no-with-scheduler 可降级为纯 Web 模式（仅查看数据，不采集）。
     """
     try:
         import uvicorn
@@ -330,9 +345,10 @@ def web(
     import os
     if with_scheduler:
         os.environ["XH_WITH_SCHEDULER"] = "1"
-        typer.echo("→ 模式: Web + 调度器（一键启动）")
+        typer.echo("→ 模式: Web + 调度器（默认，含浏览器实例与任务引擎）")
     else:
         os.environ.pop("XH_WITH_SCHEDULER", None)
+        typer.echo("→ 模式: Web only（纯 Web，实时搜索/批量采集/自动抢单不可用）")
     from xianyu_hunter.web.app import app as web_app
     typer.echo(f"→ 启动 Web 控制台: http://{host}:{port}")
     typer.echo(f"  API 文档:        http://{host}:{port}/api/docs")

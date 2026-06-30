@@ -18,6 +18,7 @@ Mixin 分工：
 - TaskLinksMixin  (repo_links.py)          → 任务关联 CRUD
 - TaskDepsMixin   (repo_deps.py)           → 任务依赖关系 CRUD
 - NotificationsMixin(repo_notifications.py) → 业务通知 CRUD
+- BatchRefreshHistoryMixin (repo_batch_refresh_history.py) → 批量采集执行历史 CRUD
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from xianyu_hunter.infra.repo_error_logs import ErrorLogsMixin
 from xianyu_hunter.infra.repo_links import TaskLinksMixin
 from xianyu_hunter.infra.repo_deps import TaskDepsMixin
 from xianyu_hunter.infra.repo_notifications import NotificationsMixin
+from xianyu_hunter.infra.repo_batch_refresh_history import BatchRefreshHistoryMixin
 
 
 class Repository(
@@ -46,6 +48,7 @@ class Repository(
     TaskLinksMixin,
     TaskDepsMixin,
     NotificationsMixin,
+    BatchRefreshHistoryMixin,
 ):
     """SQLite 数据访问仓库（Mixin 组合模式）
 

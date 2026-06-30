@@ -1,0 +1,63 @@
+# ============================================================
+# XianyuHunter pre-commit 配置
+# 安装方式：
+#   pip install pre-commit
+#   pre-commit install
+# 手动运行：pre-commit run --all-files
+# ============================================================
+repos:
+  # 检查大文件，避免误提交日志/缓存到仓库
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+        exclude: |
+          (?x)^(
+            data/chromadb/.*|
+            data/chromadb/snapshots/.*|
+            frontend/node_modules/.*
+          )$
+      - id: check-merge-conflict
+      - id: check-yaml
+        exclude: '^(docs/|frontend/).*$'
+      - id: end-of-file-fixer
+        exclude: |
+          (?x)^(
+            docs/.*|
+            data/.*|
+            browser-data/.*|
+            \.trae/.*
+          )$
+      - id: trailing-whitespace
+        exclude: |
+          (?x)^(
+            docs/.*|
+            data/.*|
+            browser-data/.*|
+            \.trae/.*
+          )$
+
+  # 自定义本地 hook：拦截本次清理中发现的根目录垃圾文件
+  - repo: local
+    hooks:
+      - id: forbid-root-temp-files
+        name: 🚫 拦截根目录垃圾文件（误重定向/调试产物）
+        entry: bash -c 'if git diff --cached --name-only --diff-filter=A | grep -E "^(0|17_xianyu.*|_r\.json|\.tmp_diff\.txt|\.s3358_lines\.txt|test_result\.txt|test_debug_output\.txt|pytest_result\.txt|pytest_output\.txt|sonar-scan\.log|jenkins_build_.*\.log)$"; then echo "❌ 检测到根目录垃圾文件被提交，请先清理后再提交"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: forbid-scannerwork
+        name: 🚫 拦截 SonarQube 扫描缓存
+        entry: bash -c 'if git diff --cached --name-only | grep -E "^\.scannerwork/"; then echo "❌ 检测到 .scannerwork/ 缓存被提交，请先清理后再提交"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: forbid-browser-cache
+        name: 🚫 拦截浏览器缓存文件
+        entry: bash -c 'if git diff --cached --name-only | grep -E "^browser-data/.*/(Cache|Code Cache|GPUCache|DawnWebGPUCache|DawnGraphiteCache|EdgeCoupons)/"; then echo "❌ 检测到浏览器缓存被提交，请先清理后再提交"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

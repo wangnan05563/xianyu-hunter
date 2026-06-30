@@ -163,9 +163,10 @@ def test_deep_analyze_image_hashes(client: TestClient, tmp_repo: Repository) -> 
     data = resp.json()
     # 2 张图片 → 2 个哈希
     assert len(data["image_hashes"]) == 2
-    # 哈希是 12 位 MD5
+    # 每项为 {url, hash} 结构，hash 是 12 位 MD5
     for h in data["image_hashes"]:
-        assert len(h) == 12
+        assert "url" in h and isinstance(h["url"], str) and h["url"]
+        assert "hash" in h and len(h["hash"]) == 12
 
 
 def test_deep_analyze_damage_detection(client: TestClient, tmp_repo: Repository) -> None:

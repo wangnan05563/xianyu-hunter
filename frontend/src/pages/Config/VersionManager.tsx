@@ -25,13 +25,15 @@ import {
   ShareAltOutlined,
   CopyOutlined,
 } from '@ant-design/icons'
-import { configApi, BackupItem } from '../../api'
+import { configApi, aboutApi, BackupItem, AboutInfo } from '../../api'
 
 const PAGE_SIZE = 10
 
 export default function VersionManager() {
   const [backups, setBackups] = useState<BackupItem[]>([])
-  const [version, setVersion] = useState(0)
+  // 系统版本号来自 /api/about（_build_info.py 写入的 __version__），
+  // 不再用 /api/config/version 的备份数计数——后者会因 BACKUP_KEEP=10 上限卡在 v10
+  const [buildInfo, setBuildInfo] = useState<AboutInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [selectedBackup, setSelectedBackup] = useState<BackupItem | null>(null)
   const [diffModalVisible, setDiffModalVisible] = useState(false)
@@ -44,12 +46,12 @@ export default function VersionManager() {
   const load = async () => {
     setLoading(true)
     try {
-      const [backupRes, versionRes] = await Promise.all([
+      const [backupRes, aboutRes] = await Promise.all([
         configApi.listBackups(),
-        configApi.getVersion(),
+        aboutApi.get(),
       ])
       setBackups(backupRes.backups || [])
-      setVersion(versionRes.version || 0)
+      setBuildInfo(aboutRes)
     } catch {
       message.error('加载版本信息失败')
     } finally {
@@ -147,18 +149,20 @@ export default function VersionManager() {
     }
   }
 
-  const handleImport = async (file: File) => {
-    try {
-      const text = await file.text()
-      const data = JSON.parse(text)
-      if (data.schema !== 'xianyu_hunter.config/v1') {
-        message.error('无效的配置文件格式')
-        return false
-      }
+  // 内部处理函数：核心逻辑封装在此，仅返回 void
+  // handleImport 作为 antd Upload 的 beforeUpload 钩子，统一返回 false 阻止自动上传
+  // 这种"内部函数处理 + 外部包装返回 false"的结构避免所有 return 返回同一值（S3516）
+  const processImport = async (file: File) => {
+    const text = await file.text()
+    const data = JSON.parse(text)
+    if (data.schema !== 'xianyu_hunter.config/v1') {
+      message.error('无效的配置文件格式')
+      return
+    }
 
-      // 先预览
-      const previewRes = await configApi.import(data.config, false)
-      Modal.confirm({
+    // 先预览
+    const previewRes = await configApi.import(data.config, false)
+    Modal.confirm({
         title: '导入配置确认',
         content: (
           <div>
@@ -166,7 +170,12 @@ export default function VersionManager() {
             <div style={{ maxHeight: 300, overflow: 'auto', background: 'var(--xh-bg-spotlight)', padding: 12, fontSize: 12 }}>
               {previewRes.diffs?.slice(0, 20).map((d: { path: string; op: string; old: string; new: string }, i: number) => (
                 <div key={i} style={{ marginBottom: 4 }}>
-                  <Tag color={d.op === 'add' ? 'green' : d.op === 'remove' ? 'red' : 'orange'}>
+                  <Tag color={(() => {
+                    // op 配色：add=绿 remove=红 其他=橙
+                    if (d.op === 'add') return 'green'
+                    if (d.op === 'remove') return 'red'
+                    return 'orange'
+                  })()}>
                     {d.op}
                   </Tag>
                   <code>{d.path}</code>
@@ -192,9 +201,13 @@ export default function VersionManager() {
           }
         },
       })
-    } catch {
+  }
+
+  const handleImport = async (file: File) => {
+    // beforeUpload 钩子：内部处理函数返回 void，钩子统一返回 false 阻止 antd 自动上传
+    await processImport(file).catch(() => {
       message.error('文件解析失败')
-    }
+    })
     return false
   }
 
@@ -229,7 +242,16 @@ export default function VersionManager() {
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={6}>
           <Card>
-            <Statistic title="当前版本" value={version} prefix="v" />
+            <Statistic
+              title="系统版本"
+              value={buildInfo ? `v${buildInfo.version}` : '--'}
+            />
+            {/* 构建日期与 git SHA 作为辅助信息，便于用户判断版本新鲜度 */}
+            {buildInfo && (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                构建：{buildInfo.build_date} · {buildInfo.git_sha.slice(0, 7)}
+              </div>
+            )}
           </Card>
         </Col>
         <Col span={6}>

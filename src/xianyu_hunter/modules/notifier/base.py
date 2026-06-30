@@ -55,6 +55,15 @@ class BaseNotifier:
         """渠道名（子类须覆盖为类属性）"""
         raise NotImplementedError
 
+    @property
+    def is_configured(self) -> bool:
+        """渠道是否已配置有效凭证
+
+        子类根据自身密钥字段覆盖。默认 True 保留对无凭证渠道（如 webhook）的兼容。
+        NotifierHub 初始化时据此过滤，避免每次事件都触发"未配置"错误。
+        """
+        return True
+
     async def send(self, event: Event) -> NotifyResult:
         """对外接口：含重试的推送
 

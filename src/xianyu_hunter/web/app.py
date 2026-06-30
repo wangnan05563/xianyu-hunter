@@ -21,6 +21,7 @@ from xianyu_hunter.web.middleware.auth import setup_auth_middleware
 from xianyu_hunter.web.middleware.exception_handler import register_exception_handlers
 from xianyu_hunter.web.startup import setup_startup_hooks
 from xianyu_hunter.web.routes import (
+    api_about,  # 关于菜单：版本信息 + 检查更新
     api_ai,
     api_anticrawl,
     api_auth,
@@ -28,11 +29,18 @@ from xianyu_hunter.web.routes import (
     api_cron,
     api_db_admin,
     api_error_logs,
+    api_vector_admin,
     api_evaluations,
     api_export,
     api_ai_deep,
     api_accounts_proxies,
+    api_batch_refresh,
+    # 智能客服模块路由：会话/消息/SSE/反馈 + 知识库 + 配置
+    # 为什么集中放在此处：三路由共用 /api/chatbot 前缀，tags 区分功能域
+    api_chatbot,
+    api_chatbot_config,
     api_items,
+    api_kb,
     api_logs,
     api_maintenance,
     api_notifications,
@@ -122,6 +130,8 @@ def create_app() -> FastAPI:
             ".woff2": "font/woff2",
             ".json": "application/json",
             ".map": "application/json",
+            # O-12-26 PWA：manifest 必须用 application/manifest+json 才能被浏览器识别
+            ".webmanifest": "application/manifest+json",
         }
 
         @app.get("/app/{full_path:path}")
@@ -164,6 +174,7 @@ def create_app() -> FastAPI:
     app.include_router(api_orders.router)
     app.include_router(api_evaluations.router)
     app.include_router(api_auth.router)
+    app.include_router(api_about.router)  # 关于菜单：版本信息 + 检查更新
     app.include_router(api_anticrawl.router)  # 反爬登录管理：策略/会话/健康/Cookie 分层
     app.include_router(api_notifications.router)
     app.include_router(api_items.router)  # P3-UX-02：商品 summary 批量接口（抢单记录列表）
@@ -178,7 +189,15 @@ def create_app() -> FastAPI:
     app.include_router(price_dashboard.router)  # P1-6：价格行情看板增强
     app.include_router(api_maintenance.router)  # 系统维护：缓存/数据库/日志清理
     app.include_router(api_db_admin.router)  # 系统维护 → 数据库维护：业务表在线 CRUD
+    app.include_router(api_vector_admin.router)  # 系统维护 → 向量数据库维护：ChromaDB 快照/清理/监控
     app.include_router(api_error_logs.router)  # 后台错误日志：异常捕获 + AI 诊断上下文
+    app.include_router(api_batch_refresh.router)  # 批量采集调度器：定时刷新在售商品详情
+    # 智能客服模块路由：api_chatbot（会话/消息/SSE/反馈）、api_kb（知识库版本/重建）、api_chatbot_config（热更新配置）
+    # 为什么放在最后：chatbot 为可选模块，容器构造时若依赖缺失返回 None，
+    # 路由内通过 get_container().chatbot 判空返回 503，不影响主系统路由注册
+    app.include_router(api_chatbot.router)
+    app.include_router(api_kb.router)
+    app.include_router(api_chatbot_config.router)
 
     @app.get("/healthz", tags=["meta"])
     def healthz() -> JSONResponse:
@@ -348,7 +367,7 @@ _SWAGGER_UI_HTML = """<!DOCTYPE html>
   </div>
   <div class="xh-actions">
     <a class="xh-btn xh-btn-default" href="/app/" target="_blank">控制台</a>
-    <a class="xh-btn xh-btn-primary" href="/app/help" target="_blank">📖 帮助文档</a>
+    <a class="xh-btn xh-btn-primary" href="/app/about" target="_blank">📖 关于</a>
   </div>
 </div>
 <div id="swagger-ui"></div>

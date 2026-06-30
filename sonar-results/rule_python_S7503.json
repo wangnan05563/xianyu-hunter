@@ -1,0 +1,69 @@
+﻿{
+    "rule":  {
+                 "key":  "python:S7503",
+                 "repo":  "python",
+                 "name":  "Async functions should use async features",
+                 "createdAt":  "2026-03-11T22:20:44+0800",
+                 "severity":  "MINOR",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "async"
+                             ],
+                 "lang":  "py",
+                 "langName":  "Python",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "CODE_SMELL",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "5min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "5min",
+                 "remFnOverloaded":  false,
+                 "scope":  "ALL",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eArticles \u0026amp; blog posts\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ca href=\"https://journal.stuffwithstuff.com/2015/02/01/what-color-is-your-function/\"\u003eWhat Color Is Your Function? - Bob Nystrom\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "introduction",
+                                                 "content":  "\u003cp\u003eThis rule raises an issue when a function is declared async but does not use any asynchronous features.\u003c/p\u003e"
+                                             },
+                                             {
+                                                 "key":  "how_to_fix",
+                                                 "content":  "\u003cp\u003eEither remove the \u003ccode\u003easync\u003c/code\u003e keyword, or start using the appropriate asynchronous features.\u003c/p\u003e\n\n\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nasync def my_function():  # Noncompliant\n    print(\"Hello from my function\")\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\ndef my_function():  # Compliant\n    print(\"Hello from my function\")\n\u003c/pre\u003e\n\u003ch4\u003eNoncompliant code example\u003c/h4\u003e\n\u003cpre data-diff-id=\"2\" data-diff-type=\"noncompliant\"\u003e\ndef another_function(): ...\n\nasync def my_function():  # Noncompliant\n    return another_function()\n\u003c/pre\u003e\n\u003ch4\u003eCompliant solution\u003c/h4\u003e\n\u003cpre data-diff-id=\"2\" data-diff-type=\"compliant\"\u003e\nasync def another_function(): ...\n\nasync def my_function():  # Compliant\n    return await another_function()\n\u003c/pre\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eDeclaring a function with \u003ccode\u003easync def\u003c/code\u003e signals that itâs a coroutine, typically because it needs to use \u003ccode\u003eawait\u003c/code\u003e for\nnon-blocking operations (like I/O), or employs other asynchronous features like \u003ccode\u003easync for\u003c/code\u003e or \u003ccode\u003easync with\u003c/code\u003e.\u003c/p\u003e\n\u003cp\u003eIf none of these asynchronous mechanisms are utilized within the functionâs body, the \u003ccode\u003easync\u003c/code\u003e declaration is superfluous.\u003c/p\u003e\n\u003cp\u003eUsing \u003ccode\u003easync\u003c/code\u003e unnecessarily can:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003cstrong\u003eReduce Code Clarity:\u003c/strong\u003e It misleads developers into thinking the function performs asynchronous operations when it doesnât,\n  making the codebase harder to understand and reason about. \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eIntroduce Minor Overhead:\u003c/strong\u003e Calling an \u003ccode\u003easync def\u003c/code\u003e function creates a coroutine object. While modern Python is\n  efficient, this still incurs more overhead than a direct synchronous function call if the asynchronicity isnât actually leveraged. The functionâs\n  body will execute synchronously until an \u003ccode\u003eawait\u003c/code\u003e (if any) is encountered. If thereâs no \u003ccode\u003eawait\u003c/code\u003e or other async feature, it\n  essentially runs synchronously but wrapped as a coroutine. \u003c/li\u003e\n  \u003cli\u003e \u003cstrong\u003eComplicate Usage:\u003c/strong\u003e Callers must use \u003ccode\u003eawait\u003c/code\u003e (or schedule it as a task) to execute the coroutine and get its result.\n  This is an unnecessary ceremony if the function itself isnât truly asynchronous. \u003c/li\u003e\n\u003c/ul\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:44+0800",
+                 "cleanCodeAttribute":  "CONVENTIONAL",
+                 "cleanCodeAttributeCategory":  "CONSISTENT",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "RELIABILITY",
+                                     "severity":  "LOW"
+                                 },
+                                 {
+                                     "softwareQuality":  "MAINTAINABILITY",
+                                     "severity":  "MEDIUM"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

@@ -67,6 +67,10 @@ class BrowserManager:
         # CDP 模式：连接已启动的系统 Edge，指纹最真实
         self.use_cdp = use_cdp
         self._cdp_process: sp.Popen | None = None  # 跟踪 CDP 启动的 Edge 进程
+        # 外部组件（如 BatchRefreshScheduler）正在使用的 page 集合
+        # close_all_pages 跳过这些 page，避免误关并发任务正在用的页面
+        # 修复场景：scheduler.run_once 结束清理时，BatchRefreshScheduler.detail() 仍在用 page
+        self._external_pages: set = set()
 
     async def start(self) -> None:
         """启动浏览器（持久化），含自动重试和清理逻辑
@@ -307,10 +311,24 @@ class BrowserManager:
             assert self._context is not None
             return await self._context.new_page()
 
+    def register_external_page(self, page) -> None:
+        """注册外部组件持有的 page，close_all_pages 不会关闭它
+
+        用于 detail()/seller_profile() 等 own_page=True 的场景，
+        防止 scheduler 在 run_once 结束清理时误关并发任务正在使用的 page。
+        """
+        self._external_pages.add(page)
+
+    def unregister_external_page(self, page) -> None:
+        """取消注册（page 关闭后调用，避免集合泄漏引用）"""
+        self._external_pages.discard(page)
+
     async def close_all_pages(self) -> int:
         """关闭所有打开的页面（保留 context）
 
         在 scheduler 每轮 run_once 结束后调用，防止因异常未关闭的页面堆积。
+        跳过 _external_pages 中外部组件（如 BatchRefreshScheduler）正在使用的 page，
+        避免 TargetClosedError。
         返回关闭的页面数。
         """
         if self._context is None:
@@ -320,6 +338,9 @@ class BrowserManager:
             pages = self._context.pages
             # 保留 about:blank 页面（CDP Edge 启动页），关闭其他所有页面
             for p in pages:
+                # 跳过外部组件正在使用的 page（修复并发任务被误关导致的 TargetClosedError）
+                if p in self._external_pages:
+                    continue
                 try:
                     if p.url not in ("about:blank", "chrome://newtab/"):
                         await p.close()
@@ -344,7 +365,16 @@ class BrowserManager:
         if self._context is None:
             return []
         try:
-            return await self._context.cookies(domains or [])
+            cookie_urls: list[str] = []
+            for domain in domains or []:
+                value = str(domain).strip()
+                if not value:
+                    continue
+                if "://" in value:
+                    cookie_urls.append(value)
+                else:
+                    cookie_urls.append(f"https://{value.lstrip('.')}")
+            return await self._context.cookies(cookie_urls)
         except Exception as e:
             logger.warning("get_cookies 失败: {}", e)
             return []

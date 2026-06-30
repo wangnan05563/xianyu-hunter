@@ -37,15 +37,22 @@ KEY_PUSHPLUS = "pushplus_token"
 KEY_BARK_SERVER = "bark_server"
 KEY_BARK_KEY = "bark_key"
 # P1-3：新增通知渠道密钥
+# key 名与 yaml 字段名保持一致，便于 wire_notifier 同步
 KEY_TELEGRAM_TOKEN = "telegram_bot_token"
 KEY_TELEGRAM_CHAT = "telegram_chat_id"
-KEY_WECOM_WEBHOOK = "wecom_webhook_url"
-KEY_DINGTALK_WEBHOOK = "dingtalk_webhook_url"
+KEY_WECOM_WEBHOOK = "wecom_webhook"
+KEY_DINGTALK_WEBHOOK = "dingtalk_webhook"
 KEY_DINGTALK_SECRET = "dingtalk_secret"
 KEY_WEBHOOK_URL = "webhook_url"
 KEY_WEBHOOK_TOKEN = "webhook_token"
+# ntfy：免费跨平台推送（公共实例 https://ntfy.sh，可自托管）
+KEY_NTFY_SERVER = "ntfy_server"
+KEY_NTFY_TOPIC = "ntfy_topic"
+KEY_NTFY_TOKEN = "ntfy_token"
 # AI 服务密钥
 KEY_OPENAI_API_KEY = "openai_api_key"
+# Embedding 服务密钥（与 LLM 解耦：DeepSeek 等不支持 /embeddings 时需独立配置）
+KEY_EMBEDDING_API_KEY = "embedding_api_key"
 COOKIE_PREFIX = "cookie_"
 
 
@@ -100,7 +107,8 @@ def list_keys() -> list[str]:
                 KEY_TELEGRAM_TOKEN, KEY_TELEGRAM_CHAT,
                 KEY_WECOM_WEBHOOK, KEY_DINGTALK_WEBHOOK, KEY_DINGTALK_SECRET,
                 KEY_WEBHOOK_URL, KEY_WEBHOOK_TOKEN,
-                KEY_OPENAI_API_KEY,
+                KEY_NTFY_SERVER, KEY_NTFY_TOPIC, KEY_NTFY_TOKEN,
+                KEY_OPENAI_API_KEY, KEY_EMBEDDING_API_KEY,
             ]
             return [k for k in keys if get_secret(k) is not None]
         except Exception:
@@ -124,6 +132,7 @@ def migrate_from_env(env_path: str = ".env") -> int:
         "PUSHPLUS_TOKEN": KEY_PUSHPLUS,
         "BARK_KEY": KEY_BARK_KEY,
         "OPENAI_API_KEY": KEY_OPENAI_API_KEY,
+        "EMBEDDING_API_KEY": KEY_EMBEDDING_API_KEY,
     }
     new_lines = []
     for line in env_file.read_text(encoding="utf-8").splitlines():

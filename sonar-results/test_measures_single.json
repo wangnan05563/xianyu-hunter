@@ -1,0 +1,14 @@
+﻿{
+    "component":  {
+                      "key":  "xianyu_hunter",
+                      "name":  "Xianyu Hunter",
+                      "description":  "Multi-component project: Python FastAPI backend + React TypeScript frontend",
+                      "qualifier":  "TRK",
+                      "measures":  [
+                                       {
+                                           "metric":  "ncloc",
+                                           "value":  "48038"
+                                       }
+                                   ]
+                  }
+}

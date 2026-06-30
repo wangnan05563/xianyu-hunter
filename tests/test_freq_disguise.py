@@ -151,6 +151,42 @@ def test_should_insert_noise_full_probability() -> None:
         assert disguiser.should_insert_noise() is True
 
 
+# ============== record_request 测试 ==============
+
+
+def test_record_request_increments_total_count() -> None:
+    """record_request 应累加 total_count 并写入 history"""
+    disguiser = FreqDisguise()
+    disguiser.record_request(ActionType.LOGIN)
+    disguiser.record_request(ActionType.SEARCH)
+    stats = disguiser.get_stats()
+    assert stats["total_requests"] == 2
+    assert stats["history_size"] == 2
+
+
+def test_record_request_does_not_sleep() -> None:
+    """record_request 不引入实际延迟（抢单场景关键）"""
+    import time as _time
+    disguiser = FreqDisguise()
+    t0 = _time.monotonic()
+    for _ in range(10):
+        disguiser.record_request(ActionType.LOGIN)
+    elapsed = _time.monotonic() - t0
+    # 10 次 record_request 应在 0.1s 内完成（无 sleep）
+    assert elapsed < 0.1, f"record_request 耗时 {elapsed:.3f}s，可能引入了延迟"
+
+
+def test_record_request_interval_within_profile_range() -> None:
+    """record_request 采样间隔应在 action 的 [min, max] 范围内"""
+    disguiser = FreqDisguise()
+    profile = INTERVAL_PROFILES[ActionType.LOGIN]
+    for _ in range(20):
+        disguiser.record_request(ActionType.LOGIN)
+    history = list(disguiser._history)
+    for interval in history:
+        assert profile.min_sec <= interval <= profile.max_sec
+
+
 def test_get_noise_action_returns_browse() -> None:
     """噪声操作类型为浏览"""
     disguiser = FreqDisguise()

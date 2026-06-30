@@ -37,6 +37,15 @@ logger = get_logger()
 _live_cache: dict[str, tuple[float, dict]] = {}
 _LIVE_CACHE_TTL = 60
 
+# live 抢单冷却：避免实时搜索频繁触发抢单冲击闲鱼下单接口
+# 为什么需要：live 搜索可能每分钟触发多次，不加冷却会短时间内重复尝试下单
+_live_last_buy_at: float = 0.0
+_LIVE_BUY_COOLDOWN = 30.0
+
+# 持有 task 引用避免被 GC 回收（Python 官方警告：未持有的 task 可能消失）
+# done_callback 自动从集合移除已完成的 task，避免集合无限增长
+_live_buy_tasks: set[asyncio.Task] = set()
+
 # 实时搜索 in-flight 去重：task_id -> asyncio.Event
 # 当搜索正在进行时，后续请求等待 Event 完成后复用缓存结果，避免并发竞争 browser_lock
 # 为什么需要：前端轮询（15s）与用户点击可能同时发起 live 请求，第二个请求会因
@@ -61,6 +70,9 @@ router = APIRouter(prefix="/api/tasks", tags=["task-links"])
 _VALID_TYPES = {"item", "seller"}
 _VALID_SOURCES = {"auto", "manual"}
 _LIVE_SEARCH_IDENTITY_COOKIES = ("cookie2", "sgcookie", "unb")
+
+# S1192: 提取重复的错误消息常量
+_TASK_NOT_FOUND = "任务不存在"
 
 
 class LinkCreate(BaseModel):
@@ -284,12 +296,14 @@ def list_links(
     keyword: str | None = Query(None, description="标题关键词模糊匹配（仅 type=item 有效）"),
     region: str | None = Query(None, description="地区精确匹配（仅 type=item 有效）"),
     brand: str | None = Query(None, description="品牌精确匹配（仅 type=item 有效）"),
+    sold_filter: str = Query("all", pattern="^(all|onsale|sold)$", description="销售状态过滤：all=全部 / onsale=在售 / sold=已售"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """列出任务的关联内容（懒加载用：前端分页拉取）
 
     支持按 keyword/region/brand 过滤：过滤已下推 SQL 层（json_extract + LIKE/=），
     避免 has_search 时全量加载到内存再 Python 过滤。
+    sold_filter 通过 JOIN items 表下推 SQL，仅 item 类型有效；seller 类型行不受影响。
     """
     # 性能埋点：记录端到端耗时（含 DB 查询 + 字段补全 + 序列化），用于长期监控
     _list_start = time.monotonic()
@@ -297,7 +311,7 @@ def list_links(
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
     if not container.repo.get_task(task_id):
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
 
     # 关键词/地区/品牌过滤仅对 item 类型生效（seller 行通常无 title/region/brand 字段）
     has_search = bool(keyword or region or brand) and (type is None or type == "item")
@@ -309,7 +323,7 @@ def list_links(
     items, counts = container.repo.list_and_count_task_links(
         task_id=task_id, link_type=type, limit=limit, offset=offset,
         search_keyword=search_keyword, search_region=search_region,
-        search_brand=search_brand,
+        search_brand=search_brand, sold_filter=sold_filter,
     )
     total_for_type = counts.get(type, len(items)) if type else counts.get("total", len(items))
 
@@ -357,15 +371,16 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
     is_sold 字段从 items 表补全：refresh_item 和 mark_sold 会将最新售出状态写入 items 表，
     补全到 display 确保前端展示与实际库存一致。
     """
+    # 返回新列表引用以满足 S3516（不变返回值规则），内部 dict 仍为原对象引用以保留 in-place 修改
     if not links:
-        return links
+        return list(links)
     # 收集需要补全的 item_id（link_type=item 时 link_key 即为 item_id）
     item_ids: set[str] = set()
     for r in links:
         if r.get("link_type") == "item" and r.get("link_key"):
             item_ids.add(str(r["link_key"]))
     if not item_ids:
-        return links
+        return list(links)
     # 批量查询 items 表（通过 Repository 方法，不直接访问 engine）
     try:
         rows = container.repo.list_items_by_ids(list(item_ids))
@@ -388,7 +403,7 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
                 }
     except Exception as e:
         logger.warning("从 items 表补全字段失败: {}", e)
-        return links
+        return list(links)
     # 补全 display JSON
     for r in links:
         if r.get("link_type") != "item":
@@ -415,7 +430,7 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
             elif k not in display or existing is None or existing == "" or existing == "None":
                 display[k] = v
         r["display"] = display
-    return links
+    return list(links)
 
 
 @router.get("/{task_id}/links/count")
@@ -425,7 +440,7 @@ def count_links(
 ) -> dict[str, Any]:
     """按类型返回关联计数（用于 Tab 角标）"""
     if not container.repo.get_task(task_id):
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     return {"task_id": task_id, **container.repo.count_task_links(task_id)}
 
 
@@ -441,7 +456,7 @@ def create_link(
     if body.source not in _VALID_SOURCES:
         raise HTTPException(status_code=400, detail=f"未知 source: {body.source}")
     if not container.repo.get_task(task_id):
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     link_id = container.repo.upsert_task_link(
         task_id=task_id,
         link_type=body.link_type,
@@ -512,7 +527,7 @@ async def refresh_links(
     """
     task = container.repo.get_task(task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     if not container.collector:
         raise HTTPException(
             status_code=503,
@@ -628,7 +643,7 @@ async def live_links(
     # 前置检查（快速失败，返回正常 HTTP 错误码）
     task = container.repo.get_task(task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     if not container.collector:
         raise HTTPException(
             status_code=503,
@@ -648,12 +663,26 @@ async def live_links(
     min_price = task.get("min_price")
     max_price = task.get("max_price")
     max_publish_days = task.get("max_publish_days")
-    task_search_filters = task.get("search_filters") or []
+    # 排除词：标题命中任一排除词则丢弃（如 "16G" 过滤掉 16G 内存条）
+    # 为什么单独读取：原 live 端点漏接此字段，导致 16G 等无关商品被保留并展示给用户
+    exclude_words = list(task.get("exclude_words") or [])
+    # 任务级 search_filters 与全局 search.filter_tags 合并（与 Worker 行为对齐）
+    # 为什么需要合并：官方链接使用 sourceType=0&yhb=1&postageType=1 筛选条件，
+    # 若仅用任务级 filters 而任务又未配置，Live 搜索 URL 不会附加任何筛选参数，
+    # 导致返回的商品池与官方链接不一致（如 600-680 元区间商品无法被搜到）
+    task_search_filters = list(task.get("search_filters") or [])
     try:
         from xianyu_hunter.infra.yaml_config import get_config
         search_cfg = get_config().search
         search_sort_type = search_cfg.sort_type
         search_regions = search_cfg.regions
+        # 合并全局 filter_tags，去重保序（任务级优先）
+        global_filters = list(search_cfg.filter_tags or [])
+        seen = set(task_search_filters)
+        for f in global_filters:
+            if f not in seen:
+                task_search_filters.append(f)
+                seen.add(f)
     except Exception:
         search_sort_type = "default"
         search_regions = ""
@@ -735,15 +764,17 @@ async def live_links(
             yield sse({"stage": "searching"})
             container.collector.last_session_invalid = False
             try:
-                # 整体超时 30s：goto(15s) + token 刷新(4s) + API 等待(8s) + unroute(2s) ≈ 29s
-                # 优化后各阶段耗时缩短，30s 足够覆盖正常流程，超时则快速失败
+                # 整体超时 45s：max_pages=2 需翻页 2 次
+                # goto(15s) + 首屏 API(8s) + 滚动(4s) + 第 2 屏 API(8s) + unroute(2s) ≈ 37s
+                # 为什么 max_pages=2：max_pages=1 仅取首屏 26 条，会遗漏 600-680 价位段商品，
+                # 官网用户可滚动加载多屏，本地至少取 2 屏以缩小数据差异
                 raw_results = await asyncio.wait_for(
                     container.collector.live_search(
-                        keyword, max_pages=1, collect_sellers=False, fast=True,
+                        keyword, max_pages=2, collect_sellers=False, fast=True,
                         search_filters=task_search_filters,
                         sort_type=search_sort_type, regions=search_regions,
                     ),
-                    timeout=30.0,
+                    timeout=45.0,
                 )
             except asyncio.TimeoutError:
                 yield sse({"stage": "error", "detail": "实时搜索超时，请稍后重试或重启服务", "status": 504})
@@ -861,6 +892,41 @@ async def live_links(
         filter_summary["keyword_skipped"] = skipped
         if skipped:
             logger.info("live_links 关键词过滤跳过了 {} 条无关结果，样例={}", skipped, keyword_skipped_titles[:5])
+
+        # 排除词过滤：标题命中任一排除词则丢弃
+        # 为什么放在关键词后、价格前：排除词是硬性条件，先剔除可减少后续价格过滤的计算量
+        if exclude_words:
+            _filtered = []
+            exclude_skipped = 0
+            exclude_skipped_titles: list[str] = []
+            for r in filtered:
+                title = str((r.get("display") or {}).get("title", ""))
+                # 大小写不敏感匹配：避免 "16g" 与 "16G" 因大小写差异漏过
+                title_lower = title.lower()
+                hit_word = next(
+                    (w for w in exclude_words if w and w.lower() in title_lower),
+                    None,
+                )
+                if hit_word:
+                    exclude_skipped += 1
+                    exclude_skipped_titles.append(str(title)[:60])
+                    if len(_filtered_out) < 50:
+                        _filtered_out.append({
+                            "link_type": r.get("link_type"),
+                            "link_key": r.get("link_key"),
+                            "display": r.get("display"),
+                            "filter_reason": "exclude_words",
+                            "filter_detail": f"标题命中排除词「{hit_word}」",
+                        })
+                else:
+                    _filtered.append(r)
+            filtered = _filtered
+            filter_summary["exclude_words_skipped"] = exclude_skipped
+            if exclude_skipped:
+                logger.info(
+                    "live_links 排除词过滤跳过了 {} 条 (words={})，样例={}",
+                    exclude_skipped, exclude_words, exclude_skipped_titles[:5],
+                )
 
         # 价格过滤（任务级 + 全局 price_strategy）
         try:
@@ -1028,24 +1094,111 @@ async def live_links(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _safe_trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
+async def _safe_trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
     """_trigger_live_evaluation 的安全包装，用于 BackgroundTasks
 
     BackgroundTasks 在响应返回后执行，异常不会反馈给客户端，需在此捕获并记录日志，
     避免未捕获异常导致任务静默失败。
     """
     try:
-        _trigger_live_evaluation(container, task_id, items)
+        await _trigger_live_evaluation(container, task_id, items)
     except Exception as e:
         logger.warning("live_links 后台触发评估失败 task={}: {}", task_id, e)
 
 
-def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
+def _build_live_price_strategy(
+    container: Container, task_id: str, items: list[dict],
+) -> tuple[Any, Any | None]:
+    """构造 live 链路的价格策略与市场上下文
+
+    与 worker.run_once / startup.py 中价格策略构造逻辑保持一致：
+    1. 任务级 min_price/max_price（最高优先级）
+    2. 任务级 price_config dict（仅当上面为 None 时生效）
+    3. 全局 AppConfig.price_strategy（market_ratio 默认 0.8，top_n 默认 None）
+
+    返回 (price_strategy, market_ctx)：
+    - price_strategy 始终非 None（与 worker 一致，即使所有规则都为 None 也会构造）
+      PriceStrategy.check 在所有规则都为 None 时返回 pass_=True，不会误过滤
+    - market_ctx 从当前批次 items 实时算 median（与 worker._compute_market_context 一致），
+      样本数 < 3 时返回 None，market_ratio 规则自动跳过
+
+    为什么独立函数：startup.py 中价格策略是任务注册时一次性构造并注入 worker，
+    而 live 链路是请求时按 task_id 现取任务字段，无法复用 startup 的注入路径
+    """
+    from xianyu_hunter.modules.price_strategy import (
+        MarketContext, PriceConfig, PriceStrategy,
+    )
+    from xianyu_hunter.infra.yaml_config import get_config
+
+    task = container.repo.get_task(task_id) or {}
+
+    # 合并优先级与 startup.py:233-253 完全一致
+    effective_min = task.get("min_price")
+    effective_max = task.get("max_price")
+
+    task_price_override = task.get("price_config") or {}
+    if isinstance(task_price_override, str):
+        try:
+            import json as _json
+            task_price_override = _json.loads(task_price_override)
+        except Exception:
+            task_price_override = {}
+
+    if task_price_override:
+        if effective_min is None and "min_price" in task_price_override:
+            effective_min = task_price_override["min_price"]
+        if effective_max is None and "max_price" in task_price_override:
+            effective_max = task_price_override["max_price"]
+
+    # market_ratio：任务级 price_config 优先，否则回退全局
+    global_price_cfg = get_config().price_strategy
+    if task_price_override and "market_ratio" in task_price_override:
+        market_ratio = task_price_override["market_ratio"]
+    else:
+        market_ratio = global_price_cfg.market_ratio
+
+    strategy = PriceStrategy(PriceConfig(
+        min_price=effective_min,
+        max_price=effective_max,
+        market_ratio=market_ratio,
+        top_n=global_price_cfg.top_n,
+    ))
+
+    # market_ctx：从当前批次 items 算 median（与 worker._compute_market_context 一致）
+    prices: list[float] = []
+    for r in items:
+        p = (r.get("display") or {}).get("price")
+        if p is None:
+            continue
+        try:
+            prices.append(float(p))
+        except (TypeError, ValueError):
+            continue
+    market_ctx = None
+    if len(prices) >= 3:
+        prices.sort()
+        n = len(prices)
+        median = prices[n // 2] if n % 2 == 1 else (prices[n // 2 - 1] + prices[n // 2]) / 2
+        market_ctx = MarketContext(
+            median_price=median, sample_size=n, all_prices=prices,
+        )
+
+    return strategy, market_ctx
+
+
+async def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
     """对 live 搜索结果触发轻量级评估
 
     基于搜索结果构造降级 ItemDetail 和 SellerProfile（不拉取详情页和卖家主页），
     调用 Evaluator.evaluate 生成评分，写入 events 表供评估明细页面展示。
     评估结果标记为"数据不足"，Worker 后续会拉取详情重新评估覆盖。
+
+    架构优化：评估达标的商品会异步触发抢单（_trigger_live_auto_buy），
+    让实时搜索发现的达标商品不必等待 worker 下一轮调度即可抢单。
+
+    价格过滤：评估达标的商品在加入抢单候选名单前，会按任务级价格策略
+    (min_price/max_price/market_ratio) 过滤，与 worker.run_once 行为一致。
+    过滤仅阻止加入候选名单，评估事件仍照写，让前端评估明细页面可见全部商品。
     """
     from xianyu_hunter.domain.item import ItemDetail, ItemSummary
     from xianyu_hunter.domain.seller import SellerProfile
@@ -1056,7 +1209,19 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
     # Evaluator 每次 evaluate 时从 get_config() 实时读取配置，无需传参
     evaluator = getattr(container, "evaluator", None) or Evaluator()
 
+    # 从配置实时读取抢单门槛（与 worker.run_once 使用同一份配置）
+    from xianyu_hunter.infra.yaml_config import get_config
+    auto_buy_score = get_config().eval.auto_buy_score
+
+    # 构造任务级价格策略（与 worker.run_once / startup.py 保持一致）
+    # 为什么 live 链路也需要价格过滤：上一次架构优化加入 _trigger_live_auto_buy 时
+    # 只对齐了"分数达标"判断，遗漏了"价格过滤"，导致任务设了 max_price=5000 但
+    # 商品价格 8000 且评分 85 时，live 链路会误抢单，与 worker 行为不一致
+    price_strategy, market_ctx = _build_live_price_strategy(container, task_id, items)
+
     evaluated = 0
+    price_filtered = 0
+    auto_buy_candidates: list[dict] = []
     for r in items:
         display = r.get("display") or {}
         item_id = r.get("link_key", "")
@@ -1106,7 +1271,12 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
             # 写入 events 表（使用 upsert 按 task_id+item_id 去重，防止重复评估）
             import json as _json
             score_display = eval_result.score if eval_result.score is not None else "N/A"
-            level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
+            if eval_result.is_passed:
+                level = "info"
+            elif eval_result.risk_level != RiskLevel.EXTREME:
+                level = "warn"
+            else:
+                level = "err"
             if eval_result.risk_level == RiskLevel.UNKNOWN:
                 level = "warn"
             container.repo.upsert_eval_event({
@@ -1130,11 +1300,135 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
                     "data_quality": eval_result.data_quality,
                 }, ensure_ascii=False, default=str),
             })
+
+            # 达标商品收集：score >= auto_buy_score 且 risk == LOW
+            # 为什么用 should_auto_buy 而非 is_auto_buy：前者接受配置阈值参数，
+            # 与 worker.run_once 使用同一份 auto_buy_score，保证一致性
+            if eval_result.should_auto_buy(auto_buy_score):
+                # 价格过滤：与 worker.run_once 行为一致，避免任务设置了价格区间
+                # 但 live 链路只看分数导致误抢单
+                # 注意：过滤仅阻止"加入候选名单"，评估事件仍照写，
+                # 让评估明细页面能看到全部商品供用户决策
+                if price_strategy is not None:
+                    verdict = price_strategy.check(detail, market_ctx)
+                    if not verdict.pass_:
+                        price_filtered += 1
+                        logger.info(
+                            "live_links 商品 {} 价格未通过策略({})，跳过加入抢单候选",
+                            detail.id, ", ".join(verdict.reasons),
+                        )
+                        continue
+                auto_buy_candidates.append({
+                    "item_id": detail.id,
+                    "title": detail.title,
+                    "price": detail.price,
+                    "score": eval_result.score,
+                    "risk_level": eval_result.risk_level.value,
+                })
         except Exception as e:
             logger.warning("live 评估失败 item={}: {}", item_id, e)
 
     if evaluated:
-        logger.info("live_links 触发轻量级评估 {} 条 (task={})", evaluated, task_id)
+        logger.info(
+            "live_links 触发轻量级评估 {} 条 (task={}, 价格过滤 {} 条)",
+            evaluated, task_id, price_filtered,
+        )
+
+    # 评估达标的商品异步触发抢单（不阻塞 BackgroundTasks）
+    # 为什么用 create_task 而非 await：抢单耗时 30-90s，串行 await 会阻塞后续 BackgroundTasks
+    if auto_buy_candidates:
+        logger.info(
+            "live_links 发现 {} 个达标商品，触发异步抢单 (task={})",
+            len(auto_buy_candidates), task_id,
+        )
+        for candidate in auto_buy_candidates:
+            task = asyncio.create_task(_trigger_live_auto_buy(container, task_id, candidate))
+            _live_buy_tasks.add(task)
+            task.add_done_callback(_live_buy_tasks.discard)
+
+
+async def _trigger_live_auto_buy(container: Container, task_id: str, candidate: dict) -> None:
+    """对 live 评估达标的商品异步触发抢单
+
+    与 worker.run_once() 的抢单逻辑独立，让实时搜索发现的达标商品也能被抢单，
+    而不必等待 worker 下一轮调度。
+
+    安全保障：
+    1. 任务模式检查：只有 AUTO 模式才抢单（与 worker._should_buy 一致）
+    2. buyer 注入检查：with_browser=False 时优雅跳过
+    3. 冷却检查（锁内）：避免频繁冲击闲鱼下单接口
+    4. browser_lock：避免与 worker/live 端点并发操作浏览器导致 TargetClosedError
+    5. buyer.buy 内部有幂等检查（内存 + DB），无需在此重复
+    """
+    from xianyu_hunter.domain.order import BuyOutcome
+
+    global _live_last_buy_at
+
+    item_id = candidate.get("item_id", "")
+    score = candidate.get("score", "?")
+
+    # 1. 任务模式检查：只有 AUTO 模式才抢单
+    task = container.repo.get_task(task_id)
+    if not task or task.get("mode") != "auto":
+        logger.info(
+            "[LiveAutoBuy] 任务 {} 模式非 auto({})，跳过 live 抢单 {}",
+            task_id, task.get("mode") if task else "None", item_id,
+        )
+        return
+
+    # 2. buyer 注入检查
+    buyer = container.buyer
+    if buyer is None:
+        logger.warning(
+            "[LiveAutoBuy] buyer 未注入（with_browser=False），跳过 live 抢单 {}", item_id
+        )
+        return
+
+    # 3. 获取 browser_lock 并执行抢单
+    # 为什么用 priority="low"：live 抢单是后台任务，不应抢占 live 端点（前端实时搜索）的锁
+    # 为什么用 acquired 标志 + 单一 finally：acquire 成功后若被 CancelledError 打断，
+    # 内层 try/finally 的窗口期内 lock 不会释放，导致后续浏览器操作全部阻塞
+    acquired = False
+    try:
+        await container.browser_lock.acquire(priority="low")
+        acquired = True
+        # 冷却检查在锁内：避免多个协程同时通过检查后串行 buy() 导致冷却失效
+        # 场景：一次搜索发现 3 个达标商品，3 个协程并行触发，若检查在锁外会全部通过
+        now = time.monotonic()
+        if now - _live_last_buy_at < _LIVE_BUY_COOLDOWN:
+            remaining = int(_LIVE_BUY_COOLDOWN - (now - _live_last_buy_at))
+            logger.info(
+                "[LiveAutoBuy] 冷却中（剩余 {}s），跳过 live 抢单 {}", remaining, item_id
+            )
+            return
+
+        _live_last_buy_at = time.monotonic()
+        logger.info(
+            "[LiveAutoBuy] 触发 live 抢单 task={} item={} score={} price={}",
+            task_id, item_id, score, candidate.get("price"),
+        )
+        buy_result = await buyer.buy(
+            task_id=task_id,
+            item_id=item_id,
+            expected_price=candidate.get("price"),
+        )
+        if buy_result.outcome == BuyOutcome.SUCCESS:
+            logger.info(
+                "[LiveAutoBuy] 抢单成功 task={} item={}", task_id, item_id
+            )
+        else:
+            logger.warning(
+                "[LiveAutoBuy] 抢单未成功 task={} item={} outcome={} error={}",
+                task_id, item_id, buy_result.outcome.value,
+                getattr(buy_result, "error", None),
+            )
+    except Exception as e:
+        logger.exception(
+            "[LiveAutoBuy] live 抢单异常 task={} item={}: {}", task_id, item_id, e
+        )
+    finally:
+        if acquired:
+            container.browser_lock.release()
 
 
 # ============== 反查 / 搜索（跨任务） ==============

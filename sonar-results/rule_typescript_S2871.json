@@ -1,0 +1,58 @@
+﻿{
+    "rule":  {
+                 "key":  "typescript:S2871",
+                 "repo":  "typescript",
+                 "name":  "\"Array.prototype.sort()\" and \"Array.prototype.toSorted()\" should use a compare function",
+                 "createdAt":  "2026-03-11T22:20:45+0800",
+                 "severity":  "CRITICAL",
+                 "status":  "READY",
+                 "isTemplate":  false,
+                 "tags":  [
+
+                          ],
+                 "sysTags":  [
+                                 "type-dependent",
+                                 "bad-practice"
+                             ],
+                 "lang":  "ts",
+                 "langName":  "TypeScript",
+                 "params":  [
+
+                            ],
+                 "defaultDebtRemFnType":  "CONSTANT_ISSUE",
+                 "debtRemFnType":  "CONSTANT_ISSUE",
+                 "type":  "BUG",
+                 "defaultRemFnType":  "CONSTANT_ISSUE",
+                 "defaultRemFnBaseEffort":  "10min",
+                 "remFnType":  "CONSTANT_ISSUE",
+                 "remFnBaseEffort":  "10min",
+                 "remFnOverloaded":  false,
+                 "scope":  "MAIN",
+                 "isExternal":  false,
+                 "descriptionSections":  [
+                                             {
+                                                 "key":  "resources",
+                                                 "content":  "\u003ch3\u003eDocumentation\u003c/h3\u003e\n\u003cul\u003e\n  \u003cli\u003e MDN web docs - \u003ca\n  href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort\"\u003e\u003ccode\u003eArray.prototype.sort()\u003c/code\u003e\u003c/a\u003e \u003c/li\u003e\n  \u003cli\u003e MDN web docs - \u003ca\n  href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/toSorted\"\u003e\u003ccode\u003eArray.prototype.toSorted()\u003c/code\u003e\u003c/a\u003e\n  \u003c/li\u003e\n  \u003cli\u003e MDN web docs - \u003ca\n  href=\"https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/localeCompare\"\u003e\u003ccode\u003eString.prototype.localeCompare()\u003c/code\u003e\u003c/a\u003e \u003c/li\u003e\n\u003c/ul\u003e"
+                                             },
+                                             {
+                                                 "key":  "root_cause",
+                                                 "content":  "\u003cp\u003eJavaScript provides built-in methods to sort arrays, making it convenient for developers to manipulate data. There are two primary ways to sort an\narray:\u003c/p\u003e\n\u003cul\u003e\n  \u003cli\u003e \u003ccode\u003eArray.prototype.sort()\u003c/code\u003e: This method sorts the elements of an array in place and returns the sorted array. \u003c/li\u003e\n  \u003cli\u003e \u003ccode\u003eArray.prototype.toSorted()\u003c/code\u003e: This method is designed to return a new sorted array, leaving the original array unchanged. \u003c/li\u003e\n\u003c/ul\u003e\n\u003cp\u003eThe default sort order is lexicographic (dictionary) order, based on the string representation of the elements. This means that when sorting an\narray of strings, numbers, or other elements, they are converted to strings and sorted according to their Unicode code points (UTF-16). For most\ncases, this default behavior is suitable when sorting an array of strings.\u003c/p\u003e\n\u003cp\u003eHowever, itâs essential to be aware of potential pitfalls when sorting arrays of non-string elements, particularly numbers. The lexicographic order\nmay not always produce the expected results for numbers:\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"noncompliant\"\u003e\nconst numbers = [10, 2, 30, 1, 5];\nnumbers.sort(); // Noncompliant: lexicographic sort\nconsole.log(numbers); // Output: [1, 10, 2, 30, 5]\n\u003c/pre\u003e\n\u003cp\u003eTo sort numbers correctly, you must provide a custom comparison function that returns the correct ordering:\u003c/p\u003e\n\u003cpre data-diff-id=\"1\" data-diff-type=\"compliant\"\u003e\nconst numbers = [10, 2, 30, 1, 5];\nnumbers.sort((a, b) =\u0026gt; a - b);\nconsole.log(numbers); // Output: [1, 2, 5, 10, 30]\n\u003c/pre\u003e\n\u003cp\u003eEven to sort strings, the default sort order may give unexpected results. Not only does it not support localization, it also doesnât fully support\nUnicode, as it only considers UTF-16 code units. For example, in the code below, \u003ccode\u003e\"eÎ\"\u003c/code\u003e is surprisingly before and after \u003ccode\u003e\"Ã©Î\"\u003c/code\u003e.\nTo guarantee that the sorting is reliable and remains as such in the long run, it is necessary to provide a compare function that is both locale and\nUnicode aware - typically \u003ccode\u003eString.localeCompare\u003c/code\u003e.\u003c/p\u003e\n\u003cpre\u003e\nconst code1 = \u0027\\u00e9\\u0394\u0027; // \"Ã©Î\"\nconst code2 = \u0027\\u0065\\u0301\\u0394\u0027; // \"Ã©Î\" using Unicode combining marks\nconst code3 = \u0027\\u0065\\u0394\u0027; // \"eÎ\"\nconsole.log([code1, code2, code3].sort()); // Noncompliant: [\"Ã©Î\", \"eÎ\", \"Ã©Î\"], \"eÎ\" position is inconsistent\nconsole.log([code1, code2, code3].sort((a, b) =\u0026gt; a.localeCompare(b))); // [\"eÎ\", \"Ã©Î\", \"Ã©Î\"]\n\u003c/pre\u003e"
+                                             }
+                                         ],
+                 "educationPrinciples":  [
+
+                                         ],
+                 "updatedAt":  "2026-03-11T22:20:45+0800",
+                 "cleanCodeAttribute":  "CLEAR",
+                 "cleanCodeAttributeCategory":  "INTENTIONAL",
+                 "impacts":  [
+                                 {
+                                     "softwareQuality":  "RELIABILITY",
+                                     "severity":  "HIGH"
+                                 }
+                             ]
+             },
+    "actives":  [
+
+                ]
+}

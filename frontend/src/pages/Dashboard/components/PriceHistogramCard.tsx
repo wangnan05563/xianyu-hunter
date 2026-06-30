@@ -35,10 +35,18 @@ export default function PriceHistogramCard({
     if (histogram.summary.median) markLines.push({ xAxis: histogram.summary.median, name: 'P50', label: { formatter: 'P50 ¥{c}', color: token.colorInfo, position: 'end', distance: 6, fontSize: 10 }, lineStyle: { color: token.colorInfo, type: 'dashed' } })
     // P75 标线（底部）— 使用 token 的 error 色
     if (histogram.summary.p75) markLines.push({ xAxis: histogram.summary.p75, name: 'P75', label: { formatter: 'P75 ¥{c}', color: token.colorError, position: 'start', distance: 20, fontSize: 10 }, lineStyle: { color: token.colorError, type: 'dashed' } })
-    // 时间对比基线（7日均价 - 顶部）— 使用 token 的 primary 色
+    // O-09-26 时间对比基线
+    // 7日均价（蓝色虚线 - 顶部）— 短期趋势基线
     if (compare.last7d > 0) markLines.push({ xAxis: compare.last7d, name: '7日均价', label: { formatter: '7日 ¥{c}', color: token.colorPrimary, position: 'end', distance: 20, fontSize: 10 }, lineStyle: { color: token.colorPrimary, type: 'dashed' } })
-    // 今日均价（底部）— 使用 token 的 error 色（实线）
-    if (compare.yesterday > 0) markLines.push({ xAxis: compare.yesterday, name: '今日均价', label: { formatter: '今日 ¥{c}', color: token.colorError, position: 'start', distance: 34, fontSize: 10 }, lineStyle: { color: token.colorError, type: 'solid' } })
+    // 30日均价（紫色虚线 - 顶部）— 中长期趋势基线，O-09-26 新增
+    if (compare.last30d > 0) markLines.push({ xAxis: compare.last30d, name: '30日均价', label: { formatter: '30日 ¥{c}', color: '#722ED1', position: 'end', distance: 34, fontSize: 10 }, lineStyle: { color: '#722ED1', type: 'dashed' } })
+    // 今日均价（红色虚线 - 底部）— O-09-26 改为虚线，与 7d/30d 视觉风格统一
+    if (compare.yesterday > 0) markLines.push({ xAxis: compare.yesterday, name: '今日均价', label: { formatter: '今日 ¥{c}', color: token.colorError, position: 'start', distance: 48, fontSize: 10 }, lineStyle: { color: token.colorError, type: 'dashed' } })
+    // P-09-30 任务定价范围标线（绿色实线）—— 让用户直观看到价格分布相对于定价范围的位置
+    // 仅在选定任务且任务设置了定价范围时显示；与分位数/均价虚线区分用实线
+    const tpr = histogram.summary.task_price_range
+    if (tpr && tpr.min_price != null) markLines.push({ xAxis: tpr.min_price, name: '定价下限', label: { formatter: '定价下限 ¥{c}', color: token.colorSuccess, position: 'start', distance: 62, fontSize: 10 }, lineStyle: { color: token.colorSuccess, type: 'solid' } })
+    if (tpr && tpr.max_price != null) markLines.push({ xAxis: tpr.max_price, name: '定价上限', label: { formatter: '定价上限 ¥{c}', color: token.colorSuccess, position: 'end', distance: 48, fontSize: 10 }, lineStyle: { color: token.colorSuccess, type: 'solid' } })
 
     return {
       tooltip: {
@@ -52,8 +60,29 @@ export default function PriceHistogramCard({
             const diff = ((mid - compare.last7d) / compare.last7d * 100)
             const sign = diff > 0 ? '+' : ''
             // 涨跌色使用 token 的语义色，自动适配主题
-            const diffColor = diff > 5 ? token.colorError : diff < -5 ? token.colorSuccess : token.colorTextTertiary
+            let diffColor: string
+            if (diff > 5) {
+              diffColor = token.colorError
+            } else if (diff < -5) {
+              diffColor = token.colorSuccess
+            } else {
+              diffColor = token.colorTextTertiary
+            }
             html += `<br/>vs 7日均价: <span style="color:${diffColor}">${sign}${diff.toFixed(1)}%</span>`
+          }
+          // O-09-26 新增：vs 30日均价对比（中长期趋势参考）
+          if (compare.last30d > 0) {
+            const diff30 = ((mid - compare.last30d) / compare.last30d * 100)
+            const sign30 = diff30 > 0 ? '+' : ''
+            let diffColor30: string
+            if (diff30 > 5) {
+              diffColor30 = token.colorError
+            } else if (diff30 < -5) {
+              diffColor30 = token.colorSuccess
+            } else {
+              diffColor30 = token.colorTextTertiary
+            }
+            html += `<br/>vs 30日均价: <span style="color:${diffColor30}">${sign30}${diff30.toFixed(1)}%</span>`
           }
           return html
         },
@@ -65,7 +94,12 @@ export default function PriceHistogramCard({
         type: 'value',
         name: '价格 (¥)',
         nameTextStyle: { color: token.colorTextTertiary },
-        axisLabel: { color: token.colorTextTertiary, formatter: (v: number) => v >= 1000 ? (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + 'k' : v },
+        axisLabel: { color: token.colorTextTertiary, formatter: (v: number) => {
+          if (v < 1000) return v
+          // 整千省略小数，非整千保留 1 位
+          const decimals = v % 1000 === 0 ? 0 : 1
+          return (v / 1000).toFixed(decimals) + 'k'
+        } },
         splitLine: { show: false },
         // 两侧留白，确保边界 markLine 标签不被截断
         boundaryGap: ['3%', '3%'],
@@ -148,12 +182,40 @@ export default function PriceHistogramCard({
                   : '低离散'})
               </span>
             </span>
-            {histogram.summary.compare.last7d > 0 && (
+            {histogram.summary.compare.last7d > 0 && (() => {
+              const pct = histogram.summary.compare.diff_pct
+              let tagColor: string
+              if (pct > 5) {
+                tagColor = 'red'
+              } else if (pct < -5) {
+                tagColor = 'green'
+              } else {
+                tagColor = 'default'
+              }
+              return (
+                <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
+                  <Tag color={tagColor}>
+                    较7日
+                  </Tag>
+                  {pct > 0 ? '+' : ''}{pct}%
+                </span>
+              )
+            })()}
+            {/* O-09-26 新增：30日均价基线展示 */}
+            {histogram.summary.compare.last30d > 0 && (
               <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
-                <Tag color={histogram.summary.compare.diff_pct > 5 ? 'red' : histogram.summary.compare.diff_pct < -5 ? 'green' : 'default'}>
-                  较7日
-                </Tag>
-                {histogram.summary.compare.diff_pct > 0 ? '+' : ''}{histogram.summary.compare.diff_pct}%
+                <Tag color="purple">30日均价</Tag>
+                ¥{histogram.summary.compare.last30d}
+              </span>
+            )}
+            {/* P-09-30 新增：任务定价范围展示，让用户对比价格分布与任务定价范围 */}
+            {histogram.summary.task_price_range &&
+              (histogram.summary.task_price_range.min_price != null || histogram.summary.task_price_range.max_price != null) && (
+              <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
+                <Tag color="green">定价范围</Tag>
+                {histogram.summary.task_price_range.min_price != null ? `¥${histogram.summary.task_price_range.min_price}` : '−'}
+                {' ~ '}
+                {histogram.summary.task_price_range.max_price != null ? `¥${histogram.summary.task_price_range.max_price}` : '−'}
               </span>
             )}
           </div>

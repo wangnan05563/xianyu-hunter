@@ -52,10 +52,61 @@ def check_item_sold(raw: dict) -> bool:
     return False
 
 
+# 页面文本检测已售的关键词列表（详情页/DOM 卡片/抢单前复用）
+# 为什么集中维护：闲鱼前端文案多次变更，分散在 3 个文件的关键词列表容易漏改，
+# 统一常量确保任一处发现新文案后全局生效
+# 历史遗漏案例：2026-06-29 发现商品 1058031608014 详情页显示"卖掉了"但被误判为在售，
+# 原因是 _detail.py 关键词列表只有"已售出"等，未覆盖新文案"卖掉了"
+SOLD_TEXT_KEYWORDS: tuple[str, ...] = (
+    "已售",
+    "已售出",
+    "已售完",
+    "已售罄",
+    "宝贝已售",
+    "商品已售",
+    "已下架",
+    "已卖出",
+    # 闲鱼新版文案：详情页参数区块下方直接显示"卖掉了"（无"已"前缀）
+    "卖掉了",
+    # 商品被卖家删除/不存在时的闲鱼提示文案
+    "宝贝不存在",
+    "宝贝走丢了",
+    "该宝贝不存在",
+    "商品不存在",
+    "已删除",
+    "已被删除",
+)
+
+
+def check_text_sold(text: str) -> bool:
+    """从页面文本检测商品是否已售/已删除
+
+    供详情页采集、DOM 卡片检测、抢单前两阶段检测复用，
+    避免三处维护独立关键词列表导致漏检。
+    """
+    if not text:
+        return False
+    return any(kw in text for kw in SOLD_TEXT_KEYWORDS)
+
+
 def parse_price_from_text(text: str) -> float:
-    """从文本中提取价格数字"""
-    m = re.search(r"\d+\.?\d*", text.replace(",", ""))
-    return float(m.group()) if m else 0.0
+    """从文本中提取价格数字
+
+    闲鱼详情页/搜索卡片的 price 元素常将整数与小数部分拆到不同子元素，
+    inner_text() 返回 "123\\n.45" 这样的文本。原正则 \\d+\\.?\\d* 跨不过换行，
+    只能匹配到 "123" 丢失小数。这里先剥离所有空白与逗号再匹配，确保拆行价格被合并。
+
+    支持"万"单位：与 _coerce_price 保持一致，如"1.2万"→12000.0，
+    避免详情页显示"1.2万"时被解析为 1.2，与官网相差 10000 倍。
+    """
+    cleaned = re.sub(r"[\s,]+", "", text)
+    m = re.search(r"\d+\.?\d*", cleaned)
+    if not m:
+        return 0.0
+    price = float(m.group())
+    if "万" in cleaned:
+        price *= 10000
+    return price
 
 
 # 中国地名正则：用于判断 region 字段是否为真实地名
@@ -94,27 +145,89 @@ def is_region_like(text: str) -> bool:
 # 常见品牌别名：用于两类兜底
 # 1. 搜索 API 没有独立 brand 字段时，从标题推断品牌
 # 2. API 把品牌/店铺标签误放进 seller_nick，且 region 是脱敏昵称时识别错位
+# 覆盖范围：内存/存储、笔记本/PC、手机、相机、音频、游戏机、外设、其他常见 3C
+# 命名约定：canonical 用中文常用名，aliases 含中文简称/英文/常见系列名
 _BRAND_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # === 内存/存储 ===
     ("SK海力士", ("sk海力士", "海力士", "hynix", "skhynix", "现代海力士")),
     ("镁光", ("镁光", "美光", "micron")),
     ("英睿达", ("英睿达", "crucial")),
-    ("三星", ("三星", "samsung")),
-    ("联想", ("联想", "lenovo", "thinkpad", "thinkplus")),
+    ("三星", ("三星", "samsung", "galaxy")),
     ("记忆科技", ("记忆科技", "ramaxel")),
     ("金士顿", ("金士顿", "kingston")),
     ("威刚", ("威刚", "adata")),
     ("光威", ("光威", "gloway")),
     ("亿捷", ("亿捷", "eaget")),
     ("全兴", ("全兴",)),
-    ("苹果", ("苹果", "apple", "iphone", "ipad", "macbook")),
-    ("任天堂", ("任天堂", "nintendo", "switch")),
-    ("索尼", ("索尼", "sony")),
-    ("华为", ("华为", "huawei")),
-    ("小米", ("小米", "xiaomi", "redmi")),
+    # === 笔记本/PC ===
+    ("联想", ("联想", "lenovo", "thinkpad", "thinkplus", "thinkbook", "拯救者", "legion")),
     ("戴尔", ("戴尔", "dell")),
     ("惠普", ("惠普", "hp")),
-    ("华硕", ("华硕", "asus")),
-    ("宏碁", ("宏碁", "acer")),
+    ("华硕", ("华硕", "asus", "rog", "玩家国度")),
+    ("宏碁", ("宏碁", "acer", "predator", "暗影骑士")),
+    ("微星", ("微星", "msi")),
+    ("外星人", ("外星人", "alienware")),
+    ("机械革命", ("机械革命", "mechrevo")),
+    ("雷蛇", ("雷蛇", "razer", "blade")),
+    ("荣耀", ("荣耀", "honor", "magicbook")),
+    ("微软", ("微软", "microsoft", "surface")),
+    ("LG", ("lg", "lg电子")),
+    ("技嘉", ("技嘉", "gigabyte", "aorus")),
+    # === 手机 ===
+    ("苹果", ("苹果", "apple", "iphone", "ipad", "macbook", "airpods")),
+    ("华为", ("华为", "huawei", "mate")),
+    ("小米", ("小米", "xiaomi", "redmi", "红米", "poco")),
+    ("OPPO", ("oppo", "欧珀", "find", "reno")),
+    ("vivo", ("vivo", "iqoo", "iQOO")),
+    ("一加", ("一加", "oneplus")),
+    ("realme", ("realme", "真我")),
+    ("努比亚", ("努比亚", "nubia", "红魔", "redmagic")),
+    ("魅族", ("魅族", "meizu")),
+    ("黑鲨", ("黑鲨", "blackshark")),
+    ("诺基亚", ("诺基亚", "nokia")),
+    ("摩托罗拉", ("摩托罗拉", "motorola", "moto")),
+    ("谷歌", ("谷歌", "google", "pixel")),
+    ("中兴", ("中兴", "zte")),
+    ("Nothing", ("nothing", "nothingphone")),
+    # === 相机 ===
+    ("佳能", ("佳能", "canon", "eos")),
+    ("尼康", ("尼康", "nikon")),
+    ("索尼", ("索尼", "sony")),
+    # 注：不添加 a7/a7m4/alpha 等型号别名，避免误命中"华为Mate 7"等无关标题
+    ("富士", ("富士", "fujifilm", "fuji", "x-t", "x-t4", "x-t5")),
+    ("徕卡", ("徕卡", "leica")),
+    ("松下", ("松下", "panasonic", "lumix")),
+    ("奥林巴斯", ("奥林巴斯", "olympus", "om-d")),
+    ("理光", ("理光", "ricoh", "grd", "gr3", "gr2")),
+    ("哈苏", ("哈苏", "hasselblad")),
+    ("宾得", ("宾得", "pentax")),
+    # === 音频 ===
+    ("森海塞尔", ("森海塞尔", "sennheiser")),
+    ("AKG", ("akg", "爱科技")),
+    ("铁三角", ("铁三角", "audio-technica", "audiotechnica")),
+    ("Bose", ("bose",)),
+    ("Beats", ("beats", "beatsaudio")),
+    ("JBL", ("jbl",)),
+    ("漫步者", ("漫步者", "edifier")),
+    ("水月雨", ("水月雨", "moondrop")),
+    # === 游戏机 ===
+    ("任天堂", ("任天堂", "nintendo", "switch", "wii", "3ds")),
+    ("PlayStation", ("playstation", "ps5", "ps4", "psn")),
+    ("Xbox", ("xbox",)),
+    ("Steam Deck", ("steam deck", "steamdeck")),
+    # === 外设 ===
+    ("罗技", ("罗技", "logitech")),
+    ("Cherry", ("cherry", "cherrymx")),
+    ("IKBC", ("ikbc",)),
+    ("Keychron", ("keychron",)),
+    ("雷柏", ("雷柏", "rapoo")),
+    ("双飞燕", ("双飞燕", "a4tech")),
+    # === 其他常见 3C ===
+    ("大疆", ("大疆", "dji", "mavic", "phantom")),
+    ("Dyson", ("dyson", "戴森")),
+    ("Kindle", ("kindle",)),
+    ("Anker", ("anker",)),
+    ("绿联", ("绿联", "ugreen")),
 )
 
 _BRAND_GENERIC_SUFFIXES = (
@@ -265,10 +378,10 @@ def extract_seller_nick(raw: dict) -> tuple[str, str]:
     raw_region = raw.get("region", "")
 
     # 场景 1：nick 为空且 region 不像地名 → 把 region 当 nick
-    if not nick and raw_region:
-        if not is_region_like(raw_region):
-            nick = raw_region.strip()
-            raw_region = ""
+    # S1066: 合并嵌套 if，两个条件同属"是否把 region 当作 nick"的判断
+    if not nick and raw_region and not is_region_like(raw_region):
+        nick = raw_region.strip()
+        raw_region = ""
 
     # 场景 2：nick 不为空但看起来不像昵称（时间描述/价格/标签/地名），
     # 且 region 看起来像昵称 → 交换两者
@@ -487,24 +600,24 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
     # 之前用 `not is_region_like(region) and _looks_like_nick(region)` 判断过于宽松：
     # "杭州"/"深圳" 不带行政区划后缀，is_region_like 返回 False，
     # 但 _looks_like_nick 返回 True（2-20 字符且无非昵称关键词），导致 region 被错误清空
-    if not seller_nick and region:
-        if _MASKED_NICK_PATTERN.match(region):
-            seller_nick = region
-            region = ""
+    # S1066: 合并嵌套 if，外层判断 region 是否脱敏昵称的入口条件
+    if not seller_nick and region and _MASKED_NICK_PATTERN.match(region):
+        seller_nick = region
+        region = ""
 
     # 场景 5：region 不像地名，且 seller_nick 像地名 → 交换
-    if region and seller_nick:
-        if not is_region_like(region) and is_region_like(seller_nick):
-            seller_nick, region = region, seller_nick
+    # S1066: 合并嵌套 if，交换 region 与 seller_nick 的判断条件同属一个语义
+    if region and seller_nick and not is_region_like(region) and is_region_like(seller_nick):
+        seller_nick, region = region, seller_nick
 
     # 场景 6：seller_nick 命中"非昵称"关键词但没有合适的归属字段 → 清空
     # 例如 seller_nick='几乎全新'/'9成新'，既不是时间也不是信用度，
     # 前面场景已尝试纠正但仍然无法识别时应清空，避免前端误显示
     # 触发条件：seller_nick 命中 _NON_NICK_PATTERN 且 region 没有有效值
-    if seller_nick and _NON_NICK_PATTERN.search(seller_nick):
-        if not region:
-            # 无 region 可填补时，清空 seller_nick
-            seller_nick = ""
+    # S1066: 合并嵌套 if，"命中非昵称且无 region 可填补"是同一清空判断
+    if seller_nick and _NON_NICK_PATTERN.search(seller_nick) and not region:
+        # 无 region 可填补时，清空 seller_nick
+        seller_nick = ""
 
     # 写回校正后的字段
     corrected["seller_nick"] = seller_nick

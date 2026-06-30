@@ -26,6 +26,10 @@ class PushPlusNotifier(BaseNotifier):
         super().__init__(**kwargs)
         self.token = token or get_secret(KEY_PUSHPLUS) or ""
 
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.token)
+
     async def _do_send(self, event: Event) -> str:
         if not self.token:
             raise ValueError("PushPlus token 未配置（keyring 缺失或为空）")

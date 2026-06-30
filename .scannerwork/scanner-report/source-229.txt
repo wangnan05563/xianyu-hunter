@@ -1,0 +1,437 @@
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Layout, List, Button, Input, Avatar, Typography, Tag, Dropdown, Empty, Spin, message } from 'antd'
+import {
+  PlusOutlined,
+  UserOutlined,
+  RobotOutlined,
+  DeleteOutlined,
+  StopOutlined,
+} from '@ant-design/icons'
+import { useSSEChat } from './hooks/useSSEChat'
+import { chatbotApi } from './api'
+import { AssistantMessage } from './components/AssistantMessage'
+import type { Session, Message, SSEEvent, ToolCall } from './types'
+
+const { Sider, Content } = Layout
+const { TextArea } = Input
+
+export default function ChatbotPage() {
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [currentSession, setCurrentSession] = useState<Session | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [inputValue, setInputValue] = useState('')
+  const [enableTools, setEnableTools] = useState(true)
+  const [loadingSessions, setLoadingSessions] = useState(false)
+  const [loadingMessages, setLoadingMessages] = useState(false)
+  // 流式响应中的临时消息内容（state 仅用于驱动渲染）
+  const [streamingContent, setStreamingContent] = useState('')
+  const [streamingSources, setStreamingSources] = useState<Message['sources']>([])
+  const [streamingToolCalls, setStreamingToolCalls] = useState<Message['tool_calls']>([])
+
+  // ref 镜像：onComplete 闭包陷阱修复（B-1）
+  // 闭包捕获的 state 是发送时刻的快照，async 回调里始终读到旧值；
+  // ref.current 可变，回调里能拿到最新值，从而正确固化 assistant 消息
+  const streamingContentRef = useRef('')
+  const streamingSourcesRef = useRef<Message['sources']>([])
+  const streamingToolCallsRef = useRef<Message['tool_calls']>([])
+  // H-3：转人工标记，onComplete 据此给 assistantMsg 打 escalated 标记
+  const escalatedRef = useRef(false)
+  const escalateReasonRef = useRef('')
+
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const { isStreaming, sendMessage, cancel } = useSSEChat()
+
+  // 加载会话列表
+  const loadSessions = useCallback(async () => {
+    setLoadingSessions(true)
+    try {
+      const { items } = await chatbotApi.listSessions(1, 50)
+      setSessions(items)
+      // 默认选中第一个会话
+      if (items.length > 0 && !currentSession) {
+        setCurrentSession(items[0])
+      }
+    } catch {
+      message.error('加载会话列表失败')
+    } finally {
+      setLoadingSessions(false)
+    }
+  }, [currentSession])
+
+  useEffect(() => {
+    loadSessions()
+  }, [loadSessions])
+
+  // 切换会话时加载消息
+  useEffect(() => {
+    if (!currentSession) return
+    const loadMessages = async () => {
+      setLoadingMessages(true)
+      try {
+        const { items } = await chatbotApi.listMessages(currentSession.id, 50)
+        setMessages(items)
+      } catch {
+        message.error('加载消息失败')
+      } finally {
+        setLoadingMessages(false)
+      }
+    }
+    loadMessages()
+  }, [currentSession])
+
+  // 自动滚动到底部
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages, streamingContent])
+
+  const handleCreateSession = async () => {
+    try {
+      const session = await chatbotApi.createSession()
+      setSessions((prev) => [session, ...prev])
+      setCurrentSession(session)
+      setMessages([])
+    } catch {
+      message.error('创建会话失败')
+    }
+  }
+
+  const handleDeleteSession = async (id: string) => {
+    try {
+      await chatbotApi.deleteSession(id)
+      setSessions((prev) => prev.filter((s) => s.id !== id))
+      if (currentSession?.id === id) {
+        setCurrentSession(null)
+        setMessages([])
+      }
+      message.success('已删除')
+    } catch {
+      message.error('删除失败')
+    }
+  }
+
+  // SSE 事件处理：根据事件类型更新流式消息
+  // 同步写入 ref + state：ref 供 onComplete 读取最新值，state 触发渲染
+  const handleSSEEvent = useCallback(
+    (event: SSEEvent) => {
+      switch (event.type) {
+        case 'token':
+          // 字段名 content：与后端 orchestrator.py L290 data={"content": token} 对齐
+          streamingContentRef.current += (event.data.content as string || '')
+          setStreamingContent(streamingContentRef.current)
+          break
+        case 'sources':
+          streamingSourcesRef.current = event.data.sources as Message['sources']
+          setStreamingSources(streamingSourcesRef.current)
+          break
+        case 'tool_call':
+          // tool_call 事件的 data 是单个工具调用结果，直接追加到列表
+          // event.data 来自后端 TOOL_CALL 事件，结构对齐 ToolCall 接口
+          streamingToolCallsRef.current = [
+            ...(streamingToolCallsRef.current || []),
+            event.data as unknown as ToolCall,
+          ]
+          setStreamingToolCalls(streamingToolCallsRef.current)
+          break
+        case 'error':
+          // H-2：按 code 分支显示友好提示，而非统一"生成失败"
+          // 后端 code 见 orchestrator.py：SECURITY_VIOLATION / OUT_OF_SCOPE / 其他
+          {
+            const code = event.data.code as string
+            const msg = event.data.message as string
+            if (code === 'SECURITY_VIOLATION') {
+              message.warning('检测到不安全输入，已拦截')
+            } else if (code === 'OUT_OF_SCOPE') {
+              message.warning(msg || '该问题超出客服范围')
+            } else {
+              message.error(msg || '生成失败')
+            }
+          }
+          break
+        case 'escalate':
+          // H-3：转人工事件——将话术写入流式内容，标记 escalated
+          // escalate 是终止事件，触发后 onComplete 会固化这条消息
+          {
+            const escalateMsg = event.data.message as string
+            const reason = event.data.reason as string
+            if (escalateMsg) {
+              streamingContentRef.current = escalateMsg
+              setStreamingContent(escalateMsg)
+            }
+            escalatedRef.current = true
+            escalateReasonRef.current = reason || ''
+          }
+          break
+      }
+    },
+    [],
+  )
+
+  const handleSend = async () => {
+    if (!inputValue.trim() || !currentSession || isStreaming) return
+
+    const userMsg: Message = {
+      id: `temp-${Date.now()}`,
+      session_id: currentSession.id,
+      role: 'user',
+      content: inputValue,
+      created_at: new Date().toISOString(),
+    }
+    setMessages((prev) => [...prev, userMsg])
+    const sentText = inputValue
+    setInputValue('')
+    // 重置 ref + state（ref 必须重置，否则下次对话会带上上次残留内容）
+    streamingContentRef.current = ''
+    streamingSourcesRef.current = []
+    streamingToolCallsRef.current = []
+    escalatedRef.current = false
+    escalateReasonRef.current = ''
+    setStreamingContent('')
+    setStreamingSources([])
+    setStreamingToolCalls([])
+
+    await sendMessage({
+      sessionId: currentSession.id,
+      message: sentText,
+      enableTools,
+      onEvent: handleSSEEvent,
+      onError: (err) => {
+        message.error('对话失败: ' + err.message)
+      },
+      onComplete: () => {
+        // 读 ref.current 而非闭包 state（B-1 修复：避免读到发送时刻的空快照）
+        const content = streamingContentRef.current
+        const sources = streamingSourcesRef.current
+        const toolCalls = streamingToolCallsRef.current
+        const escalated = escalatedRef.current
+        const escalateReason = escalateReasonRef.current
+        // escalate 事件无 content 时也要固化（转人工话术可能为空）
+        if (content || (sources && sources.length) || (toolCalls && toolCalls.length) || escalated) {
+          const assistantMsg: Message = {
+            id: `assistant-${Date.now()}`,
+            session_id: currentSession.id,
+            role: 'assistant',
+            content: content || '(空回复)',
+            sources: sources,
+            tool_calls: toolCalls,
+            escalated: escalated || undefined,
+            escalate_reason: escalateReason || undefined,
+            created_at: new Date().toISOString(),
+          }
+          setMessages((prev) => [...prev, assistantMsg])
+        }
+        // 重置 ref + state
+        streamingContentRef.current = ''
+        streamingSourcesRef.current = []
+        streamingToolCallsRef.current = []
+        escalatedRef.current = false
+        escalateReasonRef.current = ''
+        setStreamingContent('')
+        setStreamingSources([])
+        setStreamingToolCalls([])
+        // 刷新会话列表（更新最后活跃时间）
+        loadSessions()
+      },
+    })
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Enter 发送，Shift+Enter 换行
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleSend()
+    }
+  }
+
+  return (
+    <Layout style={{ height: 'calc(100vh - 56px)', background: 'transparent' }}>
+      <Sider width={280} theme="light" style={{ background: 'transparent', borderRight: '1px solid #f0f0f0' }}>
+        <div style={{ padding: 12 }}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            block
+            onClick={handleCreateSession}
+            style={{ marginBottom: 12 }}
+          >
+            新建会话
+          </Button>
+          {loadingSessions ? (
+            <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
+          ) : sessions.length === 0 ? (
+            <Empty description="暂无会话" />
+          ) : (
+            <List
+              dataSource={sessions}
+              renderItem={(session) => (
+                <List.Item
+                  style={{
+                    cursor: 'pointer',
+                    padding: '8px 12px',
+                    background: currentSession?.id === session.id ? '#e6f4ff' : undefined,
+                    borderRadius: 4,
+                  }}
+                  onClick={() => setCurrentSession(session)}
+                  actions={[
+                    <Dropdown
+                      key="menu"
+                      menu={{
+                        items: [
+                          {
+                            key: 'delete',
+                            label: '删除',
+                            danger: true,
+                            onClick: () => handleDeleteSession(session.id),
+                          },
+                        ],
+                      }}
+                    >
+                      <DeleteOutlined style={{ color: '#999' }} />
+                    </Dropdown>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={
+                      <Typography.Text ellipsis style={{ maxWidth: 160 }}>
+                        {session.title || '新会话'}
+                      </Typography.Text>
+                    }
+                    description={
+                      <span>
+                        <Tag color={session.status === 'active' ? 'green' : 'default'}>
+                          {session.status === 'active' ? '活跃' : '已结束'}
+                        </Tag>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {session.message_count} 条
+                        </Typography.Text>
+                      </span>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          )}
+        </div>
+      </Sider>
+
+      <Content style={{ display: 'flex', flexDirection: 'column', padding: '0 24px' }}>
+        {!currentSession ? (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Empty description="请选择或创建会话" />
+          </div>
+        ) : (
+          <>
+            {/* 消息列表 */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 0' }}>
+              {loadingMessages ? (
+                <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+              ) : (
+                <>
+                  {messages.map((msg) => (
+                    <MessageBubble key={msg.id} message={msg} sessionId={currentSession.id} />
+                  ))}
+                  {/* 流式响应中的临时消息 */}
+                  {isStreaming && streamingContent && (
+                    <MessageBubble
+                      message={{
+                        id: 'streaming',
+                        session_id: currentSession.id,
+                        role: 'assistant',
+                        content: streamingContent,
+                        sources: streamingSources,
+                        tool_calls: streamingToolCalls,
+                        created_at: new Date().toISOString(),
+                      }}
+                      sessionId={currentSession.id}
+                    />
+                  )}
+                  {isStreaming && !streamingContent && (
+                    <div style={{ textAlign: 'center', padding: 16 }}>
+                      <Spin tip="思考中..." />
+                    </div>
+                  )}
+                  <div ref={messagesEndRef} />
+                </>
+              )}
+            </div>
+
+            {/* 输入区 */}
+            <div style={{ padding: '12px 0', borderTop: '1px solid #f0f0f0' }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                <TextArea
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+                  autoSize={{ minRows: 1, maxRows: 4 }}
+                  style={{ flex: 1 }}
+                  maxLength={2000}
+                  disabled={isStreaming}
+                />
+                {isStreaming ? (
+                  <Button danger icon={<StopOutlined />} onClick={cancel}>
+                    停止
+                  </Button>
+                ) : (
+                  <Button
+                    type="primary"
+                    onClick={handleSend}
+                    disabled={!inputValue.trim()}
+                  >
+                    发送
+                  </Button>
+                )}
+              </div>
+              <div style={{ marginTop: 4 }}>
+                <label style={{ fontSize: 12, color: '#999', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={enableTools}
+                    onChange={(e) => setEnableTools(e.target.checked)}
+                    style={{ marginRight: 4 }}
+                  />
+                  启用工具调用（查询任务/评估/配置等实时数据）
+                </label>
+              </div>
+            </div>
+          </>
+        )}
+      </Content>
+    </Layout>
+  )
+}
+
+// 消息气泡：区分用户/助手样式
+function MessageBubble({ message: msg, sessionId }: { message: Message; sessionId: string }) {
+  const isUser = msg.role === 'user'
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 12,
+        flexDirection: isUser ? 'row-reverse' : 'row',
+        marginBottom: 8,
+      }}
+    >
+      <Avatar
+        icon={isUser ? <UserOutlined /> : <RobotOutlined />}
+        style={{ backgroundColor: isUser ? '#FF6200' : '#1677ff', flexShrink: 0 }}
+      />
+      <div
+        style={{
+          maxWidth: '70%',
+          background: isUser ? '#FFF7E6' : '#F5F5F5',
+          padding: '8px 16px',
+          borderRadius: 8,
+        }}
+      >
+        {isUser ? (
+          <Typography.Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
+            {msg.content}
+          </Typography.Paragraph>
+        ) : (
+          <AssistantMessage message={msg} sessionId={sessionId} />
+        )}
+      </div>
+    </div>
+  )
+}

@@ -5,7 +5,7 @@ import asyncio
 import json
 import math
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -24,6 +24,8 @@ from xianyu_hunter.web.utils import to_datetime
 router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
 
 
+# S1192: 提取重复字符串字面量为常量，避免散落维护
+_BROKEN_LABEL = "有故障/维修"
 # 已知污染模式：早期 DOM 解析脚本错误写入的字段值
 _REGION_PATTERNS = re.compile(r"^[\u4e00-\u9fa5]{2,4}$")  # 纯 2-4 字中文（省/市）
 _CREDIT_PATTERNS = re.compile(r"^.*(信用|极好|良好|优秀|信誉).*$")
@@ -229,34 +231,46 @@ def _enrich_eval_with_item(
     if item or link:
         _clean_dirty_seller_nick(payload)
 
-    # 补充字段：仅当 payload 中缺失时填充（不覆盖已有值）
-    if not payload.get("item_title") and title_candidate:
+    # 补充/覆盖字段：items 表和 task_links.display 反映采集最新值，
+    # eval 事件 payload 中的对应字段是评估时的历史快照。
+    # 用户点击标题刷新后，期望评估明细页显示最新商品信息，而非评估时的旧快照。
+    # 因此对"会变动的商品基础信息"字段，有最新值则覆盖；无最新值时保留 payload 旧快照。
+    # 例外：seller_nick 有脏数据清洗特殊逻辑，保持"仅缺失时填充"。
+    if title_candidate:
         payload["item_title"] = title_candidate
-    if payload.get("item_price") is None and price_candidate is not None:
+    # price=0 可能是采集失败（选择器未命中），不应覆盖有效旧值
+    if price_candidate is not None and price_candidate > 0:
         payload["item_price"] = price_candidate
-    if not payload.get("seller_id"):
-        # 优先 items.seller_id，其次 link.seller_id
-        sid = item.get("seller_id") or link.get("seller_id")
-        if sid:
-            payload["seller_id"] = str(sid)
+    # seller_id：有最新值则覆盖
+    sid = item.get("seller_id") or link.get("seller_id")
+    if sid:
+        payload["seller_id"] = str(sid)
     # 关键修复：脏数据清洗后 seller_nick 为空字符串（falsy），
     # 不能用 `not payload.get("seller_nick")` 判定缺失，否则会被 items 表回填错误数据
     if payload.get("seller_nick") is None:
         nick = link.get("seller_nick") or item.get("seller_nick")
         if nick:
             payload["seller_nick"] = nick
-    if not payload.get("thumb_url") and thumb_candidate:
+    if thumb_candidate:
         payload["thumb_url"] = thumb_candidate
-    if not payload.get("region") and region_candidate:
+    if region_candidate:
         payload["region"] = region_candidate
-    if not payload.get("brand") and brand_candidate:
+    if brand_candidate:
         payload["brand"] = brand_candidate
-    if payload.get("want_cnt") is None and want_candidate is not None:
+    # want_cnt/view_cnt=0 可能是采集失败，不应覆盖有效旧值
+    if want_candidate is not None and want_candidate > 0:
         payload["want_cnt"] = want_candidate
-    if payload.get("view_cnt") is None and view_candidate is not None:
+    if view_candidate is not None and view_candidate > 0:
         payload["view_cnt"] = view_candidate
-    if not payload.get("publish_time") and publish_candidate:
+    if publish_candidate:
         payload["publish_time"] = str(publish_candidate)
+    # is_sold：items 表（int 0/1）> task_links.display（bool）> 保留 payload 旧值
+    # 为什么总是覆盖：已售状态会变化（在售→已售），用户期望看到最新状态
+    raw_sold = item.get("is_sold")
+    if raw_sold is not None:
+        payload["is_sold"] = bool(raw_sold)
+    elif "is_sold" in link:
+        payload["is_sold"] = bool(link["is_sold"])
     # 注入订单状态：让评估明细页面能直接展示商品是否已被抢单
     # 为什么不写入 payload 原始事件：order_status 是实时查询的派生字段，不应污染 events 表
     if order_map is not None and item_id:
@@ -283,6 +297,12 @@ def list_evaluations(
     start_time: str | None = Query(None, description="开始时间 (YYYY-MM-DD)"),
     end_time: str | None = Query(None, description="结束时间 (YYYY-MM-DD)"),
     brand: str | None = Query(None, description="品牌精确匹配（从 items/task_links.display 补充后过滤）"),
+    sold_filter: str = Query("all", pattern="^(all|onsale|sold)$", description="销售状态过滤：all=全部 / onsale=在售 / sold=已售"),
+    result_category: str | None = Query(
+        None,
+        pattern="^(auto|pass|fail|insufficient)$",
+        description="结果分类过滤：auto=可抢(≥auto_buy_score) / pass=通过([pass_score,auto_buy_score)) / fail=驳回(<pass_score) / insufficient=数据不足(score=null)",
+    ),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """从 events 表中读 eval.* 事件（与 list_events 共享存储）
@@ -291,6 +311,9 @@ def list_evaluations(
     支持 page_num/page_size 分页（优先于旧版 limit/offset）。
     自动关联 items 表补充标题、价格、卖家等字段。
     brand 过滤在 enrich 之后执行（品牌字段从 task_links.display 补充）。
+    sold_filter 在 Python 端过滤：评估事件本身不存 is_sold，需从 items 表批量查询后过滤。
+    result_category 按配置阈值精确分类过滤，支持 score=null 的"数据不足"过滤，
+    解决前端只过滤当前页导致"点击统计卡片查不到记录"的问题。
     """
     # 预解析时间范围边界（避免在循环内反复解析）
     start_dt = to_datetime(start_time) if start_time else None
@@ -322,6 +345,15 @@ def list_evaluations(
         iid = str(it.get("item_id") or it.get("id") or "")
         if iid:
             item_map[iid] = it
+
+    # 预构建 item_id -> is_sold 映射，供 sold_filter 在 Python 端过滤使用
+    # 为什么不在 SQL 端下推：评估事件存于 events 表，需 JOIN items 表按 item_id 关联，
+    # 再分页；events 表数据量级大且已按 task_id+item_id 去重，Python 端过滤足够高效
+    item_sold_map: dict[str, bool] = {}
+    if sold_filter != "all":
+        for iid, it in item_map.items():
+            # items.is_sold 是 int(0/1)，转 bool 便于过滤判断
+            item_sold_map[iid] = bool(it.get("is_sold"))
 
     # 预加载 task_links.display 数据（弥补 items 表缺失的常见场景：评估事件未入 items 但已关联到任务）
     # 修复：之前直接访问 container.repo.engine 绕过 Repository，改为调用正式方法
@@ -390,8 +422,20 @@ def list_evaluations(
 
         # 品牌精确匹配：brand 字段已由 _enrich_eval_with_item 从 task_links.display 补充
         # 为什么放在 enrich 之后：评估事件本身不存 brand，必须先补全再过滤
-        if brand:
-            if str(payload.get("brand") or "") != brand:
+        # S1066: 合并嵌套 if，外层仅做"是否过滤"判断，内层为同一过滤条件的延续
+        if brand and str(payload.get("brand") or "") != brand:
+            continue
+
+        # 销售状态过滤：根据 items 表 is_sold 字段过滤评估记录
+        # 为什么放在 enrich 之后：item_map 已批量加载 is_sold，复用避免重复查询
+        # 为什么 items 表无记录时按"在售"处理：评估事件可能引用了未入库的商品，
+        # 这种情况按"在售"保留，避免 onsale 过滤时误删有效评估
+        if sold_filter != "all":
+            iid = str(payload.get("item_id") or r.get("item_id") or "")
+            is_sold = item_sold_map.get(iid, False)
+            if sold_filter == "onsale" and is_sold:
+                continue
+            if sold_filter == "sold" and not is_sold:
                 continue
 
         # 评分范围过滤
@@ -405,6 +449,27 @@ def list_evaluations(
             continue
         if max_score is not None and (score is None or score > max_score):
             continue
+
+        # 结果分类过滤：按配置阈值精确分类，与统计卡片展示逻辑一致
+        # 为什么不用 min_score/max_score：score 可能是浮点数（如 75.5），
+        # max_score 是闭区间无法表达 [pass, auto) 半开区间；
+        # insufficient 需要 score=null，min/max_score 会把 null 排除
+        if result_category:
+            eval_cfg = get_config().eval
+            pass_threshold = eval_cfg.pass_score
+            auto_threshold = eval_cfg.auto_buy_score
+            if result_category == "auto":
+                if score is None or score < auto_threshold:
+                    continue
+            elif result_category == "pass":
+                if score is None or score < pass_threshold or score >= auto_threshold:
+                    continue
+            elif result_category == "fail":
+                if score is None or score >= pass_threshold:
+                    continue
+            elif result_category == "insufficient":
+                if score is not None:
+                    continue
 
         # 时间范围过滤
         if start_dt or end_dt:
@@ -472,9 +537,9 @@ _CONDITION_KEYWORDS_LABEL_MAP = {
     "8成新": "正常使用", "8.5新": "正常使用", "85新": "正常使用", "7成新": "明显使用",
     "正常使用": "正常使用", "使用过": "正常使用", "有使用痕迹": "正常使用",
     "明显使用": "明显使用", "外观磨损": "明显使用", "有划痕": "明显使用", "磕碰": "明显使用",
-    "维修": "有故障/维修", "维修过": "有故障/维修", "拆修": "有故障/维修",
-    "故障": "有故障/维修", "损坏": "有故障/维修", "已坏": "有故障/维修",
-    "屏幕破损": "有故障/维修", "进水": "有故障/维修", "摔过": "有故障/维修",
+    "维修": _BROKEN_LABEL, "维修过": _BROKEN_LABEL, "拆修": _BROKEN_LABEL,
+    "故障": _BROKEN_LABEL, "损坏": _BROKEN_LABEL, "已坏": _BROKEN_LABEL,
+    "屏幕破损": _BROKEN_LABEL, "进水": _BROKEN_LABEL, "摔过": _BROKEN_LABEL,
     "原装": "全新", "原厂": "全新", "正品": "全新",  # 单独成色描述时归为全新
     "原盒": "全新", "原包装": "全新", "带发票": "全新", "带保修": "全新", "在保": "全新",
     "裸机": "明显使用", "无包装": "正常使用", "无配件": "正常使用",
@@ -526,7 +591,7 @@ def _enrich_condition_tags(evals: list[dict]) -> None:
 
         # 计算综合成色描述
         if any(t["category"] == "broken" for t in tags):
-            condition_label = "有故障/维修"
+            condition_label = _BROKEN_LABEL
         elif any(t["category"] == "worn" for t in tags):
             condition_label = "明显使用"
         elif any(t["category"] == "used" for t in tags):
@@ -546,10 +611,10 @@ def _enrich_condition_tags(evals: list[dict]) -> None:
             # 根据 override 的成色级别修正 condition_score
             if condition_label == "全新":
                 score = max(score, 1)
-            elif condition_label == "有故障/维修":
+            elif condition_label == _BROKEN_LABEL:
                 score = min(score, -3)  # 之前只修正 label 未修正 score，导致显示不一致
             r["is_branded_new"] = condition_label == "全新"
-            r["has_repair"] = condition_label == "有故障/维修"
+            r["has_repair"] = condition_label == _BROKEN_LABEL
             # 把 override 关键词也加入 tags（方便用户看到原始信息）
             if not any(t["label"] == override for t in tags):
                 tags.append({"category": "newness" if condition_label in ("全新", "近全新") else "used", "label": override})
@@ -561,7 +626,7 @@ def _enrich_condition_tags(evals: list[dict]) -> None:
         r["is_branded_new"] = condition_label == "全新"
         # has_repair：override 命中故障类关键词或自动识别到 broken category 时为 True
         # 之前用 any(t["category"] == "broken") 单独判断会覆盖 override 的正确结果
-        r["has_repair"] = condition_label == "有故障/维修" or any(t["category"] == "broken" for t in tags)
+        r["has_repair"] = condition_label == _BROKEN_LABEL or any(t["category"] == "broken" for t in tags)
 
 
 @router.get("/latest/{item_id}")
@@ -573,6 +638,126 @@ def latest_for_item(
     if not e:
         raise HTTPException(status_code=404, detail="无该商品评估记录")
     return e
+
+
+# ============== Task 11: 自动官方采集统计 API ==============
+@router.get("/auto-collect-stats")
+def auto_collect_stats(
+    range_hours: int = 24,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """自动官方采集统计（最近 N 小时）
+
+    聚合两类事件：
+    - eval.scored AND payload.data_source='official' → 成功采集
+    - collect.official.failed → 失败采集
+
+    Returns:
+        {
+            "range_hours": 24,
+            "total": 10,          # 成功 + 失败
+            "success": 7,         # 成功采集数
+            "failed": 3,          # 失败采集数
+            "success_rate": 0.7,  # 成功率（0-1）
+            "is_paused": False,   # 当前是否处于退避暂停状态
+            "fail_pause_threshold": 3,  # 退避阈值（来自全局配置）
+            "top_failures": [     # 失败原因 Top3
+                {"reason": "Cookie 过期", "count": 2},
+                {"reason": "超时", "count": 1},
+            ],
+        }
+    """
+    # range_hours 限定为 {1, 6, 24, 168} 之一（与 /distribution 风格一致）
+    # 为什么不用 Query(le/ge)：枚举白名单更严格，避免任意数值输入
+    if range_hours not in (1, 6, 24, 168):
+        range_hours = 24
+    now = _utcnow()
+    cutoff = now - timedelta(hours=range_hours)
+
+    from collections import Counter
+    from sqlalchemy import select
+
+    from xianyu_hunter.infra.db_models import EventRow
+    from xianyu_hunter.infra.yaml_config import get_config
+
+    # 退避阈值来自全局配置（任务级覆盖无法在全局统计端点感知，用全局值近似）
+    fail_pause_threshold = get_config().eval.auto_collect_fail_pause_threshold
+
+    success_count = 0
+    error_counter: Counter[str] = Counter()
+    failed_count = 0
+    is_paused = False
+
+    with container.repo.engine.connect() as conn:
+        # 成功事件：eval.scored + payload.data_source='official'
+        # 用 json_extract 精确查询 JSON 字段 + SQL COUNT，避免 LIKE 全表扫描和 Python 层解析
+        # 为什么用 json_extract：LIKE 无法区分 'official' vs 'official_xxx'，
+        # 且 json_extract 在 SQLite 3.38+ 有查询优化；COUNT 不加载 payload 到内存
+        from sqlalchemy import func
+        success_count = conn.execute(
+            select(func.count())
+            .select_from(EventRow)
+            .where(EventRow.type == "eval.scored")
+            .where(EventRow.created_at >= cutoff)
+            .where(func.json_extract(EventRow.payload, '$.data_source') == 'official')
+        ).scalar() or 0
+
+        # 失败事件：collect.official.failed（需加载 payload 聚合 top_failures）
+        failed_rows = conn.execute(
+            select(EventRow.payload)
+            .where(EventRow.type == "collect.official.failed")
+            .where(EventRow.created_at >= cutoff)
+        ).all()
+        for row in failed_rows:
+            failed_count += 1
+            try:
+                payload = json.loads(row.payload) if isinstance(row.payload, str) else row.payload
+                if not isinstance(payload, dict):
+                    error_counter["解析失败"] += 1
+                    continue
+                # error 字段可能很长，截断前 100 字符作为 reason 分组
+                # 为什么截断：原始 error 含堆栈/参数，截断后便于聚合 Top N
+                error = str(payload.get("error", "未知错误"))[:100]
+                error_counter[error] += 1
+            except (json.JSONDecodeError, TypeError):
+                error_counter["解析失败"] += 1
+
+        # 判断当前是否处于退避暂停状态：
+        # 取最近一条 collect.official.failed 事件的 consecutive_failures 字段，
+        # 若 >= 阈值则视为暂停。为什么用最近一条而非累计：退避语义是"连续失败"，
+        # 最近一条的 consecutive_failures 反映了最新连续失败计数
+        latest_failed_row = conn.execute(
+            select(EventRow.payload)
+            .where(EventRow.type == "collect.official.failed")
+            .order_by(EventRow.created_at.desc())
+            .limit(1)
+        ).first()
+        if latest_failed_row:
+            try:
+                latest_payload = json.loads(latest_failed_row.payload) if isinstance(latest_failed_row.payload, str) else latest_failed_row.payload
+                if isinstance(latest_payload, dict):
+                    latest_consecutive = int(latest_payload.get("consecutive_failures", 0))
+                    is_paused = latest_consecutive >= fail_pause_threshold
+            # S5713: json.JSONDecodeError 是 ValueError 的子类，移除冗余子类
+            except (TypeError, ValueError):
+                pass
+
+    total = success_count + failed_count
+    success_rate = (success_count / total) if total > 0 else 0
+
+    return {
+        "range_hours": range_hours,
+        "total": total,
+        "success": success_count,
+        "failed": failed_count,
+        "success_rate": round(success_rate, 4),
+        "is_paused": is_paused,
+        "fail_pause_threshold": fail_pause_threshold,
+        "top_failures": [
+            {"reason": reason, "count": count}
+            for reason, count in error_counter.most_common(3)
+        ],
+    }
 
 
 # ============== P3-UX-09 评估分分布 API ==============
@@ -974,7 +1159,6 @@ def threshold_suggestion(
         if accumulated >= target_count:
             # 在该桶内线性插值估算精确阈值
             bin_low = i * 10
-            bin_high = (i + 1) * 10
             # 桶内还需要多少条才达到目标
             excess = accumulated - target_count
             if bin_count > 0:
@@ -1210,7 +1394,12 @@ def recompute_evaluations(
                 )
                 eval_result = evaluator.evaluate(detail, seller)
                 score_display = eval_result.score if eval_result.score is not None else "N/A"
-                level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
+                if eval_result.is_passed:
+                    level = "info"
+                elif eval_result.risk_level != RiskLevel.EXTREME:
+                    level = "warn"
+                else:
+                    level = "err"
                 if eval_result.risk_level == RiskLevel.UNKNOWN:
                     level = "warn"
                 # 补写 items 表：recompute 从 task_links 生成评估时同步写入 items 表，
@@ -1486,7 +1675,12 @@ def batch_evaluate_unevaluated(
             )
             eval_result = evaluator.evaluate(detail, seller)
             score_display = eval_result.score if eval_result.score is not None else "N/A"
-            level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
+            if eval_result.is_passed:
+                level = "info"
+            elif eval_result.risk_level != RiskLevel.EXTREME:
+                level = "warn"
+            else:
+                level = "err"
             if eval_result.risk_level == RiskLevel.UNKNOWN:
                 level = "warn"
             effective_task_id = str(it.get("task_id") or task_id or "")
@@ -1706,18 +1900,46 @@ async def _collect_official_and_evaluate(
     item_id: str,
     task_id: str | None = None,
 ) -> dict[str, Any]:
-    """访问闲鱼官方商品详情页+卖家主页，采集完整数据后重新评估
+    """完整官方采集：执行 detail + seller + reviews + 重新评估 + events 写入的端到端流程
 
-    核心流程：
-    1. 访问商品详情页，提取标题/价格/描述/图片/卖家ID/想要数/浏览数
-    2. 尝试从详情页 DOM 提取评价/留言信息
-    3. 用卖家ID访问卖家主页，获取信用分/注册时间/在售数/已售数
-    4. 更新 items/sellers 表持久化采集结果
-    5. 用完整数据构建 ItemDetail + SellerProfile 重新评估
-    6. 更新评估事件（标记 data_source=official）
+    语义：
+        完整官方采集，调用方在进入本函数前应先执行
+        ``_ensure_official_collect_cookies(container)`` 完成 Cookie 同步，
+        随后本函数按以下顺序完成端到端采集与评估：
+
+    流程步骤（按代码顺序）：
+        1. (前置, 由调用方完成) ``_ensure_official_collect_cookies`` 采集前 Cookie 同步
+        2. ``container.collector.detail(item_id, page=own_page)`` 采集商品详情
+           （own_page 复用给后续评价提取，避免二次开页）
+        3. 并行执行 ``_extract_reviews_from_page(own_page)`` +
+           ``container.collector.seller_profile(detail.seller_id)``，
+           两者无依赖关系，并行可节省 1-3s
+        4. 卖家主页采集失败时降级：
+           ``container.collector.seller_profile_fallback(None, detail)``
+           用详情页中提取的卖家信息构建基本画像
+        5. 持久化到 ``items`` / ``sellers`` / ``task_links.display``，
+           items 字段使用 ``_coalesce`` 旧值保留策略（新值为空时保留旧值，
+           避免半残数据覆盖本地搜索已写入的有效数据；``_ALWAYS_OVERWRITE``
+           集合中的字段除外）
+        6. ``evaluator.evaluate(detail, seller)`` 用完整数据重新评估
+        7. 更新 ``events`` 表，写 ``eval.scored`` 事件并标记
+           ``data_source=official``
+
+    与 refresh_item 的区别：
+        ``api_items.py:refresh_item`` 是轻量刷新，仅采集 detail 并 ``upsert_item``，
+        不做卖家主页 / 评价提取 / 重新评估 / events 写入。本函数是 refresh_item 的
+        "超集"，适合需要完整画像与最新评估分的场景。
+
+    Args:
+        container: 应用容器，提供 ``collector`` / ``repo`` / ``evaluator`` 等依赖。
+        item_id: 商品 ID。
+        task_id: 关联任务 ID，用于写回 items.task_id / events.task_id。
+            为空时尝试从 ``get_eval_payload_by_item`` 或现有 items 行回填。
 
     Returns:
-        包含采集数据、评估结果和持久化状态的字典
+        dict: 包含 ``ok`` / ``item_id`` / ``collected`` / ``item`` / ``seller``
+        / ``reviews`` / ``evaluation`` 字段。其中 ``evaluation.data_source``
+        固定为 ``"official"``。
     """
     from xianyu_hunter.domain.item import ItemDetail
     from xianyu_hunter.domain.seller import SellerProfile
@@ -1858,6 +2080,12 @@ async def _collect_official_and_evaluate(
             for k in new_item_row.keys()
         }
         container.repo.upsert_item(item_row)
+        # 标记采集来源为 official，供统计端点（auto-collect-stats）按来源筛选
+        # 失败不阻断主流程：update_data_source 失败仅记录日志
+        try:
+            container.repo.update_data_source(item_id, "official")
+        except Exception as ds_err:
+            logger.warning("更新 data_source=official 失败 item={}: {}", item_id, ds_err)
         # 已售时同步 task_links.display.is_sold（前端列表读 display）
         if detail.is_sold:
             container.repo.mark_sold(item_id)
@@ -1894,7 +2122,12 @@ async def _collect_official_and_evaluate(
 
     # 6. 更新评估事件（标记数据来源为官方采集）
     score_display = eval_result.score if eval_result.score is not None else "N/A"
-    level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
+    if eval_result.is_passed:
+        level = "info"
+    elif eval_result.risk_level != RiskLevel.EXTREME:
+        level = "warn"
+    else:
+        level = "err"
     if eval_result.risk_level == RiskLevel.UNKNOWN:
         level = "warn"
 
@@ -2012,14 +2245,40 @@ async def batch_collect_official(
             results.append(result)
             succeeded += 1
         except HTTPException as e:
-            # 401（Cookie 失效）立即中断，后续也会失败
-            if e.status_code == 401:
+            # Cookie 失效类错误立即中断：后续商品也会逐个失败，浪费时间
+            # - 403: Cookie 不完整（_ensure_official_collect_cookies 检测到缺失关键 cookie）
+            # - 440: Cookie 过期/未刷新（重定向到登录页/首页）
+            # - 441: 触发验证码（RGV587 反爬）
+            # 注意：不检查 401——project_memory 要求闲鱼会话失效统一用 403/440/441，
+            # 401 会触发前端 axios 全局登出逻辑（误判为系统认证失效）
+            if e.status_code in (403, 440, 441):
                 raise
-            results.append({"ok": False, "item_id": iid, "error": e.detail})
+            # 根据 HTTP 状态码分类失败原因，方便调用方决定是否重试
+            # - 410: 商品已下架/不存在 → 不应重试
+            # - 其他业务错误 → 标记为 unknown，由调用方自行判断
+            if e.status_code == 410:
+                error_code = "item_not_found"
+            else:
+                error_code = "unknown"
+            results.append({
+                "ok": False, "item_id": iid, "error": e.detail,
+                "error_code": error_code,
+            })
             failed += 1
         except Exception as e:
             logger.exception("批量采集失败 item={}: {}", iid, e)
-            results.append({"ok": False, "item_id": iid, "error": str(e)})
+            # 区分网络错误与未知错误：网络错误通常可重试，未知错误不应盲目重试
+            err_str = str(e)
+            if isinstance(e, (TimeoutError, ConnectionError, OSError)):
+                error_code = "network_error"
+            elif "Timeout" in err_str or "ConnectError" in err_str or "Connection" in err_str:
+                error_code = "network_error"
+            else:
+                error_code = "unknown"
+            results.append({
+                "ok": False, "item_id": iid, "error": err_str,
+                "error_code": error_code,
+            })
             failed += 1
 
     return {

@@ -1,7 +1,9 @@
 # XianyuHunter .dockerignore
 # 减少构建上下文体积，加速 Docker build
+#
+# 原则：仅排除运行时不需要的文件，保留 Dockerfile 构建所需的源码与配置
 
-# Python
+# ============== Python ==============
 __pycache__/
 *.py[cod]
 *$py.class
@@ -9,46 +11,61 @@ __pycache__/
 .Python
 *.egg-info/
 .eggs/
-dist/
 build/
 
-# 虚拟环境
+# 虚拟环境（容器内会重新创建）
 .venv/
 venv/
 env/
 
-# IDE
+# ============== Frontend ==============
+# node_modules 在容器内 npm ci 重新安装，避免宿主机 Windows 平台二进制不兼容
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ============== IDE ==============
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# 测试
+# ============== 测试 ==============
 .pytest_cache/
 .coverage
 htmlcov/
 tests/
 
-# 文档
+# ============== 文档 ==============
 docs/
 *.md
 
-# Git
+# ============== Git ==============
 .git/
 .gitignore
+.gitattributes
 
-# 运行时数据（避免打包进镜像）
+# ============== 运行时数据（避免打包进镜像） ==============
 data/
 *.db
+*.db-journal
 *.log
 run.stdout.log
 run.stderr.log
 
-# Docker 自身
+# ============== Docker 自身 ==============
 Dockerfile
 docker-compose.yml
 .dockerignore
 
-# 操作系统
+# ============== 操作系统 ==============
 .DS_Store
 Thumbs.db
+
+# ============== 项目特定 ==============
+# .env 包含敏感密钥，不打包进镜像（运行时通过 volume 挂载）
+.env
+.env.local
+# config.yaml 包含用户配置，运行时通过 volume 挂载
+config/config.yaml
+config/eval.yaml

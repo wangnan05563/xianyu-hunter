@@ -1,9 +1,83 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // O-12-26 PWA 移动端优化：让 SPA 可被"添加到主屏幕"并支持离线访问
+    // 关键设计：
+    // 1. manifest 跟随 base('/app/')，scope/start_url 自动指向 /app/
+    // 2. workbox 预缓存静态资源 + 运行时缓存只读 GET 接口
+    // 3. SSE (/api/events/stream) 和鉴权 (/api/auth/*) 必须排除，避免长连接被 SW 拦截或登录态串号
+    VitePWA({
+      registerType: 'prompt', // 有新版本时提示用户刷新，避免静默刷新打断操作
+      includeAssets: ['favicon.ico', 'favicon-32x32.png', 'favicon-48x48.png', 'apple-touch-icon.png'],
+      manifest: {
+        name: '闲鱼猎人 XianyuHunter',
+        short_name: '闲鱼猎人',
+        description: '闲鱼商品智能监控、自动评估与抢单工具',
+        theme_color: '#FF6200',
+        background_color: '#FFFFFF',
+        display: 'standalone',
+        orientation: 'portrait-primary',
+        // scope 与 start_url 不写，让 vite-plugin-pwa 自动用 base 派生为 /app/
+        lang: 'zh-CN',
+        start_url: '/app/',
+        scope: '/app/',
+        icons: [
+          // SVG 矢量图标：Chrome/Edge/Android 支持，任意尺寸自适应
+          { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          // maskable：Android 自适应遮罩，关键内容需在安全区 (中间 80%)
+          { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
+          // iOS 不支持 SVG，回退到现有 PNG（apple-touch-icon 通常 180x180）
+          { src: 'apple-touch-icon.png', sizes: '180x180', type: 'image/png', purpose: 'any' },
+        ],
+      },
+      workbox: {
+        // 预缓存构建产物 + public 静态资源
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, // 4MB，容纳 echarts/antd 大 chunk
+        navigateFallback: 'index.html', // SPA 路由回退
+        navigateFallbackDenylist: [/^\/api\//], // API 请求不走 SPA 回退
+        runtimeCaching: [
+          {
+            // 静态图片资源：长期缓存
+            urlPattern: ({ url }) => url.pathname.endsWith('.png') || url.pathname.endsWith('.jpg') || url.pathname.endsWith('.jpeg') || url.pathname.endsWith('.webp'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'xh-img-cache',
+              expiration: { maxEntries: 100, maxAgeSeconds: 30 * 24 * 3600 },
+            },
+          },
+          {
+            // 只读 GET 接口：NetworkFirst，断网时回退缓存
+            // 关键排除项：
+            //  - /api/events/stream: SSE 长连接，被 SW 拦截会让 EventSource 卡住
+            //  - /api/auth/*: 鉴权接口，缓存会串号或污染登录态
+            //  - /api/export/*: 流式响应，缓存会破坏分块下载
+            urlPattern: ({ url, request }) =>
+              request.method === 'GET'
+              && url.pathname.startsWith('/api/')
+              && !url.pathname.startsWith('/api/events/stream')
+              && !url.pathname.startsWith('/api/auth/')
+              && !url.pathname.startsWith('/api/export/'),
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'xh-api-cache',
+              networkTimeoutSeconds: 5,
+              expiration: { maxEntries: 200, maxAgeSeconds: 5 * 60 },
+              matchOptions: { ignoreVary: true },
+            },
+          },
+        ],
+      },
+      devOptions: {
+        enabled: false, // 开发模式不启用 SW，避免热更新被缓存干扰
+      },
+    }),
+  ],
   // SPA 挂载在 /app/ 路径下，构建产物资源路径需以 /app/ 为前缀
   base: '/app/',
   resolve: {

@@ -247,22 +247,74 @@ class CookieRotator:
         导致 CookieRotator 层状态保持默认 False，引发健康检查误判 Cookie 无效。
         此方法根据 Cookie 实际内容更新层状态，修复状态不一致。
 
+        依赖层验证规则：
+        - session 层依赖 identity 层：identity 无效时 session 强制失效
+          为什么需要：cookie 存在不代表身份有效，服务端可能已注销会话
+        - tracking 层无依赖：独立追踪，不影响功能
+
+        状态变化日志：记录 valid→invalid / invalid→valid 的状态翻转，
+        便于排查"功能正常但状态失效"的矛盾现象
+
         Args:
             cookies: Cookie 名称到值的映射（通常从 JSON 文件读取）
         """
         with self._lock:
+            cookie_keys = set(cookies.keys())
+            # 第一遍：计算每层命中的 cookie
+            layer_hits: dict[CookieLayer, set[str]] = {}
             for layer, layer_def in LAYER_DEFINITIONS.items():
-                layer_cookie_names = layer_def.cookies & set(cookies.keys())
-                if layer_cookie_names:
+                hits = layer_def.cookies & cookie_keys
+                if hits:
+                    layer_hits[layer] = hits
+
+            # 第二遍：根据依赖关系决定最终状态
+            # 显式分两轮处理消除对 LAYER_DEFINITIONS 迭代顺序的依赖：
+            # 先处理无依赖的层（IDENTITY/TRACKING），再处理有依赖的层（SESSION）
+            # 确保 SESSION 读取 IDENTITY 状态时，IDENTITY 已被本轮同步更新
+            layers_no_dep = [l for l in LAYER_DEFINITIONS if LAYER_DEFINITIONS[l].depends_on is None]
+            layers_with_dep = [l for l in LAYER_DEFINITIONS if LAYER_DEFINITIONS[l].depends_on is not None]
+            for layer in [*layers_no_dep, *layers_with_dep]:
+                layer_def = LAYER_DEFINITIONS[layer]
+                hits = layer_hits.get(layer, set())
+
+                # 依赖层验证：session 依赖 identity
+                if layer_def.depends_on is not None:
+                    dep_valid = (
+                        layer_def.depends_on in layer_hits
+                        and self._layer_states[layer_def.depends_on].valid
+                    )
+                    if not dep_valid:
+                        # 依赖层无效，当前层强制失效（即使有 cookie 也不标记有效）
+                        old_state = self._layer_states[layer]
+                        if old_state.valid:
+                            logger.warning(
+                                "Cookie 层 {} 因依赖层 {} 无效而失效 (had {} cookies)",
+                                layer.value, layer_def.depends_on.value, len(hits),
+                            )
+                        self._layer_states[layer].valid = False
+                        self._layer_states[layer].cookie_count = len(hits)
+                        continue
+
+                if hits:
+                    old_state = self._layer_states[layer]
+                    # 记录状态翻转日志：invalid→valid 是关键恢复事件
+                    if not old_state.valid:
+                        logger.info(
+                            "Cookie 层 {} 状态恢复: invalid→valid, {} 个 Cookie (manual_invalidate={})",
+                            layer.value, len(hits), old_state.manual_invalidate,
+                        )
                     self._layer_states[layer] = LayerState(
                         valid=True,
                         updated_at=time.time(),
-                        cookie_count=len(layer_cookie_names),
+                        cookie_count=len(hits),
+                        # 同步恢复时清除 manual_invalidate（cookie 实际有效说明用户已重新登录）
+                        manual_invalidate=False,
                     )
-                    logger.info(
-                        "Cookie 层 {} 状态已同步: {} 个 Cookie",
-                        layer.value, len(layer_cookie_names),
-                    )
+                else:
+                    # 该层无 cookie 命中：保持原状态，不主动失效
+                    # 为什么不清零：浏览器内存可能有 cookie 但 JSON 缺失，
+                    # 此处保持原状态由调用方决定是否失效
+                    pass
 
     # ============== 状态查询 ==============
 
@@ -270,6 +322,54 @@ class CookieRotator:
         """检查某层是否有效"""
         with self._lock:
             return self._layer_states[layer].valid
+
+    def force_restore_layers(self, layers: set[CookieLayer], reason: str = "") -> list[CookieLayer]:
+        """强制恢复指定层为有效状态（基于功能可用性信号）
+
+        为什么需要此方法：cookie 检测逻辑可能因 JSON 缺失/缓存问题/浏览器未初始化
+        而误判层失效，但实际功能正常（搜索/采集可用）。此时需要绕过 cookie 检测，
+        基于功能可用性强制恢复层状态，避免"功能正常但状态失效"的矛盾显示。
+
+        使用场景：
+        - /cookies/layers 端点第三步兜底：前两步同步后仍有层失效时
+        - 定时健康检查：检测到功能正常但层状态失效时
+
+        Args:
+            layers: 需要恢复的层集合
+            reason: 恢复原因（用于日志）
+
+        Returns:
+            实际被恢复的层列表（排除 manual_invalidate=True 的层和依赖层失效的层）
+        """
+        restored: list[CookieLayer] = []
+        with self._lock:
+            for layer in layers:
+                state = self._layer_states[layer]
+                # 用户主动失效的层不自动恢复（需用户重新调用 /cookies/update）
+                if state.manual_invalidate:
+                    continue
+                # 检查依赖层是否有效：依赖层失效时恢复当前层无意义
+                # 例如 SESSION 依赖 IDENTITY——IDENTITY 失效时即使恢复 SESSION，
+                # 下一次请求仍会因底层 cookie 缺失而失败
+                layer_def = LAYER_DEFINITIONS.get(layer)
+                if layer_def and layer_def.depends_on:
+                    dep_state = self._layer_states.get(layer_def.depends_on)
+                    if dep_state and not dep_state.valid:
+                        logger.warning(
+                            "Cookie 层 %s 跳过恢复：依赖层 %s 仍处于失效状态, reason=%s",
+                            layer.value, layer_def.depends_on.value, reason or "functional_fallback",
+                        )
+                        continue
+                if not state.valid:
+                    logger.info(
+                        "Cookie 层 {} 强制恢复: invalid→valid, reason={}",
+                        layer.value, reason or "functional_fallback",
+                    )
+                    state.valid = True
+                    # 总是更新 updated_at：反映恢复时间，便于排查"何时被恢复"
+                    state.updated_at = time.time()
+                    restored.append(layer)
+        return restored
 
     def get_layer_state(self, layer: CookieLayer) -> LayerState:
         """获取某层状态"""
@@ -333,6 +433,38 @@ class CookieRotator:
 
 
 # ============== 辅助函数 ==============
+
+# _m_h5_tk 的服务端 TTL（15-22 分钟，取保守值 20 分钟）
+# 与 token_renewer.RenewerConfig.token_ttl_sec 保持一致
+_M5TK_TTL_SEC = 1200
+
+
+def is_m5tk_expired(value: str, ttl_sec: int = _M5TK_TTL_SEC) -> bool:
+    """检查 _m_h5_tk 是否已过期（基于内嵌 timestamp）
+
+    为什么需要此函数：_m_h5_tk 的 cookie expires 字段通常是 -1（session cookie），
+    无法用 cookie.expires 判断过期。但 token 内嵌了服务端下发时间戳
+    （格式: {token}_{timestamp_ms}），服务端 TTL 为 15-22 分钟。
+    若不检查内嵌时间戳，会把过期的旧 token 当作有效 cookie 同步给 CookieRotator，
+    导致与 TokenRenewer 的失效标记反复振荡。
+
+    Args:
+        value: _m_h5_tk cookie 值
+        ttl_sec: TTL 阈值（秒），默认 1200（20 分钟）
+
+    Returns:
+        True 表示已过期，False 表示未过期或无法判断
+        无法判断时返回 False（保守策略，与 cookie.expires=-1 处理一致）
+    """
+    if not value or "_" not in value:
+        return False
+    try:
+        # timestamp 是毫秒级，需转换为秒
+        issued_at_ms = int(value.rsplit("_", 1)[-1])
+        age_sec = time.time() - issued_at_ms / 1000.0
+        return age_sec > ttl_sec
+    except (ValueError, IndexError):
+        return False
 
 
 def get_cookie_layer(name: str) -> CookieLayer | None:
