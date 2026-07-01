@@ -63,3 +63,63 @@ def test_tasks_user_id_indexes_exist(tmp_db):
     assert "idx_tasks_user" in index_names
     assert "idx_tasks_user_created" in index_names
     assert "idx_tasks_user_status" in index_names
+
+
+from xianyu_hunter.web.services.user_manager import UserManager
+
+@pytest.fixture
+def user_mgr(tmp_db):
+    """UserManager 实例（使用临时数据库）"""
+    mgr = UserManager.__new__(UserManager)
+    mgr._engine = tmp_db
+    mgr._verify_cache = {}
+    mgr._lock = __import__("threading").RLock()
+    return mgr
+
+
+def test_identify_or_create_with_unb(user_mgr):
+    """从 Cookie 的 unb 字段识别用户"""
+    cookies = [
+        {"name": "unb", "value": "220812345678"},
+        {"name": "cookie2", "value": "a" * 32},
+    ]
+    user_id = user_mgr.identify_or_create(cookies)
+    assert user_id == "220812345678"
+
+    # 验证用户记录已创建
+    user = user_mgr.get_user("220812345678")
+    assert user is not None
+    assert user["user_id"] == "220812345678"
+    assert user["status"] == "active"
+
+
+def test_identify_or_create_fallback_to_cookie2(user_mgr):
+    """unb 缺失时降级为 sha256(cookie2)[:16]"""
+    cookies = [
+        {"name": "cookie2", "value": "abcdef1234567890abcdef1234567890"},
+    ]
+    import hashlib
+    expected = hashlib.sha256(b"abcdef1234567890abcdef1234567890").hexdigest()[:16]
+    user_id = user_mgr.identify_or_create(cookies)
+    assert user_id == expected
+
+
+def test_identify_or_create_fallback_to_default(user_mgr):
+    """unb 和 cookie2 都缺失时降级为 default"""
+    cookies = [{"name": "other", "value": "xxx"}]
+    user_id = user_mgr.identify_or_create(cookies)
+    assert user_id == "default"
+
+
+def test_identify_or_create_idempotent(user_mgr):
+    """重复识别同一用户不报错，不创建重复记录"""
+    cookies = [{"name": "unb", "value": "220812345678"}]
+    user_mgr.identify_or_create(cookies)
+    user_mgr.identify_or_create(cookies)  # 第二次不应报错
+
+    from sqlalchemy import text as sa_text
+    with user_mgr._engine.connect() as conn:
+        count = conn.execute(
+            sa_text("SELECT COUNT(*) FROM users WHERE user_id='220812345678'")
+        ).fetchone()[0]
+        assert count == 1
