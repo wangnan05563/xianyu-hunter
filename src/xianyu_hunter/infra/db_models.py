@@ -83,6 +83,10 @@ class TaskRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow
     )
+    # 多用户：任务归属用户 ID（default 为迁移默认用户）
+    # server_default 与 init_db 迁移的 ALTER TABLE ... DEFAULT 'default' 保持一致，
+    # 确保全新数据库（create_all）下 raw SQL INSERT 未指定 user_id 时也能自动填充
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.2 商品表
@@ -857,6 +861,15 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     # 放在末尾执行：先让其他迁移补齐缺失列，再统一重建表，避免列差异影响数据复制。
     _migrate_make_column_nullable(engine, "tasks", "eval_threshold")
 
+    # MU1：tasks 表新增 user_id 字段 + 索引
+    _migrate_add_column(engine, "tasks", "user_id", "TEXT DEFAULT 'default'")
+    with engine.connect() as conn:
+        conn.execute(sa_text("UPDATE tasks SET user_id='default' WHERE user_id IS NULL OR user_id=''"))
+        conn.commit()
+    _migrate_create_index(engine, "tasks", "idx_tasks_user", "user_id")
+    _migrate_create_index(engine, "tasks", "idx_tasks_user_created", "user_id, created_at")
+    _migrate_create_index(engine, "tasks", "idx_tasks_user_status", "user_id, status")
+
     # M2：chatbot_sessions 加 is_favorite 字段（收藏置顶）
     _migrate_add_column(engine, "chatbot_sessions", "is_favorite", "INTEGER")
     with engine.connect() as conn:
@@ -895,9 +908,11 @@ def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) 
     import re
     # S6353: [A-Za-z0-9_] 等价于 ASCII 模式下的 \w，使用 re.ASCII 保证不匹配 Unicode 字母
     _IDENT_RE = re.compile(r'^[A-Za-z_]\w*$', re.ASCII)
-    # col_type 允许类型名 + DEFAULT + 数字 + 空格（如 "INTEGER DEFAULT 0"）
-    # 比 _IDENT_RE 宽松，但仍禁止引号/分号等危险字符防止注入
-    _COL_TYPE_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_ ]*$', re.ASCII)
+    # col_type 允许类型名 + DEFAULT + 数字 + 空格 + 单引号字符串字面量
+    # （如 "INTEGER DEFAULT 0" / "TEXT DEFAULT 'default'"）
+    # 为什么允许单引号：DEFAULT 子句的字符串字面量需单引号包裹（SQL 语法要求）
+    # 仍禁止分号/双引号等危险字符防止注入；调用方仅限内部硬编码值
+    _COL_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_ ']*$", re.ASCII)
     if not (_IDENT_RE.match(table) and _IDENT_RE.match(column) and _COL_TYPE_RE.match(col_type)):
         raise ValueError(f"Invalid identifier: table={table!r}, column={column!r}, col_type={col_type!r}")
     with engine.connect() as conn:
