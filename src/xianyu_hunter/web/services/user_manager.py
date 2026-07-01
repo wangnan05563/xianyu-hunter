@@ -304,6 +304,46 @@ class UserManager:
                 user_id, delete_tasks,
             )
 
+    def list_users(self) -> list[dict]:
+        """列出所有已登录账号（含状态）。
+
+        按 created_at 升序返回（default 用户通常最先创建）。
+        不过滤 disabled 用户，展示层负责过滤。
+        只读操作但仍持锁，与现有方法风格保持一致。
+        """
+        with self._lock:
+            with self._engine.connect() as conn:
+                rows = conn.execute(
+                    sa_text("SELECT * FROM users ORDER BY created_at")
+                ).fetchall()
+            return [dict(row._mapping) for row in rows]
+
+    def set_user_status(self, user_id: str, status: str) -> None:
+        """设置账号状态（active / expired / disabled）。
+
+        不校验 status 合法性，由 API 层负责。
+        状态变更事件记录失败不阻塞业务流程（沿用 Task 4 模式）。
+        """
+        with self._lock:
+            now = _utcnow_iso()
+            with self._engine.connect() as conn:
+                conn.execute(
+                    sa_text(
+                        "UPDATE users SET status=:status, updated_at=:now "
+                        "WHERE user_id=:uid"
+                    ),
+                    {"status": status, "now": now, "uid": user_id},
+                )
+                conn.commit()
+
+        # 事件记录与业务解耦：_log_event 失败不阻塞状态变更
+        try:
+            self._log_event(user_id, "status_change", {"status": status})
+        except Exception:
+            logger.warning(
+                "记录 status_change 事件失败 user_id=%s", user_id, exc_info=True
+            )
+
     def _log_event(self, user_id: str | None, event_type: str, detail: dict) -> None:
         """记录会话事件日志
 

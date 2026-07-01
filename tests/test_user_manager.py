@@ -451,3 +451,73 @@ def test_delete_user_without_delete_tasks_keeps_tasks(user_mgr):
             {"uid": user_id}
         ).fetchone()[0]
         assert count == 1, "任务应保留"
+
+
+def test_list_users_returns_all_users(user_mgr):
+    """list_users 返回所有用户记录"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345679"}])
+
+    users = user_mgr.list_users()
+    assert len(users) == 2
+    user_ids = {u["user_id"] for u in users}
+    assert user_ids == {"220812345678", "220812345679"}
+
+
+def test_list_users_returns_empty_for_no_users(user_mgr):
+    """无用户时 list_users 返回空列表"""
+    users = user_mgr.list_users()
+    assert users == []
+
+
+def test_list_users_returns_dict_format(user_mgr):
+    """list_users 返回的每条记录是 dict 格式"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+
+    users = user_mgr.list_users()
+    assert len(users) == 1
+    user = users[0]
+    assert isinstance(user, dict)
+    assert "user_id" in user
+    assert "status" in user
+    assert "created_at" in user
+
+
+def test_set_user_status_updates_status(user_mgr):
+    """set_user_status 更新用户状态"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+
+    user_mgr.set_user_status("220812345678", "expired")
+
+    user = user_mgr.get_user("220812345678")
+    assert user["status"] == "expired"
+
+
+def test_set_user_status_updates_updated_at(user_mgr):
+    """set_user_status 更新 updated_at 字段"""
+    from sqlalchemy import text as sa_text
+    from datetime import datetime, timezone
+
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+
+    # 读取原始 updated_at
+    with user_mgr._engine.connect() as conn:
+        orig_row = conn.execute(
+            sa_text("SELECT updated_at FROM users WHERE user_id='220812345678'")
+        ).fetchone()
+        orig_updated = datetime.fromisoformat(orig_row[0])
+
+    # 等待一小段时间确保时间差
+    import time
+    time.sleep(0.01)
+
+    user_mgr.set_user_status("220812345678", "disabled")
+
+    # 验证 updated_at 已更新
+    with user_mgr._engine.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT updated_at FROM users WHERE user_id='220812345678'")
+        ).fetchone()
+        new_updated = datetime.fromisoformat(row[0])
+
+    assert new_updated > orig_updated
