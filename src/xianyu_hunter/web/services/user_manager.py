@@ -17,6 +17,7 @@ import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import text as sa_text
@@ -240,6 +241,68 @@ class UserManager:
             self._log_event(user_id, "logout", {})
         except Exception:
             logger.warning("记录 logout 事件失败 user_id=%s", user_id, exc_info=True)
+
+    def delete_user(self, user_id: str, delete_tasks: bool = False) -> None:
+        """退出账号并清除该用户的所有相关数据。
+
+        采用"标记 disabled"而非物理删除用户记录，符合概要设计 §6.1 状态机
+        （disabled 不可恢复，需重新添加）。revoke_session 已含缓存清除和
+        logout 事件记录，此处不重复记录。
+
+        线程安全：整个方法体持锁，与 verify_session/revoke_session 互斥，
+        避免删除过程中 verify_session 命中缓存。
+        """
+        if user_id == self.DEFAULT_USER_ID:
+            raise ValueError("禁止删除 default 用户")
+
+        with self._lock:
+            # 撤销会话（RLock 可重入，内部再获锁不会死锁；含缓存清除 + logout 事件）
+            self.revoke_session(user_id)
+
+            now = _utcnow_iso()
+            with self._engine.connect() as conn:
+                # 清除用户级数据：cookie/菜单配置/偏好
+                conn.execute(
+                    sa_text("DELETE FROM user_cookies WHERE user_id=:uid"),
+                    {"uid": user_id},
+                )
+                conn.execute(
+                    sa_text("DELETE FROM user_menu_configs WHERE user_id=:uid"),
+                    {"uid": user_id},
+                )
+                conn.execute(
+                    sa_text("DELETE FROM user_preferences WHERE user_id=:uid"),
+                    {"uid": user_id},
+                )
+
+                # 可选删除任务数据
+                if delete_tasks:
+                    conn.execute(
+                        sa_text("DELETE FROM tasks WHERE user_id=:uid"),
+                        {"uid": user_id},
+                    )
+
+                # 标记用户为 disabled（状态机：disabled 不可恢复，需重新添加）
+                conn.execute(
+                    sa_text(
+                        "UPDATE users SET status='disabled', updated_at=:now "
+                        "WHERE user_id=:uid"
+                    ),
+                    {"now": now, "uid": user_id},
+                )
+                conn.commit()
+
+            # 删除 Cookie 文件，不存在时静默跳过；其他 IO 错误降级为 warning 不阻塞
+            cookie_file = Path("data") / f"cookies_{user_id}.json"
+            try:
+                cookie_file.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("删除 Cookie 文件失败: %s", cookie_file, exc_info=True)
+
+            logger.info(
+                "用户已退出并清理数据: user_id=%s, delete_tasks=%s",
+                user_id, delete_tasks,
+            )
 
     def _log_event(self, user_id: str | None, event_type: str, detail: dict) -> None:
         """记录会话事件日志

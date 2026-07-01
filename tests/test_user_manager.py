@@ -337,3 +337,117 @@ def test_verify_session_no_renew_when_not_expiring_soon(user_mgr):
         expires_at = datetime.fromisoformat(row[0])
 
     assert expires_at == orig_expires, "距过期 >= 7 天时不应触发续期"
+
+
+def test_delete_user_raises_for_default_user(user_mgr):
+    """禁止删除 default 用户"""
+    with pytest.raises(ValueError, match="禁止删除 default 用户"):
+        user_mgr.delete_user("default")
+
+
+def test_delete_user_revokes_sessions(user_mgr):
+    """delete_user 撤销用户所有会话"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+    assert user_mgr.verify_session(token) == "220812345678"
+
+    user_mgr.delete_user("220812345678")
+
+    # token 应失效
+    assert user_mgr.verify_session(token) is None
+
+
+def test_delete_user_clears_user_data(user_mgr):
+    """delete_user 清除用户相关数据（cookie/菜单配置/偏好）"""
+    from sqlalchemy import text as sa_text
+
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    user_id = "220812345678"
+
+    # 插入测试数据
+    # user_cookies 的 path/expires/is_secure/is_httponly/created_at 均为 NOT NULL 无 server_default，
+    # 直接 SQL INSERT 时需显式提供（ORM default 仅 Python 端生效）
+    with user_mgr._engine.connect() as conn:
+        conn.execute(sa_text(
+            "INSERT INTO user_cookies (user_id, host_key, name, value, path, expires, is_secure, is_httponly, created_at, updated_at) "
+            "VALUES (:uid, 'taobao.com', 'test', 'val', '/', -1, 1, 1, '2026-01-01', '2026-01-01')"
+        ), {"uid": user_id})
+        conn.execute(sa_text(
+            "INSERT INTO user_menu_configs (user_id, menu_key, visible, sort_order, group_name, custom_label, updated_at) "
+            "VALUES (:uid, 'tasks', 1, 10, 'data_view', '', '2026-01-01')"
+        ), {"uid": user_id})
+        conn.execute(sa_text(
+            "INSERT INTO user_preferences (user_id, pref_key, pref_value, updated_at) "
+            "VALUES (:uid, 'columns', '{}', '2026-01-01')"
+        ), {"uid": user_id})
+        conn.commit()
+
+    user_mgr.delete_user(user_id)
+
+    # 验证数据已清除
+    with user_mgr._engine.connect() as conn:
+        for table in ("user_cookies", "user_menu_configs", "user_preferences"):
+            count = conn.execute(
+                sa_text(f"SELECT COUNT(*) FROM {table} WHERE user_id=:uid"),
+                {"uid": user_id}
+            ).fetchone()[0]
+            assert count == 0, f"{table} 应被清空"
+
+
+def test_delete_user_marks_user_disabled(user_mgr):
+    """delete_user 将用户标记为 disabled"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    user_mgr.delete_user("220812345678")
+
+    user = user_mgr.get_user("220812345678")
+    assert user is not None  # 用户记录仍存在
+    assert user["status"] == "disabled"
+
+
+def test_delete_user_with_delete_tasks_removes_tasks(user_mgr):
+    """delete_user(delete_tasks=True) 删除用户任务"""
+    from sqlalchemy import text as sa_text
+
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    user_id = "220812345678"
+
+    # 插入测试任务
+    with user_mgr._engine.connect() as conn:
+        conn.execute(sa_text(
+            "INSERT INTO tasks (id, name, keyword, cron, use_cron, interval_seconds, mode, status, created_at, updated_at, user_id) "
+            "VALUES ('t1', 'test', 'iphone', '*/5 * * * *', 0, 60.0, 'confirm', 'running', '2026-01-01', '2026-01-01', :uid)"
+        ), {"uid": user_id})
+        conn.commit()
+
+    user_mgr.delete_user(user_id, delete_tasks=True)
+
+    with user_mgr._engine.connect() as conn:
+        count = conn.execute(
+            sa_text("SELECT COUNT(*) FROM tasks WHERE user_id=:uid"),
+            {"uid": user_id}
+        ).fetchone()[0]
+        assert count == 0, "任务应被删除"
+
+
+def test_delete_user_without_delete_tasks_keeps_tasks(user_mgr):
+    """delete_user(delete_tasks=False) 保留用户任务"""
+    from sqlalchemy import text as sa_text
+
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    user_id = "220812345678"
+
+    with user_mgr._engine.connect() as conn:
+        conn.execute(sa_text(
+            "INSERT INTO tasks (id, name, keyword, cron, use_cron, interval_seconds, mode, status, created_at, updated_at, user_id) "
+            "VALUES ('t1', 'test', 'iphone', '*/5 * * * *', 0, 60.0, 'confirm', 'running', '2026-01-01', '2026-01-01', :uid)"
+        ), {"uid": user_id})
+        conn.commit()
+
+    user_mgr.delete_user(user_id, delete_tasks=False)
+
+    with user_mgr._engine.connect() as conn:
+        count = conn.execute(
+            sa_text("SELECT COUNT(*) FROM tasks WHERE user_id=:uid"),
+            {"uid": user_id}
+        ).fetchone()[0]
+        assert count == 1, "任务应保留"
