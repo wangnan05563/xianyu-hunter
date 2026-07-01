@@ -615,6 +615,129 @@ class ChatbotAuditLogRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
+# ============================================================
+# 多用户模块表（MU1）
+# ============================================================
+
+class UserRow(Base):
+    """用户表：每个闲鱼账号对应一个用户记录
+
+    user_id 来源：闲鱼 Cookie 的 unb 字段；default 为迁移默认用户
+    """
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    nickname: Mapped[str] = mapped_column(String, default="")
+    avatar_url: Mapped[str] = mapped_column(String, default="")
+    custom_alias: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, nullable=False, default="active")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    last_active_at: Mapped[str] = mapped_column(String, nullable=False)
+    last_login_at: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    __table_args__ = (
+        Index("idx_users_status", "status"),
+    )
+
+
+class UserSessionRow(Base):
+    """用户会话表：session_token 的 sha256 哈希存储
+
+    原始 token 仅存 cookie，库内只存哈希（防库泄露后伪造）
+    """
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    issued_at: Mapped[str] = mapped_column(String, nullable=False)
+    expires_at: Mapped[str] = mapped_column(String, nullable=False)
+    last_renewed_at: Mapped[str] = mapped_column(String, nullable=False)
+    client_ip: Mapped[str] = mapped_column(String, default="")
+    is_active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    __table_args__ = (
+        Index("idx_sessions_user_active", "user_id", "is_active"),
+        Index("idx_sessions_expires", "expires_at"),
+    )
+
+
+class UserCookieRow(Base):
+    """用户级 Cookie 存储：替代全局 Cookies 表，新增 user_id 维度"""
+    __tablename__ = "user_cookies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    host_key: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[str] = mapped_column(String, nullable=False)
+    path: Mapped[str] = mapped_column(String, default="/")
+    expires: Mapped[int] = mapped_column(Integer, default=-1)
+    is_secure: Mapped[int] = mapped_column(Integer, default=1)
+    is_httponly: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "host_key", "name", name="uq_user_cookies"),
+        Index("idx_user_cookies_user", "user_id"),
+        Index("idx_user_cookies_user_host", "user_id", "host_key"),
+    )
+
+
+class UserMenuConfigRow(Base):
+    """用户菜单配置表：可见性、排序、别名等用户级覆盖"""
+    __tablename__ = "user_menu_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    menu_key: Mapped[str] = mapped_column(String, nullable=False)
+    visible: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    group_name: Mapped[str] = mapped_column(String, default="")
+    custom_label: Mapped[str] = mapped_column(String, default="")
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "menu_key", name="uq_user_menu"),
+        Index("idx_menu_configs_user", "user_id"),
+        Index("idx_menu_configs_user_sort", "user_id", "sort_order"),
+    )
+
+
+class UserPreferenceRow(Base):
+    """用户偏好配置表：替代 localStorage，按 user_id 隔离"""
+    __tablename__ = "user_preferences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
+    pref_key: Mapped[str] = mapped_column(String, nullable=False)
+    pref_value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "pref_key", name="uq_user_prefs"),
+        Index("idx_prefs_user", "user_id"),
+    )
+
+
+class UserSessionEventRow(Base):
+    """会话事件日志表：登录/切换/退出/Cookie过期等事件，保留 90 天"""
+    __tablename__ = "user_session_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    event_type: Mapped[str] = mapped_column(String, nullable=False)
+    detail: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        Index("idx_session_events_user", "user_id", "created_at"),
+        Index("idx_session_events_type", "event_type"),
+        Index("idx_session_events_created", "created_at"),
+    )
+
+
 def create_sqlite_engine(db_path: str = "data/xianyu.db"):
     """创建 SQLite 引擎（启用 WAL、外键约束、busy_timeout、NullPool）
 
