@@ -521,3 +521,89 @@ def test_set_user_status_updates_updated_at(user_mgr):
         new_updated = datetime.fromisoformat(row[0])
 
     assert new_updated > orig_updated
+
+
+def test_probe_all_accounts_marks_expired_for_invalid_cookies(user_mgr):
+    """Cookie 失效的 active 账号被标记为 expired"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+
+    # validator 返回 (False, "cookie expired")
+    def validator(user_id):
+        return (False, "cookie expired")
+
+    user_mgr.probe_all_accounts(validator)
+
+    user = user_mgr.get_user("220812345678")
+    assert user["status"] == "expired"
+
+
+def test_probe_all_accounts_marks_active_for_recovered_cookies(user_mgr):
+    """Cookie 恢复的 expired 账号被标记为 active"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    user_mgr.set_user_status("220812345678", "expired")  # 先设为 expired
+
+    # validator 返回 (True, "")
+    def validator(user_id):
+        return (True, "")
+
+    user_mgr.probe_all_accounts(validator)
+
+    user = user_mgr.get_user("220812345678")
+    assert user["status"] == "active"
+
+
+def test_probe_all_accounts_skips_disabled_users(user_mgr):
+    """disabled 用户被跳过，不调用 validator"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    user_mgr.set_user_status("220812345678", "disabled")
+
+    validator_call_count = 0
+    def validator(user_id):
+        nonlocal validator_call_count
+        validator_call_count += 1
+        return (False, "should not be called")
+
+    user_mgr.probe_all_accounts(validator)
+
+    assert validator_call_count == 0, "disabled 用户不应调用 validator"
+
+
+def test_probe_all_accounts_logs_cookie_expired_event(user_mgr):
+    """Cookie 失效时记录 cookie_expired 事件"""
+    from sqlalchemy import text as sa_text
+
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+
+    def validator(user_id):
+        return (False, "cookie expired")
+
+    user_mgr.probe_all_accounts(validator)
+
+    # 验证事件已记录
+    with user_mgr._engine.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT event_type, detail FROM user_session_events WHERE user_id=:uid AND event_type='cookie_expired'"),
+            {"uid": "220812345678"}
+        ).fetchone()
+        assert row is not None
+        assert "cookie expired" in row[1]  # detail 包含 reason
+
+
+def test_probe_all_accounts_logs_cookie_recovered_event(user_mgr):
+    """Cookie 恢复时记录 cookie_recovered 事件"""
+    from sqlalchemy import text as sa_text
+
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    user_mgr.set_user_status("220812345678", "expired")
+
+    def validator(user_id):
+        return (True, "")
+
+    user_mgr.probe_all_accounts(validator)
+
+    with user_mgr._engine.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT event_type FROM user_session_events WHERE user_id=:uid AND event_type='cookie_recovered'"),
+            {"uid": "220812345678"}
+        ).fetchone()
+        assert row is not None

@@ -18,7 +18,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import text as sa_text
 
@@ -343,6 +343,54 @@ class UserManager:
             logger.warning(
                 "记录 status_change 事件失败 user_id=%s", user_id, exc_info=True
             )
+
+    def probe_all_accounts(self, validator: "Callable[[str], tuple[bool, str]]") -> None:
+        """探测所有账号 Cookie 有效性，更新账号状态。
+
+        通过依赖注入 validator 函数解耦 CookieStore（MU2 接入时直接传入
+        CookieStore.validate_cookies_with_expiry 即可），使核心探测逻辑
+        在 MU1 阶段可独立测试，无需等待 CookieStore 改造。
+
+        状态机：
+        - active + invalid → expired + cookie_expired 事件
+        - expired + valid → active + cookie_recovered 事件
+        - disabled 跳过（不可恢复，避免无谓探测）
+        - 其他组合（active 仍 active / expired 仍 expired）不处理，避免
+          status_change 事件抖动污染审计日志。
+
+        线程安全：整个方法体持锁，与 set_user_status/list_users 互斥，
+        避免探测过程中状态被其他方法修改；RLock 可重入，内部调用
+        list_users/set_user_status 不会死锁。
+        """
+        with self._lock:
+            users = self.list_users()
+            for user in users:
+                # disabled 不可恢复，跳过避免无谓探测
+                if user["status"] == "disabled":
+                    continue
+
+                user_id = user["user_id"]
+                is_valid, reason = validator(user_id)
+
+                if not is_valid and user["status"] == "active":
+                    self.set_user_status(user_id, "expired")
+                    # _log_event 失败不阻塞状态变更流程（沿用 Task 4 模式）
+                    try:
+                        self._log_event(user_id, "cookie_expired", {"reason": reason})
+                    except Exception:
+                        logger.warning(
+                            "记录 cookie_expired 事件失败 user_id=%s",
+                            user_id, exc_info=True,
+                        )
+                elif is_valid and user["status"] == "expired":
+                    self.set_user_status(user_id, "active")
+                    try:
+                        self._log_event(user_id, "cookie_recovered", {})
+                    except Exception:
+                        logger.warning(
+                            "记录 cookie_recovered 事件失败 user_id=%s",
+                            user_id, exc_info=True,
+                        )
 
     def _log_event(self, user_id: str | None, event_type: str, detail: dict) -> None:
         """记录会话事件日志
