@@ -102,11 +102,16 @@ _manager_lock = threading.Lock()
 
 
 def get_user_manager() -> UserManager:
-    """获取全局 UserManager 单例"""
+    """获取全局 UserManager 单例
+
+    延迟调用 init_db 确保 users 等多用户表存在，
+    避免在 startup 的 init_db 之前被早期中间件触发时抛 no such table。
+    """
     global _manager
     with _manager_lock:
         if _manager is None:
-            from xianyu_hunter.infra.db_models import create_sqlite_engine
+            from xianyu_hunter.infra.db_models import create_sqlite_engine, init_db
+            init_db("data/xianyu.db")
             engine = create_sqlite_engine("data/xianyu.db")
             _manager = UserManager(engine)
         return _manager
