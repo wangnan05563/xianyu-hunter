@@ -272,6 +272,9 @@ class ChatbotKBConfig(BaseModel):
     chunk_size: int = Field(500, ge=100, le=2000, description="分块字符数")
     chunk_overlap: int = Field(50, ge=0, le=500, description="分块重叠字符数")
     snapshot_max_keep: int = Field(10, ge=1, le=50, description="快照保留数量上限")
+    persist_path: str = Field("data/chromadb", description="ChromaDB 持久化路径")
+    collection_name: str = Field("xianyu_hunter_docs", description="ChromaDB 集合名")
+    project_root: str = Field(".", description="知识库扫描项目根目录")
 
 
 class ChatbotFAQConfig(BaseModel):

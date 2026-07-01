@@ -227,3 +227,172 @@ Playwright 用户数据目录，存储登录态和 Cookie。
 - `browser-data/` — `browser.py`、`config.yaml` `./browser-data`
 - `frontend/` — `重新构建.bat`、`vite.config.ts`
 - `tests/` — `pyproject.toml` testpaths
+
+---
+
+## 七、文件分类判断标准（2026-06-30 补充）
+
+本节明确"什么样的文件该放在哪里"，作为添加新文件时的判定依据。
+
+### 7.1 根目录仅允许以下文件
+
+| 类别 | 文件 | 说明 |
+|---|---|---|
+| 工具配置 | `.gitignore` / `.dockerignore` / `.env.example` / `.pre-commit-config.yaml` | 工具链相关 |
+| 构建/依赖 | `Dockerfile` / `docker-compose.yml` / `pyproject.toml` / `requirements.txt` | 项目构建 |
+| 元文档 | `README.md` / `CHANGELOG.md` / `VERSIONING.md` | 仓库根级文档 |
+| 启动入口 | `静默启动.vbs` | **唯一**根目录脚本，作为包装器跳转至 `scripts/静默启动.vbs` |
+
+### 7.2 脚本类文件（必须放 `scripts/`）
+
+凡是 `.py` / `.sh` / `.js` / `.ps1` / `.bat` / `.vbs` 后缀的可执行脚本，
+**必须** 位于 `scripts/` 下。命名风格：
+
+- **Python 工具脚本**：`snake_case.py`（如 `auth_helper.py`）
+- **Shell / 批处理**：中文命名更友好（如 `启动服务.bat`），便于双击启动
+- **PowerShell**：`snake_case.ps1`（如 `setup-env.ps1`）
+- **VBS 启动器**：`静默启动.vbs`（被根目录包装器调用）
+
+子目录：
+
+- `scripts/tests/`：用于 `scripts/` 下脚本的单元/集成测试（镜像 pytest 模式）
+
+### 7.3 文档归档（`.md`）
+
+| 位置 | 用途 |
+|---|---|
+| 根目录 `*.md` | 仅 README / CHANGELOG / VERSIONING |
+| `docs/README.md` | 文档目录索引 |
+| `docs/01-仪表盘/` ~ `docs/07-移动端/` | 各功能模块的详细设计 |
+| `docs/archive/` | 过期文档（sprint 报告、已废弃设计） |
+| `docs/requirements/` | 需求规格、评审报告 |
+| `docs/standards/` | 规范文档（部署、设计系统、目录结构） |
+| `docs/04-系统维护/sonar-reports/` | SonarQube 报告存档 |
+
+**禁止** 在 `docs/` 存放脚本文件、临时分析报告、截图。
+
+### 7.4 配置文件（`.yaml` / `.yml` / `.env`）
+
+| 类型 | 位置 | 版本控制 |
+|---|---|---|
+| 应用配置 | `config/config.yaml`、`config/eval.yaml` | ✅ 提交 |
+| 配置模板 | `config/*.example.yaml` | ✅ 提交 |
+| 环境变量 | `.env` | ❌ gitignore |
+| 环境变量示例 | `.env.example` | ✅ 提交 |
+| 数据库 / 向量库 | `data/*.db`、`data/chromadb/` | ❌ gitignore |
+| 浏览器登录态 | `browser-data/` | ❌ gitignore |
+
+### 7.5 日志与运行产物
+
+| 类型 | 位置 | `.gitignore` |
+|---|---|---|
+| 应用运行日志 | `data/logs/`、`logs/` | ✅ |
+| 服务标准输出 | 根目录 `run.stdout.log`、`run.stderr.log` | ✅ |
+| pytest 缓存 | `.pytest_cache/`、`__pycache__/`、`*.pyc` | ✅ |
+| SonarQube 缓存 | `.scannerwork/`、`sonar-results/`、`sonar-scan.log` | ✅ |
+| 浏览器缓存 | `browser-data/Default/Cache/` | 运行时数据，清理时删除 |
+| 前端构建 | `src/xianyu_hunter/web/static/spa/` | ✅ |
+| 截图 | `tests/screenshots/`、`scripts/.screenshots/` | ✅ |
+
+### 7.6 重定向误产物（必须拦截）
+
+PowerShell 中 `command > filename` 会创建 `filename` 文件。常见误用：
+
+```powershell
+Get-Help less > 17_xianyu    # ❌ 创建了 less 帮助文本的垃圾文件
+```
+
+已在 `.gitignore` + `.pre-commit-config.yaml` 拦截：
+
+```
+/0
+/17_xianyu
+/17_xianyufrontend
+/_r.json
+/.tmp_diff.txt
+/.s3358_lines.txt
+/*.txtcd      # 异常命名后缀（如 test_result_*.txtcd 是错误输入）
+```
+
+### 7.7 添加新文件时的检查清单
+
+在 `git add` 之前自检：
+
+- [ ] 该文件是否应放根目录？（仅配置/构建/元文档/启动入口）
+- [ ] 若是脚本，是否放在 `scripts/`？
+- [ ] 若是运行时数据，是否已被 `.gitignore` 覆盖？
+- [ ] 若是日志，是否输出到 `data/logs/` 或 `logs/`？
+- [ ] 是否运行了 `pre-commit run --all-files`？
+- [ ] 是否避开了常见的命名陷阱（如 `0`、`17_xianyu`、`_r.json`）？
+
+---
+
+## 八、第三轮整理变更记录（2026-06-30）
+
+### 8.1 变更背景
+
+第二轮清理后根目录又被运行时产物重建（Web 服务持续运行，定期生成日志、重定向产物）。
+本次主动停止服务后系统化整理，识别了根目录的"游离文件"，并建立长期防复发机制。
+
+### 8.2 清理动作
+
+| 类别 | 数量 | 处理 |
+|---|---|---|
+| SonarQube 调试 PS1 脚本 | 11 | 删除（`check-scan*.ps1` / `diagnose-api.ps1` / `query-*.ps1` / `run-scan.ps1`） |
+| 临时调试 Python 脚本 | 2 | 删除（`_debug_orders.py` / `_tmp_check_title.py`） |
+| 根目录测试输出 | 5 | 删除（`pytest_output.txt` 等 4 个 + 异常名 `test_result_task_editor.txtcd`） |
+| 误重定向产物 | 2 | 删除（`17_xianyu` / `17_xianyufrontend`，含 less 帮助文本） |
+| 运行日志 | 1 | 删除（`run.stdout.log` 2.37 MB） |
+| SonarQube 报告 | 2 | 移动至 `docs/04-系统维护/sonar-reports/` |
+| SonarQube 缓存 | 2 目录 | 删除（`.scannerwork/` 6.80 MB + `sonar-results/` 16.25 MB） |
+| pytest 缓存 | 1 目录 | 删除（`.pytest_cache/`） |
+
+### 8.3 新增内容
+
+| 路径 | 用途 |
+|---|---|
+| `scripts/静默启动.vbs` | 真实启动器，被根目录包装器调用 |
+| `docs/standards/directory-structure.md` 第七、八章 | 文件分类标准 + 本轮变更记录 |
+| `.gitignore` 增补 | `sonar-results/` / `test-screenshots/` / `.uploads/` / `*.txtcd` |
+| `.pre-commit-config.yaml` 增补 | 拦截 `sonar-results/` 等 |
+
+### 8.4 根目录最终状态
+
+清理后根目录仅剩 14 个核心文件，全部符合 7.1 节规范：
+
+| 类别 | 文件 |
+|---|---|
+| 工具配置 | `.dockerignore` / `.env` / `.env.example` / `.gitignore` / `.pre-commit-config.yaml` |
+| 构建/依赖 | `docker-compose.yml` / `Dockerfile` / `pyproject.toml` / `requirements.txt` / `sonar-project.properties` |
+| 元文档 | `README.md` / `CHANGELOG.md` / `VERSIONING.md` |
+| 启动入口 | `静默启动.vbs`（根目录唯一脚本，调用 `scripts/静默启动.vbs`） |
+
+无任何游离的功能性文件。`scripts/` 目录下 16 个文件（`tests/test-setup-env.ps1` + 15 个脚本）全部为脚本类（.py / .ps1 / .bat / .vbs）。
+
+---
+
+## 九、第四轮整理变更记录（2026-06-30 续）
+
+### 9.1 变更背景
+
+第三轮清理后服务又运行了一段时间，根目录再次被运行产物污染。
+本次主动检查时发现 18 个游离文件，集中清理后验证应用完整性。
+
+### 9.2 本轮清理动作
+
+| 类别 | 数量 | 处理 |
+|---|---|---|
+| SonarQube 调试 PS1 脚本 | 11 | 删除（`check-scan*.ps1` / `diagnose-api.ps1` / `query-*.ps1` / `run-scan.ps1`） |
+| 临时调试 PS1 脚本 | 1 | 移动至 `scripts/check-tmp.ps1`（保留以备复现 Sonar 临时目录权限问题） |
+| 测试输出 txt | 4 | 删除（`pytest_output.txt` / `pytest_result.txt` / `test_debug_output.txt` / `test_result.txt`） |
+| 误重定向产物 | 2 | 删除（`17_xianyu` / `17_xianyufrontend`） |
+| SonarQube 报告副本 | 2 | 删除（与 `docs/04-系统维护/sonar-reports/` 下的副本 hash 相同，根目录副本冗余） |
+| 异常名后缀 | 1 | 删除（`test_result_task_editor.txtcd`，`.txtcd` 是错误输入后缀） |
+| 临时 diff 文件 | 1 | 删除（`.tmp_diff.txt` / `.s3358_lines.txt`） |
+
+### 9.3 验证结果
+
+- ✅ 核心模块全部可导入：`xianyu_hunter` / `config` / `container` / `web.app`
+- ✅ 根目录严格 14 个核心文件，无游离功能文件
+- ✅ `scripts/` 目录仅含脚本类文件（.py / .ps1 / .bat / .vbs）
+- ✅ `docs/standards/directory-structure.md` 持续更新本轮变更记录

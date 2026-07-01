@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,6 +22,8 @@ from pydantic import BaseModel, Field
 from xianyu_hunter.container import Container
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import parse_iso_datetime
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/error-logs", tags=["error-logs"])
 
@@ -102,6 +105,8 @@ def batch_action(
     """
     ids = payload.ids
     action = payload.action
+    # 批量删除/状态变更是高危操作，记录操作类型与影响范围便于事后审计追溯
+    logger.info("error_logs batch action=%s count=%d", action, len(ids))
     if action == "delete":
         affected = container.repo.batch_delete_error_logs(ids)
     else:

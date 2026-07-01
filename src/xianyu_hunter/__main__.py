@@ -103,12 +103,6 @@ async def _load_tasks_from_repo(container: Container) -> list[Task]:
                 interval_seconds=task.interval_seconds,
             ),
             repo=container.repo,
-            # P1: 注入官方采集回调（与 web/startup.py 保持一致）
-            official_collect_fn=(
-                lambda iid, tid: _call_official_collect(container, iid, tid)
-            ),
-            # Task 9: 注入 notifier 用于自动采集暂停告警
-            notifier=container.notifier_hub,
         )
         await container.scheduler.register(task, worker)
         workers.append(worker)

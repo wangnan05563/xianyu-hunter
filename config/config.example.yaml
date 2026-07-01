@@ -108,7 +108,6 @@ batch_refresh:
   interval_minutes: 30         # 定时触发间隔（分钟）
   batch_size: 50               # 每批从 DB 拉取的最大商品数
   max_items_per_run: 100       # 单次运行最多采集的商品数
-  history_retention_days: 90   # 执行历史保留天数（0=永不清理）
 
 # 评估配置：商品评估打分阈值与 AI 自动化开关
 eval:

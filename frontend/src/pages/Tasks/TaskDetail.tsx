@@ -2,11 +2,11 @@ import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Card, Descriptions, Tag, Button, Space, Spin, Row, Col, Table, Empty, message, Tabs, List,
-  Select, Popconfirm, Radio,
+  Select, Popconfirm, Radio, Tooltip,
 } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined,
-  SearchOutlined, SyncOutlined, DeleteOutlined, PlusOutlined,
+  SearchOutlined, SyncOutlined, DeleteOutlined, PlusOutlined, EyeOutlined,
 } from '@ant-design/icons'
 import ReactECharts from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
@@ -79,7 +79,7 @@ export default function TaskDetail() {
     })
   }
 
-  // 加载商品链接
+  // 加载闲鱼内容关联
   const loadLinks = useCallback(() => {
     if (!id) return
     setLinkLoading(true)
@@ -243,7 +243,7 @@ export default function TaskDetail() {
     { title: '警告', dataIndex: 'warn_count', key: 'warn_count', width: 80, render: (v: number) => v > 0 ? <Tag color="orange">{v}</Tag> : v },
   ]
 
-  // 商品链接表格列
+  // 闲鱼内容关联表格列
   const linkColumns = [
     {
       title: '标题', key: 'title', ellipsis: true,
@@ -270,11 +270,26 @@ export default function TaskDetail() {
       render: (_: unknown, r: TaskLink) => <Tag>{r.source}</Tag>,
     },
     {
-      title: '操作', key: 'action', width: 80,
+      title: '操作', key: 'action', width: 120,
       render: (_: unknown, r: TaskLink) => (
-        <Popconfirm title="确认删除此关联？" onConfirm={() => handleRemoveLink(r.link_id)} okText="删除" cancelText="取消">
-          <Button type="link" danger size="small" icon={<DeleteOutlined />}>删除</Button>
-        </Popconfirm>
+        <Space size="small">
+          {/* 打开原帖：与 TaskList「闲鱼内容关联」风格保持一致 */}
+          {r.display?.url && (
+            <Tooltip title="打开原帖">
+              <Button
+                size="small"
+                type="link"
+                icon={<EyeOutlined />}
+                onClick={() => globalThis.open(r.display.url, '_blank')}
+              />
+            </Tooltip>
+          )}
+          <Popconfirm title="确认删除此关联？" onConfirm={() => handleRemoveLink(r.link_id)} okText="删除" cancelText="取消">
+            <Tooltip title="删除关联">
+              <Button type="link" danger size="small" icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
       ),
     },
   ]
@@ -499,7 +514,7 @@ export default function TaskDetail() {
                 },
                 {
                   key: 'links',
-                  label: '商品链接',
+                  label: '闲鱼内容关联',
                   children: (
                     <Card>
                       <Space style={{ marginBottom: 16 }} wrap>

@@ -27,8 +27,8 @@ notifier:
   - pushplus
   - bark
   channels:
-    serverchan: true
-    pushplus: true
+    serverchan: false
+    pushplus: false
     bark: false
     telegram: false
     wecom: false
@@ -150,6 +150,9 @@ chatbot:
     chunk_size: 500
     chunk_overlap: 50
     snapshot_max_keep: 10
+    persist_path: data/chromadb
+    collection_name: xianyu_hunter_docs
+    project_root: .
   faq:
     similarity_threshold: 0.85
     confirm_threshold: 0.65

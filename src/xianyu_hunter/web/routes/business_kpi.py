@@ -155,10 +155,16 @@ def business_kpi(
             .where(EventRow.stage.like("%notify%"))
         ).scalar() or 0)
     if cur_notify_total == 0:
-        logger.warning(
-            f"[business_kpi] 推送失败率分母为 0：近 {range_days} 天无 notify 事件，"
-            f"可能 NotifierHub 未写入推送记录或无推送任务"
-        )
+        notifier_count = len(getattr(container.notifier_hub, "notifiers", []) or [])
+        if notifier_count == 0:
+            logger.debug(
+                f"[business_kpi] 近 {range_days} 天无 notify 事件：当前未启用有效通知渠道，跳过告警"
+            )
+        else:
+            logger.warning(
+                f"[business_kpi] 推送失败率分母为 0：近 {range_days} 天无 notify 事件，"
+                f"可能 NotifierHub 未写入推送记录或无推送任务"
+            )
     cur_fail_rate = (cur_fail / cur_notify_total * 100) if cur_notify_total else 0.0
     prev_fail_rate = (prev_fail / prev_notify_total * 100) if prev_notify_total else 0.0
     kpis.append(_kpi_block(

@@ -11,10 +11,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from xianyu_hunter.domain.events import EventType
 from xianyu_hunter.infra.event_bus import EventBus
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repository import Repository
@@ -100,6 +102,10 @@ class Container:
     # 并发使用会导致 TargetClosedError / Connection closed 等错误
     # 使用 PriorityBrowserLock 支持 live 端点高优先级获取锁
     browser_lock: PriorityBrowserLock = field(default_factory=PriorityBrowserLock)
+    # 智能客服子容器：由 _build_chatbot_container 在主容器就绪后注入
+    # 用 Any 而非具体类型：避免顶层 container.py 强依赖 chatbot 模块，
+    # chromadb 等可选依赖未安装时仍可正常构造（chatbot=None）
+    chatbot: Any = None
 
     def wire_notifier(self) -> None:
         """把 NotifierHub 接入 EventBus（构造后只调一次）"""
@@ -119,8 +125,44 @@ class Container:
         self.notifier_hub = NotifierHub(
             channels=enabled,
             quiet_hours=self.config.notifier.quiet_hours,
+            repo=self.repo,
         )
-        self.notifier_hub.attach(self.event_bus)
+        # 从用户配置解析订阅事件集合
+        # 仅匹配已知 EventType，跳过未知事件名（如 chatbot.* 不通过 NotifierHub 推送）
+        db_only_events = {
+            "TASK_STOPPED",
+            "TASK_SEARCH_DONE",
+            "ITEM_FOUND",
+            "EVAL_SCORED",
+            "WAF_BLOCKED",
+            "AUTH_EXPIRED",
+            "SYSTEM_ERROR",
+            "MAINTENANCE_DATABASE",
+            "MAINTENANCE_LOGS",
+            "MAINTENANCE_CACHE",
+        }
+        subscribed_events: set[EventType] = set()
+        for name in self.config.notifier.subscribed_events or []:
+            if name in db_only_events:
+                logger.info(
+                    f"[wire_notifier] 配置中的 subscribed_events 包含仅用于时间线的事件类型 {name!r}，"
+                    f"通知总线已跳过"
+                )
+                continue
+            evt = getattr(EventType, name, None)
+            if evt is not None:
+                subscribed_events.add(evt)
+            else:
+                logger.warning(
+                    f"[wire_notifier] 忽略未知事件类型 {name!r}（不在 EventType 枚举中），"
+                    f"请检查 config.yaml 的 notifier.subscribed_events 配置"
+                )
+        # 用户配置为空时传 None，让 hub.attach() 回退到 DEFAULT_NOTIFY_EVENTS
+        # 避免 None vs 空 set 语义差异导致 NotifierHub 不订阅任何事件
+        self.notifier_hub.attach(
+            self.event_bus,
+            events=subscribed_events or None,
+        )
 
 
 def build_default_container(
@@ -209,5 +251,179 @@ def build_default_container(
     container.wire_notifier()
     # F-16：给 Scheduler 注入 repo，使其能触发依赖任务
     container.scheduler.set_repo(repo)
+    # 智能客服子容器构造（在主容器就绪后，复用 repo.engine 和 event_bus）
+    # 为什么放在末尾：chatbot 模块依赖 repo/engine/event_bus 等主容器资源，
+    # 必须等主容器完全构造后才能注入；可选依赖缺失时返回 None 不影响主系统
+    container.chatbot = _build_chatbot_container(container)
     logger.info("Container 初始化完成")
     return container
+
+
+def _build_chatbot_container(container: Container) -> Any:
+    """构造智能客服子容器
+
+    独立函数而非内联在 build_default_container 中：
+    1. 隔离可选依赖：chromadb/sentence-transformers 未安装时返回 None，不影响主容器
+    2. 便于测试：测试时可单独 mock chatbot 子容器
+    3. 关注点分离：主容器构造逻辑不被 chatbot 逻辑污染
+
+    返回 dict 而非 dataclass：chatbot 子容器字段多且可能扩展，
+    dict 更灵活；访问方式 container.chatbot["orchestrator"] 直观清晰
+    """
+    # 深拷贝 chatbot 配置：避免 settings.openai_model 覆盖污染 get_config() 全局单例
+    # 若直接修改单例，用户清空 OPENAI_MODEL 后 cfg.llm.model 会保留上次污染值无法重置
+    cfg = copy.deepcopy(container.config.chatbot)
+    if not cfg.enabled:
+        logger.info("智能客服未启用（chatbot.enabled=false）")
+        return None
+
+    # 同步 settings.openai_model 到 cfg.llm.model（修改的是副本，不影响全局单例）
+    # 原因：用户在 .env 中配置 OPENAI_MODEL 时，只需改一处即可同时影响 LLM 和 chatbot
+    from xianyu_hunter.config import get_settings as _get_settings
+    _settings = _get_settings()
+    if _settings.openai_model:
+        cfg.llm.model = _settings.openai_model
+        logger.info(f"chatbot LLM model 同步为 settings.openai_model: {_settings.openai_model}")
+
+    try:
+        from xianyu_hunter.infra import ai_usage
+        from xianyu_hunter.infra.repo_chatbot import ChatbotRepository
+        from xianyu_hunter.modules.chatbot.embedding_service import EmbeddingService
+        from xianyu_hunter.modules.chatbot.vector_store import VectorStore
+        from xianyu_hunter.modules.chatbot.kb_manager import KBManager
+        from xianyu_hunter.modules.chatbot.faq_matcher import FAQMatcher
+        from xianyu_hunter.modules.chatbot.intent_classifier import IntentClassifier
+        from xianyu_hunter.modules.chatbot.rag_engine import RAGEngine
+        from xianyu_hunter.modules.chatbot.context_manager import ContextManager
+        from xianyu_hunter.modules.chatbot.escalation import Escalation
+        from xianyu_hunter.modules.chatbot.tool_registry import ToolRegistry
+        from xianyu_hunter.modules.chatbot.agent import Agent
+        from xianyu_hunter.modules.chatbot.orchestrator import ChatbotOrchestrator
+        from xianyu_hunter.modules.chatbot.kb_refresh_scheduler import KBRefreshScheduler
+    except ImportError as e:
+        logger.warning(f"智能客服模块依赖缺失，跳过初始化: {e}")
+        return None
+
+    try:
+        # 1. 仓储层：复用主 repo.engine（避免独立 create_engine 导致 SQLite locked）
+        chatbot_repo = ChatbotRepository(container.repo.engine)
+
+        # 2. 基础设施层
+        # settings.embedding_* 覆盖 cfg.kb.embedding_*：
+        # embedding endpoint 已独立于 LLM（DeepSeek 不支持 /embeddings），
+        # 通过 .env 的 EMBEDDING_MODEL/DIMENSIONS 切换后端时，
+        # 必须同步覆盖 model 和 dimensions，否则会用错模型名/错误维度
+        _emb_model = _settings.embedding_model or cfg.kb.embedding_model
+        _emb_dimensions = (
+            _settings.embedding_dimensions
+            if _settings.embedding_dimensions > 0
+            else cfg.kb.embedding_dimensions
+        )
+        embedding_service = EmbeddingService(
+            ai_usage=ai_usage,
+            model=_emb_model,
+            dimensions=_emb_dimensions,
+            concurrency=cfg.kb.embedding_concurrency,
+        )
+        vector_store = VectorStore(
+            persist_path=cfg.kb.persist_path,
+            collection_name=cfg.kb.collection_name,
+        )
+
+        # 3. 知识库管理器
+        kb_manager = KBManager(
+            embedding_service=embedding_service,
+            vector_store=vector_store,
+            repo=chatbot_repo,
+            config=cfg.kb,
+            project_root=cfg.kb.project_root,
+        )
+
+        # 4. 匹配器群
+        faq_matcher = FAQMatcher(
+            repo=chatbot_repo,
+            embedding_service=embedding_service,
+            config=cfg.faq,
+        )
+        intent_classifier = IntentClassifier(
+            config=cfg,
+            ai_usage=ai_usage,
+        )
+        rag_engine = RAGEngine(
+            embedding_service=embedding_service,
+            vector_store=vector_store,
+            config=cfg.rag,
+            llm_config=cfg.llm,
+            ai_usage=ai_usage,
+        )
+
+        # 5. 上下文 + 转人工
+        context_manager = ContextManager(
+            repo=chatbot_repo,
+            config=cfg,
+        )
+        escalation = Escalation(
+            repo=chatbot_repo,
+            config=cfg.escalation,
+            session_timeout_min=cfg.session_timeout_min,
+        )
+
+        # 6. Agent + 工具注册表
+        tool_registry = ToolRegistry(
+            repo=container.repo,
+            rag_engine=rag_engine,
+            config=cfg.agent,
+        )
+        agent = Agent(
+            tool_registry=tool_registry,
+            config=cfg.agent,
+            llm_config=cfg.llm,
+            ai_usage=ai_usage,
+        )
+
+        # 7. 编排器（串联所有模块）
+        orchestrator = ChatbotOrchestrator(
+            faq_matcher=faq_matcher,
+            intent_classifier=intent_classifier,
+            rag_engine=rag_engine,
+            agent=agent,
+            context_manager=context_manager,
+            escalation=escalation,
+            chatbot_repo=chatbot_repo,
+            config=cfg,
+            event_bus=container.event_bus,
+        )
+
+        # 8. 知识库刷新调度器（不在构造时启动，由 startup.py 在应用启动后启动）
+        kb_scheduler = KBRefreshScheduler(
+            kb_manager=kb_manager,
+            config=cfg.kb,
+            event_bus=container.event_bus,
+        )
+
+        logger.info("智能客服子容器初始化完成")
+        return {
+            "repo": chatbot_repo,
+            "embedding_service": embedding_service,
+            "vector_store": vector_store,
+            "kb_manager": kb_manager,
+            "faq_matcher": faq_matcher,
+            "intent_classifier": intent_classifier,
+            "rag_engine": rag_engine,
+            "context_manager": context_manager,
+            "escalation": escalation,
+            "tool_registry": tool_registry,
+            "agent": agent,
+            "orchestrator": orchestrator,
+            "kb_scheduler": kb_scheduler,
+            "config": cfg,
+        }
+    except Exception as e:
+        # ImportError：可选依赖（chromadb/sentence-transformers）缺失是合法状态，降级为 info
+        # 避免可选依赖缺失被误判为启动失败（logger.exception 会输出 ERROR 级别+堆栈）
+        if isinstance(e, ImportError):
+            logger.info(f"智能客服可选依赖缺失，跳过初始化: {e}")
+        else:
+            # chromadb 初始化失败、VectorStore 集合打开失败等异常不阻断主系统
+            logger.exception(f"智能客服子容器初始化失败: {e}")
+        return None

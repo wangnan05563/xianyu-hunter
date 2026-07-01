@@ -68,6 +68,7 @@ jenkins_build_*.log
 # ---------- SonarQube 扫描缓存 ----------
 .scannerwork/
 sonar-scan.log
+sonar-results/
 
 # ---------- 截图与可视化产物 ----------
 *.png
@@ -122,6 +123,14 @@ config_resp.jsonclear
 
 # ---------- 前端构建产物 ----------
 src/xianyu_hunter/web/static/spa/
+
+# ---------- 截图与运行时用户数据 ----------
+test-screenshots/
+.uploads/
+
+# ---------- 异常命名后缀的根目录产物（如 .txtcd 是错误输入）----------
+# 这一类文件名后缀不规则，建议在终端命令前检查重定向目标，避免误生成
+/*.txtcd
 
 # ---------- IDE ----------
 .idea/

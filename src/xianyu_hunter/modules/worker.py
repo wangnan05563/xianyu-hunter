@@ -96,6 +96,15 @@ class TaskWorker:
         # 上次落单时间（用于冷却）
         self._last_buy_at: float = 0.0
 
+    async def cleanup(self) -> None:
+        """Worker 资源清理钩子
+
+        供 TaskScheduler.unregister 调用，确保注销任务时释放持有的资源。
+        当前实现无后台 task 需取消（同步任务在 run_once 内完成），保留方法
+        以兼容 scheduler 清理逻辑并为未来扩展（如 AI 评估后台 task）预留接入点。
+        """
+        return None
+
     def _should_buy(self) -> bool:
         """根据模式判断本轮是否执行真拍"""
         if self.task.mode == TaskMode.AUTO:

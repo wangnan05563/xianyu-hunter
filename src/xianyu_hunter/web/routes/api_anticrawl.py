@@ -44,19 +44,23 @@ def _configure_default_health_checkers(orch) -> None:
     初始化后健康检查即可直接使用。api/page 维度未配置时默认通过，
     主要依赖 cookie（权重40）和 waf（权重10）维度。
     """
-    # Cookie 检查器：基于 JSON 实际内容判断 + 自动同步层状态
+    # Cookie 检查器：基于 JSON 实际内容判断 + 自动同步层状态 + 浏览器内存兜底
     # 为什么不依赖 CookieRotator 内存状态：browser_login / auth_helper /
     # browser_import / cookie_inject 等登录路径只调用 export_cookies 写入 JSON，
     # 未调用 on_login_success，导致层状态为默认 False，引发误判
-    def cookie_checker() -> bool:
+    #
+    # 为什么需要浏览器内存兜底：JSON 与浏览器内存存在同步延迟
+    # （MTOP Set-Cookie 回写 JSON 可能失败/部分回写），健康检查只读 JSON 会误判。
+    # 浏览器内存是实时搜索实际使用的数据源，以它为兜底标准能与实时搜索行为对齐。
+    async def cookie_checker() -> bool:
         try:
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
             store = get_cookie_store()
             store.invalidate_cache()
             data = store._read_json()
             if not data or not data.get("cookies"):
-                logger.debug("cookie_checker: JSON 无 Cookie 数据")
-                return False
+                logger.debug("cookie_checker: JSON 无 Cookie 数据，尝试浏览器内存兜底")
+                return await _browser_cookies_fallback(orch)
 
             cookies_list = data["cookies"]
             names = {c.get("name", "") for c in cookies_list}
@@ -71,8 +75,24 @@ def _configure_default_health_checkers(orch) -> None:
                 for c in cookies_list
             )
             if not has_token:
-                logger.debug("cookie_checker: _m_h5_tk 缺失、无值或已过期")
-                return False
+                # JSON 中 token 过期/缺失时，尝试从浏览器内存读取最新 token 回写 JSON
+                # 为什么需要：MTOP 搜索 API 响应的 Set-Cookie 会更新浏览器内存中的 token，
+                # 但 _sync_response_cookies_to_context 回写 JSON 可能失败（被静默吞掉），
+                # 导致 JSON 中的 token 落后于浏览器内存。健康检查前先尝试同步，避免误判
+                logger.debug("cookie_checker: JSON 中 _m_h5_tk 缺失/过期，尝试从浏览器内存刷新回写 JSON")
+                refreshed = await _try_refresh_m5tk_from_browser(store)
+                if refreshed:
+                    store.invalidate_cache()
+                    data = store._read_json()
+                    cookies_list = data["cookies"] if data and data.get("cookies") else []
+                    has_token = any(
+                        c.get("name") == "_m_h5_tk" and c.get("value")
+                        and not is_m5tk_expired(c.get("value", ""))
+                        for c in cookies_list
+                    )
+                if not has_token:
+                    # JSON 路径已不可信，转浏览器内存兜底
+                    return await _browser_cookies_fallback(orch)
 
             # 2. identity 层：至少一个身份 Cookie 存在
             # 为什么用"至少一个"而非"全部"：不同登录方式返回的 Cookie 集合不同，
@@ -80,16 +100,22 @@ def _configure_default_health_checkers(orch) -> None:
             identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
             has_identity = bool(identity_cookies & names)
             if not has_identity:
-                logger.debug("cookie_checker: identity 层 Cookie 缺失 (names=%s)", names)
-                return False
+                logger.debug("cookie_checker: JSON 中 identity 层 Cookie 缺失 (names=%s)，尝试浏览器内存兜底", names)
+                return await _browser_cookies_fallback(orch)
 
-            # 3. 过期时间检查（兼容旧数据：无 expires 字段视为 session cookie）
+            # 3. 过期时间检查：仅检查关键 cookie（identity + session 层）
+            # 为什么不再检查所有 cookie：tracking 层 cookie（cna/tfstk 等）过期不影响
+            # 实时搜索，但会导致健康检查误判 cookie 无效。实时搜索只依赖 identity + session 层。
+            # 关键 cookie 过期是真失效，不兜底（兜底也无法绕过服务端过期判定）
+            key_cookie_names = identity_cookies | LAYER_DEFINITIONS[CookieLayer.SESSION].cookies
             now = time.time()
             for c in cookies_list:
+                if c.get("name") not in key_cookie_names:
+                    continue
                 expires = c.get("expires", -1)
                 if expires and expires > 0 and expires < now:
                     logger.warning(
-                        "cookie_checker: Cookie 已过期: %s (expires=%d, now=%d)",
+                        "cookie_checker: 关键 Cookie 已过期: %s (expires=%d, now=%d)",
                         c.get("name"), expires, now,
                     )
                     return False
@@ -157,6 +183,112 @@ def _configure_default_health_checkers(orch) -> None:
         cookie_checker=cookie_checker,
         waf_provider=waf_provider,
     )
+
+
+async def _try_refresh_m5tk_from_browser(store) -> bool:
+    """从浏览器内存读取最新 _m_h5_tk 并回写 JSON
+
+    为什么需要：MTOP 搜索 API 响应的 Set-Cookie 会实时更新浏览器内存中的 token，
+    但 _sync_response_cookies_to_context 回写 JSON 可能失败（被 except 静默吞掉），
+    导致 JSON 中的 token 落后于浏览器内存。健康检查前先尝试同步，避免误判。
+
+    Returns:
+        True 表示成功从浏览器内存读取到未过期 token 并回写 JSON
+    """
+    try:
+        from xianyu_hunter.web.deps import get_container
+        container = get_container()
+        if not container.browser:
+            return False
+        cookies = await container.browser.get_cookies()
+        updates: dict[str, str] = {}
+        for c in cookies:
+            name = c.get("name", "")
+            value = c.get("value", "")
+            if not value:
+                continue
+            # _m_h5_tk 需未过期；_m_h5_tk_enc 是配套加密 token，无 timestamp 无法判过期，直接回写
+            if name == "_m_h5_tk" and not is_m5tk_expired(value):
+                updates[name] = value
+            elif name == "_m_h5_tk_enc":
+                updates[name] = value
+        if not updates:
+            return False
+        return store.update_cookie_values(updates)
+    except Exception as e:
+        logger.debug("从浏览器内存刷新 _m_h5_tk 回写 JSON 失败: %s", e)
+        return False
+
+
+async def _browser_cookies_fallback(orch) -> bool:
+    """JSON 判定 cookie 无效时的浏览器内存兜底复核
+
+    为什么需要：JSON 与浏览器内存存在同步延迟（MTOP Set-Cookie 回写失败/部分回写），
+    健康检查只读 JSON 会误判。浏览器内存是实时搜索实际使用的数据源，
+    以它为兜底标准能与实时搜索行为对齐。
+
+    判定标准与实时搜索 _ensure_live_search_cookies 对齐：
+    - _m_h5_tk 存在、有值、未过期
+    - identity 层至少一个 cookie 存在
+    - 关键 cookie（identity + session 层）的 expires 未过期
+    - collector.last_session_invalid 粘性标志处理
+    """
+    try:
+        from xianyu_hunter.web.deps import get_container
+        container = get_container()
+        if not container.browser:
+            return False
+        cookies = await container.browser.get_cookies()
+        if not cookies:
+            return False
+
+        names = {c.get("name", "") for c in cookies}
+
+        # 1. _m_h5_tk 必须有效
+        has_token = any(
+            c.get("name") == "_m_h5_tk" and c.get("value")
+            and not is_m5tk_expired(c.get("value", ""))
+            for c in cookies
+        )
+        if not has_token:
+            logger.debug("cookie_checker(兜底): 浏览器内存 _m_h5_tk 缺失/过期")
+            return False
+
+        # 2. identity 层至少一个
+        identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
+        if not (identity_cookies & names):
+            logger.debug("cookie_checker(兜底): 浏览器内存 identity 层 Cookie 缺失 (names=%s)", names)
+            return False
+
+        # 3. 关键 cookie 的 expires 未过期
+        key_cookie_names = identity_cookies | LAYER_DEFINITIONS[CookieLayer.SESSION].cookies
+        now = time.time()
+        for c in cookies:
+            if c.get("name") not in key_cookie_names:
+                continue
+            expires = c.get("expires", -1)
+            if expires and expires > 0 and expires < now:
+                logger.warning(
+                    "cookie_checker(兜底): 浏览器内存关键 Cookie 已过期: %s (expires=%d, now=%d)",
+                    c.get("name"), expires, now,
+                )
+                return False
+
+        # 4. collector 会话失效标志：浏览器内存 token 实际有效时清除粘性标志
+        # 为什么与 JSON 路径一致：last_session_invalid 可能被 DOM 回退重置前触发，
+        # 浏览器内存 token 有效说明会话实际可用，应清除标志避免反复失效
+        try:
+            if container.collector and getattr(container.collector, 'last_session_invalid', False):
+                logger.info("cookie_checker(兜底): last_session_invalid=True 但浏览器内存 token 有效，清除粘性标志")
+                container.collector.last_session_invalid = False
+        except Exception:
+            pass
+
+        logger.info("cookie_checker: JSON 判定无效，但浏览器内存 cookie 有效（兜底通过）")
+        return True
+    except Exception as e:
+        logger.debug("浏览器内存兜底检查失败: %s", e)
+        return False
 
 
 # ============================================================

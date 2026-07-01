@@ -7,18 +7,37 @@ from enum import Enum
 
 
 class EventType(str, Enum):
+    # 主系统 22 种事件（与前端 NotifierChannels/constants.ts eventTypes 对齐）
+    # 任务生命周期
+    TASK_STARTED = "task.started"
+    TASK_STOPPED = "task.stopped"
+    TASK_PAUSED = "task.paused"
+    TASK_ERROR = "task.error"
+    TASK_SEARCH_DONE = "task.search_done"
+    # 商品与评估
     ITEM_DISCOVERED = "item.discovered"
+    ITEM_FOUND = "item.found"  # 旧枚举兼容
     EVAL_PASSED = "eval.passed"
     EVAL_REJECTED = "eval.rejected"
+    EVAL_SCORED = "eval.scored"
+    # 购买
     BUY_REQUESTED = "buy.requested"
     BUY_SUCCEEDED = "buy.succeeded"
     BUY_FAILED = "buy.failed"
+    # 通知
     NOTIFY_SENT = "notify.sent"
+    # 安全
     WAF_TRIGGERED = "waf.triggered"
+    WAF_BLOCKED = "waf.blocked"
+    # 认证
     LOGIN_EXPIRED = "login.expired"
-    TASK_STARTED = "task.started"
-    TASK_PAUSED = "task.paused"
-    TASK_ERROR = "task.error"
+    AUTH_EXPIRED = "auth.expired"
+    # 系统
+    SYSTEM_ERROR = "system.error"
+    # 维护（DB 实际存储的事件类型）
+    MAINTENANCE_DATABASE = "maintenance.database"
+    MAINTENANCE_LOGS = "maintenance.logs"
+    MAINTENANCE_CACHE = "maintenance.cache"
     # ============== 智能客服模块事件（13 项）==============
     # 命名约定：chatbot.<域>.<动作>，与主系统 item.<动作> 风格一致
     CHATBOT_SESSION_CREATED = "chatbot.session.created"
@@ -43,16 +62,26 @@ class EventType(str, Enum):
 EVENT_SEVERITY: dict[EventType, str] = {
     EventType.BUY_SUCCEEDED: "critical",   # 买成功需要用户拍板付款
     EventType.WAF_TRIGGERED: "critical",  # 风控触发
+    EventType.WAF_BLOCKED: "critical",    # 风控拦截（请求被阻断，可能影响任务执行）
     EventType.LOGIN_EXPIRED: "critical",  # 登录过期需立即重扫
+    EventType.AUTH_EXPIRED: "important",  # 会话过期，可延迟但需尽快处理
     EventType.TASK_ERROR: "critical",     # 任务异常
+    EventType.SYSTEM_ERROR: "critical",    # 系统级错误需立即告警
     EventType.BUY_FAILED: "important",    # 买失败但任务继续
     EventType.EVAL_PASSED: "important",   # 评估通过 → 用户确认是否抢
     EventType.EVAL_REJECTED: "info",      # 评估拒绝（量大，淹没）
+    EventType.EVAL_SCORED: "info",        # 评估打分（量大，仅参考）
     EventType.ITEM_DISCOVERED: "info",
+    EventType.ITEM_FOUND: "info",          # 旧枚举兼容
     EventType.NOTIFY_SENT: "info",
     EventType.BUY_REQUESTED: "info",
     EventType.TASK_STARTED: "info",
+    EventType.TASK_STOPPED: "info",       # 任务正常停止
     EventType.TASK_PAUSED: "info",
+    EventType.TASK_SEARCH_DONE: "info",   # 搜索完成（量大，仅参考）
+    EventType.MAINTENANCE_DATABASE: "info",  # 维护类事件，仅参考
+    EventType.MAINTENANCE_LOGS: "info",
+    EventType.MAINTENANCE_CACHE: "info",
 }
 
 

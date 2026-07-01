@@ -30,12 +30,17 @@ def trigger_session_start() -> None:
         from xianyu_hunter.modules.login_orchestrator import get_orchestrator
 
         orch = get_orchestrator()
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # fire-and-forget：登录流程不应等待会话启动
-            asyncio.ensure_future(orch.start_session_default())
-        else:
-            # 罕见：事件循环未运行时退化为同步执行（一般不会发生）
-            asyncio.run(orch.start_session_default())
+        # get_running_loop 替代 get_event_loop：前者无运行循环时抛 RuntimeError
+        # 走 except 分支；后者在 3.12+ 已弃用
+        loop = asyncio.get_running_loop()
+        # fire-and-forget：登录流程不应等待会话启动
+        loop.create_task(orch.start_session_default())
+    except RuntimeError:
+        # 罕见：事件循环未运行时退化为同步执行（一般不会发生）
+        try:
+            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+            asyncio.run(get_orchestrator().start_session_default())
+        except Exception as e:
+            logger.debug("自动启动会话失败: %s", e)
     except Exception as e:
         logger.debug("自动启动会话失败: %s", e)

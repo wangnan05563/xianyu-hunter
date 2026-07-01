@@ -120,9 +120,9 @@ export const defaultChannels: ChannelDef[] = [
   },
 ]
 
-// 事件类型定义：与后端 domain/events.py EventType 对齐
+// 事件类型定义：与后端通知总线可订阅的 EventType 对齐
 // severity 用于 UI 标签着色，defaultNotify 控制初始订阅
-// 这里仅保留后端 EventBus 可发布的 EventType；时间线的 DB-only 事件不应作为通知订阅项。
+// 时间线/维护类事件可用于事件列表筛选，但不应作为通知订阅项。
 export const eventTypes = [
   // 任务生命周期
   { key: 'TASK_STARTED', label: '任务启动', severity: 'info' },

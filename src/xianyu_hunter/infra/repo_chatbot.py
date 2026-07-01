@@ -407,11 +407,15 @@ class ChatbotRepository:
         message_id: str,
         feedback: str,
         comment: str | None = None,
+        star_rating: int | None = None,
+        category: str | None = None,
     ) -> bool:
         """更新消息反馈，同时在 chatbot_feedback 表插入一条记录
 
-        feedback: positive / negative。chatbot_feedback 用于转人工判定
-        （count_recent_negative_feedback 统计窗口内 negative 数）。
+        feedback: positive / negative（由星级推导：4-5→positive，1-3→negative）。
+        star_rating: M6 1-5 星评分。
+        category: M6 反馈分类（irrelevant/inaccurate/other）。
+        chatbot_feedback 用于转人工判定（count_recent_negative_feedback 统计窗口内 negative 数）。
         """
         with self._Session() as session:
             row = session.get(ChatbotMessageRow, message_id)
@@ -419,6 +423,8 @@ class ChatbotRepository:
                 return False
             row.feedback = feedback
             row.feedback_comment = comment
+            row.feedback_rating = star_rating
+            row.feedback_category = category
             # 反馈独立表记录：与 messages.feedback 解耦，支持趋势分析与转人工判定
             session.add(
                 ChatbotFeedbackRow(
@@ -426,6 +432,8 @@ class ChatbotRepository:
                     message_id=message_id,
                     rating=feedback,
                     comment=comment,
+                    star_rating=star_rating,
+                    category=category,
                     created_at=_utcnow(),
                 )
             )
@@ -455,6 +463,9 @@ class ChatbotRepository:
             "metadata": metadata,
             "feedback": row.feedback,
             "feedback_comment": row.feedback_comment,
+            # M6：返回星级与分类，供前端已评价状态回显
+            "feedback_rating": row.feedback_rating,
+            "feedback_category": row.feedback_category,
             "tokens_used": row.tokens_used,
             "images": images,
             "is_recalled": row.is_recalled,
@@ -654,6 +665,9 @@ class ChatbotRepository:
                     "message_id": r.message_id,
                     "rating": r.rating,
                     "comment": r.comment,
+                    # M6：返回星级与分类，供反馈列表展示
+                    "star_rating": r.star_rating,
+                    "category": r.category,
                     "escalate_triggered": r.escalate_triggered,
                     "created_at": _serialize_dt(r.created_at),
                 }

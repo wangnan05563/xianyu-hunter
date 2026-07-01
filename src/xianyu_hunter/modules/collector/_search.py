@@ -308,7 +308,9 @@ async def _sync_response_cookies_to_context(page: Page, response: Any) -> int:
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
             get_cookie_store().update_cookie_values(updates)
         except Exception as e:
-            logger.debug("MTOP Set-Cookie 回写 JSON 失败: {}", e)
+            # 为什么 warning：回写失败会导致 JSON 中 token 陈旧，下次健康检查误判 cookie 无效。
+            # 此前 debug 级别导致该问题不可观测，排查困难
+            logger.warning("MTOP Set-Cookie 回写 JSON 失败: {}", e)
 
     return len(cookies)
 
@@ -649,11 +651,17 @@ class SearchMixin:
             url = build_search_url(keyword, filter_params=filter_params, sort_type=sort_type, regions=regions)
             logger.info("搜索: {}", url)
             # 频率伪装：搜索前按对数正态分布等待，统计计数器同步累加
-            # 延迟导入避免循环依赖；fast 模式跳过伪装保持抢单速度
+            # 延迟导入避免循环依赖；fast 模式仅记录统计保持抢单速度
+            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+            from xianyu_hunter.modules.freq_disguise import ActionType
             if not fast:
-                from xianyu_hunter.modules.login_orchestrator import get_orchestrator
-                from xianyu_hunter.modules.freq_disguise import ActionType
                 await get_orchestrator().apply_freq_delay(ActionType.SEARCH)
+            else:
+                # 与 buyer.py 保持一致：频率伪装统计失败不应影响搜索主流程
+                try:
+                    get_orchestrator().record_freq_request(ActionType.SEARCH)
+                except Exception:
+                    logger.debug("fast 模式 record_freq_request 失败，忽略不影响搜索")
             await self.ad.throttle()
 
             # 始终检查 token 有效性（由 45 分钟缓存决定是否真正刷新）

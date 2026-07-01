@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Layout, List, Button, Input, Typography, Tag, Popconfirm, Empty, Spin, Upload, message } from 'antd'
+import { Layout, List, Button, Input, Typography, Tag, Popconfirm, Empty, Spin, Upload, message, Modal } from 'antd'
 import {
   PlusOutlined,
   UserOutlined,
@@ -12,6 +12,8 @@ import {
   StarOutlined,
   StarFilled,
   SearchOutlined,
+  QuestionCircleOutlined,
+  CustomerServiceOutlined,
 } from '@ant-design/icons'
 import { useSSEChat } from './hooks/useSSEChat'
 import { chatbotApi } from './api'
@@ -21,6 +23,7 @@ import ChatbotOnboarding, {
   resetOnboardingDismissed,
 } from './components/ChatbotOnboarding'
 import QuickReplyChips from './components/QuickReplyChips'
+import HelpCenterModal from './components/HelpCenterModal'
 import type { Session, Message, SSEEvent, ToolCall, FAQ } from './types'
 import './chatbot.css'
 
@@ -174,6 +177,9 @@ export default function ChatbotPage() {
   // M2：会话搜索 + 收藏过滤
   const [searchKeyword, setSearchKeyword] = useState('')
   const [favoriteOnly, setFavoriteOnly] = useState(false)
+  // M5：帮助中心弹窗 + 转人工加载
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [escalating, setEscalating] = useState(false)
   // 移动端会话抽屉开关：桌面端 Sider 始终展开，移动端默认收起，点击切换按钮滑入
   const [siderOpen, setSiderOpen] = useState(false)
   // 流式响应中的临时消息内容（state 仅用于驱动渲染）
@@ -276,6 +282,43 @@ export default function ChatbotPage() {
     window.addEventListener('chatbot:recall-message', handler)
     return () => window.removeEventListener('chatbot:recall-message', handler)
   }, [])
+
+  // M5：主动转人工——确认后调用 escalation/trigger
+  const handleEscalate = () => {
+    if (!currentSession) {
+      message.warning('请先选择一个会话')
+      return
+    }
+    // 捕获当前会话 ID，避免 onOk 闭包在用户切换会话后更新错误的会话
+    const targetSessionId = currentSession.id
+    Modal.confirm({
+      title: '转接人工客服',
+      content: '将转接至人工客服，当前会话状态会变更为"已转人工"。是否继续？',
+      okText: '确认转接',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setEscalating(true)
+        try {
+          await chatbotApi.triggerEscalation(targetSessionId)
+          setSessions((prev) =>
+            prev.map((s) =>
+              s.id === targetSessionId ? { ...s, status: 'escalated' } : s,
+            ),
+          )
+          // 函数式更新：仅当用户仍停留在原会话时才更新当前会话状态
+          setCurrentSession((prev) =>
+            prev?.id === targetSessionId ? { ...prev, status: 'escalated' } : prev,
+          )
+          message.success('已转接人工客服')
+        } catch {
+          message.error('转接失败，请稍后重试')
+        } finally {
+          setEscalating(false)
+        }
+      },
+    })
+  }
 
   // 加载会话列表（M2：支持关键词搜索 + 收藏过滤）
   const loadSessions = useCallback(async () => {
@@ -458,6 +501,12 @@ export default function ChatbotPage() {
 
   const handleSend = async () => {
     if (!inputValue.trim() || !currentSession || isStreaming) return
+    // escalated 是终态：后端 should_escalate 会直接返回转人工，绕过 FAQ/RAG
+    // 阻止发送并提示用户创建新会话，避免无意义的转人工回复
+    if (currentSession.status === 'escalated') {
+      message.warning('当前会话已转人工，请创建新会话继续咨询')
+      return
+    }
 
     // M4：图片直接存入 images 字段，气泡内渲染缩略图，不再追加 [图片×N] 文本
     const userMsg: Message = {
@@ -501,6 +550,18 @@ export default function ChatbotPage() {
         message.error('对话失败: ' + err.message)
       },
       onComplete: () => {
+        // 终止事件（done/error/escalate）触发后，确保用户消息从 sending → sent
+        // escalate 事件不发 token，userMsgSentRef 不会被设置，需在此兜底
+        if (!userMsgSentRef.current) {
+          userMsgSentRef.current = true
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.role === 'user' && m.status === 'sending'
+                ? { ...m, status: 'sent' }
+                : m,
+            ),
+          )
+        }
         // 读 ref.current 而非闭包 state（B-1 修复：避免读到发送时刻的空快照）
         const content = streamingContentRef.current
         const sources = streamingSourcesRef.current
@@ -580,8 +641,30 @@ export default function ChatbotPage() {
               className={`cb-fav-filter-btn ${favoriteOnly ? 'cb-fav-filter-active' : ''}`}
               title={favoriteOnly ? '显示全部会话' : '仅看收藏'}
             />
-          </div>
-          {loadingSessions ? (
+            </div>
+            {/* M5：帮助中心 + 立即转人工 */}
+            <div className="cb-quick-actions">
+              <Button
+                block
+                size="small"
+                icon={<QuestionCircleOutlined />}
+                onClick={() => setHelpOpen(true)}
+                className="cb-action-btn"
+              >
+                帮助中心
+              </Button>
+              <Button
+                block
+                size="small"
+                icon={<CustomerServiceOutlined />}
+                onClick={handleEscalate}
+                loading={escalating}
+                className="cb-action-btn cb-action-btn-escalate"
+              >
+                立即转人工
+              </Button>
+            </div>
+            {loadingSessions ? (
             <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
           ) : sessions.length === 0 ? (
             <Empty description={searchKeyword || favoriteOnly ? '无匹配会话' : '暂无会话'} />
@@ -825,11 +908,15 @@ export default function ChatbotPage() {
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   onPaste={handlePaste}
-                  placeholder="输入消息，Enter 发送，Shift+Enter 换行，可粘贴/拖拽图片"
+                  placeholder={
+                    currentSession?.status === 'escalated'
+                      ? '当前会话已转人工，请创建新会话继续咨询'
+                      : '输入消息，Enter 发送，Shift+Enter 换行，可粘贴/拖拽图片'
+                  }
                   autoSize={{ minRows: 2, maxRows: 6 }}
                   className="cb-textarea"
                   maxLength={2000}
-                  disabled={isStreaming}
+                  disabled={isStreaming || currentSession?.status === 'escalated'}
                 />
                 {isStreaming ? (
                   <Button icon={<StopOutlined />} onClick={cancel} className="cb-stop-btn">
@@ -857,6 +944,8 @@ export default function ChatbotPage() {
             </div>
         )}
       </Content>
+      {/* M5 帮助中心弹窗 */}
+      <HelpCenterModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </Layout>
   )
 }

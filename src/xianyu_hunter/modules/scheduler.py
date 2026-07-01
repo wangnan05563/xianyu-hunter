@@ -33,6 +33,8 @@ class _WorkerHandle:
     loop_task: asyncio.Task | None = None
     stop_event: asyncio.Event = None  # type: ignore[assignment]
     pause_event: asyncio.Event = None  # type: ignore[assignment]
+    # 连续失败计数：超阈值后自动暂停任务，由 scheduler._run_loop 维护
+    consecutive_errors: int = 0
 
     def __post_init__(self):
         if self.stop_event is None:
@@ -83,14 +85,14 @@ class TaskScheduler:
             h = self._workers[task_id]
             if h.loop_task and not h.loop_task.done():
                 raise RuntimeError(f"任务 {task_id} 仍在运行，请先 stop")
-            # 清理 Worker 的异步任务，防止内存泄漏
-            cleanup = getattr(h.worker, "cleanup", None)
-            if cleanup:
-                try:
-                    await cleanup()
-                except Exception as e:
-                    logger.warning(f"[Task {task_id}] Worker cleanup 失败: {e}")
             del self._workers[task_id]
+        # 锁外执行清理，避免长耗时 IO 阻塞 _workers_lock
+        cleanup = getattr(h.worker, "cleanup", None)
+        if cleanup:
+            try:
+                await cleanup()
+            except Exception as e:
+                logger.warning(f"[Task {task_id}] Worker cleanup 失败: {e}")
 
     # ============== 启停控制 ==============
 
@@ -278,7 +280,7 @@ class TaskScheduler:
                     logger.warning("error_logs 捕获失败，跳过")
                 h.task.status = TaskStatus.ERROR
                 # 连续失败计数：超过阈值自动暂停（阈值由 antidetect.fail_pause_threshold 配置）
-                h.consecutive_errors = getattr(h, 'consecutive_errors', 0) + 1
+                h.consecutive_errors += 1
                 # 读取用户配置的失败暂停阈值（默认 3），而非硬编码 10
                 try:
                     from xianyu_hunter.infra.yaml_config import get_config

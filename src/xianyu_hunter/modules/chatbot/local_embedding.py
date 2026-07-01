@@ -75,6 +75,12 @@ class LocalEmbeddingBackend:
                 "get_embedding_dimension",
                 getattr(self._model, "get_sentence_embedding_dimension", None),
             )
+            if get_dim is None:
+                raise RuntimeError(
+                    f"sentence-transformers 模型 {self._model_name} 不支持 "
+                    "get_embedding_dimension/get_sentence_embedding_dimension，"
+                    "请检查 sentence-transformers 版本"
+                )
             self._dim = int(get_dim())
             logger.info(
                 f"Local embedding model loaded: {self._model_name}, dim={self._dim}"

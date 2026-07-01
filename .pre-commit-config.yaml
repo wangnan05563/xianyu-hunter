@@ -50,7 +50,7 @@ repos:
 
       - id: forbid-scannerwork
         name: 🚫 拦截 SonarQube 扫描缓存
-        entry: bash -c 'if git diff --cached --name-only | grep -E "^\.scannerwork/"; then echo "❌ 检测到 .scannerwork/ 缓存被提交，请先清理后再提交"; exit 1; fi'
+        entry: bash -c 'if git diff --cached --name-only | grep -E "^\.scannerwork/|sonar-results/"; then echo "❌ 检测到 SonarQube 缓存被提交，请先清理后再提交"; exit 1; fi'
         language: system
         pass_filenames: false
         stages: [pre-commit]

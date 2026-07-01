@@ -196,6 +196,154 @@
   color: #FFB300;
 }
 
+/* ============ M5 快捷操作区 ============ */
+.cb-quick-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.cb-action-btn {
+  flex: 1;
+  border-radius: 12px !important;
+  background: rgba(255, 255, 255, 0.5) !important;
+  border-color: var(--cb-border-soft) !important;
+  color: var(--cb-text-secondary) !important;
+  font-size: 12px !important;
+  height: 32px !important;
+  transition: all 0.2s ease !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.cb-action-btn:hover {
+  background: rgba(255, 214, 232, 0.4) !important;
+  border-color: var(--cb-pink) !important;
+  color: var(--cb-pink-deep) !important;
+  transform: translateY(-1px);
+}
+
+.cb-action-btn-escalate:hover {
+  background: rgba(255, 143, 171, 0.12) !important;
+  border-color: var(--cb-pink-deep) !important;
+  color: var(--cb-pink-deep) !important;
+}
+
+/* ============ M5 帮助中心弹窗 ============ */
+.cb-help-modal .ant-modal-content {
+  border-radius: 20px;
+  background: linear-gradient(180deg, #FFF9FB 0%, #F9FFFD 100%);
+}
+
+.cb-help-modal .ant-modal-header {
+  background: transparent;
+  border-bottom: 1px solid var(--cb-border-soft);
+}
+
+.cb-help-modal .ant-modal-title {
+  font-weight: 600;
+  color: var(--cb-text-primary);
+}
+
+.cb-help-collapse {
+  background: transparent !important;
+  border: none !important;
+}
+
+.cb-help-collapse .ant-collapse-item {
+  border-bottom: 1px solid var(--cb-border-soft) !important;
+}
+
+.cb-help-collapse .ant-collapse-header {
+  font-size: 14px !important;
+  font-weight: 500;
+  color: var(--cb-text-primary) !important;
+  padding: 12px 8px !important;
+}
+
+.cb-help-collapse .ant-collapse-content-box {
+  padding: 8px 8px 16px !important;
+}
+
+.cb-help-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cb-help-guide-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+  border: 1px solid var(--cb-border-soft);
+}
+
+.cb-help-guide-title {
+  font-size: 13px;
+  color: var(--cb-pink-deep) !important;
+}
+
+.cb-help-guide-desc {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cb-help-faq-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+  border: 1px solid var(--cb-border-soft);
+}
+
+.cb-help-faq-q {
+  font-size: 13px;
+  color: var(--cb-text-primary) !important;
+}
+
+.cb-help-faq-a {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cb-help-shortcut-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+}
+
+.cb-help-key-tag {
+  background: linear-gradient(135deg, var(--cb-pink-light) 0%, var(--cb-cyan-light) 100%) !important;
+  border: none !important;
+  color: var(--cb-text-primary) !important;
+  font-size: 11px !important;
+  font-weight: 600;
+  border-radius: 8px !important;
+  padding: 2px 10px !important;
+  min-width: 80px;
+  text-align: center;
+}
+
+.cb-help-version {
+  gap: 8px;
+}
+
+.cb-help-version-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
 /* 会话列表 */
 .cb-session-list {
   flex: 1;
@@ -676,6 +824,52 @@
 .cb-msg-image-thumb:hover {
   transform: scale(1.08);
   box-shadow: 0 4px 12px rgba(255, 143, 171, 0.2);
+}
+
+/* ============ M6 星级评分 ============ */
+.cb-feedback-rate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cb-rate-input .ant-rate-star {
+  font-size: 14px !important;
+  color: var(--cb-text-tertiary) !important;
+  transition: all 0.2s ease !important;
+}
+
+.cb-rate-input .ant-rate-star:hover {
+  transform: scale(1.2);
+}
+
+.cb-rate-submitted .ant-rate-star {
+  font-size: 14px !important;
+}
+
+.cb-rate-label {
+  font-size: 11px;
+  color: var(--cb-text-tertiary);
+}
+
+/* ============ M6 反馈 Modal ============ */
+.cb-feedback-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cb-feedback-modal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cb-feedback-modal-row .ant-typography {
+  font-size: 13px;
+  color: var(--cb-text-secondary);
+  font-weight: 500;
 }
 
 /* ============ 输入区 ============ */

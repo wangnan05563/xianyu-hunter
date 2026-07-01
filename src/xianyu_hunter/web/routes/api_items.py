@@ -167,21 +167,30 @@ async def refresh_item(
     # 空 task_id 时跳过 sync_item_display_from_detail，避免写空 task_links 关联
     resolved_task_id = item.get("task_id") or task_id or ""
 
-    # 更新 items 表（复用官方采集的旧值保留策略，避免清空已有字段）
-    new_row = {
-        "id": item_id,
-        "task_id": resolved_task_id,
-        "title": detail.title,
-        "price": detail.price,
-        "seller_id": detail.seller_id or "",
-        "region": detail.region or "",
-        "want_cnt": detail.want_cnt,
-        "view_cnt": detail.view_cnt,
-        "thumb_url": detail.thumb_url or "",
-        "image_urls": json.dumps(detail.image_urls, ensure_ascii=False) if detail.image_urls else None,
-        "is_sold": 1 if detail.is_sold else 0,
-    }
-    container.repo.upsert_item(new_row)
+    # 下架/已删除场景：detail() 早期返回 ItemDetail(title="", price=0, is_sold=True)
+    # 此时不应用空 title/price 覆盖 items 表已有有效数据：
+    # - items 表已有记录：跳过 upsert_item，仅 mark_sold 更新 is_sold=1
+    # - items 表无记录：仍 upsert_item 插入占位行（is_sold=1, title=空），
+    #   让前端能感知下架状态；mark_sold 因无 WHERE 匹配不会报错（rowcount=0）
+    is_delisted = detail.is_sold and not detail.title
+    if is_delisted and item:
+        logger.info(f"[RefreshItem] 商品已下架 item={item_id}，跳过 upsert 避免覆盖已有字段，仅标记 is_sold=1")
+    else:
+        # 更新 items 表（复用官方采集的旧值保留策略，避免清空已有字段）
+        new_row = {
+            "id": item_id,
+            "task_id": resolved_task_id,
+            "title": detail.title,
+            "price": detail.price,
+            "seller_id": detail.seller_id or "",
+            "region": detail.region or "",
+            "want_cnt": detail.want_cnt,
+            "view_cnt": detail.view_cnt,
+            "thumb_url": detail.thumb_url or "",
+            "image_urls": json.dumps(detail.image_urls, ensure_ascii=False) if detail.image_urls else None,
+            "is_sold": 1 if detail.is_sold else 0,
+        }
+        container.repo.upsert_item(new_row)
     # 标记采集来源为 live（用户手动触发刷新），与自动 search 区分
     # 失败不阻断主流程：update_data_source 失败仅记录日志
     try:
@@ -194,7 +203,9 @@ async def refresh_item(
 
     # 同步 task_links.display：评估明细页 brand 等字段从此处读取。
     # 其中 brand 以详情页推断结果为准；空 brand 也要写回，用于清掉历史错误品牌。
-    if resolved_task_id:
+    # 下架场景 detail.title/brand 为空，sync_item_display_from_detail 会用空值覆盖已有 display，
+    # 这里跳过避免污染；mark_sold 已在事务内同步了 task_links.display.is_sold=True
+    if resolved_task_id and not is_delisted:
         sync_item_display_from_detail(container.repo, resolved_task_id, item_id, detail, source="auto")
 
     logger.info(f"[RefreshItem] 刷新成功 item={item_id} is_sold={detail.is_sold} brand={detail.brand!r}")

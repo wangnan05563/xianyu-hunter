@@ -39,6 +39,12 @@ export const chatbotApi = {
       .post<{ ok: boolean; id: string; is_recalled: boolean }>(`${BASE}/messages/${messageId}/recall`)
       .then((r) => r.data),
 
+  // M5：主动触发转人工
+  triggerEscalation: (sessionId: string) =>
+    client
+      .post<{ ok: boolean; session_id: string; status: string }>(`${BASE}/escalation/trigger`, { session_id: sessionId })
+      .then((r) => r.data),
+
   // ============== 消息 ==============
   listMessages: (sessionId: string, limit = 20, beforeId?: string) =>
     client
@@ -48,17 +54,21 @@ export const chatbotApi = {
       .then((r) => r.data),
 
   // ============== 反馈 ==============
+  // 后端路由为 POST /messages/{message_id}/feedback，message_id 在路径中
+  // body 只含 rating/comment/star_rating/category（FeedbackRequest 定义）
   submitFeedback: (
     messageId: string,
     rating: 'positive' | 'negative',
     comment?: string,
     sessionId?: string,
+    starRating?: number,
+    category?: string,
   ) =>
-    client.post(`${BASE}/feedback`, {
-      message_id: messageId,
+    client.post(`${BASE}/messages/${messageId}/feedback`, {
       rating,
       comment,
-      session_id: sessionId,
+      star_rating: starRating,
+      category,
     }),
 
   // ============== 知识库 ==============

@@ -138,7 +138,7 @@ class Buyer:
                 from xianyu_hunter.modules.freq_disguise import ActionType
                 get_orchestrator().record_freq_request(ActionType.LOGIN)
             except Exception:  # noqa: BLE001
-                logger.debug("[Buyer] record_freq_request 失败，忽略不影响抢单")
+                logger.warning("[Buyer] record_freq_request 失败，忽略不影响抢单")
 
             # 4. 实际落单流程（90 秒总体超时：防止浏览器操作无限阻塞）
             try:

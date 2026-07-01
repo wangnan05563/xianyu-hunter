@@ -6,7 +6,6 @@ import {
   type RecentEvent, type KpiCard, type TrendSeries, type TodayAlert, type StatsOverview, type HistogramData, type EvalFunnelData,
 } from '../../api'
 import { QuickEntryIcon } from '../../components/icons/GeometricIcons'
-import TaskContentMenu from '../../components/TaskContentMenu'
 import StatCardsSection from './components/StatCardsSection'
 import KpiSection from './components/KpiSection'
 import AlertRadar from './components/AlertRadar'
@@ -241,9 +240,6 @@ export default function Dashboard() {
             style={{ marginBottom: 16 }}
           />
         )}
-
-        {/* 任务管理菜单：下拉选择任务，查看关联的闲鱼内容 */}
-        <TaskContentMenu />
 
         {/* 统计卡 + Sparkline */}
         <StatCardsSection overview={overview} sparklines={sparklines} onNavigate={navigate} />

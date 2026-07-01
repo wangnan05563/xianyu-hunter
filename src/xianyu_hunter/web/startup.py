@@ -82,7 +82,6 @@ def start_batch_refresh_scheduler(container: Any) -> None:
     Web 进程 with_browser=False 时 collector 为 None，无法采集。
     """
     global _batch_refresh_scheduler
-    import asyncio
     from loguru import logger
     from xianyu_hunter.infra.yaml_config import get_config
     from xianyu_hunter.modules.batch_refresh_scheduler import BatchRefreshScheduler
@@ -103,7 +102,8 @@ def start_batch_refresh_scheduler(container: Any) -> None:
     )
     # 传入主事件循环：调度器在 BackgroundScheduler 线程中通过
     # run_coroutine_threadsafe 提交 async 采集任务到主循环执行
-    _batch_refresh_scheduler.start(asyncio.get_event_loop())
+    # get_running_loop：startup 事件中事件循环一定在运行，比 get_event_loop 更明确
+    _batch_refresh_scheduler.start(asyncio.get_running_loop())
 
 
 def start_kb_refresh_scheduler(container: Any) -> None:
@@ -116,7 +116,6 @@ def start_kb_refresh_scheduler(container: Any) -> None:
     不涉及闲鱼页面采集，无需浏览器实例。
     """
     global _kb_refresh_scheduler
-    import asyncio
     from loguru import logger
 
     # chatbot 子容器为 None：chromadb 未安装或 chatbot.enabled=false
@@ -130,7 +129,8 @@ def start_kb_refresh_scheduler(container: Any) -> None:
         return
 
     try:
-        kb_scheduler.start(asyncio.get_event_loop())
+        # get_running_loop：startup 事件中事件循环一定在运行
+        kb_scheduler.start(asyncio.get_running_loop())
         _kb_refresh_scheduler = kb_scheduler
     except Exception as e:  # noqa: BLE001
         # 启动失败不阻断应用：用户仍可手动通过 POST /api/chatbot/kb/rebuild 触发构建
@@ -313,13 +313,6 @@ async def start_scheduler_in_background(container: Any) -> None:
             buyer=container.buyer,
             config=task_config,
             repo=container.repo,
-            # P1: 注入官方采集回调，延迟导入避免循环依赖
-            # worker 调用此回调对通过评估的商品做深度验证
-            official_collect_fn=(
-                lambda iid, tid: _call_official_collect(container, iid, tid)
-            ),
-            # Task 9: 注入 notifier 用于自动采集暂停告警
-            notifier=container.notifier_hub,
         )
         await container.scheduler.register(task, worker)
         workers.append(worker)
@@ -366,8 +359,7 @@ async def start_scheduler_in_background(container: Any) -> None:
             raise
 
     global _scheduler_task
-    loop = asyncio.get_event_loop()
-    _scheduler_task = loop.create_task(_scheduler_loop())
+    _scheduler_task = asyncio.create_task(_scheduler_loop())
 
 
 def run_migrations(container: Any) -> None:

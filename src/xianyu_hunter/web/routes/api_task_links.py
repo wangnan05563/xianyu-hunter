@@ -1048,7 +1048,8 @@ async def live_links(
                 for r in items
             ]
             try:
-                loop = asyncio.get_event_loop()
+                # get_running_loop：本函数为 async，事件循环一定在运行
+                loop = asyncio.get_running_loop()
                 saved_live = await loop.run_in_executor(
                     None,
                     functools.partial(

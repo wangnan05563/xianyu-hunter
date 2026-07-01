@@ -75,6 +75,27 @@ SOLD_TEXT_KEYWORDS: tuple[str, ...] = (
     "商品不存在",
     "已删除",
     "已被删除",
+    # 2026-06-29 新增：闲鱼新版下架文案，商品被卖家删除时页面显示"糟糕！宝贝被删掉了"
+    # 之前 detail() 因 title 取到 document.title="闲鱼 - 闲不住？上闲鱼！"，
+    # 被首页标题检测误判为 cookie 失效，返回 None 导致 is_sold 无法更新
+    "宝贝被删掉了",
+    "被删掉了",
+)
+
+# 下架/被删除专用关键词：详情页是错误页（HTTP 200 + URL 不变 + body 显示提示文案），
+# 无法提取 title/price 等商品字段。与 SOLD_TEXT_KEYWORDS 区分：
+# - SOLD_TEXT_KEYWORDS 包含"已售"等正常显示的已售商品文案（详情页仍可提取字段）
+# - DELISTED_TEXT_KEYWORDS 仅包含"商品不存在/被删除"等错误页文案（详情页无法提取字段）
+# detail() 用此列表做早期返回，避免空 title/price 覆盖 items 表已有数据
+DELISTED_TEXT_KEYWORDS: tuple[str, ...] = (
+    "宝贝不存在",
+    "宝贝走丢了",
+    "该宝贝不存在",
+    "商品不存在",
+    "已删除",
+    "已被删除",
+    "宝贝被删掉了",
+    "被删掉了",
 )
 
 
@@ -87,6 +108,18 @@ def check_text_sold(text: str) -> bool:
     if not text:
         return False
     return any(kw in text for kw in SOLD_TEXT_KEYWORDS)
+
+
+def check_text_delisted(text: str) -> bool:
+    """从页面文本检测商品是否被删除/不存在（详情页是错误页）
+
+    与 check_text_sold 区分：本函数仅识别"商品被删除/不存在"等错误页文案，
+    这些场景下详情页无法提取 title/price 等字段，detail() 据此做早期返回，
+    避免空值覆盖 items 表已有数据。
+    """
+    if not text:
+        return False
+    return any(kw in text for kw in DELISTED_TEXT_KEYWORDS)
 
 
 def parse_price_from_text(text: str) -> float:

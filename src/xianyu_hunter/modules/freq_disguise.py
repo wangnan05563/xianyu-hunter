@@ -151,11 +151,8 @@ class FreqDisguise:
         用于抢单等时间敏感场景：需要累加统计计数器，但不能引入额外延迟。
         采样间隔仍按分布生成并写入 history，保证统计特征准确。
         """
-        profile = INTERVAL_PROFILES.get(action, INTERVAL_PROFILES[ActionType.BROWSE])
-        interval = self._sample(profile)
-        interval = max(profile.min_sec, min(profile.max_sec, interval))
-        self._history.append(interval)
-        self._total_count += 1
+        # 复用 next_interval 的采样+截断+写入 history+累加计数逻辑，避免重复
+        self.next_interval(action)
 
     def get_noise_action(self) -> ActionType:
         """获取噪声请求的操作类型

@@ -142,6 +142,8 @@ export default function TaskList() {
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [addForm] = Form.useForm()
   const [addLoading, setAddLoading] = useState(false)
+  // 一键启动所有任务（迁移自原仪表盘 TaskContentMenu）
+  const [startAllLoading, setStartAllLoading] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -495,6 +497,44 @@ export default function TaskList() {
       setAddLoading(false)
     }
   }
+
+  // 一键启动所有任务（迁移自原仪表盘 TaskContentMenu.handleStartAll）
+  // 为什么放在「闲鱼内容关联」面板：保持原 TaskContentMenu 中「任务下拉 + 全部启动」的语义分组
+  // 为什么用 batchControl 而非逐个 control：减少网络请求，与现有批量操作一致
+  const handleStartAll = useCallback(() => {
+    const toStart = tasks.filter((t) => t.status !== 'running')
+    const skipped = tasks.length - toStart.length
+
+    if (toStart.length === 0) {
+      message.info(skipped > 0 ? `所有 ${skipped} 个任务已在运行中` : '暂无任务可启动')
+      return
+    }
+
+    const taskNames = toStart.map((t) => t.name || t.keyword).slice(0, 5).join('、')
+    const more = toStart.length > 5 ? ` 等 ${toStart.length} 个任务` : ''
+
+    Modal.confirm({
+      title: '确认启动所有任务？',
+      content: `将启动 ${toStart.length} 个任务（${taskNames}${more}）` +
+        (skipped > 0 ? `，跳过 ${skipped} 个已运行任务` : ''),
+      okText: '启动',
+      cancelText: '取消',
+      onOk: async () => {
+        setStartAllLoading(true)
+        try {
+          await taskApi.batchControl(toStart.map((t) => t.id), 'restart')
+          message.success(`已启动 ${toStart.length} 个任务` + (skipped > 0 ? `，跳过 ${skipped} 个` : ''))
+          // 刷新任务列表以同步状态
+          await load()
+        } catch (err: unknown) {
+          const detail = err instanceof Error ? err.message : String(err)
+          message.error(`启动失败: ${detail.slice(0, 100)}`)
+        } finally {
+          setStartAllLoading(false)
+        }
+      },
+    })
+  }, [tasks])
 
   // 合并 DB 数据与实时数据用于展示（useMemo 避免每次渲染重新合并数组）
   const mergedLinkData = useMemo(() => [
@@ -902,6 +942,18 @@ export default function TaskList() {
                   >
                     手动添加
                   </Button>
+                  {/* 全部启动：迁移自原仪表盘 TaskContentMenu，与「任务下拉」保持原语义分组 */}
+                  <Tooltip title="一键启动所有非运行中的任务">
+                    <Button
+                      type="primary"
+                      icon={<ThunderboltOutlined />}
+                      loading={startAllLoading}
+                      onClick={handleStartAll}
+                      disabled={tasks.length === 0}
+                    >
+                      全部启动
+                    </Button>
+                  </Tooltip>
                 </div>
 
                 {/* Tab 切换：商品 / 卖家 */}

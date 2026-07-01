@@ -95,9 +95,17 @@ class SessionUpdateFavoriteRequest(BaseModel):
     is_favorite: bool = Field(..., description="是否收藏")
 
 
+class EscalationTriggerRequest(BaseModel):
+    session_id: str = Field(..., pattern=r"^[a-f0-9]{32}$", description="要转人工的会话 ID")
+
+
 class FeedbackRequest(BaseModel):
     rating: str = Field(..., pattern=r"^(positive|negative)$")
     comment: str | None = Field(None, max_length=500)
+    # M6：1-5 星评分（可选，向后兼容旧 API）
+    star_rating: int | None = Field(None, ge=1, le=5, description="1-5 星评分")
+    # M6：反馈分类（irrelevant/inaccurate/other）
+    category: str | None = Field(None, pattern=r"^(irrelevant|inaccurate|other)$")
 
 
 # ============== 对话 ==============
@@ -276,6 +284,21 @@ def recall_message(message_id: str) -> dict[str, Any]:
     return {"ok": True, "id": message_id, "is_recalled": True}
 
 
+# ============== M5 主动转人工 ==============
+@router.post("/escalation/trigger")
+def trigger_escalation(req: EscalationTriggerRequest) -> dict[str, Any]:
+    """主动触发转人工（将 session 状态置为 escalated）"""
+    chatbot = _get_chatbot_or_403()
+    repo = chatbot["repo"]
+    if repo.get_session(req.session_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+        )
+    repo.update_session_status(req.session_id, "escalated")
+    return {"ok": True, "session_id": req.session_id, "status": "escalated"}
+
+
 # ============== 反馈 ==============
 @router.post("/messages/{message_id}/feedback", status_code=201)
 def add_message_feedback(message_id: str, req: FeedbackRequest) -> dict[str, Any]:
@@ -291,7 +314,15 @@ def add_message_feedback(message_id: str, req: FeedbackRequest) -> dict[str, Any
             status_code=404,
             detail={"code": "MESSAGE_NOT_FOUND", "message": "消息不存在"},
         )
-    ok = repo.update_message_feedback(message_id, req.rating, req.comment)
+    # M6：当 star_rating 存在时，后端自动派生 rating，防止客户端传矛盾值
+    # 4-5 星 → positive，1-3 星 → negative；star_rating 为 None 时沿用客户端传的 rating
+    effective_rating = req.rating
+    if req.star_rating is not None:
+        effective_rating = "positive" if req.star_rating >= 4 else "negative"
+    ok = repo.update_message_feedback(
+        message_id, effective_rating, req.comment,
+        star_rating=req.star_rating, category=req.category,
+    )
     if not ok:
         raise HTTPException(
             status_code=404,
@@ -299,7 +330,7 @@ def add_message_feedback(message_id: str, req: FeedbackRequest) -> dict[str, Any
         )
     # negative 反馈达阈值时触发会话转人工状态
     escalate_triggered = False
-    if req.rating == "negative":
+    if effective_rating == "negative":
         cfg = chatbot["config"]
         threshold = cfg.escalation.feedback_threshold
         window = cfg.escalation.feedback_window_min

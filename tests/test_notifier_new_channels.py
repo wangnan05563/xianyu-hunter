@@ -14,7 +14,6 @@ from xianyu_hunter.modules.notifier.dingtalk import DingTalkNotifier
 from xianyu_hunter.modules.notifier.telegram import TelegramNotifier
 from xianyu_hunter.modules.notifier.wecom import WeComNotifier, _to_wecom_markdown
 from xianyu_hunter.modules.notifier.webhook import WebhookNotifier
-from xianyu_hunter.web.routes.api_notifier import _map_credentials_to_notifier_params
 
 
 # ============== 工具：构造 mock aiohttp 响应 ==============
@@ -69,35 +68,6 @@ def make_eval_event() -> Event:
             "reject_reasons": [],
         },
     )
-
-
-# ============== 字段映射测试（前端字段名 → Notifier 参数名） ==============
-
-def test_map_credentials_dingtalk() -> None:
-    """钉钉渠道字段映射：dingtalk_webhook/dingtalk_secret → webhook_url/secret"""
-    creds = {"dingtalk_webhook": "https://oapi.dingtalk.com/x", "dingtalk_secret": "SECxxx"}
-    mapped = _map_credentials_to_notifier_params(creds)
-    assert mapped == {"webhook_url": "https://oapi.dingtalk.com/x", "secret": "SECxxx"}
-    # 映射后应能成功创建 DingTalkNotifier（不再触发 BaseNotifier TypeError）
-    notifier = DingTalkNotifier(**mapped)
-    assert notifier.webhook_url == "https://oapi.dingtalk.com/x"
-    assert notifier.secret == "SECxxx"
-
-
-def test_map_credentials_all_channels() -> None:
-    """所有渠道字段映射正确性回归测试"""
-    cases = [
-        ({"serverchan_send_key": "SCT1"}, {"send_key": "SCT1"}),
-        ({"pushplus_token": "abc"}, {"token": "abc"}),
-        ({"bark_server": "https://api.day.app", "bark_key": "k"}, {"server": "https://api.day.app", "key": "k"}),
-        ({"telegram_bot_token": "123:ABC", "telegram_chat_id": "@c"}, {"bot_token": "123:ABC", "chat_id": "@c"}),
-        ({"wecom_webhook": "https://qyapi..."}, {"webhook_url": "https://qyapi..."}),
-        ({"dingtalk_webhook": "https://...", "dingtalk_secret": "SEC"}, {"webhook_url": "https://...", "secret": "SEC"}),
-        # webhook 渠道的 webhook_url 字段名与 Notifier 参数名一致，应保持原样
-        ({"webhook_url": "https://hook"}, {"webhook_url": "https://hook"}),
-    ]
-    for input_creds, expected in cases:
-        assert _map_credentials_to_notifier_params(input_creds) == expected
 
 
 # ============== 注册表测试 ==============

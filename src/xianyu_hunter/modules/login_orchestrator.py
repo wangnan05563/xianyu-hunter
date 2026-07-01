@@ -118,7 +118,7 @@ class LoginOrchestrator:
             # launch 模式需要生成指纹 profile
             self._fingerprint_profile = FingerprintProfile.random()
             logger.info(
-                "LoginOrchestrator 初始化: mode=launch, profile=%s",
+                "LoginOrchestrator 初始化: mode=launch, profile={}",
                 self._fingerprint_profile.name,
             )
         else:
@@ -204,7 +204,7 @@ class LoginOrchestrator:
         if tracking_cookies:
             written += self._cookie_rotator.atomic_update(tracking_cookies)
 
-        logger.info("登录成功，Cookie 已更新: identity=%d, session=%d, tracking=%d",
+        logger.info("登录成功，Cookie 已更新: identity={}, session={}, tracking={}",
                     len(identity_cookies), len(session_cookies), len(tracking_cookies))
         return written
 
@@ -265,12 +265,19 @@ class LoginOrchestrator:
             data = store._read_json()
             if not data or not data.get("cookies"):
                 return None
+            from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+            expired_seen = False
             for c in data["cookies"]:
                 if c.get("name") == "_m_h5_tk":
-                    return c.get("value", "")
+                    value = c.get("value", "")
+                    if value and not is_m5tk_expired(value):
+                        return value
+                    expired_seen = True
+            if expired_seen:
+                logger.debug("默认 cookie_provider 读取到过期 _m_h5_tk，等待重新登录或浏览器刷新")
             return None
         except Exception as e:
-            logger.debug("默认 cookie_provider 读取失败: %s", e)
+            logger.debug("默认 cookie_provider 读取失败: {}", e)
             return None
 
     async def _default_renew_callback(self) -> bool:
@@ -311,7 +318,7 @@ class LoginOrchestrator:
                 logger.warning("token 续期后回写 CookieStore 失败: {}", e)
             return True
         except Exception as e:
-            logger.debug("默认 token 续期回调失败: %s", e)
+            logger.debug("默认 token 续期回调失败: {}", e)
             return False
 
     async def start_session_default(self) -> bool:
@@ -332,7 +339,7 @@ class LoginOrchestrator:
             )
             return True
         except Exception as e:
-            logger.error("自动启动会话失败: %s", e)
+            logger.error("自动启动会话失败: {}", e)
             return False
 
     async def stop_session(self) -> None:
@@ -398,28 +405,30 @@ class LoginOrchestrator:
         """是否应插入噪声请求"""
         return self._freq_disguiser.should_insert_noise()
 
-    async def apply_freq_delay(self, action: ActionType) -> tuple[float, bool]:
+    async def apply_freq_delay(self, action: ActionType) -> float:
         """应用频率伪装延迟（业务模块集成入口）
 
-        统一封装"获取延迟 + sleep + 噪声判断"，让 collector/buyer 等业务模块
-        一行调用即可完成频率伪装。统计计数器在 next_interval/should_insert_noise
-        内部累加，确保统计数据准确反映实际请求节奏。
+        统一封装"获取延迟 + sleep"，让 collector/buyer 等业务模块
+        一行调用即可完成频率伪装。统计计数器在 next_interval 内部累加，
+        确保统计数据准确反映实际请求节奏。
+
+        噪声请求判断未在此处自动调用：should_insert_noise 会累加 _noise_count，
+        若调用方不执行噪声请求会导致统计虚高。需要噪声请求时调用方应显式调用
+        should_insert_noise() 并自行执行。
 
         Returns:
-            (delay_sec, should_noise): 实际等待秒数 + 是否应插入噪声请求
+            delay_sec: 实际等待秒数
         """
         delay = self._freq_disguiser.next_interval(action)
         await asyncio.sleep(delay)
-        should_noise = self._freq_disguiser.should_insert_noise()
-        return delay, should_noise
+        return delay
 
-    def record_freq_request(self, action: ActionType) -> bool:
+    def record_freq_request(self, action: ActionType) -> None:
         """仅记录请求统计（不 sleep）
 
         用于抢单等时间敏感场景：统计计数器累加，但不引入额外延迟。
         """
         self._freq_disguiser.record_request(action)
-        return self._freq_disguiser.should_insert_noise()
 
     # ============== 验证码处理 ==============
 
@@ -475,7 +484,7 @@ class LoginOrchestrator:
     def set_current_strategy(self, strategy: LoginStrategy) -> None:
         """设置当前使用的登录策略"""
         self._current_strategy = strategy
-        logger.info("当前登录策略: %s", strategy.value)
+        logger.info("当前登录策略: {}", strategy.value)
 
 
 # ============== 单例 ==============
@@ -536,5 +545,5 @@ def sync_cookie_layers_from_json() -> bool:
         get_orchestrator().cookie_rotator.sync_state_from_cookies(cookie_map)
         return True
     except Exception as e:
-        logger.warning("同步 Cookie 层状态失败: %s", e)
+        logger.warning("同步 Cookie 层状态失败: {}", e)
         return False

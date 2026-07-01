@@ -471,6 +471,10 @@ class ChatbotMessageRow(Base):
     # 用户反馈：positive=点赞 / negative=点踩 / null=未反馈
     feedback: Mapped[str | None] = mapped_column(String, nullable=True)
     feedback_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # M6：1-5 星评分（存于 messages 表用于快速展示）
+    feedback_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # M6：反馈分类（irrelevant/inaccurate/other）
+    feedback_category: Mapped[str | None] = mapped_column(String, nullable=True)
     # token 消耗（仅 assistant 消息）：用于预算追踪
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # M4：用户消息关联的图片（JSON 数组，存 data URL），仅 user 消息有值
@@ -523,6 +527,10 @@ class ChatbotFeedbackRow(Base):
     message_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     rating: Mapped[str] = mapped_column(String, nullable=False)  # positive / negative
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # M6：1-5 星评分（与 rating 并存：4-5→positive，1-3→negative）
+    star_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # M6：反馈分类（irrelevant/inaccurate/other）
+    category: Mapped[str | None] = mapped_column(String, nullable=True)
     # 触发转人工的反馈会标记 escalate_triggered=1
     escalate_triggered: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
@@ -722,6 +730,13 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     with engine.connect() as conn:
         conn.execute(sa_text("UPDATE chatbot_messages SET is_recalled=0 WHERE is_recalled IS NULL"))
         conn.commit()
+
+    # M6：chatbot_messages 加 feedback_rating 和 feedback_category 字段
+    _migrate_add_column(engine, "chatbot_messages", "feedback_rating", "INTEGER")
+    _migrate_add_column(engine, "chatbot_messages", "feedback_category", "TEXT")
+    # M6：chatbot_feedback 加 star_rating 和 category 字段
+    _migrate_add_column(engine, "chatbot_feedback", "star_rating", "INTEGER")
+    _migrate_add_column(engine, "chatbot_feedback", "category", "TEXT")
 
 
 def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) -> None:

@@ -18,7 +18,7 @@ from xianyu_hunter.domain.item import ItemDetail, ItemSummary
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.domain.urls import build_item_url, build_seller_url
 from xianyu_hunter.infra.logger import get_logger
-from xianyu_hunter.modules.collector_utils import check_text_sold, extract_brand, infer_brand_from_title, parse_price_from_text
+from xianyu_hunter.modules.collector_utils import check_text_delisted, check_text_sold, extract_brand, infer_brand_from_title, parse_price_from_text
 
 logger = get_logger()
 
@@ -52,7 +52,7 @@ class DetailMixin:
                 if ((document.title || '').trim()) return 'document.title';
                 return false;
             }""",
-            {
+            arg={
                 "titleMain": self.selectors.DETAIL_TITLE_MAIN,
                 "priceMain": self.selectors.DETAIL_PRICE_MAIN,
                 "priceAlt": self.selectors.DETAIL_PRICE_ALT,
@@ -461,6 +461,26 @@ class DetailMixin:
                     except Exception as dump_err:
                         logger.error("[P2 调试] 详情页 {} dump HTML 失败: {}", item_id, dump_err)
                 return None
+            # 下架/已删除早期检测：在首页标题检测之前优先识别下架文案
+            # 场景：商品被卖家删除时，闲鱼返回 HTTP 200 + URL 不变 + body 显示"糟糕！宝贝被删掉了"
+            # 此时 document.title="闲鱼 - 闲不住？上闲鱼！"（与首页标题相同），
+            # 若不提前拦截会被首页标题检测误判为 cookie 失效，导致 is_sold 无法更新
+            # 用 check_text_delisted 而非 check_text_sold：已售商品详情页仍能提取 title/price，
+            # 不应早期返回；仅"商品被删除/不存在"的错误页才早期返回
+            try:
+                body_text = await page.text_content("body") or ""
+            except Exception:
+                body_text = ""
+            if check_text_delisted(body_text):
+                logger.info(
+                    f"详情页 {item_id} 检测到下架/被删除文案，标记 is_sold=True 并返回（其他字段保持默认空值，由 refresh_item 决定是否覆盖）"
+                )
+                return ItemDetail(
+                    id=item_id,
+                    title="",
+                    price=0.0,
+                    is_sold=True,
+                )
             # 首页标题检测：cookie 失效后闲鱼 SPA 可能在当前 URL 渲染首页内容
             # URL 校验无法检测（URL 未改变），通过标题内容判断是否为首页
             if any(marker in title for marker in _HOME_PAGE_TITLE_MARKERS):

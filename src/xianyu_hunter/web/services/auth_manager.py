@@ -83,12 +83,11 @@ class AuthManager:
         if not _HELPER.exists():
             return
         # 用 fire-and-forget 异步任务；不阻塞
+        # get_running_loop 替代 get_event_loop：前者无运行循环时抛 RuntimeError，
+        # 正好走 except 分支起线程；后者在 3.12+ 已弃用
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self._refresh_userinfo_bg())
-            else:
-                threading.Thread(target=self._refresh_userinfo_sync, daemon=True).start()
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._refresh_userinfo_bg())
         except RuntimeError:
             threading.Thread(target=self._refresh_userinfo_sync, daemon=True).start()
 

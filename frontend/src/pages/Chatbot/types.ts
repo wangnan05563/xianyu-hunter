@@ -48,6 +48,9 @@ export interface Message {
   images?: string[] | null
   // M4：消息撤回标记（0=正常，1=已撤回）
   is_recalled?: number
+  // M6：反馈星级（1-5，null=未评价）+ 反馈分类
+  feedback_rating?: number | null
+  feedback_category?: string | null
 }
 
 export interface KBStatus {

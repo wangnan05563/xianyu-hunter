@@ -32,6 +32,10 @@ except ImportError:
 class VectorStore:
     """ChromaDB 适配器：单例，通过 container 注入"""
 
+    # ChromaDB Rust 后端单次 upsert 上限 5461 条，超出抛 ValueError
+    # 知识库全量构建片段数 7000+ 会触发，必须分批写入
+    _CHROMA_MAX_BATCH = 5000
+
     def __init__(
         self,
         persist_path: str = "data/chromadb",
@@ -145,19 +149,32 @@ class VectorStore:
                 }
                 for c in chunks
             ]
-            self._collection.upsert(
-                ids=ids,
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas,
-            )
+            # 分批 upsert：每批不超过 ChromaDB 单次上限
+            total = len(chunks)
+            if total > self._CHROMA_MAX_BATCH:
+                logger.info(
+                    "VectorStore upsert 分批写入: total={}, batch_size={}, batches={}",
+                    total,
+                    self._CHROMA_MAX_BATCH,
+                    (total + self._CHROMA_MAX_BATCH - 1) // self._CHROMA_MAX_BATCH,
+                )
+            for start in range(0, total, self._CHROMA_MAX_BATCH):
+                end = start + self._CHROMA_MAX_BATCH
+                self._collection.upsert(
+                    ids=ids[start:end],
+                    embeddings=embeddings[start:end],
+                    documents=documents[start:end],
+                    metadatas=metadatas[start:end],
+                )
 
         try:
             await asyncio.to_thread(_sync_upsert)
             return len(chunks)
         except Exception as e:
+            # 抛出异常而非返回 0：让 KBManager._do_build 进入 except 块回滚，
+            # 避免出现 status=success 但 chunks=0 的误导性版本记录
             logger.exception(f"VectorStore upsert 失败: {e}")
-            return 0
+            raise
 
     async def delete_by_source(self, source_file: str) -> int:
         """按来源文件删除，返回删除数

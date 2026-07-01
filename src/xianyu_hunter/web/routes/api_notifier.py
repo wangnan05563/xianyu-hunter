@@ -38,33 +38,6 @@ _CHANNEL_CREATION_PARAMS: dict[str, list[str]] = {
     "ntfy": ["server", "topic", "token"],
 }
 
-# 前端字段名 → Notifier 构造函数参数名映射
-# 前端字段名与 keyring KEY 常量一致（带渠道前缀），Notifier 参数名为语义化命名
-# 此映射仅在测试端点边界层做转换，避免修改 Notifier 实现或前端字段定义
-_FIELD_NAME_MAP: dict[str, str] = {
-    "serverchan_send_key": "send_key",
-    "pushplus_token": "token",
-    "bark_server": "server",
-    "bark_key": "key",
-    "telegram_bot_token": "bot_token",
-    "telegram_chat_id": "chat_id",
-    "wecom_webhook": "webhook_url",
-    "dingtalk_webhook": "webhook_url",
-    "dingtalk_secret": "secret",
-    # webhook 渠道的 webhook_url 字段名恰好与 Notifier 参数一致，无需映射
-}
-
-
-def _map_credentials_to_notifier_params(credentials: dict[str, str]) -> dict[str, str]:
-    """将前端字段名转换为 Notifier 构造函数参数名
-
-    未在映射表中的字段保持原样（如 webhook 渠道的 webhook_url，ntfy 的 server/topic/token）。
-    """
-    mapped: dict[str, str] = {}
-    for key, value in credentials.items():
-        mapped[_FIELD_NAME_MAP.get(key, key)] = value
-    return mapped
-
 
 class QuietHoursBody(BaseModel):
     """PUT 请求体：quiet hours 完整配置"""
@@ -193,10 +166,9 @@ async def test_notify(body: TestNotifyBody) -> dict[str, Any]:
 
     try:
         registry = NotifierRegistry.default()
-        # 前端字段名带渠道前缀（与 keyring KEY 一致），需映射为 Notifier 参数名
-        # 否则未识别参数会被 **kwargs 吞入并传给 BaseNotifier.__init__() 触发 TypeError
-        notifier_params = _map_credentials_to_notifier_params(body.credentials)
-        notifier = registry.create(channel, **notifier_params)
+        # 用前端传来的凭据创建 Notifier（而非 keyring 中的值，
+        # 因为用户可能正在修改配置，需要验证新值是否有效）
+        notifier = registry.create(channel, **body.credentials)
         result = await notifier.send(test_event)
 
         return {

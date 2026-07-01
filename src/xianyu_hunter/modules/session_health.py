@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -110,7 +111,9 @@ class SessionHealthChecker:
     SCORE_PAUSE_THRESHOLD = 40    # < 40 需暂停
 
     def __init__(self):
-        self._cookie_checker: Callable[[], bool] | None = None
+        # 兼容同步与异步检查器：浏览器内存兜底等场景需要 async 读取 cookie，
+        # 因此允许 checker 返回 bool 或 Awaitable[bool]
+        self._cookie_checker: Callable[[], bool | Awaitable[bool]] | None = None
         self._api_checker: Callable[[], Awaitable[bool]] | None = None
         self._page_checker: Callable[[], Awaitable[bool]] | None = None
         self._waf_provider: Callable[[], WAFStatus] | None = None
@@ -119,10 +122,12 @@ class SessionHealthChecker:
 
     # ============== 配置 ==============
 
-    def set_cookie_checker(self, checker: Callable[[], bool]) -> None:
+    def set_cookie_checker(self, checker: Callable[[], bool | Awaitable[bool]]) -> None:
         """设置 Cookie 有效性检查器
 
-        checker 应返回 True 表示 Cookie 有效
+        checker 可以是同步或异步函数，返回 True 表示 Cookie 有效。
+        为什么支持异步：cookie_checker 需要从浏览器内存读取 cookie 做兜底复核，
+        而浏览器内存读取是 async 操作。
         """
         self._cookie_checker = checker
 
@@ -226,7 +231,11 @@ class SessionHealthChecker:
         if not self._cookie_checker:
             return True  # 未设置检查器，默认有效
         try:
-            return self._cookie_checker()
+            result = self._cookie_checker()
+            # 兼容 async 检查器：浏览器内存兜底等场景需要异步读取 cookie
+            if inspect.isawaitable(result):
+                result = await result
+            return result
         except Exception as e:
             logger.error("Cookie 检查异常: %s", e)
             return False

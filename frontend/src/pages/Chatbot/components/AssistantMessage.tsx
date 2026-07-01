@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Typography, Tag, Tooltip, Progress, Collapse, Button, Modal, Input, Alert, message } from 'antd'
-import { LikeOutlined, DislikeOutlined, CopyOutlined } from '@ant-design/icons'
+import { Typography, Tag, Tooltip, Progress, Collapse, Button, Modal, Input, Alert, Rate, Select, message } from 'antd'
+import { CopyOutlined } from '@ant-design/icons'
 import type { Message, Source } from '../types'
 import { chatbotApi } from '../api'
 
@@ -10,23 +10,36 @@ interface Props {
   onFeedbackDone?: () => void
 }
 
-// 助手消息组件：渲染内容 + 引用来源 + 工具调用标记 + 反馈按钮 + 转人工告警
+// 助手消息组件：渲染内容 + 引用来源 + 工具调用标记 + 1-5 星评分 + 转人工告警
 export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Props) {
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false)
-  const [feedbackRating, setFeedbackRating] = useState<'positive' | 'negative'>('positive')
+  const [starRating, setStarRating] = useState(0)
+  const [feedbackCategory, setFeedbackCategory] = useState<string | undefined>(undefined)
   const [feedbackComment, setFeedbackComment] = useState('')
-  const [submitted, setSubmitted] = useState(false)
+  // M6：从消息已有反馈初始化已评价状态，刷新页面后回显
+  const [submitted, setSubmitted] = useState(!!msg.feedback_rating && msg.feedback_rating > 0)
+  const [submittedRating, setSubmittedRating] = useState(msg.feedback_rating ?? 0)
 
-  const handleFeedback = (rating: 'positive' | 'negative') => {
+  // M6：星级决定 sentiment——4-5 星 positive，1-3 星 negative
+  // 点击星级后自动打开反馈 Modal（低分时可填分类 + 文字，高分时只填文字）
+  const handleRateChange = (value: number) => {
     if (submitted) return
-    setFeedbackRating(rating)
+    setStarRating(value)
+    setFeedbackCategory(undefined)
     setFeedbackModalOpen(true)
   }
 
   const submitFeedback = async () => {
+    if (starRating === 0) return
+    // 4-5 星 → positive，1-3 星 → negative
+    const sentiment = starRating >= 4 ? 'positive' : 'negative'
     try {
-      await chatbotApi.submitFeedback(msg.id, feedbackRating, feedbackComment, sessionId)
+      await chatbotApi.submitFeedback(
+        msg.id, sentiment, feedbackComment, sessionId,
+        starRating, feedbackCategory,
+      )
       setSubmitted(true)
+      setSubmittedRating(starRating)
       setFeedbackModalOpen(false)
       setFeedbackComment('')
       message.success('感谢您的反馈')
@@ -45,6 +58,9 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
       message.error('复制失败')
     }
   }
+
+  // 反馈分类选项（仅低分 1-3 星时显示）
+  const showCategorySelect = starRating > 0 && starRating <= 3
 
   return (
     <div style={{ padding: '12px 0' }}>
@@ -106,35 +122,68 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
         />
       )}
 
-      {/* 反馈按钮 */}
-      {!submitted && (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button
-            size="small"
-            icon={<LikeOutlined />}
-            onClick={() => handleFeedback('positive')}
-          />
-          <Button
-            size="small"
-            icon={<DislikeOutlined />}
-            onClick={() => handleFeedback('negative')}
-          />
-        </div>
-      )}
+      {/* M6：1-5 星评分——已提交后只读 */}
+      <div className="cb-feedback-rate">
+        {submitted ? (
+          <Rate disabled value={submittedRating} className="cb-rate-submitted" />
+        ) : (
+          // value 用 starRating 而非硬编码 0：让 Rate 显示与用户点击一致，
+          // Modal 打开期间背后星数视觉连贯；取消时 starRating 已重置为 0 自然回空
+          <Rate onChange={handleRateChange} value={starRating} className="cb-rate-input" />
+        )}
+        <span className="cb-rate-label">
+          {submitted ? '已评价' : '点击评分'}
+        </span>
+      </div>
 
       {/* 反馈输入 Modal */}
       <Modal
         title="反馈"
         open={feedbackModalOpen}
         onOk={submitFeedback}
-        onCancel={() => setFeedbackModalOpen(false)}
+        onCancel={() => {
+          setFeedbackModalOpen(false)
+          setStarRating(0)
+          setFeedbackCategory(undefined)
+          setFeedbackComment('')
+        }}
+        okText="提交"
+        cancelText="取消"
       >
-        <Input.TextArea
-          rows={3}
-          placeholder="请描述您的反馈（可选）"
-          value={feedbackComment}
-          onChange={(e) => setFeedbackComment(e.target.value)}
-        />
+        <div className="cb-feedback-modal-content">
+          {/* 星级展示（只读，已在上一步选好） */}
+          <div className="cb-feedback-modal-row">
+            <Typography.Text>评分</Typography.Text>
+            <Rate disabled value={starRating} />
+          </div>
+          {/* 低分时显示问题分类 */}
+          {showCategorySelect && (
+            <div className="cb-feedback-modal-row">
+              <Typography.Text>问题类型</Typography.Text>
+              <Select
+                placeholder="选择问题类型"
+                value={feedbackCategory}
+                onChange={setFeedbackCategory}
+                style={{ width: '100%' }}
+                options={[
+                  { value: 'irrelevant', label: '答非所问' },
+                  { value: 'inaccurate', label: '信息有误' },
+                  { value: 'other', label: '其他' },
+                ]}
+              />
+            </div>
+          )}
+          {/* 文字反馈 */}
+          <div className="cb-feedback-modal-row">
+            <Typography.Text>补充说明</Typography.Text>
+            <Input.TextArea
+              rows={3}
+              placeholder="请描述您的反馈（可选）"
+              value={feedbackComment}
+              onChange={(e) => setFeedbackComment(e.target.value)}
+            />
+          </div>
+        </div>
       </Modal>
     </div>
   )
