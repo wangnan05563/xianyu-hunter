@@ -632,9 +632,12 @@ class UserRow(Base):
     avatar_url: Mapped[str] = mapped_column(String, default="")
     custom_alias: Mapped[str] = mapped_column(String, default="")
     status: Mapped[str] = mapped_column(String, nullable=False, default="active")
-    created_at: Mapped[str] = mapped_column(String, nullable=False)
-    last_active_at: Mapped[str] = mapped_column(String, nullable=False)
-    last_login_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    last_active_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow
+    )
 
     __table_args__ = (
         Index("idx_users_status", "status"),
@@ -651,9 +654,9 @@ class UserSessionRow(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     token_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
-    issued_at: Mapped[str] = mapped_column(String, nullable=False)
-    expires_at: Mapped[str] = mapped_column(String, nullable=False)
-    last_renewed_at: Mapped[str] = mapped_column(String, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    last_renewed_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     client_ip: Mapped[str] = mapped_column(String, default="")
     is_active: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
@@ -671,12 +674,15 @@ class UserCookieRow(Base):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     host_key: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
-    value: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
     path: Mapped[str] = mapped_column(String, default="/")
     expires: Mapped[int] = mapped_column(Integer, default=-1)
     is_secure: Mapped[int] = mapped_column(Integer, default=1)
     is_httponly: Mapped[int] = mapped_column(Integer, default=1)
-    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow
+    )
 
     __table_args__ = (
         UniqueConstraint("user_id", "host_key", "name", name="uq_user_cookies"),
@@ -696,7 +702,9 @@ class UserMenuConfigRow(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     group_name: Mapped[str] = mapped_column(String, default="")
     custom_label: Mapped[str] = mapped_column(String, default="")
-    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow
+    )
 
     __table_args__ = (
         UniqueConstraint("user_id", "menu_key", name="uq_user_menu"),
@@ -713,7 +721,9 @@ class UserPreferenceRow(Base):
     user_id: Mapped[str] = mapped_column(String, nullable=False)
     pref_key: Mapped[str] = mapped_column(String, nullable=False)
     pref_value: Mapped[str] = mapped_column(Text, nullable=False)
-    updated_at: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=_utcnow, onupdate=_utcnow
+    )
 
     __table_args__ = (
         UniqueConstraint("user_id", "pref_key", name="uq_user_prefs"),
@@ -722,14 +732,14 @@ class UserPreferenceRow(Base):
 
 
 class UserSessionEventRow(Base):
-    """会话事件日志表：登录/切换/退出/Cookie过期等事件，保留 90 天"""
+    """会话事件日志表：登录/切换/退出/Cookie过期等事件"""
     __tablename__ = "user_session_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str | None] = mapped_column(String, nullable=True)
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     detail: Mapped[str] = mapped_column(Text, default="{}")
-    created_at: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     __table_args__ = (
         Index("idx_session_events_user", "user_id", "created_at"),
