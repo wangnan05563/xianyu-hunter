@@ -161,3 +161,103 @@ def test_issue_session_invalidates_old_sessions(user_mgr):
     assert user_mgr.verify_session(token1) is None
     # token2 应该有效
     assert user_mgr.verify_session(token2) == "220812345678"
+
+
+def test_verify_session_returns_user_id_for_valid_token(user_mgr):
+    """有效 token 校验返回 user_id"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+    assert user_mgr.verify_session(token) == "220812345678"
+
+
+def test_verify_session_returns_none_for_invalid_token(user_mgr):
+    """无效 token 校验返回 None"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    assert user_mgr.verify_session("invalid_token_xxx") is None
+
+
+def test_verify_session_returns_none_for_empty_token(user_mgr):
+    """空 token 校验返回 None"""
+    assert user_mgr.verify_session("") is None
+    assert user_mgr.verify_session(None) is None
+
+
+def test_verify_session_uses_cache_on_second_call(user_mgr):
+    """第二次校验命中缓存（不查库）"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+
+    # 第一次校验，查库
+    assert user_mgr.verify_session(token) == "220812345678"
+
+    # 验证缓存已写入
+    import hashlib
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    assert token_hash in user_mgr._verify_cache
+
+    # 第二次校验，应命中缓存（即使数据库被清空也应返回 user_id）
+    # 通过删除数据库行模拟缓存命中场景
+    from sqlalchemy import text as sa_text
+    with user_mgr._engine.connect() as conn:
+        conn.execute(sa_text("DELETE FROM user_sessions"))
+        conn.commit()
+
+    # 缓存命中，仍返回 user_id
+    assert user_mgr.verify_session(token) == "220812345678"
+
+
+def test_revoke_session_invalidates_all_user_sessions(user_mgr):
+    """revoke_session 撤销用户所有活跃 session"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token1 = user_mgr.issue_session("220812345678")
+    token2 = user_mgr.issue_session("220812345678")  # 会使 token1 失效
+
+    user_mgr.revoke_session("220812345678")
+
+    # token2 也应失效
+    assert user_mgr.verify_session(token2) is None
+
+
+def test_revoke_session_clears_verify_cache(user_mgr):
+    """revoke_session 清除缓存中该用户的条目"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+    user_mgr.verify_session(token)  # 写入缓存
+
+    user_mgr.revoke_session("220812345678")
+
+    # 缓存应被清除
+    import hashlib
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    assert token_hash not in user_mgr._verify_cache
+
+
+def test_verify_session_invalidates_expired_token(user_mgr):
+    """过期 token 校验时标记 is_active=0 并返回 None"""
+    import hashlib
+    from sqlalchemy import text as sa_text
+    from datetime import datetime, timezone, timedelta
+
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+
+    # 手动将 expires_at 设为过去时间
+    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    with user_mgr._engine.connect() as conn:
+        conn.execute(
+            sa_text("UPDATE user_sessions SET expires_at=:exp WHERE token_hash=:thash"),
+            {"exp": past, "thash": token_hash}
+        )
+        conn.commit()
+
+    # 校验应返回 None
+    assert user_mgr.verify_session(token) is None
+
+    # 验证 is_active 被标记为 0
+    with user_mgr._engine.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT is_active FROM user_sessions WHERE token_hash=:thash"),
+            {"thash": token_hash}
+        ).fetchone()
+        assert row[0] == 0
