@@ -261,3 +261,79 @@ def test_verify_session_invalidates_expired_token(user_mgr):
             {"thash": token_hash}
         ).fetchone()
         assert row[0] == 0
+
+
+def test_verify_session_renews_when_expiring_soon(user_mgr):
+    """距过期 < 7 天时，verify_session 触发滑动续期"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+
+    import hashlib
+    from sqlalchemy import text as sa_text
+    from datetime import datetime, timezone, timedelta
+
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    # 手动将 expires_at 设为未来 5 天（< 7 天，应触发续期）
+    soon = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+    with user_mgr._engine.connect() as conn:
+        conn.execute(
+            sa_text("UPDATE user_sessions SET expires_at=:exp WHERE token_hash=:thash"),
+            {"exp": soon, "thash": token_hash}
+        )
+        conn.commit()
+
+    # 清除缓存，强制下次 verify 查库
+    user_mgr._verify_cache.clear()
+
+    # 调用 verify_session，应触发续期
+    user_mgr.verify_session(token)
+
+    # 验证 expires_at 已被延长（应 >= 未来 25 天，因为续期到 30 天）
+    with user_mgr._engine.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT expires_at, last_renewed_at FROM user_sessions WHERE token_hash=:thash"),
+            {"thash": token_hash}
+        ).fetchone()
+        expires_at = datetime.fromisoformat(row[0])
+        last_renewed_at = datetime.fromisoformat(row[1])
+
+    now = datetime.now(timezone.utc)
+    assert (expires_at - now).days >= 25, f"续期后应至少还有 25 天，实际 {(expires_at - now).days} 天"
+    assert (last_renewed_at - now).total_seconds() < 60, "last_renewed_at 应为近期时间"
+
+
+def test_verify_session_no_renew_when_not_expiring_soon(user_mgr):
+    """距过期 >= 7 天时，verify_session 不触发续期"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+
+    import hashlib
+    from sqlalchemy import text as sa_text
+    from datetime import datetime, timezone, timedelta
+
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+
+    # 读取原始 expires_at（issue_session 签发时为 30 天后）
+    with user_mgr._engine.connect() as conn:
+        orig_row = conn.execute(
+            sa_text("SELECT expires_at FROM user_sessions WHERE token_hash=:thash"),
+            {"thash": token_hash}
+        ).fetchone()
+        orig_expires = datetime.fromisoformat(orig_row[0])
+
+    # 清除缓存，强制下次 verify 查库
+    user_mgr._verify_cache.clear()
+
+    # 调用 verify_session（距过期 30 天 >= 7 天，不应续期）
+    user_mgr.verify_session(token)
+
+    # 验证 expires_at 未被修改
+    with user_mgr._engine.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT expires_at FROM user_sessions WHERE token_hash=:thash"),
+            {"thash": token_hash}
+        ).fetchone()
+        expires_at = datetime.fromisoformat(row[0])
+
+    assert expires_at == orig_expires, "距过期 >= 7 天时不应触发续期"

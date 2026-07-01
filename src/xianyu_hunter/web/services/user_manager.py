@@ -149,8 +149,10 @@ class UserManager:
 
         token_hash = hashlib.sha256(session_token.encode()).hexdigest()
 
-        # 缓存命中检查：避免每次请求都查库（TTL 5 分钟）
+        # 整个 verify 串行化，与 revoke_session 互斥，消除"查库后缓存被撤销"
+        # 与"撤销时缓存尚未写入"之间的窗口，避免撤销后 5 分钟内仍命中缓存
         with self._lock:
+            # 缓存命中检查：避免每次请求都查库（TTL 5 分钟）
             cached = self._verify_cache.get(token_hash)
             if cached is not None:
                 cached_user_id, cached_ts = cached
@@ -159,62 +161,61 @@ class UserManager:
                 # 缓存过期，清除后继续查库
                 del self._verify_cache[token_hash]
 
-        with self._engine.connect() as conn:
-            row = conn.execute(
-                sa_text(
-                    "SELECT user_id, token_hash, expires_at "
-                    "FROM user_sessions WHERE token_hash=:thash AND is_active=1"
-                ),
-                {"thash": token_hash},
-            ).fetchone()
-
-            # 未查到活跃 session，直接拒绝
-            if row is None:
-                return None
-
-            user_id, stored_hash, expires_at = row[0], row[1], row[2]
-
-            # 防时序攻击：即使 WHERE 已匹配也要走一次 compare_digest
-            if not hmac.compare_digest(token_hash, stored_hash):
-                return None
-
-            now = datetime.now(timezone.utc)
-            try:
-                expires_dt = datetime.fromisoformat(expires_at)
-            except (TypeError, ValueError):
-                # expires_at 字段损坏，视为无效
-                return None
-
-            # SQLite 可能存储 naive datetime，统一加上 UTC 时区以便比较
-            if expires_dt.tzinfo is None:
-                expires_dt = expires_dt.replace(tzinfo=timezone.utc)
-
-            # 过期 session：标记失效并拒绝
-            if expires_dt < now:
-                conn.execute(
-                    sa_text("UPDATE user_sessions SET is_active=0 WHERE token_hash=:thash"),
-                    {"thash": token_hash},
-                )
-                conn.commit()
-                return None
-
-            # 滑动续期：距过期不足 7 天时延长到 30 天，避免用户频繁登录
-            if (expires_dt - now) < timedelta(days=7):
-                new_expires = now + timedelta(days=self.SESSION_TTL_DAYS)
-                conn.execute(
+            with self._engine.connect() as conn:
+                row = conn.execute(
                     sa_text(
-                        "UPDATE user_sessions SET expires_at=:exp, last_renewed_at=:now "
-                        "WHERE token_hash=:thash"
+                        "SELECT user_id, token_hash, expires_at "
+                        "FROM user_sessions WHERE token_hash=:thash AND is_active=1"
                     ),
-                    {"exp": new_expires.isoformat(), "now": now.isoformat(), "thash": token_hash},
-                )
-                conn.commit()
+                    {"thash": token_hash},
+                ).fetchone()
 
-        # 校验通过，写入缓存供后续请求复用
-        with self._lock:
+                # 未查到活跃 session，直接拒绝
+                if row is None:
+                    return None
+
+                user_id, stored_hash, expires_at = row[0], row[1], row[2]
+
+                # 防时序攻击：即使 WHERE 已匹配也要走一次 compare_digest
+                if not hmac.compare_digest(token_hash, stored_hash):
+                    return None
+
+                now = datetime.now(timezone.utc)
+                try:
+                    expires_dt = datetime.fromisoformat(expires_at)
+                except (TypeError, ValueError):
+                    # expires_at 字段损坏，视为无效
+                    return None
+
+                # SQLite 可能存储 naive datetime，统一加上 UTC 时区以便比较
+                if expires_dt.tzinfo is None:
+                    expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+
+                # 过期 session：标记失效并拒绝
+                if expires_dt < now:
+                    conn.execute(
+                        sa_text("UPDATE user_sessions SET is_active=0 WHERE token_hash=:thash"),
+                        {"thash": token_hash},
+                    )
+                    conn.commit()
+                    return None
+
+                # 滑动续期：距过期不足 7 天时延长到 30 天，避免用户频繁登录
+                if (expires_dt - now) < timedelta(days=7):
+                    new_expires = now + timedelta(days=self.SESSION_TTL_DAYS)
+                    conn.execute(
+                        sa_text(
+                            "UPDATE user_sessions SET expires_at=:exp, last_renewed_at=:now "
+                            "WHERE token_hash=:thash"
+                        ),
+                        {"exp": new_expires.isoformat(), "now": now.isoformat(), "thash": token_hash},
+                    )
+                    conn.commit()
+
+            # 校验通过，写入缓存供后续请求复用（在同一个锁内，与 revoke_session 互斥）
             self._verify_cache[token_hash] = (user_id, time.time())
 
-        return user_id
+            return user_id
 
     def revoke_session(self, user_id: str) -> None:
         """撤销用户所有活跃 session（退出账号时调用）。
