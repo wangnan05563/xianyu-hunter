@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
+import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -103,8 +105,6 @@ class UserManager:
         3. 同用户旧 session 标记 is_active=0（会话固定防护）
         4. 返回原始 token（仅此一次明文）
         """
-        import secrets
-
         token = secrets.token_urlsafe(48)
         token_hash = hashlib.sha256(token.encode()).hexdigest()
         now = datetime.now(timezone.utc)
@@ -130,12 +130,17 @@ class UserManager:
                 })
                 conn.commit()
 
-        self._log_event(user_id, "login", {})
+        try:
+            self._log_event(user_id, "login", {})
+        except Exception:
+            logger.warning("记录 login 事件失败 user_id=%s", user_id, exc_info=True)
         return token
 
     def _log_event(self, user_id: str | None, event_type: str, detail: dict) -> None:
-        """记录会话事件日志"""
-        import json
+        """记录会话事件日志
+
+        日志失败不应阻塞业务流程（如登录/退出），仅记录 warning。
+        """
         with self._engine.connect() as conn:
             conn.execute(sa_text(
                 "INSERT INTO user_session_events (user_id, event_type, detail, created_at) "
