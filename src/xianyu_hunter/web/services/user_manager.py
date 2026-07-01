@@ -468,8 +468,12 @@ def migrate_to_multi_user(db_path: str = "data/xianyu.db") -> None:
         old_path = Path("data") / "cookies.json"
         new_path = Path("data") / "cookies_default.json"
         if old_path.exists() and not new_path.exists():
-            old_path.rename(new_path)
-            logger.info("migrate_to_multi_user: 迁移 cookies.json → cookies_default.json")
+            try:
+                old_path.rename(new_path)
+                logger.info("migrate_to_multi_user: 迁移 cookies.json → cookies_default.json")
+            except OSError:
+                # 迁移失败不阻塞启动（与 delete_user 的 IO 错误降级策略一致）
+                logger.warning("migrate_to_multi_user: Cookie 文件迁移失败", exc_info=True)
     finally:
         # 函数内创建的 engine 必须显式 dispose，避免连接泄漏
         engine.dispose()
