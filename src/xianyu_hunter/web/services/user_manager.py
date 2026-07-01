@@ -95,6 +95,59 @@ class UserManager:
             )
             conn.commit()
 
+    def issue_session(self, user_id: str) -> str:
+        """为用户签发新的 session_token。
+
+        1. secrets.token_urlsafe(48) 生成 64 字符随机串
+        2. sha256(token) 存入 user_sessions 表
+        3. 同用户旧 session 标记 is_active=0（会话固定防护）
+        4. 返回原始 token（仅此一次明文）
+        """
+        import secrets
+
+        token = secrets.token_urlsafe(48)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(days=self.SESSION_TTL_DAYS)
+
+        with self._lock:
+            with self._engine.connect() as conn:
+                # 旧 session 失效
+                conn.execute(sa_text(
+                    "UPDATE user_sessions SET is_active=0 WHERE user_id=:uid AND is_active=1"
+                ), {"uid": user_id})
+                # 写入新 session（client_ip 为 NOT NULL，ORM default 仅 Python 端生效，需显式提供）
+                conn.execute(sa_text(
+                    "INSERT INTO user_sessions (user_id, token_hash, issued_at, expires_at, last_renewed_at, client_ip, is_active) "
+                    "VALUES (:uid, :thash, :issued, :exp, :renewed, :ip, 1)"
+                ), {
+                    "uid": user_id,
+                    "thash": token_hash,
+                    "issued": now.isoformat(),
+                    "exp": expires.isoformat(),
+                    "renewed": now.isoformat(),
+                    "ip": "",
+                })
+                conn.commit()
+
+        self._log_event(user_id, "login", {})
+        return token
+
+    def _log_event(self, user_id: str | None, event_type: str, detail: dict) -> None:
+        """记录会话事件日志"""
+        import json
+        with self._engine.connect() as conn:
+            conn.execute(sa_text(
+                "INSERT INTO user_session_events (user_id, event_type, detail, created_at) "
+                "VALUES (:uid, :etype, :detail, :now)"
+            ), {
+                "uid": user_id,
+                "etype": event_type,
+                "detail": json.dumps(detail, ensure_ascii=False),
+                "now": _utcnow_iso(),
+            })
+            conn.commit()
+
 
 # 全局单例
 _manager: UserManager | None = None

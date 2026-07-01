@@ -123,3 +123,41 @@ def test_identify_or_create_idempotent(user_mgr):
             sa_text("SELECT COUNT(*) FROM users WHERE user_id='220812345678'")
         ).fetchone()[0]
         assert count == 1
+
+
+def test_issue_session_returns_token(user_mgr):
+    """签发会话返回 64 字符 token"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+    assert len(token) >= 60  # token_urlsafe(48) 约 64 字符
+    assert token != "220812345678"  # 不是 user_id 本身
+
+
+def test_issue_session_stores_hash_not_plaintext(user_mgr):
+    """库内存储 sha256 哈希，不是明文 token"""
+    import hashlib
+    from sqlalchemy import text as sa_text
+
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token = user_mgr.issue_session("220812345678")
+
+    expected_hash = hashlib.sha256(token.encode()).hexdigest()
+    with user_mgr._engine.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT token_hash FROM user_sessions WHERE user_id='220812345678'")
+        ).fetchone()
+        assert row is not None
+        assert row[0] == expected_hash  # 存的是哈希
+        assert row[0] != token  # 不是明文
+
+
+def test_issue_session_invalidates_old_sessions(user_mgr):
+    """新签发的 session 使旧 session 失效（会话固定防护）"""
+    user_mgr.identify_or_create([{"name": "unb", "value": "220812345678"}])
+    token1 = user_mgr.issue_session("220812345678")
+    token2 = user_mgr.issue_session("220812345678")
+
+    # token1 应该失效
+    assert user_mgr.verify_session(token1) is None
+    # token2 应该有效
+    assert user_mgr.verify_session(token2) == "220812345678"
