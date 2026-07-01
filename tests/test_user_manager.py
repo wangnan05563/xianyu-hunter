@@ -607,3 +607,97 @@ def test_probe_all_accounts_logs_cookie_recovered_event(user_mgr):
             {"uid": "220812345678"}
         ).fetchone()
         assert row is not None
+
+
+def test_migrate_to_multi_user_creates_default_user(tmp_db):
+    """migrate_to_multi_user 创建 default 用户"""
+    from xianyu_hunter.web.services.user_manager import migrate_to_multi_user
+    from sqlalchemy import text as sa_text
+
+    # 获取临时数据库路径
+    db_path = str(tmp_db.engine.url.database)
+
+    migrate_to_multi_user(db_path)
+
+    # 验证 default 用户已创建
+    with tmp_db.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT user_id, nickname, status FROM users WHERE user_id='default'")
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "default"
+        assert row[1] == "默认用户"
+        assert row[2] == "active"
+
+
+def test_migrate_to_multi_user_idempotent(tmp_db):
+    """migrate_to_multi_user 幂等可重复执行"""
+    from xianyu_hunter.web.services.user_manager import migrate_to_multi_user
+    from sqlalchemy import text as sa_text
+
+    db_path = str(tmp_db.engine.url.database)
+
+    # 第一次执行
+    migrate_to_multi_user(db_path)
+    # 第二次执行（不应报错）
+    migrate_to_multi_user(db_path)
+
+    # 验证只有一个 default 用户
+    with tmp_db.connect() as conn:
+        count = conn.execute(
+            sa_text("SELECT COUNT(*) FROM users WHERE user_id='default'")
+        ).fetchone()[0]
+        assert count == 1
+
+
+def test_migrate_to_multi_user_migrates_cookie_file(tmp_db, monkeypatch):
+    """migrate_to_multi_user 迁移 cookies.json → cookies_default.json"""
+    from xianyu_hunter.web.services.user_manager import migrate_to_multi_user
+    from pathlib import Path
+    import tempfile
+
+    db_path = str(tmp_db.engine.url.database)
+
+    # ignore_cleanup_errors=True：与 tmp_db fixture 一致，避免 Windows 上
+    # cwd 仍在 tmp_dir 时清理失败（monkeypatch 在 with 块清理后才恢复 cwd）
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        # 切换工作目录到临时目录
+        monkeypatch.chdir(tmp_dir)
+
+        # 创建 data/ 目录和 cookies.json
+        data_dir = Path("data")
+        data_dir.mkdir()
+        old_cookie = data_dir / "cookies.json"
+        old_cookie.write_text('[]', encoding='utf-8')
+
+        migrate_to_multi_user(db_path)
+
+        # 验证 cookies.json 已重命名为 cookies_default.json
+        assert not old_cookie.exists()
+        new_cookie = data_dir / "cookies_default.json"
+        assert new_cookie.exists()
+        assert new_cookie.read_text(encoding='utf-8') == '[]'
+
+
+def test_migrate_to_multi_user_no_cookie_file(tmp_db, monkeypatch):
+    """migrate_to_multi_user 无 cookies.json 时静默跳过"""
+    from xianyu_hunter.web.services.user_manager import migrate_to_multi_user
+    from pathlib import Path
+    import tempfile
+
+    db_path = str(tmp_db.engine.url.database)
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+        monkeypatch.chdir(tmp_dir)
+        # 不创建 data/ 目录和 cookies.json
+
+        migrate_to_multi_user(db_path)
+
+        # 应静默跳过，不报错
+        # default 用户仍应创建
+        from sqlalchemy import text as sa_text
+        with tmp_db.connect() as conn:
+            count = conn.execute(
+                sa_text("SELECT COUNT(*) FROM users WHERE user_id='default'")
+            ).fetchone()[0]
+            assert count == 1

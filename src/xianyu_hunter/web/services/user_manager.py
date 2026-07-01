@@ -429,3 +429,47 @@ def get_user_manager() -> UserManager:
             engine = create_sqlite_engine("data/xianyu.db")
             _manager = UserManager(engine)
         return _manager
+
+
+def migrate_to_multi_user(db_path: str = "data/xianyu.db") -> None:
+    """首次升级迁移：单用户 → 多用户（幂等可重复执行）
+
+    init_db 已完成表创建和 tasks.user_id 字段迁移，本函数只负责：
+    1. 创建 default 用户记录（识别降级目标）
+    2. 迁移旧版 cookies.json → cookies_default.json
+    """
+    # 局部 import 与 get_user_manager 一致，避免模块加载时触发 db_models 初始化
+    from xianyu_hunter.infra.db_models import create_sqlite_engine, init_db
+
+    # 确保 schema 已初始化（幂等），即便 migrate 在 startup 的 init_db 之前被调用也安全
+    init_db(db_path)
+    engine = create_sqlite_engine(db_path)
+
+    try:
+        with engine.connect() as conn:
+            # 幂等检查：default 用户已存在则直接返回，重复执行不报错
+            count = conn.execute(
+                sa_text("SELECT COUNT(*) FROM users WHERE user_id='default'")
+            ).fetchone()[0]
+            if count > 0:
+                logger.info("migrate_to_multi_user: default 用户已存在，跳过迁移")
+                return
+
+            # created_at/last_active_at/updated_at 是 NOT NULL 无 server_default，必须显式提供
+            now = _utcnow_iso()
+            conn.execute(sa_text(
+                "INSERT INTO users (user_id, nickname, avatar_url, custom_alias, status, created_at, last_active_at, updated_at) "
+                "VALUES ('default', '默认用户', '', '', 'active', :now, :now, :now)"
+            ), {"now": now})
+            conn.commit()
+            logger.info("migrate_to_multi_user: 创建 default 用户")
+
+        # Cookie 文件迁移：src 不存在时静默跳过；目标已存在时不覆盖
+        old_path = Path("data") / "cookies.json"
+        new_path = Path("data") / "cookies_default.json"
+        if old_path.exists() and not new_path.exists():
+            old_path.rename(new_path)
+            logger.info("migrate_to_multi_user: 迁移 cookies.json → cookies_default.json")
+    finally:
+        # 函数内创建的 engine 必须显式 dispose，避免连接泄漏
+        engine.dispose()
