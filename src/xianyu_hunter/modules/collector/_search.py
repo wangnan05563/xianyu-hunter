@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from http.cookies import CookieError, SimpleCookie
 import re
 import time
@@ -916,7 +917,20 @@ class SearchMixin:
             try:
                 response = await route.fetch()
                 await _sync_response_cookies_to_context(page, response)
-                body = await response.json()
+                try:
+                    body = await response.json()
+                except Exception as json_err:
+                    preview = ""
+                    with suppress(Exception):
+                        preview = (await response.text())[:200]
+                    logger.debug(
+                        "搜索 API 响应非 JSON，跳过解析: error={}, preview={}",
+                        str(json_err)[:80],
+                        preview,
+                    )
+                    with suppress(Exception):
+                        await route.fulfill(response=response)
+                    return
                 ret = body.get("ret", [])
                 if ret and isinstance(ret, list):
                     ret_str = str(ret[0]) if ret else ""
@@ -953,11 +967,13 @@ class SearchMixin:
                 logger.info("API 响应前500字符: {}", body_str[:500])
                 await route.fulfill(response=response)
             except Exception as e:
-                logger.warning("route 拦截处理失败: {}", str(e)[:80])
-                try:
+                err = str(e)
+                if "Route is already handled" in err:
+                    logger.debug("route 已被处理，跳过重复处理: {}", err[:80])
+                    return
+                logger.warning("route 拦截处理失败: {}", err[:80])
+                with suppress(Exception):
                     await route.continue_()
-                except Exception:
-                    pass
 
         route_pattern = self._SEARCH_API_ROUTE_PATTERN
         await page.route(route_pattern, _handle_route)
@@ -1048,6 +1064,21 @@ class SearchMixin:
                     # 打印第一条原始数据的所有 key，便于排查字段名
                     sample = raw_items[0]
                     logger.info("搜索API原始字段 keys={}", list(sample.keys())[:30])
+                # 预提取前 3 个商品摘要，便于直观确认 resultList 是真实商品而非通用占位数据
+                # 背景：API 响应前500字符只显示 appBar/filterBar/resultInfo 等 UI 字段，
+                # resultList 在 500 字符之后，仅靠前500字符日志无法判断商品数据是否真实
+                try:
+                    preview_titles: list[str] = []
+                    for raw in raw_items[:3]:
+                        f = _extract_api_item_fields(raw)
+                        if f["item_id"] and f["title"]:
+                            preview_titles.append(f"{f['item_id']}/{f['title'][:20]}/¥{f['price']}")
+                    if preview_titles:
+                        logger.info("搜索API前3个商品摘要: {}", " | ".join(preview_titles))
+                    else:
+                        logger.warning("搜索API前3个商品均缺少 item_id/title，可能返回的是通用占位数据")
+                except Exception as preview_err:
+                    logger.debug("商品摘要预览失败: {}", str(preview_err)[:80])
                 for raw in raw_items:
                     try:
                         fields = _extract_api_item_fields(raw)

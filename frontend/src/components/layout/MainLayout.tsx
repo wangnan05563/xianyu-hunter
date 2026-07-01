@@ -17,7 +17,6 @@ import {
   RobotOutlined,
   SearchOutlined,
   AimOutlined,
-  LoginOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   AppstoreOutlined,
@@ -43,9 +42,10 @@ import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import type React from 'react'
 import type { MenuProps } from 'antd'
 import { authApi, statsApi } from '../../api'
-import type { TodayAlert } from '../../api/types'
+import type { TodayAlert, AuthMe } from '../../api/types'
 import { useTheme } from '../../contexts/ThemeContext'
 import { ErrorBoundary } from '../ErrorBoundary'
+import UserMenu from './UserMenu'
 
 const { Header, Sider, Content } = Layout
 
@@ -185,6 +185,8 @@ export default function MainLayout() {
   // 首次加载时调用 /api/auth/me 触发后端设置认证 cookie
   const [authChecked, setAuthChecked] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
+  // 用户信息：供状态栏头像/昵称展示（来自 /api/auth/me）
+  const [userInfo, setUserInfo] = useState<AuthMe>({ logged_in: false })
   // 侧边栏收缩状态
   const [collapsed, setCollapsed] = useState(false)
 
@@ -232,6 +234,7 @@ export default function MainLayout() {
   useEffect(() => {
     authApi.getMe().then((data) => {
       setLoggedIn(data.logged_in === true)
+      setUserInfo(data)
     }).catch(() => setLoggedIn(false))
       .finally(() => setAuthChecked(true))
   }, [])
@@ -381,6 +384,7 @@ export default function MainLayout() {
       menuItems={menuItems}
       drawerOpen={drawerOpen}
       setDrawerOpen={setDrawerOpen}
+      userInfo={userInfo}
     />
   )
 }
@@ -409,6 +413,7 @@ interface LayoutContentProps {
   menuItems: NonNullable<MenuProps['items']>
   drawerOpen: boolean
   setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
+  userInfo: AuthMe
 }
 
 function LayoutContent({
@@ -416,7 +421,7 @@ function LayoutContent({
   schedulerRunning, todayAlert, alertCount,
   cmdOpen, setCmdOpen, cmdSearch, setCmdSearch, cmdActive, setCmdActive,
   breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems,
-  drawerOpen, setDrawerOpen,
+  drawerOpen, setDrawerOpen, userInfo,
 }: LayoutContentProps) {
   // 必须在 ConfigProvider 内部调用，token 才会响应暗色算法
   const { token: themeToken } = theme.useToken()
@@ -602,15 +607,8 @@ function LayoutContent({
               />
             </Tooltip>
 
-            <Button
-              type="text"
-              size="small"
-              icon={<LoginOutlined />}
-              onClick={() => navigate('/login')}
-              style={{ fontSize: 12, color: themeToken.colorTextSecondary }}
-            >
-              登录管理
-            </Button>
+            {/* 用户菜单：头像 + 昵称，悬浮显示 Cookie 健康面板（含换号/退出） */}
+            <UserMenu userInfo={userInfo} />
             <a
               href="/api/docs"
               target="_blank"

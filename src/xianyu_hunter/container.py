@@ -110,6 +110,9 @@ class Container:
     def wire_notifier(self) -> None:
         """把 NotifierHub 接入 EventBus（构造后只调一次）"""
         # 选取已配置为启用的渠道
+        # 必须遍历全部 8 个渠道：旧版只判断 serverchan/pushplus/bark，
+        # 导致 dingtalk/telegram/wecom/webhook/ntfy 即使在 channels 中开启也不会被加入 enabled，
+        # 表现为"钉钉通知配置已保存但永远收不到推送"
         ch_cfg = self.config.notifier.channels
         enabled: list[str] = []
         if ch_cfg.serverchan:
@@ -118,14 +121,56 @@ class Container:
             enabled.append("pushplus")
         if ch_cfg.bark:
             enabled.append("bark")
+        if ch_cfg.telegram:
+            enabled.append("telegram")
+        if ch_cfg.wecom:
+            enabled.append("wecom")
+        if ch_cfg.dingtalk:
+            enabled.append("dingtalk")
+        if ch_cfg.webhook:
+            enabled.append("webhook")
+        if ch_cfg.ntfy:
+            enabled.append("ntfy")
+        warn_unconfigured = bool(enabled)
         if not enabled:
             enabled = list(self.config.notifier.default_channels)
+        # 从 yaml 明文读取凭据，作为 keyring 的 fallback
+        # 为什么需要 yaml fallback：用户在前端保存凭据时只写入 yaml，
+        # 但 notifier __init__ 优先从 keyring 读取；当 keyring 中没有时，
+        # 用 yaml 明文兜底，避免"配置已保存但通知不发送"的数据流断裂
+        cfg = self.config
+        yaml_credentials: dict[str, dict[str, str]] = {}
+        if cfg.serverchan_send_key:
+            yaml_credentials["serverchan"] = {"send_key": cfg.serverchan_send_key}
+        if cfg.pushplus_token:
+            yaml_credentials["pushplus"] = {"token": cfg.pushplus_token}
+        if cfg.bark_key:
+            yaml_credentials["bark"] = {
+                "server": cfg.bark_server or "",
+                "key": cfg.bark_key,
+            }
+        if cfg.telegram_bot_token:
+            yaml_credentials["telegram"] = {
+                "bot_token": cfg.telegram_bot_token,
+                "chat_id": cfg.telegram_chat_id or "",
+            }
+        if cfg.wecom_webhook:
+            yaml_credentials["wecom"] = {"webhook_url": cfg.wecom_webhook}
+        if cfg.dingtalk_webhook:
+            yaml_credentials["dingtalk"] = {
+                "webhook_url": cfg.dingtalk_webhook,
+                "secret": cfg.dingtalk_secret or "",
+            }
+        if cfg.webhook_url:
+            yaml_credentials["webhook"] = {"webhook_url": cfg.webhook_url}
         # 重新构造 hub 以应用 enabled
         # P3-F-10：注入 quiet_hours；send() 时自动判定静默
         self.notifier_hub = NotifierHub(
             channels=enabled,
             quiet_hours=self.config.notifier.quiet_hours,
             repo=self.repo,
+            warn_unconfigured=warn_unconfigured,
+            yaml_credentials=yaml_credentials,
         )
         # 从用户配置解析订阅事件集合
         # 仅匹配已知 EventType，跳过未知事件名（如 chatbot.* 不通过 NotifierHub 推送）

@@ -20,6 +20,13 @@ class ErrorLogsMixin:
 
     def save_error_log(self, error_log: dict) -> int:
         """插入一条错误日志，返回主键 id"""
+        # 自动注入 request_id：调用方未显式指定时从 ContextVar 读取
+        # 与 events 表保持一致的注入策略，便于聚合查询统一检索两表
+        if "request_id" not in error_log or not error_log.get("request_id"):
+            from xianyu_hunter.infra.request_context import get_request_id
+            rid = get_request_id()
+            if rid:
+                error_log["request_id"] = rid
         with self.engine.begin() as conn:
             result = conn.execute(ErrorLogRow.__table__.insert().values(**error_log))
             return result.inserted_primary_key[0]
@@ -29,6 +36,7 @@ class ErrorLogsMixin:
         status: str | None = None,
         error_type: str | None = None,
         request_path: str | None = None,
+        request_id: str | None = None,
         start_dt: datetime | None = None,
         end_dt: datetime | None = None,
         limit: int = 50,
@@ -44,6 +52,9 @@ class ErrorLogsMixin:
                 stmt = stmt.where(ErrorLogRow.error_type.like(f"%{error_type}%"))
             if request_path:
                 stmt = stmt.where(ErrorLogRow.request_path.like(f"%{request_path}%"))
+            if request_id:
+                # 精确匹配：request_id 是高基数唯一键，无需模糊匹配
+                stmt = stmt.where(ErrorLogRow.request_id == request_id)
             if start_dt:
                 stmt = stmt.where(ErrorLogRow.timestamp >= start_dt)
             if end_dt:

@@ -122,6 +122,9 @@ class Event:
     # P3-F-10：严重度（critical/important/info），免打扰时段决策依据
     # 默认从 type 推导；调用方可显式覆盖（如强制把某条评估通过标 important）
     severity: str = ""
+    # 全局流水号：标识触发本事件所属的请求/任务链路
+    # 默认空字符串，EventBus._dispatch 时若为空则从 ContextVar 自动注入
+    request_id: str = ""
 
     def __post_init__(self) -> None:
         # 未显式指定 severity 时从 type 推导，确保免打扰决策可用

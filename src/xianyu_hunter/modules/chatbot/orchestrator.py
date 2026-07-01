@@ -213,6 +213,7 @@ class ChatbotOrchestrator:
             metadata: dict | None = None
             tokens_used: int | None = None
             escalated = False
+            follow_ups: list[str] = []
 
             if self._should_trigger_agent(intent, enable_tools):
                 async for event in self._run_agent_flow(message, context, images):
@@ -221,6 +222,7 @@ class ChatbotOrchestrator:
                         full_response = event.data.get("content", "")
                         metadata = event.data.get("metadata")
                         tokens_used = event.data.get("tokens_used")
+                        follow_ups = event.data.get("follow_ups", [])
                     elif event.event == SSEEventType.ESCALATE:
                         escalated = True
             else:
@@ -230,8 +232,13 @@ class ChatbotOrchestrator:
                         full_response = event.data.get("content", "")
                         metadata = event.data.get("metadata")
                         tokens_used = event.data.get("tokens_used")
+                        follow_ups = event.data.get("follow_ups", [])
                     elif event.event == SSEEventType.ESCALATE:
                         escalated = True
+
+            # 将 follow_ups 存入 metadata，使历史消息也能展示推荐问题
+            if follow_ups and metadata is not None:
+                metadata["follow_ups"] = follow_ups
 
             # 9. 保存 AI 消息（转人工时不保存，_escalate 已更新会话状态）
             # 10. 发布事件
@@ -305,11 +312,19 @@ class ChatbotOrchestrator:
             response = "".join(full_response)
             response = self._rag.postprocess_citations(response, chunks)
 
+            # 后续问题预测：主回答完成后生成推荐问题，失败静默降级
+            follow_ups: list[str] = []
+            if self._config.rag.enable_follow_ups:
+                follow_ups = await self._rag.generate_follow_ups(
+                    query, response, history, self._config.rag.follow_up_count,
+                )
+
             yield SSEEvent(
                 event=SSEEventType.DONE,
                 data={
                     "content": response,
                     "degraded": False,
+                    "follow_ups": follow_ups,
                     "metadata": {
                         "sources": [s.__dict__ for s in sources],
                         "degraded": False,
@@ -392,11 +407,20 @@ class ChatbotOrchestrator:
                 elif agent_event.type == "done":
                     content = agent_event.data.get("content", "")
                     yield SSEEvent(event=SSEEventType.TOKEN, data={"content": content})
+
+                    # 后续问题预测：与 RAG flow 保持一致
+                    follow_ups: list[str] = []
+                    if self._config.rag.enable_follow_ups:
+                        follow_ups = await self._rag.generate_follow_ups(
+                            query, content, history, self._config.rag.follow_up_count,
+                        )
+
                     yield SSEEvent(
                         event=SSEEventType.DONE,
                         data={
                             "content": content,
                             "degraded": False,
+                            "follow_ups": follow_ups,
                             "metadata": {
                                 "sources": [s.__dict__ for s in sources],
                                 "tool_used": True,

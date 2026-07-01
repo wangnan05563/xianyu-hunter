@@ -2,13 +2,15 @@
 
 Web 进程与 run 进程分离 → 此 API 读取：
 - log 文件（run.stdout.log / run.stderr.log）：实时流
-- events 表（结构化、含 task_id/item_id/payload）：可搜索/可标记
+- events 表（结构化、含 task_id/item_id/payload/request_id）：可搜索/可标记/可链路追踪
 
 设计要点：
 - 搜索：大小写不敏感的子串匹配（message + payload）
 - 等级过滤：复用 list_events(level=) 已有索引
+- request_id 过滤：通过 list_events_by_request 精确检索同链路所有日志
 - 标签：用 payload.tags 数组存（不引入新列，零迁移）
 - 导出：CSV 格式（Excel/Numbers 友好）
+- 全链路追踪：/api/logs/request/{request_id} 聚合 events + error_logs 两表
 """
 from __future__ import annotations
 
@@ -30,6 +32,10 @@ from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import parse_iso_datetime, to_datetime, payload_text
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
+
+# request_id token 正则：从日志行中解析 [req=xxx] 标记，供 SSE 流过滤使用
+# 日志格式：... | LEVEL | [req=req-20260701120000537-a3b2c1] | module:func:line - msg
+_REQUEST_ID_PATTERN = re.compile(r"\[req=([^\]]+)\]")
 
 
 # ============== F-08 搜索/过滤 列表 ==============
@@ -71,6 +77,7 @@ def search_logs(
     tag: str | None = Query(None, description="标签名（payload.tags 含该标签）"),
     task_id: str | None = Query(None, description="按 task_id 过滤"),
     stage: str | None = Query(None, description="按 stage 过滤"),
+    request_id: str | None = Query(None, description="按 request_id 过滤（全链路追踪）"),
     start: str | None = Query(None, description="起始时间 ISO 格式（如 2026-06-08T00:00:00）"),
     end: str | None = Query(None, description="截止时间 ISO 格式"),
     since_id: int | None = Query(None, ge=0, description="增量查询起点（P3-O-09 SSE 回放同款）"),
@@ -85,6 +92,9 @@ def search_logs(
     - total: 当前查询条件下命中总数（粗略，扫描 limit=1000）
     - matched_tags: 命中的标签直方图（top 10）
     - matched_levels: 命中的等级直方图
+
+    request_id 参数：精确匹配流水号，用于检索同链路所有关联日志。
+    传入 request_id 时优先走 list_events_by_request 索引查询，性能优于全表扫描。
     """
     # 归一化 level 大小写：events 表中 level 统一存小写（"info"/"warn"/"err"），
     # 前端 SPA 下拉传大写（ERROR/WARNING/INFO/DEBUG），这里统一转小写
@@ -94,10 +104,19 @@ def search_logs(
     start_dt = parse_iso_datetime(start)
     end_dt = parse_iso_datetime(end)
 
-    # 1) 拉取候选行（用 db 自带过滤尽量减少 Python 侧扫描）
-    candidates = container.repo.list_events(
-        level=level, task_id=task_id, limit=min(limit * 10, 1000), since_id=since_id, ascending=False
-    ) or []
+    # request_id 优先走索引查询：单次请求触发的所有日志都通过此列关联
+    if request_id:
+        rows, _ = container.repo.list_events_by_request(
+            request_id=request_id, limit=min(limit * 10, 1000), offset=0
+        )
+        # 倒序输出便于人工查看最新记录
+        candidates = list(reversed(rows))
+    else:
+        # 1) 拉取候选行（用 db 自带过滤尽量减少 Python 侧扫描）
+        candidates = container.repo.list_events(
+            level=level, task_id=task_id, limit=min(limit * 10, 1000), since_id=since_id, ascending=False
+        ) or []
+
     # 2) Python 侧：搜索 + 标签过滤 + stage 过滤 + 时间范围过滤
     if q:
         ql = q.lower()
@@ -296,9 +315,14 @@ def _event_tags(e: dict[str, Any]) -> list[str]:
 
 # ============== 既有：SSE 日志流 ==============
 @router.get("/stream")
-async def stream_logs() -> StreamingResponse:
+async def stream_logs(
+    request_id: str | None = Query(None, description="按 request_id 过滤实时日志流"),
+) -> StreamingResponse:
     """SSE 日志流：轮询 run.stdout.log 文件尾部
+
     简单实现：2s 一次，diff 出新增行。
+    request_id 参数：从日志行中解析 [req=xxx] token 过滤，
+    只推送同链路的日志行，便于前端实时追踪单次请求的执行过程。
     """
     stdout_path = Path(os.getcwd()) / "run.stdout.log"
     last_size = stdout_path.stat().st_size if stdout_path.exists() else 0
@@ -317,6 +341,11 @@ async def stream_logs() -> StreamingResponse:
                         f.seek(last_size)
                         chunk = f.read(cur_size - last_size).decode("utf-8", errors="replace")
                     for line in chunk.splitlines():
+                        # 按 request_id 过滤：从 [req=xxx] token 解析匹配
+                        if request_id:
+                            m = _REQUEST_ID_PATTERN.search(line)
+                            if not m or m.group(1) != request_id:
+                                continue
                         yield f"event: log\ndata: {json.dumps({'line': line}, ensure_ascii=False)}\n\n"
                     last_size = cur_size
                 else:
@@ -328,3 +357,68 @@ async def stream_logs() -> StreamingResponse:
                 yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ============== 全链路追踪聚合查询端点 ==============
+@router.get("/request/{request_id}")
+def get_request_chain(
+    request_id: str,
+    limit: int = Query(1000, ge=1, le=5000, description="单表最大返回数"),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """按全局流水号聚合查询同链路所有日志记录
+
+    全链路追踪核心端点：返回单次请求触发的所有 events + error_logs，
+    按时间正序合并，便于展示完整调用链路：
+
+    HTTP 请求
+      ├─ 中间件日志
+      ├─ 业务逻辑日志（events）
+      ├─ 数据库操作日志（events）
+      ├─ 外部服务调用日志（events）
+      ├─ 子请求/联动请求日志（events）
+      └─ 异常日志（error_logs）
+
+    request_id 必须符合 req-<17位数字>-<6位hex> 格式，否则返回 400。
+    """
+    from xianyu_hunter.infra.request_context import is_valid_request_id
+    if not is_valid_request_id(request_id):
+        raise HTTPException(status_code=400, detail="request_id 格式不合法")
+
+    # 分别从 events 和 error_logs 表查询
+    events, events_total = container.repo.list_events_by_request(
+        request_id=request_id, limit=limit, offset=0
+    )
+    error_logs = container.repo.list_error_logs(
+        request_id=request_id, limit=limit, offset=0
+    )
+
+    # 标记来源表，便于前端区分日志类型
+    for ev in events:
+        ev["_source"] = "event"
+    for el in error_logs:
+        el["_source"] = "error_log"
+
+    # 合并后按时间正序排序，呈现完整调用链路
+    def _parse_ts(item: dict, key: str = "created_at") -> datetime:
+        v = item.get(key)
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v)
+            except ValueError:
+                return datetime.min
+        return datetime.min
+
+    chain = events + error_logs
+    # error_logs 表时间字段是 timestamp，events 是 created_at，统一取值
+    chain.sort(key=lambda x: _parse_ts(x, "timestamp") if x.get("_source") == "error_log" else _parse_ts(x))
+
+    return {
+        "request_id": request_id,
+        "total": len(chain),
+        "events_total": events_total,
+        "error_logs_total": len(error_logs),
+        "chain": chain,
+    }

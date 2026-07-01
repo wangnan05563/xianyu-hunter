@@ -37,6 +37,14 @@ class DetailMixin:
     依赖 CollectorBase 的状态（browser/ad/selectors/_seller_profile_cache 等）。
     """
 
+    def _mark_detail_session_invalid(self, item_id: str, reason: str) -> None:
+        """标记详情采集发现的会话失效，让 Worker/Scheduler 立即短路暂停。"""
+        if not getattr(self, "last_session_invalid", False):
+            logger.warning("详情页 {} 检测到会话失效：{}，后续任务将暂停", item_id, reason)
+        else:
+            logger.debug("详情页 {} 再次检测到会话失效：{}", item_id, reason)
+        self.last_session_invalid = True
+
     async def _wait_for_detail_render_signal(self, page: Page, timeout_ms: int = 2500) -> str:
         """等待详情页出现任一可用渲染信号，避免标题选择器固定等满 10s。"""
         signal = await page.wait_for_function(
@@ -154,6 +162,45 @@ class DetailMixin:
                             logger.debug(f"详情页 {item_id} 标题从 document.title 兜底提取: {title}")
                 except Exception as e:
                     logger.warning(f"详情页 {item_id} document.title 提取失败: {e}")
+
+            # 下架/已删除页可能复用首页标题，需优先识别，避免误判为 cookie 失效。
+            try:
+                early_body_text = await page.text_content("body") or ""
+            except Exception:
+                early_body_text = ""
+            if check_text_delisted(early_body_text):
+                logger.info(
+                    f"详情页 {item_id} 检测到下架/被删除文案，标记 is_sold=True 并返回"
+                )
+                return ItemDetail(
+                    id=item_id,
+                    title="",
+                    price=0.0,
+                    is_sold=True,
+                )
+
+            # 首页标题检测必须早于卖家 ID dump 和卖家标签等待。
+            # 登录态失效时闲鱼会在 item URL 渲染首页内容，继续提取只会产生无意义诊断文件。
+            if title and any(marker in title for marker in _HOME_PAGE_TITLE_MARKERS):
+                self._mark_detail_session_invalid(item_id, f"首页标题 title={title}")
+                logger.warning(
+                    f"详情页 {item_id} 提取到首页标题（title={title}），cookie 可能失效被重定向到首页，主动返回 None"
+                )
+                return None
+
+            try:
+                current_url = page.url
+                current_url_lower = current_url.lower()
+                if "login" in current_url_lower or "passport" in current_url_lower:
+                    self._mark_detail_session_invalid(item_id, f"跳转登录页 url={current_url[:120]}")
+                    logger.warning(f"详情页 {item_id} 被重定向到登录页，请重新登录闲鱼")
+                    return None
+                if "verify" in current_url_lower or "captcha" in current_url_lower:
+                    self._mark_detail_session_invalid(item_id, f"触发验证页 url={current_url[:120]}")
+                    logger.warning(f"详情页 {item_id} 触发验证码，请手动完成验证后重试")
+                    return None
+            except Exception:
+                pass
 
             # 价格
             # 为什么添加详细日志：排查"本地价格与官网不一致"问题，

@@ -127,6 +127,8 @@ class TokenRenewer:
         self._task: asyncio.Task | None = None
         self._running = False
         self._consecutive_failures = 0
+        self._session_expired_warned = False
+        self._session_expired_checks = 0
         self._last_renew_at: float = 0.0
         self._last_renew_result: RenewResult = RenewResult.SKIPPED
         self._stats: dict[str, int] = {
@@ -187,14 +189,26 @@ class TokenRenewer:
     async def _renew_loop(self) -> None:
         """后台续期循环"""
         while self._running:
+            result = RenewResult.SKIPPED
             try:
-                await self.check_and_renew()
+                result = await self.check_and_renew()
             except asyncio.CancelledError:
                 # 任务被取消时重新抛出，符合 asyncio 任务取消标准模式（S7497）
                 raise
             except Exception as e:
                 logger.error("续期循环异常: {}", e)
-            await asyncio.sleep(self.config.check_interval_sec)
+            delay = self.config.check_interval_sec
+            if result == RenewResult.SESSION_EXPIRED:
+                self._session_expired_checks += 1
+                delay = min(600, self.config.check_interval_sec * (2 ** min(self._session_expired_checks - 1, 3)))
+                logger.debug(
+                    "TokenRenewer 会话失效状态未恢复，第 {} 次检查后退避 {}s",
+                    self._session_expired_checks,
+                    delay,
+                )
+            else:
+                self._session_expired_checks = 0
+            await asyncio.sleep(delay)
 
     async def check_and_renew(self) -> RenewResult:
         """检查 token 年龄，必要时续期
@@ -213,11 +227,15 @@ class TokenRenewer:
 
         cookie_value = self._cookie_provider()
         if not cookie_value:
-            logger.warning("无法获取 _m_h5_tk，可能未登录")
+            if self._session_expired_warned:
+                logger.debug("无法获取 _m_h5_tk，会话仍处于失效状态，等待重新登录")
+            else:
+                logger.warning("无法获取 _m_h5_tk，可能未登录")
+                self._session_expired_warned = True
             self._last_renew_result = RenewResult.SESSION_EXPIRED
             self._stats["total_failed"] += 1
             # Cookie 完全缺失时也需触发重新登录
-            if self._renew_fail_callback:
+            if self._renew_fail_callback and self._session_expired_checks == 0:
                 self._renew_fail_callback()
             return RenewResult.SESSION_EXPIRED
 
@@ -229,20 +247,26 @@ class TokenRenewer:
         should_renew_at = self.config.token_ttl_sec - self.config.renew_before_expiry_sec
         if age < should_renew_at:
             # 未到续期时间
+            self._session_expired_warned = False
             self._last_renew_result = RenewResult.SKIPPED
             self._stats["total_skipped"] += 1
             return RenewResult.SKIPPED
 
         # 3. 已过期？
         if token_info.is_expired(self.config.token_ttl_sec):
-            logger.warning("_m_h5_tk 已过期（age={:.0f}s），需重新登录", age)
+            if self._session_expired_warned:
+                logger.debug("_m_h5_tk 仍处于过期状态（age={:.0f}s），等待重新登录", age)
+            else:
+                logger.warning("_m_h5_tk 已过期（age={:.0f}s），需重新登录", age)
+                self._session_expired_warned = True
             self._last_renew_result = RenewResult.SESSION_EXPIRED
             self._stats["total_failed"] += 1
-            if self._renew_fail_callback:
+            if self._renew_fail_callback and self._session_expired_checks == 0:
                 self._renew_fail_callback()
             return RenewResult.SESSION_EXPIRED
 
         # 4. 执行续期
+        self._session_expired_warned = False
         logger.info("_m_h5_tk age={:.0f}s，触发续期", age)
         result = await self._do_renew()
         self._last_renew_at = time.time()
@@ -255,12 +279,18 @@ class TokenRenewer:
             self._consecutive_failures += 1
             self._stats["total_failed"] += 1
             if self._consecutive_failures >= self.config.max_renew_attempts:
-                logger.error(
-                    "连续 {} 次续期失败，触发重新登录",
-                    self._consecutive_failures,
-                )
-                if self._renew_fail_callback:
-                    self._renew_fail_callback()
+                if self._consecutive_failures == self.config.max_renew_attempts:
+                    logger.error(
+                        "连续 {} 次续期失败，触发重新登录",
+                        self._consecutive_failures,
+                    )
+                    if self._renew_fail_callback:
+                        self._renew_fail_callback()
+                else:
+                    logger.debug(
+                        "连续续期失败已超过阈值（{} 次），等待状态恢复",
+                        self._consecutive_failures,
+                    )
 
         return result
 

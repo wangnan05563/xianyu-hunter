@@ -61,6 +61,7 @@ def _make_container(
     # sync_item_display_from_detail 会调用 list_link_displays_by_keys，
     # 默认返回空 dict 避免 MagicMock.get() 返回非 dict 导致合并逻辑出错
     container.repo.list_link_displays_by_keys.return_value = {}
+    container._detail_map = detail_map or {}
 
     async def _detail(item_id: str):
         if detail_map and item_id in detail_map:
@@ -82,6 +83,47 @@ def _mock_cookie_sync():
         new=AsyncMock(),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _mock_collection_service(monkeypatch):
+    class FakeCollectionService:
+        def __init__(self, container):
+            self.container = container
+
+        async def collect(self, item_id, **kwargs):
+            detail_map = getattr(self.container, "_detail_map", {})
+            result = detail_map.get(item_id)
+            if isinstance(result, Exception):
+                raise result
+            if result is None:
+                return MagicMock(ok=False, changed_fields=[])
+
+            existing = kwargs.get("existing_item") or {}
+            new_row = {
+                "title": result.title,
+                "price": result.price,
+                "seller_id": result.seller_id or "",
+                "region": result.region or "",
+                "want_cnt": result.want_cnt,
+                "view_cnt": result.view_cnt,
+                "thumb_url": result.thumb_url or "",
+                "is_sold": 1 if result.is_sold else 0,
+            }
+            changed_fields = BatchRefreshScheduler(
+                self.container,
+                _make_config(),
+            )._diff_fields(existing, new_row)
+            self.container.repo.upsert_item(new_row)
+            if result.is_sold:
+                self.container.repo.mark_sold(item_id)
+            return MagicMock(ok=True, changed_fields=changed_fields)
+
+    monkeypatch.setattr(
+        "xianyu_hunter.modules.batch_refresh_scheduler.ItemCollectionService",
+        FakeCollectionService,
+    )
+    yield
 
 
 # ========== 启动/停止测试 ==========
@@ -147,6 +189,32 @@ async def test_batch_refresh_success() -> None:
     assert scheduler.is_running() is False
     # upsert_item 被调用 2 次
     assert container.repo.upsert_item.call_count == 2
+
+
+async def test_batch_refresh_uses_collection_service(monkeypatch) -> None:
+    items = [{"id": "i1", "task_id": "t1", "title": "old", "price": 50, "is_sold": 0}]
+    container = _make_container(items=items, detail_map={})
+    scheduler = BatchRefreshScheduler(container, _make_config())
+    calls = []
+
+    class FakeService:
+        def __init__(self, received_container):
+            assert received_container is container
+
+        async def collect(self, item_id, **kwargs):
+            calls.append((item_id, kwargs))
+            return MagicMock(ok=True, changed_fields=["title"])
+
+    monkeypatch.setattr(
+        "xianyu_hunter.modules.batch_refresh_scheduler.ItemCollectionService",
+        FakeService,
+    )
+
+    await scheduler._run_batch_async(task_id=1)
+
+    assert calls[0][0] == "i1"
+    assert calls[0][1]["mode"].value == "official_full"
+    assert scheduler._change_log[0]["changed_fields"] == ["title"]
 
 
 async def test_batch_refresh_detail_none_skipped() -> None:

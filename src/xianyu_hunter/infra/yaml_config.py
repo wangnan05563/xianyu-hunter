@@ -233,6 +233,9 @@ class ChatbotRAGConfig(BaseModel):
     top_k: int = Field(5, ge=1, le=20, description="检索返回的片段数量")
     similarity_threshold: float = Field(0.65, ge=0.0, le=1.0, description="相似度阈值，低于此值的片段丢弃")
     max_context_chars: int = Field(8000, ge=500, le=32000, description="context 最大字符数，超出则整片丢弃最低相似度片段")
+    # 后续问题预测：每轮回答后生成 3-5 个推荐问题，引导用户持续对话
+    enable_follow_ups: bool = Field(True, description="是否在回答后生成推荐后续问题")
+    follow_up_count: int = Field(3, ge=1, le=5, description="生成的后续问题数量")
 
 
 class ChatbotLLMConfig(BaseModel):

@@ -18,11 +18,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
+from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.domain.item import ItemDetail, ItemSummary
 from xianyu_hunter.domain.order import BuyOutcome, BuyResult
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.domain.task import Task, TaskConfig, TaskMode
 from xianyu_hunter.config import get_settings
+from xianyu_hunter.infra.event_bus import EventBus
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repo_links import task_keyword_matches_title
 from xianyu_hunter.infra.yaml_config import get_config
@@ -84,6 +86,7 @@ class TaskWorker:
         buyer: Buyer | None = None,  # 评估通过后是否真拍，模式 AUTO 时必传
         config: TaskConfig | None = None,
         repo: Any | None = None,  # 注入 repo 以写入 task_links
+        event_bus: EventBus | None = None,  # 注入后用于触发 EVAL_PASSED 等通知事件
     ):
         self.task = task
         self.collector = collector
@@ -93,6 +96,11 @@ class TaskWorker:
         self.buyer = buyer
         self.config = config or TaskConfig()
         self.repo = repo
+        # EventBus 用于把评估通过等业务事件投递给 NotifierHub
+        # 为什么需要：NotifierHub 订阅 EVAL_PASSED 事件，但旧版 worker 不持有 bus，
+        # 评估通过后只写数据库 events 表（用于时间线），从未通过 EventBus 触发事件，
+        # 导致 NotifierHub 永远收不到 EVAL_PASSED，订阅了也发不出通知
+        self.event_bus = event_bus
         # 上次落单时间（用于冷却）
         self._last_buy_at: float = 0.0
 
@@ -283,11 +291,25 @@ class TaskWorker:
                 for summary in new_items:
                     if not summary.id:
                         continue
+                    if getattr(self.collector, 'last_session_invalid', False):
+                        logger.warning(
+                            "[Task {}] 详情采集前检测到闲鱼会话失效，停止本轮并暂停任务",
+                            self.task.id,
+                        )
+                        stats.finished_at = datetime.now(timezone.utc)
+                        return RunResult(stats=stats, evaluations=evaluations, buy_results=buy_results, should_pause=True)
                     try:
                         # 复用详情页（首次创建，后续复用）
                         if _has_browser and shared_detail_page is None:
                             shared_detail_page = await self.collector.browser.new_page()
                         detail = await self.collector.detail(summary.id, page=shared_detail_page)
+                        if getattr(self.collector, 'last_session_invalid', False):
+                            logger.warning(
+                                "[Task {}] 详情页检测到闲鱼会话失效，停止本轮并暂停任务",
+                                self.task.id,
+                            )
+                            stats.finished_at = datetime.now(timezone.utc)
+                            return RunResult(stats=stats, evaluations=evaluations, buy_results=buy_results, should_pause=True)
                         if not detail:
                             logger.warning("[Task {}] 详情页获取失败，跳过 {}", self.task.id, summary.id)
                             continue
@@ -393,6 +415,34 @@ class TaskWorker:
                         if not eval_result.should_pass(_pass_score):
                             continue
                         stats.passed += 1
+
+                        # 触发 EVAL_PASSED 事件，让 NotifierHub 等订阅者收到通知
+                        # 为什么放这里：评估通过推送门槛后即应通知用户，
+                        # NotifierHub 订阅了 EVAL_PASSED，但旧版 worker 不持有 EventBus，
+                        # 导致通知永远发不出。用 publish_nowait 避免阻塞主流程
+                        if self.event_bus is not None:
+                            try:
+                                self.event_bus.publish_nowait(
+                                    Event(
+                                        type=EventType.EVAL_PASSED,
+                                        task_id=self.task.id,
+                                        item_id=detail.id,
+                                        payload={
+                                            "item_title": detail.title,
+                                            "item_price": detail.price,
+                                            "seller_id": detail.seller_id,
+                                            "score": eval_result.score,
+                                            "risk_level": eval_result.risk_level.value,
+                                            "is_passed": eval_result.is_passed,
+                                            "data_quality": eval_result.data_quality,
+                                            "pass_score": _pass_score,
+                                        },
+                                    )
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"[Task {self.task.id}] 触发 EVAL_PASSED 事件失败: {e}"
+                                )
 
                         # 5.5 AI 自动评估（可选，消耗 token）
                         # 开启后对通过规则评估的商品自动调用 AI 二次确认

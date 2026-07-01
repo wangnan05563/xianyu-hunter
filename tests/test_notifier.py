@@ -340,6 +340,29 @@ async def test_hub_no_channels_warning() -> None:
     assert results == []
 
 
+def test_hub_unconfigured_default_channel_logs_info() -> None:
+    """默认兜底渠道未配置时不打 warning，避免启动日志噪声。"""
+
+    class UnconfiguredNotifier:
+        name = "dummy"
+        is_configured = False
+
+    class FakeRegistry:
+        def create(self, name: str) -> UnconfiguredNotifier:
+            return UnconfiguredNotifier()
+
+    with patch("xianyu_hunter.modules.notifier.hub.logger") as logger:
+        hub = NotifierHub(
+            channels=["dummy"],
+            registry=FakeRegistry(),
+            warn_unconfigured=False,
+        )
+
+    assert hub.notifiers == []
+    logger.warning.assert_not_called()
+    logger.info.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_hub_unknown_channel_skipped() -> None:
     """未知渠道被跳过（不抛错）"""

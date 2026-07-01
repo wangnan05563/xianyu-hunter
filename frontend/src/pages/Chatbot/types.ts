@@ -51,6 +51,8 @@ export interface Message {
   // M6：反馈星级（1-5，null=未评价）+ 反馈分类
   feedback_rating?: number | null
   feedback_category?: string | null
+  // 后续推荐问题：DONE 事件携带，点击后自动发送
+  follow_ups?: string[]
 }
 
 export interface KBStatus {

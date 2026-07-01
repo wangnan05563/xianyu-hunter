@@ -2,6 +2,7 @@
 
 提供：
 - save_event / upsert_eval_event / list_events / get_event / update_event_payload / max_event_id
+- list_events_by_request（按 request_id 检索链路日志）
 - get_task_runs / _aggregate_bucket（F-09 时间窗聚合）
 """
 from __future__ import annotations
@@ -20,6 +21,13 @@ class EventsMixin:
     """Events 领域的 Repository 方法"""
 
     def save_event(self, event: dict) -> int:
+        # 自动注入 request_id：调用方未显式指定时从 ContextVar 读取
+        # 确保同一请求触发的所有事件都被关联到同一流水号
+        if "request_id" not in event or not event.get("request_id"):
+            from xianyu_hunter.infra.request_context import get_request_id
+            rid = get_request_id()
+            if rid:
+                event["request_id"] = rid
         with self.engine.begin() as conn:
             result = conn.execute(EventRow.__table__.insert().values(**event))
             return result.inserted_primary_key[0]
@@ -105,6 +113,37 @@ class EventsMixin:
             if task_id:
                 count_stmt = count_stmt.where(EventRow.task_id == task_id)
             total = int(conn.execute(count_stmt).scalar() or 0)
+            return rows, total
+
+    def list_events_by_request(
+        self,
+        request_id: str,
+        limit: int = 1000,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        """按 request_id 检索同链路所有事件日志
+
+        全链路追踪核心查询：通过单个流水号检索本次请求触发的所有关联事件，
+        按时间正序返回，便于展示调用链路顺序。
+        """
+        if not request_id:
+            return [], 0
+        with self.engine.connect() as conn:
+            base_where = EventRow.request_id == request_id
+            stmt = (
+                select(EventRow)
+                .where(base_where)
+                # 正序返回：链路展示按时间顺序，最早的先出
+                .order_by(EventRow.created_at.asc())
+                .limit(limit)
+                .offset(offset)
+            )
+            rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
+            total = int(
+                conn.execute(
+                    select(func.count()).select_from(EventRow).where(base_where)
+                ).scalar() or 0
+            )
             return rows, total
 
     def get_event(self, event_id: int) -> dict | None:

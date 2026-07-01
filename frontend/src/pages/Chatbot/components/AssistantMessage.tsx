@@ -1,6 +1,10 @@
-import { useState } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { Typography, Tag, Tooltip, Progress, Collapse, Button, Modal, Input, Alert, Rate, Select, message } from 'antd'
 import { CopyOutlined } from '@ant-design/icons'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
+import 'highlight.js/styles/atom-one-light.css'
 import type { Message, Source } from '../types'
 import { chatbotApi } from '../api'
 
@@ -10,7 +14,7 @@ interface Props {
   onFeedbackDone?: () => void
 }
 
-// 助手消息组件：渲染内容 + 引用来源 + 工具调用标记 + 1-5 星评分 + 转人工告警
+// 助手消息组件：渲染 Markdown 内容 + 引用来源 + 工具调用标记 + 1-5 星评分 + 转人工告警 + 后续问题推荐
 export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Props) {
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false)
   const [starRating, setStarRating] = useState(0)
@@ -62,16 +66,61 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
   // 反馈分类选项（仅低分 1-3 星时显示）
   const showCategorySelect = starRating > 0 && starRating <= 3
 
+  // 推荐问题点击：派发自定义事件，index.tsx 监听后自动发送
+  const handleFollowUpClick = (question: string) => {
+    window.dispatchEvent(new CustomEvent('chatbot:follow-up-click', { detail: question }))
+  }
+
+  // 把 [来源:N] 转成 Markdown 链接 [来源:N](#cite-N)，让 ReactMarkdown 解析为 <a> 标签
+  // 然后在 components.a 中拦截 #cite- 开头的链接，渲染成带 Tooltip 的 Tag
+  // 为什么用预处理而非自定义 text 渲染：react-markdown v9 不支持 components.text
+  const processedContent = useMemo(() => {
+    if (!msg.sources || msg.sources.length === 0) return msg.content
+    return msg.content.replace(/\[来源:(\d+|\?)\]/g, (_m, num) => `[来源:${num}](#cite-${num})`)
+  }, [msg.content, msg.sources])
+
+  // ReactMarkdown components：自定义 a/pre 渲染
+  // 为什么用 useMemo：避免每次渲染重建 components 对象导致 ReactMarkdown 不必要重渲染
+  const mdComponents = useMemo(() => ({
+    a: ({ href, children }: { href?: string; children?: React.ReactNode }) => {
+      if (href && href.startsWith('#cite-')) {
+        const refNum = href.slice(6)
+        const source = msg.sources?.find((s) => s.index === Number.parseInt(refNum, 10))
+        return (
+          <Tooltip title={source ? `${source.file} · ${source.section}` : '来源未知'}>
+            <Tag color="cyan" style={{ cursor: 'pointer', margin: '0 2px' }}>[来源:{refNum}]</Tag>
+          </Tooltip>
+        )
+      }
+      return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+    },
+    // 代码块包装：添加语言标签 + 复制按钮，行号通过 CSS counter 实现
+    pre: ({ children }: { children?: React.ReactNode }) => {
+      const child = Array.isArray(children) ? children[0] : children
+      if (child && typeof child === 'object' && 'props' in child) {
+        const codeProps = (child as React.ReactElement<{ className?: string; children?: React.ReactNode }>).props
+        return <CodeBlock className={codeProps.className}>{codeProps.children}</CodeBlock>
+      }
+      return <pre>{children}</pre>
+    },
+  }), [msg.sources])
+
   return (
     <div style={{ padding: '12px 0' }}>
-      {/* 消息内容：用 Typography 渲染，保留换行；手动处理 [来源:N] 引用 */}
-      <Typography.Paragraph style={{ marginBottom: 8, whiteSpace: 'pre-wrap' }}>
-        {renderContentWithCitations(msg.content, msg.sources)}
-      </Typography.Paragraph>
+      {/* 消息内容：ReactMarkdown 渲染，支持标题/列表/代码块/链接/加粗/斜体等 */}
+      <div className="cb-md">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[rehypeHighlight]}
+          components={mdComponents}
+        >
+          {processedContent}
+        </ReactMarkdown>
+      </div>
 
       {/* 降级标记：RAG 降级为 FAQ 或转人工时显示 */}
       {msg.degraded && (
-        <Tag color="orange" style={{ marginBottom: 8 }}>已降级</Tag>
+        <Tag color="orange" style={{ marginBottom: 8, marginTop: 8 }}>已降级</Tag>
       )}
 
       {/* 工具调用次数 */}
@@ -105,6 +154,24 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
             ))}
           </Collapse.Panel>
         </Collapse>
+      )}
+
+      {/* 后续推荐问题：点击后自动发送，引导用户持续对话（参考豆包交互） */}
+      {msg.follow_ups && msg.follow_ups.length > 0 && (
+        <div className="cb-follow-ups">
+          <div className="cb-follow-ups-label">您可能还想问：</div>
+          <div className="cb-follow-ups-tags">
+            {msg.follow_ups.map((q, i) => (
+              <Tag
+                key={i}
+                className="cb-follow-up-tag"
+                onClick={() => handleFollowUpClick(q)}
+              >
+                {q}
+              </Tag>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* 转人工告警 */}
@@ -189,41 +256,41 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
   )
 }
 
-// 渲染内容并处理 [来源:N] 引用标记
-// 为什么不用 react-markdown：项目未安装该依赖，用简单文本渲染避免引入新包
-// [来源:N] 渲染为带 Tooltip 的 Tag，点击可跳转到对应来源
-function renderContentWithCitations(content: string, sources?: Source[]): React.ReactNode {
-  if (!sources || sources.length === 0) {
-    return content
-  }
+// 代码块组件：语言标签 + 复制按钮 + 语法高亮（rehype-highlight 已处理）
+// 行号通过 CSS counter 实现（见 chatbot.css .cb-md-code-wrap pre code）
+function CodeBlock({ children, className }: { children?: React.ReactNode; className?: string }) {
+  const [copied, setCopied] = useState(false)
+  const codeRef = useRef<HTMLElement>(null)
+  const lang = (className || '').replace('language-', '') || ''
 
-  const regex = /\[来源:(\d+|\?)\]/g
-  const parts: React.ReactNode[] = []
-  let lastIndex = 0
-  let match: RegExpExecArray | null
-  let key = 0
-
-  while ((match = regex.exec(content)) !== null) {
-    // 添加匹配前的普通文本
-    if (match.index > lastIndex) {
-      parts.push(content.slice(lastIndex, match.index))
+  const handleCopy = async () => {
+    // 从 DOM 取 textContent：rehype-highlight 处理后 children 是高亮 spans，不是纯文本
+    const text = codeRef.current?.textContent || ''
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      message.error('复制失败')
     }
-    // 添加引用 Tag
-    const refNum = match[1]
-    const source = refNum !== '?' ? sources.find((s) => s.index === Number.parseInt(refNum, 10)) : undefined
-    parts.push(
-      <Tooltip
-        key={`cite-${key++}`}
-        title={source ? `${source.file} · ${source.section}` : '来源未知'}
-      >
-        <Tag color="cyan" style={{ cursor: 'pointer' }}>[来源:{refNum}]</Tag>
-      </Tooltip>,
-    )
-    lastIndex = regex.lastIndex
   }
-  // 添加剩余文本
-  if (lastIndex < content.length) {
-    parts.push(content.slice(lastIndex))
-  }
-  return <>{parts}</>
+
+  return (
+    <div className="cb-md-code-wrap">
+      <div className="cb-md-code-header">
+        <span className="cb-md-code-lang">{lang || 'text'}</span>
+        <button
+          type="button"
+          className="cb-md-copy-btn"
+          onClick={handleCopy}
+          aria-label="复制代码"
+        >
+          <CopyOutlined /> {copied ? '已复制' : '复制'}
+        </button>
+      </div>
+      <pre>
+        <code ref={codeRef} className={className}>{children}</code>
+      </pre>
+    </div>
+  )
 }

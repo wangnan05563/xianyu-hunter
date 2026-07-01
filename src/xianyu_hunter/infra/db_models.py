@@ -194,6 +194,9 @@ class EventRow(Base):
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    # 全局流水号：标识触发本条事件的请求/任务链路
+    # nullable=True 兼容历史数据；查询层通过 request_id 快速关联同链路所有日志
+    request_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
     # 联合索引：按任务+时间范围查事件是 Dashboard 时间线的核心查询路径
     __table_args__ = (
@@ -218,6 +221,9 @@ class ErrorLogRow(Base):
     request_path: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     request_params: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON: query + body（脱敏）
     request_headers: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON: 脱敏后的 headers
+    # 全局流水号：关联到触发本次异常的请求链路
+    # 与 events.request_id 同名，便于聚合查询端点统一检索两表
+    request_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
     # 来源标识（单 token 认证体系下用请求来源代替用户身份）
     client_ip: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -737,6 +743,14 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     # M6：chatbot_feedback 加 star_rating 和 category 字段
     _migrate_add_column(engine, "chatbot_feedback", "star_rating", "INTEGER")
     _migrate_add_column(engine, "chatbot_feedback", "category", "TEXT")
+
+    # 全局流水号：events 和 error_logs 表新增 request_id 列 + 单列索引
+    # 为什么建索引：聚合查询端点 /api/logs/request/{request_id} 按此列等值过滤，
+    # 无索引会全表扫描，影响日志检索性能
+    _migrate_add_column(engine, "events", "request_id", "TEXT")
+    _migrate_add_column(engine, "error_logs", "request_id", "TEXT")
+    _migrate_create_index(engine, "events", "ix_events_request_id", "request_id")
+    _migrate_create_index(engine, "error_logs", "ix_error_logs_request_id", "request_id")
 
 
 def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) -> None:

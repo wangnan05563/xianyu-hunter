@@ -244,6 +244,13 @@ class TaskScheduler:
             await h.pause_event.wait()
             if h.stop_event.is_set():
                 break
+            # 为本轮 run_once 设置独立 request_id：
+            # 周期触发的任务与原 HTTP 请求已脱钩，每轮生成新流水号，
+            # 让本轮所有 events / error_logs / loguru 日志都关联到同一 request_id
+            # 协程结束时 ContextVar 自动回收，无需显式清理
+            from xianyu_hunter.infra.request_context import generate_request_id, set_request_id
+            current_rid = generate_request_id()
+            set_request_id(current_rid)
             try:
                 # 全局锁：串行化所有任务的 run_once，避免并发弹出多个浏览器窗口
                 async with self._run_lock:
@@ -273,9 +280,17 @@ class TaskScheduler:
                 # 捕获到 error_logs 表，供错误日志页面展示和 AI 诊断
                 # 之所以放在 scheduler 层而非 worker 层，是因为这里是后台任务异常的统一兜底点，
                 # 能覆盖 worker.run_once 中所有未被内部 try-except 消化的异常
+                # context 中携带本次执行的 request_id，便于关联到本轮所有日志
                 try:
                     from xianyu_hunter.web.middleware.error_capture import capture_background_error
-                    capture_background_error(e, context={"source": "scheduler.run_once", "task_id": task_id})
+                    capture_background_error(
+                        e,
+                        context={
+                            "source": "scheduler.run_once",
+                            "task_id": task_id,
+                            "request_id": current_rid,
+                        },
+                    )
                 except Exception:
                     logger.warning("error_logs 捕获失败，跳过")
                 h.task.status = TaskStatus.ERROR

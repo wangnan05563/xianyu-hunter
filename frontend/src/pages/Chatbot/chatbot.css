@@ -1130,11 +1130,357 @@
     z-index: 999;
     animation: cb-mask-fade 0.25s ease-out;
   }
-  @keyframes cb-mask-fade {
-    from { opacity: 0; }
-    to { opacity: 1; }
+}
+
+/* =====================================================
+   Markdown 渲染样式（.cb-md 容器内）
+   设计：与马卡龙气泡风格协调，层次清晰，代码块独立卡片
+   ===================================================== */
+
+.cb-md {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--cb-text-primary);
+  word-break: break-word;
+}
+
+/* 标题：层级递减，颜色渐深，带左侧色条强调 */
+.cb-md h1,
+.cb-md h2,
+.cb-md h3,
+.cb-md h4,
+.cb-md h5,
+.cb-md h6 {
+  margin: 16px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--cb-text-primary);
+  position: relative;
+  padding-left: 12px;
+}
+
+.cb-md h1::before,
+.cb-md h2::before,
+.cb-md h3::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 70%;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--cb-pink-deep) 0%, var(--cb-cyan-deep) 100%);
+}
+
+.cb-md h1 { font-size: 20px; margin-top: 12px; }
+.cb-md h2 { font-size: 18px; }
+.cb-md h3 { font-size: 16px; }
+.cb-md h4 { font-size: 15px; }
+.cb-md h5,
+.cb-md h6 { font-size: 14px; color: var(--cb-text-secondary); }
+
+/* 段落：底部留白，首段无顶部 margin */
+.cb-md p {
+  margin: 0 0 10px;
+}
+
+.cb-md > p:first-child,
+.cb-md > h1:first-child,
+.cb-md > h2:first-child,
+.cb-md > ul:first-child,
+.cb-md > ol:first-child {
+  margin-top: 0;
+}
+
+/* 加粗 / 斜体 */
+.cb-md strong {
+  font-weight: 600;
+  color: var(--cb-pink-deep);
+}
+
+.cb-md em {
+  font-style: italic;
+  color: var(--cb-text-secondary);
+}
+
+/* 行内代码：浅粉胶囊背景 */
+.cb-md :not(pre) > code {
+  background: rgba(255, 214, 232, 0.5);
+  color: var(--cb-pink-deep);
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 0.88em;
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  border: 1px solid rgba(255, 179, 204, 0.3);
+}
+
+/* 列表：紧凑间距，自定义符号颜色 */
+.cb-md ul,
+.cb-md ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.cb-md li {
+  margin: 4px 0;
+}
+
+.cb-md ul > li::marker {
+  color: var(--cb-pink-deep);
+}
+
+.cb-md ol > li::marker {
+  color: var(--cb-cyan-deep);
+  font-weight: 600;
+}
+
+/* 嵌套列表收紧 */
+.cb-md li > ul,
+.cb-md li > ol {
+  margin: 4px 0;
+}
+
+/* 链接：马卡龙粉，hover 加深 */
+.cb-md a {
+  color: var(--cb-pink-deep);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(255, 143, 171, 0.4);
+  transition: all 0.2s ease;
+}
+
+.cb-md a:hover {
+  color: #FF6B8A;
+  border-bottom-color: #FF6B8A;
+}
+
+/* 引用块：左侧粉条 + 浅粉底 */
+.cb-md blockquote {
+  margin: 0 0 10px;
+  padding: 8px 14px;
+  border-left: 4px solid var(--cb-pink);
+  background: rgba(255, 214, 232, 0.25);
+  border-radius: 0 10px 10px 0;
+  color: var(--cb-text-secondary);
+}
+
+.cb-md blockquote p {
+  margin: 0;
+}
+
+/* 分隔线：渐变细线 */
+.cb-md hr {
+  border: none;
+  height: 1px;
+  margin: 16px 0;
+  background: linear-gradient(90deg, transparent 0%, var(--cb-pink-light) 50%, transparent 100%);
+}
+
+/* 表格：磨砂玻璃卡片 + 圆角 */
+.cb-md table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 0 0 12px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--cb-border-soft);
+  font-size: 13px;
+}
+
+.cb-md thead {
+  background: linear-gradient(135deg, rgba(255, 214, 232, 0.5) 0%, rgba(200, 241, 226, 0.4) 100%);
+}
+
+.cb-md th {
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--cb-text-primary);
+  border-bottom: 1px solid var(--cb-border-soft);
+}
+
+.cb-md td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 179, 204, 0.15);
+  color: var(--cb-text-secondary);
+}
+
+.cb-md tr:last-child td {
+  border-bottom: none;
+}
+
+.cb-md tbody tr:hover {
+  background: rgba(255, 214, 232, 0.2);
+}
+
+/* ============ 代码块卡片 ============ */
+.cb-md-code-wrap {
+  margin: 0 0 12px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--cb-border-soft);
+  background: #fafafa;
+  box-shadow: 0 2px 8px rgba(93, 78, 109, 0.06);
+}
+
+.cb-md-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: linear-gradient(135deg, rgba(255, 245, 248, 0.9) 0%, rgba(240, 255, 249, 0.9) 100%);
+  border-bottom: 1px solid var(--cb-border-soft);
+}
+
+.cb-md-code-lang {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cb-cyan-deep);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-family: 'SF Mono', 'Consolas', monospace;
+}
+
+.cb-md-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--cb-text-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.cb-md-copy-btn:hover {
+  color: var(--cb-pink-deep);
+  background: rgba(255, 214, 232, 0.4);
+}
+
+/* pre/code：覆盖 highlight.js 默认背景，融入卡片 */
+.cb-md-code-wrap pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: #fafafa !important;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.cb-md-code-wrap code {
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  color: inherit;
+}
+
+/* 滚动条美化 */
+.cb-md-code-wrap pre::-webkit-scrollbar {
+  height: 6px;
+}
+
+.cb-md-code-wrap pre::-webkit-scrollbar-thumb {
+  background: rgba(255, 179, 204, 0.4);
+  border-radius: 3px;
+}
+
+.cb-md-code-wrap pre::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 143, 171, 0.6);
+}
+
+/* ============ 后续推荐问题 ============ */
+.cb-follow-ups {
+  margin: 12px 0 8px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, rgba(255, 245, 248, 0.6) 0%, rgba(240, 255, 249, 0.5) 100%);
+  border-radius: 12px;
+  border: 1px solid var(--cb-border-soft);
+}
+
+.cb-follow-ups-label {
+  font-size: 12px;
+  color: var(--cb-text-tertiary);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+
+.cb-follow-ups-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* 推荐问题 Tag：胶囊形，hover 渐变 */
+.cb-follow-up-tag {
+  cursor: pointer !important;
+  padding: 4px 12px !important;
+  border-radius: 16px !important;
+  font-size: 13px !important;
+  background: rgba(255, 255, 255, 0.8) !important;
+  border: 1px solid var(--cb-border-soft) !important;
+  color: var(--cb-text-primary) !important;
+  transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+  margin: 0 !important;
+  line-height: 1.5;
+}
+
+.cb-follow-up-tag:hover {
+  background: linear-gradient(135deg, var(--cb-pink-light) 0%, var(--cb-cyan-light) 100%) !important;
+  border-color: var(--cb-pink) !important;
+  color: var(--cb-pink-deep) !important;
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 4px 12px rgba(255, 179, 204, 0.25);
+}
+
+.cb-follow-up-tag:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* ============ 响应式：移动端 Markdown 适配 ============ */
+@media (max-width: 768px) {
+  .cb-md {
+    font-size: 13px;
   }
 
+  .cb-md h1 { font-size: 18px; }
+  .cb-md h2 { font-size: 16px; }
+  .cb-md h3 { font-size: 15px; }
+
+  /* 移动端代码块横向滚动，避免撑破气泡 */
+  .cb-md-code-wrap pre {
+    font-size: 12px;
+    padding: 10px 12px;
+  }
+
+  /* 移动端表格横向滚动 */
+  .cb-md table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cb-follow-up-tag {
+    font-size: 12px !important;
+    padding: 4px 10px !important;
+  }
+}
+
+/* 抽屉遮罩淡入动画（全局） */
+@keyframes cb-mask-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ============ 移动端布局（继续 @media 768px 块） ============ */
+@media (max-width: 768px) {
   /* 移动端顶部工具条：含会话切换按钮 + 标题 */
   .cb-mobile-bar {
     display: flex;

@@ -446,3 +446,81 @@ class RAGEngine:
             {"role": "system", "content": f"参考资料：\n{context}"},
             {"role": "user", "content": user_content},
         ]
+
+    # 后续问题预测专用 system prompt：独立于主回答 prompt，
+    # 因为主回答 prompt 限制了"仅基于参考资料"，而后续问题需要基于完整对话上下文发散
+    _FOLLOW_UP_PROMPT = (
+        "基于用户的提问和客服的回答，预测用户可能想继续了解的后续问题。\n"
+        "要求：\n"
+        "1. 生成 {count} 个与当前话题密切相关的后续问题\n"
+        "2. 问题应帮助用户深入理解或解决实际操作问题\n"
+        "3. 问题要简洁明了、口语化，符合用户提问习惯\n"
+        "4. 只返回 JSON 数组格式，不要任何额外文本："
+        '["问题1", "问题2", "问题3"]'
+    )
+
+    async def generate_follow_ups(
+        self,
+        query: str,
+        answer: str,
+        history: list[dict],
+        count: int = 3,
+    ) -> list[str]:
+        """生成后续推荐问题
+
+        非流式轻量 LLM 调用，在主回答完成后执行。
+        失败时返回空列表，不影响主回答流程（调用方应静默降级）。
+
+        为什么用独立调用而非在主 prompt 中追加：
+        - 不污染主回答流（用户看到的回答不含推荐问题）
+        - 可以传入完整 answer 供 LLM 参考，生成更相关的问题
+        - 失败可静默降级，不影响已生成的主回答
+        """
+        # answer 截断：避免过长的回答导致 LLM 输入过大、增加延迟和成本
+        truncated_answer = answer[:800] if len(answer) > 800 else answer
+        # history 仅取最近 2 轮（4 条），后续问题主要依赖当前问答上下文
+        recent_history = history[-4:] if len(history) > 4 else history
+        history_text = "\n".join(
+            f"{'用户' if m['role'] == 'user' else '客服'}: {m['content'][:200]}"
+            for m in recent_history
+        ) or "（无历史对话）"
+
+        messages = [
+            {
+                "role": "system",
+                "content": self._FOLLOW_UP_PROMPT.format(count=count),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"用户提问：{query}\n\n"
+                    f"客服回答：{truncated_answer}\n\n"
+                    f"对话历史：\n{history_text}"
+                ),
+            },
+        ]
+        payload = {
+            "model": self._llm_config.model,
+            "messages": messages,
+            "temperature": 0.5,  # 略高于主回答的 0.3，鼓励问题多样性
+            "max_tokens": 300,  # 3-5 个问题足够，避免浪费
+            "stream": False,
+        }
+
+        try:
+            resp = await self._http.post("/chat/completions", json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"].strip()
+            # LLM 可能返回带 markdown 代码块的 JSON，提取首个 JSON 数组
+            json_match = re.search(r'\[.*?\]', content, re.DOTALL)
+            if not json_match:
+                logger.warning(f"follow_ups 响应非 JSON 数组格式: {content[:100]}")
+                return []
+            questions = json.loads(json_match.group())
+            # 过滤空字符串和过长问题（>100 字的问题不适合作为快捷推荐）
+            questions = [q.strip() for q in questions if q and len(q.strip()) <= 100]
+            return questions[:count]
+        except Exception as e:
+            logger.warning(f"generate_follow_ups 失败（静默降级）: {e}")
+            return []

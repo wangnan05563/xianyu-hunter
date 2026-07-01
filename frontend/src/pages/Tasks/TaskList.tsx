@@ -499,7 +499,6 @@ export default function TaskList() {
   }
 
   // 一键启动所有任务（迁移自原仪表盘 TaskContentMenu.handleStartAll）
-  // 为什么放在「闲鱼内容关联」面板：保持原 TaskContentMenu 中「任务下拉 + 全部启动」的语义分组
   // 为什么用 batchControl 而非逐个 control：减少网络请求，与现有批量操作一致
   const handleStartAll = useCallback(() => {
     const toStart = tasks.filter((t) => t.status !== 'running')
@@ -742,6 +741,19 @@ export default function TaskList() {
       </div>
 
       <Space style={{ marginBottom: 16 }}>
+        {/* 全部启动：放在状态筛选前作为视觉焦点，使用品牌色渐变提升可发现性 */}
+        <Tooltip title="一键启动所有非运行中的任务">
+          <Button
+            type="primary"
+            className="xh-btn-brand"
+            icon={<ThunderboltOutlined />}
+            loading={startAllLoading}
+            onClick={handleStartAll}
+            disabled={tasks.length === 0}
+          >
+            全部启动
+          </Button>
+        </Tooltip>
         <span>状态筛选：</span>
         <Select
           value={statusFilter || undefined}
@@ -942,18 +954,6 @@ export default function TaskList() {
                   >
                     手动添加
                   </Button>
-                  {/* 全部启动：迁移自原仪表盘 TaskContentMenu，与「任务下拉」保持原语义分组 */}
-                  <Tooltip title="一键启动所有非运行中的任务">
-                    <Button
-                      type="primary"
-                      icon={<ThunderboltOutlined />}
-                      loading={startAllLoading}
-                      onClick={handleStartAll}
-                      disabled={tasks.length === 0}
-                    >
-                      全部启动
-                    </Button>
-                  </Tooltip>
                 </div>
 
                 {/* Tab 切换：商品 / 卖家 */}

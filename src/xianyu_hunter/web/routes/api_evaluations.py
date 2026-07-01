@@ -1732,6 +1732,17 @@ _OFFICIAL_COLLECT_IDENTITY_COOKIES = ("cookie2", "sgcookie", "unb")
 
 
 async def _ensure_official_collect_cookies(container: Container) -> None:
+    from xianyu_hunter.modules.collection_service import (
+        CollectionError,
+        ItemCollectionService,
+    )
+
+    try:
+        await ItemCollectionService(container).ensure_official_cookies()
+    except CollectionError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+    return
+
     """检查浏览器是否持有有效的闲鱼登录 Cookie，无效时尝试从 JSON 补注入
 
     为什么需要 JSON 补注入：服务重启后浏览器实例从 SQLite 加载 cookies，
@@ -1900,6 +1911,63 @@ async def _collect_official_and_evaluate(
     item_id: str,
     task_id: str | None = None,
 ) -> dict[str, Any]:
+    from xianyu_hunter.modules.collection_service import (
+        CollectionError,
+        CollectionMode,
+        ItemCollectionService,
+    )
+
+    try:
+        result = await ItemCollectionService(container).collect(
+            item_id,
+            task_id=task_id,
+            mode=CollectionMode.OFFICIAL_FULL,
+            source="official",
+        )
+    except CollectionError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    detail = result.detail
+    seller = result.seller
+    eval_result = result.evaluation
+    if detail is None or eval_result is None:
+        raise HTTPException(status_code=502, detail=f"Official collection {item_id} returned incomplete result")
+
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "collected": True,
+        "item": {
+            "title": detail.title,
+            "price": detail.price,
+            "description": detail.description or "",
+            "image_urls": detail.image_urls or [],
+            "thumb_url": detail.thumb_url or "",
+            "region": detail.region or "",
+            "seller_id": detail.seller_id or "",
+            "want_cnt": detail.want_cnt,
+            "view_cnt": detail.view_cnt,
+        },
+        "seller": {
+            "id": seller.id if seller else "",
+            "nick": seller.nick if seller else "",
+            "credit_score": seller.credit_score if seller else None,
+            "register_days": seller.register_days if seller else 0,
+            "on_sale_count": seller.on_sale_count if seller else 0,
+            "sold_count": seller.sold_count if seller else 0,
+        },
+        "reviews": result.reviews,
+        "evaluation": {
+            "score": eval_result.score,
+            "risk_level": eval_result.risk_level.value,
+            "dimension_scores": eval_result.dimension_scores,
+            "reject_reasons": eval_result.reject_reasons,
+            "is_passed": eval_result.is_passed,
+            "data_quality": eval_result.data_quality,
+            "data_source": "official",
+        },
+    }
+
     """完整官方采集：执行 detail + seller + reviews + 重新评估 + events 写入的端到端流程
 
     语义：
@@ -2232,8 +2300,6 @@ async def batch_collect_official(
             detail="浏览器实例未初始化，请重启服务",
         )
 
-    await _ensure_official_collect_cookies(container)
-
     results: list[dict] = []
     succeeded = 0
     failed = 0
@@ -2314,8 +2380,6 @@ async def collect_official(
             status_code=503,
             detail="浏览器实例未初始化，请重启服务",
         )
-
-    await _ensure_official_collect_cookies(container)
 
     try:
         async with container.browser_lock:

@@ -41,6 +41,32 @@ export interface SavedCookieInfo {
   method?: string
 }
 
+// Cookie 健康检查报告（轻量级，供状态栏悬浮面板使用）
+export interface CookieHealthReport {
+  ok: boolean
+  is_valid: boolean
+  reason: string
+  cookie_count: number
+  key_cookies_found: string[]
+  expiry_ts: number | null
+  expiry_human: string
+  integrity: 'complete' | 'incomplete'
+  integrity_reason: string
+  layers: {
+    identity: boolean
+    session: boolean
+    tracking: boolean
+  }
+  security_flags: {
+    has_secure: boolean
+    has_httponly: boolean
+    is_session_cookie: boolean
+  }
+  exported_at: number
+  method: string
+  elapsed_ms: number
+}
+
 // 认证 API：管理当前登录态与闲鱼会话校验
 export const authApi = {
   getMe: () => client.get<AuthMe>('/api/auth/me').then((r) => r.data),
@@ -135,4 +161,17 @@ export const authApi = {
     client
       .post<{ ok: boolean; message?: string; error?: string }>('/api/auth/import-from-browser/open')
       .then((r) => r.data),
+
+  // ===== Cookie 健康检查 & 退出登录 =====
+
+  // 轻量级 Cookie 健康检查（纯文件读取，< 300ms）
+  // 供状态栏用户头像悬浮面板调用
+  checkCookieHealth: () =>
+    client.get<CookieHealthReport>('/api/auth/cookie/health').then((r) => r.data),
+
+  // 退出登录：清除 cookies.json / SQLite Cookie / xh_token 认证 Cookie
+  logout: () =>
+    client.post<{ ok: boolean; message?: string; cleared?: Record<string, unknown> }>(
+      '/api/auth/logout',
+    ).then((r) => r.data),
 }

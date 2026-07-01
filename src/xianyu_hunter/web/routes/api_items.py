@@ -125,6 +125,58 @@ async def refresh_item(
     """
     from loguru import logger
 
+    from xianyu_hunter.modules.collection_service import (
+        CollectionError,
+        CollectionMode,
+        ItemCollectionService,
+    )
+
+    if container.collector is None:
+        raise HTTPException(
+            status_code=503,
+            detail="闇€瑕佹祻瑙堝櫒瀹炰緥锛岃浠?XH_WITH_SCHEDULER=1 妯″紡鍚姩",
+        )
+
+    try:
+        result = await asyncio.wait_for(
+            ItemCollectionService(container).collect(
+                item_id,
+                task_id=task_id,
+                mode=CollectionMode.DETAIL_ONLY,
+                source="live",
+            ),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"[RefreshItem] collection timeout item={item_id}")
+        raise HTTPException(
+            status_code=504,
+            detail="閲囬泦瓒呮椂锛氭祻瑙堝櫒瀹炰緥寮傚父鎴栭棽楸煎弽鐖嫤鎴紝璇风◢鍚庨噸璇曟垨閲嶅惎鏈嶅姟",
+        )
+    except CollectionError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    detail = result.detail
+    if detail is None:
+        raise HTTPException(status_code=502, detail="閲囬泦鍟嗗搧璇︽儏澶辫触锛氭湭杩斿洖璇︽儏")
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "is_sold": detail.is_sold,
+        "title": detail.title,
+        "price": detail.price,
+        "brand": detail.brand,
+        "seller_id": detail.seller_id or "",
+        "region": detail.region or "",
+        "want_cnt": detail.want_cnt,
+        "view_cnt": detail.view_cnt,
+        "thumb_url": detail.thumb_url or "",
+        "image_urls": detail.image_urls or [],
+        "publish_time": detail.publish_time.isoformat() if detail.publish_time else None,
+        "seller_nick": detail.detail_seller_nick or "",
+        "seller_credit": detail.detail_credit_score,
+    }
+
     # 校验 collector 是否可用（Web 进程 with_browser=False 时为 None）
     if container.collector is None:
         raise HTTPException(

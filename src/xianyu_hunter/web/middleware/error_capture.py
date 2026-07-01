@@ -104,6 +104,7 @@ def _build_ai_context_md(
             "## 请求上下文",
             f"- **方法**: {request_info.get('method', 'N/A')}",
             f"- **路径**: {request_info.get('path', 'N/A')}",
+            f"- **流水号**: `{request_info.get('request_id', 'N/A')}`",
             f"- **客户端 IP**: {request_info.get('client_ip', 'N/A')}",
             f"- **User-Agent**: {request_info.get('user_agent', 'N/A')}",
         ]
@@ -150,10 +151,14 @@ def _save_error_log(
     request_info: dict | None,
     server_env: dict,
     timestamp: datetime,
+    request_id: str | None = None,
 ) -> int | None:
     """构建完整错误日志记录并写入数据库
 
     返回 error_log id，写入失败时返回 None（不阻断主流程）
+
+    request_id 由调用方显式传入（从 request.state 或后台 context 读取），
+    未传入时 save_error_log 会自动从 ContextVar 读取作为兜底。
     """
     try:
         from xianyu_hunter.container import build_default_container
@@ -165,6 +170,9 @@ def _save_error_log(
             container = build_default_container(with_browser=False)
 
         ts_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        # 将 request_id 注入 request_info，使 AI 诊断上下文报告中可见
+        if request_id and request_info is not None:
+            request_info["request_id"] = request_id
         ai_json = _build_ai_context_json(
             error_type, error_message, stack_trace or "", request_info, server_env
         )
@@ -188,6 +196,11 @@ def _save_error_log(
             "ai_context_md": ai_md,
             "status": "new",
         }
+        # 显式注入 request_id：覆盖 ContextVar 兜底值
+        # 为什么显式传入：异常处理可能在 ContextVar 已被清理后触发（如中间件 finally 后），
+        # 显式传参确保 request_id 不丢失
+        if request_id:
+            error_log["request_id"] = request_id
         return container.repo.save_error_log(error_log)
     except Exception as e:
         # 错误日志写入本身失败时，仅记录到 loguru，不抛出
@@ -201,6 +214,13 @@ async def capture_request_error(request: Any, exc: Exception) -> int | None:
     供 exception_handler.py 的 unhandled_exception_handler 调用
     """
     timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # 从 request.state 读取流水号（由 RequestIdMiddleware 注入）
+    # 兜底从 ContextVar 读取，确保异常链路与请求日志关联
+    request_id = getattr(request.state, "request_id", None)
+    if not request_id:
+        from xianyu_hunter.infra.request_context import get_request_id
+        request_id = get_request_id()
 
     # 提取请求上下文
     request_info: dict[str, Any] = {
@@ -229,17 +249,27 @@ async def capture_request_error(request: Any, exc: Exception) -> int | None:
         request_info=request_info,
         server_env=server_env,
         timestamp=timestamp,
+        request_id=request_id,
     )
 
 
 def capture_background_error(exc: Exception, context: dict | None = None) -> int | None:
     """捕获后台任务异常（worker/scheduler 等）
 
-    context 可选：传入任务相关的额外上下文信息
+    context 可选：传入任务相关的额外上下文信息，可包含 request_id
+    用于关联 HTTP 请求触发的后台任务链路。
     """
     timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
     server_env = _collect_server_env()
     stack_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+    # 优先从 context 读取 request_id，兜底从 ContextVar 读取
+    request_id = None
+    if context:
+        request_id = context.get("request_id")
+    if not request_id:
+        from xianyu_hunter.infra.request_context import get_request_id
+        request_id = get_request_id()
 
     request_info = None
     if context:
@@ -258,4 +288,5 @@ def capture_background_error(exc: Exception, context: dict | None = None) -> int
         request_info=request_info,
         server_env=server_env,
         timestamp=timestamp,
+        request_id=request_id,
     )

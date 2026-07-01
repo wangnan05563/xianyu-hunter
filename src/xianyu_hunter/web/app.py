@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from xianyu_hunter.web.middleware.auth import setup_auth_middleware
 from xianyu_hunter.web.middleware.exception_handler import register_exception_handlers
+from xianyu_hunter.web.middleware.request_id import setup_request_id_middleware
 from xianyu_hunter.web.startup import setup_startup_hooks
 from xianyu_hunter.web.routes import (
     api_about,  # 关于菜单：版本信息 + 检查更新
@@ -70,6 +71,10 @@ def create_app() -> FastAPI:
 
     # Token 认证中间件（C-01：所有 API 端点鉴权）
     setup_auth_middleware(app)
+
+    # 全局流水号中间件：必须在认证之后注册（LIFO 后注册的先执行）
+    # 执行顺序：RequestIdMiddleware → BearerAuthMiddleware → 路由
+    setup_request_id_middleware(app)
 
     # 全局异常处理器（兜底未捕获异常 + 统一 422/HTTPException 响应格式）
     register_exception_handlers(app)

@@ -581,3 +581,26 @@ body {
   color: var(--xh-text-tertiary);
   line-height: 1.2;
 }
+
+/* ============ 品牌色按钮 ============
+   复用 brand-logo 的渐变语言，让"全部启动"等关键 CTA 按钮成为视觉焦点。
+   覆盖 antd primary 蓝色，与 .brand-logo 形成统一的品牌色识别。 */
+.xh-btn-brand.ant-btn-primary {
+  background: linear-gradient(135deg, var(--xh-brand-gradient-from) 0%, var(--xh-brand-gradient-to) 100%);
+  border-color: transparent;
+  box-shadow: var(--xh-brand-shadow);
+  font-weight: 600;
+}
+
+/* hover 时仅提亮与加深阴影，保持品牌色一致，避免色相跳变 */
+.xh-btn-brand.ant-btn-primary:not(:disabled):hover {
+  background: linear-gradient(135deg, var(--xh-brand-gradient-from) 0%, var(--xh-brand-gradient-to) 100%);
+  border-color: transparent;
+  filter: brightness(1.08);
+  box-shadow: 0 4px 12px rgba(255, 98, 0, 0.35);
+}
+
+/* 点击时微下沉，提供反馈但不改变色相 */
+.xh-btn-brand.ant-btn-primary:not(:disabled):active {
+  filter: brightness(0.96);
+}

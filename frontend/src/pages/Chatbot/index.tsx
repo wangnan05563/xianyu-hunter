@@ -196,6 +196,11 @@ export default function ChatbotPage() {
   // H-3：转人工标记，onComplete 据此给 assistantMsg 打 escalated 标记
   const escalatedRef = useRef(false)
   const escalateReasonRef = useRef('')
+  // 后续推荐问题 ref：done 事件携带，onComplete 读取后存入消息
+  const streamingFollowUpsRef = useRef<string[]>([])
+  // handleSend ref：后续问题点击事件监听需要调用最新版 handleSend，
+  // 但 handleSend 每次渲染重建，空依赖 useEffect 会捕获旧版本
+  const handleSendRef = useRef<(text?: string) => Promise<void>>(() => Promise.resolve())
   // M1 引导卡 FAQ 点击后暂存待发送内容（创建会话后 setInputValue）
   const pendingFaqRef = useRef<string | null>(null)
   // M3：用户消息已送达标记（首 token 到达时切到 sent，避免重复 setState）
@@ -494,13 +499,20 @@ export default function ChatbotPage() {
             escalateReasonRef.current = reason || ''
           }
           break
+        case 'done':
+          // DONE 事件携带 follow_ups：存入 ref 供 onComplete 读取
+          // done 是终止事件，useSSEChat 在 onEvent 后立即调 onComplete
+          streamingFollowUpsRef.current = (event.data.follow_ups as string[]) || []
+          break
       }
     },
     [],
   )
 
-  const handleSend = async () => {
-    if (!inputValue.trim() || !currentSession || isStreaming) return
+  const handleSend = async (overrideText?: string) => {
+    // overrideText 用于后续问题点击发送：绕过 inputValue 直接用指定文本
+    const text = overrideText ?? inputValue
+    if (!text.trim() || !currentSession || isStreaming) return
     // escalated 是终态：后端 should_escalate 会直接返回转人工，绕过 FAQ/RAG
     // 阻止发送并提示用户创建新会话，避免无意义的转人工回复
     if (currentSession.status === 'escalated') {
@@ -513,14 +525,14 @@ export default function ChatbotPage() {
       id: `temp-${Date.now()}`,
       session_id: currentSession.id,
       role: 'user',
-      content: inputValue,
+      content: text,
       created_at: new Date().toISOString(),
       status: 'sending',  // M3：发送中
       images: pendingImages.length > 0 ? [...pendingImages] : undefined,
-      retry_payload: { text: inputValue, images: [...pendingImages] },
+      retry_payload: { text: text, images: [...pendingImages] },
     }
     setMessages((prev) => [...prev, userMsg])
-    const sentText = inputValue
+    const sentText = text
     const sentImages = pendingImages
     const tempId = userMsg.id
     setInputValue('')
@@ -531,6 +543,7 @@ export default function ChatbotPage() {
     streamingToolCallsRef.current = []
     escalatedRef.current = false
     escalateReasonRef.current = ''
+    streamingFollowUpsRef.current = []
     userMsgSentRef.current = false
     setStreamingContent('')
     setStreamingSources([])
@@ -568,6 +581,7 @@ export default function ChatbotPage() {
         const toolCalls = streamingToolCallsRef.current
         const escalated = escalatedRef.current
         const escalateReason = escalateReasonRef.current
+        const followUps = streamingFollowUpsRef.current
         // escalate 事件无 content 时也要固化（转人工话术可能为空）
         if (content || (sources && sources.length) || (toolCalls && toolCalls.length) || escalated) {
           const assistantMsg: Message = {
@@ -579,6 +593,7 @@ export default function ChatbotPage() {
             tool_calls: toolCalls,
             escalated: escalated || undefined,
             escalate_reason: escalateReason || undefined,
+            follow_ups: followUps.length > 0 ? followUps : undefined,
             created_at: new Date().toISOString(),
           }
           setMessages((prev) => [...prev, assistantMsg])
@@ -589,6 +604,7 @@ export default function ChatbotPage() {
         streamingToolCallsRef.current = []
         escalatedRef.current = false
         escalateReasonRef.current = ''
+        streamingFollowUpsRef.current = []
         setStreamingContent('')
         setStreamingSources([])
         setStreamingToolCalls([])
@@ -597,6 +613,21 @@ export default function ChatbotPage() {
       },
     })
   }
+
+  // handleSend 每次渲染重建，follow-up-click 事件监听器（空依赖 useEffect）需通过 ref 调用最新版本
+  handleSendRef.current = handleSend
+
+  // 后续问题点击事件监听：点击推荐问题 Tag 后自动发送，绕过 inputValue 状态
+  // 为什么用 ref + 空依赖：事件监听器只注册一次，避免每次渲染都 add/removeEventListener
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const question = (e as CustomEvent<string>).detail
+      if (!question || typeof question !== 'string') return
+      handleSendRef.current(question)
+    }
+    window.addEventListener('chatbot:follow-up-click', handler)
+    return () => window.removeEventListener('chatbot:follow-up-click', handler)
+  }, [])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Enter 发送，Shift+Enter 换行
@@ -925,7 +956,7 @@ export default function ChatbotPage() {
                 ) : (
                   <Button
                     type="primary"
-                    onClick={handleSend}
+                    onClick={() => handleSend()}
                     disabled={!inputValue.trim()}
                     className="cb-send-btn"
                   >

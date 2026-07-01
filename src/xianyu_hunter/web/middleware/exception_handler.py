@@ -44,8 +44,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     完整异常信息写入日志便于事后排查。
     同时捕获到 error_logs 表，供错误日志页面展示和 AI 诊断。
     """
+    # 读取流水号（RequestIdMiddleware 注入到 request.state，loguru 自动从 ContextVar 读取）
+    request_id = getattr(request.state, "request_id", "-")
     logger.exception(
-        "未处理异常 path={path} method={method} headers={headers} | {exc}",
+        "未处理异常 request_id={rid} path={path} method={method} headers={headers} | {exc}",
+        rid=request_id,
         path=request.url.path,
         method=request.method,
         headers=_sanitize_headers(request.headers),
@@ -56,10 +59,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         from xianyu_hunter.web.middleware.error_capture import capture_request_error
         await capture_request_error(request, exc)
     except Exception:
-        logger.warning("error_logs 捕获失败，跳过")
+        logger.warning("error_logs 捕获失败，跳过 rid={rid}", rid=request_id)
+    # 响应头回传流水号，便于前端关联排障
     return JSONResponse(
         status_code=500,
-        content={"detail": "内部服务器错误", "code": "internal_error"},
+        content={"detail": "内部服务器错误", "code": "internal_error", "request_id": request_id},
+        headers={"X-Request-Id": request_id} if request_id != "-" else None,
     )
 
 

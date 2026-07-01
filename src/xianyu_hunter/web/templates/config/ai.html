@@ -1,4 +1,8 @@
-<!-- AI 服务配置：全局开关 / API Key / Base URL / Model / Usage Dashboard -->
+<!--
+  AI 服务配置页：全局开关 / 选项卡（LLM + Embedding）/ 用量仪表盘 / 预算控制
+  - LLM 与 Embedding 共用 /api/ai/config 端点（一份配置），但通过独立选项卡隔离表单
+  - 用量仪表盘与预算控制为公共区域，不随选项卡切换（用户随时可见消费状态）
+-->
 <div x-data="cfgAI()">
   <!-- ============== 全局开关（最醒目位置） ============== -->
   <div class="card mb-16" style="background: var(--bg-2); border: 2px solid var(--border); padding: 20px;">
@@ -19,72 +23,165 @@
     </div>
   </div>
 
-  <!-- 关闭 AI 时的遮罩提示 -->
-  <div x-show="!aiConfig.ai_enabled" x-cloak
-       style="position: relative; opacity: 0.5; pointer-events: none;">
-    <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 10;
+  <!-- ============== 配置区：内嵌选项卡（LLM + Embedding） ============== -->
+  <!--
+    遮罩结构：相对定位包裹整块配置，关闭 AI 时显示半透明覆盖层
+    两个选项卡共享同一份 aiConfig（后端 /api/ai/config 一次返回全部字段）
+    切换选项卡只切换可见表单，不触发请求，保证流畅无卡顿
+  -->
+  <div style="position: relative;">
+    <!-- 关闭 AI 时的遮罩提示（覆盖整块配置区，含两个选项卡） -->
+    <div x-show="!aiConfig.ai_enabled" x-cloak
+         style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 10;
                 display: flex; align-items: center; justify-content: center;
                 background: rgba(0,0,0,0.1); border-radius: 8px; pointer-events: auto;">
       <p style="font-size: 18px; font-weight: 600; color: var(--text-2);">AI 功能已关闭，以下配置不可用</p>
     </div>
+    <div :style="!aiConfig.ai_enabled ? 'opacity: 0.5; pointer-events: none;' : ''">
 
-  <h3>AI 服务配置</h3>
-  <p class="muted">配置 AI 评估和自然语言解析所需的 LLM 服务。支持 OpenAI / DeepSeek / 智谱等 OpenAI 兼容接口。</p>
-
-  <div class="card mb-16" style="background: var(--bg-2);">
-    <div class="field">
-      <label>API Base URL</label>
-      <input type="text" x-model="aiConfig.base_url" placeholder="https://api.openai.com/v1">
-      <span class="help">OpenAI 兼容端点。DeepSeek: https://api.deepseek.com/v1 &nbsp; 智谱: https://open.bigmodel.cn/api/paas/v4</span>
-    </div>
-
-    <div class="field">
-      <label>API Key</label>
-      <div style="display: flex; gap: 8px;">
-        <input :type="showKey ? 'text' : 'password'" x-model="aiConfig.api_key"
-               placeholder="sk-..." style="flex: 1;">
-        <button class="btn btn-ghost btn-sm" @click="showKey = !showKey"
-                x-text="showKey ? '隐藏' : '显示'"></button>
+      <!-- 子选项卡导航 -->
+      <div class="ai-subtabs" role="tablist">
+        <button type="button" class="ai-subtab" role="tab"
+                :class="subtab === 'llm' ? 'active' : ''"
+                @click="subtab = 'llm'"
+                :aria-selected="subtab === 'llm'">
+          <span class="ai-subtab-ico" aria-hidden="true">🤖</span>
+          <span>AI 服务配置</span>
+        </button>
+        <button type="button" class="ai-subtab" role="tab"
+                :class="subtab === 'embedding' ? 'active' : ''"
+                @click="subtab = 'embedding'"
+                :aria-selected="subtab === 'embedding'">
+          <span class="ai-subtab-ico" aria-hidden="true">📐</span>
+          <span>Embedding 向量服务</span>
+        </button>
       </div>
-      <span class="help">密钥通过系统密钥库（keyring）安全存储，不写入配置文件</span>
-    </div>
 
-    <div class="field-row">
-      <div class="field">
-        <label>文本解析模型</label>
-        <input type="text" x-model="aiConfig.model" placeholder="gpt-4o-mini">
-        <span class="help">自然语言解析 + 任务字段提取</span>
+      <!-- ===== Tab 1: AI 服务配置（LLM） ===== -->
+      <div x-show="subtab === 'llm'" role="tabpanel" x-transition.opacity>
+        <h3>AI 服务配置</h3>
+        <p class="muted">配置 AI 评估和自然语言解析所需的 LLM 服务。支持 OpenAI / DeepSeek / 智谱等 OpenAI 兼容接口。</p>
+
+        <div class="card mb-16" style="background: var(--bg-2);">
+          <div class="field">
+            <label>API Base URL</label>
+            <input type="text" x-model="aiConfig.base_url" placeholder="https://api.openai.com/v1">
+            <span class="help">OpenAI 兼容端点。DeepSeek: https://api.deepseek.com/v1 &nbsp; 智谱: https://open.bigmodel.cn/api/paas/v4</span>
+          </div>
+
+          <div class="field">
+            <label>API Key</label>
+            <div style="display: flex; gap: 8px;">
+              <input :type="showKey ? 'text' : 'password'" x-model="aiConfig.api_key"
+                     placeholder="sk-..." style="flex: 1;">
+              <button class="btn btn-ghost btn-sm" @click="showKey = !showKey"
+                      x-text="showKey ? '隐藏' : '显示'"></button>
+            </div>
+            <span class="help">密钥通过系统密钥库（keyring）安全存储，不写入配置文件</span>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label>文本解析模型</label>
+              <input type="text" x-model="aiConfig.model" placeholder="gpt-4o-mini">
+              <span class="help">自然语言解析 + 任务字段提取</span>
+            </div>
+            <div class="field">
+              <label>Vision 模型</label>
+              <input type="text" x-model="aiConfig.vision_model" placeholder="gpt-4o">
+              <span class="help">图片成色评估 + 深度多模态分析</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 预设快捷切换 -->
+        <h3>快捷预设</h3>
+        <p class="muted">一键切换到常用 AI 服务商（仅修改 URL 和模型名称，需自行配置 API Key）。</p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+          <button class="btn btn-sm" @click="applyPreset('openai')">OpenAI</button>
+          <button class="btn btn-sm" @click="applyPreset('deepseek')">DeepSeek</button>
+          <button class="btn btn-sm" @click="applyPreset('zhipu')">智谱 GLM</button>
+          <button class="btn btn-sm" @click="applyPreset('moonshot')">Moonshot</button>
+        </div>
+
+        <!-- 连接测试 -->
+        <div class="mt-16" style="margin-bottom: 24px;">
+          <button class="btn" @click="testConnection()" :disabled="testing">
+            <span x-show="!testing">🔗 测试连接</span>
+            <span x-show="testing" x-cloak>测试中…</span>
+          </button>
+          <span class="muted" style="margin-left: 8px;" x-show="testResult" x-text="testResult"></span>
+        </div>
       </div>
-      <div class="field">
-        <label>Vision 模型</label>
-        <input type="text" x-model="aiConfig.vision_model" placeholder="gpt-4o">
-        <span class="help">图片成色评估 + 深度多模态分析</span>
+
+      <!-- ===== Tab 2: Embedding 向量服务配置 ===== -->
+      <!--
+        与 LLM 独立：DeepSeek 等厂商不支持 /embeddings，需要单独配置
+        留空策略：base_url 空 → 本地 sentence-transformers；api_key 空 → 复用 LLM Key
+      -->
+      <div x-show="subtab === 'embedding'" x-cloak role="tabpanel" x-transition.opacity>
+        <h3>Embedding 向量服务</h3>
+        <p class="muted">配置知识库 RAG 检索所需的向量嵌入服务。留空时自动降级到本地模式（BAAI/bge-small-zh-v1.5）。</p>
+
+        <div class="card mb-16" style="background: var(--bg-2);">
+          <div class="field">
+            <label>Embedding API Base URL</label>
+            <input type="text" x-model="aiConfig.embedding_base_url"
+                   placeholder="留空使用本地 sentence-transformers / 或填 https://api.openai.com/v1">
+            <span class="help">留空 = 本地模式（无需 API Key）；远程填 OpenAI 兼容 /v1 端点</span>
+          </div>
+
+          <div class="field">
+            <label>Embedding API Key</label>
+            <div style="display: flex; gap: 8px;">
+              <input :type="showEmbKey ? 'text' : 'password'" x-model="aiConfig.embedding_api_key"
+                     placeholder="留空复用 LLM API Key" style="flex: 1;">
+              <button class="btn btn-ghost btn-sm" @click="showEmbKey = !showEmbKey"
+                      x-text="showEmbKey ? '隐藏' : '显示'"></button>
+            </div>
+            <span class="help">远程模式留空时复用上方 LLM 的 API Key；本地模式无需 Key</span>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label>Embedding 模型</label>
+              <input type="text" x-model="aiConfig.embedding_model"
+                     placeholder="text-embedding-3-small / BAAI/bge-small-zh-v1.5">
+              <span class="help">远程：text-embedding-3-small；本地：BAAI/bge-small-zh-v1.5</span>
+            </div>
+            <div class="field">
+              <label>向量维度</label>
+              <input type="number" x-model.number="aiConfig.embedding_dimensions"
+                     placeholder="0 = 由模型决定">
+              <span class="help">设为 0 让模型决定；Ollama 等本地模型不接受该参数</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Embedding 快捷预设 -->
+        <h3>快捷预设</h3>
+        <p class="muted">一键切换到常用 Embedding 服务商。本地模式无需 API Key，适合零成本起步。</p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
+          <button class="btn btn-sm" @click="applyEmbeddingPreset('local')">🏠 本地模式（推荐）</button>
+          <button class="btn btn-sm" @click="applyEmbeddingPreset('openai')">OpenAI</button>
+          <button class="btn btn-sm" @click="applyEmbeddingPreset('zhipu')">智谱</button>
+          <button class="btn btn-sm" @click="applyEmbeddingPreset('clear')">✕ 清除配置</button>
+        </div>
+
+        <!-- 连接测试（独立于 LLM 测试，embedding 端点可能完全不同） -->
+        <div class="mt-16" style="margin-bottom: 24px;">
+          <button class="btn" @click="testEmbedding()" :disabled="testingEmb">
+            <span x-show="!testingEmb">📐 测试连接</span>
+            <span x-show="testingEmb" x-cloak>测试中…（本地模式首次加载约 95MB 模型）</span>
+          </button>
+          <span class="muted" style="margin-left: 8px;" x-show="embTestResult" x-text="embTestResult"></span>
+        </div>
       </div>
+
     </div>
   </div>
 
-  <!-- 预设快捷切换 -->
-  <h3>快捷预设</h3>
-  <p class="muted">一键切换到常用 AI 服务商（仅修改 URL 和模型名称，需自行配置 API Key）。</p>
-  <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px;">
-    <button class="btn btn-sm" @click="applyPreset('openai')">OpenAI</button>
-    <button class="btn btn-sm" @click="applyPreset('deepseek')">DeepSeek</button>
-    <button class="btn btn-sm" @click="applyPreset('zhipu')">智谱 GLM</button>
-    <button class="btn btn-sm" @click="applyPreset('moonshot')">Moonshot</button>
-  </div>
-
-  <!-- 连接测试 -->
-  <div class="mt-16" style="margin-bottom: 24px;">
-    <button class="btn" @click="testConnection()" :disabled="testing">
-      <span x-show="!testing">🔗 测试连接</span>
-      <span x-show="testing" x-cloak>测试中…</span>
-    </button>
-    <span class="muted" style="margin-left: 8px;" x-show="testResult" x-text="testResult"></span>
-  </div>
-
-  </div><!-- end 遮罩 -->
-
-  <!-- ============== 用量仪表盘（始终可见） ============== -->
+  <!-- ============== 用量仪表盘（始终可见，不随选项卡切换） ============== -->
   <h3>用量仪表盘</h3>
   <p class="muted">今日 AI 调用统计与费用估算（基于模型公开定价）。</p>
 
@@ -182,14 +279,78 @@
   <button class="btn btn-sm" @click="saveBudget()">保存预算设置</button>
 </div>
 
+<!--
+  内嵌子选项卡样式（scoped 到 .ai-subtabs，不污染全局 .tabs）
+  视觉风格与父级 .tabs 协调：底部边框 + active 下划线
+  但用 button 元素实现，支持 Alpine.js 内嵌切换（无需路由跳转）
+-->
+<style>
+.ai-subtabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.ai-subtab {
+  background: transparent;
+  border: none;
+  padding: 12px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 2px solid transparent;
+  transition: color 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+  /* margin-bottom: -1px 让 active 下划线覆盖容器底边，形成"开口"效果 */
+  margin-bottom: -1px;
+  font-family: inherit;
+}
+.ai-subtab:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+.ai-subtab.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+  font-weight: 600;
+}
+.ai-subtab-ico {
+  font-size: 16px;
+  line-height: 1;
+}
+/* 移动端紧凑布局：缩小内边距，避免选项卡文字换行 */
+@media (max-width: 600px) {
+  .ai-subtab {
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+}
+</style>
+
 <script>
 function cfgAI() {
   return {
-    aiConfig: { ai_enabled: true, base_url: '', api_key: '', model: '', vision_model: '' },
+    // AI 配置（LLM + Embedding 共用一份配置对象，对应后端 /api/ai/config）
+    aiConfig: {
+      ai_enabled: true,
+      base_url: '', api_key: '', model: '', vision_model: '',
+      // Embedding 配置（独立于 LLM，DeepSeek 等厂商不支持 /embeddings 时需单独配置）
+      embedding_base_url: '', embedding_api_key: '',
+      embedding_model: '', embedding_dimensions: 0,
+    },
+    // 子选项卡状态：'llm' 或 'embedding'，默认显示 LLM（更常用）
+    subtab: 'llm',
     showKey: false,
+    showEmbKey: false,
     testing: false,
     testResult: '',
-    pendingToggle: null,  // 确认弹窗状态
+    // Embedding 测试状态（独立于 LLM 测试，避免状态串扰）
+    testingEmb: false,
+    embTestResult: '',
+    pendingToggle: null,
     usage: {
       today: { total_calls: 0, total_tokens: 0, total_cost_usd: 0, total_cost_cny: 0, by_endpoint: {}, by_model: {} },
       budget: { daily_token_limit: 500000, daily_cost_limit_usd: 5, rate_limit_per_min: 20, token_usage_pct: 0, cost_usage_pct: 0 },
@@ -198,7 +359,7 @@ function cfgAI() {
     budget: { daily_token_limit: 500000, daily_cost_limit_usd: 5, rate_limit_per_min: 20 },
 
     async init() {
-      // 并行加载配置和用量
+      // 并行加载配置和用量：两个请求互不依赖，Promise.all 减少总耗时
       const [configR, usageR] = await Promise.all([
         fetch('/api/ai/config', { credentials: 'include' }).catch(() => null),
         fetch('/api/ai/usage', { credentials: 'include' }).catch(() => null),
@@ -207,9 +368,15 @@ function cfgAI() {
         const d = await configR.json();
         this.aiConfig.ai_enabled = d.ai_enabled !== false;
         this.aiConfig.base_url = d.base_url || '';
+        // api_key 后端返回脱敏值（****xxxx），直接显示让用户知道是否已配置
         this.aiConfig.api_key = d.api_key || '';
         this.aiConfig.model = d.model || '';
         this.aiConfig.vision_model = d.vision_model || '';
+        // Embedding 字段：留空表示 fallback 到 LLM（向后兼容）
+        this.aiConfig.embedding_base_url = d.embedding_base_url || '';
+        this.aiConfig.embedding_api_key = d.embedding_api_key || '';
+        this.aiConfig.embedding_model = d.embedding_model || '';
+        this.aiConfig.embedding_dimensions = d.embedding_dimensions || 0;
       }
       if (usageR && usageR.ok) {
         const d = await usageR.json();
@@ -222,7 +389,7 @@ function cfgAI() {
 
     async toggleAI() {
       const newVal = !this.aiConfig.ai_enabled;
-      // 确认机制：关闭时二次确认
+      // 确认机制：关闭时二次确认（避免误操作导致所有 AI 功能降级）
       if (!newVal) {
         if (!confirm('确定要关闭 AI 功能吗？\n\n关闭后所有 AI 评估、解析、分析将降级到规则模式，不消耗任何 token。\n可随时重新开启。')) {
           return;
@@ -262,10 +429,31 @@ function cfgAI() {
       }
     },
 
+    // Embedding 预设：与 LLM 预设分离，因为 embedding 端点和模型完全不同
+    // local 预设留空 base_url，触发后端 LocalEmbeddingBackend 分支
+    applyEmbeddingPreset(provider) {
+      const presets = {
+        local: { embedding_base_url: '', embedding_model: 'BAAI/bge-small-zh-v1.5', embedding_dimensions: 512 },
+        openai: { embedding_base_url: 'https://api.openai.com/v1', embedding_model: 'text-embedding-3-small', embedding_dimensions: 1536 },
+        zhipu: { embedding_base_url: 'https://open.bigmodel.cn/api/paas/v4', embedding_model: 'embedding-3', embedding_dimensions: 2048 },
+        // clear：清空所有 embedding 字段，让系统完全 fallback 到 LLM 配置
+        clear: { embedding_base_url: '', embedding_model: '', embedding_dimensions: 0, embedding_api_key: '' },
+      };
+      const p = presets[provider];
+      if (p) {
+        this.aiConfig.embedding_base_url = p.embedding_base_url;
+        this.aiConfig.embedding_model = p.embedding_model;
+        this.aiConfig.embedding_dimensions = p.embedding_dimensions;
+        if ('embedding_api_key' in p) this.aiConfig.embedding_api_key = p.embedding_api_key;
+        xhToast('已切换到 ' + provider + ' 预设', 'ok');
+      }
+    },
+
     async testConnection() {
       this.testing = true;
       this.testResult = '';
       try {
+        // 先保存配置再测试：后端 test-connection 读取 settings，必须先持久化才能测到最新值
         const saveR = await fetch('/api/ai/config', {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           credentials: 'include', body: JSON.stringify(this.aiConfig),
@@ -278,7 +466,7 @@ function cfgAI() {
         const r = await fetch('/api/ai/test-connection', { method: 'POST', credentials: 'include' });
         const data = await r.json();
         this.testResult = (r.ok && data.ok) ? '✅ 连接成功 (' + (data.model || '') + ')' : '❌ ' + (data.detail || '连接失败');
-        // 测试连接后刷新用量数据
+        // 测试连接后刷新用量数据（test-connection 会记录一次调用用量）
         if (r.ok && data.ok) {
           const ur = await fetch('/api/ai/usage', { credentials: 'include' });
           if (ur.ok) this.usage = await ur.json();
@@ -290,6 +478,42 @@ function cfgAI() {
       }
     },
 
+    // Embedding 连接测试：独立端点 /api/ai/test-embedding
+    // 本地模式首次调用会下载 ~95MB 模型，超时设为 15s 可能不够，前端提示用户耐心等待
+    async testEmbedding() {
+      this.testingEmb = true;
+      this.embTestResult = '';
+      try {
+        // 先保存 embedding 配置（仅传 embedding_* 字段，LLM 部分保持不变）
+        const saveR = await fetch('/api/ai/config', {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            embedding_base_url: this.aiConfig.embedding_base_url,
+            embedding_api_key: this.aiConfig.embedding_api_key,
+            embedding_model: this.aiConfig.embedding_model,
+            embedding_dimensions: this.aiConfig.embedding_dimensions,
+          }),
+        });
+        if (!saveR.ok) {
+          const e = await saveR.json().catch(() => ({}));
+          this.embTestResult = '❌ 保存失败: ' + (e.detail || saveR.statusText);
+          return;
+        }
+        const r = await fetch('/api/ai/test-embedding', { method: 'POST', credentials: 'include' });
+        const data = await r.json();
+        if (r.ok && data.ok) {
+          this.embTestResult = '✅ 连接成功（模型: ' + (data.model || '') + ', 维度: ' + (data.dimensions || 0) + '）';
+        } else {
+          this.embTestResult = '❌ ' + (data.detail || '连接失败');
+        }
+      } catch (err) {
+        this.embTestResult = '❌ 网络错误: ' + err.message;
+      } finally {
+        this.testingEmb = false;
+      }
+    },
+
     async saveBudget() {
       const r = await fetch('/api/ai/budget', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -297,7 +521,7 @@ function cfgAI() {
       });
       if (r.ok) {
         xhToast('预算设置已保存', 'ok');
-        // 刷新用量数据
+        // 刷新用量数据（budget 字段在 usage 响应中一并返回）
         const ur = await fetch('/api/ai/usage', { credentials: 'include' });
         if (ur.ok) this.usage = await ur.json();
       } else {

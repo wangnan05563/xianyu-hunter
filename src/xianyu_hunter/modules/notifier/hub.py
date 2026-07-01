@@ -58,22 +58,33 @@ class NotifierHub:
         registry: NotifierRegistry | None = None,
         quiet_hours: "QuietHoursConfig | None" = None,
         repo=None,
+        warn_unconfigured: bool = True,
+        yaml_credentials: dict[str, dict[str, str]] | None = None,
     ):
         # channels 为 None 时不创建任何 Notifier（hub 仅作容器使用）
         self._registry = registry or NotifierRegistry.default()
+        # yaml 明文凭据：作为 keyring 的 fallback
+        # 为什么需要：用户在前端保存凭据时只写入 yaml，但 notifier __init__ 优先从
+        # keyring 读取；keyring 中没有时用 yaml 兜底，避免数据流断裂
+        self._yaml_credentials = yaml_credentials or {}
         self._notifiers: list = []
         for name in channels or []:
             try:
-                notifier = self._registry.create(name)
+                # 优先用 yaml_credentials 中的凭据调用 create，
+                # notifier __init__ 内部仍有 keyring fallback；显式参数优先级最高
+                creds = self._yaml_credentials.get(name, {})
+                notifier = self._registry.create(name, **creds)
             except KeyError as e:
                 logger.error(f"NotifierHub 初始化失败: {e}")
                 continue
             # 启动期过滤未配置凭证的渠道：避免每次事件都触发"未配置"ERROR
             # 仅在启动时记录一次 WARNING，运行时不再调用其 send
             if not getattr(notifier, "is_configured", True):
-                logger.warning(
-                    f"[{name}] 渠道凭证未配置，已跳过（请在 keyring 中配置后重启生效）"
-                )
+                message = f"[{name}] 渠道凭证未配置，已跳过（请在配置页面填写或 keyring 中配置后重启生效）"
+                if warn_unconfigured:
+                    logger.warning(message)
+                else:
+                    logger.info(message)
                 continue
             self._notifiers.append(notifier)
         # P3-F-10：免打扰配置 + 状态

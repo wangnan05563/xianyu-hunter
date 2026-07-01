@@ -105,10 +105,13 @@ def _mock_helpers():
     sync_item_display_from_detail：同步函数，patch 成 MagicMock 避免实际写库
     """
     with patch(
-        "xianyu_hunter.web.routes.api_evaluations._extract_reviews_from_page",
+        "xianyu_hunter.modules.collection_service.ItemCollectionService.ensure_official_cookies",
+        new=AsyncMock(),
+    ), patch(
+        "xianyu_hunter.modules.collection_service.ItemCollectionService.extract_reviews_from_page",
         new=AsyncMock(return_value=[]),
     ), patch(
-        "xianyu_hunter.web.routes.api_evaluations.sync_item_display_from_detail",
+        "xianyu_hunter.modules.collection_service.sync_item_display_from_detail",
         new=MagicMock(),
     ):
         yield

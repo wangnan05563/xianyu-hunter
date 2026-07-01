@@ -313,6 +313,8 @@ async def start_scheduler_in_background(container: Any) -> None:
             buyer=container.buyer,
             config=task_config,
             repo=container.repo,
+            # 注入 EventBus 以触发 EVAL_PASSED 等通知事件给 NotifierHub
+            event_bus=container.event_bus,
         )
         await container.scheduler.register(task, worker)
         workers.append(worker)

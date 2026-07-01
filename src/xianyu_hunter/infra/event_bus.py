@@ -68,6 +68,15 @@ class EventBus:
 
     async def _dispatch(self, event: Event) -> None:
         """分发事件到所有订阅者（异常隔离）"""
+        # 自动注入 request_id：调用方未显式指定时从当前 ContextVar 读取
+        # 为什么放在 _dispatch 而非 publish：publish 只是入队，实际分发发生在
+        # 异步任务恢复后，此时 ContextVar 才是当前请求的作用域
+        if not event.request_id:
+            from xianyu_hunter.infra.request_context import get_request_id
+            rid = get_request_id()
+            if rid:
+                event.request_id = rid
+
         handlers = self._subscribers.get(event.type, [])
         if not handlers:
             logger.debug(f"事件 {event.type.value} 无订阅者")

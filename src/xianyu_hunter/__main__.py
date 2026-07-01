@@ -103,6 +103,9 @@ async def _load_tasks_from_repo(container: Container) -> list[Task]:
                 interval_seconds=task.interval_seconds,
             ),
             repo=container.repo,
+            # 注入 EventBus 以触发 EVAL_PASSED 等通知事件
+            # 为什么需要：NotifierHub 订阅 EVAL_PASSED，worker 必须能通过 bus 投递事件
+            event_bus=container.event_bus,
         )
         await container.scheduler.register(task, worker)
         workers.append(worker)

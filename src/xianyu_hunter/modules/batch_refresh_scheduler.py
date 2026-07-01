@@ -38,6 +38,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from sqlalchemy import select
 
 from xianyu_hunter.infra.db_models import BatchRefreshProgressRow
+from xianyu_hunter.modules.collection_service import (
+    CollectionError,
+    CollectionMode,
+    ItemCollectionService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -666,6 +671,25 @@ class BatchRefreshScheduler:
     async def _refresh_one(
         self, item_id: str, existing_item: dict
     ) -> list[str] | None:
+        try:
+            result = await asyncio.wait_for(
+                ItemCollectionService(self._container).collect(
+                    item_id,
+                    task_id=str(existing_item.get("task_id") or ""),
+                    mode=CollectionMode.OFFICIAL_FULL,
+                    existing_item=existing_item,
+                    source="official",
+                ),
+                timeout=_DETAIL_TIMEOUT,
+            )
+        except CollectionError as exc:
+            if exc.status_code == 410:
+                return None
+            raise
+        if not result.ok:
+            return None
+        return result.changed_fields
+
         """采集单个商品详情并合并写库
 
         Returns:
