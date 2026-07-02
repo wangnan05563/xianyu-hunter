@@ -18,7 +18,6 @@ def store(tmp_path, monkeypatch):
     s = CookieStore()
     # 重置缓存
     s._cache = {}
-    s._cache_ts = 0.0
     return s
 
 

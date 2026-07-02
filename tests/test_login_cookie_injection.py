@@ -36,8 +36,8 @@ def _old_identity_cookies() -> list[dict]:
 
 
 def _write_cookie_json(cookies: list[dict]) -> None:
-    cs_module._COOKIE_JSON_FILE.parent.mkdir(parents=True, exist_ok=True)
-    cs_module._COOKIE_JSON_FILE.write_text(
+    cs_module._cookie_json_path("default").parent.mkdir(parents=True, exist_ok=True)
+    cs_module._cookie_json_path("default").write_text(
         json.dumps(
             {
                 "exported_at": time.time(),
@@ -54,8 +54,8 @@ def _write_cookie_json(cookies: list[dict]) -> None:
 
 
 def _write_cookie_json_without_cache_invalidation(cookies: list[dict]) -> None:
-    cs_module._COOKIE_JSON_FILE.parent.mkdir(parents=True, exist_ok=True)
-    cs_module._COOKIE_JSON_FILE.write_text(
+    cs_module._cookie_json_path("default").parent.mkdir(parents=True, exist_ok=True)
+    cs_module._cookie_json_path("default").write_text(
         json.dumps(
             {
                 "exported_at": time.time(),
