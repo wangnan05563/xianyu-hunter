@@ -37,15 +37,16 @@ import {
   MessageOutlined,
   BlockOutlined,
 } from '@ant-design/icons'
-import { Outlet, useLocation, useNavigate, Link } from 'react-router-dom'
+import { useLocation, useNavigate, Link } from 'react-router-dom'
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import type React from 'react'
 import type { MenuProps } from 'antd'
 import { authApi, statsApi } from '../../api'
 import type { TodayAlert, AuthMe } from '../../api/types'
 import { useTheme } from '../../contexts/ThemeContext'
-import { ErrorBoundary } from '../ErrorBoundary'
 import UserMenu from './UserMenu'
+import { SheetWorkspace } from '../SheetWorkspace'
+import { useSheetStore } from '../../stores/sheetStore'
 
 const { Header, Sider, Content } = Layout
 
@@ -236,7 +237,11 @@ export default function MainLayout() {
       setLoggedIn(data.logged_in === true)
       setUserInfo(data)
     }).catch(() => setLoggedIn(false))
-      .finally(() => setAuthChecked(true))
+      .finally(() => {
+        setAuthChecked(true)
+        // 认证完成后恢复上次会话的 sheet 栈
+        useSheetStore.getState().hydrate()
+      })
   }, [])
 
   // 全局快捷键监听：Ctrl+K 打开 Command Palette，g+X 导航
@@ -485,7 +490,8 @@ function LayoutContent({
             // 不以 / 开头，antd 在某些版本仍会触发 onClick。
             // 这里只对路径型 key 调 navigate，避免点击 SubMenu 标题时跳到非法 URL。
             if (typeof key === 'string' && key.startsWith('/')) {
-              navigate(key)
+              // 走 openSheet：sheet 栈管理 + URL 同步（store 内部 navigate）
+              useSheetStore.getState().openSheet(key)
             }
           }}
           inlineCollapsed={collapsed}
@@ -620,14 +626,10 @@ function LayoutContent({
             </a>
           </div>
         </Header>
-        <Content id="main-content" style={{ overflow: 'auto', background: themeToken.colorBgLayout }}>
-          {/* 路由级 ErrorBoundary：页面渲染错误不会波及菜单和布局
-              key 驱动重渲染：路由切换时 div 重新挂载，触发淡入动画 */}
-          <ErrorBoundary resetKeys={[location.pathname]}>
-            <div className="fade-in-up" key={location.pathname}>
-              <Outlet />
-            </div>
-          </ErrorBoundary>
+        <Content id="main-content" style={{ overflow: 'hidden', background: themeToken.colorBgLayout }}>
+          {/* SheetWorkspace 接管内容区：sheet 标签栏 + 单激活 sheet 内容
+              内部已含 ErrorBoundary + Suspense + 懒加载，无需外层包裹 */}
+          <SheetWorkspace />
         </Content>
       </Layout>
 

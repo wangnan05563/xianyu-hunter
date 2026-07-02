@@ -14,6 +14,8 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { authApi } from '../../api'
 import type { CookieHealthReport } from '../../api/auth'
 import type { AuthMe } from '../../api/types'
+import { useSheetStore } from '../../stores/sheetStore'
+import { storage } from '../../utils/storage'
 
 const { Text } = Typography
 
@@ -74,6 +76,9 @@ export default function UserMenu({ userInfo }: UserMenuProps) {
     try {
       await authApi.logout()
       localStorage.removeItem('xh_token')
+      // 清空 sheet 栈与持久化状态，避免下一用户看到上一用户的 sheet
+      useSheetStore.getState().closeAll()
+      storage.remove('xh.sheets.state')
       message.success('已退出登录')
       setOpen(false)
       // replace 避免后退回到已退出登录的页面
