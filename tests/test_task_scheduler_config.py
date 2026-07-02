@@ -87,3 +87,44 @@ def test_task_create_interval_seconds_rejects_out_of_range() -> None:
         TaskCreate(keyword="测试", interval_seconds=29)
     with pytest.raises(Exception):
         TaskCreate(keyword="测试", interval_seconds=3601)
+
+
+def test_create_task_falls_back_to_global_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """body.interval_seconds=None 时 create_task 从全局配置 task_scheduler.default_interval_seconds 取值
+
+    端到端验证兜底逻辑：若未来误删 create_task 中的 get_config 兜底分支，本测试失败。
+    """
+    from xianyu_hunter.infra.repository import Repository
+    from xianyu_hunter.web.routes.api_tasks import create_task
+
+    # mock 全局配置：default_interval_seconds=90（与默认 60 区分，便于断言取的是配置值）
+    fake_cfg = AppConfig()
+    fake_cfg.task_scheduler.default_interval_seconds = 90
+    # 为什么 patch api_tasks.get_config 而非 yaml_config.get_config：
+    # I2 修复后 create_task 通过模块顶层 `from ... import get_config` 绑定名称，
+    # patch 源模块不影响已绑定引用，必须 patch 调用点所在模块
+    monkeypatch.setattr(
+        "xianyu_hunter.web.routes.api_tasks.get_config", lambda: fake_cfg
+    )
+
+    # 用临时 sqlite 构造 repo + 最小 container
+    # 为什么用 _FakeContainer 而非真实 Container：create_task 仅依赖 container.repo，
+    # 真实 Container 需注入 collector/evaluator/buyer 等重依赖，与本项目测试惯例不符
+    db_path = str(tmp_path / "test.db")
+    repo = Repository(db_path)
+
+    class _FakeContainer:
+        def __init__(self, repo):
+            self.repo = repo
+
+    try:
+        container = _FakeContainer(repo)
+        body = TaskCreate(keyword="测试自动搜索")
+        result = create_task(body, container=container)
+        assert result["ok"] is True
+        assert result["task"]["interval_seconds"] == 90
+    finally:
+        # Windows 下释放 SQLAlchemy 文件句柄，避免 tmp_path 清理失败
+        repo.engine.dispose()

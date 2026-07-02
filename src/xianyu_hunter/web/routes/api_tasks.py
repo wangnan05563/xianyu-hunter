@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from xianyu_hunter.domain.task import TaskMode
 from xianyu_hunter.container import Container
+from xianyu_hunter.infra.yaml_config import get_config
 from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -125,7 +126,6 @@ def create_task(
         raise HTTPException(status_code=400, detail=f"未知 mode: {body.mode}")
     # interval_seconds None 时从全局配置兜底
     # 为什么不从 Pydantic 默认值取：让全局配置可热更新生效，无需重启
-    from xianyu_hunter.infra.yaml_config import get_config
     interval_seconds = body.interval_seconds if body.interval_seconds is not None else get_config().task_scheduler.default_interval_seconds
     tid = f"t{uuid.uuid4().hex[:8]}"
     task = {
