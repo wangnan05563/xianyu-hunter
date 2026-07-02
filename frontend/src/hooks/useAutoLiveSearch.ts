@@ -103,9 +103,10 @@ export function useAutoLiveSearch({
         [taskId]: task?.interval_seconds ?? 60,
       }))
       processingRef.current = false
-      // 处理下一个
+      // 处理下一个：用 setTimeout 让调用栈释放，避免长队列递归爆栈
+      // 为什么不用 queueMicrotask：微任务仍在同一调用栈内执行，无法释放栈帧
       if (queueRef.current.length > 0) {
-        processQueue()
+        setTimeout(() => processQueue(), 0)
       }
     }
   }, [onTaskSearchStart, onTaskSearchComplete])
