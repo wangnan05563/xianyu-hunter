@@ -42,18 +42,25 @@ def test_app_config_has_task_scheduler_default() -> None:
 
 def test_app_config_loads_task_scheduler_from_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """从 yaml 加载 task_scheduler 段"""
-    cfg_dir = tmp_path / "config"
-    cfg_dir.mkdir()
-    (cfg_dir / "config.yaml").write_text(
-        "task_scheduler:\n"
-        "  default_interval_seconds: 120\n"
-        "  auto_search_enabled: true\n"
-        "  auto_search_concurrency: 2\n",
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(tmp_path)
-    reload_config()
-    cfg = get_config()
-    assert cfg.task_scheduler.default_interval_seconds == 120
-    assert cfg.task_scheduler.auto_search_enabled is True
-    assert cfg.task_scheduler.auto_search_concurrency == 2
+    try:
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        (cfg_dir / "config.yaml").write_text(
+            "task_scheduler:\n"
+            "  default_interval_seconds: 120\n"
+            "  auto_search_enabled: true\n"
+            "  auto_search_concurrency: 2\n",
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        reload_config()
+        cfg = get_config()
+        assert cfg.task_scheduler.default_interval_seconds == 120
+        assert cfg.task_scheduler.auto_search_enabled is True
+        assert cfg.task_scheduler.auto_search_concurrency == 2
+    finally:
+        # 恢复全局 _config 到原 cwd 的配置，避免污染后续测试
+        # 为什么放 finally：断言失败时也能恢复，防止测试失败连锁影响
+        # 为什么用 undo：当前 pytest 的 chdir 需要显式 path 参数，undo 会自动恢复 cwd
+        monkeypatch.undo()
+        reload_config()
