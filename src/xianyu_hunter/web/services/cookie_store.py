@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 # MU2 改造：按 user_id 隔离，每个用户一个独立 JSON 文件
 _COOKIE_JSON_DIR = Path("data")
 
+# user_id 白名单：仅允许字母数字下划线短横线，长度 1-64
+# 防止路径遍历：user_id 后续会从 JWT/数据库解析，恶意 user_id（如 ../../etc/passwd）
+# 会被拼入文件名造成 data 目录外写入，必须在此入口拦截
+_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
 
 def _cookie_json_path(user_id: str = "default") -> Path:
     """按 user_id 生成 Cookie JSON 文件路径
@@ -37,6 +42,8 @@ def _cookie_json_path(user_id: str = "default") -> Path:
     测试通过 monkeypatch 替换模块 Path 为 lambda *args: tmp_path / args[-1]，
     多参数构造使 lambda 取 args[-1]（文件名）落到 tmp_path 下，便于测试隔离。
     """
+    if not _USER_ID_RE.match(user_id):
+        raise ValueError(f"invalid user_id: {user_id!r}")
     return Path("data", f"cookies_{user_id}.json")
 
 # 闲鱼登录关键 Cookie 名称
@@ -119,7 +126,7 @@ class CookieStore:
         # MU2 改造：缓存按 user_id 分桶 {user_id: (data, timestamp)}
         # 为什么删除旧的单值 _cache_ts：多用户场景下各用户缓存独立过期，
         # 单一时间戳无法表达"每个用户各自的缓存写入时刻"
-        self._cache: dict[str, tuple[dict | None, float]] = {}
+        self._cache: dict[str, tuple[dict, float]] = {}
         _COOKIE_JSON_DIR.mkdir(parents=True, exist_ok=True)
 
     # ---------- 公共 API ----------
