@@ -5,6 +5,8 @@ import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from xianyu_hunter.web.routes.api_evaluations import _ensure_official_collect_cookies
 from xianyu_hunter.web.routes.api_task_links import _ensure_live_search_cookies
 from xianyu_hunter.web.routes.unified_login import (
@@ -15,6 +17,19 @@ from xianyu_hunter.web.routes import unified_login as unified_login_module
 from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
 from xianyu_hunter.web.services import cookie_store as cs_module
 from xianyu_hunter.web.services.cookie_store import get_cookie_store
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cookie_json(tmp_path, monkeypatch):
+    """隔离 Cookie JSON 文件到临时目录，避免污染开发环境
+
+    为什么 autouse：本测试模块多处直接写 JSON 文件（_write_cookie_json 等），
+    autouse 确保所有测试都重定向到 tmp_path，无需每个测试单独声明。
+    """
+    monkeypatch.setattr(
+        "xianyu_hunter.web.services.cookie_store.Path",
+        lambda *args: tmp_path / args[-1] if args else tmp_path,
+    )
 
 
 def _cookie_sample() -> list[dict]:
@@ -36,8 +51,8 @@ def _old_identity_cookies() -> list[dict]:
 
 
 def _write_cookie_json(cookies: list[dict]) -> None:
-    cs_module._COOKIE_JSON_FILE.parent.mkdir(parents=True, exist_ok=True)
-    cs_module._COOKIE_JSON_FILE.write_text(
+    cs_module._cookie_json_path("default").parent.mkdir(parents=True, exist_ok=True)
+    cs_module._cookie_json_path("default").write_text(
         json.dumps(
             {
                 "exported_at": time.time(),
@@ -54,8 +69,8 @@ def _write_cookie_json(cookies: list[dict]) -> None:
 
 
 def _write_cookie_json_without_cache_invalidation(cookies: list[dict]) -> None:
-    cs_module._COOKIE_JSON_FILE.parent.mkdir(parents=True, exist_ok=True)
-    cs_module._COOKIE_JSON_FILE.write_text(
+    cs_module._cookie_json_path("default").parent.mkdir(parents=True, exist_ok=True)
+    cs_module._cookie_json_path("default").write_text(
         json.dumps(
             {
                 "exported_at": time.time(),
@@ -131,8 +146,9 @@ def test_live_search_replaces_stale_worker_identity_cookies() -> None:
 
 def test_runtime_cookie_sync_invalidates_cache_and_injects_worker() -> None:
     store = get_cookie_store()
-    store._cache = {"cookies": []}
-    store._cache_ts = time.time()
+    # 模拟缓存命中但数据为空：使 _read_json 直接返回缓存的空数据，
+    # 验证 runtime_sync 会失效缓存并重新读取磁盘上的新 JSON
+    store._cache = {"default": ({"cookies": []}, time.time())}
     _write_cookie_json_without_cache_invalidation(_cookie_sample())
 
     browser = MagicMock()
@@ -154,8 +170,9 @@ def test_runtime_cookie_sync_invalidates_cache_and_injects_worker() -> None:
 
 def test_verify_cookies_invalidates_stale_json_cache() -> None:
     store = get_cookie_store()
-    store._cache = {"cookies": []}
-    store._cache_ts = time.time()
+    # 模拟缓存命中但数据为空：使 _read_json 直接返回缓存的空数据，
+    # 验证 _verify_cookies 会失效缓存并读取磁盘上的新 JSON
+    store._cache = {"default": ({"cookies": []}, time.time())}
     _write_cookie_json_without_cache_invalidation(_cookie_sample())
 
     assert _verify_cookies(max_retries=1) is True

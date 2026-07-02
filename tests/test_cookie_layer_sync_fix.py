@@ -31,7 +31,7 @@ from xianyu_hunter.web.services.cookie_store import get_cookie_store
 
 client = TestClient(app)
 _AUTH_COOKIE = {"xh_token": get_settings().web_token}
-_COOKIE_JSON = Path("data") / "cookies.json"
+_COOKIE_JSON = Path("data") / "cookies_default.json"
 
 
 def _reset_orchestrator() -> None:
@@ -721,8 +721,8 @@ class TestCrossProcessCacheInvalidation:
         # 触发一次读取，让缓存记录"空数据"
         store._read_json()  # 返回 None，但 _cache 仍为 None
         # 模拟主进程曾经读取过空数据：手工设置空缓存
-        store._cache = {"cookies": []}
-        store._cache_ts = time.time()
+        # MU2 改造：_cache 格式从 dict|None 改为 dict[str, tuple[data, ts]]
+        store._cache = {"default": ({"cookies": []}, time.time())}
 
         # Step 2: 子进程写入新数据（不清除主进程缓存）
         self._simulate_subprocess_write(_real_cookie_sample())
@@ -756,8 +756,8 @@ class TestCrossProcessCacheInvalidation:
         if _COOKIE_JSON.exists():
             _COOKIE_JSON.unlink()
         store._read_json()
-        store._cache = {"cookies": []}
-        store._cache_ts = time.time()
+        # MU2 改造：_cache 格式从 dict|None 改为 dict[str, tuple[data, ts]]
+        store._cache = {"default": ({"cookies": []}, time.time())}
 
         # Step 2: 子进程写入新数据
         self._simulate_subprocess_write(_real_cookie_sample())
@@ -780,8 +780,8 @@ class TestCrossProcessCacheInvalidation:
         if _COOKIE_JSON.exists():
             _COOKIE_JSON.unlink()
         store._read_json()
-        store._cache = {"cookies": []}
-        store._cache_ts = time.time()
+        # MU2 改造：_cache 格式从 dict|None 改为 dict[str, tuple[data, ts]]
+        store._cache = {"default": ({"cookies": []}, time.time())}
 
         # Step 2: 子进程写入新数据（不清除主进程缓存）
         self._simulate_subprocess_write(_real_cookie_sample())
@@ -811,8 +811,8 @@ class TestCrossProcessCacheInvalidation:
         if _COOKIE_JSON.exists():
             _COOKIE_JSON.unlink()
         store._read_json()
-        store._cache = {"cookies": []}
-        store._cache_ts = time.time()
+        # MU2 改造：_cache 格式从 dict|None 改为 dict[str, tuple[data, ts]]
+        store._cache = {"default": ({"cookies": []}, time.time())}
 
         # Step 2: 子进程写入完整 cookie（含 identity + session + tracking）
         self._simulate_subprocess_write(_real_cookie_sample())

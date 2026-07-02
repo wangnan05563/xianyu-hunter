@@ -25,8 +25,26 @@ from xianyu_hunter.web.services.cookie_db import batch_upsert_cookies, delete_co
 
 logger = logging.getLogger(__name__)
 
-# JSON 格式的 Cookie 存储文件（与 browser-data 同级）
-_COOKIE_JSON_FILE = Path("data") / "cookies.json"
+# JSON 格式的 Cookie 存储目录（与 browser-data 同级）
+# MU2 改造：按 user_id 隔离，每个用户一个独立 JSON 文件
+_COOKIE_JSON_DIR = Path("data")
+
+# user_id 白名单：仅允许字母数字下划线短横线，长度 1-64
+# 防止路径遍历：user_id 后续会从 JWT/数据库解析，恶意 user_id（如 ../../etc/passwd）
+# 会被拼入文件名造成 data 目录外写入，必须在此入口拦截
+_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _cookie_json_path(user_id: str = "default") -> Path:
+    """按 user_id 生成 Cookie JSON 文件路径
+
+    为什么用 Path 多参数构造而非模块级常量拼接：
+    测试通过 monkeypatch 替换模块 Path 为 lambda *args: tmp_path / args[-1]，
+    多参数构造使 lambda 取 args[-1]（文件名）落到 tmp_path 下，便于测试隔离。
+    """
+    if not _USER_ID_RE.match(user_id):
+        raise ValueError(f"invalid user_id: {user_id!r}")
+    return Path("data", f"cookies_{user_id}.json")
 
 # 闲鱼登录关键 Cookie 名称
 _GOOFISH_KEY_COOKIES = {"_m_h5_tk", "_m_h5_tk_enc", "unb", "sgcookie", "cookie2", "lg2"}
@@ -105,23 +123,30 @@ class CookieStore:
         # 用 RLock（可重入锁）：update_cookie_values 需要在持锁状态下调用
         # _read_json/_write_json（它们各自也加锁），Lock 不可重入会死锁
         self._lock = threading.RLock()
-        self._cache: dict | None = None
-        self._cache_ts: float = 0.0
-        _COOKIE_JSON_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # MU2 改造：缓存按 user_id 分桶 {user_id: (data, timestamp)}
+        # 为什么删除旧的单值 _cache_ts：多用户场景下各用户缓存独立过期，
+        # 单一时间戳无法表达"每个用户各自的缓存写入时刻"
+        self._cache: dict[str, tuple[dict, float]] = {}
+        _COOKIE_JSON_DIR.mkdir(parents=True, exist_ok=True)
 
     # ---------- 公共 API ----------
 
-    def has_valid_cookies(self) -> bool:
+    def has_valid_cookies(self, user_id: str = "default") -> bool:
         """检查是否有有效的闲鱼 Cookie（JSON 优先，SQLite 兜底）"""
-        data = self._read_json()
+        data = self._read_json(user_id)
         if data and data.get("cookies"):
             names = {c["name"] for c in data["cookies"]}
             if _GOOFISH_KEY_COOKIES & names:
                 return True
         # 兜底：JSON 为空时检查 SQLite
-        return self._check_sqlite()
+        # 为什么只对 default 用户走 SQLite 兜底：browser-data SQLite 是全局共享的，
+        # 不按 user_id 隔离。多用户场景下其他用户不应通过全局 SQLite 判断登录态，
+        # 否则 user_a 登录后 user_b 也会被误判为已登录
+        if user_id == "default":
+            return self._check_sqlite()
+        return False
 
-    def validate_cookies_with_expiry(self) -> tuple[bool, str]:
+    def validate_cookies_with_expiry(self, user_id: str = "default") -> tuple[bool, str]:
         """检查 Cookie 是否有效（含过期时间判断）
 
         为什么需要此方法：has_valid_cookies 只检查 Cookie 是否存在，
@@ -130,7 +155,7 @@ class CookieStore:
         Returns:
             (is_valid, reason) 元组。reason 为失败原因或 "ok"
         """
-        data = self._read_json()
+        data = self._read_json(user_id)
         if not data or not data.get("cookies"):
             return False, "no_cookie_data"
 
@@ -151,9 +176,9 @@ class CookieStore:
 
         return True, "ok"
 
-    def get_cookie_info(self) -> dict:
+    def get_cookie_info(self, user_id: str = "default") -> dict:
         """获取 Cookie 摘要信息（供 /api/auth/me 使用）"""
-        data = self._read_json()
+        data = self._read_json(user_id)
         if not data or not data.get("cookies"):
             return {"logged_in": False, "source": "none"}
         names = {c["name"] for c in data["cookies"]}
@@ -167,13 +192,13 @@ class CookieStore:
             "method": data.get("method", "unknown"),
         }
 
-    def get_cookie_expiry(self) -> float | None:
+    def get_cookie_expiry(self, user_id: str = "default") -> float | None:
         """获取最早过期的闲鱼关键 Cookie 的过期时间
 
         用于定时同步判断是否即将过期。
         返回 Unix 时间戳（秒），无 Cookie 或 session cookie 返回 None。
         """
-        data = self._read_json()
+        data = self._read_json(user_id)
         if not data or not data.get("cookies"):
             return None
         # 只看闲鱼关键 Cookie 的过期时间
@@ -190,12 +215,13 @@ class CookieStore:
         ]
         return min(expiries) if expiries else None
 
-    def export_cookies(self, cookies: list[dict], method: str = "unknown") -> bool:
+    def export_cookies(self, cookies: list[dict], method: str = "unknown", user_id: str = "default") -> bool:
         """导出 Cookie 到 JSON 文件（登录成功后由子进程调用）
 
         Args:
             cookies: Playwright cookie 对象列表
             method: 登录方式标识（browser/qr/cookie/import）
+            user_id: 用户标识，用于多用户隔离存储
         """
         if not cookies:
             return False
@@ -230,7 +256,7 @@ class CookieStore:
                 for c in filtered
             ],
         }
-        success = self._write_json(data)
+        success = self._write_json(data, user_id)
         # 同步到 browser-data SQLite（Worker 使用）
         # 为什么传 filtered 而非原始 cookies：测试数据已被 is_test_cookie 过滤，
         # 若同步原始 cookies 会把测试数据写入 SQLite，造成 JSON 与 SQLite 内容不一致
@@ -246,7 +272,7 @@ class CookieStore:
         """
         return self._sync_to_sqlite(cookies)
 
-    def update_cookie_values(self, updates: dict[str, str]) -> bool:
+    def update_cookie_values(self, updates: dict[str, str], user_id: str = "default") -> bool:
         """合并更新指定 Cookie 的值（不覆盖整个 JSON，不同步 SQLite）
 
         用于 MTOP Set-Cookie 回写场景：登录后 token 刷新产生新 _m_h5_tk 等，
@@ -262,6 +288,7 @@ class CookieStore:
 
         Args:
             updates: {cookie_name: new_value} 字典，仅更新已存在的 cookie
+            user_id: 用户标识，用于多用户隔离存储
 
         Returns:
             True 表示有 cookie 被更新，False 表示无更新（JSON 无数据或无匹配）
@@ -270,7 +297,7 @@ class CookieStore:
             return False
         # 持锁完成整个事务：防止并发 update 或 export_cookies 交错导致丢失更新
         with self._lock:
-            data = self._read_json()
+            data = self._read_json(user_id)
             if not data or not data.get("cookies"):
                 return False
             updated = False
@@ -285,14 +312,14 @@ class CookieStore:
                 existing_method = data.get("method", "unknown")
                 if "mtop_refresh" not in existing_method:
                     data["method"] = existing_method + "+mtop_refresh"
-                success = self._write_json(data)
+                success = self._write_json(data, user_id)
                 if success:
                     logger.info("已合并更新 %d 个 Cookie 值到 JSON: %s",
                                 len(updates), sorted(updates.keys()))
                 return success
             return False
 
-    def upsert_cookie_values(self, upserts: dict[str, dict]) -> bool:
+    def upsert_cookie_values(self, upserts: dict[str, dict], user_id: str = "default") -> bool:
         """Upsert Cookie 值（更新已存在的 + 添加不存在的）
 
         用于浏览器内存兜底回写场景：/cookies/layers 从浏览器内存读取 cookie 后，
@@ -304,6 +331,7 @@ class CookieStore:
 
         Args:
             upserts: {cookie_name: {value, domain, path, expires}} 字典
+            user_id: 用户标识，用于多用户隔离存储
 
         Returns:
             True 表示有 cookie 被更新或添加
@@ -311,7 +339,7 @@ class CookieStore:
         if not upserts:
             return False
         with self._lock:
-            data = self._read_json()
+            data = self._read_json(user_id)
             if not data or not data.get("cookies"):
                 return False
             existing_names = {c.get("name", "") for c in data["cookies"]}
@@ -338,7 +366,7 @@ class CookieStore:
                 existing_method = data.get("method", "unknown")
                 if "browser_sync" not in existing_method:
                     data["method"] = existing_method + "+browser_sync"
-                success = self._write_json(data)
+                success = self._write_json(data, user_id)
                 if success:
                     logger.info("已 upsert %d 个 Cookie 到 JSON: %s",
                                 len(upserts), sorted(upserts.keys()))
@@ -347,47 +375,65 @@ class CookieStore:
 
     # ---------- 内部方法 ----------
 
-    def invalidate_cache(self) -> None:
+    def invalidate_cache(self, user_id: str | None = None) -> None:
         """清除内存缓存，强制下次 _read_json 重新读取文件
 
         为什么需要此方法：浏览器登录子进程是独立 Python 进程，
         写入 cookies.json 后只更新子进程自己的缓存，主进程的缓存仍是旧数据。
         主进程在调用 sync_cookie_layers_from_json 等"读后同步"操作前必须先清除缓存，
         否则会读到 30 秒 TTL 内的旧缓存，导致层状态无法及时更新。
+
+        Args:
+            user_id: 指定用户则只清除该用户缓存，不传则清除全部用户缓存
         """
         with self._lock:
-            self._cache = None
-            self._cache_ts = 0.0
+            # 兼容旧代码：外部可能直接赋值 _cache = None 来清缓存
+            if self._cache is None:
+                self._cache = {}
+                return
+            if user_id:
+                self._cache.pop(user_id, None)
+            else:
+                self._cache.clear()
 
-    def _read_json(self) -> dict | None:
-        """读取 JSON Cookie 文件（带缓存）"""
+    def _read_json(self, user_id: str = "default") -> dict | None:
+        """读取指定用户的 JSON Cookie 文件（带缓存）"""
         with self._lock:
-            if self._cache and (time.time() - self._cache_ts) < _CACHE_TTL:
-                return self._cache
-        if not _COOKIE_JSON_FILE.exists():
+            # 兼容旧代码：外部可能直接赋值 _cache = None 来清缓存
+            if self._cache is None:
+                self._cache = {}
+            cached = self._cache.get(user_id)
+            if cached and (time.time() - cached[1]) < _CACHE_TTL:
+                return cached[0]
+        path = _cookie_json_path(user_id)
+        if not path.exists():
             return None
         try:
-            data = json.loads(_COOKIE_JSON_FILE.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
             with self._lock:
-                self._cache = data
-                self._cache_ts = time.time()
+                if self._cache is None:
+                    self._cache = {}
+                self._cache[user_id] = (data, time.time())
             return data
         except (json.JSONDecodeError, OSError):
             return None
 
-    def _write_json(self, data: dict) -> bool:
-        """原子写入 JSON Cookie 文件"""
+    def _write_json(self, data: dict, user_id: str = "default") -> bool:
+        """原子写入指定用户的 JSON Cookie 文件"""
+        path = _cookie_json_path(user_id)
         try:
-            tmp = _COOKIE_JSON_FILE.with_suffix(".tmp")
+            tmp = path.with_suffix(".tmp")
+            tmp.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(_COOKIE_JSON_FILE)
+            tmp.replace(path)
             with self._lock:
-                self._cache = data
-                self._cache_ts = time.time()
-            logger.info("Cookie 已导出到 JSON: %d 个, method=%s", data.get("cookie_count", 0), data.get("method"))
+                if self._cache is None:
+                    self._cache = {}
+                self._cache[user_id] = (data, time.time())
+            logger.info("Cookie 已导出到 JSON [%s]: %d 个, method=%s", user_id, data.get("cookie_count", 0), data.get("method"))
             return True
         except OSError as e:
-            logger.error("写入 Cookie JSON 失败: %s", e)
+            logger.error("写入 Cookie JSON 失败 [%s]: %s", user_id, e)
             return False
 
     def _check_sqlite(self) -> bool:

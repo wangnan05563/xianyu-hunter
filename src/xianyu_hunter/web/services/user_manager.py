@@ -293,11 +293,15 @@ class UserManager:
                 conn.commit()
 
             # 删除 Cookie 文件，不存在时静默跳过；其他 IO 错误降级为 warning 不阻塞
-            cookie_file = Path("data") / f"cookies_{user_id}.json"
+            # 为什么用 _cookie_json_path 而非直接拼接：
+            # 复用 cookie_store 的 _USER_ID_RE 白名单校验，统一路径遍历防御边界，
+            # 避免 delete_user 接收外部 user_id 时绕过安全校验
+            from xianyu_hunter.web.services.cookie_store import _cookie_json_path
             try:
+                cookie_file = _cookie_json_path(user_id)
                 cookie_file.unlink(missing_ok=True)
-            except OSError:
-                logger.warning("删除 Cookie 文件失败: %s", cookie_file, exc_info=True)
+            except (OSError, ValueError):
+                logger.warning("删除 Cookie 文件失败: user_id=%s", user_id, exc_info=True)
 
             logger.info(
                 "用户已退出并清理数据: user_id=%s, delete_tasks=%s",

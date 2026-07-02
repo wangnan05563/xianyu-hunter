@@ -36,8 +36,8 @@ def _check_cookies() -> bool:
     JSON 不可用时回退到 SQLite 检查。
     """
     store = get_cookie_store()
-    store.invalidate_cache()
-    return store.has_valid_cookies()
+    store.invalidate_cache("default")
+    return store.has_valid_cookies(user_id="default")
 
 
 @router.get("/me")
@@ -159,15 +159,15 @@ def cookie_health() -> JSONResponse:
     store.invalidate_cache()
 
     # 完整性检查：返回 (is_valid, reason)
-    is_valid, reason = store.validate_cookies_with_expiry()
+    is_valid, reason = store.validate_cookies_with_expiry(user_id="default")
     # 摘要信息：cookie_count / exported_at / method / key_cookies_found
-    info = store.get_cookie_info()
+    info = store.get_cookie_info(user_id="default")
     # 最早过期时间戳
-    expiry_ts = store.get_cookie_expiry()
+    expiry_ts = store.get_cookie_expiry(user_id="default")
 
     # 分层状态：基于 Cookie 名称判断 identity/session/tracking 三层是否齐全
     # 为什么直接读 JSON 而非调 CookieRotator：避免引入 login_orchestrator 的副作用
-    data = store._read_json()
+    data = store._read_json(user_id="default")
     names = {c.get("name", "") for c in (data or {}).get("cookies", [])} if data else set()
     layers_status = {
         "identity": bool({"unb", "cookie2", "sgcookie", "t", "_tb_token_", "lg2"} & names),
@@ -247,17 +247,23 @@ def _clear_goofish_cookies_in_sqlite() -> int:
 
 
 def _delete_cookie_json() -> bool:
-    """删除 cookies.json 文件并清除 CookieStore 内存缓存"""
-    from xianyu_hunter.web.services.cookie_store import _COOKIE_JSON_FILE
+    """删除 default 用户的 Cookie JSON 文件并清除内存缓存
+
+    为什么用 _cookie_json_path("default") 而非模块级常量：
+    MU2 改造后 CookieStore 按 user_id 分文件存储，旧的 _COOKIE_JSON_FILE
+    模块级常量已删除。logout 时清理 default 用户文件，保持与多用户模型一致。
+    """
+    from xianyu_hunter.web.services.cookie_store import _cookie_json_path
+    path = _cookie_json_path("default")
     try:
-        if _COOKIE_JSON_FILE.exists():
-            _COOKIE_JSON_FILE.unlink()
+        if path.exists():
+            path.unlink()
     except OSError as e:
-        logger.warning("删除 cookies.json 失败: %s", e)
+        logger.warning("删除 cookies_default.json 失败: %s", e)
         return False
     # 清除 CookieStore 内存缓存，避免后续请求读到旧数据
     store = get_cookie_store()
-    store.invalidate_cache()
+    store.invalidate_cache("default")
     return True
 
 
