@@ -303,6 +303,9 @@ def list_evaluations(
         pattern="^(auto|pass|fail|insufficient)$",
         description="结果分类过滤：auto=可抢(≥auto_buy_score) / pass=通过([pass_score,auto_buy_score)) / fail=驳回(<pass_score) / insufficient=数据不足(score=null)",
     ),
+    min_price: float | None = Query(None, ge=0, description="价格下限（含）。未传但传了 task_id 时自动从任务配置读取"),
+    max_price: float | None = Query(None, ge=0, description="价格上限（含）。未传但传了 task_id 时自动从任务配置读取"),
+    include_out_of_range: bool = Query(False, description="是否显示超出任务价格范围的历史商品（默认 False，仅显示合规商品）"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """从 events 表中读 eval.* 事件（与 list_events 共享存储）
@@ -314,6 +317,12 @@ def list_evaluations(
     sold_filter 在 Python 端过滤：评估事件本身不存 is_sold，需从 items 表批量查询后过滤。
     result_category 按配置阈值精确分类过滤，支持 score=null 的"数据不足"过滤，
     解决前端只过滤当前页导致"点击统计卡片查不到记录"的问题。
+
+    价格范围过滤（min_price/max_price）：
+    - 显式参数优先；未传但传了 task_id 时自动从 task.min_price/max_price 读取
+    - 解决评估明细菜单显示大量超出任务价格范围商品的问题
+    - include_out_of_range=True 时跳过价格过滤，用于审计历史超范围商品
+    - 价格取自 enrich 后的 payload.item_price（已是 items 表最新值）
     """
     # 预解析时间范围边界（避免在循环内反复解析）
     start_dt = to_datetime(start_time) if start_time else None
@@ -327,6 +336,22 @@ def list_evaluations(
     # 不传 limit/offset，全量加载 eval.* 事件（评估事件已按 task_id+item_id 去重，量级可控），
     # 后续在 Python 端做 item_id/task_id 模糊匹配、score/time 范围过滤，再分页。
     rows, _ = container.repo.list_events_by_type_prefix(type_prefix="eval.")
+
+    # 价格范围默认值：用户未显式传 min_price/max_price 但传了 task_id 时，
+    # 自动从 task 表读取任务级价格配置，解决"评估明细显示超范围商品"问题。
+    # 为什么放在 rows 加载之后：task 配置查询独立于 events，提前查会浪费未命中的 IO
+    if not include_out_of_range and (min_price is None or max_price is None) and task_id:
+        try:
+            # task_id 在评估明细页是 Select 选择的精确值，但 API 层支持模糊匹配，
+            # 此处用 get_task 精确查询；若任务不存在则不应用价格过滤（避免误伤）
+            task_raw = container.repo.get_task(task_id)
+            if task_raw:
+                if min_price is None and task_raw.get("min_price") is not None:
+                    min_price = float(task_raw["min_price"])
+                if max_price is None and task_raw.get("max_price") is not None:
+                    max_price = float(task_raw["max_price"])
+        except Exception as e:
+            logger.warning(f"读取任务 {task_id} 价格配置失败，跳过价格过滤: {e}")
 
     # 收集本批评估事件涉及的所有 item_id，用于批量查询 items / task_links
     event_item_ids: set[str] = set()
@@ -437,6 +462,23 @@ def list_evaluations(
                 continue
             if sold_filter == "sold" and not is_sold:
                 continue
+
+        # 价格范围过滤：解决评估明细菜单显示大量超出任务价格范围商品的问题
+        # 为什么放在 enrich 之后：item_price 已由 _enrich_eval_with_item 用 items 表最新值覆盖
+        # 为什么 include_out_of_range 跳过：用户审计历史超范围商品时需要能查看
+        # 为什么 price=None 时不过滤：评估时可能未采集到价格，保留避免误删
+        if not include_out_of_range and (min_price is not None or max_price is not None):
+            price_val = payload.get("item_price")
+            if price_val is not None:
+                try:
+                    price_float = float(price_val)
+                except (TypeError, ValueError):
+                    price_float = None
+                if price_float is not None:
+                    if min_price is not None and price_float < min_price:
+                        continue
+                    if max_price is not None and price_float > max_price:
+                        continue
 
         # 评分范围过滤
         score = payload.get("score")
@@ -1338,6 +1380,33 @@ def recompute_evaluations(
 
     evaluator = container.evaluator
 
+    # 任务级 PriceStrategy 缓存：recompute 应与 worker.py 搜索流水线一致，
+    # 在评估前用 PriceStrategy.check 做价格门禁，超范围商品不写入 eval.scored 事件。
+    # 为什么按 task_id 缓存：recompute 可能跨多个任务，避免重复构造 PriceStrategy
+    _price_strategy_cache: dict[str, "PriceStrategy"] = {}
+    _skip_price_check_task_ids: set[str] = set()
+
+    def _get_price_strategy(tid: str | None) -> "PriceStrategy | None":
+        """按 task_id 获取任务级 PriceStrategy。task_id 为空或任务不存在时返回 None（跳过门禁）"""
+        if not tid:
+            return None
+        if tid in _skip_price_check_task_ids:
+            return None
+        if tid in _price_strategy_cache:
+            return _price_strategy_cache[tid]
+        try:
+            task_raw = container.repo.get_task(tid)
+            if not task_raw:
+                _skip_price_check_task_ids.add(tid)
+                return None
+            ps = container.build_task_price_strategy(task_raw)
+            _price_strategy_cache[tid] = ps
+            return ps
+        except Exception as e:
+            logger.warning(f"recompute 读取任务 {tid} 价格策略失败，跳过门禁: {e}")
+            _skip_price_check_task_ids.add(tid)
+            return None
+
     # 拉取所有评估事件
     # 修复：之前用 list_events(limit=10000) 在 Python 端过滤，改为 SQL 端按 type 前缀过滤
     all_eval_events, _ = container.repo.list_events_by_type_prefix(
@@ -1392,6 +1461,18 @@ def recompute_evaluations(
                     on_sale_count=0,
                     sold_count=0,
                 )
+                # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件
+                # 为什么传 market_ctx=None：recompute 无现成市场数据，仅走 min/max 硬性规则
+                effective_task_id = link.get("task_id") or task_id or ""
+                price_strategy = _get_price_strategy(effective_task_id)
+                if price_strategy is not None:
+                    verdict = price_strategy.check(detail, market=None)
+                    if not verdict.pass_:
+                        logger.info(
+                            "recompute 跳过超范围商品: item_id={}, price={}, reasons={}",
+                            item_id, price_float, verdict.reasons,
+                        )
+                        continue
                 eval_result = evaluator.evaluate(detail, seller)
                 score_display = eval_result.score if eval_result.score is not None else "N/A"
                 if eval_result.is_passed:
@@ -1547,6 +1628,22 @@ def recompute_evaluations(
                 in_blacklist=bool(seller_data.get("in_blacklist") or False),
             )
 
+            # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不重新评估
+            # 为什么 skip 而非删除旧事件：recompute 语义是"重算"而非"清理"，
+            # 保留旧事件供 include_out_of_range=True 审计；list_evaluations 的
+            # 价格过滤会默认隐藏这些超范围商品
+            effective_task_id_b = str(payload.get("task_id") or e.get("task_id") or task_id or "")
+            price_strategy_b = _get_price_strategy(effective_task_id_b)
+            if price_strategy_b is not None:
+                verdict_b = price_strategy_b.check(detail, market=None)
+                if not verdict_b.pass_:
+                    skipped += 1
+                    logger.info(
+                        "recompute 跳过超范围商品: item_id={}, price={}, reasons={}",
+                        item_id, detail.price, verdict_b.reasons,
+                    )
+                    continue
+
             # 用当前配置重新评估
             eval_result = evaluator.evaluate(detail, seller)
 
@@ -1595,6 +1692,31 @@ def batch_evaluate_unevaluated(
     from xianyu_hunter.domain.seller import SellerProfile
 
     evaluator = container.evaluator
+
+    # 任务级 PriceStrategy 缓存：batch_evaluate 应与 worker.py 一致做价格门禁，
+    # 超范围商品不写入 eval.scored 事件，避免污染评估明细菜单
+    _price_strategy_cache: dict[str, "PriceStrategy"] = {}
+    _skip_price_check_task_ids: set[str] = set()
+
+    def _get_price_strategy(tid: str | None) -> "PriceStrategy | None":
+        if not tid:
+            return None
+        if tid in _skip_price_check_task_ids:
+            return None
+        if tid in _price_strategy_cache:
+            return _price_strategy_cache[tid]
+        try:
+            task_raw = container.repo.get_task(tid)
+            if not task_raw:
+                _skip_price_check_task_ids.add(tid)
+                return None
+            ps = container.build_task_price_strategy(task_raw)
+            _price_strategy_cache[tid] = ps
+            return ps
+        except Exception as e:
+            logger.warning(f"batch_evaluate 读取任务 {tid} 价格策略失败，跳过门禁: {e}")
+            _skip_price_check_task_ids.add(tid)
+            return None
 
     # 1. 获取所有已评估的 item_id 集合
     eval_events, _ = container.repo.list_events_by_type_prefix(type_prefix="eval.")
@@ -1673,6 +1795,18 @@ def batch_evaluate_unevaluated(
                 on_sale_count=int(seller_data.get("on_sale_count") or 0),
                 sold_count=int(seller_data.get("sold_count") or 0),
             )
+            # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件
+            effective_task_id = str(it.get("task_id") or task_id or "")
+            price_strategy = _get_price_strategy(effective_task_id)
+            if price_strategy is not None:
+                verdict = price_strategy.check(detail, market=None)
+                if not verdict.pass_:
+                    skipped += 1
+                    logger.info(
+                        "batch_evaluate 跳过超范围商品: item_id={}, price={}, reasons={}",
+                        item_id, detail.price, verdict.reasons,
+                    )
+                    continue
             eval_result = evaluator.evaluate(detail, seller)
             score_display = eval_result.score if eval_result.score is not None else "N/A"
             if eval_result.is_passed:
@@ -1683,7 +1817,6 @@ def batch_evaluate_unevaluated(
                 level = "err"
             if eval_result.risk_level == RiskLevel.UNKNOWN:
                 level = "warn"
-            effective_task_id = str(it.get("task_id") or task_id or "")
             container.repo.upsert_eval_event({
                 "type": "eval.scored",
                 "task_id": effective_task_id,

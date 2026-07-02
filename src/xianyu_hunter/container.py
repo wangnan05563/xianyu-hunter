@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from xianyu_hunter.domain.events import EventType
+from xianyu_hunter.domain.task import Task, TaskConfig, TaskMode
 from xianyu_hunter.infra.event_bus import EventBus
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repository import Repository
@@ -30,8 +32,28 @@ from xianyu_hunter.modules.evaluator import Evaluator
 from xianyu_hunter.modules.notifier import NotifierHub
 from xianyu_hunter.modules.price_strategy import PriceConfig, PriceStrategy
 from xianyu_hunter.modules.scheduler import TaskScheduler
+from xianyu_hunter.modules.worker import TaskWorker
 
 logger = get_logger()
+
+
+def _parse_json_field(raw: Any, field_name: str) -> dict | None:
+    """安全解析 DB 中的 JSON 配置覆盖字段
+
+    返回 None 表示无覆盖（沿用全局），dict 表示有效覆盖
+    """
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw or None
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if parsed else None
+        except json.JSONDecodeError:
+            logger.warning(f"任务 {field_name} JSON 解析失败，将沿用全局配置: {raw[:80]}")
+            return None
+    return None
 
 
 class PriorityBrowserLock:
@@ -110,30 +132,18 @@ class Container:
     def wire_notifier(self) -> None:
         """把 NotifierHub 接入 EventBus（构造后只调一次）"""
         # 选取已配置为启用的渠道
-        # 必须遍历全部 8 个渠道：旧版只判断 serverchan/pushplus/bark，
-        # 导致 dingtalk/telegram/wecom/webhook/ntfy 即使在 channels 中开启也不会被加入 enabled，
-        # 表现为"钉钉通知配置已保存但永远收不到推送"
+        # 通过 model_dump() 自动收集所有为 True 的渠道字段，避免新增渠道时遗漏
+        # 旧版只判断 serverchan/pushplus/bark 导致 dingtalk 等渠道即使开启也不会被加入
         ch_cfg = self.config.notifier.channels
-        enabled: list[str] = []
-        if ch_cfg.serverchan:
-            enabled.append("serverchan")
-        if ch_cfg.pushplus:
-            enabled.append("pushplus")
-        if ch_cfg.bark:
-            enabled.append("bark")
-        if ch_cfg.telegram:
-            enabled.append("telegram")
-        if ch_cfg.wecom:
-            enabled.append("wecom")
-        if ch_cfg.dingtalk:
-            enabled.append("dingtalk")
-        if ch_cfg.webhook:
-            enabled.append("webhook")
-        if ch_cfg.ntfy:
-            enabled.append("ntfy")
+        enabled: list[str] = [name for name, on in ch_cfg.model_dump().items() if on]
         warn_unconfigured = bool(enabled)
         if not enabled:
             enabled = list(self.config.notifier.default_channels)
+            if not enabled:
+                logger.warning(
+                    "[wire_notifier] 未配置任何通知渠道且 default_channels 为空，"
+                    "所有通知将被丢弃。请在 config.yaml 的 notifier.channels 中启用至少一个渠道"
+                )
         # 从 yaml 明文读取凭据，作为 keyring 的 fallback
         # 为什么需要 yaml fallback：用户在前端保存凭据时只写入 yaml，
         # 但 notifier __init__ 优先从 keyring 读取；当 keyring 中没有时，
@@ -207,6 +217,129 @@ class Container:
         self.notifier_hub.attach(
             self.event_bus,
             events=subscribed_events or None,
+        )
+
+    def build_task_price_strategy(self, raw: dict) -> PriceStrategy:
+        """从 DB raw task dict 构造任务级 PriceStrategy
+
+        合并规则（与 build_worker_from_raw_task 内的逻辑保持一致）：
+        - task.min_price/max_price 列优先
+        - 为 None 时从 task.price_config JSON 中取
+        - 都为 None 时沿用全局 self.price_strategy
+
+        为什么提取为公共方法：recompute / batch_evaluate / collection_service
+        三条评估写入路径都需要用任务级 PriceStrategy 做价格门禁，
+        避免在四处复制合并逻辑导致行为漂移。
+        """
+        task_price_override = _parse_json_field(raw.get("price_config"), "price_config")
+        effective_min = raw.get("min_price")
+        effective_max = raw.get("max_price")
+        if task_price_override:
+            if effective_min is None and "min_price" in task_price_override:
+                effective_min = task_price_override["min_price"]
+            if effective_max is None and "max_price" in task_price_override:
+                effective_max = task_price_override["max_price"]
+        if effective_min is not None or effective_max is not None:
+            price_cfg = self.config.price_strategy
+            return type(self.price_strategy)(
+                PriceConfig(
+                    min_price=effective_min,
+                    max_price=effective_max,
+                    market_ratio=task_price_override.get("market_ratio", price_cfg.market_ratio)
+                    if task_price_override else price_cfg.market_ratio,
+                )
+            )
+        return self.price_strategy
+
+    def build_worker_from_raw_task(self, raw: dict) -> TaskWorker | None:
+        """从 DB 的 raw task dict 构造 TaskWorker
+
+        统一 CLI (__main__.py) 和 Web (startup.py) 的 Worker 构造逻辑，
+        避免两处代码不一致导致行为差异。支持任务级 search_config / price_config /
+        eval_config 覆盖，None 字段沿用全局配置。
+
+        Args:
+            raw: repo.list_tasks() 返回的 dict
+
+        Returns:
+            TaskWorker 实例，若 raw 状态非 running 返回 None
+        """
+        if raw.get("status") != "running":
+            return None
+
+        # 解析任务级配置覆盖（JSON 字符串 → dict，None 表示沿用全局）
+        task_search_override = _parse_json_field(raw.get("search_config"), "search_config")
+        task_price_override = _parse_json_field(raw.get("price_config"), "price_config")
+        task_eval_override = _parse_json_field(raw.get("eval_config"), "eval_config")
+
+        task = Task(
+            id=raw["id"],
+            name=raw.get("name", raw["id"]),
+            keyword=raw["keyword"],
+            min_price=raw.get("min_price"),
+            max_price=raw.get("max_price"),
+            exclude_words=raw.get("exclude_words") or [],
+            region=raw.get("region"),
+            mode=TaskMode(raw.get("mode", "confirm")),
+            search_filters=raw.get("search_filters") or [],
+            # 用 or 防御 NULL：迁移后的旧行可能为 None
+            cron=raw.get("cron") or "*/1 * * * *",
+            use_cron=bool(raw.get("use_cron") or 0),
+            interval_seconds=float(raw.get("interval_seconds") or 60.0),
+            eval_threshold=raw.get("eval_threshold"),
+            ai_prompt=raw.get("ai_prompt"),
+            search_config=task_search_override,
+            price_config=task_price_override,
+            eval_config=task_eval_override,
+        )
+
+        # 复用公共方法构造任务级价格策略，避免逻辑重复
+        worker_price_strategy = self.build_task_price_strategy(raw)
+
+        # 合并任务级搜索参数覆盖
+        search_cfg = self.config.search
+        effective_search = {
+            "page_size": search_cfg.page_size,
+            "sort_type": search_cfg.sort_type,
+            "timeout": search_cfg.timeout,
+            "regions": search_cfg.regions,
+            "filter_tags": search_cfg.filter_tags,
+        }
+        if task_search_override:
+            for k in effective_search:
+                if k in task_search_override:
+                    effective_search[k] = task_search_override[k]
+        task_config = TaskConfig(
+            search_page_size=effective_search["page_size"],
+            search_sort_type=effective_search["sort_type"],
+            search_timeout=effective_search["timeout"],
+            search_regions=effective_search["regions"],
+            search_filter_tags=effective_search["filter_tags"],
+            use_cron=task.use_cron,
+            interval_seconds=task.interval_seconds,
+        )
+
+        # P1: 注入官方采集回调，延迟导入避免循环依赖（startup → app → container）
+        # partial 绑定 container：worker 调用 fn(item_id, task_id) 时实际执行
+        # _call_official_collect(self, item_id, task_id)
+        try:
+            from functools import partial
+            from xianyu_hunter.web.startup import _call_official_collect
+            official_collect_fn = partial(_call_official_collect, self)
+        except ImportError:
+            official_collect_fn = None
+
+        return TaskWorker(
+            task=task,
+            collector=self.collector,
+            dedup=self.dedup,
+            price_strategy=worker_price_strategy,
+            evaluator=self.evaluator,
+            buyer=self.buyer,
+            config=task_config,
+            repo=self.repo,
+            event_bus=self.event_bus,
+            official_collect_fn=official_collect_fn,
         )
 
 

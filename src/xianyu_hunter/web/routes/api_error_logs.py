@@ -21,6 +21,10 @@ from pydantic import BaseModel, Field
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.services.search_services import (
+    ErrorLogSearchParams,
+    ErrorLogSearchService,
+)
 from xianyu_hunter.web.utils import parse_iso_datetime
 
 logger = logging.getLogger(__name__)
@@ -64,17 +68,15 @@ def list_error_logs(
     start_dt = parse_iso_datetime(start) if start else None
     end_dt = parse_iso_datetime(end) if end else None
 
-    items = container.repo.list_error_logs(
-        status=status,
-        error_type=error_type,
-        request_path=request_path,
-        request_id=request_id,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        limit=limit,
-        offset=offset,
-    )
-    items = [_parse_json_fields(item) for item in items]
+    # 使用 SearchService 统一处理分页/慢查询埋点
+    service = ErrorLogSearchService(container.repo)
+    result = service.search(ErrorLogSearchParams(
+        status=status, error_type=error_type, request_path=request_path,
+        request_id=request_id, start_dt=start_dt, end_dt=end_dt,
+        limit=limit, offset=offset,
+    ))
+    items = [_parse_json_fields(item) for item in result["items"]]
+    # status_counts 是全局状态分布，不依赖当前过滤条件，单独调用 repo 获取
     status_counts = container.repo.count_error_logs_by_status()
     return {
         "items": items,

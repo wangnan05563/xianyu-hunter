@@ -451,6 +451,33 @@ class TestSessionStartStop:
         data = resp.json()
         assert data["ok"] is True
 
+    def test_start_session_when_already_active_returns_already_active_flag(self):
+        """会话已活跃时 /session/start 应返回幂等成功响应（ok:True + already_active:True）
+
+        验证修复：登录流程通过 trigger_session_start() 自动启动会话后，
+        用户手动点击"启动会话"按钮命中 is_session_active 分支，
+        返回 ok:True 而非 ok:False，避免前端显示"启动会话失败"但状态实际为"已启动"的矛盾。
+        """
+        _reset_orchestrator()
+        try:
+            # 第一次启动：会话从未启动变为活跃，不应带 already_active 标记
+            resp = client.post("/api/anticrawl/session/start", cookies=_AUTH_COOKIE)
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["ok"] is True
+            assert data.get("already_active") is not True, "首次启动不应标记为 already_active"
+
+            # 第二次启动：会话已活跃，应返回幂等成功而非失败
+            resp = client.post("/api/anticrawl/session/start", cookies=_AUTH_COOKIE)
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["ok"] is True, "会话已活跃时应返回 ok:True（幂等成功），不应返回 ok:False"
+            assert data["already_active"] is True
+            assert "活跃" in data["message"]
+        finally:
+            # 清理：停止会话避免影响后续测试
+            client.post("/api/anticrawl/session/stop", cookies=_AUTH_COOKIE)
+
 
 # ============== 辅助函数 ==============
 

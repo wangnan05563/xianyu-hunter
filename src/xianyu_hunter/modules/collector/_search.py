@@ -1067,10 +1067,13 @@ class SearchMixin:
                 # 预提取前 3 个商品摘要，便于直观确认 resultList 是真实商品而非通用占位数据
                 # 背景：API 响应前500字符只显示 appBar/filterBar/resultInfo 等 UI 字段，
                 # resultList 在 500 字符之后，仅靠前500字符日志无法判断商品数据是否真实
+                # 缓存预览结果：主循环复用前 3 个已提取的 fields，避免重复调用 _extract_api_item_fields
+                preview_cache: dict[int, dict[str, Any]] = {}
                 try:
                     preview_titles: list[str] = []
-                    for raw in raw_items[:3]:
+                    for idx, raw in enumerate(raw_items[:3]):
                         f = _extract_api_item_fields(raw)
+                        preview_cache[idx] = f
                         if f["item_id"] and f["title"]:
                             preview_titles.append(f"{f['item_id']}/{f['title'][:20]}/¥{f['price']}")
                     if preview_titles:
@@ -1079,9 +1082,9 @@ class SearchMixin:
                         logger.warning("搜索API前3个商品均缺少 item_id/title，可能返回的是通用占位数据")
                 except Exception as preview_err:
                     logger.debug("商品摘要预览失败: {}", str(preview_err)[:80])
-                for raw in raw_items:
+                for idx, raw in enumerate(raw_items):
                     try:
-                        fields = _extract_api_item_fields(raw)
+                        fields = preview_cache.get(idx) or _extract_api_item_fields(raw)
                         semantic_raw = fields["semantic_raw"]
                         if not fields["item_id"] or not fields["title"]:
                             data = raw.get("data") if isinstance(raw, dict) else None

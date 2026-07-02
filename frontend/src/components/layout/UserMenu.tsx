@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Avatar, Typography, Tag, Spin, Button, Tooltip, theme, Empty, message } from 'antd'
 import { Popover } from 'antd'
 import {
@@ -10,7 +10,7 @@ import {
   SafetyCertificateOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { authApi } from '../../api'
 import type { CookieHealthReport } from '../../api/auth'
 import type { AuthMe } from '../../api/types'
@@ -28,20 +28,18 @@ const DEFAULT_AVATAR_BG = 'linear-gradient(135deg, #FF6200, #FF8C00)'
 
 export default function UserMenu({ userInfo }: UserMenuProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { token: themeToken } = theme.useToken()
 
   const [open, setOpen] = useState(false)
   const [health, setHealth] = useState<CookieHealthReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
-  // 防抖标记：避免短时间内重复触发健康检查
-  const lastFetchRef = useRef(0)
 
-  const fetchHealth = useCallback(async (force = false) => {
-    // 5 秒内不重复请求（除非强制刷新）
-    const now = Date.now()
-    if (!force && now - lastFetchRef.current < 5000 && health) return
-    lastFetchRef.current = now
+  // 健康检查：每次调用都拉取最新状态
+  // 为什么不做防抖：Popover 打开 + 刷新按钮均为用户主动操作，频率天然受控；
+  // 防抖会导致「刷新」按钮短时间点击无效，与用户预期不符
+  const fetchHealth = useCallback(async () => {
     setLoading(true)
     try {
       const data = await authApi.checkCookieHealth()
@@ -51,20 +49,22 @@ export default function UserMenu({ userInfo }: UserMenuProps) {
     } finally {
       setLoading(false)
     }
-  }, [health])
+  }, [])
 
   // Popover 打开时触发健康检查
   const handleOpenChange = useCallback((visible: boolean) => {
     setOpen(visible)
     if (visible) {
-      void fetchHealth(true)
+      void fetchHealth()
     }
   }, [fetchHealth])
 
   // 换号：跳转到登录页（保留当前路径用于登录后跳回）
+  // 为什么用 useLocation 而非 window.location：保持 SPA 路由一致性，
+  // 避免在 BrowserRouter/HashRouter 切换时取到错误的路径格式
   const handleSwitchAccount = () => {
     setOpen(false)
-    const currentPath = window.location.pathname + window.location.search
+    const currentPath = location.pathname + location.search
     navigate(`/login?redirect=${encodeURIComponent(currentPath)}`)
   }
 
@@ -131,7 +131,7 @@ export default function UserMenu({ userInfo }: UserMenuProps) {
             size="small"
             icon={<ReloadOutlined />}
             loading={loading}
-            onClick={() => fetchHealth(true)}
+            onClick={() => fetchHealth()}
           />
         </Tooltip>
       </div>

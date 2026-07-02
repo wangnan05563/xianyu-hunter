@@ -141,34 +141,39 @@ class TestChatbotAPIDegraded:
         assert resp.status_code == 403
 
     # ============== FAQ 管理 ==============
+    # 路由定义为单数 /faq（非复数 /faqs），且无 PUT 方法：
+    # 新增和更新统一走 POST /faq（upsert 语义），id 在 body 中传递
     def test_faq_list_returns_403(self, degraded_app):
-        """GET /faqs 应返回 403（注意复数形式 faqs，非 faq）"""
+        """GET /faq 应返回 403"""
         client = TestClient(degraded_app)
-        resp = client.get("/api/chatbot/faqs")
+        resp = client.get("/api/chatbot/faq")
         assert resp.status_code == 403
 
     def test_faq_create_returns_403(self, degraded_app):
-        """POST /faqs 应返回 403"""
+        """POST /faq 应返回 403"""
         client = TestClient(degraded_app)
         resp = client.post(
-            "/api/chatbot/faqs",
+            "/api/chatbot/faq",
             json={"question": "Q", "answer": "A"},
         )
         assert resp.status_code == 403
 
     def test_faq_update_returns_403(self, degraded_app):
-        """PUT /faqs/{id} 应返回 403"""
+        """POST /faq（带 id 的 upsert 更新）应返回 403
+
+        路由无 PUT 方法，新增和更新统一走 POST /faq upsert。
+        """
         client = TestClient(degraded_app)
-        resp = client.put(
-            "/api/chatbot/faqs/1",
-            json={"question": "Q", "answer": "A"},
+        resp = client.post(
+            "/api/chatbot/faq",
+            json={"id": 1, "question": "Q", "answer": "A"},
         )
         assert resp.status_code == 403
 
     def test_faq_delete_returns_403(self, degraded_app):
-        """DELETE /faqs/{id} 应返回 403"""
+        """DELETE /faq/{id} 应返回 403"""
         client = TestClient(degraded_app)
-        resp = client.delete("/api/chatbot/faqs/1")
+        resp = client.delete("/api/chatbot/faq/1")
         assert resp.status_code == 403
 
     # ============== 反馈 ==============

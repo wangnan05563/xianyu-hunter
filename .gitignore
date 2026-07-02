@@ -52,6 +52,9 @@ config/backups/
 # ---------- 敏感配置 ----------
 .env
 .env.local
+# config.yaml 可能包含钉钉/Telegram 等明文凭据（作为 keyring fallback）
+# 若已误提交，需执行 git rm --cached config/config.yaml 移除跟踪
+config/config.yaml
 
 # ---------- 日志 ----------
 *.log

@@ -22,7 +22,7 @@ from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.services.auth_manager import get_auth_manager
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
 from xianyu_hunter.web.services.notification_engine import scan_and_notify
-from xianyu_hunter.web.services.cookie_store import get_cookie_store
+from xianyu_hunter.web.services.cookie_store import get_cookie_store, _GOOFISH_KEY_COOKIES as _KEY_COOKIES
 
 logger = logging.getLogger(__name__)
 
@@ -123,11 +123,6 @@ def verify_session() -> dict:
 # ============================================================
 # Cookie 健康检查（轻量级，供状态栏悬浮面板调用）
 # ============================================================
-# 闲鱼关键 Cookie 名称（与 cookie_store._GOOFISH_KEY_COOKIES 对齐）
-# 为什么在此重复定义而非导入：避免 auth_query 与 cookie_store 形成循环导入依赖
-_KEY_COOKIES = {"_m_h5_tk", "_m_h5_tk_enc", "unb", "sgcookie", "cookie2", "lg2"}
-
-
 def _format_expiry(expiry_ts: float | None) -> str:
     """把 Unix 时间戳格式化为人类可读的剩余时间"""
     if expiry_ts is None:
@@ -142,7 +137,10 @@ def _format_expiry(expiry_ts: float | None) -> str:
         return f"约 {days} 天 {hours} 小时"
     if hours > 0:
         return f"约 {hours} 小时 {minutes} 分钟"
-    return f"约 {minutes} 分钟"
+    if minutes > 0:
+        return f"约 {minutes} 分钟"
+    # 剩余时间不足 1 分钟但仍 > 0，避免显示"约 0 分钟"造成误解
+    return "不足 1 分钟"
 
 
 @router.get("/cookie/health")
@@ -264,11 +262,12 @@ def _delete_cookie_json() -> bool:
 
 
 def _reset_auth_manager_cache() -> None:
-    """重置 AuthManager 的 userinfo 缓存，避免退出后仍显示旧用户信息"""
-    am = get_auth_manager()
-    with am._lock:
-        am._userinfo = {"logged_in": False, "user_id": "", "nick": "", "avatar_url": "", "fetched_at": 0}
-        am._userinfo_at = time.time()
+    """重置 AuthManager 的 userinfo 缓存，避免退出后仍显示旧用户信息
+
+    为什么调用 am.reset() 而非直接操作私有属性：保持封装性，
+    让 AuthManager 自行管理内部状态和持久化文件的清理。
+    """
+    get_auth_manager().reset()
 
 
 @router.post("/logout")

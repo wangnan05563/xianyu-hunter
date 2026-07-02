@@ -12,6 +12,8 @@ import LazyImage from '../../components/LazyImage'
 import { useAutoRefresh, DEFAULT_INTERVAL, MIN_INTERVAL, MAX_INTERVAL } from '../../hooks/useAutoRefresh'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
+import { useSearch } from '../../hooks/useSearch'
+import { useSearchHistory } from '../../hooks/useSearchHistory'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
 import { ExportButton } from '../../components/ExportButton'
 
@@ -126,6 +128,8 @@ function applyClientFilters(
 
 export default function ItemList() {
   const navigate = useNavigate()
+  // 搜索历史：商品标题关键词持久化到 localStorage，供快速复用
+  const { history, add, clear } = useSearchHistory({ namespace: 'items' })
   const [tasks, setTasks] = useState<Task[]>([])
   // 持久化 selectedTask：页面刷新或实时搜索无结果后恢复上次选择的任务
   // 避免每次加载都跳回第一个任务，保持用户操作一致性
@@ -233,6 +237,10 @@ export default function ItemList() {
         setItems(newItems)
         setTotal(res.total_for_type || 0)
         applyChangeHighlight(newItems, prevItemsRef, setHighlightRows, setShowUpdateToast)
+        // 搜索成功且关键词非空时记录历史，供后续快速复用
+        if (search && search.trim()) {
+          add(search.trim())
+        }
       })
       .catch((err) => {
         message.error(errDetail(err) || '加载商品列表失败')
@@ -240,7 +248,7 @@ export default function ItemList() {
         setTotal(0)
       })
       .finally(() => setLoading(false))
-  }, [selectedTask, page, pageSize, search, regionFilter, brandFilter, soldFilter])
+  }, [selectedTask, page, pageSize, search, regionFilter, brandFilter, soldFilter, add])
 
   // 触发式实时刷新：SSE 事件驱动为主，定时兜底轮询为辅
   // DB 模式和实时模式都支持轮询，通过 liveModeRef 选择不同的数据源
@@ -511,9 +519,14 @@ export default function ItemList() {
       .finally(() => setLoading(false))
   }, [selectedTask, liveMode, page, loadItems])
 
-  useEffect(() => {
-    if (!liveMode) loadItems()
-  }, [liveMode, loadItems])
+  // 搜索防抖：loadItems 依赖变化（selectedTask/page/search/region 等）时 400ms 防抖触发
+  // enabled: !liveMode 实时模式下跳过 DB 加载（实时模式由 loadLive/silentLiveRefresh 负责数据）
+  // 退出实时模式时 enabled 从 false→true，触发一次 DB 数据加载
+  useSearch({
+    search: async () => { loadItems() },
+    deps: [loadItems],
+    enabled: !liveMode,
+  })
 
   // 实时模式下搜索条件变化时在客户端重新过滤（不重新请求闲鱼 API）
   // liveItemsRef 保存了实时搜索的原始全量结果，每次筛选条件变化时从中重新过滤
@@ -887,6 +900,23 @@ export default function ItemList() {
             />
           </div>
         </Space>
+        {/* 搜索历史小药丸：点击复用历史关键词，避免重复输入 */}
+        {history.length > 0 && (
+          <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            {history.map((kw) => (
+              <Tag
+                key={kw}
+                onClick={() => { setSearch(kw); setPage(1) }}
+                style={{ cursor: 'pointer', margin: 0, fontSize: 11 }}
+              >
+                {kw}
+              </Tag>
+            ))}
+            <Button type="link" size="small" onClick={clear} style={{ padding: 0, fontSize: 11 }}>
+              清空
+            </Button>
+          </div>
+        )}
       </Card>
 
       <Card style={{ position: 'relative' }}>

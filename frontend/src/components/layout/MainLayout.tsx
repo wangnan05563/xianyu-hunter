@@ -618,13 +618,6 @@ function LayoutContent({
             >
               <ApiOutlined /> API 文档
             </a>
-            <a
-              href="/"
-              style={{ fontSize: 12, color: themeToken.colorTextSecondary }}
-              title="返回旧版控制台"
-            >
-              ← 返回旧版
-            </a>
           </div>
         </Header>
         <Content id="main-content" style={{ overflow: 'auto', background: themeToken.colorBgLayout }}>

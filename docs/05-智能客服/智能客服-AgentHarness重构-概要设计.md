@@ -2,9 +2,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 文档版本 | v1.0 |
-| 文档日期 | 2026-07-01 |
-| 文档状态 | 初稿 |
+| 文档版本 | v1.1 |
+| 文档日期 | 2026-07-02 |
+| 文档状态 | 评审更新稿 |
 | 所属项目 | 闲鱼猎人（XianyuHunter） |
 | 文档类型 | 概要设计说明书（SDD） |
 | 上游文档 | [智能客服-AgentHarness重构-需求规格.md](./智能客服-AgentHarness重构-需求规格.md) |
@@ -44,6 +44,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │ 前端层                                                       │
 │ Chatbot 页面 · ActionPlan 确认卡片 · 诊断报告卡片 · 工具管理页 │
+│ 沙箱管理页 · SKILL 管理页                                    │
 ├─────────────────────────────────────────────────────────────┤
 │ Web 层                                                       │
 │ api_chatbot.py · api_chatbot_agent.py · api_chatbot_config.py │
@@ -52,6 +53,7 @@
 │ agent_harness.py · action_planner.py · policy_engine.py       │
 │ approval_gate.py · tool_executor.py · procedure_runner.py     │
 │ audit_service.py · response_composer.py                       │
+│ sandbox_manager.py · skill_manager.py                         │
 ├─────────────────────────────────────────────────────────────┤
 │ 现有智能客服业务层                                           │
 │ orchestrator · agent · rag_engine · faq_matcher · context     │
@@ -59,6 +61,7 @@
 ├─────────────────────────────────────────────────────────────┤
 │ 业务能力适配层（新增工具）                                    │
 │ config_tools · order_tools · log_tools · diagnose_procedures  │
+│ skill_tools（命名空间化，沙箱内执行）                         │
 ├─────────────────────────────────────────────────────────────┤
 │ 基础设施层                                                   │
 │ repo_chatbot · repository · ai_usage · event_bus · logger     │
@@ -75,11 +78,15 @@ flowchart TB
     UI[Chatbot 前端] --> CHAT[/POST /api/chatbot/chat/]
     UI --> PLAN[/POST /api/chatbot/agent/plan/]
     UI --> CONFIRM[/POST /api/chatbot/agent/confirm/]
+    UI --> SBX[/沙箱管理接口/]
+    UI --> SKILL[/SKILL 管理接口/]
 
     CHAT --> ORCH[ChatbotOrchestrator]
     PLAN --> H[AgentHarness]
     CONFIRM --> H
     ORCH --> H
+    SBX --> SBM
+    SKILL --> SKM
 
     subgraph "Agent Harness"
         H --> AP[ActionPlanner]
@@ -89,6 +96,11 @@ flowchart TB
         TE --> RC[ResponseComposer]
         H --> PR[ProcedureRunner]
         H --> AU[AuditService]
+        H --> SBM[SandboxManager]
+        H --> SKM[SkillManager]
+        SBM -- 绑定校验/配额 --> TE
+        SKM -- 命名空间注册 --> TR
+        SKM -- 试运行 --> SBM
     end
 
     AP --> LLM[Agent / LLM]
@@ -96,6 +108,7 @@ flowchart TB
     TE --> TR
     TR --> RT[Read Tools]
     TR --> WT[Write Tools]
+    TR --> SKT[Skill Tools 命名空间]
     PR --> RT
     PR --> WT
 
@@ -104,7 +117,10 @@ flowchart TB
     RT --> LOGS[Logs API / Repo]
     RT --> REPO[Repository]
 
+    SBM --> OVL[沙箱配置覆盖层]
     AU --> DB[(SQLite agent_* + chatbot_audit_logs)]
+    SBM --> DB
+    SKM --> DB
     RC --> UI
 ```
 
@@ -117,6 +133,8 @@ flowchart TB
 | 写操作计划 | `/api/chatbot/chat` 或 `/api/chatbot/agent/plan` | Harness 生成待确认 `ActionPlan`，不执行写入。 |
 | 确认执行 | `/api/chatbot/agent/confirm` | 校验 token 与 payload hash，通过后执行工具并审计。 |
 | 取消动作 | `/api/chatbot/agent/cancel` | 标记动作取消，记录审计，不执行业务写入。 |
+| 沙箱模式 | `/api/chatbot/agent/sandboxes*` | 建立/卸载/快照/重置沙箱，工具调用绑定 sandbox_id，配置变更走覆盖层。 |
+| SKILL 管理 | `/api/chatbot/agent/skills*` | 安装/升级/卸载/启停 SKILL，试运行在沙箱内，命名空间注册到 ToolRegistry。 |
 
 ---
 
@@ -321,6 +339,161 @@ class ProcedureDefinition(BaseModel):
 - 高风险动作必须展示影响范围和失败可能。
 - 诊断报告必须包含证据摘要，不输出完整敏感日志。
 
+### 3.9 `sandbox_manager.py`
+
+**职责**：用户沙箱上下文的生命周期管理、资源配额、配置覆盖层、快照与重置，并向 `ToolExecutor` 提供绑定校验。
+
+**核心接口**：
+
+```python
+class SandboxManager:
+    async def create(self, user_id: str, quota: SandboxQuota) -> SandboxContext:
+        """为 user_id 创建沙箱上下文，返回 sandbox_id 与初始配额。"""
+
+    async def get(self, sandbox_id: str) -> SandboxContext | None:
+        """查询沙箱状态、配额用量、生命周期。"""
+
+    async def teardown(self, sandbox_id: str, keep_audit: bool = True) -> None:
+        """卸载沙箱：清理覆盖层与临时数据，保留审计摘要。"""
+
+    async def snapshot(self, sandbox_id: str) -> str:
+        """对沙箱覆盖层与未确认动作打快照，返回 snapshot_id。"""
+
+    async def reset(self, sandbox_id: str, snapshot_id: str | None) -> None:
+        """回滚到快照或清空临时数据，保留已确认执行的全局副作用。"""
+
+    async def check_binding(self, sandbox_id: str, user_id: str) -> bool:
+        """校验 sandbox_id 与 user_id 绑定关系，供 ToolExecutor 调用。"""
+
+    async def acquire_quota(self, sandbox_id: str, kind: str) -> None:
+        """占用配额（并发动作/调用频率/存储），超额抛 QuotaExceeded。"""
+
+    async def promote_overlay(self, sandbox_id: str) -> ActionPlan:
+        """将沙箱配置覆盖层提升为全局配置变更计划，走标准确认流程。"""
+```
+
+**沙箱上下文模型**：
+
+```python
+class SandboxContext(BaseModel):
+    sandbox_id: str
+    user_id: str
+    status: Literal["active", "suspended", "teardown"]
+    quota: SandboxQuota
+    overlay: dict[str, Any]            # 配置覆盖层（未提升到全局）
+    allowed_tools: list[str]           # 授权工具子集
+    created_at: datetime
+    last_active_at: datetime
+    idle_timeout_sec: int
+```
+
+**设计要点**：
+
+- 沙箱是 Harness 在 `user_id` 维度上的强隔离边界，非可选装饰：`ToolExecutor` 执行任何工具前必须调用 `check_binding`，未通过则记录 `sandbox_binding_violation` 并拒绝。
+- 配置覆盖层（overlay）是沙箱内 `config.preview` 的计算基准，仅在 `promote_overlay` 显式提升、并经过标准 `ActionPlan` 确认后才合并到全局 `config.yaml`，沙箱内绝不直接落盘。
+- `ContextManager` 按 `sandbox_id` 分区管理会话历史与 RAG 检索片段，避免跨沙箱上下文串扰（对应 FR-SB-11）。
+- 配额检查采用"先占后执行"：`acquire_quota` 成功才进入工具执行，失败抛 `QuotaExceeded` 由 Harness 转为 `SANDBOX_QUOTA_EXCEEDED`。
+- 沙箱空闲超时由后台巡检任务卸载，卸载后 `sandbox_id` 不可复用，仅保留审计摘要。
+- `SandboxManager` 不直接执行业务工具，只提供上下文与配额；业务执行仍走 `ToolExecutor`。
+
+### 3.10 `skill_manager.py`
+
+**职责**：SKILL 包解析、签名校验、Prompt Injection 校验、沙箱试运行、命名空间注册、版本管理与卸载。
+
+**核心接口**：
+
+```python
+class SkillManager:
+    async def install(
+        self, source: SkillSource, sandbox_id: str, approver: str
+    ) -> SkillInstallResult:
+        """安装 SKILL：解析→签名校验→展示权限→试运行→注册。"""
+
+    async def upgrade(
+        self, skill_name: str, target_version: str, sandbox_id: str
+    ) -> SkillInstallResult:
+        """升级 SKILL，保留旧版本，失败自动回滚。"""
+
+    async def uninstall(self, skill_name: str, version: str | None = None) -> None:
+        """卸载 SKILL：清理 ToolRegistry 注册项，保留审计与 agent_actions。"""
+
+    async def set_default(self, skill_name: str, version: str) -> None:
+        """切换默认版本，需管理员确认并审计。"""
+
+    async def enable(self, skill_name: str) -> None:
+        """启用 SKILL，其工具重新进入 ToolRegistry 可见集。"""
+
+    async def disable(self, skill_name: str) -> None:
+        """禁用 SKILL，其工具从 ToolRegistry 可见集移除但保留注册。"""
+
+    async def list_installed(self) -> list[SkillRecord]:
+        """查询已安装 SKILL 及版本、状态、默认版本标记。"""
+```
+
+**SKILL manifest 模型**：
+
+```python
+class SkillManifest(BaseModel):
+    name: str                          # 命名空间前缀，需匹配 ^[a-z][a-z0-9_]*$
+    version: str                       # semver
+    author: str
+    permissions: list[str]             # 不允许 admin/critical
+    risk_level: Literal["low", "medium", "high"]
+    dependencies: list[str]            # 依赖的其它 SKILL
+    resources: SkillResources          # 网络/文件/子进程声明
+    tools: list[ToolSpec]
+    procedures: list[ProcedureSpec]
+    prompt_fragments: list[str]
+    test_cases: list[TestCase]
+    signature: str                     # 对 manifest canonical JSON 的签名
+```
+
+**安装流程**：
+
+```mermaid
+sequenceDiagram
+    participant Admin as 管理员
+    participant API as api_chatbot_agent
+    participant SKM as SkillManager
+    participant SBM as SandboxManager
+    participant TR as ToolRegistry
+    participant DB as SQLite
+
+    Admin->>API: POST /skills/install (source, sandbox_id)
+    API->>SKM: install(source, sandbox_id)
+    SKM->>SKM: 解析 manifest + 校验签名
+    alt 签名无效
+        SKM-->>API: skill_signature_invalid
+        SKM->>DB: 审计 skill_signature_invalid
+    else Prompt Injection 命中
+        SKM-->>API: skill_prompt_injection
+        SKM->>DB: 审计 skill_prompt_injection
+    else 校验通过
+        SKM-->>Admin: 展示权限/风险/依赖/注册项
+        Admin->>API: 确认安装
+        API->>SKM: proceed
+        SKM->>SBM: 在 sandbox_id 内试运行 test_cases
+        alt test_cases 失败
+            SKM-->>API: install_failed_dryrun
+            SKM->>SBM: 清理试运行产物
+        else test_cases 通过
+            SKM->>TR: 命名空间注册 <skill>.<tool>
+            SKM->>DB: 写 agent_skills + agent_skill_installations
+            SKM-->>API: installed
+        end
+    end
+```
+
+**设计要点**：
+
+- SKILL 工具一律以 `<skill_name>.<tool_name>` 命名空间注册，`ToolRegistry` 校验命名冲突，冲突时拒绝安装（对应 FR-SK-06）。
+- 试运行必须在 `SkillManager.install` 传入的 `sandbox_id` 内执行，试运行产物不污染全局，失败时由 `SandboxManager.reset` 清理。
+- `PolicyEngine` 对 SKILL 工具取"最严格策略合并"：系统默认策略与 SKILL 声明取严，SKILL 不得声明 admin/critical，此类声明降级为 high 并强制确认或拒绝安装（对应 SR-14）。
+- 多版本共存：`agent_skills` 表以 `(skill_name, version)` 为唯一键，`is_default` 标记默认版本；`ToolRegistry` 只加载默认版本工具，切换默认版本需重新加载。
+- 升级失败自动回滚：保留上一可用版本，回滚后恢复其 ToolRegistry 注册。
+- 卸载只清理 `ToolRegistry` 注册项与 `ProcedureRunner` 定义，不删除 `agent_skills` 历史与 `agent_actions` 记录（对应 SR-15）。
+- SKILL 的 prompt 片段在安装时经 `sanitizer.check_user_input_safety` 校验，命中注入模式拒绝安装。
+
 ---
 
 ## 4. 工具体系设计
@@ -333,7 +506,7 @@ class ProcedureDefinition(BaseModel):
 class ToolMetadata(BaseModel):
     name: str
     description: str
-    category: Literal["read", "diagnose", "config", "order", "task", "admin"]
+    category: Literal["read", "diagnose", "config", "order", "task", "admin", "skill"]
     permissions: list[str]
     risk_level: Literal["low", "medium", "high", "critical"]
     requires_confirmation: bool
@@ -341,6 +514,8 @@ class ToolMetadata(BaseModel):
     rollback_supported: bool = False
     timeout_sec: int = 5
     enabled: bool = True
+    skill_source: str | None = None     # SKILL 工具标记来源 SKILL 名与版本，系统工具为 None
+    sandbox_only: bool = False          # 是否仅限沙箱内调用（SKILL 工具默认 True）
 ```
 
 兼容策略：
@@ -359,6 +534,7 @@ class ToolMetadata(BaseModel):
 | order | `order.precheck`、`order.manual_takeover` | precheck 可执行，manual_takeover 需 confirm |
 | task | `task.status_update`、`task.pause`、`task.resume` | 需 confirm |
 | admin | `db.cleanup`、`vector.rebuild`、`tunnel.toggle` | 默认禁用或需 confirm |
+| skill | `<skill>.<tool>`（命名空间化） | 仅在所属沙箱内执行，继承 SKILL 风险与确认策略 |
 
 ### 4.3 首批新增工具
 
@@ -378,6 +554,9 @@ class ToolMetadata(BaseModel):
 - `ToolRegistry.get_openai_schemas()` 默认只返回 read/diagnose 工具。
 - 写工具仅通过 `ToolExecutor.execute_confirmed()` 调用。
 - 写工具执行前必须存在 `agent_actions.status="confirmed"` 或 `running`。
+- 沙箱模式下所有工具调用必须携带 `sandbox_id`，`ToolExecutor` 调用 `SandboxManager.check_binding` 校验绑定，未通过拒绝并记录 `sandbox_binding_violation`。
+- SKILL 工具（`category="skill"`）默认 `sandbox_only=True`，仅能在所属沙箱内调用；`get_openai_schemas()` 对非沙箱会话不返回 SKILL 工具。
+- SKILL 工具的 `risk_level` 由 `PolicyEngine` 取系统策略与 SKILL 声明的最严格值，确认策略不得低于 high。
 
 ---
 
@@ -410,6 +589,8 @@ class ToolMetadata(BaseModel):
 | result_json | TEXT | 脱敏执行结果 |
 | error_code | TEXT | 失败错误码 |
 | request_id | TEXT | 全局流水号 |
+| sandbox_id | TEXT | 沙箱模式必填，非沙箱模式为空 |
+| skill_source | TEXT | SKILL 工具调用时记录来源 SKILL 名与版本，系统工具为空 |
 | created_at | DATETIME | 创建时间 |
 | updated_at | DATETIME | 更新时间 |
 
@@ -418,6 +599,7 @@ class ToolMetadata(BaseModel):
 - `ix_agent_actions_session_created(session_id, created_at)`
 - `ix_agent_actions_status_created(status, created_at)`
 - `ix_agent_actions_request_id(request_id)`
+- `ix_agent_actions_sandbox(sandbox_id, created_at)`
 
 #### 5.1.2 `agent_action_steps`
 
@@ -460,6 +642,8 @@ class ToolMetadata(BaseModel):
 | output_hash | TEXT | 输出 hash |
 | error_code | TEXT | 错误码 |
 | request_id | TEXT | 流水号 |
+| sandbox_id | TEXT | 沙箱调用必填，非沙箱为空 |
+| skill_source | TEXT | SKILL 工具调用时记录来源，系统工具为空 |
 | created_at | DATETIME | 创建时间 |
 
 索引：
@@ -467,6 +651,7 @@ class ToolMetadata(BaseModel):
 - `ix_agent_tool_calls_tool_created(tool_name, created_at)`
 - `ix_agent_tool_calls_session_created(session_id, created_at)`
 - `ix_agent_tool_calls_request_id(request_id)`
+- `ix_agent_tool_calls_sandbox(sandbox_id, created_at)`
 
 #### 5.1.4 `agent_policy_events`
 
@@ -483,6 +668,112 @@ class ToolMetadata(BaseModel):
 | request_id | TEXT | 流水号 |
 | created_at | DATETIME | 创建时间 |
 
+#### 5.1.5 `agent_sandboxes`
+
+记录沙箱上下文生命周期与配额。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | TEXT PK | sandbox_id，UUID32 |
+| user_id | TEXT | 绑定用户 |
+| status | TEXT | active/suspended/teardown |
+| quota_json | TEXT | 配额配置（并发动作/调用频率/存储上限） |
+| usage_json | TEXT | 当前配额用量快照 |
+| allowed_tools_json | TEXT | 授权工具子集 |
+| idle_timeout_sec | INTEGER | 空闲超时秒数 |
+| last_active_at | DATETIME | 最近活动时间 |
+| teardown_at | DATETIME | 卸载时间，卸载后不可复用 |
+| request_id | TEXT | 创建时流水号 |
+| created_at | DATETIME | 创建时间 |
+| updated_at | DATETIME | 更新时间 |
+
+索引：
+
+- `ix_agent_sandboxes_user_status(user_id, status)`
+- `ix_agent_sandboxes_last_active(last_active_at)`
+
+#### 5.1.6 `agent_sandbox_overlays`
+
+记录沙箱配置覆盖层（未提升到全局的临时配置 diff）。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | 自增 |
+| sandbox_id | TEXT | 关联沙箱 |
+| path | TEXT | 配置路径，如 `eval.pass_score` |
+| op | TEXT | modify/add/delete |
+| old_value | TEXT | 脱敏旧值 |
+| new_value | TEXT | 脱敏新值 |
+| promoted | INTEGER | 0/1，是否已提升到全局 |
+| created_at | DATETIME | 创建时间 |
+
+索引：
+
+- `ix_agent_sandbox_overlays_sandbox(sandbox_id, path)`
+- `ix_agent_sandbox_overlays_promoted(promoted)`
+
+#### 5.1.7 `agent_sandbox_snapshots`
+
+记录沙箱快照（覆盖层与未确认动作的不可变副本）。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | TEXT PK | snapshot_id |
+| sandbox_id | TEXT | 关联沙箱 |
+| overlay_json | TEXT | 快照时刻覆盖层深拷贝 |
+| pending_action_ids_json | TEXT | 快照时刻未确认动作列表 |
+| created_by | TEXT | 操作人 |
+| created_at | DATETIME | 创建时间 |
+
+索引：
+
+- `ix_agent_sandbox_snapshots_sandbox(sandbox_id, created_at)`
+
+#### 5.1.8 `agent_skills`
+
+记录已安装 SKILL 及版本。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | 自增 |
+| skill_name | TEXT | SKILL 名，命名空间前缀 |
+| version | TEXT | semver 版本 |
+| manifest_json | TEXT | 完整 manifest（含脱敏后字段） |
+| signature | TEXT | 签名 |
+| status | TEXT | installed/enabled/disabled/uninstalled |
+| is_default | INTEGER | 0/1，是否默认版本 |
+| installed_by | TEXT | 安装人 |
+| installed_at | DATETIME | 安装时间 |
+| uninstalled_at | DATETIME | 卸载时间 |
+
+索引：
+
+- `ix_agent_skills_name_version(skill_name, version)` 唯一
+- `ix_agent_skills_name_default(skill_name, is_default)`
+- `ix_agent_skills_status(status)`
+
+#### 5.1.9 `agent_skill_installations`
+
+记录 SKILL 安装/升级/卸载/启停审计事件。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER PK | 自增 |
+| skill_name | TEXT | SKILL 名 |
+| version | TEXT | 目标版本 |
+| operation | TEXT | install/upgrade/uninstall/enable/disable/set_default |
+| before_status | TEXT | 操作前状态 |
+| after_status | TEXT | 操作后状态 |
+| operator | TEXT | 操作人 |
+| reason_code | TEXT | 成功/失败原因码 |
+| request_id | TEXT | 流水号 |
+| created_at | DATETIME | 创建时间 |
+
+索引：
+
+- `ix_agent_skill_installations_skill(skill_name, created_at)`
+- `ix_agent_skill_installations_request_id(request_id)`
+
 ### 5.2 与现有表关系
 
 | 现有表 | 关系 |
@@ -493,6 +784,9 @@ class ToolMetadata(BaseModel):
 | `events` / `error_logs` | 通过 request_id 与 Agent 动作关联。 |
 | `orders` | 下单工具执行后读取或写入订单状态。 |
 | `tasks` / `items` / `evaluations` | 下单前置检查和诊断工具读取。 |
+| `agent_actions` / `agent_tool_calls` | 新增 `sandbox_id` 字段关联 `agent_sandboxes`，SKILL 工具调用额外记录 `skill_source`。 |
+| `agent_sandboxes` | 通过 `user_id` 与多用户体系关联，沙箱内动作与工具调用均回写 `sandbox_id`。 |
+| `agent_skills` | SKILL 工具的 `skill_source` 关联 `agent_skills(skill_name, version)`，卸载后历史调用保留可查。 |
 
 ### 5.3 迁移策略
 
@@ -520,6 +814,21 @@ class ToolMetadata(BaseModel):
 | GET | `/tools` | 查询工具目录 |
 | GET | `/procedures` | 查询 Procedure 目录 |
 | POST | `/procedures/{name}/run` | 运行诊断 Procedure |
+| POST | `/sandboxes` | 创建沙箱上下文 |
+| GET | `/sandboxes` | 查询沙箱列表与状态 |
+| DELETE | `/sandboxes/{sandbox_id}` | 卸载沙箱 |
+| POST | `/sandboxes/{sandbox_id}/snapshot` | 沙箱打快照 |
+| POST | `/sandboxes/{sandbox_id}/reset` | 回滚到快照或清空临时数据 |
+| POST | `/sandboxes/{sandbox_id}/promote` | 提升沙箱覆盖层到全局（走确认流程） |
+| POST | `/skills/install` | 安装 SKILL（本地导入或市场 URL） |
+| GET | `/skills` | 查询已安装 SKILL |
+| GET | `/skills/{skill_name}` | 查询 SKILL 详情 |
+| DELETE | `/skills/{skill_name}` | 卸载 SKILL |
+| POST | `/skills/{skill_name}/enable` | 启用 SKILL |
+| POST | `/skills/{skill_name}/disable` | 禁用 SKILL |
+| POST | `/skills/{skill_name}/upgrade` | 升级 SKILL |
+| POST | `/skills/{skill_name}/default` | 切换默认版本 |
+| GET | `/skills/{skill_name}/versions` | 查询历史版本 |
 
 ### 6.3 请求响应模型
 
@@ -582,6 +891,75 @@ class ToolMetadata(BaseModel):
 }
 ```
 
+#### `POST /sandboxes`
+
+请求：
+
+```json
+{
+  "user_id": "user_001",
+  "quota": {
+    "max_pending_actions": 5,
+    "max_calls_per_min": 30,
+    "max_storage_kb": 10240
+  },
+  "allowed_tools": ["config.preview", "logs.search", "logs.request_chain"],
+  "idle_timeout_sec": 1800
+}
+```
+
+响应：
+
+```json
+{
+  "sandbox_id": "sb_20260702_001",
+  "user_id": "user_001",
+  "status": "active",
+  "expires_at": "2026-07-02T19:00:00+08:00"
+}
+```
+
+#### `POST /skills/install`
+
+请求：
+
+```json
+{
+  "source": {"type": "local", "path": "/tmp/skill_pkg/price_analyzer"},
+  "sandbox_id": "sb_20260702_001",
+  "approver": "admin"
+}
+```
+
+响应（待确认阶段）：
+
+```json
+{
+  "stage": "approval_required",
+  "manifest": {
+    "name": "price_analyzer",
+    "version": "1.2.0",
+    "permissions": ["read", "diagnose"],
+    "risk_level": "medium",
+    "tools": ["price_analyzer.compare", "price_analyzer.history"]
+  },
+  "install_token": "opaque-install-token"
+}
+```
+
+响应（安装完成）：
+
+```json
+{
+  "stage": "installed",
+  "skill_name": "price_analyzer",
+  "version": "1.2.0",
+  "is_default": true,
+  "registered_tools": ["price_analyzer.compare", "price_analyzer.history"],
+  "audit_event_id": 678
+}
+```
+
 ### 6.4 SSE 扩展
 
 现有 `/api/chatbot/chat` SSE 增加事件：
@@ -593,6 +971,8 @@ class ToolMetadata(BaseModel):
 | `diagnostic_report` | 诊断报告 |
 | `tool_observation` | 脱敏工具结果摘要 |
 | `action_result` | 执行结果 |
+| `sandbox_event` | 沙箱创建/卸载/重置/配额告警 |
+| `skill_event` | SKILL 安装/升级/卸载/试运行进度 |
 
 兼容性：旧前端忽略未知 SSE event，不影响普通聊天。
 
@@ -710,6 +1090,28 @@ flowchart LR
     I --> J[执行工具]
 ```
 
+### 7.5 沙箱配置覆盖与提升流程
+
+```mermaid
+flowchart TB
+    A[沙箱用户提出配置修改] --> B[ActionPlanner 生成建议型 ActionPlan]
+    B --> C[config.preview 基于沙箱 overlay 计算 diff]
+    C --> D{用户在沙箱内确认?}
+    D -- 取消 --> E[仅记录沙箱临时动作]
+    D -- 确认 --> F[写入 agent_sandbox_overlays<br/>不落盘全局 config.yaml]
+    F --> G[沙箱内后续 preview 基于 overlay 叠加]
+
+    H[管理员发起 promote] --> I[SandboxManager.promote_overlay]
+    I --> J[生成全局配置变更 ActionPlan<br/>risk=high]
+    J --> K{管理员二次确认?}
+    K -- 否 --> L[放弃提升，overlay 保留]
+    K -- 是 --> M[ToolExecutor 执行 config.save]
+    M --> N[overlay 标记 promoted]
+    N --> O[全局 config.yaml 更新 + 审计]
+```
+
+要点：沙箱内配置变更默认不触达全局；只有显式 `promote` 并经过标准 `ActionPlan` 确认后才合并到全局配置，确保沙箱隔离与全局安全执行底座不冲突。
+
 ---
 
 ## 8. 集成设计
@@ -723,7 +1125,10 @@ agent_repo = AgentRepository(container.repo.engine)
 tool_registry = ToolRegistry(...)
 policy_engine = PolicyEngine(config=cfg.agent_harness)
 approval_gate = ApprovalGate(secret=settings.app_secret)
-tool_executor = ToolExecutor(tool_registry, agent_repo)
+sandbox_manager = SandboxManager(agent_repo, config=cfg.agent_harness.sandbox)
+# ToolExecutor 注入 sandbox_manager，沙箱模式下强制绑定校验与配额
+tool_executor = ToolExecutor(tool_registry, agent_repo, sandbox_manager)
+skill_manager = SkillManager(tool_registry, sandbox_manager, agent_repo, config=cfg.agent_harness.skill)
 procedure_runner = ProcedureRunner(tool_executor, definitions=...)
 audit_service = AuditService(agent_repo, chatbot_repo, event_bus)
 agent_harness = AgentHarness(
@@ -733,12 +1138,16 @@ agent_harness = AgentHarness(
     tool_executor=tool_executor,
     procedure_runner=procedure_runner,
     audit_service=audit_service,
+    sandbox_manager=sandbox_manager,
+    skill_manager=skill_manager,
 )
 
 return {
     ...
     "agent_repo": agent_repo,
     "agent_harness": agent_harness,
+    "sandbox_manager": sandbox_manager,
+    "skill_manager": skill_manager,
 }
 ```
 
@@ -775,6 +1184,22 @@ chatbot:
     allow_admin_tools: false
     max_action_payload_bytes: 20000
     prompt_injection_block_write: true
+    sandbox:
+      enabled: false                     # 沙箱模式总开关，默认关闭保持单用户兼容
+      default_idle_timeout_sec: 1800
+      default_quota:
+        max_pending_actions: 5
+        max_calls_per_min: 30
+        max_storage_kb: 10240
+      max_lifetime_sec: 86400            # 单沙箱最大存活时长
+      enforce_binding: true              # ToolExecutor 强制绑定校验
+    skill:
+      allow_skill_install: true          # SKILL 安装总开关
+      allowed_market_urls: []            # 官方市场白名单
+      require_signature: true            # 强制签名校验
+      require_dryrun: true               # 强制沙箱试运行
+      default_risk_level: high           # SKILL 缺省风险
+      deny_admin_critical: true          # 拒绝 admin/critical 声明
 ```
 
 ---
@@ -816,6 +1241,25 @@ chatbot:
 - `ToolExecutor` 每次工具调用都写 `agent_tool_calls`。
 - 写审计失败时，写工具不得继续执行，返回 `AUDIT_WRITE_FAILED`。
 
+### 9.5 沙箱隔离
+
+- `ToolExecutor` 执行工具前调用 `SandboxManager.check_binding(sandbox_id, user_id)`，未通过返回 `sandbox_binding_violation`，不执行工具。
+- 沙箱配置覆盖层只存在于 `agent_sandbox_overlays` 与内存，`config.preview` 在沙箱上下文中叠加 overlay 计算 diff，绝不直接写全局 `config.yaml`。
+- 覆盖层提升到全局必须经 `promote_overlay` 生成 `risk=high` 的 `ActionPlan`，走标准确认门与 HMAC token 校验。
+- `ContextManager` 按 `sandbox_id` 分区管理会话历史与 RAG 检索片段，跨沙箱读取被拒绝。
+- 沙箱配额在 `ToolExecutor` 与 `AgentHarness.plan()` 前置检查，超额返回 `SANDBOX_QUOTA_EXCEEDED`，不进入工具执行。
+- 沙箱卸载后 `sandbox_id` 不可复用，临时数据清理，审计摘要与已确认全局副作用保留。
+
+### 9.6 SKILL 安全
+
+- SKILL 安装三道关卡：签名校验（`require_signature`）→ Prompt Injection 校验（`sanitizer.check_user_input_safety`）→ 沙箱试运行（`require_dryrun`），任一失败拒绝安装。
+- SKILL 工具命名空间化 `<skill>.<tool>`，`ToolRegistry.register` 校验冲突，冲突拒绝安装。
+- SKILL 不得声明 admin/critical 权限，`SkillManager` 对此类声明降级为 high 或拒绝安装；`PolicyEngine` 对 SKILL 工具取系统策略与 SKILL 声明的最严格值。
+- SKILL 工具默认 `sandbox_only=True`，非沙箱会话的 `get_openai_schemas()` 不返回 SKILL 工具，LLM 无法在非沙箱上下文直接调用。
+- SKILL 工具的 observation 进入 LLM 前必须脱敏，脱敏策略与系统工具一致（复用 `ToolRegistry._filter_sensitive`）。
+- SKILL 卸载只清理 `ToolRegistry` 注册项，不删除 `agent_skills` 历史与 `agent_actions`，保证审计可追溯。
+- `allow_skill_install=false` 时所有 SKILL 安装相关接口返回 403，已安装 SKILL 保持可用但不可新增/升级。
+
 ---
 
 ## 10. 错误处理与降级
@@ -831,6 +1275,14 @@ chatbot:
 | 下单前置检查失败 | 不生成下单确认卡，展示修复步骤。 |
 | 审计写入失败 | 阻断写工具执行。 |
 | Harness 初始化失败 | `/api/chatbot/chat` 降级回旧 RAG/FAQ 流程。 |
+| 沙箱绑定校验失败 | 拒绝工具调用，记录 `sandbox_binding_violation`，返回隔离错误。 |
+| 沙箱配额超额 | 返回 `SANDBOX_QUOTA_EXCEEDED`，不执行超额动作，提示管理员调配额。 |
+| 沙箱空闲超时 | 后台巡检自动卸载，保留审计摘要，sandbox_id 不可复用。 |
+| SKILL 签名校验失败 | 拒绝安装，记录 `skill_signature_invalid`，不写入 ToolRegistry。 |
+| SKILL Prompt Injection 命中 | 拒绝安装，记录 `skill_prompt_injection`，清理已下载包。 |
+| SKILL 试运行失败 | 拒绝正式注册，清理沙箱试运行产物，返回失败用例摘要。 |
+| SKILL 升级失败 | 自动回滚到上一可用版本，记录 `skill_upgrade_rolled_back`。 |
+| SKILL 工具运行时异常 | 与系统工具一致由 `ToolExecutor` 捕获，返回 `success=false`，不击穿 Harness。 |
 
 ---
 
@@ -880,6 +1332,40 @@ chatbot:
 - 是否启用
 - 是否需要确认
 - 最近调用成功率
+- 来源（系统 / SKILL 名+版本，SKILL 工具标记命名空间）
+
+### 11.4 沙箱管理页
+
+位置：Agent Harness Tab 下新增"沙箱"子页（仅管理员可见）。
+
+展示：
+
+- 沙箱列表：sandbox_id、user_id、状态、配额用量、最近活动时间、空闲超时倒计时
+- 沙箱详情：授权工具子集、配置覆盖层 diff、未确认动作列表、快照列表
+- 操作：创建、卸载、打快照、回滚到快照、清空临时数据、提升覆盖层到全局（跳转确认卡片）
+
+交互：
+
+- 提升覆盖层生成 `risk=high` 的 ActionPlan 确认卡片，走标准确认流程。
+- 卸载高危操作需二次确认，提示"将清理临时数据，保留审计"。
+- 配额用量接近上限以警告色提示。
+
+### 11.5 SKILL 管理页
+
+位置：Agent Harness Tab 下新增"SKILL"子页（仅管理员可见）。
+
+展示：
+
+- 已安装 SKILL 列表：名称、版本、状态、默认版本标记、来源、安装时间
+- SKILL 详情：manifest 摘要（权限、风险、依赖、资源声明）、注册工具/Procedure 列表、安装审计历史、历史版本
+- 安装入口：本地导入、市场 URL 安装（市场地址受白名单约束）
+
+交互：
+
+- 安装分阶段展示：校验中 → 待确认（展示权限清单）→ 试运行中 → 安装完成/失败。
+- 升级展示版本对比与回滚提示。
+- 卸载高危操作需二次确认，提示"将清理工具注册，保留历史审计"。
+- `allow_skill_install=false` 时安装入口置灰禁用。
 
 ---
 
@@ -889,11 +1375,13 @@ chatbot:
 
 | 模块 | 测试重点 |
 ---|---|
-| `PolicyEngine` | 权限、风险升级、Prompt Injection 阻断 |
+| `PolicyEngine` | 权限、风险升级、Prompt Injection 阻断、SKILL 工具最严格策略合并 |
 | `ApprovalGate` | token 签发、过期、篡改、一次性消费 |
-| `ActionPlanner` | 配置修改解析、非法 JSON 降级 |
-| `ToolExecutor` | 超时、异常、脱敏、写工具确认门 |
+| `ActionPlanner` | 配置修改解析、非法 JSON 降级、沙箱内建议型计划生成 |
+| `ToolExecutor` | 超时、异常、脱敏、写工具确认门、沙箱绑定校验、配额占用 |
 | `ProcedureRunner` | 成功、部分失败、权限不足 |
+| `SandboxManager` | 创建/卸载/快照/重置、配额超额、绑定校验、覆盖层提升、空闲超时卸载 |
+| `SkillManager` | 签名校验、Prompt Injection 拒绝、试运行失败、命名空间冲突、升级回滚、卸载保留审计 |
 
 ### 12.2 集成测试
 
@@ -903,11 +1391,19 @@ chatbot:
 - 重复 confirm 被拒绝。
 - 下单前置检查失败时不生成可执行下单动作。
 - request_id 日志诊断返回脱敏报告。
+- 沙箱内配置修改不落盘全局，`promote` 后经确认才写入全局。
+- 跨沙箱工具调用被拒绝并记录 `sandbox_binding_violation`。
+- 沙箱配额超额返回 `SANDBOX_QUOTA_EXCEEDED`。
+- 未签名 SKILL 安装被拒绝并记录 `skill_signature_invalid`。
+- SKILL 试运行失败不注册到 ToolRegistry，沙箱产物被清理。
+- SKILL 工具以 `<skill>.<tool>` 命名空间注册，卸载后不可调用但历史可查。
 
 ### 12.3 回归测试
 
 - 现有 `tests/test_chatbot_*` 继续通过。
 - 禁用 `chatbot.agent_harness.enabled` 后，现有 RAG/FAQ 对话不受影响。
+- 禁用 `agent_harness.sandbox.enabled` 后，单用户流程与现有 Harness 行为一致。
+- 禁用 `agent_harness.skill.allow_skill_install` 后，已安装 SKILL 仍可用但安装接口返回 403。
 - 旧前端忽略新增 SSE event 时不报错。
 
 ---
@@ -921,6 +1417,8 @@ chatbot:
 | Phase 3 | 日志 search/request_chain 工具、诊断报告卡片 | 可读取后台日志并输出诊断报告 |
 | Phase 4 | 下单 precheck/manual_takeover 工具 | 可确认后触发手动抢单 |
 | Phase 5 | ProcedureRunner 与工具管理页 | 支持任务、登录、抢单、配置异常诊断 |
+| Phase 6 | SandboxManager、配置覆盖层、资源配额、沙箱管理 API 与前端 | 多用户隔离与 SKILL 执行环境就绪 |
+| Phase 7 | SkillManager、SKILL 包格式、签名/试运行/版本管理、卸载、SKILL 管理页 | 可分发扩展生态形成 |
 
 ---
 
@@ -935,19 +1433,28 @@ chatbot:
 | repo_chatbot 文件继续膨胀 | 新增 `AgentRepository`，只复用 engine，不塞进 `repo_chatbot.py`。 |
 | 诊断日志泄露敏感字段 | 工具层和展示层双重脱敏。 |
 | 现有客服功能被影响 | Harness 可配置禁用，Orchestrator 可降级到旧流程。 |
+| 沙箱隔离被绕过 | ToolExecutor 强制 `check_binding`，沙箱模式默认关闭保持单用户兼容。 |
+| 沙箱配置覆盖层污染全局 | 覆盖层仅存内存与 overlay 表，提升到全局必须走标准确认门。 |
+| 恶意 SKILL 注入 | 签名校验 + Prompt Injection 校验 + 沙箱试运行三道关卡，缺一不可。 |
+| SKILL 工具权限越界 | 禁止 admin/critical 声明，PolicyEngine 取最严格策略合并，SKILL 工具默认 sandbox_only。 |
+| SKILL 卸载丢审计 | 卸载仅清理 ToolRegistry 注册项，agent_skills 历史与 agent_actions 永久保留。 |
+| 多版本 SKILL 冲突 | 命名空间 + 版本唯一键，默认版本标记，切换需管理员确认。 |
 
 ---
 
 ## 15. 阶段交接声明
 
-- 当前阶段：Agent Harness 重构概要设计。
+- 当前阶段：Agent Harness 重构概要设计（含用户沙箱模式与 SKILL 安装功能扩展）。
 - 下一阶段：详细设计。
 - 推荐详细设计重点：
   1. `AgentRepository` 表结构与 CRUD 方法。
-  2. `ActionPlan` / `PolicyDecision` / `ToolObservation` Pydantic 模型。
+  2. `ActionPlan` / `PolicyDecision` / `ToolObservation` / `SandboxContext` / `SkillManifest` Pydantic 模型。
   3. `ApprovalGate` HMAC token 细节与测试用例。
   4. `config.preview/save/rollback` 和 `logs.request_chain` 工具实现细节。
-  5. 前端 ActionPlan 卡片状态机。
+  5. `SandboxManager` 覆盖层叠加算法、配额计数器、空闲超时巡检实现。
+  6. `SkillManager` 签名校验算法、命名空间注册、试运行执行器、版本回滚实现。
+  7. `ToolExecutor` 与 `SandboxManager` 的绑定校验与配额占用协作时序。
+  8. 前端 ActionPlan 卡片、沙箱管理页、SKILL 管理页状态机。
 
 ---
 

@@ -134,7 +134,7 @@ async def refresh_item(
     if container.collector is None:
         raise HTTPException(
             status_code=503,
-            detail="闇€瑕佹祻瑙堝櫒瀹炰緥锛岃浠?XH_WITH_SCHEDULER=1 妯″紡鍚姩",
+            detail="需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动",
         )
 
     try:
@@ -151,14 +151,14 @@ async def refresh_item(
         logger.warning(f"[RefreshItem] collection timeout item={item_id}")
         raise HTTPException(
             status_code=504,
-            detail="閲囬泦瓒呮椂锛氭祻瑙堝櫒瀹炰緥寮傚父鎴栭棽楸煎弽鐖嫤鎴紝璇风◢鍚庨噸璇曟垨閲嶅惎鏈嶅姟",
+            detail="采集超时：浏览器实例异常或闲鱼反爬拦截，请稍后重试或重启服务",
         )
     except CollectionError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
 
     detail = result.detail
     if detail is None:
-        raise HTTPException(status_code=502, detail="閲囬泦鍟嗗搧璇︽儏澶辫触锛氭湭杩斿洖璇︽儏")
+        raise HTTPException(status_code=502, detail="采集商品详情失败：未返回详情")
     return {
         "ok": True,
         "item_id": item_id,
@@ -177,106 +177,4 @@ async def refresh_item(
         "seller_credit": detail.detail_credit_score,
     }
 
-    # 校验 collector 是否可用（Web 进程 with_browser=False 时为 None）
-    if container.collector is None:
-        raise HTTPException(
-            status_code=503,
-            detail="需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动",
-        )
 
-    # items 表无记录时不阻断采集：refresh 的目的就是采集后写入 items 表
-    item = container.repo.get_item(item_id) or {}
-
-    try:
-        from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
-
-        await inject_cookie_store_to_worker_browser("刷新商品详情前 Cookie 同步", force_refresh_m5tk=False)
-    except Exception as e:
-        logger.debug(f"[RefreshItem] Cookie 同步到 Worker 浏览器失败: {e}")
-
-    # detail() 内部 page.goto 已有 30s 超时，但 page.query_selector 等无 timeout 参数，
-    # 浏览器实例异常（页面/上下文已关闭）时会无限挂起。
-    # 这里加 60s 整体超时：detail 正常应在 30s 内完成，60s 是合理上限；
-    # 超时说明浏览器实例异常或闲鱼反爬拦截，返回 504 让客户端知道是网关超时而非业务错误
-    try:
-        detail = await asyncio.wait_for(
-            container.collector.detail(item_id), timeout=60.0
-        )
-    except asyncio.TimeoutError:
-        logger.warning(f"[RefreshItem] 采集超时 item={item_id}（60s），浏览器实例可能异常")
-        raise HTTPException(
-            status_code=504,
-            detail="采集超时：浏览器实例异常或闲鱼反爬拦截，请稍后重试或重启服务",
-        )
-    except Exception as e:
-        logger.warning(f"[RefreshItem] 采集失败 item={item_id}: {e}")
-        raise HTTPException(status_code=502, detail=f"采集失败：{e}")
-
-    if detail is None:
-        raise HTTPException(status_code=502, detail="采集商品详情失败：页面不可达或登录已过期")
-
-    # task_id 优先级：items 表已有 > 查询参数 > 空字符串
-    # 空 task_id 时跳过 sync_item_display_from_detail，避免写空 task_links 关联
-    resolved_task_id = item.get("task_id") or task_id or ""
-
-    # 下架/已删除场景：detail() 早期返回 ItemDetail(title="", price=0, is_sold=True)
-    # 此时不应用空 title/price 覆盖 items 表已有有效数据：
-    # - items 表已有记录：跳过 upsert_item，仅 mark_sold 更新 is_sold=1
-    # - items 表无记录：仍 upsert_item 插入占位行（is_sold=1, title=空），
-    #   让前端能感知下架状态；mark_sold 因无 WHERE 匹配不会报错（rowcount=0）
-    is_delisted = detail.is_sold and not detail.title
-    if is_delisted and item:
-        logger.info(f"[RefreshItem] 商品已下架 item={item_id}，跳过 upsert 避免覆盖已有字段，仅标记 is_sold=1")
-    else:
-        # 更新 items 表（复用官方采集的旧值保留策略，避免清空已有字段）
-        new_row = {
-            "id": item_id,
-            "task_id": resolved_task_id,
-            "title": detail.title,
-            "price": detail.price,
-            "seller_id": detail.seller_id or "",
-            "region": detail.region or "",
-            "want_cnt": detail.want_cnt,
-            "view_cnt": detail.view_cnt,
-            "thumb_url": detail.thumb_url or "",
-            "image_urls": json.dumps(detail.image_urls, ensure_ascii=False) if detail.image_urls else None,
-            "is_sold": 1 if detail.is_sold else 0,
-        }
-        container.repo.upsert_item(new_row)
-    # 标记采集来源为 live（用户手动触发刷新），与自动 search 区分
-    # 失败不阻断主流程：update_data_source 失败仅记录日志
-    try:
-        container.repo.update_data_source(item_id, "live")
-    except Exception as ds_err:
-        logger.warning("更新 data_source=live 失败 item={}: {}", item_id, ds_err)
-    # 已售时通过 mark_sold 补写 sold_detected_at + 同步 task_links.display
-    if detail.is_sold:
-        container.repo.mark_sold(item_id)
-
-    # 同步 task_links.display：评估明细页 brand 等字段从此处读取。
-    # 其中 brand 以详情页推断结果为准；空 brand 也要写回，用于清掉历史错误品牌。
-    # 下架场景 detail.title/brand 为空，sync_item_display_from_detail 会用空值覆盖已有 display，
-    # 这里跳过避免污染；mark_sold 已在事务内同步了 task_links.display.is_sold=True
-    if resolved_task_id and not is_delisted:
-        sync_item_display_from_detail(container.repo, resolved_task_id, item_id, detail, source="auto")
-
-    logger.info(f"[RefreshItem] 刷新成功 item={item_id} is_sold={detail.is_sold} brand={detail.brand!r}")
-    # 返回完整采集字段：前端实时模式下用此结果直接更新 liveItemsRef，
-    # 避免重新实时搜索（silentLiveRefresh）用搜索 API 旧数据覆盖详情页采集结果
-    return {
-        "ok": True,
-        "item_id": item_id,
-        "is_sold": detail.is_sold,
-        "title": detail.title,
-        "price": detail.price,
-        "brand": detail.brand,
-        "seller_id": detail.seller_id or "",
-        "region": detail.region or "",
-        "want_cnt": detail.want_cnt,
-        "view_cnt": detail.view_cnt,
-        "thumb_url": detail.thumb_url or "",
-        "image_urls": detail.image_urls or [],
-        "publish_time": detail.publish_time.isoformat() if detail.publish_time else None,
-        "seller_nick": detail.detail_seller_nick or "",
-        "seller_credit": detail.detail_credit_score,
-    }

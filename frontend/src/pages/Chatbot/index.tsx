@@ -16,6 +16,8 @@ import {
   CustomerServiceOutlined,
 } from '@ant-design/icons'
 import { useSSEChat } from './hooks/useSSEChat'
+import { useSearch } from '../../hooks/useSearch'
+import { useSearchHistory } from '../../hooks/useSearchHistory'
 import { chatbotApi } from './api'
 import { AssistantMessage } from './components/AssistantMessage'
 import ChatbotOnboarding, {
@@ -325,6 +327,10 @@ export default function ChatbotPage() {
     })
   }
 
+  // 搜索历史：用户每次提交非空关键词时记录，供快速复用
+  // 必须在 loadSessions 之前声明：loadSessions 依赖 addSessionHistory
+  const { history: sessionHistory, add: addSessionHistory, clear: clearSessionHistory } = useSearchHistory({ namespace: 'chatbot' })
+
   // 加载会话列表（M2：支持关键词搜索 + 收藏过滤）
   const loadSessions = useCallback(async () => {
     setLoadingSessions(true)
@@ -335,18 +341,23 @@ export default function ChatbotPage() {
       if (items.length > 0 && !currentSession) {
         setCurrentSession(items[0])
       }
+      // 搜索成功且关键词非空时记录历史，供后续快速复用
+      if (searchKeyword && searchKeyword.trim()) {
+        addSessionHistory(searchKeyword.trim())
+      }
     } catch {
       message.error('加载会话列表失败')
     } finally {
       setLoadingSessions(false)
     }
-  }, [currentSession, searchKeyword, favoriteOnly])
+  }, [currentSession, searchKeyword, favoriteOnly, addSessionHistory])
 
-  // M2：搜索防抖——避免每次按键都发请求，300ms 无新输入后触发
-  useEffect(() => {
-    const timer = setTimeout(() => loadSessions(), 300)
-    return () => clearTimeout(timer)
-  }, [loadSessions])
+  // M2：搜索防抖——使用统一 useSearch hook（400ms），与 Alpine 模板对齐
+  // 替代手写 setTimeout 防抖，获得并发保护 + 取消过时请求能力
+  useSearch({
+    search: () => loadSessions(),
+    deps: [loadSessions],
+  })
 
   // 切换会话时加载消息
   useEffect(() => {
@@ -583,7 +594,8 @@ export default function ChatbotPage() {
         const escalateReason = escalateReasonRef.current
         const followUps = streamingFollowUpsRef.current
         // escalate 事件无 content 时也要固化（转人工话术可能为空）
-        if (content || (sources && sources.length) || (toolCalls && toolCalls.length) || escalated) {
+        // follow_ups 也需纳入判断：主回答为空但生成了推荐问题时不能丢弃
+        if (content || (sources && sources.length) || (toolCalls && toolCalls.length) || escalated || followUps.length > 0) {
           const assistantMsg: Message = {
             id: `assistant-${Date.now()}`,
             session_id: currentSession.id,
@@ -673,6 +685,23 @@ export default function ChatbotPage() {
               title={favoriteOnly ? '显示全部会话' : '仅看收藏'}
             />
             </div>
+            {/* 搜索历史小药丸：点击复用历史关键词，避免重复输入 */}
+            {sessionHistory.length > 0 && (
+              <div className="cb-search-history" style={{ padding: '4px 8px', display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                {sessionHistory.map((kw) => (
+                  <Tag
+                    key={kw}
+                    onClick={() => setSearchKeyword(kw)}
+                    style={{ cursor: 'pointer', margin: 0, fontSize: 11 }}
+                  >
+                    {kw}
+                  </Tag>
+                ))}
+                <Button type="link" size="small" onClick={clearSessionHistory} style={{ padding: 0, fontSize: 11 }}>
+                  清空
+                </Button>
+              </div>
+            )}
             {/* M5：帮助中心 + 立即转人工 */}
             <div className="cb-quick-actions">
               <Button

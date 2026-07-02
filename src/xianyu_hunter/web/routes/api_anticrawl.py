@@ -380,10 +380,15 @@ async def start_session(request: dict = Body(default_factory=dict)) -> JSONRespo
     """
     orch = get_orchestrator()
 
+    # 幂等处理：会话已活跃时返回 ok:True + already_active 标记
+    # 为什么不用 ok:False：登录流程会通过 trigger_session_start() 自动启动会话，
+    # 用户手动点击"启动会话"按钮时往往会话已是活跃状态，标记为失败会让用户误以为出错，
+    # 而实际上会话功能完全正常。前端根据 already_active 显示不同的成功提示。
     if orch.is_session_active:
         return JSONResponse(content={
-            "ok": False,
-            "error": "会话已处于活跃状态，请先停止当前会话",
+            "ok": True,
+            "already_active": True,
+            "message": "会话已处于活跃状态，无需重复启动",
         })
 
     # 默认从 CookieStore 读取 _m_h5_tk

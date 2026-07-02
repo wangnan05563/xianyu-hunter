@@ -30,6 +30,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.services.search_services import (
+    DbAdminSearchParams,
+    DbAdminSearchService,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/db-admin", tags=["db-admin"])
@@ -544,53 +548,24 @@ def list_rows(
     order_by 走白名单字符名校验，search 转 LIKE 参数化绑定。
     """
     _validate_table(table)
+    # 保留 404 检查：表在白名单但数据库中无列时返回 404（与原行为一致）
+    # service 内部会再次反射列信息构造 SQL，这里仅做存在性校验
     cols = _get_columns(container, table)
     if not cols:
         raise HTTPException(status_code=404, detail=f"表 {table} 不存在或无列")
 
-    # 解析排序方向
-    desc = False
-    ob = order_by
-    if ob and ob.startswith("-"):
-        desc = True
-        ob = ob[1:]
-    if ob:
-        _validate_identifier(ob, "order_by")
-
-    # 构造 SQL（仅引用已校验的列名/表名）
-    where_clauses: list[str] = []
-    params: dict[str, Any] = {"limit": limit, "offset": offset}
-    if search:
-        # 文本列做 LIKE 搜索（数字/日期列跳过，避免类型转换异常）
-        text_cols = [c["name"] for c in cols if any(
-            t in c["type"].upper() for t in ("CHAR", "TEXT", "VARCHAR", "CLOB")
-        )]
-        if text_cols:
-            ors = [f"CAST({c} AS TEXT) LIKE :search" for c in text_cols]
-            where_clauses.append("(" + " OR ".join(ors) + ")")
-            params["search"] = f"%{search}%"
-
-    sql = f"SELECT * FROM {table}"
-    if where_clauses:
-        sql += " WHERE " + " AND ".join(where_clauses)
-    if ob:
-        sql += f" ORDER BY {ob} {'DESC' if desc else 'ASC'}"
-    sql += " LIMIT :limit OFFSET :offset"
-
-    count_sql = f"SELECT COUNT(*) FROM {table}"
-    if where_clauses:
-        count_sql += " WHERE " + " AND ".join(where_clauses)
-
-    with container.repo.engine.connect() as conn:
-        total = conn.execute(text(count_sql), params).scalar() or 0
-        rows = conn.execute(text(sql), params).mappings().all()
-
+    # 使用 SearchService 统一处理分页/慢查询埋点
+    # service 内部复用 _validate_identifier / _serialize_row，保持与原路由一致的校验和序列化
+    service = DbAdminSearchService(container.repo.engine)
+    result = service.search(DbAdminSearchParams(
+        table=table, q=search, limit=limit, offset=offset, order_by=order_by,
+    ))
     return {
         "table": table,
-        "total": total,
+        "total": result["total"],
         "limit": limit,
         "offset": offset,
-        "rows": [_serialize_row(dict(r), cols) for r in rows],
+        "rows": result["items"],
     }
 
 

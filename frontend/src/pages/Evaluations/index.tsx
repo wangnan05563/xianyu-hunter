@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Table, Tag, Button, Space, Spin, Input, Select, Slider, Row, Col, message,
   Empty, DatePicker, Modal, Collapse, Statistic, Image, Tooltip, Alert, Progress,
-  Descriptions, Tabs,
+  Descriptions, Tabs, InputNumber, Checkbox,
 } from 'antd'
 import {
   ReloadOutlined, AimOutlined, RobotOutlined, LinkOutlined,
@@ -341,6 +341,28 @@ export default function Evaluations() {
     setResultCategory(prev => prev === c ? null : c)
   }, [])
 
+  // 价格范围筛选：null 表示不限制，由后端从任务配置自动读取
+  // 为什么用 null 而非 undefined：usePersistentState 需要可序列化的默认值
+  // 为什么不持久化：价格范围是临时筛选，刷新后应回到任务默认值
+  const [priceRange, setPriceRange] = useState<[number | null, number | null]>([null, null])
+  // 显示超出任务价格范围的历史商品（审计用，默认关闭）
+  const [includeOutOfRange, setIncludeOutOfRange] = useState<boolean>(false)
+  // 选中任务时自动填入任务的 min_price/max_price 作为默认值
+  // 为什么用 useEffect 而非 onChange：任务列表加载完成后也需要回填
+  useEffect(() => {
+    if (!taskId) {
+      setPriceRange([null, null])
+      return
+    }
+    const task = tasks.find(t => t.id === taskId)
+    if (task) {
+      setPriceRange([
+        task.min_price != null ? task.min_price : null,
+        task.max_price != null ? task.max_price : null,
+      ])
+    }
+  }, [taskId, tasks])
+
   // 用当前配置重新计算历史评估
   const onRecompute = async () => {
     setRecomputing(true)
@@ -552,12 +574,12 @@ export default function Evaluations() {
 
   // 加载评估列表
   // 用 ref 持有筛选条件最新值，避免每次键入触发 API 请求
-  const filtersRef = useRef({ itemId, taskId, scoreRange, dateRange, brandFilter, soldFilter, resultCategory })
-  filtersRef.current = { itemId, taskId, scoreRange, dateRange, brandFilter, soldFilter, resultCategory }
+  const filtersRef = useRef({ itemId, taskId, scoreRange, dateRange, brandFilter, soldFilter, resultCategory, priceRange, includeOutOfRange })
+  filtersRef.current = { itemId, taskId, scoreRange, dateRange, brandFilter, soldFilter, resultCategory, priceRange, includeOutOfRange }
 
   const load = useCallback(() => {
     setLoading(true)
-    const { itemId: fItemId, taskId: fTaskId, scoreRange: fScore, dateRange: fDate, brandFilter: fBrand, soldFilter: fSold, resultCategory: fResultCategory } = filtersRef.current
+    const { itemId: fItemId, taskId: fTaskId, scoreRange: fScore, dateRange: fDate, brandFilter: fBrand, soldFilter: fSold, resultCategory: fResultCategory, priceRange: fPriceRange, includeOutOfRange: fIncludeOutOfRange } = filtersRef.current
     const params: Record<string, unknown> = {
       page_num: page,
       page_size: pageSize,
@@ -574,6 +596,11 @@ export default function Evaluations() {
     if (fSold !== 'all') params.sold_filter = fSold
     // result_category 由统计卡片点击触发，后端按配置阈值精确分类过滤
     if (fResultCategory) params.result_category = fResultCategory
+    // 价格范围：用户显式输入优先；未输入但传了 task_id 时后端自动从任务配置读取
+    if (fPriceRange[0] != null) params.min_price = fPriceRange[0]
+    if (fPriceRange[1] != null) params.max_price = fPriceRange[1]
+    // include_out_of_range=true 时后端跳过价格过滤，用于审计历史超范围商品
+    if (fIncludeOutOfRange) params.include_out_of_range = true
 
     evalApi.list(params)
       .then((res) => {
@@ -614,8 +641,9 @@ export default function Evaluations() {
   }
   const onReset = () => {
     setItemId(''); setTaskId(''); setScoreRange([0, 100]); setDateRange(null); setBrandFilter(''); setSoldFilter('all'); setResultCategory(null)
+    setPriceRange([null, null]); setIncludeOutOfRange(false)
     // 重置后需要用新条件重新加载
-    filtersRef.current = { itemId: '', taskId: '', scoreRange: [0, 100] as [number, number], dateRange: null, brandFilter: '', soldFilter: 'all', resultCategory: null }
+    filtersRef.current = { itemId: '', taskId: '', scoreRange: [0, 100] as [number, number], dateRange: null, brandFilter: '', soldFilter: 'all', resultCategory: null, priceRange: [null, null] as [number | null, number | null], includeOutOfRange: false }
     if (page !== 1) {
       setPage(1)  // useEffect 会自动触发 load
     } else {
@@ -1455,6 +1483,32 @@ export default function Evaluations() {
               { label: '已售', value: 'sold' },
             ]}
           />
+          <span>价格范围：</span>
+          {/* 价格范围筛选：选中任务时自动填入任务配置作为默认值，用户可手动调整 */}
+          <InputNumber
+            placeholder="最低"
+            min={0}
+            style={{ width: 90 }}
+            value={priceRange[0]}
+            onChange={(v) => setPriceRange([v == null ? null : v, priceRange[1]])}
+          />
+          <span>-</span>
+          <InputNumber
+            placeholder="最高"
+            min={0}
+            style={{ width: 90 }}
+            value={priceRange[1]}
+            onChange={(v) => setPriceRange([priceRange[0], v == null ? null : v])}
+          />
+          {/* 显示超范围商品开关：审计历史已写入的超范围商品用 */}
+          <Tooltip title="开启后显示超出任务价格范围的历史商品（审计用）">
+            <Checkbox
+              checked={includeOutOfRange}
+              onChange={(e) => { setIncludeOutOfRange(e.target.checked); setPage(1); setTimeout(load, 0) }}
+            >
+              显示超范围
+            </Checkbox>
+          </Tooltip>
           <Button type="primary" icon={<SearchOutlined />} onClick={onSearch}>查询</Button>
           <Button icon={<UndoOutlined />} onClick={onReset}>重置</Button>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>

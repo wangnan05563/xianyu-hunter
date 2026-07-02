@@ -121,6 +121,8 @@ export interface OperationResult {
   strategy?: string
   valid_strategies?: string[]
   valid_layers?: string[]
+  // 会话已活跃标记：/session/start 幂等返回时为 true，前端据此显示不同成功提示
+  already_active?: boolean
 }
 
 /** 当前 Cookie 字典（供更新弹窗预填） */
@@ -162,8 +164,10 @@ export const anticrawlApi = {
   getSessionStatus: () =>
     client.get<SessionStatus>('/api/anticrawl/session/status').then((r) => r.data),
 
+  // 后端返回 {ok, message?, error?, already_active?} 而非完整 SessionStatus，
+  // 用 OperationResult 与之对齐，启动后通过单独的 getSessionStatus 拉取最新状态
   startSession: () =>
-    client.post<SessionStatus>('/api/anticrawl/session/start', {}).then((r) => r.data),
+    client.post<OperationResult>('/api/anticrawl/session/start', {}).then((r) => r.data),
 
   stopSession: () =>
     client.post<OperationResult>('/api/anticrawl/session/stop', {}).then((r) => r.data),

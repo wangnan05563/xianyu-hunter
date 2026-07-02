@@ -28,6 +28,10 @@ from xianyu_hunter.domain.urls import build_item_url
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repo_links import task_keyword_matches_title
 from xianyu_hunter.modules.collector_utils import normalize_display_fields
+from xianyu_hunter.web.services.search_services import (
+    TaskLinkSearchParams,
+    TaskLinkSearchService,
+)
 from xianyu_hunter.web.deps import get_container
 
 logger = get_logger()
@@ -1465,8 +1469,11 @@ def search(
     """跨任务模糊搜索（key 或 display 字段包含 q）"""
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
-    rows = container.repo.search_task_links(q=q, link_type=type, limit=limit)
-    return {"items": rows, "count": len(rows), "q": q, "type": type}
+    # 使用 SearchService 统一处理分页/慢查询埋点/响应结构
+    service = TaskLinkSearchService(container.repo)
+    result = service.search(TaskLinkSearchParams(q=q, link_type=type, limit=limit))
+    # 保留原有响应字段（向后兼容前端期望的 count/q/type）
+    return {"items": result["items"], "count": len(result["items"]), "q": q, "type": type}
 
 
 @_links_lookup.post("/auto-migrate")

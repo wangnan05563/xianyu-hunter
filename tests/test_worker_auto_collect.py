@@ -184,16 +184,16 @@ def build_worker(
     mode: TaskMode = TaskMode.NOTIFY_ONLY,
     price_allow: bool = True,
     repo: Any | None = None,
-    notifier: Any | None = None,
+    event_bus: Any | None = None,
 ) -> TaskWorker:
     """构造带官方采集回调的 worker
 
     默认 NOTIFY_ONLY 模式 + stop_on_first_buy=False：评估通过后不抢单，
     循环继续处理下一件商品，便于断言 official_collect_fn 在多商品场景下的调用次数。
 
-    Task 8/9 新增 repo / notifier 参数：
+    Task 8/9 新增 repo / event_bus 参数：
     - repo：注入后用于去重检查（get_recently_collected_item_ids）
-    - notifier：注入后用于暂停告警（send 调用）
+    - event_bus：注入后用于 EVAL_PASSED / TASK_ERROR 事件投递（publish_nowait 调用）
     """
     items = [make_item(i) for i in range(item_count)]
     details = {it.id: make_detail(int(it.id[1:])) for it in items}
@@ -218,7 +218,7 @@ def build_worker(
         config=config,
         official_collect_fn=official_collect_fn,
         repo=repo,
-        notifier=notifier,
+        event_bus=event_bus,
     )
 
 
@@ -482,37 +482,40 @@ async def test_backoff_resets_next_run(worker_factory):
 
 @pytest.mark.asyncio
 async def test_backoff_notifier_called_on_pause(worker_factory):
-    """暂停时 notifier.send 被调用（mock notifier）
+    """暂停时通过 EventBus 发送 TASK_ERROR 告警
 
-    场景：1 件商品失败，threshold=1，注入 mock notifier
-    期望：notifier.send 被调用 1 次且参数为 Event 对象（severity=critical）
-    验证告警能触达用户，避免采集长期失效未察觉
+    场景：1 件商品失败，threshold=1，注入 mock event_bus
+    期望：event_bus.publish_nowait 被调用 2 次：
+    1. EVAL_PASSED（评估通过推送）
+    2. TASK_ERROR（自动采集暂停告警，severity=critical）
+    验证告警能触达用户，避免采集长期失效未察觉。
+    统一走 EventBus 路径，与钉钉通知修复的架构方向一致。
     """
     from unittest.mock import MagicMock
 
     from xianyu_hunter.domain.events import Event, EventType
 
     collect_fn = AsyncMock(side_effect=RuntimeError("simulated"))
-    # 用 MagicMock 持有 AsyncMock 的 send，模拟 NotifierHub 接口
-    notifier = MagicMock()
-    notifier.send = AsyncMock()
+    # EventBus.publish_nowait 是同步方法，用 MagicMock（非 AsyncMock）
+    event_bus = MagicMock()
+    event_bus.publish_nowait = MagicMock()
     worker = worker_factory(
-        item_count=1, official_collect_fn=collect_fn, notifier=notifier
+        item_count=1, official_collect_fn=collect_fn, event_bus=event_bus
     )
     with patch_eval_config(
         make_eval_config(auto_collect_official=True, auto_collect_fail_pause_threshold=1)
     ):
         result = await worker.run_once()
-    # notifier.send 被调用 2 次：
-    # 1. EVAL_PASSED（评估通过推送，Bug 1 修复后新增）
+    # publish_nowait 被调用 2 次：
+    # 1. EVAL_PASSED（评估通过推送）
     # 2. TASK_ERROR（自动采集暂停告警）
-    assert notifier.send.await_count == 2
+    assert event_bus.publish_nowait.call_count == 2
     # 第一次是 EVAL_PASSED
-    eval_event = notifier.send.await_args_list[0].args[0]
+    eval_event = event_bus.publish_nowait.call_args_list[0].args[0]
     assert isinstance(eval_event, Event)
     assert eval_event.type == EventType.EVAL_PASSED
     # 第二次是 TASK_ERROR
-    called_event = notifier.send.await_args_list[1].args[0]
+    called_event = event_bus.publish_nowait.call_args_list[1].args[0]
     assert isinstance(called_event, Event)
     assert called_event.type == EventType.TASK_ERROR
     assert called_event.severity == "critical"

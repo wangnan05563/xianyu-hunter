@@ -74,9 +74,23 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
   // 把 [来源:N] 转成 Markdown 链接 [来源:N](#cite-N)，让 ReactMarkdown 解析为 <a> 标签
   // 然后在 components.a 中拦截 #cite- 开头的链接，渲染成带 Tooltip 的 Tag
   // 为什么用预处理而非自定义 text 渲染：react-markdown v9 不支持 components.text
+  // 注意：必须跳过代码块和行内代码，否则代码内的 [来源:N] 字面量会被破坏
   const processedContent = useMemo(() => {
     if (!msg.sources || msg.sources.length === 0) return msg.content
-    return msg.content.replace(/\[来源:(\d+|\?)\]/g, (_m, num) => `[来源:${num}](#cite-${num})`)
+    const replaceCitations = (text: string) =>
+      text.replace(/\[来源:(\d+|\?)\]/g, (_m, num) => `[来源:${num}](#cite-${num})`)
+    // 按代码块 ```...``` 和行内代码 `...` 切分，仅对非代码段做替换
+    const parts: string[] = []
+    let lastIndex = 0
+    const codeRe = /```[\s\S]*?```|`[^`\n]+`/g
+    let m: RegExpExecArray | null
+    while ((m = codeRe.exec(msg.content)) !== null) {
+      parts.push(replaceCitations(msg.content.slice(lastIndex, m.index)))
+      parts.push(m[0]) // 代码段原样保留
+      lastIndex = m.index + m[0].length
+    }
+    parts.push(replaceCitations(msg.content.slice(lastIndex)))
+    return parts.join('')
   }, [msg.content, msg.sources])
 
   // ReactMarkdown components：自定义 a/pre 渲染

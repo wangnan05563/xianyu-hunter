@@ -63,6 +63,11 @@ export const evalApi = {
     // 结果分类过滤：点击统计卡片时使用，按配置阈值精确分类
     // auto=可抢 / pass=通过 / fail=驳回 / insufficient=数据不足
     result_category?: 'auto' | 'pass' | 'fail' | 'insufficient'
+    // 价格范围过滤：未传但传了 task_id 时后端自动从任务配置读取
+    min_price?: number
+    max_price?: number
+    // 显示超出任务价格范围的历史商品（审计用，默认 false）
+    include_out_of_range?: boolean
   }) => client.get<{ items: EvalItem[]; count: number; total: number }>('/api/evaluations', { params }).then((r) => r.data),
 
   distribution: (params: { range_hours?: number; price_bin_count?: number; score_bin_count?: number }) =>

@@ -2,9 +2,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 文档版本 | v1.0 |
-| 文档日期 | 2026-07-01 |
-| 文档状态 | 初稿 |
+| 文档版本 | v1.1 |
+| 文档日期 | 2026-07-02 |
+| 文档状态 | 评审更新稿 |
 | 所属项目 | 闲鱼猎人（XianyuHunter） |
 | 文档类型 | 需求规格说明书（SRS） |
 | 重构目标 | 将现有 RAG/FAQ 智能客服升级为 Agent Harness 架构的系统执行智能体 |
@@ -73,6 +73,8 @@
 - 执行审计、回滚建议和事件记录
 - 前端确认卡片、执行计划卡片、诊断报告卡片
 - 扩展工具接入规范
+- 用户沙箱模式：多用户与 SKILL 执行环境隔离、配置覆盖层、资源配额、快照与重置
+- SKILL 安装功能：包格式、获取渠道、签名校验、试运行、版本管理、命名空间、卸载机制
 
 ### 3.2 排除范围
 
@@ -247,6 +249,47 @@ flowchart TB
 | FR-EXT-04 | 工具和 Procedure 必须支持开关配置，管理员可禁用某类能力。 | P1 |
 | FR-EXT-05 | 后续可扩展能力包括任务启停、批量采集、通知测试、数据库维护、知识库重建、远程访问开关。 | P2 |
 
+### 6.8 用户沙箱模式
+
+用户沙箱模式为多用户场景与第三方 SKILL 扩展提供执行环境隔离，确保不同用户、不同 SKILL 之间的数据可见性、工具执行上下文与配置变更互不污染。沙箱是 Harness 在 `user_id` 维度之上的强隔离执行边界。
+
+| 编号 | 需求 | 优先级 |
+|---|---|---|
+| FR-SB-01 | 系统必须支持按 `user_id` 建立独立沙箱上下文（sandbox_id），沙箱内 ActionPlan、agent_actions、工具调用、诊断报告均按 sandbox_id 作用域隔离，跨沙箱默认不可见。 | P0 |
+| FR-SB-02 | 沙箱必须限制工具可见性：沙箱用户只能看到管理员授权的工具子集，未授权工具不出现在 plan 候选与 `/tools` 返回中。 | P0 |
+| FR-SB-03 | 沙箱内的写操作（配置修改、下单、任务变更）默认生成"建议型 ActionPlan"，配置类变更基于沙箱覆盖层计算 diff，不直接落盘到全局 `config.yaml`。 | P0 |
+| FR-SB-04 | 沙箱必须提供资源配额：单用户最大并发待确认动作数、单位时间工具调用次数、诊断报告保留条数、SKILL 临时存储上限，超额返回 `SANDBOX_QUOTA_EXCEEDED`。 | P0 |
+| FR-SB-05 | 沙箱必须提供独立临时配置覆盖层（sandbox config overlay）：用户在沙箱内的 `config.preview` 基于覆盖层计算 diff，仅当管理员显式"提升"后才合并到全局配置并走标准确认流程。 | P1 |
+| FR-SB-06 | 沙箱内日志、订单、任务查询必须按用户可见范围过滤；跨用户数据默认不可见，管理员可显式授权跨域只读，授权行为需审计。 | P0 |
+| FR-SB-07 | 沙箱必须支持快照与重置：管理员可对某用户沙箱做快照、回滚到快照、清空沙箱临时数据（覆盖层、临时动作、SKILL 试运行产物），操作需 admin 权限并审计。 | P1 |
+| FR-SB-08 | 沙箱生命周期必须可配置：空闲超时自动卸载、手动启停、最大存活时长，超时未活动自动卸载并保留审计摘要。 | P1 |
+| FR-SB-09 | 沙箱内 SKILL 执行必须继承沙箱作用域，SKILL 注册的工具默认只能在所属沙箱内调用；SKILL 工具调用全局工具时需显式授权。 | P0 |
+| FR-SB-10 | 沙箱不可绕过：任何工具调用必须携带 sandbox_id，ToolExecutor 校验 sandbox_id 与 user_id 绑定关系，不匹配则拒绝并记录 `sandbox_binding_violation`。 | P0 |
+| FR-SB-11 | 沙箱必须对 LLM 上下文做隔离：会话历史、RAG 检索片段、工具 observation 不得跨沙箱串扰，ContextManager 按 sandbox_id 分区管理。 | P0 |
+| FR-SB-12 | 沙箱卸载时必须保留审计记录与已确认执行的全局副作用，仅清理临时数据；卸载后该 sandbox_id 不可复用。 | P0 |
+
+### 6.9 SKILL 安装功能
+
+SKILL 是 Agent 能力的可分发扩展包，封装工具定义、Procedure、Prompt 片段、元数据与测试样例。SKILL 安装功能定义其获取渠道、安装流程、版本管理、权限验证、冲突处理与卸载机制，所有 SKILL 工具必须在用户沙箱内执行。
+
+| 编号 | 需求 | 优先级 |
+|---|---|---|
+| FR-SK-01 | 系统必须定义 SKILL 包格式：manifest（name、version、author、permissions、risk_level、dependencies）、tools 定义、procedures 定义、prompt 片段、test_cases。 | P0 |
+| FR-SK-02 | SKILL 获取渠道必须至少支持：本地文件导入、官方市场 URL 安装、已安装列表重装；不支持任意匿名 URL 安装，市场地址需在白名单内。 | P0 |
+| FR-SK-03 | SKILL 安装前必须校验签名与 manifest 完整性，签名校验失败一律拒绝安装并记录 `skill_signature_invalid` 审计事件。 | P0 |
+| FR-SK-04 | SKILL 安装前必须向管理员展示权限清单、风险等级、依赖 SKILL 与将注册的工具/Procedure 列表，管理员确认后才能写入。 | P0 |
+| FR-SK-05 | SKILL 必须在指定沙箱内进行安装试运行（dry-run）：执行 manifest 声明的 test_cases，全部通过才允许正式注册到 ToolRegistry。 | P0 |
+| FR-SK-06 | SKILL 工具与 Procedure 必须使用命名空间前缀（`<skill_name>.<tool_name>`），避免与系统工具或其它 SKILL 冲突；冲突时拒绝安装并提示。 | P0 |
+| FR-SK-07 | 同名 SKILL 多版本共存时，必须明确默认版本；切换默认版本需管理员确认并审计，旧版本保留可回滚。 | P1 |
+| FR-SK-08 | SKILL 升级必须保留旧版本，支持回滚；升级失败自动回滚到上一个可用版本，并记录 `skill_upgrade_rolled_back`。 | P1 |
+| FR-SK-09 | SKILL 卸载必须清理 ToolRegistry 与 ProcedureRunner 中的注册项，保留历史审计与工具调用记录，不得删除已产生的 agent_actions。 | P0 |
+| FR-SK-10 | SKILL 工具继承 SKILL 的权限与风险声明，PolicyEngine 以最严格策略合并（系统策略与 SKILL 声明取严）。 | P0 |
+| FR-SK-11 | SKILL 不得自行声明 admin/critical 权限；此类声明一律降级为 high 并强制确认，或拒绝安装。 | P0 |
+| FR-SK-12 | SKILL 安装、升级、卸载、启用、禁用、切默认版本均必须产生审计事件，记录操作人、SKILL 名、版本、前后状态。 | P0 |
+| FR-SK-13 | SKILL 的 prompt 片段必须经过 Prompt Injection 校验，命中注入模式的 SKILL 拒绝安装并记录 `skill_prompt_injection`。 | P0 |
+| FR-SK-14 | 管理员可全局禁用 SKILL 安装能力（`agent_harness.allow_skill_install=false`），禁用时所有 SKILL 安装相关接口返回 403。 | P1 |
+| FR-SK-15 | SKILL 必须声明所需系统资源与外部依赖（网络、文件路径、子进程），未声明的资源访问在沙箱中被拒绝。 | P1 |
+
 ---
 
 ## 7. 权限与风险分级
@@ -260,6 +303,8 @@ flowchart TB
 | write_config | 修改配置文件或动态配置 | 否 | 是 |
 | order | 触发下单或接管流程 | 否 | 是 |
 | mutate_task | 启停任务、改任务状态 | 否 | 是 |
+| sandbox | 建立/卸载/快照/重置用户沙箱、提升沙箱配置到全局 | 否 | 是 |
+| skill_install | 安装/升级/卸载/启停 SKILL、切换默认版本 | 否 | 是 |
 | admin | 数据库维护、清理、远程访问开关 | 否 | 是 |
 
 ### 7.2 风险等级
@@ -268,8 +313,8 @@ flowchart TB
 |---|---|---|---|
 | low | 只读或可忽略副作用 | 查询帮助、查询任务状态 | 可直接执行 |
 | medium | 影响局部行为，可回滚 | 修改普通展示配置、打日志标签 | 需要确认 |
-| high | 影响业务执行、资金、账号或系统稳定性 | 修改自动下单阈值、触发下单、启停任务 | 需要确认并展示风险 |
-| critical | 可能造成数据丢失、凭据暴露或不可逆操作 | 删除数据库、清空日志、导出敏感数据 | 默认禁用，需管理员开启 |
+| high | 影响业务执行、资金、账号或系统稳定性 | 修改自动下单阈值、触发下单、启停任务、安装已签名 SKILL、沙箱配置提升到全局 | 需要确认并展示风险 |
+| critical | 可能造成数据丢失、凭据暴露或不可逆操作 | 删除数据库、清空日志、导出敏感数据、安装未签名 SKILL、沙箱重置清空已确认动作 | 默认禁用，需管理员开启 |
 
 ---
 
@@ -285,6 +330,21 @@ flowchart TB
 | GET | `/api/chatbot/agent/actions/{action_id}` | 查询动作状态与结果 |
 | GET | `/api/chatbot/agent/tools` | 查询可用工具、权限、风险等级 |
 | POST | `/api/chatbot/agent/procedures/{name}/run` | 运行指定诊断 Procedure |
+| POST | `/api/chatbot/agent/sandboxes` | 为指定 user_id 创建沙箱上下文 |
+| GET | `/api/chatbot/agent/sandboxes` | 查询沙箱列表与状态 |
+| DELETE | `/api/chatbot/agent/sandboxes/{sandbox_id}` | 卸载沙箱（保留审计，清理临时数据） |
+| POST | `/api/chatbot/agent/sandboxes/{sandbox_id}/snapshot` | 对沙箱打快照 |
+| POST | `/api/chatbot/agent/sandboxes/{sandbox_id}/reset` | 回滚到快照或清空临时数据 |
+| POST | `/api/chatbot/agent/sandboxes/{sandbox_id}/promote` | 将沙箱配置覆盖层提升到全局（走确认流程） |
+| POST | `/api/chatbot/agent/skills/install` | 安装 SKILL（本地导入或市场 URL） |
+| GET | `/api/chatbot/agent/skills` | 查询已安装 SKILL 列表与版本 |
+| GET | `/api/chatbot/agent/skills/{skill_name}` | 查询 SKILL 详情、manifest 与注册项 |
+| DELETE | `/api/chatbot/agent/skills/{skill_name}` | 卸载指定 SKILL |
+| POST | `/api/chatbot/agent/skills/{skill_name}/enable` | 启用 SKILL |
+| POST | `/api/chatbot/agent/skills/{skill_name}/disable` | 禁用 SKILL |
+| POST | `/api/chatbot/agent/skills/{skill_name}/upgrade` | 升级 SKILL 到指定版本 |
+| POST | `/api/chatbot/agent/skills/{skill_name}/default` | 切换默认版本 |
+| GET | `/api/chatbot/agent/skills/{skill_name}/versions` | 查询 SKILL 历史版本 |
 
 ### 8.2 ActionPlan 结构
 
@@ -380,6 +440,11 @@ flowchart TB
 | `agent_action_steps` | 记录多步骤 Procedure 的每一步输入输出 |
 | `agent_tool_calls` | 记录每次工具调用、耗时、成功/失败 |
 | `agent_policy_events` | 记录策略拦截、权限不足、确认过期等事件 |
+| `agent_sandboxes` | 记录沙箱上下文：sandbox_id、user_id、状态、配额、生命周期 |
+| `agent_sandbox_overlays` | 记录沙箱配置覆盖层：未提升到全局的临时配置 diff |
+| `agent_sandbox_snapshots` | 记录沙箱快照：覆盖层与临时动作的不可变副本 |
+| `agent_skills` | 记录已安装 SKILL：name、version、manifest、签名、状态、默认版本标记 |
+| `agent_skill_installations` | 记录 SKILL 安装/升级/卸载/启停事件：操作人、前后状态、审计 |
 
 ### 10.2 审计字段
 
@@ -388,6 +453,7 @@ flowchart TB
 - action_id
 - session_id
 - user_id
+- sandbox_id（沙箱模式必填，非沙箱模式为空）
 - tool_name
 - risk_level
 - payload_hash
@@ -398,6 +464,7 @@ flowchart TB
 - result_status
 - error_code
 - request_id
+- skill_name（SKILL 工具调用时必填，记录来源 SKILL 与版本）
 
 ---
 
@@ -415,6 +482,12 @@ flowchart TB
 | SR-08 | critical 风险工具默认禁用。 | P0 |
 | SR-09 | 用户权限不足时，Agent 必须解释不可执行原因，不得诱导绕过权限。 | P0 |
 | SR-10 | 所有执行动作必须写入审计事件，且审计事件不得被普通客服工具删除。 | P0 |
+| SR-11 | 沙箱隔离不可绕过：ToolExecutor 必须校验 sandbox_id 与 user_id 绑定，未绑定或跨沙箱调用一律拒绝。 | P0 |
+| SR-12 | 沙箱配置覆盖层不得直接落盘全局配置；提升到全局必须走标准确认流程并审计。 | P0 |
+| SR-13 | SKILL 必须签名校验通过且 Prompt Injection 校验通过后才允许安装；未签名 SKILL 一律拒绝。 | P0 |
+| SR-14 | SKILL 工具不得声明 admin/critical 权限，PolicyEngine 对 SKILL 工具取最严格策略合并。 | P0 |
+| SR-15 | SKILL 卸载不得删除已产生的 agent_actions 与审计记录，仅清理 ToolRegistry 注册项。 | P0 |
+| SR-16 | SKILL 工具的执行结果在进入 LLM 前必须脱敏，脱敏策略与系统工具一致。 | P0 |
 
 ---
 
@@ -471,6 +544,29 @@ flowchart TB
 | AC-17 | 禁用某工具后，Agent 不再规划该工具动作。 |
 | AC-18 | Procedure 单测能覆盖成功、失败、权限不足三类路径。 |
 
+### 13.5 用户沙箱模式
+
+| 编号 | 验收标准 |
+|---|---|
+| AC-19 | 为 user_A 创建沙箱后，user_B 的 `/tools` 与 plan 候选不包含 user_A 沙箱授权外的工具。 |
+| AC-20 | 沙箱内的配置修改基于覆盖层计算 diff，全局 `config.yaml` 不发生变化。 |
+| AC-21 | 跨沙箱工具调用被 ToolExecutor 拒绝，并记录 `sandbox_binding_violation` 审计。 |
+| AC-22 | 沙箱超过配额（并发动作或调用频率）时返回 `SANDBOX_QUOTA_EXCEEDED`，不执行超额动作。 |
+| AC-23 | 沙箱重置后临时覆盖层与未确认动作被清空，已确认执行的全局副作用与审计保留。 |
+| AC-24 | 沙箱空闲超时后自动卸载，sandbox_id 不可复用，审计摘要保留。 |
+
+### 13.6 SKILL 安装功能
+
+| 编号 | 验收标准 |
+|---|---|
+| AC-25 | 本地导入未签名 SKILL 时，安装被拒绝并记录 `skill_signature_invalid`。 |
+| AC-26 | SKILL 安装前展示权限清单与风险等级，管理员未确认前不写入 ToolRegistry。 |
+| AC-27 | SKILL 试运行 test_cases 失败时不正式注册，沙箱产物被清理。 |
+| AC-28 | SKILL 工具以 `<skill_name>.<tool_name>` 命名空间注册，与系统工具同名时不覆盖。 |
+| AC-29 | 卸载 SKILL 后 ToolRegistry 中该 SKILL 工具不可调用，历史 agent_actions 保留可查。 |
+| AC-30 | SKILL prompt 片段命中注入模式时拒绝安装，并记录 `skill_prompt_injection`。 |
+| AC-31 | 全局禁用 `allow_skill_install` 后，所有 SKILL 安装接口返回 403。 |
+
 ---
 
 ## 14. 实施优先级建议
@@ -482,6 +578,8 @@ flowchart TB
 | Phase 3 | 智能下单工具、下单前置检查、订单结果解释 | 实现业务执行能力 |
 | Phase 4 | Procedure 框架、任务/登录/抢单诊断流程 | 提升复杂问题诊断质量 |
 | Phase 5 | 工具管理页、质量评估、批量测试、更多扩展工具 | 形成长期可扩展平台 |
+| Phase 6 | 用户沙箱模式、配置覆盖层、资源配额、沙箱管理 API 与前端 | 支撑多用户隔离与 SKILL 执行环境 |
+| Phase 7 | SKILL 包格式、安装/签名/试运行、版本管理、卸载、SKILL 管理页 | 形成可分发扩展生态 |
 
 ---
 
@@ -494,18 +592,24 @@ flowchart TB
 - 所有高风险动作必须有人类确认。
 - 所有执行动作必须可追溯到会话、用户、工具、payload_hash 和 request_id。
 - 下单能力只触发现有受控下单/接管流程，不承诺平台支付完成。
+- 沙箱隔离在 ToolExecutor 层强制生效，不得依赖前端或 LLM 自觉遵守。
+- 沙箱配置覆盖层不得绕过确认门直接落盘全局配置。
+- SKILL 工具必须命名空间化，且必须在用户沙箱内执行；SKILL 不得声明 admin/critical 权限。
+- SKILL 安装必须经过签名校验、Prompt Injection 校验与沙箱试运行三道关卡。
 
 ---
 
 ## 16. 阶段交接声明
 
-- 当前阶段：Agent Harness 重构需求规格说明书编写。
+- 当前阶段：Agent Harness 重构需求规格说明书编写（含用户沙箱模式与 SKILL 安装功能扩展）。
 - 下一阶段：概要设计与详细设计。
 - 推荐下一阶段重点：
-  1. 定义 `ActionPlan`、`AgentAction`、`ToolMetadata`、`PolicyDecision` 数据模型。
+  1. 定义 `ActionPlan`、`AgentAction`、`ToolMetadata`、`PolicyDecision`、`SandboxContext`、`SkillManifest` 数据模型。
   2. 设计 Harness 与现有 `Agent`、`ToolRegistry`、`Orchestrator` 的调用边界。
-  3. 先实现配置修改和日志诊断，验证确认门和审计闭环。
-  4. 再接入智能下单，避免一开始就把最高风险路径作为首个落点。
+  3. 设计沙箱管理器与 SKILL 管理器在 Harness 中的位置及与 ToolExecutor 的协作。
+  4. 先实现配置修改和日志诊断，验证确认门和审计闭环。
+  5. 再接入智能下单，避免一开始就把最高风险路径作为首个落点。
+  6. 沙箱与 SKILL 作为 Phase 6/7 落地，建立在 Harness 安全执行底座稳定之后。
 
 ---
 

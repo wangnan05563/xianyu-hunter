@@ -27,7 +27,7 @@ from xianyu_hunter.config import get_settings
 from xianyu_hunter.infra.event_bus import EventBus
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repo_links import task_keyword_matches_title
-from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.infra.yaml_config import EvalConfig, get_config
 from xianyu_hunter.modules.buyer import Buyer
 from xianyu_hunter.modules.collector import Collector
 from xianyu_hunter.modules.dedup import ItemDedup
@@ -50,6 +50,9 @@ class RunStats:
     linked: int = 0          # 写入 task_links 数
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
+    # 自动官方采集统计（P1: 对通过评估的商品做深度验证）
+    official_collected: int = 0            # 本轮成功采集数
+    official_collect_paused: bool = False  # 连续失败达阈值后暂停本轮剩余采集
 
 
 @dataclass
@@ -87,6 +90,9 @@ class TaskWorker:
         config: TaskConfig | None = None,
         repo: Any | None = None,  # 注入 repo 以写入 task_links
         event_bus: EventBus | None = None,  # 注入后用于触发 EVAL_PASSED 等通知事件
+        # P1: 官方采集回调，对通过评估的商品做深度验证（提取评价/留言等爬虫无法获取的数据）
+        # None 时跳过自动采集；container 构造时注入 startup._call_official_collect
+        official_collect_fn: Any | None = None,
     ):
         self.task = task
         self.collector = collector
@@ -101,8 +107,12 @@ class TaskWorker:
         # 评估通过后只写数据库 events 表（用于时间线），从未通过 EventBus 触发事件，
         # 导致 NotifierHub 永远收不到 EVAL_PASSED，订阅了也发不出通知
         self.event_bus = event_bus
+        self.official_collect_fn = official_collect_fn
         # 上次落单时间（用于冷却）
         self._last_buy_at: float = 0.0
+        # 连续采集失败计数器：达到 auto_collect_fail_pause_threshold 后暂停本轮采集
+        # 每轮 run_once 开头重置，避免上一轮的失败影响本轮（Cookie 可能已刷新）
+        self._consecutive_collect_failures: int = 0
 
     async def cleanup(self) -> None:
         """Worker 资源清理钩子
@@ -112,6 +122,29 @@ class TaskWorker:
         以兼容 scheduler 清理逻辑并为未来扩展（如 AI 评估后台 task）预留接入点。
         """
         return None
+
+    def _effective_eval_cfg(self) -> EvalConfig:
+        """合并任务级 eval_config 覆盖与全局 EvalConfig
+
+        task.eval_config 为 None 或空 dict 时直接返回全局单例（无副本开销）。
+        非 None 时过滤掉 None 值和未知字段后用 model_copy 创建副本，避免污染全局单例。
+        未知字段需显式过滤：Pydantic v2 的 model_copy(update=...) 会直接 setattr
+        未知键，不校验是否为模型字段，导致脏数据残留。
+        """
+        global_cfg = get_config().eval
+        task_override = getattr(self.task, "eval_config", None)
+        if not task_override:
+            return global_cfg
+        # 过滤 None 值：None 表示"不覆盖此字段"，与传 False 显式关闭语义不同
+        # 过滤未知字段：前端可能误传 typo 或废弃字段，不应污染 EvalConfig 实例
+        known_fields = type(global_cfg).model_fields
+        updates = {
+            k: v for k, v in task_override.items()
+            if v is not None and k in known_fields
+        }
+        if not updates:
+            return global_cfg
+        return global_cfg.model_copy(update=updates)
 
     def _should_buy(self) -> bool:
         """根据模式判断本轮是否执行真拍"""
@@ -186,7 +219,10 @@ class TaskWorker:
         # 显式初始化，避免 finally 块中 dir() 反模式检查变量是否存在
         new_items: list[ItemSummary] | None = None
         settings = get_settings()
-        eval_cfg = get_config().eval
+        eval_cfg = self._effective_eval_cfg()
+        # 每轮重置连续失败计数器：新一轮可能已修复问题（Cookie 刷新/网络恢复），
+        # 应给重新尝试的机会，不延续上一轮的失败状态
+        self._consecutive_collect_failures = 0
 
         try:
             # 1. 搜索（传递任务配置的筛选标签 + 全局搜索参数配置）
@@ -416,34 +452,6 @@ class TaskWorker:
                             continue
                         stats.passed += 1
 
-                        # 触发 EVAL_PASSED 事件，让 NotifierHub 等订阅者收到通知
-                        # 为什么放这里：评估通过推送门槛后即应通知用户，
-                        # NotifierHub 订阅了 EVAL_PASSED，但旧版 worker 不持有 EventBus，
-                        # 导致通知永远发不出。用 publish_nowait 避免阻塞主流程
-                        if self.event_bus is not None:
-                            try:
-                                self.event_bus.publish_nowait(
-                                    Event(
-                                        type=EventType.EVAL_PASSED,
-                                        task_id=self.task.id,
-                                        item_id=detail.id,
-                                        payload={
-                                            "item_title": detail.title,
-                                            "item_price": detail.price,
-                                            "seller_id": detail.seller_id,
-                                            "score": eval_result.score,
-                                            "risk_level": eval_result.risk_level.value,
-                                            "is_passed": eval_result.is_passed,
-                                            "data_quality": eval_result.data_quality,
-                                            "pass_score": _pass_score,
-                                        },
-                                    )
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"[Task {self.task.id}] 触发 EVAL_PASSED 事件失败: {e}"
-                                )
-
                         # 5.5 AI 自动评估（可选，消耗 token）
                         # 开启后对通过规则评估的商品自动调用 AI 二次确认
                         if _has_browser and settings.ai_enabled and eval_cfg.ai_auto_eval and settings.openai_api_key:
@@ -510,6 +518,79 @@ class TaskWorker:
                                     continue
                             except Exception as e:
                                 logger.warning("[Task {}] AI 深度分析失败，继续: {}", self.task.id, e)
+
+                        # 触发 EVAL_PASSED 事件，让 NotifierHub 等订阅者收到通知
+                        # 为什么放在 AI 评估/深度分析之后：避免 AI reject 后仍发通知造成误报，
+                        # 确保只有最终通过的商品才触发推送。用 publish_nowait 避免阻塞主流程
+                        if self.event_bus is not None:
+                            try:
+                                self.event_bus.publish_nowait(
+                                    Event(
+                                        type=EventType.EVAL_PASSED,
+                                        task_id=self.task.id,
+                                        item_id=detail.id,
+                                        payload={
+                                            "item_title": detail.title,
+                                            "item_price": detail.price,
+                                            "seller_id": detail.seller_id,
+                                            "score": eval_result.score,
+                                            "risk_level": eval_result.risk_level.value,
+                                            # 不再传 is_passed：此处必为 True，字段冗余
+                                            "data_quality": eval_result.data_quality,
+                                            "pass_score": _pass_score,
+                                        },
+                                    )
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"[Task {self.task.id}] 触发 EVAL_PASSED 事件失败: {e}"
+                                )
+
+                        # 5.8 自动官方采集（P1: 对通过评估的商品做深度验证）
+                        # 四个 AND 条件全满足才触发：配置开启 + 回调已注入 + 未暂停 + 配额未耗尽
+                        # 放在 EVAL_PASSED 之后：采集是深度验证，失败不影响已发出的通知
+                        if (eval_cfg
+                                and eval_cfg.auto_collect_official
+                                and self.official_collect_fn is not None
+                                and not stats.official_collect_paused
+                                and stats.official_collected < eval_cfg.auto_collect_max_per_run):
+                            try:
+                                await self.official_collect_fn(detail.id, self.task.id)
+                                stats.official_collected += 1
+                                # 成功时重置计数器：偶发失败不应累积触发暂停
+                                self._consecutive_collect_failures = 0
+                            except Exception as collect_err:
+                                self._consecutive_collect_failures += 1
+                                logger.warning(
+                                    f"[Task {self.task.id}] 官方采集失败 {detail.id}: {collect_err}"
+                                )
+                                # 达到阈值后暂停本轮剩余商品的采集，避免持续失败浪费配额
+                                if (self._consecutive_collect_failures
+                                        >= eval_cfg.auto_collect_fail_pause_threshold):
+                                    stats.official_collect_paused = True
+                                    logger.warning(
+                                        f"[Task {self.task.id}] 连续采集失败 "
+                                        f"{self._consecutive_collect_failures} 次，暂停本轮自动采集"
+                                    )
+                                    # 通过 EventBus 发送暂停告警，与 EVAL_PASSED 路径一致
+                                    if self.event_bus is not None:
+                                        try:
+                                            self.event_bus.publish_nowait(
+                                                Event(
+                                                    type=EventType.TASK_ERROR,
+                                                    task_id=self.task.id,
+                                                    item_id=detail.id,
+                                                    payload={
+                                                        "reason": "auto_collect_paused",
+                                                        "consecutive_failures": self._consecutive_collect_failures,
+                                                        "threshold": eval_cfg.auto_collect_fail_pause_threshold,
+                                                    },
+                                                )
+                                            )
+                                        except Exception as alert_err:
+                                            logger.warning(
+                                                f"[Task {self.task.id}] 触发采集暂停告警失败: {alert_err}"
+                                            )
 
                         # 6. 落单
                         if not self._should_buy():

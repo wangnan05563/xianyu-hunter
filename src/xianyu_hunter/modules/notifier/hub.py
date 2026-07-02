@@ -59,7 +59,7 @@ class NotifierHub:
         quiet_hours: "QuietHoursConfig | None" = None,
         repo=None,
         warn_unconfigured: bool = True,
-        yaml_credentials: dict[str, dict[str, str]] | None = None,
+        yaml_credentials: dict[str, dict[str, str | None]] | None = None,
     ):
         # channels 为 None 时不创建任何 Notifier（hub 仅作容器使用）
         self._registry = registry or NotifierRegistry.default()
@@ -72,10 +72,14 @@ class NotifierHub:
             try:
                 # 优先用 yaml_credentials 中的凭据调用 create，
                 # notifier __init__ 内部仍有 keyring fallback；显式参数优先级最高
-                creds = self._yaml_credentials.get(name, {})
+                # 过滤 None 值：避免将 None 传给 notifier __init__ 触发 TypeError
+                creds_raw = self._yaml_credentials.get(name, {})
+                creds = {k: v for k, v in creds_raw.items() if v is not None}
                 notifier = self._registry.create(name, **creds)
             except KeyError as e:
-                logger.error(f"NotifierHub 初始化失败: {e}")
+                # WARNING 而非 ERROR：渠道名来自代码硬编码，正常不触发；
+                # 配置错误时 WARNING 足够，避免误报警
+                logger.warning(f"NotifierHub 初始化失败: {e}")
                 continue
             # 启动期过滤未配置凭证的渠道：避免每次事件都触发"未配置"ERROR
             # 仅在启动时记录一次 WARNING，运行时不再调用其 send

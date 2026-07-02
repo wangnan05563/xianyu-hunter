@@ -57,57 +57,12 @@ async def _load_tasks_from_repo(container: Container) -> list[Task]:
     raw_tasks = container.repo.list_tasks()
     workers: list[TaskWorker] = []
     for raw in raw_tasks:
-        if raw.get("status") != "running":
+        # Worker 构造逻辑统一委托给 container.build_worker_from_raw_task
+        # 避免与 web/startup.py 的代码重复，保持任务级配置覆盖逻辑一致
+        worker = container.build_worker_from_raw_task(raw)
+        if worker is None:
             continue
-        # 仓库中存的 dict 还原为 Task 领域对象
-        task = Task(
-            id=raw["id"],
-            name=raw.get("name", raw["id"]),
-            keyword=raw["keyword"],
-            min_price=raw.get("min_price"),
-            max_price=raw.get("max_price"),
-            exclude_words=raw.get("exclude_words") or [],
-            region=raw.get("region"),
-            mode=TaskMode(raw.get("mode", "confirm")),
-            # 调度配置：从 DB 读取，与 web/startup.py 保持一致
-            # 用 or 防御 NULL：迁移后的旧行可能为 None，dict.get(key, default) 在 key 存在但值为 None 时返回 None
-            cron=raw.get("cron") or "*/1 * * * *",
-            use_cron=bool(raw.get("use_cron") or 0),
-            interval_seconds=float(raw.get("interval_seconds") or 60.0),
-        )
-        from xianyu_hunter.domain.task import TaskConfig
-
-        # 装入价格策略的 min/max（来自 Task）
-        if task.min_price is not None or task.max_price is not None:
-            from xianyu_hunter.modules.price_strategy import PriceConfig
-
-            container.price_strategy = type(container.price_strategy)(  # type: ignore[attr-defined]
-                PriceConfig(
-                    min_price=task.min_price,
-                    max_price=task.max_price,
-                    market_ratio=getattr(container.price_strategy, "config", None).market_ratio
-                    if getattr(container.price_strategy, "config", None) is not None
-                    else 0.8,
-                )
-            )
-        worker = TaskWorker(
-            task=task,
-            collector=container.collector,
-            dedup=container.dedup,
-            price_strategy=container.price_strategy,
-            evaluator=container.evaluator,
-            buyer=container.buyer,
-            # 调度参数从 Task 字段读取，避免 use_cron 恒为 False 的断层
-            config=TaskConfig(
-                use_cron=task.use_cron,
-                interval_seconds=task.interval_seconds,
-            ),
-            repo=container.repo,
-            # 注入 EventBus 以触发 EVAL_PASSED 等通知事件
-            # 为什么需要：NotifierHub 订阅 EVAL_PASSED，worker 必须能通过 bus 投递事件
-            event_bus=container.event_bus,
-        )
-        await container.scheduler.register(task, worker)
+        await container.scheduler.register(worker.task, worker)
         workers.append(worker)
     return [w.task for w in workers]
 

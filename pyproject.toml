@@ -12,7 +12,6 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "python-multipart>=0.0.6",      # FastAPI UploadFile 支持
-    "jinja2>=3.1",                  # SSR 模板渲染
     # CLI
     "typer>=0.9",
     # 数据层
@@ -52,7 +51,7 @@ xianyu-hunter = "xianyu_hunter.__main__:app"
 where = ["src"]
 
 [tool.setuptools.package-data]
-xianyu_hunter = ["web/templates/**/*", "web/static/**/*"]
+xianyu_hunter = ["web/static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

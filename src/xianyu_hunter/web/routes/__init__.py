@@ -2,9 +2,6 @@
 
 路由文件按功能逻辑分组（物理文件保持平铺，避免跨文件导入重构风险）：
 
-== 页面路由 ==
-  pages.py              — HTML 页面（Dashboard/任务/评估/订单/配置/日志/时间线）
-
 == 任务管理 API ==
   api_tasks.py          — 任务 CRUD + 批量控制
   api_task_deps.py      — F-16 任务依赖关系

@@ -212,14 +212,24 @@ export default function AntiCrawl() {
       setLoadingSession(true)
       const result = await anticrawlApi.startSession()
       if (result.ok) {
-        message.success('会话管理已启动')
+        // 幂等场景：会话已被 trigger_session_start() 自动启动时后端返回 already_active
+        // 此时显示 info 而非 success，避免让用户误以为是本次点击启动的
+        if (result.already_active) {
+          message.info(result.message || '会话已是活跃状态')
+        } else {
+          message.success(result.message || '会话管理已启动')
+        }
         await loadSession()
       } else {
-        message.error('启动会话失败')
+        // 失败也要刷新状态：避免 UI 停留在旧状态与定时器后续刷新出现"先错后变已启动"的矛盾
+        message.error(result.error || '启动会话失败')
+        await loadSession()
       }
     } catch (error) {
+      // 网络异常等情况：同样刷新状态，让 UI 反映真实后端状态而非凭空显示失败
       message.error('启动会话失败')
       console.error(error)
+      await loadSession()
     } finally {
       setLoadingSession(false)
     }

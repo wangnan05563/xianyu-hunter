@@ -31,6 +31,14 @@ _kb_refresh_scheduler = None
 # 即使 Web 进程（with_browser=False）也需启动，避免订单永久卡在 takeover_pending
 _takeover_timeout_scheduler = None
 
+# EventBus 主循环后台任务引用（用于 shutdown 时优雅停止）
+# 为什么独立于 _scheduler_task：EventBus 是事件分发基础设施，
+# 不应与"是否有 RUNNING 任务"耦合。原实现把 run_forever() 放在
+# _scheduler_loop 内部，导致 collector=None 或启动时无 RUNNING 任务时
+# EventBus 永不启动，后续 API resume/restart 任务时 worker.publish_nowait
+# 事件入队但无消费者，NotifierHub 收不到 EVAL_PASSED，钉钉等通知失效
+_event_bus_task: asyncio.Task | None = None
+
 
 def get_batch_refresh_scheduler():
     """供 api_batch_refresh 路由获取调度器实例"""
@@ -163,16 +171,51 @@ def start_takeover_timeout_scheduler(container: Any) -> None:
         logger.exception(f"接管超时清理调度器启动失败: {e}")
 
 
+async def start_event_bus_in_background(container: Any) -> None:
+    """独立启动 EventBus 主循环（与调度器解耦）
+
+    为什么独立于 start_scheduler_in_background：原实现把 run_forever()
+    放在 _scheduler_loop 内部，导致两个隐患：
+    1. collector 为 None（with_browser=False）时直接 return，EventBus 不启动
+    2. 启动时无 RUNNING 任务时直接 return，EventBus 不启动
+    后续通过 API resume/restart 任务时 EventBus 仍不会启动，
+    worker.publish_nowait(EVAL_PASSED) 事件入队但无消费者，NotifierHub
+    永远收不到事件，钉钉等通知永远不触发。抽离后只要调度器模式开启
+    即无条件启动 EventBus，根治此问题。
+    """
+    global _event_bus_task
+    from loguru import logger
+
+    # 幂等防护：已在运行则跳过，避免重复启动产生多个消费者竞争同一队列
+    if _event_bus_task is not None and not _event_bus_task.done():
+        logger.info("EventBus 已在运行，跳过重复启动")
+        return
+
+    async def _bus_loop() -> None:
+        try:
+            logger.info("EventBus 主循环启动")
+            await container.event_bus.run_forever()
+        except asyncio.CancelledError:
+            logger.info("EventBus 正在停止...")
+            raise
+        except Exception as e:  # noqa: BLE001
+            # run_forever 内部已隔离 handler 异常，此处兜底防止 task 静默退出
+            logger.exception(f"EventBus 主循环异常退出: {e}")
+
+    _event_bus_task = asyncio.create_task(_bus_loop())
+
+
 async def start_scheduler_in_background(container: Any) -> None:
     """在 FastAPI 事件循环中启动调度器后台任务
 
     从 DB 加载 RUNNING 任务 → 注册到 Scheduler → 启动循环。
+
+    注意：EventBus 主循环已解耦到 start_event_bus_in_background，
+    本函数不再负责启动 EventBus，避免"无 RUNNING 任务 → EventBus 不启动"
+    的链式失败。
     """
-    import json
     from loguru import logger
-    from xianyu_hunter.domain.task import Task, TaskMode, TaskConfig
     from xianyu_hunter.modules.worker import TaskWorker
-    from xianyu_hunter.modules.price_strategy import PriceConfig
     from xianyu_hunter.infra.yaml_config import get_config
 
     if not container.collector:
@@ -197,126 +240,15 @@ async def start_scheduler_in_background(container: Any) -> None:
         f"timeout={search_cfg.timeout}s), price(max={price_cfg.max_price}, min={price_cfg.min_price})"
     )
 
-    def _parse_json_field(raw: Any, field_name: str) -> dict | None:
-        """安全解析 DB 中的 JSON 配置覆盖字段
-
-        返回 None 表示无覆盖（沿用全局），dict 表示有效覆盖
-        """
-        if not raw:
-            return None
-        if isinstance(raw, dict):
-            return raw or None
-        if isinstance(raw, str) and raw.strip():
-            try:
-                parsed = json.loads(raw)
-                return parsed if parsed else None
-            except json.JSONDecodeError:
-                logger.warning(f"任务 {field_name} JSON 解析失败，将沿用全局配置: {raw[:80]}")
-                return None
-        return None
-
     raw_tasks = container.repo.list_tasks()
     workers: list[TaskWorker] = []
     for raw in raw_tasks:
-        if raw.get("status") != "running":
+        # Worker 构造逻辑统一委托给 container.build_worker_from_raw_task
+        # 避免与 __main__.py 的 CLI 入口代码重复，保持任务级配置覆盖逻辑一致
+        worker = container.build_worker_from_raw_task(raw)
+        if worker is None:
             continue
-        # 解析任务级配置覆盖（JSON 字符串 → dict，None 表示沿用全局）
-        task_search_override = _parse_json_field(raw.get("search_config"), "search_config")
-        task_price_override = _parse_json_field(raw.get("price_config"), "price_config")
-        # antidetect_config: 解析保留以兼容旧 DB 数据，但 TaskWorker 不消费此字段
-        # AntiDetect 是 container 级共享单例（所有 worker 复用 collector.antidetect），
-        # 任务级覆盖架构上不可行，前端已改为全局快捷入口 Modal（见 F4 修复）
-        task_antidetect_override = _parse_json_field(raw.get("antidetect_config"), "antidetect_config")
-        # eval_config: 任务级覆盖 AppConfig.eval（auto_collect_official/auto_collect_max_per_run 等）
-        # 在 worker.run_once 中与全局 eval_cfg 深度合并，None 表示沿用全局
-        task_eval_override = _parse_json_field(raw.get("eval_config"), "eval_config")
-
-        task = Task(
-            id=raw["id"],
-            name=raw.get("name", raw["id"]),
-            keyword=raw["keyword"],
-            min_price=raw.get("min_price"),
-            max_price=raw.get("max_price"),
-            exclude_words=raw.get("exclude_words") or [],
-            region=raw.get("region"),
-            mode=TaskMode(raw.get("mode", "confirm")),
-            search_filters=raw.get("search_filters") or [],
-            # 调度配置：从 DB 读取，scheduler._run_loop 据此决定 cron 或 interval 模式
-            # 用 or 防御 NULL：迁移后的旧行可能为 None，dict.get(key, default) 在 key 存在但值为 None 时返回 None
-            cron=raw.get("cron") or "*/1 * * * *",
-            use_cron=bool(raw.get("use_cron") or 0),
-            interval_seconds=float(raw.get("interval_seconds") or 60.0),
-            # AI 评估任务级配置：None 表示沿用全局 eval.pass_score，具体值表示任务级覆盖
-            # 之前用 `if not None else 60` 导致无法区分"用户设 60"和"未设置"，现已修正
-            eval_threshold=raw.get("eval_threshold"),
-            ai_prompt=raw.get("ai_prompt"),
-            # 任务级配置覆盖（dict 或 None）
-            search_config=task_search_override,
-            price_config=task_price_override,
-            antidetect_config=task_antidetect_override,
-            eval_config=task_eval_override,
-        )
-        # 合并任务级价格策略覆盖到 PriceConfig
-        # 任务级覆盖优先于全局配置，任务字段 min_price/max_price 优先于 price_config
-        # 使用局部变量避免污染 container.price_strategy 共享单例：
-        # 之前直接改 container.price_strategy 会导致循环结束后指向最后一个任务的配置，
-        # 影响 live 端点等共享 container 的代码
-        effective_min = task.min_price
-        effective_max = task.max_price
-        # 任务级 price_config 覆盖全局 price_strategy 的 min/max_price
-        # 注意：仅消费 min_price/max_price/market_ratio 三个字段
-        # PriceStrategyConfig 的 enabled_* 开关和 top_n 未消费（UI 未暴露 price_config 编辑入口）
-        # PriceConfig 用 None 表示禁用，与 enabled_*=False 语义等价
-        if task_price_override:
-            if effective_min is None and "min_price" in task_price_override:
-                effective_min = task_price_override["min_price"]
-            if effective_max is None and "max_price" in task_price_override:
-                effective_max = task_price_override["max_price"]
-        worker_price_strategy = container.price_strategy
-        if effective_min is not None or effective_max is not None:
-            worker_price_strategy = type(container.price_strategy)(
-                PriceConfig(
-                    min_price=effective_min,
-                    max_price=effective_max,
-                    market_ratio=task_price_override.get("market_ratio", price_cfg.market_ratio)
-                    if task_price_override else price_cfg.market_ratio,
-                )
-            )
-        # 合并任务级搜索参数覆盖到 TaskConfig
-        # 任务级 search_config 覆盖全局 AppConfig.search 的对应字段
-        effective_search = {
-            "page_size": search_cfg.page_size,
-            "sort_type": search_cfg.sort_type,
-            "timeout": search_cfg.timeout,
-            "regions": search_cfg.regions,
-            "filter_tags": search_cfg.filter_tags,
-        }
-        if task_search_override:
-            for k in effective_search:
-                if k in task_search_override:
-                    effective_search[k] = task_search_override[k]
-        task_config = TaskConfig(
-            search_page_size=effective_search["page_size"],
-            search_sort_type=effective_search["sort_type"],
-            search_timeout=effective_search["timeout"],
-            search_regions=effective_search["regions"],
-            search_filter_tags=effective_search["filter_tags"],
-            use_cron=task.use_cron,
-            interval_seconds=task.interval_seconds,
-        )
-        worker = TaskWorker(
-            task=task,
-            collector=container.collector,
-            dedup=container.dedup,
-            price_strategy=worker_price_strategy,
-            evaluator=container.evaluator,
-            buyer=container.buyer,
-            config=task_config,
-            repo=container.repo,
-            # 注入 EventBus 以触发 EVAL_PASSED 等通知事件给 NotifierHub
-            event_bus=container.event_bus,
-        )
-        await container.scheduler.register(task, worker)
+        await container.scheduler.register(worker.task, worker)
         workers.append(worker)
 
     if not workers:
@@ -324,38 +256,22 @@ async def start_scheduler_in_background(container: Any) -> None:
         return
 
     async def _scheduler_loop() -> None:
-        """调度器主循环：启动所有任务 + EventBus 消费"""
+        """调度器主循环：启动所有任务
+
+        EventBus 消费已解耦到 start_event_bus_in_background，本循环只负责
+        保持调度器运行；移除原 bus_task 状态检测，因为 EventBus 异常退出
+        已在 _bus_loop 内部记录日志，无需此处重复告警。
+        """
         try:
-            # 启动 EventBus 消费循环
-            bus_task = asyncio.create_task(container.event_bus.run_forever())
-            # 启动所有已注册任务
             await container.scheduler.start_all()
             task_ids = [w.task.id for w in workers]
             logger.info(f"调度器已启动 {len(task_ids)} 个任务: {task_ids}")
-            # 保持运行直到被取消或 bus_task 异常退出
-            # 为什么不用 asyncio.Event().wait()：EventBus 异常退出后事件推送静默失效，
-            # 需要检测 bus_task 状态并告警
+            # 保持运行直到被取消
             stop_event = asyncio.Event()
-            while not stop_event.is_set():
-                if bus_task.done():
-                    exc = bus_task.exception()
-                    if exc:
-                        logger.error(f"EventBus 异常退出，事件推送将不可用: {exc}")
-                    else:
-                        logger.warning("EventBus 已退出，事件推送不可用")
-                    break
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=10.0)
-                except asyncio.TimeoutError:
-                    continue
+            await stop_event.wait()
         except asyncio.CancelledError:
             logger.info("调度器正在停止...")
             await container.scheduler.stop_all()
-            container.event_bus.stop()
-            bus_task.cancel()
-            # 子任务被取消是预期行为，使用 suppress 避免 CancelledError 上抛中断 cleanup
-            with suppress(asyncio.CancelledError):
-                await bus_task
             logger.info("调度器已停止")
             # 重新抛出以传播取消信号，符合 S7497
             raise
@@ -516,6 +432,10 @@ def setup_startup_hooks(app: FastAPI) -> None:
 
         # 一键启动模式：在 FastAPI 事件循环中启动调度器
         if _should_start_scheduler():
+            # EventBus 必须先于调度器启动：worker.run_once 会在调度循环中
+            # publish_nowait(EVAL_PASSED)，若无消费者事件会堆积在队列
+            # 无消费者。EventBus 与"是否有 RUNNING 任务"解耦，无条件启动
+            await start_event_bus_in_background(container)
             await start_scheduler_in_background(container)
 
         # 启动 Cookie 定时同步（如果配置启用）
@@ -547,7 +467,7 @@ def setup_startup_hooks(app: FastAPI) -> None:
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:
         """优雅停止调度器后台任务"""
-        global _scheduler_task, _cookie_sync_scheduler, _batch_refresh_scheduler, _kb_refresh_scheduler, _takeover_timeout_scheduler
+        global _scheduler_task, _cookie_sync_scheduler, _batch_refresh_scheduler, _kb_refresh_scheduler, _takeover_timeout_scheduler, _event_bus_task
         # 知识库调度器优先停止：避免停止主调度器时新任务仍被提交
         if _kb_refresh_scheduler:
             _kb_refresh_scheduler.stop()
@@ -567,3 +487,11 @@ def setup_startup_hooks(app: FastAPI) -> None:
             with suppress(asyncio.CancelledError):
                 await _scheduler_task
             _scheduler_task = None
+        # EventBus 在调度器之后停止：调度器 stop_all 时可能还会 publish
+        # 事件（如任务停止事件），EventBus 需存活到调度器完全停止后才能关闭
+        if _event_bus_task and not _event_bus_task.done():
+            container.event_bus.stop()
+            _event_bus_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await _event_bus_task
+            _event_bus_task = None

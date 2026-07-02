@@ -54,7 +54,6 @@ from xianyu_hunter.web.routes import (
     api_tasks,
     api_templates,
     api_tunnel,
-    pages,
     price_dashboard,
 )
 
@@ -167,8 +166,12 @@ def create_app() -> FastAPI:
                 )
             return JSONResponse({"detail": "SPA 未构建，请运行 cd frontend && npm run build"}, status_code=404)
 
+    # 根路径重定向到新版 SPA：旧版 SSR 已下线，所有用户访问 / 时跳转到 /app/
+    @app.get("/", include_in_schema=False)
+    async def redirect_to_spa() -> RedirectResponse:
+        return RedirectResponse(url="/app/", status_code=302)
+
     # 路由
-    app.include_router(pages.router)
     app.include_router(api_tasks.router)
     app.include_router(api_task_deps.router)  # F-16：任务依赖关系
     app.include_router(api_task_links.router)

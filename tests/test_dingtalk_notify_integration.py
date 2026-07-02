@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -154,18 +155,22 @@ async def test_eval_passed_event_triggers_dingtalk_send():
                 item_id="test_item",
                 payload={"item_title": "测试商品", "score": 75},
             ))
-            # 给 EventBus 一点时间分发事件
-            await asyncio.sleep(0.1)
+            # 用轮询替代固定 sleep：等待 _do_send 被调用，最长等 2s
+            # 比 sleep(0.1) 更健壮，CI 慢机器也不会 flaky
+            for _ in range(40):
+                if DingTalkNotifier._do_send.called:
+                    break
+                await asyncio.sleep(0.05)
         finally:
-            bus._running = False
-            # 唤醒可能在 await queue.get() 中的消费者
-            await bus.publish(Event(type=EventType.TASK_STOPPED))
-            await asyncio.sleep(0.05)
-            bus_task.cancel()
+            # 用公开 API 替代私有属性 _running
+            bus.stop()
+            # run_forever 内部 wait_for(timeout=1.0) 轮询，stop() 后最多 1s 退出
             try:
-                await bus_task
-            except asyncio.CancelledError:
-                pass
+                await asyncio.wait_for(bus_task, timeout=2.0)
+            except asyncio.TimeoutError:
+                bus_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await bus_task
 
         # 验证 _do_send 被调用过
         assert DingTalkNotifier._do_send.called, (
@@ -195,3 +200,165 @@ def test_worker_eval_passed_publishes_event():
         event_bus=mock_bus,
     )
     assert worker.event_bus is mock_bus, "TaskWorker 应保留 event_bus 引用"
+
+
+@pytest.mark.asyncio
+async def test_worker_run_once_triggers_eval_passed_after_rules_pass():
+    """I-6 验证：worker.run_once 评估通过后应实际调用 publish_nowait
+
+    构造最小 mock 依赖跑通 run_once 主流程，断言 event_bus.publish_nowait
+    被调用且事件类型为 EVAL_PASSED。验证 I-1 修复后事件触发位置正确
+    """
+    from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
+    from xianyu_hunter.domain.item import ItemDetail, ItemSummary
+    from xianyu_hunter.domain.seller import SellerProfile
+    from xianyu_hunter.domain.task import Task, TaskConfig, TaskMode
+    from xianyu_hunter.modules.price_strategy import PriceVerdict
+    from xianyu_hunter.modules.worker import TaskWorker
+
+    # 构造测试商品（标题包含关键词，避免被 task_links 过滤跳过）
+    summary = ItemSummary(id="item_1", title="测试商品 iPhone", price=2000.0)
+    detail = ItemDetail(id="item_1", title="测试商品 iPhone", price=2000.0, seller_id="seller_1")
+    seller = SellerProfile(id="seller_1")
+
+    task = Task(id="t1", name="测试任务", keyword="测试", mode=TaskMode.NOTIFY_ONLY)
+
+    # 构造 mock collector：browser=None 跳过页面复用逻辑
+    mock_collector = MagicMock()
+    mock_collector.browser = None
+    mock_collector.last_session_invalid = False
+    mock_collector._browser_lock = MagicMock(has_high_priority_waiting=False)
+    mock_collector.search = AsyncMock(return_value=[summary])
+    mock_collector.detail = AsyncMock(return_value=detail)
+    mock_collector.seller_profile = AsyncMock(return_value=seller)
+    mock_collector.seller_profile_fallback = AsyncMock(return_value=seller)
+
+    mock_dedup = MagicMock()
+    mock_dedup.filter_new = AsyncMock(return_value=[summary])
+    mock_dedup.save = AsyncMock()
+
+    mock_price = MagicMock()
+    mock_price.check = MagicMock(return_value=PriceVerdict(pass_=True, reasons=[]))
+
+    eval_result = EvalResult(score=75, risk_level=RiskLevel.LOW, data_quality="full")
+    mock_evaluator = MagicMock()
+    mock_evaluator.evaluate = MagicMock(return_value=eval_result)
+
+    mock_bus = MagicMock()
+    mock_repo = MagicMock()
+
+    worker = TaskWorker(
+        task=task,
+        collector=mock_collector,
+        dedup=mock_dedup,
+        price_strategy=mock_price,
+        evaluator=mock_evaluator,
+        config=TaskConfig(),
+        repo=mock_repo,
+        event_bus=mock_bus,
+    )
+
+    # mock 全局配置：禁用 AI 评估，避免触发 LLM 调用
+    with patch("xianyu_hunter.modules.worker.get_settings") as mock_settings, \
+         patch("xianyu_hunter.modules.worker.get_config") as mock_get_config, \
+         patch(
+             "xianyu_hunter.web.services.cookie_runtime_sync.inject_cookie_store_to_browser",
+             new=AsyncMock(),
+         ):
+        mock_settings.return_value.ai_enabled = False
+        mock_cfg = MagicMock()
+        mock_cfg.eval.pass_score = 60
+        mock_cfg.eval.ai_auto_eval = False
+        mock_cfg.eval.ai_auto_deep_analyze = False
+        mock_get_config.return_value = mock_cfg
+
+        await worker.run_once()
+
+    # 验证 publish_nowait 被调用过
+    assert mock_bus.publish_nowait.called, (
+        "评估通过后应调用 event_bus.publish_nowait 触发 EVAL_PASSED"
+    )
+    # 验证事件类型为 EVAL_PASSED
+    call_args = mock_bus.publish_nowait.call_args
+    event = call_args.args[0]
+    assert event.type == EventType.EVAL_PASSED, (
+        f"事件类型应为 EVAL_PASSED，实际: {event.type}"
+    )
+    assert event.task_id == "t1"
+    assert event.item_id == "item_1"
+    assert event.payload["score"] == 75
+
+
+@pytest.mark.asyncio
+async def test_worker_run_once_no_eval_passed_when_score_below_threshold():
+    """I-6 验证：评估分数低于 pass_score 时不应触发 EVAL_PASSED
+
+    防止低分商品误触发通知
+    """
+    from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
+    from xianyu_hunter.domain.item import ItemDetail, ItemSummary
+    from xianyu_hunter.domain.seller import SellerProfile
+    from xianyu_hunter.domain.task import Task, TaskConfig, TaskMode
+    from xianyu_hunter.modules.price_strategy import PriceVerdict
+    from xianyu_hunter.modules.worker import TaskWorker
+
+    summary = ItemSummary(id="item_2", title="测试商品 iPhone", price=2000.0)
+    detail = ItemDetail(id="item_2", title="测试商品 iPhone", price=2000.0, seller_id="seller_2")
+    seller = SellerProfile(id="seller_2")
+
+    task = Task(id="t2", name="测试任务", keyword="测试", mode=TaskMode.NOTIFY_ONLY)
+
+    mock_collector = MagicMock()
+    mock_collector.browser = None
+    mock_collector.last_session_invalid = False
+    mock_collector._browser_lock = MagicMock(has_high_priority_waiting=False)
+    mock_collector.search = AsyncMock(return_value=[summary])
+    mock_collector.detail = AsyncMock(return_value=detail)
+    mock_collector.seller_profile = AsyncMock(return_value=seller)
+    mock_collector.seller_profile_fallback = AsyncMock(return_value=seller)
+
+    mock_dedup = MagicMock()
+    mock_dedup.filter_new = AsyncMock(return_value=[summary])
+    mock_dedup.save = AsyncMock()
+
+    mock_price = MagicMock()
+    mock_price.check = MagicMock(return_value=PriceVerdict(pass_=True, reasons=[]))
+
+    # 评估分 30，低于 pass_score 60，should_pass 返回 False
+    eval_result = EvalResult(score=30, risk_level=RiskLevel.HIGH, data_quality="full")
+    mock_evaluator = MagicMock()
+    mock_evaluator.evaluate = MagicMock(return_value=eval_result)
+
+    mock_bus = MagicMock()
+    mock_repo = MagicMock()
+
+    worker = TaskWorker(
+        task=task,
+        collector=mock_collector,
+        dedup=mock_dedup,
+        price_strategy=mock_price,
+        evaluator=mock_evaluator,
+        config=TaskConfig(),
+        repo=mock_repo,
+        event_bus=mock_bus,
+    )
+
+    with patch("xianyu_hunter.modules.worker.get_settings") as mock_settings, \
+         patch("xianyu_hunter.modules.worker.get_config") as mock_get_config, \
+         patch(
+             "xianyu_hunter.web.services.cookie_runtime_sync.inject_cookie_store_to_browser",
+             new=AsyncMock(),
+         ):
+        mock_settings.return_value.ai_enabled = False
+        mock_cfg = MagicMock()
+        mock_cfg.eval.pass_score = 60
+        mock_cfg.eval.ai_auto_eval = False
+        mock_cfg.eval.ai_auto_deep_analyze = False
+        mock_get_config.return_value = mock_cfg
+
+        await worker.run_once()
+
+    # 验证 publish_nowait 未被调用
+    assert not mock_bus.publish_nowait.called, (
+        "评估分数低于 pass_score 时不应触发 EVAL_PASSED 事件"
+    )

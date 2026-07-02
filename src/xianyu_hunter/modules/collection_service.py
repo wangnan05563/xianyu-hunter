@@ -384,7 +384,25 @@ class ItemCollectionService:
 
         self._save_seller(seller)
         eval_result = self.container.evaluator.evaluate(detail, seller)
+        # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件
+        # 为什么仍调用 evaluator.evaluate：官方采集弹窗需展示评估分给用户，
+        # 但超范围商品不应进入评估明细菜单（list_evaluations 的价格过滤会二次兜底）
+        price_filtered = False
         if effective_task_id:
+            try:
+                task_raw = self.container.repo.get_task(effective_task_id)
+                if task_raw:
+                    ps = self.container.build_task_price_strategy(task_raw)
+                    verdict = ps.check(detail, market=None)
+                    if not verdict.pass_:
+                        price_filtered = True
+                        logger.info(
+                            "官方采集跳过 eval 事件写入: item_id={}, price={}, reasons={}",
+                            item_id, detail.price, verdict.reasons,
+                        )
+            except Exception as e:
+                logger.warning("官方采集价格门禁检查失败 item_id={}: {}", item_id, e)
+        if effective_task_id and not price_filtered:
             self._save_eval_event(effective_task_id, item_id, detail, seller, reviews, eval_result)
 
         return CollectionResult(

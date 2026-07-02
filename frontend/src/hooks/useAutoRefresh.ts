@@ -79,7 +79,10 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
   // 并发刷新保护：防止多个触发源同时发起刷新
   const refreshingRef = useRef(false)
   // 用 ref 持有 scheduleNext，打破 doRefresh → scheduleNext → doRefresh 的循环依赖
-  const scheduleNextRef = useRef<() => void>(() => {})
+  const scheduleNextRef = useRef<(keepNextAt?: boolean) => void>(() => {})
+  // 用 ref 持有 nextRefreshAt，避免 scheduleNext 闭包陈旧读取 state
+  // 用于 visibilitychange 时保留已有未到期的下次刷新时间，避免页面切换倒计时重置
+  const nextRefreshAtRef = useRef<number | null>(null)
 
   // 组件卸载时标记 + 清理所有 timer
   useEffect(() => {
@@ -131,13 +134,16 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
   }, [])
 
   // 兜底轮询调度：SSE 断线期间的保底刷新机制
-  const scheduleNext = useCallback(() => {
+  // keepNextAt=true 时保留已有未到期的 nextRefreshAt（用于 visibilitychange），
+  // 避免页面切换时倒计时重置；其他场景（doRefresh 完成、interval 变化）重置
+  const scheduleNext = useCallback((keepNextAt = false) => {
     if (timerRef.current) {
       clearTimeout(timerRef.current)
       timerRef.current = null
     }
     if (!enabledRef.current || pausedRef.current) {
       if (mountedRef.current) {
+        nextRefreshAtRef.current = null
         setState((s) => ({ ...s, nextRefreshAt: null }))
       }
       return
@@ -145,9 +151,29 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
     const visible = document.visibilityState === 'visible'
     const multiplier = visible ? 1 : BACKGROUND_SLOWDOWN
     const intervalMs = intervalRef.current * 1000 * multiplier
-    const nextAt = Date.now() + intervalMs
-    timerRef.current = setTimeout(() => doRefresh(), intervalMs)
+    const now = Date.now()
+
+    // 计算下次刷新时间：
+    // - keepNextAt 且已有未到期的 nextRefreshAt：保留（页面切换时不重置倒计时）
+    // - 不可见时若剩余时间 < 降频间隔：延长到降频间隔（后台降频保护）
+    // - 其他情况：重新计算
+    let nextAt: number
+    const currentNext = nextRefreshAtRef.current
+    if (keepNextAt && currentNext && currentNext > now) {
+      const remaining = currentNext - now
+      if (!visible && remaining < intervalMs) {
+        nextAt = now + intervalMs
+      } else {
+        nextAt = currentNext
+      }
+    } else {
+      nextAt = now + intervalMs
+    }
+
+    const delay = Math.max(0, nextAt - now)
+    timerRef.current = setTimeout(() => doRefresh(), delay)
     if (mountedRef.current) {
+      nextRefreshAtRef.current = nextAt
       setState((s) => ({ ...s, nextRefreshAt: nextAt }))
     }
   }, [doRefresh])
@@ -156,8 +182,9 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
   scheduleNextRef.current = scheduleNext
 
   // 页面可见性变化时重新调度
+  // 传 keepNextAt=true：保留已有未到期的 nextRefreshAt，避免页面切换倒计时重置
   useEffect(() => {
-    const onVisibility = () => scheduleNext()
+    const onVisibility = () => scheduleNext(true)
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [scheduleNext])

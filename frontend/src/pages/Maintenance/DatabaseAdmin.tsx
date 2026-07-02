@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import {
   Alert,
   Button,
@@ -32,6 +32,8 @@ import {
   UploadOutlined,
 } from '@ant-design/icons'
 import { dbAdminApi, type DbColumn, type DbTableInfo } from '../../api/dbAdmin'
+import { useSearch } from '../../hooks/useSearch'
+import { useSearchHistory } from '../../hooks/useSearchHistory'
 
 // 与后端约定的危险操作确认 token
 const CONFIRM_TOKEN = 'CONFIRM_DELETE'
@@ -126,6 +128,8 @@ function ColumnFormFields({ columns, initial }: { columns: DbColumn[]; initial?:
 }
 
 export default function DatabaseAdmin() {
+  // 搜索历史：文本搜索关键词持久化到 localStorage，供快速复用
+  const { history, add, clear } = useSearchHistory({ namespace: 'db_admin' })
   // 侧边栏表数据
   const [tables, setTables] = useState<DbTableInfo[]>([])
   const [tablesLoading, setTablesLoading] = useState(false)
@@ -187,7 +191,8 @@ export default function DatabaseAdmin() {
   }
 
   // 加载行数据
-  const loadRows = async () => {
+  // 改为 useCallback：useSearch 需要把 loadRows 作为依赖，普通函数每次渲染重建会导致防抖失效
+  const loadRows = useCallback(async () => {
     if (!activeTable) return
     setRowsLoading(true)
     setSelectedRowKeys([])
@@ -200,14 +205,18 @@ export default function DatabaseAdmin() {
       })
       setRows(data.rows)
       setTotal(data.total)
+      // 搜索成功且关键词非空时记录历史，供后续快速复用
+      if (search && search.trim()) {
+        add(search.trim())
+      }
     } catch (e: any) {
       message.error(`加载数据失败: ${e?.response?.data?.detail || e?.message}`)
     } finally {
       setRowsLoading(false)
     }
-  }
+  }, [activeTable, page, search, orderBy, add])
 
-  // 选中表变化时重置并加载
+  // 选中表变化时重置并加载（仅重置状态，数据加载由 useSearch 在依赖变化后防抖触发）
   useEffect(() => {
     if (activeTable) {
       loadSchema(activeTable)
@@ -218,10 +227,12 @@ export default function DatabaseAdmin() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTable])
 
-  useEffect(() => {
-    loadRows()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, activeTable, orderBy])
+  // 搜索防抖：page/activeTable/search/orderBy 变化时 400ms 防抖触发
+  // 替代手写 useEffect，统一搜索防抖逻辑
+  const { doSearch } = useSearch({
+    search: () => loadRows(),
+    deps: [loadRows],
+  })
 
   // 主键列（用于行标识与编辑时的禁用）
   const pkCol = useMemo(() => columns.find((c) => c.primary_key), [columns])
@@ -618,11 +629,28 @@ export default function DatabaseAdmin() {
                   prefix={<SearchOutlined />}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  onPressEnter={() => { setPage(1); loadRows() }}
+                  onPressEnter={() => { setPage(1); doSearch() }}
                   style={{ width: 200 }}
                 />
-                <Button onClick={() => { setPage(1); loadRows() }}>查询</Button>
+                <Button onClick={() => { setPage(1); doSearch() }}>查询</Button>
               </Space>
+              {/* 搜索历史小药丸：点击复用历史关键词，避免重复输入 */}
+              {history.length > 0 && (
+                <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                  {history.map((kw) => (
+                    <Tag
+                      key={kw}
+                      onClick={() => { setSearch(kw); setPage(1) }}
+                      style={{ cursor: 'pointer', margin: 0, fontSize: 11 }}
+                    >
+                      {kw}
+                    </Tag>
+                  ))}
+                  <Button type="link" size="small" onClick={clear} style={{ padding: 0, fontSize: 11 }}>
+                    清空
+                  </Button>
+                </div>
+              )}
 
               <Table
                 rowKey={(r) => String(r[pkCol?.name || 'id'])}

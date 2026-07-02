@@ -218,6 +218,23 @@ class AuthManager:
             self._qr_state = AuthState()
             return {"ok": True}
 
+    # ---------- 退出登录 ----------
+    def reset(self) -> None:
+        """重置 userinfo 缓存为未登录状态（供 /api/auth/logout 调用）
+
+        为什么需要此方法：避免外部模块直接访问 _userinfo / _userinfo_at 私有属性，
+        破坏封装性。同时清理 userinfo.json 持久化文件，防止下次启动读到旧数据。
+        """
+        with self._lock:
+            self._userinfo = {"logged_in": False, "user_id": "", "nick": "", "avatar_url": "", "fetched_at": 0}
+            self._userinfo_at = time.time()
+        # 清理持久化文件，避免下次启动读到旧的已登录状态
+        try:
+            if _USERINFO_FILE.exists():
+                _USERINFO_FILE.unlink()
+        except OSError:
+            pass
+
 
 def _set_status_file(out_dir: Path, **kw) -> None:
     s = {}

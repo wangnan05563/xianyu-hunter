@@ -476,6 +476,13 @@ class RAGEngine:
         - 可以传入完整 answer 供 LLM 参考，生成更相关的问题
         - 失败可静默降级，不影响已生成的主回答
         """
+        # 预算检查：与 generate 保持一致，超限时静默降级（follow_ups 是附加功能，不应抛异常）
+        if self._ai_usage is not None:
+            budget_ok, reason = self._ai_usage.check_budget()
+            if not budget_ok:
+                logger.info(f"follow_ups 跳过：预算超限 ({reason})")
+                return []
+
         # answer 截断：避免过长的回答导致 LLM 输入过大、增加延迟和成本
         truncated_answer = answer[:800] if len(answer) > 800 else answer
         # history 仅取最近 2 轮（4 条），后续问题主要依赖当前问答上下文
@@ -507,20 +514,38 @@ class RAGEngine:
             "stream": False,
         }
 
+        # 累积实际输出用于用量记录（与 generate 模式一致）
+        collected_output: list[str] = []
         try:
-            resp = await self._http.post("/chat/completions", json=payload)
+            # 独立超时：follow_ups 是轻量调用（max_tokens=300），8s 足够；
+            # 复用主回答的 25s 超时会导致 DONE 事件长时间阻塞
+            resp = await asyncio.wait_for(
+                self._http.post("/chat/completions", json=payload),
+                timeout=8,
+            )
             resp.raise_for_status()
             data = resp.json()
             content = data["choices"][0]["message"]["content"].strip()
+            collected_output.append(content)
             # LLM 可能返回带 markdown 代码块的 JSON，提取首个 JSON 数组
             json_match = re.search(r'\[.*?\]', content, re.DOTALL)
             if not json_match:
                 logger.warning(f"follow_ups 响应非 JSON 数组格式: {content[:100]}")
                 return []
             questions = json.loads(json_match.group())
-            # 过滤空字符串和过长问题（>100 字的问题不适合作为快捷推荐）
-            questions = [q.strip() for q in questions if q and len(q.strip()) <= 100]
+            # 类型守卫 + 过滤空字符串和过长问题（>100 字不适合作为快捷推荐）
+            questions = [
+                q.strip()
+                for q in questions
+                if isinstance(q, str) and q.strip() and len(q.strip()) <= 100
+            ]
             return questions[:count]
+        except asyncio.TimeoutError:
+            logger.warning("generate_follow_ups 超时（>8s），静默降级")
+            return []
         except Exception as e:
             logger.warning(f"generate_follow_ups 失败（静默降级）: {e}")
             return []
+        finally:
+            # 用量记录：失败/超时路径也需记录（OpenAI 对已发送请求计费）
+            self._record_llm_usage(messages, collected_output)

@@ -22,6 +22,10 @@ from xianyu_hunter.modules.chatbot.sanitizer import (
     sanitize_session_for_copy as _sanitize_session_for_copy,
 )
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.services.search_services import (
+    ChatbotSessionSearchParams,
+    ChatbotSessionSearchService,
+)
 
 router = APIRouter(prefix="/api/chatbot", tags=["chatbot"])
 
@@ -154,14 +158,14 @@ def list_sessions(
     """会话列表（收藏置顶，按 last_active_at DESC）"""
     chatbot = _get_chatbot_or_403()
     repo = chatbot["repo"]
-    items = repo.list_sessions(
-        status=status, keyword=keyword, favorite_only=favorite_only,
+    # 使用 SearchService 统一处理分页/慢查询埋点
+    # keyword 对应 params.q，由基类 SearchParams 统一持有
+    service = ChatbotSessionSearchService(repo)
+    result = service.search(ChatbotSessionSearchParams(
+        q=keyword, status=status, favorite_only=favorite_only,
         limit=limit, offset=offset,
-    )
-    total = repo.count_sessions(
-        status=status, keyword=keyword, favorite_only=favorite_only,
-    )
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
+    ))
+    return {"items": result["items"], "total": result["total"], "limit": limit, "offset": offset}
 
 
 @router.post("/sessions", status_code=201)

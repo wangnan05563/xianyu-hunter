@@ -1,4 +1,4 @@
-import { Card, Col, Row, List, Tag, Empty, Button, Badge, Descriptions, Input, Space, Spin, theme } from 'antd'
+import { Card, Col, Row, List, Tag, Empty, Button, Badge, Descriptions, theme } from 'antd'
 import {
   SettingOutlined,
   DatabaseOutlined,
@@ -8,15 +8,8 @@ import {
   ShoppingCartOutlined,
   AuditOutlined,
   HeartOutlined,
-  UserOutlined,
-  ThunderboltOutlined,
-  LoginOutlined,
 } from '@ant-design/icons'
-import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
 import type { RecentEvent, StatsOverview } from '../../../api'
-import { authApi } from '../../../api'
-import type { AuthMe } from '../../../api/types'
 import { EVENT_COLOR } from '../../../constants/eventTypes'
 import { evTypeLabel, evMsg } from '../utils'
 
@@ -28,75 +21,8 @@ interface EventStreamSectionProps {
 }
 
 export default function EventStreamSection({ events, streamStatus, overview, onNavigate }: EventStreamSectionProps) {
-  const navigate = useNavigate()
   // 从 antd token 读取主题色，自动响应主题切换
   const { token } = theme.useToken()
-
-  // 登录账户状态
-  const [auth, setAuth] = useState<AuthMe | null>(null)
-  const [authLoading, setAuthLoading] = useState(true)
-
-  // Token 快速更换状态
-  const [tokenExpanded, setTokenExpanded] = useState(false)
-  const [tokenValue, setTokenValue] = useState('')
-  const [tokenUpdating, setTokenUpdating] = useState(false)
-  const [tokenRefreshing, setTokenRefreshing] = useState(false)
-  const [tokenResult, setTokenResult] = useState<{ text: string; error: boolean } | null>(null)
-
-  // 加载登录态
-  useEffect(() => {
-    authApi.getMe().then(setAuth).catch(() => setAuth(null)).finally(() => setAuthLoading(false))
-  }, [])
-
-  // 快速刷新 _m_h5_tk（从浏览器读取）
-  const handleQuickRefreshM5tk = useCallback(async () => {
-    setTokenRefreshing(true)
-    setTokenResult(null)
-    try {
-      const r = await fetch('/api/auth/cookie/fetch-keys?keys=_m_h5_tk', { credentials: 'include' })
-      const data = await r.json()
-      if (data.ok && data.cookies?._m_h5_tk) {
-        setTokenValue(data.cookies._m_h5_tk)
-        setTokenResult({ text: `已获取（来源: ${data.source}）`, error: false })
-      } else {
-        setTokenResult({ text: data.hint || '未找到', error: true })
-      }
-    } catch {
-      setTokenResult({ text: '请求失败', error: true })
-    } finally {
-      setTokenRefreshing(false)
-    }
-  }, [])
-
-  // 展开 Token 面板时自动拉取一次
-  useEffect(() => {
-    if (tokenExpanded) handleQuickRefreshM5tk()
-  }, [tokenExpanded, handleQuickRefreshM5tk])
-
-  // 注入单个 token
-  const handleInjectToken = async () => {
-    if (!tokenValue.trim()) return
-    setTokenUpdating(true)
-    setTokenResult(null)
-    try {
-      const result = await authApi.injectCookie(`_m_h5_tk=${tokenValue.trim()}`)
-      if (result.ok) {
-        setTokenResult({ text: 'Token 更新成功', error: false })
-        // 刷新登录态
-        authApi.getMe().then(setAuth).catch(() => {})
-        setTimeout(() => setTokenExpanded(false), 1500)
-      } else {
-        setTokenResult({ text: result.error || '更新失败', error: true })
-      }
-    } catch {
-      setTokenResult({ text: '请求失败', error: true })
-    } finally {
-      setTokenUpdating(false)
-    }
-  }
-
-  // 截断显示的 token 值
-  const displayToken = (val: string) => val.length > 20 ? val.slice(0, 20) + '…' : val
 
   return (
     <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
@@ -131,117 +57,6 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
       <Col xs={24} lg={9}>
         <Card title={<span><SettingOutlined /> 系统状态</span>}
           extra={<span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{overview?.ts || ''}</span>}>
-
-          {/* 登录账户 — 参考旧版 dashboard 设计 */}
-          <div style={{
-            background: 'var(--xh-bg-spotlight)', borderRadius: 6, padding: '10px 12px',
-            marginBottom: 12, border: '1px solid var(--xh-border)',
-          }}>
-            <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginBottom: 6 }}>登录账户</div>
-            {(() => {
-              // 三态渲染：加载中 / 已登录 / 未登录
-              if (authLoading) {
-                return <Spin size="small" />
-              }
-              if (!auth?.logged_in) {
-                return (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ color: 'var(--xh-text-tertiary)' }}>未登录</span>
-                    <Button size="small" type="primary" icon={<LoginOutlined />} onClick={() => navigate('/login')}
-                      style={{ background: token.colorPrimary, borderColor: token.colorPrimary }}>
-                      前往登录
-                    </Button>
-                  </div>
-                )
-              }
-              return (
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <UserOutlined style={{ color: token.colorPrimary, fontSize: 18 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>
-                      {auth.nick || (`用户 ${(auth.user_id || '').slice(0, 6)}`)}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', fontFamily: 'monospace' }}>
-                      {(auth.user_id || '').slice(0, 12)}
-                    </div>
-                  </div>
-                  {/* 换号 + Token 按钮 */}
-                  <Space size={4}>
-                    <Button size="small" onClick={() => navigate('/login')}>换号</Button>
-                    {!tokenExpanded ? (
-                      <Button
-                        size="small"
-                        icon={<ThunderboltOutlined />}
-                        onClick={() => setTokenExpanded(true)}
-                        style={{ fontSize: 10, color: token.colorWarning, borderColor: token.colorWarning }}
-                      >
-                        Token
-                      </Button>
-                    ) : (
-                      <Button
-                        size="small"
-                        onClick={() => setTokenExpanded(false)}
-                      >
-                        收起
-                      </Button>
-                    )}
-                  </Space>
-                </div>
-
-                {/* Token 快速更换面板（展开后内联显示） */}
-                {tokenExpanded && (
-                  <div style={{
-                    marginTop: 8, padding: '8px 10px',
-                    background: token.colorWarningBg, border: `1px solid ${token.colorWarningBorder}`, borderRadius: 6,
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontWeight: 600, color: token.colorWarning, fontSize: 11 }}>
-                        <ThunderboltOutlined /> 更新 _m_h5_tk
-                      </span>
-                      <Space size={4}>
-                        <Button size="small" type="link" loading={tokenRefreshing} onClick={handleQuickRefreshM5tk}
-                          style={{ fontSize: 10, padding: '0 4px' }}>
-                          从浏览器自动获取
-                        </Button>
-                      </Space>
-                    </div>
-                    <Space.Compact style={{ width: '100%' }}>
-                      <Input
-                        size="small"
-                        placeholder="粘贴新的 _m_h5_tk 值"
-                        value={tokenValue}
-                        onChange={(e) => setTokenValue(e.target.value)}
-                        style={{ fontFamily: 'monospace', fontSize: 11 }}
-                        onPressEnter={handleInjectToken}
-                      />
-                      <Button
-                        size="small"
-                        type="primary"
-                        loading={tokenUpdating}
-                        onClick={handleInjectToken}
-                        disabled={!tokenValue.trim()}
-                        style={{ background: token.colorPrimary, borderColor: token.colorPrimary, fontSize: 11 }}
-                      >
-                        更新
-                      </Button>
-                    </Space.Compact>
-                    {tokenResult && (
-                      <div style={{ fontSize: 10, marginTop: 4, color: tokenResult.error ? token.colorError : token.colorSuccess }}>
-                        {tokenResult.text}
-                      </div>
-                    )}
-                    {tokenValue && !tokenResult && (
-                      <div style={{ fontSize: 10, color: 'var(--xh-text-tertiary)', marginTop: 2 }}>
-                        当前值: {displayToken(tokenValue)}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-              )
-            })()}
-          </div>
 
           <Descriptions size="small" column={1} colon={false} labelStyle={{ width: 80, color: 'var(--xh-text-tertiary)' }} contentStyle={{ fontSize: 12 }}>
             <Descriptions.Item label={<><DatabaseOutlined /> 数据库</>}>
