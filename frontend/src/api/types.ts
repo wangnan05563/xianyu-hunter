@@ -93,6 +93,12 @@ export interface AppConfig {
     batch_size: number
     max_items_per_run: number
   }
+  // 任务调度默认值（对应后端 TaskSchedulerConfig 模型）
+  task_scheduler: {
+    default_interval_seconds: number
+    auto_search_enabled: boolean
+    auto_search_concurrency: number
+  }
   // 通知渠道凭据（明文存到 yaml，前端用 Input.Password 组件回显）
   serverchan_send_key: string
   pushplus_token: string
