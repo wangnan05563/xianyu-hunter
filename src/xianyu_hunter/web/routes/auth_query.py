@@ -159,15 +159,15 @@ def cookie_health() -> JSONResponse:
     store.invalidate_cache()
 
     # 完整性检查：返回 (is_valid, reason)
-    is_valid, reason = store.validate_cookies_with_expiry()
+    is_valid, reason = store.validate_cookies_with_expiry(user_id="default")
     # 摘要信息：cookie_count / exported_at / method / key_cookies_found
-    info = store.get_cookie_info()
+    info = store.get_cookie_info(user_id="default")
     # 最早过期时间戳
-    expiry_ts = store.get_cookie_expiry()
+    expiry_ts = store.get_cookie_expiry(user_id="default")
 
     # 分层状态：基于 Cookie 名称判断 identity/session/tracking 三层是否齐全
     # 为什么直接读 JSON 而非调 CookieRotator：避免引入 login_orchestrator 的副作用
-    data = store._read_json()
+    data = store._read_json(user_id="default")
     names = {c.get("name", "") for c in (data or {}).get("cookies", [])} if data else set()
     layers_status = {
         "identity": bool({"unb", "cookie2", "sgcookie", "t", "_tb_token_", "lg2"} & names),
