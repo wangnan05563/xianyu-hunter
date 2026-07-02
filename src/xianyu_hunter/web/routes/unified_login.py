@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -58,6 +59,7 @@ _session: dict = {
     "cookies_injected": False,
     "session_token": None,      # MU2: 多用户会话令牌
     "current_user_id": None,    # MU2: 当前登录用户 ID
+    "multi_user_finalized": False,  # MU2: 多用户接入是否已完成（幂等标志，防并发竞态）
 }
 _session_lock = threading.Lock()
 
@@ -80,6 +82,7 @@ def _reset_session() -> None:
             "cookies_injected": False,
             "session_token": None,      # MU2: 多用户会话令牌
             "current_user_id": None,    # MU2: 当前登录用户 ID
+            "multi_user_finalized": False,  # MU2: 重置幂等标志，允许下次登录重新接入
         }
 
 
@@ -120,8 +123,8 @@ def _cookies_from_store_for_playwright() -> list[dict]:
         from xianyu_hunter.web.services.cookie_store import is_test_cookie
 
         store = get_cookie_store()
-        store.invalidate_cache()
-        data = store._read_json()
+        store.invalidate_cache("default")
+        data = store._read_json("default")
         if not data or not data.get("cookies"):
             return []
 
@@ -211,14 +214,25 @@ def _finalize_multi_user_login() -> str | None:
     通过 Cookie 识别用户身份，签发 session_token，并将 Cookie 迁移到
     user_id 维度的独立文件，避免多用户共用 default 串号。
 
+    幂等保护：本函数可能被 _background_wait 后台线程和 login_status 前端轮询
+    并发调用，用 multi_user_finalized 标志保证只执行一次，避免重复签发
+    session_token 导致前一个 token 失效（issue_session 会撤销旧 session）。
+
     Returns:
         session_token 或 None（失败时降级为单用户模式，不阻塞登录主流程）
     """
+    # 幂等保护：已完成的直接返回已有 token，避免并发重复签发
+    with _session_lock:
+        if _session.get("multi_user_finalized"):
+            return _session.get("session_token")
+        _session["multi_user_finalized"] = True
+
     try:
         from xianyu_hunter.web.services.user_manager import get_user_manager
+        from xianyu_hunter.web.services.cookie_store import _cookie_json_path
 
         store = get_cookie_store()
-        store.invalidate_cache()
+        store.invalidate_cache("default")
         # 登录子进程写入 default 文件，这里读取它做用户识别
         data = store._read_json("default")
         if not data or not data.get("cookies"):
@@ -232,6 +246,17 @@ def _finalize_multi_user_login() -> str | None:
 
         # 将 Cookie 从 default 迁移到 user_id 维度的独立文件
         store.export_cookies(cookies, method="login", user_id=user_id)
+
+        # 迁移完成后清理 default 文件，避免多用户串号
+        # 为什么必须清理：若不清理，default 文件仍保留真实用户 Cookie，
+        # has_valid_cookies("default") 仍返回 True，下次登录子进程会覆写
+        # default 文件，但本次用户的 Cookie 仍残留在 default 中造成串号
+        default_path = _cookie_json_path("default")
+        try:
+            default_path.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("清理 default Cookie 文件失败: %s", e)
+        store.invalidate_cache("default")
 
         with _session_lock:
             _session["session_token"] = session_token
@@ -267,8 +292,8 @@ def _verify_cookies(max_retries: int = 10, delay: float = 1.0) -> bool:
     """
     store = get_cookie_store()
     for attempt in range(max_retries):
-        store.invalidate_cache()
-        if store.has_valid_cookies():
+        store.invalidate_cache("default")
+        if store.has_valid_cookies(user_id="default"):
             logger.info("Cookie 验证成功 (attempt=%d)", attempt + 1)
             return True
         if attempt < max_retries - 1:
@@ -643,7 +668,9 @@ async def login_status() -> dict:
         _trigger_session_start()
         # MU2: 前端轮询首次发现 success 时也尝试多用户接入
         # （兜底：_background_wait 线程可能因竞态未触发）
-        _finalize_multi_user_login()
+        # 用 asyncio.to_thread 包装避免阻塞事件循环：
+        # _finalize_multi_user_login 内部有文件 I/O 和 DB I/O
+        await asyncio.to_thread(_finalize_multi_user_login)
 
     if result["status"] == "success":
         await _ensure_session_cookies_injected()

@@ -36,8 +36,8 @@ def _check_cookies() -> bool:
     JSON 不可用时回退到 SQLite 检查。
     """
     store = get_cookie_store()
-    store.invalidate_cache()
-    return store.has_valid_cookies()
+    store.invalidate_cache("default")
+    return store.has_valid_cookies(user_id="default")
 
 
 @router.get("/me")
@@ -247,17 +247,23 @@ def _clear_goofish_cookies_in_sqlite() -> int:
 
 
 def _delete_cookie_json() -> bool:
-    """删除 cookies.json 文件并清除 CookieStore 内存缓存"""
-    from xianyu_hunter.web.services.cookie_store import _COOKIE_JSON_FILE
+    """删除 default 用户的 Cookie JSON 文件并清除内存缓存
+
+    为什么用 _cookie_json_path("default") 而非模块级常量：
+    MU2 改造后 CookieStore 按 user_id 分文件存储，旧的 _COOKIE_JSON_FILE
+    模块级常量已删除。logout 时清理 default 用户文件，保持与多用户模型一致。
+    """
+    from xianyu_hunter.web.services.cookie_store import _cookie_json_path
+    path = _cookie_json_path("default")
     try:
-        if _COOKIE_JSON_FILE.exists():
-            _COOKIE_JSON_FILE.unlink()
+        if path.exists():
+            path.unlink()
     except OSError as e:
-        logger.warning("删除 cookies.json 失败: %s", e)
+        logger.warning("删除 cookies_default.json 失败: %s", e)
         return False
     # 清除 CookieStore 内存缓存，避免后续请求读到旧数据
     store = get_cookie_store()
-    store.invalidate_cache()
+    store.invalidate_cache("default")
     return True
 
 

@@ -182,7 +182,7 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
         json_written = get_cookie_store().export_cookies([
             {"name": n, "value": v, "domain": _DEFAULT_DOMAIN, "path": "/"}
             for n, v in cookies_to_inject
-        ], method="cookie")
+        ], method="cookie", user_id="default")
         # JSON 写入成功时，即使 browser+sqlite 都没写入成功，也算注入完成
         if json_written and injected == 0:
             injected = len(cookies_to_inject)
@@ -553,8 +553,8 @@ def get_saved_cookie_info() -> dict:
     不返回 cookie 值（安全考虑）。
     """
     store = get_cookie_store()
-    store.invalidate_cache()
-    data = store._read_json()
+    store.invalidate_cache("default")
+    data = store._read_json("default")
     if not data or not data.get("cookies"):
         return {"has_cookies": False, "logged_in": False}
 
@@ -792,8 +792,8 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
     try:
         from xianyu_hunter.web.services.cookie_store import is_test_cookie
         store = get_cookie_store()
-        store.invalidate_cache()
-        json_data = store._read_json()
+        store.invalidate_cache("default")
+        json_data = store._read_json("default")
         if json_data and json_data.get("cookies"):
             json_result: dict[str, str] = {}
             for c in json_data["cookies"]:
