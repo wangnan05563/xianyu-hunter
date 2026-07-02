@@ -7,6 +7,20 @@ import { STATUS_COLOR as statusColors } from '../../constants/statusColors'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useAutoLiveSearch } from '../../hooks/useAutoLiveSearch'
 
+// 让 Tag/span 等非原生交互元素获得键盘可访问性（S6848：onClick 需配合键盘事件）
+// 用结构类型避免引入 React 命名空间依赖
+const clickableProps = (cb: () => void) => ({
+  role: 'button' as const,
+  tabIndex: 0,
+  onClick: cb,
+  onKeyDown: (e: { key: string; preventDefault: () => void }) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      cb()
+    }
+  },
+})
+
 const statusLabels: Record<string, string> = {
   running: '运行中',
   paused: '已暂停',
@@ -702,7 +716,7 @@ export default function TaskList() {
         if (record.use_cron) {
           return (
             <Tooltip title={record.cron}>
-              <Tag style={{ cursor: 'pointer' }} onClick={() => navigate(`/tasks/${record.id}/edit`)}>
+              <Tag style={{ cursor: 'pointer' }} {...clickableProps(() => navigate(`/tasks/${record.id}/edit`))}>
                 📅 {record.cron}
               </Tag>
             </Tooltip>
@@ -711,7 +725,7 @@ export default function TaskList() {
         return (
           <Tag
             style={{ cursor: 'pointer' }}
-            onClick={() => navigate(`/tasks/${record.id}/edit`)}
+            {...clickableProps(() => navigate(`/tasks/${record.id}/edit`))}
           >
             ⏱ {record.interval_seconds ?? 60}秒
           </Tag>
@@ -839,6 +853,8 @@ export default function TaskList() {
           <Space size={4}>
             <Switch
               checked={autoSearchEnabled}
+              // aria-label 提升无障碍可访问性，读屏软件可正确朗读开关用途
+              aria-label="自动实时搜索开关"
               // 关闭时调用 pauseAll 清空待搜索队列，避免队列中任务继续执行
               onChange={(v) => {
                 setAutoSearchEnabled(v)
@@ -927,6 +943,14 @@ export default function TaskList() {
               const arm = armConfirm[task.id]
               // 状态条颜色
               const statusColor = statusColors[task.status] || '#d9d9d9'
+              // 提取到变量避免 JSX 内嵌套三元（S3358）
+              const isRunning = task.status === 'running'
+              const showStopBtn = isRunning || task.status === 'paused'
+              const startPauseBtn = isRunning ? (
+                <Button size="small" icon={<PauseCircleOutlined />} onClick={() => handleAction(task.id, 'pause')}>暂停</Button>
+              ) : (
+                <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleAction(task.id, 'start')}>启动</Button>
+              )
               return (
                 <Col key={task.id} xs={24} sm={12} md={8} lg={8}>
                   <Card
@@ -958,12 +982,8 @@ export default function TaskList() {
                       ) : (
                         <>
                           <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</Button>
-                          {task.status === 'running' ? (
-                            <Button size="small" icon={<PauseCircleOutlined />} onClick={() => handleAction(task.id, 'pause')}>暂停</Button>
-                          ) : (
-                            <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleAction(task.id, 'start')}>启动</Button>
-                          )}
-                          {(task.status === 'running' || task.status === 'paused') && (
+                          {startPauseBtn}
+                          {showStopBtn && (
                             <Button size="small" danger icon={<StopOutlined />} onClick={() => doArmConfirm(task.id, 'stop', '停止', '停止后任务将不再运行')}>停止</Button>
                           )}
                           <Button size="small" icon={<CopyOutlined />} onClick={() => cloneTask(task)}>复制</Button>
@@ -1268,7 +1288,7 @@ export default function TaskList() {
                 key={cat}
                 style={{ cursor: 'pointer', padding: '2px 10px' }}
                 color={tplCategory === cat ? 'blue' : 'default'}
-                onClick={() => setTplCategory(cat)}
+                {...clickableProps(() => setTplCategory(cat))}
               >
                 {cat}
               </Tag>

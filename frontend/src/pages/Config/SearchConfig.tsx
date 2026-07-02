@@ -263,7 +263,7 @@ export default function SearchConfig() {
               type="info"
               showIcon
               message="新建任务未指定采集周期时使用此默认值"
-              description="已存在的任务不受此配置影响，需在任务编辑器中单独修改。"
+              description="已存在的任务不受此配置影响，需在任务编辑页面单独修改。"
               style={{ marginBottom: 16 }}
             />
             <Form.Item
