@@ -64,3 +64,26 @@ def test_app_config_loads_task_scheduler_from_yaml(tmp_path: Path, monkeypatch: 
         # 为什么用 undo：当前 pytest 的 chdir 需要显式 path 参数，undo 会自动恢复 cwd
         monkeypatch.undo()
         reload_config()
+
+
+from xianyu_hunter.web.routes.api_tasks import TaskCreate
+
+
+def test_task_create_interval_seconds_defaults_to_none() -> None:
+    """TaskCreate.interval_seconds 默认值为 None（让 create_task 从全局配置取）"""
+    body = TaskCreate(keyword="测试")
+    assert body.interval_seconds is None
+
+
+def test_task_create_interval_seconds_accepts_explicit_value() -> None:
+    """TaskCreate.interval_seconds 显式传入时使用传入值"""
+    body = TaskCreate(keyword="测试", interval_seconds=120)
+    assert body.interval_seconds == 120
+
+
+def test_task_create_interval_seconds_rejects_out_of_range() -> None:
+    """TaskCreate.interval_seconds 范围校验 30-3600"""
+    with pytest.raises(Exception):
+        TaskCreate(keyword="测试", interval_seconds=29)
+    with pytest.raises(Exception):
+        TaskCreate(keyword="测试", interval_seconds=3601)

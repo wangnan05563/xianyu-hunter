@@ -36,8 +36,9 @@ class TaskCreate(BaseModel):
     # 调度配置：修复前端 cron 配置断层（之前字段被 Pydantic 静默丢弃）
     cron: str = "*/5 * * * *"
     use_cron: bool = False
-    # interval_seconds 范围 30-3600s：过短易触发反爬，过长错过抢单窗口
-    interval_seconds: float = Field(60.0, ge=30.0, le=3600.0)
+    # interval_seconds: None 表示沿用全局 task_scheduler.default_interval_seconds
+    # 为什么改为 None：让全局配置可热更新生效，无需重启服务即可调整新建任务默认采集周期
+    interval_seconds: float | None = Field(None, ge=30.0, le=3600.0)
     # AI 评估任务级配置：激活已有 DB 字段
     # eval_threshold: 任务级 pass_score 覆盖（None 表示沿用全局 eval.pass_score）
     eval_threshold: int | None = Field(None, ge=0, le=100)
@@ -122,6 +123,10 @@ def create_task(
         mode = TaskMode(body.mode)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"未知 mode: {body.mode}")
+    # interval_seconds None 时从全局配置兜底
+    # 为什么不从 Pydantic 默认值取：让全局配置可热更新生效，无需重启
+    from xianyu_hunter.infra.yaml_config import get_config
+    interval_seconds = body.interval_seconds if body.interval_seconds is not None else get_config().task_scheduler.default_interval_seconds
     tid = f"t{uuid.uuid4().hex[:8]}"
     task = {
         "id": tid,
@@ -137,7 +142,7 @@ def create_task(
         # 持久化调度配置，scheduler 启动时从 DB 读取并注入 TaskConfig
         "cron": body.cron,
         "use_cron": 1 if body.use_cron else 0,
-        "interval_seconds": body.interval_seconds,
+        "interval_seconds": interval_seconds,
         # AI 评估任务级配置：序列化存 DB（None 表示沿用全局）
         "eval_threshold": body.eval_threshold,
         "ai_prompt": body.ai_prompt,
