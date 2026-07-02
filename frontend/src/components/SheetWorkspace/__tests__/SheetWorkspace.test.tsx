@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, vi, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { App } from 'antd'
@@ -47,6 +47,27 @@ function renderSheetWorkspace(initialPath = '/') {
     </App>,
   )
 }
+
+// antd Drawer/Grid 等组件内部依赖 responsiveObserver → window.matchMedia
+// jsdom 默认不提供 matchMedia，必须 mock 否则 Drawer 打开时报错
+beforeAll(() => {
+  if (!window.matchMedia) {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(() => false),
+      })),
+    })
+  }
+})
 
 beforeEach(() => {
   mockState.isMobile = false
