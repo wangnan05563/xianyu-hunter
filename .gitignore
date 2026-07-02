@@ -143,3 +143,6 @@ test-screenshots/
 *.swo
 .DS_Store
 Thumbs.db
+
+# ---------- Git Worktrees ----------
+.worktrees/
