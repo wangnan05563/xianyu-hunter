@@ -15,6 +15,8 @@ import {
   Modal,
   Table,
   Tag,
+  Switch,
+  Alert,
 } from 'antd'
 import { SaveOutlined, UndoOutlined, SearchOutlined } from '@ant-design/icons'
 import { useConfigStore } from '../../stores/configStore'
@@ -69,6 +71,9 @@ export default function SearchConfig() {
   const [filterTags, setFilterTags] = useState<string[]>([]) // 筛选标签
   const [timeout, setTimeout] = useState(30) // 超时时间（秒）
   const [retryCount, setRetryCount] = useState(3) // 失败重试次数
+  // 任务调度默认值（对应后端 TaskSchedulerConfig）
+  const [defaultInterval, setDefaultInterval] = useState(60) // 新建任务默认采集周期（秒）
+  const [autoSearchDefault, setAutoSearchDefault] = useState(false) // 任务列表自动搜索初始默认开关
 
   useEffect(() => {
     load()
@@ -90,6 +95,12 @@ export default function SearchConfig() {
         setTimeout(sc.timeout ?? 30)
         setRegions(sc.regions ?? '')
         setFilterTags(sc.filter_tags ?? [])
+      }
+      // 任务调度默认值初始化
+      const ts = config.task_scheduler
+      if (ts) {
+        setDefaultInterval(ts.default_interval_seconds ?? 60)
+        setAutoSearchDefault(ts.auto_search_enabled ?? false)
       }
     }
   }, [config])
@@ -119,6 +130,12 @@ export default function SearchConfig() {
           regions: regions,
           filter_tags: filterTags,
         } as SearchConfigFields,
+        task_scheduler: {
+          default_interval_seconds: defaultInterval,
+          auto_search_enabled: autoSearchDefault,
+          // 保留原有并发上限，本页面不暴露编辑入口（当前固定 1）
+          auto_search_concurrency: config.task_scheduler?.auto_search_concurrency ?? 1,
+        },
       })
       setSaving(true)
       const changes = await previewSave()
@@ -218,7 +235,7 @@ export default function SearchConfig() {
           </Card>
 
           {/* 容错与重试 */}
-          <Card title="⚙️ 容错与重试">
+          <Card title="⚙️ 容错与重试" style={{ marginBottom: 16 }}>
             {/* 失败重试次数 */}
             <Form.Item
               label="失败重试次数"
@@ -237,6 +254,42 @@ export default function SearchConfig() {
             {/* 当前 QPS 提示（只读） */}
             <Form.Item label="等效 QPS" extra="根据搜索间隔自动计算的理论值">
               <Text code>{Math.round(60 / searchInterval)} 次/分钟</Text>
+            </Form.Item>
+          </Card>
+
+          {/* 任务调度默认值：新建任务未指定时的兜底配置 */}
+          <Card title="⏱ 任务调度默认值">
+            <Alert
+              type="info"
+              showIcon
+              message="新建任务未指定采集周期时使用此默认值"
+              description="已存在的任务不受此配置影响，需在任务编辑器中单独修改。"
+              style={{ marginBottom: 16 }}
+            />
+            <Form.Item
+              label="默认采集周期"
+              help="范围 30-3600 秒，过短易触发反爬，过长错过抢单窗口"
+            >
+              <InputNumber
+                min={30}
+                max={3600}
+                step={10}
+                value={defaultInterval}
+                onChange={(v) => setDefaultInterval(v ?? 60)}
+                addonAfter="秒"
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+            <Form.Item
+              label="任务列表自动搜索默认开关"
+              help="开启后，用户首次访问任务管理页时自动启用倒计时搜索（用户可在页面内手动关闭）"
+            >
+              <Switch
+                checked={autoSearchDefault}
+                onChange={setAutoSearchDefault}
+                checkedChildren="开"
+                unCheckedChildren="关"
+              />
             </Form.Item>
           </Card>
         </Col>
