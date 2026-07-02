@@ -628,7 +628,7 @@ export default function TaskList() {
       dataIndex: 'name',
       key: 'name',
       render: (text: string, record: Task) => (
-        <a onClick={() => navigate(`/tasks/${record.id}/edit`)}>{text}</a>
+        <Button type="link" onClick={() => navigate(`/tasks/${record.id}/edit`)} style={{ padding: 0 }}>{text}</Button>
       ),
     },
     { title: '关键词', dataIndex: 'keyword', key: 'keyword' },
@@ -654,6 +654,32 @@ export default function TaskList() {
       render: (status: string) => <Tag color={statusColors[status]}>{statusLabels[status] || status}</Tag>,
     },
     {
+      title: '采集周期',
+      key: 'interval',
+      width: 110,
+      // 只读列：点击跳转 TaskEditor 修改，避免在列表行内直接编辑造成误操作
+      render: (_: unknown, record: Task) => {
+        // use_cron=true 显示 cron 表达式，否则显示秒数
+        if (record.use_cron) {
+          return (
+            <Tooltip title={record.cron}>
+              <Tag style={{ cursor: 'pointer' }} onClick={() => navigate(`/tasks/${record.id}/edit`)}>
+                📅 {record.cron}
+              </Tag>
+            </Tooltip>
+          )
+        }
+        return (
+          <Tag
+            style={{ cursor: 'pointer' }}
+            onClick={() => navigate(`/tasks/${record.id}/edit`)}
+          >
+            ⏱ {record.interval_seconds ?? 60}秒
+          </Tag>
+        )
+      },
+    },
+    {
       title: '沉默',
       key: 'silence',
       width: 100,
@@ -664,9 +690,9 @@ export default function TaskList() {
       key: 'links',
       width: 80,
       render: (_: unknown, record: Task) => (
-        <a onClick={() => navigate(`/tasks/${record.id}`)}>
+        <Button type="link" onClick={() => navigate(`/tasks/${record.id}`)} style={{ padding: 0 }}>
           <LinkOutlined /> {linkCounts[record.id] ?? '-'}
-        </a>
+        </Button>
       ),
     },
     {
@@ -840,7 +866,7 @@ export default function TaskList() {
                     styles={{ body: { padding: '12px 16px' } }}
                   >
                     <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 14 }}>
-                      <a onClick={() => navigate(`/tasks/${task.id}/edit`)}>{task.name || task.keyword}</a>
+                      <Button type="link" onClick={() => navigate(`/tasks/${task.id}/edit`)} style={{ padding: 0, fontWeight: 600 }}>{task.name || task.keyword}</Button>
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--xh-text-secondary)', marginBottom: 8 }}>
                       关键词：{task.keyword}
