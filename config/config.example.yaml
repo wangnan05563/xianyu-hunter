@@ -109,6 +109,12 @@ batch_refresh:
   batch_size: 50               # 每批从 DB 拉取的最大商品数
   max_items_per_run: 100       # 单次运行最多采集的商品数
 
+# 任务调度默认值：新建任务未指定时的兜底配置
+task_scheduler:
+  default_interval_seconds: 60      # 默认采集周期（秒），范围 30-3600，过短易触发反爬，过长错过抢单窗口
+  auto_search_enabled: false        # 任务管理页前端「自动搜索」开关初始默认值（用户切换后持久化到 localStorage 覆盖此值）
+  auto_search_concurrency: 1        # 前端自动搜索并发上限（保留字段，当前固定 1，未来需配合后端浏览器锁改造）
+
 # 评估配置：商品评估打分阈值与 AI 自动化开关
 eval:
   weights:                          # 评估维度权重（和应为 100）
