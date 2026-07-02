@@ -24,7 +24,7 @@ from xianyu_hunter.web.services.cookie_store import get_cookie_store
 
 client = TestClient(app)
 _AUTH_COOKIE = {"xh_token": get_settings().web_token}
-_COOKIE_JSON = Path("data") / "cookies.json"
+_COOKIE_JSON = Path("data") / "cookies_default.json"
 
 
 def _reset_orchestrator():

@@ -27,7 +27,7 @@ client = TestClient(app)
 _AUTH_COOKIE = {"xh_token": get_settings().web_token}
 
 # Cookie JSON 文件路径（与 cookie_store.py 中保持一致）
-_COOKIE_JSON = Path("data") / "cookies.json"
+_COOKIE_JSON = Path("data") / "cookies_default.json"
 
 
 def _reset_orchestrator():
