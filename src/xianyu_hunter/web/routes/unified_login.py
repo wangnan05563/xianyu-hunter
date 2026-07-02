@@ -56,6 +56,8 @@ _session: dict = {
     "qr_png_b64": None,    # QR 码 base64（qr_ready 时填充）
     "started_at": 0.0,
     "cookies_injected": False,
+    "session_token": None,      # MU2: 多用户会话令牌
+    "current_user_id": None,    # MU2: 当前登录用户 ID
 }
 _session_lock = threading.Lock()
 
@@ -76,6 +78,8 @@ def _reset_session() -> None:
             "qr_png_b64": None,
             "started_at": 0.0,
             "cookies_injected": False,
+            "session_token": None,      # MU2: 多用户会话令牌
+            "current_user_id": None,    # MU2: 当前登录用户 ID
         }
 
 
@@ -198,6 +202,48 @@ def _trigger_session_start() -> None:
     """登录成功后自动启动会话管理（TokenRenewer 后台续期）"""
     from xianyu_hunter.web.services.session_starter import trigger_session_start
     trigger_session_start()
+
+
+def _finalize_multi_user_login() -> str | None:
+    """登录成功后完成多用户接入：识别用户 + 签发会话 + 按用户存储 Cookie
+
+    登录子进程把 Cookie 写入 default 文件后，本函数读取 default 文件，
+    通过 Cookie 识别用户身份，签发 session_token，并将 Cookie 迁移到
+    user_id 维度的独立文件，避免多用户共用 default 串号。
+
+    Returns:
+        session_token 或 None（失败时降级为单用户模式，不阻塞登录主流程）
+    """
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+
+        store = get_cookie_store()
+        store.invalidate_cache()
+        # 登录子进程写入 default 文件，这里读取它做用户识别
+        data = store._read_json("default")
+        if not data or not data.get("cookies"):
+            logger.warning("多用户接入失败：default 文件无 Cookie 数据")
+            return None
+
+        cookies = data["cookies"]
+        mgr = get_user_manager()
+        user_id = mgr.identify_or_create(cookies)
+        session_token = mgr.issue_session(user_id)
+
+        # 将 Cookie 从 default 迁移到 user_id 维度的独立文件
+        store.export_cookies(cookies, method="login", user_id=user_id)
+
+        with _session_lock:
+            _session["session_token"] = session_token
+            _session["current_user_id"] = user_id
+
+        logger.info("多用户登录完成: user_id=%s", user_id)
+        return session_token
+    except Exception as e:
+        # 降级为单用户模式：登录主流程已成功，不应因多用户接入失败而回滚
+        logger.error("多用户接入异常，降级为单用户模式: %s", e)
+        return None
+
 
 
 def _read_status_file(status_file: str | None) -> dict:
@@ -451,8 +497,6 @@ def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
         if final_state == "success":
             _session["status"] = "success"
             _session["message"] = "扫码登录成功"
-            _trigger_userinfo_refresh()
-            _trigger_session_start()
         elif final_state == "timeout":
             _session["status"] = "timeout"
             _session["message"] = "扫码超时，请重试"
@@ -462,6 +506,13 @@ def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
         else:
             _session["status"] = "error"
             _session["message"] = data.get("message", "登录失败")
+
+    # hooks 在锁外调用，避免与 _finalize_multi_user_login 内部的锁获取死锁
+    if final_state == "success":
+        _trigger_userinfo_refresh()
+        _trigger_session_start()
+        # MU2: 多用户接入（识别用户 + 签发 session + 按 user_id 存储 Cookie）
+        _finalize_multi_user_login()
 
     logger.info("二维码登录结束，状态: %s", _session["status"])
 
@@ -512,6 +563,8 @@ def _background_wait(proc: subprocess.Popen, status_file: Path, method: str) -> 
     if file_status == "success":
         _trigger_userinfo_refresh()
         _trigger_session_start()
+        # MU2: 多用户接入（识别用户 + 签发 session + 按 user_id 存储 Cookie）
+        _finalize_multi_user_login()
         logger.info("浏览器登录成功 (cookie_count=%s)", data.get("cookie_count", "?"))
     else:
         logger.info("浏览器登录结束，状态: %s", file_status)
@@ -588,13 +641,18 @@ async def login_status() -> dict:
     if should_start_hooks:
         _trigger_userinfo_refresh()
         _trigger_session_start()
+        # MU2: 前端轮询首次发现 success 时也尝试多用户接入
+        # （兜底：_background_wait 线程可能因竞态未触发）
+        _finalize_multi_user_login()
 
     if result["status"] == "success":
         await _ensure_session_cookies_injected()
 
     # 登录成功时设置 xh_token cookie
     if result["status"] == "success":
-        return make_auth_response(result)
+        # MU2: 优先使用 session_token，无则回退到 web_token（向后兼容单用户模式）
+        session_token = _session.get("session_token")
+        return make_auth_response(result, session_token=session_token)
 
     return result
 
