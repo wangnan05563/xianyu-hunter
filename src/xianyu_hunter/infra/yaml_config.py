@@ -1,6 +1,7 @@
 """YAML 配置加载（pydantic 模型校验）"""
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -324,6 +325,19 @@ class TaskSchedulerConfig(BaseModel):
     default_interval_seconds: int = Field(60, ge=30, le=3600)
     auto_search_enabled: bool = False
     auto_search_concurrency: int = Field(1, ge=1, le=5)
+
+    @model_validator(mode="after")
+    def _warn_concurrency_gt_one(self) -> "TaskSchedulerConfig":
+        # 仅警告不抛错：auto_search_concurrency 是保留字段，前端 useAutoLiveSearch
+        # 当前固定串行队列（processingRef 互斥），并发 > 1 不会真正生效但语义误导
+        # 未来若实现并行搜索需同步改造前端队列与后端浏览器锁
+        if self.auto_search_concurrency > 1:
+            warnings.warn(
+                f"auto_search_concurrency={self.auto_search_concurrency} 当前未生效"
+                f"（前端固定串行队列），将按 1 处理。如需并行搜索请先完成浏览器锁改造",
+                stacklevel=2,
+            )
+        return self
 
 
 class AppConfig(BaseModel):
