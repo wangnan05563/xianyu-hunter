@@ -1017,9 +1017,9 @@ export default function TaskList() {
                     icon={<ReloadOutlined />}
                     loading={liveLoading}
                     onClick={handleLive}
-                    disabled={!linkTaskId}
+                    disabled={!linkTaskId || searchingIds.has(linkTaskId)}
                   >
-                    实时查询
+                    {searchingIds.has(linkTaskId) ? '自动搜索中...' : '实时查询'}
                   </Button>
                   {liveLoading && liveStage && (
                     <span style={{ color: '#1677ff', fontSize: 13 }}>
