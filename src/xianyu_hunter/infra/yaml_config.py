@@ -311,6 +311,21 @@ class ChatbotConfig(BaseModel):
     escalation: ChatbotEscalationConfig = Field(default_factory=ChatbotEscalationConfig)
 
 
+class TaskSchedulerConfig(BaseModel):
+    """任务调度默认值与前端自动搜索配置
+
+    - default_interval_seconds: 新建任务未指定 interval_seconds 时的默认值
+      （30-3600 秒，过短易触发反爬，过长错过抢单窗口）
+    - auto_search_enabled: 任务管理页前端「自动搜索」开关的初始默认值
+      （用户在页面内切换后会持久化到 localStorage，覆盖此默认值）
+    - auto_search_concurrency: 前端自动搜索并发上限（保留字段，当前固定 1）
+      未来若需要并行搜索可放宽，需配合后端浏览器锁改造
+    """
+    default_interval_seconds: int = Field(60, ge=30, le=3600)
+    auto_search_enabled: bool = False
+    auto_search_concurrency: int = Field(1, ge=1, le=5)
+
+
 class AppConfig(BaseModel):
     """根配置"""
     server: ServerConfig = ServerConfig()
@@ -323,6 +338,7 @@ class AppConfig(BaseModel):
     price_strategy: PriceStrategyConfig = PriceStrategyConfig()
     batch_refresh: BatchRefreshConfig = BatchRefreshConfig()
     chatbot: ChatbotConfig = ChatbotConfig()
+    task_scheduler: TaskSchedulerConfig = TaskSchedulerConfig()
     # 通知渠道凭据（明文存到 yaml，前端用 Input.Password 组件隐藏）
     # keyring 是设计首选，但前端需要回显已配置值，暂存 yaml
     serverchan_send_key: str = ""
