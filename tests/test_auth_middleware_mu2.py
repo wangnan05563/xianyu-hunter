@@ -36,7 +36,6 @@ def test_make_auth_response_without_session_token_fallback():
 
 
 # === Task 3: 三路校验测试 ===
-import asyncio
 from unittest.mock import MagicMock, patch
 from starlette.testclient import TestClient
 from fastapi import FastAPI, Request
@@ -113,3 +112,18 @@ def test_make_auth_response_with_empty_session_token_falls_back():
     resp = make_auth_response({"ok": True}, session_token="")
     # 复用文件顶部的 _get_cookie_value 解析 set-cookie header
     assert _get_cookie_value(resp, "xh_token") == get_settings().web_token
+
+
+def test_session_verify_exception_returns_401():
+    """verify_session 抛异常时降级返回 401（不泄露错误细节）"""
+    app = _build_app_with_middleware()
+    client = TestClient(app)
+
+    with patch("xianyu_hunter.web.services.user_manager.get_user_manager") as mock:
+        mgr = MagicMock()
+        mgr.verify_session.side_effect = RuntimeError("db down")
+        mock.return_value = mgr
+
+        resp = client.get("/api/whoami", headers={"Authorization": "Bearer some_token"})
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "Unauthorized"

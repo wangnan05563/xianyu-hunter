@@ -79,7 +79,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             from xianyu_hunter.web.services.user_manager import get_user_manager
             user_id = get_user_manager().verify_session(req_token)
         except Exception as e:
-            logger.debug("[Auth] session 校验异常: %s", e)
+            logger.warning("[Auth] session 校验异常，降级到 401: %s", e)
             user_id = None
 
         if user_id:
@@ -88,9 +88,8 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         # 路径 3：校验失败
         logger.debug(
-            f"[Auth] path={request.url.path} "
-            f"has_cookie={'xh_token' in request.cookies} "
-            f"web_token_match=False session_invalid=True"
+            "[Auth] path=%s has_cookie=%s web_token_match=False session_invalid=True",
+            request.url.path, 'xh_token' in request.cookies,
         )
         if request.url.path.startswith("/api/"):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
