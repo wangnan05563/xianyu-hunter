@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from xianyu_hunter.domain.task import TaskMode
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.modules.scheduler import ResumeBlockedError
 from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -39,7 +40,9 @@ class TaskCreate(BaseModel):
     use_cron: bool = False
     # interval_seconds: None 表示沿用全局 task_scheduler.default_interval_seconds
     # 为什么改为 None：让全局配置可热更新生效，无需重启服务即可调整新建任务默认采集周期
-    interval_seconds: float | None = Field(None, ge=30.0, le=3600.0)
+    # 为什么用 int 而非 float：DB schema 中 interval_seconds 是 INTEGER，float 会被 SQLite 截断且
+    # 前端 Task.interval_seconds: number 无法区分 60 与 60.0，统一为 int 保持类型一致
+    interval_seconds: int | None = Field(None, ge=30, le=3600)
     # AI 评估任务级配置：激活已有 DB 字段
     # eval_threshold: 任务级 pass_score 覆盖（None 表示沿用全局 eval.pass_score）
     eval_threshold: int | None = Field(None, ge=0, le=100)
@@ -71,7 +74,7 @@ class TaskUpdate(BaseModel):
     # 调度配置：允许编辑 cron / use_cron / interval_seconds
     cron: str | None = None
     use_cron: bool | None = None
-    interval_seconds: float | None = Field(None, ge=30.0, le=3600.0)
+    interval_seconds: int | None = Field(None, ge=30, le=3600)
     # AI 评估任务级配置（与 TaskCreate 对齐）
     eval_threshold: int | None = Field(None, ge=0, le=100)
     ai_prompt: str | None = None
@@ -326,8 +329,15 @@ async def control_task(
                 await container.scheduler.pause(task_id)
                 scheduler_note = "已暂停调度器中的任务"
             elif action == "resume":
-                await container.scheduler.resume(task_id)
-                scheduler_note = "已恢复调度器中的任务"
+                try:
+                    await container.scheduler.resume(task_id)
+                    scheduler_note = "已恢复调度器中的任务"
+                except ResumeBlockedError as e:
+                    # P0-1/P0-2：Cookie 失效或冷却期内拒绝恢复，前端应提示用户重新登录
+                    # 回滚 DB 状态：上方 update_task_status 已写入 "running"，
+                    # 但 scheduler 拒绝恢复，实际仍为 paused，需回滚避免 DB 与内存不一致
+                    container.repo.update_task_status(task_id, "paused")
+                    raise HTTPException(status_code=400, detail=str(e))
             elif action == "stop":
                 await container.scheduler.stop(task_id)
                 scheduler_note = "已停止调度器中的任务"
@@ -341,13 +351,22 @@ async def control_task(
                     is_running = container.scheduler.is_running(task_id)
                     if is_running:
                         await container.scheduler.stop(task_id)
-                    await container.scheduler.start(task_id)
-                    scheduler_note = "已重启调度器中的任务"
+                    try:
+                        await container.scheduler.start(task_id)
+                        scheduler_note = "已重启调度器中的任务"
+                    except ResumeBlockedError as e:
+                        # P0-1/P0-2：start 同样校验 Cookie 层 + 冷却期
+                        # 任务已被 stop，回滚 DB 到 stopped 保持与实际一致
+                        container.repo.update_task_status(task_id, "stopped")
+                        raise HTTPException(status_code=400, detail=str(e))
                 else:
                     scheduler_note = "任务未注册到调度器，需重启服务加载"
         except KeyError as e:
             # 任务未注册到 scheduler：仅 DB 状态生效，不阻断请求
             scheduler_note = f"调度器未注册该任务，仅 DB 状态已更新：{e}"
+        except HTTPException:
+            # P0-1/P0-2：ResumeBlockedError 转换的 400 需向上传播，不能被兜底 except 吞掉
+            raise
         except Exception as e:  # noqa: BLE001 - 兜底防止 scheduler 异常导致 500
             # scheduler 内部异常（如 loop 关闭、协程取消）：DB 状态已更新，不阻断
             scheduler_note = f"调度器操作异常，仅 DB 状态已更新：{type(e).__name__}: {e}"

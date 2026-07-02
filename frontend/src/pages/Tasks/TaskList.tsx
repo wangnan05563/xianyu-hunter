@@ -170,7 +170,8 @@ export default function TaskList() {
   }, [])
 
   // 自动实时搜索 Hook：串行队列 + 可见性暂停 + 1s tick
-  const { remainMap, searchingIds } = useAutoLiveSearch({
+  // pauseAll 用于用户主动关闭开关时清空待搜索队列，避免队列中任务继续执行
+  const { remainMap, searchingIds, pauseAll } = useAutoLiveSearch({
     tasks,
     enabled: autoSearchEnabled,
     onTaskSearchComplete: (taskId, success, itemCount) => {
@@ -838,7 +839,11 @@ export default function TaskList() {
           <Space size={4}>
             <Switch
               checked={autoSearchEnabled}
-              onChange={setAutoSearchEnabled}
+              // 关闭时调用 pauseAll 清空待搜索队列，避免队列中任务继续执行
+              onChange={(v) => {
+                setAutoSearchEnabled(v)
+                if (!v) pauseAll()
+              }}
               checkedChildren="自动"
               unCheckedChildren="手动"
             />
