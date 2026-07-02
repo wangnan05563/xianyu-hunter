@@ -54,7 +54,6 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         from xianyu_hunter.config import get_settings
         from loguru import logger
-        token = get_settings().web_token
 
         # 从 Authorization header 或 cookie 中取 token
         auth_header = request.headers.get("authorization", "")
@@ -63,22 +62,38 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         else:
             req_token = request.cookies.get("xh_token", "")
 
-        # 调试日志：打印认证详情（排查 401 根因）；不输出 token 明文/长度以防泄漏
-        if request.url.path.startswith("/api/"):
-            logger.debug(
-                f"[Auth] path={request.url.path} "
-                f"has_cookie={'xh_token' in request.cookies} "
-                f"token_match={hmac.compare_digest(req_token.encode(), token.encode())}"
-            )
-
-        if req_token and hmac.compare_digest(req_token.encode(), token.encode()):
+        if not req_token:
+            if request.url.path.startswith("/api/"):
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
             return await call_next(request)
 
-        # API 路径返回 401（JSON 格式，与 HTTPException 保持一致）
+        web_token = get_settings().web_token
+
+        # 路径 1：WEB_TOKEN 管理令牌直通（向后兼容单用户模式）
+        if hmac.compare_digest(req_token.encode(), web_token.encode()):
+            request.state.user_id = "default"
+            return await call_next(request)
+
+        # 路径 2：session_token 多用户会话校验
+        try:
+            from xianyu_hunter.web.services.user_manager import get_user_manager
+            user_id = get_user_manager().verify_session(req_token)
+        except Exception as e:
+            logger.debug("[Auth] session 校验异常: %s", e)
+            user_id = None
+
+        if user_id:
+            request.state.user_id = user_id
+            return await call_next(request)
+
+        # 路径 3：校验失败
+        logger.debug(
+            f"[Auth] path={request.url.path} "
+            f"has_cookie={'xh_token' in request.cookies} "
+            f"web_token_match=False session_invalid=True"
+        )
         if request.url.path.startswith("/api/"):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-
-        # 页面路径：设置 cookie 后重定向回来
         return await call_next(request)
 
 
