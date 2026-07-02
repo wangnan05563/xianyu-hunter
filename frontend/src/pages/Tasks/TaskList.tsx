@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { Table, Button, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col } from 'antd'
+import { Table, Button, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { taskApi, aiApi, templateApi, taskLinkApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary } from '../../api'
+import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary } from '../../api'
 import { STATUS_COLOR as statusColors } from '../../constants/statusColors'
 import { usePersistentState } from '../../hooks/usePersistentState'
+import { useAutoLiveSearch } from '../../hooks/useAutoLiveSearch'
 
 const statusLabels: Record<string, string> = {
   running: '运行中',
@@ -144,6 +145,43 @@ export default function TaskList() {
   const [addLoading, setAddLoading] = useState(false)
   // 一键启动所有任务（迁移自原仪表盘 TaskContentMenu）
   const [startAllLoading, setStartAllLoading] = useState(false)
+
+  // 自动搜索开关：localStorage 持久化，首次访问从全局配置读取默认值
+  // 为什么异步加载 config 后才设置：usePersistentState 同步初始化无法等待 config
+  const [autoSearchEnabled, setAutoSearchEnabled] = usePersistentState<boolean>(
+    'xh.tasks.autoSearchEnabled',
+    false,
+  )
+
+  useEffect(() => {
+    // localStorage 已有值：用户偏好优先，不覆盖
+    if (localStorage.getItem('xh.tasks.autoSearchEnabled') !== null) return
+    let cancelled = false
+    configApi.get()
+      .then(cfg => {
+        if (cancelled) return
+        // 双重检查：防止 usePersistentState 防抖写入抢先
+        if (localStorage.getItem('xh.tasks.autoSearchEnabled') !== null) return
+        setAutoSearchEnabled(cfg.task_scheduler?.auto_search_enabled ?? false)
+      })
+      .catch(() => { /* config 加载失败保持默认 false */ })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 自动实时搜索 Hook：串行队列 + 可见性暂停 + 1s tick
+  const { remainMap, searchingIds } = useAutoLiveSearch({
+    tasks,
+    enabled: autoSearchEnabled,
+    onTaskSearchComplete: (taskId, success, itemCount) => {
+      const taskName = tasks.find(t => t.id === taskId)?.name ?? taskId
+      if (!success) {
+        message.warning(`任务「${taskName}」自动搜索失败`)
+      } else if (itemCount > 0) {
+        message.success(`任务「${taskName}」自动搜索完成，新增 ${itemCount} 条`)
+      }
+    },
+  })
 
   const load = async () => {
     setLoading(true)
@@ -680,6 +718,22 @@ export default function TaskList() {
       },
     },
     {
+      title: '下次搜索',
+      key: 'next_search',
+      width: 90,
+      // 仅 running 任务参与倒计时；非 running 显示占位符
+      render: (_: unknown, record: Task) => {
+        if (record.status !== 'running') return <span style={{ color: 'var(--xh-text-tertiary)' }}>—</span>
+        const remain = remainMap[record.id]
+        if (remain == null) return <span style={{ color: 'var(--xh-text-tertiary)' }}>—</span>
+        if (searchingIds.has(record.id)) {
+          return <Tag color="processing">搜索中</Tag>
+        }
+        // 剩余 <10s 用警示色提示用户即将触发搜索
+        return <span style={{ color: remain < 10 ? '#faad14' : 'var(--xh-text-secondary)' }}>{remain}s</span>
+      },
+    },
+    {
       title: '沉默',
       key: 'silence',
       width: 100,
@@ -779,6 +833,16 @@ export default function TaskList() {
           >
             全部启动
           </Button>
+        </Tooltip>
+        <Tooltip title="开启后，运行中的任务按各自采集周期自动触发实时搜索（串行队列，页面不可见时暂停）">
+          <Space size={4}>
+            <Switch
+              checked={autoSearchEnabled}
+              onChange={setAutoSearchEnabled}
+              checkedChildren="自动"
+              unCheckedChildren="手动"
+            />
+          </Space>
         </Tooltip>
         <span>状态筛选：</span>
         <Select
