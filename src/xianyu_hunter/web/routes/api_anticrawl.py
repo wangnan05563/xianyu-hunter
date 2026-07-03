@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
 
 from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
@@ -573,8 +572,8 @@ def get_freq_stats() -> dict:
     return {"ok": True, **orch.freq_disguiser.get_stats()}
 
 
-@router.get("/freq/delay")
-def get_request_delay(action: str = "browse") -> dict:
+@router.get("/freq/delay", response_model=None)
+def get_request_delay(action: str = "browse") -> dict | JSONResponse:
     """获取指定操作的请求延迟（秒）
 
     Args:
