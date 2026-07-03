@@ -1,0 +1,65 @@
+/* SheetWorkspace 布局样式
+ * 为什么用 flex 而非 grid：标签栏宽度固定 80px，内容区自适应剩余空间，
+ * flex 比 grid 更直观，且 antd Layout 也是 flex 实现，保持一致性
+ */
+
+.sheet-workspace {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 内容区：占据剩余空间，内部滚动 */
+.sheet-content-area {
+  flex: 1;
+  min-width: 0; /* 允许内容区收缩，避免 flex 溢出 */
+  height: 100%;
+  overflow: auto;
+  position: relative;
+}
+
+/* 标签栏进入动画：从右侧滑入
+ * 为什么用 transform 而非 left：transform 不触发 reflow，性能更好
+ */
+@keyframes sheet-tabs-slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.sheet-tabs {
+  animation: sheet-tabs-slide-in 200ms ease-out;
+}
+
+/* 偏好禁用动画时，移除过渡与动画 */
+.sheet-workspace.no-animation .sheet-tabs {
+  animation: none;
+}
+
+.sheet-workspace.no-animation .fade-in-up {
+  animation: none;
+}
+
+/* 无障碍：尊重用户的减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .sheet-tabs {
+    animation: none;
+  }
+
+  .sheet-workspace .fade-in-up {
+    animation: none;
+  }
+}
+
+/* 移动端：标签栏隐藏，内容区全屏 */
+@media (max-width: 767px) {
+  .sheet-workspace {
+    /* 移动端单 sheet 模式，标签栏由 SheetWorkspace 条件渲染控制 */
+  }
+}
