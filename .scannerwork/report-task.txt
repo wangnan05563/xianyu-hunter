@@ -1,6 +1,0 @@
-projectKey=xianyu_hunter
-serverUrl=http://localhost:9000
-serverVersion=26.1.0.118079
-dashboardUrl=http://localhost:9000/dashboard?id=xianyu_hunter
-ceTaskId=7d2abfe6-0a46-427b-9416-12abee4380fd
-ceTaskUrl=http://localhost:9000/api/ce/task?id=7d2abfe6-0a46-427b-9416-12abee4380fd
