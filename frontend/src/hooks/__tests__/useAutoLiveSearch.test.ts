@@ -55,7 +55,7 @@ describe('useAutoLiveSearch', () => {
   })
 
   it('document.hidden=true 时 tick 不递减', () => {
-    Object.defineProperty(document, 'hidden', { value: true, configurable: true })
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true, writable: true })
     const tasks: MockTask[] = [{ id: 't1', status: 'running', interval_seconds: 60 }]
     const { result } = renderHook(() => useAutoLiveSearch({ tasks: tasks as any, enabled: true }))
     expect(result.current.remainMap.t1).toBe(60)
