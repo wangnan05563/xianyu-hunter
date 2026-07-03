@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -104,6 +105,8 @@ class TaskScheduler:
             if h.loop_task and not h.loop_task.done():
                 raise RuntimeError(f"任务 {task_id} 仍在运行，请先 stop")
             del self._workers[task_id]
+            # 清理冷却期记录，避免已注销任务的残留记录占用内存
+            self._resume_cooldown.pop(task_id, None)
         # 锁外执行清理，避免长耗时 IO 阻塞 _workers_lock
         cleanup = getattr(h.worker, "cleanup", None)
         if cleanup:
@@ -125,8 +128,6 @@ class TaskScheduler:
         校验顺序：先冷却期再 Cookie——冷却期内的拒绝是确定性的，
         Cookie 校验涉及文件 I/O，放后面可避免冷却期内无谓的磁盘读取。
         """
-        import time
-
         # 1. 冷却期检查：会话失效后 5 分钟内拒绝恢复
         cooldown_until = self._resume_cooldown.get(task_id)
         if cooldown_until is not None:
@@ -150,6 +151,10 @@ class TaskScheduler:
         except ImportError:
             # 测试环境或 cookie_store 不可用时跳过 Cookie 校验，仅依赖冷却期
             logger.debug("[Task %s] cookie_store 不可用，跳过 Cookie 校验", task_id)
+        except Exception as e:
+            # cookie_store 内部异常（如 RuntimeError/IOError）不应导致 500，
+            # 降级为跳过 Cookie 校验，仅依赖冷却期
+            logger.warning("[Task %s] Cookie 校验异常，跳过: %s", task_id, e)
 
     def start(self, task_id: str) -> None:
         """启动单个任务的后台循环"""
@@ -200,7 +205,9 @@ class TaskScheduler:
 
     async def start_all(self) -> None:
         for tid in list(self._workers.keys()):
-            await self.start(tid)
+            # start 是同步方法（创建 asyncio.Task 后立即返回），
+            # 无需 await——await None 会抛 TypeError
+            self.start(tid)
 
     async def stop_all(self) -> None:
         # 并发等待所有 stop
@@ -325,7 +332,6 @@ class TaskScheduler:
                         h.task.status = TaskStatus.PAUSED
                         # 记录冷却期结束时间：会话失效后 5 分钟内拒绝恢复，
                         # 避免用户反复点恢复触发更严厉的反爬封禁
-                        import time
                         self._resume_cooldown[task_id] = (
                             time.monotonic() + _RESUME_COOLDOWN_SECONDS
                         )
