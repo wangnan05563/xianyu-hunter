@@ -48,6 +48,11 @@ if TYPE_CHECKING:
 
 logger = get_logger()
 
+# S1192: 提取重复字符串字面量为常量
+# 为什么是 get_by_text('立即购买')：作为 _locator_count/_locator_wait_visible/
+# _locator_click 的 label 参数，用于日志标识操作来源，便于排查点击失败问题
+_GET_BY_TEXT_BUY_NOW_LABEL = "get_by_text('立即购买')"
+
 
 class Buyer:
     """自动抢单器
@@ -257,7 +262,7 @@ class Buyer:
             actual_price = await self._extract_actual_price(page)  # type: ignore[arg-type]
             if actual_price is None:
                 # 拿不到价格时跳过校验（保守处理）
-                logger.warning(f"[Buyer] 未能提取实际价格，跳过价格校验")
+                logger.warning("[Buyer] 未能提取实际价格，跳过价格校验")
             elif abs(actual_price - expected_price) / max(expected_price, 0.01) > self.config.price_tolerance:
                 raise PriceMismatchError(
                     f"价格偏差过大: 预期 ¥{expected_price} 实际 ¥{actual_price}"
@@ -427,10 +432,10 @@ class Buyer:
                 try:
                     if hasattr(page, "get_by_text"):
                         text_loc = page.get_by_text("立即购买", exact=True).last
-                        if await self._locator_count(text_loc, "get_by_text('立即购买')", timeout=0.8) <= 0:
+                        if await self._locator_count(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=0.8) <= 0:
                             raise PlaywrightTimeout("get_by_text not found")
-                        await self._locator_wait_visible(text_loc, "get_by_text('立即购买')", timeout=0.8)
-                        await self._locator_click(text_loc, "get_by_text('立即购买')", timeout=1.5)
+                        await self._locator_wait_visible(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=0.8)
+                        await self._locator_click(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=1.5)
                         clicked_any = True
                         logger.info("[Buyer] 已通过 get_by_text 精确点击立即购买")
                         if await self._wait_for_order_page(

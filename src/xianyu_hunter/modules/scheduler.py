@@ -25,6 +25,20 @@ if TYPE_CHECKING:
 logger = get_logger()
 
 
+# 会话失效后任务恢复的冷却期（秒）：避免用户在 Cookie 失效后反复点恢复
+# 触发 RGV587 反爬检测，冷却期内 resume/start 会被拒绝并提示前端重新登录
+_RESUME_COOLDOWN_SECONDS = 300
+
+
+class ResumeBlockedError(Exception):
+    """任务恢复被阻止：Cookie 失效或处于会话失效冷却期内
+
+    为什么需要自定义异常而非直接 raise HTTPException：
+    scheduler 是纯 Python 调度层，不应感知 HTTP 语义。api_tasks.py 捕获此异常
+    后转换为 400 响应，保持分层清晰。消息体会透传给前端作为 detail 提示。
+    """
+
+
 @dataclass
 class _WorkerHandle:
     """单个任务的运行时句柄"""
@@ -50,7 +64,7 @@ class TaskScheduler:
     使用方式：
         scheduler = TaskScheduler()
         scheduler.register(task, worker)
-        await scheduler.start("t1")
+        scheduler.start("t1")
         await scheduler.start_all()
         # ...
         await scheduler.stop_all()
@@ -66,6 +80,10 @@ class TaskScheduler:
         # _workers 字典并发保护锁：register/unregister/trigger_dependent_tasks
         # 等方法可能在不同协程中并发修改 _workers，需加锁防止 await 间隙的竞态
         self._workers_lock = asyncio.Lock()
+        # 会话失效冷却期记录：task_id → 冷却期结束时间戳（time.monotonic）
+        # 为什么用 monotonic 而非 time.time：monotonic 不受系统时钟调整影响，
+        # 适合测量相对时间间隔，避免 NTP 校时导致冷却期异常缩短或延长
+        self._resume_cooldown: dict[str, float] = {}
 
     # ============== 注册 ==============
 
@@ -96,12 +114,52 @@ class TaskScheduler:
 
     # ============== 启停控制 ==============
 
-    async def start(self, task_id: str) -> None:
+    def _check_resume_allowed(self, task_id: str) -> None:
+        """恢复前校验：Cookie 有效性 + 会话失效冷却期
+
+        为什么在 scheduler 层而非 api_tasks 层做校验：
+        scheduler 是任务生命周期的唯一入口（start/resume 都经过这里），
+        在此校验可覆盖所有恢复路径，避免 api_tasks 遗漏某个分支导致绕过。
+        失败时抛出 ResumeBlockedError，由 api_tasks 转换为 400 响应。
+
+        校验顺序：先冷却期再 Cookie——冷却期内的拒绝是确定性的，
+        Cookie 校验涉及文件 I/O，放后面可避免冷却期内无谓的磁盘读取。
+        """
+        import time
+
+        # 1. 冷却期检查：会话失效后 5 分钟内拒绝恢复
+        cooldown_until = self._resume_cooldown.get(task_id)
+        if cooldown_until is not None:
+            remaining = cooldown_until - time.monotonic()
+            if remaining > 0:
+                raise ResumeBlockedError(
+                    f"任务会话失效冷却期内，请 {int(remaining)} 秒后重试，"
+                    f"或重新登录后再恢复"
+                )
+            # 冷却期已过，清除记录避免字典无限增长
+            self._resume_cooldown.pop(task_id, None)
+
+        # 2. Cookie 有效性检查：延迟导入避免循环依赖
+        # 为什么延迟导入：cookie_store 属于 web 层，scheduler 属于 modules 层，
+        # 编译期直接导入会引入分层违规；运行时延迟导入在测试中可被 mock 替换
+        try:
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+
+            if not get_cookie_store().has_valid_cookies():
+                raise ResumeBlockedError("Cookie 已失效，请重新登录后再恢复任务")
+        except ImportError:
+            # 测试环境或 cookie_store 不可用时跳过 Cookie 校验，仅依赖冷却期
+            logger.debug("[Task %s] cookie_store 不可用，跳过 Cookie 校验", task_id)
+
+    def start(self, task_id: str) -> None:
         """启动单个任务的后台循环"""
         h = self._require(task_id)
         if h.loop_task and not h.loop_task.done():
             logger.warning(f"任务 {task_id} 已在运行")
             return
+        # 启动前同样校验 Cookie + 冷却期：restart 流程会先 stop 再 start，
+        # 若不校验 start，冷却期校验会被 restart 绕过
+        self._check_resume_allowed(task_id)
         h.stop_event.clear()
         h.pause_event.set()
         h.loop_task = asyncio.create_task(self._run_loop(task_id), name=f"task-{task_id}")
@@ -123,15 +181,18 @@ class TaskScheduler:
         h.task.status = TaskStatus.STOPPED
         logger.info(f"Scheduler 停止任务 {task_id}")
 
-    async def pause(self, task_id: str) -> None:
+    def pause(self, task_id: str) -> None:
         """暂停任务（当前轮会跑完，下一轮不再开始）"""
         h = self._require(task_id)
         h.pause_event.clear()
         h.task.status = TaskStatus.PAUSED
         logger.info(f"Scheduler 暂停任务 {task_id}")
 
-    async def resume(self, task_id: str) -> None:
+    def resume(self, task_id: str) -> None:
         """恢复任务"""
+        # 恢复前校验 Cookie + 冷却期：会话失效时自动暂停的任务，
+        # 若不校验直接恢复会立即再次触发 RGV587 反爬检测
+        self._check_resume_allowed(task_id)
         h = self._require(task_id)
         h.pause_event.set()
         h.task.status = TaskStatus.RUNNING
@@ -262,6 +323,12 @@ class TaskScheduler:
                         logger.info(f"[Task {task_id}] 会话失效，自动暂停任务")
                         h.pause_event.clear()
                         h.task.status = TaskStatus.PAUSED
+                        # 记录冷却期结束时间：会话失效后 5 分钟内拒绝恢复，
+                        # 避免用户反复点恢复触发更严厉的反爬封禁
+                        import time
+                        self._resume_cooldown[task_id] = (
+                            time.monotonic() + _RESUME_COOLDOWN_SECONDS
+                        )
                         # 同步数据库状态，确保 API 读取到正确的 paused 状态
                         if self._repo:
                             self._repo.update_task_status(task_id, "paused")

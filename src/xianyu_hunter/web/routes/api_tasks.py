@@ -1,7 +1,6 @@
 """任务 API - 增删改查、启停控制"""
 from __future__ import annotations
 
-import asyncio
 import json
 import uuid
 from typing import Any
@@ -326,11 +325,11 @@ async def control_task(
     if container.collector is not None:
         try:
             if action == "pause":
-                await container.scheduler.pause(task_id)
+                container.scheduler.pause(task_id)
                 scheduler_note = "已暂停调度器中的任务"
             elif action == "resume":
                 try:
-                    await container.scheduler.resume(task_id)
+                    container.scheduler.resume(task_id)
                     scheduler_note = "已恢复调度器中的任务"
                 except ResumeBlockedError as e:
                     # P0-1/P0-2：Cookie 失效或冷却期内拒绝恢复，前端应提示用户重新登录
@@ -352,7 +351,7 @@ async def control_task(
                     if is_running:
                         await container.scheduler.stop(task_id)
                     try:
-                        await container.scheduler.start(task_id)
+                        container.scheduler.start(task_id)
                         scheduler_note = "已重启调度器中的任务"
                     except ResumeBlockedError as e:
                         # P0-1/P0-2：start 同样校验 Cookie 层 + 冷却期
