@@ -24,7 +24,6 @@ import {
 } from 'antd'
 import type { TableColumnsType, TableProps } from 'antd'
 import type { Dayjs } from 'dayjs'
-import dayjs from 'dayjs'
 import {
   CloudDownloadOutlined,
   DeleteOutlined,
@@ -112,6 +111,11 @@ function formatTime(iso: string | null | undefined): string {
   } catch {
     return iso
   }
+}
+
+// Statistic formatter 用：渲染上次执行时间，提取到顶层避免组件内嵌套子组件（SonarQube S6478）
+function renderLastRunTimeText(time: string) {
+  return <Text style={{ fontSize: 14 }}>{time}</Text>
 }
 
 // 毫秒 → 可读时长（如 "1分23秒"）
@@ -692,7 +696,8 @@ function HistoryPanel() {
       const tid = Number(filterTaskId.trim())
       if (!Number.isNaN(tid)) q.task_id = tid
     }
-    if (filterDateRange && filterDateRange[0] && filterDateRange[1]) {
+    // 用可选链替代显式 null 检查，更简洁（SonarQube S6582）
+    if (filterDateRange?.[0] && filterDateRange?.[1]) {
       q.start = filterDateRange[0].startOf('day').toISOString()
       q.end = filterDateRange[1].endOf('day').toISOString()
     }
@@ -869,7 +874,8 @@ function HistoryPanel() {
     if (pagination.pageSize) setPageSize(pagination.pageSize)
     // 单字段排序
     const s = Array.isArray(sorter) ? sorter[0] : sorter
-    if (s && s.field && s.order) {
+    // 用可选链替代显式 null 检查，更简洁（SonarQube S6582）
+    if (s?.field && s?.order) {
       // s.field 是 dataIndex（字符串）
       const fieldMap: Record<string, BatchRefreshHistoryQuery['order_by']> = {
         task_id: 'task_id',
@@ -969,7 +975,8 @@ function HistoryPanel() {
           <Col>
             <RangePicker
               showTime={false}
-              value={filterDateRange as [Dayjs | null, Dayjs | null] | null}
+              // filterDateRange 已是 [Dayjs | null, Dayjs | null] | null 类型，as 断言冗余（SonarQube S4325）
+              value={filterDateRange}
               onChange={(range) => setFilterDateRange(range as [Dayjs | null, Dayjs | null] | null)}
             />
           </Col>
@@ -1063,7 +1070,7 @@ function HistoryPanel() {
 
 // ============== 详情抽屉内容 ==============
 
-function DetailContent({ detail }: { detail: BatchRefreshHistoryItem }) {
+function DetailContent({ detail }: { readonly detail: BatchRefreshHistoryItem }) {
   return (
     <div>
       <Row gutter={[16, 16]}>

@@ -10,7 +10,7 @@ cachetools 未引入项目，OrderedDict 自带的 move_to_end + popitem(last=Fa
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Generic, KT, VT
+from typing import KT, VT
 
 
 class LRUDict(OrderedDict[KT, VT]):

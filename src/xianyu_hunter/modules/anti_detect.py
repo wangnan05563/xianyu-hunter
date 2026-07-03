@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import random
 import time
 from collections import deque
@@ -266,8 +265,6 @@ def random_mouse_path(
     if steps is None:
         steps = random.randint(15, 30)
     # 控制点偏移制造弧线（非直线）
-    mid_x = (from_x + to_x) / 2 + random.uniform(-80, 80)
-    mid_y = (from_y + to_y) / 2 + random.uniform(-50, 50)
     cp1 = (from_x + (to_x - from_x) * random.uniform(0.2, 0.4), from_y + (to_y - from_y) * random.uniform(0.1, 0.3))
     cp2 = (from_x + (to_x - from_x) * random.uniform(0.6, 0.8), from_y + (to_y - from_y) * random.uniform(0.7, 0.9))
     points = []

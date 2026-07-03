@@ -7,7 +7,7 @@ chatbot_feedback / chatbot_kb_versions / chatbot_config / chatbot_audit_logs
 
 设计要点：
 - 接受外部注入的 engine，自身只负责建表（checkfirst=True 幂等）与默认配置初始化
-- 所有 Session 用 context manager（with self._Session() as session:）确保关闭
+- 所有 Session 用 context manager（with self._session() as session:）确保关闭
 - expire_on_commit=False：commit 后仍可访问 row 属性，避免 DetachedInstanceError
 - 时间字段返回时统一 isoformat() 序列化，JSON 字段用 json.dumps/loads
 """
@@ -58,7 +58,7 @@ class ChatbotRepository:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         # expire_on_commit=False：commit 后 row 属性仍可访问，避免返回 dict 时触发 re-load 失败
-        self._Session = sessionmaker(bind=engine, expire_on_commit=False)
+        self._session = sessionmaker(bind=engine, expire_on_commit=False)
         # 幂等建表：主 init_db 可能未运行（如独立测试），checkfirst=True 保证安全
         Base.metadata.create_all(
             engine,
@@ -83,7 +83,7 @@ class ChatbotRepository:
         """创建会话，返回完整会话 dict"""
         session_id = _uuid32()
         now = _utcnow()
-        with self._Session() as session:
+        with self._session() as session:
             row = ChatbotSessionRow(
                 id=session_id,
                 user_id=user_id,
@@ -109,7 +109,7 @@ class ChatbotRepository:
             }
 
     def get_session(self, session_id: str) -> dict | None:
-        with self._Session() as session:
+        with self._session() as session:
             row = session.get(ChatbotSessionRow, session_id)
             if row is None:
                 return None
@@ -139,7 +139,7 @@ class ChatbotRepository:
         keyword：模糊匹配标题或用户消息内容（子查询 LIMIT 50 防全表扫）
         favorite_only：仅返回收藏的会话
         """
-        with self._Session() as session:
+        with self._session() as session:
             stmt = select(ChatbotSessionRow).where(
                 ChatbotSessionRow.user_id == user_id
             )
@@ -197,7 +197,7 @@ class ChatbotRepository:
 
         与 list_sessions 共享过滤条件，但不应用 limit/offset。
         """
-        with self._Session() as session:
+        with self._session() as session:
             stmt = select(func.count(ChatbotSessionRow.id)).where(
                 ChatbotSessionRow.user_id == user_id
             )
@@ -225,7 +225,7 @@ class ChatbotRepository:
 
     def update_session_status(self, session_id: str, status: str) -> bool:
         """status: active / ended / escalated；返回是否更新成功"""
-        with self._Session() as session:
+        with self._session() as session:
             result = session.execute(
                 update(ChatbotSessionRow)
                 .where(ChatbotSessionRow.id == session_id)
@@ -235,7 +235,7 @@ class ChatbotRepository:
             return result.rowcount > 0
 
     def update_session_title(self, session_id: str, title: str) -> bool:
-        with self._Session() as session:
+        with self._session() as session:
             result = session.execute(
                 update(ChatbotSessionRow)
                 .where(ChatbotSessionRow.id == session_id)
@@ -246,7 +246,7 @@ class ChatbotRepository:
 
     def update_session_favorite(self, session_id: str, is_favorite: bool) -> bool:
         """M2：切换会话收藏状态，收藏的会话在列表中置顶"""
-        with self._Session() as session:
+        with self._session() as session:
             result = session.execute(
                 update(ChatbotSessionRow)
                 .where(ChatbotSessionRow.id == session_id)
@@ -262,7 +262,7 @@ class ChatbotRepository:
         返回是否更新成功（session_id 不存在时返回 False）。
         """
         now = _utcnow()
-        with self._Session() as session:
+        with self._session() as session:
             row = session.execute(
                 select(ChatbotSessionRow).where(ChatbotSessionRow.id == session_id)
             ).scalar_one_or_none()
@@ -283,7 +283,7 @@ class ChatbotRepository:
 
     def touch_session(self, session_id: str) -> None:
         """更新 last_active_at（用于会话超时判定）"""
-        with self._Session() as session:
+        with self._session() as session:
             session.execute(
                 update(ChatbotSessionRow)
                 .where(ChatbotSessionRow.id == session_id)
@@ -297,7 +297,7 @@ class ChatbotRepository:
         顺序说明：messages 与 feedback 无外键依赖，但 feedback.message_id
         语义上引用 messages.id，先删 messages 可避免残留悬空引用。
         """
-        with self._Session() as session:
+        with self._session() as session:
             session.execute(
                 delete(ChatbotMessageRow).where(
                     ChatbotMessageRow.session_id == session_id
@@ -336,7 +336,7 @@ class ChatbotRepository:
         now = _utcnow()
         metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
         images_json = json.dumps(images, ensure_ascii=False) if images else None
-        with self._Session() as session:
+        with self._session() as session:
             row = ChatbotMessageRow(
                 id=message_id,
                 session_id=session_id,
@@ -381,7 +381,7 @@ class ChatbotRepository:
 
         before_id 不为 None 时，返回该 ID 消息之前（更早）的消息（不含该 ID）。
         """
-        with self._Session() as session:
+        with self._session() as session:
             stmt = select(ChatbotMessageRow).where(
                 ChatbotMessageRow.session_id == session_id
             )
@@ -396,7 +396,7 @@ class ChatbotRepository:
             return [self._message_row_to_dict(r) for r in rows]
 
     def get_message(self, message_id: str) -> dict | None:
-        with self._Session() as session:
+        with self._session() as session:
             row = session.get(ChatbotMessageRow, message_id)
             if row is None:
                 return None
@@ -417,7 +417,7 @@ class ChatbotRepository:
         category: M6 反馈分类（irrelevant/inaccurate/other）。
         chatbot_feedback 用于转人工判定（count_recent_negative_feedback 统计窗口内 negative 数）。
         """
-        with self._Session() as session:
+        with self._session() as session:
             row = session.get(ChatbotMessageRow, message_id)
             if row is None:
                 return False
@@ -478,7 +478,7 @@ class ChatbotRepository:
         校验：仅 user 角色消息可撤回，且在 time_window_sec 秒内。
         返回 {"ok": bool, "reason": str}
         """
-        with self._Session() as session:
+        with self._session() as session:
             row = session.get(ChatbotMessageRow, message_id)
             if row is None:
                 return {"ok": False, "reason": "消息不存在"}
@@ -506,7 +506,7 @@ class ChatbotRepository:
         category: str | None = None,
         active_only: bool = True,
     ) -> list[dict]:
-        with self._Session() as session:
+        with self._session() as session:
             stmt = select(ChatbotFAQRow)
             if active_only:
                 stmt = stmt.where(ChatbotFAQRow.is_active == 1)
@@ -517,7 +517,7 @@ class ChatbotRepository:
             return [self._faq_row_to_dict(r) for r in rows]
 
     def get_faq(self, faq_id: int) -> dict | None:
-        with self._Session() as session:
+        with self._session() as session:
             row = session.get(ChatbotFAQRow, faq_id)
             if row is None:
                 return None
@@ -534,7 +534,7 @@ class ChatbotRepository:
     ) -> dict:
         """FAQ upsert：faq_id=None 新增，否则更新。返回完整 FAQ dict（含 id）"""
         now = _utcnow()
-        with self._Session() as session:
+        with self._session() as session:
             if faq_id is not None:
                 row = session.get(ChatbotFAQRow, faq_id)
                 if row is not None:
@@ -560,7 +560,7 @@ class ChatbotRepository:
             return self._faq_row_to_dict(row)
 
     def delete_faq(self, faq_id: int) -> bool:
-        with self._Session() as session:
+        with self._session() as session:
             result = session.execute(
                 delete(ChatbotFAQRow).where(ChatbotFAQRow.id == faq_id)
             )
@@ -573,7 +573,7 @@ class ChatbotRepository:
         为什么存 DB 而非 ChromaDB：FAQ 量小（<1000），DB 查询 + 应用层
         cosine 即可，避免 ChromaDB 双集合管理复杂度（见设计文档 §2.2.3）。
         """
-        with self._Session() as session:
+        with self._session() as session:
             session.execute(
                 update(ChatbotFAQRow)
                 .where(ChatbotFAQRow.id == faq_id)
@@ -615,7 +615,7 @@ class ChatbotRepository:
         escalate_triggered: int = 0,
     ) -> int:
         """添加反馈记录，返回 feedback id"""
-        with self._Session() as session:
+        with self._session() as session:
             row = ChatbotFeedbackRow(
                 session_id=session_id,
                 message_id=message_id,
@@ -637,7 +637,7 @@ class ChatbotRepository:
         时触发转人工（见设计文档 §6.3）。
         """
         cutoff = _utcnow() - timedelta(minutes=window_min)
-        with self._Session() as session:
+        with self._session() as session:
             count = session.scalar(
                 select(func.count())
                 .select_from(ChatbotFeedbackRow)
@@ -651,7 +651,7 @@ class ChatbotRepository:
 
     def get_recent_feedback(self, limit: int = 50) -> list[dict]:
         """获取最近反馈记录（跨会话），按 created_at DESC"""
-        with self._Session() as session:
+        with self._session() as session:
             stmt = (
                 select(ChatbotFeedbackRow)
                 .order_by(ChatbotFeedbackRow.created_at.desc())
@@ -689,7 +689,7 @@ class ChatbotRepository:
         "构建完成"，且 build_all 异常时不会回滚到 building 状态，导致脏数据。
         """
         now = _utcnow()
-        with self._Session() as session:
+        with self._session() as session:
             row = ChatbotKBVersionRow(
                 id=version_id,
                 snapshot_path=snapshot_path,
@@ -711,7 +711,7 @@ class ChatbotRepository:
         build_duration_sec: float | None = None,
         error_message: str | None = None,
     ) -> bool:
-        with self._Session() as session:
+        with self._session() as session:
             result = session.execute(
                 update(ChatbotKBVersionRow)
                 .where(ChatbotKBVersionRow.id == version_id)
@@ -728,7 +728,7 @@ class ChatbotRepository:
 
     def list_kb_versions(self, limit: int = 20) -> list[dict]:
         """按 created_at DESC 排序"""
-        with self._Session() as session:
+        with self._session() as session:
             stmt = (
                 select(ChatbotKBVersionRow)
                 .order_by(ChatbotKBVersionRow.created_at.desc())
@@ -739,12 +739,12 @@ class ChatbotRepository:
 
     def count_kb_versions(self) -> int:
         """KB 版本总数（M-36 修复：list_kb_versions 的 total 需真实计数支持前端分页）"""
-        with self._Session() as session:
+        with self._session() as session:
             stmt = select(func.count(ChatbotKBVersionRow.id))
             return int(session.execute(stmt).scalar() or 0)
 
     def get_kb_version(self, version_id: str) -> dict | None:
-        with self._Session() as session:
+        with self._session() as session:
             row = session.get(ChatbotKBVersionRow, version_id)
             if row is None:
                 return None
@@ -756,7 +756,7 @@ class ChatbotRepository:
         为什么不用 is_current 标记：db_models 中 ChatbotKBVersionRow 无该字段，
         通过 status=success + created_at DESC 隐式判定当前生效版本。
         """
-        with self._Session() as session:
+        with self._session() as session:
             stmt = (
                 select(ChatbotKBVersionRow)
                 .where(ChatbotKBVersionRow.status == "success")
@@ -774,7 +774,7 @@ class ChatbotRepository:
         build_all/rollback 会先创建 building 版本再更新为终态，
         查询是否存在 building 版本即可判断后台构建是否进行中。
         """
-        with self._Session() as session:
+        with self._session() as session:
             stmt = (
                 select(func.count(ChatbotKBVersionRow.id))
                 .where(ChatbotKBVersionRow.status == "building")
@@ -800,7 +800,7 @@ class ChatbotRepository:
 
     def get_config(self, key: str) -> str | None:
         """key 是 UNIQUE 约束而非主键，需 select 查询"""
-        with self._Session() as session:
+        with self._session() as session:
             row = session.execute(
                 select(ChatbotConfigRow).where(ChatbotConfigRow.key == key)
             ).scalars().first()
@@ -811,7 +811,7 @@ class ChatbotRepository:
     ) -> None:
         """upsert：存在则更新，不存在则插入"""
         now = _utcnow()
-        with self._Session() as session:
+        with self._session() as session:
             row = session.execute(
                 select(ChatbotConfigRow).where(ChatbotConfigRow.key == key)
             ).scalars().first()
@@ -832,7 +832,7 @@ class ChatbotRepository:
 
     def get_all_config(self) -> dict[str, str]:
         """返回所有配置的 {key: value} 字典"""
-        with self._Session() as session:
+        with self._session() as session:
             rows = session.execute(select(ChatbotConfigRow)).scalars().all()
             return {row.key: row.value for row in rows}
 
@@ -850,7 +850,7 @@ class ChatbotRepository:
             ("escalation.contact", "", "string", "转人工联系方式"),
             ("escalation.feedback_threshold", "2", "int", "转人工点踩阈值"),
         ]
-        with self._Session() as session:
+        with self._session() as session:
             for key, value, vtype, desc in defaults:
                 exists = session.execute(
                     select(ChatbotConfigRow).where(ChatbotConfigRow.key == key)
@@ -878,7 +878,7 @@ class ChatbotRepository:
         source: str = "web",
     ) -> int:
         """记录审计日志（仅存 hash 不存明文，敏感字段保护），返回 audit log id"""
-        with self._Session() as session:
+        with self._session() as session:
             row = ChatbotAuditLogRow(
                 action=action,
                 target=target,
@@ -895,7 +895,7 @@ class ChatbotRepository:
         self, action: str | None = None, limit: int = 50
     ) -> list[dict]:
         """按 created_at DESC 排序；action=None 不过滤"""
-        with self._Session() as session:
+        with self._session() as session:
             stmt = select(ChatbotAuditLogRow)
             if action is not None:
                 stmt = stmt.where(ChatbotAuditLogRow.action == action)

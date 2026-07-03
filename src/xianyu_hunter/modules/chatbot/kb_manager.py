@@ -101,7 +101,7 @@ class KBManager:
             snippets = await self._scan_and_chunk()
             if not snippets:
                 logger.warning("未扫描到任何文档片段，跳过构建")
-                return await self._make_empty_failed_version("无文档片段可构建")
+                return self._make_empty_failed_version("无文档片段可构建")
 
             doc_hash = self._compute_doc_hash(snippets)
             version_id = uuid.uuid4().hex
@@ -154,7 +154,7 @@ class KBManager:
         if not target:
             # 版本不存在时返回 failed 版本（不抛异常，符合"异常不向上抛出"约定）
             logger.warning(f"回滚失败：版本 {version_id} 不存在")
-            return await self._make_empty_failed_version(
+            return self._make_empty_failed_version(
                 f"回滚失败：版本 {version_id} 不存在",
                 build_type="rollback",
             )
@@ -202,7 +202,7 @@ class KBManager:
                 error_message=None,
             )
 
-            await self._cleanup_old_snapshots()
+            self._cleanup_old_snapshots()
             logger.info(
                 f"回滚成功: target={version_id} new={new_version_id} "
                 f"chunks={chunk_count} duration={duration:.2f}s"
@@ -324,7 +324,7 @@ class KBManager:
             )
 
             # 清理旧快照（保留 snapshot_max_keep 个）
-            await self._cleanup_old_snapshots()
+            self._cleanup_old_snapshots()
 
             logger.info(
                 f"知识库构建完成: version={version_id} type={build_type} "
@@ -361,7 +361,13 @@ class KBManager:
         ".md", ".py", ".jsonl", ".txt",
     })
 
-    async def _scan_and_chunk(self) -> list[DocSnippet]:
+    # S1192: 提取重复的 section_path 和 doc_type 字面量为常量
+    _FILE_SECTION = "<file>"
+    _HEADER_SECTION = "<header>"
+    _DOC_TYPE_CODE = "code"
+    _DOC_TYPE_MANUAL = "manual"
+
+    def _scan_and_chunk(self) -> list[DocSnippet]:
         """扫描 config.doc_paths 下所有文件，按文件类型分块
 
         - .md 文件：用 _chunk_markdown（按 H2 分割 + 代码块单独提取）
@@ -438,16 +444,6 @@ class KBManager:
 
         return snippets
 
-    # 二进制/打包文件后缀集合：扫描时跳过，避免读取大文件触发 UnicodeDecodeError
-    _BINARY_SUFFIXES: frozenset[str] = frozenset({
-        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",
-        ".pdf", ".zip", ".gz", ".tar", ".rar", ".7z",
-        ".db", ".sqlite", ".sqlite3",
-        ".pyc", ".pyo", ".pyd",
-        ".exe", ".dll", ".so", ".dylib",
-        ".class", ".jar",
-    })
-
     def _read_text(self, file_path: Path) -> str:
         """读取文件文本内容，失败时返回空字符串（避免单文件失败中断整个扫描）"""
         try:
@@ -486,7 +482,7 @@ class KBManager:
                         if section_content:
                             snippets.extend(self._make_md_snippets(
                                 section_content, source_file,
-                                current_path or "<header>",
+                                current_path or self._HEADER_SECTION,
                                 section_start_line, i - 1, doc_type,
                             ))
                         current_section = []
@@ -518,7 +514,7 @@ class KBManager:
                     if section_content:
                         snippets.extend(self._make_md_snippets(
                             section_content, source_file,
-                            current_path or "<header>",
+                            current_path or self._HEADER_SECTION,
                             section_start_line, i - 1, doc_type,
                         ))
                 current_section = [line]
@@ -533,7 +529,7 @@ class KBManager:
             if section_content:
                 snippets.extend(self._make_md_snippets(
                     section_content, source_file,
-                    current_path or "<header>",
+                    current_path or self._HEADER_SECTION,
                     section_start_line, len(lines), doc_type,
                 ))
 
@@ -721,7 +717,7 @@ class KBManager:
                 section_path="<file>",
                 line_start=1,
                 line_end=total_lines,
-                doc_type="manual",
+                doc_type=self._DOC_TYPE_MANUAL,
             )]
 
         snippets: list[DocSnippet] = []
@@ -732,10 +728,10 @@ class KBManager:
             snippets.append(DocSnippet(
                 content=chunk,
                 source_file=source_file,
-                section_path=f"<file> (part {idx + 1})",
+                section_path=f"{self._FILE_SECTION} (part {idx + 1})",
                 line_start=1,
                 line_end=total_lines,
-                doc_type="manual",
+                doc_type=self._DOC_TYPE_MANUAL,
                 truncated=True,
             ))
             pos += step
@@ -811,7 +807,7 @@ class KBManager:
             error_message=err_msg,
         )
 
-    async def _cleanup_old_snapshots(self) -> None:
+    def _cleanup_old_snapshots(self) -> None:
         """保留最近 snapshot_max_keep 个快照，删除更老的快照目录和对应版本记录
 
         - 版本按 created_at DESC 排序（list_kb_versions 已排序）
@@ -866,7 +862,7 @@ class KBManager:
         """
         return f"data/chromadb/snapshots/{version_id}"
 
-    async def _make_empty_failed_version(
+    def _make_empty_failed_version(
         self,
         error: str,
         build_type: str = "build",

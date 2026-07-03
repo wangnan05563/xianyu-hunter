@@ -16,6 +16,15 @@ import { storage } from '../../utils/storage'
 import { useConfigStore, DiffChange } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
 
+// Diff 预览表格的共享 render 函数（3 个全局配置 Modal 重复使用，提取到模块级避免 S4144）
+const renderDiffValue = (v: unknown) => v == null ? '-' : String(v)
+const renderOpTag = (op: string) => {
+  // op 配色：add=绿 delete=红 其他=橙
+  if (op === 'add') return <Tag color="green">新增</Tag>
+  if (op === 'delete') return <Tag color="red">删除</Tag>
+  return <Tag color="orange">修改</Tag>
+}
+
 // 闲鱼筛选标签（与后端 XIANYU_FILTER_MAP 对齐）
 const searchFilterOptions = [
   { value: 'personal_idle', label: '👤 个人闲置', desc: '非商家' },
@@ -73,6 +82,13 @@ export default function TaskEditor() {
   // 加载一次即可，TaskEditor 生命周期内全局配置不会变（保存全局配置后会刷新）
   const [globalConfig, setGlobalConfig] = useState<AppConfig | null>(null)
 
+  // 用类型守卫替代 as 断言（S4325）：让 TypeScript 收窄 prefillMode 类型
+  // TaskCreateBody['mode'] 是 string | undefined，需独立定义不含 undefined 的字面量联合
+  type TaskMode = 'auto' | 'semi_auto' | 'confirm' | 'notify'
+  const isTaskMode = (v: string): v is TaskMode =>
+    v === 'auto' || v === 'semi_auto' || v === 'confirm' || v === 'notify'
+  const initialMode: TaskMode = isTaskMode(prefillMode) ? prefillMode : 'confirm'
+
   // 表单状态（含任务级覆盖字段，null 表示沿用全局）
   const [formData, setFormData] = useState<TaskCreateBody>({
     keyword: prefillKeyword,
@@ -80,7 +96,7 @@ export default function TaskEditor() {
     min_price: prefillMinPrice ? Number(prefillMinPrice) : null,
     max_price: prefillMaxPrice ? Number(prefillMaxPrice) : null,
     max_publish_days: 7,
-    mode: (['auto', 'semi_auto', 'confirm', 'notify'].includes(prefillMode) ? prefillMode : 'confirm') as TaskCreateBody['mode'],
+    mode: initialMode,
     region: '',
     exclude_words: [],
     search_filters: [],
@@ -239,9 +255,9 @@ export default function TaskEditor() {
     const current = { ...(formData.search_config ?? {}) }
     if (isEmptyValue(value)) {
       delete current[field]
-    } else {
-      // isEmptyValue 为 false 时 value 非 null/undefined，用断言告知 TypeScript
-      current[field] = value!
+    } else if (value != null) {
+      // isEmptyValue 已过滤空字符串/空数组，仅需排除 null/undefined 让 TS 收窄类型
+      current[field] = value
     }
     setFormData({ ...formData, search_config: Object.keys(current).length > 0 ? current : null })
   }
@@ -295,7 +311,7 @@ export default function TaskEditor() {
         <div>
           <p style={{ marginBottom: 8 }}>检测到以下风险，请确认是否继续：</p>
           {risks.map((r, i) => (
-            <p key={i} style={{ color: r.level === 'danger' ? '#ff4d4f' : '#faad14', marginBottom: 4, fontSize: 13 }}>
+            <p key={`${r.level}-${i}`} style={{ color: r.level === 'danger' ? '#ff4d4f' : '#faad14', marginBottom: 4, fontSize: 13 }}>
               {r.level === 'danger' ? '🔴 ' : '🟡 '}{r.message}
             </p>
           ))}
@@ -319,8 +335,9 @@ export default function TaskEditor() {
         use_cron: useCron,
         interval_seconds: intervalSeconds,
       }
-      if (isEdit) {
-        await taskApi.update(id!, body)
+      // 用 id 直接收窄类型，替代 isEdit + 非空断言
+      if (id) {
+        await taskApi.update(id, body)
         message.success('任务已更新')
       } else {
         await taskApi.create(body)
@@ -356,17 +373,20 @@ export default function TaskEditor() {
     evalThreshold: formData.eval_threshold ?? globalConfig?.eval?.pass_score ?? 60,
   }
 
+  // 标题预计算：提取到组件主体以避免 JSX 内嵌套三元
+  const pageTitle = (() => {
+    if (isEdit) return '编辑任务'
+    if (prefillKeyword) return '新增任务（已预填充）'
+    return '新增任务（向导）'
+  })()
+
   return (
     <div className="page-container">
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')} style={{ marginBottom: 16 }}>
         返回列表
       </Button>
 
-      <h2>{(() => {
-        if (isEdit) return '编辑任务'
-        if (prefillKeyword) return '新增任务（已预填充）'
-        return '新增任务（向导）'
-      })()}</h2>
+      <h2>{pageTitle}</h2>
 
       {/* 草稿恢复提示 */}
       {!isEdit && draftRestored && (
@@ -953,7 +973,7 @@ export default function TaskEditor() {
                 description={
                   <ul style={{ margin: 0, paddingLeft: 20 }}>
                     {detectRiskyConfig().map((r, i) => (
-                      <li key={i} style={{ color: r.level === 'danger' ? '#ff4d4f' : '#faad14', fontSize: 13 }}>
+                      <li key={`${r.level}-${i}`} style={{ color: r.level === 'danger' ? '#ff4d4f' : '#faad14', fontSize: 13 }}>
                         {r.message}
                       </li>
                     ))}
@@ -1045,7 +1065,7 @@ export default function TaskEditor() {
 // ============== 全局 AI 评估配置快捷入口 Modal ==============
 // 复用 configStore 的 previewSave/confirmSave 流程，与 EvalRules 页面一致
 // 在 TaskEditor 中提供快捷入口，避免用户跳转到配置页面才能修改全局评估参数
-function GlobalEvalConfigModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+function GlobalEvalConfigModal({ open, onClose, onSaved }: { readonly open: boolean; readonly onClose: () => void; readonly onSaved: () => void }) {
   const { config, load, update, previewSave, confirmSave, hasChanges, reset } = useConfigStore()
   const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
   const [diffModalOpen, setDiffModalOpen] = useState(false)
@@ -1200,27 +1220,9 @@ function GlobalEvalConfigModal({ open, onClose, onSaved }: { open: boolean; onCl
           size="small"
           columns={[
             { title: '路径', dataIndex: 'path', key: 'path' },
-            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
-            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
-            {
-              title: '操作',
-              dataIndex: 'op',
-              key: 'op',
-              render: (op: string) => (
-                <Tag color={(() => {
-                  // op 配色：add=绿 delete=红 其他=橙
-                  if (op === 'add') return 'green'
-                  if (op === 'delete') return 'red'
-                  return 'orange'
-                })()}>
-                  {(() => {
-                    if (op === 'add') return '新增'
-                    if (op === 'delete') return '删除'
-                    return '修改'
-                  })()}
-                </Tag>
-              ),
-            },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: renderDiffValue },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: renderDiffValue },
+            { title: '操作', dataIndex: 'op', key: 'op', render: renderOpTag },
           ]}
         />
       </Modal>
@@ -1231,7 +1233,7 @@ function GlobalEvalConfigModal({ open, onClose, onSaved }: { open: boolean; onCl
 // ============== 全局批量采集配置快捷入口 Modal ==============
 // 批量采集调度器配置（BatchRefreshConfig）：定时刷新在售商品详情
 // 在调度确认步骤提供快捷入口，避免用户跳转到配置文件修改
-function GlobalBatchRefreshModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function GlobalBatchRefreshModal({ open, onClose }: { readonly open: boolean; readonly onClose: () => void }) {
   const { config, load, update, previewSave, confirmSave, hasChanges, reset } = useConfigStore()
   const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
   const [diffModalOpen, setDiffModalOpen] = useState(false)
@@ -1358,27 +1360,9 @@ function GlobalBatchRefreshModal({ open, onClose }: { open: boolean; onClose: ()
           size="small"
           columns={[
             { title: '路径', dataIndex: 'path', key: 'path' },
-            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
-            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
-            {
-              title: '操作',
-              dataIndex: 'op',
-              key: 'op',
-              render: (op: string) => (
-                <Tag color={(() => {
-                  // op 配色：add=绿 delete=红 其他=橙
-                  if (op === 'add') return 'green'
-                  if (op === 'delete') return 'red'
-                  return 'orange'
-                })()}>
-                  {(() => {
-                    if (op === 'add') return '新增'
-                    if (op === 'delete') return '删除'
-                    return '修改'
-                  })()}
-                </Tag>
-              ),
-            },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: renderDiffValue },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: renderDiffValue },
+            { title: '操作', dataIndex: 'op', key: 'op', render: renderOpTag },
           ]}
         />
       </Modal>
@@ -1389,7 +1373,7 @@ function GlobalBatchRefreshModal({ open, onClose }: { open: boolean; onClose: ()
 // ============== 全局反检测配置快捷入口 Modal ==============
 // 反检测参数（AntiDetectConfig）为全局配置，所有任务共享
 // AntiDetect 实例在 container 级创建，无法按任务独立切换
-function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open: boolean; readonly onClose: () => void; readonly onSaved: () => void }) {
   const { config, load, update, previewSave, confirmSave, hasChanges, reset } = useConfigStore()
   const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
   const [diffModalOpen, setDiffModalOpen] = useState(false)
@@ -1534,27 +1518,9 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { open: boolean
           size="small"
           columns={[
             { title: '路径', dataIndex: 'path', key: 'path' },
-            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
-            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
-            {
-              title: '操作',
-              dataIndex: 'op',
-              key: 'op',
-              render: (op: string) => (
-                <Tag color={(() => {
-                  // op 配色：add=绿 delete=红 其他=橙
-                  if (op === 'add') return 'green'
-                  if (op === 'delete') return 'red'
-                  return 'orange'
-                })()}>
-                  {(() => {
-                    if (op === 'add') return '新增'
-                    if (op === 'delete') return '删除'
-                    return '修改'
-                  })()}
-                </Tag>
-              ),
-            },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: renderDiffValue },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: renderDiffValue },
+            { title: '操作', dataIndex: 'op', key: 'op', render: renderOpTag },
           ]}
         />
       </Modal>
@@ -1568,9 +1534,9 @@ function PriceRangeSlider({
   max,
   onChange,
 }: {
-  min: number | null
-  max: number | null
-  onChange: (min: number | null, max: number | null) => void
+  readonly min: number | null
+  readonly max: number | null
+  readonly onChange: (min: number | null, max: number | null) => void
 }) {
   const range: [number, number] = [min ?? 0, max ?? 100000]
   return (

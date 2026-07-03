@@ -1,0 +1,1 @@
+﻿  Type 'KeyboardEvent<HTMLAnchorElement>' is missing the following properties from type 'KeyboardEvent': isComposing, initKeyboardEvent, DOM_KEY_LOCATION_STANDARD, DOM_KEY_LOCATION_LEFT, and 14 more.

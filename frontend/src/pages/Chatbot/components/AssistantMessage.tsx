@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, createContext, useContext } from 'react'
 import { Typography, Tag, Tooltip, Progress, Collapse, Button, Modal, Input, Alert, Rate, Select, message } from 'antd'
 import { CopyOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
@@ -9,10 +9,14 @@ import type { Message, Source } from '../types'
 import { chatbotApi } from '../api'
 
 interface Props {
-  message: Message
-  sessionId: string
-  onFeedbackDone?: () => void
+  readonly message: Message
+  readonly sessionId: string
+  readonly onFeedbackDone?: () => void
 }
+
+// SourcesContext：把 msg.sources 透传给提取到模块顶层的 MarkdownLink，
+// 避免 MarkdownLink 作为子组件定义在 AssistantMessage 内（SonarQube S6478）
+const SourcesContext = createContext<Source[] | undefined>(undefined)
 
 // 助手消息组件：渲染 Markdown 内容 + 引用来源 + 工具调用标记 + 1-5 星评分 + 转人工告警 + 后续问题推荐
 export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Props) {
@@ -68,7 +72,8 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
 
   // 推荐问题点击：派发自定义事件，index.tsx 监听后自动发送
   const handleFollowUpClick = (question: string) => {
-    window.dispatchEvent(new CustomEvent('chatbot:follow-up-click', { detail: question }))
+    // 使用 globalThis 而非 window：兼容 SSR / 非 browser 环境（SonarQube S7764）
+    globalThis.dispatchEvent(new CustomEvent('chatbot:follow-up-click', { detail: question }))
   }
 
   // 把 [来源:N] 转成 Markdown 链接 [来源:N](#cite-N)，让 ReactMarkdown 解析为 <a> 标签
@@ -77,59 +82,44 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
   // 注意：必须跳过代码块和行内代码，否则代码内的 [来源:N] 字面量会被破坏
   const processedContent = useMemo(() => {
     if (!msg.sources || msg.sources.length === 0) return msg.content
+    // replaceAll 显式表达"全局替换"语义，比 replace + g flag 更清晰（SonarQube S7781）
     const replaceCitations = (text: string) =>
-      text.replace(/\[来源:(\d+|\?)\]/g, (_m, num) => `[来源:${num}](#cite-${num})`)
+      text.replaceAll(/\[来源:(\d+|\?)\]/g, (_m, num) => `[来源:${num}](#cite-${num})`)
     // 按代码块 ```...``` 和行内代码 `...` 切分，仅对非代码段做替换
     const parts: string[] = []
     let lastIndex = 0
     const codeRe = /```[\s\S]*?```|`[^`\n]+`/g
     let m: RegExpExecArray | null
     while ((m = codeRe.exec(msg.content)) !== null) {
-      parts.push(replaceCitations(msg.content.slice(lastIndex, m.index)))
-      parts.push(m[0]) // 代码段原样保留
+      // 合并相邻 push 为单次调用，减少数组操作次数（SonarQube S7778）
+      parts.push(replaceCitations(msg.content.slice(lastIndex, m.index)), m[0])
       lastIndex = m.index + m[0].length
     }
     parts.push(replaceCitations(msg.content.slice(lastIndex)))
     return parts.join('')
   }, [msg.content, msg.sources])
 
-  // ReactMarkdown components：自定义 a/pre 渲染
-  // 为什么用 useMemo：避免每次渲染重建 components 对象导致 ReactMarkdown 不必要重渲染
+  // ReactMarkdown components：引用模块顶层组件，避免在组件内定义子组件（SonarQube S6478）
+  // 依赖数组为空：MarkdownLink / MarkdownPre 均为顶层稳定引用，sources 通过 Context 透传
   const mdComponents = useMemo(() => ({
-    a: ({ href, children }: { href?: string; children?: React.ReactNode }) => {
-      if (href && href.startsWith('#cite-')) {
-        const refNum = href.slice(6)
-        const source = msg.sources?.find((s) => s.index === Number.parseInt(refNum, 10))
-        return (
-          <Tooltip title={source ? `${source.file} · ${source.section}` : '来源未知'}>
-            <Tag color="cyan" style={{ cursor: 'pointer', margin: '0 2px' }}>[来源:{refNum}]</Tag>
-          </Tooltip>
-        )
-      }
-      return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
-    },
-    // 代码块包装：添加语言标签 + 复制按钮，行号通过 CSS counter 实现
-    pre: ({ children }: { children?: React.ReactNode }) => {
-      const child = Array.isArray(children) ? children[0] : children
-      if (child && typeof child === 'object' && 'props' in child) {
-        const codeProps = (child as React.ReactElement<{ className?: string; children?: React.ReactNode }>).props
-        return <CodeBlock className={codeProps.className}>{codeProps.children}</CodeBlock>
-      }
-      return <pre>{children}</pre>
-    },
-  }), [msg.sources])
+    a: MarkdownLink,
+    pre: MarkdownPre,
+  }), [])
 
   return (
     <div style={{ padding: '12px 0' }}>
       {/* 消息内容：ReactMarkdown 渲染，支持标题/列表/代码块/链接/加粗/斜体等 */}
       <div className="cb-md">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeHighlight]}
-          components={mdComponents}
-        >
-          {processedContent}
-        </ReactMarkdown>
+        {/* SourcesContext.Provider 把 msg.sources 注入给顶层 MarkdownLink */}
+        <SourcesContext.Provider value={msg.sources}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeHighlight]}
+            components={mdComponents}
+          >
+            {processedContent}
+          </ReactMarkdown>
+        </SourcesContext.Provider>
       </div>
 
       {/* 降级标记：RAG 降级为 FAQ 或转人工时显示 */}
@@ -175,9 +165,10 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
         <div className="cb-follow-ups">
           <div className="cb-follow-ups-label">您可能还想问：</div>
           <div className="cb-follow-ups-tags">
-            {msg.follow_ups.map((q, i) => (
+            {msg.follow_ups.map((q) => (
               <Tag
-                key={i}
+                // 基于内容生成稳定 key，避免数组索引在列表增删时错位（SonarQube S6479）
+                key={q}
                 className="cb-follow-up-tag"
                 onClick={() => handleFollowUpClick(q)}
               >
@@ -270,9 +261,41 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
   )
 }
 
+// Markdown 链接渲染：#cite- 开头的引用链接渲染为带 Tooltip 的 Tag，其他走原生 <a>
+// 提取到模块顶层避免在 AssistantMessage 内定义子组件（SonarQube S6478/S6767）
+function MarkdownLink({ href, children }: {
+  readonly href?: string
+  readonly children?: React.ReactNode
+}) {
+  // useContext 必须在条件判断之前无条件调用（React Hooks 规则）
+  const sources = useContext(SourcesContext)
+  // href 用可选链：避免对 undefined 调用 startsWith（SonarQube S6582）
+  if (href?.startsWith('#cite-')) {
+    const refNum = href.slice(6)
+    const source = sources?.find((s) => s.index === Number.parseInt(refNum, 10))
+    return (
+      <Tooltip title={source ? `${source.file} · ${source.section}` : '来源未知'}>
+        <Tag color="cyan" style={{ cursor: 'pointer', margin: '0 2px' }}>[来源:{refNum}]</Tag>
+      </Tooltip>
+    )
+  }
+  return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+}
+
+// 代码块包装：添加语言标签 + 复制按钮，行号通过 CSS counter 实现
+// 提取到模块顶层避免在 AssistantMessage 内定义子组件（SonarQube S6478）
+function MarkdownPre({ children }: { readonly children?: React.ReactNode }) {
+  const child = Array.isArray(children) ? children[0] : children
+  if (child && typeof child === 'object' && 'props' in child) {
+    const codeProps = (child as React.ReactElement<{ readonly className?: string; readonly children?: React.ReactNode }>).props
+    return <CodeBlock className={codeProps.className}>{codeProps.children}</CodeBlock>
+  }
+  return <pre>{children}</pre>
+}
+
 // 代码块组件：语言标签 + 复制按钮 + 语法高亮（rehype-highlight 已处理）
 // 行号通过 CSS counter 实现（见 chatbot.css .cb-md-code-wrap pre code）
-function CodeBlock({ children, className }: { children?: React.ReactNode; className?: string }) {
+function CodeBlock({ children, className }: { readonly children?: React.ReactNode; readonly className?: string }) {
   const [copied, setCopied] = useState(false)
   const codeRef = useRef<HTMLElement>(null)
   const lang = (className || '').replace('language-', '') || ''

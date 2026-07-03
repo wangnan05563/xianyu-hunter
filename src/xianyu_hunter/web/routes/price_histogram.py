@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -41,7 +41,6 @@ def _percentile(sorted_prices: list[float], p: float) -> float:
 
 
 def _build_compare_means(
-    prices: list[float],
     all_rows_with_ts: list[tuple[str, float]],
 ) -> dict[str, float]:
     """计算"昨日 / 7 日 / 30 日"均价对比
@@ -185,7 +184,7 @@ def prices_histogram(
     p75 = round(_percentile(sorted_p, 0.75), 2)
     mean_val = round(sum(prices) / len(prices), 2)
     median_val = round(sorted_p[len(sorted_p) // 2], 2)
-    compare = _build_compare_means(prices, all_with_ts)
+    compare = _build_compare_means(all_with_ts)
 
     if bins == 20:
         # P-09-30: 分桶范围校准——百分位裁剪 + 任务定价范围融合

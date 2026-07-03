@@ -75,7 +75,15 @@ beforeEach(() => {
   useSheetStore.setState({
     sheets: [],
     activeId: null,
-    preferences: { maxSheets: 5, enableAnimation: true, minimizeInsteadOfClose: false },
+    preferences: {
+      maxSheets: 5,
+      enableAnimation: true,
+      minimizeInsteadOfClose: false,
+      doubleClickCloseEnabled: false,
+      doubleClickInterval: 350,
+      thumbnailMode: false,
+      thumbnailTooltipEnabled: true,
+    },
     isMobile: false,
     hydrated: false,
     _navigator: null,
@@ -158,5 +166,108 @@ describe('SheetWorkspace', () => {
     fireEvent.click(prefBtn)
     // Drawer 打开，显示偏好设置表单
     expect(await screen.findByText('最大 Sheet 数量')).toBeInTheDocument()
+  })
+
+  describe('双击关闭', () => {
+    // 双击关闭依赖 Date.now() 时间戳判定
+    // 为什么用 Date.now spy 而非 vi.useFakeTimers：避免干扰 React 内部调度
+    let nowSpy: ReturnType<typeof vi.spyOn>
+    let nowValue: number
+
+    beforeEach(() => {
+      nowValue = 1000
+      nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowValue)
+    })
+    afterEach(() => {
+      nowSpy.mockRestore()
+    })
+
+    it('启用双击关闭后，快速双击激活 tab 触发关闭', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      // 再打开一个 sheet，避免栈空时 closeSheet 跳转 '/' 触发 useSheetSync 重新打开
+      act(() => {
+        useSheetStore.getState().openSheet('/items')
+      })
+      act(() => {
+        useSheetStore.getState().setPreferences({ doubleClickCloseEnabled: true, doubleClickInterval: 350 })
+      })
+      expect(useSheetStore.getState().sheets).toHaveLength(2)
+      // 当前激活 /items
+      const tabEl = container.querySelector('.sheet-tab-active') as HTMLElement
+      expect(tabEl).toBeTruthy()
+      // 第一击
+      fireEvent.click(tabEl)
+      // 推进 100ms（间隔内）
+      nowValue += 100
+      fireEvent.click(tabEl)
+      // /items 被关闭，剩 /tasks
+      const state = useSheetStore.getState()
+      expect(state.sheets).toHaveLength(1)
+      expect(state.sheets[0].path).toBe('/tasks')
+    })
+
+    it('双击间隔超过阈值时不触发关闭', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      act(() => {
+        useSheetStore.getState().setPreferences({ doubleClickCloseEnabled: true, doubleClickInterval: 300 })
+      })
+      const tabEl = container.querySelector('.sheet-tab-active') as HTMLElement
+      fireEvent.click(tabEl)
+      // 间隔 400ms > 阈值 300ms
+      nowValue += 400
+      fireEvent.click(tabEl)
+      expect(useSheetStore.getState().sheets).toHaveLength(1)
+    })
+
+    it('未启用双击关闭时单击仅激活，双击不关闭', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      // 默认 doubleClickCloseEnabled=false
+      const tabEl = container.querySelector('.sheet-tab-active') as HTMLElement
+      fireEvent.click(tabEl)
+      nowValue += 100
+      fireEvent.click(tabEl)
+      expect(useSheetStore.getState().sheets).toHaveLength(1)
+    })
+  })
+
+  describe('缩略图模式', () => {
+    it('启用缩略图模式后容器宽度收窄', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      const tabsEl = container.querySelector('.sheet-tabs') as HTMLElement
+      // 标准模式宽度 80px
+      expect(tabsEl.style.width).toBe('80px')
+      act(() => {
+        useSheetStore.getState().setPreferences({ thumbnailMode: true })
+      })
+      // 缩略图模式宽度 56px
+      expect(tabsEl.style.width).toBe('56px')
+    })
+
+    it('缩略图模式下不渲染纵向标题', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      act(() => {
+        useSheetStore.getState().setPreferences({ thumbnailMode: true })
+      })
+      // 缩略图模式只有图标，标题不渲染为纵向文字
+      const verticalTitles = container.querySelectorAll('[style*="writing-mode"]')
+      expect(verticalTitles.length).toBe(0)
+    })
+
+    it('缩略图模式可切换至禁用悬浮提示', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      act(() => {
+        useSheetStore.getState().setPreferences({ thumbnailMode: true, thumbnailTooltipEnabled: false })
+      })
+      // 禁用 Tooltip 后不应渲染 .ant-tooltip 触发器包裹层（仅渲染 .sheet-tab）
+      // 这里验证缩略图 div 仍存在即可（Tooltip 关闭时直接返回 tabContent）
+      const tabEl = container.querySelector('.sheet-tab') as HTMLElement
+      expect(tabEl).toBeTruthy()
+    })
   })
 })

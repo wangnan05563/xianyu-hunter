@@ -50,15 +50,19 @@ class FakeCollector:
 
 
 class FakeDedup:
-    """默认全部新；可通过 existing 控制"""
+    """默认全部新；可通过 existing 控制
+
+    签名与真实 ItemDedup 一致（filter_new/save 均为同步方法，save 接受 task_id），
+    避免 worker.py 同步调用时报 'coroutine has no len()' 或 'unexpected keyword argument'
+    """
     def __init__(self, existing: set[str] | None = None):
         self.existing = existing or set()
         self.saved: list[str] = []
 
-    async def filter_new(self, items: list[ItemSummary]) -> list[ItemSummary]:
+    def filter_new(self, items: list[ItemSummary]) -> list[ItemSummary]:
         return [i for i in items if i.id not in self.existing]
 
-    async def save(self, items: list[ItemSummary]) -> int:
+    def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:
         self.existing.update(i.id for i in items)
         self.saved.extend(i.id for i in items)
         return len(items)
@@ -181,6 +185,23 @@ def make_worker(
         config=config or TaskConfig(interval_seconds=0.1, cooldown_after_buy=0.1),
     )
     return worker, collector, dedup, evaluator, buyer
+
+
+# ============== 公共 fixture ==============
+
+
+@pytest.fixture(autouse=True)
+def _skip_cookie_check(monkeypatch):
+    """跳过 scheduler._check_resume_allowed 的 Cookie 校验
+
+    P0-① 在 scheduler.start/resume 中新增的 Cookie 校验会调用
+    get_cookie_store().has_valid_cookies()，测试环境无真实 cookie 会误判失效
+    导致所有 scheduler 测试抛 ResumeBlockedError。本测试聚焦 worker/scheduler
+    调度逻辑，Cookie 校验由专门测试覆盖。
+    """
+    monkeypatch.setattr(
+        TaskScheduler, "_check_resume_allowed", lambda self, task_id: None
+    )
 
 
 # ============== Worker.run_once 测试 ==============
@@ -374,7 +395,7 @@ async def test_scheduler_register_and_start_stop() -> None:
     await sch.register(task, worker)
     assert sch.get_status("t1").value == "running"
 
-    await sch.start("t1")
+    sch.start("t1")  # start 是同步方法，无需 await
     assert sch.is_running("t1") is True
     await asyncio.sleep(0.2)  # 让循环跑 1 轮
     await sch.stop("t1", timeout=2.0)
@@ -388,18 +409,22 @@ async def test_scheduler_pause_resume() -> None:
     """暂停/恢复"""
     buyer = FakeBuyer()
     config = TaskConfig(interval_seconds=0.1, cooldown_after_buy=0.0, stop_on_first_buy=False)
-    worker, _, _, _, _ = make_worker(buyer=buyer, config=config)
+    worker, _, dedup, _, _ = make_worker(buyer=buyer, config=config)
     sch = TaskScheduler()
     await sch.register(worker.task, worker)
-    await sch.start("t1")
+    sch.start("t1")  # start 是同步方法，无需 await
     await asyncio.sleep(0.15)
     # 跑过几轮：每个商品都被 buy 过
-    await sch.pause("t1")
+    sch.pause("t1")  # pause 是同步方法，无需 await
     paused_calls = len(buyer.calls)
+    # 清空已去重集合：第 1 轮 save 后 existing 包含所有商品 ID，
+    # 后续轮次 filter_new 返回空列表不再触发 buy。
+    # 清空后 resume 的第 1 轮才能重新触发 buy，验证恢复语义
+    dedup.existing.clear()
     await asyncio.sleep(0.3)
     # 暂停后不增加
     assert len(buyer.calls) == paused_calls
-    await sch.resume("t1")
+    sch.resume("t1")  # resume 是同步方法，无需 await
     await asyncio.sleep(0.2)
     resumed_calls = len(buyer.calls)
     assert resumed_calls > paused_calls
@@ -412,9 +437,9 @@ async def test_scheduler_start_already_running() -> None:
     worker, _, _, _, _ = make_worker()
     sch = TaskScheduler()
     await sch.register(worker.task, worker)
-    await sch.start("t1")
+    sch.start("t1")  # start 是同步方法，无需 await
     t1 = sch._workers["t1"].loop_task
-    await sch.start("t1")  # 第二次 start 应 no-op
+    sch.start("t1")  # start 是同步方法，无需 await  # 第二次 start 应 no-op
     assert sch._workers["t1"].loop_task is t1
     await sch.stop("t1")
 
@@ -477,7 +502,7 @@ async def test_scheduler_unregister_running_raises() -> None:
     worker, _, _, _, _ = make_worker()
     sch = TaskScheduler()
     await sch.register(worker.task, worker)
-    await sch.start("t1")
+    sch.start("t1")  # start 是同步方法，无需 await
     with pytest.raises(RuntimeError, match="仍在运行"):
         await sch.unregister("t1")
     await sch.stop("t1")

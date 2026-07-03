@@ -14,7 +14,6 @@ from datetime import datetime
 from typing import Any, Sequence
 
 from sqlalchemy import and_, case, func, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from xianyu_hunter.infra.db_models import create_sqlite_engine, init_db

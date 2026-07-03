@@ -13,7 +13,7 @@ from typing import Any
 import yaml
 from fastapi import APIRouter, Body, Depends, HTTPException
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.yaml_config import (
@@ -309,7 +309,7 @@ def _redact_for_share(data: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(cur[k], str):
                     cur[k] = "***"
                 elif isinstance(cur[k], dict):
-                    cur[k] = {kk: "***" for kk in cur[k]}
+                    cur[k] = dict.fromkeys(cur[k], "***")
                 else:
                     cur.pop(k, None)
             else:

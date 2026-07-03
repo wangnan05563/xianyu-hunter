@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from loguru import logger

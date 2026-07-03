@@ -14,7 +14,6 @@ from typing import Any
 from sqlalchemy import func, select
 
 from xianyu_hunter.infra.db_models import _utcnow, EventRow
-from xianyu_hunter.infra.repository_base import RepositoryBase
 
 
 class EventsMixin:
@@ -285,7 +284,6 @@ class EventsMixin:
                 "total_runs": 0, "total_events": 0, "total_hits": 0,
             }
 
-        window_td = timedelta(minutes=window_minutes)
         buckets: list[dict[str, Any]] = []
         current_bucket_start: datetime | None = None
         current_events: list[dict] = []

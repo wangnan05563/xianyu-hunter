@@ -5,13 +5,13 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends
 
 from xianyu_hunter.container import Container
-from xianyu_hunter.infra.db_models import _utcnow, EvaluationRow, OrderRow, EventRow, ItemRow, TaskLinkRow
+from xianyu_hunter.infra.db_models import _utcnow, EvaluationRow, OrderRow, EventRow, TaskLinkRow
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.web.deps import get_container
 
@@ -71,8 +71,7 @@ def business_kpi(
     # 1) 发现商品数
     # 优先从 task_links 表统计（包含所有采集到的商品，无论是否通过评估），
     # 因为 EvaluationRow 仅在评估通过后才写入，阶段初期可能为空。
-    from sqlalchemy import func, select as sa_select, cast, String
-    from datetime import datetime as dt
+    from sqlalchemy import func, select as sa_select
     with container.repo.engine.connect() as conn:
         cur_items_count = conn.execute(
             sa_select(func.count(func.distinct(TaskLinkRow.link_key)))
@@ -86,7 +85,7 @@ def business_kpi(
     kpis.append(_kpi_block(
         kpi_id="items_discovered", title="发现商品数", value=cur_val, unit="件",
         delta_pct=_safe_pct_change(cur_val, prev_val) if prev_val > 0 else None, sample_size=cur_val,
-        hint=f"采集到的去重商品总数（来自闲鱼搜索）",
+        hint="采集到的去重商品总数（来自闲鱼搜索）",
     ))
 
     # 2) 评估通过率
@@ -118,7 +117,7 @@ def business_kpi(
     if cur_total == 0:
         logger.warning(
             f"[business_kpi] 抢单成功率分母为 0：近 {range_days} 天无订单记录，"
-            f"可能抢单未触发或订单数据采集异常"
+            "可能抢单未触发或订单数据采集异常"
         )
     cur_order_rate = (cur_paid / cur_total * 100) if cur_total else 0.0
     prev_order_rate = (prev_paid / prev_total * 100) if prev_total else 0.0
@@ -163,7 +162,7 @@ def business_kpi(
         else:
             logger.warning(
                 f"[business_kpi] 推送失败率分母为 0：近 {range_days} 天无 notify 事件，"
-                f"可能 NotifierHub 未写入推送记录或无推送任务"
+                "可能 NotifierHub 未写入推送记录或无推送任务"
             )
     cur_fail_rate = (cur_fail / cur_notify_total * 100) if cur_notify_total else 0.0
     prev_fail_rate = (prev_fail / prev_notify_total * 100) if prev_notify_total else 0.0

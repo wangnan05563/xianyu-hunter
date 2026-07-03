@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from playwright.async_api import Page
 
-from xianyu_hunter.domain.item import ItemDetail, ItemSummary
+from xianyu_hunter.domain.item import ItemSummary
 from xianyu_hunter.domain.task import XIANYU_FILTER_MAP
 from xianyu_hunter.domain.urls import (
     build_item_url,
@@ -913,7 +913,6 @@ class SearchMixin:
         async def _handle_route(route):
             """拦截搜索 API 请求，捕获响应体"""
             nonlocal session_invalid
-            req_url = route.request.url
             try:
                 response = await route.fetch()
                 await _sync_response_cookies_to_context(page, response)
@@ -1256,7 +1255,8 @@ class SearchMixin:
                     detail_page = await self.browser.new_page()
                     # 同 search()：注册外部 page 防止并发清理误关
                     self.browser.register_external_page(detail_page)
-                assert detail_page is not None
+                if detail_page is None:
+                    raise RuntimeError("new_page 返回 None，浏览器可能已关闭")
 
                 for item in items[:max_seller_details]:
                     if not item.id:

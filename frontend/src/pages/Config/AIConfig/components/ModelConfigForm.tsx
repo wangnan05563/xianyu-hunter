@@ -18,15 +18,15 @@ export interface TestResult {
 }
 
 interface ModelConfigFormProps {
-  config: AIConfigData
-  // 局部字段更新，避免子组件直接操作父级 setState
-  onConfigChange: (patch: Partial<AIConfigData>) => void
-  showApiKey: boolean
-  onToggleShowApiKey: () => void
-  onApplyPreset: (key: keyof typeof PRESETS) => void
-  testing: boolean
-  testResult: TestResult | null
-  onTestConnection: () => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly config: AIConfigData
+  readonly onConfigChange: (patch: Partial<AIConfigData>) => void
+  readonly showApiKey: boolean
+  readonly onToggleShowApiKey: () => void
+  readonly onApplyPreset: (key: keyof typeof PRESETS) => void
+  readonly testing: boolean
+  readonly testResult: TestResult | null
+  readonly onTestConnection: () => void
 }
 
 export default function ModelConfigForm({
@@ -50,8 +50,10 @@ export default function ModelConfigForm({
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           {/* API Base URL */}
           <div>
-            <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>API Base URL</label>
+            {/* htmlFor + id 关联 label 与 input，满足可访问性（SonarQube S6853） */}
+            <label htmlFor="ai-base-url" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>API Base URL</label>
             <Input
+              id="ai-base-url"
               value={config.base_url}
               onChange={(e) => onConfigChange({ base_url: e.target.value })}
               placeholder="https://api.openai.com/v1"
@@ -64,8 +66,9 @@ export default function ModelConfigForm({
 
           {/* API Key（密码类型 + 显示/隐藏切换） */}
           <div>
-            <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>API Key</label>
+            <label htmlFor="ai-api-key" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>API Key</label>
             <Input
+              id="ai-api-key"
               type={showApiKey ? 'text' : 'password'}
               value={config.api_key}
               onChange={(e) => onConfigChange({ api_key: e.target.value })}
@@ -91,8 +94,9 @@ export default function ModelConfigForm({
           <Row gutter={16}>
             <Col span={12}>
               <div>
-                <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>文本解析模型</label>
+                <label htmlFor="ai-model-text" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>文本解析模型</label>
                 <Input
+                  id="ai-model-text"
                   value={config.model}
                   onChange={(e) => onConfigChange({ model: e.target.value })}
                   placeholder="gpt-4o-mini"
@@ -104,8 +108,9 @@ export default function ModelConfigForm({
             </Col>
             <Col span={12}>
               <div>
-                <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>Vision 模型</label>
+                <label htmlFor="ai-model-vision" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>Vision 模型</label>
                 <Input
+                  id="ai-model-vision"
                   value={config.vision_model}
                   onChange={(e) => onConfigChange({ vision_model: e.target.value })}
                   placeholder="gpt-4o"

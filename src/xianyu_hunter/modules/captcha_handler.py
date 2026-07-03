@@ -18,7 +18,6 @@
 """
 from __future__ import annotations
 
-import math
 import random
 import time
 from dataclasses import dataclass, field
@@ -259,7 +258,6 @@ class CaptchaHandler:
 
 def generate_drag_track(
     distance: float,
-    total_duration_ms: int = 500,
 ) -> DragTrack:
     """生成滑块拖动轨迹
 
@@ -271,7 +269,6 @@ def generate_drag_track(
 
     Args:
         distance: 需要拖动的总距离（像素）
-        total_duration_ms: 总时长（毫秒）
 
     Returns:
         DragTrack: 拖动轨迹点列表
@@ -280,9 +277,7 @@ def generate_drag_track(
         return DragTrack(points=[(0.0, 0.0, 0)])
 
     points: list[tuple[float, float, int]] = []
-    # 阶段划分
-    accel_end = distance * 0.3    # 加速阶段终点
-    cruise_end = distance * 0.8   # 匀速阶段终点
+    # 阶段划分：加速 0~30%，匀速 30~80%，减速 80~100%
     # 减速阶段到 distance，可能略微过冲
 
     # 生成轨迹点

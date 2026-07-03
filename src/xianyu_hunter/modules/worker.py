@@ -19,9 +19,8 @@ from typing import Any
 
 from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
 from xianyu_hunter.domain.events import Event, EventType
-from xianyu_hunter.domain.item import ItemDetail, ItemSummary
+from xianyu_hunter.domain.item import ItemSummary
 from xianyu_hunter.domain.order import BuyOutcome, BuyResult
-from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.domain.task import Task, TaskConfig, TaskMode
 from xianyu_hunter.config import get_settings
 from xianyu_hunter.infra.event_bus import EventBus
@@ -35,6 +34,9 @@ from xianyu_hunter.modules.evaluator import Evaluator
 from xianyu_hunter.modules.price_strategy import MarketContext, PriceStrategy
 
 logger = get_logger()
+
+# S1192: 评估事件类型字面量在多处重复，提取为常量
+_EVAL_SCORED_EVENT = "eval.scored"
 
 
 @dataclass
@@ -293,7 +295,9 @@ class TaskWorker:
                 return RunResult(stats=stats, should_pause=True)
 
             # 2. 去重
-            new_items = await self.dedup.filter_new(items)
+            # ItemDedup.filter_new 是同步方法（基于 repo.items_exist 批量查询），
+            # 无需 await——之前误用 await 会被 async FakeDedup 掩盖，生产环境会抛 TypeError
+            new_items = self.dedup.filter_new(items)
             stats.deduped = stats.found - len(new_items)
             if not new_items:
                 logger.info(f"[Task {self.task.id}] 全部已看过，本轮跳过")
@@ -359,13 +363,13 @@ class TaskWorker:
                         if not seller:
                             logger.info("[Task {}] 卖家主页获取失败，使用降级策略评估 {}", self.task.id, summary.id)
                             # 降级策略：合并搜索结果+详情页的卖家信息构建基本画像
-                            seller = await self.collector.seller_profile_fallback(summary=summary, detail=detail)
+                            seller = self.collector.seller_profile_fallback(summary=summary, detail=detail)
                     except Exception as e:
                         logger.warning("[Task {}] 采集异常 {}: {}", self.task.id, summary.id, e)
                         detail = None
                         # 异常时也尝试用搜索结果构建降级 SellerProfile（如果有 summary）
                         if not seller and hasattr(self, 'collector'):
-                            seller = await self.collector.seller_profile_fallback(summary=summary, detail=detail)
+                            seller = self.collector.seller_profile_fallback(summary=summary, detail=detail)
 
                     if not detail or not seller:
                         continue
@@ -420,7 +424,7 @@ class TaskWorker:
                                 if eval_result.risk_level == RiskLevel.UNKNOWN:
                                     level = "warn"  # 数据不足用 warn 级别，避免误报为错误
                                 self.repo.upsert_eval_event({
-                                    "type": "eval.scored",
+                                    "type": _EVAL_SCORED_EVENT,
                                     "task_id": self.task.id,
                                     "item_id": detail.id,  # 顶层 item_id 供前端 dataIndex 直接读取
                                     "stage": "eval",
@@ -456,7 +460,7 @@ class TaskWorker:
                         # 开启后对通过规则评估的商品自动调用 AI 二次确认
                         if _has_browser and settings.ai_enabled and eval_cfg.ai_auto_eval and settings.openai_api_key:
                             try:
-                                from xianyu_hunter.web.routes.api_ai import _call_llm_vision, _rule_eval_condition
+                                from xianyu_hunter.web.routes.api_ai import _call_llm_vision
                                 ai_result = await _call_llm_vision(
                                     detail.title, detail.description or "",
                                     detail.price or 0, detail.image_urls or [],
@@ -477,7 +481,7 @@ class TaskWorker:
                                     if self.repo:
                                         try:
                                             self.repo.update_eval_payload_by_keys(
-                                                self.task.id, detail.id, "eval.scored",
+                                                self.task.id, detail.id, _EVAL_SCORED_EVENT,
                                                 {"score": eval_result.score,
                                                  "risk_level": eval_result.risk_level.value,
                                                  "dimension_scores": eval_result.dimension_scores,
@@ -492,7 +496,7 @@ class TaskWorker:
                                 if self.repo:
                                     try:
                                         self.repo.update_eval_payload_by_keys(
-                                            self.task.id, detail.id, "eval.scored",
+                                            self.task.id, detail.id, _EVAL_SCORED_EVENT,
                                             {"score": eval_result.score,
                                              "risk_level": eval_result.risk_level.value,
                                              "dimension_scores": eval_result.dimension_scores,
@@ -507,7 +511,7 @@ class TaskWorker:
                         # 5.6 AI 深度分析（可选，消耗更多 token）
                         if _has_browser and settings.ai_enabled and eval_cfg.ai_auto_deep_analyze and settings.openai_api_key:
                             try:
-                                from xianyu_hunter.web.routes.api_ai_deep import _call_llm_deep_analyze, _fallback_deep_analyze
+                                from xianyu_hunter.web.routes.api_ai_deep import _call_llm_deep_analyze
                                 deep_result = await _call_llm_deep_analyze(
                                     detail.title, detail.description or "",
                                     detail.price or 0, detail.image_urls or [],
@@ -668,7 +672,7 @@ class TaskWorker:
             # 确保商品持久化到 items 表（去重 + 关联查询依赖此数据）
             if new_items:
                 try:
-                    await self.dedup.save(new_items, task_id=self.task.id)
+                    self.dedup.save(new_items, task_id=self.task.id)
                 except Exception as e:
                     logger.warning("[Task {}] 持久化 items 失败: {}", self.task.id, e)
             # 兜底：如果 try 块因异常未执行 _save_task_links，在 finally 中补调用

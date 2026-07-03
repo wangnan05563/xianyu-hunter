@@ -78,10 +78,10 @@ class FakeDedup:
     def __init__(self, existing: set[str] | None = None):
         self.existing = existing or set()
 
-    async def filter_new(self, items: list[ItemSummary]) -> list[ItemSummary]:
+    def filter_new(self, items: list[ItemSummary]) -> list[ItemSummary]:
         return [i for i in items if i.id not in self.existing]
 
-    async def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:
+    def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:
         self.existing.update(i.id for i in items)
         return len(items)
 

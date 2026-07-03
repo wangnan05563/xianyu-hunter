@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Awaitable
 
@@ -106,7 +106,7 @@ class TokenRenewer:
         renewer = TokenRenewer(config)
         renewer.set_cookie_provider(lambda: get_current_m5tk_cookie())
         renewer.set_renew_callback(renew_via_api_callback)
-        await renewer.start()  # 启动后台续期循环
+        renewer.start()  # 启动后台续期循环
         ...
         await renewer.stop()   # 停止
 
@@ -131,6 +131,10 @@ class TokenRenewer:
         self._session_expired_checks = 0
         self._last_renew_at: float = 0.0
         self._last_renew_result: RenewResult = RenewResult.SKIPPED
+        # 会话失效后回调触发间隔（以 _session_expired_checks 计）
+        # 为什么不只在首次触发：首次触发后若 on_renew_fail 的恢复尝试未成功，
+        # 后续持续失效将不再有任何恢复机会。周期性触发让上层能定期重试恢复
+        self._renew_fail_callback_interval = 5
         self._stats: dict[str, int] = {
             "total_checks": 0,
             "total_renewed": 0,
@@ -161,7 +165,7 @@ class TokenRenewer:
 
     # ============== 生命周期 ==============
 
-    async def start(self) -> None:
+    def start(self) -> None:
         """启动后台续期循环"""
         if self._running:
             return
@@ -234,8 +238,12 @@ class TokenRenewer:
                 self._session_expired_warned = True
             self._last_renew_result = RenewResult.SESSION_EXPIRED
             self._stats["total_failed"] += 1
-            # Cookie 完全缺失时也需触发重新登录
-            if self._renew_fail_callback and self._session_expired_checks == 0:
+            # Cookie 缺失时触发恢复：首次立即触发，之后按间隔周期性触发
+            # 周期性触发让上层 on_renew_fail 能定期重试恢复（同步 cookie / 自动重登）
+            if self._renew_fail_callback and (
+                self._session_expired_checks == 0
+                or self._session_expired_checks % self._renew_fail_callback_interval == 0
+            ):
                 self._renew_fail_callback()
             return RenewResult.SESSION_EXPIRED
 
@@ -261,7 +269,11 @@ class TokenRenewer:
                 self._session_expired_warned = True
             self._last_renew_result = RenewResult.SESSION_EXPIRED
             self._stats["total_failed"] += 1
-            if self._renew_fail_callback and self._session_expired_checks == 0:
+            # token 过期时触发恢复：首次立即触发，之后按间隔周期性触发
+            if self._renew_fail_callback and (
+                self._session_expired_checks == 0
+                or self._session_expired_checks % self._renew_fail_callback_interval == 0
+            ):
                 self._renew_fail_callback()
             return RenewResult.SESSION_EXPIRED
 

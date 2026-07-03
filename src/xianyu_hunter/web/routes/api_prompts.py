@@ -15,16 +15,16 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-
-from xianyu_hunter.container import Container
-from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/prompts", tags=["prompts"])
 
 # Prompt 文件目录
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "prompts"
+
+# Prompt 备份文件后缀：多处端点共享，提取为常量避免散落修改
+_PROMPT_BAK_SUFFIX = ".txt.bak"
 
 # Prompt 元信息：key → (文件名, 描述, 代码内置默认值)
 # 默认值从 api_ai.py 导入，保证"重置为默认"能恢复原始行为
@@ -96,7 +96,7 @@ def _write_prompt(key: str, content: str) -> None:
     path = _prompt_path(key)
     # 备份上一版（仅当文件存在且内容不同时）
     if path.exists() and path.read_text(encoding="utf-8") != content:
-        bak_path = path.with_suffix(".txt.bak")
+        bak_path = path.with_suffix(_PROMPT_BAK_SUFFIX)
         shutil.copy2(path, bak_path)
     path.write_text(content, encoding="utf-8")
 
@@ -118,7 +118,7 @@ def list_prompts() -> dict[str, Any]:
             "description": meta["description"],
             "content": current,
             "is_custom": is_custom,
-            "has_backup": path.with_suffix(".txt.bak").exists(),
+            "has_backup": path.with_suffix(_PROMPT_BAK_SUFFIX).exists(),
         })
     return {"prompts": result}
 
@@ -136,7 +136,7 @@ def get_prompt(key: str) -> dict[str, Any]:
         "description": _PROMPTS_META[key]["description"],
         "content": current,
         "is_custom": path.exists() and current != _PROMPTS_META[key]["default"],
-        "has_backup": path.with_suffix(".txt.bak").exists(),
+        "has_backup": path.with_suffix(_PROMPT_BAK_SUFFIX).exists(),
         "default": _PROMPTS_META[key]["default"],
     }
 
@@ -158,7 +158,7 @@ def update_prompt(key: str, body: PromptUpdateBody) -> dict[str, Any]:
         "ok": True,
         "key": key,
         "is_custom": body.content != _PROMPTS_META[key]["default"],
-        "has_backup": path.with_suffix(".txt.bak").exists(),
+        "has_backup": path.with_suffix(_PROMPT_BAK_SUFFIX).exists(),
     }
 
 

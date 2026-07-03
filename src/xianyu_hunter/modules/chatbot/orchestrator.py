@@ -144,7 +144,7 @@ class ChatbotOrchestrator:
         lock = await self._get_session_lock(context.session_id)
         async with lock:
             # 4. 检查转人工触发（优先级最高，即便 FAQ 命中也要转人工）
-            should_escalate, esc_reason = await self._esc.should_escalate(
+            should_escalate, esc_reason = self._esc.should_escalate(
                 context.session_id, message, context.status,
             )
             if should_escalate:
@@ -481,7 +481,7 @@ class ChatbotOrchestrator:
         - 发布 CHATBOT_ESCALATED 事件
         """
         resp = self._esc.build_escalation_response(reason)
-        await self._esc.mark_session_escalated(session_id, reason)
+        self._esc.mark_session_escalated(session_id, reason)
         yield SSEEvent(
             event=SSEEventType.ESCALATE,
             data={

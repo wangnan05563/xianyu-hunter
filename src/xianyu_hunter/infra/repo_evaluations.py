@@ -16,7 +16,6 @@ import json
 from sqlalchemy import delete, select
 
 from xianyu_hunter.infra.db_models import EvaluationRow, ItemRow
-from xianyu_hunter.infra.repository_base import RepositoryBase
 
 
 class EvaluationsMixin:

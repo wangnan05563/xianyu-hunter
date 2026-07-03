@@ -360,7 +360,7 @@ class ItemCollectionService:
         if detail is None:
             raise CollectionError(410, f"Failed to collect item {item_id}: no detail returned", item_id=item_id)
         if seller is None:
-            seller = await self.container.collector.seller_profile_fallback(None, detail)
+            seller = self.container.collector.seller_profile_fallback(None, detail)
         else:
             self._merge_detail_seller_fields(seller, detail)
 

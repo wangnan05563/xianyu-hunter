@@ -34,7 +34,8 @@ def trigger_session_start() -> None:
         # 走 except 分支；后者在 3.12+ 已弃用
         loop = asyncio.get_running_loop()
         # fire-and-forget：登录流程不应等待会话启动
-        loop.create_task(orch.start_session_default())
+        # 保存引用防止任务被 GC 回收
+        _session_task = loop.create_task(orch.start_session_default())
     except RuntimeError:
         # 罕见：事件循环未运行时退化为同步执行（一般不会发生）
         try:

@@ -50,6 +50,9 @@ _INJECT_DOMAINS = (
     _DOMAIN_TAOBAO_DOT, _DOMAIN_ALIPAY_DOT,
 )
 _DEFAULT_DOMAIN = _DOMAIN_GOOFISH_DOT
+# S1192: 提取重复字符串字面量为常量
+_COOKIE_INJECT_FAILED_PREFIX = "Cookie 注入失败: "
+_UNRECOGNIZED_FORMAT_ERROR = "无法识别文件格式，请使用 Netscape (cookies.txt) 或 JSON 格式"
 
 
 def _inject_to_sqlite(cookie_db: Path, cookies_to_inject: list[tuple[str, str]]) -> tuple[int, list[str]]:
@@ -379,12 +382,11 @@ def _filter_goofish_cookies(cookies: list[dict]) -> list[dict]:
     filtered = []
     for c in cookies:
         domain = c.get("domain", "").lower().lstrip(".")
-        # 匹配 goofish / taobao / alipay 及其子域名
-        if any(domain == d.lstrip(".") or domain.endswith(d.lstrip("."))
-               for d in _GOOFISH_DOMAINS):
-            filtered.append(c)
-        # 也保留没有明确域名但名字匹配闲鱼关键 cookie 的条目
-        elif not c.get("domain") or c["domain"] == _DEFAULT_DOMAIN:
+        # 匹配 goofish / taobao / alipay 及其子域名；也保留没有明确域名但
+        # 名字匹配闲鱼关键 cookie 的条目（S1871: 两分支均 append，合并条件）
+        if (any(domain == d.lstrip(".") or domain.endswith(d.lstrip("."))
+                for d in _GOOFISH_DOMAINS)
+                or not c.get("domain") or c["domain"] == _DEFAULT_DOMAIN):
             filtered.append(c)
     return filtered
 
@@ -539,7 +541,7 @@ async def import_cookie_path(file_path: str = Form(...)) -> JSONResponse:
     if not cookies:
         return JSONResponse(content={
             "ok": False,
-            "error": "无法识别文件格式，请使用 Netscape (cookies.txt) 或 JSON 格式",
+            "error": _UNRECOGNIZED_FORMAT_ERROR,
         })
 
     return await _do_inject_cookies(cookies, source=f"path:{path.name}")
@@ -642,10 +644,6 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
         # S5713: PermissionError 是 OSError 的子类，仅保留父类
         except OSError:
             return False
-
-    requested_keys = [k.strip() for k in keys.split(",") if k.strip()] if keys else []
-    if not requested_keys:
-        return JSONResponse(content={"ok": False, "error": "未指定要查询的 cookie key"})
 
     # ===== 策略：系统浏览器 SQLite（最新登录）→ JSON 降级（v20加密时）→ CDP 兜底 =====
     # 系统浏览器优先：用户期望读取浏览器最新登录状态
@@ -800,18 +798,18 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
                 name = c.get("name", "")
                 domain = c.get("domain", "")
                 value = c.get("value", "")
-                if name in requested_keys and any(
+                # S1066: 合并外层与"未填充"两个 if，避免嵌套
+                if (name in requested_keys and any(
                     d in domain for d in (_DOMAIN_GOOFISH, _DOMAIN_TAOBAO)
-                ):
-                    if name not in json_result:
-                        # 过滤掉测试数据（unb=123456 / cookie2=abc 等）
-                        if is_test_cookie(name, value):
-                            logger.warning(
-                                "fetch_cookie_keys: 跳过测试 Cookie %s=%s",
-                                name, value,
-                            )
-                            continue
-                        json_result[name] = value
+                ) and name not in json_result):
+                    # 过滤掉测试数据（unb=123456 / cookie2=abc 等）
+                    if is_test_cookie(name, value):
+                        logger.warning(
+                            "fetch_cookie_keys: 跳过测试 Cookie %s=%s",
+                            name, value,
+                        )
+                        continue
+                    json_result[name] = value
             if json_result:
                 logger.info(
                     "SQLite 不可读，从 CookieStore JSON 降级获取 %d 个 cookie 值: %s",
@@ -837,11 +835,11 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
             for c in pw_cookies:
                 name = c.get("name", "")
                 domain = c.get("domain", "")
-                if name in requested_keys and any(
+                # S1066: 合并外层与"未填充"两个 if，避免嵌套
+                if (name in requested_keys and any(
                     d in domain for d in (_DOMAIN_GOOFISH, _DOMAIN_TAOBAO)
-                ):
-                    if name not in cdp_result:
-                        cdp_result[name] = c.get("value", "")
+                ) and name not in cdp_result):
+                    cdp_result[name] = c.get("value", "")
             logger.info(
                 "Playwright CDP 兜底: 读取到 %d 个 cookie，匹配 %d 个目标 key: %s",
                 len(pw_cookies), len(cdp_result), list(cdp_result.keys()),

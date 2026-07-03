@@ -40,8 +40,8 @@ from xianyu_hunter.modules.cookie_rotator import CookieLayer, CookieRotator
 from xianyu_hunter.modules.fingerprint import FingerprintProfile, build_stealth_script
 from xianyu_hunter.modules.freq_disguise import ActionType, FreqDisguise
 from xianyu_hunter.modules.login_strategy import LoginStrategy, LoginStrategySelector, StrategyEvaluation
-from xianyu_hunter.modules.session_health import HealthAction, SessionHealthChecker, WAFStatus
-from xianyu_hunter.modules.token_renewer import RenewResult, RenewerConfig, TokenRenewer
+from xianyu_hunter.modules.session_health import SessionHealthChecker, WAFStatus
+from xianyu_hunter.modules.token_renewer import TokenRenewer
 
 logger = get_logger()
 
@@ -103,6 +103,11 @@ class LoginOrchestrator:
         self._started_at: float = 0.0
         self._current_strategy: LoginStrategy | None = None
         self._use_cdp: bool = False
+
+        # 自愈状态：续期失败后尝试恢复 cookie 层 / 自动重登
+        self._renew_fail_count: int = 0
+        self._auto_relogin_callback: Callable[[], Awaitable[bool]] | None = None
+        self._auto_relogin_cooldown_until: float = 0.0  # 冷却时间戳，避免频繁重登
 
     # ============== 初始化 ==============
 
@@ -173,6 +178,17 @@ class LoginOrchestrator:
         """设置 Cookie 写入函数"""
         self._cookie_rotator.set_writer(writer)
 
+    def set_auto_relogin_callback(self, callback: Callable[[], Awaitable[bool]]) -> None:
+        """设置自动重登回调
+
+        续期连续失败且 cookie 同步恢复无效时触发。回调应为无副作用的异步重登流程
+        （如 browser_login），返回 True 表示重登成功。
+
+        为什么需要：session 持续失效后若无自动重登，采集/搜索将一直不可用，
+        需人工介入。设置回调后系统可自愈。
+        """
+        self._auto_relogin_callback = callback
+
     def on_login_success(self, cookies: dict[str, str]) -> int:
         """登录成功后更新 Cookie
 
@@ -236,16 +252,65 @@ class LoginOrchestrator:
         if renew_callback:
             self._token_renewer.set_renew_callback(renew_callback)
 
-        # 设置续期失败回调：标记 Cookie 层失效
+        # 设置续期失败回调：标记 Cookie 层失效并尝试自愈
         def on_renew_fail():
             # manual=False：系统失效可被 /cookies/layers 自动同步恢复（cookie 实际有效时）
             self._cookie_rotator.invalidate_layer(CookieLayer.SESSION, manual=False)
-            logger.warning("Token 续期失败，session 层已标记失效")
+            self._renew_fail_count += 1
+            logger.warning(
+                "Token 续期失败（第 {} 次），session 层已标记失效",
+                self._renew_fail_count,
+            )
+
+            # 自愈路径 1：尝试从 CookieStore JSON 同步恢复
+            # 为什么先尝试同步：浏览器登录子进程可能已刷新 cookie 但主进程缓存未更新，
+            # 重新读 JSON 有机会恢复，成本远低于重新登录
+            recovered = sync_cookie_layers_from_json()
+            if recovered:
+                self._renew_fail_count = 0
+                logger.info("Cookie 层同步恢复成功，session 失效已自愈")
+                return
+
+            # 自愈路径 2：连续失败且超过冷却时间时触发自动重登
+            now = time.time()
+            if (
+                self._auto_relogin_callback
+                and self._renew_fail_count >= 2
+                and now >= self._auto_relogin_cooldown_until
+            ):
+                # on_renew_fail 是同步回调，异步重登需通过 create_task 触发
+                logger.error(
+                    "续期连续失败 {} 次，cookie 同步无效，触发自动重登",
+                    self._renew_fail_count,
+                )
+                # 冷却 10 分钟，避免重登失败后频繁重试
+                self._auto_relogin_cooldown_until = now + 600
+
+                async def _do_relogin():
+                    try:
+                        success = await self._auto_relogin_callback()
+                        if success:
+                            self._renew_fail_count = 0
+                            logger.info("自动重登成功，session 已恢复")
+                        else:
+                            logger.error("自动重登返回失败，等待下次重试")
+                    except Exception as e:
+                        logger.error("自动重登异常: {}", e)
+
+                try:
+                    asyncio.get_event_loop().create_task(_do_relogin())
+                except RuntimeError:
+                    logger.error("无事件循环可用，无法触发自动重登，请手动重新登录")
+            elif not self._auto_relogin_callback and self._renew_fail_count >= 2:
+                logger.error(
+                    "续期连续失败 {} 次且未配置自动重登回调，请手动重新登录",
+                    self._renew_fail_count,
+                )
 
         self._token_renewer.set_renew_fail_callback(on_renew_fail)
 
         # 启动后台续期
-        await self._token_renewer.start()
+        self._token_renewer.start()
 
         logger.info("会话管理已启动")
 
@@ -333,6 +398,9 @@ class LoginOrchestrator:
         if self._session_active:
             return True
         try:
+            # 登录成功后重置自愈状态，避免历史失败计数影响新一轮会话
+            self._renew_fail_count = 0
+            self._auto_relogin_cooldown_until = 0.0
             await self.start_session(
                 cookie_provider=self._default_cookie_provider,
                 renew_callback=self._default_renew_callback,

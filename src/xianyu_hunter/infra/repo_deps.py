@@ -9,7 +9,6 @@ from sqlalchemy import select, text as sa_text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from xianyu_hunter.infra.db_models import TaskDepRow
-from xianyu_hunter.infra.repository_base import RepositoryBase
 
 
 class TaskDepsMixin:

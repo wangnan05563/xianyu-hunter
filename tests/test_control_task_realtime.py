@@ -42,7 +42,7 @@ def tmp_repo() -> Repository:
         repo.engine.dispose()
 
 
-def _make_scheduler_with_task(task_id: str) -> tuple[TaskScheduler, AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
+def _make_scheduler_with_task(task_id: str) -> tuple[TaskScheduler, MagicMock, MagicMock, AsyncMock, MagicMock]:
     """构造一个真实 TaskScheduler 并注册一个任务，返回 scheduler + mock 方法
 
     用 asyncio.run 执行 register 协程，避免在同步 fixture 中依赖 pytest-asyncio
@@ -57,11 +57,12 @@ def _make_scheduler_with_task(task_id: str) -> tuple[TaskScheduler, AsyncMock, A
     # register 内部只是 async with lock + 字典赋值，asyncio.run 同步执行即可
     asyncio.run(scheduler.register(task, worker))
 
-    # 用 AsyncMock 包裹 scheduler 的方法以验证调用
-    scheduler.pause = AsyncMock()
-    scheduler.resume = AsyncMock()
+    # pause/resume/start 是同步方法用 MagicMock，stop 是 async 用 AsyncMock
+    # 之前误用 AsyncMock 导致 api_tasks 同步调用时 assert_awaited 失败
+    scheduler.pause = MagicMock()
+    scheduler.resume = MagicMock()
     scheduler.stop = AsyncMock()
-    scheduler.start = AsyncMock()
+    scheduler.start = MagicMock()
     scheduler.is_running = MagicMock(return_value=False)
     scheduler.list_tasks = MagicMock(return_value=[task])
 
@@ -167,7 +168,7 @@ class TestSchedulerModeRealtime:
             headers=_auth_headers(),
         )
         assert resp.status_code == 200
-        scheduler.pause.assert_awaited_once_with("t1")
+        scheduler.pause.assert_called_once_with("t1")
         assert "已暂停" in resp.json()["note"]
 
     def test_resume_calls_scheduler(self, client_scheduler_mode, tmp_repo: Repository):
@@ -180,7 +181,7 @@ class TestSchedulerModeRealtime:
             headers=_auth_headers(),
         )
         assert resp.status_code == 200
-        scheduler.resume.assert_awaited_once_with("t1")
+        scheduler.resume.assert_called_once_with("t1")
         assert "已恢复" in resp.json()["note"]
 
     def test_stop_calls_scheduler(self, client_scheduler_mode, tmp_repo: Repository):
@@ -214,7 +215,7 @@ class TestSchedulerModeRealtime:
         assert resp.status_code == 200
         # is_running=False 时不调用 stop
         scheduler.stop.assert_not_awaited()
-        scheduler.start.assert_awaited_once_with("t1")
+        scheduler.start.assert_called_once_with("t1")
         assert "已重启" in resp.json()["note"]
 
     def test_restart_running_task_calls_stop_then_start(
@@ -234,7 +235,7 @@ class TestSchedulerModeRealtime:
         )
         assert resp.status_code == 200
         scheduler.stop.assert_awaited_once_with("t1")
-        scheduler.start.assert_awaited_once_with("t1")
+        scheduler.start.assert_called_once_with("t1")
 
 
 # ============== 边界场景测试 ==============
@@ -269,7 +270,9 @@ class TestEdgeCases:
         tmp_repo.upsert_task({"id": "t_orphan", "name": "test", "keyword": "kw"})
 
         # scheduler.pause 抛 KeyError 模拟未注册
-        scheduler.pause = AsyncMock(side_effect=KeyError("任务 t_orphan 未注册"))
+        # 用 MagicMock 而非 AsyncMock：api_tasks.py 同步调用 pause（无 await），
+        # AsyncMock 的 side_effect 仅在 await 时触发，同步调用只返回 coroutine 不抛错
+        scheduler.pause = MagicMock(side_effect=KeyError("任务 t_orphan 未注册"))
 
         resp = client.post(
             "/api/tasks/t_orphan/control",
@@ -292,7 +295,8 @@ class TestEdgeCases:
         tmp_repo.upsert_task({"id": "t1", "name": "test", "keyword": "kw", "status": "running"})
 
         # scheduler.pause 抛 RuntimeError 模拟内部异常
-        scheduler.pause = AsyncMock(side_effect=RuntimeError("loop closed"))
+        # 同理用 MagicMock：同步调用需立即抛错，AsyncMock 的 side_effect 不会触发
+        scheduler.pause = MagicMock(side_effect=RuntimeError("loop closed"))
 
         resp = client.post(
             "/api/tasks/t1/control",

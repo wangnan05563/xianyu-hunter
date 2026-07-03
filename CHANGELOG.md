@@ -12,6 +12,88 @@ _本次发布周期的变更已封版至 [0.2.0]，新变更请在此段落积�
 
 ---
 
+## [0.3.0] - 2026-07-03
+
+### Summary
+
+本次发布聚焦多用户体系、任务调度自动化、多 Sheet 页工作区与远程访问能力。从单用户工具升级为支持多账号隔离与团队协作的捡漏平台，并补齐任务自动实时搜索、Cloudflare Tunnel 远程访问、SonarQube 代码质量整改等关键能力。
+
+### Added
+
+#### 多用户体系（MU1 + MU2）
+- **多用户数据层**：新增 6 张多用户 ORM 表模型，TaskRow 增加 `user_id` 字段与索引迁移。
+- **UserManager**：身份识别 `identify_or_create`、会话签发 `issue_session`、滑动续期 `verify_session`、会话注销 `revoke_session`、用户列表/状态切换/删除/账号探测等完整生命周期管理。
+- **数据迁移**：`migrate_to_multi_user` 启动时自动迁移历史 Cookie 与任务到默认用户。
+- **CookieStore 用户隔离**：按 `user_id` 维度隔离 JSON 文件与内存缓存。
+- **认证中间件三路校验**：WEB_TOKEN 直通 + session_token 校验 + 401 降级，注入 `user_id` 到请求上下文。
+- **登录流程接入**：`unified_login` 集成 UserManager，登录成功后自动签发会话并导出 Cookie。
+- **向后兼容**：`cookie_inject` / `auth_query` 调用自动补充 `user_id=default`。
+
+#### 任务管理菜单实时搜索与采集周期配置
+- **useAutoLiveSearch Hook**：任务自动实时搜索，支持倒计时、页面可见性感知、并发控制。
+- **TaskList 集成**：新增「下次搜索」倒计时列、「自动搜索」开关、「采集周期」只读列。
+- **手动/自动互斥**：折叠面板「实时查询」按钮与自动搜索互斥，避免冲突。
+- **TaskSchedulerConfig**：新增 `default_interval_seconds` / `auto_search_enabled` / `auto_search_concurrency` 配置块，支持全局默认与任务级覆盖。
+- **SearchConfig 分区**：新增「任务调度默认值」分区。
+
+#### 多 Sheet 页工作区
+- **useIsMobile**：响应式断点检测 Hook。
+- **sheetRegistry**：路径到懒加载页面组件的映射注册表。
+- **sheetStore**：Sheet 状态管理与持久化，支持 navigator 注入。
+- **useSheetSync**：URL 与当前 Sheet 双向同步。
+- **Sheet 组件套件**：SheetContent、SheetTabs、SheetPreferences、SheetWorkspace 容器。
+- **MainLayout 改造**：用 SheetWorkspace 替换 Outlet，登出时清空 Sheet 栈。
+
+#### Cloudflare Tunnel 远程访问
+- **内置 TunnelService**：零配置启动 Cloudflare Tunnel，支持远程访问本地服务。
+- **Tunnel API**：`/api/tunnel/start` / `/api/tunnel/stop` 一键开关。
+
+#### 其他
+- **全局流水号中间件**：每个请求分配 `request_id`，贯穿日志链路。
+- **钉钉通知渠道**：新增钉钉机器人推送。
+- **采集服务**：统一搜索服务标准化。
+- **前端用户菜单**：右上角用户头像下拉菜单。
+
+### Changed
+- **搜索服务标准化**：评估价格覆盖逻辑统一，钉钉通知时机修正。
+- **MainLayout 重构**：Outlet → SheetWorkspace，登出清理 Sheet 栈。
+
+### Fixed
+
+#### Scheduler 与 API 修复
+- **ResumeBlockedError ImportError**：main 分支上 `scheduler.py` 引用未定义的 `ResumeBlockedError`。
+- **api_tasks await 不匹配**：移除 `pause/resume/start` 的 `await` 调用，匹配 scheduler 同步方法签名。
+- **api_anticrawl 返回类型**：`/freq/delay` 返回 `dict | JSONResponse` Union 类型不被 Pydantic 支持，改为 `response_model=None`。
+- **5 分钟冷却**：会话过期暂停后 5 分钟内禁止重复恢复，避免雪崩。
+
+#### 多用户模块修复
+- **Cookie 文件迁移异常保护**：迁移失败不中断启动。
+- **verify_session 竞态条件**：滑动续期测试补充。
+- **issue_session 隔离**：`_log_event` 失败不影响会话签发。
+- **get_user_manager 初始化**：确保 `init_db` 在 engine 使用前调用。
+- **时间字段类型**：与现有表模式保持一致。
+- **路径遍历校验**：`_cookie_json_path` 防路径遍历攻击。
+- **代码评审整改**：2 Critical + 7 Important 问题修复。
+
+#### 任务管理与前端修复
+- **类型不一致**：`api_tasks.py` 的 `interval_seconds` 类型与 DB schema 对齐。
+- **递归调用栈**：`useAutoLiveSearch` 递归调用 `processQueue` 改为迭代。
+- **Switch 关闭未暂停**：`TaskList.tsx` Switch 关闭时未调用 `pauseAll`。
+- **defineProperty writable**：测试 L58 补齐 `writable: true`。
+- **aria-label**：Switch 补充无障碍标签。
+- **警告文本**：`SearchConfig` 自动并发警告文本优化。
+
+#### 其他修复
+- **TunnelService**：清理未使用导入，添加 `stdout=None` 防御。
+- **test_app_config**：修复 `test_app_config_loads_task_scheduler_from_yaml` 全局 `_config` 污染。
+- **SonarQube 整改**：79 个跟踪文件的代码质量问题全面修复。
+
+### Security
+- **路径遍历防护**：`_cookie_json_path` 增加路径遍历校验。
+- **认证中间件**：三方校验防止会话伪造。
+
+---
+
 ## [0.2.0] - 2026-06-29
 
 ### Summary
@@ -144,6 +226,7 @@ _本次发布周期的变更已封版至 [0.2.0]，新变更请在此段落积�
 
 ---
 
-[Unreleased]: https://github.com/wangnan05563/xianyu-hunter/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/wangnan05563/xianyu-hunter/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.1.0

@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from sqlalchemy import select, func, cast, Float
 # 别名与其他 repo_*.py 统一为 sqlite_insert
@@ -17,7 +16,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from xianyu_hunter.domain.urls import build_item_url
 from xianyu_hunter.infra.db_models import ItemRow, TaskLinkRow, TaskRow
-from xianyu_hunter.infra.repository_base import RepositoryBase, _escape_like
+from xianyu_hunter.infra.repository_base import _escape_like
 
 
 _WORD_RE = re.compile(r"[0-9a-zA-Z]+|[\u4e00-\u9fff]+")
@@ -101,7 +100,6 @@ class TaskLinksMixin:
 
     def _build_item_link_rows(
         self,
-        task_id: str,
         item_id: str,
         title: str | None,
         price: float | None = None,
@@ -182,7 +180,6 @@ class TaskLinksMixin:
     ) -> int:
         written = 0
         for link_type, link_key, display in self._build_item_link_rows(
-            task_id=task_id,
             item_id=item_id,
             title=title,
             price=price,
@@ -295,7 +292,6 @@ class TaskLinksMixin:
         batch: list[dict] = []
         for data in items_data:
             for link_type, link_key, display in self._build_item_link_rows(
-                task_id=task_id,
                 item_id=data["item_id"],
                 title=data.get("title"),
                 price=data.get("price"),
@@ -672,7 +668,6 @@ class TaskLinksMixin:
             batch: list[dict] = []
             for item_id, tid, title, price, thumb, seller_id, keyword in rows:
                 for link_type, link_key, display in self._build_item_link_rows(
-                    task_id=tid,
                     item_id=item_id,
                     title=title,
                     price=price,
@@ -711,7 +706,6 @@ class TaskLinksMixin:
                 if not task_keyword_matches_title(keyword, title):
                     continue
                 for link_type, link_key, derived_display in self._build_item_link_rows(
-                    task_id=tid,
                     item_id=item_id,
                     title=title,
                     price=display.get("price"),

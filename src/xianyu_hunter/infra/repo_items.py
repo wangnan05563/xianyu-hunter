@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from xianyu_hunter.infra.db_models import ItemRow
-from xianyu_hunter.infra.repository_base import RepositoryBase
 
 
 class ItemsMixin:

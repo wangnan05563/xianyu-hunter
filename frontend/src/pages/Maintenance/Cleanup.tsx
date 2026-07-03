@@ -84,7 +84,7 @@ export default function Maintenance() {
   // 执行缓存清理
   const handleCleanupCache = async () => {
     // 非预览模式需要用户确认，防止误操作导致数据丢失
-    if (!cacheForm.dry_run && !window.confirm('确认清理缓存？此操作不可撤销。')) {
+    if (!cacheForm.dry_run && !globalThis.confirm('确认清理缓存？此操作不可撤销。')) {
       return
     }
 
@@ -112,7 +112,7 @@ export default function Maintenance() {
   // 执行数据库清理
   const handleCleanupDatabase = async () => {
     // 数据库操作风险较高，必须二次确认
-    if (!dbForm.dry_run && !window.confirm('确认清理数据库？建议先备份数据。此操作不可撤销。')) {
+    if (!dbForm.dry_run && !globalThis.confirm('确认清理数据库？建议先备份数据。此操作不可撤销。')) {
       return
     }
 
@@ -153,12 +153,13 @@ export default function Maintenance() {
       })
       setLogResult(result)
       // 预览模式也必须给出明确反馈，否则用户无法判断是否有可清理内容
+      // 优先判断 dry_run（预览）分支：默认开启预览，肯定条件更直观
       const count = result.cleaned?.length ?? 0
-      if (!logForm.dry_run) {
+      if (logForm.dry_run) {
+        message.info(count > 0 ? `预览完成：将处理 ${count} 项日志` : '预览完成：无需要清理的日志文件')
+      } else {
         await loadStatus()
         message.success(count > 0 ? `日志清理完成，共处理 ${count} 项` : '没有需要清理的日志文件')
-      } else {
-        message.info(count > 0 ? `预览完成：将处理 ${count} 项日志` : '预览完成：无需要清理的日志文件')
       }
     } catch (error) {
       setLogResult({ errors: ['清理失败：' + String(error)] })
@@ -179,8 +180,8 @@ export default function Maintenance() {
             {result.count !== undefined && <div>完成 {result.count} 项</div>}
             {result.total_deleted !== undefined && <div>删除 {result.total_deleted} 条</div>}
             {result.total_freed_mb !== undefined && <div>释放 {result.total_freed_mb} MB</div>}
-            {result.cleaned.map((item, index) => (
-              <Text key={index} type="secondary" style={{ fontSize: 12, display: 'block' }}>
+            {result.cleaned.map((item) => (
+              <Text key={item} type="secondary" style={{ fontSize: 12, display: 'block' }}>
                 {item}
               </Text>
             ))}
@@ -188,8 +189,8 @@ export default function Maintenance() {
         ) : null}
         {result.errors?.length ? (
           <div style={{ color: '#ff4d4f' }}>
-            {result.errors.map((err, index) => (
-              <div key={index} style={{ fontSize: 12 }}>{err}</div>
+            {result.errors.map((err) => (
+              <div key={err} style={{ fontSize: 12 }}>{err}</div>
             ))}
           </div>
         ) : null}

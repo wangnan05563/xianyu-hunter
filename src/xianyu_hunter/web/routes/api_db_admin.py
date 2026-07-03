@@ -19,10 +19,9 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import inspect, text
@@ -280,7 +279,6 @@ TABLE_RELATIONS: dict[str, list[dict[str, str]]] = {
 def _cascade_delete(
     conn: Any,
     table: str,
-    pk_col_name: str,
     pk_values: list[Any],
 ) -> dict[str, int]:
     """执行级联删除/置空，返回各关联表受影响行数
@@ -317,7 +315,6 @@ def _cascade_delete(
 def _cascade_preview(
     conn: Any,
     table: str,
-    pk_col_name: str,
     pk_values: list[Any],
 ) -> list[dict[str, Any]]:
     """预览级联影响：返回每条关联规则下将被影响的行数（不执行实际操作）"""
@@ -524,7 +521,7 @@ def cascade_preview(
     converted = [_parse_value(v, pk_col["type"]) for v in body.ids]
 
     with container.repo.engine.connect() as conn:
-        preview = _cascade_preview(conn, table, pk_col["name"], converted)
+        preview = _cascade_preview(conn, table, converted)
 
     total = sum(p["count"] for p in preview)
     return {"table": table, "relations": preview, "total_affected": total}
@@ -688,7 +685,7 @@ def delete_row(
     try:
         with container.repo.engine.begin() as conn:
             # 先处理级联（必须在删主记录之前，否则找不到关联记录）
-            cascade_affected = _cascade_delete(conn, table, pk_col["name"], [pk_val])
+            cascade_affected = _cascade_delete(conn, table, [pk_val])
             # 再删主表记录
             result = conn.execute(text(f"DELETE FROM {table} WHERE {pk_col['name']} = :pk"), {"pk": pk_val})
     except SQLAlchemyError as e:
@@ -727,7 +724,7 @@ def batch_delete_rows(
     try:
         with container.repo.engine.begin() as conn:
             # 先处理级联
-            cascade_affected = _cascade_delete(conn, table, pk_col["name"], converted)
+            cascade_affected = _cascade_delete(conn, table, converted)
             # 再删主表记录
             from sqlalchemy import bindparam
             stmt = text(f"DELETE FROM {table} WHERE {pk_col['name']} IN :ids").bindparams(

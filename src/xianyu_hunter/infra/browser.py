@@ -296,7 +296,8 @@ class BrowserManager:
         """
         if self._context is None:
             await self.start()
-            assert self._context is not None
+            if self._context is None:
+                raise RuntimeError("浏览器启动后 context 仍为空")
             return await self._context.new_page()
         try:
             return await self._context.new_page()
@@ -308,7 +309,8 @@ class BrowserManager:
             except Exception:
                 pass
             await self.start()
-            assert self._context is not None
+            if self._context is None:
+                raise RuntimeError("浏览器重启后 context 仍为空")
             return await self._context.new_page()
 
     def register_external_page(self, page) -> None:
@@ -415,7 +417,7 @@ class BrowserManager:
             logger.error("add_cookies 失败: {}", e)
             return False
 
-    async def is_alive(self) -> bool:
+    def is_alive(self) -> bool:
         """检查浏览器是否还活着
 
         通过访问 context.pages 属性验证底层连接是否可用。

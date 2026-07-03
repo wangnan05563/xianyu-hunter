@@ -26,12 +26,24 @@ export interface SheetPreferences {
   enableAnimation: boolean
   /** 关闭按钮行为：true=最小化 false=直接关闭，默认 false */
   minimizeInsteadOfClose: boolean
+  /** 双击关闭开关：默认 false（保守默认，避免误触关闭未保存数据） */
+  doubleClickCloseEnabled: boolean
+  /** 双击判定间隔毫秒，范围 [200,800]，默认 350 */
+  doubleClickInterval: number
+  /** 缩略图模式：true=仅显示图标紧凑布局，默认 false */
+  thumbnailMode: boolean
+  /** 缩略图悬浮提示开关：默认 true */
+  thumbnailTooltipEnabled: boolean
 }
 
 const DEFAULT_PREFERENCES: SheetPreferences = {
   maxSheets: 5,
   enableAnimation: true,
   minimizeInsteadOfClose: false,
+  doubleClickCloseEnabled: false,
+  doubleClickInterval: 350,
+  thumbnailMode: false,
+  thumbnailTooltipEnabled: true,
 }
 
 const STATE_KEY = 'xh.sheets.state'
@@ -77,6 +89,12 @@ function navigate(state: SheetState, path: string) {
 function clampMaxSheets(n: number): number {
   if (!Number.isInteger(n)) return DEFAULT_PREFERENCES.maxSheets
   return Math.max(1, Math.min(10, n))
+}
+
+/** 钳制 doubleClickInterval 到 [200, 800]，避免过短无效或过长误判 */
+function clampDoubleClickInterval(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_PREFERENCES.doubleClickInterval
+  return Math.max(200, Math.min(800, Math.round(n)))
 }
 
 /** 从 registry 重建 sheet 元数据（icon/title） */
@@ -179,8 +197,13 @@ export const useSheetStore = create<SheetState>((set, get) => ({
     const state = get()
     const target = state.sheets.find((s) => s.id === id)
     if (!target) return
-    const next: SheetState = { ...state, activeId: id }
-    set({ activeId: id })
+    // 激活最小化 sheet 时同时恢复：否则 SheetContent 因 minimized=true 显示空状态，
+    // 用户点击 tab 后看不到内容，体验上等同"无反应"
+    const needRestore = target.minimized
+    const next: SheetState = needRestore
+      ? { ...state, sheets: state.sheets.map((s) => (s.id === id ? { ...s, minimized: false } : s)), activeId: id }
+      : { ...state, activeId: id }
+    set(needRestore ? { sheets: next.sheets, activeId: id } : { activeId: id })
     navigate(next, target.path)
     get().persist()
   },
@@ -226,6 +249,10 @@ export const useSheetStore = create<SheetState>((set, get) => ({
     const merged: SheetPreferences = { ...current, ...patch }
     // maxSheets 钳制
     if (patch.maxSheets !== undefined) merged.maxSheets = clampMaxSheets(patch.maxSheets)
+    // doubleClickInterval 钳制
+    if (patch.doubleClickInterval !== undefined) {
+      merged.doubleClickInterval = clampDoubleClickInterval(patch.doubleClickInterval)
+    }
     set({ preferences: merged })
     // 偏好独立持久化
     storage.set(PREFS_KEY, merged)
@@ -244,6 +271,21 @@ export const useSheetStore = create<SheetState>((set, get) => ({
       ...DEFAULT_PREFERENCES,
       ...savedPrefs,
       maxSheets: clampMaxSheets(savedPrefs.maxSheets),
+      // 兼容旧版本持久化数据：缺失字段时回退默认值
+      doubleClickInterval: clampDoubleClickInterval(
+        typeof savedPrefs.doubleClickInterval === 'number'
+          ? savedPrefs.doubleClickInterval
+          : DEFAULT_PREFERENCES.doubleClickInterval,
+      ),
+      doubleClickCloseEnabled: typeof savedPrefs.doubleClickCloseEnabled === 'boolean'
+        ? savedPrefs.doubleClickCloseEnabled
+        : DEFAULT_PREFERENCES.doubleClickCloseEnabled,
+      thumbnailMode: typeof savedPrefs.thumbnailMode === 'boolean'
+        ? savedPrefs.thumbnailMode
+        : DEFAULT_PREFERENCES.thumbnailMode,
+      thumbnailTooltipEnabled: typeof savedPrefs.thumbnailTooltipEnabled === 'boolean'
+        ? savedPrefs.thumbnailTooltipEnabled
+        : DEFAULT_PREFERENCES.thumbnailTooltipEnabled,
     }
 
     // 恢复 sheet 栈（丢弃 registry 中已不存在的 path，重建 icon/title）

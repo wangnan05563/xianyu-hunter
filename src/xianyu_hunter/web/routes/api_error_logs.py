@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/error-logs", tags=["error-logs"])
 
+# 错误日志不存在的统一错误消息：多处端点共享，提取为常量避免散落修改
+ERROR_LOG_NOT_FOUND_MSG = "错误日志不存在"
+
 
 class BatchActionRequest(BaseModel):
     """批量操作请求体
@@ -93,7 +96,7 @@ def get_error_log(
     """获取单条错误日志详情"""
     item = container.repo.get_error_log(error_log_id)
     if not item:
-        raise HTTPException(status_code=404, detail="错误日志不存在")
+        raise HTTPException(status_code=404, detail=ERROR_LOG_NOT_FOUND_MSG)
     return _parse_json_fields(item)
 
 
@@ -131,7 +134,7 @@ def get_ai_context(
     """
     item = container.repo.get_error_log(error_log_id)
     if not item:
-        raise HTTPException(status_code=404, detail="错误日志不存在")
+        raise HTTPException(status_code=404, detail=ERROR_LOG_NOT_FOUND_MSG)
 
     if format == "json":
         content = item.get("ai_context_json") or "{}"
@@ -150,7 +153,7 @@ def update_status(
     """更新错误日志状态"""
     success = container.repo.update_error_log_status(error_log_id, status)
     if not success:
-        raise HTTPException(status_code=404, detail="错误日志不存在")
+        raise HTTPException(status_code=404, detail=ERROR_LOG_NOT_FOUND_MSG)
     return {"status": "ok"}
 
 
@@ -162,7 +165,7 @@ def delete_error_log(
     """删除单条错误日志"""
     success = container.repo.delete_error_log(error_log_id)
     if not success:
-        raise HTTPException(status_code=404, detail="错误日志不存在")
+        raise HTTPException(status_code=404, detail=ERROR_LOG_NOT_FOUND_MSG)
     return {"status": "ok"}
 
 

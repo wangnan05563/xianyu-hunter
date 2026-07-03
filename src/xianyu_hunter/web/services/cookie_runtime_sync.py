@@ -11,8 +11,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# 多个函数共用的日志前缀默认值
+DEFAULT_LOG_PREFIX = "Cookie 同步"
 
-def cookies_from_store_for_playwright(log_prefix: str = "Cookie 同步") -> list[dict]:
+
+def cookies_from_store_for_playwright(log_prefix: str = DEFAULT_LOG_PREFIX) -> list[dict]:
     """Read fresh CookieStore JSON and convert it to Playwright add_cookies input."""
     try:
         from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
@@ -54,7 +57,7 @@ def cookies_from_store_for_playwright(log_prefix: str = "Cookie 同步") -> list
 
 async def inject_cookie_store_to_browser(
     browser,
-    log_prefix: str = "Cookie 同步",
+    log_prefix: str = DEFAULT_LOG_PREFIX,
     *,
     collector=None,
     force_refresh_m5tk: bool = True,
@@ -88,7 +91,7 @@ async def inject_cookie_store_to_browser(
 
 
 async def inject_cookie_store_to_worker_browser(
-    log_prefix: str = "Cookie 同步",
+    log_prefix: str = DEFAULT_LOG_PREFIX,
     *,
     force_refresh_m5tk: bool = True,
 ) -> bool:

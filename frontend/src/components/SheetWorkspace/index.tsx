@@ -64,6 +64,7 @@ export function SheetWorkspace() {
         <SheetTabs
           sheets={sheets}
           activeId={activeId}
+          preferences={preferences}
           onActivate={activateSheet}
           onClose={handleClose}
           onMinimize={minimizeSheet}

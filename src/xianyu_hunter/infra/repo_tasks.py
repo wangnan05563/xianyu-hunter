@@ -5,14 +5,10 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
-
 from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from xianyu_hunter.infra.db_models import _utcnow, ItemRow, TaskRow
-from xianyu_hunter.infra.repository_base import RepositoryBase
 
 
 class TasksMixin:

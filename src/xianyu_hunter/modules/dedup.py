@@ -14,7 +14,7 @@ class ItemDedup:
     def __init__(self, repo: Repository):
         self.repo = repo
 
-    async def filter_new(self, items: list[ItemSummary]) -> list[ItemSummary]:
+    def filter_new(self, items: list[ItemSummary]) -> list[ItemSummary]:
         """过滤出数据库中不存在的商品"""
         if not items:
             return []
@@ -23,7 +23,7 @@ class ItemDedup:
         new_items = [it for it in items if it.id not in existing]
         return new_items
 
-    async def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:
+    def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:
         """批量保存到 items 表（单次事务批量 upsert）
 
         task_id 用于关联商品到具体任务，使得前端可按任务查询商品列表。

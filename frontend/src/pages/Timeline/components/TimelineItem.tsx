@@ -7,13 +7,21 @@ import { ORDER_STATUS_CONFIG } from '../../../constants/orderStatus'
 import { RISK_LEVEL_CONFIG } from '../../../constants/riskLevels'
 import { parsePayload, formatRelativeTime } from '../utils'
 
+// payload 字段类型为 unknown，直接 String() 在值为对象/数组时会得到 [object Object]，
+// 因此统一封装：对象用 JSON.stringify，其他用 String，null/undefined 返回空串
+const safeStr = (v: unknown): string => {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
 interface TimelineItemProps {
-  item: TimelineEntry
-  index: number
-  isExpanded: boolean
-  onToggleExpand: (idx: number) => void
+  readonly item: TimelineEntry
+  readonly index: number
+  readonly isExpanded: boolean
+  readonly onToggleExpand: (idx: number) => void
   // 任务名映射：task_id → 任务名（用于在事件项中显示人类可读的任务标识）
-  taskMap: Map<string, string>
+  readonly taskMap: Map<string, string>
 }
 
 // 单条时间线项：根据 _kind 分发到订单详情或事件详情
@@ -35,11 +43,11 @@ export default function TimelineItem({
 }
 
 interface EventDetailProps {
-  item: TimelineEntry
-  idx: number
-  isExpanded: boolean
-  onToggleExpand: (idx: number) => void
-  taskMap: Map<string, string>
+  readonly item: TimelineEntry
+  readonly idx: number
+  readonly isExpanded: boolean
+  readonly onToggleExpand: (idx: number) => void
+  readonly taskMap: Map<string, string>
 }
 
 // 事件详情：事件类型 + 严重度 + 关键指标 + 可展开的 payload 详情
@@ -107,8 +115,8 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
           )}
           {!!payload.risk_level && (
             <span>
-              风险：<Tag color={RISK_LEVEL_CONFIG[String(payload.risk_level)]?.color || 'default'} style={{ fontSize: 10 }}>
-                {RISK_LEVEL_CONFIG[String(payload.risk_level)]?.label || String(payload.risk_level)}
+              风险：<Tag color={RISK_LEVEL_CONFIG[safeStr(payload.risk_level)]?.color || 'default'} style={{ fontSize: 10 }}>
+                {RISK_LEVEL_CONFIG[safeStr(payload.risk_level)]?.label || safeStr(payload.risk_level)}
               </Tag>
             </span>
           )}
@@ -131,9 +139,9 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
             <span>通过 {payload.passed as number} 件</span>
           )}
           {!!payload.item_id && (
-            <Tooltip title={String(payload.item_id)}>
+            <Tooltip title={safeStr(payload.item_id)}>
               <span style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                ID: {String(payload.item_id).slice(0, 12)}...
+                ID: {safeStr(payload.item_id).slice(0, 12)}...
               </span>
             </Tooltip>
           )}
@@ -145,7 +153,7 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
               if (dq === 'partial') return 'orange'
               return 'default'
             })()} style={{ fontSize: 10 }}>
-              {'数据: ' + String(payload.data_quality)}
+              {'数据: ' + safeStr(payload.data_quality)}
             </Tag>
           )}
         </div>
@@ -179,7 +187,7 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
                   .slice(0, 12)
                   .map(([k, v]) => (
                     <Descriptions.Item key={k} label={k}>
-                      {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                      {safeStr(v)}
                     </Descriptions.Item>
                   ))}
               </Descriptions>
@@ -192,8 +200,8 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
 }
 
 interface OrderDetailProps {
-  item: TimelineEntry
-  taskMap: Map<string, string>
+  readonly item: TimelineEntry
+  readonly taskMap: Map<string, string>
 }
 
 // 订单详情：状态 + 商品标题 + 金额
@@ -231,9 +239,9 @@ function OrderDetail({ item, taskMap }: OrderDetailProps) {
           </span>
         )}
         {!!payload?.item_id && (
-          <Tooltip title={String(payload.item_id)}>
+          <Tooltip title={safeStr(payload.item_id)}>
             <span style={{ fontFamily: 'monospace', fontSize: 11 }}>
-              ID: {String(payload.item_id).slice(0, 12)}...
+              ID: {safeStr(payload.item_id).slice(0, 12)}...
             </span>
           </Tooltip>
         )}

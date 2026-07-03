@@ -29,6 +29,9 @@ from xianyu_hunter.web.services.search_services import (
 
 router = APIRouter(prefix="/api/chatbot", tags=["chatbot"])
 
+# 会话不存在的错误消息：多处端点统一返回此消息，提取为常量避免散落修改
+SESSION_NOT_FOUND_MSG = "会话不存在"
+
 
 def _get_chatbot_or_403() -> dict[str, Any]:
     """获取 chatbot 子容器，未启用时抛 403
@@ -184,7 +187,7 @@ def get_session(session_id: str) -> dict[str, Any]:
     if session is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+            detail={"code": "SESSION_NOT_FOUND", "message": SESSION_NOT_FOUND_MSG},
         )
     return session
 
@@ -197,7 +200,7 @@ def delete_session(session_id: str) -> dict[str, Any]:
     if not ok:
         raise HTTPException(
             status_code=404,
-            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+            detail={"code": "SESSION_NOT_FOUND", "message": SESSION_NOT_FOUND_MSG},
         )
     return {"ok": True, "id": session_id}
 
@@ -211,7 +214,7 @@ def update_session_title(session_id: str, req: SessionUpdateTitleRequest) -> dic
     if repo.get_session(session_id) is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+            detail={"code": "SESSION_NOT_FOUND", "message": SESSION_NOT_FOUND_MSG},
         )
     repo.update_session_title(session_id, req.title)
     return repo.get_session(session_id)
@@ -225,7 +228,7 @@ def update_session_favorite(session_id: str, req: SessionUpdateFavoriteRequest) 
     if repo.get_session(session_id) is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+            detail={"code": "SESSION_NOT_FOUND", "message": SESSION_NOT_FOUND_MSG},
         )
     repo.update_session_favorite(session_id, req.is_favorite)
     return repo.get_session(session_id)
@@ -239,7 +242,7 @@ def end_session(session_id: str) -> dict[str, Any]:
     if repo.get_session(session_id) is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+            detail={"code": "SESSION_NOT_FOUND", "message": SESSION_NOT_FOUND_MSG},
         )
     repo.update_session_status(session_id, "ended")
     return {"ok": True, "id": session_id, "status": "ended"}
@@ -258,7 +261,7 @@ def list_messages(
     if repo.get_session(session_id) is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+            detail={"code": "SESSION_NOT_FOUND", "message": SESSION_NOT_FOUND_MSG},
         )
     items = repo.list_messages(session_id, limit=limit, before_id=before_id)
     # has_more + oldest_id 用于前端下次分页游标
@@ -297,7 +300,7 @@ def trigger_escalation(req: EscalationTriggerRequest) -> dict[str, Any]:
     if repo.get_session(req.session_id) is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+            detail={"code": "SESSION_NOT_FOUND", "message": SESSION_NOT_FOUND_MSG},
         )
     repo.update_session_status(req.session_id, "escalated")
     return {"ok": True, "session_id": req.session_id, "status": "escalated"}
@@ -367,7 +370,7 @@ def export_session_for_escalation(session_id: str) -> dict[str, Any]:
     if session is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "SESSION_NOT_FOUND", "message": "会话不存在"},
+            detail={"code": "SESSION_NOT_FOUND", "message": SESSION_NOT_FOUND_MSG},
         )
     # 取较大 limit 覆盖整个会话（list_messages 按 created_at ASC 排序）
     messages = repo.list_messages(session_id, limit=1000)

@@ -101,41 +101,43 @@ const COLUMN_DEFINITIONS: ColumnConfig[] = [
 function formatPublishTime(raw: string | number | null | undefined): string | null {
   if (raw === null || raw === undefined || raw === '') return null
   const d = new Date(raw)
-  if (isNaN(d.getTime())) return null
+  // 用 Number.isNaN 替代全局 isNaN：全局 isNaN 会先强制转字符串，可能误判非数字值
+  if (Number.isNaN(d.getTime())) return null
   return d.toLocaleString('zh-CN', { hour12: false })
 }
 
 // 缩略图兜底：URL 为空或加载失败时显示占位符
-function ThumbCell({ url, title }: { url?: string | null; title?: string | null }) {
+function ThumbCell({ url, title }: { readonly url?: string | null; readonly title?: string | null }) {
   const [errored, setErrored] = useState(false)
   // url 变化时重置 errored：官方采集更新图片后需重新尝试加载，
   // 否则旧失败状态残留导致 React 复用实例时永远显示占位图
   useEffect(() => { setErrored(false) }, [url])
-  if (!url || errored) {
+  // 改写为肯定条件：URL 有效且未触发错误时走主流程，避免否定条件认知负担
+  if (url && !errored) {
     return (
-      <div
-        style={{
-          width: 50, height: 50, borderRadius: 6,
-          background: '#f5f5f5', color: 'var(--xh-text-quaternary)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-        title={title || '暂无图片'}
-      >
-        <PictureOutlined style={{ fontSize: 20 }} />
-      </div>
+      <Image
+        src={url}
+        referrerPolicy="no-referrer"
+        width={50}
+        height={50}
+        style={{ objectFit: 'cover', borderRadius: 6, background: 'var(--xh-bg-code)' }}
+        preview={{ mask: '预览' }}
+        onError={() => setErrored(true)}
+        alt={title || ''}
+      />
     )
   }
   return (
-    <Image
-      src={url}
-      referrerPolicy="no-referrer"
-      width={50}
-      height={50}
-      style={{ objectFit: 'cover', borderRadius: 6, background: 'var(--xh-bg-code)' }}
-      preview={{ mask: '预览' }}
-      onError={() => setErrored(true)}
-      alt={title || ''}
-    />
+    <div
+      style={{
+        width: 50, height: 50, borderRadius: 6,
+        background: '#f5f5f5', color: 'var(--xh-text-quaternary)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+      title={title || '暂无图片'}
+    >
+      <PictureOutlined style={{ fontSize: 20 }} />
+    </div>
   )
 }
 
@@ -143,9 +145,9 @@ function ThumbCell({ url, title }: { url?: string | null; title?: string | null 
 // 后端 _normalize_deep_result 已把 signals/damages/inconsistencies 统一归并到 signals 字段，
 // 所以前端只需消费 check.signals，不需要按维度区分字段名
 type DeepCheckPanelProps = {
-  title: string
-  check: DeepCheckResult
-  signalLabel: string
+  readonly title: string
+  readonly check: DeepCheckResult
+  readonly signalLabel: string
 }
 function DeepCheckPanel({ title, check, signalLabel }: DeepCheckPanelProps) {
   const riskColor = (() => {
@@ -201,6 +203,17 @@ function DeepCheckPanel({ title, check, signalLabel }: DeepCheckPanelProps) {
       </div>
     </div>
   )
+}
+
+// O-13-26 综合结论 Tag：从父组件 IIFE 抽到模块顶层，
+// 避免每次父组件 render 都新建组件实例导致 reconciliation 失败
+type VerdictTagProps = {
+  readonly verdict: 'recommend' | 'caution' | 'reject'
+}
+function VerdictTag({ verdict }: VerdictTagProps) {
+  const tagColor = verdict === 'recommend' ? 'success' : verdict === 'caution' ? 'warning' : 'error'
+  const label = verdict === 'recommend' ? '推荐' : verdict === 'caution' ? '谨慎' : '拒绝'
+  return <Tag color={tagColor}>{label}</Tag>
 }
 
 export default function Evaluations() {
@@ -401,7 +414,8 @@ export default function Evaluations() {
   // 根据目标通过率自动推算建议阈值（从当前页面数据降序排列取分位点）
   const computeSuggestedThreshold = (targetRate: number): number => {
     if (items.length === 0) return 0
-    const sortedScores = [...items.map(item => item.payload.score ?? 0)].sort((a, b) => b - a)
+    // map 已返回新数组，再 [...arr] 包一层属于多余克隆
+    const sortedScores = items.map(item => item.payload.score ?? 0).sort((a, b) => b - a)
     const targetCount = Math.ceil(items.length * targetRate / 100)
     return sortedScores[Math.min(targetCount - 1, sortedScores.length - 1)] ?? 0
   }
@@ -589,8 +603,8 @@ export default function Evaluations() {
     if (fTaskId) params.task_id = fTaskId
     if (fScore[0] > 0) params.min_score = fScore[0]
     if (fScore[1] < 100) params.max_score = fScore[1]
-    if (fDate && fDate[0]) params.start_time = fDate[0].format('YYYY-MM-DD')
-    if (fDate && fDate[1]) params.end_time = fDate[1].format('YYYY-MM-DD')
+    if (fDate?.[0]) params.start_time = fDate[0].format('YYYY-MM-DD')
+    if (fDate?.[1]) params.end_time = fDate[1].format('YYYY-MM-DD')
     if (fBrand) params.brand = fBrand
     // 'all' 时不传给后端，等价于不过滤，减少参数传输
     if (fSold !== 'all') params.sold_filter = fSold
@@ -633,10 +647,11 @@ export default function Evaluations() {
   // 修复：之前 setPage(1) + load() 会用旧 page 闭包加载一次，导致双重请求
   // 改为：page 变化时由 useEffect 自动触发 load；page 未变时手动调用 load
   const onSearch = () => {
-    if (page !== 1) {
-      setPage(1)  // useEffect 会自动触发 load（filtersRef.current 已是最新）
-    } else {
+    // 改用肯定条件：page 已是 1 时直接 load，否则切到 1 由 useEffect 触发
+    if (page === 1) {
       load()
+    } else {
+      setPage(1)  // useEffect 会自动触发 load（filtersRef.current 已是最新）
     }
   }
   const onReset = () => {
@@ -644,10 +659,10 @@ export default function Evaluations() {
     setPriceRange([null, null]); setIncludeOutOfRange(false)
     // 重置后需要用新条件重新加载
     filtersRef.current = { itemId: '', taskId: '', scoreRange: [0, 100] as [number, number], dateRange: null, brandFilter: '', soldFilter: 'all', resultCategory: null, priceRange: [null, null] as [number | null, number | null], includeOutOfRange: false }
-    if (page !== 1) {
-      setPage(1)  // useEffect 会自动触发 load
-    } else {
+    if (page === 1) {
       load()
+    } else {
+      setPage(1)  // useEffect 会自动触发 load
     }
   }
 
@@ -805,7 +820,7 @@ export default function Evaluations() {
       title: '图片', key: 'thumb', width: 70,
       render: (_: unknown, r: EvalItem) => {
         const url = r.payload?.thumb_url as string | undefined
-        return <ThumbCell url={url} title={r.payload?.item_title as string | undefined} />
+        return <ThumbCell url={url} title={r.payload?.item_title} />
       },
     },
     {
@@ -844,11 +859,11 @@ export default function Evaluations() {
       // 视觉权重：昵称 > 信用度；缺数据时显示 ID 后备文案，避免空荡荡
       title: '卖家', key: 'seller', width: 170, ellipsis: true,
       render: (_: unknown, r: EvalItem) => {
-        const nick = r.payload?.seller_nick as string | undefined
-        const id = r.payload?.seller_id as string | undefined
+        const nick = r.payload?.seller_nick
+        const id = r.payload?.seller_id
         const credit = r.payload?.seller_credit as string | undefined
         // 真实昵称优先级：清洗后的 seller_nick > seller_id（截短）> '—'
-        const hasNick = !!(nick && nick.trim())
+        const hasNick = !!nick?.trim()
         const displayName = (() => {
           if (hasNick) return nick
           if (id) return `用户 ${id.slice(0, 8)}`
@@ -876,13 +891,16 @@ export default function Evaluations() {
       title: '地区', key: 'region', width: 90,
       render: (_: unknown, r: EvalItem) => {
         const region = r.payload?.region as string | undefined
-        if (!region) return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
-        return (
-          <span>
-            <EnvironmentOutlined style={{ marginRight: 4, color: '#fa8c16' }} />
-            {region}
-          </span>
-        )
+        // 改写为肯定条件：有 region 时走主流程，避免否定条件认知负担
+        if (region) {
+          return (
+            <span>
+              <EnvironmentOutlined style={{ marginRight: 4, color: '#fa8c16' }} />
+              {region}
+            </span>
+          )
+        }
+        return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
       },
     },
     {
@@ -890,9 +908,12 @@ export default function Evaluations() {
       // 空值显示"—"，与商品列表页对齐
       title: '品牌', key: 'brand', width: 90, ellipsis: true,
       render: (_: unknown, r: EvalItem) => {
-        const brand = r.payload?.brand as string | undefined
-        if (!brand) return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
-        return <Tooltip title={brand}>{brand}</Tooltip>
+        const brand = r.payload?.brand
+        // 改写为肯定条件：有 brand 时走主流程
+        if (brand) {
+          return <Tooltip title={brand}>{brand}</Tooltip>
+        }
+        return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
       },
     },
     {
@@ -1125,20 +1146,21 @@ export default function Evaluations() {
       title: '订单', key: 'order_status', width: 90,
       render: (_: unknown, r: EvalItem) => {
         const status = r.payload?.order_status as string | undefined
-        if (!status) {
-          return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
+        // 改写为肯定条件：有 status 时走映射主流程
+        if (status) {
+          // 订单状态映射：颜色与文案与 Orders 页面保持一致
+          const statusMap: Record<string, { color: string; label: string }> = {
+            pending_pay: { color: 'orange', label: '待支付' },
+            paid: { color: 'blue', label: '已支付' },
+            succeeded: { color: 'green', label: '已成功' },
+            takeover_pending: { color: 'gold', label: '接管中' },
+            cancelled: { color: 'default', label: '已取消' },
+            failed: { color: 'red', label: '失败' },
+          }
+          const cfg = statusMap[status] || { color: 'default', label: status }
+          return <Tag color={cfg.color}>{cfg.label}</Tag>
         }
-        // 订单状态映射：颜色与文案与 Orders 页面保持一致
-        const statusMap: Record<string, { color: string; label: string }> = {
-          pending_pay: { color: 'orange', label: '待支付' },
-          paid: { color: 'blue', label: '已支付' },
-          succeeded: { color: 'green', label: '已成功' },
-          takeover_pending: { color: 'gold', label: '接管中' },
-          cancelled: { color: 'default', label: '已取消' },
-          failed: { color: 'red', label: '失败' },
-        }
-        const cfg = statusMap[status] || { color: 'default', label: status }
-        return <Tag color={cfg.color}>{cfg.label}</Tag>
+        return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
       },
     },
     {
@@ -1177,17 +1199,20 @@ export default function Evaluations() {
   // 为什么用 useMemo 派生而非修改 useColumnConfig：折叠列宽是系统行为，
   // 与用户手动配置的显隐/排序正交，保持 hook 通用性
   const adaptedColumns = useMemo(() => {
-    if (!panelCollapsed) return columns
-    return columns.map((col) => {
-      switch (col.key) {
-        case 'task_id': return { ...col, responsive: undefined }
-        case 'title': return { ...col, width: 280 }
-        case 'seller': return { ...col, width: 220 }
-        case 'publish': return { ...col, responsive: undefined }
-        case 'condition_tags': return { ...col, width: 180 }
-        default: return col
-      }
-    })
+    // 改写为肯定条件：折叠时走列宽自适应主流程
+    if (panelCollapsed) {
+      return columns.map((col) => {
+        switch (col.key) {
+          case 'task_id': return { ...col, responsive: undefined }
+          case 'title': return { ...col, width: 280 }
+          case 'seller': return { ...col, width: 220 }
+          case 'publish': return { ...col, responsive: undefined }
+          case 'condition_tags': return { ...col, width: 180 }
+          default: return col
+        }
+      })
+    }
+    return columns
   }, [columns, panelCollapsed])
 
   // 应用列配置：根据用户拖拽顺序重排 + 跳过已隐藏的列
@@ -1201,7 +1226,7 @@ export default function Evaluations() {
   // 品牌选项：从当前已加载的评估列表中提取（payload.brand 由后端 enrich 补充）
   // 分页场景下选项可能不完整，用户可清空筛选后重新选择，与商品列表页策略一致
   const brandOptions = [...new Set(
-    items.map((i) => i.payload?.brand as string | undefined).filter(Boolean)
+    items.map((i) => i.payload?.brand).filter(Boolean)
   )].sort((a, b) => String(a).localeCompare(String(b)))
 
   // 展开行：详细信息 + 卖家价格趋势
@@ -1906,28 +1931,7 @@ export default function Evaluations() {
                   {
                     key: 'verdict',
                     label: '综合结论',
-                    children: (
-                      (() => {
-                        const verdict = deepResult.overall_verdict
-                        let tagColor: string
-                        let label: string
-                        if (verdict === 'recommend') {
-                          tagColor = 'success'
-                          label = '推荐'
-                        } else if (verdict === 'caution') {
-                          tagColor = 'warning'
-                          label = '谨慎'
-                        } else {
-                          tagColor = 'error'
-                          label = '拒绝'
-                        }
-                        return (
-                          <Tag color={tagColor}>
-                            {label}
-                          </Tag>
-                        )
-                      })()
-                    ),
+                    children: <VerdictTag verdict={deepResult.overall_verdict} />,
                   },
                   {
                     key: 'score',

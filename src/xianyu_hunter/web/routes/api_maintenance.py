@@ -344,11 +344,11 @@ def cleanup_logs(
             mtime = datetime.fromtimestamp(f.stat().st_mtime)
             size_mb = f.stat().st_size / 1024 / 1024
 
-            should_delete = False
-            if target in ("old_logs", "all") and mtime < cutoff:
-                should_delete = True
-            elif target in ("large_logs", "all") and size_mb > 10:
-                should_delete = True
+            # S1871: 两个分支都设置 should_delete=True，合并条件简化逻辑
+            should_delete = (
+                (target in ("old_logs", "all") and mtime < cutoff)
+                or (target in ("large_logs", "all") and size_mb > 10)
+            )
 
             if should_delete:
                 if req.dry_run:

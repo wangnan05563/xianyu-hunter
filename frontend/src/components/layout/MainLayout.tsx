@@ -20,7 +20,6 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   AppstoreOutlined,
-  ApiOutlined,
   SettingOutlined,
   DatabaseOutlined,
   ClearOutlined,
@@ -99,12 +98,6 @@ const menuItems = [
   { type: 'divider' as const },
   // 智能客服：独立一级菜单，对话入口（配置在"配置管理"分组中）
   { key: '/chatbot', icon: <MessageOutlined />, label: '智能客服' },
-  { type: 'divider' as const },
-  {
-    key: '/about',
-    icon: <InfoCircleOutlined />,
-    label: '关于',
-  },
 ]
 
 // 路由 → 面包屑映射
@@ -615,15 +608,6 @@ function LayoutContent({
 
             {/* 用户菜单：头像 + 昵称，悬浮显示 Cookie 健康面板（含换号/退出） */}
             <UserMenu userInfo={userInfo} />
-            <a
-              href="/api/docs"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ fontSize: 12, color: themeToken.colorTextSecondary, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-              title="API 文档（新窗口打开）"
-            >
-              <ApiOutlined /> API 文档
-            </a>
           </div>
         </Header>
         <Content id="main-content" style={{ overflow: 'hidden', background: themeToken.colorBgLayout }}>
