@@ -1145,7 +1145,7 @@ export default function TaskList() {
             />
             <Table
               size="small"
-              rowKey={(r, idx) => `${r.link_type}-${r.link_key}-${idx}`}
+              rowKey={(r) => `${r.link_type}-${r.link_key}-${r.filter_reason}`}
               dataSource={liveFilterSummary.filtered_out}
               pagination={{ pageSize: 10 }}
               columns={[

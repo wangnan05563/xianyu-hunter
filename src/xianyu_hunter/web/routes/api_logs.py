@@ -37,6 +37,10 @@ router = APIRouter(prefix="/api/logs", tags=["logs"])
 # 日志格式：... | LEVEL | [req=req-20260701120000537-a3b2c1] | module:func:line - msg
 _REQUEST_ID_PATTERN = re.compile(r"\[req=([^\]]+)\]")
 
+# 运行日志文件名：多处端点共享，提取为常量避免散落修改
+STDOUT_LOG_FILENAME = "run.stdout.log"
+STDERR_LOG_FILENAME = "run.stderr.log"
+
 
 # ============== F-08 搜索/过滤 列表 ==============
 @router.get("")
@@ -53,7 +57,7 @@ def list_logs(
         return {"items": rows, "count": len(rows), "source": "db"}
     base = Path(os.getcwd())
     out: list[dict[str, Any]] = []
-    for fname in ("run.stdout.log", "run.stderr.log"):
+    for fname in (STDOUT_LOG_FILENAME, STDERR_LOG_FILENAME):
         p = base / fname
         if p.exists():
             text = p.read_text(encoding="utf-8", errors="replace")
@@ -178,7 +182,8 @@ def tag_event(
     if payload:
         try:
             p = json.loads(payload) if isinstance(payload, str) else (payload or {})
-        except (json.JSONDecodeError, TypeError, ValueError):
+        # S5713: json.JSONDecodeError 是 ValueError 的子类，冗余已移除
+        except (TypeError, ValueError):
             p = {}
     tags = list(p.get("tags") or [])
     if tag not in tags:
@@ -285,7 +290,7 @@ def _export_log_file() -> StreamingResponse:
     """导出原始 log 文件拼接流"""
     base = Path(os.getcwd())
     chunks: list[str] = []
-    for fname in ("run.stdout.log", "run.stderr.log"):
+    for fname in (STDOUT_LOG_FILENAME, STDERR_LOG_FILENAME):
         p = base / fname
         if p.exists():
             chunks.append(f"===== {fname} =====\n")
@@ -324,7 +329,7 @@ async def stream_logs(
     request_id 参数：从日志行中解析 [req=xxx] token 过滤，
     只推送同链路的日志行，便于前端实时追踪单次请求的执行过程。
     """
-    stdout_path = Path(os.getcwd()) / "run.stdout.log"
+    stdout_path = Path(os.getcwd()) / STDOUT_LOG_FILENAME
     last_size = stdout_path.stat().st_size if stdout_path.exists() else 0
 
     async def gen():

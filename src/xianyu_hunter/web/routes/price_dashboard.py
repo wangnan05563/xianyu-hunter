@@ -22,7 +22,6 @@ from sqlalchemy import select, func
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import ItemRow, TaskLinkRow, TaskRow, _utcnow
 from xianyu_hunter.web.deps import get_container
-from xianyu_hunter.web.utils import to_datetime
 
 router = APIRouter(prefix="/api", tags=["price-dashboard"])
 

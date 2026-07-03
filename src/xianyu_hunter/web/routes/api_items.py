@@ -7,13 +7,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from xianyu_hunter.container import Container
-from xianyu_hunter.infra.item_display_sync import sync_item_display_from_detail
 from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/items", tags=["items"])

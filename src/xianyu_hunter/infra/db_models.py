@@ -7,8 +7,8 @@ SQLite 不存储时区信息，统一 UTC 避免本地时区混淆。
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
-from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -35,6 +35,11 @@ def _utcnow() -> datetime:
     SQLite 不存储时区信息，但 Python 侧统一 UTC 避免混淆。
     """
     return datetime.now(timezone.utc)
+
+
+# S1192: 提取迁移函数中重复的正则为模块级常量
+# S6353: [A-Za-z0-9_] 等价于 ASCII 模式下的 \w，使用 re.ASCII 保证不匹配 Unicode 字母
+_IDENT_RE = re.compile(r'^[A-Za-z_]\w*$', re.ASCII)
 
 
 class Base(DeclarativeBase):
@@ -904,10 +909,6 @@ def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) 
 
     table/column/col_type 仅接受内部硬编码值，通过白名单校验防止注入。
     """
-    # 白名单校验：仅允许字母数字和下划线，防止SQL注入
-    import re
-    # S6353: [A-Za-z0-9_] 等价于 ASCII 模式下的 \w，使用 re.ASCII 保证不匹配 Unicode 字母
-    _IDENT_RE = re.compile(r'^[A-Za-z_]\w*$', re.ASCII)
     # col_type 允许类型名 + DEFAULT + 数字 + 空格 + 单引号字符串字面量
     # （如 "INTEGER DEFAULT 0" / "TEXT DEFAULT 'default'"）
     # 为什么允许单引号：DEFAULT 子句的字符串字面量需单引号包裹（SQL 语法要求）
@@ -928,9 +929,6 @@ def _migrate_create_index(engine: Engine, table: str, index_name: str, columns: 
 
     columns 为逗号分隔的列名列表，如 "task_id, source"。
     """
-    import re
-    # S6353: [A-Za-z0-9_] 等价于 ASCII 模式下的 \w
-    _IDENT_RE = re.compile(r'^[A-Za-z_]\w*$', re.ASCII)
     if not _IDENT_RE.match(table) or not _IDENT_RE.match(index_name):
         return
     # 校验每个列名
@@ -953,10 +951,7 @@ def _migrate_make_column_nullable(engine: Engine, table: str, column: str) -> No
     事务安全：整个重建过程包裹在单一事务中（engine.begin），任一步骤失败自动回滚。
     残留清理：迁移前先 DROP TABLE IF EXISTS {table}_old，避免上次失败残留导致永久阻塞。
     """
-    import re
     from loguru import logger
-    # S6353: [A-Za-z0-9_] 等价于 ASCII 模式下的 \w
-    _IDENT_RE = re.compile(r'^[A-Za-z_]\w*$', re.ASCII)
     if not (_IDENT_RE.match(table) and _IDENT_RE.match(column)):
         return
 

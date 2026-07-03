@@ -22,6 +22,10 @@ from xianyu_hunter.infra.logger import get_logger
 logger = get_logger()
 
 
+# S1192: vendor 字面量在预设 profile 和 dataclass 默认值中重复，提取为常量
+_VENDOR_GOOGLE = "Google Inc."
+_VENDOR_INTEL = "Intel Inc."
+
 # ============== 预设指纹配置文件 ==============
 # 每份 profile 代表一台真实存在的设备配置，所有字段内部一致
 # 关键约束：UA / 硬件 / 屏幕 / GPU 必须互相匹配，不能交叉矛盾
@@ -36,10 +40,10 @@ _PRESET_PROFILES: list[dict[str, Any]] = [
             "Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
         ),
         "platform": "Win32",
-        "vendor": "Google Inc.",
+        "vendor": _VENDOR_GOOGLE,
         "hardware_concurrency": 8,
         "device_memory": 8,
-        "gpu_vendor": "Intel Inc.",
+        "gpu_vendor": _VENDOR_INTEL,
         "gpu_renderer": "Intel(R) Iris(R) Xe Graphics",
         "screen_width": 1920,
         "screen_height": 1080,
@@ -58,7 +62,7 @@ _PRESET_PROFILES: list[dict[str, Any]] = [
             "Chrome/130.0.0.0 Safari/537.36"
         ),
         "platform": "Win32",
-        "vendor": "Google Inc.",
+        "vendor": _VENDOR_GOOGLE,
         "hardware_concurrency": 12,
         "device_memory": 16,
         "gpu_vendor": "Google Inc. (AMD)",
@@ -80,10 +84,10 @@ _PRESET_PROFILES: list[dict[str, Any]] = [
             "Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
         ),
         "platform": "Win32",
-        "vendor": "Google Inc.",
+        "vendor": _VENDOR_GOOGLE,
         "hardware_concurrency": 12,
         "device_memory": 16,
-        "gpu_vendor": "Intel Inc.",
+        "gpu_vendor": _VENDOR_INTEL,
         "gpu_renderer": "Intel(R) UHD Graphics 770",
         "screen_width": 1920,
         "screen_height": 1080,
@@ -102,10 +106,10 @@ _PRESET_PROFILES: list[dict[str, Any]] = [
             "Chrome/129.0.0.0 Safari/537.36"
         ),
         "platform": "Win32",
-        "vendor": "Google Inc.",
+        "vendor": _VENDOR_GOOGLE,
         "hardware_concurrency": 4,
         "device_memory": 8,
-        "gpu_vendor": "Intel Inc.",
+        "gpu_vendor": _VENDOR_INTEL,
         "gpu_renderer": "Intel(R) UHD Graphics 730",
         "screen_width": 1920,
         "screen_height": 1080,
@@ -124,7 +128,7 @@ _PRESET_PROFILES: list[dict[str, Any]] = [
             "Chrome/131.0.0.0 Safari/537.36"
         ),
         "platform": "Win32",
-        "vendor": "Google Inc.",
+        "vendor": _VENDOR_GOOGLE,
         "hardware_concurrency": 16,
         "device_memory": 32,
         "gpu_vendor": "Google Inc. (NVIDIA)",
@@ -154,12 +158,12 @@ class FingerprintProfile:
     name: str
     ua: str
     platform: str = "Win32"
-    vendor: str = "Google Inc."
+    vendor: str = _VENDOR_GOOGLE
 
     # 硬件 — 必须与 UA 声称的设备匹配
     hardware_concurrency: int = 8
     device_memory: int = 8
-    gpu_vendor: str = "Intel Inc."
+    gpu_vendor: str = _VENDOR_INTEL
     gpu_renderer: str = "Intel(R) Iris(R) Xe Graphics"
 
     # 屏幕 — 必须与设备类型匹配

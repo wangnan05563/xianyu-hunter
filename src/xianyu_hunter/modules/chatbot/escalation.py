@@ -60,7 +60,7 @@ class Escalation:
         self._config = config
         self._session_timeout_min = session_timeout_min
 
-    async def should_escalate(
+    def should_escalate(
         self,
         session_id: str,
         user_message: str,
@@ -136,7 +136,7 @@ class Escalation:
         """
         return _sanitize_session_for_copy(session_data)
 
-    async def mark_session_escalated(self, session_id: str, reason: str) -> None:
+    def mark_session_escalated(self, session_id: str, reason: str) -> None:
         """更新会话状态为 escalated 并记录原因到 metadata_json
 
         escalation_reason 写入 session.metadata_json 供审计追溯

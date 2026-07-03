@@ -41,8 +41,8 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const config = await configApi.get()
-      // 深拷贝作为原始值
-      set({ config, original: JSON.parse(JSON.stringify(config)), loading: false })
+      // 深拷贝作为原始值（structuredClone 性能更好且保留 Date 等类型，SonarQube S7784）
+      set({ config, original: structuredClone(config), loading: false })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '加载配置失败'
       set({ error: msg, loading: false })
@@ -58,7 +58,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   reset: () => {
     const { original } = get()
     if (original) {
-      set({ config: JSON.parse(JSON.stringify(original)) })
+      set({ config: structuredClone(original) })
     }
   },
 
@@ -68,7 +68,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       await configApi.save(config, false)
-      set({ original: JSON.parse(JSON.stringify(config)), loading: false })
+      set({ original: structuredClone(config), loading: false })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '保存配置失败'
       set({ error: msg, loading: false })
@@ -109,7 +109,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       await configApi.save(config, false)
-      set({ original: JSON.parse(JSON.stringify(config)), loading: false })
+      set({ original: structuredClone(config), loading: false })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '保存配置失败'
       set({ error: msg, loading: false })
@@ -137,15 +137,18 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     const originalValue = get().getFieldOriginal(path)
     // 路径不存在时不写入，避免在 config 上创建 undefined 键
     if (originalValue === undefined) return
-    // 深拷贝 config 避免引用问题
-    const newConfig = JSON.parse(JSON.stringify(config)) as AppConfig
+    // 深拷贝 config 避免引用问题（structuredClone 保留类型，无需 as 断言）
+    const newConfig = structuredClone(config)
     const keys = path.split('.')
     let target: unknown = newConfig
     for (let i = 0; i < keys.length - 1; i++) {
       if (target == null || typeof target !== 'object') return
       target = (target as Record<string, unknown>)[keys[i]]
     }
-    if (target == null || typeof target !== 'object') return
+    if (target == null || typeof target !== 'object') {
+      // 加大括号避免 SonarQube S2681 误判下一条赋值语句属于 if 体
+      return
+    }
     ;(target as Record<string, unknown>)[keys[keys.length - 1]] = originalValue
     set({ config: newConfig })
   },

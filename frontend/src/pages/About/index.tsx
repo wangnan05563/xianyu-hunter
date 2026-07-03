@@ -39,7 +39,7 @@ export default function About() {
   const { state, run, copy } = useUpdateChecker(info.version)
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ height: '100%' }}>
       <Header
         style={{
           background: token.colorBgContainer,
@@ -48,9 +48,7 @@ export default function About() {
           alignItems: 'center',
           justifyContent: 'space-between',
           boxShadow: '0 1px 4px rgba(0, 0, 0, 0.04)',
-          position: 'sticky',
-          top: 0,
-          zIndex: 10,
+          flex: '0 0 auto',
           height: 56,
         }}
       >
@@ -66,7 +64,7 @@ export default function About() {
           {TEXTS.backToConsole}
         </Button>
       </Header>
-      <Content style={{ background: token.colorBgLayout, overflow: 'auto' }}>
+      <Content style={{ background: token.colorBgLayout, overflow: 'auto', flex: 1 }}>
         <div className="xh-about-content">
           <h1
             className="xh-about-h1"

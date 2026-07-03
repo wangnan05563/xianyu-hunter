@@ -12,12 +12,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from xianyu_hunter.modules.cron_utils import (
     next_run_time,
-    parse_cron,
     validate_cron,
 )
 

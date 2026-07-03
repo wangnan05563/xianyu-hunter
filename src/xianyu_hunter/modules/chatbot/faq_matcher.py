@@ -139,7 +139,7 @@ class FAQMatcher:
             dot += a * b
             norm_a += a * a
             norm_b += b * b
-        if norm_a == 0.0 or norm_b == 0.0:
+        if norm_a <= 0.0 or norm_b <= 0.0:
             return 0.0
         return dot / ((norm_a ** 0.5) * (norm_b ** 0.5))
 

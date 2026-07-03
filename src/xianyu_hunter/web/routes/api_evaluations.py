@@ -1,7 +1,6 @@
 """评估明细 API"""
 from __future__ import annotations
 
-import asyncio
 import json
 import math
 import re
@@ -15,7 +14,6 @@ from pydantic import BaseModel, Field
 from xianyu_hunter.container import Container
 from xianyu_hunter.domain.evaluation import RiskLevel
 from xianyu_hunter.infra.db_models import _utcnow
-from xianyu_hunter.infra.item_display_sync import sync_item_display_from_detail
 from xianyu_hunter.infra.yaml_config import get_config
 from xianyu_hunter.modules.collector_utils import normalize_display_fields
 from xianyu_hunter.web.deps import get_container
@@ -26,18 +24,22 @@ router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
 
 # S1192: 提取重复字符串字面量为常量，避免散落维护
 _BROKEN_LABEL = "有故障/维修"
+_USED_TRACE_LABEL = "有使用痕迹"
+_EVAL_TYPE_PREFIX = "eval."
+_EVAL_SCORED_TYPE = "eval.scored"
 # 已知污染模式：早期 DOM 解析脚本错误写入的字段值
 _REGION_PATTERNS = re.compile(r"^[\u4e00-\u9fa5]{2,4}$")  # 纯 2-4 字中文（省/市）
 _CREDIT_PATTERNS = re.compile(r"^.*(信用|极好|良好|优秀|信誉).*$")
+# match() 不要求匹配到字符串结尾，移除尾部 .* 降低正则复杂度（S5843）
 _PUBLISH_TIME_PATTERNS = re.compile(
-    r".*(周内|天内|小时前|分钟前|月前|刚刚|今天|昨天|前天|秒前|\d+\s*(分钟|小时|天|周|月)前).*"
+    r".*(周内|天内|小时前|分钟前|月前|刚刚|今天|昨天|前天|秒前|\d+\s*(分钟|小时|天|周|月)前)"
 )
 # 卖家昵称脏数据识别用的关键词集合
 # 必须包含所有可能的污染值（如"几乎全新"、"全新"等成色关键词）
 _POLLUTED_NICK_KEYWORDS = {
     "全新", "未拆封", "未使用", "未拆", "99新", "95新", "9成新", "几乎全新",
     "近全新", "近新", "9.5新", "9.9新", "8成新", "8.5新", "85新", "7成新",
-    "正常使用", "使用过", "有使用痕迹", "明显使用", "外观磨损", "有划痕", "磕碰",
+    "正常使用", "使用过", _USED_TRACE_LABEL, "明显使用", "外观磨损", "有划痕", "磕碰",
     "维修", "维修过", "拆修", "故障", "损坏", "已坏", "屏幕破损", "进水", "摔过",
     "原装", "原厂", "正品", "原盒", "原包装", "带发票", "带保修", "在保",
     "裸机", "无包装", "无配件",
@@ -335,7 +337,7 @@ def list_evaluations(
     # 当非 eval 事件多时会遗漏数据且 total 不准。改为 SQL 端按 type 前缀过滤。
     # 不传 limit/offset，全量加载 eval.* 事件（评估事件已按 task_id+item_id 去重，量级可控），
     # 后续在 Python 端做 item_id/task_id 模糊匹配、score/time 范围过滤，再分页。
-    rows, _ = container.repo.list_events_by_type_prefix(type_prefix="eval.")
+    rows, _ = container.repo.list_events_by_type_prefix(type_prefix=_EVAL_TYPE_PREFIX)
 
     # 价格范围默认值：用户未显式传 min_price/max_price 但传了 task_id 时，
     # 自动从 task 表读取任务级价格配置，解决"评估明细显示超范围商品"问题。
@@ -416,7 +418,7 @@ def list_evaluations(
 
     evals = []
     for r in rows:
-        if not str(r.get("type", "")).startswith("eval."):
+        if not str(r.get("type", "")).startswith(_EVAL_TYPE_PREFIX):
             continue
         payload = r.get("payload") or {}
 
@@ -546,7 +548,7 @@ _CONDITION_KEYWORDS = {
         "score_bonus": 0,
     },
     "used": {  # 中度使用
-        "labels": ["8成新", "8.5新", "85新", "9成新以下", "正常使用", "使用过", "有使用痕迹"],
+        "labels": ["8成新", "8.5新", "85新", "9成新以下", "正常使用", "使用过", _USED_TRACE_LABEL],
         "score_bonus": -1,
     },
     "worn": {  # 明显使用
@@ -577,7 +579,7 @@ _CONDITION_KEYWORDS_LABEL_MAP = {
     "99新": "近全新", "95新": "近全新", "9成新": "近全新", "几乎全新": "近全新",
     "近全新": "近全新", "近新": "近全新", "9.5新": "近全新", "9.9新": "近全新",
     "8成新": "正常使用", "8.5新": "正常使用", "85新": "正常使用", "7成新": "明显使用",
-    "正常使用": "正常使用", "使用过": "正常使用", "有使用痕迹": "正常使用",
+    "正常使用": "正常使用", "使用过": "正常使用", _USED_TRACE_LABEL: "正常使用",
     "明显使用": "明显使用", "外观磨损": "明显使用", "有划痕": "明显使用", "磕碰": "明显使用",
     "维修": _BROKEN_LABEL, "维修过": _BROKEN_LABEL, "拆修": _BROKEN_LABEL,
     "故障": _BROKEN_LABEL, "损坏": _BROKEN_LABEL, "已坏": _BROKEN_LABEL,
@@ -739,7 +741,7 @@ def auto_collect_stats(
         success_count = conn.execute(
             select(func.count())
             .select_from(EventRow)
-            .where(EventRow.type == "eval.scored")
+            .where(EventRow.type == _EVAL_SCORED_TYPE)
             .where(EventRow.created_at >= cutoff)
             .where(func.json_extract(EventRow.payload, '$.data_source') == 'official')
         ).scalar() or 0
@@ -846,7 +848,7 @@ def evaluations_distribution(
     # 从 events 拉 eval.*，并 join items 拿价格（item_id 在 payload.item_id）
     # 修复：之前用 list_events(limit=5000) + list_items(limit=5000) 全量加载，
     # 改为按 type 前缀过滤 events，按涉及 item_id 批量查询 items
-    events, _ = container.repo.list_events_by_type_prefix(type_prefix="eval.")
+    events, _ = container.repo.list_events_by_type_prefix(type_prefix=_EVAL_TYPE_PREFIX)
     # 收集涉及的 item_id 用于批量查询 items
     dist_item_ids: set[str] = set()
     for ev in events:
@@ -872,7 +874,7 @@ def evaluations_distribution(
     eval_records: list[tuple[float, float | None]] = []  # (score, price_or_None)
     insufficient_count = 0  # 数据不足的评估数
     for e in events:
-        if not str(e.get("type", "")).startswith("eval."):
+        if not str(e.get("type", "")).startswith(_EVAL_TYPE_PREFIX):
             continue
         ts = e.get("created_at", "")
         if not ts:
@@ -1295,7 +1297,7 @@ def submit_eval_feedback(
         raise HTTPException(status_code=400, detail="feedback 必须为 accurate/inaccurate/partial")
 
     # 查找该商品最新的评估事件
-    event_type = "eval.scored"
+    event_type = _EVAL_SCORED_TYPE
     payload_updates: dict[str, Any] = {
         "feedback": feedback,
         "feedback_note": note or "",
@@ -1319,7 +1321,7 @@ def submit_eval_feedback(
                 task_id_in_payload, item_id, event_type, payload_updates
             )
         else:
-            raise HTTPException(status_code=404, detail=f"评估记录缺少 task_id，无法更新")
+            raise HTTPException(status_code=404, detail="评估记录缺少 task_id，无法更新")
 
     if not updated:
         raise HTTPException(status_code=404, detail=f"未找到商品 {item_id} 的评估记录")
@@ -1337,7 +1339,7 @@ def feedback_stats(
 
     返回各反馈类型的数量和准确率，用于监控评估系统整体表现。
     """
-    rows, _ = container.repo.list_events_by_type_prefix("eval.scored", limit=50000)
+    rows, _ = container.repo.list_events_by_type_prefix(_EVAL_SCORED_TYPE, limit=50000)
     stats: dict[str, int] = {"accurate": 0, "inaccurate": 0, "partial": 0, "no_feedback": 0}
     for r in rows:
         payload = r.get("payload")
@@ -1410,7 +1412,7 @@ def recompute_evaluations(
     # 拉取所有评估事件
     # 修复：之前用 list_events(limit=10000) 在 Python 端过滤，改为 SQL 端按 type 前缀过滤
     all_eval_events, _ = container.repo.list_events_by_type_prefix(
-        type_prefix="eval.", task_id=task_id
+        type_prefix=_EVAL_TYPE_PREFIX, task_id=task_id
     )
     eval_events = all_eval_events
 
@@ -1507,7 +1509,7 @@ def recompute_evaluations(
                         logger.warning(f"补写 items 表失败 item_id={item_id}: {e}")
                 # 使用 upsert 按 task_id+item_id 去重，防止重复评估
                 container.repo.upsert_eval_event({
-                    "type": "eval.scored",
+                    "type": _EVAL_SCORED_TYPE,
                     "task_id": link.get("task_id") or task_id or "",
                     "item_id": detail.id,
                     "stage": "eval",
@@ -1719,7 +1721,7 @@ def batch_evaluate_unevaluated(
             return None
 
     # 1. 获取所有已评估的 item_id 集合
-    eval_events, _ = container.repo.list_events_by_type_prefix(type_prefix="eval.")
+    eval_events, _ = container.repo.list_events_by_type_prefix(type_prefix=_EVAL_TYPE_PREFIX)
     evaluated_ids: set[str] = set()
     for e in eval_events:
         payload = e.get("payload") or {}
@@ -1818,7 +1820,7 @@ def batch_evaluate_unevaluated(
             if eval_result.risk_level == RiskLevel.UNKNOWN:
                 level = "warn"
             container.repo.upsert_eval_event({
-                "type": "eval.scored",
+                "type": _EVAL_SCORED_TYPE,
                 "task_id": effective_task_id,
                 "item_id": item_id,
                 "stage": "eval",
@@ -1875,130 +1877,6 @@ async def _ensure_official_collect_cookies(container: Container) -> None:
     except CollectionError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
     return
-
-    """检查浏览器是否持有有效的闲鱼登录 Cookie，无效时尝试从 JSON 补注入
-
-    为什么需要 JSON 补注入：服务重启后浏览器实例从 SQLite 加载 cookies，
-    但 SQLite 可能被锁或同步失败，导致 cookies 仅存在于 JSON 文件中。
-    此时通过 Playwright context.add_cookies() 直接注入到浏览器内存。
-
-    P3 增强：除了检查 cookie 存在性，还检查 expires 字段判断是否过期。
-    过期 cookie 会导致 page.goto 被 30s 超时浪费，前置检查可快速失败返回 440。
-    """
-    if not container.browser:
-        return
-
-    async def _get_cookies() -> list[dict]:
-        try:
-            return await container.browser.get_cookies()
-        except Exception as e:
-            logger.warning("读取浏览器 Cookie 失败: {}", e)
-            return []
-
-    def _cookie_by_name(cookies: list[dict]) -> dict[str, dict]:
-        return {
-            str(c.get("name") or ""): c
-            for c in cookies
-            if str(c.get("name") or "")
-        }
-
-    def _expired_identity_cookies(cookies_by_name: dict[str, dict]) -> list[str]:
-        """检查关键 cookie 的 expires 字段，返回已过期的 cookie 名列表。"""
-        import time as _time
-
-        now = _time.time()
-        expired = []
-        for name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
-            c = cookies_by_name.get(name)
-            if not c:
-                continue
-            expires = c.get("expires", -1)
-            # 仅 persistent cookie 且已过期才记录；session cookie（expires<=0）跳过
-            if expires > 0 and expires < now:
-                expired.append(name)
-        return expired
-
-    from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
-
-    def _cookies_from_json() -> tuple[list[dict], dict[str, str]]:
-        """读取 CookieStore JSON，返回可注入 cookie 和关键 cookie 最新值。"""
-        store = get_cookie_store()
-        store.invalidate_cache()
-        json_data = store._read_json()
-        if not json_data or not json_data.get("cookies"):
-            return [], {}
-
-        pw_cookies: list[dict] = []
-        identity_values: dict[str, str] = {}
-        for c in json_data["cookies"]:
-            name = str(c.get("name") or "")
-            value = str(c.get("value") or "")
-            if not name or not value:
-                continue
-            # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
-            if is_test_cookie(name, value):
-                logger.warning("官方采集：跳过测试 Cookie {}={}，不注入浏览器", name, value)
-                continue
-
-            item = {
-                "name": name,
-                "value": value,
-                "domain": c.get("domain") or ".goofish.com",
-                "path": c.get("path") or "/",
-            }
-            expires = c.get("expires", -1)
-            if expires and expires > 0:
-                item["expires"] = expires
-            pw_cookies.append(item)
-            if name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
-                identity_values[name] = value
-        return pw_cookies, identity_values
-
-    async def _cookie_issues(json_identity_values: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
-        cookies_by_name = _cookie_by_name(await _get_cookies())
-        missing = [n for n in _OFFICIAL_COLLECT_IDENTITY_COOKIES if n not in cookies_by_name]
-        expired = _expired_identity_cookies(cookies_by_name)
-        stale = [
-            n for n, value in json_identity_values.items()
-            if n in cookies_by_name and cookies_by_name[n].get("value") != value
-        ]
-        return missing, expired, stale
-
-    pw_cookies, json_identity_values = _cookies_from_json()
-    missing, expired, stale = await _cookie_issues(json_identity_values)
-    if not missing and not expired and not stale:
-        return
-
-    # 浏览器缺少、过期或仍持有旧关键 cookie 时，尝试从 CookieStore JSON 补/替换注入。
-    if pw_cookies:
-        logger.info(
-            "官方采集：准备从 CookieStore JSON 注入 cookie，missing={}, expired={}, stale={}",
-            missing, expired, stale,
-        )
-        try:
-            success = await container.browser.add_cookies(pw_cookies)
-            if success:
-                logger.info("从 CookieStore JSON 补注入/替换 {} 个 cookie 到浏览器", len(pw_cookies))
-                # 同步 CookieRotator 层状态：补注入成功说明 JSON 持有有效 cookie，
-                # 若层状态从未初始化（updated_at==0.0），此处补救同步避免 /cookies/layers 误显示失效
-                try:
-                    from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
-                    sync_cookie_layers_from_json()
-                except Exception as e:
-                    logger.debug("官方采集补注入后同步层状态失败: {}", e)
-            else:
-                logger.warning("从 CookieStore JSON 注入 cookie 后关键 Cookie 验证未通过")
-        except Exception as e:
-            logger.warning("从 JSON 补注入 cookie 失败: {}", e)
-
-    # 重新检查补注入后是否仍缺少/过期/陈旧
-    missing, expired, stale = await _cookie_issues(json_identity_values)
-    if expired:
-        logger.warning("官方采集：关键 Cookie 已过期 {}，需重新登录闲鱼", expired)
-        raise HTTPException(
-            status_code=440,
-            detail=f"闲鱼登录 Cookie 已过期（{', '.join(expired)}），请重新登录闲鱼",
-        )
     if stale:
         raise HTTPException(
             status_code=440,
@@ -2090,310 +1968,6 @@ async def _collect_official_and_evaluate(
             "sold_count": seller.sold_count if seller else 0,
         },
         "reviews": result.reviews,
-        "evaluation": {
-            "score": eval_result.score,
-            "risk_level": eval_result.risk_level.value,
-            "dimension_scores": eval_result.dimension_scores,
-            "reject_reasons": eval_result.reject_reasons,
-            "is_passed": eval_result.is_passed,
-            "data_quality": eval_result.data_quality,
-            "data_source": "official",
-        },
-    }
-
-    """完整官方采集：执行 detail + seller + reviews + 重新评估 + events 写入的端到端流程
-
-    语义：
-        完整官方采集，调用方在进入本函数前应先执行
-        ``_ensure_official_collect_cookies(container)`` 完成 Cookie 同步，
-        随后本函数按以下顺序完成端到端采集与评估：
-
-    流程步骤（按代码顺序）：
-        1. (前置, 由调用方完成) ``_ensure_official_collect_cookies`` 采集前 Cookie 同步
-        2. ``container.collector.detail(item_id, page=own_page)`` 采集商品详情
-           （own_page 复用给后续评价提取，避免二次开页）
-        3. 并行执行 ``_extract_reviews_from_page(own_page)`` +
-           ``container.collector.seller_profile(detail.seller_id)``，
-           两者无依赖关系，并行可节省 1-3s
-        4. 卖家主页采集失败时降级：
-           ``container.collector.seller_profile_fallback(None, detail)``
-           用详情页中提取的卖家信息构建基本画像
-        5. 持久化到 ``items`` / ``sellers`` / ``task_links.display``，
-           items 字段使用 ``_coalesce`` 旧值保留策略（新值为空时保留旧值，
-           避免半残数据覆盖本地搜索已写入的有效数据；``_ALWAYS_OVERWRITE``
-           集合中的字段除外）
-        6. ``evaluator.evaluate(detail, seller)`` 用完整数据重新评估
-        7. 更新 ``events`` 表，写 ``eval.scored`` 事件并标记
-           ``data_source=official``
-
-    与 refresh_item 的区别：
-        ``api_items.py:refresh_item`` 是轻量刷新，仅采集 detail 并 ``upsert_item``，
-        不做卖家主页 / 评价提取 / 重新评估 / events 写入。本函数是 refresh_item 的
-        "超集"，适合需要完整画像与最新评估分的场景。
-
-    Args:
-        container: 应用容器，提供 ``collector`` / ``repo`` / ``evaluator`` 等依赖。
-        item_id: 商品 ID。
-        task_id: 关联任务 ID，用于写回 items.task_id / events.task_id。
-            为空时尝试从 ``get_eval_payload_by_item`` 或现有 items 行回填。
-
-    Returns:
-        dict: 包含 ``ok`` / ``item_id`` / ``collected`` / ``item`` / ``seller``
-        / ``reviews`` / ``evaluation`` 字段。其中 ``evaluation.data_source``
-        固定为 ``"official"``。
-    """
-    from xianyu_hunter.domain.item import ItemDetail
-    from xianyu_hunter.domain.seller import SellerProfile
-
-    # 1. 采集商品详情（传入 own_page 以便后续提取评价）
-    own_page = await container.browser.new_page()
-    detail: ItemDetail | None = None
-    reviews: list[str] = []
-    seller: SellerProfile | None = None
-    try:
-        detail = await container.collector.detail(item_id, page=own_page)
-        if detail is None:
-            # 尝试从页面 URL/标题获取更精准的失败原因
-            page_url = ""
-            page_title = ""
-            try:
-                page_url = own_page.url
-                page_title = await own_page.title()
-            except Exception:
-                pass
-            logger.warning(
-                "官方采集失败：detail() 返回 None，item_id={}, page_url={}, page_title={}",
-                item_id, page_url, page_title,
-            )
-            # 根据页面 URL/标题 区分用户可操作的失败原因
-            # 差异化状态码：440=cookie失效、441=反爬触发、410=商品下架/未加载
-            # 仍保留 502 仅给浏览器断连等系统级故障，避免用户误以为是系统问题
-            if "login" in page_url.lower() or "passport" in page_url.lower():
-                raise HTTPException(
-                    status_code=440,
-                    detail="采集商品详情失败：页面被重定向到登录页，请重新登录闲鱼后重试",
-                )
-            if "verify" in page_url.lower() or "captcha" in page_url.lower():
-                raise HTTPException(
-                    status_code=441,
-                    detail="采集商品详情失败：触发闲鱼验证码，请手动完成验证后重试",
-                )
-            # 首页标题检测：cookie 失效后闲鱼 SPA 在商品 URL 下渲染首页内容
-            if page_title and ("闲不住" in page_title or page_title.strip() == "闲鱼"):
-                raise HTTPException(
-                    status_code=440,
-                    detail="采集商品详情失败：闲鱼登录已过期，页面被重定向到首页，请重新登录闲鱼后重试",
-                )
-            raise HTTPException(
-                status_code=410,
-                detail=f"采集商品 {item_id} 详情失败：页面可能未正常加载或商品已下架（标题/价格未提取到），请稍后重试",
-            )
-
-        # 2. 并行执行：评价提取（依赖 own_page）+ 卖家主页采集（独立 page）
-        # 两者无依赖关系，并行可节省 1-3s（卖家主页 page.goto 与 reviews DOM 提取重叠）
-        # 注意：reviews 必须在 own_page 关闭前完成，所以放在同一个 try-finally 内
-        async def _safe_seller_profile() -> SellerProfile | None:
-            if not detail or not detail.seller_id:
-                return None
-            try:
-                return await container.collector.seller_profile(detail.seller_id)
-            except Exception as e:
-                logger.warning("采集卖家主页失败 seller={}: {}", detail.seller_id, e)
-                return None
-
-        reviews, seller = await asyncio.gather(
-            _extract_reviews_from_page(own_page),
-            _safe_seller_profile(),
-        )
-    finally:
-        await own_page.close()
-
-    # 卖家主页采集失败时降级：用详情页中提取的卖家信息构建基本画像
-    if seller is None:
-        seller = await container.collector.seller_profile_fallback(None, detail)
-    else:
-        # 卖家主页采集成功但部分字段为空时，用详情页数据补充
-        # 新版闲鱼卖家主页信用分通过图片显示，无法文本提取；注册天数已从卖家主页移除
-        if not seller.nick and detail.detail_seller_nick:
-            seller.nick = detail.detail_seller_nick
-        if seller.credit_score is None and detail.detail_credit_score is not None:
-            seller.credit_score = detail.detail_credit_score
-        if not seller.sold_count and detail.detail_sold_count:
-            seller.sold_count = detail.detail_sold_count
-        # 注册天数：新版闲鱼卖家主页已无此字段，从详情页的"来闲鱼X天"补充
-        if not seller.register_days and detail.detail_register_days:
-            seller.register_days = detail.detail_register_days
-
-    # 3. 持久化到 items 表
-    import json as _json
-    existing_item = container.repo.get_item(item_id) or {}
-    effective_task_id = task_id or ""
-    if not effective_task_id:
-        existing_payload = container.repo.get_eval_payload_by_item(item_id)
-        if existing_payload:
-            effective_task_id = existing_payload.get("task_id", "") or ""
-    if not effective_task_id:
-        effective_task_id = str(existing_item.get("task_id") or "")
-
-    new_item_row = {
-        "id": item_id,
-        "task_id": effective_task_id,
-        "title": detail.title,
-        "price": detail.price,
-        "description": detail.description or "",
-        "image_urls": _json.dumps(detail.image_urls, ensure_ascii=False) if detail.image_urls else None,
-        "seller_id": detail.seller_id or "",
-        "region": detail.region or "",
-        "want_cnt": detail.want_cnt,
-        "view_cnt": detail.view_cnt,
-        "thumb_url": detail.thumb_url or "",
-        "publish_time": detail.publish_time,
-        # 销售状态：来自采集侧 detail() 的页面已售关键词检测
-        "is_sold": 1 if detail.is_sold else 0,
-    }
-    # P0 修复：官方采集不应清空已有非空字段
-    # 旧值保留策略：新值为 None/空字符串/0 时保留旧值
-    # 仅当新值有有效内容时才覆盖
-    def _is_blank(v: object) -> bool:
-        if v is None:
-            return True
-        if isinstance(v, str) and v == "":
-            return True
-        # 仅当新值为 None 或空字符串时视为 blank；数字 0 是合法值
-        # （如新发布商品浏览数 0、卖家在售数 0 等），不能被当成"缺失"
-        return False
-
-    def _coalesce(new_val: object, old_val: object) -> object:
-        """新值为空时保留旧值，避免官方采集半残数据覆盖本地搜索已写入的有效数据"""
-        return old_val if _is_blank(new_val) else new_val
-
-    # 允许覆盖的字段（官方采集应优先更新采集时刻 + 来源信息）
-    # 数字 0 是合法值（_is_blank 已修正不再当作 blank），所以这些字段
-    # 走 ALWAYS_OVERWRITE 不会因新值为 0 而误判为"缺失"
-    # 注意：image_urls 不在此集合中——采集未获取到图片时应保留旧值，
-    # 而非用 None 覆盖清空已有图片数据（走 _coalesce 逻辑）
-    _ALWAYS_OVERWRITE = {"task_id", "publish_time", "view_cnt", "want_cnt", "region", "seller_id", "is_sold"}
-
-    try:
-        old_item = existing_item
-        item_row = {
-            k: (new_item_row[k] if k in _ALWAYS_OVERWRITE else _coalesce(new_item_row[k], old_item.get(k)))
-            for k in new_item_row.keys()
-        }
-        container.repo.upsert_item(item_row)
-        # 标记采集来源为 official，供统计端点（auto-collect-stats）按来源筛选
-        # 失败不阻断主流程：update_data_source 失败仅记录日志
-        try:
-            container.repo.update_data_source(item_id, "official")
-        except Exception as ds_err:
-            logger.warning("更新 data_source=official 失败 item={}: {}", item_id, ds_err)
-        # 已售时同步 task_links.display.is_sold（前端列表读 display）
-        if detail.is_sold:
-            container.repo.mark_sold(item_id)
-    except Exception as e:
-        logger.warning("更新 items 表失败 item={}: {}", item_id, e)
-
-    # 官方采集完成后也要同步 task_links.display。brand 为空时代表详情页无法验证旧品牌，
-    # 必须写回空值，避免评估明细继续从旧 display 读到错误品牌。
-    if effective_task_id:
-        try:
-            sync_item_display_from_detail(container.repo, effective_task_id, item_id, detail, source="auto")
-        except Exception as e:
-            logger.warning("同步 task_links.display 失败 item={}: {}", item_id, e)
-
-    # 4. 持久化到 sellers 表
-    if seller and seller.id and seller.id != "unknown":
-        seller_row = {
-            "id": seller.id,
-            "nick": seller.nick or "",
-            "credit_score": seller.credit_score,
-            "register_days": seller.register_days,
-            "on_sale_count": seller.on_sale_count,
-            "sold_count": seller.sold_count,
-            "last_visited": _utcnow(),
-        }
-        try:
-            container.repo.upsert_seller(seller_row)
-        except Exception as e:
-            logger.warning("更新 sellers 表失败 seller={}: {}", seller.id, e)
-
-    # 5. 用完整数据重新评估
-    evaluator = container.evaluator
-    eval_result = evaluator.evaluate(detail, seller)
-
-    # 6. 更新评估事件（标记数据来源为官方采集）
-    score_display = eval_result.score if eval_result.score is not None else "N/A"
-    if eval_result.is_passed:
-        level = "info"
-    elif eval_result.risk_level != RiskLevel.EXTREME:
-        level = "warn"
-    else:
-        level = "err"
-    if eval_result.risk_level == RiskLevel.UNKNOWN:
-        level = "warn"
-
-    eval_payload = {
-        "task_id": effective_task_id or "",  # 写入 payload 保持与其他路径一致
-        "item_id": item_id,
-        "item_title": detail.title,
-        "item_price": detail.price,
-        "item_description": detail.description or "",
-        "seller_id": detail.seller_id or "",
-        "seller_nick": seller.nick if seller else "",
-        "seller_credit_score": seller.credit_score if seller else None,
-        "seller_on_sale_count": seller.on_sale_count if seller else 0,
-        "seller_sold_count": seller.sold_count if seller else 0,
-        "seller_register_days": seller.register_days if seller else 0,
-        "score": eval_result.score,
-        "risk_level": eval_result.risk_level.value,
-        "dimension_scores": eval_result.dimension_scores,
-        "reject_reasons": eval_result.reject_reasons,
-        "is_passed": eval_result.is_passed,
-        "data_quality": eval_result.data_quality,
-        "data_source": "official",  # 标记数据来源为官方页面采集
-        "collected_at": _utcnow().isoformat(),
-        "reviews": reviews,  # 评价信息（可能为空）
-        "image_urls": detail.image_urls if detail.image_urls else [],
-    }
-
-    if effective_task_id:
-        try:
-            container.repo.upsert_eval_event({
-                "type": "eval.scored",
-                "task_id": effective_task_id,
-                "item_id": item_id,
-                "stage": "eval",
-                "level": level,
-                "message": f"商品 {item_id} 官方采集评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
-                "payload": _json.dumps(eval_payload, ensure_ascii=False, default=str),
-            })
-        except Exception as e:
-            logger.warning("更新评估事件失败 item={}: {}", item_id, e)
-
-    return {
-        "ok": True,
-        "item_id": item_id,
-        "collected": True,
-        "item": {
-            "title": detail.title,
-            "price": detail.price,
-            "description": detail.description or "",
-            "image_urls": detail.image_urls or [],
-            "thumb_url": detail.thumb_url or "",
-            "region": detail.region or "",
-            "seller_id": detail.seller_id or "",
-            "want_cnt": detail.want_cnt,
-            "view_cnt": detail.view_cnt,
-        },
-        "seller": {
-            "id": seller.id if seller else "",
-            "nick": seller.nick if seller else "",
-            "credit_score": seller.credit_score if seller else None,
-            "register_days": seller.register_days if seller else 0,
-            "on_sale_count": seller.on_sale_count if seller else 0,
-            "sold_count": seller.sold_count if seller else 0,
-        },
-        "reviews": reviews,
         "evaluation": {
             "score": eval_result.score,
             "risk_level": eval_result.risk_level.value,

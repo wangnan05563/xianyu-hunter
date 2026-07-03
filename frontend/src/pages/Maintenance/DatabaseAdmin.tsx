@@ -62,7 +62,49 @@ const PAGE_SIZE = 50
 function formatCell(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'object') return JSON.stringify(value)
+  // 显式处理 string：避免后续 String() 误判对象为 [object Object]（S6551）
+  if (typeof value === 'string') return value
   return String(value)
+}
+
+// 表单初值转字符串：对象字段用 JSON.stringify 避免得到 [object Object]（S6551）
+function toFormString(value: unknown): string {
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+// CSV 解析（简单实现，支持引号转义；生产环境建议用 papaparse）
+// 提取到组件外避免每次渲染重建闭包（S7721）
+function parseCSV(text: string): string[][] {
+  const rows: string[][] = []
+  let cur: string[] = []
+  let val = ''
+  let inQuote = false
+  // 去除 UTF-8 BOM：用 codePointAt 替代 charCodeAt 以正确处理 Unicode（S7758）
+  if (text.codePointAt(0) === 0xfeff) text = text.slice(1)
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    if (inQuote) {
+      if (ch === '"' && text[i + 1] === '"') { val += '"'; i++ }
+      else if (ch === '"') { inQuote = false }
+      else { val += ch }
+    } else if (ch === '"') {
+      // else 块只含 if 时改为 else if 链，减少嵌套层级（S6660）
+      inQuote = true
+    } else if (ch === ',') {
+      cur.push(val); val = ''
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++
+      cur.push(val); val = ''
+      rows.push(cur); cur = []
+    } else {
+      val += ch
+    }
+    i++
+  }
+  if (val !== '' || cur.length > 0) { cur.push(val); rows.push(cur) }
+  return rows.filter((r) => r.length > 1 || (r.length === 1 && r[0] !== ''))
 }
 
 // 推断 antd 表单组件类型（动态表单渲染用）
@@ -78,7 +120,8 @@ function inferFormType(colType: string): 'text' | 'textarea' | 'number' | 'switc
 }
 
 // 单元格编辑器：在 Modal 中根据列定义动态生成表单项
-function ColumnFormFields({ columns, initial }: { columns: DbColumn[]; initial?: Record<string, unknown> }) {
+// props 标记 readonly 防止组件内部意外修改父级传入数据（S6759）
+function ColumnFormFields({ columns, initial }: { readonly columns: DbColumn[]; readonly initial?: Record<string, unknown> }) {
   return (
     <>
       {columns.map((col) => {
@@ -111,14 +154,14 @@ function ColumnFormFields({ columns, initial }: { columns: DbColumn[]; initial?:
         }
         if (formType === 'textarea') {
           return (
-            <Form.Item key={col.name} name={col.name} label={label} initialValue={isInitialNull ? '' : String(initialValue)}>
+            <Form.Item key={col.name} name={col.name} label={label} initialValue={isInitialNull ? '' : toFormString(initialValue)}>
               <TextArea rows={3} placeholder="JSON 字符串" />
             </Form.Item>
           )
         }
         // text / datetime 统一用 Input，由后端解析
         return (
-          <Form.Item key={col.name} name={col.name} label={label} initialValue={isInitialNull ? '' : String(initialValue)}>
+          <Form.Item key={col.name} name={col.name} label={label} initialValue={isInitialNull ? '' : toFormString(initialValue)}>
             <Input placeholder={col.nullable ? '可空' : ''} />
           </Form.Item>
         )
@@ -170,6 +213,8 @@ export default function DatabaseAdmin() {
       }
     } catch (e) {
       message.error('加载表列表失败')
+      // 记录异常对象，便于排查时定位根因（S2486）
+      console.warn('加载表列表失败:', e)
     } finally {
       setTablesLoading(false)
     }
@@ -187,6 +232,8 @@ export default function DatabaseAdmin() {
       setColumns(data.columns)
     } catch (e) {
       message.error('加载表结构失败')
+      // 记录异常对象，便于排查时定位根因（S2486）
+      console.warn('加载表结构失败:', e)
     }
   }
 
@@ -318,7 +365,7 @@ export default function DatabaseAdmin() {
       icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
       content: (
         <div>
-          <p>主键：<code>{String(pkValue)}</code></p>
+          <p>主键：<code>{formatCell(pkValue)}</code></p>
           <div dangerouslySetInnerHTML={{ __html: cascadeHtml }} style={{ marginBottom: 12, padding: 8, background: '#fafafa', borderRadius: 6 }} />
           <p>请输入 <b>{CONFIRM_TOKEN}</b> 以确认（区分大小写）：</p>
           <Input.Password
@@ -444,37 +491,9 @@ export default function DatabaseAdmin() {
       setAuditLog({ items: data.items })
     } catch (e) {
       message.error('加载审计日志失败')
+      // 记录异常对象，便于排查时定位根因（S2486）
+      console.warn('加载审计日志失败:', e)
     }
-  }
-
-  // CSV 解析（简单实现，支持引号转义；生产环境建议用 papaparse）
-  function parseCSV(text: string): string[][] {
-    const rows: string[][] = []
-    let cur: string[] = []
-    let val = ''
-    let inQuote = false
-    // 去除 UTF-8 BOM
-    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
-    let i = 0
-    while (i < text.length) {
-      const ch = text[i]
-      if (inQuote) {
-        if (ch === '"' && text[i + 1] === '"') { val += '"'; i++ }
-        else if (ch === '"') { inQuote = false }
-        else { val += ch }
-      } else {
-        if (ch === '"') inQuote = true
-        else if (ch === ',') { cur.push(val); val = '' }
-        else if (ch === '\n' || ch === '\r') {
-          if (ch === '\r' && text[i + 1] === '\n') i++
-          cur.push(val); val = ''
-          rows.push(cur); cur = []
-        } else val += ch
-      }
-      i++
-    }
-    if (val !== '' || cur.length > 0) { cur.push(val); rows.push(cur) }
-    return rows.filter((r) => r.length > 1 || (r.length === 1 && r[0] !== ''))
   }
 
   // 导入文件：核心解析与确认逻辑封装在内部函数中，
@@ -577,7 +596,10 @@ export default function DatabaseAdmin() {
           {tables.map((t) => (
             <div
               key={t.name}
+              role="button"
+              tabIndex={0}
               onClick={() => setActiveTable(t.name)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setActiveTable(t.name) }}
               style={{
                 padding: '10px 16px',
                 cursor: 'pointer',
@@ -599,9 +621,7 @@ export default function DatabaseAdmin() {
 
         {/* 右侧主区域 */}
         <Content style={{ background: 'var(--xh-bg-container)', borderRadius: 8, padding: 16 }}>
-          {!activeTable ? (
-            <div style={{ textAlign: 'center', padding: 60, color: 'var(--xh-text-tertiary)' }}>请从左侧选择一张表</div>
-          ) : (
+          {activeTable ? (
             <>
               {/* 工具栏 */}
               <Space style={{ marginBottom: 12 }} wrap>
@@ -653,7 +673,7 @@ export default function DatabaseAdmin() {
               )}
 
               <Table
-                rowKey={(r) => String(r[pkCol?.name || 'id'])}
+                rowKey={(r) => formatCell(r[pkCol?.name || 'id'])}
                 columns={[
                   ...tableColumns,
                   {
@@ -706,6 +726,8 @@ export default function DatabaseAdmin() {
                 size="small"
               />
             </>
+          ) : (
+            <div style={{ textAlign: 'center', padding: 60, color: 'var(--xh-text-tertiary)' }}>请从左侧选择一张表</div>
           )}
         </Content>
       </Layout>
@@ -839,6 +861,6 @@ export default function DatabaseAdmin() {
 }
 
 // 局部小工具：Text 别名（避免再 import Typography）
-const Text = ({ type, style, children }: { type?: 'secondary'; style?: React.CSSProperties; children: React.ReactNode }) => (
+const Text = ({ type, style, children }: { readonly type?: 'secondary'; readonly style?: React.CSSProperties; readonly children: React.ReactNode }) => (
   <span style={{ color: type === 'secondary' ? '#999' : undefined, ...style }}>{children}</span>
 )

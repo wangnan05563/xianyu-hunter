@@ -52,8 +52,9 @@ export default function TaskDetail() {
       statsApi.trend({ metric: 'eval_score', task_id: id, range_hours: trendRange }).catch(() => null),
       statsApi.trend({ metric: 'events', task_id: id, range_hours: trendRange }).catch(() => null),
     ]).then(([ev, evs]) => {
-      setEvalTrend(ev as TrendSeries | null)
-      setEventsTrend(evs as TrendSeries | null)
+      // Promise.all 已推断出 TrendSeries | null，as 断言冗余（SonarQube S4325）
+      setEvalTrend(ev)
+      setEventsTrend(evs)
     }).finally(() => setTrendLoading(false))
   }, [id, trendRange])
 
@@ -251,7 +252,8 @@ export default function TaskDetail() {
     },
     {
       title: '价格', key: 'price', width: 100,
-      render: (_: unknown, r: TaskLink) => r.display?.price != null ? `¥${r.display.price}` : '—',
+      // 用肯定条件 typeof === 'number' 替代 != null，更直观（SonarQube S7735）
+      render: (_: unknown, r: TaskLink) => typeof r.display?.price === 'number' ? `¥${r.display.price}` : '—',
     },
     {
       title: '卖家昵称', key: 'seller_nick', width: 120, ellipsis: true,
@@ -405,8 +407,8 @@ export default function TaskDetail() {
                       {idleGaps.length > 0 && (
                         <div style={{ marginTop: 16 }}>
                           <h4>空闲间隔（{idleGaps.length}）</h4>
-                          {idleGaps.slice(0, 5).map((g, i) => (
-                            <div key={i} style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                          {idleGaps.slice(0, 5).map((g) => (
+                            <div key={`${g.from}-${g.to}`} style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
                               {new Date(g.from).toLocaleString('zh-CN')} → {new Date(g.to).toLocaleString('zh-CN')}（{Math.floor(g.duration_s / 60)}分钟）
                             </div>
                           ))}

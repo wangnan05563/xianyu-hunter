@@ -110,29 +110,37 @@ export default function ChatbotPage() {
     })
 
   // 添加图片：校验类型/大小/数量，通过后转 base64 加入 pendingImages
+  // S3516 修复：原 setPendingImages 回调总返回 prev，等同无更新。
+  // 改为遍历异步转 base64，每个就绪后用 functional update 追加，并在追加前
+  // 用闭包计数避免重复警告（functional update 内不能放副作用）。
   const addImageFiles = useCallback(async (files: FileList | File[]) => {
     const maxImages = 4
     const maxSize = 5 * 1024 * 1024 // 5MB
     const arr = Array.from(files).filter((f) => f.type.startsWith('image/'))
     if (arr.length === 0) return
-    setPendingImages((prev) => {
-      const remaining = maxImages - prev.length
-      if (remaining <= 0) {
-        message.warning(`最多 ${maxImages} 张图片`)
-        return prev
+    // 用 ref-like 闭包变量跟踪是否已警告，避免重复提示
+    let warnedLimit = false
+    for (const f of arr) {
+      if (f.size > maxSize) {
+        message.warning(`${f.name} 超过 5MB，已跳过`)
+        continue
       }
-      const toAdd = arr.slice(0, remaining)
-      toAdd.forEach((f) => {
-        if (f.size > maxSize) {
-          message.warning(`${f.name} 超过 5MB，已跳过`)
-          return
-        }
-        fileToDataUrl(f).then((url) => {
-          setPendingImages((p) => (p.length >= maxImages ? p : [...p, url]))
+      try {
+        const url = await fileToDataUrl(f)
+        let added = false
+        setPendingImages((p) => {
+          if (p.length >= maxImages) return p
+          added = true
+          return [...p, url]
         })
-      })
-      return prev
-    })
+        if (!added && !warnedLimit) {
+          warnedLimit = true
+          message.warning(`最多 ${maxImages} 张图片`)
+        }
+      } catch {
+        // 单个文件转 base64 失败时忽略，不影响其他文件
+      }
+    }
   }, [])
 
   // Upload beforeUpload：拦截不发请求，转 base64
@@ -264,30 +272,34 @@ export default function ChatbotPage() {
       // 移除状态为 failed 的同内容用户消息（避免重复）
       setMessages((prev) => prev.filter((m) => m.status !== 'failed'))
     }
-    window.addEventListener('chatbot:retry-send', handler)
-    return () => window.removeEventListener('chatbot:retry-send', handler)
+    globalThis.addEventListener('chatbot:retry-send', handler)
+    return () => globalThis.removeEventListener('chatbot:retry-send', handler)
   }, [])
 
   // M4 消息撤回：监听 MessageBubble 派发的 recall 事件
   useEffect(() => {
-    const handler = async (e: Event) => {
-      const detail = (e as CustomEvent<{ id: string }>).detail
-      if (!detail) return
-      try {
-        await chatbotApi.recallMessage(detail.id)
-        // 乐观更新：立即把消息标记为已撤回
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === detail.id ? { ...m, is_recalled: 1 } : m,
-          ),
-        )
-        message.success('已撤回')
-      } catch {
-        message.error('撤回失败，可能已超过 2 分钟时限')
-      }
+    // handler 用同步包装：addEventListener 期望 (e: Event) => void，
+    // 直接用 async 函数会返回 Promise，类型不匹配且未捕获的 rejection 无法处理
+    const handler = (e: Event) => {
+      void (async () => {
+        const detail = (e as CustomEvent<{ id: string }>).detail
+        if (!detail) return
+        try {
+          await chatbotApi.recallMessage(detail.id)
+          // 乐观更新：立即把消息标记为已撤回
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === detail.id ? { ...m, is_recalled: 1 } : m,
+            ),
+          )
+          message.success('已撤回')
+        } catch {
+          message.error('撤回失败，可能已超过 2 分钟时限')
+        }
+      })()
     }
-    window.addEventListener('chatbot:recall-message', handler)
-    return () => window.removeEventListener('chatbot:recall-message', handler)
+    globalThis.addEventListener('chatbot:recall-message', handler)
+    return () => globalThis.removeEventListener('chatbot:recall-message', handler)
   }, [])
 
   // M5：主动转人工——确认后调用 escalation/trigger
@@ -342,7 +354,8 @@ export default function ChatbotPage() {
         setCurrentSession(items[0])
       }
       // 搜索成功且关键词非空时记录历史，供后续快速复用
-      if (searchKeyword && searchKeyword.trim()) {
+      // 可选链替代 searchKeyword && searchKeyword.trim()：S6582
+      if (searchKeyword?.trim()) {
         addSessionHistory(searchKeyword.trim())
       }
     } catch {
@@ -595,7 +608,7 @@ export default function ChatbotPage() {
         const followUps = streamingFollowUpsRef.current
         // escalate 事件无 content 时也要固化（转人工话术可能为空）
         // follow_ups 也需纳入判断：主回答为空但生成了推荐问题时不能丢弃
-        if (content || (sources && sources.length) || (toolCalls && toolCalls.length) || escalated || followUps.length > 0) {
+        if (content || sources?.length || toolCalls?.length || escalated || followUps.length > 0) {
           const assistantMsg: Message = {
             id: `assistant-${Date.now()}`,
             session_id: currentSession.id,
@@ -637,8 +650,8 @@ export default function ChatbotPage() {
       if (!question || typeof question !== 'string') return
       handleSendRef.current(question)
     }
-    window.addEventListener('chatbot:follow-up-click', handler)
-    return () => window.removeEventListener('chatbot:follow-up-click', handler)
+    globalThis.addEventListener('chatbot:follow-up-click', handler)
+    return () => globalThis.removeEventListener('chatbot:follow-up-click', handler)
   }, [])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -647,6 +660,197 @@ export default function ChatbotPage() {
       e.preventDefault()
       handleSend()
     }
+  }
+
+  // S3358：会话列表嵌套三元提取为变量，用 if-else 替代 loadingSessions ? <Spin> : sessions.length === 0 ? <Empty> : <List>
+  const sessionListView = (
+    <div className="cb-session-list">
+      <List
+        dataSource={sessions}
+        renderItem={(session) => {
+          // S3358：用映射表替代嵌套三元，避免 status === 'active' ? '活跃' : status === 'escalated' ? '已转人工' : '已结束'
+          const statusClass = session.status === 'active' ? 'cb-tag-active' : 'cb-tag-ended'
+          const statusLabels: Record<Session['status'], string> = {
+            active: '活跃',
+            escalated: '已转人工',
+            ended: '已结束',
+          }
+          const statusLabel = statusLabels[session.status]
+          return (
+          <List.Item
+            className={`cb-session-item ${currentSession?.id === session.id ? 'cb-session-item-active' : ''}`}
+            onClick={() => {
+              setCurrentSession(session)
+              // 选中会话后自动关闭移动端抽屉，桌面端无副作用
+              setSiderOpen(false)
+            }}
+            actions={[
+              <span
+                key="fav"
+                className={`cb-fav-icon ${session.is_favorite ? 'cb-fav-icon-active' : ''}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleToggleFavorite(session.id, !!session.is_favorite)
+                }}
+                role="button"
+                tabIndex={0}
+                aria-label={session.is_favorite ? '取消收藏' : '收藏'}
+                onKeyDown={(e) => {
+                  // S6819：补全 Space 触发，使 role="button" 键盘交互符合 WAI-ARIA
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    handleToggleFavorite(session.id, !!session.is_favorite)
+                  }
+                }}
+              >
+                {session.is_favorite ? <StarFilled /> : <StarOutlined />}
+              </span>,
+              <Popconfirm
+                key="delete"
+                title="删除会话"
+                description="删除后不可恢复，消息与反馈将一并清除"
+                onConfirm={() => handleDeleteSession(session.id)}
+                okText="删除"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+              >
+                <DeleteOutlined className="cb-delete-icon" onClick={(e) => e.stopPropagation()} />
+              </Popconfirm>,
+            ]}
+          >
+            <List.Item.Meta
+              title={
+                <Typography.Text ellipsis className="cb-session-title">
+                  {session.is_favorite ? '★ ' : ''}{session.title || '新会话'}
+                </Typography.Text>
+              }
+              description={
+                <span className="cb-session-meta">
+                  <Tag className={statusClass}>
+                    {statusLabel}
+                  </Tag>
+                  <span className="cb-session-count">
+                    {session.message_count} 条
+                  </span>
+                </span>
+              }
+            />
+          </List.Item>
+          )
+        }}
+      />
+    </div>
+  )
+  let sessionListBody: React.ReactNode
+  if (loadingSessions) {
+    sessionListBody = <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
+  } else if (sessions.length === 0) {
+    sessionListBody = <Empty description={searchKeyword || favoriteOnly ? '无匹配会话' : '暂无会话'} />
+  } else {
+    sessionListBody = sessionListView
+  }
+
+  // S3358/S7735：主内容区多层嵌套三元提取为变量，用 if-else 消除冗余条件与死代码
+  // 原 L869 的 !onboardingDismissed 在 else 分支中冗余（else 已隐含 !onboardingDismissed）
+  // 原 L882 的 messages.length === 0 && !loadingMessages 是死代码（被上一分支拦截），删除
+  let mainContentBody: React.ReactNode
+  if (!currentSession) {
+    // 无会话：显示引导卡（M1）
+    mainContentBody = (
+      <ChatbotOnboarding
+        onQuestionClick={async (q) => {
+          // 先创建会话，再触发 handleSend
+          try {
+            const session = await chatbotApi.createSession(q.slice(0, 30))
+            setCurrentSession(session)
+            // 用 ref 暂存待发送内容，等 messages 加载完成后再发
+            pendingFaqRef.current = q
+            // 让父级进入 messages 渲染分支后再发送
+            setTimeout(() => {
+              if (pendingFaqRef.current) {
+                setInputValue(pendingFaqRef.current)
+                pendingFaqRef.current = null
+              }
+            }, 0)
+          } catch {
+            message.error('创建会话失败')
+          }
+        }}
+        onDismiss={() => {
+          setOnboardingDismissed(true)
+          try {
+            localStorage.setItem('chatbot_onboarding_dismissed', '1')
+          } catch {
+            // localStorage 不可用时仅内存记忆
+          }
+        }}
+      />
+    )
+  } else if (onboardingDismissed) {
+    // 已关闭引导卡：显示空状态
+    mainContentBody = (
+      <div className="cb-empty">
+        <EmptyIllustration />
+        <span className="cb-empty-text">开始输入您的问题吧~</span>
+      </div>
+    )
+  } else if (messages.length === 0 && !loadingMessages) {
+    // 新会话空消息：显示引导卡（M1）
+    mainContentBody = (
+      <ChatbotOnboarding
+        onQuestionClick={(q) => setInputValue(q)}
+        onDismiss={() => {
+          setOnboardingDismissed(true)
+          try {
+            localStorage.setItem('chatbot_onboarding_dismissed', '1')
+          } catch {
+            // 静默忽略
+          }
+        }}
+      />
+    )
+  } else {
+    // 有消息或正在加载：显示消息列表
+    mainContentBody = (
+      <div className="cb-messages">
+        {loadingMessages ? (
+          <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+        ) : (
+          <>
+            {messages.map((msg) => (
+              <MessageBubble key={msg.id} message={msg} sessionId={currentSession.id} />
+            ))}
+            {/* 流式响应中的临时消息 */}
+            {isStreaming && streamingContent && (
+              <MessageBubble
+                message={{
+                  id: 'streaming',
+                  session_id: currentSession.id,
+                  role: 'assistant',
+                  content: streamingContent,
+                  sources: streamingSources,
+                  tool_calls: streamingToolCalls,
+                  created_at: new Date().toISOString(),
+                }}
+                sessionId={currentSession.id}
+              />
+            )}
+            {isStreaming && !streamingContent && (
+              <div className="cb-thinking">
+                <div className="cb-thinking-dots">
+                  <span></span>
+                  <span></span>
+                  <span></span>
+                </div>
+                <div style={{ marginTop: 8, fontSize: 13, color: 'var(--cb-text-tertiary)' }}>思考中...</div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -724,76 +928,7 @@ export default function ChatbotPage() {
                 立即转人工
               </Button>
             </div>
-            {loadingSessions ? (
-            <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
-          ) : sessions.length === 0 ? (
-            <Empty description={searchKeyword || favoriteOnly ? '无匹配会话' : '暂无会话'} />
-          ) : (
-            <div className="cb-session-list">
-              <List
-                dataSource={sessions}
-                renderItem={(session) => (
-                  <List.Item
-                    className={`cb-session-item ${currentSession?.id === session.id ? 'cb-session-item-active' : ''}`}
-                    onClick={() => {
-                      setCurrentSession(session)
-                      // 选中会话后自动关闭移动端抽屉，桌面端无副作用
-                      setSiderOpen(false)
-                    }}
-                    actions={[
-                      <span
-                        key="fav"
-                        className={`cb-fav-icon ${session.is_favorite ? 'cb-fav-icon-active' : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleToggleFavorite(session.id, !!session.is_favorite)
-                        }}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.stopPropagation()
-                            handleToggleFavorite(session.id, !!session.is_favorite)
-                          }
-                        }}
-                      >
-                        {session.is_favorite ? <StarFilled /> : <StarOutlined />}
-                      </span>,
-                      <Popconfirm
-                        key="delete"
-                        title="删除会话"
-                        description="删除后不可恢复，消息与反馈将一并清除"
-                        onConfirm={() => handleDeleteSession(session.id)}
-                        okText="删除"
-                        cancelText="取消"
-                        okButtonProps={{ danger: true }}
-                      >
-                        <DeleteOutlined className="cb-delete-icon" onClick={(e) => e.stopPropagation()} />
-                      </Popconfirm>,
-                    ]}
-                  >
-                    <List.Item.Meta
-                      title={
-                        <Typography.Text ellipsis className="cb-session-title">
-                          {session.is_favorite ? '★ ' : ''}{session.title || '新会话'}
-                        </Typography.Text>
-                      }
-                      description={
-                        <span className="cb-session-meta">
-                          <Tag className={session.status === 'active' ? 'cb-tag-active' : 'cb-tag-ended'}>
-                            {session.status === 'active' ? '活跃' : session.status === 'escalated' ? '已转人工' : '已结束'}
-                          </Tag>
-                          <span className="cb-session-count">
-                            {session.message_count} 条
-                          </span>
-                        </span>
-                      }
-                    />
-                  </List.Item>
-                )}
-              />
-            </div>
-          )}
+            {sessionListBody}
         </div>
       </Sider>
 
@@ -802,7 +937,16 @@ export default function ChatbotPage() {
         <div
           className="cb-sider-mask"
           onClick={() => setSiderOpen(false)}
-          aria-hidden="true"
+          // S1082/S6847/S6848：遮罩可点击须可被键盘操作，aria-hidden 与 onClick 冲突故移除
+          role="button"
+          tabIndex={0}
+          aria-label="关闭会话列表"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              setSiderOpen(false)
+            }
+          }}
         />
       )}
 
@@ -820,102 +964,8 @@ export default function ChatbotPage() {
             {currentSession ? (currentSession.title || '新会话') : '智能客服'}
           </span>
         </div>
-        {!currentSession ? (
-          // 无会话时显示引导卡（M1）：用户点 FAQ 后自动建会话并发送
-          <ChatbotOnboarding
-            onQuestionClick={async (q) => {
-              // 先创建会话，再触发 handleSend
-              try {
-                const session = await chatbotApi.createSession(q.slice(0, 30))
-                setCurrentSession(session)
-                // 用 ref 暂存待发送内容，等 messages 加载完成后再发
-                pendingFaqRef.current = q
-                // 让父级进入 messages 渲染分支后再发送
-                setTimeout(() => {
-                  if (pendingFaqRef.current) {
-                    setInputValue(pendingFaqRef.current)
-                    pendingFaqRef.current = null
-                  }
-                }, 0)
-              } catch {
-                message.error('创建会话失败')
-              }
-            }}
-            onDismiss={() => {
-              setOnboardingDismissed(true)
-              try {
-                localStorage.setItem('chatbot_onboarding_dismissed', '1')
-              } catch {
-                // localStorage 不可用时仅内存记忆
-              }
-            }}
-          />
-        ) : onboardingDismissed ? (
-          // 已关闭引导卡：仍无消息时显示原空状态（M1 关闭后体验）
-          <div className="cb-empty">
-            <EmptyIllustration />
-            <span className="cb-empty-text">开始输入您的问题吧~</span>
-          </div>
-        ) : (
-          // 消息列表：有会话且有消息时显示，否则用引导卡/空状态
-          messages.length === 0 && !loadingMessages && !onboardingDismissed ? (
-            // 新会话空消息：再显示一次引导卡（M1）
-            <ChatbotOnboarding
-              onQuestionClick={(q) => setInputValue(q)}
-              onDismiss={() => {
-                setOnboardingDismissed(true)
-                try {
-                  localStorage.setItem('chatbot_onboarding_dismissed', '1')
-                } catch {
-                  // 静默忽略
-                }
-              }}
-            />
-          ) : messages.length === 0 && !loadingMessages ? (
-            <div className="cb-empty">
-              <EmptyIllustration />
-              <span className="cb-empty-text">开始输入您的问题吧~</span>
-            </div>
-          ) : (
-            <div className="cb-messages">
-              {loadingMessages ? (
-                <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
-              ) : (
-                <>
-                  {messages.map((msg) => (
-                    <MessageBubble key={msg.id} message={msg} sessionId={currentSession.id} />
-                  ))}
-                  {/* 流式响应中的临时消息 */}
-                  {isStreaming && streamingContent && (
-                    <MessageBubble
-                      message={{
-                        id: 'streaming',
-                        session_id: currentSession.id,
-                        role: 'assistant',
-                        content: streamingContent,
-                        sources: streamingSources,
-                        tool_calls: streamingToolCalls,
-                        created_at: new Date().toISOString(),
-                      }}
-                      sessionId={currentSession.id}
-                    />
-                  )}
-                  {isStreaming && !streamingContent && (
-                    <div className="cb-thinking">
-                      <div className="cb-thinking-dots">
-                        <span></span>
-                        <span></span>
-                        <span></span>
-                      </div>
-                      <div style={{ marginTop: 8, fontSize: 13, color: 'var(--cb-text-tertiary)' }}>思考中...</div>
-                    </div>
-                  )}
-                  <div ref={messagesEndRef} />
-                </>
-              )}
-            </div>
-          )
-        )}
+        {/* S3358/S7735：主内容区已提取为 mainContentBody 变量（见 return 前 if-else） */}
+        {mainContentBody}
 
         {/* 输入区：当前会话存在时显示，与消息区/引导卡互斥 */}
         {currentSession && (
@@ -935,13 +985,24 @@ export default function ChatbotPage() {
             {pendingImages.length > 0 && (
               <div className="cb-image-preview-row">
                 {pendingImages.map((img, idx) => (
-                  <div key={idx} className="cb-image-thumb">
+                  // S6479：data URL 作为稳定 key，避免数组索引在增删时错位
+                  <div key={img} className="cb-image-thumb">
                     <img src={img} alt={`图片${idx + 1}`} />
                     <CloseCircleFilled
                       className="cb-image-remove"
                       onClick={() =>
                         setPendingImages((prev) => prev.filter((_, i) => i !== idx))
                       }
+                      // S1082/S6847/S6848：图标可点击需补全键盘可达性
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`删除图片${idx + 1}`}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          setPendingImages((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                      }}
                     />
                   </div>
                 ))}
@@ -999,7 +1060,8 @@ export default function ChatbotPage() {
                   checked={enableTools}
                   onChange={(e) => setEnableTools(e.target.checked)}
                 />
-                启用工具调用（查询任务/评估/配置等实时数据）
+                {/* S6772：显式空格避免 JSX 折叠后 input 与文本无间隙 */}
+                {' '}启用工具调用（查询任务/评估/配置等实时数据）
               </label>
             </div>
         )}
@@ -1011,13 +1073,13 @@ export default function ChatbotPage() {
 }
 
 // 消息气泡：区分用户/助手样式，马卡龙渐变气泡 + 圆润头像
-function MessageBubble({ message: msg, sessionId }: { message: Message; sessionId: string }) {
+function MessageBubble({ message: msg, sessionId }: { readonly message: Message; readonly sessionId: string }) {
   const isUser = msg.role === 'user'
   // M3 重试：失败时点击重发（仅用户消息 + 有 retry_payload）
   const handleRetry = () => {
     if (!msg.retry_payload) return
     // 用自定义事件通知 handleSend 重新执行（避免在 MessageBubble 里复制 sendMessage 逻辑）
-    window.dispatchEvent(
+    globalThis.dispatchEvent(
       new CustomEvent('chatbot:retry-send', {
         detail: msg.retry_payload,
       }),
@@ -1025,7 +1087,7 @@ function MessageBubble({ message: msg, sessionId }: { message: Message; sessionI
   }
   // M4 撤回：派发事件由父组件处理 API 调用 + state 更新
   const handleRecall = () => {
-    window.dispatchEvent(
+    globalThis.dispatchEvent(
       new CustomEvent('chatbot:recall-message', { detail: { id: msg.id } }),
     )
   }
@@ -1057,15 +1119,26 @@ function MessageBubble({ message: msg, sessionId }: { message: Message; sessionI
         {isUser ? (
           <>
             {/* M4 图文混排：先渲染图片缩略图，再渲染文本 */}
-            {msg.images && msg.images.length > 0 && (
+            {/* 可选链替代 msg.images && msg.images.length：S6582 */}
+            {msg.images?.length > 0 && (
               <div className="cb-msg-images">
                 {msg.images.map((img, idx) => (
                   <img
-                    key={idx}
+                    // S6479：图片 URL 作为稳定 key
+                    key={img}
                     src={img}
                     alt={`图片${idx + 1}`}
                     className="cb-msg-image-thumb"
                     onClick={() => window.open(img, '_blank')}
+                    // S1082/S6847/S6848：图片可点击需补全键盘可达性
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        window.open(img, '_blank')
+                      }
+                    }}
                   />
                 ))}
               </div>
@@ -1077,7 +1150,7 @@ function MessageBubble({ message: msg, sessionId }: { message: Message; sessionI
             <div className="cb-msg-status">
               {msg.status === 'sending' && (
                 <span className="cb-msg-status-sending">
-                  <Spin size="small" /> 发送中...
+                  <Spin size="small" />{' '}发送中...
                 </span>
               )}
               {msg.status === 'sent' && (

@@ -77,7 +77,8 @@ class DetailMixin:
             # 注册为外部 page，防止 scheduler.close_all_pages 误关
             # 场景：BatchRefreshScheduler 并发调用 detail() 时，主任务 run_once 结束清理会误关此 page
             self.browser.register_external_page(page)
-        assert page is not None
+        if page is None:
+            raise RuntimeError("new_page 返回 None，浏览器可能已关闭")
         try:
             # 防御性检查：page 可能在 new_page() 的 await 返回前被 close_all_pages 并发关闭
             # 时序：new_page await 期间事件循环切换到 TaskScheduler.run_once 结束清理，
@@ -635,7 +636,8 @@ class DetailMixin:
             page = await self.browser.new_page()
             # 同 detail()：注册外部 page 防止并发清理误关
             self.browser.register_external_page(page)
-        assert page is not None
+        if page is None:
+            raise RuntimeError("new_page 返回 None，浏览器可能已关闭")
         try:
             # 防御性检查：同 detail()，page 可能在 new_page await 期间被并发关闭
             if page.is_closed():
@@ -774,7 +776,7 @@ class DetailMixin:
                 except Exception:
                     pass
 
-    async def seller_profile_fallback(
+    def seller_profile_fallback(
         self,
         summary: ItemSummary | None = None,
         detail: ItemDetail | None = None,

@@ -21,29 +21,50 @@ from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/chatbot", tags=["chatbot-config"])
 
+# 配置 key 常量：白名单与合并逻辑共享同一字符串字面量，提取为常量避免散落修改
+# 同时规避 SonarQube S1192（字符串字面量重复 3+ 次需提取为常量）
+KEY_ENABLED = "enabled"
+KEY_MAX_HISTORY_TURNS = "max_history_turns"
+KEY_SESSION_TIMEOUT_MIN = "session_timeout_min"
+KEY_RAG_TOP_K = "rag.top_k"
+KEY_RAG_SIMILARITY_THRESHOLD = "rag.similarity_threshold"
+KEY_RAG_MAX_CONTEXT_CHARS = "rag.max_context_chars"
+KEY_AGENT_ENABLE_TOOLS = "agent.enable_tools"
+KEY_AGENT_MAX_TOOL_ROUNDS = "agent.max_tool_rounds"
+KEY_AGENT_TOOL_TRIGGER_MODE = "agent.tool_trigger_mode"
+KEY_KB_AUTO_UPDATE_ENABLED = "kb.auto_update_enabled"
+KEY_KB_UPDATE_INTERVAL_HOURS = "kb.update_interval_hours"
+KEY_FAQ_SIMILARITY_THRESHOLD = "faq.similarity_threshold"
+KEY_FAQ_CONFIRM_THRESHOLD = "faq.confirm_threshold"
+KEY_ESCALATION_CONTACT = "escalation.contact"
+KEY_ESCALATION_FEEDBACK_THRESHOLD = "escalation.feedback_threshold"
+KEY_ESCALATION_FEEDBACK_WINDOW_MIN = "escalation.feedback_window_min"
+KEY_ESCALATION_SANITIZE_PII = "escalation.sanitize_pii"
+KEY_WELCOME_MESSAGE = "welcome_message"
+
 
 # 支持热更新的配置 key 白名单
 # 为什么用集合：O(1) 查找；为什么显式列出：避免误开放需要重启的字段（如 llm.model / kb.doc_paths / kb.embedding_model）
 # 覆盖 Config.tsx 中所有 updateConfig 调用，避免前端编辑被 422 拒绝导致 UI 闪回
 _UPDATABLE_KEYS: set[str] = {
-    "enabled",
-    "max_history_turns",
-    "session_timeout_min",
-    "rag.top_k",
-    "rag.similarity_threshold",
-    "rag.max_context_chars",
-    "agent.enable_tools",
-    "agent.max_tool_rounds",
-    "agent.tool_trigger_mode",
-    "kb.auto_update_enabled",
-    "kb.update_interval_hours",
-    "faq.similarity_threshold",
-    "faq.confirm_threshold",
-    "escalation.contact",
-    "escalation.feedback_threshold",
-    "escalation.feedback_window_min",
-    "escalation.sanitize_pii",
-    "welcome_message",
+    KEY_ENABLED,
+    KEY_MAX_HISTORY_TURNS,
+    KEY_SESSION_TIMEOUT_MIN,
+    KEY_RAG_TOP_K,
+    KEY_RAG_SIMILARITY_THRESHOLD,
+    KEY_RAG_MAX_CONTEXT_CHARS,
+    KEY_AGENT_ENABLE_TOOLS,
+    KEY_AGENT_MAX_TOOL_ROUNDS,
+    KEY_AGENT_TOOL_TRIGGER_MODE,
+    KEY_KB_AUTO_UPDATE_ENABLED,
+    KEY_KB_UPDATE_INTERVAL_HOURS,
+    KEY_FAQ_SIMILARITY_THRESHOLD,
+    KEY_FAQ_CONFIRM_THRESHOLD,
+    KEY_ESCALATION_CONTACT,
+    KEY_ESCALATION_FEEDBACK_THRESHOLD,
+    KEY_ESCALATION_FEEDBACK_WINDOW_MIN,
+    KEY_ESCALATION_SANITIZE_PII,
+    KEY_WELCOME_MESSAGE,
 }
 
 
@@ -90,9 +111,9 @@ def get_config() -> dict[str, Any]:
 
     # 以 yaml 配置为基线
     result: dict[str, Any] = {
-        "enabled": cfg.enabled,
-        "max_history_turns": cfg.max_history_turns,
-        "session_timeout_min": cfg.session_timeout_min,
+        KEY_ENABLED: cfg.enabled,
+        KEY_MAX_HISTORY_TURNS: cfg.max_history_turns,
+        KEY_SESSION_TIMEOUT_MIN: cfg.session_timeout_min,
         "rag": cfg.rag.model_dump(),
         "llm": cfg.llm.model_dump(),
         "agent": cfg.agent.model_dump(),
@@ -103,40 +124,40 @@ def get_config() -> dict[str, Any]:
 
     # 应用 DB 覆盖（仅热更新字段，类型转换与 _UPDATABLE_KEYS 对应）
     # 类型映射：bool / int / float / str 分别处理，DB 一律存字符串
-    if "enabled" in db_overrides:
-        result["enabled"] = db_overrides["enabled"].lower() == "true"
-    if "max_history_turns" in db_overrides:
-        result["max_history_turns"] = int(db_overrides["max_history_turns"])
-    if "session_timeout_min" in db_overrides:
-        result["session_timeout_min"] = int(db_overrides["session_timeout_min"])
-    if "rag.top_k" in db_overrides:
-        result["rag"]["top_k"] = int(db_overrides["rag.top_k"])
-    if "rag.similarity_threshold" in db_overrides:
-        result["rag"]["similarity_threshold"] = float(db_overrides["rag.similarity_threshold"])
-    if "rag.max_context_chars" in db_overrides:
-        result["rag"]["max_context_chars"] = int(db_overrides["rag.max_context_chars"])
-    if "agent.enable_tools" in db_overrides:
-        result["agent"]["enable_tools"] = db_overrides["agent.enable_tools"].lower() == "true"
-    if "agent.max_tool_rounds" in db_overrides:
-        result["agent"]["max_tool_rounds"] = int(db_overrides["agent.max_tool_rounds"])
-    if "agent.tool_trigger_mode" in db_overrides:
-        result["agent"]["tool_trigger_mode"] = db_overrides["agent.tool_trigger_mode"]
-    if "kb.auto_update_enabled" in db_overrides:
-        result["kb"]["auto_update_enabled"] = db_overrides["kb.auto_update_enabled"].lower() == "true"
-    if "kb.update_interval_hours" in db_overrides:
-        result["kb"]["update_interval_hours"] = int(db_overrides["kb.update_interval_hours"])
-    if "faq.similarity_threshold" in db_overrides:
-        result["faq"]["similarity_threshold"] = float(db_overrides["faq.similarity_threshold"])
-    if "faq.confirm_threshold" in db_overrides:
-        result["faq"]["confirm_threshold"] = float(db_overrides["faq.confirm_threshold"])
-    if "escalation.contact" in db_overrides:
-        result["escalation"]["contact"] = db_overrides["escalation.contact"]
-    if "escalation.feedback_threshold" in db_overrides:
-        result["escalation"]["feedback_threshold"] = int(db_overrides["escalation.feedback_threshold"])
-    if "escalation.feedback_window_min" in db_overrides:
-        result["escalation"]["feedback_window_min"] = int(db_overrides["escalation.feedback_window_min"])
-    if "escalation.sanitize_pii" in db_overrides:
-        result["escalation"]["sanitize_pii"] = db_overrides["escalation.sanitize_pii"].lower() == "true"
+    if KEY_ENABLED in db_overrides:
+        result[KEY_ENABLED] = db_overrides[KEY_ENABLED].lower() == "true"
+    if KEY_MAX_HISTORY_TURNS in db_overrides:
+        result[KEY_MAX_HISTORY_TURNS] = int(db_overrides[KEY_MAX_HISTORY_TURNS])
+    if KEY_SESSION_TIMEOUT_MIN in db_overrides:
+        result[KEY_SESSION_TIMEOUT_MIN] = int(db_overrides[KEY_SESSION_TIMEOUT_MIN])
+    if KEY_RAG_TOP_K in db_overrides:
+        result["rag"]["top_k"] = int(db_overrides[KEY_RAG_TOP_K])
+    if KEY_RAG_SIMILARITY_THRESHOLD in db_overrides:
+        result["rag"]["similarity_threshold"] = float(db_overrides[KEY_RAG_SIMILARITY_THRESHOLD])
+    if KEY_RAG_MAX_CONTEXT_CHARS in db_overrides:
+        result["rag"]["max_context_chars"] = int(db_overrides[KEY_RAG_MAX_CONTEXT_CHARS])
+    if KEY_AGENT_ENABLE_TOOLS in db_overrides:
+        result["agent"]["enable_tools"] = db_overrides[KEY_AGENT_ENABLE_TOOLS].lower() == "true"
+    if KEY_AGENT_MAX_TOOL_ROUNDS in db_overrides:
+        result["agent"]["max_tool_rounds"] = int(db_overrides[KEY_AGENT_MAX_TOOL_ROUNDS])
+    if KEY_AGENT_TOOL_TRIGGER_MODE in db_overrides:
+        result["agent"]["tool_trigger_mode"] = db_overrides[KEY_AGENT_TOOL_TRIGGER_MODE]
+    if KEY_KB_AUTO_UPDATE_ENABLED in db_overrides:
+        result["kb"]["auto_update_enabled"] = db_overrides[KEY_KB_AUTO_UPDATE_ENABLED].lower() == "true"
+    if KEY_KB_UPDATE_INTERVAL_HOURS in db_overrides:
+        result["kb"]["update_interval_hours"] = int(db_overrides[KEY_KB_UPDATE_INTERVAL_HOURS])
+    if KEY_FAQ_SIMILARITY_THRESHOLD in db_overrides:
+        result["faq"]["similarity_threshold"] = float(db_overrides[KEY_FAQ_SIMILARITY_THRESHOLD])
+    if KEY_FAQ_CONFIRM_THRESHOLD in db_overrides:
+        result["faq"]["confirm_threshold"] = float(db_overrides[KEY_FAQ_CONFIRM_THRESHOLD])
+    if KEY_ESCALATION_CONTACT in db_overrides:
+        result["escalation"]["contact"] = db_overrides[KEY_ESCALATION_CONTACT]
+    if KEY_ESCALATION_FEEDBACK_THRESHOLD in db_overrides:
+        result["escalation"]["feedback_threshold"] = int(db_overrides[KEY_ESCALATION_FEEDBACK_THRESHOLD])
+    if KEY_ESCALATION_FEEDBACK_WINDOW_MIN in db_overrides:
+        result["escalation"]["feedback_window_min"] = int(db_overrides[KEY_ESCALATION_FEEDBACK_WINDOW_MIN])
+    if KEY_ESCALATION_SANITIZE_PII in db_overrides:
+        result["escalation"]["sanitize_pii"] = db_overrides[KEY_ESCALATION_SANITIZE_PII].lower() == "true"
 
     result["updatable_keys"] = sorted(_UPDATABLE_KEYS)
     return result
@@ -296,13 +317,13 @@ def get_welcome() -> dict[str, Any]:
     # 走 chatbot 子容器获取 Session：与现有 get_config 保持一致的访问路径
     if container.chatbot is not None:
         repo = container.chatbot["repo"]
-        db_value = repo.get_config("welcome_message")
+        db_value = repo.get_config(KEY_WELCOME_MESSAGE)
         if db_value:
             message = db_value
         # updated_at 单独查一次（get_config 不返回时间戳，避免破坏现有签名）
         with repo._Session() as session:
             row = session.execute(
-                select(ChatbotConfigRow).where(ChatbotConfigRow.key == "welcome_message")
+                select(ChatbotConfigRow).where(ChatbotConfigRow.key == KEY_WELCOME_MESSAGE)
             ).scalars().first()
             if row and row.updated_at:
                 updated_at = row.updated_at.isoformat()

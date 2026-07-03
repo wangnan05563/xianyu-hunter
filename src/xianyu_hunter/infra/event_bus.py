@@ -82,7 +82,7 @@ class EventBus:
             logger.debug(f"事件 {event.type.value} 无订阅者")
             return
         # 并发执行所有 handler，单个失败不影响其他
-        results = await asyncio.gather(
+        await asyncio.gather(
             *(self._safe_call(h, event) for h in handlers),
             return_exceptions=False,
         )

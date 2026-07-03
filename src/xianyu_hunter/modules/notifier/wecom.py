@@ -30,7 +30,7 @@ def _to_wecom_markdown(body: str) -> str:
     lines = []
     for line in body.split("\n"):
         line = re.sub(r"^- (.+)$", r"• \1", line)
-        line = re.sub(r"!\[.*?\]\(.*?\)", "", line)
+        line = re.sub(r"!\[[^\]]*\]\([^\)]*\)", "", line)
         line = re.sub(r"_([^_]+)_", r"\1", line)
         line = re.sub(r"^-{3,}$", "", line)
         lines.append(line)

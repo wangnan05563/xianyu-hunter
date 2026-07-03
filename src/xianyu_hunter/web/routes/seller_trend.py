@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -64,12 +64,12 @@ def seller_price_trend(
         items.append({"item_id": row.id, "title": row.title or "", "price": price, "publish_time": pt_str})
         all_prices.append(price)
 
-        if pt_dt is not None:
-            if pt_dt >= cutoff:
-                if pt_dt >= seven_days_ago:
-                    recent_prices.append(price)
-                else:
-                    earlier_prices.append(price)
+        # S1066: 合并外层两个 if（pt_dt is not None 与 pt_dt >= cutoff）避免嵌套
+        if pt_dt is not None and pt_dt >= cutoff:
+            if pt_dt >= seven_days_ago:
+                recent_prices.append(price)
+            else:
+                earlier_prices.append(price)
 
     price_stats: dict[str, Any] = {
         "min": round(min(all_prices), 2),

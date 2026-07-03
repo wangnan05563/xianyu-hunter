@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type KeyboardEvent } from 'react'
 import { Card, Table, Tag, Select, Button, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
 import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined, ThunderboltOutlined, ClockCircleOutlined, LoadingOutlined, CheckCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -26,6 +26,10 @@ dayjs.locale('zh-cn')
 // 以便访问 message 和 loadItems 实现采集后刷新列表
 
 type ViewMode = 'table' | 'card'
+
+// 商品状态筛选的取值集合
+// 抽取为 type alias 以便在 useState/usePersistentState/参数声明处复用，避免联合字面量散落多处
+type SoldFilter = 'all' | 'onsale' | 'sold'
 
 // 默认字段顺序：当后端未返回 field_map 时（如从 DB 加载的旧数据）使用此顺序
 // 与后端 FIELD_METADATA 保持一致，确保无 field_map 时也能正常渲染
@@ -103,7 +107,7 @@ function applyClientFilters(
   search: string,
   region: string | undefined,
   brand: string | undefined,
-  sold: 'all' | 'onsale' | 'sold',
+  sold: SoldFilter,
 ): TaskLink[] {
   let filtered = rows
   if (search) {
@@ -151,8 +155,8 @@ export default function ItemList() {
   // 品牌筛选：与地区筛选对齐，持久化以保留用户偏好
   const [brandFilter, setBrandFilter] = usePersistentState<string | undefined>('xh.items.brandFilter', undefined)
   // 状态筛选：默认仅看在售商品，避免已售商品干扰捡漏决策；持久化保留用户偏好
-  const [soldFilter, setSoldFilter] = usePersistentState<'all' | 'onsale' | 'sold'>('xh.items.soldFilter', 'onsale', {
-    validator: (v): v is 'all' | 'onsale' | 'sold' => v === 'all' || v === 'onsale' || v === 'sold',
+  const [soldFilter, setSoldFilter] = usePersistentState<SoldFilter>('xh.items.soldFilter', 'onsale', {
+    validator: (v): v is SoldFilter => v === 'all' || v === 'onsale' || v === 'sold',
   })
   // 登录态/搜索令牌不可用标识：后端检测到身份 Cookie 缺失或 token 过期
   const [sessionExpired, setSessionExpired] = useState(false)
@@ -289,7 +293,9 @@ export default function ItemList() {
   // 点击标题超链接：异步触发后端采集（更新 brand/price/is_sold 等字段），
   // 同时打开闲鱼原帖。采集完成后刷新列表展示最新数据。
   // 参照评估明细页 onTitleClick 的交互模式：loading 提示 + 成功/失败反馈
-  const handleTitleClick = (e: MouseEvent, itemId: string | undefined, url: string | undefined) => {
+  // 接受 MouseEvent | KeyboardEvent：anchor 同时绑定 onClick 和 onKeyDown（Enter/Space），
+  // 键盘事件同样需要 preventDefault 阻止默认行为（如空格滚动页面）
+  const handleTitleClick = (e: MouseEvent | KeyboardEvent, itemId: string | undefined, url: string | undefined) => {
     e.preventDefault()
     if (!itemId) {
       if (url) globalThis.open(url, '_blank', 'noopener,noreferrer')
@@ -457,7 +463,7 @@ export default function ItemList() {
     // 为什么需要：页面不可见时 selectedTask 变化会触发 useEffect 重执行，
     // connect() 检测不可见直接 return，恢复可见后无机制触发 connect()
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && !sseRef.current) {
+      if (document.visibilityState === 'visible' && sseRef.current === null) {
         reconnectAttempts = 0  // 恢复可见时重置计数，给新一轮重连机会
         connect()
       }
@@ -670,7 +676,13 @@ export default function ItemList() {
           col.render = (d: TaskLink['display'], record: TaskLink) => (
             <Tooltip title={d?.url ? '点击采集更新商品信息并打开原帖' : ''}>
               {d?.url ? (
-                <a onClick={(e) => handleTitleClick(e, record.link_key ?? '', d.url)} style={{ cursor: 'pointer' }}>{d?.title || '—'}</a>
+                <a
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => handleTitleClick(e, record.link_key ?? '', d.url)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleTitleClick(e, record.link_key ?? '', d.url) }}
+                  style={{ cursor: 'pointer' }}
+                >{d?.title || '—'}</a>
               ) : (
                 d?.title || '—'
               )}
@@ -759,6 +771,10 @@ export default function ItemList() {
     return visibleCols
   }, [fieldMap, liveMode, handleDelete, applyColumnConfig])
 
+  // 提取嵌套模板字符串为变量：避免在模板字符串内再嵌套模板字符串，提升可读性
+  // 同时区分实时模式与 DB 模式下的轮询间隔展示文案
+  const intervalLabel = liveMode ? `实时模式 ${liveRefreshInterval}秒` : `DB模式 ${refreshInterval}秒`
+
   return (
     <div className="page-container">
       {/* 登录态异常提示：醒目居中显示在搜索区域上方 */}
@@ -846,7 +862,7 @@ export default function ItemList() {
           />
           {/* 实时更新开关 + 轮询间隔配置
               DB 模式和实时模式各自有独立的间隔设置 */}
-          <Tooltip title={`自动轮询（设置已保存：${autoRefreshEnabled ? '开' : '关'}）。${liveMode ? `实时模式 ${liveRefreshInterval}秒` : `DB模式 ${refreshInterval}秒`}轮询一次`}>
+          <Tooltip title={`自动轮询（设置已保存：${autoRefreshEnabled ? '开' : '关'}）。${intervalLabel}轮询一次`}>
             <Space size={4}>
               <ThunderboltOutlined style={{ color: autoRefreshEnabled ? '#1677ff' : undefined }} />
               <Switch
@@ -1064,7 +1080,15 @@ export default function ItemList() {
                         }
                         actions={[
                           d?.url ? (
-                            <a key="link" onClick={(e) => handleTitleClick(e, item.link_key ?? '', d.url)} title="采集更新并打开原帖" style={{ cursor: 'pointer' }}>
+                            <a
+                              key="link"
+                              role="button"
+                              tabIndex={0}
+                              onClick={(e) => handleTitleClick(e, item.link_key ?? '', d.url)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleTitleClick(e, item.link_key ?? '', d.url) }}
+                              title="采集更新并打开原帖"
+                              style={{ cursor: 'pointer' }}
+                            >
                               <LinkOutlined />
                             </a>
                           ) : <span key="nolink" style={{ color: '#d9d9d9' }}><LinkOutlined /></span>,

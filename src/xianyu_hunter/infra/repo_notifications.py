@@ -7,11 +7,9 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
 from sqlalchemy import func, select
 
 from xianyu_hunter.infra.db_models import NotificationRow, _utcnow
-from xianyu_hunter.infra.repository_base import RepositoryBase
 
 
 class NotificationsMixin:
@@ -55,7 +53,7 @@ class NotificationsMixin:
                     "created_at": stmt.excluded.created_at,
                 },
             )
-            result = conn.execute(stmt)
+            conn.execute(stmt)
             row = conn.execute(
                 select(NotificationRow).where(NotificationRow.dedup_key == dedup_key)
             ).first()

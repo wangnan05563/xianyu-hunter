@@ -74,13 +74,13 @@ class MtopSignedParams:
         """转换为 URL 查询参数字符串"""
         return urlencode({
             "jsv": self.jsv,
-            "appKey": self.appKey,
+            "appKey": self.app_key,
             "t": self.t,
             "sign": self.sign,
             "api": self.api,
             "v": self.v,
             "type": self.type,
-            "dataType": self.dataType,
+            "dataType": self.data_type,
             "data": self.data,
         })
 
@@ -88,13 +88,13 @@ class MtopSignedParams:
         """转换为字典"""
         return {
             "jsv": self.jsv,
-            "appKey": self.appKey,
+            "appKey": self.app_key,
             "t": self.t,
             "sign": self.sign,
             "api": self.api,
             "v": self.v,
             "type": self.type,
-            "dataType": self.dataType,
+            "dataType": self.data_type,
             "data": self.data,
         }
 
@@ -187,7 +187,7 @@ class MtopSigner:
             api=request.api,
             v=request.version,
             type=self.DEFAULT_TYPE,
-            dataType=self.DEFAULT_DATA_TYPE,
+            data_type=self.DEFAULT_DATA_TYPE,
             data=data_json,
         )
 

@@ -18,23 +18,16 @@ from __future__ import annotations
 
 import asyncio
 import signal
-import sys
 import uuid
 from contextlib import suppress
-from pathlib import Path
-from typing import Any
 
 import typer
-from loguru import logger
 
 from xianyu_hunter.domain.task import Task, TaskMode
 from xianyu_hunter.domain.urls import get_base_url
 from xianyu_hunter.container import Container, build_default_container
 from xianyu_hunter.infra.yaml_config import get_config
-from xianyu_hunter.modules.scheduler import TaskScheduler
 from xianyu_hunter.modules.worker import TaskWorker
-# P1: 官方采集回调（延迟导入 _collect_official_and_evaluate 的包装函数）
-from xianyu_hunter.web.startup import _call_official_collect
 
 app = typer.Typer(help="XianyuHunter - 闲鱼自动捡漏与抢单系统")
 control_app = typer.Typer(help="任务控制")
@@ -202,7 +195,7 @@ def run(
         bus_task = asyncio.create_task(container.event_bus.run_forever())
         # 启动所有目标 worker
         for tid in target_ids:
-            await container.scheduler.start(tid)
+            container.scheduler.start(tid)
         typer.echo(f"已启动 {len(target_ids)} 个任务: {target_ids}")
         typer.echo("按 Ctrl+C 退出")
 

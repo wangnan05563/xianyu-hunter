@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[4]
@@ -185,15 +184,14 @@ class AuthManager:
                     qr_b64 = base64.b64encode(qr_png.read_bytes()).decode("ascii")
             # 成功后回填 userinfo
             userinfo = None
-            if state == "success":
-                if _USERINFO_FILE.exists():
-                    try:
-                        userinfo = json.loads(_USERINFO_FILE.read_text(encoding="utf-8"))
-                        # 刷新主缓存
-                        self._userinfo = userinfo
-                        self._userinfo_at = time.time()
-                    except Exception:
-                        pass
+            if state == "success" and _USERINFO_FILE.exists():
+                try:
+                    userinfo = json.loads(_USERINFO_FILE.read_text(encoding="utf-8"))
+                    # 刷新主缓存
+                    self._userinfo = userinfo
+                    self._userinfo_at = time.time()
+                except Exception:
+                    pass
             return {
                 "state": state,
                 "message": message,

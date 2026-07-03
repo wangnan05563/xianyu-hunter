@@ -66,9 +66,9 @@ class FakeDedup:
         self.existing = set(existing or [])
         self.saved = []
 
-    async def filter_new(self, items): return [i for i in items if i.id not in self.existing]
+    def filter_new(self, items): return [i for i in items if i.id not in self.existing]
 
-    async def save(self, items):
+    def save(self, items, task_id=None):
         n = len(items)
         for i in items:
             self.existing.add(i.id)
@@ -125,6 +125,19 @@ def make_session(responses):
 
 
 # ============== 工厂：构造带 fakes 的 Container ==============
+
+
+@pytest.fixture(autouse=True)
+def _skip_cookie_check(monkeypatch):
+    """跳过 scheduler._check_resume_allowed 的 Cookie 校验
+
+    test_e2e_full_flow_with_scheduler 调用 sched.start("t1") 会触发
+    P0-① 新增的 Cookie 校验，测试环境无真实 cookie 会抛 ResumeBlockedError。
+    E2E 聚焦流水线联通，Cookie 校验由专门测试覆盖。
+    """
+    monkeypatch.setattr(
+        TaskScheduler, "_check_resume_allowed", lambda self, task_id: None
+    )
 
 
 @pytest.fixture
@@ -277,7 +290,7 @@ async def test_e2e_full_flow_with_scheduler(tmp_path) -> None:
         # 第 2 轮没新增商品，不会再 push
     ])
     with patch.object(aiohttp, "ClientSession", return_value=session):
-        await sched.start("t1")
+        sched.start("t1")  # start 是同步方法（创建 asyncio.Task 后立即返回），无需 await
         await asyncio.sleep(0.3)  # 跑 2 轮
         await sched.stop("t1", timeout=2.0)
         await asyncio.sleep(0.2)  # 等事件分发

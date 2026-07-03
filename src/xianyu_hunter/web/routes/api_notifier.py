@@ -8,7 +8,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends
@@ -17,7 +16,7 @@ from pydantic import BaseModel, Field, field_validator
 from xianyu_hunter.container import Container
 from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.infra.logger import get_logger
-from xianyu_hunter.infra.yaml_config import QuietHoursConfig, get_config, reload_config
+from xianyu_hunter.infra.yaml_config import get_config, reload_config
 from xianyu_hunter.modules.notifier.quiet_hours import is_quiet_now, next_quiet_end
 from xianyu_hunter.modules.notifier.registry import NotifierRegistry
 from xianyu_hunter.web.deps import get_container

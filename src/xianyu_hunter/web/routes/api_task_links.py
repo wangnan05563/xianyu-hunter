@@ -429,9 +429,8 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
             existing = display.get(k)
             # is_sold 总是以 items 表为准：items 表由 refresh_item/mark_sold 更新，
             # 比 task_links.display 中的旧值更准确，避免已售商品仍显示在售
-            if k == "is_sold":
-                display[k] = v
-            elif k not in display or existing is None or existing == "" or existing == "None":
+            # S1871: 两个分支都执行 display[k] = v，合并条件简化逻辑
+            if k == "is_sold" or k not in display or existing is None or existing == "" or existing == "None":
                 display[k] = v
         r["display"] = display
     return list(links)

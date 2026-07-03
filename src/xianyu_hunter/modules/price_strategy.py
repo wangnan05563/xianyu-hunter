@@ -33,7 +33,7 @@ class MarketContext:
     cheaper_seller_count: int = 0              # 比本商品更便宜的卖家数（逐商品计算）
     sample_size: int = 0                       # 样本数
     # 所有商品价格列表（排序后），供 TopN 策略逐商品计算 cheaper_seller_count
-    all_prices: list[float] = None  # type: ignore[assignment]
+    all_prices: list[float] | None = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.all_prices is None:

@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
-import { Spin, Card, Col, Row, Alert, Button, Space, theme } from 'antd'
+// 删除未使用的 theme 导入（S1128）
+import { Spin, Card, Col, Row, Alert, Button, Space } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
   taskApi, statsApi, priceApi,
@@ -33,7 +34,8 @@ export default function Dashboard() {
 
   // 趋势大图 Modal
   const [trendOpen, setTrendOpen] = useState(false)
-  const [trendMetric] = useState('events')
+  // 值从不变化，改用 const 替代 useState，避免无谓的状态管理（S6754）
+  const trendMetric = 'events'
   const [trendRange, setTrendRange] = useState(168)
   const [trendData, setTrendData] = useState<TrendSeries | null>(null)
 
@@ -59,11 +61,12 @@ export default function Dashboard() {
       priceApi.histogram({ bins: 20, task_id: histoTaskId === 'all' ? undefined : histoTaskId }).catch(() => null),
       taskApi.list({ limit: 100 }).catch(() => ({ items: [], total: 0 })),
     ]).then(([ov, kpi, ev, hist, tasks]) => {
-      if (ov) setOverview(ov as StatsOverview)
-      setKpiCards((kpi as { kpis: KpiCard[] })?.kpis || [])
-      setEvents((ev as { events: RecentEvent[] })?.events || [])
-      setHistogram(hist as HistogramData | null)
-      const items = (tasks as { items: Array<{ id: string; name: string; keyword: string; status: string }> })?.items || []
+      // 移除不必要的类型断言：API 返回类型已明确，TS 可正确推断（S4325）
+      if (ov) setOverview(ov)
+      setKpiCards(kpi.kpis || [])
+      setEvents(ev.events || [])
+      setHistogram(hist)
+      const items = tasks.items || []
       setHistoTasks(items.filter(t => t.status !== 'deleted'))
       setLoading(false)
     })
@@ -74,7 +77,8 @@ export default function Dashboard() {
       statsApi.trend({ metric: 'events', range_hours: 24 }).catch(() => null),
       statsApi.trend({ metric: 'orders', range_hours: 24 }).catch(() => null),
     ]).then(([tasks, orders]) => {
-      setSparklines({ tasks: tasks as TrendSeries | null, orders: orders as TrendSeries | null })
+      // 移除不必要的类型断言：trend API 已返回 TrendSeries 类型（S4325）
+      setSparklines({ tasks, orders })
     })
   }, [])
 
@@ -210,7 +214,7 @@ export default function Dashboard() {
     <div className="page-container">
       <Spin spinning={loading}>
         {/* 引导 Banner：无任务时显示欢迎引导 */}
-        {overview && overview.tasks.total === 0 && overview.tasks.running === 0 && (
+        {overview?.tasks?.total === 0 && overview?.tasks?.running === 0 && (
           <Alert
             type="info"
             message="欢迎使用闲鱼猎人！"

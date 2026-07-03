@@ -6,8 +6,6 @@
 """
 from __future__ import annotations
 
-import os
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +13,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, text as sa_text
 
 from xianyu_hunter.container import Container
-from xianyu_hunter.infra.db_models import EventRow, TaskRow, OrderRow, _utcnow
+from xianyu_hunter.infra.db_models import EventRow, _utcnow
 from xianyu_hunter.web.deps import get_container, _should_start_scheduler
 
 router = APIRouter(prefix="/api", tags=["stats-overview"])

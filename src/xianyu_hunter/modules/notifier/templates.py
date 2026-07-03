@@ -48,7 +48,7 @@ def _eval_passed(event: Event) -> tuple[str, str]:
 
     head = f"[闲鱼捡漏] {title[:30]} ¥{price}"
     body_lines = [
-        f"### 评估通过 ✅",
+        "### 评估通过 ✅",
         f"- 卖家：{seller_nick}" if seller_nick else "",
         f"- 评分：**{score}** / 风险等级：**{risk_level}**",
         f"- 价格：¥{price}",
@@ -74,11 +74,11 @@ def _order_placed(event: Event) -> tuple[str, str]:
 
     head = f"[已拍下] {title[:30]} ¥{price}"
     body_lines = [
-        f"### 已拍下未支付 ⏰",
+        "### 已拍下未支付 ⏰",
         f"- 订单号：`{order_id}`" if order_id else "",
         f"- 金额：¥{price}",
         f"- 过期时间：{expire_at}" if expire_at else "",
-        f"\n请打开闲鱼 App 在 **5 分钟内** 完成支付，否则订单自动释放。",
+        "\n请打开闲鱼 App 在 **5 分钟内** 完成支付，否则订单自动释放。",
     ]
     return head, "\n".join(line for line in body_lines if line)
 
@@ -92,11 +92,11 @@ def _task_error(event: Event) -> tuple[str, str]:
 
     head = f"[告警] {title}"
     body_lines = [
-        f"### ⚠️ 任务异常",
+        "### ⚠️ 任务异常",
         f"- 任务：`{event.task_id}`" if event.task_id else "",
         f"- 详情：{message}" if message else "",
         f"- 原因：`{reason}`" if reason else "",
-        f"\n请尽快检查任务状态和 Cookie 有效性。",
+        "\n请尽快检查任务状态和 Cookie 有效性。",
     ]
     return head, "\n".join(line for line in body_lines if line)
 

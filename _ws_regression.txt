@@ -1,0 +1,40 @@
+...........................................................              [100%]
+============================== warnings summary ===============================
+F:\Program Files\Python3.14\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py:128
+  F:\Program Files\Python3.14\Lib\site-packages\chromadb\telemetry\opentelemetry\__init__.py:128: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+    if asyncio.iscoroutinefunction(f):
+
+src\xianyu_hunter\web\startup.py:419
+  d:\code\otherProjects\17_xianyu\src\xianyu_hunter\web\startup.py:419: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+F:\Program Files\Python3.14\Lib\site-packages\fastapi\applications.py:4598
+F:\Program Files\Python3.14\Lib\site-packages\fastapi\applications.py:4598
+  F:\Program Files\Python3.14\Lib\site-packages\fastapi\applications.py:4598: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+src\xianyu_hunter\web\startup.py:467
+  d:\code\otherProjects\17_xianyu\src\xianyu_hunter\web\startup.py:467: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+tests/test_task_scheduler_config.py::test_app_config_loads_task_scheduler_from_yaml
+  F:\Program Files\Python3.14\Lib\site-packages\pydantic\main.py:732: UserWarning: auto_search_concurrency=2 当前未生效（前端固定串行队列），前端实际并发仍为 1。如需并行搜索请先完成浏览器锁改造
+    return cls.__pydantic_validator__.validate_python(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+59 passed, 6 warnings in 33.90s

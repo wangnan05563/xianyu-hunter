@@ -15,11 +15,10 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -33,6 +32,11 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 # 超时：与前端 AbortController 30s 对齐（前端 30s 触发 abort，后端不能让它跑更久）
 HTTP_TIMEOUT_SEC = 25.0
+
+# LLM 调用共享常量：多处 endpoint 共用同一组 HTTP 头/路径，提取为常量避免散落修改
+CHAT_COMPLETIONS_PATH = "/chat/completions"
+AUTH_BEARER_PREFIX = "Bearer "
+CONTENT_TYPE_JSON = "application/json"
 
 
 def _check_ai_enabled() -> None:
@@ -93,10 +97,10 @@ def _parse_llm_response(r: httpx.Response) -> dict[str, Any]:
     # LLM 偶尔会包 ```json ... ```，剥掉
     content = content.strip()
     if content.startswith("```"):
-        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.MULTILINE).strip()
+        content = re.sub(r"(?:^```(?:json)?\s*|\s*```$)", "", content, flags=re.MULTILINE).strip()
     try:
         parsed = json.loads(content)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
         raise RuntimeError(f"AI 返回非 JSON: {content[:200]}") from None
     if not isinstance(parsed, dict):
         raise RuntimeError("AI 返回非 dict 结构")
@@ -120,7 +124,7 @@ def _call_llm(text: str) -> dict[str, Any]:
     if not allowed:
         raise RuntimeError(f"AI 调用受限：{reason}，已自动降级到规则解析")
 
-    url = settings.openai_base_url.rstrip("/") + "/chat/completions"
+    url = settings.openai_base_url.rstrip("/") + CHAT_COMPLETIONS_PATH
     # P1-8：从 Prompt 编辑器读取最新内容（支持热更新，无需重启）
     from xianyu_hunter.web.routes.api_prompts import get_active_prompt
     system_prompt = get_active_prompt("parse_task")
@@ -135,8 +139,8 @@ def _call_llm(text: str) -> dict[str, Any]:
         "max_tokens": 600,
     }
     headers = {
-        "Authorization": "Bearer " + settings.openai_api_key,
-        "Content-Type": "application/json",
+        "Authorization": AUTH_BEARER_PREFIX + settings.openai_api_key,
+        "Content-Type": CONTENT_TYPE_JSON,
     }
     try:
         with httpx.Client(timeout=HTTP_TIMEOUT_SEC) as client:
@@ -196,7 +200,6 @@ def _rule_parse(text: str) -> dict[str, Any]:
 
     输出格式与 LLM 输出一致，保证前端能无差别使用。
     """
-    original = text
     t = text.strip()
     # 1. 价格区间：'预算 1000-3000' / '1k~2k'
     min_price: float | None = None
@@ -433,7 +436,7 @@ async def _call_llm_vision(
     if not allowed:
         raise RuntimeError(f"AI 调用受限：{reason}，已自动降级到规则评估")
 
-    url = settings.openai_base_url.rstrip("/") + "/chat/completions"
+    url = settings.openai_base_url.rstrip("/") + CHAT_COMPLETIONS_PATH
 
     # 检测当前模型是否支持 vision：
     # 纯文本模型（deepseek-chat / gpt-3.5-turbo 等）不支持 image_url 字段，
@@ -498,8 +501,8 @@ async def _call_llm_vision(
         "max_tokens": 800,
     }
     headers = {
-        "Authorization": "Bearer " + settings.openai_api_key,
-        "Content-Type": "application/json",
+        "Authorization": AUTH_BEARER_PREFIX + settings.openai_api_key,
+        "Content-Type": CONTENT_TYPE_JSON,
     }
     try:
         async with httpx.AsyncClient(timeout=VISION_TIMEOUT_SEC) as client:
@@ -924,15 +927,15 @@ def test_ai_connection() -> dict[str, Any]:
     if not settings.openai_api_key:
         return {"ok": False, "detail": "未配置 API Key"}
 
-    url = settings.openai_base_url.rstrip("/") + "/chat/completions"
+    url = settings.openai_base_url.rstrip("/") + CHAT_COMPLETIONS_PATH
     payload = {
         "model": settings.openai_model,
         "messages": [{"role": "user", "content": "Hi"}],
         "max_tokens": 5,
     }
     headers = {
-        "Authorization": "Bearer " + settings.openai_api_key,
-        "Content-Type": "application/json",
+        "Authorization": AUTH_BEARER_PREFIX + settings.openai_api_key,
+        "Content-Type": CONTENT_TYPE_JSON,
     }
     try:
         with httpx.Client(timeout=15.0) as client:
@@ -975,12 +978,6 @@ def test_embedding_connection() -> dict[str, Any]:
     from xianyu_hunter.infra.yaml_config import get_config
     cfg = get_config()
     model = settings.embedding_model or cfg.kb.embedding_model
-    dimensions = (
-        settings.embedding_dimensions
-        if settings.embedding_dimensions > 0
-        else cfg.kb.embedding_dimensions
-    )
-
     # 本地模式：直接调用 LocalEmbeddingBackend
     # 首次调用会触发模型下载（约 95MB for bge-small-zh-v1.5），可能耗时较久
     if not base_url or base_url.lower() == "local":
@@ -1015,8 +1012,8 @@ def test_embedding_connection() -> dict[str, Any]:
     if settings.embedding_dimensions > 0:
         payload["dimensions"] = settings.embedding_dimensions
     headers = {
-        "Authorization": "Bearer " + api_key,
-        "Content-Type": "application/json",
+        "Authorization": AUTH_BEARER_PREFIX + api_key,
+        "Content-Type": CONTENT_TYPE_JSON,
     }
     try:
         with httpx.Client(timeout=15.0) as client:

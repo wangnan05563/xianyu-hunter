@@ -50,7 +50,15 @@ beforeEach(() => {
   useSheetStore.setState({
     sheets: [],
     activeId: null,
-    preferences: { maxSheets: 5, enableAnimation: true, minimizeInsteadOfClose: false },
+    preferences: {
+      maxSheets: 5,
+      enableAnimation: true,
+      minimizeInsteadOfClose: false,
+      doubleClickCloseEnabled: false,
+      doubleClickInterval: 350,
+      thumbnailMode: false,
+      thumbnailTooltipEnabled: true,
+    },
     isMobile: false,
     hydrated: false,
     _navigator: navigatorFn,
@@ -237,6 +245,29 @@ describe('sheetStore', () => {
       useSheetStore.getState().setPreferences({ maxSheets: 99 })
       expect(useSheetStore.getState().preferences.maxSheets).toBe(10)
     })
+
+    it('doubleClickInterval 钳制到 [200, 800]', () => {
+      useSheetStore.getState().setPreferences({ doubleClickInterval: 100 })
+      expect(useSheetStore.getState().preferences.doubleClickInterval).toBe(200)
+      useSheetStore.getState().setPreferences({ doubleClickInterval: 1000 })
+      expect(useSheetStore.getState().preferences.doubleClickInterval).toBe(800)
+    })
+
+    it('doubleClickInterval 非法值回退默认 350', () => {
+      useSheetStore.getState().setPreferences({ doubleClickInterval: NaN })
+      expect(useSheetStore.getState().preferences.doubleClickInterval).toBe(350)
+    })
+
+    it('双击关闭与缩略图模式开关正常切换并持久化', () => {
+      useSheetStore.getState().setPreferences({ doubleClickCloseEnabled: true, thumbnailMode: true })
+      expect(useSheetStore.getState().preferences.doubleClickCloseEnabled).toBe(true)
+      expect(useSheetStore.getState().preferences.thumbnailMode).toBe(true)
+      act(() => { vi.advanceTimersByTime(300) })
+      expect(storage.set).toHaveBeenCalledWith('xh.sheets.preferences', expect.objectContaining({
+        doubleClickCloseEnabled: true,
+        thumbnailMode: true,
+      }))
+    })
   })
 
   describe('hydrate', () => {
@@ -286,6 +317,33 @@ describe('sheetStore', () => {
       expect(state.activeId).toBeNull()
       expect(state.preferences.maxSheets).toBe(5) // 默认
       expect(state.hydrated).toBe(true)
+    })
+
+    it('旧版本持久化数据缺失新字段时回退默认值', () => {
+      // 模拟旧版本：仅含 maxSheets/enableAnimation/minimizeInsteadOfClose
+      memoryStore.set('xh.sheets.preferences', JSON.stringify({
+        __v: 1,
+        data: { maxSheets: 4, enableAnimation: true, minimizeInsteadOfClose: false },
+      }))
+      useSheetStore.getState().hydrate()
+      const prefs = useSheetStore.getState().preferences
+      // 旧字段保留
+      expect(prefs.maxSheets).toBe(4)
+      expect(prefs.enableAnimation).toBe(true)
+      // 新字段回退默认
+      expect(prefs.doubleClickCloseEnabled).toBe(false)
+      expect(prefs.doubleClickInterval).toBe(350)
+      expect(prefs.thumbnailMode).toBe(false)
+      expect(prefs.thumbnailTooltipEnabled).toBe(true)
+    })
+
+    it('恢复时 doubleClickInterval 超界会被钳制', () => {
+      memoryStore.set('xh.sheets.preferences', JSON.stringify({
+        __v: 1,
+        data: { maxSheets: 5, doubleClickInterval: 5000 },
+      }))
+      useSheetStore.getState().hydrate()
+      expect(useSheetStore.getState().preferences.doubleClickInterval).toBe(800)
     })
   })
 

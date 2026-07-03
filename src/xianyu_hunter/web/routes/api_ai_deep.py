@@ -19,7 +19,7 @@ from collections import Counter
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,8 @@ router = APIRouter(prefix="/api/ai", tags=["ai-deep"])
 
 # 深度分析超时：多图 Vision 推理较慢
 DEEP_ANALYZE_TIMEOUT_SEC = 90.0
+# S1192: 提取重复的规则模拟前缀为常量
+_RULE_DETAIL_PREFIX = "规则模拟：基于"
 
 
 # ============== 请求模型 ==============
@@ -209,7 +211,7 @@ def _parse_llm_response(r: httpx.Response) -> dict[str, Any]:
         raise RuntimeError(f"AI 返回结构异常: {e}") from None
     content = content.strip()
     if content.startswith("```"):
-        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content, flags=re.MULTILINE).strip()
+        content = re.sub(r"(?:^```(?:json)?\s*|\s*```$)", "", content, flags=re.MULTILINE).strip()
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
@@ -223,7 +225,6 @@ def _parse_llm_response(r: httpx.Response) -> dict[str, Any]:
 def _rule_deep_analyze(
     title: str,
     description: str,
-    price: float,
     image_urls: list[str],
     seller_items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -339,7 +340,7 @@ def _rule_deep_analyze(
             "score": template_score,
             "risk_level": _risk(template_score),
             "signals": template_signals,
-            "detail": "规则模拟：基于模板词频率和卖家多商品相似度" + ("；".join(template_signals) if template_signals else "文案较个性化"),
+            "detail": f"{_RULE_DETAIL_PREFIX}模板词频率和卖家多商品相似度" + ("；".join(template_signals) if template_signals else "文案较个性化"),
         },
         "overall_verdict": overall_verdict,
         "overall_score": overall_score,
@@ -477,7 +478,7 @@ async def deep_analyze(
 
     if raw_result is None:
         raw_result = _rule_deep_analyze(
-            title, description, price, image_urls, seller_items
+            title, description, image_urls, seller_items
         )
         used_source = "rule"
         logger.info(f"[P1-4] 规则模拟深度分析完成: item_id={body.item_id}")

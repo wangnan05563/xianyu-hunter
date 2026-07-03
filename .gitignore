@@ -97,15 +97,18 @@ _git_status.txt
 /0
 /17_xianyu
 /17_xianyufrontend
+/17_xianyu.worktreesmu2
 /_r.json
 /.tmp_diff.txt
 /.s3358_lines.txt
+# PowerShell 哈希表/命令误重定向（含特殊字符文件名，可能含敏感信息）
+/=\@\{*
+/onar-scanner*
 
 # 测试输出（根目录）
 /test_result.txt
 /test_debug_output.txt
-/pytest_result.txt
-/pytest_output.txt
+/pytest*.txt
 
 # ---------- 临时调试脚本（根目录以 _ 开头）----------
 /_*.py
@@ -117,6 +120,28 @@ _git_status.txt
 /diagnose-api.ps1
 /run-scan.ps1
 /query-*.ps1
+# SonarQube 一次性 Python 调试脚本（根目录）
+/fetch_issues.py
+/filter_issues.py
+/group_issues.py
+/check_issue*.py
+/query_*.py
+
+# SonarQube 调试输出（根目录）
+/all-issues.csv
+/all-issues.json
+/issues-by-file.json
+/issues-by-file.txt
+/issues-by-rule.json
+/my_issues.json
+/issues_summary.txt
+/filter_output*.txt
+/scan-output.txt
+/sonar-scan-progress.log
+# SonarQube 临时分析输出（按组件名命名的调试文件）
+/ItemList_issues.*
+/*_issues.txt
+/*_issues.json
 
 # ---------- 历史遗留临时测试文件（预防再次创建）----------
 test_pw*.py

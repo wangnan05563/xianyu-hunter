@@ -5,11 +5,10 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import desc, func, select, delete
+from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from xianyu_hunter.infra.db_models import OrderRow
-from xianyu_hunter.infra.repository_base import RepositoryBase
 
 
 class OrdersMixin:

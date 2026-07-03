@@ -612,7 +612,6 @@ async def login_status() -> dict:
     global _session
 
     with _session_lock:
-        proc = _session.get("proc")
         status_file = _session.get("status_file")
         started_at = _session.get("started_at") or 0
         session_status = _session["status"]

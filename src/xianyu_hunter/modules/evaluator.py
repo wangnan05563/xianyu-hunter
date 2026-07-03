@@ -384,15 +384,11 @@ class Evaluator:
         thresholds = self.thresholds
 
         # professional 维度：在售数或发布数有效
-        if seller.on_sale_count >= thresholds.min_on_sale_for_valid:
-            valid.add("professional")
-        elif seller.post_count_30d >= 1:
+        if seller.on_sale_count >= thresholds.min_on_sale_for_valid or seller.post_count_30d >= 1:
             valid.add("professional")
 
         # credit 维度：信用分或注册天数有效
-        if seller.credit_score is not None and seller.credit_score >= thresholds.min_credit_score_for_valid:
-            valid.add("credit")
-        elif seller.register_days >= thresholds.min_register_days_for_valid:
+        if (seller.credit_score is not None and seller.credit_score >= thresholds.min_credit_score_for_valid) or seller.register_days >= thresholds.min_register_days_for_valid:
             valid.add("credit")
 
         # dispute 维度：需要至少有在售数或注册天数才认为有效

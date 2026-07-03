@@ -22,7 +22,7 @@ Mixin 分工：
 """
 from __future__ import annotations
 
-from xianyu_hunter.infra.repository_base import RepositoryBase, get_repository
+from xianyu_hunter.infra.repository_base import RepositoryBase
 from xianyu_hunter.infra.repo_tasks import TasksMixin
 from xianyu_hunter.infra.repo_items import ItemsMixin
 from xianyu_hunter.infra.repo_sellers import SellersMixin

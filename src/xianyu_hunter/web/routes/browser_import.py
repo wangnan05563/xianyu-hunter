@@ -29,7 +29,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from fastapi import APIRouter, Form
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from xianyu_hunter.domain.urls import get_base_url
@@ -138,7 +138,7 @@ def decrypt_dpapi(encrypted_bytes: bytes) -> bytes | None:
     - Chrome < v80 的旧版 cookie 直接 DPAPI 加密
     - 解密 Local State 中的 AES 密钥（去掉 "DPAPI" 前缀后）
     """
-    class DATA_BLOB(ctypes.Structure):
+    class DataBlob(ctypes.Structure):
         _fields_ = [
             ("cbData", ctypes.wintypes.DWORD),
             ("pbData", ctypes.POINTER(ctypes.c_char)),
@@ -148,8 +148,8 @@ def decrypt_dpapi(encrypted_bytes: bytes) -> bytes | None:
         dll = ctypes.WinDLL("crypt32.dll", use_last_error=True)
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-        blob_in = DATA_BLOB(len(encrypted_bytes), ctypes.create_string_buffer(encrypted_bytes, len(encrypted_bytes)))
-        blob_out = DATA_BLOB()
+        blob_in = DataBlob(len(encrypted_bytes), ctypes.create_string_buffer(encrypted_bytes, len(encrypted_bytes)))
+        blob_out = DataBlob()
 
         if dll.CryptUnprotectData(
             ctypes.byref(blob_in), None, None, None, None, 0, ctypes.byref(blob_out)
@@ -251,14 +251,17 @@ def decrypt_cookie_value(enc_val: bytes, plain_val: str | None, aes_key: bytes |
 
 # ============== API 端点 ==============
 
+# 浏览器用户数据目录名：路径映射与状态检测共享，提取为常量避免散落修改
+USER_DATA_DIR_NAME = "User Data"
+
 # 浏览器 Cookie 数据库路径映射（同时包含 Cookies DB 和 User Data 目录用于读取 Local State）
 _BROWSER_PATHS = {
-    "edge": lambda lad: Path(lad) / "Microsoft" / "Edge" / "User Data" / "Default" / "Network" / "Cookies",
-    "chrome": lambda lad: Path(lad) / "Google" / "Chrome" / "User Data" / "Default" / "Network" / "Cookies",
+    "edge": lambda lad: Path(lad) / "Microsoft" / "Edge" / USER_DATA_DIR_NAME / "Default" / "Network" / "Cookies",
+    "chrome": lambda lad: Path(lad) / "Google" / "Chrome" / USER_DATA_DIR_NAME / "Default" / "Network" / "Cookies",
 }
 _BROWSER_USER_DATA = {
-    "edge": lambda lad: Path(lad) / "Microsoft" / "Edge" / "User Data",
-    "chrome": lambda lad: Path(lad) / "Google" / "Chrome" / "User Data",
+    "edge": lambda lad: Path(lad) / "Microsoft" / "Edge" / USER_DATA_DIR_NAME,
+    "chrome": lambda lad: Path(lad) / "Google" / "Chrome" / USER_DATA_DIR_NAME,
 }
 
 _TARGET_DOMAINS = ("%goofish%", "%taobao%", "%alipay%")
@@ -611,8 +614,8 @@ def import_status() -> dict:
     local_app_data = os.environ.get("LOCALAPPDATA", "")
     browsers = {}
     for name, rel_path in [
-        ("edge", r"Microsoft\Edge\User Data\Default\Network\Cookies"),
-        ("chrome", r"Google\Chrome\User Data\Default\Network\Cookies"),
+        ("edge", rf"Microsoft\Edge\{USER_DATA_DIR_NAME}\Default\Network\Cookies"),
+        ("chrome", rf"Google\Chrome\{USER_DATA_DIR_NAME}\Default\Network\Cookies"),
     ]:
         db_path = Path(local_app_data) / rel_path
         info = {"exists": db_path.exists(), "path": str(db_path), "has_goofish_cookie": False}

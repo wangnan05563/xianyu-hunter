@@ -101,7 +101,6 @@ export const TaskCreationIcon: React.FC<IconProps> = ({ size = 48, className }) 
 export const PriceStrategyIcon: React.FC<IconProps> = ({ size = 48, className }) => {
   const s = size
   const stroke = s * 0.055
-  const r = s * 0.1
 
   return (
     <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -158,7 +157,7 @@ export const PriceStrategyIcon: React.FC<IconProps> = ({ size = 48, className })
       <text x="24" y="27.5" textAnchor="middle" fontSize="16" fontWeight="700"
         fill="url(#yenGrad)" fontFamily="system-ui, -apple-system, sans-serif">¥</text>
 
-      /* 金币高光反射点 —— 左上 11 点钟位置 */
+      {/* 金币高光反射点 —— 左上 11 点钟位置 */}
       <ellipse cx="17.5" cy="16.5" rx="4" ry="2.5" fill="#FFF" opacity="0.35"
         transform="rotate(-30, 17.5, 16.5)" />
 
@@ -186,7 +185,6 @@ export const PriceStrategyIcon: React.FC<IconProps> = ({ size = 48, className })
 export const EvalRulesIcon: React.FC<IconProps> = ({ size = 48, className }) => {
   const s = size
   const stroke = s * 0.055
-  const r = s * 0.08
 
   return (
     <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -253,8 +251,8 @@ export const EvalRulesIcon: React.FC<IconProps> = ({ size = 48, className }) => 
         { x: 16.8, y: 31.2, angle: 225 },
         { x: 13.5, y: 24, angle: 270 },
         { x: 16.8, y: 16.8, angle: 315 },
-      ].map((tick, i) => (
-        <line key={i} x1={tick.x} y1={tick.y}
+      ].map((tick) => (
+        <line key={`tick-${tick.angle}`} x1={tick.x} y1={tick.y}
           x2={24 + (tick.x - 24) * 0.82} y2={24 + (tick.y - 24) * 0.82}
           stroke="url(#tickGrad)" strokeWidth={stroke * 0.4} strokeLinecap="round" />
       ))}
@@ -414,20 +412,20 @@ export const AIConfigIcon: React.FC<IconProps> = ({ size = 48, className }) => {
 
       {/* 芯片引脚 —— 四边各 3 个 */}
       {/* 上边 */}
-      {[16, 24, 32].map((x, i) => (
-        <line key={`u${i}`} x1={x} y1="10" x2={x} y2="6" stroke="#7C3AED" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      {[16, 24, 32].map((x) => (
+        <line key={`pin-up-${x}`} x1={x} y1="10" x2={x} y2="6" stroke="#7C3AED" strokeWidth={stroke * 0.6} strokeLinecap="round" />
       ))}
       {/* 下边 */}
-      {[16, 24, 32].map((x, i) => (
-        <line key={`d${i}`} x1={x} y1="38" x2={x} y2="42" stroke="#7C3AED" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      {[16, 24, 32].map((x) => (
+        <line key={`pin-down-${x}`} x1={x} y1="38" x2={x} y2="42" stroke="#7C3AED" strokeWidth={stroke * 0.6} strokeLinecap="round" />
       ))}
       {/* 左边 */}
-      {[16, 24, 32].map((y, i) => (
-        <line key={`l${i}`} x1="10" y1={y} x2="6" y2={y} stroke="#7C3AED" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      {[16, 24, 32].map((y) => (
+        <line key={`pin-left-${y}`} x1="10" y1={y} x2="6" y2={y} stroke="#7C3AED" strokeWidth={stroke * 0.6} strokeLinecap="round" />
       ))}
       {/* 右边 */}
-      {[16, 24, 32].map((y, i) => (
-        <line key={`r${i}`} x1="38" y1={y} x2="42" y2={y} stroke="#7C3AED" strokeWidth={stroke * 0.6} strokeLinecap="round" />
+      {[16, 24, 32].map((y) => (
+        <line key={`pin-right-${y}`} x1="38" y1={y} x2="42" y2={y} stroke="#7C3AED" strokeWidth={stroke * 0.6} strokeLinecap="round" />
       ))}
 
       {/* 神经网络节点 —— 三层拓扑 */}
@@ -472,7 +470,6 @@ export const AIConfigIcon: React.FC<IconProps> = ({ size = 48, className }) => {
 export const BuyerStrategyIcon: React.FC<IconProps> = ({ size = 48, className }) => {
   const s = size
   const stroke = s * 0.055
-  const r = s * 0.1
 
   return (
     <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -548,7 +545,6 @@ export const BuyerStrategyIcon: React.FC<IconProps> = ({ size = 48, className })
 export const SearchConfigIcon: React.FC<IconProps> = ({ size = 48, className }) => {
   const s = size
   const stroke = s * 0.055
-  const r = s * 0.1
 
   return (
     <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -619,7 +615,6 @@ export const SearchConfigIcon: React.FC<IconProps> = ({ size = 48, className }) 
 export const VersionManagerIcon: React.FC<IconProps> = ({ size = 48, className }) => {
   const s = size
   const stroke = s * 0.055
-  const r = s * 0.1
 
   return (
     <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -705,7 +700,6 @@ export const VersionManagerIcon: React.FC<IconProps> = ({ size = 48, className }
 export const CleanupIcon: React.FC<IconProps> = ({ size = 48, className }) => {
   const s = size
   const stroke = s * 0.055
-  const r = s * 0.1
 
   return (
     <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -755,8 +749,8 @@ export const CleanupIcon: React.FC<IconProps> = ({ size = 48, className }) => {
       />
 
       {/* 扫帚毛纹理 —— 垂直细线 */}
-      {[12, 15, 18, 21, 24].map((x, i) => (
-        <line key={i} x1={x} y1="30" x2={x + (x - 18) * 0.3} y2="40"
+      {[12, 15, 18, 21, 24].map((x) => (
+        <line key={`bristle-${x}`} x1={x} y1="30" x2={x + (x - 18) * 0.3} y2="40"
           stroke="#047857" strokeWidth={stroke * 0.2} opacity="0.4" />
       ))}
 
@@ -788,7 +782,6 @@ export const CleanupIcon: React.FC<IconProps> = ({ size = 48, className }) => {
 export const DatabaseAdminIcon: React.FC<IconProps> = ({ size = 48, className }) => {
   const s = size
   const stroke = s * 0.055
-  const r = s * 0.1
 
   return (
     <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -864,14 +857,14 @@ export const DatabaseAdminIcon: React.FC<IconProps> = ({ size = 48, className })
       {/* 维护齿轮 —— 右下角 */}
       <g transform="translate(36, 36)">
         {/* 齿轮齿 */}
-        {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => {
+        {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => {
           const rad = (angle * Math.PI) / 180
           const x1 = Math.cos(rad) * 4
           const y1 = Math.sin(rad) * 4
           const x2 = Math.cos(rad) * 6
           const y2 = Math.sin(rad) * 6
           return (
-            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+            <line key={`gear-tooth-${angle}`} x1={x1} y1={y1} x2={x2} y2={y2}
               stroke="url(#gearGrad)" strokeWidth={stroke * 0.8} strokeLinecap="round" />
           )
         })}
@@ -1439,8 +1432,8 @@ export const DashboardIcon: React.FC<IconProps> = ({ size = 48, className }) => 
         { x1: 24, y1: 16, x2: 24, y2: 18 },
         { x1: 32, y1: 19, x2: 30.5, y2: 21 },
         { x1: 38, y1: 28, x2: 36, y2: 26 },
-      ].map((tick, i) => (
-        <line key={i} x1={tick.x1} y1={tick.y1} x2={tick.x2} y2={tick.y2}
+      ].map((tick) => (
+        <line key={`tick-${tick.x1}`} x1={tick.x1} y1={tick.y1} x2={tick.x2} y2={tick.y2}
           stroke="#EA580C" strokeWidth={stroke * 0.5} strokeLinecap="round" opacity="0.7" />
       ))}
 
@@ -1632,7 +1625,6 @@ export const ItemListIcon: React.FC<IconProps> = ({ size = 48, className }) => {
 export const OrderRecordIcon: React.FC<IconProps> = ({ size = 48, className }) => {
   const s = size
   const stroke = s * 0.055
-  const r = s * 0.1
 
   return (
     <svg width={s} height={s} viewBox="0 0 48 48" fill="none" className={className} xmlns="http://www.w3.org/2000/svg">
@@ -1780,8 +1772,8 @@ export const EvalDetailIcon: React.FC<IconProps> = ({ size = 48, className }) =>
         { y: 28, width: 14, opacity: 0.5 },
         { y: 32, width: 18, opacity: 0.7 },
         { y: 36, width: 22, opacity: 0.9 },
-      ].map((bar, i) => (
-        <g key={i}>
+      ].map((bar) => (
+        <g key={`bar-${bar.y}`}>
           {/* 背景条 */}
           <rect x="13" y={bar.y} width="22" height="2.5" rx="1" fill="#E0E7FF" opacity="0.6" />
           {/* 填充条 */}
@@ -2103,14 +2095,14 @@ export const ConfigIcon: React.FC<IconProps> = ({ size = 48, className }) => {
       {/* 齿轮主体 —— 居中大齿轮 */}
       <g filter="url(#cfgShadow)">
         {/* 齿轮齿 —— 8 个齿均匀分布 */}
-        {[0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => {
+        {[0, 45, 90, 135, 180, 225, 270, 315].map((angle) => {
           const rad = (angle * Math.PI) / 180
           const x1 = 24 + Math.cos(rad) * 13
           const y1 = 24 + Math.sin(rad) * 13
           const x2 = 24 + Math.cos(rad) * 17
           const y2 = 24 + Math.sin(rad) * 17
           return (
-            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+            <line key={`tooth-${angle}`} x1={x1} y1={y1} x2={x2} y2={y2}
               stroke="url(#cfgRim)" strokeWidth={stroke * 1.8} strokeLinecap="round" />
           )
         })}
@@ -2205,14 +2197,14 @@ export const MaintenanceIcon: React.FC<IconProps> = ({ size = 48, className }) =
       {/* 辅助齿轮 —— 右下角小齿轮，表达"维护对象" */}
       <g transform="translate(36, 36)">
         {/* 齿轮齿 */}
-        {[0, 60, 120, 180, 240, 300].map((angle, i) => {
+        {[0, 60, 120, 180, 240, 300].map((angle) => {
           const rad = (angle * Math.PI) / 180
           const x1 = Math.cos(rad) * 3.5
           const y1 = Math.sin(rad) * 3.5
           const x2 = Math.cos(rad) * 5
           const y2 = Math.sin(rad) * 5
           return (
-            <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+            <line key={`tooth-${angle}`} x1={x1} y1={y1} x2={x2} y2={y2}
               stroke="url(#mntGear)" strokeWidth={stroke * 0.8} strokeLinecap="round" />
           )
         })}
