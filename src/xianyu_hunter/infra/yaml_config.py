@@ -334,7 +334,7 @@ class TaskSchedulerConfig(BaseModel):
         if self.auto_search_concurrency > 1:
             warnings.warn(
                 f"auto_search_concurrency={self.auto_search_concurrency} 当前未生效"
-                f"（前端固定串行队列），将按 1 处理。如需并行搜索请先完成浏览器锁改造",
+                f"（前端固定串行队列），前端实际并发仍为 1。如需并行搜索请先完成浏览器锁改造",
                 stacklevel=2,
             )
         return self

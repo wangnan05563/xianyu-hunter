@@ -158,13 +158,13 @@ describe('useAutoLiveSearch', () => {
     // 页面隐藏：tick 不递减，remainMap 保持 55（不重置为 60）
     // 直接修改 document.hidden 不会触发 visibilitychange 事件，需手动派发
     // 否则 visibleRef 仍是 true，tick 会继续递减
-    Object.defineProperty(document, 'hidden', { value: true, configurable: true })
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true, writable: true })
     act(() => { document.dispatchEvent(new Event('visibilitychange')) })
     act(() => { vi.advanceTimersByTime(10 * 1000) })
     expect(result.current.remainMap.t1).toBe(55)
 
     // 页面恢复可见：从 55 继续递减（选项 B：保留剩余值）
-    Object.defineProperty(document, 'hidden', { value: false, configurable: true })
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true, writable: true })
     act(() => { document.dispatchEvent(new Event('visibilitychange')) })
     act(() => { vi.advanceTimersByTime(5 * 1000) })
     expect(result.current.remainMap.t1).toBe(50)
