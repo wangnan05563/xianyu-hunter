@@ -32,6 +32,7 @@ from enum import Enum
 from typing import Any
 
 from xianyu_hunter.infra.logger import get_logger
+from xianyu_hunter.infra.yaml_config import get_config
 
 logger = get_logger()
 
@@ -52,27 +53,31 @@ class LayerDefinition:
     depends_on: CookieLayer | None = None  # 依赖的层
 
 
-# 层定义注册表
-LAYER_DEFINITIONS: dict[CookieLayer, LayerDefinition] = {
-    CookieLayer.IDENTITY: LayerDefinition(
-        name=CookieLayer.IDENTITY,
-        cookies={"unb", "cookie2", "sgcookie", "t", "_tb_token_", "lg2"},
-        ttl="session",
-        depends_on=None,
-    ),
-    CookieLayer.SESSION: LayerDefinition(
-        name=CookieLayer.SESSION,
-        cookies={"_m_h5_tk", "_m_h5_tk_enc"},
-        ttl="15-22min",
-        depends_on=CookieLayer.IDENTITY,
-    ),
-    CookieLayer.TRACKING: LayerDefinition(
-        name=CookieLayer.TRACKING,
-        cookies={"cna", "tfstk", "xlly_s", "ali_aplus_v3", "utdid"},
-        ttl="dynamic",
-        depends_on=None,
-    ),
-}
+# 层定义注册表：从配置加载（cookie_management.layer_definitions 节点）
+# 配置化的动机：原硬编码与 cookie_store._GOOFISH_KEY_COOKIES /
+# browser_import._TARGET_COOKIE_NAMES / _search.key_cookie_names 各自定义，
+# 4 处独立名单存在漂移风险，导致 75+ cookie 部分丢失。统一配置后确保一致
+def _build_layer_definitions() -> dict[CookieLayer, LayerDefinition]:
+    """从配置构建层定义
+
+    配置 key（字符串）必须与 CookieLayer Enum 值匹配（identity/session/tracking），
+    不匹配会抛 ValueError —— 配置错误应尽早暴露而非静默降级
+    """
+    cfg = get_config().cookie_management
+    result: dict[CookieLayer, LayerDefinition] = {}
+    for layer_name_str, layer_cfg in cfg.layer_definitions.items():
+        layer = CookieLayer(layer_name_str)
+        depends_on = CookieLayer(layer_cfg.depends_on) if layer_cfg.depends_on else None
+        result[layer] = LayerDefinition(
+            name=layer,
+            cookies=set(layer_cfg.cookies),
+            ttl=layer_cfg.ttl,
+            depends_on=depends_on,
+        )
+    return result
+
+
+LAYER_DEFINITIONS: dict[CookieLayer, LayerDefinition] = _build_layer_definitions()
 
 # Cookie 名称到层的反向映射
 _COOKIE_TO_LAYER: dict[str, CookieLayer] = {}
@@ -124,12 +129,9 @@ class CookieRotator:
     """
 
     # 闲鱼相关域名（Cookie 需写入这些域名）
-    DOMAINS = [
-        ".goofish.com", "goofish.com",
-        ".taobao.com", "taobao.com",
-        ".alipay.com", "alipay.com",
-        "login.taobao.com", ".login.taobao.com",
-    ]
+    # 配置化（cookie_management.domains）：统一 cookie_inject._INJECT_DOMAINS /
+    # browser_import._TARGET_DOMAINS 三处独立定义，避免域名列表漂移
+    DOMAINS = list(get_config().cookie_management.domains)
 
     def __init__(self):
         self._lock = threading.Lock()

@@ -340,7 +340,7 @@ def get_welcome() -> dict[str, Any]:
         if db_value:
             message = db_value
         # updated_at 单独查一次（get_config 不返回时间戳，避免破坏现有签名）
-        with repo._Session() as session:
+        with repo._session() as session:
             row = session.execute(
                 select(ChatbotConfigRow).where(ChatbotConfigRow.key == KEY_WELCOME_MESSAGE)
             ).scalars().first()

@@ -23,6 +23,7 @@ from xianyu_hunter.web.middleware.request_id import setup_request_id_middleware
 from xianyu_hunter.web.startup import setup_startup_hooks
 from xianyu_hunter.web.routes import (
     api_about,  # 关于菜单：版本信息 + 检查更新
+    api_accounts,  # MU3：多账号管理（列表/切换/退出/会话事件）
     api_ai,
     api_anticrawl,
     api_auth,
@@ -44,9 +45,11 @@ from xianyu_hunter.web.routes import (
     api_kb,
     api_logs,
     api_maintenance,
+    api_menu,  # MU5：菜单动态化（用户级可见性/排序覆盖）
     api_notifications,
     api_notifier,
     api_orders,
+    api_preferences,  # MU6：用户偏好（替代 localStorage，按 user_id 隔离）
     api_prompts,
     api_stats,
     api_task_deps,
@@ -225,6 +228,9 @@ def create_app() -> FastAPI:
     app.include_router(api_orders.router)
     app.include_router(api_evaluations.router)
     app.include_router(api_auth.router)
+    app.include_router(api_accounts.router)  # MU3：多账号管理（列表/切换/退出/会话事件）
+    app.include_router(api_preferences.router)  # MU6：用户偏好（按 user_id 隔离）
+    app.include_router(api_menu.router)  # MU5：菜单动态化（GET/PUT/POST /api/menu）
     app.include_router(api_about.router)  # 关于菜单：版本信息 + 检查更新
     app.include_router(api_anticrawl.router)  # 反爬登录管理：策略/会话/健康/Cookie 分层
     app.include_router(api_notifications.router)

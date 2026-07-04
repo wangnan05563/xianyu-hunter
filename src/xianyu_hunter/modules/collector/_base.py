@@ -53,6 +53,13 @@ class CollectorBase:
         # 上次搜索是否捕获到 API 响应但解析为 0 个商品（可能是登录墙/会话过期）
         # 供 live_links 端点判断是否需要提示用户重新登录
         self._last_api_captured: bool = False
+        # 上次 detail() 返回 None 的具体原因（枚举字符串）
+        # 为什么需要：collection_service 抛错时根据 reason 区分 401/429/502/503，
+        # 避免所有失败都归为 502 让用户无法判断是该重试、该重登录还是该等待
+        # 取值：page_closed/http_status_error/home_title_redirect/login_redirect/
+        #       verify_redirect/title_extraction_failed/price_extraction_failed/
+        #       redirected_away_from_item/target_closed_exception/unknown_exception
+        self.last_detail_failure_reason: str = ""
 
     # ============== _m_h5_tk 刷新时间戳的公共访问接口 ==============
     # 为什么需要封装：_last_m5tk_refresh 是私有属性，但 web 路由层

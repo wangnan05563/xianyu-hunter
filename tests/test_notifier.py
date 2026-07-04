@@ -113,13 +113,15 @@ def test_notify_result_to_dict() -> None:
 
 
 def test_template_eval_passed() -> None:
-    """EVAL_PASSED 模板含标题、价格、链接、截图"""
+    """EVAL_PASSED 模板含标题、价格、链接、图片占位提示"""
     title, body = render(make_eval_event())
     assert "iPhone 13" in title
     assert "1999" in title
     assert "评估通过" in body
     assert "85" in body  # score
     assert "立即查看" in body
+    # 商品图改为可点击链接（v7 方案，绕过钉钉 webhook 不支持 image 的限制）
+    assert "点击查看商品图" in body
     assert "img.example.com" in body
 
 

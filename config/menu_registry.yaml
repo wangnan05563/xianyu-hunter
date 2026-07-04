@@ -1,0 +1,205 @@
+# 菜单元数据单一事实源（前后端共享）
+# 设计文档：docs/07-权限模块/2026-07-01-登录模块优化概要设计.md §3.4 / §7.2
+# 新增菜单只需改此文件，无需改后端代码；前端通过 /api/menu 动态拉取
+version: 1
+
+menus:
+  # ========== 主菜单（main）：业务功能入口 ==========
+  - key: dashboard
+    label: 仪表盘
+    icon: DashboardOutlined
+    path: /
+    sort_order: 1
+    default_visible: true
+    category: main
+  - key: tasks
+    label: 任务管理
+    icon: UnorderedListOutlined
+    path: /tasks
+    sort_order: 2
+    default_visible: true
+    category: main
+  - key: items
+    label: 商品中心
+    icon: ShoppingOutlined
+    path: /items
+    sort_order: 3
+    default_visible: true
+    category: main
+  - key: evaluations
+    label: 卖家评估
+    icon: AuditOutlined
+    path: /evaluations
+    sort_order: 4
+    default_visible: true
+    category: main
+  - key: orders
+    label: 抢单记录
+    icon: ThunderboltOutlined
+    path: /orders
+    sort_order: 5
+    default_visible: true
+    category: main
+  - key: chatbot
+    label: 智能客服
+    icon: MessageOutlined
+    path: /chatbot
+    sort_order: 6
+    default_visible: true
+    category: main
+  - key: notifications
+    label: 通知中心
+    icon: BellOutlined
+    path: /notifications
+    sort_order: 7
+    default_visible: true
+    category: main
+  - key: price_dashboard
+    label: 价格行情
+    icon: DollarOutlined
+    path: /price-dashboard
+    sort_order: 8
+    default_visible: true
+    category: main
+  - key: batch_refresh
+    label: 批量采集
+    icon: CloudDownloadOutlined
+    path: /batch-refresh
+    sort_order: 9
+    default_visible: true
+    category: main
+  - key: ai_assistant
+    label: AI 助手
+    icon: RobotOutlined
+    path: /ai-assistant
+    sort_order: 10
+    default_visible: true
+    category: main
+  - key: timeline
+    label: 事件时间线
+    icon: FieldTimeOutlined
+    path: /timeline
+    sort_order: 11
+    default_visible: true
+    category: main
+  - key: logs
+    label: 实时日志
+    icon: FileTextOutlined
+    path: /logs
+    sort_order: 12
+    default_visible: true
+    category: main
+  - key: error_logs
+    label: 错误日志
+    icon: BugOutlined
+    path: /logs/errors
+    sort_order: 13
+    default_visible: true
+    category: main
+  - key: anticrawl
+    label: 反爬登录管理
+    icon: ExperimentOutlined
+    path: /anticrawl
+    sort_order: 14
+    default_visible: true
+    category: main
+
+  # ========== 系统菜单（system）：配置与维护入口 ==========
+  - key: system
+    label: 系统设置
+    icon: SettingOutlined
+    path: /config
+    sort_order: 100
+    default_visible: true
+    category: system
+  - key: price_strategy
+    label: 价格策略
+    icon: DollarOutlined
+    path: /config/price
+    sort_order: 101
+    default_visible: true
+    category: system
+  - key: eval_rules
+    label: 评估规则
+    icon: SafetyCertificateOutlined
+    path: /config/eval
+    sort_order: 102
+    default_visible: true
+    category: system
+  - key: buy_config
+    label: 抢单策略
+    icon: AimOutlined
+    path: /config/buyer
+    sort_order: 103
+    default_visible: true
+    category: system
+  - key: search_config
+    label: 搜索参数
+    icon: SearchOutlined
+    path: /config/search
+    sort_order: 104
+    default_visible: true
+    category: system
+  - key: notifier
+    label: 通知渠道
+    icon: BellOutlined
+    path: /config/notifier
+    sort_order: 105
+    default_visible: true
+    category: system
+  - key: ai_config
+    label: AI 服务
+    icon: RobotOutlined
+    path: /config/ai
+    sort_order: 106
+    default_visible: true
+    category: system
+  - key: chatbot_config
+    label: 客服配置
+    icon: MessageOutlined
+    path: /config/chatbot
+    sort_order: 107
+    default_visible: true
+    category: system
+  - key: version
+    label: 配置版本
+    icon: HistoryOutlined
+    path: /config/version
+    sort_order: 108
+    default_visible: true
+    category: system
+  - key: maintenance
+    label: 系统清理
+    icon: ClearOutlined
+    path: /maintenance
+    sort_order: 109
+    default_visible: true
+    category: system
+  - key: db_admin
+    label: 数据库维护
+    icon: DatabaseOutlined
+    path: /maintenance/db
+    sort_order: 110
+    default_visible: true
+    category: system
+  - key: templates
+    label: 模板市场
+    icon: AppstoreOutlined
+    path: /templates
+    sort_order: 200
+    default_visible: true
+    category: system
+  - key: export
+    label: 数据导出
+    icon: CloudDownloadOutlined
+    path: /export
+    sort_order: 201
+    default_visible: true
+    category: system
+  - key: about
+    label: 关于
+    icon: InfoCircleOutlined
+    path: /about
+    sort_order: 300
+    default_visible: true
+    category: system

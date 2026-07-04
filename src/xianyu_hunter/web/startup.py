@@ -426,6 +426,22 @@ def _cleanup_old_batch_history(container: Any) -> None:
         logger.warning(f"C-06 批量采集历史清理失败（忽略）: {e}")
 
 
+def _migrate_to_multi_user(container: Any) -> None:
+    """C-07: 单用户 → 多用户迁移（幂等）
+
+    为什么独立：migrate_to_multi_user 自建 engine 而非复用 container.repo.engine，
+    放在独立函数中避免与 container 的 session 生命周期耦合。
+    """
+    from loguru import logger
+
+    try:
+        from xianyu_hunter.web.services.user_manager import migrate_to_multi_user
+        migrate_to_multi_user()
+        logger.info("多用户迁移完成（C-07）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"C-07 多用户迁移失败（忽略）: {e}")
+
+
 def run_migrations(container: Any) -> None:
     """执行数据库增量迁移
 
@@ -446,6 +462,8 @@ def run_migrations(container: Any) -> None:
     _migrate_notifications_read_at(container, insp)
     _migrate_eval_scored_dedup(container, insp)
     _cleanup_old_batch_history(container)
+    # 多用户迁移放最后：依赖 init_db 创建的多用户表已就绪
+    _migrate_to_multi_user(container)
 
 
 async def _start_all_schedulers(container: Any) -> None:

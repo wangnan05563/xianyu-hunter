@@ -14,6 +14,11 @@ export { statsApi } from './stats'
 export { aiApi } from './ai'
 export { priceApi } from './price'
 export { authApi } from './auth'
+export type { AccountInfo, SessionEvent } from './auth'
+export { menuApi } from './menu'
+export type { MenuItem, MenuItemUpdate, MenuCategory } from './menu'
+export { preferencesApi } from './preferences'
+export type { PreferenceValue, PreferenceMap } from './preferences'
 export { anticrawlApi } from './anticrawl'
 export type {
   StrategyEvaluation,

@@ -27,7 +27,8 @@ class TasksMixin:
             row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
             return self._row_to_dict(row) if row else None
 
-    def list_tasks(self, status: str | None = None, limit: int | None = None, offset: int = 0) -> list[dict]:
+    def list_tasks(self, status: str | None = None, limit: int | None = None, offset: int = 0,
+                   user_id: str | None = None) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(TaskRow)
             if status:
@@ -35,13 +36,16 @@ class TasksMixin:
             else:
                 # 未指定状态时默认排除软删除任务
                 stmt = stmt.where(TaskRow.status != "deleted")
+            if user_id is not None:
+                stmt = stmt.where(TaskRow.user_id == user_id)
             stmt = stmt.order_by(desc(TaskRow.created_at))
             if limit is not None:
                 stmt = stmt.limit(limit).offset(offset)
             rows = conn.execute(stmt).all()
             return [self._row_to_dict(r) for r in rows]
 
-    def list_tasks_with_last_seen(self, status: str | None = None, limit: int | None = None, offset: int = 0) -> list[dict]:
+    def list_tasks_with_last_seen(self, status: str | None = None, limit: int | None = None,
+                                   offset: int = 0, user_id: str | None = None) -> list[dict]:
         """列出任务 + 每个任务最后一次抓到商品的时间（LEFT JOIN + GROUP BY 一次性聚合）"""
         last_seen_subq = (
             select(ItemRow.task_id, func.max(ItemRow.last_seen).label("last_seen_at"))
@@ -60,6 +64,8 @@ class TasksMixin:
                 # 未明确指定状态时，默认排除已软删除的任务
                 # 必须在 SQL 层排除，否则 limit/offset 在内存过滤前已截断
                 stmt = stmt.where(TaskRow.status != "deleted")
+            if user_id is not None:
+                stmt = stmt.where(TaskRow.user_id == user_id)
             stmt = stmt.order_by(desc(TaskRow.created_at))
             if limit is not None:
                 stmt = stmt.limit(limit).offset(offset)
@@ -72,7 +78,7 @@ class TasksMixin:
                 out.append(d)
             return out
 
-    def count_tasks(self, status: str | None = None) -> int:
+    def count_tasks(self, status: str | None = None, user_id: str | None = None) -> int:
         """统计任务数（带 status 过滤）。不传 status = 排除已删除"""
         with self.engine.connect() as conn:
             stmt = select(func.count()).select_from(TaskRow)
@@ -81,15 +87,22 @@ class TasksMixin:
             else:
                 # 默认排除软删除任务
                 stmt = stmt.where(TaskRow.status != "deleted")
+            if user_id is not None:
+                stmt = stmt.where(TaskRow.user_id == user_id)
             return int(conn.execute(stmt).scalar() or 0)
 
-    def update_task_status(self, task_id: str, status: str) -> None:
+    def update_task_status(self, task_id: str, status: str, user_id: str | None = None) -> None:
+        """更新任务状态
+
+        user_id 不为 None 时附加 WHERE 过滤，确保不会跨用户更新（深度防御）。
+        为什么需要兜底：API 层已校验 task 归属权，但调用方若遗漏校验，
+        repo 层仍能阻止越权写入。SQLAlchemy 的 .where() 可链式追加条件。
+        """
         with self.engine.begin() as conn:
-            conn.execute(
-                TaskRow.__table__.update()
-                .where(TaskRow.id == task_id)
-                .values(status=status, updated_at=_utcnow())
-            )
+            stmt = TaskRow.__table__.update().where(TaskRow.id == task_id)
+            if user_id is not None:
+                stmt = stmt.where(TaskRow.user_id == user_id)
+            conn.execute(stmt.values(status=status, updated_at=_utcnow()))
 
     def delete_task_cascade(self, task_id: str) -> dict[str, int]:
         """级联删除任务的所有关联数据（不含任务行本身）

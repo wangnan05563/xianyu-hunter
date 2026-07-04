@@ -28,6 +28,29 @@ def _get_browser_cfg():
     return get_config().browser
 
 
+def _cleanup_lock_files(user_data_dir: Path) -> None:
+    """清理 user_data_dir 中残留的 SingletonLock 等锁文件
+
+    与 browser_login.py / browser.py 的 _cleanup_lock_files 行为一致：
+    Worker 异常退出后 SingletonLock 会残留，导致新 Chromium 启动后无法
+    独占 user_data_dir，表现为 launch 成功但 new_page() 报
+    "Target.createTarget: Failed to open a new tab" 或整个子进程静默失败，
+    进而让 auth_helper 的 nick 抓取流程完全不执行，前端显示"未登录"。
+    """
+    import glob as _glob
+    for pattern in (
+        str(user_data_dir / "SingletonLock"),
+        str(user_data_dir / "SingletonCookie"),
+        str(user_data_dir / "SingletonSocket"),
+        str(user_data_dir / "*lock*"),
+    ):
+        for f in _glob.glob(pattern):
+            try:
+                Path(f).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _export_cookies_to_json(cookies: list[dict], method: str) -> None:
     """登录成功后导出 Cookie 到 JSON 文件（供 Web 后端立即验证）"""
     try:
@@ -88,6 +111,9 @@ async def _cmd_info(out_dir: Path) -> int:
             # 反检测参数：闲鱼对 headless 浏览器有较强的指纹检测
             # --disable-blink-features=AutomationControlled 去掉 navigator.webdriver=true
             # 其余参数减少自动化特征暴露
+            # 清理残留锁文件：Worker 异常退出后 SingletonLock 会残留，
+            # 导致 launch_persistent_context 启动后无法创建 page，nick 抓取整个流程不执行
+            _cleanup_lock_files(Path(cfg.user_data_dir))
             ctx = await pw.chromium.launch_persistent_context(
                 user_data_dir=cfg.user_data_dir,
                 headless=True,
@@ -169,12 +195,75 @@ async def _cmd_info(out_dir: Path) -> int:
                     }"""
                 )
                 # 过滤"登录"按钮文本和闲鱼默认欢迎语（未登录时也会显示）
+                # 首次抓取结果保留在 raw_nick：失败时进入"二次重试"分支，避免
+                # 一上来就因为 3s 等待不够而丢失真实昵称
                 raw_nick = (info.get("nick") or "").strip()
+                # 二次重试：闲鱼 SPA 用 React + 自定义 hydration，昵称元素在
+                # domcontentloaded 后还需 2-8s 才挂载；首次抓到的 "Hi! 你好"
+                # 是个人页默认欢迎语占位符，并非真实昵称。
+                # 触发条件：抓到的值在无效集（含 "Hi! 你好"）中或为空，但当前
+                # 不在登录页 URL → SPA 还在渲染中，再等 5s 重抓
+                # 为什么不再等更久：8s 是单次抓取上限场景下剩余预算，超过则进入
+                # 下一阶段（淘宝 myTaobao.htm / unb 兜底）
+                _is_invalid_first = (not raw_nick) or (raw_nick in (
+                    "登录", "登錄", "Login", "Sign in", "立即登录",
+                    "Hi! 你好", "Hi！你好", "你好", "Hi", "Hi!",
+                ))
+                if _is_invalid_first and not is_login_url:
+                    try:
+                        # 优先等昵称元素挂载（比固定 sleep 更精准），最长 5s
+                        await page.wait_for_selector(
+                            '[class*="userInfo"] [class*="nick"], '
+                            '[class*="user-info"] [class*="nick"], '
+                            '[class*="userInfo--"] [class*="nick--"], '
+                            '[class*="userName"], [class*="nickName"]',
+                            timeout=5000,
+                            state="visible",
+                        )
+                    except Exception:
+                        # 选择器超时不影响：固定 sleep 兜底
+                        await page.wait_for_timeout(5000)
+                    info = await page.evaluate(
+                        """() => {
+                          const sel = [
+                            '[class*="userInfo"] [class*="nick"]',
+                            '[class*="user-info"] [class*="nick"]',
+                            '[class*="userInfo--"] [class*="nick--"]',
+                            '[class*="userName"]',
+                            '[class*="nickName"]',
+                            '[class*="username"]',
+                            'header [class*="nick"]',
+                            'a[href*="personal"] [class*="nick"]',
+                          ];
+                          let nick = '';
+                          for (const s of sel) {
+                            const el = document.querySelector(s);
+                            if (el && (el.textContent || '').trim()) {
+                              nick = (el.textContent || '').trim();
+                              break;
+                            }
+                          }
+                          return { nick };
+                        }"""
+                    )
+                    retry_nick = (info.get("nick") or "").strip()
+                    if retry_nick and retry_nick not in (
+                        "登录", "登錄", "Login", "Sign in", "立即登录",
+                        "Hi! 你好", "Hi！你好", "你好", "Hi", "Hi!",
+                    ):
+                        raw_nick = retry_nick
                 if raw_nick in ("登录", "登錄", "Login", "Sign in", "立即登录", "Hi! 你好", "Hi！你好", "你好", ""):
                     raw_nick = ""
                 # 3) cookie 信息
+                # 关键身份 cookie（unb/cookie2/_tb_token_）实际存储在 .taobao.com 域名下，
+                # 而非 .goofish.com。仅按 "goofish" 过滤会漏掉 unb，导致 user_id 退化成
+                # _tb_token_ 前 16 字符、nick 兜底失败（issue: 登录后显示"未登录"）
                 cookies = await ctx.cookies()
-                goofish_cookies = [c for c in cookies if "goofish" in (c.get("domain") or "")]
+                goofish_cookies = [
+                    c for c in cookies
+                    if "goofish" in (c.get("domain") or "")
+                    or "taobao" in (c.get("domain") or "")
+                ]
                 goofish_names = {c.get("name", "") for c in goofish_cookies}
                 uid = ""
                 for c in goofish_cookies:
@@ -186,6 +275,27 @@ async def _cmd_info(out_dir: Path) -> int:
                         if c.get("name") == "_tb_token_":
                             uid = c["value"][:16]
                             break
+                # 兜底：登录刚完成时（< 5s），browser 异步写入 cookie 可能未完成。
+                # 这里若 uid 仍是 _tb_token_ 截断值且没找到 unb，再等 3s 重读一次。
+                # 为什么不一开始就等：正常场景 1s 内即可拿到完整 cookie，3s 等于浪费时间
+                _uid_via_tb_token = bool(uid) and not any(
+                    c.get("name") == "unb" for c in goofish_cookies
+                )
+                if _uid_via_tb_token:
+                    try:
+                        await page.wait_for_timeout(3000)
+                        cookies = await ctx.cookies()
+                        goofish_cookies = [
+                            c for c in cookies
+                            if "goofish" in (c.get("domain") or "")
+                            or "taobao" in (c.get("domain") or "")
+                        ]
+                        for c in goofish_cookies:
+                            if c.get("name") == "unb" and c.get("value"):
+                                uid = c["value"]
+                                break
+                    except Exception:
+                        pass
                 # 4) 最终登录态判定
                 #    关键：以关键登录 Cookie 为准（unb/_tb_token_/cookie2 任一存在即视为已登录）
                 #    之前要求 nick 非空 + cookie 才算登录，会导致 DOM 抓取失败时误判为未登录
@@ -271,6 +381,8 @@ async def _cmd_qr(out_dir: Path, timeout: int) -> int:
             # 使用与搜索相同的 Chromium 浏览器（headless=False 用于显示二维码）
             # 不传 channel="msedge"，确保 Cookie 加密密钥与搜索浏览器一致
             # 关键：不注入 stealth 脚本、不传反检测参数，以最接近用户手动打开的方式启动
+            # 清理残留锁文件：与 _cmd_info 一致，避免 SingletonLock 残留导致启动失败
+            _cleanup_lock_files(Path(cfg.user_data_dir))
             ctx = await pw.chromium.launch_persistent_context(
                 user_data_dir=cfg.user_data_dir,
                 headless=False,

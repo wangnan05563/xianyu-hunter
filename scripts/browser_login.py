@@ -192,76 +192,102 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
 
             # 统一使用指定 user_data_dir，确保 Cookie 写入正确位置
             launch_kwargs["user_data_dir"] = str(user_data_dir)
+
+            # 清理 user_data_dir 中残留的 SingletonLock 等锁文件 + Sessions 历史
+            # 为什么：Worker 与本进程共用 browser-data 目录，Worker 异常退出后
+            # SingletonLock/SingletonCookie/SingletonSocket 会残留，导致新 Chromium
+            # 启动后无法独占 user_data_dir，表现为 launch 成功但 new_page() 报
+            # "Target.createTarget: Failed to open a new tab"
+            # 与 Worker 的 _cleanup_lock_files() 保持一致（browser.py#L475）
+            #
+            # 同时清理 Sessions/ 目录：Chromium 启动时会自动恢复历史标签，
+            # 导致登录窗口出现 3 个标签（2 个 Worker 残留 + 1 个登录页）。
+            # 删除 Tabs_*/Session_* 文件让 Chromium 干净启动，只打开登录需要的 1 个标签。
+            # Cookie 存在 Default/Cookies SQLite，不在 Sessions/ 目录，清理不影响登录态
+            import glob as _glob
+            for _pattern in (
+                str(user_data_dir / "SingletonLock"),
+                str(user_data_dir / "SingletonCookie"),
+                str(user_data_dir / "SingletonSocket"),
+                str(user_data_dir / "*lock*"),
+                str(user_data_dir / "Default" / "Sessions" / "Tabs_*"),
+                str(user_data_dir / "Default" / "Sessions" / "Session_*"),
+            ):
+                for _f in _glob.glob(_pattern):
+                    try:
+                        Path(_f).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
             launch_start = time.monotonic()
             bc = await pw.chromium.launch_persistent_context(**launch_kwargs)
             timings["launch_context_sec"] = _elapsed_sec(launch_start)
 
-            # 拦截字体、媒体资源，加速页面加载
-            # 不拦截 image：闲鱼扫码登录需要二维码图片，拦截会导致用户无法登录
+            # 拦截非必要资源加速加载：字体、媒体、图片、manifest
+            # 不拦截 stylesheet：闲鱼/淘宝登录页 CSS 来自 g.alicdn.com 等阿里 CDN，
+            # 白名单难穷尽所有 CDN 域名；CSS 缺失会导致页面布局错乱、按钮不可见、
+            # 扫码区域错位，得不偿失（CSS 体积通常仅几百 KB）
+            # 通过域名白名单放行登录页（淘宝/支付宝登录页含扫码二维码图），
+            # 否则拦截 image 会导致二维码无法显示，用户无法扫码登录
             async def _block_resources(route):
-                if route.request.resource_type in ("font", "media"):
-                    await route.abort()
-                else:
+                req = route.request
+                url = req.url.lower()
+                # 放行登录相关域名：扫码二维码图与登录页资源必须可达
+                if any(d in url for d in (
+                    "login.taobao.com", "passport.taobao.com",
+                    "mini_login", "alipay.com",
+                )):
                     await route.continue_()
+                    return
+                if req.resource_type in ("font", "media", "image", "manifest"):
+                    await route.abort()
+                    return
+                await route.continue_()
             await bc.route("**/*", _block_resources)
 
             try:
                 set_status(status="opening", message="正在打开闲鱼...")
                 page_start = time.monotonic()
-                page = await bc.new_page()
+                # 复用 launch_persistent_context 自动创建的默认 page，
+                # 而非 close + new_page：关闭 context 中唯一的 page 会让
+                # Edge/Chromium 某些版本进入不稳定状态，紧接的 new_page()
+                # 会报 "Target.createTarget: Failed to open a new tab"
+                # 兼容无默认 page 的边缘场景
+                page = bc.pages[0] if bc.pages else await bc.new_page()
                 timings["new_page_sec"] = _elapsed_sec(page_start)
 
-                # 导航到闲鱼首页
+                # 直接打开个人页：已登录显示个人页，未登录服务端自动 302 跳转到登录页
+                # 比先打开首页再判断少一次 SPA 初始化，节省 1-3 秒
                 goto_start = time.monotonic()
                 await page.goto(
-                    "https://www.goofish.com",
+                    "https://www.goofish.com/personal",
                     wait_until="domcontentloaded",
                     timeout=20000,
                 )
                 timings["goto_home_sec"] = _elapsed_sec(goto_start)
 
-                # 检查是否已登录（严格验证 Cookie 值，而非仅检测名称存在）
-                # _m_h5_tk 访问首页就会自动设置，不能作为登录判据
+                # 检查是否已登录（严格验证 Cookie 值）
+                # _m_h5_tk 访问首页就会自动设置，不能作为登录判据；
+                # 这里严格校验 unb（>=6位数字）+ cookie2（>=10位真实会话ID），
+                # 验证通过即视为已登录，无需再访问 personal 页做服务端二次验证
+                # （避免开第 2 个标签导致窗口出现 3 个标签）
                 cookie_start = time.monotonic()
                 cookies = await bc.cookies()
                 timings["initial_cookie_read_sec"] = _elapsed_sec(cookie_start)
-                cookie_names = {c["name"] for c in cookies}
 
                 if _validate_login_cookies(cookies):
-                    # Cookie 值验证通过，进一步访问 personal 页面确认登录态有效
-                    try:
-                        verify_start = time.monotonic()
-                        personal_page = await bc.new_page()
-                        await personal_page.goto(
-                            "https://www.goofish.com/personal",
-                            wait_until="domcontentloaded",
-                            timeout=8000,
-                        )
-                        timings["verify_personal_sec"] = _elapsed_sec(verify_start)
-                        cur_url = personal_page.url.lower()
-                        # 如果没被重定向到登录页，说明登录态有效
-                        is_login_page = any(k in cur_url for k in ("/login", "passport", "mini_login"))
-                        if not is_login_page:
-                            set_status(status="already_logged", message="检测到已登录状态")
-                            # 导出 Cookie 到 JSON 供后端验证
-                            export_start = time.monotonic()
-                            final_cookies = await bc.cookies()
-                            _export_cookies_to_json(final_cookies, "browser")
-                            # 保存 Playwright 格式 Cookie 供 Worker 注入
-                            _save_playwright_cookies(final_cookies)
-                            timings["export_cookies_sec"] = _elapsed_sec(export_start)
-                            set_status(
-                                status="success",
-                                message="已处于登录状态",
-                                cookie_count=len(final_cookies),
-                            )
-                            await personal_page.close()
-                            return 0
-                        else:
-                            print("[browser_login] Cookie 存在但 personal 页面重定向到登录页，Cookie 可能已过期", file=sys.stderr)
-                        await personal_page.close()
-                    except Exception as e:
-                        print(f"[browser_login] 验证登录态失败: {e}", file=sys.stderr)
+                    set_status(status="already_logged", message="检测到已登录状态")
+                    export_start = time.monotonic()
+                    final_cookies = await bc.cookies()
+                    _export_cookies_to_json(final_cookies, "browser")
+                    _save_playwright_cookies(final_cookies)
+                    timings["export_cookies_sec"] = _elapsed_sec(export_start)
+                    set_status(
+                        status="success",
+                        message="已处于登录状态",
+                        cookie_count=len(final_cookies),
+                    )
+                    return 0
 
                 set_status(
                     status="waiting",
@@ -277,6 +303,14 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
 
                     if _validate_login_cookies(cookies):
                         # 强制保存浏览器存储状态，确保 Cookie 写入 SQLite
+                        # 为什么先 sleep 3 秒：闲鱼登录成功后会在 2-3s 内异步写入
+                        # _m_h5_tk / tfstk / t 等会话层 cookie（这些 cookie 决定
+                        # TokenRenewer 是否会标记 session 失效）。立即读 cookies
+                        # 只能拿到 18-20 个身份 cookie，缺关键会话 cookie，
+                        # 后续 auth_helper 读 user_data_dir 时也无法获取
+                        # 完整 cookie → 显示"未登录"。
+                        # 3 秒是经验值：超过这个时间，闲鱼侧通常已设置完毕。
+                        await asyncio.sleep(3)
                         storage_start = time.monotonic()
                         try:
                             await bc.storage_state()
@@ -296,6 +330,10 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                             message="检测到登录成功，Cookie 已保存",
                             cookie_count=final_count,
                         )
+                        # 再等 2 秒让 Chromium 异步 flush SQLite：
+                        # bc.close() 之前 SQLite 写入可能未完成，立即退出
+                        # 会导致其他 Chromium 进程（auth_helper / Worker）读到不完整 cookie
+                        await asyncio.sleep(2)
                         return 0
 
                     # 更新状态消息

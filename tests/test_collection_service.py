@@ -60,6 +60,14 @@ async def test_detail_only_collection_preserves_old_title_and_syncs_display() ->
     )
     container = MagicMock()
     container.collector.detail = AsyncMock(return_value=detail)
+    # 模拟完整 cookie 集（身份 + 会话），让 _check_detail_cookie_completeness 预检通过
+    container.browser.get_cookies = AsyncMock(return_value=[
+        {"name": n, "value": "v"} for n in [
+            "cookie2", "sgcookie", "unb", "_m_h5_tk",
+            "cna", "tracknick", "_tb_token_", "t", "tfstk",
+            "xlly_s", "_samesite_flag_", "KLNotice",
+        ]
+    ])
     container.repo.get_item.return_value = {"id": "i1", "task_id": "t1", "title": "old title"}
     container.repo.upsert_item = MagicMock()
     container.repo.mark_sold = MagicMock()

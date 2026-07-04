@@ -61,6 +61,15 @@ _DEFAULT_ALWAYS_OVERWRITE = {
 
 _OFFICIAL_COLLECT_IDENTITY_COOKIES = ("cookie2", "sgcookie", "unb")
 
+# 详情页 SPA 渲染必需的非身份 cookie（基于完整 22 个 cookie 集推断）
+# 为什么这些 cookie 必需：闲鱼详情页 SPA 依赖 cna/tracknick/_tb_token_/t 等
+# 追踪/会话 cookie 进行风控、CSRF 校验和卖家信息渲染，仅身份 cookie 不足以维持详情页会话
+_DETAIL_SESSION_COOKIES = {"cna", "tracknick", "_tb_token_", "t", "tfstk"}
+# Cookie 完整性判断的最低总数阈值（22 个完整集 vs 4 个不完整集，阈值 10 居中）
+_DETAIL_COOKIE_MIN_COUNT = 10
+# 详情页必需 cookie 的最低命中数量（5 个中至少命中 3 个才算完整）
+_DETAIL_SESSION_MIN_HITS = 3
+
 
 def _is_blank(value: object) -> bool:
     return value is None or (isinstance(value, str) and value == "")
@@ -204,6 +213,36 @@ class ItemCollectionService:
         ]
         return missing, expired, stale
 
+    async def _check_detail_cookie_completeness(self) -> str | None:
+        """检查浏览器 cookie 完整性，返回错误信息或 None
+
+        为什么需要预检：collector.detail() 返回 None 时，上游无法区分是 cookie 失效
+        还是页面不可用。预检 cookie 完整性可以在 detail() 调用前识别 cookie 问题，
+        给出明确的 401 错误，而非含糊的 502（v4.5 错误语义准确性规则）。
+
+        判断依据（任一命中即视为不完整）：
+        1. cookie 总数 < 10：22 个完整集 vs 4 个不完整集，阈值 10 居中
+        2. 详情页必需 cookie（cna/tracknick/_tb_token_/t/tfstk）命中数 < 3：
+           仅身份 cookie 不足以维持详情页 SPA 会话
+
+        Returns:
+            None 表示 cookie 完整；str 表示错误信息（含具体缺失情况，便于用户排查）
+        """
+        cookies = await self._get_browser_cookies()
+        cookie_names = {c.get("name", "") for c in cookies}
+        identity_found = set(_OFFICIAL_COLLECT_IDENTITY_COOKIES) & cookie_names
+        session_found = _DETAIL_SESSION_COOKIES & cookie_names
+
+        if len(cookies) >= _DETAIL_COOKIE_MIN_COUNT and len(session_found) >= _DETAIL_SESSION_MIN_HITS:
+            return None
+
+        return (
+            f"闲鱼登录 Cookie 不完整（共 {len(cookies)} 个，"
+            f"身份 Cookie {sorted(identity_found)} 存在，"
+            f"会话 Cookie {sorted(session_found)} 不足），"
+            f"请重新登录或从浏览器导出完整 Cookie 导入"
+        )
+
     async def ensure_official_cookies(self) -> None:
         container = self.container
         if not getattr(container, "browser", None):
@@ -283,11 +322,68 @@ class ItemCollectionService:
         reuse_page: Any | None,
     ) -> CollectionResult:
         await self._sync_detail_cookies()
+        # cookie 完整性预检：detail() 返回 None 时上游无法区分原因，
+        # 预检可在调用前识别 cookie 不完整问题，给出 401 而非含糊的 502
+        cookie_issue = await self._check_detail_cookie_completeness()
+        if cookie_issue:
+            raise CollectionError(401, cookie_issue, item_id=item_id)
+
         detail = await self.container.collector.detail(item_id, page=reuse_page)
+
+        # token 失效自动重试：home_title_redirect 通常是 _m_h5_tk 过期被重定向到首页
+        # 强制刷新 token 后重试一次，避免用户因偶发 token 过期看到 502
         if detail is None:
+            reason = getattr(self.container.collector, "last_detail_failure_reason", "") or ""
+            if reason == "home_title_redirect" and self.container.collector is not None:
+                try:
+                    refresh_page = await self.container.browser.new_page()
+                    try:
+                        await self.container.collector._ensure_fresh_m5tk(refresh_page, force=True)
+                    finally:
+                        try:
+                            await refresh_page.close()
+                        except Exception:
+                            pass
+                    logger.info("token 失效，已强制刷新 _m_h5_tk 后重试 item={}", item_id)
+                    detail = await self.container.collector.detail(item_id, page=reuse_page)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("token 刷新重试失败 item={}: {}", item_id, exc)
+
+        if detail is None:
+            # detail 失败后再次检查 cookie 完整性：cookie 不完整时给 401 而非 502
+            cookie_issue = await self._check_detail_cookie_completeness()
+            if cookie_issue:
+                raise CollectionError(401, cookie_issue, item_id=item_id)
+
+            # 根据 detail() 的失败 reason 映射到对应的 status_code
+            # 为什么这么做：所有失败都抛 502 会让用户无法判断是该重登录、该等待还是该手动验证
+            reason = getattr(self.container.collector, "last_detail_failure_reason", "") or "unknown"
+            if reason in ("home_title_redirect", "login_redirect"):
+                # cookie 失效或 _m_h5_tk token 过期，需用户重新登录
+                raise CollectionError(
+                    401,
+                    "采集失败：登录态失效或 _m_h5_tk token 过期，请重新登录或导入完整 Cookie",
+                    item_id=item_id,
+                )
+            if reason == "verify_redirect":
+                # 反爬验证码拦截，需用户手动完成验证
+                raise CollectionError(
+                    429,
+                    "采集失败：触发闲鱼反爬验证码，请手动完成验证后重试",
+                    item_id=item_id,
+                )
+            if reason in ("page_closed", "target_closed_exception"):
+                # 页面被并发清理关闭，临时性故障，用户可重试
+                raise CollectionError(
+                    503,
+                    "采集失败：浏览器页面被并发清理关闭，请稍后重试",
+                    item_id=item_id,
+                )
+            # 其他原因（http_status_error / title_extraction_failed /
+            # price_extraction_failed / redirected_away_from_item / unknown）
             raise CollectionError(
                 502,
-                "Failed to collect item detail: page unavailable or login expired",
+                f"采集失败：详情页不可用或网络异常（reason={reason}），请稍后重试",
                 item_id=item_id,
             )
 

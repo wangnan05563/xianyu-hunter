@@ -639,7 +639,12 @@ def list_evaluations(
 
     evals = []
     for r in rows:
-        if not str(r.get("type", "")).startswith(_EVAL_TYPE_PREFIX):
+        # 只展示 eval.scored 评估事件，排除 eval.passed 等通知事件
+        # 为什么不用 startswith("eval.")：NotifierHub 推送钉钉时会写入 type="eval.passed"、
+        # payload=None、stage="notify" 的记录（hub.py 第 196-204 行），这些通知事件
+        # 没有评分数据，混入列表会导致前端出现大量"无内容记录"且被 distribution API
+        # 误算为 insufficient_count
+        if str(r.get("type", "")) != _EVAL_SCORED_TYPE:
             continue
         # 关键修复：必须把兜底空字典写回 r["payload"]，否则数据库中 payload 为 NULL 的记录
         # 会在 _enrich_eval_with_item 修改后仍以 None 返回前端，导致 r.payload.score 报错
@@ -1056,11 +1061,17 @@ def _collect_dist_eval_records(
 
     score 必须有（非 None），price 可选。
     分数分布只依赖 score，热力图依赖 price × score。
-    score=None（数据不足）的记录不计入分数分布，但计入 insufficient_count"""
+    score=None（数据不足）的记录不计入分数分布，但计入 insufficient_count
+
+    为什么只统计 eval.scored 而非所有 eval.*：NotifierHub 推送钉钉时会写入
+    type="eval.passed"、payload=None、stage="notify" 的记录（hub.py 第 196-204 行），
+    这些通知事件没有 score 字段，若用 startswith("eval.") 过滤会被误算为
+    insufficient_count，导致前端误报"有 N 条评估记录因卖家信息缺失仅基于价格评估"
+    """
     eval_records: list[tuple[float, float | None]] = []
     insufficient_count = 0  # 数据不足的评估数
     for e in events:
-        if not str(e.get("type", "")).startswith(_EVAL_TYPE_PREFIX):
+        if str(e.get("type", "")) != _EVAL_SCORED_TYPE:
             continue
         ts = e.get("created_at", "")
         if not ts:

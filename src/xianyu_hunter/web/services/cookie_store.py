@@ -46,39 +46,24 @@ def _cookie_json_path(user_id: str = "default") -> Path:
         raise ValueError(f"invalid user_id: {user_id!r}")
     return Path("data", f"cookies_{user_id}.json")
 
-# 闲鱼登录关键 Cookie 名称
-_GOOFISH_KEY_COOKIES = {"_m_h5_tk", "_m_h5_tk_enc", "unb", "sgcookie", "cookie2", "lg2"}
-
-# 缓存 TTL（秒）
-_CACHE_TTL = 30.0
-
+# 闲鱼登录关键 Cookie 名称 / 缓存 TTL / 测试值过滤 / 格式正则
+# 配置化（cookie_management 节点）：统一管理散落在 cookie_store / cookie_rotator /
+# browser_import / cookie_inject / _search 等模块的硬编码常量，
+# 避免名单漂移导致 75+ cookie 丢失。模块级一次性加载，热更新需重启进程
+_CFG_COOKIE = get_config().cookie_management
+_GOOFISH_KEY_COOKIES: set[str] = set(_CFG_COOKIE.key_cookies)
+_CACHE_TTL: float = _CFG_COOKIE.cache_ttl_sec
 # 已知的测试数据特征（来自测试用例的默认值）
 # 这些值不应被当作真实 Cookie 返回给用户或写入 JSON 存储
 _TEST_COOKIE_VALUES: dict[str, set[str]] = {
-    "unb": {"123456", "123"},        # 测试用例默认用户ID
-    "cookie2": {"abc"},              # 测试用例默认会话ID
-    "_m_h5_tk": {"abc"},             # 测试用例默认令牌
-    "_m_h5_tk_enc": {"enc", "enc_123", "abc123enc456"},  # 测试用例默认加密令牌
-    "sgcookie": {"sg", "sg_token"},  # 测试用例默认 sgcookie
+    k: set(v) for k, v in _CFG_COOKIE.test_cookie_values.items()
 }
-
 # 真实 Cookie 的格式特征（用于拦截黑名单之外的测试数据）
 # 为什么用正则而非精确匹配：测试代码可能使用 real_token_123、fake_token 等任意字符串，
 # 精确匹配无法覆盖；用格式校验能识别所有不符合真实格式的值
 # 注意：只对格式明确固定的 Cookie 添加校验，避免误伤真实数据
 _COOKIE_FORMAT_PATTERNS: dict[str, re.Pattern] = {
-    # _m_h5_tk: 32位hex + 下划线 + 13位毫秒时间戳（如 c7b2c44645275604a525e6287fea2c3a_1782530783399）
-    # 大小写都接受：真实浏览器可能返回大写 hex
-    "_m_h5_tk": re.compile(r"^[0-9a-fA-F]{32}_\d{13}$"),
-    # unb: 8位以上纯数字用户ID（测试值 123456 只有6位）
-    "unb": re.compile(r"^\d{8,}$"),
-    # cookie2: 32位以上十六进制会话ID（大小写都接受）
-    "cookie2": re.compile(r"^[0-9a-fA-F]{32,}$"),
-    # sgcookie: 真实值通常以 E100 开头且长度 >= 20（URL编码的加密字符串）
-    # 测试值 "sg"(2), "sg_token"(8) 等短字符串会被拦截
-    "sgcookie": re.compile(r"^.{20,}$"),
-    # _m_h5_tk_enc: 加密令牌，真实值长度 >= 16（测试值 enc/enc_123 等较短）
-    "_m_h5_tk_enc": re.compile(r"^.{16,}$"),
+    k: re.compile(v) for k, v in _CFG_COOKIE.cookie_format_patterns.items()
 }
 
 
@@ -269,6 +254,74 @@ class CookieStore:
         if success:
             self._sync_to_sqlite(filtered)
         return success
+
+    def merge_cookies(self, cookies: list[dict], method: str = "merge", user_id: str = "default") -> bool:
+        """合并写入 Cookie 到 JSON（保留原有 cookie，新值覆盖同名 cookie）
+
+        为什么需要合并写：用户从浏览器 DevTools 复制 cookie 时可能只粘贴部分
+        cookie（如仅 4 个身份 cookie），若用 export_cookies 覆盖写入，会丢失
+        原有 22 个完整 cookie 集（包括 cna/tracknick/_tb_token_/t/tfstk 等
+        详情页 SPA 渲染必需的会话/追踪 cookie），导致详情页采集失败。
+
+        合并策略：以 cookie 名为 key 合并，相同 name 的新值覆盖旧值，旧文件中
+        其他 cookie 全部保留。
+        """
+        if not cookies:
+            return False
+        filtered = [
+            c for c in cookies
+            if not is_test_cookie(c.get("name", ""), c.get("value", ""))
+        ]
+        if not filtered:
+            logger.warning("merge_cookies: 所有 Cookie 被识别为测试数据，跳过写入")
+            return False
+        if len(filtered) < len(cookies):
+            logger.warning(
+                "merge_cookies: 过滤掉 %d 个测试 Cookie（%d → %d）",
+                len(cookies) - len(filtered), len(cookies), len(filtered),
+            )
+
+        with self._lock:
+            existing = self._read_json(user_id)
+            # 用 name 做 key：同名 cookie 覆盖，旧文件中其他 cookie 全部保留
+            merged_by_name: dict[str, dict] = {}
+            if existing and existing.get("cookies"):
+                for c in existing["cookies"]:
+                    name = c.get("name", "")
+                    if name:
+                        merged_by_name[name] = c
+            for new_c in filtered:
+                merged_by_name[new_c.get("name", "")] = new_c
+
+            merged_cookies = list(merged_by_name.values())
+            existing_count = len(existing["cookies"]) if existing and existing.get("cookies") else 0
+            logger.info(
+                "merge_cookies: 注入 %d 个，原有 %d 个，合并后 %d 个",
+                len(filtered), existing_count, len(merged_cookies),
+            )
+
+            data = {
+                "exported_at": time.time(),
+                "method": method,
+                "cookie_count": len(merged_cookies),
+                "cookies": [
+                    {
+                        "name": c.get("name", ""),
+                        "value": c.get("value", ""),
+                        "domain": c.get("domain", ""),
+                        "path": c.get("path", "/"),
+                        # 保存过期时间用于健康检查的有效性判断
+                        "expires": c.get("expires", -1),
+                    }
+                    for c in merged_cookies
+                ],
+            }
+            success = self._write_json(data, user_id)
+            if success:
+                # 同步全部合并后的 cookie（不仅仅是新注入的），
+                # 确保 SQLite 与 JSON 状态一致
+                self._sync_to_sqlite(merged_cookies)
+            return success
 
     def sync_to_sqlite(self, cookies: list[dict]) -> bool:
         """外部调用：将 Cookie 同步到 browser-data SQLite

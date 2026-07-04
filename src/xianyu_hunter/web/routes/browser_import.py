@@ -265,7 +265,14 @@ _BROWSER_USER_DATA = {
 }
 
 _TARGET_DOMAINS = ("%goofish%", "%taobao%", "%alipay%")
-_TARGET_COOKIE_NAMES = {"_m_h5_tk", "_m_h5_tk_enc", "cookie2", "sgcookie", "unb", "lg2", "tracknick"}
+# 关键 Cookie 名单（用于非全量导入模式的过滤 + 导入结果统计）
+# 配置化（cookie_management.key_cookies）：与 cookie_store / _search 等模块共享同一份名单
+# 为什么不再硬编码 tracknick：原硬编码包含 tracknick 但不在 key_cookies 中，
+# 全量导入模式下不需要白名单，非全量模式按配置 key_cookies 过滤即可
+_TARGET_COOKIE_NAMES = set(get_config().cookie_management.key_cookies)
+# 是否全量导入：true=保留所有 75+ cookie（推荐），false=仅导入 key_cookies 白名单
+# 用户反馈"75 个 cookie 齐全时各类问题大幅度减少"，全量导入是保留 cookie 的关键
+_IMPORT_FULL = get_config().cookie_management.import_full
 
 
 def _build_no_profile_error(browser: str, local_app_data: str) -> dict:
@@ -538,15 +545,28 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
                     "hint": "可能需要关闭浏览器后重试，或改用手动粘贴 Cookie 方式",
                 }
 
-            name_placeholders = ",".join("?" for _ in _TARGET_COOKIE_NAMES)
-            rows = src_conn.execute(
-                f"""SELECT host_key, name, encrypted_value, value, path,
-                          expires_utc, is_secure, is_httponly
-                   FROM cookies
-                   WHERE (host_key LIKE ? OR host_key LIKE ? OR host_key LIKE ?)
-                     AND name IN ({name_placeholders})""",
-                (*_TARGET_DOMAINS, *_TARGET_COOKIE_NAMES),
-            ).fetchall()
+            # 全量导入：不按 name 过滤，保留所有闲鱼相关域名下的 cookie（75+ 个）
+            # 非全量导入：仅导入 key_cookies 白名单（会丢失 68 个 cookie，不推荐）
+            # 为什么优先全量：用户反馈 75 个 cookie 齐全时各类问题大幅度减少，
+            # 白名单过滤会丢失 tracking 层 cookie（cna/tfstk 等）导致反爬风险升高
+            if _IMPORT_FULL:
+                rows = src_conn.execute(
+                    """SELECT host_key, name, encrypted_value, value, path,
+                              expires_utc, is_secure, is_httponly
+                       FROM cookies
+                       WHERE host_key LIKE ? OR host_key LIKE ? OR host_key LIKE ?""",
+                    _TARGET_DOMAINS,
+                ).fetchall()
+            else:
+                name_placeholders = ",".join("?" for _ in _TARGET_COOKIE_NAMES)
+                rows = src_conn.execute(
+                    f"""SELECT host_key, name, encrypted_value, value, path,
+                              expires_utc, is_secure, is_httponly
+                       FROM cookies
+                       WHERE (host_key LIKE ? OR host_key LIKE ? OR host_key LIKE ?)
+                         AND name IN ({name_placeholders})""",
+                    (*_TARGET_DOMAINS, *_TARGET_COOKIE_NAMES),
+                ).fetchall()
 
             if not rows:
                 shutil.rmtree(tmp_dir, ignore_errors=True)

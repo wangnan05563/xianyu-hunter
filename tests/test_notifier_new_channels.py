@@ -10,19 +10,31 @@ import pytest
 
 from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.modules.notifier import NotifierRegistry, create_notifier
-from xianyu_hunter.modules.notifier.dingtalk import DingTalkNotifier
+from xianyu_hunter.modules.notifier.dingtalk import DingTalkNotifier, _to_dingtalk_markdown
 from xianyu_hunter.modules.notifier.telegram import TelegramNotifier
+from xianyu_hunter.modules.notifier.templates import _translate_reject_reason
 from xianyu_hunter.modules.notifier.wecom import WeComNotifier, _to_wecom_markdown
 from xianyu_hunter.modules.notifier.webhook import WebhookNotifier
 
 
 # ============== 工具：构造 mock aiohttp 响应 ==============
 
-def make_response(status: int, text: str = "ok") -> MagicMock:
-    """构造 aiohttp 响应 mock"""
+def make_response(status: int, text: str = "ok", body: bytes | None = None) -> MagicMock:
+    """构造 aiohttp 响应 mock
+
+    - text：text() 返回的字符串（默认 "ok"）
+    - body：read() 返回的字节（用于图片下载等场景）
+      若同时提供 body，text() 返回 body 的字符串形式（兜底）
+    """
     resp = MagicMock()
     resp.status = status
-    resp.text = AsyncMock(return_value=text)
+    if body is not None:
+        resp.read = AsyncMock(return_value=body)
+        # 部分代码可能用 text()，兜底返回 body 字符串
+        resp.text = AsyncMock(return_value=body.decode("utf-8", errors="replace"))
+    else:
+        resp.text = AsyncMock(return_value=text)
+        resp.read = AsyncMock(return_value=text.encode("utf-8") if isinstance(text, str) else text)
     resp.request_info = MagicMock()
     resp.history = ()
     resp.__aenter__ = AsyncMock(return_value=resp)
@@ -49,8 +61,39 @@ def make_session(responses: list[MagicMock]) -> MagicMock:
     return session
 
 
+def make_session_with_get(get_responses: list[MagicMock], post_responses: list[MagicMock]) -> MagicMock:
+    """构造支持 GET + POST 的 ClientSession mock（独立队列）
+
+    钉钉 notifier v6 方案需要：
+    1. session.get(thumb_url) 下载商品图
+    2. session.post(payload) 发送主消息
+    3. session.post(form) 上传到公共图床
+    4. session.post(payload) 发送 link 副消息
+
+    get_responses 和 post_responses 各自维护独立队列
+    """
+    session = MagicMock()
+    get_queue = list(get_responses)
+    post_queue = list(post_responses)
+
+    def _next_get(*args, **kwargs):
+        if not get_queue:
+            raise AssertionError("get() 调用次数超出预期")
+        return get_queue.pop(0)
+
+    def _next_post(*args, **kwargs):
+        if not post_queue:
+            raise AssertionError("post() 调用次数超出预期")
+        return post_queue.pop(0)
+
+    session.get = MagicMock(side_effect=_next_get)
+    session.post = MagicMock(side_effect=_next_post)
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session
+
+
 def make_eval_event() -> Event:
-    """构造评估通过事件"""
     return Event(
         type=EventType.EVAL_PASSED,
         task_id="t1",
@@ -68,6 +111,37 @@ def make_eval_event() -> Event:
             "reject_reasons": [],
         },
     )
+
+
+def patch_pil_compress_success():
+    """mock PIL.Image 让压缩步骤"成功"返回固定字节
+
+    测试中下载的 image_bytes 是不合法的（仅为模拟 webp 头），PIL 真实解码会失败。
+    用这个 context manager 替换 PIL.Image，模拟 Image.open / convert / thumbnail / save 链，
+    让 _prepare_image_url 走完整个下载→压缩→上传流程。
+
+    注意：dingtalk.py 用的是 `from PIL import Image` + `Image.open(...)` 模式，
+    替换 PIL.Image 后，函数内重新 import 时 Image 就指向 mock_module，
+    所以这里 mock 的是 mock_module.open（不是 mock_module.Image.open）。
+    """
+    fake_jpg = b"\xff\xd8\xff\xe0" + b"\x00" * 50  # 模拟 JPEG 字节
+    mock_img = MagicMock()
+    mock_img.mode = "RGB"
+
+    def _fake_save(buf, format=None, **kwargs):
+        buf.write(fake_jpg)
+        return None
+
+    mock_img.save = _fake_save
+    mock_img.convert = MagicMock(return_value=mock_img)
+    mock_img.thumbnail = MagicMock(return_value=None)
+
+    mock_module = MagicMock()
+    mock_module.open = MagicMock(return_value=mock_img)
+
+    # PIL 用延迟加载：测试运行时 PIL.Image 还不存在（没人 import），
+    # create=True 让 patch 在属性缺失时自动创建
+    return patch("PIL.Image", mock_module, create=True)
 
 
 # ============== 注册表测试 ==============
@@ -252,7 +326,125 @@ async def test_wecom_4xx_response_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_dingtalk_send_success() -> None:
-    """钉钉推送成功（含签名）"""
+    """钉钉推送成功（含签名），单条 actionCard 策略
+
+    策略：
+    - 单条 actionCard 主消息：富文本（# 标题、<font color>、>引用、风险项翻译）
+      + 商品图作为 markdown 链接嵌入末尾 + 按钮跳转
+    - **钉钉 webhook 不支持 image 类型 + 公共图床国内不可用**（v1→v6 全失败）
+    - 当前 v7 方案：只发 1 条消息，商品图以可点击链接形式呈现
+    """
+    notifier = DingTalkNotifier(
+        webhook_url="https://oapi.dingtalk.com/robot/send?access_token=abc",
+        secret="SECtest123",
+    )
+    main_resp = make_response(200, '{"errcode":0,"errmsg":"ok"}')
+    session = make_session([main_resp])
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        result = await notifier.send(make_eval_event())
+
+    assert result.success is True
+    assert result.channel == "dingtalk"
+    # 只发 1 条 actionCard（无副消息、无 GET 下载、无图床上传）
+    assert session.post.call_count == 1
+    assert session.get.call_count == 0
+
+    # —— 验证主消息（actionCard）——
+    main_args, main_kwargs = session.post.call_args
+    # URL 应含签名参数
+    assert "timestamp=" in main_args[0]
+    assert "sign=" in main_args[0]
+    # msgtype 应为 actionCard
+    assert main_kwargs["json"]["msgtype"] == "actionCard"
+    card = main_kwargs["json"]["actionCard"]
+    # 卡片标题：短标题（限 64 字符）
+    assert card["title"].startswith("[闲鱼捡漏]")
+    # 卡片正文：markdown
+    content = card["text"]
+    # 钉钉优化格式：首行用 # 标题
+    assert content.startswith("# ")
+    # 关键字段用 <font color> 标记
+    assert '<font color="#1890FF">' in content  # 评分（蓝色）
+    assert '<font color="#52C41A">' in content or '<font color="#FA8C16">' in content
+    assert '<font color="#F5222D">' in content  # 价格（红色）
+    # 跳转链接带颜色
+    assert '[<font color="#0088FF">' in content
+    # 不应包含钉钉不支持的语法
+    assert "_系统自动" not in content  # 斜体已移除
+    # actionCard 整体跳转按钮
+    assert card["singleTitle"] == "查看商品详情"
+    assert "goofish.com" in card["singleURL"] and "/item/" in card["singleURL"]
+    # 商品图作为可点击链接嵌入（v7 新方案）
+    assert "点击查看商品图" in content
+    assert "img.example.com" in content
+    # 灰色页脚
+    assert '<font color="#999999">' in content
+
+
+@pytest.mark.asyncio
+async def test_dingtalk_send_without_thumb_skips_link() -> None:
+    """无 thumb_url 时主消息正常发送（v7 单消息策略无副消息可跳过）"""
+    notifier = DingTalkNotifier(
+        webhook_url="https://oapi.dingtalk.com/robot/send?access_token=abc",
+        secret="SECtest123",
+    )
+    # 构造无 thumb_url 的事件
+    event = Event(
+        type=EventType.EVAL_PASSED,
+        task_id="t1",
+        item_id="i1",
+        payload={
+            "item": {
+                "title": "iPhone 13",
+                "price": 1999.0,
+                "url": "https://www.goofish.com/item/i1",
+            },
+            "score": 85,
+            "risk_level": "low",
+            "seller_nick": "测试卖家",
+            "reject_reasons": [],
+        },
+    )
+    main_resp = make_response(200, '{"errcode":0,"errmsg":"ok"}')
+    session = make_session([main_resp])
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        result = await notifier.send(event)
+
+    assert result.success is True
+    # 只调用 1 次 POST
+    assert session.post.call_count == 1
+    # 不应调用 GET（无图可下）
+    assert session.get.call_count == 0
+    # 且为主消息 actionCard
+    assert session.post.call_args.kwargs["json"]["msgtype"] == "actionCard"
+    # 无 thumb_url 时主消息不含"点击查看商品图"
+    content = session.post.call_args.kwargs["json"]["actionCard"]["text"]
+    assert "点击查看商品图" not in content
+
+
+@pytest.mark.asyncio
+async def test_dingtalk_send_renders_reject_reasons_as_blockquote() -> None:
+    """风险项 reject_reasons 存在时，应渲染为 > 引用块 + 中文翻译（钉钉 markdown 原生支持）"""
+    event = Event(
+        type=EventType.EVAL_PASSED,
+        task_id="t1",
+        item_id="i1",
+        payload={
+            "item": {
+                "title": "iPhone 13 128G 国行",
+                "price": 1999.0,
+                "url": "https://www.goofish.com/item/i1",
+            },
+            "score": 70,
+            "risk_level": "medium",
+            "reject_reasons": [
+                "on_sale 9 (ded=1)",
+                "dealer:image_theft(sellers=6,sample=10506087)",
+            ],
+        },
+    )
     notifier = DingTalkNotifier(
         webhook_url="https://oapi.dingtalk.com/robot/send?access_token=abc",
         secret="SECtest123",
@@ -261,15 +453,34 @@ async def test_dingtalk_send_success() -> None:
     session = make_session([resp])
 
     with patch("aiohttp.ClientSession", return_value=session):
+        await notifier.send(event)
+
+    _, kwargs = session.post.call_args
+    content = kwargs["json"]["actionCard"]["text"]
+    # 风险项用 > 引用块突出
+    assert "> 📦 在售商品过多（9 件）" in content
+    # dealer:image_theft 应翻译为中文
+    assert "> 🖼️ 涉嫌盗图" in content
+    # 风险等级 medium → 橙色
+    assert '<font color="#FA8C16">medium</font>' in content
+
+
+@pytest.mark.asyncio
+async def test_dingtalk_send_business_error() -> None:
+    """钉钉业务错误（HTTP 200 但 errcode!=0）应标记为失败"""
+    notifier = DingTalkNotifier(
+        webhook_url="https://oapi.dingtalk.com/robot/send?access_token=abc",
+        secret="SECtest123",
+    )
+    # 模拟关键词不匹配
+    main_resp = make_response(200, '{"errcode":310000,"errmsg":"keywords not in content"}')
+    session = make_session([main_resp])
+
+    with patch("aiohttp.ClientSession", return_value=session):
         result = await notifier.send(make_eval_event())
 
-    assert result.success is True
-    assert result.channel == "dingtalk"
-    args, kwargs = session.post.call_args
-    # URL 应含签名参数
-    assert "timestamp=" in args[0]
-    assert "sign=" in args[0]
-    assert kwargs["json"]["msgtype"] == "text"
+    assert result.success is False
+    assert "errcode=310000" in result.error or "keywords" in result.error
 
 
 @pytest.mark.asyncio
@@ -313,6 +524,96 @@ async def test_dingtalk_missing_url_raises() -> None:
     result = await notifier.send(make_eval_event())
     assert result.success is False
     assert "webhook" in result.error
+
+
+def test_to_dingtalk_markdown_keeps_images() -> None:
+    """图片语法 ![alt](url) 应保留（ActionCard 走钉钉图片代理）"""
+    body = "# 评估通过\n![商品图](https://example.com/img.jpg)\n[查看](https://example.com)"
+    result = _to_dingtalk_markdown(body)
+    assert "![商品图](https://example.com/img.jpg)" in result
+    assert "[查看](https://example.com)" in result  # 普通链接保留
+
+
+def test_to_dingtalk_markdown_removes_italics() -> None:
+    """斜体 _text_ 应转为纯文本（ActionCard markdown 不识别下划线斜体）"""
+    body = "系统自动发送，_请尽快确认_"
+    result = _to_dingtalk_markdown(body)
+    assert "_" not in result
+    assert "请尽快确认" in result
+
+
+def test_to_dingtalk_markdown_keeps_separators() -> None:
+    """ActionCard 支持分割线 --- → 保留"""
+    body = "标题\n\n---\n\n正文"
+    result = _to_dingtalk_markdown(body)
+    assert "---" in result
+
+
+def test_to_dingtalk_markdown_keeps_font_color() -> None:
+    """<font color> 字体颜色应保留（ActionCard markdown 原生支持）"""
+    body = '<font color="#F5222D">¥760.00</font>'
+    result = _to_dingtalk_markdown(body)
+    assert '<font color="#F5222D">¥760.00</font>' in result
+
+
+def test_to_dingtalk_markdown_keeps_blockquote() -> None:
+    """引用块 > 应保留（ActionCard markdown 原生支持）"""
+    body = "**风险项：**\n> on_sale 9 (ded=1)\n> dealer:image_theft"
+    result = _to_dingtalk_markdown(body)
+    assert "> on_sale 9" in result
+    assert "> dealer:image_theft" in result
+
+
+# ============== 风险项翻译器测试 ==============
+
+
+def test_translate_reject_reason_image_theft() -> None:
+    """dealer:image_theft 应翻译为'涉嫌盗图'"""
+    assert "涉嫌盗图" in _translate_reject_reason(
+        "dealer:image_theft(sellers=6,sample=10506087,85381285)"
+    )
+
+
+def test_translate_reject_reason_new_register() -> None:
+    """dealer:new_register_low_activity 应翻译为'新注册账号'"""
+    assert "新注册账号" in _translate_reject_reason(
+        "dealer:new_register_low_activity(days=15,sold=2,on_sale=8)"
+    )
+
+
+def test_translate_reject_reason_templated_text() -> None:
+    """dealer:templated_text 应翻译为'文案高度模板化'"""
+    assert "文案高度模板化" in _translate_reject_reason(
+        "dealer:templated_text(max_sim=0.92,sample=15)"
+    )
+
+
+def test_translate_reject_reason_post_burst() -> None:
+    """dealer:post_burst 应翻译为'短期大量发帖'"""
+    assert "短期大量发帖" in _translate_reject_reason(
+        "dealer:post_burst(recent=20,previous=2,ratio=10.0x)"
+    )
+
+
+def test_translate_reject_reason_on_sale() -> None:
+    """on_sale N (ded=M) 应翻译为'在售商品过多'"""
+    assert "在售商品过多" in _translate_reject_reason("on_sale 9 (ded=1)")
+
+
+def test_translate_reject_reason_credit_score() -> None:
+    """credit_score N moderate 应翻译为'信用分一般'"""
+    assert "信用分一般" in _translate_reject_reason("credit_score 98 moderate")
+
+
+def test_translate_reject_reason_register_days() -> None:
+    """register_days N < M 应翻译为'注册时间过短'"""
+    assert "注册时间过短" in _translate_reject_reason("register_days 30 < 90")
+
+
+def test_translate_reject_reason_unknown_keeps_original() -> None:
+    """未知模式应保留原值，便于排查"""
+    result = _translate_reject_reason("some_unknown_signal")
+    assert "some_unknown_signal" in result
 
 
 # ============== Webhook 推送测试 ==============

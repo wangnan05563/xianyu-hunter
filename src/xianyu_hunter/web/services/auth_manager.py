@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import sys
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _REPO = Path(__file__).resolve().parents[4]
 _HELPER = _REPO / "scripts" / "auth_helper.py"
@@ -57,6 +60,12 @@ class AuthManager:
         self._qr_state = AuthState()
         self._qr_proc: subprocess.Popen | None = None
         self._qr_monitor_task: asyncio.Task | None = None
+        # auth_helper 进程互斥锁：防止多个 auth_helper 并发执行
+        # 为什么需要：_maybe_refresh_userinfo 的条件3（nick 无效）会在登录后
+        # 立即触发第二次 auth_helper，与第一次（delay=5s 后启动）并发执行，
+        # 两个 Chromium 争用同一 user_data_dir → SingletonLock 冲突 → 卡死
+        self._refresh_lock = threading.Lock()
+        self._refreshing = False
         self._ensure_out_dir()
 
     @staticmethod
@@ -79,8 +88,19 @@ class AuthManager:
                     pass
             return {"logged_in": False, "user_id": "", "nick": "", "avatar_url": "", "fetched_at": 0}
 
-    def trigger_refresh_userinfo_async(self) -> None:
-        """触发后台刷新（不等完成）"""
+    def trigger_refresh_userinfo_async(self, delay: float = 0.0) -> None:
+        """触发后台刷新（不等完成）
+
+        delay 参数：延迟秒数后执行。
+        为什么需要延迟：登录成功后 browser_login.py 的 Chromium 进程需要 2-5 秒
+        才完全退出（bc.close() 后 Edge 进程异步清理）。如果立即启动 auth_helper，
+        两个 Chromium 会争用同一 user_data_dir，导致：
+        1. SQLite Cookie 数据库锁冲突 → Cookie 写入丢失（38→18 个）
+        2. Chromium 启动变慢（等待锁释放）
+        3. auth_helper 读 Cookie 不完整 → 读不到 unb → user_id 降级为 sha256(cookie2)
+        4. auth_helper 的 Chromium 虽然 headless=True，启动瞬间可能闪现窗口
+        登录路径调用时传 delay=5.0，让 browser_login 的 Chromium 先退出。
+        """
         if not _HELPER.exists():
             return
         # 用 fire-and-forget 异步任务；不阻塞
@@ -88,12 +108,43 @@ class AuthManager:
         # 正好走 except 分支起线程；后者在 3.12+ 已弃用
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._refresh_userinfo_bg())
+            loop.create_task(self._refresh_userinfo_bg(delay))
         except RuntimeError:
-            threading.Thread(target=self._refresh_userinfo_sync, daemon=True).start()
+            threading.Thread(
+                target=self._refresh_userinfo_sync_with_delay,
+                args=(delay,),
+                daemon=True,
+            ).start()
 
-    async def _refresh_userinfo_bg(self) -> None:
-        await asyncio.to_thread(self._refresh_userinfo_sync)
+    async def _refresh_userinfo_bg(self, delay: float = 0.0) -> None:
+        if delay > 0:
+            await asyncio.sleep(delay)
+        # 复用 _refresh_userinfo_sync_with_delay 的互斥逻辑
+        # 为什么不直接调 _refresh_userinfo_sync：async 路径也需要互斥，
+        # 防止 /me 触发的 async 任务与登录触发的 thread 任务并发执行
+        await asyncio.to_thread(self._refresh_userinfo_sync_with_delay, 0.0)
+
+    def _refresh_userinfo_sync_with_delay(self, delay: float = 0.0) -> None:
+        """线程入口：延迟后调用 _refresh_userinfo_sync
+
+        为什么单独抽出：threading.Thread 的 target 不能是 async 函数，
+        需要同步包装。delay=0 时直接调用，不引入额外开销。
+        """
+        if delay > 0:
+            time.sleep(delay)
+        # 互斥检查：如果已有 auth_helper 在运行，跳过本次触发
+        # 为什么不阻塞等待：auth_helper 运行时间 30-60s，等待会堆积线程；
+        # 跳过更安全，因为下一次 /me 请求会再次触发
+        with self._refresh_lock:
+            if self._refreshing:
+                logger.debug("auth_helper 已在运行，跳过本次触发")
+                return
+            self._refreshing = True
+        try:
+            self._refresh_userinfo_sync()
+        finally:
+            with self._refresh_lock:
+                self._refreshing = False
 
     def _refresh_userinfo_sync(self) -> None:
         try:
@@ -106,8 +157,18 @@ class AuthManager:
                 with self._lock:
                     self._userinfo = json.loads(_USERINFO_FILE.read_text(encoding="utf-8"))
                     self._userinfo_at = time.time()
-        except Exception:
-            pass
+            elif proc.returncode != 0:
+                # 记录失败原因：之前静默吞掉异常，导致 auth_helper 启动失败时
+                # _userinfo 保持旧值（nick=""），前端一直显示"未登录"且无日志可查
+                stderr = proc.stderr.decode(errors="replace")[:500] if proc.stderr else ""
+                logger.warning(
+                    "auth_helper info 失败 (returncode=%d): %s",
+                    proc.returncode, stderr,
+                )
+        except subprocess.TimeoutExpired:
+            logger.warning("auth_helper info 超时（60s）")
+        except Exception as e:
+            logger.warning("auth_helper info 异常: %s", e)
 
     def _qr_state_dict(self) -> dict:
         """把内部 _qr_state 序列化为对外字典"""

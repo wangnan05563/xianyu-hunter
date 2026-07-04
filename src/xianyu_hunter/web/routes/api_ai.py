@@ -38,6 +38,34 @@ CHAT_COMPLETIONS_PATH = "/chat/completions"
 AUTH_BEARER_PREFIX = "Bearer "
 CONTENT_TYPE_JSON = "application/json"
 
+# Vision 能力关键字白名单：模型名包含任一关键字即视为支持多模态。
+# 升级模型时只需在此处追加（如新增 "gemini-2.0-flash"），所有调用点自动生效。
+# 注：纯文本模型（deepseek-chat / moonshot-v1-8k 等）服务端 schema 不支持 image_url
+# content block，强行传图会被报 400（unknown variant `image_url`）导致降级。
+_VISION_CAPABLE_KEYWORDS: tuple[str, ...] = (
+    "vision",
+    "gpt-4o",
+    "gpt-4-vision",
+    "qvq",
+    "qwen-vl",
+    "glm-4v",
+    "claude-3",
+    "opus",
+    "sonnet",
+    "haiku",
+)
+
+
+def _is_vision_capable(model_name: str | None) -> bool:
+    """判断指定模型是否支持多模态（Vision）输入。
+
+    api_ai 成色评估 / api_ai_deep 深度分析 共用此判断，避免散落关键字导致漏改。
+    """
+    if not model_name:
+        return False
+    name = model_name.lower()
+    return any(kw in name for kw in _VISION_CAPABLE_KEYWORDS)
+
 
 def _check_ai_enabled() -> None:
     """AI 全局开关检查：关闭时抛出 403，阻止所有 AI 调用"""
@@ -486,14 +514,8 @@ async def _call_llm_vision(
 
     url = settings.openai_base_url.rstrip("/") + CHAT_COMPLETIONS_PATH
 
-    # 检测当前模型是否支持 vision：
-    # 纯文本模型（deepseek-chat / gpt-3.5-turbo 等）不支持 image_url 字段，
-    # 强行传图会被服务商报 400（unknown variant `image_url`）导致降级规则模拟。
-    model_name = (settings.openai_vision_model or "").lower()
-    vision_capable = any(
-        kw in model_name
-        for kw in ("vision", "gpt-4o", "gpt-4-vision", "qvq", "qwen-vl", "glm-4v", "claude-3", "opus", "sonnet", "haiku")
-    )
+    # 检测当前 vision_model 是否支持多模态（统一在 _is_vision_capable 维护关键字白名单）
+    vision_capable = _is_vision_capable(settings.openai_vision_model)
 
     # P1-8：从 Prompt 编辑器读取最新内容（支持热更新，无需重启）
     from xianyu_hunter.web.routes.api_prompts import get_active_prompt

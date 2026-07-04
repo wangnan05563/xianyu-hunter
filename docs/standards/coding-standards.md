@@ -48,6 +48,11 @@
 | B6 | **仓储返回 DTO** | `return orm` | `return ItemDTO.model_validate(orm)` |
 | B7 | **async 不阻塞** | `requests.get` 在 async 中 | `aiohttp` |
 | B8 | **参数化 SQL** | `text(f"WHERE x = '{x}'")` | ORM / `text(..., :param)` |
+| B9 | **统计查询对齐写入端** | 查询 `status in ('paid','confirmed')` 但写入端从未写入这两个值 | 新增统计查询前搜索所有写入位置，确认取值一致 |
+| B10 | **分子分母口径一致** | 分子查 notify 事件，分母用全量事件数 | 分母统计范围必须与分子同类 |
+| B11 | **数据采集闭环** | 统计查询依赖某表数据，但该表无写入代码 | 数据产生点必须写入对应记录 |
+| B12 | **构造函数测试兼容** | 新增 `_repo` 属性，测试用 `__new__` 跳过构造导致 AttributeError | 新增属性用 `getattr(self, '_x', None)` 兼容 |
+| B13 | **统计异常告警** | 分母为 0 时静默返回 0% | 分母为 0 时记录 WARNING 含原因提示 |
 
 ### 2.3 前端铁律
 
@@ -148,6 +153,42 @@
 - 数据库聚合代替 Python 聚合
 
 详见 [`sqlalchemy.md`](../skills/xianyu-backend-code-review/references/sqlalchemy.md)
+
+### 3.6 模式 6：统计查询与写入端取值不对齐
+
+**Bug 现象**：
+> 仪表盘"抢单成功率"始终显示 0%，实际已有成功订单
+
+**根因**：`business_kpi.py` 查询 `OrderRow.status in ('paid','confirmed')`，但生产代码实际写入的是 `'pending_pay'`（已拍下）和 `'succeeded'`（确认支付）。`'paid'` 和 `'confirmed'` 在整个代码库中从未被写入 orders 表。
+
+**修复**：
+- 查询条件改为 `OrderRow.status == 'succeeded'`，与 `stats_overview.py` 统计口径一致
+- 新增统计查询前必须搜索所有写入位置，确认取值一致
+
+**预防**：
+- 审查统计查询时，反向追溯写入端实际取值
+- 枚举值不硬编码在查询中，应引用 `OrderStatus` 等枚举类
+- 加回归测试覆盖"有数据时查询能命中"场景
+
+### 3.7 模式 7：数据采集环节缺失
+
+**Bug 现象**：
+> 仪表盘"推送失败率"始终显示 0%，实际推送有成功有失败
+
+**根因**：`business_kpi.py` 查询 `EventRow.stage like '%notify%'`，但 `NotifierHub.send()` 推送时从不写入 EventRow，只写 `logger.info` 日志。查询永远命中 0 行。
+
+**修复**：
+- 在 `NotifierHub.send()` 末尾写入 EventRow：`stage='notify'`，`level='info'/'err'`
+- 静默（quiet hours）和未配置渠道场景不写入，避免污染统计
+- 分母改为单独查询 `stage like '%notify%'` 的事件总数，与分子口径一致
+
+**预防**：
+- 新增统计指标时，必须确认数据源有写入代码
+- 数据产生点（推送/抢单/评估）必须写入对应的 EventRow/OrderRow
+- 统计字段（stage/level/status）取值全代码库统一
+- 分母为 0 时记录 WARNING 日志含原因提示
+
+详见 [`coding-standards.md`](../skills/xianyu-hunter-dev/references/coding-standards.md) §2.10 统计查询规范
 
 ---
 

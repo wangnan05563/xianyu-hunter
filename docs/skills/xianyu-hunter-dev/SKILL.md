@@ -30,9 +30,12 @@ description: "闲鱼猎人项目（XianyuHunter）增量开发与 Bug 修复技�
 2. **【必读】查阅 §2 核心编码规范** —— 项目级铁律
 3. **【场景】按需查阅 references/ 下专题**：
    - `references/coding-standards.md` —— 统一编码规范（Python + TS）
+   - `references/encoding-and-io.md` —— 字符编码与 I/O 边界规范（FAQ 乱码、文件 I/O、外部脚本调用 API）
    - `references/yaml-config-patterns.md` —— YAML 配置加载/合并的踩坑记录
    - `references/error-handling.md` —— 前后端错误处理统一规范
    - `references/frontend-state-and-api.md` —— Zustand + Axios + Ant Design 联动
+   - `references/browser-automation-and-async-patterns.md` —— 浏览器自动化与异步时序规范（登录模块复盘）
+   - `references/cookie-state-recovery-patterns.md` —— Cookie 层状态管理复盘
 4. **【场景】按需查阅 `docs/standards/`**：
    - `directory-structure.md` —— 文件放哪里
    - `michelin-design-system.md` —— 视觉规范
@@ -95,6 +98,9 @@ description: "闲鱼猎人项目（XianyuHunter）增量开发与 Bug 修复技�
 | **敏感字段 redact** | 直接返回带 cookie 的配置 | `_REDACT_KEYS` 列表 + 递归脱敏 |
 | **错误用 Pydantic 校验** | `if x > 100: raise` | `@field_validator` / `@model_validator` |
 | **注释解释 why** | `# 加载配置` | `# 颠倒加载顺序：避免 eval.yaml 整体覆盖 config.yaml` |
+| **统计查询对齐写入端** | 查询 `status in ('paid','confirmed')` 但写入端从未写入 | 搜索所有写入位置确认取值一致 |
+| **分子分母口径一致** | 分子查 notify 事件，分母用全量事件 | 分母范围必须与分子同类 |
+| **数据采集闭环** | 统计依赖某表但该表无写入代码 | 数据产生点必须写入对应记录 |
 
 ### 2.2 前端 React/TypeScript
 
@@ -146,6 +152,31 @@ try {
 ```
 
 完整规范见 [references/error-handling.md](references/error-handling.md)。
+
+### 2.5 浏览器自动化与异步时序（登录模块复盘）
+
+> **复盘来源**：登录模块 11 类问题（浏览器加载慢 / 多标签页 / Cookie 注入失效 / 取消登录卡死 / "未登录" 6 次迭代等）。完整版见 [references/browser-automation-and-async-patterns.md](references/browser-automation-and-async-patterns.md)。
+
+| 铁律 | 错误示例 | 正确做法 |
+|---|---|---|
+| **共享 user_data_dir 必须互斥** | 多个 Chromium 并发使用同一目录 | `_refresh_lock` + `_refreshing` 标志 + `delay=5.0` 延迟触发 |
+| **启动前清理锁文件** | 直接 launch 不清 SingletonLock | 清理 `SingletonLock` / `SingletonCookie` / `SingletonSocket` + Sessions 历史 |
+| **异步写入后必须等待** | 立即读 cookie 拿到 18 个而非 38 个 | `sleep(3)` + `storage_state()` flush + `sleep(2)` 等 SQLite |
+| **一次读取失败必须重读** | unb 未找到直接降级 | 再等 3s 重读一次（兜底机制） |
+| **Cookie 域白名单** | 仅按 goofish 过滤漏掉 unb | 扩展为 `goofish + taobao`（unb 在 .taobao.com 域） |
+| **登录态以关键 Cookie 为准** | `_m_h5_tk` 存在就视为登录 | `unb / _tb_token_ / cookie2` 任一存在 + 值校验 |
+| **Cookie 值必须严格校验** | 仅检测名称存在 | `unb.isdigit() and len(unb) >= 6`，过滤测试值 |
+| **占位符过滤** | 直接信任首次抓取的 "Hi! 你好" | `_INVALID_NICKS` 集合 + 二次重试（wait_for_selector + sleep 兜底） |
+| **不关闭 context 唯一 page** | `close() + new_page()` 报 Target.createTarget | 复用 `pages[0]`（兼容无默认 page 边缘场景） |
+| **资源拦截不拦 stylesheet** | 拦截 CSS 导致页面无样式 | 仅拦 `font/media/image/manifest` + 域名白名单放行 |
+| **子进程异常可观测** | `except Exception: pass` 吞异常 | `capture_output=True` + `logger.warning` + stderr 截取前 500 字符 |
+| **前端取消先停本地再调远程** | 先调 cancel API 再停轮询 | `clearInterval(pollRef)` 在 `await cancelLogin()` 之前 |
+| **前端启动按钮防抖** | 不防抖导致双击弹 4 标签 | `startingBrowser` 状态在 API 返回前禁用按钮 |
+| **配置化无硬编码** | 等待时间/域名/选择器散落代码 | 全部走 `config/auth.yaml` + `config/browser.yaml` |
+
+**配置项清单**（17 项，详见 references 文档 §7.1）：
+- `config/auth.yaml`：`invalid_nicks` / `login_cookie_names` / `cookie_write_wait_sec` / `sqlite_flush_wait_sec` / `helper_delay_sec` / `unb_reread_wait_sec` / `selector_wait_sec` / `nick_selectors` / `unb_test_values` / `unb_min_length` / `cookie2_min_length` / `helper_timeout_sec` / `qr_timeout_sec` / `userinfo_ttl_sec`
+- `config/browser.yaml`：`auth_cookie_domains` / `resource_block_types` / `resource_allow_domains`
 
 ---
 
@@ -219,6 +250,90 @@ try {
 | **审计日志** | 所有 DML 写入 `events` 表（type=`db_admin.*`），可在审计日志抽屉查看 |
 | **SQLite 类型兼容** | `text()` 查询 datetime 列返回字符串，序列化前需 `hasattr(obj, 'isoformat')` 兼容 |
 
+### 4.6 统计查询验证约定
+
+> **复盘来源**：仪表盘 KPI 始终显示 0% 问题。
+
+| 约定 | 说明 |
+|---|---|
+| **查询-写入对齐** | 新增统计查询前，搜索所有写入端代码位置，确认查询条件与实际写入取值匹配 |
+| **枚举值不硬编码** | 查询条件中的状态值引用枚举类（如 `OrderStatus.SUCCEEDED.value`），不写魔法字符串 |
+| **分子分母同类** | 分母的统计范围必须与分子同类（分子查 notify 事件 → 分母也必须是 notify 事件总数） |
+| **hint 与公式一致** | 返回前端的 hint 文案必须与实际计算公式的分子分母语义一致 |
+| **数据采集闭环** | 统计指标依赖某表时，必须确认该表有写入代码；数据产生点必须写入对应记录 |
+| **分母为 0 告警** | 统计指标分母为 0 时记录 WARNING 日志，含可能原因提示 |
+| **构造函数测试兼容** | 新增构造函数属性用 `getattr(self, '_x', None)` 兼容 `__new__` 跳过构造的测试 |
+
+**统计查询验证流程**（查询-写入对齐法）：
+
+1. 找到查询端代码（如 `business_kpi.py` 中的查询条件）
+2. 反向追溯写入端代码（如 `buyer.py` 中的实际写入值），用 Grep 搜索所有写入位置
+3. 对比查询条件与写入值是否匹配
+4. 如不匹配：修复查询条件以匹配写入端实际值，或修复写入端以使用统一枚举值
+5. 验证修复后查询能命中真实数据
+
+详见 [references/coding-standards.md](references/coding-standards.md) §2.10 统计查询规范
+
+### 4.7 浏览器自动化与登录模块约定
+
+> **复盘来源**：登录模块 11 类问题复盘（浏览器加载慢 / 多标签页 / Cookie 注入失效 / 取消登录卡死 / "未登录" 6 次迭代等）。完整版见 [references/browser-automation-and-async-patterns.md](references/browser-automation-and-async-patterns.md)。
+
+#### 4.7.1 浏览器进程互斥（共享 user_data_dir）
+
+| 约定 | 说明 |
+|---|---|
+| **启动前清理锁文件** | `SingletonLock` / `SingletonCookie` / `SingletonSocket` + `Sessions/Tabs_*` / `Sessions/Session_*` |
+| **进程级互斥** | `AuthManager._refresh_lock` + `_refreshing` 标志，防止 auth_helper 与登录路径并发 |
+| **延迟触发** | 登录路径触发 auth_helper 时传 `delay=5.0`（由 `auth.helper_delay_sec` 配置） |
+| **退出后等 SQLite flush** | `bc.close()` 后再等 2s（由 `auth.sqlite_flush_wait_sec` 配置） |
+| **不关闭 context 唯一 page** | 复用 `pages[0]`，避免 `Target.createTarget: Failed to open a new tab` |
+
+#### 4.7.2 Cookie 处理规范
+
+| 约定 | 说明 |
+|---|---|
+| **域白名单** | `goofish + taobao`（unb 实际在 .taobao.com 域，由 `browser.auth_cookie_domains` 配置） |
+| **关键登录 Cookie** | `unb / _tb_token_ / cookie2`（由 `auth.login_cookie_names` 配置） |
+| **值校验** | `unb.isdigit() and len(unb) >= 6`，过滤测试值 `["123456", "123"]` |
+| **用户 ID 优先级** | `unb > _tb_token_截断 > sha256(cookie2)[:16] > default` |
+| **异步写入等待** | `sleep(3) + storage_state() + sleep(2)`（由配置管理） |
+| **兜底重读** | unb 未找到时再等 3s 重读一次（由 `auth.unb_reread_wait_sec` 配置） |
+
+#### 4.7.3 SPA 抓取与占位符过滤
+
+| 约定 | 说明 |
+|---|---|
+| **domcontentloaded 后等待** | SPA hydration 需要 2-8s，用 `wait_for_selector` + 固定 sleep 兜底 |
+| **占位符过滤集合** | `_INVALID_NICKS = ["登录", "登錄", "Login", "Sign in", "立即登录", "Hi! 你好", "Hi！你好", "你好", "Hi", "Hi!"]`（由 `auth.invalid_nicks` 配置） |
+| **二次重试机制** | 首次抓取失败 + 不在登录页 URL → 等 5s 重抓（由 `auth.selector_wait_sec` 配置） |
+| **昵称选择器集合** | 8 个 CSS 选择器（由 `auth.nick_selectors` 配置） |
+
+#### 4.7.4 资源拦截策略
+
+| 约定 | 说明 |
+|---|---|
+| **不拦截 stylesheet** | CSS 缺失导致布局错乱、按钮不可见、扫码区域错位 |
+| **拦截类型白名单** | `font / media / image / manifest`（由 `browser.resource_block_types` 配置） |
+| **域名白名单放行** | `login.taobao.com / passport.taobao.com / mini_login / alipay.com`（由 `browser.resource_allow_domains` 配置） |
+
+#### 4.7.5 子进程异常可观测
+
+| 约定 | 说明 |
+|---|---|
+| **stderr 必须捕获** | `subprocess.run(..., capture_output=True)` 或 `stderr=subprocess.PIPE` |
+| **失败时记录 stderr** | `stderr.decode(errors="replace")[:500]`（截取前 500 字符） |
+| **日志级别用 warning** | 异常路径必须显眼，禁止 `logger.debug` 或 `pass` |
+| **超时单独处理** | `subprocess.TimeoutExpired` 不与普通异常混淆 |
+
+#### 4.7.6 前端异步操作规范
+
+| 约定 | 说明 |
+|---|---|
+| **取消操作顺序** | 先停本地轮询（`clearInterval(pollRef)`）再调远程 cancel API |
+| **启动按钮防抖** | `startingBrowser` 状态在 API 返回前禁用按钮 |
+| **轮询终态保护** | in-flight polling resolve 不应覆盖用户主动设置的 `setLoginStatus(null)` |
+| **状态机显式定义** | `idle → starting → opening → qr_ready → success / timeout / error / cancelled` |
+
 ---
 
 ## §5 与其他技能的关系
@@ -266,9 +381,12 @@ xianyu-hunter-dev（本技能）
 ## References
 
 - [references/coding-standards.md](references/coding-standards.md) —— 统一编码规范（Python + TS）
+- [references/encoding-and-io.md](references/encoding-and-io.md) —— 字符编码与 I/O 边界规范（FAQ 乱码复盘提炼）
 - [references/yaml-config-patterns.md](references/yaml-config-patterns.md) —— YAML 配置加载踩坑模式
 - [references/error-handling.md](references/error-handling.md) —— 前后端错误处理统一规范
 - [references/frontend-state-and-api.md](references/frontend-state-and-api.md) —— Zustand + Axios 联动
+- [references/browser-automation-and-async-patterns.md](references/browser-automation-and-async-patterns.md) —— 浏览器自动化与异步时序规范（登录模块复盘，17 项配置化要求）
+- [references/cookie-state-recovery-patterns.md](references/cookie-state-recovery-patterns.md) —— Cookie 层状态管理复盘（缓存失效传播 / 状态判定兜底 / Schema 迁移事务安全）
 - [references/database-admin.md](references/database-admin.md) —— 数据库维护模块专项规范
 
 ## 外部规范

@@ -417,7 +417,12 @@ export default function Login() {
   }
 
   // ===== 浏览器窗口登录（Playwright） =====
+  // 启动期间禁用按钮 + 已存在会话时禁用，避免用户连续点击启动多次
+  // （每次点击都会拉起 1 个新 Edge 进程，导致 4+ 个标签页）
+  const [startingBrowser, setStartingBrowser] = useState(false)
   const handleStartBrowserLogin = async () => {
+    if (startingBrowser) return
+    setStartingBrowser(true)
     try {
       const result = await authApi.startBrowserLogin()
       if (result.ok) {
@@ -434,6 +439,10 @@ export default function Login() {
       }
     } catch (err: any) {
       message.error(err?.response?.data?.error || '请求失败')
+    } finally {
+      // 给后端 1 秒时间更新 _session.status=running，
+      // 防止用户在按钮恢复瞬间再次点击（去抖）
+      setTimeout(() => setStartingBrowser(false), 1000)
     }
   }
 
@@ -461,12 +470,16 @@ export default function Login() {
 
   // 取消登录
   const handleCancelLogin = async () => {
+    // 先停轮询再发 cancel 请求：
+    // 否则 cancel 接口返回前，in-flight 的轮询 tick 会 resolve 并把
+    // cancelled 状态写回 loginStatus，覆盖下面的 setLoginStatus(null)，
+    // 导致页面卡在"已取消"状态无法回到启动按钮初始态
+    if (pollRef.current) {
+      clearInterval(pollRef.current)
+      setPollTimer(null)
+    }
     try {
       await authApi.cancelLogin()
-      if (pollRef.current) {
-        clearInterval(pollRef.current)
-        setPollTimer(null)
-      }
       setLoginStatus(null)
       message.info('已取消登录')
     } catch {
@@ -512,6 +525,7 @@ export default function Login() {
               size="large"
               icon={<LoginOutlined />}
               onClick={handleStartBrowserLogin}
+              loading={startingBrowser}
               style={{ background: '#FF6200', borderColor: '#FF6200', width: 'fit-content' }}
             >
               启动浏览器窗口登录
@@ -575,6 +589,7 @@ export default function Login() {
                   - success：跳转失败的兜底（onLoginSuccess 未成功跳转时用户可手动重试） */}
               {['success', 'cancelled', 'error', 'timeout'].includes(loginStatus.status) && (
                 <Button type="primary" icon={<ReloadOutlined />} onClick={handleStartBrowserLogin}
+                  loading={startingBrowser}
                   style={{ background: '#FF6200', borderColor: '#FF6200' }}>
                   重新登录
                 </Button>

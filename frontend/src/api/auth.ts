@@ -2,7 +2,8 @@ import client from './client'
 import type { AuthMe } from './types'
 
 // 登录状态轮询响应
-export interface LoginStatus {
+// 项目规范：用 type 而非 interface 定义数据结构
+export type LoginStatus = {
   method: string | null
   status: 'idle' | 'running' | 'qr_ready' | 'success' | 'cancelled' | 'error' | 'timeout'
   message: string
@@ -15,7 +16,7 @@ export interface LoginStatus {
 }
 
 // Cookie 注入响应
-export interface CookieInjectResult {
+export type CookieInjectResult = {
   ok: boolean
   injected?: number
   total_parsed?: number
@@ -26,13 +27,13 @@ export interface CookieInjectResult {
 }
 
 // 浏览器导入状态
-export interface BrowserImportStatus {
+export type BrowserImportStatus = {
   edge: { exists: boolean; has_goofish_cookie: boolean }
   chrome: { exists: boolean; has_goofish_cookie: boolean }
 }
 
 // Cookie 摘要信息
-export interface SavedCookieInfo {
+export type SavedCookieInfo = {
   has_cookies: boolean
   logged_in: boolean
   cookie_count?: number
@@ -42,7 +43,7 @@ export interface SavedCookieInfo {
 }
 
 // Cookie 健康检查报告（轻量级，供状态栏悬浮面板使用）
-export interface CookieHealthReport {
+export type CookieHealthReport = {
   ok: boolean
   is_valid: boolean
   reason: string
@@ -174,4 +175,52 @@ export const authApi = {
     client.post<{ ok: boolean; message?: string; cleared?: Record<string, unknown> }>(
       '/api/auth/logout',
     ).then((r) => r.data),
+
+  // ===== 多账号管理（MU3/MU7）=====
+  // 后端契约：/api/auth/* 路径（与 /api/auth/cookie、/api/auth/me 同前缀）
+  // session_token 由 cookie 自动携带，字段名 target_user_id 与设计文档对齐
+
+  // 账号列表：返回所有已登录账号，含当前账号标记
+  getAccounts: () =>
+    client.get<{ accounts: AccountInfo[] }>('/api/auth/accounts').then((r) => r.data.accounts),
+
+  // 切换账号：后端签发新 session_token 并通过 Set-Cookie 写入
+  // 切换后前端需刷新菜单 + 任务列表（新 user_id 隔离的数据）
+  // body 字段 target_user_id 与设计文档需求规格 L341 严格对齐
+  switchAccount: (targetUserId: string) =>
+    client.post<{ ok: boolean; user_id?: string; nickname?: string }>('/api/auth/switch', {
+      target_user_id: targetUserId,
+    }).then((r) => r.data),
+
+  // 退出当前账号（不删除账号数据，仅失效当前 session）
+  logoutAccount: () =>
+    client.post<{ ok: boolean }>('/api/auth/logout').then((r) => r.data),
+
+  // 会话事件日志：用于账号切换历史审计
+  getSessionEvents: (userId?: string, limit: number = 100) =>
+    client
+      .get<SessionEvent[]>('/api/auth/session-events', {
+        params: { user_id: userId, limit },
+      })
+      .then((r) => r.data),
+}
+
+// 已登录账号信息：与后端 api_accounts.py AccountInfo 对齐
+export type AccountInfo = {
+  user_id: string
+  nickname: string
+  avatar_url: string
+  status: 'active' | 'expired' | 'disabled'
+  is_current: boolean
+  last_active_at?: string
+  custom_alias?: string
+}
+
+// 会话事件：login/logout/switch/cookie_expired/session_renewed
+export type SessionEvent = {
+  id: number
+  user_id: string | null
+  event_type: string
+  detail: string
+  created_at: string
 }

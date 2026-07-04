@@ -27,7 +27,7 @@ from xianyu_hunter.config import get_settings
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.ai_usage import check_budget, record_usage
 from xianyu_hunter.web.deps import get_container
-from xianyu_hunter.web.routes.api_ai import _check_ai_enabled
+from xianyu_hunter.web.routes.api_ai import _check_ai_enabled, _is_vision_capable
 
 router = APIRouter(prefix="/api/ai", tags=["ai-deep"])
 
@@ -143,6 +143,23 @@ async def _call_llm_deep_analyze(
 
     url = settings.openai_base_url.rstrip("/") + "/chat/completions"
 
+    # 检测当前 vision_model 是否具备多模态能力（统一在 api_ai._is_vision_capable
+    # 维护关键字白名单，避免模型升级时散落修改）。
+    # 纯文本模型服务端 schema 不支持 image_url content block，强行传图会被报 400
+    # （unknown variant `image_url`）导致降级。
+    vision_capable = _is_vision_capable(settings.openai_vision_model)
+
+    # 纯文本模型时，移除 prompt 中"看图"相关要求，
+    # 避免 LLM 强行编造"我看了图片"导致盗图/损坏/一致性维度失真
+    system_prompt = _DEEP_ANALYZE_PROMPT
+    if not vision_capable:
+        system_prompt = (
+            system_prompt
+            + "\n\n【特别说明】当前模型不支持图片分析，请仅基于标题、描述、价格和"
+              "卖家其他商品描述样本进行评估。盗图/损坏/一致性维度因无图无法判断，"
+              "对应 score 取默认值 5、risk_level='medium'，signals 中加入'无图片参考'。"
+        )
+
     # 构建 user message
     text_parts = [
         f"商品标题：{title}",
@@ -161,17 +178,24 @@ async def _call_llm_deep_analyze(
         {"type": "text", "text": "\n".join(text_parts)},
     ]
 
-    # 最多 6 张图片用于深度分析
+    # 最多 6 张图片用于深度分析；纯文本模型直接跳过，避免 400 + 用量浪费
+    # 闲鱼图片 URL 常为协议相对路径（//img.alicdn.com/...），LLM 端无法解析，
+    # 需补全为 https://，否则会被 vision 服务报 400 失败并降级规则模拟
     for img_url in image_urls[:6]:
+        if not vision_capable:
+            break
+        normalized = img_url
+        if normalized.startswith("//"):
+            normalized = "https:" + normalized
         user_content.append({
             "type": "image_url",
-            "image_url": {"url": img_url},
+            "image_url": {"url": normalized},
         })
 
     payload = {
         "model": settings.openai_vision_model,  # 可配置：Vision 模型
         "messages": [
-            {"role": "system", "content": _DEEP_ANALYZE_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.2,

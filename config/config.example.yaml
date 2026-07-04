@@ -164,3 +164,106 @@ eval:
   ai_multi_run_suggestion: false
   # 每隔多少轮生成一次 AI 建议（太小浪费 token，太大反馈滞后）
   ai_suggestion_interval: 5
+
+# ============== Cookie 自愈体系 ==============
+# 设计文档：docs/plans/cookie-self-healing-optimization.md
+# 75 个 cookie 齐全时各类问题大幅度减少，本节统一管理 cookie 三层架构、
+# 续期、跨进程同步等关键参数，替代散落在 cookie_rotator / cookie_store /
+# token_renewer / login_orchestrator / _search / browser_import / cookie_inject
+# 等模块的硬编码常量，避免名单漂移导致 cookie 丢失。
+
+# Cookie 管理统一配置（聚合 cookie_store / cookie_rotator / browser_import / cookie_inject）
+cookie_management:
+  # 关键 Cookie 名单：用于 JSON 持久化时的关键字段过滤
+  key_cookies:
+    - _m_h5_tk          # MTOP 会话 token（核心，TTL 15-22min）
+    - _m_h5_tk_enc      # MTOP 会话 token 加密版
+    - unb               # 用户唯一标识
+    - sgcookie          # 安全 cookie
+    - cookie2           # 登录态 cookie
+    - lg2               # 登录态保留 cookie
+  # CookieStore 内存缓存 TTL（秒）
+  cache_ttl_sec: 30.0
+  # 测试用 Cookie 值：用于过滤无效的占位符值（避免测试数据被当作有效 cookie）
+  test_cookie_values:
+    unb: ["123456", "123"]
+    cookie2: ["abc"]
+    _m_h5_tk: ["abc"]
+    _m_h5_tk_enc: ["enc", "enc_123", "abc123enc456"]
+    sgcookie: ["sg", "sg_token"]
+  # Cookie 格式正则（字符串形式，运行时编译为 re.Pattern）
+  cookie_format_patterns:
+    _m_h5_tk: '^[0-9a-fA-F]{32}_\d{13}$'      # 32 位 hex + 13 位时间戳
+    unb: '^\d{8,}$'                              # 至少 8 位数字
+    cookie2: '^[0-9a-fA-F]{32,}$'               # 至少 32 位 hex
+    sgcookie: '^.{20,}$'                         # 至少 20 字符
+    _m_h5_tk_enc: '^.{16,}$'                     # 至少 16 字符
+  # 三层架构定义：层间依赖决定恢复顺序
+  # identity 失效需重登录 / session 失效可续期 / tracking 失效可重建
+  layer_definitions:
+    identity:
+      cookies: [unb, cookie2, sgcookie, t, _tb_token_, lg2]
+      ttl: session              # 随浏览器会话
+      depends_on: null          # 无依赖
+    session:
+      cookies: [_m_h5_tk, _m_h5_tk_enc]
+      ttl: 15-22min             # MTOP token TTL
+      depends_on: identity      # 依赖身份层
+    tracking:
+      cookies: [cna, tfstk, xlly_s, ali_aplus_v3, utdid]
+      ttl: dynamic              # 动态更新
+      depends_on: null          # 无依赖
+  # Cookie 写入的目标域名（必须同时包含 .xxx.com 与 xxx.com 两种形式）
+  domains:
+    - .goofish.com
+    - goofish.com
+    - .taobao.com
+    - taobao.com
+    - .alipay.com
+    - alipay.com
+    - login.taobao.com
+    - .login.taobao.com
+  # browser_import 是否全量导入：true=保留所有 75+ cookie（推荐）
+  # false=仅导入 key_cookies 白名单（会丢失 68 个 cookie，不推荐）
+  import_full: true
+
+# Token 续期器配置（_m_h5_tk 主动续期）
+token_renewer:
+  renew_before_expiry_sec: 600     # 提前多少秒续期（避免临到期才触发失败）
+  check_interval_sec: 120          # 检查间隔（秒）
+  token_ttl_sec: 1200              # Token 预估 TTL（秒）
+  max_renew_attempts: 3            # 最大续期尝试次数（超过触发重登录）
+  retry_interval_sec: 30           # 续期失败后的重试间隔
+  # 续期调用的 MTOP API 名：getTimestamp 轻量且无需业务参数
+  timestamp_api: mtop.taobao.mtop.common.getTimestamp
+
+# 登录协调器配置
+login_orchestrator:
+  renew_fail_threshold: 2          # 续期失败 N 次触发自动重登录
+  auto_relogin_cooldown_sec: 600   # 自动重登录冷却（秒），防止反复弹登录框
+
+# MTOP 响应 Set-Cookie 回写同步配置
+mtop_sync:
+  # 触发 JSON 回写的关键 cookie 名单（默认与 cookie_management.key_cookies 一致）
+  key_cookie_names:
+    - _m_h5_tk
+    - _m_h5_tk_enc
+    - unb
+    - sgcookie
+    - cookie2
+    - lg2
+  # 是否启用节流（推荐 true：高频搜索时大幅减少 sync 调用次数）
+  throttle_enabled: true
+  # 节流间隔（秒）：同一 cookie 名在间隔内只触发一次 sync
+  throttle_interval_sec: 5.0
+
+# 子进程 Cookie 同步配置
+# 子进程（auth_helper.py / browser_login.py）无法访问主进程单例，
+# 采用"文件信号 + 主进程轮询"方案触发 sync_cookie_layers_from_json
+subprocess_sync:
+  # pending 标记文件路径（子进程写入，主进程读取后删除）
+  pending_file_path: data/.cookie_sync_pending
+  # 主进程轮询间隔（秒）
+  poll_interval_sec: 30
+  # 启动时是否立即检查 pending 标记（处理上次未消费的信号）
+  startup_check_enabled: true

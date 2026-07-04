@@ -48,14 +48,34 @@ _DOMAIN_ALIPAY_DOT = ".alipay.com"
 _DOMAIN_LOGIN_TAOBAO = "login.taobao.com"
 _DOMAIN_LOGIN_TAOBAO_DOT = ".login.taobao.com"
 
-_INJECT_DOMAINS = (
-    _DOMAIN_GOOFISH_DOT, _DOMAIN_GOOFISH,
-    _DOMAIN_TAOBAO_DOT, _DOMAIN_ALIPAY_DOT,
-)
+# 注入域名：从配置读取（cookie_management.domains）
+# 配置化修复了原代码遗漏：原 _INJECT_DOMAINS 仅 4 个域名，缺少 taobao.com /
+# alipay.com / login.taobao.com / .login.taobao.com，导致 cookie 写入不完整
+# 与 cookie_rotator.DOMAINS 共享同一份配置，避免域名列表漂移
+_INJECT_DOMAINS = tuple(get_config().cookie_management.domains)
 _DEFAULT_DOMAIN = _DOMAIN_GOOFISH_DOT
 # S1192: 提取重复字符串字面量为常量
 _COOKIE_INJECT_FAILED_PREFIX = "Cookie 注入失败: "
 _UNRECOGNIZED_FORMAT_ERROR = "无法识别文件格式，请使用 Netscape (cookies.txt) 或 JSON 格式"
+
+
+def _identify_user_from_cookies(cookies: list[dict] | list[tuple[str, str]]) -> str:
+    """从 Cookie 列表识别用户身份，不存在则创建。
+
+    手动注入场景下用户可能只粘贴部分 Cookie，identify_or_create 内部
+    会按 unb > sha256(cookie2) > "default" 降级，确保总有 user_id 返回。
+    """
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+        # 统一转换为 [{"name": n, "value": v}] 格式
+        if cookies and isinstance(cookies[0], tuple):
+            cookie_list = [{"name": n, "value": v} for n, v in cookies]
+        else:
+            cookie_list = cookies  # type: ignore[assignment]
+        return get_user_manager().identify_or_create(cookie_list)
+    except Exception as e:
+        logger.warning("识别用户身份失败，降级到 default: %s", e)
+        return "default"
 
 
 def _inject_to_sqlite(cookie_db: Path, cookies_to_inject: list[tuple[str, str]]) -> tuple[int, list[str]]:
@@ -147,18 +167,27 @@ def _parse_cookie_string_to_pairs(cookie_string: str) -> list[tuple[str, str]]:
 
 async def _write_json_fallback_and_sync(
     cookies_to_inject: list[tuple[str, str]], injected: int, method: str,
-) -> tuple[int, str, bool]:
+) -> tuple[int, str, bool, str]:
     """写入 JSON 兜底并同步 CookieRotator 层状态与 Worker 浏览器
 
     Returns:
-        (injected, method, json_written)
+        (injected, method, json_written, user_id)
+        user_id 用于上层签发多用户 session_token，确保 /api/auth/me 能识别登录态
     """
     json_written = False
+    # 默认 user_id，识别失败时降级
+    user_id = "default"
     if cookies_to_inject:
-        json_written = get_cookie_store().export_cookies([
+        # 动态识别 user_id：手动注入场景也支持多账号，不再硬编码 "default"
+        user_id = _identify_user_from_cookies(cookies_to_inject)
+        # 用 merge_cookies 合并写而非 export_cookies 覆盖写
+        # 为什么：用户从 DevTools 复制时可能只粘贴部分 cookie（如仅 4 个身份 cookie），
+        # 覆盖写会丢失原有 22 个完整 cookie 集，导致详情页 SPA 渲染失败；
+        # 合并写只增量更新同名 cookie，保留原有 cna/tracknick/_tb_token_ 等追踪/会话 cookie
+        json_written = get_cookie_store().merge_cookies([
             {"name": n, "value": v, "domain": _DEFAULT_DOMAIN, "path": "/"}
             for n, v in cookies_to_inject
-        ], method="cookie", user_id="default")
+        ], method="cookie", user_id=user_id)
         # JSON 写入成功时，即使 browser+sqlite 都没写入成功，也算注入完成
         if json_written and injected == 0:
             injected = len(cookies_to_inject)
@@ -176,13 +205,20 @@ async def _write_json_fallback_and_sync(
                 await inject_cookie_store_to_worker_browser("手动 Cookie 注入")
             except Exception as e:
                 logger.debug("cookie 注入后同步 Worker 浏览器失败: %s", e)
-    return injected, method, json_written
+    return injected, method, json_written, user_id
 
 
 def _build_inject_success_response(
     injected: int, total_parsed: int, method: str, errors: list[str],
+    user_id: str = "default",
 ) -> JSONResponse:
-    """构建注入成功的响应，并自动启动会话管理"""
+    """构建注入成功的响应，并自动启动会话管理
+
+    Args:
+        user_id: 注入时识别出的用户 ID。必须传给 make_auth_response 签发
+                 session_token，否则 /api/auth/me 无法识别登录态，前端会
+                 被路由守卫重定向回登录页（issue: 注入cookie登录后未进入系统）
+    """
     result = {
         "ok": True,
         "injected": injected,
@@ -198,7 +234,17 @@ def _build_inject_success_response(
         trigger_session_start()
     except Exception as e:
         logger.debug("自动启动会话失败: %s", e)
-    return make_auth_response(result)
+    # 签发多用户 session_token：与浏览器登录路径一致（unified_login.py）
+    # 不传 session_token 时 make_auth_response 会回退到全局 web_token，
+    # /api/auth/me 的 verify_session(web_token) 返回 None → 查 cookies_default.json
+    # → 找不到 cookies_{user_id}.json → logged_in=False → 重定向回登录页
+    session_token = None
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+        session_token = get_user_manager().issue_session(user_id)
+    except Exception as e:
+        logger.warning("签发 session_token 失败，降级到全局 web_token: %s", e)
+    return make_auth_response(result, session_token=session_token)
 
 
 @router.post("/cookie")
@@ -247,12 +293,12 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
             logger.warning("SQLite 直写也失败: %s", sqlite_err)
 
     # 策略2：写入 JSON 兜底（即使 browser+sqlite 都失败，JSON 兜底也能独立工作）
-    injected, method, _ = await _write_json_fallback_and_sync(cookies_to_inject, injected, method)
+    injected, method, _, user_id = await _write_json_fallback_and_sync(cookies_to_inject, injected, method)
 
     # 构建响应
     if injected > 0:
         return _build_inject_success_response(
-            injected, len(cookies_to_inject), method, errors,
+            injected, len(cookies_to_inject), method, errors, user_id,
         )
 
     # 全部失败
@@ -445,14 +491,21 @@ async def _write_import_json_fallback_and_sync(
     injected: int,
     method: str,
     source: str,
-) -> tuple[int, str]:
+) -> tuple[int, str, str]:
     """写入 JSON 兜底并同步 CookieRotator 层状态与 Worker 浏览器（文件导入专用）
 
     Returns:
-        (injected, method)
+        (injected, method, user_id)
+        user_id 用于上层签发多用户 session_token
     """
+    # 默认 user_id，识别失败时降级
+    user_id = "default"
     if cookies_to_inject:
-        json_written = get_cookie_store().export_cookies(goofish_cookies, method=source, user_id="default")
+        # 动态识别 user_id：文件导入场景也支持多账号，不再硬编码 "default"
+        user_id = _identify_user_from_cookies(goofish_cookies)
+        # 文件导入也用 merge_cookies：用户从浏览器导出的 Netscape/JSON 文件
+        # 通常包含完整 cookie 集，合并写更安全（保留旧的同名 cookie 的额外字段如 expires）
+        json_written = get_cookie_store().merge_cookies(goofish_cookies, method=source, user_id=user_id)
         # 必须检查 json_written：export_cookies 返回 False 时 JSON 未写入，
         # 不应报告 json_fallback 成功（修复原有 BUG：原代码未检查 json_written）
         if json_written and injected == 0:
@@ -470,13 +523,18 @@ async def _write_import_json_fallback_and_sync(
                 await inject_cookie_store_to_worker_browser("Cookie 文件导入")
             except Exception as e:
                 logger.debug("cookie 导入后同步 Worker 浏览器失败: %s", e)
-    return injected, method
+    return injected, method, user_id
 
 
 def _build_import_success_response(
     injected: int, total_parsed: int, method: str, source: str, errors: list[str],
+    user_id: str = "default",
 ) -> JSONResponse:
-    """构建文件导入成功的响应，并自动启动会话管理"""
+    """构建文件导入成功的响应，并自动启动会话管理
+
+    Args:
+        user_id: 导入时识别出的用户 ID，用于签发 session_token（同 _build_inject_success_response）
+    """
     result = {
         "ok": True,
         "injected": injected,
@@ -493,7 +551,14 @@ def _build_import_success_response(
         trigger_session_start()
     except Exception as e:
         logger.debug("自动启动会话失败: %s", e)
-    return make_auth_response(result)
+    # 签发多用户 session_token：原因同 _build_inject_success_response
+    session_token = None
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+        session_token = get_user_manager().issue_session(user_id)
+    except Exception as e:
+        logger.warning("签发 session_token 失败，降级到全局 web_token: %s", e)
+    return make_auth_response(result, session_token=session_token)
 
 
 async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONResponse:
@@ -536,13 +601,13 @@ async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONR
             pass
 
     # 策略2：写入 JSON（即使 browser+sqlite 都失败，JSON 兜底也能独立工作）
-    injected, method = await _write_import_json_fallback_and_sync(
+    injected, method, user_id = await _write_import_json_fallback_and_sync(
         goofish_cookies, cookies_to_inject, injected, method, source,
     )
 
     if injected > 0:
         return _build_import_success_response(
-            injected, len(goofish_cookies), method, source, errors,
+            injected, len(goofish_cookies), method, source, errors, user_id,
         )
 
     return JSONResponse(content={

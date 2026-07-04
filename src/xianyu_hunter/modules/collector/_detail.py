@@ -110,11 +110,13 @@ class DetailMixin:
             return False
         http_status = response.status
         if http_status >= 400:
+            self.last_detail_failure_reason = "http_status_error"
             logger.warning(
                 f"详情页 {item_id} HTTP {http_status}（页面可能已下架/被限制），主动返回 None"
             )
             return True
         if http_status >= 300:
+            self.last_detail_failure_reason = "http_status_error"
             redirect_url = response.headers.get("location", "")
             logger.warning(
                 f"详情页 {item_id} 被重定向 HTTP {http_status} → {redirect_url}，主动返回 None"
@@ -206,6 +208,7 @@ class DetailMixin:
             return False
         if not any(marker in title for marker in _HOME_PAGE_TITLE_MARKERS):
             return False
+        self.last_detail_failure_reason = "home_title_redirect"
         self._mark_detail_session_invalid(item_id, f"首页标题 title={title}")
         logger.warning(
             f"详情页 {item_id} 提取到首页标题（title={title}），cookie 可能失效被重定向到首页，主动返回 None"
@@ -218,10 +221,14 @@ class DetailMixin:
             current_url = page.url
             current_url_lower = current_url.lower()
             if "login" in current_url_lower or "passport" in current_url_lower:
+                # 区分 login_redirect vs verify_redirect：login 是 cookie 失效（401），
+                # verify 是反爬拦截（429），用户行动指引不同
+                self.last_detail_failure_reason = "login_redirect"
                 self._mark_detail_session_invalid(item_id, f"跳转登录页 url={current_url[:120]}")
                 logger.warning(f"详情页 {item_id} 被重定向到登录页，请重新登录闲鱼")
                 return True
             if "verify" in current_url_lower or "captcha" in current_url_lower:
+                self.last_detail_failure_reason = "verify_redirect"
                 self._mark_detail_session_invalid(item_id, f"触发验证页 url={current_url[:120]}")
                 logger.warning(f"详情页 {item_id} 触发验证码，请手动完成验证后重试")
                 return True
@@ -559,6 +566,10 @@ class DetailMixin:
         """
         if not any(marker in title for marker in _HOME_PAGE_TITLE_MARKERS):
             return False
+        # 修复：早期检测 _is_home_page_title_early 调用了 _mark_detail_session_invalid
+        # 但晚期检测漏调用，导致 Worker 无法感知此类失效继续调度任务
+        self.last_detail_failure_reason = "home_title_redirect"
+        self._mark_detail_session_invalid(item_id, f"二次首页标题 title={title}")
         logger.warning(
             f"详情页 {item_id} 提取到首页标题（title={title}），cookie 可能失效被重定向到首页，主动返回 None"
         )
@@ -574,6 +585,7 @@ class DetailMixin:
         try:
             current_url = page.url
             if "/item" not in current_url or f"id={item_id}" not in current_url:
+                self.last_detail_failure_reason = "redirected_away_from_item"
                 logger.warning(
                     f"详情页 {item_id} 被重定向到非商品页（current_url={current_url}），主动返回 None"
                 )
@@ -613,6 +625,15 @@ class DetailMixin:
 
     async def detail(self, item_id: str, page: Page | None = None) -> ItemDetail | None:
         """商品详情"""
+        # 入口重置 reason：避免上次失败 reason 残留导致本次成功后上游误判
+        # 仅在 detail() 返回 None 时 reason 才有意义
+        self.last_detail_failure_reason = ""
+        # 会话失效前置检查：上次检测到 Cookie 失效（首页标题）后立即返回，避免重复采集
+        # 利用 _mark_detail_session_invalid 设置的 last_session_invalid 标志，减少无效日志噪声
+        if getattr(self, "last_session_invalid", False):
+            self.last_detail_failure_reason = "home_title_redirect"
+            logger.debug("详情页 {} 跳过采集（会话已失效，last_session_invalid=True）", item_id)
+            return None
         own_page = page is None
         if own_page:
             page = await self.browser.new_page()
@@ -626,6 +647,7 @@ class DetailMixin:
             # 时序：new_page await 期间事件循环切换到 TaskScheduler.run_once 结束清理，
             # close_all_pages 遍历 context.pages 看到新 page（还未 register）将其关闭
             if page.is_closed():
+                self.last_detail_failure_reason = "page_closed"
                 logger.warning(f"详情页 {item_id} page 已关闭（并发清理或浏览器崩溃），跳过采集")
                 return None
             # 延迟导入避免循环依赖
@@ -680,6 +702,7 @@ class DetailMixin:
             # P0 修复：如果核心字段（标题）未提取成功，主动返回 None 让上游感知失败
             # 避免超时后仍返回默认值，导致半残数据污染 items 表与评估结果
             if not title:
+                self.last_detail_failure_reason = "title_extraction_failed"
                 await self._handle_title_extraction_failure(page, item_id)
                 return None
             # 下架/已删除早期检测：在首页标题检测之前优先识别下架文案
@@ -692,6 +715,7 @@ class DetailMixin:
                 return None
             if price <= 0:
                 # 价格未命中通常意味着详情页未正常加载（404/SPA 未渲染）
+                self.last_detail_failure_reason = "price_extraction_failed"
                 logger.warning(f"详情页 {item_id} 价格提取失败（title={title}, price={price}），主动返回 None")
                 return None
 
@@ -738,8 +762,10 @@ class DetailMixin:
             # TargetClosedError 是已知并发场景（BatchRefreshScheduler 与 TaskScheduler.run_once 并发清理），
             # 降级为 WARNING 避免污染 ERROR 日志；page 已不可用，直接返回 None
             if "Target" in err_msg and "closed" in err_msg:
+                self.last_detail_failure_reason = "target_closed_exception"
                 logger.warning(f"详情页 {item_id} 采集失败（页面被并发关闭）: {e}")
             else:
+                self.last_detail_failure_reason = "unknown_exception"
                 logger.exception(f"采集详情失败 {item_id}: {e}")
             return None
         finally:

@@ -346,6 +346,163 @@ class TaskSchedulerConfig(BaseModel):
         return self
 
 
+# ============== Cookie 自愈体系配置 ==============
+# 设计文档：docs/plans/cookie-self-healing-optimization.md
+# 统一管理 Cookie 三层架构、续期、跨进程同步等关键参数，替代散落在
+# cookie_rotator / cookie_store / token_renewer / login_orchestrator /
+# _search / browser_import / cookie_inject 等模块的硬编码常量。
+# 配置化目的：确保 75+ cookie 全程保留，避免不同模块独立定义名单导致丢失。
+
+
+class CookieLayerDefinitionConfig(BaseModel):
+    """单个 Cookie 层定义（对应 cookie_rotator.LAYER_DEFINITIONS）
+
+    - cookies: 该层包含的 cookie 名集合（运行时转 set 加速查询）
+    - ttl: 生命周期描述（语义化字符串，不做强制校验）
+           identity=session（随浏览器会话）/ session=15-22min（MTOP token）/ tracking=dynamic
+    - depends_on: 依赖的上一层名（None 表示无依赖）
+    """
+    cookies: list[str]
+    ttl: str = "session"
+    depends_on: str | None = None
+
+
+class CookieManagementConfig(BaseModel):
+    """Cookie 管理统一配置
+
+    聚合 cookie_store / cookie_rotator / browser_import / cookie_inject
+    四个模块的硬编码常量。配置化的核心动机：用户反馈"75 个 cookie 齐全时
+    各类问题大幅度减少"，但原代码中 4 处独立定义关键 cookie 集合
+    （_GOOFISH_KEY_COOKIES 6 个 / LAYER_DEFINITIONS 13 个 / _TARGET_COOKIE_NAMES
+    7 个 / key_cookie_names 6 个）和 3 处独立定义域名集合，存在名单漂移风险。
+    """
+    # 关键 Cookie 名单：用于 JSON 持久化时的关键字段过滤
+    # 与 mtop_sync.key_cookie_names 保持一致即可（避免重复定义）
+    key_cookies: list[str] = Field(
+        default_factory=lambda: [
+            "_m_h5_tk", "_m_h5_tk_enc", "unb", "sgcookie", "cookie2", "lg2",
+        ]
+    )
+    # CookieStore 内存缓存 TTL（秒）：30s 平衡一致性与查询性能
+    cache_ttl_sec: float = 30.0
+    # 测试用 Cookie 值：用于过滤无效的占位符值（避免测试数据被当作有效 cookie）
+    test_cookie_values: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "unb": ["123456", "123"],
+            "cookie2": ["abc"],
+            "_m_h5_tk": ["abc"],
+            "_m_h5_tk_enc": ["enc", "enc_123", "abc123enc456"],
+            "sgcookie": ["sg", "sg_token"],
+        }
+    )
+    # Cookie 格式正则（字符串形式，运行时由 cookie_store 编译为 re.Pattern）
+    # 用于校验 cookie 值是否符合预期格式，过滤残缺数据
+    cookie_format_patterns: dict[str, str] = Field(
+        default_factory=lambda: {
+            "_m_h5_tk": r"^[0-9a-fA-F]{32}_\d{13}$",
+            "unb": r"^\d{8,}$",
+            "cookie2": r"^[0-9a-fA-F]{32,}$",
+            "sgcookie": r"^.{20,}$",
+            "_m_h5_tk_enc": r"^.{16,}$",
+        }
+    )
+    # 三层架构定义（identity / session / tracking）
+    # 层间依赖关系决定恢复顺序：identity 失效需重登录，session 失效可续期，tracking 失效可重建
+    layer_definitions: dict[str, CookieLayerDefinitionConfig] = Field(
+        default_factory=lambda: {
+            "identity": CookieLayerDefinitionConfig(
+                cookies=["unb", "cookie2", "sgcookie", "t", "_tb_token_", "lg2"],
+                ttl="session",
+                depends_on=None,
+            ),
+            "session": CookieLayerDefinitionConfig(
+                cookies=["_m_h5_tk", "_m_h5_tk_enc"],
+                ttl="15-22min",
+                depends_on="identity",
+            ),
+            "tracking": CookieLayerDefinitionConfig(
+                cookies=["cna", "tfstk", "xlly_s", "ali_aplus_v3", "utdid"],
+                ttl="dynamic",
+                depends_on=None,
+            ),
+        }
+    )
+    # Cookie 写入的目标域名：统一 cookie_rotator.DOMAINS / cookie_inject._INJECT_DOMAINS
+    # 注意：必须同时包含 .goofish.com 与 goofish.com 两种形式，浏览器 Cookie 域名匹配规则
+    domains: list[str] = Field(
+        default_factory=lambda: [
+            ".goofish.com", "goofish.com",
+            ".taobao.com", "taobao.com",
+            ".alipay.com", "alipay.com",
+            "login.taobao.com", ".login.taobao.com",
+        ]
+    )
+    # browser_import 是否全量导入：true=保留所有 75+ cookie（推荐），
+    # false=仅导入 key_cookies 白名单（会丢失 68 个 cookie，不推荐）
+    import_full: bool = True
+
+
+class TokenRenewerConfig(BaseModel):
+    """Token 续期器配置（对应 token_renewer.RenewerConfig）
+
+    _m_h5_tk 是 MTOP 接口的会话 token，TTL 约 15-22 分钟，需主动续期。
+    原硬编码值保留为默认值，配置化后可在不重启代码的情况下调整。
+    """
+    renew_before_expiry_sec: int = 600    # 提前多少秒续期（避免临到期才触发失败）
+    check_interval_sec: int = 120         # 检查间隔（秒）
+    token_ttl_sec: int = 1200             # Token 预估 TTL（秒，用于计算续期时机）
+    max_renew_attempts: int = 3           # 最大续期尝试次数（超过触发重登录）
+    retry_interval_sec: int = 30          # 续期失败后的重试间隔
+    # 续期调用的 MTOP API 名：getTimestamp 接口轻量且无需业务参数，适合做 token 刷新
+    timestamp_api: str = "mtop.taobao.mtop.common.getTimestamp"
+
+
+class LoginOrchestratorConfig(BaseModel):
+    """登录协调器配置（对应 login_orchestrator 中的硬编码阈值）"""
+    # 续期失败达到此次数后触发自动重登录（避免无限重试浪费资源）
+    renew_fail_threshold: int = 2
+    # 自动重登录冷却（秒）：防止短时间内反复弹登录框骚扰用户
+    auto_relogin_cooldown_sec: int = 600
+
+
+class MtopSyncConfig(BaseModel):
+    """MTOP 响应 Set-Cookie 回写同步配置（对应 _search.py）
+
+    高频搜索时每个 MTOP 响应都含 Set-Cookie，若每次都触发
+    sync_cookie_layers_from_json 会造成不必要的 CPU/IO 开销。
+    节流策略：仅当 _m_h5_tk 实际值变化时才触发 sync。
+    """
+    # 触发 JSON 回写的关键 cookie 名单（默认与 cookie_management.key_cookies 一致）
+    key_cookie_names: list[str] = Field(
+        default_factory=lambda: [
+            "_m_h5_tk", "_m_h5_tk_enc", "unb", "sgcookie", "cookie2", "lg2",
+        ]
+    )
+    # 是否启用节流（推荐 true：高频搜索时大幅减少 sync 调用次数）
+    throttle_enabled: bool = True
+    # 节流间隔（秒）：同一 cookie 名在间隔内只触发一次 sync
+    # 5 秒平衡时效性与性能：搜索通常每 5-10 秒一次，太短失去节流意义
+    throttle_interval_sec: float = 5.0
+
+
+class SubprocessSyncConfig(BaseModel):
+    """子进程 Cookie 同步配置
+
+    子进程（scripts/auth_helper.py / scripts/browser_login.py）通过
+    Playwright 启动独立浏览器进程登录，无法访问主进程的 CookieRotator 单例。
+    采用"文件信号 + 主进程轮询"方案：子进程写 JSON 后创建 pending 标记文件，
+    主进程 CookieSyncScheduler 启动时 + 定时轮询检查标记，存在则调用
+    sync_cookie_layers_from_json 并删除标记。
+    """
+    # pending 标记文件路径（子进程写入，主进程读取后删除）
+    # 放在 data/ 目录与 CookieStore JSON 同级，便于清理
+    pending_file_path: str = "data/.cookie_sync_pending"
+    # 主进程轮询间隔（秒）：30s 与 browser.auto_sync_interval 对齐
+    poll_interval_sec: int = 30
+    # 启动时是否立即检查 pending 标记（推荐 true：处理上次未消费的信号）
+    startup_check_enabled: bool = True
+
+
 class AppConfig(BaseModel):
     """根配置"""
     server: ServerConfig = ServerConfig()
@@ -359,6 +516,12 @@ class AppConfig(BaseModel):
     batch_refresh: BatchRefreshConfig = BatchRefreshConfig()
     chatbot: ChatbotConfig = ChatbotConfig()
     task_scheduler: TaskSchedulerConfig = TaskSchedulerConfig()
+    # Cookie 自愈体系（统一管理 75+ cookie 的保留与恢复）
+    cookie_management: CookieManagementConfig = CookieManagementConfig()
+    token_renewer: TokenRenewerConfig = TokenRenewerConfig()
+    login_orchestrator: LoginOrchestratorConfig = LoginOrchestratorConfig()
+    mtop_sync: MtopSyncConfig = MtopSyncConfig()
+    subprocess_sync: SubprocessSyncConfig = SubprocessSyncConfig()
     # 通知渠道凭据（明文存到 yaml，前端用 Input.Password 组件隐藏）
     # keyring 是设计首选，但前端需要回显已配置值，暂存 yaml
     serverchan_send_key: str = ""

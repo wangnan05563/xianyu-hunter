@@ -165,10 +165,17 @@ def _get_quiet_python_executable() -> tuple[str, int]:
 
 
 def _trigger_userinfo_refresh() -> None:
-    """登录成功后触发用户信息刷新和 Cookie 层状态同步。"""
+    """登录成功后触发用户信息刷新和 Cookie 层状态同步。
+
+    delay=5.0：延迟 5 秒触发 auth_helper。
+    为什么：登录成功时 browser_login.py 的 Chromium 进程尚未完全退出
+    （bc.close() 后 Edge 还需 2-5 秒清理），立即启动 auth_helper 会与
+    browser_login 的 Chromium 争用同一 user_data_dir，导致 SQLite Cookie
+    锁冲突、Cookie 丢失、auth_helper 读不到 unb。
+    """
     try:
         from xianyu_hunter.web.services.auth_manager import get_auth_manager
-        get_auth_manager().trigger_refresh_userinfo_async()
+        get_auth_manager().trigger_refresh_userinfo_async(delay=5.0)
     except Exception as e:
         logger.debug("触发用户信息刷新失败: %s", e)
 

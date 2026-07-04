@@ -42,6 +42,8 @@ description: "对闲鱼猎人项目前端代码（React/TypeScript/Ant Design/Zu
    - [references/hooks-and-state.md](references/hooks-and-state.md) —— Hooks / Zustand 用法
    - [references/security-and-a11y.md](references/security-and-a11y.md) —— 安全 / 可访问性
    - [references/antd-patterns.md](references/antd-patterns.md) —— antd 5 关键模式审查
+   - [references/encoding-and-io.md](references/encoding-and-io.md) —— 字符编码 / I/O 边界（FAQ 乱码复盘）
+   - [references/async-cancel-and-debounce-patterns.md](references/async-cancel-and-debounce-patterns.md) —— 异步取消与防抖（登录模块复盘）
 5. **按 §4 模板输出审查报告**
 
 ---
@@ -58,7 +60,7 @@ description: "对闲鱼猎人项目前端代码（React/TypeScript/Ant Design/Zu
 
 ---
 
-## §2 审查维度（8 个）
+## §2 审查维度（9 个）
 
 ### 2.1 类型安全（Code Quality · 类型）
 
@@ -156,6 +158,45 @@ description: "对闲鱼猎人项目前端代码（React/TypeScript/Ant Design/Zu
 |---|---|---|
 | FP-01 | antd 5 组件使用模式（Modal.update / Menu路径守卫 / 表格中文标注 / 路由同步）[references/antd-patterns.md](references/antd-patterns.md) | Critical |
 
+### 2.9 编码与 I/O（Encoding & I/O）
+
+> **复盘来源**：FAQ 乱码问题（PowerShell 调用 API 默认 cp936 编码 body）。详见 [references/encoding-and-io.md](references/encoding-and-io.md)。
+
+| 编号 | 规则 | 严重度 |
+|---|---|---|
+| ENC-01 | `axios` / `fetch` 用 `json=` 参数而非手动 `JSON.stringify` + `data:` 传参 | Critical |
+| ENC-02 | 自定义请求头包含 `Content-Type: application/json; charset=utf-8` | Suggestion |
+| ENC-03 | 不覆盖 `TextDecoder` 为非 UTF-8（默认 UTF-8） | Critical |
+| ENC-04 | 表单输入中文字符直接透传，禁止 `encodeURIComponent` 后传给 API | Critical |
+| ENC-05 | 写入前校验非 ASCII 字符不为 `?`（0x3f），防止编码损坏 | Suggestion |
+| ENC-06 | CSV 导出加 UTF-8 BOM（`\ufeff`）防 Excel 乱码 | Critical |
+| ENC-07 | 中文文件名用 `encodeURIComponent` 或现代浏览器原生 `download` 属性 | Critical |
+| ENC-08 | 生产环境禁止保留 `console.log` 调试代码 | Suggestion |
+
+### 2.10 统计指标前端展示验证（Statistics Display）
+
+> **复盘来源**：仪表盘 KPI 始终显示 0% 问题（前端展示逻辑本身无 Bug，但需新增验证检查项）。详见后端 [STQ-* 规则](../xianyu-backend-code-review/SKILL.md#29-统计查询验证statistics-query)。
+
+| 编号 | 规则 | 严重度 |
+|---|---|---|
+| SD-01 | 统计指标的 `value` 字段类型与后端返回一致（`number` 不当 `string` 显示） | Critical |
+| SD-02 | 百分比指标（`is_pct=true`）前端显示 `%` 后缀，非百分比不显示 | Suggestion |
+| SD-03 | `sample_size` 为 0 时前端显示"暂无数据"而非"0%"，避免误导用户 | Suggestion |
+| SD-04 | KPI 卡片的 hint 文案与后端返回的 `hint` 字段一致，前端不覆写 | Suggestion |
+| SD-05 | 反向指标（如失败率）上升为红色、下降为绿色，方向取反逻辑正确 | Suggestion |
+| SD-06 | 统计指标轮询刷新时 loading 状态正确，避免数据闪烁 | Suggestion |
+
+### 2.11 异步操作与状态机（Async Cancel & Debounce）
+
+> **复盘来源**：登录模块前端问题（多标签页 / 取消登录卡死 / 双击触发 / 轮询终态保护）。详见 [references/async-cancel-and-debounce-patterns.md](references/async-cancel-and-debounce-patterns.md)。
+
+| 编号 | 规则 | 严重度 |
+|---|---|---|
+| FAC-01 | "轮询 + 取消"场景，必须**先停本地轮询**（`clearInterval`）**再调远程 cancel API**，避免 in-flight resolve 覆盖本地 state | Critical |
+| FAC-02 | 启动类按钮（启动浏览器 / 启动任务 / 启动扫描）必须有防抖状态（`startingXxx`），API 返回前 `disabled=true` | Critical |
+| FAC-03 | 轮询必须有终态保护：进入 `success/cancelled/timeout/error` 后立即 `clearInterval`，in-flight resolve 不再 `setState` | Critical |
+| FAC-04 | 轮询间隔（`pollIntervalMs`）和超时时间（`timeoutSec`）必须从配置读取，禁止硬编码 `setInterval(fn, 1000)` | Suggestion |
+
 ---
 
 ## §3 项目特定审查要点
@@ -187,6 +228,21 @@ description: "对闲鱼猎人项目前端代码（React/TypeScript/Ant Design/Zu
 | TBL-02 | 分页 / 排序 / 筛选有明确交互 |
 | TBL-03 | 批量操作有确认 |
 | TBL-04 | 空状态有友好提示 |
+
+### 3.4 登录页面（`pages/Login/*.tsx`）
+
+> **复盘来源**：登录模块前端问题（多标签页 / 取消卡死 / 双击触发）。详见 [references/async-cancel-and-debounce-patterns.md](references/async-cancel-and-debounce-patterns.md)。
+
+| 编号 | 规则 |
+|---|---|
+| LGN-01 | "启动浏览器登录"按钮必须有 `startingBrowser` 防抖状态，API 返回前 `disabled=true`（对应 FAC-02） |
+| LGN-02 | "取消登录"按钮必须先 `clearInterval(pollRef)` 再 `await authApi.cancelLogin()`（对应 FAC-01） |
+| LGN-03 | 取消后立即 `setLoginStatus(null)`，远程 cancel 失败也保持已取消状态（不回退） |
+| LGN-04 | 轮询函数必须检查终态（`null/success/cancelled`），in-flight resolve 不再 setState（对应 FAC-03） |
+| LGN-05 | 轮询间隔 / 超时时间从配置读取（`useConfigStore` → `auth.poll_interval_ms` / `auth.qr_timeout_sec`） |
+| LGN-06 | 状态机显式定义：`idle → starting → opening → qr_ready → success / timeout / error / cancelled` |
+| LGN-07 | 错误提示用 `extractApiError(e)`，持续时间 ≥ 5 秒（对应 API-01/02） |
+| LGN-08 | 组件卸载时 `clearInterval(pollRef)` 防止内存泄漏（对应 HK-02） |
 
 ---
 
@@ -290,6 +346,9 @@ git diff frontend/src/
 - Hooks
 - 性能
 - 安全 / A11y
+- 编码与 I/O（ENC-*）
+- 统计指标展示（SD-*）
+- 异步操作与状态机（FAC-*）
 
 ### Step 3: 逐项检查
 
@@ -404,6 +463,123 @@ const save = await configApi.save(payload)  // payload 用 snake_case
 
 **预防机制**：types.ts 集中定义，后端字段名不能改。
 
+### 8.4 反模式 4：统计指标展示与后端数据不一致
+
+**复盘案例**：仪表盘 KPI 始终显示 0%（前端展示逻辑本身无 Bug，但需验证前端与后端数据契约）
+
+**检查要点**：
+1. **value 字段类型**：后端返回 `number`，前端不当 `string` 显示
+2. **百分比后缀**：`is_pct=true` 的指标前端显示 `%`，非百分比不显示
+3. **sample_size 为 0**：前端显示"暂无数据"而非"0%"，避免误导
+4. **hint 文案一致**：前端不覆写后端返回的 `hint` 字段
+5. **反向指标方向**：失败率上升=红色=坏，下降=绿色=好
+
+**正确模式**：
+```tsx
+// ✅ 反向指标方向取反
+const isInverted = k.id === 'notify_failure_rate'
+const upColor = isInverted ? token.colorError : token.colorSuccess
+const downColor = isInverted ? token.colorSuccess : token.colorError
+
+// ✅ sample_size 为 0 时显示"暂无数据"
+{k.sample_size === 0 ? (
+  <span>暂无数据</span>
+) : (
+  <Statistic value={k.value} suffix={k.is_pct ? '%' : k.unit} />
+)}
+```
+
+**预防机制**：审查统计指标展示时，检查前端与后端 `KpiCard` 类型定义的字段对应关系，确保类型和语义一致。
+
+### 8.5 反模式 5：取消操作顺序错误导致状态卡死
+
+**复盘案例**：登录页面点击取消登录后，状态卡在"已取消"，无法重新启动
+
+**反模式代码**：
+```tsx
+// ❌ 先调 cancel API 再停轮询
+const handleCancelLogin = async () => {
+  try {
+    await authApi.cancelLogin()  // 网络往返 200-500ms
+    if (pollRef.current) {
+      clearInterval(pollRef.current)  // 太晚：in-flight 请求已 resolve
+    }
+    setLoginStatus(null)
+  } catch {
+    message.error('取消失败')
+  }
+}
+```
+
+**问题**：
+- cancel API 网络往返期间，轮询中的 in-flight 请求 resolve
+- resolve 后的 `setLoginStatus('waiting')` 覆盖了 cancel 路径的 `setLoginStatus(null)`
+- 用户看到状态从"已取消"闪回"等待登录中"，UI 卡死
+
+**正确模式**：
+```tsx
+// ✅ 先停本地轮询，再调远程 cancel API
+const handleCancelLogin = async () => {
+  if (pollRef.current) {
+    clearInterval(pollRef.current)
+    setPollTimer(null)
+  }
+  setLoginStatus(null)
+  try {
+    await authApi.cancelLogin()
+    message.info('已取消登录')
+  } catch {
+    message.error('取消失败')
+  }
+}
+```
+
+**预防机制**：Code Review 时检查所有"取消 + 轮询"场景，确认 `clearInterval` 在 `await cancel` 之前。
+
+### 8.6 反模式 6：启动按钮无防抖导致重复触发
+
+**复盘案例**：用户双击"启动浏览器登录"按钮，弹出 4 个浏览器标签页
+
+**反模式代码**：
+```tsx
+// ❌ 无防抖，双击触发 2 次
+const handleStartLogin = async () => {
+  await authApi.startBrowserLogin()  // 双击会启动 2 个 Chromium
+  setPollTimer(setInterval(pollLoginStatus, 1000))
+}
+
+return <Button onClick={handleStartLogin}>启动浏览器登录</Button>
+```
+
+**问题**：
+- 用户双击 / 网络慢时重复点击 → 多次调用 startBrowserLogin
+- 后端启动多个 Chromium 子进程 → 弹出多个浏览器窗口
+- 多次 `setInterval` 累积 → 内存泄漏 + 状态错乱
+
+**正确模式**：
+```tsx
+const [startingBrowser, setStartingBrowser] = useState(false)
+
+const handleStartLogin = async () => {
+  if (startingBrowser) return
+  setStartingBrowser(true)
+  try {
+    await authApi.startBrowserLogin()
+    setPollTimer(setInterval(pollLoginStatus, pollIntervalMs))
+  } finally {
+    setStartingBrowser(false)
+  }
+}
+
+return (
+  <Button disabled={startingBrowser} onClick={handleStartLogin}>
+    {startingBrowser ? '启动中...' : '启动浏览器登录'}
+  </Button>
+)
+```
+
+**预防机制**：Code Review 时检查所有"启动类"按钮（启动浏览器 / 启动任务 / 启动扫描），必须有 `startingXxx` 防抖状态。
+
 ---
 
 ## §9 与其他技能协同
@@ -414,6 +590,7 @@ const save = await configApi.save(payload)  // payload 用 snake_case
 xianyu-frontend-code-review（本技能）
     │
     ├── 编码规范依据 ──→ docs/skills/xianyu-hunter-dev/references/coding-standards.md
+    │                  + docs/skills/xianyu-hunter-dev/references/browser-automation-and-async-patterns.md
     │
     ├── 类型 / 命名 / 注释 ──→ references/code-quality.md
     │
@@ -425,7 +602,11 @@ xianyu-frontend-code-review（本技能）
     │
     ├── Hooks / Zustand ──→ references/hooks-and-state.md
     │
-    └── 安全 / 可访问性 ──→ references/security-and-a11y.md
+    ├── 安全 / 可访问性 ──→ references/security-and-a11y.md
+    │
+    ├── 编码与 I/O ──→ references/encoding-and-io.md
+    │
+    └── 异步取消与防抖 ──→ references/async-cancel-and-debounce-patterns.md
 ```
 
 ---
@@ -438,4 +619,6 @@ xianyu-frontend-code-review（本技能）
 - [references/api-contract.md](references/api-contract.md)
 - [references/hooks-and-state.md](references/hooks-and-state.md)
 - [references/security-and-a11y.md](references/security-and-a11y.md)
+- [references/encoding-and-io.md](references/encoding-and-io.md) —— 字符编码 / I/O 边界（FAQ 乱码复盘）
 - [references/antd-patterns.md](references/antd-patterns.md) —— antd 5 关键模式审查
+- [references/async-cancel-and-debounce-patterns.md](references/async-cancel-and-debounce-patterns.md) —— 异步取消与防抖（登录模块复盘，FAC-01~04 检查点）

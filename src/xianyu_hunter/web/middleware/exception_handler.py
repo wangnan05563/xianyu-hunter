@@ -21,6 +21,10 @@ from loguru import logger
 # 敏感请求头：记录日志时需脱敏，避免 token/cookie 写入持久化日志
 _SENSITIVE_HEADERS = {"authorization", "cookie", "xh_token", "set-cookie"}
 
+# 采集失败（Cookie 失效）的 detail 标识，用于日志降级判断
+# 文案来源：collection_service.py 中 CollectionError(502, "Failed to collect item detail: ...")
+_COOKIE_EXPIRED_DETAIL_MARKER = "Failed to collect item detail"
+
 
 def _sanitize_headers(headers: Any) -> dict[str, str]:
     """脱敏请求头，敏感字段只保留键名，值替换为 ***
@@ -93,7 +97,12 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     响应体保持 {"detail": ...} 结构，与现有前端契约一致。
     """
     if exc.status_code >= 500:
-        logger.warning(
+        # 502 采集失败（Cookie失效）降级为 INFO，避免会话失效期间 WARNING 日志刷屏
+        # 其他 500+ 错误仍保持 WARNING 级别，便于区分真正的系统错误
+        is_cookie_expired_502 = exc.status_code == 502 and _COOKIE_EXPIRED_DETAIL_MARKER in str(exc.detail)
+        log_level = "INFO" if is_cookie_expired_502 else "WARNING"
+        logger.log(
+            log_level,
             "HTTPException path={path} status={status} | {detail}",
             path=request.url.path,
             status=exc.status_code,

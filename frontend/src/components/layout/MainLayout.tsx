@@ -13,14 +13,11 @@ import {
   HistoryOutlined,
   HomeOutlined,
   InfoCircleOutlined,
-  ToolOutlined,
   RobotOutlined,
   SearchOutlined,
   AimOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  AppstoreOutlined,
-  SettingOutlined,
   DatabaseOutlined,
   ClearOutlined,
   WarningOutlined,
@@ -46,59 +43,10 @@ import UserMenu from './UserMenu'
 import { SheetWorkspace } from '../SheetWorkspace'
 import { useSheetStore } from '../../stores/sheetStore'
 import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
+import { useMenuConfig } from '../../hooks/useMenuConfig'
+import AccountSwitcher from './AccountSwitcher'
 
 const { Header, Sider, Content } = Layout
-
-// 菜单配置：一级分组使用 SubMenu 支持折叠展开
-const menuItems = [
-  { key: '/', icon: <DashboardOutlined />, label: '仪表盘' },
-  { type: 'divider' as const },
-  {
-    key: 'sub-data',
-    icon: <AppstoreOutlined />,
-    label: '数据查看',
-    children: [
-      { key: '/tasks', icon: <UnorderedListOutlined />, label: '任务管理' },
-      { key: '/items', icon: <ShoppingOutlined />, label: '商品列表' },
-      { key: '/orders', icon: <ThunderboltOutlined />, label: '抢单记录' },
-      { key: '/evaluations', icon: <AuditOutlined />, label: '评估明细' },
-      { key: '/timeline', icon: <FieldTimeOutlined />, label: '事件时间线' },
-      { key: '/logs', icon: <FileTextOutlined />, label: '实时日志' },
-      { key: '/logs/errors', icon: <BugOutlined />, label: '错误日志' },
-    ],
-  },
-  { type: 'divider' as const },
-  {
-    key: 'sub-config',
-    icon: <SettingOutlined />,
-    label: '配置管理',
-    children: [
-      { key: '/config/price', icon: <DollarOutlined />, label: '价格策略' },
-      { key: '/config/eval', icon: <SafetyCertificateOutlined />, label: '评估规则' },
-      { key: '/config/buyer', icon: <AimOutlined />, label: '抢单策略' },
-      { key: '/config/search', icon: <SearchOutlined />, label: '搜索参数' },
-      { key: '/config/notifier', icon: <BellOutlined />, label: '通知渠道' },
-      { key: '/config/ai', icon: <RobotOutlined />, label: 'AI 服务' },
-      { key: '/config/chatbot', icon: <MessageOutlined />, label: '客服配置' },
-      { key: '/config/version', icon: <HistoryOutlined />, label: '配置版本' },
-    ],
-  },
-  { type: 'divider' as const },
-  {
-    key: 'sub-maintenance',
-    icon: <ToolOutlined />,
-    label: '系统维护',
-    children: [
-      { key: '/maintenance', icon: <ClearOutlined />, label: '系统清理' },
-      { key: '/maintenance/db', icon: <DatabaseOutlined />, label: '数据库维护' },
-      { key: '/batch-refresh', icon: <CloudDownloadOutlined />, label: '批量采集' },
-      { key: '/anticrawl', icon: <ExperimentOutlined />, label: '反爬登录管理' },
-    ],
-  },
-  { type: 'divider' as const },
-  // 智能客服：独立一级菜单，对话入口（配置在"配置管理"分组中）
-  { key: '/chatbot', icon: <MessageOutlined />, label: '智能客服' },
-]
 
 // 路由 → 面包屑映射
 const ROUTE_LABELS: Record<string, string> = {
@@ -202,6 +150,10 @@ export default function MainLayout() {
   // g 前缀快捷键：记录是否处于 g 等待第二键的状态
   const gPrefixRef = useRef(false)
   const gTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 动态菜单：从后端 /api/menu 拉取用户级菜单配置（MU5）
+  // 模块级缓存 5min TTL，切换账号时由 AccountSwitcher 调用 invalidateMenuCache 失效
+  const { menuItems: dynamicMenuItems, loading: menuLoading } = useMenuConfig()
 
   // 轮询调度器状态
   const fetchSchedulerStatus = useCallback(() => {
@@ -328,7 +280,9 @@ export default function MainLayout() {
   // Command Palette 模糊搜索过滤（移到 LayoutContent 内部，因为依赖 ConfigProvider 上下文）
 
   // 所有 hooks 必须在条件性 return 之前调用，否则 React hooks 数量不一致会触发 Error #310
-  const allLeafKeys = menuItems.flatMap((item) => {
+  // 动态菜单的叶子节点 key 列表：用于 selectedKey 匹配（高亮当前路由对应的菜单项）
+  const allLeafKeys = dynamicMenuItems.flatMap((item) => {
+    if ('type' in item) return [] // divider 无 key
     if ('children' in item && Array.isArray(item.children)) {
       return item.children.map((c) => c.key)
     }
@@ -343,9 +297,11 @@ export default function MainLayout() {
   const selectedKey = matchedKey || '/'
 
   // 根据当前路由计算应该自动展开的 SubMenu 分组
+  // 依赖 dynamicMenuItems：菜单加载后重新计算，确保首次渲染时 openKeys 能正确初始化
   const autoOpenKeys = useMemo(() => {
     const keys: string[] = []
-    for (const item of menuItems) {
+    for (const item of dynamicMenuItems) {
+      if ('type' in item) continue // divider
       if ('children' in item && Array.isArray(item.children) && item.key) {
         if (item.children.some((c) => location.pathname.startsWith(c.key))) {
           keys.push(item.key)
@@ -353,7 +309,7 @@ export default function MainLayout() {
       }
     }
     return keys
-  }, [location.pathname])
+  }, [location.pathname, dynamicMenuItems])
 
   // 受控 openKeys：仅首次挂载时按当前路由初始化，之后完全由用户手动控制
   // 为什么不用 useEffect 联动 autoOpenKeys：sheet 切换/快捷键导航都会触发 URL 变化→
@@ -400,6 +356,17 @@ export default function MainLayout() {
     )
   }
 
+  // 菜单加载中：等待菜单数据就绪后再渲染 LayoutContent
+  // 为什么需要等待：openKeys 初始化依赖 autoOpenKeys，而 autoOpenKeys 依赖 menuItems
+  // 如果菜单未加载就渲染，openKeys 会初始化为空，SubMenu 不会自动展开
+  if (menuLoading && dynamicMenuItems.length === 0) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <Spin size="large" tip="正在加载菜单..."><div /></Spin>
+      </div>
+    )
+  }
+
   return (
     <LayoutContent
       isDark={isDark}
@@ -421,8 +388,8 @@ export default function MainLayout() {
       selectedKey={selectedKey}
       openKeys={openKeys}
       setOpenKeys={setOpenKeys}
-      menuItems={menuItems}
-          drawerOpen={drawerOpen}
+      menuItems={dynamicMenuItems}
+      drawerOpen={drawerOpen}
       setDrawerOpen={setDrawerOpen}
       userInfo={userInfo}
       onRefreshUserInfo={fetchUserInfo}
@@ -653,6 +620,9 @@ function LayoutContent({
                 onClick={() => navigate('/about')}
               />
             </Tooltip>
+
+            {/* 账号切换器：多账号管理入口（MU7），切换后整页刷新确保数据隔离 */}
+            <AccountSwitcher currentUserId={userInfo.user_id} />
 
             {/* 用户菜单：头像 + 昵称，悬浮显示 Cookie 健康面板（含换号/退出） */}
             <UserMenu userInfo={userInfo} onRefreshUserInfo={onRefreshUserInfo} />

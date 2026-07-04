@@ -34,7 +34,7 @@ const getStatusMessage = (status: number | undefined): string | null => {
   return null
 }
 
-export function extractApiError(e: unknown): string {
+export function extractApiError(e: unknown, fallback = '操作失败'): string {
   if (typeof e === 'object' && e !== null) {
     const resp = (e as { response?: { data?: unknown; status?: number } }).response
     if (resp) {
@@ -45,5 +45,7 @@ export function extractApiError(e: unknown): string {
       if (statusMsg) return statusMsg
     }
   }
-  return e instanceof Error ? e.message : '操作失败'
+  // 优先用 Error.message，避免丢失原生 JS 错误信息；无 message 时用调用方 fallback
+  if (e instanceof Error && e.message) return e.message
+  return fallback
 }
