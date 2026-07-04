@@ -1,0 +1,89 @@
+/* 移动端全局样式：覆盖 antd 默认桌面端间距 */
+
+.m-layout {
+  max-width: 600px;
+  margin: 0 auto;
+  position: relative;
+}
+
+.m-header {
+  height: 56px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg-1, #fff);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.m-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.m-brand-logo {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: #E20613;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 18px;
+  font-family: 'Cormorant Garamond', Georgia, serif;
+}
+
+.m-brand-name {
+  font-family: 'Cormorant Garamond', 'Noto Serif SC', serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-0, #1a1814);
+  letter-spacing: -0.3px;
+}
+
+.m-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.m-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.m-content {
+  padding: 12px;
+}
+
+/* 移动端正文 15px，比桌面 14px 大，提升可读性 */
+.m-content {
+  font-size: 15px;
+}
+
+/* 卡片间距：移动端单列，间距更紧凑 */
+.m-content .ant-card {
+  margin-bottom: 12px;
+}
+
+/* 米其林品牌红竖条：主按钮左侧 3px 强调 */
+.m-content .ant-btn-primary::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  background: #E20613;
+  border-radius: 0 2px 2px 0;
+}
