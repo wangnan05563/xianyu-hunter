@@ -16,6 +16,6 @@ def test_verify_token_sets_samesite_none_for_cross_origin(client):
     token = get_settings().web_token
     resp = client.post(f"/api/auth/verify?token={token}")
     assert resp.status_code == 200
-    # 检查 Set-Cookie 头包含 SameSite=None
-    set_cookie = resp.headers.get("set-cookie", "")
-    assert "samesite=none" in set_cookie.lower()
+    set_cookie = resp.headers.get("set-cookie", "").lower()
+    assert "samesite=none" in set_cookie
+    assert "secure" in set_cookie  # 验证 Secure 属性

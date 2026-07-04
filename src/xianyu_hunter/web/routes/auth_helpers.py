@@ -24,7 +24,10 @@ def make_auth_response(data: dict, session_token: str | None = None) -> JSONResp
         key="xh_token",
         value=token,
         httponly=True,
-        samesite="lax",
+        # 与 verify_token 保持一致：SameSite=None 允许移动端跨域携带
+        # Secure 是 SameSite=None 的强制要求，否则浏览器会拒绝设置 cookie
+        samesite="none",
+        secure=True,
         max_age=86400 * 30,  # 30 天
     )
     return resp
