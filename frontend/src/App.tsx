@@ -6,7 +6,8 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { lazyRetry, LazyErrorBoundary } from './utils/lazyRetry'
 import ReloadPrompt from './components/ReloadPrompt'
 import { useMobileDetect } from './mobile/hooks/useMobileDetect'
-import MobileRoutes from './mobile/routes'
+// 移动端路由临时禁用：mobile/routes.tsx 引用的页面组件（Dashboard/Tasks/Orders/TabBar/OfflineBanner）尚未实现
+// 待移动端模块开发完成后再启用 import MobileRoutes from './mobile/routes'
 
 // 路由懒加载：按需加载页面组件，减小首屏 bundle 体积
 // 使用 lazyRetry 包装：网络抖动或部署时 chunk 失效可自动重试，避免白屏
@@ -68,8 +69,9 @@ export default function App() {
 
   // 移动端 UA 自动跳转到 /m/* 路由
   // 桌面端访问 /m/* 重定向到桌面路由
-  if (isMobile && !window.location.pathname.startsWith('/m') && !window.location.pathname.startsWith('/login')) {
-    return <Navigate to="/m" replace />
+  // 移动端模块未实现时跳过自动跳转，避免重定向到不存在的 /m 路由
+  if (isMobile && !window.location.pathname.startsWith('/login')) {
+    // 待移动端模块完成后恢复: return <Navigate to="/m" replace />
   }
 
   return (
@@ -116,8 +118,8 @@ export default function App() {
             <Route path="config/chatbot" element={<LazyRoute><ChatbotConfig /></LazyRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
-          {/* 移动端路由组 */}
-          <Route path="/m/*" element={<MobileRoutes />} />
+          {/* 移动端路由组临时禁用：mobile 模块页面组件未实现，待完成后恢复 */}
+          {/* <Route path="/m/*" element={<MobileRoutes />} /> */}
         </Routes>
         {/* O-12-26 PWA 更新/离线就绪提示，放在 AntdApp 内以使用主题 notification */}
         <ReloadPrompt />

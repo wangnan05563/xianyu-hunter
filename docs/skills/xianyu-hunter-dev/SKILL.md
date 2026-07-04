@@ -36,6 +36,8 @@ description: "闲鱼猎人项目（XianyuHunter）增量开发与 Bug 修复技�
    - `references/frontend-state-and-api.md` —— Zustand + Axios + Ant Design 联动
    - `references/browser-automation-and-async-patterns.md` —— 浏览器自动化与异步时序规范（登录模块复盘）
    - `references/cookie-state-recovery-patterns.md` —— Cookie 层状态管理复盘
+   - `references/data-consistency-patterns.md` —— 🆕 数据一致性规范（多入口参数合并、价格采集、状态检测关键词覆盖，实时搜索/价格不一致复盘提炼，DC-001~DC-009）
+   - `references/performance-and-security-patterns.md` —— 🆕 性能与安全规范（N+1 查询优化、json_extract、异常脱敏、计数器语义、前端阈值获取，代码审查 P0-P4 复盘提炼，PS-001~PS-009）
 4. **【场景】按需查阅 `docs/standards/`**：
    - `directory-structure.md` —— 文件放哪里
    - `michelin-design-system.md` —— 视觉规范
@@ -173,6 +175,8 @@ try {
 | **前端取消先停本地再调远程** | 先调 cancel API 再停轮询 | `clearInterval(pollRef)` 在 `await cancelLogin()` 之前 |
 | **前端启动按钮防抖** | 不防抖导致双击弹 4 标签 | `startingBrowser` 状态在 API 返回前禁用按钮 |
 | **配置化无硬编码** | 等待时间/域名/选择器散落代码 | 全部走 `config/auth.yaml` + `config/browser.yaml` |
+| **Session Cookie 内嵌 timestamp 检测** | 仅看 `cookie.expires=-1` 就认为有效 | 解析 `_m_h5_tk` 等 `{token}_{ts_ms}` 格式 cookie 的内嵌 timestamp，超过 `auth.session_cookie_ttl_sec`（默认 1200）视为过期；所有 `cookie_map` 构造处统一调用 `is_session_cookie_expired()` 过滤 |
+| **解析失败保守返回 False** | 解析异常时返回 True 误判失效 | 解析失败时 `logger.warning` + 返回 False（保守认为未过期），避免误把合法 cookie 判失效触发振荡 |
 
 **配置项清单**（17 项，详见 references 文档 §7.1）：
 - `config/auth.yaml`：`invalid_nicks` / `login_cookie_names` / `cookie_write_wait_sec` / `sqlite_flush_wait_sec` / `helper_delay_sec` / `unb_reread_wait_sec` / `selector_wait_sec` / `nick_selectors` / `unb_test_values` / `unb_min_length` / `cookie2_min_length` / `helper_timeout_sec` / `qr_timeout_sec` / `userinfo_ttl_sec`
@@ -298,6 +302,8 @@ try {
 | **用户 ID 优先级** | `unb > _tb_token_截断 > sha256(cookie2)[:16] > default` |
 | **异步写入等待** | `sleep(3) + storage_state() + sleep(2)`（由配置管理） |
 | **兜底重读** | unb 未找到时再等 3s 重读一次（由 `auth.unb_reread_wait_sec` 配置） |
+| **Session Cookie 内嵌 timestamp 检测** | `_m_h5_tk` 等 cookie `expires=-1`（session cookie）但值内嵌服务端 timestamp + TTL，仅看 expires 会误判有效 | 解析 `{token}_{ts_ms}` 格式提取 timestamp，超过 `auth.session_cookie_ttl_sec`（默认 1200 秒）视为过期；所有 cookie_map 构造处统一调用 `is_session_cookie_expired()` 过滤；解析失败保守返回 False（不误判） |
+| **TTL 与 cookie 名单配置化** | TTL / cookie 名单硬编码在代码中 | `auth.session_cookie_ttl_sec` + `auth.session_cookie_names`（默认 `["_m_h5_tk", "_m_h5_tk_enc"]`）走 `config/auth.yaml` 管理 |
 
 #### 4.7.3 SPA 抓取与占位符过滤
 
@@ -386,7 +392,7 @@ xianyu-hunter-dev（本技能）
 - [references/error-handling.md](references/error-handling.md) —— 前后端错误处理统一规范
 - [references/frontend-state-and-api.md](references/frontend-state-and-api.md) —— Zustand + Axios 联动
 - [references/browser-automation-and-async-patterns.md](references/browser-automation-and-async-patterns.md) —— 浏览器自动化与异步时序规范（登录模块复盘，17 项配置化要求）
-- [references/cookie-state-recovery-patterns.md](references/cookie-state-recovery-patterns.md) —— Cookie 层状态管理复盘（缓存失效传播 / 状态判定兜底 / Schema 迁移事务安全）
+- [references/cookie-state-recovery-patterns.md](references/cookie-state-recovery-patterns.md) —— Cookie 层状态管理复盘（v1：缓存失效传播 / 状态判定兜底 / Schema 迁移事务安全；v2：Session Cookie 内嵌 timestamp 过期检测 / UI 状态与操作按钮文案分离）
 - [references/database-admin.md](references/database-admin.md) —— 数据库维护模块专项规范
 
 ## 外部规范

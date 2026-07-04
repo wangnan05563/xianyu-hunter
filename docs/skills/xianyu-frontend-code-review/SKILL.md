@@ -44,6 +44,7 @@ description: "对闲鱼猎人项目前端代码（React/TypeScript/Ant Design/Zu
    - [references/antd-patterns.md](references/antd-patterns.md) —— antd 5 关键模式审查
    - [references/encoding-and-io.md](references/encoding-and-io.md) —— 字符编码 / I/O 边界（FAQ 乱码复盘）
    - [references/async-cancel-and-debounce-patterns.md](references/async-cancel-and-debounce-patterns.md) —— 异步取消与防抖（登录模块复盘）
+   - [references/state-and-consistency-checks.md](references/state-and-consistency-checks.md) —— 🆕 前端硬编码阈值禁用、状态判断后端一致性、类型对齐、API 字段映射、credentials 传递、错误反馈与重试、事件冒泡控制（代码审查 P1 + 实时搜索复盘提炼，10 项 F-REVIEW 检查点）
 5. **按 §4 模板输出审查报告**
 
 ---
@@ -60,7 +61,7 @@ description: "对闲鱼猎人项目前端代码（React/TypeScript/Ant Design/Zu
 
 ---
 
-## §2 审查维度（9 个）
+## §2 审查维度（12 个）
 
 ### 2.1 类型安全（Code Quality · 类型）
 
@@ -196,6 +197,33 @@ description: "对闲鱼猎人项目前端代码（React/TypeScript/Ant Design/Zu
 | FAC-02 | 启动类按钮（启动浏览器 / 启动任务 / 启动扫描）必须有防抖状态（`startingXxx`），API 返回前 `disabled=true` | Critical |
 | FAC-03 | 轮询必须有终态保护：进入 `success/cancelled/timeout/error` 后立即 `clearInterval`，in-flight resolve 不再 `setState` | Critical |
 | FAC-04 | 轮询间隔（`pollIntervalMs`）和超时时间（`timeoutSec`）必须从配置读取，禁止硬编码 `setInterval(fn, 1000)` | Suggestion |
+
+### 2.12 UI 状态与操作按钮分离（UI State & Action Separation）
+
+> **复盘来源**：Cookie 分层管理卡片"失效"按钮被误认为状态显示（用户报告"identity/session/tracking 一直显示失效"，实际三层 `valid=true`，红色"失效"是操作按钮文案）。详见 [references/state-and-consistency-checks.md](references/state-and-consistency-checks.md) + [xianyu-hunter-dev references/cookie-state-recovery-patterns.md](../xianyu-hunter-dev/references/cookie-state-recovery-patterns.md) v2 增补章节。
+
+| 编号 | 规则 | 严重度 |
+|---|---|---|
+| USS-01 | 状态卡片若同时显示"状态文本 + 危险操作按钮"，操作按钮文案必须加动词前缀（如"主动失效" / "手动标记失效"），禁止与状态文案共用"失效"二字 | Critical |
+| USS-02 | 危险操作按钮必须用图标（如 `StopOutlined` / `DeleteOutlined`）+ `type="link"` + `danger` 视觉与状态指示器（Badge / Tag）分离 | Suggestion |
+| USS-03 | 特殊状态（如 `valid=true && cookie_count=0`，由后端 `force_restore` 强制恢复）必须显式标注"已恢复（无 Cookie）"等文案，禁止显示"0 个 Cookie"误导用户以为有有效 cookie | Critical |
+| USS-04 | 状态指示器（Badge status）与状态文本必须**同源**于后端 `valid` 字段，禁止前端自行计算（如 `count > 0 ? success : default`）覆盖后端判定 | Critical |
+| USS-05 | 操作按钮 `onClick` 必须有 `Popconfirm` 二次确认（涉及失效 / 删除 / 重置等不可逆操作），且 `stopPropagation` 防止事件冒泡触发卡片点击 | Suggestion |
+| USS-06 | 所有状态文案模板（"未初始化" / "已恢复（无 Cookie）" / "N 个 Cookie"）提取为模块级常量或 `useMemo`，禁止在 JSX 内联三元嵌套超过 2 层 | Suggestion |
+
+**审查方法**：文案歧义 + 视觉分离 + 特殊状态 + 同源判定 4 维度交叉验证
+
+```
+1. grep 状态卡片组件（Badge / Tag / Card），检查是否同时含状态文本 + 操作按钮
+2. 检查操作按钮文案是否与状态文案有歧义重叠（如都用"失效"）
+3. 检查特殊状态（valid=true && count=0）是否有显式文案标注
+4. 检查 Badge status 是否直接来源于后端 valid 字段
+5. 检查危险操作按钮是否有 Popconfirm + stopPropagation
+6. 检查状态文案三元嵌套是否超过 2 层
+```
+
+**适用场景**：状态卡片同时显示状态 + 操作按钮的场景（Cookie 分层管理 / 任务状态卡片 / 连接状态卡片 / 服务健康卡片）。
+**不适用场景**：纯展示卡片（无操作按钮）、纯操作卡片（无状态显示）、列表行内操作（操作列与状态列分离）。
 
 ---
 

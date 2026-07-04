@@ -222,3 +222,183 @@
 3. **Schema 演进的"非破坏性"是错觉**——SQLite 的 NOT NULL→nullable 必须重建表，重建必须事务安全
 4. **代码审查发现的不止是"问题"**，更是"系统设计的盲区"——本次发现的状态自愈需求即是设计补完
 5. **测试预期与实现需同步更新**——增量修改时测试预期要随实现一起更新，避免"通过/失败反复横跳"
+
+---
+
+# 闲鱼猎人编码规范复盘（v2 增补）
+
+> **版本**：v2.0
+> **日期**：2026-06-29
+> **来源**：从"Cookie 分层管理 identity/session/tracking 一直显示失效"问题复盘
+> **复盘方法**：Sequential Thinking 4 维度（成功步骤 / 失败点 / 可抽象流程 / 适用与不适用场景）
+> **本次新增**：流程 E（Session Cookie 内嵌 Timestamp 过期检测）+ 流程 F（UI 状态显示与操作按钮分离）+ 规范 6.5/6.6
+
+---
+
+## 九、v2 问题原型
+
+**用户报告**：
+
+> Cookie 分层管理中，identity、session、tracking 一直显示失效
+
+**矛盾本质（两层）**：
+
+1. **后端振荡**：`_m_h5_tk` 已过期 9 小时，但 `cookie.expires=-1`（session cookie）不被常规过期过滤识别。`/cookies/layers` 端点把过期的 `_m_h5_tk` 当作有效 cookie 同步给 CookieRotator，与 TokenRenewer 的失效标记反复振荡
+2. **前端 UI 混淆**：`state.valid=true` 时前端显示红色"失效"按钮（供用户主动失效），用户把按钮文字误认为状态显示
+
+**修复涉及文件**：
+- `cookie_rotator.py`：新增 `is_m5tk_expired` 辅助函数
+- `api_anticrawl.py`：4 处 cookie_map 构造逻辑增加 _m_h5_tk 过期过滤
+- `login_orchestrator.py`：`sync_cookie_layers_from_json` 增加过滤
+- `frontend/src/pages/AntiCrawl/index.tsx`：按钮文案"失效"→"主动失效" + 图标 + 特殊状态文案
+
+---
+
+## 十、v2 成功执行任务的完整步骤
+
+| 阶段 | 动作 | 产出 |
+|---|---|---|
+| 1. 数据确认 | 读取 cookies.json 确认 _m_h5_tk timestamp=1782673201708（已过期 9 小时） | 定位振荡根因 |
+| 2. 辅助函数 | 在 cookie_rotator.py 添加 `is_m5tk_expired`（检查内嵌 timestamp + TTL=1200s） | 纯函数可独立测试 |
+| 3. 后端过滤 | api_anticrawl.py 4 处 + login_orchestrator.py 1 处 cookie_map 构造增加过滤 | 消除振荡 |
+| 4. 前端 UI | Playwright 检查 DOM 确认三层 Badge 实际都是 success；按钮文案改为"主动失效" | 消除用户混淆 |
+| 5. TS 类型修复 | ItemList.tsx:315 seller_credit number→String() 转换（既有类型不一致） | 解除构建阻塞 |
+| 6. 验证 | API 调用确认三层 valid=true + Playwright DOM 检查确认 success Badge | 端到端验证 |
+
+---
+
+## 十一、v2 任务执行过程中的不确定性与失败点
+
+### 11.1 不确定性
+
+| 类别 | 描述 | 处理 |
+|---|---|---|
+| TTL 值选择 | _m_h5_tk 服务端 TTL 15-22 分钟，取什么值 | 取保守值 1200s，与 token_renewer.RenewerConfig.token_ttl_sec 一致 |
+| timestamp 解析 | _m_h5_tk 格式是否稳定 | `rsplit("_", 1)[-1]` 安全解析，无下划线返回 False |
+| 过滤范围 | is_m5tk_expired 应在哪些位置应用 | 所有构造 cookie_map 的位置（4 处后端 + 1 处登录同步） |
+| UI 修复范围 | 按钮混淆是个案还是通用问题 | 个案，只改 AntiCrawl 页面 |
+| force_restore 语义 | count=0 但 valid=true 是否合理 | 不合理但 force_restore 有意设计，UI 显示"已恢复"区分 |
+
+### 11.2 失败点
+
+| # | 失败现象 | 根因 | 修复 |
+|---|---|---|---|
+| F-9 | 用户报告"显示失效"但 Playwright 检查是 success | 用户把红色"失效"按钮误认为状态显示 | 按钮文案改为"主动失效" + 图标 |
+| F-10 | 前端构建失败 | ItemList.tsx:315 seller_credit 类型不一致 | String() 转换（最小修改） |
+| F-11 | 用户重启后仍报告问题 | PWA Service Worker 缓存旧 API 响应 | 建议硬刷新或清除 Service Worker |
+| F-12 | session/tracking count=0 但 valid=true | force_restore_layers 强制恢复无 cookie 的层 | UI 显示"已恢复（无 Cookie）" |
+| F-13 | 初次诊断振荡根因走了弯路 | 未第一时间检查 cookies.json 实际内容 | 先读数据文件再读代码逻辑 |
+
+---
+
+## 十二、v2 可抽象的固定流程与判断逻辑
+
+### 流程 E：Session Cookie 内嵌 Timestamp 过期检测
+
+**触发场景**：Cookie 的 expires 字段为 -1（session cookie），但 cookie 值内嵌了服务端下发时间戳，服务端有独立 TTL。典型代表：`_m_h5_tk`（格式 `{token}_{timestamp_ms}`，服务端 TTL 15-22 分钟）。
+
+**固定步骤**：
+1. **识别 session cookie 是否内嵌 timestamp**：检查 cookie 值格式是否包含可解析的时间戳
+2. **定义 TTL 常量**：与服务端 TTL 保持一致（如 `_M5TK_TTL_SEC = 1200`），集中为模块级常量
+3. **实现过期检测函数**：解析 timestamp，计算 age，与 TTL 比较
+4. **在所有 cookie_map 构造处应用过滤**：凡是读取 cookie 并用于状态同步的位置，都必须调用过期检测
+5. **解析失败时保守返回 False**（不过期）：避免格式异常导致误判
+
+**判断逻辑**：
+```
+cookie.expires == -1（session cookie）
+  └─ cookie 值是否内嵌 timestamp？
+     ├─ 是 → 检查 timestamp + TTL 是否过期
+     │     ├─ 过期 → 过滤掉，不纳入 valid_cookies
+     │     └─ 未过期 → 保留
+     └─ 否 → 按 cookie.expires 常规处理
+```
+
+**反模式**：
+- 只看 cookie.expires 字段，忽略内嵌 timestamp（导致过期 token 被当作有效，与 TokenRenewer 振荡）
+- TTL 值硬编码在多个位置（应集中为模块级常量）
+- 解析失败时返回 True（过期）——过于激进，应保守返回 False
+
+### 流程 F：UI 状态显示与操作按钮文案分离
+
+**触发场景**：状态卡片中同时展示状态信息（Badge + 文字）和操作按钮（如"失效""删除""重启"），按钮文案可能被误认为状态描述。
+
+**固定步骤**：
+1. **识别易混淆的操作动词**："失效""删除""禁用""停止"等红色/危险按钮文案
+2. **按钮文案加前缀或图标**："主动失效"而非"失效"，加 `StopOutlined` 等图标
+3. **状态与按钮视觉分离**：状态用 Badge + 副文字，按钮单独一行或右上角
+4. **特殊状态显式标注**：如 `valid=true` 但 `count=0` 时显示"已恢复"而非"0 个"
+
+**判断逻辑**：
+```
+状态卡片中是否同时有状态显示 + 危险操作按钮？
+  ├─ 是 → 按钮文案是否可能被误读为状态？
+  │     ├─ 是 → 加前缀（"主动"）+ 图标 + 视觉分离
+  │     └─ 否 → 保持现状
+  └─ 否 → 无需处理
+```
+
+**反模式**：
+- 按钮文案与状态描述使用相同词汇（如"失效"既表示状态又表示操作）
+- `valid=true` 但 `count=0` 时显示"0 个"（用户困惑：有效为什么是 0？）
+
+---
+
+## 十三、v2 适用场景与不适用场景
+
+| 流程 | 适用场景 | 不适用场景 |
+|---|---|---|
+| E. Session Cookie 内嵌 Timestamp 过期检测 | 服务端下发的 session cookie（expires=-1）但值内嵌时间戳；_m_h5_tk / _m_h5_tk_enc 等 MTOP token；任何有服务端独立 TTL 的 session cookie | 持久 cookie（expires>0，可直接用字段判断）；不内嵌 timestamp 的 session cookie；客户端设置的 cookie（无服务端 TTL） |
+| F. UI 状态显示与操作按钮分离 | 状态卡片同时有状态 + 危险操作按钮；Badge + 文字 + 按钮的布局；用户报告"状态不对"但实际是按钮文案混淆 | 纯状态展示（无操作按钮）；操作按钮文案不与状态词汇重叠（如"编辑""导出"）；列表页的操作列 |
+
+**通用性边界**：
+- **流程 E** 适用于所有"cookie 字段无法反映真实过期"的场景——不仅限于 _m_h5_tk，任何格式为 `{value}_{timestamp}` 的 cookie 都可复用 `is_m5tk_expired` 模式
+- **流程 F** 适用于所有"状态 + 操作"混合的 UI 组件——不仅限于 Cookie 分层管理，任务状态卡片、会话状态卡片等都适用
+
+**与现有流程的关系**：
+- 流程 E 是流程 B（状态判定兜底）的**前置补充**——在多信号融合前，先确保输入信号（cookie 内容）本身是有效的
+- 流程 F 是流程 D（状态翻转日志）的**前端镜像**——后端记日志保证可观测，前端 UI 分离保证用户可理解
+
+---
+
+## 十四、v2 衍生规范
+
+### 6.5 强制规范：Session Cookie 内嵌 Timestamp 过期检测
+
+> 任何 `expires=-1` 的 session cookie，若值内嵌服务端下发时间戳（格式 `{token}_{timestamp_ms}`），必须实现独立的 timestamp 过期检测函数；所有 cookie_map 构造处必须调用此函数过滤过期 cookie，禁止仅依赖 cookie.expires 字段。
+
+- TTL 值必须与服务端配置一致，集中为模块级常量（如 `_M5TK_TTL_SEC = 1200`）
+- 解析失败时保守返回 False（不过期），避免格式异常导致误判
+- 过期检测函数必须可独立测试（纯函数，无副作用）
+
+### 6.6 强制规范：UI 状态显示与操作按钮文案分离
+
+> 状态卡片中，操作按钮的文案不得与状态描述使用相同词汇；危险操作按钮必须加前缀（如"主动"）或图标，与状态 Badge 视觉分离。
+
+- `valid=true` 但 `count=0`（强制恢复）时，必须显示"已恢复"而非"0 个"，区分正常有效与强制恢复
+- 危险操作按钮（失效/删除/禁用）必须加图标 + 前缀，避免与状态词汇重叠
+
+---
+
+## 十五、v2 落地映射
+
+| 规范 | 后端审查规则 | 前端审查规则 | 技能配置节点 |
+|---|---|---|---|
+| 6.5 Session Cookie timestamp 过期检测 | B-REVIEW-SESSION-COOKIE-TIMESTAMP（维度 2.4 Cookie 处理） | — | `session_cookie_timestamp` |
+| 6.6 UI 状态与操作按钮分离 | — | F-REVIEW-UI-STATE-ACTION-SEPARATION（维度 2.2 业务逻辑 + 2.8 框架模式） | `ui_state_action_separation` |
+
+**配套技能更新**：
+- `xianyu-hunter-dev`：在 cookie-state-recovery-patterns.md 补充流程 E/F + 规范 6.5/6.6（本文档）
+- `xianyu-backend-code-review`：新增 B-REVIEW-SESSION-COOKIE-TIMESTAMP 检查点
+- `xianyu-frontend-code-review`：新增 F-REVIEW-UI-STATE-ACTION-SEPARATION 检查点
+- 所有新规则参数集中在模块级常量管理（不硬编码）
+
+---
+
+## 十六、v2 经验教训
+
+1. **用户报告"显示失效"不一定是状态真的失效**——必须用 Playwright 检查实际 DOM 状态，区分"状态显示"与"操作按钮"
+2. **session cookie 的 expires=-1 不代表永不过期**——必须检查内嵌 timestamp + 服务端 TTL
+3. **前端构建类型错误会阻塞所有修改**——必须先修复既有 TS 错误才能构建新修改
+4. **PWA Service Worker 会缓存 API 响应**——NetworkFirst 策略下仍可能返回旧缓存，需建议用户硬刷新
+5. **force_restore 导致的 count=0 但 valid=true 是特殊状态**——UI 必须显式标注"已恢复"，不能显示"0 个"

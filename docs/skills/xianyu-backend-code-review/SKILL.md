@@ -45,6 +45,7 @@ description: "对闲鱼猎人项目后端代码（Python/FastAPI/SQLAlchemy）�
    - [references/yaml-and-config.md](references/yaml-and-config.md) —— YAML 配置加载
    - [references/encoding-and-io.md](references/encoding-and-io.md) —— 字符编码 / I/O 边界 / 外部脚本调用 API（FAQ 乱码复盘）
    - [references/browser-subprocess-patterns.md](references/browser-subprocess-patterns.md) —— 浏览器自动化与子进程模式（登录模块复盘）
+   - [references/consistency-and-state-checks.md](references/consistency-and-state-checks.md) —— 🆕 多入口参数一致性、价格采集字段优先级、DOM 选择器排除、N+1 查询、json_extract vs LIKE、异常消息脱敏、计数器语义、状态检测关键词覆盖（实时搜索/价格不一致/商品删除复盘提炼，13 项 B-REVIEW 检查点）
 5. **按 §4 模板输出审查报告**
 
 ---
@@ -61,7 +62,7 @@ description: "对闲鱼猎人项目后端代码（Python/FastAPI/SQLAlchemy）�
 
 ---
 
-## §2 审查维度（8 个）
+## §2 审查维度（11 个）
 
 ### 2.1 分层架构（Architecture）
 
@@ -250,6 +251,34 @@ description: "对闲鱼猎人项目后端代码（Python/FastAPI/SQLAlchemy）�
 **适用场景**：Playwright 浏览器自动化、共享 user_data_dir 架构、subprocess 调用外部脚本、跨域 Cookie 处理、SPA 数据抓取。
 **不适用场景**：纯 HTTP API 调用、静态页面爬取、单进程同步流程、桌面应用。
 
+### 2.11 Cookie 状态管理（Cookie State Management）
+
+> **复盘来源**：Cookie 分层管理状态振荡问题（后端 `is_m5tk_expired` 标记 session 失效 ↔ `/cookies/layers` 恢复 session valid）。详见 [references/consistency-and-state-checks.md](references/consistency-and-state-checks.md) + [xianyu-hunter-dev references/cookie-state-recovery-patterns.md](../xianyu-hunter-dev/references/cookie-state-recovery-patterns.md) v2 增补章节。
+
+| 编号 | 规则 | 严重度 |
+|---|---|---|
+| CSM-01 | Session Cookie（`expires=-1`）若值内嵌服务端 timestamp（如 `_m_h5_tk={token}_{ts_ms}`），必须解析 timestamp 并按 `auth.session_cookie_ttl_sec`（默认 1200）判定过期，禁止仅看 `cookie.expires` | Critical |
+| CSM-02 | 所有 `cookie_map` / `cookie_layers` 构造处必须统一调用 `is_session_cookie_expired()` 过滤，禁止部分入口过滤部分入口不过滤导致状态振荡 | Critical |
+| CSM-03 | timestamp 解析失败时必须保守返回 False（认为未过期）+ `logger.warning`，禁止返回 True 误判失效 | Critical |
+| CSM-04 | TTL 与 cookie 名单必须走 `config/auth.yaml`（`session_cookie_ttl_sec` + `session_cookie_names`），禁止硬编码 | Critical |
+| CSM-05 | `force_restore_layers` 强制恢复层状态时必须显式标注 `cookie_count=0` 但 `valid=true` 的特殊语义，前端据此显示"已恢复（无 Cookie）"而非"0 个 Cookie" | Suggestion |
+| CSM-06 | TokenRenewer / worker 标记层失效与 `/cookies/layers` 恢复层状态必须用同一份 `is_session_cookie_expired` 判定逻辑，禁止两个入口各写一套 | Critical |
+
+**审查方法**：timestamp 解析 + 入口对齐 + 配置化 3 维度交叉验证
+
+```
+1. grep 所有 cookie_map / cookie_layers 构造处，确认均调用 is_session_cookie_expired()
+2. 检查 is_session_cookie_expired 实现是否解析 {token}_{ts_ms} 格式
+3. 检查 TTL 是否从 auth.session_cookie_ttl_sec 读取（默认 1200）
+4. 检查解析失败分支是否返回 False + logger.warning
+5. 检查 session_cookie_names 是否从配置读取
+6. 对比 TokenRenewer 与 /cookies/layers 是否用同一判定函数
+7. 检查 force_restore_layers 恢复的层是否在 API 响应中标注特殊语义
+```
+
+**适用场景**：Session Cookie 内嵌 timestamp 的过期检测（淘宝/天猫 `_m_h5_tk` / `_m_h5_tk_enc` 等）、多入口 cookie 状态聚合、cookie 分层管理（identity / session / tracking）。
+**不适用场景**：纯持久化 cookie（`expires > 0` 由浏览器管理过期）、无 timestamp 内嵌的 session cookie、单入口无聚合场景。
+
 ---
 
 ## §3 项目特定审查要点
@@ -434,6 +463,7 @@ git diff src/xianyu_hunter/
 - 编码与 I/O（ENC-*）
 - 统计查询（STQ-*）
 - 浏览器自动化与子进程（BAC-*）
+- Cookie 状态管理（CSM-*）
 
 ### Step 3: 逐项检查
 

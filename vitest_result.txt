@@ -1,0 +1,3 @@
+>>> CMD: npx.cmd vitest run --reporter=verbose
+    CWD: d:\code\otherProjects\17_xianyu\frontend
+TIMEOUT after 300s

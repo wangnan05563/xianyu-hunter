@@ -134,6 +134,136 @@ def _validate_login_cookies(cookies: list[dict]) -> bool:
     return True
 
 
+def _build_login_launch_args(cfg) -> list[str]:
+    """Build Chromium args for the interactive login window."""
+    args = [
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-default-apps",
+        "--disable-extensions",
+    ]
+
+    proxy_server = str(getattr(cfg, "proxy_server", "") or "").strip()
+    if proxy_server:
+        args.append(f"--proxy-server={proxy_server}")
+    else:
+        args.append("--no-proxy-server")
+    return args
+
+
+_LOGIN_RESOURCE_ALLOW_HINTS = (
+    "goofish.com",
+    "taobao.com",
+    "tmall.com",
+    "alicdn.com",
+    "aliyuncs.com",
+    "aliapp.org",
+    "alipay.com",
+    "mmstat.com",
+    "cnzz.com",
+)
+
+
+def _should_abort_login_resource(url: str, resource_type: str) -> bool:
+    """Return True when a nonessential login-window resource can be blocked."""
+    if resource_type not in ("font", "media", "image", "manifest"):
+        return False
+
+    lower_url = url.lower()
+    if any(hint in lower_url for hint in _LOGIN_RESOURCE_ALLOW_HINTS):
+        return False
+    return True
+
+
+def _cookie_signature(cookies: list[dict]) -> frozenset[tuple[str, str, str]]:
+    return frozenset(
+        (
+            str(c.get("name", "")),
+            str(c.get("domain", "")),
+            str(c.get("path", "/")),
+        )
+        for c in cookies
+        if c.get("name")
+    )
+
+
+async def _collect_settled_cookies(
+    context,
+    *,
+    min_wait: float = 2.0,
+    max_wait: float = 8.0,
+    interval: float = 1.0,
+    stable_rounds: int = 2,
+    min_full_count: int = 60,
+) -> list[dict]:
+    """Read cookies until post-login async writes have had time to settle."""
+    start = time.monotonic()
+    deadline = start + max_wait
+    best: list[dict] = []
+    last_signature: frozenset[tuple[str, str, str]] | None = None
+    stable_count = 0
+
+    while True:
+        cookies = await context.cookies()
+        if len(cookies) >= len(best):
+            best = cookies
+
+        signature = _cookie_signature(cookies)
+        if signature == last_signature:
+            stable_count += 1
+        else:
+            stable_count = 0
+            last_signature = signature
+
+        waited = time.monotonic() - start
+        enough_time = waited >= min_wait
+        enough_count = len(cookies) >= min_full_count
+        stable = stable_count >= stable_rounds
+        timed_out = time.monotonic() >= deadline
+        if timed_out or (enough_time and enough_count and stable):
+            return best
+
+        await asyncio.sleep(interval)
+
+
+async def _prepare_login_cookie_export(bc, page, route_handler, timings: dict[str, float]) -> list[dict]:
+    """Switch from fast login loading to complete post-login cookie collection."""
+    try:
+        await bc.unroute("**/*", route_handler)
+    except Exception:
+        pass
+
+    warmup_start = time.monotonic()
+    try:
+        await page.goto(
+            "https://www.goofish.com/personal",
+            wait_until="domcontentloaded",
+            timeout=15000,
+        )
+    except Exception:
+        pass
+    try:
+        await page.wait_for_load_state("networkidle", timeout=5000)
+    except Exception:
+        pass
+    timings["post_login_warmup_sec"] = _elapsed_sec(warmup_start)
+
+    await asyncio.sleep(3)
+    storage_start = time.monotonic()
+    try:
+        await bc.storage_state()
+    except Exception:
+        pass
+    timings["storage_state_sec"] = _elapsed_sec(storage_start)
+
+    settle_start = time.monotonic()
+    final_cookies = await _collect_settled_cookies(bc)
+    timings["settle_cookies_sec"] = _elapsed_sec(settle_start)
+    return final_cookies
+
+
 async def _cmd_login(status_file: Path, timeout: int) -> int:
     """启动有头浏览器，等待用户登录"""
     from playwright.async_api import async_playwright
@@ -170,14 +300,7 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                 "viewport": {"width": 1280, "height": 800},
                 "locale": "zh-CN",
                 "timezone_id": "Asia/Shanghai",
-                "args": [
-                    "--no-first-run",
-                    "--no-default-browser-check",
-                    "--disable-background-networking",
-                    "--disable-component-update",
-                    "--disable-default-apps",
-                    "--disable-extensions",
-                ],
+                "args": _build_login_launch_args(cfg),
             }
             if edge_path:
                 # 系统 Edge：干净启动，最不容易被风控检测
@@ -231,15 +354,7 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
             # 否则拦截 image 会导致二维码无法显示，用户无法扫码登录
             async def _block_resources(route):
                 req = route.request
-                url = req.url.lower()
-                # 放行登录相关域名：扫码二维码图与登录页资源必须可达
-                if any(d in url for d in (
-                    "login.taobao.com", "passport.taobao.com",
-                    "mini_login", "alipay.com",
-                )):
-                    await route.continue_()
-                    return
-                if req.resource_type in ("font", "media", "image", "manifest"):
+                if _should_abort_login_resource(req.url, req.resource_type):
                     await route.abort()
                     return
                 await route.continue_()
@@ -278,7 +393,9 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                 if _validate_login_cookies(cookies):
                     set_status(status="already_logged", message="检测到已登录状态")
                     export_start = time.monotonic()
-                    final_cookies = await bc.cookies()
+                    final_cookies = await _prepare_login_cookie_export(
+                        bc, page, _block_resources, timings
+                    )
                     _export_cookies_to_json(final_cookies, "browser")
                     _save_playwright_cookies(final_cookies)
                     timings["export_cookies_sec"] = _elapsed_sec(export_start)
@@ -302,24 +419,11 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                     cookies = await bc.cookies()
 
                     if _validate_login_cookies(cookies):
-                        # 强制保存浏览器存储状态，确保 Cookie 写入 SQLite
-                        # 为什么先 sleep 3 秒：闲鱼登录成功后会在 2-3s 内异步写入
-                        # _m_h5_tk / tfstk / t 等会话层 cookie（这些 cookie 决定
-                        # TokenRenewer 是否会标记 session 失效）。立即读 cookies
-                        # 只能拿到 18-20 个身份 cookie，缺关键会话 cookie，
-                        # 后续 auth_helper 读 user_data_dir 时也无法获取
-                        # 完整 cookie → 显示"未登录"。
-                        # 3 秒是经验值：超过这个时间，闲鱼侧通常已设置完毕。
-                        await asyncio.sleep(3)
-                        storage_start = time.monotonic()
-                        try:
-                            await bc.storage_state()
-                        except Exception:
-                            pass
-                        timings["storage_state_sec"] = _elapsed_sec(storage_start)
-                        # 再次读取 Cookie 并导出到 JSON（主验证数据源）
+                        # 登录成功后继续预热并等待 cookie jar 稳定，避免只导出半截 cookie。
                         export_start = time.monotonic()
-                        final_cookies = await bc.cookies()
+                        final_cookies = await _prepare_login_cookie_export(
+                            bc, page, _block_resources, timings
+                        )
                         final_count = len(final_cookies)
                         _export_cookies_to_json(final_cookies, "browser")
                         # 保存 Playwright 格式 Cookie 供 Worker 注入
