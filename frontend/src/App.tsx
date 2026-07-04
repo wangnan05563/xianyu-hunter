@@ -5,6 +5,8 @@ import MainLayout from './components/layout/MainLayout'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { lazyRetry, LazyErrorBoundary } from './utils/lazyRetry'
 import ReloadPrompt from './components/ReloadPrompt'
+import { useMobileDetect } from './mobile/hooks/useMobileDetect'
+import MobileRoutes from './mobile/routes'
 
 // 路由懒加载：按需加载页面组件，减小首屏 bundle 体积
 // 使用 lazyRetry 包装：网络抖动或部署时 chunk 失效可自动重试，避免白屏
@@ -38,6 +40,8 @@ const About = lazyRetry(() => import('./pages/About'))
 // 智能客服模块：对话主页 + 配置页
 const Chatbot = lazyRetry(() => import('./pages/Chatbot'))
 const ChatbotConfig = lazyRetry(() => import('./pages/Chatbot/Config'))
+// 菜单管理页：用户级菜单可见性/排序配置（MU5）
+const MenuAdmin = lazyRetry(() => import('./pages/MenuAdmin'))
 
 // 全局 fallback 加载组件：懒加载页面未就绪时展示
 function PageLoading() {
@@ -60,6 +64,14 @@ function LazyRoute({ children }: { children: ReactNode }) {
 }
 
 export default function App() {
+  const isMobile = useMobileDetect()
+
+  // 移动端 UA 自动跳转到 /m/* 路由
+  // 桌面端访问 /m/* 重定向到桌面路由
+  if (isMobile && !window.location.pathname.startsWith('/m') && !window.location.pathname.startsWith('/login')) {
+    return <Navigate to="/m" replace />
+  }
+
   return (
     <ErrorBoundary>
       {/* AntdApp 提供 App.useApp() 上下文，让 ReloadPrompt 能用主题化的 notification */}
@@ -97,11 +109,15 @@ export default function App() {
             <Route path="maintenance/vector" element={<LazyRoute><VectorAdmin /></LazyRoute>} />
             <Route path="batch-refresh" element={<LazyRoute><BatchRefresh /></LazyRoute>} />
             <Route path="anticrawl" element={<LazyRoute><AntiCrawl /></LazyRoute>} />
+            {/* 菜单管理：用户级菜单可见性/排序配置（MU5） */}
+            <Route path="menu-admin" element={<LazyRoute><MenuAdmin /></LazyRoute>} />
             {/* 智能客服：对话主页 + 配置页（含知识库管理） */}
             <Route path="chatbot" element={<LazyRoute><Chatbot /></LazyRoute>} />
             <Route path="config/chatbot" element={<LazyRoute><ChatbotConfig /></LazyRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
+          {/* 移动端路由组 */}
+          <Route path="/m/*" element={<MobileRoutes />} />
         </Routes>
         {/* O-12-26 PWA 更新/离线就绪提示，放在 AntdApp 内以使用主题 notification */}
         <ReloadPrompt />
