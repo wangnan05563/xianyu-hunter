@@ -99,6 +99,59 @@ def _hash_value(value: str | None) -> str | None:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+# DB 覆盖应用规则表：(db_key, result_path, type_converter)
+# S3776 修复：将 17 个重复 if 分支合并为表驱动遍历，主函数复杂度从 17 降至 ~3
+# type_converter 决定如何把 DB 中的字符串转换为目标类型：
+# - "bool": "true"→True（小写比较）
+# - "int": int()
+# - "float": float()
+# - "str": 原样保留
+_DB_OVERRIDE_RULES: list[tuple[str, str, str]] = [
+    (KEY_ENABLED, "enabled", "bool"),
+    (KEY_MAX_HISTORY_TURNS, "max_history_turns", "int"),
+    (KEY_SESSION_TIMEOUT_MIN, "session_timeout_min", "int"),
+    (KEY_RAG_TOP_K, "rag.top_k", "int"),
+    (KEY_RAG_SIMILARITY_THRESHOLD, "rag.similarity_threshold", "float"),
+    (KEY_RAG_MAX_CONTEXT_CHARS, "rag.max_context_chars", "int"),
+    (KEY_AGENT_ENABLE_TOOLS, "agent.enable_tools", "bool"),
+    (KEY_AGENT_MAX_TOOL_ROUNDS, "agent.max_tool_rounds", "int"),
+    (KEY_AGENT_TOOL_TRIGGER_MODE, "agent.tool_trigger_mode", "str"),
+    (KEY_KB_AUTO_UPDATE_ENABLED, "kb.auto_update_enabled", "bool"),
+    (KEY_KB_UPDATE_INTERVAL_HOURS, "kb.update_interval_hours", "int"),
+    (KEY_FAQ_SIMILARITY_THRESHOLD, "faq.similarity_threshold", "float"),
+    (KEY_FAQ_CONFIRM_THRESHOLD, "faq.confirm_threshold", "float"),
+    (KEY_ESCALATION_CONTACT, "escalation.contact", "str"),
+    (KEY_ESCALATION_FEEDBACK_THRESHOLD, "escalation.feedback_threshold", "int"),
+    (KEY_ESCALATION_FEEDBACK_WINDOW_MIN, "escalation.feedback_window_min", "int"),
+    (KEY_ESCALATION_SANITIZE_PII, "escalation.sanitize_pii", "bool"),
+]
+
+
+def _convert_db_override(raw: str, conv: str) -> bool | int | float | str:
+    """按类型转换器把 DB 字符串值转换为目标类型。"""
+    if conv == "bool":
+        return raw.lower() == "true"
+    if conv == "int":
+        return int(raw)
+    if conv == "float":
+        return float(raw)
+    return raw
+
+
+def _apply_db_overrides(result: dict[str, Any], db_overrides: dict[str, str]) -> None:
+    """按 _DB_OVERRIDE_RULES 表把 DB 覆盖值写入 result 对应路径。"""
+    for db_key, path, conv in _DB_OVERRIDE_RULES:
+        if db_key not in db_overrides:
+            continue
+        converted = _convert_db_override(db_overrides[db_key], conv)
+        # 支持 "section.field" 形式的嵌套路径
+        parts = path.split(".")
+        target = result
+        for p in parts[:-1]:
+            target = target[p]
+        target[parts[-1]] = converted
+
+
 @router.get("/config")
 def get_config() -> dict[str, Any]:
     """获取合并后的配置（yaml 基线 + DB 覆盖）
@@ -123,41 +176,7 @@ def get_config() -> dict[str, Any]:
     }
 
     # 应用 DB 覆盖（仅热更新字段，类型转换与 _UPDATABLE_KEYS 对应）
-    # 类型映射：bool / int / float / str 分别处理，DB 一律存字符串
-    if KEY_ENABLED in db_overrides:
-        result[KEY_ENABLED] = db_overrides[KEY_ENABLED].lower() == "true"
-    if KEY_MAX_HISTORY_TURNS in db_overrides:
-        result[KEY_MAX_HISTORY_TURNS] = int(db_overrides[KEY_MAX_HISTORY_TURNS])
-    if KEY_SESSION_TIMEOUT_MIN in db_overrides:
-        result[KEY_SESSION_TIMEOUT_MIN] = int(db_overrides[KEY_SESSION_TIMEOUT_MIN])
-    if KEY_RAG_TOP_K in db_overrides:
-        result["rag"]["top_k"] = int(db_overrides[KEY_RAG_TOP_K])
-    if KEY_RAG_SIMILARITY_THRESHOLD in db_overrides:
-        result["rag"]["similarity_threshold"] = float(db_overrides[KEY_RAG_SIMILARITY_THRESHOLD])
-    if KEY_RAG_MAX_CONTEXT_CHARS in db_overrides:
-        result["rag"]["max_context_chars"] = int(db_overrides[KEY_RAG_MAX_CONTEXT_CHARS])
-    if KEY_AGENT_ENABLE_TOOLS in db_overrides:
-        result["agent"]["enable_tools"] = db_overrides[KEY_AGENT_ENABLE_TOOLS].lower() == "true"
-    if KEY_AGENT_MAX_TOOL_ROUNDS in db_overrides:
-        result["agent"]["max_tool_rounds"] = int(db_overrides[KEY_AGENT_MAX_TOOL_ROUNDS])
-    if KEY_AGENT_TOOL_TRIGGER_MODE in db_overrides:
-        result["agent"]["tool_trigger_mode"] = db_overrides[KEY_AGENT_TOOL_TRIGGER_MODE]
-    if KEY_KB_AUTO_UPDATE_ENABLED in db_overrides:
-        result["kb"]["auto_update_enabled"] = db_overrides[KEY_KB_AUTO_UPDATE_ENABLED].lower() == "true"
-    if KEY_KB_UPDATE_INTERVAL_HOURS in db_overrides:
-        result["kb"]["update_interval_hours"] = int(db_overrides[KEY_KB_UPDATE_INTERVAL_HOURS])
-    if KEY_FAQ_SIMILARITY_THRESHOLD in db_overrides:
-        result["faq"]["similarity_threshold"] = float(db_overrides[KEY_FAQ_SIMILARITY_THRESHOLD])
-    if KEY_FAQ_CONFIRM_THRESHOLD in db_overrides:
-        result["faq"]["confirm_threshold"] = float(db_overrides[KEY_FAQ_CONFIRM_THRESHOLD])
-    if KEY_ESCALATION_CONTACT in db_overrides:
-        result["escalation"]["contact"] = db_overrides[KEY_ESCALATION_CONTACT]
-    if KEY_ESCALATION_FEEDBACK_THRESHOLD in db_overrides:
-        result["escalation"]["feedback_threshold"] = int(db_overrides[KEY_ESCALATION_FEEDBACK_THRESHOLD])
-    if KEY_ESCALATION_FEEDBACK_WINDOW_MIN in db_overrides:
-        result["escalation"]["feedback_window_min"] = int(db_overrides[KEY_ESCALATION_FEEDBACK_WINDOW_MIN])
-    if KEY_ESCALATION_SANITIZE_PII in db_overrides:
-        result["escalation"]["sanitize_pii"] = db_overrides[KEY_ESCALATION_SANITIZE_PII].lower() == "true"
+    _apply_db_overrides(result, db_overrides)
 
     result["updatable_keys"] = sorted(_UPDATABLE_KEYS)
     return result

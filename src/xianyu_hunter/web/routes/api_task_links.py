@@ -576,6 +576,22 @@ def delete_link(
     return {"ok": True, "id": link_id, "task_id": task_id, "deleted_events": deleted_events, "deleted_evaluations": deleted_evaluations}
 
 
+def _raise_search_error(err_msg: str) -> None:
+    """根据搜索异常消息抛出对应的 HTTPException（总是抛出，不返回）
+
+    为什么独立：refresh_links 中搜索异常含 4 个 if 错误判断分支
+    （TargetClosed/RGV587/Connection closed/默认），嵌套在 try/except 内
+    导致认知复杂度超限，提取后主函数变为线性流程。
+    """
+    if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
+        raise HTTPException(status_code=502, detail="浏览器连接已断开，请重启服务后重试")
+    if "RGV587" in err_msg:
+        raise HTTPException(status_code=403, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
+    if "Connection closed" in err_msg:
+        raise HTTPException(status_code=502, detail="浏览器连接异常，请重启服务后重试")
+    raise HTTPException(status_code=502, detail=f"闲鱼搜索失败: {err_msg}")
+
+
 @router.post("/{task_id}/links/refresh")
 async def refresh_links(
     task_id: str,
@@ -635,14 +651,7 @@ async def refresh_links(
                 )
             except Exception as e:
                 logger.exception("refresh_links 搜索失败 task={}: {}", task_id, e)
-                err_msg = str(e)
-                if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
-                    raise HTTPException(status_code=502, detail="浏览器连接已断开，请重启服务后重试")
-                if "RGV587" in err_msg:
-                    raise HTTPException(status_code=403, detail="搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼")
-                if "Connection closed" in err_msg:
-                    raise HTTPException(status_code=502, detail="浏览器连接异常，请重启服务后重试")
-                raise HTTPException(status_code=502, detail=f"闲鱼搜索失败: {err_msg}")
+                _raise_search_error(str(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -1362,6 +1371,70 @@ def _build_live_price_strategy(
     return strategy, market_ctx
 
 
+def _build_live_item_detail(item_id: str, display: dict) -> Any:
+    """从 live 搜索结果 display 构造降级 ItemDetail（无详情页数据）
+
+    为什么独立：构造逻辑含 try/except 和类型转换，提取后主循环变为线性流程，
+    且构造失败时返回 None 让调用方用统一的 continue 处理，避免嵌套 try/except。
+    """
+    from xianyu_hunter.domain.item import ItemDetail, ItemSummary
+    try:
+        price_val = display.get("price")
+        price_float = float(price_val) if price_val is not None else 0.0
+        summary = ItemSummary(
+            id=str(item_id),
+            title=display.get("title", ""),
+            price=price_float,
+            region=display.get("region", "") or "",
+            brand=display.get("brand", "") or "",
+            seller_id=display.get("seller_id", "") or "",
+            seller_nick=display.get("seller_nick", "") or "",
+            thumb_url=display.get("thumb_url", "") or "",
+            is_sold=display.get("is_sold", False),
+            want_cnt=display.get("want_cnt") or 0,
+            view_cnt=display.get("view_cnt") or 0,
+        )
+        return ItemDetail(
+            **{k: getattr(summary, k) for k in summary.__dataclass_fields__},
+            description="",
+        )
+    except Exception as e:
+        logger.warning("构造 ItemDetail 失败 item={}: {}", item_id, e)
+        return None
+
+
+def _resolve_eval_event_level(is_passed: bool, risk_level: Any) -> str:
+    """根据评估结果决定 events 表事件 level
+
+    为什么独立：level 判断含嵌套 if/elif/else + 二次 if 覆盖（UNKNOWN 强制改 warn），
+    集中维护避免与 upsert_eval_event 写入逻辑耦合，且便于单元测试覆盖所有分支。
+    """
+    from xianyu_hunter.domain.evaluation import RiskLevel
+    if is_passed:
+        level = "info"
+    elif risk_level != RiskLevel.EXTREME:
+        level = "warn"
+    else:
+        level = "err"
+    # UNKNOWN 风险等级强制改 warn：数据不足时不应显示 error 级别
+    if risk_level == RiskLevel.UNKNOWN:
+        level = "warn"
+    return level
+
+
+def _build_degraded_seller_profile(seller_id: str, seller_nick: str) -> Any:
+    """构造降级 SellerProfile（无卖家主页数据，标记为数据不足）"""
+    from xianyu_hunter.domain.seller import SellerProfile
+    return SellerProfile(
+        id=seller_id or "unknown",
+        nick=seller_nick or "",
+        credit_score=None,
+        register_days=0,
+        on_sale_count=0,
+        sold_count=0,
+    )
+
+
 def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
     """对 live 搜索结果触发轻量级评估
 
@@ -1376,9 +1449,6 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
     (min_price/max_price/market_ratio) 过滤，与 worker.run_once 行为一致。
     过滤仅阻止加入候选名单，评估事件仍照写，让前端评估明细页面可见全部商品。
     """
-    from xianyu_hunter.domain.item import ItemDetail, ItemSummary
-    from xianyu_hunter.domain.seller import SellerProfile
-    from xianyu_hunter.domain.evaluation import RiskLevel
     from xianyu_hunter.modules.evaluator import Evaluator
 
     # 构造 Evaluator（复用容器配置）
@@ -1404,40 +1474,11 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
         if not item_id:
             continue
 
-        # 从搜索结果构造 ItemSummary → ItemDetail（降级，无详情页数据）
-        try:
-            price_val = display.get("price")
-            price_float = float(price_val) if price_val is not None else 0.0
-            summary = ItemSummary(
-                id=str(item_id),
-                title=display.get("title", ""),
-                price=price_float,
-                region=display.get("region", "") or "",
-                brand=display.get("brand", "") or "",
-                seller_id=display.get("seller_id", "") or "",
-                seller_nick=display.get("seller_nick", "") or "",
-                thumb_url=display.get("thumb_url", "") or "",
-                is_sold=display.get("is_sold", False),
-                want_cnt=display.get("want_cnt") or 0,
-                view_cnt=display.get("view_cnt") or 0,
-            )
-            detail = ItemDetail(
-                **{k: getattr(summary, k) for k in summary.__dataclass_fields__},
-                description="",
-            )
-        except Exception as e:
-            logger.warning("构造 ItemDetail 失败 item={}: {}", item_id, e)
+        detail = _build_live_item_detail(item_id, display)
+        if detail is None:
             continue
 
-        # 构造降级 SellerProfile（无卖家主页数据，标记为数据不足）
-        seller = SellerProfile(
-            id=summary.seller_id or "unknown",
-            nick=summary.seller_nick or "",
-            credit_score=None,
-            register_days=0,
-            on_sale_count=0,
-            sold_count=0,
-        )
+        seller = _build_degraded_seller_profile(detail.seller_id, detail.seller_nick)
 
         # 评估
         try:
@@ -1447,14 +1488,7 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
             # 写入 events 表（使用 upsert 按 task_id+item_id 去重，防止重复评估）
             import json as _json
             score_display = eval_result.score if eval_result.score is not None else "N/A"
-            if eval_result.is_passed:
-                level = "info"
-            elif eval_result.risk_level != RiskLevel.EXTREME:
-                level = "warn"
-            else:
-                level = "err"
-            if eval_result.risk_level == RiskLevel.UNKNOWN:
-                level = "warn"
+            level = _resolve_eval_event_level(eval_result.is_passed, eval_result.risk_level)
             container.repo.upsert_eval_event({
                 "type": "eval.scored",
                 "task_id": task_id,
@@ -1467,7 +1501,7 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
                     "item_title": detail.title,
                     "item_price": detail.price,
                     "seller_id": detail.seller_id,
-                    "seller_nick": detail.detail_seller_nick or summary.seller_nick or "",
+                    "seller_nick": detail.detail_seller_nick or detail.seller_nick or "",
                     "score": eval_result.score,
                     "risk_level": eval_result.risk_level.value,
                     "dimension_scores": eval_result.dimension_scores,

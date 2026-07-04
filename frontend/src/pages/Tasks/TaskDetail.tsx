@@ -18,6 +18,22 @@ function filterOutDep(prev: TaskDep[], dependsOn: string): TaskDep[] {
   return prev.filter((d) => d.depends_on !== dependsOn)
 }
 
+// 评分色：≥70 绿 ≥50 橙 否则红
+// 为什么提取：evalColumns 评分列内 IIFE 含 if/else if 链，提取后列定义更简洁
+const evalScoreToColor = (s: number): string => {
+  if (s >= 70) return '#52c41a'
+  if (s >= 50) return '#faad14'
+  return '#ff4d4f'
+}
+
+// 风险等级色：low=green high=red 其他=orange
+// 为什么提取：evalColumns 风险列内 IIFE 含 if/else if 链，与评分色同理
+const riskLevelToColor = (lvl: string): string => {
+  if (lvl === 'low') return 'green'
+  if (lvl === 'high') return 'red'
+  return 'orange'
+}
+
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -214,12 +230,8 @@ export default function TaskDetail() {
       title: '评分', key: 'score', width: 80,
       render: (_: unknown, r: EvalItem) => {
         const s = r.payload.score
-        const color = (() => {
-          // 评分色：≥70 绿 ≥50 橙 否则红
-          if (s >= 70) return '#52c41a'
-          if (s >= 50) return '#faad14'
-          return '#ff4d4f'
-        })()
+        // 评分色计算提取为模块级 evalScoreToColor（避免 IIFE 嵌套 if/else if）
+        const color = evalScoreToColor(s)
         return <span style={{ color, fontWeight: 600 }}>{s.toFixed(1)}</span>
       },
     },
@@ -227,11 +239,8 @@ export default function TaskDetail() {
       title: '风险', key: 'risk', width: 80,
       render: (_: unknown, r: EvalItem) => {
         const lvl = r.payload.risk_level
-        const color = (() => {
-          if (lvl === 'low') return 'green'
-          if (lvl === 'high') return 'red'
-          return 'orange'
-        })()
+        // 风险色计算提取为模块级 riskLevelToColor（避免 IIFE 嵌套 if/else if）
+        const color = riskLevelToColor(lvl)
         return <Tag color={color}>{lvl}</Tag>
       },
     },

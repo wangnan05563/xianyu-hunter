@@ -69,6 +69,36 @@ const WAF_LABELS: Record<string, string> = {
   blocked: '已熔断',
 }
 
+// 把 cookie 字符串解析为对象：支持分号/换行分隔，值中可含 = 号
+// 为什么提取：handleUpdateCookies 内嵌 for + if + 解构 + 多个 continue 分支，认知复杂度高
+const parseCookieInput = (input: string): Record<string, string> => {
+  const cookies: Record<string, string> = {}
+  for (const part of input.split(/[;\n]/)) {
+    const trimmed = part.trim()
+    if (!trimmed || !trimmed.includes('=')) continue
+    const [name, ...valueParts] = trimmed.split('=')
+    const value = valueParts.join('=')
+    if (name && value) {
+      cookies[name.trim()] = value.trim()
+    }
+  }
+  return cookies
+}
+
+// 把 cookies 对象拼接为 "k1=v1; k2=v2" 格式文本
+// 为什么提取：openCookieModal 与 handleImportFromBrowser 都用相同的 Object.entries.map.join
+const cookiesToString = (cookies: Record<string, string>): string => {
+  return Object.entries(cookies)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ')
+}
+
+// 格式化"从浏览器导入预览"失败信息：error + hint 拼接，无内容时返回默认提示
+// 为什么提取：handleImportFromBrowser 内 [result.error, result.hint].filter(Boolean).join('\n') || '...' 链复杂
+const formatImportPreviewError = (result: { error?: string; hint?: string }): string => {
+  return [result.error, result.hint].filter(Boolean).join('\n') || '从浏览器导入失败'
+}
+
 export default function AntiCrawl() {
   // 数据状态
   const [strategy, setStrategy] = useState<StrategyEvaluation | null>(null)
@@ -319,10 +349,8 @@ export default function AntiCrawl() {
     try {
       const result = await anticrawlApi.getCurrentCookies()
       const cookies = result.cookies || {}
-      const text = Object.entries(cookies)
-        .map(([k, v]) => `${k}=${v}`)
-        .join('; ')
-      setCookieInput(text)
+      // cookies → text 拼接提取为模块级 cookiesToString（与 handleImportFromBrowser 共用）
+      setCookieInput(cookiesToString(cookies))
       if (result.count > 0) {
         setPrefillHint(`已自动读取 ${result.count} 个 Cookie，可直接点「更新」或编辑后再提交`)
       } else {
@@ -347,17 +375,15 @@ export default function AntiCrawl() {
       setLoadingImport(true)
       const result = await anticrawlApi.importFromBrowserPreview(importBrowser, false)
       if (result.ok && result.cookies) {
-        const text = Object.entries(result.cookies)
-          .map(([k, v]) => `${k}=${v}`)
-          .join('; ')
-        setCookieInput(text)
+        // cookies → text 拼接复用 cookiesToString（与 openCookieModal 共用）
+        setCookieInput(cookiesToString(result.cookies))
         setPrefillHint(
           `从 ${importBrowser === 'edge' ? 'Edge' : 'Chrome'} 导入 ${result.imported_count ?? 0} 个 Cookie，可直接点「更新」`
         )
         message.success(result.message || '已导入到文本框')
       } else {
-        const detail = [result.error, result.hint].filter(Boolean).join('\n')
-        message.error(detail || '从浏览器导入失败')
+        // 错误信息拼接提取为 formatImportPreviewError（含 error + hint + 默认兜底）
+        message.error(formatImportPreviewError(result))
         if (result.error_detail) {
           console.error('import error detail:', result.error_detail)
         }
@@ -376,17 +402,8 @@ export default function AntiCrawl() {
       return
     }
 
-    // 解析 cookie 字符串为对象
-    const cookies: Record<string, string> = {}
-    for (const part of cookieInput.split(/[;\n]/)) {
-      const trimmed = part.trim()
-      if (!trimmed || !trimmed.includes('=')) continue
-      const [name, ...valueParts] = trimmed.split('=')
-      const value = valueParts.join('=')
-      if (name && value) {
-        cookies[name.trim()] = value.trim()
-      }
-    }
+    // 解析 cookie 字符串提取为模块级 parseCookieInput（支持分号/换行分隔，值可含 = 号）
+    const cookies = parseCookieInput(cookieInput)
 
     if (Object.keys(cookies).length === 0) {
       message.warning('未能解析出有效的 Cookie')
