@@ -87,3 +87,47 @@
   background: #E20613;
   border-radius: 0 2px 2px 0;
 }
+
+/* 底部 TabBar 导航 */
+.m-tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: 600px;
+  margin: 0 auto;
+  height: 56px;
+  display: flex;
+  z-index: 100;
+  /* iOS safe area：避免被底部横条遮挡 */
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.m-tab-item {
+  flex: 1;
+  border: none;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: color 0.2s;
+  /* 最小可点击元素 44x44px（WCAG） */
+  min-height: 44px;
+}
+
+.m-tab-icon {
+  font-size: 20px;
+}
+
+.m-tab-label {
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+
+.m-tab-item.active {
+  color: #E20613;
+}
