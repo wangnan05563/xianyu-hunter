@@ -26,6 +26,12 @@ class BrowserConfig(BaseModel):
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/131.0.0.0 Safari/537.36"
     )
+    # 代理服务器配置：
+    # - 留空（默认）：强制禁用系统代理，避免 Clash/V2Ray 等代理软件未运行时
+    #   触发 ERR_PROXY_CONNECTION_FAILED（闲鱼为国内站点，无需代理）
+    # - 配置示例："socks5://127.0.0.1:7890" / "http://127.0.0.1:7890"
+    #   海外部署需要代理访问闲鱼时配置此项
+    proxy_server: str = ""
     # Cookie 定时自动同步配置
     auto_sync: bool = False                     # 默认关闭，需显式启用
     auto_sync_interval: int = 30                # 同步间隔（分钟）

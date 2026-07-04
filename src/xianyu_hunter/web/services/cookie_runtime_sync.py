@@ -28,31 +28,46 @@ def cookies_from_store_for_playwright(log_prefix: str = DEFAULT_LOG_PREFIX) -> l
 
         pw_cookies: list[dict] = []
         for c in data["cookies"]:
-            name = str(c.get("name") or "")
-            value = str(c.get("value") or "")
-            if not name or not value:
-                continue
-            if is_test_cookie(name, value):
-                logger.warning("%s：跳过测试 Cookie %s=%s", log_prefix, name, value)
-                continue
-
-            item = {
-                "name": name,
-                "value": value,
-                "domain": c.get("domain") or ".goofish.com",
-                "path": c.get("path") or "/",
-            }
-            try:
-                expires = float(c.get("expires", -1) or -1)
-            except (TypeError, ValueError):
-                expires = -1
-            if expires > 0:
-                item["expires"] = expires
-            pw_cookies.append(item)
+            item = _convert_cookie_to_playwright_format(c, log_prefix, is_test_cookie)
+            if item is not None:
+                pw_cookies.append(item)
         return pw_cookies
     except Exception as e:  # noqa: BLE001
         logger.debug("%s：读取 CookieStore JSON 失败: %s", log_prefix, e)
         return []
+
+
+def _convert_cookie_to_playwright_format(
+    raw: dict, log_prefix: str, is_test_cookie_fn,
+) -> dict | None:
+    """将单条 CookieStore JSON 记录转为 Playwright add_cookies 格式
+
+    为什么提取为模块级函数：原 cookies_from_store_for_playwright 的 for 循环内
+    嵌套多个 if (or/continue) + 内嵌 try/except 解析 expires，认知复杂度堆积。
+    提取后主函数仅保留遍历骨架，单条 cookie 的校验/解析/构造职责分离。
+    返回 None 表示该 cookie 应跳过（空值/测试数据）。
+    """
+    name = str(raw.get("name") or "")
+    value = str(raw.get("value") or "")
+    if not name or not value:
+        return None
+    if is_test_cookie_fn(name, value):
+        logger.warning("%s：跳过测试 Cookie %s=%s", log_prefix, name, value)
+        return None
+
+    item = {
+        "name": name,
+        "value": value,
+        "domain": raw.get("domain") or ".goofish.com",
+        "path": raw.get("path") or "/",
+    }
+    try:
+        expires = float(raw.get("expires", -1) or -1)
+    except (TypeError, ValueError):
+        expires = -1
+    if expires > 0:
+        item["expires"] = expires
+    return item
 
 
 async def inject_cookie_store_to_browser(

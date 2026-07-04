@@ -66,7 +66,7 @@ class TaskScheduler:
         scheduler = TaskScheduler()
         scheduler.register(task, worker)
         scheduler.start("t1")
-        await scheduler.start_all()
+        scheduler.start_all()  # 同步 API：内部已通过 asyncio.create_task 启动后台循环
         # ...
         await scheduler.stop_all()
     """
@@ -203,10 +203,16 @@ class TaskScheduler:
         h.task.status = TaskStatus.RUNNING
         logger.info(f"Scheduler 恢复任务 {task_id}")
 
-    async def start_all(self) -> None:
+    def start_all(self) -> None:
+        """同步启动所有已注册任务。
+
+        注意：保持非 async。原因：
+        - `start` 本身是同步方法（内部通过 `asyncio.create_task` 启动后台循环），
+          返回 None，若包成 async + await 会导致调用方得到空 await，徒增复杂度。
+        - 公共 API 上保留 `start_all()` 同步签名，调用方用 `container.scheduler.start_all()` 即可。
+        - 若需要等待首个轮次结束，请改用 `await scheduler.start_and_wait_all()` 之类显式方法。
+        """
         for tid in list(self._workers.keys()):
-            # start 是同步方法（创建 asyncio.Task 后立即返回），
-            # 无需 await——await None 会抛 TypeError
             self.start(tid)
 
     async def stop_all(self) -> None:
@@ -300,6 +306,9 @@ class TaskScheduler:
 
         P1-7：支持 cron 模式。当 TaskConfig.use_cron=True 时，
         按 Task.cron 表达式计算下次运行时间，sleep 到该时间点再执行。
+
+        重构说明：主循环只保留调度骨架（暂停检查→执行→异常处理→等待），
+        各分支细节下沉到独立私有方法，便于单测与降低圈复杂度（S3776）。
         """
         h = self._require(task_id)
         interval = h.worker.config.interval_seconds
@@ -320,103 +329,181 @@ class TaskScheduler:
             current_rid = generate_request_id()
             set_request_id(current_rid)
             try:
-                # 全局锁：串行化所有任务的 run_once，避免并发弹出多个浏览器窗口
-                async with self._run_lock:
-                    if h.stop_event.is_set():
-                        break
-                    result = await h.worker.run_once()
-                    # RGV587 会话失效或搜索超时时自动暂停任务，避免无效搜索持续占用 browser_lock
-                    if result.should_pause:
-                        logger.info(f"[Task {task_id}] 会话失效，自动暂停任务")
-                        h.pause_event.clear()
-                        h.task.status = TaskStatus.PAUSED
-                        # 记录冷却期结束时间：会话失效后 5 分钟内拒绝恢复，
-                        # 避免用户反复点恢复触发更严厉的反爬封禁
-                        self._resume_cooldown[task_id] = (
-                            time.monotonic() + _RESUME_COOLDOWN_SECONDS
-                        )
-                        # 同步数据库状态，确保 API 读取到正确的 paused 状态
-                        if self._repo:
-                            self._repo.update_task_status(task_id, "paused")
-                        break
-                    # 每轮结束后清理残留页面，防止因异常未关闭的页面堆积
-                    # 导致内存压力和窗口不停弹出
-                    browser = getattr(h.worker.collector, 'browser', None)
-                    if browser is not None:
-                        try:
-                            await browser.close_all_pages()
-                        except Exception as e:
-                            logger.warning("[Task %s] 清理残留页面失败: %s", task_id, e)
+                # should_break=True 表示会话失效或 stop 信号，需跳出主循环
+                should_break = await self._execute_run_once_locked(h, task_id)
+                if should_break:
+                    break
                 h.consecutive_errors = 0  # 成功后重置连续失败计数
             except Exception as e:  # noqa: BLE001
-                logger.exception(f"[Task {task_id}] run_once 异常: {e}")
-                # 捕获到 error_logs 表，供错误日志页面展示和 AI 诊断
-                # 之所以放在 scheduler 层而非 worker 层，是因为这里是后台任务异常的统一兜底点，
-                # 能覆盖 worker.run_once 中所有未被内部 try-except 消化的异常
-                # context 中携带本次执行的 request_id，便于关联到本轮所有日志
-                try:
-                    from xianyu_hunter.web.middleware.error_capture import capture_background_error
-                    capture_background_error(
-                        e,
-                        context={
-                            "source": "scheduler.run_once",
-                            "task_id": task_id,
-                            "request_id": current_rid,
-                        },
-                    )
-                except Exception:
-                    logger.warning("error_logs 捕获失败，跳过")
-                h.task.status = TaskStatus.ERROR
-                # 连续失败计数：超过阈值自动暂停（阈值由 antidetect.fail_pause_threshold 配置）
-                h.consecutive_errors += 1
-                # 读取用户配置的失败暂停阈值（默认 3），而非硬编码 10
-                try:
-                    from xianyu_hunter.infra.yaml_config import get_config
-                    max_errors = get_config().antidetect.fail_pause_threshold
-                except Exception:
-                    max_errors = 3
-                if h.consecutive_errors >= max_errors:
-                    logger.error(
-                        f"[Task {task_id}] 连续失败 {h.consecutive_errors} 次，"
-                        f"达到阈值 {max_errors}，自动暂停任务"
-                    )
-                    h.pause_event.clear()
-                    h.task.status = TaskStatus.PAUSED
-                    # 同步数据库状态，确保 API 读取到正确的 paused 状态
-                    # 与 should_pause 分支（L248-251）保持一致
-                    if self._repo:
-                        try:
-                            self._repo.update_task_status(task_id, "paused")
-                        except Exception as db_err:
-                            logger.warning(f"[Task {task_id}] 暂停状态同步 DB 失败: {db_err}")
-                    break
-                # 出错后等待 5 分钟再试（避免刷错误日志）
-                try:
-                    await asyncio.wait_for(h.stop_event.wait(), timeout=300)
-                except asyncio.TimeoutError:
-                    pass
-                h.task.status = TaskStatus.RUNNING
-                continue
+                # 异常分支返回 True 表示 continue 下一轮，False 表示已达失败阈值需 break
+                should_continue = await self._handle_run_once_exception(
+                    e, h, task_id, current_rid
+                )
+                if should_continue:
+                    continue
+                break
 
             # 等待下一轮（可被 stop 提前唤醒）
-            # P1-7：cron 模式按表达式计算下次运行时间，interval 模式用固定间隔
-            if cron_expr:
-                try:
-                    from xianyu_hunter.modules.cron_utils import seconds_until_next_run
-                    wait_seconds = seconds_until_next_run(cron_expr)
-                    logger.debug(
-                        f"[Task {task_id}] cron={cron_expr!r} 下次运行在 {wait_seconds:.0f}s 后"
-                    )
-                except ValueError as e:
-                    logger.warning(
-                        f"[Task {task_id}] cron 表达式 {cron_expr!r} 无效，回退到 interval={interval}s: {e}"
-                    )
-                    wait_seconds = interval
-            else:
-                wait_seconds = interval
-
+            wait_seconds = self._compute_next_wait_seconds(cron_expr, interval, task_id)
             try:
                 await asyncio.wait_for(h.stop_event.wait(), timeout=wait_seconds)
             except asyncio.TimeoutError:
                 pass
         logger.info(f"任务 {task_id} 循环退出")
+
+    async def _execute_run_once_locked(
+        self, h: "_WorkerHandle", task_id: str
+    ) -> bool:
+        """在全局锁内执行一轮 run_once，返回是否应跳出主循环
+
+        为什么需要返回 bool 而非 raise：should_pause 是业务预期内的暂停（会话失效），
+        不是异常；用返回值语义化地表达"应跳出循环"，避免与下方 except 混淆。
+
+        返回 True：会话失效已自动暂停，或 stop 信号到达，调用方应 break。
+        返回 False：本轮正常完成，调用方应重置 consecutive_errors 并进入下一轮等待。
+        """
+        # 全局锁：串行化所有任务的 run_once，避免并发弹出多个浏览器窗口
+        async with self._run_lock:
+            if h.stop_event.is_set():
+                return True
+            result = await h.worker.run_once()
+            # RGV587 会话失效或搜索超时时自动暂停任务，避免无效搜索持续占用 browser_lock
+            if result.should_pause:
+                logger.info(f"[Task {task_id}] 会话失效，自动暂停任务")
+                h.pause_event.clear()
+                h.task.status = TaskStatus.PAUSED
+                # 记录冷却期结束时间：会话失效后 5 分钟内拒绝恢复，
+                # 避免用户反复点恢复触发更严厉的反爬封禁
+                self._resume_cooldown[task_id] = (
+                    time.monotonic() + _RESUME_COOLDOWN_SECONDS
+                )
+                # 同步数据库状态，确保 API 读取到正确的 paused 状态
+                if self._repo:
+                    self._repo.update_task_status(task_id, "paused")
+                return True
+            # 每轮结束后清理残留页面，防止因异常未关闭的页面堆积
+            # 导致内存压力和窗口不停弹出
+            await self._cleanup_browser_pages(h, task_id)
+        return False
+
+    async def _cleanup_browser_pages(
+        self, h: "_WorkerHandle", task_id: str
+    ) -> None:
+        """每轮结束后清理浏览器残留页面
+
+        单独提取：close_all_pages 失败不应影响主流程，异常在此吞掉仅记日志。
+        """
+        browser = getattr(h.worker.collector, 'browser', None)
+        if browser is None:
+            return
+        try:
+            await browser.close_all_pages()
+        except Exception as e:
+            logger.warning("[Task %s] 清理残留页面失败: %s", task_id, e)
+
+    async def _handle_run_once_exception(
+        self,
+        e: Exception,
+        h: "_WorkerHandle",
+        task_id: str,
+        current_rid: str,
+    ) -> bool:
+        """处理 run_once 抛出异常的分支，返回是否应 continue 下一轮
+
+        返回 True：未达失败阈值，等待 5 分钟后 continue 下一轮。
+        返回 False：已达失败阈值，任务已暂停，应 break 主循环。
+
+        之所以放在 scheduler 层而非 worker 层：这里是后台任务异常的统一兜底点，
+        能覆盖 worker.run_once 中所有未被内部 try-except 消化的异常。
+        """
+        logger.exception(f"[Task {task_id}] run_once 异常: {e}")
+        # 捕获到 error_logs 表，供错误日志页面展示和 AI 诊断
+        # context 中携带本次执行的 request_id，便于关联到本轮所有日志
+        self._capture_background_error(e, task_id, current_rid)
+        h.task.status = TaskStatus.ERROR
+        # 连续失败计数：超过阈值自动暂停（阈值由 antidetect.fail_pause_threshold 配置）
+        h.consecutive_errors += 1
+        if self._pause_if_exceeded_fail_threshold(h, task_id):
+            return False
+        # 出错后等待 5 分钟再试（避免刷错误日志）
+        try:
+            await asyncio.wait_for(h.stop_event.wait(), timeout=300)
+        except asyncio.TimeoutError:
+            pass
+        h.task.status = TaskStatus.RUNNING
+        return True
+
+    def _capture_background_error(
+        self, e: Exception, task_id: str, current_rid: str
+    ) -> None:
+        """将异常写入 error_logs 表，供错误日志页面展示和 AI 诊断
+
+        延迟导入避免分层违规：error_capture 属于 web 层，scheduler 属于 modules 层。
+        捕获本身失败时仅记日志，不应让错误处理流程再次抛出异常。
+        """
+        try:
+            from xianyu_hunter.web.middleware.error_capture import capture_background_error
+            capture_background_error(
+                e,
+                context={
+                    "source": "scheduler.run_once",
+                    "task_id": task_id,
+                    "request_id": current_rid,
+                },
+            )
+        except Exception:
+            logger.warning("error_logs 捕获失败，跳过")
+
+    def _pause_if_exceeded_fail_threshold(
+        self, h: "_WorkerHandle", task_id: str
+    ) -> bool:
+        """连续失败超阈值时自动暂停任务，返回是否已触发暂停
+
+        阈值由 antidetect.fail_pause_threshold 配置控制（默认 3），
+        避免硬编码导致不同部署环境无法调整。
+        """
+        # 读取用户配置的失败暂停阈值（默认 3），而非硬编码 10
+        try:
+            from xianyu_hunter.infra.yaml_config import get_config
+            max_errors = get_config().antidetect.fail_pause_threshold
+        except Exception:
+            max_errors = 3
+        if h.consecutive_errors < max_errors:
+            return False
+        logger.error(
+            f"[Task {task_id}] 连续失败 {h.consecutive_errors} 次，"
+            f"达到阈值 {max_errors}，自动暂停任务"
+        )
+        h.pause_event.clear()
+        h.task.status = TaskStatus.PAUSED
+        # 同步数据库状态，确保 API 读取到正确的 paused 状态
+        # 与 should_pause 分支保持一致
+        if self._repo:
+            try:
+                self._repo.update_task_status(task_id, "paused")
+            except Exception as db_err:
+                logger.warning(f"[Task {task_id}] 暂停状态同步 DB 失败: {db_err}")
+        return True
+
+    def _compute_next_wait_seconds(
+        self, cron_expr: str | None, interval: int, task_id: str
+    ) -> float:
+        """计算下一轮的等待秒数：cron 模式按表达式，interval 模式用固定间隔
+
+        P1-7：cron 模式按表达式计算下次运行时间，interval 模式用固定间隔。
+        cron 表达式无效时回退到 interval，保证调度不中断。
+        """
+        if not cron_expr:
+            return interval
+        try:
+            from xianyu_hunter.modules.cron_utils import seconds_until_next_run
+            wait_seconds = seconds_until_next_run(cron_expr)
+            logger.debug(
+                f"[Task {task_id}] cron={cron_expr!r} 下次运行在 {wait_seconds:.0f}s 后"
+            )
+            return wait_seconds
+        except ValueError as e:
+            logger.warning(
+                f"[Task {task_id}] cron 表达式 {cron_expr!r} 无效，回退到 interval={interval}s: {e}"
+            )
+            return interval

@@ -1,8 +1,8 @@
 # XianyuHunter 文档中心
 
 > 项目代号：**XianyuHunter（闲鱼猎人）**  
-> 文档版本：v2.0  
-> 更新日期：2026-06-29  
+> 文档版本：v2.1  
+> 更新日期：2026-07-04  
 > 文档维护：按菜单结构分组，便于查阅和维护
 
 ---
@@ -82,8 +82,38 @@ docs/
 │
 ├── standards/                          # 视觉规范与标准
 │   ├── michelin-design-system.md       # 米其林风格 UI 设计规范
-│   ├── 目录结构规范.md                   # 项目目录结构规范
-│   └── 部署指南.md                       # 部署指南
+│   ├── directory-structure.md          # 项目目录结构规范
+│   ├── deployment.md                    # 部署指南（推荐阅读）
+│   ├── coding-standards.md              # 项目级编码规范总纲（5 步法 + 铁律 + 反模式）
+│   └── 部署指南.md                       # 部署指南（中文版）
+│
+├── skills/                             # 项目技能集（供 AI Agent 调用）
+│   ├── xianyu-hunter-dev/              # 核心开发技能（5 步法 + 编码规范）
+│   │   ├── SKILL.md
+│   │   └── references/
+│   │       ├── coding-standards.md     # Python/TypeScript 编码规范
+│   │       ├── error-handling.md       # 前后端错误处理
+│   │       ├── frontend-state-and-api.md  # Zustand + API 集成
+│   │       └── yaml-config-patterns.md # YAML 加载与合并
+│   ├── xianyu-frontend-code-review/    # 前端代码审查（7 维度 · 49 规则）
+│   │   ├── SKILL.md
+│   │   └── references/
+│   │       ├── api-contract.md
+│   │       ├── business-logic.md
+│   │       ├── code-quality.md
+│   │       ├── hooks-and-state.md
+│   │       ├── performance.md
+│   │       └── security-and-a11y.md
+│   └── xianyu-backend-code-review/     # 后端代码审查（7 维度 · 63 规则）
+│       ├── SKILL.md
+│       └── references/
+│           ├── architecture.md
+│           ├── async-and-concurrency.md
+│           ├── maintainability.md
+│           ├── performance.md
+│           ├── security.md
+│           ├── sqlalchemy.md
+│           └── yaml-and-config.md
 │
 └── archive/                            # 迭代记录与历史文档
     ├── sprint-a-2026-06-06.md
@@ -182,8 +212,20 @@ docs/
 | 文档 | 说明 | 链接 |
 |------|------|------|
 | UI 设计规范 | 米其林风格、CSS Token、双主题 | [michelin-design-system.md](./standards/michelin-design-system.md) |
-| 目录结构规范 | 项目文件组织、命名约定 | [目录结构规范.md](./standards/目录结构规范.md) |
-| 部署指南 | Docker、服务器、本地部署 | [部署指南.md](./standards/部署指南.md) |
+| 目录结构规范 | 项目文件组织、命名约定 | [directory-structure.md](./standards/directory-structure.md) |
+| 部署指南 | Docker、服务器、本地部署 | [deployment.md](./standards/deployment.md) |
+| 编码规范总纲 | 5 步法 + 铁律 + 反模式（前后端通用） | [coding-standards.md](./standards/coding-standards.md) |
+
+### 项目技能集（AI Agent 索引）
+
+| 技能 | 适用场景 | 入口 |
+|------|----------|------|
+| **xianyu-hunter-dev** | 闲鱼猎人项目开发、编码规范速查、5 步法落地 | [SKILL.md](./skills/xianyu-hunter-dev/SKILL.md) |
+| **xianyu-frontend-code-review** | 前端代码审查（7 维度 · 49 规则 · TypeScript/React/Zustand） | [SKILL.md](./skills/xianyu-frontend-code-review/SKILL.md) |
+| **xianyu-backend-code-review** | 后端代码审查（7 维度 · 63 规则 · FastAPI/SQLAlchemy/Async） | [SKILL.md](./skills/xianyu-backend-code-review/SKILL.md) |
+
+> 技能调用方式：开发或评审前先 `Read` 对应 `SKILL.md` 加载规范与流程；
+> 详情见各技能 `references/` 子目录。
 
 ---
 

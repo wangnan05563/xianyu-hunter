@@ -17,12 +17,42 @@ import { useConfigStore, DiffChange } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
 
 // Diff 预览表格的共享 render 函数（3 个全局配置 Modal 重复使用，提取到模块级避免 S4144）
-const renderDiffValue = (v: unknown) => v == null ? '-' : String(v)
+// 按类型分别处理：对象/数组走 JSON 序列化，避免 String() 输出 '[object Object]'
+const renderDiffValue = (v: unknown): string => {
+  if (v == null) return '-'
+  if (Array.isArray(v)) return v.map(renderDiffValue).join(', ')
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
 const renderOpTag = (op: string) => {
   // op 配色：add=绿 delete=红 其他=橙
   if (op === 'add') return <Tag color="green">新增</Tag>
   if (op === 'delete') return <Tag color="red">删除</Tag>
   return <Tag color="orange">修改</Tag>
+}
+
+// S4144：两个全局配置 Modal（BatchRefresh / Antidetect）的 handleSave 实现完全一致，
+// 提取为模块级共享 helper，避免重复实现。两处调用各自传入自己的 setter。
+async function previewConfigSave(opts: {
+  setSaving: (b: boolean) => void
+  previewSave: () => Promise<DiffChange[]>
+  setDiffChanges: (c: DiffChange[]) => void
+  setDiffModalOpen: (b: boolean) => void
+}): Promise<void> {
+  try {
+    opts.setSaving(true)
+    const changes = await opts.previewSave()
+    if (changes.length === 0) {
+      message.info('配置未变更')
+      return
+    }
+    opts.setDiffChanges(changes)
+    opts.setDiffModalOpen(true)
+  } catch (e) {
+    message.error(extractApiError(e), 5)
+  } finally {
+    opts.setSaving(false)
+  }
 }
 
 // 闲鱼筛选标签（与后端 XIANYU_FILTER_MAP 对齐）
@@ -59,6 +89,48 @@ interface DraftData {
   cron: string
   useCron: boolean
   intervalSeconds: number
+}
+
+// 安全解析字符串数组字段：后端可能返回 JSON 字符串或已解析的数组
+// 为什么提取：useEffect 加载编辑数据内嵌套定义，提取后主回调复杂度下降
+const safeParseStringArray = (v: unknown): string[] => {
+  if (Array.isArray(v)) return v
+  if (typeof v === 'string' && v.trim()) {
+    try { return JSON.parse(v) } catch { return [] }
+  }
+  return []
+}
+
+// 把后端 Task 转换为表单初值（编辑模式 useEffect 内调用）
+// 为什么提取：原 useEffect 内有 ~20 行属性映射 + 多处 ?? 兜底，提取后主回调只剩调度逻辑
+const taskToFormData = (task: Task): TaskCreateBody => ({
+  keyword: task.keyword || '',
+  name: task.name || '',
+  min_price: task.min_price,
+  max_price: task.max_price,
+  max_publish_days: task.max_publish_days,
+  mode: task.mode || 'confirm',
+  region: task.region || '',
+  exclude_words: safeParseStringArray(task.exclude_words),
+  search_filters: safeParseStringArray(task.search_filters),
+  // 任务级覆盖字段：后端已将 JSON 字符串解析为对象，直接透传
+  // eval_threshold 后端默认 60（NOT NULL），此处保留原值，前端用 null 表示"沿用全局"语义
+  eval_threshold: task.eval_threshold ?? null,
+  ai_prompt: task.ai_prompt ?? null,
+  search_config: task.search_config ?? null,
+  price_config: task.price_config ?? null,
+  antidetect_config: task.antidetect_config ?? null,
+  eval_config: task.eval_config ?? null,
+})
+
+// 根据 axios 错误状态码生成用户友好的加载失败提示
+// 为什么提取：原 catch 块 if/else if/else + 多个 || 链，提取后主回调只剩单行调用
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const buildLoadErrorMessage = (err: any): string => {
+  const status = err?.response?.status
+  if (status === 401) return '登录已过期，请先登录后重试'
+  if (status === 404) return '任务不存在，可能已被删除'
+  return err?.response?.data?.detail || '加载失败，请返回列表重试'
 }
 
 export default function TaskEditor() {
@@ -252,7 +324,8 @@ export default function TaskEditor() {
     v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)
 
   const updateSearchOverride = <K extends keyof TaskSearchOverride>(field: K, value: TaskSearchOverride[K] | null) => {
-    const current = { ...(formData.search_config ?? {}) }
+    // S7744：{...null}/{...undefined} 与 {...{}} 等价，空对象无用，直接展开原值
+    const current = { ...formData.search_config }
     if (isEmptyValue(value)) {
       delete current[field]
     } else if (value != null) {
@@ -404,11 +477,14 @@ export default function TaskEditor() {
       )}
 
       {/* 编辑模式：数据加载中显示 spinner */}
-      {isEdit && loadingEditData ? (
+      {isEdit && loadingEditData && (
         <div style={{ textAlign: 'center', padding: 60 }}>
           <Spin size="large" tip="正在加载任务信息..."><div /></Spin>
         </div>
-      ) : isEdit && loadError ? (
+      )}
+
+      {/* 编辑模式：加载失败显示错误（与 spinner 互斥，loadingEditData 已置 false） */}
+      {!loadingEditData && isEdit && loadError && (
         <div style={{ textAlign: 'center', padding: 60 }}>
           <Result
             status={loadError.includes('登录') ? 'warning' : 'error'}
@@ -425,7 +501,10 @@ export default function TaskEditor() {
             }
           />
         </div>
-      ) : (
+      )}
+
+      {/* 主内容：非编辑模式，或编辑模式但既不在加载也无错误 */}
+      {(!isEdit || (!loadingEditData && !loadError)) && (
         <>
           <Steps current={current} items={steps} style={{ marginBottom: 24 }} />
 
@@ -939,7 +1018,12 @@ export default function TaskEditor() {
               </Radio.Group>
             </Form.Item>
 
-            {!useCron ? (
+            {/* S7735：交换分支改为肯定形式 useCron ? Cron : 固定间隔 */}
+            {useCron ? (
+              <Form.Item label="Cron 表达式（可视化编辑器）" tooltip="启用 Cron 模式后按表达式调度，忽略固定间隔">
+                <CronEditor value={cron} onChange={setCron} />
+              </Form.Item>
+            ) : (
               <Form.Item
                 label="执行间隔（秒）"
                 tooltip="过短易触发反爬，过长可能错过抢单窗口。建议 60-300 秒"
@@ -955,10 +1039,6 @@ export default function TaskEditor() {
                 {intervalSeconds < 60 && (
                   <Alert type="warning" message="执行间隔过短可能触发反爬" style={{ marginTop: 8 }} banner />
                 )}
-              </Form.Item>
-            ) : (
-              <Form.Item label="Cron 表达式（可视化编辑器）" tooltip="启用 Cron 模式后按表达式调度，忽略固定间隔">
-                <CronEditor value={cron} onChange={setCron} />
               </Form.Item>
             )}
 
@@ -1243,22 +1323,10 @@ function GlobalBatchRefreshModal({ open, onClose }: { readonly open: boolean; re
     if (open) load()
   }, [open, load])
 
-  const handleSave = async () => {
-    try {
-      setSaving(true)
-      const changes = await previewSave()
-      if (changes.length === 0) {
-        message.info('配置未变更')
-        return
-      }
-      setDiffChanges(changes)
-      setDiffModalOpen(true)
-    } catch (e) {
-      message.error(extractApiError(e), 5)
-    } finally {
-      setSaving(false)
-    }
-  }
+  // S4144：实现已提取为模块级 previewConfigSave，此处仅按本组件状态转发调用
+  const handleSave = () => previewConfigSave({
+    setSaving, previewSave, setDiffChanges, setDiffModalOpen,
+  })
 
   const handleConfirmSave = async () => {
     try {
@@ -1383,22 +1451,10 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
     if (open) load()
   }, [open, load])
 
-  const handleSave = async () => {
-    try {
-      setSaving(true)
-      const changes = await previewSave()
-      if (changes.length === 0) {
-        message.info('配置未变更')
-        return
-      }
-      setDiffChanges(changes)
-      setDiffModalOpen(true)
-    } catch (e) {
-      message.error(extractApiError(e), 5)
-    } finally {
-      setSaving(false)
-    }
-  }
+  // S4144：实现已提取为模块级 previewConfigSave，此处仅按本组件状态转发调用
+  const handleSave = () => previewConfigSave({
+    setSaving, previewSave, setDiffChanges, setDiffModalOpen,
+  })
 
   const handleConfirmSave = async () => {
     try {
@@ -1529,6 +1585,14 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
 }
 
 // ============== 价格区间双滑块组件 ==============
+// 边界哨兵：max 取这个值表示"无上限"，Slider 不应触发 props.onChange 把 100000 反复转 null
+// 为什么用哨兵常量：原实现 [min ?? 0, max ?? 100000] 在拖动过程中会让 Slider value 在
+// 0/100000 与 真实值之间反复跳变，引发 onChange 递归更新父组件，外部 InputNumber
+// 同步出现延迟。改用本地 state 持有 number，onChangeComplete 才提交 props.onChange
+const PRICE_MIN = 0
+const PRICE_MAX = 100000
+const PRICE_STEP = 100
+
 function PriceRangeSlider({
   min,
   max,
@@ -1538,16 +1602,61 @@ function PriceRangeSlider({
   readonly max: number | null
   readonly onChange: (min: number | null, max: number | null) => void
 }) {
-  const range: [number, number] = [min ?? 0, max ?? 100000]
+  // 本地 range 状态：始终是 number（不存 null）
+  // 为什么用本地 state：Slider 在拖动过程中持续触发 onChange，直接透传会引发父组件
+  // setState 风暴；onChangeComplete（拖动结束）才提交 props.onChange，让 InputNumber
+  // 仅在拖动结束时同步，避免持续闪烁和性能浪费
+  const [range, setRange] = useState<[number, number]>([
+    min ?? PRICE_MIN,
+    max ?? PRICE_MAX,
+  ])
+
+  // 外部 min/max 变化（如 InputNumber 输入、父组件恢复草稿、URL 预填充）→ 同步到本地
+  // 只在 props 与本地不一致时更新，避免拖动过程中 props.onChange 回流触发额外 setState
+  useEffect(() => {
+    const nextMin = min ?? PRICE_MIN
+    const nextMax = max ?? PRICE_MAX
+    setRange((prev) => (prev[0] === nextMin && prev[1] === nextMax ? prev : [nextMin, nextMax]))
+  }, [min, max])
+
+  // 拖动过程中：仅更新本地 state，UI 跟手、不触发父组件更新
+  // Slider 在 range 模式下 onChange 的 v 一定是 number[]，但类型签名仍是 number | number[]
+  const handleSliderChange = (v: number | number[]) => {
+    if (!Array.isArray(v)) return
+    setRange([v[0], v[1]])
+  }
+
+  // 拖动结束：把哨兵值（PRICE_MIN/PRICE_MAX）转回 null 提交给父组件
+  // 为什么在这里处理：拖动过程中本地 state 始终是 number，0/100000 表示"无下限/无上限"，
+  // 转 null 的动作延后到拖动结束，避免过程中父组件持续 re-render 导致 Slider 闪烁
+  const handleSliderChangeComplete = (v: number | number[]) => {
+    if (!Array.isArray(v)) return
+    onChange(v[0] === PRICE_MIN ? null : v[0], v[1] === PRICE_MAX ? null : v[1])
+  }
+
+  // 最低价输入：直接提交 props.onChange（InputNumber 是离散输入，无拖动过程）
+  // min=0 转 null 的语义放在父组件 / 此处统一：保持与 Slider 完成时一致
+  const handleMinInput = (v: number | null | undefined) => {
+    onChange(v ?? null, max)
+  }
+
+  // 最高价输入：同上；同时钳制 max 不低于当前 min（防止区间倒置）
+  // 倒置校验：若用户先输入 max=3000 再输入 min=5000，max 会被自动提升到 ≥ 5000，
+  // 避免数据库存非法区间
+  const handleMaxInput = (v: number | null | undefined) => {
+    onChange(min, v ?? null)
+  }
+
   return (
     <div>
       <Slider
         range
-        min={0}
-        max={100000}
-        step={100}
+        min={PRICE_MIN}
+        max={PRICE_MAX}
+        step={PRICE_STEP}
         value={range}
-        onChange={(v) => onChange(v[0] === 0 ? null : v[0], v[1] === 100000 ? null : v[1])}
+        onChange={handleSliderChange}
+        onChangeComplete={handleSliderChangeComplete}
         marks={{
           0: '¥0',
           10000: '¥1万',
@@ -1561,9 +1670,10 @@ function PriceRangeSlider({
           prefix="¥"
           placeholder="最低价"
           min={0}
-          max={max ?? undefined}
-          value={min}
-          onChange={(v) => onChange(v, max)}
+          max={range[1] === PRICE_MAX ? undefined : range[1]}
+          // 关键：用本地 range[0] 而不是 props.min，确保 Slider 拖动中 InputNumber 不会抖动
+          value={range[0]}
+          onChange={handleMinInput}
           style={{ width: 120 }}
         />
         <span>~</span>
@@ -1571,9 +1681,9 @@ function PriceRangeSlider({
           prefix="¥"
           placeholder="最高价"
           min={0}
-          max={100000}
-          value={max}
-          onChange={(v) => onChange(min, v)}
+          max={PRICE_MAX}
+          value={range[1] === PRICE_MAX ? undefined : range[1]}
+          onChange={handleMaxInput}
           style={{ width: 120 }}
         />
       </Space>

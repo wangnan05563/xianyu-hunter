@@ -7,7 +7,7 @@ import {
   CloseCircleOutlined,
 } from '@ant-design/icons'
 import type { AIConfig as AIConfigData } from '../../../../api'
-import { EMBEDDING_PRESETS } from '../constants'
+import { EMBEDDING_PRESETS, findEmbeddingPresetByBaseUrl } from '../constants'
 
 const { Text } = Typography
 
@@ -49,9 +49,12 @@ export default function EmbeddingConfigForm({
   const isInheritMode =
     !config.embedding_base_url && !config.embedding_model && !config.embedding_dimensions
 
+  // 根据 embedding_base_url 反查 Embedding 预设，得到对应厂商 API Key 申请页
+  // 仅 remote 模式（base_url 非空）有值；local/inherit 模式无对应厂商，不渲染链接
+  const embeddingApiKeyUrl = findEmbeddingPresetByBaseUrl(config.embedding_base_url ?? '')?.apiKeyUrl
+
   return (
     <>
-      <h3 style={{ marginBottom: 8, marginTop: 32 }}>Embedding 向量服务配置</h3>
       <p style={{ color: 'var(--xh-text-tertiary)', marginBottom: 16 }}>
         为知识库（RAG）和 FAQ 语义匹配提供文本向量化能力。
         DeepSeek / 智谱等厂商不支持 /v1/embeddings，需独立配置（推荐 Python 本地，无外部依赖）。
@@ -97,7 +100,7 @@ export default function EmbeddingConfigForm({
             </div>
           </div>
 
-          {/* Embedding API Key（密码类型 + 显示/隐藏切换） */}
+          {/* Embedding API Key（密码类型 + 显示/隐藏切换 + 厂商申请页「获取」链接） */}
           <div>
             <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
               Embedding API Key
@@ -109,14 +112,21 @@ export default function EmbeddingConfigForm({
               placeholder="本地模式无需填写；远程 Ollama 填 ollama"
               style={{ maxWidth: 600 }}
               addonAfter={
-                <Button
-                  type="text"
-                  size="small"
-                  icon={showApiKey ? <EyeInvisibleOutlined /> : <EyeOutlined />}
-                  onClick={onToggleShowApiKey}
-                >
-                  {showApiKey ? '隐藏' : '显示'}
-                </Button>
+                <Space size="small">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={showApiKey ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+                    onClick={onToggleShowApiKey}
+                  >
+                    {showApiKey ? '隐藏' : '显示'}
+                  </Button>
+                  {embeddingApiKeyUrl && (
+                    <a href={embeddingApiKeyUrl} target="_blank" rel="noopener noreferrer">
+                      获取
+                    </a>
+                  )}
+                </Space>
               }
             />
             <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>

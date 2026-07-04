@@ -71,7 +71,7 @@ export const sheetRegistry: SheetMeta[] = [
   { path: '/maintenance/vector', title: '向量数据库维护', icon: <DatabaseOutlined />, component: lazyRetry(() => import('../../pages/Maintenance/VectorAdmin')) },
   { path: '/batch-refresh', title: '批量采集', icon: <CloudDownloadOutlined />, component: lazyRetry(() => import('../../pages/Maintenance/BatchRefresh')) },
   { path: '/anticrawl', title: '反爬登录管理', icon: <ExperimentOutlined />, component: lazyRetry(() => import('../../pages/AntiCrawl')) },
-  { path: '/chatbot', title: '智能客服', icon: <MessageOutlined />, component: lazyRetry(() => import('../../pages/Chatbot')) },
+  { path: '/chatbot', title: '智能客服对话', icon: <MessageOutlined />, component: lazyRetry(() => import('../../pages/Chatbot')) },
   { path: '/about', title: '关于', icon: <InfoCircleOutlined />, component: lazyRetry(() => import('../../pages/About')) },
   { path: '/help', title: '帮助文档', icon: <BlockOutlined />, component: lazyRetry(() => import('../../pages/Help')) },
 ]

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
 import { useSheetStore } from '../stores/sheetStore'
+import { openSheetWithNotification } from '../components/SheetWorkspace/sheetNotifications'
 
 /**
  * URL ↔ sheet 栈双向同步 Hook
@@ -11,10 +12,13 @@ import { useSheetStore } from '../stores/sheetStore'
  *
  * 防循环关键：每次同步前比较"当前激活 sheet 的 path"与"URL path"，
  * 相同则跳过，避免 URL→栈→URL 死循环。
+ *
+ * 为什么用 openSheetWithNotification 而非 store.openSheet：
+ * URL 变化（如菜单点击触发的 navigate）也可能触发循环替换，
+ * 此时需发 Toast 通知 + 撤销按钮，与菜单点击走相同路径
  */
 export function useSheetSync(): void {
   const location = useLocation()
-  const openSheet = useSheetStore((s) => s.openSheet)
   const sheets = useSheetStore((s) => s.sheets)
   const activeId = useSheetStore((s) => s.activeId)
 
@@ -23,6 +27,6 @@ export function useSheetSync(): void {
     const activeSheet = sheets.find((s) => s.id === activeId)
     // 防循环：当前激活 sheet 的 path 已等于 URL 则不操作
     if (activeSheet?.path === path) return
-    openSheet(path)
-  }, [location.pathname, sheets, activeId, openSheet])
+    openSheetWithNotification(path)
+  }, [location.pathname, sheets, activeId])
 }

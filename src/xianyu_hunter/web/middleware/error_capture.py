@@ -46,6 +46,51 @@ def _collect_server_env() -> dict[str, str]:
     }
 
 
+def _infer_possible_causes(error_message: str, prefix: str = "") -> list[str]:
+    """基于错误消息关键词推断可能的原因
+
+    为什么独立：_build_ai_context_json 和 _build_ai_context_md 中重复了相同的
+    关键词匹配逻辑（5 组 if + or/and），集中维护避免两处不一致，
+    同时降低两个构建函数的认知复杂度。
+    """
+    possible_causes: list[str] = []
+    msg_lower = error_message.lower()
+    if "connection" in msg_lower or "timeout" in msg_lower:
+        possible_causes.append(f"{prefix}网络连接或超时问题")
+    if "permission" in msg_lower or "denied" in msg_lower:
+        possible_causes.append(f"{prefix}权限或文件系统访问问题")
+    if "type" in msg_lower and ("convert" in msg_lower or "cast" in msg_lower):
+        possible_causes.append(f"{prefix}数据类型转换错误")
+    if "key" in msg_lower and ("not found" in msg_lower or "missing" in msg_lower):
+        possible_causes.append(f"{prefix}字典/配置键缺失")
+    if "index" in msg_lower and "out of range" in msg_lower:
+        possible_causes.append(f"{prefix}数组索引越界")
+    if not possible_causes:
+        possible_causes.append(f"{prefix}需要根据堆栈信息进一步分析")
+    return possible_causes
+
+
+def _build_request_context_md_lines(request_info: dict) -> list[str]:
+    """构建 Markdown 格式的请求上下文行（含方法/路径/流水号/参数）
+
+    为什么独立：_build_ai_context_md 中请求上下文构建有嵌套 if (params)，
+    拆分后主函数线性拼接各段落，便于增删字段。
+    """
+    lines = [
+        "",
+        "## 请求上下文",
+        f"- **方法**: {request_info.get('method', 'N/A')}",
+        f"- **路径**: {request_info.get('path', 'N/A')}",
+        f"- **流水号**: `{request_info.get('request_id', 'N/A')}`",
+        f"- **客户端 IP**: {request_info.get('client_ip', 'N/A')}",
+        f"- **User-Agent**: {request_info.get('user_agent', 'N/A')}",
+    ]
+    params = request_info.get("params")
+    if params:
+        lines += ["", "### 请求参数", "```json", json.dumps(params, ensure_ascii=False, indent=2), "```"]
+    return lines
+
+
 def _build_ai_context_json(
     error_type: str,
     error_message: str,
@@ -62,22 +107,7 @@ def _build_ai_context_json(
     }
     if request_info:
         ctx["request"] = request_info
-    # 简单的可能的错误原因推断（基于错误类型关键词）
-    possible_causes: list[str] = []
-    msg_lower = error_message.lower()
-    if "connection" in msg_lower or "timeout" in msg_lower:
-        possible_causes.append("网络连接或超时问题")
-    if "permission" in msg_lower or "denied" in msg_lower:
-        possible_causes.append("权限或文件系统访问问题")
-    if "type" in msg_lower and ("convert" in msg_lower or "cast" in msg_lower):
-        possible_causes.append("数据类型转换错误")
-    if "key" in msg_lower and ("not found" in msg_lower or "missing" in msg_lower):
-        possible_causes.append("字典/配置键缺失")
-    if "index" in msg_lower and "out of range" in msg_lower:
-        possible_causes.append("数组索引越界")
-    if not possible_causes:
-        possible_causes.append("需要根据堆栈信息进一步分析")
-    ctx["possible_causes"] = possible_causes
+    ctx["possible_causes"] = _infer_possible_causes(error_message)
     return json.dumps(ctx, ensure_ascii=False, indent=2)
 
 
@@ -99,18 +129,7 @@ def _build_ai_context_md(
         f"- **消息**: {error_message}",
     ]
     if request_info:
-        lines += [
-            "",
-            "## 请求上下文",
-            f"- **方法**: {request_info.get('method', 'N/A')}",
-            f"- **路径**: {request_info.get('path', 'N/A')}",
-            f"- **流水号**: `{request_info.get('request_id', 'N/A')}`",
-            f"- **客户端 IP**: {request_info.get('client_ip', 'N/A')}",
-            f"- **User-Agent**: {request_info.get('user_agent', 'N/A')}",
-        ]
-        params = request_info.get("params")
-        if params:
-            lines += ["", "### 请求参数", "```json", json.dumps(params, ensure_ascii=False, indent=2), "```"]
+        lines += _build_request_context_md_lines(request_info)
     lines += [
         "",
         "## 堆栈信息",
@@ -125,22 +144,8 @@ def _build_ai_context_md(
         "",
         "## 可能原因",
     ]
-    # 复用 JSON 构建中的原因推断逻辑
-    possible_causes: list[str] = []
-    msg_lower = error_message.lower()
-    if "connection" in msg_lower or "timeout" in msg_lower:
-        possible_causes.append("- 网络连接或超时问题")
-    if "permission" in msg_lower or "denied" in msg_lower:
-        possible_causes.append("- 权限或文件系统访问问题")
-    if "type" in msg_lower and ("convert" in msg_lower or "cast" in msg_lower):
-        possible_causes.append("- 数据类型转换错误")
-    if "key" in msg_lower and ("not found" in msg_lower or "missing" in msg_lower):
-        possible_causes.append("- 字典/配置键缺失")
-    if "index" in msg_lower and "out of range" in msg_lower:
-        possible_causes.append("- 数组索引越界")
-    if not possible_causes:
-        possible_causes.append("- 需要根据堆栈信息进一步分析")
-    lines.extend(possible_causes)
+    # 复用 JSON 构建中的原因推断逻辑，加 "- " 前缀适配 Markdown 列表格式
+    lines.extend(_infer_possible_causes(error_message, prefix="- "))
     return "\n".join(lines)
 
 

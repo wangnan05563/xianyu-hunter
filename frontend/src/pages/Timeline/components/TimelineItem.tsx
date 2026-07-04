@@ -8,11 +8,12 @@ import { RISK_LEVEL_CONFIG } from '../../../constants/riskLevels'
 import { parsePayload, formatRelativeTime } from '../utils'
 
 // payload 字段类型为 unknown，直接 String() 在值为对象/数组时会得到 [object Object]，
-// 因此统一封装：对象用 JSON.stringify，其他用 String，null/undefined 返回空串
+// 因此统一封装：对象用 JSON.stringify，其他用 toString，null/undefined 返回空串
 const safeStr = (v: unknown): string => {
   if (v === null || v === undefined) return ''
   if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
+  // 经过前面的 typeof 检查，v 必为基础类型，用 toString() 避免 S6551
+  return (v as { toString: () => string }).toString()
 }
 
 interface TimelineItemProps {

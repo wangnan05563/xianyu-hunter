@@ -80,3 +80,35 @@ export function calcHeatmapMax(dist: DistResponse): number {
   )
   return maxVal
 }
+
+// 操作列占位类型：表示为何不显示抢单按钮
+// 抽取为纯函数便于单元测试覆盖优先级顺序（已下单 > 已售 > 未达阈值 > 可抢）
+export type ActionPlaceholderType = 'ordered' | 'sold' | 'below_threshold' | null
+
+// 判定评估记录在操作列应显示占位还是按钮
+// 返回 null 表示应渲染抢单按钮，否则返回占位类型
+// 优先级顺序的业务原因：
+// - ordered 优先：已成功/进行中的订单不可重复下单
+// - sold 次之：商品已售时即使订单失败也无法再抢，避免用户点击后才发现无法成交
+// - below_threshold 最后：低分商品本就不应被抢，但若已售/已下单则状态展示优先
+export function resolveActionDisplay(
+  r: EvalItem,
+  autoBuyScore: number,
+): ActionPlaceholderType {
+  const score = r.payload.score ?? 0
+  const orderStatus = r.payload?.order_status
+  // 已有订单（非失败/取消）时不显示抢单按钮，避免重复下单
+  // null/undefined 在真值判断中均被排除，无需 as 断言
+  if (orderStatus && orderStatus !== 'failed' && orderStatus !== 'cancelled') {
+    return 'ordered'
+  }
+  // 已售商品不可抢：商品已下架/已被他人购得时下单必失败且可能产生脏数据
+  if (r.payload?.is_sold) {
+    return 'sold'
+  }
+  // 评分低于阈值时不显示，避免误操作
+  if (score < autoBuyScore) {
+    return 'below_threshold'
+  }
+  return null
+}

@@ -1,5 +1,6 @@
-import { Drawer, Form, InputNumber, Switch, Button, Space, Typography, Divider } from 'antd'
-import { useSheetStore } from '../../stores/sheetStore'
+import { Drawer, Form, InputNumber, Switch, Button, Space, Typography, Divider, Tag } from 'antd'
+import { SwapOutlined } from '@ant-design/icons'
+import { useSheetStore, DEFAULT_PREFERENCES } from '../../stores/sheetStore'
 
 const { Text } = Typography
 
@@ -11,17 +12,12 @@ interface SheetPreferencesProps {
 export function SheetPreferences({ open, onClose }: SheetPreferencesProps) {
   const preferences = useSheetStore((s) => s.preferences)
   const setPreferences = useSheetStore((s) => s.setPreferences)
+  const replacedHistory = useSheetStore((s) => s.replacedHistory)
+  const clearReplacedHistory = useSheetStore((s) => s.clearReplacedHistory)
 
+  // 复用 store 的默认值常量，避免两处定义导致默认值变更时不同步
   const handleReset = () => {
-    setPreferences({
-      maxSheets: 5,
-      enableAnimation: true,
-      minimizeInsteadOfClose: false,
-      doubleClickCloseEnabled: false,
-      doubleClickInterval: 350,
-      thumbnailMode: false,
-      thumbnailTooltipEnabled: true,
-    })
+    setPreferences({ ...DEFAULT_PREFERENCES })
   }
 
   return (
@@ -46,6 +42,69 @@ export function SheetPreferences({ open, onClose }: SheetPreferencesProps) {
             style={{ width: '100%' }}
           />
         </Form.Item>
+
+        <Form.Item
+          label={
+            <Space size={6}>
+              <span>循环替换</span>
+              {/*
+                状态徽标：让用户在面板中一眼看到当前开关是否激活
+                用 colorPrimary 与主题色统一，简洁不抢眼
+              */}
+              {preferences.circularReplaceEnabled ? (
+                <Tag color="processing" icon={<SwapOutlined />}>已开启</Tag>
+              ) : (
+                <Tag>已关闭</Tag>
+              )}
+            </Space>
+          }
+          help={
+            // 帮助文案分两段：开启/关闭行为差异 + 兜底机制，让用户清楚知道替换有恢复路径
+            preferences.circularReplaceEnabled
+              ? '达到上限时自动淘汰最早打开的非激活 sheet（保护当前查看页）。被替换的 sheet 进入回收栈，可通过 Toast 内的「撤销」按钮在 5 秒内恢复。'
+              : '关闭时达到上限会拒绝打开新 sheet。开启后可无界打开新页面，老 sheet 自动回收。'
+          }
+        >
+          <Switch
+            checked={preferences.circularReplaceEnabled}
+            onChange={(checked) => setPreferences({ circularReplaceEnabled: checked })}
+            aria-label="循环替换开关"
+          />
+        </Form.Item>
+
+        {replacedHistory.length > 0 && (
+          <Form.Item
+            label={
+              <Space size={6}>
+                <span>回收栈</span>
+                <Tag color="default">{replacedHistory.length}/5</Tag>
+              </Space>
+            }
+            help="最近被循环替换淘汰的 sheet 列表。Toast 中的「撤销」按钮可在 5 秒内恢复最新一项；此处可查看历史。"
+          >
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              {replacedHistory.slice(0, 5).map((r) => (
+                <Text
+                  key={r.id}
+                  data-testid="replaced-sheet-item"
+                  data-sheet-path={r.path}
+                  type="secondary"
+                  style={{ fontSize: 12 }}
+                >
+                  · {r.title} <Text type="secondary" style={{ fontSize: 11, opacity: 0.65 }}>({r.path})</Text>
+                </Text>
+              ))}
+              <Button
+                size="small"
+                type="link"
+                onClick={clearReplacedHistory}
+                style={{ padding: 0, alignSelf: 'flex-start' }}
+              >
+                清空回收栈
+              </Button>
+            </Space>
+          </Form.Item>
+        )}
 
         <Form.Item label="启用切换动画">
           <Switch
@@ -79,7 +138,7 @@ export function SheetPreferences({ open, onClose }: SheetPreferencesProps) {
 
         <Form.Item
           label="双击判定间隔（毫秒）"
-          help="两次点击间隔 ≤ 此值视为双击；范围 200-800，推荐 300-500"
+          help={preferences.doubleClickCloseEnabled ? '两次点击间隔 ≤ 此值视为双击；范围 200-800，推荐 300-500' : '需先启用「启用双击关闭」才能配置此间隔'}
         >
           <InputNumber
             min={200}
@@ -89,6 +148,7 @@ export function SheetPreferences({ open, onClose }: SheetPreferencesProps) {
             onChange={(v) => v != null && setPreferences({ doubleClickInterval: v })}
             style={{ width: '100%' }}
             disabled={!preferences.doubleClickCloseEnabled}
+            aria-label="双击判定间隔"
           />
         </Form.Item>
 
@@ -107,12 +167,13 @@ export function SheetPreferences({ open, onClose }: SheetPreferencesProps) {
 
         <Form.Item
           label="显示悬浮提示"
-          help="鼠标悬停在缩略图上时显示 sheet 名称、路径、创建时间等详细信息"
+          help={preferences.thumbnailMode ? '鼠标悬停在缩略图上时显示 sheet 名称、路径、创建时间等详细信息' : '需先启用「启用缩略图模式」才能配置悬浮提示'}
         >
           <Switch
             checked={preferences.thumbnailTooltipEnabled}
             onChange={(checked) => setPreferences({ thumbnailTooltipEnabled: checked })}
             disabled={!preferences.thumbnailMode}
+            aria-label="显示悬浮提示开关"
           />
         </Form.Item>
 

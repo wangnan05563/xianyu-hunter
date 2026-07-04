@@ -99,6 +99,23 @@ describe('useAutoLiveSearch', () => {
     expect(result.current.remainMap.t1).toBe(45)
   })
 
+  it('搜索失败时透传后端 detail 到 onTaskSearchComplete', async () => {
+    const { taskLinkApi } = await import('../../api')
+    // 模拟后端 SSE error 事件：taskLinkApi.live 按 axios 兼容格式抛出
+    const err = Object.assign(new Error('HTTP 503'), {
+      response: { status: 503, data: { detail: '系统正在执行后台搜索任务，请稍后重试' } },
+    })
+    ;(taskLinkApi.live as any).mockRejectedValue(err)
+    const onComplete = vi.fn()
+
+    const tasks: MockTask[] = [{ id: 't1', status: 'running', interval_seconds: 30 }]
+    renderHook(() => useAutoLiveSearch({ tasks: tasks as any, enabled: true, onTaskSearchComplete: onComplete }))
+    act(() => { vi.advanceTimersByTime(30 * 1000) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+
+    expect(onComplete).toHaveBeenCalledWith('t1', false, 0, '系统正在执行后台搜索任务，请稍后重试')
+  })
+
   it('pauseAll 清空 remainMap 与队列', () => {
     const tasks: MockTask[] = [{ id: 't1', status: 'running', interval_seconds: 60 }]
     const { result } = renderHook(() => useAutoLiveSearch({ tasks: tasks as any, enabled: true }))

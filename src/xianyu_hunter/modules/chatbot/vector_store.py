@@ -28,6 +28,36 @@ except ImportError:
     chromadb = None  # type: ignore[assignment]
 
 
+def _clear_persist_dir_excluding_snapshots(persist_path: Path) -> None:
+    """清空 persist_path 但保留 snapshots 子目录
+
+    为什么提取为模块级函数：原 _sync_restore 闭包内的 for + if name == snapshots +
+    if is_dir + else 嵌套结构贡献了主要认知复杂度，提取后闭包仅保留流程编排。
+    保留 snapshots 目录避免丢失其他版本快照（多版本管理依赖）。
+    """
+    for item in persist_path.iterdir():
+        if item.name == "snapshots":
+            continue
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+
+
+def _copy_dir_contents(src: Path, dst: Path) -> None:
+    """把 src 目录下所有内容复制到 dst（覆盖）
+
+    为什么提取为模块级函数：与 _clear_persist_dir_excluding_snapshots 同理，
+    把 for + if is_dir + else 的复制逻辑抽出，_sync_restore 闭包复杂度显著降低。
+    """
+    for item in src.iterdir():
+        target = dst / item.name
+        if item.is_dir():
+            shutil.copytree(item, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(item, target)
+
+
 class VectorStore:
     """ChromaDB 适配器：单例，通过 container 注入"""
 
@@ -253,20 +283,9 @@ class VectorStore:
             if not src.exists():
                 raise FileNotFoundError(f"快照不存在: {snapshot_path}")
             # 清空当前数据（保留 snapshots 目录）
-            for item in Path(self._persist_path).iterdir():
-                if item.name == "snapshots":
-                    continue
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
+            _clear_persist_dir_excluding_snapshots(Path(self._persist_path))
             # 复制快照内容覆盖
-            for item in src.iterdir():
-                target = Path(self._persist_path) / item.name
-                if item.is_dir():
-                    shutil.copytree(item, target, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, target)
+            _copy_dir_contents(src, Path(self._persist_path))
             # 重建 collection 引用：旧 collection 对象绑定的数据已被替换
             self._collection = self._client.get_collection(self._collection_name)
 

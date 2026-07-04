@@ -226,7 +226,6 @@ _本次发布周期的变更已封版至 [0.2.0]，新变更请在此段落积�
 
 ---
 
-[Unreleased]: https://github.com/wangnan05563/xianyu-hunter/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.3.0
+[Unreleased]: https://github.com/wangnan05563/xianyu-hunter/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.1.0

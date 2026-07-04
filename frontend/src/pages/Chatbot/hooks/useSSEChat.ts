@@ -15,6 +15,67 @@ interface SendMessageParams {
   images?: string[]
 }
 
+// 构造认证请求头：cookie 为主（withCredentials），Authorization header 为辅（兼容场景）
+// 提取为模块级纯函数：原 sendMessage 内联三元 + spread 贡献认知复杂度（S3776）
+const buildChatHeaders = (token: string | null): Record<string, string> => ({
+  'Content-Type': 'application/json',
+  ...(token ? { Authorization: `Bearer ${token}` } : {}),
+})
+
+// 构造请求体：将 opts 字段映射为后端 API 字段
+// 提取为模块级纯函数：原 sendMessage 内联对象字面量 + 2 个 ?? 运算贡献认知复杂度
+const buildChatBody = (opts: UseSSEChatOptions & SendMessageParams) => ({
+  session_id: opts.sessionId,
+  message: opts.message,
+  enable_tools: opts.enableTools ?? true,
+  images: opts.images ?? [],
+})
+
+// 终止事件类型集合：done/error/escalate 触发 onComplete 后立即结束流
+// 用 Set 查表替代 3 个 || 链，新增终止类型只需加一行（S3776）
+const TERMINAL_EVENT_TYPES = new Set<SSEEvent['type']>(['done', 'error', 'escalate'])
+
+// 用户主动取消（AbortController.abort）不算错误，需静默忽略
+const isAbortError = (e: unknown): boolean =>
+  e instanceof Error && e.name === 'AbortError'
+
+// 错误归一化：将任意异常转为 Error 实例，便于上层统一处理
+const normalizeError = (e: unknown): Error =>
+  e instanceof Error ? e : new Error(String(e))
+
+// 消费 SSE 流：解析每个事件并回调 onEvent，遇终止事件提前返回 true
+// 提取为模块级函数：原 sendMessage 内 while+for+if 嵌套 4 层，SonarQube S3776 认知复杂度超限
+// 返回值约定：true=遇到终止事件提前结束（调用方不应再回调 onComplete），false=流正常结束（调用方需补回调）
+// 为什么用返回值而非内部直接调 onComplete：避免与 sendMessage 末尾的 onComplete 形成双重调用
+async function consumeSSEStream(resp: Response, opts: UseSSEChatOptions): Promise<boolean> {
+  const reader = resp.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    // SSE 协议：双换行分隔独立事件
+    const events = buffer.split('\n\n')
+    // 最后一段可能不完整，保留到下次拼接
+    buffer = events.pop() || ''
+
+    for (const eventStr of events) {
+      const event = parseSSEEvent(eventStr)
+      if (event) {
+        opts.onEvent(event)
+        // done/error/escalate 为终止事件，结束本次流
+        if (TERMINAL_EVENT_TYPES.has(event.type)) {
+          return true
+        }
+      }
+    }
+  }
+  return false
+}
+
 // SSE 聊天 Hook：用 fetch + ReadableStream 实现
 // 为什么不用 EventSource：chat 是 POST 请求，EventSource 仅支持 GET
 // 为什么不用 axios：axios 不支持 ReadableStream 流式读取
@@ -33,16 +94,8 @@ export function useSSEChat() {
         const resp = await fetch('/api/chatbot/chat', {
           method: 'POST',
           credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
-            session_id: opts.sessionId,
-            message: opts.message,
-            enable_tools: opts.enableTools ?? true,
-            images: opts.images ?? [],
-          }),
+          headers: buildChatHeaders(token),
+          body: JSON.stringify(buildChatBody(opts)),
           signal: abortControllerRef.current.signal,
         })
 
@@ -57,38 +110,14 @@ export function useSSEChat() {
           throw new Error(`HTTP ${resp.status}`)
         }
 
-        const reader = resp.body!.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-
-          buffer += decoder.decode(value, { stream: true })
-          // SSE 协议：双换行分隔独立事件
-          const events = buffer.split('\n\n')
-          // 最后一段可能不完整，保留到下次拼接
-          buffer = events.pop() || ''
-
-          for (const eventStr of events) {
-            const event = parseSSEEvent(eventStr)
-            if (event) {
-              opts.onEvent(event)
-              // done/error/escalate 为终止事件，结束本次流
-              if (event.type === 'done' || event.type === 'error' || event.type === 'escalate') {
-                opts.onComplete()
-                return
-              }
-            }
-          }
-        }
-        // 流正常结束但未收到 done 事件，也要回调 onComplete
+        // 消费 SSE 流：终止事件由 consumeSSEStream 提前返回，但仍需统一回调 onComplete
+        // 为什么不在 consumeSSEStream 内部回调：避免与这里形成双重调用，让 onComplete 调用点单一可追踪
+        await consumeSSEStream(resp, opts)
         opts.onComplete()
       } catch (e) {
         // 用户主动取消不算错误
-        if (e instanceof Error && e.name === 'AbortError') return
-        const err = e instanceof Error ? e : new Error(String(e))
+        if (isAbortError(e)) return
+        const err = normalizeError(e)
         opts.onError(err)
         message.error('对话失败: ' + err.message)
       } finally {

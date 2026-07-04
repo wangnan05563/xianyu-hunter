@@ -13,8 +13,9 @@ import sqlite3
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import text as sa_text
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.yaml_config import get_config
@@ -28,56 +29,194 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["auth-query"])
 
+# 无效昵称集合：闲鱼页面未登录或 DOM 抓取错位时会拿到这些文本
+# 为什么需要集中定义：auth_helper.py 在抓取时已做过滤，但 userinfo.json 可能缓存
+# 过滤逻辑加入前的旧值，users.nickname 也可能被同步过无效值。
+# 此处在 API 出口再做一次兜底过滤，确保无效昵称不会透到前端。
+_INVALID_NICKS = {
+    "", "登录", "登錄", "Login", "Sign in", "立即登录",
+    "Hi! 你好", "Hi！你好", "你好", "Hi", "Hi!",
+    "登录/注册", "请登录", "点击登录",
+}
 
-def _check_cookies() -> bool:
+
+def _is_invalid_nick(nick: str | None) -> bool:
+    """判断 nick 是否为无效值（登录按钮文本/欢迎语/空字符串）"""
+    return (nick or "").strip() in _INVALID_NICKS
+
+
+def _resolve_current_user_id(request: Request) -> str | None:
+    """从 xh_token cookie 识别当前多用户会话用户 ID
+
+    为什么不依赖中间件注入：/api/auth/me 在 PUBLIC_PREFIXES 中，中间件不会
+    对其执行会话校验和 user_id 注入。这里主动调用 verify_session 拿 user_id，
+    既能识别多用户会话，又能让 PUBLIC 路径感知到当前登录身份。
+    """
+    token = request.cookies.get("xh_token", "")
+    if not token:
+        return None
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+        return get_user_manager().verify_session(token)
+    except Exception:
+        return None
+
+
+def _check_cookies(user_id: str = "default") -> bool:
     """检查闲鱼 Cookie 是否有效（JSON 优先，SQLite 兜底）
 
     CookieStore 内部优先读取 JSON 文件（登录子进程立即写入），
-    JSON 不可用时回退到 SQLite 检查。
+    JSON 不可用时回退到 SQLite 检查（仅 default 用户）。
+
+    为什么按 user_id 检查：多用户登录后 cookie 存在 cookies_{user_id}.json
+    而非 cookies_default.json，硬编码 default 会导致多用户场景误判为未登录。
     """
     store = get_cookie_store()
-    store.invalidate_cache("default")
-    return store.has_valid_cookies(user_id="default")
+    store.invalidate_cache(user_id)
+    return store.has_valid_cookies(user_id=user_id)
 
 
-@router.get("/me")
-def auth_me(container: Container = Depends(get_container)):
-    """返回当前登录用户信息（昵称/头像/user_id）
+def _sync_nick_to_users_table(user_id: str, nick: str) -> tuple[str, str]:
+    """把抓取到的 nick 同步到 users.nickname，并返回 (nickname, custom_alias)
 
-    实现策略：复用现有 cookie 探测 + 后台 Playwright 拉取
-    - 同步部分：从持久化 cookies 立即判断 has_login（基于 cookie 存在性）
-    - 异步部分：触发后台拉取 userinfo（首次 / 缓存过期时）
+    为什么需要同步：auth_helper 拉取到的 nick 只写在 auth_cache/userinfo.json，
+    从未回写 users 表。users.nickname 字段一直是 identify_or_create 时的空字符串，
+    导致 /api/auth/me 即使能识别 user_id，也拿不到本地存储的昵称。
+
+    无效 nick 处理：当 nick 为 "Hi! 你好" 等无效值时，不仅不写入，还会清空
+    库里已有的无效 nickname，避免旧缓存持续透到前端。
+
+    Returns:
+        (nickname, custom_alias) - 过滤无效值后的最终展示名
     """
-    has_cookie = _check_cookies()
+    if not user_id or user_id == "default":
+        # default 用户无本地记录，返回空
+        return ("", "")
 
-    am = get_auth_manager()
-    info = am.get_userinfo()
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+        mgr = get_user_manager()
+        user = mgr.get_user(user_id)
+        if not user:
+            return ("", "")
 
-    # 同步探测有 cookie 但缓存里 logged_in=False → 触发后台刷新
+        current_nick = user.get("nickname") or ""
+        custom_alias = user.get("custom_alias") or ""
+
+        # 过滤无效 nick：新抓取的 nick 和库里已有的 nick 都需要校验
+        # 为什么校验库里：userinfo.json 过滤逻辑是后加的，库里可能已存有 "Hi! 你好"
+        valid_nick = "" if _is_invalid_nick(nick) else nick
+        valid_current_nick = "" if _is_invalid_nick(current_nick) else current_nick
+
+        # 情况1：新 nick 有效且与库里不同 → 写入新 nick
+        if valid_nick and valid_nick != current_nick:
+            now_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+            with mgr._engine.connect() as conn:
+                conn.execute(sa_text(
+                    "UPDATE users SET nickname=:nick, updated_at=:now WHERE user_id=:uid"
+                ), {"nick": valid_nick, "now": now_iso, "uid": user_id})
+                conn.commit()
+            logger.info("已同步闲鱼昵称到 users 表: user_id=%s, nick=%s", user_id, valid_nick)
+            return (valid_nick, custom_alias)
+
+        # 情况2：新 nick 无效但库里也是无效值 → 清空库里的无效 nickname
+        # 为什么需要清空：旧的 "Hi! 你好" 会通过返回值透到前端 local_username
+        if not valid_nick and current_nick and valid_current_nick != current_nick:
+            now_iso = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+            with mgr._engine.connect() as conn:
+                conn.execute(sa_text(
+                    "UPDATE users SET nickname='', updated_at=:now WHERE user_id=:uid"
+                ), {"now": now_iso, "uid": user_id})
+                conn.commit()
+            logger.info("已清空无效昵称: user_id=%s, old_nick=%s", user_id, current_nick)
+            return ("", custom_alias)
+
+        return (valid_current_nick, custom_alias)
+    except Exception as e:
+        logger.warning("同步 nick 到 users 表失败: %s", e)
+        return ("", "")
+
+
+def _maybe_refresh_userinfo(
+    has_cookie: bool, info: dict, am, raw_nick: str, valid_nick: str
+) -> None:
+    """集中处理三类后台刷新触发条件，避免主流程被多个 and 复合判断拉高复杂度
+
+    1. 有 cookie 但缓存里 logged_in=False：同步探测结果，需尽快拉取真实登录态
+    2. 缓存已过期（TTL 外）：触发后台刷新
+    3. 缓存中是无效 nick：触发刷新以尽快拿到真实昵称
+    """
     if has_cookie and not info.get("logged_in"):
         am.trigger_refresh_userinfo_async()
-    # 缓存过期 → 触发后台刷新
     if has_cookie and info.get("logged_in") and (time.time() - info.get("fetched_at", 0)) > am.USERINFO_TTL:
         am.trigger_refresh_userinfo_async()
+    if has_cookie and raw_nick and not valid_nick:
+        am.trigger_refresh_userinfo_async()
 
-    # 构建返回结果
+
+def _build_auth_me_result(has_cookie: bool, info: dict, valid_nick: str) -> dict:
+    """构建 /me 响应体
+
+    has_cookie=True 但缓存 logged_in=False 时附加 detecting=True：
+    说明后端正在后台刷新，前端应展示"检测中"占位而非直接判定为未登录。
+    """
     if has_cookie and not info.get("logged_in"):
-        result = {
+        return {
             "logged_in": True,
             "user_id": info.get("user_id", ""),
-            "nick": info.get("nick", ""),
+            "nick": valid_nick,
             "avatar_url": info.get("avatar_url", ""),
             "fetched_at": info.get("fetched_at", 0),
             "detecting": True,
         }
-    else:
-        result = {
-            "logged_in": has_cookie and bool(info.get("logged_in")),
-            "user_id": info.get("user_id", ""),
-            "nick": info.get("nick", ""),
-            "avatar_url": info.get("avatar_url", ""),
-            "fetched_at": info.get("fetched_at", 0),
-        }
+    return {
+        "logged_in": has_cookie and bool(info.get("logged_in")),
+        "user_id": info.get("user_id", ""),
+        "nick": valid_nick,
+        "avatar_url": info.get("avatar_url", ""),
+        "fetched_at": info.get("fetched_at", 0),
+    }
+
+
+@router.get("/me")
+def auth_me(request: Request, container: Container = Depends(get_container)):
+    """返回当前登录用户信息（昵称/头像/user_id/local_username）
+
+    实现策略：
+    1. 从 xh_token 识别多用户会话 user_id（无会话则用 default）
+    2. 按 user_id 检查 cookies_{user_id}.json 存在性
+    3. 复用 auth_manager 的 userinfo 缓存（昵称/头像）
+    4. 把抓取到的 nick 同步回 users.nickname，并在响应中返回 local_username
+    """
+    # 1. 识别当前多用户会话用户
+    current_uid = _resolve_current_user_id(request)
+    cookie_user_id = current_uid or "default"
+
+    # 2. 检查当前用户的 cookie 文件
+    has_cookie = _check_cookies(cookie_user_id)
+
+    am = get_auth_manager()
+    info = am.get_userinfo()
+
+    # 过滤无效 nick：userinfo.json 可能缓存了过滤逻辑加入前的旧值（如 "Hi! 你好"）
+    # 此处兜底过滤，确保无效昵称不会透到前端 result["nick"]
+    raw_nick = info.get("nick", "")
+    valid_nick = "" if _is_invalid_nick(raw_nick) else raw_nick
+    _maybe_refresh_userinfo(has_cookie, info, am, raw_nick, valid_nick)
+
+    # 构建返回结果
+    result = _build_auth_me_result(has_cookie, info, valid_nick)
+
+    # 3. 同步 nick 到 users 表，并在响应中追加 local_username/custom_alias
+    #    传入 valid_nick：已过滤无效值，_sync_nick_to_users_table 会据此清空库里旧无效值
+    nickname, custom_alias = _sync_nick_to_users_table(
+        current_uid or "", valid_nick
+    )
+    # local_username 优先级：自定义别名 > 闲鱼昵称 > user_id
+    # 为什么自定义别名优先：用户主动设置的标识更具辨识度，闲鱼昵称可能因反爬抓不到
+    result["local_username"] = custom_alias or nickname or result.get("user_id", "") or ""
+    result["nickname"] = nickname
+    result["custom_alias"] = custom_alias
 
     # 检测登录态掉线 → 生成业务通知（失败不影响主路径）
     scan_and_notify(container, auth_state=result)
@@ -144,7 +283,7 @@ def _format_expiry(expiry_ts: float | None) -> str:
 
 
 @router.get("/cookie/health")
-def cookie_health() -> JSONResponse:
+def cookie_health(request: Request) -> JSONResponse:
     """轻量级 Cookie 健康检查（< 300ms）
 
     供状态栏用户头像悬浮面板调用，纯文件读取无网络请求，
@@ -152,22 +291,28 @@ def cookie_health() -> JSONResponse:
 
     与 /api/anticrawl/health 的区别：
     - /anticrawl/health：重量级检查（含浏览器访问、API 探测），耗时数秒
-    - /cookie/health：仅读取 cookies.json 文件，毫秒级返回
+    - /cookie/health：仅读取 cookies_{user_id}.json 文件，毫秒级返回
+
+    多用户场景：从 xh_token 识别当前会话用户，按 user_id 读取对应 cookie 文件，
+    避免硬编码 default 导致多用户登录后状态栏显示"无 Cookie"。
     """
     start_ts = time.time()
+    # 识别当前多用户会话（/api/auth/cookie/health 在 PUBLIC_PREFIXES 中）
+    current_uid = _resolve_current_user_id(request) or "default"
+
     store = get_cookie_store()
-    store.invalidate_cache()
+    store.invalidate_cache(current_uid)
 
     # 完整性检查：返回 (is_valid, reason)
-    is_valid, reason = store.validate_cookies_with_expiry(user_id="default")
+    is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
     # 摘要信息：cookie_count / exported_at / method / key_cookies_found
-    info = store.get_cookie_info(user_id="default")
+    info = store.get_cookie_info(user_id=current_uid)
     # 最早过期时间戳
-    expiry_ts = store.get_cookie_expiry(user_id="default")
+    expiry_ts = store.get_cookie_expiry(user_id=current_uid)
 
     # 分层状态：基于 Cookie 名称判断 identity/session/tracking 三层是否齐全
     # 为什么直接读 JSON 而非调 CookieRotator：避免引入 login_orchestrator 的副作用
-    data = store._read_json(user_id="default")
+    data = store._read_json(user_id=current_uid)
     names = {c.get("name", "") for c in (data or {}).get("cookies", [])} if data else set()
     layers_status = {
         "identity": bool({"unb", "cookie2", "sgcookie", "t", "_tb_token_", "lg2"} & names),

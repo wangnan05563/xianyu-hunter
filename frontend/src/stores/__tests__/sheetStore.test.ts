@@ -58,10 +58,13 @@ beforeEach(() => {
       doubleClickInterval: 350,
       thumbnailMode: false,
       thumbnailTooltipEnabled: true,
+      circularReplaceEnabled: false,
     },
     isMobile: false,
     hydrated: false,
     _navigator: navigatorFn,
+    // 回收栈独立于 sheets，必须显式重置，否则前一轮循环替换项会泄漏到本轮
+    replacedHistory: [],
   })
 })
 
@@ -141,6 +144,141 @@ describe('sheetStore', () => {
         expect(r.ok).toBe(true)
       }
       expect(useSheetStore.getState().sheets).toHaveLength(1)
+    })
+
+    describe('循环替换（circularReplaceEnabled）', () => {
+      // 循环替换依赖 Date.now() 用于 openedAt 与 replacedAt
+      // 用 Date.now spy 控制时间，避免依赖不可预测的递增
+      let nowSpy: ReturnType<typeof vi.spyOn>
+      let nowValue: number
+
+      beforeEach(() => {
+        nowValue = 1_000_000
+        nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowValue)
+      })
+      afterEach(() => {
+        nowSpy.mockRestore()
+      })
+
+      // 工具：填充到上限（按时间顺序让 openedAt 严格递增，便于断言最旧）
+      function fillToMax(max: number) {
+        for (let i = 0; i < max; i++) {
+          // 推进时间确保 openedAt 严格递增
+          nowValue += 10
+          useSheetStore.getState().openSheet(`/tasks/${i}`)
+        }
+        expect(useSheetStore.getState().sheets).toHaveLength(max)
+      }
+
+      it('circularReplaceEnabled=true 时达到上限自动淘汰最旧非激活 sheet', () => {
+        useSheetStore.getState().setPreferences({ maxSheets: 3, circularReplaceEnabled: true })
+        fillToMax(3)
+        // sheets 按 openedAt 升序：[/tasks/0, /tasks/1, /tasks/2]
+        // 当前激活是 /tasks/2（最后开的）
+        const oldActiveId = useSheetStore.getState().activeId
+
+        const result = useSheetStore.getState().openSheet('/')
+        // 返回 ok + replacedSheet
+        expect(result.ok).toBe(true)
+        expect(result.replacedSheet).toBeDefined()
+        expect(result.replacedSheet?.path).toBe('/tasks/0')
+        // 栈仍为 3，新 sheet 是 /
+        const sheets = useSheetStore.getState().sheets
+        expect(sheets).toHaveLength(3)
+        expect(sheets.find((s) => s.path === '/tasks/0')).toBeUndefined()
+        expect(sheets.find((s) => s.path === '/')).toBeDefined()
+        // 激活的 sheet（/tasks/2）应保留（保护激活 sheet）
+        expect(sheets.find((s) => s.id === oldActiveId)).toBeDefined()
+        // 新的 activeId 指向新 sheet
+        expect(useSheetStore.getState().activeId).toBe(useSheetStore.getState().sheets.find((s) => s.path === '/')?.id)
+        // 回收栈应包含被淘汰的项
+        expect(useSheetStore.getState().replacedHistory[0].path).toBe('/tasks/0')
+      })
+
+      it('circularReplaceEnabled=false（默认）仍返回 limit（保持向后兼容）', () => {
+        useSheetStore.getState().setPreferences({ maxSheets: 3, circularReplaceEnabled: false })
+        fillToMax(3)
+        const result = useSheetStore.getState().openSheet('/')
+        expect(result).toEqual({ ok: false, reason: 'limit' })
+        // replacedHistory 不应变化
+        expect(useSheetStore.getState().replacedHistory).toHaveLength(0)
+      })
+
+      it('保护 activeId：非激活 sheet 中按 openedAt 升序选最旧', () => {
+        useSheetStore.getState().setPreferences({ maxSheets: 3, circularReplaceEnabled: true })
+        // 1) 开 3 个（按时间顺序：0, 1, 2；激活为 2）
+        fillToMax(3)
+        // 2) 激活 0（最早的），此时 0 是 activeId，1 和 2 是非激活
+        const firstId = useSheetStore.getState().sheets.find((s) => s.path === '/tasks/0')!.id
+        useSheetStore.getState().activateSheet(firstId)
+        // 此时非激活的是 /tasks/1 (openedAt=中间) 和 /tasks/2 (openedAt=最新)
+        // 循环替换应淘汰非激活中最旧的 /tasks/1，而不是 activeId 指向的 /tasks/0
+        nowValue += 10
+        const result = useSheetStore.getState().openSheet('/')
+        expect(result.replacedSheet?.path).toBe('/tasks/1')
+        // 激活的 /tasks/0 应保留
+        const sheets = useSheetStore.getState().sheets
+        expect(sheets.find((s) => s.path === '/tasks/0')).toBeDefined()
+      })
+
+      it('极端情况：所有 sheet 都是激活态时退回全体 openedAt 升序', () => {
+        // 模拟 maxSheets=1 + 唯一 sheet 是 activeId
+        useSheetStore.getState().setPreferences({ maxSheets: 1, circularReplaceEnabled: true })
+        nowValue += 10
+        useSheetStore.getState().openSheet('/tasks/0')
+        expect(useSheetStore.getState().sheets).toHaveLength(1)
+        expect(useSheetStore.getState().activeId).not.toBeNull()
+        // 此时没有"非激活" sheet，应退回到全体替换
+        nowValue += 10
+        const result = useSheetStore.getState().openSheet('/')
+        expect(result.ok).toBe(true)
+        expect(result.replacedSheet?.path).toBe('/tasks/0')
+        expect(useSheetStore.getState().sheets).toHaveLength(1)
+        expect(useSheetStore.getState().sheets[0].path).toBe('/')
+      })
+
+      it('循环替换 FIFO 截断回收栈到最多 5 条', () => {
+        useSheetStore.getState().setPreferences({ maxSheets: 2, circularReplaceEnabled: true })
+        // 连续替换 7 次，每次淘汰最旧的
+        // 注：每次新开 sheet 时它的 openedAt 是当前 nowValue，淘汰时按当前栈的 openedAt 升序选
+        for (let i = 0; i < 7; i++) {
+          nowValue += 10
+          const r = useSheetStore.getState().openSheet(`/tasks/${i}`)
+          expect(r.ok).toBe(true)
+        }
+        // 回收栈最多 5 条
+        expect(useSheetStore.getState().replacedHistory).toHaveLength(5)
+        // 栈仍为 2
+        expect(useSheetStore.getState().sheets).toHaveLength(2)
+      })
+
+      it('path 已存在时仅激活，不触发 replacedSheet', () => {
+        useSheetStore.getState().setPreferences({ maxSheets: 3, circularReplaceEnabled: true })
+        fillToMax(3)
+        // 第一个 sheet 的 path 已存在，再次 openSheet 不应替换
+        const result = useSheetStore.getState().openSheet('/tasks/0')
+        expect(result).toEqual({ ok: true })
+        expect(result.replacedSheet).toBeUndefined()
+        // sheets 数量不变
+        expect(useSheetStore.getState().sheets).toHaveLength(3)
+        // replacedHistory 不变
+        expect(useSheetStore.getState().replacedHistory).toHaveLength(0)
+      })
+
+      it('移动端模式不受 circularReplaceEnabled 影响', () => {
+        useSheetStore.setState({ isMobile: true })
+        useSheetStore.getState().setPreferences({ maxSheets: 5, circularReplaceEnabled: true })
+        // 移动端单 sheet 替换：连续开多个始终 1 个，不进回收栈
+        for (let i = 0; i < 3; i++) {
+          nowValue += 10
+          const r = useSheetStore.getState().openSheet(`/tasks/${i}`)
+          expect(r.ok).toBe(true)
+          // 移动端不进入循环替换分支
+          expect(r.replacedSheet).toBeUndefined()
+        }
+        expect(useSheetStore.getState().sheets).toHaveLength(1)
+        expect(useSheetStore.getState().replacedHistory).toHaveLength(0)
+      })
     })
   })
 
@@ -389,6 +527,163 @@ describe('sheetStore', () => {
       useSheetStore.getState().setNavigator(fn)
       useSheetStore.getState().openSheet('/tasks')
       expect(fn).toHaveBeenCalledWith('/tasks')
+    })
+  })
+
+  describe('restoreReplaced', () => {
+    // 同样依赖 Date.now 控制时间
+    let nowSpy: ReturnType<typeof vi.spyOn>
+    let nowValue: number
+
+    beforeEach(() => {
+      nowValue = 1_000_000
+      nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowValue)
+    })
+    afterEach(() => {
+      nowSpy.mockRestore()
+    })
+
+    // 工具：先开 2 个 sheet，然后开第 3 个触发循环替换
+    function setupWithReplacedItem() {
+      useSheetStore.getState().setPreferences({ maxSheets: 2, circularReplaceEnabled: true })
+      nowValue += 10
+      useSheetStore.getState().openSheet('/tasks/0')
+      nowValue += 10
+      useSheetStore.getState().openSheet('/tasks/1')
+      nowValue += 10
+      const result = useSheetStore.getState().openSheet('/')
+      // /tasks/0 被淘汰
+      const replaced = result.replacedSheet!
+      return { replaced }
+    }
+
+    it('从回收栈恢复被替换的 sheet，生成新 id，保持原 openedAt', () => {
+      const { replaced } = setupWithReplacedItem()
+      navigatorFn.mockClear()
+      const beforeCount = useSheetStore.getState().sheets.length
+
+      const result = useSheetStore.getState().restoreReplaced(replaced.id)
+      expect(result.ok).toBe(true)
+      const state = useSheetStore.getState()
+      // 栈数量 +1
+      expect(state.sheets).toHaveLength(beforeCount + 1)
+      // 找到恢复的 sheet（path 是 /tasks/0）
+      const restored = state.sheets.find((s) => s.path === '/tasks/0')!
+      expect(restored).toBeDefined()
+      // id 是新生成的（不与原 id 相同）
+      expect(restored.id).not.toBe(replaced.id)
+      // openedAt 保持原 replacedAt（保持时间顺序）
+      expect(restored.openedAt).toBe(replaced.replacedAt)
+      // activeId 指向新 sheet
+      expect(state.activeId).toBe(restored.id)
+      // 回收栈移除
+      expect(state.replacedHistory.find((r) => r.id === replaced.id)).toBeUndefined()
+      // navigate 到恢复的 path
+      expect(navigatorFn).toHaveBeenCalledWith('/tasks/0')
+    })
+
+    it('id 不存在时返回 not_found', () => {
+      const result = useSheetStore.getState().restoreReplaced('nonexistent-id')
+      expect(result).toEqual({ ok: false, reason: 'not_found' })
+    })
+
+    it('栈满时恢复仍允许（撤销动作不应被拒绝，可能临时超 maxSheets）', () => {
+      useSheetStore.getState().setPreferences({ maxSheets: 2, circularReplaceEnabled: true })
+      nowValue += 10
+      useSheetStore.getState().openSheet('/tasks/0')
+      nowValue += 10
+      useSheetStore.getState().openSheet('/tasks/1')
+      nowValue += 10
+      const r1 = useSheetStore.getState().openSheet('/')
+      // 此时栈满（2 个），回收栈有 1 个被淘汰项
+      // 恢复（撤销）应直接成功，不应循环替换
+      const result = useSheetStore.getState().restoreReplaced(r1.replacedSheet!.id)
+      expect(result.ok).toBe(true)
+      // sheets 临时为 3（超 maxSheets=2），下次 openSheet 会再触发循环替换平衡
+      expect(useSheetStore.getState().sheets).toHaveLength(3)
+      // 回收栈移除该条
+      expect(useSheetStore.getState().replacedHistory).toHaveLength(0)
+    })
+
+    it('被恢复的 path 已重新存在于栈时：仅激活现有那个 + 从回收栈移除', () => {
+      const { replaced } = setupWithReplacedItem()
+      // 此时栈中是 /tasks/1, /，已满（maxSheets=2）
+      // 先关闭一项腾出空间，避免重新 openSheet 触发循环替换污染回收栈
+      const homeId = useSheetStore.getState().sheets.find((s) => s.path === '/')!.id
+      useSheetStore.getState().closeSheet(homeId)
+      expect(useSheetStore.getState().sheets).toHaveLength(1)
+      // 重新打开 /tasks/0（不触发循环替换，因为未达上限）
+      useSheetStore.getState().openSheet('/tasks/0')
+      expect(useSheetStore.getState().sheets).toHaveLength(2)
+      expect(useSheetStore.getState().sheets.find((s) => s.path === '/tasks/0')).toBeDefined()
+      // 回收栈不变（仍是 setup 时的 1 项）
+      expect(useSheetStore.getState().replacedHistory).toHaveLength(1)
+      // 现在调用 restoreReplaced：应只激活现有的 /tasks/0，不重复创建
+      const result = useSheetStore.getState().restoreReplaced(replaced.id)
+      expect(result.ok).toBe(true)
+      // sheets 仍为 2（/tasks/0 + /tasks/1）
+      expect(useSheetStore.getState().sheets).toHaveLength(2)
+      // activeId 是 /tasks/0 的 id
+      const existing = useSheetStore.getState().sheets.find((s) => s.path === '/tasks/0')!
+      expect(useSheetStore.getState().activeId).toBe(existing.id)
+      // 回收栈移除
+      expect(useSheetStore.getState().replacedHistory).toHaveLength(0)
+    })
+
+    it('registry 中已不存在的 path 返回 not_found', () => {
+      const { replaced } = setupWithReplacedItem()
+      // 模拟 path 已不在 registry：手动注入一个"幽灵"项
+      const ghostId = 'ghost-id'
+      useSheetStore.setState({
+        replacedHistory: [
+          { id: ghostId, path: '/removed-path', title: '已删除', replacedAt: Date.now() },
+          ...useSheetStore.getState().replacedHistory,
+        ],
+      })
+      const result = useSheetStore.getState().restoreReplaced(ghostId)
+      // 找不到 meta → not_found
+      expect(result).toEqual({ ok: false, reason: 'not_found' })
+    })
+  })
+
+  describe('clearReplacedHistory', () => {
+    it('清空回收栈', () => {
+      useSheetStore.getState().setPreferences({ maxSheets: 2, circularReplaceEnabled: true })
+      useSheetStore.getState().openSheet('/tasks/0')
+      useSheetStore.getState().openSheet('/tasks/1')
+      const r = useSheetStore.getState().openSheet('/')
+      expect(useSheetStore.getState().replacedHistory).toHaveLength(1)
+
+      useSheetStore.getState().clearReplacedHistory()
+      expect(useSheetStore.getState().replacedHistory).toHaveLength(0)
+      // 验证 r 仍可访问（变量提示）
+      expect(r.replacedSheet).toBeDefined()
+    })
+  })
+
+  describe('hydrate 兼容 circularReplaceEnabled 字段', () => {
+    it('旧版本持久化数据缺失 circularReplaceEnabled 时回退默认 false', () => {
+      // 模拟旧版本偏好：仅含 maxSheets（无 circularReplaceEnabled）
+      memoryStore.set('xh.sheets.preferences', JSON.stringify({
+        __v: 1,
+        data: { maxSheets: 4, enableAnimation: true, minimizeInsteadOfClose: false },
+      }))
+      useSheetStore.getState().hydrate()
+      expect(useSheetStore.getState().preferences.circularReplaceEnabled).toBe(false)
+    })
+
+    it('新版本持久化数据保留 circularReplaceEnabled=true', () => {
+      memoryStore.set('xh.sheets.preferences', JSON.stringify({
+        __v: 1,
+        data: {
+          maxSheets: 5,
+          enableAnimation: true,
+          minimizeInsteadOfClose: false,
+          circularReplaceEnabled: true,
+        },
+      }))
+      useSheetStore.getState().hydrate()
+      expect(useSheetStore.getState().preferences.circularReplaceEnabled).toBe(true)
     })
   })
 })

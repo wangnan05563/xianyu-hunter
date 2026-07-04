@@ -226,7 +226,6 @@ class Buyer:
             except Exception:
                 pass
 
-            # 阶段一已售检测：导航后、点击立即购买前，先检测是否已售
             # 为什么在此处检测：导航完成页面已渲染，此时检测最准；
             # 已售商品不应继续进入抢单流程，避免无效点击
             if await self._detect_sold(page):  # type: ignore[arg-type]
@@ -249,7 +248,6 @@ class Buyer:
             logger.info(f"[Buyer] 步骤3/4 点击提交订单/确认购买 item={item_id}")
             confirmed = await self._click_submit_order(page)  # type: ignore[arg-type]
             if not confirmed:
-                # 阶段二回退检测：提交订单按钮找不到时，回退检测是否因商品已售
                 # 为什么需要回退：部分商品渲染时机不同，阶段一可能未命中
                 if await self._detect_sold(page):  # type: ignore[arg-type]
                     self._mark_item_sold(item_id)
@@ -380,6 +378,89 @@ class Buyer:
             )
         raise ButtonNotFoundError("点击「立即购买」后订单确认页未加载完成")
 
+    async def _check_login_redirect(self, page: Page) -> None:
+        """检测登录态失效并在失效时抛 BuyerError
+
+        放在每轮重试开头而非 _is_out_of_stock 之前：登录态失效是最高频失败原因，
+        先检测可在毫秒级返回准确错误，而非等 4 个 selector 各超时 5 秒
+        """
+        try:
+            current_url = page.url or ""
+        except Exception:  # noqa: BLE001
+            current_url = ""
+        if self._is_login_url(current_url):
+            raise BuyerError(
+                "闲鱼未登录或登录已过期，请先在「Cookie 注入」页面重新登录闲鱼"
+            )
+
+    async def _try_click_buy_now_by_selectors(
+        self, page: Page, item_id: str
+    ) -> tuple[bool, bool]:
+        """遍历 buy_now_candidates selectors 尝试点击
+
+        返回 (clicked_any, order_page_reached)：
+        - order_page_reached=True 表示已进入订单页，调用方应立即返回
+        - clicked_any=True 表示本轮至少点中过一个候选
+        """
+        clicked_any = False
+        for selector in self._buy_now_candidates():
+            try:
+                loc = page.locator(selector).first
+                if await self._locator_count(loc, selector, timeout=0.8) <= 0:
+                    continue
+                await self._locator_wait_visible(loc, selector, timeout=0.8)
+                await self._locator_click(loc, selector, timeout=1.5)
+                clicked_any = True
+                logger.info(f"[Buyer] 已点击立即购买候选 selector={selector}")
+                if await self._wait_for_order_page(
+                    page,
+                    item_id=item_id,
+                    timeout=0.25,
+                    raise_on_timeout=False,
+                    wait_for_networkidle=False,
+                ):
+                    return clicked_any, True
+                logger.warning(f"[Buyer] 点击候选后未进入订单确认页，继续尝试 selector={selector}")
+            except PlaywrightTimeout:
+                continue
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[Buyer] 点击立即购买候选失败 selector={selector}: {e}")
+                continue
+        return clicked_any, False
+
+    async def _try_click_buy_now_by_get_by_text(
+        self, page: Page, item_id: str
+    ) -> tuple[bool, bool]:
+        """用 get_by_text 精确点文字中心兜底点击立即购买
+
+        Playwright 的 text selector 可能命中外层容器，get_by_text 能定位到最小文本节点。
+        返回 (clicked_any, order_page_reached)，语义同 _try_click_buy_now_by_selectors。
+        """
+        if not hasattr(page, "get_by_text"):
+            return False, False
+        try:
+            text_loc = page.get_by_text("立即购买", exact=True).last
+            if await self._locator_count(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=0.8) <= 0:
+                raise PlaywrightTimeout("get_by_text not found")
+            await self._locator_wait_visible(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=0.8)
+            await self._locator_click(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=1.5)
+            logger.info("[Buyer] 已通过 get_by_text 精确点击立即购买")
+            if await self._wait_for_order_page(
+                page,
+                item_id=item_id,
+                timeout=0.25,
+                raise_on_timeout=False,
+                wait_for_networkidle=False,
+            ):
+                return True, True
+            logger.warning("[Buyer] get_by_text 点击后未进入订单确认页")
+            return True, False
+        except PlaywrightTimeout:
+            return False, False
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[Buyer] get_by_text 点击立即购买失败: {e}")
+            return False, False
+
     async def _click_buy_now(self, page: Page, item_id: str = "") -> bool:
         """点击"立即购买"，重试 click_retry_times 次
 
@@ -389,68 +470,24 @@ class Buyer:
         clicked_any = False
         for attempt in range(1, self.config.click_retry_times + 1):
             # 登录页跳转检测：每轮重试开始时检查 URL
-            # 为什么放在 _is_out_of_stock 之前：登录态失效是最高频的失败原因，
-            # 先检测可在毫秒级返回准确错误，而非等 4 个 selector 各超时 5 秒
-            try:
-                current_url = page.url or ""
-            except Exception:  # noqa: BLE001
-                current_url = ""
-            if self._is_login_url(current_url):
-                raise BuyerError(
-                    "闲鱼未登录或登录已过期，请先在「Cookie 注入」页面重新登录闲鱼"
-                )
+            await self._check_login_redirect(page)
             try:
                 # 先判断是否下架
                 if await self._is_out_of_stock(page):
-                    raise OutOfStockError(f"商品已下架/无库存")
+                    raise OutOfStockError("商品已下架/无库存")
 
-                for selector in self._buy_now_candidates():
-                    try:
-                        loc = page.locator(selector).first
-                        if await self._locator_count(loc, selector, timeout=0.8) <= 0:
-                            continue
-                        await self._locator_wait_visible(loc, selector, timeout=0.8)
-                        await self._locator_click(loc, selector, timeout=1.5)
-                        clicked_any = True
-                        logger.info(f"[Buyer] 已点击立即购买候选 selector={selector}")
-                        if await self._wait_for_order_page(
-                            page,
-                            item_id=item_id,
-                            timeout=0.25,
-                            raise_on_timeout=False,
-                            wait_for_networkidle=False,
-                        ):
-                            return True
-                        logger.warning(f"[Buyer] 点击候选后未进入订单确认页，继续尝试 selector={selector}")
-                    except PlaywrightTimeout:
-                        continue
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug(f"[Buyer] 点击立即购买候选失败 selector={selector}: {e}")
-                        continue
+                sel_clicked, sel_reached = await self._try_click_buy_now_by_selectors(page, item_id)
+                if sel_reached:
+                    return True
+                if sel_clicked:
+                    clicked_any = True
 
                 # Playwright 的 text selector 仍可能命中外层容器；再用 get_by_text 精确点文字中心。
-                try:
-                    if hasattr(page, "get_by_text"):
-                        text_loc = page.get_by_text("立即购买", exact=True).last
-                        if await self._locator_count(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=0.8) <= 0:
-                            raise PlaywrightTimeout("get_by_text not found")
-                        await self._locator_wait_visible(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=0.8)
-                        await self._locator_click(text_loc, _GET_BY_TEXT_BUY_NOW_LABEL, timeout=1.5)
-                        clicked_any = True
-                        logger.info("[Buyer] 已通过 get_by_text 精确点击立即购买")
-                        if await self._wait_for_order_page(
-                            page,
-                            item_id=item_id,
-                            timeout=0.25,
-                            raise_on_timeout=False,
-                            wait_for_networkidle=False,
-                        ):
-                            return True
-                        logger.warning("[Buyer] get_by_text 点击后未进入订单确认页")
-                except PlaywrightTimeout:
-                    pass
-                except Exception as e:  # noqa: BLE001
-                    logger.debug(f"[Buyer] get_by_text 点击立即购买失败: {e}")
+                txt_clicked, txt_reached = await self._try_click_buy_now_by_get_by_text(page, item_id)
+                if txt_reached:
+                    return True
+                if txt_clicked:
+                    clicked_any = True
 
                 if clicked_any:
                     # 已经点到过候选按钮，后续由步骤 2.5 给出「未进入确认页」的准确错误。
@@ -466,8 +503,12 @@ class Buyer:
                 # 本轮没点中，间隔后重试
                 if attempt < self.config.click_retry_times:
                     await asyncio.sleep(self.config.click_retry_interval)
-            # S5713: OutOfStockError 是 BuyerError 的子类，仅保留父类
+            # 为什么用 except+raise 而非去掉整个 except：内层 for 循环有
+            # except PlaywrightTimeout / except Exception 分支，若去掉此 except，
+            # BuyerError 会被内层 except Exception 捕获并 continue，导致抢单错误被吞掉
             except BuyerError:
+                # 重新抛出：避免被内层 except Exception 捕获并 continue，导致抢单错误被吞掉
+                logger.debug("[Buyer] BuyerError 重新抛出，绕过内层 except Exception")
                 raise
         return False
 

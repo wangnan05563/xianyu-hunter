@@ -93,6 +93,139 @@ def _build_buckets(prices: list[float]) -> list[dict[str, Any]]:
     return buckets
 
 
+def _resolve_histogram_scope(conn, task_id: str | None) -> tuple[dict, dict] | None:
+    """解析直方图查询范围与任务定价范围
+
+    task_id 为空或 "all" 时返回全任务 scope；非空且任务存在时返回任务 scope + 定价范围；
+    任务不存在时返回 None，由调用方构造"任务不存在"的空响应。
+    """
+    scope: dict[str, Any] = {"mode": "all", "task_id": None, "task_name": None, "keyword": None, "label": "全部任务"}
+    # 任务定价范围（min_price/max_price），用于校准分桶范围与前端标线展示
+    task_price_range: dict[str, float | None] = {"min_price": None, "max_price": None}
+    if not (task_id and task_id != "all"):
+        return scope, task_price_range
+
+    row = conn.execute(
+        select(TaskRow.name, TaskRow.keyword, TaskRow.min_price, TaskRow.max_price)
+        .where(TaskRow.id == task_id)
+        .limit(1)
+    ).first()
+    if not row:
+        return None
+    name, kw, t_min, t_max = row[0], row[1], row[2], row[3]
+    scope = {
+        "mode": "task",
+        "task_id": task_id,
+        "task_name": name,
+        "keyword": kw,
+        "label": f"{name or kw or task_id}（{task_id}）" if (name or kw) else task_id,
+    }
+    task_price_range = {
+        "min_price": float(t_min) if t_min is not None else None,
+        "max_price": float(t_max) if t_max is not None else None,
+    }
+    return scope, task_price_range
+
+
+def _load_histogram_samples(conn, scope: dict, task_id: str | None) -> tuple[list[float], list[tuple]]:
+    """加载 prices 与 ts_rows，二者必须同源（按 task_id 过滤）
+
+    P-09-30 关键修复：修复前 ts_rows 为全表查询，导致选定任务时
+    yesterday/last7d/last30d 基线混入其它任务价格，时间对比指标完全失真。
+    """
+    if scope["mode"] == "task":
+        # task_id 有 ix_items_task_first_seen 索引，查询高效，但仍加 LIMIT 防止极端数据量
+        rows = conn.execute(
+            select(ItemRow.price).where(ItemRow.task_id == task_id).limit(10000)
+        ).all()
+    else:
+        # 全表查询必须有 LIMIT，防止大表撑爆内存
+        rows = conn.execute(select(ItemRow.price).limit(10000)).all()
+    prices = [float(r[0]) for r in rows if r and r[0] is not None]
+
+    ts_query = select(ItemRow.price, ItemRow.publish_time)
+    if scope["mode"] == "task":
+        ts_query = ts_query.where(ItemRow.task_id == task_id)
+    ts_rows = conn.execute(
+        ts_query.order_by(ItemRow.publish_time.desc()).limit(2000)
+    ).all()
+    all_with_ts = [(r[1], float(r[0])) for r in ts_rows if r and r[0] is not None and r[1]]
+    return prices, all_with_ts
+
+
+def _build_empty_histogram_summary(task_price_range: dict) -> dict[str, Any]:
+    """空样本时的 summary 占位，保持字段完整避免前端 undefined"""
+    return {
+        "count": 0, "min": 0, "max": 0, "mean": 0, "median": 0,
+        "p25": 0, "p75": 0,
+        "compare": {"yesterday": 0, "last7d": 0, "last30d": 0, "diff_pct": 0},
+        "task_price_range": task_price_range,
+    }
+
+
+def _build_histogram_summary(
+    sorted_p: list, prices: list, mean_val: float, median_val: float,
+    p25: float, p75: float, compare: dict, task_price_range: dict,
+) -> dict[str, Any]:
+    """非空样本的 summary，含真实 min/max 与分位数"""
+    return {
+        "count": len(prices),
+        # 真实最小/最大值（不是分桶下/上界），让前端能显示真实价格范围
+        "min": round(sorted_p[0], 2),
+        "max": round(sorted_p[-1], 2),
+        "mean": mean_val,
+        "median": median_val,
+        "p25": p25,
+        "p75": p75,
+        "compare": compare,
+        "task_price_range": task_price_range,
+    }
+
+
+def _compute_auto_bins_bounds(sorted_p: list, task_price_range: dict) -> tuple[float, float]:
+    """bins=20 时的分桶边界 [lo, hi]
+
+    P-09-30: 分桶范围校准——百分位裁剪 + 任务定价范围融合
+    旧逻辑用 min(prices)/max(prices)，单个异常高价（如 5000）会把范围拉到 5000，
+    而任务实际定价范围可能只有 100~1000，导致前 2 个桶装着大部分商品、其余全为 0。
+    新逻辑：
+      1. 用 P5/P95 裁剪极端值，分桶范围聚焦主要分布；
+      2. 融合任务定价范围 (min_price/max_price)，确保分桶范围覆盖定价区间；
+      3. 首尾桶吸收范围外的极端值，保证商品计数不丢失。
+    """
+    p5 = _percentile(sorted_p, 0.05)
+    p95 = _percentile(sorted_p, 0.95)
+    t_min = task_price_range["min_price"]
+    t_max = task_price_range["max_price"]
+    # 下界取 P5 与任务定价下界的较小值，确保覆盖任务定价范围
+    lo = min(p5, t_min) if t_min is not None else p5
+    # 上界取 P95 与任务定价上界的较大值，确保覆盖任务定价范围
+    hi = max(p95, t_max) if t_max is not None else p95
+    lo = max(0.0, lo)
+    if hi <= lo:
+        hi = lo + 1
+    return lo, hi
+
+
+def _build_auto_bins(prices: list, sorted_p: list, task_price_range: dict) -> list[dict[str, Any]]:
+    """bins=20 的分桶：首尾桶吸收范围外的极端值，保证商品计数不丢失"""
+    lo, hi = _compute_auto_bins_bounds(sorted_p, task_price_range)
+    step = (hi - lo) / 20
+    result = []
+    for i in range(20):
+        b_lo = lo + i * step
+        b_hi = b_lo + step if i < 19 else hi + 1
+        # 首桶吸收所有低于 b_lo 的极端低价；尾桶吸收所有 >= b_lo 的极端高价
+        if i == 0:
+            cnt = sum(1 for p in prices if p < b_hi)
+        elif i == 19:
+            cnt = sum(1 for p in prices if b_lo <= p)
+        else:
+            cnt = sum(1 for p in prices if b_lo <= p < b_hi)
+        result.append({"min": round(b_lo, 2), "max": round(b_hi, 2) if i < 19 else round(hi, 2), "count": cnt})
+    return result
+
+
 @router.get("/prices/histogram")
 def prices_histogram(
     bins: int = 0,
@@ -111,70 +244,24 @@ def prices_histogram(
     """
     engine = container.repo.engine
     with engine.connect() as conn:
-        scope: dict[str, Any] = {"mode": "all", "task_id": None, "task_name": None, "keyword": None, "label": "全部任务"}
-        # 任务定价范围（min_price/max_price），用于校准分桶范围与前端标线展示
-        task_price_range: dict[str, float | None] = {"min_price": None, "max_price": None}
-        if task_id and task_id != "all":
-            row = conn.execute(
-                select(TaskRow.name, TaskRow.keyword, TaskRow.min_price, TaskRow.max_price)
-                .where(TaskRow.id == task_id)
-                .limit(1)
-            ).first()
-            if row:
-                name, kw, t_min, t_max = row[0], row[1], row[2], row[3]
-                scope = {
-                    "mode": "task",
-                    "task_id": task_id,
-                    "task_name": name,
-                    "keyword": kw,
-                    "label": f"{name or kw or task_id}（{task_id}）" if (name or kw) else task_id,
-                }
-                task_price_range = {
-                    "min_price": float(t_min) if t_min is not None else None,
-                    "max_price": float(t_max) if t_max is not None else None,
-                }
-            else:
-                return {
-                    "bins": [],
-                    "summary": {
-                        "count": 0, "min": 0, "max": 0, "mean": 0, "median": 0,
-                        "p25": 0, "p75": 0,
-                        "compare": {"yesterday": 0, "last7d": 0, "last30d": 0, "diff_pct": 0},
-                        "task_price_range": task_price_range,
-                    },
-                    "scope": {**scope, "task_id": task_id, "label": f"任务 {task_id}（不存在）"},
-                    "mode": "fixed",
-                }
-
-        if scope["mode"] == "task":
-            # task_id 有 ix_items_task_first_seen 索引，查询高效，但仍加 LIMIT 防止极端数据量
-            rows = conn.execute(
-                select(ItemRow.price).where(ItemRow.task_id == task_id).limit(10000)
-            ).all()
-        else:
-            # 全表查询必须有 LIMIT，防止大表撑爆内存
-            rows = conn.execute(select(ItemRow.price).limit(10000)).all()
-        prices = [float(r[0]) for r in rows if r and r[0] is not None]
-
-        # P-09-30 关键修复：ts_rows 必须与 prices 同源，按 task_id 过滤
-        # 修复前为全表查询，导致选定任务时 yesterday/last7d/last30d 基线混入其它任务价格
-        ts_query = select(ItemRow.price, ItemRow.publish_time)
-        if scope["mode"] == "task":
-            ts_query = ts_query.where(ItemRow.task_id == task_id)
-        ts_rows = conn.execute(
-            ts_query.order_by(ItemRow.publish_time.desc()).limit(2000)
-        ).all()
-        all_with_ts = [(r[1], float(r[0])) for r in ts_rows if r and r[0] is not None and r[1]]
+        resolved = _resolve_histogram_scope(conn, task_id)
+        if resolved is None:
+            # 任务不存在：返回空响应，scope 标注"任务 {id}（不存在）"
+            scope: dict[str, Any] = {"mode": "all", "task_id": None, "task_name": None, "keyword": None, "label": "全部任务"}
+            task_price_range = {"min_price": None, "max_price": None}
+            return {
+                "bins": [],
+                "summary": _build_empty_histogram_summary(task_price_range),
+                "scope": {**scope, "task_id": task_id, "label": f"任务 {task_id}（不存在）"},
+                "mode": "fixed",
+            }
+        scope, task_price_range = resolved
+        prices, all_with_ts = _load_histogram_samples(conn, scope, task_id)
 
     if not prices:
         return {
             "bins": [],
-            "summary": {
-                "count": 0, "min": 0, "max": 0, "mean": 0, "median": 0,
-                "p25": 0, "p75": 0,
-                "compare": {"yesterday": 0, "last7d": 0, "last30d": 0, "diff_pct": 0},
-                "task_price_range": task_price_range,
-            },
+            "summary": _build_empty_histogram_summary(task_price_range),
             "scope": scope,
             "mode": "fixed",
         }
@@ -187,51 +274,11 @@ def prices_histogram(
     compare = _build_compare_means(all_with_ts)
 
     if bins == 20:
-        # P-09-30: 分桶范围校准——百分位裁剪 + 任务定价范围融合
-        # 旧逻辑用 min(prices)/max(prices)，单个异常高价（如 5000）会把范围拉到 5000，
-        # 而任务实际定价范围可能只有 100~1000，导致前 2 个桶装着大部分商品、其余全为 0。
-        # 新逻辑：
-        #   1. 用 P5/P95 裁剪极端值，分桶范围聚焦主要分布；
-        #   2. 融合任务定价范围 (min_price/max_price)，确保分桶范围覆盖定价区间；
-        #   3. 首尾桶吸收范围外的极端值，保证商品计数不丢失。
-        p5 = _percentile(sorted_p, 0.05)
-        p95 = _percentile(sorted_p, 0.95)
-        t_min = task_price_range["min_price"]
-        t_max = task_price_range["max_price"]
-        # 下界取 P5 与任务定价下界的较小值，确保覆盖任务定价范围
-        lo = min(p5, t_min) if t_min is not None else p5
-        # 上界取 P95 与任务定价上界的较大值，确保覆盖任务定价范围
-        hi = max(p95, t_max) if t_max is not None else p95
-        lo = max(0.0, lo)
-        if hi <= lo:
-            hi = lo + 1
-        step = (hi - lo) / 20
-        result = []
-        for i in range(20):
-            b_lo = lo + i * step
-            b_hi = b_lo + step if i < 19 else hi + 1
-            # 首桶吸收所有低于 b_lo 的极端低价；尾桶吸收所有 >= b_lo 的极端高价
-            if i == 0:
-                cnt = sum(1 for p in prices if p < b_hi)
-            elif i == 19:
-                cnt = sum(1 for p in prices if b_lo <= p)
-            else:
-                cnt = sum(1 for p in prices if b_lo <= p < b_hi)
-            result.append({"min": round(b_lo, 2), "max": round(b_hi, 2) if i < 19 else round(hi, 2), "count": cnt})
         return {
-            "bins": result,
-            "summary": {
-                "count": len(prices),
-                # 真实最小/最大值（不是分桶下/上界），让前端能显示真实价格范围
-                "min": round(sorted_p[0], 2),
-                "max": round(sorted_p[-1], 2),
-                "mean": mean_val,
-                "median": median_val,
-                "p25": p25,
-                "p75": p75,
-                "compare": compare,
-                "task_price_range": task_price_range,
-            },
+            "bins": _build_auto_bins(prices, sorted_p, task_price_range),
+            "summary": _build_histogram_summary(
+                sorted_p, prices, mean_val, median_val, p25, p75, compare, task_price_range
+            ),
             "scope": scope,
             "mode": "auto",
         }
@@ -239,17 +286,9 @@ def prices_histogram(
     bins_data = _build_buckets(prices)
     return {
         "bins": bins_data,
-        "summary": {
-            "count": len(prices),
-            "min": round(sorted_p[0], 2),
-            "max": round(sorted_p[-1], 2),
-            "mean": mean_val,
-            "median": median_val,
-            "p25": p25,
-            "p75": p75,
-            "compare": compare,
-            "task_price_range": task_price_range,
-        },
+        "summary": _build_histogram_summary(
+            sorted_p, prices, mean_val, median_val, p25, p75, compare, task_price_range
+        ),
         "scope": scope,
         "mode": "fixed",
     }

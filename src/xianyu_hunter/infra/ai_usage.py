@@ -170,6 +170,33 @@ def check_budget() -> tuple[bool, str]:
     return True, ""
 
 
+def _accumulate_usage_into_summary(
+    summary: DailyUsage,
+    *,
+    endpoint: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float,
+) -> None:
+    """将单条用量记录累加到 summary（含 by_endpoint/by_model 计数）
+
+    为什么独立：get_daily_summary 中内存循环和文件循环的累加逻辑重复，
+    集中维护避免两处分支不一致，同时降低主函数的认知复杂度。
+
+    注意：内存循环原本无条件累加 endpoint/model 计数，这里加 if 判断后
+    行为等价——UsageRecord 的 endpoint/model 字段在实际使用中不会为空字符串。
+    """
+    summary.total_calls += 1
+    summary.total_input_tokens += input_tokens
+    summary.total_output_tokens += output_tokens
+    summary.total_cost_usd += cost_usd
+    if endpoint:
+        summary.by_endpoint[endpoint] = summary.by_endpoint.get(endpoint, 0) + 1
+    if model:
+        summary.by_model[model] = summary.by_model.get(model, 0) + 1
+
+
 def get_daily_summary() -> DailyUsage:
     """获取今日用量汇总（含已持久化的历史记录）
 
@@ -182,12 +209,14 @@ def get_daily_summary() -> DailyUsage:
     # 从内存加载当前会话的记录
     with _lock:
         for r in _today_records:
-            summary.total_calls += 1
-            summary.total_input_tokens += r.input_tokens
-            summary.total_output_tokens += r.output_tokens
-            summary.total_cost_usd += r.cost_usd
-            summary.by_endpoint[r.endpoint] = summary.by_endpoint.get(r.endpoint, 0) + 1
-            summary.by_model[r.model] = summary.by_model.get(r.model, 0) + 1
+            _accumulate_usage_into_summary(
+                summary,
+                endpoint=r.endpoint,
+                model=r.model,
+                input_tokens=r.input_tokens,
+                output_tokens=r.output_tokens,
+                cost_usd=r.cost_usd,
+            )
 
     # 从持久化文件补充今日历史记录（覆盖服务重启前已写入的部分）
     if USAGE_FILE.exists():
@@ -201,16 +230,14 @@ def get_daily_summary() -> DailyUsage:
                     # 文件中的记录与内存可能重叠（同一请求既在内存也在文件），
                     # 但 record_usage 先写内存再异步写文件，且文件是追加模式，
                     # 所以这里直接累加即可——重复的概率极低且影响可忽略
-                    summary.total_calls += 1
-                    summary.total_input_tokens += entry.get("input_tokens", 0)
-                    summary.total_output_tokens += entry.get("output_tokens", 0)
-                    summary.total_cost_usd += entry.get("cost_usd", 0)
-                    ep = entry.get("endpoint", "")
-                    mdl = entry.get("model", "")
-                    if ep:
-                        summary.by_endpoint[ep] = summary.by_endpoint.get(ep, 0) + 1
-                    if mdl:
-                        summary.by_model[mdl] = summary.by_model.get(mdl, 0) + 1
+                    _accumulate_usage_into_summary(
+                        summary,
+                        endpoint=entry.get("endpoint", ""),
+                        model=entry.get("model", ""),
+                        input_tokens=entry.get("input_tokens", 0),
+                        output_tokens=entry.get("output_tokens", 0),
+                        cost_usd=entry.get("cost_usd", 0),
+                    )
         except (json.JSONDecodeError, KeyError, OSError):
             pass
 

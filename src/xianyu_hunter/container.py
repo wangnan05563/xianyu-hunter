@@ -56,6 +56,85 @@ def _parse_json_field(raw: Any, field_name: str) -> dict | None:
     return None
 
 
+# 仅用于时间线/DB 持久化的事件类型集合，不通过 NotifierHub 推送
+# 为什么定义为模块级常量：避免 wire_notifier 内联大集合推高认知复杂度，
+# 同时便于在测试中通过模块级 patch 替换
+_DB_ONLY_EVENTS: frozenset[str] = frozenset({
+    "TASK_STOPPED",
+    "TASK_SEARCH_DONE",
+    "ITEM_FOUND",
+    "EVAL_SCORED",
+    "WAF_BLOCKED",
+    "AUTH_EXPIRED",
+    "SYSTEM_ERROR",
+    "MAINTENANCE_DATABASE",
+    "MAINTENANCE_LOGS",
+    "MAINTENANCE_CACHE",
+})
+
+
+def _build_yaml_credentials(cfg: Any) -> dict[str, dict[str, str]]:
+    """从 AppConfig 顶层字段构建 yaml_credentials 字典
+
+    为什么提取为模块级函数：原 wire_notifier 内联 7 个 if cfg.xxx 分支
+    构建各渠道凭据字典，单一方法认知复杂度堆积。提取后 wire_notifier 仅保留
+    编排逻辑，凭据构建职责分离。
+    yaml_credentials 作为 keyring 的 fallback：用户在前端保存凭据时只写入 yaml，
+    但 notifier __init__ 优先从 keyring 读取，需用 yaml 明文兜底避免数据流断裂。
+    """
+    yaml_credentials: dict[str, dict[str, str]] = {}
+    if cfg.serverchan_send_key:
+        yaml_credentials["serverchan"] = {"send_key": cfg.serverchan_send_key}
+    if cfg.pushplus_token:
+        yaml_credentials["pushplus"] = {"token": cfg.pushplus_token}
+    if cfg.bark_key:
+        yaml_credentials["bark"] = {
+            "server": cfg.bark_server or "",
+            "key": cfg.bark_key,
+        }
+    if cfg.telegram_bot_token:
+        yaml_credentials["telegram"] = {
+            "bot_token": cfg.telegram_bot_token,
+            "chat_id": cfg.telegram_chat_id or "",
+        }
+    if cfg.wecom_webhook:
+        yaml_credentials["wecom"] = {"webhook_url": cfg.wecom_webhook}
+    if cfg.dingtalk_webhook:
+        yaml_credentials["dingtalk"] = {
+            "webhook_url": cfg.dingtalk_webhook,
+            "secret": cfg.dingtalk_secret or "",
+        }
+    if cfg.webhook_url:
+        yaml_credentials["webhook"] = {"webhook_url": cfg.webhook_url}
+    return yaml_credentials
+
+
+def _resolve_subscribed_events(config_events: list[str] | None) -> set[EventType]:
+    """解析用户配置的订阅事件名列表为 EventType 集合
+
+    为什么提取为模块级函数：原 wire_notifier 内联 for + if name in db_only_events
+    + if evt is not None + else warning 的嵌套链，提取后 wire_notifier 复杂度显著降低。
+    仅匹配已知 EventType，跳过未知事件名（如 chatbot.* 不通过 NotifierHub 推送）。
+    """
+    subscribed_events: set[EventType] = set()
+    for name in config_events or []:
+        if name in _DB_ONLY_EVENTS:
+            logger.info(
+                f"[wire_notifier] 配置中的 subscribed_events 包含仅用于时间线的事件类型 {name!r}，"
+                f"通知总线已跳过"
+            )
+            continue
+        evt = getattr(EventType, name, None)
+        if evt is not None:
+            subscribed_events.add(evt)
+        else:
+            logger.warning(
+                f"[wire_notifier] 忽略未知事件类型 {name!r}（不在 EventType 枚举中），"
+                f"请检查 config.yaml 的 notifier.subscribed_events 配置"
+            )
+    return subscribed_events
+
+
 class PriorityBrowserLock:
     """优先级浏览器锁
 
@@ -148,31 +227,7 @@ class Container:
         # 为什么需要 yaml fallback：用户在前端保存凭据时只写入 yaml，
         # 但 notifier __init__ 优先从 keyring 读取；当 keyring 中没有时，
         # 用 yaml 明文兜底，避免"配置已保存但通知不发送"的数据流断裂
-        cfg = self.config
-        yaml_credentials: dict[str, dict[str, str]] = {}
-        if cfg.serverchan_send_key:
-            yaml_credentials["serverchan"] = {"send_key": cfg.serverchan_send_key}
-        if cfg.pushplus_token:
-            yaml_credentials["pushplus"] = {"token": cfg.pushplus_token}
-        if cfg.bark_key:
-            yaml_credentials["bark"] = {
-                "server": cfg.bark_server or "",
-                "key": cfg.bark_key,
-            }
-        if cfg.telegram_bot_token:
-            yaml_credentials["telegram"] = {
-                "bot_token": cfg.telegram_bot_token,
-                "chat_id": cfg.telegram_chat_id or "",
-            }
-        if cfg.wecom_webhook:
-            yaml_credentials["wecom"] = {"webhook_url": cfg.wecom_webhook}
-        if cfg.dingtalk_webhook:
-            yaml_credentials["dingtalk"] = {
-                "webhook_url": cfg.dingtalk_webhook,
-                "secret": cfg.dingtalk_secret or "",
-            }
-        if cfg.webhook_url:
-            yaml_credentials["webhook"] = {"webhook_url": cfg.webhook_url}
+        yaml_credentials = _build_yaml_credentials(self.config)
         # 重新构造 hub 以应用 enabled
         # P3-F-10：注入 quiet_hours；send() 时自动判定静默
         self.notifier_hub = NotifierHub(
@@ -184,34 +239,9 @@ class Container:
         )
         # 从用户配置解析订阅事件集合
         # 仅匹配已知 EventType，跳过未知事件名（如 chatbot.* 不通过 NotifierHub 推送）
-        db_only_events = {
-            "TASK_STOPPED",
-            "TASK_SEARCH_DONE",
-            "ITEM_FOUND",
-            "EVAL_SCORED",
-            "WAF_BLOCKED",
-            "AUTH_EXPIRED",
-            "SYSTEM_ERROR",
-            "MAINTENANCE_DATABASE",
-            "MAINTENANCE_LOGS",
-            "MAINTENANCE_CACHE",
-        }
-        subscribed_events: set[EventType] = set()
-        for name in self.config.notifier.subscribed_events or []:
-            if name in db_only_events:
-                logger.info(
-                    f"[wire_notifier] 配置中的 subscribed_events 包含仅用于时间线的事件类型 {name!r}，"
-                    f"通知总线已跳过"
-                )
-                continue
-            evt = getattr(EventType, name, None)
-            if evt is not None:
-                subscribed_events.add(evt)
-            else:
-                logger.warning(
-                    f"[wire_notifier] 忽略未知事件类型 {name!r}（不在 EventType 枚举中），"
-                    f"请检查 config.yaml 的 notifier.subscribed_events 配置"
-                )
+        subscribed_events = _resolve_subscribed_events(
+            self.config.notifier.subscribed_events,
+        )
         # 用户配置为空时传 None，让 hub.attach() 回退到 DEFAULT_NOTIFY_EVENTS
         # 避免 None vs 空 set 语义差异导致 NotifierHub 不订阅任何事件
         self.notifier_hub.attach(
@@ -382,6 +412,7 @@ def build_default_container(
             # 即使页面被正确关闭，窗口也会短暂出现，导致任务执行时不停弹窗。
             # headless launch 模式更适合后台任务执行场景。
             use_cdp=False,
+            proxy_server=cfg.browser.proxy_server,
         )
 
         antidetect = AntiDetect(AntiDetectConfig(

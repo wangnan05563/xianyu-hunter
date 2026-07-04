@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -58,6 +59,22 @@ _BATCH_TIMEOUT = 3600
 _YIELD_INTERVAL = 0.3
 # 单批次累积错误消息上限：避免大量失败时 error_messages JSON 字段无限膨胀
 _MAX_ERROR_MESSAGES = 50
+
+
+@dataclass
+class _BatchCounters:
+    """批次采集计数器
+
+    为什么用 dataclass 而非局部变量：_run_batch_async 主流程需要将计数器
+    传递给 _process_items_loop 子方法，dataclass 提供可变引用避免逐个返回值聚合。
+    """
+    success: int = 0
+    failed: int = 0
+    skipped: int = 0
+    consecutive_failures: int = 0
+    # 标记是否因熔断退出（区别于用户停止）
+    circuit_broken: bool = False
+    processed: int = 0
 
 
 class BatchRefreshScheduler:
@@ -307,6 +324,9 @@ class BatchRefreshScheduler:
         5. 每个 item 后 await asyncio.sleep 让出事件循环（资源调度优化）
         6. 批次开始时插入历史记录（running），结束时更新终态（completed/cancelled/failed）
 
+        重构说明：将"准备 items"、"主循环处理"、"终态计算"拆分为独立方法，
+        主方法只负责编排，降低圈复杂度（S3776）。计数器通过 _BatchCounters 共享。
+
         Args:
             task_id: 批次任务 ID（全局自增）
             source: 触发来源 manual=用户手动 / scheduler=定时调度
@@ -322,48 +342,11 @@ class BatchRefreshScheduler:
         # 重置当前批次错误累积
         self._current_errors = []
         started_at = datetime.now(timezone.utc)
-        success = 0
-        failed = 0
-        skipped = 0
-        consecutive_failures = 0
-        # 标记是否因熔断退出（区别于用户停止）
-        circuit_broken = False
+        counters = _BatchCounters()
 
-        # 断点续传：检查是否有未完成的批次
-        resumed = self._load_resumable_progress()
-        if resumed:
-            # 从持久化的 pending_item_ids 恢复
-            pending_ids = resumed["pending_item_ids"]
-            items = self._container.repo.list_items_by_ids(pending_ids)
-            # 过滤掉已售的（暂停期间可能已被其他流程标记为已售）
-            items = [it for it in items if not it.get("is_sold")]
-            processed = resumed["processed"]
-            total = resumed["total"]
-            logger.info(
-                f"[BatchRefresh#{task_id}] 从断点续传: 已处理 {processed}/{total}, "
-                f"剩余 {len(items)} 个未售商品"
-            )
-            # 清理旧的进度记录
-            self._clear_progress()
-        else:
-            # 新批次：拉取在售商品
-            try:
-                from xianyu_hunter.web.services.cookie_runtime_sync import (
-                    inject_cookie_store_to_worker_browser,
-                )
-                await inject_cookie_store_to_worker_browser(
-                    "批量采集前 Cookie 同步", force_refresh_m5tk=False
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"[BatchRefresh#{task_id}] Cookie 同步失败: {e}")
-                self._append_error("cookie_sync", str(e), started_at)
-
-            items = self._container.repo.list_unsold_items(
-                limit=self._config.max_items_per_run
-            )
-            processed = 0
-            total = len(items)
-            logger.info(f"[BatchRefresh#{task_id}] 开始采集 {total} 个商品")
+        # 准备 items（断点续传或新批次）
+        items, processed, total = await self._prepare_batch_items(task_id, started_at)
+        counters.processed = processed
 
         # 插入历史记录（running 状态），结束前在 finally 中更新为终态
         self._current_history_id = self._create_history(
@@ -384,110 +367,36 @@ class BatchRefreshScheduler:
         }
 
         try:
-            for idx, item in enumerate(items):
-                item_id = item.get("id")
-                if not item_id:
-                    skipped += 1
-                    continue
-
-                # 检查停止标志（在 wait 之前，避免暂停态下无法停止）
-                if self._stop_flag:
-                    # 持久化未处理的 items（含当前 item）
-                    remaining = [it for it in items[idx:] if it.get("id")]
-                    self._save_progress(
-                        task_id, remaining, processed, total, "stopped"
-                    )
-                    logger.info(
-                        f"[BatchRefresh#{task_id}] 用户停止，已持久化 "
-                        f"{len(remaining)} 个未处理商品"
-                    )
-                    break
-
-                # 等待暂停恢复（暂停时 event 被 clear，wait 阻塞）
-                await self._pause_event.wait()
-
-                # resume 后再次检查停止标志（用户可能在暂停态下请求停止）
-                if self._stop_flag:
-                    remaining = [it for it in items[idx:] if it.get("id")]
-                    self._save_progress(
-                        task_id, remaining, processed, total, "stopped"
-                    )
-                    break
-
-                # 更新当前处理的 item（前端可见）
-                self._progress["current_item_id"] = item_id
-
-                try:
-                    changed_fields = await self._refresh_one(item_id, item)
-                    if changed_fields is None:
-                        skipped += 1
-                    else:
-                        success += 1
-                        if changed_fields:
-                            self._record_change(item_id, changed_fields)
-                    consecutive_failures = 0
-                except Exception as e:  # noqa: BLE001
-                    failed += 1
-                    consecutive_failures += 1
-                    logger.warning(
-                        f"[BatchRefresh#{task_id}] 采集 {item_id} 失败: {e}"
-                    )
-                    # 累积错误消息到历史记录，便于事后排查
-                    self._append_error(item_id, str(e), datetime.now(timezone.utc))
-                    if consecutive_failures >= self._fail_pause_threshold:
-                        logger.error(
-                            f"[BatchRefresh#{task_id}] 连续失败 {consecutive_failures} 次，"
-                            f"暂停当前批次（剩余商品记为 skipped）"
-                        )
-                        # 标记熔断：与用户停止区分，历史记录 status=failed
-                        circuit_broken = True
-                        # 剩余未处理商品记为 skipped，便于统计对账
-                        processed_count = success + failed + skipped
-                        remaining_count = len(items) - processed_count
-                        skipped += remaining_count
-                        break
-
-                # 更新进度
-                processed += 1
-                self._progress["current"] = processed
-                self._progress["current_item_id"] = None
-
-                # 资源调度优化：让出事件循环给主业务请求
-                # 不在 finally 中，避免暂停阻塞时也 sleep
-                await asyncio.sleep(_YIELD_INTERVAL)
+            # 主循环：逐个采集，期间响应暂停/停止
+            await self._process_items_loop(items, task_id, total, started_at, counters)
 
             # 正常完成：清理进度记录
             if not self._stop_flag:
                 self._clear_progress()
             self._last_result = {
-                "success": success,
-                "failed": failed,
-                "skipped": skipped,
+                "success": counters.success,
+                "failed": counters.failed,
+                "skipped": counters.skipped,
                 "stopped": self._stop_flag,
             }
             self._last_run_at = started_at.isoformat()
             logger.info(
-                f"[BatchRefresh#{task_id}] 完成: success={success} "
-                f"failed={failed} skipped={skipped} stopped={self._stop_flag}"
+                f"[BatchRefresh#{task_id}] 完成: success={counters.success} "
+                f"failed={counters.failed} skipped={counters.skipped} stopped={self._stop_flag}"
             )
 
             # 计算终态：熔断=failed / 用户停止=cancelled / 正常=completed
-            if circuit_broken:
-                final_status = "failed"
-            elif self._stop_flag:
-                final_status = "cancelled"
-            else:
-                final_status = "completed"
+            final_status = self._compute_final_status(counters.circuit_broken)
 
             # 更新历史记录为终态
             self._finalize_history(
                 started_at=started_at,
                 status=final_status,
-                success=success,
-                failed=failed,
-                skipped=skipped,
+                success=counters.success,
+                failed=counters.failed,
+                skipped=counters.skipped,
                 total=total,
-                consecutive_failures=consecutive_failures if circuit_broken else 0,
+                consecutive_failures=counters.consecutive_failures if counters.circuit_broken else 0,
             )
         finally:
             self._status = "idle"
@@ -496,6 +405,198 @@ class BatchRefreshScheduler:
             self._stop_flag = False
             self._current_history_id = None
             self._current_errors = []
+
+    async def _prepare_batch_items(
+        self, task_id: int, started_at: datetime
+    ) -> tuple[list[dict], int, int]:
+        """准备本批次要处理的 items 列表
+
+        优先尝试断点续传（恢复未完成的 paused/running 批次）；
+        无可续传记录时走新批次路径：同步 Cookie + 拉取在售商品。
+
+        Returns:
+            (items, processed, total)：items 为待处理列表，processed 为已处理数（续传时非 0），total 为总数。
+        """
+        resumed = self._load_resumable_progress()
+        if resumed:
+            # 从持久化的 pending_item_ids 恢复
+            pending_ids = resumed["pending_item_ids"]
+            items = self._container.repo.list_items_by_ids(pending_ids)
+            # 过滤掉已售的（暂停期间可能已被其他流程标记为已售）
+            items = [it for it in items if not it.get("is_sold")]
+            processed = resumed["processed"]
+            total = resumed["total"]
+            logger.info(
+                f"[BatchRefresh#{task_id}] 从断点续传: 已处理 {processed}/{total}, "
+                f"剩余 {len(items)} 个未售商品"
+            )
+            # 清理旧的进度记录
+            self._clear_progress()
+            return items, processed, total
+
+        # 新批次：先同步 Cookie，再拉取在售商品
+        await self._sync_cookie_before_batch(task_id, started_at)
+        items = self._container.repo.list_unsold_items(
+            limit=self._config.max_items_per_run
+        )
+        processed = 0
+        total = len(items)
+        logger.info(f"[BatchRefresh#{task_id}] 开始采集 {total} 个商品")
+        return items, processed, total
+
+    async def _sync_cookie_before_batch(
+        self, task_id: int, started_at: datetime
+    ) -> None:
+        """新批次开始前同步 Cookie 到 worker 浏览器
+
+        为什么每批次只同步一次：Cookie 同步涉及磁盘 I/O 与浏览器 IPC，
+        每商品都同步会显著拖慢采集；同批次内 Cookie 通常不会中途失效。
+        同步失败仅记日志与错误累积，不阻断批次（后续 _refresh_one 会再次校验）。
+        """
+        try:
+            from xianyu_hunter.web.services.cookie_runtime_sync import (
+                inject_cookie_store_to_worker_browser,
+            )
+            await inject_cookie_store_to_worker_browser(
+                "批量采集前 Cookie 同步", force_refresh_m5tk=False
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[BatchRefresh#{task_id}] Cookie 同步失败: {e}")
+            self._append_error("cookie_sync", str(e), started_at)
+
+    async def _process_items_loop(
+        self,
+        items: list[dict],
+        task_id: int,
+        total: int,
+        started_at: datetime,
+        counters: _BatchCounters,
+    ) -> None:
+        """逐个采集 items，期间响应暂停/停止/熔断
+
+        async 方法：内部需要 await _pause_event.wait()、_refresh_one、asyncio.sleep，
+        必须在 async 上下文中调用。提取为独立方法是为降低 _run_batch_async 圈复杂度（S3776）。
+        """
+        for idx, item in enumerate(items):
+            item_id = item.get("id")
+            if not item_id:
+                counters.skipped += 1
+                continue
+
+            # 检查停止标志（在 wait 之前，避免暂停态下无法停止）
+            if self._stop_flag:
+                # 持久化未处理的 items（含当前 item）
+                remaining = [it for it in items[idx:] if it.get("id")]
+                self._save_progress(
+                    task_id, remaining, counters.processed, total, "stopped"
+                )
+                logger.info(
+                    f"[BatchRefresh#{task_id}] 用户停止，已持久化 "
+                    f"{len(remaining)} 个未处理商品"
+                )
+                break
+
+            # 等待暂停恢复（暂停时 event 被 clear，wait 阻塞）
+            await self._pause_event.wait()
+
+            # resume 后再次检查停止标志（用户可能在暂停态下请求停止）
+            if self._stop_flag:
+                remaining = [it for it in items[idx:] if it.get("id")]
+                self._save_progress(
+                    task_id, remaining, counters.processed, total, "stopped"
+                )
+                break
+
+            # 更新当前处理的 item（前端可见）
+            self._progress["current_item_id"] = item_id
+
+            # 处理单个 item；返回 True 表示熔断需跳出循环
+            should_break = await self._process_single_item(
+                item_id, item, task_id, started_at, counters, len(items)
+            )
+            if should_break:
+                break
+
+            # 更新进度
+            counters.processed += 1
+            self._progress["current"] = counters.processed
+            self._progress["current_item_id"] = None
+
+            # 资源调度优化：让出事件循环给主业务请求
+            # 不在 finally 中，避免暂停阻塞时也 sleep
+            await asyncio.sleep(_YIELD_INTERVAL)
+
+    async def _process_single_item(
+        self,
+        item_id: str,
+        item: dict,
+        task_id: int,
+        started_at: datetime,
+        counters: _BatchCounters,
+        total_items: int,
+    ) -> bool:
+        """处理单个 item 的采集，返回是否应跳出主循环
+
+        返回 True：熔断触发，应 break 主循环。
+        返回 False：正常处理完成或单商品失败但未熔断，应继续下一轮。
+        """
+        try:
+            changed_fields = await self._refresh_one(item_id, item)
+            if changed_fields is None:
+                counters.skipped += 1
+            else:
+                counters.success += 1
+                if changed_fields:
+                    self._record_change(item_id, changed_fields)
+            counters.consecutive_failures = 0
+            return False
+        except Exception as e:  # noqa: BLE001
+            return self._handle_item_failure(
+                e, task_id, item_id, started_at, counters, total_items
+            )
+
+    def _handle_item_failure(
+        self,
+        e: Exception,
+        task_id: int,
+        item_id: str,
+        started_at: datetime,
+        counters: _BatchCounters,
+        total_items: int,
+    ) -> bool:
+        """处理单个 item 采集失败：累加错误、检查熔断，返回是否应跳出主循环
+
+        返回 True：连续失败达阈值，已标记熔断，应 break。
+        返回 False：未达阈值，应继续下一轮。
+        """
+        counters.failed += 1
+        counters.consecutive_failures += 1
+        logger.warning(
+            f"[BatchRefresh#{task_id}] 采集 {item_id} 失败: {e}"
+        )
+        # 累积错误消息到历史记录，便于事后排查
+        self._append_error(item_id, str(e), datetime.now(timezone.utc))
+        if counters.consecutive_failures < self._fail_pause_threshold:
+            return False
+        logger.error(
+            f"[BatchRefresh#{task_id}] 连续失败 {counters.consecutive_failures} 次，"
+            f"暂停当前批次（剩余商品记为 skipped）"
+        )
+        # 标记熔断：与用户停止区分，历史记录 status=failed
+        counters.circuit_broken = True
+        # 剩余未处理商品记为 skipped，便于统计对账
+        processed_count = counters.success + counters.failed + counters.skipped
+        remaining_count = total_items - processed_count
+        counters.skipped += remaining_count
+        return True
+
+    def _compute_final_status(self, circuit_broken: bool) -> str:
+        """计算批次终态：熔断=failed / 用户停止=cancelled / 正常=completed"""
+        if circuit_broken:
+            return "failed"
+        if self._stop_flag:
+            return "cancelled"
+        return "completed"
 
     def _create_history(
         self,

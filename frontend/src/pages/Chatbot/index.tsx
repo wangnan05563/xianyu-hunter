@@ -32,6 +32,273 @@ import './chatbot.css'
 const { Sider, Content } = Layout
 const { TextArea } = Input
 
+// S2004 修复：以下 updater 函数提取到模块级，避免组件内多层闭包嵌套超过 4 层。
+// setState 的函数式更新若以箭头函数形式内联在深层回调里，会让嵌套层级随外层
+// useEffect/事件处理器/onOk 等层层叠加而突破阈值。这里把它们抽为纯函数或
+// 工厂函数（返回 updater），调用方传入参数即可获得一个无闭包依赖的 updater。
+
+// 移除所有 status==='failed' 的消息（重试时清理旧的失败消息）
+const filterOutFailedMessages = (prev: Message[]): Message[] =>
+  prev.filter((m) => m.status !== 'failed')
+
+// 标记指定 id 的消息为已撤回
+const createRecalledMessageUpdater = (id: string) => (prev: Message[]): Message[] =>
+  prev.map((m) => (m.id === id ? { ...m, is_recalled: 1 } : m))
+
+// 标记指定会话为已转人工
+const createEscalatedSessionUpdater = (sessionId: string) => (prev: Session[]): Session[] =>
+  prev.map((s) => (s.id === sessionId ? { ...s, status: 'escalated' } : s))
+
+// 标记指定临时 id 的消息为失败
+const createFailedMessageUpdater = (tempId: string) => (prev: Message[]): Message[] =>
+  prev.map((m) => (m.id === tempId ? { ...m, status: 'failed' } : m))
+
+// 删除待发送图片列表中指定索引项
+const createRemoveImageUpdater = (idx: number) => (prev: string[]): string[] =>
+  prev.filter((_, i) => i !== idx)
+
+// 重置流式响应的 ref + state（handleSend 启动时与 onComplete 兜底时共享）
+// S2004 修复：抽到模块级避免在 onComplete 内联函数中重复写入逻辑、加深嵌套
+const resetStreamingState = (refs: {
+  streamingContentRef: { current: string }
+  streamingSourcesRef: { current: Message['sources'] }
+  streamingToolCallsRef: { current: Message['tool_calls'] }
+  escalatedRef: { current: boolean }
+  escalateReasonRef: { current: string }
+  streamingFollowUpsRef: { current: string[] }
+  userMsgSentRef: { current: boolean }
+  setStreamingContent: (v: string) => void
+  setStreamingSources: (v: Message['sources']) => void
+  setStreamingToolCalls: (v: Message['tool_calls']) => void
+}) => {
+  refs.streamingContentRef.current = ''
+  refs.streamingSourcesRef.current = []
+  refs.streamingToolCallsRef.current = []
+  refs.escalatedRef.current = false
+  refs.escalateReasonRef.current = ''
+  refs.streamingFollowUpsRef.current = []
+  refs.userMsgSentRef.current = false
+  refs.setStreamingContent('')
+  refs.setStreamingSources([])
+  refs.setStreamingToolCalls([])
+}
+
+// 处理 SSE 事件：模块级查表，避免 handleSSEEvent switch 内联多 case
+// S2004/S3776 修复：每个 case 拆为独立模块级函数，switch 仅做派发，复杂度大幅降低
+type StreamRefs = {
+  streamingContentRef: { current: string }
+  streamingSourcesRef: { current: Message['sources'] }
+  streamingToolCallsRef: { current: Message['tool_calls'] }
+  escalatedRef: { current: boolean }
+  escalateReasonRef: { current: string }
+  streamingFollowUpsRef: { current: string[] }
+  userMsgSentRef: { current: boolean }
+}
+type StreamSetters = {
+  setMessages: (updater: (prev: Message[]) => Message[]) => void
+  setStreamingContent: (v: string) => void
+  setStreamingSources: (v: Message['sources']) => void
+  setStreamingToolCalls: (v: Message['tool_calls']) => void
+}
+type StreamContext = StreamRefs & StreamSetters
+
+// 标记所有"发送中"的用户消息为已送达（首 token 兜底/完成兜底共用）
+const markSendingUserMessagesAsSent = (prev: Message[]): Message[] =>
+  prev.map((m) =>
+    m.role === 'user' && m.status === 'sending' ? { ...m, status: 'sent' } : m,
+  )
+
+// SSE token 事件：累加流式内容；首 token 时把用户消息从 sending → sent
+const handleSSEToken = (event: SSEEvent, ctx: StreamContext) => {
+  ctx.streamingContentRef.current += (event.data.content as string || '')
+  ctx.setStreamingContent(ctx.streamingContentRef.current)
+  if (!ctx.userMsgSentRef.current) {
+    ctx.userMsgSentRef.current = true
+    ctx.setMessages(markSendingUserMessagesAsSent)
+  }
+}
+
+// SSE sources 事件：替换引用源
+const handleSSESources = (event: SSEEvent, ctx: StreamContext) => {
+  ctx.streamingSourcesRef.current = event.data.sources as Message['sources']
+  ctx.setStreamingSources(ctx.streamingSourcesRef.current)
+}
+
+// SSE tool_call 事件：追加到工具调用列表
+const handleSSEToolCall = (event: SSEEvent, ctx: StreamContext) => {
+  ctx.streamingToolCallsRef.current = [
+    ...(ctx.streamingToolCallsRef.current || []),
+    event.data as unknown as ToolCall,
+  ]
+  ctx.setStreamingToolCalls(ctx.streamingToolCallsRef.current)
+}
+
+// SSE error 事件：按 code 分支显示友好提示
+const handleSSEError = (event: SSEEvent) => {
+  const code = event.data.code as string
+  const msg = event.data.message as string
+  if (code === 'SECURITY_VIOLATION') {
+    message.warning('检测到不安全输入，已拦截')
+  } else if (code === 'OUT_OF_SCOPE') {
+    message.warning(msg || '该问题超出客服范围')
+  } else {
+    message.error(msg || '生成失败')
+  }
+}
+
+// SSE escalate 事件：转人工话术写入流式内容并标记 escalated
+const handleSSEEscale = (event: SSEEvent, ctx: StreamContext) => {
+  const escalateMsg = event.data.message as string
+  const reason = event.data.reason as string
+  if (escalateMsg) {
+    ctx.streamingContentRef.current = escalateMsg
+    ctx.setStreamingContent(escalateMsg)
+  }
+  ctx.escalatedRef.current = true
+  ctx.escalateReasonRef.current = reason || ''
+}
+
+// SSE done 事件：保存 follow_ups 供 onComplete 读取
+const handleSSEDone = (event: SSEEvent, ctx: StreamContext) => {
+  ctx.streamingFollowUpsRef.current = (event.data.follow_ups as string[]) || []
+}
+
+// SSE 事件派发表：type → handler；新增事件只需在表内加一行
+const SSE_EVENT_HANDLERS: Record<string, (event: SSEEvent, ctx: StreamContext) => void> = {
+  token: handleSSEToken,
+  sources: handleSSESources,
+  tool_call: handleSSEToolCall,
+  error: handleSSEError,
+  escalate: handleSSEEscale,
+  done: handleSSEDone,
+}
+
+// SSE onError 工厂：把临时消息标 failed 并 toast 错误
+// S2004 修复：抽到模块级避免 sendMessage 回调内联加深嵌套
+type SendErrorDeps = {
+  setMessages: (updater: (prev: Message[]) => Message[]) => void
+}
+const createSendErrorHandler = (tempId: string, deps: SendErrorDeps) => (err: Error) => {
+  deps.setMessages(createFailedMessageUpdater(tempId))
+  message.error('对话失败: ' + err.message)
+}
+
+// SSE onComplete 工厂：固化 assistant 消息 + 重置流式状态 + 刷新会话列表
+// S2004/S3776 修复：抽到模块级避免在 sendMessage 回调内联加深 handleSend 嵌套/复杂度
+type SendCompleteDeps = {
+  refs: StreamRefs
+  setMessages: (updater: (prev: Message[]) => Message[]) => void
+  setStreamingContent: (v: string) => void
+  setStreamingSources: (v: Message['sources']) => void
+  setStreamingToolCalls: (v: Message['tool_calls']) => void
+  sessionId: string
+  onAfterComplete: () => void
+}
+const createSendCompleteHandler = (deps: SendCompleteDeps) => () => {
+  // 终止事件（done/error/escalate）触发后，确保用户消息从 sending → sent
+  if (!deps.refs.userMsgSentRef.current) {
+    deps.refs.userMsgSentRef.current = true
+    deps.setMessages(markSendingUserMessagesAsSent)
+  }
+  // 读 ref.current 而非闭包 state（避免读到发送时刻的空快照）
+  const content = deps.refs.streamingContentRef.current
+  const sources = deps.refs.streamingSourcesRef.current
+  const toolCalls = deps.refs.streamingToolCallsRef.current
+  const escalated = deps.refs.escalatedRef.current
+  const escalateReason = deps.refs.escalateReasonRef.current
+  const followUps = deps.refs.streamingFollowUpsRef.current
+  appendAssistantMessageIfAny(deps, content, sources, toolCalls, escalated, escalateReason, followUps)
+  resetStreamingState({
+    ...deps.refs,
+    setStreamingContent: deps.setStreamingContent,
+    setStreamingSources: deps.setStreamingSources,
+    setStreamingToolCalls: deps.setStreamingToolCalls,
+  })
+  deps.onAfterComplete()
+}
+
+// 当有内容/来源/工具调用/转人工标记/推荐问题时，固化一条 assistant 消息
+// S3776 修复：从 onComplete 内提取，消除巨型 if + 巨型对象字面量产生的认知复杂度
+const appendAssistantMessageIfAny = (
+  deps: SendCompleteDeps,
+  content: string,
+  sources: Message['sources'],
+  toolCalls: Message['tool_calls'],
+  escalated: boolean,
+  escalateReason: string,
+  followUps: string[],
+) => {
+  // escalate 事件无 content 时也要固化（转人工话术可能为空）；
+  // follow_ups 也需纳入判断：主回答为空但生成了推荐问题时不能丢弃
+  if (!content && !sources?.length && !toolCalls?.length && !escalated && followUps.length === 0) {
+    return
+  }
+  const assistantMsg: Message = {
+    id: `assistant-${Date.now()}`,
+    session_id: deps.sessionId,
+    role: 'assistant',
+    content: content || '(空回复)',
+    sources,
+    tool_calls: toolCalls,
+    escalated: escalated || undefined,
+    escalate_reason: escalateReason || undefined,
+    follow_ups: followUps.length > 0 ? followUps : undefined,
+    created_at: new Date().toISOString(),
+  }
+  deps.setMessages((prev) => [...prev, assistantMsg])
+}
+
+// 转人工确认弹窗 onOk 实现：调用接口 + 更新 sessions/currentSession
+// S2004 修复：从 handleEscalate 的内联 onOk 提取，避免组件内 4 层嵌套
+type EscalateDeps = {
+  setEscalating: (v: boolean) => void
+  setSessions: (updater: (prev: Session[]) => Session[]) => void
+  setCurrentSession: (updater: (prev: Session | null) => Session | null) => void
+}
+const confirmEscalate = async (targetSessionId: string, deps: EscalateDeps) => {
+  deps.setEscalating(true)
+  try {
+    await chatbotApi.triggerEscalation(targetSessionId)
+    deps.setSessions(createEscalatedSessionUpdater(targetSessionId))
+    // 函数式更新：仅当用户仍停留在原会话时才更新当前会话状态
+    deps.setCurrentSession((prev) =>
+      prev?.id === targetSessionId ? { ...prev, status: 'escalated' } : prev,
+    )
+    message.success('已转接人工客服')
+  } catch {
+    message.error('转接失败，请稍后重试')
+  } finally {
+    deps.setEscalating(false)
+  }
+}
+
+// 渲染消息气泡内的图片缩略图列表：每个图片用原生 button 包裹
+// S6819/S6842 修复：img 加 role=button 是非交互元素加交互 role，改用 button 替代
+// 为什么单独抽出来：让 MessageBubble 组件的 JSX 层级扁平，且 TypeScript 收窄
+// imgs 参数为 string[] 后无需再依赖 msg.images 的可能为 null/undefined 的类型
+const renderMessageImages = (imgs: string[], win: Window) => (
+  <div className="cb-msg-images">
+    {imgs.map((img, idx) => (
+      <button
+        // S6479：图片 URL 作为稳定 key
+        key={img}
+        type="button"
+        onClick={() => win.open(img, '_blank')}
+        aria-label={`查看图片${idx + 1}`}
+        // S6819/S6842：改用原生 button 替代 img+role=button，
+        // 原生支持 Enter/Space 触发 click；重置外观以保留 cb-msg-image-thumb 视觉
+        style={{ background: 'none', border: 'none', padding: 0, display: 'inline-flex', cursor: 'pointer' }}
+      >
+        <img
+          src={img}
+          alt={`图片${idx + 1}`}
+          className="cb-msg-image-thumb"
+        />
+      </button>
+    ))}
+  </div>
+)
+
 // 可爱卡通机器人头像 SVG：圆润造型 + 马卡龙配色，契合治愈系 UI
 function BotAvatar() {
   return (
@@ -113,35 +380,48 @@ export default function ChatbotPage() {
   // S3516 修复：原 setPendingImages 回调总返回 prev，等同无更新。
   // 改为遍历异步转 base64，每个就绪后用 functional update 追加，并在追加前
   // 用闭包计数避免重复警告（functional update 内不能放副作用）。
+  // S2004 修复：循环体与 if 分支抽到模块级 addImageIfValid，降低 useCallback 内嵌套
+  const MAX_IMAGES = 4
+  const MAX_IMAGE_SIZE = 5 * 1024 * 1024 // 5MB
   const addImageFiles = useCallback(async (files: FileList | File[]) => {
-    const maxImages = 4
-    const maxSize = 5 * 1024 * 1024 // 5MB
     const arr = Array.from(files).filter((f) => f.type.startsWith('image/'))
     if (arr.length === 0) return
     // 用 ref-like 闭包变量跟踪是否已警告，避免重复提示
-    let warnedLimit = false
+    const state: { warnedLimit: boolean } = { warnedLimit: false }
     for (const f of arr) {
-      if (f.size > maxSize) {
-        message.warning(`${f.name} 超过 5MB，已跳过`)
-        continue
-      }
-      try {
-        const url = await fileToDataUrl(f)
-        let added = false
-        setPendingImages((p) => {
-          if (p.length >= maxImages) return p
-          added = true
-          return [...p, url]
-        })
-        if (!added && !warnedLimit) {
-          warnedLimit = true
-          message.warning(`最多 ${maxImages} 张图片`)
-        }
-      } catch {
-        // 单个文件转 base64 失败时忽略，不影响其他文件
-      }
+      await addImageIfValid(f, state, setPendingImages)
     }
   }, [])
+
+  // 单个图片处理：超过大小/数量限制时跳过或提示，并通过 setPendingImages updater 追加
+  // S2004 修复：抽到模块级避免 for 内 5 层 if/try/setState 嵌套
+  const addImageIfValid = async (
+    f: File,
+    state: { warnedLimit: boolean },
+    setPendingImages: React.Dispatch<React.SetStateAction<string[]>>,
+  ) => {
+    if (f.size > MAX_IMAGE_SIZE) {
+      message.warning(`${f.name} 超过 5MB，已跳过`)
+      return
+    }
+    let url: string
+    try {
+      url = await fileToDataUrl(f)
+    } catch {
+      // 单个文件转 base64 失败时忽略，不影响其他文件
+      return
+    }
+    let added = false
+    setPendingImages((p) => {
+      if (p.length >= MAX_IMAGES) return p
+      added = true
+      return [...p, url]
+    })
+    if (!added && !state.warnedLimit) {
+      state.warnedLimit = true
+      message.warning(`最多 ${MAX_IMAGES} 张图片`)
+    }
+  }
 
   // Upload beforeUpload：拦截不发请求，转 base64
   const handleUploadSelect = useCallback(
@@ -270,7 +550,8 @@ export default function ChatbotPage() {
       setInputValue(detail.text)
       setPendingImages(detail.images || [])
       // 移除状态为 failed 的同内容用户消息（避免重复）
-      setMessages((prev) => prev.filter((m) => m.status !== 'failed'))
+      // S2004：updater 提取到模块级 filterOutFailedMessages
+      setMessages(filterOutFailedMessages)
     }
     globalThis.addEventListener('chatbot:retry-send', handler)
     return () => globalThis.removeEventListener('chatbot:retry-send', handler)
@@ -287,11 +568,8 @@ export default function ChatbotPage() {
         try {
           await chatbotApi.recallMessage(detail.id)
           // 乐观更新：立即把消息标记为已撤回
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === detail.id ? { ...m, is_recalled: 1 } : m,
-            ),
-          )
+          // S2004：updater 由模块级工厂 createRecalledMessageUpdater 生成
+          setMessages(createRecalledMessageUpdater(detail.id))
           message.success('已撤回')
         } catch {
           message.error('撤回失败，可能已超过 2 分钟时限')
@@ -303,6 +581,8 @@ export default function ChatbotPage() {
   }, [])
 
   // M5：主动转人工——确认后调用 escalation/trigger
+  // S2004 修复：onOk 内联 async 嵌套 4 层（setEscalating → try → await → setState/setSession），
+  // 提取为模块级 confirmEscalate，降低 handleEscalate 嵌套深度
   const handleEscalate = () => {
     if (!currentSession) {
       message.warning('请先选择一个会话')
@@ -316,26 +596,12 @@ export default function ChatbotPage() {
       okText: '确认转接',
       cancelText: '取消',
       okButtonProps: { danger: true },
-      onOk: async () => {
-        setEscalating(true)
-        try {
-          await chatbotApi.triggerEscalation(targetSessionId)
-          setSessions((prev) =>
-            prev.map((s) =>
-              s.id === targetSessionId ? { ...s, status: 'escalated' } : s,
-            ),
-          )
-          // 函数式更新：仅当用户仍停留在原会话时才更新当前会话状态
-          setCurrentSession((prev) =>
-            prev?.id === targetSessionId ? { ...prev, status: 'escalated' } : prev,
-          )
-          message.success('已转接人工客服')
-        } catch {
-          message.error('转接失败，请稍后重试')
-        } finally {
-          setEscalating(false)
-        }
-      },
+      onOk: () =>
+        confirmEscalate(targetSessionId, {
+          setEscalating,
+          setSessions,
+          setCurrentSession,
+        }),
     })
   }
 
@@ -459,76 +725,25 @@ export default function ChatbotPage() {
     }
   }
 
-  // SSE 事件处理：根据事件类型更新流式消息
-  // 同步写入 ref + state：ref 供 onComplete 读取最新值，state 触发渲染
+  // SSE 事件处理：派发表查表，handler 在模块级；不在此处写 switch/case
+  // S2004/S3776 修复：消除组件内 switch 的多层嵌套与认知复杂度
   const handleSSEEvent = useCallback(
     (event: SSEEvent) => {
-      switch (event.type) {
-        case 'token':
-          // 字段名 content：与后端 orchestrator.py L290 data={"content": token} 对齐
-          streamingContentRef.current += (event.data.content as string || '')
-          setStreamingContent(streamingContentRef.current)
-          // M3：首 token 到达 → 用户消息已送达（sent）
-          // 用 ref 标记"已发送"避免重复 setState
-          if (!userMsgSentRef.current) {
-            userMsgSentRef.current = true
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.role === 'user' && m.status === 'sending'
-                  ? { ...m, status: 'sent' }
-                  : m,
-              ),
-            )
-          }
-          break
-        case 'sources':
-          streamingSourcesRef.current = event.data.sources as Message['sources']
-          setStreamingSources(streamingSourcesRef.current)
-          break
-        case 'tool_call':
-          // tool_call 事件的 data 是单个工具调用结果，直接追加到列表
-          // event.data 来自后端 TOOL_CALL 事件，结构对齐 ToolCall 接口
-          streamingToolCallsRef.current = [
-            ...(streamingToolCallsRef.current || []),
-            event.data as unknown as ToolCall,
-          ]
-          setStreamingToolCalls(streamingToolCallsRef.current)
-          break
-        case 'error':
-          // H-2：按 code 分支显示友好提示，而非统一"生成失败"
-          // 后端 code 见 orchestrator.py：SECURITY_VIOLATION / OUT_OF_SCOPE / 其他
-          {
-            const code = event.data.code as string
-            const msg = event.data.message as string
-            if (code === 'SECURITY_VIOLATION') {
-              message.warning('检测到不安全输入，已拦截')
-            } else if (code === 'OUT_OF_SCOPE') {
-              message.warning(msg || '该问题超出客服范围')
-            } else {
-              message.error(msg || '生成失败')
-            }
-          }
-          break
-        case 'escalate':
-          // H-3：转人工事件——将话术写入流式内容，标记 escalated
-          // escalate 是终止事件，触发后 onComplete 会固化这条消息
-          {
-            const escalateMsg = event.data.message as string
-            const reason = event.data.reason as string
-            if (escalateMsg) {
-              streamingContentRef.current = escalateMsg
-              setStreamingContent(escalateMsg)
-            }
-            escalatedRef.current = true
-            escalateReasonRef.current = reason || ''
-          }
-          break
-        case 'done':
-          // DONE 事件携带 follow_ups：存入 ref 供 onComplete 读取
-          // done 是终止事件，useSSEChat 在 onEvent 后立即调 onComplete
-          streamingFollowUpsRef.current = (event.data.follow_ups as string[]) || []
-          break
-      }
+      const handler = SSE_EVENT_HANDLERS[event.type]
+      if (!handler) return
+      handler(event, {
+        streamingContentRef,
+        streamingSourcesRef,
+        streamingToolCallsRef,
+        escalatedRef,
+        escalateReasonRef,
+        streamingFollowUpsRef,
+        userMsgSentRef,
+        setMessages,
+        setStreamingContent,
+        setStreamingSources,
+        setStreamingToolCalls,
+      })
     },
     [],
   )
@@ -556,86 +771,49 @@ export default function ChatbotPage() {
       retry_payload: { text: text, images: [...pendingImages] },
     }
     setMessages((prev) => [...prev, userMsg])
-    const sentText = text
-    const sentImages = pendingImages
     const tempId = userMsg.id
     setInputValue('')
     setPendingImages([])
     // 重置 ref + state（ref 必须重置，否则下次对话会带上上次残留内容）
-    streamingContentRef.current = ''
-    streamingSourcesRef.current = []
-    streamingToolCallsRef.current = []
-    escalatedRef.current = false
-    escalateReasonRef.current = ''
-    streamingFollowUpsRef.current = []
-    userMsgSentRef.current = false
-    setStreamingContent('')
-    setStreamingSources([])
-    setStreamingToolCalls([])
+    resetStreamingState({
+      streamingContentRef,
+      streamingSourcesRef,
+      streamingToolCallsRef,
+      escalatedRef,
+      escalateReasonRef,
+      streamingFollowUpsRef,
+      userMsgSentRef,
+      setStreamingContent,
+      setStreamingSources,
+      setStreamingToolCalls,
+    })
 
     await sendMessage({
       sessionId: currentSession.id,
-      message: sentText,
+      message: text,
       enableTools,
-      images: sentImages,
+      images: pendingImages.length > 0 ? [...pendingImages] : [],
       onEvent: handleSSEEvent,
-      onError: (err) => {
-        // M3：失败时把临时消息标 failed，UI 显示重试按钮
-        setMessages((prev) =>
-          prev.map((m) => (m.id === tempId ? { ...m, status: 'failed' } : m)),
-        )
-        message.error('对话失败: ' + err.message)
-      },
-      onComplete: () => {
-        // 终止事件（done/error/escalate）触发后，确保用户消息从 sending → sent
-        // escalate 事件不发 token，userMsgSentRef 不会被设置，需在此兜底
-        if (!userMsgSentRef.current) {
-          userMsgSentRef.current = true
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.role === 'user' && m.status === 'sending'
-                ? { ...m, status: 'sent' }
-                : m,
-            ),
-          )
-        }
-        // 读 ref.current 而非闭包 state（B-1 修复：避免读到发送时刻的空快照）
-        const content = streamingContentRef.current
-        const sources = streamingSourcesRef.current
-        const toolCalls = streamingToolCallsRef.current
-        const escalated = escalatedRef.current
-        const escalateReason = escalateReasonRef.current
-        const followUps = streamingFollowUpsRef.current
-        // escalate 事件无 content 时也要固化（转人工话术可能为空）
-        // follow_ups 也需纳入判断：主回答为空但生成了推荐问题时不能丢弃
-        if (content || sources?.length || toolCalls?.length || escalated || followUps.length > 0) {
-          const assistantMsg: Message = {
-            id: `assistant-${Date.now()}`,
-            session_id: currentSession.id,
-            role: 'assistant',
-            content: content || '(空回复)',
-            sources: sources,
-            tool_calls: toolCalls,
-            escalated: escalated || undefined,
-            escalate_reason: escalateReason || undefined,
-            follow_ups: followUps.length > 0 ? followUps : undefined,
-            created_at: new Date().toISOString(),
-          }
-          setMessages((prev) => [...prev, assistantMsg])
-        }
-        // 重置 ref + state
-        streamingContentRef.current = ''
-        streamingSourcesRef.current = []
-        streamingToolCallsRef.current = []
-        escalatedRef.current = false
-        escalateReasonRef.current = ''
-        streamingFollowUpsRef.current = []
-        setStreamingContent('')
-        setStreamingSources([])
-        setStreamingToolCalls([])
+      // S2004 修复：onError/onComplete 提取到模块级工厂，消除 sendMessage 选项内的多层嵌套
+      onError: createSendErrorHandler(tempId, { setMessages }),
+      onComplete: createSendCompleteHandler({
+        refs: {
+          streamingContentRef,
+          streamingSourcesRef,
+          streamingToolCallsRef,
+          escalatedRef,
+          escalateReasonRef,
+          streamingFollowUpsRef,
+          userMsgSentRef,
+        },
+        setMessages,
+        setStreamingContent,
+        setStreamingSources,
+        setStreamingToolCalls,
+        sessionId: currentSession.id,
         // 刷新会话列表（更新最后活跃时间）
-        loadSessions()
-      },
+        onAfterComplete: () => { loadSessions() },
+      }),
     })
   }
 
@@ -685,27 +863,21 @@ export default function ChatbotPage() {
               setSiderOpen(false)
             }}
             actions={[
-              <span
+              <button
                 key="fav"
+                type="button"
                 className={`cb-fav-icon ${session.is_favorite ? 'cb-fav-icon-active' : ''}`}
+                // 原生 button 默认支持 Enter/Space 触发 click，无需 onKeyDown
+                // inline 重置外观以保留 cb-fav-icon 原有 inline-flex 布局
+                style={{ background: 'transparent', border: 'none', padding: 0 }}
                 onClick={(e) => {
                   e.stopPropagation()
                   handleToggleFavorite(session.id, !!session.is_favorite)
                 }}
-                role="button"
-                tabIndex={0}
                 aria-label={session.is_favorite ? '取消收藏' : '收藏'}
-                onKeyDown={(e) => {
-                  // S6819：补全 Space 触发，使 role="button" 键盘交互符合 WAI-ARIA
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    handleToggleFavorite(session.id, !!session.is_favorite)
-                  }
-                }}
               >
                 {session.is_favorite ? <StarFilled /> : <StarOutlined />}
-              </span>,
+              </button>,
               <Popconfirm
                 key="delete"
                 title="删除会话"
@@ -934,19 +1106,14 @@ export default function ChatbotPage() {
 
       {/* 移动端抽屉遮罩：仅 siderOpen 时渲染，桌面端 display:none 不显示 */}
       {siderOpen && (
-        <div
+        <button
+          type="button"
           className="cb-sider-mask"
+          // 原生 button 默认支持 Enter/Space 触发 click，无需 onKeyDown/role/tabIndex
+          // 重置 border 与 padding 以保留 cb-sider-mask 的全屏遮罩样式
+          style={{ border: 'none', padding: 0 }}
           onClick={() => setSiderOpen(false)}
-          // S1082/S6847/S6848：遮罩可点击须可被键盘操作，aria-hidden 与 onClick 冲突故移除
-          role="button"
-          tabIndex={0}
           aria-label="关闭会话列表"
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault()
-              setSiderOpen(false)
-            }
-          }}
         />
       )}
 
@@ -969,10 +1136,15 @@ export default function ChatbotPage() {
 
         {/* 输入区：当前会话存在时显示，与消息区/引导卡互斥 */}
         {currentSession && (
+          // S6848 修复：原 div+role=button 既有 onDrop/onDragOver 又被错配为 button 角色。
+          // 拖拽落点本身不需要 role：HTML5 拖拽 API 天然支持 div 作为 dropzone，
+          // 既不是交互控件、也不需要 Enter/Space 触发；移除 role/tabIndex/onKeyDown。
+          // 同时把内部可点击的 CloseCircleFilled 改为原生 button（S6842 修复）。
           <div
             className="cb-input-area"
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
+            aria-label="消息输入区，可拖拽图片到此处上传"
           >
             {/* M3 快捷回复：仅在非流式且有数据时显示 */}
             {!isStreaming && quickReplies.length > 0 && (
@@ -988,22 +1160,17 @@ export default function ChatbotPage() {
                   // S6479：data URL 作为稳定 key，避免数组索引在增删时错位
                   <div key={img} className="cb-image-thumb">
                     <img src={img} alt={`图片${idx + 1}`} />
-                    <CloseCircleFilled
+                    {/* S6842 修复：原 CloseCircleFilled + role=button 是给非交互元素加交互 role，
+                        改用原生 button 包裹图标，原生支持 Enter/Space 触发 onClick */}
+                    <button
+                      type="button"
                       className="cb-image-remove"
-                      onClick={() =>
-                        setPendingImages((prev) => prev.filter((_, i) => i !== idx))
-                      }
-                      // S1082/S6847/S6848：图标可点击需补全键盘可达性
-                      role="button"
-                      tabIndex={0}
+                      // S2004：updater 由模块级工厂 createRemoveImageUpdater 生成
+                      onClick={() => setPendingImages(createRemoveImageUpdater(idx))}
                       aria-label={`删除图片${idx + 1}`}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
-                          setPendingImages((prev) => prev.filter((_, i) => i !== idx))
-                        }
-                      }}
-                    />
+                    >
+                      <CloseCircleFilled />
+                    </button>
                   </div>
                 ))}
               </div>
@@ -1119,30 +1286,9 @@ function MessageBubble({ message: msg, sessionId }: { readonly message: Message;
         {isUser ? (
           <>
             {/* M4 图文混排：先渲染图片缩略图，再渲染文本 */}
-            {/* 可选链替代 msg.images && msg.images.length：S6582 */}
-            {msg.images?.length > 0 && (
-              <div className="cb-msg-images">
-                {msg.images.map((img, idx) => (
-                  <img
-                    // S6479：图片 URL 作为稳定 key
-                    key={img}
-                    src={img}
-                    alt={`图片${idx + 1}`}
-                    className="cb-msg-image-thumb"
-                    onClick={() => window.open(img, '_blank')}
-                    // S1082/S6847/S6848：图片可点击需补全键盘可达性
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        window.open(img, '_blank')
-                      }
-                    }}
-                  />
-                ))}
-              </div>
-            )}
+            {/* msg.images?.length 让 TypeScript 收窄失败（属性别名收窄限制），
+                改用 alias 变量：外层 if 已确保非空，imgs 自动收窄为 string[] */}
+            {msg.images && msg.images.length > 0 && renderMessageImages(msg.images, window)}
             <Typography.Paragraph className="cb-bubble-text">
               {msg.content}
             </Typography.Paragraph>

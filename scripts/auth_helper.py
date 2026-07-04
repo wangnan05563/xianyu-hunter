@@ -187,20 +187,19 @@ async def _cmd_info(out_dir: Path) -> int:
                             uid = c["value"][:16]
                             break
                 # 4) 最终登录态判定
-                #    关键：必须同时满足 (1) 页面有真实昵称 (2) 有关键登录 Cookie
-                #    仅页面不跳转不代表已登录（闲鱼未登录时也会展示默认个人主页）
-                #    仅 Cookie 存在也不代表有效（可能是过期残留）
+                #    关键：以关键登录 Cookie 为准（unb/_tb_token_/cookie2 任一存在即视为已登录）
+                #    之前要求 nick 非空 + cookie 才算登录，会导致 DOM 抓取失败时误判为未登录
+                #    （顶部 UserMenu 显示"未登录"），而 cookie 才是登录态的硬指标
                 #    关键登录 Cookie：unb（用户ID）、_tb_token_（淘宝Token）、cookie2
                 login_cookie_names = {"unb", "_tb_token_", "cookie2"}
                 has_login_cookie = bool(login_cookie_names & goofish_names)
                 if is_login_url:
                     logged_in = False
-                elif raw_nick and has_login_cookie:
-                    logged_in = True
                 else:
-                    # 缺少任一条件 → 按未登录处理，避免误判
-                    logged_in = False
-                # 5) 昵称为空且登录态有效：再尝试我的淘宝页
+                    # cookie 在 + 不在登录页 URL → 视为已登录
+                    # 不再要求 nick 非空：nick 抓取易受 DOM 反爬影响，cookie 更可靠
+                    logged_in = has_login_cookie
+                # 5) 昵称为空且登录态有效：依次尝试 淘宝我的页面 → cookie unb 兜底
                 if logged_in and not raw_nick:
                     try:
                         await page.goto(
@@ -211,16 +210,31 @@ async def _cmd_info(out_dir: Path) -> int:
                         await page.wait_for_timeout(2000)
                         info2 = await page.evaluate(
                             """() => {
-                              const t = (document.querySelector('[class*="nick"]') ||
-                                         document.querySelector('[class*="userName"]') ||
-                                         document.querySelector('[class*="username"]'));
-                              return t ? (t.textContent || '').trim() : '';
+                              const sel = [
+                                '[class*="nick"]', '[class*="userName"]',
+                                '[class*="username"]', '[class*="userNick"]',
+                                '[class*="user-nick"]', '[class*="nickname"]',
+                              ];
+                              for (const s of sel) {
+                                const el = document.querySelector(s);
+                                if (el && (el.textContent || '').trim()) {
+                                  return (el.textContent || '').trim();
+                                }
+                              }
+                              return '';
                             }"""
                         )
-                        if info2 and info2 not in ("登录", "登錄"):
+                        if info2 and info2 not in ("登录", "登錄", "Login", "Sign in"):
                             raw_nick = info2
                     except Exception:
                         pass
+                # 5.1) 仍为空：用 unb cookie 值作为兜底昵称（至少有可读标识，比空字符串好）
+                #      不直接用 user_id 是因为 user_id 可能是 _tb_token_ 截断的前 16 字符
+                if logged_in and not raw_nick:
+                    for c in goofish_cookies:
+                        if c.get("name") == "unb" and c.get("value"):
+                            raw_nick = f"闲鱼用户{c['value'][-4:]}"
+                            break
                 result = {
                     "logged_in": logged_in,
                     "user_id": uid,
@@ -422,7 +436,11 @@ async def _cmd_qr(out_dir: Path, timeout: int) -> int:
 
 
 async def _fetch_userinfo_into(ctx, out_dir: Path) -> None:
-    """登录成功后顺便抓 userinfo 写入缓存（用 personal 页面更稳定）"""
+    """登录成功后顺便抓 userinfo 写入缓存（用 personal 页面更稳定）
+
+    与 _cmd_info 共用判定逻辑：cookie 有效即视为已登录，nick 抓取失败时
+    用 unb cookie 后4位兜底，避免登录态与昵称耦合导致 UserMenu 显示"未登录"。
+    """
     try:
         page = await ctx.new_page()
         await page.goto("https://www.goofish.com/personal", wait_until="domcontentloaded", timeout=15000)
@@ -433,8 +451,9 @@ async def _fetch_userinfo_into(ctx, out_dir: Path) -> None:
                 '[class*="userInfo"] [class*="nick"]',
                 '[class*="user-info"] [class*="nick"]',
                 '[class*="userInfo--"] [class*="nick--"]',
-                '[class*="userName"]',
-                '[class*="username"]',
+                '[class*="userName"]', '[class*="username"]',
+                '[class*="userNick"]', '[class*="user-nick"]',
+                '[class*="nickname"]', '[class*="nickName"]',
               ];
               let nick = '';
               for (const s of sel) {
@@ -452,14 +471,18 @@ async def _fetch_userinfo_into(ctx, out_dir: Path) -> None:
             }"""
         )
         cookies = await ctx.cookies()
+        goofish_cookies = [c for c in cookies if "goofish" in (c.get("domain") or "")]
         uid = ""
-        for c in cookies:
-            if c.get("name") == "unb" and "goofish" in (c.get("domain") or ""):
+        for c in goofish_cookies:
+            if c.get("name") == "unb":
                 uid = c["value"]
                 break
         nick = (info.get("nick") or "").strip()
-        if nick in ("登录", "登錄", "Login", "Sign in", "立即登录"):
+        if nick in ("登录", "登錄", "Login", "Sign in", "立即登录", "Hi! 你好", "Hi！你好", "你好", ""):
             nick = ""
+        # 兜底：DOM 抓取失败时用 unb 后4位生成可读昵称
+        if not nick and uid:
+            nick = f"闲鱼用户{uid[-4:]}"
         result = {
             "logged_in": True,
             "user_id": uid,

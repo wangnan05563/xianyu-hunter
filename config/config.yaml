@@ -103,13 +103,13 @@ search:
   - free_shipping
 price_strategy:
   enabled_max: true
-  max_price: 700
+  max_price: 750
   enabled_min: true
-  min_price: 510
+  min_price: 600
   enabled_market_ratio: true
-  market_ratio: 0.8
+  market_ratio: 1
   enabled_top_n: true
-  top_n: 5
+  top_n: 10
 batch_refresh:
   enabled: true
   interval_minutes: 30
@@ -124,6 +124,8 @@ chatbot:
     top_k: 5
     similarity_threshold: 0.65
     max_context_chars: 8000
+    enable_follow_ups: true
+    follow_up_count: 3
   llm:
     model: deepseek-chat
     temperature: 0.3
@@ -167,3 +169,7 @@ telegram_bot_token: ''
 telegram_chat_id: ''
 wecom_webhook: ''
 webhook_url: ''
+task_scheduler:
+  default_interval_seconds: 60
+  auto_search_enabled: false
+  auto_search_concurrency: 1

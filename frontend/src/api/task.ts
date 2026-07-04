@@ -68,10 +68,13 @@ export const taskDetailApi = {
 // SSE 实时搜索进度事件类型
 export interface LiveProgress {
   // waiting_inflight: 已有搜索在进行中，等待复用结果（避免并发竞争 browser_lock）
-  stage: 'checking_cache' | 'checking_cookies' | 'waiting_inflight' | 'acquiring_lock' | 'searching' | 'refreshing_token' | 'searching_retry' | 'filtering' | 'writing_db' | 'done' | 'error'
+  // waiting_lock: 后台 Worker 正在执行搜索任务，实时查询等待浏览器锁（每 1.5s 推一次）
+  stage: 'checking_cache' | 'checking_cookies' | 'waiting_inflight' | 'acquiring_lock' | 'waiting_lock' | 'searching' | 'refreshing_token' | 'searching_retry' | 'filtering' | 'writing_db' | 'done' | 'error'
   detail?: string
   status?: number
   count?: number
+  // waiting_lock 阶段携带已等待秒数，前端用于拼接文案
+  elapsed_sec?: number
   // done 阶段携带的完整结果
   ok?: boolean
   items?: TaskLink[]
@@ -107,6 +110,47 @@ export interface LiveFilteredItem {
   filter_detail: string
 }
 
+// 构造 axios 兼容错误对象：让上层 catch 能识别 HTTP 状态码与响应体
+// 为什么需要：fetch 抛出的原生 Error 没有 response 字段，401 拦截器等需要 .response.status
+const makeHttpError = (status: number, data: unknown): Error & { response: { status: number; data: unknown } } =>
+  Object.assign(new Error(`HTTP ${status}`), { response: { status, data } })
+
+// 解析单条 SSE 事件文本为 LiveProgress 对象
+// 为什么独立：JSON.parse 失败时返回 null 让调用方统一处理，避免主循环嵌套 try/catch
+const parseSSEEvent = (line: string): LiveProgress | null => {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith('data: ')) return null
+  try {
+    return JSON.parse(trimmed.slice(6)) as LiveProgress
+  } catch {
+    return null
+  }
+}
+
+// 分发单条 SSE 事件：done 写入 finalData、error 抛出兼容错误、其他仅回调 onProgress
+// 返回 { finalData, shouldThrow }，调用方按返回值推进状态机，保持原有 throw 语义
+// 为什么返回值而非直接 throw：把分发逻辑提纯后主循环不再需要 try/catch，降低认知复杂度
+const dispatchSSEEvent = (
+  data: LiveProgress,
+  onProgress?: (data: LiveProgress) => void,
+): { finalData: LiveProgress | null; shouldThrow: Error & { response: unknown } | null } => {
+  // done 阶段：先记录终态数据，再回调 onProgress（保持与原 if/else 后统一 onProgress 的顺序）
+  if (data.stage === 'done') {
+    onProgress?.(data)
+    return { finalData: data, shouldThrow: null }
+  }
+  // error 阶段：构造兼容错误抛出，不回调 onProgress（原实现用 throw 跳过 onProgress）
+  if (data.stage === 'error') {
+    return {
+      finalData: null,
+      shouldThrow: makeHttpError(data.status || 502, { detail: data.detail }),
+    }
+  }
+  // 其他阶段：仅回调 onProgress 推送进度
+  onProgress?.(data)
+  return { finalData: null, shouldThrow: null }
+}
+
 // 任务关联（商品列表）API：管理任务下挂载的商品/卖家链接
 export const taskLinkApi = {
   list: (
@@ -135,8 +179,7 @@ export const taskLinkApi = {
       // 前置检查失败（HTTP 错误码），按 axios 兼容格式抛出
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: response.statusText }))
-        // 抛出 Error 实例并附加 axios 兼容的 response 结构，便于上层 catch 统一处理
-        throw Object.assign(new Error(`HTTP ${response.status}`), { response: { status: response.status, data: errorData } })
+        throw makeHttpError(response.status, errorData)
       }
       const reader = response.body!.getReader()
       const decoder = new TextDecoder()
@@ -150,21 +193,13 @@ export const taskLinkApi = {
         const events = buffer.split('\n\n')
         buffer = events.pop() || ''
         for (const evt of events) {
-          const line = evt.trim()
-          if (!line.startsWith('data: ')) continue
-          try {
-            const data = JSON.parse(line.slice(6)) as LiveProgress
-            if (data.stage === 'done') {
-              finalData = data
-            } else if (data.stage === 'error') {
-              // SSE 错误事件：按 axios 兼容格式抛出，触发 401 拦截器
-              throw Object.assign(new Error(`HTTP ${data.status || 502}`), { response: { status: data.status || 502, data: { detail: data.detail } } })
-            }
-            onProgress?.(data)
-          } catch (e) {
-            // 传播已构造的 axios 兼容错误
-            if (e && typeof e === 'object' && 'response' in e) throw e
-          }
+          // 解析 + 分发拆为纯函数，避免主循环嵌套 try/catch 与多层 if
+          const parsed = parseSSEEvent(evt)
+          if (!parsed) continue
+          const result = dispatchSSEEvent(parsed, onProgress)
+          // error 阶段抛出兼容错误，触发 401 拦截器等上层处理
+          if (result.shouldThrow) throw result.shouldThrow
+          if (result.finalData) finalData = result.finalData
         }
       }
       return finalData

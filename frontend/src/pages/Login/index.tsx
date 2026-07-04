@@ -106,6 +106,69 @@ const formatTimings = (timings?: Record<string, number>) => {
     .join(' · ')
 }
 
+// Cookie 字段元信息：key + 中文标签 + 输入提示
+// 为什么提到模块级：静态数据避免每次渲染重建，且被多处辅助函数引用
+const COOKIE_KEYS = [
+  { key: '_m_h5_tk', label: '安全令牌', hint: '每小时自动刷新，过期后搜索会报签名错误' },
+  { key: 'cookie2', label: '会话ID', hint: '' },
+  { key: 'sgcookie', label: '安全Cookie', hint: '' },
+  { key: 'unb', label: '用户ID', hint: '' },
+] as const
+
+// 空字段模板：handleAutoFillFromBrowser 用此作为 prev 重置字段，避免浏览器残留值干扰
+const EMPTY_COOKIE_FIELDS: Record<string, string> = {
+  _m_h5_tk: '', cookie2: '', sgcookie: '', unb: '',
+}
+
+// 把后端返回的 cookies 应用到字段对象上，返回新对象 + matched 列表
+// 为什么提取：useEffect 自动填充、handleParsePaste、handleAutoFillFromBrowser 三处都用相同循环
+const applyCookiesToFields = (
+  cookies: Record<string, string>,
+  prev: Record<string, string>,
+): { updated: Record<string, string>; filled: number; matched: string[] } => {
+  const updated = { ...prev }
+  const matched: string[] = []
+  for (const ck of COOKIE_KEYS) {
+    if (cookies[ck.key]) {
+      updated[ck.key] = cookies[ck.key]
+      matched.push(ck.key)
+    }
+  }
+  return { updated, filled: matched.length, matched }
+}
+
+// 拼接非空字段为 cookie 字符串：key1=value1; key2=value2
+// 为什么提取：handleInjectCookie 内的 filter+map+join 链提取后主流程语义更清晰
+const buildCookieString = (fields: Record<string, string>): string => {
+  return COOKIE_KEYS
+    .filter((ck) => fields[ck.key]?.trim())
+    .map((ck) => `${ck.key}=${fields[ck.key].trim()}`)
+    .join('; ')
+}
+
+// 根据 fetch-keys 接口返回的 source 生成用户友好的来源说明标签
+// 为什么提取：handleAutoFillFromBrowser 中嵌套 if/else if，提取后降低复杂度
+const sourceLabel = (source?: string): string => {
+  if (source === 'cookie_store_json_fallback') return '（回退到上次保存的 Cookie）'
+  if (source === 'playwright_cdp') return '（来自项目浏览器）'
+  return ''
+}
+
+// 格式化浏览器导入结果：有 hint 时拼成多行，无 hint 时只返回错误信息
+// 为什么提取：handleImportFromBrowser 的失败分支与 catch 分支都用相同拼接逻辑
+const formatImportResult = (errMsg: string, hint?: string): string => {
+  return hint ? `${errMsg}\n${hint}` : errMsg
+}
+
+// 从 axios 错误对象中提取浏览器导入错误信息（errMsg + hint）
+// 为什么提取：catch 块里多个 ?. 链 + 默认值，提取后主流程更清晰
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const extractImportBrowserError = (err: any): { errMsg: string; hint: string } => {
+  const errMsg = err?.response?.data?.error || '请求失败'
+  const hint = err?.response?.data?.hint || ''
+  return { errMsg, hint }
+}
+
 // 登录页面：独立于 MainLayout，提供多种登录方式
 export default function Login() {
   const navigate = useNavigate()
@@ -120,12 +183,7 @@ export default function Login() {
   const [checkingAuth, setCheckingAuth] = useState(true)
 
   // Cookie 注入 Tab 状态 — 分字段输入（参考旧版 dashboard 设计）
-  const COOKIE_KEYS = [
-    { key: '_m_h5_tk', label: '安全令牌', hint: '每小时自动刷新，过期后搜索会报签名错误' },
-    { key: 'cookie2', label: '会话ID', hint: '' },
-    { key: 'sgcookie', label: '安全Cookie', hint: '' },
-    { key: 'unb', label: '用户ID', hint: '' },
-  ] as const
+  // COOKIE_KEYS 与 EMPTY_COOKIE_FIELDS 已提到模块级，被多个辅助函数共用
   const [cookieFields, setCookieFields] = useState<Record<string, string>>({
     _m_h5_tk: '', cookie2: '', sgcookie: '', unb: '',
   })
@@ -176,14 +234,8 @@ export default function Login() {
       .then((r) => r.json())
       .then((data) => {
         if (data.ok && data.cookies) {
-          const updated = { ...cookieFields }
-          let filled = 0
-          for (const ck of COOKIE_KEYS) {
-            if (data.cookies[ck.key]) {
-              updated[ck.key] = data.cookies[ck.key]
-              filled++
-            }
-          }
+          // 复用 applyCookiesToFields：与 handleParsePaste/handleAutoFillFromBrowser 同一逻辑
+          const { updated, filled } = applyCookiesToFields(data.cookies, cookieFields)
           if (filled > 0) setCookieFields(updated)
         }
       })
@@ -217,10 +269,8 @@ export default function Login() {
     }
     setInjecting(true)
     try {
-      // 将分字段拼接为旧版格式的 cookie 字符串
-      const parts = COOKIE_KEYS.filter((ck) => cookieFields[ck.key]?.trim())
-        .map((ck) => `${ck.key}=${cookieFields[ck.key].trim()}`)
-      const cookieString = parts.join('; ')
+      // 将分字段拼接为旧版格式的 cookie 字符串（提取为 buildCookieString 降低嵌套）
+      const cookieString = buildCookieString(cookieFields)
       const result = await authApi.injectCookie(cookieString)
       if (result.ok) {
         message.success(result.message || 'Cookie 注入成功')
@@ -259,15 +309,8 @@ export default function Login() {
       return
     }
 
-    // 将解析出的关键 Cookie 填充到分字段输入框
-    const updated = { ...cookieFields }
-    const matched: string[] = []
-    for (const ck of COOKIE_KEYS) {
-      if (parsed[ck.key]) {
-        updated[ck.key] = parsed[ck.key]
-        matched.push(ck.key)
-      }
-    }
+    // 复用 applyCookiesToFields：与 useEffect 自动填充、handleAutoFillFromBrowser 共用同一循环
+    const { updated, matched } = applyCookiesToFields(parsed, cookieFields)
     setCookieFields(updated)
 
     const missing = COOKIE_KEYS.map((ck) => ck.key).filter((k) => !matched.includes(k))
@@ -294,26 +337,14 @@ export default function Login() {
       })
       const data = await r.json()
       if (data.ok && data.cookies) {
-        let filled = 0
-        // 先清空所有字段，防止浏览器自动填充的残留值干扰
-        const updated: Record<string, string> = {
-          _m_h5_tk: '', cookie2: '', sgcookie: '', unb: '',
-        }
-        for (const ck of COOKIE_KEYS) {
-          if (data.cookies[ck.key]) {
-            updated[ck.key] = data.cookies[ck.key]
-            filled++
-          }
-        }
+        // 先用空模板重置字段，再用 applyCookiesToFields 应用浏览器返回值（避免残留值干扰）
+        const { updated, filled } = applyCookiesToFields(data.cookies, EMPTY_COOKIE_FIELDS)
         setCookieFields(updated)
-        // Cookie 来源说明：仅对特定 source 显示，避免空字符串拼接
-        let srcLabel = ''
-        if (data.source === 'cookie_store_json_fallback') {
-          srcLabel = '（回退到上次保存的 Cookie）'
-        } else if (data.source === 'playwright_cdp') {
-          srcLabel = '（来自项目浏览器）'
-        }
-        setAutoFillResult({ text: `成功获取 ${filled} 个 Cookie 值${srcLabel}`, error: data.source === 'cookie_store_json_fallback' })
+        // Cookie 来源说明：仅对特定 source 显示（提取为 sourceLabel 降低嵌套）
+        setAutoFillResult({
+          text: `成功获取 ${filled} 个 Cookie 值${sourceLabel(data.source)}`,
+          error: data.source === 'cookie_store_json_fallback',
+        })
       } else {
         setAutoFillResult({ text: data.hint || data.error || '未找到 Cookie', error: true })
       }
@@ -356,16 +387,15 @@ export default function Login() {
         message.success(result.message || '导入成功')
         onLoginSuccess()
       } else {
-        // 格式化错误提示，支持多行 hint 显示
+        // 失败分支：用 formatImportResult 拼接 errMsg + hint（与 catch 分支共用）
         const errMsg = result.error || '导入失败'
-        const hint = result.hint || ''
-        setImportResult(hint ? `${errMsg}\n${hint}` : errMsg)
+        setImportResult(formatImportResult(errMsg, result.hint))
         message.error(errMsg)
       }
     } catch (err: any) {
-      const errMsg = err?.response?.data?.error || '请求失败'
-      const hint = err?.response?.data?.hint || ''
-      setImportResult(hint ? `${errMsg}\n${hint}` : errMsg)
+      // catch 分支：从 axios 错误对象提取 errMsg + hint，再统一格式化
+      const { errMsg, hint } = extractImportBrowserError(err)
+      setImportResult(formatImportResult(errMsg, hint))
       message.error(errMsg)
     } finally {
       setImporting(false)
@@ -539,8 +569,11 @@ export default function Login() {
                 </Button>
               )}
 
-              {/* 错误/超时重试 */}
-              {['error', 'timeout'].includes(loginStatus.status) && (
+              {/* 终态重试：success/cancelled/error/timeout 都允许重新登录
+                  - error/timeout：常规重试
+                  - cancelled：用户主动取消后可能想重新尝试
+                  - success：跳转失败的兜底（onLoginSuccess 未成功跳转时用户可手动重试） */}
+              {['success', 'cancelled', 'error', 'timeout'].includes(loginStatus.status) && (
                 <Button type="primary" icon={<ReloadOutlined />} onClick={handleStartBrowserLogin}
                   style={{ background: '#FF6200', borderColor: '#FF6200' }}>
                   重新登录

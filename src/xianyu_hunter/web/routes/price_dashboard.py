@@ -159,6 +159,78 @@ def category_stats(
     return {"categories": categories, "total_count": total}
 
 
+_ALLOWED_COMPARISON_SORT = {"mean", "median", "min", "max", "p10", "p25", "p75", "p90", "count"}
+
+
+def _normalize_comparison_params(sort_by: str, order: str) -> tuple[str, str]:
+    """白名单校验排序字段和方向，防止 SQL 注入和无效字段
+
+    非法值统一回退到默认值，不抛错让前端能继续展示。
+    """
+    if sort_by not in _ALLOWED_COMPARISON_SORT:
+        sort_by = "mean"
+    if order not in ("asc", "desc"):
+        order = "asc"
+    return sort_by, order
+
+
+def _filter_category_prices_by_range(conn, task_map: dict, range_days: int) -> None:
+    """range_days>0 时基于 publish_time 重新筛选样本，原地修改 task_map
+
+    原始 task_map 由 _load_category_prices 全量加载，这里清空 prices 后
+    按时间窗重新填充，保证统计口径与时间过滤一致。
+    """
+    if range_days <= 0:
+        return
+    cutoff = _utcnow() - timedelta(days=range_days)
+    # 重新加载带时间过滤的样本
+    item_rows = conn.execute(
+        select(ItemRow.task_id, ItemRow.price, ItemRow.publish_time)
+        .where(ItemRow.publish_time >= cutoff)
+    ).all()
+    # 清空原有 prices，重新填充
+    for info in task_map.values():
+        info["prices"] = []
+    orphan_prices: list[float] = []
+    for r in item_rows:
+        tid, price, _ = r[0], r[1], r[2]
+        if price is None:
+            continue
+        p = float(price)
+        if tid and tid in task_map:
+            task_map[tid]["prices"].append(p)
+        else:
+            orphan_prices.append(p)
+    if orphan_prices:
+        task_map["__orphan__"] = {
+            "name": "未分类",
+            "keyword": "",
+            "prices": orphan_prices,
+        }
+
+
+def _make_comparison_sort_key(sort_by: str, order: str):
+    """闭包工厂：捕获 sort_by 和 order 返回排序键函数，避免嵌套三元
+
+    空样本根据排序方向推到队尾，避免 0 值干扰排序。
+    """
+    def _sort_key(c: dict[str, Any]) -> float:
+        if c["count"] > 0:
+            return c[sort_by]
+        # 空样本根据排序方向推到队尾
+        if order == "asc":
+            return float("inf")
+        return float("-inf")
+    return _sort_key
+
+
+def _compute_deviation_pct(c: dict[str, Any], overall_mean: float) -> float:
+    """计算单个品类相对全体均价的偏离度百分比"""
+    if overall_mean > 0 and c["count"] > 0:
+        return round((c["mean"] - overall_mean) / overall_mean * 100, 1)
+    return 0.0
+
+
 @router.get("/prices/category-comparison")
 def category_comparison(
     sort_by: str = Query("mean", description="排序字段: mean/median/min/p25/p75/count"),
@@ -172,44 +244,12 @@ def category_comparison(
     按 sort_by 排序后返回前 limit 个品类的价格统计。
     range_days>0 时仅统计最近 N 天的商品，便于观察短期行情变化。
     """
-    # 白名单校验排序字段，防止 SQL 注入和无效字段
-    allowed_sort = {"mean", "median", "min", "max", "p10", "p25", "p75", "p90", "count"}
-    if sort_by not in allowed_sort:
-        sort_by = "mean"
-    if order not in ("asc", "desc"):
-        order = "asc"
+    sort_by, order = _normalize_comparison_params(sort_by, order)
 
     engine = container.repo.engine
     with engine.connect() as conn:
         task_map = _load_category_prices(conn)
-
-        # range_days 过滤：基于 publish_time 筛选
-        if range_days > 0:
-            cutoff = _utcnow() - timedelta(days=range_days)
-            # 重新加载带时间过滤的样本
-            item_rows = conn.execute(
-                select(ItemRow.task_id, ItemRow.price, ItemRow.publish_time)
-                .where(ItemRow.publish_time >= cutoff)
-            ).all()
-            # 清空原有 prices，重新填充
-            for info in task_map.values():
-                info["prices"] = []
-            orphan_prices: list[float] = []
-            for r in item_rows:
-                tid, price, _ = r[0], r[1], r[2]
-                if price is None:
-                    continue
-                p = float(price)
-                if tid and tid in task_map:
-                    task_map[tid]["prices"].append(p)
-                else:
-                    orphan_prices.append(p)
-            if orphan_prices:
-                task_map["__orphan__"] = {
-                    "name": "未分类",
-                    "keyword": "",
-                    "prices": orphan_prices,
-                }
+        _filter_category_prices_by_range(conn, task_map, range_days)
 
     # 计算统计并排序
     categories: list[dict[str, Any]] = []
@@ -222,18 +262,8 @@ def category_comparison(
             **stats,
         })
 
-    # 空样本的品类排在最后，避免 0 值干扰排序
-    # 闭包捕获 sort_by 和 order，避免嵌套三元
-    def _sort_key(c: dict[str, Any]) -> float:
-        if c["count"] > 0:
-            return c[sort_by]
-        # 空样本根据排序方向推到队尾
-        if order == "asc":
-            return float("inf")
-        return float("-inf")
-
     categories.sort(
-        key=_sort_key,
+        key=_make_comparison_sort_key(sort_by, order),
         reverse=(order == "desc"),
     )
 
@@ -244,10 +274,7 @@ def category_comparison(
     all_prices = [p for c in categories for _ in range(min(c["count"], 100)) for p in [c["mean"]]]
     overall_mean = round(sum(all_prices) / len(all_prices), 2) if all_prices else 0.0
     for c in categories:
-        if overall_mean > 0 and c["count"] > 0:
-            c["deviation_pct"] = round((c["mean"] - overall_mean) / overall_mean * 100, 1)
-        else:
-            c["deviation_pct"] = 0.0
+        c["deviation_pct"] = _compute_deviation_pct(c, overall_mean)
 
     return {
         "categories": categories,

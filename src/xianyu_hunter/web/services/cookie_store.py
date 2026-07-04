@@ -348,36 +348,76 @@ class CookieStore:
             data = self._read_json(user_id)
             if not data or not data.get("cookies"):
                 return False
-            existing_names = {c.get("name", "") for c in data["cookies"]}
-            changed = False
-            # 更新已存在的
-            for c in data["cookies"]:
-                name = c.get("name", "")
-                if name in upserts and c.get("value") != upserts[name].get("value"):
-                    c["value"] = upserts[name].get("value", c.get("value", ""))
-                    changed = True
-            # 添加不存在的
-            for name, props in upserts.items():
-                if name not in existing_names and props.get("value"):
-                    data["cookies"].append({
-                        "name": name,
-                        "value": props["value"],
-                        "domain": props.get("domain", ".goofish.com"),
-                        "path": props.get("path", "/"),
-                        "expires": props.get("expires", -1),
-                    })
-                    changed = True
-            if changed:
-                data["exported_at"] = time.time()
-                existing_method = data.get("method", "unknown")
-                if "browser_sync" not in existing_method:
-                    data["method"] = existing_method + "+browser_sync"
-                success = self._write_json(data, user_id)
-                if success:
-                    logger.info("已 upsert %d 个 Cookie 到 JSON: %s",
-                                len(upserts), sorted(upserts.keys()))
-                return success
-            return False
+            if not self._apply_upsert_to_cookies(data["cookies"], upserts):
+                return False
+            data["exported_at"] = time.time()
+            data["method"] = self._merge_method(data.get("method", "unknown"), "browser_sync")
+            success = self._write_json(data, user_id)
+            if success:
+                logger.info(
+                    "已 upsert %d 个 Cookie 到 JSON: %s",
+                    len(upserts),
+                    sorted(upserts.keys()),
+                )
+            return success
+
+    def _apply_upsert_to_cookies(
+        self,
+        cookies: list[dict],
+        upserts: dict[str, dict],
+    ) -> bool:
+        """应用 upsert 变更到 cookies 列表，返回是否有变更
+
+        拆分为「更新已存在」+「添加不存在」两个职责，避免单函数嵌套过深。
+        """
+        existing_names = {c.get("name", "") for c in cookies}
+        changed = False
+        changed |= self._update_existing_cookies(cookies, upserts)
+        changed |= self._append_missing_cookies(cookies, upserts, existing_names)
+        return changed
+
+    def _update_existing_cookies(self, cookies: list[dict], upserts: dict[str, dict]) -> bool:
+        """将 upserts 中已存在 cookie 的值同步到列表，返回是否发生变更"""
+        changed = False
+        for c in cookies:
+            name = c.get("name", "")
+            if name in upserts and c.get("value") != upserts[name].get("value"):
+                c["value"] = upserts[name].get("value", c.get("value", ""))
+                changed = True
+        return changed
+
+    def _append_missing_cookies(
+        self,
+        cookies: list[dict],
+        upserts: dict[str, dict],
+        existing_names: set[str],
+    ) -> bool:
+        """将 upserts 中不存在的 cookie 追加到列表，返回是否发生追加"""
+        changed = False
+        for name, props in upserts.items():
+            if name in existing_names or not props.get("value"):
+                continue
+            cookies.append(self._build_cookie_entry(name, props))
+            changed = True
+        return changed
+
+    @staticmethod
+    def _build_cookie_entry(name: str, props: dict) -> dict:
+        """构造单条 cookie 字典，缺省字段使用 .goofish.com 域与根路径"""
+        return {
+            "name": name,
+            "value": props["value"],
+            "domain": props.get("domain", ".goofish.com"),
+            "path": props.get("path", "/"),
+            "expires": props.get("expires", -1),
+        }
+
+    @staticmethod
+    def _merge_method(existing_method: str, new_tag: str) -> str:
+        """合并 method 标记：若 new_tag 已存在则不重复拼接"""
+        if new_tag in existing_method:
+            return existing_method
+        return f"{existing_method}+{new_tag}"
 
     # ---------- 内部方法 ----------
 

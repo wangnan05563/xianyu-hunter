@@ -301,6 +301,12 @@ export interface EvalItem {
     seller_nick?: string
     // 后端 _enrich_eval_with_item 从 items/task_links.display 补充的品牌字段
     brand?: string
+    // 后端 _enrich_eval_with_item 注入的销售状态（bool），总是覆盖旧值以反映最新状态
+    is_sold?: boolean
+    // 后端 _enrich_eval_with_item 实时关联 orders 表注入的订单状态（无订单时为 null）
+    // 为什么放 payload 而非顶级：order_status 是派生字段，不应污染 events 表原始事件
+    order_status?: string | null
+    order_id?: string | number | null
     [k: string]: unknown
   }
 }
@@ -738,4 +744,9 @@ export interface AuthMe {
   avatar_url?: string
   fetched_at?: number
   detecting?: boolean
+  // 后端新增：本地用户名（自定义别名 > 闲鱼昵称 > user_id）
+  // 为什么需要：多用户场景下 nick 抓取可能失败，但 users.nickname/custom_alias 仍可辨识
+  local_username?: string
+  nickname?: string
+  custom_alias?: string
 }

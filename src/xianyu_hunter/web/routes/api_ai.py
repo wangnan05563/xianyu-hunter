@@ -195,13 +195,14 @@ def _to_number(raw: str) -> float | None:
         return None
 
 
-def _rule_parse(text: str) -> dict[str, Any]:
-    """规则解析：覆盖基础场景（价格 + 关键词），不依赖外部 LLM
+def _parse_price_range(t: str) -> tuple[float | None, float | None, re.Match | None]:
+    """规则解析-价格区间：识别 '预算 1000-3000' / '1k~2k' / '1.2w 以内' 等写法
 
-    输出格式与 LLM 输出一致，保证前端能无差别使用。
+    返回 (min_price, max_price, range_match)：
+    - range_match 用于后续关键词提取时移除价格片段
+    - 区间写法优先于单值写法（互斥）
+    - 100 以内数字（如"9 成新"）不算价格
     """
-    t = text.strip()
-    # 1. 价格区间：'预算 1000-3000' / '1k~2k'
     min_price: float | None = None
     max_price: float | None = None
     # 区间写法（"-" "～" "到" "至"）
@@ -211,36 +212,53 @@ def _rule_parse(text: str) -> dict[str, Any]:
     if range_m:
         min_price = _to_number(range_m.group(1).replace(" ", ""))
         max_price = _to_number(range_m.group(2).replace(" ", ""))
-    else:
-        # 单值："预算 1.2w" / "1.2w 以内" / "1.2w 左右"
-        single_m = re.search(
-            r"(\d+(?:\.\d+)?\s*[wWkK万千])(?:\s*(?:以内|以下|左右|上下|上下左右))?", t
-        )
-        if single_m:
-            max_price = _to_number(single_m.group(1).replace(" ", ""))
-        # "1k5" "1k" "5000" 等纯数字
-        if max_price is None:
-            num_m = re.search(r"(\d{2,7})", t)
-            if num_m:
-                v = float(num_m.group(1))
-                # 100 以内（如"9 成新"）不算价格
-                if v >= 100:
-                    max_price = v
+        return min_price, max_price, range_m
+    # 单值："预算 1.2w" / "1.2w 以内" / "1.2w 左右"
+    single_m = re.search(
+        r"(\d+(?:\.\d+)?\s*[wWkK万千])(?:\s*(?:以内|以下|左右|上下|上下左右))?", t
+    )
+    if single_m:
+        max_price = _to_number(single_m.group(1).replace(" ", ""))
+    # "1k5" "1k" "5000" 等纯数字
+    if max_price is None:
+        num_m = re.search(r"(\d{2,7})", t)
+        if num_m:
+            v = float(num_m.group(1))
+            # 100 以内（如"9 成新"）不算价格
+            if v >= 100:
+                max_price = v
+    return min_price, max_price, None
 
-    # 2. 模式
-    mode = "notify"
+
+def _parse_mode(t: str) -> str:
+    """规则解析-执行模式：从描述关键词推断 notify/confirm/auto
+
+    默认 notify；auto 关键词优先级高于 confirm（auto 更激进，命中即覆盖默认）。
+    """
     if re.search(r"(全自动|自动抢|秒拍|秒抢|自动拍|立刻下单|自动下单)", t):
-        mode = "auto"
-    elif re.search(r"(通知.{0,3}确认|我先看|先确认|半自动)", t):
-        mode = "confirm"
+        return "auto"
+    if re.search(r"(通知.{0,3}确认|我先看|先确认|半自动)", t):
+        return "confirm"
+    return "notify"
 
-    # 3. 排除词：用户明确说"不要 / 排除"
-    exclude_words: list[str] = []
+
+def _parse_exclude_words(t: str) -> tuple[list[str], re.Match | None]:
+    """规则解析-排除词：用户明确说"不要 / 排除"时提取后续词列表
+
+    返回 (words, excl_match)：excl_match 用于关键词提取时移除排除词片段。
+    """
     excl_m = re.search(r"(?:不要|排除|不想要|避开)\s*([^\s,，。；;]+(?:[\s,，。；;]+[^\s,，。；;]+)*)", t)
-    if excl_m:
-        exclude_words = [w.strip() for w in re.split(r"[\s,，。；;]+", excl_m.group(1)) if w.strip()]
+    if not excl_m:
+        return [], None
+    words = [w.strip() for w in re.split(r"[\s,，。；;]+", excl_m.group(1)) if w.strip()]
+    return words, excl_m
 
-    # 4. 关键词：剥掉价格/模式/排除词等"元数据"，剩下的核心商品描述
+
+def _extract_keyword(t: str, range_m: re.Match | None, excl_m: re.Match | None) -> str:
+    """规则解析-关键词：剥掉价格/模式/排除词等"元数据"，剩下的核心商品描述
+
+    多轮 re.sub 移除各类元信息后，若结果为空则保底用原文（避免空关键词）。
+    """
     kw = t
     # 移除价格相关
     if range_m:
@@ -258,19 +276,26 @@ def _rule_parse(text: str) -> dict[str, Any]:
     kw = re.sub(r"[\s,，。；;]+", " ", kw).strip()
     if not kw:
         kw = t  # 兜底：拿不到关键词就保底用原文
+    return kw
 
-    # 5. 备注：剩下的"元信息"（地域/版本/新旧）
+
+def _parse_notes(t: str) -> str:
+    """规则解析-备注：提取地域/版本/新旧等"元信息"
+
+    地域词（本地/同城/包邮/顺丰）和成新（如"9 成新"）是用户未结构化的偏好，
+    单独拼到 notes 字段供前端展示。
+    """
     note_m = re.search(r"([\u4e00-\u9fa5]{2,15}(本地|同城|包邮|顺丰))", t)
     notes = note_m.group(1) if note_m else ""
     if re.search(r"\d+\s*成新", t):
         cn_match = re.search(r"(\d+)\s*成新", t)
         if cn_match:
             notes = (notes + " · " + cn_match.group(0)).strip(" ·")
+    return notes
 
-    # 6. 任务名
-    name = kw[:30]
 
-    # 7. reason
+def _build_parse_reason(min_price: float | None, max_price: float | None, mode: str) -> str:
+    """规则解析-构建 reason：简短说明解析依据，让用户看懂字段来源"""
     reason_parts: list[str] = []
     if max_price is not None:
         reason_parts.append(f"max_price={int(max_price)}")
@@ -278,7 +303,30 @@ def _rule_parse(text: str) -> dict[str, Any]:
         reason_parts.append(f"min_price={int(min_price)}")
     if mode != "notify":
         reason_parts.append(f"mode={mode}")
-    reason = "规则解析: " + (", ".join(reason_parts) if reason_parts else "仅提取关键词")
+    return "规则解析: " + (", ".join(reason_parts) if reason_parts else "仅提取关键词")
+
+
+def _rule_parse(text: str) -> dict[str, Any]:
+    """规则解析：覆盖基础场景（价格 + 关键词），不依赖外部 LLM
+
+    输出格式与 LLM 输出一致，保证前端能无差别使用。
+    各解析维度独立提取为子函数，range_m/excl_m 通过参数传递以供关键词提取复用。
+    """
+    t = text.strip()
+    # 1. 价格区间
+    min_price, max_price, range_m = _parse_price_range(t)
+    # 2. 模式
+    mode = _parse_mode(t)
+    # 3. 排除词
+    exclude_words, excl_m = _parse_exclude_words(t)
+    # 4. 关键词
+    kw = _extract_keyword(t, range_m, excl_m)
+    # 5. 备注
+    notes = _parse_notes(t)
+    # 6. 任务名
+    name = kw[:30]
+    # 7. reason
+    reason = _build_parse_reason(min_price, max_price, mode)
 
     return {
         "keyword": kw,
@@ -525,6 +573,125 @@ async def _call_llm_vision(
     return _parse_llm_response(r)
 
 
+def _eval_good_keywords(
+    title: str, description: str, condition_score: int, detail_parts: list[str]
+) -> int:
+    """规则评估-加分关键词：命中即停，避免近义词过度加分
+
+    "全新/未拆封/仅拆封/99新/98新/未使用/自用/国行" 是闲鱼正向成色信号，
+    但一个商品可能同时含多个（如"99新自用国行"），不应叠加加分。
+    """
+    good_keywords = ["全新", "未拆封", "仅拆封", "99新", "98新", "未使用", "自用", "国行"]
+    for kw in good_keywords:
+        if kw in title or kw in (description or ""):
+            condition_score = min(10, condition_score + 1)
+            detail_parts.append(f"描述含'{kw}'")
+            break
+    return condition_score
+
+
+def _eval_bad_keywords(
+    title: str,
+    description: str,
+    condition_score: int,
+    risk_signals: list[str],
+    detail_parts: list[str],
+) -> int:
+    """规则评估-减分关键词：每个故障词累计减分
+
+    不 break：多个故障信号（如"划痕+维修"）意味着成色更差，需累计扣分。
+    """
+    bad_keywords = ["划痕", "磕碰", "维修", "进水", "碎屏", "开胶", "变形", "故障", "修过", "换过"]
+    for kw in bad_keywords:
+        if kw in title or kw in (description or ""):
+            condition_score = max(1, condition_score - 2)
+            risk_signals.append(f"描述含'{kw}'")
+            detail_parts.append(f"描述含'{kw}'")
+    return condition_score
+
+
+def _eval_no_images(
+    image_urls: list[str],
+    condition_score: int,
+    risk_signals: list[str],
+    detail_parts: list[str],
+) -> int:
+    """规则评估-无图片：风险信号 + 减分
+
+    无图商品无法人工核验成色，规则评估也无法做图片分析，需扣分提示风险。
+    """
+    if not image_urls:
+        risk_signals.append("无图片参考")
+        condition_score = max(1, condition_score - 1)
+        detail_parts.append("无商品图片")
+    return condition_score
+
+
+def _eval_low_price(
+    price: float,
+    title: str,
+    condition_score: int,
+    risk_signals: list[str],
+    detail_parts: list[str],
+) -> int:
+    """规则评估-价格异常低：低于100元且非配件类视为可疑
+
+    配件类（壳/膜/线/充/支架/贴）本身低价合理，排除避免误判。
+    """
+    if price < 100 and not any(kw in title for kw in ["壳", "膜", "线", "充", "支架", "贴"]):
+        risk_signals.append("价格异常低")
+        condition_score = max(1, condition_score - 1)
+        detail_parts.append("价格低于100元")
+    return condition_score
+
+
+def _eval_price_range(
+    price: float,
+    price_range: dict[str, Any] | None,
+    condition_score: int,
+    risk_signals: list[str],
+    detail_parts: list[str],
+) -> int:
+    """规则评估-基于同类物品价格区间判断价格合理性（捡漏价格参考）
+
+    当有价格区间数据时，判断当前商品是否处于"捡漏"区间：
+    - 低于捡漏价：可能是真捡漏也可能是假货，不加分不减分让用户综合判断
+    - 中位数以下85%：性价比良好
+    - 高于最高价：价格偏高，减分
+    """
+    if not price_range or price_range.get("sample_size", 0) <= 0:
+        return condition_score
+    bargain_price = price_range.get("bargain_price") or 0
+    median_price = price_range.get("median_price") or 0
+    max_price = price_range.get("max_price") or 0
+    sample = price_range.get("sample_size", 0)
+    source_label = price_range.get("source_label", price_range.get("source", ""))
+
+    if bargain_price <= 0 or median_price <= 0:
+        return condition_score
+
+    # 价格低于捡漏价格 → 极佳捡漏机会，但需警惕假货风险
+    if price < bargain_price:
+        detail_parts.append(
+            f"价格¥{price}低于同类最低价¥{bargain_price}（捡漏机会，样本{sample}）"
+        )
+        # 不加分也不减分：低于最低价可能是真捡漏，也可能是假货/问题机
+        # 让用户结合其他维度判断
+    # 价格在中位数以下 → 性价比良好
+    elif price < median_price * 0.85:
+        detail_parts.append(
+            f"价格¥{price}低于同类中位数¥{median_price}的85%（性价比良好）"
+        )
+    # 价格高于最高价 → 价格偏高
+    elif max_price > 0 and price > max_price:
+        risk_signals.append(f"价格¥{price}高于同类最高价¥{max_price}")
+        condition_score = max(1, condition_score - 1)
+        detail_parts.append("价格高于同类最高价")
+    # 数据来源说明
+    detail_parts.append(f"价格参考来源：{source_label}")
+    return condition_score
+
+
 def _rule_eval_condition(
     title: str,
     description: str,
@@ -540,70 +707,20 @@ def _rule_eval_condition(
     - 描述含"划痕/磕碰/维修/进水"等 → 成色减分
     - 无图片 → 风险信号
     - price_range 提供同类物品价格区间时，判断当前价格是否处于合理可拾区间
+
+    各评估维度独立提取为子函数，condition_score 通过返回值传递（int 不可变），
+    risk_signals / detail_parts 通过引用修改（list 可变）。
     """
     # 成色评分基准
     condition_score = 7  # 默认 7 分（闲鱼商品普遍 7 成新）
     risk_signals: list[str] = []
     detail_parts: list[str] = []
 
-    # 描述关键词加分（命中一个即停，避免一个商品因多个近义词过度加分）
-    good_keywords = ["全新", "未拆封", "仅拆封", "99新", "98新", "未使用", "自用", "国行"]
-    for kw in good_keywords:
-        if kw in title or kw in (description or ""):
-            condition_score = min(10, condition_score + 1)
-            detail_parts.append(f"描述含'{kw}'")
-            break
-
-    # 描述关键词减分（不 break，每个故障关键词都累计减分，因为多个故障信号意味着更差的成色）
-    bad_keywords = ["划痕", "磕碰", "维修", "进水", "碎屏", "开胶", "变形", "故障", "修过", "换过"]
-    for kw in bad_keywords:
-        if kw in title or kw in (description or ""):
-            condition_score = max(1, condition_score - 2)
-            risk_signals.append(f"描述含'{kw}'")
-            detail_parts.append(f"描述含'{kw}'")
-
-    # 无图片 → 风险
-    if not image_urls:
-        risk_signals.append("无图片参考")
-        condition_score = max(1, condition_score - 1)
-        detail_parts.append("无商品图片")
-
-    # 价格异常低 → 谨慎
-    # 闲鱼商品价格低于 100 元且非配件类 → 可能有问题
-    if price < 100 and not any(kw in title for kw in ["壳", "膜", "线", "充", "支架", "贴"]):
-        risk_signals.append("价格异常低")
-        condition_score = max(1, condition_score - 1)
-        detail_parts.append("价格低于100元")
-
-    # 基于同类物品价格区间判断价格合理性（捡漏价格参考）
-    # 当有价格区间数据时，判断当前商品是否处于"捡漏"区间
-    if price_range and price_range.get("sample_size", 0) > 0:
-        bargain_price = price_range.get("bargain_price") or 0
-        median_price = price_range.get("median_price") or 0
-        max_price = price_range.get("max_price") or 0
-        sample = price_range.get("sample_size", 0)
-        source_label = price_range.get("source_label", price_range.get("source", ""))
-
-        if bargain_price > 0 and median_price > 0:
-            # 价格低于捡漏价格 → 极佳捡漏机会，但需警惕假货风险
-            if price < bargain_price:
-                detail_parts.append(
-                    f"价格¥{price}低于同类最低价¥{bargain_price}（捡漏机会，样本{sample}）"
-                )
-                # 不加分也不减分：低于最低价可能是真捡漏，也可能是假货/问题机
-                # 让用户结合其他维度判断
-            # 价格在中位数以下 → 性价比良好
-            elif price < median_price * 0.85:
-                detail_parts.append(
-                    f"价格¥{price}低于同类中位数¥{median_price}的85%（性价比良好）"
-                )
-            # 价格高于最高价 → 价格偏高
-            elif max_price > 0 and price > max_price:
-                risk_signals.append(f"价格¥{price}高于同类最高价¥{max_price}")
-                condition_score = max(1, condition_score - 1)
-                detail_parts.append("价格高于同类最高价")
-            # 数据来源说明
-            detail_parts.append(f"价格参考来源：{source_label}")
+    condition_score = _eval_good_keywords(title, description, condition_score, detail_parts)
+    condition_score = _eval_bad_keywords(title, description, condition_score, risk_signals, detail_parts)
+    condition_score = _eval_no_images(image_urls, condition_score, risk_signals, detail_parts)
+    condition_score = _eval_low_price(price, title, condition_score, risk_signals, detail_parts)
+    condition_score = _eval_price_range(price, price_range, condition_score, risk_signals, detail_parts)
 
     # 判定
     verdict = "recommend" if condition_score >= 7 else "caution"
@@ -658,6 +775,197 @@ def _clamp_score(v: Any) -> int:
         return 5
 
 
+def _parse_image_urls(image_urls_raw: Any) -> list:
+    """解析 image_urls 字段：items 表中可能是 JSON 字符串或列表
+
+    闲鱼图片 URL 列表在 items 表存储为 JSON 字符串（SQLite 无原生数组类型），
+    需统一转换为 list 供后续逻辑使用；解析失败回退为空列表避免阻断评估。
+    """
+    if isinstance(image_urls_raw, str):
+        try:
+            return json.loads(image_urls_raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return image_urls_raw
+
+
+def _parse_dim_scores(dim_scores_raw: Any) -> dict[str, Any]:
+    """解析 dimension_scores 字段：可能为 JSON 字符串或 dict
+
+    evaluations 表中 dimension_scores 列以 TEXT 存储 JSON 字符串，
+    读取时需转换为 dict 才能进一步访问 ai_condition_eval 等子字段。
+    """
+    if isinstance(dim_scores_raw, str):
+        try:
+            return json.loads(dim_scores_raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return dim_scores_raw or {}
+
+
+def _get_item_with_payload_fallback(
+    container: Container, item_id: str
+) -> dict[str, Any] | None:
+    """获取商品信息：优先 items 表，无记录时从 eval 事件 payload 回退
+
+    场景：实时搜索(live_links)或轻量评估生成的 eval.scored 事件
+    商品未写入 items 表，但 payload 中有 item_title / item_price，
+    需用 payload 字段构造伪 item dict，字段名对齐 items 表结构。
+    """
+    # 策略1：优先从 items 表查询（数据最完整，含 description 和 image_urls）
+    item = container.repo.get_item(item_id)
+    if not item:
+        # 策略2：items 表无记录时，从评估事件 payload 回退
+        payload = container.repo.get_eval_payload_by_item(item_id)
+        if payload:
+            # payload 不含 description/image_urls，LLM 仅基于标题+价格评估、无图走规则模拟
+            item = {
+                "id": item_id,
+                "title": payload.get("item_title") or payload.get("title") or "",
+                "price": payload.get("item_price") or payload.get("price") or 0,
+                "description": "",
+                "image_urls": [],
+                "task_id": payload.get("task_id"),  # 从事件 payload 回退提取 task_id
+            }
+            logger.info(f"[F-06] items 表无记录，从 eval 事件 payload 回退: item_id={item_id}")
+    return item
+
+
+def _get_cached_ai_eval(
+    existing_eval: dict[str, Any] | None, item_id: str
+) -> dict[str, Any] | None:
+    """从已有评估记录中提取缓存的 AI 成色评估结果
+
+    缓存 key 存在 evaluations 表的 dimension_scores JSON 中的 ai_condition_eval 字段，
+    命中时直接返回，避免重复调用 LLM。
+    """
+    if not existing_eval:
+        return None
+    dim_scores = _parse_dim_scores(existing_eval.get("dimension_scores"))
+    cached_ai_eval = dim_scores.get("ai_condition_eval")
+    if cached_ai_eval:
+        logger.info(f"[F-06] 命中缓存: item_id={item_id}")
+        return cached_ai_eval
+    return None
+
+
+def _query_price_range(
+    task_id: str | None, item_id: str, container: Container
+) -> dict[str, Any] | None:
+    """查询同类物品已售价格区间（捡漏价格参考）
+
+    价格区间作为 AI 评估 price_reasonability 维度的重要参考依据。
+    策略：优先查近30天数据；若为空则回退到全部历史数据，确保有数据时总能提供参考。
+    查询失败不阻断 AI 评估主流程（捕获所有异常并返回 None）。
+    """
+    if not task_id:
+        return None
+    try:
+        from xianyu_hunter.web.routes.price_dashboard import sold_range as _sold_range
+        price_range = _sold_range(
+            task_id=task_id, range_days=30, container=container
+        )
+        # 近30天无数据时回退到全部历史数据，避免价格参考缺失
+        if price_range.get("source") == "empty":
+            price_range = _sold_range(
+                task_id=task_id, range_days=0, container=container
+            )
+        logger.info(
+            f"[F-06] 价格区间查询完成: item_id={item_id}, "
+            f"task_id={task_id}, source={price_range.get('source')}, "
+            f"sample_size={price_range.get('sample_size')}"
+        )
+        return price_range
+    except Exception as e:  # noqa: BLE001
+        # 价格区间查询失败不阻断 AI 评估主流程
+        logger.warning(f"[F-06] 价格区间查询失败（不影响评估）: {e}")
+        return None
+
+
+async def _run_condition_eval(
+    title: str,
+    description: str,
+    price: float,
+    image_urls: list,
+    price_range: dict[str, Any] | None,
+    item_id: str,
+) -> tuple[dict[str, Any], str]:
+    """执行成色评估：有 Key 走 LLM Vision，无 Key 或失败降级规则模拟
+
+    返回 (raw_result, source)：source 标识是 'llm' 还是 'rule'，
+    供后续归一化和缓存区分数据来源。
+    """
+    settings = get_settings()
+    used_source = "llm"
+    raw_result: dict[str, Any] | None = None
+
+    if settings.openai_api_key:
+        try:
+            raw_result = await _call_llm_vision(
+                title, description, price, image_urls, price_range
+            )
+            logger.info(f"[F-06] LLM Vision 评估完成: item_id={item_id}")
+        except RuntimeError as e:
+            logger.warning(f"[F-06] LLM Vision 失败，降级规则模拟: {e}")
+            raw_result = None
+    else:
+        used_source = "rule"
+
+    # 降级到规则模拟
+    if raw_result is None:
+        raw_result = _rule_eval_condition(
+            title, description, price, image_urls, price_range
+        )
+        used_source = "rule"
+        logger.info(f"[F-06] 规则模拟评估完成: item_id={item_id}")
+
+    return raw_result, used_source
+
+
+def _cache_eval_result(
+    existing_eval: dict[str, Any] | None,
+    item_id: str,
+    item: dict[str, Any],
+    result: dict[str, Any],
+    container: Container,
+) -> None:
+    """缓存评估结果到 evaluations 表
+
+    已有记录则更新 dimension_scores（保留其他维度数据）；
+    无记录则创建新评估（score 用 condition_score * 10 映射到 0-100）。
+    缓存失败不影响返回结果（仅捕获可预期的数据/IO异常）。
+    """
+    try:
+        if existing_eval:
+            # 更新已有评估记录的 dimension_scores
+            dim_scores = _parse_dim_scores(existing_eval.get("dimension_scores"))
+            dim_scores["ai_condition_eval"] = result
+            # 通过 Repository 方法更新 dimension_scores 字段
+            container.repo.update_evaluation_dimension_scores(
+                existing_eval["id"], dim_scores
+            )
+        else:
+            # 创建新的评估记录（仅 AI 成色评估，score 用 condition_score * 10 映射到 0-100）
+            eval_data = {
+                "item_id": item_id,
+                "seller_id": item.get("seller_id"),
+                "score": result["condition_score"] * 10,
+                "risk_level": "low" if result["verdict"] == "recommend" else "medium",
+                "dimension_scores": json.dumps(
+                    {"ai_condition_eval": result}, ensure_ascii=False
+                ),
+                "reject_reasons": json.dumps(
+                    result["risk_signals"], ensure_ascii=False
+                ) if result["risk_signals"] else None,
+                "created_at": _utcnow(),
+            }
+            container.repo.save_evaluation(eval_data)
+        logger.info(f"[F-06] 评估结果已缓存: item_id={item_id}")
+    except (RuntimeError, ValueError, KeyError, OSError) as e:
+        # 缓存失败不影响返回结果（仅捕获可预期的数据/IO异常）
+        logger.warning(f"[F-06] 缓存评估结果失败（不影响返回）: {e}")
+
+
 @router.post("/evaluate-condition")
 async def evaluate_condition(
     body: ConditionEvalRequest,
@@ -674,109 +982,29 @@ async def evaluate_condition(
     5. 返回评估结果：推荐/不推荐 + 理由 + 成色评分
     """
     _check_ai_enabled()
-    # 1. 获取商品信息
-    # 策略1：优先从 items 表查询（数据最完整，含 description 和 image_urls）
-    item = container.repo.get_item(body.item_id)
-
-    # 策略2：items 表无记录时，从评估事件 payload 回退
-    # 场景：实时搜索(live_links)或轻量评估生成的 eval.scored 事件
-    #       商品未写入 items 表，但 payload 中有 item_title / item_price
-    if not item:
-        payload = container.repo.get_eval_payload_by_item(body.item_id)
-        if payload:
-            # 用 payload 字段构造伪 item dict，字段名对齐 items 表结构
-            item = {
-                "id": body.item_id,
-                "title": payload.get("item_title") or payload.get("title") or "",
-                "price": payload.get("item_price") or payload.get("price") or 0,
-                "description": "",   # payload 不含 description，LLM 仅基于标题+价格评估
-                "image_urls": [],    # payload 不含 image_urls，无图走规则模拟
-                "task_id": payload.get("task_id"),  # 从事件 payload 回退提取 task_id
-            }
-            logger.info(f"[F-06] items 表无记录，从 eval 事件 payload 回退: item_id={body.item_id}")
-
+    # 1. 获取商品信息（含 payload 回退）
+    item = _get_item_with_payload_fallback(container, body.item_id)
     if not item:
         raise HTTPException(status_code=404, detail=f"商品 {body.item_id} 不存在")
 
     title = item.get("title", "")
     description = item.get("description", "")
     price = float(item.get("price", 0))
-    image_urls_raw = item.get("image_urls") or []
-    # image_urls 可能是 JSON 字符串或列表
-    if isinstance(image_urls_raw, str):
-        try:
-            image_urls = json.loads(image_urls_raw)
-        except (json.JSONDecodeError, TypeError):
-            image_urls = []
-    else:
-        image_urls = image_urls_raw
+    image_urls = _parse_image_urls(item.get("image_urls") or [])
 
-    # 2. 检查缓存：如果该商品已有 AI 成色评估结果，直接返回
-    # 缓存 key 存在 evaluations 表的 dimension_scores JSON 中
+    # 2. 检查缓存：命中则直接返回，避免重复 LLM 调用
     existing_eval = container.repo.get_latest_evaluation(body.item_id)
-    if existing_eval:
-        dim_scores = existing_eval.get("dimension_scores") or {}
-        if isinstance(dim_scores, str):
-            try:
-                dim_scores = json.loads(dim_scores)
-            except (json.JSONDecodeError, TypeError):
-                dim_scores = {}
-        cached_ai_eval = dim_scores.get("ai_condition_eval")
-        if cached_ai_eval:
-            logger.info(f"[F-06] 命中缓存: item_id={body.item_id}")
-            return {**cached_ai_eval, "cached": True}
+    cached_eval = _get_cached_ai_eval(existing_eval, body.item_id)
+    if cached_eval:
+        return {**cached_eval, "cached": True}
 
     # 2.5 查询同类物品已售价格区间（捡漏价格参考）
-    # 从 item 中提取 task_id，查询该任务下近期已售商品价格区间
-    # 价格区间作为 AI 评估 price_reasonability 维度的重要参考依据
-    # 策略：优先查近30天数据；若为空则回退到全部历史数据，确保有数据时总能提供参考
-    price_range: dict[str, Any] | None = None
-    task_id = item.get("task_id")
-    if task_id:
-        try:
-            from xianyu_hunter.web.routes.price_dashboard import sold_range as _sold_range
-            price_range = _sold_range(
-                task_id=task_id, range_days=30, container=container
-            )
-            # 近30天无数据时回退到全部历史数据，避免价格参考缺失
-            if price_range.get("source") == "empty":
-                price_range = _sold_range(
-                    task_id=task_id, range_days=0, container=container
-                )
-            logger.info(
-                f"[F-06] 价格区间查询完成: item_id={body.item_id}, "
-                f"task_id={task_id}, source={price_range.get('source')}, "
-                f"sample_size={price_range.get('sample_size')}"
-            )
-        except Exception as e:  # noqa: BLE001
-            # 价格区间查询失败不阻断 AI 评估主流程
-            logger.warning(f"[F-06] 价格区间查询失败（不影响评估）: {e}")
-            price_range = None
+    price_range = _query_price_range(item.get("task_id"), body.item_id, container)
 
     # 3. 调用 LLM Vision 或规则模拟
-    settings = get_settings()
-    used_source = "llm"
-    raw_result: dict[str, Any] | None = None
-
-    if settings.openai_api_key:
-        try:
-            raw_result = await _call_llm_vision(
-                title, description, price, image_urls, price_range
-            )
-            logger.info(f"[F-06] LLM Vision 评估完成: item_id={body.item_id}")
-        except RuntimeError as e:
-            logger.warning(f"[F-06] LLM Vision 失败，降级规则模拟: {e}")
-            raw_result = None
-    else:
-        used_source = "rule"
-
-    # 降级到规则模拟
-    if raw_result is None:
-        raw_result = _rule_eval_condition(
-            title, description, price, image_urls, price_range
-        )
-        used_source = "rule"
-        logger.info(f"[F-06] 规则模拟评估完成: item_id={body.item_id}")
+    raw_result, used_source = await _run_condition_eval(
+        title, description, price, image_urls, price_range, body.item_id
+    )
 
     # 4. 归一化结果
     result = _normalize_condition_result(raw_result, used_source)
@@ -786,40 +1014,7 @@ async def evaluate_condition(
         result["price_range"] = price_range
 
     # 5. 缓存到 evaluations 表
-    try:
-        if existing_eval:
-            # 更新已有评估记录的 dimension_scores
-            dim_scores = existing_eval.get("dimension_scores") or {}
-            if isinstance(dim_scores, str):
-                try:
-                    dim_scores = json.loads(dim_scores)
-                except (json.JSONDecodeError, TypeError):
-                    dim_scores = {}
-            dim_scores["ai_condition_eval"] = result
-            # 通过 Repository 方法更新 dimension_scores 字段
-            container.repo.update_evaluation_dimension_scores(
-                existing_eval["id"], dim_scores
-            )
-        else:
-            # 创建新的评估记录（仅 AI 成色评估，score 用 condition_score * 10 映射到 0-100）
-            eval_data = {
-                "item_id": body.item_id,
-                "seller_id": item.get("seller_id"),
-                "score": result["condition_score"] * 10,
-                "risk_level": "low" if result["verdict"] == "recommend" else "medium",
-                "dimension_scores": json.dumps(
-                    {"ai_condition_eval": result}, ensure_ascii=False
-                ),
-                "reject_reasons": json.dumps(
-                    result["risk_signals"], ensure_ascii=False
-                ) if result["risk_signals"] else None,
-                "created_at": _utcnow(),
-            }
-            container.repo.save_evaluation(eval_data)
-        logger.info(f"[F-06] 评估结果已缓存: item_id={body.item_id}")
-    except (RuntimeError, ValueError, KeyError, OSError) as e:
-        # 缓存失败不影响返回结果（仅捕获可预期的数据/IO异常）
-        logger.warning(f"[F-06] 缓存评估结果失败（不影响返回）: {e}")
+    _cache_eval_result(existing_eval, body.item_id, item, result, container)
 
     return {**result, "cached": False}
 
@@ -960,48 +1155,43 @@ def test_ai_connection() -> dict[str, Any]:
         return {"ok": False, "detail": f"API 返回 {r.status_code}: {snippet}"}
 
 
-@router.post("/test-embedding")
-def test_embedding_connection() -> dict[str, Any]:
-    """测试 Embedding 服务连接
+def _test_local_embedding(model: str) -> dict[str, Any]:
+    """本地模式 embedding 连接测试：调用 sentence-transformers
 
-    发送一个最小化 embedding 请求验证端点和模型是否可用。
-    与 LLM 测试分离：embedding 端点可能完全不同（如本地 Ollama）。
-
-    支持两种 backend：
-    - 本地：EMBEDDING_BASE_URL 为空或 "local"，调用 sentence-transformers
-    - 远程：OpenAI 兼容 /v1/embeddings 协议
+    首次调用会触发模型下载（约 95MB for bge-small-zh-v1.5），可能耗时较久。
+    ImportError 单独捕获：sentence-transformers 未装时给出明确的安装提示，
+    而非笼统的"加载失败"。
     """
-    settings = get_settings()
-    base_url = (settings.embedding_base_url or "").strip()
-    # 与 container.py 的 fallback 逻辑保持一致：settings 优先，空时读 cfg.kb
-    # 避免硬编码 "text-embedding-3-small" 导致本地模式加载错误模型
-    from xianyu_hunter.infra.yaml_config import get_config
-    cfg = get_config()
-    model = settings.embedding_model or cfg.kb.embedding_model
-    # 本地模式：直接调用 LocalEmbeddingBackend
-    # 首次调用会触发模型下载（约 95MB for bge-small-zh-v1.5），可能耗时较久
-    if not base_url or base_url.lower() == "local":
-        try:
-            from xianyu_hunter.modules.chatbot.local_embedding import LocalEmbeddingBackend
-            backend = LocalEmbeddingBackend(model)
-            vec = backend.embed("test")
-            return {
-                "ok": True,
-                "model": model,
-                "dimensions": len(vec),
-            }
-        except ImportError as e:
-            return {
-                "ok": False,
-                "detail": f"sentence-transformers 未安装: {e}",
-            }
-        except Exception as e:
-            return {
-                "ok": False,
-                "detail": f"本地 embedding 加载失败: {type(e).__name__}: {e}",
-            }
+    try:
+        from xianyu_hunter.modules.chatbot.local_embedding import LocalEmbeddingBackend
+        backend = LocalEmbeddingBackend(model)
+        vec = backend.embed("test")
+        return {
+            "ok": True,
+            "model": model,
+            "dimensions": len(vec),
+        }
+    except ImportError as e:
+        return {
+            "ok": False,
+            "detail": f"sentence-transformers 未安装: {e}",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "detail": f"本地 embedding 加载失败: {type(e).__name__}: {e}",
+        }
 
-    # 远程模式：OpenAI 兼容 /v1/embeddings 协议
+
+def _test_remote_embedding(
+    settings: Any, base_url: str, model: str
+) -> dict[str, Any]:
+    """远程模式 embedding 连接测试：OpenAI 兼容 /v1/embeddings 协议
+
+    embedding 端点可能与 LLM 端点完全不同（如本地 Ollama），
+    API Key 缺失时先兜底用 openai_api_key，两者都空才报错。
+    dimensions=0 时不传该参数：Ollama 等本地模型不接受 dimensions 字段。
+    """
     api_key = settings.embedding_api_key or settings.openai_api_key
     if not api_key:
         return {"ok": False, "detail": "未配置 API Key（embedding 与 LLM 均为空）"}
@@ -1037,6 +1227,31 @@ def test_embedding_connection() -> dict[str, Any]:
     else:
         snippet = r.text[:200]
         return {"ok": False, "detail": f"API 返回 {r.status_code}: {snippet}"}
+
+
+@router.post("/test-embedding")
+def test_embedding_connection() -> dict[str, Any]:
+    """测试 Embedding 服务连接
+
+    发送一个最小化 embedding 请求验证端点和模型是否可用。
+    与 LLM 测试分离：embedding 端点可能完全不同（如本地 Ollama）。
+
+    支持两种 backend：
+    - 本地：EMBEDDING_BASE_URL 为空或 "local"，调用 sentence-transformers
+    - 远程：OpenAI 兼容 /v1/embeddings 协议
+    """
+    settings = get_settings()
+    base_url = (settings.embedding_base_url or "").strip()
+    # 与 container.py 的 fallback 逻辑保持一致：settings 优先，空时读 cfg.kb
+    # 避免硬编码 "text-embedding-3-small" 导致本地模式加载错误模型
+    from xianyu_hunter.infra.yaml_config import get_config
+    cfg = get_config()
+    model = settings.embedding_model or cfg.kb.embedding_model
+    # 本地模式：直接调用 LocalEmbeddingBackend
+    if not base_url or base_url.lower() == "local":
+        return _test_local_embedding(model)
+    # 远程模式：OpenAI 兼容 /v1/embeddings 协议
+    return _test_remote_embedding(settings, base_url, model)
 
 
 # ============== 用量统计 API ==============

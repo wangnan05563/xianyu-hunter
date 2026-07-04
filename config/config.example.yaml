@@ -20,6 +20,11 @@ browser:
   viewport_height: 768
   user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
     like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0
+  # 浏览器代理服务器配置
+  # - 留空（默认）：禁用系统代理，避免 Clash/V2Ray 等代理软件未运行时
+  #   触发 ERR_PROXY_CONNECTION_FAILED（闲鱼为国内站点，无需代理）
+  # - 海外部署需代理访问闲鱼时配置，示例：socks5://127.0.0.1:7890 或 http://127.0.0.1:7890
+  proxy_server: ""
   # Cookie 定时自动同步（详见 docs/plans/2026-06-25-browser-cookie-import-enhancement-design.md）
   auto_sync: false                    # 默认关闭，需显式启用
   auto_sync_interval: 30              # 同步间隔（分钟）

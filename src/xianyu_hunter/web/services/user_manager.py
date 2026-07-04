@@ -25,6 +25,10 @@ from sqlalchemy import text as sa_text
 logger = logging.getLogger(__name__)
 
 
+# 默认 SQLite 数据库路径：get_user_manager 与 migrate_to_multi_user 共用
+_DB_PATH = "data/xianyu.db"
+
+
 def _utcnow_iso() -> str:
     """返回 ISO8601 格式的当前 UTC 时间"""
     return datetime.now(timezone.utc).isoformat()
@@ -429,13 +433,13 @@ def get_user_manager() -> UserManager:
     with _manager_lock:
         if _manager is None:
             from xianyu_hunter.infra.db_models import create_sqlite_engine, init_db
-            init_db("data/xianyu.db")
-            engine = create_sqlite_engine("data/xianyu.db")
+            init_db(_DB_PATH)
+            engine = create_sqlite_engine(_DB_PATH)
             _manager = UserManager(engine)
         return _manager
 
 
-def migrate_to_multi_user(db_path: str = "data/xianyu.db") -> None:
+def migrate_to_multi_user(db_path: str = _DB_PATH) -> None:
     """首次升级迁移：单用户 → 多用户（幂等可重复执行）
 
     init_db 已完成表创建和 tasks.user_id 字段迁移，本函数只负责：

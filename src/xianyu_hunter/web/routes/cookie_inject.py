@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 
@@ -122,27 +125,12 @@ async def _inject_via_browser(cookies_to_inject: list[tuple[str, str]]) -> tuple
     return injected, errors, "browser_context"
 
 
-@router.post("/cookie")
-async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
-    """手动注入闲鱼 Cookie
+def _parse_cookie_string_to_pairs(cookie_string: str) -> list[tuple[str, str]]:
+    """解析 cookie 字符串为 (name, value) 对
 
-    Args:
-        cookie_string: 格式如 "_m_h5_tk=abc123; cookie2=xyz789; unb=uid123"
-
-    注入策略（按优先级尝试）：
-    1. 直接写入 SQLite（浏览器未运行时成功）
-    2. 通过运行中的浏览器 BrowserManager.add_cookies() 注入（浏览器运行时使用）
-    3. 仅写入 JSON 文件（最终兜底，下次浏览器启动时可读取）
+    支持分隔符：; 或换行符（用户从浏览器DevTools复制时常见）
     """
-    if not cookie_string or not cookie_string.strip():
-        return JSONResponse(content={"ok": False, "error": "Cookie 字符串为空"})
-
-    cfg = get_config()
-    cookie_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
-
-    # 解析 cookie 字符串为 (name, value) 对
-    # 支持分隔符：; 或换行符（用户从浏览器DevTools复制时常见）
-    cookies_to_inject = []
+    pairs = []
     # 先按换行分割，再按分号分割（处理混合格式）
     for line in cookie_string.split("\n"):
         for part in line.split(";"):
@@ -153,33 +141,18 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
             name = name.strip()
             value = value.strip()
             if name and value:
-                cookies_to_inject.append((name, value))
+                pairs.append((name, value))
+    return pairs
 
-    if not cookies_to_inject:
-        return JSONResponse(content={"ok": False, "error": "未能解析出有效的 cookie 键值对"})
 
-    # 确保 Cookies 数据库目录存在
-    cookie_db.parent.mkdir(parents=True, exist_ok=True)
+async def _write_json_fallback_and_sync(
+    cookies_to_inject: list[tuple[str, str]], injected: int, method: str,
+) -> tuple[int, str, bool]:
+    """写入 JSON 兜底并同步 CookieRotator 层状态与 Worker 浏览器
 
-    injected = 0
-    errors = []
-    method = "unknown"
-    browser_error = None
-
-    # 策略1：优先通过浏览器上下文注入（Chromium 加密存储，SQLite 明文写入无效）
-    try:
-        injected, errors, method = await _inject_via_browser(cookies_to_inject)
-    except Exception as e:
-        browser_error = str(e)
-        # 浏览器上下文不可用，尝试 SQLite 直写（仅当浏览器完全未启动时可行）
-        try:
-            injected, errors = _inject_to_sqlite(cookie_db, cookies_to_inject)
-            method = "sqlite_direct"
-            logger.info("浏览器不可用，已通过 SQLite 直写 %d 个 cookie", injected)
-        except Exception as sqlite_err:
-            logger.warning("SQLite 直写也失败: %s", sqlite_err)
-
-    # 策略2：写入 JSON 兜底（即使 browser+sqlite 都失败，JSON 兜底也能独立工作）
+    Returns:
+        (injected, method, json_written)
+    """
     json_written = False
     if cookies_to_inject:
         json_written = get_cookie_store().export_cookies([
@@ -203,25 +176,84 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
                 await inject_cookie_store_to_worker_browser("手动 Cookie 注入")
             except Exception as e:
                 logger.debug("cookie 注入后同步 Worker 浏览器失败: %s", e)
+    return injected, method, json_written
+
+
+def _build_inject_success_response(
+    injected: int, total_parsed: int, method: str, errors: list[str],
+) -> JSONResponse:
+    """构建注入成功的响应，并自动启动会话管理"""
+    result = {
+        "ok": True,
+        "injected": injected,
+        "total_parsed": total_parsed,
+        "method": method,
+        "message": f"成功注入 {injected} 个 cookie（方式: {method}）",
+    }
+    if errors:
+        result["errors"] = errors[:5]
+    # 注入成功后自动启动会话管理：与登录入口行为一致
+    try:
+        from xianyu_hunter.web.services.session_starter import trigger_session_start
+        trigger_session_start()
+    except Exception as e:
+        logger.debug("自动启动会话失败: %s", e)
+    return make_auth_response(result)
+
+
+@router.post("/cookie")
+async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
+    """手动注入闲鱼 Cookie
+
+    Args:
+        cookie_string: 格式如 "_m_h5_tk=abc123; cookie2=xyz789; unb=uid123"
+
+    注入策略（按优先级尝试）：
+    1. 直接写入 SQLite（浏览器未运行时成功）
+    2. 通过运行中的浏览器 BrowserManager.add_cookies() 注入（浏览器运行时使用）
+    3. 仅写入 JSON 文件（最终兜底，下次浏览器启动时可读取）
+    """
+    if not cookie_string or not cookie_string.strip():
+        return JSONResponse(content={"ok": False, "error": "Cookie 字符串为空"})
+
+    cfg = get_config()
+    cookie_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
+
+    # 解析 cookie 字符串为 (name, value) 对
+    cookies_to_inject = _parse_cookie_string_to_pairs(cookie_string)
+
+    if not cookies_to_inject:
+        return JSONResponse(content={"ok": False, "error": "未能解析出有效的 cookie 键值对"})
+
+    # 确保 Cookies 数据库目录存在
+    cookie_db.parent.mkdir(parents=True, exist_ok=True)
+
+    injected = 0
+    errors: list[str] = []
+    method = "unknown"
+    browser_error = None
+
+    # 策略1：优先通过浏览器上下文注入（Chromium 加密存储，SQLite 明文写入无效）
+    try:
+        injected, errors, method = await _inject_via_browser(cookies_to_inject)
+    except Exception as e:
+        browser_error = str(e)
+        # 浏览器上下文不可用，尝试 SQLite 直写（仅当浏览器完全未启动时可行）
+        try:
+            injected, errors = _inject_to_sqlite(cookie_db, cookies_to_inject)
+            method = "sqlite_direct"
+            logger.info("浏览器不可用，已通过 SQLite 直写 %d 个 cookie", injected)
+        except Exception as sqlite_err:
+            logger.warning("SQLite 直写也失败: %s", sqlite_err)
+
+    # 策略2：写入 JSON 兜底（即使 browser+sqlite 都失败，JSON 兜底也能独立工作）
+    injected, method, _ = await _write_json_fallback_and_sync(cookies_to_inject, injected, method)
 
     # 构建响应
     if injected > 0:
-        result = {
-            "ok": True,
-            "injected": injected,
-            "total_parsed": len(cookies_to_inject),
-            "method": method,
-            "message": f"成功注入 {injected} 个 cookie（方式: {method}）",
-        }
-        if errors:
-            result["errors"] = errors[:5]
-        # 注入成功后自动启动会话管理：与登录入口行为一致
-        try:
-            from xianyu_hunter.web.services.session_starter import trigger_session_start
-            trigger_session_start()
-        except Exception as e:
-            logger.debug("自动启动会话失败: %s", e)
-        return make_auth_response(result)
+        return _build_inject_success_response(
+            injected, len(cookies_to_inject), method, errors,
+        )
 
     # 全部失败
     error_detail = browser_error or "浏览器不可用"
@@ -280,6 +312,33 @@ def _parse_netscape_cookies(text: str) -> list[dict]:
     return cookies
 
 
+def _extract_cookie_list_from_object(data: dict) -> list | None:
+    """从 JSON 对象的常见字段中提取 cookie 数组
+
+    支持 "cookies"/"data"/"items" 字段名（不同扩展导出格式不一致）。
+    """
+    for key in ("cookies", "data", "items"):
+        if key in data and isinstance(data[key], list):
+            return data[key]
+    return None
+
+
+def _parse_single_json_cookie(item: object) -> dict | None:
+    """解析单个 JSON cookie 条目，无效条目返回 None"""
+    if not isinstance(item, dict):
+        return None
+    name = item.get("name", "")
+    value = item.get("value", "")
+    if not name or not value:
+        return None
+    return {
+        "name": name,
+        "value": value,
+        "domain": item.get("domain", _DEFAULT_DOMAIN),
+        "path": item.get("path", "/"),
+    }
+
+
 def _parse_json_cookies(text: str) -> list[dict]:
     """解析 JSON 格式的 cookie 数据
 
@@ -294,30 +353,19 @@ def _parse_json_cookies(text: str) -> list[dict]:
 
     # 如果是对象，尝试从常见字段中提取数组
     if isinstance(data, dict):
-        for key in ("cookies", "data", "items"):
-            if key in data and isinstance(data[key], list):
-                data = data[key]
-                break
-        else:
+        extracted = _extract_cookie_list_from_object(data)
+        if extracted is None:
             return []
+        data = extracted
 
     if not isinstance(data, list):
         return []
 
     cookies = []
     for item in data:
-        if not isinstance(item, dict):
-            continue
-        name = item.get("name", "")
-        value = item.get("value", "")
-        if not name or not value:
-            continue
-        cookies.append({
-            "name": name,
-            "value": value,
-            "domain": item.get("domain", _DEFAULT_DOMAIN),
-            "path": item.get("path", "/"),
-        })
+        parsed = _parse_single_json_cookie(item)
+        if parsed:
+            cookies.append(parsed)
     return cookies
 
 
@@ -391,6 +439,63 @@ def _filter_goofish_cookies(cookies: list[dict]) -> list[dict]:
     return filtered
 
 
+async def _write_import_json_fallback_and_sync(
+    goofish_cookies: list[dict],
+    cookies_to_inject: list[tuple[str, str]],
+    injected: int,
+    method: str,
+    source: str,
+) -> tuple[int, str]:
+    """写入 JSON 兜底并同步 CookieRotator 层状态与 Worker 浏览器（文件导入专用）
+
+    Returns:
+        (injected, method)
+    """
+    if cookies_to_inject:
+        json_written = get_cookie_store().export_cookies(goofish_cookies, method=source, user_id="default")
+        # 必须检查 json_written：export_cookies 返回 False 时 JSON 未写入，
+        # 不应报告 json_fallback 成功（修复原有 BUG：原代码未检查 json_written）
+        if json_written and injected == 0:
+            injected = len(cookies_to_inject)
+            method = "json_fallback"
+        # 同步 CookieRotator 层状态，避免 /cookies/layers 仍显示失效
+        if json_written:
+            try:
+                from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                sync_cookie_layers_from_json()
+            except Exception as e:
+                logger.debug("cookie 导入后同步层状态失败: %s", e)
+            try:
+                from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+                await inject_cookie_store_to_worker_browser("Cookie 文件导入")
+            except Exception as e:
+                logger.debug("cookie 导入后同步 Worker 浏览器失败: %s", e)
+    return injected, method
+
+
+def _build_import_success_response(
+    injected: int, total_parsed: int, method: str, source: str, errors: list[str],
+) -> JSONResponse:
+    """构建文件导入成功的响应，并自动启动会话管理"""
+    result = {
+        "ok": True,
+        "injected": injected,
+        "total_parsed": total_parsed,
+        "method": method,
+        "source": source,
+        "message": f"成功导入 {injected} 个 Cookie（来源: {source}, 方式: {method}）",
+    }
+    if errors:
+        result["errors"] = errors[:5]
+    # 导入成功后自动启动会话管理：与登录入口行为一致
+    try:
+        from xianyu_hunter.web.services.session_starter import trigger_session_start
+        trigger_session_start()
+    except Exception as e:
+        logger.debug("自动启动会话失败: %s", e)
+    return make_auth_response(result)
+
+
 async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONResponse:
     """通用 cookie 注入逻辑（被文件导入和手动注入共用）
 
@@ -415,7 +520,7 @@ async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONR
     cookies_to_inject = [(c["name"], c["value"]) for c in goofish_cookies]
 
     injected = 0
-    errors = []
+    errors: list[str] = []
     method = "unknown"
     browser_error = None
 
@@ -431,44 +536,14 @@ async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONR
             pass
 
     # 策略2：写入 JSON（即使 browser+sqlite 都失败，JSON 兜底也能独立工作）
-    if cookies_to_inject:
-        json_written = get_cookie_store().export_cookies(goofish_cookies, method=source, user_id="default")
-        # 必须检查 json_written：export_cookies 返回 False 时 JSON 未写入，
-        # 不应报告 json_fallback 成功（修复原有 BUG：原代码未检查 json_written）
-        if json_written and injected == 0:
-            injected = len(cookies_to_inject)
-            method = "json_fallback"
-        # 同步 CookieRotator 层状态，避免 /cookies/layers 仍显示失效
-        if json_written:
-            try:
-                from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
-                sync_cookie_layers_from_json()
-            except Exception as e:
-                logger.debug("cookie 导入后同步层状态失败: %s", e)
-            try:
-                from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
-                await inject_cookie_store_to_worker_browser("Cookie 文件导入")
-            except Exception as e:
-                logger.debug("cookie 导入后同步 Worker 浏览器失败: %s", e)
+    injected, method = await _write_import_json_fallback_and_sync(
+        goofish_cookies, cookies_to_inject, injected, method, source,
+    )
 
     if injected > 0:
-        result = {
-            "ok": True,
-            "injected": injected,
-            "total_parsed": len(goofish_cookies),
-            "method": method,
-            "source": source,
-            "message": f"成功导入 {injected} 个 Cookie（来源: {source}, 方式: {method}）",
-        }
-        if errors:
-            result["errors"] = errors[:5]
-        # 导入成功后自动启动会话管理：与登录入口行为一致
-        try:
-            from xianyu_hunter.web.services.session_starter import trigger_session_start
-            trigger_session_start()
-        except Exception as e:
-            logger.debug("自动启动会话失败: %s", e)
-        return make_auth_response(result)
+        return _build_import_success_response(
+            injected, len(goofish_cookies), method, source, errors,
+        )
 
     return JSONResponse(content={
         "ok": False,
@@ -575,84 +650,67 @@ def get_saved_cookie_info() -> dict:
     }
 
 
-@router.get("/cookie/fetch-keys")
-async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_container)) -> JSONResponse:
-    """从浏览器读取指定 cookie key 的值（用于前端自动填充 _m_h5_tk 等）
+# ============== fetch_cookie_keys 辅助函数（从原方法提取，保持功能不变） ==============
 
-    读取顺序（优先级从高到低）：
-    1. **Playwright CDP**（推荐）：通过已连接的系统 Edge 浏览器实时读取，无需复制文件
-    2. 项目 browser-data 目录（服务启动的浏览器实例）
-    3. 系统 Chrome 所有 Profile
-    4. 系统 Edge（复制文件绕过锁定）
 
-    Args:
-        keys: 逗号分隔的 cookie name 列表，如 "_m_h5_tk,cookie2,sgcookie,unb"
+def _copy_locked_cookie_file(src: str, dst: str) -> bool:
+    """尝试复制被锁定的 Cookie DB 文件
+
+    优先用 Windows API 绕过共享锁定，失败时回退 shutil 普通复制。
     """
-    import os
-    import shutil
-    import tempfile
+    # 策略1：Windows ctypes CreateFile + ReadFile（可读取被其他进程以共享模式打开的文件）
+    try:
+        import ctypes
+        from ctypes import wintypes
 
-    requested_keys = [k.strip() for k in keys.split(",") if k.strip()] if keys else []
-    if not requested_keys:
-        return JSONResponse(content={"ok": False, "error": "未指定要查询的 cookie key"})
+        GENERIC_READ = 0x80000000
+        FILE_SHARE_READ = 0x00000001
+        FILE_SHARE_WRITE = 0x00000002
+        OPEN_EXISTING = 3
+        INVALID_HANDLE_VALUE = -1
 
-    # ===== 先尝试系统浏览器 SQLite（用户期望读取系统浏览器的最新登录状态） =====
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        src_handle = kernel32.CreateFileW(
+            src, GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None, OPEN_EXISTING, 0, None,
+        )
+        if src_handle == INVALID_HANDLE_VALUE:
+            return False  # 回退到普通复制
 
-    def _copy_locked_file(src: str, dst: str) -> bool:
-        """尝试复制文件，优先用 Windows API 绕过共享锁定，失败时回退 shutil"""
-        # 策略1：Windows ctypes CreateFile + ReadFile（可读取被其他进程以共享模式打开的文件）
         try:
-            import ctypes
-            from ctypes import wintypes
-
-            GENERIC_READ = 0x80000000
-            FILE_SHARE_READ = 0x00000001
-            FILE_SHARE_WRITE = 0x00000002
-            OPEN_EXISTING = 3
-            INVALID_HANDLE_VALUE = -1
-
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            src_handle = kernel32.CreateFileW(
-                src, GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                None, OPEN_EXISTING, 0, None,
-            )
-            if src_handle == INVALID_HANDLE_VALUE:
-                return False  # 回退到普通复制
-
-            try:
-                with open(dst, "wb") as out_f:
-                    buf = ctypes.create_string_buffer(64 * 1024)  # 64KB chunks
-                    n_read = wintypes.DWORD()
-                    while True:
-                        ok = kernel32.ReadFile(
-                            src_handle, buf, len(buf), ctypes.byref(n_read), None,
-                        )
-                        if not ok or n_read.value == 0:
-                            break
-                        out_f.write(buf.raw[:n_read.value])
-                return True
-            finally:
-                kernel32.CloseHandle(src_handle)
-        except Exception:
-            pass
-
-        # 策略2：普通 shutil 复制（文件未被锁定时可用）
-        try:
-            shutil.copy2(src, dst)
+            with open(dst, "wb") as out_f:
+                buf = ctypes.create_string_buffer(64 * 1024)  # 64KB chunks
+                n_read = wintypes.DWORD()
+                while True:
+                    ok = kernel32.ReadFile(
+                        src_handle, buf, len(buf), ctypes.byref(n_read), None,
+                    )
+                    if not ok or n_read.value == 0:
+                        break
+                    out_f.write(buf.raw[:n_read.value])
             return True
-        # S5713: PermissionError 是 OSError 的子类，仅保留父类
-        except OSError:
-            return False
+        finally:
+            kernel32.CloseHandle(src_handle)
+    except Exception:
+        pass
 
-    # ===== 策略：系统浏览器 SQLite（最新登录）→ JSON 降级（v20加密时）→ CDP 兜底 =====
-    # 系统浏览器优先：用户期望读取浏览器最新登录状态
-    # JSON 降级：当系统浏览器 v20 加密不可读时，回退到之前浏览器登录保存的明文
-    cfg = get_config()
+    # 策略2：普通 shutil 复制（文件未被锁定时可用）
+    try:
+        shutil.copy2(src, dst)
+        return True
+    # S5713: PermissionError 是 OSError 的子类，仅保留父类
+    except OSError:
+        return False
 
+
+def _build_cookie_db_candidates(cfg) -> list[tuple[Path, bool]]:
+    """构建候选 Cookie DB 路径列表（按优先级排序）
+
+    顺序：Chrome 所有 Profile → Edge Default → 项目 browser-data
+    Edge 可能被锁定，标记为需要复制后读取。
+    """
     local_appdata = os.environ.get("LOCALAPPDATA", "")
-
-    # 候选 DB 路径列表：(路径, 是否尝试复制)
     candidates: list[tuple[Path, bool]] = []
 
     # 1. Chrome 所有 Profile（直接读）- 优先于 Edge，因为用户更常用 Chrome 登录闲鱼
@@ -685,108 +743,149 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
     project_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
     candidates.append((project_db, False))
 
-    def _query_db(db_path: Path) -> tuple[dict[str, str], bool]:
-        """从 SQLite DB 中查询目标 cookie，返回 ({name: value}, v20_detected)
+    return candidates
 
-        Chrome v20 加密将值存储在 encrypted_value 列，value 列为空。
-        无法离线解密 v20，因此跳过空值并标记 v20_detected。
-        """
-        result: dict[str, str] = {}
-        v20_detected = False
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            # 先检查 cookies 表是否存在（项目 browser-data 可能是 Playwright 创建的空库）
-            try:
-                table_check = conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
-                ).fetchone()
-                if not table_check:
-                    return result, v20_detected  # 无表 → 静默跳过
-            except sqlite3.OperationalError:
-                return result, v20_detected  # 数据库损坏 → 静默跳过
 
-            placeholders = ",".join(["?"] * len(requested_keys))
-            rows = conn.execute(
-                f"""
-                SELECT name, value, encrypted_value FROM cookies
-                WHERE name IN ({placeholders})
-                  AND (host_key LIKE '%goofish.com%'
-                       OR host_key LIKE '%taobao.com%'
-                       OR host_key LIKE '%h5.m.taobao%'
-                       OR host_key LIKE '%h5api.m.taobao%')
-                """,
-                requested_keys,
-            ).fetchall()
-            for name, value, enc_value in rows:
-                if name in result:
-                    continue
-                # value 非空 → 明文 cookie，直接使用
-                if value:
-                    result[name] = value
-                # value 为空但 encrypted_value 存在 → 检测加密格式
-                elif enc_value:
-                    enc_bytes = bytes(enc_value) if enc_value else b""
-                    if enc_bytes[:3] == b"v20":
-                        v20_detected = True
-                    # v10 等旧格式理论上可解密，但 fetch-keys 场景不依赖解密
-                    # 留空让后续 CDP 路径或手动输入兜底
-        return result, v20_detected
+def _query_cookie_db(db_path: Path, requested_keys: list[str]) -> tuple[dict[str, str], bool]:
+    """从 SQLite DB 中查询目标 cookie，返回 ({name: value}, v20_detected)
 
-    # 逐个候选尝试
-    last_error = None
+    Chrome v20 加密将值存储在 encrypted_value 列，value 列为空。
+    无法离线解密 v20，因此跳过空值并标记 v20_detected。
+    """
+    result: dict[str, str] = {}
+    v20_detected = False
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+        # 先检查 cookies 表是否存在（项目 browser-data 可能是 Playwright 创建的空库）
+        try:
+            table_check = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
+            ).fetchone()
+            if not table_check:
+                return result, v20_detected  # 无表 → 静默跳过
+        except sqlite3.OperationalError:
+            return result, v20_detected  # 数据库损坏 → 静默跳过
+
+        placeholders = ",".join(["?"] * len(requested_keys))
+        rows = conn.execute(
+            f"""
+            SELECT name, value, encrypted_value FROM cookies
+            WHERE name IN ({placeholders})
+              AND (host_key LIKE '%goofish.com%'
+                   OR host_key LIKE '%taobao.com%'
+                   OR host_key LIKE '%h5.m.taobao%'
+                   OR host_key LIKE '%h5api.m.taobao%')
+            """,
+            requested_keys,
+        ).fetchall()
+        for name, value, enc_value in rows:
+            if name in result:
+                continue
+            # value 非空 → 明文 cookie，直接使用
+            if value:
+                result[name] = value
+            # value 为空但 encrypted_value 存在 → 检测加密格式
+            elif enc_value:
+                enc_bytes = bytes(enc_value) if enc_value else b""
+                if enc_bytes[:3] == b"v20":
+                    v20_detected = True
+                # v10 等旧格式理论上可解密，但 fetch-keys 场景不依赖解密
+                # 留空让后续 CDP 路径或手动输入兜底
+    return result, v20_detected
+
+
+def _cleanup_temp_db_copy(temp_copy: str | None) -> None:
+    """清理临时复制的 DB 文件（忽略清理失败）"""
+    if temp_copy and os.path.exists(temp_copy):
+        try:
+            os.unlink(temp_copy)
+        except OSError:
+            pass
+
+
+# 用 sentinel 区分"不更新 last_error"与"将 last_error 置为 None"（如 no such table 情况）
+_LAST_ERROR_NO_UPDATE = object()
+
+
+def _try_single_cookie_candidate(
+    cookie_db: Path,
+    try_copy: bool,
+    requested_keys: list[str],
+) -> tuple[dict[str, str] | None, bool, object | str | None]:
+    """尝试单个候选 DB，返回 (result, v20_detected, last_error_update)
+
+    last_error_update 为 _LAST_ERROR_NO_UPDATE 表示不更新外部 last_error，
+    其他值（含 None）表示用该值更新 last_error。
+    """
+    if not cookie_db.exists():
+        return None, False, _LAST_ERROR_NO_UPDATE
+
+    actual_db = cookie_db
+    temp_copy = None
+    try:
+        # 如果需要复制（如 Edge 正在运行时），先复制到临时文件
+        if try_copy:
+            fd, temp_copy = tempfile.mkstemp(suffix=".db")
+            os.close(fd)
+            _copy_locked_cookie_file(str(cookie_db), temp_copy)
+            actual_db = Path(temp_copy)
+
+        result, v20_detected = _query_cookie_db(actual_db, requested_keys)
+        # 查询成功（无论有无结果）都不更新 last_error
+        return result, v20_detected, _LAST_ERROR_NO_UPDATE
+
+    except sqlite3.OperationalError as e:
+        err_msg = str(e).lower()
+        if "locked" in err_msg or "unable to open" in err_msg:
+            return None, False, f"{cookie_db.parent.parent.name} 浏览器正在运行，数据库被锁定"
+        elif "no such table" in err_msg:
+            # 技术性错误，不展示给用户（空库/表不存在已静默跳过）
+            return None, False, None
+        else:
+            return None, False, str(e)
+    except PermissionError:
+        return None, False, f"{cookie_db.parent.parent.name} 文件被占用（请关闭浏览器后重试）"
+    except Exception as e:
+        return None, False, str(e)
+    finally:
+        _cleanup_temp_db_copy(temp_copy)
+
+
+def _try_sqlite_cookie_candidates(
+    candidates: list[tuple[Path, bool]],
+    requested_keys: list[str],
+) -> tuple[JSONResponse | None, str | None, bool]:
+    """遍历 SQLite 候选 DB，返回 (成功响应, 最后错误, 是否检测到v20)
+
+    成功时返回 JSONResponse；全部失败时返回 None 和错误状态。
+    """
+    last_error: str | None = None
     any_v20_detected = False
     for cookie_db, try_copy in candidates:
-        if not cookie_db.exists():
-            continue
+        result, v20_detected, last_error_update = _try_single_cookie_candidate(
+            cookie_db, try_copy, requested_keys
+        )
+        if v20_detected:
+            any_v20_detected = True
+        if last_error_update is not _LAST_ERROR_NO_UPDATE:
+            last_error = last_error_update  # type: ignore[assignment]
+        if result:
+            logger.info(
+                "从 %s 成功获取 %d 个 cookie 值",
+                cookie_db,
+                len(result),
+            )
+            return make_auth_response({
+                "ok": True,
+                "cookies": result,
+                "found": list(result.keys()),
+                "missing": [k for k in requested_keys if k not in result],
+                "source": str(cookie_db),
+            }), last_error, any_v20_detected
+    return None, last_error, any_v20_detected
 
-        actual_db = cookie_db
-        temp_copy = None
-        try:
-            # 如果需要复制（如 Edge 正在运行时），先复制到临时文件
-            if try_copy:
-                fd, temp_copy = tempfile.mkstemp(suffix=".db")
-                os.close(fd)
-                _copy_locked_file(str(cookie_db), temp_copy)
-                actual_db = Path(temp_copy)
 
-            result, v20_detected = _query_db(actual_db)
-            if v20_detected:
-                any_v20_detected = True
-
-            if result:
-                logger.info(
-                    "从 %s 成功获取 %d 个 cookie 值",
-                    cookie_db,
-                    len(result),
-                )
-                return make_auth_response({
-                    "ok": True,
-                    "cookies": result,
-                    "found": list(result.keys()),
-                    "missing": [k for k in requested_keys if k not in result],
-                    "source": str(cookie_db),
-                })
-
-        except sqlite3.OperationalError as e:
-            err_msg = str(e).lower()
-            if "locked" in err_msg or "unable to open" in err_msg:
-                last_error = f"{cookie_db.parent.parent.name} 浏览器正在运行，数据库被锁定"
-            elif "no such table" in err_msg:
-                # 技术性错误，不展示给用户（空库/表不存在已静默跳过）
-                last_error = None
-            else:
-                last_error = str(e)
-        except PermissionError:
-            last_error = f"{cookie_db.parent.parent.name} 文件被占用（请关闭浏览器后重试）"
-        except Exception as e:
-            last_error = str(e)
-        finally:
-            if temp_copy and os.path.exists(temp_copy):
-                try:
-                    os.unlink(temp_copy)
-                except OSError:
-                    pass
-
-    # ===== SQLite 候选都失败 → JSON 降级（v20 加密时读取之前保存的明文） =====
+def _fallback_to_cookie_store_json(requested_keys: list[str]) -> JSONResponse | None:
+    """JSON 降级：当系统浏览器 v20 加密不可读时，回退到之前浏览器登录保存的明文"""
     try:
         from xianyu_hunter.web.services.cookie_store import is_test_cookie
         store = get_cookie_store()
@@ -825,8 +924,13 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
                 })
     except Exception as e:
         logger.warning("CookieStore JSON 降级读取失败: %s", e)
+    return None
 
-    # ===== JSON 也不可用 → Playwright CDP 兜底（读取项目浏览器的 cookie） =====
+
+async def _fallback_to_playwright_cdp(
+    container: Container, requested_keys: list[str],
+) -> JSONResponse | None:
+    """Playwright CDP 兜底：读取项目浏览器内存中的 cookie"""
     try:
         browser = container.browser
         if browser and browser._context:
@@ -854,8 +958,16 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
                 })
     except Exception as e:
         logger.warning("Playwright CDP 兜底也失败: %s", e)
+    return None
 
-    # 所有候选都失败 → 构建详细错误提示
+
+def _build_fetch_keys_failure_response(
+    requested_keys: list[str],
+    any_v20_detected: bool,
+    last_error: str | None,
+    container: Container,
+) -> JSONResponse:
+    """所有候选都失败时，构建详细的错误提示响应"""
     hints = []
 
     # v20 加密检测：Chrome/Edge 新版使用 app-bound encryption，无法离线解密
@@ -885,3 +997,48 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
         "error": f"未找到闲鱼 Cookie（{', '.join(requested_keys)}）",
         "hint": "；".join(hints),
     })
+
+
+@router.get("/cookie/fetch-keys")
+async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_container)) -> JSONResponse:
+    """从浏览器读取指定 cookie key 的值（用于前端自动填充 _m_h5_tk 等）
+
+    读取顺序（优先级从高到低）：
+    1. **Playwright CDP**（推荐）：通过已连接的系统 Edge 浏览器实时读取，无需复制文件
+    2. 项目 browser-data 目录（服务启动的浏览器实例）
+    3. 系统 Chrome 所有 Profile
+    4. 系统 Edge（复制文件绕过锁定）
+
+    Args:
+        keys: 逗号分隔的 cookie name 列表，如 "_m_h5_tk,cookie2,sgcookie,unb"
+    """
+    requested_keys = [k.strip() for k in keys.split(",") if k.strip()] if keys else []
+    if not requested_keys:
+        return JSONResponse(content={"ok": False, "error": "未指定要查询的 cookie key"})
+
+    # ===== 策略：系统浏览器 SQLite（最新登录）→ JSON 降级（v20加密时）→ CDP 兜底 =====
+    # 系统浏览器优先：用户期望读取浏览器最新登录状态
+    # JSON 降级：当系统浏览器 v20 加密不可读时，回退到之前浏览器登录保存的明文
+    cfg = get_config()
+    candidates = _build_cookie_db_candidates(cfg)
+
+    sqlite_response, last_error, any_v20_detected = _try_sqlite_cookie_candidates(
+        candidates, requested_keys,
+    )
+    if sqlite_response is not None:
+        return sqlite_response
+
+    # ===== SQLite 候选都失败 → JSON 降级（v20 加密时读取之前保存的明文） =====
+    json_response = _fallback_to_cookie_store_json(requested_keys)
+    if json_response is not None:
+        return json_response
+
+    # ===== JSON 也不可用 → Playwright CDP 兜底（读取项目浏览器的 cookie） =====
+    cdp_response = await _fallback_to_playwright_cdp(container, requested_keys)
+    if cdp_response is not None:
+        return cdp_response
+
+    # 所有候选都失败 → 构建详细错误提示
+    return _build_fetch_keys_failure_response(
+        requested_keys, any_v20_detected, last_error, container,
+    )

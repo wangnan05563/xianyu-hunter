@@ -425,60 +425,105 @@ class Evaluator:
         return max_deduction / (1 + math.exp(-k * (value - threshold)))
 
     def _eval_professional(self, seller: SellerProfile, item: ItemDetail | None = None) -> tuple[int, list[str]]:
+        """职业卖家维度评估
+
+        重构说明：将各扣分逻辑拆分为独立的 _apply_* 方法，
+        每个方法返回更新后的 score 并向 reasons 追加原因，避免主函数嵌套过深（S3776）。
+        """
         score = 100
         reasons: list[str] = []
 
-        # 在售数：Sigmoid 渐进式扣分（阈值 30，最大扣 40）
-        # on_sale=10 → 扣 ~1 分，on_sale=30 → 扣 20 分，on_sale=50 → 扣 ~38 分
-        if seller.on_sale_count > 0:
-            ded = self._sigmoid_deduction(
-                seller.on_sale_count, self.thresholds.on_sale_count, 40
-            )
-            if ded >= 1:
-                score -= int(ded)
-                reasons.append(
-                    f"on_sale {seller.on_sale_count} (ded={int(ded)})"
-                )
+        score = self._apply_on_sale_deduction(seller, score, reasons)
+        score = self._apply_post_count_30d_deduction(seller, score, reasons)
+        score = self._apply_top_category_ratio_deduction(seller, score, reasons)
 
-        # 30 天发布数：Sigmoid 渐进式扣分（阈值 15，最大扣 30）
-        if seller.post_count_30d > 0:
-            ded = self._sigmoid_deduction(
-                seller.post_count_30d, self.thresholds.post_count_30d, 30
-            )
-            if ded >= 1:
-                score -= int(ded)
-                reasons.append(
-                    f"30d_post {seller.post_count_30d} (ded={int(ded)})"
-                )
+        # 关键词命中是明确的职业信号，命中即提前返回（跳过贩子检测）
+        # 为什么提前返回：关键词命中已足以判定职业卖家，继续贩子检测会重复扣分
+        early_return = self._try_apply_professional_keyword_deduction(seller, score, reasons)
+        if early_return is not None:
+            return early_return
 
-        # 类目集中度：保持硬阈值（ratio 是比例值，0.8 是明确的职业信号）
-        if (
+        score = self._apply_dealer_signal_deduction(seller, item, score, reasons)
+        return max(score, 0), reasons
+
+    def _apply_on_sale_deduction(
+        self, seller: SellerProfile, score: int, reasons: list[str]
+    ) -> int:
+        """在售数 Sigmoid 渐进式扣分（阈值 30，最大扣 40）
+
+        on_sale=10 → 扣 ~1 分，on_sale=30 → 扣 20 分，on_sale=50 → 扣 ~38 分
+        """
+        if seller.on_sale_count <= 0:
+            return score
+        ded = self._sigmoid_deduction(
+            seller.on_sale_count, self.thresholds.on_sale_count, 40
+        )
+        if ded < 1:
+            return score
+        score -= int(ded)
+        reasons.append(f"on_sale {seller.on_sale_count} (ded={int(ded)})")
+        return score
+
+    def _apply_post_count_30d_deduction(
+        self, seller: SellerProfile, score: int, reasons: list[str]
+    ) -> int:
+        """30 天发布数 Sigmoid 渐进式扣分（阈值 15，最大扣 30）"""
+        if seller.post_count_30d <= 0:
+            return score
+        ded = self._sigmoid_deduction(
+            seller.post_count_30d, self.thresholds.post_count_30d, 30
+        )
+        if ded < 1:
+            return score
+        score -= int(ded)
+        reasons.append(f"30d_post {seller.post_count_30d} (ded={int(ded)})")
+        return score
+
+    def _apply_top_category_ratio_deduction(
+        self, seller: SellerProfile, score: int, reasons: list[str]
+    ) -> int:
+        """类目集中度硬阈值扣分（ratio 是比例值，0.8 是明确的职业信号）"""
+        if not (
             seller.top_category_ratio > 0
             and seller.top_category_ratio > self.thresholds.top_category_ratio
         ):
-            score -= 20
-            reasons.append(
-                f"top_category_ratio {seller.top_category_ratio:.0%} > {self.thresholds.top_category_ratio:.0%}"
-            )
+            return score
+        score -= 20
+        reasons.append(
+            f"top_category_ratio {seller.top_category_ratio:.0%} > {self.thresholds.top_category_ratio:.0%}"
+        )
+        return score
 
-        # 描述关键词：保持硬扣分（关键词命中是明确的职业信号）
+    def _try_apply_professional_keyword_deduction(
+        self, seller: SellerProfile, score: int, reasons: list[str]
+    ) -> tuple[int, list[str]] | None:
+        """描述关键词硬扣分（关键词命中是明确的职业信号）
+
+        返回 tuple 表示命中关键词需提前返回；返回 None 表示未命中，调用方继续后续评估。
+        """
         for post in seller.recent_posts:
             for kw in self.professional_keywords:
                 if post.title and kw in post.title:
                     score -= 15
                     reasons.append(f"professional_keyword:{kw}")
                     return max(score, 0), reasons
+        return None
 
-        # O-10-26 / O-13-26 贩子识别：在职业卖家维度中附加贩子信号扣分
-        # 为什么放在 professional 维度：贩子本质是职业卖家的极端形态，
-        # 扣分叠加在此维度符合语义，且不影响其他维度的独立性
-        # O-13-26：传入 item 用于图像盗图检测（DB 查询相同 image_url）
+    def _apply_dealer_signal_deduction(
+        self, seller: SellerProfile, item: ItemDetail | None, score: int, reasons: list[str]
+    ) -> int:
+        """O-10-26 / O-13-26 贩子识别：在职业卖家维度中附加贩子信号扣分
+
+        为什么放在 professional 维度：贩子本质是职业卖家的极端形态，
+        扣分叠加在此维度符合语义，且不影响其他维度的独立性。
+        O-13-26：传入 item 用于图像盗图检测（DB 查询相同 image_url）。
+        """
         dealer_result = detect_dealer(seller, item)
-        if dealer_result.score_deduction > 0:
-            score -= dealer_result.score_deduction
-            reasons.extend(dealer_result.reasons)
-
-        return max(score, 0), reasons
+        if dealer_result.score_deduction <= 0:
+            return score
+        score -= dealer_result.score_deduction
+        reasons.extend(dealer_result.reasons)
+        return score
 
     # ============== 2. 信用与资质 ==============
 

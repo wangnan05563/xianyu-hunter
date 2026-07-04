@@ -16,6 +16,69 @@ from sqlalchemy import func, select
 from xianyu_hunter.infra.db_models import _utcnow, EventRow
 
 
+def _aggregate_events_into_buckets(
+    events: list[dict],
+    window_minutes: int,
+    aggregate_bucket,
+) -> list[dict[str, Any]]:
+    """将事件按时间窗聚合到桶（接受 aggregate_bucket 回调以保持与类的解耦）
+
+    为什么独立：get_task_runs 中桶聚合逻辑含嵌套 if 判断
+    （current_bucket_start is None / bucket_start != current_bucket_start /
+    current_bucket_start is not None and current_events），提取后主函数变为线性流程，
+    且聚合逻辑可独立测试。
+    """
+    buckets: list[dict[str, Any]] = []
+    current_bucket_start: datetime | None = None
+    current_events: list[dict] = []
+
+    for ev in events:
+        ev_time = ev["created_at"]
+        if isinstance(ev_time, str):
+            ev_time = datetime.fromisoformat(ev_time)
+
+        minutes_since_midnight = ev_time.hour * 60 + ev_time.minute
+        bucket_minute = (minutes_since_midnight // window_minutes) * window_minutes
+        bucket_start = ev_time.replace(hour=bucket_minute // 60, minute=bucket_minute % 60, second=0, microsecond=0)
+
+        if current_bucket_start is None or bucket_start != current_bucket_start:
+            if current_bucket_start is not None and current_events:
+                buckets.append(aggregate_bucket(current_bucket_start, current_events, window_minutes))
+            current_bucket_start = bucket_start
+            current_events = [ev]
+        else:
+            current_events.append(ev)
+
+    if current_bucket_start is not None and current_events:
+        buckets.append(aggregate_bucket(current_bucket_start, current_events, window_minutes))
+
+    return buckets
+
+
+def _compute_idle_gaps(buckets: list[dict[str, Any]], idle_gap_minutes: int) -> list[dict[str, Any]]:
+    """计算桶之间的空闲间隔（超过 idle_gap_minutes 阈值的间隔）
+
+    为什么独立：get_task_runs 中空闲间隔计算含嵌套 isinstance 判断
+    （prev_end / curr_start 都可能为 str），提取后主函数变为线性流程。
+    """
+    idle_gaps: list[dict[str, Any]] = []
+    for i in range(1, len(buckets)):
+        prev_end = buckets[i - 1]["end"]
+        curr_start = buckets[i]["start"]
+        if isinstance(prev_end, str):
+            prev_end = datetime.fromisoformat(prev_end)
+        if isinstance(curr_start, str):
+            curr_start = datetime.fromisoformat(curr_start)
+        gap_minutes = (curr_start - prev_end).total_seconds() / 60
+        if gap_minutes > idle_gap_minutes:
+            idle_gaps.append({
+                "from": prev_end.isoformat(),
+                "to": curr_start.isoformat(),
+                "duration_s": int((curr_start - prev_end).total_seconds()),
+            })
+    return idle_gaps
+
+
 class EventsMixin:
     """Events 领域的 Repository 方法"""
 
@@ -284,46 +347,10 @@ class EventsMixin:
                 "total_runs": 0, "total_events": 0, "total_hits": 0,
             }
 
-        buckets: list[dict[str, Any]] = []
-        current_bucket_start: datetime | None = None
-        current_events: list[dict] = []
-
-        for row in rows:
-            ev = self._row_to_dict(row)
-            ev_time = ev["created_at"]
-            if isinstance(ev_time, str):
-                ev_time = datetime.fromisoformat(ev_time)
-
-            minutes_since_midnight = ev_time.hour * 60 + ev_time.minute
-            bucket_minute = (minutes_since_midnight // window_minutes) * window_minutes
-            bucket_start = ev_time.replace(hour=bucket_minute // 60, minute=bucket_minute % 60, second=0, microsecond=0)
-
-            if current_bucket_start is None or bucket_start != current_bucket_start:
-                if current_bucket_start is not None and current_events:
-                    buckets.append(self._aggregate_bucket(current_bucket_start, current_events, window_minutes))
-                current_bucket_start = bucket_start
-                current_events = [ev]
-            else:
-                current_events.append(ev)
-
-        if current_bucket_start is not None and current_events:
-            buckets.append(self._aggregate_bucket(current_bucket_start, current_events, window_minutes))
-
-        idle_gaps: list[dict[str, Any]] = []
-        for i in range(1, len(buckets)):
-            prev_end = buckets[i - 1]["end"]
-            curr_start = buckets[i]["start"]
-            if isinstance(prev_end, str):
-                prev_end = datetime.fromisoformat(prev_end)
-            if isinstance(curr_start, str):
-                curr_start = datetime.fromisoformat(curr_start)
-            gap_minutes = (curr_start - prev_end).total_seconds() / 60
-            if gap_minutes > idle_gap_minutes:
-                idle_gaps.append({
-                    "from": prev_end.isoformat(),
-                    "to": curr_start.isoformat(),
-                    "duration_s": int((curr_start - prev_end).total_seconds()),
-                })
+        # 先批量转换 Row 为 dict，让后续聚合逻辑变为纯函数处理
+        events = [self._row_to_dict(row) for row in rows]
+        buckets = _aggregate_events_into_buckets(events, window_minutes, self._aggregate_bucket)
+        idle_gaps = _compute_idle_gaps(buckets, idle_gap_minutes)
 
         total_events = sum(b["event_count"] for b in buckets)
         total_hits = sum(b["hit_count"] for b in buckets)

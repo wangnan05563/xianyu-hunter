@@ -130,6 +130,31 @@ function applyClientFilters(
   return filtered
 }
 
+// 用采集结果合并 display 字段：仅覆盖非空字段（与后端 set_if_present 策略一致）
+// 提取为模块级纯函数：原 applyRefreshToLiveItem 内 12 个 if 条件赋值贡献认知复杂度（S3776）
+function applyRefreshToDisplay(
+  base: TaskLink['display'] | undefined,
+  res: Awaited<ReturnType<typeof itemApi.refresh>>,
+): TaskLink['display'] {
+  // S7744：用条件 spread 显式处理 undefined，避免空对象字面量被 Sonar 误判为无用
+  const d: TaskLink['display'] = base ? { ...base } : {} as TaskLink['display']
+  if (res.title) d.title = res.title
+  if (res.price > 0) d.price = res.price
+  if (res.brand) d.brand = res.brand
+  if (res.seller_id) d.seller_id = res.seller_id
+  if (res.region) d.region = res.region
+  if (res.thumb_url) d.thumb_url = res.thumb_url
+  if ((res.image_urls?.length ?? 0) > 0) d.image_urls = res.image_urls
+  if (res.want_cnt > 0) d.want_cnt = res.want_cnt
+  if (res.view_cnt > 0) d.view_cnt = res.view_cnt
+  if (res.seller_nick) d.seller_nick = res.seller_nick
+  if (res.seller_credit != null) d.seller_credit = String(res.seller_credit)
+  if (res.publish_time) d.publish_time = res.publish_time
+  // is_sold 无条件覆盖：后端始终返回明确布尔值，无需判空
+  d.is_sold = res.is_sold
+  return d
+}
+
 export default function ItemList() {
   const navigate = useNavigate()
   // 搜索历史：商品标题关键词持久化到 localStorage，供快速复用
@@ -242,7 +267,7 @@ export default function ItemList() {
         setTotal(res.total_for_type || 0)
         applyChangeHighlight(newItems, prevItemsRef, setHighlightRows, setShowUpdateToast)
         // 搜索成功且关键词非空时记录历史，供后续快速复用
-        if (search && search.trim()) {
+        if (search?.trim()) {
           add(search.trim())
         }
       })
@@ -290,6 +315,31 @@ export default function ItemList() {
     applyChangeHighlight(filteredRows, prevItemsRef, setHighlightRows, setShowUpdateToast)
   }, [selectedTask])
 
+  // 实时模式：用采集结果直接更新 liveItemsRef 中匹配项并重新过滤
+  // 拆为独立子函数以降低 handleTitleClick 认知复杂度（S3776）
+  // 为什么不用 silentLiveRefresh：重新搜索会返回搜索 API 数据，
+  // 覆盖详情页采集到的最新字段（价格/标题/品牌等），导致只有图片更新
+  const applyRefreshToLiveItem = useCallback(
+    (itemId: string, res: Awaited<ReturnType<typeof itemApi.refresh>>) => {
+      const idx = liveItemsRef.current.findIndex((r) => r.link_key === itemId)
+      if (idx < 0) return
+      const item = liveItemsRef.current[idx]
+      const d = applyRefreshToDisplay(item.display, res)
+      liveItemsRef.current[idx] = { ...item, display: d }
+      // 重新应用客户端筛选条件
+      const filteredRows = applyClientFilters(
+        liveItemsRef.current,
+        searchRef.current,
+        regionFilterRef.current,
+        brandFilterRef.current,
+        soldFilterRef.current,
+      )
+      setItems(filteredRows)
+      setTotal(filteredRows.length)
+    },
+    [],
+  )
+
   // 点击标题超链接：异步触发后端采集（更新 brand/price/is_sold 等字段），
   // 同时打开闲鱼原帖。采集完成后刷新列表展示最新数据。
   // 参照评估明细页 onTitleClick 的交互模式：loading 提示 + 成功/失败反馈
@@ -305,52 +355,22 @@ export default function ItemList() {
     const hide = message.loading(`正在采集 ${shortId}...`, 0)
     // 传入 task_id：items 表无记录时后端用其回填 task_links.display
     // 不传则 task_links.display 不会被同步，采集的字段更新无法反映到列表
-    itemApi.refresh(itemId, selectedTask || undefined).then((res) => {
-      hide()
-      message.success(`已更新商品信息：${shortId}...`)
-      if (liveModeRef.current) {
-        // 实时模式：用采集结果直接更新 liveItemsRef，不重新搜索
-        // 为什么不用 silentLiveRefresh：重新搜索会返回搜索 API 数据，
-        // 覆盖详情页采集到的最新字段（价格/标题/品牌等），导致只有图片更新
-        const idx = liveItemsRef.current.findIndex((r) => r.link_key === itemId)
-        if (idx >= 0) {
-          const item = liveItemsRef.current[idx]
-          const d = { ...(item.display || {}) }
-          // 用采集结果覆盖非空字段（与后端 set_if_present 策略一致）
-          if (res.title) d.title = res.title
-          if (res.price > 0) d.price = res.price
-          if (res.brand) d.brand = res.brand
-          if (res.seller_id) d.seller_id = res.seller_id
-          if (res.region) d.region = res.region
-          if (res.thumb_url) d.thumb_url = res.thumb_url
-          if (res.image_urls && res.image_urls.length > 0) d.image_urls = res.image_urls
-          if (res.want_cnt > 0) d.want_cnt = res.want_cnt
-          if (res.view_cnt > 0) d.view_cnt = res.view_cnt
-          if (res.seller_nick) d.seller_nick = res.seller_nick
-          if (res.seller_credit != null) d.seller_credit = String(res.seller_credit)
-          if (res.publish_time) d.publish_time = res.publish_time
-          d.is_sold = res.is_sold
-          liveItemsRef.current[idx] = { ...item, display: d }
-          // 重新应用客户端筛选条件
-          const filteredRows = applyClientFilters(
-            liveItemsRef.current,
-            searchRef.current,
-            regionFilterRef.current,
-            brandFilterRef.current,
-            soldFilterRef.current,
-          )
-          setItems(filteredRows)
-          setTotal(filteredRows.length)
+    itemApi.refresh(itemId, selectedTask || undefined)
+      .then((res) => {
+        hide()
+        message.success(`已更新商品信息：${shortId}...`)
+        if (liveModeRef.current) {
+          applyRefreshToLiveItem(itemId, res)
+          return
         }
-      } else {
         // DB 模式：从数据库加载（task_links.display 已被后端同步更新）
         loadItems()
-      }
-    }).catch((err: unknown) => {
-      hide()
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      message.error(detail || `采集失败：${shortId}...，请稍后重试`)
-    })
+      })
+      .catch((err: unknown) => {
+        hide()
+        const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        message.error(detail || `采集失败：${shortId}...，请稍后重试`)
+      })
     if (url) {
       globalThis.open(url, '_blank', 'noopener,noreferrer')
     }
@@ -504,10 +524,10 @@ export default function ItemList() {
         // 刷新后重新加载 DB 数据（page 重置到第 1 页，确保看到最新结果）
         // 修复：之前 setPage(1) + loadItems() 会用旧 page 闭包加载一次，导致双重请求
         // 改为：page 变化时由 useEffect 自动触发；page 未变时手动调用
-        if (page !== 1) {
-          setPage(1)  // useEffect 会自动触发 loadItems
-        } else {
+        if (page === 1) {
           loadItems()
+        } else {
+          setPage(1)  // useEffect 会自动触发 loadItems
         }
       })
       .catch((err) => {
@@ -676,13 +696,13 @@ export default function ItemList() {
           col.render = (d: TaskLink['display'], record: TaskLink) => (
             <Tooltip title={d?.url ? '点击采集更新商品信息并打开原帖' : ''}>
               {d?.url ? (
-                <a
-                  role="button"
-                  tabIndex={0}
+                <button
+                  type="button"
+                  aria-label={`采集更新商品：${d?.title || ''}`}
                   onClick={(e) => handleTitleClick(e, record.link_key ?? '', d.url)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleTitleClick(e, record.link_key ?? '', d.url) }}
-                  style={{ cursor: 'pointer' }}
-                >{d?.title || '—'}</a>
+                  style={{ cursor: 'pointer', background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit' }}
+                >{d?.title || '—'}</button>
               ) : (
                 d?.title || '—'
               )}
@@ -1080,17 +1100,17 @@ export default function ItemList() {
                         }
                         actions={[
                           d?.url ? (
-                            <a
+                            <button
                               key="link"
-                              role="button"
-                              tabIndex={0}
+                              type="button"
+                              aria-label={`采集更新商品：${d?.title || ''}`}
                               onClick={(e) => handleTitleClick(e, item.link_key ?? '', d.url)}
                               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleTitleClick(e, item.link_key ?? '', d.url) }}
                               title="采集更新并打开原帖"
-                              style={{ cursor: 'pointer' }}
+                              style={{ cursor: 'pointer', background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit' }}
                             >
                               <LinkOutlined />
-                            </a>
+                            </button>
                           ) : <span key="nolink" style={{ color: '#d9d9d9' }}><LinkOutlined /></span>,
                           <DeleteOutlined key="delete" onClick={() => handleDelete(item.link_id)} style={{ color: item.link_id ? '#ff4d4f' : '#d9d9d9' }} />,
                         ]}

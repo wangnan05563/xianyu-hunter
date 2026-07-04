@@ -360,6 +360,16 @@ function CurrentBatchPanel() {
     ? Math.round((progress.current / progress.total) * 100)
     : 0
 
+  // 拆分嵌套三元为独立变量，提升可读性（SonarQube S3358）
+  const stoppedSuffix = lastResult?.stopped ? ' · 已停止' : ''
+  const lastResultText = lastResult
+    ? `成功 ${lastResult.success} · 失败 ${lastResult.failed} · 跳过 ${lastResult.skipped}${stoppedSuffix}`
+    : '暂无执行记录'
+  // 触发按钮 Tooltip：用 if/else 替代嵌套三元（SonarQube S3358）
+  let triggerTooltipText = ''
+  if (inProgress) triggerTooltipText = '已有批次在运行，请先停止'
+  else if (unavailable) triggerTooltipText = '调度器未启动'
+
   return (
     <>
       {/* 页面标题与刷新按钮 */}
@@ -467,12 +477,11 @@ function CurrentBatchPanel() {
           <Col span={6}>
             <Statistic
               title="上次执行时间"
-              formatter={() => <Text style={{ fontSize: 14 }}>{formatTime(status?.last_run_at ?? null)}</Text>}
+              // 调用顶层函数避免在 formatter 内联 JSX 子组件（SonarQube S6478）
+              formatter={() => renderLastRunTimeText(formatTime(status?.last_run_at ?? null))}
             />
             <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
-              {lastResult
-                ? `成功 ${lastResult.success} · 失败 ${lastResult.failed} · 跳过 ${lastResult.skipped}${lastResult.stopped ? ' · 已停止' : ''}`
-                : '暂无执行记录'}
+              {lastResultText}
             </div>
           </Col>
           <Col span={6}>
@@ -547,7 +556,7 @@ function CurrentBatchPanel() {
             </Paragraph>
 
             {/* 触发按钮：仅空闲态可用 */}
-            <Tooltip title={inProgress ? '已有批次在运行，请先停止' : unavailable ? '调度器未启动' : ''}>
+            <Tooltip title={triggerTooltipText}>
               <Button
                 type="primary"
                 icon={<PlayCircleOutlined />}
@@ -891,6 +900,24 @@ function HistoryPanel() {
     }
   }
 
+  // Drawer 内容：用 if/else 替代嵌套三元（SonarQube S3358）
+  let drawerContent: React.ReactNode
+  if (detailLoading) {
+    drawerContent = (
+      <div style={{ textAlign: 'center', padding: 48 }}>
+        <Text type="secondary">加载中…</Text>
+      </div>
+    )
+  } else if (detail) {
+    drawerContent = <DetailContent detail={detail} />
+  } else {
+    drawerContent = (
+      <div style={{ textAlign: 'center', padding: 48 }}>
+        <Text type="secondary">暂无数据</Text>
+      </div>
+    )
+  }
+
   return (
     <>
       {/* 概览卡片：按状态聚合统计 */}
@@ -1052,17 +1079,7 @@ function HistoryPanel() {
         width={640}
         destroyOnClose
       >
-        {detailLoading ? (
-          <div style={{ textAlign: 'center', padding: 48 }}>
-            <Text type="secondary">加载中…</Text>
-          </div>
-        ) : detail ? (
-          <DetailContent detail={detail} />
-        ) : (
-          <div style={{ textAlign: 'center', padding: 48 }}>
-            <Text type="secondary">暂无数据</Text>
-          </div>
-        )}
+        {drawerContent}
       </Drawer>
     </>
   )

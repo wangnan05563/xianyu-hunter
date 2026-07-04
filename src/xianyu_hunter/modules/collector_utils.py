@@ -344,22 +344,51 @@ def normalize_display_brand(
 
 
 def _find_first_text_by_keys(obj: Any, keys: set[str], depth: int = 0, max_depth: int = 3) -> str:
+    """递归查找第一个匹配 keys 的文本字段
+
+    重构说明：按 obj 类型分派到独立函数，避免主函数嵌套过深导致认知复杂度过高（S3776）。
+    """
     if depth > max_depth:
         return ""
     if isinstance(obj, dict):
-        for key, value in obj.items():
-            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
-            if normalized_key in keys and isinstance(value, str) and value.strip():
-                return value.strip()
-        for value in obj.values():
-            found = _find_first_text_by_keys(value, keys, depth + 1, max_depth)
-            if found:
-                return found
-    elif isinstance(obj, list):
-        for value in obj[:20]:
-            found = _find_first_text_by_keys(value, keys, depth + 1, max_depth)
-            if found:
-                return found
+        return _find_text_in_dict(obj, keys, depth, max_depth)
+    if isinstance(obj, list):
+        return _find_text_in_list(obj, keys, depth, max_depth)
+    return ""
+
+
+def _find_text_in_dict(
+    obj: dict, keys: set[str], depth: int, max_depth: int
+) -> str:
+    """先在本层 key 中查找，再递归 values
+
+    为什么先本层再递归：本层 key 命中即返回，避免无谓的深递归；
+    只有本层未命中时才向 values 下钻，符合"最短路径优先"。
+    """
+    for key, value in obj.items():
+        # 归一化 key：去除非字母数字字符并小写，应对 camelCase/snake_case/含分隔符的差异
+        normalized_key = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        if normalized_key in keys and isinstance(value, str) and value.strip():
+            return value.strip()
+    for value in obj.values():
+        found = _find_first_text_by_keys(value, keys, depth + 1, max_depth)
+        if found:
+            return found
+    return ""
+
+
+def _find_text_in_list(
+    obj: list, keys: set[str], depth: int, max_depth: int
+) -> str:
+    """限制前 20 个元素避免大列表性能问题
+
+    为什么限制 20：商品 raw 数据中列表字段通常较短（图片、标签等），
+    20 个元素足够覆盖；无限遍历可能遇到超大列表导致性能退化。
+    """
+    for value in obj[:20]:
+        found = _find_first_text_by_keys(value, keys, depth + 1, max_depth)
+        if found:
+            return found
     return ""
 
 
@@ -527,6 +556,80 @@ FIELD_METADATA: dict[str, dict[str, Any]] = {
 }
 
 
+def _swap_seller_nick_with_region(
+    seller_nick: str,
+    region: str,
+    publish_time: str,
+    seller_credit: str,
+) -> tuple[str, str, str, str]:
+    """场景 3：seller_nick 不像昵称且 region 像昵称 → 交换两者
+
+    交换后 old_seller_nick 按其语义归入 publish_time / seller_credit / region / 丢弃。
+    返回 (seller_nick, region, publish_time, seller_credit)。
+    """
+    region_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(region))
+    seller_nick_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(seller_nick))
+    # 判断 seller_nick 是否明显不是昵称
+    seller_nick_is_non_nick = (
+        is_region_like(seller_nick)
+        or _looks_like_publish_time(seller_nick)
+        or _looks_like_credit(seller_nick)
+        or bool(_NON_NICK_PATTERN.search(seller_nick))
+    )
+    # region 是脱敏昵称且 seller_nick 明显不是昵称 → 强制交换
+    # 或 seller_nick 不像昵称且 region 像昵称 → 交换（原逻辑）
+    should_swap = (
+        (region_is_masked_nick and not seller_nick_is_masked_nick and seller_nick_is_non_nick)
+        or (not _looks_like_nick(seller_nick) and _looks_like_nick(region))
+    )
+    if not should_swap:
+        return seller_nick, region, publish_time, seller_credit
+    # 交换时，seller_nick 的原始值移到合适的字段
+    old_seller_nick = seller_nick
+    seller_nick = region
+    region = ""
+    # 如果 old_seller_nick 像时间且 publish_time 为空，移到 publish_time
+    if _looks_like_publish_time(old_seller_nick) and not publish_time:
+        publish_time = old_seller_nick
+    # 如果 old_seller_nick 像信用且 seller_credit 为空，移到 seller_credit
+    elif _looks_like_credit(old_seller_nick) and not seller_credit:
+        seller_credit = old_seller_nick
+    # 如果 old_seller_nick 像地名，移到 region（保留地名信息）
+    elif is_region_like(old_seller_nick):
+        region = old_seller_nick
+    # 否则丢弃（old_seller_nick 是非昵称关键词，如"几乎全新"）
+    return seller_nick, region, publish_time, seller_credit
+
+
+def _build_field_map(corrected: dict) -> dict[str, dict[str, Any]]:
+    """根据 corrected 中实际有值的字段构建元数据映射
+
+    元数据来源 FIELD_METADATA；缺字段或值为空时不返回该字段。
+    """
+    field_map: dict[str, dict[str, Any]] = {}
+    for field, meta in FIELD_METADATA.items():
+        # 字段不在 display 中时跳过（如空字典输入时 is_sold 不存在）
+        if field not in corrected:
+            continue
+        value = corrected.get(field)
+        # 判断字段是否有值（None/空字符串/空数字视为无值）
+        meta_type = meta["type"]
+        if meta_type == "image":
+            has_value = bool(value)
+        elif meta_type == "price":
+            has_value = value is not None and value != 0
+        elif meta_type == "number":
+            has_value = value is not None
+        elif meta_type == "status":
+            # 状态字段：只要字段存在就显示（False 表示"在售"，是有效值）
+            has_value = True
+        else:
+            has_value = bool(value)
+        if has_value:
+            field_map[field] = meta
+    return field_map
+
+
 def normalize_display_fields(display: dict) -> tuple[dict, dict]:
     """对 display 字段做全面语义校正，并返回字段元数据
 
@@ -597,36 +700,9 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
     # "杭州"等简短城市名会被 _looks_like_nick 误判为昵称（2-20 字符且无非昵称关键词），
     # 导致 seller_nick="杭州" + region="芯***鱼" 时不会交换，前端显示错位
     if seller_nick and region:
-        region_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(region))
-        seller_nick_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(seller_nick))
-        # 判断 seller_nick 是否明显不是昵称
-        seller_nick_is_non_nick = (
-            is_region_like(seller_nick)
-            or _looks_like_publish_time(seller_nick)
-            or _looks_like_credit(seller_nick)
-            or bool(_NON_NICK_PATTERN.search(seller_nick))
+        seller_nick, region, publish_time, seller_credit = _swap_seller_nick_with_region(
+            seller_nick, region, publish_time, seller_credit
         )
-        # region 是脱敏昵称且 seller_nick 明显不是昵称 → 强制交换
-        # 或 seller_nick 不像昵称且 region 像昵称 → 交换（原逻辑）
-        should_swap = (
-            (region_is_masked_nick and not seller_nick_is_masked_nick and seller_nick_is_non_nick)
-            or (not _looks_like_nick(seller_nick) and _looks_like_nick(region))
-        )
-        if should_swap:
-            # 交换时，seller_nick 的原始值移到合适的字段
-            old_seller_nick = seller_nick
-            seller_nick = region
-            region = ""
-            # 如果 old_seller_nick 像时间且 publish_time 为空，移到 publish_time
-            if _looks_like_publish_time(old_seller_nick) and not publish_time:
-                publish_time = old_seller_nick
-            # 如果 old_seller_nick 像信用且 seller_credit 为空，移到 seller_credit
-            elif _looks_like_credit(old_seller_nick) and not seller_credit:
-                seller_credit = old_seller_nick
-            # 如果 old_seller_nick 像地名，移到 region（保留地名信息）
-            elif is_region_like(old_seller_nick):
-                region = old_seller_nick
-            # 否则丢弃（old_seller_nick 是非昵称关键词，如"几乎全新"）
 
     # 场景 4：seller_nick 为空，且 region 是脱敏昵称 → 把 region 当 seller_nick
     # 只在 region 明显是脱敏昵称（如"芯***鱼"）时才交换，避免误伤简短城市名（如"杭州"、"深圳"）
@@ -659,30 +735,7 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
     corrected["seller_credit"] = seller_credit
     corrected["brand"] = brand
 
-    # 构建字段元数据：只包含实际有值的字段
-    field_map: dict[str, dict[str, Any]] = {}
-    for field, meta in FIELD_METADATA.items():
-        # 字段不在 display 中时跳过（如空字典输入时 is_sold 不存在）
-        if field not in corrected:
-            continue
-        value = corrected.get(field)
-        # 判断字段是否有值（None/空字符串/空数字视为无值）
-        has_value = False
-        if meta["type"] == "image":
-            has_value = bool(value)
-        elif meta["type"] == "price":
-            has_value = value is not None and value != 0
-        elif meta["type"] == "number":
-            has_value = value is not None
-        elif meta["type"] == "status":
-            # 状态字段：只要字段存在就显示（False 表示"在售"，是有效值）
-            has_value = True
-        else:
-            has_value = bool(value)
-        if has_value:
-            field_map[field] = meta
-
-    return corrected, field_map
+    return corrected, _build_field_map(corrected)
 
 
 def parse_search_api_result(result: dict) -> list[dict]:
@@ -693,49 +746,76 @@ def parse_search_api_result(result: dict) -> list[dict]:
     - data.itemsList
     - data.data.items
     以及递归搜索包含 itemId/title 的列表。
+
+    重构说明：将 inner/data 两层查找拆分为独立函数，主函数只负责分派，
+    降低圈复杂度（S3776）。两层日志格式不同，故分别保留独立函数。
     """
     if not result or not isinstance(result, dict):
         return []
 
     # 尝试已知的字段路径
     data = result.get("data", result)
-    if isinstance(data, dict):
-        inner = data.get("data", data)
-        if isinstance(inner, dict):
-            for key in ("itemsList", "itemList", "items", "list", "result", "resultList"):
-                items_list = inner.get(key)
-                if isinstance(items_list, list) and items_list:
-                    # 记录第一个元素的 keys，便于排查字段名不匹配问题
-                    if isinstance(items_list[0], dict):
-                        logger.info("parse_search_api_result: key='{}', count={}, sample keys={}",
-                                    key, len(items_list), list(items_list[0].keys())[:20])
-                    return items_list
-            # 调试：记录实际响应结构（loguru 使用 {} 格式化，不是 %s）
-            logger.info(
-                "parse_search_api_result: inner keys={}, data keys={}, top keys={}",
-                list(inner.keys())[:15], list(data.keys())[:15], list(result.keys())[:15],
-            )
-            # 递归搜索：在 inner 中查找包含 itemId 的列表
-            found = _find_items_recursive(inner, depth=0)
-            if found:
-                logger.info("parse_search_api_result: 递归搜索找到 {} 个商品", len(found))
-                return found
-            return []
-        for key in ("itemsList", "itemList", "items", "list", "result", "resultList"):
-            items_list = data.get(key)
-            if isinstance(items_list, list) and items_list:
-                return items_list
-        logger.info(
-            "parse_search_api_result: data keys={}, top keys={}",
-            list(data.keys())[:15] if isinstance(data, dict) else type(data).__name__,
-            list(result.keys())[:15],
-        )
-        # 递归搜索
-        found = _find_items_recursive(data, depth=0)
-        if found:
-            logger.info("parse_search_api_result: 递归搜索找到 {} 个商品", len(found))
-            return found
+    if not isinstance(data, dict):
         return []
+
+    # 优先尝试 inner data 层（data.data.xxx），闲鱼 API 常见双层嵌套
+    inner = data.get("data", data)
+    if isinstance(inner, dict):
+        return _extract_items_from_inner(inner, data, result)
+
+    # 回退到 data 层（data.xxx）
+    return _extract_items_from_data(data, result)
+
+
+# 已知的商品列表字段名：闲鱼 API 在不同版本使用不同字段名，按优先级顺序尝试
+_KNOWN_ITEM_KEYS = ("itemsList", "itemList", "items", "list", "result", "resultList")
+
+
+def _extract_items_from_inner(
+    inner: dict, data: dict, result: dict
+) -> list[dict]:
+    """从 inner dict 中提取商品列表，含详细调试日志
+
+    inner 分支比 data 分支多记录 sample keys，因为 inner 是最常见的命中路径，
+    需要更详细的日志便于排查字段名不匹配问题。
+    """
+    for key in _KNOWN_ITEM_KEYS:
+        items_list = inner.get(key)
+        if isinstance(items_list, list) and items_list:
+            # 记录第一个元素的 keys，便于排查字段名不匹配问题
+            if isinstance(items_list[0], dict):
+                logger.info("parse_search_api_result: key='{}', count={}, sample keys={}",
+                            key, len(items_list), list(items_list[0].keys())[:20])
+            return items_list
+    # 调试：记录实际响应结构（loguru 使用 {} 格式化，不是 %s）
+    logger.info(
+        "parse_search_api_result: inner keys={}, data keys={}, top keys={}",
+        list(inner.keys())[:15], list(data.keys())[:15], list(result.keys())[:15],
+    )
+    # 递归搜索：在 inner 中查找包含 itemId 的列表
+    found = _find_items_recursive(inner, depth=0)
+    if found:
+        logger.info("parse_search_api_result: 递归搜索找到 {} 个商品", len(found))
+        return found
+    return []
+
+
+def _extract_items_from_data(data: dict, result: dict) -> list[dict]:
+    """从 data dict 中提取商品列表（inner 层未命中时的回退路径）"""
+    for key in _KNOWN_ITEM_KEYS:
+        items_list = data.get(key)
+        if isinstance(items_list, list) and items_list:
+            return items_list
+    logger.info(
+        "parse_search_api_result: data keys={}, top keys={}",
+        list(data.keys())[:15] if isinstance(data, dict) else type(data).__name__,
+        list(result.keys())[:15],
+    )
+    # 递归搜索
+    found = _find_items_recursive(data, depth=0)
+    if found:
+        logger.info("parse_search_api_result: 递归搜索找到 {} 个商品", len(found))
+        return found
     return []
 
 
@@ -743,29 +823,62 @@ def _find_items_recursive(obj: Any, depth: int = 0, max_depth: int = 4) -> list[
     """递归搜索 dict/list 结构中包含商品特征的列表
 
     闲鱼 API 可能嵌套在不同层级，此函数做兜底搜索。
+
+    重构说明：按 obj 类型分派到独立函数，避免主函数嵌套过深导致认知复杂度过高（S3776）。
     """
-    _item_keys = ("itemId", "id", "item_id", "auctionId", "auction_id")
     if depth > max_depth:
         return []
     if isinstance(obj, list):
-        # 检查列表元素是否像商品（含 itemId/id/auctionId 等标识字段）
-        # 闲鱼 resultList 元素可能将商品字段包裹在 data 子字典中
-        if obj and isinstance(obj[0], dict):
-            for item in obj[:3]:
-                if any(k in item for k in _item_keys):
-                    return obj
-                # 检查 data 子字典中的商品字段
-                sub = item.get("data")
-                if isinstance(sub, dict) and any(k in sub for k in _item_keys):
-                    return obj
-        # 继续搜索子元素
-        for item in obj:
-            found = _find_items_recursive(item, depth + 1, max_depth)
-            if found:
-                return found
-    elif isinstance(obj, dict):
-        for v in obj.values():
-            found = _find_items_recursive(v, depth + 1, max_depth)
-            if found:
-                return found
+        return _find_items_in_list(obj, depth, max_depth)
+    if isinstance(obj, dict):
+        return _find_items_in_dict(obj, depth, max_depth)
+    return []
+
+
+# 商品标识字段：用于判断列表元素是否像商品
+_ITEM_KEYS = ("itemId", "id", "item_id", "auctionId", "auction_id")
+
+
+def _is_item_like(item: Any) -> bool:
+    """判断对象是否像商品：直接含 itemId 或在 data 子字典中含 itemId
+
+    闲鱼 resultList 元素可能将商品字段包裹在 data 子字典中，需要两层检查。
+    """
+    if not isinstance(item, dict):
+        return False
+    if any(k in item for k in _ITEM_KEYS):
+        return True
+    sub = item.get("data")
+    return isinstance(sub, dict) and any(k in sub for k in _ITEM_KEYS)
+
+
+def _find_items_in_list(
+    obj: list, depth: int, max_depth: int
+) -> list[dict]:
+    """在列表中查找商品列表：先看本层前 3 个元素是否像商品，再递归子元素
+
+    为什么只看前 3 个：列表若为商品列表，前几个元素必然是商品；
+    只看前 3 个足够判断，避免对大列表做完整扫描。
+    """
+    # 检查列表元素是否像商品（含 itemId/id/auctionId 等标识字段）
+    if obj and isinstance(obj[0], dict):
+        for item in obj[:3]:
+            if _is_item_like(item):
+                return obj
+    # 继续搜索子元素
+    for item in obj:
+        found = _find_items_recursive(item, depth + 1, max_depth)
+        if found:
+            return found
+    return []
+
+
+def _find_items_in_dict(
+    obj: dict, depth: int, max_depth: int
+) -> list[dict]:
+    """在字典的 values 中递归查找商品列表"""
+    for v in obj.values():
+        found = _find_items_recursive(v, depth + 1, max_depth)
+        if found:
+            return found
     return []

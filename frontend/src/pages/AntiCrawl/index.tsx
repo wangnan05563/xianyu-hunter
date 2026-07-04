@@ -518,7 +518,7 @@ export default function AntiCrawl() {
                 <Col span={8}>
                   <Statistic
                     title="Token 年龄"
-                    value={session.token_age_sec != null ? `${Math.floor(session.token_age_sec)}s` : '-'}
+                    value={session.token_age_sec == null ? '-' : `${Math.floor(session.token_age_sec)}s`}
                     valueStyle={{
                       color: session.token_expired ? '#ff4d4f' : '#52c41a',
                     }}
@@ -570,7 +570,7 @@ export default function AntiCrawl() {
               </Button>
             }
           >
-            {health && health.ok ? (
+            {health?.ok ? (
               <>
                 <Progress
                   percent={health.score}
@@ -673,11 +673,13 @@ export default function AntiCrawl() {
                         <Text type="secondary" style={{ fontSize: 12 }}>
                           {/* valid 但 cookie_count=0 是 force_restore 强制恢复的，
                               显示"已恢复"避免误以为有有效 cookie */}
-                          {!state.valid
-                            ? '未初始化'
-                            : state.cookie_count > 0
-                            ? `${state.cookie_count} 个 Cookie`
-                            : '已恢复（无 Cookie）'}
+                          {(() => {
+                            // S7735：用正向分支判断 valid === false 而非 !state.valid
+                            // S3358：嵌套三元替换为 if/else 链
+                            if (state.valid === false) return '未初始化'
+                            if (state.cookie_count > 0) return `${state.cookie_count} 个 Cookie`
+                            return '已恢复（无 Cookie）'
+                          })()}
                         </Text>
                       </div>
                       {state.valid && (
@@ -723,7 +725,7 @@ export default function AntiCrawl() {
               </Space>
             }
           >
-            {fingerprint && fingerprint.profile ? (
+            {fingerprint?.profile ? (
               <Descriptions column={2} size="small" bordered>
                 <Descriptions.Item label="Profile" span={2}>
                   <Tag color="orange">{fingerprint.profile.name}</Tag>

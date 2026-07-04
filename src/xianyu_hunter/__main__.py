@@ -143,6 +143,7 @@ def login(timeout: int = typer.Option(180, help="扫码登录超时秒数")) -> 
         headless=False,  # 必须可弹窗
         user_agent=cfg.browser.user_agent,
         use_cdp=True,  # CDP 模式：连接系统 Edge，指纹最真实
+        proxy_server=cfg.browser.proxy_server,
     )
 
     async def _login() -> None:

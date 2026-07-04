@@ -367,6 +367,63 @@ class KBManager:
     _DOC_TYPE_CODE = "code"
     _DOC_TYPE_MANUAL = "manual"
 
+    def _is_excluded_path(self, fp: Path) -> bool:
+        """判断文件是否落在 _EXCLUDED_DIRS 内（用 posix 路径匹配，兼容 Windows 反斜杠）"""
+        try:
+            rel = fp.relative_to(self._project_root).as_posix()
+        except ValueError:
+            rel = fp.as_posix()
+        return any(
+            rel.startswith(excluded + "/") or f"/{excluded}/" in f"/{rel}/"
+            for excluded in self._EXCLUDED_DIRS
+        )
+
+    def _collect_files_from_path(self, root: Path) -> list[Path]:
+        """从给定 root 收集要扫描的文件列表
+
+        - root 是文件：直接返回 [root]
+        - root 是目录：rglob 遍历，按 _EXCLUDED_DIRS 与 _ALLOWED_SUFFIXES 过滤
+        """
+        if root.is_file():
+            return [root]
+        files: list[Path] = []
+        for fp in root.rglob("*"):
+            if not fp.is_file():
+                continue
+            # 排除目录检查：用 posix 路径匹配，兼容 Windows 反斜杠
+            if self._is_excluded_path(fp):
+                continue
+            # 后缀白名单：跳过 .js/.css/.html 等无文档价值的文件
+            if fp.suffix.lower() not in self._ALLOWED_SUFFIXES:
+                continue
+            files.append(fp)
+        return files
+
+    def _chunk_file_by_suffix(self, file_path: Path, rel_path: str) -> list[DocSnippet]:
+        """按后缀选择对应的分块器，返回该文件的片段列表"""
+        suffix = file_path.suffix.lower()
+        if suffix == ".md":
+            return self._chunk_markdown(self._read_text(file_path), rel_path)
+        if suffix == ".py":
+            return self._chunk_python(self._read_text(file_path), rel_path)
+        if suffix == ".jsonl":
+            # JSONL 训练材料：每行一个独立训练样本，按行解析而非字符切分
+            return self._chunk_jsonl(self._read_text(file_path), rel_path)
+        # .txt 及其他白名单内但无专门分块器的文件
+        content = self._read_text(file_path)
+        if not content:
+            return []
+        return self._chunk_plain(content, rel_path)
+
+    def _mark_sensitive_snippets(self, snippets: list[DocSnippet]) -> None:
+        """原地标记含敏感数据的片段 redacted=True
+
+        不脱敏是因为脱敏会破坏代码语义与文档可读性
+        """
+        for s in snippets:
+            if self._has_sensitive_data(s.content):
+                s.redacted = True
+
     def _scan_and_chunk(self) -> list[DocSnippet]:
         """扫描 config.doc_paths 下所有文件，按文件类型分块
 
@@ -385,27 +442,7 @@ class KBManager:
                 continue
 
             # 既支持目录扫描也支持单文件
-            files: list[Path] = []
-            if root.is_file():
-                files = [root]
-            else:
-                for fp in root.rglob("*"):
-                    if not fp.is_file():
-                        continue
-                    # 排除目录检查：用 posix 路径匹配，兼容 Windows 反斜杠
-                    try:
-                        rel = fp.relative_to(self._project_root).as_posix()
-                    except ValueError:
-                        rel = fp.as_posix()
-                    if any(
-                        rel.startswith(excluded + "/") or f"/{excluded}/" in f"/{rel}/"
-                        for excluded in self._EXCLUDED_DIRS
-                    ):
-                        continue
-                    # 后缀白名单：跳过 .js/.css/.html 等无文档价值的文件
-                    if fp.suffix.lower() not in self._ALLOWED_SUFFIXES:
-                        continue
-                    files.append(fp)
+            files = self._collect_files_from_path(root)
 
             for file_path in files:
                 # 统一用相对路径作为 source_file，便于按来源删除/审计
@@ -414,32 +451,9 @@ class KBManager:
                 except ValueError:
                     rel_path = file_path.as_posix()
 
-                suffix = file_path.suffix.lower()
-                if suffix == ".md":
-                    file_snippets = self._chunk_markdown(
-                        self._read_text(file_path), rel_path
-                    )
-                elif suffix == ".py":
-                    file_snippets = self._chunk_python(
-                        self._read_text(file_path), rel_path
-                    )
-                elif suffix == ".jsonl":
-                    # JSONL 训练材料：每行一个独立训练样本，按行解析而非字符切分
-                    file_snippets = self._chunk_jsonl(
-                        self._read_text(file_path), rel_path
-                    )
-                else:
-                    # .txt 及其他白名单内但无专门分块器的文件
-                    content = self._read_text(file_path)
-                    if not content:
-                        continue
-                    file_snippets = self._chunk_plain(content, rel_path)
-
+                file_snippets = self._chunk_file_by_suffix(file_path, rel_path)
                 # 敏感数据扫描：标记 redacted=True 但保留片段
-                # 不脱敏是因为脱敏会破坏代码语义与文档可读性
-                for s in file_snippets:
-                    if self._has_sensitive_data(s.content):
-                        s.redacted = True
+                self._mark_sensitive_snippets(file_snippets)
                 snippets.extend(file_snippets)
 
         return snippets
@@ -475,33 +489,22 @@ class KBManager:
             stripped = line.lstrip()
             # 代码块边界检测（``` 或 ~~~）
             if stripped.startswith("```") or stripped.startswith("~~~"):
+                # 代码块边界处理：进入/退出分别 flush 段落或生成代码片段
+                # 提取为独立方法避免 if/else 双分支嵌套过深导致认知复杂度堆积
                 if not in_code_block:
                     # 进入代码块前先保存当前段落（避免代码块与文本混在一个片段）
-                    if current_section:
-                        section_content = "\n".join(current_section).strip()
-                        if section_content:
-                            snippets.extend(self._make_md_snippets(
-                                section_content, source_file,
-                                current_path or self._HEADER_SECTION,
-                                section_start_line, i - 1, doc_type,
-                            ))
-                        current_section = []
+                    self._flush_md_section(
+                        current_section, snippets, source_file, current_path,
+                        section_start_line, i - 1, doc_type,
+                    )
+                    current_section = []
                     in_code_block = True
                     code_block_start_line = i
                 else:
-                    # 代码块结束：单独生成一个 code_block 片段
-                    code_lines = lines[code_block_start_line - 1: i]
-                    code_content = "\n".join(code_lines)
-                    snippets.append(DocSnippet(
-                        content=code_content[: self._config.chunk_size],
-                        source_file=source_file,
-                        section_path=f"{current_path} > <code_block>",
-                        line_start=code_block_start_line,
-                        line_end=i,
-                        doc_type=doc_type,
-                        truncated=len(code_content) > self._config.chunk_size,
-                        code_block=True,
-                    ))
+                    self._append_code_block_snippet(
+                        snippets, lines, code_block_start_line, i,
+                        source_file, current_path, doc_type,
+                    )
                     in_code_block = False
                     section_start_line = i + 1
                 continue
@@ -509,14 +512,10 @@ class KBManager:
             # 仅在非代码块内识别 H2 标题（避免把代码里的注释当标题）
             if not in_code_block and line.startswith("## ") and not line.startswith("### "):
                 # 保存前一段
-                if current_section:
-                    section_content = "\n".join(current_section).strip()
-                    if section_content:
-                        snippets.extend(self._make_md_snippets(
-                            section_content, source_file,
-                            current_path or self._HEADER_SECTION,
-                            section_start_line, i - 1, doc_type,
-                        ))
+                self._flush_md_section(
+                    current_section, snippets, source_file, current_path,
+                    section_start_line, i - 1, doc_type,
+                )
                 current_section = [line]
                 current_path = line.lstrip("# ").strip()
                 section_start_line = i
@@ -524,16 +523,65 @@ class KBManager:
                 current_section.append(line)
 
         # 最后一段
-        if current_section:
-            section_content = "\n".join(current_section).strip()
-            if section_content:
-                snippets.extend(self._make_md_snippets(
-                    section_content, source_file,
-                    current_path or self._HEADER_SECTION,
-                    section_start_line, len(lines), doc_type,
-                ))
+        self._flush_md_section(
+            current_section, snippets, source_file, current_path,
+            section_start_line, len(lines), doc_type,
+        )
 
         return snippets
+
+    def _flush_md_section(
+        self,
+        current_section: list[str],
+        snippets: list[DocSnippet],
+        source_file: str,
+        current_path: str,
+        line_start: int,
+        line_end: int,
+        doc_type: str,
+    ) -> None:
+        """把累积的段落写入 snippets 列表
+
+        为什么提取为独立方法：同一段「段落→片段」flush 逻辑在代码块进入、H2 切换、
+        文件末尾出现 3 次，内联会让主循环嵌套过深且容易行为漂移。
+        """
+        if not current_section:
+            return
+        section_content = "\n".join(current_section).strip()
+        if not section_content:
+            return
+        snippets.extend(self._make_md_snippets(
+            section_content, source_file,
+            current_path or self._HEADER_SECTION,
+            line_start, line_end, doc_type,
+        ))
+
+    def _append_code_block_snippet(
+        self,
+        snippets: list[DocSnippet],
+        lines: list[str],
+        code_block_start_line: int,
+        code_block_end_line: int,
+        source_file: str,
+        current_path: str,
+        doc_type: str,
+    ) -> None:
+        """代码块结束：生成单个 code_block 片段并追加
+
+        为什么独立方法：代码块片段字段较多且需截断处理，内联会让代码块 else 分支嵌套过深。
+        """
+        code_lines = lines[code_block_start_line - 1: code_block_end_line]
+        code_content = "\n".join(code_lines)
+        snippets.append(DocSnippet(
+            content=code_content[: self._config.chunk_size],
+            source_file=source_file,
+            section_path=f"{current_path} > <code_block>",
+            line_start=code_block_start_line,
+            line_end=code_block_end_line,
+            doc_type=doc_type,
+            truncated=len(code_content) > self._config.chunk_size,
+            code_block=True,
+        ))
 
     def _make_md_snippets(
         self,
@@ -601,7 +649,7 @@ class KBManager:
             return [DocSnippet(
                 content=content[: self._config.chunk_size],
                 source_file=source_file,
-                section_path="<file>",
+                section_path=self._FILE_SECTION,
                 line_start=1,
                 line_end=len(lines) if lines else 1,
                 doc_type="code",
@@ -651,7 +699,7 @@ class KBManager:
             snippets.append(DocSnippet(
                 content=content[: self._config.chunk_size],
                 source_file=source_file,
-                section_path="<file>",
+                section_path=self._FILE_SECTION,
                 line_start=1,
                 line_end=len(lines) if lines else 1,
                 doc_type="code",
@@ -714,7 +762,7 @@ class KBManager:
             return [DocSnippet(
                 content=content,
                 source_file=source_file,
-                section_path="<file>",
+                section_path=self._FILE_SECTION,
                 line_start=1,
                 line_end=total_lines,
                 doc_type=self._DOC_TYPE_MANUAL,

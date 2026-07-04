@@ -45,8 +45,8 @@ export default function PriceHistogramCard({
     // P-09-30 任务定价范围标线（绿色实线）—— 让用户直观看到价格分布相对于定价范围的位置
     // 仅在选定任务且任务设置了定价范围时显示；与分位数/均价虚线区分用实线
     const tpr = histogram.summary.task_price_range
-    if (tpr && tpr.min_price != null) markLines.push({ xAxis: tpr.min_price, name: '定价下限', label: { formatter: '定价下限 ¥{c}', color: token.colorSuccess, position: 'start', distance: 62, fontSize: 10 }, lineStyle: { color: token.colorSuccess, type: 'solid' } })
-    if (tpr && tpr.max_price != null) markLines.push({ xAxis: tpr.max_price, name: '定价上限', label: { formatter: '定价上限 ¥{c}', color: token.colorSuccess, position: 'end', distance: 48, fontSize: 10 }, lineStyle: { color: token.colorSuccess, type: 'solid' } })
+    if (tpr?.min_price != null) markLines.push({ xAxis: tpr.min_price, name: '定价下限', label: { formatter: '定价下限 ¥{c}', color: token.colorSuccess, position: 'start', distance: 62, fontSize: 10 }, lineStyle: { color: token.colorSuccess, type: 'solid' } })
+    if (tpr?.max_price != null) markLines.push({ xAxis: tpr.max_price, name: '定价上限', label: { formatter: '定价上限 ¥{c}', color: token.colorSuccess, position: 'end', distance: 48, fontSize: 10 }, lineStyle: { color: token.colorSuccess, type: 'solid' } })
 
     return {
       tooltip: {
@@ -209,15 +209,19 @@ export default function PriceHistogramCard({
               </span>
             )}
             {/* P-09-30 新增：任务定价范围展示，让用户对比价格分布与任务定价范围 */}
-            {histogram.summary.task_price_range &&
-              (histogram.summary.task_price_range.min_price != null || histogram.summary.task_price_range.max_price != null) && (
-              <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
-                <Tag color="green">定价范围</Tag>
-                {histogram.summary.task_price_range.min_price != null ? `¥${histogram.summary.task_price_range.min_price}` : '−'}
-                {' ~ '}
-                {histogram.summary.task_price_range.max_price != null ? `¥${histogram.summary.task_price_range.max_price}` : '−'}
-              </span>
-            )}
+            {(() => {
+              const tpr = histogram.summary.task_price_range
+              const hasMin = tpr?.min_price !== null && tpr?.min_price !== undefined
+              const hasMax = tpr?.max_price !== null && tpr?.max_price !== undefined
+              return tpr && (hasMin || hasMax) ? (
+                <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
+                  <Tag color="green">定价范围</Tag>
+                  {hasMin ? `¥${tpr!.min_price}` : '−'}
+                  {' ~ '}
+                  {hasMax ? `¥${tpr!.max_price}` : '−'}
+                </span>
+              ) : null
+            })()}
           </div>
 
           {/* AI 分析按钮 + 结果 */}

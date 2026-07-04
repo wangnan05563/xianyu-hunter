@@ -226,6 +226,11 @@ class LoginOrchestrator:
 
     # ============== 会话生命周期 ==============
 
+    # 续期失败连续阈值：超过此次数才触发自动重登
+    _RENEW_FAIL_THRESHOLD = 2
+    # 自动重登冷却时间（秒），失败后避免频繁重试
+    _AUTO_RELOGIN_COOLDOWN_SEC = 600
+
     async def start_session(
         self,
         cookie_provider: Callable[[], str | None],
@@ -252,67 +257,103 @@ class LoginOrchestrator:
         if renew_callback:
             self._token_renewer.set_renew_callback(renew_callback)
 
-        # 设置续期失败回调：标记 Cookie 层失效并尝试自愈
-        def on_renew_fail():
-            # manual=False：系统失效可被 /cookies/layers 自动同步恢复（cookie 实际有效时）
-            self._cookie_rotator.invalidate_layer(CookieLayer.SESSION, manual=False)
-            self._renew_fail_count += 1
-            logger.warning(
-                "Token 续期失败（第 {} 次），session 层已标记失效",
-                self._renew_fail_count,
-            )
-
-            # 自愈路径 1：尝试从 CookieStore JSON 同步恢复
-            # 为什么先尝试同步：浏览器登录子进程可能已刷新 cookie 但主进程缓存未更新，
-            # 重新读 JSON 有机会恢复，成本远低于重新登录
-            recovered = sync_cookie_layers_from_json()
-            if recovered:
-                self._renew_fail_count = 0
-                logger.info("Cookie 层同步恢复成功，session 失效已自愈")
-                return
-
-            # 自愈路径 2：连续失败且超过冷却时间时触发自动重登
-            now = time.time()
-            if (
-                self._auto_relogin_callback
-                and self._renew_fail_count >= 2
-                and now >= self._auto_relogin_cooldown_until
-            ):
-                # on_renew_fail 是同步回调，异步重登需通过 create_task 触发
-                logger.error(
-                    "续期连续失败 {} 次，cookie 同步无效，触发自动重登",
-                    self._renew_fail_count,
-                )
-                # 冷却 10 分钟，避免重登失败后频繁重试
-                self._auto_relogin_cooldown_until = now + 600
-
-                async def _do_relogin():
-                    try:
-                        success = await self._auto_relogin_callback()
-                        if success:
-                            self._renew_fail_count = 0
-                            logger.info("自动重登成功，session 已恢复")
-                        else:
-                            logger.error("自动重登返回失败，等待下次重试")
-                    except Exception as e:
-                        logger.error("自动重登异常: {}", e)
-
-                try:
-                    asyncio.get_event_loop().create_task(_do_relogin())
-                except RuntimeError:
-                    logger.error("无事件循环可用，无法触发自动重登，请手动重新登录")
-            elif not self._auto_relogin_callback and self._renew_fail_count >= 2:
-                logger.error(
-                    "续期连续失败 {} 次且未配置自动重登回调，请手动重新登录",
-                    self._renew_fail_count,
-                )
-
-        self._token_renewer.set_renew_fail_callback(on_renew_fail)
+        # 续期失败回调：拆分为多个原子方法，避免单函数嵌套过深
+        self._token_renewer.set_renew_fail_callback(self._on_renew_fail)
 
         # 启动后台续期
         self._token_renewer.start()
 
         logger.info("会话管理已启动")
+
+    def _on_renew_fail(self) -> None:
+        """Token 续期失败回调（同步入口）
+
+        三步策略：
+        1. 标记 session 层失效
+        2. 尝试从 CookieStore JSON 同步恢复（低成本自愈）
+        3. 连续失败且超过冷却时间时触发自动重登（高成本自愈）
+        """
+        # 手动标记失效：manual=False 让 /cookies/layers 自动同步可恢复该层
+        self._invalidate_session_layer_after_renew_fail()
+        if self._try_recover_session_from_json():
+            return
+        self._maybe_trigger_auto_relogin()
+
+    def _invalidate_session_layer_after_renew_fail(self) -> None:
+        """续期失败后标记 session 层失效并累加计数"""
+        self._cookie_rotator.invalidate_layer(CookieLayer.SESSION, manual=False)
+        self._renew_fail_count += 1
+        logger.warning(
+            "Token 续期失败（第 {} 次），session 层已标记失效",
+            self._renew_fail_count,
+        )
+
+    def _try_recover_session_from_json(self) -> bool:
+        """尝试从 CookieStore JSON 同步恢复 session 层
+
+        为什么先尝试同步：浏览器登录子进程可能已刷新 cookie 但主进程缓存未更新，
+        重新读 JSON 有机会恢复，成本远低于重新登录。
+
+        Returns:
+            True 表示恢复成功，无需触发自动重登
+        """
+        recovered = sync_cookie_layers_from_json()
+        if not recovered:
+            return False
+        self._renew_fail_count = 0
+        logger.info("Cookie 层同步恢复成功，session 失效已自愈")
+        return True
+
+    def _maybe_trigger_auto_relogin(self) -> None:
+        """根据冷却时间和失败次数决定是否触发自动重登
+
+        冷却 10 分钟避免重登失败后频繁重试；
+        无事件循环时记录错误并提示手动重登。
+        """
+        if not self._should_trigger_relogin():
+            return
+        now = time.time()
+        self._auto_relogin_cooldown_until = now + self._AUTO_RELOGIN_COOLDOWN_SEC
+        logger.error(
+            "续期连续失败 {} 次，cookie 同步无效，触发自动重登",
+            self._renew_fail_count,
+        )
+        self._schedule_auto_relogin()
+
+    def _should_trigger_relogin(self) -> bool:
+        """是否应该触发自动重登：需要回调 + 连续失败次数达标 + 冷却期已过"""
+        if not self._auto_relogin_callback:
+            if self._renew_fail_count >= self._RENEW_FAIL_THRESHOLD:
+                logger.error(
+                    "续期连续失败 {} 次且未配置自动重登回调，请手动重新登录",
+                    self._renew_fail_count,
+                )
+            return False
+        if self._renew_fail_count < self._RENEW_FAIL_THRESHOLD:
+            return False
+        return time.time() >= self._auto_relogin_cooldown_until
+
+    def _schedule_auto_relogin(self) -> None:
+        """通过事件循环调度异步自动重登；无循环时降级为日志告警"""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            logger.error("无事件循环可用，无法触发自动重登，请手动重新登录")
+            return
+        loop.create_task(self._do_auto_relogin())
+
+    async def _do_auto_relogin(self) -> None:
+        """执行自动重登：调用回调并根据结果重置/保留失败计数"""
+        try:
+            success = await self._auto_relogin_callback()
+        except Exception as exc:  # noqa: BLE001 - 自动重登失败需记录原始异常
+            logger.error("自动重登异常: {}", exc)
+            return
+        if success:
+            self._renew_fail_count = 0
+            logger.info("自动重登成功，session 已恢复")
+        else:
+            logger.error("自动重登返回失败，等待下次重试")
 
     # ============== 默认会话启动（登录后自动调用） ==============
 

@@ -31,6 +31,10 @@ router = APIRouter(prefix="/api/chatbot", tags=["chatbot"])
 
 # 会话不存在的错误消息：多处端点统一返回此消息，提取为常量避免散落修改
 SESSION_NOT_FOUND_MSG = "会话不存在"
+# 消息不存在的错误消息：多处端点统一返回此消息，提取为常量避免散落修改
+MESSAGE_NOT_FOUND_MSG = "消息不存在"
+# 会话/消息 ID 格式校验：UUID32（无连字符的 MD5 风格 hex），多处 Field/Query 复用
+_MD5_HEX_PATTERN = r"^[a-f0-9]{32}$"
 
 
 def _get_chatbot_or_403() -> dict[str, Any]:
@@ -57,7 +61,7 @@ class ChatRequest(BaseModel):
     """
     session_id: str | None = Field(
         None,
-        pattern=r"^[a-f0-9]{32}$",
+        pattern=_MD5_HEX_PATTERN,
         description="会话 ID（UUID32，无连字符）；None 表示首次对话",
     )
     message: str = Field(..., min_length=1, max_length=2000, description="用户消息（1-2000 字符）")
@@ -103,7 +107,7 @@ class SessionUpdateFavoriteRequest(BaseModel):
 
 
 class EscalationTriggerRequest(BaseModel):
-    session_id: str = Field(..., pattern=r"^[a-f0-9]{32}$", description="要转人工的会话 ID")
+    session_id: str = Field(..., pattern=_MD5_HEX_PATTERN, description="要转人工的会话 ID")
 
 
 class FeedbackRequest(BaseModel):
@@ -253,7 +257,7 @@ def end_session(session_id: str) -> dict[str, Any]:
 def list_messages(
     session_id: str,
     limit: int = Query(50, ge=1, le=100),
-    before_id: str | None = Query(None, pattern=r"^[a-f0-9]{32}$"),
+    before_id: str | None = Query(None, pattern=_MD5_HEX_PATTERN),
 ) -> dict[str, Any]:
     """消息历史（游标分页，按 created_at ASC）"""
     chatbot = _get_chatbot_or_403()
@@ -280,7 +284,7 @@ def recall_message(message_id: str) -> dict[str, Any]:
     if message is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "MESSAGE_NOT_FOUND", "message": "消息不存在"},
+            detail={"code": "MESSAGE_NOT_FOUND", "message": MESSAGE_NOT_FOUND_MSG},
         )
     result = repo.recall_message(message_id, time_window_sec=120)
     if not result["ok"]:
@@ -319,7 +323,7 @@ def add_message_feedback(message_id: str, req: FeedbackRequest) -> dict[str, Any
     if message is None:
         raise HTTPException(
             status_code=404,
-            detail={"code": "MESSAGE_NOT_FOUND", "message": "消息不存在"},
+            detail={"code": "MESSAGE_NOT_FOUND", "message": MESSAGE_NOT_FOUND_MSG},
         )
     # M6：当 star_rating 存在时，后端自动派生 rating，防止客户端传矛盾值
     # 4-5 星 → positive，1-3 星 → negative；star_rating 为 None 时沿用客户端传的 rating
@@ -333,7 +337,7 @@ def add_message_feedback(message_id: str, req: FeedbackRequest) -> dict[str, Any
     if not ok:
         raise HTTPException(
             status_code=404,
-            detail={"code": "MESSAGE_NOT_FOUND", "message": "消息不存在"},
+            detail={"code": "MESSAGE_NOT_FOUND", "message": MESSAGE_NOT_FOUND_MSG},
         )
     # negative 反馈达阈值时触发会话转人工状态
     escalate_triggered = False

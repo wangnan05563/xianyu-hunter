@@ -67,6 +67,80 @@ def list_logs(
 
 
 # ============== F-08 日志搜索/过滤/标签（events 表） ==============
+def _fetch_log_candidates(
+    container: Container,
+    request_id: str | None,
+    level: str | None,
+    task_id: str | None,
+    limit: int,
+    since_id: int | None,
+) -> list[dict[str, Any]]:
+    """拉取候选行：request_id 走索引查询，否则走 list_events 全量过滤
+
+    request_id 优先级最高：单次请求触发的所有日志都通过此列关联，
+    list_events_by_request 走索引性能优于全表扫描。
+    """
+    if request_id:
+        rows, _ = container.repo.list_events_by_request(
+            request_id=request_id, limit=min(limit * 10, 1000), offset=0
+        )
+        # 倒序输出便于人工查看最新记录
+        return list(reversed(rows))
+    # 用 db 自带过滤尽量减少 Python 侧扫描
+    return container.repo.list_events(
+        level=level, task_id=task_id, limit=min(limit * 10, 1000), since_id=since_id, ascending=False
+    ) or []
+
+
+def _filter_log_candidates(
+    candidates: list[dict[str, Any]],
+    q: str | None,
+    tag: str | None,
+    stage: str | None,
+    start_dt: Any,
+    end_dt: Any,
+) -> list[dict[str, Any]]:
+    """Python 侧过滤：关键字 / 标签 / stage / 时间范围
+
+    DB 侧只能做 level/task_id 粗过滤，payload 内的 tag 和 message 子串匹配
+    必须在 Python 侧完成（payload 是 JSON 字符串，SQLite 无原生 JSON 查询）。
+    """
+    if q:
+        ql = q.lower()
+        # 构造安全的搜索谓词（payload 可能是 dict，序列化后再 lower）
+        candidates = [
+            e for e in candidates
+            if ql in (e.get("message") or "").lower()
+            or ql in payload_text(e.get("payload")).lower()
+        ]
+    if tag:
+        candidates = [e for e in candidates if tag in _event_tags(e)]
+    if stage:
+        candidates = [e for e in candidates if (e.get("stage") or "").lower() == stage.lower()]
+    if start_dt:
+        candidates = [e for e in candidates if to_datetime(e.get("created_at")) >= start_dt]
+    if end_dt:
+        candidates = [e for e in candidates if to_datetime(e.get("created_at")) <= end_dt]
+    return candidates
+
+
+def _compute_log_histograms(
+    candidates: list[dict[str, Any]],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """统计命中行的等级和标签直方图，供前端展示分布
+
+    level 缺失时归入 "info"：早期日志未写 level 字段，info 是最通用的兜底。
+    """
+    tag_counter: dict[str, int] = {}
+    lvl_counter: dict[str, int] = {}
+    for e in candidates:
+        lvl_key = e.get("level") or "info"
+        lvl_counter[lvl_key] = lvl_counter.get(lvl_key, 0) + 1
+        for t in _event_tags(e):
+            tag_counter[t] = tag_counter.get(t, 0) + 1
+    return lvl_counter, tag_counter
+
+
 @router.get("/search")
 def search_logs(
     # 大小写都允许：前端 SPA 下拉用大写（ERROR/WARNING/INFO/DEBUG），
@@ -108,44 +182,14 @@ def search_logs(
     start_dt = parse_iso_datetime(start)
     end_dt = parse_iso_datetime(end)
 
-    # request_id 优先走索引查询：单次请求触发的所有日志都通过此列关联
-    if request_id:
-        rows, _ = container.repo.list_events_by_request(
-            request_id=request_id, limit=min(limit * 10, 1000), offset=0
-        )
-        # 倒序输出便于人工查看最新记录
-        candidates = list(reversed(rows))
-    else:
-        # 1) 拉取候选行（用 db 自带过滤尽量减少 Python 侧扫描）
-        candidates = container.repo.list_events(
-            level=level, task_id=task_id, limit=min(limit * 10, 1000), since_id=since_id, ascending=False
-        ) or []
+    # 1) 拉取候选行 + 2) Python 侧过滤
+    candidates = _fetch_log_candidates(container, request_id, level, task_id, limit, since_id)
+    candidates = _filter_log_candidates(candidates, q, tag, stage, start_dt, end_dt)
 
-    # 2) Python 侧：搜索 + 标签过滤 + stage 过滤 + 时间范围过滤
-    if q:
-        ql = q.lower()
-        # 构造安全的搜索谓词（payload 可能是 dict，序列化后再 lower）
-        candidates = [
-            e for e in candidates
-            if ql in (e.get("message") or "").lower()
-            or ql in payload_text(e.get("payload")).lower()
-        ]
-    if tag:
-        candidates = [e for e in candidates if tag in _event_tags(e)]
-    if stage:
-        candidates = [e for e in candidates if (e.get("stage") or "").lower() == stage.lower()]
-    if start_dt:
-        candidates = [e for e in candidates if to_datetime(e.get("created_at")) >= start_dt]
-    if end_dt:
-        candidates = [e for e in candidates if to_datetime(e.get("created_at")) <= end_dt]
-    # 3) 统计直方图（基于当前结果）
-    tag_counter: dict[str, int] = {}
-    lvl_counter: dict[str, int] = {}
-    for e in candidates:
-        lvl_counter[e.get("level") or "info"] = lvl_counter.get(e.get("level") or "info", 0) + 1
-        for t in _event_tags(e):
-            tag_counter[t] = tag_counter.get(t, 0) + 1
-    # 4) 分页 + 倒序
+    # 3) 统计直方图（基于过滤后的结果）
+    lvl_counter, tag_counter = _compute_log_histograms(candidates)
+
+    # 4) 分页 + 返回
     candidates = candidates[offset: offset + limit]
     return {
         "items": candidates,
@@ -319,6 +363,45 @@ def _event_tags(e: dict[str, Any]) -> list[str]:
 
 
 # ============== 既有：SSE 日志流 ==============
+def _format_sse(event: str, data: dict[str, Any]) -> str:
+    """格式化 SSE 消息：event 行 + data 行 + 空行结尾
+
+    SSE 协议要求消息以 \n\n 分隔，data 字段统一用 JSON 字符串，
+    ensure_ascii=False 保留中文便于前端调试时直接阅读。
+    """
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _match_request_id(line: str, request_id: str | None) -> bool:
+    """检查日志行是否匹配 request_id
+
+    日志行格式含 [req=xxx] token；request_id 为 None 时不过滤（返回 True）。
+    """
+    if not request_id:
+        return True
+    m = _REQUEST_ID_PATTERN.search(line)
+    return bool(m and m.group(1) == request_id)
+
+
+def _read_log_chunk(stdout_path: Path, last_size: int) -> tuple[str | None, int]:
+    """读取日志文件增量
+
+    返回 (chunk, cur_size)：
+    - 文件不存在：(None, 0) —— 调用方据此发 ts=0 的 ping
+    - 无新增：(None, cur_size) —— 调用方据此发 ts=cur_size 的 ping
+    - 有新增：(chunk_text, cur_size) —— 调用方按行处理 chunk
+    """
+    if not stdout_path.exists():
+        return None, 0
+    cur_size = stdout_path.stat().st_size
+    if cur_size <= last_size:
+        return None, cur_size
+    with stdout_path.open("rb") as f:
+        f.seek(last_size)
+        chunk = f.read(cur_size - last_size).decode("utf-8", errors="replace")
+    return chunk, cur_size
+
+
 @router.get("/stream")
 async def stream_logs(
     request_id: str | None = Query(None, description="按 request_id 过滤实时日志流"),
@@ -337,29 +420,22 @@ async def stream_logs(
         while True:
             await asyncio.sleep(2)
             try:
-                if not stdout_path.exists():
-                    yield f"event: ping\ndata: {json.dumps({'ts': 0, 'empty': True})}\n\n"
+                chunk, cur_size = _read_log_chunk(stdout_path, last_size)
+                if chunk is None:
+                    # 文件不存在或无新增：发 ping 维持连接
+                    yield _format_sse("ping", {"ts": cur_size, "empty": True})
                     continue
-                cur_size = stdout_path.stat().st_size
-                if cur_size > last_size:
-                    with stdout_path.open("rb") as f:
-                        f.seek(last_size)
-                        chunk = f.read(cur_size - last_size).decode("utf-8", errors="replace")
-                    for line in chunk.splitlines():
-                        # 按 request_id 过滤：从 [req=xxx] token 解析匹配
-                        if request_id:
-                            m = _REQUEST_ID_PATTERN.search(line)
-                            if not m or m.group(1) != request_id:
-                                continue
-                        yield f"event: log\ndata: {json.dumps({'line': line}, ensure_ascii=False)}\n\n"
-                    last_size = cur_size
-                else:
-                    yield f"event: ping\ndata: {json.dumps({'ts': cur_size, 'empty': True})}\n\n"
+                for line in chunk.splitlines():
+                    # 按 request_id 过滤：从 [req=xxx] token 解析匹配
+                    if not _match_request_id(line, request_id):
+                        continue
+                    yield _format_sse("log", {"line": line})
+                last_size = cur_size
             except asyncio.CancelledError:
                 # SSE 客户端断开连接时生成器被取消，重新抛出符合 asyncio 取消标准模式（S7497）
                 raise
             except Exception as e:
-                yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                yield _format_sse("error", {"error": str(e)})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 

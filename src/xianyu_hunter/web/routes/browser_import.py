@@ -268,6 +268,205 @@ _TARGET_DOMAINS = ("%goofish%", "%taobao%", "%alipay%")
 _TARGET_COOKIE_NAMES = {"_m_h5_tk", "_m_h5_tk_enc", "cookie2", "sgcookie", "unb", "lg2", "tracknick"}
 
 
+def _build_no_profile_error(browser: str, local_app_data: str) -> dict:
+    """构建未找到浏览器 Profile 的错误响应"""
+    available = []
+    for k, v in _BROWSER_PATHS.items():
+        if v(local_app_data).exists():
+            available.append(k)
+    return {
+        "ok": False,
+        "error": f"{browser} 浏览器的 Cookie 文件不存在",
+        "hint": f"可用浏览器: {available}" if available else "未检测到已安装的 Edge 或 Chrome",
+    }
+
+
+def _copy_browser_cookie_db_with_fallback(
+    source_db: Path, db_copy: Path, browser: str, auto_close: bool,
+) -> tuple[bool, str]:
+    """4级降级策略复制浏览器 Cookie DB
+
+    顺序：immutable=1 → mode=ro&nolock=1 → copy_file_with_share → 关闭浏览器重试。
+    完全绕过文件锁是首要目标，因为 Edge/Chrome 运行时会锁定 Cookie DB。
+    """
+    copy_ok = False
+    copy_error = ""
+
+    # 策略1：immutable=1（SQLite 假设文件不会被修改，完全不需要文件锁）
+    try:
+        _src = sqlite3.connect(f"file:{source_db}?immutable=1", uri=True)
+        _dst = sqlite3.connect(str(db_copy))
+        _src.backup(_dst)
+        _dst.close(); _src.close()
+        copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
+    except Exception as e:
+        copy_error = str(e)
+
+    # 策略2：mode=ro&nolock=1（兼容旧版 SQLite，忽略文件锁）
+    if not copy_ok:
+        try:
+            _src = sqlite3.connect(f"file:{source_db}?mode=ro&nolock=1", uri=True)
+            _dst = sqlite3.connect(str(db_copy))
+            _src.backup(_dst)
+            _dst.close(); _src.close()
+            copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
+        except Exception as e:
+            copy_error = str(e)
+
+    # 策略3：copy_file_with_share（robocopy + CreateFileW 共享模式 + WAL/SHM）
+    if not copy_ok:
+        copy_ok = copy_file_with_share(str(source_db), str(db_copy))
+
+    # 策略4：检测到锁定时自动关闭浏览器并重试（即使 auto_close=False 也尝试一次）
+    if not copy_ok and not auto_close and _is_file_locked(source_db):
+        exe_name = "msedge.exe" if browser == "edge" else "chrome.exe"
+        killed_pids = _kill_browser(exe_name)
+        if killed_pids:
+            logger.info("检测到 %s 文件锁定，已自动关闭 %s 进程重试", browser, exe_name)
+            time.sleep(2)
+            # 关闭后重新尝试复制
+            try:
+                _src = sqlite3.connect(f"file:{source_db}?immutable=1", uri=True)
+                _dst = sqlite3.connect(str(db_copy))
+                _src.backup(_dst)
+                _dst.close(); _src.close()
+                copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
+            except Exception:
+                pass
+            if not copy_ok:
+                copy_ok = copy_file_with_share(str(source_db), str(db_copy))
+
+    return copy_ok, copy_error
+
+
+def _build_copy_failed_error(browser: str, source_db: Path, copy_error: str) -> dict:
+    """构建 DB 复制失败的错误响应，含针对性解决方案"""
+    is_locked = _is_file_locked(source_db)
+    return {
+        "ok": False,
+        "error": f"无法读取 {browser} 的 Cookie 文件"
+                 + (f"（{browser} 正在运行时文件被锁定）" if is_locked else "（文件读取失败）"),
+        "hint": (
+            f"请尝试以下解决方案：\n"
+            f"1. 完全关闭 {browser} 浏览器（包括后台进程）后重试\n"
+            f"2. 使用「自动关闭浏览器并导入」按钮\n"
+            f"3. 改用「Cookie 注入」标签页手动粘贴 Cookie\n"
+            f"4. 改用「浏览器登录」标签页启动独立窗口登录"
+        ) if is_locked else f"请检查 {browser} 是否正常安装，或改用手动粘贴 Cookie 方式",
+        "error_detail": copy_error if copy_error else None,
+    }
+
+
+def _decrypt_and_upsert_browser_cookies(
+    rows: list, aes_key: bytes | None, target_db: Path, now_utc: int,
+) -> tuple[list[dict], list[str], list[str], bool]:
+    """解密浏览器 cookie 并写入目标 DB
+
+    Returns:
+        (imported_cookies, imported_names, errors, has_v20)
+    """
+    imported_cookies: list[dict] = []  # [{name, value, domain, path}, ...]
+    imported_names: list[str] = []     # ["name@domain", ...] 用于显示
+    errors: list[str] = []
+    has_v20 = False  # 跟踪是否检测到 v20 加密，用于引导用户使用 CDP 方式
+
+    with sqlite3.connect(str(target_db)) as dst_conn:
+        init_cookie_table(dst_conn)
+
+        for host_key, name, enc_val, plain_val, path, expires, secure, httponly in rows:
+            try:
+                cookie_value = decrypt_cookie_value(enc_val, plain_val, aes_key)
+
+                if not cookie_value:
+                    # 检测 v20 加密格式（Chrome app-bound encryption，无法离线解密）
+                    enc_bytes = bytes(enc_val) if enc_val else b""
+                    if enc_bytes[:3] == b"v20":
+                        errors.append(f"{name}@{host_key}: v20加密不支持")
+                        has_v20 = True
+                    else:
+                        errors.append(f"{name}@{host_key}: 无法解密")
+                    continue
+
+                upsert_cookie(dst_conn, {
+                    "host_key": host_key,
+                    "name": name,
+                    "value": cookie_value,
+                    "path": path or "/",
+                    "expires_utc": expires or now_utc + 86400 * 365,
+                    "is_secure": secure or 1,
+                    "is_httponly": httponly or 1,
+                    "creation_utc": now_utc,
+                    "last_access_utc": now_utc,
+                })
+                imported_names.append(f"{name}@{host_key}")
+                imported_cookies.append({
+                    "name": name,
+                    "value": cookie_value,
+                    "domain": host_key,
+                    "path": path or "/",
+                })
+            except Exception as e:
+                errors.append(f"{name}@{host_key}: {e}")
+
+        dst_conn.commit()
+
+    return imported_cookies, imported_names, errors, has_v20
+
+
+def _build_import_result(
+    imported_names: list[str],
+    imported_cookies: list[dict],
+    errors: list[str],
+    has_v20: bool,
+    browser: str,
+    dry_run: bool,
+) -> dict:
+    """构建导入结果，处理 dry_run 预览和实际写入两种模式"""
+    result = {
+        "ok": len(imported_names) > 0,
+        "imported_count": len(imported_names),
+        "imported_cookies": imported_names,
+        "source_browser": browser,
+    }
+    if has_v20:
+        result["has_v20"] = True
+        result["v20_hint"] = (
+            "检测到 Chrome/Edge v127+ 的 App-Bound Encryption (v20)，"
+            "无法离线解密。请改用 CDP 方式：先运行 scripts/start_edge_debug.ps1 "
+            "启动调试浏览器，然后调用 /api/auth/import-from-browser/cdp"
+        )
+    if errors:
+        result["errors"] = errors[:10]
+    if imported_names:
+        result["message"] = f"成功从 {browser} 导入 {len(imported_names)} 个 Cookie"
+        # dry_run 模式：跳过持久化，把 cookie 字典返回给调用方做预览
+        if dry_run:
+            cookies_map = {c["name"]: c["value"] for c in imported_cookies if c.get("name")}
+            result["cookies"] = cookies_map
+            result["dry_run"] = True
+        else:
+            # 传入实际解密后的 cookie 值（之前 bug 是传空值）
+            json_written = get_cookie_store().export_cookies(imported_cookies, method="import")
+            # 同步 CookieRotator 层状态，避免 /cookies/layers 仍显示失效
+            if json_written:
+                try:
+                    from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                    sync_cookie_layers_from_json()
+                except Exception as e:
+                    logger.debug("浏览器导入后同步层状态失败: %s", e)
+            # 导入成功后自动启动会话管理：与登录入口行为一致
+            try:
+                from xianyu_hunter.web.services.session_starter import trigger_session_start
+                trigger_session_start()
+            except Exception as e:
+                logger.debug("自动启动会话失败: %s", e)
+    else:
+        result["message"] = "未能导入任何 Cookie（可能解密失败）"
+        result["ok"] = False
+
+    return result
+
+
 def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: bool = False) -> dict:
     """从系统浏览器导入 Cookie 的核心逻辑（返回 dict，由端点包装为 JSONResponse）
 
@@ -286,15 +485,7 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
     # 多 Profile 支持：遍历所有 Profile，优先使用含闲鱼 Cookie 的
     profiles = discover_profiles(browser)
     if not profiles:
-        available = []
-        for k, v in _BROWSER_PATHS.items():
-            if v(local_app_data).exists():
-                available.append(k)
-        return {
-            "ok": False,
-            "error": f"{browser} 浏览器的 Cookie 文件不存在",
-            "hint": f"可用浏览器: {available}" if available else "未检测到已安装的 Edge 或 Chrome",
-        }
+        return _build_no_profile_error(browser, local_app_data)
 
     # 选取第一个（已按优先级排序：含闲鱼 Cookie 的在前）
     selected_profile = profiles[0]
@@ -321,85 +512,19 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
     target_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
     target_db.parent.mkdir(parents=True, exist_ok=True)
 
-    # 用 dict 保存实际解密后的 cookie 值，供 export_cookies 使用
-    imported_cookies: list[dict] = []  # [{name, value, domain, path}, ...]
-    imported_names: list[str] = []     # ["name@domain", ...] 用于显示
-    errors = []
-    has_v20 = False  # 跟踪是否检测到 v20 加密，用于引导用户使用 CDP 方式
-
+    tmp_dir = None
     try:
         tmp_dir = Path(tempfile.mkdtemp(prefix="xh_cookie_"))
         db_copy = tmp_dir / "Cookies_copy"
 
-        # 文件复制策略（4级降级）：
-        # 1. SQLite immutable=1 + backup（完全绕过文件锁，最优先尝试）
-        # 2. SQLite mode=ro&nolock=1 + backup（兼容旧版 SQLite）
-        # 3. copy_file_with_share（robocopy + CreateFileW 共享模式）
-        # 4. 检测到锁定时自动关闭浏览器并重试（仅当 auto_close=True 或首次失败）
-        copy_ok = False
-        copy_error = ""
-
-        # 策略1：immutable=1（SQLite 假设文件不会被修改，完全不需要文件锁）
-        try:
-            _src = sqlite3.connect(f"file:{source_db}?immutable=1", uri=True)
-            _dst = sqlite3.connect(str(db_copy))
-            _src.backup(_dst)
-            _dst.close(); _src.close()
-            copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
-        except Exception as e:
-            copy_error = str(e)
-
-        # 策略2：mode=ro&nolock=1（兼容旧版 SQLite，忽略文件锁）
-        if not copy_ok:
-            try:
-                _src = sqlite3.connect(f"file:{source_db}?mode=ro&nolock=1", uri=True)
-                _dst = sqlite3.connect(str(db_copy))
-                _src.backup(_dst)
-                _dst.close(); _src.close()
-                copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
-            except Exception as e:
-                copy_error = str(e)
-
-        # 策略3：copy_file_with_share（robocopy + CreateFileW 共享模式 + WAL/SHM）
-        if not copy_ok:
-            copy_ok = copy_file_with_share(str(source_db), str(db_copy))
-
-        # 策略4：检测到锁定时自动关闭浏览器并重试（即使 auto_close=False 也尝试一次）
-        if not copy_ok and not auto_close and _is_file_locked(source_db):
-            exe_name = "msedge.exe" if browser == "edge" else "chrome.exe"
-            killed_pids = _kill_browser(exe_name)
-            if killed_pids:
-                logger.info("检测到 %s 文件锁定，已自动关闭 %s 进程重试", browser, exe_name)
-                time.sleep(2)
-                # 关闭后重新尝试复制
-                try:
-                    _src = sqlite3.connect(f"file:{source_db}?immutable=1", uri=True)
-                    _dst = sqlite3.connect(str(db_copy))
-                    _src.backup(_dst)
-                    _dst.close(); _src.close()
-                    copy_ok = db_copy.exists() and db_copy.stat().st_size > 0
-                except Exception:
-                    pass
-                if not copy_ok:
-                    copy_ok = copy_file_with_share(str(source_db), str(db_copy))
+        # 文件复制策略（4级降级）：完全绕过文件锁是首要目标
+        copy_ok, copy_error = _copy_browser_cookie_db_with_fallback(
+            source_db, db_copy, browser, auto_close,
+        )
 
         if not copy_ok or not db_copy.exists() or db_copy.stat().st_size == 0:
             shutil.rmtree(tmp_dir, ignore_errors=True)
-            # 提供更详细的错误信息和解决方案
-            is_locked = _is_file_locked(source_db)
-            return {
-                "ok": False,
-                "error": f"无法读取 {browser} 的 Cookie 文件"
-                         + (f"（{browser} 正在运行时文件被锁定）" if is_locked else "（文件读取失败）"),
-                "hint": (
-                    f"请尝试以下解决方案：\n"
-                    f"1. 完全关闭 {browser} 浏览器（包括后台进程）后重试\n"
-                    f"2. 使用「自动关闭浏览器并导入」按钮\n"
-                    f"3. 改用「Cookie 注入」标签页手动粘贴 Cookie\n"
-                    f"4. 改用「浏览器登录」标签页启动独立窗口登录"
-                ) if is_locked else f"请检查 {browser} 是否正常安装，或改用手动粘贴 Cookie 方式",
-                "error_detail": copy_error if copy_error else None,
-            }
+            return _build_copy_failed_error(browser, source_db, copy_error)
 
         with sqlite3.connect(f"file:{db_copy}?mode=ro", uri=True) as src_conn:
             table_check = src_conn.execute(
@@ -432,93 +557,19 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
                 }
 
             now_utc = int(time.time()) + 11644473600
-            with sqlite3.connect(str(target_db)) as dst_conn:
-                init_cookie_table(dst_conn)
-
-                for host_key, name, enc_val, plain_val, path, expires, secure, httponly in rows:
-                    try:
-                        cookie_value = decrypt_cookie_value(enc_val, plain_val, aes_key)
-
-                        if not cookie_value:
-                            # 检测 v20 加密格式（Chrome app-bound encryption，无法离线解密）
-                            enc_bytes = bytes(enc_val) if enc_val else b""
-                            if enc_bytes[:3] == b"v20":
-                                errors.append(f"{name}@{host_key}: v20加密不支持")
-                                has_v20 = True
-                            else:
-                                errors.append(f"{name}@{host_key}: 无法解密")
-                            continue
-
-                        upsert_cookie(dst_conn, {
-                            "host_key": host_key,
-                            "name": name,
-                            "value": cookie_value,
-                            "path": path or "/",
-                            "expires_utc": expires or now_utc + 86400 * 365,
-                            "is_secure": secure or 1,
-                            "is_httponly": httponly or 1,
-                            "creation_utc": now_utc,
-                            "last_access_utc": now_utc,
-                        })
-                        imported_names.append(f"{name}@{host_key}")
-                        imported_cookies.append({
-                            "name": name,
-                            "value": cookie_value,
-                            "domain": host_key,
-                            "path": path or "/",
-                        })
-                    except Exception as e:
-                        errors.append(f"{name}@{host_key}: {e}")
-
-                dst_conn.commit()
-
-        result = {
-            "ok": len(imported_names) > 0,
-            "imported_count": len(imported_names),
-            "imported_cookies": imported_names,
-            "source_browser": browser,
-        }
-        if has_v20:
-            result["has_v20"] = True
-            result["v20_hint"] = (
-                "检测到 Chrome/Edge v127+ 的 App-Bound Encryption (v20)，"
-                "无法离线解密。请改用 CDP 方式：先运行 scripts/start_edge_debug.ps1 "
-                "启动调试浏览器，然后调用 /api/auth/import-from-browser/cdp"
+            imported_cookies, imported_names, errors, has_v20 = (
+                _decrypt_and_upsert_browser_cookies(rows, aes_key, target_db, now_utc)
             )
-        if errors:
-            result["errors"] = errors[:10]
-        if imported_names:
-            result["message"] = f"成功从 {browser} 导入 {len(imported_names)} 个 Cookie"
-            # dry_run 模式：跳过持久化，把 cookie 字典返回给调用方做预览
-            if dry_run:
-                cookies_map = {c["name"]: c["value"] for c in imported_cookies if c.get("name")}
-                result["cookies"] = cookies_map
-                result["dry_run"] = True
-            else:
-                # 传入实际解密后的 cookie 值（之前 bug 是传空值）
-                json_written = get_cookie_store().export_cookies(imported_cookies, method="import")
-                # 同步 CookieRotator 层状态，避免 /cookies/layers 仍显示失效
-                if json_written:
-                    try:
-                        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
-                        sync_cookie_layers_from_json()
-                    except Exception as e:
-                        logger.debug("浏览器导入后同步层状态失败: %s", e)
-                # 导入成功后自动启动会话管理：与登录入口行为一致
-                try:
-                    from xianyu_hunter.web.services.session_starter import trigger_session_start
-                    trigger_session_start()
-                except Exception as e:
-                    logger.debug("自动启动会话失败: %s", e)
-        else:
-            result["message"] = "未能导入任何 Cookie（可能解密失败）"
-            result["ok"] = False
+
+        result = _build_import_result(
+            imported_names, imported_cookies, errors, has_v20, browser, dry_run,
+        )
 
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return result
 
     except Exception as e:
-        if 'tmp_dir' in dir():
+        if tmp_dir is not None:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"ok": False, "error": f"导入失败: {e}", "imported_count": 0}
 

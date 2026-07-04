@@ -57,6 +57,12 @@ _live_buy_tasks: set[asyncio.Task] = set()
 _live_inflight: dict[str, asyncio.Event] = {}
 # 等待 in-flight 搜索完成的超时时间：覆盖正常搜索（30s）+ 缓冲（5s）
 _LIVE_INFLIGHT_WAIT_TIMEOUT = 35.0
+# live 端点获取 browser_lock 的总等待时间：从 10s 延长到 20s
+# 为什么延长：Worker 一轮搜索（freq_delay + m5tk + API + DOM 回退）可能持锁 30-45s，
+# 10s 内大概率拿不到；20s 配合 SSE 进度推送能在多数情况下等到 Worker 让出（sleep 3s）
+_LIVE_LOCK_TOTAL_TIMEOUT = 20.0
+# live 锁等待的进度推送间隔：每 1.5s 推一次 SSE 事件，让前端显示「等待中...」
+_LIVE_LOCK_PROGRESS_INTERVAL = 1.5
 
 
 def _clear_live_inflight(task_id: str, event: asyncio.Event) -> None:
@@ -92,6 +98,186 @@ def _missing_live_search_cookie_names(cookie_names: set[str]) -> list[str]:
     return [name for name in _LIVE_SEARCH_IDENTITY_COOKIES if name not in cookie_names]
 
 
+async def _get_browser_cookies_by_name(container: Container) -> dict[str, dict]:
+    """读取浏览器内存 Cookie 并按 name 建立映射
+
+    读取失败时返回空字典而非抛异常：调用方需要用空集合判断"缺失"状态，
+    异常会破坏后续 missing/expired/stale 检查流程。
+    """
+    try:
+        cookies = await container.browser.get_cookies()
+    except Exception as e:
+        logger.warning("读取浏览器 Cookie 失败: {}", e)
+        return {}
+    return {
+        str(c.get("name") or ""): c
+        for c in cookies
+        if str(c.get("name") or "")
+    }
+
+
+def _get_expired_identity_cookies(cookies_by_name: dict[str, dict]) -> list[str]:
+    """检查 identity Cookie 是否已过期（session cookie 不计）"""
+    now = time.time()
+    expired = []
+    for name in _LIVE_SEARCH_IDENTITY_COOKIES:
+        c = cookies_by_name.get(name)
+        if not c:
+            continue
+        try:
+            expires = float(c.get("expires", -1) or -1)
+        except (TypeError, ValueError):
+            expires = -1
+        # session cookie（expires <= 0）不按过期处理
+        if expires > 0 and expires < now:
+            expired.append(name)
+    return expired
+
+
+def _load_pw_cookies_from_json() -> tuple[list[dict], dict[str, str]]:
+    """从 CookieStore JSON 读取 Playwright 格式 Cookie 列表 + identity cookie 值映射
+
+    返回 (pw_cookies, identity_values)：
+    - pw_cookies 用于 add_cookies 注入浏览器
+    - identity_values 用于后续 stale 检测（JSON 与浏览器内存值对比）
+    """
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
+    store = get_cookie_store()
+    store.invalidate_cache()
+    json_data = store._read_json()
+    if not json_data or not json_data.get("cookies"):
+        return [], {}
+
+    pw_cookies: list[dict] = []
+    identity_values: dict[str, str] = {}
+    for c in json_data["cookies"]:
+        name = str(c.get("name") or "")
+        value = str(c.get("value") or "")
+        if not name or not value:
+            continue
+        # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
+        if is_test_cookie(name, value):
+            logger.warning("实时搜索：跳过测试 Cookie {}={}，不注入浏览器", name, value)
+            continue
+
+        item = {
+            "name": name,
+            "value": value,
+            "domain": c.get("domain") or ".goofish.com",
+            "path": c.get("path") or "/",
+        }
+        try:
+            expires = float(c.get("expires", -1) or -1)
+        except (TypeError, ValueError):
+            expires = -1
+        if expires > 0:
+            item["expires"] = expires
+        pw_cookies.append(item)
+        if name in _LIVE_SEARCH_IDENTITY_COOKIES:
+            identity_values[name] = value
+    return pw_cookies, identity_values
+
+
+async def _collect_cookie_issues(
+    container: Container, json_identity_values: dict[str, str],
+) -> tuple[list[str], list[str], list[str]]:
+    """收集浏览器 Cookie 三类问题：缺失、过期、陈旧
+
+    - missing: 浏览器缺失的 identity cookie
+    - expired: 浏览器中已过期的 identity cookie
+    - stale: 浏览器持有但值与 JSON 不一致的 identity cookie
+    """
+    cookies_by_name = await _get_browser_cookies_by_name(container)
+    names = set(cookies_by_name)
+    missing = _missing_live_search_cookie_names(names)
+    expired = _get_expired_identity_cookies(cookies_by_name)
+    stale = [
+        name for name, value in json_identity_values.items()
+        if name in cookies_by_name and cookies_by_name[name].get("value") != value
+    ]
+    return missing, expired, stale
+
+
+async def _inject_cookies_from_json(
+    container: Container, pw_cookies: list[dict],
+    missing: list[str], expired: list[str], stale: list[str],
+) -> bool:
+    """将 JSON Cookie 注入浏览器，成功时返回 True
+
+    注入成功后还会同步 CookieRotator 层状态：
+    补注入成功说明 JSON 持有有效 cookie，若层状态从未初始化（updated_at==0.0），
+    此处补救同步避免 /cookies/layers 误显示失效。
+    """
+    if not pw_cookies:
+        return False
+    logger.info(
+        "实时搜索：准备从 CookieStore JSON 注入 cookie，missing={}, expired={}, stale={}",
+        missing, expired, stale,
+    )
+    try:
+        success = await container.browser.add_cookies(pw_cookies)
+        if success:
+            # 为什么记录具体名称：排查"补注入 2 个 cookie"时无法定位是哪两个
+            # cookie 的关键信息，便于日志审计与问题复现
+            logger.info(
+                "实时搜索：从 CookieStore JSON 补注入/替换 {} 个 cookie 到浏览器: {}",
+                len(pw_cookies), [c["name"] for c in pw_cookies],
+            )
+            try:
+                from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+                sync_cookie_layers_from_json()
+            except Exception as e:
+                logger.debug("实时搜索补注入后同步层状态失败: {}", e)
+            return True
+        logger.warning("实时搜索：从 CookieStore JSON 注入 cookie 后关键 Cookie 验证未通过")
+    except Exception as e:
+        logger.warning("实时搜索：从 JSON 补注入 cookie 失败: {}", e)
+    return False
+
+
+def _raise_live_cookie_errors(missing: list[str], expired: list[str], stale: list[str]) -> None:
+    """根据 Cookie 检查结果抛出对应 HTTPException（任一非空即抛）
+
+    为什么独立：三段错误判断与上游"重新检查 + 注入回执"流程解耦后，
+    主函数变为线性流程，且错误码/消息集中维护避免散落。
+    """
+    if expired:
+        logger.warning("实时搜索：关键 Cookie 已过期 {}，需重新登录闲鱼", expired)
+        raise HTTPException(
+            status_code=440,
+            detail=f"闲鱼登录 Cookie 已过期（{', '.join(expired)}），实时搜索不可用，请重新登录闲鱼",
+        )
+    if stale:
+        raise HTTPException(
+            status_code=440,
+            detail=f"闲鱼登录 Cookie 未刷新到实时搜索浏览器（{', '.join(stale)}），请重新登录闲鱼",
+        )
+    if missing:
+        raise HTTPException(
+            status_code=403,
+            detail=f"闲鱼登录 Cookie 不完整（缺少 {', '.join(missing)}），实时搜索不可用，请重新登录闲鱼",
+        )
+
+
+def _maybe_reset_m5tk_refresh(container: Container, cookies_injected: bool) -> None:
+    """按需重置 _m_h5_tk 刷新时间戳（补注入或距上次刷新超 5 分钟时）
+
+    通过封装方法访问 _last_m5tk_refresh，避免破坏 collector 私有属性封装性
+    （历史问题：原代码直接读写 _last_m5tk_refresh 私有属性，collector 内部
+    重命名会导致此处的重置逻辑静默失效）。
+    """
+    if not container.collector:
+        return
+    # 仅在以下情况重置 _m_h5_tk 刷新时间戳：
+    # 1. 刚进行了 Cookie 补注入：身份 Cookie 变更后，旧 token 必然失效，需强制刷新
+    # 2. 距上次刷新超过 5 分钟：避免短时间连续实时搜索反复刷新 token（每次刷新约 4s）
+    # 不再无条件重置：原逻辑导致每次实时搜索都额外 4s 主页导航，60s 缓存命中也无效
+    if cookies_injected or container.collector.should_reset_m5tk():
+        container.collector.force_refresh_m5tk_next()
+        reason = "Cookie 补注入" if cookies_injected else "距上次刷新超过 5 分钟"
+        logger.info("已重置 _m_h5_tk 刷新时间戳（{}），下次搜索将强制刷新 token", reason)
+
+
 async def _ensure_live_search_cookies(container: Container) -> None:
     """检查浏览器是否持有有效的闲鱼登录 Cookie，无效时尝试从 JSON 补注入
 
@@ -110,146 +296,19 @@ async def _ensure_live_search_cookies(container: Container) -> None:
     if not container.browser:
         return
 
-    async def _get_cookie_by_name() -> dict[str, dict]:
-        try:
-            cookies = await container.browser.get_cookies()
-        except Exception as e:
-            logger.warning("读取浏览器 Cookie 失败: {}", e)
-            return {}
-        return {
-            str(c.get("name") or ""): c
-            for c in cookies
-            if str(c.get("name") or "")
-        }
-
-    def _expired_identity_cookies(cookies_by_name: dict[str, dict]) -> list[str]:
-        now = time.time()
-        expired = []
-        for name in _LIVE_SEARCH_IDENTITY_COOKIES:
-            c = cookies_by_name.get(name)
-            if not c:
-                continue
-            try:
-                expires = float(c.get("expires", -1) or -1)
-            except (TypeError, ValueError):
-                expires = -1
-            # session cookie（expires <= 0）不按过期处理
-            if expires > 0 and expires < now:
-                expired.append(name)
-        return expired
-
-    from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
-
-    def _cookies_from_json() -> tuple[list[dict], dict[str, str]]:
-        store = get_cookie_store()
-        store.invalidate_cache()
-        json_data = store._read_json()
-        if not json_data or not json_data.get("cookies"):
-            return [], {}
-
-        pw_cookies: list[dict] = []
-        identity_values: dict[str, str] = {}
-        for c in json_data["cookies"]:
-            name = str(c.get("name") or "")
-            value = str(c.get("value") or "")
-            if not name or not value:
-                continue
-            # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
-            if is_test_cookie(name, value):
-                logger.warning("实时搜索：跳过测试 Cookie {}={}，不注入浏览器", name, value)
-                continue
-
-            item = {
-                "name": name,
-                "value": value,
-                "domain": c.get("domain") or ".goofish.com",
-                "path": c.get("path") or "/",
-            }
-            try:
-                expires = float(c.get("expires", -1) or -1)
-            except (TypeError, ValueError):
-                expires = -1
-            if expires > 0:
-                item["expires"] = expires
-            pw_cookies.append(item)
-            if name in _LIVE_SEARCH_IDENTITY_COOKIES:
-                identity_values[name] = value
-        return pw_cookies, identity_values
-
-    async def _cookie_issues(json_identity_values: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
-        cookies_by_name = await _get_cookie_by_name()
-        names = set(cookies_by_name)
-        missing = _missing_live_search_cookie_names(names)
-        expired = _expired_identity_cookies(cookies_by_name)
-        stale = [
-            name for name, value in json_identity_values.items()
-            if name in cookies_by_name and cookies_by_name[name].get("value") != value
-        ]
-        return missing, expired, stale
-
-    pw_cookies, json_identity_values = _cookies_from_json()
-    missing, expired, stale = await _cookie_issues(json_identity_values)
+    pw_cookies, json_identity_values = _load_pw_cookies_from_json()
+    missing, expired, stale = await _collect_cookie_issues(container, json_identity_values)
     cookies_injected = False  # 标记是否进行了 Cookie 补注入
     if missing or expired or stale:
         # 浏览器缺少、过期或仍持有旧关键 Cookie 时，尝试从 CookieStore JSON 补/替换注入。
-        if pw_cookies:
-            logger.info(
-                "实时搜索：准备从 CookieStore JSON 注入 cookie，missing={}, expired={}, stale={}",
-                missing, expired, stale,
-            )
-            try:
-                success = await container.browser.add_cookies(pw_cookies)
-                if success:
-                    cookies_injected = True
-                    # 为什么记录具体名称：排查"补注入 2 个 cookie"时无法定位是哪两个
-                    # cookie 的关键信息，便于日志审计与问题复现
-                    logger.info(
-                        "实时搜索：从 CookieStore JSON 补注入/替换 {} 个 cookie 到浏览器: {}",
-                        len(pw_cookies), [c["name"] for c in pw_cookies],
-                    )
-                    # 同步 CookieRotator 层状态：补注入成功说明 JSON 持有有效 cookie，
-                    # 若层状态从未初始化（updated_at==0.0），此处补救同步避免 /cookies/layers 误显示失效
-                    try:
-                        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
-                        sync_cookie_layers_from_json()
-                    except Exception as e:
-                        logger.debug("实时搜索补注入后同步层状态失败: {}", e)
-                else:
-                    logger.warning("实时搜索：从 CookieStore JSON 注入 cookie 后关键 Cookie 验证未通过")
-            except Exception as e:
-                logger.warning("实时搜索：从 JSON 补注入 cookie 失败: {}", e)
-
+        cookies_injected = await _inject_cookies_from_json(
+            container, pw_cookies, missing, expired, stale,
+        )
         # 重新检查补注入后是否仍缺少/过期/陈旧
-        missing, expired, stale = await _cookie_issues(json_identity_values)
-        if expired:
-            logger.warning("实时搜索：关键 Cookie 已过期 {}，需重新登录闲鱼", expired)
-            raise HTTPException(
-                status_code=440,
-                detail=f"闲鱼登录 Cookie 已过期（{', '.join(expired)}），实时搜索不可用，请重新登录闲鱼",
-            )
-        if stale:
-            raise HTTPException(
-                status_code=440,
-                detail=f"闲鱼登录 Cookie 未刷新到实时搜索浏览器（{', '.join(stale)}），请重新登录闲鱼",
-            )
-        if missing:
-            raise HTTPException(
-                status_code=403,
-                detail=f"闲鱼登录 Cookie 不完整（缺少 {', '.join(missing)}），实时搜索不可用，请重新登录闲鱼",
-            )
+        missing, expired, stale = await _collect_cookie_issues(container, json_identity_values)
+        _raise_live_cookie_errors(missing, expired, stale)
 
-    # 仅在以下情况重置 _m_h5_tk 刷新时间戳：
-    # 1. 刚进行了 Cookie 补注入：身份 Cookie 变更后，旧 token 必然失效，需强制刷新
-    # 2. 距上次刷新超过 5 分钟：避免短时间连续实时搜索反复刷新 token（每次刷新约 4s）
-    # 不再无条件重置：原逻辑导致每次实时搜索都额外 4s 主页导航，60s 缓存命中也无效
-    if container.collector:
-        # 通过封装方法访问 _last_m5tk_refresh，避免破坏 collector 私有属性封装性
-        # （历史问题：原代码直接读写 _last_m5tk_refresh 私有属性，collector 内部
-        #  重命名会导致此处的重置逻辑静默失效）
-        if cookies_injected or container.collector.should_reset_m5tk():
-            container.collector.force_refresh_m5tk_next()
-            reason = "Cookie 补注入" if cookies_injected else "距上次刷新超过 5 分钟"
-            logger.info("已重置 _m_h5_tk 刷新时间戳（{}），下次搜索将强制刷新 token", reason)
+    _maybe_reset_m5tk_refresh(container, cookies_injected)
 
 
 def _normalize_task_link_rows(rows: list[dict]) -> tuple[list[dict], dict[str, dict[str, Any]]]:
@@ -630,6 +689,322 @@ async def refresh_links(
     }
 
 
+def _format_live_raw_results(
+    raw_results: list[dict], task_id: str,
+) -> tuple[list[dict], dict[str, dict[str, Any]], dict[str, Any]]:
+    """将 live_search 原始结果格式化为 live 链路 results，并初始化 filter_summary
+
+    为什么独立：格式化涉及 14 个字段映射 + normalize_display_fields 校正，
+    与 SSE 流推送逻辑解耦后便于单独测试，且避免 event_stream 认知复杂度膨胀。
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    results: list[dict] = []
+    merged_field_map: dict[str, dict[str, Any]] = {}
+    filter_summary: dict[str, Any] = {
+        "raw": len(raw_results),
+        "formatted": 0,
+        "keyword_skipped": 0,
+        "price_skipped": 0,
+        "publish_days_skipped": 0,
+        # 被过滤的商品列表（带过滤原因），供前端"显示被过滤结果"使用
+        # 为什么限制 50 条：避免响应体积过大（59 条约 30KB），50 条足够用户判断是否需调整过滤条件
+        "filtered_out": [],
+    }
+    for r in raw_results:
+        display = {
+            "title": r.get("title", ""),
+            "price": r.get("price"),
+            "thumb_url": r.get("thumb_url", ""),
+            "brand": r.get("brand", ""),
+            "region": r.get("region", ""),
+            "url": r.get("url", ""),
+            "is_sold": r.get("is_sold", False),
+            "publish_time": r.get("publish_time"),
+            "seller_id": r.get("seller_id", ""),
+            "seller_nick": r.get("seller_nick", ""),
+            "seller_credit": r.get("seller_credit", ""),
+            "want_cnt": r.get("want_cnt"),
+            "view_cnt": r.get("view_cnt"),
+            # 描述：仅在 live_search 通过详情补抓写入时存在，
+            # 搜索 API 自身返回的 itemDesc 也会通过 _search.py 的 _extract_api_item_fields 写入
+            # 用于 exclude_words 模糊匹配（标题不含但描述中含的关键词也能命中）
+            "item_desc": r.get("item_desc", ""),
+        }
+        corrected_display, field_map = normalize_display_fields(display)
+        merged_field_map.update(field_map)
+        results.append({
+            "link_id": 0,
+            "task_id": task_id,
+            "link_type": r["link_type"],
+            "link_key": r["link_key"],
+            "source": "live",
+            "display": corrected_display,
+            "note": None,
+            "created_at": now,
+        })
+    filter_summary["formatted"] = len(results)
+    return results, merged_field_map, filter_summary
+
+
+def _filter_live_by_keyword(
+    results: list[dict], keyword: str, filter_summary: dict[str, Any],
+) -> list[dict]:
+    """关键词安全兜底过滤：标题不匹配任务关键词的结果丢弃"""
+    filtered = []
+    keyword_skipped_titles: list[str] = []
+    _filtered_out = filter_summary["filtered_out"]
+    for r in results:
+        title = (r.get("display") or {}).get("title", "")
+        if task_keyword_matches_title(keyword, title):
+            filtered.append(r)
+        else:
+            keyword_skipped_titles.append(str(title)[:60])
+            # 记录被过滤的商品（限制总量避免响应过大）
+            if len(_filtered_out) < 50:
+                _filtered_out.append({
+                    "link_type": r.get("link_type"),
+                    "link_key": r.get("link_key"),
+                    "display": r.get("display"),
+                    "filter_reason": "keyword",
+                    "filter_detail": f"标题不匹配关键词「{keyword}」",
+                })
+    skipped = len(results) - len(filtered)
+    filter_summary["keyword_skipped"] = skipped
+    if skipped:
+        logger.info("live_links 关键词过滤跳过了 {} 条无关结果，样例={}", skipped, keyword_skipped_titles[:5])
+    return filtered
+
+
+def _filter_live_by_exclude_words(
+    filtered: list[dict], exclude_words: list[str], filter_summary: dict[str, Any],
+) -> list[dict]:
+    """排除词过滤：标题或描述命中任一排除词则丢弃
+
+    为什么同时匹配 description：用户输入的"二手、仿品"等关键词常出现在商品描述而非标题中，
+    仅匹配 title 会导致包含排除词的商品仍出现在结果里（如 16G 出现在描述里）
+    description 来自 live_search 详情补抓（_search.py 中 collect_sellers 时写入 item_desc），
+    部分搜索结果可能没有 description（API 未返回 + 未走到详情补抓分支），缺失时仅依赖 title 匹配
+    """
+    if not exclude_words:
+        return filtered
+    _filtered = []
+    exclude_skipped = 0
+    exclude_skipped_titles: list[str] = []
+    _filtered_out = filter_summary["filtered_out"]
+    for r in filtered:
+        display = r.get("display") or {}
+        title = str(display.get("title", ""))
+        # item_desc 字段来自 live_search 详情补抓，可能为空（未补抓到）
+        item_desc = str(display.get("item_desc", "") or r.get("item_desc", "") or "")
+        # 大小写不敏感匹配：避免 "16g" 与 "16G" 因大小写差异漏过
+        title_lower = title.lower()
+        desc_lower = item_desc.lower()
+        hit_word = next(
+            (w for w in exclude_words if w and (w.lower() in title_lower or w.lower() in desc_lower)),
+            None,
+        )
+        if hit_word:
+            exclude_skipped += 1
+            exclude_skipped_titles.append(str(title)[:60])
+            if len(_filtered_out) < 50:
+                # 记录匹配位置（title / desc）便于前端调试
+                match_in = "描述" if hit_word.lower() in desc_lower and hit_word.lower() not in title_lower else "标题"
+                _filtered_out.append({
+                    "link_type": r.get("link_type"),
+                    "link_key": r.get("link_key"),
+                    "display": r.get("display"),
+                    "filter_reason": "exclude_words",
+                    "filter_detail": f"商品{match_in}命中排除词「{hit_word}」",
+                })
+        else:
+            _filtered.append(r)
+    filter_summary["exclude_words_skipped"] = exclude_skipped
+    if exclude_skipped:
+        logger.info(
+            "live_links 排除词过滤跳过了 {} 条 (words={})，样例={}",
+            exclude_skipped, exclude_words, exclude_skipped_titles[:5],
+        )
+    return _filtered
+
+
+def _filter_live_by_price(
+    filtered: list[dict], min_price: Any, max_price: Any, filter_summary: dict[str, Any],
+) -> list[dict]:
+    """价格过滤（任务级 + 全局 price_strategy 合并后的有效区间）"""
+    # 读取全局搜索配置的价格策略，与 Worker 保持一致
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        global_ps = get_config().price_strategy
+    except Exception:
+        global_ps = None
+    effective_min = min_price
+    effective_max = max_price
+    if effective_min is None and global_ps and global_ps.enabled_min:
+        effective_min = global_ps.min_price
+    if effective_max is None and global_ps and global_ps.enabled_max:
+        effective_max = global_ps.max_price
+    if effective_min is None and effective_max is None:
+        return filtered
+    _filtered = []
+    price_skipped = 0
+    _filtered_out = filter_summary["filtered_out"]
+    for r in filtered:
+        price = (r.get("display") or {}).get("price")
+        if price is None:
+            _filtered.append(r)
+            continue
+        try:
+            p = float(price)
+        except (ValueError, TypeError):
+            _filtered.append(r)
+            continue
+        if effective_min is not None and p < effective_min:
+            price_skipped += 1
+            if len(_filtered_out) < 50:
+                _filtered_out.append({
+                    "link_type": r.get("link_type"),
+                    "link_key": r.get("link_key"),
+                    "display": r.get("display"),
+                    "filter_reason": "price",
+                    "filter_detail": f"价格 {p} 低于下限 {effective_min}",
+                })
+            continue
+        if effective_max is not None and p > effective_max:
+            price_skipped += 1
+            if len(_filtered_out) < 50:
+                _filtered_out.append({
+                    "link_type": r.get("link_type"),
+                    "link_key": r.get("link_key"),
+                    "display": r.get("display"),
+                    "filter_reason": "price",
+                    "filter_detail": f"价格 {p} 超出上限 {effective_max}",
+                })
+            continue
+        _filtered.append(r)
+    filter_summary["price_skipped"] = price_skipped
+    if price_skipped:
+        logger.info(
+            "live_links 价格过滤跳过了 {} 条 (min={}, max={})",
+            price_skipped, effective_min, effective_max,
+        )
+    return _filtered
+
+
+def _filter_live_by_publish_days(
+    filtered: list[dict], max_publish_days: Any, filter_summary: dict[str, Any],
+) -> list[dict]:
+    """发布天数过滤：超过任务配置 max_publish_days 的商品丢弃"""
+    if max_publish_days is None:
+        return filtered
+    from datetime import datetime as _dt
+    _now = _dt.now()
+    _filtered = []
+    publish_days_skipped = 0
+    _filtered_out = filter_summary["filtered_out"]
+    for r in filtered:
+        pub = (r.get("display") or {}).get("publish_time")
+        if not pub:
+            _filtered.append(r)
+            continue
+        try:
+            pub_dt = _dt.fromisoformat(str(pub).replace("Z", "+00:00"))
+            if (_now - pub_dt).days > max_publish_days:
+                publish_days_skipped += 1
+                if len(_filtered_out) < 50:
+                    _filtered_out.append({
+                        "link_type": r.get("link_type"),
+                        "link_key": r.get("link_key"),
+                        "display": r.get("display"),
+                        "filter_reason": "publish_days",
+                        "filter_detail": f"发布 {(_now - pub_dt).days} 天，超过上限 {max_publish_days} 天",
+                    })
+                continue
+        except (ValueError, TypeError):
+            pass
+        _filtered.append(r)
+    filter_summary["publish_days_skipped"] = publish_days_skipped
+    if publish_days_skipped:
+        logger.info(
+            "live_links 发布时间过滤跳过了 {} 条 (max_publish_days={})",
+            publish_days_skipped, max_publish_days,
+        )
+    return _filtered
+
+
+def _build_live_items_data(items: list[dict]) -> list[dict]:
+    """从 live results 构造 batch_upsert_item_task_links 所需的 items_data"""
+    return [
+        {
+            "item_id": r.get("link_key", ""),
+            "title": (r.get("display") or {}).get("title", ""),
+            "price": (r.get("display") or {}).get("price"),
+            "thumb_url": (r.get("display") or {}).get("thumb_url", ""),
+            "brand": (r.get("display") or {}).get("brand", "") or "",
+            "seller_id": (r.get("display") or {}).get("seller_id", "") or "",
+            # 修复：之前漏写 seller_nick，导致 list_links 从 items 表回退到 seller_id 展示
+            "seller_nick": (r.get("display") or {}).get("seller_nick", "") or "",
+            "region": (r.get("display") or {}).get("region"),
+            "publish_time": (r.get("display") or {}).get("publish_time"),
+            "want_cnt": (r.get("display") or {}).get("want_cnt"),
+            "view_cnt": (r.get("display") or {}).get("view_cnt"),
+            "is_sold": (r.get("display") or {}).get("is_sold", False),
+        }
+        for r in items
+    ]
+
+
+async def _write_live_items_to_db(
+    container: Container, task_id: str, items_data: list[dict],
+) -> None:
+    """通过 run_in_executor 异步批量写入 DB，避免阻塞事件循环
+
+    为什么用 run_in_executor：batch_upsert 是同步 SQLite 写入（fsync 开销大），
+    直接在事件循环中调用会阻塞其他 SSE 推送和并发请求。
+    """
+    try:
+        # get_running_loop：本函数为 async，事件循环一定在运行
+        loop = asyncio.get_running_loop()
+        saved_live = await loop.run_in_executor(
+            None,
+            functools.partial(
+                container.repo.batch_upsert_item_task_links,
+                task_id=task_id,
+                items_data=items_data,
+                source="live",
+            ),
+        )
+        if saved_live:
+            logger.info("live_links 已写入 {} 条记录到 DB (task={})", saved_live, task_id)
+    except Exception as e:
+        logger.warning("live_links 批量写入 DB 失败: {}", e)
+
+
+def _build_live_final_result(
+    task_id: str, keyword: str, container: Container,
+    items: list[dict], sellers: list[dict], filtered: list[dict],
+    merged_field_map: dict[str, dict[str, Any]], filter_summary: dict[str, Any],
+) -> dict:
+    """构造 live 链路最终响应并执行 _normalize_live_result 校正"""
+    session_expired = getattr(container.collector, "last_session_invalid", False)
+    result = {
+        "ok": True,
+        "task_id": task_id,
+        "keyword": keyword,
+        "session_expired": session_expired,
+        "counts": {
+            "item": len(items),
+            "seller": len(sellers),
+            "total": len(filtered),
+        },
+        "items": items,
+        "sellers": sellers,
+        "all": filtered,
+        "field_map": merged_field_map,
+        "filter_summary": filter_summary,
+    }
+    return _normalize_live_result(result)
+
+
 @router.get("/{task_id}/links/live")
 async def live_links(
     task_id: str,
@@ -750,16 +1125,33 @@ async def live_links(
             return
 
         # 阶段 3：获取浏览器锁（高优先级，优先于 Worker 后台搜索）
+        # 改进：循环等待并定期推送 SSE 进度事件，避免前端在 10-20s 等待中完全静默
+        # 为什么需要：Worker 一轮搜索可能持锁 30-45s（freq_delay + m5tk + API + DOM 回退），
+        # 实时查询需要耐心等，但前端不应长时间无任何反馈
         yield sse({"stage": "acquiring_lock"})
-        try:
-            await asyncio.wait_for(
-                container.browser_lock.acquire(priority="high"),
-                timeout=10.0,
-            )
-        except asyncio.TimeoutError:
-            _clear_live_inflight(task_id, inflight_event)
-            yield sse({"stage": "error", "detail": "系统正在执行后台搜索任务，请稍后重试", "status": 503})
-            return
+        deadline = time.monotonic() + _LIVE_LOCK_TOTAL_TIMEOUT
+        acquired = False
+        while not acquired:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _clear_live_inflight(task_id, inflight_event)
+                yield sse({"stage": "error", "detail": "系统正在执行后台搜索任务，请稍后重试", "status": 503})
+                return
+            try:
+                # 每次只等一个 progress 间隔，Worker 检测到 _high_waiting>0
+                # 会在 search 完成后主动 sleep(3) 让出，acquire 大概率能成功
+                await asyncio.wait_for(
+                    container.browser_lock.acquire(priority="high"),
+                    timeout=min(_LIVE_LOCK_PROGRESS_INTERVAL, remaining),
+                )
+                acquired = True
+            except asyncio.TimeoutError:
+                # 推 SSE 等待进度，让前端展示「等待浏览器资源...」
+                # PriorityBrowserLock.acquire 在 finally 中会减回 _high_waiting，
+                # 不会污染 Worker 的优先级判断
+                elapsed = _LIVE_LOCK_TOTAL_TIMEOUT - remaining
+                yield sse({"stage": "waiting_lock", "elapsed_sec": round(elapsed, 1)})
+                continue
 
         # 阶段 4：搜索
         raw_results: list[dict] = []
@@ -805,6 +1197,16 @@ async def live_links(
                 except asyncio.TimeoutError:
                     yield sse({"stage": "error", "detail": "实时搜索重试超时，请稍后再试", "status": 504})
                     return
+            # 重试后若仍无结果且 last_session_invalid 仍为 True，
+            # 说明闲鱼登录态已失效（_m_h5_tk 过期或身份 Cookie 过期），
+            # 此时不应继续走 filtering 流程让前端误以为"真的没货"
+            if not raw_results and getattr(container.collector, "last_session_invalid", False):
+                yield sse({
+                    "stage": "error",
+                    "detail": "闲鱼登录态已过期，请前往「反爬登录管理」重新登录闲鱼",
+                    "status": 403,
+                })
+                return
             logger.info(
                 "live_links 搜索返回 raw_results={} task={} keyword={} filters={} sort={} regions={}",
                 len(raw_results), task_id, keyword, task_search_filters, search_sort_type, search_regions,
@@ -829,198 +1231,16 @@ async def live_links(
 
         # 阶段 5：格式化 + 过滤
         yield sse({"stage": "filtering", "count": len(raw_results)})
-        now = datetime.now(timezone.utc).isoformat()
-        results: list[dict] = []
-        merged_field_map: dict[str, dict[str, Any]] = {}
-        filter_summary: dict[str, Any] = {
-            "raw": len(raw_results),
-            "formatted": 0,
-            "keyword_skipped": 0,
-            "price_skipped": 0,
-            "publish_days_skipped": 0,
-            # 被过滤的商品列表（带过滤原因），供前端"显示被过滤结果"使用
-            # 为什么限制 50 条：避免响应体积过大（59 条约 30KB），50 条足够用户判断是否需调整过滤条件
-            "filtered_out": [],
-        }
-        for r in raw_results:
-            display = {
-                "title": r.get("title", ""),
-                "price": r.get("price"),
-                "thumb_url": r.get("thumb_url", ""),
-                "brand": r.get("brand", ""),
-                "region": r.get("region", ""),
-                "url": r.get("url", ""),
-                "is_sold": r.get("is_sold", False),
-                "publish_time": r.get("publish_time"),
-                "seller_id": r.get("seller_id", ""),
-                "seller_nick": r.get("seller_nick", ""),
-                "seller_credit": r.get("seller_credit", ""),
-                "want_cnt": r.get("want_cnt"),
-                "view_cnt": r.get("view_cnt"),
-            }
-            corrected_display, field_map = normalize_display_fields(display)
-            merged_field_map.update(field_map)
-            results.append({
-                "link_id": 0,
-                "task_id": task_id,
-                "link_type": r["link_type"],
-                "link_key": r["link_key"],
-                "source": "live",
-                "display": corrected_display,
-                "note": None,
-                "created_at": now,
-            })
-        filter_summary["formatted"] = len(results)
+        results, merged_field_map, filter_summary = _format_live_raw_results(raw_results, task_id)
 
         # 关键词过滤（安全兜底）
-        filtered = []
-        keyword_skipped_titles: list[str] = []
-        _filtered_out = filter_summary["filtered_out"]
-        for r in results:
-            title = (r.get("display") or {}).get("title", "")
-            if task_keyword_matches_title(keyword, title):
-                filtered.append(r)
-            else:
-                keyword_skipped_titles.append(str(title)[:60])
-                # 记录被过滤的商品（限制总量避免响应过大）
-                if len(_filtered_out) < 50:
-                    _filtered_out.append({
-                        "link_type": r.get("link_type"),
-                        "link_key": r.get("link_key"),
-                        "display": r.get("display"),
-                        "filter_reason": "keyword",
-                        "filter_detail": f"标题不匹配关键词「{keyword}」",
-                    })
-        skipped = len(results) - len(filtered)
-        filter_summary["keyword_skipped"] = skipped
-        if skipped:
-            logger.info("live_links 关键词过滤跳过了 {} 条无关结果，样例={}", skipped, keyword_skipped_titles[:5])
-
-        # 排除词过滤：标题命中任一排除词则丢弃
-        # 为什么放在关键词后、价格前：排除词是硬性条件，先剔除可减少后续价格过滤的计算量
-        if exclude_words:
-            _filtered = []
-            exclude_skipped = 0
-            exclude_skipped_titles: list[str] = []
-            for r in filtered:
-                title = str((r.get("display") or {}).get("title", ""))
-                # 大小写不敏感匹配：避免 "16g" 与 "16G" 因大小写差异漏过
-                title_lower = title.lower()
-                hit_word = next(
-                    (w for w in exclude_words if w and w.lower() in title_lower),
-                    None,
-                )
-                if hit_word:
-                    exclude_skipped += 1
-                    exclude_skipped_titles.append(str(title)[:60])
-                    if len(_filtered_out) < 50:
-                        _filtered_out.append({
-                            "link_type": r.get("link_type"),
-                            "link_key": r.get("link_key"),
-                            "display": r.get("display"),
-                            "filter_reason": "exclude_words",
-                            "filter_detail": f"标题命中排除词「{hit_word}」",
-                        })
-                else:
-                    _filtered.append(r)
-            filtered = _filtered
-            filter_summary["exclude_words_skipped"] = exclude_skipped
-            if exclude_skipped:
-                logger.info(
-                    "live_links 排除词过滤跳过了 {} 条 (words={})，样例={}",
-                    exclude_skipped, exclude_words, exclude_skipped_titles[:5],
-                )
-
+        filtered = _filter_live_by_keyword(results, keyword, filter_summary)
+        # 排除词过滤
+        filtered = _filter_live_by_exclude_words(filtered, exclude_words, filter_summary)
         # 价格过滤（任务级 + 全局 price_strategy）
-        try:
-            from xianyu_hunter.infra.yaml_config import get_config
-            global_ps = get_config().price_strategy
-        except Exception:
-            global_ps = None
-        effective_min = min_price
-        effective_max = max_price
-        if effective_min is None and global_ps and global_ps.enabled_min:
-            effective_min = global_ps.min_price
-        if effective_max is None and global_ps and global_ps.enabled_max:
-            effective_max = global_ps.max_price
-        if effective_min is not None or effective_max is not None:
-            _filtered = []
-            price_skipped = 0
-            for r in filtered:
-                price = (r.get("display") or {}).get("price")
-                if price is None:
-                    _filtered.append(r)
-                    continue
-                try:
-                    p = float(price)
-                except (ValueError, TypeError):
-                    _filtered.append(r)
-                    continue
-                if effective_min is not None and p < effective_min:
-                    price_skipped += 1
-                    if len(_filtered_out) < 50:
-                        _filtered_out.append({
-                            "link_type": r.get("link_type"),
-                            "link_key": r.get("link_key"),
-                            "display": r.get("display"),
-                            "filter_reason": "price",
-                            "filter_detail": f"价格 {p} 低于下限 {effective_min}",
-                        })
-                    continue
-                if effective_max is not None and p > effective_max:
-                    price_skipped += 1
-                    if len(_filtered_out) < 50:
-                        _filtered_out.append({
-                            "link_type": r.get("link_type"),
-                            "link_key": r.get("link_key"),
-                            "display": r.get("display"),
-                            "filter_reason": "price",
-                            "filter_detail": f"价格 {p} 超出上限 {effective_max}",
-                        })
-                    continue
-                _filtered.append(r)
-            filtered = _filtered
-            filter_summary["price_skipped"] = price_skipped
-            if price_skipped:
-                logger.info(
-                    "live_links 价格过滤跳过了 {} 条 (min={}, max={})",
-                    price_skipped, effective_min, effective_max,
-                )
-
+        filtered = _filter_live_by_price(filtered, min_price, max_price, filter_summary)
         # 发布天数过滤
-        if max_publish_days is not None:
-            from datetime import datetime as _dt
-            _now = _dt.now()
-            _filtered = []
-            publish_days_skipped = 0
-            for r in filtered:
-                pub = (r.get("display") or {}).get("publish_time")
-                if not pub:
-                    _filtered.append(r)
-                    continue
-                try:
-                    pub_dt = _dt.fromisoformat(str(pub).replace("Z", "+00:00"))
-                    if (_now - pub_dt).days > max_publish_days:
-                        publish_days_skipped += 1
-                        if len(_filtered_out) < 50:
-                            _filtered_out.append({
-                                "link_type": r.get("link_type"),
-                                "link_key": r.get("link_key"),
-                                "display": r.get("display"),
-                                "filter_reason": "publish_days",
-                                "filter_detail": f"发布 {(_now - pub_dt).days} 天，超过上限 {max_publish_days} 天",
-                            })
-                        continue
-                except (ValueError, TypeError):
-                    pass
-                _filtered.append(r)
-            filtered = _filtered
-            filter_summary["publish_days_skipped"] = publish_days_skipped
-            if publish_days_skipped:
-                logger.info(
-                    "live_links 发布时间过滤跳过了 {} 条 (max_publish_days={})",
-                    publish_days_skipped, max_publish_days,
-                )
+        filtered = _filter_live_by_publish_days(filtered, max_publish_days, filter_summary)
 
         items = [r for r in filtered if r["link_type"] == "item"]
         sellers = [r for r in filtered if r["link_type"] == "seller"]
@@ -1032,62 +1252,14 @@ async def live_links(
         # 阶段 6：批量写入 DB（run_in_executor 避免阻塞事件循环）
         if items:
             yield sse({"stage": "writing_db", "count": len(items)})
-            items_data = [
-                {
-                    "item_id": r.get("link_key", ""),
-                    "title": (r.get("display") or {}).get("title", ""),
-                    "price": (r.get("display") or {}).get("price"),
-                    "thumb_url": (r.get("display") or {}).get("thumb_url", ""),
-                    "brand": (r.get("display") or {}).get("brand", "") or "",
-                    "seller_id": (r.get("display") or {}).get("seller_id", "") or "",
-                    # 修复：之前漏写 seller_nick，导致 list_links 从 items 表回退到 seller_id 展示
-                    "seller_nick": (r.get("display") or {}).get("seller_nick", "") or "",
-                    "region": (r.get("display") or {}).get("region"),
-                    "publish_time": (r.get("display") or {}).get("publish_time"),
-                    "want_cnt": (r.get("display") or {}).get("want_cnt"),
-                    "view_cnt": (r.get("display") or {}).get("view_cnt"),
-                    "is_sold": (r.get("display") or {}).get("is_sold", False),
-                }
-                for r in items
-            ]
-            try:
-                # get_running_loop：本函数为 async，事件循环一定在运行
-                loop = asyncio.get_running_loop()
-                saved_live = await loop.run_in_executor(
-                    None,
-                    functools.partial(
-                        container.repo.batch_upsert_item_task_links,
-                        task_id=task_id,
-                        items_data=items_data,
-                        source="live",
-                    ),
-                )
-                if saved_live:
-                    logger.info("live_links 已写入 {} 条记录到 DB (task={})", saved_live, task_id)
-            except Exception as e:
-                logger.warning("live_links 批量写入 DB 失败: {}", e)
-
+            items_data = _build_live_items_data(items)
+            await _write_live_items_to_db(container, task_id, items_data)
             background_tasks.add_task(_safe_trigger_live_evaluation, container, task_id, items)
 
         # 阶段 7：完成
-        session_expired = getattr(container.collector, "last_session_invalid", False)
-        result = {
-            "ok": True,
-            "task_id": task_id,
-            "keyword": keyword,
-            "session_expired": session_expired,
-            "counts": {
-                "item": len(items),
-                "seller": len(sellers),
-                "total": len(filtered),
-            },
-            "items": items,
-            "sellers": sellers,
-            "all": filtered,
-            "field_map": merged_field_map,
-            "filter_summary": filter_summary,
-        }
-        result = _normalize_live_result(result)
+        result = _build_live_final_result(
+            task_id, keyword, container, items, sellers, filtered, merged_field_map, filter_summary,
+        )
         # 写入缓存：仅当查询结果非空时缓存，0 条记录不缓存以便下次请求重新触发实时查询
         if filtered:
             _live_cache[task_id] = (time.monotonic(), result)
@@ -1190,7 +1362,7 @@ def _build_live_price_strategy(
     return strategy, market_ctx
 
 
-async def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
+def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
     """对 live 搜索结果触发轻量级评估
 
     基于搜索结果构造降级 ItemDetail 和 SellerProfile（不拉取详情页和卖家主页），

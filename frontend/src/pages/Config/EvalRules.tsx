@@ -9,6 +9,106 @@ import { evalApi } from '../../api'
 import TagEditor from '../../components/editors/TagEditor'
 import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 
+// 热力图坐标数据：从 distData.buckets 二维数组计算 ECharts 所需 [x, y, value] 列表与轴标签
+// 为什么提取：原实现包含 4 层嵌套（if + 3 个 for/forEach），留在组件内会让 EvalRules 复杂度超限
+type HeatmapCompute = {
+  data: Array<[number, number, number]>
+  max: number
+  xLabels: string[]
+  yLabels: string[]
+}
+const computeHeatmapData = (distData: {
+  buckets: Array<Array<{ count: number; pass: number; auto: number; fail: number }>>
+  price_range: [number, number]
+  total: number
+} | null): HeatmapCompute => {
+  const result: HeatmapCompute = { data: [], max: 1, xLabels: [], yLabels: [] }
+  if (!distData || !distData.buckets?.length) return result
+
+  const sBins = distData.buckets.length
+  const pBins = distData.buckets[0]?.length || 5
+  const [pMin, pMax] = distData.price_range || [0, 5000]
+  const pStep = (pMax - pMin) / pBins
+  const sStep = 100 / sBins
+
+  // X 轴标签（价格区间）
+  for (let i = 0; i < pBins; i++) {
+    const lo = Math.round(pMin + i * pStep)
+    const hi = Math.round(pMin + (i + 1) * pStep)
+    result.xLabels.push(`¥${lo}~${hi}`)
+  }
+  // Y 轴标签（评分区间，从高到低）
+  for (let i = 0; i < sBins; i++) {
+    const hi = Math.round(100 - i * sStep)
+    const lo = Math.round(100 - (i + 1) * sStep)
+    result.yLabels.push(`${lo}-${hi}`)
+  }
+  // 构建 [x, y, value] 序列并跟踪最大值（用于 visualMap 范围）
+  distData.buckets.forEach((row, si) => {
+    row.forEach((bucket, pi) => {
+      result.data.push([pi, si, bucket.count])
+      if (bucket.count > result.max) result.max = bucket.count
+    })
+  })
+  return result
+}
+
+// 构建热力图 ECharts 配置：tooltip/grid/visualMap/series
+// 为什么提取：原实现是嵌套三元 + 多层对象字面量，组件内联让 EvalRules 函数复杂度上升
+const buildHeatmapOption = (
+  distData: { buckets: Array<Array<{ count: number; pass: number; auto: number; fail: number }>> } | null,
+  heatmap: HeatmapCompute,
+) => {
+  if (!distData || !distData.buckets?.length) return null
+  return {
+    tooltip: {
+      position: 'top',
+      formatter: (p: { dataIndex: [number, number]; value: number }) => {
+        const [pi, si] = p.dataIndex
+        const bucket = distData.buckets[si]?.[pi]
+        if (!bucket || bucket.count === 0) return '该区间暂无商品'
+        return `${heatmap.xLabels[pi]} × ${heatmap.yLabels[si]}<br/>商品数：${bucket.count}<br/>可抢：${bucket.auto} / 通过：${bucket.pass} / 驳回：${bucket.fail}`
+      },
+    },
+    grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: heatmap.xLabels,
+      name: '价格',
+      splitArea: { show: true },
+      axisLabel: { fontSize: 9, rotate: 30 },
+    },
+    yAxis: {
+      type: 'category',
+      data: heatmap.yLabels,
+      name: '评分',
+      splitArea: { show: true },
+      axisLabel: { fontSize: 9 },
+    },
+    visualMap: {
+      min: 0,
+      max: heatmap.max,
+      calculable: true,
+      orient: 'horizontal',
+      left: 'center',
+      bottom: '0%',
+      inRange: { color: ['#f5f5f5', '#bae7ff', '#69c0ff', '#1890ff'] },
+      formatter: (v: number) => `${v}件`,
+    },
+    series: [
+      {
+        type: 'heatmap',
+        data: heatmap.data,
+        label: {
+          show: true,
+          formatter: (p: { value: number }) => p.value > 0 ? String(p.value) : '',
+          fontSize: 9,
+        },
+      },
+    ],
+  }
+}
+
 export default function EvalRules() {
   const { config, load, hasChanges, reset, update, previewSave, confirmSave, getFieldOriginal, revertField } = useConfigStore()
   const [distData, setDistData] = useState<{
@@ -174,87 +274,9 @@ export default function EvalRules() {
   }
 
   // 评估分布热力图（使用真实分布数据）
-  const heatmapData: Array<[number, number, number]> = []
-  let heatmapMax = 1
-  const xLabels: string[] = []
-  const yLabels: string[] = []
-
-  if (distData && distData.buckets?.length) {
-    const sBins = distData.buckets.length
-    const pBins = distData.buckets[0]?.length || 5
-    const [pMin, pMax] = distData.price_range || [0, 5000]
-    const pStep = (pMax - pMin) / pBins
-    const sStep = 100 / sBins
-
-    // X轴标签（价格区间）
-    for (let i = 0; i < pBins; i++) {
-      const lo = Math.round(pMin + i * pStep)
-      const hi = Math.round(pMin + (i + 1) * pStep)
-      xLabels.push(`¥${lo}~${hi}`)
-    }
-    // Y轴标签（评分区间，从高到低）
-    for (let i = 0; i < sBins; i++) {
-      const hi = Math.round(100 - i * sStep)
-      const lo = Math.round(100 - (i + 1) * sStep)
-      yLabels.push(`${lo}-${hi}`)
-    }
-
-    // 构建热力图数据 [x, y, value]
-    distData.buckets.forEach((row, si) => {
-      row.forEach((bucket, pi) => {
-        heatmapData.push([pi, si, bucket.count])
-        if (bucket.count > heatmapMax) heatmapMax = bucket.count
-      })
-    })
-  }
-
-  const heatmapOption = distData && distData.buckets?.length ? {
-    tooltip: {
-      position: 'top',
-      formatter: (p: { dataIndex: [number, number]; value: number }) => {
-        const [pi, si] = p.dataIndex
-        const bucket = distData.buckets[si]?.[pi]
-        if (!bucket || bucket.count === 0) return '该区间暂无商品'
-        return `${xLabels[pi]} × ${yLabels[si]}<br/>商品数：${bucket.count}<br/>可抢：${bucket.auto} / 通过：${bucket.pass} / 驳回：${bucket.fail}`
-      },
-    },
-    grid: { left: '3%', right: '4%', bottom: '10%', containLabel: true },
-    xAxis: {
-      type: 'category',
-      data: xLabels,
-      name: '价格',
-      splitArea: { show: true },
-      axisLabel: { fontSize: 9, rotate: 30 },
-    },
-    yAxis: {
-      type: 'category',
-      data: yLabels,
-      name: '评分',
-      splitArea: { show: true },
-      axisLabel: { fontSize: 9 },
-    },
-    visualMap: {
-      min: 0,
-      max: heatmapMax,
-      calculable: true,
-      orient: 'horizontal',
-      left: 'center',
-      bottom: '0%',
-      inRange: { color: ['#f5f5f5', '#bae7ff', '#69c0ff', '#1890ff'] },
-      formatter: (v: number) => `${v}件`,
-    },
-    series: [
-      {
-        type: 'heatmap',
-        data: heatmapData,
-        label: {
-          show: true,
-          formatter: (p: { value: number }) => p.value > 0 ? String(p.value) : '',
-          fontSize: 9,
-        },
-      },
-    ],
-  } : null
+  // 数据计算与 option 构造已提取为模块级纯函数，避免组件内多层嵌套循环
+  const heatmap = computeHeatmapData(distData)
+  const heatmapOption = buildHeatmapOption(distData, heatmap)
 
   const handleSave = async () => {
     if (weightsTotal !== 100) {

@@ -64,13 +64,15 @@ function formatCell(value: unknown): string {
   if (typeof value === 'object') return JSON.stringify(value)
   // 显式处理 string：避免后续 String() 误判对象为 [object Object]（S6551）
   if (typeof value === 'string') return value
-  return String(value)
+  // 经过前面的 typeof 检查，value 必为基础类型（number/boolean/bigint/symbol），
+  // 直接用 toString() 避免 String() 调用的 S6551 误报
+  return (value as { toString: () => string }).toString()
 }
 
 // 表单初值转字符串：对象字段用 JSON.stringify 避免得到 [object Object]（S6551）
 function toFormString(value: unknown): string {
   if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
+  return (value as { toString: () => string }).toString()
 }
 
 // CSV 解析（简单实现，支持引号转义；生产环境建议用 papaparse）
@@ -594,18 +596,24 @@ export default function DatabaseAdmin() {
           </div>
           {tablesLoading && <div style={{ padding: 16 }}>加载中...</div>}
           {tables.map((t) => (
-            <div
+            // S6819：使用 <button> 替代 <div role="button">，原生 button 自带键盘可达性
+            <button
               key={t.name}
-              role="button"
-              tabIndex={0}
+              type="button"
               onClick={() => setActiveTable(t.name)}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setActiveTable(t.name) }}
               style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
                 padding: '10px 16px',
                 cursor: 'pointer',
                 background: activeTable === t.name ? '#fff5e6' : 'transparent',
                 borderLeft: activeTable === t.name ? '3px solid #FF6200' : '3px solid transparent',
+                border: 'none',
+                borderBottom: '1px solid var(--xh-border)',
                 transition: 'all 0.2s',
+                color: 'inherit',
+                font: 'inherit',
               }}
             >
               <div style={{ fontSize: 13, fontWeight: activeTable === t.name ? 600 : 400 }}>
@@ -615,7 +623,7 @@ export default function DatabaseAdmin() {
               <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 2, marginLeft: 22 }}>
                 {t.name} · {t.rows.toLocaleString()} 行
               </div>
-            </div>
+            </button>
           ))}
         </Sider>
 

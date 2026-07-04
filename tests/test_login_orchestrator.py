@@ -445,11 +445,13 @@ class TestStartSessionDefault:
         """启动异常时应返回 False 而不抛异常（避免影响登录流程）"""
         orch = LoginOrchestrator()
 
-        # 模拟 token_renewer.start 抛异常
+        # 为什么用 MagicMock：TokenRenewer.start 是同步方法（内部通过
+        # asyncio.create_task 启动后台循环，本身不 await）。
+        # 若误用 AsyncMock，需要 await 才会触发 side_effect，
+        # 与 start_session 的同步调用方式不匹配。
         with patch.object(
             orch._token_renewer,
             "start",
-            new_callable=AsyncMock,
             side_effect=RuntimeError("renewer failed"),
         ):
             result = await orch.start_session_default()

@@ -53,27 +53,49 @@ def _dump_yaml(data: dict[str, Any]) -> str:
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
 
 
+def _build_diff_path(prefix: str, key: str) -> str:
+    """构建 diff 路径：根层直接用 key，嵌套层用 prefix.key"""
+    return f"{prefix}.{key}" if prefix else key
+
+
+def _classify_diff_op(av: Any, bv: Any) -> str:
+    """根据 av/bv 的 truthy 判定操作类型：均非空=modify、只剩 bv=add、只剩 av=remove
+
+    注意：这里用 truthy 判断（av and bv）而非 is None，与序列化逻辑（is None）刻意不同——
+    op 分类需要把空字符串/0/False 也视为"无值"以匹配"删除/新增"语义，
+    而序列化时 None 才转空串、其他 falsy 值仍需 JSON 编码保留类型信息。
+    """
+    if av and bv:
+        return "modify"
+    if bv:
+        return "add"
+    return "remove"
+
+
+def _build_diff_entry(path: str, av: Any, bv: Any) -> dict[str, str]:
+    """构建单个 diff 条目：op 由 av/bv 推断，old/new 用 JSON 序列化保留类型"""
+    return {
+        "path": path,
+        "op": _classify_diff_op(av, bv),
+        # None 转空串便于前端直接渲染；非 None 用 JSON 序列化保留类型信息
+        "old": "" if av is None else json.dumps(av, ensure_ascii=False),
+        "new": "" if bv is None else json.dumps(bv, ensure_ascii=False),
+    }
+
+
 def _diff(a: dict[str, Any], b: dict[str, Any], prefix: str = "") -> list[dict[str, str]]:
     """递归生成 diff 列表：{path, op, old, new}"""
     out: list[dict[str, str]] = []
     keys = set(a.keys()) | set(b.keys())
     for k in keys:
-        path = f"{prefix}.{k}" if prefix else k
+        path = _build_diff_path(prefix, k)
         av = a.get(k)
         bv = b.get(k)
+        # 两边都是 dict 则递归比较，避免把整个子树当 modify 丢失细粒度
         if isinstance(av, dict) and isinstance(bv, dict):
             out.extend(_diff(av, bv, path))
         elif av != bv:
-            # av/bv 均非空为 modify；只剩 bv 为 add；只剩 av 为 remove
-            if av and bv:
-                op = "modify"
-            elif bv:
-                op = "add"
-            else:
-                op = "remove"
-            out.append({"path": path, "op": op,
-                        "old": "" if av is None else json.dumps(av, ensure_ascii=False),
-                        "new": "" if bv is None else json.dumps(bv, ensure_ascii=False)})
+            out.append(_build_diff_entry(path, av, bv))
     return out
 
 
@@ -291,6 +313,36 @@ _SHARE_REDACT_PATHS = [
 ]
 
 
+def _navigate_to_redact_parent(root: dict[str, Any], path: tuple[str, ...]) -> dict[str, Any] | None:
+    """沿 path 导航到倒数第二级（父级 dict），路径不存在则返回 None
+
+    末级 key 的处理交给 _redact_terminal，这里只负责"走到父级"，
+    避免导航与脱敏逻辑耦合在同一层循环里推高认知复杂度。
+    """
+    cur: Any = root
+    for k in path[:-1]:
+        if not isinstance(cur, dict) or k not in cur:
+            return None
+        cur = cur[k]
+    return cur if isinstance(cur, dict) else None
+
+
+def _redact_terminal(parent: dict[str, Any], key: str) -> None:
+    """对末级字段执行脱敏：str→***、dict→全 ***、其他→删除
+
+    之所以区分类型：str 保留键名便于读者知道"这里曾有配置但已脱敏"，
+    dict 保留结构但值打码，非 str/dict（int/bool/list）直接删除——
+    这些字段通常是端口/路径列表，分享场景无意义。
+    """
+    val = parent[key]
+    if isinstance(val, str):
+        parent[key] = "***"
+    elif isinstance(val, dict):
+        parent[key] = dict.fromkeys(val, "***")
+    else:
+        parent.pop(key, None)
+
+
 def _redact_for_share(data: dict[str, Any]) -> dict[str, Any]:
     """分享专用脱敏：移除 token / 路径等敏感字段
 
@@ -299,22 +351,60 @@ def _redact_for_share(data: dict[str, Any]) -> dict[str, Any]:
     """
     out = copy.deepcopy(data)
     for path in _SHARE_REDACT_PATHS:
-        cur = out
-        for i, k in enumerate(path):
-            if not isinstance(cur, dict) or k not in cur:
-                cur = None
-                break
-            if i == len(path) - 1:
-                # 末级：删除 / 替换为 "***"
-                if isinstance(cur[k], str):
-                    cur[k] = "***"
-                elif isinstance(cur[k], dict):
-                    cur[k] = dict.fromkeys(cur[k], "***")
-                else:
-                    cur.pop(k, None)
-            else:
-                cur = cur[k]
+        # 先导航到父级，再对末级 key 执行脱敏；路径不存在则跳过
+        parent = _navigate_to_redact_parent(out, path)
+        if parent is not None and path[-1] in parent:
+            _redact_terminal(parent, path[-1])
     return out
+
+
+def _build_share_header() -> list[str]:
+    """构建分享摘要的头部：标题 + 导出时间 + 脱敏说明
+
+    固定 4 行（含空行），与前端 Markdown 渲染对齐。
+    """
+    return [
+        "# XianyuHunter 配置分享",
+        f"# 导出时间: {datetime.now().isoformat(timespec='seconds')}",
+        "# 敏感字段（token / 路径）已脱敏为 ***",
+        "",
+    ]
+
+
+def _render_dict_section(k: str, redacted: dict[str, Any]) -> list[str]:
+    """渲染单个 dict 字段为一行一个 key: value 的列表
+
+    值超过 100 字符截断加省略号，避免单行过长影响分享可读性。
+    非基础类型用 JSON 序列化（保留中文），基础类型直接 str()。
+    """
+    lines: list[str] = [f"  {k}:"]
+    if isinstance(redacted[k], dict):
+        for sk, sv in redacted[k].items():
+            sv_repr = json.dumps(sv, ensure_ascii=False) if not isinstance(sv, (int, float, str, bool)) else str(sv)
+            if len(sv_repr) > 100:
+                sv_repr = sv_repr[:100] + "…"
+            lines.append(f"    {sk}: {sv_repr}")
+    lines.append("")
+    return lines
+
+
+def _render_share_tab(
+    tab_name: str, keys: list[str], redacted: dict[str, Any]
+) -> list[str]:
+    """渲染单个分类 Tab 的内容
+
+    与 config 页面 5 个 Tab 对齐：keys 为空表示该分类字段分散在其它 Tab，
+    展示占位提示；非空则逐个渲染存在的字段。
+    """
+    lines: list[str] = [f"## {tab_name}"]
+    if not keys:
+        lines.append("  (无独立配置)")
+        lines.append("")
+        return lines
+    for k in keys:
+        if k in redacted:
+            lines.extend(_render_dict_section(k, redacted))
+    return lines
 
 
 @router.get("/share")
@@ -333,11 +423,7 @@ def share_config() -> dict[str, Any]:
     """
     raw = _load_yaml()
     redacted = _redact_for_share(raw)
-    lines: list[str] = []
-    lines.append("# XianyuHunter 配置分享")
-    lines.append(f"# 导出时间: {datetime.now().isoformat(timespec='seconds')}")
-    lines.append("# 敏感字段（token / 路径）已脱敏为 ***")
-    lines.append("")
+    lines = _build_share_header()
     # 按 5 大分类（与 config 页面 5 个 Tab 对齐）展开
     for tab_name, keys in [
         ("搜索", ["antidetect", "browser", "waf"]),
@@ -346,22 +432,7 @@ def share_config() -> dict[str, Any]:
         ("通知", ["notifier"]),
         ("抢单", []),
     ]:
-        lines.append(f"## {tab_name}")
-        if not keys:
-            lines.append("  (无独立配置)")
-            lines.append("")
-            continue
-        for k in keys:
-            if k in redacted:
-                lines.append(f"  {k}:")
-                # 一行一个 key: value
-                if isinstance(redacted[k], dict):
-                    for sk, sv in redacted[k].items():
-                        sv_repr = json.dumps(sv, ensure_ascii=False) if not isinstance(sv, (int, float, str, bool)) else str(sv)
-                        if len(sv_repr) > 100:
-                            sv_repr = sv_repr[:100] + "…"
-                        lines.append(f"    {sk}: {sv_repr}")
-                lines.append("")
+        lines.extend(_render_share_tab(tab_name, keys, redacted))
     return {
         "summary": "\n".join(lines),
         "config": redacted,

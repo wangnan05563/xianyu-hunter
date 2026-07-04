@@ -58,6 +58,48 @@ from xianyu_hunter.web.routes import (
 )
 
 
+def _check_db(container: Any) -> tuple[str, bool]:
+    """检查数据库连通性，返回 (status_text, is_ok)
+
+    为什么独立：healthz 中 5 个嵌套 try/except 使认知复杂度逼近阈值，
+    拆分后主函数只负责组装响应，单项检查异常不会波及其他检查。
+    """
+    from sqlalchemy import text as sql_text
+    try:
+        with container.repo.engine.connect() as conn:
+            conn.execute(sql_text("SELECT 1"))
+        return "ok", True
+    except Exception as e:
+        return f"error: {e}", False
+
+
+def _check_login_valid() -> bool:
+    """检查闲鱼登录态（信息性：未登录不影响服务本身）"""
+    try:
+        from xianyu_hunter.web.services.cookie_store import CookieStore
+        return CookieStore().has_valid_cookies()
+    except Exception:
+        return False
+
+
+def _check_tasks_running(container: Any) -> int:
+    """检查运行中任务数"""
+    try:
+        return len(container.repo.list_tasks(status="running"))
+    except Exception:
+        return 0
+
+
+def _check_notifier(container: Any) -> str:
+    """检查通知渠道配置"""
+    try:
+        hub = container.notifier_hub
+        channels = getattr(hub, "channels", []) or []
+        return "configured" if channels else "not_configured"
+    except Exception:
+        return "unknown"
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="XianyuHunter Web",
@@ -216,8 +258,6 @@ def create_app() -> FastAPI:
         仅数据库故障时返回 503（Docker HEALTHCHECK 据此判定不健康）；
         其他检查项为信息性指标，不影响 HTTP 状态码。
         """
-        from sqlalchemy import text as sql_text
-
         checks: dict[str, Any] = {}
         db_ok = False
 
@@ -225,38 +265,20 @@ def create_app() -> FastAPI:
             from xianyu_hunter.web.deps import get_container
             container = get_container()
 
-            # 1. 数据库连通性（关键检查项）
-            try:
-                with container.repo.engine.connect() as conn:
-                    conn.execute(sql_text("SELECT 1"))
-                checks["db"] = "ok"
-                db_ok = True
-            except Exception as e:
-                checks["db"] = f"error: {e}"
+            # 1. 数据库连通性（关键检查项，决定 HTTP 状态码）
+            checks["db"], db_ok = _check_db(container)
 
             # 2. 闲鱼登录态（信息性：未登录不影响服务本身）
-            try:
-                from xianyu_hunter.web.services.cookie_store import CookieStore
-                checks["login_valid"] = CookieStore().has_valid_cookies()
-            except Exception:
-                checks["login_valid"] = False
+            checks["login_valid"] = _check_login_valid()
 
             # 3. 运行中任务数
-            try:
-                checks["tasks_running"] = len(container.repo.list_tasks(status="running"))
-            except Exception:
-                checks["tasks_running"] = 0
+            checks["tasks_running"] = _check_tasks_running(container)
 
             # 4. 浏览器实例（Web 进程 with_browser=False 时为 None，属正常）
             checks["browser"] = "running" if container.browser is not None else "not_started"
 
             # 5. 通知渠道配置
-            try:
-                hub = container.notifier_hub
-                channels = getattr(hub, "channels", []) or []
-                checks["notifier"] = "configured" if channels else "not_configured"
-            except Exception:
-                checks["notifier"] = "unknown"
+            checks["notifier"] = _check_notifier(container)
 
         except Exception as e:
             checks["error"] = str(e)

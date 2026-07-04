@@ -81,27 +81,17 @@ class FAQMatcher:
 
         query_embedding = await self._embedding_service.embed(query)
 
-        best_score = 0.0
-        best_faq: dict | None = None
-
         if query_embedding:
             # 主路径：向量 cosine 相似度
-            for faq in faqs:
-                faq_embedding = faq.get("question_embedding")
-                if not faq_embedding:
-                    continue
-                score = self._compute_similarity(query_embedding, faq_embedding)
-                if score > best_score:
-                    best_score = score
-                    best_faq = faq
+            best_score, best_faq = self._find_best_faq(
+                faqs, lambda faq: self._score_faq_by_embedding(faq, query_embedding),
+            )
         else:
             # 降级路径：embedding 服务不可用时用编辑距离兜底，保证匹配链路不中断
             logger.warning("query embedding 为空，降级到编辑距离匹配")
-            for faq in faqs:
-                score = self._levenshtein_ratio(query, faq.get("question", ""))
-                if score > best_score:
-                    best_score = score
-                    best_faq = faq
+            best_score, best_faq = self._find_best_faq(
+                faqs, lambda faq: self._levenshtein_ratio(query, faq.get("question", "")),
+            )
 
         if best_faq is None or best_score < self._config.confirm_threshold:
             return None
@@ -115,6 +105,42 @@ class FAQMatcher:
             similarity=round(best_score, 4),
             category=best_faq.get("category", "general"),
         )
+
+    def _find_best_faq(
+        self,
+        faqs: list[dict],
+        score_fn,
+    ) -> tuple[float, dict | None]:
+        """遍历 FAQ 列表，返回 (最高分, 对应 FAQ)
+
+        为什么提取：原 match 方法主路径（向量）与降级路径（编辑距离）的
+        for + if score > best_score 逻辑完全重复，重复结构推高认知复杂度。
+        提取后两条路径共用同一遍历骨架，score_fn 注入打分差异。
+        score_fn 返回 -1.0 表示跳过该 FAQ（如缺 embedding）。
+        """
+        best_score = 0.0
+        best_faq: dict | None = None
+        for faq in faqs:
+            score = score_fn(faq)
+            if score < 0:
+                continue
+            if score > best_score:
+                best_score = score
+                best_faq = faq
+        return best_score, best_faq
+
+    def _score_faq_by_embedding(
+        self, faq: dict, query_embedding: list[float],
+    ) -> float:
+        """单条 FAQ 的向量相似度打分
+
+        返回 -1.0 表示该 FAQ 缺 embedding 应跳过（_find_best_faq 据此过滤），
+        避免在遍历骨架中再嵌套一层 if not faq_embedding 分支。
+        """
+        faq_embedding = faq.get("question_embedding")
+        if not faq_embedding:
+            return -1.0
+        return self._compute_similarity(query_embedding, faq_embedding)
 
     def _compute_similarity(
         self, query_embedding: list[float], faq_embedding: list[float]

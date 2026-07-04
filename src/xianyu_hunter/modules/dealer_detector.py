@@ -260,6 +260,9 @@ def detect_dealer(seller: SellerProfile, item: ItemDetail | None = None) -> Deal
 
     Returns:
         DealerDetectionResult，包含扣分建议和命中信号
+
+    重构说明：4 个维度各自独立检测，提取为私有函数，主函数只负责编排、
+    置信度聚合与缓存。降低圈复杂度（S3776）并便于单维度独立测试。
     """
     # H7: 缓存优先——同一卖家在同一轮评估中多次出现时直接返回缓存结果
     # 避免 _detect_image_theft（LIKE 全表扫描）和 _detect_post_burst（2 次 COUNT）
@@ -271,103 +274,12 @@ def detect_dealer(seller: SellerProfile, item: ItemDetail | None = None) -> Deal
         return cached
 
     result = DealerDetectionResult()
-    signals = result.signals
+    # 各维度独立检测，命中则累加扣分与命中数
     hit_count = 0
-
-    # ========== 维度1：新注册低活跃 ==========
-    # 单独"新注册"或"低活跃"不一定是贩子（可能是新用户），
-    # 但两者组合（新注册 AND 低活跃 AND 高在售）是职业贩子典型特征：
-    # 批量注册账号 → 上架大量商品 → 但还没有成交记录
-    # S1066: 两层 if 仅在做"新注册且低活跃且高在售"的组合判断，合并后语义更清晰
-    if (
-        seller.register_days > 0
-        and seller.register_days < 30
-        and seller.sold_count < 5
-        and seller.on_sale_count > 10
-    ):
-        deduction = 25
-        result.score_deduction += deduction
-        result.reasons.append(
-            f"dealer:new_register_low_activity(days={seller.register_days},sold={seller.sold_count},on_sale={seller.on_sale_count})"
-        )
-        signals["new_register_low_activity"] = {
-            "register_days": seller.register_days,
-            "sold_count": seller.sold_count,
-            "on_sale_count": seller.on_sale_count,
-            "deduction": deduction,
-        }
-        hit_count += 1
-
-    # ========== 维度2：文案模板化 ==========
-    # 职业贩子常用同一模板批量发品，标题仅替换型号/颜色/品牌
-    # 用 2-gram Jaccard 相似度检测，阈值 0.7
-    titles = [p.title for p in seller.recent_posts if p.title]
-    is_templated, max_sim = _detect_templated_text(titles)
-    if is_templated:
-        deduction = 20
-        result.score_deduction += deduction
-        result.reasons.append(f"dealer:templated_text(max_sim={max_sim},sample={len(titles)})")
-        signals["templated_text"] = {
-            "max_similarity": max_sim,
-            "sample_size": len(titles),
-            "deduction": deduction,
-        }
-        hit_count += 1
-
-    # ========== 维度3：图像盗图（O-13-26）==========
-    # 职业贩子常盗用其他卖家的商品图片批量上架，节省拍摄成本
-    # 通过 DB 查询相同 image_url 是否被其他 seller_id 使用
-    # 限制：仅检测已采集到 DB 的商品，无法检测站外盗图
-    if item is not None and item.image_urls and seller.id:
-        is_theft, theft_count, sample_sellers = _detect_image_theft(
-            item.image_urls, seller.id
-        )
-        if is_theft:
-            # 扣分梯度：1 个其他卖家 -15，2+ 个 -25，3+ 个 -30
-            if theft_count >= 3:
-                deduction = 30
-            elif theft_count == 2:
-                deduction = 25
-            else:
-                deduction = 15
-            result.score_deduction += deduction
-            result.reasons.append(
-                f"dealer:image_theft(sellers={theft_count},sample={','.join(sample_sellers[:3])})"
-            )
-            signals["image_theft"] = {
-                "distinct_seller_count": theft_count,
-                "sample_other_sellers": sample_sellers,
-                "deduction": deduction,
-            }
-            hit_count += 1
-
-    # ========== 维度4：卖家主页商品数突增 ==========
-    # 职业贩子批量注册后会突然大量上架，近 15 天发布数远超前 15 天
-    # 用 items.first_seen 字段对比前后窗口，无需新增时序表
-    if seller.id:
-        is_burst, recent_n, previous_n, ratio = _detect_post_burst(seller.id)
-        if is_burst:
-            # 扣分梯度：比值 3-5x -15，5-10x -20，>10x -25
-            # previous=0 时 ratio=0.0（无意义），梯度按 min_recent_count 命中给最低扣分 -15
-            if ratio >= 10:
-                deduction = 25
-            elif ratio >= 5:
-                deduction = 20
-            else:
-                deduction = 15
-            result.score_deduction += deduction
-            # ratio=0 时显示 N/A 避免误导（previous=0 时比值本就无意义）
-            ratio_str = f"{ratio}x" if previous_n > 0 else "N/A"
-            result.reasons.append(
-                f"dealer:post_burst(recent={recent_n},previous={previous_n},ratio={ratio_str})"
-            )
-            signals["post_burst"] = {
-                "recent_count": recent_n,
-                "previous_count": previous_n,
-                "ratio": ratio,
-                "deduction": deduction,
-            }
-            hit_count += 1
+    hit_count += _check_new_register_low_activity(seller, result)
+    hit_count += _check_templated_text(seller, result)
+    hit_count += _check_image_theft(seller, item, result)
+    hit_count += _check_post_burst(seller, result)
 
     # 置信度：命中维度越多越高（1 维=0.4, 2 维=0.7, 3 维=0.9）
     result.confidence = min(0.9, hit_count * 0.35) if hit_count > 0 else 0.0
@@ -388,3 +300,131 @@ def detect_dealer(seller: SellerProfile, item: ItemDetail | None = None) -> Deal
     _DEALER_CACHE[cache_key] = result
 
     return result
+
+
+def _check_new_register_low_activity(
+    seller: SellerProfile, result: DealerDetectionResult
+) -> int:
+    """维度1：新注册低活跃检测
+
+    单独"新注册"或"低活跃"不一定是贩子（可能是新用户），
+    但两者组合（新注册 AND 低活跃 AND 高在售）是职业贩子典型特征：
+    批量注册账号 → 上架大量商品 → 但还没有成交记录。
+
+    返回命中数（0 或 1），命中时已填充 result 的对应字段。
+    """
+    if not (
+        seller.register_days > 0
+        and seller.register_days < 30
+        and seller.sold_count < 5
+        and seller.on_sale_count > 10
+    ):
+        return 0
+    deduction = 25
+    result.score_deduction += deduction
+    result.reasons.append(
+        f"dealer:new_register_low_activity(days={seller.register_days},sold={seller.sold_count},on_sale={seller.on_sale_count})"
+    )
+    result.signals["new_register_low_activity"] = {
+        "register_days": seller.register_days,
+        "sold_count": seller.sold_count,
+        "on_sale_count": seller.on_sale_count,
+        "deduction": deduction,
+    }
+    return 1
+
+
+def _check_templated_text(
+    seller: SellerProfile, result: DealerDetectionResult
+) -> int:
+    """维度2：文案模板化检测
+
+    职业贩子常用同一模板批量发品，标题仅替换型号/颜色/品牌。
+    用 2-gram Jaccard 相似度检测，阈值 0.7。
+    """
+    titles = [p.title for p in seller.recent_posts if p.title]
+    is_templated, max_sim = _detect_templated_text(titles)
+    if not is_templated:
+        return 0
+    deduction = 20
+    result.score_deduction += deduction
+    result.reasons.append(f"dealer:templated_text(max_sim={max_sim},sample={len(titles)})")
+    result.signals["templated_text"] = {
+        "max_similarity": max_sim,
+        "sample_size": len(titles),
+        "deduction": deduction,
+    }
+    return 1
+
+
+def _check_image_theft(
+    seller: SellerProfile,
+    item: ItemDetail | None,
+    result: DealerDetectionResult,
+) -> int:
+    """维度3：图像盗图检测（O-13-26）
+
+    职业贩子常盗用其他卖家的商品图片批量上架，节省拍摄成本。
+    通过 DB 查询相同 image_url 是否被其他 seller_id 使用。
+    限制：仅检测已采集到 DB 的商品，无法检测站外盗图。
+    """
+    if item is None or not item.image_urls or not seller.id:
+        return 0
+    is_theft, theft_count, sample_sellers = _detect_image_theft(
+        item.image_urls, seller.id
+    )
+    if not is_theft:
+        return 0
+    # 扣分梯度：1 个其他卖家 -15，2+ 个 -25，3+ 个 -30
+    if theft_count >= 3:
+        deduction = 30
+    elif theft_count == 2:
+        deduction = 25
+    else:
+        deduction = 15
+    result.score_deduction += deduction
+    result.reasons.append(
+        f"dealer:image_theft(sellers={theft_count},sample={','.join(sample_sellers[:3])})"
+    )
+    result.signals["image_theft"] = {
+        "distinct_seller_count": theft_count,
+        "sample_other_sellers": sample_sellers,
+        "deduction": deduction,
+    }
+    return 1
+
+
+def _check_post_burst(
+    seller: SellerProfile, result: DealerDetectionResult
+) -> int:
+    """维度4：卖家主页商品数突增检测
+
+    职业贩子批量注册后会突然大量上架，近 15 天发布数远超前 15 天。
+    用 items.first_seen 字段对比前后窗口，无需新增时序表。
+    """
+    if not seller.id:
+        return 0
+    is_burst, recent_n, previous_n, ratio = _detect_post_burst(seller.id)
+    if not is_burst:
+        return 0
+    # 扣分梯度：比值 3-5x -15，5-10x -20，>10x -25
+    # previous=0 时 ratio=0.0（无意义），梯度按 min_recent_count 命中给最低扣分 -15
+    if ratio >= 10:
+        deduction = 25
+    elif ratio >= 5:
+        deduction = 20
+    else:
+        deduction = 15
+    result.score_deduction += deduction
+    # ratio=0 时显示 N/A 避免误导（previous=0 时比值本就无意义）
+    ratio_str = f"{ratio}x" if previous_n > 0 else "N/A"
+    result.reasons.append(
+        f"dealer:post_burst(recent={recent_n},previous={previous_n},ratio={ratio_str})"
+    )
+    result.signals["post_burst"] = {
+        "recent_count": recent_n,
+        "previous_count": previous_n,
+        "ratio": ratio,
+        "deduction": deduction,
+    }
+    return 1

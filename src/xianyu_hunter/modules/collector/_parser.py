@@ -54,67 +54,22 @@ class ParserMixin:
         注意：闲鱼搜索结果卡片本身就是 <a> 标签（class="feeds-item-wrap--*"），
         所以先判断 card.tagName，若为 A 则直接用 card 当链接；
         否则在内部找第一个 <a>。
+
+        重构说明：将各字段提取拆分为独立私有方法，主方法只负责编排，
+        降低圈复杂度（S3776）并便于单字段解析失败时定位问题。
         """
         try:
-            # 1. 链接：card 本身可能就是 <a>，否则向内找
-            tag = (await card.evaluate("el => el.tagName")).upper() if hasattr(card, "evaluate") else ""
-            link = card if tag == "A" else await card.query_selector(self.selectors.CARD_LINK_MAIN)
-            if not link:
-                return None
-            href = await link.get_attribute("href") or ""
-            item_id = self._extract_item_id(href)
+            # 1. 链接 + item_id：card 本身可能就是 <a>，否则向内找
+            item_id = await self._extract_card_item_id(card)
             if not item_id:
                 return None
 
-            # 标题
-            title = ""
-            for sel in self.selectors.title_candidates():
-                el = await card.query_selector(sel)
-                if el:
-                    title = (await el.inner_text()).strip()
-                    if title:
-                        break
-
-            # 价格
-            price = 0.0
-            for sel in self.selectors.price_candidates():
-                el = await card.query_selector(sel)
-                if el:
-                    text = (await el.inner_text()).strip()
-                    price = parse_price_from_text(text)
-                    if price > 0:
-                        break
-
-            # 缩略图：优先 src，回退 data-src（懒加载），再回退 data-original
-            thumb = ""
-            img = await card.query_selector(self.selectors.CARD_THUMB_MAIN)
-            if img:
-                for attr in ("src", "data-src", "data-original", "data-lazy-src"):
-                    thumb = (await img.get_attribute(attr)) or ""
-                    if thumb and not thumb.startswith("data:"):
-                        break
-                # 协议相对 URL 补全（//img.alicdn.com → https://img.alicdn.com）
-                if thumb and thumb.startswith("//"):
-                    thumb = "https:" + thumb
-
-            # 卖家所在地（搜索结果卡片中仅有所在地文本，无卖家ID/链接）
-            # 卖家ID需访问详情页才能获取，搜索卡片不包含
-            region = ""
-            seller_loc = await card.query_selector(self.selectors.CARD_SELLER_LOCATION)
-            if seller_loc:
-                region = (await seller_loc.inner_text()).strip()
-
-            # 从卡片文本中提取想要数和发布时间（DOM 回退模式下的降级提取）
-            want_cnt = 0
-            publish_time = None
-            try:
-                card_text = await card.inner_text()
-                # 想要数：匹配 "X人想要" 或 "想要 X" 格式
-                want_match = re.search(r"(\d+)\s*人想要", card_text)
-                if want_match:
-                    want_cnt = int(want_match.group(1))
-            except Exception:
-                pass
+            # 各字段独立提取，互不影响
+            title = await self._extract_card_title(card)
+            price = await self._extract_card_price(card)
+            thumb = await self._extract_card_thumbnail(card)
+            region = await self._extract_card_region(card)
+            want_cnt = await self._extract_card_want_count(card)
 
             return ItemSummary(
                 id=item_id,
@@ -124,11 +79,96 @@ class ParserMixin:
                 region=region,
                 is_sold=await self._check_card_sold(card),
                 want_cnt=want_cnt,
-                publish_time=publish_time,
+                publish_time=None,
             )
         except Exception as e:
             logger.warning(f"解析卡片失败: {e}")
             return None
+
+    async def _extract_card_item_id(self, card: Any) -> str:
+        """从卡片提取商品 ID：card 本身是 <a> 时直接用，否则向内找第一个 <a>
+
+        为什么需要 tagName 判断：闲鱼卡片本身就是 <a> 标签，
+        若再用 query_selector 找 <a> 会返回 None，必须分两路处理。
+        """
+        tag = (await card.evaluate("el => el.tagName")).upper() if hasattr(card, "evaluate") else ""
+        link = card if tag == "A" else await card.query_selector(self.selectors.CARD_LINK_MAIN)
+        if not link:
+            return ""
+        href = await link.get_attribute("href") or ""
+        return self._extract_item_id(href)
+
+    async def _extract_card_title(self, card: Any) -> str:
+        """提取标题：按候选选择器顺序匹配，命中即返回
+
+        多候选选择器应对闲鱼前端不同版本 DOM 结构差异。
+        """
+        for sel in self.selectors.title_candidates():
+            el = await card.query_selector(sel)
+            if el:
+                title = (await el.inner_text()).strip()
+                if title:
+                    return title
+        return ""
+
+    async def _extract_card_price(self, card: Any) -> float:
+        """提取价格：按候选选择器顺序匹配，命中即解析
+
+        返回 0.0 表示未解析到有效价格。
+        """
+        for sel in self.selectors.price_candidates():
+            el = await card.query_selector(sel)
+            if el:
+                text = (await el.inner_text()).strip()
+                price = parse_price_from_text(text)
+                if price > 0:
+                    return price
+        return 0.0
+
+    async def _extract_card_thumbnail(self, card: Any) -> str:
+        """提取缩略图 URL：优先 src，回退 data-* 懒加载属性
+
+        闲鱼使用懒加载，真实 URL 通常在 data-src/data-original 中。
+        跳过 data: URI（占位图），并对协议相对 URL（//开头）补全 https:。
+        """
+        img = await card.query_selector(self.selectors.CARD_THUMB_MAIN)
+        if not img:
+            return ""
+        thumb = ""
+        for attr in ("src", "data-src", "data-original", "data-lazy-src"):
+            thumb = (await img.get_attribute(attr)) or ""
+            if thumb and not thumb.startswith("data:"):
+                break
+        # 协议相对 URL 补全（//img.alicdn.com → https://img.alicdn.com）
+        if thumb and thumb.startswith("//"):
+            thumb = "https:" + thumb
+        return thumb
+
+    async def _extract_card_region(self, card: Any) -> str:
+        """提取卖家所在地（搜索结果卡片中仅有所在地文本，无卖家ID/链接）
+
+        卖家ID需访问详情页才能获取，搜索卡片不包含。
+        """
+        seller_loc = await card.query_selector(self.selectors.CARD_SELLER_LOCATION)
+        if not seller_loc:
+            return ""
+        return (await seller_loc.inner_text()).strip()
+
+    async def _extract_card_want_count(self, card: Any) -> int:
+        """从卡片文本中提取想要数（DOM 回退模式下的降级提取）
+
+        匹配 "X人想要" 格式；发布时间在搜索卡片中无法可靠提取，固定返回 None。
+        为什么用正则而非选择器：闲鱼前端将"X人想要"渲染为纯文本节点，
+        无独立 class，只能从卡片整体文本中匹配。
+        """
+        try:
+            card_text = await card.inner_text()
+            want_match = re.search(r"(\d+)\s*人想要", card_text)
+            if want_match:
+                return int(want_match.group(1))
+        except Exception:
+            pass
+        return 0
 
     @staticmethod
     def _extract_item_id(href: str) -> str:

@@ -1,0 +1,146 @@
+{
+  "sample_issues": [
+    {
+      "key": "b4bbc1cc-88ca-44ab-bd95-b583d4148c7f",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "e83575e9-661e-44b1-b2f0-2c6fb7108d13",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "3b25c8c2-c9a0-4ff1-9744-adef427f951b",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "8143a1c4-b4db-4c6b-9e74-5f5b12066268",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "d956fd7e-5c47-4246-ae92-0177d951ab15",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "43f6fa11-b797-427b-90b6-323473d3fddc",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "cb23203f-f4ee-426a-80c8-e99f75d688c3",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "7258d952-7a09-4f65-933f-25f63454a77c",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "f28c977e-1838-4d0c-8b9d-c45fadfa0749",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    },
+    {
+      "key": "4e5f585d-e1a8-433a-bb99-8b32abb1b80d",
+      "rule": "typescript:S6767",
+      "severity": "MINOR",
+      "component": "xianyu_hunter:frontend/src/components/SheetWorkspace/SheetTabs.tsx",
+      "project": "xianyu_hunter"
+    }
+  ],
+  "java_s1192_count": 616,
+  "java_s1192_sample": [
+    {
+      "component": "bemp-ext-hnnxbank-org-management:hnnxbank-biz-as/src/main/java/com/hundsun/bemp/hnnxbank/biz/pc/credit/dao/entity/HnnxAcceptBankCreditBatchExample.java",
+      "project": "bemp-ext-hnnxbank-org-management",
+      "rule": "java:S1192"
+    },
+    {
+      "component": "bemp-ext-hnnxbank-org-management:hnnxbank-biz-as/src/main/java/com/hundsun/bemp/hnnxbank/biz/pc/credit/dao/entity/HnnxAcceptBankCreditBatchExample.java",
+      "project": "bemp-ext-hnnxbank-org-management",
+      "rule": "java:S1192"
+    },
+    {
+      "component": "bemp-ext-hnnxbank-org-management:hnnxbank-biz-as/src/main/java/com/hundsun/bemp/hnnxbank/biz/pc/credit/dao/entity/HnnxAcceptBankCreditBatchExample.java",
+      "project": "bemp-ext-hnnxbank-org-management",
+      "rule": "java:S1192"
+    },
+    {
+      "component": "bemp-ext-hnnxbank-org-management:hnnxbank-biz-as/src/main/java/com/hundsun/bemp/hnnxbank/biz/pc/credit/dao/entity/HnnxAcceptBankCreditBatchExample.java",
+      "project": "bemp-ext-hnnxbank-org-management",
+      "rule": "java:S1192"
+    },
+    {
+      "component": "bemp-ext-hnnxbank-org-management:hnnxbank-biz-as/src/main/java/com/hundsun/bemp/hnnxbank/biz/pc/credit/dao/entity/HnnxAcceptBankCreditBatchExample.java",
+      "project": "bemp-ext-hnnxbank-org-management",
+      "rule": "java:S1192"
+    }
+  ],
+  "paging": {
+    "pageIndex": 1,
+    "pageSize": 10,
+    "total": 2665
+  },
+  "by_project": [
+    {
+      "property": "projects",
+      "values": [
+        {
+          "val": "bemp-ext-hnnxbank-org-management",
+          "count": 1783
+        },
+        {
+          "val": "adapterSonar",
+          "count": 529
+        },
+        {
+          "val": "xianyu_hunter",
+          "count": 353
+        }
+      ]
+    }
+  ],
+  "all_java_s1192_by_project": [
+    {
+      "property": "projects",
+      "values": [
+        {
+          "val": "bemp-ext-hnnxbank-org-management",
+          "count": 605
+        },
+        {
+          "val": "adapterSonar",
+          "count": 11
+        }
+      ]
+    }
+  ],
+  "project_search": {
+    "error": "HTTP 403",
+    "body": "{\"errors\":[{\"msg\":\"Insufficient privileges\"}]}"
+  },
+  "components": []
+}

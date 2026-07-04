@@ -6,7 +6,9 @@ interface UseAutoLiveSearchOptions {
   tasks: Task[]
   enabled: boolean
   onTaskSearchStart?: (taskId: string) => void
-  onTaskSearchComplete?: (taskId: string, success: boolean, itemCount: number) => void
+  // detail：透传后端 error.detail（如"系统正在执行后台搜索任务，请稍后重试"），
+  // 让上层给出更精准的失败提示，避免笼统"自动搜索失败"
+  onTaskSearchComplete?: (taskId: string, success: boolean, itemCount: number, detail?: string) => void
 }
 
 interface UseAutoLiveSearchReturn {
@@ -14,6 +16,28 @@ interface UseAutoLiveSearchReturn {
   searchingIds: Set<string>
   pauseAll: () => void
   resumeAll: () => void
+}
+
+// 每秒递减 remainMap：倒计时归零的任务入队搜索，搜索中的任务跳过递减
+// 为什么提取到模块级：原 useEffect → setInterval → setRemainMap(prev =>) → forEach(taskId =>) 嵌套达 5 层，违反 S2004
+function decrementRemainMap(
+  prev: Record<string, number>,
+  searchingIds: Set<string>,
+  enqueue: (taskId: string) => void,
+): Record<string, number> {
+  const next = { ...prev }
+  Object.keys(next).forEach((taskId) => {
+    if (searchingIds.has(taskId)) return // 搜索中不递减
+    const newVal = next[taskId] - 1
+    if (newVal <= 0) {
+      // 加入队列，倒计时显示 0
+      enqueue(taskId)
+      next[taskId] = 0
+    } else {
+      next[taskId] = newVal
+    }
+  })
+  return next
 }
 
 /**
@@ -88,8 +112,11 @@ export function useAutoLiveSearch({
       const itemCount = res?.items?.length ?? 0
       // 不展示过滤 Modal，仅 toast（避免自动搜索时弹窗干扰）
       onTaskSearchComplete?.(taskId, true, itemCount)
-    } catch {
-      onTaskSearchComplete?.(taskId, false, 0)
+    } catch (err: unknown) {
+      // 透传后端 detail：taskLinkApi.live 已按 axios 兼容格式抛出
+      // 见 api/task.ts live() 中 throw new Error 附 response.data.detail
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      onTaskSearchComplete?.(taskId, false, 0, detail)
     } finally {
       setSearchingIds((prev) => {
         const next = new Set(prev)
@@ -131,21 +158,8 @@ export function useAutoLiveSearch({
     const timer = setInterval(() => {
       // 页面不可见时暂停 tick（不累计，剩余值保持，符合选项 B）
       if (!visibleRef.current) return
-      setRemainMap((prev) => {
-        const next = { ...prev }
-        Object.keys(next).forEach((taskId) => {
-          if (searchingIdsRef.current.has(taskId)) return // 搜索中不递减
-          const newVal = next[taskId] - 1
-          if (newVal <= 0) {
-            // 加入队列，倒计时显示 0
-            enqueueSearchRef.current(taskId)
-            next[taskId] = 0
-          } else {
-            next[taskId] = newVal
-          }
-        })
-        return next
-      })
+      // 递减逻辑提取为模块级 decrementRemainMap，避免嵌套过深（S2004）
+      setRemainMap((prev) => decrementRemainMap(prev, searchingIdsRef.current, enqueueSearchRef.current))
     }, 1000)
     return () => clearInterval(timer)
   }, [enabled])

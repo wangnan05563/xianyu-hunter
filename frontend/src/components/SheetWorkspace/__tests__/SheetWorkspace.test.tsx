@@ -83,10 +83,12 @@ beforeEach(() => {
       doubleClickInterval: 350,
       thumbnailMode: false,
       thumbnailTooltipEnabled: true,
+      circularReplaceEnabled: false,
     },
     isMobile: false,
     hydrated: false,
     _navigator: null,
+    replacedHistory: [],
   })
 })
 
@@ -231,6 +233,39 @@ describe('SheetWorkspace', () => {
       fireEvent.click(tabEl)
       expect(useSheetStore.getState().sheets).toHaveLength(1)
     })
+
+    // I2 回归测试：双击关闭与 minimizeInsteadOfClose 偏好的组合行为
+    // 为什么单独覆盖：onClose 在容器层根据偏好分发为 minimize 或 close，
+    // 双击路径同样经过 onClose，必须验证偏好生效，避免回归成"双击总是真关闭"
+    it('minimizeInsteadOfClose=true 时双击触发最小化而非关闭', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      act(() => {
+        useSheetStore.getState().openSheet('/items')
+      })
+      // 同时启用双击关闭与"关闭即最小化"偏好
+      act(() => {
+        useSheetStore.getState().setPreferences({
+          doubleClickCloseEnabled: true,
+          doubleClickInterval: 350,
+          minimizeInsteadOfClose: true,
+        })
+      })
+      expect(useSheetStore.getState().sheets).toHaveLength(2)
+      // 当前激活 /items
+      const itemsSheet = useSheetStore.getState().sheets.find((s) => s.path === '/items')!
+      const tabEl = container.querySelector('.sheet-tab-active') as HTMLElement
+      expect(tabEl).toBeTruthy()
+      // 双击
+      fireEvent.click(tabEl)
+      nowValue += 100
+      fireEvent.click(tabEl)
+      const state = useSheetStore.getState()
+      // 关键断言：sheet 仍在栈中（未被关闭），但被最小化
+      expect(state.sheets).toHaveLength(2)
+      const minimizedSheet = state.sheets.find((s) => s.id === itemsSheet.id)
+      expect(minimizedSheet?.minimized).toBe(true)
+    })
   })
 
   describe('缩略图模式', () => {
@@ -268,6 +303,100 @@ describe('SheetWorkspace', () => {
       // 这里验证缩略图 div 仍存在即可（Tooltip 关闭时直接返回 tabContent）
       const tabEl = container.querySelector('.sheet-tab') as HTMLElement
       expect(tabEl).toBeTruthy()
+    })
+
+    // C1 回归测试：缩略图模式激活态必须有可点击的关闭按钮
+    // 为什么单独覆盖：此前缩略图分支完全省略关闭按钮，双击关闭禁用时用户无法关闭 sheet
+    it('缩略图模式激活态显示关闭按钮，点击后关闭当前 sheet', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      act(() => {
+        useSheetStore.getState().openSheet('/items')
+      })
+      act(() => {
+        // 双击关闭保持禁用（默认值），确保关闭路径只能走关闭按钮
+        useSheetStore.getState().setPreferences({ thumbnailMode: true })
+      })
+      // 激活 tab（/items）上应存在缩略图关闭按钮
+      const closeBtn = container.querySelector('[data-testid="sheet-thumbnail-close"]') as HTMLElement
+      expect(closeBtn).toBeTruthy()
+      fireEvent.click(closeBtn)
+      // /items 被关闭，剩 /tasks
+      const state = useSheetStore.getState()
+      expect(state.sheets).toHaveLength(1)
+      expect(state.sheets[0].path).toBe('/tasks')
+    })
+
+    it('缩略图模式非激活 tab 不渲染关闭按钮', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      act(() => {
+        useSheetStore.getState().openSheet('/items')
+      })
+      act(() => {
+        useSheetStore.getState().setPreferences({ thumbnailMode: true })
+      })
+      // 当前激活 /items，仅激活态有关闭按钮 → 全局应只有 1 个
+      const closeBtns = container.querySelectorAll('[data-testid="sheet-thumbnail-close"]')
+      expect(closeBtns.length).toBe(1)
+    })
+  })
+
+  describe('循环替换状态徽标', () => {
+    it('circularReplaceEnabled=true 时标签栏顶部显示状态指示', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      // 默认 false：徽标不显示
+      expect(container.querySelector('[data-testid="sheet-circular-indicator"]')).toBeNull()
+      // 开启后显示
+      act(() => {
+        useSheetStore.getState().setPreferences({ circularReplaceEnabled: true })
+      })
+      const indicator = container.querySelector('[data-testid="sheet-circular-indicator"]')
+      expect(indicator).toBeTruthy()
+      // 徽标内的 SwapOutlined 图标存在
+      expect(indicator?.querySelector('.anticon-swap')).toBeTruthy()
+    })
+
+    it('circularReplaceEnabled=false 时不显示状态徽标（默认）', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      await screen.findByText('任务管理')
+      expect(container.querySelector('[data-testid="sheet-circular-indicator"]')).toBeNull()
+    })
+
+    it('循环替换触发后状态徽标持续显示（状态指示是偏好，不是临时状态）', async () => {
+      const { container } = renderSheetWorkspace('/tasks')
+      useSheetStore.getState().setPreferences({ maxSheets: 2, circularReplaceEnabled: true })
+      await screen.findByText('任务管理')
+      // 开第 2、3 个 sheet 触发循环替换
+      act(() => { useSheetStore.getState().openSheet('/items') })
+      act(() => { useSheetStore.getState().openSheet('/') })
+      // 徽标仍应显示（用户应能继续识别"循环替换"是开启的）
+      const indicator = container.querySelector('[data-testid="sheet-circular-indicator"]')
+      expect(indicator).toBeTruthy()
+    })
+  })
+
+  describe('回收栈 UI', () => {
+    it('替换产生历史项后，偏好面板中显示回收栈入口', async () => {
+      renderSheetWorkspace('/tasks')
+      useSheetStore.getState().setPreferences({ maxSheets: 2, circularReplaceEnabled: true })
+      await screen.findByText('任务管理')
+      // 触发循环替换
+      act(() => { useSheetStore.getState().openSheet('/items') })
+      act(() => { useSheetStore.getState().openSheet('/') })
+      // 打开偏好设置：偏好按钮在标签栏 .sheet-tabs 最后一个子 div
+      const prefBtn = document.body.querySelector('.sheet-tabs > div:last-child button') as HTMLElement
+      fireEvent.click(prefBtn)
+      // 回收栈标题出现
+      expect(await screen.findByText('回收栈')).toBeInTheDocument()
+      // Drawer 内容用 Portal 渲染到 document.body → 在 document 上查询 data-testid
+      const items = document.body.querySelectorAll('[data-testid="replaced-sheet-item"]')
+      expect(items.length).toBeGreaterThan(0)
+      const paths = Array.from(items).map((el) => (el as HTMLElement).dataset.sheetPath)
+      expect(paths).toContain('/tasks')
+      // 文本中包含标题「任务管理」
+      expect(items[0].textContent).toContain('任务管理')
     })
   })
 })

@@ -12,6 +12,12 @@ import ReactECharts from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
 import { STATUS_COLOR } from '../../constants/statusColors'
 
+// 过滤掉指定的上游依赖项（S2004 拆出避免函数嵌套过深）
+// 为什么提取：handleRemoveDep → .then → setDeps(prev =>) → filter(d =>) 嵌套达 5 层
+function filterOutDep(prev: TaskDep[], dependsOn: string): TaskDep[] {
+  return prev.filter((d) => d.depends_on !== dependsOn)
+}
+
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -172,7 +178,8 @@ export default function TaskDetail() {
     taskDetailApi.removeDep(id, dependsOn)
       .then(() => {
         message.success('移除依赖成功')
-        setDeps((prev) => prev.filter((d) => d.depends_on !== dependsOn))
+        // 过滤逻辑提取为模块级 filterOutDep，避免嵌套过深（S2004）
+        setDeps((prev) => filterOutDep(prev, dependsOn))
       })
       .catch(() => message.error('移除依赖失败'))
   }

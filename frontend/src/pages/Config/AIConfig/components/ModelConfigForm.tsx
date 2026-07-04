@@ -7,7 +7,7 @@ import {
   CloseCircleOutlined,
 } from '@ant-design/icons'
 import type { AIConfig as AIConfigData } from '../../../../api'
-import { PRESETS } from '../constants'
+import { PRESETS, findPresetByBaseUrl } from '../constants'
 
 const { Text } = Typography
 
@@ -39,9 +39,12 @@ export default function ModelConfigForm({
   testResult,
   onTestConnection,
 }: ModelConfigFormProps) {
+  // 根据当前 base_url 反查预设，得到对应厂商的 API Key 申请页链接
+  // 切换预设或手动改 base_url 都会重新派生，保证「获取」链接跟随当前配置
+  const apiKeyUrl = findPresetByBaseUrl(config.base_url)?.apiKeyUrl
+
   return (
     <>
-      <h3 style={{ marginBottom: 8 }}>AI 服务配置</h3>
       <p style={{ color: 'var(--xh-text-tertiary)', marginBottom: 16 }}>
         配置 AI 评估和自然语言解析所需的 LLM 服务。支持 OpenAI / DeepSeek / 智谱等 OpenAI 兼容接口。
       </p>
@@ -64,7 +67,7 @@ export default function ModelConfigForm({
             </div>
           </div>
 
-          {/* API Key（密码类型 + 显示/隐藏切换） */}
+          {/* API Key（密码类型 + 显示/隐藏切换 + 厂商申请页「获取」链接） */}
           <div>
             <label htmlFor="ai-api-key" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>API Key</label>
             <Input
@@ -75,14 +78,21 @@ export default function ModelConfigForm({
               placeholder="sk-..."
               style={{ maxWidth: 600 }}
               addonAfter={
-                <Button
-                  type="text"
-                  size="small"
-                  icon={showApiKey ? <EyeInvisibleOutlined /> : <EyeOutlined />}
-                  onClick={onToggleShowApiKey}
-                >
-                  {showApiKey ? '隐藏' : '显示'}
-                </Button>
+                <Space size="small">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={showApiKey ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+                    onClick={onToggleShowApiKey}
+                  >
+                    {showApiKey ? '隐藏' : '显示'}
+                  </Button>
+                  {apiKeyUrl && (
+                    <a href={apiKeyUrl} target="_blank" rel="noopener noreferrer">
+                      获取
+                    </a>
+                  )}
+                </Space>
               }
             />
             <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>

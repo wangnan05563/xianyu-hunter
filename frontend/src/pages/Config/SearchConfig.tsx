@@ -270,15 +270,23 @@ export default function SearchConfig() {
               label="默认采集周期"
               help="范围 30-3600 秒，过短易触发反爬，过长错过抢单窗口"
             >
-              <InputNumber
-                min={30}
-                max={3600}
-                step={10}
-                value={defaultInterval}
-                onChange={(v) => setDefaultInterval(v ?? 60)}
-                addonAfter="秒"
-                style={{ width: '100%' }}
-              />
+              {/* S1874：InputNumber.addonAfter 已被 antd 废弃，改用 Space.Compact 拼接
+                  视觉上"输入框 + 单位"的效果与原版一致，保留可访问性 */}
+              <Space.Compact style={{ width: '100%' }}>
+                <InputNumber
+                  min={30}
+                  max={3600}
+                  step={10}
+                  value={defaultInterval}
+                  onChange={(v) => setDefaultInterval(v ?? 60)}
+                  style={{ width: '100%' }}
+                />
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', padding: '0 11px',
+                  background: 'rgba(0,0,0,0.02)', border: '1px solid var(--xh-border)',
+                  borderLeft: 'none', borderRadius: '0 6px 6px 0', color: 'var(--xh-text-tertiary)',
+                }}>秒</span>
+              </Space.Compact>
             </Form.Item>
             <Form.Item
               label="任务列表自动搜索默认开关"

@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Any
 
 from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
+from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.domain.item import ItemDetail
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.infra.item_display_sync import sync_item_display_from_detail
@@ -118,83 +119,98 @@ class ItemCollectionService:
             )
         raise CollectionError(500, f"Unsupported collection mode: {mode}", item_id=item_id)
 
+    async def _get_browser_cookies(self) -> list[dict]:
+        """读取浏览器当前 cookie，失败时降级为空列表避免阻塞后续校验"""
+        try:
+            return await self.container.browser.get_cookies()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to read browser cookies: {}", exc)
+            return []
+
+    @staticmethod
+    def _cookies_indexed_by_name(cookies: list[dict]) -> dict[str, dict]:
+        """以 name 为键构建索引，便于 O(1) 查找指定 cookie"""
+        return {
+            str(cookie.get("name") or ""): cookie
+            for cookie in cookies
+            if str(cookie.get("name") or "")
+        }
+
+    @staticmethod
+    def _expired_identity_cookies(cookies_by_name: dict[str, dict]) -> list[str]:
+        """筛查身份 cookie 中已过期项；expires<=0 视为会话级 cookie 不参与判断"""
+        now = datetime.now(timezone.utc).timestamp()
+        expired: list[str] = []
+        for name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
+            cookie = cookies_by_name.get(name)
+            if not cookie:
+                continue
+            expires = cookie.get("expires", -1)
+            if expires > 0 and expires < now:
+                expired.append(name)
+        return expired
+
+    def _read_cookies_from_store(self) -> tuple[list[dict], dict[str, str]]:
+        """从 CookieStore 读取 cookie，转换为 Playwright 格式
+
+        返回 (pw_cookies, identity_values)：
+        - pw_cookies 用于注入浏览器
+        - identity_values 仅包含身份 cookie 的值，用于后续 staleness 校验
+        延迟导入避免 web.services 模块在采集路径上提前加载
+        """
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
+
+        store = get_cookie_store()
+        store.invalidate_cache()
+        json_data = store._read_json()
+        if not json_data or not json_data.get("cookies"):
+            return [], {}
+
+        pw_cookies: list[dict] = []
+        identity_values: dict[str, str] = {}
+        for cookie in json_data["cookies"]:
+            name = str(cookie.get("name") or "")
+            value = str(cookie.get("value") or "")
+            if not name or not value:
+                continue
+            if is_test_cookie(name, value):
+                logger.warning("Official collection skipped test cookie {}={}", name, value)
+                continue
+
+            item = {
+                "name": name,
+                "value": value,
+                "domain": cookie.get("domain") or ".goofish.com",
+                "path": cookie.get("path") or "/",
+            }
+            expires = cookie.get("expires", -1)
+            if expires and expires > 0:
+                item["expires"] = expires
+            pw_cookies.append(item)
+            if name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
+                identity_values[name] = value
+        return pw_cookies, identity_values
+
+    async def _check_cookie_issues(
+        self, json_identity_values: dict[str, str]
+    ) -> tuple[list[str], list[str], list[str]]:
+        """汇总身份 cookie 的三类问题：缺失/过期/浏览器侧值与 store 不一致"""
+        cookies_by_name = self._cookies_indexed_by_name(await self._get_browser_cookies())
+        missing = [name for name in _OFFICIAL_COLLECT_IDENTITY_COOKIES if name not in cookies_by_name]
+        expired = self._expired_identity_cookies(cookies_by_name)
+        stale = [
+            name for name, value in json_identity_values.items()
+            if name in cookies_by_name and cookies_by_name[name].get("value") != value
+        ]
+        return missing, expired, stale
+
     async def ensure_official_cookies(self) -> None:
         container = self.container
         if not getattr(container, "browser", None):
             return
 
-        async def get_cookies() -> list[dict]:
-            try:
-                return await container.browser.get_cookies()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to read browser cookies: {}", exc)
-                return []
-
-        def cookie_by_name(cookies: list[dict]) -> dict[str, dict]:
-            return {
-                str(cookie.get("name") or ""): cookie
-                for cookie in cookies
-                if str(cookie.get("name") or "")
-            }
-
-        def expired_identity_cookies(cookies_by_name: dict[str, dict]) -> list[str]:
-            now = datetime.now(timezone.utc).timestamp()
-            expired: list[str] = []
-            for name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
-                cookie = cookies_by_name.get(name)
-                if not cookie:
-                    continue
-                expires = cookie.get("expires", -1)
-                if expires > 0 and expires < now:
-                    expired.append(name)
-            return expired
-
-        from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
-
-        def cookies_from_json() -> tuple[list[dict], dict[str, str]]:
-            store = get_cookie_store()
-            store.invalidate_cache()
-            json_data = store._read_json()
-            if not json_data or not json_data.get("cookies"):
-                return [], {}
-
-            pw_cookies: list[dict] = []
-            identity_values: dict[str, str] = {}
-            for cookie in json_data["cookies"]:
-                name = str(cookie.get("name") or "")
-                value = str(cookie.get("value") or "")
-                if not name or not value:
-                    continue
-                if is_test_cookie(name, value):
-                    logger.warning("Official collection skipped test cookie {}={}", name, value)
-                    continue
-
-                item = {
-                    "name": name,
-                    "value": value,
-                    "domain": cookie.get("domain") or ".goofish.com",
-                    "path": cookie.get("path") or "/",
-                }
-                expires = cookie.get("expires", -1)
-                if expires and expires > 0:
-                    item["expires"] = expires
-                pw_cookies.append(item)
-                if name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
-                    identity_values[name] = value
-            return pw_cookies, identity_values
-
-        async def cookie_issues(json_identity_values: dict[str, str]) -> tuple[list[str], list[str], list[str]]:
-            cookies_by_name = cookie_by_name(await get_cookies())
-            missing = [name for name in _OFFICIAL_COLLECT_IDENTITY_COOKIES if name not in cookies_by_name]
-            expired = expired_identity_cookies(cookies_by_name)
-            stale = [
-                name for name, value in json_identity_values.items()
-                if name in cookies_by_name and cookies_by_name[name].get("value") != value
-            ]
-            return missing, expired, stale
-
-        pw_cookies, json_identity_values = cookies_from_json()
-        missing, expired, stale = await cookie_issues(json_identity_values)
+        pw_cookies, json_identity_values = self._read_cookies_from_store()
+        missing, expired, stale = await self._check_cookie_issues(json_identity_values)
         if not missing and not expired and not stale:
             return
 
@@ -219,7 +235,7 @@ class ItemCollectionService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to inject CookieStore cookies: {}", exc)
 
-        missing, expired, stale = await cookie_issues(json_identity_values)
+        missing, expired, stale = await self._check_cookie_issues(json_identity_values)
         if expired:
             raise CollectionError(
                 440,
@@ -404,6 +420,13 @@ class ItemCollectionService:
                 logger.warning("官方采集价格门禁检查失败 item_id={}: {}", item_id, e)
         if effective_task_id and not price_filtered:
             self._save_eval_event(effective_task_id, item_id, detail, seller, reviews, eval_result)
+            # 评估通过才发 EVAL_PASSED，与 worker.py 第 320 行 should_pass 判定语义一致
+            # 为什么放在 _save_eval_event 之后：事件落库用于时间线/审计，通知是独立通道，
+            # 二者解耦避免通知失败阻塞事件写入；通知失败仅 warning 不影响主流程
+            if eval_result.is_passed:
+                self._publish_eval_passed_event(
+                    effective_task_id, item_id, detail, seller, eval_result
+                )
 
         return CollectionResult(
             ok=True,
@@ -534,6 +557,53 @@ class ItemCollectionService:
             })
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to upsert evaluation event item={}: {}", item_id, exc)
+
+    def _publish_eval_passed_event(
+        self,
+        task_id: str,
+        item_id: str,
+        detail: ItemDetail,
+        seller: SellerProfile | None,
+        eval_result: EvalResult,
+    ) -> None:
+        """官方采集评估通过 → 触发 EVAL_PASSED 事件，让 NotifierHub 等订阅者推送通知
+
+        为什么独立方法而非复用 worker._publish_eval_passed_event：
+        - worker 方法绑定 self.task / self.event_bus，无法跨模块复用
+        - 官方采集路径走 container.event_bus，与 worker 的 bus 实例一致（同一 DI 容器）
+        - payload 字段与 worker._publish_eval_passed_event 完全对齐，保证模板渲染一致
+
+        为什么用 publish_nowait 而非 await publish：
+        - 调用方 _collect_official_and_evaluate 虽是 async，但通知是 fire-and-forget
+        - 同步入队避免阻塞评估主流程，事件由 EventBus.run_forever 异步消费
+        """
+        bus = getattr(self.container, "event_bus", None)
+        if bus is None:
+            return
+        try:
+            bus.publish_nowait(
+                Event(
+                    type=EventType.EVAL_PASSED,
+                    task_id=task_id,
+                    item_id=item_id,
+                    payload={
+                        "item_id": item_id,
+                        "item_title": detail.title,
+                        "item_price": detail.price,
+                        "thumb_url": getattr(detail, "thumb_url", ""),
+                        "region": getattr(detail, "region", ""),
+                        "seller_id": detail.seller_id or "",
+                        "seller_nick": seller.nick if seller else "",
+                        "score": eval_result.score,
+                        "risk_level": eval_result.risk_level.value,
+                        "data_quality": eval_result.data_quality,
+                        "reject_reasons": eval_result.reject_reasons or [],
+                        "data_source": "official",
+                    },
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to publish EVAL_PASSED item={}: {}", item_id, exc)
 
     @staticmethod
     def diff_fields(existing: dict[str, Any], incoming: dict[str, Any]) -> list[str]:

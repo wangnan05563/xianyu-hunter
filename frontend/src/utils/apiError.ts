@@ -8,24 +8,41 @@
  *
  * 不在每个页面重复解析逻辑，统一在此提取人类可读信息。
  */
+
+// 从 detail 字段提取可读消息：字符串直返，对象尝试拼接 message + errors
+// 为什么单独提取：detail 可能是 string 也可能是 {message, errors}，主函数多层嵌套判断
+const extractDetailMessage = (detail: unknown): string | null => {
+  if (typeof detail === 'string') return detail
+  if (typeof detail === 'object' && detail !== null) {
+    const msg = (detail as Record<string, unknown>).message
+    const errors = (detail as Record<string, unknown>).errors
+    if (typeof msg === 'string') {
+      // 校验失败时拼接字段错误，便于定位具体哪个参数不合法
+      if (Array.isArray(errors) && errors.length > 0) {
+        return `${msg}：${errors.join('; ')}`
+      }
+      return msg
+    }
+  }
+  return null
+}
+
+// HTTP 状态码到用户友好提示的映射，仅处理与用户操作相关的状态
+const getStatusMessage = (status: number | undefined): string | null => {
+  if (status === 401) return '认证已过期，请重新登录'
+  if (status === 500) return '服务器内部错误，请稍后重试'
+  return null
+}
+
 export function extractApiError(e: unknown): string {
   if (typeof e === 'object' && e !== null) {
     const resp = (e as { response?: { data?: unknown; status?: number } }).response
     if (resp) {
-      const detail = (resp.data as Record<string, unknown>)?.detail
-      if (typeof detail === 'string') return detail
-      if (typeof detail === 'object' && detail !== null) {
-        const msg = (detail as Record<string, unknown>).message
-        const errors = (detail as Record<string, unknown>).errors
-        if (typeof msg === 'string') {
-          if (Array.isArray(errors) && errors.length > 0) {
-            return `${msg}：${errors.join('; ')}`
-          }
-          return msg
-        }
-      }
-      if (resp.status === 401) return '认证已过期，请重新登录'
-      if (resp.status === 500) return '服务器内部错误，请稍后重试'
+      // 优先用后端返回的 detail 文案，其次按状态码兜底
+      const detailMsg = extractDetailMessage((resp.data as Record<string, unknown>)?.detail)
+      if (detailMsg) return detailMsg
+      const statusMsg = getStatusMessage(resp.status)
+      if (statusMsg) return statusMsg
     }
   }
   return e instanceof Error ? e.message : '操作失败'

@@ -222,17 +222,25 @@ def _parse_llm_response(r: httpx.Response) -> dict[str, Any]:
 
 
 # ============== 规则模拟（fallback） ==============
-def _rule_deep_analyze(
-    title: str,
-    description: str,
-    image_urls: list[str],
-    seller_items: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """无 LLM Key 时的规则模拟深度分析
+def _rule_risk_level(score: int) -> str:
+    """规则模拟专用：将评分映射为 risk_level
 
-    基于关键词和元数据特征做启发式判断，精度低于 LLM 但保证开箱可用。
+    阈值与 LLM 输出保持一致：<=3=high、<7=medium、>=7=low，
+    保证前端无论拿到 LLM 还是规则结果都能用同一套颜色/文案渲染。
     """
-    # 1. 盗图检测：基于图片 URL 域名和数量
+    if score <= 3:
+        return "high"
+    if score < 7:
+        return "medium"
+    return "low"
+
+
+def _rule_check_stolen_image(image_urls: list[str]) -> tuple[int, list[str]]:
+    """规则模拟-盗图检测：基于图片 URL 域名和数量
+
+    闲鱼官方图床域名（xianyu/taobao/alicdn）以外的图片来源视为可疑，
+    无图片则风险等级直接降到 3 分。
+    """
     stolen_signals: list[str] = []
     stolen_score = 8
     if not image_urls:
@@ -244,8 +252,14 @@ def _rule_deep_analyze(
         if non_official:
             stolen_signals.append(f"含非官方图床图片({len(non_official)}张)")
             stolen_score = max(3, stolen_score - 3)
+    return stolen_score, stolen_signals
 
-    # 2. 物理损坏识别：基于描述关键词
+
+def _rule_check_damage(title: str, description: str) -> tuple[int, list[str]]:
+    """规则模拟-物理损坏识别：基于描述关键词
+
+    每个损坏关键词累计减分（不 break），多个故障信号意味着成色更差。
+    """
     damage_signals: list[str] = []
     damage_score = 8
     damage_keywords = ["划痕", "磕碰", "裂纹", "碎屏", "变形", "磨损", "掉漆", "开胶", "进水", "维修", "修过", "故障"]
@@ -254,8 +268,16 @@ def _rule_deep_analyze(
         if kw in desc_combined:
             damage_signals.append(f"描述提及'{kw}'")
             damage_score = max(1, damage_score - 2)
+    return damage_score, damage_signals
 
-    # 3. 描述与图片一致性：基于标题关键词与描述匹配度
+
+def _rule_check_consistency(
+    title: str, description: str, image_urls: list[str]
+) -> tuple[int, list[str]]:
+    """规则模拟-描述与图片一致性：基于标题关键词与描述匹配度
+
+    标题核心词在描述中提及率 <30% 视为不一致；无图片无法校验。
+    """
     consistency_signals: list[str] = []
     consistency_score = 7
     # 标题中的核心型号词是否在描述中出现
@@ -269,11 +291,20 @@ def _rule_deep_analyze(
     if not image_urls:
         consistency_signals.append("无图片无法校验一致性")
         consistency_score = max(3, consistency_score - 2)
+    return consistency_score, consistency_signals
 
-    # 4. 文案模板化检测：基于模板关键词 + 卖家多商品相似度
+
+def _rule_check_template(
+    title: str, description: str, seller_items: list[dict[str, Any]] | None
+) -> tuple[int, list[str]]:
+    """规则模拟-文案模板化检测：基于模板关键词 + 卖家多商品相似度
+
+    模板词命中阈值减分；卖家多商品共用模板词时疑似贩子再叠加扣分。
+    """
     template_signals: list[str] = []
     template_score = 7
     template_keywords = ["99新", "98新", "仅拆封", "未使用", "自用", "国行", "全新", "正品", "专柜", "代购"]
+    desc_combined = f"{title} {description}"
     template_hits = [kw for kw in template_keywords if kw in desc_combined]
     if len(template_hits) >= 3:
         template_signals.append(f"堆砌模板词({len(template_hits)}个): {'/'.join(template_hits[:3])}")
@@ -294,51 +325,70 @@ def _rule_deep_analyze(
             if common_template_count >= 2:
                 template_signals.append(f"卖家多商品共用模板词({common_template_count}个)，疑似贩子")
                 template_score = max(1, template_score - 3)
+    return template_score, template_signals
 
-    # 综合判定
-    scores = [stolen_score, damage_score, consistency_score, template_score]
+
+def _compute_overall_verdict(
+    scores: list[int],
+) -> tuple[str, str, float]:
+    """综合判定：根据各维度评分推断 overall_verdict
+
+    存在 high 风险（任一维度 score<=3）→ reject；
+    否则存在 medium 风险（3<score<7）→ caution；
+    全部 low（score>=7）→ recommend。
+    """
     overall_score = round(sum(scores) / len(scores), 1)
     has_high = any(s <= 3 for s in scores)
     has_medium = any(3 < s < 7 for s in scores)
     if has_high:
-        overall_verdict = "reject"
-        verdict_text = "拒绝"
-    elif has_medium:
-        overall_verdict = "caution"
-        verdict_text = "谨慎"
-    else:
-        overall_verdict = "recommend"
-        verdict_text = "购买"
+        return "reject", "拒绝", overall_score
+    if has_medium:
+        return "caution", "谨慎", overall_score
+    return "recommend", "购买", overall_score
 
-    def _risk(score: int) -> str:
-        if score <= 3:
-            return "high"
-        if score < 7:
-            return "medium"
-        return "low"
+
+def _rule_deep_analyze(
+    title: str,
+    description: str,
+    image_urls: list[str],
+    seller_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """无 LLM Key 时的规则模拟深度分析
+
+    基于关键词和元数据特征做启发式判断，精度低于 LLM 但保证开箱可用。
+    各维度检测逻辑独立提取为子函数，便于单测与阈值调整。
+    """
+    stolen_score, stolen_signals = _rule_check_stolen_image(image_urls)
+    damage_score, damage_signals = _rule_check_damage(title, description)
+    consistency_score, consistency_signals = _rule_check_consistency(title, description, image_urls)
+    template_score, template_signals = _rule_check_template(title, description, seller_items)
+
+    # 综合判定
+    scores = [stolen_score, damage_score, consistency_score, template_score]
+    overall_verdict, verdict_text, overall_score = _compute_overall_verdict(scores)
 
     return {
         "stolen_image": {
             "score": stolen_score,
-            "risk_level": _risk(stolen_score),
+            "risk_level": _rule_risk_level(stolen_score),
             "signals": stolen_signals,
             "detail": "规则模拟：基于图片来源域名和数量判断" + ("；".join(stolen_signals) if stolen_signals else "未发现盗图风险"),
         },
         "damage": {
             "score": damage_score,
-            "risk_level": _risk(damage_score),
+            "risk_level": _rule_risk_level(damage_score),
             "damages": damage_signals,
             "detail": "规则模拟：基于描述关键词检测损坏" + ("；".join(damage_signals) if damage_signals else "未发现损坏描述"),
         },
         "consistency": {
             "score": consistency_score,
-            "risk_level": _risk(consistency_score),
+            "risk_level": _rule_risk_level(consistency_score),
             "inconsistencies": consistency_signals,
             "detail": "规则模拟：基于标题描述匹配度判断" + ("；".join(consistency_signals) if consistency_signals else "标题描述基本一致"),
         },
         "template": {
             "score": template_score,
-            "risk_level": _risk(template_score),
+            "risk_level": _rule_risk_level(template_score),
             "signals": template_signals,
             "detail": f"{_RULE_DETAIL_PREFIX}模板词频率和卖家多商品相似度" + ("；".join(template_signals) if template_signals else "文案较个性化"),
         },
@@ -348,49 +398,71 @@ def _rule_deep_analyze(
     }
 
 
-def _normalize_deep_result(raw: dict[str, Any], source: str) -> dict[str, Any]:
-    """归一化深度分析结果"""
-    def _norm_dimension(d: Any) -> dict[str, Any]:
-        if not isinstance(d, dict):
-            return {"score": 5, "risk_level": "medium", "signals": [], "detail": ""}
-        score = d.get("score", 5)
-        try:
-            score = max(1, min(10, int(score)))
-        except (TypeError, ValueError):
-            score = 5
-        risk = str(d.get("risk_level") or "").strip().lower()
-        if risk not in ("low", "medium", "high"):
-            # 根据 score 兜底推断风险等级
-            if score <= 3:
-                risk = "high"
-            elif score < 7:
-                risk = "medium"
-            else:
-                risk = "low"
-        # 统一 signals/damages/inconsistencies 字段为 signals
-        signals = d.get("signals") or d.get("damages") or d.get("inconsistencies") or []
-        return {
-            "score": score,
-            "risk_level": risk,
-            "signals": [str(s) for s in signals if str(s).strip()],
-            "detail": str(d.get("detail") or "").strip()[:200],
-        }
+def _norm_dimension(d: Any) -> dict[str, Any]:
+    """归一化单个维度结果：score 限定 1-10，risk_level 兜底推断
 
-    verdict = str(raw.get("overall_verdict") or "").strip().lower()
-    if verdict not in ("recommend", "caution", "reject"):
-        score = raw.get("overall_score", 5)
-        # 根据 score 兜底推断 verdict
-        if score <= 3:
-            verdict = "reject"
-        elif score < 7:
-            verdict = "caution"
-        else:
-            verdict = "recommend"
-
+    LLM 偶尔会返回非标准 risk_level（如 "warn"），需根据 score 重新推断；
+    统一 signals/damages/inconsistencies 字段为 signals 便于前端统一渲染。
+    """
+    if not isinstance(d, dict):
+        return {"score": 5, "risk_level": "medium", "signals": [], "detail": ""}
+    score = d.get("score", 5)
     try:
-        overall_score = max(1, min(10, float(raw.get("overall_score", 5))))
+        score = max(1, min(10, int(score)))
     except (TypeError, ValueError):
-        overall_score = 5.0
+        score = 5
+    risk = str(d.get("risk_level") or "").strip().lower()
+    if risk not in ("low", "medium", "high"):
+        # 根据 score 兜底推断风险等级
+        if score <= 3:
+            risk = "high"
+        elif score < 7:
+            risk = "medium"
+        else:
+            risk = "low"
+    # 统一 signals/damages/inconsistencies 字段为 signals
+    signals = d.get("signals") or d.get("damages") or d.get("inconsistencies") or []
+    return {
+        "score": score,
+        "risk_level": risk,
+        "signals": [str(s) for s in signals if str(s).strip()],
+        "detail": str(d.get("detail") or "").strip()[:200],
+    }
+
+
+def _normalize_verdict(raw: dict[str, Any]) -> str:
+    """归一化 overall_verdict：非标准值时根据 overall_score 兜底推断
+
+    verdict 必须为 recommend/caution/reject 之一；LLM 偶尔返回空或非标准值时，
+    按 score 阈值（<=3 reject、<7 caution、>=7 recommend）回退。
+    """
+    verdict = str(raw.get("overall_verdict") or "").strip().lower()
+    if verdict in ("recommend", "caution", "reject"):
+        return verdict
+    score = raw.get("overall_score", 5)
+    # 根据 score 兜底推断 verdict
+    if score <= 3:
+        return "reject"
+    if score < 7:
+        return "caution"
+    return "recommend"
+
+
+def _normalize_overall_score(raw: dict[str, Any]) -> float:
+    """归一化 overall_score：限定 1-10 范围，非数字回退 5.0"""
+    try:
+        return max(1, min(10, float(raw.get("overall_score", 5))))
+    except (TypeError, ValueError):
+        return 5.0
+
+
+def _normalize_deep_result(raw: dict[str, Any], source: str) -> dict[str, Any]:
+    """归一化深度分析结果
+
+    各维度独立归一化（_norm_dimension），全局字段 verdict/score 分别提取子函数处理。
+    """
+    verdict = _normalize_verdict(raw)
+    overall_score = _normalize_overall_score(raw)
 
     return {
         "stolen_image": _norm_dimension(raw.get("stolen_image")),
@@ -416,6 +488,94 @@ def _compute_image_url_hash(image_urls: list[str]) -> list[dict]:
 
 
 # ============== 端点 ==============
+def _parse_image_urls_deep(image_urls_raw: Any) -> list:
+    """解析 image_urls 字段：items 表中可能是 JSON 字符串或列表
+
+    SQLite 无原生数组类型，image_urls 以 TEXT 存 JSON 字符串；
+    解析失败回退为空列表避免阻断分析。
+    """
+    if isinstance(image_urls_raw, str):
+        try:
+            return json.loads(image_urls_raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return image_urls_raw
+
+
+def _get_seller_items(
+    container: Container, seller_id: str | None, checks: list[str]
+) -> list[dict[str, Any]]:
+    """获取卖家其他商品（用于模板化检测）
+
+    仅当 checks 含 'template' 且有 seller_id 时才查询，避免无谓 DB 调用。
+    查询失败不阻断分析（返回空列表）。
+    """
+    if not seller_id or "template" not in checks:
+        return []
+    try:
+        # 通过 repo 获取该卖家的其他商品
+        return container.repo.list_items_by_seller(seller_id, limit=10)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[P1-4] 获取卖家商品失败（不影响分析）: {e}")
+        return []
+
+
+async def _run_deep_analyze(
+    title: str,
+    description: str,
+    price: float,
+    image_urls: list,
+    seller_items: list[dict[str, Any]],
+    item_id: str,
+) -> tuple[dict[str, Any], str]:
+    """执行深度分析：有 Key 走 LLM Vision，无 Key 或失败降级规则模拟
+
+    返回 (raw_result, source)：source 标识 'llm' 或 'rule' 供归一化区分。
+    """
+    settings = get_settings()
+    used_source = "llm"
+    raw_result: dict[str, Any] | None = None
+
+    if settings.openai_api_key:
+        try:
+            raw_result = await _call_llm_deep_analyze(
+                title, description, price, image_urls, seller_items
+            )
+            logger.info(f"[P1-4] LLM 深度分析完成: item_id={item_id}")
+        except RuntimeError as e:
+            logger.warning(f"[P1-4] LLM 深度分析失败，降级规则模拟: {e}")
+            raw_result = None
+    else:
+        used_source = "rule"
+
+    if raw_result is None:
+        raw_result = _rule_deep_analyze(
+            title, description, image_urls, seller_items
+        )
+        used_source = "rule"
+        logger.info(f"[P1-4] 规则模拟深度分析完成: item_id={item_id}")
+
+    return raw_result, used_source
+
+
+def _filter_unrequested_checks(
+    result: dict[str, Any], checks: list[str]
+) -> dict[str, Any]:
+    """过滤未请求的检查项，保留全局字段
+
+    用户可能只请求部分检查项（如只查 stolen_image），需移除未请求的维度结果；
+    全局字段（verdict/score/summary 等）始终保留供前端展示概览。
+    """
+    filtered: dict[str, Any] = {}
+    for check in checks:
+        if check in result:
+            filtered[check] = result[check]
+    # 保留全局字段
+    for key in ("overall_verdict", "overall_score", "summary", "source", "image_hashes", "item_id", "checks_performed"):
+        filtered[key] = result[key]
+    return filtered
+
+
 @router.post("/deep-analyze")
 async def deep_analyze(
     body: DeepAnalyzeRequest,
@@ -440,48 +600,15 @@ async def deep_analyze(
     title = item.get("title", "")
     description = item.get("description", "")
     price = float(item.get("price", 0))
-    image_urls_raw = item.get("image_urls") or []
-    if isinstance(image_urls_raw, str):
-        try:
-            image_urls = json.loads(image_urls_raw)
-        except (json.JSONDecodeError, TypeError):
-            image_urls = []
-    else:
-        image_urls = image_urls_raw
+    image_urls = _parse_image_urls_deep(item.get("image_urls") or [])
 
     # 2. 获取卖家其他商品（用于模板化检测）
-    seller_id = item.get("seller_id")
-    seller_items: list[dict[str, Any]] = []
-    if seller_id and "template" in body.checks:
-        try:
-            # 通过 repo 获取该卖家的其他商品
-            seller_items = container.repo.list_items_by_seller(seller_id, limit=10)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[P1-4] 获取卖家商品失败（不影响分析）: {e}")
+    seller_items = _get_seller_items(container, item.get("seller_id"), body.checks)
 
     # 3. 调用 LLM 或规则模拟
-    settings = get_settings()
-    used_source = "llm"
-    raw_result: dict[str, Any] | None = None
-
-    if settings.openai_api_key:
-        try:
-            raw_result = await _call_llm_deep_analyze(
-                title, description, price, image_urls, seller_items
-            )
-            logger.info(f"[P1-4] LLM 深度分析完成: item_id={body.item_id}")
-        except RuntimeError as e:
-            logger.warning(f"[P1-4] LLM 深度分析失败，降级规则模拟: {e}")
-            raw_result = None
-    else:
-        used_source = "rule"
-
-    if raw_result is None:
-        raw_result = _rule_deep_analyze(
-            title, description, image_urls, seller_items
-        )
-        used_source = "rule"
-        logger.info(f"[P1-4] 规则模拟深度分析完成: item_id={body.item_id}")
+    raw_result, used_source = await _run_deep_analyze(
+        title, description, price, image_urls, seller_items, body.item_id
+    )
 
     # 4. 归一化结果
     result = _normalize_deep_result(raw_result, used_source)
@@ -492,15 +619,96 @@ async def deep_analyze(
     result["checks_performed"] = body.checks
 
     # 6. 过滤未请求的检查项
-    filtered = {}
-    for check in body.checks:
-        if check in result:
-            filtered[check] = result[check]
-    # 保留全局字段
-    for key in ("overall_verdict", "overall_score", "summary", "source", "image_hashes", "item_id", "checks_performed"):
-        filtered[key] = result[key]
+    return _filter_unrequested_checks(result, body.checks)
 
-    return filtered
+
+def _count_template_keywords(descriptions: list[str]) -> dict[str, int]:
+    """统计模板词在所有描述中的出现频率
+
+    闲鱼贩子常用模板词（99新/仅拆封/支持验货等），高频出现暗示文案模板化。
+    返回 {keyword: total_count} 供后续高频词判定。
+    """
+    template_keywords = [
+        "99新", "98新", "95新", "仅拆封", "未使用", "自用", "国行",
+        "全新", "正品", "专柜", "代购", "支持验货", "假一赔十",
+        "闲置", "回血", "出国", "搬家", "清仓",
+    ]
+    desc_combined = " ".join(descriptions)
+    return {kw: desc_combined.count(kw) for kw in template_keywords}
+
+
+def _compute_desc_length_variance(descriptions: list[str]) -> tuple[float, list[int]]:
+    """计算描述长度方差（贩子文案长度通常很接近）
+
+    返回 (variance, desc_lens)：
+    - 样本数 <3 时方差为 0（样本不足无统计意义）
+    - desc_lens 用于后续"高度一致"判定需 >=5 的阈值检查
+    """
+    desc_lens = [len(d) for d in descriptions if d]
+    if len(desc_lens) < 3:
+        return 0, desc_lens
+    avg_len = sum(desc_lens) / len(desc_lens)
+    variance = sum((l - avg_len) ** 2 for l in desc_lens) / len(desc_lens)
+    return variance, desc_lens
+
+
+def _find_shared_sentences(descriptions: list[str]) -> list[str]:
+    """检测多商品共用的句子（贩子文案模板化特征）
+
+    简化 N-gram：按标点分句，统计句子在多个描述中出现的次数，
+    出现 >=3 次视为共用句子。只统计长度 >=8 的句子避免短词干扰。
+    """
+    common_phrases: dict[str, int] = Counter()
+    for desc in descriptions:
+        # 简化：按标点分句，统计句子在多个描述中出现的次数
+        sentences = re.split(r"[。！!？?；;\n]", desc)
+        for s in sentences:
+            s = s.strip()
+            if len(s) >= 8:  # 只统计较长的句子
+                common_phrases[s] += 1
+    return [s for s, cnt in common_phrases.items() if cnt >= 3]
+
+
+def _compute_template_score(
+    high_freq_keywords: list[str],
+    len_variance: float,
+    desc_lens: list[int],
+    shared_sentences: list[str],
+) -> tuple[int, list[str]]:
+    """综合评分：高频模板词 + 长度方差 + 共用句子三项叠加扣分
+
+    返回 (template_score, signals)：每项命中都生成对应信号说明，
+    template_score 最低不低于 1。
+    """
+    template_score = 10
+    signals: list[str] = []
+
+    if high_freq_keywords:
+        signals.append(f"高频模板词({len(high_freq_keywords)}个): {'/'.join(high_freq_keywords[:3])}")
+        template_score = max(1, template_score - len(high_freq_keywords) * 2)
+
+    # 长度方差 <50 且样本 >=5 才判定（样本少时方差无统计意义）
+    if len_variance < 50 and len(desc_lens) >= 5:
+        signals.append(f"描述长度高度一致(方差={len_variance:.0f})，疑似模板")
+        template_score = max(1, template_score - 3)
+
+    if shared_sentences:
+        signals.append(f"多商品共用文案({len(shared_sentences)}句)")
+        template_score = max(1, template_score - len(shared_sentences))
+
+    return template_score, signals
+
+
+def _infer_template_risk_level(score: int) -> str:
+    """根据 template_score 推断风险等级
+
+    阈值与 _rule_risk_level 保持一致：<=3 high、<7 medium、>=7 low。
+    """
+    if score <= 3:
+        return "high"
+    if score < 7:
+        return "medium"
+    return "low"
 
 
 @router.post("/seller-template-check")
@@ -533,63 +741,24 @@ def seller_template_check(
     descriptions = [it.get("description", "") for it in items if it.get("description")]
 
     # 3. 模板词频率统计
-    template_keywords = [
-        "99新", "98新", "95新", "仅拆封", "未使用", "自用", "国行",
-        "全新", "正品", "专柜", "代购", "支持验货", "假一赔十",
-        "闲置", "回血", "出国", "搬家", "清仓",
-    ]
-    desc_combined = " ".join(descriptions)
-    keyword_freq: dict[str, int] = {}
-    for kw in template_keywords:
-        keyword_freq[kw] = desc_combined.count(kw)
+    keyword_freq = _count_template_keywords(descriptions)
 
     # 4. 计算模板化得分
-    # 4.1 高频模板词数量
+    # 4.1 高频模板词数量（出现次数 >= 描述数 * 0.4 视为高频）
     high_freq_keywords = [kw for kw, cnt in keyword_freq.items() if cnt >= len(descriptions) * 0.4]
-    # 4.2 描述长度方差（贩子文案长度通常很接近）
-    desc_lens = [len(d) for d in descriptions if d]
-    len_variance = 0
-    if len(desc_lens) >= 3:
-        avg_len = sum(desc_lens) / len(desc_lens)
-        len_variance = sum((l - avg_len) ** 2 for l in desc_lens) / len(desc_lens)
-
-    # 4.3 共同短语检测（N-gram 简化版）
-    # 提取所有描述的 4-gram，统计在多少个描述中出现
-    common_phrases: dict[str, int] = Counter()
-    for desc in descriptions:
-        # 简化：按标点分句，统计句子在多个描述中出现的次数
-        sentences = re.split(r"[。！!？?；;\n]", desc)
-        for s in sentences:
-            s = s.strip()
-            if len(s) >= 8:  # 只统计较长的句子
-                common_phrases[s] += 1
-    shared_sentences = [s for s, cnt in common_phrases.items() if cnt >= 3]
+    # 4.2 描述长度方差
+    len_variance, desc_lens = _compute_desc_length_variance(descriptions)
+    # 4.3 共同短语检测
+    shared_sentences = _find_shared_sentences(descriptions)
 
     # 5. 综合评分
-    template_score = 10
-    signals: list[str] = []
-
-    if high_freq_keywords:
-        signals.append(f"高频模板词({len(high_freq_keywords)}个): {'/'.join(high_freq_keywords[:3])}")
-        template_score = max(1, template_score - len(high_freq_keywords) * 2)
-
-    if len_variance < 50 and len(desc_lens) >= 5:
-        signals.append(f"描述长度高度一致(方差={len_variance:.0f})，疑似模板")
-        template_score = max(1, template_score - 3)
-
-    if shared_sentences:
-        signals.append(f"多商品共用文案({len(shared_sentences)}句)")
-        template_score = max(1, template_score - len(shared_sentences))
+    template_score, signals = _compute_template_score(
+        high_freq_keywords, len_variance, desc_lens, shared_sentences
+    )
 
     # 6. 判定
     is_dealer = template_score <= 4
-    # 根据 template_score 推断风险等级
-    if template_score <= 3:
-        risk_level = "high"
-    elif template_score < 7:
-        risk_level = "medium"
-    else:
-        risk_level = "low"
+    risk_level = _infer_template_risk_level(template_score)
 
     return {
         "seller_id": body.seller_id,

@@ -209,32 +209,21 @@ class ChatbotOrchestrator:
             self._ctx.save_message(context.session_id, "user", message, images=images or None)
 
             # 8. RAG 检索 + 生成：根据 enable_tools 和 intent 决定走 RAG 还是 Agent
-            full_response = ""
-            metadata: dict | None = None
-            tokens_used: int | None = None
-            escalated = False
-            follow_ups: list[str] = []
+            # 闭包工厂模式：提取 flow 事件跟踪逻辑，避免 if/else 两分支重复 async for + 状态更新
+            flow_tracker, flow_state = self._make_flow_state_tracker()
+            flow = (
+                self._run_agent_flow(message, context, images)
+                if self._should_trigger_agent(intent, enable_tools)
+                else self._run_rag_flow(message, context, images)
+            )
+            async for event in flow_tracker(flow):
+                yield event
 
-            if self._should_trigger_agent(intent, enable_tools):
-                async for event in self._run_agent_flow(message, context, images):
-                    yield event
-                    if event.event == SSEEventType.DONE:
-                        full_response = event.data.get("content", "")
-                        metadata = event.data.get("metadata")
-                        tokens_used = event.data.get("tokens_used")
-                        follow_ups = event.data.get("follow_ups", [])
-                    elif event.event == SSEEventType.ESCALATE:
-                        escalated = True
-            else:
-                async for event in self._run_rag_flow(message, context, images):
-                    yield event
-                    if event.event == SSEEventType.DONE:
-                        full_response = event.data.get("content", "")
-                        metadata = event.data.get("metadata")
-                        tokens_used = event.data.get("tokens_used")
-                        follow_ups = event.data.get("follow_ups", [])
-                    elif event.event == SSEEventType.ESCALATE:
-                        escalated = True
+            full_response = flow_state["full_response"]
+            metadata = flow_state["metadata"]
+            tokens_used = flow_state["tokens_used"]
+            escalated = flow_state["escalated"]
+            follow_ups = flow_state["follow_ups"]
 
             # 将 follow_ups 存入 metadata，使历史消息也能展示推荐问题
             if follow_ups and metadata is not None:
@@ -250,6 +239,34 @@ class ChatbotOrchestrator:
                     EventType.CHATBOT_MESSAGE_SAVED,
                     {"session_id": context.session_id, "role": "assistant"},
                 )
+
+    def _make_flow_state_tracker(self):
+        """创建 flow 事件跟踪闭包
+
+        闭包工厂模式：返回 (tracker async generator factory, state dict)。
+        tracker 转发事件并更新 state，调用方通过 state 读取最终结果，
+        避免 orchestrate 中 if/else 两分支重复 async for + 状态更新逻辑导致认知复杂度堆积。
+        """
+        state = {
+            "full_response": "",
+            "metadata": None,
+            "tokens_used": None,
+            "escalated": False,
+            "follow_ups": [],
+        }
+
+        async def tracker(flow):
+            async for event in flow:
+                if event.event == SSEEventType.DONE:
+                    state["full_response"] = event.data.get("content", "")
+                    state["metadata"] = event.data.get("metadata")
+                    state["tokens_used"] = event.data.get("tokens_used")
+                    state["follow_ups"] = event.data.get("follow_ups", [])
+                elif event.event == SSEEventType.ESCALATE:
+                    state["escalated"] = True
+                yield event
+
+        return tracker, state
 
     async def _get_session_lock(self, session_id: str) -> asyncio.Lock:
         """获取或创建会话级锁（双检锁模式）
@@ -335,27 +352,18 @@ class ChatbotOrchestrator:
             # LLM 超时/网络错误 → 降级到 RAG 片段
             logger.warning(f"RAG flow LLM 异常 {type(e).__name__}，降级到 RAG 片段: {e}")
             await self._publish_degraded("llm", "rag_fragments", str(e))
-            if not chunks:
-                # 降级链末端：RAG 片段为空 → 转人工
-                async for event in self._escalate(
-                    context.session_id, f"RAG 无匹配片段: {e}",
-                ):
-                    yield event
-            else:
-                async for event in self._fallback_to_rag_fragments(chunks, str(e)):
-                    yield event
+            async for event in self._fallback_after_llm_failure(
+                chunks, str(e), context.session_id,
+            ):
+                yield event
         except RuntimeError as e:
             # 预算超限或空响应（RAGEngine.generate 抛 RuntimeError）→ 降级到 RAG 片段
             logger.warning(f"RAG flow 运行时异常，降级到 RAG 片段: {e}")
             await self._publish_degraded("llm", "rag_fragments", str(e))
-            if not chunks:
-                async for event in self._escalate(
-                    context.session_id, f"RAG 无匹配片段: {e}",
-                ):
-                    yield event
-            else:
-                async for event in self._fallback_to_rag_fragments(chunks, str(e)):
-                    yield event
+            async for event in self._fallback_after_llm_failure(
+                chunks, str(e), context.session_id,
+            ):
+                yield event
         except asyncio.CancelledError:
             # 取消向上传播：触发上层资源清理
             raise
@@ -365,6 +373,27 @@ class ChatbotOrchestrator:
             async for event in self._escalate(
                 context.session_id, f"内部错误: {type(e).__name__}",
             ):
+                yield event
+
+    async def _fallback_after_llm_failure(
+        self,
+        chunks: list[RetrievedChunk],
+        reason: str,
+        session_id: str,
+    ) -> AsyncIterator[SSEEvent]:
+        """LLM 失败后降级：有 chunks 走 _fallback_to_rag_fragments，无则转人工
+
+        为什么提取：原 _run_rag_flow 两个 except 分支的降级逻辑完全相同，
+        重复 if not chunks / else 双分支会让认知复杂度叠加。
+        """
+        if not chunks:
+            # 降级链末端：RAG 片段为空 → 转人工
+            async for event in self._escalate(
+                session_id, f"RAG 无匹配片段: {reason}",
+            ):
+                yield event
+        else:
+            async for event in self._fallback_to_rag_fragments(chunks, reason):
                 yield event
 
     async def _run_agent_flow(
@@ -406,36 +435,17 @@ class ChatbotOrchestrator:
                     )
                 elif agent_event.type == "done":
                     content = agent_event.data.get("content", "")
-                    yield SSEEvent(event=SSEEventType.TOKEN, data={"content": content})
-
-                    # 后续问题预测：与 RAG flow 保持一致
-                    follow_ups: list[str] = []
-                    if self._config.rag.enable_follow_ups:
-                        follow_ups = await self._rag.generate_follow_ups(
-                            query, content, history, self._config.rag.follow_up_count,
-                        )
-
-                    yield SSEEvent(
-                        event=SSEEventType.DONE,
-                        data={
-                            "content": content,
-                            "degraded": False,
-                            "follow_ups": follow_ups,
-                            "metadata": {
-                                "sources": [s.__dict__ for s in sources],
-                                "tool_used": True,
-                                "degraded": False,
-                            },
-                        },
-                    )
+                    async for event in self._emit_agent_done_event(
+                        query, content, sources, history,
+                    ):
+                        yield event
                     return
                 elif agent_event.type == "error":
                     # Agent 异常 → 降级到 RAG flow（Agent 失败回退到 RAG）
                     logger.warning(f"Agent 异常，降级到 RAG flow: {agent_event.data}")
-                    await self._publish_degraded(
-                        "agent", "rag", agent_event.data.get("message", ""),
-                    )
-                    async for event in self._run_rag_flow(query, context, images):
+                    async for event in self._fallback_to_rag_flow(
+                        query, context, images, agent_event.data.get("message", ""),
+                    ):
                         yield event
                     return
         except asyncio.CancelledError:
@@ -443,9 +453,61 @@ class ChatbotOrchestrator:
         except Exception as e:
             # Agent flow 异常 → 降级到 RAG flow
             logger.exception(f"Agent flow 异常，降级到 RAG flow: {e}")
-            await self._publish_degraded("agent", "rag", str(e))
-            async for event in self._run_rag_flow(query, context, images):
+            async for event in self._fallback_to_rag_flow(
+                query, context, images, str(e),
+            ):
                 yield event
+
+    async def _emit_agent_done_event(
+        self,
+        query: str,
+        content: str,
+        sources: list,
+        history: list,
+    ) -> AsyncIterator[SSEEvent]:
+        """构造 Agent flow 的 TOKEN + DONE 事件流
+
+        为什么提取：原 _run_agent_flow 的 done 分支内嵌 follow_ups 生成 + DONE 构造，
+        与 elif 链叠加推高认知复杂度。提取后 done 分支仅保留事件转发。
+        """
+        yield SSEEvent(event=SSEEventType.TOKEN, data={"content": content})
+
+        # 后续问题预测：与 RAG flow 保持一致
+        follow_ups: list[str] = []
+        if self._config.rag.enable_follow_ups:
+            follow_ups = await self._rag.generate_follow_ups(
+                query, content, history, self._config.rag.follow_up_count,
+            )
+
+        yield SSEEvent(
+            event=SSEEventType.DONE,
+            data={
+                "content": content,
+                "degraded": False,
+                "follow_ups": follow_ups,
+                "metadata": {
+                    "sources": [s.__dict__ for s in sources],
+                    "tool_used": True,
+                    "degraded": False,
+                },
+            },
+        )
+
+    async def _fallback_to_rag_flow(
+        self,
+        query: str,
+        context: Context,
+        images: list[str] | None,
+        reason: str,
+    ) -> AsyncIterator[SSEEvent]:
+        """Agent 失败后降级到 RAG flow（含降级事件发布）
+
+        为什么提取：原 _run_rag_flow 的 error 分支与 except 分支均执行
+        publish_degraded + _run_rag_flow 转发，重复逻辑导致认知复杂度叠加。
+        """
+        await self._publish_degraded("agent", "rag", reason)
+        async for event in self._run_rag_flow(query, context, images):
+            yield event
 
     async def _fallback_to_rag_fragments(
         self, chunks: list[RetrievedChunk], reason: str,

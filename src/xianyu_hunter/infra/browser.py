@@ -55,6 +55,7 @@ class BrowserManager:
         ),
         viewport: dict[str, int] | None = None,
         use_cdp: bool = False,
+        proxy_server: str = "",
     ):
         self.user_data_dir = Path(user_data_dir)
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -66,6 +67,11 @@ class BrowserManager:
         self._context: BrowserContext | None = None
         # CDP 模式：连接已启动的系统 Edge，指纹最真实
         self.use_cdp = use_cdp
+        # 代理服务器配置：
+        # - 空字符串：强制禁用系统代理（--no-proxy-server），避免 Clash 等代理软件
+        #   未运行时 ERR_PROXY_CONNECTION_FAILED（闲鱼国内站点无需代理）
+        # - 非空：通过 --proxy-server=<url> 显式指定代理（海外部署场景）
+        self.proxy_server = (proxy_server or "").strip()
         self._cdp_process: sp.Popen | None = None  # 跟踪 CDP 启动的 Edge 进程
         # 外部组件（如 BatchRefreshScheduler）正在使用的 page 集合
         # close_all_pages 跳过这些 page，避免误关并发任务正在用的页面
@@ -132,6 +138,8 @@ class BrowserManager:
             "--no-first-run",
             "--no-default-browser-check",
             "--start-minimized",  # 最小化启动，避免 new_page() 时弹出可见窗口
+            # 代理参数：与 launch 模式保持一致，避免系统代理干扰闲鱼访问
+            f"--proxy-server={self.proxy_server}" if self.proxy_server else "--no-proxy-server",
             "about:blank",
         ]
         logger.info("启动系统 Edge (CDP): {}", " ".join(cmd[:4]))
@@ -139,7 +147,10 @@ class BrowserManager:
         _si = sp.STARTUPINFO()
         _si.dwFlags |= sp.STARTF_USESHOWWINDOW
         _si.wShowWindow = 0  # SW_HIDE
-        self._cdp_process = sp.Popen(
+        # S7487：async 函数中禁止同步 subprocess 调用；sp.Popen 在事件循环中可能阻塞线程
+        # 用 asyncio.to_thread 将进程启动移到工作线程，避免阻塞事件循环
+        self._cdp_process = await asyncio.to_thread(
+            sp.Popen,
             cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL,
             startupinfo=_si if os.name == "nt" else None,
         )
@@ -209,6 +220,15 @@ class BrowserManager:
             "--export-tagged-pdf",
             "--disable-gpu",
         ]
+        # 代理参数：必须显式指定，否则 Chromium 默认读取系统代理
+        # 当系统代理软件（Clash/V2Ray）未运行时会触发 ERR_PROXY_CONNECTION_FAILED
+        if self.proxy_server:
+            launch_args.append(f"--proxy-server={self.proxy_server}")
+            logger.info("浏览器使用代理: {}", self.proxy_server)
+        else:
+            # 闲鱼为国内站点，默认禁用系统代理以确保连接稳定
+            launch_args.append("--no-proxy-server")
+            logger.info("浏览器禁用系统代理（闲鱼国内站点无需代理）")
 
         # 尝试从 LoginOrchestrator 获取指纹 profile
         # 若 orchestrator 已初始化且为 launch 模式，使用 profile 的 UA 和 viewport

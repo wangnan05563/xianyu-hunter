@@ -188,10 +188,11 @@ export default function TaskList() {
   const { remainMap, searchingIds, pauseAll } = useAutoLiveSearch({
     tasks,
     enabled: autoSearchEnabled,
-    onTaskSearchComplete: (taskId, success, itemCount) => {
+    onTaskSearchComplete: (taskId, success, itemCount, detail) => {
       const taskName = tasks.find(t => t.id === taskId)?.name ?? taskId
       if (!success) {
-        message.warning(`任务「${taskName}」自动搜索失败`)
+        // 透传后端 detail：避免笼统"自动搜索失败"，让用户知道是 Worker 占用还是别的原因
+        message.warning(`任务「${taskName}」自动搜索失败${detail ? `：${detail}` : ''}`)
       } else if (itemCount > 0) {
         message.success(`任务「${taskName}」自动搜索完成，新增 ${itemCount} 条`)
       }
@@ -474,6 +475,8 @@ export default function TaskList() {
       checking_cache: '正在检查缓存...',
       checking_cookies: '正在检查登录状态...',
       acquiring_lock: '正在获取浏览器锁...',
+      // waiting_lock 后端每 1.5s 推一次，携带 elapsed_sec 提示用户耐心等
+      waiting_lock: '后台任务占用浏览器，等待中...',
       searching: '正在搜索闲鱼...',
       refreshing_token: '正在刷新搜索令牌...',
       searching_retry: '正在重试搜索...',
@@ -482,7 +485,11 @@ export default function TaskList() {
     }
     taskLinkApi.live(linkTaskId, (data: LiveProgress) => {
       if (data.stage && stageLabels[data.stage]) {
-        setLiveStage(stageLabels[data.stage])
+        // waiting_lock 阶段携带 elapsed_sec，拼到文案上让用户看到已等待秒数
+        const label = data.stage === 'waiting_lock' && typeof data.elapsed_sec === 'number'
+          ? `${stageLabels[data.stage]}（已等 ${data.elapsed_sec.toFixed(1)}s）`
+          : stageLabels[data.stage]
+        setLiveStage(label)
       }
     })
       .then((res) => {
@@ -508,9 +515,12 @@ export default function TaskList() {
           message.info('实时查询完成，未找到匹配商品')
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         setLiveStage('')
-        message.error('实时查询失败')
+        // 透传后端 detail（如"系统正在执行后台搜索任务，请稍后重试"），
+        // 避免笼统提示"实时查询失败"让用户摸不到头脑
+        const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        message.error(detail || '实时查询失败')
       })
       .finally(() => setLiveLoading(false))
   }

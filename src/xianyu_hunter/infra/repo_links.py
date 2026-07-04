@@ -314,6 +314,50 @@ class TaskLinksMixin:
                 })
         return self.batch_upsert_task_links(batch)
 
+    @staticmethod
+    def _decode_display(display) -> dict:
+        """将 display 字段统一解析为 dict，兼容 str/json/None 多种存储形态"""
+        if isinstance(display, str):
+            try:
+                return json.loads(display)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        if isinstance(display, dict):
+            return display
+        return {}
+
+    @staticmethod
+    def _row_price_matches(display: dict, min_price, max_price) -> bool:
+        """单行价格过滤：price 为空时保留（兼容 url/seller 类型）"""
+        price_val = display.get("price") if display else None
+        if price_val is None:
+            return True
+        try:
+            p = float(price_val)
+            if min_price is not None and p < min_price:
+                return False
+            if max_price is not None and p > max_price:
+                return False
+        except (ValueError, TypeError):
+            pass
+        return True
+
+    @staticmethod
+    def _row_publish_matches(display: dict, max_publish_days, now: datetime) -> bool:
+        """单行发布天数过滤：publish_time 为空时保留（兼容旧数据）"""
+        if max_publish_days is None or not isinstance(display, dict):
+            return True
+        pub = display.get("publish_time")
+        if not pub:
+            return True
+        try:
+            pub_dt = datetime.fromisoformat(str(pub).replace("Z", "+00:00"))
+            if (now - pub_dt).days > max_publish_days:
+                return False
+        except (ValueError, TypeError):
+            pass
+        return True
+
     def _filter_task_links(self, rows: list[dict], task: dict | None) -> list[dict]:
         """统一过滤逻辑：关键词 + 价格 + 发布天数
 
@@ -321,46 +365,24 @@ class TaskLinksMixin:
         """
         # 关键词过滤
         rows = [r for r in rows if self._task_link_matches_task(r, task)]
-        # 价格过滤
+        # 价格/发布天数过滤
         min_price = (task or {}).get("min_price")
         max_price = (task or {}).get("max_price")
         max_publish_days = (task or {}).get("max_publish_days")
-        if min_price is not None or max_price is not None or max_publish_days is not None:
-            filtered = []
-            # 与 db_models._utcnow 保持一致：publish_time 存储为 UTC，比较时也用 UTC
-            now = datetime.now(timezone.utc)
-            for r in rows:
-                display = r.get("display")
-                if isinstance(display, str):
-                    try:
-                        display = json.loads(display)
-                    except (json.JSONDecodeError, TypeError):
-                        display = {}
-                # 价格过滤（price 为空时保留，兼容 url/seller 类型）
-                if min_price is not None or max_price is not None:
-                    price_val = (display or {}).get("price") if isinstance(display, dict) else None
-                    if price_val is not None:
-                        try:
-                            p = float(price_val)
-                            if min_price is not None and p < min_price:
-                                continue
-                            if max_price is not None and p > max_price:
-                                continue
-                        except (ValueError, TypeError):
-                            pass
-                # 发布天数过滤（publish_time 为空时保留，兼容旧数据）
-                if max_publish_days is not None and isinstance(display, dict):
-                    pub = display.get("publish_time")
-                    if pub:
-                        try:
-                            pub_dt = datetime.fromisoformat(str(pub).replace("Z", "+00:00"))
-                            if (now - pub_dt).days > max_publish_days:
-                                continue
-                        except (ValueError, TypeError):
-                            pass
-                filtered.append(r)
-            rows = filtered
-        return rows
+        if min_price is None and max_price is None and max_publish_days is None:
+            return rows
+        # 与 db_models._utcnow 保持一致：publish_time 存储为 UTC，比较时也用 UTC
+        now = datetime.now(timezone.utc)
+        need_price = min_price is not None or max_price is not None
+        filtered = []
+        for r in rows:
+            display = self._decode_display(r.get("display"))
+            if need_price and not self._row_price_matches(display, min_price, max_price):
+                continue
+            if not self._row_publish_matches(display, max_publish_days, now):
+                continue
+            filtered.append(r)
+        return filtered
 
     def list_task_links(
         self,

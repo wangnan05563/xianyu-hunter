@@ -1,17 +1,17 @@
 import { useRef, useMemo } from 'react'
-import { Button, Tooltip, theme } from 'antd'
-import { CloseOutlined, MinusOutlined, SettingOutlined } from '@ant-design/icons'
-import type { SheetItem } from '../../stores/sheetStore'
-import type { SheetPreferences } from '../../stores/sheetStore'
+import type { MutableRefObject } from 'react'
+import { Button, Tooltip, theme, Badge } from 'antd'
+import { CloseOutlined, MinusOutlined, SettingOutlined, SwapOutlined } from '@ant-design/icons'
+import type { SheetItem, SheetPreferences } from '../../stores/sheetStore'
 
 interface SheetTabsProps {
-  sheets: SheetItem[]
-  activeId: string | null
-  preferences: SheetPreferences
-  onActivate: (id: string) => void
-  onClose: (id: string) => void
-  onMinimize: (id: string) => void
-  onOpenPreferences: () => void
+  readonly sheets: SheetItem[]
+  readonly activeId: string | null
+  readonly preferences: SheetPreferences
+  readonly onActivate: (id: string) => void
+  readonly onClose: (id: string) => void
+  readonly onMinimize: (id: string) => void
+  readonly onOpenPreferences: () => void
 }
 
 /** 格式化时间戳为可读字符串 */
@@ -25,115 +25,179 @@ function formatOpenedAt(ts: number): string {
   }
 }
 
-function TabItem({
+interface TabItemProps {
+  readonly sheet: SheetItem
+  readonly active: boolean
+  readonly onActivate: () => void
+  readonly onClose: () => void
+  readonly onMinimize: () => void
+  readonly activeBg: string
+  readonly activeColor: string
+  readonly textColor: string
+  readonly borderColor: string
+  readonly doubleClickCloseEnabled: boolean
+  readonly doubleClickInterval: number
+  readonly thumbnailMode: boolean
+  readonly thumbnailTooltipEnabled: boolean
+}
+
+function TabItem(props: TabItemProps) {
+  // 上次点击时间戳：双击判定依据
+  // 为什么用 useRef 而非 state：避免触发重渲染，仅作为内部计时器
+  const lastClickRef = useRef<number>(0)
+
+  // I1: 双击触发关闭后阻止事件冒泡，与关闭按钮的 stopPropagation 行为一致
+  // 为什么返回布尔值：handleTabClick 需要告知调用方是否触发了关闭，以便决定是否 stopPropagation
+  const handleClick = (e?: React.MouseEvent<HTMLDivElement>) => {
+    if (handleTabClick(props, lastClickRef)) {
+      e?.stopPropagation()
+    }
+  }
+
+  if (props.thumbnailMode) {
+    return <ThumbnailTab {...props} handleClick={handleClick} />
+  }
+  return <StandardTab {...props} handleClick={handleClick} />
+}
+
+/** 双击关闭判定与回放：避免在 TabItem 主体内嵌套复杂条件（S3776）
+ *  返回 true 表示触发了关闭（调用方应阻止事件冒泡），false 表示仅激活
+ */
+function handleTabClick(
+  props: TabItemProps,
+  lastClickRef: MutableRefObject<number>,
+): boolean {
+  if (!props.doubleClickCloseEnabled) {
+    props.onActivate()
+    return false
+  }
+  const now = Date.now()
+  const last = lastClickRef.current
+  // 重置时间戳，避免连续三连击触发两次关闭
+  lastClickRef.current = now
+  if (last > 0 && now - last <= props.doubleClickInterval) {
+    // 命中双击：触发关闭并清空计时器
+    lastClickRef.current = 0
+    props.onClose()
+    return true
+  }
+  // 首次点击或间隔外：作为普通激活
+  props.onActivate()
+  return false
+}
+
+/** 缩略图模式：仅图标 + Tooltip */
+function ThumbnailTab({
   sheet,
   active,
-  onActivate,
+  onClose,
+  activeBg,
+  activeColor,
+  textColor,
+  thumbnailTooltipEnabled,
+  handleClick,
+}: TabItemProps & { readonly handleClick: (e?: React.MouseEvent<HTMLDivElement>) => void }) {
+  const tabContent = (
+    <div
+      className={`sheet-tab${active ? ' sheet-tab-active' : ''}${sheet.minimized ? ' sheet-tab-minimized' : ''}`}
+      onClick={handleClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleClick() }}
+      role="button"
+      tabIndex={0}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '8px 0',
+        cursor: 'pointer',
+        width: 40,
+        height: 40,
+        borderRadius: 6,
+        background: active ? activeBg : 'transparent',
+        color: active ? activeColor : textColor,
+        borderLeft: active ? `2px solid ${activeColor}` : '2px solid transparent',
+        opacity: sheet.minimized ? 0.5 : 1,
+        position: 'relative',
+        transition: 'background 200ms, opacity 200ms',
+      }}
+    >
+      <span style={{ fontSize: 18, lineHeight: 1 }}>{sheet.icon}</span>
+      {/* 缩略图模式激活态显示微型关闭按钮：
+          双击关闭禁用时缩略图模式原本无任何关闭途径，属于可用性阻塞 */}
+      {active && !sheet.minimized && (
+        <Button
+          type="text"
+          size="small"
+          danger
+          data-testid="sheet-thumbnail-close"
+          icon={<CloseOutlined style={{ fontSize: 8 }} />}
+          onClick={(e) => { e.stopPropagation(); onClose() }}
+          style={{
+            position: 'absolute',
+            top: -2,
+            right: -2,
+            padding: 0,
+            width: 14,
+            height: 14,
+            minWidth: 14,
+            borderRadius: '50%',
+            background: '#fff',
+            boxShadow: '0 0 0 1px currentColor',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        />
+      )}
+      {sheet.minimized && (
+        <span style={{ position: 'absolute', top: 2, right: 2, fontSize: 8, color: activeColor }}>●</span>
+      )}
+    </div>
+  )
+
+  if (!thumbnailTooltipEnabled) {
+    return tabContent
+  }
+
+  // 提取嵌套三元为局部变量：避免 JSX 内嵌套三元降低可读性（S3358）
+  const statusText = sheet.minimized ? '已最小化' : (active ? '激活中' : '后台')
+  const tooltipContent = (
+    <div style={{ maxWidth: 240 }}>
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{sheet.title}</div>
+      <div style={{ fontSize: 12, opacity: 0.85 }}>
+        <div>路径：{sheet.path}</div>
+        <div>创建：{formatOpenedAt(sheet.openedAt)}</div>
+        <div>状态：{statusText}</div>
+      </div>
+    </div>
+  )
+
+  return (
+    <Tooltip title={tooltipContent} placement="right" mouseEnterDelay={0.3}>
+      {tabContent}
+    </Tooltip>
+  )
+}
+
+/** 标准模式：图标 + 纵向标题 + 操作按钮 */
+function StandardTab({
+  sheet,
+  active,
   onClose,
   onMinimize,
   activeBg,
   activeColor,
   textColor,
   borderColor,
-  doubleClickCloseEnabled,
-  doubleClickInterval,
-  thumbnailMode,
-  thumbnailTooltipEnabled,
-}: {
-  sheet: SheetItem
-  active: boolean
-  onActivate: () => void
-  onClose: () => void
-  onMinimize: () => void
-  activeBg: string
-  activeColor: string
-  textColor: string
-  borderColor: string
-  doubleClickCloseEnabled: boolean
-  doubleClickInterval: number
-  thumbnailMode: boolean
-  thumbnailTooltipEnabled: boolean
-}) {
-  // 上次点击时间戳：双击判定依据
-  // 为什么用 useRef 而非 state：避免触发重渲染，仅作为内部计时器
-  const lastClickRef = useRef<number>(0)
-
-  const handleClick = () => {
-    if (!doubleClickCloseEnabled) {
-      onActivate()
-      return
-    }
-    const now = Date.now()
-    const last = lastClickRef.current
-    // 重置时间戳，避免连续三连击触发两次关闭
-    lastClickRef.current = now
-    if (last > 0 && now - last <= doubleClickInterval) {
-      // 命中双击：触发关闭并清空计时器
-      lastClickRef.current = 0
-      onClose()
-      return
-    }
-    // 首次点击或间隔外：作为普通激活
-    onActivate()
-  }
-
-  // 缩略图模式：仅图标 + Tooltip
-  if (thumbnailMode) {
-    const tabContent = (
-      <div
-        className={`sheet-tab${active ? ' sheet-tab-active' : ''}${sheet.minimized ? ' sheet-tab-minimized' : ''}`}
-        onClick={handleClick}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '8px 0',
-          cursor: 'pointer',
-          width: 40,
-          height: 40,
-          borderRadius: 6,
-          background: active ? activeBg : 'transparent',
-          color: active ? activeColor : textColor,
-          borderLeft: active ? `2px solid ${activeColor}` : '2px solid transparent',
-          opacity: sheet.minimized ? 0.5 : 1,
-          position: 'relative',
-          transition: 'background 200ms, opacity 200ms',
-        }}
-      >
-        <span style={{ fontSize: 18, lineHeight: 1 }}>{sheet.icon}</span>
-        {sheet.minimized && (
-          <span style={{ position: 'absolute', top: 2, right: 2, fontSize: 8, color: activeColor }}>●</span>
-        )}
-      </div>
-    )
-
-    if (!thumbnailTooltipEnabled) {
-      return tabContent
-    }
-
-    const tooltipContent = (
-      <div style={{ maxWidth: 240 }}>
-        <div style={{ fontWeight: 600, marginBottom: 4 }}>{sheet.title}</div>
-        <div style={{ fontSize: 12, opacity: 0.85 }}>
-          <div>路径：{sheet.path}</div>
-          <div>创建：{formatOpenedAt(sheet.openedAt)}</div>
-          <div>状态：{sheet.minimized ? '已最小化' : (active ? '激活中' : '后台')}</div>
-        </div>
-      </div>
-    )
-
-    return (
-      <Tooltip title={tooltipContent} placement="right" mouseEnterDelay={0.3}>
-        {tabContent}
-      </Tooltip>
-    )
-  }
-
-  // 标准模式：图标 + 纵向标题 + 操作按钮
+  handleClick,
+}: TabItemProps & { readonly handleClick: (e?: React.MouseEvent<HTMLDivElement>) => void }) {
   return (
     <div
       className={`sheet-tab${active ? ' sheet-tab-active' : ''}${sheet.minimized ? ' sheet-tab-minimized' : ''}`}
       onClick={handleClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleClick() }}
+      role="button"
+      tabIndex={0}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -232,6 +296,29 @@ export function SheetTabs({
       borderLeft: `1px solid ${themeToken.colorBorderSecondary}`,
       overflowY: 'auto',
     }}>
+      {/* 循环替换状态指示徽标：仅在开启时显示，让用户在使用过程中随时可识别状态 */}
+      {preferences.circularReplaceEnabled && (
+        <Tooltip title="循环替换已开启：达到上限时自动淘汰最旧非激活 sheet" placement="right">
+          <div
+            className="sheet-circular-indicator"
+            data-testid="sheet-circular-indicator"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '6px 0',
+              borderRadius: 6,
+              background: themeToken.colorPrimaryBg,
+              color: themeToken.colorPrimary,
+              cursor: 'help',
+            }}
+          >
+            <Badge dot color={themeToken.colorPrimary}>
+              <SwapOutlined style={{ fontSize: 14 }} />
+            </Badge>
+          </div>
+        </Tooltip>
+      )}
       {sheets.map((s) => (
         <TabItem
           key={s.id}

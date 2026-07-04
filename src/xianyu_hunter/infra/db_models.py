@@ -483,7 +483,7 @@ class ChatbotMessageRow(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # AI 回复的元数据（JSON）：sources / tool_calls / intent / tokens_used
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 用户反馈：positive=点赞 / negative=点踩 / null=未反馈
+    # 用户反馈：positive：点赞 / negative：点踩 / null：未反馈
     feedback: Mapped[str | None] = mapped_column(String, nullable=True)
     feedback_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     # M6：1-5 星评分（存于 messages 表用于快速展示）
@@ -569,7 +569,7 @@ class ChatbotKBVersionRow(Base):
     doc_hash: Mapped[str] = mapped_column(String, nullable=False, index=True)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # build=全量构建 / incremental=增量更新 / rollback=回滚产生
+    # build：全量构建 / incremental：增量更新 / rollback：回滚产生
     build_type: Mapped[str] = mapped_column(String, nullable=False, default="build")
     # 构建状态：success / partial / failed / rolled_back（见 §6.2 状态机）
     status: Mapped[str] = mapped_column(String, nullable=False, default="success")

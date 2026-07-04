@@ -23,6 +23,41 @@ TAKEOVER_TIMEOUT_MIN = 30
 _ORDER_NOT_FOUND = "订单不存在"
 
 
+def _parse_takeover_ts(ts: Any) -> datetime | None:
+    """把 confirmed_at 多种存储形态统一解析为 datetime，None 表示无法解析
+
+    SQLite 同一列可能返回 ISO 字符串、datetime 对象或空值，
+    集中处理避免每个调用点重复 isinstance + try/except 拉高认知复杂度。
+    """
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts)
+        except ValueError:
+            return None
+    if isinstance(ts, datetime):
+        return ts
+    return None
+
+
+def _apply_takeover_deadline(o: dict, now: datetime) -> None:
+    """为 takeover_pending 订单附加 deadline/remaining_sec 两个字段
+
+    SQLite 读回的 confirmed_at 是 naive datetime，_utcnow() 须同步去时区，
+    否则 deadline(naive) - now(aware) 会抛 TypeError（与 repo_chatbot.recall_message 同根因）。
+    为什么不后端算 deadline_at 再返回：少一个字段耦合，deadline_sec 已经够用，
+    前端按需自己拼 deadline_at 字符串展示。
+    """
+    ts_dt = _parse_takeover_ts(o.get("confirmed_at"))
+    if ts_dt is not None:
+        deadline = ts_dt + timedelta(minutes=TAKEOVER_TIMEOUT_MIN)
+        remaining = int((deadline - now).total_seconds())
+        o["takeover_deadline"] = deadline.isoformat(timespec="seconds")
+        o["takeover_remaining_sec"] = max(0, remaining)
+    else:
+        o["takeover_deadline"] = None
+        o["takeover_remaining_sec"] = None
+
+
 @router.get("")
 def list_orders(
     status: str | None = None,
@@ -50,31 +85,10 @@ def list_orders(
     total = container.repo.count_orders(status=status, task_id=task_id, item_id=item_id)
 
     # 给 takeover_pending 订单附加"剩余倒计时秒数"，前端 modal 直接读 deadline。
-    # 为什么不后端算 deadline_at 再返回：少一个字段耦合，deadline_sec 已经够用，
-    # 前端按需自己拼 deadline_at 字符串展示。
-    # SQLite 读回的 confirmed_at 是 naive datetime，_utcnow() 须同步去时区，
-    # 否则 deadline(naive) - now(aware) 会抛 TypeError（与 repo_chatbot.recall_message 同根因）
     now = _utcnow().replace(tzinfo=None)
     for o in rows:
         if o.get("status") == "takeover_pending":
-            ts = o.get("confirmed_at")
-            if isinstance(ts, str):
-                try:
-                    ts_dt = datetime.fromisoformat(ts)
-                except ValueError:
-                    ts_dt = None
-            elif isinstance(ts, datetime):
-                ts_dt = ts
-            else:
-                ts_dt = None
-            if ts_dt is not None:
-                deadline = ts_dt + timedelta(minutes=TAKEOVER_TIMEOUT_MIN)
-                remaining = int((deadline - now).total_seconds())
-                o["takeover_deadline"] = deadline.isoformat(timespec="seconds")
-                o["takeover_remaining_sec"] = max(0, remaining)
-            else:
-                o["takeover_deadline"] = None
-                o["takeover_remaining_sec"] = None
+            _apply_takeover_deadline(o, now)
     # H-05 修复：通知扫描从 list_orders 移至按需端点，避免每次列表请求都触发全量扫描。
     # scan_and_notify 现在仅由 /api/notifications/scan 显式触发或定时任务调用，
     # 不再随订单列表请求自动执行（消除不必要的 DB 开销）。
@@ -304,6 +318,100 @@ def _trigger_dependent_tasks(container: Container, order: dict) -> None:
         )
 
 
+def _parse_takeover_payload(payload: dict[str, Any]) -> tuple[str, str]:
+    """提取并校验 item_id/task_id，返回 (item_id, task_id)"""
+    item_id = str(payload.get("item_id") or "").strip()
+    task_id = str(payload.get("task_id") or "").strip()
+    if not item_id:
+        raise HTTPException(status_code=422, detail="item_id 不能为空")
+    return item_id, task_id
+
+
+def _ensure_takeover_prerequisites(container: Container) -> None:
+    """前置校验：buyer 注入态 + 闲鱼登录态，任一缺失直接抛 HTTPException
+
+    未登录时点击「立即购买」会跳转到登录页，导致找不到「提交订单」按钮，
+    浪费一次浏览器自动化流程，因此在抢单前就拦截。
+    """
+    # 检查 buyer 是否注入：Web 进程默认 with_browser=False，buyer 为 None
+    if container.buyer is None:
+        raise HTTPException(
+            status_code=503,
+            detail="抢单功能未启用：需要以 XH_WITH_SCHEDULER=1 模式启动服务以注入浏览器实例",
+        )
+
+    from xianyu_hunter.web.services.cookie_store import get_cookie_store
+
+    cookie_store = get_cookie_store()
+    cookie_store.invalidate_cache()
+    if not cookie_store.has_valid_cookies():
+        raise HTTPException(
+            status_code=403,
+            detail="闲鱼登录已过期，请先在「Cookie 注入」页面重新登录闲鱼",
+        )
+
+
+def _resolve_takeover_item(
+    container: Container, item_id: str, task_id: str
+) -> tuple[float, str]:
+    """查询商品并补全 task_id，返回 (expected_price, resolved_task_id)"""
+    item = container.repo.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"商品 {item_id} 不存在于数据库中")
+
+    expected_price = float(item.get("price") or 0)
+    if not task_id:
+        task_id = str(item.get("task_id") or "")
+    return expected_price, task_id
+
+
+def _check_existing_takeover_order(
+    container: Container, task_id: str, item_id: str
+) -> dict[str, Any] | None:
+    """幂等检查：已存在订单时返回提前响应 dict，否则返回 None 继续抢单"""
+    if not task_id:
+        return None
+    existing = container.repo.find_order_by_task_item(task_id, item_id)
+    if not existing:
+        return None
+    return {
+        "ok": True,
+        "outcome": "skipped_duplicate",
+        "order": existing,
+        "message": f"商品已存在订单 {existing.get('id')}，状态：{existing.get('status')}",
+    }
+
+
+def _format_takeover_result(result: Any) -> dict[str, Any]:
+    """把 buyer.buy() 返回值转换为 HTTP 响应体
+
+    success/skipped_duplicate 返回正常 dict；其它 outcome 抛 502 HTTPException，
+    让上层异常处理统一兜底。buyer._save_failed_order 已写库，这里只组装响应。
+    """
+    if result.outcome.value == "success" and result.order:
+        return {
+            "ok": True,
+            "outcome": "success",
+            "order": {
+                "order_no": result.order.order_no,
+                "price": result.order.price,
+                "status": result.order.status.value,
+            },
+            "message": "抢单成功，订单已创建",
+        }
+    if result.outcome.value == "skipped_duplicate":
+        return {
+            "ok": True,
+            "outcome": "skipped_duplicate",
+            "message": "商品已下过单，幂等跳过",
+        }
+    # 失败：buyer._save_failed_order 已写库，这里只返回结果
+    raise HTTPException(
+        status_code=502,
+        detail=f"抢单失败：{result.error or '未知原因'}",
+    )
+
+
 @router.post("/manual-takeover")
 async def manual_takeover(
     payload: dict[str, Any],
@@ -322,48 +430,15 @@ async def manual_takeover(
     """
     from loguru import logger
 
-    item_id = str(payload.get("item_id") or "").strip()
-    task_id = str(payload.get("task_id") or "").strip()
-    if not item_id:
-        raise HTTPException(status_code=422, detail="item_id 不能为空")
+    item_id, task_id = _parse_takeover_payload(payload)
+    _ensure_takeover_prerequisites(container)
 
-    # 检查 buyer 是否注入：Web 进程默认 with_browser=False，buyer 为 None
-    if container.buyer is None:
-        raise HTTPException(
-            status_code=503,
-            detail="抢单功能未启用：需要以 XH_WITH_SCHEDULER=1 模式启动服务以注入浏览器实例",
-        )
-
-    # 闲鱼登录态前置检查：未登录时点击「立即购买」会跳转到登录页，
-    # 导致找不到「提交订单」按钮，浪费一次浏览器自动化流程
-    from xianyu_hunter.web.services.cookie_store import get_cookie_store
-
-    cookie_store = get_cookie_store()
-    cookie_store.invalidate_cache()
-    if not cookie_store.has_valid_cookies():
-        raise HTTPException(
-            status_code=403,
-            detail="闲鱼登录已过期，请先在「Cookie 注入」页面重新登录闲鱼",
-        )
-
-    # 查询商品信息：用于读取 expected_price 和补充 task_id
-    item = container.repo.get_item(item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail=f"商品 {item_id} 不存在于数据库中")
-
-    expected_price = float(item.get("price") or 0)
-    if not task_id:
-        task_id = str(item.get("task_id") or "")
+    expected_price, task_id = _resolve_takeover_item(container, item_id, task_id)
 
     # 幂等检查：避免重复抢单
-    existing = container.repo.find_order_by_task_item(task_id, item_id) if task_id else None
-    if existing:
-        return {
-            "ok": True,
-            "outcome": "skipped_duplicate",
-            "order": existing,
-            "message": f"商品已存在订单 {existing.get('id')}，状态：{existing.get('status')}",
-        }
+    existing_response = _check_existing_takeover_order(container, task_id, item_id)
+    if existing_response is not None:
+        return existing_response
 
     logger.info(f"[ManualTakeover] 用户手动触发抢单：task={task_id} item={item_id} price={expected_price}")
 
@@ -406,27 +481,4 @@ async def manual_takeover(
         if acquired_browser_lock:
             container.browser_lock.release()
 
-    if result.outcome.value == "success" and result.order:
-        # buyer.buy() 内部已调用 repo.upsert_order 写库，这里只返回结果
-        return {
-            "ok": True,
-            "outcome": "success",
-            "order": {
-                "order_no": result.order.order_no,
-                "price": result.order.price,
-                "status": result.order.status.value,
-            },
-            "message": "抢单成功，订单已创建",
-        }
-    elif result.outcome.value == "skipped_duplicate":
-        return {
-            "ok": True,
-            "outcome": "skipped_duplicate",
-            "message": "商品已下过单，幂等跳过",
-        }
-    else:
-        # 失败：buyer._save_failed_order 已写库，这里只返回结果
-        raise HTTPException(
-            status_code=502,
-            detail=f"抢单失败：{result.error or '未知原因'}",
-        )
+    return _format_takeover_result(result)

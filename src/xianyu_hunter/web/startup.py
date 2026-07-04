@@ -263,7 +263,7 @@ async def start_scheduler_in_background(container: Any) -> None:
         已在 _bus_loop 内部记录日志，无需此处重复告警。
         """
         try:
-            await container.scheduler.start_all()
+            container.scheduler.start_all()
             task_ids = [w.task.id for w in workers]
             logger.info(f"调度器已启动 {len(task_ids)} 个任务: {task_ids}")
             # 保持运行直到被取消
@@ -280,23 +280,16 @@ async def start_scheduler_in_background(container: Any) -> None:
     _scheduler_task = asyncio.create_task(_scheduler_loop())
 
 
-def run_migrations(container: Any) -> None:
-    """执行数据库增量迁移
+def _migrate_task_links_table(container: Any, insp: Any) -> None:
+    """C-01: task_links 表重建（含 UNIQUE 约束）+ 历史数据回填
 
-    包含 task_links 表重建、orders.task_id、tasks.search_filters、
-    notifications.read_at 等历史迁移逻辑。
-
-    每个迁移块独立 try/except：历史教训——auto_migrate_task_links 抛异常会让
-    C-04 等后续迁移全部跳过，外层 try/except 又吞掉异常，最终数据库 schema 与
-    ORM 不一致，运行时 INSERT 才报 "no such column"。
+    为什么独立：原 run_migrations 中 6 个迁移块的 try/except 链使主函数
+    认知复杂度超过阈值，拆分后每个迁移块独立维护，主函数只负责顺序调用。
     """
     from loguru import logger
-    from sqlalchemy import inspect as sa_inspect, text as sa_text
+    from sqlalchemy import text as sa_text
     from xianyu_hunter.infra.db_models import TaskLinkRow
 
-    insp = sa_inspect(container.repo.engine)
-
-    # C-01: task_links 表重建（含 UNIQUE 约束）+ 历史数据回填
     try:
         needs_rebuild = False
         if not insp.has_table("task_links"):
@@ -329,7 +322,11 @@ def run_migrations(container: Any) -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"C-01 task_links 迁移失败（忽略，不影响后续迁移）: {e}")
 
-    # C-02 迁移：确保 orders 表含 task_id 列
+
+def _migrate_orders_task_id(container: Any, insp: Any) -> None:
+    """C-02 迁移：确保 orders 表含 task_id 列"""
+    from loguru import logger
+
     try:
         if insp.has_table("orders"):
             order_cols = {c["name"] for c in insp.get_columns("orders")}
@@ -342,7 +339,11 @@ def run_migrations(container: Any) -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"C-02 orders.task_id 迁移失败（忽略）: {e}")
 
-    # C-03 迁移：确保 tasks 表含 search_filters 列（闲鱼筛选标签）
+
+def _migrate_tasks_search_filters(container: Any, insp: Any) -> None:
+    """C-03 迁移：确保 tasks 表含 search_filters 列（闲鱼筛选标签）"""
+    from loguru import logger
+
     try:
         if insp.has_table("tasks"):
             task_cols = {c["name"] for c in insp.get_columns("tasks")}
@@ -355,8 +356,14 @@ def run_migrations(container: Any) -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"C-03 tasks.search_filters 迁移失败（忽略）: {e}")
 
-    # C-04 迁移：确保 notifications 表含 read_at 列
-    # 关键迁移：缺此列会导致 add_notification 的 UPSERT 完全失败，所有告警丢失
+
+def _migrate_notifications_read_at(container: Any, insp: Any) -> None:
+    """C-04 迁移：确保 notifications 表含 read_at 列
+
+    关键迁移：缺此列会导致 add_notification 的 UPSERT 完全失败，所有告警丢失
+    """
+    from loguru import logger
+
     try:
         if insp.has_table("notifications"):
             notif_cols = {c["name"] for c in insp.get_columns("notifications")}
@@ -369,8 +376,14 @@ def run_migrations(container: Any) -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"C-04 notifications.read_at 迁移失败（忽略）: {e}")
 
-    # C-05 迁移：eval.scored 事件去重 + 添加部分唯一索引
-    # 防止 live_links 多次触发或 recompute 多次调用产生重复评估记录
+
+def _migrate_eval_scored_dedup(container: Any, insp: Any) -> None:
+    """C-05 迁移：eval.scored 事件去重 + 添加部分唯一索引
+
+    防止 live_links 多次触发或 recompute 多次调用产生重复评估记录
+    """
+    from loguru import logger
+
     try:
         if insp.has_table("events"):
             with container.repo.engine.begin() as conn:
@@ -393,9 +406,15 @@ def run_migrations(container: Any) -> None:
     except Exception as e:  # noqa: BLE001
         logger.warning(f"C-05 eval.scored 去重迁移失败（忽略）: {e}")
 
-    # C-06: 清理过期的批量采集执行历史
-    # 为什么放这里：init_db 已通过 create_all 创建 batch_refresh_history 表，
-    # 此处根据配置 history_retention_days 清理过期记录，避免磁盘无限增长。
+
+def _cleanup_old_batch_history(container: Any) -> None:
+    """C-06: 清理过期的批量采集执行历史
+
+    为什么放这里：init_db 已通过 create_all 创建 batch_refresh_history 表，
+    此处根据配置 history_retention_days 清理过期记录，避免磁盘无限增长。
+    """
+    from loguru import logger
+
     try:
         from xianyu_hunter.infra.yaml_config import get_config
         days = get_config().batch_refresh.history_retention_days
@@ -405,6 +424,95 @@ def run_migrations(container: Any) -> None:
                 logger.info(f"已清理 {deleted} 条过期批量采集历史（>{days} 天）")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"C-06 批量采集历史清理失败（忽略）: {e}")
+
+
+def run_migrations(container: Any) -> None:
+    """执行数据库增量迁移
+
+    包含 task_links 表重建、orders.task_id、tasks.search_filters、
+    notifications.read_at 等历史迁移逻辑。
+
+    每个迁移块独立 try/except：历史教训——auto_migrate_task_links 抛异常会让
+    C-04 等后续迁移全部跳过，外层 try/except 又吞掉异常，最终数据库 schema 与
+    ORM 不一致，运行时 INSERT 才报 "no such column"。
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    insp = sa_inspect(container.repo.engine)
+
+    _migrate_task_links_table(container, insp)
+    _migrate_orders_task_id(container, insp)
+    _migrate_tasks_search_filters(container, insp)
+    _migrate_notifications_read_at(container, insp)
+    _migrate_eval_scored_dedup(container, insp)
+    _cleanup_old_batch_history(container)
+
+
+async def _start_all_schedulers(container: Any) -> None:
+    """启动所有后台调度器（含 EventBus、调度器、Cookie 同步等）
+
+    为什么独立：_on_startup 中调度器启动顺序有依赖关系（EventBus 必须先于调度器），
+    集中维护避免遗漏顺序约束，同时降低 _on_startup 认知复杂度。
+    """
+    from loguru import logger
+    from xianyu_hunter.web.deps import _should_start_scheduler
+
+    # 一键启动模式：在 FastAPI 事件循环中启动调度器
+    if _should_start_scheduler():
+        # EventBus 必须先于调度器启动：worker.run_once 会在调度循环中
+        # publish_nowait(EVAL_PASSED)，若无消费者事件会堆积在队列
+        # 无消费者。EventBus 与"是否有 RUNNING 任务"解耦，无条件启动
+        await start_event_bus_in_background(container)
+        await start_scheduler_in_background(container)
+
+    # 启动 Cookie 定时同步（如果配置启用）
+    start_cookie_sync_scheduler(container)
+
+    # 启动批量采集调度器（如果配置启用且 collector 可用）
+    start_batch_refresh_scheduler(container)
+
+    # 启动智能客服知识库定时刷新调度器（如果 chatbot 启用）
+    # 放在最后：chatbot 为可选模块，启动失败不影响主系统
+    start_kb_refresh_scheduler(container)
+
+    # 启动接管超时清理调度器（独立于 with_browser 模式）
+    # 为什么放最后：本调度器只读写 DB，无外部依赖，启动失败不影响主业务
+    start_takeover_timeout_scheduler(container)
+
+    # 启动反爬会话管理（TokenRenewer 后台续期）
+    # 仅在 with_browser=True 时启动：renew_callback 依赖 container.browser 进行 Cookie 续期
+    # 无有效 Cookie 时 start_session_default 内部会失败并记录日志，无副作用
+    # 放在调度器之后：确保浏览器实例已就绪，避免 renew_callback 因 browser=None 反复失效
+    if _should_start_scheduler():
+        try:
+            from xianyu_hunter.web.services.session_starter import trigger_session_start
+            trigger_session_start()
+            logger.info("反爬会话管理已尝试自动启动（若无有效 Cookie 将跳过）")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"反爬会话管理自动启动失败（忽略）: {e}")
+
+
+def _stop_all_sync_schedulers() -> None:
+    """停止所有同步调度器（非 async task 类型的调度器）
+
+    为什么独立：_on_shutdown 中 4 个 if scheduler: stop + None 模式重复，
+    集中维护停止顺序（知识库优先，避免主调度器停止时新任务被提交）。
+    """
+    global _kb_refresh_scheduler, _batch_refresh_scheduler, _cookie_sync_scheduler, _takeover_timeout_scheduler
+
+    # 知识库调度器优先停止：避免停止主调度器时新任务仍被提交
+    if _kb_refresh_scheduler:
+        _kb_refresh_scheduler.stop()
+        _kb_refresh_scheduler = None
+    if _batch_refresh_scheduler:
+        _batch_refresh_scheduler.stop()
+        _batch_refresh_scheduler = None
+    if _cookie_sync_scheduler:
+        _cookie_sync_scheduler.stop()
+        _cookie_sync_scheduler = None
+    if _takeover_timeout_scheduler:
+        _takeover_timeout_scheduler.stop()
+        _takeover_timeout_scheduler = None
 
 
 def setup_startup_hooks(app: FastAPI) -> None:
@@ -430,57 +538,15 @@ def setup_startup_hooks(app: FastAPI) -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"启动迁移钩子失败（忽略）: {e}")
 
-        # 一键启动模式：在 FastAPI 事件循环中启动调度器
-        if _should_start_scheduler():
-            # EventBus 必须先于调度器启动：worker.run_once 会在调度循环中
-            # publish_nowait(EVAL_PASSED)，若无消费者事件会堆积在队列
-            # 无消费者。EventBus 与"是否有 RUNNING 任务"解耦，无条件启动
-            await start_event_bus_in_background(container)
-            await start_scheduler_in_background(container)
-
-        # 启动 Cookie 定时同步（如果配置启用）
-        start_cookie_sync_scheduler(container)
-
-        # 启动批量采集调度器（如果配置启用且 collector 可用）
-        start_batch_refresh_scheduler(container)
-
-        # 启动智能客服知识库定时刷新调度器（如果 chatbot 启用）
-        # 放在最后：chatbot 为可选模块，启动失败不影响主系统
-        start_kb_refresh_scheduler(container)
-
-        # 启动接管超时清理调度器（独立于 with_browser 模式）
-        # 为什么放最后：本调度器只读写 DB，无外部依赖，启动失败不影响主业务
-        start_takeover_timeout_scheduler(container)
-
-        # 启动反爬会话管理（TokenRenewer 后台续期）
-        # 仅在 with_browser=True 时启动：renew_callback 依赖 container.browser 进行 Cookie 续期
-        # 无有效 Cookie 时 start_session_default 内部会失败并记录日志，无副作用
-        # 放在调度器之后：确保浏览器实例已就绪，避免 renew_callback 因 browser=None 反复失效
-        if _should_start_scheduler():
-            try:
-                from xianyu_hunter.web.services.session_starter import trigger_session_start
-                trigger_session_start()
-                logger.info("反爬会话管理已尝试自动启动（若无有效 Cookie 将跳过）")
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"反爬会话管理自动启动失败（忽略）: {e}")
+        # 启动所有后台调度器（EventBus 优先 → 调度器 → Cookie 同步等）
+        await _start_all_schedulers(container)
 
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:
         """优雅停止调度器后台任务"""
-        global _scheduler_task, _cookie_sync_scheduler, _batch_refresh_scheduler, _kb_refresh_scheduler, _takeover_timeout_scheduler, _event_bus_task
-        # 知识库调度器优先停止：避免停止主调度器时新任务仍被提交
-        if _kb_refresh_scheduler:
-            _kb_refresh_scheduler.stop()
-            _kb_refresh_scheduler = None
-        if _batch_refresh_scheduler:
-            _batch_refresh_scheduler.stop()
-            _batch_refresh_scheduler = None
-        if _cookie_sync_scheduler:
-            _cookie_sync_scheduler.stop()
-            _cookie_sync_scheduler = None
-        if _takeover_timeout_scheduler:
-            _takeover_timeout_scheduler.stop()
-            _takeover_timeout_scheduler = None
+        global _scheduler_task, _event_bus_task
+        # 同步调度器优先停止（知识库 → 批量采集 → Cookie 同步 → 接管超时）
+        _stop_all_sync_schedulers()
         if _scheduler_task and not _scheduler_task.done():
             _scheduler_task.cancel()
             # shutdown 中 await 已取消的子任务，使用 suppress 避免 CancelledError 中断 cleanup

@@ -132,6 +132,41 @@ def maintenance_status(
 
 
 # ============== 缓存清理 ==============
+def _cleanup_browser_data(dry_run: bool, cleaned: list, errors: list) -> None:
+    """清理浏览器数据目录（webview_data_*）
+
+    浏览器数据目录存放反检测指纹/cookies，清理后首次启动会重新生成。
+    dry_run 模式只列出不删除。
+    """
+    try:
+        for d in _data_dir().glob("webview_data_*"):
+            if d.is_dir():
+                if dry_run:
+                    cleaned.append(f"[预览] 将删除 {d.name}")
+                else:
+                    shutil.rmtree(d, ignore_errors=True)
+                    cleaned.append(f"已删除 {d.name}")
+    except Exception as e:
+        errors.append(f"浏览器数据清理失败: {e}")
+
+
+def _cleanup_pycache(dry_run: bool, cleaned: list, errors: list) -> None:
+    """清理 Python __pycache__ 缓存（仅项目源码目录）
+
+    排除 .venv 等第三方依赖目录（由 _iter_pycache_dirs 处理），
+    清理后首次导入会重新编译 .pyc，不影响功能。
+    """
+    try:
+        for p in _iter_pycache_dirs():
+            if dry_run:
+                cleaned.append(f"[预览] 将删除 {p}")
+            else:
+                shutil.rmtree(p, ignore_errors=True)
+                cleaned.append(f"已删除 {p}")
+    except Exception as e:
+        errors.append(f"临时文件清理失败: {e}")
+
+
 @router.post("/cache")
 def cleanup_cache(
     req: CleanupRequest,
@@ -149,28 +184,10 @@ def cleanup_cache(
     errors = []
 
     if target in ("browser_data", "all"):
-        try:
-            for d in _data_dir().glob("webview_data_*"):
-                if d.is_dir():
-                    if req.dry_run:
-                        cleaned.append(f"[预览] 将删除 {d.name}")
-                    else:
-                        shutil.rmtree(d, ignore_errors=True)
-                        cleaned.append(f"已删除 {d.name}")
-        except Exception as e:
-            errors.append(f"浏览器数据清理失败: {e}")
+        _cleanup_browser_data(req.dry_run, cleaned, errors)
 
     if target in ("temp", "all"):
-        try:
-            # 清理 Python 缓存文件（仅项目源码目录，排除 .venv 等第三方依赖）
-            for p in _iter_pycache_dirs():
-                if req.dry_run:
-                    cleaned.append(f"[预览] 将删除 {p}")
-                else:
-                    shutil.rmtree(p, ignore_errors=True)
-                    cleaned.append(f"已删除 {p}")
-        except Exception as e:
-            errors.append(f"临时文件清理失败: {e}")
+        _cleanup_pycache(req.dry_run, cleaned, errors)
 
     # 记录操作日志
     _log_cleanup_action("cache", target, cleaned, errors, container)
@@ -185,6 +202,104 @@ def cleanup_cache(
 
 
 # ============== 数据库清理 ==============
+def _cleanup_old_events(conn, dry_run: bool, days: int, cutoff: datetime, cleaned: list) -> int:
+    """清理 events 表中 N 天前的记录
+
+    dry_run 模式只统计不删除，返回 0；非 dry_run 返回实际删除行数。
+    cleaned 列表通过引用修改，追加预览/删除消息。
+    """
+    from sqlalchemy import text
+    if dry_run:
+        count = conn.execute(
+            text("SELECT COUNT(*) FROM events WHERE created_at < :cutoff"),
+            {"cutoff": cutoff},
+        ).scalar()
+        cleaned.append(f"[预览] 将删除 {count} 条 {days} 天前的事件")
+        return 0
+    result = conn.execute(
+        text("DELETE FROM events WHERE created_at < :cutoff"),
+        {"cutoff": cutoff},
+    )
+    deleted = result.rowcount or 0
+    cleaned.append(f"已删除 {deleted} 条 {days} 天前的事件")
+    return deleted
+
+
+def _cleanup_old_items(conn, dry_run: bool, days: int, cutoff: datetime, cleaned: list) -> int:
+    """清理 items 表中 N 天前且未关联 task_links 的记录
+
+    排除已关联商品避免删掉用户仍在监控的数据；
+    dry_run 模式只统计不删除。
+    """
+    from sqlalchemy import text
+    # 关联检查子查询：排除仍在 task_links 中的商品
+    not_linked = "AND id NOT IN (SELECT link_key FROM task_links WHERE link_type='item')"
+    if dry_run:
+        count = conn.execute(
+            text(f"SELECT COUNT(*) FROM items WHERE first_seen < :cutoff {not_linked}"),
+            {"cutoff": cutoff},
+        ).scalar()
+        cleaned.append(f"[预览] 将删除 {count} 条 {days} 天前的未关联商品")
+        return 0
+    result = conn.execute(
+        text(f"DELETE FROM items WHERE first_seen < :cutoff {not_linked}"),
+        {"cutoff": cutoff},
+    )
+    deleted = result.rowcount or 0
+    cleaned.append(f"已删除 {deleted} 条 {days} 天前的未关联商品")
+    return deleted
+
+
+def _cleanup_sold_items(conn, dry_run: bool, cleaned: list) -> int:
+    """清理 task_links 中已售商品关联（display JSON 含 is_sold=true）
+
+    注意：LIKE 模式中的冒号会被 SQLAlchemy 误判为绑定参数，必须用参数化查询。
+    """
+    from sqlalchemy import text
+    # display 字段是 JSON 字符串，匹配 "is_sold":true
+    sold_pattern = '%\"is_sold\":true%'
+    if dry_run:
+        count = conn.execute(
+            text(
+                "SELECT COUNT(*) FROM task_links WHERE link_type='item' "
+                "AND display LIKE :pattern"
+            ),
+            {"pattern": sold_pattern},
+        ).scalar()
+        cleaned.append(f"[预览] 将删除 {count} 条已售商品关联")
+        return 0
+    result = conn.execute(
+        text(
+            "DELETE FROM task_links WHERE link_type='item' "
+            "AND display LIKE :pattern"
+        ),
+        {"pattern": sold_pattern},
+    )
+    deleted = result.rowcount or 0
+    cleaned.append(f"已删除 {deleted} 条已售商品关联")
+    return deleted
+
+
+def _vacuum_database(engine, dry_run: bool, cleaned: list, errors: list) -> None:
+    """执行 VACUUM 压缩数据库
+
+    VACUUM 不能在事务中执行，需通过 execution_options(isolation_level="AUTOCOMMIT")
+    显式关闭 SQLAlchemy 2.0 的隐式事务。
+    """
+    from sqlalchemy import text
+    if dry_run:
+        cleaned.append("[预览] 将执行 VACUUM 压缩数据库")
+        return
+    try:
+        with engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as conn:
+            conn.execute(text("VACUUM"))
+            cleaned.append("已执行 VACUUM 压缩数据库")
+    except Exception as e:
+        errors.append(f"VACUUM 失败: {e}")
+
+
 @router.post("/database")
 def cleanup_database(
     req: CleanupRequest,
@@ -211,65 +326,13 @@ def cleanup_database(
     try:
         with container.repo.engine.begin() as conn:
             if target in ("old_events", "all"):
-                if req.dry_run:
-                    count = conn.execute(
-                        text("SELECT COUNT(*) FROM events WHERE created_at < :cutoff"),
-                        {"cutoff": cutoff},
-                    ).scalar()
-                    cleaned.append(f"[预览] 将删除 {count} 条 {days} 天前的事件")
-                else:
-                    result = conn.execute(
-                        text("DELETE FROM events WHERE created_at < :cutoff"),
-                        {"cutoff": cutoff},
-                    )
-                    total_deleted += result.rowcount or 0
-                    cleaned.append(f"已删除 {result.rowcount or 0} 条 {days} 天前的事件")
+                total_deleted += _cleanup_old_events(conn, req.dry_run, days, cutoff, cleaned)
 
             if target in ("old_items", "all"):
-                # 清理 items 表中 N 天前且不在 task_links 中的记录
-                if req.dry_run:
-                    count = conn.execute(
-                        text(
-                            "SELECT COUNT(*) FROM items WHERE first_seen < :cutoff "
-                            "AND id NOT IN (SELECT link_key FROM task_links WHERE link_type='item')"
-                        ),
-                        {"cutoff": cutoff},
-                    ).scalar()
-                    cleaned.append(f"[预览] 将删除 {count} 条 {days} 天前的未关联商品")
-                else:
-                    result = conn.execute(
-                        text(
-                            "DELETE FROM items WHERE first_seen < :cutoff "
-                            "AND id NOT IN (SELECT link_key FROM task_links WHERE link_type='item')"
-                        ),
-                        {"cutoff": cutoff},
-                    )
-                    total_deleted += result.rowcount or 0
-                    cleaned.append(f"已删除 {result.rowcount or 0} 条 {days} 天前的未关联商品")
+                total_deleted += _cleanup_old_items(conn, req.dry_run, days, cutoff, cleaned)
 
             if target in ("sold_items", "all"):
-                # 清理 task_links 中已售商品的 display JSON 含 is_sold=true 的记录
-                # 注意：LIKE 模式中的冒号会被 SQLAlchemy 误判为绑定参数，必须用参数化查询
-                sold_pattern = '%\"is_sold\":true%'
-                if req.dry_run:
-                    count = conn.execute(
-                        text(
-                            "SELECT COUNT(*) FROM task_links WHERE link_type='item' "
-                            "AND display LIKE :pattern"
-                        ),
-                        {"pattern": sold_pattern},
-                    ).scalar()
-                    cleaned.append(f"[预览] 将删除 {count} 条已售商品关联")
-                else:
-                    result = conn.execute(
-                        text(
-                            "DELETE FROM task_links WHERE link_type='item' "
-                            "AND display LIKE :pattern"
-                        ),
-                        {"pattern": sold_pattern},
-                    )
-                    total_deleted += result.rowcount or 0
-                    cleaned.append(f"已删除 {result.rowcount or 0} 条已售商品关联")
+                total_deleted += _cleanup_sold_items(conn, req.dry_run, cleaned)
 
             if target in ("vacuum", "all"):
                 if req.dry_run:
@@ -282,14 +345,7 @@ def cleanup_database(
         # SQLAlchemy 2.0 的 engine.connect() 默认开启隐式事务，
         # 需通过 execution_options(isolation_level="AUTOCOMMIT") 显式关闭事务
         if target in ("vacuum", "all") and not req.dry_run:
-            try:
-                with container.repo.engine.connect().execution_options(
-                    isolation_level="AUTOCOMMIT"
-                ) as conn:
-                    conn.execute(text("VACUUM"))
-                    cleaned.append("已执行 VACUUM 压缩数据库")
-            except Exception as e:
-                errors.append(f"VACUUM 失败: {e}")
+            _vacuum_database(container.repo.engine, False, cleaned, errors)
 
     except Exception as e:
         errors.append(f"数据库清理失败: {e}")

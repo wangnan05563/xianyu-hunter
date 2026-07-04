@@ -260,61 +260,88 @@ class CookieRotator:
         """
         with self._lock:
             cookie_keys = set(cookies.keys())
-            # 第一遍：计算每层命中的 cookie
-            layer_hits: dict[CookieLayer, set[str]] = {}
-            for layer, layer_def in LAYER_DEFINITIONS.items():
-                hits = layer_def.cookies & cookie_keys
-                if hits:
-                    layer_hits[layer] = hits
+            layer_hits = self._compute_layer_hits(cookie_keys)
 
-            # 第二遍：根据依赖关系决定最终状态
             # 显式分两轮处理消除对 LAYER_DEFINITIONS 迭代顺序的依赖：
             # 先处理无依赖的层（IDENTITY/TRACKING），再处理有依赖的层（SESSION）
             # 确保 SESSION 读取 IDENTITY 状态时，IDENTITY 已被本轮同步更新
             layers_no_dep = [l for l in LAYER_DEFINITIONS if LAYER_DEFINITIONS[l].depends_on is None]
             layers_with_dep = [l for l in LAYER_DEFINITIONS if LAYER_DEFINITIONS[l].depends_on is not None]
             for layer in [*layers_no_dep, *layers_with_dep]:
-                layer_def = LAYER_DEFINITIONS[layer]
-                hits = layer_hits.get(layer, set())
+                self._sync_single_layer_state(layer, layer_hits)
 
-                # 依赖层验证：session 依赖 identity
-                if layer_def.depends_on is not None:
-                    dep_valid = (
-                        layer_def.depends_on in layer_hits
-                        and self._layer_states[layer_def.depends_on].valid
-                    )
-                    if not dep_valid:
-                        # 依赖层无效，当前层强制失效（即使有 cookie 也不标记有效）
-                        old_state = self._layer_states[layer]
-                        if old_state.valid:
-                            logger.warning(
-                                "Cookie 层 {} 因依赖层 {} 无效而失效 (had {} cookies)",
-                                layer.value, layer_def.depends_on.value, len(hits),
-                            )
-                        self._layer_states[layer].valid = False
-                        self._layer_states[layer].cookie_count = len(hits)
-                        continue
+    def _compute_layer_hits(self, cookie_keys: set[str]) -> dict[CookieLayer, set[str]]:
+        """计算每层命中的 cookie 集合
 
-                if hits:
-                    old_state = self._layer_states[layer]
-                    # 记录状态翻转日志：invalid→valid 是关键恢复事件
-                    if not old_state.valid:
-                        logger.info(
-                            "Cookie 层 {} 状态恢复: invalid→valid, {} 个 Cookie (manual_invalidate={})",
-                            layer.value, len(hits), old_state.manual_invalidate,
-                        )
-                    self._layer_states[layer] = LayerState(
-                        valid=True,
-                        updated_at=time.time(),
-                        cookie_count=len(hits),
-                        # 同步恢复时清除 manual_invalidate（cookie 实际有效说明用户已重新登录）
-                        manual_invalidate=False,
-                    )
-                else:
-                    # 该层无 cookie 命中：保持原状态，不主动失效
-                    # 为什么不清零：浏览器内存可能有 cookie 但 JSON 缺失，
-                    # 此处保持原状态由调用方决定是否失效
-                    pass
+        为什么单独提取：避免主流程在循环内嵌套条件判断，降低认知复杂度（S3776）。
+        """
+        layer_hits: dict[CookieLayer, set[str]] = {}
+        for layer, layer_def in LAYER_DEFINITIONS.items():
+            hits = layer_def.cookies & cookie_keys
+            if hits:
+                layer_hits[layer] = hits
+        return layer_hits
+
+    def _sync_single_layer_state(
+        self, layer: CookieLayer, layer_hits: dict[CookieLayer, set[str]]
+    ) -> None:
+        """同步单层状态，处理依赖关系与状态翻转
+
+        依赖层无效时强制失效当前层；有命中时标记有效；无命中时保持原状态。
+        """
+        layer_def = LAYER_DEFINITIONS[layer]
+        hits = layer_hits.get(layer, set())
+
+        # 依赖层验证：session 依赖 identity
+        if layer_def.depends_on is not None:
+            dep_valid = (
+                layer_def.depends_on in layer_hits
+                and self._layer_states[layer_def.depends_on].valid
+            )
+            if not dep_valid:
+                # 依赖层无效，当前层强制失效（即使有 cookie 也不标记有效）
+                self._invalidate_layer_due_to_dependency(layer, layer_def, hits)
+                return
+
+        if hits:
+            self._mark_layer_valid_with_transition_log(layer, hits)
+        # else: 该层无 cookie 命中，保持原状态，不主动失效
+        # 为什么不清零：浏览器内存可能有 cookie 但 JSON 缺失，
+        # 此处保持原状态由调用方决定是否失效
+
+    def _invalidate_layer_due_to_dependency(
+        self, layer: CookieLayer, layer_def: LayerDefinition, hits: set[str]
+    ) -> None:
+        """依赖层无效时强制失效当前层并记录日志"""
+        old_state = self._layer_states[layer]
+        if old_state.valid:
+            logger.warning(
+                "Cookie 层 {} 因依赖层 {} 无效而失效 (had {} cookies)",
+                layer.value, layer_def.depends_on.value, len(hits),
+            )
+        self._layer_states[layer].valid = False
+        self._layer_states[layer].cookie_count = len(hits)
+
+    def _mark_layer_valid_with_transition_log(
+        self, layer: CookieLayer, hits: set[str]
+    ) -> None:
+        """标记层为有效并记录 invalid→valid 的状态翻转日志
+
+        同步恢复时清除 manual_invalidate（cookie 实际有效说明用户已重新登录）。
+        """
+        old_state = self._layer_states[layer]
+        # 记录状态翻转日志：invalid→valid 是关键恢复事件
+        if not old_state.valid:
+            logger.info(
+                "Cookie 层 {} 状态恢复: invalid→valid, {} 个 Cookie (manual_invalidate={})",
+                layer.value, len(hits), old_state.manual_invalidate,
+            )
+        self._layer_states[layer] = LayerState(
+            valid=True,
+            updated_at=time.time(),
+            cookie_count=len(hits),
+            manual_invalidate=False,
+        )
 
     # ============== 状态查询 ==============
 

@@ -180,6 +180,65 @@ def get_task(
     return t
 
 
+def _normalize_task_updates(raw: dict[str, Any]) -> dict[str, Any]:
+    """规范化 TaskUpdate 字段，集中处理 mode/JSON/None/bool 转换
+
+    拆出主流程避免十几个独立 if 拉高 update_task 认知复杂度。
+    顺序与原实现一致：mode → JSON 列表字段 → NOT NULL 字段 None 剔除 → bool→int → 配置覆盖。
+    """
+    updates: dict[str, Any] = dict(raw)
+    _apply_mode_update(updates)
+    _serialize_json_list_fields(updates)
+    _drop_null_nullable_core_fields(updates)
+    _convert_use_cron_to_int(updates)
+    _serialize_config_overrides(updates)
+    return updates
+
+
+def _apply_mode_update(updates: dict[str, Any]) -> None:
+    """mode 字段校验为 TaskMode 枚举，无效值返回 400"""
+    if "mode" not in updates:
+        return
+    try:
+        updates["mode"] = TaskMode(updates["mode"]).value
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"未知 mode: {updates['mode']}")
+
+
+def _serialize_json_list_fields(updates: dict[str, Any]) -> None:
+    """search_filters / exclude_words 需 JSON 序列化后存入 DB（与 create_task 保持一致）"""
+    for field in ("search_filters", "exclude_words"):
+        if field in updates:
+            updates[field] = json.dumps(updates[field], ensure_ascii=False)
+
+
+def _drop_null_nullable_core_fields(updates: dict[str, Any]) -> None:
+    """use_cron / interval_seconds 在 DB 中 NOT NULL，传 null 视为"不更新"
+
+    为什么不像 search_config 那样允许 null：这两个是核心调度字段，不是覆盖字段。
+    """
+    for field in ("use_cron", "interval_seconds"):
+        if updates.get(field) is None:
+            updates.pop(field, None)
+
+
+def _convert_use_cron_to_int(updates: dict[str, Any]) -> None:
+    """use_cron 在 DB 中是 INTEGER（0/1），Pydantic 收到的是 bool，需转换"""
+    if "use_cron" in updates:
+        updates["use_cron"] = 1 if updates["use_cron"] else 0
+
+
+_CONFIG_OVERRIDE_FIELDS = ("search_config", "price_config", "antidetect_config", "eval_config")
+
+
+def _serialize_config_overrides(updates: dict[str, Any]) -> None:
+    """任务级配置覆盖：JSON 序列化存 DB，空值保留 None（运行时视为无覆盖）"""
+    for field in _CONFIG_OVERRIDE_FIELDS:
+        if field in updates:
+            val = updates[field]
+            updates[field] = json.dumps(val, ensure_ascii=False) if val else None
+
+
 @router.patch("/{task_id}")
 def update_task(
     task_id: str,
@@ -193,37 +252,7 @@ def update_task(
     # - 未传的字段被排除（跳过更新）
     # - 传 null 的字段被包含（清除覆盖/设为 NULL）
     # 这解决了前端"清除覆盖"时 null 被跳过导致旧值保留的 bug
-    raw = body.model_dump(exclude_unset=True)
-    updates: dict[str, Any] = dict(raw)
-    if "mode" in updates:
-        try:
-            updates["mode"] = TaskMode(updates["mode"]).value
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"未知 mode: {updates['mode']}")
-    # search_filters 和 exclude_words 需 JSON 序列化后存入 DB（与 create_task 保持一致）
-    if "search_filters" in updates:
-        updates["search_filters"] = json.dumps(updates["search_filters"], ensure_ascii=False)
-    if "exclude_words" in updates:
-        updates["exclude_words"] = json.dumps(updates["exclude_words"], ensure_ascii=False)
-    # use_cron / interval_seconds 在 DB 中是 NOT NULL（无"沿用全局"语义）
-    # 传 null 视为"不更新"（保持原值），避免 IntegrityError
-    # 为什么不像 search_config 那样允许 null：这两个是核心调度字段，不是覆盖字段
-    if updates.get("use_cron") is None:
-        updates.pop("use_cron", None)
-    if updates.get("interval_seconds") is None:
-        updates.pop("interval_seconds", None)
-    # use_cron 在 DB 中是 INTEGER（0/1），Pydantic 收到的是 bool，需转换
-    if "use_cron" in updates:
-        updates["use_cron"] = 1 if updates["use_cron"] else 0
-    # 任务级配置覆盖：JSON 序列化存 DB（空 dict 序列化为 "{}" 字符串，运行时视为无覆盖）
-    if "search_config" in updates:
-        updates["search_config"] = json.dumps(updates["search_config"], ensure_ascii=False) if updates["search_config"] else None
-    if "price_config" in updates:
-        updates["price_config"] = json.dumps(updates["price_config"], ensure_ascii=False) if updates["price_config"] else None
-    if "antidetect_config" in updates:
-        updates["antidetect_config"] = json.dumps(updates["antidetect_config"], ensure_ascii=False) if updates["antidetect_config"] else None
-    if "eval_config" in updates:
-        updates["eval_config"] = json.dumps(updates["eval_config"], ensure_ascii=False) if updates["eval_config"] else None
+    updates = _normalize_task_updates(body.model_dump(exclude_unset=True))
     t.update(updates)
     container.repo.upsert_task(t)
     return {"ok": True, "task": t}
@@ -299,6 +328,45 @@ def get_task_runs(
     return container.repo.get_task_runs(task_id, range_hours=range_hours)
 
 
+async def _handle_scheduler_resume(container: Container, task_id: str) -> str:
+    """resume 分支：scheduler.resume 失败时回滚 DB 到 paused 并抛 400
+
+    P0-1/P0-2：Cookie 失效或冷却期内拒绝恢复，前端应提示用户重新登录。
+    回滚 DB 状态：上方 update_task_status 已写入 "running"，
+    但 scheduler 拒绝恢复，实际仍为 paused，需回滚避免 DB 与内存不一致。
+    """
+    try:
+        container.scheduler.resume(task_id)
+        return "已恢复调度器中的任务"
+    except ResumeBlockedError as e:
+        container.repo.update_task_status(task_id, "paused")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+async def _handle_scheduler_restart(container: Container, task_id: str) -> str:
+    """restart 分支：stop + start，仅对已注册任务生效
+
+    list_tasks 返回 Task 对象列表，需按 id 比较而非直接 in
+    （Task 是 dataclass，in 会触发全字段 __eq__，字符串永不相等）。
+    P0-1/P0-2：start 同样校验 Cookie 层 + 冷却期，失败时回滚 DB 到 stopped。
+    """
+    # 未注册任务（新建后未重启服务）需重启服务才会被加载
+    registered_ids = {t.id for t in container.scheduler.list_tasks()}
+    if task_id not in registered_ids:
+        return "任务未注册到调度器，需重启服务加载"
+
+    is_running = container.scheduler.is_running(task_id)
+    if is_running:
+        await container.scheduler.stop(task_id)
+    try:
+        container.scheduler.start(task_id)
+        return "已重启调度器中的任务"
+    except ResumeBlockedError as e:
+        # 任务已被 stop，回滚 DB 到 stopped 保持与实际一致
+        container.repo.update_task_status(task_id, "stopped")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/{task_id}/control")
 async def control_task(
     task_id: str,
@@ -328,38 +396,12 @@ async def control_task(
                 container.scheduler.pause(task_id)
                 scheduler_note = "已暂停调度器中的任务"
             elif action == "resume":
-                try:
-                    container.scheduler.resume(task_id)
-                    scheduler_note = "已恢复调度器中的任务"
-                except ResumeBlockedError as e:
-                    # P0-1/P0-2：Cookie 失效或冷却期内拒绝恢复，前端应提示用户重新登录
-                    # 回滚 DB 状态：上方 update_task_status 已写入 "running"，
-                    # 但 scheduler 拒绝恢复，实际仍为 paused，需回滚避免 DB 与内存不一致
-                    container.repo.update_task_status(task_id, "paused")
-                    raise HTTPException(status_code=400, detail=str(e))
+                scheduler_note = await _handle_scheduler_resume(container, task_id)
             elif action == "stop":
                 await container.scheduler.stop(task_id)
                 scheduler_note = "已停止调度器中的任务"
             elif action == "restart":
-                # restart = stop + start，仅对已注册任务生效
-                # 未注册任务（新建后未重启服务）需重启服务才会被加载
-                # list_tasks 返回 Task 对象列表，需按 id 比较而非直接 in
-                # （Task 是 dataclass，in 会触发全字段 __eq__，字符串永不相等）
-                registered_ids = {t.id for t in container.scheduler.list_tasks()}
-                if task_id in registered_ids:
-                    is_running = container.scheduler.is_running(task_id)
-                    if is_running:
-                        await container.scheduler.stop(task_id)
-                    try:
-                        container.scheduler.start(task_id)
-                        scheduler_note = "已重启调度器中的任务"
-                    except ResumeBlockedError as e:
-                        # P0-1/P0-2：start 同样校验 Cookie 层 + 冷却期
-                        # 任务已被 stop，回滚 DB 到 stopped 保持与实际一致
-                        container.repo.update_task_status(task_id, "stopped")
-                        raise HTTPException(status_code=400, detail=str(e))
-                else:
-                    scheduler_note = "任务未注册到调度器，需重启服务加载"
+                scheduler_note = await _handle_scheduler_restart(container, task_id)
         except KeyError as e:
             # 任务未注册到 scheduler：仅 DB 状态生效，不阻断请求
             scheduler_note = f"调度器未注册该任务，仅 DB 状态已更新：{e}"

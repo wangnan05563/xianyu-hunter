@@ -120,18 +120,23 @@ export const defaultChannels: ChannelDef[] = [
   },
 ]
 
-// 事件类型定义：与后端通知总线可订阅的 EventType 对齐
+// 事件类型定义（22 种）：与 Timeline EVENT_TYPE_OPTIONS / ENUM_TO_DOT 对齐
 // severity 用于 UI 标签着色，defaultNotify 控制初始订阅
-// 时间线/维护类事件可用于事件列表筛选，但不应作为通知订阅项。
+// key 必须与 ENUM_TO_DOT 中的键一一对应，否则时间线"同步订阅"会丢弃
+// severity 取值与后端 domain/events.py EVENT_SEVERITY 字典保持一致
 export const eventTypes = [
   // 任务生命周期
   { key: 'TASK_STARTED', label: '任务启动', severity: 'info' },
+  { key: 'TASK_STOPPED', label: '任务停止', severity: 'info' },
   { key: 'TASK_PAUSED', label: '任务暂停', severity: 'info' },
   { key: 'TASK_ERROR', label: '任务异常', severity: 'critical' },
+  { key: 'TASK_SEARCH_DONE', label: '搜索完成', severity: 'info' },
   // 商品与评估
   { key: 'ITEM_DISCOVERED', label: '发现商品', severity: 'info' },
+  { key: 'ITEM_FOUND', label: '发现商品（旧枚举）', severity: 'info' },
   { key: 'EVAL_PASSED', label: '评估通过', severity: 'important', defaultNotify: true },
   { key: 'EVAL_REJECTED', label: '评估拒绝', severity: 'info' },
+  { key: 'EVAL_SCORED', label: '评估打分', severity: 'info' },
   // 购买
   { key: 'BUY_REQUESTED', label: '请求购买', severity: 'info' },
   { key: 'BUY_SUCCEEDED', label: '抢单成功', severity: 'critical', defaultNotify: true },
@@ -140,8 +145,16 @@ export const eventTypes = [
   { key: 'NOTIFY_SENT', label: '通知已发送', severity: 'info' },
   // 安全
   { key: 'WAF_TRIGGERED', label: '风控触发', severity: 'critical' },
+  { key: 'WAF_BLOCKED', label: '风控拦截', severity: 'critical' },
   // 认证
   { key: 'LOGIN_EXPIRED', label: '登录过期', severity: 'critical' },
+  { key: 'AUTH_EXPIRED', label: '会话过期', severity: 'important' },
+  // 系统
+  { key: 'SYSTEM_ERROR', label: '系统错误', severity: 'critical' },
+  // 维护（DB 实际存储的事件类型，无对应 EventType 枚举）
+  { key: 'MAINTENANCE_DATABASE', label: '数据库维护', severity: 'info' },
+  { key: 'MAINTENANCE_LOGS', label: '日志清理', severity: 'info' },
+  { key: 'MAINTENANCE_CACHE', label: '缓存清理', severity: 'info' },
 ]
 
 // 严重级别对应的标签颜色

@@ -32,6 +32,10 @@ logger = get_logger()
 
 _ITEM_ID_KEYS = ("itemId", "item_id", "auctionId", "auction_id", "itemID", "id")
 _TITLE_KEYS = ("title", "itemTitle", "item_title", "name", "subject")
+# 商品描述/详情字段（闲鱼搜索 API 部分版本会附带 itemDesc，用于 exclude_words 模糊匹配）
+# 为什么用多个候选键：API 字段命名在不同版本间会变化（itemDesc/itemDescription/desc/content），
+# 全部列出避免漏取
+_DESC_KEYS = ("itemDesc", "itemDescription", "description", "desc", "itemContent", "content")
 # 优先取当前挂牌价 price（与官网展示一致），促销价作为兜底
 # 为什么调整：promoPrice 是促销价（可能临时降价），官网展示的是 price（挂牌价），
 # 两者不一致会导致用户点击跳转后看到不同金额
@@ -51,6 +55,8 @@ _PREFERRED_NESTED_KEYS = (
     "item", "itemInfo", "itemDO", "auction", "auctionInfo", "main", "data",
     "sellerInfo", "userInfo", "ownerInfo",
 )
+# 协议补全前缀：闲鱼 CDN 图片/链接常以 // 开头（协议相对 URL），需补 https: 才能直接访问
+_HTTPS_PREFIX = "https:"
 
 
 def _normalize_key(key: Any) -> str:
@@ -62,31 +68,58 @@ def _is_scalar(value: Any) -> bool:
 
 
 def _find_value_by_key(obj: Any, key: str, depth: int = 0, max_depth: int = 6) -> Any:
+    """递归查找匹配 key 的标量值
+
+    重构说明：按 obj 类型分派到独立函数，避免主函数嵌套过深导致认知复杂度过高（S3776）。
+    """
     if depth > max_depth:
         return None
     target = _normalize_key(key)
     if isinstance(obj, dict):
-        for raw_key, value in obj.items():
-            if _normalize_key(raw_key) == target and _is_scalar(value):
-                return value
+        return _find_value_in_dict(obj, key, target, depth, max_depth)
+    if isinstance(obj, list):
+        return _find_value_in_list(obj, key, depth, max_depth)
+    return None
 
-        preferred_values = [
-            obj[k] for k in _PREFERRED_NESTED_KEYS
-            if k in obj and isinstance(obj[k], (dict, list))
-        ]
-        other_values = [
-            v for k, v in obj.items()
-            if k not in _PREFERRED_NESTED_KEYS and isinstance(v, (dict, list))
-        ]
-        for value in preferred_values + other_values:
-            found = _find_value_by_key(value, key, depth + 1, max_depth)
-            if found is not None:
-                return found
-    elif isinstance(obj, list):
-        for value in obj[:40]:
-            found = _find_value_by_key(value, key, depth + 1, max_depth)
-            if found is not None:
-                return found
+
+def _find_value_in_dict(
+    obj: dict, key: str, target: str, depth: int, max_depth: int
+) -> Any:
+    """在 dict 中查找：先本层 key 精确匹配，再递归子 dict/list
+
+    为什么先本层再递归：本层 key 命中即返回，避免无谓的深递归。
+    preferred_values 优先于 other_values：闲鱼 API 常将商品信息嵌套在
+    item/itemInfo/data 等已知字段中，优先搜索这些字段提高命中率。
+    """
+    # 先本层 key 精确匹配
+    for raw_key, value in obj.items():
+        if _normalize_key(raw_key) == target and _is_scalar(value):
+            return value
+
+    # 收集嵌套 dict/list 值，preferred 优先
+    preferred_values = [
+        obj[k] for k in _PREFERRED_NESTED_KEYS
+        if k in obj and isinstance(obj[k], (dict, list))
+    ]
+    other_values = [
+        v for k, v in obj.items()
+        if k not in _PREFERRED_NESTED_KEYS and isinstance(v, (dict, list))
+    ]
+    for value in preferred_values + other_values:
+        found = _find_value_by_key(value, key, depth + 1, max_depth)
+        if found is not None:
+            return found
+    return None
+
+
+def _find_value_in_list(
+    obj: list, key: str, depth: int, max_depth: int
+) -> Any:
+    """在 list 中递归查找（限制前 40 个元素避免大列表性能问题）"""
+    for value in obj[:40]:
+        found = _find_value_by_key(value, key, depth + 1, max_depth)
+        if found is not None:
+            return found
     return None
 
 
@@ -139,7 +172,7 @@ def _normalize_image_url(value: Any) -> str:
     if not url or url.startswith("data:"):
         return ""
     if not url.startswith(("http://", "https://")):
-        url = "https:" + url if url.startswith("//") else "https://" + url
+        url = _HTTPS_PREFIX + url if url.startswith("//") else "https://" + url
     return url
 
 
@@ -170,6 +203,8 @@ def _extract_api_item_fields(raw: dict) -> dict[str, Any]:
     source: Any = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else raw
     item_id = _first_text(source, _ITEM_ID_KEYS)
     title = _first_text(source, _TITLE_KEYS)
+    # 描述：搜索 API 偶尔会附带 itemDesc 等字段，提取后用于 exclude_words 模糊匹配
+    description = _first_text(source, _DESC_KEYS)
 
     semantic_raw = {
         "itemId": item_id,
@@ -208,6 +243,7 @@ def _extract_api_item_fields(raw: dict) -> dict[str, Any]:
         "view_cnt": _coerce_int(semantic_raw["viewCnt"]),
         "publish_time": _parse_api_publish_time(semantic_raw["publishTime"]),
         "seller_credit": semantic_raw["sellerCredit"],
+        "description": description,
         "semantic_raw": semantic_raw,
     }
 
@@ -241,40 +277,65 @@ def _set_cookie_headers_from_response(response: Any) -> list[str]:
 
 
 def _cookies_from_set_cookie_headers(headers: list[str], response_url: str) -> list[dict[str, Any]]:
-    """Convert Set-Cookie headers to Playwright add_cookies() payloads."""
+    """Convert Set-Cookie headers to Playwright add_cookies() payloads.
+
+    重构说明：按"解析 header → 构建 cookie"两步拆分到独立函数，
+    避免双层循环嵌套+多分支导致认知复杂度过高（S3776）。
+    """
     parsed = urlparse(response_url or "")
     origin = f"{parsed.scheme}://{parsed.netloc}/" if parsed.scheme and parsed.netloc else ""
     cookies: list[dict[str, Any]] = []
 
     for header in headers:
-        jar = SimpleCookie()
-        try:
-            jar.load(header)
-        except CookieError:
-            continue
-        for morsel in jar.values():
-            cookie: dict[str, Any] = {
-                "name": morsel.key,
-                "value": morsel.value,
-                "path": morsel["path"] or "/",
-            }
-            domain = morsel["domain"]
-            if domain:
-                cookie["domain"] = domain
-            elif origin:
-                cookie["url"] = origin
-            else:
-                continue
+        _parse_set_cookie_header(header, origin, cookies)
 
-            if morsel["secure"]:
-                cookie["secure"] = True
-            if morsel["httponly"]:
-                cookie["httpOnly"] = True
-            same_site = (morsel["samesite"] or "").lower()
-            if same_site in {"lax", "strict", "none"}:
-                cookie["sameSite"] = {"lax": "Lax", "strict": "Strict", "none": "None"}[same_site]
-            cookies.append(cookie)
     return cookies
+
+
+def _parse_set_cookie_header(header: str, origin: str, cookies: list[dict[str, Any]]) -> None:
+    """解析单个 Set-Cookie header，将结果追加到 cookies 列表
+
+    为什么用追加而非返回值：调用方在循环中累积结果，追加模式避免列表合并开销。
+    """
+    jar = SimpleCookie()
+    try:
+        jar.load(header)
+    except CookieError:
+        return
+    for morsel in jar.values():
+        cookie = _build_cookie_from_morsel(morsel, origin)
+        if cookie is not None:
+            cookies.append(cookie)
+
+
+def _build_cookie_from_morsel(morsel, origin: str) -> dict[str, Any] | None:
+    """将单个 morsel 转换为 Playwright cookie 字典
+
+    返回 None 表示该 cookie 缺少 domain 与 origin（无法定位作用域），跳过。
+    为什么这样判断：Playwright add_cookies 要求 cookie 必须有 domain 或 url 之一，
+    否则会被静默丢弃，这里提前过滤避免无效调用。
+    """
+    cookie: dict[str, Any] = {
+        "name": morsel.key,
+        "value": morsel.value,
+        "path": morsel["path"] or "/",
+    }
+    domain = morsel["domain"]
+    if domain:
+        cookie["domain"] = domain
+    elif origin:
+        cookie["url"] = origin
+    else:
+        return None
+
+    if morsel["secure"]:
+        cookie["secure"] = True
+    if morsel["httponly"]:
+        cookie["httpOnly"] = True
+    same_site = (morsel["samesite"] or "").lower()
+    if same_site in {"lax", "strict", "none"}:
+        cookie["sameSite"] = {"lax": "Lax", "strict": "Strict", "none": "None"}[same_site]
+    return cookie
 
 
 async def _sync_response_cookies_to_context(page: Page, response: Any) -> int:
@@ -622,47 +683,21 @@ class SearchMixin:
         Returns:
             搜索结果 ItemSummary 列表（已去重）
         """
-        own_page = page is None
-        if own_page:
-            page = await self.browser.new_page()
-            # 注册外部 page，防止与 scheduler.close_all_pages 并发时被误关
-            # 场景：live_search 端点调用 search() 时，主任务 run_once 可能同时清理 page
-            self.browser.register_external_page(page)
-        assert page is not None
+        page, own_page, release_lock = await self._prepare_search_page_and_lock(page, skip_lock)
         items: list[ItemSummary] = []
-        # Worker 搜索时获取 browser_lock，与 live 端点互斥
-        # skip_lock=True 时跳过（live 端点已在外层持有锁）
-        release_lock = False
-        if self._browser_lock is not None and own_page and not skip_lock:
-            await self._browser_lock.acquire()
-            release_lock = True
         # 性能埋点：记录搜索耗时和搜索方式（api 拦截 / dom 回退），
         # 便于后续日志分析定位性能瓶颈
         search_start = time.monotonic()
         search_via = "unknown"
         self._last_search_error = ""
         try:
-            # H-06 修复：keyword 需做 URL 编码，避免 & # % % 等特殊字符破坏查询语义
+            # H-06 修复：keyword 需做 URL 编码，避免 & # % 等特殊字符破坏查询语义
             # 追加筛选标签对应的 URL 参数（映射关系见 domain/task.py XIANYU_FILTER_MAP）
-            filter_params: list[str] = []
-            if search_filters:
-                filter_params = [XIANYU_FILTER_MAP[f] for f in search_filters if f in XIANYU_FILTER_MAP]
-                if filter_params:
-                    logger.info("搜索筛选参数: {}", ", ".join(search_filters))
+            filter_params = self._build_search_filter_params(search_filters)
             url = build_search_url(keyword, filter_params=filter_params, sort_type=sort_type, regions=regions)
             logger.info("搜索: {}", url)
             # 频率伪装：搜索前按对数正态分布等待，统计计数器同步累加
-            # 延迟导入避免循环依赖；fast 模式仅记录统计保持抢单速度
-            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
-            from xianyu_hunter.modules.freq_disguise import ActionType
-            if not fast:
-                await get_orchestrator().apply_freq_delay(ActionType.SEARCH)
-            else:
-                # 与 buyer.py 保持一致：频率伪装统计失败不应影响搜索主流程
-                try:
-                    get_orchestrator().record_freq_request(ActionType.SEARCH)
-                except Exception:
-                    logger.debug("fast 模式 record_freq_request 失败，忽略不影响搜索")
+            await self._apply_search_freq_delay(fast)
             await self.ad.throttle()
 
             # 始终检查 token 有效性（由 45 分钟缓存决定是否真正刷新）
@@ -671,7 +706,11 @@ class SearchMixin:
             await self._ensure_fresh_m5tk(page)
 
             # 优先通过 route 拦截捕获 API 响应获取结构化数据
-            api_items, session_invalid = await self._call_search_api(page, keyword, max_pages, fast=fast, skip_rgv587_retry=skip_rgv587_retry, sort_type=sort_type, regions=regions)
+            api_items, session_invalid = await self._call_search_api(
+                page, keyword, max_pages, fast=fast,
+                skip_rgv587_retry=skip_rgv587_retry,
+                sort_type=sort_type, regions=regions,
+            )
             # 记录会话失效状态，供 Worker 检测后暂停任务
             self.last_session_invalid = session_invalid
             if api_items:
@@ -681,196 +720,7 @@ class SearchMixin:
                 search_via = "dom"
                 # API 不可用或会话失效时，均尝试 DOM 解析作为兜底
                 # RGV587_ERROR 时页面仍可能渲染搜索结果（10:06 验证可行），不应直接放弃
-                if session_invalid:
-                    logger.warning("搜索 API 会话失效，尝试 DOM 回退: keyword={}", keyword)
-                else:
-                    logger.info("API 不可用，回退到 DOM 解析: {}", keyword)
-                # RGV587 时页面可能未完全渲染，缩短等待时间避免 API 超时
-                await self.ad.human_delay(1000, 2000)
-                # 检查页面是否被重定向到非搜索页面（RGV587 可能触发验证页面跳转）
-                try:
-                    current_url = page.url
-                    if "goofish.com/search" not in current_url:
-                        logger.warning("页面已跳转至非搜索页，跳过 DOM 回退: url={}", current_url[:100])
-                        cards = []
-                    else:
-                        # 先用 evaluate 检查卡片数量（不会卡住），再决定是否执行 query_selector_all
-                        # 多选择器容错：闲鱼前端可能调整 class 命名，覆盖多种历史与当前结构
-                        card_selectors = (
-                            "[class*='feeds-item-wrap'], [class*='feeds-item'], "
-                            "[class*='item-card'], [class*='search-item'], "
-                            "[class*='product-card'], [data-spm*='item']"
-                        )
-                        card_count = await asyncio.wait_for(
-                            page.evaluate(
-                                f"() => document.querySelectorAll(\"{card_selectors}\").length"
-                            ),
-                            timeout=5.0,
-                        )
-                        # 首次未检测到卡片时，等待 2 秒后重试一次（页面可能仍在异步渲染）
-                        if card_count == 0:
-                            await asyncio.sleep(2)
-                            card_count = await asyncio.wait_for(
-                                page.evaluate(
-                                    f"() => document.querySelectorAll(\"{card_selectors}\").length"
-                                ),
-                                timeout=5.0,
-                            )
-                        if card_count == 0:
-                            logger.info("DOM 回退: 页面无搜索卡片 (RGV587 可能阻止了渲染)")
-                            cards = []
-                        else:
-                            logger.info("DOM 回退: 检测到 {} 个卡片，开始解析", card_count)
-                            # 注意：此处不重置 session_invalid 标志
-                            # 检测到卡片不等于会话有效，可能页面渲染了卡片但 API 令牌仍失效
-                            # 重置时机推迟到成功提取商品后（见下方 items 非空时）
-                            cards = await asyncio.wait_for(self._find_cards(page), timeout=8.0)
-                except asyncio.TimeoutError:
-                    logger.warning("DOM 回退查找卡片超时，放弃: keyword={}", keyword)
-                    cards = []
-                except Exception as e:
-                    logger.warning("DOM 回退异常: {}", str(e)[:80])
-                    cards = []
-                if cards:
-                    logger.info("DOM 解析发现 {} 个卡片", len(cards))
-                    # 批量提取：用 page.evaluate 一次性获取所有卡片数据，替代逐个 query_selector
-                    # 将 150+ 次 DOM 往返减少到 1 次，性能提升 10 倍以上
-                    try:
-                        batch_data = await asyncio.wait_for(
-                            page.evaluate(_BATCH_PARSE_SCRIPT),
-                            timeout=10.0,
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning("DOM 批量解析超时，回退到逐个解析")
-                        batch_data = []
-                    except Exception as e:
-                        logger.warning("DOM 批量解析异常: {}", str(e)[:80])
-                        batch_data = []
-
-                    filtered_out = []
-                    if batch_data:
-                        logger.info("DOM 批量解析提取到 {} 条数据", len(batch_data))
-                        for d in batch_data:
-                            item_id = d.get("id", "")
-                            if not item_id or any(i.id == item_id for i in items):
-                                continue
-                            title = d.get("title", "")
-                            # 关键词过滤（与逐个解析逻辑一致）
-                            if keyword and title and not task_keyword_matches_title(keyword, title):
-                                filtered_out.append(title[:50])
-                                continue
-                            thumb = d.get("thumb", "")
-                            if thumb and thumb.startswith("//"):
-                                thumb = "https:" + thumb
-                            # 发布时间：DOM 脚本返回 ISO 字符串，需转为 datetime
-                            pt_str = d.get("publish_time")
-                            pt_val = None
-                            if pt_str:
-                                try:
-                                    pt_val = datetime.fromisoformat(pt_str.replace('Z', '+00:00'))
-                                except Exception:
-                                    pass
-                            # 通过 extract_seller_nick 校验卖家昵称和地区
-                            # DOM 提取的段落匹配可能将昵称和地区搞反，
-                            # 复用 API 路径的校验逻辑确保字段一致性
-                            dom_nick = d.get("seller_nick", "") or ""
-                            dom_region = d.get("region", "") or ""
-                            nick, region = extract_seller_nick({
-                                "userNick": dom_nick,
-                                "region": dom_region,
-                            })
-                            brand = extract_brand(None, title, seller_candidate=nick)
-                            items.append(ItemSummary(
-                                id=item_id,
-                                title=title,
-                                price=float(d.get("price", 0) or 0),
-                                thumb_url=thumb,
-                                region=region,
-                                brand=brand,
-                                is_sold=d.get("is_sold", False),
-                                want_cnt=int(d.get("want_cnt", 0) or 0),
-                                seller_id=d.get("seller_id", "") or "",
-                                seller_nick=nick,
-                                seller_credit=d.get("seller_credit", "") or "",
-                                publish_time=pt_val,
-                            ))
-                    else:
-                        # 批量提取失败时回退到逐个解析
-                        for card in cards:
-                            summary = await self._parse_card(card)
-                            if summary and summary.id and not any(i.id == summary.id for i in items):
-                                if keyword and summary.title and not task_keyword_matches_title(keyword, summary.title):
-                                    filtered_out.append(summary.title[:50])
-                                    continue
-                                items.append(summary)
-                    if filtered_out:
-                        logger.info("DOM 回退过滤掉 {} 个标题 (关键词={}): {}", len(filtered_out), keyword, filtered_out)
-                    logger.info("DOM 解析有效结果: {} 个", len(items))
-                    # DOM 回退成功提取到商品才重置会话失效标志：
-                    # 此时页面能正常渲染搜索结果且解析有效，说明会话实际可用
-                    # 如果解析到 0 个商品（选择器失效/关键词过滤），保持标志为 True，
-                    # 让 live_links 触发令牌刷新重试，避免持续走 DOM 回退
-                    if session_invalid and items:
-                        self.last_session_invalid = False
-                        logger.info("DOM 回退成功提取 {} 个商品，重置会话失效标志", len(items))
-                # DOM 翻页：首屏解析后，若 max_pages > 1 则滚动加载更多屏
-                # 为什么需要：DOM 回退原仅取首屏 26 条，650 元商品可能在第 2 屏
-                if items and max_pages > 1:
-                    seen_ids = {i.id for i in items}
-                    for dom_page in range(1, max_pages):
-                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        await self.ad.human_delay(2000, 4000)
-                        try:
-                            batch_data = await asyncio.wait_for(
-                                page.evaluate(_BATCH_PARSE_SCRIPT),
-                                timeout=10.0,
-                            )
-                        except (asyncio.TimeoutError, Exception) as e:
-                            logger.warning("DOM 翻页第 {} 屏解析失败: {}", dom_page + 1, str(e)[:80])
-                            break
-                        new_count = 0
-                        for d in (batch_data or []):
-                            item_id = d.get("id", "")
-                            if not item_id or item_id in seen_ids:
-                                continue
-                            title = d.get("title", "")
-                            if keyword and title and not task_keyword_matches_title(keyword, title):
-                                continue
-                            thumb = d.get("thumb", "")
-                            if thumb and thumb.startswith("//"):
-                                thumb = "https:" + thumb
-                            pt_str = d.get("publish_time")
-                            pt_val = None
-                            if pt_str:
-                                try:
-                                    pt_val = datetime.fromisoformat(pt_str.replace('Z', '+00:00'))
-                                except Exception:
-                                    pass
-                            dom_nick = d.get("seller_nick", "") or ""
-                            dom_region = d.get("region", "") or ""
-                            nick, region = extract_seller_nick({"userNick": dom_nick, "region": dom_region})
-                            brand = extract_brand(None, title, seller_candidate=nick)
-                            items.append(ItemSummary(
-                                id=item_id,
-                                title=title,
-                                price=float(d.get("price", 0) or 0),
-                                thumb_url=thumb,
-                                region=region,
-                                brand=brand,
-                                is_sold=d.get("is_sold", False),
-                                want_cnt=int(d.get("want_cnt", 0) or 0),
-                                seller_id=d.get("seller_id", "") or "",
-                                seller_nick=nick,
-                                seller_credit=d.get("seller_credit", "") or "",
-                                publish_time=pt_val,
-                            ))
-                            seen_ids.add(item_id)
-                            new_count += 1
-                        logger.info("DOM 翻页第 {} 屏新增 {} 个商品", dom_page + 1, new_count)
-                        if new_count == 0:
-                            break
-                if not items:
-                    logger.info("搜索无结果: {}", keyword)
+                items = await self._fallback_to_dom_search(page, keyword, max_pages, session_invalid)
 
             elapsed = time.monotonic() - search_start
             logger.info("搜索完成: 共 {} 个商品, 耗时 {:.1f}s, 方式={}", len(items), elapsed, search_via)
@@ -879,15 +729,319 @@ class SearchMixin:
             self._last_search_error = str(e)
             logger.exception("搜索失败 {}: {}, 耗时 {:.1f}s", keyword, e, elapsed)
         finally:
-            if own_page:
-                try:
-                    self.browser.unregister_external_page(page)
-                    await page.close()
-                except Exception:
-                    pass  # 页面可能已被取消，忽略关闭异常
-            if release_lock:
-                self._browser_lock.release()
+            await self._cleanup_search_resources(page, own_page, release_lock)
         return items
+
+    async def _prepare_search_page_and_lock(
+        self,
+        page: Page | None,
+        skip_lock: bool,
+    ) -> tuple[Page, bool, bool]:
+        """创建/注册搜索页并按需获取 browser_lock
+
+        返回 (page, own_page, release_lock)。
+        own_page=True 表示本方法创建了页面，调用方需在 finally 中清理。
+        """
+        own_page = page is None
+        if own_page:
+            page = await self.browser.new_page()
+            # 注册外部 page，防止与 scheduler.close_all_pages 并发时被误关
+            # 场景：live_search 端点调用 search() 时，主任务 run_once 可能同时清理 page
+            self.browser.register_external_page(page)
+        assert page is not None
+        # Worker 搜索时获取 browser_lock，与 live 端点互斥
+        # skip_lock=True 时跳过（live 端点已在外层持有锁）
+        release_lock = False
+        if self._browser_lock is not None and own_page and not skip_lock:
+            await self._browser_lock.acquire()
+            release_lock = True
+        return page, own_page, release_lock
+
+    async def _cleanup_search_resources(
+        self,
+        page: Page,
+        own_page: bool,
+        release_lock: bool,
+    ) -> None:
+        """搜索结束的资源清理：注销外部 page、关闭页面、释放 browser_lock
+
+        为什么吞掉关闭异常：页面可能已被 scheduler 并发清理，重复 close 会抛异常，
+        但属正常竞态，不应影响搜索结果返回。
+        """
+        if own_page:
+            try:
+                self.browser.unregister_external_page(page)
+                await page.close()
+            except Exception:
+                pass  # 页面可能已被取消，忽略关闭异常
+        if release_lock:
+            self._browser_lock.release()
+
+    def _build_search_filter_params(self, search_filters: list[str] | None) -> list[str]:
+        """将闲鱼筛选标签映射为 URL 查询参数
+
+        为什么显式过滤未知标签：XIANYU_FILTER_MAP 是白名单，
+        未知标签会被静默忽略，避免向 URL 注入侵扰性参数触发风控。
+        """
+        if not search_filters:
+            return []
+        filter_params = [XIANYU_FILTER_MAP[f] for f in search_filters if f in XIANYU_FILTER_MAP]
+        if filter_params:
+            logger.info("搜索筛选参数: {}", ", ".join(search_filters))
+        return filter_params
+
+    async def _apply_search_freq_delay(self, fast: bool) -> None:
+        """应用搜索前的频率伪装延迟
+
+        延迟导入避免循环依赖；fast 模式仅记录统计保持抢单速度，
+        与 buyer.py 保持一致：频率伪装统计失败不应影响搜索主流程。
+        """
+        from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+        from xianyu_hunter.modules.freq_disguise import ActionType
+        if not fast:
+            await get_orchestrator().apply_freq_delay(ActionType.SEARCH)
+        else:
+            try:
+                get_orchestrator().record_freq_request(ActionType.SEARCH)
+            except Exception:
+                logger.debug("fast 模式 record_freq_request 失败，忽略不影响搜索")
+
+    async def _fallback_to_dom_search(
+        self,
+        page: Page,
+        keyword: str,
+        max_pages: int,
+        session_invalid: bool,
+    ) -> list[ItemSummary]:
+        """API 不可用或会话失效时的 DOM 解析回退主流程
+
+        RGV587_ERROR 时页面仍可能渲染搜索结果，不应直接放弃。
+        """
+        if session_invalid:
+            logger.warning("搜索 API 会话失效，尝试 DOM 回退: keyword={}", keyword)
+        else:
+            logger.info("API 不可用，回退到 DOM 解析: {}", keyword)
+        # RGV587 时页面可能未完全渲染，缩短等待时间避免 API 超时
+        await self.ad.human_delay(1000, 2000)
+        cards = await self._collect_dom_cards(page, keyword)
+        items: list[ItemSummary] = []
+        if cards:
+            logger.info("DOM 解析发现 {} 个卡片", len(cards))
+            # 批量提取：用 page.evaluate 一次性获取所有卡片数据，替代逐个 query_selector
+            # 将 150+ 次 DOM 往返减少到 1 次，性能提升 10 倍以上
+            batch_data = await self._evaluate_dom_batch(page)
+            filtered_out: list[str] = []
+            if batch_data:
+                filtered_out = self._build_items_from_dom_batch(batch_data, items, keyword)
+            else:
+                # 批量提取失败时回退到逐个解析
+                filtered_out = await self._parse_dom_cards_one_by_one(cards, items, keyword)
+            if filtered_out:
+                logger.info("DOM 回退过滤掉 {} 个标题 (关键词={}): {}", len(filtered_out), keyword, filtered_out)
+            logger.info("DOM 解析有效结果: {} 个", len(items))
+            # DOM 回退成功提取到商品才重置会话失效标志：
+            # 此时页面能正常渲染搜索结果且解析有效，说明会话实际可用
+            # 如果解析到 0 个商品（选择器失效/关键词过滤），保持标志为 True，
+            # 让 live_links 触发令牌刷新重试，避免持续走 DOM 回退
+            if session_invalid and items:
+                self.last_session_invalid = False
+                logger.info("DOM 回退成功提取 {} 个商品，重置会话失效标志", len(items))
+            # DOM 翻页：首屏解析后，若 max_pages > 1 则滚动加载更多屏
+            # 为什么需要：DOM 回退原仅取首屏 26 条，650 元商品可能在第 2 屏
+            if items and max_pages > 1:
+                await self._paginate_dom_results(page, items, keyword, max_pages)
+            if not items:
+                logger.info("搜索无结果: {}", keyword)
+        return items
+
+    async def _collect_dom_cards(self, page: Page, keyword: str) -> list:
+        """DOM 回退：检测页面跳转并查找搜索卡片
+
+        包含卡片数量评估、首次为 0 时 2 秒重试、查找超时保护。
+        选择器必须与 _BATCH_PARSE_SCRIPT 保持一致，否则会漏卡片。
+        """
+        # 检查页面是否被重定向到非搜索页面（RGV587 可能触发验证页面跳转）
+        try:
+            current_url = page.url
+            if "goofish.com/search" not in current_url:
+                logger.warning("页面已跳转至非搜索页，跳过 DOM 回退: url={}", current_url[:100])
+                return []
+            # 先用 evaluate 检查卡片数量（不会卡住），再决定是否执行 query_selector_all
+            # 多选择器容错：闲鱼前端可能调整 class 命名，覆盖多种历史与当前结构
+            card_selectors = (
+                "[class*='feeds-item-wrap'], [class*='feeds-item'], "
+                "[class*='item-card'], [class*='search-item'], "
+                "[class*='product-card'], [data-spm*='item']"
+            )
+            card_count = await asyncio.wait_for(
+                page.evaluate(f"() => document.querySelectorAll(\"{card_selectors}\").length"),
+                timeout=5.0,
+            )
+            # 首次未检测到卡片时，等待 2 秒后重试一次（页面可能仍在异步渲染）
+            if card_count == 0:
+                await asyncio.sleep(2)
+                card_count = await asyncio.wait_for(
+                    page.evaluate(f"() => document.querySelectorAll(\"{card_selectors}\").length"),
+                    timeout=5.0,
+                )
+            if card_count == 0:
+                logger.info("DOM 回退: 页面无搜索卡片 (RGV587 可能阻止了渲染)")
+                return []
+            logger.info("DOM 回退: 检测到 {} 个卡片，开始解析", card_count)
+            # 注意：此处不重置 session_invalid 标志
+            # 检测到卡片不等于会话有效，可能页面渲染了卡片但 API 令牌仍失效
+            # 重置时机推迟到成功提取商品后（见 _fallback_to_dom_search）
+            return await asyncio.wait_for(self._find_cards(page), timeout=8.0)
+        except asyncio.TimeoutError:
+            logger.warning("DOM 回退查找卡片超时，放弃: keyword={}", keyword)
+            return []
+        except Exception as e:
+            logger.warning("DOM 回退异常: {}", str(e)[:80])
+            return []
+
+    async def _evaluate_dom_batch(self, page: Page) -> list:
+        """执行批量解析脚本，异常时返回空列表（由调用方回退到逐个解析）"""
+        try:
+            return await asyncio.wait_for(page.evaluate(_BATCH_PARSE_SCRIPT), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning("DOM 批量解析超时，回退到逐个解析")
+            return []
+        except Exception as e:
+            logger.warning("DOM 批量解析异常: {}", str(e)[:80])
+            return []
+
+    def _build_item_from_dom_data(
+        self,
+        d: dict,
+        keyword: str,
+        filtered_out: list[str] | None = None,
+    ) -> ItemSummary | None:
+        """从 DOM 单条数据构造 ItemSummary
+
+        数据无效或被关键词过滤时返回 None。
+        filtered_out 非 None 时，被关键词过滤的标题会被追加进去（仅首屏解析使用，
+        翻页解析不传该参数以保持原行为：翻页时被过滤的标题不记录）。
+        """
+        item_id = d.get("id", "")
+        if not item_id:
+            return None
+        title = d.get("title", "")
+        # 关键词过滤（与逐个解析逻辑一致）
+        if keyword and title and not task_keyword_matches_title(keyword, title):
+            if filtered_out is not None:
+                filtered_out.append(title[:50])
+            return None
+        thumb = d.get("thumb", "")
+        if thumb and thumb.startswith("//"):
+            thumb = _HTTPS_PREFIX + thumb
+        # 发布时间：DOM 脚本返回 ISO 字符串，需转为 datetime
+        pt_val = self._parse_dom_publish_time(d.get("publish_time"))
+        # 通过 extract_seller_nick 校验卖家昵称和地区
+        # DOM 提取的段落匹配可能将昵称和地区搞反，
+        # 复用 API 路径的校验逻辑确保字段一致性
+        dom_nick = d.get("seller_nick", "") or ""
+        dom_region = d.get("region", "") or ""
+        nick, region = extract_seller_nick({"userNick": dom_nick, "region": dom_region})
+        brand = extract_brand(None, title, seller_candidate=nick)
+        return ItemSummary(
+            id=item_id,
+            title=title,
+            price=float(d.get("price", 0) or 0),
+            thumb_url=thumb,
+            region=region,
+            brand=brand,
+            is_sold=d.get("is_sold", False),
+            want_cnt=int(d.get("want_cnt", 0) or 0),
+            seller_id=d.get("seller_id", "") or "",
+            seller_nick=nick,
+            seller_credit=d.get("seller_credit", "") or "",
+            publish_time=pt_val,
+        )
+
+    @staticmethod
+    def _parse_dom_publish_time(pt_str: str | None) -> datetime | None:
+        """解析 DOM 脚本返回的 ISO 时间字符串为 datetime"""
+        if not pt_str:
+            return None
+        try:
+            return datetime.fromisoformat(pt_str.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _build_items_from_dom_batch(
+        self,
+        batch_data: list,
+        items: list[ItemSummary],
+        keyword: str,
+    ) -> list[str]:
+        """从批量解析数据构建 ItemSummary 并追加到 items
+
+        返回被关键词过滤的标题列表（用于日志输出）。
+        """
+        logger.info("DOM 批量解析提取到 {} 条数据", len(batch_data))
+        filtered_out: list[str] = []
+        for d in batch_data:
+            item_id = d.get("id", "")
+            if not item_id or any(i.id == item_id for i in items):
+                continue
+            item = self._build_item_from_dom_data(d, keyword, filtered_out)
+            if item is None:
+                continue
+            items.append(item)
+        return filtered_out
+
+    async def _parse_dom_cards_one_by_one(
+        self,
+        cards: list,
+        items: list[ItemSummary],
+        keyword: str,
+    ) -> list[str]:
+        """逐个解析卡片（批量解析失败时的回退路径）"""
+        filtered_out: list[str] = []
+        for card in cards:
+            summary = await self._parse_card(card)
+            if summary and summary.id and not any(i.id == summary.id for i in items):
+                if keyword and summary.title and not task_keyword_matches_title(keyword, summary.title):
+                    filtered_out.append(summary.title[:50])
+                    continue
+                items.append(summary)
+        return filtered_out
+
+    async def _paginate_dom_results(
+        self,
+        page: Page,
+        items: list[ItemSummary],
+        keyword: str,
+        max_pages: int,
+    ) -> None:
+        """DOM 翻页：滚动加载更多屏并解析追加到 items
+
+        为什么需要：DOM 回退原仅取首屏 26 条，650 元商品可能在第 2 屏。
+        """
+        seen_ids = {i.id for i in items}
+        for dom_page in range(1, max_pages):
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await self.ad.human_delay(2000, 4000)
+            try:
+                batch_data = await asyncio.wait_for(page.evaluate(_BATCH_PARSE_SCRIPT), timeout=10.0)
+            except Exception as e:
+                logger.warning("DOM 翻页第 {} 屏解析失败: {}", dom_page + 1, str(e)[:80])
+                break
+            new_count = 0
+            for d in (batch_data or []):
+                item_id = d.get("id", "")
+                if not item_id or item_id in seen_ids:
+                    continue
+                # 翻页时不传 filtered_out：原行为为被过滤的标题不记录，仅直接跳过
+                item = self._build_item_from_dom_data(d, keyword)
+                if item is None:
+                    continue
+                items.append(item)
+                seen_ids.add(item.id)
+                new_count += 1
+            logger.info("DOM 翻页第 {} 屏新增 {} 个商品", dom_page + 1, new_count)
+            if new_count == 0:
+                break
 
     async def _call_search_api(self, page: Page, keyword: str, max_pages: int = 3, fast: bool = False, skip_rgv587_retry: bool = False, sort_type: str = "default", regions: str = "") -> tuple[list[ItemSummary], bool]:
         """通过 Playwright route 拦截捕获搜索 API 响应
@@ -1192,6 +1346,10 @@ class SearchMixin:
         results: list[dict] = []
         # 优先从搜索结果中收集已有的 seller_id（API 响应中包含此字段）
         sellers_from_search: dict[str, dict] = {}
+        # 描述映射：item_id -> description，用于详情补抓时回填到 results
+        # 为什么需要此映射：live_search 多数情况下没有 item_desc，需要在 collect_sellers
+        # 访问详情页时回填到 display 字典，让 exclude_words 能匹配描述
+        desc_by_item_id: dict[str, str] = {}
         for item in items:
             # 闲鱼商品详情页 URL 格式（.htm 已废弃，使用 /item?id=）
             item_url = build_item_url(item.id)
@@ -1263,6 +1421,10 @@ class SearchMixin:
                         continue
                     try:
                         detail = await self.detail(item.id, page=detail_page)
+                        # 详情页含 description：缓存起来供后续回填到 results，
+                        # 让 exclude_words 能匹配描述中的关键词
+                        if detail and getattr(detail, "description", ""):
+                            desc_by_item_id[item.id] = detail.description
                         if detail and detail.seller_id and detail.seller_id not in seen_sellers:
                             seen_sellers.add(detail.seller_id)
                             # DOM 回退模式下 detail() 不返回 nick（需访问卖家主页），
@@ -1297,4 +1459,14 @@ class SearchMixin:
 
         seller_count = len([r for r in results if r.get("link_type") == "seller"])
         logger.info("live_search 完成: {} 个商品, {} 个卖家, {} 条总结果", len(items), seller_count, len(results))
+        # 回填 description：把详情页补抓的描述附到 item 行的 link_key/item_id 字段上
+        # 为什么只对 item 类型回填：seller 行的 item_id 字段实际指向原商品 id，
+        # 但 seller 类型不参与 exclude_words 过滤，无需描述
+        # 注意：description 不写入 results[i]["item_id"] 等已有字段，单独加一个键便于过滤逻辑读取
+        if desc_by_item_id:
+            for r in results:
+                if r.get("link_type") == "item":
+                    desc = desc_by_item_id.get(r.get("link_key") or r.get("item_id"), "")
+                    if desc:
+                        r["item_desc"] = desc
         return results

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Switch, Tag, message, Typography } from 'antd'
+import { Card, Switch, Tag, message, Typography, Tabs } from 'antd'
 import { aiApi, type AIConfig as AIConfigData, type AIUsage } from '../../../api'
 import { extractApiError } from '../../../utils/apiError'
 import { PRESETS, EMBEDDING_PRESETS } from './constants'
@@ -279,27 +279,45 @@ export default function AIConfig() {
           </div>
         )}
 
-        <ModelConfigForm
-          config={config}
-          onConfigChange={updateConfig}
-          showApiKey={showApiKey}
-          onToggleShowApiKey={() => setShowApiKey(!showApiKey)}
-          onApplyPreset={applyPreset}
-          testing={testing}
-          testResult={testResult}
-          onTestConnection={handleTestConnection}
-        />
-
-        {/* Embedding 配置区：与 LLM 同属"AI 服务"配置域，但端点可独立 */}
-        <EmbeddingConfigForm
-          config={config}
-          onConfigChange={updateConfig}
-          showApiKey={showApiKey}
-          onToggleShowApiKey={() => setShowApiKey(!showApiKey)}
-          onApplyPreset={applyEmbeddingPreset}
-          testing={embTesting}
-          testResult={embTestResult}
-          onTestConnection={handleTestEmbeddingConnection}
+        <Tabs
+          // 切换 tab 时保留各自表单状态：两个表单共用 config/showApiKey 等 props，
+          // 但 testing/testResult 独立，因此用 destroyInactiveTab={false} 防止切换时丢失测试结果
+          destroyInactiveTabPane={false}
+          items={[
+            {
+              key: 'ai-service',
+              label: 'AI 服务配置',
+              children: (
+                <ModelConfigForm
+                  config={config}
+                  onConfigChange={updateConfig}
+                  showApiKey={showApiKey}
+                  onToggleShowApiKey={() => setShowApiKey(!showApiKey)}
+                  onApplyPreset={applyPreset}
+                  testing={testing}
+                  testResult={testResult}
+                  onTestConnection={handleTestConnection}
+                />
+              ),
+            },
+            {
+              key: 'embedding-service',
+              label: 'Embedding 向量服务配置',
+              children: (
+                // Embedding 配置区：与 LLM 同属"AI 服务"配置域，但端点可独立
+                <EmbeddingConfigForm
+                  config={config}
+                  onConfigChange={updateConfig}
+                  showApiKey={showApiKey}
+                  onToggleShowApiKey={() => setShowApiKey(!showApiKey)}
+                  onApplyPreset={applyEmbeddingPreset}
+                  testing={embTesting}
+                  testResult={embTestResult}
+                  onTestConnection={handleTestEmbeddingConnection}
+                />
+              ),
+            },
+          ]}
         />
       </div>{/* end 遮罩容器 */}
 

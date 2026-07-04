@@ -41,6 +41,8 @@ _BROWSER_LOGIN_SCRIPT = _REPO / "scripts" / "browser_login.py"
 _AUTH_HELPER_SCRIPT = _REPO / "scripts" / "auth_helper.py"
 _TERMINAL_STATUSES = {"success", "cancelled", "error", "timeout"}
 _LIVE_STATUSES = {"pending", "starting", "opening", "waiting", "already_logged", "running"}
+# Cookie 未持久化提示文案：登录子进程返回 success 但 JSON 未检测到 Cookie 时复用
+_COOKIE_NOT_PERSISTED_MSG = "登录似乎成功，但 Cookie 未持久化，请重试"
 
 router = APIRouter(tags=["unified-login"])
 
@@ -64,26 +66,36 @@ _session: dict = {
 _session_lock = threading.Lock()
 
 
-def _reset_session() -> None:
-    """重置登录会话到 idle 状态"""
+def _reset_session_locked() -> None:
+    """重置登录会话到 idle 状态（调用方必须已持有 _session_lock）
+
+    为什么需要这个无锁版本：start_login 在 with _session_lock 块内检测到子进程
+    已死亡时需要重置 session，若调用 _reset_session() 会再次获取 _session_lock，
+    而 threading.Lock 不可重入，会导致请求永久阻塞（用户表现为"按钮无响应"）。
+    """
     global _session
+    # 杀掉残留子进程
+    _kill_proc(_session.get("proc"))
+    _session = {
+        "method": None,
+        "status": "idle",
+        "message": "",
+        "status_file": None,
+        "proc": None,
+        "pid": None,
+        "qr_png_b64": None,
+        "started_at": 0.0,
+        "cookies_injected": False,
+        "session_token": None,      # MU2: 多用户会话令牌
+        "current_user_id": None,    # MU2: 当前登录用户 ID
+        "multi_user_finalized": False,  # MU2: 重置幂等标志，允许下次登录重新接入
+    }
+
+
+def _reset_session() -> None:
+    """重置登录会话到 idle 状态（调用方未持有 _session_lock 时使用）"""
     with _session_lock:
-        # 杀掉残留子进程
-        _kill_proc(_session.get("proc"))
-        _session = {
-            "method": None,
-            "status": "idle",
-            "message": "",
-            "status_file": None,
-            "proc": None,
-            "pid": None,
-            "qr_png_b64": None,
-            "started_at": 0.0,
-            "cookies_injected": False,
-            "session_token": None,      # MU2: 多用户会话令牌
-            "current_user_id": None,    # MU2: 当前登录用户 ID
-            "multi_user_finalized": False,  # MU2: 重置幂等标志，允许下次登录重新接入
-        }
+        _reset_session_locked()
 
 
 def _kill_proc(proc) -> None:
@@ -98,6 +110,58 @@ def _kill_proc(proc) -> None:
                 proc.kill()
     except OSError:
         pass
+
+
+def _get_quiet_python_executable() -> tuple[str, int]:
+    """获取无控制台窗口的 Python 解释器路径及对应的 creationflags
+
+    为什么需要 pythonw.exe：
+    - Windows 下 python.exe 是控制台子系统程序，subprocess 启动时会弹出黑色控制台窗口
+    - pythonw.exe 是 GUI 子系统程序，无控制台，启动时不弹窗
+    - CREATE_NEW_CONSOLE 对 GUI 子系统程序无效（不会创建控制台），因此 pythonw.exe 不会弹窗
+    - Playwright 浏览器子进程由 Playwright 库自身启动，不继承 Python 进程的 creationflags，
+      因此 pythonw.exe 不会触发硬约束中"CREATE_NO_WINDOW 导致 Playwright 闪退"的问题
+
+    Returns:
+        (python_executable, creationflags)
+        - Windows + pythonw.exe 可用：(pythonw_path, 0)  完全静默
+        - Windows + pythonw.exe 不可用：(python_path, CREATE_NEW_CONSOLE)  fallback 弹窗但保证稳定
+        - macOS/Linux：(sys.executable, 0)  无控制台问题
+    """
+    if os.name != "nt":
+        # macOS/Linux：Python 进程不弹控制台窗口，无需特殊处理
+        return sys.executable, 0
+
+    # Windows：优先使用 pythonw.exe
+    exe = sys.executable
+    pythonw_candidates: list[str] = []
+
+    if exe.lower().endswith("python.exe"):
+        # 同目录下的 pythonw.exe（标准 Python 安装布局）
+        pythonw_candidates.append(exe[:-len("python.exe")] + "pythonw.exe")
+    elif exe.lower().endswith("pythonw.exe"):
+        # 已经是 pythonw.exe
+        return exe, 0
+
+    # venv 场景：venv 目录下可能没有 pythonw.exe，回退到基础解释器
+    # 检查 venv pyvenv.cfg 指向的基础 Python
+    exe_dir = os.path.dirname(exe)
+    pythonw_candidates.append(os.path.join(exe_dir, "pythonw.exe"))
+
+    # 检查 venv 的 base_executable
+    base_exe = getattr(sys, "_base_executable", None)
+    if base_exe and base_exe.lower().endswith("python.exe"):
+        pythonw_candidates.append(base_exe[:-len("python.exe")] + "pythonw.exe")
+
+    for candidate in pythonw_candidates:
+        if os.path.exists(candidate):
+            logger.debug("使用无窗口 Python 解释器: %s", candidate)
+            return candidate, 0
+
+    # fallback：pythonw.exe 不可用，保留 CREATE_NEW_CONSOLE 防止 Playwright 闪退
+    # （硬约束：CREATE_NO_WINDOW 会导致 Playwright GUI 子进程不稳定）
+    logger.warning("pythonw.exe 不可用，回退到 python.exe + CREATE_NEW_CONSOLE（会弹出控制台窗口）")
+    return exe, subprocess.CREATE_NEW_CONSOLE
 
 
 def _trigger_userinfo_refresh() -> None:
@@ -334,8 +398,8 @@ def start_login(request: dict = Body(...)) -> JSONResponse:
                     "current_method": _session["method"],
                     "current_status": _session["status"],
                 })
-            # 子进程已死，重置
-            _reset_session()
+            # 子进程已死，重置（必须用 _reset_session_locked 避免重入锁死锁）
+            _reset_session_locked()
 
         # 启动新会话
         _session["method"] = method
@@ -369,14 +433,20 @@ def _start_browser_login() -> JSONResponse:
     status_file = tmp_dir / f"browser_login_{int(time.time() * 1000)}.json"
 
     try:
+        # 使用 pythonw.exe 静默启动（无控制台窗口），提升用户体验
+        # pythonw.exe 是 GUI 子系统程序，不会弹出 python.exe 黑窗
+        # Playwright 浏览器子进程由 Playwright 库自身启动，不受此设置影响
+        python_exe, creation_flags = _get_quiet_python_executable()
         proc = subprocess.Popen(
             [
-                sys.executable, str(_BROWSER_LOGIN_SCRIPT),
+                python_exe, str(_BROWSER_LOGIN_SCRIPT),
                 "--status-file", str(status_file),
                 "--timeout", "300",
             ],
-            # Playwright GUI 子进程必须用 CREATE_NEW_CONSOLE，CREATE_NO_WINDOW 会导致窗口不稳定/闪退
-            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
+            # creation_flags 由 _get_quiet_python_executable 决定：
+            # - pythonw.exe 可用时为 0（完全静默）
+            # - fallback 到 python.exe 时为 CREATE_NEW_CONSOLE（防 Playwright 闪退，但会弹窗）
+            creationflags=creation_flags,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -516,7 +586,7 @@ def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
         if not _verify_cookies(max_retries=5, delay=1.5):
             logger.warning("QR 登录子进程返回 success，但 Cookie 未在数据库中检测到")
             final_state = "error"
-            data["message"] = "登录似乎成功，但 Cookie 未持久化，请重试"
+            data["message"] = _COOKIE_NOT_PERSISTED_MSG
 
     with _session_lock:
         if final_state == "success":
@@ -549,22 +619,29 @@ def _background_wait(proc: subprocess.Popen, status_file: Path, method: str) -> 
     """后台线程：等待子进程退出，同步终态"""
     global _session
 
+    # 必须使用 communicate() 而非 wait()：
+    # wait() 不读取 PIPE 缓冲区，当子进程输出满 64KB 后会被阻塞卡死，
+    # 导致 _session["status"] 永远停留在 "running"，后续启动请求被拒绝。
+    # communicate() 会持续读取输出，避免缓冲区死锁。
     try:
-        proc.wait(timeout=310)
+        stdout, stderr = proc.communicate(timeout=310)
     except subprocess.TimeoutExpired:
         logger.warning("登录子进程超时，强制终止")
         _kill_proc(proc)
+        # 超时后再次调用 communicate 以获取已产生的输出并回收子进程
+        try:
+            stdout, stderr = proc.communicate(timeout=5)
+        except Exception:
+            stdout, stderr = b'', b''
+    except Exception:
+        stdout, stderr = b'', b''
 
     # 读取子进程输出用于调试
-    try:
-        stdout, stderr = proc.communicate(timeout=5)
-        if stdout:
-            logger.debug("登录子进程 stdout: %s", stdout.decode(errors="replace")[:500])
-        if stderr:
-            for line in stderr.decode(errors="replace").splitlines()[:10]:
-                logger.debug("登录子进程 stderr: %s", line[:200])
-    except Exception:
-        pass
+    if stdout:
+        logger.debug("登录子进程 stdout: %s", stdout.decode(errors="replace")[:500])
+    if stderr:
+        for line in stderr.decode(errors="replace").splitlines()[:10]:
+            logger.debug("登录子进程 stderr: %s", line[:200])
 
     # 读取状态文件
     data = _read_status_file(str(status_file))
@@ -576,7 +653,7 @@ def _background_wait(proc: subprocess.Popen, status_file: Path, method: str) -> 
         if not _verify_cookies(max_retries=3, delay=0.5):
             logger.warning("浏览器登录子进程返回 success，但 Cookie 未在数据库中检测到")
             file_status = "error"
-            data["message"] = "登录似乎成功，但 Cookie 未持久化，请重试"
+            data["message"] = _COOKIE_NOT_PERSISTED_MSG
 
     with _session_lock:
         # 如果已经是 success（前端轮询已更新），保持 success
@@ -635,7 +712,7 @@ async def login_status() -> dict:
         # 子进程已保证 Cookie 写入，快速确认即可（1.5s→0.6s）
         if normalized_status == "success" and not _verify_cookies(max_retries=2, delay=0.3):
             normalized_status = "error"
-            data["message"] = "登录似乎成功，但 Cookie 未持久化，请重试"
+            data["message"] = _COOKIE_NOT_PERSISTED_MSG
 
         with _session_lock:
             _session["status"] = normalized_status

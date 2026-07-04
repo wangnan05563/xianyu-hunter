@@ -797,6 +797,67 @@ def export_rows(
     )
 
 
+def _validate_import_body(body: ImportBody) -> None:
+    """集中校验导入请求体，避免主流程被多重 if 拉高认知复杂度"""
+    if body.confirm_token != CONFIRM_TOKEN:
+        raise HTTPException(status_code=400, detail=f"需要 confirm_token={CONFIRM_TOKEN}")
+    if not body.rows:
+        raise HTTPException(status_code=400, detail="rows 不能为空")
+    if len(body.rows) > MAX_IMPORT_ROWS:
+        raise HTTPException(status_code=400, detail=f"单次最多导入 {MAX_IMPORT_ROWS} 行")
+    if body.mode not in ("insert", "replace"):
+        raise HTTPException(status_code=400, detail="mode 必须为 insert 或 replace")
+
+
+def _resolve_import_headers(body: ImportBody, cols: list[dict]) -> tuple[list[str], dict[str, dict]]:
+    """解析 headers 缺省值并校验列名合法性，返回 (headers, col_by_name)"""
+    col_by_name = {c["name"]: c for c in cols}
+    # headers 缺省按列顺序
+    headers = body.headers or [c["name"] for c in cols]
+    for h in headers:
+        if h not in col_by_name:
+            raise HTTPException(status_code=400, detail=f"未知列: {h}")
+    return headers, col_by_name
+
+
+def _build_insert_sql(table: str, mode: str, values: dict[str, Any]) -> str:
+    """根据 mode 选择 INSERT 或 INSERT OR REPLACE，避免在主循环内分支"""
+    cols_list = list(values.keys())
+    placeholders = ", ".join(f":{c}" for c in cols_list)
+    if mode == "replace":
+        return f"INSERT OR REPLACE INTO {table} ({', '.join(cols_list)}) VALUES ({placeholders})"
+    return f"INSERT INTO {table} ({', '.join(cols_list)}) VALUES ({placeholders})"
+
+
+def _is_unique_constraint_error(e: SQLAlchemyError) -> bool:
+    """识别 SQLite 主键/唯一约束冲突，insert 模式下计入 skipped 而非 errors"""
+    msg_upper = str(e).upper()
+    return "UNIQUE" in msg_upper or "PRIMARY KEY" in msg_upper
+
+
+def _execute_single_import(
+    container: Container, table: str, mode: str,
+    raw_row: list, headers: list[str], col_by_name: dict[str, dict], idx: int,
+) -> tuple[bool, bool, str | None]:
+    """执行单行导入，返回 (inserted, skipped, error_msg)
+
+    三态返回避免主循环里再分支：调用方按 bool 累加计数即可。
+    """
+    if len(raw_row) != len(headers):
+        return False, False, f"第 {idx} 行列数不匹配"
+    values = {h: _parse_value(v, col_by_name[h]["type"]) for h, v in zip(headers, raw_row)}
+    sql = _build_insert_sql(table, mode, values)
+    try:
+        with container.repo.engine.begin() as conn:
+            conn.execute(text(sql), values)
+        return True, False, None
+    except SQLAlchemyError as e:
+        # 主键冲突时 SQLite 抛 IntegrityError，insert 模式计入 skipped
+        if _is_unique_constraint_error(e):
+            return False, True, None
+        return False, False, f"第 {idx} 行失败: {e}"
+
+
 @router.post("/tables/{table}/import")
 def import_rows(
     table: str,
@@ -811,48 +872,22 @@ def import_rows(
     - 需要 confirm_token（导入可能产生大量数据）
     """
     _validate_table(table)
-    if body.confirm_token != CONFIRM_TOKEN:
-        raise HTTPException(status_code=400, detail=f"需要 confirm_token={CONFIRM_TOKEN}")
-    if not body.rows:
-        raise HTTPException(status_code=400, detail="rows 不能为空")
-    if len(body.rows) > MAX_IMPORT_ROWS:
-        raise HTTPException(status_code=400, detail=f"单次最多导入 {MAX_IMPORT_ROWS} 行")
-    if body.mode not in ("insert", "replace"):
-        raise HTTPException(status_code=400, detail="mode 必须为 insert 或 replace")
+    _validate_import_body(body)
 
     cols = _get_columns(container, table)
-    col_by_name = {c["name"]: c for c in cols}
-
-    # headers 缺省按列顺序
-    headers = body.headers or [c["name"] for c in cols]
-    for h in headers:
-        if h not in col_by_name:
-            raise HTTPException(status_code=400, detail=f"未知列: {h}")
+    headers, col_by_name = _resolve_import_headers(body, cols)
 
     inserted = 0
     skipped = 0
     errors: list[str] = []
     for idx, raw_row in enumerate(body.rows, start=1):
-        if len(raw_row) != len(headers):
-            errors.append(f"第 {idx} 行列数不匹配")
-            continue
-        values = {h: _parse_value(v, col_by_name[h]["type"]) for h, v in zip(headers, raw_row)}
-        cols_list = list(values.keys())
-        placeholders = ", ".join(f":{c}" for c in cols_list)
-        if body.mode == "replace":
-            sql = f"INSERT OR REPLACE INTO {table} ({', '.join(cols_list)}) VALUES ({placeholders})"
-        else:
-            sql = f"INSERT INTO {table} ({', '.join(cols_list)}) VALUES ({placeholders})"
-        try:
-            with container.repo.engine.begin() as conn:
-                conn.execute(text(sql), values)
+        ok, skip, err = _execute_single_import(container, table, body.mode, raw_row, headers, col_by_name, idx)
+        if ok:
             inserted += 1
-        except SQLAlchemyError as e:
-            # 主键冲突时 SQLite 抛 IntegrityError，insert 模式计入 skipped
-            if "UNIQUE" in str(e).upper() or "PRIMARY KEY" in str(e).upper():
-                skipped += 1
-            else:
-                errors.append(f"第 {idx} 行失败: {e}")
+        elif skip:
+            skipped += 1
+        elif err:
+            errors.append(err)
 
     _log_audit(
         container, "import", table,

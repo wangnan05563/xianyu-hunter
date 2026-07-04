@@ -24,8 +24,10 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[4]
 _HELPER = _REPO / "scripts" / "auth_helper.py"
 _OUT_DIR = _REPO / "data" / "auth_cache"
+# status.json 文件名：_STATUS_FILE 路径、_set_status_file 写入、start_qr_login 清理复用
+_STATUS_JSON_FILENAME = "status.json"
 _USERINFO_FILE = _OUT_DIR / "userinfo.json"
-_STATUS_FILE = _OUT_DIR / "status.json"
+_STATUS_FILE = _OUT_DIR / _STATUS_JSON_FILENAME
 
 
 @dataclass
@@ -127,7 +129,7 @@ class AuthManager:
             if not _HELPER.exists():
                 return {"error": "auth_helper.py 缺失"}
             # 清理旧状态
-            for f in ("userinfo.json", "status.json", "qr.png", "qr_full.png"):
+            for f in ("userinfo.json", _STATUS_JSON_FILENAME, "qr.png", "qr_full.png"):
                 p = _OUT_DIR / f
                 if p.exists():
                     p.unlink()
@@ -236,7 +238,7 @@ class AuthManager:
 
 def _set_status_file(out_dir: Path, **kw) -> None:
     s = {}
-    p = out_dir / "status.json"
+    p = out_dir / _STATUS_JSON_FILENAME
     if p.exists():
         try:
             s = json.loads(p.read_text(encoding="utf-8"))

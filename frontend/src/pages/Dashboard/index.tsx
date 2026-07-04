@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, type Dispatch, type SetStateAction } from 'react'
 // 删除未使用的 theme 导入（S1128）
 import { Spin, Card, Col, Row, Alert, Button, Space } from 'antd'
 import { useNavigate } from 'react-router-dom'
@@ -14,6 +14,26 @@ import EventStreamSection from './components/EventStreamSection'
 import PriceHistogramCard from './components/PriceHistogramCard'
 import EvalFunnelCard from './components/EvalFunnelCard'
 import TrendModal from './components/TrendModal'
+
+// SSE lastEventId 持久化 key：提取到模块级，供 handleSseAppEvent 与 connect 共享（S2004 提取避免嵌套过深）
+const SSE_LAST_EVENT_ID_KEY = 'xh.sse.lastEventId'
+
+// 处理 app_event 事件：解析 SSE 数据并 prepend 到事件列表前 100 条
+// 为什么提取到模块级：原 useEffect → connect → addEventListener → setEvents(prev =>) 嵌套达 5 层，违反 S2004
+function handleSseAppEvent(
+  e: MessageEvent,
+  setEvents: Dispatch<SetStateAction<RecentEvent[]>>,
+) {
+  try {
+    const ev = JSON.parse(e.data) as RecentEvent
+    // O-14-26：记录 lastEventId 到 localStorage，供重连时补拉
+    // MessageEvent 的 lastEventId 属性对应 SSE 帧的 id 字段
+    if (e.lastEventId) {
+      localStorage.setItem(SSE_LAST_EVENT_ID_KEY, e.lastEventId)
+    }
+    setEvents(prev => [ev, ...prev].slice(0, 100))
+  } catch { /* 忽略解析错误 */ }
+}
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -131,14 +151,13 @@ export default function Dashboard() {
   // 因此用 localStorage 持久化 lastEventId，重连时作为 query 参数传递，
   // 后端 sse_stream.py 支持 ?last_event_id=xxx 补拉漏掉的事件。
   useEffect(() => {
-    const LAST_EVENT_ID_KEY = 'xh.sse.lastEventId'
     const connect = () => {
       if (esRef.current) esRef.current.close()
       // 页面不可见时不建立连接，避免后台无效重连
       if (document.visibilityState !== 'visible') return
       // O-14-26：重连时从 localStorage 读取 lastEventId，附加到 URL
       // 后端会补拉 id > lastEventId 的事件，避免断网期间漏掉关键告警
-      const lastId = localStorage.getItem(LAST_EVENT_ID_KEY)
+      const lastId = localStorage.getItem(SSE_LAST_EVENT_ID_KEY)
       const url = lastId ? `/api/events/stream?last_event_id=${lastId}` : '/api/events/stream'
       const es = new EventSource(url)
       esRef.current = es
@@ -156,17 +175,8 @@ export default function Dashboard() {
           }
         } catch { /* ignore */ }
       })
-      es.addEventListener('app_event', (e) => {
-        try {
-          const ev = JSON.parse(e.data) as RecentEvent
-          // O-14-26：记录 lastEventId 到 localStorage，供重连时补拉
-          // MessageEvent 的 lastEventId 属性对应 SSE 帧的 id 字段
-          if (e.lastEventId) {
-            localStorage.setItem(LAST_EVENT_ID_KEY, e.lastEventId)
-          }
-          setEvents(prev => [ev, ...prev].slice(0, 100))
-        } catch { /* 忽略解析错误 */ }
-      })
+      // app_event 处理已提取为模块级 handleSseAppEvent，避免嵌套过深（S2004）
+      es.addEventListener('app_event', (e) => handleSseAppEvent(e, setEvents))
       es.addEventListener('error', () => {
         setStreamStatus('× 断线，重连中…')
         try { es.close() } catch { /* */ }

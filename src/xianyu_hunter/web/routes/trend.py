@@ -65,6 +65,82 @@ def _build_trend_series(
     return buckets
 
 
+_RANGE_BUCKET_COUNT = {24: 24, 72: 24, 168: 14, 720: 30, 2160: 90}
+
+
+def _load_trend_events(conn, container: Container, task_id: str | None, cutoff) -> list[dict]:
+    """加载 events 表行：用 EventRow.task_id 列过滤（有索引），比解析 payload 更高效"""
+    if task_id:
+        event_stmt = (
+            select(EventRow).where(EventRow.created_at >= cutoff)
+            .where(EventRow.task_id == task_id)
+        )
+    else:
+        event_stmt = select(EventRow).where(EventRow.created_at >= cutoff)
+    event_stmt = event_stmt.order_by(EventRow.created_at.desc()).limit(5000)
+    return [container.repo._row_to_dict(r) for r in conn.execute(event_stmt).all()]
+
+
+def _load_trend_orders(conn, container: Container, cutoff) -> list[dict]:
+    """加载 orders 表行：OrderRow 有 task_id 列，原注释"无 task_id 字段"过时"""
+    order_stmt = select(OrderRow).where(OrderRow.created_at >= cutoff)
+    order_stmt = order_stmt.order_by(OrderRow.created_at.desc()).limit(5000)
+    return [container.repo._row_to_dict(r) for r in conn.execute(order_stmt).all()]
+
+
+def _build_count_metric_rows(records: list[dict], cutoff) -> list[tuple]:
+    """events/orders 计数指标：每条记录贡献 1.0，过滤掉 cutoff 之外的记录"""
+    rows: list[tuple] = []
+    for r in records:
+        d = _ensure_aware(to_datetime(r.get("created_at")))
+        if d is not None and d >= cutoff:
+            rows.append((r.get("created_at"), 1.0))
+    return rows
+
+
+def _build_eval_score_rows(events: list[dict], cutoff) -> list[tuple]:
+    """eval_score 指标：score>0 时放大 100 倍入库，便于与百分比指标同图展示"""
+    rows: list[tuple] = []
+    for e in events:
+        d = _ensure_aware(to_datetime(e.get("created_at")))
+        if d is None or d < cutoff:
+            continue
+        score = e.get("score")
+        try:
+            if score is not None and float(score) > 0:
+                rows.append((e.get("created_at"), float(score) * 100))
+        except (TypeError, ValueError):
+            pass
+    return rows
+
+
+def _build_success_rate_rows(orders: list[dict], cutoff) -> list[tuple]:
+    """success_rate 指标：succeeded=1.0，其它=0.0，聚合后即为成功率"""
+    rows: list[tuple] = []
+    for o in orders:
+        d = _ensure_aware(to_datetime(o.get("created_at")))
+        if d is None or d < cutoff:
+            continue
+        v = 1.0 if o.get("status") == "succeeded" else 0.0
+        rows.append((o.get("created_at"), v))
+    return rows
+
+
+def _build_trend_metric_rows(
+    metric: str, events: list[dict], orders: list[dict], cutoff
+) -> list[tuple] | None:
+    """按 metric 分发到对应行构建函数，未知 metric 返回 None 由调用方返回空响应"""
+    if metric == "events":
+        return _build_count_metric_rows(events, cutoff)
+    if metric == "orders":
+        return _build_count_metric_rows(orders, cutoff)
+    if metric == "eval_score":
+        return _build_eval_score_rows(events, cutoff)
+    if metric == "success_rate":
+        return _build_success_rate_rows(orders, cutoff)
+    return None
+
+
 @router.get("/stats/trend")
 def stats_trend(
     metric: str = "events",
@@ -75,7 +151,7 @@ def stats_trend(
     """P3-UX-07：Dashboard sparkline 趋势数据"""
     if range_hours not in (24, 72, 168, 720, 2160):
         range_hours = 24
-    bucket_count = {24: 24, 72: 24, 168: 14, 720: 30, 2160: 90}.get(range_hours, 24)
+    bucket_count = _RANGE_BUCKET_COUNT.get(range_hours, 24)
 
     now = _utcnow()
     cutoff = now - timedelta(hours=range_hours)
@@ -89,49 +165,15 @@ def stats_trend(
     engine = container.repo.engine
     with engine.connect() as conn:
         if metric in ("events", "eval_score"):
-            if task_id:
-                # 用 EventRow.task_id 列过滤（有索引），比原实现解析 payload 更高效
-                event_stmt = (
-                    select(EventRow).where(EventRow.created_at >= cutoff)
-                    .where(EventRow.task_id == task_id)
-                )
-            else:
-                event_stmt = select(EventRow).where(EventRow.created_at >= cutoff)
-            event_stmt = event_stmt.order_by(EventRow.created_at.desc()).limit(5000)
-            events = [container.repo._row_to_dict(r) for r in conn.execute(event_stmt).all()]
+            events = _load_trend_events(conn, container, task_id, cutoff)
         elif metric in ("orders", "success_rate"):
             if task_id:
                 # OrderRow 有 task_id 列，原注释"无 task_id 字段"过时，但保留 skipped_reason 行为不变
                 skipped_reason = f"metric={metric} 暂不支持按 task_id 过滤（Order 模型无 task_id 字段）"
-            order_stmt = select(OrderRow).where(OrderRow.created_at >= cutoff)
-            order_stmt = order_stmt.order_by(OrderRow.created_at.desc()).limit(5000)
-            orders = [container.repo._row_to_dict(r) for r in conn.execute(order_stmt).all()]
+            orders = _load_trend_orders(conn, container, cutoff)
 
-    if metric == "events":
-        rows = [(e.get("created_at"), 1.0) for e in events if _ensure_aware(to_datetime(e.get("created_at"))) and _ensure_aware(to_datetime(e.get("created_at"))) >= cutoff]
-    elif metric == "orders":
-        rows = [(o.get("created_at"), 1.0) for o in orders if _ensure_aware(to_datetime(o.get("created_at"))) and _ensure_aware(to_datetime(o.get("created_at"))) >= cutoff]
-    elif metric == "eval_score":
-        rows = []
-        for e in events:
-            d = _ensure_aware(to_datetime(e.get("created_at")))
-            if d is None or d < cutoff:
-                continue
-            score = e.get("score")
-            try:
-                if score is not None and float(score) > 0:
-                    rows.append((e.get("created_at"), float(score) * 100))
-            except (TypeError, ValueError):
-                pass
-    elif metric == "success_rate":
-        rows = []
-        for o in orders:
-            d = _ensure_aware(to_datetime(o.get("created_at")))
-            if d is None or d < cutoff:
-                continue
-            v = 1.0 if o.get("status") == "succeeded" else 0.0
-            rows.append((o.get("created_at"), v))
-    else:
+    rows = _build_trend_metric_rows(metric, events, orders, cutoff)
+    if rows is None:
         return {"metric": metric, "range_hours": range_hours, "task_id": task_id, "series": [],
                 "summary": {"min": 0, "max": 0, "avg": 0, "current": 0}, "skipped_reason": None}
 

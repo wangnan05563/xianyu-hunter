@@ -34,7 +34,6 @@ import {
   QuestionCircleOutlined,
   CloudDownloadOutlined,
   MessageOutlined,
-  BlockOutlined,
 } from '@ant-design/icons'
 import { useLocation, useNavigate, Link } from 'react-router-dom'
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
@@ -46,6 +45,7 @@ import { useTheme } from '../../contexts/ThemeContext'
 import UserMenu from './UserMenu'
 import { SheetWorkspace } from '../SheetWorkspace'
 import { useSheetStore } from '../../stores/sheetStore'
+import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
 
 const { Header, Sider, Content } = Layout
 
@@ -150,7 +150,7 @@ const COMMAND_ITEMS = [
   { key: '/maintenance/db', label: '数据库维护', icon: <DatabaseOutlined /> },
   { key: '/batch-refresh', label: '批量采集', icon: <CloudDownloadOutlined /> },
   { key: '/anticrawl', label: '反爬登录管理', icon: <ExperimentOutlined /> },
-  { key: '/chatbot', label: '智能客服', icon: <MessageOutlined /> },
+  { key: '/chatbot', label: '智能客服对话', icon: <MessageOutlined /> },
   { key: '/config/chatbot', label: '客服配置', icon: <MessageOutlined /> },
   { key: '/help', label: '帮助文档', icon: <QuestionCircleOutlined /> },
   { key: '/about', label: '关于', icon: <InfoCircleOutlined /> },
@@ -225,17 +225,58 @@ export default function MainLayout() {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [fetchSchedulerStatus, fetchTodayAlert, loggedIn])
 
-  useEffect(() => {
-    authApi.getMe().then((data) => {
+  // 拉取用户信息：挂载时拉取一次；已登录但 nick/local_username 为空时轮询重试
+  // 为什么需要重试：auth_helper 抓取 nick 异步进行，首次请求可能拿到 nick="" + logged_in=true
+  //                 前端不重试就会一直显示"未登录"或 user_id，体验差
+  const fetchUserInfo = useCallback(() => {
+    return authApi.getMe().then((data) => {
       setLoggedIn(data.logged_in === true)
       setUserInfo(data)
-    }).catch(() => setLoggedIn(false))
-      .finally(() => {
-        setAuthChecked(true)
-        // 认证完成后恢复上次会话的 sheet 栈
-        useSheetStore.getState().hydrate()
-      })
+      return data
+    }).catch(() => {
+      setLoggedIn(false)
+      return null
+    })
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchUserInfo().finally(() => {
+      if (cancelled) return
+      setAuthChecked(true)
+      // 认证完成后恢复上次会话的 sheet 栈
+      useSheetStore.getState().hydrate()
+    })
+
+    // 已登录但 nick 抓取未完成时轮询：每 15s 拉一次，最多 8 次（共 2 分钟）
+    // 为什么用 setTimeout 链而非 setInterval：每次拉取后基于最新 data 判断是否还需重试，
+    // 拿到 nick 立即停止，避免无谓请求
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let retryCount = 0
+    const MAX_RETRIES = 8
+    const RETRY_INTERVAL = 15_000
+
+    const scheduleRetry = () => {
+      if (cancelled || retryCount >= MAX_RETRIES) return
+      retryTimer = setTimeout(() => {
+        retryCount += 1
+        fetchUserInfo().then((data) => {
+          if (!data) return
+          // 终止条件：未登录 / 已拿到 nick / 已拿到 local_username（非 user_id 兜底）
+          const hasRealName = !!data.nick
+            || (!!data.local_username && data.local_username !== data.user_id)
+          if (!data.logged_in || hasRealName) return
+          scheduleRetry()
+        })
+      }, RETRY_INTERVAL)
+    }
+    scheduleRetry()
+
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+    }
+  }, [fetchUserInfo])
 
   // 全局快捷键监听：Ctrl+K 打开 Command Palette，g+X 导航
   useEffect(() => {
@@ -314,10 +355,11 @@ export default function MainLayout() {
     return keys
   }, [location.pathname])
 
-  // 受控 openKeys：用户可手动展开/折叠，路由变化时自动展开对应分组
+  // 受控 openKeys：仅首次挂载时按当前路由初始化，之后完全由用户手动控制
+  // 为什么不用 useEffect 联动 autoOpenKeys：sheet 切换/快捷键导航都会触发 URL 变化→
+  // autoOpenKeys 重算，若联动更新 openKeys 会展开新分组 SubMenu，产生遮挡内容的动画
+  // 用户期望：侧边栏 SubMenu 状态独立于路由，仅在用户主动点击时变化
   const [openKeys, setOpenKeys] = useState<string[]>(autoOpenKeys)
-  // 路由变化时同步自动展开
-  useEffect(() => { setOpenKeys(autoOpenKeys) }, [autoOpenKeys])
 
   const breadcrumbItems = useMemo(() => {
     const items = [{ title: <Link to="/"><HomeOutlined /> 首页</Link> }]
@@ -380,38 +422,41 @@ export default function MainLayout() {
       openKeys={openKeys}
       setOpenKeys={setOpenKeys}
       menuItems={menuItems}
-      drawerOpen={drawerOpen}
+          drawerOpen={drawerOpen}
       setDrawerOpen={setDrawerOpen}
       userInfo={userInfo}
+      onRefreshUserInfo={fetchUserInfo}
     />
   )
 }
 
 // 内部子组件：在 ConfigProvider 内部消费 themeToken，确保暗色主题正确应用
 interface LayoutContentProps {
-  isDark: boolean
-  onToggleTheme: () => void
-  collapsed: boolean
-  setCollapsed: React.Dispatch<React.SetStateAction<boolean>>
-  location: ReturnType<typeof useLocation>
-  navigate: ReturnType<typeof useNavigate>
-  schedulerRunning: boolean | null
-  todayAlert: TodayAlert | null
-  alertCount: number
-  cmdOpen: boolean
-  setCmdOpen: React.Dispatch<React.SetStateAction<boolean>>
-  cmdSearch: string
-  setCmdSearch: React.Dispatch<React.SetStateAction<string>>
-  cmdActive: number
-  setCmdActive: React.Dispatch<React.SetStateAction<number>>
-  breadcrumbItems: { title: React.ReactNode }[]
-  selectedKey: string
-  openKeys: string[]
-  setOpenKeys: React.Dispatch<React.SetStateAction<string[]>>
-  menuItems: NonNullable<MenuProps['items']>
-  drawerOpen: boolean
-  setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
-  userInfo: AuthMe
+  readonly isDark: boolean
+  readonly onToggleTheme: () => void
+  readonly collapsed: boolean
+  readonly setCollapsed: React.Dispatch<React.SetStateAction<boolean>>
+  readonly location: ReturnType<typeof useLocation>
+  readonly navigate: ReturnType<typeof useNavigate>
+  readonly schedulerRunning: boolean | null
+  readonly todayAlert: TodayAlert | null
+  readonly alertCount: number
+  readonly cmdOpen: boolean
+  readonly setCmdOpen: React.Dispatch<React.SetStateAction<boolean>>
+  readonly cmdSearch: string
+  readonly setCmdSearch: React.Dispatch<React.SetStateAction<string>>
+  readonly cmdActive: number
+  readonly setCmdActive: React.Dispatch<React.SetStateAction<number>>
+  readonly breadcrumbItems: { title: React.ReactNode }[]
+  readonly selectedKey: string
+  readonly openKeys: string[]
+  readonly setOpenKeys: React.Dispatch<React.SetStateAction<string[]>>
+  readonly menuItems: NonNullable<MenuProps['items']>
+  readonly drawerOpen: boolean
+  readonly setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
+  readonly userInfo: AuthMe
+  // 刷新用户信息回调：从 MainLayout 传入，UserMenu 调用时触发后端 nick 重抓
+  readonly onRefreshUserInfo?: () => Promise<AuthMe | null>
 }
 
 function LayoutContent({
@@ -419,7 +464,7 @@ function LayoutContent({
   schedulerRunning, todayAlert, alertCount,
   cmdOpen, setCmdOpen, cmdSearch, setCmdSearch, cmdActive, setCmdActive,
   breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems,
-  drawerOpen, setDrawerOpen, userInfo,
+  drawerOpen, setDrawerOpen, userInfo, onRefreshUserInfo,
 }: LayoutContentProps) {
   // 必须在 ConfigProvider 内部调用，token 才会响应暗色算法
   const { token: themeToken } = theme.useToken()
@@ -450,7 +495,9 @@ function LayoutContent({
         collapsed={collapsed}
         onCollapse={setCollapsed}
         collapsedWidth={64}
-        breakpoint="lg"
+        // 不设 breakpoint：避免窗口缩放触发 antd 自动折叠后，
+        // 折叠态下 SubMenu 的 Popover 浮层溢出到 Content 区域上方。
+        // 折叠状态完全由 Header 按钮显式控制。
         trigger={null}
         theme={isDark ? 'dark' : 'light'}
         style={{
@@ -464,7 +511,7 @@ function LayoutContent({
       >
         {/* 品牌区：收缩时只显示 logo 圆标 */}
         <div className="brand-area" style={{ justifyContent: collapsed ? 'center' : undefined, padding: collapsed ? '16px 0' : undefined }}>
-          <div className="brand-logo" style={{ fontSize: collapsed ? 24 : undefined }}>{collapsed ? '闲' : '闲'}</div>
+          <div className="brand-logo" style={{ fontSize: collapsed ? 24 : undefined }}>闲</div>
           {!collapsed && (
             <div className="brand-text">
               <span className="brand-name">闲鱼猎人</span>
@@ -484,7 +531,8 @@ function LayoutContent({
             // 这里只对路径型 key 调 navigate，避免点击 SubMenu 标题时跳到非法 URL。
             if (typeof key === 'string' && key.startsWith('/')) {
               // 走 openSheet：sheet 栈管理 + URL 同步（store 内部 navigate）
-              useSheetStore.getState().openSheet(key)
+              // 用带通知的包装函数：循环替换触发时发 Toast + 撤销按钮
+              openSheetWithNotification(key)
             }
           }}
           inlineCollapsed={collapsed}
@@ -607,7 +655,7 @@ function LayoutContent({
             </Tooltip>
 
             {/* 用户菜单：头像 + 昵称，悬浮显示 Cookie 健康面板（含换号/退出） */}
-            <UserMenu userInfo={userInfo} />
+            <UserMenu userInfo={userInfo} onRefreshUserInfo={onRefreshUserInfo} />
           </div>
         </Header>
         <Content id="main-content" style={{ overflow: 'hidden', background: themeToken.colorBgLayout }}>
@@ -758,6 +806,9 @@ function LayoutContent({
               <div
                 key={item.key}
                 onClick={() => { navigate(item.key); setCmdOpen(false) }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { navigate(item.key); setCmdOpen(false) } }}
+                role="button"
+                tabIndex={0}
                 style={{
                   display: 'flex',
                   alignItems: 'center',

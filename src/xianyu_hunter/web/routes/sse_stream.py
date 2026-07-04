@@ -33,6 +33,23 @@ def _format_sse_event(ev: dict, ev_id: int) -> str:
     )
 
 
+def _load_replay_events(container, should_replay: bool, effective_last_id: int) -> list[dict]:
+    """加载断线回放事件，返回已过滤掉 <= effective_last_id 的事件列表
+
+    主生成器只需遍历列表 yield，无需在 for 内 if continue 拉高嵌套复杂度。
+    """
+    if not should_replay:
+        return []
+    raw_rows = container.repo.list_events(since_id=effective_last_id, ascending=True, limit=1000) or []
+    return [ev for ev in raw_rows if int(ev.get("id") or 0) > effective_last_id]
+
+
+def _load_new_events(container, cursor: int) -> list[dict]:
+    """加载增量事件，返回已过滤掉 <= cursor 的事件列表"""
+    raw_rows = container.repo.list_events(since_id=cursor, ascending=True, limit=200) or []
+    return [ev for ev in raw_rows if int(ev.get("id") or 0) > cursor]
+
+
 @router.get("/events/stream")
 async def events_stream(
     container: Container = Depends(get_container),
@@ -65,17 +82,12 @@ async def events_stream(
             replayed = 0
             cursor = 0
             try:
-                if should_replay:
-                    replay_rows = (
-                        container.repo.list_events(since_id=effective_last_id, ascending=True, limit=1000) or []
-                    )
-                    for ev in replay_rows:
-                        ev_id = int(ev.get("id") or 0)
-                        if ev_id <= effective_last_id:
-                            continue
-                        yield _format_sse_event(ev, ev_id)
-                        cursor = ev_id
-                        replayed += 1
+                replay_rows = _load_replay_events(container, should_replay, effective_last_id)
+                for ev in replay_rows:
+                    ev_id = int(ev.get("id") or 0)
+                    yield _format_sse_event(ev, ev_id)
+                    cursor = ev_id
+                    replayed += 1
             except Exception as e:
                 yield f"event: warn\ndata: {json.dumps({'msg': 'replay_failed', 'error': str(e)})}\n\n"
 
@@ -87,13 +99,9 @@ async def events_stream(
                 try:
                     cur = container.repo.max_event_id()
                     if cur > cursor:
-                        new_rows = (
-                            container.repo.list_events(since_id=cursor, ascending=True, limit=200) or []
-                        )
+                        new_rows = _load_new_events(container, cursor)
                         for ev in new_rows:
                             ev_id = int(ev.get("id") or 0)
-                            if ev_id <= cursor:
-                                continue
                             yield _format_sse_event(ev, ev_id)
                             cursor = ev_id
                     yield f"event: ping\ndata: {json.dumps({'ts': _utcnow().isoformat(timespec='seconds')})}\n\n"

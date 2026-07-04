@@ -92,15 +92,20 @@ def start_browser_login() -> JSONResponse:
     status_file = tmp_dir / f"browser_login_{int(time.time() * 1000)}.json"
 
     try:
+        # 使用 pythonw.exe 静默启动（无控制台窗口），提升用户体验
+        # 复用 unified_login 的工具函数，保持两个路由行为一致
+        from xianyu_hunter.web.routes.unified_login import _get_quiet_python_executable
+        python_exe, creation_flags = _get_quiet_python_executable()
         proc = subprocess.Popen(
             [
-                sys.executable, str(_BROWSER_LOGIN_SCRIPT),
+                python_exe, str(_BROWSER_LOGIN_SCRIPT),
                 "--status-file", str(status_file),
                 "--timeout", "300",
             ],
-            # 必须使用 CREATE_NEW_CONSOLE 而非 CREATE_NO_WINDOW
-            # CREATE_NO_WINDOW 会导致 GUI 子进程（Playwright 浏览器）不稳定或闪退
-            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
+            # creation_flags 由 _get_quiet_python_executable 决定：
+            # - pythonw.exe 可用时为 0（完全静默，不弹 python.exe 黑窗）
+            # - fallback 到 python.exe 时为 CREATE_NEW_CONSOLE（防 Playwright 闪退）
+            creationflags=creation_flags,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

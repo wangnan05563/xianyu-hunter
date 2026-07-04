@@ -34,9 +34,15 @@ export interface SheetPreferences {
   thumbnailMode: boolean
   /** 缩略图悬浮提示开关：默认 true */
   thumbnailTooltipEnabled: boolean
+  /**
+   * 循环替换开关：开启后，达到 maxSheets 上限时会自动淘汰最旧的非激活 sheet。
+   * 关闭时，超限返回 { ok: false, reason: 'limit' } 由调用方处理。
+   * 默认 false（保守默认：升级后行为不变，用户主动开启）。
+   */
+  circularReplaceEnabled: boolean
 }
 
-const DEFAULT_PREFERENCES: SheetPreferences = {
+export const DEFAULT_PREFERENCES: SheetPreferences = {
   maxSheets: 5,
   enableAnimation: true,
   minimizeInsteadOfClose: false,
@@ -44,7 +50,26 @@ const DEFAULT_PREFERENCES: SheetPreferences = {
   doubleClickInterval: 350,
   thumbnailMode: false,
   thumbnailTooltipEnabled: true,
+  circularReplaceEnabled: false,
 }
+
+/**
+ * 被循环替换淘汰的 sheet 摘要（轻量、无 icon，用于回收栈 + 返回值）
+ * 为什么独立于 SheetItem：返回值不携带 ReactNode，序列化/UI 显示更轻便
+ */
+export interface ReplacedSheet {
+  /** 原始 id（用户撤销时用于匹配回收栈项） */
+  id: string
+  /** 路由路径（用于恢复时查找 meta 与重新打开） */
+  path: string
+  /** 显示标题（从 registry 复制的字符串，无需再次查找） */
+  title: string
+  /** 被替换时间戳（用于调试/排序） */
+  replacedAt: number
+}
+
+/** 回收栈最大保留条数：5 条足够覆盖用户连续操作窗口，又不会无限增长 */
+const REPLACED_HISTORY_MAX = 5
 
 const STATE_KEY = 'xh.sheets.state'
 const PREFS_KEY = 'xh.sheets.preferences'
@@ -62,13 +87,41 @@ interface SheetState {
   hydrated: boolean
   /** 注入的 navigate 函数（由 SheetWorkspace 通过 useNavigate 注入） */
   _navigator: ((path: string) => void) | null
+  /**
+   * 回收栈：最近被循环替换淘汰的 sheet 摘要（FIFO，最多 REPLACED_HISTORY_MAX 条）
+   * 为什么只存摘要不存 SheetItem：避免 ReactNode 持久化，恢复时按 path 重新查 registry 即可
+   */
+  replacedHistory: ReplacedSheet[]
 
-  openSheet: (path: string) => { ok: boolean; reason?: 'limit' | 'not_found' }
+  /**
+   * 打开或激活 sheet
+   * - 桌面端 + 未达上限：新建 sheet
+   * - 桌面端 + 达到上限 + circularReplaceEnabled=true：淘汰最旧非激活 sheet 后新建，返回 replacedSheet
+   * - 桌面端 + 达到上限 + circularReplaceEnabled=false：返回 { ok: false, reason: 'limit' }
+   * - 移动端：单 sheet 替换（不受循环替换影响）
+   * - path 已存在：仅激活（不触发 replacedSheet）
+   */
+  openSheet: (path: string) => {
+    ok: boolean
+    reason?: 'limit' | 'not_found'
+    /** 仅循环替换触发时返回，调用方可用其发 Toast 通知 + 撤销 */
+    replacedSheet?: ReplacedSheet
+  }
   closeSheet: (id: string) => void
   activateSheet: (id: string) => void
   minimizeSheet: (id: string) => void
   restoreSheet: (id: string) => void
   closeAll: () => void
+  /**
+   * 从回收栈恢复被替换的 sheet
+   * - 命中：恢复为新 sheet（生成新 id，保持原 openedAt 顺序），从回收栈移除
+   * - path 已重新存在于栈：仅激活那个 sheet（不重复开）
+   * - 当前栈已满：返回 { ok: false, reason: 'limit' }
+   * - id 不存在：返回 { ok: false, reason: 'not_found' }
+   */
+  restoreReplaced: (id: string) => { ok: boolean; reason?: 'not_found' | 'limit' }
+  /** 清空回收栈（暴露给偏好/调试使用） */
+  clearReplacedHistory: () => void
   setPreferences: (patch: Partial<SheetPreferences>) => void
   setMobileMode: (isMobile: boolean) => void
   setNavigator: (fn: (path: string) => void) => void
@@ -104,6 +157,144 @@ function rebuildSheetMeta(path: string): { title: string; icon: ReactNode } | nu
   return { title: meta.title, icon: meta.icon }
 }
 
+/** openSheet 操作签名（set/get 为 zustand 提供的写入与读取函数） */
+type SetFn = (
+  partial:
+    | Partial<SheetState>
+    | ((state: SheetState) => Partial<SheetState>),
+) => void
+type GetFn = () => SheetState
+
+/**
+ * openSheet 子流程：命中已存在 path 时激活它（必要时恢复最小化）。
+ * 为什么独立：openSheet 主体有 4 个分支，拆出"激活现有"可让主函数保持线性。
+ */
+function activateExistingSheet(
+  set: SetFn,
+  get: GetFn,
+  state: SheetState,
+  existing: SheetItem,
+  path: string,
+): { ok: boolean } {
+  const needRestore = existing.minimized
+  const next: SheetState = needRestore
+    ? { ...state, sheets: state.sheets.map((s) => (s.id === existing.id ? { ...s, minimized: false } : s)), activeId: existing.id }
+    : { ...state, activeId: existing.id }
+  set(needRestore ? { sheets: next.sheets, activeId: existing.id } : { activeId: existing.id })
+  navigate(next, path)
+  get().persist()
+  return { ok: true }
+}
+
+/**
+ * openSheet 子流程：循环替换路径——淘汰最旧非激活 sheet 并新建。
+ * 为什么独立：原 openSheet 内嵌 30+ 行替换逻辑（含回收栈、victim 选取、排序），
+ *             抽离后让主函数只负责"分流"。
+ */
+function performCircularReplace(
+  set: SetFn,
+  get: GetFn,
+  state: SheetState,
+  path: string,
+  meta: SheetMeta,
+): { ok: boolean; replacedSheet?: ReplacedSheet; reason?: 'limit' | 'not_found' } {
+  // 保护 activeId：优先从"非激活"sheet 中按 openedAt 升序选最旧
+  // 极端情况（所有 sheet 都激活，例如 maxSheets=1 + 唯一 sheet 是激活态）→ 退回全体选择
+  const inactivePool = state.sheets.filter((s) => s.id !== state.activeId)
+  const victimPool = inactivePool.length > 0 ? inactivePool : state.sheets
+  // 升序排序：openedAt 最小的在最前
+  const victim = [...victimPool].sort((a, b) => a.openedAt - b.openedAt)[0]
+  if (!victim) return { ok: false, reason: 'limit' } // 理论不可达（sheets.length >= 1）
+
+  const replaced: ReplacedSheet = {
+    id: victim.id,
+    path: victim.path,
+    title: victim.title,
+    replacedAt: Date.now(),
+  }
+  const remainingSheets = state.sheets.filter((s) => s.id !== victim.id)
+  const newSheet: SheetItem = {
+    id: `${path}-${Date.now()}`,
+    path,
+    title: meta.title,
+    icon: meta.icon,
+    minimized: false,
+    openedAt: Date.now(),
+  }
+  // 新 sheet 直接成为激活项
+  const newActiveId = newSheet.id
+  // 回收栈：FIFO 截断到最多 REPLACED_HISTORY_MAX 条
+  const newHistory = [replaced, ...state.replacedHistory].slice(0, REPLACED_HISTORY_MAX)
+  const next: SheetState = {
+    ...state,
+    sheets: [...remainingSheets, newSheet],
+    activeId: newActiveId,
+    replacedHistory: newHistory,
+  }
+  set({ sheets: [...remainingSheets, newSheet], activeId: newActiveId, replacedHistory: newHistory })
+  navigate(next, path)
+  get().persist()
+  return { ok: true, replacedSheet: replaced }
+}
+
+/**
+ * openSheet 子流程：移动端单 sheet 模式——若当前激活 sheet 路径不同则替换。
+ * 返回 null 表示"未发生替换"（同 path 时由调用方走 createNewSheet）。
+ */
+function replaceMobileActiveSheet(
+  set: SetFn,
+  get: GetFn,
+  state: SheetState,
+  path: string,
+  meta: SheetMeta,
+): { ok: boolean } | null {
+  if (!state.activeId) return null
+  const current = state.sheets.find((s) => s.id === state.activeId)
+  if (!current || current.path === path) return null
+
+  // 关闭当前，不触发级联 navigate（仅替换，由下方新 sheet 统一 navigate）
+  const newSheets = state.sheets.filter((s) => s.id !== state.activeId)
+  const newSheet: SheetItem = {
+    id: `${path}-${Date.now()}`,
+    path,
+    title: meta.title,
+    icon: meta.icon,
+    minimized: false,
+    openedAt: Date.now(),
+  }
+  const next: SheetState = { ...state, sheets: [...newSheets, newSheet], activeId: newSheet.id }
+  set({ sheets: [...newSheets, newSheet], activeId: newSheet.id })
+  navigate(next, path)
+  get().persist()
+  return { ok: true }
+}
+
+/**
+ * openSheet 子流程：纯新建 sheet（无冲突、未达上限、移动端无激活项）。
+ * 为什么独立：openSheet 默认分支，5 行内可表达"追加 + 激活 + 持久化"。
+ */
+function createNewSheet(
+  set: SetFn,
+  get: GetFn,
+  state: SheetState,
+  path: string,
+  meta: SheetMeta,
+): { ok: boolean } {
+  const newSheet: SheetItem = {
+    id: `${path}-${Date.now()}`,
+    path,
+    title: meta.title,
+    icon: meta.icon,
+    minimized: false,
+    openedAt: Date.now(),
+  }
+  const next: SheetState = { ...state, sheets: [...state.sheets, newSheet], activeId: newSheet.id }
+  set({ sheets: [...state.sheets, newSheet], activeId: newSheet.id })
+  navigate(next, path)
+  get().persist()
+  return { ok: true }
+}
+
 export const useSheetStore = create<SheetState>((set, get) => ({
   sheets: [],
   activeId: null,
@@ -111,64 +302,36 @@ export const useSheetStore = create<SheetState>((set, get) => ({
   isMobile: false,
   hydrated: false,
   _navigator: null,
+  replacedHistory: [],
 
   openSheet: (path) => {
     const state = get()
+    const meta = findSheetMeta(path)
 
     // 已存在同 path → 仅激活（优先于 limit：用户点击已存在 tab 应激活而非拒绝）
     const existing = state.sheets.find((s) => s.path === path)
     if (existing) {
-      const next: SheetState = { ...state, activeId: existing.id }
-      set({ activeId: existing.id })
-      navigate(next, path)
-      get().persist()
-      return { ok: true }
+      return activateExistingSheet(set, get, state, existing, path)
     }
 
     // 桌面端：检查上限（先于 registry，避免无谓查找；测试约定栈满时优先返回 limit）
     if (!state.isMobile && state.sheets.length >= state.preferences.maxSheets) {
-      return { ok: false, reason: 'limit' }
+      if (!state.preferences.circularReplaceEnabled) {
+        return { ok: false, reason: 'limit' }
+      }
+      if (!meta) return { ok: false, reason: 'not_found' }
+      return performCircularReplace(set, get, state, path, meta)
     }
 
-    const meta = findSheetMeta(path)
     if (!meta) return { ok: false, reason: 'not_found' }
 
     // 移动端单 sheet 模式：替换当前激活 sheet
     if (state.isMobile && state.activeId) {
-      const current = state.sheets.find((s) => s.id === state.activeId)
-      if (current && current.path !== path) {
-        // 关闭当前，不触发级联 navigate（仅替换，由下方新 sheet 统一 navigate）
-        const newSheets = state.sheets.filter((s) => s.id !== state.activeId)
-        const newSheet: SheetItem = {
-          id: `${path}-${Date.now()}`,
-          path,
-          title: meta.title,
-          icon: meta.icon,
-          minimized: false,
-          openedAt: Date.now(),
-        }
-        const next: SheetState = { ...state, sheets: [...newSheets, newSheet], activeId: newSheet.id }
-        set({ sheets: [...newSheets, newSheet], activeId: newSheet.id })
-        navigate(next, path)
-        get().persist()
-        return { ok: true }
-      }
+      const replaced = replaceMobileActiveSheet(set, get, state, path, meta)
+      if (replaced) return replaced
     }
 
-    // 新建 sheet
-    const newSheet: SheetItem = {
-      id: `${path}-${Date.now()}`,
-      path,
-      title: meta.title,
-      icon: meta.icon,
-      minimized: false,
-      openedAt: Date.now(),
-    }
-    const next: SheetState = { ...state, sheets: [...state.sheets, newSheet], activeId: newSheet.id }
-    set({ sheets: [...state.sheets, newSheet], activeId: newSheet.id })
-    navigate(next, path)
-    get().persist()
-    return { ok: true }
+    return createNewSheet(set, get, state, path, meta)
   },
 
   closeSheet: (id) => {
@@ -244,6 +407,60 @@ export const useSheetStore = create<SheetState>((set, get) => ({
     get().persist()
   },
 
+  restoreReplaced: (id) => {
+    const state = get()
+    const target = state.replacedHistory.find((r) => r.id === id)
+    if (!target) return { ok: false, reason: 'not_found' }
+
+    // 防御：被恢复的 path 已重新存在于栈 → 激活现有那个，从回收栈移除
+    const existing = state.sheets.find((s) => s.path === target.path)
+    if (existing) {
+      const needRestore = existing.minimized
+      const newSheets = needRestore
+        ? state.sheets.map((s) => (s.id === existing.id ? { ...s, minimized: false } : s))
+        : state.sheets
+      const newHistory = state.replacedHistory.filter((r) => r.id !== id)
+      const next: SheetState = { ...state, sheets: newSheets, activeId: existing.id, replacedHistory: newHistory }
+      set(needRestore ? { sheets: newSheets, activeId: existing.id, replacedHistory: newHistory } : { activeId: existing.id, replacedHistory: newHistory })
+      navigate(next, target.path)
+      get().persist()
+      return { ok: true }
+    }
+
+    // 注意：不检查 maxSheets 上限。"恢复"是用户对刚才循环替换的撤销操作，
+    // 应当始终成功（可能临时超过 maxSheets，下次 openSheet 会再触发循环替换平衡）。
+    // 这与 openSheet 路径的"栈满 → 替换"语义不同：用户主动撤销自己的动作不应被拒绝。
+
+    const meta = findSheetMeta(target.path)
+    if (!meta) return { ok: false, reason: 'not_found' }
+
+    // 恢复为新 sheet：保持原 openedAt 顺序（用 replacedAt 还原相对时序）
+    const newSheet: SheetItem = {
+      id: `${target.path}-${Date.now()}`,
+      path: target.path,
+      title: meta.title,
+      icon: meta.icon,
+      minimized: false,
+      openedAt: target.replacedAt,
+    }
+    const newSheets = [...state.sheets, newSheet]
+    const newHistory = state.replacedHistory.filter((r) => r.id !== id)
+    const next: SheetState = {
+      ...state,
+      sheets: newSheets,
+      activeId: newSheet.id,
+      replacedHistory: newHistory,
+    }
+    set({ sheets: newSheets, activeId: newSheet.id, replacedHistory: newHistory })
+    navigate(next, target.path)
+    get().persist()
+    return { ok: true }
+  },
+
+  clearReplacedHistory: () => {
+    set({ replacedHistory: [] })
+  },
+
   setPreferences: (patch) => {
     const current = get().preferences
     const merged: SheetPreferences = { ...current, ...patch }
@@ -271,21 +488,13 @@ export const useSheetStore = create<SheetState>((set, get) => ({
       ...DEFAULT_PREFERENCES,
       ...savedPrefs,
       maxSheets: clampMaxSheets(savedPrefs.maxSheets),
-      // 兼容旧版本持久化数据：缺失字段时回退默认值
-      doubleClickInterval: clampDoubleClickInterval(
-        typeof savedPrefs.doubleClickInterval === 'number'
-          ? savedPrefs.doubleClickInterval
-          : DEFAULT_PREFERENCES.doubleClickInterval,
-      ),
-      doubleClickCloseEnabled: typeof savedPrefs.doubleClickCloseEnabled === 'boolean'
-        ? savedPrefs.doubleClickCloseEnabled
-        : DEFAULT_PREFERENCES.doubleClickCloseEnabled,
-      thumbnailMode: typeof savedPrefs.thumbnailMode === 'boolean'
-        ? savedPrefs.thumbnailMode
-        : DEFAULT_PREFERENCES.thumbnailMode,
-      thumbnailTooltipEnabled: typeof savedPrefs.thumbnailTooltipEnabled === 'boolean'
-        ? savedPrefs.thumbnailTooltipEnabled
-        : DEFAULT_PREFERENCES.thumbnailTooltipEnabled,
+      // 兼容旧版本持久化数据：缺失/类型错误字段回退默认值
+      // number 字段用 ??（clampDoubleClickInterval 内部已处理非有限值），boolean 字段保留 typeof 检查防御类型污染
+      doubleClickInterval: clampDoubleClickInterval(savedPrefs.doubleClickInterval ?? DEFAULT_PREFERENCES.doubleClickInterval),
+      doubleClickCloseEnabled: typeof savedPrefs.doubleClickCloseEnabled === 'boolean' ? savedPrefs.doubleClickCloseEnabled : DEFAULT_PREFERENCES.doubleClickCloseEnabled,
+      thumbnailMode: typeof savedPrefs.thumbnailMode === 'boolean' ? savedPrefs.thumbnailMode : DEFAULT_PREFERENCES.thumbnailMode,
+      thumbnailTooltipEnabled: typeof savedPrefs.thumbnailTooltipEnabled === 'boolean' ? savedPrefs.thumbnailTooltipEnabled : DEFAULT_PREFERENCES.thumbnailTooltipEnabled,
+      circularReplaceEnabled: typeof savedPrefs.circularReplaceEnabled === 'boolean' ? savedPrefs.circularReplaceEnabled : DEFAULT_PREFERENCES.circularReplaceEnabled,
     }
 
     // 恢复 sheet 栈（丢弃 registry 中已不存在的 path，重建 icon/title）
@@ -313,7 +522,9 @@ export const useSheetStore = create<SheetState>((set, get) => ({
       activeId = validSheets.length > 0 ? validSheets[validSheets.length - 1].id : null
     }
 
-    set({ sheets: validSheets, activeId, preferences, hydrated: true })
+    // replacedHistory 不持久化恢复：回收栈依赖 replacedAt 计算 5 秒撤销窗口，
+    // 重启后时间戳已过期，恢复无意义且可能导致撤销按钮指向已失效的 sheet
+    set({ sheets: validSheets, activeId, preferences, replacedHistory: [], hydrated: true })
   },
 
   persist: () => {

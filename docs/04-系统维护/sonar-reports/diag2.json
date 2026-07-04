@@ -1,0 +1,177 @@
+{
+  "method": "components=xianyu_hunter 精确匹配",
+  "open_total": 353,
+  "by_severity": [
+    {
+      "val": "MINOR",
+      "count": 141
+    },
+    {
+      "val": "CRITICAL",
+      "count": 120
+    },
+    {
+      "val": "MAJOR",
+      "count": 92
+    },
+    {
+      "val": "INFO",
+      "count": 0
+    },
+    {
+      "val": "BLOCKER",
+      "count": 0
+    }
+  ],
+  "top_rules": [
+    {
+      "val": "python:S3776",
+      "count": 106
+    },
+    {
+      "val": "typescript:S6759",
+      "count": 43
+    },
+    {
+      "val": "typescript:S1874",
+      "count": 25
+    },
+    {
+      "val": "python:S125",
+      "count": 21
+    },
+    {
+      "val": "typescript:S3776",
+      "count": 12
+    },
+    {
+      "val": "typescript:S6767",
+      "count": 10
+    },
+    {
+      "val": "typescript:S7764",
+      "count": 10
+    },
+    {
+      "val": "typescript:S7735",
+      "count": 9
+    },
+    {
+      "val": "typescript:S6582",
+      "count": 7
+    },
+    {
+      "val": "typescript:S3358",
+      "count": 7
+    },
+    {
+      "val": "python:S7483",
+      "count": 7
+    },
+    {
+      "val": "typescript:S4325",
+      "count": 7
+    },
+    {
+      "val": "typescript:S6853",
+      "count": 7
+    },
+    {
+      "val": "typescript:S6479",
+      "count": 6
+    },
+    {
+      "val": "python:S5890",
+      "count": 6
+    },
+    {
+      "val": "python:S7503",
+      "count": 6
+    },
+    {
+      "val": "typescript:S6819",
+      "count": 5
+    },
+    {
+      "val": "typescript:S6848",
+      "count": 5
+    },
+    {
+      "val": "typescript:S6551",
+      "count": 4
+    },
+    {
+      "val": "typescript:S6772",
+      "count": 4
+    },
+    {
+      "val": "python:S7504",
+      "count": 3
+    },
+    {
+      "val": "typescript:S7748",
+      "count": 3
+    },
+    {
+      "val": "typescript:S7773",
+      "count": 3
+    },
+    {
+      "val": "typescript:S1082",
+      "count": 3
+    },
+    {
+      "val": "typescript:S7770",
+      "count": 2
+    },
+    {
+      "val": "python:S5850",
+      "count": 2
+    },
+    {
+      "val": "typescript:S4624",
+      "count": 2
+    },
+    {
+      "val": "python:S107",
+      "count": 2
+    },
+    {
+      "val": "python:S116",
+      "count": 2
+    },
+    {
+      "val": "typescript:S4144",
+      "count": 1
+    }
+  ],
+  "quality_gate": {
+    "status": "ERROR",
+    "conditions": [
+      {
+        "metricKey": "new_coverage",
+        "status": "ERROR",
+        "value": null,
+        "errorThreshold": "80"
+      },
+      {
+        "metricKey": "new_duplicated_lines_density",
+        "status": "OK",
+        "value": null,
+        "errorThreshold": "3"
+      },
+      {
+        "metricKey": "new_security_hotspots_reviewed",
+        "status": "ERROR",
+        "value": null,
+        "errorThreshold": "100"
+      },
+      {
+        "metricKey": "new_violations",
+        "status": "ERROR",
+        "value": null,
+        "errorThreshold": "0"
+      }
+    ]
+  }
+}
