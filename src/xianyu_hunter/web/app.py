@@ -307,7 +307,8 @@ def create_app() -> FastAPI:
             key="xh_token",
             value=token,
             httponly=True,
-            samesite="lax",
+            samesite="none",  # 改为 none，支持移动端跨域访问
+            secure=True,      # SameSite=None 要求 Secure
             max_age=86400 * 30,  # 30 天
         )
         return resp
