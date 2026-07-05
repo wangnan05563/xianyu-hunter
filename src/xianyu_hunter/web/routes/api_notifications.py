@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.web.deps import get_container
@@ -25,6 +25,7 @@ _ALLOWED_CATEGORIES = {"order", "auth", "system", "config", "task"}
 
 @router.get("")
 def list_notifications(
+    request: Request,
     status: str | None = Query(default=None, description="unread / read / None(全部)"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -35,8 +36,10 @@ def list_notifications(
     为什么不限制为只能看未读：用户可能想回看"我之前漏看什么"，
     走 status=read 即可；同时返回 total 字段，前端用于分页/计数展示。
     """
-    rows = container.repo.list_notifications(status=status, limit=limit, offset=offset)
-    total = container.repo.count_notifications(status=status)
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    rows = container.repo.list_notifications(status=status, limit=limit, offset=offset, user_id=user_id)
+    total = container.repo.count_notifications(status=status, user_id=user_id)
     return {
         "items": rows,
         "count": len(rows),
@@ -49,14 +52,18 @@ def list_notifications(
 
 @router.get("/unread_count")
 def unread_count(
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """未读数（给顶栏铃铛 badge 单独拉取，避免列表里再算）"""
-    return {"unread": container.repo.count_notifications(status="unread")}
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    return {"unread": container.repo.count_notifications(status="unread", user_id=user_id)}
 
 
 @router.post("")
 def create_notification(
+    request: Request,
     payload: dict[str, Any] = Body(...),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -65,6 +72,8 @@ def create_notification(
     必填：level, category, title, message, dedup_key
     可选：link, reset_read
     """
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
     level = (payload.get("level") or "info").lower()
     category = (payload.get("category") or "").lower()
     title = (payload.get("title") or "").strip()
@@ -98,6 +107,7 @@ def create_notification(
         link=link,
         dedup_key=dedup_key,
         reset_read=reset_read,
+        user_id=user_id,
     )
     return {"ok": True, "item": row}
 
@@ -105,40 +115,50 @@ def create_notification(
 @router.post("/{notif_id}/read")
 def mark_read(
     notif_id: int,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """标记单条已读（幂等：已读的不报错）"""
-    existed = container.repo.get_notification(notif_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    existed = container.repo.get_notification(notif_id, user_id=user_id)
     if not existed:
         raise HTTPException(status_code=404, detail="通知不存在")
-    updated = container.repo.mark_notification_read(notif_id)
+    updated = container.repo.mark_notification_read(notif_id, user_id=user_id)
     return {"ok": True, "id": notif_id, "newly_read": updated}
 
 
 @router.post("/read_all")
 def mark_all_read(
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """全部标记已读（"打开通知中心"行为时使用）"""
-    updated = container.repo.mark_all_notifications_read()
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    updated = container.repo.mark_all_notifications_read(user_id=user_id)
     return {"ok": True, "updated": updated}
 
 
 @router.delete("/{notif_id}")
 def delete_notification(
     notif_id: int,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """删除单条"""
-    existed = container.repo.get_notification(notif_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    existed = container.repo.get_notification(notif_id, user_id=user_id)
     if not existed:
         raise HTTPException(status_code=404, detail="通知不存在")
-    deleted = container.repo.delete_notification(notif_id)
+    deleted = container.repo.delete_notification(notif_id, user_id=user_id)
     return {"ok": True, "id": notif_id, "deleted": deleted}
 
 
 @router.delete("")
 def clear_notifications(
+    request: Request,
     status: str | None = Query(default=None, description="unread / read / None(全部)"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -147,7 +167,9 @@ def clear_notifications(
     为什么不默认"清空 = 全清"：用户最常见操作是"清掉已读的腾出空间"，
     走 status=read 即可；status 留 None 仍然支持全清，但前端默认走 read。
     """
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
     if status is not None and status not in ("unread", "read"):
         raise HTTPException(status_code=400, detail="status 必须是 unread / read")
-    deleted = container.repo.clear_notifications(status=status)
+    deleted = container.repo.clear_notifications(status=status, user_id=user_id)
     return {"ok": True, "deleted": deleted, "status": status or "all"}

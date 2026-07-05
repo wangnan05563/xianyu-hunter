@@ -192,6 +192,7 @@ class TaskLinksMixin:
         is_sold: bool | None = None,
         seller_nick: str | None = None,
         brand: str | None = None,
+        user_id: str = "default",
     ) -> int:
         written = 0
         for link_type, link_key, display in self._build_item_link_rows(
@@ -214,6 +215,7 @@ class TaskLinksMixin:
                 link_key=link_key,
                 display=display,
                 source=source,
+                user_id=user_id,
             )
             written += 1
         return written
@@ -226,6 +228,7 @@ class TaskLinksMixin:
         display: dict | None = None,
         source: str = "auto",
         note: str | None = None,
+        user_id: str = "default",
     ) -> int | None:
         """插入或忽略重复，返回行 id。已存在则仅更新 display / note。"""
         with self.engine.begin() as conn:
@@ -236,11 +239,13 @@ class TaskLinksMixin:
                 display=json.dumps(display, ensure_ascii=False) if display else None,
                 source=source,
                 note=note,
+                user_id=user_id,
             )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["task_id", "link_type", "link_key"],
                 # 修复：之前不更新 source，导致 live 搜索命中的商品若已存在 auto 来源，
                 # source 仍为 "auto"，后续 refresh_links 删除 auto 时会误删 live 数据。
+                # 不更新 user_id：避免不同用户重复关联时归属权被覆盖，保留首次写入的用户
                 set_={
                     "display": stmt.excluded["display"],
                     "note": stmt.excluded["note"],
@@ -296,6 +301,7 @@ class TaskLinksMixin:
         task_id: str,
         items_data: list[dict],
         source: str = "auto",
+        user_id: str = "default",
     ) -> int:
         """批量写入 item + seller 关联，单事务提交
 
@@ -326,6 +332,7 @@ class TaskLinksMixin:
                     "link_key": link_key,
                     "display": display,
                     "source": source,
+                    "user_id": user_id,
                 })
         return self.batch_upsert_task_links(batch)
 
@@ -405,6 +412,7 @@ class TaskLinksMixin:
         link_type: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> list[dict]:
         with self.engine.connect() as conn:
             task_row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
@@ -412,6 +420,8 @@ class TaskLinksMixin:
             stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
             if link_type:
                 stmt = stmt.where(TaskLinkRow.link_type == link_type)
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
 
             # 价格过滤下推 SQL：减少全量加载的行数
             # 关键词/发布天数过滤保留 Python 层（中文分词 + 时间计算兼容性）
@@ -444,6 +454,7 @@ class TaskLinksMixin:
         search_brand: str | None = None,
         sold_filter: str = "all",
         task: dict | None = None,
+        user_id: str | None = None,
     ) -> tuple[list[dict], dict[str, int]]:
         """单次查询同时返回列表和计数，避免 list + count 两次全量加载
 
@@ -479,6 +490,8 @@ class TaskLinksMixin:
             stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
             if link_type:
                 stmt = stmt.where(TaskLinkRow.link_type == link_type)
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
 
             # 销售状态下推过滤：仅在 sold_filter != 'all' 时添加 JOIN，避免无谓性能开销
             # 为什么用 OUTER JOIN 而非 INNER JOIN：seller 行的 link_key 不在 items 表中，
@@ -584,6 +597,7 @@ class TaskLinksMixin:
         self,
         task_id: str,
         link_type: str | None = None,
+        user_id: str | None = None,
     ) -> dict[str, int]:
         """按类型返回关联计数（与 list_task_links 的过滤逻辑保持一致）"""
         with self.engine.connect() as conn:
@@ -592,6 +606,8 @@ class TaskLinksMixin:
             stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
             if link_type:
                 stmt = stmt.where(TaskLinkRow.link_type == link_type)
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
             rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
             rows = self._filter_task_links(rows, task)
             result = {"item": 0, "seller": 0, "url": 0, "total": 0}
@@ -602,19 +618,28 @@ class TaskLinksMixin:
                     result["total"] += 1
             return result
 
-    def delete_task_link(self, link_id: int) -> bool:
+    def delete_task_link(self, link_id: int, user_id: str | None = None) -> bool:
+        """user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）"""
         with self.engine.begin() as conn:
-            result = conn.execute(
-                TaskLinkRow.__table__.delete().where(TaskLinkRow.id == link_id)
-            )
+            stmt = TaskLinkRow.__table__.delete().where(TaskLinkRow.id == link_id)
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
+            result = conn.execute(stmt)
             return (result.rowcount or 0) > 0
 
-    def delete_task_links_by_task(self, task_id: str, source: str | None = None) -> int:
-        """按任务删除关联数据；source 可选过滤（'auto' 只删自动采集的）"""
+    def delete_task_links_by_task(
+        self, task_id: str, source: str | None = None, user_id: str | None = None
+    ) -> int:
+        """按任务删除关联数据；source 可选过滤（'auto' 只删自动采集的）
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）。
+        """
         with self.engine.begin() as conn:
             stmt = TaskLinkRow.__table__.delete().where(TaskLinkRow.task_id == task_id)
             if source:
                 stmt = stmt.where(TaskLinkRow.source == source)
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
             result = conn.execute(stmt)
             return result.rowcount or 0
 
@@ -622,6 +647,7 @@ class TaskLinksMixin:
         self,
         link_type: str,
         link_key: str,
+        user_id: str | None = None,
     ) -> list[dict]:
         """反查：给定 (type, key)，返回所有关联该 key 的任务链接行"""
         with self.engine.connect() as conn:
@@ -630,12 +656,15 @@ class TaskLinksMixin:
                 .where(TaskLinkRow.link_type == link_type)
                 .where(TaskLinkRow.link_key == link_key)
             )
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
             return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
 
     def list_link_displays_by_keys(
         self,
         link_keys: list[str],
         link_type: str = "item",
+        user_id: str | None = None,
     ) -> dict[str, dict]:
         """按 link_key 批量查询 display，返回 {link_key: display_dict}
 
@@ -652,11 +681,14 @@ class TaskLinksMixin:
         with self.engine.connect() as conn:
             for i in range(0, len(link_keys), batch_size):
                 batch = link_keys[i:i + batch_size]
-                rows = conn.execute(
+                stmt = (
                     select(TaskLinkRow.link_key, TaskLinkRow.display)
                     .where(TaskLinkRow.link_type == link_type)
                     .where(TaskLinkRow.link_key.in_(batch))
-                ).fetchall()
+                )
+                if user_id is not None:
+                    stmt = stmt.where(TaskLinkRow.user_id == user_id)
+                rows = conn.execute(stmt).fetchall()
                 for lk, display_json in rows:
                     if not lk:
                         continue
@@ -678,6 +710,7 @@ class TaskLinksMixin:
         q: str,
         link_type: str | None = None,
         limit: int = 50,
+        user_id: str | None = None,
     ) -> list[dict]:
         """跨任务模糊搜索 link_key / display"""
         like = f"%{_escape_like(q)}%"
@@ -685,6 +718,8 @@ class TaskLinksMixin:
             stmt = select(TaskLinkRow)
             if link_type:
                 stmt = stmt.where(TaskLinkRow.link_type == link_type)
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
             stmt = stmt.where(
                 (TaskLinkRow.link_key.like(like, escape="/")) | (TaskLinkRow.display.like(like, escape="/"))
             )

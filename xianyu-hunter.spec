@@ -36,6 +36,14 @@ hiddenimports += [
     'uvicorn.protocols.utils',
 ]
 
+# 系统托盘（可选）：pystray + PIL 已安装时才收集
+# launcher.py 中 try/except 导入，未安装时跳过托盘功能
+for mod in ('pystray', 'PIL', 'PIL.Image', 'PIL.ImageDraw'):
+    try:
+        hiddenimports += collect_submodules(mod)
+    except Exception:
+        pass
+
 # ============== 数据文件 ==============
 datas = []
 
@@ -60,7 +68,17 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],  # 不排除任何模块：chromadb 等可选依赖需保留
+    # 排除明确未使用的模块以减小体积
+    # - pytest 系列：测试框架，生产环境无需
+    # - sklearn：业务未直接使用，transformers 通过 is_sklearn_available() 按需加载
+    #   （transformers 用 sklearn 仅做 KMeans 聚类，sentence-transformers 不依赖）
+    # 注意：scipy 不排除 — chromadb/transformers 可能通过 scipy.sparse 间接使用
+    excludes=[
+        'pytest', '_pytest', 'pluggy', 'iniconfig', 'py',
+        'sklearn', 'sklearn.externals',
+        'IPython', 'jupyter', 'notebook', 'jupyter_client',
+        'matplotlib', 'pandas', 'pandas.testing',
+    ],
     noarchive=False,
     cipher=None,  # 不加密字节码（加密会增加启动耗时且无明显保护效果）
 )
@@ -74,9 +92,8 @@ exe = EXE(
     exclude_binaries=True,  # 目录模式（非 onefile）：依赖由 COLLECT 收集到 _internal
     name='xianyu-hunter',
     console=True,  # 保留控制台便于查看日志，P2 阶段改为 False + GUI 加载窗口
-    # icon 必须为 .ico 格式：SVG 需先用 Pillow/在线工具转换
-    # 构建前请确保 assets/xianyu-hunter.ico 存在
-    # icon='assets/xianyu-hunter.ico',
+    # 复用 frontend/public/favicon.ico（米其林指南风格品牌符号）
+    icon='assets/xianyu-hunter.ico',
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,

@@ -33,6 +33,7 @@ class OrdersMixin:
         offset: int = 0,
         task_id: str | None = None,
         item_id: str | None = None,
+        user_id: str | None = None,
     ) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(OrderRow).order_by(OrderRow.created_at.desc())
@@ -42,6 +43,8 @@ class OrdersMixin:
                 stmt = stmt.where(OrderRow.task_id == task_id)
             if item_id:
                 stmt = stmt.where(OrderRow.item_id == item_id)
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
             stmt = stmt.limit(limit).offset(offset)
             return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
 
@@ -50,6 +53,7 @@ class OrdersMixin:
         status: str | None = None,
         task_id: str | None = None,
         item_id: str | None = None,
+        user_id: str | None = None,
     ) -> int:
         with self.engine.connect() as conn:
             stmt = select(func.count(OrderRow.id))
@@ -59,16 +63,22 @@ class OrdersMixin:
                 stmt = stmt.where(OrderRow.task_id == task_id)
             if item_id:
                 stmt = stmt.where(OrderRow.item_id == item_id)
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
             return conn.execute(stmt).scalar() or 0
 
-    def delete_order_by_id(self, order_id: str) -> int:
+    def delete_order_by_id(self, order_id: str, user_id: str | None = None) -> int:
+        """user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）"""
         with self.engine.begin() as conn:
-            result = conn.execute(
-                OrderRow.__table__.delete().where(OrderRow.id == order_id)
-            )
+            stmt = OrderRow.__table__.delete().where(OrderRow.id == order_id)
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount or 0
 
-    def find_order_by_task_item(self, task_id: str, item_id: str) -> dict | None:
+    def find_order_by_task_item(
+        self, task_id: str, item_id: str, user_id: str | None = None
+    ) -> dict | None:
         """幂等查询：同 task 内该 item 是否已有非失败的订单"""
         with self.engine.connect() as conn:
             stmt = (
@@ -78,6 +88,8 @@ class OrdersMixin:
                 .order_by(OrderRow.created_at.desc())
                 .limit(1)
             )
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
             row = conn.execute(stmt).first()
             if not row:
                 return None
@@ -87,7 +99,8 @@ class OrdersMixin:
             return order
 
     def list_orders_by_item_ids(
-        self, item_ids: list[str], include_failed: bool = False
+        self, item_ids: list[str], include_failed: bool = False,
+        user_id: str | None = None,
     ) -> dict[str, dict]:
         """批量查询多个商品的最新订单状态
 
@@ -109,6 +122,8 @@ class OrdersMixin:
                 .where(OrderRow.item_id.in_(item_ids))
                 .order_by(OrderRow.created_at.desc())
             )
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
             for row in conn.execute(stmt).all():
                 order = self._row_to_dict(row)
                 iid = order.get("item_id")
@@ -119,15 +134,21 @@ class OrdersMixin:
                 result[iid] = order
         return result
 
-    def delete_orders_by_task(self, task_id: str) -> int:
-        """按任务删除所有关联订单"""
+    def delete_orders_by_task(self, task_id: str, user_id: str | None = None) -> int:
+        """按任务删除所有关联订单
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）。
+        """
         with self.engine.begin() as conn:
-            result = conn.execute(
-                OrderRow.__table__.delete().where(OrderRow.task_id == task_id)
-            )
+            stmt = OrderRow.__table__.delete().where(OrderRow.task_id == task_id)
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount or 0
 
-    def expire_takeover_pending_orders(self, timeout_minutes: int) -> list[dict]:
+    def expire_takeover_pending_orders(
+        self, timeout_minutes: int, user_id: str | None = None
+    ) -> list[dict]:
         """将超时未确认支付的 takeover_pending 订单批量标记为 failed
 
         业务背景：用户点击「接管」后有 timeout_minutes（默认 30 分钟）在闲鱼 App
@@ -138,6 +159,9 @@ class OrdersMixin:
 
         返回被超时清理的订单列表，供调用方发布事件/通知下游
         为什么一次 SQL 而非逐条 update：避免长事务和 N+1，且批量场景下性能更好
+
+        user_id 不为 None 时仅清理该用户的超时订单（多用户隔离）；
+        user_id=None 时跨用户清理（后台调度场景）。
         """
         from datetime import timedelta
         from sqlalchemy import update
@@ -153,6 +177,8 @@ class OrdersMixin:
                 .where(OrderRow.confirmed_at.is_not(None))
                 .where(OrderRow.confirmed_at < cutoff)
             )
+            if user_id is not None:
+                select_stmt = select_stmt.where(OrderRow.user_id == user_id)
             expired_orders = [self._row_to_dict(r) for r in conn.execute(select_stmt).all()]
 
             if not expired_orders:
@@ -168,6 +194,7 @@ class OrdersMixin:
                     confirmed_at=None,
                 )
             )
+            # select 已按 user_id 过滤，id 列表必然属于该用户，此处无需重复过滤
             conn.execute(update_stmt)
 
         # 同步内存中的字段，供调用方使用

@@ -68,7 +68,8 @@ export default function App() {
 
   // 移动端 UA 自动跳转到 /m/* 路由
   // 桌面端访问 /m/* 重定向到桌面路由
-  if (isMobile && !window.location.pathname.startsWith('/m') && !window.location.pathname.startsWith('/login')) {
+  // 路径检测必须用 /app/login：SPA 挂载在 /app/ 下（BrowserRouter basename="/app"）
+  if (isMobile && !window.location.pathname.startsWith('/m') && !window.location.pathname.startsWith('/app/login')) {
     return <Navigate to="/m" replace />
   }
 

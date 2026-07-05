@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
@@ -353,6 +353,7 @@ def _normalize_live_result(result: dict) -> dict:
 @router.get("/{task_id}/links")
 def list_links(
     task_id: str,
+    request: Request,
     type: str | None = Query(None, description="item | seller | url"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -373,10 +374,12 @@ def list_links(
 
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
     # 任务存在性校验 + 顺带取 task dict 传入 list_and_count_task_links
     # 为什么不分别调用：路由层校验存在性已 SELECT TaskRow by PK，
     # list_and_count_task_links 内部还会再查一次，重复 I/O 多耗 1-3ms
-    task = container.repo.get_task(task_id)
+    task = container.repo.get_task(task_id, user_id=user_id)
     if not task:
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
 
@@ -398,7 +401,7 @@ def list_links(
     # 同步对每行 display 做字段语义校正：DB 中可能存了错位的 seller_nick/region/seller_credit，
     # 校正后传给前端，避免"卖家"列显示地区、"地区"列显示昵称等视觉错位
     result_items = []
-    for r in _enrich_with_item_data(items, container):
+    for r in _enrich_with_item_data(items, container, user_id=user_id):
         r["link_id"] = r.pop("id", 0)  # id → link_id 映射，确保前端 rowKey/delete 正常工作
         display = r.get("display")
         if isinstance(display, dict):
@@ -430,7 +433,9 @@ def list_links(
     }
 
 
-def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict]:
+def _enrich_with_item_data(
+    links: list[dict], container: Container, user_id: str | None = None,
+) -> list[dict]:
     """从 items 表补充 task_links.display 中缺失的字段（region/seller_id/want_cnt/view_cnt/publish_time/is_sold）
 
     旧数据写入 task_links 时未包含这些字段，这里从 items 表实时补全，
@@ -450,7 +455,7 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
         return list(links)
     # 批量查询 items 表（通过 Repository 方法，不直接访问 engine）
     try:
-        rows = container.repo.list_items_by_ids(list(item_ids))
+        rows = container.repo.list_items_by_ids(list(item_ids), user_id=user_id)
         # 构建 item_id -> 字段映射
         item_map: dict[str, dict] = {}
         for row in rows:
@@ -502,10 +507,13 @@ def _enrich_with_item_data(links: list[dict], container: Container) -> list[dict
 @router.get("/{task_id}/links/count")
 def count_links(
     task_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """按类型返回关联计数（用于 Tab 角标）"""
-    if not container.repo.get_task(task_id):
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    if not container.repo.get_task(task_id, user_id=user_id):
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     return {"task_id": task_id, **container.repo.count_task_links(task_id)}
 
@@ -514,6 +522,7 @@ def count_links(
 def create_link(
     task_id: str,
     body: LinkCreate,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """手动新增关联"""
@@ -521,7 +530,9 @@ def create_link(
         raise HTTPException(status_code=400, detail=f"未知 link_type: {body.link_type}")
     if body.source not in _VALID_SOURCES:
         raise HTTPException(status_code=400, detail=f"未知 source: {body.source}")
-    if not container.repo.get_task(task_id):
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    if not container.repo.get_task(task_id, user_id=user_id):
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     link_id = container.repo.upsert_task_link(
         task_id=task_id,
@@ -538,6 +549,7 @@ def create_link(
 def delete_link(
     task_id: str,
     link_id: int,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """解除关联
@@ -545,6 +557,8 @@ def delete_link(
     联动清理：删除 item 类型关联时，同步删除 events 表中对应的 eval.* 评估事件，
     避免 task_links 已删但评估明细残留导致的垃圾数据。
     """
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
     # 删除前先查出关联信息，用于判断是否需要联动清理评估事件
     # 为什么不用 delete_task_link 直接删：它只返回 bool，拿不到 link_type/link_key
     from sqlalchemy import select as _select
@@ -599,6 +613,7 @@ def _raise_search_error(err_msg: str) -> None:
 @router.post("/{task_id}/links/refresh")
 async def refresh_links(
     task_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """实时从闲鱼搜索并刷新关联数据
@@ -607,7 +622,9 @@ async def refresh_links(
     清除旧的 auto 来源关联后写入新结果。
     仅在 Web 进程持有浏览器实例时可用（XH_WITH_SCHEDULER=1 模式）。
     """
-    task = container.repo.get_task(task_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    task = container.repo.get_task(task_id, user_id=user_id)
     if not task:
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     if not container.collector:
@@ -1022,6 +1039,7 @@ def _build_live_final_result(
 async def live_links(
     task_id: str,
     background_tasks: BackgroundTasks,
+    request: Request,
     container: Container = Depends(get_container),
 ):
     """实时从闲鱼搜索并直接返回结果（SSE 流式响应）
@@ -1031,8 +1049,10 @@ async def live_links(
     使用高优先级浏览器锁，优先于 Worker 后台搜索。
     同步 DB 调用通过 run_in_executor 异步化，避免阻塞事件循环。
     """
+    # 多用户隔离：live 主用途为查询（返回搜索结果），用 None
+    user_id = getattr(request.state, "user_id", None)
     # 前置检查（快速失败，返回正常 HTTP 错误码）
-    task = container.repo.get_task(task_id)
+    task = container.repo.get_task(task_id, user_id=user_id)
     if not task:
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     if not container.collector:
@@ -1267,7 +1287,8 @@ async def live_links(
             yield sse({"stage": "writing_db", "count": len(items)})
             items_data = _build_live_items_data(items)
             await _write_live_items_to_db(container, task_id, items_data)
-            background_tasks.add_task(_safe_trigger_live_evaluation, container, task_id, items)
+            # 传递 user_id 给后台评估任务，写入事件时用 "default" 兜底
+            background_tasks.add_task(_safe_trigger_live_evaluation, container, task_id, items, user_id)
 
         # 阶段 7：完成
         result = _build_live_final_result(
@@ -1283,7 +1304,10 @@ async def live_links(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _safe_trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
+def _safe_trigger_live_evaluation(
+    container: Container, task_id: str, items: list[dict],
+    user_id: str | None = None,
+) -> None:
     """_trigger_live_evaluation 的安全包装，用于 BackgroundTasks
 
     BackgroundTasks 在响应返回后执行，异常不会反馈给客户端，需在此捕获并记录日志，
@@ -1297,7 +1321,7 @@ def _safe_trigger_live_evaluation(container: Container, task_id: str, items: lis
     "'NoneType' object can't be awaited"，导致 live 评估永远静默失败。
     """
     try:
-        _trigger_live_evaluation(container, task_id, items)
+        _trigger_live_evaluation(container, task_id, items, user_id=user_id)
     except Exception as e:
         logger.warning("live_links 后台触发评估失败 task={}: {}", task_id, e)
 
@@ -1446,7 +1470,10 @@ def _build_degraded_seller_profile(seller_id: str, seller_nick: str) -> Any:
     )
 
 
-def _trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
+def _trigger_live_evaluation(
+    container: Container, task_id: str, items: list[dict],
+    user_id: str | None = None,
+) -> None:
     """对 live 搜索结果触发轻量级评估
 
     基于搜索结果构造降级 ItemDetail 和 SellerProfile（不拉取详情页和卖家主页），
@@ -1475,6 +1502,9 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
     # 只对齐了"分数达标"判断，遗漏了"价格过滤"，导致任务设了 max_price=5000 但
     # 商品价格 8000 且评分 85 时，live 链路会误抢单，与 worker 行为不一致
     price_strategy, market_ctx = _build_live_price_strategy(container, task_id, items)
+
+    # 写入操作用 "default" 兜底：live 端点是查询模式（None），写入事件需有用户归属
+    effective_user_id = user_id or "default"
 
     evaluated = 0
     price_filtered = 0
@@ -1520,7 +1550,7 @@ def _trigger_live_evaluation(container: Container, task_id: str, items: list[dic
                     "is_passed": eval_result.is_passed,
                     "data_quality": eval_result.data_quality,
                 }, ensure_ascii=False, default=str),
-            })
+            }, user_id=effective_user_id)
 
             # 达标商品收集：score >= auto_buy_score 且 risk == LOW
             # 为什么用 should_auto_buy 而非 is_auto_buy：前者接受配置阈值参数，
@@ -1661,6 +1691,7 @@ _links_lookup = APIRouter(prefix="/api/tasks/links", tags=["task-links"])
 
 @_links_lookup.get("/lookup")
 def lookup(
+    request: Request,
     type: str = Query(..., description="item | seller | url"),
     key: str = Query(..., min_length=1, max_length=512),
     container: Container = Depends(get_container),
@@ -1671,7 +1702,9 @@ def lookup(
     """
     if type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
-    rows = container.repo.lookup_task_links(link_type=type, link_key=key)
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    rows = container.repo.lookup_task_links(link_type=type, link_key=key, user_id=user_id)
     return {"items": rows, "count": len(rows), "type": type, "key": key}
 
 
@@ -1682,7 +1715,11 @@ def search(
     limit: int = Query(50, ge=1, le=200),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """跨任务模糊搜索（key 或 display 字段包含 q）"""
+    """跨任务模糊搜索（key 或 display 字段包含 q）
+
+    通过 TaskLinkSearchService 间接调用 repo.search_task_links，
+    不直接调用 Repository 层方法，user_id 隔离将由后续任务在 Service 层补齐。
+    """
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
     # 使用 SearchService 统一处理分页/慢查询埋点/响应结构
@@ -1694,11 +1731,14 @@ def search(
 
 @_links_lookup.post("/auto-migrate")
 def auto_migrate(
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """一次性把 items.task_id 隐式关联同步到 task_links 表。
 
     通常在 web 启动时调用一次即可；后续 Worker 抓新商品时也会写 task_links。
     """
-    inserted = container.repo.auto_migrate_task_links()
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    inserted = container.repo.auto_migrate_task_links(user_id=user_id)
     return {"ok": True, "inserted": inserted}

@@ -22,9 +22,15 @@ class TasksMixin:
             stmt = stmt.on_conflict_do_update(index_elements=["id"], set_=update_cols)
             conn.execute(stmt)
 
-    def get_task(self, task_id: str) -> dict | None:
+    def get_task(self, task_id: str, user_id: str | None = None) -> dict | None:
+        # user_id 多用户隔离：与 list_tasks 保持一致
+        # 路由层（api_task_links/api_task_deps）已普遍传入 user_id，
+        # 缺失此参数会抛 TypeError 被全局异常处理器兜底为 500 "内部服务器错误"
         with self.engine.connect() as conn:
-            row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
+            stmt = select(TaskRow).where(TaskRow.id == task_id)
+            if user_id is not None:
+                stmt = stmt.where(TaskRow.user_id == user_id)
+            row = conn.execute(stmt).first()
             return self._row_to_dict(row) if row else None
 
     def list_tasks(self, status: str | None = None, limit: int | None = None, offset: int = 0,

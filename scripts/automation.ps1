@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     闲鱼猎人项目自动化生命周期管理脚本
 .DESCRIPTION

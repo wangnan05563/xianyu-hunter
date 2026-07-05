@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import _utcnow
@@ -60,6 +60,7 @@ def _apply_takeover_deadline(o: dict, now: datetime) -> None:
 
 @router.get("")
 def list_orders(
+    request: Request,
     status: str | None = None,
     limit: int = 100,
     page_num: int = Query(1, ge=1, description="页码（从1开始）"),
@@ -78,11 +79,13 @@ def list_orders(
         offset = 0
         actual_limit = limit
 
+    # 多用户隔离：仅查询当前账号的订单
+    user_id = getattr(request.state, "user_id", None)
     rows = container.repo.list_orders(
         status=status, limit=actual_limit, offset=offset,
-        task_id=task_id, item_id=item_id,
+        task_id=task_id, item_id=item_id, user_id=user_id,
     )
-    total = container.repo.count_orders(status=status, task_id=task_id, item_id=item_id)
+    total = container.repo.count_orders(status=status, task_id=task_id, item_id=item_id, user_id=user_id)
 
     # 给 takeover_pending 订单附加"剩余倒计时秒数"，前端 modal 直接读 deadline。
     now = _utcnow().replace(tzinfo=None)
@@ -98,9 +101,12 @@ def list_orders(
 @router.get("/{order_id}")
 def get_order(
     order_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    o = container.repo.get_order(order_id)
+    # 多用户隔离：仅查询当前账号的订单
+    user_id = getattr(request.state, "user_id", None)
+    o = container.repo.get_order(order_id, user_id=user_id)
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     return o
@@ -109,6 +115,7 @@ def get_order(
 @router.delete("/{order_id}")
 def delete_order(
     order_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """删除订单记录
@@ -118,7 +125,9 @@ def delete_order(
     2. 删除后 buyer._task_item_set 仍在内存中（进程未重启时幂等仍生效）
     3. DB 层 hard delete 保持简单，与 delete_orders_by_task 一致
     """
-    deleted = container.repo.delete_order_by_id(order_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    deleted = container.repo.delete_order_by_id(order_id, user_id=user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     return {"ok": True, "id": order_id, "deleted": deleted}
@@ -127,6 +136,7 @@ def delete_order(
 @router.post("/{order_id}/takeover")
 def takeover_order(
     order_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """人工接管：把订单状态置为 takeover_pending，等待用户在闲鱼 App 手动支付。
@@ -141,7 +151,9 @@ def takeover_order(
     - 拒绝 succeeded/failed/cancelled → takeover_pending：终态订单不可复活
     - 用户若需重新接管已 cancel 的订单，需先确保状态回退到 pending_pay
     """
-    o = container.repo.get_order(order_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    o = container.repo.get_order(order_id, user_id=user_id)
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     current_status = o.get("status")
@@ -158,7 +170,7 @@ def takeover_order(
     # 写库用 datetime（SQLAlchemy DateTime 字段不接受 string），
     # 返回时再把字符串给前端，避免污染其他读取方。
     o["confirmed_at"] = now
-    container.repo.upsert_order(o)
+    container.repo.upsert_order(o, user_id=user_id)
     deadline = now + timedelta(minutes=TAKEOVER_TIMEOUT_MIN)
     return {
         "ok": True,
@@ -173,13 +185,16 @@ def takeover_order(
 @router.post("/{order_id}/takeover/confirm")
 def takeover_confirm(
     order_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """用户反馈"已在闲鱼 App 完成支付"，把订单标记为 succeeded。
 
     状态机：takeover_pending → succeeded
     """
-    o = container.repo.get_order(order_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    o = container.repo.get_order(order_id, user_id=user_id)
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     if o.get("status") != "takeover_pending":
@@ -190,15 +205,16 @@ def takeover_confirm(
     now = _utcnow()
     o["status"] = "succeeded"
     o["paid_at"] = now
-    container.repo.upsert_order(o)
+    container.repo.upsert_order(o, user_id=user_id)
     # F-16：订单成功后触发下游依赖任务
-    _trigger_dependent_tasks(container, o)
+    _trigger_dependent_tasks(container, o, user_id=user_id)
     return {"ok": True, "id": order_id, "status": "succeeded", "paid_at": now.isoformat(timespec="seconds")}
 
 
 @router.post("/{order_id}/takeover/cancel")
 def takeover_cancel(
     order_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """用户放弃接管：把订单状态回退到 pending，清空 confirmed_at。
@@ -206,7 +222,9 @@ def takeover_cancel(
     设计选择：保留订单而非删除。
     1) 用户可能只是误点；2) 留作审计；3) 避免数据丢失。
     """
-    o = container.repo.get_order(order_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    o = container.repo.get_order(order_id, user_id=user_id)
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     if o.get("status") != "takeover_pending":
@@ -216,7 +234,7 @@ def takeover_cancel(
         )
     o["status"] = "pending_pay"
     o["confirmed_at"] = None
-    container.repo.upsert_order(o)
+    container.repo.upsert_order(o, user_id=user_id)
     return {"ok": True, "id": order_id, "status": "pending_pay"}
 
 
@@ -224,6 +242,7 @@ def takeover_cancel(
 def update_order_status(
     order_id: str,
     payload: dict[str, Any],
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """修改订单状态
@@ -242,7 +261,9 @@ def update_order_status(
             detail=f"无效状态值: {new_status}，允许: {', '.join(sorted(valid_statuses))}",
         )
 
-    o = container.repo.get_order(order_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    o = container.repo.get_order(order_id, user_id=user_id)
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
 
@@ -254,16 +275,16 @@ def update_order_status(
     # succeeded 时记录支付时间，与 takeover_confirm 行为一致
     if new_status == "succeeded":
         o["paid_at"] = _utcnow()
-    container.repo.upsert_order(o)
+    container.repo.upsert_order(o, user_id=user_id)
 
     # 状态变为 succeeded 时触发下游依赖任务（与 takeover_confirm 一致）
     if new_status == "succeeded" and old_status != "succeeded":
-        _trigger_dependent_tasks(container, o)
+        _trigger_dependent_tasks(container, o, user_id=user_id)
 
     return {"ok": True, "id": order_id, "old_status": old_status, "new_status": new_status, "changed": True}
 
 
-def _trigger_dependent_tasks(container: Container, order: dict) -> None:
+def _trigger_dependent_tasks(container: Container, order: dict, user_id: str | None = None) -> None:
     """F-16：订单成功后，检查是否有下游任务依赖此订单所属任务，自动激活它们
 
     触发条件：
@@ -281,7 +302,7 @@ def _trigger_dependent_tasks(container: Container, order: dict) -> None:
         return
 
     # 从 item 反查 task_id
-    item = container.repo.get_item(item_id)
+    item = container.repo.get_item(item_id, user_id=user_id)
     if not item or not item.get("task_id"):
         return
 
@@ -304,7 +325,7 @@ def _trigger_dependent_tasks(container: Container, order: dict) -> None:
             )
             continue
 
-        container.repo.update_task_status(downstream_task_id, "running")
+        container.repo.update_task_status(downstream_task_id, "running", user_id=user_id or "default")
         # 记录事件，方便追溯"谁触发了谁"
         container.repo.save_event({
             "task_id": downstream_task_id,
@@ -352,10 +373,10 @@ def _ensure_takeover_prerequisites(container: Container) -> None:
 
 
 def _resolve_takeover_item(
-    container: Container, item_id: str, task_id: str
+    container: Container, item_id: str, task_id: str, user_id: str | None = None,
 ) -> tuple[float, str]:
     """查询商品并补全 task_id，返回 (expected_price, resolved_task_id)"""
-    item = container.repo.get_item(item_id)
+    item = container.repo.get_item(item_id, user_id=user_id)
     if not item:
         raise HTTPException(status_code=404, detail=f"商品 {item_id} 不存在于数据库中")
 
@@ -366,12 +387,12 @@ def _resolve_takeover_item(
 
 
 def _check_existing_takeover_order(
-    container: Container, task_id: str, item_id: str
+    container: Container, task_id: str, item_id: str, user_id: str | None = None,
 ) -> dict[str, Any] | None:
     """幂等检查：已存在订单时返回提前响应 dict，否则返回 None 继续抢单"""
     if not task_id:
         return None
-    existing = container.repo.find_order_by_task_item(task_id, item_id)
+    existing = container.repo.find_order_by_task_item(task_id, item_id, user_id=user_id)
     if not existing:
         return None
     return {
@@ -415,6 +436,7 @@ def _format_takeover_result(result: Any) -> dict[str, Any]:
 @router.post("/manual-takeover")
 async def manual_takeover(
     payload: dict[str, Any],
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """手动触发抢单：突破纯自动模式限制，让用户在评估明细页面主动触发
@@ -433,10 +455,12 @@ async def manual_takeover(
     item_id, task_id = _parse_takeover_payload(payload)
     _ensure_takeover_prerequisites(container)
 
-    expected_price, task_id = _resolve_takeover_item(container, item_id, task_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    expected_price, task_id = _resolve_takeover_item(container, item_id, task_id, user_id=user_id)
 
     # 幂等检查：避免重复抢单
-    existing_response = _check_existing_takeover_order(container, task_id, item_id)
+    existing_response = _check_existing_takeover_order(container, task_id, item_id, user_id=user_id)
     if existing_response is not None:
         return existing_response
 

@@ -289,7 +289,33 @@ class BrowserManager:
 
     @staticmethod
     def _find_edge() -> str | None:
-        """查找系统 Edge 可执行文件路径"""
+        """查找系统 Edge 可执行文件路径
+
+        检测顺序：
+        1. 注册表 App Paths（识别非默认安装路径，最准确）
+        2. 固定路径回退（默认安装位置）
+
+        仅 Windows 平台执行注册表查询，其他平台直接走固定路径回退。
+        """
+        # 注册表查询：识别用户自定义安装路径（如 D:\Program Files\Edge\）
+        if os.name == "nt":
+            try:
+                import winreg
+
+                # HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe
+                # 注册表值是 Edge 安装目录路径，含 msedge.exe 文件名
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe",
+                ) as key:
+                    path, _ = winreg.QueryValueEx(key, "")
+                    if path and Path(path).exists():
+                        return path
+            except (OSError, FileNotFoundError, PermissionError):
+                # 注册表查询失败（非 Windows / Edge 未注册 / 权限不足）时静默回退
+                pass
+
+        # 固定路径回退：覆盖默认安装位置
         for p in _EDGE_PATHS:
             if Path(p).exists():
                 return p

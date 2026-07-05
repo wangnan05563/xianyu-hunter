@@ -1,4 +1,4 @@
-"""PyInstaller 打包入口
+r"""PyInstaller 打包入口
 
 设计要点：
 1. 设置运行时环境变量（PLAYWRIGHT_BROWSERS_PATH、SENTENCE_TRANSFORMERS_HOME）
@@ -113,6 +113,46 @@ def _wait_for_port(host: str, port: int, timeout: int = 30) -> bool:
     return False
 
 
+def _try_start_tray(host: str, port: int, on_quit) -> threading.Thread | None:
+    """可选启动系统托盘（pystray 未安装时返回 None）
+
+    为什么是可选依赖：项目核心是 Web 应用，控制台 + Ctrl+C 已满足基本需求。
+    pystray + pillow 仅在需要托盘图标时才安装，避免增加打包体积和复杂度。
+
+    启用方式：build-exe.ps1 中 `pip install pystray pillow` 后重打包。
+    """
+    try:
+        import pystray
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None
+
+    # 生成简单图标（不依赖外部图片文件）
+    # 32x32 圆形，米其林红 + 金色三星
+    img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((2, 2, 30, 30), fill=(226, 6, 19, 255))  # 米其林红
+    # 简化的三星（白色小圆点代替）
+    for x, y in [(16, 9), (10, 20), (22, 20)]:
+        draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=(201, 169, 97, 255))
+
+    def on_open(icon, item):
+        webbrowser.open(f"http://{host}:{port}/app/")
+
+    def on_quit_item(icon, item):
+        icon.stop()
+        on_quit()
+
+    menu = pystray.Menu(
+        pystray.MenuItem("打开浏览器", on_open, default=True),
+        pystray.MenuItem("退出", on_quit_item),
+    )
+    icon = pystray.Icon("XianyuHunter", img, "闲鱼猎人", menu)
+    thread = threading.Thread(target=icon.run, daemon=True)
+    thread.start()
+    return thread
+
+
 def _print_banner(host: str, port: int) -> None:
     """打印启动横幅（控制台模式）"""
     print("=" * 40)
@@ -159,6 +199,15 @@ def main() -> int:
     else:
         print(f"[ERROR] Web server failed to start within 30 seconds!")
         return 1
+
+    # 可选启动系统托盘（pystray 未安装时返回 None，控制台模式继续）
+    # 托盘提供"打开浏览器"和"退出"菜单，用户可通过托盘退出而无需 Ctrl+C
+    def _on_tray_quit():
+        server.should_exit = True
+
+    tray_thread = _try_start_tray(host, port, _on_tray_quit)
+    if tray_thread is not None:
+        print("  System tray enabled (pystray).")
 
     # 阻塞主线程：uvicorn 在子线程运行，主线程 join 等待
     # Ctrl+C 时 daemon 线程自动退出

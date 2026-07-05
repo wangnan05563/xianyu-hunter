@@ -55,11 +55,14 @@ class ItemsMixin:
         task_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(ItemRow).order_by(ItemRow.first_seen.desc())
             if task_id:
                 stmt = stmt.where(ItemRow.task_id == task_id)
+            if user_id is not None:
+                stmt = stmt.where(ItemRow.user_id == user_id)
             stmt = stmt.limit(limit).offset(offset)
             rows = conn.execute(stmt).all()
             return [self._row_to_dict(r) for r in rows]
@@ -68,6 +71,7 @@ class ItemsMixin:
         self,
         seller_id: str,
         limit: int = 20,
+        user_id: str | None = None,
     ) -> list[dict]:
         """按卖家 ID 查询商品列表（P1-4 贩子识别需要）"""
         with self.engine.connect() as conn:
@@ -77,10 +81,12 @@ class ItemsMixin:
                 .order_by(ItemRow.first_seen.desc())
                 .limit(limit)
             )
+            if user_id is not None:
+                stmt = stmt.where(ItemRow.user_id == user_id)
             rows = conn.execute(stmt).all()
             return [self._row_to_dict(r) for r in rows]
 
-    def list_unsold_items(self, limit: int = 100) -> list[dict]:
+    def list_unsold_items(self, limit: int = 100, user_id: str | None = None) -> list[dict]:
         """查询所有在售（is_sold=0）商品，按首见时间倒序
 
         为什么单独提供此方法：批量采集调度器需要定期刷新在售商品详情，
@@ -95,10 +101,12 @@ class ItemsMixin:
                 .order_by(ItemRow.first_seen.desc())
                 .limit(limit)
             )
+            if user_id is not None:
+                stmt = stmt.where(ItemRow.user_id == user_id)
             rows = conn.execute(stmt).all()
             return [self._row_to_dict(r) for r in rows]
 
-    def list_items_by_ids(self, item_ids: list[str]) -> list[dict]:
+    def list_items_by_ids(self, item_ids: list[str], user_id: str | None = None) -> list[dict]:
         """按 item_id 批量查询商品（避免 list_items(limit=N) 在大数据量下遗漏）
 
         评估明细相关接口需要按评估事件涉及的 item_id 精确查询，
@@ -111,11 +119,14 @@ class ItemsMixin:
         with self.engine.connect() as conn:
             for i in range(0, len(item_ids), batch_size):
                 batch = item_ids[i:i + batch_size]
-                rows = conn.execute(select(ItemRow).where(ItemRow.id.in_(batch))).all()
+                stmt = select(ItemRow).where(ItemRow.id.in_(batch))
+                if user_id is not None:
+                    stmt = stmt.where(ItemRow.user_id == user_id)
+                rows = conn.execute(stmt).all()
                 result.extend(self._row_to_dict(r) for r in rows)
         return result
 
-    def items_exist(self, item_ids: list[str]) -> set[str]:
+    def items_exist(self, item_ids: list[str], user_id: str | None = None) -> set[str]:
         """批量检查商品ID是否已存在（分批查询避免SQLite IN子句参数上限）"""
         if not item_ids:
             return set()
@@ -124,12 +135,15 @@ class ItemsMixin:
         with self.engine.connect() as conn:
             for i in range(0, len(item_ids), batch_size):
                 batch = item_ids[i:i + batch_size]
-                rows = conn.execute(select(ItemRow.id).where(ItemRow.id.in_(batch))).all()
+                stmt = select(ItemRow.id).where(ItemRow.id.in_(batch))
+                if user_id is not None:
+                    stmt = stmt.where(ItemRow.user_id == user_id)
+                rows = conn.execute(stmt).all()
                 result.update(row[0] for row in rows)
         return result
 
     def get_recently_collected_item_ids(
-        self, item_ids: list[str], window_minutes: int
+        self, item_ids: list[str], window_minutes: int, user_id: str | None = None,
     ) -> set[str]:
         """查询最近 window_minutes 分钟内已采集（last_seen 更新）的 item_id 集合
 
@@ -160,24 +174,31 @@ class ItemsMixin:
                     .where(ItemRow.id.in_(batch))
                     .where(ItemRow.last_seen >= threshold)
                 )
+                if user_id is not None:
+                    stmt = stmt.where(ItemRow.user_id == user_id)
                 rows = conn.execute(stmt).all()
                 result.update(row[0] for row in rows)
         return result
 
-    def delete_items_by_task(self, task_id: str) -> int:
-        """按任务删除所有关联商品"""
+    def delete_items_by_task(self, task_id: str, user_id: str | None = None) -> int:
+        """按任务删除所有关联商品
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）。
+        """
         with self.engine.begin() as conn:
-            result = conn.execute(
-                ItemRow.__table__.delete().where(ItemRow.task_id == task_id)
-            )
+            stmt = ItemRow.__table__.delete().where(ItemRow.task_id == task_id)
+            if user_id is not None:
+                stmt = stmt.where(ItemRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount or 0
 
-    def update_data_source(self, item_id: str, source: str) -> bool:
+    def update_data_source(self, item_id: str, source: str, user_id: str | None = None) -> bool:
         """更新商品的采集来源标记
 
         Args:
             item_id: 商品 ID
             source: 采集来源，必须是 'search' / 'official' / 'live' 之一
+            user_id: 不为 None 时附加 WHERE 过滤，防止跨用户更新（深度防御）
 
         Returns:
             是否更新成功（受影响行数 > 0）
@@ -192,14 +213,17 @@ class ItemsMixin:
                 f"非法的 data_source 取值: {source!r}，必须是 {valid_sources} 之一"
             )
         with self.engine.begin() as conn:
-            result = conn.execute(
+            stmt = (
                 ItemRow.__table__.update()
                 .where(ItemRow.id == item_id)
                 .values(data_source=source)
             )
+            if user_id is not None:
+                stmt = stmt.where(ItemRow.user_id == user_id)
+            result = conn.execute(stmt)
             return (result.rowcount or 0) > 0
 
-    def mark_sold(self, item_id: str) -> None:
+    def mark_sold(self, item_id: str, user_id: str | None = None) -> None:
         """标记商品为已售出，同步更新 items 表 + task_links.display
 
         为什么同步 task_links：前端列表读 task_links.display.is_sold，
@@ -207,6 +231,9 @@ class ItemsMixin:
 
         原子性保证：items 更新和 task_links 更新在同一事务中执行，
         避免中间崩溃导致 items.is_sold=1 但 task_links.display.is_sold 仍为 False。
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户更新（深度防御）。
+        items 与 task_links 的 user_id 来自同一 task，过滤后仍能保持原子性一致。
         """
         import json as _json
         from xianyu_hunter.infra.db_models import _utcnow, TaskLinkRow
@@ -214,16 +241,23 @@ class ItemsMixin:
         now = _utcnow()
         with self.engine.begin() as conn:
             # 1. 更新 items 表
-            conn.execute(
+            items_stmt = (
                 ItemRow.__table__.update()
                 .where(ItemRow.id == item_id)
                 .values(is_sold=1, sold_detected_at=now)
             )
+            if user_id is not None:
+                items_stmt = items_stmt.where(ItemRow.user_id == user_id)
+            conn.execute(items_stmt)
             # 2. 同步 task_links.display.is_sold（同一事务内，保证原子性）
-            links = conn.execute(
-                select(TaskLinkRow).where(TaskLinkRow.link_type == "item")
+            links_stmt = (
+                select(TaskLinkRow)
+                .where(TaskLinkRow.link_type == "item")
                 .where(TaskLinkRow.link_key == item_id)
-            ).all()
+            )
+            if user_id is not None:
+                links_stmt = links_stmt.where(TaskLinkRow.user_id == user_id)
+            links = conn.execute(links_stmt).all()
             for link in links:
                 display = link.display
                 if isinstance(display, str):
@@ -237,8 +271,11 @@ class ItemsMixin:
                     # SQLAlchemy 可能已解析为 dict
                     pass
                 display["is_sold"] = True
-                conn.execute(
+                link_update = (
                     TaskLinkRow.__table__.update()
                     .where(TaskLinkRow.id == link.id)
                     .values(display=_json.dumps(display, ensure_ascii=False))
                 )
+                if user_id is not None:
+                    link_update = link_update.where(TaskLinkRow.user_id == user_id)
+                conn.execute(link_update)

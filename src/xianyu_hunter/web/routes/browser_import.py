@@ -29,7 +29,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from xianyu_hunter.domain.urls import get_base_url
@@ -427,8 +427,12 @@ def _build_import_result(
     has_v20: bool,
     browser: str,
     dry_run: bool,
+    user_id: str = "default",
 ) -> dict:
-    """构建导入结果，处理 dry_run 预览和实际写入两种模式"""
+    """构建导入结果，处理 dry_run 预览和实际写入两种模式
+
+    多用户隔离：user_id 决定 cookie 写入到哪个 cookies_{user_id}.json。
+    """
     result = {
         "ok": len(imported_names) > 0,
         "imported_count": len(imported_names),
@@ -453,7 +457,7 @@ def _build_import_result(
             result["dry_run"] = True
         else:
             # 传入实际解密后的 cookie 值（之前 bug 是传空值）
-            json_written = get_cookie_store().export_cookies(imported_cookies, method="import")
+            json_written = get_cookie_store().export_cookies(imported_cookies, method="import", user_id=user_id)
             # 同步 CookieRotator 层状态，避免 /cookies/layers 仍显示失效
             if json_written:
                 try:
@@ -474,7 +478,7 @@ def _build_import_result(
     return result
 
 
-def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: bool = False) -> dict:
+def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: bool = False, user_id: str = "default") -> dict:
     """从系统浏览器导入 Cookie 的核心逻辑（返回 dict，由端点包装为 JSONResponse）
 
     Args:
@@ -482,6 +486,7 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
         auto_close: 文件被锁定时是否自动关闭浏览器
         dry_run: True 时只解密读取、不写入 CookieStore，并在结果中返回 cookies 字典
                  供前端"从浏览器导入预览"使用
+        user_id: 多用户隔离，决定 cookie 写入到哪个 cookies_{user_id}.json
     """
     from xianyu_hunter.web.services.browser_profile import discover_profiles
 
@@ -582,7 +587,7 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
             )
 
         result = _build_import_result(
-            imported_names, imported_cookies, errors, has_v20, browser, dry_run,
+            imported_names, imported_cookies, errors, has_v20, browser, dry_run, user_id,
         )
 
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -595,9 +600,14 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
 
 
 @router.post("/import-from-browser")
-async def import_from_browser(browser: str = "edge", auto_close: bool = False) -> JSONResponse:
-    """从系统已登录的浏览器中自动提取闲鱼/淘宝 Cookie 并注入到项目 browser-data"""
-    result = await asyncio.to_thread(_do_import_from_browser, browser, auto_close)
+async def import_from_browser(request: Request, browser: str = "edge", auto_close: bool = False) -> JSONResponse:
+    """从系统已登录的浏览器中自动提取闲鱼/淘宝 Cookie 并注入到项目 browser-data
+
+    多用户隔离：从 request.state.user_id 获取当前登录用户，按 user_id 写入
+    cookies_{user_id}.json。
+    """
+    cookie_user_id = getattr(request.state, "user_id", None) or "default"
+    result = await asyncio.to_thread(_do_import_from_browser, browser, auto_close, False, cookie_user_id)
     if result.get("ok"):
         try:
             from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser

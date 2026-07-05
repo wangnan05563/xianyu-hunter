@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from xianyu_hunter.container import Container
@@ -222,6 +222,7 @@ def _serialize_history(row: dict) -> dict:
 
 @router.get("/history")
 def list_history(
+    request: Request,
     task_id: int | None = Query(None, description="按 task_id 精确过滤"),
     status: str | None = Query(
         None, pattern="^(running|completed|cancelled|failed)$",
@@ -246,6 +247,8 @@ def list_history(
     支持按 task_id / status / trigger_source / 时间范围过滤，
     支持多字段排序。响应包含 items 列表和 total 总数，供前端分页。
     """
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
     start_dt = parse_iso_datetime(start) if start else None
     end_dt = parse_iso_datetime(end) if end else None
 
@@ -259,6 +262,7 @@ def list_history(
         order_dir=order_dir,
         limit=limit,
         offset=offset,
+        user_id=user_id,
     )
     total = container.repo.count_batch_refresh_history(
         task_id=task_id,
@@ -266,9 +270,10 @@ def list_history(
         trigger_source=trigger_source,
         start_dt=start_dt,
         end_dt=end_dt,
+        user_id=user_id,
     )
     # 状态聚合：供前端概览卡片展示各状态记录数
-    status_counts = container.repo.count_batch_refresh_history_by_status()
+    status_counts = container.repo.count_batch_refresh_history_by_status(user_id=user_id)
     return {
         "items": [_serialize_history(it) for it in items],
         "total": total,
@@ -280,6 +285,7 @@ def list_history(
 
 @router.get("/history/stats")
 def get_history_stats(
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """按 task_id 聚合统计执行次数
@@ -287,17 +293,22 @@ def get_history_stats(
     用于「检查某 task_id 执行过几次」与「最近执行时间」的需求。
     返回 list[{task_id, run_count, last_run_at, total_success, total_failed}]。
     """
-    stats = container.repo.count_batch_refresh_history_by_task()
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    stats = container.repo.count_batch_refresh_history_by_task(user_id=user_id)
     return {"items": stats, "count": len(stats)}
 
 
 @router.get("/history/{history_id}")
 def get_history_detail(
     history_id: int,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """查询单条历史记录详情（含完整错误消息列表）"""
-    row = container.repo.get_batch_refresh_history(history_id)
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    row = container.repo.get_batch_refresh_history(history_id, user_id=user_id)
     if row is None:
         raise HTTPException(status_code=404, detail="历史记录不存在")
     return _serialize_history(row)
@@ -306,10 +317,13 @@ def get_history_detail(
 @router.delete("/history/{history_id}")
 def delete_history(
     history_id: int,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """删除单条历史记录"""
-    ok = container.repo.delete_batch_refresh_history(history_id)
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    ok = container.repo.delete_batch_refresh_history(history_id, user_id=user_id)
     if not ok:
         raise HTTPException(status_code=404, detail="历史记录不存在")
     return {"ok": True}
@@ -317,6 +331,7 @@ def delete_history(
 
 @router.delete("/history")
 def cleanup_history(
+    request: Request,
     days: int = Query(..., ge=0, le=3650, description="清理 N 天前的记录，0=清理全部"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -326,12 +341,15 @@ def cleanup_history(
     与启动时自动清理逻辑共用 cleanup_old_batch_refresh_history，days=0 走特殊分支
     直接 DELETE FROM table。
     """
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
     if days == 0:
         # 清理全部：直接删除表内所有记录
+        # 为什么不分用户：days=0 是全局清空操作，与启动时自动清理逻辑一致
         with container.repo.engine.begin() as conn:
             from xianyu_hunter.infra.db_models import BatchRefreshHistoryRow
             result = conn.execute(BatchRefreshHistoryRow.__table__.delete())
             deleted = result.rowcount
     else:
-        deleted = container.repo.cleanup_old_batch_refresh_history(days)
+        deleted = container.repo.cleanup_old_batch_refresh_history(days, user_id=user_id)
     return {"ok": True, "deleted": deleted}

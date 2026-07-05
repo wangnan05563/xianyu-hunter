@@ -418,7 +418,18 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
 
                 while time.monotonic() - start < timeout:
                     await asyncio.sleep(1)
-                    cookies = await bc.cookies()
+                    # bc.cookies() 加超时保护：
+                    # Playwright 在浏览器进程无响应/IPC 通道阻塞时会永久挂起，
+                    # 导致下方心跳逻辑无法执行，status_file 停在最后一次写入的
+                    # "剩余 Ns"，前端秒数一直不变化。超时后跳过本轮检测继续心跳。
+                    try:
+                        cookies = await asyncio.wait_for(bc.cookies(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        print("[browser_login] bc.cookies() 超时(5s)，跳过本轮检测", file=sys.stderr)
+                        cookies = []
+                    except Exception as e:
+                        print(f"[browser_login] bc.cookies() 异常: {e}", file=sys.stderr)
+                        cookies = []
 
                     if _validate_login_cookies(cookies):
                         # 登录成功后继续预热并等待 cookie jar 稳定，避免只导出半截 cookie。

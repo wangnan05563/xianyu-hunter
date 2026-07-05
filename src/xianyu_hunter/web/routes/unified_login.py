@@ -33,10 +33,13 @@ from fastapi.responses import JSONResponse
 
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
 from xianyu_hunter.web.services.cookie_store import get_cookie_store
+# 打包后 __file__ 在 _internal/ 下，parents[4] 会指错位置；统一走 paths.get_app_dir()
+# 开发模式返回项目根 CWD，打包模式返回 exe 同级目录（安装时复制 scripts/ 子进程脚本）
+from xianyu_hunter.paths import get_app_dir
 
 logger = logging.getLogger(__name__)
 
-_REPO = Path(__file__).resolve().parents[4]
+_REPO = get_app_dir()
 _BROWSER_LOGIN_SCRIPT = _REPO / "scripts" / "browser_login.py"
 _AUTH_HELPER_SCRIPT = _REPO / "scripts" / "auth_helper.py"
 _TERMINAL_STATUSES = {"success", "cancelled", "error", "timeout"}
@@ -713,6 +716,40 @@ async def login_status() -> dict:
     data = _read_status_file(status_file)
     file_status = data.get("status") or data.get("state") or ""
     should_start_hooks = False
+
+    # 心跳超时检测：status file 超过 15s 未更新时判定子进程卡死
+    # 为什么需要：browser_login.py 子进程的 bc.cookies() 在浏览器无响应时
+    # 可能永久阻塞，导致心跳停止、status_file 停在最后一次写入的 message，
+    # 前端秒数一直不变化。此处主动识别并清理，让前端停止轮询。
+    # 阈值 15s：子进程心跳间隔 3s + Playwright 偶尔阻塞 5-8s + 余量
+    if file_status in _LIVE_STATUSES:
+        ts = data.get("ts")
+        if ts is not None:
+            stale_sec = time.time() - float(ts)
+            if stale_sec > 15:
+                logger.warning("登录子进程心跳超时（%.1fs 未更新），判定为卡死", stale_sec)
+                with _session_lock:
+                    proc = _session.get("proc")
+                    if proc and proc.poll() is None:
+                        try:
+                            proc.kill()
+                        except OSError:
+                            pass
+                    _session["status"] = "error"
+                    _session["message"] = f"登录进程无响应（{stale_sec:.0f}s 未更新），请重试"
+                data["status"] = "error"
+                data["message"] = _session["message"]
+                file_status = "error"
+                # 写回 status_file 让 _background_wait 线程也能读到终态，
+                # 否则它会读到旧的 "waiting" 把 _session["status"] 覆盖回去
+                if status_file:
+                    try:
+                        Path(status_file).write_text(
+                            json.dumps(data, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    except OSError:
+                        pass
 
     if file_status in _TERMINAL_STATUSES:
         normalized_status = file_status

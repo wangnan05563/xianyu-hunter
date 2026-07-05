@@ -417,8 +417,16 @@ class LoginOrchestrator:
                 cookies = await container.browser.get_cookies(["goofish.com", "taobao.com"])
                 if cookies:
                     from xianyu_hunter.web.services.cookie_store import get_cookie_store
-                    get_cookie_store().export_cookies(cookies, method="renew")
-                    logger.debug("token 续期后已同步 {} 个 cookie 到 CookieStore", len(cookies))
+                    # 多用户隔离：回写到最近活跃用户的 cookie 文件
+                    # 为什么不硬编码 default：login_orchestrator 是全局单例，
+                    # 多用户场景下回写到 default 会导致活跃用户读不到续期后的新 token
+                    try:
+                        from xianyu_hunter.web.services.user_manager import get_user_manager
+                        renew_user_id = get_user_manager().get_active_user_id()
+                    except Exception:
+                        renew_user_id = "default"
+                    get_cookie_store().export_cookies(cookies, method="renew", user_id=renew_user_id)
+                    logger.debug("token 续期后已同步 {} 个 cookie 到 CookieStore [user={}]", len(cookies), renew_user_id)
             except Exception as e:
                 # 回写失败不影响续期成功状态（token 已在浏览器内存中刷新）
                 logger.warning("token 续期后回写 CookieStore 失败: {}", e)

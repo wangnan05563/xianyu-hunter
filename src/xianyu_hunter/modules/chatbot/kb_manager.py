@@ -30,6 +30,7 @@ from xianyu_hunter.infra.yaml_config import ChatbotKBConfig
 from xianyu_hunter.modules.chatbot.embedding_service import EmbeddingService
 from xianyu_hunter.modules.chatbot.security.patterns import SENSITIVE_PATTERNS
 from xianyu_hunter.modules.chatbot.vector_store import VectorStore
+from xianyu_hunter.paths import get_chromadb_path
 
 
 @dataclass
@@ -967,7 +968,6 @@ class KBManager:
         persist_path 已通过 yaml_config.py 走 paths.get_chromadb_path()，
         打包后会指向 %APPDATA%/XianyuHunter/data/chromadb
         """
-        from xianyu_hunter.paths import get_chromadb_path
         return str(get_chromadb_path() / "snapshots" / version_id)
 
     def _make_empty_failed_version(

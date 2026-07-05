@@ -27,11 +27,14 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
+# 打包后 __file__ 在 _internal/ 下，parents[4] 会指错位置；统一走 paths.get_app_dir()
+# 开发模式返回项目根 CWD，打包模式返回 exe 同级目录（安装时复制 scripts/ 子进程脚本）
+from xianyu_hunter.paths import get_app_dir
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["browser-login"])
 
-_REPO = Path(__file__).resolve().parents[4]
+_REPO = get_app_dir()
 _BROWSER_LOGIN_SCRIPT = _REPO / "scripts" / "browser_login.py"
 
 # 全局状态

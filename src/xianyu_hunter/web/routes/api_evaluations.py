@@ -7,7 +7,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -563,6 +563,7 @@ def _filter_time_range(r: dict, start_dt: Any, end_dt: Any) -> bool:
 
 @router.get("")
 def list_evaluations(
+    request: Request,
     limit: int = 200,
     offset: int = 0,
     page_num: int = Query(1, ge=1, description="页码（从1开始）"),
@@ -607,7 +608,11 @@ def list_evaluations(
     # 当非 eval 事件多时会遗漏数据且 total 不准。改为 SQL 端按 type 前缀过滤。
     # 不传 limit/offset，全量加载 eval.* 事件（评估事件已按 task_id+item_id 去重，量级可控），
     # 后续在 Python 端做 item_id/task_id 模糊匹配、score/time 范围过滤，再分页。
-    rows, _ = container.repo.list_events_by_type_prefix(type_prefix=_EVAL_TYPE_PREFIX)
+    # 多用户隔离：仅查询当前账号的评估事件
+    user_id = getattr(request.state, "user_id", None)
+    rows, _ = container.repo.list_events_by_type_prefix(
+        type_prefix=_EVAL_TYPE_PREFIX, user_id=user_id,
+    )
 
     min_price, max_price = _apply_task_price_fallback(
         container, task_id, min_price, max_price, include_out_of_range
@@ -620,7 +625,7 @@ def list_evaluations(
     # 预加载 task_links.display 数据（弥补 items 表缺失的常见场景：评估事件未入 items 但已关联到任务）
     # 修复：之前直接访问 container.repo.engine 绕过 Repository，改为调用正式方法
     link_map: dict[str, dict] = container.repo.list_link_displays_by_keys(
-        list(event_item_ids), link_type="item"
+        list(event_item_ids), link_type="item", user_id=user_id,
     ) if event_item_ids else {}
 
     seller_map = _load_seller_nick_map(container, item_map)
@@ -631,7 +636,7 @@ def list_evaluations(
     # 点击抢单失败后刷新页面看到「—」，会误以为没下过单而反复触发抢单
     order_map = (
         container.repo.list_orders_by_item_ids(
-            list(event_item_ids), include_failed=True
+            list(event_item_ids), include_failed=True, user_id=user_id,
         )
         if event_item_ids
         else {}
@@ -881,9 +886,12 @@ def _enrich_condition_tags(evals: list[dict]) -> None:
 @router.get("/latest/{item_id}")
 def latest_for_item(
     item_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    e = container.repo.get_latest_evaluation(item_id)
+    # 多用户隔离：仅返回当前账号的评估记录
+    user_id = getattr(request.state, "user_id", None)
+    e = container.repo.get_latest_evaluation(item_id, user_id=user_id)
     if not e:
         raise HTTPException(status_code=404, detail="无该商品评估记录")
     return e
@@ -1248,6 +1256,7 @@ def _calc_suggested_threshold(
 # ============== P3-UX-09 评估分分布 API ==============
 @router.get("/distribution")
 def evaluations_distribution(
+    request: Request,
     range_hours: int = 168,
     price_bin_count: int = 10,
     score_bin_count: int = 10,
@@ -1289,7 +1298,11 @@ def evaluations_distribution(
     # 从 events 拉 eval.*，并 join items 拿价格（item_id 在 payload.item_id）
     # 修复：之前用 list_events(limit=5000) + list_items(limit=5000) 全量加载，
     # 改为按 type 前缀过滤 events，按涉及 item_id 批量查询 items
-    events, _ = container.repo.list_events_by_type_prefix(type_prefix=_EVAL_TYPE_PREFIX)
+    # 多用户隔离：仅统计当前账号的评估事件
+    user_id = getattr(request.state, "user_id", None)
+    events, _ = container.repo.list_events_by_type_prefix(
+        type_prefix=_EVAL_TYPE_PREFIX, user_id=user_id,
+    )
     item_price_map = _load_dist_item_price_map(container, events)
 
     eval_records, insufficient_count = _collect_dist_eval_records(events, cutoff, item_price_map)
@@ -1406,6 +1419,7 @@ def _determine_trend(price_points: list[dict[str, Any]]) -> str:
 def seller_price_trend(
     seller_id: str = Query(..., description="卖家 ID"),
     range_days: int = Query(30, ge=7, le=90, description="统计天数"),
+    request: Request = None,  # noqa: B008  # 兼容 seller_trend_for_item 内部调用（FastAPI 路由会注入非 None 值）
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """F-12：卖家历史价格趋势
@@ -1420,8 +1434,12 @@ def seller_price_trend(
     now = _utcnow()
     cutoff = now - timedelta(days=range_days)
 
+    # 多用户隔离：仅查询当前账号的商品
+    user_id = getattr(request.state, "user_id", None) if request is not None else None
     # 查询该卖家的所有商品（SQL 端按 seller_id 过滤，不加载全量 items 再 Python 过滤）
-    seller_items = container.repo.list_items_by_seller(seller_id, limit=5000) or []
+    seller_items = container.repo.list_items_by_seller(
+        seller_id, limit=5000, user_id=user_id,
+    ) or []
 
     if not seller_items:
         # 无数据时返回空结构，前端显示"暂无数据"
@@ -1499,6 +1517,7 @@ def _calc_current_pass_rate(score_marginals: list[int], total: int, current_pass
 
 @router.get("/threshold-suggestion")
 def threshold_suggestion(
+    request: Request,
     target_pass_rate: float = Query(0.7, ge=0.1, le=0.95, description="目标通过率"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -1508,10 +1527,12 @@ def threshold_suggestion(
     复用 distribution API 的 marginals.score 数据，不需要新的数据源。
     """
     # 复用 distribution API 获取分数分布（默认 7 天）
+    # 多用户隔离：传递 request 以复用用户过滤逻辑
     dist_data = evaluations_distribution(
         range_hours=168,
         price_bin_count=10,
         score_bin_count=10,
+        request=request,
         container=container,
     )
 
@@ -1555,6 +1576,7 @@ def threshold_suggestion(
 @router.get("/{item_id}/seller-trend")
 def seller_trend_for_item(
     item_id: str,
+    request: Request,
     range_days: int = Query(30, ge=7, le=90, description="统计天数"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -1566,15 +1588,17 @@ def seller_trend_for_item(
     """
     seller_id: str | None = None
 
+    # 多用户隔离：仅查询当前账号的商品和评估事件
+    user_id = getattr(request.state, "user_id", None)
     # 策略1：优先从 items 表查询（数据更完整）
     # 修复：之前直接访问 engine，改为调用 Repository 方法
-    item = container.repo.get_item(item_id)
+    item = container.repo.get_item(item_id, user_id=user_id)
     if item and item.get("seller_id"):
         seller_id = str(item["seller_id"])
 
     # 策略2：items 表无记录时，从事件 payload 回退（评估事件中包含 seller_id）
     if not seller_id:
-        payload = container.repo.get_eval_payload_by_item(item_id)
+        payload = container.repo.get_eval_payload_by_item(item_id, user_id=user_id)
         if payload:
             seller_id = payload.get("seller_id")
 
@@ -1582,9 +1606,11 @@ def seller_trend_for_item(
         raise HTTPException(status_code=404, detail="未找到该商品的卖家信息（商品未入库且无评估事件）")
 
     # 复用本模块的 seller_price_trend（同返回格式，避免跨路由耦合）
+    # 传递 request 以复用用户过滤逻辑
     return seller_price_trend(
         seller_id=seller_id,
         range_days=range_days,
+        request=request,
         container=container,
     )
 
@@ -1594,6 +1620,7 @@ def seller_trend_for_item(
 @router.post("/{item_id}/feedback")
 def submit_eval_feedback(
     item_id: str,
+    request: Request,
     feedback: str = Query(..., description="反馈类型: accurate / inaccurate / partial"),
     note: str | None = Query(None, description="可选反馈备注"),
     task_id: str | None = Query(None, description="可选：指定任务 ID（多任务同 item_id 时）"),
@@ -1613,6 +1640,8 @@ def submit_eval_feedback(
     if feedback not in ("accurate", "inaccurate", "partial"):
         raise HTTPException(status_code=400, detail="feedback 必须为 accurate/inaccurate/partial")
 
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
     # 查找该商品最新的评估事件
     event_type = _EVAL_SCORED_TYPE
     payload_updates: dict[str, Any] = {
@@ -1624,18 +1653,18 @@ def submit_eval_feedback(
     # 如果有 task_id，按 task_id + item_id 精确查找
     if task_id:
         updated = container.repo.update_eval_payload_by_keys(
-            task_id, item_id, event_type, payload_updates
+            task_id, item_id, event_type, payload_updates, user_id=user_id,
         )
     else:
         # 无 task_id 时，查找该 item_id 最新的 eval.scored 事件
-        payload = container.repo.get_eval_payload_by_item(item_id)
+        payload = container.repo.get_eval_payload_by_item(item_id, user_id=user_id)
         if not payload:
             raise HTTPException(status_code=404, detail=f"未找到商品 {item_id} 的评估记录")
         # 获取 task_id 后更新
         task_id_in_payload = payload.get("task_id", "")
         if task_id_in_payload:
             updated = container.repo.update_eval_payload_by_keys(
-                task_id_in_payload, item_id, event_type, payload_updates
+                task_id_in_payload, item_id, event_type, payload_updates, user_id=user_id,
             )
         else:
             raise HTTPException(status_code=404, detail="评估记录缺少 task_id，无法更新")
@@ -1650,13 +1679,16 @@ def submit_eval_feedback(
 
 @router.get("/feedback/stats")
 def feedback_stats(
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """评估反馈统计
 
     返回各反馈类型的数量和准确率，用于监控评估系统整体表现。
     """
-    rows, _ = container.repo.list_events_by_type_prefix(_EVAL_SCORED_TYPE, limit=50000)
+    # 多用户隔离：仅统计当前账号的评估反馈
+    user_id = getattr(request.state, "user_id", None)
+    rows, _ = container.repo.list_events_by_type_prefix(_EVAL_SCORED_TYPE, limit=50000, user_id=user_id)
     stats: dict[str, int] = {"accurate": 0, "inaccurate": 0, "partial": 0, "no_feedback": 0}
     for r in rows:
         payload = r.get("payload")
@@ -1758,6 +1790,7 @@ def _upsert_item_from_link_display(
     display: dict,
     price_float: float,
     task_id: str | None,
+    user_id: str | None = None,
 ) -> bool:
     """补写 items 表：recompute 从 task_links 生成评估时同步写入 items 表
 
@@ -1778,7 +1811,7 @@ def _upsert_item_from_link_display(
             "description": "",
             "first_seen": _utcnow(),
             "last_seen": _utcnow(),
-        })
+        }, user_id=user_id or "default")
         return True
     except Exception as e:
         logger.warning(f"补写 items 表失败 item_id={item_id}: {e}")
@@ -1789,6 +1822,7 @@ def _recompute_from_task_links(
     container: Container,
     task_id: str | None,
     get_price_strategy,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """无 eval.* 事件时，从 task_links 生成评估
 
@@ -1798,7 +1832,7 @@ def _recompute_from_task_links(
     link_rows = []
     if task_id:
         link_rows = container.repo.list_task_links(
-            task_id=task_id, link_type="item", limit=500
+            task_id=task_id, link_type="item", limit=500, user_id=user_id,
         )
     if not link_rows:
         return {"ok": True, "recomputed": 0, "message": "无评估记录需要重新计算，且无 task_links 可生成评估"}
@@ -1844,7 +1878,7 @@ def _recompute_from_task_links(
             # 避免 eval.* 事件引用的 item_id 在 items 表中不存在（孤儿数据）
             if item_id not in existing_item_ids:
                 if _upsert_item_from_link_display(
-                    container, item_id, link, display, detail.price, task_id
+                    container, item_id, link, display, detail.price, task_id, user_id=user_id,
                 ):
                     existing_item_ids.add(item_id)
             # 使用 upsert 按 task_id+item_id 去重，防止重复评估
@@ -1869,7 +1903,7 @@ def _recompute_from_task_links(
                     "is_passed": eval_result.is_passed,
                     "data_quality": eval_result.data_quality,
                 }, ensure_ascii=False, default=str),
-            })
+            }, user_id=user_id or "default")
             generated += 1
         except Exception:
             errors += 1
@@ -2042,6 +2076,7 @@ def _recompute_single_eval(
 # ============== 历史评估重新计算 ==============
 @router.post("/recompute")
 def recompute_evaluations(
+    request: Request,
     task_id: str | None = Query(None, description="可选：仅重新计算指定任务的评估"),
     notify: bool = Query(
         False,
@@ -2059,17 +2094,19 @@ def recompute_evaluations(
     evaluator = container.evaluator
     get_price_strategy = _make_recompute_price_strategy_getter(container)
 
+    # 多用户隔离：仅重新计算当前账号的评估事件
+    user_id = getattr(request.state, "user_id", None)
     # 拉取所有评估事件
     # 修复：之前用 list_events(limit=10000) 在 Python 端过滤，改为 SQL 端按 type 前缀过滤
     all_eval_events, _ = container.repo.list_events_by_type_prefix(
-        type_prefix=_EVAL_TYPE_PREFIX, task_id=task_id
+        type_prefix=_EVAL_TYPE_PREFIX, task_id=task_id, user_id=user_id,
     )
     eval_events = all_eval_events
 
     if not eval_events:
         # 没有 eval.* 事件时，从 task_links 生成评估
         # 覆盖场景：live_search 写入了 task_links 但未触发评估（旧版本）
-        return _recompute_from_task_links(container, task_id, get_price_strategy)
+        return _recompute_from_task_links(container, task_id, get_price_strategy, user_id=user_id)
 
     item_map, item_rows = _load_recompute_item_map(container, eval_events)
     seller_map = _load_recompute_seller_map(container, item_rows)
@@ -2143,9 +2180,11 @@ def _make_batch_price_strategy_getter(container: Container):
     return _get_price_strategy
 
 
-def _collect_evaluated_ids(container: Container) -> set[str]:
+def _collect_evaluated_ids(container: Container, user_id: str | None = None) -> set[str]:
     """获取所有已评估的 item_id 集合"""
-    eval_events, _ = container.repo.list_events_by_type_prefix(type_prefix=_EVAL_TYPE_PREFIX)
+    eval_events, _ = container.repo.list_events_by_type_prefix(
+        type_prefix=_EVAL_TYPE_PREFIX, user_id=user_id,
+    )
     evaluated_ids: set[str] = set()
     for e in eval_events:
         payload = e.get("payload") or {}
@@ -2237,6 +2276,7 @@ def _evaluate_single_unevaluated_item(
     evaluator,
     task_id: str | None,
     notify: bool = True,
+    user_id: str | None = None,
 ) -> str:
     """评估单个未评估商品并写入 eval.* 事件
 
@@ -2312,7 +2352,7 @@ def _evaluate_single_unevaluated_item(
                 "data_quality": eval_result.data_quality,
                 "data_source": "batch_unevaluated",
             }, ensure_ascii=False, default=str),
-        })
+        }, user_id=user_id or "default")
         # 评估通过 → 触发 EVAL_PASSED 事件，让 NotifierHub 推送钉钉等通知
         # 为什么 notify 默认 True：与 collection_service 官方采集语义一致，
         # 用户主动触发的批量评估，通过的商品值得通知
@@ -2331,6 +2371,7 @@ def _evaluate_single_unevaluated_item(
 
 @router.post("/batch-evaluate-unevaluated")
 def batch_evaluate_unevaluated(
+    request: Request,
     task_id: str | None = Query(None, description="可选：仅评估指定任务的商品"),
     limit: int = Query(200, ge=1, le=1000, description="单次最大评估数量"),
     notify: bool = Query(
@@ -2348,12 +2389,14 @@ def batch_evaluate_unevaluated(
     evaluator = container.evaluator
     get_price_strategy = _make_batch_price_strategy_getter(container)
 
+    # 多用户隔离：仅评估当前账号的商品
+    user_id = getattr(request.state, "user_id", None)
     # 1. 获取所有已评估的 item_id 集合
-    evaluated_ids = _collect_evaluated_ids(container)
+    evaluated_ids = _collect_evaluated_ids(container, user_id=user_id)
 
     # 2. 获取 items 表中所有商品（按 task_id 过滤）
     # items 表量级可控（通常 < 1000），一次查询即可
-    all_items = container.repo.list_items(task_id=task_id, limit=5000, offset=0)
+    all_items = container.repo.list_items(task_id=task_id, limit=5000, offset=0, user_id=user_id)
     unevaluated = [it for it in all_items if str(it.get("id") or "") not in evaluated_ids]
 
     if not unevaluated:
@@ -2380,7 +2423,7 @@ def batch_evaluate_unevaluated(
     for it in to_evaluate:
         result = _evaluate_single_unevaluated_item(
             it, container, seller_map, get_price_strategy, evaluator, task_id,
-            notify=notify,
+            notify=notify, user_id=user_id,
         )
         if result == "notified":
             notified += 1

@@ -1,27 +1,27 @@
 @echo off
-chcp 65001 >nul 2>&1
-REM è„šæœ¬ä½äºŽ scripts/ å­ç›®å½•ï¼Œè°ƒç”¨åŒç›®å½•çš„ setup-env.ps1
+chcp 936 >nul 2>&1
+REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬µ÷ÓÃÍ¬Ä¿Â¼µÄ setup-env.ps1
 cd /d "%~dp0.."
 
 echo ============================================
-echo   XianyuHunter çŽ¯å¢ƒé…ç½®ï¼ˆè°ƒç”¨ PowerShell è„šæœ¬ï¼‰
+echo   XianyuHunter »·¾³ÅäÖÃ£¨µ÷ÓÃ PowerShell ½Å±¾£©
 echo ============================================
 echo.
 
-REM -NoProfileï¼šé¿å…ç”¨æˆ·è‡ªå®šä¹‰ profile å¹²æ‰°ï¼ˆå¦‚ safe_rm_aliases.ps1ï¼‰
-REM -ExecutionPolicy Bypassï¼šç»•è¿‡æ‰§è¡Œç­–ç•¥é™åˆ¶ï¼Œå…è®¸åŒå‡»æ‰§è¡Œæœªç­¾åè„šæœ¬
-REM -Fileï¼šæŒ‡å®šè¦æ‰§è¡Œçš„ ps1 è„šæœ¬ï¼Œ%* é€ä¼ æ‰€æœ‰å‘½ä»¤è¡Œå‚æ•°ï¼ˆå¦‚ -SkipSystemï¼‰
+REM -NoProfile£º±ÜÃâÓÃ»§×Ô¶¨Òå profile ¸ÉÈÅ£¨Èç safe_rm_aliases.ps1£©
+REM -ExecutionPolicy Bypass£ºÈÆ¹ýÖ´ÐÐ²ßÂÔÏÞÖÆ£¬ÔÊÐíË«»÷Ö´ÐÐÎ´Ç©Ãû½Å±¾
+REM -File£ºÖ¸¶¨ÒªÖ´ÐÐµÄ ps1 ½Å±¾£¬%* Í¸´«ËùÓÐÃüÁîÐÐ²ÎÊý£¨Èç -SkipSystem£©
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-env.ps1" %*
 
-REM PowerShell è„šæœ¬é€€å‡ºç é€ä¼ 
+REM PowerShell ½Å±¾ÍË³öÂëÍ¸´«
 if errorlevel 1 (
     echo.
-    echo [ERROR] çŽ¯å¢ƒé…ç½®å¤±è´¥ï¼Œè¯·æŸ¥çœ‹ä¸Šæ–¹é”™è¯¯ä¿¡æ¯
+    echo [ERROR] »·¾³ÅäÖÃÊ§°Ü£¬Çë²é¿´ÉÏ·½´íÎóÐÅÏ¢
     pause
     exit /b 1
 )
 
 echo.
-echo æŒ‰ä»»æ„é”®å…³é—­çª—å£...
+echo °´ÈÎÒâ¼ü¹Ø±Õ´°¿Ú...
 pause >nul
 exit

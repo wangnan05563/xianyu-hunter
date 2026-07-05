@@ -126,7 +126,13 @@ def create_app() -> FastAPI:
     setup_startup_hooks(app)
 
     # 静态资源
-    static_dir = Path(__file__).resolve().parent / "static"
+    # 打包模式：static 外置到 exe 同级目录（与 launcher.py、build-exe.ps1 外置策略一致）
+    # 开发模式：源码目录
+    from xianyu_hunter.paths import is_frozen, get_app_dir
+    if is_frozen():
+        static_dir = get_app_dir() / "static"
+    else:
+        static_dir = Path(__file__).resolve().parent / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # 浏览器访问任何页面都会默认请求 /favicon.ico，需显式提供避免 404 噪音

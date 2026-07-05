@@ -42,12 +42,14 @@ _PLACEHOLDER_MARKS = ("tps-2-2", "2-2.png", "1x1.png")
 # 分支，单一方法认知复杂度堆积。提取为表驱动后解析逻辑集中且可单测。
 # 年/月换算为天数（按 365/30 天近似，与闲鱼显示口径一致）
 _SELLER_LABEL_PATTERNS: tuple[tuple[str, re.Pattern, Any], ...] = (
-    ("sold_count", re.compile(r"卖出(\d+)件"), int),
-    ("on_sale_count", re.compile(r"在售(\d+)"), int),
-    ("register_days", re.compile(r"来闲鱼(\d+)\s*天"), int),
+    # converter 收到的是 re.Match 对象而非字符串，必须显式取 group(1) 再 int
+    # 否则 int(m) 报 "int() argument must be a string ... not 're.Match'"
+    ("sold_count", re.compile(r"卖出(\d+)件"), lambda m: int(m.group(1))),
+    ("on_sale_count", re.compile(r"在售(\d+)"), lambda m: int(m.group(1))),
+    ("register_days", re.compile(r"来闲鱼(\d+)\s*天"), lambda m: int(m.group(1))),
     ("register_days", re.compile(r"来闲鱼(\d+)\s*年"), lambda m: int(m.group(1)) * 365),
     ("register_days", re.compile(r"来闲鱼(\d+)\s*个月"), lambda m: int(m.group(1)) * 30),
-    ("credit_score", re.compile(r"好评率(\d+)%?"), int),
+    ("credit_score", re.compile(r"好评率(\d+)%?"), lambda m: int(m.group(1))),
 )
 
 

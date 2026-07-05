@@ -94,7 +94,7 @@ class EventsMixin:
             result = conn.execute(EventRow.__table__.insert().values(**event))
             return result.inserted_primary_key[0]
 
-    def upsert_eval_event(self, event: dict) -> int:
+    def upsert_eval_event(self, event: dict, user_id: str | None = None) -> int:
         """评估事件 upsert：按 (task_id, item_id, type) 去重
 
         防止 live_links 多次触发或 recompute 多次调用产生重复评估记录。
@@ -108,19 +108,30 @@ class EventsMixin:
         因此用 DELETE+INSERT 实现 upsert 语义。
         整个操作在 engine.begin() 事务内执行，SQLite 序列化写入，
         不存在并发 DELETE+INSERT 导致的重复插入问题。
+
+        user_id 不为 None 时（深度防御）：
+        - DELETE 附加 user_id 过滤，防止跨用户误删对方评估记录
+        - INSERT 时若 event 未显式设置 user_id，注入到 event 字典
+        与 list_events / update_event_payload 等 user_id 参数语义一致。
         """
         task_id = event.get("task_id")
         item_id = event.get("item_id")
         event_type = event.get("type", "eval.scored")
+        # 调用方通过 user_id 关键字传入时，统一注入 event 字典，
+        # 让 INSERT 路径自动写入 EventRow.user_id 列
+        if user_id is not None and "user_id" not in event:
+            event["user_id"] = user_id
         with self.engine.begin() as conn:
-            # 先删除已有的相同 (task_id, item_id) eval.scored 记录
-            conn.execute(
-                EventRow.__table__.delete().where(
-                    EventRow.task_id == task_id,
-                    EventRow.item_id == item_id,
-                    EventRow.type == event_type,
-                )
+            # 先删除已有的相同 (task_id, item_id, type) eval.scored 记录
+            # 附加 user_id 过滤防止跨用户误删（与 list_events 的 user_id 隔离语义一致）
+            delete_stmt = EventRow.__table__.delete().where(
+                EventRow.task_id == task_id,
+                EventRow.item_id == item_id,
+                EventRow.type == event_type,
             )
+            if user_id is not None:
+                delete_stmt = delete_stmt.where(EventRow.user_id == user_id)
+            conn.execute(delete_stmt)
             # 插入新记录
             result = conn.execute(EventRow.__table__.insert().values(**event))
             return result.inserted_primary_key[0]
@@ -133,6 +144,7 @@ class EventsMixin:
         offset: int = 0,
         since_id: int | None = None,
         ascending: bool = False,
+        user_id: str | None = None,
     ) -> list[dict]:
         """列出事件（支持 SSE 回放 since_id 参数）"""
         with self.engine.connect() as conn:
@@ -145,6 +157,8 @@ class EventsMixin:
                 stmt = stmt.where(EventRow.task_id == task_id)
             if since_id is not None:
                 stmt = stmt.where(EventRow.id > since_id)
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
             stmt = stmt.limit(limit).offset(offset)
             return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
 
@@ -154,6 +168,7 @@ class EventsMixin:
         task_id: str | None = None,
         limit: int = 50000,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """按 type 前缀过滤事件，返回 (rows, total)
 
@@ -166,6 +181,8 @@ class EventsMixin:
             stmt = select(EventRow).where(EventRow.type.like(f"{type_prefix}%"))
             if task_id:
                 stmt = stmt.where(EventRow.task_id == task_id)
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
             stmt = stmt.order_by(EventRow.created_at.desc()).limit(limit).offset(offset)
             rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
 
@@ -174,6 +191,8 @@ class EventsMixin:
             )
             if task_id:
                 count_stmt = count_stmt.where(EventRow.task_id == task_id)
+            if user_id is not None:
+                count_stmt = count_stmt.where(EventRow.user_id == user_id)
             total = int(conn.execute(count_stmt).scalar() or 0)
             return rows, total
 
@@ -182,6 +201,7 @@ class EventsMixin:
         request_id: str,
         limit: int = 1000,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """按 request_id 检索同链路所有事件日志
 
@@ -191,10 +211,12 @@ class EventsMixin:
         if not request_id:
             return [], 0
         with self.engine.connect() as conn:
-            base_where = EventRow.request_id == request_id
+            base_where = [EventRow.request_id == request_id]
+            if user_id is not None:
+                base_where.append(EventRow.user_id == user_id)
             stmt = (
                 select(EventRow)
-                .where(base_where)
+                .where(*base_where)
                 # 正序返回：链路展示按时间顺序，最早的先出
                 .order_by(EventRow.created_at.asc())
                 .limit(limit)
@@ -203,7 +225,7 @@ class EventsMixin:
             rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
             total = int(
                 conn.execute(
-                    select(func.count()).select_from(EventRow).where(base_where)
+                    select(func.count()).select_from(EventRow).where(*base_where)
                 ).scalar() or 0
             )
             return rows, total
@@ -214,7 +236,7 @@ class EventsMixin:
             row = conn.execute(select(EventRow).where(EventRow.id == event_id)).first()
             return self._row_to_dict(row) if row else None
 
-    def get_eval_payload_by_item(self, item_id: str) -> dict | None:
+    def get_eval_payload_by_item(self, item_id: str, user_id: str | None = None) -> dict | None:
         """按 item_id 查询最新评估事件的 payload
 
         seller_trend_for_item 在 items 表无记录时，从评估事件 payload 回退提取 seller_id。
@@ -226,13 +248,16 @@ class EventsMixin:
         if not item_id:
             return None
         with self.engine.connect() as conn:
-            row = conn.execute(
+            stmt = (
                 select(EventRow.payload, EventRow.task_id)
                 .where(EventRow.item_id == item_id)
                 .where(EventRow.type.like("eval.%"))
                 .order_by(EventRow.created_at.desc())
                 .limit(1)
-            ).first()
+            )
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
+            row = conn.execute(stmt).first()
             if not row or not row.payload:
                 return None
             try:
@@ -244,25 +269,36 @@ class EventsMixin:
                 payload.setdefault("task_id", row.task_id)
             return payload
 
-    def update_event_payload(self, event_id: int, payload: str) -> None:
-        """更新事件的 payload JSON"""
+    def update_event_payload(
+        self, event_id: int, payload: str, user_id: str | None = None
+    ) -> None:
+        """更新事件的 payload JSON
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户更新（深度防御）。
+        """
         with self.engine.begin() as conn:
-            conn.execute(
+            stmt = (
                 EventRow.__table__.update()
                 .where(EventRow.id == event_id)
                 .values(payload=payload)
             )
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
+            conn.execute(stmt)
 
     def update_eval_payload_by_keys(
-        self, task_id: str, item_id: str, event_type: str, payload_updates: dict
+        self, task_id: str, item_id: str, event_type: str, payload_updates: dict,
+        user_id: str | None = None,
     ) -> bool:
         """按 (task_id, item_id, type) 查找评估事件并合并更新 payload
 
         payload_updates 中的键值对会合并到现有 payload 中（不覆盖整个 payload）。
         返回是否成功更新（未找到记录时返回 False）。
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户更新（深度防御）。
         """
         with self.engine.begin() as conn:
-            row = conn.execute(
+            sel_stmt = (
                 select(EventRow.id, EventRow.payload)
                 .where(
                     EventRow.task_id == task_id,
@@ -271,7 +307,10 @@ class EventsMixin:
                 )
                 .order_by(EventRow.created_at.desc())
                 .limit(1)
-            ).first()
+            )
+            if user_id is not None:
+                sel_stmt = sel_stmt.where(EventRow.user_id == user_id)
+            row = conn.execute(sel_stmt).first()
             if not row:
                 return False
             try:
@@ -279,44 +318,62 @@ class EventsMixin:
             except (json.JSONDecodeError, TypeError):
                 payload = {}
             payload.update(payload_updates)
-            conn.execute(
+            update_stmt = (
                 EventRow.__table__.update()
                 .where(EventRow.id == row.id)
                 .values(payload=json.dumps(payload, ensure_ascii=False, default=str))
             )
+            if user_id is not None:
+                update_stmt = update_stmt.where(EventRow.user_id == user_id)
+            conn.execute(update_stmt)
             return True
 
-    def max_event_id(self) -> int:
-        """获取当前 events 表最大 id（不存在时返回 0）"""
-        with self.engine.connect() as conn:
-            return int(conn.execute(select(func.max(EventRow.id))).scalar() or 0)
+    def max_event_id(self, user_id: str | None = None) -> int:
+        """获取当前 events 表最大 id（不存在时返回 0）
 
-    def delete_events_by_task(self, task_id: str) -> int:
-        """按任务删除所有关联事件"""
+        user_id 不为 None 时仅统计该用户的事件 id（SSE 按用户回放场景）。
+        """
+        with self.engine.connect() as conn:
+            stmt = select(func.max(EventRow.id))
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
+            return int(conn.execute(stmt).scalar() or 0)
+
+    def delete_events_by_task(self, task_id: str, user_id: str | None = None) -> int:
+        """按任务删除所有关联事件
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）。
+        """
         with self.engine.begin() as conn:
-            result = conn.execute(
-                EventRow.__table__.delete().where(EventRow.task_id == task_id)
-            )
+            stmt = EventRow.__table__.delete().where(EventRow.task_id == task_id)
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount or 0
 
-    def delete_eval_events_by_task_item(self, task_id: str, item_id: str) -> int:
+    def delete_eval_events_by_task_item(
+        self, task_id: str, item_id: str, user_id: str | None = None
+    ) -> int:
         """删除指定任务+商品的评估事件（联动清理垃圾数据）
 
         使用场景：删除 task_links 中 item 类型关联时，联动删除 events 表中
         对应的 eval.* 事件，避免评估明细残留垃圾数据。
         为什么按 task_id + item_id 双键：同一商品可能被多个任务关联，
         只按 item_id 删除会误清其他任务的评估记录。
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）。
         """
         if not task_id or not item_id:
             return 0
         with self.engine.begin() as conn:
-            result = conn.execute(
-                EventRow.__table__.delete().where(
-                    EventRow.task_id == task_id,
-                    EventRow.item_id == item_id,
-                    EventRow.type.like("eval.%"),
-                )
+            stmt = EventRow.__table__.delete().where(
+                EventRow.task_id == task_id,
+                EventRow.item_id == item_id,
+                EventRow.type.like("eval.%"),
             )
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount or 0
 
     # ============== F-09 任务运行历史（按时间窗聚合 events） ==============
@@ -326,19 +383,26 @@ class EventsMixin:
         range_hours: int = 24,
         window_minutes: int = 5,
         idle_gap_minutes: int = 30,
+        user_id: str | None = None,
     ) -> dict[str, Any]:
-        """按时间窗聚合 events 表中该 task_id 的运行记录"""
+        """按时间窗聚合 events 表中该 task_id 的运行记录
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户读取（深度防御）。
+        """
         now = _utcnow()
         start_time = now - timedelta(hours=range_hours)
 
         with self.engine.connect() as conn:
-            rows = conn.execute(
+            stmt = (
                 select(EventRow)
                 .where(EventRow.task_id == task_id)
                 .where(EventRow.created_at >= start_time)
                 .where(EventRow.created_at <= now)
                 .order_by(EventRow.created_at.asc())
-            ).all()
+            )
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
+            rows = conn.execute(stmt).all()
 
         if not rows:
             return {

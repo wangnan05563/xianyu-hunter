@@ -15,14 +15,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_LOG_PREFIX = "Cookie 同步"
 
 
-def cookies_from_store_for_playwright(log_prefix: str = DEFAULT_LOG_PREFIX) -> list[dict]:
-    """Read fresh CookieStore JSON and convert it to Playwright add_cookies input."""
+def cookies_from_store_for_playwright(log_prefix: str = DEFAULT_LOG_PREFIX, user_id: str = "default") -> list[dict]:
+    """Read fresh CookieStore JSON and convert it to Playwright add_cookies input.
+
+    多用户隔离：按 user_id 读取 cookies_{user_id}.json。Worker 浏览器是全局单例，
+    调用方需传入当前活跃用户（通常通过 UserManager.get_active_user_id() 获取）。
+    """
     try:
         from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
 
         store = get_cookie_store()
-        store.invalidate_cache()
-        data = store._read_json()
+        store.invalidate_cache(user_id)
+        data = store._read_json(user_id)
         if not data or not data.get("cookies"):
             return []
 
@@ -76,13 +80,17 @@ async def inject_cookie_store_to_browser(
     *,
     collector=None,
     force_refresh_m5tk: bool = True,
+    user_id: str = "default",
 ) -> bool:
-    """Inject latest CookieStore cookies into a running BrowserManager."""
+    """Inject latest CookieStore cookies into a running BrowserManager.
+
+    多用户隔离：按 user_id 读取 cookies_{user_id}.json 注入到浏览器。
+    """
     if not browser:
         logger.debug("%s：浏览器未初始化，跳过运行时注入", log_prefix)
         return False
 
-    pw_cookies = cookies_from_store_for_playwright(log_prefix)
+    pw_cookies = cookies_from_store_for_playwright(log_prefix, user_id)
     if not pw_cookies:
         logger.warning("%s：CookieStore 中没有可注入的 Cookie", log_prefix)
         return False
@@ -109,15 +117,27 @@ async def inject_cookie_store_to_worker_browser(
     log_prefix: str = DEFAULT_LOG_PREFIX,
     *,
     force_refresh_m5tk: bool = True,
+    user_id: str | None = None,
 ) -> bool:
     """Inject latest CookieStore cookies into the global worker browser.
 
     Returns True when the worker browser accepted the cookies. Missing browser
     context is treated as a non-fatal False because CLI/import flows can still
     persist cookies for the next browser start.
+
+    多用户隔离：user_id 为 None 时自动获取最近活跃用户（后台调度场景）。
+    显式传入 user_id 时按该用户读取（登录/导入端点已识别 user_id）。
     """
     try:
         from xianyu_hunter.web.deps import get_container
+
+        # 未指定 user_id 时获取最近活跃用户（后台调度场景）
+        if user_id is None:
+            try:
+                from xianyu_hunter.web.services.user_manager import get_user_manager
+                user_id = get_user_manager().get_active_user_id()
+            except Exception:
+                user_id = "default"
 
         container = get_container()
         browser = getattr(container, "browser", None)
@@ -127,6 +147,7 @@ async def inject_cookie_store_to_worker_browser(
             log_prefix,
             collector=collector,
             force_refresh_m5tk=force_refresh_m5tk,
+            user_id=user_id,
         )
     except Exception as e:  # noqa: BLE001
         logger.debug("%s：运行时 Cookie 注入失败: %s", log_prefix, e)

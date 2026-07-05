@@ -8,7 +8,14 @@
 
 ## [Unreleased]
 
-_本次发布周期的变更已封版至 [0.2.0]，新变更请在此段落积累。_
+## [0.3.1] - 2026-07-05
+
+_本次发布周期的变更已封版至 [0.3.0]，新变更请在此段落积累。_
+
+### Fixed
+
+- **实时搜索 500 内部服务器错误**：`Repository.get_task(task_id, user_id=...)` 方法签名缺失 `user_id` 参数，路由层多用户隔离调用抛 `TypeError`，被全局异常处理器兜底为 500。补齐参数并按 `user_id` 过滤，与 `list_tasks` 行为一致。影响实时搜索、关联列表/刷新、任务依赖等 11 处端点。
+- **打包版登录跳转 404**：浏览器原生 `location.replace/href` 不走 react-router，不会自动补 `basename` 前缀。`client.ts` 401 拦截器、`useSSEChat.ts` SSE 401 跳转、`App.tsx` 移动端 UA 检测共 4 处的 `/login` 改为 `/app/login`，与 SPA 挂载路径 `/app/` 对齐。
 
 ---
 
@@ -226,7 +233,8 @@ _本次发布周期的变更已封版至 [0.2.0]，新变更请在此段落积�
 
 ---
 
-[Unreleased]: https://github.com/wangnan05563/xianyu-hunter/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/wangnan05563/xianyu-hunter/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.3.1
 [0.3.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.1.0

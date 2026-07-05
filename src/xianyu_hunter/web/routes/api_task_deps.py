@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from xianyu_hunter.container import Container
@@ -23,14 +23,17 @@ class DepBody(BaseModel):
 def add_dep(
     task_id: str,
     body: DepBody,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """添加依赖：task_id 依赖 depends_on 成功后才启动"""
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
     # 两个任务都必须存在
-    if not container.repo.get_task(task_id):
+    if not container.repo.get_task(task_id, user_id=user_id):
         # S3457: 字符串拼接改 f-string
         raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
-    if not container.repo.get_task(body.depends_on):
+    if not container.repo.get_task(body.depends_on, user_id=user_id):
         raise HTTPException(status_code=404, detail=f"被依赖任务不存在: {body.depends_on}")
     if task_id == body.depends_on:
         raise HTTPException(status_code=400, detail="任务不能依赖自身")
@@ -45,9 +48,14 @@ def add_dep(
 def remove_dep(
     task_id: str,
     body: DepBody,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """删除依赖关系"""
+    # 多用户隔离：写入操作用 "default" 兜底
+    user_id = getattr(request.state, "user_id", "default")
+    if not container.repo.get_task(task_id, user_id=user_id):
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
     removed = container.repo.remove_task_dep(task_id, body.depends_on)
     if not removed:
         raise HTTPException(status_code=404, detail="依赖关系不存在")
@@ -57,16 +65,19 @@ def remove_dep(
 @router.get("/{task_id}/deps")
 def list_deps(
     task_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """列出 task_id 的所有上游依赖"""
-    if not container.repo.get_task(task_id):
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    if not container.repo.get_task(task_id, user_id=user_id):
         raise HTTPException(status_code=404, detail="任务不存在")
     deps = container.repo.list_task_deps(task_id)
     # 附带上游任务的名称，方便前端展示
     items = []
     for d in deps:
-        upstream = container.repo.get_task(d["depends_on"])
+        upstream = container.repo.get_task(d["depends_on"], user_id=user_id)
         items.append({
             "id": d["id"],
             "depends_on": d["depends_on"],
@@ -79,15 +90,18 @@ def list_deps(
 @router.get("/{task_id}/dependents")
 def list_dependents(
     task_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """列出依赖此任务的所有下游任务"""
-    if not container.repo.get_task(task_id):
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    if not container.repo.get_task(task_id, user_id=user_id):
         raise HTTPException(status_code=404, detail="任务不存在")
     deps = container.repo.list_dependent_tasks(task_id)
     items = []
     for d in deps:
-        downstream = container.repo.get_task(d["task_id"])
+        downstream = container.repo.get_task(d["task_id"], user_id=user_id)
         items.append({
             "id": d["id"],
             "task_id": d["task_id"],

@@ -23,7 +23,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, UploadFile, File
+from fastapi import APIRouter, Depends, Form, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 
 from xianyu_hunter.container import Container
@@ -688,15 +688,19 @@ async def import_cookie_path(file_path: str = Form(...)) -> JSONResponse:
 
 
 @router.get("/cookie/saved")
-def get_saved_cookie_info() -> dict:
+def get_saved_cookie_info(request: Request) -> dict:
     """获取已保存的 cookie 摘要信息（供前端显示上次登录状态）
 
     返回 cookie 数量、关键 cookie 名称列表、最后导出时间、登录方式。
     不返回 cookie 值（安全考虑）。
+
+    多用户隔离：从 request.state.user_id 获取当前登录用户，按 user_id 读取
+    cookies_{user_id}.json。
     """
+    cookie_user_id = getattr(request.state, "user_id", None) or "default"
     store = get_cookie_store()
-    store.invalidate_cache("default")
-    data = store._read_json("default")
+    store.invalidate_cache(cookie_user_id)
+    data = store._read_json(cookie_user_id)
     if not data or not data.get("cookies"):
         return {"has_cookies": False, "logged_in": False}
 
@@ -949,13 +953,16 @@ def _try_sqlite_cookie_candidates(
     return None, last_error, any_v20_detected
 
 
-def _fallback_to_cookie_store_json(requested_keys: list[str]) -> JSONResponse | None:
-    """JSON 降级：当系统浏览器 v20 加密不可读时，回退到之前浏览器登录保存的明文"""
+def _fallback_to_cookie_store_json(requested_keys: list[str], user_id: str = "default") -> JSONResponse | None:
+    """JSON 降级：当系统浏览器 v20 加密不可读时，回退到之前浏览器登录保存的明文
+
+    多用户隔离：按 user_id 读取 cookies_{user_id}.json。
+    """
     try:
         from xianyu_hunter.web.services.cookie_store import is_test_cookie
         store = get_cookie_store()
-        store.invalidate_cache("default")
-        json_data = store._read_json("default")
+        store.invalidate_cache(user_id)
+        json_data = store._read_json(user_id)
         if json_data and json_data.get("cookies"):
             json_result: dict[str, str] = {}
             for c in json_data["cookies"]:
@@ -1065,7 +1072,7 @@ def _build_fetch_keys_failure_response(
 
 
 @router.get("/cookie/fetch-keys")
-async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_container)) -> JSONResponse:
+async def fetch_cookie_keys(request: Request, keys: str = "", container: Container = Depends(get_container)) -> JSONResponse:
     """从浏览器读取指定 cookie key 的值（用于前端自动填充 _m_h5_tk 等）
 
     读取顺序（优先级从高到低）：
@@ -1076,10 +1083,14 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
 
     Args:
         keys: 逗号分隔的 cookie name 列表，如 "_m_h5_tk,cookie2,sgcookie,unb"
+
+    多用户隔离：JSON 降级时按 request.state.user_id 读取对应 cookie 文件。
     """
     requested_keys = [k.strip() for k in keys.split(",") if k.strip()] if keys else []
     if not requested_keys:
         return JSONResponse(content={"ok": False, "error": "未指定要查询的 cookie key"})
+
+    cookie_user_id = getattr(request.state, "user_id", None) or "default"
 
     # ===== 策略：系统浏览器 SQLite（最新登录）→ JSON 降级（v20加密时）→ CDP 兜底 =====
     # 系统浏览器优先：用户期望读取浏览器最新登录状态
@@ -1094,7 +1105,7 @@ async def fetch_cookie_keys(keys: str = "", container: Container = Depends(get_c
         return sqlite_response
 
     # ===== SQLite 候选都失败 → JSON 降级（v20 加密时读取之前保存的明文） =====
-    json_response = _fallback_to_cookie_store_json(requested_keys)
+    json_response = _fallback_to_cookie_store_json(requested_keys, cookie_user_id)
     if json_response is not None:
         return json_response
 

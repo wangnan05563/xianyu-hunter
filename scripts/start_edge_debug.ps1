@@ -1,4 +1,4 @@
-# 以调试端口启动 Edge，用于 CDP 方式导入 Cookie
+﻿# 以调试端口启动 Edge，用于 CDP 方式导入 Cookie
 #
 # 使用独立 Debug 目录避免与用户日常浏览器冲突
 # Chrome 136+ 要求 --remote-debugging-port 必须配合 --user-data-dir 指向非标准目录

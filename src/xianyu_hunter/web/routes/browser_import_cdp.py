@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
@@ -77,10 +77,13 @@ def _collect_cookies_via_cdp(port: int) -> list[dict]:
 
 
 @router.post("/import-from-browser/cdp")
-def import_via_cdp(port: int = 9222) -> JSONResponse:
+def import_via_cdp(request: Request, port: int = 9222) -> JSONResponse:
     """通过 CDP 协议从运行中的浏览器获取明文 Cookie
 
     前置条件：浏览器以 --remote-debugging-port=9222 启动
+
+    多用户隔离：从 request.state.user_id 获取当前登录用户，按 user_id 写入
+    cookies_{user_id}.json。
     """
     if not _check_cdp_reachable(port):
         return JSONResponse(content={
@@ -111,7 +114,8 @@ def import_via_cdp(port: int = 9222) -> JSONResponse:
         })
 
     # 写入 CookieStore（JSON + SQLite）
-    success = get_cookie_store().export_cookies(cookies, method="cdp_import")
+    cookie_user_id = getattr(request.state, "user_id", None) or "default"
+    success = get_cookie_store().export_cookies(cookies, method="cdp_import", user_id=cookie_user_id)
     if not success:
         return JSONResponse(content={
             "ok": False,

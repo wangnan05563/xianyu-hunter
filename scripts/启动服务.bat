@@ -1,6 +1,6 @@
 @echo off
-chcp 65001 >nul 2>&1
-REM è„šæœ¬ä½äº scripts/ å­ç›®å½•ï¼Œéœ€å›åˆ°é¡¹ç›®æ ¹ç›®å½•
+chcp 936 >nul 2>&1
+REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬Ğè»Øµ½ÏîÄ¿¸ùÄ¿Â¼
 cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
@@ -49,9 +49,9 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM [3/4] Start Web server (é»˜è®¤è°ƒåº¦å™¨æ¨¡å¼ï¼šæµè§ˆå™¨ + ä»»åŠ¡å¼•æ“ + æ‰¹é‡é‡‡é›†åŒè¿›ç¨‹)
-REM è‡ª xianyu web å‘½ä»¤é»˜è®¤å¯ç”¨ --with-schedulerï¼Œæ— éœ€æ˜¾å¼ä¼ å‚
-REM è‹¥éœ€çº¯ Web æ¨¡å¼ï¼ˆä¸å¯åŠ¨æµè§ˆå™¨ï¼‰ï¼Œæ”¹ç”¨: -m xianyu_hunter web --no-with-scheduler
+REM [3/4] Start Web server (Ä¬ÈÏµ÷¶ÈÆ÷Ä£Ê½£ºä¯ÀÀÆ÷ + ÈÎÎñÒıÇæ + ÅúÁ¿²É¼¯Í¬½ø³Ì)
+REM ×Ô xianyu web ÃüÁîÄ¬ÈÏÆôÓÃ --with-scheduler£¬ÎŞĞèÏÔÊ½´«²Î
+REM ÈôĞè´¿ Web Ä£Ê½£¨²»Æô¶¯ä¯ÀÀÆ÷£©£¬¸ÄÓÃ: -m xianyu_hunter web --no-with-scheduler
 echo [3/4] Starting Web server (default: with scheduler)...
 
 start "XianyuHunter-Web" cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web 2>&1 & pause"
@@ -107,7 +107,7 @@ echo   Web:  http://127.0.0.1:8000
 echo   Mode: Web + Scheduler (with browser)
 echo   Log:  logs\web.log
 echo.
-echo To stop: double-click scripts\åœæ­¢æœåŠ¡.bat
+echo To stop: double-click scripts\Í£Ö¹·şÎñ.bat
 echo.
 
 start "" http://127.0.0.1:8000/app/

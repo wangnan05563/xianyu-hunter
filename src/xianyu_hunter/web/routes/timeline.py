@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import _utcnow
@@ -37,6 +37,7 @@ def _to_utc_iso(val: Any) -> str:
 
 @router.get("/timeline")
 def timeline(
+    request: Request,
     types: str = "orders,events",
     task_id: str | None = None,
     limit: int = 200,
@@ -49,16 +50,18 @@ def timeline(
     - 单列评估/日志端点已存在（向后兼容），timeline 只做"视图聚合"
     - 避免 N 次查询 + Python 端 union 排序的开销
     """
+    # 多用户隔离：仅查询当前账号的 orders/events
+    user_id = getattr(request.state, "user_id", None)
     wanted = {t.strip() for t in types.split(",") if t.strip()}
     items: list[dict] = []
     if "orders" in wanted:
-        for o in container.repo.list_orders(limit=limit) or []:
+        for o in container.repo.list_orders(limit=limit, user_id=user_id) or []:
             o2 = dict(o)
             o2["_kind"] = "order"
             o2["_ts"] = _to_utc_iso(o2.get("created_at"))
             items.append(o2)
     if "events" in wanted:
-        for e in container.repo.list_events(limit=limit) or []:
+        for e in container.repo.list_events(limit=limit, user_id=user_id) or []:
             if task_id and e.get("task_id") != task_id:
                 continue
             e2 = dict(e)

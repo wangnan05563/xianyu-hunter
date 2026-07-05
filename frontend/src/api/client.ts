@@ -27,16 +27,18 @@ client.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('xh_token')
       // 避免在登录页本身触发跳转（防止死循环）
+      // 路径匹配必须用 /app/login：SPA 挂载在 /app/ 下（vite base + BrowserRouter basename）
       const currentPath = window.location.pathname + window.location.search
-      const isLoginPage = currentPath.startsWith('/login')
+      const isLoginPage = currentPath.startsWith('/app/login')
       if (!isLoginPage && !isRedirecting) {
         isRedirecting = true
         // 保存当前路径，登录后跳转回来
         const redirect = encodeURIComponent(currentPath)
         // 使用 replace 避免在历史记录中留下当前页面，
         // 防止用户后退回到已失效的认证态页面
-        // 路由为 /login（App.tsx 中定义），非 /app/login
-        globalThis.location.replace(`/login?redirect=${redirect}`)
+        // 必须用 /app/login：浏览器原生跳转不走 react-router，
+        // 不会自动补 basename 前缀，直接用 /login 会被后端返回 404
+        globalThis.location.replace(`/app/login?redirect=${redirect}`)
       }
     }
     return Promise.reject(error)

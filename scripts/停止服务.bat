@@ -1,5 +1,5 @@
 @echo off
-chcp 65001 >nul 2>&1
+chcp 936 >nul 2>&1
 REM 脚本位于 scripts/ 子目录，需回到项目根目录
 cd /d "%~dp0.."
 setlocal enabledelayedexpansion

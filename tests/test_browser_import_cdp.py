@@ -83,8 +83,12 @@ def test_cdp_connect_success():
 
 def test_import_via_cdp_endpoint_not_reachable():
     """CDP 端点不可达时返回错误响应"""
+    # 构造 mock request：多用户隔离需要 request.state.user_id，
+    # 但 _check_cdp_reachable 失败时函数直接返回，不访问 request
+    mock_request = MagicMock()
+
     with patch("xianyu_hunter.web.routes.browser_import_cdp._check_cdp_reachable", return_value=False):
-        response = import_via_cdp(port=9222)
+        response = import_via_cdp(mock_request, port=9222)
 
     assert isinstance(response, JSONResponse)
     assert response.status_code == 200

@@ -128,6 +128,8 @@ class ItemRow(Base):
     # 采集来源标记：search=搜索结果 / official=官方采集 / live=实时搜索/手动刷新
     # 为什么单独建列：原仅写在 events.payload JSON 中无法高效筛选，建列后支持按来源统计与过滤
     data_source: Mapped[str] = mapped_column(Text, default='search')
+    # 多用户隔离：商品归属用户 ID，与 tasks.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.3 卖家表
@@ -166,6 +168,8 @@ class EvaluationRow(Base):
     dimension_scores: Mapped[str | None] = mapped_column(Text, nullable=True)
     reject_reasons: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # 多用户隔离：评估归属用户 ID，与 items.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.5 订单快照
@@ -188,6 +192,8 @@ class OrderRow(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # 多用户隔离：订单归属用户 ID，与 tasks.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.6 事件日志
@@ -206,6 +212,8 @@ class EventRow(Base):
     # 全局流水号：标识触发本条事件的请求/任务链路
     # nullable=True 兼容历史数据；查询层通过 request_id 快速关联同链路所有日志
     request_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # 多用户隔离：事件归属用户 ID，与 tasks.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
     # 联合索引：按任务+时间范围查事件是 Dashboard 时间线的核心查询路径
     __table_args__ = (
@@ -277,6 +285,8 @@ class TaskLinkRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow
     )
+    # 多用户隔离：关联归属用户 ID，与 tasks.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.9 任务依赖关系（F-16）
@@ -293,6 +303,8 @@ class TaskDepRow(Base):
     task_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     depends_on: Mapped[str] = mapped_column(String, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # 多用户隔离：依赖归属用户 ID，与 tasks.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.8 业务通知（P1-4 Notification Center）
@@ -317,6 +329,8 @@ class NotificationRow(Base):
     dedup_key: Mapped[str] = mapped_column(String, nullable=False)  # 同类去重 key
     read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # NULL = 未读
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    # 多用户隔离：通知归属用户 ID
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.20 批量采集进度持久化表（断点续传）
@@ -341,6 +355,8 @@ class BatchRefreshProgressRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow
     )
+    # 多用户隔离：进度归属用户 ID，与 tasks.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.21 批量采集任务执行历史表
@@ -377,6 +393,8 @@ class BatchRefreshHistoryRow(Base):
     # 执行耗时毫秒（completed_at - started_at），completed 时计算
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    # 多用户隔离：历史归属用户 ID，与 tasks.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
 
 
 # 5.10 闲鱼账号池（P1-2 多账号轮换）
@@ -902,6 +920,52 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     _migrate_add_column(engine, "error_logs", "request_id", "TEXT")
     _migrate_create_index(engine, "events", "ix_events_request_id", "request_id")
     _migrate_create_index(engine, "error_logs", "ix_error_logs_request_id", "request_id")
+
+    # MU2：多用户数据隔离 - 为 9 个业务表添加 user_id 字段
+    # 为什么需要：原设计仅 tasks 表有 user_id，items/evaluations/orders 等关联表
+    # 通过 task_id 间接关联，查询时未按 user_id 过滤，导致多用户切换后数据串读。
+    # 迁移策略：添加 user_id 列 + 通过 task_id JOIN 回填 + 建索引加速过滤查询
+    _MU2_TABLES = [
+        "items", "evaluations", "orders", "events",
+        "task_links", "task_deps", "notifications",
+        "batch_refresh_progress", "batch_refresh_history",
+    ]
+    for tbl in _MU2_TABLES:
+        _migrate_add_column(engine, tbl, "user_id", "TEXT DEFAULT 'default'")
+
+    # 回填 user_id：通过 task_id JOIN tasks 表获取归属用户
+    # 为什么用 WHERE EXISTS 而非 WHERE user_id IS NULL OR user_id = ''：
+    # 添加列时用了 DEFAULT 'default'，新列初始值是 'default' 字符串而非 NULL，
+    # 旧回填条件匹配不到。改为"有 task_id 关联的行无条件回填"，
+    # task_id 为 NULL 的孤儿数据保留原 user_id（COALESCE 第二参数回退到自身）。
+    with engine.connect() as conn:
+        # items / orders / events / task_links / task_deps / batch_refresh_progress / batch_refresh_history
+        # 都有 task_id 字段，通过 JOIN tasks 表回填
+        for tbl in ["items", "orders", "events", "task_links", "task_deps",
+                    "batch_refresh_progress", "batch_refresh_history"]:
+            conn.execute(sa_text(
+                f"UPDATE {tbl} SET user_id = COALESCE("
+                f"(SELECT t.user_id FROM tasks t WHERE t.id = {tbl}.task_id), "
+                f"{tbl}.user_id) "
+                f"WHERE EXISTS (SELECT 1 FROM tasks t WHERE t.id = {tbl}.task_id)"
+            ))
+        # evaluations 通过 item_id JOIN items 表回填（items 已回填完毕）
+        conn.execute(sa_text(
+            "UPDATE evaluations SET user_id = COALESCE("
+            "(SELECT i.user_id FROM items i WHERE i.id = evaluations.item_id), "
+            "evaluations.user_id) "
+            "WHERE EXISTS (SELECT 1 FROM items i WHERE i.id = evaluations.item_id)"
+        ))
+        # notifications 无 task_id 关联，默认 'default'
+        conn.execute(sa_text(
+            "UPDATE notifications SET user_id='default' "
+            "WHERE user_id IS NULL OR user_id = ''"
+        ))
+        conn.commit()
+
+    # 为所有 user_id 列创建索引，加速按用户过滤查询
+    for tbl in _MU2_TABLES:
+        _migrate_create_index(engine, tbl, f"idx_{tbl}_user", "user_id")
 
 
 def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) -> None:

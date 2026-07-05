@@ -440,6 +440,12 @@ class ItemCollectionService:
         await self.ensure_official_cookies()
         own_page = reuse_page is None
         page = reuse_page or await self.container.browser.new_page()
+        # own_page 时注册为外部 page，防止与 TaskScheduler.run_once 的 close_all_pages 并发时被误关
+        # 为什么需要在此处 register：detail(item_id, page=page) 走 own_page=False 分支，
+        # 不会自动 register；不注册会导致 close_all_pages 把此 page 当残留页面关闭，
+        # 在 detail 内 await 期间触发 TargetClosedError（_detail.py:766 已降级为 WARNING）
+        if own_page:
+            self.container.browser.register_external_page(page)
         detail: ItemDetail | None = None
         seller: SellerProfile | None = None
         reviews: list[str] = []
@@ -467,6 +473,8 @@ class ItemCollectionService:
             )
         finally:
             if own_page:
+                # 先 unregister 再 close：close 后 page 引用仍留在 _external_pages 会泄漏
+                self.container.browser.unregister_external_page(page)
                 await page.close()
 
         if detail is None:

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     XianyuHunter 一键环境配置脚本
 .DESCRIPTION
@@ -361,7 +361,15 @@ if (Test-Path $VenvPython) {
 Write-Step "[3/9] 安装 Python 依赖 (requirements.txt + 项目本体)"
 
 # pip 自身先升级，避免老版本对 pyproject.toml metadata 解析失败
-Invoke-Safe { & $VenvPython -m pip install --upgrade pip setuptools wheel } "升级 pip"
+# setuptools 固定 <82：torch 2.12+ 要求 setuptools<82，升级到最新(83+)会破坏 torch
+Invoke-Safe { & $VenvPython -m pip install --upgrade "pip" "setuptools<82" "wheel" } "升级 pip"
+
+# 清理 pip 卸载残留（~前缀目录）：pip 卸载包时先重命名为 ~xxx，若中途失败会残留，每次 pip 执行都报警告
+$brokenDists = Get-ChildItem (Join-Path $VenvDir "Lib\site-packages") -Directory -Filter '~*' -ErrorAction SilentlyContinue
+if ($brokenDists) {
+    foreach ($d in $brokenDists) { Remove-Item -Recurse -Force $d.FullName -ErrorAction SilentlyContinue }
+    Write-OK "已清理 pip 卸载残留目录（~前缀）"
+}
 
 $pipArgs = @('install', '-r', $Requirements)
 if ($Force) { $pipArgs += '--force-reinstall' }
@@ -375,13 +383,32 @@ Invoke-Safe { & $VenvPython -m pip install -e $ProjectRoot } "安装项目本体
 # 此处显式安装作为保障；失败不阻断主流程（chromadb 缺失时 chatbot 子容器自动降级为 None）
 try {
     Invoke-Safe { & $VenvPython -m pip install "chromadb>=1.0.0" } "安装 chromadb（智能客服向量库）"
+    # chromadb 依赖 huggingface-hub，后者要求 typer<0.26.0；requirements.txt 锁定的 0.26.6 不兼容，需降级
+    Invoke-Safe { & $VenvPython -m pip install "typer<0.26.0" } "降级 typer 兼容 huggingface-hub"
 } catch {
     Write-Warn "chromadb 安装失败（智能客服功能将不可用）：$_"
 }
 
+# sentence-transformers：智能客服本地 Embedding 模式必需（local_embedding.py）
+# torch 是其传递依赖，需 setuptools<82（已在上方 pip 升级时固定）
+# 失败不阻断主流程：缺失时 local_embedding.py raise RuntimeError，chatbot 自动降级到远程 embedding
+try {
+    Invoke-Safe { & $VenvPython -m pip install "sentence-transformers>=2.7.0" } "安装 sentence-transformers（本地 Embedding）"
+} catch {
+    Write-Warn "sentence-transformers 安装失败（本地 Embedding 模式将不可用，需改用远程 embedding）：$_"
+}
+
+# psutil：浏览器进程管理（browser_import.py / browser_login.py）
+# 轻量纯 Python 包，缺失时回退到 taskkill，但 psutil 提供更可靠的进程树清理
+try {
+    Invoke-Safe { & $VenvPython -m pip install "psutil>=5.9.0" } "安装 psutil（进程管理）"
+} catch {
+    Write-Warn "psutil 安装失败（浏览器进程清理将降级到 taskkill）：$_"
+}
+
 # 核心模块导入冒烟测试，提前发现依赖缺失或路径错误
 # 用 -join 合并可能的数组输出，-notmatch 避免 stderr 警告干扰判断
-$importCheck = (& $VenvPython -c "import xianyu_hunter, uvicorn, fastapi, playwright, sqlalchemy; print('ok')" 2>&1) -join "`n"
+$importCheck = (& $VenvPython -c "import xianyu_hunter, uvicorn, fastapi, playwright, sqlalchemy, httpx, aiohttp, apscheduler, typer, pydantic, loguru, cryptography, keyring, yaml; print('ok')" 2>&1) -join "`n"
 if ($importCheck -notmatch 'ok$') {
     Write-Err "核心模块导入失败：$importCheck"
     throw "Python 依赖校验失败"
@@ -457,11 +484,11 @@ if ($SkipFrontend) {
 
     # 找到可用的 npm：优先 PATH 中的 npm，备选 node 同目录下的 npm.cmd
     $npmCmd = $null
-    if (Test-CommandAvailable 'npm') { $npmCmd = 'npm' }
-    elseif (Test-Path 'D:\code\nodejs24\npm.cmd') { $npmCmd = 'D:\code\nodejs24\npm.cmd' }
-    elseif ($nodeExe -and (Test-Path (Join-Path (Split-Path $nodeExe) 'npm.cmd'))) {
+    # 优先用 Step 1 验证过版本的 $nodeExe 推导 npm 路径，避免 PATH 中旧版 npm（如 npm 6 不兼容 lockfileVersion 3）
+    if ($nodeExe -and $nodeExe -ne 'node' -and (Test-Path (Join-Path (Split-Path $nodeExe) 'npm.cmd'))) {
         $npmCmd = Join-Path (Split-Path $nodeExe) 'npm.cmd'
-    }
+    } elseif (Test-CommandAvailable 'npm') { $npmCmd = 'npm' }
+    elseif (Test-Path 'D:\code\nodejs24\npm.cmd') { $npmCmd = 'D:\code\nodejs24\npm.cmd' }
 
     if (-not $npmCmd) {
         Write-Warn "找不到 npm，跳过前端构建。请确认 Node.js 安装后重跑（可加 -SkipSystem）"
@@ -500,7 +527,7 @@ $checklist = @(
     @{ Name = "Python 虚拟环境"; Test = { Test-Path $VenvPython } },
     @{ Name = "requirements.txt 依赖"; Test = {
         # 同 Step 3：用 -join 合并数组，-match 避免 stderr 干扰
-        $r = (& $VenvPython -c "import uvicorn, fastapi, sqlalchemy, playwright; print('ok')" 2>&1) -join "`n"
+        $r = (& $VenvPython -c "import uvicorn, fastapi, sqlalchemy, playwright, httpx, aiohttp, apscheduler, typer, pydantic, loguru, cryptography, keyring, yaml; print('ok')" 2>&1) -join "`n"
         $r -match 'ok$'
     } },
     @{ Name = ".env 配置文件"; Test = { Test-Path $EnvFile } },

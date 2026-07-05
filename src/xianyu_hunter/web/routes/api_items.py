@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.web.deps import get_container
@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/items", tags=["items"])
 @router.get("/{item_id}/summary")
 def item_summary(
     item_id: str,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """商品概要：标题 + 价格 + 卖家 ID
@@ -31,7 +32,9 @@ def item_summary(
     """
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id 必填")
-    item = container.repo.get_item(item_id)
+    # 多用户隔离：仅返回当前账号拥有的商品
+    user_id = getattr(request.state, "user_id", None)
+    item = container.repo.get_item(item_id, user_id=user_id)
     if not item:
         # 返回 200 + null：列表页批量拉时，个别缺失不应阻塞其他行
         return {"item_id": item_id, "title": None, "price": None, "seller_id": None}
@@ -47,6 +50,7 @@ def item_summary(
 
 @router.get("/batch")
 def items_batch(
+    request: Request,
     ids: str = Query(..., description="逗号分隔的 item_id 列表，最多 50 个"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -63,10 +67,12 @@ def items_batch(
         raise HTTPException(status_code=400, detail="ids 必填")
     if len(id_list) > 50:
         raise HTTPException(status_code=400, detail="一次最多 50 个")
+    # 多用户隔离：仅返回当前账号拥有的商品
+    user_id = getattr(request.state, "user_id", None)
     summaries: dict[str, Any] = {}
     missing: list[str] = []
     for iid in id_list:
-        item = container.repo.get_item(iid)
+        item = container.repo.get_item(iid, user_id=user_id)
         if not item:
             missing.append(iid)
             continue
