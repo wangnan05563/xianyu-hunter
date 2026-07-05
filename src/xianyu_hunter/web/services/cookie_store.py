@@ -21,13 +21,15 @@ import time
 from pathlib import Path
 
 from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.paths import get_data_dir
 from xianyu_hunter.web.services.cookie_db import batch_upsert_cookies, delete_cookies_by_domain, init_cookie_table
 
 logger = logging.getLogger(__name__)
 
 # JSON 格式的 Cookie 存储目录（与 browser-data 同级）
 # MU2 改造：按 user_id 隔离，每个用户一个独立 JSON 文件
-_COOKIE_JSON_DIR = Path("data")
+# 走 paths.py 统一入口：PyInstaller 打包后写入 %APPDATA%，开发模式写入项目根/data
+_COOKIE_JSON_DIR = get_data_dir()
 
 # user_id 白名单：仅允许字母数字下划线短横线，长度 1-64
 # 防止路径遍历：user_id 后续会从 JWT/数据库解析，恶意 user_id（如 ../../etc/passwd）
@@ -38,13 +40,13 @@ _USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 def _cookie_json_path(user_id: str = "default") -> Path:
     """按 user_id 生成 Cookie JSON 文件路径
 
-    为什么用 Path 多参数构造而非模块级常量拼接：
+    为什么用 Path 多参数构造而非 _COOKIE_JSON_DIR / 拼接：
     测试通过 monkeypatch 替换模块 Path 为 lambda *args: tmp_path / args[-1]，
     多参数构造使 lambda 取 args[-1]（文件名）落到 tmp_path 下，便于测试隔离。
     """
     if not _USER_ID_RE.match(user_id):
         raise ValueError(f"invalid user_id: {user_id!r}")
-    return Path("data", f"cookies_{user_id}.json")
+    return Path(_COOKIE_JSON_DIR, f"cookies_{user_id}.json")
 
 # 闲鱼登录关键 Cookie 名称 / 缓存 TTL / 测试值过滤 / 格式正则
 # 配置化（cookie_management 节点）：统一管理散落在 cookie_store / cookie_rotator /

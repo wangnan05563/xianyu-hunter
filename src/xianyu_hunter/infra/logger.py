@@ -16,6 +16,7 @@ from loguru import logger
 
 from xianyu_hunter.config import get_settings
 from xianyu_hunter.infra.request_context import get_request_id
+from xianyu_hunter.paths import get_log_dir
 
 
 _configured = False
@@ -58,7 +59,8 @@ def setup_logging() -> None:
 
     # 文件：JSON 结构化（按日滚动，保留 14 天）
     # serialize=True 时 extra 字段自动序列化到 JSON，request_id 随之输出
-    log_dir = Path("data/logs")
+    # 走 paths.py 统一入口：避免硬编码 Path("data/logs") 在打包后路径错乱
+    log_dir = get_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     logger.add(
         log_dir / "xianyu_{time:YYYY-MM-DD}.log",

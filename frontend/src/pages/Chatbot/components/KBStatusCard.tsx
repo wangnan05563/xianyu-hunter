@@ -1,4 +1,4 @@
-import { Card, Button, Tag, Modal, Progress, message } from 'antd'
+import { Card, Button, Tag, Modal, Progress, message, Typography } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import type { KBStatus } from '../types'
@@ -31,6 +31,9 @@ export function KBStatusCard({ status, onRebuild }: Props) {
   }
 
   const isBuilding = building || status.building
+  const progress = status.progress
+  // 失败阶段用异常状态色（红色），其他构建阶段用 active 动画
+  const progressStatus = progress?.phase === 'failed' ? 'exception' : 'active'
 
   return (
     <Card
@@ -60,7 +63,19 @@ export function KBStatusCard({ status, onRebuild }: Props) {
       {status.status === 'partial' && (
         <Tag color="orange">部分片段构建失败</Tag>
       )}
-      {isBuilding && <Progress percent={100} status="active" />}
+      {isBuilding && progress && (
+        <div style={{ marginTop: 12 }}>
+          <Progress
+            percent={progress.percent}
+            status={progressStatus}
+          />
+          {progress.message && (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {progress.message}
+            </Typography.Text>
+          )}
+        </div>
+      )}
     </Card>
   )
 }

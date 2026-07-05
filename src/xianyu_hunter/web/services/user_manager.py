@@ -22,6 +22,8 @@ from typing import Callable, Optional
 
 from sqlalchemy import text as sa_text
 
+from xianyu_hunter.paths import get_data_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,6 +104,29 @@ class UserManager:
                 {"now": _utcnow_iso(), "uid": user_id},
             )
             conn.commit()
+
+    def get_active_user_id(self) -> str:
+        """获取最近活跃的非 default 用户 ID（供后台调度器/全局组件使用）
+
+        为什么需要：后台调度器（cookie_sync_scheduler）和全局组件
+        （login_orchestrator/cookie_runtime_sync）没有 request 上下文，
+        无法从 request.state.user_id 获取当前用户。它们需要知道当前活跃用户
+        才能把 cookie 写到正确的 cookies_{user_id}.json。
+
+        降级策略：无活跃非 default 用户时返回 "default"，保持与旧行为兼容。
+        """
+        try:
+            with self._engine.connect() as conn:
+                rows = conn.execute(sa_text(
+                    "SELECT user_id FROM users "
+                    "WHERE status='active' AND user_id!='default' "
+                    "ORDER BY last_active_at DESC LIMIT 1"
+                )).fetchall()
+            if rows:
+                return rows[0][0]
+        except Exception:
+            pass
+        return "default"
 
     def issue_session(self, user_id: str) -> str:
         """为用户签发新的 session_token。
@@ -473,8 +498,9 @@ def migrate_to_multi_user(db_path: str = _DB_PATH) -> None:
             logger.info("migrate_to_multi_user: 创建 default 用户")
 
         # Cookie 文件迁移：src 不存在时静默跳过；目标已存在时不覆盖
-        old_path = Path("data") / "cookies.json"
-        new_path = Path("data") / "cookies_default.json"
+        # 走 paths.py 统一入口：避免硬编码 Path("data")
+        old_path = get_data_dir() / "cookies.json"
+        new_path = get_data_dir() / "cookies_default.json"
         if old_path.exists() and not new_path.exists():
             try:
                 old_path.rename(new_path)

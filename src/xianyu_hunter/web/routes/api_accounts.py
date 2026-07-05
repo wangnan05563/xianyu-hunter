@@ -71,6 +71,14 @@ def switch_account(body: SwitchAccountBody, request: Request) -> Any:
 
     关键字传参 session_token，与 unified_login.py 调用风格一致。
     UserManager.issue_session 已含会话固定防护（旧 session 标记 is_active=0）。
+
+    多用户 Cookie 状态同步（C-08 修复）：
+    切换账号时必须失效旧用户 + 新用户的 CookieStore 缓存，并重置 CookieRotator
+    层状态。否则旧用户的层失效状态会"传染"给新用户，导致 /cookies/layers
+    返回错误的 invalid 状态，前端显示"Cookie 异常"。
+    为什么重置层状态而非同步：CookieRotator 是全局单例，不按 user_id 隔离，
+    切换时无法确定旧层状态属于哪个用户，最安全的方式是清空让下次 /cookies/layers
+    重新从 JSON 同步。
     """
     user_manager = get_user_manager()
     # 校验目标账号存在且非 disabled（disabled 不可恢复，需重新添加）
@@ -80,8 +88,33 @@ def switch_account(body: SwitchAccountBody, request: Request) -> Any:
     if target.get("status") == "disabled":
         raise HTTPException(status_code=400, detail="目标账号已禁用，需重新添加")
 
+    # C-08 修复：切换前失效旧用户的 CookieStore 缓存
+    # 为什么失效旧用户：30s TTL 内可能读到旧缓存，切换后立即读应直接读 JSON
+    old_user_id = getattr(request.state, "user_id", None)
+    if old_user_id and old_user_id != body.target_user_id:
+        try:
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+            get_cookie_store().invalidate_cache(old_user_id)
+        except Exception:
+            pass
+
     token = user_manager.issue_session(body.target_user_id)
     user_manager.update_last_active(body.target_user_id)
+
+    # C-08 修复：切换后失效新用户缓存 + 重置 CookieRotator 层状态
+    # 为什么重置而非同步：CookieRotator 全局单例不按 user_id 隔离，
+    # 旧用户的失效状态不应保留到新用户。重置后 /cookies/layers 会从
+    # 新用户的 cookies_{user_id}.json 重新同步层状态。
+    try:
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store
+        get_cookie_store().invalidate_cache(body.target_user_id)
+    except Exception:
+        pass
+    try:
+        from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+        get_orchestrator().cookie_rotator.invalidate_all()
+    except Exception:
+        pass
 
     result = {
         "ok": True,

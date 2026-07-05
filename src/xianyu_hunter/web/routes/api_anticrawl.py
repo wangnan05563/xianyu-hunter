@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 
 from xianyu_hunter.modules.cookie_rotator import CookieLayer, LAYER_DEFINITIONS, is_m5tk_expired
@@ -688,16 +688,20 @@ def get_request_delay(action: str = "browse") -> dict | JSONResponse:
 # Cookie 分层管理
 # ============================================================
 @router.get("/cookies/current")
-def get_current_cookies() -> dict:
+def get_current_cookies(request: Request) -> dict:
     """读取当前 CookieStore JSON 中的全部 Cookie（供更新弹窗自动预填）
 
     为什么用此接口而不是直接读 layers：layers 端点只返回每层是否有效与数量，
     不包含 cookie 明文。前端"更新 Cookie"弹窗需要 name=>value 字典来预填文本框。
+
+    多用户隔离：从 request.state.user_id 获取当前登录用户，按 user_id 读取
+    cookies_{user_id}.json。
     """
     from xianyu_hunter.web.services.cookie_store import get_cookie_store
+    cookie_user_id = getattr(request.state, "user_id", None) or "default"
     store = get_cookie_store()
-    store.invalidate_cache()
-    data = store._read_json()
+    store.invalidate_cache(cookie_user_id)
+    data = store._read_json(cookie_user_id)
     if not data or not data.get("cookies"):
         return {"ok": True, "cookies": {}, "count": 0}
     cookies = {
@@ -728,23 +732,28 @@ def import_from_browser_preview(request: dict = Body(...)) -> JSONResponse:
 
 
 @router.post("/cookies/update")
-async def update_cookies(request: dict = Body(...)) -> JSONResponse:
+async def update_cookies(request: Request, body: dict = Body(...)) -> JSONResponse:
     """分层更新 Cookie（合并写入，不丢失已有 Cookie）
 
     Request body:
         {"cookies": {"unb": "123", "_m_h5_tk": "tk_123", ...}}
 
     与 on_login_success 的区别：
-    - on_login_success 分3次调用 atomic_update，每次触发 export_cookies 覆盖写 JSON，
+    - on_login_success 分3次调用 atomic_update，每次触发 export_cookies 覆盖写 JSON,
       导致只有最后一层的 Cookie 被保留，且 session 层因 identity 层未更新而抛异常。
     - 本端点改为：先读取现有 JSON 全量 Cookie，合并传入值后一次性写入，
       再用 sync_state_from_cookies 同步所有层状态，避免覆盖丢失和依赖检查失败。
+
+    多用户隔离：从 request.state.user_id 获取当前登录用户，按 user_id 读写
+    cookies_{user_id}.json。原实现硬编码 default，多用户场景下会把 A 用户的
+    cookie 写到 default 文件，B 用户切换后读不到自己的 cookie。
     """
-    cookies = request.get("cookies", {})
+    cookies = body.get("cookies", {})
     if not cookies:
         return JSONResponse(content={"ok": False, "error": "cookies 为空"})
 
     orch = get_orchestrator()
+    cookie_user_id = getattr(request.state, "user_id", None) or "default"
 
     from xianyu_hunter.web.services.cookie_store import get_cookie_store
     cookie_store = get_cookie_store()
@@ -753,8 +762,8 @@ async def update_cookies(request: dict = Body(...)) -> JSONResponse:
     # 必须先清除缓存：浏览器登录子进程写入 JSON 后只更新子进程自己的缓存，
     # 主进程 30 秒 TTL 缓存仍是旧数据（空数据或旧 cookie）。
     # 若不清除，合并时会用旧缓存覆盖丢失子进程刚写入的新 cookie，导致层状态失效
-    cookie_store.invalidate_cache()
-    existing_data = cookie_store._read_json()
+    cookie_store.invalidate_cache(cookie_user_id)
+    existing_data = cookie_store._read_json(cookie_user_id)
     existing_cookies: list[dict] = existing_data.get("cookies", []) if existing_data else []
 
     # name => cookie_obj 映射（同名取第一条，丢弃其他域名的重复项）
@@ -780,7 +789,7 @@ async def update_cookies(request: dict = Body(...)) -> JSONResponse:
     merged_list = list(existing_map.values())
 
     # 3. 一次性写入合并后的完整列表（export_cookies 内部会过滤测试数据）
-    success = cookie_store.export_cookies(merged_list, method="orchestrator_api")
+    success = cookie_store.export_cookies(merged_list, method="orchestrator_api", user_id=cookie_user_id)
     if not success:
         return JSONResponse(content={
             "ok": False,
@@ -793,7 +802,7 @@ async def update_cookies(request: dict = Body(...)) -> JSONResponse:
     # 为什么重新读 JSON 而非用 merged_list：export_cookies 内部会过滤测试数据，
     # 用 merged_list 构造 cookie_map 会包含被过滤的测试数据，导致层状态与 JSON
     # 实际内容不一致（如 unb=123456 被过滤但层状态仍标记 identity 有效）
-    fresh_data = cookie_store._read_json()
+    fresh_data = cookie_store._read_json(cookie_user_id)
     fresh_cookies = fresh_data.get("cookies", []) if fresh_data else []
     cookie_map = {
         c.get("name", ""): c.get("value", "")
@@ -852,13 +861,17 @@ def _filter_valid_cookies_for_sync(
     return result
 
 
-def _sync_layers_from_json(orch) -> None:
+def _sync_layers_from_json(orch, user_id: str = "default") -> None:
     """第一步：从 JSON 同步层状态（对所有非用户主动失效的层）
 
     为什么不再只检查 updated_at==0：被 worker.py/cookie_checker 系统失效的层
     updated_at>0 但 valid=False，自动同步需能恢复这些层（cookie 实际仍有效时）。
     仅跳过 manual_invalidate=True 的层：用户通过 /cookies/invalidate 主动失效的层
     不应被自动同步覆盖，需用户重新调用 /cookies/update 才能恢复。
+
+    C-08 修复：接受 user_id 参数，按当前登录用户读取 cookies_{user_id}.json。
+    原实现硬编码 default，多用户切换后读取错误用户的 cookie 文件，
+    导致层状态显示 invalid（实际新用户 cookie 有效）。
     """
     try:
         from xianyu_hunter.web.services.cookie_store import get_cookie_store
@@ -867,8 +880,8 @@ def _sync_layers_from_json(orch) -> None:
         store = get_cookie_store()
         # 先清除缓存再读取：浏览器登录子进程写入 JSON 后只更新子进程自己的缓存，
         # 主进程的 30 秒 TTL 缓存仍是旧数据。此端点会被前端轮询，必须读到最新 JSON
-        store.invalidate_cache()
-        data = store._read_json()
+        store.invalidate_cache(user_id)
+        data = store._read_json(user_id)
         if data and data.get("cookies"):
             current_states = orch.cookie_rotator.get_all_states()
             # 筛选需要同步的层：排除用户主动失效的层
@@ -951,16 +964,18 @@ def _collect_collector_signal() -> bool:
     return False
 
 
-def _collect_json_m5tk_signal() -> bool:
+def _collect_json_m5tk_signal(user_id: str = "default") -> bool:
     """信号2：JSON 中存在未过期的 _m_h5_tk（session token 有效说明登录态仍有效）
 
     为什么检查 timestamp 过期：_m_h5_tk 可能存在但已过期（cookie.expires=-1 无法判断），
     此时不能作为"功能正常"的信号恢复 session 层，否则会与 TokenRenewer 振荡。
+
+    C-08 修复：接受 user_id 参数，按当前登录用户读取 cookies_{user_id}.json。
     """
     try:
         from xianyu_hunter.web.services.cookie_store import get_cookie_store
         store_for_check = get_cookie_store()
-        json_data = store_for_check._read_json()
+        json_data = store_for_check._read_json(user_id)
         if json_data and json_data.get("cookies"):
             return any(
                 c.get("name") == "_m_h5_tk" and c.get("value")
@@ -995,11 +1010,13 @@ def _compute_layers_to_restore(
     return set()
 
 
-def _functional_fallback_restore(orch) -> None:
+def _functional_fallback_restore(orch, user_id: str = "default") -> None:
     """第三步：功能可用性兜底——前两步同步后仍有层失效时，基于实际功能状态恢复
 
     为什么需要：JSON 可能缺少某些 cookie（子进程只写了部分），浏览器也可能未初始化，
     但实际功能正常（搜索/采集都能用），此时应反映真实可用性而非机械地依赖 cookie 检测。
+
+    C-08 修复：接受 user_id 参数，透传给 _collect_json_m5tk_signal。
     """
     try:
         current_states = orch.cookie_rotator.get_all_states()
@@ -1014,7 +1031,7 @@ def _functional_fallback_restore(orch) -> None:
         functional_signals: set[str] = set()
         if _collect_collector_signal():
             functional_signals.add("collector.last_session_invalid=False")
-        if _collect_json_m5tk_signal():
+        if _collect_json_m5tk_signal(user_id):
             functional_signals.add("json_has_valid_m5tk")
 
         if not functional_signals:
@@ -1038,7 +1055,7 @@ def _functional_fallback_restore(orch) -> None:
 
 
 @router.get("/cookies/layers")
-async def get_cookie_layers() -> dict:
+async def get_cookie_layers(request: Request) -> dict:
     """获取 Cookie 各层状态
 
     返回三层（identity/session/tracking）的有效性、更新时间、Cookie 数量。
@@ -1055,12 +1072,17 @@ async def get_cookie_layers() -> dict:
     只写了部分 cookie），但浏览器内存中有有效 cookie（功能正常）。
     当 JSON 同步后仍有层失效时，从浏览器内存读取 cookie 作为兜底同步源，
     确保层状态反映浏览器实际状态。
+
+    C-08 修复：从 request.state.user_id 获取当前登录用户，传递给同步函数。
+    原实现硬编码 default，多用户切换后读取错误用户的 cookie 文件。
     """
     orch = get_orchestrator()
+    # 多用户场景：中间件注入 request.state.user_id，无会话时降级 default
+    cookie_user_id = getattr(request.state, "user_id", None) or "default"
 
-    _sync_layers_from_json(orch)
+    _sync_layers_from_json(orch, cookie_user_id)
     await _sync_layers_from_browser(orch)
-    _functional_fallback_restore(orch)
+    _functional_fallback_restore(orch, cookie_user_id)
 
     states = orch.cookie_rotator.get_all_states()
 

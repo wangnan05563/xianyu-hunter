@@ -14,6 +14,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from xianyu_hunter.paths import get_data_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,8 +52,9 @@ class TunnelService:
 
     def _ensure_binary(self) -> Path:
         """确保 cloudflared 二进制存在，缺失则下载"""
-        # 放在项目 data 目录下，避免污染系统路径
-        data_dir = Path(__file__).resolve().parents[3] / "data"
+        # 放在 data 目录下，避免污染系统路径
+        # 走 paths.py 统一入口：避免 __file__ 推算在打包后路径错乱
+        data_dir = get_data_dir()
         data_dir.mkdir(exist_ok=True)
         binary_path = data_dir / self.BINARY_NAME
 

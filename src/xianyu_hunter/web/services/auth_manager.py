@@ -24,9 +24,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_REPO = Path(__file__).resolve().parents[4]
+# 走 paths.py 统一入口：PyInstaller 打包后基于 exe 目录，开发模式基于 __file__ 推算
+# _REPO 仅用于定位 scripts/auth_helper.py（仅开发模式存在，打包后该脚本由 launcher 替代）
+from xianyu_hunter.paths import get_app_dir, get_data_dir
+_REPO = get_app_dir()
 _HELPER = _REPO / "scripts" / "auth_helper.py"
-_OUT_DIR = _REPO / "data" / "auth_cache"
+_OUT_DIR = get_data_dir() / "auth_cache"
 # status.json 文件名：_STATUS_FILE 路径、_set_status_file 写入、start_qr_login 清理复用
 _STATUS_JSON_FILENAME = "status.json"
 _USERINFO_FILE = _OUT_DIR / "userinfo.json"

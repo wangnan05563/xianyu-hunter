@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.paths import get_data_dir, get_log_dir
 from xianyu_hunter.web.deps import get_container
 
 logger = logging.getLogger(__name__)
@@ -28,12 +29,12 @@ class CleanupRequest(BaseModel):
 
 def _data_dir() -> Path:
     """获取数据目录"""
-    return Path("data")
+    return get_data_dir()
 
 
 def _log_dir() -> Path:
     """获取日志目录（实际位于 data/logs/）"""
-    return Path("data/logs")
+    return get_log_dir()
 
 
 # 扫描 __pycache__ 时排除的目录：这些目录下的缓存不应被统计/清理

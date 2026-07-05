@@ -55,6 +55,15 @@ export interface Message {
   follow_ups?: string[]
 }
 
+export interface KBProgress {
+  // 与后端 kb_manager._set_progress 的 phase 对齐
+  // idle=空闲 / scanning=扫描中 / snapshotting=导出快照 / embedding=向量化中
+  // writing=写入向量库 / finalizing=更新版本状态 / done=完成 / failed=失败 / rolling_back=回滚中
+  phase: 'idle' | 'scanning' | 'snapshotting' | 'embedding' | 'writing' | 'finalizing' | 'done' | 'failed' | 'rolling_back'
+  percent: number
+  message: string
+}
+
 export interface KBStatus {
   current_version: string | null
   chunk_count: number
@@ -62,6 +71,8 @@ export interface KBStatus {
   building: boolean
   // 与后端 api_kb.py:kb_status 对齐：empty(无版本)/success/partial/failed(构建失败)/building(构建中)
   status: 'empty' | 'success' | 'partial' | 'failed' | 'building' | 'corrupted'
+  // 构建进度（building=true 时由后端 _progress 字段填充）
+  progress?: KBProgress | null
 }
 
 export interface KBVersion {

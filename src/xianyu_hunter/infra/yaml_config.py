@@ -8,6 +8,9 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
+# 路径统一入口：避免硬编码 Path("config") / Path("data/chromadb")
+from xianyu_hunter.paths import get_config_dir, get_chromadb_path
+
 
 # ============== 配置模型定义 ==============
 
@@ -282,7 +285,7 @@ class ChatbotKBConfig(BaseModel):
     chunk_size: int = Field(500, ge=100, le=2000, description="分块字符数")
     chunk_overlap: int = Field(50, ge=0, le=500, description="分块重叠字符数")
     snapshot_max_keep: int = Field(10, ge=1, le=50, description="快照保留数量上限")
-    persist_path: str = Field("data/chromadb", description="ChromaDB 持久化路径")
+    persist_path: str = Field(str(get_chromadb_path()), description="ChromaDB 持久化路径")
     collection_name: str = Field("xianyu_hunter_docs", description="ChromaDB 集合名")
     project_root: str = Field(".", description="知识库扫描项目根目录")
 
@@ -575,7 +578,7 @@ def _load_all() -> AppConfig:
     两边都有的字段（weights / thresholds）保留 config.yaml；只在 eval.yaml
     出现的字段（如历史遗留的 ai_auto_eval）仍能加载到 AppConfig。
     """
-    base = Path("config")
+    base = get_config_dir()
     data: dict[str, Any] = {}
 
     # 1) 先加载子配置（默认值基线）

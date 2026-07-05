@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Tabs, Switch, InputNumber, Input, Button, Slider, Radio, Table, Modal,
-  Card, Tag, message, Space, Typography,
+  Card, Tag, message, Space, Typography, List,
 } from 'antd'
-import { PlusOutlined, DeleteOutlined, RollbackOutlined } from '@ant-design/icons'
+import { PlusOutlined, DeleteOutlined, RollbackOutlined, HistoryOutlined } from '@ant-design/icons'
 import { chatbotApi } from './api'
 import { KBStatusCard } from './components/KBStatusCard'
 import { VectorAdminPanel } from './components/VectorAdminPanel'
@@ -22,6 +22,14 @@ function setNestedField<T>(obj: T, path: string, value: unknown): T {
   } as T
 }
 
+// 从审计日志中过滤出重建/回滚记录，按时间倒序取前 5 条
+// 后端 audit log 写入时 target 字段格式为 "{vid}|status:{status}|chunks:{n}" 或 "from:{vid}→to:{vid}|..."
+function pickRebuildLogs(logs: AuditLog[]): AuditLog[] {
+  return logs
+    .filter(l => l.action === 'kb_rebuild' || l.action === 'kb_rollback')
+    .slice(0, 5)
+}
+
 export default function ChatbotConfigPage() {
   const [config, setConfig] = useState<ChatbotConfig | null>(null)
   const [kbStatus, setKbStatus] = useState<KBStatus | null>(null)
@@ -34,19 +42,28 @@ export default function ChatbotConfigPage() {
 
   const loadAll = useCallback(async () => {
     setLoading(true)
+    // 错误隔离：每个请求独立 catch，单个失败不影响其他状态
+    // 否则 chatbot 模块未启用时 Promise.all 整体 reject，kbVersions 保持空，看起来"无重建记录"
+    const safe = <T,>(p: Promise<T>, fallback: T): Promise<T> =>
+      p.catch(() => fallback)
+
     try {
-      const [cfg, status, versions, faqList] = await Promise.all([
-        chatbotApi.getConfig(),
-        chatbotApi.getKBStatus(),
-        chatbotApi.listKBVersions(),
-        chatbotApi.listFAQ(),
+      const [cfg, status, versions, faqList, auditRes] = await Promise.all([
+        chatbotApi.getConfig().catch(() => null),
+        safe(chatbotApi.getKBStatus(), null),
+        safe(chatbotApi.listKBVersions(), [] as KBVersion[]),
+        safe(chatbotApi.listFAQ(), [] as FAQ[]),
+        safe(chatbotApi.listAuditLogs(1, 50), { items: [] as AuditLog[], total: 0 }),
       ])
-      setConfig(cfg)
-      setKbStatus(status)
+      if (!cfg) {
+        message.error('智能客服模块未启用或加载失败')
+      } else {
+        setConfig(cfg)
+      }
+      if (status) setKbStatus(status)
       setKbVersions(versions)
       setFaqs(faqList)
-    } catch {
-      message.error('加载配置失败，请确认智能客服模块已启用')
+      setAuditLogs(auditRes.items)
     } finally {
       setLoading(false)
     }
@@ -55,6 +72,25 @@ export default function ChatbotConfigPage() {
   useEffect(() => {
     loadAll()
   }, [loadAll])
+
+  // building 状态轮询：构建中每 2 秒拉取一次 status，构建完成时整体刷新
+  // 不再使用单次 setTimeout，因为大型知识库构建可能 30s+，单次刷新无法感知中途进度
+  useEffect(() => {
+    if (!kbStatus?.building) return
+    const timer = setInterval(async () => {
+      try {
+        const status = await chatbotApi.getKBStatus()
+        setKbStatus(status)
+        if (!status.building) {
+          // 构建结束：停止轮询并整体刷新（拿到新版本列表和审计日志）
+          loadAll()
+        }
+      } catch {
+        // 静默失败，下次轮询继续
+      }
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [kbStatus?.building, loadAll])
 
   // 按 key 防抖的 PUT 定时器（H-6/7/8 修复：Slider/Input 高频 onChange 避免洪水 PUT）
   const updateTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -89,8 +125,13 @@ export default function ChatbotConfigPage() {
 
   const handleRebuild = async (force: boolean) => {
     await chatbotApi.rebuildKB(force)
-    // 轮询状态直到构建完成（简化版：延迟刷新）
-    setTimeout(loadAll, 3000)
+    // 立即拉取一次 status 触发 building=true，让轮询 useEffect 接管后续进度
+    try {
+      const status = await chatbotApi.getKBStatus()
+      setKbStatus(status)
+    } catch {
+      // 静默：轮询 useEffect 会在 2s 后自动重试
+    }
   }
 
   const handleRollback = async (versionId: string) => {
@@ -144,6 +185,8 @@ export default function ChatbotConfigPage() {
   if (loading || !config) {
     return <Card loading={loading}>加载中...</Card>
   }
+
+  const rebuildLogs = pickRebuildLogs(auditLogs)
 
   return (
     <Card title="智能客服配置">
@@ -260,6 +303,45 @@ export default function ChatbotConfigPage() {
             children: (
               <Space direction="vertical" size="middle" style={{ width: '100%' }}>
                 {kbStatus && <KBStatusCard status={kbStatus} onRebuild={handleRebuild} />}
+                <Card
+                  size="small"
+                  title={
+                    <Space>
+                      <HistoryOutlined />
+                      <span>最近重建记录</span>
+                    </Space>
+                  }
+                >
+                  {rebuildLogs.length === 0 ? (
+                    <Typography.Text type="secondary">暂无重建记录</Typography.Text>
+                  ) : (
+                    <List
+                      size="small"
+                      dataSource={rebuildLogs}
+                      renderItem={(log) => (
+                        <List.Item>
+                          <List.Item.Meta
+                            avatar={
+                              <Tag color={log.action === 'kb_rebuild' ? 'blue' : 'purple'}>
+                                {log.action === 'kb_rebuild' ? '重建' : '回滚'}
+                              </Tag>
+                            }
+                            title={
+                              <Typography.Text style={{ fontSize: 12 }}>
+                                {log.target}
+                              </Typography.Text>
+                            }
+                            description={
+                              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                                {log.created_at} · 来源：{log.source}
+                              </Typography.Text>
+                            }
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  )}
+                </Card>
                 <div>
                   <Typography.Text>定时自动更新</Typography.Text>
                   <Switch

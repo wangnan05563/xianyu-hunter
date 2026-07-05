@@ -101,12 +101,29 @@ class CookieSyncScheduler:
                     self._current_interval,
                 )
 
+    def _get_active_user_id(self) -> str:
+        """获取最近活跃的用户 ID（多用户场景下同步到正确用户的 cookie 文件）
+
+        为什么需要：系统浏览器只有一个登录态，同步的 cookie 应归属到最近活跃
+        的用户。硬编码 default 会导致多用户场景下 cookie 写到 default 文件，
+        实际活跃用户读不到自己的 cookie。
+
+        降级策略：UserManager 不可用或无活跃用户时降级到 default，
+        保持与旧行为兼容，避免阻塞同步流程。
+        """
+        try:
+            from xianyu_hunter.web.services.user_manager import get_user_manager
+            return get_user_manager().get_active_user_id()
+        except Exception:
+            return "default"
+
     def _should_sync(self) -> bool:
         """判断是否需要同步（Cookie 无效或即将过期）"""
-        self._cookie_store.invalidate_cache()
-        if not self._cookie_store.has_valid_cookies():
+        user_id = self._get_active_user_id()
+        self._cookie_store.invalidate_cache(user_id)
+        if not self._cookie_store.has_valid_cookies(user_id=user_id):
             return True
-        expiry = self._cookie_store.get_cookie_expiry()
+        expiry = self._cookie_store.get_cookie_expiry(user_id=user_id)
         if expiry is None:
             return True
         # 剩余有效期低于阈值时触发同步
@@ -117,9 +134,10 @@ class CookieSyncScheduler:
         """尝试离线导入（v10/DPAPI/明文）"""
         try:
             from xianyu_hunter.web.routes.browser_import import _do_import_from_browser
-            result = _do_import_from_browser("edge", auto_close=False)
+            user_id = self._get_active_user_id()
+            result = _do_import_from_browser("edge", auto_close=False, user_id=user_id)
             if result.get("ok") and result.get("imported_count", 0) > 0:
-                logger.info("离线导入成功，导入 %d 个 Cookie", result["imported_count"])
+                logger.info("离线导入成功，导入 %d 个 Cookie [user=%s]", result["imported_count"], user_id)
                 return True
             if result.get("has_v20"):
                 logger.info("检测到 v20 加密，降级到 CDP 方式")
@@ -141,9 +159,10 @@ class CookieSyncScheduler:
             cookies = _collect_cookies_via_cdp(self._cdp_port)
             if not cookies:
                 return False
-            success = self._cookie_store.export_cookies(cookies, method="cdp_sync")
+            user_id = self._get_active_user_id()
+            success = self._cookie_store.export_cookies(cookies, method="cdp_sync", user_id=user_id)
             if success:
-                logger.info("CDP 导入成功，导入 %d 个 Cookie", len(cookies))
+                logger.info("CDP 导入成功，导入 %d 个 Cookie [user=%s]", len(cookies), user_id)
             return success
         except Exception as e:
             logger.warning("CDP 导入异常: %s", e)

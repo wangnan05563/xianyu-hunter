@@ -86,8 +86,28 @@ class KBManager:
         self._project_root = Path(project_root)
         # 构建互斥锁：build_all 与 incremental_update 共用，避免并发构建产生不一致快照
         self._build_lock = asyncio.Lock()
+        # 构建进度状态：供 /kb/status 接口读取，前端轮询展示真实进度
+        # 单值即可，因为 _build_lock 保证不会并发构建
+        self._progress: dict = {"phase": "idle", "percent": 0, "message": ""}
 
     # ==================== 公开方法 ====================
+
+    def get_progress(self) -> dict:
+        """返回当前构建进度（供 /kb/status 接口转发给前端）"""
+        return dict(self._progress)
+
+    def _set_progress(self, phase: str, percent: int, message: str = "") -> None:
+        """更新进度状态
+
+        phase: idle/scanning/snapshotting/embedding/writing/finalizing/done/failed/rolling_back
+        percent: 0-100
+        message: 人类可读的阶段描述（前端直接展示）
+        """
+        self._progress = {
+            "phase": phase,
+            "percent": max(0, min(100, percent)),
+            "message": message,
+        }
 
     async def build_all(self) -> KBVersion:
         """全量构建：扫描所有 doc_paths → 分块 → 向量化 → 写入 ChromaDB → 创建版本记录
@@ -98,10 +118,14 @@ class KBManager:
         - 任一阶段失败：调用 _rollback_build 恢复快照
         """
         async with self._build_lock:
+            self._set_progress("scanning", 5, "扫描文档中...")
             snippets = await self._scan_and_chunk()
             if not snippets:
                 logger.warning("未扫描到任何文档片段，跳过构建")
+                self._set_progress("failed", 100, "无文档片段可构建")
                 return self._make_empty_failed_version("无文档片段可构建")
+
+            self._set_progress("scanning", 15, f"已扫描到 {len(snippets)} 个片段")
 
             doc_hash = self._compute_doc_hash(snippets)
             version_id = uuid.uuid4().hex
@@ -122,15 +146,18 @@ class KBManager:
         - hash 变化：调用 _do_build 重新构建（build_type=incremental）
         """
         async with self._build_lock:
+            self._set_progress("scanning", 5, "增量扫描文档中...")
             snippets = await self._scan_and_chunk()
             if not snippets:
                 logger.info("增量更新：未扫描到文档，跳过")
+                self._set_progress("idle", 0, "")
                 return None
 
             current_hash = self._compute_doc_hash(snippets)
             last_version = self._repo.get_current_kb_version()
             if last_version and last_version.get("doc_hash") == current_hash:
                 logger.info("知识库 doc_hash 无变化，跳过增量更新")
+                self._set_progress("idle", 0, "")
                 return None
 
             version_id = uuid.uuid4().hex
@@ -150,10 +177,12 @@ class KBManager:
         - 创建 build_type="rollback" 的新版本记录
         - 旧版本状态更新为 "rolled_back"
         """
+        self._set_progress("rolling_back", 5, f"回滚到版本 {version_id[:8]}")
         target = self._repo.get_kb_version(version_id)
         if not target:
             # 版本不存在时返回 failed 版本（不抛异常，符合"异常不向上抛出"约定）
             logger.warning(f"回滚失败：版本 {version_id} 不存在")
+            self._set_progress("failed", 100, f"回滚失败：版本 {version_id} 不存在")
             return self._make_empty_failed_version(
                 f"回滚失败：版本 {version_id} 不存在",
                 build_type="rollback",
@@ -166,6 +195,7 @@ class KBManager:
         start_ts = time.monotonic()
 
         # 先创建 building 状态的新版本记录
+        self._set_progress("rolling_back", 20, "创建回滚版本记录")
         self._repo.create_kb_version(
             version_id=new_version_id,
             snapshot_path=new_snapshot_path,
@@ -184,9 +214,11 @@ class KBManager:
                 status="rolled_back",
             )
 
+            self._set_progress("rolling_back", 40, "从快照恢复 ChromaDB")
             # 从快照恢复 ChromaDB
             await self._vector_store.restore_from_snapshot(snapshot_path)
 
+            self._set_progress("rolling_back", 70, "导出新快照")
             # 恢复后立即导出新快照（保留可二次回滚的版本）
             await self._vector_store.export_snapshot(new_snapshot_path)
 
@@ -203,6 +235,10 @@ class KBManager:
             )
 
             self._cleanup_old_snapshots()
+            self._set_progress(
+                "done", 100,
+                f"回滚完成: {chunk_count} 片段"
+            )
             logger.info(
                 f"回滚成功: target={version_id} new={new_version_id} "
                 f"chunks={chunk_count} duration={duration:.2f}s"
@@ -219,6 +255,7 @@ class KBManager:
                 build_duration_sec=duration,
                 error_message=f"回滚失败: {type(e).__name__}: {e}",
             )
+            self._set_progress("failed", 100, f"回滚失败: {e}")
             return self._repo_to_version(self._repo.get_kb_version(new_version_id))
 
     # ==================== 内部方法：构建核心 ====================
@@ -240,6 +277,7 @@ class KBManager:
         start_ts = time.monotonic()
 
         # 先创建 building 状态的版本记录，便于外部观测构建状态
+        self._set_progress("snapshotting", 20, "创建版本记录")
         self._repo.create_kb_version(
             version_id=version_id,
             snapshot_path=snapshot_path,
@@ -253,10 +291,15 @@ class KBManager:
 
         # 阶段1：导出当前 ChromaDB 快照（用于失败回滚）
         # 先导出再清空，保证有可恢复的快照点
+        self._set_progress("snapshotting", 30, "导出 ChromaDB 快照")
         await self._vector_store.export_snapshot(snapshot_path)
 
         # 阶段2：批量向量化 → 清空集合 → 写入新片段 → 更新版本状态
         try:
+            self._set_progress(
+                "embedding", 40,
+                f"向量化 {len(snippets)} 个片段中..."
+            )
             embeddings, failed_indices = await self._embedding.embed_batch(
                 [s.content for s in snippets]
             )
@@ -282,6 +325,10 @@ class KBManager:
                 )
                 return self._repo_to_version(self._repo.get_kb_version(version_id))
 
+            self._set_progress(
+                "writing", 70,
+                f"写入向量库（{total - failed_count}/{total} 片段）"
+            )
             # 清空集合 → 按 embeddings 顺序对齐 snippets 构造 upsert 数据
             await self._vector_store.clear_collection()
             chunks_with_vectors: list[dict] = []
@@ -313,6 +360,7 @@ class KBManager:
             else:
                 status = "success"
 
+            self._set_progress("finalizing", 90, "更新版本状态")
             duration = time.monotonic() - start_ts
             self._repo.update_kb_version_status(
                 version_id=version_id,
@@ -326,6 +374,10 @@ class KBManager:
             # 清理旧快照（保留 snapshot_max_keep 个）
             self._cleanup_old_snapshots()
 
+            self._set_progress(
+                "done", 100,
+                f"构建完成: {upserted} 片段，状态 {status}"
+            )
             logger.info(
                 f"知识库构建完成: version={version_id} type={build_type} "
                 f"status={status} chunks={upserted} failed={failed_count} "
@@ -854,6 +906,8 @@ class KBManager:
             build_duration_sec=None,
             error_message=err_msg,
         )
+        # 同步更新构建进度为失败状态，让前端能感知到错误原因
+        self._set_progress("failed", 100, f"构建失败: {err_msg}")
 
     def _cleanup_old_snapshots(self) -> None:
         """保留最近 snapshot_max_keep 个快照，删除更老的快照目录和对应版本记录
@@ -907,8 +961,14 @@ class KBManager:
         """生成快照路径：data/chromadb/snapshots/{version_id}/
 
         相对路径由 vector_store.export_snapshot / restore_from_snapshot 接受
+
+        注意：此处返回相对路径字符串（与 vector_store 接口约定一致），
+        实际写入由 vector_store 在 persist_path 下完成。
+        persist_path 已通过 yaml_config.py 走 paths.get_chromadb_path()，
+        打包后会指向 %APPDATA%/XianyuHunter/data/chromadb
         """
-        return f"data/chromadb/snapshots/{version_id}"
+        from xianyu_hunter.paths import get_chromadb_path
+        return str(get_chromadb_path() / "snapshots" / version_id)
 
     def _make_empty_failed_version(
         self,

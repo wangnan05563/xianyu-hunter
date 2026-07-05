@@ -89,7 +89,8 @@ def _scan_auth_down(container: Container, auth_state: dict[str, Any]) -> int:
     # 避免每个匿名用户首次访问都生成一条"登录态失效"噪音
     from pathlib import Path
 
-    userinfo_path = Path("data") / "userinfo.json"
+    from xianyu_hunter.paths import get_data_dir
+    userinfo_path = get_data_dir() / "userinfo.json"
     last_user_id: str | None = None
     if userinfo_path.exists():
         try:

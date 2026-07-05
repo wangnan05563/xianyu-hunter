@@ -727,15 +727,30 @@ class ChatbotRepository:
             return result.rowcount > 0
 
     def list_kb_versions(self, limit: int = 20) -> list[dict]:
-        """按 created_at DESC 排序"""
+        """按 created_at DESC 排序
+
+        同时标记 is_current 字段：当前生效版本（status=success + 最新）为 True
+        前端用此字段禁用对应行的回滚按钮
+        """
         with self._session() as session:
+            # 子查询当前生效版本 ID（status=success + created_at DESC 首条）
+            # 同会话内查询避免多次连接开销
+            current_id = session.execute(
+                select(ChatbotKBVersionRow.id)
+                .where(ChatbotKBVersionRow.status == "success")
+                .order_by(ChatbotKBVersionRow.created_at.desc())
+                .limit(1)
+            ).scalar()
             stmt = (
                 select(ChatbotKBVersionRow)
                 .order_by(ChatbotKBVersionRow.created_at.desc())
                 .limit(limit)
             )
             rows = session.execute(stmt).scalars().all()
-            return [self._kb_version_row_to_dict(r) for r in rows]
+            return [
+                self._kb_version_row_to_dict(r, is_current=(r.id == current_id))
+                for r in rows
+            ]
 
     def count_kb_versions(self) -> int:
         """KB 版本总数（M-36 修复：list_kb_versions 的 total 需真实计数支持前端分页）"""
@@ -766,7 +781,7 @@ class ChatbotRepository:
             row = session.execute(stmt).scalars().first()
             if row is None:
                 return None
-            return self._kb_version_row_to_dict(row)
+            return self._kb_version_row_to_dict(row, is_current=True)
 
     def has_building_kb_version(self) -> bool:
         """是否存在 status=building 的版本（供 /kb/status 返回 building 字段）
@@ -782,7 +797,9 @@ class ChatbotRepository:
             return int(session.execute(stmt).scalar() or 0) > 0
 
     @staticmethod
-    def _kb_version_row_to_dict(row: ChatbotKBVersionRow) -> dict:
+    def _kb_version_row_to_dict(
+        row: ChatbotKBVersionRow, is_current: bool = False
+    ) -> dict:
         return {
             "id": row.id,
             "snapshot_path": row.snapshot_path,
@@ -793,6 +810,7 @@ class ChatbotRepository:
             "status": row.status,
             "build_duration_sec": row.build_duration_sec,
             "error_message": row.error_message,
+            "is_current": is_current,
             "created_at": _serialize_dt(row.created_at),
         }
 

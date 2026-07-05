@@ -23,7 +23,7 @@ from xianyu_hunter.web.middleware.request_id import setup_request_id_middleware
 from xianyu_hunter.web.startup import setup_startup_hooks
 from xianyu_hunter.web.routes import (
     api_about,  # 关于菜单：版本信息 + 检查更新
-    api_accounts,  # MU3：多账号管理（列表/切换/退出/会话事件）
+    api_accounts,  # 多账号管理：列表/切换/退出/会话事件（/api/auth/accounts）
     api_ai,
     api_anticrawl,
     api_auth,
@@ -45,11 +45,10 @@ from xianyu_hunter.web.routes import (
     api_kb,
     api_logs,
     api_maintenance,
-    api_menu,  # MU5：菜单动态化（用户级可见性/排序覆盖）
+    api_menu,  # 菜单配置：用户级菜单可见性/排序（/api/menu）
     api_notifications,
     api_notifier,
     api_orders,
-    api_preferences,  # MU6：用户偏好（替代 localStorage，按 user_id 隔离）
     api_prompts,
     api_stats,
     api_task_deps,
@@ -228,9 +227,7 @@ def create_app() -> FastAPI:
     app.include_router(api_orders.router)
     app.include_router(api_evaluations.router)
     app.include_router(api_auth.router)
-    app.include_router(api_accounts.router)  # MU3：多账号管理（列表/切换/退出/会话事件）
-    app.include_router(api_preferences.router)  # MU6：用户偏好（按 user_id 隔离）
-    app.include_router(api_menu.router)  # MU5：菜单动态化（GET/PUT/POST /api/menu）
+    app.include_router(api_accounts.router)  # 多账号管理：/api/auth/accounts 列表/切换/退出
     app.include_router(api_about.router)  # 关于菜单：版本信息 + 检查更新
     app.include_router(api_anticrawl.router)  # 反爬登录管理：策略/会话/健康/Cookie 分层
     app.include_router(api_notifications.router)
@@ -250,6 +247,7 @@ def create_app() -> FastAPI:
     app.include_router(api_error_logs.router)  # 后台错误日志：异常捕获 + AI 诊断上下文
     app.include_router(api_batch_refresh.router)  # 批量采集调度器：定时刷新在售商品详情
     app.include_router(api_tunnel.router)  # 内网穿透：一键远程访问
+    app.include_router(api_menu.router)  # 用户级菜单可见性/排序：/api/menu GET/PUT + /api/menu/reset
     # 智能客服模块路由：api_chatbot（会话/消息/SSE/反馈）、api_kb（知识库版本/重建）、api_chatbot_config（热更新配置）
     # 为什么放在最后：chatbot 为可选模块，容器构造时若依赖缺失返回 None，
     # 路由内通过 get_container().chatbot 判空返回 503，不影响主系统路由注册

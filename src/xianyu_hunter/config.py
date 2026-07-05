@@ -11,6 +11,10 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 路径统一入口：PyInstaller 打包后基于 _MEIPASS / exe 目录，
+# 开发模式下基于 __file__ 推算项目根（不依赖 CWD）
+from xianyu_hunter.paths import get_app_dir, get_env_file
+
 
 class Settings(BaseSettings):
     """全局配置，从 .env 读取"""
@@ -64,7 +68,9 @@ class Settings(BaseSettings):
     xianyu_base_url: str = "https://www.goofish.com"
 
     # 路径
-    project_root: Path = Path(__file__).resolve().parent.parent.parent.parent
+    # 走 paths.py 统一入口：PyInstaller 打包后基于 _MEIPASS / exe 目录，
+    # 开发模式下基于 __file__ 推算项目根（不依赖 CWD）
+    project_root: Path = get_app_dir()
 
 
 @lru_cache
@@ -156,7 +162,7 @@ def update_ai_config(
 
 def _persist_to_env(updates: dict[str, str]) -> None:
     """将配置变更持久化到 .env 文件（upsert 语义）"""
-    env_path = Path(".env")
+    env_path = get_env_file()
     lines: list[str] = []
     if env_path.exists():
         lines = env_path.read_text(encoding="utf-8").splitlines()
@@ -188,7 +194,7 @@ def _persist_to_env(updates: dict[str, str]) -> None:
 def _generate_and_persist_token() -> str:
     """生成随机 token 并追加到 .env 文件"""
     token = _secrets.token_urlsafe(32)
-    env_path = Path(".env")
+    env_path = get_env_file()
     try:
         line = f"\nWEB_TOKEN={token}\n"
         with env_path.open("a", encoding="utf-8") as f:

@@ -36,6 +36,14 @@ def _get_chatbot_or_403() -> dict[str, Any]:
     return container.chatbot
 
 
+def _log_audit(repo: Any, action: str, target: str) -> None:
+    """审计日志：失败不阻塞主流程（与 api_vector_admin._log_audit 策略一致）"""
+    try:
+        repo.add_audit_log(action=action, target=target, source="web")
+    except Exception:
+        logger.exception("写入知识库审计日志失败")
+
+
 # ============== 知识库版本管理 ==============
 @router.post("/kb/rebuild", status_code=202)
 async def rebuild_kb() -> dict[str, Any]:
@@ -49,6 +57,7 @@ async def rebuild_kb() -> dict[str, Any]:
     """
     chatbot = _get_chatbot_or_403()
     kb_manager = chatbot["kb_manager"]
+    repo = chatbot["repo"]
 
     async def _do_rebuild() -> None:
         try:
@@ -56,9 +65,15 @@ async def rebuild_kb() -> dict[str, Any]:
             logger.info(
                 f"知识库重建完成: version_id={version.version_id} chunks={version.chunk_count}"
             )
+            _log_audit(
+                repo,
+                action="kb_rebuild",
+                target=f"{version.version_id[:8]}|status:{version.status}|chunks:{version.chunk_count}",
+            )
         except Exception as e:
             # 后台任务异常无 awaiter 接收，仅记录日志
             logger.exception(f"知识库重建失败: {e}")
+            _log_audit(repo, action="kb_rebuild", target=f"failed:{type(e).__name__}")
 
     # 创建后台任务并立即返回，不阻塞 HTTP 响应
     # 保留引用避免 GC 回收（M-35），任务完成后自动从集合移除
@@ -73,12 +88,15 @@ def kb_status() -> dict[str, Any]:
     """当前知识库状态
 
     字段名与前端 KBStatus 类型对齐：
-    - chunk_count / last_build_at / building / status
+    - chunk_count / last_build_at / building / status / progress
     - building 通过查询 status=building 的版本判断后台构建是否进行中
+    - progress 来自 KBManager._progress，包含 phase/percent/message
     """
     chatbot = _get_chatbot_or_403()
     repo = chatbot["repo"]
+    kb_manager = chatbot["kb_manager"]
     current = repo.get_current_kb_version()
+    progress = kb_manager.get_progress()
     if current is None:
         return {
             "current_version": None,
@@ -86,6 +104,7 @@ def kb_status() -> dict[str, Any]:
             "last_build_at": None,
             "building": repo.has_building_kb_version(),
             "status": "empty",
+            "progress": progress,
         }
     return {
         "current_version": current["id"],
@@ -93,6 +112,7 @@ def kb_status() -> dict[str, Any]:
         "last_build_at": current["created_at"],
         "building": repo.has_building_kb_version(),
         "status": current["status"],
+        "progress": progress,
     }
 
 
@@ -121,4 +141,9 @@ async def rollback_kb(version_id: str) -> dict[str, Any]:
     kb_manager = chatbot["kb_manager"]
     # rollback 内部加 _build_lock，会等待进行中的构建完成
     new_version = await kb_manager.rollback(version_id)
+    _log_audit(
+        repo,
+        action="kb_rollback",
+        target=f"from:{version_id[:8]}→to:{new_version.version_id[:8]}|status:{new_version.status}|chunks:{new_version.chunk_count}",
+    )
     return {"ok": True, "current_version": new_version.version_id, "status": new_version.status}

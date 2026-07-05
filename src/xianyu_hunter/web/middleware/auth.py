@@ -55,18 +55,14 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         from xianyu_hunter.config import get_settings
         from loguru import logger
 
-        # 从 Authorization header 和 cookie 中取 token。Authorization 优先，
-        # 但失败后继续尝试 cookie，避免前端 localStorage 残留旧 token
-        # 覆盖刚登录写入的 HttpOnly xh_token cookie。
+        # 从 Authorization header 或 cookie 中取 token
         auth_header = request.headers.get("authorization", "")
-        candidate_tokens: list[str] = []
         if auth_header.startswith("Bearer "):
-            candidate_tokens.append(auth_header[7:])
-        cookie_token = request.cookies.get("xh_token", "")
-        if cookie_token and cookie_token not in candidate_tokens:
-            candidate_tokens.append(cookie_token)
+            req_token = auth_header[7:]
+        else:
+            req_token = request.cookies.get("xh_token", "")
 
-        if not candidate_tokens:
+        if not req_token:
             if request.url.path.startswith("/api/"):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
             return await call_next(request)
@@ -74,23 +70,21 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         web_token = get_settings().web_token
 
         # 路径 1：WEB_TOKEN 管理令牌直通（向后兼容单用户模式）
-        for req_token in candidate_tokens:
-            if hmac.compare_digest(req_token.encode(), web_token.encode()):
-                request.state.user_id = "default"
-                return await call_next(request)
+        if hmac.compare_digest(req_token.encode(), web_token.encode()):
+            request.state.user_id = "default"
+            return await call_next(request)
 
         # 路径 2：session_token 多用户会话校验
-        from xianyu_hunter.web.services.user_manager import get_user_manager
-        for req_token in candidate_tokens:
-            try:
-                user_id = get_user_manager().verify_session(req_token)
-            except Exception as e:
-                logger.warning("[Auth] session 校验异常，降级尝试下一个 token: %s", e)
-                user_id = None
+        try:
+            from xianyu_hunter.web.services.user_manager import get_user_manager
+            user_id = get_user_manager().verify_session(req_token)
+        except Exception as e:
+            logger.warning("[Auth] session 校验异常，降级到 401: %s", e)
+            user_id = None
 
-            if user_id:
-                request.state.user_id = user_id
-                return await call_next(request)
+        if user_id:
+            request.state.user_id = user_id
+            return await call_next(request)
 
         # 路径 3：校验失败
         logger.debug(
