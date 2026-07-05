@@ -42,10 +42,13 @@ type MenuRow = MenuItem & {
 
 // 分组中文标签：从 menu.ts 共享常量导入，避免与 useMenuConfig 重复定义导致漂移
 
-// 类别标签颜色
+// 类别标签颜色：与 menu_registry.yaml 的 5 个分组对齐
 const CATEGORY_TAG_COLOR: Record<string, string> = {
-  main: 'blue',
-  system: 'purple',
+  overview: 'blue',
+  data_view: 'cyan',
+  config: 'purple',
+  maintenance: 'orange',
+  other: 'default',
 }
 
 export default function MenuAdmin() {

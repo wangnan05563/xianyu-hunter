@@ -110,6 +110,10 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
       // 清空 sheet 栈，避免看到上一用户的 sheet
       useSheetStore.getState().closeAll()
       storage.remove('xh.sheets.state')
+      // 清除 localStorage 中的旧 token：后端 verify_session 有 5 分钟缓存，
+      // 若不清除，整页刷新后 Bearer 头携带旧 token 会被缓存命中，
+      // 导致中间件认证为旧用户而非新切换的用户
+      storage.remove('xh_token')
       hide()
       message.success('账号切换成功')
       setOpen(false)

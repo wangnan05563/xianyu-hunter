@@ -190,6 +190,7 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
     """
     # 1. 识别当前多用户会话用户
     current_uid = _resolve_current_user_id(request)
+    current_session_token = request.cookies.get("xh_token", "") if current_uid else None
     cookie_user_id = current_uid or "default"
 
     # 2. 检查当前用户的 cookie 文件
@@ -223,7 +224,7 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
 
     # 已登录时确保浏览器持有 xh_token 认证 cookie
     if result.get("logged_in"):
-        return make_auth_response(result)
+        return make_auth_response(result, session_token=current_session_token)
 
     return result
 

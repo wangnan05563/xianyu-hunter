@@ -149,8 +149,90 @@ test_pw*.txt
 _test_result.txt
 config_resp.jsonclear
 
+# ---------- 第五轮清理新增（2026-07-05）----------
+# .tmp_ 前缀调试脚本（SonarQube 分析/拆分等临时工具）
+/.tmp_*.ps1
+/.tmp_*.py
+/.tmp_*.bat
+
+# 根目录临时测试脚本（test_*.py，正式测试应在 tests/ 目录）
+/test_*.py
+
+# 根目录临时运行脚本（run_*.py / run_*.js，正式脚本应在 scripts/）
+/run_*.py
+/run_*.js
+/run_*.ps1
+
+# 根目录 git 调试脚本与输出
+/git_*.py
+/git_*.txt
+
+# 根目录 SonarQube Python 调试脚本（除已声明的 fetch_issues.py 等）
+/check_sonar.py
+/query_sonar.py
+/diag*.py
+/fetch_status3_tmp.py
+
+# 根目录验证脚本与输出
+/verify_*.py
+/verify_*.txt
+
+# 根目录 skill 集成 / git 提交调试产物
+/commit_msg.txt
+/compare_*.ps1
+/compare_result.txt
+/do_commit.js
+/do_git_commit.ps1
+/get_git_info.js
+/git_status.txt
+/git_commit_result.txt
+/integrate_*.ps1
+/diff_*.ps1
+/diff_skills.ps1
+
+# 根目录 diff / 调试输出 txt
+/app_diff.txt
+/app_old.txt
+/diffs_review.txt
+/pytest_n7.txt
+/pytest_output.log
+/tabbar_debug.txt
+/tabbar_direct.txt
+/test_result_output.txt
+/tsc_output.txt
+/vitest_out.txt
+/vitest_result.txt
+
+# 根目录调试日志（_ 前缀，含大量调试输出）
+/_*.log
+/_*.txt
+
+# 异常文件名（PowerShell 误重定向含特殊字符）
+/not enabled*
+/ubprocess*
+
 # ---------- 前端构建产物 ----------
 src/xianyu_hunter/web/static/spa/
+
+# ---------- 前端调试产物（frontend/ 根目录，非 src/）----------
+# TypeScript 检查 / Vitest 运行调试脚本（正式配置在 tsconfig.json / vitest.config.ts）
+/frontend/check_tsc.js
+/frontend/run_tsc.js
+/frontend/run-tsc.ps1
+/frontend/tsc_check.js
+/frontend/tsc_runner.js
+/frontend/tsc_simple.js
+/frontend/vitest_runner.js
+# 前端调试日志与临时输出
+/frontend/build.log
+/frontend/test.log
+/frontend/test2.log
+/frontend/tsc.log
+/frontend/vite_stderr.log
+/frontend/vite_stdout.log
+/frontend/run.stdout.log
+/frontend/_ps_test.txt
+/frontend/ws_test2.txt
 
 # ---------- 截图与运行时用户数据 ----------
 test-screenshots/

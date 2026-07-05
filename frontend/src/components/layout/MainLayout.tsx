@@ -75,6 +75,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/config/chatbot': '客服配置',
   '/help': '帮助文档',
   '/about': '关于',
+  '/export': '数据导出',
 }
 
 // Command Palette 可搜索的命令列表（扁平化所有页面导航项）
@@ -102,6 +103,7 @@ const COMMAND_ITEMS = [
   { key: '/config/chatbot', label: '客服配置', icon: <MessageOutlined /> },
   { key: '/help', label: '帮助文档', icon: <QuestionCircleOutlined /> },
   { key: '/about', label: '关于', icon: <InfoCircleOutlined /> },
+  { key: '/export', label: '数据导出', icon: <CloudDownloadOutlined /> },
 ]
 
 // g+X 全局快捷键映射

@@ -396,3 +396,71 @@ Get-Help less > 17_xianyu    # ❌ 创建了 less 帮助文本的垃圾文件
 - ✅ 根目录严格 14 个核心文件，无游离功能文件
 - ✅ `scripts/` 目录仅含脚本类文件（.py / .ps1 / .bat / .vbs）
 - ✅ `docs/standards/directory-structure.md` 持续更新本轮变更记录
+
+---
+
+## 十、第五轮整理变更记录（2026-07-05）
+
+### 10.1 变更背景
+
+第四轮清理后服务持续运行多日，根目录再次积累大量临时调试脚本与运行时日志。
+本轮清理采用 `xianyu-workspace-cleanup` 技能的 6 阶段闭环流程
+（Recon → Classify → Impact → Execute → Verify → Archive）系统化处理，
+并主动停止服务（PID 33540，端口 8000）以确保清理安全。
+
+### 10.2 清理动作
+
+| 类别 | 数量 | 处理 |
+|---|---|---|
+| 缓存目录 | 3 | 删除（`.scannerwork/` + `.pytest_cache/` + `sonar-results/` 16.6 MB） |
+| 异常重定向产物 | 2 | 删除（`not enabled, try to fix it now.` + `ubprocess; r=subprocess.run(...)`） |
+| `.tmp_` 前缀调试脚本 | 6 | 删除（`.tmp_analyze*.py` / `.tmp_run_scan.bat` / `.tmp_split.py`） |
+| `_` 前缀调试脚本 | ~40 | 删除（`_batch_*.py` / `_eval_*.py` / `_run_vitest*.py` / `_ws_*.txt` 等） |
+| SonarQube Python 调试 | 8 | 删除（`check_sonar.py` / `diag*.py` / `fetch_issues.py` / `query_sonar.py` / `all-issues.json` 1.7 MB / `scan-output.log`） |
+| `test_*.py` 临时测试 | 15 | 删除（`test_api*.py` / `test_simple*.py` / `test_subproc*.py`） |
+| `run_*.py/js` 临时运行 | 7 | 删除（`run_pytest.py` / `run_vitest_*.js` / `run_tabbar_test.ps1`） |
+| `git_*` 调试产物 | 6 | 删除（`git_menu_history.py/txt` / `git_show_output.txt`） |
+| `_` 前缀调试日志 | ~15 | 删除（`_eval_trace.log` 55 KB / `_piplist.log` / `_task_price_check.log` 等） |
+| 其他调试输出 | ~10 | 删除（`app_diff.txt` / `verify_out.txt` / `vitest_*.txt` / `tsc_*.txt`） |
+| 运行时日志（大文件） | 3 | 删除（`run.stdout.log` 3.2 MB + 2 个时间戳日志各 9.7 MB，共 22.6 MB） |
+| frontend 调试产物 | 17 | 删除（`check_tsc.js` / `run-tsc.ps1` / `tsc_*.js` / `vitest_runner.js` / 6 个 `spa-*.png` 截图 / 调试日志） |
+| skill 集成调试产物 | 6 | 删除（`compare_*.ps1` / `do_git_commit.ps1` / `integrate_*.ps1` / `get_git_info.js` 等） |
+
+**总计：删除 ~118 个文件 + 3 个缓存目录，释放约 42 MB 磁盘空间。**
+
+### 10.3 新增内容
+
+| 路径 | 用途 |
+|---|---|
+| `.gitignore` 第五轮新增区块 | 拦截 `.tmp_*` / `test_*.py` / `run_*.py/js` / `git_*` / `verify_*` / skill 调试产物 / `_*.log` / `_*.txt` / 异常文件名 / frontend 调试产物 |
+| `.pre-commit-config.yaml` 扩展 | `forbid-root-temp-files` 钩子正则表达式扩展，新增 `forbid-frontend-debug-files` 钩子 |
+| `logs/cleanup-20260705-000340.log` | 125 个文件的 SHA256 hash 备份日志 |
+
+### 10.4 验证结果
+
+- ✅ 核心模块导入：`import xianyu_hunter; from xianyu_hunter import config, container` 成功（v0.3.0）
+- ✅ 根目录从 119 个文件降至 15 个（14 个白名单 + 1 个被后台进程持续重建的异常文件）
+- ✅ frontend 目录从 30 个文件降至 9 个（全部为正式项目文件）
+
+### 10.5 遗留问题
+
+**`ubprocess; r=subprocess.run([...])` 文件被后台进程持续重建。**
+
+该文件名是被截断的 Python 代码片段（疑似 PowerShell 误重定向产物），
+每次删除后会被某个后台脚本重新创建。建议：
+
+1. 排查是否有其他 AI 会话或后台脚本在执行 git diff 操作
+2. 检查 `.trae/` 目录下的技能配置是否有 `subprocess.run(['git','diff',...])` 调用
+3. 该文件已被 `.gitignore` 的 `/ubprocess*` 规则拦截，不会误提交
+
+### 10.6 根目录最终状态
+
+清理后根目录 15 个文件（14 个白名单 + 1 个异常重建）：
+
+| 类别 | 文件 |
+|---|---|
+| 工具配置 | `.dockerignore` / `.env` / `.env.example` / `.gitignore` / `.pre-commit-config.yaml` |
+| 构建/依赖 | `docker-compose.yml` / `Dockerfile` / `pyproject.toml` / `requirements.txt` / `sonar-project.properties` |
+| 元文档 | `README.md` / `CHANGELOG.md` / `VERSIONING.md` |
+| 启动入口 | `静默启动.vbs` |
+| 异常（待排查） | `ubprocess; r=subprocess.run(...)`（被后台进程持续重建） |

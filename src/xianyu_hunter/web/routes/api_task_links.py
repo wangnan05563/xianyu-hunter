@@ -373,7 +373,11 @@ def list_links(
 
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
-    if not container.repo.get_task(task_id):
+    # 任务存在性校验 + 顺带取 task dict 传入 list_and_count_task_links
+    # 为什么不分别调用：路由层校验存在性已 SELECT TaskRow by PK，
+    # list_and_count_task_links 内部还会再查一次，重复 I/O 多耗 1-3ms
+    task = container.repo.get_task(task_id)
+    if not task:
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
 
     # 关键词/地区/品牌过滤仅对 item 类型生效（seller 行通常无 title/region/brand 字段）
@@ -386,7 +390,7 @@ def list_links(
     items, counts = container.repo.list_and_count_task_links(
         task_id=task_id, link_type=type, limit=limit, offset=offset,
         search_keyword=search_keyword, search_region=search_region,
-        search_brand=search_brand, sold_filter=sold_filter,
+        search_brand=search_brand, sold_filter=sold_filter, task=task,
     )
     total_for_type = counts.get(type, len(items)) if type else counts.get("total", len(items))
 
@@ -1279,14 +1283,21 @@ async def live_links(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-async def _safe_trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
+def _safe_trigger_live_evaluation(container: Container, task_id: str, items: list[dict]) -> None:
     """_trigger_live_evaluation 的安全包装，用于 BackgroundTasks
 
     BackgroundTasks 在响应返回后执行，异常不会反馈给客户端，需在此捕获并记录日志，
     避免未捕获异常导致任务静默失败。
+
+    为什么是同步函数：_trigger_live_evaluation 内部全是同步调用
+    （evaluator.evaluate / container.repo.upsert_eval_event），无需 await。
+    FastAPI BackgroundTasks 支持同步函数，会在 threadpool 中执行，不阻塞事件循环。
+    历史教训：早期写成 async def + await _trigger_live_evaluation(...)，
+    但 _trigger_live_evaluation 返回 None，await None 抛
+    "'NoneType' object can't be awaited"，导致 live 评估永远静默失败。
     """
     try:
-        await _trigger_live_evaluation(container, task_id, items)
+        _trigger_live_evaluation(container, task_id, items)
     except Exception as e:
         logger.warning("live_links 后台触发评估失败 task={}: {}", task_id, e)
 

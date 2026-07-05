@@ -98,6 +98,28 @@ def test_invalid_token_returns_401():
         assert resp.json()["detail"] == "Unauthorized"
 
 
+def test_valid_cookie_session_used_when_authorization_header_is_stale():
+    """本地残留旧 Authorization 时，仍应使用有效 xh_token cookie 认证"""
+    app = _build_app_with_middleware()
+    client = TestClient(app)
+    client.cookies.set("xh_token", "fresh_session_token")
+
+    with patch("xianyu_hunter.web.services.user_manager.get_user_manager") as mock:
+        mgr = MagicMock()
+        mgr.verify_session.side_effect = lambda token: (
+            "user_from_cookie" if token == "fresh_session_token" else None
+        )
+        mock.return_value = mgr
+
+        resp = client.get(
+            "/api/whoami",
+            headers={"Authorization": "Bearer stale_local_storage_token"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["user_id"] == "user_from_cookie"
+
+
 def test_public_path_no_auth_required():
     """公开路径不需要认证"""
     app = _build_app_with_middleware()
@@ -127,3 +149,49 @@ def test_session_verify_exception_returns_401():
         resp = client.get("/api/whoami", headers={"Authorization": "Bearer some_token"})
         assert resp.status_code == 401
         assert resp.json()["detail"] == "Unauthorized"
+
+
+def test_auth_me_preserves_current_session_token_cookie():
+    """已登录多用户会话调用 /me 时不应把 session_token 覆盖成 web_token"""
+    from xianyu_hunter.web.deps import get_container
+    from xianyu_hunter.web.routes import auth_query
+
+    app = FastAPI()
+    app.include_router(auth_query.router, prefix="/api/auth")
+    app.dependency_overrides[get_container] = lambda: object()
+    client = TestClient(app)
+
+    store = MagicMock()
+    store.has_valid_cookies.return_value = True
+
+    auth_manager = MagicMock()
+    auth_manager.USERINFO_TTL = 300
+    auth_manager.get_userinfo.return_value = {
+        "logged_in": True,
+        "user_id": "user_abc",
+        "nick": "",
+        "avatar_url": "",
+        "fetched_at": 0,
+    }
+
+    user_manager = MagicMock()
+    user_manager.verify_session.return_value = "user_abc"
+    user_manager.get_user.return_value = {"nickname": "", "custom_alias": ""}
+
+    with patch(
+        "xianyu_hunter.web.routes.auth_query.get_cookie_store",
+        return_value=store,
+    ), patch(
+        "xianyu_hunter.web.routes.auth_query.get_auth_manager",
+        return_value=auth_manager,
+    ), patch(
+        "xianyu_hunter.web.routes.auth_query.scan_and_notify",
+    ), patch(
+        "xianyu_hunter.web.services.user_manager.get_user_manager",
+        return_value=user_manager,
+    ):
+        resp = client.get("/api/auth/me", cookies={"xh_token": "session_token_xyz"})
+
+    assert resp.status_code == 200
+    assert resp.json()["logged_in"] is True
+    assert _get_cookie_value(resp, "xh_token") == "session_token_xyz"

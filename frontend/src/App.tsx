@@ -22,6 +22,8 @@ const Evaluations = lazyRetry(() => import('./pages/Evaluations/index'))
 const Timeline = lazyRetry(() => import('./pages/Timeline'))
 const Logs = lazyRetry(() => import('./pages/Logs/Logs'))
 const ErrorLogs = lazyRetry(() => import('./pages/Logs/ErrorLogs'))
+// 通知中心：业务通知列表（未读/已读/全部筛选、单条/全部已读、删除/清空已读）
+const Notifications = lazyRetry(() => import('./pages/Notifications'))
 const PriceStrategy = lazyRetry(() => import('./pages/Config/PriceStrategy'))
 const EvalRules = lazyRetry(() => import('./pages/Config/EvalRules'))
 const NotifierChannels = lazyRetry(() => import('./pages/Config/NotifierChannels'))
@@ -43,6 +45,8 @@ const Chatbot = lazyRetry(() => import('./pages/Chatbot'))
 const ChatbotConfig = lazyRetry(() => import('./pages/Chatbot/Config'))
 // 菜单管理页：用户级菜单可见性/排序配置（MU5）
 const MenuAdmin = lazyRetry(() => import('./pages/MenuAdmin'))
+// 数据导出页：独立路由，提供完整筛选条件（task_id/时间范围/状态/等级/limit）
+const Export = lazyRetry(() => import('./pages/Export'))
 
 // 全局 fallback 加载组件：懒加载页面未就绪时展示
 function PageLoading() {
@@ -99,6 +103,7 @@ export default function App() {
             <Route path="timeline" element={<LazyRoute><Timeline /></LazyRoute>} />
             <Route path="logs" element={<LazyRoute><Logs /></LazyRoute>} />
             <Route path="logs/errors" element={<LazyRoute><ErrorLogs /></LazyRoute>} />
+            <Route path="notifications" element={<LazyRoute><Notifications /></LazyRoute>} />
             <Route path="config/price" element={<LazyRoute><PriceStrategy /></LazyRoute>} />
             <Route path="config/eval" element={<LazyRoute><EvalRules /></LazyRoute>} />
             <Route path="config/notifier" element={<LazyRoute><NotifierChannels /></LazyRoute>} />
@@ -111,11 +116,15 @@ export default function App() {
             <Route path="maintenance/vector" element={<LazyRoute><VectorAdmin /></LazyRoute>} />
             <Route path="batch-refresh" element={<LazyRoute><BatchRefresh /></LazyRoute>} />
             <Route path="anticrawl" element={<LazyRoute><AntiCrawl /></LazyRoute>} />
+            {/* 价格行情：品类价格统计 + 横向对比 + 捡漏价格参考 */}
+            <Route path="price-dashboard" element={<LazyRoute><PriceDashboard /></LazyRoute>} />
             {/* 菜单管理：用户级菜单可见性/排序配置（MU5） */}
             <Route path="menu-admin" element={<LazyRoute><MenuAdmin /></LazyRoute>} />
             {/* 智能客服：对话主页 + 配置页（含知识库管理） */}
             <Route path="chatbot" element={<LazyRoute><Chatbot /></LazyRoute>} />
             <Route path="config/chatbot" element={<LazyRoute><ChatbotConfig /></LazyRoute>} />
+            {/* 数据导出：独立页面提供完整筛选条件 */}
+            <Route path="export" element={<LazyRoute><Export /></LazyRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
           {/* 移动端路由组临时禁用：mobile 模块页面组件未实现，待完成后恢复 */}

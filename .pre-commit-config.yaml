@@ -43,7 +43,14 @@ repos:
     hooks:
       - id: forbid-root-temp-files
         name: 🚫 拦截根目录垃圾文件（误重定向/调试产物）
-        entry: bash -c 'if git diff --cached --name-only --diff-filter=A | grep -E "^(0|17_xianyu.*|_r\.json|\.tmp_diff\.txt|\.s3358_lines\.txt|test_result\.txt|test_debug_output\.txt|pytest_result\.txt|pytest_output\.txt|sonar-scan\.log|jenkins_build_.*\.log)$"; then echo "❌ 检测到根目录垃圾文件被提交，请先清理后再提交"; exit 1; fi'
+        entry: bash -c 'if git diff --cached --name-only --diff-filter=A | grep -E "^(0|17_xianyu.*|_r\.json|\.tmp_diff\.txt|\.s3358_lines\.txt|test_result\.txt|test_debug_output\.txt|pytest_result\.txt|pytest_output\.txt|sonar-scan\.log|jenkins_build_.*\.log|\.tmp_.*|test_.*\.py|run_.*\.(py|js|ps1)|git_.*\.(py|txt)|check_sonar\.py|query_sonar\.py|diag.*\.py|fetch_status3_tmp\.py|verify_.*\.(py|txt)|commit_msg\.txt|compare_.*\.ps1|compare_result\.txt|do_commit\.js|do_git_commit\.ps1|get_git_info\.js|git_status\.txt|git_commit_result\.txt|integrate_.*\.ps1|diff_.*\.ps1|app_diff\.txt|app_old\.txt|diffs_review\.txt|pytest_n7\.txt|tabbar_debug\.txt|tabbar_direct\.txt|test_result_output\.txt|tsc_output\.txt|vitest_out\.txt|vitest_result\.txt|_.*\.(log|txt)|not enabled.*|ubprocess.*)$"; then echo "❌ 检测到根目录垃圾文件被提交，请先清理后再提交"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: forbid-frontend-debug-files
+        name: 🚫 拦截 frontend 根目录调试产物
+        entry: bash -c 'if git diff --cached --name-only --diff-filter=A | grep -E "^frontend/(check_tsc\.js|run_tsc\.js|run-tsc\.ps1|tsc_check\.js|tsc_runner\.js|tsc_simple\.js|vitest_runner\.js|build\.log|test\.log|test2\.log|tsc\.log|vite_stderr\.log|vite_stdout\.log|run\.stdout\.log|_ps_test\.txt|ws_test2\.txt)$"; then echo "❌ 检测到 frontend 根目录调试文件被提交，请先清理后再提交"; exit 1; fi'
         language: system
         pass_filenames: false
         stages: [pre-commit]

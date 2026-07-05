@@ -28,14 +28,15 @@ client.interceptors.response.use(
       localStorage.removeItem('xh_token')
       // 避免在登录页本身触发跳转（防止死循环）
       const currentPath = window.location.pathname + window.location.search
-      const isLoginPage = currentPath.startsWith('/app/login') || currentPath.startsWith('/login')
+      const isLoginPage = currentPath.startsWith('/login')
       if (!isLoginPage && !isRedirecting) {
         isRedirecting = true
         // 保存当前路径，登录后跳转回来
         const redirect = encodeURIComponent(currentPath)
         // 使用 replace 避免在历史记录中留下当前页面，
         // 防止用户后退回到已失效的认证态页面
-        globalThis.location.replace(`/app/login?redirect=${redirect}`)
+        // 路由为 /login（App.tsx 中定义），非 /app/login
+        globalThis.location.replace(`/login?redirect=${redirect}`)
       }
     }
     return Promise.reject(error)
