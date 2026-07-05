@@ -22,6 +22,7 @@ from playwright.async_api import (
 )
 
 from xianyu_hunter.infra.logger import get_logger
+from xianyu_hunter.paths import get_browser_data_dir
 
 logger = get_logger()
 
@@ -57,7 +58,7 @@ class BrowserManager:
         use_cdp: bool = False,
         proxy_server: str = "",
     ):
-        self.user_data_dir = Path(user_data_dir)
+        self.user_data_dir = get_browser_data_dir(user_data_dir)
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
         self.headless = headless
         self.user_agent = user_agent

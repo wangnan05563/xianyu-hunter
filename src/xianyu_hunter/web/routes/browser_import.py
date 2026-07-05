@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse
 
 from xianyu_hunter.domain.urls import get_base_url
 from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.paths import get_browser_data_dir
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
 from xianyu_hunter.web.services.cookie_db import init_cookie_table, upsert_cookie
 from xianyu_hunter.web.services.cookie_store import get_cookie_store
@@ -521,7 +522,7 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
         time.sleep(2)
 
     cfg = get_config()
-    target_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
+    target_db = get_browser_data_dir(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
     target_db.parent.mkdir(parents=True, exist_ok=True)
 
     tmp_dir = None

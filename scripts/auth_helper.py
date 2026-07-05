@@ -21,6 +21,8 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "src"))
 
+from xianyu_hunter.paths import get_browser_data_dir
+
 
 def _get_browser_cfg():
     from xianyu_hunter.infra.yaml_config import get_config
@@ -105,6 +107,7 @@ async def _cmd_info(out_dir: Path) -> int:
     from playwright.async_api import async_playwright
 
     cfg = _get_browser_cfg()
+    user_data_dir = get_browser_data_dir(cfg.user_data_dir)
     _set_status(out_dir, state="starting", message="启动浏览器…")
     try:
         async with async_playwright() as pw:
@@ -113,9 +116,9 @@ async def _cmd_info(out_dir: Path) -> int:
             # 其余参数减少自动化特征暴露
             # 清理残留锁文件：Worker 异常退出后 SingletonLock 会残留，
             # 导致 launch_persistent_context 启动后无法创建 page，nick 抓取整个流程不执行
-            _cleanup_lock_files(Path(cfg.user_data_dir))
+            _cleanup_lock_files(user_data_dir)
             ctx = await pw.chromium.launch_persistent_context(
-                user_data_dir=cfg.user_data_dir,
+                user_data_dir=str(user_data_dir),
                 headless=True,
                 user_agent=cfg.user_agent,
                 viewport={"width": 1280, "height": 800},
@@ -375,6 +378,7 @@ async def _cmd_qr(out_dir: Path, timeout: int) -> int:
     from playwright.async_api import async_playwright
 
     cfg = _get_browser_cfg()
+    user_data_dir = get_browser_data_dir(cfg.user_data_dir)
     _set_status(out_dir, state="starting", message="启动浏览器…")
     try:
         async with async_playwright() as pw:
@@ -382,9 +386,9 @@ async def _cmd_qr(out_dir: Path, timeout: int) -> int:
             # 不传 channel="msedge"，确保 Cookie 加密密钥与搜索浏览器一致
             # 关键：不注入 stealth 脚本、不传反检测参数，以最接近用户手动打开的方式启动
             # 清理残留锁文件：与 _cmd_info 一致，避免 SingletonLock 残留导致启动失败
-            _cleanup_lock_files(Path(cfg.user_data_dir))
+            _cleanup_lock_files(user_data_dir)
             ctx = await pw.chromium.launch_persistent_context(
-                user_data_dir=cfg.user_data_dir,
+                user_data_dir=str(user_data_dir),
                 headless=False,
                 # 不设 user_agent，使用 Chromium 原生 UA
                 # 不传 args，避免任何可能被识别为自动化的启动标志
@@ -479,12 +483,12 @@ async def _cmd_qr(out_dir: Path, timeout: int) -> int:
                         await ctx.close()
                         # 删除 Default 目录以清除所有异常状态（Cookie、LocalStorage 等）
                         import shutil
-                        default_dir = Path(cfg.user_data_dir) / "Default"
+                        default_dir = user_data_dir / "Default"
                         if default_dir.exists():
                             shutil.rmtree(default_dir, ignore_errors=True)
                         # 重新以主 user_data_dir 启动（确保 Cookie 写入正确位置）
                         ctx = await pw.chromium.launch_persistent_context(
-                            user_data_dir=cfg.user_data_dir,
+                            user_data_dir=str(user_data_dir),
                             headless=False,
                             viewport={"width": 1280, "height": 800},
                             locale="zh-CN",

@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.paths import get_browser_data_dir
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
 from xianyu_hunter.web.services.cookie_db import init_cookie_table, upsert_cookie
@@ -263,7 +264,7 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": "Cookie 字符串为空"})
 
     cfg = get_config()
-    cookie_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
+    cookie_db = get_browser_data_dir(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
 
     # 解析 cookie 字符串为 (name, value) 对
     cookies_to_inject = _parse_cookie_string_to_pairs(cookie_string)
@@ -314,7 +315,7 @@ async def inject_cookie(cookie_string: str = Form(...)) -> JSONResponse:
 def list_cookie_domains() -> dict:
     """列出当前 browser-data 中已有的 cookie 域名和关键字（用于调试）"""
     cfg = get_config()
-    cookie_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
+    cookie_db = get_browser_data_dir(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
     if not cookie_db.exists():
         return {"exists": False, "domains": [], "key_names": []}
     try:
@@ -578,7 +579,7 @@ async def _do_inject_cookies(cookies: list[dict], source: str = "file") -> JSONR
         goofish_cookies = cookies
 
     cfg = get_config()
-    cookie_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
+    cookie_db = get_browser_data_dir(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
     cookie_db.parent.mkdir(parents=True, exist_ok=True)
 
     # 转换为 (name, value) 元组列表供注入函数使用
@@ -809,7 +810,7 @@ def _build_cookie_db_candidates(cfg) -> list[tuple[Path, bool]]:
         candidates.append((edge_db, True))  # True = 尝试复制再读
 
     # 3. 项目 browser-data（最后才读，因为可能是旧数据）
-    project_db = Path(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
+    project_db = get_browser_data_dir(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"
     candidates.append((project_db, False))
 
     return candidates

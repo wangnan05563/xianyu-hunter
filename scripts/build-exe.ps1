@@ -120,6 +120,22 @@ Write-Host "  预计耗时：约 2-5 分钟（需下载 Chromium ~150MB 和模�
 Write-Host "  [6.1] Copying static assets (SPA + icons)...（约 1 秒）"
 Copy-Item -Recurse -Force "src\xianyu_hunter\web\static" "dist\xianyu-hunter\static"
 
+# 6.1.1 子进程脚本（auth_helper.py / browser_login.py）
+# 为什么需要：browser_login.py / unified_login.py / auth_manager.py 通过 get_app_dir()/"scripts" 定位这些脚本
+# PyInstaller 不收集 scripts/ 目录（仅打包 src/xianyu_hunter/），必须显式复制
+# 仅复制运行时实际调用的子进程脚本，避免打包测试脚本（test_*.py / perf_test.py 等）
+Write-Host "  [6.1.1] Copying subprocess scripts (auth_helper, browser_login)..."
+$scriptsTarget = "dist\xianyu-hunter\scripts"
+New-Item -ItemType Directory -Force $scriptsTarget | Out-Null
+foreach ($script in @("browser_login.py", "auth_helper.py")) {
+    $src = "scripts\$script"
+    if (Test-Path $src) {
+        Copy-Item -Force $src $scriptsTarget
+    } else {
+        Write-Host "  [WARN] 缺少 $src，浏览器登录/二维码登录功能将不可用" -ForegroundColor Red
+    }
+}
+
 # 6.2 Playwright Chromium
 # 直接安装到目标位置，避免大文件跨目录复制
 # PLAYWRIGHT_BROWSERS_PATH 指定后，playwright install 会把浏览器放到此目录
@@ -251,7 +267,9 @@ Name: "{commondesktop}\XianyuHunter"; Filename: "{app}\xianyu-hunter.exe"; Tasks
 [Run]
 Filename: "{app}\xianyu-hunter.exe"; Description: "Launch XianyuHunter"; Flags: nowait postinstall skipifsilent
 "@
-    [System.IO.File]::WriteAllText("installer.iss", $issTemplate, (New-Object System.Text.UTF8Encoding($false)))
+    # Inno Setup 编译器（ISCC）需要 UTF-8 BOM 才能正确解析模板中的中文（"创建桌面快捷方式"等）
+    # 之前用 UTF8Encoding($false)（无 BOM）会导致编译时中文乱码，最终安装包路径或提示信息错位
+    [System.IO.File]::WriteAllText("installer.iss", $issTemplate, (New-Object System.Text.UTF8Encoding($true)))
 }
 
 # 7.4 编译安装包

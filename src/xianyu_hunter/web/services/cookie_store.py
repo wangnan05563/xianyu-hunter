@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from xianyu_hunter.infra.yaml_config import get_config
-from xianyu_hunter.paths import get_data_dir
+from xianyu_hunter.paths import get_browser_data_dir, get_data_dir
 from xianyu_hunter.web.services.cookie_db import batch_upsert_cookies, delete_cookies_by_domain, init_cookie_table
 
 logger = logging.getLogger(__name__)
@@ -540,9 +540,7 @@ class CookieStore:
     def _check_sqlite(self) -> bool:
         """兜底方案：检查 browser-data SQLite 中是否有闲鱼 Cookie"""
         cfg = get_config()
-        user_data_dir = Path(cfg.browser.user_data_dir)
-        if not user_data_dir.is_absolute():
-            user_data_dir = Path.cwd() / user_data_dir
+        user_data_dir = get_browser_data_dir(cfg.browser.user_data_dir)
         cookie_db = user_data_dir / "Default" / "Network" / "Cookies"
         if not cookie_db.exists():
             return False
@@ -575,9 +573,7 @@ class CookieStore:
         仅保留最近一次获取的真实 Cookie 数据。
         """
         cfg = get_config()
-        user_data_dir = Path(cfg.browser.user_data_dir)
-        if not user_data_dir.is_absolute():
-            user_data_dir = Path.cwd() / user_data_dir
+        user_data_dir = get_browser_data_dir(cfg.browser.user_data_dir)
         cookie_db = user_data_dir / "Default" / "Network" / "Cookies"
         cookie_db.parent.mkdir(parents=True, exist_ok=True)
 

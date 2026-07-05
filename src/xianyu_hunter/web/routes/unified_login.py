@@ -46,6 +46,7 @@ _TERMINAL_STATUSES = {"success", "cancelled", "error", "timeout"}
 _LIVE_STATUSES = {"pending", "starting", "opening", "waiting", "already_logged", "running"}
 # Cookie 未持久化提示文案：登录子进程返回 success 但 JSON 未检测到 Cookie 时复用
 _COOKIE_NOT_PERSISTED_MSG = "登录似乎成功，但 Cookie 未持久化，请重试"
+_PACKAGED_SCRIPT_FLAG = "--xh-run-script"
 
 router = APIRouter(tags=["unified-login"])
 
@@ -135,6 +136,11 @@ def _get_quiet_python_executable() -> tuple[str, int]:
         # macOS/Linux：Python 进程不弹控制台窗口，无需特殊处理
         return sys.executable, 0
 
+    if getattr(sys, "frozen", False):
+        # PyInstaller 打包后 sys.executable 是 xianyu-hunter.exe，不是 Python 解释器。
+        # 子进程脚本由 launcher.py 的内部分发入口执行，不能再寻找 pythonw.exe。
+        return sys.executable, 0
+
     # Windows：优先使用 pythonw.exe
     exe = sys.executable
     pythonw_candidates: list[str] = []
@@ -167,6 +173,13 @@ def _get_quiet_python_executable() -> tuple[str, int]:
     return exe, subprocess.CREATE_NEW_CONSOLE
 
 
+def _build_script_subprocess_command(python_exe: str, script_path: Path, *args: str) -> list[str]:
+    """Build the command used to run helper scripts in dev and packaged modes."""
+    if getattr(sys, "frozen", False):
+        return [python_exe, _PACKAGED_SCRIPT_FLAG, script_path.stem, *args]
+    return [python_exe, str(script_path), *args]
+
+
 def _trigger_userinfo_refresh() -> None:
     """登录成功后触发用户信息刷新和 Cookie 层状态同步。
 
@@ -197,8 +210,10 @@ def _cookies_from_store_for_playwright() -> list[dict]:
         from xianyu_hunter.web.services.cookie_store import is_test_cookie
 
         store = get_cookie_store()
-        store.invalidate_cache("default")
-        data = store._read_json("default")
+        with _session_lock:
+            user_id = _session.get("current_user_id") or "default"
+        store.invalidate_cache(user_id)
+        data = store._read_json(user_id)
         if not data or not data.get("cookies"):
             return []
 
@@ -447,12 +462,14 @@ def _start_browser_login() -> JSONResponse:
         # pythonw.exe 是 GUI 子系统程序，不会弹出 python.exe 黑窗
         # Playwright 浏览器子进程由 Playwright 库自身启动，不受此设置影响
         python_exe, creation_flags = _get_quiet_python_executable()
+        cmd = _build_script_subprocess_command(
+            python_exe,
+            _BROWSER_LOGIN_SCRIPT,
+            "--status-file", str(status_file),
+            "--timeout", "300",
+        )
         proc = subprocess.Popen(
-            [
-                python_exe, str(_BROWSER_LOGIN_SCRIPT),
-                "--status-file", str(status_file),
-                "--timeout", "300",
-            ],
+            cmd,
             # creation_flags 由 _get_quiet_python_executable 决定：
             # - pythonw.exe 可用时为 0（完全静默）
             # - fallback 到 python.exe 时为 CREATE_NEW_CONSOLE（防 Playwright 闪退，但会弹窗）
@@ -506,13 +523,15 @@ def _start_qr_login() -> JSONResponse:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        cmd = _build_script_subprocess_command(
+            sys.executable,
+            _AUTH_HELPER_SCRIPT,
+            "qr",
+            "--out-dir", str(out_dir),
+            "--timeout", "180",
+        )
         proc = subprocess.Popen(
-            [
-                sys.executable, str(_AUTH_HELPER_SCRIPT),
-                "qr",
-                "--out-dir", str(out_dir),
-                "--timeout", "180",
-            ],
+            cmd,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

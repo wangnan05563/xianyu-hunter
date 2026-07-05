@@ -16,6 +16,7 @@ from __future__ import annotations
 import ctypes
 import os
 import re
+import runpy
 import socket
 import subprocess
 import sys
@@ -27,6 +28,11 @@ from pathlib import Path
 
 # ERROR_ALREADY_EXISTS：Windows 系统常量，CreateMutex 已存在时返回
 _ERROR_ALREADY_EXISTS = 183
+_SCRIPT_DISPATCH_FLAG = "--xh-run-script"
+_SCRIPT_DISPATCH: dict[str, str] = {
+    "browser_login": "browser_login.py",
+    "auth_helper": "auth_helper.py",
+}
 
 
 def _is_frozen() -> bool:
@@ -51,6 +57,45 @@ def _setup_env() -> None:
     os.environ["SENTENCE_TRANSFORMERS_HOME"] = str(app_dir / "models")
     # 启用调度器：Web + 浏览器 + 任务引擎同进程
     os.environ["XH_WITH_SCHEDULER"] = "1"
+
+
+def _dispatch_helper_script() -> int | None:
+    """Run packaged helper scripts inside this PyInstaller executable.
+
+    In frozen mode there is no bundled python.exe/pythonw.exe next to the app.
+    The web process starts helper scripts by relaunching xianyu-hunter.exe with
+    this private flag; this branch must run before the single-instance mutex.
+    """
+    if len(sys.argv) < 2 or sys.argv[1] != _SCRIPT_DISPATCH_FLAG:
+        return None
+
+    _setup_env()
+    if len(sys.argv) < 3:
+        print("Missing helper script name")
+        return 2
+
+    script_key = sys.argv[2]
+    script_name = _SCRIPT_DISPATCH.get(script_key)
+    if not script_name:
+        print(f"Unknown helper script: {script_key}")
+        return 2
+
+    script_path = Path(sys.executable).resolve().parent / "scripts" / script_name
+    if not script_path.exists():
+        print(f"Helper script missing: {script_path}")
+        return 2
+
+    sys.argv = [str(script_path), *sys.argv[3:]]
+    try:
+        runpy.run_path(str(script_path), run_name="__main__")
+    except SystemExit as exc:
+        if exc.code is None:
+            return 0
+        if isinstance(exc.code, int):
+            return exc.code
+        print(exc.code)
+        return 1
+    return 0
 
 
 def _acquire_single_instance() -> bool:
@@ -154,18 +199,32 @@ def _try_start_tray(host: str, port: int, on_quit) -> threading.Thread | None:
 
 
 def _print_banner(host: str, port: int) -> None:
-    """打印启动横幅（控制台模式）"""
+    """打印启动横幅（控制台模式）
+
+    强制 stdout 使用 UTF-8 编码，避免 Windows 控制台 OEM 编码（如 GBK/CP936）下中文乱码。
+    为什么需要：打包后 PyInstaller 的 stdout 默认走系统编码（中文 Windows 通常是 GBK），
+    写入 UTF-8 字节会被 GBK 错误解析，banner 中文显示为问号或乱码。
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except (AttributeError, OSError):
+        pass
     print("=" * 40)
-    print("  XianyuHunter Starting...")
+    print("  闲鱼猎人 启动中...")
     print("=" * 40)
-    print(f"  Web:  http://{host}:{port}")
-    print(f"  Mode: Web + Scheduler (with browser)")
-    print(f"  Press Ctrl+C to stop")
+    print(f"  Web:  http://{host}:{port}/app/")
+    print(f"  Mode: Web + 调度器（含浏览器）")
+    print(f"  提示: 按 Ctrl+C 停止")
     print("=" * 40)
 
 
 def main() -> int:
     """启动器主入口"""
+    dispatched = _dispatch_helper_script()
+    if dispatched is not None:
+        return dispatched
+
     host = "127.0.0.1"
     port = 8000
 
@@ -195,7 +254,39 @@ def main() -> int:
     print("[3/3] Waiting for Web server...")
     if _wait_for_port(host, port, timeout=30):
         print(f"  Web server started on port {port}.")
-        webbrowser.open(f"http://{host}:{port}/app/")
+        # 为什么需要 try/except + fallback：PyInstaller 打包后 webbrowser.open() 依赖
+        # os.startfile() -> ShellExecuteW 调起系统默认浏览器，在以下场景会静默失败：
+        # 1) 默认浏览器未在 Windows 注册表中设置
+        # 2) Windows Server / 无 GUI 环境下没有关联浏览器
+        # 3) PyInstaller 打包的 webbrowser 模块未能正确读取注册表
+        # fallback 1：os.startfile 走 ShellExecuteW
+        # fallback 2：cmd /c start 走 cmd.exe 解析，能在更多边缘场景成功
+        url = f"http://{host}:{port}/app/"
+        opened = False
+        try:
+            opened = webbrowser.open(url)
+        except Exception as e:
+            print(f"  [WARN] webbrowser.open 失败: {e}")
+        if not opened:
+            try:
+                os.startfile(url)  # type: ignore[attr-defined]
+                opened = True
+                print("  使用 os.startfile 成功打开浏览器")
+            except Exception as e:
+                print(f"  [WARN] os.startfile 失败: {e}")
+        if not opened:
+            try:
+                # CREATE_NO_WINDOW 避免弹黑色控制台
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "", url],
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+                )
+                opened = True
+                print("  使用 cmd /c start 成功打开浏览器")
+            except Exception as e:
+                print(f"  [WARN] cmd /c start 失败: {e}")
+        if not opened:
+            print(f"  [ERROR] 未能自动打开浏览器，请手动访问 {url}")
     else:
         print(f"[ERROR] Web server failed to start within 30 seconds!")
         return 1

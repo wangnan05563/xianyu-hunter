@@ -25,6 +25,8 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO / "src"))
 
+from xianyu_hunter.paths import get_browser_data_dir
+
 
 def _get_browser_cfg():
     from xianyu_hunter.infra.yaml_config import get_config
@@ -285,8 +287,7 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
     # 检测可用浏览器：优先 Edge（Windows 自带），其次 Chromium
     edge_path = _get_edge_path()
     # 使用已有的 browser-data 目录，登录后 Cookie 与 Worker 共享
-    user_data_dir = Path(cfg.user_data_dir)
-    user_data_dir.mkdir(parents=True, exist_ok=True)
+    user_data_dir = get_browser_data_dir(cfg.user_data_dir)
 
     if edge_path:
         print(f"[browser_login] 使用系统 Edge: {edge_path}", file=sys.stderr)

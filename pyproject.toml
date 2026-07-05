@@ -36,6 +36,7 @@ dependencies = [
     "cryptography>=42.0",           # Chrome v80+ Cookie AES-256-GCM 解密
     # Chatbot RAG 向量库
     "chromadb>=1.0.0",              # 1.x 提供 cp39-abi3 预编译 wheel，兼容 Python 3.14 且无需 C++ 编译
+    "sentence-transformers>=5.0.0", # 本地 Embedding + 打包阶段预置 bge-small-zh 模型
 ]
 
 [project.optional-dependencies]

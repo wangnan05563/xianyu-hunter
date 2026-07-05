@@ -10,6 +10,7 @@
 import asyncio
 import json
 import subprocess
+import sys
 from http.cookies import SimpleCookie
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -275,6 +276,42 @@ def test_login_status_no_cookie_when_not_success():
     # 非成功时返回 dict（不是 JSONResponse）
     assert isinstance(result, dict)
     assert result["status"] == "running"
+
+
+def test_packaged_browser_login_uses_launcher_script_dispatch(monkeypatch, tmp_path):
+    """打包模式下不能把 browser_login.py 当作普通脚本参数直接传给主 exe。"""
+    script_path = tmp_path / "scripts" / "browser_login.py"
+    script_path.parent.mkdir()
+    script_path.write_text("raise SystemExit(0)", encoding="utf-8")
+    status_dir = tmp_path / "status"
+    status_dir.mkdir()
+    exe_path = str(tmp_path / "xianyu-hunter.exe")
+
+    proc = MagicMock(spec=subprocess.Popen)
+    proc.pid = 12345
+    proc.poll.return_value = None
+
+    class DummyThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(ul, "_BROWSER_LOGIN_SCRIPT", script_path)
+    monkeypatch.setattr(ul.tempfile, "gettempdir", lambda: str(status_dir))
+    monkeypatch.setattr(sys, "executable", exe_path)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    with patch("xianyu_hunter.web.routes.unified_login.subprocess.Popen", return_value=proc) as popen, patch(
+        "xianyu_hunter.web.routes.unified_login.threading.Thread", DummyThread
+    ):
+        result = ul._start_browser_login()
+
+    assert result.status_code == 200
+    cmd = popen.call_args.args[0]
+    assert cmd[:3] == [exe_path, "--xh-run-script", "browser_login"]
+    assert str(script_path) not in cmd[:3]
 
 
 # ============================================================

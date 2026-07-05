@@ -19,6 +19,7 @@ from sqlalchemy import text as sa_text
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.paths import get_browser_data_dir
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.services.auth_manager import get_auth_manager
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
@@ -368,9 +369,7 @@ def _clear_goofish_cookies_in_sqlite() -> int:
     Returns: 删除的 Cookie 数量
     """
     cfg = get_config()
-    user_data_dir = Path(cfg.browser.user_data_dir)
-    if not user_data_dir.is_absolute():
-        user_data_dir = Path.cwd() / user_data_dir
+    user_data_dir = get_browser_data_dir(cfg.browser.user_data_dir)
     cookie_db = user_data_dir / "Default" / "Network" / "Cookies"
     if not cookie_db.exists():
         return 0

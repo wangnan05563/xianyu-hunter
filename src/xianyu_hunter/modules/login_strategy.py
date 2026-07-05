@@ -24,6 +24,7 @@ from typing import Any
 
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.paths import get_browser_data_dir
 
 logger = get_logger()
 
@@ -166,9 +167,7 @@ class LoginStrategySelector:
 
         # 2. 检查 SQLite
         cfg = get_config()
-        user_data_dir = Path(cfg.browser.user_data_dir)
-        if not user_data_dir.is_absolute():
-            user_data_dir = Path.cwd() / user_data_dir
+        user_data_dir = get_browser_data_dir(cfg.browser.user_data_dir)
         cookie_db = user_data_dir / "Default" / "Network" / "Cookies"
         if not cookie_db.exists():
             return False

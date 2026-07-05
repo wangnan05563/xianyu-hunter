@@ -50,9 +50,9 @@ def _old_identity_cookies() -> list[dict]:
     ]
 
 
-def _write_cookie_json(cookies: list[dict]) -> None:
-    cs_module._cookie_json_path("default").parent.mkdir(parents=True, exist_ok=True)
-    cs_module._cookie_json_path("default").write_text(
+def _write_cookie_json(cookies: list[dict], user_id: str = "default") -> None:
+    cs_module._cookie_json_path(user_id).parent.mkdir(parents=True, exist_ok=True)
+    cs_module._cookie_json_path(user_id).write_text(
         json.dumps(
             {
                 "exported_at": time.time(),
@@ -65,7 +65,7 @@ def _write_cookie_json(cookies: list[dict]) -> None:
         ),
         encoding="utf-8",
     )
-    get_cookie_store().invalidate_cache()
+    get_cookie_store().invalidate_cache(user_id)
 
 
 def _write_cookie_json_without_cache_invalidation(cookies: list[dict]) -> None:
@@ -87,6 +87,25 @@ def _write_cookie_json_without_cache_invalidation(cookies: list[dict]) -> None:
 
 def test_unified_login_injects_latest_cookie_store_into_worker_browser() -> None:
     _write_cookie_json(_cookie_sample())
+
+    browser = MagicMock()
+    browser.add_cookies = AsyncMock(return_value=True)
+    container = MagicMock()
+    container.browser = browser
+
+    with patch("xianyu_hunter.web.deps.get_container", return_value=container):
+        ok = asyncio.run(_inject_cookies_to_worker_from_store())
+
+    assert ok is True
+    browser.add_cookies.assert_awaited_once()
+    injected = browser.add_cookies.await_args.args[0]
+    assert {c["name"] for c in injected} >= {"unb", "cookie2", "sgcookie"}
+
+
+def test_unified_login_injects_current_user_cookie_store_into_worker_browser() -> None:
+    user_id = "2209384756290"
+    _write_cookie_json(_cookie_sample(), user_id=user_id)
+    unified_login_module._session["current_user_id"] = user_id
 
     browser = MagicMock()
     browser.add_cookies = AsyncMock(return_value=True)
@@ -159,7 +178,7 @@ def test_runtime_cookie_sync_invalidates_cache_and_injects_worker() -> None:
     container.collector = collector
 
     with patch("xianyu_hunter.web.deps.get_container", return_value=container):
-        ok = asyncio.run(inject_cookie_store_to_worker_browser("test"))
+        ok = asyncio.run(inject_cookie_store_to_worker_browser("test", user_id="default"))
 
     assert ok is True
     browser.add_cookies.assert_awaited_once()

@@ -47,6 +47,24 @@ def get_data_dir() -> Path:
     return base
 
 
+def get_browser_data_dir(configured: str | Path = "./browser-data") -> Path:
+    """Return the writable browser profile directory.
+
+    Relative browser profile paths stay relative in development. In packaged
+    builds they are rooted under the per-user data directory so Edge/Chromium
+    never tries to write inside the install directory.
+    """
+    configured_path = Path(configured)
+    if configured_path.is_absolute():
+        base = configured_path
+    elif is_frozen():
+        base = get_data_dir() / configured_path
+    else:
+        base = configured_path
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
 def get_config_dir() -> Path:
     """配置目录（可写：YAML 配置）
 
