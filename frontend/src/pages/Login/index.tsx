@@ -455,9 +455,14 @@ export default function Login() {
         setLoginStatus(status)
         if (status.status === 'success') {
           onLoginSuccess()
-        } else if (['cancelled', 'error', 'timeout'].includes(status.status)) {
+        } else if (['cancelled', 'error', 'timeout', 'idle'].includes(status.status)) {
+          // idle 表示后端已重置（web 进程重启或心跳超时清理），
+          // 停止轮询并清空 loginStatus 让前端回到初始按钮状态
           clearInterval(pollRef.current!)
           setPollTimer(null)
+          if (status.status === 'idle') {
+            setLoginStatus(null)
+          }
         }
       } catch {
         // 轮询失败不中断，继续尝试

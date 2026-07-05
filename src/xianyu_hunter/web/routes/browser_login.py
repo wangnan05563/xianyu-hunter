@@ -44,26 +44,57 @@ _browser_login_state: dict = {
 
 
 def _cleanup_dead_process() -> None:
-    """检测子进程是否已死亡，若死亡则重置状态"""
+    """检测子进程是否已死亡，若死亡则重置状态
+
+    三重检测：
+    1. subprocess.Popen.poll() — 子进程是否已退出
+    2. psutil.pid_exists() — pid 是否还存在
+    3. status file 心跳超时 — 即使子进程未死但已卡死（bc.cookies 阻塞）也应清理
+       为什么需要：bc.cookies() 阻塞时 _background_wait_browser_login 仍在
+       proc.wait(timeout=310) 中阻塞，proc.poll() 仍返回 None，
+       status file 也不更新，_browser_login_state 永远停留在 running。
+       心跳超时检测能识别"子进程未死但已无响应"的卡死状态。
+    """
     global _browser_login_state
-    pid = _browser_login_state.get("pid")
-    proc = _browser_login_state.get("proc")
     if _browser_login_state["status"] != "running":
         return
-    # 检查 subprocess.Popen 对象
+    proc = _browser_login_state.get("proc")
     if proc is not None and proc.poll() is not None:
         logger.warning("浏览器登录子进程已退出（exitcode=%d），强制重置", proc.returncode)
         _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
         return
-    # 检查 pid
+    pid = _browser_login_state.get("pid")
     if pid:
         try:
             import psutil
             if not psutil.pid_exists(pid):
                 logger.warning("浏览器登录子进程 pid=%d 已不存在，强制重置", pid)
                 _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
+                return
         except ImportError:
             pass
+    # 心跳超时：status file 超过 30s 未更新时强制重置
+    # 阈值 30s：子进程心跳 3s + Playwright 偶尔阻塞 5-10s + 余量
+    status_file = _browser_login_state.get("status_file")
+    if status_file:
+        path = Path(status_file)
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                ts = data.get("ts")
+                if ts is not None and time.time() - float(ts) > 30:
+                    logger.warning(
+                        "浏览器登录子进程心跳超时（%.1fs 未更新），强制 kill 并重置",
+                        time.time() - float(ts),
+                    )
+                    if proc and proc.poll() is None:
+                        try:
+                            proc.kill()
+                        except OSError:
+                            pass
+                    _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
+            except (json.JSONDecodeError, OSError, ValueError):
+                pass
 
 
 @router.post("/browser-login")
@@ -195,8 +226,9 @@ async def browser_login_status() -> dict:
 
     _cleanup_dead_process()
 
+    # cleanup 后如果状态已变 idle（心跳超时被清理），返回 idle 让前端显示初始按钮
     if _browser_login_state["status"] == "idle":
-        return {"status": "idle", "message": "未启动登录"}
+        return {"status": "idle", "message": "未启动登录（上次进程已超时清理）"}
 
     status_file = _browser_login_state.get("status_file")
     if not status_file:
