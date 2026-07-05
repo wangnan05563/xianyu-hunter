@@ -38,7 +38,7 @@ const BuyerStrategy = lazyRetry(() => import('./pages/Config/BuyerStrategy'))
 const Onboarding = lazyRetry(() => import('./pages/Onboarding'))
 const AntiCrawl = lazyRetry(() => import('./pages/AntiCrawl'))
 const Help = lazyRetry(() => import('./pages/Help'))
-// 关于菜单：系统元信息 + 文档资源统一入口（独立路由，与 /help 同级）
+// 关于菜单：系统元信息 + 文档资源统一入口（嵌入 MainLayout 的 SheetWorkspace 内）
 const About = lazyRetry(() => import('./pages/About'))
 // 智能客服模块：对话主页 + 配置页
 const Chatbot = lazyRetry(() => import('./pages/Chatbot'))
@@ -47,6 +47,8 @@ const ChatbotConfig = lazyRetry(() => import('./pages/Chatbot/Config'))
 const MenuAdmin = lazyRetry(() => import('./pages/MenuAdmin'))
 // 数据导出页：独立路由，提供完整筛选条件（task_id/时间范围/状态/等级/limit）
 const Export = lazyRetry(() => import('./pages/Export'))
+// 价格行情：品类价格统计 + 横向对比 + 捡漏价格参考
+const PriceDashboard = lazyRetry(() => import('./pages/PriceDashboard'))
 
 // 全局 fallback 加载组件：懒加载页面未就绪时展示
 function PageLoading() {
@@ -89,8 +91,6 @@ export default function App() {
           <Route path="/onboarding" element={<LazyRoute><Onboarding /></LazyRoute>} />
           {/* 帮助文档独立路由，不嵌套在 MainLayout 中（含自有顶部导航） */}
           <Route path="/help" element={<LazyRoute><Help /></LazyRoute>} />
-          {/* 关于菜单独立路由，不嵌套在 MainLayout 中（与 /help 同级） */}
-          <Route path="/about" element={<LazyRoute><About /></LazyRoute>} />
           <Route path="/" element={<MainLayout />}>
             <Route index element={<LazyRoute><Dashboard /></LazyRoute>} />
             <Route path="tasks" element={<LazyRoute><TaskList /></LazyRoute>} />
@@ -125,6 +125,8 @@ export default function App() {
             <Route path="config/chatbot" element={<LazyRoute><ChatbotConfig /></LazyRoute>} />
             {/* 数据导出：独立页面提供完整筛选条件 */}
             <Route path="export" element={<LazyRoute><Export /></LazyRoute>} />
+            {/* 关于菜单：嵌入 MainLayout 的 SheetWorkspace 内展示版本/许可/文档资源（非全屏） */}
+            <Route path="about" element={<LazyRoute><About /></LazyRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
           {/* 移动端路由组临时禁用：mobile 模块页面组件未实现，待完成后恢复 */}

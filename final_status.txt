@@ -1,0 +1,276 @@
+﻿M  .gitignore
+M  .pre-commit-config.yaml
+D  .tmp_analyze.ps1
+D  .tmp_analyze_high.py
+D  .tmp_analyze_rel.py
+D  .tmp_analyze_sonar.py
+D  .tmp_run_scan.bat
+D  .tmp_split.py
+D  _ps_test.txt
+D  _vitest_output_err.txt
+D  _ws_ctrl.txt
+D  _ws_e2e.txt
+D  _ws_full.txt
+D  _ws_regression.txt
+D  _ws_result.txt
+D  _ws_test.txt
+D  app_diff.txt
+D  app_old.txt
+D  check_sonar.py
+AD clear
+AD commit_subject.txt
+M  config/menu_registry.yaml
+AD create_msg.ps1
+D  diag.py
+D  diag2.py
+D  diffs_review.txt
+AD do_git.ps1
+AD do_git2.ps1
+ M "docs/00-\345\276\205\345\256\214\346\210\220/\350\277\255\344\273\243\346\217\220\347\244\272\350\257\215.md"
+ M "docs/01-\344\273\252\350\241\250\347\233\230/\344\273\252\350\241\250\347\233\230-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/2026-06-25-browser-cookie-import-enhancement-design.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/2026-06-25-browser-cookie-import-enhancement-plan.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/2026-06-25-\346\265\217\350\247\210\345\231\250Cookie\345\257\274\345\205\245\345\242\236\345\274\272-\350\256\241\345\210\222.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/2026-06-25-\346\265\217\350\247\210\345\231\250Cookie\345\257\274\345\205\245\345\242\236\345\274\272-\350\256\276\350\256\241.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/2026-06-26-item-sold-status-detection-design.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/2026-06-26-item-sold-status-detection-plan.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/2026-06-26-\345\225\206\345\223\201\345\267\262\345\224\256\347\212\266\346\200\201\346\243\200\346\265\213-\350\256\241\345\210\222.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/2026-06-26-\345\225\206\345\223\201\345\267\262\345\224\256\347\212\266\346\200\201\346\243\200\346\265\213-\350\256\276\350\256\241.md"
+ M "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\344\272\213\344\273\266\346\227\266\351\227\264\347\272\277-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ M "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\344\273\273\345\212\241\347\256\241\347\220\206-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\345\225\206\345\223\201\345\210\227\350\241\250-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ M "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\345\244\232sheet\351\241\265-\344\275\277\347\224\250\350\257\264\346\230\216.md"
+ M "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\345\256\236\346\227\266\346\227\245\345\277\227-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ M "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\346\212\242\345\215\225\350\256\260\345\275\225-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ D "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\350\257\204\344\274\260\346\230\216\347\273\206-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ M "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\345\217\215\347\210\254\347\231\273\345\275\225\347\256\241\347\220\206-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ M "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\345\220\221\351\207\217\346\225\260\346\215\256\345\272\223\347\273\264\346\212\244-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ M "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\346\211\271\351\207\217\351\207\207\351\233\206-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ M "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\346\225\260\346\215\256\345\272\223\347\273\264\346\212\244-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ M "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\347\263\273\347\273\237\346\270\205\347\220\206-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/chatbot-rag-agent-requirements.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/chatbot-ux-\344\274\230\345\214\226\350\247\204\345\210\222.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/chatbot-\346\246\202\350\246\201\350\256\276\350\256\241.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/chatbot-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/training-corpus/api_manual.jsonl"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/training-corpus/config_reference.jsonl"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/training-corpus/conversation.jsonl"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/training-corpus/dataset_manifest.json"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/training-corpus/domain_knowledge.jsonl"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/training-corpus/faq.jsonl"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/training-corpus/troubleshooting.jsonl"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/\346\231\272\350\203\275\345\256\242\346\234\215-AgentHarness\351\207\215\346\236\204-\346\226\207\346\241\243\350\257\204\345\256\241\346\212\245\345\221\212.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/\346\231\272\350\203\275\345\256\242\346\234\215-AgentHarness\351\207\215\346\236\204-\346\246\202\350\246\201\350\256\276\350\256\241.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/\346\231\272\350\203\275\345\256\242\346\234\215-AgentHarness\351\207\215\346\236\204-\351\234\200\346\261\202\350\247\204\346\240\274.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/\346\231\272\350\203\275\345\256\242\346\234\215-UX\344\274\230\345\214\226\350\247\204\345\210\222.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/\346\231\272\350\203\275\345\256\242\346\234\215-\346\246\202\350\246\201\350\256\276\350\256\241.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/\346\231\272\350\203\275\345\256\242\346\234\215-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+ D "docs/05-\346\231\272\350\203\275\345\256\242\346\234\215/\346\231\272\350\203\275\345\256\242\346\234\215-\351\234\200\346\261\202\350\247\204\346\240\274.md"
+ D "docs/06-\345\205\263\344\272\216/about-menu-design.md"
+ D "docs/06-\345\205\263\344\272\216/about-menu-implementation-plan.md"
+ D "docs/06-\345\205\263\344\272\216/about-menu-requirements.md"
+ D "docs/06-\345\205\263\344\272\216/\345\205\263\344\272\216-\345\256\236\346\226\275\350\256\241\345\210\222.md"
+ D "docs/06-\345\205\263\344\272\216/\345\205\263\344\272\216-\346\246\202\350\246\201\350\256\276\350\256\241.md"
+ D "docs/06-\345\205\263\344\272\216/\345\205\263\344\272\216-\351\234\200\346\261\202\350\247\204\346\240\274.md"
+D  docs/skills/xianyu-backend-code-review/SKILL.md
+D  docs/skills/xianyu-backend-code-review/references/architecture.md
+D  docs/skills/xianyu-backend-code-review/references/async-and-concurrency.md
+D  docs/skills/xianyu-backend-code-review/references/browser-subprocess-patterns.md
+D  docs/skills/xianyu-backend-code-review/references/cache-state-migration-patterns.md
+D  docs/skills/xianyu-backend-code-review/references/consistency-and-state-checks.md
+D  docs/skills/xianyu-backend-code-review/references/encoding-and-io.md
+D  docs/skills/xianyu-backend-code-review/references/maintainability.md
+D  docs/skills/xianyu-backend-code-review/references/performance.md
+D  docs/skills/xianyu-backend-code-review/references/security.md
+D  docs/skills/xianyu-backend-code-review/references/sqlalchemy.md
+D  docs/skills/xianyu-backend-code-review/references/yaml-and-config.md
+D  docs/skills/xianyu-frontend-code-review/SKILL.md
+D  docs/skills/xianyu-frontend-code-review/references/antd-patterns.md
+D  docs/skills/xianyu-frontend-code-review/references/api-contract.md
+D  docs/skills/xianyu-frontend-code-review/references/async-cancel-and-debounce-patterns.md
+D  docs/skills/xianyu-frontend-code-review/references/business-logic.md
+D  docs/skills/xianyu-frontend-code-review/references/code-quality.md
+D  docs/skills/xianyu-frontend-code-review/references/encoding-and-io.md
+D  docs/skills/xianyu-frontend-code-review/references/hooks-and-state.md
+D  docs/skills/xianyu-frontend-code-review/references/performance.md
+D  docs/skills/xianyu-frontend-code-review/references/security-and-a11y.md
+D  docs/skills/xianyu-frontend-code-review/references/state-and-consistency-checks.md
+D  docs/skills/xianyu-frontend-code-review/references/state-functional-align-patterns.md
+D  docs/skills/xianyu-hunter-dev/SKILL.md
+D  docs/skills/xianyu-hunter-dev/references/browser-automation-and-async-patterns.md
+D  docs/skills/xianyu-hunter-dev/references/coding-standards.md
+D  docs/skills/xianyu-hunter-dev/references/cookie-state-recovery-patterns.md
+D  docs/skills/xianyu-hunter-dev/references/data-consistency-patterns.md
+D  docs/skills/xianyu-hunter-dev/references/database-admin.md
+D  docs/skills/xianyu-hunter-dev/references/encoding-and-io.md
+D  docs/skills/xianyu-hunter-dev/references/error-handling.md
+D  docs/skills/xianyu-hunter-dev/references/frontend-state-and-api.md
+D  docs/skills/xianyu-hunter-dev/references/performance-and-security-patterns.md
+D  docs/skills/xianyu-hunter-dev/references/yaml-config-patterns.md
+M  docs/standards/directory-structure.md
+D  fetch_status3_tmp.py
+D  frontend/_ps_test.txt
+D  frontend/check_tsc.js
+D  frontend/run-tsc.ps1
+D  frontend/run_tsc.js
+MM frontend/src/App.tsx
+M  frontend/src/api/client.ts
+M  frontend/src/api/index.ts
+A  frontend/src/api/notifications.ts
+M  frontend/src/api/price.ts
+M  frontend/src/components/SheetWorkspace/sheetRegistry.tsx
+MM frontend/src/components/layout/AccountSwitcher.tsx
+MM frontend/src/components/layout/MainLayout.tsx
+A  frontend/src/mobile/pages/Orders/OrderDetail.tsx
+A  frontend/src/mobile/pages/Orders/index.tsx
+ M frontend/src/pages/About/index.tsx
+A  frontend/src/pages/Export/index.tsx
+M  frontend/src/pages/MenuAdmin/index.tsx
+A  frontend/src/pages/Notifications/index.tsx
+A  frontend/src/pages/PriceDashboard/index.tsx
+ M frontend/src/pages/Tasks/TaskEditor.tsx
+D  frontend/tsc_check.js
+D  frontend/tsc_runner.js
+D  frontend/tsc_simple.js
+D  frontend/vitest_runner.js
+D  frontend/ws_test2.txt
+D  git_log_temp.txt
+D  git_show_output.txt
+D  "not enabled, try to fix it now.\357\200\242"
+D  pytest_n7.txt
+D  run_pytest.py
+D  run_simple5.py
+D  sonar-results/01_measures_all.json
+D  sonar-results/02_quality_gate.json
+D  sonar-results/06_facets.json
+D  sonar-results/07_quality_gate.json
+D  sonar-results/10_blocker_detail.json
+D  sonar-results/11_critical_top30.json
+D  sonar-results/14_duplication_issues.json
+D  sonar-results/16_files_facet.json
+D  sonar-results/20_cwe_issues.json
+D  sonar-results/21_performance_issues.json
+D  sonar-results/22_brain_overload.json
+D  sonar-results/23_bug_issues.json
+D  sonar-results/25_duplication_measures.json
+D  sonar-results/26_rules_facet.json
+D  sonar-results/30_all_rules_facet.json
+D  sonar-results/40_rules_summary.csv
+D  sonar-results/issues_BLOCKER.json
+D  sonar-results/issues_CRITICAL.json
+D  sonar-results/issues_INFO.json
+D  sonar-results/issues_MAJOR.json
+D  sonar-results/issues_MINOR.json
+D  sonar-results/issues_quality_MAINTAINABILITY.json
+D  sonar-results/issues_quality_RELIABILITY.json
+D  sonar-results/issues_quality_SECURITY.json
+D  sonar-results/issues_type_BUG.json
+D  sonar-results/issues_type_CODE_SMELL.json
+D  sonar-results/issues_type_VULNERABILITY.json
+D  sonar-results/measures_batch_bugs.json
+D  sonar-results/measures_batch_complexity.json
+D  sonar-results/measures_batch_coverage.json
+D  sonar-results/measures_batch_sqale_rating.json
+D  sonar-results/measures_batch_violations.json
+D  sonar-results/rule_python_S1066.json
+D  sonar-results/rule_python_S107.json
+D  sonar-results/rule_python_S1172.json
+D  sonar-results/rule_python_S1192.json
+D  sonar-results/rule_python_S125.json
+D  sonar-results/rule_python_S1481.json
+D  sonar-results/rule_python_S1845.json
+D  sonar-results/rule_python_S1871.json
+D  sonar-results/rule_python_S2737.json
+D  sonar-results/rule_python_S3457.json
+D  sonar-results/rule_python_S3516.json
+D  sonar-results/rule_python_S3776.json
+D  sonar-results/rule_python_S5713.json
+D  sonar-results/rule_python_S5850.json
+D  sonar-results/rule_python_S5890.json
+D  sonar-results/rule_python_S6353.json
+D  sonar-results/rule_python_S6903.json
+D  sonar-results/rule_python_S7483.json
+D  sonar-results/rule_python_S7487.json
+D  sonar-results/rule_python_S7497.json
+D  sonar-results/rule_python_S7502.json
+D  sonar-results/rule_python_S7503.json
+D  sonar-results/rule_python_S7504.json
+D  sonar-results/rule_typescript_S1082.json
+D  sonar-results/rule_typescript_S1128.json
+D  sonar-results/rule_typescript_S1854.json
+D  sonar-results/rule_typescript_S1874.json
+D  sonar-results/rule_typescript_S2004.json
+D  sonar-results/rule_typescript_S2310.json
+D  sonar-results/rule_typescript_S2486.json
+D  sonar-results/rule_typescript_S2871.json
+D  sonar-results/rule_typescript_S3358.json
+D  sonar-results/rule_typescript_S3516.json
+D  sonar-results/rule_typescript_S3696.json
+D  sonar-results/rule_typescript_S4325.json
+D  sonar-results/rule_typescript_S4624.json
+D  sonar-results/rule_typescript_S6479.json
+D  sonar-results/rule_typescript_S6551.json
+D  sonar-results/rule_typescript_S6582.json
+D  sonar-results/rule_typescript_S6757.json
+D  sonar-results/rule_typescript_S6759.json
+D  sonar-results/rule_typescript_S6772.json
+D  sonar-results/rule_typescript_S6844.json
+D  sonar-results/rule_typescript_S6848.json
+D  sonar-results/rule_typescript_S6853.json
+D  sonar-results/rule_typescript_S7735.json
+D  sonar-results/rule_typescript_S7747.json
+D  sonar-results/rule_typescript_S7748.json
+D  sonar-results/rule_typescript_S7770.json
+D  sonar-results/rule_typescript_S7773.json
+D  sonar-results/rule_typescript_S7781.json
+D  sonar-results/rule_typescript_S7784.json
+D  sonar-results/test_components_show_error.txt
+D  sonar-results/test_components_tree_basic_error.txt
+D  sonar-results/test_issues_basic.json
+D  sonar-results/test_measures_basic_error.txt
+D  sonar-results/test_measures_component_tree_error.txt
+D  sonar-results/test_measures_single.json
+D  sonar-results/test_measures_v2_error.txt
+MM src/xianyu_hunter/_build_info.py
+M  src/xianyu_hunter/infra/repo_links.py
+M  src/xianyu_hunter/web/middleware/auth.py
+ M src/xianyu_hunter/web/routes/api_accounts.py
+M  src/xianyu_hunter/web/routes/api_task_links.py
+M  src/xianyu_hunter/web/routes/auth_query.py
+D  test_api.py
+D  test_api2.py
+D  test_api3.py
+D  test_fetch.py
+D  test_files.py
+D  test_result_output.txt
+D  test_simple.py
+D  test_simple2.py
+D  test_simple3.py
+D  test_simple4.py
+D  test_simple5.py
+D  test_subproc.py
+D  test_subproc2.py
+D  test_subproc3.py
+D  test_wb.py
+D  test_write.py
+M  tests/test_auth_middleware_mu2.py
+D  tsc_output.txt
+D  tsc_verify.txt
+D  verify_out.txt
+D  vitest_out.txt
+D  vitest_result.txt
+?? check_status.ps1
+?? "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\344\273\267\346\240\274\350\241\214\346\203\205-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+?? "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\345\215\226\345\256\266\350\257\204\344\274\260-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+?? "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\345\225\206\345\223\201\344\270\255\345\277\203-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+?? "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\351\200\232\347\237\245\344\270\255\345\277\203-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+?? "docs/02-\346\225\260\346\215\256\346\237\245\347\234\213/\351\224\231\350\257\257\346\227\245\345\277\227-\350\257\246\347\273\206\350\256\276\350\256\241.md"
+?? "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\345\217\215\347\210\254\347\231\273\345\275\225\347\256\241\347\220\206-\351\234\200\346\261\202\350\247\204\346\240\274.md"
+?? "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\345\220\221\351\207\217\346\225\260\346\215\256\345\272\223\347\273\264\346\212\244-\351\234\200\346\261\202\350\247\204\346\240\274.md"
+?? "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\346\211\271\351\207\217\351\207\207\351\233\206-\351\234\200\346\261\202\350\247\204\346\240\274.md"
+?? "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\346\225\260\346\215\256\345\272\223\347\273\264\346\212\244-\351\234\200\346\261\202\350\247\204\346\240\274.md"
+?? "docs/04-\347\263\273\347\273\237\347\273\264\346\212\244/\347\263\273\347\273\237\346\270\205\347\220\206-\351\234\200\346\261\202\350\247\204\346\240\274.md"
+?? "docs/05-\345\205\266\344\273\226/"
+?? "docs/06-\346\231\272\350\203\275\345\256\242\346\234\215/"
+?? final_status.txt
+31ffa0a01198b0ae3f8eccb583960b1429001607 feat: 鏂板绉诲姩绔姠鍗曡褰曞垪琛ㄤ笌璇︽儏椤甸潰锛堝惈鐘舵€佷慨鏀癸級

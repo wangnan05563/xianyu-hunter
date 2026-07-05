@@ -62,7 +62,7 @@ def list_accounts(request: Request) -> dict[str, Any]:
         }
         for u in users
     ]
-    return {"items": items, "count": len(items)}
+    return {"accounts": items, "items": items, "count": len(items)}
 
 
 @router.post("/switch")

@@ -413,6 +413,8 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
 
                 # 轮询检测 Cookie（严格验证 Cookie 值，而非仅检测名称存在）
                 start = time.monotonic()
+                last_heartbeat = 0.0  # 上次心跳写入时间，用于保证 status file 持续更新
+                HEARTBEAT_INTERVAL = 3.0  # 心跳间隔（秒），保证子进程存活时 status file 一定被更新
 
                 while time.monotonic() - start < timeout:
                     await asyncio.sleep(1)
@@ -442,10 +444,15 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
 
                     # 更新状态消息
                     names = {c["name"] for c in cookies}
-
-                    # 每10秒更新一次状态消息
                     elapsed = int(time.monotonic() - start)
-                    if elapsed % 10 < 2:
+
+                    # 心跳：每 HEARTBEAT_INTERVAL 秒无条件更新 status file
+                    # 为什么需要心跳：原实现每 10s 才更新一次（elapsed % 10 < 2），
+                    # 若 bc.cookies() 在两次更新之间卡住，子进程被 kill 时 status file
+                    # 永远停留在 "waiting" 终态，前端无法感知已超时。
+                    # 心跳保证子进程存活时 status file 持续被更新，后端可基于 ts 判断存活状态。
+                    if elapsed - last_heartbeat >= HEARTBEAT_INTERVAL:
+                        last_heartbeat = elapsed
                         set_status(
                             status="waiting",
                             message=f"等待登录中... 剩余 {timeout - elapsed}s",

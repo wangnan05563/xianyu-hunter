@@ -88,6 +88,7 @@ const COMMAND_ITEMS = [
   { key: '/timeline', label: '事件时间线', icon: <FieldTimeOutlined /> },
   { key: '/logs', label: '实时日志', icon: <FileTextOutlined /> },
   { key: '/logs/errors', label: '错误日志', icon: <BugOutlined /> },
+  { key: '/price-dashboard', label: '价格行情', icon: <DollarOutlined /> },
   { key: '/config/price', label: '价格策略', icon: <DollarOutlined /> },
   { key: '/config/eval', label: '评估规则', icon: <SafetyCertificateOutlined /> },
   { key: '/config/buyer', label: '抢单策略', icon: <AimOutlined /> },
@@ -611,7 +612,7 @@ function LayoutContent({
               />
             </Tooltip>
 
-            {/* 关于入口：跳转到独立 /about 路由，展示版本/许可/文档资源 */}
+            {/* 关于入口：在 SheetWorkspace 内打开 /about sheet，展示版本/许可/文档资源 */}
             <Tooltip title="关于">
               <Button
                 type="text"

@@ -74,7 +74,10 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
   const fetchAccounts = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      const list = await authApi.getAccounts()
+      // 防御性：后端契约异常（如未返回 accounts 字段）时回退空数组，
+      // 避免 setAccounts(undefined) 触发后续 .find() 崩溃
+      const res = await authApi.getAccounts()
+      const list = Array.isArray(res) ? res : []
       setAccounts(list)
     } catch (err) {
       // 失败时不弹错误消息，避免打开下拉时打扰用户
@@ -168,7 +171,9 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
   }, [navigate])
 
   // 当前账号（用于头像显示）
-  const current = accounts.find((a) => a.is_current) || accounts.find((a) => a.user_id === currentUserId)
+  // 防御性：accounts 偶发为 undefined 时回退空数组，避免 .find() 崩溃
+  const safeAccounts = Array.isArray(accounts) ? accounts : []
+  const current = safeAccounts.find((a) => a.is_current) || safeAccounts.find((a) => a.user_id === currentUserId)
   const displayName = current ? getDisplayName(current) : '账号'
   const avatarUrl = current?.avatar_url && !avatarErrors[current.user_id] ? current.avatar_url : undefined
 
@@ -302,7 +307,7 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
       }}
     >
       {avatarUrl ? (
-        <Avatar size={28} src={avatarUrl} onError={() => current && handleAvatarError(current.user_id)} />
+        <Avatar size={28} src={avatarUrl} onError={() => { if (current) handleAvatarError(current.user_id); return true }} />
       ) : (
         <Avatar size={28} style={{ background: DEFAULT_AVATAR_BG, fontSize: 13, fontWeight: 600 }}>
           {displayName.charAt(0)}

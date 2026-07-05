@@ -186,6 +186,10 @@ async def browser_login_status() -> dict:
 
     登录成功时，自动将 Cookie 注入到 Worker 浏览器实例中，
     解决 Worker 在登录前已启动、内存中缺少登录 Cookie 的问题。
+
+    心跳检测：检查 status file 的 ts 字段，如果距上次更新超过阈值
+    （HEARTBEAT_TIMEOUT_SEC），说明子进程可能卡住或被异常 kill，
+    主动标记为 error 让前端停止轮询（status file 保留 "waiting" 不会自动切换）。
     """
     global _browser_login_state
 
@@ -206,6 +210,39 @@ async def browser_login_status() -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         return {"status": "running", "message": f"状态文件读取失败: {e}"}
+
+    # 心跳检测：status file ts 超过 15s 未更新时主动判定为卡死
+    # 为什么需要 15s：子进程心跳间隔 3s + Playwright bc.cookies() 偶尔阻塞到 5-8s，
+    # 15s 阈值在容忍网络抖动的同时能在子进程真正卡死时及时识别
+    file_status = data.get("status", "running")
+    if file_status in ("running", "waiting", "opening"):
+        ts = data.get("ts")
+        if ts is not None:
+            stale_sec = time.time() - float(ts)
+            if stale_sec > 15:
+                logger.warning(
+                    "浏览器登录子进程心跳超时（%.1fs 未更新），判定为卡死",
+                    stale_sec,
+                )
+                # 主动清理子进程
+                proc = _browser_login_state.get("proc")
+                if proc and proc.poll() is None:
+                    try:
+                        proc.kill()
+                    except OSError:
+                        pass
+                # 写入终态让前端停止轮询
+                _browser_login_state["status"] = "error"
+                data["status"] = "error"
+                data["message"] = f"登录进程无响应（{stale_sec:.0f}s 未更新），请重试"
+                try:
+                    path.write_text(
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    pass
+                return data
 
     # 终态同步内存状态
     file_status = data.get("status", "running")
