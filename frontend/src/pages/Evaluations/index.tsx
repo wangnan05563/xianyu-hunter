@@ -1023,11 +1023,25 @@ export default function Evaluations() {
   // 加载分布数据
   const loadDist = useCallback(() => {
     setDistLoading(true)
-    evalApi.distribution({ range_hours: distRange, price_bin_count: 10, score_bin_count: 10 })
+    const { taskId: fTaskId, priceRange: fPriceRange, includeOutOfRange: fIncludeOutOfRange } = filtersRef.current
+    const params: {
+      range_hours: number
+      price_bin_count: number
+      score_bin_count: number
+      task_id?: string
+      min_price?: number
+      max_price?: number
+      include_out_of_range?: boolean
+    } = { range_hours: distRange, price_bin_count: 10, score_bin_count: 10 }
+    if (fTaskId) params.task_id = fTaskId
+    if (fPriceRange[0] != null) params.min_price = fPriceRange[0]
+    if (fPriceRange[1] != null) params.max_price = fPriceRange[1]
+    if (fIncludeOutOfRange) params.include_out_of_range = true
+    evalApi.distribution(params)
       .then((res) => setDist(res as DistResponse))
       .catch(() => {})
       .finally(() => setDistLoading(false))
-  }, [distRange])
+  }, [distRange, taskId, priceRange, includeOutOfRange])
 
   useEffect(() => { load() }, [load])
   useEffect(() => { loadDist() }, [loadDist])

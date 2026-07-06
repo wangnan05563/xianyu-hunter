@@ -301,3 +301,214 @@ def test_unauthorized_request(client: TestClient) -> None:
     """未认证请求返回 401"""
     resp = client.get("/api/prices/category-stats")
     assert resp.status_code == 401
+
+
+# ============== sold-range 任务价格区间过滤与 bargain_eval 评估 ==============
+
+
+def _seed_sold_range_data(repo: Repository) -> None:
+    """填充 sold-range 测试数据：1 个带价格区间的任务 + 多个已售商品
+
+    任务 t1 配置 min_price=3000, max_price=6000，已售商品价格含：
+    - 1 元引流（应被过滤）
+    - 200 元配件（应被过滤）
+    - 3500/3800/4200/4800/5500（在范围内，应保留）
+    - 9999 元超范围高价（应被过滤）
+
+    为什么同时写 task_links 和 items 两张表：
+    - sold-range 端点优先从 task_links.display 读已售价格（is_sold=1）
+    - category-stats / category-comparison 端点从 items 表读价格样本
+    - 两张表写入相同价格列表，保证所有端点的过滤逻辑都能被验证
+    """
+    repo.upsert_task({
+        "id": "t1", "name": "iPhone 任务", "keyword": "iphone",
+        "mode": "confirm", "cron": "*/5 * * * *",
+        "min_price": 3000.0, "max_price": 6000.0,
+    })
+    sold_prices = [1.0, 200.0, 3500.0, 3800.0, 4200.0, 4800.0, 5500.0, 9999.0]
+    now = datetime.now(timezone.utc)
+    items_payload = []
+    for i, price in enumerate(sold_prices):
+        # task_links 供 sold-range 端点读取（display.is_sold=1 标记为已售）
+        repo.upsert_task_link(
+            task_id="t1",
+            link_type="item",
+            link_key=f"item_{i}",
+            display={"price": price, "is_sold": 1, "title": f"item {i}"},
+        )
+        # items 表供 category-stats / category-comparison 端点读取
+        items_payload.append({
+            "id": f"item_{i}", "task_id": "t1", "title": f"item {i}",
+            "price": price, "is_sold": 1,
+            "first_seen": now, "publish_time": now,
+        })
+    repo.batch_upsert_items(items_payload)
+
+
+def test_sold_range_filters_by_task_price_range(client: TestClient, tmp_repo: Repository) -> None:
+    """sold-range 应按任务价格区间过滤异常样本（1 元引流/配件/超范围高价被剔除）"""
+    _seed_sold_range_data(tmp_repo)
+    resp = client.get("/api/prices/sold-range?task_id=t1&range_days=0", headers=_auth_headers())
+    assert resp.status_code == 200
+    data = resp.json()
+    # 过滤后应保留 3500/3800/4200/4800/5500 共 5 个样本
+    assert data["sample_size"] == 5
+    assert data["min_price"] == 3500.0
+    assert data["max_price"] == 5500.0
+    # task_price_range 字段应回传任务配置
+    assert data["task_price_range"]["min_price"] == 3000.0
+    assert data["task_price_range"]["max_price"] == 6000.0
+    # filtered_count 应记录被过滤的样本数（1元+200元+9999元 = 3 个）
+    assert data["filtered_count"] == 3
+    # 分位数字段应存在
+    for field in ("p10", "p25", "p75", "p90"):
+        assert field in data
+        assert data[field] is not None
+
+
+def test_sold_range_bargain_price_uses_p10_not_min(client: TestClient, tmp_repo: Repository) -> None:
+    """bargain_price 应使用 P10 分位数而非历史最低价，避免单点异常污染"""
+    _seed_sold_range_data(tmp_repo)
+    resp = client.get("/api/prices/sold-range?task_id=t1&range_days=0", headers=_auth_headers())
+    data = resp.json()
+    # 过滤后样本排序：[3500, 3800, 4200, 4800, 5500]
+    # P10 = 0.10 * 4 = 0.4 → 3500*0.6 + 3800*0.4 = 2100 + 1520 = 3620.0
+    assert data["bargain_price"] == 3620.0
+    # min_price 仍保留为真实最低价
+    assert data["min_price"] == 3500.0
+
+
+def test_sold_range_no_task_range_keeps_all(client: TestClient, tmp_repo: Repository) -> None:
+    """任务未配置价格区间时不过滤，保留原有行为"""
+    repo = tmp_repo
+    repo.upsert_task({
+        "id": "t_no_range", "name": "无价格区间任务", "keyword": "test",
+        "mode": "confirm", "cron": "*/5 * * * *",
+    })
+    for i, price in enumerate([1.0, 100.0, 500.0]):
+        repo.upsert_task_link(
+            task_id="t_no_range",
+            link_type="item",
+            link_key=f"item_{i}",
+            display={"price": price, "is_sold": 1, "title": f"item {i}"},
+        )
+    resp = client.get("/api/prices/sold-range?task_id=t_no_range&range_days=0", headers=_auth_headers())
+    data = resp.json()
+    # 未配置区间，1 元商品应保留
+    assert data["sample_size"] == 3
+    assert data["min_price"] == 1.0
+    assert data["task_price_range"]["min_price"] is None
+    assert data["task_price_range"]["max_price"] is None
+    # 未过滤任何样本
+    assert data["filtered_count"] == 0
+
+
+def test_category_stats_filters_by_task_price_range(client: TestClient, tmp_repo: Repository) -> None:
+    """category-stats 也应按任务价格区间过滤，最高价不超出任务上限"""
+    _seed_sold_range_data(tmp_repo)
+    resp = client.get("/api/prices/category-stats?task_id=t1", headers=_auth_headers())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_count"] > 0
+    cat = data["categories"][0]
+    # 过滤后最高价不应超过任务 max_price=6000
+    assert cat["max"] <= 6000.0
+    # 过滤后最低价不应低于任务 min_price=3000
+    assert cat["min"] >= 3000.0
+    # task_price_range 字段应回传
+    assert cat["task_price_range"]["max_price"] == 6000.0
+
+
+def test_bargain_eval_excellent_level(client: TestClient, tmp_repo: Repository) -> None:
+    """bargain-eval：当前价格低于 P10 评定为 excellent"""
+    _seed_sold_range_data(tmp_repo)
+    # 过滤后样本 [3500, 3800, 4200, 4800, 5500]，P10=3620
+    resp = client.get(
+        "/api/prices/bargain-eval?task_id=t1&current_price=3000&range_days=0",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["bargain_level"] == "excellent"
+    assert data["bargain_score"] == 95
+    assert "极好的捡漏机会" in data["suggestion"]
+    assert data["sold_price_stats"] is not None
+    assert data["sold_price_stats"]["count"] == 5
+
+
+def test_bargain_eval_poor_level(client: TestClient, tmp_repo: Repository) -> None:
+    """bargain-eval：当前价格高于中位数评定为 poor"""
+    _seed_sold_range_data(tmp_repo)
+    # 中位数 = 4200，传入 5000 高于中位数
+    resp = client.get(
+        "/api/prices/bargain-eval?task_id=t1&current_price=5000&range_days=0",
+        headers=_auth_headers(),
+    )
+    data = resp.json()
+    assert data["bargain_level"] == "poor"
+    assert data["bargain_score"] == 30
+    assert "价格偏高" in data["suggestion"]
+
+
+def test_bargain_eval_below_task_min_warns_risk(client: TestClient, tmp_repo: Repository) -> None:
+    """bargain-eval：低于任务配置下限优先提示假货/骗子风险"""
+    _seed_sold_range_data(tmp_repo)
+    # task_min=3000，传入 100 低于下限
+    resp = client.get(
+        "/api/prices/bargain-eval?task_id=t1&current_price=100&range_days=0",
+        headers=_auth_headers(),
+    )
+    data = resp.json()
+    # 即使 100 < P10，任务区间校验优先，应提示风险而非 excellent
+    assert "低于任务配置下限" in data["suggestion"]
+    assert "假货/骗子风险" in data["suggestion"]
+
+
+def test_bargain_eval_above_task_max_warns_out_of_range(client: TestClient, tmp_repo: Repository) -> None:
+    """bargain-eval：高于任务配置上限提示超出监控目标范围"""
+    _seed_sold_range_data(tmp_repo)
+    # task_max=6000，传入 8000 高于上限
+    resp = client.get(
+        "/api/prices/bargain-eval?task_id=t1&current_price=8000&range_days=0",
+        headers=_auth_headers(),
+    )
+    data = resp.json()
+    assert "高于任务配置上限" in data["suggestion"]
+    assert "超出监控目标范围" in data["suggestion"]
+
+
+def test_bargain_eval_empty_data_returns_unknown(client: TestClient, tmp_repo: Repository) -> None:
+    """bargain-eval：无已售数据时返回 unknown 等级"""
+    repo = tmp_repo
+    repo.upsert_task({
+        "id": "t_empty", "name": "空任务", "keyword": "empty",
+        "mode": "confirm", "cron": "*/5 * * * *",
+        "min_price": 100.0, "max_price": 500.0,
+    })
+    resp = client.get(
+        "/api/prices/bargain-eval?task_id=t_empty&current_price=200&range_days=0",
+        headers=_auth_headers(),
+    )
+    data = resp.json()
+    assert data["bargain_level"] == "unknown"
+    assert data["bargain_score"] == 0
+    assert data["sold_price_stats"] is None
+    assert "暂无" in data["suggestion"]
+
+
+def test_bargain_eval_requires_task_id(client: TestClient) -> None:
+    """bargain-eval：task_id 必填，缺失返回 422"""
+    resp = client.get(
+        "/api/prices/bargain-eval?current_price=100",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 422
+
+
+def test_bargain_eval_requires_current_price(client: TestClient) -> None:
+    """bargain-eval：current_price 必填，缺失返回 422"""
+    resp = client.get(
+        "/api/prices/bargain-eval?task_id=t1",
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 422

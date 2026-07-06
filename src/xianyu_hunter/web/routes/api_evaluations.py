@@ -1063,7 +1063,13 @@ def _load_dist_item_price_map(container: Container, events: list[dict]) -> dict[
 
 
 def _collect_dist_eval_records(
-    events: list[dict], cutoff: Any, item_price_map: dict[str, float],
+    events: list[dict],
+    cutoff: Any,
+    item_price_map: dict[str, float],
+    task_id: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    include_out_of_range: bool = False,
 ) -> tuple[list[tuple[float, float | None]], int]:
     """收集评估记录（score, price_or_None），返回 (records, insufficient_count)
 
@@ -1088,13 +1094,7 @@ def _collect_dist_eval_records(
         if d is None or d < cutoff:
             continue
         payload = e.get("payload") or {}
-        score = payload.get("score")
-        if score is None:
-            insufficient_count += 1
-            continue
-        try:
-            score = float(score)
-        except (TypeError, ValueError):
+        if _match_task_id_filter(payload, e, task_id):
             continue
         item_id = payload.get("item_id") or e.get("item_id")
         price = item_price_map.get(str(item_id)) if item_id else None
@@ -1105,6 +1105,17 @@ def _collect_dist_eval_records(
                 price = float(payload["item_price"])
             except (TypeError, ValueError):
                 pass
+        price_payload = {**payload, "item_price": price}
+        if _filter_price_range(price_payload, min_price, max_price, include_out_of_range):
+            continue
+        score = payload.get("score")
+        if score is None:
+            insufficient_count += 1
+            continue
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            continue
         eval_records.append((score, price))
     return eval_records, insufficient_count
 
@@ -1260,6 +1271,10 @@ def evaluations_distribution(
     range_hours: int = 168,
     price_bin_count: int = 10,
     score_bin_count: int = 10,
+    task_id: str | None = Query(None, description="任务 ID 模糊匹配；用于与评估列表统计口径一致"),
+    min_price: float | None = Query(None, ge=0, description="价格下限（含）。未传但传了 task_id 时自动从任务配置读取"),
+    max_price: float | None = Query(None, ge=0, description="价格上限（含）。未传但传了 task_id 时自动从任务配置读取"),
+    include_out_of_range: bool = Query(False, description="是否显示超出任务价格范围的历史商品"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """P3-UX-09：评估分 × 价格的二维分布
@@ -1303,9 +1318,20 @@ def evaluations_distribution(
     events, _ = container.repo.list_events_by_type_prefix(
         type_prefix=_EVAL_TYPE_PREFIX, user_id=user_id,
     )
+    min_price, max_price = _apply_task_price_fallback(
+        container, task_id, min_price, max_price, include_out_of_range
+    )
     item_price_map = _load_dist_item_price_map(container, events)
 
-    eval_records, insufficient_count = _collect_dist_eval_records(events, cutoff, item_price_map)
+    eval_records, insufficient_count = _collect_dist_eval_records(
+        events,
+        cutoff,
+        item_price_map,
+        task_id=task_id,
+        min_price=min_price,
+        max_price=max_price,
+        include_out_of_range=include_out_of_range,
+    )
 
     # total = 所有有 score 的评估数（不要求有 price）
     total = len(eval_records)

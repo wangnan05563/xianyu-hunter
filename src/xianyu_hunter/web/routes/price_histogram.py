@@ -207,22 +207,33 @@ def _compute_auto_bins_bounds(sorted_p: list, task_price_range: dict) -> tuple[f
     return lo, hi
 
 
+def _count_in_bucket(prices: list, b_lo: float, b_hi: float, is_first: bool, is_last: bool) -> int:
+    """统计落入单个分桶的价格数量
+
+    首桶吸收所有低于 b_hi 的极端低价；尾桶吸收所有 >= b_lo 的极端高价。
+    """
+    if is_first:
+        return sum(1 for p in prices if p < b_hi)
+    if is_last:
+        return sum(1 for p in prices if b_lo <= p)
+    return sum(1 for p in prices if b_lo <= p < b_hi)
+
+
 def _build_auto_bins(prices: list, sorted_p: list, task_price_range: dict) -> list[dict[str, Any]]:
     """bins=20 的分桶：首尾桶吸收范围外的极端值，保证商品计数不丢失"""
     lo, hi = _compute_auto_bins_bounds(sorted_p, task_price_range)
     step = (hi - lo) / 20
     result = []
     for i in range(20):
+        is_last = i == 19
         b_lo = lo + i * step
-        b_hi = b_lo + step if i < 19 else hi + 1
-        # 首桶吸收所有低于 b_lo 的极端低价；尾桶吸收所有 >= b_lo 的极端高价
-        if i == 0:
-            cnt = sum(1 for p in prices if p < b_hi)
-        elif i == 19:
-            cnt = sum(1 for p in prices if b_lo <= p)
-        else:
-            cnt = sum(1 for p in prices if b_lo <= p < b_hi)
-        result.append({"min": round(b_lo, 2), "max": round(b_hi, 2) if i < 19 else round(hi, 2), "count": cnt})
+        b_hi = b_lo + step if not is_last else hi + 1
+        cnt = _count_in_bucket(prices, b_lo, b_hi, is_first=(i == 0), is_last=is_last)
+        result.append({
+            "min": round(b_lo, 2),
+            "max": round(b_hi, 2) if not is_last else round(hi, 2),
+            "count": cnt,
+        })
     return result
 
 
@@ -256,7 +267,7 @@ def prices_histogram(
                 "mode": "fixed",
             }
         scope, task_price_range = resolved
-        prices, all_with_ts = _load_histogram_samples(conn, scope, task_id)
+        prices, all_with_ts = _load_histogram_samples(conn, scope, task_id, task_price_range)
 
     if not prices:
         return {

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from xianyu_hunter.container import Container
-from xianyu_hunter.infra.db_models import ItemRow, _utcnow
+from xianyu_hunter.infra.db_models import ItemRow, TaskRow, _utcnow
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import to_datetime
 
@@ -35,6 +35,30 @@ def _safe_diff(current: float, baseline: float) -> float:
     return round((current - baseline) / baseline * 100, 1)
 
 
+def _load_task_price_range(conn, task_id: str | None) -> dict[str, float | None]:
+    """读取任务配置的价格区间（min_price/max_price）
+
+    用于过滤超出任务监控范围的异常价格（1 元引流/配件/超范围高价），
+    与 price_dashboard.py / price_histogram.py 保持口径一致。
+
+    task_id 为空、"all" 或任务不存在时返回 {min: None, max: None}，
+    调用方据此跳过过滤。
+    """
+    if not task_id or task_id == "all":
+        return {"min_price": None, "max_price": None}
+    row = conn.execute(
+        select(TaskRow.min_price, TaskRow.max_price)
+        .where(TaskRow.id == task_id)
+        .limit(1)
+    ).first()
+    if not row:
+        return {"min_price": None, "max_price": None}
+    return {
+        "min_price": float(row[0]) if row[0] is not None else None,
+        "max_price": float(row[1]) if row[1] is not None else None,
+    }
+
+
 @router.get("/stats/price-trend")
 def price_trend(
     task_id: str | None = None,
@@ -44,6 +68,10 @@ def price_trend(
 
     返回今日均价、7日均价、30日均价及相对涨跌幅。
     数据源：items 表 publish_time 字段（商品发布时间）。
+
+    应用任务价格区间过滤，剔除超出 min_price/max_price 的异常样本，
+    与 price_dashboard.py / price_histogram.py 保持口径一致，
+    避免异常价格污染今日/7日/30日均价基线。
     """
     now = _utcnow()
     yesterday_start = now - timedelta(days=1)
@@ -52,21 +80,34 @@ def price_trend(
 
     engine = container.repo.engine
     with engine.connect() as conn:
+        # 读取任务价格区间，task_id 为空或 "all" 时跳过过滤
+        task_price_range = _load_task_price_range(conn, task_id)
+        t_min = task_price_range["min_price"]
+        t_max = task_price_range["max_price"]
+
         # 拉取最近 2000 条带时间的价格，覆盖 30 天窗口足够
         # 与 price_histogram._build_compare_means 口径一致，确保数据可比
         if task_id and task_id != "all":
-            rows = conn.execute(
+            stmt = (
                 select(ItemRow.price, ItemRow.publish_time)
                 .where(ItemRow.task_id == task_id)
                 .order_by(ItemRow.publish_time.desc())
                 .limit(2000)
-            ).all()
+            )
         else:
-            rows = conn.execute(
+            stmt = (
                 select(ItemRow.price, ItemRow.publish_time)
                 .order_by(ItemRow.publish_time.desc())
                 .limit(2000)
-            ).all()
+            )
+
+        # 应用任务价格区间过滤，剔除超出范围的异常样本
+        if t_min is not None:
+            stmt = stmt.where(ItemRow.price >= t_min)
+        if t_max is not None:
+            stmt = stmt.where(ItemRow.price <= t_max)
+
+        rows = conn.execute(stmt).all()
 
     today_prices: list[float] = []
     week_prices: list[float] = []
@@ -105,4 +146,6 @@ def price_trend(
             "d7": len(week_prices),
             "d30": len(month_prices),
         },
+        # 任务价格区间（让前端能展示过滤范围说明）
+        "task_price_range": task_price_range,
     }

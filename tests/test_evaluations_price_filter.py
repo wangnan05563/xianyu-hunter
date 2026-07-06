@@ -272,6 +272,59 @@ def test_price_none_not_filtered(client: TestClient, tmp_repo: Repository) -> No
     assert "item_ok" in item_ids
 
 
+# ============== distribution 与评估列表过滤口径一致 ==============
+
+
+def test_distribution_filters_by_task_id_and_task_price_range(
+    client: TestClient, tmp_repo: Repository
+) -> None:
+    """distribution 统计应与当前任务评估列表一致，排除其他任务和任务价格范围外样本"""
+    _seed_task(tmp_repo, "t1", min_price=100, max_price=1000)
+    _seed_task(tmp_repo, "t2", min_price=100, max_price=10000)
+    _seed_eval_event(tmp_repo, "item_t1_low", 50.0, task_id="t1", score=70)
+    _seed_eval_event(tmp_repo, "item_t1_ok_200", 200.0, task_id="t1", score=75)
+    _seed_eval_event(tmp_repo, "item_t1_ok_800", 800.0, task_id="t1", score=85)
+    _seed_eval_event(tmp_repo, "item_t1_high", 5000.0, task_id="t1", score=90)
+    _seed_eval_event(tmp_repo, "item_t2_other", 3000.0, task_id="t2", score=95)
+
+    resp = client.get(
+        "/api/evaluations/distribution",
+        params={"task_id": "t1", "range_hours": 168},
+        headers=_auth_headers(),
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 2
+    assert data["price_range"] == [200.0, 800.0]
+    assert data["marginals"]["result"]["fail"] == 0
+    assert data["marginals"]["result"]["pass"] == 1
+    assert data["marginals"]["result"]["auto"] == 1
+
+
+def test_distribution_include_out_of_range_disables_task_price_filter(
+    client: TestClient, tmp_repo: Repository
+) -> None:
+    """include_out_of_range=True 时 distribution 仍限定任务，但保留任务价格范围外样本"""
+    _seed_task(tmp_repo, "t1", min_price=100, max_price=1000)
+    _seed_task(tmp_repo, "t2", min_price=100, max_price=10000)
+    _seed_eval_event(tmp_repo, "item_t1_low", 50.0, task_id="t1", score=70)
+    _seed_eval_event(tmp_repo, "item_t1_ok", 500.0, task_id="t1", score=75)
+    _seed_eval_event(tmp_repo, "item_t1_high", 5000.0, task_id="t1", score=90)
+    _seed_eval_event(tmp_repo, "item_t2_other", 3000.0, task_id="t2", score=95)
+
+    resp = client.get(
+        "/api/evaluations/distribution",
+        params={"task_id": "t1", "range_hours": 168, "include_out_of_range": True},
+        headers=_auth_headers(),
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 3
+    assert data["price_range"] == [50.0, 5000.0]
+
+
 # ============== build_task_price_strategy 公共方法 ==============
 
 

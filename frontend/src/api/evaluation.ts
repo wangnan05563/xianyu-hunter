@@ -70,7 +70,15 @@ export const evalApi = {
     include_out_of_range?: boolean
   }) => client.get<{ items: EvalItem[]; count: number; total: number }>('/api/evaluations', { params }).then((r) => r.data),
 
-  distribution: (params: { range_hours?: number; price_bin_count?: number; score_bin_count?: number }) =>
+  distribution: (params: {
+    range_hours?: number
+    price_bin_count?: number
+    score_bin_count?: number
+    task_id?: string
+    min_price?: number
+    max_price?: number
+    include_out_of_range?: boolean
+  }) =>
     client.get('/api/evaluations/distribution', { params }).then((r) => r.data),
 
   thresholdSuggestion: (targetPassRate: number) =>

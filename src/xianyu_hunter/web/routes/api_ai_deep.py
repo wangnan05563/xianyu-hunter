@@ -121,6 +121,67 @@ _DEEP_ANALYZE_PROMPT = """你是一个闲鱼二手商品深度鉴伪专家。
 
 
 # ============== LLM 调用 ==============
+def _build_deep_system_prompt(vision_capable: bool) -> str:
+    """构建深度分析 system prompt
+
+    纯文本模型时追加"无图评估"说明，避免 LLM 强行编造"我看了图片"
+    导致盗图/损坏/一致性维度失真。
+    """
+    system_prompt = _DEEP_ANALYZE_PROMPT
+    if not vision_capable:
+        system_prompt = (
+            system_prompt
+            + "\n\n【特别说明】当前模型不支持图片分析，请仅基于标题、描述、价格和"
+              "卖家其他商品描述样本进行评估。盗图/损坏/一致性维度因无图无法判断，"
+              "对应 score 取默认值 5、risk_level='medium'，signals 中加入'无图片参考'。"
+        )
+    return system_prompt
+
+
+def _build_deep_text_content(
+    title: str, description: str, price: float, seller_items: list[dict[str, Any]] | None
+) -> str:
+    """构建深度分析文本内容，注入卖家其他商品描述样本用于模板化检测对比"""
+    text_parts = [
+        f"商品标题：{title}",
+        f"商品描述：{description}",
+        f"商品价格：¥{price}",
+    ]
+    # 卖家其他商品文案样本（用于模板化检测）
+    if seller_items:
+        sample_descs = [s.get("description", "")[:100] for s in seller_items[:5] if s.get("description")]
+        if sample_descs:
+            text_parts.append("该卖家其他商品描述样本：")
+            for i, d in enumerate(sample_descs, 1):
+                text_parts.append(f"  样本{i}：{d}")
+    return "\n".join(text_parts)
+
+
+def _build_deep_user_content(
+    text_content: str, image_urls: list[str], vision_capable: bool
+) -> list[dict[str, Any]]:
+    """构建 user_content 列表：文本 + 最多 6 张图片
+
+    闲鱼图片 URL 常为协议相对路径（//img.alicdn.com/...），LLM 端无法解析，
+    需补全为 https://，否则会被 vision 服务报 400 失败并降级规则模拟。
+    纯文本模型直接跳过图片，避免 400 + 用量浪费。
+    """
+    user_content: list[dict[str, Any]] = [
+        {"type": "text", "text": text_content},
+    ]
+    for img_url in image_urls[:6]:
+        if not vision_capable:
+            break
+        normalized = img_url
+        if normalized.startswith("//"):
+            normalized = "https:" + normalized
+        user_content.append({
+            "type": "image_url",
+            "image_url": {"url": normalized},
+        })
+    return user_content
+
+
 async def _call_llm_deep_analyze(
     title: str,
     description: str,
@@ -145,52 +206,11 @@ async def _call_llm_deep_analyze(
 
     # 检测当前 vision_model 是否具备多模态能力（统一在 api_ai._is_vision_capable
     # 维护关键字白名单，避免模型升级时散落修改）。
-    # 纯文本模型服务端 schema 不支持 image_url content block，强行传图会被报 400
-    # （unknown variant `image_url`）导致降级。
     vision_capable = _is_vision_capable(settings.openai_vision_model)
 
-    # 纯文本模型时，移除 prompt 中"看图"相关要求，
-    # 避免 LLM 强行编造"我看了图片"导致盗图/损坏/一致性维度失真
-    system_prompt = _DEEP_ANALYZE_PROMPT
-    if not vision_capable:
-        system_prompt = (
-            system_prompt
-            + "\n\n【特别说明】当前模型不支持图片分析，请仅基于标题、描述、价格和"
-              "卖家其他商品描述样本进行评估。盗图/损坏/一致性维度因无图无法判断，"
-              "对应 score 取默认值 5、risk_level='medium'，signals 中加入'无图片参考'。"
-        )
-
-    # 构建 user message
-    text_parts = [
-        f"商品标题：{title}",
-        f"商品描述：{description}",
-        f"商品价格：¥{price}",
-    ]
-    # 卖家其他商品文案样本（用于模板化检测）
-    if seller_items:
-        sample_descs = [s.get("description", "")[:100] for s in seller_items[:5] if s.get("description")]
-        if sample_descs:
-            text_parts.append("该卖家其他商品描述样本：")
-            for i, d in enumerate(sample_descs, 1):
-                text_parts.append(f"  样本{i}：{d}")
-
-    user_content: list[dict[str, Any]] = [
-        {"type": "text", "text": "\n".join(text_parts)},
-    ]
-
-    # 最多 6 张图片用于深度分析；纯文本模型直接跳过，避免 400 + 用量浪费
-    # 闲鱼图片 URL 常为协议相对路径（//img.alicdn.com/...），LLM 端无法解析，
-    # 需补全为 https://，否则会被 vision 服务报 400 失败并降级规则模拟
-    for img_url in image_urls[:6]:
-        if not vision_capable:
-            break
-        normalized = img_url
-        if normalized.startswith("//"):
-            normalized = "https:" + normalized
-        user_content.append({
-            "type": "image_url",
-            "image_url": {"url": normalized},
-        })
+    system_prompt = _build_deep_system_prompt(vision_capable)
+    text_content = _build_deep_text_content(title, description, price, seller_items)
+    user_content = _build_deep_user_content(text_content, image_urls, vision_capable)
 
     payload = {
         "model": settings.openai_vision_model,  # 可配置：Vision 模型
@@ -318,6 +338,43 @@ def _rule_check_consistency(
     return consistency_score, consistency_signals
 
 
+def _eval_template_keyword_hits(
+    desc_combined: str, template_keywords: list[str]
+) -> tuple[int, list[str]]:
+    """评估模板词命中：>=3个堆砌减4分(最低2)，1-2个减1分(最低4)，0个不减分
+
+    贩子常堆砌"99新/仅拆封/正品"等套话，命中数量越多越可疑。
+    """
+    template_hits = [kw for kw in template_keywords if kw in desc_combined]
+    if len(template_hits) >= 3:
+        return max(2, 7 - 4), [f"堆砌模板词({len(template_hits)}个): {'/'.join(template_hits[:3])}"]
+    if len(template_hits) >= 1:
+        return max(4, 7 - 1), [f"含模板词: {'/'.join(template_hits)}"]
+    return 7, []
+
+
+def _eval_seller_template_similarity(
+    seller_items: list[dict[str, Any]] | None,
+    template_keywords: list[str],
+    current_score: int,
+) -> tuple[int, list[str]]:
+    """评估卖家多商品相似度：>=3商品且共用>=2模板词时减3分(最低1)
+
+    多商品共用模板词是贩子批量发帖的典型特征，在单商品模板词扣分基础上再叠加。
+    """
+    if seller_items and len(seller_items) >= 3:
+        descs = [s.get("description", "") for s in seller_items if s.get("description")]
+        if len(descs) >= 3:
+            # 简化相似度：统计在半数以上商品中出现的模板词数量
+            common_template_count = sum(
+                1 for kw in template_keywords
+                if sum(1 for d in descs if kw in d) >= len(descs) * 0.5
+            )
+            if common_template_count >= 2:
+                return max(1, current_score - 3), [f"卖家多商品共用模板词({common_template_count}个)，疑似贩子"]
+    return current_score, []
+
+
 def _rule_check_template(
     title: str, description: str, seller_items: list[dict[str, Any]] | None
 ) -> tuple[int, list[str]]:
@@ -325,31 +382,15 @@ def _rule_check_template(
 
     模板词命中阈值减分；卖家多商品共用模板词时疑似贩子再叠加扣分。
     """
-    template_signals: list[str] = []
-    template_score = 7
     template_keywords = ["99新", "98新", "仅拆封", "未使用", "自用", "国行", "全新", "正品", "专柜", "代购"]
     desc_combined = f"{title} {description}"
-    template_hits = [kw for kw in template_keywords if kw in desc_combined]
-    if len(template_hits) >= 3:
-        template_signals.append(f"堆砌模板词({len(template_hits)}个): {'/'.join(template_hits[:3])}")
-        template_score = max(2, template_score - 4)
-    elif len(template_hits) >= 1:
-        template_signals.append(f"含模板词: {'/'.join(template_hits)}")
-        template_score = max(4, template_score - 1)
 
-    # 卖家多商品描述相似度检测（贩子识别）
-    if seller_items and len(seller_items) >= 3:
-        descs = [s.get("description", "") for s in seller_items if s.get("description")]
-        if len(descs) >= 3:
-            # 简化相似度：统计共同出现的模板词数量
-            common_template_count = sum(
-                1 for kw in template_keywords
-                if sum(1 for d in descs if kw in d) >= len(descs) * 0.5
-            )
-            if common_template_count >= 2:
-                template_signals.append(f"卖家多商品共用模板词({common_template_count}个)，疑似贩子")
-                template_score = max(1, template_score - 3)
-    return template_score, template_signals
+    template_score, signals = _eval_template_keyword_hits(desc_combined, template_keywords)
+    template_score, seller_signals = _eval_seller_template_similarity(
+        seller_items, template_keywords, template_score
+    )
+    signals.extend(seller_signals)
+    return template_score, signals
 
 
 def _compute_overall_verdict(
@@ -437,13 +478,9 @@ def _norm_dimension(d: Any) -> dict[str, Any]:
         score = 5
     risk = str(d.get("risk_level") or "").strip().lower()
     if risk not in ("low", "medium", "high"):
-        # 根据 score 兜底推断风险等级
-        if score <= 3:
-            risk = "high"
-        elif score < 7:
-            risk = "medium"
-        else:
-            risk = "low"
+        # 非标准 risk_level 时按 score 兜底推断（阈值与 _rule_risk_level 一致，
+        # 复用避免阈值漂移：规则模拟与 LLM 归一化必须用同一套阈值）
+        risk = _rule_risk_level(score)
     # 统一 signals/damages/inconsistencies 字段为 signals
     signals = d.get("signals") or d.get("damages") or d.get("inconsistencies") or []
     return {

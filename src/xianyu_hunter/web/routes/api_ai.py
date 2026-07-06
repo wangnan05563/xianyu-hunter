@@ -370,6 +370,30 @@ def _rule_parse(text: str) -> dict[str, Any]:
 
 
 # ============== 端点 ==============
+def _normalize_parse_result(
+    parsed: dict[str, Any], text: str, used_source: str
+) -> dict[str, Any]:
+    """强制字段归一化：保证前端拿到的字段都在白名单内
+
+    LLM 返回的字段可能缺失/类型错误，统一兜底处理；
+    keyword 为空时抛 422 让用户补充描述（兜底用原文也救不回来说明描述太模糊）。
+    """
+    norm: dict[str, Any] = {
+        "keyword": str(parsed.get("keyword") or "").strip() or text,
+        "name": str(parsed.get("name") or parsed.get("keyword") or text).strip(),
+        "min_price": _coerce_int(parsed.get("min_price")),
+        "max_price": _coerce_int(parsed.get("max_price")),
+        "mode": parsed.get("mode") if parsed.get("mode") in ("notify", "confirm", "auto") else "notify",
+        "exclude_words": [str(x).strip() for x in (parsed.get("exclude_words") or []) if str(x).strip()],
+        "notes": str(parsed.get("notes") or "").strip(),
+        "reason": str(parsed.get("reason") or "").strip(),
+        "source": used_source,
+    }
+    if not norm["keyword"]:
+        raise HTTPException(status_code=422, detail="无法从描述中提取关键词，请说得更具体一些（例如'iPhone 13 128G 银色'）")
+    return norm
+
+
 @router.post("/parse-task")
 def parse_task(body: ParseTaskBody) -> dict[str, Any]:
     """自然语言 → 结构化任务字段
@@ -403,21 +427,8 @@ def parse_task(body: ParseTaskBody) -> dict[str, Any]:
         parsed = _rule_parse(text)
         used_source = "rule"
 
-    # 3. 强制字段归一化：保证前端拿到的字段都在白名单内
-    norm: dict[str, Any] = {
-        "keyword": str(parsed.get("keyword") or "").strip() or text,
-        "name": str(parsed.get("name") or parsed.get("keyword") or text).strip(),
-        "min_price": _coerce_int(parsed.get("min_price")),
-        "max_price": _coerce_int(parsed.get("max_price")),
-        "mode": parsed.get("mode") if parsed.get("mode") in ("notify", "confirm", "auto") else "notify",
-        "exclude_words": [str(x).strip() for x in (parsed.get("exclude_words") or []) if str(x).strip()],
-        "notes": str(parsed.get("notes") or "").strip(),
-        "reason": str(parsed.get("reason") or "").strip(),
-        "source": used_source,
-    }
-    if not norm["keyword"]:
-        raise HTTPException(status_code=422, detail="无法从描述中提取关键词，请说得更具体一些（例如'iPhone 13 128G 银色'）")
-    return norm
+    # 3. 字段归一化 + keyword 校验
+    return _normalize_parse_result(parsed, text, used_source)
 
 
 def _coerce_int(v: Any) -> int | None:
@@ -760,15 +771,24 @@ def _rule_eval_condition(
     }
 
 
+def _normalize_condition_verdict(raw: dict[str, Any]) -> str:
+    """归一化 verdict：非标准值时根据 condition_score 兜底推断
+
+    成色评估仅有 recommend/caution 两档（无 reject），LLM 返回空或非标准值时
+    按 condition_score>=7 推荐否则谨慎；score 为 None 时保底 5 分避免 int(None) 报错。
+    """
+    verdict = str(raw.get("verdict") or "").strip().lower()
+    if verdict in ("recommend", "caution"):
+        return verdict
+    score = raw.get("condition_score")
+    if score is None:
+        score = 5
+    return "recommend" if int(score) >= 7 else "caution"
+
+
 def _normalize_condition_result(raw: dict[str, Any], source: str) -> dict[str, Any]:
     """归一化成色评估结果，保证前端拿到的字段稳定"""
-    verdict = str(raw.get("verdict") or "").strip().lower()
-    if verdict not in ("recommend", "caution"):
-        # 尝试从 condition_score 推断（处理 None 情况，避免 int(None) 报错）
-        score = raw.get("condition_score")
-        if score is None:
-            score = 5
-        verdict = "recommend" if int(score) >= 7 else "caution"
+    verdict = _normalize_condition_verdict(raw)
 
     condition_score = raw.get("condition_score")
     try:

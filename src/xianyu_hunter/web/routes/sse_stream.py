@@ -50,6 +50,66 @@ def _load_new_events(container, cursor: int) -> list[dict]:
     return [ev for ev in raw_rows if int(ev.get("id") or 0) > cursor]
 
 
+async def _acquire_sse_slot() -> bool:
+    """尝试获取 SSE 连接槽位，成功返回 True，超限返回 False"""
+    global _sse_connection_count
+    async with _sse_gate:
+        if _sse_connection_count >= _MAX_SSE_CONNECTIONS:
+            return False
+        _sse_connection_count += 1
+        return True
+
+
+async def _release_sse_slot() -> None:
+    """释放 SSE 连接槽位"""
+    global _sse_connection_count
+    async with _sse_gate:
+        _sse_connection_count = max(0, _sse_connection_count - 1)
+
+
+def _build_replay_frames(
+    container, should_replay: bool, effective_last_id: int
+) -> tuple[list[str], int, int, str | None]:
+    """构建回放帧序列
+
+    Returns:
+        (frames, cursor, replayed, error_msg)
+        - 正常: (frames, cursor, replayed, None)
+        - 异常: (partial_frames, cursor, partial_replayed, error_str)
+    """
+    frames: list[str] = []
+    cursor = 0
+    replayed = 0
+    try:
+        for ev in _load_replay_events(container, should_replay, effective_last_id):
+            ev_id = int(ev.get("id") or 0)
+            frames.append(_format_sse_event(ev, ev_id))
+            cursor = ev_id
+            replayed += 1
+        return frames, cursor, replayed, None
+    except Exception as e:
+        return frames, cursor, replayed, str(e)
+
+
+def _build_polling_frames(container, cursor: int) -> tuple[list[str], int, str | None]:
+    """构建一轮轮询的帧序列
+
+    正常时 frames 含增量事件帧 + ping 帧；异常时 frames 为空，error_msg 非空。
+    """
+    try:
+        frames: list[str] = []
+        cur = container.repo.max_event_id()
+        if cur > cursor:
+            for ev in _load_new_events(container, cursor):
+                ev_id = int(ev.get("id") or 0)
+                frames.append(_format_sse_event(ev, ev_id))
+                cursor = ev_id
+        frames.append(f"event: ping\ndata: {json.dumps({'ts': _utcnow().isoformat(timespec='seconds')})}\n\n")
+        return frames, cursor, None
+    except Exception as e:
+        return [], cursor, str(e)
+
+
 @router.get("/events/stream")
 async def events_stream(
     container: Container = Depends(get_container),
@@ -70,49 +130,33 @@ async def events_stream(
     )
 
     async def gen():
-        global _sse_connection_count
-        # 连接数限制：超限则直接拒绝
-        async with _sse_gate:
-            if _sse_connection_count >= _MAX_SSE_CONNECTIONS:
-                yield f"event: error\ndata: {json.dumps({'error': f'SSE connections limit ({_MAX_SSE_CONNECTIONS}) reached'})}\n\n"
-                return
-            _sse_connection_count += 1
-        connected = True
+        if not await _acquire_sse_slot():
+            yield f"event: error\ndata: {json.dumps({'error': f'SSE connections limit ({_MAX_SSE_CONNECTIONS}) reached'})}\n\n"
+            return
         try:
-            replayed = 0
-            cursor = 0
-            try:
-                replay_rows = _load_replay_events(container, should_replay, effective_last_id)
-                for ev in replay_rows:
-                    ev_id = int(ev.get("id") or 0)
-                    yield _format_sse_event(ev, ev_id)
-                    cursor = ev_id
-                    replayed += 1
-            except Exception as e:
-                yield f"event: warn\ndata: {json.dumps({'msg': 'replay_failed', 'error': str(e)})}\n\n"
+            # 回放阶段：构建帧列表后逐条 yield，避免 try/for 嵌套拉高复杂度
+            frames, cursor, replayed, replay_err = _build_replay_frames(
+                container, should_replay, effective_last_id
+            )
+            for frame in frames:
+                yield frame
+            if replay_err:
+                yield f"event: warn\ndata: {json.dumps({'msg': 'replay_failed', 'error': replay_err})}\n\n"
 
             latest = container.repo.max_event_id()
             yield f"event: hello\ndata: {json.dumps({'ts': _utcnow().isoformat(timespec='seconds'), 'latest_id': latest, 'replayed': replayed, 'replay_requested': should_replay})}\n\n"
 
+            # 轮询阶段：CancelledError 只会从 await asyncio.sleep 抛出，
+            # 因 _build_polling_frames 的 except Exception 不捕获 BaseException 子类，
+            # 故 CancelledError 会自然传播到 finally 触发槽位释放（符合 S7497）
             while True:
                 await asyncio.sleep(3)
-                try:
-                    cur = container.repo.max_event_id()
-                    if cur > cursor:
-                        new_rows = _load_new_events(container, cursor)
-                        for ev in new_rows:
-                            ev_id = int(ev.get("id") or 0)
-                            yield _format_sse_event(ev, ev_id)
-                            cursor = ev_id
-                    yield f"event: ping\ndata: {json.dumps({'ts': _utcnow().isoformat(timespec='seconds')})}\n\n"
-                except asyncio.CancelledError:
-                    # SSE 客户端断开连接时生成器被取消，重新抛出符合 asyncio 取消标准模式（S7497）
-                    raise
-                except Exception as e:
-                    yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+                frames, cursor, err = _build_polling_frames(container, cursor)
+                for frame in frames:
+                    yield frame
+                if err:
+                    yield f"event: error\ndata: {json.dumps({'error': err})}\n\n"
         finally:
-            if connected:
-                async with _sse_gate:
-                    _sse_connection_count = max(0, _sse_connection_count - 1)
+            await _release_sse_slot()
 
     return StreamingResponse(gen(), media_type="text/event-stream")
