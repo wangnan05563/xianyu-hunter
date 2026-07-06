@@ -8,7 +8,7 @@ import {
   ArrowLeftOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined,
   SearchOutlined, SyncOutlined, DeleteOutlined, PlusOutlined, EyeOutlined,
 } from '@ant-design/icons'
-import ReactECharts from '../../components/charts/EChart'
+import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
 import { STATUS_COLOR } from '../../constants/statusColors'
 
@@ -75,6 +75,76 @@ function applyDepsResult(
   const [d, dep] = data
   setters.setDeps((d as TaskDep[]) || [])
   setters.setDependents((dep as TaskDep[]) || [])
+}
+
+// S3776 修复：运行历史 ECharts option 构造提取为模块级函数
+// 原主函数内 `runs.length > 0 ? {...} : null` 三元 + 多个 .map 让认知复杂度累加
+function buildRunsOption(runs: TaskRun[]): EChartOption | null {
+  if (runs.length === 0) return null
+  return {
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['事件数', '命中数', '错误数'] },
+    xAxis: { type: 'category', data: runs.map((r) => new Date(r.start).toLocaleString('zh-CN').slice(5, 16)) },
+    yAxis: { type: 'value' },
+    series: [
+      { name: '事件数', type: 'bar', data: runs.map((r) => r.event_count), itemStyle: { color: '#1890ff' } },
+      { name: '命中数', type: 'bar', data: runs.map((r) => r.hit_count), itemStyle: { color: '#52c41a' } },
+      { name: '错误数', type: 'line', data: runs.map((r) => r.err_count), itemStyle: { color: '#ff4d4f' } },
+    ],
+    grid: { left: 50, right: 20, bottom: 60, top: 40 },
+  }
+}
+
+// S3776 修复：运行历史列内的三元渲染提取为模块级辅助函数
+// 原 runColumns 内 3 个三元（结束时间/错误数/警告数）让主函数复杂度累加
+const formatRunEnd = (t: string | null): string => (t ? new Date(t).toLocaleString('zh-CN') : '运行中')
+const formatErrCount = (v: number) => (v > 0 ? <Tag color="red">{v}</Tag> : v)
+const formatWarnCount = (v: number) => (v > 0 ? <Tag color="orange">{v}</Tag> : v)
+
+// S3776 修复：趋势 sparkline 提取为独立组件
+// 原 JSX 内两段 `trend && trend.series.length > 0 ? <ReactECharts/> : <Empty/>` 各贡献
+// && + 三元 + 嵌套 +2 复杂度，提取后主函数仅剩单行 <TrendSparkline/>
+function TrendSparkline({
+  trend,
+  dataKey,
+  lineColor,
+  areaColor,
+  yAxisMin,
+}: {
+  trend: TrendSeries | null
+  dataKey: 'value' | 'count'
+  lineColor: string
+  areaColor: string
+  yAxisMin?: (value: { min: number }) => number
+}) {
+  if (!trend || trend.series.length === 0) {
+    return <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+  }
+  const data = trend.series.map((p) => (dataKey === 'value' ? p.value : p.count))
+  return (
+    <ReactECharts
+      option={{
+        tooltip: { trigger: 'axis' },
+        grid: { left: 40, right: 10, top: 10, bottom: 24 },
+        xAxis: {
+          type: 'category',
+          data: trend.series.map((p) => new Date(p.ts).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })),
+          show: true,
+          axisLabel: { fontSize: 10 },
+        },
+        yAxis: { type: 'value', min: yAxisMin, axisLabel: { fontSize: 10 } },
+        series: [{
+          type: 'line',
+          data,
+          smooth: true,
+          symbol: 'none',
+          lineStyle: { width: 2, color: lineColor },
+          areaStyle: { color: areaColor },
+        }],
+      }}
+      style={{ height: 120 }}
+    />
+  )
 }
 
 export default function TaskDetail() {
@@ -241,19 +311,8 @@ export default function TaskDetail() {
     }).catch(() => message.error('操作失败')).finally(() => setActionLoading(false))
   }
 
-  // 运行历史趋势图
-  const runsOption = runs.length > 0 ? {
-    tooltip: { trigger: 'axis' },
-    legend: { data: ['事件数', '命中数', '错误数'] },
-    xAxis: { type: 'category', data: runs.map((r) => new Date(r.start).toLocaleString('zh-CN').slice(5, 16)) },
-    yAxis: { type: 'value' },
-    series: [
-      { name: '事件数', type: 'bar', data: runs.map((r) => r.event_count), itemStyle: { color: '#1890ff' } },
-      { name: '命中数', type: 'bar', data: runs.map((r) => r.hit_count), itemStyle: { color: '#52c41a' } },
-      { name: '错误数', type: 'line', data: runs.map((r) => r.err_count), itemStyle: { color: '#ff4d4f' } },
-    ],
-    grid: { left: 50, right: 20, bottom: 60, top: 40 },
-  } : null
+  // 运行历史趋势图：构造逻辑提取为模块级 buildRunsOption（避免主函数复杂度累加）
+  const runsOption = buildRunsOption(runs)
 
   const evalColumns = [
     { title: '商品ID', dataIndex: 'item_id', key: 'item_id', width: 150, ellipsis: true },
@@ -284,12 +343,13 @@ export default function TaskDetail() {
 
   const runColumns = [
     { title: '开始', dataIndex: 'start', key: 'start', render: (t: string) => new Date(t).toLocaleString('zh-CN') },
-    { title: '结束', dataIndex: 'end', key: 'end', render: (t: string | null) => t ? new Date(t).toLocaleString('zh-CN') : '运行中' },
+    // 三元渲染提取为模块级 formatRunEnd/formatErrCount/formatWarnCount（避免主函数复杂度累加）
+    { title: '结束', dataIndex: 'end', key: 'end', render: formatRunEnd },
     { title: '时长(秒)', dataIndex: 'duration_s', key: 'duration_s', width: 100 },
     { title: '事件', dataIndex: 'event_count', key: 'event_count', width: 80 },
     { title: '命中', dataIndex: 'hit_count', key: 'hit_count', width: 80, render: (v: number) => <Tag color="green">{v}</Tag> },
-    { title: '错误', dataIndex: 'err_count', key: 'err_count', width: 80, render: (v: number) => v > 0 ? <Tag color="red">{v}</Tag> : v },
-    { title: '警告', dataIndex: 'warn_count', key: 'warn_count', width: 80, render: (v: number) => v > 0 ? <Tag color="orange">{v}</Tag> : v },
+    { title: '错误', dataIndex: 'err_count', key: 'err_count', width: 80, render: formatErrCount },
+    { title: '警告', dataIndex: 'warn_count', key: 'warn_count', width: 80, render: formatWarnCount },
   ]
 
   // 闲鱼内容关联表格列
@@ -405,37 +465,23 @@ export default function TaskDetail() {
                 <Row gutter={16}>
                   <Col span={12}>
                     <div style={{ textAlign: 'center', marginBottom: 4, color: 'var(--xh-text-secondary)', fontSize: 13 }}>评估分趋势</div>
-                    {evalTrend && evalTrend.series.length > 0 ? (
-                      <ReactECharts
-                        option={{
-                          tooltip: { trigger: 'axis' },
-                          grid: { left: 40, right: 10, top: 10, bottom: 24 },
-                          xAxis: { type: 'category', data: evalTrend.series.map((p) => new Date(p.ts).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })), show: true, axisLabel: { fontSize: 10 } },
-                          yAxis: { type: 'value', min: (value: { min: number }) => Math.floor(value.min * 0.9), axisLabel: { fontSize: 10 } },
-                          series: [{ type: 'line', data: evalTrend.series.map((p) => p.value), smooth: true, symbol: 'none', lineStyle: { width: 2, color: '#1890ff' }, areaStyle: { color: 'rgba(24,144,255,0.1)' } }],
-                        }}
-                        style={{ height: 120 }}
-                      />
-                    ) : (
-                      <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                    )}
+                    {/* 趋势图渲染提取为模块级 TrendSparkline 组件（含空数据兜底） */}
+                    <TrendSparkline
+                      trend={evalTrend}
+                      dataKey="value"
+                      lineColor="#1890ff"
+                      areaColor="rgba(24,144,255,0.1)"
+                      yAxisMin={(value) => Math.floor(value.min * 0.9)}
+                    />
                   </Col>
                   <Col span={12}>
                     <div style={{ textAlign: 'center', marginBottom: 4, color: 'var(--xh-text-secondary)', fontSize: 13 }}>事件密度趋势</div>
-                    {eventsTrend && eventsTrend.series.length > 0 ? (
-                      <ReactECharts
-                        option={{
-                          tooltip: { trigger: 'axis' },
-                          grid: { left: 40, right: 10, top: 10, bottom: 24 },
-                          xAxis: { type: 'category', data: eventsTrend.series.map((p) => new Date(p.ts).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })), show: true, axisLabel: { fontSize: 10 } },
-                          yAxis: { type: 'value', axisLabel: { fontSize: 10 } },
-                          series: [{ type: 'line', data: eventsTrend.series.map((p) => p.count), smooth: true, symbol: 'none', lineStyle: { width: 2, color: '#52c41a' }, areaStyle: { color: 'rgba(82,196,26,0.1)' } }],
-                        }}
-                        style={{ height: 120 }}
-                      />
-                    ) : (
-                      <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                    )}
+                    <TrendSparkline
+                      trend={eventsTrend}
+                      dataKey="count"
+                      lineColor="#52c41a"
+                      areaColor="rgba(82,196,26,0.1)"
+                    />
                   </Col>
                 </Row>
               </Spin>

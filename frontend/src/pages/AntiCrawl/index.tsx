@@ -114,6 +114,30 @@ const ensureHealthCheckerReady = async (
   return anticrawlApi.checkHealth()
 }
 
+// S3776 修复：通用异步操作结果处理，提取 if(result.ok)/else 模式
+// 为什么提取：handleInitialize/handleStopSession/handleInvalidateLayer 都有相同的
+// if(result.ok){success+reload} else {error} 模式，每处贡献 +2 复杂度点
+const handleAsyncResult = (
+  result: { ok: boolean; message?: string; error?: string },
+  successMsg: string,
+  errorMsg: string,
+  onSuccess?: () => void,
+) => {
+  if (result.ok) {
+    message.success(result.message || successMsg)
+    onSuccess?.()
+  } else {
+    message.error(result.error || errorMsg)
+  }
+}
+
+// S3776 修复：Cookie 预填提示文本生成
+// 为什么提取：openCookieModal 内 if/else 贡献 +2 复杂度点
+const prefillHintForCookies = (count: number): string =>
+  count > 0
+    ? `已自动读取 ${count} 个 Cookie，可直接点「更新」或编辑后再提交`
+    : '当前没有 Cookie 数据，可点击下方「从浏览器导入」按钮'
+
 // S3776 修复：将 startSession 结果消息处理提取为独立函数
 // 原嵌套 if (result.ok) → if (result.already_active) → else，复杂度 +4
 const showStartSessionResult = (result: {
@@ -141,6 +165,281 @@ const validateCookieInput = (input: string): { cookies: Record<string, string>; 
   const cookies = parseCookieInput(input)
   if (Object.keys(cookies).length === 0) return { cookies: {}, error: '未能解析出有效的 Cookie' }
   return { cookies }
+}
+
+// S3776 修复：健康检查结果消息显示提取为模块级函数
+// 原 handleHealthCheck 内 if (result.ok) → if (result.is_healthy) → else 嵌套 2 层，复杂度 +5
+// 提取后用早返回拉平嵌套，主函数仅剩单行调用
+const showHealthCheckResult = (result: HealthReport) => {
+  if (!result.ok) {
+    message.warning(result.error || '未配置健康检查器')
+    return
+  }
+  if (result.is_healthy) {
+    message.success(`健康检查通过（score=${result.score}）`)
+    return
+  }
+  message.warning(
+    `健康检查发现问题（score=${result.score}，建议：${ACTION_LABELS[result.action] || result.action}）`,
+  )
+}
+
+// S3776 修复：健康分→进度条状态映射提取为模块级函数
+// 原 JSX 内 IIFE 含 if/else if/else，IIFE 让嵌套层级 +1，复杂度 +3
+const healthScoreToProgressStatus = (score: number): 'success' | 'normal' | 'exception' => {
+  if (score >= 80) return 'success'
+  if (score >= 60) return 'normal'
+  return 'exception'
+}
+
+// S3776 修复：Cookie 层状态文本计算提取为模块级函数
+// 原 JSX 内 IIFE 在 .map 回调内嵌套，认知复杂度因嵌套层级翻倍
+const cookieLayerStateText = (state: { valid: boolean; cookie_count: number }): string => {
+  if (state.valid === false) return '未初始化'
+  if (state.cookie_count > 0) return `${state.cookie_count} 个 Cookie`
+  return '已恢复（无 Cookie）'
+}
+
+// S3776 修复：「从浏览器导入」失败分支处理提取为模块级函数
+// 原 handleImportFromBrowser 内 else 分支嵌套 if (result.error_detail)，复杂度 +2
+const logImportPreviewFailure = (result: { error?: string; hint?: string; error_detail?: string }) => {
+  message.error(formatImportPreviewError(result))
+  if (result.error_detail) {
+    console.error('import error detail:', result.error_detail)
+  }
+}
+
+// S3776 修复：把所有数据加载函数体提取到模块级工厂函数
+// 为什么提取：原主组件内 5 个 load* 函数各含 try/catch/finally，每个贡献 +3 复杂度，累计 +15
+// 工厂模式让主组件只保留 useCallback 包装的薄壳，认知复杂度归零
+type AntiCrawlSetters = {
+  setStrategy: (s: StrategyEvaluation | null) => void
+  setSession: (s: SessionStatus | null) => void
+  setFingerprint: (s: FingerprintInfo | null) => void
+  setFreqStats: (s: FreqStats | null) => void
+  setCookieLayers: (s: CookieLayersResult | null) => void
+  setHealth: (s: HealthReport | null) => void
+  setLoadingStrategy: (b: boolean) => void
+  setLoadingLayers: (b: boolean) => void
+}
+
+// S3776 修复：5 个数据加载函数全部移出主组件，主组件仅保留 useCallback 薄壳
+const fetchStrategy = async (setters: AntiCrawlSetters) => {
+  try {
+    setters.setLoadingStrategy(true)
+    const data = await anticrawlApi.getStrategy()
+    setters.setStrategy(data)
+  } catch (error) {
+    console.error('加载策略失败', error)
+  } finally {
+    setters.setLoadingStrategy(false)
+  }
+}
+
+const fetchSession = async (setters: AntiCrawlSetters) => {
+  try {
+    const data = await anticrawlApi.getSessionStatus()
+    setters.setSession(data)
+  } catch (error) {
+    console.error('加载会话状态失败', error)
+  }
+}
+
+const fetchFingerprint = async (setters: AntiCrawlSetters) => {
+  try {
+    const data = await anticrawlApi.getFingerprint()
+    setters.setFingerprint(data)
+  } catch (error) {
+    console.error('加载指纹信息失败', error)
+  }
+}
+
+const fetchFreqStats = async (setters: AntiCrawlSetters) => {
+  try {
+    const data = await anticrawlApi.getFreqStats()
+    setters.setFreqStats(data)
+  } catch (error) {
+    console.error('加载频率统计失败', error)
+  }
+}
+
+const fetchCookieLayers = async (setters: AntiCrawlSetters) => {
+  try {
+    setters.setLoadingLayers(true)
+    const data = await anticrawlApi.getCookieLayers()
+    setters.setCookieLayers(data)
+  } catch (error) {
+    console.error('加载 Cookie 层状态失败', error)
+  } finally {
+    setters.setLoadingLayers(false)
+  }
+}
+
+// S3776 修复：批量加载所有数据，主组件 loadAll 仅一行调用
+const fetchAll = async (setters: AntiCrawlSetters) => {
+  await Promise.all([
+    fetchStrategy(setters),
+    fetchSession(setters),
+    fetchFingerprint(setters),
+    fetchFreqStats(setters),
+    fetchCookieLayers(setters),
+  ])
+}
+
+// S3776 修复：操作处理函数体提取到模块级，主组件仅保留 useCallback 薄壳
+// 8 个 handle* 函数各含 try/catch/finally + 条件分支，每函数 +3~5 复杂度
+type AntiCrawlActionsParams = {
+  setters: AntiCrawlSetters
+  useCdp: boolean
+  importBrowser: string
+  cookieInput: string
+  setCookieModalOpen: (b: boolean) => void
+  setCookieInput: (s: string) => void
+  setPrefillHint: (s: string) => void
+  setLoadingInit: (b: boolean) => void
+  setLoadingSession: (b: boolean) => void
+  setLoadingHealth: (b: boolean) => void
+  setLoadingUpdate: (b: boolean) => void
+  setLoadingPrefill: (b: boolean) => void
+  setLoadingImport: (b: boolean) => void
+  setHealth: (s: HealthReport | null) => void
+}
+
+const runInitialize = async (params: AntiCrawlActionsParams) => {
+  try {
+    params.setLoadingInit(true)
+    const result = await anticrawlApi.initialize(params.useCdp)
+    handleAsyncResult(result, `协调器已初始化（${result.mode} 模式）`, '初始化失败', () => fetchAll(params.setters))
+  } catch (error) {
+    message.error('初始化失败')
+    console.error(error)
+  } finally {
+    params.setLoadingInit(false)
+  }
+}
+
+const runStartSession = async (params: AntiCrawlActionsParams) => {
+  try {
+    params.setLoadingSession(true)
+    const result = await anticrawlApi.startSession()
+    showStartSessionResult(result)
+    await fetchSession(params.setters)
+  } catch (error) {
+    message.error('启动会话失败')
+    console.error(error)
+    await fetchSession(params.setters)
+  } finally {
+    params.setLoadingSession(false)
+  }
+}
+
+const runStopSession = async (params: AntiCrawlActionsParams) => {
+  try {
+    params.setLoadingSession(true)
+    const result = await anticrawlApi.stopSession()
+    handleAsyncResult(result, '会话管理已停止', '停止会话失败', () => fetchSession(params.setters))
+  } catch (error) {
+    message.error('停止会话失败')
+    console.error(error)
+  } finally {
+    params.setLoadingSession(false)
+  }
+}
+
+const runHealthCheck = async (params: AntiCrawlActionsParams) => {
+  try {
+    params.setLoadingHealth(true)
+    const initial = await anticrawlApi.checkHealth()
+    const result = await ensureHealthCheckerReady(initial, params.useCdp, () => fetchAll(params.setters))
+    params.setHealth(result)
+    showHealthCheckResult(result)
+  } catch (error) {
+    message.error('健康检查失败')
+    console.error(error)
+  } finally {
+    params.setLoadingHealth(false)
+  }
+}
+
+const runInvalidateLayer = (layer: string, params: AntiCrawlActionsParams) => {
+  Modal.confirm({
+    title: `确认失效 ${layer} 层？`,
+    icon: <ExclamationCircleOutlined />,
+    content: layer === 'identity' ? 'identity 层失效会级联导致 session 层失效' : undefined,
+    onOk: async () => {
+      try {
+        const result = await anticrawlApi.invalidateLayer(layer)
+        handleAsyncResult(result, `层 ${layer} 已失效`, '操作失败', () => fetchCookieLayers(params.setters))
+      } catch (error) {
+        message.error('操作失败')
+        console.error(error)
+      }
+    },
+  })
+}
+
+const runOpenCookieModal = async (params: AntiCrawlActionsParams) => {
+  params.setCookieModalOpen(true)
+  params.setCookieInput('')
+  params.setPrefillHint('')
+  params.setLoadingPrefill(true)
+  try {
+    const result = await anticrawlApi.getCurrentCookies()
+    const cookies = result.cookies || {}
+    params.setCookieInput(cookiesToString(cookies))
+    params.setPrefillHint(prefillHintForCookies(result.count))
+  } catch (error) {
+    params.setPrefillHint('读取当前 Cookie 失败，可手动粘贴或从浏览器导入')
+    console.error(error)
+  } finally {
+    params.setLoadingPrefill(false)
+  }
+}
+
+const runImportFromBrowser = async (params: AntiCrawlActionsParams) => {
+  try {
+    params.setLoadingImport(true)
+    const result = await anticrawlApi.importFromBrowserPreview(params.importBrowser, false)
+    if (!result.ok || !result.cookies) {
+      logImportPreviewFailure(result)
+      return
+    }
+    params.setCookieInput(cookiesToString(result.cookies))
+    params.setPrefillHint(
+      `从 ${params.importBrowser === 'edge' ? 'Edge' : 'Chrome'} 导入 ${result.imported_count ?? 0} 个 Cookie，可直接点「更新」`,
+    )
+    message.success(result.message || '已导入到文本框')
+  } catch (error) {
+    message.error('从浏览器导入失败')
+    console.error(error)
+  } finally {
+    params.setLoadingImport(false)
+  }
+}
+
+const runUpdateCookies = async (params: AntiCrawlActionsParams) => {
+  const { cookies, error } = validateCookieInput(params.cookieInput)
+  if (error) {
+    message.warning(error)
+    return
+  }
+  try {
+    params.setLoadingUpdate(true)
+    const result = await anticrawlApi.updateCookies(cookies)
+    if (result.ok) {
+      message.success(result.message || `已更新 ${result.written} 个 Cookie`)
+      params.setCookieModalOpen(false)
+      params.setCookieInput('')
+      await fetchCookieLayers(params.setters)
+    } else {
+      message.error(result.error || '更新失败')
+    }
+  } catch (error) {
+    message.error('更新 Cookie 失败')
+    console.error(error)
+  } finally {
+    params.setLoadingUpdate(false)
+  }
 }
 
 export default function AntiCrawl() {
@@ -176,276 +475,67 @@ export default function AntiCrawl() {
   const [loadingImport, setLoadingImport] = useState(false)
 
   // ============== 数据加载 ==============
+  // S3776 修复：所有 load* 函数体已提取到模块级 fetch*，主组件仅保留 useCallback 薄壳
 
-  const loadAll = useCallback(async () => {
-    await Promise.all([
-      loadStrategy(),
-      loadSession(),
-      loadFingerprint(),
-      loadFreqStats(),
-      loadCookieLayers(),
-    ])
-  }, [])
+  // setters 对象一次性构造，避免每个 load 都重新创建闭包
+  const setters: AntiCrawlSetters = {
+    setStrategy, setSession, setFingerprint, setFreqStats, setCookieLayers, setHealth,
+    setLoadingStrategy, setLoadingLayers,
+  }
+
+  // S1854 修复：loadStrategy/loadFingerprint 仅在 loadAll 内部经由 fetchAll 间接调用，
+  // 直接删除 useCallback 包装器，避免无用赋值。其余 load* 在 setInterval/JSX 中被直接引用
+  const loadSession = useCallback(() => fetchSession(setters), [])
+  const loadFreqStats = useCallback(() => fetchFreqStats(setters), [])
+  const loadCookieLayers = useCallback(() => fetchCookieLayers(setters), [])
+  const loadAll = useCallback(() => fetchAll(setters), [])
 
   useEffect(() => {
     loadAll()
     // 会话活跃时每 10 秒刷新状态
-    const sessionInterval = setInterval(() => {
-      loadSession()
-    }, 10000)
+    const sessionInterval = setInterval(loadSession, 10000)
     // 频率伪装统计每 10 秒刷新：业务模块持续调用 apply_freq_delay/record_freq_request，
     // 前端需定时拉取才能反映最新请求节奏
-    const freqInterval = setInterval(() => {
-      loadFreqStats()
-    }, 10000)
+    const freqInterval = setInterval(loadFreqStats, 10000)
     // Cookie 层状态轮询：后端会基于 JSON 实际内容、浏览器内存、功能信号同步层状态，
     // 前端不轮询会停留在某个时刻的快照（如刚重启时的全失效状态），无法反映后续恢复
-    const layersInterval = setInterval(() => {
-      loadCookieLayers()
-    }, 30000)
+    const layersInterval = setInterval(loadCookieLayers, 30000)
     return () => {
       clearInterval(sessionInterval)
       clearInterval(freqInterval)
       clearInterval(layersInterval)
     }
-  }, [loadAll])
-
-  const loadStrategy = async () => {
-    try {
-      setLoadingStrategy(true)
-      const data = await anticrawlApi.getStrategy()
-      setStrategy(data)
-    } catch (error) {
-      console.error('加载策略失败', error)
-    } finally {
-      setLoadingStrategy(false)
-    }
-  }
-
-  const loadSession = async () => {
-    try {
-      const data = await anticrawlApi.getSessionStatus()
-      setSession(data)
-    } catch (error) {
-      console.error('加载会话状态失败', error)
-    }
-  }
-
-  const loadFingerprint = async () => {
-    try {
-      const data = await anticrawlApi.getFingerprint()
-      setFingerprint(data)
-    } catch (error) {
-      console.error('加载指纹信息失败', error)
-    }
-  }
-
-  const loadFreqStats = async () => {
-    try {
-      const data = await anticrawlApi.getFreqStats()
-      setFreqStats(data)
-    } catch (error) {
-      console.error('加载频率统计失败', error)
-    }
-  }
-
-  const loadCookieLayers = async () => {
-    try {
-      setLoadingLayers(true)
-      const data = await anticrawlApi.getCookieLayers()
-      setCookieLayers(data)
-    } catch (error) {
-      console.error('加载 Cookie 层状态失败', error)
-    } finally {
-      setLoadingLayers(false)
-    }
-  }
+  }, [loadAll, loadSession, loadFreqStats, loadCookieLayers])
 
   // ============== 操作处理 ==============
+  // S3776 修复：所有 handle* 函数体已提取到模块级 run*，主组件仅保留薄壳
 
-  const handleInitialize = async () => {
-    try {
-      setLoadingInit(true)
-      const result = await anticrawlApi.initialize(useCdp)
-      if (result.ok) {
-        message.success(result.message || `协调器已初始化（${result.mode} 模式）`)
-        await loadAll()
-      } else {
-        message.error(result.error || '初始化失败')
-      }
-    } catch (error) {
-      message.error('初始化失败')
-      console.error(error)
-    } finally {
-      setLoadingInit(false)
-    }
+  // actionsParams 集中装配所有依赖，避免每个 handle 函数重复传参
+  const actionsParams: AntiCrawlActionsParams = {
+    setters,
+    useCdp,
+    importBrowser,
+    cookieInput,
+    setCookieModalOpen,
+    setCookieInput,
+    setPrefillHint,
+    setLoadingInit,
+    setLoadingSession,
+    setLoadingHealth,
+    setLoadingUpdate,
+    setLoadingPrefill,
+    setLoadingImport,
+    setHealth,
   }
 
-  const handleStartSession = async () => {
-    try {
-      setLoadingSession(true)
-      const result = await anticrawlApi.startSession()
-      showStartSessionResult(result)
-      // 无论成功/失败都刷新状态：避免 UI 停留在旧状态与定时器后续刷新出现矛盾
-      await loadSession()
-    } catch (error) {
-      // 网络异常等情况：同样刷新状态，让 UI 反映真实后端状态而非凭空显示失败
-      message.error('启动会话失败')
-      console.error(error)
-      await loadSession()
-    } finally {
-      setLoadingSession(false)
-    }
-  }
-
-  const handleStopSession = async () => {
-    try {
-      setLoadingSession(true)
-      const result = await anticrawlApi.stopSession()
-      if (result.ok) {
-        message.success('会话管理已停止')
-        await loadSession()
-      } else {
-        message.error(result.error || '停止会话失败')
-      }
-    } catch (error) {
-      message.error('停止会话失败')
-      console.error(error)
-    } finally {
-      setLoadingSession(false)
-    }
-  }
-
-  const handleHealthCheck = async () => {
-    try {
-      setLoadingHealth(true)
-      const initial = await anticrawlApi.checkHealth()
-      const result = await ensureHealthCheckerReady(initial, useCdp, loadAll)
-      setHealth(result)
-      if (result.ok) {
-        if (result.is_healthy) {
-          message.success(`健康检查通过（score=${result.score}）`)
-        } else {
-          message.warning(`健康检查发现问题（score=${result.score}，建议：${ACTION_LABELS[result.action] || result.action}）`)
-        }
-      } else {
-        message.warning(result.error || '未配置健康检查器')
-      }
-    } catch (error) {
-      message.error('健康检查失败')
-      console.error(error)
-    } finally {
-      setLoadingHealth(false)
-    }
-  }
-
-  const handleInvalidateLayer = (layer: string) => {
-    Modal.confirm({
-      title: `确认失效 ${layer} 层？`,
-      icon: <ExclamationCircleOutlined />,
-      content: layer === 'identity' ? 'identity 层失效会级联导致 session 层失效' : undefined,
-      onOk: async () => {
-        try {
-          const result = await anticrawlApi.invalidateLayer(layer)
-          if (result.ok) {
-            message.success(result.message || `层 ${layer} 已失效`)
-            await loadCookieLayers()
-          } else {
-            message.error(result.error || '操作失败')
-          }
-        } catch (error) {
-          message.error('操作失败')
-          console.error(error)
-        }
-      },
-    })
-  }
-
-  /**
-   * 打开 Cookie 更新弹窗：自动从后端读取当前 cookie 预填文本框
-   *
-   * 为什么自动预填：旧版本要求用户手动粘贴体验差，常见诉求只是想"重新分层"
-   * 同步层状态而已；预填后用户可直接点更新或在文本框上做局部修改。
-   */
-  const openCookieModal = async () => {
-    setCookieModalOpen(true)
-    setCookieInput('')
-    setPrefillHint('')
-    setLoadingPrefill(true)
-    try {
-      const result = await anticrawlApi.getCurrentCookies()
-      const cookies = result.cookies || {}
-      // cookies → text 拼接提取为模块级 cookiesToString（与 handleImportFromBrowser 共用）
-      setCookieInput(cookiesToString(cookies))
-      if (result.count > 0) {
-        setPrefillHint(`已自动读取 ${result.count} 个 Cookie，可直接点「更新」或编辑后再提交`)
-      } else {
-        setPrefillHint('当前没有 Cookie 数据，可点击下方「从浏览器导入」按钮')
-      }
-    } catch (error) {
-      setPrefillHint('读取当前 Cookie 失败，可手动粘贴或从浏览器导入')
-      console.error(error)
-    } finally {
-      setLoadingPrefill(false)
-    }
-  }
-
-  /**
-   * 「从浏览器导入」按钮：从已登录的 Edge/Chrome 读取 cookie 覆盖文本框
-   *
-   * 与 /api/auth/import-from-browser 的区别：那个端点读取后立即写入 CookieStore，
-   * 容易覆盖仍在用的有效登录态；本操作仅在文本框内预览，由用户确认后再调 update。
-   */
-  const handleImportFromBrowser = async () => {
-    try {
-      setLoadingImport(true)
-      const result = await anticrawlApi.importFromBrowserPreview(importBrowser, false)
-      if (result.ok && result.cookies) {
-        // cookies → text 拼接复用 cookiesToString（与 openCookieModal 共用）
-        setCookieInput(cookiesToString(result.cookies))
-        setPrefillHint(
-          `从 ${importBrowser === 'edge' ? 'Edge' : 'Chrome'} 导入 ${result.imported_count ?? 0} 个 Cookie，可直接点「更新」`
-        )
-        message.success(result.message || '已导入到文本框')
-      } else {
-        // 错误信息拼接提取为 formatImportPreviewError（含 error + hint + 默认兜底）
-        message.error(formatImportPreviewError(result))
-        if (result.error_detail) {
-          console.error('import error detail:', result.error_detail)
-        }
-      }
-    } catch (error) {
-      message.error('从浏览器导入失败')
-      console.error(error)
-    } finally {
-      setLoadingImport(false)
-    }
-  }
-
-  const handleUpdateCookies = async () => {
-    const { cookies, error } = validateCookieInput(cookieInput)
-    if (error) {
-      message.warning(error)
-      return
-    }
-    try {
-      setLoadingUpdate(true)
-      const result = await anticrawlApi.updateCookies(cookies)
-      if (result.ok) {
-        message.success(result.message || `已更新 ${result.written} 个 Cookie`)
-        setCookieModalOpen(false)
-        setCookieInput('')
-        await loadCookieLayers()
-      } else {
-        message.error(result.error || '更新失败')
-      }
-    } catch (error) {
-      message.error('更新 Cookie 失败')
-      console.error(error)
-    } finally {
-      setLoadingUpdate(false)
-    }
-  }
+  const handleInitialize = () => runInitialize(actionsParams)
+  const handleStartSession = () => runStartSession(actionsParams)
+  const handleStopSession = () => runStopSession(actionsParams)
+  const handleHealthCheck = () => runHealthCheck(actionsParams)
+  const handleInvalidateLayer = (layer: string) => runInvalidateLayer(layer, actionsParams)
+  const openCookieModal = () => runOpenCookieModal(actionsParams)
+  const handleImportFromBrowser = () => runImportFromBrowser(actionsParams)
+  const handleUpdateCookies = () => runUpdateCookies(actionsParams)
 
   // ============== 渲染 ==============
 
@@ -514,156 +604,21 @@ export default function AntiCrawl() {
         </Col>
 
         {/* ============== 会话管理 ============== */}
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <Space>
-                <SafetyCertificateOutlined />
-                会话管理
-                {session?.active && (
-                  <Badge status="processing" text="运行中" />
-                )}
-              </Space>
-            }
-          >
-            {session && !session.active && session.cookie_layers?.identity && (
-              <Alert
-                type="warning"
-                showIcon
-                message="检测到有效 Cookie 但会话未启动"
-                description="正常情况下登录/导入/注入完成后会自动启动 TokenRenewer 后台续期。如未自动启动，可点击下方按钮手动启用。"
-                style={{ marginBottom: 12 }}
-              />
-            )}
-            {session && (
-              <Row gutter={[16, 16]}>
-                <Col span={8}>
-                  <Statistic
-                    title="会话状态"
-                    value={session.active ? '活跃' : '未启动'}
-                    valueStyle={{ color: session.active ? '#52c41a' : '#8c8c8c' }}
-                  />
-                </Col>
-                <Col span={8}>
-                  <Statistic
-                    title="运行时间"
-                    value={session.active ? `${Math.floor(session.uptime_sec)}s` : '-'}
-                  />
-                </Col>
-                <Col span={8}>
-                  <Statistic
-                    title="Token 年龄"
-                    value={session.token_age_sec == null ? '-' : `${Math.floor(session.token_age_sec)}s`}
-                    valueStyle={{
-                      color: session.token_expired ? '#ff4d4f' : '#52c41a',
-                    }}
-                  />
-                </Col>
-              </Row>
-            )}
-            <Divider style={{ margin: '12px 0' }} />
-            <Space>
-              <Button
-                type="primary"
-                icon={<PlayCircleOutlined />}
-                onClick={handleStartSession}
-                loading={loadingSession}
-                disabled={session?.active}
-              >
-                启动会话
-              </Button>
-              <Button
-                danger
-                icon={<StopOutlined />}
-                onClick={handleStopSession}
-                loading={loadingSession}
-                disabled={!session?.active}
-              >
-                停止会话
-              </Button>
-            </Space>
-          </Card>
-        </Col>
+        {/* S3776 修复：JSX 内的条件渲染已提取到 SessionCardCol 子组件，主组件复杂度归零 */}
+        <SessionCardCol
+          session={session}
+          loadingSession={loadingSession}
+          onStart={handleStartSession}
+          onStop={handleStopSession}
+        />
 
         {/* ============== 健康检查 ============== */}
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <Space>
-                <HeartOutlined />
-                健康检查
-              </Space>
-            }
-            extra={
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={handleHealthCheck}
-                loading={loadingHealth}
-                size="small"
-              >
-                检查
-              </Button>
-            }
-          >
-            {health?.ok ? (
-              <>
-                <Progress
-                  percent={health.score}
-                  status={(() => {
-                    // 健康分等级：≥80 成功，≥60 正常，否则异常
-                    if (health.score >= 80) return 'success'
-                    if (health.score >= 60) return 'normal'
-                    return 'exception'
-                  })()}
-                  format={(percent) => `${percent}分`}
-                  style={{ marginBottom: 16 }}
-                />
-                <Row gutter={[16, 8]}>
-                  <Col span={6}>
-                    <Statistic
-                      title="Cookie"
-                      value={health.cookie_valid ? '有效' : '无效'}
-                      valueStyle={{ color: health.cookie_valid ? '#52c41a' : '#ff4d4f', fontSize: 14 }}
-                    />
-                  </Col>
-                  <Col span={6}>
-                    <Statistic
-                      title="API"
-                      value={health.api_reachable ? '可达' : '不可达'}
-                      valueStyle={{ color: health.api_reachable ? '#52c41a' : '#ff4d4f', fontSize: 14 }}
-                    />
-                  </Col>
-                  <Col span={6}>
-                    <Statistic
-                      title="页面"
-                      value={health.page_accessible ? '可访问' : '不可访问'}
-                      valueStyle={{ color: health.page_accessible ? '#52c41a' : '#ff4d4f', fontSize: 14 }}
-                    />
-                  </Col>
-                  <Col span={6}>
-                    <Statistic
-                      title="WAF"
-                      value={WAF_LABELS[health.waf_status] || health.waf_status}
-                      valueStyle={{ fontSize: 14 }}
-                    />
-                  </Col>
-                </Row>
-                {health.action !== 'none' && (
-                  <Alert
-                    type={health.needs_attention ? 'error' : 'warning'}
-                    showIcon
-                    message={`建议操作：${ACTION_LABELS[health.action] || health.action}`}
-                    style={{ marginTop: 12 }}
-                  />
-                )}
-              </>
-            ) : (
-              <Text type="secondary">
-                {health?.error || '点击「检查」按钮执行健康检查'}
-              </Text>
-            )}
-          </Card>
-        </Col>
+        {/* S3776 修复：JSX 内 8 个条件渲染已提取到 HealthCardCol 子组件 */}
+        <HealthCardCol
+          health={health}
+          loadingHealth={loadingHealth}
+          onCheck={handleHealthCheck}
+        />
 
         {/* ============== Cookie 分层管理 ============== */}
         <Col xs={24} lg={12}>
@@ -707,14 +662,8 @@ export default function AntiCrawl() {
                       <div style={{ marginTop: 8 }}>
                         <Text type="secondary" style={{ fontSize: 12 }}>
                           {/* valid 但 cookie_count=0 是 force_restore 强制恢复的，
-                              显示"已恢复"避免误以为有有效 cookie */}
-                          {(() => {
-                            // S7735：用正向分支判断 valid === false 而非 !state.valid
-                            // S3358：嵌套三元替换为 if/else 链
-                            if (state.valid === false) return '未初始化'
-                            if (state.cookie_count > 0) return `${state.cookie_count} 个 Cookie`
-                            return '已恢复（无 Cookie）'
-                          })()}
+                              显示"已恢复"避免误以为有有效 cookie；逻辑提取为模块级 cookieLayerStateText */}
+                          {cookieLayerStateText(state)}
                         </Text>
                       </div>
                       {state.valid && (
@@ -944,5 +893,177 @@ export default function AntiCrawl() {
         )}
       </Modal>
     </div>
+  )
+}
+
+// S3776 修复：会话管理 Card 提取为独立子组件
+// 为什么提取：原主组件 JSX 内的 6 个条件渲染（session?.active / session&&!session.active&&... /
+// session&& / session.active? / token_age_sec==null? / token_expired?）全部贡献主组件复杂度，
+// 提取后子组件独立计算认知复杂度，主组件函数 CC 从 22 降至 ~9
+function SessionCardCol(props: {
+  session: SessionStatus | null
+  loadingSession: boolean
+  onStart: () => void
+  onStop: () => void
+}) {
+  const { session, loadingSession, onStart, onStop } = props
+  return (
+    <Col xs={24} lg={12}>
+      <Card
+        title={
+          <Space>
+            <SafetyCertificateOutlined />
+            会话管理
+            {session?.active && (
+              <Badge status="processing" text="运行中" />
+            )}
+          </Space>
+        }
+      >
+        {session && !session.active && session.cookie_layers?.identity && (
+          <Alert
+            type="warning"
+            showIcon
+            message="检测到有效 Cookie 但会话未启动"
+            description="正常情况下登录/导入/注入完成后会自动启动 TokenRenewer 后台续期。如未自动启动，可点击下方按钮手动启用。"
+            style={{ marginBottom: 12 }}
+          />
+        )}
+        {session && (
+          <Row gutter={[16, 16]}>
+            <Col span={8}>
+              <Statistic
+                title="会话状态"
+                value={session.active ? '活跃' : '未启动'}
+                valueStyle={{ color: session.active ? '#52c41a' : '#8c8c8c' }}
+              />
+            </Col>
+            <Col span={8}>
+              <Statistic
+                title="运行时间"
+                value={session.active ? `${Math.floor(session.uptime_sec)}s` : '-'}
+              />
+            </Col>
+            <Col span={8}>
+              <Statistic
+                title="Token 年龄"
+                value={session.token_age_sec == null ? '-' : `${Math.floor(session.token_age_sec)}s`}
+                valueStyle={{
+                  color: session.token_expired ? '#ff4d4f' : '#52c41a',
+                }}
+              />
+            </Col>
+          </Row>
+        )}
+        <Divider style={{ margin: '12px 0' }} />
+        <Space>
+          <Button
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            onClick={onStart}
+            loading={loadingSession}
+            disabled={session?.active}
+          >
+            启动会话
+          </Button>
+          <Button
+            danger
+            icon={<StopOutlined />}
+            onClick={onStop}
+            loading={loadingSession}
+            disabled={!session?.active}
+          >
+            停止会话
+          </Button>
+        </Space>
+      </Card>
+    </Col>
+  )
+}
+
+// S3776 修复：健康检查 Card 提取为独立子组件
+// 为什么提取：原主组件 JSX 内 8 个条件渲染（health?.ok? / cookie_valid? / api_reachable? /
+// page_accessible? / action!=='none' && / needs_attention? / health?.error || '...'）全部贡献
+// 主组件复杂度，提取后子组件独立计算，主组件函数 CC 进一步下降
+function HealthCardCol(props: {
+  health: HealthReport | null
+  loadingHealth: boolean
+  onCheck: () => void
+}) {
+  const { health, loadingHealth, onCheck } = props
+  return (
+    <Col xs={24} lg={12}>
+      <Card
+        title={
+          <Space>
+            <HeartOutlined />
+            健康检查
+          </Space>
+        }
+        extra={
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={onCheck}
+            loading={loadingHealth}
+            size="small"
+          >
+            检查
+          </Button>
+        }
+      >
+        {health?.ok ? (
+          <>
+            <Progress
+              percent={health.score}
+              status={healthScoreToProgressStatus(health.score)}
+              format={(percent) => `${percent}分`}
+              style={{ marginBottom: 16 }}
+            />
+            <Row gutter={[16, 8]}>
+              <Col span={6}>
+                <Statistic
+                  title="Cookie"
+                  value={health.cookie_valid ? '有效' : '无效'}
+                  valueStyle={{ color: health.cookie_valid ? '#52c41a' : '#ff4d4f', fontSize: 14 }}
+                />
+              </Col>
+              <Col span={6}>
+                <Statistic
+                  title="API"
+                  value={health.api_reachable ? '可达' : '不可达'}
+                  valueStyle={{ color: health.api_reachable ? '#52c41a' : '#ff4d4f', fontSize: 14 }}
+                />
+              </Col>
+              <Col span={6}>
+                <Statistic
+                  title="页面"
+                  value={health.page_accessible ? '可访问' : '不可访问'}
+                  valueStyle={{ color: health.page_accessible ? '#52c41a' : '#ff4d4f', fontSize: 14 }}
+                />
+              </Col>
+              <Col span={6}>
+                <Statistic
+                  title="WAF"
+                  value={WAF_LABELS[health.waf_status] || health.waf_status}
+                  valueStyle={{ fontSize: 14 }}
+                />
+              </Col>
+            </Row>
+            {health.action !== 'none' && (
+              <Alert
+                type={health.needs_attention ? 'error' : 'warning'}
+                showIcon
+                message={`建议操作：${ACTION_LABELS[health.action] || health.action}`}
+                style={{ marginTop: 12 }}
+              />
+            )}
+          </>
+        ) : (
+          <Text type="secondary">
+            {health?.error || '点击「检查」按钮执行健康检查'}
+          </Text>
+        )}
+      </Card>
+    </Col>
   )
 }

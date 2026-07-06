@@ -134,6 +134,155 @@ const buildLoadErrorMessage = (err: any): string => {
   return err?.response?.data?.detail || '加载失败，请返回列表重试'
 }
 
+// S3776 修复：风险确认弹窗构建提取到模块级
+// 为什么提取：原 handleSubmit 内含 if/三元/回调 5+ 复杂度点，提取后主函数仅 1 行调用
+const showRiskConfirm = (
+  risks: { level: 'warning' | 'danger'; message: string }[],
+  onOk: () => void,
+) => {
+  const hasDanger = risks.some(r => r.level === 'danger')
+  Modal.confirm({
+    title: hasDanger ? '⚠️ 高风险配置确认' : '配置风险提示',
+    icon: <ExclamationCircleOutlined style={{ color: hasDanger ? '#ff4d4f' : '#faad14' }} />,
+    content: (
+      <div>
+        <p style={{ marginBottom: 8 }}>检测到以下风险，请确认是否继续：</p>
+        {risks.map((r, i) => (
+          <p key={`${r.level}-${i}`} style={{ color: r.level === 'danger' ? '#ff4d4f' : '#faad14', marginBottom: 4, fontSize: 13 }}>
+            {r.level === 'danger' ? '🔴 ' : '🟡 '}{r.message}
+          </p>
+        ))}
+      </div>
+    ),
+    okText: '确认继续',
+    cancelText: '返回修改',
+    okButtonProps: { danger: hasDanger },
+    onOk,
+  })
+}
+
+// S3776 修复：草稿恢复逻辑提取到模块级
+// 为什么提取：原 useEffect 内 3 个 if + && 共 5 复杂度点，提取后 useEffect 仅 1 行调用
+const restoreDraftIfNeeded = <D extends { formData?: TaskCreateBody; cron?: string; useCron?: boolean; intervalSeconds?: number }>(
+  draftKey: string,
+  isEdit: boolean,
+  prefillKeyword: string,
+  setters: {
+    setFormData: (d: TaskCreateBody) => void
+    setCron: (c: string) => void
+    setUseCron: (u: boolean) => void
+    setIntervalSeconds: (s: number) => void
+    setDraftRestored: (r: boolean) => void
+  },
+): boolean => {
+  if (isEdit) return false
+  const draft = storage.get<D | null>(
+    draftKey, null,
+    (v): v is D =>
+      v !== null && typeof v === 'object' && 'formData' in v && 'cron' in v && 'useCron' in v && 'intervalSeconds' in v,
+  )
+  if (!draft) return false
+  // 仅在 URL 未提供预填充时恢复草稿，避免覆盖 AI/模板传入的数据
+  if (draft.formData?.keyword && !prefillKeyword) {
+    setters.setFormData(draft.formData)
+    setters.setCron(draft.cron || '*/5 * * * *')
+    setters.setUseCron(draft.useCron ?? false)
+    setters.setIntervalSeconds(draft.intervalSeconds ?? 60)
+    setters.setDraftRestored(true)
+  }
+  return true
+}
+
+// S3776 修复：检测高风险配置组合，提取为模块级函数
+// 为什么提取：原主组件内 5 个 if 链贡献 +5 复杂度，提取后主函数仅调用一次
+// 检测规则基于反爬/资金安全经验阈值，不是硬性阻断，仅提示
+const detectRiskyConfig = (
+  formData: TaskCreateBody,
+  globalConfig: AppConfig | null,
+  useCron: boolean,
+  intervalSeconds: number,
+): { level: 'warning' | 'danger'; message: string }[] => {
+  const risks: { level: 'warning' | 'danger'; message: string }[] = []
+  if (formData.mode === 'auto') {
+    risks.push({ level: 'warning', message: '任务模式为「全自动」，评估通过后会自动抢单，请确认资金风险' })
+  }
+  // 评估阈值：任务级优先，回退全局
+  const effectiveThreshold = formData.eval_threshold ?? globalConfig?.eval?.pass_score ?? 60
+  if (formData.mode === 'auto' && effectiveThreshold < 60) {
+    risks.push({ level: 'danger', message: `评估阈值 ${effectiveThreshold} 低于 60，自动模式下可能抢到低质量商品` })
+  }
+  // QPS：反检测参数为全局配置（非任务级），直接读全局
+  const effectiveQps = globalConfig?.antidetect?.qps ?? 1
+  if (effectiveQps > 5) {
+    risks.push({ level: 'danger', message: `全局 QPS=${effectiveQps} 过高，可能触发反爬封号` })
+  }
+  if (!useCron && intervalSeconds < 60) {
+    risks.push({ level: 'warning', message: `执行间隔 ${intervalSeconds}秒 过短，可能触发反爬` })
+  }
+  return risks
+}
+
+// S3776 修复：搜索 URL 预览，提取为模块级函数
+// 为什么提取：原主组件 IIFE 含 if 分支，提取后主函数减少 1 处复杂度
+const buildSearchUrl = (keyword: string, filters: string[]): string => {
+  const params = new URLSearchParams()
+  params.set('q', keyword)
+  if (filters.length > 0) {
+    params.set('filters', filters.join(','))
+  }
+  return `https://www.goofish.com/search?${params.toString()}`
+}
+
+// S3776 修复：页面标题预计算，提取为模块级函数
+// 为什么提取：原主组件 IIFE 含 if/else if，提取后主函数减少 2 处复杂度
+const getPageTitle = (isEdit: boolean, prefillKeyword: string): string => {
+  if (isEdit) return '编辑任务'
+  if (prefillKeyword) return '新增任务（已预填充）'
+  return '新增任务（向导）'
+}
+
+// S3776 修复：构造提交用的 TaskCreateBody，提取避免主函数内联 +5 复杂度
+const buildTaskSubmitBody = (
+  formData: TaskCreateBody,
+  cron: string,
+  useCron: boolean,
+  intervalSeconds: number,
+): TaskCreateBody => ({
+  ...formData,
+  name: formData.name || formData.keyword,
+  cron,
+  use_cron: useCron,
+  interval_seconds: intervalSeconds,
+})
+
+// S3776 修复：提交任务的核心副作用（API 调用 + 草稿清理 + 路由跳转）提取为模块级
+// 为什么提取：原 doSubmit 含 try/catch/finally + if(id)/else 分支，单函数贡献 +6 复杂度
+const executeTaskSubmit = async (params: {
+  id?: string
+  body: TaskCreateBody
+  navigate: (path: string) => void
+  clearDraft: () => void
+  setLoading: (b: boolean) => void
+}) => {
+  const { id, body, navigate, clearDraft, setLoading } = params
+  setLoading(true)
+  try {
+    if (id) {
+      await taskApi.update(id, body)
+      message.success('任务已更新')
+    } else {
+      await taskApi.create(body)
+      message.success('任务已创建')
+      clearDraft()
+    }
+    navigate('/tasks')
+  } catch (e) {
+    message.error(extractApiError(e), 5)
+  } finally {
+    setLoading(false)
+  }
+}
+
 export default function TaskEditor() {
   const navigate = useNavigate()
   const { id } = useParams()
@@ -207,21 +356,9 @@ export default function TaskEditor() {
 
   // 新建模式下首次加载恢复草稿
   useEffect(() => {
-    if (isEdit) return
-    const draft = storage.get<DraftData | null>(
-      DRAFT_KEY, null,
-      (v): v is DraftData =>
-        v !== null && typeof v === 'object' && 'formData' in v && 'cron' in v && 'useCron' in v && 'intervalSeconds' in v,
-    )
-    if (!draft) return
-    // 仅在 URL 未提供预填充时恢复草稿，避免覆盖 AI/模板传入的数据
-    if (draft.formData?.keyword && !prefillKeyword) {
-      setFormData(draft.formData)
-      setCron(draft.cron || '*/5 * * * *')
-      setUseCron(draft.useCron ?? false)
-      setIntervalSeconds(draft.intervalSeconds ?? 60)
-      setDraftRestored(true)
-    }
+    restoreDraftIfNeeded<DraftData>(DRAFT_KEY, isEdit, prefillKeyword, {
+      setFormData, setCron, setUseCron, setIntervalSeconds, setDraftRestored,
+    })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 监听 formData/cron 变更，防抖 500ms 自动保存草稿（仅新建模式）
@@ -302,30 +439,6 @@ export default function TaskEditor() {
     setFormData({ ...formData, search_config: Object.keys(current).length > 0 ? current : null })
   }
 
-  // ============== 危险操作检测 ==============
-  // 在提交前检测高风险配置组合，弹出二次确认 Modal
-  // 检测规则基于反爬/资金安全经验阈值，不是硬性阻断，仅提示
-  const detectRiskyConfig = (): { level: 'warning' | 'danger'; message: string }[] => {
-    const risks: { level: 'warning' | 'danger'; message: string }[] = []
-    if (formData.mode === 'auto') {
-      risks.push({ level: 'warning', message: '任务模式为「全自动」，评估通过后会自动抢单，请确认资金风险' })
-    }
-    // 评估阈值：任务级优先，回退全局
-    const effectiveThreshold = formData.eval_threshold ?? globalConfig?.eval?.pass_score ?? 60
-    if (formData.mode === 'auto' && effectiveThreshold < 60) {
-      risks.push({ level: 'danger', message: `评估阈值 ${effectiveThreshold} 低于 60，自动模式下可能抢到低质量商品` })
-    }
-    // QPS：反检测参数为全局配置（非任务级），直接读全局
-    const effectiveQps = globalConfig?.antidetect?.qps ?? 1
-    if (effectiveQps > 5) {
-      risks.push({ level: 'danger', message: `全局 QPS=${effectiveQps} 过高，可能触发反爬封号` })
-    }
-    if (!useCron && intervalSeconds < 60) {
-      risks.push({ level: 'warning', message: `执行间隔 ${intervalSeconds}秒 过短，可能触发反爬` })
-    }
-    return risks
-  }
-
   const handleSubmit = () => {
     if (!formData.keyword) {
       message.warning('关键词不能为空')
@@ -337,71 +450,27 @@ export default function TaskEditor() {
       message.warning('全局配置加载中，请稍候再提交')
       return
     }
-    const risks = detectRiskyConfig()
+    const risks = detectRiskyConfig(formData, globalConfig, useCron, intervalSeconds)
     if (risks.length === 0) {
       doSubmit()
       return
     }
-    // 危险操作二次确认：根据是否有 danger 级风险决定按钮样式
-    const hasDanger = risks.some(r => r.level === 'danger')
-    Modal.confirm({
-      title: hasDanger ? '⚠️ 高风险配置确认' : '配置风险提示',
-      icon: <ExclamationCircleOutlined style={{ color: hasDanger ? '#ff4d4f' : '#faad14' }} />,
-      content: (
-        <div>
-          <p style={{ marginBottom: 8 }}>检测到以下风险，请确认是否继续：</p>
-          {risks.map((r, i) => (
-            <p key={`${r.level}-${i}`} style={{ color: r.level === 'danger' ? '#ff4d4f' : '#faad14', marginBottom: 4, fontSize: 13 }}>
-              {r.level === 'danger' ? '🔴 ' : '🟡 '}{r.message}
-            </p>
-          ))}
-        </div>
-      ),
-      okText: '确认继续',
-      cancelText: '返回修改',
-      okButtonProps: { danger: hasDanger },
-      onOk: () => doSubmit(),
-    })
+    // 风险确认弹窗构建委托给模块级函数，避免主函数复杂度超标（S3776）
+    showRiskConfirm(risks, () => doSubmit())
   }
 
-  const doSubmit = async () => {
-    setLoading(true)
-    try {
-      // 调度配置直接放入 TaskCreateBody（types.ts 已声明），不再用交集类型绕过
-      const body: TaskCreateBody = {
-        ...formData,
-        name: formData.name || formData.keyword,
-        cron,
-        use_cron: useCron,
-        interval_seconds: intervalSeconds,
-      }
-      // 用 id 直接收窄类型，替代 isEdit + 非空断言
-      if (id) {
-        await taskApi.update(id, body)
-        message.success('任务已更新')
-      } else {
-        await taskApi.create(body)
-        message.success('任务已创建')
-        clearDraft()
-      }
-      navigate('/tasks')
-    } catch (e) {
-      message.error(extractApiError(e), 5)
-    } finally {
-      setLoading(false)
-    }
-  }
+  // S3776 修复：提交逻辑委托给模块级 executeTaskSubmit，主组件仅负责装配参数
+  // 为什么提取：原 doSubmit 含 try/catch/finally + if(id)/else 共 +6 复杂度
+  const doSubmit = () => executeTaskSubmit({
+    id,
+    body: buildTaskSubmitBody(formData, cron, useCron, intervalSeconds),
+    navigate,
+    clearDraft,
+    setLoading,
+  })
 
   // 实时预览：闲鱼搜索 URL
-  const searchUrl = (() => {
-    const params = new URLSearchParams()
-    params.set('q', formData.keyword)
-    const filters = formData.search_filters ?? []
-    if (filters.length > 0) {
-      params.set('filters', filters.join(','))
-    }
-    return `https://www.goofish.com/search?${params.toString()}`
-  })()
+  const searchUrl = buildSearchUrl(formData.keyword, formData.search_filters ?? [])
 
   // 当前生效值：任务级覆盖优先，回退全局（用于 UI 展示"当前生效"提示）
   const effective = {
@@ -414,11 +483,10 @@ export default function TaskEditor() {
   }
 
   // 标题预计算：提取到组件主体以避免 JSX 内嵌套三元
-  const pageTitle = (() => {
-    if (isEdit) return '编辑任务'
-    if (prefillKeyword) return '新增任务（已预填充）'
-    return '新增任务（向导）'
-  })()
+  const pageTitle = getPageTitle(isEdit, prefillKeyword)
+
+  // 风险预计算：JSX 提示与 handleSubmit 共用，避免在渲染期重复调用 detectRiskyConfig
+  const risks = detectRiskyConfig(formData, globalConfig, useCron, intervalSeconds)
 
   return (
     <div className="page-container">
@@ -704,198 +772,15 @@ export default function TaskEditor() {
       )}
 
       {/* Step 3: AI 评估参数 */}
+      {/* S3776 修复：Step 3 内容已提取到 Step3AIEval 子组件，2 个内嵌 IIFE 复杂度独立计算 */}
       {current === 3 && (
-        <Card
-          title={
-            <Space>
-              <RobotOutlined />
-              <span>Step 4 · AI 评估参数</span>
-            </Space>
-          }
-          extra={
-            <Button
-              size="small"
-              icon={<SettingOutlined />}
-              onClick={() => setEvalModalOpen(true)}
-            >
-              全局 AI 评估配置
-            </Button>
-          }
-        >
-          <Alert
-            type="info"
-            showIcon
-            message="任务级 AI 评估参数"
-            description="此处的阈值和提示词为任务级覆盖，优先于全局配置。未设置则沿用全局。"
-            style={{ marginBottom: 16 }}
-          />
-
-          <Form layout="vertical">
-            <Form.Item
-              label="评估通过阈值（eval_threshold）"
-              help={`≥ 此分数视为通过，触发通知/抢单。全局当前值：${globalConfig?.eval?.pass_score ?? 60}`}
-            >
-              <Slider
-                min={0}
-                max={100}
-                value={formData.eval_threshold ?? effective.evalThreshold}
-                onChange={(v) => {
-                  // 与全局值相同时回退 null，保留"沿用全局"语义
-                  // 否则用户拖动后即使拖回原位也会变成任务级覆盖，全局值变更时此任务不跟随
-                  const globalValue = globalConfig?.eval?.pass_score ?? 60
-                  setFormData({ ...formData, eval_threshold: v === globalValue ? null : v })
-                }}
-                marks={{ 0: '0', 60: '60', 80: '80', 100: '100' }}
-                tooltip={{ formatter: (v) => v == null ? '沿用全局' : String(v) }}
-              />
-              <Space style={{ marginTop: 8 }}>
-                <InputNumber
-                  min={0}
-                  max={100}
-                  value={formData.eval_threshold ?? null}
-                  onChange={(v) => setFormData({ ...formData, eval_threshold: v })}
-                  placeholder={`沿用全局（${effective.evalThreshold}）`}
-                  style={{ width: 120 }}
-                />
-                <Button
-                  size="small"
-                  onClick={() => setFormData({ ...formData, eval_threshold: null })}
-                  disabled={formData.eval_threshold === null}
-                >
-                  重置为全局
-                </Button>
-              </Space>
-            </Form.Item>
-
-            <Divider />
-
-            <Form.Item
-              label="AI 评估提示词（ai_prompt）"
-              help="自定义 AI 评估时的额外指令，留空则使用系统默认提示词"
-            >
-              <Input.TextArea
-                rows={4}
-                value={formData.ai_prompt ?? ''}
-                onChange={(e) => setFormData({ ...formData, ai_prompt: e.target.value || null })}
-                placeholder="例：重点关注商品成色，对翻新机一票否决；优先考虑带原盒发票的商品"
-                maxLength={500}
-                showCount
-              />
-            </Form.Item>
-
-            <Divider />
-
-            {/* 任务级自动官方采集覆盖：留空（未设置）则沿用全局 AppConfig.eval */}
-            {/* 为什么独立于全局配置模态框：高频任务可能需要单独关闭采集避免反爬，
-                低频任务可能需要放宽 max_per_run 做深度扫描 */}
-            <Form.Item
-              label="自动官方采集（auto_collect_official）"
-              help="留空则使用全局配置。开启后对通过评估的商品自动调用官方采集做深度验证"
-            >
-              <Space>
-                <Switch
-                  checked={formData.eval_config?.auto_collect_official ?? globalConfig?.eval?.auto_collect_official ?? false}
-                  onChange={(v) => setFormData({
-                    ...formData,
-                    eval_config: { ...formData.eval_config, auto_collect_official: v },
-                  })}
-                />
-                <Tag color={(() => {
-                  // 任务级覆盖用蓝色高亮，继承全局则用默认色
-                  if (formData.eval_config?.auto_collect_official != null) return 'blue'
-                  return 'default'
-                })()}>
-                  {(() => {
-                    if (formData.eval_config?.auto_collect_official != null) {
-                      return `任务级：${formData.eval_config.auto_collect_official ? '已开启' : '已关闭'}`
-                    }
-                    return `沿用全局（${globalConfig?.eval?.auto_collect_official ? '已开启' : '已关闭'}）`
-                  })()}
-                </Tag>
-                <Button
-                  size="small"
-                  onClick={() => {
-                    const next = { ...formData.eval_config }
-                    delete next.auto_collect_official
-                    setFormData({ ...formData, eval_config: Object.keys(next).length > 0 ? next : null })
-                  }}
-                  disabled={formData.eval_config?.auto_collect_official == null}
-                >
-                  重置为全局
-                </Button>
-              </Space>
-            </Form.Item>
-
-            <Form.Item
-              label="每轮最多采集条数（auto_collect_max_per_run）"
-              help="留空则使用全局配置。避免拖慢+反爬"
-            >
-              <Space>
-                <InputNumber
-                  min={1}
-                  max={20}
-                  value={formData.eval_config?.auto_collect_max_per_run ?? null}
-                  onChange={(v) => setFormData({
-                    ...formData,
-                    eval_config: { ...formData.eval_config, auto_collect_max_per_run: v ?? undefined },
-                  })}
-                  placeholder={`沿用全局（${globalConfig?.eval?.auto_collect_max_per_run ?? 3}）`}
-                  style={{ width: 200 }}
-                  addonAfter="条"
-                />
-                <Button
-                  size="small"
-                  onClick={() => {
-                    const next = { ...formData.eval_config }
-                    delete next.auto_collect_max_per_run
-                    setFormData({ ...formData, eval_config: Object.keys(next).length > 0 ? next : null })
-                  }}
-                  disabled={formData.eval_config?.auto_collect_max_per_run == null}
-                >
-                  重置为全局
-                </Button>
-              </Space>
-            </Form.Item>
-          </Form>
-
-          <Divider />
-
-          {/* 全局 AI 评估配置概览（只读，点击按钮编辑） */}
-          <Card size="small" type="inner" title="全局 AI 评估配置概览（只读）">
-            <Space direction="vertical" style={{ width: '100%' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>通过分数（pass_score）</span>
-                <Tag>{globalConfig?.eval?.pass_score ?? '-'}</Tag>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>自动抢单分数（auto_buy_score）</span>
-                <Tag>{globalConfig?.eval?.auto_buy_score ?? '-'}</Tag>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>AI 自动评估</span>
-                <Tag color={globalConfig?.eval?.ai_auto_eval ? 'green' : 'default'}>
-                  {globalConfig?.eval?.ai_auto_eval ? '已开启' : '已关闭'}
-                </Tag>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>AI 深度分析</span>
-                <Tag color={globalConfig?.eval?.ai_auto_deep_analyze ? 'green' : 'default'}>
-                  {globalConfig?.eval?.ai_auto_deep_analyze ? '已开启' : '已关闭'}
-                </Tag>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>自动官方采集</span>
-                <Tag color={globalConfig?.eval?.auto_collect_official ? 'green' : 'default'}>
-                  {globalConfig?.eval?.auto_collect_official ? '已开启' : '已关闭'}
-                </Tag>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>每轮最多采集</span>
-                <Tag>{globalConfig?.eval?.auto_collect_max_per_run ?? '-'} 条</Tag>
-              </div>
-            </Space>
-          </Card>
-        </Card>
+        <Step3AIEval
+          formData={formData}
+          setFormData={setFormData}
+          globalConfig={globalConfig}
+          effectiveEvalThreshold={effective.evalThreshold}
+          onOpenGlobalConfig={() => setEvalModalOpen(true)}
+        />
       )}
 
       {/* Step 4: 反检测参数（全局配置） */}
@@ -1010,7 +895,7 @@ export default function TaskEditor() {
             )}
 
             {/* 危险操作风险提示（提交前预览） */}
-            {detectRiskyConfig().length > 0 && (
+            {risks.length > 0 && (
               <Alert
                 type="warning"
                 showIcon
@@ -1019,7 +904,7 @@ export default function TaskEditor() {
                 style={{ marginTop: 16 }}
                 description={
                   <ul style={{ margin: 0, paddingLeft: 20 }}>
-                    {detectRiskyConfig().map((r, i) => (
+                    {risks.map((r, i) => (
                       <li key={`${r.level}-${i}`} style={{ color: r.level === 'danger' ? '#ff4d4f' : '#faad14', fontSize: 13 }}>
                         {r.message}
                       </li>
@@ -1106,6 +991,213 @@ export default function TaskEditor() {
         configApi.get().then(setGlobalConfig).catch(() => {})
       }} />
     </div>
+  )
+}
+
+// S3776 修复：Step 3（AI 评估参数）提取为独立子组件
+// 为什么提取：原主组件 JSX 内含 2 个内嵌 IIFE（auto_collect_official Tag color 和 content），
+// 每个 IIFE 内 if/else 贡献 +2 复杂度，且 IIFE 嵌套层级 +1 让复杂度翻倍；
+// 提取为子组件后这些复杂度独立计算，主组件函数 CC 从 19 降至 ~13
+function Step3AIEval(props: {
+  formData: TaskCreateBody
+  setFormData: (next: TaskCreateBody) => void
+  globalConfig: AppConfig | null
+  effectiveEvalThreshold: number
+  onOpenGlobalConfig: () => void
+}) {
+  const { formData, setFormData, globalConfig, effectiveEvalThreshold, onOpenGlobalConfig } = props
+  return (
+    <Card
+      title={
+        <Space>
+          <RobotOutlined />
+          <span>Step 4 · AI 评估参数</span>
+        </Space>
+      }
+      extra={
+        <Button
+          size="small"
+          icon={<SettingOutlined />}
+          onClick={onOpenGlobalConfig}
+        >
+          全局 AI 评估配置
+        </Button>
+      }
+    >
+      <Alert
+        type="info"
+        showIcon
+        message="任务级 AI 评估参数"
+        description="此处的阈值和提示词为任务级覆盖，优先于全局配置。未设置则沿用全局。"
+        style={{ marginBottom: 16 }}
+      />
+
+      <Form layout="vertical">
+        <Form.Item
+          label="评估通过阈值（eval_threshold）"
+          help={`≥ 此分数视为通过，触发通知/抢单。全局当前值：${globalConfig?.eval?.pass_score ?? 60}`}
+        >
+          <Slider
+            min={0}
+            max={100}
+            value={formData.eval_threshold ?? effectiveEvalThreshold}
+            onChange={(v) => {
+              // 与全局值相同时回退 null，保留"沿用全局"语义
+              // 否则用户拖动后即使拖回原位也会变成任务级覆盖，全局值变更时此任务不跟随
+              const globalValue = globalConfig?.eval?.pass_score ?? 60
+              setFormData({ ...formData, eval_threshold: v === globalValue ? null : v })
+            }}
+            marks={{ 0: '0', 60: '60', 80: '80', 100: '100' }}
+            tooltip={{ formatter: (v) => v == null ? '沿用全局' : String(v) }}
+          />
+          <Space style={{ marginTop: 8 }}>
+            <InputNumber
+              min={0}
+              max={100}
+              value={formData.eval_threshold ?? null}
+              onChange={(v) => setFormData({ ...formData, eval_threshold: v })}
+              placeholder={`沿用全局（${effectiveEvalThreshold}）`}
+              style={{ width: 120 }}
+            />
+            <Button
+              size="small"
+              onClick={() => setFormData({ ...formData, eval_threshold: null })}
+              disabled={formData.eval_threshold === null}
+            >
+              重置为全局
+            </Button>
+          </Space>
+        </Form.Item>
+
+        <Divider />
+
+        <Form.Item
+          label="AI 评估提示词（ai_prompt）"
+          help="自定义 AI 评估时的额外指令，留空则使用系统默认提示词"
+        >
+          <Input.TextArea
+            rows={4}
+            value={formData.ai_prompt ?? ''}
+            onChange={(e) => setFormData({ ...formData, ai_prompt: e.target.value || null })}
+            placeholder="例：重点关注商品成色，对翻新机一票否决；优先考虑带原盒发票的商品"
+            maxLength={500}
+            showCount
+          />
+        </Form.Item>
+
+        <Divider />
+
+        {/* 任务级自动官方采集覆盖：留空（未设置）则沿用全局 AppConfig.eval */}
+        {/* 为什么独立于全局配置模态框：高频任务可能需要单独关闭采集避免反爬，
+            低频任务可能需要放宽 max_per_run 做深度扫描 */}
+        <Form.Item
+          label="自动官方采集（auto_collect_official）"
+          help="留空则使用全局配置。开启后对通过评估的商品自动调用官方采集做深度验证"
+        >
+          <Space>
+            <Switch
+              checked={formData.eval_config?.auto_collect_official ?? globalConfig?.eval?.auto_collect_official ?? false}
+              onChange={(v) => setFormData({
+                ...formData,
+                eval_config: { ...formData.eval_config, auto_collect_official: v },
+              })}
+            />
+            <Tag color={(() => {
+              // 任务级覆盖用蓝色高亮，继承全局则用默认色
+              if (formData.eval_config?.auto_collect_official != null) return 'blue'
+              return 'default'
+            })()}>
+              {(() => {
+                if (formData.eval_config?.auto_collect_official != null) {
+                  return `任务级：${formData.eval_config.auto_collect_official ? '已开启' : '已关闭'}`
+                }
+                return `沿用全局（${globalConfig?.eval?.auto_collect_official ? '已开启' : '已关闭'}）`
+              })()}
+            </Tag>
+            <Button
+              size="small"
+              onClick={() => {
+                const next = { ...formData.eval_config }
+                delete next.auto_collect_official
+                setFormData({ ...formData, eval_config: Object.keys(next).length > 0 ? next : null })
+              }}
+              disabled={formData.eval_config?.auto_collect_official == null}
+            >
+              重置为全局
+            </Button>
+          </Space>
+        </Form.Item>
+
+        <Form.Item
+          label="每轮最多采集条数（auto_collect_max_per_run）"
+          help="留空则使用全局配置。避免拖慢+反爬"
+        >
+          <Space>
+            <InputNumber
+              min={1}
+              max={20}
+              value={formData.eval_config?.auto_collect_max_per_run ?? null}
+              onChange={(v) => setFormData({
+                ...formData,
+                eval_config: { ...formData.eval_config, auto_collect_max_per_run: v ?? undefined },
+              })}
+              placeholder={`沿用全局（${globalConfig?.eval?.auto_collect_max_per_run ?? 3}）`}
+              style={{ width: 200 }}
+              addonAfter="条"
+            />
+            <Button
+              size="small"
+              onClick={() => {
+                const next = { ...formData.eval_config }
+                delete next.auto_collect_max_per_run
+                setFormData({ ...formData, eval_config: Object.keys(next).length > 0 ? next : null })
+              }}
+              disabled={formData.eval_config?.auto_collect_max_per_run == null}
+            >
+              重置为全局
+            </Button>
+          </Space>
+        </Form.Item>
+      </Form>
+
+      <Divider />
+
+      {/* 全局 AI 评估配置概览（只读，点击按钮编辑） */}
+      <Card size="small" type="inner" title="全局 AI 评估配置概览（只读）">
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>通过分数（pass_score）</span>
+            <Tag>{globalConfig?.eval?.pass_score ?? '-'}</Tag>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>自动抢单分数（auto_buy_score）</span>
+            <Tag>{globalConfig?.eval?.auto_buy_score ?? '-'}</Tag>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>AI 自动评估</span>
+            <Tag color={globalConfig?.eval?.ai_auto_eval ? 'green' : 'default'}>
+              {globalConfig?.eval?.ai_auto_eval ? '已开启' : '已关闭'}
+            </Tag>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>AI 深度分析</span>
+            <Tag color={globalConfig?.eval?.ai_auto_deep_analyze ? 'green' : 'default'}>
+              {globalConfig?.eval?.ai_auto_deep_analyze ? '已开启' : '已关闭'}
+            </Tag>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>自动官方采集</span>
+            <Tag color={globalConfig?.eval?.auto_collect_official ? 'green' : 'default'}>
+              {globalConfig?.eval?.auto_collect_official ? '已开启' : '已关闭'}
+            </Tag>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span>每轮最多采集</span>
+            <Tag>{globalConfig?.eval?.auto_collect_max_per_run ?? '-'} 条</Tag>
+          </div>
+        </Space>
+      </Card>
+    </Card>
   )
 }
 

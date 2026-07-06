@@ -24,7 +24,7 @@ import { AIEvalModal } from './components/AIEvalModal'
 import { DeepAnalyzeModal } from './components/DeepAnalyzeModal'
 import { CollectResultModal } from './components/CollectResultModal'
 
-import { useEvalFilters } from './hooks/useEvalFilters'
+import { useEvalFilters, type ResultCategory } from './hooks/useEvalFilters'
 import { useEvalList } from './hooks/useEvalList'
 import { useEvalDist } from './hooks/useEvalDist'
 import { useEvalAI } from './hooks/useEvalAI'
@@ -280,6 +280,104 @@ function AnalysisPanel({
   )
 }
 
+// S3776 修复：把评估结果分类卡片提取为子组件
+// 5 个 Card 共享 onClick + 条件 style 模式，用配置数组驱动消除 5 处内联 onClick + 5 处三元样式
+function ResultCategoryCards({
+  dist, passScore, autoBuyScore, resultCategory, onSelect,
+}: {
+  readonly dist: DistResponse
+  readonly passScore: number
+  readonly autoBuyScore: number
+  readonly resultCategory: ResultCategory
+  readonly onSelect: (category: ResultCategory) => void
+}) {
+  // 配置数组：5 个分类卡片共享同一渲染模板，只差 title/value/color
+  // 为什么用数组：原 5 段几乎相同 JSX，每段含 onClick + 条件 style，配置化后子组件复杂度 ~3，主函数减 ~7
+  const cards: ReadonlyArray<{
+    readonly key: ResultCategory
+    readonly title: string
+    readonly value: number
+    readonly valueStyle?: { color: string }
+    readonly activeColor: string
+    readonly activeBg: string
+  }> = [
+    { key: null, title: '评估总数', value: dist.total, activeColor: '#1890ff', activeBg: 'rgba(24,144,255,0.06)' },
+    { key: 'auto', title: `可抢(≥${autoBuyScore})`, value: dist.marginals.result.auto, valueStyle: { color: '#52c41a' }, activeColor: '#52c41a', activeBg: 'rgba(82,196,26,0.06)' },
+    { key: 'pass', title: `通过(${passScore}-${autoBuyScore - 1})`, value: dist.marginals.result.pass, valueStyle: { color: '#1890ff' }, activeColor: '#1890ff', activeBg: 'rgba(24,144,255,0.06)' },
+    { key: 'fail', title: `驳回(<${passScore})`, value: dist.marginals.result.fail, valueStyle: { color: '#ff4d4f' }, activeColor: '#ff4d4f', activeBg: 'rgba(255,77,79,0.06)' },
+    { key: 'insufficient', title: '数据不足', value: dist.insufficient_count, valueStyle: { color: 'var(--xh-text-tertiary)' }, activeColor: '#faad14', activeBg: 'rgba(250,173,20,0.06)' },
+  ]
+  return (
+    <Row gutter={12} style={{ marginBottom: 16 }}>
+      {cards.map((c) => (
+        <Col span={4} key={String(c.key)}>
+          <Card
+            size="small" hoverable
+            onClick={() => onSelect(c.key)}
+            style={resultCategory === c.key ? { borderColor: c.activeColor, background: c.activeBg } : {}}
+          >
+            <Statistic title={c.title} value={c.value} valueStyle={c.valueStyle} />
+          </Card>
+        </Col>
+      ))}
+      <Col span={4}>
+        <Card size="small" hoverable>
+          <Statistic title="价格区间" value={dist.price_range[0] > 0 ? `¥${dist.price_range[0]}~${dist.price_range[1]}` : '—'} />
+        </Card>
+      </Col>
+    </Row>
+  )
+}
+
+// S3776 修复：批量选择 Alert 提取为子组件
+// 原 JSX 含 5 处三元（batchCollecting ? collectProgress : batchProgress）+ 1 处 && 条件渲染
+// 提取后用单个 progress 变量替代 3 处三元，主函数减少 1 处 && 条件渲染
+function BatchSelectionAlert({
+  selectedCount, batchAIEvaluating, batchCollecting,
+  batchProgress, batchCollectProgress,
+  onBatchAIEval, onBatchCollectOfficial, onClearSelection,
+}: {
+  readonly selectedCount: number
+  readonly batchAIEvaluating: boolean
+  readonly batchCollecting: boolean
+  readonly batchProgress: { done: number; total: number }
+  readonly batchCollectProgress: { done: number; total: number }
+  readonly onBatchAIEval: () => void
+  readonly onBatchCollectOfficial: () => void
+  readonly onClearSelection: () => void
+}) {
+  if (selectedCount === 0) return null
+  // 进度数据选择：批量采集进行中显示采集进度，否则显示 AI 评估进度
+  const progress = batchCollecting ? batchCollectProgress : batchProgress
+  const showProgress = batchAIEvaluating || batchCollecting
+  return (
+    <Alert
+      type="info"
+      showIcon
+      style={{ marginBottom: 12 }}
+      message={
+        <Space>
+          <span>已选择 <b>{selectedCount}</b> 项</span>
+          <Button type="primary" size="small" icon={<RobotOutlined />} loading={batchAIEvaluating} onClick={onBatchAIEval}>
+            批量 AI 评估 ({selectedCount} 项)
+          </Button>
+          <Button size="small" icon={<CloudDownloadOutlined />} loading={batchCollecting} onClick={onBatchCollectOfficial}>
+            批量官方采集 ({selectedCount} 项)
+          </Button>
+          <Button size="small" onClick={onClearSelection}>取消选择</Button>
+        </Space>
+      }
+      description={showProgress && (
+        <Progress
+          percent={Math.round((progress.done / progress.total) * 100)}
+          size="small"
+          format={() => `${progress.done}/${progress.total}`}
+        />
+      )}
+    />
+  )
+}
+
 export default function Evaluations() {
   const filters = useEvalFilters()
   const list = useEvalList({
@@ -493,58 +591,13 @@ export default function Evaluations() {
       )}
 
       {dist.dist && (
-        <Row gutter={12} style={{ marginBottom: 16 }}>
-          <Col span={4}>
-            <Card
-              size="small" hoverable
-              onClick={() => { filters.toggleResultCategory(null); list.setPage(1); setTimeout(list.load, 0) }}
-              style={filters.resultCategory === null ? { borderColor: '#1890ff', background: 'rgba(24,144,255,0.06)' } : {}}
-            >
-              <Statistic title="评估总数" value={dist.dist.total} />
-            </Card>
-          </Col>
-          <Col span={4}>
-            <Card
-              size="small" hoverable
-              onClick={() => { filters.toggleResultCategory('auto'); list.setPage(1); setTimeout(list.load, 0) }}
-              style={filters.resultCategory === 'auto' ? { borderColor: '#52c41a', background: 'rgba(82,196,26,0.06)' } : {}}
-            >
-              <Statistic title={`可抢(≥${dist.autoBuyScore})`} value={dist.dist.marginals.result.auto} valueStyle={{ color: '#52c41a' }} />
-            </Card>
-          </Col>
-          <Col span={4}>
-            <Card
-              size="small" hoverable
-              onClick={() => { filters.toggleResultCategory('pass'); list.setPage(1); setTimeout(list.load, 0) }}
-              style={filters.resultCategory === 'pass' ? { borderColor: '#1890ff', background: 'rgba(24,144,255,0.06)' } : {}}
-            >
-              <Statistic title={`通过(${dist.passScore}-${dist.autoBuyScore - 1})`} value={dist.dist.marginals.result.pass} valueStyle={{ color: '#1890ff' }} />
-            </Card>
-          </Col>
-          <Col span={4}>
-            <Card
-              size="small" hoverable
-              onClick={() => { filters.toggleResultCategory('fail'); list.setPage(1); setTimeout(list.load, 0) }}
-              style={filters.resultCategory === 'fail' ? { borderColor: '#ff4d4f', background: 'rgba(255,77,79,0.06)' } : {}}
-            >
-              <Statistic title={`驳回(<${dist.passScore})`} value={dist.dist.marginals.result.fail} valueStyle={{ color: '#ff4d4f' }} />
-            </Card>
-          </Col>
-          <Col span={4}>
-            <Card
-              size="small" hoverable
-              onClick={() => { filters.toggleResultCategory('insufficient'); list.setPage(1); setTimeout(list.load, 0) }}
-              style={filters.resultCategory === 'insufficient' ? { borderColor: '#faad14', background: 'rgba(250,173,20,0.06)' } : {}}
-            >
-              <Statistic title="数据不足" value={dist.dist.insufficient_count} valueStyle={{ color: 'var(--xh-text-tertiary)' }} />
-            </Card>
-          </Col>
-          <Col span={4}>
-            <Card size="small" hoverable>
-              <Statistic title="价格区间" value={dist.dist.price_range[0] > 0 ? `¥${dist.dist.price_range[0]}~${dist.dist.price_range[1]}` : '—'} />
-            </Card>
-          </Col>
-        </Row>
+        <ResultCategoryCards
+          dist={dist.dist}
+          passScore={dist.passScore}
+          autoBuyScore={dist.autoBuyScore}
+          resultCategory={filters.resultCategory}
+          onSelect={(cat) => { filters.toggleResultCategory(cat); list.setPage(1); setTimeout(list.load, 0) }}
+        />
       )}
 
       <Row gutter={16}>
@@ -561,48 +614,16 @@ export default function Evaluations() {
               </Tooltip>
             }
           >
-            {batch.selectedRowKeys.length > 0 && (
-              <Alert
-                type="info"
-                showIcon
-                style={{ marginBottom: 12 }}
-                message={
-                  <Space>
-                    <span>已选择 <b>{batch.selectedRowKeys.length}</b> 项</span>
-                    <Button
-                      type="primary"
-                      size="small"
-                      icon={<RobotOutlined />}
-                      loading={batch.batchAIEvaluating}
-                      onClick={batch.onBatchAIEval}
-                    >
-                      批量 AI 评估 ({batch.selectedRowKeys.length} 项)
-                    </Button>
-                    <Button
-                      size="small"
-                      icon={<CloudDownloadOutlined />}
-                      loading={batch.batchCollecting}
-                      onClick={batch.onBatchCollectOfficial}
-                    >
-                      批量官方采集 ({batch.selectedRowKeys.length} 项)
-                    </Button>
-                    <Button size="small" onClick={() => batch.setSelectedRowKeys([])}>取消选择</Button>
-                  </Space>
-                }
-                description={(batch.batchAIEvaluating || batch.batchCollecting) && (
-                  <Progress
-                    percent={Math.round(
-                      (batch.batchCollecting ? batch.batchCollectProgress.done : batch.batchProgress.done) /
-                      (batch.batchCollecting ? batch.batchCollectProgress.total : batch.batchProgress.total) * 100
-                    )}
-                    size="small"
-                    format={() =>
-                      `${batch.batchCollecting ? batch.batchCollectProgress.done : batch.batchProgress.done}/${batch.batchCollecting ? batch.batchCollectProgress.total : batch.batchProgress.total}`
-                    }
-                  />
-                )}
-              />
-            )}
+            <BatchSelectionAlert
+              selectedCount={batch.selectedRowKeys.length}
+              batchAIEvaluating={batch.batchAIEvaluating}
+              batchCollecting={batch.batchCollecting}
+              batchProgress={batch.batchProgress}
+              batchCollectProgress={batch.batchCollectProgress}
+              onBatchAIEval={batch.onBatchAIEval}
+              onBatchCollectOfficial={batch.onBatchCollectOfficial}
+              onClearSelection={() => batch.setSelectedRowKeys([])}
+            />
             <Spin spinning={list.loading}>
               {list.items.length === 0 ? (
                 <Empty description={filters.resultCategory ? '当前过滤条件下无匹配记录' : '暂无评估数据'} />

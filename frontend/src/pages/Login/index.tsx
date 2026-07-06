@@ -195,6 +195,448 @@ const pollLoginTick = async (
   }
 }
 
+// 浏览器状态 Tag 颜色：有闲鱼 Cookie=绿，已安装但无 Cookie=默认，未安装=红
+// 为什么提取：原 tabItems 内 IIFE 含 if/if/return，提取后子组件 JSX 更扁平
+const browserTagColor = (status: { exists: boolean; has_goofish_cookie: boolean }): string => {
+  if (status.has_goofish_cookie) return 'green'
+  if (status.exists) return 'default'
+  return 'red'
+}
+
+// 浏览器状态 Tag 文本：未安装/可导入/未检测到闲鱼 Cookie
+const browserTagText = (status: { exists: boolean; has_goofish_cookie: boolean }): string => {
+  if (!status.exists) return ' 未安装'
+  if (status.has_goofish_cookie) return ' 可导入'
+  return ' 未检测到闲鱼 Cookie'
+}
+
+// S3776 修复：浏览器登录 Tab 提取为子组件
+// 原主函数 tabItems 内含 8 处条件判断（||/&&/?:/includes），提取后主函数复杂度降 ~8
+function BrowserLoginTab({
+  loginStatus, startingBrowser, onStart, onCancel,
+}: {
+  readonly loginStatus: LoginStatus | null
+  readonly startingBrowser: boolean
+  readonly onStart: () => void
+  readonly onCancel: () => void
+}) {
+  const { token: themeToken } = theme.useToken()
+  // 终态判断：success/cancelled/error/timeout 都允许重新登录
+  // 为什么复用变量：原代码两处 .includes() 互斥，提取为 isTerminal 消除 2 处重复 .includes 调用
+  const isTerminal = loginStatus != null && ['success', 'cancelled', 'error', 'timeout'].includes(loginStatus.status)
+  const showStartButton = !loginStatus || loginStatus.status === 'idle'
+  // 进度卡片背景：成功用绿色，进行中用黄色（提取变量消除 2 处三元）
+  const progressBg = loginStatus?.status === 'success' ? '#f6ffed' : '#fffbe6'
+  const progressBorder = loginStatus?.status === 'success' ? '#b7eb8f' : '#ffe58f'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Alert
+        type="info"
+        showIcon
+        message="弹出浏览器窗口登录"
+        description="启动 Playwright 浏览器窗口，在窗口中手动登录闲鱼。适合浏览器导入失败或需要重新登录的场景。"
+      />
+
+      {showStartButton ? (
+        <Button
+          type="primary"
+          size="large"
+          icon={<LoginOutlined />}
+          onClick={onStart}
+          loading={startingBrowser}
+          style={{ background: '#FF6200', borderColor: '#FF6200', width: 'fit-content' }}
+        >
+          启动浏览器窗口登录
+        </Button>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* 登录进度 */}
+          <div style={{ padding: 16, borderRadius: 8, background: progressBg, border: `1px solid ${progressBorder}` }}>
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {loginStatus?.status === 'success' ? (
+                  <CheckCircleOutlined style={{ color: themeToken.colorSuccess, fontSize: 20 }} />
+                ) : (
+                  <Spin size="small" />
+                )}
+                <Text strong>{loginStatus?.message}</Text>
+              </div>
+              {loginStatus && loginStatus.elapsed > 0 && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  已用时 {Math.floor(loginStatus.elapsed / 60)}分{Math.floor(loginStatus.elapsed % 60)}秒
+                </Text>
+              )}
+              {loginStatus && (loginStatus.phase || loginStatus.child_elapsed != null) && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {phaseLabel(loginStatus.phase) || '当前阶段'}
+                  {loginStatus.child_elapsed != null ? ` ${Number(loginStatus.child_elapsed).toFixed(1)}秒` : ''}
+                  {loginStatus.wait_elapsed != null ? `（等待登录 ${loginStatus.wait_elapsed}秒）` : ''}
+                </Text>
+              )}
+              {loginStatus && formatTimings(loginStatus.timings) && (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  阶段耗时：{formatTimings(loginStatus.timings)}
+                </Text>
+              )}
+              {/* 进度条：给用户视觉反馈 */}
+              {loginStatus?.status === 'running' && (
+                <Progress
+                  percent={Math.min(95, Math.floor((loginStatus.elapsed / 300) * 100))}
+                  showInfo={false}
+                  strokeColor="#FF6200"
+                  size="small"
+                />
+              )}
+            </Space>
+          </div>
+
+          {/* 取消按钮 */}
+          {!isTerminal && (
+            <Button icon={<SwapOutlined />} onClick={onCancel}>
+              取消登录
+            </Button>
+          )}
+
+          {/* 终态重试：success/cancelled/error/timeout 都允许重新登录
+              - error/timeout：常规重试
+              - cancelled：用户主动取消后可能想重新尝试
+              - success：跳转失败的兜底（onLoginSuccess 未成功跳转时用户可手动重试） */}
+          {isTerminal && (
+            <Button type="primary" icon={<ReloadOutlined />} onClick={onStart}
+              loading={startingBrowser}
+              style={{ background: '#FF6200', borderColor: '#FF6200' }}>
+              重新登录
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// S3776 修复：Cookie 注入 Tab 提取为子组件
+// 原主函数 tabItems 内含 ~10 处条件判断（&&/?:），提取后主函数复杂度降 ~10
+function CookieInjectTab({
+  cookieFields, setCookieFields, injecting, autoFilling, autoFillResult,
+  pasteText, parseResult, cookieInfo,
+  onInject, onAutoFill, onClear, onParsePaste, onPaste, onFileUpload,
+}: {
+  readonly cookieFields: Record<string, string>
+  readonly setCookieFields: React.Dispatch<React.SetStateAction<Record<string, string>>>
+  readonly injecting: boolean
+  readonly autoFilling: boolean
+  readonly autoFillResult: { text: string; error: boolean } | null
+  readonly pasteText: string
+  readonly parseResult: { total: number; matched: string[]; missing: string[] } | null
+  readonly cookieInfo: SavedCookieInfo | null
+  readonly onInject: () => void
+  readonly onAutoFill: () => void
+  readonly onClear: () => void
+  readonly onParsePaste: (text: string) => void
+  readonly onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void
+  readonly onFileUpload: (file: File) => boolean | Promise<boolean>
+}) {
+  const { isDark } = useTheme()
+  const { token: themeToken } = theme.useToken()
+  const hasAnyCookie = COOKIE_KEYS.some((ck) => cookieFields[ck.key]?.trim())
+  const keyCookiesFound = cookieInfo?.key_cookies_found ?? []
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* 顶部操作栏：自动获取 + 当前状态 + 清空 */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <Button
+          size="small"
+          icon={<GlobalOutlined />}
+          loading={autoFilling}
+          onClick={onAutoFill}
+        >
+          {autoFilling ? '读取中…' : '从浏览器自动获取'}
+        </Button>
+        {autoFillResult && (
+          <span style={{ fontSize: 12, color: autoFillResult.error ? themeToken.colorError : themeToken.colorSuccess }}>
+            {autoFillResult.text}
+          </span>
+        )}
+        {hasAnyCookie && (
+          <Button size="small" icon={<ClearOutlined />} onClick={onClear}>
+            清空
+          </Button>
+        )}
+      </div>
+
+      {/* 已有 Cookie 状态提示 */}
+      {cookieInfo?.has_cookies && (
+        <Alert
+          type="info"
+          showIcon={false}
+          message={
+            <span style={{ fontSize: 12 }}>
+              已保存 <strong>{cookieInfo.cookie_count}</strong> 个 Cookie
+              {cookieInfo.method && `（来源: ${cookieInfo.method}）`}
+              {keyCookiesFound.length > 0 && (
+                <span>，关键: {keyCookiesFound.join(', ')}</span>
+              )}
+            </span>
+          }
+          style={{ marginBottom: 4 }}
+        />
+      )}
+
+      {/* 快速粘贴：从浏览器开发者工具全量复制 Cookie 键值对后直接粘贴 */}
+      <div style={{
+        padding: 12,
+        borderRadius: 8,
+        background: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.02)',
+        border: `1px dashed ${themeToken.colorBorder}`,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: themeToken.colorText }}>
+            <CopyOutlined style={{ marginRight: 4 }} />
+            快速粘贴 Cookie
+          </span>
+          <Text type="secondary" style={{ fontSize: 10 }}>
+            支持格式：key=value; key=value 或换行分隔
+          </Text>
+        </div>
+        <TextArea
+          rows={3}
+          placeholder="从此处粘贴从浏览器复制的 Cookie，例如：&#10;_m_h5_tk=xxx; cookie2=xxx; sgcookie=xxx; unb=xxx"
+          value={pasteText}
+          onChange={(e) => onParsePaste(e.target.value)}
+          onPaste={onPaste}
+          style={{ fontFamily: 'monospace', fontSize: 11 }}
+          disabled={injecting}
+          autoComplete="off"
+          name="cookie-paste-area"
+          spellCheck={false}
+        />
+        {/* 解析结果反馈 */}
+        {parseResult && (
+          <div style={{ marginTop: 6, fontSize: 11 }}>
+            {parseResult.total > 0 ? (
+              <Space size={4} wrap>
+                <span style={{ color: themeToken.colorTextSecondary }}>
+                  识别到 <strong style={{ color: themeToken.colorPrimary }}>{parseResult.total}</strong> 个 Cookie
+                </span>
+                {parseResult.matched.length > 0 && (
+                  <span style={{ color: themeToken.colorSuccess }}>
+                    ✓ 已填充: {parseResult.matched.join(', ')}
+                  </span>
+                )}
+                {parseResult.missing.length > 0 && (
+                  <span style={{ color: themeToken.colorWarning }}>
+                    ⚠ 未找到: {parseResult.missing.join(', ')}
+                  </span>
+                )}
+              </Space>
+            ) : (
+              <span style={{ color: themeToken.colorError }}>
+                未识别到有效的 Cookie 键值对，请检查格式
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* 分字段输入（用于精细调整） */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10,
+      }}>
+        {COOKIE_KEYS.map((ck) => (
+          <div key={ck.key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Tag color="blue" style={{ fontSize: 11, fontFamily: 'monospace' }}>{ck.key}</Tag>
+              <span style={{ fontSize: 11, color: themeToken.colorTextSecondary, fontWeight: 500 }}>{ck.label}</span>
+            </div>
+            <Input
+              placeholder={`粘贴 ${ck.key} 的值`}
+              value={cookieFields[ck.key]}
+              onChange={(e) => setCookieFields((prev) => ({ ...prev, [ck.key]: e.target.value }))}
+              style={{ fontFamily: 'monospace', fontSize: 12 }}
+              disabled={injecting}
+              autoComplete="off"
+              name={`cookie-${ck.key}`}
+              spellCheck={false}
+            />
+            {ck.hint && (
+              <span style={{ fontSize: 10, color: themeToken.colorWarning, fontWeight: 500 }}>{ck.hint}</span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* 操作按钮 */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <Button
+          type="primary"
+          icon={<KeyOutlined />}
+          loading={injecting}
+          onClick={onInject}
+          disabled={!hasAnyCookie}
+          style={{ background: '#FF6200', borderColor: '#FF6200' }}
+        >
+          注入 Cookie 登录
+        </Button>
+
+        <Divider type="vertical" style={{ height: 24 }} />
+
+        <Text type="secondary" style={{ fontSize: 11 }}>或</Text>
+
+        <Upload
+          accept=".txt,.json,.csv"
+          maxCount={1}
+          showUploadList={false}
+          beforeUpload={onFileUpload}
+        >
+          <Button icon={<UploadOutlined />} size="small" loading={injecting}>
+            上传文件
+          </Button>
+        </Upload>
+      </div>
+    </div>
+  )
+}
+
+// S3776 修复：浏览器导入 Tab 提取为子组件
+// 原主函数 tabItems 内含 2 处 IIFE + 多处条件判断，提取后用 browserTagColor/browserTagText 替代 IIFE
+function BrowserImportTab({
+  browserStatus, importing, importResult,
+  onImport, onOpenBrowser, onRefreshStatus, onClearImportResult,
+}: {
+  readonly browserStatus: {
+    edge: { exists: boolean; has_goofish_cookie: boolean }
+    chrome: { exists: boolean; has_goofish_cookie: boolean }
+  } | null
+  readonly importing: boolean
+  readonly importResult: string | null
+  readonly onImport: (browser: 'edge' | 'chrome', autoClose?: boolean) => void
+  readonly onOpenBrowser: () => void
+  readonly onRefreshStatus: () => void
+  readonly onClearImportResult: () => void
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Alert
+        type="info"
+        showIcon
+        message="从系统浏览器自动获取闲鱼登录状态"
+        description="如果你已在 Edge 或 Chrome 中登录过闲鱼，可以直接导入 Cookie，无需重新扫码"
+        style={{ marginBottom: 8 }}
+      />
+
+      {/* 浏览器状态检测 */}
+      {browserStatus && (
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {(['edge', 'chrome'] as const).map((b) => {
+            const status = browserStatus[b]
+            return (
+              <Tag
+                key={b}
+                icon={<GlobalOutlined />}
+                color={browserTagColor(status)}
+                style={{ fontSize: 13, padding: '4px 12px' }}
+              >
+                {b === 'edge' ? 'Edge' : 'Chrome'}
+                {browserTagText(status)}
+              </Tag>
+            )
+          })}
+        </div>
+      )}
+
+      {/* 操作按钮 */}
+      <Space wrap>
+        <Button
+          type="primary"
+          icon={<ImportOutlined />}
+          loading={importing}
+          onClick={() => onImport('edge')}
+          disabled={!browserStatus?.edge?.exists}
+          style={{ background: '#FF6200', borderColor: '#FF6200' }}
+        >
+          从 Edge 导入
+        </Button>
+        <Button
+          icon={<ImportOutlined />}
+          loading={importing}
+          onClick={() => onImport('chrome')}
+          disabled={!browserStatus?.chrome?.exists}
+        >
+          从 Chrome 导入
+        </Button>
+        <Button icon={<ReloadOutlined />} onClick={onOpenBrowser}>
+          打开闲鱼网页
+        </Button>
+      </Space>
+
+      {/* 文件锁定时的解决方案 */}
+      <Alert
+        type="warning"
+        showIcon
+        message="遇到「文件被锁定」错误？"
+        description={
+          <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+            <p style={{ margin: '4px 0' }}>Edge/Chrome 运行时会锁定 Cookie 文件。如果导入失败，请尝试：</p>
+            <ol style={{ margin: '4px 0 4px 20px', padding: 0 }}>
+              <li>点击下方「自动关闭浏览器并导入」按钮（会自动关闭浏览器进程后重试）</li>
+              <li>或手动完全关闭浏览器（包括任务栏托盘后台进程）后重试</li>
+              <li>或改用「Cookie 注入」标签页，从浏览器开发者工具复制 Cookie 后粘贴</li>
+            </ol>
+          </div>
+        }
+        style={{ marginBottom: 8 }}
+      />
+
+      {/* 自动关闭浏览器并导入按钮 */}
+      <Space wrap>
+        <Button
+          icon={<ThunderboltOutlined />}
+          loading={importing}
+          onClick={() => onImport('edge', true)}
+          disabled={!browserStatus?.edge?.exists}
+          danger
+        >
+          自动关闭 Edge 并导入
+        </Button>
+        <Button
+          icon={<ThunderboltOutlined />}
+          loading={importing}
+          onClick={() => onImport('chrome', true)}
+          disabled={!browserStatus?.chrome?.exists}
+          danger
+        >
+          自动关闭 Chrome 并导入
+        </Button>
+      </Space>
+
+      {/* 导入结果提示（支持多行显示） */}
+      {importResult && (
+        <Alert
+          type={importResult.includes('成功') ? 'success' : 'error'}
+          message={importResult.split('\n').map((line, i) => (
+            <div key={`${line}-${i}`} style={{ fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{line}</div>
+          ))}
+          showIcon
+          closable
+          onClose={onClearImportResult}
+        />
+      )}
+
+      <Divider plain style={{ margin: '8px 0' }}>
+        <Text type="secondary">或使用其他方式</Text>
+      </Divider>
+
+      <Space>
+        <Button icon={<ReloadOutlined />} onClick={onRefreshStatus}>
+          刷新检测
+        </Button>
+      </Space>
+    </div>
+  )
+}
+
 // 登录页面：独立于 MainLayout，提供多种登录方式
 export default function Login() {
   const navigate = useNavigate()
@@ -527,92 +969,12 @@ export default function Login() {
         </span>
       ),
       children: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Alert
-            type="info"
-            showIcon
-            message="弹出浏览器窗口登录"
-            description="启动 Playwright 浏览器窗口，在窗口中手动登录闲鱼。适合浏览器导入失败或需要重新登录的场景。"
-          />
-
-          {!loginStatus || loginStatus.status === 'idle' ? (
-            <Button
-              type="primary"
-              size="large"
-              icon={<LoginOutlined />}
-              onClick={handleStartBrowserLogin}
-              loading={startingBrowser}
-              style={{ background: '#FF6200', borderColor: '#FF6200', width: 'fit-content' }}
-            >
-              启动浏览器窗口登录
-            </Button>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {/* 登录进度 */}
-              <div style={{
-                padding: 16, borderRadius: 8,
-                background: loginStatus.status === 'success' ? '#f6ffed' : '#fffbe6',
-                border: `1px solid ${loginStatus.status === 'success' ? '#b7eb8f' : '#ffe58f'}`,
-              }}>
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {loginStatus.status === 'success' ? (
-                      <CheckCircleOutlined style={{ color: themeToken.colorSuccess, fontSize: 20 }} />
-                    ) : (
-                      <Spin size="small" />
-                    )}
-                    <Text strong>{loginStatus.message}</Text>
-                  </div>
-                  {loginStatus.elapsed > 0 && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      已用时 {Math.floor(loginStatus.elapsed / 60)}分{Math.floor(loginStatus.elapsed % 60)}秒
-                    </Text>
-                  )}
-                  {(loginStatus.phase || loginStatus.child_elapsed != null) && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {phaseLabel(loginStatus.phase) || '当前阶段'}
-                      {loginStatus.child_elapsed != null ? ` ${Number(loginStatus.child_elapsed).toFixed(1)}秒` : ''}
-                      {loginStatus.wait_elapsed != null ? `（等待登录 ${loginStatus.wait_elapsed}秒）` : ''}
-                    </Text>
-                  )}
-                  {formatTimings(loginStatus.timings) && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      阶段耗时：{formatTimings(loginStatus.timings)}
-                    </Text>
-                  )}
-                  {/* 进度条：给用户视觉反馈 */}
-                  {loginStatus.status === 'running' && (
-                    <Progress
-                      percent={Math.min(95, Math.floor((loginStatus.elapsed / 300) * 100))}
-                      showInfo={false}
-                      strokeColor="#FF6200"
-                      size="small"
-                    />
-                  )}
-                </Space>
-              </div>
-
-              {/* 取消按钮 */}
-              {!['success', 'cancelled', 'error', 'timeout'].includes(loginStatus.status) && (
-                <Button icon={<SwapOutlined />} onClick={handleCancelLogin}>
-                  取消登录
-                </Button>
-              )}
-
-              {/* 终态重试：success/cancelled/error/timeout 都允许重新登录
-                  - error/timeout：常规重试
-                  - cancelled：用户主动取消后可能想重新尝试
-                  - success：跳转失败的兜底（onLoginSuccess 未成功跳转时用户可手动重试） */}
-              {['success', 'cancelled', 'error', 'timeout'].includes(loginStatus.status) && (
-                <Button type="primary" icon={<ReloadOutlined />} onClick={handleStartBrowserLogin}
-                  loading={startingBrowser}
-                  style={{ background: '#FF6200', borderColor: '#FF6200' }}>
-                  重新登录
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
+        <BrowserLoginTab
+          loginStatus={loginStatus}
+          startingBrowser={startingBrowser}
+          onStart={handleStartBrowserLogin}
+          onCancel={handleCancelLogin}
+        />
       ),
     },
     {
@@ -621,159 +983,22 @@ export default function Login() {
         <span style={{ fontWeight: 500 }}><KeyOutlined /> Cookie 注入</span>
       ),
       children: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* 顶部操作栏：自动获取 + 当前状态 + 清空 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Button
-              size="small"
-              icon={<GlobalOutlined />}
-              loading={autoFilling}
-              onClick={handleAutoFillFromBrowser}
-            >
-              {autoFilling ? '读取中…' : '从浏览器自动获取'}
-            </Button>
-            {autoFillResult && (
-              <span style={{ fontSize: 12, color: autoFillResult.error ? themeToken.colorError : themeToken.colorSuccess }}>
-                {autoFillResult.text}
-              </span>
-            )}
-            {COOKIE_KEYS.some((ck) => cookieFields[ck.key]?.trim()) && (
-              <Button size="small" icon={<ClearOutlined />} onClick={handleClearCookies}>
-                清空
-              </Button>
-            )}
-          </div>
-
-          {/* 已有 Cookie 状态提示 */}
-          {cookieInfo?.has_cookies && (
-            <Alert
-              type="info"
-              showIcon={false}
-              message={
-                <span style={{ fontSize: 12 }}>
-                  已保存 <strong>{cookieInfo.cookie_count}</strong> 个 Cookie
-                  {cookieInfo.method && `（来源: ${cookieInfo.method}）`}
-                  {(cookieInfo.key_cookies_found?.length ?? 0) > 0 && (
-                    <span>，关键: {cookieInfo.key_cookies_found!.join(', ')}</span>
-                  )}
-                </span>
-              }
-              style={{ marginBottom: 4 }}
-            />
-          )}
-
-          {/* 快速粘贴：从浏览器开发者工具全量复制 Cookie 键值对后直接粘贴 */}
-          <div style={{
-            padding: 12,
-            borderRadius: 8,
-            background: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.02)',
-            border: `1px dashed ${themeToken.colorBorder}`,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: themeToken.colorText }}>
-                <CopyOutlined style={{ marginRight: 4 }} />
-                快速粘贴 Cookie
-              </span>
-              <Text type="secondary" style={{ fontSize: 10 }}>
-                支持格式：key=value; key=value 或换行分隔
-              </Text>
-            </div>
-            <TextArea
-              rows={3}
-              placeholder="从此处粘贴从浏览器复制的 Cookie，例如：&#10;_m_h5_tk=xxx; cookie2=xxx; sgcookie=xxx; unb=xxx"
-              value={pasteText}
-              onChange={(e) => handleParsePaste(e.target.value)}
-              onPaste={handlePaste}
-              style={{ fontFamily: 'monospace', fontSize: 11 }}
-              disabled={injecting}
-              autoComplete="off"
-              name="cookie-paste-area"
-              spellCheck={false}
-            />
-            {/* 解析结果反馈 */}
-            {parseResult && (
-              <div style={{ marginTop: 6, fontSize: 11 }}>
-                {parseResult.total > 0 ? (
-                  <Space size={4} wrap>
-                    <span style={{ color: themeToken.colorTextSecondary }}>
-                      识别到 <strong style={{ color: themeToken.colorPrimary }}>{parseResult.total}</strong> 个 Cookie
-                    </span>
-                    {parseResult.matched.length > 0 && (
-                      <span style={{ color: themeToken.colorSuccess }}>
-                        ✓ 已填充: {parseResult.matched.join(', ')}
-                      </span>
-                    )}
-                    {parseResult.missing.length > 0 && (
-                      <span style={{ color: themeToken.colorWarning }}>
-                        ⚠ 未找到: {parseResult.missing.join(', ')}
-                      </span>
-                    )}
-                  </Space>
-                ) : (
-                  <span style={{ color: themeToken.colorError }}>
-                    未识别到有效的 Cookie 键值对，请检查格式
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* 分字段输入（用于精细调整） */}
-          <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10,
-          }}>
-            {COOKIE_KEYS.map((ck) => (
-              <div key={ck.key} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Tag color="blue" style={{ fontSize: 11, fontFamily: 'monospace' }}>{ck.key}</Tag>
-                  <span style={{ fontSize: 11, color: themeToken.colorTextSecondary, fontWeight: 500 }}>{ck.label}</span>
-                </div>
-                <Input
-                  placeholder={`粘贴 ${ck.key} 的值`}
-                  value={cookieFields[ck.key]}
-                  onChange={(e) => setCookieFields((prev) => ({ ...prev, [ck.key]: e.target.value }))}
-                  style={{ fontFamily: 'monospace', fontSize: 12 }}
-                  disabled={injecting}
-                  autoComplete="off"
-                  name={`cookie-${ck.key}`}
-                  spellCheck={false}
-                />
-                {ck.hint && (
-                  <span style={{ fontSize: 10, color: themeToken.colorWarning, fontWeight: 500 }}>{ck.hint}</span>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {/* 操作按钮 */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <Button
-              type="primary"
-              icon={<KeyOutlined />}
-              loading={injecting}
-              onClick={handleInjectCookie}
-              disabled={!COOKIE_KEYS.some((ck) => cookieFields[ck.key]?.trim())}
-              style={{ background: '#FF6200', borderColor: '#FF6200' }}
-            >
-              注入 Cookie 登录
-            </Button>
-
-            <Divider type="vertical" style={{ height: 24 }} />
-
-            <Text type="secondary" style={{ fontSize: 11 }}>或</Text>
-
-            <Upload
-              accept=".txt,.json,.csv"
-              maxCount={1}
-              showUploadList={false}
-              beforeUpload={handleFileUpload}
-            >
-              <Button icon={<UploadOutlined />} size="small" loading={injecting}>
-                上传文件
-              </Button>
-            </Upload>
-          </div>
-        </div>
+        <CookieInjectTab
+          cookieFields={cookieFields}
+          setCookieFields={setCookieFields}
+          injecting={injecting}
+          autoFilling={autoFilling}
+          autoFillResult={autoFillResult}
+          pasteText={pasteText}
+          parseResult={parseResult}
+          cookieInfo={cookieInfo}
+          onInject={handleInjectCookie}
+          onAutoFill={handleAutoFillFromBrowser}
+          onClear={handleClearCookies}
+          onParsePaste={handleParsePaste}
+          onPaste={handlePaste}
+          onFileUpload={handleFileUpload}
+        />
       ),
     },
     {
@@ -782,133 +1007,18 @@ export default function Login() {
         <span style={{ fontWeight: 500 }}><ChromeOutlined /> 浏览器导入</span>
       ),
       children: (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Alert
-            type="info"
-            showIcon
-            message="从系统浏览器自动获取闲鱼登录状态"
-            description="如果你已在 Edge 或 Chrome 中登录过闲鱼，可以直接导入 Cookie，无需重新扫码"
-            style={{ marginBottom: 8 }}
-          />
-
-          {/* 浏览器状态检测 */}
-          {browserStatus && (
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {(['edge', 'chrome'] as const).map((b) => (
-                <Tag
-                  key={b}
-                  icon={<GlobalOutlined />}
-                  color={(() => {
-                    const status = browserStatus[b]
-                    if (status.has_goofish_cookie) return 'green'
-                    if (status.exists) return 'default'
-                    return 'red'
-                  })()}
-                  style={{ fontSize: 13, padding: '4px 12px' }}
-                >
-                  {b === 'edge' ? 'Edge' : 'Chrome'}
-                  {(() => {
-                    const status = browserStatus[b]
-                    if (!status.exists) return ' 未安装'
-                    if (status.has_goofish_cookie) return ' 可导入'
-                    return ' 未检测到闲鱼 Cookie'
-                  })()}
-                </Tag>
-              ))}
-            </div>
-          )}
-
-          {/* 操作按钮 */}
-          <Space wrap>
-            <Button
-              type="primary"
-              icon={<ImportOutlined />}
-              loading={importing}
-              onClick={() => handleImportFromBrowser('edge')}
-              disabled={!browserStatus?.edge?.exists}
-              style={{ background: '#FF6200', borderColor: '#FF6200' }}
-            >
-              从 Edge 导入
-            </Button>
-            <Button
-              icon={<ImportOutlined />}
-              loading={importing}
-              onClick={() => handleImportFromBrowser('chrome')}
-              disabled={!browserStatus?.chrome?.exists}
-            >
-              从 Chrome 导入
-            </Button>
-            <Button icon={<ReloadOutlined />} onClick={handleOpenBrowser}>
-              打开闲鱼网页
-            </Button>
-          </Space>
-
-          {/* 文件锁定时的解决方案 */}
-          <Alert
-            type="warning"
-            showIcon
-            message="遇到「文件被锁定」错误？"
-            description={
-              <div style={{ fontSize: 12, lineHeight: 1.8 }}>
-                <p style={{ margin: '4px 0' }}>Edge/Chrome 运行时会锁定 Cookie 文件。如果导入失败，请尝试：</p>
-                <ol style={{ margin: '4px 0 4px 20px', padding: 0 }}>
-                  <li>点击下方「自动关闭浏览器并导入」按钮（会自动关闭浏览器进程后重试）</li>
-                  <li>或手动完全关闭浏览器（包括任务栏托盘后台进程）后重试</li>
-                  <li>或改用「Cookie 注入」标签页，从浏览器开发者工具复制 Cookie 后粘贴</li>
-                </ol>
-              </div>
-            }
-            style={{ marginBottom: 8 }}
-          />
-
-          {/* 自动关闭浏览器并导入按钮 */}
-          <Space wrap>
-            <Button
-              icon={<ThunderboltOutlined />}
-              loading={importing}
-              onClick={() => handleImportFromBrowser('edge', true)}
-              disabled={!browserStatus?.edge?.exists}
-              danger
-            >
-              自动关闭 Edge 并导入
-            </Button>
-            <Button
-              icon={<ThunderboltOutlined />}
-              loading={importing}
-              onClick={() => handleImportFromBrowser('chrome', true)}
-              disabled={!browserStatus?.chrome?.exists}
-              danger
-            >
-              自动关闭 Chrome 并导入
-            </Button>
-          </Space>
-
-          {/* 导入结果提示（支持多行显示） */}
-          {importResult && (
-            <Alert
-              type={importResult.includes('成功') ? 'success' : 'error'}
-              message={importResult.split('\n').map((line, i) => (
-                <div key={`${line}-${i}`} style={{ fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{line}</div>
-              ))}
-              showIcon
-              closable
-              onClose={() => setImportResult(null)}
-            />
-          )}
-
-          <Divider plain style={{ margin: '8px 0' }}>
-            <Text type="secondary">或使用其他方式</Text>
-          </Divider>
-
-          <Space>
-            <Button icon={<ReloadOutlined />} onClick={() => {
-              authApi.getBrowserImportStatus().then(setBrowserStatus).catch(() => {})
-              message.info('已刷新浏览器状态')
-            }}>
-              刷新检测
-            </Button>
-          </Space>
-        </div>
+        <BrowserImportTab
+          browserStatus={browserStatus}
+          importing={importing}
+          importResult={importResult}
+          onImport={handleImportFromBrowser}
+          onOpenBrowser={handleOpenBrowser}
+          onRefreshStatus={() => {
+            authApi.getBrowserImportStatus().then(setBrowserStatus).catch(() => {})
+            message.info('已刷新浏览器状态')
+          }}
+          onClearImportResult={() => setImportResult(null)}
+        />
       ),
     },
   ]
