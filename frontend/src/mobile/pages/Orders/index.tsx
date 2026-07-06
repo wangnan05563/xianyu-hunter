@@ -76,14 +76,18 @@ export default function MobileOrders() {
             size="small"
             style={{ marginBottom: 12 }}
           >
-            <div onClick={() => navigate(`/m/orders/${order.id}`)}>
+            <button
+              type="button"
+              onClick={() => navigate(`/m/orders/${order.id}`)}
+              style={{ border: 'none', background: 'none', padding: 0, width: '100%', textAlign: 'left', cursor: 'pointer' }}
+            >
               <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
                 {order.item_id || '商品'}
               </div>
               <div style={{ fontSize: 13, color: '#999', marginBottom: 8 }}>
                 ¥{order.price} · {order.created_at}
               </div>
-            </div>
+            </button>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Tag color={STATUS_COLORS[order.status]}>
                 {STATUS_LABELS[order.status] || order.status}
