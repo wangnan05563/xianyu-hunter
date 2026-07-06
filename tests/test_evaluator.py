@@ -6,7 +6,8 @@ import pytest
 from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
 from xianyu_hunter.domain.item import ItemDetail
 from xianyu_hunter.domain.seller import SellerProfile
-from xianyu_hunter.modules.evaluator import Evaluator
+from xianyu_hunter.modules.evaluator import Evaluator, PriceRange
+from xianyu_hunter.modules.price_strategy import PriceConfig
 
 
 # ============== 工厂函数 ==============
@@ -426,6 +427,63 @@ def test_normal_price_no_penalty() -> None:
     assert not any(r.startswith("price_") for r in result.reject_reasons)
 
 
+def test_task_price_range_scores_center_higher_than_edges() -> None:
+    ev = Evaluator()
+    price_range = PriceRange(min_price=600, max_price=800)
+    seller = make_seller()
+
+    center = ev.evaluate(make_item(price=700), seller, price_range=price_range)
+    lower_edge = ev.evaluate(make_item(price=610), seller, price_range=price_range)
+    upper_edge = ev.evaluate(make_item(price=790), seller, price_range=price_range)
+
+    assert center.dimension_scores["price"] == 100
+    assert lower_edge.dimension_scores["price"] < center.dimension_scores["price"]
+    assert upper_edge.dimension_scores["price"] < center.dimension_scores["price"]
+    assert lower_edge.dimension_scores["price"] >= 85
+    assert upper_edge.dimension_scores["price"] >= 80
+    assert any("task_price_range" in r for r in lower_edge.reject_reasons)
+    assert any("task_price_range" in r for r in upper_edge.reject_reasons)
+
+
+def test_task_price_range_penalizes_out_of_range_without_hardcoding() -> None:
+    ev = Evaluator()
+    price_range = PriceRange(min_price=600, max_price=800)
+    seller = make_seller()
+
+    in_range_edge = ev.evaluate(make_item(price=790), seller, price_range=price_range)
+    slight_high = ev.evaluate(make_item(price=820), seller, price_range=price_range)
+    far_high = ev.evaluate(make_item(price=950), seller, price_range=price_range)
+    far_low = ev.evaluate(make_item(price=450), seller, price_range=price_range)
+
+    assert slight_high.dimension_scores["price"] < in_range_edge.dimension_scores["price"]
+    assert far_high.dimension_scores["price"] < slight_high.dimension_scores["price"]
+    assert far_low.dimension_scores["price"] <= far_high.dimension_scores["price"]
+    assert any("task_price_range_high" in r for r in slight_high.reject_reasons)
+    assert any("task_price_range_high" in r for r in far_high.reject_reasons)
+    assert any("task_price_range_low" in r for r in far_low.reject_reasons)
+
+
+def test_eval_price_without_task_range_keeps_legacy_score() -> None:
+    ev = Evaluator()
+    result = ev.evaluate(make_item(price=700, title="iPhone 13"), make_seller())
+
+    assert result.dimension_scores["price"] == 100
+    assert not any("task_price_range" in r for r in result.reject_reasons)
+
+
+def test_price_range_from_price_config() -> None:
+    price_range = PriceRange.from_price_config(
+        PriceConfig(min_price=600, max_price=800)
+    )
+
+    assert price_range == PriceRange(min_price=600, max_price=800)
+
+
+def test_price_range_ignores_empty_config() -> None:
+    assert PriceRange.from_price_config(PriceConfig()) is None
+    assert PriceRange.from_price_config(None) is None
+
+
 # ============== P1: Sigmoid 渐进式扣分 ==============
 
 
@@ -638,6 +696,14 @@ def test_evaluator_with_override_ignores_config() -> None:
     thresholds = ev._get_thresholds()
     assert thresholds.auto_buy_score == 75
     assert thresholds.pass_score == 50
+
+
+def test_credit_threshold_defaults_match_xianyu_0_to_100_scale() -> None:
+    from xianyu_hunter.infra.yaml_config import EvalThresholds
+    from xianyu_hunter.modules.evaluator import EvaluationThresholds
+
+    assert EvalThresholds().credit_score_min == 60
+    assert EvaluationThresholds().credit_score_min == 60
 
 
 def test_score_to_risk_consistent_with_should_auto_buy() -> None:

@@ -17,6 +17,7 @@ from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.infra.yaml_config import get_config
 from xianyu_hunter.modules.collector_utils import normalize_display_fields
+from xianyu_hunter.modules.evaluator import PriceRange
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import to_datetime
 
@@ -2051,6 +2052,13 @@ def _persist_eval_from_link(
     }, user_id=user_id or "default")
 
 
+def _evaluate_with_task_price_range(evaluator, detail, seller, price_strategy):
+    price_range = PriceRange.from_price_config(getattr(price_strategy, "config", None))
+    if price_range is None:
+        return evaluator.evaluate(detail, seller)
+    return evaluator.evaluate(detail, seller, price_range=price_range)
+
+
 def _process_recompute_link(
     link: dict, container: Container, get_price_strategy, evaluator,
     task_id: str | None, user_id: str | None, existing_item_ids: set[str],
@@ -2081,7 +2089,8 @@ def _process_recompute_link(
         # 为什么传 market_ctx=None：recompute 无现成市场数据，仅走 min/max 硬性规则
         if _is_recompute_price_skipped(get_price_strategy, effective_task_id, detail, item_id):
             return "skip"
-        eval_result = evaluator.evaluate(detail, seller)
+        price_strategy = get_price_strategy(effective_task_id)
+        eval_result = _evaluate_with_task_price_range(evaluator, detail, seller, price_strategy)
         _persist_eval_from_link(
             container, link, display, detail, eval_result,
             task_id, user_id, item_id, existing_item_ids,
@@ -2321,7 +2330,8 @@ def _do_recompute_single_eval(
     if _is_recompute_price_skipped(get_price_strategy, effective_task_id, detail, item_id):
         return "skipped"
 
-    eval_result = evaluator.evaluate(detail, seller)
+    price_strategy = get_price_strategy(effective_task_id)
+    eval_result = _evaluate_with_task_price_range(evaluator, detail, seller, price_strategy)
     _update_recompute_payload(payload, eval_result)
 
     return _persist_recomputed_eval(
@@ -2650,7 +2660,8 @@ def _do_evaluate_single_unevaluated_item(
     if _is_batch_price_skipped(get_price_strategy, effective_task_id, detail, item_id):
         return "skipped"
 
-    eval_result = evaluator.evaluate(detail, seller)
+    price_strategy = get_price_strategy(effective_task_id)
+    eval_result = _evaluate_with_task_price_range(evaluator, detail, seller, price_strategy)
     _persist_batch_eval_event(container, item_id, effective_task_id, detail, eval_result, user_id)
 
     # 评估通过 → 触发 EVAL_PASSED 事件，让 NotifierHub 推送钉钉等通知

@@ -12,6 +12,7 @@ Worker 不持任何状态，调度由 TaskScheduler 负责。
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -30,7 +31,7 @@ from xianyu_hunter.infra.yaml_config import EvalConfig, get_config
 from xianyu_hunter.modules.buyer import Buyer
 from xianyu_hunter.modules.collector import Collector
 from xianyu_hunter.modules.dedup import ItemDedup
-from xianyu_hunter.modules.evaluator import Evaluator
+from xianyu_hunter.modules.evaluator import Evaluator, PriceRange
 from xianyu_hunter.modules.price_strategy import MarketContext, PriceStrategy
 
 logger = get_logger()
@@ -552,14 +553,23 @@ class TaskWorker:
             if not seller:
                 logger.info("[Task {}] 卖家主页获取失败，使用降级策略评估 {}", self.task.id, summary.id)
                 # 降级策略：合并搜索结果+详情页的卖家信息构建基本画像
-                seller = self.collector.seller_profile_fallback(summary=summary, detail=detail)
+                seller = await self._seller_profile_fallback(summary=summary, detail=detail)
         except Exception as e:
             logger.warning("[Task {}] 采集异常 {}: {}", self.task.id, summary.id, e)
             detail = None
             # 异常时也尝试用搜索结果构建降级 SellerProfile（如果有 summary）
             if not seller and hasattr(self, 'collector'):
-                seller = self.collector.seller_profile_fallback(summary=summary, detail=detail)
+                seller = await self._seller_profile_fallback(summary=summary, detail=detail)
         return detail, seller, False
+
+    async def _seller_profile_fallback(self, summary: ItemSummary | None = None, detail: Any | None = None) -> Any | None:
+        fallback = getattr(self.collector, "seller_profile_fallback", None)
+        if not callable(fallback):
+            return None
+        result = fallback(summary=summary, detail=detail)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     def _update_seller_in_task_links(self, detail: Any, summary: ItemSummary) -> None:
         """用详情页采集到的 seller_id 更新 task_links
@@ -601,7 +611,11 @@ class TaskWorker:
         if not verdict.pass_:
             stats.price_filtered += 1
             return None
-        eval_result = self.evaluator.evaluate(detail, seller)
+        price_range = PriceRange.from_price_config(getattr(self.price, "config", None))
+        if price_range is None:
+            eval_result = self.evaluator.evaluate(detail, seller)
+        else:
+            eval_result = self.evaluator.evaluate(detail, seller, price_range=price_range)
         stats.evaluated += 1
         evaluations.append(eval_result)
         return eval_result

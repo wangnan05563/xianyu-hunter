@@ -18,6 +18,7 @@ from xianyu_hunter.domain.item import ItemDetail
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.infra.item_display_sync import sync_item_display_from_detail
 from xianyu_hunter.infra.logger import get_logger
+from xianyu_hunter.modules.evaluator import PriceRange
 
 logger = get_logger()
 
@@ -648,7 +649,13 @@ class ItemCollectionService:
         为什么仍调用 evaluator.evaluate：官方采集弹窗需展示评估分给用户，
         但超范围商品不应进入评估明细菜单（list_evaluations 的价格过滤会二次兜底）。
         """
-        eval_result = self.container.evaluator.evaluate(detail, seller)
+        price_range = self._price_range_for_task(item_id, effective_task_id)
+        if price_range is None:
+            eval_result = self.container.evaluator.evaluate(detail, seller)
+        else:
+            eval_result = self.container.evaluator.evaluate(
+                detail, seller, price_range=price_range
+            )
         price_filtered = self._check_price_filter(item_id, detail, effective_task_id)
         if not effective_task_id or price_filtered:
             return eval_result
@@ -661,6 +668,19 @@ class ItemCollectionService:
                 effective_task_id, item_id, detail, seller, eval_result
             )
         return eval_result
+
+    def _price_range_for_task(self, item_id: str, effective_task_id: str) -> PriceRange | None:
+        if not effective_task_id:
+            return None
+        try:
+            task_raw = self.container.repo.get_task(effective_task_id)
+            if not task_raw:
+                return None
+            price_strategy = self.container.build_task_price_strategy(task_raw)
+            return PriceRange.from_price_config(getattr(price_strategy, "config", None))
+        except Exception as e:
+            logger.warning("官方采集评分价格区间读取失败 item_id={}: {}", item_id, e)
+            return None
 
     def _check_price_filter(
         self, item_id: str, detail: ItemDetail, effective_task_id: str

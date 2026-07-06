@@ -28,6 +28,7 @@ from xianyu_hunter.domain.urls import build_item_url
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repo_links import task_keyword_matches_title
 from xianyu_hunter.modules.collector_utils import normalize_display_fields
+from xianyu_hunter.modules.evaluator import PriceRange
 from xianyu_hunter.web.services.search_services import (
     TaskLinkSearchParams,
     TaskLinkSearchService,
@@ -1870,7 +1871,11 @@ def _evaluate_single_live_item(
     seller = _build_degraded_seller_profile(detail.seller_id, detail.seller_nick)
 
     try:
-        eval_result = evaluator.evaluate(detail, seller)
+        price_range = PriceRange.from_price_config(getattr(price_strategy, "config", None))
+        if price_range is None:
+            eval_result = evaluator.evaluate(detail, seller)
+        else:
+            eval_result = evaluator.evaluate(detail, seller, price_range=price_range)
         _write_live_eval_event(container, task_id, effective_user_id, detail, eval_result)
 
         # 达标商品收集：score >= auto_buy_score 且 risk == LOW

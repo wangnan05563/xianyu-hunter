@@ -32,13 +32,33 @@ from xianyu_hunter.modules.dealer_detector import detect_dealer
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class PriceRange:
+    """Task-level price range used for scoring, not hard filtering."""
+    min_price: float | None = None
+    max_price: float | None = None
+
+    @classmethod
+    def from_price_config(cls, config: object | None) -> "PriceRange | None":
+        if config is None:
+            return None
+        min_price = getattr(config, "min_price", None)
+        max_price = getattr(config, "max_price", None)
+        if min_price is None and max_price is None:
+            return None
+        return cls(min_price=min_price, max_price=max_price)
+
+    def is_empty(self) -> bool:
+        return self.min_price is None and self.max_price is None
+
+
 @dataclass
 class EvaluationThresholds:
     """运行时阈值（可覆盖 config 默认值）"""
     on_sale_count: int = 30
     post_count_30d: int = 15
     top_category_ratio: float = 0.8
-    credit_score_min: int = 600
+    credit_score_min: int = 60
     bad_review_max: int = 3
     register_days_min: int = 30
     pass_score: int = 60
@@ -111,7 +131,12 @@ class Evaluator:
             return self._override_keywords
         return get_config().eval.professional_keywords
 
-    def evaluate(self, item: ItemDetail, seller: SellerProfile) -> EvalResult:
+    def evaluate(
+        self,
+        item: ItemDetail,
+        seller: SellerProfile,
+        price_range: PriceRange | None = None,
+    ) -> EvalResult:
         """评估卖家 + 价格
 
         数据质量三级分级：
@@ -139,15 +164,20 @@ class Evaluator:
 
         if len(valid_dims) >= 4:
             # full：4 维都有效 → 正常评估
-            return self._evaluate_full(item, seller)
+            return self._evaluate_full(item, seller, price_range)
         elif len(valid_dims) >= 2:
             # partial：1-3 维有效 → 仅有效维度归一化评估
-            return self._evaluate_partial(item, seller, valid_dims)
+            return self._evaluate_partial(item, seller, valid_dims, price_range)
         else:
             # insufficient：仅价格有效 → 保守评分
-            return self._evaluate_insufficient(item)
+            return self._evaluate_insufficient(item, price_range)
 
-    def _evaluate_full(self, item: ItemDetail, seller: SellerProfile) -> EvalResult:
+    def _evaluate_full(
+        self,
+        item: ItemDetail,
+        seller: SellerProfile,
+        price_range: PriceRange | None = None,
+    ) -> EvalResult:
         """完整 4 维评估（卖家数据充足）"""
         # 1. 一票否决
         veto_reasons = self._veto(seller)
@@ -175,7 +205,7 @@ class Evaluator:
         scores["dispute"] = dispute_score
         reasons.extend(dispute_reasons)
 
-        price_score, price_reasons = self._eval_price(item)
+        price_score, price_reasons = self._eval_price(item, price_range)
         scores["price"] = price_score
         reasons.extend(price_reasons)
 
@@ -215,7 +245,11 @@ class Evaluator:
         )
 
     def _evaluate_partial(
-        self, item: ItemDetail, seller: SellerProfile, valid_dims: set[str]
+        self,
+        item: ItemDetail,
+        seller: SellerProfile,
+        valid_dims: set[str],
+        price_range: PriceRange | None = None,
     ) -> EvalResult:
         """部分维度评估（卖家数据不完整）
 
@@ -239,7 +273,7 @@ class Evaluator:
             scores["dispute"] = s
             reasons.extend(r)
         # 价格维度始终有效
-        s, r = self._eval_price(item)
+        s, r = self._eval_price(item, price_range)
         scores["price"] = s
         reasons.extend(r)
 
@@ -270,7 +304,11 @@ class Evaluator:
             data_quality="partial",
         )
 
-    def _evaluate_insufficient(self, item: ItemDetail) -> EvalResult:
+    def _evaluate_insufficient(
+        self,
+        item: ItemDetail,
+        price_range: PriceRange | None = None,
+    ) -> EvalResult:
         """数据严重不足时的保守评估（价格 + 热度维度）
 
         当卖家数据完全缺失时，利用商品本身的数据做基础评估：
@@ -280,7 +318,7 @@ class Evaluator:
         评分上限 65 分：可以 pass(60) 但不能 auto_buy(80)，
         确保数据不足的卖家不会触发自动下单，但允许用户手动审查。
         """
-        price_score, price_reasons = self._eval_price(item)
+        price_score, price_reasons = self._eval_price(item, price_range)
         popularity_score, popularity_reasons = self._eval_popularity(item)
 
         # 两维度加权：price 60% + popularity 40%
@@ -444,6 +482,7 @@ class Evaluator:
             return early_return
 
         score = self._apply_dealer_signal_deduction(seller, item, score, reasons)
+
         return max(score, 0), reasons
 
     def _apply_on_sale_deduction(
@@ -571,7 +610,11 @@ class Evaluator:
 
     # ============== 4. 价格与竞价异常 ==============
 
-    def _eval_price(self, item: ItemDetail) -> tuple[int, list[str]]:
+    def _eval_price(
+        self,
+        item: ItemDetail,
+        price_range: PriceRange | None = None,
+    ) -> tuple[int, list[str]]:
         """价格异常检测（P0 增强：多维度检查）
 
         检查项：
@@ -618,7 +661,82 @@ class Evaluator:
             score -= 10
             reasons.append("no_image_for_condition")
 
+        score = self._apply_task_price_range_score(item, price_range, score, reasons)
+
         return max(score, 0), reasons
+
+    def _apply_task_price_range_score(
+        self,
+        item: ItemDetail,
+        price_range: PriceRange | None,
+        score: int,
+        reasons: list[str],
+    ) -> int:
+        """Apply task min/max range as a graded score signal."""
+        if price_range is None or price_range.is_empty():
+            return score
+
+        min_price = price_range.min_price
+        max_price = price_range.max_price
+        price = item.price
+
+        if min_price is not None and max_price is not None:
+            if max_price <= min_price:
+                return score
+            width = max_price - min_price
+            ratio = (price - min_price) / width
+            if ratio < 0:
+                over = abs(ratio)
+                deduction = 25 if over <= 0.15 else 50
+                reasons.append(
+                    f"task_price_range_low(price={price}, min={min_price}, ded={deduction})"
+                )
+                return max(0, score - deduction)
+            if ratio > 1:
+                over = ratio - 1
+                deduction = 25 if over <= 0.15 else 50
+                reasons.append(
+                    f"task_price_range_high(price={price}, max={max_price}, ded={deduction})"
+                )
+                return max(0, score - deduction)
+            if ratio < 0.2:
+                reasons.append(
+                    f"task_price_range_lower_edge(price={price}, range={min_price}-{max_price}, ded=10)"
+                )
+                return max(0, score - 10)
+            if ratio <= 0.65:
+                return score
+            if ratio < 0.8:
+                reasons.append(
+                    f"task_price_range_upper_mid(price={price}, range={min_price}-{max_price}, ded=5)"
+                )
+                return max(0, score - 5)
+            reasons.append(
+                f"task_price_range_upper_edge(price={price}, range={min_price}-{max_price}, ded=12)"
+            )
+            return max(0, score - 12)
+
+        if min_price is not None and price < min_price:
+            if min_price <= 0:
+                deduction = 25
+            else:
+                deduction = 25 if (min_price - price) / min_price <= 0.15 else 50
+            reasons.append(
+                f"task_price_range_low(price={price}, min={min_price}, ded={deduction})"
+            )
+            return max(0, score - deduction)
+
+        if max_price is not None and price > max_price:
+            if max_price <= 0:
+                deduction = 25
+            else:
+                deduction = 25 if (price - max_price) / max_price <= 0.15 else 50
+            reasons.append(
+                f"task_price_range_high(price={price}, max={max_price}, ded={deduction})"
+            )
+            return max(0, score - deduction)
+
+        return score
 
     # ============== 5. 商品热度（insufficient 模式专用） ==============
 

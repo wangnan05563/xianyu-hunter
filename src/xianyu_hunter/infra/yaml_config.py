@@ -119,7 +119,7 @@ class EvalThresholds(BaseModel):
     on_sale_count: int = 30              # 超过视为职业
     post_count_30d: int = 15
     top_category_ratio: float = 0.8
-    credit_score_min: int = 600          # 低于一票否决
+    credit_score_min: int = 60           # 低于一票否决
     bad_review_max: int = 3
     register_days_min: int = 30
 
