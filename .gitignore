@@ -30,6 +30,10 @@ htmlcov/
 node_modules/
 frontend/tsconfig.tsbuildinfo
 
+# ---------- 构建缓存（build-exe.ps1 生成，避免重复下载依赖）----------
+.venv-build/
+.cache/
+
 # ---------- 运行时数据（不纳入版本控制）----------
 # SQLite 数据库
 *.db

@@ -4,13 +4,11 @@
 - 均价 / 中位数 / 历史最低价 / 价格分位数（P10/P25/P75/P90）
 - 多品类横向对比（按任务关键词聚合，支持排序）
 - 同类物品已售价格区间（捡漏价格参考）
-- 捡漏价格多维评估（bargain-eval）
 
 端点：
 - GET /api/prices/category-stats        单品类或全品类价格统计
 - GET /api/prices/category-comparison   多品类横向对比
 - GET /api/prices/sold-range            同类物品已售价格区间（捡漏价格参考）
-- GET /api/prices/bargain-eval          捡漏价格多维评估
 """
 from __future__ import annotations
 
@@ -68,9 +66,6 @@ def _compute_stats(prices: list[float]) -> dict[str, float]:
         "p75": round(_percentile(sorted_p, 0.75), 2),
         "p90": round(_percentile(sorted_p, 0.90), 2),
     }
-
-
-# ============== 品类级价格统计 ==============
 
 
 def _load_category_prices(
@@ -161,9 +156,6 @@ def category_stats(
 
     返回每个品类的均价/中位数/历史最低价/历史最高价/价格分位数。
     task_id 为空时返回全部品类的统计字典。
-
-    每个品类按各自任务配置的 min_price/max_price 过滤超范围样本，
-    最高价/最低价均不会超出任务配置的上限/下限。
     """
     engine = container.repo.engine
     with engine.connect() as conn:
@@ -283,8 +275,6 @@ def category_comparison(
 
     按 sort_by 排序后返回前 limit 个品类的价格统计。
     range_days>0 时仅统计最近 N 天的商品，便于观察短期行情变化。
-
-    每个品类按各自任务配置的 min_price/max_price 过滤超范围样本。
     """
     sort_by, order = _normalize_comparison_params(sort_by, order)
 
@@ -569,20 +559,14 @@ def sold_range(
         return _compute_sold_range(conn, task_id, range_days)
 
 
-# ============== 捡漏价格多维评估 ==============
+# 捡漏评估等级：基于 P10/P25/median 三档划分
+# 低于 P10 = excellent（极好的捡漏机会）；P10~P25 = good；P25~median = fair；高于 median = poor
 
 
-def _compute_bargain_level(
-    current_price: float, p10: float, p25: float, median: float,
-) -> tuple[str, int]:
+def _compute_bargain_level(current_price: float, p10: float, p25: float, median: float) -> tuple[str, int]:
     """根据当前价格相对分位数的位置评定捡漏等级与得分
 
     返回 (level, score)。score 用于前端排序/可视化，level 用于文案展示。
-    等级阈值基于 P10/P25/median 三档划分：
-    - 低于 P10 = excellent（极好的捡漏机会）
-    - P10~P25 = good（价格划算）
-    - P25~median = fair（价格适中）
-    - 高于 median = poor（价格偏高）
     """
     if current_price < p10:
         return "excellent", 95
@@ -601,8 +585,8 @@ def _build_bargain_suggestion(
     """生成捡漏建议文案
 
     综合分位数等级与任务价格区间两个维度：
-    - 任务区间合理性校验优先（低于 task_min 提示假货风险，高于 task_max 提示超范围）
     - 等级给出基础建议（捡漏/观望/避开）
+    - 任务区间给出合理性校验（低于 task_min 可能是骗子/假货；高于 task_max 超出监控目标）
     """
     t_min = task_range.get("min_price")
     t_max = task_range.get("max_price")

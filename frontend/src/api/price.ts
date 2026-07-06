@@ -1,11 +1,13 @@
 import client from './client'
-import type { SoldPriceRange } from './types'
+import type { BargainEval, SoldPriceRange } from './types'
 
 // 单品类价格统计：count/min/max/mean/median/p10/p25/p75/p90
 export interface CategoryStat {
   task_id: string | null
   name: string
   keyword: string
+  // 任务配置的价格区间，用于过滤超范围样本；NULL 表示未配置
+  task_price_range?: { min_price: number | null; max_price: number | null }
   count: number
   min: number
   max: number
@@ -61,8 +63,14 @@ export const priceApi = {
     client.post<{ analysis: string; source: string; scope_label?: string }>('/api/prices/analyze', null, { params, timeout: 60000 }).then((r) => r.data),
 
   // 同类物品已售价格区间（捡漏价格参考）
-  // 返回指定品类下近期已售商品的最低价/最高价/中位数/样本数
-  // 最低价作为"捡漏价格"参考指标
+  // 返回指定品类下近期已售商品的最低价/最高价/中位数/分位数/样本数
+  // P10 分位数作为"捡漏价格"参考指标，任务价格区间过滤超范围异常样本
   soldRange: (params: { task_id?: string; range_days?: number }) =>
     client.get<SoldPriceRange>('/api/prices/sold-range', { params }).then((r) => r.data),
+
+  // 捡漏价格多维评估
+  // 入参：task_id（必填）、current_price（必填，待评估价格）、range_days（可选）
+  // 返回 bargain_score/bargain_level/suggestion/sold_price_stats/task_price_range
+  bargainEval: (params: { task_id: string; current_price: number; range_days?: number }) =>
+    client.get<BargainEval>('/api/prices/bargain-eval', { params }).then((r) => r.data),
 }

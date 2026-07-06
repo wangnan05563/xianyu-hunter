@@ -409,9 +409,9 @@ function AnalysisPanel({
 }
 
 // === 展开行：详细信息 + 卖家价格趋势 ===
-// 从 Evaluations 主组件拆出：原 expandedRowRender 是一段 ~200 行 JSX，
-// 留在主组件会让 S3776（认知复杂度）爆表；提到模块顶层后由 props 注入依赖。
-// props 只接收主组件 state 快照和必要 handler，避免不必要的 prop 漂移。
+// 为什么拆分：原 expandedRowRender 内含 ~200 行 JSX + 多重嵌套条件，
+// S3776 认知复杂度直接爆表。拆为「数据解析 Hook + 卡片子组件 + 编排主组件」三层，
+// 主组件只负责按条件渲染卡片，每个卡片子组件复杂度独立 <15。
 type ExpandedDetailProps = {
   readonly r: EvalItem
   readonly trendCache: Record<string, SellerTrendData>
@@ -419,200 +419,218 @@ type ExpandedDetailProps = {
   readonly trendError: Record<string, string>
   readonly loadSellerTrend: (itemId: string) => Promise<void>
 }
-function ExpandedDetail({ r, trendCache, trendLoading, trendError, loadSellerTrend }: ExpandedDetailProps) {
-  // 从 payload 提取详细信息字段（collect-official 流程会写入这些字段）
-  const description = r.payload?.item_description as string | undefined
-  const imageUrls = r.payload?.image_urls as string[] | undefined
-  const reviews = r.payload?.reviews as string[] | undefined
-  const sellerCreditScore = r.payload?.seller_credit_score as number | undefined
-  const sellerOnSaleCount = r.payload?.seller_on_sale_count as number | undefined
-  const sellerSoldCount = r.payload?.seller_sold_count as number | undefined
-  const sellerRegisterDays = r.payload?.seller_register_days as number | undefined
-  const dataSource = r.payload?.data_source as string | undefined
 
-  // 从 dimension_scores 提取 AI 成色评估详情
-  const dimScores = r.payload?.dimension_scores as Record<string, unknown> | undefined
-  const aiEval = dimScores?.ai_condition_eval as Record<string, unknown> | undefined
+// AI 成色评估卡片：原 ExpandedDetail 内嵌条件最密集的部分，独立为子组件后复杂度归零于主函数
+// 为什么 verdictColor 用三元而非查表：仅 2 种取值，查表反而过度设计
+function AiConditionCard({ aiEval }: { aiEval: Record<string, unknown> }) {
+  const verdict = typeof aiEval.verdict === 'string' ? aiEval.verdict : ''
+  const verdictColor = verdict === 'recommend' ? '#52c41a' : '#faad14'
+  const scoreFields: Array<[string, string]> = [
+    ['condition_score', '成色评分'],
+    ['appearance_score', '外观成色'],
+    ['consistency_score', '描述一致性'],
+    ['price_reasonability', '价格合理性'],
+  ]
+  const reason = typeof aiEval.reason === 'string' ? aiEval.reason : ''
+  const riskSignals = Array.isArray(aiEval.risk_signals) ? aiEval.risk_signals as unknown[] : []
+  const detail = typeof aiEval.detail === 'string' ? aiEval.detail : ''
 
-  // 从 dimension_scores 提取规则评估维度分数
-  const ruleDims: Array<[string, number]> = []
-  if (dimScores) {
-    for (const [k, v] of Object.entries(dimScores)) {
-      if (k === 'ai_condition_eval') continue
-      if (typeof v === 'number') ruleDims.push([k, v])
+  return (
+    <Card size="small" title="AI 成色评估" style={{ marginBottom: 8 }}>
+      <Row gutter={[16, 8]}>
+        {verdict.length > 0 && (
+          <Col span={6}>
+            <Statistic title="结论" value={verdict === 'recommend' ? '推荐' : '谨慎'} valueStyle={{ color: verdictColor, fontSize: 16 }} />
+          </Col>
+        )}
+        {scoreFields.map(([key, label]) => {
+          const v = aiEval[key]
+          if (typeof v !== 'number') return null
+          return (
+            <Col key={key} span={6}>
+              <Statistic title={label} value={`${v}/10`} valueStyle={{ fontSize: 16 }} />
+            </Col>
+          )
+        })}
+      </Row>
+      {reason.length > 0 && (
+        <div style={{ marginTop: 8, color: 'var(--xh-text-secondary)', fontSize: 13 }}>{reason}</div>
+      )}
+      {riskSignals.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          {riskSignals.map((sig, i) => (
+            <Tag key={`${String(sig)}-${i}`} color="orange" style={{ marginBottom: 2 }}>{String(sig)}</Tag>
+          ))}
+        </div>
+      )}
+      {detail.length > 0 && (
+        <Collapse
+          ghost
+          size="small"
+          style={{ marginTop: 8 }}
+          items={[{ key: 'detail', label: '详细分析', children: <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{detail}</pre> }]}
+        />
+      )}
+    </Card>
+  )
+}
+
+// 商品详情卡片：description + imageUrls（最多展示 6 张图）
+function ProductDetailCard({ description, imageUrls }: {
+  description?: string
+  imageUrls?: string[]
+}) {
+  if (!description && !imageUrls?.length) return null
+  return (
+    <Card size="small" title="商品详情" style={{ marginBottom: 8 }}>
+      {description && (
+        <div style={{ marginBottom: 8, color: 'var(--xh-text-secondary)', fontSize: 13, whiteSpace: 'pre-wrap' }}>
+          {description}
+        </div>
+      )}
+      {imageUrls && imageUrls.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {imageUrls.slice(0, 6).map((url, i) => (
+            <Image
+              key={`${url}-${i}`}
+              src={url}
+              width={80}
+              height={80}
+              style={{ objectFit: 'cover', borderRadius: 6 }}
+              referrerPolicy="no-referrer"
+            />
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// 卖家信息卡片：4 个字段任意存在即渲染，避免主函数 4 重 || 判断
+function SellerInfoCard({ creditScore, onSaleCount, soldCount, registerDays }: {
+  creditScore?: number
+  onSaleCount?: number
+  soldCount?: number
+  registerDays?: number
+}) {
+  if (creditScore == null && onSaleCount == null && soldCount == null && registerDays == null) return null
+  return (
+    <Card size="small" title="卖家信息" style={{ marginBottom: 8 }}>
+      <Descriptions column={2} size="small" labelStyle={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+        {creditScore != null && <Descriptions.Item label="芝麻信用">{creditScore}</Descriptions.Item>}
+        {registerDays != null && <Descriptions.Item label="注册天数">{registerDays} 天</Descriptions.Item>}
+        {onSaleCount != null && <Descriptions.Item label="在售数">{onSaleCount}</Descriptions.Item>}
+        {soldCount != null && <Descriptions.Item label="已售数">{soldCount}</Descriptions.Item>}
+      </Descriptions>
+    </Card>
+  )
+}
+
+// 评估维度卡片：规则分数 Tag + 拒绝原因 Tag
+function EvalDimensionsCard({ ruleDims, rejectReasons }: {
+  ruleDims: Array<[string, number]>
+  rejectReasons?: string[]
+}) {
+  if (ruleDims.length === 0 && !rejectReasons?.length) return null
+  return (
+    <Card size="small" title="评估维度" style={{ marginBottom: 8 }}>
+      {ruleDims.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+          {ruleDims.map(([k, v]) => (
+            <Tag key={k} color="blue">{translateDimension(k)}: {v}</Tag>
+          ))}
+        </div>
+      )}
+      {rejectReasons && rejectReasons.length > 0 && (
+        <div style={{ fontSize: 12 }}>
+          <span style={{ color: 'var(--xh-text-tertiary)' }}>拒绝原因: </span>
+          {rejectReasons.map((reason, i) => (
+            <Tag key={`${reason}-${i}`} color="orange" style={{ fontSize: 11, marginBottom: 2 }}>{translateRejectReason(reason)}</Tag>
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// 评价列表卡片：最多展示 5 条，超过则显示"还有 N 条评价"
+function ReviewsCard({ reviews }: { reviews: string[] }) {
+  if (!reviews.length) return null
+  const shown = reviews.slice(0, 5)
+  return (
+    <Card size="small" title={`评价/留言 (${reviews.length})`} style={{ marginBottom: 8 }}>
+      {shown.map((review, i) => (
+        <div key={`${review}-${i}`} style={{ padding: '4px 0', borderBottom: i < shown.length - 1 ? '1px solid var(--xh-border-secondary)' : 'none', fontSize: 13 }}>
+          {review}
+        </div>
+      ))}
+      {reviews.length > 5 && (
+        <div style={{ color: 'var(--xh-text-tertiary)', fontSize: 12, marginTop: 4 }}>
+          还有 {reviews.length - 5} 条评价
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// 数据解析 Hook：将 payload 解析与渲染分离，主组件只做编排
+// 为什么用 useMemo：r.payload 变化时才重新解析，避免每次渲染都遍历对象
+function useEvalItemDetail(r: EvalItem) {
+  return useMemo(() => {
+    const p = r.payload ?? {}
+    const dimScores = p.dimension_scores as Record<string, unknown> | undefined
+    const ruleDims: Array<[string, number]> = []
+    if (dimScores) {
+      for (const [k, v] of Object.entries(dimScores)) {
+        if (k === 'ai_condition_eval') continue
+        if (typeof v === 'number') ruleDims.push([k, v])
+      }
     }
-  }
+    return {
+      description: p.item_description as string | undefined,
+      imageUrls: p.image_urls as string[] | undefined,
+      reviews: p.reviews as string[] | undefined,
+      sellerCreditScore: p.seller_credit_score as number | undefined,
+      sellerOnSaleCount: p.seller_on_sale_count as number | undefined,
+      sellerSoldCount: p.seller_sold_count as number | undefined,
+      sellerRegisterDays: p.seller_register_days as number | undefined,
+      dataSource: p.data_source as string | undefined,
+      aiEval: dimScores?.ai_condition_eval as Record<string, unknown> | undefined,
+      ruleDims,
+      rejectReasons: p.reject_reasons as string[] | undefined,
+    }
+  }, [r.payload])
+}
 
-  // 从 reject_reasons 提取拒绝原因
-  const rejectReasons = r.payload?.reject_reasons as string[] | undefined
-
-  // 判断是否有任何详细信息可显示
-  const hasDetail = description || imageUrls?.length || reviews?.length ||
-    sellerCreditScore != null || sellerOnSaleCount != null ||
-    sellerSoldCount != null || sellerRegisterDays != null ||
-    aiEval || ruleDims.length > 0 || rejectReasons?.length
+function ExpandedDetail({ r, trendCache, trendLoading, trendError, loadSellerTrend }: ExpandedDetailProps) {
+  const d = useEvalItemDetail(r)
+  // hasDetail 判断：任意卡片有数据即渲染整块
+  const hasDetail = d.description || d.imageUrls?.length || d.reviews?.length ||
+    d.sellerCreditScore != null || d.sellerOnSaleCount != null ||
+    d.sellerSoldCount != null || d.sellerRegisterDays != null ||
+    d.aiEval || d.ruleDims.length > 0 || d.rejectReasons?.length || d.dataSource
 
   return (
     <div>
-      {/* 详细信息区域：仅在有任何可展示数据时渲染 */}
       {hasDetail && (
         <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-          {/* 商品详情卡片 */}
-          {(description || imageUrls?.length) && (
-            <Col span={24}>
-              <Card size="small" title="商品详情" style={{ marginBottom: 8 }}>
-                {description && (
-                  <div style={{ marginBottom: 8, color: 'var(--xh-text-secondary)', fontSize: 13, whiteSpace: 'pre-wrap' }}>
-                    {description}
-                  </div>
-                )}
-                {imageUrls && imageUrls.length > 0 && (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {imageUrls.slice(0, 6).map((url, i) => (
-                      <Image
-                        key={`${url}-${i}`}
-                        src={url}
-                        width={80}
-                        height={80}
-                        style={{ objectFit: 'cover', borderRadius: 6 }}
-                        referrerPolicy="no-referrer"
-                      />
-                    ))}
-                  </div>
-                )}
-              </Card>
-            </Col>
+          {(d.description || d.imageUrls?.length) && (
+            <Col span={24}><ProductDetailCard description={d.description} imageUrls={d.imageUrls} /></Col>
           )}
-
-          {/* 卖家信息卡片 */}
-          {(sellerCreditScore != null || sellerOnSaleCount != null || sellerSoldCount != null || sellerRegisterDays != null) && (
-            <Col xs={24} md={12}>
-              <Card size="small" title="卖家信息" style={{ marginBottom: 8 }}>
-                <Descriptions column={2} size="small" labelStyle={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
-                  {sellerCreditScore != null && (
-                    <Descriptions.Item label="芝麻信用">{sellerCreditScore}</Descriptions.Item>
-                  )}
-                  {sellerRegisterDays != null && (
-                    <Descriptions.Item label="注册天数">{sellerRegisterDays} 天</Descriptions.Item>
-                  )}
-                  {sellerOnSaleCount != null && (
-                    <Descriptions.Item label="在售数">{sellerOnSaleCount}</Descriptions.Item>
-                  )}
-                  {sellerSoldCount != null && (
-                    <Descriptions.Item label="已售数">{sellerSoldCount}</Descriptions.Item>
-                  )}
-                </Descriptions>
-              </Card>
-            </Col>
+          {(d.sellerCreditScore != null || d.sellerOnSaleCount != null || d.sellerSoldCount != null || d.sellerRegisterDays != null) && (
+            <Col xs={24} md={12}><SellerInfoCard creditScore={d.sellerCreditScore} onSaleCount={d.sellerOnSaleCount} soldCount={d.sellerSoldCount} registerDays={d.sellerRegisterDays} /></Col>
           )}
-
-          {/* 评估维度卡片 */}
-          {(ruleDims.length > 0 || rejectReasons?.length) && (
-            <Col xs={24} md={12}>
-              <Card size="small" title="评估维度" style={{ marginBottom: 8 }}>
-                {ruleDims.length > 0 && (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                    {ruleDims.map(([k, v]) => (
-                      <Tag key={k} color="blue">
-                        {translateDimension(k)}: {v}
-                      </Tag>
-                    ))}
-                  </div>
-                )}
-                {rejectReasons && rejectReasons.length > 0 && (
-                  <div style={{ fontSize: 12 }}>
-                    <span style={{ color: 'var(--xh-text-tertiary)' }}>拒绝原因: </span>
-                    {rejectReasons.map((reason, i) => (
-                      <Tag key={`${reason}-${i}`} color="orange" style={{ fontSize: 11, marginBottom: 2 }}>{translateRejectReason(reason)}</Tag>
-                    ))}
-                  </div>
-                )}
-              </Card>
-            </Col>
+          {(d.ruleDims.length > 0 || d.rejectReasons?.length) && (
+            <Col xs={24} md={12}><EvalDimensionsCard ruleDims={d.ruleDims} rejectReasons={d.rejectReasons} /></Col>
           )}
-
-          {/* AI 成色评估卡片 */}
-          {aiEval && (
-            <Col span={24}>
-              <Card size="small" title="AI 成色评估" style={{ marginBottom: 8 }}>
-                <Row gutter={[16, 8]}>
-                  {typeof aiEval.verdict === 'string' && aiEval.verdict.length > 0 && (
-                    <Col span={6}>
-                      <Statistic
-                        title="结论"
-                        value={aiEval.verdict === 'recommend' ? '推荐' : '谨慎'}
-                        valueStyle={{ color: aiEval.verdict === 'recommend' ? '#52c41a' : '#faad14', fontSize: 16 }}
-                      />
-                    </Col>
-                  )}
-                  {typeof aiEval.condition_score === 'number' && (
-                    <Col span={6}>
-                      <Statistic title="成色评分" value={`${aiEval.condition_score}/10`} valueStyle={{ fontSize: 16 }} />
-                    </Col>
-                  )}
-                  {typeof aiEval.appearance_score === 'number' && (
-                    <Col span={6}>
-                      <Statistic title="外观成色" value={`${aiEval.appearance_score}/10`} valueStyle={{ fontSize: 16 }} />
-                    </Col>
-                  )}
-                  {typeof aiEval.consistency_score === 'number' && (
-                    <Col span={6}>
-                      <Statistic title="描述一致性" value={`${aiEval.consistency_score}/10`} valueStyle={{ fontSize: 16 }} />
-                    </Col>
-                  )}
-                  {typeof aiEval.price_reasonability === 'number' && (
-                    <Col span={6}>
-                      <Statistic title="价格合理性" value={`${aiEval.price_reasonability}/10`} valueStyle={{ fontSize: 16 }} />
-                    </Col>
-                  )}
-                </Row>
-                {typeof aiEval.reason === 'string' && aiEval.reason.length > 0 && (
-                  <div style={{ marginTop: 8, color: 'var(--xh-text-secondary)', fontSize: 13 }}>
-                    {aiEval.reason}
-                  </div>
-                )}
-                {Array.isArray(aiEval.risk_signals) && aiEval.risk_signals.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    {aiEval.risk_signals.map((sig, i) => (
-                      <Tag key={`${sig}-${i}`} color="orange" style={{ marginBottom: 2 }}>{String(sig)}</Tag>
-                    ))}
-                  </div>
-                )}
-                {typeof aiEval.detail === 'string' && aiEval.detail.length > 0 && (
-                  <Collapse
-                    ghost
-                    size="small"
-                    style={{ marginTop: 8 }}
-                    items={[{ key: 'detail', label: '详细分析', children: <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{aiEval.detail}</pre> }]}
-                  />
-                )}
-              </Card>
-            </Col>
+          {d.aiEval && (
+            <Col span={24}><AiConditionCard aiEval={d.aiEval} /></Col>
           )}
-
-          {/* 评价列表 */}
-          {reviews && reviews.length > 0 && (
-            <Col span={24}>
-              <Card size="small" title={`评价/留言 (${reviews.length})`} style={{ marginBottom: 8 }}>
-                {reviews.slice(0, 5).map((review, i) => (
-                  <div key={`${review}-${i}`} style={{ padding: '4px 0', borderBottom: i < Math.min(reviews.length, 5) - 1 ? '1px solid var(--xh-border-secondary)' : 'none', fontSize: 13 }}>
-                    {review}
-                  </div>
-                ))}
-                {reviews.length > 5 && (
-                  <div style={{ color: 'var(--xh-text-tertiary)', fontSize: 12, marginTop: 4 }}>
-                    还有 {reviews.length - 5} 条评价
-                  </div>
-                )}
-              </Card>
-            </Col>
+          {d.reviews && d.reviews.length > 0 && (
+            <Col span={24}><ReviewsCard reviews={d.reviews} /></Col>
           )}
-
-          {/* 数据来源 */}
-          {dataSource && (
-            <Col span={24}>
-              <Tag color="blue">数据来源: {dataSource}</Tag>
-            </Col>
+          {d.dataSource && (
+            <Col span={24}><Tag color="blue">数据来源: {d.dataSource}</Tag></Col>
           )}
         </Row>
       )}

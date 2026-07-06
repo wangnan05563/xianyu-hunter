@@ -16,6 +16,37 @@ from sqlalchemy import func, select
 from xianyu_hunter.infra.db_models import _utcnow, EventRow
 
 
+def _parse_event_time(value: Any) -> datetime:
+    """把事件 created_at 统一解析为 datetime（字符串走 fromisoformat，datetime 直通）
+
+    集中处理避免每个聚合函数重复 isinstance 判断（S3776）。
+    """
+    if isinstance(value, str):
+        return datetime.fromisoformat(value)
+    return value
+
+
+def _compute_bucket_start(ev_time: datetime, window_minutes: int) -> datetime:
+    """按时间窗对齐计算桶起始时间（截断到 window_minutes 整数倍）"""
+    minutes_since_midnight = ev_time.hour * 60 + ev_time.minute
+    bucket_minute = (minutes_since_midnight // window_minutes) * window_minutes
+    return ev_time.replace(
+        hour=bucket_minute // 60, minute=bucket_minute % 60, second=0, microsecond=0
+    )
+
+
+def _flush_current_bucket(
+    buckets: list[dict[str, Any]],
+    current_bucket_start: datetime | None,
+    current_events: list[dict],
+    aggregate_bucket,
+    window_minutes: int,
+) -> None:
+    """提交当前桶到结果列表（仅在有起始时间和事件数据时）"""
+    if current_bucket_start is not None and current_events:
+        buckets.append(aggregate_bucket(current_bucket_start, current_events, window_minutes))
+
+
 def _aggregate_events_into_buckets(
     events: list[dict],
     window_minutes: int,
@@ -33,26 +64,43 @@ def _aggregate_events_into_buckets(
     current_events: list[dict] = []
 
     for ev in events:
-        ev_time = ev["created_at"]
-        if isinstance(ev_time, str):
-            ev_time = datetime.fromisoformat(ev_time)
-
-        minutes_since_midnight = ev_time.hour * 60 + ev_time.minute
-        bucket_minute = (minutes_since_midnight // window_minutes) * window_minutes
-        bucket_start = ev_time.replace(hour=bucket_minute // 60, minute=bucket_minute % 60, second=0, microsecond=0)
+        ev_time = _parse_event_time(ev["created_at"])
+        bucket_start = _compute_bucket_start(ev_time, window_minutes)
 
         if current_bucket_start is None or bucket_start != current_bucket_start:
-            if current_bucket_start is not None and current_events:
-                buckets.append(aggregate_bucket(current_bucket_start, current_events, window_minutes))
+            _flush_current_bucket(buckets, current_bucket_start, current_events, aggregate_bucket, window_minutes)
             current_bucket_start = bucket_start
             current_events = [ev]
         else:
             current_events.append(ev)
 
-    if current_bucket_start is not None and current_events:
-        buckets.append(aggregate_bucket(current_bucket_start, current_events, window_minutes))
+    _flush_current_bucket(buckets, current_bucket_start, current_events, aggregate_bucket, window_minutes)
 
     return buckets
+
+
+# 命中关键词集合：level=info 且 stage 含这些词时计为一次命中
+_HIT_STAGES = {"hit", "eval", "score", "match", "found"}
+
+
+def _count_event_levels(events: list[dict]) -> tuple[int, int, int]:
+    """统计事件列表中的 hit/err/warn 计数，返回 (hit_count, err_count, warn_count)
+
+    独立出 _aggregate_bucket 的循环以降低其认知复杂度（S3776）。
+    """
+    hit_count = 0
+    err_count = 0
+    warn_count = 0
+    for ev in events:
+        level = (ev.get("level") or "").lower()
+        stage = (ev.get("stage") or "").lower()
+        if level == "err":
+            err_count += 1
+        elif level == "warn":
+            warn_count += 1
+        if level == "info" and any(kw in stage for kw in _HIT_STAGES):
+            hit_count += 1
+    return hit_count, err_count, warn_count
 
 
 def _compute_idle_gaps(buckets: list[dict[str, Any]], idle_gap_minutes: int) -> list[dict[str, Any]]:
@@ -435,28 +483,11 @@ class EventsMixin:
         window_minutes: int,
     ) -> dict[str, Any]:
         """将一个时间桶内的事件聚合为一条运行记录"""
-        hit_stages = {"hit", "eval", "score", "match", "found"}
-        hit_count = 0
-        err_count = 0
-        warn_count = 0
+        hit_count, err_count, warn_count = _count_event_levels(events)
         first_event_stage = events[0].get("stage", "")  # API 字段名 first_event_type 实际取 stage 值
 
-        for ev in events:
-            level = (ev.get("level") or "").lower()
-            stage = (ev.get("stage") or "").lower()
-            if level == "err":
-                err_count += 1
-            elif level == "warn":
-                warn_count += 1
-            if level == "info" and any(kw in stage for kw in hit_stages):
-                hit_count += 1
-
-        first_time = events[0].get("created_at")
-        last_time = events[-1].get("created_at")
-        if isinstance(first_time, str):
-            first_time = datetime.fromisoformat(first_time)
-        if isinstance(last_time, str):
-            last_time = datetime.fromisoformat(last_time)
+        first_time = _parse_event_time(events[0].get("created_at"))
+        last_time = _parse_event_time(events[-1].get("created_at"))
         duration_s = (last_time - first_time).total_seconds() if first_time and last_time else 0
 
         bucket_end = bucket_start + timedelta(minutes=window_minutes)

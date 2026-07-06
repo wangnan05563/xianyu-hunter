@@ -169,10 +169,10 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
         authApi.checkCookieHealth().catch(() => null),
         opts?.withUserInfo && onRefreshUserInfo ? onRefreshUserInfo() : Promise.resolve(null),
       ]
-      const [healthData, userData] = await Promise.all(tasks)
+      // userData 由父组件通过 props 更新，这里无需 setState，故不解构第二个返回值
+      // S3735 修复：原 `void userData` 用 void 操作符抑制未使用警告，删除 void 改为不解构
+      const [healthData] = await Promise.all(tasks)
       if (healthData) setHealth(healthData)
-      // userData 由父组件通过 props 更新，这里无需 setState
-      void userData
     } catch {
       setHealth(null)
     } finally {
@@ -185,7 +185,8 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
   const handleOpenChange = useCallback((visible: boolean) => {
     setOpen(visible)
     if (visible) {
-      void fetchHealth()
+      // S3735 修复：删除 void 操作符，fetchHealth 内部已 try/catch，.catch 兜底防 floating promise
+      fetchHealth().catch(() => undefined)
     }
   }, [fetchHealth])
 

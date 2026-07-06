@@ -307,8 +307,7 @@ class TaskScheduler:
         P1-7：支持 cron 模式。当 TaskConfig.use_cron=True 时，
         按 Task.cron 表达式计算下次运行时间，sleep 到该时间点再执行。
 
-        重构说明：主循环只保留调度骨架（暂停检查→执行→异常处理→等待），
-        各分支细节下沉到独立私有方法，便于单测与降低圈复杂度（S3776）。
+        重构说明：主循环只保留调度骨架，单轮执行与等待下沉到独立私有方法（S3776）。
         """
         h = self._require(task_id)
         interval = h.worker.config.interval_seconds
@@ -321,35 +320,63 @@ class TaskScheduler:
             await h.pause_event.wait()
             if h.stop_event.is_set():
                 break
-            # 为本轮 run_once 设置独立 request_id：
-            # 周期触发的任务与原 HTTP 请求已脱钩，每轮生成新流水号，
-            # 让本轮所有 events / error_logs / loguru 日志都关联到同一 request_id
-            # 协程结束时 ContextVar 自动回收，无需显式清理
-            from xianyu_hunter.infra.request_context import generate_request_id, set_request_id
-            current_rid = generate_request_id()
-            set_request_id(current_rid)
-            try:
-                # should_break=True 表示会话失效或 stop 信号，需跳出主循环
-                should_break = await self._execute_run_once_locked(h, task_id)
-                if should_break:
-                    break
-                h.consecutive_errors = 0  # 成功后重置连续失败计数
-            except Exception as e:  # noqa: BLE001
-                # 异常分支返回 True 表示 continue 下一轮，False 表示已达失败阈值需 break
-                should_continue = await self._handle_run_once_exception(
-                    e, h, task_id, current_rid
-                )
-                if should_continue:
-                    continue
+            # 为本轮 run_once 设置独立 request_id
+            current_rid = self._init_request_id()
+            # 单轮执行：返回 True 表示应跳出主循环
+            if await self._run_one_iteration(h, task_id, current_rid):
                 break
-
             # 等待下一轮（可被 stop 提前唤醒）
-            wait_seconds = self._compute_next_wait_seconds(cron_expr, interval, task_id)
-            try:
-                await asyncio.wait_for(h.stop_event.wait(), timeout=wait_seconds)
-            except asyncio.TimeoutError:
-                pass
+            await self._wait_for_next_round(h, cron_expr, interval, task_id)
         logger.info(f"任务 {task_id} 循环退出")
+
+    @staticmethod
+    def _init_request_id() -> str:
+        """为本轮 run_once 生成独立 request_id
+
+        周期触发的任务与原 HTTP 请求已脱钩，每轮生成新流水号，
+        让本轮所有 events / error_logs / loguru 日志都关联到同一 request_id。
+        协程结束时 ContextVar 自动回收，无需显式清理。
+        """
+        from xianyu_hunter.infra.request_context import generate_request_id, set_request_id
+        current_rid = generate_request_id()
+        set_request_id(current_rid)
+        return current_rid
+
+    async def _run_one_iteration(
+        self, h: "_WorkerHandle", task_id: str, current_rid: str
+    ) -> bool:
+        """执行一轮 run_once，返回是否应跳出主循环
+
+        返回 True：会话失效已自动暂停，或已达失败阈值，调用方应 break。
+        返回 False：本轮正常完成或异常后将继续下一轮，调用方应进入等待。
+        """
+        try:
+            # should_break=True 表示会话失效或 stop 信号，需跳出主循环
+            should_break = await self._execute_run_once_locked(h, task_id)
+            if should_break:
+                return True
+            h.consecutive_errors = 0  # 成功后重置连续失败计数
+            return False
+        except Exception as e:  # noqa: BLE001
+            # should_continue=True 表示未达阈值等待重试，False 表示已达阈值已暂停
+            should_continue = await self._handle_run_once_exception(
+                e, h, task_id, current_rid
+            )
+            # should_continue=True → 不 break（返回 False）；False → break（返回 True）
+            return not should_continue
+
+    async def _wait_for_next_round(
+        self, h: "_WorkerHandle", cron_expr: str | None, interval: int, task_id: str
+    ) -> None:
+        """等待下一轮执行：cron 模式按表达式，interval 模式用固定间隔
+
+        可被 stop_event 提前唤醒，避免 stop 时还要等到下一轮。
+        """
+        wait_seconds = self._compute_next_wait_seconds(cron_expr, interval, task_id)
+        try:
+            await asyncio.wait_for(h.stop_event.wait(), timeout=wait_seconds)
+        except asyncio.TimeoutError:
+            pass
 
     async def _execute_run_once_locked(
         self, h: "_WorkerHandle", task_id: str

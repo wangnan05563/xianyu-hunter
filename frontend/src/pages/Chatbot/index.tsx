@@ -559,25 +559,24 @@ export default function ChatbotPage() {
 
   // M4 消息撤回：监听 MessageBubble 派发的 recall 事件
   useEffect(() => {
-    // handler 用同步包装：addEventListener 期望 (e: Event) => void，
-    // 直接用 async 函数会返回 Promise，类型不匹配且未捕获的 rejection 无法处理
-    const handler = (e: Event) => {
-      void (async () => {
-        const detail = (e as CustomEvent<{ id: string }>).detail
-        if (!detail) return
-        try {
-          await chatbotApi.recallMessage(detail.id)
-          // 乐观更新：立即把消息标记为已撤回
-          // S2004：updater 由模块级工厂 createRecalledMessageUpdater 生成
-          setMessages(createRecalledMessageUpdater(detail.id))
-          message.success('已撤回')
-        } catch {
-          message.error('撤回失败，可能已超过 2 分钟时限')
-        }
-      })()
+    // S3735 修复：原 `void (async () => {...})()` 用 void 调用 IIFE，改为直接用 async 函数。
+    // addEventListener 接受 async handler（返回 Promise<void> 兼容 void 签名），
+    // 内部 try/catch 包裹所有异步操作，不会产生未捕获 rejection
+    const handleRecall = async (e: Event) => {
+      const detail = (e as CustomEvent<{ id: string }>).detail
+      if (!detail) return
+      try {
+        await chatbotApi.recallMessage(detail.id)
+        // 乐观更新：立即把消息标记为已撤回
+        // S2004：updater 由模块级工厂 createRecalledMessageUpdater 生成
+        setMessages(createRecalledMessageUpdater(detail.id))
+        message.success('已撤回')
+      } catch {
+        message.error('撤回失败，可能已超过 2 分钟时限')
+      }
     }
-    globalThis.addEventListener('chatbot:recall-message', handler)
-    return () => globalThis.removeEventListener('chatbot:recall-message', handler)
+    globalThis.addEventListener('chatbot:recall-message', handleRecall)
+    return () => globalThis.removeEventListener('chatbot:recall-message', handleRecall)
   }, [])
 
   // M5：主动转人工——确认后调用 escalation/trigger

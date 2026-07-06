@@ -401,6 +401,38 @@ async def _handle_scheduler_restart(container: Container, task_id: str, user_id:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+async def _dispatch_scheduler_action(
+    container: Container, action: str, task_id: str, user_id: str,
+) -> str:
+    """按 action 分发到对应的 scheduler 内存操作，返回用户可读的 note
+
+    主流程只负责 DB 写入与编排，scheduler 调用与异常兜底集中在此处
+    以降低 control_task 的认知复杂度（S3776）。HTTPException 必须上抛，
+    否则 P0-1/P0-2 的 ResumeBlockedError 400 会被兜底 except 吞掉。
+    """
+    try:
+        if action == "pause":
+            container.scheduler.pause(task_id)
+            return "已暂停调度器中的任务"
+        if action == "resume":
+            return await _handle_scheduler_resume(container, task_id, user_id)
+        if action == "stop":
+            await container.scheduler.stop(task_id)
+            return "已停止调度器中的任务"
+        if action == "restart":
+            return await _handle_scheduler_restart(container, task_id, user_id)
+        return ""  # 不会到达：上层已校验 action 合法性
+    except KeyError as e:
+        # 任务未注册到 scheduler：仅 DB 状态生效，不阻断请求
+        return f"调度器未注册该任务，仅 DB 状态已更新：{e}"
+    except HTTPException:
+        # P0-1/P0-2：ResumeBlockedError 转换的 400 需向上传播，不能被兜底 except 吞掉
+        raise
+    except Exception as e:  # noqa: BLE001 - 兜底防止 scheduler 异常导致 500
+        # scheduler 内部异常（如 loop 关闭、协程取消）：DB 状态已更新，不阻断
+        return f"调度器操作异常，仅 DB 状态已更新：{type(e).__name__}: {e}"
+
+
 @router.post("/{task_id}/control")
 async def control_task(
     task_id: str,
@@ -427,26 +459,7 @@ async def control_task(
     # 纯 web 模式下 collector 为 None，跳过 scheduler 调用，仅 DB 写入已足够
     scheduler_note = "状态已写入数据库"
     if container.collector is not None:
-        try:
-            if action == "pause":
-                container.scheduler.pause(task_id)
-                scheduler_note = "已暂停调度器中的任务"
-            elif action == "resume":
-                scheduler_note = await _handle_scheduler_resume(container, task_id, user_id)
-            elif action == "stop":
-                await container.scheduler.stop(task_id)
-                scheduler_note = "已停止调度器中的任务"
-            elif action == "restart":
-                scheduler_note = await _handle_scheduler_restart(container, task_id, user_id)
-        except KeyError as e:
-            # 任务未注册到 scheduler：仅 DB 状态生效，不阻断请求
-            scheduler_note = f"调度器未注册该任务，仅 DB 状态已更新：{e}"
-        except HTTPException:
-            # P0-1/P0-2：ResumeBlockedError 转换的 400 需向上传播，不能被兜底 except 吞掉
-            raise
-        except Exception as e:  # noqa: BLE001 - 兜底防止 scheduler 异常导致 500
-            # scheduler 内部异常（如 loop 关闭、协程取消）：DB 状态已更新，不阻断
-            scheduler_note = f"调度器操作异常，仅 DB 状态已更新：{type(e).__name__}: {e}"
+        scheduler_note = await _dispatch_scheduler_action(container, action, task_id, user_id)
 
     return {
         "ok": True,

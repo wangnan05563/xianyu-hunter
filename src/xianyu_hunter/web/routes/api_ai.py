@@ -369,16 +369,28 @@ def _rule_parse(text: str) -> dict[str, Any]:
     }
 
 
-# ============== 端点 ==============
-def _normalize_parse_result(
-    parsed: dict[str, Any], text: str, used_source: str
-) -> dict[str, Any]:
+def _try_parse_with_llm(text: str, settings: Any) -> tuple[dict[str, Any] | None, str]:
+    """尝试 LLM 解析，失败时返回 (None, source) 触发降级
+
+    返回 (parsed, used_source)：used_source 为 'llm' 或 'rule'，
+    parsed 为 None 时调用方应走规则解析兜底。
+    """
+    if not settings.openai_api_key:
+        return None, "rule"
+    try:
+        return _call_llm(text), "llm"
+    except RuntimeError as e:
+        # LLM 失败不直接挂，降级到规则解析
+        logger.warning(f"[ai/parse-task] LLM 失败，降级规则解析: {e}")
+        return None, "llm"
+
+
+def _normalize_parse_result(parsed: dict[str, Any], text: str, used_source: str) -> dict[str, Any]:
     """强制字段归一化：保证前端拿到的字段都在白名单内
 
-    LLM 返回的字段可能缺失/类型错误，统一兜底处理；
-    keyword 为空时抛 422 让用户补充描述（兜底用原文也救不回来说明描述太模糊）。
+    LLM/规则解析输出可能字段缺失或类型不一致，统一转换避免前端崩溃。
     """
-    norm: dict[str, Any] = {
+    return {
         "keyword": str(parsed.get("keyword") or "").strip() or text,
         "name": str(parsed.get("name") or parsed.get("keyword") or text).strip(),
         "min_price": _coerce_int(parsed.get("min_price")),
@@ -389,11 +401,9 @@ def _normalize_parse_result(
         "reason": str(parsed.get("reason") or "").strip(),
         "source": used_source,
     }
-    if not norm["keyword"]:
-        raise HTTPException(status_code=422, detail="无法从描述中提取关键词，请说得更具体一些（例如'iPhone 13 128G 银色'）")
-    return norm
 
 
+# ============== 端点 ==============
 @router.post("/parse-task")
 def parse_task(body: ParseTaskBody) -> dict[str, Any]:
     """自然语言 → 结构化任务字段
@@ -408,27 +418,18 @@ def parse_task(body: ParseTaskBody) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="文本不能为空")
     _check_ai_enabled()
 
-    # 1. 试 LLM
-    used_source = "llm"
-    parsed: dict[str, Any] | None = None
+    # 1. 试 LLM，失败则降级
     settings = get_settings()
-    if settings.openai_api_key:
-        try:
-            parsed = _call_llm(text)
-        except RuntimeError as e:
-            # LLM 失败不直接挂，降级到规则解析
-            logger.warning(f"[ai/parse-task] LLM 失败，降级规则解析: {e}")
-            parsed = None
-    else:
-        used_source = "rule"
-
-    # 2. 降级 / 补充字段
+    parsed, used_source = _try_parse_with_llm(text, settings)
     if parsed is None:
         parsed = _rule_parse(text)
         used_source = "rule"
 
-    # 3. 字段归一化 + keyword 校验
-    return _normalize_parse_result(parsed, text, used_source)
+    # 2. 字段归一化 + 关键词校验
+    norm = _normalize_parse_result(parsed, text, used_source)
+    if not norm["keyword"]:
+        raise HTTPException(status_code=422, detail="无法从描述中提取关键词，请说得更具体一些（例如'iPhone 13 128G 银色'）")
+    return norm
 
 
 def _coerce_int(v: Any) -> int | None:
@@ -501,6 +502,68 @@ _CONDITION_SYSTEM_PROMPT = """你是一个闲鱼二手商品成色鉴定专家�
 """
 
 
+def _build_vision_condition_prompt(vision_capable: bool) -> str:
+    """构建成色评估的 system prompt
+
+    纯文本模型时追加"无图评估"说明，避免 LLM 强行编造"我看了图片"导致评估失真。
+    """
+    # P1-8：从 Prompt 编辑器读取最新内容（支持热更新，无需重启）
+    from xianyu_hunter.web.routes.api_prompts import get_active_prompt
+    condition_prompt = get_active_prompt("evaluate_condition")
+    if not vision_capable:
+        condition_prompt = (
+            condition_prompt
+            + "\n\n【特别说明】当前模型不支持图片分析，请仅基于标题、描述、价格"
+              "和同类物品价格区间进行评估，risk_signals 中加入'无图片参考'。"
+        )
+    return condition_prompt
+
+
+def _build_vision_text_content(
+    title: str, description: str, price: float, price_range: dict[str, Any] | None
+) -> str:
+    """构建 Vision 请求的文本内容（商品信息 + 同类价格区间参考）"""
+    text_content = f"商品标题：{title}\n商品描述：{description}\n商品价格：¥{price}"
+    # 注入同类物品价格区间，让 LLM 判断当前价格是否合理可拾
+    if price_range and price_range.get("sample_size", 0) > 0:
+        text_content += (
+            f"\n\n同类物品近期成交价格参考："
+            f"\n- 最低价（捡漏价格）：¥{price_range.get('bargain_price')}"
+            f"\n- 最高价：¥{price_range.get('max_price')}"
+            f"\n- 中位数：¥{price_range.get('median_price')}"
+            f"\n- 样本数：{price_range.get('sample_size')}"
+            f"\n- 数据来源：{price_range.get('source_label', price_range.get('source', ''))}"
+            f"\n请结合此价格区间判断当前商品价格是否处于合理可拾区间。"
+        )
+    return text_content
+
+
+def _build_vision_user_content(
+    text_content: str, image_urls: list[str], vision_capable: bool
+) -> list[dict[str, Any]]:
+    """构建 Vision 请求的 user_content（文本 + 图片 URL 列表）
+
+    最多传入 4 张图片（避免 token 过多 + 超时）。
+    闲鱼图片 URL 常为协议相对路径（//img.alicdn.com/...），LLM 端无法解析，
+    需补全为 https://，否则会被 vision 服务报 400 失败并降级规则模拟。
+    """
+    user_content: list[dict[str, Any]] = [
+        {"type": "text", "text": text_content},
+    ]
+    for img_url in image_urls[:4]:
+        # 纯文本模型不接图，避免 400 报错 + 用量浪费
+        if not vision_capable:
+            break
+        normalized = img_url
+        if normalized.startswith("//"):
+            normalized = "https:" + normalized
+        user_content.append({
+            "type": "image_url",
+            "image_url": {"url": normalized},
+        })
+    return user_content
+
+
 async def _call_llm_vision(
     title: str,
     description: str,
@@ -524,53 +587,12 @@ async def _call_llm_vision(
         raise RuntimeError(f"AI 调用受限：{reason}，已自动降级到规则评估")
 
     url = settings.openai_base_url.rstrip("/") + CHAT_COMPLETIONS_PATH
-
     # 检测当前 vision_model 是否支持多模态（统一在 _is_vision_capable 维护关键字白名单）
     vision_capable = _is_vision_capable(settings.openai_vision_model)
 
-    # P1-8：从 Prompt 编辑器读取最新内容（支持热更新，无需重启）
-    from xianyu_hunter.web.routes.api_prompts import get_active_prompt
-    condition_prompt = get_active_prompt("evaluate_condition")
-    # 纯文本模型（无 vision 能力）时，移除 prompt 中"看图"相关要求，
-    # 避免 LLM 强行编造"我看了图片"导致评估失真
-    if not vision_capable:
-        condition_prompt = (
-            condition_prompt
-            + "\n\n【特别说明】当前模型不支持图片分析，请仅基于标题、描述、价格"
-              "和同类物品价格区间进行评估，risk_signals 中加入'无图片参考'。"
-        )
-
-    # 构建 user message：文字描述 + 图片 URL
-    text_content = f"商品标题：{title}\n商品描述：{description}\n商品价格：¥{price}"
-    # 注入同类物品价格区间，让 LLM 判断当前价格是否合理可拾
-    if price_range and price_range.get("sample_size", 0) > 0:
-        text_content += (
-            f"\n\n同类物品近期成交价格参考："
-            f"\n- 最低价（捡漏价格）：¥{price_range.get('bargain_price')}"
-            f"\n- 最高价：¥{price_range.get('max_price')}"
-            f"\n- 中位数：¥{price_range.get('median_price')}"
-            f"\n- 样本数：{price_range.get('sample_size')}"
-            f"\n- 数据来源：{price_range.get('source_label', price_range.get('source', ''))}"
-            f"\n请结合此价格区间判断当前商品价格是否处于合理可拾区间。"
-        )
-    user_content: list[dict[str, Any]] = [
-        {"type": "text", "text": text_content},
-    ]
-
-    # 最多传入 4 张图片（避免 token 过多 + 超时）
-    # 闲鱼图片 URL 常为协议相对路径（//img.alicdn.com/...），LLM 端无法解析，
-    # 需补全为 https://，否则会被 vision 服务报 400 失败并降级规则模拟
-    for img_url in image_urls[:4]:
-        if not vision_capable:
-            # 纯文本模型不接图，避免 400 报错 + 用量浪费
-            break
-        normalized = img_url
-        if normalized.startswith("//"):
-            normalized = "https:" + normalized
-        user_content.append({
-            "type": "image_url",
-            "image_url": {"url": normalized},
-        })
+    condition_prompt = _build_vision_condition_prompt(vision_capable)
+    text_content = _build_vision_text_content(title, description, price, price_range)
+    user_content = _build_vision_user_content(text_content, image_urls, vision_capable)
 
     payload = {
         "model": settings.openai_vision_model,  # 可配置：Vision 模型
@@ -678,6 +700,60 @@ def _eval_low_price(
     return condition_score
 
 
+def _extract_price_range_stats(price_range: dict[str, Any] | None) -> dict[str, Any] | None:
+    """提取并验证同类物品价格区间数据
+
+    返回 None 表示数据无效（无区间或 bargain/median 关键字段缺失），
+    让调用方跳过价格区间评估，避免在数据不足时误判。
+    """
+    if not price_range or price_range.get("sample_size", 0) <= 0:
+        return None
+    bargain_price = price_range.get("bargain_price") or 0
+    median_price = price_range.get("median_price") or 0
+    # bargain/median 为 0 时无法判断捡漏/性价比，视为数据无效
+    if bargain_price <= 0 or median_price <= 0:
+        return None
+    return {
+        "bargain_price": bargain_price,
+        "median_price": median_price,
+        "max_price": price_range.get("max_price") or 0,
+        "sample_size": price_range.get("sample_size", 0),
+        "source_label": price_range.get("source_label", price_range.get("source", "")),
+    }
+
+
+def _apply_price_range_eval(
+    price: float,
+    stats: dict[str, Any],
+    condition_score: int,
+    risk_signals: list[str],
+    detail_parts: list[str],
+) -> int:
+    """根据价格区间统计判断当前价格合理性并更新评分/信号
+
+    三档判断：低于捡漏价（提示机会，不加减分避免误判假货）/低于中位数85%（性价比良好）/高于最高价（减分）。
+    """
+    bargain_price = stats["bargain_price"]
+    median_price = stats["median_price"]
+    max_price = stats["max_price"]
+
+    if price < bargain_price:
+        # 低于最低价可能是真捡漏也可能是假货/问题机，不加减分让用户综合判断
+        detail_parts.append(
+            f"价格¥{price}低于同类最低价¥{bargain_price}（捡漏机会，样本{stats['sample_size']}）"
+        )
+    elif price < median_price * 0.85:
+        detail_parts.append(
+            f"价格¥{price}低于同类中位数¥{median_price}的85%（性价比良好）"
+        )
+    elif max_price > 0 and price > max_price:
+        risk_signals.append(f"价格¥{price}高于同类最高价¥{max_price}")
+        condition_score = max(1, condition_score - 1)
+        detail_parts.append("价格高于同类最高价")
+    detail_parts.append(f"价格参考来源：{stats['source_label']}")
+    return condition_score
+
+
 def _eval_price_range(
     price: float,
     price_range: dict[str, Any] | None,
@@ -692,37 +768,10 @@ def _eval_price_range(
     - 中位数以下85%：性价比良好
     - 高于最高价：价格偏高，减分
     """
-    if not price_range or price_range.get("sample_size", 0) <= 0:
+    stats = _extract_price_range_stats(price_range)
+    if stats is None:
         return condition_score
-    bargain_price = price_range.get("bargain_price") or 0
-    median_price = price_range.get("median_price") or 0
-    max_price = price_range.get("max_price") or 0
-    sample = price_range.get("sample_size", 0)
-    source_label = price_range.get("source_label", price_range.get("source", ""))
-
-    if bargain_price <= 0 or median_price <= 0:
-        return condition_score
-
-    # 价格低于捡漏价格 → 极佳捡漏机会，但需警惕假货风险
-    if price < bargain_price:
-        detail_parts.append(
-            f"价格¥{price}低于同类最低价¥{bargain_price}（捡漏机会，样本{sample}）"
-        )
-        # 不加分也不减分：低于最低价可能是真捡漏，也可能是假货/问题机
-        # 让用户结合其他维度判断
-    # 价格在中位数以下 → 性价比良好
-    elif price < median_price * 0.85:
-        detail_parts.append(
-            f"价格¥{price}低于同类中位数¥{median_price}的85%（性价比良好）"
-        )
-    # 价格高于最高价 → 价格偏高
-    elif max_price > 0 and price > max_price:
-        risk_signals.append(f"价格¥{price}高于同类最高价¥{max_price}")
-        condition_score = max(1, condition_score - 1)
-        detail_parts.append("价格高于同类最高价")
-    # 数据来源说明
-    detail_parts.append(f"价格参考来源：{source_label}")
-    return condition_score
+    return _apply_price_range_eval(price, stats, condition_score, risk_signals, detail_parts)
 
 
 def _rule_eval_condition(
@@ -771,24 +820,15 @@ def _rule_eval_condition(
     }
 
 
-def _normalize_condition_verdict(raw: dict[str, Any]) -> str:
-    """归一化 verdict：非标准值时根据 condition_score 兜底推断
-
-    成色评估仅有 recommend/caution 两档（无 reject），LLM 返回空或非标准值时
-    按 condition_score>=7 推荐否则谨慎；score 为 None 时保底 5 分避免 int(None) 报错。
-    """
-    verdict = str(raw.get("verdict") or "").strip().lower()
-    if verdict in ("recommend", "caution"):
-        return verdict
-    score = raw.get("condition_score")
-    if score is None:
-        score = 5
-    return "recommend" if int(score) >= 7 else "caution"
-
-
 def _normalize_condition_result(raw: dict[str, Any], source: str) -> dict[str, Any]:
     """归一化成色评估结果，保证前端拿到的字段稳定"""
-    verdict = _normalize_condition_verdict(raw)
+    verdict = str(raw.get("verdict") or "").strip().lower()
+    if verdict not in ("recommend", "caution"):
+        # 尝试从 condition_score 推断（处理 None 情况，避免 int(None) 报错）
+        score = raw.get("condition_score")
+        if score is None:
+            score = 5
+        verdict = "recommend" if int(score) >= 7 else "caution"
 
     condition_score = raw.get("condition_score")
     try:

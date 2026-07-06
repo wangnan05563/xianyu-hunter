@@ -37,6 +37,16 @@ _LAZY_SRC_ATTRS = ("data-src", "data-original", "data-lazy-src", "data-img")
 _PLACEHOLDER_MARKS = ("tps-2-2", "2-2.png", "1x1.png")
 
 
+def _is_valid_image_src(src: str) -> bool:
+    """判断图片 URL 是否有效：非空、非 data: 占位符、非 1x1 透明 PNG
+
+    提取为模块级函数避免在循环内堆叠多个 if 导致认知复杂度超标（S3776）。
+    """
+    if not src or src.startswith(_DATA_PREFIX):
+        return False
+    return not any(mark in src for mark in _PLACEHOLDER_MARKS)
+
+
 # 卖家信息标签解析规则：(字段名, 正则, 值转换函数)
 # 为什么提取为模块级常量：原 _extract_detail_seller_info 内联 6 个 m = re.search + if m: continue
 # 分支，单一方法认知复杂度堆积。提取为表驱动后解析逻辑集中且可单测。
@@ -65,6 +75,103 @@ def _parse_seller_label_text(text: str) -> tuple[str, Any] | None:
         m = pattern.search(text)
         if m:
             return field, converter(m)
+    return None
+
+
+def _parse_single_tab_count(text: str, prefix: str, current: int) -> int:
+    """从 tab 文本中按前缀解析数字；未命中或已存在值时保持原值
+
+    为什么未命中也返回 current：tab 遍历会逐个处理三种 tab（全部/在售/已售），
+    大多数 tab 不匹配当前 prefix，应保持原值不变。
+    """
+    if not text.startswith(prefix):
+        return current
+    m = re.search(_DIGITS_PATTERN, text)
+    return int(m.group(1)) if m else current
+
+
+def _parse_sold_tab_count(text: str, current: int) -> int:
+    """从已售 tab 文本中解析数字（兼容"已售出"/"已售"两种前缀）
+
+    为什么单独函数：原代码用 `elif text.startswith("已售出") or text.startswith("已售")`
+    复合条件，提取为函数后主循环只剩单行调用，认知复杂度下降。
+    """
+    if not (text.startswith("已售出") or text.startswith("已售")):
+        return current
+    m = re.search(_DIGITS_PATTERN, text)
+    return int(m.group(1)) if m else current
+
+
+def _parse_relative_publish_time(s: str, now: datetime) -> datetime | None:
+    """解析相对时间描述为 datetime：刚刚 / X秒/分钟/小时前 / 今天/昨天 HH:MM / X天/周/月/年前
+
+    按优先级顺序尝试，命中即返回；都不命中返回 None 由调用方继续尝试绝对时间解析。
+    """
+    from datetime import timedelta
+
+    # 刚刚 / X秒前
+    m = re.search(r"(\d+)\s*秒前", s)
+    if m or s == "刚刚":
+        return now - timedelta(seconds=int(m.group(1)) if m else 0)
+    # X分钟前
+    m = re.search(r"(\d+)\s*分钟前", s)
+    if m:
+        return now - timedelta(minutes=int(m.group(1)))
+    # X小时前
+    m = re.search(r"(\d+)\s*小时前", s)
+    if m:
+        return now - timedelta(hours=int(m.group(1)))
+    # 今天 HH:MM
+    m = re.search(r"今天\s*(\d{1,2}):(\d{1,2})", s)
+    if m:
+        return now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+    # 昨天 HH:MM
+    m = re.search(r"昨天\s*(\d{1,2}):(\d{1,2})", s)
+    if m:
+        t = now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        return t - timedelta(days=1)
+    # X天前
+    m = re.search(r"(\d+)\s*天前", s)
+    if m:
+        return now - timedelta(days=int(m.group(1)))
+    # X周前
+    m = re.search(r"(\d+)\s*周前", s)
+    if m:
+        return now - timedelta(weeks=int(m.group(1)))
+    # X个月前
+    m = re.search(r"(\d+)\s*个?月前", s)
+    if m:
+        return now - timedelta(days=int(m.group(1)) * 30)
+    # X年前
+    m = re.search(r"(\d+)\s*年前", s)
+    if m:
+        return now - timedelta(days=int(m.group(1)) * 365)
+    return None
+
+
+def _parse_absolute_publish_time(s: str) -> datetime | None:
+    """解析绝对时间格式：YYYY-MM-DD HH:MM[:SS] 或纯日期 YYYY-MM-DD / YYYY/MM/DD
+
+    两种格式分别尝试，解析失败（如月份越界）静默返回 None 由调用方兜底。
+    """
+    # 1. 完整日期时间：YYYY-MM-DD HH:MM[:SS] 或 YYYY/MM/DD HH:MM
+    m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?", s)
+    if m:
+        try:
+            y, mo, d, h, mi, se = m.groups()
+            return datetime(
+                int(y), int(mo), int(d), int(h), int(mi), int(se or 0),
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            pass
+    # 2. 纯日期：YYYY-MM-DD 或 YYYY/MM/DD
+    m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+        except ValueError:
+            pass
     return None
 
 
@@ -280,17 +387,17 @@ class DetailMixin:
         return src
 
     async def _extract_detail_images(self, page: Page) -> list[str]:
-        """提取图片列表，最多取 10 张，跳过占位符。"""
+        """提取图片列表，最多取 10 张，跳过占位符。
+
+        主函数只负责选择器遍历与去重收集，单张图片过滤下沉到辅助函数
+        以降低认知复杂度（S3776）。
+        """
         images: list[str] = []
         for sel in [self.selectors.DETAIL_IMAGES_MAIN, self.selectors.DETAIL_IMAGES_ALT]:
             img_els = await page.query_selector_all(sel)
             for img in img_els[:10]:  # 最多取 10 张
                 src = await self._resolve_img_src(img)
-                if not src or src.startswith(_DATA_PREFIX):
-                    continue
-                if any(mark in src for mark in _PLACEHOLDER_MARKS):
-                    continue
-                if src not in images:
+                if _is_valid_image_src(src) and src not in images:
                     images.append(src)
             if images:
                 break
@@ -320,39 +427,59 @@ class DetailMixin:
         return ""
 
     async def _extract_detail_want_view_counts(self, page: Page, item_id: str) -> tuple[int, int]:
-        """提取想要数和浏览数：先从 want-- 父元素提取，失败时用单独选择器兜底。"""
-        # 想要数 + 浏览数：闲鱼详情页两者共享父元素 [class*='want--']
-        # DOM 结构：<div class="want--XXX"><div>45人想要</div><div>1472浏览</div></div>
-        # 子元素无 class，无法单独选中，需从父元素 inner_text 中用正则分别提取
+        """提取想要数和浏览数：先从 want-- 父元素提取，失败时用单独选择器兜底。
+
+        主函数只负责编排（父元素解析 → 单字段兜底），
+        两个子流程下沉到辅助函数以降低认知复杂度（S3776）。
+        """
+        want_cnt, view_cnt = await self._extract_want_view_from_parent(page, item_id)
+        # 兜底：父元素提取失败时用原有选择器尝试
+        if want_cnt == 0:
+            want_cnt = await self._fallback_extract_count(
+                page, [self.selectors.DETAIL_WANT_MAIN, self.selectors.DETAIL_WANT_ALT]
+            )
+        if view_cnt == 0:
+            view_cnt = await self._fallback_extract_count(
+                page, [self.selectors.DETAIL_VIEW_MAIN, self.selectors.DETAIL_VIEW_ALT]
+            )
+        return want_cnt, view_cnt
+
+    async def _extract_want_view_from_parent(
+        self, page: Page, item_id: str
+    ) -> tuple[int, int]:
+        """从 want-- 父元素 inner_text 中解析想要数与浏览数
+
+        DOM 结构：<div class="want--XXX"><div>45人想要</div><div>1472浏览</div></div>
+        子元素无 class，无法单独选中，需从父元素 inner_text 中用正则分别提取。
+        """
         want_cnt = 0
         view_cnt = 0
         try:
             want_parent = await page.query_selector("[class*='want--']")
-            if want_parent:
-                want_text = await want_parent.inner_text()
-                # 想要数："45人想要"
-                m_want = re.search(r"(\d+)\s*人想要", want_text)
-                if m_want:
-                    want_cnt = int(m_want.group(1))
-                # 浏览数："1472浏览"
-                m_view = re.search(r"(\d+)\s*浏览", want_text)
-                if m_view:
-                    view_cnt = int(m_view.group(1))
+            if not want_parent:
+                return 0, 0
+            want_text = await want_parent.inner_text()
+            # 想要数："45人想要"
+            m_want = re.search(r"(\d+)\s*人想要", want_text)
+            if m_want:
+                want_cnt = int(m_want.group(1))
+            # 浏览数："1472浏览"
+            m_view = re.search(r"(\d+)\s*浏览", want_text)
+            if m_view:
+                view_cnt = int(m_view.group(1))
         except Exception as e:
             logger.debug(f"详情页 {item_id} 想要数/浏览数从 want-- 父元素提取失败: {e}")
-
-        # 兜底：父元素提取失败时用原有选择器尝试
-        if want_cnt == 0:
-            for sel in [self.selectors.DETAIL_WANT_MAIN, self.selectors.DETAIL_WANT_ALT]:
-                want_cnt = await self._extract_count(page, sel)
-                if want_cnt > 0:
-                    break
-        if view_cnt == 0:
-            for sel in [self.selectors.DETAIL_VIEW_MAIN, self.selectors.DETAIL_VIEW_ALT]:
-                view_cnt = await self._extract_count(page, sel)
-                if view_cnt > 0:
-                    break
         return want_cnt, view_cnt
+
+    async def _fallback_extract_count(
+        self, page: Page, selectors: list[str]
+    ) -> int:
+        """按选择器顺序尝试提取数字，命中即返回"""
+        for sel in selectors:
+            cnt = await self._extract_count(page, sel)
+            if cnt > 0:
+                return cnt
+        return 0
 
     async def _extract_detail_publish_time(self, page: Page) -> datetime:
         """提取发布时间；解析失败时兜底为 now()，保证字段非空，避免评估/展示出现 None。"""
@@ -448,6 +575,9 @@ class DetailMixin:
         新版闲鱼详情页在 item-user-info-label 中显示：
         地区 / 活跃时间 / 注册时间("来闲鱼X天"/"来闲鱼X年") / 已售数("卖出X件宝贝") / 好评率("好评率X%")
         SPA 页面异步渲染，标题出现后这些元素可能还未渲染，需显式等待。
+
+        主函数只负责初始化与编排，昵称提取和标签解析下沉到辅助函数
+        以降低认知复杂度（S3776）。
         """
         info: dict[str, Any] = {
             "nick": "",
@@ -456,23 +586,37 @@ class DetailMixin:
             "sold_count": 0,
             "register_days": 0,
         }
+        info["nick"] = await self._extract_detail_seller_name(page)
+        await self._populate_seller_info_labels(page, item_id, info)
+        return info
 
-        # 提取卖家昵称（详情页通常显示卖家名称）
+    async def _extract_detail_seller_name(self, page: Page) -> str:
+        """从详情页 DOM 提取卖家昵称
+
+        为什么用 for 循环单元素：保留扩展为多候选选择器的能力，
+        未来选择器改版时只需在列表中追加新选择器。
+        """
         for nick_sel in [self.selectors.DETAIL_SELLER_NAME]:
             try:
                 nick_el = await page.query_selector(nick_sel)
                 if nick_el:
                     nick = (await nick_el.inner_text()).strip()
                     if nick:
-                        info["nick"] = nick
-                        break
+                        return nick
             except Exception:
                 continue
+        return ""
 
-        # 从详情页的卖家信息标签提取结构化数据
+    async def _populate_seller_info_labels(
+        self, page: Page, item_id: str, info: dict[str, Any]
+    ) -> None:
+        """从详情页卖家信息标签提取结构化数据并写回 info
+
+        标签解析逻辑统一在模块级函数 _parse_seller_label_text 中（表驱动）。
+        SPA 异步渲染需显式等待选择器（5s 超时后仍尝试，可能部分元素已渲染）。
+        """
         try:
             # 等待卖家信息标签出现（5s 超时，足够 SPA hydration 完成）
-            # 不阻塞太久，超时后仍尝试提取（可能部分元素已渲染）
             try:
                 await page.wait_for_selector(
                     self.selectors.DETAIL_REGION_MAIN, timeout=5000
@@ -500,8 +644,6 @@ class DetailMixin:
         except Exception as e:
             # 不再静默吞异常，记录错误原因便于诊断
             logger.warning(f"详情页 {item_id} 卖家信息标签提取异常: {e}")
-
-        return info
 
     async def _handle_title_extraction_failure(self, page: Page, item_id: str) -> None:
         """标题提取失败时记录日志并 dump HTML，便于事后分析选择器失效根因。
@@ -626,7 +768,11 @@ class DetailMixin:
         return brand
 
     async def detail(self, item_id: str, page: Page | None = None) -> ItemDetail | None:
-        """商品详情"""
+        """商品详情
+
+        主函数只负责页面生命周期与 try/except 包装，
+        字段采集主流程下沉到 _collect_detail 以降低认知复杂度（S3776）。
+        """
         # 入口重置 reason：避免上次失败 reason 残留导致本次成功后上游误判
         # 仅在 detail() 返回 None 时 reason 才有意义
         self.last_detail_failure_reason = ""
@@ -645,131 +791,9 @@ class DetailMixin:
         if page is None:
             raise RuntimeError("new_page 返回 None，浏览器可能已关闭")
         try:
-            # 防御性检查：page 可能在 new_page() 的 await 返回前被 close_all_pages 并发关闭
-            # 时序：new_page await 期间事件循环切换到 TaskScheduler.run_once 结束清理，
-            # close_all_pages 遍历 context.pages 看到新 page（还未 register）将其关闭
-            if page.is_closed():
-                self.last_detail_failure_reason = "page_closed"
-                logger.warning(f"详情页 {item_id} page 已关闭（并发清理或浏览器崩溃），跳过采集")
-                return None
-            # 延迟导入避免循环依赖
-            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
-            from xianyu_hunter.modules.freq_disguise import ActionType
-            await get_orchestrator().apply_freq_delay(ActionType.DETAIL)
-            await self.ad.throttle()
-            url = build_item_url(item_id)
-            logger.debug(f"详情: {url}")
-            _t0 = time.perf_counter()
-            response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            _t_goto = time.perf_counter() - _t0
-            logger.debug(f"详情页 {item_id} page.goto 耗时 {_t_goto:.2f}s")
-
-            # 检查 HTTP 状态码：404/403/302 等异常状态提前返回 None
-            if self._check_detail_http_status(item_id, response):
-                return None
-
-            # 等待任一详情页渲染信号。新版闲鱼详情页经常没有 h1，固定等标题会让
-            # 每个详情页白白耗满 10s；后续仍会做标题、价格、URL、首页标题校验。
-            _t1 = time.perf_counter()
-            render_signal = await self._wait_render_signal_with_timeout(page, item_id)
-            _t_wait_title = time.perf_counter() - _t1
-            logger.debug(f"详情页 {item_id} wait_for_render_signal({render_signal}) 耗时 {_t_wait_title:.2f}s")
-
-            # 解析标题（DOM 选择器 → og:title → document.title 兜底）
-            title = await self._extract_detail_title(page, item_id)
-
-            # 下架/已删除页可能复用首页标题，需优先识别，避免误判为 cookie 失效。
-            early_return = await self._early_detect_delisted(page, item_id)
-            if early_return is not None:
-                return early_return
-
-            # 首页标题检测必须早于卖家 ID dump 和卖家标签等待。
-            if self._is_home_page_title_early(item_id, title):
-                return None
-
-            if self._is_login_or_verify_redirect(page, item_id):
-                return None
-
-            # 提取各字段（价格/描述/图片/缩略图/地区/想要数/浏览数/发布时间/卖家ID/卖家信息）
-            price = await self._extract_detail_price(page, item_id)
-            desc = await self._extract_detail_description(page)
-            images = await self._extract_detail_images(page)
-            thumb_url = await self._extract_detail_thumb_url(page, images)
-            region = await self._extract_detail_region(page)
-            want_cnt, view_cnt = await self._extract_detail_want_view_counts(page, item_id)
-            publish_time = await self._extract_detail_publish_time(page)
-            seller_id = await self._extract_detail_seller_id(page, item_id, url)
-            seller_info = await self._extract_detail_seller_info(page, item_id)
-
-            # P0 修复：如果核心字段（标题）未提取成功，主动返回 None 让上游感知失败
-            # 避免超时后仍返回默认值，导致半残数据污染 items 表与评估结果
-            if not title:
-                self.last_detail_failure_reason = "title_extraction_failed"
-                await self._handle_title_extraction_failure(page, item_id)
-                return None
-            # 下架/已删除早期检测：在首页标题检测之前优先识别下架文案
-            early_return = await self._second_detect_delisted(page, item_id)
-            if early_return is not None:
-                return early_return
-            # 首页标题检测：cookie 失效后闲鱼 SPA 可能在当前 URL 渲染首页内容
-            # URL 校验无法检测（URL 未改变），通过标题内容判断是否为首页
-            if self._is_home_page_title_late(item_id, title):
-                return None
-            if price <= 0:
-                # 价格未命中通常意味着详情页未正常加载（404/SPA 未渲染）
-                self.last_detail_failure_reason = "price_extraction_failed"
-                logger.warning(f"详情页 {item_id} 价格提取失败（title={title}, price={price}），主动返回 None")
-                return None
-
-            # P0 增强：校验当前 URL 仍是商品页，否则视为采集失败
-            if self._is_redirected_away_from_item(page, item_id):
-                return None
-
-            # 已售/已删除检测
-            is_sold = await self._detect_detail_is_sold(page, item_id)
-
-            # 品牌字段
-            brand = self._extract_detail_brand(title, desc, seller_info["nick"])
-
-            # P3 埋点：成功路径总耗时（DEBUG 级别，便于诊断慢节点）
-            _t_total = time.perf_counter() - _t0
-            logger.debug(
-                f"详情页 {item_id} 采集完成总耗时 {_t_total:.2f}s "
-                f"(goto={_t_goto:.2f}s, wait_title={_t_wait_title:.2f}s)"
-            )
-            return ItemDetail(
-                id=item_id,
-                title=title,
-                price=price,
-                description=desc,
-                image_urls=images,
-                # P1 字段补齐：从详情页提取的结构化字段
-                thumb_url=thumb_url,
-                region=region,
-                want_cnt=want_cnt,
-                view_cnt=view_cnt,
-                seller_id=seller_id,
-                brand=brand,
-                publish_time=publish_time,  # 已从详情页解析，无则兜底为 now()
-                # 填充从详情页提取的卖家信息
-                detail_seller_nick=seller_info["nick"],
-                detail_credit_score=seller_info["credit_score"],
-                detail_on_sale_count=seller_info["on_sale_count"],
-                detail_sold_count=seller_info["sold_count"],
-                detail_register_days=seller_info["register_days"],
-                is_sold=is_sold,
-            )
+            return await self._collect_detail(item_id, page)
         except Exception as e:
-            err_msg = str(e)
-            # TargetClosedError 是已知并发场景（BatchRefreshScheduler 与 TaskScheduler.run_once 并发清理），
-            # 降级为 WARNING 避免污染 ERROR 日志；page 已不可用，直接返回 None
-            if "Target" in err_msg and "closed" in err_msg:
-                self.last_detail_failure_reason = "target_closed_exception"
-                logger.warning(f"详情页 {item_id} 采集失败（页面被并发关闭）: {e}")
-            else:
-                self.last_detail_failure_reason = "unknown_exception"
-                logger.exception(f"采集详情失败 {item_id}: {e}")
-            return None
+            return self._handle_detail_exception(item_id, e)
         finally:
             if own_page:
                 self.browser.unregister_external_page(page)
@@ -778,6 +802,142 @@ class DetailMixin:
                     await page.close()
                 except Exception:
                     pass
+
+    async def _collect_detail(self, item_id: str, page: Page) -> ItemDetail | None:
+        """详情页字段采集主流程（不含 try/except 包装）
+
+        包含：page 防御性检查、HTTP 状态校验、标题/价格/图片/卖家等字段提取、
+        下架/首页标题/重定向校验、最终组装 ItemDetail。
+        """
+        # 防御性检查：page 可能在 new_page() 的 await 返回前被 close_all_pages 并发关闭
+        # 时序：new_page await 期间事件循环切换到 TaskScheduler.run_once 结束清理，
+        # close_all_pages 遍历 context.pages 看到新 page（还未 register）将其关闭
+        if page.is_closed():
+            self.last_detail_failure_reason = "page_closed"
+            logger.warning(f"详情页 {item_id} page 已关闭（并发清理或浏览器崩溃），跳过采集")
+            return None
+        # 延迟导入避免循环依赖
+        from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+        from xianyu_hunter.modules.freq_disguise import ActionType
+        await get_orchestrator().apply_freq_delay(ActionType.DETAIL)
+        await self.ad.throttle()
+        url = build_item_url(item_id)
+        logger.debug(f"详情: {url}")
+        _t0 = time.perf_counter()
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        _t_goto = time.perf_counter() - _t0
+        logger.debug(f"详情页 {item_id} page.goto 耗时 {_t_goto:.2f}s")
+
+        # 检查 HTTP 状态码：404/403/302 等异常状态提前返回 None
+        if self._check_detail_http_status(item_id, response):
+            return None
+
+        # 等待任一详情页渲染信号。新版闲鱼详情页经常没有 h1，固定等标题会让
+        # 每个详情页白白耗满 10s；后续仍会做标题、价格、URL、首页标题校验。
+        _t1 = time.perf_counter()
+        render_signal = await self._wait_render_signal_with_timeout(page, item_id)
+        _t_wait_title = time.perf_counter() - _t1
+        logger.debug(f"详情页 {item_id} wait_for_render_signal({render_signal}) 耗时 {_t_wait_title:.2f}s")
+
+        # 解析标题（DOM 选择器 → og:title → document.title 兜底）
+        title = await self._extract_detail_title(page, item_id)
+
+        # 下架/已删除页可能复用首页标题，需优先识别，避免误判为 cookie 失效。
+        early_return = await self._early_detect_delisted(page, item_id)
+        if early_return is not None:
+            return early_return
+
+        # 首页标题检测必须早于卖家 ID dump 和卖家标签等待。
+        if self._is_home_page_title_early(item_id, title):
+            return None
+
+        if self._is_login_or_verify_redirect(page, item_id):
+            return None
+
+        # 提取各字段（价格/描述/图片/缩略图/地区/想要数/浏览数/发布时间/卖家ID/卖家信息）
+        price = await self._extract_detail_price(page, item_id)
+        desc = await self._extract_detail_description(page)
+        images = await self._extract_detail_images(page)
+        thumb_url = await self._extract_detail_thumb_url(page, images)
+        region = await self._extract_detail_region(page)
+        want_cnt, view_cnt = await self._extract_detail_want_view_counts(page, item_id)
+        publish_time = await self._extract_detail_publish_time(page)
+        seller_id = await self._extract_detail_seller_id(page, item_id, url)
+        seller_info = await self._extract_detail_seller_info(page, item_id)
+
+        # P0 修复：如果核心字段（标题）未提取成功，主动返回 None 让上游感知失败
+        # 避免超时后仍返回默认值，导致半残数据污染 items 表与评估结果
+        if not title:
+            self.last_detail_failure_reason = "title_extraction_failed"
+            await self._handle_title_extraction_failure(page, item_id)
+            return None
+        # 下架/已删除早期检测：在首页标题检测之前优先识别下架文案
+        early_return = await self._second_detect_delisted(page, item_id)
+        if early_return is not None:
+            return early_return
+        # 首页标题检测：cookie 失效后闲鱼 SPA 可能在当前 URL 渲染首页内容
+        # URL 校验无法检测（URL 未改变），通过标题内容判断是否为首页
+        if self._is_home_page_title_late(item_id, title):
+            return None
+        if price <= 0:
+            # 价格未命中通常意味着详情页未正常加载（404/SPA 未渲染）
+            self.last_detail_failure_reason = "price_extraction_failed"
+            logger.warning(f"详情页 {item_id} 价格提取失败（title={title}, price={price}），主动返回 None")
+            return None
+
+        # P0 增强：校验当前 URL 仍是商品页，否则视为采集失败
+        if self._is_redirected_away_from_item(page, item_id):
+            return None
+
+        # 已售/已删除检测
+        is_sold = await self._detect_detail_is_sold(page, item_id)
+
+        # 品牌字段
+        brand = self._extract_detail_brand(title, desc, seller_info["nick"])
+
+        # P3 埋点：成功路径总耗时（DEBUG 级别，便于诊断慢节点）
+        _t_total = time.perf_counter() - _t0
+        logger.debug(
+            f"详情页 {item_id} 采集完成总耗时 {_t_total:.2f}s "
+            f"(goto={_t_goto:.2f}s, wait_title={_t_wait_title:.2f}s)"
+        )
+        return ItemDetail(
+            id=item_id,
+            title=title,
+            price=price,
+            description=desc,
+            image_urls=images,
+            # P1 字段补齐：从详情页提取的结构化字段
+            thumb_url=thumb_url,
+            region=region,
+            want_cnt=want_cnt,
+            view_cnt=view_cnt,
+            seller_id=seller_id,
+            brand=brand,
+            publish_time=publish_time,  # 已从详情页解析，无则兜底为 now()
+            # 填充从详情页提取的卖家信息
+            detail_seller_nick=seller_info["nick"],
+            detail_credit_score=seller_info["credit_score"],
+            detail_on_sale_count=seller_info["on_sale_count"],
+            detail_sold_count=seller_info["sold_count"],
+            detail_register_days=seller_info["register_days"],
+            is_sold=is_sold,
+        )
+
+    def _handle_detail_exception(self, item_id: str, e: Exception) -> None:
+        """处理 detail() 采集异常：TargetClosedError 降级为 WARNING，其他为 ERROR
+
+        TargetClosedError 是已知并发场景（BatchRefreshScheduler 与 TaskScheduler.run_once
+        并发清理），降级避免污染 ERROR 日志；page 已不可用，统一返回 None。
+        """
+        err_msg = str(e)
+        if "Target" in err_msg and "closed" in err_msg:
+            self.last_detail_failure_reason = "target_closed_exception"
+            logger.warning(f"详情页 {item_id} 采集失败（页面被并发关闭）: {e}")
+        else:
+            self.last_detail_failure_reason = "unknown_exception"
+            logger.exception(f"采集详情失败 {item_id}: {e}")
+        return None
 
     async def seller_profile(
         self, seller_id: str, page: Page | None = None
@@ -845,6 +1005,8 @@ class DetailMixin:
 
         为什么需要 title 兜底：新版卖家主页可能因选择器改版导致昵称为空，
         但 document.title 始终可用（格式"昵称_闲鱼"），是最后防线。
+
+        title 兜底逻辑下沉到辅助函数以降低认知复杂度（S3776）。
         """
         nick = ""
         for sel in [self.selectors.SELLER_NICK_MAIN, self.selectors.SELLER_NICK_ALT]:
@@ -855,16 +1017,24 @@ class DetailMixin:
                     break
         # 昵称兜底：从 document.title 提取
         if not nick:
-            try:
-                doc_title = await page.title()
-                if doc_title:
-                    for suffix in ("_闲鱼", " - 闲鱼", " | 闲鱼"):
-                        if doc_title.endswith(suffix):
-                            nick = doc_title[: -len(suffix)].strip()
-                            break
-            except Exception:
-                pass
+            nick = await self._extract_nick_from_doc_title(page)
         return nick
+
+    async def _extract_nick_from_doc_title(self, page: Page) -> str:
+        """从 document.title 提取卖家昵称（格式"昵称_闲鱼"，需去掉后缀）
+
+        兼容三种后缀："_闲鱼" / " - 闲鱼" / " | 闲鱼"。
+        """
+        try:
+            doc_title = await page.title()
+            if not doc_title:
+                return ""
+            for suffix in ("_闲鱼", " - 闲鱼", " | 闲鱼"):
+                if doc_title.endswith(suffix):
+                    return doc_title[: -len(suffix)].strip()
+        except Exception:
+            pass
+        return ""
 
     async def _extract_seller_credit_score(self, page: Page) -> int | None:
         """提取信用分：多候选选择器 + 3-4 位数字正则"""
@@ -888,27 +1058,11 @@ class DetailMixin:
         旧版用 onSale/sold + count 子元素。
         由于新版 className 是哈希化的 tabItem--HiFOTMcp，无法用 CSS 选择器区分，
         直接遍历 tabItem 按文本前缀匹配。
+
+        主函数只负责编排（新版解析 → 旧版兜底 → 调试 dump），
+        tabItem 文本解析下沉到辅助函数以降低认知复杂度（S3776）。
         """
-        on_sale = 0
-        sold = 0
-        try:
-            tab_texts = await page.evaluate(
-                """() => {
-                    const tabs = document.querySelectorAll('[class*="tabItem"]');
-                    return Array.from(tabs).map(t => (t.innerText || '').trim());
-                }"""
-            )
-            for text in tab_texts or []:
-                if text.startswith("在售"):
-                    m = re.search(_DIGITS_PATTERN, text)
-                    if m:
-                        on_sale = int(m.group(1))
-                elif text.startswith("已售出") or text.startswith("已售"):
-                    m = re.search(_DIGITS_PATTERN, text)
-                    if m:
-                        sold = int(m.group(1))
-        except Exception as e:
-            logger.debug(f"tabItem 文本提取失败: {e}")
+        on_sale, sold = await self._parse_sale_counts_from_tabs(page)
 
         # 旧版兜底：新版未命中时尝试旧版选择器
         if on_sale == 0:
@@ -922,6 +1076,28 @@ class DetailMixin:
         if (on_sale == 0 or sold == 0) and seller_id not in _DUMPED_SELLER_IDS:
             await self._dump_seller_dom_for_debug(page, seller_id, on_sale, sold)
 
+        return on_sale, sold
+
+    async def _parse_sale_counts_from_tabs(self, page: Page) -> tuple[int, int]:
+        """从新版 tabItem 元素文本中解析在售数/已售数
+
+        三个 tab 文本分别为 "全部N"/"在售N"/"已售出N"。
+        className 是哈希化的 tabItem--XXX，无法用 CSS 选择器区分，按文本前缀匹配。
+        """
+        on_sale = 0
+        sold = 0
+        try:
+            tab_texts = await page.evaluate(
+                """() => {
+                    const tabs = document.querySelectorAll('[class*="tabItem"]');
+                    return Array.from(tabs).map(t => (t.innerText || '').trim());
+                }"""
+            )
+            for text in tab_texts or []:
+                on_sale = _parse_single_tab_count(text, "在售", on_sale)
+                sold = _parse_sold_tab_count(text, sold)
+        except Exception as e:
+            logger.debug(f"tabItem 文本提取失败: {e}")
         return on_sale, sold
 
     async def _dump_seller_dom_for_debug(
@@ -1197,8 +1373,11 @@ class DetailMixin:
 
         返回带 timezone.utc 的 datetime（统一时区便于排序/比较）。
         解析失败返回 None。
+
+        主函数只负责编排（相对时间 → 绝对时间），
+        两类格式解析下沉到模块级辅助函数以降低认知复杂度（S3776）。
         """
-        from datetime import datetime as _dt, timedelta
+        from datetime import datetime as _dt
 
         if not text:
             return None
@@ -1208,63 +1387,10 @@ class DetailMixin:
 
         now = _dt.now(timezone.utc)
 
-        # 1. 相对时间
-        # 刚刚 / X秒前
-        m = re.search(r"(\d+)\s*秒前", s)
-        if m or s == "刚刚":
-            return now - timedelta(seconds=int(m.group(1)) if m else 0)
-        # X分钟前
-        m = re.search(r"(\d+)\s*分钟前", s)
-        if m:
-            return now - timedelta(minutes=int(m.group(1)))
-        # X小时前
-        m = re.search(r"(\d+)\s*小时前", s)
-        if m:
-            return now - timedelta(hours=int(m.group(1)))
-        # 今天 HH:MM
-        m = re.search(r"今天\s*(\d{1,2}):(\d{1,2})", s)
-        if m:
-            return now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
-        # 昨天 HH:MM
-        m = re.search(r"昨天\s*(\d{1,2}):(\d{1,2})", s)
-        if m:
-            t = now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
-            return t - timedelta(days=1)
-        # X天前
-        m = re.search(r"(\d+)\s*天前", s)
-        if m:
-            return now - timedelta(days=int(m.group(1)))
-        # X周前
-        m = re.search(r"(\d+)\s*周前", s)
-        if m:
-            return now - timedelta(weeks=int(m.group(1)))
-        # X个月前
-        m = re.search(r"(\d+)\s*个?月前", s)
-        if m:
-            return now - timedelta(days=int(m.group(1)) * 30)
-        # X年前
-        m = re.search(r"(\d+)\s*年前", s)
-        if m:
-            return now - timedelta(days=int(m.group(1)) * 365)
+        # 1. 相对时间（X秒前 / X分钟前 / 今天 HH:MM 等）
+        relative = _parse_relative_publish_time(s, now)
+        if relative is not None:
+            return relative
 
-        # 2. 绝对时间：YYYY-MM-DD HH:MM[:SS] 或 YYYY/MM/DD HH:MM
-        m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?", s)
-        if m:
-            try:
-                y, mo, d, h, mi, se = m.groups()
-                return datetime(
-                    int(y), int(mo), int(d), int(h), int(mi), int(se or 0),
-                    tzinfo=timezone.utc,
-                )
-            except ValueError:
-                pass
-        # 3. 纯日期：YYYY-MM-DD 或 YYYY/MM/DD
-        m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
-        if m:
-            try:
-                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
-            except ValueError:
-                pass
-
-        # 解析失败
-        return None
+        # 2. 绝对时间（YYYY-MM-DD HH:MM[:SS] 或纯日期）
+        return _parse_absolute_publish_time(s)

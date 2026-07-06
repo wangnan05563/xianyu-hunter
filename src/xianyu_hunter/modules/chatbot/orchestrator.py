@@ -154,37 +154,12 @@ class ChatbotOrchestrator:
 
             # 5. FAQ 快速匹配：命中且高置信度则直接返回，跳过 LLM 调用节省成本
             faq_result = await self._faq.match(message)
-            if faq_result and faq_result.direct_answer:
-                # FAQ 命中分支在步骤 7 之前返回，需单独保存用户消息以保证历史完整
-                self._ctx.save_message(context.session_id, "user", message)
-                yield SSEEvent(
-                    event=SSEEventType.TOKEN,
-                    data={"content": faq_result.answer},
-                )
-                yield SSEEvent(
-                    event=SSEEventType.DONE,
-                    data={
-                        "content": faq_result.answer,
-                        "degraded": False,
-                        "metadata": {"faq_id": faq_result.faq_id, "degraded": False},
-                    },
-                )
-                self._ctx.save_message(
-                    context.session_id, "assistant", faq_result.answer,
-                    {"faq_id": faq_result.faq_id},
-                )
-                await self._publish_event(
-                    EventType.CHATBOT_MESSAGE_SAVED,
-                    {"session_id": context.session_id, "role": "assistant"},
-                )
-                return
-
-            # FAQ 模糊命中（需用户确认）：返回确认事件，不进入 LLM 流程
-            if faq_result and faq_result.matched:
-                yield SSEEvent(
-                    event=SSEEventType.FAQ_CONFIRM,
-                    data={"question": faq_result.question, "answer": faq_result.answer},
-                )
+            # 提取为独立 async generator 避免 if/else 双分支 + 多 yield 嵌套推高复杂度
+            faq_handled = False
+            async for event in self._try_faq_shortcut(message, context, faq_result):
+                yield event
+                faq_handled = True
+            if faq_handled:
                 return
 
             # 6. 意图分类：超范围则拒绝，避免 LLM 被滥用回答无关问题
@@ -219,26 +194,80 @@ class ChatbotOrchestrator:
             async for event in flow_tracker(flow):
                 yield event
 
-            full_response = flow_state["full_response"]
-            metadata = flow_state["metadata"]
-            tokens_used = flow_state["tokens_used"]
-            escalated = flow_state["escalated"]
-            follow_ups = flow_state["follow_ups"]
-
-            # 将 follow_ups 存入 metadata，使历史消息也能展示推荐问题
-            if follow_ups and metadata is not None:
-                metadata["follow_ups"] = follow_ups
-
             # 9. 保存 AI 消息（转人工时不保存，_escalate 已更新会话状态）
             # 10. 发布事件
-            if not escalated and full_response:
-                self._ctx.save_message(
-                    context.session_id, "assistant", full_response, metadata, tokens_used,
-                )
-                await self._publish_event(
-                    EventType.CHATBOT_MESSAGE_SAVED,
-                    {"session_id": context.session_id, "role": "assistant"},
-                )
+            # 提取为独立方法避免双 and 条件嵌套推高 orchestrate 复杂度
+            await self._finalize_response(context, flow_state)
+
+    async def _try_faq_shortcut(
+        self,
+        message: str,
+        context: Context,
+        faq_result,
+    ) -> AsyncIterator[SSEEvent]:
+        """尝试 FAQ 快速回复，命中则 yield 对应事件（调用方据此短路返回）
+
+        为什么独立方法：原 orchestrate 中 FAQ direct_answer 与 matched 两个分支
+        各含 and 条件 + 多个 yield + save_message + publish_event，
+        内联会让主流程的 10 步编排被 FAQ 细节淹没。
+        """
+        if faq_result and faq_result.direct_answer:
+            # FAQ 命中分支在步骤 7 之前返回，需单独保存用户消息以保证历史完整
+            self._ctx.save_message(context.session_id, "user", message)
+            yield SSEEvent(
+                event=SSEEventType.TOKEN,
+                data={"content": faq_result.answer},
+            )
+            yield SSEEvent(
+                event=SSEEventType.DONE,
+                data={
+                    "content": faq_result.answer,
+                    "degraded": False,
+                    "metadata": {"faq_id": faq_result.faq_id, "degraded": False},
+                },
+            )
+            self._ctx.save_message(
+                context.session_id, "assistant", faq_result.answer,
+                {"faq_id": faq_result.faq_id},
+            )
+            await self._publish_event(
+                EventType.CHATBOT_MESSAGE_SAVED,
+                {"session_id": context.session_id, "role": "assistant"},
+            )
+            return
+
+        # FAQ 模糊命中（需用户确认）：返回确认事件，不进入 LLM 流程
+        if faq_result and faq_result.matched:
+            yield SSEEvent(
+                event=SSEEventType.FAQ_CONFIRM,
+                data={"question": faq_result.question, "answer": faq_result.answer},
+            )
+
+    async def _finalize_response(self, context: Context, flow_state: dict) -> None:
+        """处理 flow 完成后的收尾：将 follow_ups 存入 metadata，保存 AI 消息并发布事件
+
+        为什么独立方法：原 orchestrate 中此段含 `follow_ups and metadata is not None`
+        与 `not escalated and full_response` 两个 and 条件，叠加 nesting 推高复杂度。
+        """
+        full_response = flow_state["full_response"]
+        metadata = flow_state["metadata"]
+        tokens_used = flow_state["tokens_used"]
+        escalated = flow_state["escalated"]
+        follow_ups = flow_state["follow_ups"]
+
+        # 将 follow_ups 存入 metadata，使历史消息也能展示推荐问题
+        if follow_ups and metadata is not None:
+            metadata["follow_ups"] = follow_ups
+
+        # 转人工时不保存（_escalate 已更新会话状态）
+        if not escalated and full_response:
+            self._ctx.save_message(
+                context.session_id, "assistant", full_response, metadata, tokens_used,
+            )
+            await self._publish_event(
+                EventType.CHATBOT_MESSAGE_SAVED,
+                {"session_id": context.session_id, "role": "assistant"},
+            )
 
     def _make_flow_state_tracker(self):
         """创建 flow 事件跟踪闭包

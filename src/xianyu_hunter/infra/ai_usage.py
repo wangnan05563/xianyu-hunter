@@ -244,12 +244,11 @@ def get_daily_summary() -> DailyUsage:
     return summary
 
 
-def get_recent_usage(days: int = 7) -> list[dict[str, Any]]:
-    """获取最近 N 天的用量历史"""
-    summaries: dict[str, DailyUsage] = {}
-    today = _today_key()
+def _load_today_from_memory(summaries: dict[str, DailyUsage], today: str) -> None:
+    """从内存 _today_records 累加今日用量到 summaries
 
-    # 先从内存加今日数据
+    独立出 get_recent_usage 的内存循环，降低主函数嵌套深度（S3776）。
+    """
     with _lock:
         for r in _today_records:
             key = today
@@ -261,25 +260,40 @@ def get_recent_usage(days: int = 7) -> list[dict[str, Any]]:
             s.total_output_tokens += r.output_tokens
             s.total_cost_usd += r.cost_usd
 
-    # 从文件加载历史数据
-    if USAGE_FILE.exists():
-        try:
-            data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
-            for entry in data.get("records", []):
-                date_key = datetime.fromtimestamp(
-                    entry["timestamp"], tz=timezone.utc
-                ).strftime("%Y-%m-%d")
-                if date_key == today:
-                    continue  # 今日数据已从内存加载
-                if date_key not in summaries:
-                    summaries[date_key] = DailyUsage(date=date_key)
-                s = summaries[date_key]
-                s.total_calls += 1
-                s.total_input_tokens += entry.get("input_tokens", 0)
-                s.total_output_tokens += entry.get("output_tokens", 0)
-                s.total_cost_usd += entry.get("cost_usd", 0)
-        except (json.JSONDecodeError, KeyError):
-            pass
+
+def _load_history_from_file(summaries: dict[str, DailyUsage], today: str) -> None:
+    """从持久化文件补充历史用量到 summaries（跳过今日，今日已从内存加载）
+
+    独立出 get_recent_usage 的文件解析循环，集中处理 JSON 异常与日期过滤。
+    """
+    if not USAGE_FILE.exists():
+        return
+    try:
+        data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, KeyError):
+        return
+    for entry in data.get("records", []):
+        date_key = datetime.fromtimestamp(
+            entry["timestamp"], tz=timezone.utc
+        ).strftime("%Y-%m-%d")
+        if date_key == today:
+            continue  # 今日数据已从内存加载
+        if date_key not in summaries:
+            summaries[date_key] = DailyUsage(date=date_key)
+        s = summaries[date_key]
+        s.total_calls += 1
+        s.total_input_tokens += entry.get("input_tokens", 0)
+        s.total_output_tokens += entry.get("output_tokens", 0)
+        s.total_cost_usd += entry.get("cost_usd", 0)
+
+
+def get_recent_usage(days: int = 7) -> list[dict[str, Any]]:
+    """获取最近 N 天的用量历史"""
+    summaries: dict[str, DailyUsage] = {}
+    today = _today_key()
+
+    _load_today_from_memory(summaries, today)
+    _load_history_from_file(summaries, today)
 
     # 按日期排序，取最近 N 天
     sorted_days = sorted(summaries.values(), key=lambda x: x.date, reverse=True)[:days]

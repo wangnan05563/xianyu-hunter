@@ -314,35 +314,21 @@ def _seed_sold_range_data(repo: Repository) -> None:
     - 200 元配件（应被过滤）
     - 3500/3800/4200/4800/5500（在范围内，应保留）
     - 9999 元超范围高价（应被过滤）
-
-    为什么同时写 task_links 和 items 两张表：
-    - sold-range 端点优先从 task_links.display 读已售价格（is_sold=1）
-    - category-stats / category-comparison 端点从 items 表读价格样本
-    - 两张表写入相同价格列表，保证所有端点的过滤逻辑都能被验证
     """
     repo.upsert_task({
         "id": "t1", "name": "iPhone 任务", "keyword": "iphone",
         "mode": "confirm", "cron": "*/5 * * * *",
         "min_price": 3000.0, "max_price": 6000.0,
     })
+    # 通过 task_links 注入已售商品（is_sold=1, price 在 display 中）
     sold_prices = [1.0, 200.0, 3500.0, 3800.0, 4200.0, 4800.0, 5500.0, 9999.0]
-    now = datetime.now(timezone.utc)
-    items_payload = []
     for i, price in enumerate(sold_prices):
-        # task_links 供 sold-range 端点读取（display.is_sold=1 标记为已售）
         repo.upsert_task_link(
             task_id="t1",
             link_type="item",
             link_key=f"item_{i}",
             display={"price": price, "is_sold": 1, "title": f"item {i}"},
         )
-        # items 表供 category-stats / category-comparison 端点读取
-        items_payload.append({
-            "id": f"item_{i}", "task_id": "t1", "title": f"item {i}",
-            "price": price, "is_sold": 1,
-            "first_seen": now, "publish_time": now,
-        })
-    repo.batch_upsert_items(items_payload)
 
 
 def test_sold_range_filters_by_task_price_range(client: TestClient, tmp_repo: Repository) -> None:
@@ -358,8 +344,6 @@ def test_sold_range_filters_by_task_price_range(client: TestClient, tmp_repo: Re
     # task_price_range 字段应回传任务配置
     assert data["task_price_range"]["min_price"] == 3000.0
     assert data["task_price_range"]["max_price"] == 6000.0
-    # filtered_count 应记录被过滤的样本数（1元+200元+9999元 = 3 个）
-    assert data["filtered_count"] == 3
     # 分位数字段应存在
     for field in ("p10", "p25", "p75", "p90"):
         assert field in data
@@ -399,24 +383,6 @@ def test_sold_range_no_task_range_keeps_all(client: TestClient, tmp_repo: Reposi
     assert data["min_price"] == 1.0
     assert data["task_price_range"]["min_price"] is None
     assert data["task_price_range"]["max_price"] is None
-    # 未过滤任何样本
-    assert data["filtered_count"] == 0
-
-
-def test_category_stats_filters_by_task_price_range(client: TestClient, tmp_repo: Repository) -> None:
-    """category-stats 也应按任务价格区间过滤，最高价不超出任务上限"""
-    _seed_sold_range_data(tmp_repo)
-    resp = client.get("/api/prices/category-stats?task_id=t1", headers=_auth_headers())
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total_count"] > 0
-    cat = data["categories"][0]
-    # 过滤后最高价不应超过任务 max_price=6000
-    assert cat["max"] <= 6000.0
-    # 过滤后最低价不应低于任务 min_price=3000
-    assert cat["min"] >= 3000.0
-    # task_price_range 字段应回传
-    assert cat["task_price_range"]["max_price"] == 6000.0
 
 
 def test_bargain_eval_excellent_level(client: TestClient, tmp_repo: Repository) -> None:

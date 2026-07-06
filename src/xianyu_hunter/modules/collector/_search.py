@@ -1062,256 +1062,379 @@ class SearchMixin:
         """
         items: list[ItemSummary] = []
         captured_responses: list[dict] = []
-        session_invalid: bool = False  # RGV587 表示会话失效，不是普通限流
-
-        async def _handle_route(route):
-            """拦截搜索 API 请求，捕获响应体"""
-            nonlocal session_invalid
-            try:
-                response = await route.fetch()
-                await _sync_response_cookies_to_context(page, response)
-                try:
-                    body = await response.json()
-                except Exception as json_err:
-                    preview = ""
-                    with suppress(Exception):
-                        preview = (await response.text())[:200]
-                    logger.debug(
-                        "搜索 API 响应非 JSON，跳过解析: error={}, preview={}",
-                        str(json_err)[:80],
-                        preview,
-                    )
-                    with suppress(Exception):
-                        await route.fulfill(response=response)
-                    return
-                ret = body.get("ret", [])
-                if ret and isinstance(ret, list):
-                    ret_str = str(ret[0]) if ret else ""
-                    # 会话失效判定：RGV587_ERROR 或 token 非法/过期
-                    # FAIL_SYS_TOKEN_ILLEGAL 表示 _m_h5_tk 令牌非法，与 RGV587 同属会话过期
-                    token_invalid = any(
-                        keyword in ret_str
-                        for keyword in (
-                            "RGV587",
-                            "TOKEN_EMPTY",
-                            "TOKEN_ILLEGAL",
-                            "TOKEN_EXPIRED",
-                            "TOKEN_INVALID",
-                            "SYS_ILLEGAL_ACCESS",
-                        )
-                    )
-                    if token_invalid:
-                        # 会话失效／反爬检测／token 过期，非普通限流
-                        # 此时闲鱼要求重新登录，DOM 回退也无法获取搜索结果
-                        logger.warning(
-                            "搜索 API 会话失效 ({})，需重新登录闲鱼: keyword={}",
-                            ret_str[:60], keyword,
-                        )
-                        session_invalid = True
-                        await route.fulfill(response=response)
-                        return
-                    if "ERROR" in ret_str or "FAIL" in ret_str:
-                        logger.warning("搜索 API 返回错误 (可能限流/未登录): {}", ret_str[:100])
-                        await route.fulfill(response=response)
-                        return
-                captured_responses.append(body)
-                body_str = str(body)
-                logger.info("route 拦截捕获搜索 API 响应，大小: {} bytes", len(body_str))
-                logger.info("API 响应前500字符: {}", body_str[:500])
-                await route.fulfill(response=response)
-            except Exception as e:
-                err = str(e)
-                if "Route is already handled" in err:
-                    logger.debug("route 已被处理，跳过重复处理: {}", err[:80])
-                    return
-                logger.warning("route 拦截处理失败: {}", err[:80])
-                with suppress(Exception):
-                    await route.continue_()
-
+        # 用 dict 持有可变状态，便于 _handle_route 闭包修改 session_invalid
+        # 闭包内 nonlocal 也可以，但提取为方法后状态需通过引用传递
+        state = {"session_invalid": False}
         route_pattern = self._SEARCH_API_ROUTE_PATTERN
+        _handle_route = self._make_search_route_handler(page, keyword, captured_responses, state)
         await page.route(route_pattern, _handle_route)
 
         try:
-            # 导航到搜索页（页面会自然发起 API 请求）
-            url = build_search_url(keyword, sort_type=sort_type, regions=regions)
-            # 使用 wait_until="commit"：HTTP 响应头到达即返回，不等待 SPA 水合
-            # 闲鱼搜索页是 SPA，domcontentloaded 事件需等待水合完成，网络波动时易超时
-            # commit 后 route 拦截器仍可捕获后续 API 请求，等待逻辑由下方轮询负责
-            goto_timeout = 15000 if fast else 20000
-            try:
-                await page.goto(url, wait_until="commit", timeout=goto_timeout)
-            except Exception as goto_err:
-                # goto 超时后主动检测会话失效：闲鱼可能将失效会话重定向到登录/验证页
-                # 重定向时 page.url 不再是搜索页，此时 DOM 回退也无法成功
-                try:
-                    current_url = page.url or ""
-                except Exception:
-                    current_url = ""
-                # 仅当 URL 确实是 goofish.com 的非搜索页时才判定为会话失效：
-                # about:blank（导航未开始）或空 URL 更可能是网络/浏览器问题，不误判
-                if (
-                    current_url
-                    and "goofish.com" in current_url
-                    and "goofish.com/search" not in current_url
-                ):
-                    logger.warning(
-                        "goto 超时且页面已跳转至非搜索页，判定为会话失效: url={}",
-                        current_url[:120],
-                    )
-                    session_invalid = True
-                    self._last_api_captured = False
-                    return items, session_invalid
-                # 未跳转则重新抛出，由上层处理（可能是单纯网络慢）
-                raise goto_err
-
-            # 等待 API 响应：快速模式最多 8 秒，正常模式最多 15 秒
-            wait_rounds = 8 if fast else 15
-            for _ in range(wait_rounds):
-                if captured_responses or session_invalid:
-                    break
-                await asyncio.sleep(1)
-            if not captured_responses and not session_invalid:
-                logger.info("搜索 API 未捕获响应，等待 {}s 后回退 DOM: keyword={}", wait_rounds, keyword)
-
-            # 会话失效时尝试刷新 token 后重试一次
-            # skip_rgv587_retry 时跳过重试（Worker 专用，避免 75 秒重试占用 browser_lock）
-            # fast 模式也重试：_ensure_fresh_m5tk(force=True) 有 5 分钟最小间隔保护，
-            # 不会频繁刷新；令牌失效后不重试会导致每次搜索都走 DOM 回退，性能差且易超时
-            if session_invalid and not skip_rgv587_retry:
-                logger.warning("搜索 API 会话失效，尝试强制刷新 _m_h5_tk 后重试: keyword={}", keyword)
-                # 强制刷新 token（跳过缓存）
-                refreshed = await self._ensure_fresh_m5tk(page, force=True)
-                if refreshed:
-                    # 重置状态，重新尝试搜索
-                    session_invalid = False
-                    captured_responses.clear()
-                    try:
-                        # 同步使用 wait_until="commit" 加速重试导航
-                        await page.goto(url, wait_until="commit", timeout=20000)
-                        # 等待 API 响应（最多等 15 秒）
-                        for _ in range(15):
-                            if captured_responses or session_invalid:
-                                break
-                            await asyncio.sleep(1)
-                    except Exception as e:
-                        logger.warning("RGV587 重试导航失败: {}", e)
-                else:
-                    logger.warning("强制刷新 _m_h5_tk 失败，跳过重试: keyword={}", keyword)
-
-            # 会话失效时返回空列表，由 search 方法决定是否尝试 DOM 回退
+            # 导航 + 等待响应 + 会话失效重试
+            session_invalid = await self._navigate_and_wait_for_api(
+                page, keyword, fast, skip_rgv587_retry,
+                sort_type, regions, captured_responses, state,
+            )
             if session_invalid:
                 logger.warning("搜索 API 会话失效，将尝试 DOM 回退: keyword={}", keyword)
 
-            # 解析捕获到的 API 响应
-            # 为什么用 while 而非 for：翻页后新捕获的响应需被继续处理，
-            # for 循环基于原始迭代器，遍历完后不会处理新增元素
-            api_page_idx = 0
-            while captured_responses and api_page_idx < max_pages:
-                resp = captured_responses.pop(0)
-                raw_items = self._parse_search_api_result(resp)
-                if not raw_items:
-                    api_page_idx += 1
-                    continue
-                logger.info("route 拦截获取到 {} 个商品", len(raw_items))
-                if raw_items:
-                    # 打印第一条原始数据的所有 key，便于排查字段名
-                    sample = raw_items[0]
-                    logger.info("搜索API原始字段 keys={}", list(sample.keys())[:30])
-                # 预提取前 3 个商品摘要，便于直观确认 resultList 是真实商品而非通用占位数据
-                # 背景：API 响应前500字符只显示 appBar/filterBar/resultInfo 等 UI 字段，
-                # resultList 在 500 字符之后，仅靠前500字符日志无法判断商品数据是否真实
-                # 缓存预览结果：主循环复用前 3 个已提取的 fields，避免重复调用 _extract_api_item_fields
-                preview_cache: dict[int, dict[str, Any]] = {}
-                try:
-                    preview_titles: list[str] = []
-                    for idx, raw in enumerate(raw_items[:3]):
-                        f = _extract_api_item_fields(raw)
-                        preview_cache[idx] = f
-                        if f["item_id"] and f["title"]:
-                            preview_titles.append(f"{f['item_id']}/{f['title'][:20]}/¥{f['price']}")
-                    if preview_titles:
-                        logger.info("搜索API前3个商品摘要: {}", " | ".join(preview_titles))
-                    else:
-                        logger.warning("搜索API前3个商品均缺少 item_id/title，可能返回的是通用占位数据")
-                except Exception as preview_err:
-                    logger.debug("商品摘要预览失败: {}", str(preview_err)[:80])
-                for idx, raw in enumerate(raw_items):
-                    try:
-                        fields = preview_cache.get(idx) or _extract_api_item_fields(raw)
-                        semantic_raw = fields["semantic_raw"]
-                        if not fields["item_id"] or not fields["title"]:
-                            data = raw.get("data") if isinstance(raw, dict) else None
-                            type_info = {k: type(v).__name__ for k, v in data.items()} if isinstance(data, dict) else {}
-                            logger.debug(
-                                "跳过搜索 API 条目：缺少 item_id/title, raw_keys={}, data_types={}",
-                                list(raw.keys())[:20] if isinstance(raw, dict) else type(raw).__name__,
-                                type_info,
-                            )
-                            continue
-                        # 提取卖家昵称和地区（委托到 collector_utils，处理 region 误存为 nick 的情况）
-                        # 调试日志：记录 API 原始字段值，便于排查字段错位
-                        _raw_nick = semantic_raw.get("userNick") or semantic_raw.get("sellerNick") or semantic_raw.get("nick") or ""
-                        _raw_region_val = semantic_raw.get("region", "")
-                        if _raw_nick or _raw_region_val:
-                            logger.debug(
-                                "商品 {} 原始字段 userNick={!r} region={!r}",
-                                fields["item_id"], _raw_nick, _raw_region_val,
-                            )
-                        nick, _raw_region = extract_seller_nick(semantic_raw)
-                        brand = extract_brand(semantic_raw, fields["title"], seller_candidate=nick)
-                        # 一次性构造 ItemSummary
-                        item = ItemSummary(
-                            id=fields["item_id"],
-                            title=fields["title"],
-                            price=fields["price"],
-                            region=_raw_region,
-                            brand=brand,
-                            seller_id=fields["seller_id"],
-                            seller_nick=nick or "",
-                            want_cnt=fields["want_cnt"],
-                            view_cnt=fields["view_cnt"],
-                            thumb_url=fields["thumb_url"],
-                            is_sold=check_item_sold(semantic_raw),
-                            publish_time=fields["publish_time"],
-                            # 尝试从搜索API提取卖家基本信息（用于降级评估）
-                            seller_credit_score=self._extract_credit_from_api_raw(semantic_raw),
-                            seller_on_sale_count=_coerce_int(_first_value(semantic_raw, ("onSaleCount", "itemCount"))),
-                            seller_sold_count=_coerce_int(_first_value(semantic_raw, ("soldCount",))),
-                        )
-                        if nick and item.seller_id:
-                            self._seller_nicks[item.seller_id] = nick
-                        if item.id and not any(i.id == item.id for i in items):
-                            items.append(item)
-                    except Exception as e:
-                        logger.debug("解析搜索 API 条目失败: {}", str(e)[:120])
-                        continue
-
-                # 翻页：滚动以触发更多 API 请求
-                if len(raw_items) >= 20 and api_page_idx + 1 < max_pages:
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await self.ad.human_delay(2000, 4000)
-                    # 等待下一页 API 响应（新响应会通过 route 拦截器追加到 captured_responses）
-                    for _ in range(10):
-                        if captured_responses:
-                            break
-                        await asyncio.sleep(1)
-                api_page_idx += 1
-
+            # 解析捕获到的 API 响应（含翻页滚动）
+            await self._parse_captured_responses(page, captured_responses, items, max_pages)
         finally:
-            # 页面可能已损坏（TargetClosedError），unroute 需超时+异常保护避免卡住
-            # 只解除当前搜索 API handler，避免 page.unroute("**/*") 等待页面所有路由清理。
-            try:
-                await asyncio.wait_for(page.unroute(route_pattern, _handle_route), timeout=1.0)
-                logger.info("page.unroute 完成")
-            except asyncio.TimeoutError:
-                logger.warning("page.unroute 超时，可能影响后续 DOM 解析")
-            except Exception as e:
-                logger.warning("page.unroute 异常: {}", str(e)[:80])
+            await self._unroute_search_api(page, route_pattern, _handle_route)
 
         # 记录是否捕获到 API 响应（供 live_links 判断 Cookie 失效）
         # captured_responses 非空但 items 为空 → 可能是登录墙响应或会话过期
         self._last_api_captured = bool(captured_responses)
         return items, session_invalid
+
+    def _make_search_route_handler(
+        self, page: Page, keyword: str,
+        captured_responses: list[dict], state: dict,
+    ):
+        """构造 route 拦截 handler 闭包
+
+        闭包修改 state["session_invalid"] 而非 nonlocal，便于后续扩展为类方法
+        """
+        async def _handle_route(route):
+            """拦截搜索 API 请求，捕获响应体"""
+            try:
+                response = await route.fetch()
+                await _sync_response_cookies_to_context(page, response)
+                if not await self._maybe_consume_route_response(route, response, keyword, captured_responses, state):
+                    # 会话失效/错误/非 JSON 已被消费，不再追加 captured_responses
+                    return
+            except Exception as e:
+                await self._handle_route_exception(route, e)
+
+        return _handle_route
+
+    async def _maybe_consume_route_response(
+        self, route, response, keyword: str,
+        captured_responses: list[dict], state: dict,
+    ) -> bool:
+        """解析 route.fetch() 的响应：会话失效/错误/非 JSON 时返回 False
+
+        返回 True 表示响应已成功捕获并追加到 captured_responses
+        """
+        try:
+            body = await response.json()
+        except Exception as json_err:
+            # 非 JSON 响应（如 HTML 登录页）记录预览后回放，避免阻塞 route
+            preview = ""
+            with suppress(Exception):
+                preview = (await response.text())[:200]
+            logger.debug(
+                "搜索 API 响应非 JSON，跳过解析: error={}, preview={}",
+                str(json_err)[:80], preview,
+            )
+            with suppress(Exception):
+                await route.fulfill(response=response)
+            return False
+
+        if self._is_session_invalid_response(body, keyword, state):
+            await route.fulfill(response=response)
+            return False
+        if self._is_error_response(body):
+            await route.fulfill(response=response)
+            return False
+
+        captured_responses.append(body)
+        body_str = str(body)
+        logger.info("route 拦截捕获搜索 API 响应，大小: {} bytes", len(body_str))
+        logger.info("API 响应前500字符: {}", body_str[:500])
+        await route.fulfill(response=response)
+        return True
+
+    def _is_session_invalid_response(self, body: dict, keyword: str, state: dict) -> bool:
+        """检测响应是否为会话失效（RGV587_ERROR / token 非法过期）
+
+        FAIL_SYS_TOKEN_ILLEGAL 与 RGV587 同属会话过期，DOM 回退也无法获取结果
+        """
+        ret = body.get("ret", [])
+        if not (ret and isinstance(ret, list)):
+            return False
+        ret_str = str(ret[0]) if ret else ""
+        token_invalid = any(
+            keyword in ret_str
+            for keyword in (
+                "RGV587", "TOKEN_EMPTY", "TOKEN_ILLEGAL",
+                "TOKEN_EXPIRED", "TOKEN_INVALID", "SYS_ILLEGAL_ACCESS",
+            )
+        )
+        if not token_invalid:
+            return False
+        logger.warning(
+            "搜索 API 会话失效 ({})，需重新登录闲鱼: keyword={}",
+            ret_str[:60], keyword,
+        )
+        state["session_invalid"] = True
+        return True
+
+    def _is_error_response(self, body: dict) -> bool:
+        """检测响应是否包含 ERROR/FAIL（限流或未登录），记录日志"""
+        ret = body.get("ret", [])
+        if not (ret and isinstance(ret, list)):
+            return False
+        ret_str = str(ret[0]) if ret else ""
+        if "ERROR" not in ret_str and "FAIL" not in ret_str:
+            return False
+        logger.warning("搜索 API 返回错误 (可能限流/未登录): {}", ret_str[:100])
+        return True
+
+    async def _handle_route_exception(self, route, e: Exception) -> None:
+        """route 拦截异常分类处理：已 handled 跳过，其他异常尝试 continue_"""
+        err = str(e)
+        if "Route is already handled" in err:
+            logger.debug("route 已被处理，跳过重复处理: {}", err[:80])
+            return
+        logger.warning("route 拦截处理失败: {}", err[:80])
+        with suppress(Exception):
+            await route.continue_()
+
+    async def _navigate_and_wait_for_api(
+        self, page: Page, keyword: str, fast: bool, skip_rgv587_retry: bool,
+        sort_type: str, regions: str,
+        captured_responses: list[dict], state: dict,
+    ) -> bool:
+        """导航搜索页 + 等待 API 响应 + 会话失效重试
+
+        返回最终 session_invalid 状态（True 表示会话失效）
+        """
+        url = build_search_url(keyword, sort_type=sort_type, regions=regions)
+        # 使用 wait_until="commit"：HTTP 响应头到达即返回，不等待 SPA 水合
+        # 闲鱼搜索页是 SPA，domcontentloaded 事件需等待水合完成，网络波动时易超时
+        # commit 后 route 拦截器仍可捕获后续 API 请求，等待逻辑由下方轮询负责
+        goto_timeout = 15000 if fast else 20000
+        try:
+            await page.goto(url, wait_until="commit", timeout=goto_timeout)
+        except Exception as goto_err:
+            # goto 超时后主动检测会话失效：闲鱼可能将失效会话重定向到登录/验证页
+            if self._goto_timeout_indicates_session_invalid(page):
+                state["session_invalid"] = True
+                self._last_api_captured = False
+                return True
+            # 未跳转则重新抛出，由上层处理（可能是单纯网络慢）
+            raise goto_err
+
+        # 等待 API 响应：快速模式最多 8 秒，正常模式最多 15 秒
+        wait_rounds = 8 if fast else 15
+        await self._poll_for_captured_responses(captured_responses, state, wait_rounds)
+        if not captured_responses and not state["session_invalid"]:
+            logger.info("搜索 API 未捕获响应，等待 {}s 后回退 DOM: keyword={}", wait_rounds, keyword)
+
+        # 会话失效时尝试刷新 token 后重试一次
+        # skip_rgv587_retry 时跳过重试（Worker 专用，避免 75 秒重试占用 browser_lock）
+        # fast 模式也重试：_ensure_fresh_m5tk(force=True) 有 5 分钟最小间隔保护
+        if state["session_invalid"] and not skip_rgv587_retry:
+            await self._retry_search_after_token_refresh(
+                page, keyword, url, captured_responses, state
+            )
+        return state["session_invalid"]
+
+    def _goto_timeout_indicates_session_invalid(self, page: Page) -> bool:
+        """goto 超时后检测页面是否被重定向到非搜索页（判定为会话失效）
+
+        仅当 URL 确实是 goofish.com 的非搜索页时才判定：
+        about:blank（导航未开始）或空 URL 更可能是网络/浏览器问题，不误判
+        """
+        try:
+            current_url = page.url or ""
+        except Exception:
+            current_url = ""
+        if (
+            current_url
+            and "goofish.com" in current_url
+            and "goofish.com/search" not in current_url
+        ):
+            logger.warning(
+                "goto 超时且页面已跳转至非搜索页，判定为会话失效: url={}",
+                current_url[:120],
+            )
+            return True
+        return False
+
+    async def _poll_for_captured_responses(
+        self, captured_responses: list[dict], state: dict, rounds: int
+    ) -> None:
+        """轮询等待 route 拦截到响应或会话失效"""
+        for _ in range(rounds):
+            if captured_responses or state["session_invalid"]:
+                break
+            await asyncio.sleep(1)
+
+    async def _retry_search_after_token_refresh(
+        self, page: Page, keyword: str, url: str,
+        captured_responses: list[dict], state: dict,
+    ) -> None:
+        """会话失效后强制刷新 _m_h5_tk 并重试一次导航
+
+        为什么 fast 模式也重试：令牌失效后不重试会导致每次搜索都走 DOM 回退，
+        性能差且易超时；_ensure_fresh_m5tk 内部有 5 分钟最小间隔保护
+        """
+        logger.warning("搜索 API 会话失效，尝试强制刷新 _m_h5_tk 后重试: keyword={}", keyword)
+        refreshed = await self._ensure_fresh_m5tk(page, force=True)
+        if not refreshed:
+            logger.warning("强制刷新 _m_h5_tk 失败，跳过重试: keyword={}", keyword)
+            return
+        # 重置状态，重新尝试搜索
+        state["session_invalid"] = False
+        captured_responses.clear()
+        try:
+            # 同步使用 wait_until="commit" 加速重试导航
+            await page.goto(url, wait_until="commit", timeout=20000)
+            # 等待 API 响应（最多等 15 秒）
+            for _ in range(15):
+                if captured_responses or state["session_invalid"]:
+                    break
+                await asyncio.sleep(1)
+        except Exception as e:
+            logger.warning("RGV587 重试导航失败: {}", e)
+
+    async def _unroute_search_api(self, page: Page, route_pattern: str, handler) -> None:
+        """解除 route 拦截：超时+异常保护避免页面已损坏时卡住
+
+        只解除当前搜索 API handler，避免 page.unroute("**/*") 等待页面所有路由清理
+        """
+        try:
+            await asyncio.wait_for(page.unroute(route_pattern, handler), timeout=1.0)
+            logger.info("page.unroute 完成")
+        except asyncio.TimeoutError:
+            logger.warning("page.unroute 超时，可能影响后续 DOM 解析")
+        except Exception as e:
+            logger.warning("page.unroute 异常: {}", str(e)[:80])
+
+    async def _parse_captured_responses(
+        self, page: Page, captured_responses: list[dict],
+        items: list[ItemSummary], max_pages: int,
+    ) -> None:
+        """解析捕获到的 API 响应并翻页滚动加载
+
+        为什么用 while 而非 for：翻页后新捕获的响应需被继续处理，
+        for 循环基于原始迭代器，遍历完后不会处理新增元素
+        """
+        api_page_idx = 0
+        while captured_responses and api_page_idx < max_pages:
+            resp = captured_responses.pop(0)
+            raw_items = self._parse_search_api_result(resp)
+            if not raw_items:
+                api_page_idx += 1
+                continue
+            logger.info("route 拦截获取到 {} 个商品", len(raw_items))
+            # 打印第一条原始数据的所有 key，便于排查字段名
+            sample = raw_items[0]
+            logger.info("搜索API原始字段 keys={}", list(sample.keys())[:30])
+            preview_cache = self._build_preview_cache(raw_items)
+            self._append_items_from_raw(raw_items, preview_cache, items)
+            # 翻页：滚动以触发更多 API 请求
+            await self._maybe_scroll_for_next_page(
+                page, captured_responses, raw_items, api_page_idx, max_pages
+            )
+            api_page_idx += 1
+
+    def _build_preview_cache(self, raw_items: list) -> dict[int, dict[str, Any]]:
+        """预提取前 3 个商品摘要并缓存，主循环复用避免重复调用
+
+        背景：API 响应前500字符只显示 appBar/filterBar/resultInfo 等 UI 字段，
+        resultList 在 500 字符之后，仅靠前500字符日志无法判断商品数据是否真实
+        """
+        preview_cache: dict[int, dict[str, Any]] = {}
+        try:
+            preview_titles: list[str] = []
+            for idx, raw in enumerate(raw_items[:3]):
+                f = _extract_api_item_fields(raw)
+                preview_cache[idx] = f
+                if f["item_id"] and f["title"]:
+                    preview_titles.append(f"{f['item_id']}/{f['title'][:20]}/¥{f['price']}")
+            if preview_titles:
+                logger.info("搜索API前3个商品摘要: {}", " | ".join(preview_titles))
+            else:
+                logger.warning("搜索API前3个商品均缺少 item_id/title，可能返回的是通用占位数据")
+        except Exception as preview_err:
+            logger.debug("商品摘要预览失败: {}", str(preview_err)[:80])
+        return preview_cache
+
+    def _append_items_from_raw(
+        self, raw_items: list, preview_cache: dict[int, dict[str, Any]],
+        items: list[ItemSummary],
+    ) -> None:
+        """将单页 raw_items 转换为 ItemSummary 并追加到 items（去重）"""
+        for idx, raw in enumerate(raw_items):
+            try:
+                fields = preview_cache.get(idx) or _extract_api_item_fields(raw)
+                item = self._build_item_from_api_raw(raw, fields)
+                if item is None:
+                    continue
+                if item.id and not any(i.id == item.id for i in items):
+                    items.append(item)
+            except Exception as e:
+                logger.debug("解析搜索 API 条目失败: {}", str(e)[:120])
+                continue
+
+    def _build_item_from_api_raw(self, raw: dict, fields: dict) -> ItemSummary | None:
+        """从单条 API raw 数据构造 ItemSummary
+
+        缺少 item_id/title 时记录调试日志并返回 None（数据无效）
+        """
+        semantic_raw = fields["semantic_raw"]
+        if not fields["item_id"] or not fields["title"]:
+            data = raw.get("data") if isinstance(raw, dict) else None
+            type_info = {k: type(v).__name__ for k, v in data.items()} if isinstance(data, dict) else {}
+            logger.debug(
+                "跳过搜索 API 条目：缺少 item_id/title, raw_keys={}, data_types={}",
+                list(raw.keys())[:20] if isinstance(raw, dict) else type(raw).__name__,
+                type_info,
+            )
+            return None
+        # 提取卖家昵称和地区（委托到 collector_utils，处理 region 误存为 nick 的情况）
+        _raw_nick = semantic_raw.get("userNick") or semantic_raw.get("sellerNick") or semantic_raw.get("nick") or ""
+        _raw_region_val = semantic_raw.get("region", "")
+        if _raw_nick or _raw_region_val:
+            logger.debug(
+                "商品 {} 原始字段 userNick={!r} region={!r}",
+                fields["item_id"], _raw_nick, _raw_region_val,
+            )
+        nick, _raw_region = extract_seller_nick(semantic_raw)
+        brand = extract_brand(semantic_raw, fields["title"], seller_candidate=nick)
+        item = ItemSummary(
+            id=fields["item_id"],
+            title=fields["title"],
+            price=fields["price"],
+            region=_raw_region,
+            brand=brand,
+            seller_id=fields["seller_id"],
+            seller_nick=nick or "",
+            want_cnt=fields["want_cnt"],
+            view_cnt=fields["view_cnt"],
+            thumb_url=fields["thumb_url"],
+            is_sold=check_item_sold(semantic_raw),
+            publish_time=fields["publish_time"],
+            # 尝试从搜索API提取卖家基本信息（用于降级评估）
+            seller_credit_score=self._extract_credit_from_api_raw(semantic_raw),
+            seller_on_sale_count=_coerce_int(_first_value(semantic_raw, ("onSaleCount", "itemCount"))),
+            seller_sold_count=_coerce_int(_first_value(semantic_raw, ("soldCount",))),
+        )
+        if nick and item.seller_id:
+            self._seller_nicks[item.seller_id] = nick
+        return item
+
+    async def _maybe_scroll_for_next_page(
+        self, page: Page, captured_responses: list[dict],
+        raw_items: list, api_page_idx: int, max_pages: int,
+    ) -> None:
+        """满 20 条且未到 max_pages 时滚动加载下一页
+
+        滚动后新响应会通过 route 拦截器追加到 captured_responses
+        """
+        if len(raw_items) < 20 or api_page_idx + 1 >= max_pages:
+            return
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await self.ad.human_delay(2000, 4000)
+        # 等待下一页 API 响应（新响应会通过 route 拦截器追加到 captured_responses）
+        for _ in range(10):
+            if captured_responses:
+                break
+            await asyncio.sleep(1)
 
     async def live_search(
         self,
@@ -1350,54 +1473,7 @@ class SearchMixin:
         # 为什么需要此映射：live_search 多数情况下没有 item_desc，需要在 collect_sellers
         # 访问详情页时回填到 display 字典，让 exclude_words 能匹配描述
         desc_by_item_id: dict[str, str] = {}
-        for item in items:
-            # 闲鱼商品详情页 URL 格式（.htm 已废弃，使用 /item?id=）
-            item_url = build_item_url(item.id)
-            # 卖家昵称：优先从 _seller_nicks 缓存中读取（搜索 API 已提取）
-            seller_nick = self._seller_nicks.get(getattr(item, "seller_id", ""), "")
-            base = {
-                "item_id": item.id,
-                "title": item.title,
-                "brand": getattr(item, "brand", ""),
-                "price": item.price,
-                "thumb_url": item.thumb_url,
-                "region": item.region,
-                "url": item_url,
-                "is_sold": item.is_sold,
-                "seller_id": getattr(item, "seller_id", ""),
-                "seller_nick": seller_nick or getattr(item, "seller_nick", ""),
-                "seller_credit": getattr(item, "seller_credit", ""),
-                "want_cnt": getattr(item, "want_cnt", 0),
-                "view_cnt": getattr(item, "view_cnt", 0),
-                "publish_time": getattr(item, "publish_time", None).isoformat() if getattr(item, "publish_time", None) else None,
-            }
-            # item 类型（url 已可由前端从 item_id 自动拼接，无需单独存储）
-            results.append({**base, "link_type": "item", "link_key": item.id})
-            # 搜索 API 已返回 seller_id 时直接收集，无需访问详情页
-            # seller 行的字段结构必须与 item 行对称（同一份前端表格渲染），
-            # 否则会出现"卖家"列与"发布时间"列错位显示同一 seller_credit 的问题
-            if getattr(item, "seller_id", None) and item.seller_id not in sellers_from_search:
-                item_seller_credit = getattr(item, "seller_credit", "") or ""
-                item_publish_time = getattr(item, "publish_time", None)
-                sellers_from_search[item.seller_id] = {
-                    "item_id": item.id,
-                    "title": seller_nick or f"卖家 {item.seller_id}",
-                    "brand": getattr(item, "brand", ""),
-                    "price": None,
-                    "thumb_url": "",
-                    "region": item.region,
-                    "url": build_seller_url(item.seller_id),
-                    "is_sold": False,
-                    "publish_time": item_publish_time.isoformat() if item_publish_time else None,
-                    "seller_id": item.seller_id,
-                    "seller_nick": seller_nick,
-                    "seller_credit": item_seller_credit,
-                    "want_cnt": 0,
-                    "view_cnt": 0,
-                    "link_type": "seller",
-                    "link_key": item.seller_id,
-                }
-                logger.debug("live_search 从搜索结果提取卖家: {} (来自商品 {})", item.seller_id, item.id)
+        self._build_live_search_results_from_items(items, results, sellers_from_search)
 
         # 将搜索结果中已获取的卖家加入 results
         for seller_data in sellers_from_search.values():
@@ -1405,68 +1481,167 @@ class SearchMixin:
 
         # 如果搜索结果中没有 seller_id（DOM 回退模式），访问详情页获取
         if collect_sellers and items and not sellers_from_search:
-            seen_sellers: set[str] = set()
-            own_page = page is None
-            detail_page = page
-            try:
-                if own_page:
-                    detail_page = await self.browser.new_page()
-                    # 同 search()：注册外部 page 防止并发清理误关
-                    self.browser.register_external_page(detail_page)
-                if detail_page is None:
-                    raise RuntimeError("new_page 返回 None，浏览器可能已关闭")
-
-                for item in items[:max_seller_details]:
-                    if not item.id:
-                        continue
-                    try:
-                        detail = await self.detail(item.id, page=detail_page)
-                        # 详情页含 description：缓存起来供后续回填到 results，
-                        # 让 exclude_words 能匹配描述中的关键词
-                        if detail and getattr(detail, "description", ""):
-                            desc_by_item_id[item.id] = detail.description
-                        if detail and detail.seller_id and detail.seller_id not in seen_sellers:
-                            seen_sellers.add(detail.seller_id)
-                            # DOM 回退模式下 detail() 不返回 nick（需访问卖家主页），
-                            # 此处保持空字符串，前端会回退到 seller_id 展示
-                            # seller 行的 display 字段需要与 item 行对称，
-                            # 避免前端表格"卖家"列与"发布时间"列错位渲染
-                            results.append({
-                                "item_id": item.id,
-                                "title": f"卖家 {detail.seller_id}",
-                                "brand": getattr(item, "brand", ""),
-                                "price": None,
-                                "thumb_url": "",
-                                "region": item.region,
-                                "url": build_seller_url(detail.seller_id),
-                                "is_sold": False,
-                                "publish_time": None,
-                                "seller_id": detail.seller_id,
-                                "seller_nick": "",
-                                "seller_credit": "",
-                                "want_cnt": 0,
-                                "view_cnt": 0,
-                                "link_type": "seller",
-                                "link_key": detail.seller_id,
-                            })
-                            logger.debug("live_search 提取卖家: {} (来自商品 {})", detail.seller_id, item.id)
-                    except Exception as e:
-                        logger.warning(f"live_search 提取卖家失败 item={item.id}: {e}")
-            finally:
-                if own_page and detail_page:
-                    self.browser.unregister_external_page(detail_page)
-                    await detail_page.close()
+            await self._collect_sellers_from_details(
+                page, items, max_seller_details, results, desc_by_item_id
+            )
 
         seller_count = len([r for r in results if r.get("link_type") == "seller"])
         logger.info("live_search 完成: {} 个商品, {} 个卖家, {} 条总结果", len(items), seller_count, len(results))
         # 回填 description：把详情页补抓的描述附到 item 行的 link_key/item_id 字段上
         # 为什么只对 item 类型回填：seller 行的 item_id 字段实际指向原商品 id，
         # 但 seller 类型不参与 exclude_words 过滤，无需描述
-        # 注意：description 不写入 results[i]["item_id"] 等已有字段，单独加一个键便于过滤逻辑读取
-        if desc_by_item_id:
-            for r in results:
-                if r.get("link_type") == "item":
-                    desc = desc_by_item_id.get(r.get("link_key") or r.get("item_id"), "")
-                    if desc:
-                        r["item_desc"] = desc
+        self._backfill_descriptions_to_results(results, desc_by_item_id)
         return results
+
+    def _build_live_search_results_from_items(
+        self, items: list, results: list[dict],
+        sellers_from_search: dict[str, dict],
+    ) -> None:
+        """将搜索结果商品转换为前端可展示的 item/seller 行并追加到 results
+
+        seller 行的字段结构必须与 item 行对称（同一份前端表格渲染），
+        否则会出现"卖家"列与"发布时间"列错位显示同一 seller_credit 的问题
+        """
+        for item in items:
+            item_url = build_item_url(item.id)
+            # 卖家昵称：优先从 _seller_nicks 缓存中读取（搜索 API 已提取）
+            seller_nick = self._seller_nicks.get(getattr(item, "seller_id", ""), "")
+            base = self._build_live_search_item_base(item, item_url, seller_nick)
+            # item 类型（url 已可由前端从 item_id 自动拼接，无需单独存储）
+            results.append({**base, "link_type": "item", "link_key": item.id})
+            # 搜索 API 已返回 seller_id 时直接收集，无需访问详情页
+            if getattr(item, "seller_id", None) and item.seller_id not in sellers_from_search:
+                sellers_from_search[item.seller_id] = self._build_seller_row_from_item(
+                    item, seller_nick
+                )
+                logger.debug("live_search 从搜索结果提取卖家: {} (来自商品 {})", item.seller_id, item.id)
+
+    def _build_live_search_item_base(self, item, item_url: str, seller_nick: str) -> dict:
+        """构造单个商品的 base display 字典（不含 link_type/link_key）"""
+        return {
+            "item_id": item.id,
+            "title": item.title,
+            "brand": getattr(item, "brand", ""),
+            "price": item.price,
+            "thumb_url": item.thumb_url,
+            "region": item.region,
+            "url": item_url,
+            "is_sold": item.is_sold,
+            "seller_id": getattr(item, "seller_id", ""),
+            "seller_nick": seller_nick or getattr(item, "seller_nick", ""),
+            "seller_credit": getattr(item, "seller_credit", ""),
+            "want_cnt": getattr(item, "want_cnt", 0),
+            "view_cnt": getattr(item, "view_cnt", 0),
+            "publish_time": getattr(item, "publish_time", None).isoformat() if getattr(item, "publish_time", None) else None,
+        }
+
+    def _build_seller_row_from_item(self, item, seller_nick: str) -> dict:
+        """从商品构造卖家 display 行
+
+        DOM 回退模式下 detail() 不返回 nick（需访问卖家主页），
+        此处保持空字符串，前端会回退到 seller_id 展示
+        """
+        item_publish_time = getattr(item, "publish_time", None)
+        return {
+            "item_id": item.id,
+            "title": seller_nick or f"卖家 {item.seller_id}",
+            "brand": getattr(item, "brand", ""),
+            "price": None,
+            "thumb_url": "",
+            "region": item.region,
+            "url": build_seller_url(item.seller_id),
+            "is_sold": False,
+            "publish_time": item_publish_time.isoformat() if item_publish_time else None,
+            "seller_id": item.seller_id,
+            "seller_nick": seller_nick,
+            "seller_credit": getattr(item, "seller_credit", "") or "",
+            "want_cnt": 0,
+            "view_cnt": 0,
+            "link_type": "seller",
+            "link_key": item.seller_id,
+        }
+
+    async def _collect_sellers_from_details(
+        self, page: Page | None, items: list, max_seller_details: int,
+        results: list[dict], desc_by_item_id: dict[str, str],
+    ) -> None:
+        """DOM 回退模式下访问详情页获取卖家ID并追加到 results
+
+        每个详情页约 3-5 秒，限制 max_seller_details 避免耗时过长
+        """
+        seen_sellers: set[str] = set()
+        own_page = page is None
+        detail_page = page
+        try:
+            if own_page:
+                detail_page = await self.browser.new_page()
+                # 同 search()：注册外部 page 防止并发清理误关
+                self.browser.register_external_page(detail_page)
+            if detail_page is None:
+                raise RuntimeError("new_page 返回 None，浏览器可能已关闭")
+
+            for item in items[:max_seller_details]:
+                if not item.id:
+                    continue
+                await self._collect_single_seller_from_detail(
+                    item, detail_page, seen_sellers, results, desc_by_item_id
+                )
+        finally:
+            if own_page and detail_page:
+                self.browser.unregister_external_page(detail_page)
+                await detail_page.close()
+
+    async def _collect_single_seller_from_detail(
+        self, item, detail_page, seen_sellers: set[str],
+        results: list[dict], desc_by_item_id: dict[str, str],
+    ) -> None:
+        """访问单个商品详情页，提取卖家ID 和描述并追加到 results"""
+        try:
+            detail = await self.detail(item.id, page=detail_page)
+            # 详情页含 description：缓存起来供后续回填到 results，
+            # 让 exclude_words 能匹配描述中的关键词
+            if detail and getattr(detail, "description", ""):
+                desc_by_item_id[item.id] = detail.description
+            if not (detail and detail.seller_id and detail.seller_id not in seen_sellers):
+                return
+            seen_sellers.add(detail.seller_id)
+            # seller 行的 display 字段需要与 item 行对称，
+            # 避免前端表格"卖家"列与"发布时间"列错位渲染
+            results.append({
+                "item_id": item.id,
+                "title": f"卖家 {detail.seller_id}",
+                "brand": getattr(item, "brand", ""),
+                "price": None,
+                "thumb_url": "",
+                "region": item.region,
+                "url": build_seller_url(detail.seller_id),
+                "is_sold": False,
+                "publish_time": None,
+                "seller_id": detail.seller_id,
+                "seller_nick": "",
+                "seller_credit": "",
+                "want_cnt": 0,
+                "view_cnt": 0,
+                "link_type": "seller",
+                "link_key": detail.seller_id,
+            })
+            logger.debug("live_search 提取卖家: {} (来自商品 {})", detail.seller_id, item.id)
+        except Exception as e:
+            logger.warning(f"live_search 提取卖家失败 item={item.id}: {e}")
+
+    def _backfill_descriptions_to_results(
+        self, results: list[dict], desc_by_item_id: dict[str, str]
+    ) -> None:
+        """将详情页描述回填到 item 行（seller 行不参与 exclude_words 过滤，不回填）
+
+        description 不写入 results[i]["item_id"] 等已有字段，单独加 item_desc 键
+        便于过滤逻辑读取
+        """
+        if not desc_by_item_id:
+            return
+        for r in results:
+            if r.get("link_type") != "item":
+                continue
+            desc = desc_by_item_id.get(r.get("link_key") or r.get("item_id"), "")
+            if desc:
+                r["item_desc"] = desc

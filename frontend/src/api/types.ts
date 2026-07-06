@@ -319,15 +319,51 @@ export interface SoldPriceRange {
   min_price: number | null
   max_price: number | null
   median_price: number | null
-  // 捡漏价格 = 已售商品最低价，低于此价视为捡漏机会
+  // 捡漏价格 = 已售商品 P10 分位数（旧逻辑用 min_price，单点异常易失真）
   bargain_price: number | null
+  // 分位数：P10/P25/P75/P90，便于前端展示完整价格分布
+  p10?: number | null
+  p25?: number | null
+  p75?: number | null
+  p90?: number | null
   sample_size: number
+  // 被任务价格区间过滤掉的样本数，用于前端展示"已过滤 N 个超范围样本"提示
+  filtered_count?: number
   // 数据来源：sold=已售成交价 / all_fallback=全部商品参考价 / empty=无数据
   source: 'sold' | 'all_fallback' | 'all_fallback_insufficient' | 'empty'
   source_label?: string
+  // 任务配置的价格区间，用于过滤超出监控范围的异常样本
+  task_price_range?: { min_price: number | null; max_price: number | null }
   task_id?: string | null
   range_days?: number
   message?: string  // 无数据时的友好提示
+}
+
+// 捡漏价格多维评估结果
+// 后端 GET /api/prices/bargain-eval 返回结构
+export interface BargainEval {
+  task_id: string
+  current_price: number
+  range_days: number
+  // 0-100 数值得分，越高越值得捡漏
+  bargain_score: number
+  // 四档等级：excellent/good/fair/poor/unknown
+  bargain_level: 'excellent' | 'good' | 'fair' | 'poor' | 'unknown'
+  suggestion: string
+  // 已售价格统计（source=empty 时为 null）
+  sold_price_stats: {
+    min: number | null
+    max: number | null
+    median: number | null
+    p10: number | null
+    p25: number | null
+    p75: number | null
+    p90: number | null
+    count: number
+    source: string
+    source_label?: string
+  } | null
+  task_price_range: { min_price: number | null; max_price: number | null }
 }
 
 export interface AIConditionResult {

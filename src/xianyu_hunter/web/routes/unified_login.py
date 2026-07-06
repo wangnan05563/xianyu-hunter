@@ -44,6 +44,9 @@ _BROWSER_LOGIN_SCRIPT = _REPO / "scripts" / "browser_login.py"
 _AUTH_HELPER_SCRIPT = _REPO / "scripts" / "auth_helper.py"
 _TERMINAL_STATUSES = {"success", "cancelled", "error", "timeout"}
 _LIVE_STATUSES = {"pending", "starting", "opening", "waiting", "already_logged", "running"}
+_STARTUP_STATUSES = {"pending", "starting", "opening", "already_logged", "running"}
+_STARTUP_HEARTBEAT_TIMEOUT_SEC = 90.0
+_WAITING_HEARTBEAT_TIMEOUT_SEC = 30.0
 # Cookie 未持久化提示文案：登录子进程返回 success 但 JSON 未检测到 Cookie 时复用
 _COOKIE_NOT_PERSISTED_MSG = "登录似乎成功，但 Cookie 未持久化，请重试"
 _PACKAGED_SCRIPT_FLAG = "--xh-run-script"
@@ -116,26 +119,6 @@ def _kill_proc(proc) -> None:
         pass
 
 
-def _collect_pythonw_candidates(exe: str) -> list[str]:
-    """收集 pythonw.exe 候选路径列表
-
-    Windows 下优先使用 pythonw.exe（GUI 子系统，无控制台窗口）。
-    venv 场景下 pythonw.exe 可能不在 venv 目录，需回退到基础解释器。
-    """
-    candidates: list[str] = []
-    if exe.lower().endswith("python.exe"):
-        # 同目录下的 pythonw.exe（标准 Python 安装布局）
-        candidates.append(exe[:-len("python.exe")] + "pythonw.exe")
-    # venv 目录下可能没有 pythonw.exe，但仍作为候选尝试
-    exe_dir = os.path.dirname(exe)
-    candidates.append(os.path.join(exe_dir, "pythonw.exe"))
-    # venv 的 base_executable 指向基础 Python，其目录可能有 pythonw.exe
-    base_exe = getattr(sys, "_base_executable", None)
-    if base_exe and base_exe.lower().endswith("python.exe"):
-        candidates.append(base_exe[:-len("python.exe")] + "pythonw.exe")
-    return candidates
-
-
 def _get_quiet_python_executable() -> tuple[str, int]:
     """获取无控制台窗口的 Python 解释器路径及对应的 creationflags
 
@@ -161,12 +144,28 @@ def _get_quiet_python_executable() -> tuple[str, int]:
         # 子进程脚本由 launcher.py 的内部分发入口执行，不能再寻找 pythonw.exe。
         return sys.executable, 0
 
+    # Windows：优先使用 pythonw.exe
     exe = sys.executable
-    if exe.lower().endswith("pythonw.exe"):
+    pythonw_candidates: list[str] = []
+
+    if exe.lower().endswith("python.exe"):
+        # 同目录下的 pythonw.exe（标准 Python 安装布局）
+        pythonw_candidates.append(exe[:-len("python.exe")] + "pythonw.exe")
+    elif exe.lower().endswith("pythonw.exe"):
         # 已经是 pythonw.exe
         return exe, 0
 
-    for candidate in _collect_pythonw_candidates(exe):
+    # venv 场景：venv 目录下可能没有 pythonw.exe，回退到基础解释器
+    # 检查 venv pyvenv.cfg 指向的基础 Python
+    exe_dir = os.path.dirname(exe)
+    pythonw_candidates.append(os.path.join(exe_dir, "pythonw.exe"))
+
+    # 检查 venv 的 base_executable
+    base_exe = getattr(sys, "_base_executable", None)
+    if base_exe and base_exe.lower().endswith("python.exe"):
+        pythonw_candidates.append(base_exe[:-len("python.exe")] + "pythonw.exe")
+
+    for candidate in pythonw_candidates:
         if os.path.exists(candidate):
             logger.debug("使用无窗口 Python 解释器: %s", candidate)
             return candidate, 0
@@ -377,6 +376,13 @@ def _read_status_file(status_file: str | None) -> dict:
         return {}
 
 
+def _heartbeat_timeout_for_status(file_status: str) -> float:
+    """按子进程阶段返回心跳超时时间。"""
+    if file_status in _STARTUP_STATUSES:
+        return _STARTUP_HEARTBEAT_TIMEOUT_SEC
+    return _WAITING_HEARTBEAT_TIMEOUT_SEC
+
+
 def _verify_cookies(max_retries: int = 10, delay: float = 1.0) -> bool:
     """验证闲鱼 Cookie 是否已导出到 JSON 文件
 
@@ -568,14 +574,15 @@ def _start_qr_login() -> JSONResponse:
     })
 
 
-def _wait_qr_ready(proc: subprocess.Popen, qr_png: Path, status_file: Path) -> str:
-    """轮询等待二维码生成或子进程退出（最多 30 秒）
+def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
+    """后台线程：等待二维码就绪 + 子进程退出"""
+    global _session
 
-    Returns:
-        "ready"   - 二维码已生成
-        "exited"  - 子进程已退出（已同步终态到 _session）
-        "timeout" - 30 秒内既未生成二维码子进程也未退出
-    """
+    status_file = out_dir / "status.json"
+    qr_png = out_dir / "qr.png"
+
+    # 轮询等待二维码生成（最多等 30 秒）
+    qr_ready = False
     for _ in range(60):  # 30s / 0.5s = 60
         if proc.poll() is not None:
             # 子进程已退出（可能启动失败）
@@ -583,60 +590,25 @@ def _wait_qr_ready(proc: subprocess.Popen, qr_png: Path, status_file: Path) -> s
             with _session_lock:
                 _session["status"] = data.get("state", "error")
                 _session["message"] = data.get("message", "子进程异常退出")
-            return "exited"
+            return
         if qr_png.exists() and qr_png.stat().st_size > 0:
-            return "ready"
+            qr_ready = True
+            break
         time.sleep(0.5)
-    return "timeout"
 
+    if qr_ready:
+        # 读取二维码图片为 base64
+        try:
+            qr_b64 = base64.b64encode(qr_png.read_bytes()).decode("ascii")
+        except Exception:
+            qr_b64 = None
 
-def _mark_qr_ready(qr_png: Path) -> None:
-    """读取二维码图片为 base64 并写入 _session（qr_ready 状态）"""
-    try:
-        qr_b64 = base64.b64encode(qr_png.read_bytes()).decode("ascii")
-    except Exception:
-        qr_b64 = None
+        with _session_lock:
+            _session["status"] = "qr_ready"
+            _session["message"] = "请用手机闲鱼 App 扫码登录"
+            _session["qr_png_b64"] = qr_b64
 
-    with _session_lock:
-        _session["status"] = "qr_ready"
-        _session["message"] = "请用手机闲鱼 App 扫码登录"
-        _session["qr_png_b64"] = qr_b64
-
-    logger.info("二维码已生成，等待用户扫码...")
-
-
-def _apply_qr_final_state(final_state: str, data: dict) -> None:
-    """同步二维码登录终态到 _session"""
-    with _session_lock:
-        if final_state == "success":
-            _session["status"] = "success"
-            _session["message"] = "扫码登录成功"
-        elif final_state == "timeout":
-            _session["status"] = "timeout"
-            _session["message"] = "扫码超时，请重试"
-        elif final_state == "cancelled":
-            _session["status"] = "cancelled"
-            _session["message"] = "已取消"
-        else:
-            _session["status"] = "error"
-            _session["message"] = data.get("message", "登录失败")
-
-
-def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
-    """后台线程：等待二维码就绪 + 子进程退出
-
-    编排逻辑：轮询二维码就绪 → 等待子进程退出 → 校验 Cookie → 同步终态 → 触发 hooks
-    """
-    global _session
-
-    status_file = out_dir / "status.json"
-    qr_png = out_dir / "qr.png"
-
-    qr_state = _wait_qr_ready(proc, qr_png, status_file)
-    if qr_state == "exited":
-        return
-    if qr_state == "ready":
-        _mark_qr_ready(qr_png)
+        logger.info("二维码已生成，等待用户扫码...")
 
     # 等待子进程退出（用户扫码成功或超时）
     try:
@@ -655,7 +627,19 @@ def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
             final_state = "error"
             data["message"] = _COOKIE_NOT_PERSISTED_MSG
 
-    _apply_qr_final_state(final_state, data)
+    with _session_lock:
+        if final_state == "success":
+            _session["status"] = "success"
+            _session["message"] = "扫码登录成功"
+        elif final_state == "timeout":
+            _session["status"] = "timeout"
+            _session["message"] = "扫码超时，请重试"
+        elif final_state == "cancelled":
+            _session["status"] = "cancelled"
+            _session["message"] = "已取消"
+        else:
+            _session["status"] = "error"
+            _session["message"] = data.get("message", "登录失败")
 
     # hooks 在锁外调用，避免与 _finalize_multi_user_login 内部的锁获取死锁
     if final_state == "success":
@@ -730,112 +714,6 @@ def _background_wait(proc: subprocess.Popen, status_file: Path, method: str) -> 
 # ============================================================
 # GET /api/auth/login/status - 轮询登录状态
 # ============================================================
-def _build_login_status_snapshot() -> tuple[str | None, bool, dict]:
-    """在锁内构建状态快照，返回 (status_file, already_success, result)
-
-    为什么单独抽出：login_status 主函数嵌套层级深导致认知复杂度超标，
-    锁内快照构建独立后既缩短锁持有时间，又让主函数只剩编排逻辑。
-    """
-    with _session_lock:
-        status_file = _session.get("status_file")
-        started_at = _session.get("started_at") or 0
-        session_status = _session["status"]
-        already_success = session_status == "success"
-        result = {
-            "method": _session["method"],
-            "status": session_status,
-            "message": _session["message"],
-            "elapsed": round(time.time() - started_at, 1) if started_at else 0,
-        }
-        if session_status == "qr_ready":
-            result["qr_png_b64"] = _session.get("qr_png_b64")
-    return status_file, already_success, result
-
-
-def _detect_heartbeat_timeout(data: dict, status_file: str | None, file_status: str) -> str:
-    """心跳超时检测：子进程卡死时杀进程并标记 error
-
-    为什么需要：browser_login.py 子进程的 bc.cookies() 在浏览器无响应时
-    可能永久阻塞，导致心跳停止、status_file 停在最后一次写入的 message，
-    前端秒数一直不变化。此处主动识别并清理，让前端停止轮询。
-    阈值 15s：子进程心跳间隔 3s + Playwright 偶尔阻塞 5-8s + 余量
-
-    Returns:
-        更新后的 file_status（卡死时为 "error"，否则原值不变）
-    """
-    if file_status not in _LIVE_STATUSES:
-        return file_status
-    ts = data.get("ts")
-    if ts is None:
-        return file_status
-    stale_sec = time.time() - float(ts)
-    if stale_sec <= 15:
-        return file_status
-
-    logger.warning("登录子进程心跳超时（%.1fs 未更新），判定为卡死", stale_sec)
-    with _session_lock:
-        proc = _session.get("proc")
-        if proc and proc.poll() is None:
-            try:
-                proc.kill()
-            except OSError:
-                pass
-        _session["status"] = "error"
-        _session["message"] = f"登录进程无响应（{stale_sec:.0f}s 未更新），请重试"
-    data["status"] = "error"
-    data["message"] = _session["message"]
-    # 写回 status_file 让 _background_wait 线程也能读到终态，
-    # 否则它会读到旧的 "waiting" 把 _session["status"] 覆盖回去
-    if status_file:
-        try:
-            Path(status_file).write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
-    return "error"
-
-
-def _finalize_terminal_status(
-    file_status: str, data: dict, result: dict, already_success: bool
-) -> bool:
-    """处理终态：校验 Cookie + 同步 _session + 计算 hooks 触发标志
-
-    Returns:
-        should_start_hooks：是否需要触发 userinfo 刷新 + 多用户接入
-    """
-    normalized_status = file_status
-    # 子进程已保证 Cookie 写入，快速确认即可（1.5s→0.6s）
-    if normalized_status == "success" and not _verify_cookies(max_retries=2, delay=0.3):
-        normalized_status = "error"
-        data["message"] = _COOKIE_NOT_PERSISTED_MSG
-
-    with _session_lock:
-        _session["status"] = normalized_status
-        _session["message"] = data.get("message", "")
-        result.update({
-            "status": normalized_status,
-            "message": _session["message"],
-            "elapsed": round(time.time() - (_session.get("started_at") or 0), 1)
-            if _session.get("started_at") else 0,
-        })
-        should_start_hooks = normalized_status == "success" and not already_success
-    return should_start_hooks
-
-
-def _merge_extra_status_fields(data: dict, result: dict) -> None:
-    """合并子进程上报的额外计时字段到结果（仅当 data 非空时）"""
-    if not data:
-        return
-    if data.get("elapsed") is not None:
-        result["child_elapsed"] = data.get("elapsed")
-    if data.get("wait_elapsed") is not None:
-        result["wait_elapsed"] = data.get("wait_elapsed")
-    if data.get("timings") is not None:
-        result["timings"] = data.get("timings")
-
-
 @router.get("/login/status")
 async def login_status() -> dict:
     """轮询当前登录会话状态
@@ -849,19 +727,78 @@ async def login_status() -> dict:
     """
     global _session
 
-    status_file, already_success, result = _build_login_status_snapshot()
+    with _session_lock:
+        status_file = _session.get("status_file")
+        started_at = _session.get("started_at") or 0
+        session_status = _session["status"]
+        already_success = session_status == "success"
+        result = {
+            "method": _session["method"],
+            "status": session_status,
+            "message": _session["message"],
+            "elapsed": round(time.time() - started_at, 1) if started_at else 0,
+        }
+
+        if session_status == "qr_ready":
+            result["qr_png_b64"] = _session.get("qr_png_b64")
 
     data = _read_status_file(status_file)
     file_status = data.get("status") or data.get("state") or ""
-
-    # 心跳超时检测：子进程卡死时杀进程并标记 error
-    file_status = _detect_heartbeat_timeout(data, status_file, file_status)
-
     should_start_hooks = False
+
+    # 心跳超时检测：status file 超过阶段阈值未更新时判定子进程卡死
+    # 为什么需要：browser_login.py 子进程的 bc.cookies() 在浏览器无响应时
+    # 可能永久阻塞，导致心跳停止、status_file 停在最后一次写入的 message，
+    # 前端秒数一直不变化。此处主动识别并清理，让前端停止轮询。
+    # 启动阶段给更长宽限：打包 exe 冷启动、导入 Playwright、拉起 Edge 可能超过 15s。
+    # 等待登录阶段仍保留较短阈值，及时识别浏览器 IPC 卡死。
+    if file_status in _LIVE_STATUSES:
+        ts = data.get("ts")
+        if ts is not None:
+            stale_sec = time.time() - float(ts)
+            timeout_sec = _heartbeat_timeout_for_status(file_status)
+            if stale_sec > timeout_sec:
+                logger.warning("登录子进程心跳超时（%.1fs 未更新），判定为卡死", stale_sec)
+                with _session_lock:
+                    proc = _session.get("proc")
+                    if proc and proc.poll() is None:
+                        try:
+                            proc.kill()
+                        except OSError:
+                            pass
+                    _session["status"] = "error"
+                    _session["message"] = f"登录进程无响应（{stale_sec:.0f}s 未更新），请重试"
+                data["status"] = "error"
+                data["message"] = _session["message"]
+                file_status = "error"
+                # 写回 status_file 让 _background_wait 线程也能读到终态，
+                # 否则它会读到旧的 "waiting" 把 _session["status"] 覆盖回去
+                if status_file:
+                    try:
+                        Path(status_file).write_text(
+                            json.dumps(data, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
+                    except OSError:
+                        pass
+
     if file_status in _TERMINAL_STATUSES:
-        should_start_hooks = _finalize_terminal_status(
-            file_status, data, result, already_success
-        )
+        normalized_status = file_status
+        # 子进程已保证 Cookie 写入，快速确认即可（1.5s→0.6s）
+        if normalized_status == "success" and not _verify_cookies(max_retries=2, delay=0.3):
+            normalized_status = "error"
+            data["message"] = _COOKIE_NOT_PERSISTED_MSG
+
+        with _session_lock:
+            _session["status"] = normalized_status
+            _session["message"] = data.get("message", "")
+            result.update({
+                "status": normalized_status,
+                "message": _session["message"],
+                "elapsed": round(time.time() - (_session.get("started_at") or 0), 1)
+                if _session.get("started_at") else 0,
+            })
+            should_start_hooks = normalized_status == "success" and not already_success
     elif file_status in _LIVE_STATUSES and result["status"] not in _TERMINAL_STATUSES:
         # 子进程运行中也会持续写 status_file。实时透传这些阶段，便于定位
         # launch / goto / 等待用户登录分别耗时多少。
@@ -869,7 +806,13 @@ async def login_status() -> dict:
         result["phase"] = file_status
         result["message"] = data.get("message") or result["message"]
 
-    _merge_extra_status_fields(data, result)
+    if data:
+        if data.get("elapsed") is not None:
+            result["child_elapsed"] = data.get("elapsed")
+        if data.get("wait_elapsed") is not None:
+            result["wait_elapsed"] = data.get("wait_elapsed")
+        if data.get("timings") is not None:
+            result["timings"] = data.get("timings")
 
     if should_start_hooks:
         _trigger_userinfo_refresh()

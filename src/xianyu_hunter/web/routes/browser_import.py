@@ -479,6 +479,79 @@ def _build_import_result(
     return result
 
 
+def _fetch_cookie_rows_from_src(src_conn: sqlite3.Connection) -> list | None:
+    """从源 DB 查询闲鱼相关 cookie 行
+
+    全量导入 vs 白名单导入由 _IMPORT_FULL 配置决定：
+    - 全量：保留所有闲鱼相关域名下的 cookie（75+ 个）
+    - 白名单：仅导入 key_cookies（会丢失 68 个 cookie，不推荐）
+
+    为什么优先全量：用户反馈 75 个 cookie 齐全时各类问题大幅度减少，
+    白名单过滤会丢失 tracking 层 cookie（cna/tfstk 等）导致反爬风险升高。
+    返回 None 表示数据库无 cookies 表（格式异常）。
+    """
+    table_check = src_conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
+    ).fetchone()
+    if not table_check:
+        return None
+
+    if _IMPORT_FULL:
+        return src_conn.execute(
+            """SELECT host_key, name, encrypted_value, value, path,
+                      expires_utc, is_secure, is_httponly
+               FROM cookies
+               WHERE host_key LIKE ? OR host_key LIKE ? OR host_key LIKE ?""",
+            _TARGET_DOMAINS,
+        ).fetchall()
+
+    name_placeholders = ",".join("?" for _ in _TARGET_COOKIE_NAMES)
+    return src_conn.execute(
+        f"""SELECT host_key, name, encrypted_value, value, path,
+                  expires_utc, is_secure, is_httponly
+           FROM cookies
+           WHERE (host_key LIKE ? OR host_key LIKE ? OR host_key LIKE ?)
+             AND name IN ({name_placeholders})""",
+        (*_TARGET_DOMAINS, *_TARGET_COOKIE_NAMES),
+    ).fetchall()
+
+
+def _is_db_copy_usable(db_copy: Path) -> bool:
+    """检查 DB 副本是否可用（存在且非空）
+
+    为什么独立：原 _do_import_from_browser 中 `not copy_ok or not db_copy.exists()
+    or db_copy.stat().st_size == 0` 三重 or 条件贡献认知复杂度。
+    """
+    return db_copy.exists() and db_copy.stat().st_size > 0
+
+
+def _decode_cookies_from_db_copy(
+    db_copy: Path, aes_key: bytes | None, target_db: Path, browser: str,
+) -> tuple[list[dict], list[str], list[str], bool] | dict:
+    """从 DB 副本查询并解密 cookie 行
+
+    返回 dict 表示失败响应（无表/无 cookie），返回 tuple 表示解密结果。
+    为什么独立：原 _do_import_from_browser 中 with 块内两个嵌套 if 早返回
+    是认知复杂度主要来源。
+    """
+    with sqlite3.connect(f"file:{db_copy}?mode=ro", uri=True) as src_conn:
+        rows = _fetch_cookie_rows_from_src(src_conn)
+        if rows is None:
+            return {
+                "ok": False,
+                "error": f"{browser} Cookie 数据库格式异常：未找到 cookies 表",
+                "hint": "可能需要关闭浏览器后重试，或改用手动粘贴 Cookie 方式",
+            }
+        if not rows:
+            return {
+                "ok": False,
+                "error": f"未在 {browser} 中找到闲鱼相关 Cookie",
+                "hint": f"请先在 {browser} 中访问 {get_base_url()} 并登录",
+            }
+        now_utc = int(time.time()) + 11644473600
+        return _decrypt_and_upsert_browser_cookies(rows, aes_key, target_db, now_utc)
+
+
 def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: bool = False, user_id: str = "default") -> dict:
     """从系统浏览器导入 Cookie 的核心逻辑（返回 dict，由端点包装为 JSONResponse）
 
@@ -535,58 +608,17 @@ def _do_import_from_browser(browser: str, auto_close: bool = False, dry_run: boo
             source_db, db_copy, browser, auto_close,
         )
 
-        if not copy_ok or not db_copy.exists() or db_copy.stat().st_size == 0:
+        if not copy_ok or not _is_db_copy_usable(db_copy):
             shutil.rmtree(tmp_dir, ignore_errors=True)
             return _build_copy_failed_error(browser, source_db, copy_error)
 
-        with sqlite3.connect(f"file:{db_copy}?mode=ro", uri=True) as src_conn:
-            table_check = src_conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
-            ).fetchone()
-            if not table_check:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                return {
-                    "ok": False,
-                    "error": f"{browser} Cookie 数据库格式异常：未找到 cookies 表",
-                    "hint": "可能需要关闭浏览器后重试，或改用手动粘贴 Cookie 方式",
-                }
+        decode_result = _decode_cookies_from_db_copy(db_copy, aes_key, target_db, browser)
+        if isinstance(decode_result, dict):
+            # 解码失败（无表/无 cookie）：先清理临时目录再返回错误响应
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return decode_result
 
-            # 全量导入：不按 name 过滤，保留所有闲鱼相关域名下的 cookie（75+ 个）
-            # 非全量导入：仅导入 key_cookies 白名单（会丢失 68 个 cookie，不推荐）
-            # 为什么优先全量：用户反馈 75 个 cookie 齐全时各类问题大幅度减少，
-            # 白名单过滤会丢失 tracking 层 cookie（cna/tfstk 等）导致反爬风险升高
-            if _IMPORT_FULL:
-                rows = src_conn.execute(
-                    """SELECT host_key, name, encrypted_value, value, path,
-                              expires_utc, is_secure, is_httponly
-                       FROM cookies
-                       WHERE host_key LIKE ? OR host_key LIKE ? OR host_key LIKE ?""",
-                    _TARGET_DOMAINS,
-                ).fetchall()
-            else:
-                name_placeholders = ",".join("?" for _ in _TARGET_COOKIE_NAMES)
-                rows = src_conn.execute(
-                    f"""SELECT host_key, name, encrypted_value, value, path,
-                              expires_utc, is_secure, is_httponly
-                       FROM cookies
-                       WHERE (host_key LIKE ? OR host_key LIKE ? OR host_key LIKE ?)
-                         AND name IN ({name_placeholders})""",
-                    (*_TARGET_DOMAINS, *_TARGET_COOKIE_NAMES),
-                ).fetchall()
-
-            if not rows:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-                return {
-                    "ok": False,
-                    "error": f"未在 {browser} 中找到闲鱼相关 Cookie",
-                    "hint": f"请先在 {browser} 中访问 {get_base_url()} 并登录",
-                }
-
-            now_utc = int(time.time()) + 11644473600
-            imported_cookies, imported_names, errors, has_v20 = (
-                _decrypt_and_upsert_browser_cookies(rows, aes_key, target_db, now_utc)
-            )
-
+        imported_cookies, imported_names, errors, has_v20 = decode_result
         result = _build_import_result(
             imported_names, imported_cookies, errors, has_v20, browser, dry_run, user_id,
         )

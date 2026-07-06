@@ -1,77 +1,114 @@
 ﻿# scripts/build-exe.ps1
-# P0 阶段构建脚本：在干净 venv 中构建 EXE 安装包
+# XianyuHunter EXE 构建脚本（缓存优化版）
 #
 # 用法：
-#   powershell -File scripts/build-exe.ps1            # 默认每次重建 SPA
-#   powershell -File scripts/build-exe.ps1 -SkipSPA   # 跳过 SPA 构建（仅当确信前端无变更时使用）
-# 产物：dist/xianyu-hunter/ 目录
+#   powershell -File scripts/build-exe.ps1            # 默认增量打包（首次慢，后续快）
+#   powershell -File scripts/build-exe.ps1 -SkipSPA   # 跳过 SPA 构建（仅前端无变更时用）
+#   powershell -File scripts/build-exe.ps1 -SkipDeps  # 跳过 pip/npm 依赖安装（仅依赖无变更时用）
+#   powershell -File scripts/build-exe.ps1 -Clean     # 清理所有缓存重新下载（怀疑缓存损坏时用）
+#
+# 产物：dist/xianyu-hunter/ 目录 + dist/XianyuHunter-Setup-v*.exe
+#
+# 缓存策略（避免重复下载）：
+# - .venv-build/         venv 增量更新（pip install 自动跳过已安装包）
+# - frontend/node_modules/ 按 package-lock.json mtime 增量
+# - .cache/playwright_browsers/  Chromium 缓存，复制到 dist
+# - .cache/models/bge-small-zh-v1.5/  sentence-transformers 模型缓存，复制到 dist
 #
 # 构建步骤：
-# 1. 创建干净 venv（避免开发环境传递依赖污染）
-# 2. 安装项目依赖 + PyInstaller
-# 3. 重建依赖锁定（传递依赖完整记录）
-# 4. 构建 SPA（默认强制重建，-SkipSPA 可跳过）
-# 5. PyInstaller 打包
-# 6. 复制外置资源（SPA、Playwright Chromium、sentence-transformers 模型）
+# 1. venv 增量更新 + 依赖安装
+# 2. 锁定依赖到 requirements-lock.txt
+# 3. 构建 SPA（按 lock mtime 增量）
+# 4. PyInstaller 打包
+# 5. 复制外置资源（SPA + 子进程脚本 + Chromium + 模型）
+# 6. 制作安装包（Inno Setup）
 
 param(
-    [switch]$SkipSPA
+    [switch]$SkipSPA,
+    [switch]$SkipDeps,
+    [switch]$Clean
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
 Set-Location $repoRoot
 
+# 缓存目录（独立于 dist，dist 每次删除不影响缓存）
+$cacheDir = "$repoRoot\.cache"
+$pwCacheDir = "$cacheDir\playwright_browsers"
+$modelCacheDir = "$cacheDir\models\bge-small-zh-v1.5"
+
+# -Clean：清理所有缓存
+if ($Clean) {
+    Write-Host "[Clean] 清理所有缓存..." -ForegroundColor Yellow
+    foreach ($p in @(".venv-build", "frontend\node_modules", $cacheDir, "dist")) {
+        if (Test-Path $p) {
+            Write-Host "  删除 $p"
+            Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# 创建缓存目录
+New-Item -ItemType Directory -Force $cacheDir | Out-Null
+
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  XianyuHunter EXE Build (P0)" -ForegroundColor Cyan
+Write-Host "  XianyuHunter EXE Build" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Repo: $repoRoot"
+Write-Host "Cache: $cacheDir"
+if ($SkipDeps) { Write-Host "Mode: SkipDeps（跳过依赖安装）" }
+if ($SkipSPA)  { Write-Host "Mode: SkipSPA（跳过 SPA 构建）" }
 
-# ============== 1. 创建干净构建环境 ==============
-Write-Host "`n[1/6] Creating clean build venv..." -ForegroundColor Yellow
-Write-Host "  预计耗时：约 10-30 秒" -ForegroundColor DarkGray
-if (Test-Path ".venv-build") {
-    Remove-Item -Recurse -Force ".venv-build"
-}
-python -m venv .venv-build
-if ($LASTEXITCODE -ne 0) { throw "venv 创建失败" }
-
-# ============== 2. 安装项目依赖 + PyInstaller ==============
-Write-Host "`n[2/6] Installing dependencies..." -ForegroundColor Yellow
-Write-Host "  预计耗时：约 1-3 分钟（取决于网络速度）" -ForegroundColor DarkGray
-& .venv-build\Scripts\pip install -e .
-if ($LASTEXITCODE -ne 0) { throw "项目依赖安装失败" }
-& .venv-build\Scripts\pip install pyinstaller
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller 安装失败" }
-# 系统托盘可选依赖：pystray + pillow
-# launcher.py 中 try/except 导入，未安装时控制台模式仍可用
-# 启用托盘功能时取消下面注释
-& .venv-build\Scripts\pip install pystray pillow
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  [WARN] pystray/pillow 安装失败，托盘功能将不可用" -ForegroundColor Red
+# ============== 1. venv 增量更新 + 依赖安装 ==============
+Write-Host "`n[1/6] Preparing build venv..." -ForegroundColor Yellow
+# 为什么不每次删除重建：pip install 对已安装包会自动跳过，删除重建会让所有包重新解压
+# 仅在 venv 不存在或 -Clean 时创建
+if (-not (Test-Path ".venv-build\Scripts\python.exe")) {
+    Write-Host "  venv 不存在，创建新 venv...（约 10 秒）"
+    python -m venv .venv-build
+    if ($LASTEXITCODE -ne 0) { throw "venv 创建失败" }
 } else {
-    Write-Host "  pystray + pillow 已安装（托盘功能可用）"
+    Write-Host "  venv 已存在，增量更新" -ForegroundColor DarkGray
 }
 
-# ============== 3. 重建依赖锁定 ==============
-Write-Host "`n[3/6] Locking dependencies..." -ForegroundColor Yellow
-Write-Host "  预计耗时：约 5 秒" -ForegroundColor DarkGray
+if (-not $SkipDeps) {
+    Write-Host "  安装项目依赖（pip 自动跳过已安装包）..."
+    & .venv-build\Scripts\pip install -e . --quiet
+    if ($LASTEXITCODE -ne 0) { throw "项目依赖安装失败" }
+
+    & .venv-build\Scripts\pip install pyinstaller --quiet
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller 安装失败" }
+
+    # 系统托盘可选依赖：pystray + pillow
+    # launcher.py 中 try/except 导入，未安装时控制台模式仍可用
+    & .venv-build\Scripts\pip install pystray pillow --quiet
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [WARN] pystray/pillow 安装失败，托盘功能将不可用" -ForegroundColor Red
+    }
+} else {
+    Write-Host "  -SkipDeps 已指定，跳过依赖安装" -ForegroundColor DarkGray
+}
+
+# 验证关键依赖存在（即使 -SkipDeps 也要确保）
+if (-not (Test-Path ".venv-build\Scripts\pyinstaller.exe")) {
+    Write-Host "  [WARN] PyInstaller 未安装，强制安装..." -ForegroundColor Red
+    & .venv-build\Scripts\pip install pyinstaller --quiet
+}
+
+# ============== 2. 锁定依赖 ==============
+Write-Host "`n[2/6] Locking dependencies..." -ForegroundColor Yellow
 & .venv-build\Scripts\pip freeze > requirements-lock.txt
 Write-Host "  依赖已锁定到 requirements-lock.txt"
 
-# ============== 4. 构建 SPA ==============
+# ============== 3. 构建 SPA ==============
 # 默认每次都重建：避免前端源码已修改但 SPA 产物未更新导致打包后行为不一致
 # 用 -SkipSPA 跳过（仅当确信前端无变更时使用，可省 1-3 分钟）
-Write-Host "`n[4/6] Building SPA..." -ForegroundColor Yellow
+Write-Host "`n[3/6] Building SPA..." -ForegroundColor Yellow
 $spaIndex = "src\xianyu_hunter\web\static\spa\index.html"
 if ($SkipSPA -and (Test-Path $spaIndex)) {
     Write-Host "  SPA 已存在且 -SkipSPA 已指定，跳过构建" -ForegroundColor DarkGray
 } else {
-    if (Test-Path $spaIndex) {
-        Write-Host "  SPA 已存在但默认强制重建（避免前端源码与产物不一致）" -ForegroundColor DarkGray
-    }
-    Write-Host "  预计耗时：约 1-3 分钟" -ForegroundColor DarkGray
-
     # Node 版本检测：vite 5 + ??= 运算符需要 Node 18+
     # 为什么检测：用户机器可能装了多个 Node 版本，PATH 指向旧版会导致构建静默失败
     $nodeVersion = (node --version 2>$null) -replace '[v\n\r]', ''
@@ -80,7 +117,6 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
         if ($nodeMajor -lt 18) {
             Write-Host "  [ERROR] Node $nodeVersion 版本过低，vite 5 需要 Node 18+" -ForegroundColor Red
             Write-Host "  当前 PATH 中的 Node：$((Get-Command node).Source)" -ForegroundColor Red
-            Write-Host "  请安装 Node 18+ 或将高版本 Node 加入 PATH 后重试" -ForegroundColor Red
             throw "Node 版本过低（$nodeVersion），需要 18+"
         }
         Write-Host "  Node 版本：$nodeVersion" -ForegroundColor DarkGray
@@ -89,21 +125,54 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
     }
 
     Push-Location frontend
-    if (Test-Path "package-lock.json") {
-        npm ci
-    } else {
-        npm install
+
+    # node_modules 增量：比较 package-lock.json 与 .install-stamp 的 mtime
+    # 为什么不用 npm ci 每次重装：npm ci 会删除 node_modules 重新解压，耗时 1-3 分钟
+    # 仅在 lock 文件变化时才 npm ci，否则直接 npm run build
+    $lockFile = "package-lock.json"
+    $stampFile = "node_modules\.install-stamp"
+    $needInstall = $false
+
+    if (-not (Test-Path "node_modules")) {
+        $needInstall = $true
+        Write-Host "  node_modules 不存在，需要安装"
+    } elseif (-not (Test-Path $stampFile)) {
+        $needInstall = $true
+        Write-Host "  .install-stamp 不存在，需要重装"
+    } elseif (Test-Path $lockFile) {
+        $lockMtime = (Get-Item $lockFile).LastWriteTime
+        $stampMtime = (Get-Item $stampFile).LastWriteTime
+        if ($lockMtime -gt $stampMtime) {
+            $needInstall = $true
+            Write-Host "  package-lock.json 已变更，需要重新安装依赖"
+        } else {
+            Write-Host "  node_modules 已是最新（lock 未变），跳过安装" -ForegroundColor DarkGray
+        }
     }
-    if ($LASTEXITCODE -ne 0) { Pop-Location; throw "npm install 失败" }
+
+    if ($needInstall) {
+        Write-Host "  预计耗时：约 1-3 分钟" -ForegroundColor DarkGray
+        if (Test-Path $lockFile) {
+            npm ci
+        } else {
+            npm install
+        }
+        if ($LASTEXITCODE -ne 0) { Pop-Location; throw "npm install 失败" }
+        # 写入安装时间戳（用于下次增量判断）
+        Set-Content -Path $stampFile -Value (Get-Date -Format "o") -Encoding UTF8
+    }
+
+    Write-Host "  构建 SPA..."
     npm run build
     if ($LASTEXITCODE -ne 0) { Pop-Location; throw "SPA 构建失败" }
     Pop-Location
     Write-Host "  SPA 构建完成"
 }
 
-# ============== 5. PyInstaller 打包 ==============
-Write-Host "`n[5/6] Running PyInstaller..." -ForegroundColor Yellow
+# ============== 4. PyInstaller 打包 ==============
+Write-Host "`n[4/6] Running PyInstaller..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-3 分钟" -ForegroundColor DarkGray
+# 清理旧产物（dist 每次重建，但缓存独立在 .cache/ 不受影响）
 if (Test-Path "dist\xianyu-hunter") {
     Remove-Item -Recurse -Force "dist\xianyu-hunter"
 }
@@ -111,20 +180,19 @@ if (Test-Path "dist\xianyu-hunter") {
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 Write-Host "  PyInstaller 打包完成"
 
-# ============== 6. 复制外置资源 ==============
-Write-Host "`n[6/6] Copying external resources..." -ForegroundColor Yellow
-Write-Host "  预计耗时：约 2-5 分钟（需下载 Chromium ~150MB 和模型 ~100MB）" -ForegroundColor DarkGray
+# ============== 5. 复制外置资源 ==============
+Write-Host "`n[5/6] Copying external resources..." -ForegroundColor Yellow
 
-# 6.1 静态资源（含 SPA + icons，外置到 exe 同级 static 目录）
+# 5.1 静态资源（含 SPA + icons，外置到 exe 同级 static 目录）
 # app.py 在打包模式下通过 get_app_dir() / "static" 定位此目录
-Write-Host "  [6.1] Copying static assets (SPA + icons)...（约 1 秒）"
+Write-Host "  [5.1] Copying static assets (SPA + icons)..."
 Copy-Item -Recurse -Force "src\xianyu_hunter\web\static" "dist\xianyu-hunter\static"
 
-# 6.1.1 子进程脚本（auth_helper.py / browser_login.py）
+# 5.2 子进程脚本（auth_helper.py / browser_login.py）
 # 为什么需要：browser_login.py / unified_login.py / auth_manager.py 通过 get_app_dir()/"scripts" 定位这些脚本
 # PyInstaller 不收集 scripts/ 目录（仅打包 src/xianyu_hunter/），必须显式复制
 # 仅复制运行时实际调用的子进程脚本，避免打包测试脚本（test_*.py / perf_test.py 等）
-Write-Host "  [6.1.1] Copying subprocess scripts (auth_helper, browser_login)..."
+Write-Host "  [5.2] Copying subprocess scripts (auth_helper, browser_login)..."
 $scriptsTarget = "dist\xianyu-hunter\scripts"
 New-Item -ItemType Directory -Force $scriptsTarget | Out-Null
 foreach ($script in @("browser_login.py", "auth_helper.py")) {
@@ -136,55 +204,74 @@ foreach ($script in @("browser_login.py", "auth_helper.py")) {
     }
 }
 
-# 6.2 Playwright Chromium
-# 直接安装到目标位置，避免大文件跨目录复制
-# PLAYWRIGHT_BROWSERS_PATH 指定后，playwright install 会把浏览器放到此目录
-Write-Host "  [6.2] Installing Playwright Chromium...（下载约 150MB）"
-$pwTarget = "$repoRoot\dist\xianyu-hunter\playwright_browsers"
-$env:PLAYWRIGHT_BROWSERS_PATH = $pwTarget
-& .venv-build\Scripts\playwright install chromium
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  [WARN] Playwright Chromium 安装失败" -ForegroundColor Red
+# 5.3 Playwright Chromium（从缓存复制，避免重复下载 ~150MB）
+# 为什么用缓存：dist 每次打包都会删除重建，直接下载到 dist 会每次重下
+# 缓存到 .cache/playwright_browsers/，复制到 dist/xianyu-hunter/playwright_browsers/
+Write-Host "  [5.3] Playwright Chromium..."
+$pwTarget = "dist\xianyu-hunter\playwright_browsers"
+if (Test-Path "$pwCacheDir\chromium-*") {
+    Write-Host "  从缓存复制 Chromium...（约 10-30 秒）"
+    Copy-Item -Recurse -Force $pwCacheDir $pwTarget
+    Write-Host "  Chromium 已从缓存复制到 $pwTarget"
 } else {
-    Write-Host "  Playwright Chromium 已安装到 $pwTarget"
+    Write-Host "  缓存不存在，下载 Chromium...（下载约 150MB）"
+    $env:PLAYWRIGHT_BROWSERS_PATH = $pwCacheDir
+    & .venv-build\Scripts\playwright install chromium
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [WARN] Playwright Chromium 安装失败" -ForegroundColor Red
+    } else {
+        Write-Host "  Chromium 已下载到缓存 $pwCacheDir"
+        # 复制到 dist
+        Copy-Item -Recurse -Force $pwCacheDir $pwTarget
+        Write-Host "  Chromium 已复制到 $pwTarget"
+    }
+    Remove-Item Env:\PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
 }
-Remove-Item Env:\PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
 
-# 6.3 sentence-transformers 模型（预置，避免首次运行联网下载）
-# 设置 HF 镜像，避免国内访问 huggingface.co 超时
-Write-Host "  [6.3] Preparing sentence-transformers model...（下载约 100MB）"
-$env:HF_ENDPOINT = "https://hf-mirror.com"
-$modelDir = "dist\xianyu-hunter\models\bge-small-zh-v1.5"
-New-Item -ItemType Directory -Force $modelDir | Out-Null
-& .venv-build\Scripts\python -c @"
+# 5.4 sentence-transformers 模型（从缓存复制，避免重复下载 ~100MB）
+# 为什么用缓存：同上，dist 每次重建会导致重新下载
+# 缓存到 .cache/models/bge-small-zh-v1.5/，复制到 dist/xianyu-hunter/models/
+Write-Host "  [5.4] sentence-transformers model..."
+$modelTarget = "dist\xianyu-hunter\models\bge-small-zh-v1.5"
+if (Test-Path "$modelCacheDir\config.json") {
+    Write-Host "  从缓存复制模型...（约 5-15 秒）"
+    New-Item -ItemType Directory -Force (Split-Path $modelTarget) | Out-Null
+    Copy-Item -Recurse -Force $modelCacheDir $modelTarget
+    Write-Host "  模型已从缓存复制到 $modelTarget"
+} else {
+    Write-Host "  缓存不存在，下载模型...（下载约 100MB）"
+    # 设置 HF 镜像，避免国内访问 huggingface.co 超时
+    $env:HF_ENDPOINT = "https://hf-mirror.com"
+    New-Item -ItemType Directory -Force $modelCacheDir | Out-Null
+    & .venv-build\Scripts\python -c @"
 import os
 os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
 from sentence_transformers import SentenceTransformer
 m = SentenceTransformer('BAAI/bge-small-zh-v1.5')
-m.save(r'$modelDir')
-print('Model saved to $modelDir')
+m.save(r'$modelCacheDir')
+print('Model saved to $modelCacheDir')
 "@
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  [WARN] 模型预置失败（首次运行将联网下载）" -ForegroundColor Red
-} else {
-    Write-Host "  模型已预置"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [WARN] 模型预置失败（首次运行将联网下载）" -ForegroundColor Red
+    } else {
+        Write-Host "  模型已下载到缓存 $modelCacheDir"
+        # 复制到 dist
+        New-Item -ItemType Directory -Force (Split-Path $modelTarget) | Out-Null
+        Copy-Item -Recurse -Force $modelCacheDir $modelTarget
+        Write-Host "  模型已复制到 $modelTarget"
+    }
 }
 
-# ============== 7. 制作安装包（Inno Setup） ==============
-Write-Host "`n[7/7] Building installer (Inno Setup)..." -ForegroundColor Yellow
-Write-Host "  预计耗时：约 30 秒（已安装）/ 2-3 分钟（首次需下载安装）" -ForegroundColor DarkGray
+# ============== 6. 制作安装包（Inno Setup） ==============
+Write-Host "`n[6/6] Building installer (Inno Setup)..." -ForegroundColor Yellow
 
-# 7.1 查找 iscc.exe（Inno Setup 编译器）
-# 优先 PATH，然后常见安装路径
+# 6.1 查找 iscc.exe（Inno Setup 编译器）
 function Find-ISCC {
-    # 1. 优先 PATH 中的 iscc
     $cmd = Get-Command iscc -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    # 2. 检查常见安装路径（含 winget 用户级安装路径）
     $paths = @(
         "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         "C:\Program Files\Inno Setup 6\ISCC.exe",
-        # winget 用户级安装（不需要管理员权限，默认装到这里）
         "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe",
         "$env:USERPROFILE\AppData\Local\Programs\Inno Setup 6\ISCC.exe"
     )
@@ -192,37 +279,29 @@ function Find-ISCC {
     return $null
 }
 
-# 刷新当前会话 PATH（安装程序可能已更新系统 PATH 但当前会话未感知）
 function Refresh-Path {
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 }
 
 $iscc = Find-ISCC
 
-# 7.2 自动安装 Inno Setup（如未安装）
-# 三段式 fallback：winget → 直接下载 is.exe 静默安装 → 跳过
+# 6.2 自动安装 Inno Setup（如未安装）
 if (-not $iscc) {
-    Write-Host "  [7.1] Inno Setup 未安装，尝试自动安装..." -ForegroundColor Cyan
+    Write-Host "  Inno Setup 未安装，尝试自动安装..." -ForegroundColor Cyan
 
-    # 方案 A：winget（Win10 1709+ 自带，最干净）
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Host "  [7.1a] 使用 winget 安装..." -ForegroundColor DarkGray
+        Write-Host "  使用 winget 安装..." -ForegroundColor DarkGray
         winget install --id JRSoftware.InnoSetup --silent --accept-package-agreements --accept-source-agreements
         Refresh-Path
         $iscc = Find-ISCC
     }
 
-    # 方案 B：直接下载官方 is.exe 静默安装（绕过 winget，更可靠）
-    # innosetup-X.X.X.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
     if (-not $iscc) {
-        Write-Host "  [7.1b] 直接下载 Inno Setup 安装包..." -ForegroundColor DarkGray
+        Write-Host "  直接下载 Inno Setup 安装包..." -ForegroundColor DarkGray
         $installerUrl = "https://jrsoftware.org/download.php/is.exe"
         $installerFile = "$env:TEMP\innosetup-install.exe"
         try {
-            # Invoke-WebRequest 在 PS 5.1 默认使用 IE 引擎，需指定 -UseBasicParsing
             Invoke-WebRequest -Uri $installerUrl -OutFile $installerFile -UseBasicParsing
-            Write-Host "  下载完成，开始静默安装..." -ForegroundColor DarkGray
-            # /VERYSILENT：无 UI；/SUPPRESSMSGBOXES：抑制弹窗；/NORESTART：不重启；/SP-：禁用安装前磁盘检查
             Start-Process -FilePath $installerFile -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-" -Wait -NoNewWindow
             Refresh-Path
             $iscc = Find-ISCC
@@ -234,10 +313,9 @@ if (-not $iscc) {
     }
 }
 
-# 7.3 自动创建 installer.iss（如不存在）
-# 与项目根目录的 installer.iss 保持一致；缺失时生成精简模板
+# 6.3 自动创建 installer.iss（如不存在）
 if ($iscc -and -not (Test-Path "installer.iss")) {
-    Write-Host "  [7.2] installer.iss 不存在，自动创建..." -ForegroundColor Cyan
+    Write-Host "  installer.iss 不存在，自动创建..." -ForegroundColor Cyan
     $issTemplate = @"
 ; Auto-generated by build-exe.ps1
 #ifndef MyAppVersion
@@ -267,26 +345,24 @@ Name: "{commondesktop}\XianyuHunter"; Filename: "{app}\xianyu-hunter.exe"; Tasks
 [Run]
 Filename: "{app}\xianyu-hunter.exe"; Description: "Launch XianyuHunter"; Flags: nowait postinstall skipifsilent
 "@
-    # Inno Setup 编译器（ISCC）需要 UTF-8 BOM 才能正确解析模板中的中文（"创建桌面快捷方式"等）
-    # 之前用 UTF8Encoding($false)（无 BOM）会导致编译时中文乱码，最终安装包路径或提示信息错位
+    # Inno Setup 编译器（ISCC）需要 UTF-8 BOM 才能正确解析模板中的中文
     [System.IO.File]::WriteAllText("installer.iss", $issTemplate, (New-Object System.Text.UTF8Encoding($true)))
 }
 
-# 7.4 编译安装包
+# 6.4 编译安装包
 if (-not $iscc) {
     Write-Host "  [WARN] Inno Setup 不可用，跳过安装包制作" -ForegroundColor Red
     Write-Host "  手动安装：https://jrsoftware.org/isdl.php" -ForegroundColor DarkGray
 } else {
-    # 从 __init__.py 读取版本号（与 build_info.py 的 _read_version() 逻辑一致）
+    # 从 __init__.py 读取版本号
     $initFile = "src\xianyu_hunter\__init__.py"
     $version = "0.0.0.0"
     if (Test-Path $initFile) {
         $line = Get-Content $initFile | Where-Object { $_ -match '__version__' } | Select-Object -First 1
         if ($line -match '"([^"]+)"') { $version = $matches[1] }
     }
-    Write-Host "  [7.3] 版本号: $version"
-
-    Write-Host "  [7.4] 编译安装包..."
+    Write-Host "  版本号: $version"
+    Write-Host "  编译安装包..."
     & $iscc /DMyAppVersion=$version installer.iss
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [WARN] 安装包编译失败" -ForegroundColor Red

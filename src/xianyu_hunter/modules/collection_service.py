@@ -244,6 +244,10 @@ class ItemCollectionService:
         )
 
     async def ensure_official_cookies(self) -> None:
+        """确保浏览器有最新的官方采集 cookie
+
+        重构说明：cookie 注入和错误映射下沉到独立私有方法（S3776）。
+        """
         container = self.container
         if not getattr(container, "browser", None):
             return
@@ -254,27 +258,55 @@ class ItemCollectionService:
             return
 
         if pw_cookies:
-            logger.info(
-                "Official collection injecting CookieStore cookies: missing={}, expired={}, stale={}",
-                missing,
-                expired,
-                stale,
+            await self._inject_cookies_from_store(
+                container, pw_cookies, missing, expired, stale
             )
-            try:
-                success = await container.browser.add_cookies(pw_cookies)
-                if success:
-                    try:
-                        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
 
-                        sync_cookie_layers_from_json()
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("Failed to sync cookie layer state after injection: {}", exc)
-                else:
-                    logger.warning("CookieStore injection did not pass key cookie verification")
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to inject CookieStore cookies: {}", exc)
-
+        # 注入后重新检查，仍存在问题则抛错
         missing, expired, stale = await self._check_cookie_issues(json_identity_values)
+        self._raise_cookie_errors(missing, expired, stale)
+
+    async def _inject_cookies_from_store(
+        self,
+        container: Any,
+        pw_cookies: list[dict],
+        missing: list[str],
+        expired: list[str],
+        stale: list[str],
+    ) -> None:
+        """注入 CookieStore cookie 到浏览器，失败仅记日志不抛异常
+
+        为什么失败不抛：注入失败后由后续 _raise_cookie_errors 根据 cookie 实际状态
+        决定是否抛 440/403，避免注入层与校验层重复决策。
+        """
+        logger.info(
+            "Official collection injecting CookieStore cookies: missing={}, expired={}, stale={}",
+            missing,
+            expired,
+            stale,
+        )
+        try:
+            success = await container.browser.add_cookies(pw_cookies)
+            if success:
+                try:
+                    from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+
+                    sync_cookie_layers_from_json()
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Failed to sync cookie layer state after injection: {}", exc)
+            else:
+                logger.warning("CookieStore injection did not pass key cookie verification")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to inject CookieStore cookies: {}", exc)
+
+    @staticmethod
+    def _raise_cookie_errors(
+        missing: list[str], expired: list[str], stale: list[str]
+    ) -> None:
+        """根据 cookie 问题类型抛对应 CollectionError
+
+        优先级：expired > stale > missing，先抛最严重的（需重新登录）。
+        """
         if expired:
             raise CollectionError(
                 440,
@@ -321,6 +353,10 @@ class ItemCollectionService:
         source: str,
         reuse_page: Any | None,
     ) -> CollectionResult:
+        """detail-only 模式采集
+
+        重构说明：token 重试、错误映射、持久化下沉到独立私有方法（S3776）。
+        """
         await self._sync_detail_cookies()
         # cookie 完整性预检：detail() 返回 None 时上游无法区分原因，
         # 预检可在调用前识别 cookie 不完整问题，给出 401 而非含糊的 502
@@ -333,60 +369,93 @@ class ItemCollectionService:
         # token 失效自动重试：home_title_redirect 通常是 _m_h5_tk 过期被重定向到首页
         # 强制刷新 token 后重试一次，避免用户因偶发 token 过期看到 502
         if detail is None:
-            reason = getattr(self.container.collector, "last_detail_failure_reason", "") or ""
-            if reason == "home_title_redirect" and self.container.collector is not None:
-                try:
-                    refresh_page = await self.container.browser.new_page()
-                    try:
-                        await self.container.collector._ensure_fresh_m5tk(refresh_page, force=True)
-                    finally:
-                        try:
-                            await refresh_page.close()
-                        except Exception:
-                            pass
-                    logger.info("token 失效，已强制刷新 _m_h5_tk 后重试 item={}", item_id)
-                    detail = await self.container.collector.detail(item_id, page=reuse_page)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("token 刷新重试失败 item={}: {}", item_id, exc)
+            detail = await self._refresh_token_and_retry_detail(item_id, reuse_page)
 
         if detail is None:
-            # detail 失败后再次检查 cookie 完整性：cookie 不完整时给 401 而非 502
-            cookie_issue = await self._check_detail_cookie_completeness()
-            if cookie_issue:
-                raise CollectionError(401, cookie_issue, item_id=item_id)
+            # _raise_detail_failure_error 总是抛异常，不会返回
+            await self._raise_detail_failure_error(item_id)
 
-            # 根据 detail() 的失败 reason 映射到对应的 status_code
-            # 为什么这么做：所有失败都抛 502 会让用户无法判断是该重登录、该等待还是该手动验证
-            reason = getattr(self.container.collector, "last_detail_failure_reason", "") or "unknown"
-            if reason in ("home_title_redirect", "login_redirect"):
-                # cookie 失效或 _m_h5_tk token 过期，需用户重新登录
-                raise CollectionError(
-                    401,
-                    "采集失败：登录态失效或 _m_h5_tk token 过期，请重新登录或导入完整 Cookie",
-                    item_id=item_id,
-                )
-            if reason == "verify_redirect":
-                # 反爬验证码拦截，需用户手动完成验证
-                raise CollectionError(
-                    429,
-                    "采集失败：触发闲鱼反爬验证码，请手动完成验证后重试",
-                    item_id=item_id,
-                )
-            if reason in ("page_closed", "target_closed_exception"):
-                # 页面被并发清理关闭，临时性故障，用户可重试
-                raise CollectionError(
-                    503,
-                    "采集失败：浏览器页面被并发清理关闭，请稍后重试",
-                    item_id=item_id,
-                )
-            # 其他原因（http_status_error / title_extraction_failed /
-            # price_extraction_failed / redirected_away_from_item / unknown）
+        return await self._persist_detail_collection(
+            item_id, detail, task_id=task_id, existing_item=existing_item, source=source
+        )
+
+    async def _refresh_token_and_retry_detail(
+        self, item_id: str, reuse_page: Any
+    ) -> ItemDetail | None:
+        """token 失效时强制刷新 _m_h5_tk 后重试 detail
+
+        仅在 last_detail_failure_reason == home_title_redirect 时尝试，
+        其他失败原因直接返回 None 由调用方走错误映射。
+        """
+        reason = getattr(self.container.collector, "last_detail_failure_reason", "") or ""
+        if reason != "home_title_redirect" or self.container.collector is None:
+            return None
+        try:
+            refresh_page = await self.container.browser.new_page()
+            try:
+                await self.container.collector._ensure_fresh_m5tk(refresh_page, force=True)
+            finally:
+                try:
+                    await refresh_page.close()
+                except Exception:
+                    pass
+            logger.info("token 失效，已强制刷新 _m_h5_tk 后重试 item={}", item_id)
+            return await self.container.collector.detail(item_id, page=reuse_page)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("token 刷新重试失败 item={}: {}", item_id, exc)
+            return None
+
+    async def _raise_detail_failure_error(self, item_id: str) -> None:
+        """detail 失败后根据 reason 映射到对应 status_code 并抛 CollectionError
+
+        为什么这么做：所有失败都抛 502 会让用户无法判断是该重登录、该等待还是该手动验证。
+        总是抛异常，不会正常返回。
+        """
+        # detail 失败后再次检查 cookie 完整性：cookie 不完整时给 401 而非 502
+        cookie_issue = await self._check_detail_cookie_completeness()
+        if cookie_issue:
+            raise CollectionError(401, cookie_issue, item_id=item_id)
+
+        reason = getattr(self.container.collector, "last_detail_failure_reason", "") or "unknown"
+        if reason in ("home_title_redirect", "login_redirect"):
+            # cookie 失效或 _m_h5_tk token 过期，需用户重新登录
             raise CollectionError(
-                502,
-                f"采集失败：详情页不可用或网络异常（reason={reason}），请稍后重试",
+                401,
+                "采集失败：登录态失效或 _m_h5_tk token 过期，请重新登录或导入完整 Cookie",
                 item_id=item_id,
             )
+        if reason == "verify_redirect":
+            # 反爬验证码拦截，需用户手动完成验证
+            raise CollectionError(
+                429,
+                "采集失败：触发闲鱼反爬验证码，请手动完成验证后重试",
+                item_id=item_id,
+            )
+        if reason in ("page_closed", "target_closed_exception"):
+            # 页面被并发清理关闭，临时性故障，用户可重试
+            raise CollectionError(
+                503,
+                "采集失败：浏览器页面被并发清理关闭，请稍后重试",
+                item_id=item_id,
+            )
+        # 其他原因（http_status_error / title_extraction_failed /
+        # price_extraction_failed / redirected_away_from_item / unknown）
+        raise CollectionError(
+            502,
+            f"采集失败：详情页不可用或网络异常（reason={reason}），请稍后重试",
+            item_id=item_id,
+        )
 
+    async def _persist_detail_collection(
+        self,
+        item_id: str,
+        detail: ItemDetail,
+        *,
+        task_id: str | None,
+        existing_item: dict[str, Any] | None,
+        source: str,
+    ) -> CollectionResult:
+        """持久化 detail 采集结果：upsert item、标记售出、同步 display"""
         old_item = existing_item if existing_item is not None else (self.container.repo.get_item(item_id) or {})
         effective_task_id = str(old_item.get("task_id") or task_id or "")
         incoming = self._item_row_from_detail(item_id, detail, effective_task_id)
@@ -437,6 +506,10 @@ class ItemCollectionService:
         source: str,
         reuse_page: Any | None,
     ) -> CollectionResult:
+        """official-full 模式采集
+
+        重构说明：detail+seller 采集、持久化、价格门禁、评估通知下沉到独立私有方法（S3776）。
+        """
         await self.ensure_official_cookies()
         own_page = reuse_page is None
         page = reuse_page or await self.container.browser.new_page()
@@ -446,44 +519,79 @@ class ItemCollectionService:
         # 在 detail 内 await 期间触发 TargetClosedError（_detail.py:766 已降级为 WARNING）
         if own_page:
             self.container.browser.register_external_page(page)
-        detail: ItemDetail | None = None
-        seller: SellerProfile | None = None
-        reviews: list[str] = []
         try:
-            detail = await self.container.collector.detail(item_id, page=page)
-            if detail is None:
-                raise CollectionError(
-                    410,
-                    f"Failed to collect item {item_id}: detail page unavailable or item removed",
-                    item_id=item_id,
-                )
-
-            async def safe_seller_profile() -> SellerProfile | None:
-                if not detail or not detail.seller_id:
-                    return None
-                try:
-                    return await self.container.collector.seller_profile(detail.seller_id)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Failed to collect seller profile seller={}: {}", detail.seller_id, exc)
-                    return None
-
-            reviews, seller = await asyncio.gather(
-                self.extract_reviews_from_page(page),
-                safe_seller_profile(),
-            )
+            detail, seller, reviews = await self._collect_detail_and_seller(item_id, page)
         finally:
             if own_page:
                 # 先 unregister 再 close：close 后 page 引用仍留在 _external_pages 会泄漏
                 self.container.browser.unregister_external_page(page)
                 await page.close()
 
-        if detail is None:
-            raise CollectionError(410, f"Failed to collect item {item_id}: no detail returned", item_id=item_id)
         if seller is None:
             seller = self.container.collector.seller_profile_fallback(None, detail)
         else:
             self._merge_detail_seller_fields(seller, detail)
 
+        _, effective_task_id, changed_fields = self._persist_official_collection(
+            item_id, detail, seller, task_id=task_id, existing_item=existing_item, source=source
+        )
+
+        eval_result = self._evaluate_and_notify(
+            item_id, detail, seller, reviews, effective_task_id
+        )
+
+        return CollectionResult(
+            ok=True,
+            item_id=item_id,
+            mode=CollectionMode.OFFICIAL_FULL,
+            detail=detail,
+            seller=seller,
+            reviews=reviews,
+            evaluation=eval_result,
+            changed_fields=changed_fields,
+        )
+
+    async def _collect_detail_and_seller(
+        self, item_id: str, page: Any
+    ) -> tuple[ItemDetail, SellerProfile | None, list[str]]:
+        """采集 detail + seller + reviews，detail 不可用时抛 CollectionError(410)"""
+        detail = await self.container.collector.detail(item_id, page=page)
+        if detail is None:
+            raise CollectionError(
+                410,
+                f"Failed to collect item {item_id}: detail page unavailable or item removed",
+                item_id=item_id,
+            )
+        reviews, seller = await asyncio.gather(
+            self.extract_reviews_from_page(page),
+            self._safe_seller_profile(detail),
+        )
+        return detail, seller, reviews
+
+    async def _safe_seller_profile(self, detail: ItemDetail) -> SellerProfile | None:
+        """采集 seller profile，失败时返回 None 不阻塞主流程"""
+        if not detail or not detail.seller_id:
+            return None
+        try:
+            return await self.container.collector.seller_profile(detail.seller_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to collect seller profile seller={}: {}", detail.seller_id, exc)
+            return None
+
+    def _persist_official_collection(
+        self,
+        item_id: str,
+        detail: ItemDetail,
+        seller: SellerProfile | None,
+        *,
+        task_id: str | None,
+        existing_item: dict[str, Any] | None,
+        source: str,
+    ) -> tuple[dict[str, Any], str, list[str]]:
+        """持久化 official 采集结果：upsert item、seller、display sync
+
+        返回 (old_item, effective_task_id, changed_fields) 供调用方构建 CollectionResult。
+        """
         old_item = existing_item if existing_item is not None else (self.container.repo.get_item(item_id) or {})
         effective_task_id = self._resolve_task_id(item_id, task_id, old_item)
         incoming = self._item_row_from_detail(item_id, detail, effective_task_id)
@@ -503,45 +611,58 @@ class ItemCollectionService:
             )
 
         self._save_seller(seller)
-        eval_result = self.container.evaluator.evaluate(detail, seller)
-        # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件
-        # 为什么仍调用 evaluator.evaluate：官方采集弹窗需展示评估分给用户，
-        # 但超范围商品不应进入评估明细菜单（list_evaluations 的价格过滤会二次兜底）
-        price_filtered = False
-        if effective_task_id:
-            try:
-                task_raw = self.container.repo.get_task(effective_task_id)
-                if task_raw:
-                    ps = self.container.build_task_price_strategy(task_raw)
-                    verdict = ps.check(detail, market=None)
-                    if not verdict.pass_:
-                        price_filtered = True
-                        logger.info(
-                            "官方采集跳过 eval 事件写入: item_id={}, price={}, reasons={}",
-                            item_id, detail.price, verdict.reasons,
-                        )
-            except Exception as e:
-                logger.warning("官方采集价格门禁检查失败 item_id={}: {}", item_id, e)
-        if effective_task_id and not price_filtered:
-            self._save_eval_event(effective_task_id, item_id, detail, seller, reviews, eval_result)
-            # 评估通过才发 EVAL_PASSED，与 worker.py 第 320 行 should_pass 判定语义一致
-            # 为什么放在 _save_eval_event 之后：事件落库用于时间线/审计，通知是独立通道，
-            # 二者解耦避免通知失败阻塞事件写入；通知失败仅 warning 不影响主流程
-            if eval_result.is_passed:
-                self._publish_eval_passed_event(
-                    effective_task_id, item_id, detail, seller, eval_result
-                )
+        return old_item, effective_task_id, changed_fields
 
-        return CollectionResult(
-            ok=True,
-            item_id=item_id,
-            mode=CollectionMode.OFFICIAL_FULL,
-            detail=detail,
-            seller=seller,
-            reviews=reviews,
-            evaluation=eval_result,
-            changed_fields=changed_fields,
-        )
+    def _evaluate_and_notify(
+        self,
+        item_id: str,
+        detail: ItemDetail,
+        seller: SellerProfile | None,
+        reviews: list[str],
+        effective_task_id: str,
+    ) -> EvalResult:
+        """评估 + 通知：价格门禁通过时写入 eval 事件并发布 EVAL_PASSED
+
+        价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件。
+        为什么仍调用 evaluator.evaluate：官方采集弹窗需展示评估分给用户，
+        但超范围商品不应进入评估明细菜单（list_evaluations 的价格过滤会二次兜底）。
+        """
+        eval_result = self.container.evaluator.evaluate(detail, seller)
+        price_filtered = self._check_price_filter(item_id, detail, effective_task_id)
+        if not effective_task_id or price_filtered:
+            return eval_result
+        self._save_eval_event(effective_task_id, item_id, detail, seller, reviews, eval_result)
+        # 评估通过才发 EVAL_PASSED，与 worker.py 第 320 行 should_pass 判定语义一致
+        # 为什么放在 _save_eval_event 之后：事件落库用于时间线/审计，通知是独立通道，
+        # 二者解耦避免通知失败阻塞事件写入；通知失败仅 warning 不影响主流程
+        if eval_result.is_passed:
+            self._publish_eval_passed_event(
+                effective_task_id, item_id, detail, seller, eval_result
+            )
+        return eval_result
+
+    def _check_price_filter(
+        self, item_id: str, detail: ItemDetail, effective_task_id: str
+    ) -> bool:
+        """价格门禁检查：超范围商品返回 True（过滤 eval 事件写入）"""
+        if not effective_task_id:
+            return False
+        try:
+            task_raw = self.container.repo.get_task(effective_task_id)
+            if not task_raw:
+                return False
+            ps = self.container.build_task_price_strategy(task_raw)
+            verdict = ps.check(detail, market=None)
+            if not verdict.pass_:
+                logger.info(
+                    "官方采集跳过 eval 事件写入: item_id={}, price={}, reasons={}",
+                    item_id, detail.price, verdict.reasons,
+                )
+                return True
+            return False
+        except Exception as e:
+            logger.warning("官方采集价格门禁检查失败 item_id={}: {}", item_id, e)
+            return False
 
     def _item_row_from_detail(self, item_id: str, detail: ItemDetail, task_id: str) -> dict[str, Any]:
         return {

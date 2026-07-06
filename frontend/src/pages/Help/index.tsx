@@ -1,8 +1,6 @@
 import { useState, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Layout, Typography, Anchor, Button, Space, Tag, Alert, Card, Divider, theme, Tooltip, Input } from 'antd'
+import { Layout, Typography, Anchor, Button, Space, Tag, Alert, Card, Divider, theme, Input } from 'antd'
 import {
-  ArrowLeftOutlined,
   ApiOutlined,
   RocketOutlined,
   DashboardOutlined,
@@ -18,13 +16,11 @@ import {
   BulbOutlined,
   WarningOutlined,
   CheckCircleOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
 } from '@ant-design/icons'
 import type React from 'react'
 import { useTheme } from '../../contexts/ThemeContext'
 
-const { Header, Sider, Content } = Layout
+const { Sider, Content } = Layout
 const { Title, Paragraph, Text } = Typography
 
 // ============ 文档内容数据结构 ============
@@ -479,8 +475,7 @@ function renderBlock(block: DocBlock): React.ReactNode {
 }
 
 export default function Help() {
-  const navigate = useNavigate()
-  const { isDark, toggle } = useTheme()
+  const { isDark } = useTheme()
   const { token: themeToken } = theme.useToken()
   const [collapsed, setCollapsed] = useState(false)
   const [search, setSearch] = useState('')
@@ -506,8 +501,11 @@ export default function Help() {
     ),
   }))
 
+  // 嵌入 SheetWorkspace 内显示：不再渲染自有 Header/Layout 外壳，
+  // 由 SheetWorkspace 的 sheet-content-area 提供滚动容器，标签栏提供关闭入口。
+  // 保留 Sider 用作章节锚点导航，breakpoint="lg" 在窄屏自动折叠避免遮挡内容。
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ minHeight: '100%', background: themeToken.colorBgLayout }}>
       <Sider
         collapsible
         collapsed={collapsed}
@@ -520,7 +518,7 @@ export default function Help() {
           background: themeToken.colorBgContainer,
           position: 'sticky',
           top: 0,
-          height: '100vh',
+          height: '100%',
           overflow: 'auto',
         }}
         width={240}
@@ -545,108 +543,65 @@ export default function Help() {
           style={{ padding: '0 16px' }}
         />
       </Sider>
-      <Layout>
-        <Header
-          style={{
-            background: themeToken.colorBgContainer,
-            padding: '0 24px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            boxShadow: '0 1px 4px rgba(0, 0, 0, 0.04)',
-            position: 'sticky',
-            top: 0,
-            zIndex: 10,
-            height: 56,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Button
-              type="text"
-              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-              onClick={() => setCollapsed(!collapsed)}
-              style={{ fontSize: 16, width: 40, height: 40 }}
-            />
-            <Space>
-              <FileTextOutlined style={{ fontSize: 18, color: themeToken.colorPrimary }} />
-              <Title level={4} style={{ margin: 0 }}>帮助文档</Title>
-            </Space>
-          </div>
-          <Space>
-            <Button
-              type="text"
-              icon={<ApiOutlined />}
-              onClick={() => globalThis.open('/api/docs', '_blank')}
-            >
-              API 文档
-            </Button>
-            <Button
-              type="primary"
-              icon={<ArrowLeftOutlined />}
-              onClick={() => navigate('/')}
-            >
-              返回控制台
-            </Button>
-          </Space>
-        </Header>
-        <Content style={{ background: themeToken.colorBgLayout, overflow: 'auto' }}>
-          <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px 64px' }}>
-            {/* 文档头部简介 */}
-            <Card style={{ marginBottom: 24, background: 'linear-gradient(135deg, rgba(255,98,0,0.06), rgba(255,133,51,0.04))' }}>
-              <Space align="start" size={16}>
-                <RocketOutlined style={{ fontSize: 32, color: themeToken.colorPrimary }} />
-                <div>
+      <Content style={{ background: themeToken.colorBgLayout, overflow: 'visible' }}>
+        <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px 64px' }}>
+          {/* 文档头部简介 */}
+          <Card style={{ marginBottom: 24, background: 'linear-gradient(135deg, rgba(255,98,0,0.06), rgba(255,133,51,0.04))' }}>
+            <Space align="start" size={16}>
+              <RocketOutlined style={{ fontSize: 32, color: themeToken.colorPrimary }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
                   <Title level={3} style={{ margin: 0 }}>闲鱼猎人使用文档</Title>
-                  <Paragraph style={{ color: 'var(--xh-text-secondary)', marginTop: 8, marginBottom: 0 }}>
-                    系统涵盖监控、评估、抢单、通知全流程。本文档详细介绍各功能模块的使用方法，
-                    包括核心功能、操作步骤、使用场景、参数配置和注意事项。
-                  </Paragraph>
-                </div>
-              </Space>
-            </Card>
-
-            {/* 各章节内容 */}
-            {filteredSections.map((section) => (
-              <Card
-                key={section.id}
-                id={section.id}
-                style={{ marginBottom: 24, scrollMarginTop: 72 }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                  <span style={{ fontSize: 22, color: themeToken.colorPrimary }}>{section.icon}</span>
-                  <Title level={4} style={{ margin: 0 }}>{section.title}</Title>
-                </div>
-                <Paragraph style={{ color: 'var(--xh-text-secondary)', marginBottom: 16 }}>
-                  {section.intro}
-                </Paragraph>
-                <Divider style={{ margin: '0 0 20px' }} />
-                {section.blocks.map((block, i) => (
-                  <div key={i}>{renderBlock(block)}</div>
-                ))}
-              </Card>
-            ))}
-
-            {filteredSections.length === 0 && (
-              <div style={{ textAlign: 'center', padding: 64, color: 'var(--xh-text-quaternary)' }}>
-                未找到匹配的章节
-              </div>
-            )}
-
-            {/* 底部 */}
-            <div style={{ textAlign: 'center', color: 'var(--xh-text-quaternary)', fontSize: 13, marginTop: 32 }}>
-              <Divider />
-              <Space>
-                <Tooltip title="切换主题">
-                  <Button type="text" size="small" onClick={toggle}>
-                    {isDark ? '☀️ 浅色' : '🌙 深色'}
+                  <Button
+                    type="text"
+                    icon={<ApiOutlined />}
+                    onClick={() => globalThis.open('/api/docs', '_blank')}
+                  >
+                    API 文档
                   </Button>
-                </Tooltip>
-                <Text type="secondary">闲鱼猎人 · 帮助文档</Text>
-              </Space>
+                </div>
+                <Paragraph style={{ color: 'var(--xh-text-secondary)', marginTop: 8, marginBottom: 0 }}>
+                  系统涵盖监控、评估、抢单、通知全流程。本文档详细介绍各功能模块的使用方法，
+                  包括核心功能、操作步骤、使用场景、参数配置和注意事项。
+                </Paragraph>
+              </div>
+            </Space>
+          </Card>
+
+          {/* 各章节内容 */}
+          {filteredSections.map((section) => (
+            <Card
+              key={section.id}
+              id={section.id}
+              style={{ marginBottom: 24, scrollMarginTop: 16 }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                <span style={{ fontSize: 22, color: themeToken.colorPrimary }}>{section.icon}</span>
+                <Title level={4} style={{ margin: 0 }}>{section.title}</Title>
+              </div>
+              <Paragraph style={{ color: 'var(--xh-text-secondary)', marginBottom: 16 }}>
+                {section.intro}
+              </Paragraph>
+              <Divider style={{ margin: '0 0 20px' }} />
+              {section.blocks.map((block, i) => (
+                <div key={i}>{renderBlock(block)}</div>
+              ))}
+            </Card>
+          ))}
+
+          {filteredSections.length === 0 && (
+            <div style={{ textAlign: 'center', padding: 64, color: 'var(--xh-text-quaternary)' }}>
+              未找到匹配的章节
             </div>
+          )}
+
+          {/* 底部 */}
+          <div style={{ textAlign: 'center', color: 'var(--xh-text-quaternary)', fontSize: 13, marginTop: 32 }}>
+            <Divider />
+            <Text type="secondary">闲鱼猎人 · 帮助文档</Text>
           </div>
-        </Content>
-      </Layout>
+        </div>
+      </Content>
     </Layout>
   )
 }

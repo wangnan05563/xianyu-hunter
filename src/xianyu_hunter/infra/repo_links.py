@@ -396,15 +396,27 @@ class TaskLinksMixin:
         # 与 db_models._utcnow 保持一致：publish_time 存储为 UTC，比较时也用 UTC
         now = datetime.now(timezone.utc)
         need_price = min_price is not None or max_price is not None
-        filtered = []
-        for r in rows:
-            display = self._decode_display(r.get("display"))
-            if need_price and not self._row_price_matches(display, min_price, max_price):
-                continue
-            if not self._row_publish_matches(display, max_publish_days, now):
-                continue
-            filtered.append(r)
-        return filtered
+        return [
+            r for r in rows
+            if self._row_passes_price_and_publish(
+                r, need_price, min_price, max_price, max_publish_days, now
+            )
+        ]
+
+    def _row_passes_price_and_publish(
+        self, row: dict, need_price: bool, min_price, max_price,
+        max_publish_days, now: datetime,
+    ) -> bool:
+        """单行价格+发布天数过滤：任一条件不满足返回 False
+
+        拆出独立方法避免 _filter_task_links 中 for+嵌套 if 抬高认知复杂度
+        """
+        display = self._decode_display(row.get("display"))
+        if need_price and not self._row_price_matches(display, min_price, max_price):
+            return False
+        if not self._row_publish_matches(display, max_publish_days, now):
+            return False
+        return True
 
     def list_task_links(
         self,
@@ -425,23 +437,31 @@ class TaskLinksMixin:
 
             # 价格过滤下推 SQL：减少全量加载的行数
             # 关键词/发布天数过滤保留 Python 层（中文分词 + 时间计算兼容性）
-            min_price = (task or {}).get("min_price")
-            max_price = (task or {}).get("max_price")
-            if min_price is not None or max_price is not None:
-                price_expr = func.json_extract(TaskLinkRow.display, '$.price')
-                if min_price is not None:
-                    stmt = stmt.where(
-                        (price_expr.is_(None)) | (cast(price_expr, Float) >= min_price)
-                    )
-                if max_price is not None:
-                    stmt = stmt.where(
-                        (price_expr.is_(None)) | (cast(price_expr, Float) <= max_price)
-                    )
-
+            stmt = self._apply_price_filter_to_stmt(stmt, task)
             stmt = stmt.order_by(TaskLinkRow.created_at.desc())
             rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
             rows = self._filter_task_links(rows, task)
             return rows[offset:offset + limit]
+
+    def _apply_price_filter_to_stmt(self, stmt, task: dict | None):
+        """价格过滤下推 SQL：减少全量加载的行数
+
+        关键词/发布天数过滤保留 Python 层（中文分词 + 时间计算兼容性）
+        """
+        min_price = (task or {}).get("min_price")
+        max_price = (task or {}).get("max_price")
+        if min_price is None and max_price is None:
+            return stmt
+        price_expr = func.json_extract(TaskLinkRow.display, '$.price')
+        if min_price is not None:
+            stmt = stmt.where(
+                (price_expr.is_(None)) | (cast(price_expr, Float) >= min_price)
+            )
+        if max_price is not None:
+            stmt = stmt.where(
+                (price_expr.is_(None)) | (cast(price_expr, Float) <= max_price)
+            )
+        return stmt
 
     def list_and_count_task_links(
         self,
@@ -493,71 +513,11 @@ class TaskLinksMixin:
             if user_id is not None:
                 stmt = stmt.where(TaskLinkRow.user_id == user_id)
 
-            # 销售状态下推过滤：仅在 sold_filter != 'all' 时添加 JOIN，避免无谓性能开销
-            # 为什么用 OUTER JOIN 而非 INNER JOIN：seller 行的 link_key 不在 items 表中，
-            # INNER JOIN 会错误排除所有 seller 行；OUTER JOIN + WHERE 限定保证 seller 行
-            # 在 onsale/sold 过滤下仍能保留（is_sold 为 NULL 时按"在售"处理）
-            if sold_filter in ("onsale", "sold"):
-                # ON 条件同时限定 link_type='item'，确保只对 item 行做 items JOIN
-                stmt = stmt.outerjoin(
-                    ItemRow,
-                    (TaskLinkRow.link_type == "item") & (TaskLinkRow.link_key == ItemRow.id),
-                )
-                if sold_filter == "onsale":
-                    # 在售：items.is_sold=0 或 item 行无对应 items 记录（NULL 视为在售）
-                    stmt = stmt.where(
-                        (TaskLinkRow.link_type != "item") | (ItemRow.is_sold == 0) | (ItemRow.is_sold.is_(None))
-                    )
-                else:  # sold
-                    # 已售：仅保留 items.is_sold=1 的 item 行
-                    stmt = stmt.where(
-                        (TaskLinkRow.link_type != "item") | (ItemRow.is_sold == 1)
-                    )
-
-            # 价格过滤下推 SQL（与 list_task_links 保持一致）
-            min_price = (task or {}).get("min_price")
-            max_price = (task or {}).get("max_price")
-            if min_price is not None or max_price is not None:
-                price_expr = func.json_extract(TaskLinkRow.display, '$.price')
-                if min_price is not None:
-                    stmt = stmt.where(
-                        (price_expr.is_(None)) | (cast(price_expr, Float) >= min_price)
-                    )
-                if max_price is not None:
-                    stmt = stmt.where(
-                        (price_expr.is_(None)) | (cast(price_expr, Float) <= max_price)
-                    )
-
-            # 关键词/地区过滤下推 SQL：避免 has_search 时全量加载到内存再 Python 过滤
-            # json_extract 对 NULL display 返回 NULL，NULL LIKE '%kw%' 为 NULL（非 true），
-            # 行被自动排除，与原 Python 逻辑（空 title 不匹配）一致
-            if search_keyword:
-                kw_pattern = f'%{search_keyword.lower()}%'
-                title_expr = func.lower(func.json_extract(TaskLinkRow.display, '$.title'))
-                stmt = stmt.where(title_expr.like(kw_pattern))
-            if search_region:
-                region_expr = func.json_extract(TaskLinkRow.display, '$.region')
-                stmt = stmt.where(region_expr == search_region)
-            if search_brand:
-                # 品牌精确匹配（与地区过滤一致），空品牌自动排除
-                brand_expr = func.json_extract(TaskLinkRow.display, '$.brand')
-                stmt = stmt.where(brand_expr == search_brand)
-
-            # 发布天数过滤下推 SQL：减少 Python 层处理的数据行数
-            # publish_time 存储为 ISO 字符串（UTC），substr 截取前 19 字符去掉时区后缀，
-            # datetime() 将字符串转为可比较的时间值
-            # 为什么下推：原 Python 层过滤需全量加载到内存再逐行解析，SQL 层过滤直接减少返回行数
-            max_publish_days = (task or {}).get("max_publish_days")
-            if max_publish_days is not None:
-                pub_expr = func.json_extract(TaskLinkRow.display, '$.publish_time')
-                # substr(..., 1, 19) 截取 "YYYY-MM-DDTHH:MM:SS"，datetime() 解析为时间值
-                pub_dt_expr = func.datetime(func.substr(pub_expr, 1, 19))
-                cutoff_dt = datetime.now(timezone.utc) - timedelta(days=max_publish_days)
-                cutoff_str = cutoff_dt.strftime('%Y-%m-%d %H:%M:%S')
-                # publish_time 为 NULL 或解析失败时保留行（兼容旧数据，与 Python 逻辑一致）
-                stmt = stmt.where(
-                    (pub_expr.is_(None)) | (pub_dt_expr.is_(None)) | (pub_dt_expr >= cutoff_str)
-                )
+            # 各过滤条件下推 SQL（拆分为独立方法避免主函数认知复杂度过高）
+            stmt = self._apply_sold_filter_to_stmt(stmt, sold_filter)
+            stmt = self._apply_price_filter_to_stmt(stmt, task)
+            stmt = self._apply_search_filters_to_stmt(stmt, search_keyword, search_region, search_brand)
+            stmt = self._apply_publish_days_filter_to_stmt(stmt, task)
 
             stmt = stmt.order_by(TaskLinkRow.created_at.desc())
             all_rows = [self._row_to_dict(r) for r in conn.execute(stmt).all()]
@@ -569,29 +529,114 @@ class TaskLinksMixin:
             filtered = [r for r in all_rows if self._task_link_matches_task(r, task)]
 
             # 一次遍历同时产出分页列表和各类型计数
-            counts: dict[str, int] = {"item": 0, "seller": 0, "url": 0, "total": 0}
-            for row in filtered:
-                lt = row.get("link_type")
-                if lt in counts:
-                    counts[lt] += 1
-                    counts["total"] += 1
-
+            counts = self._count_link_types(filtered)
             page_rows = filtered[offset:offset + limit]
 
             # 性能埋点：慢查询告警（>100ms 记录 warning，便于持续监控）
-            _elapsed_ms = (_time.monotonic() - _perf_start) * 1000
-            if _elapsed_ms > 100:
-                _perf_logger.warning(
-                    "list_and_count_task_links 慢查询: task={}, type={}, rows={}, filtered={}, elapsed={:.1f}ms",
-                    task_id, link_type, len(all_rows), len(filtered), _elapsed_ms,
-                )
-            else:
-                _perf_logger.debug(
-                    "list_and_count_task_links: task={}, type={}, rows={}, elapsed={:.1f}ms",
-                    task_id, link_type, len(all_rows), _elapsed_ms,
-                )
-
+            self._log_query_perf(
+                _perf_logger, _perf_start, task_id, link_type,
+                len(all_rows), len(filtered),
+            )
             return page_rows, counts
+
+    def _apply_sold_filter_to_stmt(self, stmt, sold_filter: str):
+        """销售状态下推过滤：仅在 sold_filter != 'all' 时添加 JOIN
+
+        为什么用 OUTER JOIN 而非 INNER JOIN：seller 行的 link_key 不在 items 表中，
+        INNER JOIN 会错误排除所有 seller 行；OUTER JOIN + WHERE 限定保证 seller 行
+        在 onsale/sold 过滤下仍能保留（is_sold 为 NULL 时按"在售"处理）
+        """
+        if sold_filter not in ("onsale", "sold"):
+            return stmt
+        # ON 条件同时限定 link_type='item'，确保只对 item 行做 items JOIN
+        stmt = stmt.outerjoin(
+            ItemRow,
+            (TaskLinkRow.link_type == "item") & (TaskLinkRow.link_key == ItemRow.id),
+        )
+        if sold_filter == "onsale":
+            # 在售：items.is_sold=0 或 item 行无对应 items 记录（NULL 视为在售）
+            stmt = stmt.where(
+                (TaskLinkRow.link_type != "item") | (ItemRow.is_sold == 0) | (ItemRow.is_sold.is_(None))
+            )
+        else:  # sold
+            # 已售：仅保留 items.is_sold=1 的 item 行
+            stmt = stmt.where(
+                (TaskLinkRow.link_type != "item") | (ItemRow.is_sold == 1)
+            )
+        return stmt
+
+    def _apply_search_filters_to_stmt(
+        self, stmt, search_keyword: str | None,
+        search_region: str | None, search_brand: str | None,
+    ):
+        """关键词/地区/品牌过滤下推 SQL
+
+        json_extract 对 NULL display 返回 NULL，NULL LIKE '%kw%' 为 NULL（非 true），
+        行被自动排除，与原 Python 逻辑（空 title 不匹配）一致
+        """
+        if search_keyword:
+            kw_pattern = f'%{search_keyword.lower()}%'
+            title_expr = func.lower(func.json_extract(TaskLinkRow.display, '$.title'))
+            stmt = stmt.where(title_expr.like(kw_pattern))
+        if search_region:
+            region_expr = func.json_extract(TaskLinkRow.display, '$.region')
+            stmt = stmt.where(region_expr == search_region)
+        if search_brand:
+            # 品牌精确匹配（与地区过滤一致），空品牌自动排除
+            brand_expr = func.json_extract(TaskLinkRow.display, '$.brand')
+            stmt = stmt.where(brand_expr == search_brand)
+        return stmt
+
+    def _apply_publish_days_filter_to_stmt(self, stmt, task: dict | None):
+        """发布天数过滤下推 SQL：减少 Python 层处理的数据行数
+
+        publish_time 存储为 ISO 字符串（UTC），substr 截取前 19 字符去掉时区后缀，
+        datetime() 将字符串转为可比较的时间值。
+        为什么下推：原 Python 层过滤需全量加载到内存再逐行解析，SQL 层过滤直接减少返回行数
+        """
+        max_publish_days = (task or {}).get("max_publish_days")
+        if max_publish_days is None:
+            return stmt
+        pub_expr = func.json_extract(TaskLinkRow.display, '$.publish_time')
+        # substr(..., 1, 19) 截取 "YYYY-MM-DDTHH:MM:SS"，datetime() 解析为时间值
+        pub_dt_expr = func.datetime(func.substr(pub_expr, 1, 19))
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=max_publish_days)
+        cutoff_str = cutoff_dt.strftime('%Y-%m-%d %H:%M:%S')
+        # publish_time 为 NULL 或解析失败时保留行（兼容旧数据，与 Python 逻辑一致）
+        stmt = stmt.where(
+            (pub_expr.is_(None)) | (pub_dt_expr.is_(None)) | (pub_dt_expr >= cutoff_str)
+        )
+        return stmt
+
+    @staticmethod
+    def _count_link_types(rows: list[dict]) -> dict[str, int]:
+        """一次遍历产出各类型计数（item/seller/url/total）"""
+        counts: dict[str, int] = {"item": 0, "seller": 0, "url": 0, "total": 0}
+        for row in rows:
+            lt = row.get("link_type")
+            if lt in counts:
+                counts[lt] += 1
+                counts["total"] += 1
+        return counts
+
+    @staticmethod
+    def _log_query_perf(
+        logger_obj, perf_start: float, task_id: str, link_type,
+        row_count: int, filtered_count: int,
+    ) -> None:
+        """性能埋点：>100ms 记录 warning，便于持续监控慢查询"""
+        import time as _time
+        _elapsed_ms = (_time.monotonic() - perf_start) * 1000
+        if _elapsed_ms > 100:
+            logger_obj.warning(
+                "list_and_count_task_links 慢查询: task={}, type={}, rows={}, filtered={}, elapsed={:.1f}ms",
+                task_id, link_type, row_count, filtered_count, _elapsed_ms,
+            )
+        else:
+            logger_obj.debug(
+                "list_and_count_task_links: task={}, type={}, rows={}, elapsed={:.1f}ms",
+                task_id, link_type, row_count, _elapsed_ms,
+            )
 
     def count_task_links(
         self,
@@ -735,82 +780,105 @@ class TaskLinksMixin:
         """
         inserted = 0
         with self.engine.begin() as conn:
-            # 阶段1：从 items 表迁移 item + seller 关联
-            rows = conn.execute(
-                select(
-                    ItemRow.id,
-                    ItemRow.task_id,
-                    ItemRow.title,
-                    ItemRow.price,
-                    ItemRow.thumb_url,
-                    ItemRow.seller_id,
-                    TaskRow.keyword,
-                )
-                .join(TaskRow, TaskRow.id == ItemRow.task_id)
-                .where(ItemRow.task_id.is_not(None))
-            ).all()
-            # 收集所有要插入的记录，批量写入而非逐条 INSERT
-            batch: list[dict] = []
-            for item_id, tid, title, price, thumb, seller_id, keyword in rows:
-                for link_type, link_key, display in self._build_item_link_rows(
-                    item_id=item_id,
-                    title=title,
-                    price=price,
-                    thumb_url=thumb,
-                    seller_id=seller_id,
-                ):
-                    batch.append({
-                        "task_id": tid,
-                        "link_type": link_type,
-                        "link_key": link_key,
-                        "display": json.dumps(display, ensure_ascii=False),
-                        "source": "auto",
-                    })
-            if batch:
-                stmt = sqlite_insert(TaskLinkRow).values(batch)
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=["task_id", "link_type", "link_key"]
-                )
-                result = conn.execute(stmt)
-                inserted += result.rowcount or 0
-
-            # 阶段2：从已有 task_links 补建 seller 关联
-            legacy_rows = conn.execute(
-                select(TaskLinkRow.task_id, TaskLinkRow.link_key, TaskLinkRow.display, TaskRow.keyword)
-                .join(TaskRow, TaskRow.id == TaskLinkRow.task_id)
-                .where(TaskLinkRow.link_type == "item")
-                .where(TaskLinkRow.source == "auto")
-            ).all()
-            seller_batch: list[dict] = []
-            for tid, item_id, raw_display, keyword in legacy_rows:
-                try:
-                    display = json.loads(raw_display) if isinstance(raw_display, str) and raw_display else {}
-                except json.JSONDecodeError:
-                    display = {}
-                title = display.get("title") or display.get("item_title")
-                if not task_keyword_matches_title(keyword, title):
-                    continue
-                for link_type, link_key, derived_display in self._build_item_link_rows(
-                    item_id=item_id,
-                    title=title,
-                    price=display.get("price"),
-                    thumb_url=display.get("thumb_url"),
-                    seller_id=display.get("seller_id"),
-                ):
-                    if link_type == "item":
-                        continue
-                    seller_batch.append({
-                        "task_id": tid,
-                        "link_type": link_type,
-                        "link_key": link_key,
-                        "display": json.dumps(derived_display, ensure_ascii=False),
-                        "source": "auto",
-                    })
-            if seller_batch:
-                stmt = sqlite_insert(TaskLinkRow).values(seller_batch)
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=["task_id", "link_type", "link_key"]
-                )
-                result = conn.execute(stmt)
-                inserted += result.rowcount or 0
+            inserted += self._migrate_items_to_task_links(conn)
+            inserted += self._backfill_seller_links_from_legacy(conn)
         return inserted
+
+    def _migrate_items_to_task_links(self, conn) -> int:
+        """阶段1：从 items 表迁移 item + seller 关联到 task_links"""
+        rows = conn.execute(
+            select(
+                ItemRow.id,
+                ItemRow.task_id,
+                ItemRow.title,
+                ItemRow.price,
+                ItemRow.thumb_url,
+                ItemRow.seller_id,
+                TaskRow.keyword,
+            )
+            .join(TaskRow, TaskRow.id == ItemRow.task_id)
+            .where(ItemRow.task_id.is_not(None))
+        ).all()
+        # 收集所有要插入的记录，批量写入而非逐条 INSERT
+        batch: list[dict] = []
+        for item_id, tid, title, price, thumb, seller_id, keyword in rows:
+            for link_type, link_key, display in self._build_item_link_rows(
+                item_id=item_id,
+                title=title,
+                price=price,
+                thumb_url=thumb,
+                seller_id=seller_id,
+            ):
+                batch.append({
+                    "task_id": tid,
+                    "link_type": link_type,
+                    "link_key": link_key,
+                    "display": json.dumps(display, ensure_ascii=False),
+                    "source": "auto",
+                })
+        if not batch:
+            return 0
+        stmt = sqlite_insert(TaskLinkRow).values(batch)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["task_id", "link_type", "link_key"]
+        )
+        result = conn.execute(stmt)
+        return result.rowcount or 0
+
+    def _backfill_seller_links_from_legacy(self, conn) -> int:
+        """阶段2：从已有 task_links(item) 补建 seller 关联
+
+        仅迁移标题匹配任务关键词的行，避免污染无关数据
+        """
+        legacy_rows = conn.execute(
+            select(TaskLinkRow.task_id, TaskLinkRow.link_key, TaskLinkRow.display, TaskRow.keyword)
+            .join(TaskRow, TaskRow.id == TaskLinkRow.task_id)
+            .where(TaskLinkRow.link_type == "item")
+            .where(TaskLinkRow.source == "auto")
+        ).all()
+        seller_batch: list[dict] = []
+        for tid, item_id, raw_display, keyword in legacy_rows:
+            self._collect_seller_link_from_legacy_row(
+                tid, item_id, raw_display, keyword, seller_batch
+            )
+        if not seller_batch:
+            return 0
+        stmt = sqlite_insert(TaskLinkRow).values(seller_batch)
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=["task_id", "link_type", "link_key"]
+        )
+        result = conn.execute(stmt)
+        return result.rowcount or 0
+
+    def _collect_seller_link_from_legacy_row(
+        self, tid: str, item_id: str, raw_display, keyword: str | None,
+        seller_batch: list[dict],
+    ) -> None:
+        """从单条 legacy item 行提取 seller 关联并追加到 seller_batch
+
+        关键词不匹配或 display 解析失败时跳过该行
+        """
+        try:
+            display = json.loads(raw_display) if isinstance(raw_display, str) and raw_display else {}
+        except json.JSONDecodeError:
+            display = {}
+        title = display.get("title") or display.get("item_title")
+        if not task_keyword_matches_title(keyword, title):
+            return
+        for link_type, link_key, derived_display in self._build_item_link_rows(
+            item_id=item_id,
+            title=title,
+            price=display.get("price"),
+            thumb_url=display.get("thumb_url"),
+            seller_id=display.get("seller_id"),
+        ):
+            # 阶段2 仅补建 seller 关联，跳过 item 类型（已在阶段1 处理）
+            if link_type == "item":
+                continue
+            seller_batch.append({
+                "task_id": tid,
+                "link_type": link_type,
+                "link_key": link_key,
+                "display": json.dumps(derived_display, ensure_ascii=False),
+                "source": "auto",
+            })

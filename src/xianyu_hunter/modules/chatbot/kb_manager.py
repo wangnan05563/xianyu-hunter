@@ -698,68 +698,85 @@ class KBManager:
         except SyntaxError as e:
             # AST 解析失败降级为文件粒度（保留可索引内容，不丢弃整个文件）
             logger.debug(f"AST 解析失败，降级文件粒度: {source_file}: {e}")
-            lines = content.splitlines()
-            return [DocSnippet(
-                content=content[: self._config.chunk_size],
-                source_file=source_file,
-                section_path=self._FILE_SECTION,
-                line_start=1,
-                line_end=len(lines) if lines else 1,
-                doc_type="code",
-                truncated=len(content) > self._config.chunk_size,
-            )]
+            return [self._make_file_level_python_snippet(content, source_file)]
 
         snippets: list[DocSnippet] = []
-        lines = content.splitlines()
-
-        # 模块级 docstring（tree.body[0] 若是 Expr 且 value 是 Constant str）
-        if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(
-            tree.body[0].value, ast.Constant
-        ):
-            doc = tree.body[0].value.value
-            if isinstance(doc, str):
-                end_line = tree.body[0].end_lineno or 1
-                snippets.append(DocSnippet(
-                    content=doc,
-                    source_file=source_file,
-                    section_path="<module>",
-                    line_start=1,
-                    line_end=end_line,
-                    doc_type="code",
-                ))
-
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
-                # 跳过私有方法（_ 开头），不纳入知识库
-                if isinstance(node, ast.FunctionDef) and node.name.startswith("_"):
-                    continue
-                doc = ast.get_docstring(node)
-                if not doc:
-                    continue
-                # 构造可读的 section_path（ClassDef:func 或 FunctionDef:func）
-                node_kind = node.__class__.__name__
-                snippets.append(DocSnippet(
-                    content=f"{node.name}: {doc}",
-                    source_file=source_file,
-                    section_path=f"{node_kind}:{node.name}",
-                    line_start=node.lineno,
-                    line_end=node.end_lineno or node.lineno,
-                    doc_type="code",
-                ))
+        self._extract_python_module_docstring(tree, source_file, snippets)
+        self._extract_python_node_docstrings(tree, source_file, snippets)
 
         # 若 AST 未提取到任何片段（如纯赋值脚本），降级为文件粒度
         if not snippets:
-            snippets.append(DocSnippet(
-                content=content[: self._config.chunk_size],
-                source_file=source_file,
-                section_path=self._FILE_SECTION,
-                line_start=1,
-                line_end=len(lines) if lines else 1,
-                doc_type="code",
-                truncated=len(content) > self._config.chunk_size,
-            ))
+            snippets.append(self._make_file_level_python_snippet(content, source_file))
 
         return snippets
+
+    def _extract_python_module_docstring(
+        self, tree: ast.Module, source_file: str, snippets: list[DocSnippet],
+    ) -> None:
+        """提取模块级 docstring（tree.body[0] 若是 Expr 且 value 是 Constant str）
+
+        为什么独立方法：模块 docstring 判定含 3 层 isinstance 嵌套，
+        内联会让 _chunk_python 顶层逻辑被类型守护占据，可读性下降。
+        """
+        if not tree.body:
+            return
+        first = tree.body[0]
+        if not isinstance(first, ast.Expr) or not isinstance(first.value, ast.Constant):
+            return
+        doc = first.value.value
+        if not isinstance(doc, str):
+            return
+        snippets.append(DocSnippet(
+            content=doc,
+            source_file=source_file,
+            section_path="<module>",
+            line_start=1,
+            line_end=first.end_lineno or 1,
+            doc_type="code",
+        ))
+
+    def _extract_python_node_docstrings(
+        self, tree: ast.Module, source_file: str, snippets: list[DocSnippet],
+    ) -> None:
+        """遍历 AST 提取类/函数的 docstring（跳过私有方法 _ 开头）
+
+        为什么独立方法：遍历 + isinstance + 私有过滤 + docstring 存在性检查
+        多层条件叠加，提取后 _chunk_python 主流程仅保留编排。
+        """
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+                continue
+            # 跳过私有方法（_ 开头），不纳入知识库
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("_"):
+                continue
+            doc = ast.get_docstring(node)
+            if not doc:
+                continue
+            # 构造可读的 section_path（ClassDef:func 或 FunctionDef:func）
+            node_kind = node.__class__.__name__
+            snippets.append(DocSnippet(
+                content=f"{node.name}: {doc}",
+                source_file=source_file,
+                section_path=f"{node_kind}:{node.name}",
+                line_start=node.lineno,
+                line_end=node.end_lineno or node.lineno,
+                doc_type="code",
+            ))
+
+    def _make_file_level_python_snippet(
+        self, content: str, source_file: str,
+    ) -> DocSnippet:
+        """构造文件粒度的 Python 片段（AST 解析失败或无片段时降级使用）"""
+        lines = content.splitlines()
+        return DocSnippet(
+            content=content[: self._config.chunk_size],
+            source_file=source_file,
+            section_path=self._FILE_SECTION,
+            line_start=1,
+            line_end=len(lines) if lines else 1,
+            doc_type="code",
+            truncated=len(content) > self._config.chunk_size,
+        )
 
     def _chunk_jsonl(self, content: str, source_file: str) -> list[DocSnippet]:
         """JSONL 分块：每行 JSON 解析为一个 DocSnippet

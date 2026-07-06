@@ -278,6 +278,72 @@ def test_login_status_no_cookie_when_not_success():
     assert result["status"] == "running"
 
 
+def test_login_status_allows_slow_packaged_helper_startup(tmp_path):
+    """打包 exe 冷启动时 pending/starting 阶段可能超过 15 秒，不应误杀。"""
+    status_file = tmp_path / "browser_login_pending.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "status": "pending",
+                "message": "初始化...",
+                "ts": ul.time.time() - 30,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    proc = MagicMock(spec=subprocess.Popen)
+    proc.poll.return_value = None
+
+    ul._session["status"] = "running"
+    ul._session["method"] = "browser"
+    ul._session["message"] = "正在启动浏览器窗口..."
+    ul._session["status_file"] = str(status_file)
+    ul._session["proc"] = proc
+    ul._session["started_at"] = ul.time.time() - 30
+
+    result = asyncio.run(ul.login_status())
+
+    assert isinstance(result, dict)
+    assert result["status"] == "running"
+    assert result["phase"] == "pending"
+    proc.kill.assert_not_called()
+
+
+def test_login_status_still_times_out_stale_waiting_heartbeat(tmp_path):
+    """进入等待登录后，心跳长期不更新仍应判定为无响应。"""
+    status_file = tmp_path / "browser_login_waiting.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "status": "waiting",
+                "message": "请在浏览器窗口中登录闲鱼",
+                "ts": ul.time.time() - 45,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    proc = MagicMock(spec=subprocess.Popen)
+    proc.poll.return_value = None
+
+    ul._session["status"] = "running"
+    ul._session["method"] = "browser"
+    ul._session["message"] = "请在浏览器窗口中登录闲鱼"
+    ul._session["status_file"] = str(status_file)
+    ul._session["proc"] = proc
+    ul._session["started_at"] = ul.time.time() - 45
+
+    result = asyncio.run(ul.login_status())
+
+    assert isinstance(result, dict)
+    assert result["status"] == "error"
+    assert "无响应" in result["message"]
+    proc.kill.assert_called_once()
+
+
 def test_packaged_browser_login_uses_launcher_script_dispatch(monkeypatch, tmp_path):
     """打包模式下不能把 browser_login.py 当作普通脚本参数直接传给主 exe。"""
     script_path = tmp_path / "scripts" / "browser_login.py"

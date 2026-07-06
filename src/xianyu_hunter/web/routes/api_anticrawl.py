@@ -304,6 +304,43 @@ async def _try_refresh_m5tk_from_browser(store) -> bool:
         return False
 
 
+def _check_browser_key_cookies_expiry(cookies: list[dict]) -> bool:
+    """检查浏览器内存中关键 cookie（identity + session 层）的 expires 是否过期
+
+    返回 True 表示通过，False 表示有关键 cookie 已过期。
+    为什么独立：原 _browser_cookies_fallback 中 for + if + if(三重 and) 嵌套
+    是认知复杂度的主要来源。
+    """
+    identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
+    key_cookie_names = identity_cookies | LAYER_DEFINITIONS[CookieLayer.SESSION].cookies
+    now = time.time()
+    for c in cookies:
+        if c.get("name") not in key_cookie_names:
+            continue
+        expires = c.get("expires", -1)
+        if expires and expires > 0 and expires < now:
+            logger.warning(
+                "cookie_checker(兜底): 浏览器内存关键 Cookie 已过期: %s (expires=%d, now=%d)",
+                c.get("name"), expires, now,
+            )
+            return False
+    return True
+
+
+def _clear_collector_sticky_flag(container) -> None:
+    """浏览器内存 token 实际有效时清除 collector 的 last_session_invalid 粘性标志
+
+    为什么与 JSON 路径一致：last_session_invalid 可能被 DOM 回退重置前触发，
+    浏览器内存 token 有效说明会话实际可用，应清除标志避免反复失效。
+    """
+    try:
+        if container.collector and getattr(container.collector, 'last_session_invalid', False):
+            logger.info("cookie_checker(兜底): last_session_invalid=True 但浏览器内存 token 有效，清除粘性标志")
+            container.collector.last_session_invalid = False
+    except Exception:
+        pass
+
+
 async def _browser_cookies_fallback(orch) -> bool:
     """JSON 判定 cookie 无效时的浏览器内存兜底复核
 
@@ -328,13 +365,8 @@ async def _browser_cookies_fallback(orch) -> bool:
 
         names = {c.get("name", "") for c in cookies}
 
-        # 1. _m_h5_tk 必须有效
-        has_token = any(
-            c.get("name") == "_m_h5_tk" and c.get("value")
-            and not is_m5tk_expired(c.get("value", ""))
-            for c in cookies
-        )
-        if not has_token:
+        # 1. _m_h5_tk 必须有效（复用 _has_valid_m5tk_in_list 保持判定一致）
+        if not _has_valid_m5tk_in_list(cookies):
             logger.debug("cookie_checker(兜底): 浏览器内存 _m_h5_tk 缺失/过期")
             return False
 
@@ -345,28 +377,11 @@ async def _browser_cookies_fallback(orch) -> bool:
             return False
 
         # 3. 关键 cookie 的 expires 未过期
-        key_cookie_names = identity_cookies | LAYER_DEFINITIONS[CookieLayer.SESSION].cookies
-        now = time.time()
-        for c in cookies:
-            if c.get("name") not in key_cookie_names:
-                continue
-            expires = c.get("expires", -1)
-            if expires and expires > 0 and expires < now:
-                logger.warning(
-                    "cookie_checker(兜底): 浏览器内存关键 Cookie 已过期: %s (expires=%d, now=%d)",
-                    c.get("name"), expires, now,
-                )
-                return False
+        if not _check_browser_key_cookies_expiry(cookies):
+            return False
 
         # 4. collector 会话失效标志：浏览器内存 token 实际有效时清除粘性标志
-        # 为什么与 JSON 路径一致：last_session_invalid 可能被 DOM 回退重置前触发，
-        # 浏览器内存 token 有效说明会话实际可用，应清除标志避免反复失效
-        try:
-            if container.collector and getattr(container.collector, 'last_session_invalid', False):
-                logger.info("cookie_checker(兜底): last_session_invalid=True 但浏览器内存 token 有效，清除粘性标志")
-                container.collector.last_session_invalid = False
-        except Exception:
-            pass
+        _clear_collector_sticky_flag(container)
 
         logger.info("cookie_checker: JSON 判定无效，但浏览器内存 cookie 有效（兜底通过）")
         return True
@@ -731,6 +746,48 @@ def import_from_browser_preview(request: dict = Body(...)) -> JSONResponse:
     return JSONResponse(content=result)
 
 
+def _merge_existing_with_incoming(
+    existing_cookies: list[dict], incoming_cookies: dict[str, str],
+) -> list[dict]:
+    """合并现有 cookie 列表与传入的 cookie 覆盖项
+
+    为什么独立：原 update_cookies 中两个 for 循环 + 嵌套 if 推高认知复杂度。
+    合并规则：同名覆盖 value，新增的用默认元信息（.goofish.com 域）。
+    """
+    # name => cookie_obj 映射（同名取第一条，丢弃其他域名的重复项）
+    existing_map: dict[str, dict] = {}
+    for c in existing_cookies:
+        name = c.get("name", "")
+        if name and name not in existing_map:
+            existing_map[name] = dict(c)
+
+    # 传入的 cookie 覆盖同名 value，新增的用默认元信息
+    for name, value in incoming_cookies.items():
+        if name in existing_map:
+            existing_map[name]["value"] = value
+        else:
+            existing_map[name] = {
+                "name": name,
+                "value": value,
+                "domain": ".goofish.com",
+                "path": "/",
+                "expires": -1,
+            }
+    return list(existing_map.values())
+
+
+def _build_cookie_map_from_fresh(fresh_cookies: list[dict]) -> dict[str, str]:
+    """从最新 JSON cookie 列表构造 name->value 映射（仅含有效 name/value 的条目）
+
+    为什么独立：原 update_cookies 中字典推导式内的多重 and 条件贡献认知复杂度。
+    """
+    return {
+        c.get("name", ""): c.get("value", "")
+        for c in fresh_cookies
+        if c.get("name") and c.get("value")
+    }
+
+
 @router.post("/cookies/update")
 async def update_cookies(request: Request, body: dict = Body(...)) -> JSONResponse:
     """分层更新 Cookie（合并写入，不丢失已有 Cookie）
@@ -766,27 +823,8 @@ async def update_cookies(request: Request, body: dict = Body(...)) -> JSONRespon
     existing_data = cookie_store._read_json(cookie_user_id)
     existing_cookies: list[dict] = existing_data.get("cookies", []) if existing_data else []
 
-    # name => cookie_obj 映射（同名取第一条，丢弃其他域名的重复项）
-    existing_map: dict[str, dict] = {}
-    for c in existing_cookies:
-        name = c.get("name", "")
-        if name and name not in existing_map:
-            existing_map[name] = dict(c)
-
-    # 2. 合并：传入的 cookie 覆盖同名 value，新增的用默认元信息
-    for name, value in cookies.items():
-        if name in existing_map:
-            existing_map[name]["value"] = value
-        else:
-            existing_map[name] = {
-                "name": name,
-                "value": value,
-                "domain": ".goofish.com",
-                "path": "/",
-                "expires": -1,
-            }
-
-    merged_list = list(existing_map.values())
+    # 2. 合并现有 cookie 与传入 cookie
+    merged_list = _merge_existing_with_incoming(existing_cookies, cookies)
 
     # 3. 一次性写入合并后的完整列表（export_cookies 内部会过滤测试数据）
     success = cookie_store.export_cookies(merged_list, method="orchestrator_api", user_id=cookie_user_id)
@@ -804,11 +842,7 @@ async def update_cookies(request: Request, body: dict = Body(...)) -> JSONRespon
     # 实际内容不一致（如 unb=123456 被过滤但层状态仍标记 identity 有效）
     fresh_data = cookie_store._read_json(cookie_user_id)
     fresh_cookies = fresh_data.get("cookies", []) if fresh_data else []
-    cookie_map = {
-        c.get("name", ""): c.get("value", "")
-        for c in fresh_cookies
-        if c.get("name") and c.get("value")
-    }
+    cookie_map = _build_cookie_map_from_fresh(fresh_cookies)
     orch.cookie_rotator.sync_state_from_cookies(cookie_map)
 
     written = len(fresh_cookies)
@@ -901,6 +935,45 @@ def _sync_layers_from_json(orch, user_id: str = "default") -> None:
         logger.warning("get_cookie_layers JSON 同步失败: %s", e)
 
 
+async def _sync_invalid_layers_from_browser(
+    orch, still_invalid_layers: set,
+) -> None:
+    """从浏览器内存读取 cookie 并同步 still_invalid_layers 中各层的状态
+
+    为什么独立：原 _sync_layers_from_browser 中 try + 多层 if 嵌套（4 层）
+    是认知复杂度主要来源。拆分后主函数只决定是否进入兜底。
+    """
+    from xianyu_hunter.web.deps import get_container
+    container = get_container()
+    if not container.browser or not container.browser._context:
+        return
+
+    # 从浏览器内存读取所有 goofish/taobao 域 cookie
+    browser_cookies = await container.browser.get_cookies(
+        ["goofish.com", "taobao.com"]
+    )
+    if not browser_cookies:
+        return
+
+    from xianyu_hunter.modules.cookie_rotator import LAYER_DEFINITIONS
+    needed_names: set[str] = set()
+    for layer in still_invalid_layers:
+        needed_names |= LAYER_DEFINITIONS[layer].cookies
+
+    # 构造 cookie_map（过滤过期 cookie）
+    browser_cookie_map = _filter_valid_cookies_for_sync(browser_cookies, needed_names)
+    if not browser_cookie_map:
+        return
+
+    orch.cookie_rotator.sync_state_from_cookies(browser_cookie_map)
+    # 回写浏览器内存中的关键 cookie 到 JSON，避免下次再兜底
+    _write_browser_cookies_to_json(browser_cookies, needed_names)
+    logger.info(
+        "浏览器内存兜底同步: 从浏览器读取 %d 个 cookie 同步层状态",
+        len(browser_cookie_map),
+    )
+
+
 async def _sync_layers_from_browser(orch) -> None:
     """第二步：浏览器内存兜底同步
 
@@ -916,29 +989,7 @@ async def _sync_layers_from_browser(orch) -> None:
             if not state.manual_invalidate and not state.valid
         }
         if still_invalid_layers:
-            from xianyu_hunter.web.deps import get_container
-            container = get_container()
-            if container.browser and container.browser._context:
-                # 从浏览器内存读取所有 goofish/taobao 域 cookie
-                browser_cookies = await container.browser.get_cookies(
-                    ["goofish.com", "taobao.com"]
-                )
-                if browser_cookies:
-                    from xianyu_hunter.modules.cookie_rotator import LAYER_DEFINITIONS
-                    needed_names: set[str] = set()
-                    for layer in still_invalid_layers:
-                        needed_names |= LAYER_DEFINITIONS[layer].cookies
-
-                    # 构造 cookie_map（过滤过期 cookie）
-                    browser_cookie_map = _filter_valid_cookies_for_sync(browser_cookies, needed_names)
-                    if browser_cookie_map:
-                        orch.cookie_rotator.sync_state_from_cookies(browser_cookie_map)
-                        # 回写浏览器内存中的关键 cookie 到 JSON，避免下次再兜底
-                        _write_browser_cookies_to_json(browser_cookies, needed_names)
-                        logger.info(
-                            "浏览器内存兜底同步: 从浏览器读取 %d 个 cookie 同步层状态",
-                            len(browser_cookie_map),
-                        )
+            await _sync_invalid_layers_from_browser(orch, still_invalid_layers)
     except Exception as e:
         logger.debug("get_cookie_layers 浏览器兜底同步失败: %s", e)
 

@@ -76,6 +76,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/help': '帮助文档',
   '/about': '关于',
   '/export': '数据导出',
+  '/notifications': '通知中心',
 }
 
 // Command Palette 可搜索的命令列表（扁平化所有页面导航项）
@@ -105,6 +106,7 @@ const COMMAND_ITEMS = [
   { key: '/help', label: '帮助文档', icon: <QuestionCircleOutlined /> },
   { key: '/about', label: '关于', icon: <InfoCircleOutlined /> },
   { key: '/export', label: '数据导出', icon: <CloudDownloadOutlined /> },
+  { key: '/notifications', label: '通知中心', icon: <BellOutlined /> },
 ]
 
 // g+X 全局快捷键映射
@@ -211,18 +213,23 @@ export default function MainLayout() {
     const MAX_RETRIES = 8
     const RETRY_INTERVAL = 15_000
 
+    // S2004 修复：原 .then 内联回调嵌在 setTimeout 内，叠加 useEffect→scheduleRetry→setTimeout→.then→if
+    // 共 5 层嵌套超阈值。提取为命名函数后，.then 仅传函数引用，if 脱离 setTimeout 调用链
+    // 闭包引用 scheduleRetry 安全：onRetryData 调用时 scheduleRetry 已定义（延迟执行）
+    const onRetryData = (data: AuthMe | null) => {
+      if (!data) return
+      // 终止条件：未登录 / 已拿到 nick / 已拿到 local_username（非 user_id 兜底）
+      const hasRealName = !!data.nick
+        || (!!data.local_username && data.local_username !== data.user_id)
+      if (!data.logged_in || hasRealName) return
+      scheduleRetry()
+    }
+
     const scheduleRetry = () => {
       if (cancelled || retryCount >= MAX_RETRIES) return
       retryTimer = setTimeout(() => {
         retryCount += 1
-        fetchUserInfo().then((data) => {
-          if (!data) return
-          // 终止条件：未登录 / 已拿到 nick / 已拿到 local_username（非 user_id 兜底）
-          const hasRealName = !!data.nick
-            || (!!data.local_username && data.local_username !== data.user_id)
-          if (!data.logged_in || hasRealName) return
-          scheduleRetry()
-        })
+        fetchUserInfo().then(onRetryData)
       }, RETRY_INTERVAL)
     }
     scheduleRetry()
@@ -270,7 +277,7 @@ export default function MainLayout() {
         const target = G_PREFIX_MAP[e.key]
         if (target) {
           e.preventDefault()
-          navigate(target)
+          openSheetWithNotification(target)
         }
         gPrefixRef.current = false
         if (gTimerRef.current) clearTimeout(gTimerRef.current)
@@ -559,7 +566,7 @@ function LayoutContent({
                 shape="circle"
                 size="small"
                 style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                onClick={() => navigate('/')}
+                onClick={() => openSheetWithNotification('/')}
               >
                 <span
                   style={{
@@ -600,7 +607,7 @@ function LayoutContent({
               />
             </Tooltip>
 
-            {/* 帮助文档入口：跳转到独立 /help 路由（不嵌套在 MainLayout 中） */}
+            {/* 帮助文档入口：在 SheetWorkspace 内打开 /help sheet，与其他菜单一致 */}
             <Tooltip title="帮助文档">
               <Button
                 type="text"
@@ -608,7 +615,7 @@ function LayoutContent({
                 size="small"
                 icon={<QuestionCircleOutlined />}
                 style={{ fontSize: 16, width: 28, height: 28 }}
-                onClick={() => navigate('/help')}
+                onClick={() => openSheetWithNotification('/help')}
               />
             </Tooltip>
 
@@ -620,7 +627,7 @@ function LayoutContent({
                 size="small"
                 icon={<InfoCircleOutlined />}
                 style={{ fontSize: 16, width: 28, height: 28 }}
-                onClick={() => navigate('/about')}
+                onClick={() => openSheetWithNotification('/about')}
               />
             </Tooltip>
 
@@ -760,7 +767,7 @@ function LayoutContent({
                 e.preventDefault()
                 setCmdActive((prev) => Math.max(prev - 1, 0))
               } else if (e.key === 'Enter' && filteredCommands[cmdActive]) {
-                navigate(filteredCommands[cmdActive].key)
+                openSheetWithNotification(filteredCommands[cmdActive].key)
                 setCmdOpen(false)
               } else if (e.key === 'Escape') {
                 setCmdOpen(false)
@@ -778,8 +785,8 @@ function LayoutContent({
             filteredCommands.map((item, idx) => (
               <div
                 key={item.key}
-                onClick={() => { navigate(item.key); setCmdOpen(false) }}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { navigate(item.key); setCmdOpen(false) } }}
+                onClick={() => { openSheetWithNotification(item.key); setCmdOpen(false) }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { openSheetWithNotification(item.key); setCmdOpen(false) } }}
                 role="button"
                 tabIndex={0}
                 style={{

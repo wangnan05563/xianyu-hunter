@@ -210,84 +210,113 @@ class Buyer:
 
         返回: dict (含 id / order_no / price / status 等字段，可直接 upsert)
         Raises: ButtonNotFoundError / OutOfStockError / PriceMismatchError
+
+        重构说明：主流程下沉到 _execute_buy_flow，本方法仅负责 page 生命周期管理，
+        降低认知复杂度（S3776）。
         """
         own_page = page is None
         if own_page:
-            page = await self.browser.new_page()  # type: ignore[attr-defined]
-            if hasattr(self.browser, "register_external_page"):
-                self.browser.register_external_page(page)  # type: ignore[attr-defined]
-
+            page = await self._create_owned_page()
         try:
-            # 1. 导航到详情页
-            logger.info(f"[Buyer] 步骤1/4 导航详情页 item={item_id}")
-            await self._navigate(page, item_id)  # type: ignore[arg-type]
-            try:
-                logger.info(f"[Buyer] detail navigation completed item={item_id} url={page.url}")
-            except Exception:
-                pass
-
-            # 为什么在此处检测：导航完成页面已渲染，此时检测最准；
-            # 已售商品不应继续进入抢单流程，避免无效点击
-            if await self._detect_sold(page):  # type: ignore[arg-type]
-                self._mark_item_sold(item_id)
-                raise ItemSoldError("商品已售出")
-
-            # 2. 点击"立即购买"
-            logger.info(f"[Buyer] 步骤2/4 点击立即购买 item={item_id}")
-            clicked = await self._click_buy_now(page, item_id=item_id)  # type: ignore[arg-type]
-            if not clicked:
-                raise ButtonNotFoundError("未找到「立即购买」按钮")
-
-            # 2.5 等待页面跳转完成：点击「立即购买」后会跳转到订单确认页
-            # 为什么需要显式等待：不等待直接查找「提交订单」按钮会导致竞态失败
-            # 未登录时会跳转到登录页，需检测并给出友好错误
-            logger.info(f"[Buyer] 步骤2.5/4 等待订单确认页 item={item_id}")
-            await self._wait_for_order_page(page, item_id=item_id)  # type: ignore[arg-type]
-
-            # 3. 等待并点击"提交订单/确认购买"
-            logger.info(f"[Buyer] 步骤3/4 点击提交订单/确认购买 item={item_id}")
-            confirmed = await self._click_submit_order(page)  # type: ignore[arg-type]
-            if not confirmed:
-                # 为什么需要回退：部分商品渲染时机不同，阶段一可能未命中
-                if await self._detect_sold(page):  # type: ignore[arg-type]
-                    self._mark_item_sold(item_id)
-                    raise ItemSoldError("商品已售出")
-                raise ButtonNotFoundError("未找到「提交订单/确认购买」按钮")
-
-            # 4. 提取订单号 + 实际价格
-            logger.info(f"[Buyer] 步骤4/4 提取订单号 item={item_id}")
-            order_no = await self._extract_order_no(page)  # type: ignore[arg-type]
-            actual_price = await self._extract_actual_price(page)  # type: ignore[arg-type]
-            if actual_price is None:
-                # 拿不到价格时跳过校验（保守处理）
-                logger.warning("[Buyer] 未能提取实际价格，跳过价格校验")
-            elif abs(actual_price - expected_price) / max(expected_price, 0.01) > self.config.price_tolerance:
-                raise PriceMismatchError(
-                    f"价格偏差过大: 预期 ¥{expected_price} 实际 ¥{actual_price}"
-                )
-
-            return {
-                # 订单 ID 时间戳与 created_at 统一使用 UTC，避免时区偏差
-                "id": f"{item_id}:{_utcnow().strftime('%Y%m%d%H%M%S')}:{uuid.uuid4().hex[:8]}",
-                "item_id": item_id,
-                "order_no": order_no or "",
-                "price": actual_price or expected_price,
-                "status": OrderStatus.PENDING_PAY.value,
-                "screenshot": "",
-                "error": "",
-                "created_at": _utcnow(),
-            }
+            return await self._execute_buy_flow(page, item_id, expected_price)
         finally:
             if own_page and page is not None:
-                if hasattr(self.browser, "unregister_external_page"):
-                    try:
-                        self.browser.unregister_external_page(page)  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
-                try:
-                    await page.close()
-                except Exception:
-                    pass
+                await self._close_owned_page(page)
+
+    async def _create_owned_page(self) -> Page:
+        """创建并注册为外部 page，防止被 close_all_pages 误关"""
+        page = await self.browser.new_page()  # type: ignore[attr-defined]
+        if hasattr(self.browser, "register_external_page"):
+            self.browser.register_external_page(page)  # type: ignore[attr-defined]
+        return page
+
+    async def _close_owned_page(self, page: Page) -> None:
+        """注销并关闭自有 page：close 失败不阻塞主流程"""
+        if hasattr(self.browser, "unregister_external_page"):
+            try:
+                self.browser.unregister_external_page(page)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        try:
+            await page.close()
+        except Exception:
+            pass
+
+    async def _execute_buy_flow(
+        self, page: Page, item_id: str, expected_price: float
+    ) -> dict:
+        """落单主流程：导航→点击立即购买→点击提交→提取订单号→价格校验"""
+        # 1. 导航到详情页
+        logger.info(f"[Buyer] 步骤1/4 导航详情页 item={item_id}")
+        await self._navigate(page, item_id)
+        try:
+            logger.info(f"[Buyer] detail navigation completed item={item_id} url={page.url}")
+        except Exception:
+            pass
+
+        # 为什么在此处检测：导航完成页面已渲染，此时检测最准；
+        # 已售商品不应继续进入抢单流程，避免无效点击
+        if await self._detect_sold(page):
+            self._mark_item_sold(item_id)
+            raise ItemSoldError("商品已售出")
+
+        # 2. 点击"立即购买"
+        logger.info(f"[Buyer] 步骤2/4 点击立即购买 item={item_id}")
+        clicked = await self._click_buy_now(page, item_id=item_id)
+        if not clicked:
+            raise ButtonNotFoundError("未找到「立即购买」按钮")
+
+        # 2.5 等待页面跳转完成：点击「立即购买」后会跳转到订单确认页
+        # 为什么需要显式等待：不等待直接查找「提交订单」按钮会导致竞态失败
+        # 未登录时会跳转到登录页，需检测并给出友好错误
+        logger.info(f"[Buyer] 步骤2.5/4 等待订单确认页 item={item_id}")
+        await self._wait_for_order_page(page, item_id=item_id)
+
+        # 3. 等待并点击"提交订单/确认购买"
+        logger.info(f"[Buyer] 步骤3/4 点击提交订单/确认购买 item={item_id}")
+        confirmed = await self._click_submit_order(page)
+        if not confirmed:
+            # 为什么需要回退：部分商品渲染时机不同，阶段一可能未命中
+            if await self._detect_sold(page):
+                self._mark_item_sold(item_id)
+                raise ItemSoldError("商品已售出")
+            raise ButtonNotFoundError("未找到「提交订单/确认购买」按钮")
+
+        # 4. 提取订单号 + 实际价格
+        logger.info(f"[Buyer] 步骤4/4 提取订单号 item={item_id}")
+        order_no = await self._extract_order_no(page)
+        actual_price = await self._extract_actual_price(page)
+        self._validate_price_or_raise(actual_price, expected_price)
+        return self._build_order_dict(item_id, order_no, actual_price, expected_price)
+
+    def _validate_price_or_raise(
+        self, actual_price: float | None, expected_price: float
+    ) -> None:
+        """价格校验：偏差超容差抛 PriceMismatchError；无价格时跳过（保守处理）"""
+        if actual_price is None:
+            logger.warning("[Buyer] 未能提取实际价格，跳过价格校验")
+            return
+        if abs(actual_price - expected_price) / max(expected_price, 0.01) > self.config.price_tolerance:
+            raise PriceMismatchError(
+                f"价格偏差过大: 预期 ¥{expected_price} 实际 ¥{actual_price}"
+            )
+
+    @staticmethod
+    def _build_order_dict(
+        item_id: str, order_no: str | None, actual_price: float | None, expected_price: float
+    ) -> dict:
+        """构建订单 dict，价格缺失时回退到期望价格"""
+        return {
+            # 订单 ID 时间戳与 created_at 统一使用 UTC，避免时区偏差
+            "id": f"{item_id}:{_utcnow().strftime('%Y%m%d%H%M%S')}:{uuid.uuid4().hex[:8]}",
+            "item_id": item_id,
+            "order_no": order_no or "",
+            "price": actual_price or expected_price,
+            "status": OrderStatus.PENDING_PAY.value,
+            "screenshot": "",
+            "error": "",
+            "created_at": _utcnow(),
+        }
 
     async def _navigate(self, page: Page, item_id: str) -> None:
         url = build_item_url(item_id)
@@ -328,19 +357,37 @@ class Buyer:
         闲鱼的订单确认页是 SPA 动态加载，networkidle 可能过早返回。
         采用渐进式等待：先等 networkidle，再轮询检测「提交订单/确认购买」按钮或登录页特征。
         检测到登录页时抛出 BuyerError，给出比「未找到提交订单按钮」更准确的错误信息。
+
+        重构说明：networkidle 等待、轮询、超时分支下沉到独立私有方法（S3776）。
         """
         wait_seconds = timeout if timeout is not None else self.config.confirm_button_timeout
 
         if wait_for_networkidle:
-            try:
-                await page.wait_for_load_state(
-                    "networkidle",
-                    timeout=max(500, min(int(wait_seconds * 1000), 8000)),
-                )
-            except PlaywrightTimeout:
-                # networkidle 超时不致命，继续轮询检测
-                pass
+            await self._wait_networkidle_or_pass(page, wait_seconds)
 
+        if await self._poll_order_page_appearance(page, item_id, wait_seconds):
+            return True
+
+        return await self._handle_order_page_timeout(page, item_id, raise_on_timeout)
+
+    async def _wait_networkidle_or_pass(self, page: Page, wait_seconds: float) -> None:
+        """等待 networkidle，超时不致命（继续走轮询检测）"""
+        try:
+            await page.wait_for_load_state(
+                "networkidle",
+                timeout=max(500, min(int(wait_seconds * 1000), 8000)),
+            )
+        except PlaywrightTimeout:
+            pass
+
+    async def _poll_order_page_appearance(
+        self, page: Page, item_id: str, wait_seconds: float
+    ) -> bool:
+        """轮询检测订单确认页是否出现，检测到登录页立即抛 BuyerError
+
+        检测顺序：登录页 → 提交订单按钮 → 订单页 URL，先检测登录页可在毫秒级返回准确错误，
+        避免等待按钮超时浪费 5 秒。
+        """
         deadline = time.monotonic() + max(wait_seconds, 0.1)
         while time.monotonic() < deadline:
             current_url = page.url or ""
@@ -357,7 +404,12 @@ class Buyer:
             if self._is_order_page_url(current_url):
                 return True
             await asyncio.sleep(min(0.5, max(0.05, deadline - time.monotonic())))
+        return False
 
+    async def _handle_order_page_timeout(
+        self, page: Page, item_id: str, raise_on_timeout: bool
+    ) -> bool:
+        """轮询超时后的处理：根据当前 URL/按钮状态决定返回值或抛异常"""
         current_url = page.url or ""
         is_order_page = self._is_order_page_url(current_url)
         still_on_detail = self._is_item_detail_url(current_url, item_id)
@@ -466,51 +518,71 @@ class Buyer:
 
         闲鱼部分商品只有「我想要」按钮（需聊天协商），无「立即购买」按钮。
         检测到此情况时抛出 BuyerError，给出比「未找到立即购买按钮」更友好的提示。
+
+        重构说明：单轮尝试逻辑下沉到 _try_one_buy_now_attempt（S3776）。
         """
         clicked_any = False
         for attempt in range(1, self.config.click_retry_times + 1):
             # 登录页跳转检测：每轮重试开始时检查 URL
             await self._check_login_redirect(page)
             try:
-                # 先判断是否下架
-                if await self._is_out_of_stock(page):
-                    raise OutOfStockError("商品已下架/无库存")
-
-                sel_clicked, sel_reached = await self._try_click_buy_now_by_selectors(page, item_id)
-                if sel_reached:
+                should_return, clicked_any = await self._try_one_buy_now_attempt(
+                    page, item_id, attempt, clicked_any
+                )
+                if should_return:
                     return True
-                if sel_clicked:
-                    clicked_any = True
-
-                # Playwright 的 text selector 仍可能命中外层容器；再用 get_by_text 精确点文字中心。
-                txt_clicked, txt_reached = await self._try_click_buy_now_by_get_by_text(page, item_id)
-                if txt_reached:
-                    return True
-                if txt_clicked:
-                    clicked_any = True
-
-                if clicked_any:
-                    # 已经点到过候选按钮，后续由步骤 2.5 给出「未进入确认页」的准确错误。
-                    return True
-                # 兼容极旧版本：如果按钮点击立即同步跳转但短轮询没捕获，也继续交给步骤 2.5。
-                if await self._has_submit_order_button(page):
-                    return True
-                # 两轮主备都未命中，检测是否为「我想要」类型商品
-                if await self._has_want_button(page):
-                    raise BuyerError(
-                        "该商品不支持直接购买（仅有「我想要」按钮），需手动联系卖家"
-                    )
                 # 本轮没点中，间隔后重试
                 if attempt < self.config.click_retry_times:
                     await asyncio.sleep(self.config.click_retry_interval)
-            # 为什么用 except+raise 而非去掉整个 except：内层 for 循环有
-            # except PlaywrightTimeout / except Exception 分支，若去掉此 except，
-            # BuyerError 会被内层 except Exception 捕获并 continue，导致抢单错误被吞掉
+            # 为什么用 except+raise 而非去掉整个 except：内层 _try_one_buy_now_attempt
+            # 调用的子方法有 except Exception 分支，若去掉此 except，BuyerError 会被
+            # 内层 except Exception 捕获并 continue，导致抢单错误被吞掉
             except BuyerError:
                 # 重新抛出：避免被内层 except Exception 捕获并 continue，导致抢单错误被吞掉
                 logger.debug("[Buyer] BuyerError 重新抛出，绕过内层 except Exception")
                 raise
         return False
+
+    async def _try_one_buy_now_attempt(
+        self, page: Page, item_id: str, attempt: int, clicked_any: bool
+    ) -> tuple[bool, bool]:
+        """单轮尝试点击立即购买
+
+        返回 (should_return_true, new_clicked_any)：
+        - should_return_true=True 表示已成功进入订单页或已点到候选按钮，调用方应返回 True
+        - new_clicked_any 是本轮更新后的 clicked_any 状态
+
+        Raises: OutOfStockError / BuyerError（调用方需重新抛出，绕过内层 except Exception）
+        """
+        # 先判断是否下架
+        if await self._is_out_of_stock(page):
+            raise OutOfStockError("商品已下架/无库存")
+
+        sel_clicked, sel_reached = await self._try_click_buy_now_by_selectors(page, item_id)
+        if sel_reached:
+            return True, clicked_any
+        if sel_clicked:
+            clicked_any = True
+
+        # Playwright 的 text selector 仍可能命中外层容器；再用 get_by_text 精确点文字中心。
+        txt_clicked, txt_reached = await self._try_click_buy_now_by_get_by_text(page, item_id)
+        if txt_reached:
+            return True, clicked_any
+        if txt_clicked:
+            clicked_any = True
+
+        if clicked_any:
+            # 已经点到过候选按钮，后续由步骤 2.5 给出「未进入确认页」的准确错误。
+            return True, clicked_any
+        # 兼容极旧版本：如果按钮点击立即同步跳转但短轮询没捕获，也继续交给步骤 2.5。
+        if await self._has_submit_order_button(page):
+            return True, clicked_any
+        # 两轮主备都未命中，检测是否为「我想要」类型商品
+        if await self._has_want_button(page):
+            raise BuyerError(
+                "该商品不支持直接购买（仅有「我想要」按钮），需手动联系卖家"
+            )
+        return False, clicked_any
 
     def _is_login_url(self, url: str) -> bool:
         lower = (url or "").lower()
@@ -748,43 +820,25 @@ class Buyer:
         return False
 
     async def _click_submit_order(self, page: Page) -> bool:
-        """等待并点击"提交订单/确认购买"按钮（多文案兜底）。"""
+        """等待并点击"提交订单/确认购买"按钮（多文案兜底）。
+
+        重构说明：selector 遍历和文本坐标遍历下沉到独立私有方法（S3776）。
+        """
         deadline = time.monotonic() + self.config.confirm_button_timeout
         last_error: Exception | None = None
 
         while time.monotonic() < deadline:
-            for selector in self._submit_order_candidates():
-                try:
-                    loc = page.locator(selector).first
-                    if await self._locator_count(loc, selector, timeout=0.5) <= 0:
-                        continue
-                    await self._locator_wait_visible(loc, selector, timeout=0.5)
-                    await self._locator_click(loc, selector, timeout=1.5)
-                    logger.info(f"[Buyer] 已点击订单确认按钮 selector={selector}")
-                    return True
-                except PlaywrightTimeout as e:
-                    last_error = e
-                    continue
-                except Exception as e:  # noqa: BLE001
-                    last_error = e
-                    continue
+            clicked, err = await self._try_submit_by_selectors(page)
+            if clicked:
+                return True
+            if err is not None:
+                last_error = err
 
-            current_url = page.url or ""
-            if self._is_order_page_url(current_url):
-                for text in self._submit_order_text_candidates():
-                    try:
-                        clicked = await self._click_visible_text_by_coordinates(
-                            page,
-                            text,
-                            log_missing=False,
-                        )
-                        if clicked:
-                            logger.info(f"[Buyer] 已通过 DOM 坐标点击订单确认按钮 text={text}")
-                            return True
-                    except Exception as e:  # noqa: BLE001
-                        last_error = e
-                        logger.debug(f"[Buyer] DOM 坐标点击订单确认按钮失败 text={text}: {e}")
-                        continue
+            clicked, err = await self._try_submit_by_text(page)
+            if clicked:
+                return True
+            if err is not None:
+                last_error = err
 
             await asyncio.sleep(0.2)
 
@@ -792,6 +846,59 @@ class Buyer:
             logger.debug(f"[Buyer] 点击订单确认按钮失败: {last_error}")
         await self._log_order_page_button_diagnostics(page)
         return False
+
+    async def _try_submit_by_selectors(
+        self, page: Page
+    ) -> tuple[bool, Exception | None]:
+        """遍历 selector 候选点击订单确认按钮
+
+        返回 (clicked, last_error)：clicked=True 表示已点击成功；
+        last_error 为本轮最后一个 selector 失败的异常（用于上层日志）。
+        """
+        last_error: Exception | None = None
+        for selector in self._submit_order_candidates():
+            try:
+                loc = page.locator(selector).first
+                if await self._locator_count(loc, selector, timeout=0.5) <= 0:
+                    continue
+                await self._locator_wait_visible(loc, selector, timeout=0.5)
+                await self._locator_click(loc, selector, timeout=1.5)
+                logger.info(f"[Buyer] 已点击订单确认按钮 selector={selector}")
+                return True, None
+            except PlaywrightTimeout as e:
+                last_error = e
+                continue
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                continue
+        return False, last_error
+
+    async def _try_submit_by_text(
+        self, page: Page
+    ) -> tuple[bool, Exception | None]:
+        """通过 DOM 坐标点击订单确认按钮文本（仅在订单页 URL 下尝试）
+
+        返回 (clicked, last_error)：clicked=True 表示已点击成功。
+        """
+        current_url = page.url or ""
+        if not self._is_order_page_url(current_url):
+            return False, None
+        last_error: Exception | None = None
+        for text in self._submit_order_text_candidates():
+            try:
+                clicked = await self._click_visible_text_by_coordinates(
+                    page,
+                    text,
+                    log_missing=False,
+                )
+                if clicked:
+                    logger.info(f"[Buyer] 已通过 DOM 坐标点击订单确认按钮 text={text}")
+                    return True, None
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                logger.debug(f"[Buyer] DOM 坐标点击订单确认按钮失败 text={text}: {e}")
+                continue
+        return False, last_error
 
     async def _log_order_page_button_diagnostics(self, page: Page) -> None:
         """记录订单页可见按钮/文本摘要，便于定位闲鱼改版文案。"""

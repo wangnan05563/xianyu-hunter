@@ -350,6 +350,45 @@ def _normalize_live_result(result: dict) -> dict:
     return out
 
 
+def _build_list_result_items(
+    items: list[dict], container: Container, user_id: str | None,
+) -> list[dict]:
+    """构造 list_links 响应的 result_items：id→link_id 映射 + display 字段校正
+
+    为什么独立：循环体内含 if isinstance + normalize_display_fields 调用，
+    提取后 list_links 主函数变为线性流程。
+    """
+    # 统一字段名为 link_id（前端接口定义用 link_id，后端 DB 主键为 id）
+    # 同步对每行 display 做字段语义校正：DB 中可能存了错位的 seller_nick/region/seller_credit，
+    # 校正后传给前端，避免"卖家"列显示地区、"地区"列显示昵称等视觉错位
+    result_items = []
+    for r in _enrich_with_item_data(items, container, user_id=user_id):
+        r["link_id"] = r.pop("id", 0)  # id → link_id 映射，确保前端 rowKey/delete 正常工作
+        display = r.get("display")
+        if isinstance(display, dict):
+            corrected_display, _ = normalize_display_fields(display)
+            r["display"] = corrected_display
+        result_items.append(r)
+    return result_items
+
+
+def _log_list_links_performance(
+    task_id: str, type: str | None, limit: int, offset: int,
+    result_count: int, elapsed_ms: float,
+) -> None:
+    """记录 list_links 端到端耗时（>200ms 告警，覆盖 DB + enrich + 序列化全链路）"""
+    if elapsed_ms > 200:
+        logger.warning(
+            "list_links 慢响应: task={}, type={}, limit={}, offset={}, items={}, elapsed={:.1f}ms",
+            task_id, type, limit, offset, result_count, elapsed_ms,
+        )
+    else:
+        logger.debug(
+            "list_links: task={}, type={}, items={}, elapsed={:.1f}ms",
+            task_id, type, result_count, elapsed_ms,
+        )
+
+
 @router.get("/{task_id}/links")
 def list_links(
     task_id: str,
@@ -397,30 +436,11 @@ def list_links(
     )
     total_for_type = counts.get(type, len(items)) if type else counts.get("total", len(items))
 
-    # 统一字段名为 link_id（前端接口定义用 link_id，后端 DB 主键为 id）
-    # 同步对每行 display 做字段语义校正：DB 中可能存了错位的 seller_nick/region/seller_credit，
-    # 校正后传给前端，避免"卖家"列显示地区、"地区"列显示昵称等视觉错位
-    result_items = []
-    for r in _enrich_with_item_data(items, container, user_id=user_id):
-        r["link_id"] = r.pop("id", 0)  # id → link_id 映射，确保前端 rowKey/delete 正常工作
-        display = r.get("display")
-        if isinstance(display, dict):
-            corrected_display, _ = normalize_display_fields(display)
-            r["display"] = corrected_display
-        result_items.append(r)
+    result_items = _build_list_result_items(items, container, user_id)
 
-    # 性能埋点：端到端耗时记录（>200ms 告警，覆盖 DB + enrich + 序列化全链路）
+    # 性能埋点：端到端耗时记录
     _elapsed_ms = (time.monotonic() - _list_start) * 1000
-    if _elapsed_ms > 200:
-        logger.warning(
-            "list_links 慢响应: task={}, type={}, limit={}, offset={}, items={}, elapsed={:.1f}ms",
-            task_id, type, limit, offset, len(result_items), _elapsed_ms,
-        )
-    else:
-        logger.debug(
-            "list_links: task={}, type={}, items={}, elapsed={:.1f}ms",
-            task_id, type, len(result_items), _elapsed_ms,
-        )
+    _log_list_links_performance(task_id, type, limit, offset, len(result_items), _elapsed_ms)
 
     return {
         "items": result_items,
@@ -610,6 +630,92 @@ def _raise_search_error(err_msg: str) -> None:
     raise HTTPException(status_code=502, detail=f"闲鱼搜索失败: {err_msg}")
 
 
+def _load_refresh_search_config() -> tuple[str, str]:
+    """读取全局搜索配置的排序方式和地区过滤，与 Worker 保持一致
+
+    返回 (sort_type, regions)，配置读取失败时返回默认值。
+    """
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        _search_cfg = get_config().search
+        return _search_cfg.sort_type, _search_cfg.regions
+    except Exception:
+        return "default", ""
+
+
+async def _execute_refresh_search(
+    container: Container, task_id: str, keyword: str,
+    task_search_filters: list, sort_type: str, regions: str,
+) -> list[dict]:
+    """使用互斥锁执行 refresh 搜索，成功时返回搜索结果列表
+
+    为什么独立：原 refresh_links 中搜索逻辑含 3 层嵌套 try/except
+    （外层 except HTTPException + except Exception + async with 内层 try/except），
+    提取后主函数变为线性流程。
+    """
+    # 不做 is_alive() 预检——直接尝试搜索，失败时返回明确错误
+    try:
+        async with container.browser_lock:
+            try:
+                # skip_lock=True：外层已持有 browser_lock，search 内部不再获取，避免死锁
+                return await container.collector.search(
+                    keyword, max_pages=2, skip_lock=True,
+                    search_filters=task_search_filters,
+                    sort_type=sort_type, regions=regions,
+                )
+            except Exception as e:
+                logger.exception("refresh_links 搜索失败 task={}: {}", task_id, e)
+                _raise_search_error(str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("refresh_links 未预期异常 task={}: {}", task_id, e)
+        raise HTTPException(status_code=502, detail=f"刷新搜索异常: {str(e)}")
+
+
+def _build_refresh_items_data(items: list) -> list[dict]:
+    """从搜索结果构造 batch_upsert_item_task_links 所需的 items_data
+
+    为什么独立：12 个字段映射的列表推导提取后，refresh_links 主函数
+    不再混杂数据构造和业务编排，可读性更好。
+    """
+    return [
+        {
+            "item_id": item.id,
+            "title": item.title,
+            "price": item.price,
+            "thumb_url": item.thumb_url,
+            "brand": getattr(item, "brand", None) or "",
+            "seller_id": getattr(item, "seller_id", None) or "",
+            # 修复：之前漏写 seller_nick，导致 list_links 从 items 表回退到 seller_id 展示
+            "seller_nick": getattr(item, "seller_nick", None) or "",
+            "region": getattr(item, "region", None),
+            "publish_time": getattr(item, "publish_time", None),
+            "want_cnt": getattr(item, "want_cnt", None),
+            "view_cnt": getattr(item, "view_cnt", None),
+            "is_sold": getattr(item, "is_sold", False),
+        }
+        for item in items
+    ]
+
+
+def _save_refresh_results(container: Container, task_id: str, items: list) -> int:
+    """批量写入搜索结果到 task_links，失败时返回 0
+
+    为什么独立：写入含 try/except + 12 字段 items_data 构造，
+    提取后 refresh_links 主函数的搜索→写入→返回三段式更清晰。
+    """
+    # 批量写入：将 N 次独立事务合并为 1 次，减少 SQLite fsync 开销
+    items_data = _build_refresh_items_data(items)
+    try:
+        return container.repo.batch_upsert_item_task_links(
+            task_id=task_id, items_data=items_data, source="auto"
+        )
+    except Exception as e:
+        logger.warning("批量写入关联失败: {}", e)
+        return 0
+
+
 @router.post("/{task_id}/links/refresh")
 async def refresh_links(
     task_id: str,
@@ -645,67 +751,16 @@ async def refresh_links(
 
     # 读取任务筛选标签，传递给搜索 URL（如个人闲置、包邮等）
     task_search_filters = task.get("search_filters") or []
-    # 读取全局搜索配置的排序方式和地区过滤，与 Worker 保持一致
-    try:
-        from xianyu_hunter.infra.yaml_config import get_config
-        _search_cfg = get_config().search
-        _search_sort_type = _search_cfg.sort_type
-        _search_regions = _search_cfg.regions
-    except Exception:
-        _search_sort_type = "default"
-        _search_regions = ""
+    sort_type, regions = _load_refresh_search_config()
 
     # 清除该任务旧的 auto 来源关联（manual 来源保留）
     container.repo.delete_task_links_by_task(task_id, source="auto")
 
-    # 使用互斥锁防止 Worker 和 refresh 端点并发操作浏览器
-    # 不做 is_alive() 预检——直接尝试搜索，失败时返回明确错误
-    items: list[dict] = []
-    try:
-        async with container.browser_lock:
-            try:
-                # skip_lock=True：外层已持有 browser_lock，search 内部不再获取，避免死锁
-                items = await container.collector.search(
-                    keyword, max_pages=2, skip_lock=True,
-                    search_filters=task_search_filters,
-                    sort_type=_search_sort_type, regions=_search_regions,
-                )
-            except Exception as e:
-                logger.exception("refresh_links 搜索失败 task={}: {}", task_id, e)
-                _raise_search_error(str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("refresh_links 未预期异常 task={}: {}", task_id, e)
-        raise HTTPException(status_code=502, detail=f"刷新搜索异常: {str(e)}")
+    items = await _execute_refresh_search(
+        container, task_id, keyword, task_search_filters, sort_type, regions,
+    )
 
-    # 写入新关联
-    # 批量写入：将 N 次独立事务合并为 1 次，减少 SQLite fsync 开销
-    items_data = [
-        {
-            "item_id": item.id,
-            "title": item.title,
-            "price": item.price,
-            "thumb_url": item.thumb_url,
-            "brand": getattr(item, "brand", None) or "",
-            "seller_id": getattr(item, "seller_id", None) or "",
-            # 修复：之前漏写 seller_nick，导致 list_links 从 items 表回退到 seller_id 展示
-            "seller_nick": getattr(item, "seller_nick", None) or "",
-            "region": getattr(item, "region", None),
-            "publish_time": getattr(item, "publish_time", None),
-            "want_cnt": getattr(item, "want_cnt", None),
-            "view_cnt": getattr(item, "view_cnt", None),
-            "is_sold": getattr(item, "is_sold", False),
-        }
-        for item in items
-    ]
-    try:
-        saved = container.repo.batch_upsert_item_task_links(
-            task_id=task_id, items_data=items_data, source="auto"
-        )
-    except Exception as e:
-        logger.warning("批量写入关联失败: {}", e)
-        saved = 0
+    saved = _save_refresh_results(container, task_id, items)
 
     # 返回刷新后的统计
     counts = container.repo.count_task_links(task_id)
@@ -1035,6 +1090,210 @@ def _build_live_final_result(
     return _normalize_live_result(result)
 
 
+def _build_live_search_error_sse(err_msg: str) -> dict:
+    """根据搜索异常消息构造 SSE 错误事件（不抛异常，返回事件让调用方 yield）
+
+    为什么独立：live 端点的错误通过 SSE 事件返回而非 HTTPException，
+    与 _raise_search_error（抛 HTTPException 用于 refresh_links）区分。
+    """
+    if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
+        return {"stage": "error", "detail": "浏览器连接已断开，请重启服务后重试", "status": 502}
+    if "RGV587" in err_msg:
+        return {"stage": "error", "detail": "搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼", "status": 403}
+    if "Connection closed" in err_msg:
+        return {"stage": "error", "detail": "浏览器连接异常，请重启服务后重试", "status": 502}
+    return {"stage": "error", "detail": f"闲鱼搜索失败: {err_msg}", "status": 502}
+
+
+def _check_live_cache(task_id: str, live_start: float) -> dict | None:
+    """检查 live 缓存，命中时返回归一化结果，未命中返回 None"""
+    cached = _live_cache.get(task_id)
+    if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
+        logger.info("live_links 命中缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
+        return _normalize_live_result(cached[1])
+    return None
+
+
+async def _wait_for_inflight_search(
+    task_id: str, live_start: float, inflight_event: asyncio.Event,
+) -> dict:
+    """等待 in-flight 搜索完成并返回最终 SSE 事件
+
+    调用方应在调用前 yield "waiting_inflight" 事件。
+    返回值始终为有效 SSE 事件，调用方 yield 后 return。
+    """
+    logger.info("live_links 等待 in-flight 搜索完成 task={}", task_id)
+    try:
+        await asyncio.wait_for(inflight_event.wait(), timeout=_LIVE_INFLIGHT_WAIT_TIMEOUT)
+    except asyncio.TimeoutError:
+        # 等待超时：in-flight 搜索耗时过长，放弃等待让客户端重试
+        return {"stage": "error", "detail": "搜索耗时较长，请稍后重试", "status": 503}
+    # in-flight 搜索完成，检查缓存是否已写入
+    cached = _live_cache.get(task_id)
+    if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
+        logger.info("live_links 命中 in-flight 缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
+        return {"stage": "done", **_normalize_live_result(cached[1])}
+    # in-flight 搜索完成但缓存未命中（搜索失败或 0 结果未缓存）：
+    # 不再重复搜索，返回空结果避免再次竞争锁
+    logger.warning("live_links in-flight 搜索未产生缓存结果 task={}", task_id)
+    return {
+        "stage": "done", "items": [], "sellers": [], "all": [],
+        "counts": {"item": 0, "seller": 0, "total": 0},
+        "field_map": {}, "filter_summary": {},
+    }
+
+
+async def _check_live_cookies_safely(
+    container: Container, task_id: str, inflight_event: asyncio.Event,
+) -> dict | None:
+    """执行 Cookie 检查，失败时返回 SSE 错误事件，成功返回 None"""
+    try:
+        await _ensure_live_search_cookies(container)
+        return None
+    except HTTPException as e:
+        _clear_live_inflight(task_id, inflight_event)
+        return {"stage": "error", "detail": e.detail, "status": e.status_code}
+    except Exception as e:
+        logger.exception("live_links cookie 检查异常 task={}: {}", task_id, e)
+        _clear_live_inflight(task_id, inflight_event)
+        return {"stage": "error", "detail": f"Cookie 检查异常: {e}", "status": 502}
+
+
+async def _try_acquire_live_lock_once(container: Container, remaining: float) -> bool:
+    """单次尝试获取浏览器锁（高优先级），成功返回 True，超时返回 False
+
+    为什么独立：将锁获取的 try/except 封装，让 event_stream 的 while 循环体
+    变为简单的 if + await，避免嵌套 try/except 导致认知复杂度膨胀。
+    """
+    try:
+        await asyncio.wait_for(
+            container.browser_lock.acquire(priority="high"),
+            timeout=min(_LIVE_LOCK_PROGRESS_INTERVAL, remaining),
+        )
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+async def _maybe_retry_live_search(
+    container: Container, task_id: str, keyword: str,
+    task_search_filters: list[str], search_sort_type: str, search_regions: str,
+    raw_results: list[dict],
+) -> tuple[list[dict], dict | None]:
+    """RGV587 时强制刷新 token 后重试搜索
+
+    返回 (raw_results, error_sse)：
+    - 无需重试或重试成功：(raw_results, None)
+    - 重试失败：(raw_results, error_sse)
+    """
+    # 仅在 fast 模式搜索返回空且 last_session_invalid 为 True 时重试
+    if raw_results or not getattr(container.collector, "last_session_invalid", False):
+        return raw_results, None
+
+    logger.info("实时搜索触发 RGV587，强制刷新 token 后重试: task={}", task_id)
+    try:
+        refresh_page = await container.browser.new_page()
+        try:
+            await container.collector._ensure_fresh_m5tk(refresh_page, force=True)
+        finally:
+            await refresh_page.close()
+        retry_results = await asyncio.wait_for(
+            container.collector.live_search(
+                keyword, max_pages=1, collect_sellers=False, fast=False,
+                search_filters=task_search_filters,
+                sort_type=search_sort_type, regions=search_regions,
+            ),
+            timeout=45.0,
+        )
+        return retry_results, None
+    except asyncio.TimeoutError:
+        return raw_results, {"stage": "error", "detail": "实时搜索重试超时，请稍后再试", "status": 504}
+    except Exception as e:
+        logger.exception("实时搜索重试失败 task={}: {}", task_id, e)
+        return raw_results, _build_live_search_error_sse(str(e))
+
+
+async def _execute_live_search_with_retry(
+    container: Container, task_id: str, keyword: str,
+    task_search_filters: list[str], search_sort_type: str, search_regions: str,
+) -> tuple[list[dict], dict | None]:
+    """执行 live 搜索，含 RGV587 重试
+
+    返回 (raw_results, error_sse)：
+    - 成功：(raw_results, None)
+    - 失败：([], error_sse)
+
+    注意：调用方负责在 finally 中释放 browser_lock 和清除 in-flight
+    """
+    # 第一轮搜索（fast 模式）
+    try:
+        raw_results = await asyncio.wait_for(
+            container.collector.live_search(
+                keyword, max_pages=2, collect_sellers=False, fast=True,
+                search_filters=task_search_filters,
+                sort_type=search_sort_type, regions=search_regions,
+            ),
+            timeout=45.0,
+        )
+    except asyncio.TimeoutError:
+        return [], {"stage": "error", "detail": "实时搜索超时，请稍后重试或重启服务", "status": 504}
+    except Exception as e:
+        logger.exception("实时搜索失败 task={}: {}", task_id, e)
+        return [], _build_live_search_error_sse(str(e))
+
+    # RGV587 重试
+    raw_results, retry_error = await _maybe_retry_live_search(
+        container, task_id, keyword, task_search_filters,
+        search_sort_type, search_regions, raw_results,
+    )
+    if retry_error:
+        return [], retry_error
+
+    # 重试后若仍无结果且 last_session_invalid 仍为 True，
+    # 说明闲鱼登录态已失效，不应继续走 filtering 流程让前端误以为"真的没货"
+    if not raw_results and getattr(container.collector, "last_session_invalid", False):
+        return [], {
+            "stage": "error",
+            "detail": "闲鱼登录态已过期，请前往「反爬登录管理」重新登录闲鱼",
+            "status": 403,
+        }
+
+    logger.info(
+        "live_links 搜索返回 raw_results={} task={} keyword={} filters={} sort={} regions={}",
+        len(raw_results), task_id, keyword, task_search_filters, search_sort_type, search_regions,
+    )
+    return raw_results, None
+
+
+def _load_live_search_config(task: dict) -> tuple[list[str], str, str]:
+    """读取任务级 + 全局搜索配置，合并 filter_tags
+
+    返回 (task_search_filters, sort_type, regions)：
+    - task_search_filters：任务级与全局 filter_tags 合并去重后的列表（任务级优先）
+    - sort_type / regions：全局搜索配置的排序方式和地区
+
+    为什么独立：合并逻辑含 for 循环 + if 去重 + try/except，提取后 live_links 主函数
+    变为线性前置检查流程，且便于单独测试合并行为。
+    """
+    task_search_filters = list(task.get("search_filters") or [])
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        search_cfg = get_config().search
+        sort_type = search_cfg.sort_type
+        regions = search_cfg.regions
+        # 合并全局 filter_tags，去重保序（任务级优先）
+        global_filters = list(search_cfg.filter_tags or [])
+        seen = set(task_search_filters)
+        for f in global_filters:
+            if f not in seen:
+                task_search_filters.append(f)
+                seen.add(f)
+    except Exception:
+        sort_type = "default"
+        regions = ""
+    return task_search_filters, sort_type, regions
+
+
 @router.get("/{task_id}/links/live")
 async def live_links(
     task_id: str,
@@ -1081,25 +1340,14 @@ async def live_links(
     # 为什么需要合并：官方链接使用 sourceType=0&yhb=1&postageType=1 筛选条件，
     # 若仅用任务级 filters 而任务又未配置，Live 搜索 URL 不会附加任何筛选参数，
     # 导致返回的商品池与官方链接不一致（如 600-680 元区间商品无法被搜到）
-    task_search_filters = list(task.get("search_filters") or [])
-    try:
-        from xianyu_hunter.infra.yaml_config import get_config
-        search_cfg = get_config().search
-        search_sort_type = search_cfg.sort_type
-        search_regions = search_cfg.regions
-        # 合并全局 filter_tags，去重保序（任务级优先）
-        global_filters = list(search_cfg.filter_tags or [])
-        seen = set(task_search_filters)
-        for f in global_filters:
-            if f not in seen:
-                task_search_filters.append(f)
-                seen.add(f)
-    except Exception:
-        search_sort_type = "default"
-        search_regions = ""
+    task_search_filters, search_sort_type, search_regions = _load_live_search_config(task)
 
     async def event_stream():
-        """SSE 事件流：分阶段推送搜索进度和最终结果"""
+        """SSE 事件流：分阶段推送搜索进度和最终结果
+
+        各阶段的错误处理已提取到 _xxx 辅助函数，主流程仅负责编排和 yield，
+        避免嵌套 try/except 和多层 if/elif 导致认知复杂度超限。
+        """
         # 性能埋点：记录 live 搜索整体耗时，便于分析缓存命中率和搜索性能
         live_start = time.monotonic()
         def sse(data: dict) -> str:
@@ -1107,35 +1355,18 @@ async def live_links(
 
         # 阶段 1：检查缓存
         yield sse({"stage": "checking_cache"})
-        cached = _live_cache.get(task_id)
-        if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
-            logger.info("live_links 命中缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
-            yield sse({"stage": "done", **_normalize_live_result(cached[1])})
+        cached_result = _check_live_cache(task_id, live_start)
+        if cached_result:
+            yield sse({"stage": "done", **cached_result})
             return
 
         # 阶段 1.5：in-flight 去重
         # 如果该 task 的搜索正在进行，等待其完成后复用缓存结果
         # 避免并发请求竞争 browser_lock 导致"系统正在执行后台搜索任务"错误
-        inflight_event = _live_inflight.get(task_id)
-        if inflight_event is not None and not inflight_event.is_set():
+        existing_inflight = _live_inflight.get(task_id)
+        if existing_inflight is not None and not existing_inflight.is_set():
             yield sse({"stage": "waiting_inflight"})
-            logger.info("live_links 等待 in-flight 搜索完成 task={}", task_id)
-            try:
-                await asyncio.wait_for(inflight_event.wait(), timeout=_LIVE_INFLIGHT_WAIT_TIMEOUT)
-            except asyncio.TimeoutError:
-                # 等待超时：in-flight 搜索耗时过长，放弃等待让客户端重试
-                yield sse({"stage": "error", "detail": "搜索耗时较长，请稍后重试", "status": 503})
-                return
-            # in-flight 搜索完成，检查缓存是否已写入
-            cached = _live_cache.get(task_id)
-            if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
-                logger.info("live_links 命中 in-flight 缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
-                yield sse({"stage": "done", **_normalize_live_result(cached[1])})
-                return
-            # in-flight 搜索完成但缓存未命中（搜索失败或 0 结果未缓存）：
-            # 不再重复搜索，返回空结果避免再次竞争锁
-            logger.warning("live_links in-flight 搜索未产生缓存结果 task={}", task_id)
-            yield sse({"stage": "done", "items": [], "sellers": [], "all": [], "counts": {"item": 0, "seller": 0, "total": 0}, "field_map": {}, "filter_summary": {}})
+            yield sse(await _wait_for_inflight_search(task_id, live_start, existing_inflight))
             return
 
         # 创建 in-flight Event，标记搜索开始
@@ -1145,16 +1376,9 @@ async def live_links(
 
         # 阶段 2：Cookie 检查
         yield sse({"stage": "checking_cookies"})
-        try:
-            await _ensure_live_search_cookies(container)
-        except HTTPException as e:
-            _clear_live_inflight(task_id, inflight_event)
-            yield sse({"stage": "error", "detail": e.detail, "status": e.status_code})
-            return
-        except Exception as e:
-            logger.exception("live_links cookie 检查异常 task={}: {}", task_id, e)
-            _clear_live_inflight(task_id, inflight_event)
-            yield sse({"stage": "error", "detail": f"Cookie 检查异常: {e}", "status": 502})
+        cookie_error = await _check_live_cookies_safely(container, task_id, inflight_event)
+        if cookie_error:
+            yield sse(cookie_error)
             return
 
         # 阶段 3：获取浏览器锁（高优先级，优先于 Worker 后台搜索）
@@ -1163,99 +1387,31 @@ async def live_links(
         # 实时查询需要耐心等，但前端不应长时间无任何反馈
         yield sse({"stage": "acquiring_lock"})
         deadline = time.monotonic() + _LIVE_LOCK_TOTAL_TIMEOUT
-        acquired = False
-        while not acquired:
+        while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _clear_live_inflight(task_id, inflight_event)
                 yield sse({"stage": "error", "detail": "系统正在执行后台搜索任务，请稍后重试", "status": 503})
                 return
-            try:
-                # 每次只等一个 progress 间隔，Worker 检测到 _high_waiting>0
-                # 会在 search 完成后主动 sleep(3) 让出，acquire 大概率能成功
-                await asyncio.wait_for(
-                    container.browser_lock.acquire(priority="high"),
-                    timeout=min(_LIVE_LOCK_PROGRESS_INTERVAL, remaining),
-                )
-                acquired = True
-            except asyncio.TimeoutError:
-                # 推 SSE 等待进度，让前端展示「等待浏览器资源...」
-                # PriorityBrowserLock.acquire 在 finally 中会减回 _high_waiting，
-                # 不会污染 Worker 的优先级判断
-                elapsed = _LIVE_LOCK_TOTAL_TIMEOUT - remaining
-                yield sse({"stage": "waiting_lock", "elapsed_sec": round(elapsed, 1)})
-                continue
+            if await _try_acquire_live_lock_once(container, remaining):
+                break
+            # 推 SSE 等待进度，让前端展示「等待浏览器资源...」
+            # PriorityBrowserLock.acquire 在 finally 中会减回 _high_waiting，
+            # 不会污染 Worker 的优先级判断
+            yield sse({"stage": "waiting_lock", "elapsed_sec": round(_LIVE_LOCK_TOTAL_TIMEOUT - remaining, 1)})
 
         # 阶段 4：搜索
         raw_results: list[dict] = []
         try:
             yield sse({"stage": "searching"})
             container.collector.last_session_invalid = False
-            try:
-                # 整体超时 45s：max_pages=2 需翻页 2 次
-                # goto(15s) + 首屏 API(8s) + 滚动(4s) + 第 2 屏 API(8s) + unroute(2s) ≈ 37s
-                # 为什么 max_pages=2：max_pages=1 仅取首屏 26 条，会遗漏 600-680 价位段商品，
-                # 官网用户可滚动加载多屏，本地至少取 2 屏以缩小数据差异
-                raw_results = await asyncio.wait_for(
-                    container.collector.live_search(
-                        keyword, max_pages=2, collect_sellers=False, fast=True,
-                        search_filters=task_search_filters,
-                        sort_type=search_sort_type, regions=search_regions,
-                    ),
-                    timeout=45.0,
-                )
-            except asyncio.TimeoutError:
-                yield sse({"stage": "error", "detail": "实时搜索超时，请稍后重试或重启服务", "status": 504})
-                return
-
-            # RGV587 时 fast 模式跳过了 token 刷新重试，此处补一次
-            if not raw_results and getattr(container.collector, "last_session_invalid", False):
-                yield sse({"stage": "refreshing_token"})
-                logger.info("实时搜索触发 RGV587，强制刷新 token 后重试: task={}", task_id)
-                try:
-                    refresh_page = await container.browser.new_page()
-                    try:
-                        await container.collector._ensure_fresh_m5tk(refresh_page, force=True)
-                    finally:
-                        await refresh_page.close()
-                    yield sse({"stage": "searching_retry"})
-                    raw_results = await asyncio.wait_for(
-                        container.collector.live_search(
-                            keyword, max_pages=1, collect_sellers=False, fast=False,
-                            search_filters=task_search_filters,
-                            sort_type=search_sort_type, regions=search_regions,
-                        ),
-                        timeout=45.0,
-                    )
-                except asyncio.TimeoutError:
-                    yield sse({"stage": "error", "detail": "实时搜索重试超时，请稍后再试", "status": 504})
-                    return
-            # 重试后若仍无结果且 last_session_invalid 仍为 True，
-            # 说明闲鱼登录态已失效（_m_h5_tk 过期或身份 Cookie 过期），
-            # 此时不应继续走 filtering 流程让前端误以为"真的没货"
-            if not raw_results and getattr(container.collector, "last_session_invalid", False):
-                yield sse({
-                    "stage": "error",
-                    "detail": "闲鱼登录态已过期，请前往「反爬登录管理」重新登录闲鱼",
-                    "status": 403,
-                })
-                return
-            logger.info(
-                "live_links 搜索返回 raw_results={} task={} keyword={} filters={} sort={} regions={}",
-                len(raw_results), task_id, keyword, task_search_filters, search_sort_type, search_regions,
+            raw_results, search_error = await _execute_live_search_with_retry(
+                container, task_id, keyword, task_search_filters,
+                search_sort_type, search_regions,
             )
-        except Exception as e:
-            logger.exception("实时搜索失败 task={}: {}", task_id, e)
-            err_msg = str(e)
-            if "TargetClosed" in err_msg or "Browser has been closed" in err_msg:
-                yield sse({"stage": "error", "detail": "浏览器连接已断开，请重启服务后重试", "status": 502})
-            elif "RGV587" in err_msg:
-                yield sse({"stage": "error", "detail": "搜索令牌临时过期，请稍后重试；若持续失败请重新登录闲鱼", "status": 403})
-            elif "Connection closed" in err_msg:
-                yield sse({"stage": "error", "detail": "浏览器连接异常，请重启服务后重试", "status": 502})
-            else:
-                yield sse({"stage": "error", "detail": f"闲鱼搜索失败: {err_msg}", "status": 502})
-            return
+            if search_error:
+                yield sse(search_error)
+                return
         finally:
             container.browser_lock.release()
             # 搜索阶段结束：清除 in-flight 标记，通知等待者检查缓存
@@ -1470,6 +1626,102 @@ def _build_degraded_seller_profile(seller_id: str, seller_nick: str) -> Any:
     )
 
 
+def _write_live_eval_event(
+    container: Container, task_id: str, user_id: str,
+    detail: Any, eval_result: Any,
+) -> None:
+    """写入评估事件到 events 表（使用 upsert 按 task_id+item_id 去重）
+
+    为什么独立：事件构造含 14 个字段映射 + JSON 序列化，提取后
+    _evaluate_single_live_item 的 try 块变为线性流程，避免嵌套缩进过深。
+    """
+    import json as _json
+    score_display = eval_result.score if eval_result.score is not None else "N/A"
+    level = _resolve_eval_event_level(eval_result.is_passed, eval_result.risk_level)
+    container.repo.upsert_eval_event({
+        "type": "eval.scored",
+        "task_id": task_id,
+        "item_id": detail.id,
+        "stage": "eval",
+        "level": level,
+        "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
+        "payload": _json.dumps({
+            "item_id": detail.id,
+            "item_title": detail.title,
+            "item_price": detail.price,
+            "seller_id": detail.seller_id,
+            "seller_nick": detail.detail_seller_nick or detail.seller_nick or "",
+            "score": eval_result.score,
+            "risk_level": eval_result.risk_level.value,
+            "dimension_scores": eval_result.dimension_scores,
+            "reject_reasons": eval_result.reject_reasons,
+            "is_passed": eval_result.is_passed,
+            "data_quality": eval_result.data_quality,
+        }, ensure_ascii=False, default=str),
+    }, user_id=user_id)
+
+
+def _evaluate_single_live_item(
+    r: dict, evaluator: Any, task_id: str, effective_user_id: str,
+    container: Container, auto_buy_score: Any,
+    price_strategy: Any, market_ctx: Any,
+) -> tuple[bool, dict | None, bool]:
+    """评估单个 live 商品并返回结果
+
+    返回 (evaluated, candidate, price_filtered)：
+    - evaluated: 是否成功评估（含异常时为 False）
+    - candidate: 达标且通过价格过滤时的候选信息 dict，否则 None
+    - price_filtered: 是否因价格策略被过滤
+
+    为什么独立：原 _trigger_live_evaluation 循环体内含 3 层嵌套 if + try/except，
+    认知复杂度超限；提取后主函数仅负责循环和计数，编排清晰。
+    """
+    display = r.get("display") or {}
+    item_id = r.get("link_key", "")
+    if not item_id:
+        return False, None, False
+
+    detail = _build_live_item_detail(item_id, display)
+    if detail is None:
+        return False, None, False
+
+    seller = _build_degraded_seller_profile(detail.seller_id, detail.seller_nick)
+
+    try:
+        eval_result = evaluator.evaluate(detail, seller)
+        _write_live_eval_event(container, task_id, effective_user_id, detail, eval_result)
+
+        # 达标商品收集：score >= auto_buy_score 且 risk == LOW
+        # 为什么用 should_auto_buy 而非 is_auto_buy：前者接受配置阈值参数，
+        # 与 worker.run_once 使用同一份 auto_buy_score，保证一致性
+        if not eval_result.should_auto_buy(auto_buy_score):
+            return True, None, False
+
+        # 价格过滤：与 worker.run_once 行为一致，避免任务设置了价格区间
+        # 但 live 链路只看分数导致误抢单
+        # 注意：过滤仅阻止"加入候选名单"，评估事件仍照写，
+        # 让评估明细页面能看到全部商品供用户决策
+        if price_strategy is not None:
+            verdict = price_strategy.check(detail, market_ctx)
+            if not verdict.pass_:
+                logger.info(
+                    "live_links 商品 {} 价格未通过策略({})，跳过加入抢单候选",
+                    detail.id, ", ".join(verdict.reasons),
+                )
+                return True, None, True
+
+        return True, {
+            "item_id": detail.id,
+            "title": detail.title,
+            "price": detail.price,
+            "score": eval_result.score,
+            "risk_level": eval_result.risk_level.value,
+        }, False
+    except Exception as e:
+        logger.warning("live 评估失败 item={}: {}", item_id, e)
+        return False, None, False
+
+
 def _trigger_live_evaluation(
     container: Container, task_id: str, items: list[dict],
     user_id: str | None = None,
@@ -1510,74 +1762,16 @@ def _trigger_live_evaluation(
     price_filtered = 0
     auto_buy_candidates: list[dict] = []
     for r in items:
-        display = r.get("display") or {}
-        item_id = r.get("link_key", "")
-        if not item_id:
-            continue
-
-        detail = _build_live_item_detail(item_id, display)
-        if detail is None:
-            continue
-
-        seller = _build_degraded_seller_profile(detail.seller_id, detail.seller_nick)
-
-        # 评估
-        try:
-            eval_result = evaluator.evaluate(detail, seller)
+        was_evaluated, candidate, was_price_filtered = _evaluate_single_live_item(
+            r, evaluator, task_id, effective_user_id, container,
+            auto_buy_score, price_strategy, market_ctx,
+        )
+        if was_evaluated:
             evaluated += 1
-
-            # 写入 events 表（使用 upsert 按 task_id+item_id 去重，防止重复评估）
-            import json as _json
-            score_display = eval_result.score if eval_result.score is not None else "N/A"
-            level = _resolve_eval_event_level(eval_result.is_passed, eval_result.risk_level)
-            container.repo.upsert_eval_event({
-                "type": "eval.scored",
-                "task_id": task_id,
-                "item_id": detail.id,
-                "stage": "eval",
-                "level": level,
-                "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
-                "payload": _json.dumps({
-                    "item_id": detail.id,
-                    "item_title": detail.title,
-                    "item_price": detail.price,
-                    "seller_id": detail.seller_id,
-                    "seller_nick": detail.detail_seller_nick or detail.seller_nick or "",
-                    "score": eval_result.score,
-                    "risk_level": eval_result.risk_level.value,
-                    "dimension_scores": eval_result.dimension_scores,
-                    "reject_reasons": eval_result.reject_reasons,
-                    "is_passed": eval_result.is_passed,
-                    "data_quality": eval_result.data_quality,
-                }, ensure_ascii=False, default=str),
-            }, user_id=effective_user_id)
-
-            # 达标商品收集：score >= auto_buy_score 且 risk == LOW
-            # 为什么用 should_auto_buy 而非 is_auto_buy：前者接受配置阈值参数，
-            # 与 worker.run_once 使用同一份 auto_buy_score，保证一致性
-            if eval_result.should_auto_buy(auto_buy_score):
-                # 价格过滤：与 worker.run_once 行为一致，避免任务设置了价格区间
-                # 但 live 链路只看分数导致误抢单
-                # 注意：过滤仅阻止"加入候选名单"，评估事件仍照写，
-                # 让评估明细页面能看到全部商品供用户决策
-                if price_strategy is not None:
-                    verdict = price_strategy.check(detail, market_ctx)
-                    if not verdict.pass_:
-                        price_filtered += 1
-                        logger.info(
-                            "live_links 商品 {} 价格未通过策略({})，跳过加入抢单候选",
-                            detail.id, ", ".join(verdict.reasons),
-                        )
-                        continue
-                auto_buy_candidates.append({
-                    "item_id": detail.id,
-                    "title": detail.title,
-                    "price": detail.price,
-                    "score": eval_result.score,
-                    "risk_level": eval_result.risk_level.value,
-                })
-        except Exception as e:
-            logger.warning("live 评估失败 item={}: {}", item_id, e)
+        if was_price_filtered:
+            price_filtered += 1
+        if candidate:
+            auto_buy_candidates.append(candidate)
 
     if evaluated:
         logger.info(

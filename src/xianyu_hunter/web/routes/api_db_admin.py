@@ -372,6 +372,7 @@ def _parse_value(raw: Any, col_type: str) -> Any:
 
     为什么不直接用 SQLAlchemy 的 type 系统：动态表结构下用户传入的是 JSON，
     需要按列类型做轻量转换（int/float/bool/None/datetime），比反射 ORM 类型更轻。
+    主函数只做类型分发，具体转换交给专用解析器以控制认知复杂度（S3776）。
     """
     if raw is None:
         return None
@@ -382,24 +383,39 @@ def _parse_value(raw: Any, col_type: str) -> Any:
         if any(t in upper for t in ("FLOAT", "REAL", "DOUBLE", "NUMERIC", "DECIMAL")):
             return float(raw)
         if "BOOL" in upper:
-            if isinstance(raw, bool):
-                return raw
-            return str(raw).lower() in ("1", "true", "yes", "on")
+            return _parse_bool_value(raw)
         if "DATETIME" in upper or "TIMESTAMP" in upper:
-            if isinstance(raw, (int, float)):
-                # 使用 timezone-aware datetime 避免废弃的 utcfromtimestamp（S6903）
-                return datetime.fromtimestamp(raw, tz=timezone.utc)
-            return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            return _parse_datetime_value(raw)
         if "JSON" in upper or "TEXT" in upper:
-            if isinstance(raw, str):
-                return raw
-            return json.dumps(raw, ensure_ascii=False)
+            return _parse_text_value(raw)
     except (ValueError, TypeError) as e:
         raise HTTPException(
             status_code=400,
             detail=f"字段类型转换失败 ({col_type}): {e}",
         )
     return raw
+
+
+def _parse_bool_value(raw: Any) -> bool:
+    """bool 列：bool 直通，其他值按字符串真值表判定"""
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).lower() in ("1", "true", "yes", "on")
+
+
+def _parse_datetime_value(raw: Any) -> datetime:
+    """datetime/timestamp 列：数值走 fromtimestamp，字符串走 fromisoformat"""
+    if isinstance(raw, (int, float)):
+        # 使用 timezone-aware datetime 避免废弃的 utcfromtimestamp（S6903）
+        return datetime.fromtimestamp(raw, tz=timezone.utc)
+    return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+
+
+def _parse_text_value(raw: Any) -> str:
+    """json/text 列：字符串直通，其他类型 JSON 序列化"""
+    if isinstance(raw, str):
+        return raw
+    return json.dumps(raw, ensure_ascii=False)
 
 
 def _serialize_row(row: dict[str, Any], columns: list[dict[str, Any]]) -> dict[str, Any]:

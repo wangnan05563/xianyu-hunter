@@ -248,15 +248,16 @@ async def browser_login_status() -> dict:
     except (json.JSONDecodeError, OSError) as e:
         return {"status": "running", "message": f"状态文件读取失败: {e}"}
 
-    # 心跳检测：status file ts 超过 15s 未更新时主动判定为卡死
-    # 为什么需要 15s：子进程心跳间隔 3s + Playwright bc.cookies() 偶尔阻塞到 5-8s，
-    # 15s 阈值在容忍网络抖动的同时能在子进程真正卡死时及时识别
+    # 心跳检测：按子进程阶段使用不同阈值。打包 exe 冷启动/导入 Playwright
+    # 可能超过 15s；进入 waiting 后再用较短阈值识别真正卡死。
     file_status = data.get("status", "running")
-    if file_status in ("running", "waiting", "opening"):
+    if file_status in ("pending", "starting", "running", "waiting", "opening", "already_logged"):
         ts = data.get("ts")
         if ts is not None:
             stale_sec = time.time() - float(ts)
-            if stale_sec > 15:
+            from xianyu_hunter.web.routes.unified_login import _heartbeat_timeout_for_status
+
+            if stale_sec > _heartbeat_timeout_for_status(file_status):
                 logger.warning(
                     "浏览器登录子进程心跳超时（%.1fs 未更新），判定为卡死",
                     stale_sec,

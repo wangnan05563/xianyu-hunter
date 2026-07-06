@@ -774,6 +774,31 @@ def _copy_locked_cookie_file(src: str, dst: str) -> bool:
         return False
 
 
+def _list_chrome_profile_cookie_dbs(local_appdata: str) -> list[tuple[Path, bool]]:
+    """列出 Chrome 所有 Profile 下的 Cookie DB（直接读，无需复制）
+
+    为什么独立：原 _build_cookie_db_candidates 中 if+if+for+if+if 多层嵌套
+    是认知复杂度主要来源。Chrome Profile 遍历逻辑独立后主函数更清晰。
+    跳过非目录和系统目录（如 .DS_Store、Lock File 等以 . 开头的条目）。
+    """
+    if not local_appdata:
+        return []
+    chrome_base = Path(local_appdata) / "Google" / "Chrome" / "User Data"
+    if not chrome_base.exists():
+        return []
+
+    result: list[tuple[Path, bool]] = []
+    for entry in sorted(os.listdir(chrome_base)):
+        profile_dir = chrome_base / entry
+        # 跳过非目录和系统目录
+        if not profile_dir.is_dir() or entry.startswith("."):
+            continue
+        db = profile_dir / "Network" / "Cookies"
+        if db.exists():
+            result.append((db, False))
+    return result
+
+
 def _build_cookie_db_candidates(cfg) -> list[tuple[Path, bool]]:
     """构建候选 Cookie DB 路径列表（按优先级排序）
 
@@ -784,17 +809,7 @@ def _build_cookie_db_candidates(cfg) -> list[tuple[Path, bool]]:
     candidates: list[tuple[Path, bool]] = []
 
     # 1. Chrome 所有 Profile（直接读）- 优先于 Edge，因为用户更常用 Chrome 登录闲鱼
-    if local_appdata:
-        chrome_base = Path(local_appdata) / "Google" / "Chrome" / "User Data"
-        if chrome_base.exists():
-            for entry in sorted(os.listdir(chrome_base)):
-                profile_dir = chrome_base / entry
-                db = profile_dir / "Network" / "Cookies"
-                # 跳过非目录和系统目录
-                if not profile_dir.is_dir() or entry.startswith("."):
-                    continue
-                if db.exists():
-                    candidates.append((db, False))
+    candidates.extend(_list_chrome_profile_cookie_dbs(local_appdata))
 
     # 2. Edge Default Profile（可能被锁定，用复制方式读）
     if local_appdata:
@@ -816,6 +831,43 @@ def _build_cookie_db_candidates(cfg) -> list[tuple[Path, bool]]:
     return candidates
 
 
+def _cookies_table_exists(conn: sqlite3.Connection) -> bool:
+    """检查 cookies 表是否存在（项目 browser-data 可能是 Playwright 创建的空库）
+
+    为什么独立：原 _query_cookie_db 中 try/except + if 嵌套推高了认知复杂度，
+    拆分后主函数只需 if not _cookies_table_exists: return 即可。
+    """
+    try:
+        return conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
+        ).fetchone() is not None
+    except sqlite3.OperationalError:
+        return False  # 数据库损坏 → 视为无表，静默跳过
+
+
+def _process_cookie_row(
+    name: str, value: str, enc_value: bytes | None, result: dict[str, str],
+) -> bool:
+    """处理单行 cookie：明文优先，否则检测 v20 加密格式
+
+    返回是否检测到 v20 加密（用于上层引导用户改用 CDP 方式）。
+    为什么独立：原 for+if/elif+if 三层嵌套是认知复杂度的主要来源。
+    """
+    if name in result:
+        return False
+    # value 非空 → 明文 cookie，直接使用
+    if value:
+        result[name] = value
+        return False
+    # value 为空但 encrypted_value 存在 → 检测加密格式
+    if not enc_value:
+        return False
+    enc_bytes = bytes(enc_value)
+    # v10 等旧格式理论上可解密，但 fetch-keys 场景不依赖解密
+    # 留空让后续 CDP 路径或手动输入兜底
+    return enc_bytes[:3] == b"v20"
+
+
 def _query_cookie_db(db_path: Path, requested_keys: list[str]) -> tuple[dict[str, str], bool]:
     """从 SQLite DB 中查询目标 cookie，返回 ({name: value}, v20_detected)
 
@@ -825,15 +877,8 @@ def _query_cookie_db(db_path: Path, requested_keys: list[str]) -> tuple[dict[str
     result: dict[str, str] = {}
     v20_detected = False
     with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-        # 先检查 cookies 表是否存在（项目 browser-data 可能是 Playwright 创建的空库）
-        try:
-            table_check = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
-            ).fetchone()
-            if not table_check:
-                return result, v20_detected  # 无表 → 静默跳过
-        except sqlite3.OperationalError:
-            return result, v20_detected  # 数据库损坏 → 静默跳过
+        if not _cookies_table_exists(conn):
+            return result, v20_detected  # 无表或数据库损坏 → 静默跳过
 
         placeholders = ",".join(["?"] * len(requested_keys))
         rows = conn.execute(
@@ -848,18 +893,8 @@ def _query_cookie_db(db_path: Path, requested_keys: list[str]) -> tuple[dict[str
             requested_keys,
         ).fetchall()
         for name, value, enc_value in rows:
-            if name in result:
-                continue
-            # value 非空 → 明文 cookie，直接使用
-            if value:
-                result[name] = value
-            # value 为空但 encrypted_value 存在 → 检测加密格式
-            elif enc_value:
-                enc_bytes = bytes(enc_value) if enc_value else b""
-                if enc_bytes[:3] == b"v20":
-                    v20_detected = True
-                # v10 等旧格式理论上可解密，但 fetch-keys 场景不依赖解密
-                # 留空让后续 CDP 路径或手动输入兜底
+            if _process_cookie_row(name, value, enc_value, result):
+                v20_detected = True
     return result, v20_detected
 
 
@@ -954,50 +989,83 @@ def _try_sqlite_cookie_candidates(
     return None, last_error, any_v20_detected
 
 
+def _filter_json_cookies_for_fetch(
+    cookies: list[dict], requested_keys: list[str],
+) -> dict[str, str]:
+    """从 JSON cookie 列表中筛选目标 key 且域名匹配的 cookie
+
+    为什么独立：原 _fallback_to_cookie_store_json 中 for + 多重 and 条件 + 嵌套 if
+    是认知复杂度的主要来源，拆分后主函数只处理 IO 和响应构建。
+    """
+    from xianyu_hunter.web.services.cookie_store import is_test_cookie
+    result: dict[str, str] = {}
+    for c in cookies:
+        name = c.get("name", "")
+        domain = c.get("domain", "")
+        value = c.get("value", "")
+        # S1066: 合并外层与"未填充"两个 if，避免嵌套
+        if (name in requested_keys and any(
+            d in domain for d in (_DOMAIN_GOOFISH, _DOMAIN_TAOBAO)
+        ) and name not in result):
+            # 过滤掉测试数据（unb=123456 / cookie2=abc 等）
+            if is_test_cookie(name, value):
+                logger.warning("fetch_cookie_keys: 跳过测试 Cookie %s=%s", name, value)
+                continue
+            result[name] = value
+    return result
+
+
 def _fallback_to_cookie_store_json(requested_keys: list[str], user_id: str = "default") -> JSONResponse | None:
     """JSON 降级：当系统浏览器 v20 加密不可读时，回退到之前浏览器登录保存的明文
 
     多用户隔离：按 user_id 读取 cookies_{user_id}.json。
     """
     try:
-        from xianyu_hunter.web.services.cookie_store import is_test_cookie
         store = get_cookie_store()
         store.invalidate_cache(user_id)
         json_data = store._read_json(user_id)
-        if json_data and json_data.get("cookies"):
-            json_result: dict[str, str] = {}
-            for c in json_data["cookies"]:
-                name = c.get("name", "")
-                domain = c.get("domain", "")
-                value = c.get("value", "")
-                # S1066: 合并外层与"未填充"两个 if，避免嵌套
-                if (name in requested_keys and any(
-                    d in domain for d in (_DOMAIN_GOOFISH, _DOMAIN_TAOBAO)
-                ) and name not in json_result):
-                    # 过滤掉测试数据（unb=123456 / cookie2=abc 等）
-                    if is_test_cookie(name, value):
-                        logger.warning(
-                            "fetch_cookie_keys: 跳过测试 Cookie %s=%s",
-                            name, value,
-                        )
-                        continue
-                    json_result[name] = value
-            if json_result:
-                logger.info(
-                    "SQLite 不可读，从 CookieStore JSON 降级获取 %d 个 cookie 值: %s",
-                    len(json_result), list(json_result.keys()),
-                )
-                return make_auth_response({
-                    "ok": True,
-                    "cookies": json_result,
-                    "found": list(json_result.keys()),
-                    "missing": [k for k in requested_keys if k not in json_result],
-                    "source": "cookie_store_json_fallback",
-                    "hint": "系统浏览器 Cookie 加密不可读，已回退到上次保存的 Cookie。如需更新，请使用「浏览器登录」功能重新扫码登录。",
-                })
+        if not json_data or not json_data.get("cookies"):
+            return None
+
+        json_result = _filter_json_cookies_for_fetch(json_data["cookies"], requested_keys)
+        if not json_result:
+            return None
+
+        logger.info(
+            "SQLite 不可读，从 CookieStore JSON 降级获取 %d 个 cookie 值: %s",
+            len(json_result), list(json_result.keys()),
+        )
+        return make_auth_response({
+            "ok": True,
+            "cookies": json_result,
+            "found": list(json_result.keys()),
+            "missing": [k for k in requested_keys if k not in json_result],
+            "source": "cookie_store_json_fallback",
+            "hint": "系统浏览器 Cookie 加密不可读，已回退到上次保存的 Cookie。如需更新，请使用「浏览器登录」功能重新扫码登录。",
+        })
     except Exception as e:
         logger.warning("CookieStore JSON 降级读取失败: %s", e)
     return None
+
+
+def _filter_pw_cookies_for_cdp(
+    pw_cookies: list[dict], requested_keys: list[str],
+) -> dict[str, str]:
+    """从 Playwright cookie 列表中筛选目标 key 且域名匹配的 cookie
+
+    为什么独立：原 _fallback_to_playwright_cdp 中 try + if + for + 多重 and 条件
+    嵌套推高认知复杂度，拆分后主函数只处理 IO 和响应构建。
+    """
+    result: dict[str, str] = {}
+    for c in pw_cookies:
+        name = c.get("name", "")
+        domain = c.get("domain", "")
+        # S1066: 合并外层与"未填充"两个 if，避免嵌套
+        if (name in requested_keys and any(
+            d in domain for d in (_DOMAIN_GOOFISH, _DOMAIN_TAOBAO)
+        ) and name not in result):
+            result[name] = c.get("value", "")
+    return result
 
 
 async def _fallback_to_playwright_cdp(
@@ -1006,29 +1074,24 @@ async def _fallback_to_playwright_cdp(
     """Playwright CDP 兜底：读取项目浏览器内存中的 cookie"""
     try:
         browser = container.browser
-        if browser and browser._context:
-            pw_cookies = await browser.get_cookies()
-            cdp_result: dict[str, str] = {}
-            for c in pw_cookies:
-                name = c.get("name", "")
-                domain = c.get("domain", "")
-                # S1066: 合并外层与"未填充"两个 if，避免嵌套
-                if (name in requested_keys and any(
-                    d in domain for d in (_DOMAIN_GOOFISH, _DOMAIN_TAOBAO)
-                ) and name not in cdp_result):
-                    cdp_result[name] = c.get("value", "")
-            logger.info(
-                "Playwright CDP 兜底: 读取到 %d 个 cookie，匹配 %d 个目标 key: %s",
-                len(pw_cookies), len(cdp_result), list(cdp_result.keys()),
-            )
-            if cdp_result:
-                return make_auth_response({
-                    "ok": True,
-                    "cookies": cdp_result,
-                    "found": list(cdp_result.keys()),
-                    "missing": [k for k in requested_keys if k not in cdp_result],
-                    "source": "playwright_cdp",
-                })
+        if not browser or not browser._context:
+            return None
+
+        pw_cookies = await browser.get_cookies()
+        cdp_result = _filter_pw_cookies_for_cdp(pw_cookies, requested_keys)
+        logger.info(
+            "Playwright CDP 兜底: 读取到 %d 个 cookie，匹配 %d 个目标 key: %s",
+            len(pw_cookies), len(cdp_result), list(cdp_result.keys()),
+        )
+        if not cdp_result:
+            return None
+        return make_auth_response({
+            "ok": True,
+            "cookies": cdp_result,
+            "found": list(cdp_result.keys()),
+            "missing": [k for k in requested_keys if k not in cdp_result],
+            "source": "playwright_cdp",
+        })
     except Exception as e:
         logger.warning("Playwright CDP 兜底也失败: %s", e)
     return None

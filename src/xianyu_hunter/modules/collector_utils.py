@@ -427,16 +427,10 @@ def extract_seller_nick(raw: dict) -> tuple[str, str]:
        → 表现为"卖家"列显示"一周内发布"，"地区"列显示脱敏昵称
 
     这两种情况都会导致 seller/region/publish_time 三列整体错位。
-    这里做两层校验：先按候选字段顺序取 nick；再对结果做语义校验，
-    若 nick 看起来像时间描述/价格/标签而 region 看起来像昵称，则交换。
+    主函数只负责场景编排，候选字段扫描与交换判断分别下沉到辅助函数
+    以降低认知复杂度（S3776）。
     """
-    nick = ""
-    for nk in ("userNick", "sellerNick", "nick", "userNickname", "sellerNickName"):
-        v = raw.get(nk)
-        if v and isinstance(v, str) and v.strip():
-            nick = v.strip()
-            break
-
+    nick = _extract_first_nick_candidate(raw)
     raw_region = raw.get("region", "")
 
     # 场景 1：nick 为空且 region 不像地名 → 把 region 当 nick
@@ -445,27 +439,47 @@ def extract_seller_nick(raw: dict) -> tuple[str, str]:
         nick = raw_region.strip()
         raw_region = ""
 
-    # 场景 2：nick 不为空但看起来不像昵称（时间描述/价格/标签/地名），
-    # 且 region 看起来像昵称 → 交换两者
-    # 修复：region 是脱敏昵称（如"芯***鱼"）时，一定是昵称
-    # 但只有当 nick 明显不是昵称时才交换：
-    # - nick 像地名（如"杭州"、"浙江杭州"）
-    # - nick 像时间/价格/标签（如"一周内发布"、"¥699"、"包邮"）
-    # 例外：nick 也是脱敏昵称时，视为数据冗余，不交换（两个都是昵称）
-    # 之前的判断条件 `_looks_like_publish_label(nick)` 过于严格：
-    # "杭州"等简短城市名不会命中发布标签关键词，导致 nick="杭州" + region="芯***鱼" 不交换
-    if nick and raw_region:
-        region_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(raw_region))
-        nick_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(nick))
-        nick_is_non_nick = is_region_like(nick) or _looks_like_publish_label(nick)
-        should_swap = (
-            (region_is_masked_nick and not nick_is_masked_nick and nick_is_non_nick)
-            or (_looks_like_publish_label(nick) and not is_region_like(raw_region) and _looks_like_nick(raw_region))
-        )
-        if should_swap:
-            nick, raw_region = raw_region, nick
+    # 场景 2：nick 不像昵称（时间/价格/标签/地名）且 region 像昵称 → 交换
+    # 详细判断下沉到 _should_swap_extracted_nick_with_region，避免主函数嵌套过深
+    if nick and raw_region and _should_swap_extracted_nick_with_region(nick, raw_region):
+        nick, raw_region = raw_region, nick
 
     return nick, raw_region
+
+
+def _extract_first_nick_candidate(raw: dict) -> str:
+    """按候选字段顺序取第一个非空字符串作为 nick
+
+    为什么不直接 raw.get(...)：闲鱼 API 不同版本字段名差异大，
+    需要按优先级顺序尝试多个字段名，命中即返回。
+    """
+    for nk in ("userNick", "sellerNick", "nick", "userNickname", "sellerNickName"):
+        v = raw.get(nk)
+        if v and isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _should_swap_extracted_nick_with_region(nick: str, region: str) -> bool:
+    """场景 2 判断：nick 不像昵称且 region 像昵称时交换两者
+
+    两条命中路径（任一即可）：
+    - region 是脱敏昵称且 nick 明显不是昵称（地名/时间/标签）
+    - nick 像发布标签且 region 不像地名且 region 像昵称
+
+    例外：nick 也是脱敏昵称时，视为数据冗余，不交换（两个都是昵称）
+    """
+    region_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(region))
+    nick_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(nick))
+    nick_is_non_nick = is_region_like(nick) or _looks_like_publish_label(nick)
+    return (
+        (region_is_masked_nick and not nick_is_masked_nick and nick_is_non_nick)
+        or (
+            _looks_like_publish_label(nick)
+            and not is_region_like(region)
+            and _looks_like_nick(region)
+        )
+    )
 
 
 # 闲鱼搜索结果中常混入"非昵称"字段的关键词：
@@ -566,68 +580,89 @@ def _swap_seller_nick_with_region(
 
     交换后 old_seller_nick 按其语义归入 publish_time / seller_credit / region / 丢弃。
     返回 (seller_nick, region, publish_time, seller_credit)。
+
+    主函数只负责编排：判断是否交换 + 交换后字段重新分配，
+    两个子判断下沉到辅助函数以降低认知复杂度（S3776）。
     """
+    if not _should_swap_seller_nick_with_region(seller_nick, region):
+        return seller_nick, region, publish_time, seller_credit
+    # 交换时，seller_nick 的原始值按其语义归入合适字段
+    new_region, new_publish_time, new_credit = _reassign_old_seller_nick(
+        seller_nick, publish_time, seller_credit
+    )
+    return region, new_region, new_publish_time, new_credit
+
+
+def _should_swap_seller_nick_with_region(seller_nick: str, region: str) -> bool:
+    """场景 3 判断：region 是脱敏昵称且 seller_nick 明显不是昵称，或 seller_nick 不像昵称且 region 像昵称"""
     region_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(region))
     seller_nick_is_masked_nick = bool(_MASKED_NICK_PATTERN.match(seller_nick))
-    # 判断 seller_nick 是否明显不是昵称
+    # seller_nick 是否明显不是昵称（地名/时间/信用/价格标签）
     seller_nick_is_non_nick = (
         is_region_like(seller_nick)
         or _looks_like_publish_time(seller_nick)
         or _looks_like_credit(seller_nick)
         or bool(_NON_NICK_PATTERN.search(seller_nick))
     )
-    # region 是脱敏昵称且 seller_nick 明显不是昵称 → 强制交换
-    # 或 seller_nick 不像昵称且 region 像昵称 → 交换（原逻辑）
-    should_swap = (
+    return (
         (region_is_masked_nick and not seller_nick_is_masked_nick and seller_nick_is_non_nick)
         or (not _looks_like_nick(seller_nick) and _looks_like_nick(region))
     )
-    if not should_swap:
-        return seller_nick, region, publish_time, seller_credit
-    # 交换时，seller_nick 的原始值移到合适的字段
-    old_seller_nick = seller_nick
-    seller_nick = region
-    region = ""
-    # 如果 old_seller_nick 像时间且 publish_time 为空，移到 publish_time
+
+
+def _reassign_old_seller_nick(
+    old_seller_nick: str, publish_time: str, seller_credit: str
+) -> tuple[str, str, str]:
+    """交换后把 old_seller_nick 归入合适字段；返回 (region, publish_time, seller_credit)
+
+    归入优先级：发布时间 > 信用度 > 地区 > 丢弃。
+    丢弃场景：old_seller_nick 是非昵称关键词（如"几乎全新"），既不是时间/信用/地名。
+    """
+    # 像时间且 publish_time 为空 → 移到 publish_time
     if _looks_like_publish_time(old_seller_nick) and not publish_time:
-        publish_time = old_seller_nick
-    # 如果 old_seller_nick 像信用且 seller_credit 为空，移到 seller_credit
-    elif _looks_like_credit(old_seller_nick) and not seller_credit:
-        seller_credit = old_seller_nick
-    # 如果 old_seller_nick 像地名，移到 region（保留地名信息）
-    elif is_region_like(old_seller_nick):
-        region = old_seller_nick
-    # 否则丢弃（old_seller_nick 是非昵称关键词，如"几乎全新"）
-    return seller_nick, region, publish_time, seller_credit
+        return "", old_seller_nick, seller_credit
+    # 像信用且 seller_credit 为空 → 移到 seller_credit
+    if _looks_like_credit(old_seller_nick) and not seller_credit:
+        return "", publish_time, old_seller_nick
+    # 像地名 → 移到 region（保留地名信息）
+    if is_region_like(old_seller_nick):
+        return old_seller_nick, publish_time, seller_credit
+    # 否则丢弃（old_seller_nick 是非昵称关键词）
+    return "", publish_time, seller_credit
 
 
 def _build_field_map(corrected: dict) -> dict[str, dict[str, Any]]:
     """根据 corrected 中实际有值的字段构建元数据映射
 
     元数据来源 FIELD_METADATA；缺字段或值为空时不返回该字段。
+    字段是否有值的判断下沉到 _field_has_value，避免类型分支堆积在循环内（S3776）。
     """
     field_map: dict[str, dict[str, Any]] = {}
     for field, meta in FIELD_METADATA.items():
         # 字段不在 display 中时跳过（如空字典输入时 is_sold 不存在）
         if field not in corrected:
             continue
-        value = corrected.get(field)
-        # 判断字段是否有值（None/空字符串/空数字视为无值）
-        meta_type = meta["type"]
-        if meta_type == "image":
-            has_value = bool(value)
-        elif meta_type == "price":
-            has_value = value is not None and value != 0
-        elif meta_type == "number":
-            has_value = value is not None
-        elif meta_type == "status":
-            # 状态字段：只要字段存在就显示（False 表示"在售"，是有效值）
-            has_value = True
-        else:
-            has_value = bool(value)
-        if has_value:
+        if _field_has_value(meta["type"], corrected.get(field)):
             field_map[field] = meta
     return field_map
+
+
+def _field_has_value(meta_type: str, value: Any) -> bool:
+    """判断字段是否有值（不同类型语义不同）
+
+    - status：只要字段存在就显示（False 表示"在售"，是有效值）
+    - price/number：非 None 且非 0
+    - image/text：truthy 即有值
+    """
+    if meta_type == "image":
+        return bool(value)
+    if meta_type == "price":
+        return value is not None and value != 0
+    if meta_type == "number":
+        return value is not None
+    if meta_type == "status":
+        return True
+    return bool(value)
 
 
 def normalize_display_fields(display: dict) -> tuple[dict, dict]:
@@ -644,6 +679,9 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
     - region 必须是地名（不能是昵称）
     - publish_time 必须是时间（不能是昵称或地区）
     - seller_credit 必须是信用度描述（不能是昵称）
+
+    主函数只负责字段读取与场景编排，每个场景的判断+处理下沉到独立辅助函数
+    以降低认知复杂度（S3776）。
 
     Args:
         display: 原始 display 字典
@@ -666,67 +704,37 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
 
     brand = normalize_display_brand(brand, title, seller_candidate=seller_nick)
 
-    # 场景 0：seller_nick 实际是品牌/店铺标签，region 是脱敏卖家昵称。
-    # 近期实时搜索可见：seller_nick="镁光数码"/"现代海力士"，region="牧***蓉"/"行***三"。
-    # 这种情况下把 seller_nick 移到 brand，region 移到 seller_nick，真实地区未知则留空。
-    if (
-        seller_nick
-        and region
-        and _MASKED_NICK_PATTERN.match(region)
-        and not _MASKED_NICK_PATTERN.match(seller_nick)
-        and _brand_candidate_matches_title(seller_nick, title)
-    ):
-        brand = brand or seller_nick
-        seller_nick = region
-        region = ""
+    # 场景 0：seller_nick 实际是品牌/店铺标签，region 是脱敏卖家昵称
+    seller_nick, region, brand = _normalize_scene0_brand_label_swap(
+        seller_nick, region, brand, title
+    )
 
     # 场景 1：seller_nick 像信用度描述，且 seller_credit 为空 → 移动到 seller_credit
-    if seller_nick and not seller_credit and _looks_like_credit(seller_nick):
-        seller_credit = seller_nick
-        seller_nick = ""
+    seller_nick, seller_credit = _normalize_scene1_move_nick_to_credit(
+        seller_nick, seller_credit
+    )
 
     # 场景 2：seller_nick 像发布时间描述，且 publish_time 为空 → 移动到 publish_time
-    if seller_nick and not publish_time and _looks_like_publish_time(seller_nick):
-        publish_time = seller_nick
-        seller_nick = ""
+    seller_nick, publish_time = _normalize_scene2_move_nick_to_publish_time(
+        seller_nick, publish_time
+    )
 
     # 场景 3：seller_nick 不像昵称，且 region 像昵称 → 交换
-    # 修复：region 是脱敏昵称（如"芯***鱼"）时，一定是昵称
-    # 但只有当 seller_nick 明显不是昵称时才交换：
-    # - seller_nick 像地名（如"杭州"、"浙江杭州"）
-    # - seller_nick 像时间/信用/价格/标签/商品描述
-    # 例外：seller_nick 也是脱敏昵称时，视为数据冗余，不交换（两个都是昵称）
-    # 之前的判断条件 `not _looks_like_nick(seller_nick)` 过于宽松：
-    # "杭州"等简短城市名会被 _looks_like_nick 误判为昵称（2-20 字符且无非昵称关键词），
-    # 导致 seller_nick="杭州" + region="芯***鱼" 时不会交换，前端显示错位
     if seller_nick and region:
         seller_nick, region, publish_time, seller_credit = _swap_seller_nick_with_region(
             seller_nick, region, publish_time, seller_credit
         )
 
     # 场景 4：seller_nick 为空，且 region 是脱敏昵称 → 把 region 当 seller_nick
-    # 只在 region 明显是脱敏昵称（如"芯***鱼"）时才交换，避免误伤简短城市名（如"杭州"、"深圳"）
-    # 之前用 `not is_region_like(region) and _looks_like_nick(region)` 判断过于宽松：
-    # "杭州"/"深圳" 不带行政区划后缀，is_region_like 返回 False，
-    # 但 _looks_like_nick 返回 True（2-20 字符且无非昵称关键词），导致 region 被错误清空
-    # S1066: 合并嵌套 if，外层判断 region 是否脱敏昵称的入口条件
-    if not seller_nick and region and _MASKED_NICK_PATTERN.match(region):
-        seller_nick = region
-        region = ""
+    seller_nick, region = _normalize_scene4_region_to_seller_nick(seller_nick, region)
 
     # 场景 5：region 不像地名，且 seller_nick 像地名 → 交换
-    # S1066: 合并嵌套 if，交换 region 与 seller_nick 的判断条件同属一个语义
-    if region and seller_nick and not is_region_like(region) and is_region_like(seller_nick):
-        seller_nick, region = region, seller_nick
+    seller_nick, region = _normalize_scene5_swap_when_region_not_location(
+        seller_nick, region
+    )
 
     # 场景 6：seller_nick 命中"非昵称"关键词但没有合适的归属字段 → 清空
-    # 例如 seller_nick='几乎全新'/'9成新'，既不是时间也不是信用度，
-    # 前面场景已尝试纠正但仍然无法识别时应清空，避免前端误显示
-    # 触发条件：seller_nick 命中 _NON_NICK_PATTERN 且 region 没有有效值
-    # S1066: 合并嵌套 if，"命中非昵称且无 region 可填补"是同一清空判断
-    if seller_nick and _NON_NICK_PATTERN.search(seller_nick) and not region:
-        # 无 region 可填补时，清空 seller_nick
-        seller_nick = ""
+    seller_nick = _normalize_scene6_clear_invalid_nick(seller_nick, region)
 
     # 写回校正后的字段
     corrected["seller_nick"] = seller_nick
@@ -736,6 +744,77 @@ def normalize_display_fields(display: dict) -> tuple[dict, dict]:
     corrected["brand"] = brand
 
     return corrected, _build_field_map(corrected)
+
+
+def _normalize_scene0_brand_label_swap(
+    seller_nick: str, region: str, brand: str, title: str
+) -> tuple[str, str, str]:
+    """场景 0：seller_nick 是品牌/店铺标签且 region 是脱敏卖家昵称
+
+    近期实时搜索可见：seller_nick="镁光数码"/"现代海力士"，region="牧***蓉"/"行***三"。
+    把 seller_nick 移到 brand，region 移到 seller_nick，真实地区未知则留空。
+    """
+    if (
+        seller_nick
+        and region
+        and _MASKED_NICK_PATTERN.match(region)
+        and not _MASKED_NICK_PATTERN.match(seller_nick)
+        and _brand_candidate_matches_title(seller_nick, title)
+    ):
+        return region, "", (brand or seller_nick)
+    return seller_nick, region, brand
+
+
+def _normalize_scene1_move_nick_to_credit(
+    seller_nick: str, seller_credit: str
+) -> tuple[str, str]:
+    """场景 1：seller_nick 像信用度描述，且 seller_credit 为空 → 移动到 seller_credit"""
+    if seller_nick and not seller_credit and _looks_like_credit(seller_nick):
+        return "", seller_nick
+    return seller_nick, seller_credit
+
+
+def _normalize_scene2_move_nick_to_publish_time(
+    seller_nick: str, publish_time: str
+) -> tuple[str, str]:
+    """场景 2：seller_nick 像发布时间描述，且 publish_time 为空 → 移动到 publish_time"""
+    if seller_nick and not publish_time and _looks_like_publish_time(seller_nick):
+        return "", seller_nick
+    return seller_nick, publish_time
+
+
+def _normalize_scene4_region_to_seller_nick(
+    seller_nick: str, region: str
+) -> tuple[str, str]:
+    """场景 4：seller_nick 为空，且 region 是脱敏昵称 → 把 region 当 seller_nick
+
+    只在 region 明显是脱敏昵称（如"芯***鱼"）时才交换，避免误伤简短城市名
+    （如"杭州"、"深圳"不带行政区划后缀，is_region_like 返回 False，
+    但 _looks_like_nick 返回 True，会导致 region 被错误清空）。
+    """
+    if not seller_nick and region and _MASKED_NICK_PATTERN.match(region):
+        return region, ""
+    return seller_nick, region
+
+
+def _normalize_scene5_swap_when_region_not_location(
+    seller_nick: str, region: str
+) -> tuple[str, str]:
+    """场景 5：region 不像地名，且 seller_nick 像地名 → 交换两者"""
+    if region and seller_nick and not is_region_like(region) and is_region_like(seller_nick):
+        return region, seller_nick
+    return seller_nick, region
+
+
+def _normalize_scene6_clear_invalid_nick(seller_nick: str, region: str) -> str:
+    """场景 6：seller_nick 命中"非昵称"关键词且 region 无有效值 → 清空
+
+    例如 seller_nick='几乎全新'/'9成新'，既不是时间也不是信用度，
+    前面场景已尝试纠正但仍然无法识别时应清空，避免前端误显示。
+    """
+    if seller_nick and _NON_NICK_PATTERN.search(seller_nick) and not region:
+        return ""
+    return seller_nick
 
 
 def parse_search_api_result(result: dict) -> list[dict]:

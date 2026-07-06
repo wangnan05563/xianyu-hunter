@@ -206,14 +206,8 @@ class TaskWorker:
     async def run_once(self) -> RunResult:
         """执行一轮完整流水线
 
-        流程：
-        1. 搜索
-        2. 去重
-        3. 拉详情 + 卖家主页
-        4. 价格过滤
-        5. 评估
-        6. 落单（仅 AUTO 模式）
-        7. 写入 task_links
+        流程：搜索 → 去重 → 详情+卖家 → 价格过滤 → 评估 → 落单 → 写 task_links
+        本方法只负责阶段编排，单阶段实现细节在对应的私有方法中
         """
         stats = RunStats()
         evaluations: list[EvalResult] = []
@@ -227,143 +221,30 @@ class TaskWorker:
         self._consecutive_collect_failures = 0
 
         try:
-            # 1. 搜索（传递任务配置的筛选标签 + 全局搜索参数配置）
-            logger.info(f"[Task {self.task.id}] 搜索「{self.task.keyword}」")
-            await self._sync_cookie_before_search()
-            combined_filters = self._build_combined_search_filters()
-            items = await self._execute_search_with_timeout(combined_filters, stats)
+            # 1. 搜索阶段：超时/会话失效直接返回，调用方据 stats 决策
+            items = await self._search_phase(stats)
             if items is None:
-                # 搜索超时：持续占用 browser_lock 阻塞 live 端点，因此暂停任务
-                return RunResult(stats=stats, should_pause=True)
-            stats.found = len(items)
-            logger.info(f"[Task {self.task.id}] 搜索到 {stats.found} 件")
-
-            await self._yield_to_live_queries()
-
-            # RGV587 会话失效时通知 Scheduler 暂停任务
-            # 避免无效搜索持续占用 browser_lock，阻塞 live 端点的实时搜索
-            if getattr(self.collector, 'last_session_invalid', False):
-                logger.warning(f"[Task {self.task.id}] 闲鱼会话失效（RGV587_ERROR），自动暂停任务，请重新登录闲鱼")
-                self._invalidate_session_identity()
-                stats.finished_at = datetime.now(timezone.utc)
                 return RunResult(stats=stats, should_pause=True)
 
-            # 2. 去重
-            # ItemDedup.filter_new 是同步方法（基于 repo.items_exist 批量查询），
-            # 无需 await——之前误用 await 会被 async FakeDedup 掩盖，生产环境会抛 TypeError
-            new_items = self.dedup.filter_new(items)
-            stats.deduped = stats.found - len(new_items)
-            if not new_items:
-                logger.info(f"[Task {self.task.id}] 全部已看过，本轮跳过")
-                stats.finished_at = datetime.now(timezone.utc)
+            # 2. 去重 + 限流：返回 None 表示本轮无可处理商品
+            new_items = self._dedup_and_limit(items, stats)
+            if new_items is None:
                 return RunResult(stats=stats)
 
-            # 限制每轮条数：使用用户配置的 page_size（默认 20）
-            # 避免处理过多商品导致 OOM 或超时
-            max_items = self.config.search_page_size or self.config.max_items_per_run
-            new_items = new_items[:max_items]
-
-            # 立即写入 task_links（搜索完成后直接存储，不等详情爬取）
-            # 这样用户可以在"闲鱼内容关联"面板立即看到搜索结果
+            # 3. 立即写 task_links + 估算市场价
             self._save_task_links(new_items)
             stats.linked = sum(
                 1 for item in new_items
                 if task_keyword_matches_title(self.task.keyword, getattr(item, "title", None))
             )
-
             market_ctx = self._compute_market_context(new_items)
 
-            # 3. 串行拉取详情 + 卖家主页（复用单个页面，避免并发打开多个浏览器窗口）
-            # 原实现用 Semaphore(3) + gather 并发，每个 detail/seller_profile 都 new_page，
-            # 导致 scheduler 每轮触发时同时弹出 6 个窗口（3 详情 + 3 卖家主页）。
-            # 改为串行复用单个详情页 + 单个卖家页，窗口数从 6 降到 2，且不会并发弹出。
-            shared_pages: dict = {"detail": None, "seller": None}
-            # collector.browser 可能为 None（测试环境），此时不创建复用页面
-            _has_browser = getattr(self.collector, 'browser', None) is not None
-            try:
-                for summary in new_items:
-                    if not summary.id:
-                        continue
-                    if getattr(self.collector, 'last_session_invalid', False):
-                        logger.warning(
-                            "[Task {}] 详情采集前检测到闲鱼会话失效，停止本轮并暂停任务",
-                            self.task.id,
-                        )
-                        stats.finished_at = datetime.now(timezone.utc)
-                        return RunResult(stats=stats, evaluations=evaluations, buy_results=buy_results, should_pause=True)
-
-                    detail, seller, should_pause = await self._collect_detail_and_seller(
-                        summary, shared_pages, _has_browser
-                    )
-                    if should_pause:
-                        stats.finished_at = datetime.now(timezone.utc)
-                        return RunResult(stats=stats, evaluations=evaluations, buy_results=buy_results, should_pause=True)
-                    if not detail or not seller:
-                        continue
-
-                    # 用详情页采集到的 seller_id 更新 task_links
-                    self._update_seller_in_task_links(detail, summary)
-
-                    try:
-                        # 4. 价格过滤 + 5. 评估
-                        eval_result = self._evaluate_item(detail, seller, market_ctx, stats, evaluations)
-                        if eval_result is None:
-                            continue
-
-                        # 写入 events 表，供评估明细/事件中心展示
-                        self._save_eval_event(detail, eval_result)
-
-                        # 推送门槛：使用配置的 pass_score（默认 60）
-                        # 通过此门槛的商品会进入 AI 评估和推送通知流程
-                        # 但不一定会触发抢单（抢单需达到 auto_buy_score，见下方落单判断）
-                        _pass_score = eval_cfg.pass_score if eval_cfg else 60
-                        if not eval_result.should_pass(_pass_score):
-                            continue
-                        stats.passed += 1
-
-                        # 5.5 AI 自动评估（可选，消耗 token）
-                        ai_eval_result = await self._run_ai_auto_eval(
-                            detail, eval_result, eval_cfg, settings, _has_browser
-                        )
-                        if ai_eval_result is None:
-                            continue
-                        eval_result = ai_eval_result
-
-                        # 5.6 AI 深度分析（可选，消耗更多 token）
-                        if not await self._run_ai_deep_analyze(detail, eval_cfg, settings, _has_browser):
-                            continue
-
-                        # 触发 EVAL_PASSED 事件，让 NotifierHub 等订阅者收到通知
-                        # 为什么放在 AI 评估/深度分析之后：避免 AI reject 后仍发通知造成误报，
-                        # 确保只有最终通过的商品才触发推送。用 publish_nowait 避免阻塞主流程
-                        self._publish_eval_passed_event(detail, eval_result, _pass_score)
-
-                        # 5.8 自动官方采集（P1: 对通过评估的商品做深度验证）
-                        # 放在 EVAL_PASSED 之后：采集是深度验证，失败不影响已发出的通知
-                        await self._run_official_collect(detail, stats, eval_cfg)
-
-                        # 6. 落单
-                        action = await self._attempt_buy(detail, eval_result, eval_cfg, stats, buy_results)
-                        if action == "break":
-                            break
-                    except Exception as e:  # noqa: BLE001
-                        logger.exception(f"[Task {self.task.id}] 处理 {summary.id} 出错: {e}")
-                        # 捕获到 error_logs 表，供错误日志页面展示
-                        # 这里是单商品处理异常，记录后 continue 跳过该商品，不影响整体流程
-                        try:
-                            from xianyu_hunter.web.middleware.error_capture import capture_background_error
-                            capture_background_error(e, context={
-                                "source": "worker.run_once.process_item",
-                                "task_id": self.task.id,
-                                "item_id": getattr(summary, 'id', None),
-                            })
-                        except Exception:
-                            pass
-                        continue
-            finally:
-                # 关闭复用的详情页和卖家页，避免页面泄漏
-                await self._close_shared_pages(shared_pages)
-
+            # 4. 详情/评估/落单：处理循环内部异常通过返回值控制是否提前终止
+            early_return = await self._process_items_loop(
+                new_items, market_ctx, eval_cfg, settings, stats, evaluations, buy_results
+            )
+            if early_return is not None:
+                return early_return
         finally:
             await self._finalize_run(stats, new_items)
 
@@ -374,6 +255,168 @@ class TaskWorker:
             f"落单 {stats.bought} / 失败 {stats.failed} / 关联 {stats.linked}"
         )
         return RunResult(stats=stats, evaluations=evaluations, buy_results=buy_results)
+
+    async def _search_phase(self, stats: RunStats) -> list[ItemSummary] | None:
+        """搜索阶段：返回商品列表，会话失效或超时返回 None
+
+        会话失效检测放在搜索之后：detail 阶段若已会话失效，
+        collector 会置 last_session_invalid=True，由调用方统一处理暂停
+        """
+        logger.info(f"[Task {self.task.id}] 搜索「{self.task.keyword}」")
+        await self._sync_cookie_before_search()
+        combined_filters = self._build_combined_search_filters()
+        items = await self._execute_search_with_timeout(combined_filters, stats)
+        if items is None:
+            # 搜索超时：持续占用 browser_lock 阻塞 live 端点，因此暂停任务
+            return None
+        stats.found = len(items)
+        logger.info(f"[Task {self.task.id}] 搜索到 {stats.found} 件")
+
+        await self._yield_to_live_queries()
+
+        # RGV587 会话失效时通知 Scheduler 暂停任务
+        # 避免无效搜索持续占用 browser_lock，阻塞 live 端点的实时搜索
+        if getattr(self.collector, 'last_session_invalid', False):
+            logger.warning(f"[Task {self.task.id}] 闲鱼会话失效（RGV587_ERROR），自动暂停任务，请重新登录闲鱼")
+            self._invalidate_session_identity()
+            stats.finished_at = datetime.now(timezone.utc)
+            return None
+        return items
+
+    def _dedup_and_limit(self, items: list[ItemSummary], stats: RunStats) -> list[ItemSummary] | None:
+        """去重 + 限制每轮条数，无可处理商品返回 None
+
+        ItemDedup.filter_new 是同步方法（基于 repo.items_exist 批量查询），
+        无需 await——之前误用 await 会被 async FakeDedup 掩盖，生产环境会抛 TypeError
+        """
+        new_items = self.dedup.filter_new(items)
+        stats.deduped = stats.found - len(new_items)
+        if not new_items:
+            logger.info(f"[Task {self.task.id}] 全部已看过，本轮跳过")
+            stats.finished_at = datetime.now(timezone.utc)
+            return None
+        # 限制每轮条数：使用用户配置的 page_size（默认 20）
+        # 避免处理过多商品导致 OOM 或超时
+        max_items = self.config.search_page_size or self.config.max_items_per_run
+        return new_items[:max_items]
+
+    async def _process_items_loop(
+        self, new_items: list[ItemSummary], market_ctx: MarketContext | None,
+        eval_cfg: EvalConfig, settings: Any, stats: RunStats,
+        evaluations: list[EvalResult], buy_results: list[BuyResult]
+    ) -> RunResult | None:
+        """串行拉取详情 + 卖家主页并执行评估/落单
+
+        复用单个详情页和卖家页，避免并发打开多个浏览器窗口
+        （原 Semaphore(3)+gather 实现每轮弹出 6 个窗口，干扰用户操作）
+        返回 RunResult 表示应提前终止本轮；None 表示正常完成
+        """
+        shared_pages: dict = {"detail": None, "seller": None}
+        # collector.browser 可能为 None（测试环境），此时不创建复用页面
+        _has_browser = getattr(self.collector, 'browser', None) is not None
+        try:
+            for summary in new_items:
+                if not summary.id:
+                    continue
+                # 详情采集前再次检测会话失效，避免无效请求
+                if getattr(self.collector, 'last_session_invalid', False):
+                    logger.warning(
+                        "[Task {}] 详情采集前检测到闲鱼会话失效，停止本轮并暂停任务",
+                        self.task.id,
+                    )
+                    stats.finished_at = datetime.now(timezone.utc)
+                    return RunResult(stats=stats, evaluations=evaluations, buy_results=buy_results, should_pause=True)
+
+                detail, seller, should_pause = await self._collect_detail_and_seller(
+                    summary, shared_pages, _has_browser
+                )
+                if should_pause:
+                    stats.finished_at = datetime.now(timezone.utc)
+                    return RunResult(stats=stats, evaluations=evaluations, buy_results=buy_results, should_pause=True)
+                if not detail or not seller:
+                    continue
+
+                # 用详情页采集到的 seller_id 更新 task_links
+                self._update_seller_in_task_links(detail, summary)
+
+                # 单商品处理（评估/AI/落单）独立方法，异常隔离到单条商品
+                stop = await self._process_single_item(
+                    detail, seller, summary, market_ctx, eval_cfg,
+                    settings, _has_browser, stats, evaluations, buy_results
+                )
+                if stop:
+                    break
+        finally:
+            # 关闭复用的详情页和卖家页，避免页面泄漏
+            await self._close_shared_pages(shared_pages)
+        return None
+
+    async def _process_single_item(
+        self, detail: Any, seller: Any, summary: ItemSummary,
+        market_ctx: MarketContext | None, eval_cfg: EvalConfig, settings: Any,
+        _has_browser: bool, stats: RunStats,
+        evaluations: list[EvalResult], buy_results: list[BuyResult]
+    ) -> bool:
+        """处理单个商品：价格过滤 → 评估 → AI 二次确认 → 通知 → 官方采集 → 落单
+
+        返回 True 表示已抢单成功且配置 stop_on_first_buy，调用方应终止循环；
+        任何单条商品异常都被捕获并记录，不影响后续商品处理
+        """
+        try:
+            # 4. 价格过滤 + 5. 评估
+            eval_result = self._evaluate_item(detail, seller, market_ctx, stats, evaluations)
+            if eval_result is None:
+                return False
+
+            # 写入 events 表，供评估明细/事件中心展示
+            self._save_eval_event(detail, eval_result)
+
+            # 推送门槛：使用配置的 pass_score（默认 60）
+            # 通过此门槛的商品会进入 AI 评估和推送通知流程
+            # 但不一定会触发抢单（抢单需达到 auto_buy_score，见下方落单判断）
+            _pass_score = eval_cfg.pass_score if eval_cfg else 60
+            if not eval_result.should_pass(_pass_score):
+                return False
+            stats.passed += 1
+
+            # 5.5 AI 自动评估（可选，消耗 token）
+            ai_eval_result = await self._run_ai_auto_eval(
+                detail, eval_result, eval_cfg, settings, _has_browser
+            )
+            if ai_eval_result is None:
+                return False
+            eval_result = ai_eval_result
+
+            # 5.6 AI 深度分析（可选，消耗更多 token）
+            if not await self._run_ai_deep_analyze(detail, eval_cfg, settings, _has_browser):
+                return False
+
+            # 触发 EVAL_PASSED 事件，让 NotifierHub 等订阅者收到通知
+            # 为什么放在 AI 评估/深度分析之后：避免 AI reject 后仍发通知造成误报，
+            # 确保只有最终通过的商品才触发推送。用 publish_nowait 避免阻塞主流程
+            self._publish_eval_passed_event(detail, eval_result, _pass_score)
+
+            # 5.8 自动官方采集（P1: 对通过评估的商品做深度验证）
+            # 放在 EVAL_PASSED 之后：采集是深度验证，失败不影响已发出的通知
+            await self._run_official_collect(detail, stats, eval_cfg)
+
+            # 6. 落单
+            action = await self._attempt_buy(detail, eval_result, eval_cfg, stats, buy_results)
+            return action == "break"
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"[Task {self.task.id}] 处理 {summary.id} 出错: {e}")
+            # 捕获到 error_logs 表，供错误日志页面展示
+            # 这里是单商品处理异常，记录后由调用方 continue 跳过该商品，不影响整体流程
+            try:
+                from xianyu_hunter.web.middleware.error_capture import capture_background_error
+                capture_background_error(e, context={
+                    "source": "worker.run_once.process_item",
+                    "task_id": self.task.id,
+                    "item_id": getattr(summary, 'id', None),
+                })
+            except Exception:
+                pass
+            return False
 
     def _compute_market_context(self, items: list) -> MarketContext | None:
         """从当前批次的商品中估算市场参考价（中位数 + 全量价格列表）"""

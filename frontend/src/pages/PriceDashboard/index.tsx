@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Card, Table, Tag, Select, Button, Space, Spin, Empty, Statistic, Row, Col,
-  Alert, Tooltip, Typography, theme,
+  Alert, Tooltip, Typography, theme, InputNumber, Progress,
 } from 'antd'
 import { ReloadOutlined, InfoCircleOutlined } from '@ant-design/icons'
 import ReactECharts from '../../components/charts/EChart'
@@ -9,7 +9,7 @@ import { priceApi, taskApi } from '../../api'
 import type {
   CategoryStat, CategoryComparisonItem, CategoryComparisonSortBy,
 } from '../../api'
-import type { Task } from '../../api/types'
+import type { BargainEval, Task } from '../../api/types'
 
 const { Text } = Typography
 
@@ -44,6 +44,16 @@ function formatPrice(v: number | null | undefined): string {
   return `¥${(v / 1000).toFixed(1)}k`
 }
 
+// 捡漏评估等级 → Tag 颜色 + 中文标签映射
+// 与后端 _compute_bargain_level 的 excellent/good/fair/poor/unknown 一一对应
+const BARGAIN_LEVEL_CONFIG: Record<string, { color: string; label: string }> = {
+  excellent: { color: 'green', label: '极好捡漏' },
+  good: { color: 'blue', label: '价格划算' },
+  fair: { color: 'orange', label: '价格适中' },
+  poor: { color: 'red', label: '价格偏高' },
+  unknown: { color: 'default', label: '无法评估' },
+}
+
 export default function PriceDashboard() {
   const { token } = theme.useToken()
 
@@ -67,14 +77,25 @@ export default function PriceDashboard() {
     max_price: number | null
     median_price: number | null
     bargain_price: number | null
+    p10?: number | null
+    p25?: number | null
+    p75?: number | null
+    p90?: number | null
     sample_size: number
+    filtered_count?: number
     source: string
     source_label?: string
     message?: string
+    task_price_range?: { min_price: number | null; max_price: number | null }
   } | null>(null)
   const [soldLoading, setSoldLoading] = useState(false)
   const [soldTaskId, setSoldTaskId] = useState<string | undefined>(undefined)
   const [soldRangeDays, setSoldRangeDays] = useState(30)
+
+  // 价格评估工具：用户输入当前价格，调用 bargain-eval 得到等级与建议
+  const [evalCurrentPrice, setEvalCurrentPrice] = useState<number | null>(null)
+  const [evalResult, setEvalResult] = useState<BargainEval | null>(null)
+  const [evalLoading, setEvalLoading] = useState(false)
 
   // 任务列表（用于捡漏价格参考的品类选择器）
   const [tasks, setTasks] = useState<Task[]>([])
@@ -126,6 +147,32 @@ export default function PriceDashboard() {
     } finally {
       setSoldLoading(false)
     }
+  }, [soldTaskId, soldRangeDays])
+
+  // 价格评估：复用 soldRange 的时间窗与任务，确保评估口径与上方统计一致
+  const fetchBargainEval = useCallback(async () => {
+    if (!soldTaskId || evalCurrentPrice == null || evalCurrentPrice <= 0) {
+      setEvalResult(null)
+      return
+    }
+    setEvalLoading(true)
+    try {
+      const data = await priceApi.bargainEval({
+        task_id: soldTaskId,
+        current_price: evalCurrentPrice,
+        range_days: soldRangeDays,
+      })
+      setEvalResult(data)
+    } catch {
+      setEvalResult(null)
+    } finally {
+      setEvalLoading(false)
+    }
+  }, [soldTaskId, evalCurrentPrice, soldRangeDays])
+
+  // 切换任务或时间窗时清空评估结果，避免与新任务口径不一致的旧结论误导用户
+  useEffect(() => {
+    setEvalResult(null)
   }, [soldTaskId, soldRangeDays])
 
   // 拉取任务列表，用于捡漏价格参考的品类下拉
@@ -226,6 +273,24 @@ export default function PriceDashboard() {
       render: (name: string, record: CategoryStat) => (
         <span>{name || record.keyword || '未分类'}</span>
       ),
+    },
+    {
+      title: '任务价格区间',
+      dataIndex: 'task_price_range',
+      key: 'task_price_range',
+      width: 150,
+      render: (tr: CategoryStat['task_price_range']) => {
+        if (!tr || (tr.min_price == null && tr.max_price == null)) {
+          return <Text type="secondary">未配置</Text>
+        }
+        return (
+          <Tag color="cyan">
+            {tr.min_price != null ? `¥${tr.min_price}` : '—'}
+            {' ~ '}
+            {tr.max_price != null ? `¥${tr.max_price}` : '—'}
+          </Tag>
+        )
+      },
     },
     { title: '样本数', dataIndex: 'count', key: 'count', width: 80, sorter: (a: CategoryStat, b: CategoryStat) => a.count - b.count, render: (v: number) => <Tag color="blue">{v}</Tag> },
     { title: '最低价', dataIndex: 'min', key: 'min', width: 90, sorter: (a: CategoryStat, b: CategoryStat) => a.min - b.min, render: (v: number) => formatPrice(v) },
@@ -347,10 +412,139 @@ export default function PriceDashboard() {
               {soldRange.source_label && (
                 <span><Text type="secondary">数据来源：</Text><Tag color="purple">{soldRange.source_label}</Tag></span>
               )}
+              {soldRange.task_price_range && (soldRange.task_price_range.min_price != null || soldRange.task_price_range.max_price != null) && (
+                <span>
+                  <Text type="secondary">任务价格区间：</Text>
+                  <Tag color="cyan">
+                    {soldRange.task_price_range.min_price != null ? `¥${soldRange.task_price_range.min_price}` : '—'}
+                    {' ~ '}
+                    {soldRange.task_price_range.max_price != null ? `¥${soldRange.task_price_range.max_price}` : '—'}
+                  </Tag>
+                </span>
+              )}
+              {soldRange.filtered_count != null && soldRange.filtered_count > 0 && (
+                <span>
+                  <Tooltip title="被任务价格区间过滤掉的异常样本数（1 元引流、配件、超范围高价）">
+                    <Tag color="orange">已过滤 {soldRange.filtered_count} 个</Tag>
+                  </Tooltip>
+                </span>
+              )}
             </div>
+            {soldRange.task_price_range && (soldRange.task_price_range.min_price != null || soldRange.task_price_range.max_price != null) && (
+              <Alert
+                type="info"
+                showIcon={false}
+                style={{ marginTop: 8, fontSize: 12 }}
+                message={`已按任务价格区间过滤异常样本（1 元引流、配件、超范围高价）${soldRange.filtered_count ? `，本次共过滤 ${soldRange.filtered_count} 个` : ''}，统计更贴近任务实际监控目标。`}
+              />
+            )}
           </>
         ) : (
           <Empty description={soldRange?.message || '暂无已售价格数据，建议先执行实时搜索采集更多商品'} />
+        )}
+      </Card>
+
+      {/* 模块 B+：价格评估工具（基于上方捡漏参考的多维决策）*/}
+      <Card
+        title="价格评估"
+        extra={
+          <Tooltip title="刷新">
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={fetchBargainEval}
+              loading={evalLoading}
+              disabled={!soldTaskId || evalCurrentPrice == null || evalCurrentPrice <= 0}
+            />
+          </Tooltip>
+        }
+      >
+        {!soldTaskId ? (
+          <Empty description={'请先在上方"捡漏价格参考"选择品类，再进行价格评估'} />
+        ) : (
+          <>
+            <Space wrap style={{ marginBottom: 16 }}>
+              <Text type="secondary">当前价格：</Text>
+              <InputNumber
+                value={evalCurrentPrice}
+                onChange={(v) => setEvalCurrentPrice(v)}
+                min={0}
+                precision={2}
+                prefix="¥"
+                placeholder="输入待评估价格"
+                style={{ width: 180 }}
+              />
+              <Button
+                type="primary"
+                size="small"
+                onClick={fetchBargainEval}
+                loading={evalLoading}
+                disabled={evalCurrentPrice == null || evalCurrentPrice <= 0}
+              >
+                评估
+              </Button>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                基于任务价格区间 + 已售商品分位数综合评估
+              </Text>
+            </Space>
+            {evalLoading ? (
+              <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+            ) : evalResult ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <Row gutter={16} align="middle">
+                  <Col xs={24} sm={8}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Text type="secondary">评估等级：</Text>
+                      <Tag color={BARGAIN_LEVEL_CONFIG[evalResult.bargain_level]?.color || 'default'}>
+                        {BARGAIN_LEVEL_CONFIG[evalResult.bargain_level]?.label || evalResult.bargain_level}
+                      </Tag>
+                    </div>
+                  </Col>
+                  <Col xs={24} sm={16}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Text type="secondary">捡漏得分：</Text>
+                      <Progress
+                        percent={evalResult.bargain_score}
+                        size="small"
+                        status={
+                          evalResult.bargain_level === 'excellent' || evalResult.bargain_level === 'good'
+                            ? 'success'
+                            : evalResult.bargain_level === 'fair'
+                              ? 'normal'
+                              : 'exception'
+                        }
+                        style={{ flex: 1, minWidth: 200, marginBottom: 0 }}
+                      />
+                    </div>
+                  </Col>
+                </Row>
+                <Alert
+                  type={
+                    evalResult.bargain_level === 'excellent' || evalResult.bargain_level === 'good'
+                      ? 'success'
+                      : evalResult.bargain_level === 'fair'
+                        ? 'info'
+                        : evalResult.bargain_level === 'poor'
+                          ? 'warning'
+                          : 'error'
+                  }
+                  message={evalResult.suggestion}
+                />
+                {evalResult.sold_price_stats && (
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: token.colorTextTertiary }}>
+                    <span>已售 P10：<b>{formatPrice(evalResult.sold_price_stats.p10)}</b></span>
+                    <span>P25：<b>{formatPrice(evalResult.sold_price_stats.p25)}</b></span>
+                    <span>中位数：<b>{formatPrice(evalResult.sold_price_stats.median)}</b></span>
+                    <span>P75：<b>{formatPrice(evalResult.sold_price_stats.p75)}</b></span>
+                    <span>P90：<b>{formatPrice(evalResult.sold_price_stats.p90)}</b></span>
+                    <span>样本数：<b>{evalResult.sold_price_stats.count}</b></span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Empty description={'输入价格并点击"评估"查看捡漏建议'} />
+            )}
+          </>
         )}
       </Card>
 
@@ -368,6 +562,12 @@ export default function PriceDashboard() {
           </Space>
         }
       >
+        <Alert
+          type="info"
+          showIcon={false}
+          style={{ marginBottom: 12, fontSize: 12 }}
+          message="已按各任务配置的价格区间过滤超范围样本（1 元引流、配件、超范围高价），最高价/最低价均不会超出任务配置的上限/下限。"
+        />
         <Table<CategoryStat>
           rowKey={(r) => r.task_id || '__orphan__'}
           columns={statsColumns}

@@ -12,6 +12,7 @@ browser:
   auto_sync_interval: 30
   auto_sync_expiry_threshold: 10
   cdp_port: 9222
+  proxy_server: ''
 antidetect:
   qps: 10
   min_delay_ms: 3000
@@ -78,7 +79,7 @@ eval:
   - 现货
   - 大量有货
   - 全新
-  pass_score: 70
+  pass_score: 75
   auto_buy_score: 80
   ai_auto_eval: false
   ai_auto_deep_analyze: false
@@ -107,7 +108,7 @@ price_strategy:
   enabled_min: true
   min_price: 600
   enabled_market_ratio: true
-  market_ratio: 1
+  market_ratio: 0.85
   enabled_top_n: true
   top_n: 10
 batch_refresh:
@@ -173,3 +174,93 @@ task_scheduler:
   default_interval_seconds: 60
   auto_search_enabled: false
   auto_search_concurrency: 1
+cookie_management:
+  key_cookies:
+  - _m_h5_tk
+  - _m_h5_tk_enc
+  - unb
+  - sgcookie
+  - cookie2
+  - lg2
+  cache_ttl_sec: 30
+  test_cookie_values:
+    unb:
+    - '123456'
+    - '123'
+    cookie2:
+    - abc
+    _m_h5_tk:
+    - abc
+    _m_h5_tk_enc:
+    - enc
+    - enc_123
+    - abc123enc456
+    sgcookie:
+    - sg
+    - sg_token
+  cookie_format_patterns:
+    _m_h5_tk: ^[0-9a-fA-F]{32}_\d{13}$
+    unb: ^\d{8,}$
+    cookie2: ^[0-9a-fA-F]{32,}$
+    sgcookie: ^.{20,}$
+    _m_h5_tk_enc: ^.{16,}$
+  layer_definitions:
+    identity:
+      cookies:
+      - unb
+      - cookie2
+      - sgcookie
+      - t
+      - _tb_token_
+      - lg2
+      ttl: session
+      depends_on: null
+    session:
+      cookies:
+      - _m_h5_tk
+      - _m_h5_tk_enc
+      ttl: 15-22min
+      depends_on: identity
+    tracking:
+      cookies:
+      - cna
+      - tfstk
+      - xlly_s
+      - ali_aplus_v3
+      - utdid
+      ttl: dynamic
+      depends_on: null
+  domains:
+  - .goofish.com
+  - goofish.com
+  - .taobao.com
+  - taobao.com
+  - .alipay.com
+  - alipay.com
+  - login.taobao.com
+  - .login.taobao.com
+  import_full: true
+token_renewer:
+  renew_before_expiry_sec: 600
+  check_interval_sec: 120
+  token_ttl_sec: 1200
+  max_renew_attempts: 3
+  retry_interval_sec: 30
+  timestamp_api: mtop.taobao.mtop.common.getTimestamp
+login_orchestrator:
+  renew_fail_threshold: 2
+  auto_relogin_cooldown_sec: 600
+mtop_sync:
+  key_cookie_names:
+  - _m_h5_tk
+  - _m_h5_tk_enc
+  - unb
+  - sgcookie
+  - cookie2
+  - lg2
+  throttle_enabled: true
+  throttle_interval_sec: 5
+subprocess_sync:
+  pending_file_path: data/.cookie_sync_pending
+  poll_interval_sec: 30
+  startup_check_enabled: true

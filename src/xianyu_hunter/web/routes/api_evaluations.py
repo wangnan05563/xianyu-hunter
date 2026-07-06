@@ -561,6 +561,65 @@ def _filter_time_range(r: dict, start_dt: Any, end_dt: Any) -> bool:
     return False
 
 
+def _enrich_eval_record(
+    r: dict, item_map: dict[str, dict], link_map: dict[str, dict],
+    order_map: dict[str, dict], seller_map: dict[str, str],
+) -> None:
+    """丰富单条评估记录的 payload 字段（标题/价格/卖家/订单状态等）
+
+    拆分自主循环：降低 list_evaluations 嵌套层级，避免 11 个 if 平铺时认知负担过重"""
+    # 关键修复：必须把兜底空字典写回 r["payload"]，否则数据库中 payload 为 NULL 的记录
+    # 会在 _enrich_eval_with_item 修改后仍以 None 返回前端，导致 r.payload.score 报错
+    r["payload"] = r.get("payload") or {}
+    payload = r["payload"]
+
+    _enrich_eval_with_item(payload, item_map, link_map, order_map)
+
+    # 用 sellers 表补充卖家昵称（items 表无 seller_nick 字段）
+    # 关键修复：脏数据清洗后 seller_nick 为空字符串，不能用 `not` 判定缺失
+    sid = payload.get("seller_id") or r.get("seller_id")
+    if sid and payload.get("seller_nick") is None and str(sid) in seller_map:
+        payload["seller_nick"] = seller_map[str(sid)]
+
+    # 确保顶层 item_id 有值（兼容旧事件：EventRow.item_id 列可能为空）
+    if not r.get("item_id") and payload.get("item_id"):
+        r["item_id"] = str(payload["item_id"])
+
+
+def _should_skip_eval_record(
+    r: dict, payload: dict,
+    item_id: str | None, task_id: str | None, brand: str | None,
+    sold_filter: str, item_sold_map: dict[str, bool],
+    min_price: float | None, max_price: float | None,
+    include_out_of_range: bool,
+    min_score: int | None, max_score: int | None,
+    result_category: str | None,
+    start_dt: Any, end_dt: Any,
+) -> bool:
+    """判断评估记录是否应被跳过（不满足任一过滤条件返回 True）
+
+    拆分自主循环：把 8 个独立 if 过滤条件收敛到一个函数，
+    主循环只看到一个判定结果，降低嵌套层级与认知复杂度"""
+    if _match_item_id_filter(payload, r, item_id):
+        return True
+    if _match_task_id_filter(payload, r, task_id):
+        return True
+    if _match_brand_filter(payload, brand):
+        return True
+    if _filter_sold_status(payload, r, sold_filter, item_sold_map):
+        return True
+    if _filter_price_range(payload, min_price, max_price, include_out_of_range):
+        return True
+    score = _parse_eval_score(payload)
+    if _filter_score_range(score, min_score, max_score):
+        return True
+    if _filter_result_category(score, result_category):
+        return True
+    if _filter_time_range(r, start_dt, end_dt):
+        return True
+    return False
+
+
 @router.get("")
 def list_evaluations(
     request: Request,
@@ -651,43 +710,15 @@ def list_evaluations(
         # 误算为 insufficient_count
         if str(r.get("type", "")) != _EVAL_SCORED_TYPE:
             continue
-        # 关键修复：必须把兜底空字典写回 r["payload"]，否则数据库中 payload 为 NULL 的记录
-        # 会在 _enrich_eval_with_item 修改后仍以 None 返回前端，导致 r.payload.score 报错
-        # Cannot read properties of null (reading 'score')
-        r["payload"] = r.get("payload") or {}
+        _enrich_eval_record(r, item_map, link_map, order_map, seller_map)
         payload = r["payload"]
-
-        # 用 items 表 / task_links 数据丰富 payload（补充标题、价格、地区、图片、卖家ID等）
-        _enrich_eval_with_item(payload, item_map, link_map, order_map)
-
-        # 用 sellers 表补充卖家昵称（items 表无 seller_nick 字段）
-        # 关键修复：脏数据清洗后 seller_nick 为空字符串，不能用 `not` 判定缺失
-        sid = payload.get("seller_id") or r.get("seller_id")
-        if sid and payload.get("seller_nick") is None and str(sid) in seller_map:
-            payload["seller_nick"] = seller_map[str(sid)]
-
-        # 确保顶层 item_id 有值（兼容旧事件：EventRow.item_id 列可能为空）
-        if not r.get("item_id") and payload.get("item_id"):
-            r["item_id"] = str(payload["item_id"])
-
-        if _match_item_id_filter(payload, r, item_id):
-            continue
-        if _match_task_id_filter(payload, r, task_id):
-            continue
-        # S1066: 品牌过滤已提取为独立函数，避免嵌套 if
-        if _match_brand_filter(payload, brand):
-            continue
-        if _filter_sold_status(payload, r, sold_filter, item_sold_map):
-            continue
-        if _filter_price_range(payload, min_price, max_price, include_out_of_range):
-            continue
-
-        score = _parse_eval_score(payload)
-        if _filter_score_range(score, min_score, max_score):
-            continue
-        if _filter_result_category(score, result_category):
-            continue
-        if _filter_time_range(r, start_dt, end_dt):
+        if _should_skip_eval_record(
+            r, payload, item_id, task_id, brand,
+            sold_filter, item_sold_map,
+            min_price, max_price, include_out_of_range,
+            min_score, max_score, result_category,
+            start_dt, end_dt,
+        ):
             continue
 
         evals.append(r)
@@ -1062,6 +1093,38 @@ def _load_dist_item_price_map(container: Container, events: list[dict]) -> dict[
     return item_price_map
 
 
+def _is_within_eval_cutoff(e: dict, cutoff: Any) -> bool:
+    """检查事件是否在统计时间窗口内（有合法时间戳且不早于 cutoff）
+
+    拆分自 _collect_dist_eval_records：将时间戳解析 + cutoff 判断收敛到单一函数，
+    降低主循环嵌套层级"""
+    ts = e.get("created_at", "")
+    if not ts:
+        return False
+    d = to_datetime(ts)
+    return d is not None and d >= cutoff
+
+
+def _resolve_eval_price_from_payload(
+    payload: dict, e: dict, item_price_map: dict[str, float],
+) -> float | None:
+    """从 item_price_map 或 payload.item_price 解析价格
+
+    优先用 item_price_map（items 表结构化数据），其次 payload 中的 item_price
+    （_enrich_eval_with_item 补充的历史快照）。转换失败返回 None"""
+    item_id = payload.get("item_id") or e.get("item_id")
+    price = item_price_map.get(str(item_id)) if item_id else None
+    if price is not None:
+        return price
+    raw_price = payload.get("item_price")
+    if raw_price is None:
+        return None
+    try:
+        return float(raw_price)
+    except (TypeError, ValueError):
+        return None
+
+
 def _collect_dist_eval_records(
     events: list[dict],
     cutoff: Any,
@@ -1087,34 +1150,22 @@ def _collect_dist_eval_records(
     for e in events:
         if str(e.get("type", "")) != _EVAL_SCORED_TYPE:
             continue
-        ts = e.get("created_at", "")
-        if not ts:
-            continue
-        d = to_datetime(ts)
-        if d is None or d < cutoff:
+        if not _is_within_eval_cutoff(e, cutoff):
             continue
         payload = e.get("payload") or {}
         if _match_task_id_filter(payload, e, task_id):
             continue
-        item_id = payload.get("item_id") or e.get("item_id")
-        price = item_price_map.get(str(item_id)) if item_id else None
-        # 如果 payload 中已有价格（从 _enrich_eval_with_item 补充的），优先使用
-        # 字段名与 worker.py 写入的 payload 对齐：item_price
-        if price is None and payload.get("item_price") is not None:
-            try:
-                price = float(payload["item_price"])
-            except (TypeError, ValueError):
-                pass
+        price = _resolve_eval_price_from_payload(payload, e, item_price_map)
         price_payload = {**payload, "item_price": price}
         if _filter_price_range(price_payload, min_price, max_price, include_out_of_range):
             continue
-        score = payload.get("score")
-        if score is None:
+        # score=None（数据不足）计入 insufficient_count，区别于转换失败（跳过）
+        raw_score = payload.get("score")
+        if raw_score is None:
             insufficient_count += 1
             continue
-        try:
-            score = float(score)
-        except (TypeError, ValueError):
+        score = _parse_eval_score(payload)
+        if score is None:
             continue
         eval_records.append((score, price))
     return eval_records, insufficient_count
@@ -1145,6 +1196,79 @@ def _calc_marginal_score_and_result(
     return marginal_score, result_totals
 
 
+def _compute_log_price_bounds(
+    prices: list[float],
+) -> tuple[float, float, float, float, list[float]]:
+    """计算对数价格桶边界，返回 (pmin, pmax, log_pmin, log_pmax, price_range)
+
+    拆分自 _build_2d_buckets：将边界计算（含 pmin==pmax 和 log_pmax==log_pmin
+    两个边界情况处理）收敛到独立函数，降低主函数条件分支数"""
+    pmin = max(1.0, min(prices))
+    pmax = max(prices)
+    if pmin == pmax:
+        pmin = max(1.0, pmin * 0.9)
+        pmax = pmax * 1.1
+    log_pmin = math.log10(pmin)
+    log_pmax = math.log10(pmax)
+    if log_pmax == log_pmin:
+        log_pmax = log_pmin + 0.1
+    return pmin, pmax, log_pmin, log_pmax, [round(pmin, 2), round(pmax, 2)]
+
+
+def _init_2d_buckets(
+    score_bin_count: int, price_bin_count: int,
+) -> list[list[dict[str, int]]]:
+    """初始化二维桶，每个桶包含 count/pass/auto/fail 计数
+
+    拆分自 _build_2d_buckets：将嵌套列表推导提取为独立函数，
+    避免嵌套推导增加认知复杂度"""
+    return [
+        [{"count": 0, "pass": 0, "auto": 0, "fail": 0} for _ in range(price_bin_count)]
+        for _ in range(score_bin_count)
+    ]
+
+
+def _compute_price_bin_index(
+    price: float, pmin: float, pmax: float,
+    log_pmin: float, log_pmax: float, price_bin_count: int,
+) -> int:
+    """计算价格在对数桶中的索引
+
+    拆分自 _build_2d_buckets：将 if/else 分支 + 对数计算提取为独立函数"""
+    if pmin <= price <= pmax:
+        log_p = math.log10(price)
+        pi = int((log_p - log_pmin) / (log_pmax - log_pmin) * price_bin_count)
+        return max(0, min(price_bin_count - 1, pi))
+    return price_bin_count - 1
+
+
+def _classify_score_result(
+    score: float, pass_threshold: float, auto_threshold: float,
+) -> str:
+    """按阈值分类评估结果，返回 "auto"/"pass"/"fail"
+
+    拆分自 _build_2d_buckets：将 if/elif/else 链提取为独立函数"""
+    if score >= auto_threshold:
+        return "auto"
+    if score >= pass_threshold:
+        return "pass"
+    return "fail"
+
+
+def _sum_price_marginals(
+    buckets: list[list[dict[str, int]]],
+    score_bin_count: int, price_bin_count: int,
+) -> list[int]:
+    """按价格桶汇总所有分数桶的 count
+
+    拆分自 _build_2d_buckets：将嵌套推导（list comp + generator in sum）
+    提取为独立函数，避免嵌套推导增加认知复杂度"""
+    return [
+        sum(buckets[si][pi]["count"] for si in range(score_bin_count))
+        for pi in range(price_bin_count)
+    ]
+
+
 def _build_2d_buckets(
     eval_records: list[tuple[float, float | None]],
     score_bin_count: int,
@@ -1164,44 +1288,20 @@ def _build_2d_buckets(
         return [], [0] * price_bin_count, [0.0, 0.0]
 
     prices = [p for p, _ in pairs_with_price]
-    pmin = max(1.0, min(prices))
-    pmax = max(prices)
-    if pmin == pmax:
-        pmin = max(1.0, pmin * 0.9)
-        pmax = pmax * 1.1
-    log_pmin = math.log10(pmin)
-    log_pmax = math.log10(pmax)
-    if log_pmax == log_pmin:
-        log_pmax = log_pmin + 0.1
-    price_range = [round(pmin, 2), round(pmax, 2)]
-
-    # 二维桶 [score_idx][price_idx]
-    buckets = [
-        [{"count": 0, "pass": 0, "auto": 0, "fail": 0} for _ in range(price_bin_count)]
-        for _ in range(score_bin_count)
-    ]
+    pmin, pmax, log_pmin, log_pmax, price_range = _compute_log_price_bounds(prices)
+    buckets = _init_2d_buckets(score_bin_count, price_bin_count)
     smin, smax = 0.0, 100.0
     for price, score in pairs_with_price:
-        # 价格桶（对数刻度）
-        if pmin <= price <= pmax:
-            log_p = math.log10(price)
-            pi = int((log_p - log_pmin) / (log_pmax - log_pmin) * price_bin_count)
-            pi = max(0, min(price_bin_count - 1, pi))
-        else:
-            pi = price_bin_count - 1
+        pi = _compute_price_bin_index(
+            price, pmin, pmax, log_pmin, log_pmax, price_bin_count,
+        )
         # 分数桶
         si = int((score - smin) / (smax - smin) * score_bin_count)
         si = max(0, min(score_bin_count - 1, si))
         buckets[si][pi]["count"] += 1
-        if score >= auto_threshold:
-            buckets[si][pi]["auto"] += 1
-        elif score >= pass_threshold:
-            buckets[si][pi]["pass"] += 1
-        else:
-            buckets[si][pi]["fail"] += 1
+        buckets[si][pi][_classify_score_result(score, pass_threshold, auto_threshold)] += 1
 
-    marginal_price = [sum(buckets[si][pi]["count"] for si in range(score_bin_count))
-                      for pi in range(price_bin_count)]
+    marginal_price = _sum_price_marginals(buckets, score_bin_count, price_bin_count)
     return buckets, marginal_price, price_range
 
 
@@ -1221,6 +1321,25 @@ def _build_distribution_5bin(marginal_score: list[int]) -> list[dict[str, Any]]:
     ]
 
 
+def _compute_passing_count(marginal_score: list[int], threshold: float) -> float:
+    """计算在指定阈值下的通过数量（桶内线性插值）
+
+    threshold 右侧的分数视为通过；桶内 straddle threshold 时按比例计算。
+    拆分自 _calc_suggested_threshold：两个循环（二分搜索 + 最终计算）
+    复用同一逻辑，消除重复代码并降低嵌套"""
+    passing = 0
+    for i in range(len(marginal_score)):
+        bin_low = i * 10
+        bin_high = (i + 1) * 10
+        if threshold <= bin_low:
+            # 整个桶都在阈值之上，全部通过
+            passing += marginal_score[i] or 0
+        elif threshold < bin_high:
+            # 桶内线性插值：threshold 右侧部分通过
+            passing += (marginal_score[i] or 0) * (bin_high - threshold) / 10
+    return passing
+
+
 def _calc_suggested_threshold(
     marginal_score: list[int], total: int,
 ) -> tuple[int, float]:
@@ -1235,32 +1354,15 @@ def _calc_suggested_threshold(
     lo, hi = 0.0, 100.0
     for _ in range(30):
         mid = (lo + hi) / 2
-        passing = 0
-        for i in range(len(marginal_score)):
-            bin_low = i * 10
-            bin_high = (i + 1) * 10
-            if mid <= bin_low:
-                # 整个桶都在阈值之上，全部通过
-                passing += marginal_score[i] or 0
-            elif mid < bin_high:
-                # 桶内线性插值：mid 右侧部分通过
-                passing += (marginal_score[i] or 0) * (bin_high - mid) / 10
-        rate = passing / total
+        rate = _compute_passing_count(marginal_score, mid) / total
         if rate > target_rate:
             lo = mid
         else:
             hi = mid
     suggested_score = round((lo + hi) / 2)
     # 计算该阈值下的实际通过率
-    passing = 0
-    for i in range(len(marginal_score)):
-        bin_low = i * 10
-        bin_high = (i + 1) * 10
-        if suggested_score <= bin_low:
-            passing += marginal_score[i] or 0
-        elif suggested_score < bin_high:
-            passing += (marginal_score[i] or 0) * (bin_high - suggested_score) / 10
-    actual_pass_rate = round(passing / total, 2)
+    actual_passing = _compute_passing_count(marginal_score, suggested_score)
+    actual_pass_rate = round(actual_passing / total, 2)
     return suggested_score, actual_pass_rate
 
 
@@ -1703,6 +1805,34 @@ def submit_eval_feedback(
     return {"ok": True, "item_id": item_id, "feedback": feedback}
 
 
+def _parse_eval_feedback(r: dict) -> str:
+    """从评估事件 payload 解析反馈类型，无效 payload 返回空字符串
+
+    payload 可能是 str（旧数据，需 json.loads）或 dict（新数据）或 None。
+    拆分自 feedback_stats：把 try/except 嵌套抽离，主循环只剩分支统计"""
+    payload = r.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+    return (payload or {}).get("feedback", "")
+
+
+def _accumulate_feedback_stats(rows: list[dict]) -> dict[str, int]:
+    """聚合评估反馈统计：遍历 eval.scored 事件统计各反馈类型计数
+
+    拆分自 feedback_stats：把 for + try/except + if/else 嵌套收敛到独立函数"""
+    stats: dict[str, int] = {"accurate": 0, "inaccurate": 0, "partial": 0, "no_feedback": 0}
+    for r in rows:
+        fb = _parse_eval_feedback(r)
+        if fb in stats:
+            stats[fb] += 1
+        else:
+            stats["no_feedback"] += 1
+    return stats
+
+
 @router.get("/feedback/stats")
 def feedback_stats(
     request: Request,
@@ -1715,19 +1845,7 @@ def feedback_stats(
     # 多用户隔离：仅统计当前账号的评估反馈
     user_id = getattr(request.state, "user_id", None)
     rows, _ = container.repo.list_events_by_type_prefix(_EVAL_SCORED_TYPE, limit=50000, user_id=user_id)
-    stats: dict[str, int] = {"accurate": 0, "inaccurate": 0, "partial": 0, "no_feedback": 0}
-    for r in rows:
-        payload = r.get("payload")
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except (json.JSONDecodeError, TypeError):
-                payload = {}
-        fb = (payload or {}).get("feedback", "")
-        if fb in stats:
-            stats[fb] += 1
-        else:
-            stats["no_feedback"] += 1
+    stats = _accumulate_feedback_stats(rows)
 
     total_feedback = stats["accurate"] + stats["inaccurate"] + stats["partial"]
     accuracy_rate = stats["accurate"] / total_feedback if total_feedback > 0 else 0
@@ -1844,6 +1962,88 @@ def _upsert_item_from_link_display(
         return False
 
 
+def _persist_eval_from_link(
+    container: Container, link: dict, display: dict,
+    detail, eval_result, task_id: str | None, user_id: str | None,
+    item_id: str, existing_item_ids: set[str],
+) -> None:
+    """写入 eval 事件，并按需补写 items 表
+
+    为什么补写 items：recompute 从 task_links 生成评估时同步写入 items 表，
+    避免 eval.* 事件引用的 item_id 在 items 表中不存在（孤儿数据）。
+    拆分自 _recompute_from_task_links：把持久化逻辑抽离，主循环只编排"""
+    score_display = eval_result.score if eval_result.score is not None else "N/A"
+    level = _determine_eval_level(eval_result)
+    if item_id not in existing_item_ids:
+        if _upsert_item_from_link_display(
+            container, item_id, link, display, detail.price, task_id, user_id=user_id,
+        ):
+            existing_item_ids.add(item_id)
+    # 使用 upsert 按 task_id+item_id 去重，防止重复评估
+    container.repo.upsert_eval_event({
+        "type": _EVAL_SCORED_TYPE,
+        "task_id": link.get("task_id") or task_id or "",
+        "item_id": detail.id,
+        "stage": "eval",
+        "level": level,
+        "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
+        "payload": json.dumps({
+            "task_id": link.get("task_id") or task_id or "",  # 写入 payload 供官方采集回查
+            "item_id": detail.id,
+            "item_title": detail.title,
+            "item_price": detail.price,
+            "seller_id": detail.seller_id,
+            "seller_nick": detail.seller_nick,
+            "score": eval_result.score,
+            "risk_level": eval_result.risk_level.value,
+            "dimension_scores": eval_result.dimension_scores,
+            "reject_reasons": eval_result.reject_reasons,
+            "is_passed": eval_result.is_passed,
+            "data_quality": eval_result.data_quality,
+        }, ensure_ascii=False, default=str),
+    }, user_id=user_id or "default")
+
+
+def _process_recompute_link(
+    link: dict, container: Container, get_price_strategy, evaluator,
+    task_id: str | None, user_id: str | None, existing_item_ids: set[str],
+) -> str:
+    """处理单条 task_link：构建评估对象 + 价格门禁 + 评估 + 持久化
+
+    返回 generated/error/skip。
+    拆分自 _recompute_from_task_links：把 for 循环体提取为独立函数，
+    降低 try/except + 嵌套 if 的认知复杂度"""
+    from xianyu_hunter.domain.seller import SellerProfile
+
+    display = link.get("display") or {}
+    item_id = link.get("link_key") or ""
+    if not item_id:
+        return "skip"
+    try:
+        detail = _build_item_detail_from_display(item_id, display)
+        seller = SellerProfile(
+            id=detail.seller_id or "unknown",
+            nick=detail.seller_nick or "",
+            credit_score=None,
+            register_days=0,
+            on_sale_count=0,
+            sold_count=0,
+        )
+        effective_task_id = link.get("task_id") or task_id or ""
+        # 复用 _is_recompute_price_skipped：日志前缀一致（都是 "recompute 跳过超范围商品"）
+        # 为什么传 market_ctx=None：recompute 无现成市场数据，仅走 min/max 硬性规则
+        if _is_recompute_price_skipped(get_price_strategy, effective_task_id, detail, item_id):
+            return "skip"
+        eval_result = evaluator.evaluate(detail, seller)
+        _persist_eval_from_link(
+            container, link, display, detail, eval_result,
+            task_id, user_id, item_id, existing_item_ids,
+        )
+        return "generated"
+    except Exception:
+        return "error"
+
+
 def _recompute_from_task_links(
     container: Container,
     task_id: str | None,
@@ -1853,8 +2053,6 @@ def _recompute_from_task_links(
     """无 eval.* 事件时，从 task_links 生成评估
 
     覆盖场景：live_search 写入了 task_links 但未触发评估（旧版本）"""
-    from xianyu_hunter.domain.seller import SellerProfile
-
     link_rows = []
     if task_id:
         link_rows = container.repo.list_task_links(
@@ -1870,70 +2068,18 @@ def _recompute_from_task_links(
     # recompute 从 task_links 生成评估时，需同步补写 items 表，防止孤儿数据
     all_link_item_ids = [link.get("link_key") for link in link_rows if link.get("link_key")]
     existing_item_ids = container.repo.items_exist(all_link_item_ids) if all_link_item_ids else set()
+
     for link in link_rows:
-        display = link.get("display") or {}
-        item_id = link.get("link_key") or ""
-        if not item_id:
-            continue
-        try:
-            detail = _build_item_detail_from_display(item_id, display)
-            seller = SellerProfile(
-                id=detail.seller_id or "unknown",
-                nick=detail.seller_nick or "",
-                credit_score=None,
-                register_days=0,
-                on_sale_count=0,
-                sold_count=0,
-            )
-            # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件
-            # 为什么传 market_ctx=None：recompute 无现成市场数据，仅走 min/max 硬性规则
-            effective_task_id = link.get("task_id") or task_id or ""
-            price_strategy = get_price_strategy(effective_task_id)
-            if price_strategy is not None:
-                verdict = price_strategy.check(detail, market=None)
-                if not verdict.pass_:
-                    logger.info(
-                        "recompute 跳过超范围商品: item_id={}, price={}, reasons={}",
-                        item_id, detail.price, verdict.reasons,
-                    )
-                    continue
-            eval_result = evaluator.evaluate(detail, seller)
-            score_display = eval_result.score if eval_result.score is not None else "N/A"
-            level = _determine_eval_level(eval_result)
-            # 补写 items 表：recompute 从 task_links 生成评估时同步写入 items 表，
-            # 避免 eval.* 事件引用的 item_id 在 items 表中不存在（孤儿数据）
-            if item_id not in existing_item_ids:
-                if _upsert_item_from_link_display(
-                    container, item_id, link, display, detail.price, task_id, user_id=user_id,
-                ):
-                    existing_item_ids.add(item_id)
-            # 使用 upsert 按 task_id+item_id 去重，防止重复评估
-            container.repo.upsert_eval_event({
-                "type": _EVAL_SCORED_TYPE,
-                "task_id": link.get("task_id") or task_id or "",
-                "item_id": detail.id,
-                "stage": "eval",
-                "level": level,
-                "message": f"商品 {detail.id} 评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
-                "payload": json.dumps({
-                    "task_id": link.get("task_id") or task_id or "",  # 写入 payload 供官方采集回查
-                    "item_id": detail.id,
-                    "item_title": detail.title,
-                    "item_price": detail.price,
-                    "seller_id": detail.seller_id,
-                    "seller_nick": detail.seller_nick,
-                    "score": eval_result.score,
-                    "risk_level": eval_result.risk_level.value,
-                    "dimension_scores": eval_result.dimension_scores,
-                    "reject_reasons": eval_result.reject_reasons,
-                    "is_passed": eval_result.is_passed,
-                    "data_quality": eval_result.data_quality,
-                }, ensure_ascii=False, default=str),
-            }, user_id=user_id or "default")
+        result = _process_recompute_link(
+            link, container, get_price_strategy, evaluator,
+            task_id, user_id, existing_item_ids,
+        )
+        if result == "generated":
             generated += 1
-        except Exception:
+        elif result == "error":
             errors += 1
-            continue
+        # "skip"：item_id 为空或价格门禁跳过，不计数
+
     return {
         "ok": True,
         "recomputed": generated,
@@ -1988,6 +2134,155 @@ def _load_recompute_seller_map(
     return seller_map
 
 
+def _resolve_recompute_item_data(item_id: str, item_map: dict[str, dict], payload: dict) -> dict:
+    """获取商品数据，items 表无记录时回退到 payload
+
+    修复：之前直接 skip，导致 live 搜索写入 task_links 但未入 items 表的商品无法重算评估。
+    回退字段由 _enrich_eval_with_item 从 task_links.display 补充"""
+    item_data = item_map.get(item_id)
+    if item_data:
+        return item_data
+    return {
+        "title": payload.get("item_title") or "",
+        "price": payload.get("item_price") or 0,
+        "region": payload.get("region") or "",
+        "seller_id": payload.get("seller_id") or "",
+        "seller_nick": payload.get("seller_nick") or "",
+    }
+
+
+def _build_recompute_item_detail(
+    item_id: str, item_data: dict, payload: dict, seller_data: dict,
+):
+    """重建 ItemDetail（仅包含评估所需字段）
+
+    seller_nick 优先从 sellers 表取（ItemRow 无此字段），回退到 payload"""
+    from xianyu_hunter.domain.item import ItemDetail
+    seller_id = str(item_data.get("seller_id") or payload.get("seller_id") or "")
+    return ItemDetail(
+        id=item_id,
+        title=str(item_data.get("title") or payload.get("item_title") or ""),
+        price=float(item_data.get("price") or 0),
+        region=str(item_data.get("region") or ""),
+        seller_id=seller_id,
+        seller_nick=str(seller_data.get("nick") or payload.get("seller_nick") or ""),
+    )
+
+
+def _build_recompute_seller_profile(seller_id: str, seller_data: dict):
+    """重建 SellerProfile"""
+    from xianyu_hunter.domain.seller import SellerProfile
+    return SellerProfile(
+        id=seller_id or "unknown",
+        nick=str(seller_data.get("nick") or ""),
+        credit_score=seller_data.get("credit_score"),
+        register_days=int(seller_data.get("register_days") or 0),
+        on_sale_count=int(seller_data.get("on_sale_count") or 0),
+        sold_count=int(seller_data.get("sold_count") or 0),
+        top_category=seller_data.get("top_category"),
+        top_category_ratio=float(seller_data.get("top_category_ratio") or 0),
+        post_count_30d=int(seller_data.get("post_count_30d") or 0),
+        bad_review_count=int(seller_data.get("bad_review_count") or 0),
+        in_blacklist=bool(seller_data.get("in_blacklist") or False),
+    )
+
+
+def _is_recompute_price_skipped(
+    get_price_strategy, task_id: str, detail, item_id: str,
+) -> bool:
+    """价格门禁：与 worker.py 搜索流水线一致，超范围商品不重新评估
+
+    为什么 skip 而非删除旧事件：recompute 语义是"重算"而非"清理"，
+    保留旧事件供 include_out_of_range=True 审计；list_evaluations 的
+    价格过滤会默认隐藏这些超范围商品"""
+    price_strategy = get_price_strategy(task_id)
+    if price_strategy is None:
+        return False
+    verdict = price_strategy.check(detail, market=None)
+    if verdict.pass_:
+        return False
+    logger.info(
+        "recompute 跳过超范围商品: item_id={}, price={}, reasons={}",
+        item_id, detail.price, verdict.reasons,
+    )
+    return True
+
+
+def _update_recompute_payload(payload: dict, eval_result) -> None:
+    """更新 payload（保留原始字段，仅更新评分相关字段）"""
+    payload["score"] = eval_result.score
+    payload["risk_level"] = eval_result.risk_level.value
+    payload["dimension_scores"] = eval_result.dimension_scores
+    payload["reject_reasons"] = eval_result.reject_reasons
+    payload["is_passed"] = eval_result.is_passed
+    payload["data_quality"] = eval_result.data_quality
+    payload["recomputed_at"] = _utcnow().isoformat()
+
+
+def _persist_recomputed_eval(
+    e: dict, container: Container, payload: dict, eval_result,
+    detail, seller, effective_task_id: str, item_id: str, notify: bool,
+) -> str:
+    """更新 events 表，按需触发 EVAL_PASSED 事件
+
+    返回 recomputed/notified/noop。
+    为什么 notify 默认 False：recompute 是历史回算，可能批量重算大量历史数据，
+    默认关闭避免刷爆群；用户主动回算想验证通知链路时由调用方传 True"""
+    event_id = e.get("id")
+    if not event_id:
+        return "noop"
+    container.repo.update_event_payload(event_id, json.dumps(payload, ensure_ascii=False, default=str))
+    if notify and eval_result.is_passed:
+        _publish_eval_passed_event(
+            container, effective_task_id, item_id, detail, seller, eval_result,
+            data_source="recompute",
+        )
+        return "notified"
+    return "recomputed"
+
+
+def _do_recompute_single_eval(
+    e: dict,
+    container: Container,
+    item_map: dict[str, dict],
+    seller_map: dict[str, dict],
+    get_price_strategy,
+    evaluator,
+    task_id: str | None,
+    notify: bool,
+) -> str:
+    """实际重算逻辑
+
+    拆分自 _recompute_single_eval：把核心逻辑从 try/except 中拆出，
+    降低嵌套层级；原函数仅负责异常兜底"""
+    payload = e.get("payload") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+
+    item_id = str(payload.get("item_id") or e.get("item_id") or "")
+    if not item_id:
+        return "skipped"
+
+    item_data = _resolve_recompute_item_data(item_id, item_map, payload)
+    seller_id = str(item_data.get("seller_id") or payload.get("seller_id") or "")
+    seller_data = seller_map.get(seller_id, {})
+
+    detail = _build_recompute_item_detail(item_id, item_data, payload, seller_data)
+    seller = _build_recompute_seller_profile(seller_id, seller_data)
+
+    effective_task_id = str(payload.get("task_id") or e.get("task_id") or task_id or "")
+    if _is_recompute_price_skipped(get_price_strategy, effective_task_id, detail, item_id):
+        return "skipped"
+
+    eval_result = evaluator.evaluate(detail, seller)
+    _update_recompute_payload(payload, eval_result)
+
+    return _persist_recomputed_eval(
+        e, container, payload, eval_result, detail, seller,
+        effective_task_id, item_id, notify,
+    )
+
+
 def _recompute_single_eval(
     e: dict,
     container: Container,
@@ -1996,105 +2291,16 @@ def _recompute_single_eval(
     get_price_strategy,
     evaluator,
     task_id: str | None,
+    notify: bool = False,
 ) -> str:
     """重新计算单条评估事件
 
     返回值：recomputed=已重算 / skipped=跳过 / error=异常 / noop=无 event_id 不计数"""
-    from xianyu_hunter.domain.item import ItemDetail
-    from xianyu_hunter.domain.seller import SellerProfile
-
     try:
-        payload = e.get("payload") or {}
-        if isinstance(payload, str):
-            payload = json.loads(payload)
-
-        item_id = str(payload.get("item_id") or e.get("item_id") or "")
-        if not item_id:
-            return "skipped"
-
-        item_data = item_map.get(item_id)
-        if not item_data:
-            # 修复：之前直接 skip，导致 live 搜索写入 task_links 但未入 items 表的商品无法重算评估
-            # 回退到 payload 中的字段（由 _enrich_eval_with_item 从 task_links.display 补充）
-            item_data = {
-                "title": payload.get("item_title") or "",
-                "price": payload.get("item_price") or 0,
-                "region": payload.get("region") or "",
-                "seller_id": payload.get("seller_id") or "",
-                "seller_nick": payload.get("seller_nick") or "",
-            }
-
-        seller_id = str(item_data.get("seller_id") or payload.get("seller_id") or "")
-        seller_data = seller_map.get(seller_id, {})
-
-        # 重建 ItemDetail（仅包含评估所需字段）
-        # seller_nick 优先从 sellers 表取（ItemRow 无此字段），回退到 payload
-        detail = ItemDetail(
-            id=item_id,
-            title=str(item_data.get("title") or payload.get("item_title") or ""),
-            price=float(item_data.get("price") or 0),
-            region=str(item_data.get("region") or ""),
-            seller_id=seller_id,
-            seller_nick=str(seller_data.get("nick") or payload.get("seller_nick") or ""),
+        return _do_recompute_single_eval(
+            e, container, item_map, seller_map,
+            get_price_strategy, evaluator, task_id, notify,
         )
-
-        # 重建 SellerProfile
-        seller = SellerProfile(
-            id=seller_id or "unknown",
-            nick=str(seller_data.get("nick") or ""),
-            credit_score=seller_data.get("credit_score"),
-            register_days=int(seller_data.get("register_days") or 0),
-            on_sale_count=int(seller_data.get("on_sale_count") or 0),
-            sold_count=int(seller_data.get("sold_count") or 0),
-            top_category=seller_data.get("top_category"),
-            top_category_ratio=float(seller_data.get("top_category_ratio") or 0),
-            post_count_30d=int(seller_data.get("post_count_30d") or 0),
-            bad_review_count=int(seller_data.get("bad_review_count") or 0),
-            in_blacklist=bool(seller_data.get("in_blacklist") or False),
-        )
-
-        # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不重新评估
-        # 为什么 skip 而非删除旧事件：recompute 语义是"重算"而非"清理"，
-        # 保留旧事件供 include_out_of_range=True 审计；list_evaluations 的
-        # 价格过滤会默认隐藏这些超范围商品
-        effective_task_id_b = str(payload.get("task_id") or e.get("task_id") or task_id or "")
-        price_strategy_b = get_price_strategy(effective_task_id_b)
-        if price_strategy_b is not None:
-            verdict_b = price_strategy_b.check(detail, market=None)
-            if not verdict_b.pass_:
-                logger.info(
-                    "recompute 跳过超范围商品: item_id={}, price={}, reasons={}",
-                    item_id, detail.price, verdict_b.reasons,
-                )
-                return "skipped"
-
-        # 用当前配置重新评估
-        eval_result = evaluator.evaluate(detail, seller)
-
-        # 更新 payload（保留原始字段，仅更新评分相关字段）
-        payload["score"] = eval_result.score
-        payload["risk_level"] = eval_result.risk_level.value
-        payload["dimension_scores"] = eval_result.dimension_scores
-        payload["reject_reasons"] = eval_result.reject_reasons
-        payload["is_passed"] = eval_result.is_passed
-        payload["data_quality"] = eval_result.data_quality
-        payload["recomputed_at"] = _utcnow().isoformat()
-
-        # 更新 events 表
-        event_id = e.get("id")
-        if event_id:
-            container.repo.update_event_payload(event_id, json.dumps(payload, ensure_ascii=False, default=str))
-            # 评估通过 → 触发 EVAL_PASSED 事件（受 notify 参数控制）
-            # 为什么不直接复用 _publish_eval_passed_event 默认开启：
-            # recompute 是历史回算，可能批量重算大量历史数据，默认关闭避免刷爆群
-            if notify and eval_result.is_passed:
-                _publish_eval_passed_event(
-                    container, effective_task_id_b, item_id, detail, seller, eval_result,
-                    data_source="recompute",
-                )
-                return "notified"
-            return "recomputed"
-        return "noop"
     except Exception:
         return "error"
 
@@ -2294,6 +2500,125 @@ def _publish_eval_passed_event(
         logger.warning("Failed to publish EVAL_PASSED item={}: {}", item_id, exc)
 
 
+def _build_batch_item_detail(it: dict, seller_data: dict):
+    """从 items 表行 + sellers 表数据构建 ItemDetail
+
+    seller_nick 优先从 sellers 表取（ItemRow 无此字段），传入 seller_data 用于查询"""
+    from xianyu_hunter.domain.item import ItemDetail
+    return ItemDetail(
+        id=str(it.get("id") or ""),
+        title=str(it.get("title") or ""),
+        price=float(it.get("price") or 0),
+        region=str(it.get("region") or ""),
+        seller_id=str(it.get("seller_id") or ""),
+        seller_nick=str(seller_data.get("nick") or ""),
+        thumb_url=str(it.get("thumb_url") or ""),
+        want_cnt=int(it.get("want_cnt") or 0),
+        view_cnt=int(it.get("view_cnt") or 0),
+    )
+
+
+def _build_batch_seller_profile(seller_id: str, seller_data: dict):
+    """构建 SellerProfile（批量评估路径专用）"""
+    from xianyu_hunter.domain.seller import SellerProfile
+    return SellerProfile(
+        id=seller_id or "unknown",
+        nick=str(seller_data.get("nick") or ""),
+        credit_score=seller_data.get("credit_score"),
+        register_days=int(seller_data.get("register_days") or 0),
+        on_sale_count=int(seller_data.get("on_sale_count") or 0),
+        sold_count=int(seller_data.get("sold_count") or 0),
+    )
+
+
+def _is_batch_price_skipped(
+    get_price_strategy, task_id: str, detail, item_id: str,
+) -> bool:
+    """价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件"""
+    price_strategy = get_price_strategy(task_id)
+    if price_strategy is None:
+        return False
+    verdict = price_strategy.check(detail, market=None)
+    if verdict.pass_:
+        return False
+    logger.info(
+        "batch_evaluate 跳过超范围商品: item_id={}, price={}, reasons={}",
+        item_id, detail.price, verdict.reasons,
+    )
+    return True
+
+
+def _persist_batch_eval_event(
+    container: Container, item_id: str, effective_task_id: str,
+    detail, eval_result, user_id: str | None,
+) -> None:
+    """写入 eval 事件，data_source=batch_unevaluated 标记来源便于追踪
+
+    为什么用 upsert：按 task_id+item_id 去重，防止重复评估"""
+    score_display = eval_result.score if eval_result.score is not None else "N/A"
+    level = _determine_eval_level(eval_result)
+    container.repo.upsert_eval_event({
+        "type": _EVAL_SCORED_TYPE,
+        "task_id": effective_task_id,
+        "item_id": item_id,
+        "stage": "eval",
+        "level": level,
+        "message": f"商品 {item_id} 批量评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
+        "payload": json.dumps({
+            "task_id": effective_task_id,
+            "item_id": item_id,
+            "item_title": detail.title,
+            "item_price": detail.price,
+            "seller_id": detail.seller_id,
+            "seller_nick": detail.seller_nick,
+            "score": eval_result.score,
+            "risk_level": eval_result.risk_level.value,
+            "dimension_scores": eval_result.dimension_scores,
+            "reject_reasons": eval_result.reject_reasons,
+            "is_passed": eval_result.is_passed,
+            "data_quality": eval_result.data_quality,
+            "data_source": "batch_unevaluated",
+        }, ensure_ascii=False, default=str),
+    }, user_id=user_id or "default")
+
+
+def _do_evaluate_single_unevaluated_item(
+    it: dict, container: Container, seller_map: dict[str, dict],
+    get_price_strategy, evaluator, task_id: str | None,
+    notify: bool, user_id: str | None,
+) -> str:
+    """实际评估逻辑
+
+    拆分自 _evaluate_single_unevaluated_item：把核心逻辑从 try/except 中拆出，
+    降低嵌套层级；原函数仅负责异常兜底"""
+    item_id = str(it.get("id") or "")
+    if not item_id:
+        return "noop"
+    seller_id = str(it.get("seller_id") or "")
+    seller_data = seller_map.get(seller_id, {})
+    detail = _build_batch_item_detail(it, seller_data)
+    seller = _build_batch_seller_profile(seller_id, seller_data)
+
+    effective_task_id = str(it.get("task_id") or task_id or "")
+    if _is_batch_price_skipped(get_price_strategy, effective_task_id, detail, item_id):
+        return "skipped"
+
+    eval_result = evaluator.evaluate(detail, seller)
+    _persist_batch_eval_event(container, item_id, effective_task_id, detail, eval_result, user_id)
+
+    # 评估通过 → 触发 EVAL_PASSED 事件，让 NotifierHub 推送钉钉等通知
+    # 为什么 notify 默认 True：与 collection_service 官方采集语义一致，
+    # 用户主动触发的批量评估，通过的商品值得通知
+    # 返回 "notified" 而非 "evaluated"：让调用方统计通知数
+    if notify and eval_result.is_passed:
+        _publish_eval_passed_event(
+            container, effective_task_id, item_id, detail, seller, eval_result,
+            data_source="batch_unevaluated",
+        )
+        return "notified"
+    return "evaluated"
+
+
 def _evaluate_single_unevaluated_item(
     it: dict,
     container: Container,
@@ -2311,85 +2636,11 @@ def _evaluate_single_unevaluated_item(
     为什么默认 notify=True：批量评估是用户主动触发的新评估，评估通过应该通知用户
     （与官方采集语义一致）；recompute 是历史回算，默认不通知，由调用方传 False
     """
-    from xianyu_hunter.domain.item import ItemDetail
-    from xianyu_hunter.domain.seller import SellerProfile
-
     try:
-        item_id = str(it.get("id") or "")
-        if not item_id:
-            return "noop"
-        seller_id = str(it.get("seller_id") or "")
-        seller_data = seller_map.get(seller_id, {})
-
-        detail = ItemDetail(
-            id=item_id,
-            title=str(it.get("title") or ""),
-            price=float(it.get("price") or 0),
-            region=str(it.get("region") or ""),
-            seller_id=seller_id,
-            seller_nick=str(seller_data.get("nick") or ""),
-            thumb_url=str(it.get("thumb_url") or ""),
-            want_cnt=int(it.get("want_cnt") or 0),
-            view_cnt=int(it.get("view_cnt") or 0),
+        return _do_evaluate_single_unevaluated_item(
+            it, container, seller_map, get_price_strategy, evaluator,
+            task_id, notify, user_id,
         )
-        seller = SellerProfile(
-            id=seller_id or "unknown",
-            nick=str(seller_data.get("nick") or ""),
-            credit_score=seller_data.get("credit_score"),
-            register_days=int(seller_data.get("register_days") or 0),
-            on_sale_count=int(seller_data.get("on_sale_count") or 0),
-            sold_count=int(seller_data.get("sold_count") or 0),
-        )
-        # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件
-        effective_task_id = str(it.get("task_id") or task_id or "")
-        price_strategy = get_price_strategy(effective_task_id)
-        if price_strategy is not None:
-            verdict = price_strategy.check(detail, market=None)
-            if not verdict.pass_:
-                logger.info(
-                    "batch_evaluate 跳过超范围商品: item_id={}, price={}, reasons={}",
-                    item_id, detail.price, verdict.reasons,
-                )
-                return "skipped"
-        eval_result = evaluator.evaluate(detail, seller)
-        score_display = eval_result.score if eval_result.score is not None else "N/A"
-        level = _determine_eval_level(eval_result)
-        # 写入 eval 事件，data_source=batch_unevaluated 标记来源便于追踪
-        # 为什么用 upsert：按 task_id+item_id 去重，防止重复评估
-        container.repo.upsert_eval_event({
-            "type": _EVAL_SCORED_TYPE,
-            "task_id": effective_task_id,
-            "item_id": item_id,
-            "stage": "eval",
-            "level": level,
-            "message": f"商品 {item_id} 批量评估分 {score_display} ({eval_result.risk_level.value}) [数据质量: {eval_result.data_quality}]",
-            "payload": json.dumps({
-                "task_id": effective_task_id,
-                "item_id": item_id,
-                "item_title": detail.title,
-                "item_price": detail.price,
-                "seller_id": detail.seller_id,
-                "seller_nick": detail.seller_nick,
-                "score": eval_result.score,
-                "risk_level": eval_result.risk_level.value,
-                "dimension_scores": eval_result.dimension_scores,
-                "reject_reasons": eval_result.reject_reasons,
-                "is_passed": eval_result.is_passed,
-                "data_quality": eval_result.data_quality,
-                "data_source": "batch_unevaluated",
-            }, ensure_ascii=False, default=str),
-        }, user_id=user_id or "default")
-        # 评估通过 → 触发 EVAL_PASSED 事件，让 NotifierHub 推送钉钉等通知
-        # 为什么 notify 默认 True：与 collection_service 官方采集语义一致，
-        # 用户主动触发的批量评估，通过的商品值得通知
-        # 返回 "notified" 而非 "evaluated"：让调用方统计通知数
-        if notify and eval_result.is_passed:
-            _publish_eval_passed_event(
-                container, effective_task_id, item_id, detail, seller, eval_result,
-                data_source="batch_unevaluated",
-            )
-            return "notified"
-        return "evaluated"
     except Exception as e:
         logger.warning(f"批量评估失败 item_id={it.get('id')}: {e}")
         return "error"

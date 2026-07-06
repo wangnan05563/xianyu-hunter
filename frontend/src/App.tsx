@@ -42,6 +42,8 @@ const Chatbot = lazyRetry(() => import('./pages/Chatbot'))
 const ChatbotConfig = lazyRetry(() => import('./pages/Chatbot/Config'))
 // 菜单管理页：用户级菜单可见性/排序配置（MU5）
 const MenuAdmin = lazyRetry(() => import('./pages/MenuAdmin'))
+// 通知中心：系统通知的列表/标记已读/删除
+const Notifications = lazyRetry(() => import('./pages/Notifications'))
 
 // 全局 fallback 加载组件：懒加载页面未就绪时展示
 function PageLoading() {
@@ -82,10 +84,6 @@ export default function App() {
           <Route path="/login" element={<LazyRoute><Login /></LazyRoute>} />
           {/* 引导页独立路由，不嵌套在 MainLayout 中 */}
           <Route path="/onboarding" element={<LazyRoute><Onboarding /></LazyRoute>} />
-          {/* 帮助文档独立路由，不嵌套在 MainLayout 中（含自有顶部导航） */}
-          <Route path="/help" element={<LazyRoute><Help /></LazyRoute>} />
-          {/* 关于菜单独立路由，不嵌套在 MainLayout 中（与 /help 同级） */}
-          <Route path="/about" element={<LazyRoute><About /></LazyRoute>} />
           <Route path="/" element={<MainLayout />}>
             <Route index element={<LazyRoute><Dashboard /></LazyRoute>} />
             <Route path="tasks" element={<LazyRoute><TaskList /></LazyRoute>} />
@@ -112,9 +110,14 @@ export default function App() {
             <Route path="anticrawl" element={<LazyRoute><AntiCrawl /></LazyRoute>} />
             {/* 菜单管理：用户级菜单可见性/排序配置（MU5） */}
             <Route path="menu-admin" element={<LazyRoute><MenuAdmin /></LazyRoute>} />
+            {/* 通知中心：系统通知列表与已读管理 */}
+            <Route path="notifications" element={<LazyRoute><Notifications /></LazyRoute>} />
             {/* 智能客服：对话主页 + 配置页（含知识库管理） */}
             <Route path="chatbot" element={<LazyRoute><Chatbot /></LazyRoute>} />
             <Route path="config/chatbot" element={<LazyRoute><ChatbotConfig /></LazyRoute>} />
+            {/* 帮助文档、关于：与其他菜单一致，在 SheetWorkspace 内显示 */}
+            <Route path="help" element={<LazyRoute><Help /></LazyRoute>} />
+            <Route path="about" element={<LazyRoute><About /></LazyRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
           {/* 移动端路由组 */}

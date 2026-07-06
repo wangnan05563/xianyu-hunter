@@ -73,6 +73,7 @@ export const sheetRegistry: SheetMeta[] = [
   { path: '/batch-refresh', title: '批量采集', icon: <CloudDownloadOutlined />, component: lazyRetry(() => import('../../pages/Maintenance/BatchRefresh')) },
   { path: '/anticrawl', title: '反爬登录管理', icon: <ExperimentOutlined />, component: lazyRetry(() => import('../../pages/AntiCrawl')) },
   { path: '/price-dashboard', title: '价格行情', icon: <DollarOutlined />, component: lazyRetry(() => import('../../pages/PriceDashboard')) },
+  { path: '/notifications', title: '通知中心', icon: <BellOutlined />, component: lazyRetry(() => import('../../pages/Notifications')) },
   { path: '/menu-admin', title: '菜单管理', icon: <SettingOutlined />, component: lazyRetry(() => import('../../pages/MenuAdmin')) },
   { path: '/chatbot', title: '智能客服对话', icon: <MessageOutlined />, component: lazyRetry(() => import('../../pages/Chatbot')) },
   { path: '/about', title: '关于', icon: <InfoCircleOutlined />, component: lazyRetry(() => import('../../pages/About')) },
