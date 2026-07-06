@@ -29,17 +29,29 @@ export default function MobileHeader() {
     return () => clearInterval(id)
   }, [])
 
+  // 调度器状态文本：复用为 a11y 标签与 Tooltip 标题
+  const schedulerLabel = schedulerRunning === null ? '加载中' : schedulerRunning ? '运行中' : '已停止'
+
   return (
     <header className="m-header">
-      <div className="m-brand" onClick={() => navigate('/m')}>
-        <span className="m-brand-logo">闲</span>
+      {/* 品牌区：改用 <button> 让键盘 / 屏幕阅读器可聚焦和操作 */}
+      <button
+        type="button"
+        className="m-brand"
+        onClick={() => navigate('/m')}
+        aria-label="返回仪表盘"
+      >
+        <span className="m-brand-logo" aria-hidden="true">闲</span>
         <span className="m-brand-name">闲鱼猎人</span>
-      </div>
+      </button>
       <div className="m-header-actions">
-        {/* 调度器状态灯 */}
-        <Tooltip title={schedulerRunning === null ? '加载中' : schedulerRunning ? '运行中' : '已停止'}>
+        {/* 调度器状态灯：补 role + aria-label 让屏幕阅读器感知状态变化 */}
+        <Tooltip title={schedulerLabel}>
           <span
             className="m-status-dot"
+            role="status"
+            aria-live="polite"
+            aria-label={`调度器状态：${schedulerLabel}`}
             style={{
               background: schedulerRunning === null ? '#d9d9d9' : schedulerRunning ? '#52c41a' : '#ff4d4f',
             }}
