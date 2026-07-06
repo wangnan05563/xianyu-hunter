@@ -1487,7 +1487,7 @@ def _trigger_live_evaluation(
     (min_price/max_price/market_ratio) 过滤，与 worker.run_once 行为一致。
     过滤仅阻止加入候选名单，评估事件仍照写，让前端评估明细页面可见全部商品。
     """
-    from xianyu_hunter.modules.evaluator import Evaluator
+    from xianyu_hunter.modules.evaluator import Evaluator, PriceRange
 
     # 构造 Evaluator（复用容器配置）
     # Evaluator 每次 evaluate 时从 get_config() 实时读取配置，无需传参
@@ -1502,6 +1502,9 @@ def _trigger_live_evaluation(
     # 只对齐了"分数达标"判断，遗漏了"价格过滤"，导致任务设了 max_price=5000 但
     # 商品价格 8000 且评分 85 时，live 链路会误抢单，与 worker 行为不一致
     price_strategy, market_ctx = _build_live_price_strategy(container, task_id, items)
+    price_range = PriceRange.from_price_config(
+        getattr(price_strategy, "config", None)
+    )
 
     # 写入操作用 "default" 兜底：live 端点是查询模式（None），写入事件需有用户归属
     effective_user_id = user_id or "default"
@@ -1523,7 +1526,10 @@ def _trigger_live_evaluation(
 
         # 评估
         try:
-            eval_result = evaluator.evaluate(detail, seller)
+            if price_range is None:
+                eval_result = evaluator.evaluate(detail, seller)
+            else:
+                eval_result = evaluator.evaluate(detail, seller, price_range=price_range)
             evaluated += 1
 
             # 写入 events 表（使用 upsert 按 task_id+item_id 去重，防止重复评估）

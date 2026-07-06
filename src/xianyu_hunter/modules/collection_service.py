@@ -18,6 +18,7 @@ from xianyu_hunter.domain.item import ItemDetail
 from xianyu_hunter.domain.seller import SellerProfile
 from xianyu_hunter.infra.item_display_sync import sync_item_display_from_detail
 from xianyu_hunter.infra.logger import get_logger
+from xianyu_hunter.modules.evaluator import PriceRange
 
 logger = get_logger()
 
@@ -503,7 +504,23 @@ class ItemCollectionService:
             )
 
         self._save_seller(seller)
-        eval_result = self.container.evaluator.evaluate(detail, seller)
+        price_range = None
+        if effective_task_id:
+            try:
+                task_raw_for_score = self.container.repo.get_task(effective_task_id)
+                if task_raw_for_score:
+                    ps_for_score = self.container.build_task_price_strategy(task_raw_for_score)
+                    price_range = PriceRange.from_price_config(
+                        getattr(ps_for_score, "config", None)
+                    )
+            except Exception as e:
+                logger.warning("瀹樻柟閲囬泦璇勫垎浠锋牸鍖洪棿璇诲彇澶辫触 item_id={}: {}", item_id, e)
+        if price_range is None:
+            eval_result = self.container.evaluator.evaluate(detail, seller)
+        else:
+            eval_result = self.container.evaluator.evaluate(
+                detail, seller, price_range=price_range
+            )
         # 价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件
         # 为什么仍调用 evaluator.evaluate：官方采集弹窗需展示评估分给用户，
         # 但超范围商品不应进入评估明细菜单（list_evaluations 的价格过滤会二次兜底）

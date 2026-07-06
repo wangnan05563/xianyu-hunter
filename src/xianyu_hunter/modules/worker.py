@@ -30,7 +30,7 @@ from xianyu_hunter.infra.yaml_config import EvalConfig, get_config
 from xianyu_hunter.modules.buyer import Buyer
 from xianyu_hunter.modules.collector import Collector
 from xianyu_hunter.modules.dedup import ItemDedup
-from xianyu_hunter.modules.evaluator import Evaluator
+from xianyu_hunter.modules.evaluator import Evaluator, PriceRange
 from xianyu_hunter.modules.price_strategy import MarketContext, PriceStrategy
 
 logger = get_logger()
@@ -558,7 +558,11 @@ class TaskWorker:
         if not verdict.pass_:
             stats.price_filtered += 1
             return None
-        eval_result = self.evaluator.evaluate(detail, seller)
+        price_range = PriceRange.from_price_config(getattr(self.price, "config", None))
+        if price_range is None:
+            eval_result = self.evaluator.evaluate(detail, seller)
+        else:
+            eval_result = self.evaluator.evaluate(detail, seller, price_range=price_range)
         stats.evaluated += 1
         evaluations.append(eval_result)
         return eval_result

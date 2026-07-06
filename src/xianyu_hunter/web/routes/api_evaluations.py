@@ -17,6 +17,7 @@ from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.infra.yaml_config import get_config
 from xianyu_hunter.modules.collector_utils import normalize_display_fields
+from xianyu_hunter.modules.evaluator import PriceRange
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import to_datetime
 
@@ -1871,7 +1872,13 @@ def _recompute_from_task_links(
                         item_id, detail.price, verdict.reasons,
                     )
                     continue
-            eval_result = evaluator.evaluate(detail, seller)
+            price_range = PriceRange.from_price_config(
+                getattr(price_strategy, "config", None)
+            )
+            if price_range is None:
+                eval_result = evaluator.evaluate(detail, seller)
+            else:
+                eval_result = evaluator.evaluate(detail, seller, price_range=price_range)
             score_display = eval_result.score if eval_result.score is not None else "N/A"
             level = _determine_eval_level(eval_result)
             # 补写 items 表：recompute 从 task_links 生成评估时同步写入 items 表，
@@ -2043,7 +2050,13 @@ def _recompute_single_eval(
                 return "skipped"
 
         # 用当前配置重新评估
-        eval_result = evaluator.evaluate(detail, seller)
+        price_range_b = PriceRange.from_price_config(
+            getattr(price_strategy_b, "config", None)
+        )
+        if price_range_b is None:
+            eval_result = evaluator.evaluate(detail, seller)
+        else:
+            eval_result = evaluator.evaluate(detail, seller, price_range=price_range_b)
 
         # 更新 payload（保留原始字段，仅更新评分相关字段）
         payload["score"] = eval_result.score
@@ -2325,7 +2338,13 @@ def _evaluate_single_unevaluated_item(
                     item_id, detail.price, verdict.reasons,
                 )
                 return "skipped"
-        eval_result = evaluator.evaluate(detail, seller)
+        price_range = PriceRange.from_price_config(
+            getattr(price_strategy, "config", None)
+        )
+        if price_range is None:
+            eval_result = evaluator.evaluate(detail, seller)
+        else:
+            eval_result = evaluator.evaluate(detail, seller, price_range=price_range)
         score_display = eval_result.score if eval_result.score is not None else "N/A"
         level = _determine_eval_level(eval_result)
         # 写入 eval 事件，data_source=batch_unevaluated 标记来源便于追踪
