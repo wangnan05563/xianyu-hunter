@@ -40,6 +40,13 @@ class ResumeBlockedError(Exception):
     """
 
 
+class _ImmediateAwaitable:
+    def __await__(self):
+        if False:
+            yield None
+        return None
+
+
 @dataclass
 class _WorkerHandle:
     """单个任务的运行时句柄"""
@@ -203,7 +210,7 @@ class TaskScheduler:
         h.task.status = TaskStatus.RUNNING
         logger.info(f"Scheduler 恢复任务 {task_id}")
 
-    def start_all(self) -> None:
+    def start_all(self) -> _ImmediateAwaitable:
         """同步启动所有已注册任务。
 
         注意：保持非 async。原因：
@@ -214,6 +221,7 @@ class TaskScheduler:
         """
         for tid in list(self._workers.keys()):
             self.start(tid)
+        return _ImmediateAwaitable()
 
     async def stop_all(self) -> None:
         # 并发等待所有 stop
