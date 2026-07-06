@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-06
+
 ## [0.3.1] - 2026-07-05
 
 _本次发布周期的变更已封版至 [0.3.0]，新变更请在此段落积累。_
@@ -233,7 +235,8 @@ _本次发布周期的变更已封版至 [0.3.0]，新变更请在此段落积�
 
 ---
 
-[Unreleased]: https://github.com/wangnan05563/xianyu-hunter/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/wangnan05563/xianyu-hunter/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.4.0
 [0.3.1]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.3.1
 [0.3.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wangnan05563/xianyu-hunter/releases/tag/v0.2.0
