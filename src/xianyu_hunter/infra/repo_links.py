@@ -720,7 +720,17 @@ class TaskLinksMixin:
         """
         if not link_keys:
             return {}
-        # 先收集每个 key 的所有 display 候选
+        # 拆分为「收集候选」+「择优」两阶段，避免单方法嵌套 try/except + 多层 for/if 拉高复杂度（S3776）
+        candidates = self._collect_display_candidates(link_keys, link_type, user_id)
+        return self._pick_best_displays(candidates)
+
+    def _collect_display_candidates(
+        self,
+        link_keys: list[str],
+        link_type: str,
+        user_id: str | None,
+    ) -> dict[str, list[dict]]:
+        """分批查询 task_links，返回 {key: [display, ...]} 候选字典"""
         candidates: dict[str, list[dict]] = {}
         batch_size = 500
         with self.engine.connect() as conn:
@@ -735,16 +745,27 @@ class TaskLinksMixin:
                     stmt = stmt.where(TaskLinkRow.user_id == user_id)
                 rows = conn.execute(stmt).fetchall()
                 for lk, display_json in rows:
-                    if not lk:
-                        continue
-                    key = str(lk)
-                    try:
-                        d = json.loads(display_json) if isinstance(display_json, str) else (display_json or {})
-                    except (json.JSONDecodeError, TypeError):
-                        d = {}
-                    if d:
-                        candidates.setdefault(key, []).append(d)
-        # 每个 key 选择非空字段最多的 display
+                    self._add_display_candidate(candidates, lk, display_json)
+        return candidates
+
+    @staticmethod
+    def _add_display_candidate(
+        candidates: dict[str, list[dict]], lk, display_json,
+    ) -> None:
+        """解析单行 display 并加入候选列表，跳过空键和解析失败"""
+        if not lk:
+            return
+        key = str(lk)
+        try:
+            d = json.loads(display_json) if isinstance(display_json, str) else (display_json or {})
+        except (json.JSONDecodeError, TypeError):
+            d = {}
+        if d:
+            candidates.setdefault(key, []).append(d)
+
+    @staticmethod
+    def _pick_best_displays(candidates: dict[str, list[dict]]) -> dict[str, dict]:
+        """每个 key 选择非空字段最多的 display（老任务字段可能缺失）"""
         result: dict[str, dict] = {}
         for key, display_list in candidates.items():
             result[key] = max(display_list, key=lambda d: sum(1 for v in d.values() if v not in (None, "", False, 0)))

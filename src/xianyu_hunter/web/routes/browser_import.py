@@ -43,6 +43,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["browser-import"])
 
+# SQLite backup API 的 immutable 模式 URI 参数：在多个降级策略中作为策略名和 SQL 参数重复使用，
+# 提取为常量避免字面量散落（S1192），且便于统一调整
+_SQLITE_IMMUTABLE_URI = "immutable=1"
+
 
 # ============== Windows 系统级辅助函数 ==============
 
@@ -319,7 +323,7 @@ def _copy_browser_cookie_db_with_fallback(
 
     # 前三级策略：SQLite backup API 的两种模式 + 文件级复制
     strategies = [
-        ("immutable=1", lambda: _try_sqlite_backup(source_db, db_copy, "immutable=1")),
+        (_SQLITE_IMMUTABLE_URI, lambda: _try_sqlite_backup(source_db, db_copy, _SQLITE_IMMUTABLE_URI)),
         ("mode=ro&nolock=1", lambda: _try_sqlite_backup(source_db, db_copy, "mode=ro&nolock=1")),
         ("copy_file_with_share", lambda: copy_file_with_share(str(source_db), str(db_copy))),
     ]
@@ -342,7 +346,7 @@ def _copy_browser_cookie_db_with_fallback(
     time.sleep(2)
 
     # 关闭后重新尝试复制（优先 immutable，其次文件级复制）
-    if _try_sqlite_backup(source_db, db_copy, "immutable=1"):
+    if _try_sqlite_backup(source_db, db_copy, _SQLITE_IMMUTABLE_URI):
         return True, ""
     if copy_file_with_share(str(source_db), str(db_copy)):
         return True, ""

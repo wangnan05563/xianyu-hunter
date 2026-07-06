@@ -99,6 +99,50 @@ const formatImportPreviewError = (result: { error?: string; hint?: string }): st
   return [result.error, result.hint].filter(Boolean).join('\n') || '从浏览器导入失败'
 }
 
+// S3776 修复：将"未配置检查器时自动初始化后重试"逻辑提取为模块级函数
+// 原嵌套在 handleHealthCheck try 内，导致 3 层嵌套 if（result.ok/initResult.ok/外层 try）
+const ensureHealthCheckerReady = async (
+  result: HealthReport,
+  useCdp: boolean,
+  loadAll: () => Promise<void>,
+): Promise<HealthReport> => {
+  // 已 ok 或非 initialize 类错误：直接返回原结果
+  if (result.ok || !result.error?.includes('initialize')) return result
+  const initResult = await anticrawlApi.initialize(useCdp)
+  if (!initResult.ok) return result
+  await loadAll()
+  return anticrawlApi.checkHealth()
+}
+
+// S3776 修复：将 startSession 结果消息处理提取为独立函数
+// 原嵌套 if (result.ok) → if (result.already_active) → else，复杂度 +4
+const showStartSessionResult = (result: {
+  ok: boolean
+  already_active?: boolean
+  message?: string
+  error?: string
+}) => {
+  if (!result.ok) {
+    message.error(result.error || '启动会话失败')
+    return
+  }
+  // 幂等场景：会话已被 trigger_session_start() 自动启动时后端返回 already_active
+  if (result.already_active) {
+    message.info(result.message || '会话已是活跃状态')
+  } else {
+    message.success(result.message || '会话管理已启动')
+  }
+}
+
+// S3776 修复：将 cookieInput 校验提取为独立函数
+// 原两个守卫 if 嵌在 handleUpdateCookies 主流程，提取后主流程只剩单行调用
+const validateCookieInput = (input: string): { cookies: Record<string, string>; error?: string } => {
+  if (!input.trim()) return { cookies: {}, error: '请输入 Cookie' }
+  const cookies = parseCookieInput(input)
+  if (Object.keys(cookies).length === 0) return { cookies: {}, error: '未能解析出有效的 Cookie' }
+  return { cookies }
+}
+
 export default function AntiCrawl() {
   // 数据状态
   const [strategy, setStrategy] = useState<StrategyEvaluation | null>(null)
@@ -241,20 +285,9 @@ export default function AntiCrawl() {
     try {
       setLoadingSession(true)
       const result = await anticrawlApi.startSession()
-      if (result.ok) {
-        // 幂等场景：会话已被 trigger_session_start() 自动启动时后端返回 already_active
-        // 此时显示 info 而非 success，避免让用户误以为是本次点击启动的
-        if (result.already_active) {
-          message.info(result.message || '会话已是活跃状态')
-        } else {
-          message.success(result.message || '会话管理已启动')
-        }
-        await loadSession()
-      } else {
-        // 失败也要刷新状态：避免 UI 停留在旧状态与定时器后续刷新出现"先错后变已启动"的矛盾
-        message.error(result.error || '启动会话失败')
-        await loadSession()
-      }
+      showStartSessionResult(result)
+      // 无论成功/失败都刷新状态：避免 UI 停留在旧状态与定时器后续刷新出现矛盾
+      await loadSession()
     } catch (error) {
       // 网络异常等情况：同样刷新状态，让 UI 反映真实后端状态而非凭空显示失败
       message.error('启动会话失败')
@@ -286,15 +319,8 @@ export default function AntiCrawl() {
   const handleHealthCheck = async () => {
     try {
       setLoadingHealth(true)
-      let result = await anticrawlApi.checkHealth()
-      // 未配置检查器时自动初始化后重试
-      if (!result.ok && result.error?.includes('initialize')) {
-        const initResult = await anticrawlApi.initialize(useCdp)
-        if (initResult.ok) {
-          await loadAll()
-          result = await anticrawlApi.checkHealth()
-        }
-      }
+      const initial = await anticrawlApi.checkHealth()
+      const result = await ensureHealthCheckerReady(initial, useCdp, loadAll)
       setHealth(result)
       if (result.ok) {
         if (result.is_healthy) {
@@ -397,19 +423,11 @@ export default function AntiCrawl() {
   }
 
   const handleUpdateCookies = async () => {
-    if (!cookieInput.trim()) {
-      message.warning('请输入 Cookie')
+    const { cookies, error } = validateCookieInput(cookieInput)
+    if (error) {
+      message.warning(error)
       return
     }
-
-    // 解析 cookie 字符串提取为模块级 parseCookieInput（支持分号/换行分隔，值可含 = 号）
-    const cookies = parseCookieInput(cookieInput)
-
-    if (Object.keys(cookies).length === 0) {
-      message.warning('未能解析出有效的 Cookie')
-      return
-    }
-
     try {
       setLoadingUpdate(true)
       const result = await anticrawlApi.updateCookies(cookies)

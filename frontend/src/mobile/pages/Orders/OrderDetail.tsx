@@ -19,11 +19,10 @@ export default function MobileOrderDetail() {
 
   useEffect(() => {
     if (!id) return
-    // orderApi 没有 get(id) 方法，通过 list 查找
-    orderApi.list()
-      .then(data => data.items.find(o => o.id === id))
-      .then(found => setOrder(found || null))
-      .catch(() => {})
+    // 直连 GET /api/orders/{id}，避免 list+find 全量拉取
+    orderApi.get(id)
+      .then(setOrder)
+      .catch(() => setOrder(null))
       .finally(() => setLoading(false))
   }, [id])
 

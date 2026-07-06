@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react'
 import { theme } from 'antd'
 import { priceApi } from '../../../api'
 import type { CategoryComparisonItem, CategoryComparisonSortBy } from '../../../api'
+import type { EChartOption } from '../../../components/charts/EChart'
 
 // 品类横向对比 Hook：封装筛选状态、数据加载与图表配置
 // 为什么提取：原组件中横向对比包含 6 个 state + 2 个 useMemo + fetch 函数 + 多个 useEffect，

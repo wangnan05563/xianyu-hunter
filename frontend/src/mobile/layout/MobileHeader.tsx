@@ -47,7 +47,13 @@ export default function MobileHeader() {
         </Tooltip>
         {/* 通知铃铛 */}
         <Badge count={alertCount} size="small" offset={[-2, 2]}>
-          <Button type="text" shape="circle" size="small" icon={<BellOutlined />} />
+          <Button
+            type="text"
+            shape="circle"
+            size="small"
+            icon={<BellOutlined />}
+            aria-label={`通知${alertCount > 0 ? `，${alertCount} 条未读` : ''}`}
+          />
         </Badge>
       </div>
     </header>

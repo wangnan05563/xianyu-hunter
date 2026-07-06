@@ -1,6 +1,13 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Card, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Tag, Alert, Spin, Empty, Modal, Table, Switch, theme } from 'antd'
-import { SaveOutlined, UndoOutlined, ThunderboltOutlined, RobotOutlined, CloudDownloadOutlined } from '@ant-design/icons'
+import {
+  CloudDownloadOutlined,
+  DollarCircleOutlined,
+  RobotOutlined,
+  SaveOutlined,
+  ThunderboltOutlined,
+  UndoOutlined,
+} from '@ant-design/icons'
 import ReactECharts from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
@@ -109,6 +116,15 @@ const buildHeatmapOption = (
   }
 }
 
+const priceRangeGradientRules = [
+  { range: '< 600', label: '低于任务下限', score: '-25 / -50', color: 'red' },
+  { range: '600-640', label: '低价边缘', score: '-10', color: 'orange' },
+  { range: '640-730', label: '推荐核心区', score: '不扣分', color: 'green' },
+  { range: '730-760', label: '偏高观察区', score: '-5', color: 'gold' },
+  { range: '760-800', label: '高价边缘', score: '-12', color: 'orange' },
+  { range: '> 800', label: '高于任务上限', score: '-25 / -50', color: 'red' },
+]
+
 export default function EvalRules() {
   const { config, load, hasChanges, reset, update, previewSave, confirmSave, getFieldOriginal, revertField } = useConfigStore()
   const [distData, setDistData] = useState<{
@@ -168,11 +184,6 @@ export default function EvalRules() {
   const statsNextRefreshStr = statsNextRefresh
     ? new Date(statsNextRefresh).toLocaleTimeString('zh-CN')
     : null
-
-  // 采集统计文案的语义色：项目无 --xh-success/--xh-error CSS 变量，
-  // 改用 antd theme token 与项目其他页面（如 EventStreamSection）保持一致
-  // 必须在 `if (!config) return` 之前调用，遵守 hooks 顺序规则
-  const { token } = theme.useToken()
 
   // 首次加载 + 开关切换时立即加载（useAutoRefresh 的 deps 已会触发，此处兜底保证首次进入也拉一次）
   useEffect(() => {
@@ -278,13 +289,17 @@ export default function EvalRules() {
   const heatmap = computeHeatmapData(distData)
   const heatmapOption = buildHeatmapOption(distData, heatmap)
 
+  // S3776 修复：将保存前的两个守卫校验提取为独立函数，主回调只剩 try/catch 流程
+  const validateBeforeSave = (): string | null => {
+    if (weightsTotal !== 100) return '权重总和必须为 100，请调整后保存'
+    if (scoreOrderError) return '通过分数不能大于自动抢单分数'
+    return null
+  }
+
   const handleSave = async () => {
-    if (weightsTotal !== 100) {
-      message.error('权重总和必须为 100，请调整后保存')
-      return
-    }
-    if (scoreOrderError) {
-      message.error('通过分数不能大于自动抢单分数')
+    const error = validateBeforeSave()
+    if (error) {
+      message.error(error)
       return
     }
     try {
@@ -614,75 +629,12 @@ export default function EvalRules() {
 
               {/* 采集指标可视化：仅开关开启时展示，避免关闭后占用空间 */}
               {evalConfig.auto_collect_official && (
-                <div style={{ marginTop: 12, padding: '8px 12px', background: 'var(--xh-bg-spotlight)', borderRadius: 6, fontSize: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <span style={{ color: 'var(--xh-text-secondary)', fontWeight: 500 }}>
-                      最近 24 小时采集统计
-                    </span>
-                    <span style={{ fontSize: 11, color: 'var(--xh-text-quaternary)' }}>
-                      {statsLoading ? '刷新中...' : `更新于 ${statsLastRefreshStr}`}
-                      {statsNextRefreshStr && ` · 下次 ${statsNextRefreshStr}`}
-                    </span>
-                  </div>
-                  {collectStats ? (
-                    <>
-                      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 8 }}>
-                        <span>
-                          共 <strong style={{ color: 'var(--xh-text-primary)' }}>{collectStats.total}</strong> 次
-                        </span>
-                        <span>
-                          成功 <strong style={{ color: token.colorSuccess }}>{collectStats.success}</strong> 次
-                        </span>
-                        <span>
-                          失败{' '}
-                          <strong style={{ color: collectStats.failed > 0 ? token.colorError : 'var(--xh-text-primary)' }}>
-                            {collectStats.failed}
-                          </strong>{' '}
-                          次
-                        </span>
-                        <span>
-                          成功率{' '}
-                          <Tag color={
-                            collectStats.success_rate >= 0.8 ? 'green' :
-                            collectStats.success_rate >= 0.5 ? 'orange' : 'red'
-                          }>
-                            {(collectStats.success_rate * 100).toFixed(1)}%
-                          </Tag>
-                        </span>
-                      </div>
-                      {/* 退避暂停状态：后端根据最近一条失败事件的 consecutive_failures 判断 */}
-                      {/* 为什么用 is_paused 而非 failed >= 3：failed 是累计数，连续失败语义需看最近一次计数 */}
-                      {collectStats.is_paused && (
-                        <div style={{ marginBottom: 8 }}>
-                          <Tag color="red">
-                            已暂停（连续失败达阈值 {collectStats.fail_pause_threshold} 次）
-                          </Tag>
-                          <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginLeft: 8 }}>
-                            本轮剩余商品跳过采集，下轮自动重试
-                          </span>
-                        </div>
-                      )}
-                      {/* Top3 失败原因：仅在失败数 > 0 时展示，避免成功时占位 */}
-                      {collectStats.failed > 0 && collectStats.top_failures.length > 0 && (
-                        <div>
-                          <div style={{ color: 'var(--xh-text-tertiary)', marginBottom: 4 }}>主要失败原因：</div>
-                          <ul style={{ margin: 0, paddingLeft: 20, color: 'var(--xh-text-secondary)' }}>
-                            {collectStats.top_failures.map((f) => (
-                              <li key={`${f.reason}-${f.count}`} style={{ fontSize: 11 }}>
-                                <span style={{ color: 'var(--xh-text-primary)' }}>{f.reason}</span>
-                                <span style={{ color: 'var(--xh-text-quaternary)', marginLeft: 8 }}>×{f.count}</span>
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <span style={{ color: 'var(--xh-text-tertiary)' }}>
-                      {statsLoading ? '加载中...' : '暂无数据'}
-                    </span>
-                  )}
-                </div>
+                <CollectStatsPanel
+                  stats={collectStats}
+                  loading={statsLoading}
+                  lastRefreshStr={statsLastRefreshStr}
+                  nextRefreshStr={statsNextRefreshStr}
+                />
               )}
 
               <Divider style={{ margin: '12px 0' }} />
@@ -720,6 +672,53 @@ export default function EvalRules() {
                   />
                   <span style={{ fontSize: 13 }}>轮生成一次（太小浪费 token，太大反馈滞后）</span>
                 </div>
+              </div>
+            </Card>
+
+            <Card
+              title={
+                <Space>
+                  <DollarCircleOutlined />
+                  任务价格区间梯度评分
+                </Space>
+              }
+              style={{ marginBottom: 16 }}
+            >
+              <Alert
+                type="info"
+                showIcon={false}
+                style={{ marginBottom: 12, fontSize: 12 }}
+                message="价格维度会读取每个任务的 min_price / max_price；未配置任务区间时保持旧评分逻辑。"
+              />
+              <Table
+                size="small"
+                pagination={false}
+                rowKey="range"
+                dataSource={priceRangeGradientRules}
+                columns={[
+                  {
+                    title: '以 600-800 元为例',
+                    dataIndex: 'range',
+                    key: 'range',
+                    width: 120,
+                    render: (v: string) => <Tag color="blue">{v}</Tag>,
+                  },
+                  {
+                    title: '评分含义',
+                    dataIndex: 'label',
+                    key: 'label',
+                  },
+                  {
+                    title: '价格分调整',
+                    dataIndex: 'score',
+                    key: 'score',
+                    width: 110,
+                    render: (v: string, row: { color: string }) => <Tag color={row.color}>{v}</Tag>,
+                  },
+                ]}
+              />
+              <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 8 }}>
+                区间中段优先，靠近上下边缘轻扣分；超出区间会按偏离程度加重扣分，避免 1 元引流、配件价或明显偏高商品获得虚高评分。
               </div>
             </Card>
 
@@ -799,6 +798,104 @@ export default function EvalRules() {
           ]}
         />
       </Modal>
+    </div>
+  )
+}
+
+// 采集统计类型：与主组件 useState 推断的类型保持一致
+type CollectStats = {
+  total: number
+  success: number
+  failed: number
+  success_rate: number
+  is_paused: boolean
+  fail_pause_threshold: number
+  top_failures: Array<{ reason: string; count: number }>
+}
+
+// S3776 修复：采集统计区块原嵌套 5+ 个条件渲染（三元+&&+嵌套三元），提取为独立组件
+// 为什么独立 useToken：组件内 token 仅用于此区块的颜色，主组件不再需要持有 token
+function CollectStatsPanel({
+  stats,
+  loading,
+  lastRefreshStr,
+  nextRefreshStr,
+}: {
+  readonly stats: CollectStats | null
+  readonly loading: boolean
+  readonly lastRefreshStr: string
+  readonly nextRefreshStr: string | null
+}) {
+  const { token } = theme.useToken()
+  return (
+    <div style={{ marginTop: 12, padding: '8px 12px', background: 'var(--xh-bg-spotlight)', borderRadius: 6, fontSize: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span style={{ color: 'var(--xh-text-secondary)', fontWeight: 500 }}>
+          最近 24 小时采集统计
+        </span>
+        <span style={{ fontSize: 11, color: 'var(--xh-text-quaternary)' }}>
+          {loading ? '刷新中...' : `更新于 ${lastRefreshStr}`}
+          {nextRefreshStr && ` · 下次 ${nextRefreshStr}`}
+        </span>
+      </div>
+      {stats ? (
+        <>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 8 }}>
+            <span>
+              共 <strong style={{ color: 'var(--xh-text-primary)' }}>{stats.total}</strong> 次
+            </span>
+            <span>
+              成功 <strong style={{ color: token.colorSuccess }}>{stats.success}</strong> 次
+            </span>
+            <span>
+              失败{' '}
+              <strong style={{ color: stats.failed > 0 ? token.colorError : 'var(--xh-text-primary)' }}>
+                {stats.failed}
+              </strong>{' '}
+              次
+            </span>
+            <span>
+              成功率{' '}
+              <Tag color={
+                stats.success_rate >= 0.8 ? 'green' :
+                stats.success_rate >= 0.5 ? 'orange' : 'red'
+              }>
+                {(stats.success_rate * 100).toFixed(1)}%
+              </Tag>
+            </span>
+          </div>
+          {/* 退避暂停状态：后端根据最近一条失败事件的 consecutive_failures 判断 */}
+          {/* 为什么用 is_paused 而非 failed >= 3：failed 是累计数，连续失败语义需看最近一次计数 */}
+          {stats.is_paused && (
+            <div style={{ marginBottom: 8 }}>
+              <Tag color="red">
+                已暂停（连续失败达阈值 {stats.fail_pause_threshold} 次）
+              </Tag>
+              <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginLeft: 8 }}>
+                本轮剩余商品跳过采集，下轮自动重试
+              </span>
+            </div>
+          )}
+          {/* Top3 失败原因：仅在失败数 > 0 时展示，避免成功时占位 */}
+          {stats.failed > 0 && stats.top_failures.length > 0 && (
+            <div>
+              <div style={{ color: 'var(--xh-text-tertiary)', marginBottom: 4 }}>主要失败原因：</div>
+              <ul style={{ margin: 0, paddingLeft: 20, color: 'var(--xh-text-secondary)' }}>
+                {stats.top_failures.map((f) => (
+                  <li key={`${f.reason}-${f.count}`} style={{ fontSize: 11 }}>
+                    <span style={{ color: 'var(--xh-text-primary)' }}>{f.reason}</span>
+                    <span style={{ color: 'var(--xh-text-quaternary)', marginLeft: 8 }}>×{f.count}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      ) : (
+        <span style={{ color: 'var(--xh-text-tertiary)' }}>
+          {loading ? '加载中...' : '暂无数据'}
+        </span>
+      )}
     </div>
   )
 }

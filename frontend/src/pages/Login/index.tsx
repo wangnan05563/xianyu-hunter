@@ -169,6 +169,32 @@ const extractImportBrowserError = (err: any): { errMsg: string; hint: string } =
   return { errMsg, hint }
 }
 
+// S3776 修复：将轮询 tick 从 startPolling 内嵌套提取到模块级
+// 原嵌套层级 3（startPolling → tick → if/else if → if），提取后降至 1
+const POLL_TERMINAL_STATUSES = ['cancelled', 'error', 'timeout', 'idle'] as const
+const pollLoginTick = async (
+  setLoginStatus: (s: LoginStatus | null) => void,
+  onSuccess: () => void,
+  stopPolling: () => void,
+) => {
+  try {
+    const status = await authApi.getLoginStatus()
+    setLoginStatus(status)
+    if (status.status === 'success') {
+      onSuccess()
+    } else if (POLL_TERMINAL_STATUSES.includes(status.status as typeof POLL_TERMINAL_STATUSES[number])) {
+      // idle 表示后端已重置（web 进程重启或心跳超时清理），
+      // 停止轮询并清空 loginStatus 让前端回到初始按钮状态
+      stopPolling()
+      if (status.status === 'idle') {
+        setLoginStatus(null)
+      }
+    }
+  } catch {
+    // 轮询失败不中断，继续尝试
+  }
+}
+
 // 登录页面：独立于 MainLayout，提供多种登录方式
 export default function Login() {
   const navigate = useNavigate()
@@ -449,27 +475,12 @@ export default function Login() {
   // 开始轮询登录状态
   const startPolling = () => {
     if (pollRef.current) clearInterval(pollRef.current)
-    const tick = async () => {
-      try {
-        const status = await authApi.getLoginStatus()
-        setLoginStatus(status)
-        if (status.status === 'success') {
-          onLoginSuccess()
-        } else if (['cancelled', 'error', 'timeout', 'idle'].includes(status.status)) {
-          // idle 表示后端已重置（web 进程重启或心跳超时清理），
-          // 停止轮询并清空 loginStatus 让前端回到初始按钮状态
-          clearInterval(pollRef.current!)
-          setPollTimer(null)
-          if (status.status === 'idle') {
-            setLoginStatus(null)
-          }
-        }
-      } catch {
-        // 轮询失败不中断，继续尝试
-      }
+    const stopPolling = () => {
+      clearInterval(pollRef.current!)
+      setPollTimer(null)
     }
-    void tick()
-    const timer = setInterval(tick, 1000)
+    void pollLoginTick(setLoginStatus, onLoginSuccess, stopPolling)
+    const timer = setInterval(() => void pollLoginTick(setLoginStatus, onLoginSuccess, stopPolling), 1000)
     setPollTimer(timer)
   }
 

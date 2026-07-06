@@ -77,6 +77,22 @@ function toFormString(value: unknown): string {
 
 // CSV 解析（简单实现，支持引号转义；生产环境建议用 papaparse）
 // 提取到组件外避免每次渲染重建闭包（S7721）
+
+// 处理引号字符：根据当前 inQuote 状态决定追加内容、状态切换、跳过下一字符数
+// 为什么提取：parseCSV 主函数 if(inQuote) 内嵌套 if/else if 链让认知复杂度达 19（S3776）；
+// 把引号处理独立后，主循环每个分支变为单层 else if，复杂度归零到 14 以下
+function handleQuoteChar(
+  inQuote: boolean,
+  nextCh: string | undefined,
+): { append: string; newInQuote: boolean; skip: number } {
+  // 引号内遇到双引号：CSV 标准转义（"" 表示字面量 "），追加 " 并跳过下一 "
+  if (inQuote && nextCh === '"') return { append: '"', newInQuote: true, skip: 1 }
+  // 引号内遇到单 "：闭合引号
+  if (inQuote) return { append: '', newInQuote: false, skip: 0 }
+  // 引号外遇到 "：开启引号
+  return { append: '', newInQuote: true, skip: 0 }
+}
+
 function parseCSV(text: string): string[][] {
   const rows: string[][] = []
   let cur: string[] = []
@@ -87,13 +103,13 @@ function parseCSV(text: string): string[][] {
   let i = 0
   while (i < text.length) {
     const ch = text[i]
-    if (inQuote) {
-      if (ch === '"' && text[i + 1] === '"') { val += '"'; i++ }
-      else if (ch === '"') { inQuote = false }
-      else { val += ch }
-    } else if (ch === '"') {
-      // else 块只含 if 时改为 else if 链，减少嵌套层级（S6660）
-      inQuote = true
+    if (ch === '"') {
+      const r = handleQuoteChar(inQuote, text[i + 1])
+      val += r.append
+      inQuote = r.newInQuote
+      i += r.skip
+    } else if (inQuote) {
+      val += ch
     } else if (ch === ',') {
       cur.push(val); val = ''
     } else if (ch === '\n' || ch === '\r') {
@@ -107,6 +123,28 @@ function parseCSV(text: string): string[][] {
   }
   if (val !== '' || cur.length > 0) { cur.push(val); rows.push(cur) }
   return rows.filter((r) => r.length > 1 || (r.length === 1 && r[0] !== ''))
+}
+
+// 构建级联影响预览 HTML：被 openDeleteConfirm 与 openBatchDeleteConfirm 共用
+// 为什么提取：两个函数原本各自重复 try/catch + if(relations.length>0) + for + 三元 icon 链，
+// 单函数复杂度 9+；提取后调用方仅剩单行 await，主函数复杂度降低 9
+async function buildCascadeHtml(
+  table: string | null,
+  keys: Array<string | number>,
+): Promise<string> {
+  if (!table) return '<p style="color:#999">加载中...</p>'
+  try {
+    const preview = await dbAdminApi.cascadePreview(table, keys)
+    if (preview.relations.length === 0) {
+      return '<p style="color:#52c41a">✓ 无关联数据，可安全删除</p>'
+    }
+    const items = preview.relations
+      .map((r) => `<li>${r.action === 'cascade' ? '🗑' : '✂'} ${r.description}</li>`)
+      .join('')
+    return `<p style="color:#faad14;margin-bottom:4px">⚠ 关联影响：共 ${preview.total_affected} 条关联数据将被处理</p><ul style="margin:0;padding-left:20px;font-size:12px;color:#666">${items}</ul>`
+  } catch {
+    return '<p style="color:#999">级联预览加载失败</p>'
+  }
 }
 
 // 推断 antd 表单组件类型（动态表单渲染用）
@@ -343,25 +381,8 @@ export default function DatabaseAdmin() {
   // 弹窗：单行删除二次确认（含级联影响预览）
   const openDeleteConfirm = async (pkValue: unknown) => {
     let tokenValue = ''
-    // 先获取级联影响预览
-    let cascadeHtml = '<p style="color:#999">加载中...</p>'
-    if (activeTable) {
-      try {
-        const preview = await dbAdminApi.cascadePreview(activeTable, [pkValue as string | number])
-        if (preview.relations.length > 0) {
-          cascadeHtml = `<p style="color:#faad14;margin-bottom:4px">⚠ 关联影响：共 ${preview.total_affected} 条关联数据将被处理</p><ul style="margin:0;padding-left:20px;font-size:12px;color:#666">`
-          for (const r of preview.relations) {
-            const icon = r.action === 'cascade' ? '🗑' : '✂'
-            cascadeHtml += `<li>${icon} ${r.description}</li>`
-          }
-          cascadeHtml += '</ul>'
-        } else {
-          cascadeHtml = '<p style="color:#52c41a">✓ 无关联数据，可安全删除</p>'
-        }
-      } catch {
-        cascadeHtml = '<p style="color:#999">级联预览加载失败</p>'
-      }
-    }
+    // 级联预览 HTML 构建提取为模块级 buildCascadeHtml（消除 try/catch + if/for 嵌套）
+    const cascadeHtml = await buildCascadeHtml(activeTable, [pkValue as string | number])
     const modal = Modal.confirm({
       title: '确认删除该行？',
       icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
@@ -392,24 +413,8 @@ export default function DatabaseAdmin() {
   // 弹窗：批量删除二次确认（含级联影响预览）
   const openBatchDeleteConfirm = async () => {
     let tokenValue = ''
-    let cascadeHtml = '<p style="color:#999">加载中...</p>'
-    if (activeTable) {
-      try {
-        const preview = await dbAdminApi.cascadePreview(activeTable, selectedRowKeys.map(String))
-        if (preview.relations.length > 0) {
-          cascadeHtml = `<p style="color:#faad14;margin-bottom:4px">⚠ 关联影响：共 ${preview.total_affected} 条关联数据将被处理</p><ul style="margin:0;padding-left:20px;font-size:12px;color:#666">`
-          for (const r of preview.relations) {
-            const icon = r.action === 'cascade' ? '🗑' : '✂'
-            cascadeHtml += `<li>${icon} ${r.description}</li>`
-          }
-          cascadeHtml += '</ul>'
-        } else {
-          cascadeHtml = '<p style="color:#52c41a">✓ 无关联数据，可安全删除</p>'
-        }
-      } catch {
-        cascadeHtml = '<p style="color:#999">级联预览加载失败</p>'
-      }
-    }
+    // 级联预览 HTML 构建复用 buildCascadeHtml（与 openDeleteConfirm 一致）
+    const cascadeHtml = await buildCascadeHtml(activeTable, selectedRowKeys.map(String))
     const modal = Modal.confirm({
       title: `确认批量删除 ${selectedRowKeys.length} 行？`,
       icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,

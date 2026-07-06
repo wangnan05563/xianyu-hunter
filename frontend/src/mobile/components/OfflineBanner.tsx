@@ -20,6 +20,8 @@ export default function OfflineBanner() {
 
   return (
     <div
+      role="status"
+      aria-live="polite"
       style={{
         background: '#D4A017',
         color: '#fff',
@@ -37,3 +39,4 @@ export default function OfflineBanner() {
     </div>
   )
 }
+

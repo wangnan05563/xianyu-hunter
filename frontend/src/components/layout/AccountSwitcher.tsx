@@ -133,7 +133,8 @@ function buildAccountMenuItems(
     return {
       key: `account-${account.user_id}`,
       disabled: switching || isExpired,
-      onClick: () => { void handleSwitch(account.user_id) },
+      // S3735：移除 void 操作符，handleSwitch 内部已有 try/catch，可直接调用
+      onClick: () => { handleSwitch(account.user_id) },
       label: (
         <AccountMenuItem
           account={account}

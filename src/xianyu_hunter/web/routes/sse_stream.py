@@ -110,6 +110,22 @@ def _build_polling_frames(container, cursor: int) -> tuple[list[str], int, str |
         return [], cursor, str(e)
 
 
+def _resolve_last_event_id(
+    last_event_id: int | None,
+    last_event_id_header: int | None,
+) -> tuple[int, bool]:
+    """合并 query 和 header 的 Last-Event-ID
+
+    返回 (effective_id, should_replay)。query 优先于 header，均缺失时 effective=0 且不回放。
+    独立为辅助函数以避免在路由中嵌套三元表达式拉高认知复杂度（S3776）。
+    """
+    if last_event_id is not None:
+        return last_event_id, True
+    if last_event_id_header is not None:
+        return last_event_id_header, True
+    return 0, False
+
+
 @router.get("/events/stream")
 async def events_stream(
     container: Container = Depends(get_container),
@@ -117,12 +133,7 @@ async def events_stream(
     last_event_id_header: int | None = Header(default=None, alias="Last-Event-ID", ge=0),
 ) -> StreamingResponse:
     """SSE 事件流：推送最近事件 + 实时新事件 + 断线回放"""
-    client_provided_last = last_event_id is not None or last_event_id_header is not None
-    effective_last_id = (
-        last_event_id if last_event_id is not None
-        else (last_event_id_header or 0)
-    )
-    should_replay = client_provided_last
+    effective_last_id, should_replay = _resolve_last_event_id(last_event_id, last_event_id_header)
     logger.debug(
         f"[SSE] connect: query.last_event_id={last_event_id} "
         f"header.Last-Event-ID={last_event_id_header} "

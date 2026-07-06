@@ -21,6 +21,37 @@ function ActionPlaceholder({ text }: { text: string }) {
   return <span style={{ color: 'var(--xh-text-quaternary)', fontSize: 11 }}>{text}</span>
 }
 
+// S2004 修复：原 render 内嵌套 btn 闭包（4+ 层），提取到模块级组件以降低嵌套深度
+function FeedbackButton({
+  icon,
+  color,
+  title,
+  active,
+  submitting,
+  onClick,
+}: {
+  readonly icon: React.ReactNode
+  readonly color: string
+  readonly title: string
+  readonly active: boolean
+  readonly submitting: boolean
+  readonly onClick: () => void
+}) {
+  return (
+    <Tooltip title={title}>
+      <Button
+        size="small"
+        type={active ? 'primary' : 'text'}
+        ghost={active}
+        icon={icon}
+        loading={submitting}
+        onClick={onClick}
+        style={active ? { background: color, borderColor: color } : { color }}
+      />
+    </Tooltip>
+  )
+}
+
 function formatPublishTime(raw: string | number | null | undefined): string | null {
   if (raw === null || raw === undefined || raw === '') return null
   const d = new Date(raw)
@@ -353,29 +384,11 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
       render: (_: unknown, r: EvalItem) => {
         const current = r.payload?.feedback as 'accurate' | 'inaccurate' | 'partial' | undefined
         const submitting = feedbackSubmitting[r.item_id]
-        const btn = (
-          type: 'accurate' | 'inaccurate' | 'partial',
-          icon: React.ReactNode,
-          color: string,
-          title: string,
-        ) => (
-          <Tooltip title={title}>
-            <Button
-              size="small"
-              type={current === type ? 'primary' : 'text'}
-              ghost={current === type}
-              icon={icon}
-              loading={submitting}
-              onClick={() => onFeedback(r, type)}
-              style={current === type ? { background: color, borderColor: color } : { color }}
-            />
-          </Tooltip>
-        )
         return (
           <Space size={2}>
-            {btn('accurate', <CheckCircleOutlined />, '#52c41a', '准确')}
-            {btn('partial', <WarningOutlined />, '#faad14', '部分准确')}
-            {btn('inaccurate', <CloseCircleOutlined />, '#ff4d4f', '不准确')}
+            <FeedbackButton icon={<CheckCircleOutlined />} color="#52c41a" title="准确" active={current === 'accurate'} submitting={submitting} onClick={() => onFeedback(r, 'accurate')} />
+            <FeedbackButton icon={<WarningOutlined />} color="#faad14" title="部分准确" active={current === 'partial'} submitting={submitting} onClick={() => onFeedback(r, 'partial')} />
+            <FeedbackButton icon={<CloseCircleOutlined />} color="#ff4d4f" title="不准确" active={current === 'inaccurate'} submitting={submitting} onClick={() => onFeedback(r, 'inaccurate')} />
           </Space>
         )
       },

@@ -102,6 +102,99 @@ def _check_notifier(container: Any) -> str:
         return "unknown"
 
 
+# 常见 MIME 类型映射（确保浏览器正确解析 JS/CSS/WOFF2 等资源）
+# 提取为模块级常量，避免 create_app 内嵌套局部函数访问时拉高认知复杂度（S3776）
+_SPA_MEDIA_TYPES = {
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".html": "text/html; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".json": "application/json",
+    ".map": "application/json",
+    # O-12-26 PWA：manifest 必须用 application/manifest+json 才能被浏览器识别
+    ".webmanifest": "application/manifest+json",
+}
+
+
+def _build_favicon_response(static_dir: Path) -> Response:
+    """构建 favicon 响应，优先 SPA 构建产物，回退到 frontend/public 源文件
+
+    独立为模块级函数：原为 create_app 内的局部路由函数，多重 if 分支拉高了
+    create_app 的认知复杂度（S3776）；提取后路由函数仅做一行调用。
+    """
+    spa_favicon = static_dir / "spa" / "favicon.ico"
+    if spa_favicon.is_file():
+        return Response(
+            content=spa_favicon.read_bytes(),
+            media_type="image/x-icon",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    frontend_favicon = Path(__file__).resolve().parents[3] / "frontend" / "public" / "favicon.ico"
+    if frontend_favicon.is_file():
+        return Response(
+            content=frontend_favicon.read_bytes(),
+            media_type="image/x-icon",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    return JSONResponse({"detail": "favicon not found"}, status_code=404)
+
+
+def _serve_spa_request(spa_dir: Path, full_path: str) -> Response:
+    """SPA catch-all 请求处理：静态文件直接返回，其余返回注入登录浮层的 index.html
+
+    独立为模块级函数以降低 create_app 认知复杂度（S3776）。
+    """
+    if full_path:
+        file_path = spa_dir / full_path
+        if file_path.is_file():
+            ext = file_path.suffix.lower()
+            media_type = _SPA_MEDIA_TYPES.get(ext, "application/octet-stream")
+            # assets/ 下是带 hash 的构建产物，可长期强缓存；其余路径禁缓存以保证 index.html 实时性
+            headers = (
+                {"Cache-Control": "public, max-age=31536000, immutable"}
+                if full_path.startswith("assets/")
+                else {"Cache-Control": "no-cache"}
+            )
+            return Response(content=file_path.read_bytes(), media_type=media_type, headers=headers)
+    index_path = spa_dir / "index.html"
+    if index_path.exists():
+        html = index_path.read_text(encoding="utf-8")
+        # 注入登录引导浮层（在 </body> 前插入）
+        html = html.replace("</body>", _SPA_LOGIN_OVERLAY + "\n</body>")
+        return Response(
+            content=html,
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-cache"},
+        )
+    return JSONResponse({"detail": "SPA 未构建，请运行 cd frontend && npm run build"}, status_code=404)
+
+
+def _collect_health_checks(container: Any) -> tuple[dict[str, Any], bool]:
+    """运行健康检查项，返回 (checks, db_ok)
+
+    try/except 兜底：容器初始化异常不应让 /healthz 直接 500，而应返回带 error 字段的 503。
+    """
+    checks: dict[str, Any] = {}
+    db_ok = False
+    try:
+        # 1. 数据库连通性（关键检查项，决定 HTTP 状态码）
+        checks["db"], db_ok = _check_db(container)
+        # 2. 闲鱼登录态（信息性：未登录不影响服务本身）
+        checks["login_valid"] = _check_login_valid()
+        # 3. 运行中任务数
+        checks["tasks_running"] = _check_tasks_running(container)
+        # 4. 浏览器实例（Web 进程 with_browser=False 时为 None，属正常）
+        checks["browser"] = "running" if container.browser is not None else "not_started"
+        # 5. 通知渠道配置
+        checks["notifier"] = _check_notifier(container)
+    except Exception as e:
+        checks["error"] = str(e)
+    return checks, db_ok
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="XianyuHunter Web",
@@ -139,21 +232,7 @@ def create_app() -> FastAPI:
     # 优先从 SPA 构建产物读取，回退到 frontend/public 源文件
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> Response:
-        spa_favicon = static_dir / "spa" / "favicon.ico"
-        if spa_favicon.is_file():
-            return Response(
-                content=spa_favicon.read_bytes(),
-                media_type="image/x-icon",
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
-        frontend_favicon = Path(__file__).resolve().parents[3] / "frontend" / "public" / "favicon.ico"
-        if frontend_favicon.is_file():
-            return Response(
-                content=frontend_favicon.read_bytes(),
-                media_type="image/x-icon",
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
-        return JSONResponse({"detail": "favicon not found"}, status_code=404)
+        return _build_favicon_response(static_dir)
 
     # /app/docs 重定向到 FastAPI 内置的 API 文档（docs_url=/api/docs）
     # 避免被下方 SPA catch-all 捕获后返回 index.html，导致前端路由跳回首页
@@ -174,21 +253,6 @@ def create_app() -> FastAPI:
     #       统一由 spa_index catch-all 处理，确保 JS/CSS 等资源有正确的 Content-Type
     spa_dir = static_dir / "spa"
     if spa_dir.exists():
-        # 常见 MIME 类型映射（确保浏览器正确解析 JS/CSS/WOFF2 等资源）
-        _SPA_MEDIA_TYPES = {
-            ".js": "application/javascript",
-            ".css": "text/css",
-            ".html": "text/html; charset=utf-8",
-            ".svg": "image/svg+xml",
-            ".png": "image/png",
-            ".woff": "font/woff",
-            ".woff2": "font/woff2",
-            ".json": "application/json",
-            ".map": "application/json",
-            # O-12-26 PWA：manifest 必须用 application/manifest+json 才能被浏览器识别
-            ".webmanifest": "application/manifest+json",
-        }
-
         @app.get("/app/{full_path:path}")
         async def spa_index(full_path: str) -> Response:
             """SPA catch-all：所有 /app/* 路径，静态文件直接返回，其余返回 index.html
@@ -196,25 +260,7 @@ def create_app() -> FastAPI:
             未登录时在 index.html 中注入登录引导浮层，
             引导用户跳转到 /app/login 完成登录后返回 /app。
             """
-            if full_path:
-                file_path = spa_dir / full_path
-                if file_path.is_file():
-                    ext = file_path.suffix.lower()
-                    media_type = _SPA_MEDIA_TYPES.get(ext, "application/octet-stream")
-                    headers = {"Cache-Control": "public, max-age=31536000, immutable"} if full_path.startswith("assets/") else {"Cache-Control": "no-cache"}
-                    return Response(content=file_path.read_bytes(), media_type=media_type, headers=headers)
-            index_path = spa_dir / "index.html"
-            if index_path.exists():
-                html = index_path.read_text(encoding="utf-8")
-                # 注入登录引导浮层（在 </body> 前插入）
-                login_overlay = _SPA_LOGIN_OVERLAY
-                html = html.replace("</body>", login_overlay + "\n</body>")
-                return Response(
-                    content=html,
-                    media_type="text/html; charset=utf-8",
-                    headers={"Cache-Control": "no-cache"},
-                )
-            return JSONResponse({"detail": "SPA 未构建，请运行 cd frontend && npm run build"}, status_code=404)
+            return _serve_spa_request(spa_dir, full_path)
 
     # 根路径重定向到新版 SPA：旧版 SSR 已下线，所有用户访问 / 时跳转到 /app/
     @app.get("/", include_in_schema=False)
@@ -268,31 +314,9 @@ def create_app() -> FastAPI:
         仅数据库故障时返回 503（Docker HEALTHCHECK 据此判定不健康）；
         其他检查项为信息性指标，不影响 HTTP 状态码。
         """
-        checks: dict[str, Any] = {}
-        db_ok = False
-
-        try:
-            from xianyu_hunter.web.deps import get_container
-            container = get_container()
-
-            # 1. 数据库连通性（关键检查项，决定 HTTP 状态码）
-            checks["db"], db_ok = _check_db(container)
-
-            # 2. 闲鱼登录态（信息性：未登录不影响服务本身）
-            checks["login_valid"] = _check_login_valid()
-
-            # 3. 运行中任务数
-            checks["tasks_running"] = _check_tasks_running(container)
-
-            # 4. 浏览器实例（Web 进程 with_browser=False 时为 None，属正常）
-            checks["browser"] = "running" if container.browser is not None else "not_started"
-
-            # 5. 通知渠道配置
-            checks["notifier"] = _check_notifier(container)
-
-        except Exception as e:
-            checks["error"] = str(e)
-
+        from xianyu_hunter.web.deps import get_container
+        container = get_container()
+        checks, db_ok = _collect_health_checks(container)
         checks["status"] = "ok" if db_ok else "unhealthy"
         return JSONResponse(
             status_code=200 if db_ok else 503,

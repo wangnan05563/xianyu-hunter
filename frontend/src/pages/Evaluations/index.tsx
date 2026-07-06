@@ -41,6 +41,16 @@ const { RangePicker } = DatePicker
 
 const SCROLL_X = 2060
 
+// S3776 修复：用查表替代原 useMemo 内 switch（5 case 嵌套在 if 内贡献 ~+10 复杂度）
+// 为什么用 Record：列宽/responsive 调整是静态映射，查表比 switch 更扁平
+const COLLAPSED_COLUMN_OVERRIDES: Record<string, Record<string, unknown>> = {
+  task_id: { responsive: undefined },
+  title: { width: 280 },
+  seller: { width: 220 },
+  publish: { responsive: undefined },
+  condition_tags: { width: 180 },
+}
+
 const COLUMN_DEFINITIONS: ColumnConfig[] = [
   { key: 'task_id', label: '任务ID' },
   { key: 'thumb', label: '图片' },
@@ -347,19 +357,11 @@ export default function Evaluations() {
   }
 
   const adaptedColumns = useMemo(() => {
-    if (panelCollapsed) {
-      return columns.map((col) => {
-        switch (col.key) {
-          case 'task_id': return { ...col, responsive: undefined }
-          case 'title': return { ...col, width: 280 }
-          case 'seller': return { ...col, width: 220 }
-          case 'publish': return { ...col, responsive: undefined }
-          case 'condition_tags': return { ...col, width: 180 }
-          default: return col
-        }
-      })
-    }
-    return columns
+    if (!panelCollapsed) return columns
+    return columns.map((col) => {
+      const override = COLLAPSED_COLUMN_OVERRIDES[String(col.key ?? '')]
+      return override ? { ...col, ...override } : col
+    })
   }, [columns, panelCollapsed])
 
   const visibleColumns = applyColumnConfig(adaptedColumns)

@@ -120,7 +120,7 @@ class KBManager:
         """
         async with self._build_lock:
             self._set_progress("scanning", 5, "扫描文档中...")
-            snippets = await self._scan_and_chunk()
+            snippets = self._scan_and_chunk()
             if not snippets:
                 logger.warning("未扫描到任何文档片段，跳过构建")
                 self._set_progress("failed", 100, "无文档片段可构建")
@@ -148,7 +148,7 @@ class KBManager:
         """
         async with self._build_lock:
             self._set_progress("scanning", 5, "增量扫描文档中...")
-            snippets = await self._scan_and_chunk()
+            snippets = self._scan_and_chunk()
             if not snippets:
                 logger.info("增量更新：未扫描到文档，跳过")
                 self._set_progress("idle", 0, "")

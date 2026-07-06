@@ -34,6 +34,49 @@ const riskLevelToColor = (lvl: string): string => {
   return 'orange'
 }
 
+// 把 load 接口的 5 个返回值应用到对应 setter
+// 为什么提取：load 函数 .then 回调内 5 个 setX 调用，每个含 || [] 默认值，
+// 嵌套层级 1 让每个 || 翻倍计分，认知复杂度累计让 TaskDetail 主函数触发 S3776；
+// 提取到模块级后，主函数复杂度由 ~12 降至 1（仅剩 if (!id) return）
+type IdleGap = { from: string; to: string; duration_s: number }
+function applyLoadResult(
+  data: [unknown, unknown, unknown, unknown, unknown],
+  setters: {
+    setTask: (t: Task | null) => void
+    setRuns: (r: TaskRun[]) => void
+    setIdleGaps: (g: IdleGap[]) => void
+    setDeps: (d: TaskDep[]) => void
+    setDependents: (d: TaskDep[]) => void
+    setEvals: (e: EvalItem[]) => void
+    setLoading: (b: boolean) => void
+  },
+) {
+  const [t, r, d, dep, ev] = data
+  const rObj = r as { runs?: TaskRun[]; idle_gaps?: IdleGap[] } | null
+  setters.setTask(t as Task)
+  setters.setRuns(rObj?.runs || [])
+  setters.setIdleGaps(rObj?.idle_gaps || [])
+  setters.setDeps((d as TaskDep[]) || [])
+  setters.setDependents((dep as TaskDep[]) || [])
+  setters.setEvals((ev as { items?: EvalItem[] })?.items || [])
+  setters.setLoading(false)
+}
+
+// 把 handleAddDep 内 Promise.all 的返回值应用到 setDeps/setDependents
+// 为什么提取：原 .then 嵌套 .then 回调内含 2 个 || []，嵌套层级让复杂度翻倍；
+// 提取后 handleAddDep 主流程仅剩单行调用
+function applyDepsResult(
+  data: [unknown, unknown],
+  setters: {
+    setDeps: (d: TaskDep[]) => void
+    setDependents: (d: TaskDep[]) => void
+  },
+) {
+  const [d, dep] = data
+  setters.setDeps((d as TaskDep[]) || [])
+  setters.setDependents((dep as TaskDep[]) || [])
+}
+
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -87,19 +130,11 @@ export default function TaskDetail() {
     setLoading(true)
     Promise.all([
       taskApi.get(id).catch(() => null),
-      taskDetailApi.runs(id, 168).catch(() => ({ runs: [], idle_gaps: [] })),
-      taskDetailApi.deps(id).catch(() => []),
-      taskDetailApi.dependents(id).catch(() => []),
-      evalApi.list({ task_id: id, limit: 50 }).catch(() => ({ items: [] })),
-    ]).then(([t, r, d, dep, ev]) => {
-      setTask(t as Task)
-      setRuns((r as { runs: TaskRun[]; idle_gaps: Array<{ from: string; to: string; duration_s: number }> })?.runs || [])
-      setIdleGaps((r as { idle_gaps: Array<{ from: string; to: string; duration_s: number }> })?.idle_gaps || [])
-      setDeps((d as TaskDep[]) || [])
-      setDependents((dep as TaskDep[]) || [])
-      setEvals((ev as { items: EvalItem[] })?.items || [])
-      setLoading(false)
-    })
+      taskDetailApi.runs(id, 168).catch(() => null),
+      taskDetailApi.deps(id).catch(() => null),
+      taskDetailApi.dependents(id).catch(() => null),
+      evalApi.list({ task_id: id, limit: 50 }).catch(() => null),
+    ]).then((data) => applyLoadResult(data, { setTask, setRuns, setIdleGaps, setDeps, setDependents, setEvals, setLoading }))
   }
 
   // 加载闲鱼内容关联
@@ -175,14 +210,11 @@ export default function TaskDetail() {
       .then(() => {
         message.success('添加依赖成功')
         setAddDepTaskId(null)
-        // 刷新依赖列表
+        // 刷新依赖列表：默认值与 || [] 处理统一收敛到 applyDepsResult
         Promise.all([
-          taskDetailApi.deps(id).catch(() => []),
-          taskDetailApi.dependents(id).catch(() => []),
-        ]).then(([d, dep]) => {
-          setDeps((d as TaskDep[]) || [])
-          setDependents((dep as TaskDep[]) || [])
-        })
+          taskDetailApi.deps(id).catch(() => null),
+          taskDetailApi.dependents(id).catch(() => null),
+        ]).then((data) => applyDepsResult(data, { setDeps, setDependents }))
       })
       .catch(() => message.error('添加依赖失败'))
       .finally(() => setAddDepLoading(false))

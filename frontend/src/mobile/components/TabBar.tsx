@@ -33,19 +33,24 @@ export default function TabBar() {
         borderTop: `1px solid ${themeToken.colorBorderSecondary}`,
       }}
     >
-      {TABS.map((tab) => (
-        <button
-          key={tab.key}
-          className={`m-tab-item ${isActive(tab.key) ? 'active' : ''}`}
-          onClick={() => navigate(tab.key)}
-          style={{
-            color: isActive(tab.key) ? '#E20613' : themeToken.colorTextSecondary,
-          }}
-        >
-          <span className="m-tab-icon">{tab.icon}</span>
-          <span className="m-tab-label">{tab.label}</span>
-        </button>
-      ))}
+      {TABS.map((tab) => {
+        const active = isActive(tab.key)
+        return (
+          <button
+            key={tab.key}
+            type="button"
+            aria-current={active ? 'page' : undefined}
+            className={`m-tab-item ${active ? 'active' : ''}`}
+            onClick={() => navigate(tab.key)}
+            style={{
+              color: active ? '#E20613' : themeToken.colorTextSecondary,
+            }}
+          >
+            <span className="m-tab-icon">{tab.icon}</span>
+            <span className="m-tab-label">{tab.label}</span>
+          </button>
+        )
+      })}
     </nav>
   )
 }

@@ -243,59 +243,25 @@ export default function TaskEditor() {
   const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (id) {
-      setLoadingEditData(true)
-      setLoadError(null)
-      taskApi.get(id)
-        .then((task) => {
-          // 后端可能返回 JSON 字符串或已解析的数组/对象，统一安全解析
-          const safeParse = (v: unknown): string[] => {
-            if (Array.isArray(v)) return v
-            if (typeof v === 'string' && v.trim()) {
-              try { return JSON.parse(v) } catch { return [] }
-            }
-            return []
-          }
-          const data: TaskCreateBody = {
-            keyword: task.keyword || '',
-            name: task.name || '',
-            min_price: task.min_price,
-            max_price: task.max_price,
-            max_publish_days: task.max_publish_days,
-            mode: task.mode || 'confirm',
-            region: task.region || '',
-            exclude_words: safeParse(task.exclude_words),
-            search_filters: safeParse(task.search_filters),
-            // 任务级覆盖字段：后端已将 JSON 字符串解析为对象，直接透传
-            // eval_threshold 后端默认 60（NOT NULL），此处保留原值，前端用 null 表示"沿用全局"语义
-            eval_threshold: task.eval_threshold ?? null,
-            ai_prompt: task.ai_prompt ?? null,
-            search_config: task.search_config ?? null,
-            price_config: task.price_config ?? null,
-            antidetect_config: task.antidetect_config ?? null,
-            eval_config: task.eval_config ?? null,
-          }
-          setFormData(data)
-          setCron(task.cron || '*/5 * * * *')
-          // 兼容旧任务：use_cron / interval_seconds 可能未持久化，回退默认值
-          setUseCron(Boolean(task.use_cron))
-          setIntervalSeconds(
-            typeof task.interval_seconds === 'number' ? task.interval_seconds : 60
-          )
-        })
-        .catch((err) => {
-          console.error('加载任务失败:', err)
-          const status = err?.response?.status
-          if (status === 401) {
-            setLoadError('登录已过期，请先登录后重试')
-          } else if (status === 404) {
-            setLoadError('任务不存在，可能已被删除')
-          } else {
-            setLoadError(err?.response?.data?.detail || '加载失败，请返回列表重试')
-          }
-        })
-        .finally(() => setLoadingEditData(false))
-    }
+    // S3776 修复：早返回替代 if 包裹，复用模块级 taskToFormData / buildLoadErrorMessage
+    if (!id) return
+    setLoadingEditData(true)
+    setLoadError(null)
+    taskApi.get(id)
+      .then((task) => {
+        setFormData(taskToFormData(task))
+        setCron(task.cron || '*/5 * * * *')
+        // 兼容旧任务：use_cron / interval_seconds 可能未持久化，回退默认值
+        setUseCron(Boolean(task.use_cron))
+        setIntervalSeconds(
+          typeof task.interval_seconds === 'number' ? task.interval_seconds : 60
+        )
+      })
+      .catch((err) => {
+        console.error('加载任务失败:', err)
+        setLoadError(buildLoadErrorMessage(err))
+      })
+      .finally(() => setLoadingEditData(false))
   }, [id])
 
   const steps = [

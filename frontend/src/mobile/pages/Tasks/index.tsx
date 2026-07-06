@@ -26,14 +26,17 @@ export default function MobileTasks() {
   useEffect(() => { fetchTasks() }, [fetchTasks])
 
   // 启停任务：乐观更新，失败回滚
+  // 用函数式 setTasks 精确回滚单个 task，避免闭包 prev 快照过期误回滚其他 task
+  // （连续快速点击场景：第二次操作闭包里的 prev 已过期，整体 setTasks(prev) 会覆盖中间变化）
   const handleToggle = async (task: Task, checked: boolean) => {
-    const prev = tasks
-    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: checked ? 'running' : 'paused' } : t))
+    const newStatus = checked ? 'running' : 'paused'
+    setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: newStatus } : t))
     try {
       await taskApi.control(task.id, checked ? 'resume' : 'pause')
       message.success(checked ? '已启动' : '已暂停')
     } catch {
-      setTasks(prev) // 回滚
+      // 仅回滚当前 task 到操作前状态，不影响其他 task 期间发生的变化
+      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: task.status } : t))
       message.error('操作失败')
     }
   }

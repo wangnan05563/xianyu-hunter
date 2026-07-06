@@ -5,6 +5,7 @@
 #   powershell -File scripts/build-exe.ps1            # 默认增量打包（首次慢，后续快）
 #   powershell -File scripts/build-exe.ps1 -SkipSPA   # 跳过 SPA 构建（仅前端无变更时用）
 #   powershell -File scripts/build-exe.ps1 -SkipDeps  # 跳过 pip/npm 依赖安装（仅依赖无变更时用）
+#   powershell -File scripts/build-exe.ps1 -DepsOnly  # 仅验证/修复构建 venv 与 Python 依赖
 #   powershell -File scripts/build-exe.ps1 -Clean     # 清理所有缓存重新下载（怀疑缓存损坏时用）
 #
 # 产物：dist/xianyu-hunter/ 目录 + dist/XianyuHunter-Setup-v*.exe
@@ -26,6 +27,7 @@
 param(
     [switch]$SkipSPA,
     [switch]$SkipDeps,
+    [switch]$DepsOnly,
     [switch]$Clean
 )
 
@@ -37,6 +39,59 @@ Set-Location $repoRoot
 $cacheDir = "$repoRoot\.cache"
 $pwCacheDir = "$cacheDir\playwright_browsers"
 $modelCacheDir = "$cacheDir\models\bge-small-zh-v1.5"
+$buildVenv = ".venv-build"
+$buildPython = "$buildVenv\Scripts\python.exe"
+$buildVenvReadyMarker = "$buildVenv\.xh-build-ready"
+
+function New-BuildVenv {
+    if (Test-Path $buildVenv) {
+        Write-Host "  删除损坏的 $buildVenv 后重建..." -ForegroundColor Yellow
+        Remove-Item -Recurse -Force $buildVenv -ErrorAction SilentlyContinue
+    }
+    Write-Host "  创建新 venv...（约 10 秒）"
+    python -m venv $buildVenv
+    if ($LASTEXITCODE -ne 0) { throw "venv 创建失败" }
+}
+
+function Test-BuildPip {
+    if (-not (Test-Path $buildPython)) { return $false }
+    & $buildPython -m pip --version *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Repair-BuildPip {
+    if (-not (Test-Path $buildPython)) { return $false }
+    Write-Host "  [WARN] build venv 中 pip 不可用，尝试 ensurepip 修复..." -ForegroundColor Yellow
+    & $buildPython -m ensurepip --upgrade *> $null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    return (Test-BuildPip)
+}
+
+function Invoke-BuildPip {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$PipArgs,
+        [Parameter(Mandatory = $true)]
+        [string]$FailureMessage,
+        [switch]$RetryAfterRebuild
+    )
+
+    & $buildPython -m pip @PipArgs
+    if ($LASTEXITCODE -eq 0) { return }
+
+    if ($RetryAfterRebuild) {
+        Write-Host "  [WARN] pip 命令失败，重建 build venv 后重试一次..." -ForegroundColor Yellow
+        New-BuildVenv
+        if (-not (Test-BuildPip)) {
+            & $buildPython -m ensurepip --upgrade *> $null
+            if (-not (Test-BuildPip)) { throw "build venv 中 pip 不可用" }
+        }
+        & $buildPython -m pip @PipArgs
+        if ($LASTEXITCODE -eq 0) { return }
+    }
+
+    throw $FailureMessage
+}
 
 # -Clean：清理所有缓存
 if ($Clean) {
@@ -59,33 +114,48 @@ Write-Host "Repo: $repoRoot"
 Write-Host "Cache: $cacheDir"
 if ($SkipDeps) { Write-Host "Mode: SkipDeps（跳过依赖安装）" }
 if ($SkipSPA)  { Write-Host "Mode: SkipSPA（跳过 SPA 构建）" }
+if ($DepsOnly) { Write-Host "Mode: DepsOnly（仅验证构建依赖）" }
 
 # ============== 1. venv 增量更新 + 依赖安装 ==============
 Write-Host "`n[1/6] Preparing build venv..." -ForegroundColor Yellow
 # 为什么不每次删除重建：pip install 对已安装包会自动跳过，删除重建会让所有包重新解压
 # 仅在 venv 不存在或 -Clean 时创建
-if (-not (Test-Path ".venv-build\Scripts\python.exe")) {
-    Write-Host "  venv 不存在，创建新 venv...（约 10 秒）"
-    python -m venv .venv-build
-    if ($LASTEXITCODE -ne 0) { throw "venv 创建失败" }
+if (-not (Test-Path $buildPython)) {
+    Write-Host "  venv 不存在"
+    New-BuildVenv
 } else {
     Write-Host "  venv 已存在，增量更新" -ForegroundColor DarkGray
 }
 
+if ((-not $SkipDeps) -and (Test-Path $buildPython) -and (-not (Test-Path $buildVenvReadyMarker))) {
+    Write-Host "  [WARN] build venv 缺少健康标记，可能是上次构建中断留下的半成品，重建..." -ForegroundColor Yellow
+    New-BuildVenv
+}
+
+if (-not (Test-BuildPip)) {
+    if (-not (Repair-BuildPip)) {
+        Write-Host "  [WARN] ensurepip 修复失败，重建 build venv..." -ForegroundColor Yellow
+        New-BuildVenv
+        if (-not (Test-BuildPip)) {
+            & $buildPython -m ensurepip --upgrade *> $null
+            if (-not (Test-BuildPip)) { throw "build venv 中 pip 不可用" }
+        }
+    }
+}
+
 if (-not $SkipDeps) {
     Write-Host "  安装项目依赖（pip 自动跳过已安装包）..."
-    & .venv-build\Scripts\pip install -e . --quiet
-    if ($LASTEXITCODE -ne 0) { throw "项目依赖安装失败" }
+    Invoke-BuildPip -PipArgs @("install", "-e", ".", "--quiet") -FailureMessage "项目依赖安装失败" -RetryAfterRebuild
 
-    & .venv-build\Scripts\pip install pyinstaller --quiet
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller 安装失败" }
+    Invoke-BuildPip -PipArgs @("install", "pyinstaller", "--quiet") -FailureMessage "PyInstaller 安装失败"
 
     # 系统托盘可选依赖：pystray + pillow
     # launcher.py 中 try/except 导入，未安装时控制台模式仍可用
-    & .venv-build\Scripts\pip install pystray pillow --quiet
+    & $buildPython -m pip install pystray pillow --quiet
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [WARN] pystray/pillow 安装失败，托盘功能将不可用" -ForegroundColor Red
     }
+    Set-Content -Path $buildVenvReadyMarker -Value (Get-Date -Format o) -Encoding UTF8
 } else {
     Write-Host "  -SkipDeps 已指定，跳过依赖安装" -ForegroundColor DarkGray
 }
@@ -93,13 +163,18 @@ if (-not $SkipDeps) {
 # 验证关键依赖存在（即使 -SkipDeps 也要确保）
 if (-not (Test-Path ".venv-build\Scripts\pyinstaller.exe")) {
     Write-Host "  [WARN] PyInstaller 未安装，强制安装..." -ForegroundColor Red
-    & .venv-build\Scripts\pip install pyinstaller --quiet
+    Invoke-BuildPip -PipArgs @("install", "pyinstaller", "--quiet") -FailureMessage "PyInstaller 安装失败"
 }
 
 # ============== 2. 锁定依赖 ==============
 Write-Host "`n[2/6] Locking dependencies..." -ForegroundColor Yellow
-& .venv-build\Scripts\pip freeze > requirements-lock.txt
+& $buildPython -m pip freeze > requirements-lock.txt
 Write-Host "  依赖已锁定到 requirements-lock.txt"
+
+if ($DepsOnly) {
+    Write-Host "`n[DepsOnly] 构建 venv 与 Python 依赖验证完成" -ForegroundColor Green
+    exit 0
+}
 
 # ============== 3. 构建 SPA ==============
 # 默认每次都重建：避免前端源码已修改但 SPA 产物未更新导致打包后行为不一致

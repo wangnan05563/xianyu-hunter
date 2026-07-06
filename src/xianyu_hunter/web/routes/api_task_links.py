@@ -1474,122 +1474,144 @@ async def live_links(
     # 导致返回的商品池与官方链接不一致（如 600-680 元区间商品无法被搜到）
     task_search_filters, search_sort_type, search_regions = _load_live_search_config(task)
 
-    async def event_stream():
-        """SSE 事件流：分阶段推送搜索进度和最终结果
+    # SSE 事件流逻辑提取为模块级 async generator，避免内嵌闭包拉高 live_links 认知复杂度（S3776）
+    return StreamingResponse(
+        _live_event_stream(
+            container, background_tasks, task_id, keyword, user_id,
+            min_price, max_price, max_publish_days, exclude_words,
+            task_search_filters, search_sort_type, search_regions,
+        ),
+        media_type="text/event-stream",
+    )
 
-        各阶段的错误处理已提取到 _xxx 辅助函数，主流程仅负责编排和 yield，
-        避免嵌套 try/except 和多层 if/elif 导致认知复杂度超限。
-        """
-        # 性能埋点：记录 live 搜索整体耗时，便于分析缓存命中率和搜索性能
-        live_start = time.monotonic()
-        def sse(data: dict) -> str:
-            return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        # 阶段 1：检查缓存
-        yield sse({"stage": "checking_cache"})
-        cached_result = _check_live_cache(task_id, live_start)
-        if cached_result:
-            yield sse({"stage": "done", **cached_result})
-            return
+async def _live_event_stream(
+    container: Container,
+    background_tasks: BackgroundTasks,
+    task_id: str,
+    keyword: str,
+    user_id: str | None,
+    min_price,
+    max_price,
+    max_publish_days,
+    exclude_words: list[str],
+    task_search_filters: list[str],
+    search_sort_type: str,
+    search_regions: str,
+):
+    """SSE 事件流：分阶段推送搜索进度和最终结果
 
-        # 阶段 1.5：in-flight 去重
-        # 如果该 task 的搜索正在进行，等待其完成后复用缓存结果
-        # 避免并发请求竞争 browser_lock 导致"系统正在执行后台搜索任务"错误
-        existing_inflight = _live_inflight.get(task_id)
-        if existing_inflight is not None and not existing_inflight.is_set():
-            yield sse({"stage": "waiting_inflight"})
-            yield sse(await _wait_for_inflight_search(task_id, live_start, existing_inflight))
-            return
+    各阶段的错误处理已提取到 _xxx 辅助函数，主流程仅负责编排和 yield，
+    避免嵌套 try/except 和多层 if/elif 导致认知复杂度超限。
+    """
+    # 性能埋点：记录 live 搜索整体耗时，便于分析缓存命中率和搜索性能
+    live_start = time.monotonic()
+    def sse(data: dict) -> str:
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        # 创建 in-flight Event，标记搜索开始
-        # 在所有退出路径调用 _clear_live_inflight 确保标记被清除，避免后续请求卡在等待逻辑
-        inflight_event = asyncio.Event()
-        _live_inflight[task_id] = inflight_event
+    # 阶段 1：检查缓存
+    yield sse({"stage": "checking_cache"})
+    cached_result = _check_live_cache(task_id, live_start)
+    if cached_result:
+        yield sse({"stage": "done", **cached_result})
+        return
 
-        # 阶段 2：Cookie 检查
-        yield sse({"stage": "checking_cookies"})
-        cookie_error = await _check_live_cookies_safely(container, task_id, inflight_event)
-        if cookie_error:
-            yield sse(cookie_error)
-            return
+    # 阶段 1.5：in-flight 去重
+    # 如果该 task 的搜索正在进行，等待其完成后复用缓存结果
+    # 避免并发请求竞争 browser_lock 导致"系统正在执行后台搜索任务"错误
+    existing_inflight = _live_inflight.get(task_id)
+    if existing_inflight is not None and not existing_inflight.is_set():
+        yield sse({"stage": "waiting_inflight"})
+        yield sse(await _wait_for_inflight_search(task_id, live_start, existing_inflight))
+        return
 
-        # 阶段 3：获取浏览器锁（高优先级，优先于 Worker 后台搜索）
-        # 改进：循环等待并定期推送 SSE 进度事件，避免前端在 10-20s 等待中完全静默
-        # 为什么需要：Worker 一轮搜索可能持锁 30-45s（freq_delay + m5tk + API + DOM 回退），
-        # 实时查询需要耐心等，但前端不应长时间无任何反馈
-        yield sse({"stage": "acquiring_lock"})
-        deadline = time.monotonic() + _LIVE_LOCK_TOTAL_TIMEOUT
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                _clear_live_inflight(task_id, inflight_event)
-                yield sse({"stage": "error", "detail": "系统正在执行后台搜索任务，请稍后重试", "status": 503})
-                return
-            if await _try_acquire_live_lock_once(container, remaining):
-                break
-            # 推 SSE 等待进度，让前端展示「等待浏览器资源...」
-            # PriorityBrowserLock.acquire 在 finally 中会减回 _high_waiting，
-            # 不会污染 Worker 的优先级判断
-            yield sse({"stage": "waiting_lock", "elapsed_sec": round(_LIVE_LOCK_TOTAL_TIMEOUT - remaining, 1)})
+    # 创建 in-flight Event，标记搜索开始
+    # 在所有退出路径调用 _clear_live_inflight 确保标记被清除，避免后续请求卡在等待逻辑
+    inflight_event = asyncio.Event()
+    _live_inflight[task_id] = inflight_event
 
-        # 阶段 4：搜索
-        raw_results: list[dict] = []
-        try:
-            yield sse({"stage": "searching"})
-            container.collector.last_session_invalid = False
-            raw_results, search_error = await _execute_live_search_with_retry(
-                container, task_id, keyword, task_search_filters,
-                search_sort_type, search_regions,
-            )
-            if search_error:
-                yield sse(search_error)
-                return
-        finally:
-            container.browser_lock.release()
-            # 搜索阶段结束：清除 in-flight 标记，通知等待者检查缓存
-            # 此时搜索数据已获取，后续格式化/写入DB（阶段5-7）不涉及锁竞争
+    # 阶段 2：Cookie 检查
+    yield sse({"stage": "checking_cookies"})
+    cookie_error = await _check_live_cookies_safely(container, task_id, inflight_event)
+    if cookie_error:
+        yield sse(cookie_error)
+        return
+
+    # 阶段 3：获取浏览器锁（高优先级，优先于 Worker 后台搜索）
+    # 改进：循环等待并定期推送 SSE 进度事件，避免前端在 10-20s 等待中完全静默
+    # 为什么需要：Worker 一轮搜索可能持锁 30-45s（freq_delay + m5tk + API + DOM 回退），
+    # 实时查询需要耐心等，但前端不应长时间无任何反馈
+    yield sse({"stage": "acquiring_lock"})
+    deadline = time.monotonic() + _LIVE_LOCK_TOTAL_TIMEOUT
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             _clear_live_inflight(task_id, inflight_event)
+            yield sse({"stage": "error", "detail": "系统正在执行后台搜索任务，请稍后重试", "status": 503})
+            return
+        if await _try_acquire_live_lock_once(container, remaining):
+            break
+        # 推 SSE 等待进度，让前端展示「等待浏览器资源...」
+        # PriorityBrowserLock.acquire 在 finally 中会减回 _high_waiting，
+        # 不会污染 Worker 的优先级判断
+        yield sse({"stage": "waiting_lock", "elapsed_sec": round(_LIVE_LOCK_TOTAL_TIMEOUT - remaining, 1)})
 
-        # 阶段 5：格式化 + 过滤
-        yield sse({"stage": "filtering", "count": len(raw_results)})
-        results, merged_field_map, filter_summary = _format_live_raw_results(raw_results, task_id)
-
-        # 关键词过滤（安全兜底）
-        filtered = _filter_live_by_keyword(results, keyword, filter_summary)
-        # 排除词过滤
-        filtered = _filter_live_by_exclude_words(filtered, exclude_words, filter_summary)
-        # 价格过滤（任务级 + 全局 price_strategy）
-        filtered = _filter_live_by_price(filtered, min_price, max_price, filter_summary)
-        # 发布天数过滤
-        filtered = _filter_live_by_publish_days(filtered, max_publish_days, filter_summary)
-
-        items = [r for r in filtered if r["link_type"] == "item"]
-        sellers = [r for r in filtered if r["link_type"] == "seller"]
-        filter_summary["final_total"] = len(filtered)
-        filter_summary["final_items"] = len(items)
-        filter_summary["final_sellers"] = len(sellers)
-        logger.info("live_links 过滤汇总 task={}: {}", task_id, filter_summary)
-
-        # 阶段 6：批量写入 DB（run_in_executor 避免阻塞事件循环）
-        if items:
-            yield sse({"stage": "writing_db", "count": len(items)})
-            items_data = _build_live_items_data(items)
-            await _write_live_items_to_db(container, task_id, items_data)
-            # 传递 user_id 给后台评估任务，写入事件时用 "default" 兜底
-            background_tasks.add_task(_safe_trigger_live_evaluation, container, task_id, items, user_id)
-
-        # 阶段 7：完成
-        result = _build_live_final_result(
-            task_id, keyword, container, items, sellers, filtered, merged_field_map, filter_summary,
+    # 阶段 4：搜索
+    raw_results: list[dict] = []
+    try:
+        yield sse({"stage": "searching"})
+        container.collector.last_session_invalid = False
+        raw_results, search_error = await _execute_live_search_with_retry(
+            container, task_id, keyword, task_search_filters,
+            search_sort_type, search_regions,
         )
-        # 写入缓存：仅当查询结果非空时缓存，0 条记录不缓存以便下次请求重新触发实时查询
-        if filtered:
-            _live_cache[task_id] = (time.monotonic(), result)
-        elapsed = time.monotonic() - live_start
-        logger.info("live_links 完成 task={}, {} 个商品, 耗时 {:.1f}s", task_id, len(items), elapsed)
-        yield sse({"stage": "done", **result})
+        if search_error:
+            yield sse(search_error)
+            return
+    finally:
+        container.browser_lock.release()
+        # 搜索阶段结束：清除 in-flight 标记，通知等待者检查缓存
+        # 此时搜索数据已获取，后续格式化/写入DB（阶段5-7）不涉及锁竞争
+        _clear_live_inflight(task_id, inflight_event)
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    # 阶段 5：格式化 + 过滤
+    yield sse({"stage": "filtering", "count": len(raw_results)})
+    results, merged_field_map, filter_summary = _format_live_raw_results(raw_results, task_id)
+
+    # 关键词过滤（安全兜底）
+    filtered = _filter_live_by_keyword(results, keyword, filter_summary)
+    # 排除词过滤
+    filtered = _filter_live_by_exclude_words(filtered, exclude_words, filter_summary)
+    # 价格过滤（任务级 + 全局 price_strategy）
+    filtered = _filter_live_by_price(filtered, min_price, max_price, filter_summary)
+    # 发布天数过滤
+    filtered = _filter_live_by_publish_days(filtered, max_publish_days, filter_summary)
+
+    items = [r for r in filtered if r["link_type"] == "item"]
+    sellers = [r for r in filtered if r["link_type"] == "seller"]
+    filter_summary["final_total"] = len(filtered)
+    filter_summary["final_items"] = len(items)
+    filter_summary["final_sellers"] = len(sellers)
+    logger.info("live_links 过滤汇总 task={}: {}", task_id, filter_summary)
+
+    # 阶段 6：批量写入 DB（run_in_executor 避免阻塞事件循环）
+    if items:
+        yield sse({"stage": "writing_db", "count": len(items)})
+        items_data = _build_live_items_data(items)
+        await _write_live_items_to_db(container, task_id, items_data)
+        # 传递 user_id 给后台评估任务，写入事件时用 "default" 兜底
+        background_tasks.add_task(_safe_trigger_live_evaluation, container, task_id, items, user_id)
+
+    # 阶段 7：完成
+    result = _build_live_final_result(
+        task_id, keyword, container, items, sellers, filtered, merged_field_map, filter_summary,
+    )
+    # 写入缓存：仅当查询结果非空时缓存，0 条记录不缓存以便下次请求重新触发实时查询
+    if filtered:
+        _live_cache[task_id] = (time.monotonic(), result)
+    elapsed = time.monotonic() - live_start
+    logger.info("live_links 完成 task={}, {} 个商品, 耗时 {:.1f}s", task_id, len(items), elapsed)
+    yield sse({"stage": "done", **result})
 
 
 def _safe_trigger_live_evaluation(

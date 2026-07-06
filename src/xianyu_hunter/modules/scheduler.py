@@ -42,9 +42,9 @@ class ResumeBlockedError(Exception):
 
 class _ImmediateAwaitable:
     def __await__(self):
-        if False:
-            yield None
-        return None
+        # 返回空迭代器让 await 立即完成：原 if False: yield 是为了让 __await__ 被识别为 generator，
+        # 但属于恒定条件（S5797）。改用 iter(()) 直接得到空迭代器，语义等价且无死代码。
+        return iter(())
 
 
 @dataclass

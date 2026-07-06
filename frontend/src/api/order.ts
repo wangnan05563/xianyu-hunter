@@ -22,6 +22,10 @@ export const orderApi = {
       )
       .then((r) => r.data),
 
+  // 详情直连：避免 OrderDetail 走 list+find 全量拉取
+  get: (id: string) =>
+    client.get<OrderItem>(`/api/orders/${id}`).then((r) => r.data),
+
   // id 为字符串组合键（item_id:timestamp:rand），非数字
   // 返回 takeover_deadline 供前端 modal 启动倒计时
   takeover: (id: string) =>

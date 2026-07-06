@@ -680,63 +680,82 @@ class Evaluator:
         max_price = price_range.max_price
         price = item.price
 
+        # 三种边界组合分别委托给独立辅助方法，避免单函数嵌套分支过多（S3776）
         if min_price is not None and max_price is not None:
-            if max_price <= min_price:
-                return score
-            width = max_price - min_price
-            ratio = (price - min_price) / width
-            if ratio < 0:
-                over = abs(ratio)
-                deduction = 25 if over <= 0.15 else 50
-                reasons.append(
-                    f"task_price_range_low(price={price}, min={min_price}, ded={deduction})"
-                )
-                return max(0, score - deduction)
-            if ratio > 1:
-                over = ratio - 1
-                deduction = 25 if over <= 0.15 else 50
-                reasons.append(
-                    f"task_price_range_high(price={price}, max={max_price}, ded={deduction})"
-                )
-                return max(0, score - deduction)
-            if ratio < 0.2:
-                reasons.append(
-                    f"task_price_range_lower_edge(price={price}, range={min_price}-{max_price}, ded=10)"
-                )
-                return max(0, score - 10)
-            if ratio <= 0.65:
-                return score
-            if ratio < 0.8:
-                reasons.append(
-                    f"task_price_range_upper_mid(price={price}, range={min_price}-{max_price}, ded=5)"
-                )
-                return max(0, score - 5)
-            reasons.append(
-                f"task_price_range_upper_edge(price={price}, range={min_price}-{max_price}, ded=12)"
-            )
-            return max(0, score - 12)
-
+            return self._score_full_price_range(price, min_price, max_price, score, reasons)
         if min_price is not None and price < min_price:
-            if min_price <= 0:
-                deduction = 25
-            else:
-                deduction = 25 if (min_price - price) / min_price <= 0.15 else 50
+            deduction = self._deviation_deduction(price, min_price, below=True)
             reasons.append(
                 f"task_price_range_low(price={price}, min={min_price}, ded={deduction})"
             )
             return max(0, score - deduction)
-
         if max_price is not None and price > max_price:
-            if max_price <= 0:
-                deduction = 25
-            else:
-                deduction = 25 if (price - max_price) / max_price <= 0.15 else 50
+            deduction = self._deviation_deduction(price, max_price, below=False)
             reasons.append(
                 f"task_price_range_high(price={price}, max={max_price}, ded={deduction})"
             )
             return max(0, score - deduction)
-
         return score
+
+    @staticmethod
+    def _deviation_deduction(price: float, bound: float, below: bool) -> int:
+        """统一计算单边越界扣分：偏离 <=15% 扣 25，否则扣 50。
+
+        bound <= 0 时无法计算百分比，固定 25 以避免除零异常。
+        """
+        if bound <= 0:
+            return 25
+        delta = abs(bound - price) if below else abs(price - bound)
+        return 25 if delta / bound <= 0.15 else 50
+
+    def _score_full_price_range(
+        self,
+        price: float,
+        min_price: float,
+        max_price: float,
+        score: int,
+        reasons: list[str],
+    ) -> int:
+        """双边界场景：以 ratio = (price - min) / (max - min) 分段评分。
+
+        各 ratio 区间的扣分曲线设计：越接近边界扣分越大，中段 [0.2, 0.65] 视为安全区不扣分。
+        """
+        if max_price <= min_price:
+            return score
+        width = max_price - min_price
+        ratio = (price - min_price) / width
+
+        # 低于下界：偏离量 <=15% 扣 25，否则扣 50
+        if ratio < 0:
+            deduction = 25 if abs(ratio) <= 0.15 else 50
+            reasons.append(
+                f"task_price_range_low(price={price}, min={min_price}, ded={deduction})"
+            )
+            return max(0, score - deduction)
+        # 高于上界：偏离量 <=15% 扣 25，否则扣 50
+        if ratio > 1:
+            deduction = 25 if (ratio - 1) <= 0.15 else 50
+            reasons.append(
+                f"task_price_range_high(price={price}, max={max_price}, ded={deduction})"
+            )
+            return max(0, score - deduction)
+        # 区间内分段：靠近下界 / 中段 / 靠近上界
+        if ratio < 0.2:
+            reasons.append(
+                f"task_price_range_lower_edge(price={price}, range={min_price}-{max_price}, ded=10)"
+            )
+            return max(0, score - 10)
+        if ratio <= 0.65:
+            return score
+        if ratio < 0.8:
+            reasons.append(
+                f"task_price_range_upper_mid(price={price}, range={min_price}-{max_price}, ded=5)"
+            )
+            return max(0, score - 5)
+        reasons.append(
+            f"task_price_range_upper_edge(price={price}, range={min_price}-{max_price}, ded=12)"
+        )
+        return max(0, score - 12)
 
     # ============== 5. 商品热度（insufficient 模式专用） ==============
 

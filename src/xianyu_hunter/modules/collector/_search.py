@@ -819,11 +819,7 @@ class SearchMixin:
         """
         # 降级链日志合并（meta-rule #32）：收集多阶段信息，最终输出一条结构化日志
         # 避免一次 DOM 回退产生 5+ 条分散日志，导致日志噪音和排查困难
-        chain: list[str] = []
-        if session_invalid:
-            chain.append("API会话失效")
-        else:
-            chain.append("API不可用")
+        chain: list[str] = ["API会话失效" if session_invalid else "API不可用"]
         await self.ad.human_delay(1000, 2000)
         cards = await self._collect_dom_cards(page, keyword)
         items: list[ItemSummary] = []
@@ -833,7 +829,6 @@ class SearchMixin:
             return items
         chain.append(f"卡片{len(cards)}")
         batch_data = await self._evaluate_dom_batch(page)
-        filtered_out: list[str] = []
         if batch_data:
             chain.append("批量解析")
             filtered_out = self._build_items_from_dom_batch(batch_data, items, keyword)
@@ -844,14 +839,8 @@ class SearchMixin:
             chain.append(f"过滤{len(filtered_out)}")
         if items:
             chain.append(f"有效{len(items)}")
-            if session_invalid:
-                self.last_session_invalid = False
-                chain.append("重置会话标志")
-            if max_pages > 1:
-                before_paginate = len(items)
-                await self._paginate_dom_results(page, items, keyword, max_pages)
-                if len(items) > before_paginate:
-                    chain.append(f"翻页+{len(items) - before_paginate}")
+            # 嵌套的 session 重置 + 翻页逻辑提取到辅助方法，避免主流程复杂度超限
+            await self._apply_dom_fallback_pagination(page, items, keyword, max_pages, session_invalid, chain)
         else:
             chain.append("无结果")
         level = "warning" if session_invalid else "info"
@@ -862,6 +851,29 @@ class SearchMixin:
             keyword,
         )
         return items
+
+    async def _apply_dom_fallback_pagination(
+        self,
+        page: Page,
+        items: list[ItemSummary],
+        keyword: str,
+        max_pages: int,
+        session_invalid: bool,
+        chain: list[str],
+    ) -> None:
+        """DOM 回退的分页与 session 标志重置
+
+        独立为辅助方法以降低 _fallback_to_dom_search 的认知复杂度：
+        session 标志重置和翻页增量统计属于次要副作用，与主流程结果构造解耦后更易读。
+        """
+        if session_invalid:
+            self.last_session_invalid = False
+            chain.append("重置会话标志")
+        if max_pages > 1:
+            before_paginate = len(items)
+            await self._paginate_dom_results(page, items, keyword, max_pages)
+            if len(items) > before_paginate:
+                chain.append(f"翻页+{len(items) - before_paginate}")
 
     async def _collect_dom_cards(self, page: Page, keyword: str) -> list:
         """DOM 回退：检测页面跳转并查找搜索卡片

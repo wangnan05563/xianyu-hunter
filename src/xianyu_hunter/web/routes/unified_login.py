@@ -209,6 +209,31 @@ def _trigger_userinfo_refresh() -> None:
         logger.debug("登录后同步 Cookie 层状态失败: %s", e)
 
 
+def _convert_cookie_to_playwright(c: dict, is_test_cookie_fn) -> dict | None:
+    """转换单条 cookie 为 Playwright add_cookies 入参，跳过无效或测试 cookie
+
+    返回 None 表示该 cookie 应跳过。独立为模块级函数以降低
+    _cookies_from_store_for_playwright 的认知复杂度（S3776）。
+    """
+    name = str(c.get("name") or "")
+    value = str(c.get("value") or "")
+    if not name or not value:
+        return None
+    if is_test_cookie_fn(name, value):
+        logger.warning("登录后注入：跳过测试 Cookie %s=%s", name, value)
+        return None
+    item = {
+        "name": name,
+        "value": value,
+        "domain": c.get("domain") or ".goofish.com",
+        "path": c.get("path") or "/",
+    }
+    expires = c.get("expires", -1)
+    if expires and expires > 0:
+        item["expires"] = expires
+    return item
+
+
 def _cookies_from_store_for_playwright() -> list[dict]:
     """读取 CookieStore 最新 JSON，并转换成 Playwright add_cookies 入参。"""
     try:
@@ -224,23 +249,9 @@ def _cookies_from_store_for_playwright() -> list[dict]:
 
         pw_cookies: list[dict] = []
         for c in data["cookies"]:
-            name = str(c.get("name") or "")
-            value = str(c.get("value") or "")
-            if not name or not value:
-                continue
-            if is_test_cookie(name, value):
-                logger.warning("登录后注入：跳过测试 Cookie %s=%s", name, value)
-                continue
-            item = {
-                "name": name,
-                "value": value,
-                "domain": c.get("domain") or ".goofish.com",
-                "path": c.get("path") or "/",
-            }
-            expires = c.get("expires", -1)
-            if expires and expires > 0:
-                item["expires"] = expires
-            pw_cookies.append(item)
+            item = _convert_cookie_to_playwright(c, is_test_cookie)
+            if item is not None:
+                pw_cookies.append(item)
         return pw_cookies
     except Exception as e:
         logger.debug("读取 CookieStore JSON 失败，无法注入 Playwright: %s", e)
@@ -576,6 +587,35 @@ def _start_qr_login() -> JSONResponse:
     })
 
 
+def _wait_for_qr_ready(proc: subprocess.Popen, status_file: Path, qr_png: Path) -> tuple[bool, dict | None]:
+    """轮询等待二维码生成或子进程退出
+
+    返回 (qr_ready, exit_data)：
+    - qr_ready=True：二维码已生成，可继续扫码流程
+    - qr_ready=False, exit_data=非空：子进程已退出，调用方需用 exit_data 更新 session 后直接返回
+    - qr_ready=False, exit_data=None：轮询超时（30s 内既无二维码也未退出），继续等待子进程
+    """
+    for _ in range(60):  # 30s / 0.5s = 60
+        if proc.poll() is not None:
+            # 子进程已退出（可能启动失败）
+            return False, _read_status_file(str(status_file))
+        if qr_png.exists() and qr_png.stat().st_size > 0:
+            return True, None
+        time.sleep(0.5)
+    return False, None
+
+
+def _qr_final_session_state(final_state: str, data: dict) -> tuple[str, str]:
+    """将 QR 登录终态映射为 (session_status, message)，未知状态归一为 error"""
+    if final_state == "success":
+        return "success", "扫码登录成功"
+    if final_state == "timeout":
+        return "timeout", "扫码超时，请重试"
+    if final_state == "cancelled":
+        return "cancelled", "已取消"
+    return "error", data.get("message", "登录失败")
+
+
 def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
     """后台线程：等待二维码就绪 + 子进程退出"""
     global _session
@@ -583,20 +623,14 @@ def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
     status_file = out_dir / "status.json"
     qr_png = out_dir / "qr.png"
 
-    # 轮询等待二维码生成（最多等 30 秒）
-    qr_ready = False
-    for _ in range(60):  # 30s / 0.5s = 60
-        if proc.poll() is not None:
-            # 子进程已退出（可能启动失败）
-            data = _read_status_file(str(status_file))
-            with _session_lock:
-                _session["status"] = data.get("state", "error")
-                _session["message"] = data.get("message", "子进程异常退出")
-            return
-        if qr_png.exists() and qr_png.stat().st_size > 0:
-            qr_ready = True
-            break
-        time.sleep(0.5)
+    # 轮询等待二维码生成（最多等 30 秒）；提取为辅助函数避免嵌套 if 拉高认知复杂度（S3776）
+    qr_ready, exit_data = _wait_for_qr_ready(proc, status_file, qr_png)
+    if exit_data is not None:
+        # 子进程已退出（可能启动失败）
+        with _session_lock:
+            _session["status"] = exit_data.get("state", "error")
+            _session["message"] = exit_data.get("message", "子进程异常退出")
+        return
 
     if qr_ready:
         # 读取二维码图片为 base64
@@ -629,19 +663,11 @@ def _background_wait_qr(proc: subprocess.Popen, out_dir: Path) -> None:
             final_state = "error"
             data["message"] = _COOKIE_NOT_PERSISTED_MSG
 
+    # 状态映射提取为辅助函数，避免多重 elif 拉高复杂度
+    session_status, session_message = _qr_final_session_state(final_state, data)
     with _session_lock:
-        if final_state == "success":
-            _session["status"] = "success"
-            _session["message"] = "扫码登录成功"
-        elif final_state == "timeout":
-            _session["status"] = "timeout"
-            _session["message"] = "扫码超时，请重试"
-        elif final_state == "cancelled":
-            _session["status"] = "cancelled"
-            _session["message"] = "已取消"
-        else:
-            _session["status"] = "error"
-            _session["message"] = data.get("message", "登录失败")
+        _session["status"] = session_status
+        _session["message"] = session_message
 
     # hooks 在锁外调用，避免与 _finalize_multi_user_login 内部的锁获取死锁
     if final_state == "success":
@@ -716,6 +742,87 @@ def _background_wait(proc: subprocess.Popen, status_file: Path, method: str) -> 
 # ============================================================
 # GET /api/auth/login/status - 轮询登录状态
 # ============================================================
+def _handle_heartbeat_timeout(data: dict, status_file, file_status: str) -> str:
+    """检测心跳超时并清理卡死的子进程，返回更新后的 file_status
+
+    为什么需要：browser_login.py 子进程的 bc.cookies() 在浏览器无响应时
+    可能永久阻塞，导致心跳停止、status_file 停在最后一次写入的 message，
+    前端秒数一直不变化。此处主动识别并清理，让前端停止轮询。
+    启动阶段给更长宽限：打包 exe 冷启动、导入 Playwright、拉起 Edge 可能超过 15s。
+    等待登录阶段仍保留较短阈值，及时识别浏览器 IPC 卡死。
+
+    独立为模块级函数：原为 login_status 内多层嵌套 if + try/except，拉高了
+    认知复杂度（S3776）；提取后 login_status 主流程变为线性调用。
+    """
+    if file_status not in _LIVE_STATUSES:
+        return file_status
+    ts = data.get("ts")
+    if ts is None:
+        return file_status
+    stale_sec = time.time() - float(ts)
+    timeout_sec = _heartbeat_timeout_for_status(file_status)
+    if stale_sec <= timeout_sec:
+        return file_status
+
+    logger.warning("登录子进程心跳超时（%.1fs 未更新），判定为卡死", stale_sec)
+    with _session_lock:
+        proc = _session.get("proc")
+        if proc and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        _session["status"] = "error"
+        _session["message"] = f"登录进程无响应（{stale_sec:.0f}s 未更新），请重试"
+    data["status"] = "error"
+    data["message"] = _session["message"]
+    # 写回 status_file 让 _background_wait 线程也能读到终态，
+    # 否则它会读到旧的 "waiting" 把 _session["status"] 覆盖回去
+    if status_file:
+        try:
+            Path(status_file).write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+    return "error"
+
+
+def _apply_terminal_status_to_session(
+    data: dict, file_status: str, already_success: bool, result: dict,
+) -> bool:
+    """处理终态：验证 Cookie + 更新 session + 更新 result，返回 should_start_hooks"""
+    normalized_status = file_status
+    # 子进程已保证 Cookie 写入，快速确认即可（1.5s→0.6s）
+    if normalized_status == "success" and not _verify_cookies(max_retries=2, delay=0.3):
+        normalized_status = "error"
+        data["message"] = _COOKIE_NOT_PERSISTED_MSG
+
+    with _session_lock:
+        _session["status"] = normalized_status
+        _session["message"] = data.get("message", "")
+        result.update({
+            "status": normalized_status,
+            "message": _session["message"],
+            "elapsed": round(time.time() - (_session.get("started_at") or 0), 1)
+            if _session.get("started_at") else 0,
+        })
+        return normalized_status == "success" and not already_success
+
+
+def _merge_child_timings(data: dict, result: dict) -> None:
+    """合并子进程的 elapsed/wait_elapsed/timings 字段到 result"""
+    if not data:
+        return
+    if data.get("elapsed") is not None:
+        result["child_elapsed"] = data.get("elapsed")
+    if data.get("wait_elapsed") is not None:
+        result["wait_elapsed"] = data.get("wait_elapsed")
+    if data.get("timings") is not None:
+        result["timings"] = data.get("timings")
+
+
 @router.get("/login/status")
 async def login_status() -> dict:
     """轮询当前登录会话状态
@@ -748,59 +855,13 @@ async def login_status() -> dict:
     file_status = data.get("status") or data.get("state") or ""
     should_start_hooks = False
 
-    # 心跳超时检测：status file 超过阶段阈值未更新时判定子进程卡死
-    # 为什么需要：browser_login.py 子进程的 bc.cookies() 在浏览器无响应时
-    # 可能永久阻塞，导致心跳停止、status_file 停在最后一次写入的 message，
-    # 前端秒数一直不变化。此处主动识别并清理，让前端停止轮询。
-    # 启动阶段给更长宽限：打包 exe 冷启动、导入 Playwright、拉起 Edge 可能超过 15s。
-    # 等待登录阶段仍保留较短阈值，及时识别浏览器 IPC 卡死。
-    if file_status in _LIVE_STATUSES:
-        ts = data.get("ts")
-        if ts is not None:
-            stale_sec = time.time() - float(ts)
-            timeout_sec = _heartbeat_timeout_for_status(file_status)
-            if stale_sec > timeout_sec:
-                logger.warning("登录子进程心跳超时（%.1fs 未更新），判定为卡死", stale_sec)
-                with _session_lock:
-                    proc = _session.get("proc")
-                    if proc and proc.poll() is None:
-                        try:
-                            proc.kill()
-                        except OSError:
-                            pass
-                    _session["status"] = "error"
-                    _session["message"] = f"登录进程无响应（{stale_sec:.0f}s 未更新），请重试"
-                data["status"] = "error"
-                data["message"] = _session["message"]
-                file_status = "error"
-                # 写回 status_file 让 _background_wait 线程也能读到终态，
-                # 否则它会读到旧的 "waiting" 把 _session["status"] 覆盖回去
-                if status_file:
-                    try:
-                        Path(status_file).write_text(
-                            json.dumps(data, ensure_ascii=False, indent=2),
-                            encoding="utf-8",
-                        )
-                    except OSError:
-                        pass
+    # 心跳超时检测提取为辅助函数，避免多层嵌套 if 拉高认知复杂度
+    file_status = _handle_heartbeat_timeout(data, status_file, file_status)
 
     if file_status in _TERMINAL_STATUSES:
-        normalized_status = file_status
-        # 子进程已保证 Cookie 写入，快速确认即可（1.5s→0.6s）
-        if normalized_status == "success" and not _verify_cookies(max_retries=2, delay=0.3):
-            normalized_status = "error"
-            data["message"] = _COOKIE_NOT_PERSISTED_MSG
-
-        with _session_lock:
-            _session["status"] = normalized_status
-            _session["message"] = data.get("message", "")
-            result.update({
-                "status": normalized_status,
-                "message": _session["message"],
-                "elapsed": round(time.time() - (_session.get("started_at") or 0), 1)
-                if _session.get("started_at") else 0,
-            })
-            should_start_hooks = normalized_status == "success" and not already_success
+        should_start_hooks = _apply_terminal_status_to_session(
+            data, file_status, already_success, result,
+        )
     elif file_status in _LIVE_STATUSES and result["status"] not in _TERMINAL_STATUSES:
         # 子进程运行中也会持续写 status_file。实时透传这些阶段，便于定位
         # launch / goto / 等待用户登录分别耗时多少。
@@ -808,13 +869,7 @@ async def login_status() -> dict:
         result["phase"] = file_status
         result["message"] = data.get("message") or result["message"]
 
-    if data:
-        if data.get("elapsed") is not None:
-            result["child_elapsed"] = data.get("elapsed")
-        if data.get("wait_elapsed") is not None:
-            result["wait_elapsed"] = data.get("wait_elapsed")
-        if data.get("timings") is not None:
-            result["timings"] = data.get("timings")
+    _merge_child_timings(data, result)
 
     if should_start_hooks:
         _trigger_userinfo_refresh()
@@ -827,9 +882,7 @@ async def login_status() -> dict:
 
     if result["status"] == "success":
         await _ensure_session_cookies_injected()
-
-    # 登录成功时设置 xh_token cookie
-    if result["status"] == "success":
+        # 登录成功时设置 xh_token cookie
         # MU2: 优先使用 session_token，无则回退到 web_token（向后兼容单用户模式）
         session_token = _session.get("session_token")
         return make_auth_response(result, session_token=session_token)

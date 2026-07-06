@@ -538,7 +538,7 @@ class TestCookieCheckerFix:
 
         mock_data = _make_mock_cookie_data(expires_offset=3600)
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         # 初始化协调器（配置健康检查器）
         client.post(
@@ -563,7 +563,7 @@ class TestCookieCheckerFix:
         # expires_offset 为负数表示已过期
         mock_data = _make_mock_cookie_data(expires_offset=-100)
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         client.post(
             "/api/anticrawl/initialize",
@@ -583,7 +583,7 @@ class TestCookieCheckerFix:
 
         mock_data = _make_mock_cookie_data(include_token=False)
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         client.post(
             "/api/anticrawl/initialize",
@@ -603,7 +603,7 @@ class TestCookieCheckerFix:
 
         mock_data = _make_mock_cookie_data(include_identity=False)
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         client.post(
             "/api/anticrawl/initialize",
@@ -622,7 +622,7 @@ class TestCookieCheckerFix:
         _reset_orchestrator()
 
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: None)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": None)
 
         client.post(
             "/api/anticrawl/initialize",
@@ -646,7 +646,7 @@ class TestCookieCheckerFix:
 
         mock_data = _make_mock_cookie_data(expires_offset=3600)
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         client.post(
             "/api/anticrawl/initialize",
@@ -693,7 +693,7 @@ class TestCookieCheckerFix:
             ],
         }
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         client.post(
             "/api/anticrawl/initialize",
@@ -729,7 +729,7 @@ class TestManualInvalidateSemantic:
         """系统失效（manual=False）后 /cookies/layers 应能自动同步恢复"""
         mock_data = _make_mock_cookie_data(expires_offset=3600)
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         client.post(
             "/api/anticrawl/initialize",
@@ -755,7 +755,7 @@ class TestManualInvalidateSemantic:
         """用户主动失效（manual=True）后 /cookies/layers 自动同步应跳过"""
         mock_data = _make_mock_cookie_data(expires_offset=3600)
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         client.post(
             "/api/anticrawl/initialize",
@@ -788,7 +788,7 @@ class TestManualInvalidateSemantic:
         """
         mock_data = _make_mock_cookie_data(expires_offset=3600)
         from xianyu_hunter.web.services import cookie_store as cs_module
-        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self: mock_data)
+        monkeypatch.setattr(cs_module.CookieStore, "_read_json", lambda self, user_id="default": mock_data)
 
         client.post(
             "/api/anticrawl/initialize",
