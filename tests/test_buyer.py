@@ -475,7 +475,8 @@ async def test_buy_fail_out_of_stock() -> None:
     buyer, _, browser, _ = make_buyer(scenario)
     result = await buyer.buy(task_id="t1", item_id="i1", expected_price=1999.0, page=browser.page)
     assert result.outcome.value == "failed"
-    assert "下架" in result.error or "无库存" in result.error
+    # 已下架/已售/被删除在业务上均视为不可购买，统一返回"商品已售出"
+    assert "下架" in result.error or "无库存" in result.error or "已售出" in result.error
 
 
 @pytest.mark.asyncio

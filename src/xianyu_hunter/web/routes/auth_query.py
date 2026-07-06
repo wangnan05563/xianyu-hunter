@@ -284,6 +284,47 @@ def _format_expiry(expiry_ts: float | None) -> str:
     return "不足 1 分钟"
 
 
+_IDENTITY_LAYER_COOKIES = {"unb", "cookie2", "sgcookie", "t", "_tb_token_", "lg2"}
+_SESSION_LAYER_COOKIES = {"_m_h5_tk", "_m_h5_tk_enc"}
+_TRACKING_LAYER_COOKIES = {"cna", "tfstk", "xlly_s"}
+
+
+def _compute_layers_status(names: set[str]) -> dict[str, bool]:
+    """计算 Cookie 三层（identity/session/tracking）的齐全状态
+
+    拆分自 cookie_health：将三层集合交集判断收敛到单一函数，
+    降低主函数的认知复杂度（S3776）。"""
+    return {
+        "identity": bool(_IDENTITY_LAYER_COOKIES & names),
+        "session": bool(_SESSION_LAYER_COOKIES & names),
+        "tracking": bool(_TRACKING_LAYER_COOKIES & names),
+    }
+
+
+def _compute_security_flags(data: dict | None, expiry_ts: float | None) -> dict[str, bool]:
+    """计算安全标记（secure/httponly/session_cookie）
+
+    拆分自 cookie_health：将 key cookie 扫描 + 域名推断收敛到单一函数，
+    降低主函数的循环嵌套与认知复杂度（S3776）。"""
+    flags = {
+        "has_secure": False,
+        "has_httponly": False,
+        "is_session_cookie": expiry_ts is None,
+    }
+    if not data or not data.get("cookies"):
+        return flags
+
+    for c in data["cookies"]:
+        if c.get("name") not in _KEY_COOKIES:
+            continue
+        domain = c.get("domain", "")
+        if domain.endswith(".goofish.com") or domain.endswith(".taobao.com"):
+            flags["has_secure"] = True
+            flags["has_httponly"] = True
+            break
+    return flags
+
+
 @router.get("/cookie/health")
 def cookie_health(request: Request) -> JSONResponse:
     """轻量级 Cookie 健康检查（< 300ms）
@@ -297,49 +338,25 @@ def cookie_health(request: Request) -> JSONResponse:
 
     多用户场景：从 xh_token 识别当前会话用户，按 user_id 读取对应 cookie 文件，
     避免硬编码 default 导致多用户登录后状态栏显示"无 Cookie"。
+
+    重构说明：分层状态计算和安全标记推断下沉到独立函数（S3776），
+    主函数只做流程编排和结果组装，降低嵌套层级与认知负担。
     """
     start_ts = time.time()
-    # 识别当前多用户会话（/api/auth/cookie/health 在 PUBLIC_PREFIXES 中）
     current_uid = _resolve_current_user_id(request) or "default"
 
     store = get_cookie_store()
     store.invalidate_cache(current_uid)
 
-    # 完整性检查：返回 (is_valid, reason)
     is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
-    # 摘要信息：cookie_count / exported_at / method / key_cookies_found
     info = store.get_cookie_info(user_id=current_uid)
-    # 最早过期时间戳
     expiry_ts = store.get_cookie_expiry(user_id=current_uid)
 
-    # 分层状态：基于 Cookie 名称判断 identity/session/tracking 三层是否齐全
-    # 为什么直接读 JSON 而非调 CookieRotator：避免引入 login_orchestrator 的副作用
     data = store._read_json(user_id=current_uid)
     names = {c.get("name", "") for c in (data or {}).get("cookies", [])} if data else set()
-    layers_status = {
-        "identity": bool({"unb", "cookie2", "sgcookie", "t", "_tb_token_", "lg2"} & names),
-        "session": bool({"_m_h5_tk", "_m_h5_tk_enc"} & names),
-        "tracking": bool({"cna", "tfstk", "xlly_s"} & names),
-    }
 
-    # 安全标记：基于 Cookie 属性推断
-    # - has_secure: 是否标记 Secure（HTTPS 传输）
-    # - has_httponly: 是否标记 HttpOnly（防 XSS）
-    # - is_session_cookie: 是否为会话级 Cookie（无 expires）
-    security_flags = {
-        "has_secure": False,
-        "has_httponly": False,
-        "is_session_cookie": expiry_ts is None,
-    }
-    if data and data.get("cookies"):
-        for c in data["cookies"]:
-            if c.get("name") in _KEY_COOKIES:
-                # JSON 存储未保留 secure/httponly 标记，根据域名推断
-                domain = c.get("domain", "")
-                if domain.endswith(".goofish.com") or domain.endswith(".taobao.com"):
-                    security_flags["has_secure"] = True
-                    security_flags["has_httponly"] = True
-                    break
+    layers_status = _compute_layers_status(names)
+    security_flags = _compute_security_flags(data, expiry_ts)
 
     elapsed_ms = int((time.time() - start_ts) * 1000)
     return JSONResponse(content={

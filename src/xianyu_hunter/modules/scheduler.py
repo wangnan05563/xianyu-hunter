@@ -443,7 +443,7 @@ class TaskScheduler:
         之所以放在 scheduler 层而非 worker 层：这里是后台任务异常的统一兜底点，
         能覆盖 worker.run_once 中所有未被内部 try-except 消化的异常。
         """
-        logger.exception(f"[Task {task_id}] run_once 异常: {e}")
+        logger.exception(f"[Task {task_id}] run_once 异常")
         # 捕获到 error_logs 表，供错误日志页面展示和 AI 诊断
         # context 中携带本次执行的 request_id，便于关联到本轮所有日志
         self._capture_background_error(e, task_id, current_rid)

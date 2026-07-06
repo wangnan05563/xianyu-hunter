@@ -22,6 +22,7 @@ from sqlalchemy import select, func
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import ItemRow, TaskLinkRow, TaskRow, _utcnow
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.utils import filter_prices_by_task_range, load_task_price_range
 
 router = APIRouter(prefix="/api", tags=["price-dashboard"])
 
@@ -68,31 +69,37 @@ def _compute_stats(prices: list[float]) -> dict[str, float]:
     }
 
 
-def _load_category_prices(
-    conn, task_id: str | None = None,
-    apply_task_range_filter: bool = True,
-) -> dict[str, dict[str, Any]]:
-    """加载各品类（任务）的价格样本
+def _build_task_select(task_id: str | None):
+    """构建任务元信息查询语句
 
-    返回 {task_id: {"name": ..., "keyword": ..., "prices": [...], "task_price_range": {...}}}。
-    task_id=None 时加载全部任务；每个品类的价格样本含 publish_time 用于历史最低价计算。
-
-    apply_task_range_filter=True 时按每个任务配置的 min_price/max_price 过滤超范围样本，
-    剔除 1 元引流/配件/超范围高价，与 sold_range 端点口径一致。
-    task_map 中每个品类会携带 task_price_range 字段，供前端展示任务价格区间。
+    提取为独立函数：消除 _load_category_prices 中 task_id 分支的重复 SQL 构建，
+    降低认知复杂度（S3776）。task_id 为 None 时返回全量查询。
     """
-    # 先取任务元信息（含价格区间）
+    stmt = select(TaskRow.id, TaskRow.name, TaskRow.keyword, TaskRow.min_price, TaskRow.max_price)
     if task_id:
-        task_rows = conn.execute(
-            select(TaskRow.id, TaskRow.name, TaskRow.keyword, TaskRow.min_price, TaskRow.max_price)
-            .where(TaskRow.id == task_id)
-        ).all()
-    else:
-        task_rows = conn.execute(
-            select(TaskRow.id, TaskRow.name, TaskRow.keyword, TaskRow.min_price, TaskRow.max_price)
-        ).all()
+        stmt = stmt.where(TaskRow.id == task_id)
+    return stmt
 
-    task_map: dict[str, dict[str, Any]] = {
+
+def _build_item_select(task_id: str | None):
+    """构建商品价格查询语句
+
+    提取为独立函数：消除 _load_category_prices 中 task_id 分支的重复 SQL 构建，
+    降低认知复杂度（S3776）。task_id 为 None 时返回全量查询。
+    """
+    stmt = select(ItemRow.task_id, ItemRow.price, ItemRow.publish_time)
+    if task_id:
+        stmt = stmt.where(ItemRow.task_id == task_id)
+    return stmt
+
+
+def _build_task_map(task_rows) -> dict[str, dict[str, Any]]:
+    """将任务行转换为 task_map 字典结构
+
+    提取为独立函数：将数据转换逻辑从 _load_category_prices 主流程中分离，
+    让主函数更聚焦于"加载-归类-返回"的高层流程。
+    """
+    return {
         r[0]: {
             "name": r[1] or r[0],
             "keyword": r[2] or "",
@@ -105,37 +112,56 @@ def _load_category_prices(
         for r in task_rows
     }
 
-    # 取商品价格
-    if task_id:
-        item_rows = conn.execute(
-            select(ItemRow.task_id, ItemRow.price, ItemRow.publish_time)
-            .where(ItemRow.task_id == task_id)
-        ).all()
-    else:
-        item_rows = conn.execute(
-            select(ItemRow.task_id, ItemRow.price, ItemRow.publish_time)
-        ).all()
 
-    # 归类到对应任务
-    orphan_prices: list[float] = []  # task_id 为 NULL 或任务不存在的孤儿商品
+def _classify_item_prices(
+    item_rows, task_map: dict[str, dict[str, Any]],
+    apply_task_range_filter: bool,
+) -> list[float]:
+    """将商品价格归类到对应任务，返回孤儿价格列表
+
+    提取为独立函数：将价格归类的循环逻辑从 _load_category_prices 中分离，
+    消除多层嵌套条件，降低认知复杂度（S3776）。
+    原地修改 task_map 中各任务的 prices 列表。
+    """
+    orphan_prices: list[float] = []
     for r in item_rows:
         tid, price, _ = r[0], r[1], r[2]
         if price is None:
             continue
         p = float(price)
-        if tid and tid in task_map:
-            # 按任务价格区间过滤，剔除 1 元引流/配件/超范围高价
-            if apply_task_range_filter:
-                tr = task_map[tid]["task_price_range"]
-                lo = tr["min_price"]
-                hi = tr["max_price"]
-                if (lo is not None and p < lo) or (hi is not None and p > hi):
-                    continue
-            task_map[tid]["prices"].append(p)
-        else:
+        if not tid or tid not in task_map:
             orphan_prices.append(p)
+            continue
+        if apply_task_range_filter:
+            tr = task_map[tid]["task_price_range"]
+            if not _price_in_range(p, tr):
+                continue
+        task_map[tid]["prices"].append(p)
+    return orphan_prices
 
-    # 把孤儿商品单独归为一类，便于全量统计
+
+def _load_category_prices(
+    conn, task_id: str | None = None,
+    apply_task_range_filter: bool = True,
+) -> dict[str, dict[str, Any]]:
+    """加载各品类（任务）的价格样本
+
+    返回 {task_id: {"name": ..., "keyword": ..., "prices": [...], "task_price_range": {...}}}。
+    task_id=None 时加载全部任务；每个品类的价格样本含 publish_time 用于历史最低价计算。
+
+    apply_task_range_filter=True 时按每个任务配置的 min_price/max_price 过滤超范围样本，
+    剔除 1 元引流/配件/超范围高价，与 sold_range 端点口径一致。
+    task_map 中每个品类会携带 task_price_range 字段，供前端展示任务价格区间。
+
+    重构说明：原函数 CC=27，通过提取 4 个辅助函数将主函数简化为"加载任务→加载商品→归类→整理"
+    四步线性流程，显著降低认知复杂度。
+    """
+    task_rows = conn.execute(_build_task_select(task_id)).all()
+    task_map = _build_task_map(task_rows)
+
+    item_rows = conn.execute(_build_item_select(task_id)).all()
+    orphan_prices = _classify_item_prices(item_rows, task_map, apply_task_range_filter)
+
     if orphan_prices and not task_id:
         task_map["__orphan__"] = {
             "name": "未分类",
@@ -185,6 +211,21 @@ def category_stats(
 _ALLOWED_COMPARISON_SORT = {"mean", "median", "min", "max", "p10", "p25", "p75", "p90", "count"}
 
 
+def _price_in_range(p: float, task_range: dict) -> bool:
+    """判断价格是否在任务价格区间内
+
+    提取为独立函数：减少 _filter_category_prices_by_range 内嵌套条件的
+    认知复杂度（S3776），同时供其他函数复用。
+    """
+    lo = task_range.get("min_price")
+    hi = task_range.get("max_price")
+    if lo is not None and p < lo:
+        return False
+    if hi is not None and p > hi:
+        return False
+    return True
+
+
 def _normalize_comparison_params(sort_by: str, order: str) -> tuple[str, str]:
     """白名单校验排序字段和方向，防止 SQL 注入和无效字段
 
@@ -225,9 +266,7 @@ def _filter_category_prices_by_range(conn, task_map: dict, range_days: int) -> N
         if tid and tid in task_map:
             # 按任务价格区间过滤，与 _load_category_prices 保持一致
             tr = task_map[tid].get("task_price_range", {})
-            lo = tr.get("min_price")
-            hi = tr.get("max_price")
-            if (lo is not None and p < lo) or (hi is not None and p > hi):
+            if not _price_in_range(p, tr):
                 continue
             task_map[tid]["prices"].append(p)
         else:
@@ -304,8 +343,15 @@ def category_comparison(
     categories = categories[:limit]
 
     # 计算横向对比指标：每个品类相对全体的偏离度
-    all_prices = [p for c in categories for _ in range(min(c["count"], 100)) for p in [c["mean"]]]
-    overall_mean = round(sum(all_prices) / len(all_prices), 2) if all_prices else 0.0
+    # 修复：使用正确的样本数加权平均，而非"每个品类重复 min(count, 100) 次均值"
+    # 旧实现 count>100 的品类权重被截断，导致 overall_mean 偏离真实水平
+    total_count = sum(c["count"] for c in categories)
+    if total_count > 0:
+        overall_mean = round(
+            sum(c["mean"] * c["count"] for c in categories) / total_count, 2
+        )
+    else:
+        overall_mean = 0.0
     for c in categories:
         c["deviation_pct"] = _compute_deviation_pct(c, overall_mean)
 
@@ -323,49 +369,6 @@ def category_comparison(
 
 # 已售样本不足时的回退阈值：低于此值时回退到全部商品价格
 _MIN_SOLD_SAMPLES = 3
-
-
-def _load_task_price_range(conn, task_id: str | None) -> dict[str, float | None]:
-    """读取任务配置的价格区间（min_price/max_price）
-
-    用于过滤超出任务监控范围的异常价格（如 1 元引流、配件、超范围商品），
-    与 price_histogram.py 的 _resolve_histogram_scope 和 api_evaluations.py
-    的 _apply_task_price_fallback 保持口径一致。
-
-    task_id 为空或任务未配置价格区间时返回 {min: None, max: None}，
-    调用方据此跳过过滤，保留原有行为。
-    """
-    if not task_id:
-        return {"min_price": None, "max_price": None}
-    row = conn.execute(
-        select(TaskRow.min_price, TaskRow.max_price)
-        .where(TaskRow.id == task_id)
-        .limit(1)
-    ).first()
-    if not row:
-        return {"min_price": None, "max_price": None}
-    return {
-        "min_price": float(row[0]) if row[0] is not None else None,
-        "max_price": float(row[1]) if row[1] is not None else None,
-    }
-
-
-def _filter_by_task_range(
-    prices: list[float], task_range: dict[str, float | None]
-) -> list[float]:
-    """按任务价格区间过滤价格样本
-
-    仅当对应边界存在时才过滤，避免 NULL 边界误删有效样本。
-    1 元引流、配件、超范围高价商品会被剔除，让捡漏参考贴近任务实际监控目标。
-    """
-    lo = task_range.get("min_price")
-    hi = task_range.get("max_price")
-    if lo is None and hi is None:
-        return prices
-    return [
-        p for p in prices
-        if (lo is None or p >= lo) and (hi is None or p <= hi)
-    ]
 
 
 def _load_sold_prices_from_links(
@@ -413,7 +416,7 @@ def _load_sold_prices_from_links(
             continue
     raw_count = len(prices)
     if task_range:
-        prices = _filter_by_task_range(prices, task_range)
+        prices = filter_prices_by_task_range(prices, task_range)
     return prices, raw_count
 
 
@@ -441,7 +444,7 @@ def _load_all_prices_from_items(
     prices = [float(r[0]) for r in rows if r and r[0] is not None and float(r[0]) > 0]
     raw_count = len(prices)
     if task_range:
-        prices = _filter_by_task_range(prices, task_range)
+        prices = filter_prices_by_task_range(prices, task_range)
     return prices, raw_count
 
 
@@ -457,7 +460,7 @@ def _compute_sold_range(
     filtered_count 字段记录被任务价格区间过滤掉的样本数，让前端能展示
     "已过滤 N 个超范围样本"的提示，用户可直观确认过滤是否生效。
     """
-    task_range = _load_task_price_range(conn, task_id)
+    task_range = load_task_price_range(conn, task_id)
 
     sold_prices, sold_raw = _load_sold_prices_from_links(conn, task_id, range_days, task_range)
     source = "sold"
@@ -563,11 +566,23 @@ def sold_range(
 # 低于 P10 = excellent（极好的捡漏机会）；P10~P25 = good；P25~median = fair；高于 median = poor
 
 
-def _compute_bargain_level(current_price: float, p10: float, p25: float, median: float) -> tuple[str, int]:
+def _compute_bargain_level(
+    current_price: float, p10: float, p25: float, median: float,
+    task_range: dict[str, float | None],
+) -> tuple[str, int]:
     """根据当前价格相对分位数的位置评定捡漏等级与得分
 
     返回 (level, score)。score 用于前端排序/可视化，level 用于文案展示。
+    任务区间校验优先：超出 task_min/task_max 时返回 out_of_range 等级，
+    避免与分位数等级（excellent/good）语义冲突——否则用户会看到
+    level=excellent 但 suggestion 提示"假货风险"，造成认知不一致。
     """
+    t_min = task_range.get("min_price")
+    t_max = task_range.get("max_price")
+    if t_min is not None and current_price < t_min:
+        return "out_of_range", 0
+    if t_max is not None and current_price > t_max:
+        return "out_of_range", 0
     if current_price < p10:
         return "excellent", 95
     if current_price < p25:
@@ -650,7 +665,7 @@ def bargain_eval(
     median = float(stats["median_price"])
     task_range = stats.get("task_price_range", {"min_price": None, "max_price": None})
 
-    level, score = _compute_bargain_level(current_price, p10, p25, median)
+    level, score = _compute_bargain_level(current_price, p10, p25, median, task_range)
     suggestion = _build_bargain_suggestion(level, current_price, p10, p25, median, task_range)
 
     return {

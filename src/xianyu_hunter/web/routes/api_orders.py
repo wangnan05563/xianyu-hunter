@@ -499,7 +499,7 @@ async def manual_takeover(
         logger.info(f"[ManualTakeover] 商品已售出 item={item_id}: {e}")
         raise HTTPException(status_code=409, detail="商品已售出")
     except Exception as e:
-        logger.exception(f"[ManualTakeover] 抢单异常：{e}")
+        logger.exception("[ManualTakeover] 抢单异常：")
         raise HTTPException(status_code=500, detail=f"抢单失败：{e}")
     finally:
         if acquired_browser_lock:

@@ -19,6 +19,8 @@ import { extractApiError } from '../../utils/apiError'
 
 const { Text } = Typography
 
+type MenuItem = NonNullable<MenuProps['items']>[number]
+
 // 默认头像背景：与 UserMenu 品牌色保持一致
 const DEFAULT_AVATAR_BG = 'linear-gradient(135deg, #FF6200, #FF8C00)'
 
@@ -59,6 +61,142 @@ function getDisplayName(account: AccountInfo): string {
   if (account.custom_alias) return account.custom_alias
   if (account.nickname) return account.nickname
   return account.user_id
+}
+
+// S3776 修复：AccountSwitcher 原 CC=18，拆分为多个子组件 + 独立函数降低复杂度
+// 账号菜单项组件：单个账号的渲染逻辑
+function AccountMenuItem({
+  account,
+  isCurrent,
+  isExpired,
+  disabled,
+  avatarError,
+  onAvatarError,
+  onClick,
+}: {
+  readonly account: AccountInfo
+  readonly isCurrent: boolean
+  readonly isExpired: boolean
+  readonly disabled: boolean
+  readonly avatarError: boolean
+  readonly onAvatarError: () => boolean
+  readonly onClick: () => void
+}) {
+  const displayName = getDisplayName(account)
+  const avatarUrl = account.avatar_url && !avatarError ? account.avatar_url : undefined
+  const showNickname = !!account.nickname && !!account.custom_alias && account.custom_alias !== account.nickname
+
+  return (
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', minWidth: 220 }}
+      onClick={onClick}
+    >
+      {avatarUrl ? (
+        <Avatar size={28} src={avatarUrl} onError={onAvatarError} />
+      ) : (
+        <Avatar size={28} style={{ background: DEFAULT_AVATAR_BG, fontSize: 12 }}>
+          {displayName.charAt(0)}
+        </Avatar>
+      )}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Text strong style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
+            {displayName}
+          </Text>
+          {isCurrent && <CheckCircleFilled style={{ color: `var(--ant-color-success, ${FALLBACK.success})`, fontSize: 12 }} />}
+        </div>
+        {showNickname && (
+          <Text type="secondary" style={{ fontSize: 11, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {account.nickname}
+          </Text>
+        )}
+      </div>
+      <Tag color={STATUS_TAG_COLOR[account.status] || 'default'} style={{ fontSize: 10, margin: 0 }}>
+        {STATUS_TAG_TEXT[account.status] || account.status}
+      </Tag>
+    </div>
+  )
+}
+
+// 构建账号列表菜单项：从主组件抽出，降低主函数复杂度
+function buildAccountMenuItems(
+  accounts: AccountInfo[],
+  currentUserId: string | undefined,
+  switching: boolean,
+  avatarErrors: Record<string, boolean>,
+  handleAvatarError: (userId: string) => boolean,
+  handleSwitch: (userId: string) => void,
+): MenuItem[] {
+  return accounts.map((account) => {
+    const isCurrent = account.is_current || account.user_id === currentUserId
+    const isExpired = account.status !== 'active'
+    return {
+      key: `account-${account.user_id}`,
+      disabled: switching || isExpired,
+      onClick: () => { void handleSwitch(account.user_id) },
+      label: (
+        <AccountMenuItem
+          account={account}
+          isCurrent={isCurrent}
+          isExpired={isExpired}
+          disabled={switching || isExpired}
+          avatarError={!!avatarErrors[account.user_id]}
+          onAvatarError={() => handleAvatarError(account.user_id)}
+          onClick={() => { if (!(switching || isExpired)) handleSwitch(account.user_id) }}
+        />
+      ),
+    }
+  })
+}
+
+// 下拉触发器按钮组件
+function TriggerButton({
+  current,
+  displayName,
+  avatarError,
+  onAvatarError,
+}: {
+  readonly current: AccountInfo | undefined
+  readonly displayName: string
+  readonly avatarError: boolean
+  readonly onAvatarError: () => boolean
+}) {
+  const avatarUrl = current?.avatar_url && !avatarError ? current.avatar_url : undefined
+  return (
+    <button
+      type="button"
+      aria-label="账号切换"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 10px',
+        borderRadius: 20,
+        cursor: 'pointer',
+        background: `var(--ant-color-fill-quaternary, ${FALLBACK.fillQuaternary})`,
+        transition: 'background 0.2s ease',
+        border: 'none',
+        outline: 'none',
+        font: 'inherit',
+        color: 'inherit',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = `var(--ant-color-fill-tertiary, ${FALLBACK.fillTertiary})`
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = `var(--ant-color-fill-quaternary, ${FALLBACK.fillQuaternary})`
+      }}
+    >
+      {avatarUrl ? (
+        <Avatar size={28} src={avatarUrl} onError={onAvatarError} />
+      ) : (
+        <Avatar size={28} style={{ background: DEFAULT_AVATAR_BG, fontSize: 13, fontWeight: 600 }}>
+          {displayName.charAt(0)}
+        </Avatar>
+      )}
+      <SwapOutlined style={{ fontSize: 12, color: `var(--ant-color-text-secondary, ${FALLBACK.textSecondary})` }} />
+    </button>
+  )
 }
 
 export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSwitcherProps) {
@@ -183,138 +321,81 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
     return false
   }
 
-  // 下拉菜单项
-  const menuItems: MenuProps['items'] = [
-    {
-      key: 'header',
-      label: (
-        <div style={{ padding: '4px 0', borderBottom: `1px solid var(--ant-color-border-secondary, ${FALLBACK.borderSecondary})`, marginBottom: 4 }}>
-          <Text strong>账号切换</Text>
-          <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
-            共 {accounts.length} 个账号
-          </Text>
-        </div>
-      ),
-      disabled: true,
-    },
-  ]
-
-  // 账号列表
-  if (loading) {
-    menuItems.push({
-      key: 'loading',
-      label: (
-        <div style={{ textAlign: 'center', padding: '16px 0' }}>
-          <Spin size="small" />
-          <div style={{ marginTop: 8, fontSize: 12, color: `var(--ant-color-text-secondary, ${FALLBACK.textSecondary})` }}>加载账号列表…</div>
-        </div>
-      ),
-      disabled: true,
-    })
-  } else {
-    for (const account of accounts) {
-      const isCurrent = account.is_current || account.user_id === currentUserId
-      const isExpired = account.status !== 'active'
-      const accAvatarUrl = account.avatar_url && !avatarErrors[account.user_id] ? account.avatar_url : undefined
-      menuItems.push({
-        key: `account-${account.user_id}`,
-        disabled: switching || isExpired,
-        onClick: () => { void handleSwitch(account.user_id) },
-        label: (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', minWidth: 220 }}>
-            {accAvatarUrl ? (
-              <Avatar size={28} src={accAvatarUrl} onError={() => handleAvatarError(account.user_id)} />
-            ) : (
-              <Avatar size={28} style={{ background: DEFAULT_AVATAR_BG, fontSize: 12 }}>
-                {getDisplayName(account).charAt(0)}
-              </Avatar>
-            )}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Text strong style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
-                  {getDisplayName(account)}
-                </Text>
-                {isCurrent && <CheckCircleFilled style={{ color: `var(--ant-color-success, ${FALLBACK.success})`, fontSize: 12 }} />}
-              </div>
-              {account.nickname && account.custom_alias && account.custom_alias !== account.nickname && (
-                <Text type="secondary" style={{ fontSize: 11, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {account.nickname}
-                </Text>
-              )}
-            </div>
-            <Tag color={STATUS_TAG_COLOR[account.status] || 'default'} style={{ fontSize: 10, margin: 0 }}>
-              {STATUS_TAG_TEXT[account.status] || account.status}
-            </Tag>
-          </div>
-        ),
-      })
-    }
+  // S3776 修复：菜单项构建逻辑拆分到 buildMenuItems，主组件只剩调用
+  // 菜单项头部
+  const headerItem: MenuItem = {
+    key: 'header',
+    label: (
+      <div style={{ padding: '4px 0', borderBottom: `1px solid var(--ant-color-border-secondary, ${FALLBACK.borderSecondary})`, marginBottom: 4 }}>
+        <Text strong>账号切换</Text>
+        <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
+          共 {accounts.length} 个账号
+        </Text>
+      </div>
+    ),
+    disabled: true,
   }
 
-  // 分隔线 + 操作项
-  menuItems.push({ type: 'divider' })
-  menuItems.push({
-    key: 'add-account',
-    icon: <UserAddOutlined />,
-    disabled: switching,
-    onClick: handleAddAccount,
-    label: '添加新账号',
-  })
-  menuItems.push({
-    key: 'menu-admin',
-    icon: <SettingOutlined />,
-    disabled: switching,
-    onClick: handleMenuAdmin,
-    label: '菜单管理',
-  })
-  menuItems.push({ type: 'divider' })
-  menuItems.push({
-    key: 'logout',
-    icon: <LogoutOutlined />,
-    disabled: switching,
-    onClick: () => { void handleLogout() },
-    danger: true,
-    label: '退出当前账号',
+  // 加载中菜单项
+  const loadingItem: MenuItem = {
+    key: 'loading',
+    label: (
+      <div style={{ textAlign: 'center', padding: '16px 0' }}>
+        <Spin size="small" />
+        <div style={{ marginTop: 8, fontSize: 12, color: `var(--ant-color-text-secondary, ${FALLBACK.textSecondary})` }}>加载账号列表…</div>
+      </div>
+    ),
+    disabled: true,
+  }
+
+  // 底部操作项配置表：用查表替代逐个 push
+  type ActionItemConfig = {
+    readonly key: string
+    readonly icon: React.ReactNode
+    readonly label: string
+    readonly onClick: () => void
+    readonly danger?: boolean
+    readonly dividerBefore?: boolean
+  }
+  const ACTION_ITEMS: ReadonlyArray<ActionItemConfig> = [
+    { key: 'add-account', icon: <UserAddOutlined />, label: '添加新账号', onClick: handleAddAccount, dividerBefore: true },
+    { key: 'menu-admin', icon: <SettingOutlined />, label: '菜单管理', onClick: handleMenuAdmin },
+    { key: 'logout', icon: <LogoutOutlined />, label: '退出当前账号', onClick: () => { void handleLogout() }, danger: true, dividerBefore: true },
+  ]
+
+  // 构建底部操作菜单项
+  const actionItems: MenuItem[] = ACTION_ITEMS.flatMap((item) => {
+    const result: MenuItem[] = []
+    if (item.dividerBefore) result.push({ type: 'divider' })
+    result.push({
+      key: item.key,
+      icon: item.icon,
+      disabled: switching,
+      onClick: item.onClick,
+      danger: item.danger,
+      label: item.label,
+    })
+    return result
   })
 
-  // 切换中状态：显示 Spin
+  // 账号列表项
+  const accountItems: MenuItem[] = loading
+    ? [loadingItem]
+    : buildAccountMenuItems(accounts, currentUserId, switching, avatarErrors, handleAvatarError, handleSwitch)
+
+  // 最终菜单项：头部 + 账号列表 + 操作项
+  const menuItems: MenuItem[] = [headerItem, ...accountItems, ...actionItems]
+
+  // 切换中状态：显示 Spin；否则用 TriggerButton 组件
   const triggerContent = switching ? (
     <Spin size="small" />
   ) : (
-    <button
-      type="button"
-      aria-label="账号切换"
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '4px 10px',
-        borderRadius: 20,
-        cursor: 'pointer',
-        background: `var(--ant-color-fill-quaternary, ${FALLBACK.fillQuaternary})`,
-        transition: 'background 0.2s ease',
-        // 重置原生 button 默认样式：避免浏览器默认边框/底色干扰 Dropdown 触发器视觉
-        border: 'none',
-        outline: 'none',
-        font: 'inherit',
-        color: 'inherit',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = `var(--ant-color-fill-tertiary, ${FALLBACK.fillTertiary})`
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = `var(--ant-color-fill-quaternary, ${FALLBACK.fillQuaternary})`
-      }}
-    >
-      {avatarUrl ? (
-        <Avatar size={28} src={avatarUrl} onError={() => { if (current) handleAvatarError(current.user_id); return true }} />
-      ) : (
-        <Avatar size={28} style={{ background: DEFAULT_AVATAR_BG, fontSize: 13, fontWeight: 600 }}>
-          {displayName.charAt(0)}
-        </Avatar>
-      )}
-      <SwapOutlined style={{ fontSize: 12, color: `var(--ant-color-text-secondary, ${FALLBACK.textSecondary})` }} />
-    </button>
+    <TriggerButton
+      current={current}
+      displayName={displayName}
+      avatarError={current ? !!avatarErrors[current.user_id] : false}
+      onAvatarError={() => { if (current) return handleAvatarError(current.user_id); return true }}
+    />
   )
 
   return (

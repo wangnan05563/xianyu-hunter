@@ -146,7 +146,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 yield f"event: {event.event.value}\ndata: {json.dumps(event.data, ensure_ascii=False)}\n\n"
         except Exception as e:
             # orchestrator 内部异常已被转为 SSEEvent(ERROR)，此处兜底未预期异常
-            logger.exception(f"SSE 流未预期异常: {e}")
+            logger.exception("SSE 流未预期异常")
             err = {"code": "INTERNAL_ERROR", "message": "服务器内部错误"}
             yield f"event: error\ndata: {json.dumps(err, ensure_ascii=False)}\n\n"
 

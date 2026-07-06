@@ -120,7 +120,7 @@ class ToolRegistry:
             raise
         except Exception as e:
             # 工具内部异常统一兜底，避免击穿 Agent 主循环
-            logger.exception(f"工具 {name} 执行异常: {e}")
+            logger.exception(f"工具 {name} 执行异常")
             return ToolResult(
                 success=False,
                 error=f"Tool {name} internal error: {type(e).__name__}: {str(e)[:200]}",

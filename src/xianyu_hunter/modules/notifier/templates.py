@@ -83,87 +83,130 @@ def _format_title(title: str | None, item_id: str | None) -> str:
 # 评估器内部逻辑/日志/前端 API 都仍能看到原始技术描述便于排查。
 
 
+def _translate_dealer_image_theft(m: re.Match) -> str:
+    """翻译 dealer:image_theft 风险项
+    
+    为什么提取为独立函数：原函数内嵌套了 sample_count 三分支判断，
+    与外层 if 链叠加推高认知复杂度。单独提取后主函数只需查表调度。
+    """
+    sellers = m.group(1)
+    sample_ids = m.group(2).split(",")
+    sample_count = len(sample_ids)
+    sellers_int = int(sellers)
+    if sample_count < sellers_int:
+        suffix = f"，样本 {sample_count} 个"
+    elif sample_count > 1:
+        suffix = f"（含 {sample_count} 个样本）"
+    else:
+        suffix = ""
+    return f"🖼️ 涉嫌盗图（已被 {sellers} 个其他卖家使用{suffix}）"
+
+
+def _translate_dealer_new_register(m: re.Match) -> str:
+    """翻译 dealer:new_register_low_activity 风险项"""
+    days, sold, on_sale = m.group(1), m.group(2), m.group(3)
+    return f"👶 新注册账号（{days} 天），在售 {on_sale} 件 / 已售 {sold} 件，疑似批量上号"
+
+
+def _translate_dealer_templated_text(m: re.Match) -> str:
+    """翻译 dealer:templated_text 风险项"""
+    sim = m.group(1)
+    return f"📋 文案高度模板化（与 {m.group(2)} 条已售商品相似度 {sim}），疑似批量发帖"
+
+
+def _translate_dealer_post_burst(m: re.Match) -> str:
+    """翻译 dealer:post_burst 风险项"""
+    recent, previous, ratio = m.group(1), m.group(2), m.group(3)
+    ratio_text = f"（环比 {ratio}）" if ratio != "N/A" else ""
+    return f"📈 短期大量发帖（最近 {recent} 条 / 上一周期 {previous} 条）{ratio_text}"
+
+
+def _translate_on_sale(m: re.Match) -> str:
+    """翻译 on_sale 风险项"""
+    return f"📦 在售商品过多（{m.group(1)} 件），扣 {m.group(2)} 分"
+
+
+def _translate_30d_post(m: re.Match) -> str:
+    """翻译 30d_post 风险项"""
+    return f"📅 30 天内发布数过多（{m.group(1)} 条），扣 {m.group(2)} 分"
+
+
+def _translate_top_category_ratio(m: re.Match) -> str:
+    """翻译 top_category_ratio 风险项"""
+    return f"🎯 类目集中度过高（{m.group(1)}%），疑似专注单一品类批发"
+
+
+def _translate_professional_keyword(m: re.Match) -> str:
+    """翻译 professional_keyword 风险项"""
+    return f"🏷️ 命中职业卖家关键词「{m.group(1)}」"
+
+
+def _translate_credit_score_moderate(m: re.Match) -> str:
+    """翻译 credit_score moderate 风险项"""
+    return f"💳 信用分一般（{m.group(1)} 分）"
+
+
+def _translate_credit_score(m: re.Match) -> str:
+    """翻译 credit_score 风险项（非 moderate）"""
+    return f"💳 信用分偏低（{m.group(1)} 分）"
+
+
+def _translate_register_days(m: re.Match) -> str:
+    """翻译 register_days 风险项"""
+    return f"📅 注册时间过短（仅 {m.group(1)} 天，要求 ≥{m.group(2)} 天）"
+
+
+def _translate_low_sold_count(m: re.Match) -> str:
+    """翻译 low_sold_count 风险项"""
+    return f"📉 销量过低（仅 {m.group(1)} 件成交）"
+
+
+def _translate_bad_review(m: re.Match) -> str:
+    """翻译 bad_review 风险项"""
+    return f"⚠️ 差评数过多（{m.group(1)} 条，要求 ≤{m.group(2)} 条）"
+
+
+# 风险项翻译模式表：按优先级排序，匹配到第一个即返回
+# 为什么用查表替代 if-elif 链：13 个 if 分支的认知复杂度 = 1 + 分支数，
+# 查表法将复杂度降为固定的循环+条件判断，不受模式数量影响。
+_REASON_PATTERNS: list[tuple[re.Pattern, callable]] = [
+    (re.compile(r"dealer:image_theft\(sellers=(\d+),sample=([^)]+)\)"), _translate_dealer_image_theft),
+    (re.compile(r"dealer:new_register_low_activity\(days=(\d+),sold=(\d+),on_sale=(\d+)\)"), _translate_dealer_new_register),
+    (re.compile(r"dealer:templated_text\(max_sim=([\d.]+),sample=(\d+)\)"), _translate_dealer_templated_text),
+    (re.compile(r"dealer:post_burst\(recent=(\d+),previous=(\d+),ratio=([^)]+)\)"), _translate_dealer_post_burst),
+    (re.compile(r"on_sale (\d+) \(ded=(\d+)\)"), _translate_on_sale),
+    (re.compile(r"30d_post (\d+) \(ded=(\d+)\)"), _translate_30d_post),
+    (re.compile(r"top_category_ratio (\d+)% > (\d+)%"), _translate_top_category_ratio),
+    (re.compile(r"professional_keyword:(.+)"), _translate_professional_keyword),
+    (re.compile(r"credit_score (\d+) moderate"), _translate_credit_score_moderate),
+    (re.compile(r"credit_score (\d+)"), _translate_credit_score),
+    (re.compile(r"register_days (\d+) < (\d+)"), _translate_register_days),
+    (re.compile(r"low_sold_count (\d+)"), _translate_low_sold_count),
+    (re.compile(r"bad_review (\d+) > (\d+)"), _translate_bad_review),
+]
+
+
 def _translate_reject_reason(reason: str) -> str:
     """将评估器/贩子检测器生成的技术风险项翻译为中文
 
     翻译规则覆盖 evaluator.py + dealer_detector.py 中所有 reasons.append 模式。
     未知模式直接返回原值（保留原信息便于排查），但去掉过长参数避免视觉冲击。
+    
+    为什么用查表法：原函数有 13+ 个 if-elif 分支，认知复杂度随分支数线性增长。
+    改为模式表 + 循环匹配后，复杂度降为固定值，新增模式只需在表中追加一项。
     """
     if not reason:
         return ""
 
-    # —— 贩子信号（dealer:*） ——
-    m = re.match(r"dealer:image_theft\(sellers=(\d+),sample=([^)]+)\)", reason)
-    if m:
-        sellers = m.group(1)
-        # 样本 seller_id 列表过长会撑爆卡片宽度，仅取首个并加省略号
-        sample_ids = m.group(2).split(",")
-        # sample_ids 是「同款图片出现的其他卖家样本」，sellers 是「被发现的总卖家数」
-        # 避免重复措辞：默认用 sellers 总数；仅当样本数 < sellers 时附"样本：N 个"
-        sample_count = len(sample_ids)
-        if sample_count < int(sellers):
-            suffix = f"，样本 {sample_count} 个"
-        elif sample_count > 1:
-            suffix = f"（含 {sample_count} 个样本）"
-        else:
-            suffix = ""
-        return f"🖼️ 涉嫌盗图（已被 {sellers} 个其他卖家使用{suffix}）"
-
-    m = re.match(r"dealer:new_register_low_activity\(days=(\d+),sold=(\d+),on_sale=(\d+)\)", reason)
-    if m:
-        days, sold, on_sale = m.group(1), m.group(2), m.group(3)
-        return f"👶 新注册账号（{days} 天），在售 {on_sale} 件 / 已售 {sold} 件，疑似批量上号"
-
-    m = re.match(r"dealer:templated_text\(max_sim=([\d.]+),sample=(\d+)\)", reason)
-    if m:
-        sim = m.group(1)
-        return f"📋 文案高度模板化（与 {m.group(2)} 条已售商品相似度 {sim}），疑似批量发帖"
-
-    m = re.match(r"dealer:post_burst\(recent=(\d+),previous=(\d+),ratio=([^)]+)\)", reason)
-    if m:
-        recent, previous, ratio = m.group(1), m.group(2), m.group(3)
-        ratio_text = f"（环比 {ratio}）" if ratio != "N/A" else ""
-        return f"📈 短期大量发帖（最近 {recent} 条 / 上一周期 {previous} 条）{ratio_text}"
-
-    # —— 基础评估（evaluator） ——
-    m = re.match(r"on_sale (\d+) \(ded=(\d+)\)", reason)
-    if m:
-        return f"📦 在售商品过多（{m.group(1)} 件），扣 {m.group(2)} 分"
-
-    m = re.match(r"30d_post (\d+) \(ded=(\d+)\)", reason)
-    if m:
-        return f"📅 30 天内发布数过多（{m.group(1)} 条），扣 {m.group(2)} 分"
-
-    m = re.match(r"top_category_ratio (\d+)% > (\d+)%", reason)
-    if m:
-        return f"🎯 类目集中度过高（{m.group(1)}%），疑似专注单一品类批发"
-
-    m = re.match(r"professional_keyword:(.+)", reason)
-    if m:
-        return f"🏷️ 命中职业卖家关键词「{m.group(1)}」"
-
-    m = re.match(r"credit_score (\d+) moderate", reason)
-    if m:
-        return f"💳 信用分一般（{m.group(1)} 分）"
-
-    m = re.match(r"credit_score (\d+)", reason)
-    if m:
-        return f"💳 信用分偏低（{m.group(1)} 分）"
-
+    # 精确匹配的简单模式（无需正则，性能更优）
     if reason == "credit_score_unknown":
         return "💳 信用分未公开"
 
-    m = re.match(r"register_days (\d+) < (\d+)", reason)
-    if m:
-        return f"📅 注册时间过短（仅 {m.group(1)} 天，要求 ≥{m.group(2)} 天）"
-
-    m = re.match(r"low_sold_count (\d+)", reason)
-    if m:
-        return f"📉 销量过低（仅 {m.group(1)} 件成交）"
-
-    m = re.match(r"bad_review (\d+) > (\d+)", reason)
-    if m:
-        return f"⚠️ 差评数过多（{m.group(1)} 条，要求 ≤{m.group(2)} 条）"
+    # 正则模式表匹配
+    for pattern, handler in _REASON_PATTERNS:
+        m = pattern.match(reason)
+        if m:
+            return handler(m)
 
     # 未知模式：截断到合理长度（避免超长参数撑爆卡片）
     if len(reason) > 30:
@@ -186,6 +229,87 @@ def render(event: Event) -> tuple[str, str]:
     return _generic(event)
 
 
+def _extract_eval_payload(event: Event) -> dict:
+    """从事件 payload 中提取评估模板所需的所有字段
+    
+    为什么提取为独立函数：原 _eval_passed 中数据提取 + 兜底逻辑
+    与模板渲染逻辑混在一起，多个 if/or 条件叠加推高复杂度。
+    单独提取后渲染函数只关注字符串拼接。
+    """
+    p = event.payload or {}
+    item = p.get("item") if isinstance(p.get("item"), dict) else {}
+    
+    item_id = _get(p, "item_id", item, "") or (event.item_id or "")
+    title = _get(p, "item_title", item, "") or _get(p, "title", item, "")
+    
+    price = _get(p, "item_price", item, 0)
+    if price in (0, None, ""):
+        price = _get(p, "price", item, 0)
+    
+    return {
+        "item_id": item_id,
+        "title": title,
+        "price": price,
+        "score": p.get("score", 0),
+        "risk_level": p.get("risk_level", RiskLevel.MEDIUM.value),
+        "seller_nick": _get(p, "seller_nick", item, ""),
+        "thumb": _get(p, "thumb_url", item, ""),
+        "url": _get(p, "url", item, "") or (GOOFISH_ITEM_URL.format(item_id=item_id) if item_id else ""),
+        "reasons": p.get("reject_reasons", []) or [],
+        "data_quality": p.get("data_quality", ""),
+        "region": _get(p, "region", item, ""),
+    }
+
+
+def _build_meta_parts(data: dict) -> list[str]:
+    """构建元信息行的各个部分（ID/卖家/地区）
+    
+    为什么提取：原函数内三个独立 if 追加到列表，
+    与其他条件判断叠加推高复杂度。单独提取后职责单一。
+    """
+    parts = []
+    if data["item_id"]:
+        parts.append(f"**ID：** `{data['item_id']}`")
+    if data["seller_nick"]:
+        parts.append(f"**卖家：** {data['seller_nick']}")
+    if data["region"]:
+        parts.append(f"**地区：** {data['region']}")
+    return parts
+
+
+def _build_eval_parts(data: dict, risk_color: str) -> list[str]:
+    """构建评估行的各个部分（评分/风险/数据质量）"""
+    parts = [
+        f"**评分：** <font color=\"#1890FF\">{data['score']}</font>",
+        f"**风险：** <font color=\"{risk_color}\">{data['risk_level']}</font>",
+    ]
+    if data["data_quality"]:
+        parts.append(f"**数据：** {data['data_quality']}")
+    return parts
+
+
+def _build_reasons_lines(reasons: list) -> list[str]:
+    """构建风险项引用块的行列表
+    
+    为什么提取：原函数内 if reasons + for 循环嵌套，
+    与其他条件叠加增加嵌套深度。单独提取后调用方只需判断是否非空。
+    """
+    lines = ["\n**⚠️ 风险项：**"]
+    for r in reasons[:3]:
+        lines.append(f"> {_translate_reject_reason(r)}")
+    return lines
+
+
+def _get_risk_color(risk_level: str) -> str:
+    """风险等级 → 颜色映射（钉钉支持 6 位 hex <font color>）"""
+    color_map = {
+        RiskLevel.LOW.value: "#52C41A",
+        RiskLevel.MEDIUM.value: "#FA8C16",
+        RiskLevel.HIGH.value: "#F5222D",
+    }
+    return color_map.get(risk_level, "#FA8C16")
+
+
 def _eval_passed(event: Event) -> tuple[str, str]:
     """评估通过模板
 
@@ -200,75 +324,39 @@ def _eval_passed(event: Event) -> tuple[str, str]:
     - `![alt](url)` —— 商品图（钉钉 markdown 支持公网可访问图片）
     - `[text](url)` —— 跳转链接
     - 风险项经 `_translate_reject_reason` 翻译为中文便于用户理解
+    
+    为什么重构：原函数将数据提取、各区块构建、条件判断全部混在一起，
+    多个 if 分支 + 嵌套循环导致认知复杂度超标。拆分为多个单一职责
+    辅助函数后，主函数只负责串联各区块，复杂度大幅降低。
     """
-    p = event.payload or {}
-    item = p.get("item") if isinstance(p.get("item"), dict) else {}
-    item_id = _get(p, "item_id", item, "") or (event.item_id or "")
-    title = _get(p, "item_title", item, "") or _get(p, "title", item, "")
-    price = _get(p, "item_price", item, 0)
-    if price in (0, None, ""):
-        # 兜底：扁平用 item_price，子对象用 price，二者都空时再回退 0
-        price = _get(p, "price", item, 0)
-    score = p.get("score", 0)
-    risk_level = p.get("risk_level", RiskLevel.MEDIUM.value)
-    seller_nick = _get(p, "seller_nick", item, "")
-    thumb = _get(p, "thumb_url", item, "")
-    url = _get(p, "url", item, "") or (GOOFISH_ITEM_URL.format(item_id=item_id) if item_id else "")
-    reasons = p.get("reject_reasons", []) or []
-    data_quality = p.get("data_quality", "")
-    region = _get(p, "region", item, "")
+    data = _extract_eval_payload(event)
+    
+    display_title = _format_title(data["title"], data["item_id"])
+    price_str = _format_price(data["price"])
+    risk_color = _get_risk_color(data["risk_level"])
 
-    display_title = _format_title(title, item_id)
-    price_str = _format_price(price)
-
-    # 风险等级 → 颜色映射（钉钉支持 6 位 hex <font color>，low=绿/medium=橙/high=红）
-    risk_color = {
-        RiskLevel.LOW.value: "#52C41A",      # 绿
-        RiskLevel.MEDIUM.value: "#FA8C16",   # 橙
-        RiskLevel.HIGH.value: "#F5222D",     # 红
-    }.get(risk_level, "#FA8C16")
-
-    # 短标题：用于钉钉会话列表预览（title 字段，纯文本，限 30 字符）
     head = f"[闲鱼捡漏] {display_title} {price_str}"
-    # 卡片标题：钉钉会读取首行 # 标题渲染成会话内大字号卡片标题
     md_title = f"# 🛒 评估通过  {display_title}"
     md_price_line = f"\n<font color=\"#F5222D\">**{price_str}**</font>"
 
     body_lines = [md_title + md_price_line]
-    # 元信息块：用 4 个空格作为柔性分隔（钉钉 markdown 不支持表格，柔性空格避免拥挤换行）
-    meta_parts = []
-    if item_id:
-        meta_parts.append(f"**ID：** `{item_id}`")
-    if seller_nick:
-        meta_parts.append(f"**卖家：** {seller_nick}")
-    if region:
-        meta_parts.append(f"**地区：** {region}")
+    
+    meta_parts = _build_meta_parts(data)
     if meta_parts:
         body_lines.append("  ".join(meta_parts))
-    # 评估行：评分 + 风险等级 + 数据质量（4 空格分隔，避免堆在一起）
-    eval_parts = [
-        f"**评分：** <font color=\"#1890FF\">{score}</font>",
-        f"**风险：** <font color=\"{risk_color}\">{risk_level}</font>",
-    ]
-    if data_quality:
-        eval_parts.append(f"**数据：** {data_quality}")
+    
+    eval_parts = _build_eval_parts(data, risk_color)
     body_lines.append("    ".join(eval_parts))
-    if reasons:
-        # 风险项：用引用块突出，且通过翻译器转为人类可读中文
-        # 4 个空格前缀避免在窄卡片中错位
-        body_lines.append("\n**⚠️ 风险项：**")
-        for r in reasons[:3]:
-            body_lines.append(f"> {_translate_reject_reason(r)}")
-    # 商品图说明：钉钉 markdown 在 actionCard 内的图片经常无法渲染
-    # （图床防盗链、格式 webp 不支持、钉钉代理下载失败等）
-    # 故改在 dingtalk.py 中发送单独的 link 类型消息展示 picUrl（更稳定）
-    # 钉钉 webhook 不支持 image 类型（官方限制），且公共图床国内访问不通。
-    # 降级为可点击图片链接：用户点击在新窗口打开原图（绕过防盗链问题）
-    if thumb:
-        body_lines.append(f"\n🖼️ [<font color=\"#0088FF\">点击查看商品图</font>]({thumb})")
-    if url:
-        # 跳转链接用 font 颜色更醒目，前后空行形成视觉分段
-        body_lines.append(f"\n🔗 [<font color=\"#0088FF\">立即查看商品详情</font>]({url})")
+    
+    if data["reasons"]:
+        body_lines.extend(_build_reasons_lines(data["reasons"]))
+    
+    if data["thumb"]:
+        body_lines.append(f"\n🖼️ [<font color=\"#0088FF\">点击查看商品图</font>]({data['thumb']})")
+    
+    if data["url"]:
+        body_lines.append(f"\n🔗 [<font color=\"#0088FF\">立即查看商品详情</font>]({data['url']})")
+    
     body_lines.append(f"\n<font color=\"#999999\">{SEP}_系统自动发送，请尽快确认_</font>")
     return head, "\n".join(line for line in body_lines if line)
 

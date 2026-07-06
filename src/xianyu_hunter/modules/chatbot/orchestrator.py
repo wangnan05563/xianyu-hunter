@@ -398,7 +398,7 @@ class ChatbotOrchestrator:
             raise
         except Exception as e:
             # 未知异常 → 转人工（降级链末端）
-            logger.exception(f"RAG flow 未知异常: {e}")
+            logger.exception("RAG flow 未知异常")
             async for event in self._escalate(
                 context.session_id, f"内部错误: {type(e).__name__}",
             ):
@@ -425,6 +425,47 @@ class ChatbotOrchestrator:
             async for event in self._fallback_to_rag_fragments(chunks, reason):
                 yield event
 
+    async def _handle_tool_call_event(self, agent_event, **kwargs) -> tuple[bool, AsyncIterator[SSEEvent]]:
+        """处理 tool_call 类型的 Agent 事件，返回 (是否终止, 事件流)"""
+        async def _gen():
+            yield SSEEvent(event=SSEEventType.TOOL_CALL, data=agent_event.data)
+        return False, _gen()
+
+    async def _handle_tool_result_event(self, agent_event, **kwargs) -> tuple[bool, AsyncIterator[SSEEvent]]:
+        """处理 tool_result 类型的 Agent 事件，返回 (是否终止, 事件流)
+        
+        tool_result 转为 TOOL_CALL 事件并标记 status=done，
+        前端可据此更新工具调用状态为"完成"
+        """
+        async def _gen():
+            yield SSEEvent(
+                event=SSEEventType.TOOL_CALL,
+                data={
+                    "tool": agent_event.data.get("tool"),
+                    "status": "done",
+                },
+            )
+        return False, _gen()
+
+    async def _handle_done_event(
+        self, agent_event, query: str, sources: list, history: list, **kwargs,
+    ) -> tuple[bool, AsyncIterator[SSEEvent]]:
+        """处理 done 类型的 Agent 事件，返回 (是否终止, 事件流)"""
+        content = agent_event.data.get("content", "")
+        return True, self._emit_agent_done_event(query, content, sources, history)
+
+    async def _handle_error_event(
+        self, agent_event, query: str, context: Context, images: list[str] | None, **kwargs,
+    ) -> tuple[bool, AsyncIterator[SSEEvent]]:
+        """处理 error 类型的 Agent 事件，返回 (是否终止, 事件流)
+        
+        Agent 异常 → 降级到 RAG flow（Agent 失败回退到 RAG）
+        """
+        logger.warning(f"Agent 异常，降级到 RAG flow: {agent_event.data}")
+        return True, self._fallback_to_rag_flow(
+            query, context, images, agent_event.data.get("message", ""),
+        )
+
     async def _run_agent_flow(
         self, query: str, context: Context, images: list[str] | None = None,
     ) -> AsyncIterator[SSEEvent]:
@@ -436,6 +477,10 @@ class ChatbotOrchestrator:
         3. tool_call/tool_result → yield TOOL_CALL
         4. done → yield TOKEN + DONE
         5. error → 降级到 _run_rag_flow（Agent 失败回退到 RAG）
+        
+        为什么重构：原函数在 for 循环内有 4 个 elif 分支，加上异常处理，
+        认知复杂度超标。改为事件处理器映射表后，主循环只需查表调度，
+        复杂度不随事件类型增加而增长。
         """
         chunks = await self._rag.retrieve(query)
         sources = self._rag.to_sources(chunks)
@@ -448,40 +493,35 @@ class ChatbotOrchestrator:
         context_str = self._rag.build_context(chunks)
         history = self._ctx.build_history_messages(context)
 
+        event_handlers = {
+            "tool_call": self._handle_tool_call_event,
+            "tool_result": self._handle_tool_result_event,
+            "done": self._handle_done_event,
+            "error": self._handle_error_event,
+        }
+        
+        handler_kwargs = {
+            "query": query,
+            "sources": sources,
+            "history": history,
+            "context": context,
+            "images": images,
+        }
+
         try:
             async for agent_event in self._agent.run(query, context_str, history, images):
-                if agent_event.type == "tool_call":
-                    yield SSEEvent(event=SSEEventType.TOOL_CALL, data=agent_event.data)
-                elif agent_event.type == "tool_result":
-                    # tool_result 转为 TOOL_CALL 事件并标记 status=done，
-                    # 前端可据此更新工具调用状态为"完成"
-                    yield SSEEvent(
-                        event=SSEEventType.TOOL_CALL,
-                        data={
-                            "tool": agent_event.data.get("tool"),
-                            "status": "done",
-                        },
-                    )
-                elif agent_event.type == "done":
-                    content = agent_event.data.get("content", "")
-                    async for event in self._emit_agent_done_event(
-                        query, content, sources, history,
-                    ):
-                        yield event
-                    return
-                elif agent_event.type == "error":
-                    # Agent 异常 → 降级到 RAG flow（Agent 失败回退到 RAG）
-                    logger.warning(f"Agent 异常，降级到 RAG flow: {agent_event.data}")
-                    async for event in self._fallback_to_rag_flow(
-                        query, context, images, agent_event.data.get("message", ""),
-                    ):
-                        yield event
+                handler = event_handlers.get(agent_event.type)
+                if not handler:
+                    continue
+                should_stop, event_stream = await handler(agent_event, **handler_kwargs)
+                async for event in event_stream:
+                    yield event
+                if should_stop:
                     return
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            # Agent flow 异常 → 降级到 RAG flow
-            logger.exception(f"Agent flow 异常，降级到 RAG flow: {e}")
+            logger.exception("Agent flow 异常，降级到 RAG flow")
             async for event in self._fallback_to_rag_flow(
                 query, context, images, str(e),
             ):

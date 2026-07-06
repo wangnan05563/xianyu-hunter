@@ -22,7 +22,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -402,6 +402,51 @@ def _read_log_chunk(stdout_path: Path, last_size: int) -> tuple[str | None, int]
     return chunk, cur_size
 
 
+def _process_log_chunk(
+    chunk: str,
+    request_id: str | None,
+) -> list[str]:
+    """处理日志 chunk，按 request_id 过滤后返回 SSE 格式的行列表
+    
+    为什么提取：原 gen() 函数内 for 循环 + if 过滤嵌套在 try 块内，
+    与 while 循环叠加推高复杂度。单独提取后循环和过滤逻辑独立，
+    调用方只需遍历结果 yield 即可。
+    """
+    sse_lines = []
+    for line in chunk.splitlines():
+        if _match_request_id(line, request_id):
+            sse_lines.append(_format_sse("log", {"line": line}))
+    return sse_lines
+
+
+async def _log_stream_generator(
+    stdout_path: Path,
+    initial_size: int,
+    request_id: str | None,
+) -> AsyncIterator[str]:
+    """日志流生成器核心逻辑
+    
+    为什么提取为独立函数：原 stream_logs 内嵌的 gen() 函数包含
+    while 循环 + try/except + 多层条件判断，嵌套深度大导致认知复杂度高。
+    单独提取后，stream_logs 只负责参数初始化和 StreamingResponse 包装。
+    """
+    last_size = initial_size
+    while True:
+        await asyncio.sleep(2)
+        try:
+            chunk, cur_size = _read_log_chunk(stdout_path, last_size)
+            if chunk is None:
+                yield _format_sse("ping", {"ts": cur_size, "empty": True})
+                continue
+            for sse_line in _process_log_chunk(chunk, request_id):
+                yield sse_line
+            last_size = cur_size
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            yield _format_sse("error", {"error": str(e)})
+
+
 @router.get("/stream")
 async def stream_logs(
     request_id: str | None = Query(None, description="按 request_id 过滤实时日志流"),
@@ -411,33 +456,17 @@ async def stream_logs(
     简单实现：2s 一次，diff 出新增行。
     request_id 参数：从日志行中解析 [req=xxx] token 过滤，
     只推送同链路的日志行，便于前端实时追踪单次请求的执行过程。
+    
+    为什么重构：原函数内嵌 gen() 闭包含 while + try + for + if 多层嵌套，
+    认知复杂度超标。拆分为 _log_stream_generator + _process_log_chunk
+    两个单一职责函数后，每层的复杂度都大幅降低。
     """
     stdout_path = Path(os.getcwd()) / STDOUT_LOG_FILENAME
-    last_size = stdout_path.stat().st_size if stdout_path.exists() else 0
-
-    async def gen():
-        nonlocal last_size
-        while True:
-            await asyncio.sleep(2)
-            try:
-                chunk, cur_size = _read_log_chunk(stdout_path, last_size)
-                if chunk is None:
-                    # 文件不存在或无新增：发 ping 维持连接
-                    yield _format_sse("ping", {"ts": cur_size, "empty": True})
-                    continue
-                for line in chunk.splitlines():
-                    # 按 request_id 过滤：从 [req=xxx] token 解析匹配
-                    if not _match_request_id(line, request_id):
-                        continue
-                    yield _format_sse("log", {"line": line})
-                last_size = cur_size
-            except asyncio.CancelledError:
-                # SSE 客户端断开连接时生成器被取消，重新抛出符合 asyncio 取消标准模式（S7497）
-                raise
-            except Exception as e:
-                yield _format_sse("error", {"error": str(e)})
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    initial_size = stdout_path.stat().st_size if stdout_path.exists() else 0
+    return StreamingResponse(
+        _log_stream_generator(stdout_path, initial_size, request_id),
+        media_type="text/event-stream",
+    )
 
 
 # ============== 全链路追踪聚合查询端点 ==============

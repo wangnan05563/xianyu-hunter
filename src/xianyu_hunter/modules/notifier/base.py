@@ -91,7 +91,7 @@ class BaseNotifier:
             except Exception as e:
                 # 未知异常：不重试，直接失败
                 last_error = f"{type(e).__name__}: {e}"
-                logger.exception(f"[{self.name}] 推送异常（不再重试）: {e}")
+                logger.exception(f"[{self.name}] 推送异常（不再重试）")
                 return NotifyResult(
                     success=False,
                     channel=self.name,

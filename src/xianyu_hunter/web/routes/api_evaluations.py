@@ -233,6 +233,78 @@ def _collect_enrich_candidates(item: dict, link: dict) -> dict:
     }
 
 
+_SIMPLE_FIELD_MAP = {
+    "title": "item_title",
+    "thumb_url": "thumb_url",
+    "region": "region",
+    "brand": "brand",
+    "seller_id": "seller_id",
+}
+
+_POSITIVE_FIELD_MAP = {
+    "price": "item_price",
+    "want_cnt": "want_cnt",
+    "view_cnt": "view_cnt",
+}
+
+
+def _apply_simple_fields(payload: dict, candidates: dict) -> None:
+    """应用简单字段映射：有值则覆盖
+
+    拆分自 _apply_enrich_fields：将 title/thumb_url/region/brand/seller_id
+    等"有值即覆盖"的字段用查表法统一处理，替代多个平铺 if（S3776）。"""
+    for src_key, dst_key in _SIMPLE_FIELD_MAP.items():
+        value = candidates.get(src_key)
+        if not value:
+            continue
+        if src_key == "seller_id":
+            payload[dst_key] = str(value)
+        else:
+            payload[dst_key] = value
+
+
+def _apply_positive_fields(payload: dict, candidates: dict) -> None:
+    """应用数值型字段映射：值为正才覆盖（0 可能是采集失败）
+
+    拆分自 _apply_enrich_fields：将 price/want_cnt/view_cnt 等
+    "需 >0 才覆盖"的字段用查表法统一处理，替代多个平铺 if（S3776）。
+
+    为什么 0 不覆盖：选择器未命中时采集器可能返回 0，不应覆盖历史有效数据。"""
+    for src_key, dst_key in _POSITIVE_FIELD_MAP.items():
+        value = candidates.get(src_key)
+        if value is not None and value > 0:
+            payload[dst_key] = value
+
+
+def _apply_seller_nick(payload: dict, item: dict, link: dict) -> None:
+    """填充 seller_nick：仅在 payload 中完全缺失时才从 item/link 回填
+
+    拆分自 _apply_enrich_fields：将 seller_nick 的特殊判断（None vs 空字符串）
+    收敛到单一函数，避免脏数据清洗后的空字符串被误覆盖（S3776）。
+
+    关键细节：用 is None 判断而非 not，因为脏数据清洗后 seller_nick 可能是
+    空字符串（falsy），此时不应被 items 表的旧数据回填。"""
+    if payload.get("seller_nick") is not None:
+        return
+    nick = link.get("seller_nick") or item.get("seller_nick")
+    if nick:
+        payload["seller_nick"] = nick
+
+
+def _apply_is_sold(payload: dict, item: dict, link: dict) -> None:
+    """填充 is_sold：items 表（int 0/1）> task_links.display（bool）> 保留旧值
+
+    拆分自 _apply_enrich_fields：将 is_sold 的多数据源优先级判断
+    收敛到单一函数，降低主函数的分支数（S3776）。
+
+    为什么总是覆盖：已售状态会变化（在售→已售），用户期望看到最新状态。"""
+    raw_sold = item.get("is_sold")
+    if raw_sold is not None:
+        payload["is_sold"] = bool(raw_sold)
+    elif "is_sold" in link:
+        payload["is_sold"] = bool(link["is_sold"])
+
+
 def _apply_enrich_fields(
     payload: dict, candidates: dict, item: dict, link: dict,
 ) -> None:
@@ -242,41 +314,16 @@ def _apply_enrich_fields(
     eval 事件 payload 中的对应字段是评估时的历史快照。
     用户点击标题刷新后，期望评估明细页显示最新商品信息，而非评估时的旧快照。
     因此对"会变动的商品基础信息"字段，有最新值则覆盖；无最新值时保留 payload 旧快照。
-    例外：seller_nick 有脏数据清洗特殊逻辑，保持"仅缺失时填充"。"""
-    if candidates["title"]:
-        payload["item_title"] = candidates["title"]
-    # price=0 可能是采集失败（选择器未命中），不应覆盖有效旧值
-    if candidates["price"] is not None and candidates["price"] > 0:
-        payload["item_price"] = candidates["price"]
-    # seller_id：有最新值则覆盖
-    if candidates["seller_id"]:
-        payload["seller_id"] = str(candidates["seller_id"])
-    # 关键修复：脏数据清洗后 seller_nick 为空字符串（falsy），
-    # 不能用 `not payload.get("seller_nick")` 判定缺失，否则会被 items 表回填错误数据
-    if payload.get("seller_nick") is None:
-        nick = link.get("seller_nick") or item.get("seller_nick")
-        if nick:
-            payload["seller_nick"] = nick
-    if candidates["thumb_url"]:
-        payload["thumb_url"] = candidates["thumb_url"]
-    if candidates["region"]:
-        payload["region"] = candidates["region"]
-    if candidates["brand"]:
-        payload["brand"] = candidates["brand"]
-    # want_cnt/view_cnt=0 可能是采集失败，不应覆盖有效旧值
-    if candidates["want_cnt"] is not None and candidates["want_cnt"] > 0:
-        payload["want_cnt"] = candidates["want_cnt"]
-    if candidates["view_cnt"] is not None and candidates["view_cnt"] > 0:
-        payload["view_cnt"] = candidates["view_cnt"]
+    例外：seller_nick 有脏数据清洗特殊逻辑，保持"仅缺失时填充"。
+
+    重构说明：按字段类型拆分到 4 个独立函数（S3776），
+    简单字段和数值字段用查表法替代平铺 if，主函数只做流程编排。"""
+    _apply_simple_fields(payload, candidates)
+    _apply_positive_fields(payload, candidates)
+    _apply_seller_nick(payload, item, link)
     if candidates["publish_time"]:
         payload["publish_time"] = str(candidates["publish_time"])
-    # is_sold：items 表（int 0/1）> task_links.display（bool）> 保留 payload 旧值
-    # 为什么总是覆盖：已售状态会变化（在售→已售），用户期望看到最新状态
-    raw_sold = item.get("is_sold")
-    if raw_sold is not None:
-        payload["is_sold"] = bool(raw_sold)
-    elif "is_sold" in link:
-        payload["is_sold"] = bool(link["is_sold"])
+    _apply_is_sold(payload, item, link)
 
 
 def _inject_order_status(

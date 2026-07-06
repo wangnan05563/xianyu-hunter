@@ -16,7 +16,7 @@ from sqlalchemy import select
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import ItemRow, TaskRow, _utcnow
 from xianyu_hunter.web.deps import get_container
-from xianyu_hunter.web.utils import to_datetime
+from xianyu_hunter.web.utils import load_task_price_range, to_datetime
 
 router = APIRouter(prefix="/api", tags=["prices"])
 
@@ -100,19 +100,19 @@ def _resolve_histogram_scope(conn, task_id: str | None) -> tuple[dict, dict] | N
     任务不存在时返回 None，由调用方构造"任务不存在"的空响应。
     """
     scope: dict[str, Any] = {"mode": "all", "task_id": None, "task_name": None, "keyword": None, "label": "全部任务"}
-    # 任务定价范围（min_price/max_price），用于校准分桶范围与前端标线展示
-    task_price_range: dict[str, float | None] = {"min_price": None, "max_price": None}
     if not (task_id and task_id != "all"):
-        return scope, task_price_range
+        return scope, {"min_price": None, "max_price": None}
 
     row = conn.execute(
-        select(TaskRow.name, TaskRow.keyword, TaskRow.min_price, TaskRow.max_price)
+        select(TaskRow.name, TaskRow.keyword)
         .where(TaskRow.id == task_id)
         .limit(1)
     ).first()
     if not row:
         return None
-    name, kw, t_min, t_max = row[0], row[1], row[2], row[3]
+    name, kw = row[0], row[1]
+    # 价格区间统一走共享函数，与 price_dashboard / stats_price_trend 口径一致
+    task_price_range = load_task_price_range(conn, task_id)
     scope = {
         "mode": "task",
         "task_id": task_id,
@@ -120,32 +120,42 @@ def _resolve_histogram_scope(conn, task_id: str | None) -> tuple[dict, dict] | N
         "keyword": kw,
         "label": f"{name or kw or task_id}（{task_id}）" if (name or kw) else task_id,
     }
-    task_price_range = {
-        "min_price": float(t_min) if t_min is not None else None,
-        "max_price": float(t_max) if t_max is not None else None,
-    }
     return scope, task_price_range
 
 
-def _load_histogram_samples(conn, scope: dict, task_id: str | None) -> tuple[list[float], list[tuple]]:
+def _load_histogram_samples(
+    conn, scope: dict, task_id: str | None, task_price_range: dict,
+) -> tuple[list[float], list[tuple]]:
     """加载 prices 与 ts_rows，二者必须同源（按 task_id 过滤）
 
     P-09-30 关键修复：修复前 ts_rows 为全表查询，导致选定任务时
     yesterday/last7d/last30d 基线混入其它任务价格，时间对比指标完全失真。
-    """
-    if scope["mode"] == "task":
-        # task_id 有 ix_items_task_first_seen 索引，查询高效，但仍加 LIMIT 防止极端数据量
-        rows = conn.execute(
-            select(ItemRow.price).where(ItemRow.task_id == task_id).limit(10000)
-        ).all()
-    else:
-        # 全表查询必须有 LIMIT，防止大表撑爆内存
-        rows = conn.execute(select(ItemRow.price).limit(10000)).all()
-    prices = [float(r[0]) for r in rows if r and r[0] is not None]
 
+    P-09-30 扩展：应用任务价格区间 (min_price/max_price) 过滤 SQL 层
+    base_query 与 ts_query。旧实现仅 Python 层过滤 prices，未过滤 ts_rows，
+    导致 y_mean/w_mean/m_mean 基线混入超范围异常样本。本次修复在
+    SQL 层同时过滤，保证 prices 与 ts_rows 口径完全一致，与
+    price_dashboard._load_sold_prices_from_links / stats_price_trend
+    行为对齐，剔除 1 元引流/配件/超范围高价对基线的污染。
+    """
+    t_min = task_price_range.get("min_price")
+    t_max = task_price_range.get("max_price")
+    base_query = select(ItemRow.price)
     ts_query = select(ItemRow.price, ItemRow.publish_time)
     if scope["mode"] == "task":
+        # task_id 有 ix_items_task_first_seen 索引，查询高效
+        base_query = base_query.where(ItemRow.task_id == task_id)
         ts_query = ts_query.where(ItemRow.task_id == task_id)
+    if t_min is not None:
+        base_query = base_query.where(ItemRow.price >= t_min)
+        ts_query = ts_query.where(ItemRow.price >= t_min)
+    if t_max is not None:
+        base_query = base_query.where(ItemRow.price <= t_max)
+        ts_query = ts_query.where(ItemRow.price <= t_max)
+    # LIMIT 防止大表全扫描 + 内存爆炸
+    rows = conn.execute(base_query.limit(10000)).all()
+    prices = [float(r[0]) for r in rows if r and r[0] is not None]
+
     ts_rows = conn.execute(
         ts_query.order_by(ItemRow.publish_time.desc()).limit(2000)
     ).all()

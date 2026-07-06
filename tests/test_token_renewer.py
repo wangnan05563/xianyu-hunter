@@ -218,7 +218,8 @@ async def test_start_stop_lifecycle() -> None:
 
     assert not renewer.is_running
 
-    await renewer.start()
+    # start() 是同步方法：内部通过 asyncio.create_task 启动后台循环
+    renewer.start()
     assert renewer.is_running
 
     await asyncio.sleep(0.1)  # 让循环跑一会
@@ -233,10 +234,10 @@ async def test_start_idempotent() -> None:
     renewer = TokenRenewer(RenewerConfig(check_interval_sec=10))
     renewer.set_cookie_provider(lambda: None)
 
-    await renewer.start()
+    renewer.start()
     task1 = renewer._task
 
-    await renewer.start()
+    renewer.start()
     task2 = renewer._task
 
     assert task1 is task2

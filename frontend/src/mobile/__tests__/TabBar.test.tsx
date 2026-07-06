@@ -11,13 +11,11 @@ function renderWithRouter(initialPath: string = '/m') {
 }
 
 describe('TabBar', () => {
-  it('应渲染 5 个 Tab', () => {
+  it('应渲染 3 个 Tab', () => {
     renderWithRouter('/m')
     expect(screen.getByText('仪表盘')).toBeInTheDocument()
     expect(screen.getByText('任务')).toBeInTheDocument()
     expect(screen.getByText('抢单')).toBeInTheDocument()
-    expect(screen.getByText('客服')).toBeInTheDocument()
-    expect(screen.getByText('我的')).toBeInTheDocument()
   })
 
   it('当前路径 /m/tasks 时任务 Tab 应为 active', () => {

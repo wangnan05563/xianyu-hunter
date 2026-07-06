@@ -182,5 +182,5 @@ async def test_notify(body: TestNotifyBody) -> dict[str, Any]:
     except ValueError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:
-        logger.exception(f"[notifier/test] {channel} 测试推送异常: {e}")
+        logger.exception(f"[notifier/test] {channel} 测试推送异常")
         return {"ok": False, "error": f"推送异常: {type(e).__name__}: {e}"}

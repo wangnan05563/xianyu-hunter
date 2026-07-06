@@ -110,7 +110,7 @@ class EmbeddingService:
             return await self._call_embedding(text)
         except Exception as e:
             # 基础设施层容错：不向上抛出，避免单次检索失败拖垮整个对话
-            logger.exception(f"Embedding 单条调用失败: {e}")
+            logger.exception("Embedding 单条调用失败")
             return []
 
     async def embed_batch(
@@ -202,7 +202,7 @@ class EmbeddingService:
             )
             return vectors, []
         except Exception as e:
-            logger.exception(f"本地 batch embedding 失败: {e}")
+            logger.exception("本地 batch embedding 失败")
             return [], list(range(len(texts)))
 
     @property

@@ -817,41 +817,50 @@ class SearchMixin:
 
         RGV587_ERROR 时页面仍可能渲染搜索结果，不应直接放弃。
         """
+        # 降级链日志合并（meta-rule #32）：收集多阶段信息，最终输出一条结构化日志
+        # 避免一次 DOM 回退产生 5+ 条分散日志，导致日志噪音和排查困难
+        chain: list[str] = []
         if session_invalid:
-            logger.warning("搜索 API 会话失效，尝试 DOM 回退: keyword={}", keyword)
+            chain.append("API会话失效")
         else:
-            logger.info("API 不可用，回退到 DOM 解析: {}", keyword)
-        # RGV587 时页面可能未完全渲染，缩短等待时间避免 API 超时
+            chain.append("API不可用")
         await self.ad.human_delay(1000, 2000)
         cards = await self._collect_dom_cards(page, keyword)
         items: list[ItemSummary] = []
-        if cards:
-            logger.info("DOM 解析发现 {} 个卡片", len(cards))
-            # 批量提取：用 page.evaluate 一次性获取所有卡片数据，替代逐个 query_selector
-            # 将 150+ 次 DOM 往返减少到 1 次，性能提升 10 倍以上
-            batch_data = await self._evaluate_dom_batch(page)
-            filtered_out: list[str] = []
-            if batch_data:
-                filtered_out = self._build_items_from_dom_batch(batch_data, items, keyword)
-            else:
-                # 批量提取失败时回退到逐个解析
-                filtered_out = await self._parse_dom_cards_one_by_one(cards, items, keyword)
-            if filtered_out:
-                logger.info("DOM 回退过滤掉 {} 个标题 (关键词={}): {}", len(filtered_out), keyword, filtered_out)
-            logger.info("DOM 解析有效结果: {} 个", len(items))
-            # DOM 回退成功提取到商品才重置会话失效标志：
-            # 此时页面能正常渲染搜索结果且解析有效，说明会话实际可用
-            # 如果解析到 0 个商品（选择器失效/关键词过滤），保持标志为 True，
-            # 让 live_links 触发令牌刷新重试，避免持续走 DOM 回退
-            if session_invalid and items:
+        if not cards:
+            chain.append("无卡片")
+            logger.info("搜索降级链 [{}] → 结果=0: keyword={}", " → ".join(chain), keyword)
+            return items
+        chain.append(f"卡片{len(cards)}")
+        batch_data = await self._evaluate_dom_batch(page)
+        filtered_out: list[str] = []
+        if batch_data:
+            chain.append("批量解析")
+            filtered_out = self._build_items_from_dom_batch(batch_data, items, keyword)
+        else:
+            chain.append("逐个解析")
+            filtered_out = await self._parse_dom_cards_one_by_one(cards, items, keyword)
+        if filtered_out:
+            chain.append(f"过滤{len(filtered_out)}")
+        if items:
+            chain.append(f"有效{len(items)}")
+            if session_invalid:
                 self.last_session_invalid = False
-                logger.info("DOM 回退成功提取 {} 个商品，重置会话失效标志", len(items))
-            # DOM 翻页：首屏解析后，若 max_pages > 1 则滚动加载更多屏
-            # 为什么需要：DOM 回退原仅取首屏 26 条，650 元商品可能在第 2 屏
-            if items and max_pages > 1:
+                chain.append("重置会话标志")
+            if max_pages > 1:
+                before_paginate = len(items)
                 await self._paginate_dom_results(page, items, keyword, max_pages)
-            if not items:
-                logger.info("搜索无结果: {}", keyword)
+                if len(items) > before_paginate:
+                    chain.append(f"翻页+{len(items) - before_paginate}")
+        else:
+            chain.append("无结果")
+        level = "warning" if session_invalid else "info"
+        getattr(logger, level)(
+            "搜索降级链 [{}] → 结果={}: keyword={}",
+            " → ".join(chain),
+            len(items),
+            keyword,
+        )
         return items
 
     async def _collect_dom_cards(self, page: Page, keyword: str) -> list:
@@ -885,9 +894,9 @@ class SearchMixin:
                     timeout=5.0,
                 )
             if card_count == 0:
-                logger.info("DOM 回退: 页面无搜索卡片 (RGV587 可能阻止了渲染)")
+                logger.debug("DOM 回退: 页面无搜索卡片 (RGV587 可能阻止了渲染)")
                 return []
-            logger.info("DOM 回退: 检测到 {} 个卡片，开始解析", card_count)
+            logger.debug("DOM 回退: 检测到 {} 个卡片，开始解析", card_count)
             # 注意：此处不重置 session_invalid 标志
             # 检测到卡片不等于会话有效，可能页面渲染了卡片但 API 令牌仍失效
             # 重置时机推迟到成功提取商品后（见 _fallback_to_dom_search）
@@ -904,10 +913,10 @@ class SearchMixin:
         try:
             return await asyncio.wait_for(page.evaluate(_BATCH_PARSE_SCRIPT), timeout=10.0)
         except asyncio.TimeoutError:
-            logger.warning("DOM 批量解析超时，回退到逐个解析")
+            logger.debug("DOM 批量解析超时，回退到逐个解析")
             return []
         except Exception as e:
-            logger.warning("DOM 批量解析异常: {}", str(e)[:80])
+            logger.debug("DOM 批量解析异常: {}", str(e)[:80])
             return []
 
     def _build_item_from_dom_data(
@@ -978,7 +987,7 @@ class SearchMixin:
 
         返回被关键词过滤的标题列表（用于日志输出）。
         """
-        logger.info("DOM 批量解析提取到 {} 条数据", len(batch_data))
+        logger.debug("DOM 批量解析提取到 {} 条数据", len(batch_data))
         filtered_out: list[str] = []
         for d in batch_data:
             item_id = d.get("id", "")
@@ -1025,7 +1034,7 @@ class SearchMixin:
             try:
                 batch_data = await asyncio.wait_for(page.evaluate(_BATCH_PARSE_SCRIPT), timeout=10.0)
             except Exception as e:
-                logger.warning("DOM 翻页第 {} 屏解析失败: {}", dom_page + 1, str(e)[:80])
+                logger.debug("DOM 翻页第 {} 屏解析失败: {}", dom_page + 1, str(e)[:80])
                 break
             new_count = 0
             for d in (batch_data or []):
@@ -1039,7 +1048,7 @@ class SearchMixin:
                 items.append(item)
                 seen_ids.add(item.id)
                 new_count += 1
-            logger.info("DOM 翻页第 {} 屏新增 {} 个商品", dom_page + 1, new_count)
+            logger.debug("DOM 翻页第 {} 屏新增 {} 个商品", dom_page + 1, new_count)
             if new_count == 0:
                 break
 
@@ -1075,9 +1084,6 @@ class SearchMixin:
                 page, keyword, fast, skip_rgv587_retry,
                 sort_type, regions, captured_responses, state,
             )
-            if session_invalid:
-                logger.warning("搜索 API 会话失效，将尝试 DOM 回退: keyword={}", keyword)
-
             # 解析捕获到的 API 响应（含翻页滚动）
             await self._parse_captured_responses(page, captured_responses, items, max_pages)
         finally:

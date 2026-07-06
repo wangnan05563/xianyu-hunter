@@ -404,7 +404,7 @@ class TaskWorker:
             action = await self._attempt_buy(detail, eval_result, eval_cfg, stats, buy_results)
             return action == "break"
         except Exception as e:  # noqa: BLE001
-            logger.exception(f"[Task {self.task.id}] 处理 {summary.id} 出错: {e}")
+            logger.exception(f"[Task {self.task.id}] 处理 {summary.id} 出错")
             # 捕获到 error_logs 表，供错误日志页面展示
             # 这里是单商品处理异常，记录后由调用方 continue 跳过该商品，不影响整体流程
             try:

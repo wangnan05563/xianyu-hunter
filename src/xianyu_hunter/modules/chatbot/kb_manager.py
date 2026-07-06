@@ -246,7 +246,7 @@ class KBManager:
             )
             return self._repo_to_version(self._repo.get_kb_version(new_version_id))
         except Exception as e:
-            logger.exception(f"回滚失败: {e}")
+            logger.exception("回滚失败")
             duration = time.monotonic() - start_ts
             self._repo.update_kb_version_status(
                 version_id=new_version_id,
@@ -386,7 +386,7 @@ class KBManager:
             )
             return self._repo_to_version(self._repo.get_kb_version(version_id))
         except Exception as e:
-            logger.exception(f"阶段2（写入 ChromaDB）失败，开始回滚: {e}")
+            logger.exception("阶段2（写入 ChromaDB）失败，开始回滚")
             await self._rollback_build(
                 snapshot_path=snapshot_path,
                 version_id=version_id,

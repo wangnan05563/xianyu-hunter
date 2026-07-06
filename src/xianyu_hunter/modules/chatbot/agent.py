@@ -119,7 +119,7 @@ class Agent:
             # 取消向上传播：触发上层资源清理
             raise
         except Exception as e:
-            logger.exception(f"AGENT 异常: {e}")
+            logger.exception("AGENT 异常")
             yield AgentEvent(
                 type="error",
                 data={"message": f"AGENT 内部错误: {type(e).__name__}: {e}"},

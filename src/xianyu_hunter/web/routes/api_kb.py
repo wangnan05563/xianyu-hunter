@@ -72,7 +72,7 @@ async def rebuild_kb() -> dict[str, Any]:
             )
         except Exception as e:
             # 后台任务异常无 awaiter 接收，仅记录日志
-            logger.exception(f"知识库重建失败: {e}")
+            logger.exception("知识库重建失败")
             _log_audit(repo, action="kb_rebuild", target=f"failed:{type(e).__name__}")
 
     # 创建后台任务并立即返回，不阻塞 HTTP 响应

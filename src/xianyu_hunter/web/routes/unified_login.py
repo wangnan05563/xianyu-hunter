@@ -50,6 +50,8 @@ _WAITING_HEARTBEAT_TIMEOUT_SEC = 30.0
 # Cookie 未持久化提示文案：登录子进程返回 success 但 JSON 未检测到 Cookie 时复用
 _COOKIE_NOT_PERSISTED_MSG = "登录似乎成功，但 Cookie 未持久化，请重试"
 _PACKAGED_SCRIPT_FLAG = "--xh-run-script"
+_PYTHON_EXE = "python.exe"
+_PYTHONW_EXE = "pythonw.exe"
 
 router = APIRouter(tags=["unified-login"])
 
@@ -148,22 +150,22 @@ def _get_quiet_python_executable() -> tuple[str, int]:
     exe = sys.executable
     pythonw_candidates: list[str] = []
 
-    if exe.lower().endswith("python.exe"):
+    if exe.lower().endswith(_PYTHON_EXE):
         # 同目录下的 pythonw.exe（标准 Python 安装布局）
-        pythonw_candidates.append(exe[:-len("python.exe")] + "pythonw.exe")
-    elif exe.lower().endswith("pythonw.exe"):
+        pythonw_candidates.append(exe[:-len(_PYTHON_EXE)] + _PYTHONW_EXE)
+    elif exe.lower().endswith(_PYTHONW_EXE):
         # 已经是 pythonw.exe
         return exe, 0
 
     # venv 场景：venv 目录下可能没有 pythonw.exe，回退到基础解释器
     # 检查 venv pyvenv.cfg 指向的基础 Python
     exe_dir = os.path.dirname(exe)
-    pythonw_candidates.append(os.path.join(exe_dir, "pythonw.exe"))
+    pythonw_candidates.append(os.path.join(exe_dir, _PYTHONW_EXE))
 
     # 检查 venv 的 base_executable
     base_exe = getattr(sys, "_base_executable", None)
-    if base_exe and base_exe.lower().endswith("python.exe"):
-        pythonw_candidates.append(base_exe[:-len("python.exe")] + "pythonw.exe")
+    if base_exe and base_exe.lower().endswith(_PYTHON_EXE):
+        pythonw_candidates.append(base_exe[:-len(_PYTHON_EXE)] + _PYTHONW_EXE)
 
     for candidate in pythonw_candidates:
         if os.path.exists(candidate):

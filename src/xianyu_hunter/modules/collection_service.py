@@ -10,7 +10,7 @@ import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from xianyu_hunter.domain.evaluation import EvalResult, RiskLevel
 from xianyu_hunter.domain.events import Event, EventType
@@ -159,6 +159,36 @@ class ItemCollectionService:
                 expired.append(name)
         return expired
 
+    @staticmethod
+    def _is_valid_cookie(name: str, value: str, is_test_fn) -> bool:
+        """校验 cookie 是否有效（非空且非测试 cookie）
+
+        拆分自 _read_cookies_from_store：将 name/value 判空 + 测试 cookie 校验
+        收敛到单一函数，降低主循环的认知复杂度（S3776）。"""
+        if not name or not value:
+            return False
+        if is_test_fn(name, value):
+            logger.warning("Official collection skipped test cookie {}={}", name, value)
+            return False
+        return True
+
+    @staticmethod
+    def _build_pw_cookie(name: str, value: str, cookie: dict) -> dict:
+        """构建 Playwright 格式的 cookie 对象
+
+        拆分自 _read_cookies_from_store：将字段组装 + expires 条件判断
+        收敛到单一函数，降低主循环的嵌套层级（S3776）。"""
+        item = {
+            "name": name,
+            "value": value,
+            "domain": cookie.get("domain") or ".goofish.com",
+            "path": cookie.get("path") or "/",
+        }
+        expires = cookie.get("expires", -1)
+        if expires and expires > 0:
+            item["expires"] = expires
+        return item
+
     def _read_cookies_from_store(self) -> tuple[list[dict], dict[str, str]]:
         """从 CookieStore 读取 cookie，转换为 Playwright 格式
 
@@ -166,6 +196,9 @@ class ItemCollectionService:
         - pw_cookies 用于注入浏览器
         - identity_values 仅包含身份 cookie 的值，用于后续 staleness 校验
         延迟导入避免 web.services 模块在采集路径上提前加载
+
+        重构说明：将 cookie 校验和格式构建下沉到独立静态方法（S3776），
+        主循环只做迭代与分发，降低嵌套层级与认知负担。
         """
         from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
 
@@ -180,22 +213,10 @@ class ItemCollectionService:
         for cookie in json_data["cookies"]:
             name = str(cookie.get("name") or "")
             value = str(cookie.get("value") or "")
-            if not name or not value:
-                continue
-            if is_test_cookie(name, value):
-                logger.warning("Official collection skipped test cookie {}={}", name, value)
+            if not self._is_valid_cookie(name, value, is_test_cookie):
                 continue
 
-            item = {
-                "name": name,
-                "value": value,
-                "domain": cookie.get("domain") or ".goofish.com",
-                "path": cookie.get("path") or "/",
-            }
-            expires = cookie.get("expires", -1)
-            if expires and expires > 0:
-                item["expires"] = expires
-            pw_cookies.append(item)
+            pw_cookies.append(self._build_pw_cookie(name, value, cookie))
             if name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
                 identity_values[name] = value
         return pw_cookies, identity_values
@@ -831,21 +852,67 @@ class ItemCollectionService:
             logger.warning("Failed to publish EVAL_PASSED item={}: {}", item_id, exc)
 
     @staticmethod
+    def _diff_field_price(old: Any, new: Any) -> bool:
+        """价格字段比较：浮点比较，解析失败视为变化
+
+        提取为独立比较函数：消除 diff_fields 中 if-elif 多分支，
+        降低认知复杂度（S3776）。
+        """
+        try:
+            return float(old or 0) != float(new or 0)
+        except (TypeError, ValueError):
+            return True
+
+    @staticmethod
+    def _diff_field_int(old: Any, new: Any) -> bool:
+        """整数字段比较（want_cnt/view_cnt/is_sold）
+
+        提取为独立比较函数：消除 diff_fields 中 if-elif 多分支，
+        降低认知复杂度（S3776）。
+        """
+        return int(old or 0) != int(new or 0)
+
+    @staticmethod
+    def _diff_field_str(old: Any, new: Any) -> bool:
+        """字符串字段比较（title/seller_id/region/thumb_url 等）
+
+        提取为独立比较函数：消除 diff_fields 中 if-elif 多分支，
+        降低认知复杂度（S3776）。
+        """
+        return (old or "") != (new or "")
+
+    @staticmethod
+    def _get_field_comparer(field_name: str) -> Callable[[Any, Any], bool]:
+        """根据字段名返回对应的比较函数（查表法）
+
+        用字典映射替代 if-elif-else 多分支，将字段类型判断
+        从循环体中分离，降低 diff_fields 的认知复杂度（S3776）。
+        """
+        int_fields = {"want_cnt", "view_cnt", "is_sold"}
+        if field_name == "price":
+            return ItemCollectionService._diff_field_price
+        if field_name in int_fields:
+            return ItemCollectionService._diff_field_int
+        return ItemCollectionService._diff_field_str
+
+    @staticmethod
     def diff_fields(existing: dict[str, Any], incoming: dict[str, Any]) -> list[str]:
-        fields = ["title", "price", "seller_id", "region", "want_cnt", "view_cnt", "thumb_url", "is_sold"]
+        """对比两个商品字典，返回发生变化的字段名列表
+
+        重构说明：原函数 CC=20，循环内 if-elif-else 四级分支。
+        通过 _get_field_comparer 查表法替代多分支，
+        主循环简化为"取比较器→比较→记录"三步线性逻辑，
+        显著降低认知复杂度。
+        """
+        fields = [
+            "title", "price", "seller_id", "region",
+            "want_cnt", "view_cnt", "thumb_url", "is_sold",
+        ]
         changed: list[str] = []
         for field_name in fields:
             old = existing.get(field_name)
             new = incoming.get(field_name)
-            if field_name == "price":
-                try:
-                    if float(old or 0) != float(new or 0):
-                        changed.append(field_name)
-                except (TypeError, ValueError):
-                    changed.append(field_name)
-            elif field_name in {"want_cnt", "view_cnt", "is_sold"}:
-                if int(old or 0) != int(new or 0):
-                    changed.append(field_name)
-            elif (old or "") != (new or ""):
+            comparer = ItemCollectionService._get_field_comparer(field_name)
+            if comparer(old, new):
                 changed.append(field_name)
         return changed

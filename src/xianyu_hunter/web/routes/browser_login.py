@@ -46,58 +46,116 @@ _browser_login_state: dict = {
 }
 
 
+def _reset_browser_login_state() -> None:
+    """重置浏览器登录状态为 idle
+
+    为什么提取：原函数中多次重复相同的重置字典赋值，提取为函数后减少重复，
+    也避免因拼写不一致导致的 bug。
+    """
+    global _browser_login_state
+    _browser_login_state = {
+        "status": "idle",
+        "status_file": None,
+        "pid": None,
+        "proc": None,
+        "cookies_injected": False,
+    }
+
+
+def _check_process_exited(proc: subprocess.Popen | None) -> bool:
+    """检测1：子进程是否已通过 poll() 退出"""
+    if proc is None:
+        return False
+    if proc.poll() is None:
+        return False
+    logger.warning("浏览器登录子进程已退出（exitcode=%d），强制重置", proc.returncode)
+    return True
+
+
+def _check_pid_not_exists(pid: int | None) -> bool:
+    """检测2：pid 是否还存在（使用 psutil）"""
+    if not pid:
+        return False
+    try:
+        import psutil
+        if not psutil.pid_exists(pid):
+            logger.warning("浏览器登录子进程 pid=%d 已不存在，强制重置", pid)
+            return True
+    except ImportError:
+        pass
+    return False
+
+
+def _check_heartbeat_timeout(status_file: str | None, proc: subprocess.Popen | None) -> bool:
+    """检测3：status file 心跳是否超时（30s 阈值）
+
+    阈值 30s：子进程心跳 3s + Playwright 偶尔阻塞 5-10s + 余量。
+    为什么需要：bc.cookies() 阻塞时 _background_wait_browser_login 仍在
+    proc.wait(timeout=310) 中阻塞，proc.poll() 仍返回 None，
+    status file 也不更新，_browser_login_state 永远停留在 running。
+    心跳超时检测能识别"子进程未死但已无响应"的卡死状态。
+    """
+    if not status_file:
+        return False
+
+    path = Path(status_file)
+    if not path.exists():
+        return False
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        ts = data.get("ts")
+        if ts is None:
+            return False
+
+        stale_sec = time.time() - float(ts)
+        if stale_sec <= 30:
+            return False
+
+        logger.warning(
+            "浏览器登录子进程心跳超时（%.1fs 未更新），强制 kill 并重置",
+            stale_sec,
+        )
+        if proc and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        return True
+    except (json.JSONDecodeError, OSError, ValueError):
+        return False
+
+
 def _cleanup_dead_process() -> None:
     """检测子进程是否已死亡，若死亡则重置状态
 
     三重检测：
     1. subprocess.Popen.poll() — 子进程是否已退出
     2. psutil.pid_exists() — pid 是否还存在
-    3. status file 心跳超时 — 即使子进程未死但已卡死（bc.cookies 阻塞）也应清理
-       为什么需要：bc.cookies() 阻塞时 _background_wait_browser_login 仍在
-       proc.wait(timeout=310) 中阻塞，proc.poll() 仍返回 None，
-       status file 也不更新，_browser_login_state 永远停留在 running。
-       心跳超时检测能识别"子进程未死但已无响应"的卡死状态。
+    3. status file 心跳超时 — 即使子进程未死但已卡死也应清理
+
+    重构说明：将三重检测拆分为独立函数，按顺序短路返回，
+    认知复杂度从 28 降到 7 以下。
     """
     global _browser_login_state
     if _browser_login_state["status"] != "running":
         return
+
     proc = _browser_login_state.get("proc")
-    if proc is not None and proc.poll() is not None:
-        logger.warning("浏览器登录子进程已退出（exitcode=%d），强制重置", proc.returncode)
-        _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
-        return
     pid = _browser_login_state.get("pid")
-    if pid:
-        try:
-            import psutil
-            if not psutil.pid_exists(pid):
-                logger.warning("浏览器登录子进程 pid=%d 已不存在，强制重置", pid)
-                _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
-                return
-        except ImportError:
-            pass
-    # 心跳超时：status file 超过 30s 未更新时强制重置
-    # 阈值 30s：子进程心跳 3s + Playwright 偶尔阻塞 5-10s + 余量
     status_file = _browser_login_state.get("status_file")
-    if status_file:
-        path = Path(status_file)
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                ts = data.get("ts")
-                if ts is not None and time.time() - float(ts) > 30:
-                    logger.warning(
-                        "浏览器登录子进程心跳超时（%.1fs 未更新），强制 kill 并重置",
-                        time.time() - float(ts),
-                    )
-                    if proc and proc.poll() is None:
-                        try:
-                            proc.kill()
-                        except OSError:
-                            pass
-                    _browser_login_state = {"status": "idle", "status_file": None, "pid": None, "proc": None, "cookies_injected": False}
-            except (json.JSONDecodeError, OSError, ValueError):
-                pass
+
+    if _check_process_exited(proc):
+        _reset_browser_login_state()
+        return
+
+    if _check_pid_not_exists(pid):
+        _reset_browser_login_state()
+        return
+
+    if _check_heartbeat_timeout(status_file, proc):
+        _reset_browser_login_state()
+        return
 
 
 @router.post("/browser-login")
@@ -216,6 +274,67 @@ def _background_wait_browser_login(proc: subprocess.Popen, status_file: Path) ->
         _browser_login_state["status"] = "error"
 
 
+_RUNNING_STATES = ("pending", "starting", "running", "waiting", "opening", "already_logged")
+_FINAL_STATES = ("success", "cancelled", "error", "timeout")
+
+
+def _read_status_file(path: Path) -> dict | None:
+    """读取状态文件并解析为 JSON，失败返回 None"""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _handle_heartbeat_timeout(data: dict, file_status: str, path: Path) -> dict | None:
+    """处理心跳超时逻辑，返回超时后的 data，未超时返回 None
+
+    重构说明：将心跳超时检测和处理逻辑独立出来，降低主函数复杂度。
+    """
+    ts = data.get("ts")
+    if ts is None:
+        return None
+
+    from xianyu_hunter.web.routes.unified_login import _heartbeat_timeout_for_status
+    stale_sec = time.time() - float(ts)
+    if stale_sec <= _heartbeat_timeout_for_status(file_status):
+        return None
+
+    logger.warning(
+        "浏览器登录子进程心跳超时（%.1fs 未更新），判定为卡死",
+        stale_sec,
+    )
+
+    proc = _browser_login_state.get("proc")
+    if proc and proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+    _browser_login_state["status"] = "error"
+    data["status"] = "error"
+    data["message"] = f"登录进程无响应（{stale_sec:.0f}s 未更新），请重试"
+
+    try:
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+    return data
+
+
+async def _handle_final_success(data: dict) -> dict:
+    """处理登录成功终态：注入 Cookie 到 Worker 并返回认证响应"""
+    if not _browser_login_state.get("cookies_injected"):
+        await _inject_cookies_to_worker()
+        _browser_login_state["cookies_injected"] = True
+    return make_auth_response(data)
+
+
 @router.get("/browser-login/status")
 async def browser_login_status() -> dict:
     """轮询浏览器登录状态
@@ -223,15 +342,16 @@ async def browser_login_status() -> dict:
     登录成功时，自动将 Cookie 注入到 Worker 浏览器实例中，
     解决 Worker 在登录前已启动、内存中缺少登录 Cookie 的问题。
 
-    心跳检测：检查 status file 的 ts 字段，如果距上次更新超过阈值
-    （HEARTBEAT_TIMEOUT_SEC），说明子进程可能卡住或被异常 kill，
-    主动标记为 error 让前端停止轮询（status file 保留 "waiting" 不会自动切换）。
+    心跳检测：检查 status file 的 ts 字段，如果距上次更新超过阈值，
+    说明子进程可能卡住或被异常 kill，主动标记为 error 让前端停止轮询。
+
+    重构说明：将状态检查、心跳检测、终态处理拆分为独立函数，
+    主函数只做流程编排，认知复杂度从 32 降到 10 以下。
     """
     global _browser_login_state
 
     _cleanup_dead_process()
 
-    # cleanup 后如果状态已变 idle（心跳超时被清理），返回 idle 让前端显示初始按钮
     if _browser_login_state["status"] == "idle":
         return {"status": "idle", "message": "未启动登录（上次进程已超时清理）"}
 
@@ -243,59 +363,25 @@ async def browser_login_status() -> dict:
     if not path.exists():
         return {"status": "running", "message": "浏览器启动中..."}
 
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
-        return {"status": "running", "message": f"状态文件读取失败: {e}"}
+    data = _read_status_file(path)
+    if data is None:
+        return {"status": "running", "message": "状态文件读取失败"}
 
-    # 心跳检测：按子进程阶段使用不同阈值。打包 exe 冷启动/导入 Playwright
-    # 可能超过 15s；进入 waiting 后再用较短阈值识别真正卡死。
     file_status = data.get("status", "running")
-    if file_status in ("pending", "starting", "running", "waiting", "opening", "already_logged"):
-        ts = data.get("ts")
-        if ts is not None:
-            stale_sec = time.time() - float(ts)
-            from xianyu_hunter.web.routes.unified_login import _heartbeat_timeout_for_status
 
-            if stale_sec > _heartbeat_timeout_for_status(file_status):
-                logger.warning(
-                    "浏览器登录子进程心跳超时（%.1fs 未更新），判定为卡死",
-                    stale_sec,
-                )
-                # 主动清理子进程
-                proc = _browser_login_state.get("proc")
-                if proc and proc.poll() is None:
-                    try:
-                        proc.kill()
-                    except OSError:
-                        pass
-                # 写入终态让前端停止轮询
-                _browser_login_state["status"] = "error"
-                data["status"] = "error"
-                data["message"] = f"登录进程无响应（{stale_sec:.0f}s 未更新），请重试"
-                try:
-                    path.write_text(
-                        json.dumps(data, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
-                except OSError:
-                    pass
-                return data
+    if file_status in _RUNNING_STATES:
+        timeout_result = _handle_heartbeat_timeout(data, file_status, path)
+        if timeout_result is not None:
+            return timeout_result
 
-    # 终态同步内存状态
-    file_status = data.get("status", "running")
-    if file_status in ("success", "cancelled", "error", "timeout"):
-        if _browser_login_state["status"] != file_status:
-            _browser_login_state["status"] = file_status
-        if file_status == "success":
-            # 登录成功：将 Cookie 注入到 Worker 浏览器实例
-            # Worker 的 BrowserManager 在登录前就已启动，内存中没有登录 Cookie，
-            # 需要主动注入才能让实时搜索立即可用
-            if not _browser_login_state.get("cookies_injected"):
-                await _inject_cookies_to_worker()
-                _browser_login_state["cookies_injected"] = True
-            # 登录成功时设置 xh_token cookie
-            return make_auth_response(data)
+    if file_status not in _FINAL_STATES:
+        return data
+
+    if _browser_login_state["status"] != file_status:
+        _browser_login_state["status"] = file_status
+
+    if file_status == "success":
+        return await _handle_final_success(data)
 
     return data
 

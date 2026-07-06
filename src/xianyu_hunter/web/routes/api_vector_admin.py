@@ -191,7 +191,7 @@ async def create_snapshot(body: CreateSnapshotBody) -> dict[str, Any]:
         _log_audit(repo, "vector_admin.snapshot_create", snapshot_id)
         return {"ok": True, "snapshot_id": snapshot_id}
     except Exception as e:
-        logger.exception(f"创建快照失败: {e}")
+        logger.exception("创建快照失败")
         raise HTTPException(status_code=500, detail=f"创建快照失败: {e}")
 
 
@@ -216,7 +216,7 @@ async def restore_snapshot(snapshot_id: str, body: RestoreSnapshotBody) -> dict[
         _log_audit(repo, "vector_admin.snapshot_restore", snapshot_id)
         return {"ok": True, "restored_from": snapshot_id}
     except Exception as e:
-        logger.exception(f"从快照恢复失败: {e}")
+        logger.exception("从快照恢复失败")
         raise HTTPException(status_code=500, detail=f"恢复失败: {e}")
 
 
@@ -240,7 +240,7 @@ def delete_snapshot(
         _log_audit(repo, "vector_admin.snapshot_delete", snapshot_id)
         return {"ok": True, "deleted": snapshot_id}
     except Exception as e:
-        logger.exception(f"删除快照失败: {e}")
+        logger.exception("删除快照失败")
         raise HTTPException(status_code=500, detail=f"删除快照失败: {e}")
 
 
@@ -263,7 +263,7 @@ async def cleanup_all(body: CleanupAllBody) -> dict[str, Any]:
         _log_audit(repo, "vector_admin.cleanup_all", f"cleared {before} chunks")
         return {"ok": True, "cleared": before}
     except Exception as e:
-        logger.exception(f"清空集合失败: {e}")
+        logger.exception("清空集合失败")
         raise HTTPException(status_code=500, detail=f"清空集合失败: {e}")
 
 
@@ -285,7 +285,7 @@ async def cleanup_by_source(body: CleanupBySourceBody) -> dict[str, Any]:
         _log_audit(repo, "vector_admin.cleanup_by_source", f"{body.source_file} ({deleted} chunks)")
         return {"ok": True, "deleted": deleted}
     except Exception as e:
-        logger.exception(f"按来源删除失败: {e}")
+        logger.exception("按来源删除失败")
         raise HTTPException(status_code=500, detail=f"按来源删除失败: {e}")
 
 

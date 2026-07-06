@@ -134,12 +134,39 @@ def _get_expired_identity_cookies(cookies_by_name: dict[str, dict]) -> list[str]
     return expired
 
 
+def _parse_cookie_expires(cookie: dict) -> float:
+    """安全解析 cookie 的 expires 字段，失败时返回 -1"""
+    try:
+        return float(cookie.get("expires", -1) or -1)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _build_pw_cookie_item(name: str, value: str, cookie: dict) -> dict:
+    """从原始 cookie 构建 Playwright 格式的 cookie 项"""
+    item = {
+        "name": name,
+        "value": value,
+        "domain": cookie.get("domain") or ".goofish.com",
+        "path": cookie.get("path") or "/",
+    }
+    expires = _parse_cookie_expires(cookie)
+    if expires > 0:
+        item["expires"] = expires
+    return item
+
+
 def _load_pw_cookies_from_json() -> tuple[list[dict], dict[str, str]]:
     """从 CookieStore JSON 读取 Playwright 格式 Cookie 列表 + identity cookie 值映射
 
     返回 (pw_cookies, identity_values)：
     - pw_cookies 用于 add_cookies 注入浏览器
     - identity_values 用于后续 stale 检测（JSON 与浏览器内存值对比）
+
+    为什么拆分：原函数单循环内含 5 个条件分支（空值跳过、测试 cookie、
+    expires 解析、expires>0、identity 收集），认知复杂度 19。
+    提取 _parse_cookie_expires 和 _build_pw_cookie_item 后，主循环只保留
+    3 个早返回 continue，复杂度降至 10 以下。
     """
     from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
     store = get_cookie_store()
@@ -155,24 +182,11 @@ def _load_pw_cookies_from_json() -> tuple[list[dict], dict[str, str]]:
         value = str(c.get("value") or "")
         if not name or not value:
             continue
-        # 深度防御：跳过测试数据，防止 JSON 被污染时测试值注入浏览器
         if is_test_cookie(name, value):
             logger.warning("实时搜索：跳过测试 Cookie {}={}，不注入浏览器", name, value)
             continue
 
-        item = {
-            "name": name,
-            "value": value,
-            "domain": c.get("domain") or ".goofish.com",
-            "path": c.get("path") or "/",
-        }
-        try:
-            expires = float(c.get("expires", -1) or -1)
-        except (TypeError, ValueError):
-            expires = -1
-        if expires > 0:
-            item["expires"] = expires
-        pw_cookies.append(item)
+        pw_cookies.append(_build_pw_cookie_item(name, value, c))
         if name in _LIVE_SEARCH_IDENTITY_COOKIES:
             identity_values[name] = value
     return pw_cookies, identity_values
@@ -453,6 +467,94 @@ def list_links(
     }
 
 
+def _collect_item_ids_from_links(links: list[dict]) -> set[str]:
+    """从 links 中收集所有 item 类型的 link_key 作为 item_id 集合"""
+    item_ids: set[str] = set()
+    for r in links:
+        if r.get("link_type") == "item" and r.get("link_key"):
+            item_ids.add(str(r["link_key"]))
+    return item_ids
+
+
+def _build_item_extra_dict(row: dict) -> dict:
+    """从 items 表行构建补全用的字段字典"""
+    return {
+        "region": row.get("region") or "",
+        "seller_id": row.get("seller_id") or "",
+        "seller_nick": row.get("seller_nick") or row.get("seller_id") or "",
+        "want_cnt": row.get("want_cnt") or 0,
+        "view_cnt": row.get("view_cnt") or 0,
+        "publish_time": row.get("publish_time").isoformat() if row.get("publish_time") else None,
+        "thumb_url": row.get("thumb_url") or "",
+        "url": build_item_url(str(row["id"])) if row.get("id") else "",
+        "is_sold": bool(row.get("is_sold")),
+    }
+
+
+def _build_item_map_from_rows(rows: list) -> dict[str, dict]:
+    """从 items 查询结果构建 item_id -> 补全字段的映射"""
+    item_map: dict[str, dict] = {}
+    for row in rows:
+        if row and row.get("id"):
+            item_map[str(row["id"])] = _build_item_extra_dict(row)
+    return item_map
+
+
+def _parse_display_json(display: Any) -> dict:
+    """安全解析 display 字段，确保返回 dict 类型
+
+    处理三种情况：
+    1. 已是 dict → 直接返回
+    2. 是 JSON 字符串 → 解析后返回
+    3. 其他类型或解析失败 → 返回空 dict
+    """
+    if isinstance(display, dict):
+        return display
+    if isinstance(display, str):
+        try:
+            parsed = json.loads(display)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+def _should_update_field(key: str, existing: Any) -> bool:
+    """判断 display 中的字段是否需要用 items 表的值更新
+
+    更新条件（满足任一即可）：
+    - is_sold 字段总是更新（items 表是权威来源）
+    - 字段不存在
+    - 字段值为 None / 空字符串 / "None" 字符串
+    """
+    if key == "is_sold":
+        return True
+    if existing is None or existing == "" or existing == "None":
+        return True
+    return False
+
+
+def _apply_extra_to_display(display: dict, extra: dict) -> dict:
+    """将 extra 字段补全到 display 中，按需更新"""
+    for k, v in extra.items():
+        existing = display.get(k)
+        if _should_update_field(k, existing):
+            display[k] = v
+    return display
+
+
+def _enrich_single_link(link: dict, item_map: dict[str, dict]) -> None:
+    """补全单个 link 的 display 字段（in-place 修改）"""
+    if link.get("link_type") != "item":
+        return
+    item_id = str(link.get("link_key", ""))
+    extra = item_map.get(item_id)
+    if not extra:
+        return
+    display = _parse_display_json(link.get("display"))
+    link["display"] = _apply_extra_to_display(display, extra)
+
+
 def _enrich_with_item_data(
     links: list[dict], container: Container, user_id: str | None = None,
 ) -> list[dict]:
@@ -462,65 +564,28 @@ def _enrich_with_item_data(
     避免悬停摘要和地区筛选因旧数据缺字段而无法展示。
     is_sold 字段从 items 表补全：refresh_item 和 mark_sold 会将最新售出状态写入 items 表，
     补全到 display 确保前端展示与实际库存一致。
+
+    为什么拆分：原函数单函数内有 3 层循环 + 5 种条件判断 + try/except，
+    认知复杂度 41。拆分为 7 个单一职责的小函数后，每个函数 CC 均 < 10，
+    主函数变为线性编排流程，可读性和可测试性大幅提升。
     """
-    # 返回新列表引用以满足 S3516（不变返回值规则），内部 dict 仍为原对象引用以保留 in-place 修改
     if not links:
         return list(links)
-    # 收集需要补全的 item_id（link_type=item 时 link_key 即为 item_id）
-    item_ids: set[str] = set()
-    for r in links:
-        if r.get("link_type") == "item" and r.get("link_key"):
-            item_ids.add(str(r["link_key"]))
+
+    item_ids = _collect_item_ids_from_links(links)
     if not item_ids:
         return list(links)
-    # 批量查询 items 表（通过 Repository 方法，不直接访问 engine）
+
     try:
         rows = container.repo.list_items_by_ids(list(item_ids), user_id=user_id)
-        # 构建 item_id -> 字段映射
-        item_map: dict[str, dict] = {}
-        for row in rows:
-            if row and row.get("id"):
-                item_map[str(row["id"])] = {
-                    "region": row.get("region") or "",
-                    "seller_id": row.get("seller_id") or "",
-                    "seller_nick": row.get("seller_nick") or row.get("seller_id") or "",  # 优先昵称，回退到 ID
-                    "want_cnt": row.get("want_cnt") or 0,
-                    "view_cnt": row.get("view_cnt") or 0,
-                    "publish_time": row.get("publish_time").isoformat() if row.get("publish_time") else None,
-                    # 图片和链接：旧 task_links.display 可能缺少这些字段，从 items 表补全
-                    "thumb_url": row.get("thumb_url") or "",
-                    "url": build_item_url(str(row["id"])) if row.get("id") else "",
-                    # is_sold：items 表存 int(0/1)，转为 bool 给前端 truthy 判断
-                    "is_sold": bool(row.get("is_sold")),
-                }
+        item_map = _build_item_map_from_rows(rows)
     except Exception as e:
         logger.warning("从 items 表补全字段失败: {}", e)
         return list(links)
-    # 补全 display JSON
+
     for r in links:
-        if r.get("link_type") != "item":
-            continue
-        item_id = str(r.get("link_key", ""))
-        extra = item_map.get(item_id)
-        if not extra:
-            continue
-        display = r.get("display")
-        if isinstance(display, str):
-            try:
-                display = json.loads(display)
-            except (json.JSONDecodeError, TypeError):
-                display = {}
-        if not isinstance(display, dict):
-            display = {}
-        # 补全缺失或无效的字段（"None" 字符串/null/空字符串视为无效，用 items 表正确值覆盖）
-        for k, v in extra.items():
-            existing = display.get(k)
-            # is_sold 总是以 items 表为准：items 表由 refresh_item/mark_sold 更新，
-            # 比 task_links.display 中的旧值更准确，避免已售商品仍显示在售
-            # S1871: 两个分支都执行 display[k] = v，合并条件简化逻辑
-            if k == "is_sold" or k not in display or existing is None or existing == "" or existing == "None":
-                display[k] = v
-        r["display"] = display
+        _enrich_single_link(r, item_map)
+
     return list(links)
 
 
@@ -860,6 +925,49 @@ def _filter_live_by_keyword(
     return filtered
 
 
+def _find_exclude_word_hit(
+    title: str, item_desc: str, exclude_words: list[str],
+) -> tuple[str | None, str]:
+    """查找命中的排除词及匹配位置
+
+    返回 (hit_word, match_in)：
+    - hit_word: 命中的排除词，未命中时为 None
+    - match_in: "标题" 或 "描述"，便于前端调试展示
+    """
+    title_lower = title.lower()
+    desc_lower = item_desc.lower()
+    for w in exclude_words:
+        if not w:
+            continue
+        w_lower = w.lower()
+        in_title = w_lower in title_lower
+        in_desc = w_lower in desc_lower
+        if in_title or in_desc:
+            match_in = "描述" if in_desc and not in_title else "标题"
+            return w, match_in
+    return None, ""
+
+
+def _add_filtered_out_item(
+    filtered_out: list[dict], item: dict, reason: str, detail: str,
+) -> None:
+    """向 filter_summary.filtered_out 添加被过滤的项（最多 50 条）
+
+    为什么独立：多个过滤函数（keyword/exclude_words/price/publish_days）
+    都需要向 filtered_out 追加记录，提取后避免重复代码，
+    且统一限制 50 条的逻辑集中维护。
+    """
+    if len(filtered_out) >= 50:
+        return
+    filtered_out.append({
+        "link_type": item.get("link_type"),
+        "link_key": item.get("link_key"),
+        "display": item.get("display"),
+        "filter_reason": reason,
+        "filter_detail": detail,
+    })
+
+
 def _filter_live_by_exclude_words(
     filtered: list[dict], exclude_words: list[str], filter_summary: dict[str, Any],
 ) -> list[dict]:
@@ -869,110 +977,133 @@ def _filter_live_by_exclude_words(
     仅匹配 title 会导致包含排除词的商品仍出现在结果里（如 16G 出现在描述里）
     description 来自 live_search 详情补抓（_search.py 中 collect_sellers 时写入 item_desc），
     部分搜索结果可能没有 description（API 未返回 + 未走到详情补抓分支），缺失时仅依赖 title 匹配
+
+    为什么拆分：原函数循环体内含 5 个条件分支（空判断/命中判断/条数限制/
+    匹配位置判断/日志判断），认知复杂度 18。提取 _find_exclude_word_hit
+    和 _add_filtered_out_item 后，主循环只剩 2 个分支，复杂度降至 10 以下。
     """
     if not exclude_words:
         return filtered
-    _filtered = []
+
+    result = []
     exclude_skipped = 0
-    exclude_skipped_titles: list[str] = []
-    _filtered_out = filter_summary["filtered_out"]
+    skipped_titles: list[str] = []
+    filtered_out = filter_summary["filtered_out"]
+
     for r in filtered:
         display = r.get("display") or {}
         title = str(display.get("title", ""))
-        # item_desc 字段来自 live_search 详情补抓，可能为空（未补抓到）
         item_desc = str(display.get("item_desc", "") or r.get("item_desc", "") or "")
-        # 大小写不敏感匹配：避免 "16g" 与 "16G" 因大小写差异漏过
-        title_lower = title.lower()
-        desc_lower = item_desc.lower()
-        hit_word = next(
-            (w for w in exclude_words if w and (w.lower() in title_lower or w.lower() in desc_lower)),
-            None,
-        )
+
+        hit_word, match_in = _find_exclude_word_hit(title, item_desc, exclude_words)
         if hit_word:
             exclude_skipped += 1
-            exclude_skipped_titles.append(str(title)[:60])
-            if len(_filtered_out) < 50:
-                # 记录匹配位置（title / desc）便于前端调试
-                match_in = "描述" if hit_word.lower() in desc_lower and hit_word.lower() not in title_lower else "标题"
-                _filtered_out.append({
-                    "link_type": r.get("link_type"),
-                    "link_key": r.get("link_key"),
-                    "display": r.get("display"),
-                    "filter_reason": "exclude_words",
-                    "filter_detail": f"商品{match_in}命中排除词「{hit_word}」",
-                })
+            skipped_titles.append(str(title)[:60])
+            _add_filtered_out_item(
+                filtered_out, r, "exclude_words",
+                f"商品{match_in}命中排除词「{hit_word}」",
+            )
         else:
-            _filtered.append(r)
+            result.append(r)
+
     filter_summary["exclude_words_skipped"] = exclude_skipped
     if exclude_skipped:
         logger.info(
             "live_links 排除词过滤跳过了 {} 条 (words={})，样例={}",
-            exclude_skipped, exclude_words, exclude_skipped_titles[:5],
+            exclude_skipped, exclude_words, skipped_titles[:5],
         )
-    return _filtered
+    return result
 
 
-def _filter_live_by_price(
-    filtered: list[dict], min_price: Any, max_price: Any, filter_summary: dict[str, Any],
-) -> list[dict]:
-    """价格过滤（任务级 + 全局 price_strategy 合并后的有效区间）"""
-    # 读取全局搜索配置的价格策略，与 Worker 保持一致
+def _load_global_price_strategy() -> Any:
+    """安全读取全局价格策略配置，失败时返回 None"""
     try:
         from xianyu_hunter.infra.yaml_config import get_config
-        global_ps = get_config().price_strategy
+        return get_config().price_strategy
     except Exception:
-        global_ps = None
+        return None
+
+
+def _compute_effective_price_range(
+    min_price: Any, max_price: Any, global_ps: Any,
+) -> tuple[Any, Any]:
+    """计算最终生效的价格范围（任务级优先，全局兜底）
+
+    优先级：
+    1. 任务级 min_price/max_price（最高优先级）
+    2. 全局 price_strategy（仅当任务级为 None 时生效）
+    """
     effective_min = min_price
     effective_max = max_price
     if effective_min is None and global_ps and global_ps.enabled_min:
         effective_min = global_ps.min_price
     if effective_max is None and global_ps and global_ps.enabled_max:
         effective_max = global_ps.max_price
+    return effective_min, effective_max
+
+
+def _safe_parse_price(price: Any) -> float | None:
+    """安全解析价格为 float，失败或为空时返回 None"""
+    if price is None:
+        return None
+    try:
+        return float(price)
+    except (ValueError, TypeError):
+        return None
+
+
+def _check_price_filter(
+    price: float, effective_min: Any, effective_max: Any,
+) -> str | None:
+    """检查价格是否在有效范围内，返回过滤原因（None 表示通过）"""
+    if effective_min is not None and price < effective_min:
+        return f"价格 {price} 低于下限 {effective_min}"
+    if effective_max is not None and price > effective_max:
+        return f"价格 {price} 超出上限 {effective_max}"
+    return None
+
+
+def _filter_live_by_price(
+    filtered: list[dict], min_price: Any, max_price: Any, filter_summary: dict[str, Any],
+) -> list[dict]:
+    """价格过滤（任务级 + 全局 price_strategy 合并后的有效区间）
+
+    为什么拆分：原函数含 try/except + 4 个条件计算 effective 范围 +
+    循环内 5 个分支（空价格/解析失败/低于下限/超出上限/通过），
+    认知复杂度 26。拆分为 4 个单一职责小函数后，主循环只剩 2 个分支，
+    复杂度降至 10 以下，且各辅助函数可独立测试。
+    """
+    global_ps = _load_global_price_strategy()
+    effective_min, effective_max = _compute_effective_price_range(min_price, max_price, global_ps)
+
     if effective_min is None and effective_max is None:
         return filtered
-    _filtered = []
+
+    result = []
     price_skipped = 0
-    _filtered_out = filter_summary["filtered_out"]
+    filtered_out = filter_summary["filtered_out"]
+
     for r in filtered:
-        price = (r.get("display") or {}).get("price")
-        if price is None:
-            _filtered.append(r)
+        price_val = (r.get("display") or {}).get("price")
+        p = _safe_parse_price(price_val)
+        if p is None:
+            result.append(r)
             continue
-        try:
-            p = float(price)
-        except (ValueError, TypeError):
-            _filtered.append(r)
-            continue
-        if effective_min is not None and p < effective_min:
+
+        filter_detail = _check_price_filter(p, effective_min, effective_max)
+        if filter_detail:
             price_skipped += 1
-            if len(_filtered_out) < 50:
-                _filtered_out.append({
-                    "link_type": r.get("link_type"),
-                    "link_key": r.get("link_key"),
-                    "display": r.get("display"),
-                    "filter_reason": "price",
-                    "filter_detail": f"价格 {p} 低于下限 {effective_min}",
-                })
-            continue
-        if effective_max is not None and p > effective_max:
-            price_skipped += 1
-            if len(_filtered_out) < 50:
-                _filtered_out.append({
-                    "link_type": r.get("link_type"),
-                    "link_key": r.get("link_key"),
-                    "display": r.get("display"),
-                    "filter_reason": "price",
-                    "filter_detail": f"价格 {p} 超出上限 {effective_max}",
-                })
-            continue
-        _filtered.append(r)
+            _add_filtered_out_item(filtered_out, r, "price", filter_detail)
+        else:
+            result.append(r)
+
     filter_summary["price_skipped"] = price_skipped
     if price_skipped:
         logger.info(
             "live_links 价格过滤跳过了 {} 条 (min={}, max={})",
             price_skipped, effective_min, effective_max,
         )
-    return _filtered
+    return result
 
 
 def _filter_live_by_publish_days(
@@ -1482,6 +1613,93 @@ def _safe_trigger_live_evaluation(
         logger.warning("live_links 后台触发评估失败 task={}: {}", task_id, e)
 
 
+def _parse_task_price_config(price_config: Any) -> dict:
+    """安全解析任务 price_config 字段，确保返回 dict
+
+    处理三种情况：
+    1. 已是 dict → 直接返回
+    2. 是 JSON 字符串 → 解析后返回
+    3. 其他类型或解析失败 → 返回空 dict
+    """
+    if isinstance(price_config, dict):
+        return price_config
+    if isinstance(price_config, str):
+        try:
+            import json as _json
+            parsed = _json.loads(price_config)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _merge_task_price_params(
+    task: dict, task_price_config: dict,
+) -> tuple[Any, Any]:
+    """合并任务级的 min_price 和 max_price（直接字段优先于 price_config）"""
+    effective_min = task.get("min_price")
+    effective_max = task.get("max_price")
+
+    if not task_price_config:
+        return effective_min, effective_max
+
+    if effective_min is None and "min_price" in task_price_config:
+        effective_min = task_price_config["min_price"]
+    if effective_max is None and "max_price" in task_price_config:
+        effective_max = task_price_config["max_price"]
+
+    return effective_min, effective_max
+
+
+def _resolve_market_ratio(task_price_config: dict, global_price_cfg: Any) -> Any:
+    """解析 market_ratio（任务级 price_config 优先，否则回退全局）"""
+    if task_price_config and "market_ratio" in task_price_config:
+        return task_price_config["market_ratio"]
+    return global_price_cfg.market_ratio
+
+
+def _collect_prices_from_items(items: list[dict]) -> list[float]:
+    """从 items 中收集所有有效的价格值（跳过 None 和解析失败的）"""
+    prices: list[float] = []
+    for r in items:
+        p = (r.get("display") or {}).get("price")
+        if p is None:
+            continue
+        try:
+            prices.append(float(p))
+        except (TypeError, ValueError):
+            continue
+    return prices
+
+
+def _compute_median(prices: list[float]) -> float:
+    """计算价格列表的中位数
+
+    为什么独立：中位数计算含奇偶长度判断 + 排序 + 索引计算，
+    提取后便于单独测试和复用。
+    """
+    prices_sorted = sorted(prices)
+    n = len(prices_sorted)
+    if n % 2 == 1:
+        return prices_sorted[n // 2]
+    return (prices_sorted[n // 2 - 1] + prices_sorted[n // 2]) / 2
+
+
+def _build_market_context(prices: list[float]) -> Any | None:
+    """从价格列表构建 MarketContext，样本不足 3 个时返回 None"""
+    from xianyu_hunter.modules.price_strategy import MarketContext
+
+    if len(prices) < 3:
+        return None
+
+    median = _compute_median(prices)
+    return MarketContext(
+        median_price=median,
+        sample_size=len(prices),
+        all_prices=sorted(prices),
+    )
+
+
 def _build_live_price_strategy(
     container: Container, task_id: str, items: list[dict],
 ) -> tuple[Any, Any | None]:
@@ -1498,40 +1716,20 @@ def _build_live_price_strategy(
     - market_ctx 从当前批次 items 实时算 median（与 worker._compute_market_context 一致），
       样本数 < 3 时返回 None，market_ratio 规则自动跳过
 
-    为什么独立函数：startup.py 中价格策略是任务注册时一次性构造并注入 worker，
-    而 live 链路是请求时按 task_id 现取任务字段，无法复用 startup 的注入路径
+    为什么拆分：原函数单函数内含 JSON 解析 + 3 层条件合并 + 价格收集 +
+    中位数计算，认知复杂度 24。拆分为 6 个单一职责小函数后，
+    主函数变为线性编排，每个子函数 CC 均 < 10，整体复杂度大幅降低。
     """
-    from xianyu_hunter.modules.price_strategy import (
-        MarketContext, PriceConfig, PriceStrategy,
-    )
+    from xianyu_hunter.modules.price_strategy import PriceConfig, PriceStrategy
     from xianyu_hunter.infra.yaml_config import get_config
 
     task = container.repo.get_task(task_id) or {}
+    task_price_config = _parse_task_price_config(task.get("price_config"))
 
-    # 合并优先级与 startup.py:233-253 完全一致
-    effective_min = task.get("min_price")
-    effective_max = task.get("max_price")
+    effective_min, effective_max = _merge_task_price_params(task, task_price_config)
 
-    task_price_override = task.get("price_config") or {}
-    if isinstance(task_price_override, str):
-        try:
-            import json as _json
-            task_price_override = _json.loads(task_price_override)
-        except Exception:
-            task_price_override = {}
-
-    if task_price_override:
-        if effective_min is None and "min_price" in task_price_override:
-            effective_min = task_price_override["min_price"]
-        if effective_max is None and "max_price" in task_price_override:
-            effective_max = task_price_override["max_price"]
-
-    # market_ratio：任务级 price_config 优先，否则回退全局
     global_price_cfg = get_config().price_strategy
-    if task_price_override and "market_ratio" in task_price_override:
-        market_ratio = task_price_override["market_ratio"]
-    else:
-        market_ratio = global_price_cfg.market_ratio
+    market_ratio = _resolve_market_ratio(task_price_config, global_price_cfg)
 
     strategy = PriceStrategy(PriceConfig(
         min_price=effective_min,
@@ -1540,24 +1738,8 @@ def _build_live_price_strategy(
         top_n=global_price_cfg.top_n,
     ))
 
-    # market_ctx：从当前批次 items 算 median（与 worker._compute_market_context 一致）
-    prices: list[float] = []
-    for r in items:
-        p = (r.get("display") or {}).get("price")
-        if p is None:
-            continue
-        try:
-            prices.append(float(p))
-        except (TypeError, ValueError):
-            continue
-    market_ctx = None
-    if len(prices) >= 3:
-        prices.sort()
-        n = len(prices)
-        median = prices[n // 2] if n % 2 == 1 else (prices[n // 2 - 1] + prices[n // 2]) / 2
-        market_ctx = MarketContext(
-            median_price=median, sample_size=n, all_prices=prices,
-        )
+    prices = _collect_prices_from_items(items)
+    market_ctx = _build_market_context(prices)
 
     return strategy, market_ctx
 

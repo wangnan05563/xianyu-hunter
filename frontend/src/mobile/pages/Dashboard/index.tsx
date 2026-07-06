@@ -1,13 +1,13 @@
 import { Card, Spin, Tag } from 'antd'
 import { useEffect, useState } from 'react'
 import { statsApi } from '../../../api'
-import type { TodayAlert } from '../../../api/types'
+import type { TodayAlert, StatsOverview } from '../../../api/types'
 import PullToRefresh from '../../components/PullToRefresh'
 
 // 移动端仪表盘：KPI 星级卡片 + 调度器状态 + 实时事件流（精简版）
 export default function MobileDashboard() {
   const [loading, setLoading] = useState(true)
-  const [overview, setOverview] = useState<any>(null)
+  const [overview, setOverview] = useState<StatsOverview | null>(null)
   const [todayAlert, setTodayAlert] = useState<TodayAlert | null>(null)
 
   const fetchData = async () => {
@@ -37,12 +37,20 @@ export default function MobileDashboard() {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
   }
 
-  // KPI 数据（从 overview 提取）
+  // KPI 数据：字段映射 StatsOverview 实际结构
+  // discovered_count → tasks.total（任务总数即累计发现商品量）
+  // eval_passed_count → evaluation_count（评估总次数，后端无 pass/fail 拆分）
+  // order_succeeded_count → orders.succeeded（抢单成功数）
+  // notify_failed_count → orders.failed（订单失败数，作为通知失败代理指标）
+  const taskTotal = overview?.tasks.total ?? 0
+  const evalCount = overview?.evaluation_count ?? 0
+  const orderSucceeded = overview?.orders.succeeded ?? 0
+  const orderFailed = overview?.orders.failed ?? 0
   const kpis = [
-    { label: '发现商品', value: overview?.discovered_count ?? 0, star: overview?.discovered_count > 100 ? 5 : 3 },
-    { label: '评估通过', value: overview?.eval_passed_count ?? 0, star: overview?.eval_pass_rate > 0.3 ? 5 : 3 },
-    { label: '抢单成功', value: overview?.order_succeeded_count ?? 0, star: overview?.order_success_rate > 0.8 ? 5 : 1 },
-    { label: '通知失败', value: overview?.notify_failed_count ?? 0, star: overview?.notify_failed_count === 0 ? 5 : 1 },
+    { label: '发现商品', value: taskTotal, star: taskTotal > 100 ? 5 : 3 },
+    { label: '评估通过', value: evalCount, star: evalCount > 10 ? 5 : 3 },
+    { label: '抢单成功', value: orderSucceeded, star: orderSucceeded > 5 ? 5 : 1 },
+    { label: '通知失败', value: orderFailed, star: orderFailed === 0 ? 5 : 1 },
   ]
 
   return (

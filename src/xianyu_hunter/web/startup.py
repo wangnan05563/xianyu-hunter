@@ -142,7 +142,7 @@ def start_kb_refresh_scheduler(container: Any) -> None:
         _kb_refresh_scheduler = kb_scheduler
     except Exception as e:  # noqa: BLE001
         # 启动失败不阻断应用：用户仍可手动通过 POST /api/chatbot/kb/rebuild 触发构建
-        logger.exception(f"知识库定时刷新调度器启动失败: {e}")
+        logger.exception("知识库定时刷新调度器启动失败")
 
 
 def start_takeover_timeout_scheduler(container: Any) -> None:
@@ -168,7 +168,7 @@ def start_takeover_timeout_scheduler(container: Any) -> None:
         _takeover_timeout_scheduler.start()
     except Exception as e:  # noqa: BLE001
         # 启动失败不阻断应用：用户仍可通过手动修改订单状态处理超时
-        logger.exception(f"接管超时清理调度器启动失败: {e}")
+        logger.exception("接管超时清理调度器启动失败")
 
 
 async def start_event_bus_in_background(container: Any) -> None:
@@ -200,7 +200,7 @@ async def start_event_bus_in_background(container: Any) -> None:
             raise
         except Exception as e:  # noqa: BLE001
             # run_forever 内部已隔离 handler 异常，此处兜底防止 task 静默退出
-            logger.exception(f"EventBus 主循环异常退出: {e}")
+            logger.exception("EventBus 主循环异常退出")
 
     _event_bus_task = asyncio.create_task(_bus_loop())
 
@@ -320,7 +320,10 @@ def _migrate_task_links_table(container: Any, insp: Any) -> None:
         inserted = container.repo.auto_migrate_task_links()
         logger.info(f"task_links auto-migrate: 新增 {inserted} 条")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"C-01 task_links 迁移失败（忽略，不影响后续迁移）: {e}")
+        # 为什么用 exc_info=True 而非 logger.exception：
+        # 迁移失败是已知可降级场景，保持 WARNING 级别避免误触发告警，
+        # 但必须保留完整 traceback 便于定位根因（违反 meta-rule #26 会丢失堆栈）
+        logger.warning("C-01 task_links 迁移失败（忽略，不影响后续迁移）: {}", e, exc_info=True)
 
 
 def _migrate_orders_task_id(container: Any, insp: Any) -> None:
@@ -337,7 +340,8 @@ def _migrate_orders_task_id(container: Any, insp: Any) -> None:
                     )
                 logger.info("orders 表已新增 task_id 列（C-02 迁移）")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"C-02 orders.task_id 迁移失败（忽略）: {e}")
+        # 保留 WARNING 级别但附加 traceback，见 C-01 注释
+        logger.warning("C-02 orders.task_id 迁移失败（忽略）: {}", e, exc_info=True)
 
 
 def _migrate_tasks_search_filters(container: Any, insp: Any) -> None:
@@ -354,7 +358,7 @@ def _migrate_tasks_search_filters(container: Any, insp: Any) -> None:
                     )
                 logger.info("tasks 表已新增 search_filters 列（C-03 迁移）")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"C-03 tasks.search_filters 迁移失败（忽略）: {e}")
+        logger.warning("C-03 tasks.search_filters 迁移失败（忽略）: {}", e, exc_info=True)
 
 
 def _migrate_notifications_read_at(container: Any, insp: Any) -> None:
@@ -374,7 +378,7 @@ def _migrate_notifications_read_at(container: Any, insp: Any) -> None:
                     )
                 logger.info("notifications 表已新增 read_at 列（C-04 迁移）")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"C-04 notifications.read_at 迁移失败（忽略）: {e}")
+        logger.warning("C-04 notifications.read_at 迁移失败（忽略）: {}", e, exc_info=True)
 
 
 def _migrate_eval_scored_dedup(container: Any, insp: Any) -> None:
@@ -404,7 +408,7 @@ def _migrate_eval_scored_dedup(container: Any, insp: Any) -> None:
                 )
             logger.info("eval.scored 事件去重 + 唯一索引已创建（C-05 迁移）")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"C-05 eval.scored 去重迁移失败（忽略）: {e}")
+        logger.warning("C-05 eval.scored 去重迁移失败（忽略）: {}", e, exc_info=True)
 
 
 def _cleanup_old_batch_history(container: Any) -> None:
@@ -423,7 +427,7 @@ def _cleanup_old_batch_history(container: Any) -> None:
             if deleted > 0:
                 logger.info(f"已清理 {deleted} 条过期批量采集历史（>{days} 天）")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"C-06 批量采集历史清理失败（忽略）: {e}")
+        logger.warning("C-06 批量采集历史清理失败（忽略）: {}", e, exc_info=True)
 
 
 def _migrate_to_multi_user(container: Any) -> None:
@@ -439,7 +443,7 @@ def _migrate_to_multi_user(container: Any) -> None:
         migrate_to_multi_user()
         logger.info("多用户迁移完成（C-07）")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"C-07 多用户迁移失败（忽略）: {e}")
+        logger.warning("C-07 多用户迁移失败（忽略）: {}", e, exc_info=True)
 
 
 def run_migrations(container: Any) -> None:
@@ -507,7 +511,7 @@ async def _start_all_schedulers(container: Any) -> None:
             trigger_session_start()
             logger.info("反爬会话管理已尝试自动启动（若无有效 Cookie 将跳过）")
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"反爬会话管理自动启动失败（忽略）: {e}")
+            logger.warning("反爬会话管理自动启动失败（忽略）: {}", e, exc_info=True)
 
 
 def _stop_all_sync_schedulers() -> None:
@@ -554,7 +558,9 @@ def setup_startup_hooks(app: FastAPI) -> None:
         try:
             run_migrations(container)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"启动迁移钩子失败（忽略）: {e}")
+            # 启动迁移钩子是关键路径（meta-rule #26），必须保留完整 traceback
+            # 用 exception 而非 warning+exc_info：迁移失败影响面大，值得 ERROR 级告警
+            logger.exception("启动迁移钩子失败（忽略，继续启动）: {}", e)
 
         # 启动所有后台调度器（EventBus 优先 → 调度器 → Cookie 同步等）
         await _start_all_schedulers(container)

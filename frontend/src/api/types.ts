@@ -347,8 +347,9 @@ export interface BargainEval {
   range_days: number
   // 0-100 数值得分，越高越值得捡漏
   bargain_score: number
-  // 四档等级：excellent/good/fair/poor/unknown
-  bargain_level: 'excellent' | 'good' | 'fair' | 'poor' | 'unknown'
+  // 五档等级：excellent/good/fair/poor/unknown/out_of_range
+  // out_of_range：当前价格超出任务配置的 min_price/max_price，优先级最高
+  bargain_level: 'excellent' | 'good' | 'fair' | 'poor' | 'unknown' | 'out_of_range'
   suggestion: string
   // 已售价格统计（source=empty 时为 null）
   sold_price_stats: {

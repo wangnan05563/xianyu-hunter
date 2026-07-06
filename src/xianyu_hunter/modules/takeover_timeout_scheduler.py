@@ -89,4 +89,4 @@ class TakeoverTimeoutScheduler:
                 )
         except Exception as e:  # noqa: BLE001
             # 清理失败不影响主业务，下次扫描会重试
-            logger.exception(f"接管超时清理任务异常: {e}")
+            logger.exception("接管超时清理任务异常")

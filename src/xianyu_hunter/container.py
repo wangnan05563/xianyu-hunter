@@ -634,5 +634,5 @@ def _build_chatbot_container(container: Container) -> Any:
             logger.info(f"智能客服可选依赖缺失，跳过初始化: {e}")
         else:
             # chromadb 初始化失败、VectorStore 集合打开失败等异常不阻断主系统
-            logger.exception(f"智能客服子容器初始化失败: {e}")
+            logger.exception("智能客服子容器初始化失败")
         return None

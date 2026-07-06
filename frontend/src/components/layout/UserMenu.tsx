@@ -40,9 +40,143 @@ const computeDisplayName = (info: AuthMe): string => {
   return '未登录'
 }
 
-// 渲染 Cookie 健康详情面板：完整状态 + 详情列表 + 安全标记
-// 为什么提取：原 healthDetailContent 内联在组件中，含多处条件渲染 + 嵌套 JSX，认知复杂度高
-// themeToken 作为参数传入，保持函数纯度（无 hooks 依赖）
+// S3776 修复：renderHealthDetail 原 CC=17，拆分为多个小组件 + 查表映射降低复杂度
+// 每个子组件职责单一，主函数只剩组合逻辑
+
+// 健康状态图标映射：is_valid → 图标组件
+const HEALTH_STATUS_ICONS = {
+  valid: CheckCircleFilled,
+  invalid: ExclamationCircleFilled,
+} as const
+
+// 层级状态配置：label + 对应 health.layers 的 key
+const LAYER_CONFIGS: ReadonlyArray<{
+  readonly label: string
+  readonly key: keyof CookieHealthReport['layers']
+}> = [
+  { label: '身份层', key: 'identity' },
+  { label: '会话层', key: 'session' },
+  { label: '追踪层', key: 'tracking' },
+]
+
+// 安全标记配置：label + 对应 health.security_flags 的 key + active 颜色
+const SECURITY_FLAG_CONFIGS: ReadonlyArray<{
+  readonly label: string
+  readonly key: keyof CookieHealthReport['security_flags']
+  readonly activeColor: string
+}> = [
+  { label: 'Secure', key: 'has_secure', activeColor: 'green' },
+  { label: 'HttpOnly', key: 'has_httponly', activeColor: 'green' },
+  { label: '会话级', key: 'is_session_cookie', activeColor: 'blue' },
+]
+
+// 健康状态头部：图标 + 文案 + 完整性标签
+function HealthStatusHeader({
+  health,
+  themeToken,
+}: {
+  readonly health: CookieHealthReport
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}) {
+  const StatusIcon = health.is_valid ? HEALTH_STATUS_ICONS.valid : HEALTH_STATUS_ICONS.invalid
+  const iconColor = health.is_valid ? themeToken.colorSuccess : themeToken.colorError
+  const statusText = health.is_valid ? 'Cookie 状态正常' : 'Cookie 异常'
+  const tagColor = health.is_valid ? 'success' : 'error'
+  const integrityText = health.integrity === 'complete' ? '完整' : '不完整'
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      <StatusIcon style={{ color: iconColor, fontSize: 16 }} />
+      <Text strong style={{ fontSize: 13 }}>
+        {statusText}
+      </Text>
+      <Tag color={tagColor} style={{ marginLeft: 'auto', fontSize: 11 }}>
+        {integrityText}
+      </Tag>
+    </div>
+  )
+}
+
+// 异常原因提示：仅在 is_valid=false 且有原因时显示
+function IntegrityReasonHint({
+  reason,
+  themeToken,
+}: {
+  readonly reason?: string
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}) {
+  if (!reason) return null
+  return (
+    <div style={{
+      fontSize: 11, color: themeToken.colorTextSecondary,
+      marginBottom: 10, padding: '6px 8px',
+      background: themeToken.colorFillQuaternary,
+      borderRadius: 4,
+    }}>
+      原因：{reason}
+    </div>
+  )
+}
+
+// Cookie 层级列表：遍历 LAYER_CONFIGS 渲染，避免重复 JSX
+function HealthLayersList({
+  health,
+  themeToken,
+}: {
+  readonly health: CookieHealthReport
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}) {
+  return (
+    <>
+      {LAYER_CONFIGS.map(({ label, key }) => {
+        const isReady = health.layers[key]
+        return (
+          <DetailRow
+            key={key}
+            label={label}
+            value={isReady ? '✓ 已就绪' : '✗ 缺失'}
+            valueColor={isReady ? themeToken.colorSuccess : themeToken.colorError}
+          />
+        )
+      })}
+    </>
+  )
+}
+
+// 安全标记组：遍历 SECURITY_FLAG_CONFIGS 渲染
+function SecurityFlags({
+  flags,
+  themeToken,
+}: {
+  readonly flags: CookieHealthReport['security_flags']
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}) {
+  return (
+    <div style={{
+      display: 'flex', gap: 6, flexWrap: 'wrap',
+      marginTop: 4, paddingTop: 8, borderTop: `1px dashed ${themeToken.colorBorderSecondary}`,
+    }}>
+      {SECURITY_FLAG_CONFIGS.map(({ label, key, activeColor }) => {
+        const active = flags[key]
+        const text = key === 'is_session_cookie'
+          ? (active ? label : '持久化')
+          : (active ? `✓ ${label}` : `✗ ${label}`)
+        return (
+          <Tag
+            key={key}
+            color={active ? activeColor : 'default'}
+            style={{ fontSize: 10, margin: 0 }}
+          >
+            {text}
+          </Tag>
+        )
+      })}
+    </div>
+  )
+}
+
+// 健康详情主渲染函数：组合各子组件，主逻辑只剩拼装
+// 复杂度降低原因：条件判断分散到各子组件，主函数无分支嵌套
 const renderHealthDetail = (health: CookieHealthReport | null, themeToken: ReturnType<typeof theme.useToken>['token']) => {
   if (!health) {
     return (
@@ -55,35 +189,8 @@ const renderHealthDetail = (health: CookieHealthReport | null, themeToken: Retur
   }
   return (
     <>
-      {/* 完整性状态 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-        {health.is_valid ? (
-          <CheckCircleFilled style={{ color: themeToken.colorSuccess, fontSize: 16 }} />
-        ) : (
-          <ExclamationCircleFilled style={{ color: themeToken.colorError, fontSize: 16 }} />
-        )}
-        <Text strong style={{ fontSize: 13 }}>
-          {health.is_valid ? 'Cookie 状态正常' : 'Cookie 异常'}
-        </Text>
-        <Tag
-          color={health.is_valid ? 'success' : 'error'}
-          style={{ marginLeft: 'auto', fontSize: 11 }}
-        >
-          {health.integrity === 'complete' ? '完整' : '不完整'}
-        </Tag>
-      </div>
-      {!health.is_valid && health.integrity_reason && (
-        <div style={{
-          fontSize: 11, color: themeToken.colorTextSecondary,
-          marginBottom: 10, padding: '6px 8px',
-          background: themeToken.colorFillQuaternary,
-          borderRadius: 4,
-        }}>
-          原因：{health.integrity_reason}
-        </div>
-      )}
-
-      {/* 详情列表 */}
+      <HealthStatusHeader health={health} themeToken={themeToken} />
+      <IntegrityReasonHint reason={!health.is_valid ? health.integrity_reason : undefined} themeToken={themeToken} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
         <DetailRow
           icon={<ClockCircleOutlined style={{ color: themeToken.colorPrimary }} />}
@@ -95,45 +202,8 @@ const renderHealthDetail = (health: CookieHealthReport | null, themeToken: Retur
           label="Cookie 数"
           value={`${health.cookie_count} 个`}
         />
-        <DetailRow
-          label="身份层"
-          value={health.layers.identity ? '✓ 已就绪' : '✗ 缺失'}
-          valueColor={health.layers.identity ? themeToken.colorSuccess : themeToken.colorError}
-        />
-        <DetailRow
-          label="会话层"
-          value={health.layers.session ? '✓ 已就绪' : '✗ 缺失'}
-          valueColor={health.layers.session ? themeToken.colorSuccess : themeToken.colorError}
-        />
-        <DetailRow
-          label="追踪层"
-          value={health.layers.tracking ? '✓ 已就绪' : '✗ 缺失'}
-          valueColor={health.layers.tracking ? themeToken.colorSuccess : themeToken.colorError}
-        />
-        {/* 安全标记 */}
-        <div style={{
-          display: 'flex', gap: 6, flexWrap: 'wrap',
-          marginTop: 4, paddingTop: 8, borderTop: `1px dashed ${themeToken.colorBorderSecondary}`,
-        }}>
-          <Tag
-            color={health.security_flags.has_secure ? 'green' : 'default'}
-            style={{ fontSize: 10, margin: 0 }}
-          >
-            {health.security_flags.has_secure ? '✓ Secure' : '✗ Secure'}
-          </Tag>
-          <Tag
-            color={health.security_flags.has_httponly ? 'green' : 'default'}
-            style={{ fontSize: 10, margin: 0 }}
-          >
-            {health.security_flags.has_httponly ? '✓ HttpOnly' : '✗ HttpOnly'}
-          </Tag>
-          <Tag
-            color={health.security_flags.is_session_cookie ? 'blue' : 'default'}
-            style={{ fontSize: 10, margin: 0 }}
-          >
-            {health.security_flags.is_session_cookie ? '会话级' : '持久化'}
-          </Tag>
-        </div>
+        <HealthLayersList health={health} themeToken={themeToken} />
+        <SecurityFlags flags={health.security_flags} themeToken={themeToken} />
       </div>
     </>
   )

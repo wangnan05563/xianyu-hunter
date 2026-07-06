@@ -11,11 +11,17 @@ export default function MobileHeader() {
   const [alertCount, setAlertCount] = useState(0)
 
   // 轮询调度器状态与告警数（30s）
+  // 告警数 = 今日失败订单 + 超时待支付 + 低分评估，与 Dashboard 摘要一致
   useEffect(() => {
     const poll = async () => {
       try {
-        const data = await statsApi.overview()
-        setSchedulerRunning(data.scheduler_running)
+        const [overview, today] = await Promise.all([
+          statsApi.overview(),
+          statsApi.today(),
+        ])
+        setSchedulerRunning(overview.scheduler_running)
+        const c = today.alerts.counts
+        setAlertCount(c.failed + c.timeout + c.low_eval)
       } catch { /* 忽略，弱网下不打断用户 */ }
     }
     poll()

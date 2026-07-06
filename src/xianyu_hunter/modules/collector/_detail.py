@@ -936,7 +936,7 @@ class DetailMixin:
             logger.warning(f"详情页 {item_id} 采集失败（页面被并发关闭）: {e}")
         else:
             self.last_detail_failure_reason = "unknown_exception"
-            logger.exception(f"采集详情失败 {item_id}: {e}")
+            logger.exception(f"采集详情失败 {item_id}")
         return None
 
     async def seller_profile(
@@ -990,7 +990,7 @@ class DetailMixin:
             if "Target" in err_msg and "closed" in err_msg:
                 logger.warning(f"卖家主页 {seller_id} 采集失败（页面被并发关闭）: {e}")
             else:
-                logger.exception(f"采集卖家主页失败 {seller_id}: {e}")
+                logger.exception(f"采集卖家主页失败 {seller_id}")
             return None
         finally:
             if own_page:

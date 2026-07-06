@@ -98,7 +98,7 @@ class KBRefreshScheduler:
             logger.error(f"知识库定时更新超时（>{_REFRESH_TIMEOUT_SEC}s）: {e}")
             self._publish_failure_event(e)
         except Exception as e:
-            logger.exception(f"知识库定时更新失败: {e}")
+            logger.exception("知识库定时更新失败")
             self._publish_failure_event(e)
 
     async def _refresh_job(self) -> None:
@@ -129,7 +129,7 @@ class KBRefreshScheduler:
         except Exception as e:
             # 异常仅记录日志，失败事件由 _refresh_job_sync 的 except 分支发布
             # 避免 _refresh_job 内异常被 _refresh_job_sync 重复捕获导致双重发布
-            logger.exception(f"知识库定时更新异常: {e}")
+            logger.exception("知识库定时更新异常")
 
     def _publish_failure_event(self, error: Exception) -> None:
         """发布 CHATBOT_KB_FAILED 事件（同步方法，用 run_coroutine_threadsafe 提交）

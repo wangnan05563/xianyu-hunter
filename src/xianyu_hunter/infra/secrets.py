@@ -71,7 +71,7 @@ def set_secret(key: str, value: str) -> None:
         keyring.set_password(SERVICE_NAME, key, value)
         logger.debug(f"已加密存储 {key}")
     except Exception as e:
-        logger.exception(f"keyring 存储失败 {key}: {e}，回退到 .env")
+        logger.exception(f"keyring 存储失败 {key}: ，回退到 .env")
         _fallback_set(key, value)
 
 
@@ -82,7 +82,7 @@ def get_secret(key: str) -> str | None:
     try:
         return keyring.get_password(SERVICE_NAME, key)
     except Exception as e:
-        logger.exception(f"keyring 读取失败 {key}: {e}")
+        logger.exception(f"keyring 读取失败 {key}")
         return _fallback_get(key)
 
 

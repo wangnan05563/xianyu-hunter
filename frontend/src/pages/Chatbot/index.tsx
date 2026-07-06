@@ -839,190 +839,67 @@ export default function ChatbotPage() {
     }
   }
 
-  // S3358：会话列表嵌套三元提取为变量，用 if-else 替代 loadingSessions ? <Spin> : sessions.length === 0 ? <Empty> : <List>
-  const sessionListView = (
-    <div className="cb-session-list">
-      <List
-        dataSource={sessions}
-        renderItem={(session) => {
-          // S3358：用映射表替代嵌套三元，避免 status === 'active' ? '活跃' : status === 'escalated' ? '已转人工' : '已结束'
-          const statusClass = session.status === 'active' ? 'cb-tag-active' : 'cb-tag-ended'
-          const statusLabels: Record<Session['status'], string> = {
-            active: '活跃',
-            escalated: '已转人工',
-            ended: '已结束',
-          }
-          const statusLabel = statusLabels[session.status]
-          return (
-          <List.Item
-            className={`cb-session-item ${currentSession?.id === session.id ? 'cb-session-item-active' : ''}`}
-            onClick={() => {
-              setCurrentSession(session)
-              // 选中会话后自动关闭移动端抽屉，桌面端无副作用
-              setSiderOpen(false)
-            }}
-            actions={[
-              <button
-                key="fav"
-                type="button"
-                className={`cb-fav-icon ${session.is_favorite ? 'cb-fav-icon-active' : ''}`}
-                // 原生 button 默认支持 Enter/Space 触发 click，无需 onKeyDown
-                // inline 重置外观以保留 cb-fav-icon 原有 inline-flex 布局
-                style={{ background: 'transparent', border: 'none', padding: 0 }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleToggleFavorite(session.id, !!session.is_favorite)
-                }}
-                aria-label={session.is_favorite ? '取消收藏' : '收藏'}
-              >
-                {session.is_favorite ? <StarFilled /> : <StarOutlined />}
-              </button>,
-              <Popconfirm
-                key="delete"
-                title="删除会话"
-                description="删除后不可恢复，消息与反馈将一并清除"
-                onConfirm={() => handleDeleteSession(session.id)}
-                okText="删除"
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-              >
-                <DeleteOutlined className="cb-delete-icon" onClick={(e) => e.stopPropagation()} />
-              </Popconfirm>,
-            ]}
-          >
-            <List.Item.Meta
-              title={
-                <Typography.Text ellipsis className="cb-session-title">
-                  {session.is_favorite ? '★ ' : ''}{session.title || '新会话'}
-                </Typography.Text>
-              }
-              description={
-                <span className="cb-session-meta">
-                  <Tag className={statusClass}>
-                    {statusLabel}
-                  </Tag>
-                  <span className="cb-session-count">
-                    {session.message_count} 条
-                  </span>
-                </span>
-              }
-            />
-          </List.Item>
-          )
-        }}
-      />
-    </div>
-  )
-  let sessionListBody: React.ReactNode
-  if (loadingSessions) {
-    sessionListBody = <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
-  } else if (sessions.length === 0) {
-    sessionListBody = <Empty description={searchKeyword || favoriteOnly ? '无匹配会话' : '暂无会话'} />
-  } else {
-    sessionListBody = sessionListView
-  }
+  // S3776 修复：会话列表抽取为 SessionList 组件，主组件只剩调用
+  const handleSelectSession = useCallback((session: Session) => {
+    setCurrentSession(session)
+    setSiderOpen(false)
+  }, [])
 
-  // S3358/S7735：主内容区多层嵌套三元提取为变量，用 if-else 消除冗余条件与死代码
-  // 原 L869 的 !onboardingDismissed 在 else 分支中冗余（else 已隐含 !onboardingDismissed）
-  // 原 L882 的 messages.length === 0 && !loadingMessages 是死代码（被上一分支拦截），删除
-  let mainContentBody: React.ReactNode
-  if (!currentSession) {
-    // 无会话：显示引导卡（M1）
-    mainContentBody = (
-      <ChatbotOnboarding
-        onQuestionClick={async (q) => {
-          // 先创建会话，再触发 handleSend
-          try {
-            const session = await chatbotApi.createSession(q.slice(0, 30))
-            setCurrentSession(session)
-            // 用 ref 暂存待发送内容，等 messages 加载完成后再发
-            pendingFaqRef.current = q
-            // 让父级进入 messages 渲染分支后再发送
-            setTimeout(() => {
-              if (pendingFaqRef.current) {
-                setInputValue(pendingFaqRef.current)
-                pendingFaqRef.current = null
-              }
-            }, 0)
-          } catch {
-            message.error('创建会话失败')
-          }
-        }}
-        onDismiss={() => {
-          setOnboardingDismissed(true)
-          try {
-            localStorage.setItem('chatbot_onboarding_dismissed', '1')
-          } catch {
-            // localStorage 不可用时仅内存记忆
-          }
-        }}
-      />
-    )
-  } else if (onboardingDismissed) {
-    // 已关闭引导卡：显示空状态
-    mainContentBody = (
-      <div className="cb-empty">
-        <EmptyIllustration />
-        <span className="cb-empty-text">开始输入您的问题吧~</span>
-      </div>
-    )
-  } else if (messages.length === 0 && !loadingMessages) {
-    // 新会话空消息：显示引导卡（M1）
-    mainContentBody = (
-      <ChatbotOnboarding
-        onQuestionClick={(q) => setInputValue(q)}
-        onDismiss={() => {
-          setOnboardingDismissed(true)
-          try {
-            localStorage.setItem('chatbot_onboarding_dismissed', '1')
-          } catch {
-            // 静默忽略
-          }
-        }}
-      />
-    )
-  } else {
-    // 有消息或正在加载：显示消息列表
-    mainContentBody = (
-      <div className="cb-messages">
-        {loadingMessages ? (
-          <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
-        ) : (
-          <>
-            {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} sessionId={currentSession.id} />
-            ))}
-            {/* 流式响应中的临时消息 */}
-            {isStreaming && streamingContent && (
-              <MessageBubble
-                message={{
-                  id: 'streaming',
-                  session_id: currentSession.id,
-                  role: 'assistant',
-                  content: streamingContent,
-                  sources: streamingSources,
-                  tool_calls: streamingToolCalls,
-                  created_at: new Date().toISOString(),
-                }}
-                sessionId={currentSession.id}
-              />
-            )}
-            {isStreaming && !streamingContent && (
-              <div className="cb-thinking">
-                <div className="cb-thinking-dots">
-                  <span></span>
-                  <span></span>
-                  <span></span>
-                </div>
-                <div style={{ marginTop: 8, fontSize: 13, color: 'var(--cb-text-tertiary)' }}>思考中...</div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </>
-        )}
-      </div>
-    )
-  }
+  const sessionListBody = (
+    <SessionList
+      sessions={sessions}
+      currentSessionId={currentSession?.id}
+      loadingSessions={loadingSessions}
+      searchKeyword={searchKeyword}
+      favoriteOnly={favoriteOnly}
+      onSelectSession={handleSelectSession}
+      onToggleFavorite={handleToggleFavorite}
+      onDeleteSession={handleDeleteSession}
+    />
+  )
+
+  // S3776 修复：主内容区判断逻辑提取到函数，减少主组件内的分支
+  // 无会话时的引导卡点击处理
+  const handleOnboardingQuestionNoSession = useCallback(async (q: string) => {
+    try {
+      const session = await chatbotApi.createSession(q.slice(0, 30))
+      setCurrentSession(session)
+      pendingFaqRef.current = q
+      setTimeout(() => {
+        if (pendingFaqRef.current) {
+          setInputValue(pendingFaqRef.current)
+          pendingFaqRef.current = null
+        }
+      }, 0)
+    } catch {
+      message.error('创建会话失败')
+    }
+  }, [])
+
+  const handleOnboardingDismiss = useCallback(() => {
+    setOnboardingDismissed(true)
+    try {
+      localStorage.setItem('chatbot_onboarding_dismissed', '1')
+    } catch {
+      // localStorage 不可用时仅内存记忆
+    }
+  }, [])
+
+  // 计算主内容区：用函数封装判断逻辑，主组件内只剩函数调用
+  const mainContentBody = getMainContentBody({
+    currentSession,
+    onboardingDismissed,
+    messages,
+    loadingMessages,
+    isStreaming,
+    streamingContent,
+    streamingSources,
+    streamingToolCalls,
+    messagesEndRef,
+    onQuestionClickNoSession: handleOnboardingQuestionNoSession,
+    onQuestionClickWithSession: setInputValue,
+    onDismiss: handleOnboardingDismiss,
+  })
 
   return (
     <Layout className="cb-root">
@@ -1133,108 +1010,411 @@ export default function ChatbotPage() {
         {/* S3358/S7735：主内容区已提取为 mainContentBody 变量（见 return 前 if-else） */}
         {mainContentBody}
 
-        {/* 输入区：当前会话存在时显示，与消息区/引导卡互斥 */}
+        {/* S3776 修复：输入区抽取为 ChatInputArea 组件 */}
         {currentSession && (
-          // S6848 修复：原 div+role=button 既有 onDrop/onDragOver 又被错配为 button 角色。
-          // 拖拽落点本身不需要 role：HTML5 拖拽 API 天然支持 div 作为 dropzone，
-          // 既不是交互控件、也不需要 Enter/Space 触发；移除 role/tabIndex/onKeyDown。
-          // 同时把内部可点击的 CloseCircleFilled 改为原生 button（S6842 修复）。
-          <div
-            className="cb-input-area"
+          <ChatInputArea
+            currentSession={currentSession}
+            inputValue={inputValue}
+            onInputChange={setInputValue}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             onDrop={handleDrop}
-            onDragOver={(e) => e.preventDefault()}
-            aria-label="消息输入区，可拖拽图片到此处上传"
-          >
-            {/* M3 快捷回复：仅在非流式且有数据时显示 */}
-            {!isStreaming && quickReplies.length > 0 && (
-              <QuickReplyChips
-                quickReplies={quickReplies}
-                onSelect={(q) => setInputValue(q)}
-              />
-            )}
-            {/* 图片预览缩略图 */}
-            {pendingImages.length > 0 && (
-              <div className="cb-image-preview-row">
-                {pendingImages.map((img, idx) => (
-                  // S6479：data URL 作为稳定 key，避免数组索引在增删时错位
-                  <div key={img} className="cb-image-thumb">
-                    <img src={img} alt={`图片${idx + 1}`} />
-                    {/* S6842 修复：原 CloseCircleFilled + role=button 是给非交互元素加交互 role，
-                        改用原生 button 包裹图标，原生支持 Enter/Space 触发 onClick */}
-                    <button
-                      type="button"
-                      className="cb-image-remove"
-                      // S2004：updater 由模块级工厂 createRemoveImageUpdater 生成
-                      onClick={() => setPendingImages(createRemoveImageUpdater(idx))}
-                      aria-label={`删除图片${idx + 1}`}
-                    >
-                      <CloseCircleFilled />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="cb-input-row">
-              <Upload
-                beforeUpload={handleUploadSelect}
-                  showUploadList={false}
-                  accept="image/*"
-                  disabled={isStreaming || pendingImages.length >= 4}
-                >
-                  <Button
-                    type="text"
-                    icon={<PictureOutlined />}
-                    disabled={isStreaming || pendingImages.length >= 4}
-                    className="cb-upload-btn"
-                    title={pendingImages.length >= 4 ? '最多 4 张' : '上传图片'}
-                  />
-                </Upload>
-                <TextArea
-                  ref={inputRef as React.Ref<any>}
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  onPaste={handlePaste}
-                  placeholder={
-                    currentSession?.status === 'escalated'
-                      ? '当前会话已转人工，请创建新会话继续咨询'
-                      : '输入消息，Enter 发送，Shift+Enter 换行，可粘贴/拖拽图片'
-                  }
-                  autoSize={{ minRows: 2, maxRows: 6 }}
-                  className="cb-textarea"
-                  maxLength={2000}
-                  disabled={isStreaming || currentSession?.status === 'escalated'}
-                />
-                {isStreaming ? (
-                  <Button icon={<StopOutlined />} onClick={cancel} className="cb-stop-btn">
-                    停止
-                  </Button>
-                ) : (
-                  <Button
-                    type="primary"
-                    onClick={() => handleSend()}
-                    disabled={!inputValue.trim()}
-                    className="cb-send-btn"
-                  >
-                    发送
-                  </Button>
-                )}
-              </div>
-              <label className="cb-tools-label">
-                <input
-                  type="checkbox"
-                  checked={enableTools}
-                  onChange={(e) => setEnableTools(e.target.checked)}
-                />
-                {/* S6772：显式空格避免 JSX 折叠后 input 与文本无间隙 */}
-                {' '}启用工具调用（查询任务/评估/配置等实时数据）
-              </label>
-            </div>
+            isStreaming={isStreaming}
+            quickReplies={quickReplies}
+            onQuickReplySelect={setInputValue}
+            pendingImages={pendingImages}
+            onRemoveImage={(idx) => setPendingImages(createRemoveImageUpdater(idx))}
+            onUploadSelect={handleUploadSelect}
+            enableTools={enableTools}
+            onToggleTools={setEnableTools}
+            onSend={handleSend}
+            onStop={cancel}
+          />
         )}
       </Content>
       {/* M5 帮助中心弹窗 */}
       <HelpCenterModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </Layout>
+  )
+}
+
+// S3776 修复：ChatbotPage 原 CC=21，拆分多个子组件 + 自定义 Hook 降低复杂度
+
+// 会话状态标签映射：status → 样式类名 + 文案
+const SESSION_STATUS_MAP: Record<Session['status'], { readonly className: string; readonly label: string }> = {
+  active: { className: 'cb-tag-active', label: '活跃' },
+  escalated: { className: 'cb-tag-ended', label: '已转人工' },
+  ended: { className: 'cb-tag-ended', label: '已结束' },
+}
+
+// 会话列表项组件：单个会话的渲染
+function SessionListItem({
+  session,
+  isActive,
+  onSelect,
+  onToggleFavorite,
+  onDelete,
+}: {
+  readonly session: Session
+  readonly isActive: boolean
+  readonly onSelect: () => void
+  readonly onToggleFavorite: (currentFav: boolean) => void
+  readonly onDelete: () => void
+}) {
+  const statusInfo = SESSION_STATUS_MAP[session.status]
+  return (
+    <List.Item
+      className={`cb-session-item ${isActive ? 'cb-session-item-active' : ''}`}
+      onClick={onSelect}
+      actions={[
+        <button
+          key="fav"
+          type="button"
+          className={`cb-fav-icon ${session.is_favorite ? 'cb-fav-icon-active' : ''}`}
+          style={{ background: 'transparent', border: 'none', padding: 0 }}
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleFavorite(!!session.is_favorite)
+          }}
+          aria-label={session.is_favorite ? '取消收藏' : '收藏'}
+        >
+          {session.is_favorite ? <StarFilled /> : <StarOutlined />}
+        </button>,
+        <Popconfirm
+          key="delete"
+          title="删除会话"
+          description="删除后不可恢复，消息与反馈将一并清除"
+          onConfirm={onDelete}
+          okText="删除"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+        >
+          <DeleteOutlined className="cb-delete-icon" onClick={(e) => e.stopPropagation()} />
+        </Popconfirm>,
+      ]}
+    >
+      <List.Item.Meta
+        title={
+          <Typography.Text ellipsis className="cb-session-title">
+            {session.is_favorite ? '★ ' : ''}{session.title || '新会话'}
+          </Typography.Text>
+        }
+        description={
+          <span className="cb-session-meta">
+            <Tag className={statusInfo.className}>
+              {statusInfo.label}
+            </Tag>
+            <span className="cb-session-count">
+              {session.message_count} 条
+            </span>
+          </span>
+        }
+      />
+    </List.Item>
+  )
+}
+
+// 会话列表组件
+function SessionList({
+  sessions,
+  currentSessionId,
+  loadingSessions,
+  searchKeyword,
+  favoriteOnly,
+  onSelectSession,
+  onToggleFavorite,
+  onDeleteSession,
+}: {
+  readonly sessions: Session[]
+  readonly currentSessionId?: string
+  readonly loadingSessions: boolean
+  readonly searchKeyword: string
+  readonly favoriteOnly: boolean
+  readonly onSelectSession: (session: Session) => void
+  readonly onToggleFavorite: (id: string, currentFav: boolean) => void
+  readonly onDeleteSession: (id: string) => void
+}) {
+  if (loadingSessions) {
+    return <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
+  }
+  if (sessions.length === 0) {
+    return <Empty description={searchKeyword || favoriteOnly ? '无匹配会话' : '暂无会话'} />
+  }
+  return (
+    <div className="cb-session-list">
+      <List
+        dataSource={sessions}
+        renderItem={(session) => (
+          <SessionListItem
+            key={session.id}
+            session={session}
+            isActive={currentSessionId === session.id}
+            onSelect={() => onSelectSession(session)}
+            onToggleFavorite={(currentFav) => onToggleFavorite(session.id, currentFav)}
+            onDelete={() => onDeleteSession(session.id)}
+          />
+        )}
+      />
+    </div>
+  )
+}
+
+// 消息列表组件
+function MessageList({
+  messages,
+  currentSession,
+  loadingMessages,
+  isStreaming,
+  streamingContent,
+  streamingSources,
+  streamingToolCalls,
+  messagesEndRef,
+}: {
+  readonly messages: Message[]
+  readonly currentSession: Session
+  readonly loadingMessages: boolean
+  readonly isStreaming: boolean
+  readonly streamingContent: string
+  readonly streamingSources: Message['sources']
+  readonly streamingToolCalls: Message['tool_calls']
+  readonly messagesEndRef: React.RefObject<HTMLDivElement>
+}) {
+  if (loadingMessages) {
+    return (
+      <div className="cb-messages">
+        <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+      </div>
+    )
+  }
+  return (
+    <div className="cb-messages">
+      {messages.map((msg) => (
+        <MessageBubble key={msg.id} message={msg} sessionId={currentSession.id} />
+      ))}
+      {isStreaming && streamingContent && (
+        <MessageBubble
+          message={{
+            id: 'streaming',
+            session_id: currentSession.id,
+            role: 'assistant',
+            content: streamingContent,
+            sources: streamingSources,
+            tool_calls: streamingToolCalls,
+            created_at: new Date().toISOString(),
+          }}
+          sessionId={currentSession.id}
+        />
+      )}
+      {isStreaming && !streamingContent && (
+        <div className="cb-thinking">
+          <div className="cb-thinking-dots">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 13, color: 'var(--cb-text-tertiary)' }}>思考中...</div>
+        </div>
+      )}
+      <div ref={messagesEndRef} />
+    </div>
+  )
+}
+
+// 主内容区类型定义
+type MainContentParams = {
+  readonly currentSession: Session | null
+  readonly onboardingDismissed: boolean
+  readonly messages: Message[]
+  readonly loadingMessages: boolean
+  readonly isStreaming: boolean
+  readonly streamingContent: string
+  readonly streamingSources: Message['sources']
+  readonly streamingToolCalls: Message['tool_calls']
+  readonly messagesEndRef: React.RefObject<HTMLDivElement>
+  readonly onQuestionClickNoSession: (q: string) => Promise<void>
+  readonly onQuestionClickWithSession: (q: string) => void
+  readonly onDismiss: () => void
+}
+
+// 主内容区渲染函数：从主组件抽出，降低主组件复杂度
+function getMainContentBody(params: MainContentParams): React.ReactNode {
+  const {
+    currentSession,
+    onboardingDismissed,
+    messages,
+    loadingMessages,
+    isStreaming,
+    streamingContent,
+    streamingSources,
+    streamingToolCalls,
+    messagesEndRef,
+    onQuestionClickNoSession,
+    onQuestionClickWithSession,
+    onDismiss,
+  } = params
+
+  if (!currentSession) {
+    return (
+      <ChatbotOnboarding
+        onQuestionClick={onQuestionClickNoSession}
+        onDismiss={onDismiss}
+      />
+    )
+  }
+
+  if (onboardingDismissed) {
+    return (
+      <div className="cb-empty">
+        <EmptyIllustration />
+        <span className="cb-empty-text">开始输入您的问题吧~</span>
+      </div>
+    )
+  }
+
+  if (messages.length === 0 && !loadingMessages) {
+    return (
+      <ChatbotOnboarding
+        onQuestionClick={onQuestionClickWithSession}
+        onDismiss={onDismiss}
+      />
+    )
+  }
+
+  return (
+    <MessageList
+      messages={messages}
+      currentSession={currentSession}
+      loadingMessages={loadingMessages}
+      isStreaming={isStreaming}
+      streamingContent={streamingContent}
+      streamingSources={streamingSources}
+      streamingToolCalls={streamingToolCalls}
+      messagesEndRef={messagesEndRef}
+    />
+  )
+}
+
+// 输入区组件
+function ChatInputArea({
+  currentSession,
+  inputValue,
+  onInputChange,
+  onKeyDown,
+  onPaste,
+  onDrop,
+  isStreaming,
+  quickReplies,
+  onQuickReplySelect,
+  pendingImages,
+  onRemoveImage,
+  onUploadSelect,
+  enableTools,
+  onToggleTools,
+  onSend,
+  onStop,
+}: {
+  readonly currentSession: Session
+  readonly inputValue: string
+  readonly onInputChange: (value: string) => void
+  readonly onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  readonly onPaste: (e: React.ClipboardEvent) => void
+  readonly onDrop: (e: React.DragEvent) => void
+  readonly isStreaming: boolean
+  readonly quickReplies: FAQ[]
+  readonly onQuickReplySelect: (q: string) => void
+  readonly pendingImages: string[]
+  readonly onRemoveImage: (idx: number) => void
+  readonly onUploadSelect: (file: File) => boolean
+  readonly enableTools: boolean
+  readonly onToggleTools: (checked: boolean) => void
+  readonly onSend: () => void
+  readonly onStop: () => void
+}) {
+  const isEscalated = currentSession.status === 'escalated'
+  const placeholder = isEscalated
+    ? '当前会话已转人工，请创建新会话继续咨询'
+    : '输入消息，Enter 发送，Shift+Enter 换行，可粘贴/拖拽图片'
+
+  return (
+    <div
+      className="cb-input-area"
+      onDrop={onDrop}
+      onDragOver={(e) => e.preventDefault()}
+      aria-label="消息输入区，可拖拽图片到此处上传"
+    >
+      {!isStreaming && quickReplies.length > 0 && (
+        <QuickReplyChips
+          quickReplies={quickReplies}
+          onSelect={onQuickReplySelect}
+        />
+      )}
+      {pendingImages.length > 0 && (
+        <div className="cb-image-preview-row">
+          {pendingImages.map((img, idx) => (
+            <div key={img} className="cb-image-thumb">
+              <img src={img} alt={`图片${idx + 1}`} />
+              <button
+                type="button"
+                className="cb-image-remove"
+                onClick={() => onRemoveImage(idx)}
+                aria-label={`删除图片${idx + 1}`}
+              >
+                <CloseCircleFilled />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="cb-input-row">
+        <Upload
+          beforeUpload={onUploadSelect}
+          showUploadList={false}
+          accept="image/*"
+          disabled={isStreaming || pendingImages.length >= 4}
+        >
+          <Button
+            type="text"
+            icon={<PictureOutlined />}
+            disabled={isStreaming || pendingImages.length >= 4}
+            className="cb-upload-btn"
+            title={pendingImages.length >= 4 ? '最多 4 张' : '上传图片'}
+          />
+        </Upload>
+        <TextArea
+          value={inputValue}
+          onChange={(e) => onInputChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          placeholder={placeholder}
+          autoSize={{ minRows: 2, maxRows: 6 }}
+          className="cb-textarea"
+          maxLength={2000}
+          disabled={isStreaming || isEscalated}
+        />
+        {isStreaming ? (
+          <Button icon={<StopOutlined />} onClick={onStop} className="cb-stop-btn">
+            停止
+          </Button>
+        ) : (
+          <Button
+            type="primary"
+            onClick={onSend}
+            disabled={!inputValue.trim()}
+            className="cb-send-btn"
+          >
+            发送
+          </Button>
+        )}
+      </div>
+      <label className="cb-tools-label">
+        <input
+          type="checkbox"
+          checked={enableTools}
+          onChange={(e) => onToggleTools(e.target.checked)}
+        />
+        {' '}启用工具调用（查询任务/评估/配置等实时数据）
+      </label>
+    </div>
   )
 }
 

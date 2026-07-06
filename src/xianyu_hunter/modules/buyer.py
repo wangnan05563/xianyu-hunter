@@ -167,7 +167,7 @@ class Buyer:
                 self._publish_buy_failed(task_id, item_id, msg)
                 return BuyResult(outcome=BuyOutcome.FAILED, error=msg)
             except Exception as e:  # noqa: BLE001
-                logger.exception(f"[Buyer] 落单未预期异常: {e}")
+                logger.exception("[Buyer] 落单未预期异常")
                 # 捕获到 error_logs 表，抢单异常是高优先级业务错误，需要可视化追踪
                 try:
                     from xianyu_hunter.web.middleware.error_capture import capture_background_error

@@ -31,6 +31,43 @@ import type { PreferenceValue } from '../api/preferences'
 const preferenceCache = new Map<string, PreferenceValue>()
 // 进行中的请求：避免同一 key 并发触发多次请求
 const inflightRequests = new Map<string, Promise<PreferenceValue | undefined>>()
+// 防抖写入定时器：key → timer
+// 为什么用模块级：多个 hook 实例写入同一 key 时共享防抖，避免重复写入
+const writeTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+// S2004 修复：以下辅助函数提取到模块级，避免 setAndPersist 内嵌套超过 4 层
+// 写入错误处理：统一错误转换逻辑
+const handleWriteError = (
+  err: unknown,
+  setError: (e: Error) => void,
+) => {
+  const e = err instanceof Error ? err : new Error(String(err))
+  setError(e)
+}
+
+// 创建防抖写入函数：从 setAndPersist 抽出，减少嵌套层级
+// 返回一个清理函数，用于 hook 卸载时取消定时器
+const createDebouncedWriter = (
+  key: string,
+  value: PreferenceValue,
+  setError: (e: Error) => void,
+) => {
+  const existingTimer = writeTimers.get(key)
+  if (existingTimer) clearTimeout(existingTimer)
+  const timer = setTimeout(() => {
+    preferencesApi.set(key, value).catch((err) => handleWriteError(err, setError))
+    writeTimers.delete(key)
+  }, 400)
+  writeTimers.set(key, timer)
+}
+
+// 计算下一个值：从 setAndPersist 的 setValue 回调内抽出，减少嵌套
+const computeNextValue = <T extends PreferenceValue>(
+  updater: SetStateAction<T>,
+  prev: T,
+): T => {
+  return typeof updater === 'function' ? (updater as (p: T) => T)(prev) : updater
+}
 
 /**
  * 用户偏好 Hook —— 从后端 /api/preferences 读写用户级偏好
@@ -55,9 +92,6 @@ export function usePreferences<T extends PreferenceValue>(
   const [value, setValue] = useState<T>(preferenceCache.has(key) ? (preferenceCache.get(key) as T) : defaultValue)
   const [loading, setLoading] = useState<boolean>(!preferenceCache.has(key))
   const [error, setError] = useState<Error | null>(null)
-
-  // 写入防抖定时器：避免快速交互时频繁调用 API
-  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 拉取单个偏好值
   const fetchValue = useCallback(async (): Promise<void> => {
@@ -113,22 +147,14 @@ export function usePreferences<T extends PreferenceValue>(
     void fetchValue()
   }, [key, fetchValue])
 
-  // 包装 setValue：除更新 state 外，还异步写入后端（防抖）
+  // S2004 修复：setAndPersist 内嵌套原超过 4 层，
+  // 内层逻辑提取到模块级 computeNextValue/createDebouncedWriter/handleWriteError，
+  // 主函数只剩 2 层嵌套（useCallback → setValue）
   const setAndPersist = useCallback<Dispatch<SetStateAction<T>>>((updater) => {
     setValue((prev) => {
-      const next = typeof updater === 'function' ? (updater as (p: T) => T)(prev) : updater
-      // 更新缓存
+      const next = computeNextValue(updater, prev)
       preferenceCache.set(key, next)
-      // 防抖写入后端
-      if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
-      writeTimerRef.current = setTimeout(() => {
-        preferencesApi.set(key, next).catch((err) => {
-          const e = err instanceof Error ? err : new Error(String(err))
-          setError(e)
-          // 写入失败：不回滚 state（用户已看到变化），仅记录错误
-          // 为什么不回滚：避免用户连续操作时被回滚打断，错误可通过 error 状态感知
-        })
-      }, 400)
+      createDebouncedWriter(key, next, setError)
       return next
     })
   }, [key])
@@ -140,12 +166,16 @@ export function usePreferences<T extends PreferenceValue>(
     preferencesApi.remove(key).catch(() => { /* 忽略，下次拉取会用默认值 */ })
   }, [key, defaultValue])
 
-  // 卸载时清理防抖定时器
+  // 卸载时清理防抖定时器：从模块级 writeTimers 中清理当前 key 的定时器
   useEffect(() => {
     return () => {
-      if (writeTimerRef.current) clearTimeout(writeTimerRef.current)
+      const timer = writeTimers.get(key)
+      if (timer) {
+        clearTimeout(timer)
+        writeTimers.delete(key)
+      }
     }
-  }, [])
+  }, [key])
 
   return [value, setAndPersist, { loading, error, remove }]
 }
@@ -156,6 +186,11 @@ export function usePreferences<T extends PreferenceValue>(
 export function invalidatePreferenceCache(): void {
   preferenceCache.clear()
   inflightRequests.clear()
+  // 同时清理所有防抖定时器：切换账号后旧用户的待写入应该取消
+  for (const timer of writeTimers.values()) {
+    clearTimeout(timer)
+  }
+  writeTimers.clear()
 }
 
 /**

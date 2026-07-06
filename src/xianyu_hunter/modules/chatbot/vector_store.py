@@ -128,7 +128,7 @@ class VectorStore:
         try:
             result = await asyncio.to_thread(_sync_query)
         except Exception as e:
-            logger.exception(f"VectorStore 检索失败: {e}")
+            logger.exception("VectorStore 检索失败")
             return []
 
         if not result.get("ids") or not result["ids"][0]:
@@ -202,7 +202,7 @@ class VectorStore:
         except Exception as e:
             # 抛出异常而非返回 0：让 KBManager._do_build 进入 except 块回滚，
             # 避免出现 status=success 但 chunks=0 的误导性版本记录
-            logger.exception(f"VectorStore upsert 失败: {e}")
+            logger.exception("VectorStore upsert 失败")
             raise
 
     async def delete_by_source(self, source_file: str) -> int:
@@ -226,7 +226,7 @@ class VectorStore:
             await asyncio.to_thread(_sync_delete)
             return count
         except Exception as e:
-            logger.exception(f"VectorStore delete_by_source 失败: {e}")
+            logger.exception("VectorStore delete_by_source 失败")
             return 0
 
     async def clear_collection(self) -> None:
@@ -244,7 +244,7 @@ class VectorStore:
         try:
             await asyncio.to_thread(_sync_clear)
         except Exception as e:
-            logger.exception(f"VectorStore clear_collection 失败: {e}")
+            logger.exception("VectorStore clear_collection 失败")
 
     async def export_snapshot(self, snapshot_path: str) -> None:
         """导出快照（复制 chromadb 持久化目录到 snapshot_path）
@@ -268,7 +268,7 @@ class VectorStore:
         try:
             await asyncio.to_thread(_sync_export)
         except Exception as e:
-            logger.exception(f"VectorStore export_snapshot 失败: {e}")
+            logger.exception("VectorStore export_snapshot 失败")
 
     async def restore_from_snapshot(self, snapshot_path: str) -> None:
         """从快照恢复（先清空当前集合，再用快照覆盖）
@@ -292,7 +292,7 @@ class VectorStore:
         try:
             await asyncio.to_thread(_sync_restore)
         except Exception as e:
-            logger.exception(f"VectorStore restore_from_snapshot 失败: {e}")
+            logger.exception("VectorStore restore_from_snapshot 失败")
 
     async def count(self) -> int:
         """返回集合中片段数"""
@@ -302,5 +302,5 @@ class VectorStore:
         try:
             return await asyncio.to_thread(_sync_count)
         except Exception as e:
-            logger.exception(f"VectorStore count 失败: {e}")
+            logger.exception("VectorStore count 失败")
             return 0

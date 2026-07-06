@@ -3,18 +3,15 @@ import {
   DashboardOutlined,
   UnorderedListOutlined,
   ThunderboltOutlined,
-  MessageOutlined,
-  UserOutlined,
 } from '@ant-design/icons'
 import { theme } from 'antd'
 
-// 底部 5 Tab 导航配置
+// 底部 3 Tab 导航：仅保留已实现路由对应的 Tab
+// 未实现的"客服"/"我的"页移除，避免点击被 catch-all 重定向回 /m 造成困惑
 const TABS = [
   { key: '/m', label: '仪表盘', icon: <DashboardOutlined /> },
   { key: '/m/tasks', label: '任务', icon: <UnorderedListOutlined /> },
   { key: '/m/orders', label: '抢单', icon: <ThunderboltOutlined /> },
-  { key: '/m/chatbot', label: '客服', icon: <MessageOutlined /> },
-  { key: '/m/profile', label: '我的', icon: <UserOutlined /> },
 ]
 
 export default function TabBar() {

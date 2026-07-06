@@ -443,6 +443,141 @@ def test_bargain_eval_above_task_max_warns_out_of_range(client: TestClient, tmp_
     assert "超出监控目标范围" in data["suggestion"]
 
 
+def test_bargain_eval_below_task_min_returns_out_of_range_level(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """bargain-eval：低于 task_min 应返回 out_of_range 等级而非 excellent
+
+    修复前：低于 task_min 时分位数评定为 excellent，但 suggestion 提示假货风险，
+    造成 level 与 suggestion 语义冲突。新逻辑统一返回 out_of_range 等级。
+    """
+    _seed_sold_range_data(tmp_repo)
+    # task_min=3000，传入 100 低于下限（同时也低于 P10=3620）
+    resp = client.get(
+        "/api/prices/bargain-eval?task_id=t1&current_price=100&range_days=0",
+        headers=_auth_headers(),
+    )
+    data = resp.json()
+    assert data["bargain_level"] == "out_of_range"
+    assert data["bargain_score"] == 0
+    assert "低于任务配置下限" in data["suggestion"]
+
+
+def test_bargain_eval_above_task_max_returns_out_of_range_level(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """bargain-eval：高于 task_max 应返回 out_of_range 等级而非 poor"""
+    _seed_sold_range_data(tmp_repo)
+    # task_max=6000，传入 8000 高于上限（同时也高于中位数 4200）
+    resp = client.get(
+        "/api/prices/bargain-eval?task_id=t1&current_price=8000&range_days=0",
+        headers=_auth_headers(),
+    )
+    data = resp.json()
+    assert data["bargain_level"] == "out_of_range"
+    assert data["bargain_score"] == 0
+    assert "高于任务配置上限" in data["suggestion"]
+
+
+def test_category_stats_filters_by_task_price_range(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """category-stats 应按任务价格区间过滤异常样本
+
+    验证 _load_category_prices 的 apply_task_range_filter 逻辑。
+    """
+    repo = tmp_repo
+    repo.upsert_task({
+        "id": "t_range", "name": "范围任务", "keyword": "range",
+        "mode": "confirm", "cron": "*/5 * * * *",
+        "min_price": 100.0, "max_price": 500.0,
+    })
+    now = datetime.now(timezone.utc)
+    # 同时往 task_links（sold_range 用）和 items（category-stats 用）写数据
+    items = []
+    for i, price in enumerate([1.0, 50.0, 100.0, 200.0, 350.0, 500.0, 999.0]):
+        repo.upsert_task_link(
+            task_id="t_range",
+            link_type="item",
+            link_key=f"item_{i}",
+            display={"price": price, "is_sold": 0, "title": f"item {i}"},
+        )
+        items.append({
+            "id": f"item_{i}", "task_id": "t_range", "title": f"item {i}",
+            "price": price, "seller_id": f"s_{i}",
+            "first_seen": now, "publish_time": now,
+        })
+    repo.batch_upsert_items(items)
+
+    resp = client.get(
+        "/api/prices/category-stats?task_id=t_range", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    cat = data["categories"][0]
+    # 1元/50元/999元 都被过滤，保留 100/200/350/500 共 4 个
+    assert cat["count"] == 4
+    assert cat["min"] == 100.0
+    assert cat["max"] == 500.0
+    assert cat["task_price_range"]["min_price"] == 100.0
+    assert cat["task_price_range"]["max_price"] == 500.0
+
+
+def test_category_comparison_overall_mean_uses_weighted_average(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """category-comparison overall_mean 应使用样本数加权平均
+
+    修复前用"每个品类重复 min(count, 100) 次均值"近似加权，
+    count>100 的品类权重被截断。修复后用 sum(mean*count)/sum(count)
+    精确加权。
+    """
+    _seed_multi_category_data(tmp_repo)
+    resp = client.get(
+        "/api/prices/category-comparison", headers=_auth_headers()
+    )
+    data = resp.json()
+    # 验证：精确加权 = sum(mean*count) / sum(count)
+    cats = data["categories"]
+    expected = sum(c["mean"] * c["count"] for c in cats) / sum(c["count"] for c in cats)
+    expected = round(expected, 2)
+    assert data["overall_mean"] == expected
+
+
+def test_histogram_endpoint_not_crash_with_task_id(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """histogram 端点不应因 _load_histogram_samples 参数不匹配崩溃
+
+    修复前：_load_histogram_samples 函数定义只接受 3 个参数，
+    调用方传 4 个参数，导致 TypeError。
+    """
+    repo = tmp_repo
+    repo.upsert_task({
+        "id": "t_hist", "name": "直方图任务", "keyword": "hist",
+        "mode": "confirm", "cron": "*/5 * * * *",
+        "min_price": 100.0, "max_price": 500.0,
+    })
+    now = datetime.now(timezone.utc)
+    items = [
+        {"id": f"h_{i}", "task_id": "t_hist", "title": f"h_{i}",
+         "price": price, "seller_id": f"sh_{i}",
+         "first_seen": now, "publish_time": now}
+        for i, price in enumerate([1.0, 100.0, 250.0, 500.0, 9999.0])
+    ]
+    repo.batch_upsert_items(items)
+
+    resp = client.get(
+        "/api/prices/histogram?task_id=t_hist&bins=20", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    summary = resp.json()["summary"]
+    # 1元/9999元被过滤，保留 100/250/500 共 3 个
+    assert summary["count"] == 3
+    assert summary["min"] == 100.0
+    assert summary["max"] == 500.0
+
+
 def test_bargain_eval_empty_data_returns_unknown(client: TestClient, tmp_repo: Repository) -> None:
     """bargain-eval：无已售数据时返回 unknown 等级"""
     repo = tmp_repo

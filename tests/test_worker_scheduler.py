@@ -363,6 +363,15 @@ async def test_worker_exception_in_item_does_not_crash() -> None:
                 raise RuntimeError("simulated")
             return await super().detail(item_id, page=page)
 
+        def seller_profile_fallback(self, summary: ItemSummary, detail: ItemDetail | None) -> SellerProfile:
+            # worker.py 在 detail/seller_profile 异常时会调用降级方法构建基础画像
+            return SellerProfile(
+                id=summary.seller_id,
+                credit_score=0,
+                register_days=0,
+                sold_count=0,
+            )
+
     items = [make_item(i) for i in range(3)]
     details = {it.id: make_detail(int(it.id[1:])) for it in items}
     sellers = {it.seller_id: make_seller(int(it.seller_id[1:])) for it in items}
@@ -457,7 +466,8 @@ async def test_scheduler_start_all_stop_all() -> None:
     sch = TaskScheduler()
     await sch.register(w1.task, w1)
     await sch.register(w2.task, w2)
-    await sch.start_all()
+    # start_all 内部通过 asyncio.create_task 启动后台循环，保持同步签名
+    sch.start_all()
     assert sch.is_running("t1") and sch.is_running("t2")
     await asyncio.sleep(0.2)
     await sch.stop_all()
