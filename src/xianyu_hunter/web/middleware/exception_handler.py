@@ -41,7 +41,7 @@ def _sanitize_headers(headers: Any) -> dict[str, str]:
     return safe
 
 
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """兜底处理所有未捕获的 Exception
 
     返回统一的 500 响应，不向前端暴露内部堆栈（防止信息泄露）。

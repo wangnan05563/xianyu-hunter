@@ -339,9 +339,8 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
 
       {/* 阶段3：完成 */}
       {phase === 'done' && (
-        // S6848：div 上有鼠标事件，加 role+aria 让屏读器识别为区域
-        <div
-          role="region"
+        // S6819：用 <section aria-label> 替代 div role="region"，语义化区域
+        <section
           aria-label="接管完成区域"
           onMouseEnter={() => { autoClosePaused.current = true }}
           onMouseLeave={() => { autoClosePaused.current = false }}
@@ -355,7 +354,7 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
           <div style={{ textAlign: 'right', marginTop: 16 }}>
             <Button onClick={handleClose}>关闭</Button>
           </div>
-        </div>
+        </section>
       )}
     </Modal>
   )

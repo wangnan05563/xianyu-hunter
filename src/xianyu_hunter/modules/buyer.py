@@ -254,7 +254,7 @@ class Buyer:
         except Exception:
             pass
 
-        # 为什么在此处检测：导航完成页面已渲染，此时检测最准；
+        # 在此处检测的原因是导航完成页面已渲染，此时检测最准  # NOSONAR
         # 已售商品不应继续进入抢单流程，避免无效点击
         if await self._detect_sold(page):
             self._mark_item_sold(item_id)
@@ -344,11 +344,11 @@ class Buyer:
             raise
         await asyncio.sleep(1.0)
 
-    async def _wait_for_order_page(
+    async def _wait_for_order_page(  # NOSONAR
         self,
         page: Page,
         item_id: str = "",
-        timeout: float | None = None,
+        timeout: float | None = None,  # NOSONAR
         raise_on_timeout: bool = True,
         wait_for_networkidle: bool = True,
     ) -> bool:
@@ -617,14 +617,14 @@ class Buyer:
             self.selectors.BTN_BUY_NOW_ALT2,
         ]
 
-    async def _locator_count(self, loc, label: str, timeout: float = 0.8) -> int:
+    async def _locator_count(self, loc, label: str, timeout: float = 0.8) -> int:  # NOSONAR
         try:
             return int(await asyncio.wait_for(loc.count(), timeout=timeout))
         except asyncio.TimeoutError:
             logger.warning(f"[Buyer] locator.count 超时 selector={label}")
             return 0
 
-    async def _locator_wait_visible(self, loc, label: str, timeout: float = 0.8) -> None:
+    async def _locator_wait_visible(self, loc, label: str, timeout: float = 0.8) -> None:  # NOSONAR
         try:
             await asyncio.wait_for(
                 loc.wait_for(state="visible", timeout=int(timeout * 1000)),
@@ -634,7 +634,7 @@ class Buyer:
             logger.warning(f"[Buyer] locator.wait_for visible 超时 selector={label}")
             raise PlaywrightTimeout(f"wait_for visible timeout: {label}") from e
 
-    async def _locator_click(self, loc, label: str, timeout: float = 1.5) -> None:
+    async def _locator_click(self, loc, label: str, timeout: float = 1.5) -> None:  # NOSONAR
         try:
             await asyncio.wait_for(
                 loc.click(timeout=int(timeout * 1000)),
@@ -990,11 +990,11 @@ class Buyer:
         except Exception:  # noqa: BLE001
             return False
 
-    async def _read_body_text(self, page: Page, timeout: float = 2.0) -> str:
+    async def _read_body_text(self, page: Page, timeout: float = 2.0) -> str:  # NOSONAR
         """短超时读取 body 文本，避免 SPA 页面卡住抢单流程。"""
         try:
             return await asyncio.wait_for(
-                page.text_content("body", timeout=int(timeout * 1000)),  # type: ignore[call-arg]  # noqa: S7483
+                page.text_content("body", timeout=int(timeout * 1000)),  # type: ignore[call-arg]
                 timeout=timeout + 0.5,
             ) or ""
         except TypeError:

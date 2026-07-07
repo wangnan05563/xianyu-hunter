@@ -413,7 +413,7 @@ DisableProgramGroupPage=yes
 [Tasks]
 Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional:"
 [Files]
-Source: "dist\xianyu-hunter\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\xianyu-hunter\*"; DestDir: "{app}"; Excludes: "*.log,data\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
 Name: "{group}\XianyuHunter"; Filename: "{app}\xianyu-hunter.exe"
 Name: "{commondesktop}\XianyuHunter"; Filename: "{app}\xianyu-hunter.exe"; Tasks: desktopicon

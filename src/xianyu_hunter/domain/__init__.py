@@ -1,12 +1,12 @@
 """领域模型包
 
-子模块：
-- item: 商品（ItemSummary / ItemDetail）
-- seller: 卖家画像
-- task: 监控任务
-- order: 订单快照
-- events: 领域事件
-- evaluation: 评估结果
+子模块列表
+- item 表示商品 ItemSummary 与 ItemDetail
+- seller 表示卖家画像
+- task 表示监控任务
+- order 表示订单快照
+- events 表示领域事件
+- evaluation 表示评估结果
 """
 # 聚合导出核心领域模型，支持 from xianyu_hunter.domain import Task 等简洁引用
 from xianyu_hunter.domain.task import Task, TaskMode, TaskStatus, TaskConfig, XIANYU_FILTER_MAP

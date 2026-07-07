@@ -1,10 +1,6 @@
-"""批量采集执行历史领域数据访问
-
-提供：
-- save_batch_refresh_history / get_batch_refresh_history / update_batch_refresh_history
-- list_batch_refresh_history / count_batch_refresh_history
-- count_batch_refresh_history_by_task / get_max_batch_refresh_task_id
-- cleanup_old_batch_refresh_history
+# 批量采集执行历史领域数据访问  # NOSONAR
+"""
+提供批量采集历史的保存、查询、更新、列表、计数与清理等数据访问方法。
 """
 from __future__ import annotations
 

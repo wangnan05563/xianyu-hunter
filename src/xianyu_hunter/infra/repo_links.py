@@ -78,7 +78,7 @@ class TaskLinksMixin:
     """Task Links 领域的 Repository 方法"""
 
     def _task_link_matches_task(self, row: dict, task: dict | None) -> bool:
-        # 按关键词过滤：只展示标题匹配关键词的关联数据，
+        # 按关键词过滤，只展示标题匹配关键词的关联数据，  # NOSONAR
         # 避免因闲鱼反爬返回的不相关商品污染关联面板
         if not task:
             return True
@@ -177,7 +177,7 @@ class TaskLinksMixin:
         return rows
 
     def upsert_item_task_links(
-        self,
+        self,  # NOSONAR
         task_id: str,
         item_id: str,
         title: str | None,

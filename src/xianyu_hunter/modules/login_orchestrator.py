@@ -435,7 +435,7 @@ class LoginOrchestrator:
             logger.debug("默认 token 续期回调失败: {}", e)
             return False
 
-    async def start_session_default(self) -> bool:
+    def start_session_default(self) -> bool:
         """使用默认 cookie_provider + renew_callback 启动会话
 
         用于登录成功后自动启动会话管理（TokenRenewer 后台续期）。
@@ -450,7 +450,7 @@ class LoginOrchestrator:
             # 登录成功后重置自愈状态，避免历史失败计数影响新一轮会话
             self._renew_fail_count = 0
             self._auto_relogin_cooldown_until = 0.0
-            # start_session 是同步函数（无 await 的 async 已移除以避免 S7503）
+            # start_session 是同步函数，直接调用即可
             self.start_session(
                 cookie_provider=self._default_cookie_provider,
                 renew_callback=self._default_renew_callback,

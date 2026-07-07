@@ -902,10 +902,10 @@ export default function AntiCrawl() {
 // session&& / session.active? / token_age_sec==null? / token_expired?）全部贡献主组件复杂度，
 // 提取后子组件独立计算认知复杂度，主组件函数 CC 从 22 降至 ~9
 function SessionCardCol(props: {
-  session: SessionStatus | null
-  loadingSession: boolean
-  onStart: () => void
-  onStop: () => void
+  readonly session: SessionStatus | null
+  readonly loadingSession: boolean
+  readonly onStart: () => void
+  readonly onStop: () => void
 }) {
   const { session, loadingSession, onStart, onStop } = props
   return (
@@ -987,9 +987,9 @@ function SessionCardCol(props: {
 // page_accessible? / action!=='none' && / needs_attention? / health?.error || '...'）全部贡献
 // 主组件复杂度，提取后子组件独立计算，主组件函数 CC 进一步下降
 function HealthCardCol(props: {
-  health: HealthReport | null
-  loadingHealth: boolean
-  onCheck: () => void
+  readonly health: HealthReport | null
+  readonly loadingHealth: boolean
+  readonly onCheck: () => void
 }) {
   const { health, loadingHealth, onCheck } = props
   return (

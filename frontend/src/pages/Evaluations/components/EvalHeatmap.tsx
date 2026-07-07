@@ -20,7 +20,7 @@ export default function EvalHeatmap({
   const { xLabels, yLabels } = dist ? buildHeatmapLabels(dist) : { xLabels: [], yLabels: [] }
   const heatmapMax = dist ? calcHeatmapMax(dist) : 1
 
-  const heatmapOption = dist && dist.buckets?.length ? {
+  const heatmapOption = dist?.buckets?.length ? {
     tooltip: {
       position: 'top',
       backgroundColor: token.colorBgElevated,

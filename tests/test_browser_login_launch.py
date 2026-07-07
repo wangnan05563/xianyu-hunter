@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -51,6 +52,107 @@ def test_login_resource_filter_still_blocks_unrelated_images() -> None:
         "https://cdn.example.com/tracker/banner.png",
         "image",
     )
+
+
+def test_recoverable_profile_launch_error_detects_edge_exit_code() -> None:
+    err = RuntimeError(
+        "BrowserType.launch_persistent_context: Target page, context or browser "
+        "has been closed\n<process did exit: exitCode=21, signal=null>"
+    )
+
+    assert browser_login._is_recoverable_profile_launch_error(err)
+
+
+def test_quarantine_browser_profile_moves_existing_profile(tmp_path: Path) -> None:
+    profile = tmp_path / "browser-data"
+    default_dir = profile / "Default"
+    default_dir.mkdir(parents=True)
+    (default_dir / "Preferences").write_text("old", encoding="utf-8")
+
+    backup = browser_login._quarantine_browser_profile(profile)
+
+    assert backup is not None
+    assert backup.exists()
+    assert (backup / "Default" / "Preferences").read_text(encoding="utf-8") == "old"
+    assert profile.exists()
+    assert not any(profile.iterdir())
+
+
+@pytest.mark.asyncio
+async def test_launch_context_retries_with_rebuilt_profile_after_edge_profile_crash(
+    tmp_path: Path,
+) -> None:
+    profile = tmp_path / "browser-data"
+    (profile / "Default").mkdir(parents=True)
+    (profile / "Default" / "Preferences").write_text("old", encoding="utf-8")
+
+    context = object()
+    launch_calls: list[str] = []
+
+    class FakeChromium:
+        async def launch_persistent_context(self, **kwargs):
+            launch_calls.append(kwargs["user_data_dir"])
+            if len(launch_calls) == 1:
+                raise RuntimeError(
+                    "BrowserType.launch_persistent_context: Target page, context "
+                    "or browser has been closed\nexitCode=21"
+                )
+            return context
+
+    pw = SimpleNamespace(chromium=FakeChromium())
+    status_updates: list[dict] = []
+
+    result = await browser_login._launch_login_context_with_recovery(
+        pw,
+        {"user_data_dir": str(profile)},
+        profile,
+        set_status=lambda **kw: status_updates.append(kw),
+    )
+
+    assert result is context
+    assert launch_calls == [str(profile), str(profile)]
+    assert any(profile.parent.glob("browser-data.bak-*"))
+    assert status_updates[-1]["status"] == "starting"
+
+
+@pytest.mark.asyncio
+async def test_launch_context_uses_recovery_profile_when_quarantine_denied(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    profile = tmp_path / "browser-data"
+    profile.mkdir()
+
+    context = object()
+    launch_calls: list[str] = []
+
+    class FakeChromium:
+        async def launch_persistent_context(self, **kwargs):
+            launch_calls.append(kwargs["user_data_dir"])
+            if len(launch_calls) == 1:
+                raise RuntimeError(
+                    "BrowserType.launch_persistent_context: Target page, context "
+                    "or browser has been closed\nexitCode=21"
+                )
+            return context
+
+    monkeypatch.setattr(
+        browser_login,
+        "_quarantine_browser_profile",
+        lambda _profile: (_ for _ in ()).throw(PermissionError("locked")),
+    )
+
+    result = await browser_login._launch_login_context_with_recovery(
+        SimpleNamespace(chromium=FakeChromium()),
+        {"user_data_dir": str(profile)},
+        profile,
+        set_status=lambda **_kw: None,
+    )
+
+    assert result is context
+    assert launch_calls[0] == str(profile)
+    assert launch_calls[1] != str(profile)
+    assert Path(launch_calls[1]).name.startswith("browser-data.recovery-")
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,7 @@ export default function PullToRefresh({ onRefresh, children }: PullToRefreshProp
   const THRESHOLD = 60 // 下拉 60px 触发刷新
 
   const handleTouchStart = (e: React.TouchEvent) => {
-    // 仅在内容滚动到顶部时启用下拉
+    // S6582：用可选链替代手动 null 检查
     if (containerRef.current?.scrollTop === 0) {
       startY.current = e.touches[0].clientY
     } else {

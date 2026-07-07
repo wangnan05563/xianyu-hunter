@@ -315,7 +315,7 @@ class RAGEngine:
             # H5 修复：流式请求中途失败，已生成的 tokens 仍会被 OpenAI 计费，需记录用量
             self._record_llm_usage(messages, collected_output)
             raise
-        except Exception as e:
+        except Exception:
             # JSON 解析等其他异常：同样向上抛出走降级链
             logger.exception("RAGEngine.generate 异常")
             self._record_llm_usage(messages, collected_output)

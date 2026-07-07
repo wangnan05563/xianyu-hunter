@@ -52,6 +52,13 @@ export default function MobileTasks() {
           // 卡片整体作为可聚焦链接：键盘 Enter 跳转，回车键同样可触发
           // 为什么用 role="link" 而非 <button>：卡片内嵌 <Switch> 按钮，
           // <button> 嵌套 <button> 违反 HTML 规范；用 role="link" + tabIndex 同样可达
+          // S3358：嵌套三元拆分为独立 if/else，提升可读性
+          let modeLabel = '确认'
+          if (task.mode === 'auto') {
+            modeLabel = '全自动'
+          } else if (task.mode === 'semi_auto') {
+            modeLabel = '半自动'
+          }
           const goDetail = () => navigate(`/m/tasks/${task.id}`)
           const onKeyDown = (e: React.KeyboardEvent) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -59,10 +66,6 @@ export default function MobileTasks() {
               goDetail()
             }
           }
-          // S3358：任务模式文本拆为独立 if/else，避免嵌套三元
-          let modeLabel = '确认'
-          if (task.mode === 'auto') modeLabel = '全自动'
-          else if (task.mode === 'semi_auto') modeLabel = '半自动'
           return (
             <Card
               key={task.id}

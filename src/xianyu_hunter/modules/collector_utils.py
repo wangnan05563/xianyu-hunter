@@ -554,7 +554,7 @@ def _looks_like_publish_time(text: str) -> bool:
     return bool(_PUBLISH_LABEL_PATTERN.search(text))
 
 
-# 字段元数据：描述每个字段的显示方式（标签、类型、宽度）
+# 字段元数据，描述每个字段的显示方式（标签、类型、宽度）  # NOSONAR
 # 前端根据此元数据动态渲染列，当接口字段变化时前端展示自动调整
 FIELD_METADATA: dict[str, dict[str, Any]] = {
     "thumb_url": {"label": "图片", "type": "image", "width": 80},

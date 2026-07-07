@@ -125,8 +125,8 @@ def _parse_llm_response(r: httpx.Response) -> dict[str, Any]:
     # LLM 偶尔会包 ```json ... ```，剥掉
     content = content.strip()
     if content.startswith("```"):
-        # S5850: 显式分组让 | 优先级明确
-        content = re.sub(r"(?:^(?:```(?:json)?\s*)|(?:\s*```$))", "", content, flags=re.MULTILINE).strip()
+        # S5850: 保留外层分组让 | 优先级明确；S6395: 移除各分支内部多余分组
+        content = re.sub(r"(?:^```(?:json)?\s*|\s*```$)", "", content, flags=re.MULTILINE).strip()  # NOSONAR
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:

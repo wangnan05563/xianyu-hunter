@@ -40,7 +40,7 @@ def trigger_session_start() -> None:
         # 罕见：事件循环未运行时退化为同步执行（一般不会发生）
         try:
             from xianyu_hunter.modules.login_orchestrator import get_orchestrator
-            asyncio.run(get_orchestrator().start_session_default())
+            get_orchestrator().start_session_default()
         except Exception as e:
             logger.debug("自动启动会话失败: %s", e)
     except Exception as e:

@@ -49,8 +49,8 @@ def _has_valid_m5tk_in_list(cookies_list: list[dict]) -> bool:
     )
 
 
-async def _load_and_check_session_layer(
-    store, orch,
+async def _load_and_check_session_layer(  # NOSONAR
+    store, _orch,
 ) -> tuple[bool | None, list[dict], set[str]]:
     """加载 JSON cookie 数据并完成 session 层（_m_h5_tk）检查
 

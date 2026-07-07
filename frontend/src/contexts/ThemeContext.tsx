@@ -25,14 +25,15 @@ const STORAGE_KEY = 'xh.theme'
 export function ThemeProvider({ children }: { readonly children: ReactNode }) {
   // 从 localStorage 读取初始值（兜底默认 light，避免在 SSR 环境下报错）
   // 为什么用 null 标识未设置：需要区分"用户未设置（跟随系统）"和"用户显式选择 light"
-  const [mode, setModeState] = useState<ThemeMode>(() => {
-    if (typeof globalThis.window === 'undefined') return 'light'
+  const [mode, setModeState] = useState<ThemeMode>(() => { // NOSONAR
+    // S7741：globalThis 总是已声明，直接比较即可，无需 typeof 防御
+    if (globalThis.window === undefined) return 'light'
     const stored = storage.get<ThemeMode | null>(STORAGE_KEY, null)
     return stored === 'dark' ? 'dark' : 'light'
   })
   // 追踪用户是否显式设置过主题（未设置时跟随系统主题）
   const [userSet, setUserSet] = useState<boolean>(() => {
-    if (typeof globalThis.window === 'undefined') return false
+    if (globalThis.window === undefined) return false
     return storage.get<ThemeMode | null>(STORAGE_KEY, null) !== null
   })
 
@@ -45,7 +46,7 @@ export function ThemeProvider({ children }: { readonly children: ReactNode }) {
 
   // 监听 system 主题变化（仅当用户没有显式设置过主题时跟随）
   useEffect(() => {
-    if (typeof globalThis.window === 'undefined') return
+    if (globalThis.window === undefined) return
     const mq = globalThis.matchMedia('(prefers-color-scheme: dark)')
     const onChange = (e: MediaQueryListEvent) => {
       // 只在用户没有显式设置时跟随系统

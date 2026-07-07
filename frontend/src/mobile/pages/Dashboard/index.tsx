@@ -19,8 +19,8 @@ export default function MobileDashboard() {
       setOverview(ov)
       setTodayAlert(alert)
     } catch (e) {
-      // 弱网下静默失败，保留已有数据；记录日志便于排查
-      console.warn('移动端仪表盘数据加载失败', e)
+      // 弱网下静默失败，保留已有数据；记录错误便于排查
+      console.error('MobileDashboard fetch failed:', e)
     } finally {
       setLoading(false)
     }

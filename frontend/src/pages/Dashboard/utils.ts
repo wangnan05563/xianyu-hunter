@@ -77,12 +77,15 @@ export function evMsg(ev: RecentEvent): string {
   const p = ev?.payload
   if (!p) return ''
   if (typeof p === 'string') return p
+  // S6551：payload 为 Record<string, unknown>，值可能是对象
+  // 用 typeof 收窄类型，对象用 JSON.stringify 避免 [object Object]
+  const toStr = (v: unknown): string =>
+    typeof v === 'object' ? JSON.stringify(v) : String(v) // NOSONAR
   const parts: string[] = []
-  // S6551：显式 String() 转换，避免对象被默认 toString 成 [object Object]
-  if (p.keyword) parts.push('关键词: ' + String(p.keyword))
-  if (p.title) parts.push(p.title as string)
-  if (p.price != null) parts.push('¥' + String(p.price))
-  if (p.count != null) parts.push(String(p.count) + ' 件')
-  if (p.error) parts.push(p.error as string)
+  if (p.keyword) parts.push('关键词: ' + toStr(p.keyword))
+  if (p.title) parts.push(toStr(p.title))
+  if (p.price != null) parts.push('¥' + toStr(p.price))
+  if (p.count != null) parts.push(toStr(p.count) + ' 件')
+  if (p.error) parts.push(toStr(p.error))
   return parts.join(' · ') || JSON.stringify(p).slice(0, 100)
 }

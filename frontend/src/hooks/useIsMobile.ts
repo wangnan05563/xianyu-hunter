@@ -10,7 +10,8 @@ import { useEffect, useState } from 'react'
  */
 export function useIsMobile(): boolean {
   const [isMobile, setIsMobile] = useState<boolean>(() => {
-    if (typeof globalThis.window === 'undefined') return false
+    // S7741：globalThis 总是已声明，直接比较即可
+    if (globalThis.window === undefined) return false
     return globalThis.matchMedia('(max-width: 767px)').matches
   })
 

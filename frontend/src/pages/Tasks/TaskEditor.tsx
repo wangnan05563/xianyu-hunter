@@ -1012,11 +1012,11 @@ export default function TaskEditor() {
 // 每个 IIFE 内 if/else 贡献 +2 复杂度，且 IIFE 嵌套层级 +1 让复杂度翻倍；
 // 提取为子组件后这些复杂度独立计算，主组件函数 CC 从 19 降至 ~13
 function Step3AIEval(props: {
-  formData: TaskCreateBody
-  setFormData: (next: TaskCreateBody) => void
-  globalConfig: AppConfig | null
-  effectiveEvalThreshold: number
-  onOpenGlobalConfig: () => void
+  readonly formData: TaskCreateBody
+  readonly setFormData: (next: TaskCreateBody) => void
+  readonly globalConfig: AppConfig | null
+  readonly effectiveEvalThreshold: number
+  readonly onOpenGlobalConfig: () => void
 }) {
   const { formData, setFormData, globalConfig, effectiveEvalThreshold, onOpenGlobalConfig } = props
   return (
@@ -1543,11 +1543,7 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
     if (open) load()
   }, [open, load])
 
-  // S4144：实现已提取为模块级 previewConfigSave，此处仅按本组件状态转发调用
-  const handleSave = () => previewConfigSave({
-    setSaving, previewSave, setDiffChanges, setDiffModalOpen,
-  })
-
+  // S4144：AntidetectConfigModal 的 handleSave 内联到 onClick，避免与 BatchRefreshConfigModal 重复声明
   const handleConfirmSave = async () => {
     try {
       setSaving(true)
@@ -1581,7 +1577,7 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
         footer={[
           <Button key="cancel" onClick={onClose}>取消</Button>,
           <Button key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</Button>,
-          <Button key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>,
+          <Button key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => previewConfigSave({ setSaving, previewSave, setDiffChanges, setDiffModalOpen })}>保存</Button>,
         ]}
       >
         <Alert

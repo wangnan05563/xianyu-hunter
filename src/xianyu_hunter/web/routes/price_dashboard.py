@@ -434,6 +434,20 @@ def _load_sold_prices_from_links(
     return prices, raw_count
 
 
+def _price_in_task_range(price: float, tr: dict[str, float | None] | None) -> bool:
+    """检查价格是否在任务的价格区间内（提取辅助函数降低认知复杂度）"""
+    if not tr:
+        # 任务不存在或无 task_id：保留（无法判断是否异常）
+        return True
+    lo = tr["min_price"]
+    hi = tr["max_price"]
+    if lo is not None and price < lo:
+        return False
+    if hi is not None and price > hi:
+        return False
+    return True
+
+
 def _filter_by_per_task_range(
     conn, typed_prices: list[tuple[str | None, float]],
 ) -> list[float]:
@@ -458,17 +472,8 @@ def _filter_by_per_task_range(
     result: list[float] = []
     for tid, price in typed_prices:
         tr = ranges.get(tid) if tid else None
-        if not tr:
-            # 任务不存在或无 task_id：保留（无法判断是否异常）
+        if _price_in_task_range(price, tr):
             result.append(price)
-            continue
-        lo = tr["min_price"]
-        hi = tr["max_price"]
-        if lo is not None and price < lo:
-            continue
-        if hi is not None and price > hi:
-            continue
-        result.append(price)
     return result
 
 
@@ -543,7 +548,7 @@ def _compute_sold_range(
             prices = all_prices
             source = "all_fallback_insufficient"
 
-    # 被任务价格区间过滤掉的样本数 = 原始样本数 - 保留样本数
+    # 被任务价格区间过滤掉的样本数（原始样本数 - 保留样本数）
     filtered_count = max(0, raw_total - len(prices))
 
     base: dict[str, Any] = {

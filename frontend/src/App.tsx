@@ -71,6 +71,7 @@ export default function App() {
   // 移动端 UA 自动跳转到 /m/* 路由
   // 桌面端访问 /m/* 重定向到桌面路由
   // 路径检测必须带 /app 前缀：SPA 挂载在 /app/ 下（BrowserRouter basename="/app"）
+  // S7764：用 globalThis 替代 window
   if (isMobile && !globalThis.location.pathname.startsWith('/app/m') && !globalThis.location.pathname.startsWith('/app/login')) {
     return <Navigate to="/m" replace />
   }

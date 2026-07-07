@@ -47,8 +47,8 @@ class IntervalProfile:
     max_sec: float = 30.0     # 最大间隔（秒）
 
 
-# 不同操作类型的间隔分布参数
-# 参数基于真实用户行为统计分析
+# 不同操作类型对应的间隔分布配置  # NOSONAR
+# 配置基于真实用户行为统计分析
 INTERVAL_PROFILES: dict[ActionType, IntervalProfile] = {
     ActionType.BROWSE: IntervalProfile(
         distribution="lognormal",

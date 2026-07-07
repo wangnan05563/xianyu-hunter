@@ -179,6 +179,122 @@ def _should_abort_login_resource(url: str, resource_type: str) -> bool:
     return True
 
 
+def _cleanup_browser_profile_startup_files(user_data_dir: Path) -> None:
+    """Remove stale Chromium profile locks/session restore files before launch."""
+    import glob as _glob
+
+    for pattern in (
+        str(user_data_dir / "SingletonLock"),
+        str(user_data_dir / "SingletonCookie"),
+        str(user_data_dir / "SingletonSocket"),
+        str(user_data_dir / "*lock*"),
+        str(user_data_dir / "Default" / "Sessions" / "Tabs_*"),
+        str(user_data_dir / "Default" / "Sessions" / "Session_*"),
+    ):
+        for filename in _glob.glob(pattern):
+            try:
+                Path(filename).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _is_recoverable_profile_launch_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return (
+        "launch_persistent_context" in text
+        and (
+            "Target page, context or browser has been closed" in text
+            or "exitCode=21" in text
+        )
+    )
+
+
+def _quarantine_browser_profile(user_data_dir: Path) -> Path | None:
+    """Move a broken browser profile aside and recreate the original path."""
+    user_data_dir = Path(user_data_dir)
+    if not user_data_dir.exists():
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        return None
+
+    try:
+        has_content = any(user_data_dir.iterdir())
+    except OSError:
+        has_content = True
+    if not has_content:
+        return None
+
+    parent = user_data_dir.parent
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    for i in range(100):
+        suffix = f"{stamp}-{i}" if i else stamp
+        backup = parent / f"{user_data_dir.name}.bak-{suffix}"
+        if backup.exists():
+            continue
+        last_error: OSError | None = None
+        for _attempt in range(5):
+            try:
+                user_data_dir.rename(backup)
+                user_data_dir.mkdir(parents=True, exist_ok=True)
+                return backup
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.2)
+        if last_error is not None:
+            raise last_error
+    raise RuntimeError(f"无法为浏览器数据目录生成备份路径: {user_data_dir}")
+
+
+def _make_recovery_browser_profile(user_data_dir: Path) -> Path:
+    parent = Path(user_data_dir).parent
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    for i in range(100):
+        suffix = f"{stamp}-{i}" if i else stamp
+        recovery = parent / f"{Path(user_data_dir).name}.recovery-{suffix}"
+        if recovery.exists():
+            continue
+        recovery.mkdir(parents=True, exist_ok=True)
+        return recovery
+    raise RuntimeError(f"无法创建临时浏览器登录目录: {user_data_dir}")
+
+
+async def _launch_login_context_with_recovery(
+    pw,
+    launch_kwargs: dict,
+    user_data_dir: Path,
+    *,
+    set_status,
+):
+    _cleanup_browser_profile_startup_files(user_data_dir)
+    try:
+        return await pw.chromium.launch_persistent_context(**launch_kwargs)
+    except Exception as exc:
+        if not _is_recoverable_profile_launch_error(exc):
+            raise
+
+        retry_profile = user_data_dir
+        try:
+            backup = _quarantine_browser_profile(user_data_dir)
+            if backup is not None:
+                print(
+                    f"[browser_login] 浏览器数据目录启动失败，已备份到 {backup}，重建后重试",
+                    file=sys.stderr,
+                )
+            message = "浏览器数据损坏，已备份并重建，正在重试..."
+        except OSError as quarantine_error:
+            retry_profile = _make_recovery_browser_profile(user_data_dir)
+            print(
+                "[browser_login] 浏览器数据目录无法备份，改用临时登录目录重试: "
+                f"{retry_profile} ({quarantine_error})",
+                file=sys.stderr,
+            )
+            message = "浏览器数据目录被占用，正在使用临时登录目录重试..."
+
+        set_status(status="starting", message=message)
+        launch_kwargs["user_data_dir"] = str(retry_profile)
+        _cleanup_browser_profile_startup_files(retry_profile)
+        return await pw.chromium.launch_persistent_context(**launch_kwargs)
+
+
 def _cookie_signature(cookies: list[dict]) -> frozenset[tuple[str, str, str]]:
     return frozenset(
         (
@@ -345,23 +461,13 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
             # 导致登录窗口出现 3 个标签（2 个 Worker 残留 + 1 个登录页）。
             # 删除 Tabs_*/Session_* 文件让 Chromium 干净启动，只打开登录需要的 1 个标签。
             # Cookie 存在 Default/Cookies SQLite，不在 Sessions/ 目录，清理不影响登录态
-            import glob as _glob
-            for _pattern in (
-                str(user_data_dir / "SingletonLock"),
-                str(user_data_dir / "SingletonCookie"),
-                str(user_data_dir / "SingletonSocket"),
-                str(user_data_dir / "*lock*"),
-                str(user_data_dir / "Default" / "Sessions" / "Tabs_*"),
-                str(user_data_dir / "Default" / "Sessions" / "Session_*"),
-            ):
-                for _f in _glob.glob(_pattern):
-                    try:
-                        Path(_f).unlink(missing_ok=True)
-                    except OSError:
-                        pass
-
             launch_start = time.monotonic()
-            bc = await pw.chromium.launch_persistent_context(**launch_kwargs)
+            bc = await _launch_login_context_with_recovery(
+                pw,
+                launch_kwargs,
+                user_data_dir,
+                set_status=set_status,
+            )
             timings["launch_context_sec"] = _elapsed_sec(launch_start)
 
             # 拦截非必要资源加速加载：字体、媒体、图片、manifest

@@ -69,7 +69,7 @@ class NotificationsMixin:
         offset: int = 0,
         user_id: str | None = None,
     ) -> list[dict]:
-        """列出通知；status=unread|read|None(全部)"""
+        """列出通知；status 取值为 unread、read 或 None 表示全部"""
         from sqlalchemy import desc
 
         with self.engine.connect() as conn:

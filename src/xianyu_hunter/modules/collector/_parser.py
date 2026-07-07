@@ -30,11 +30,11 @@ class ParserMixin:
     依赖 CollectorBase 提供的 self.selectors 状态。
     """
 
-    async def _wait_for_cards(self, page: Page, timeout: int = 15000) -> None:
+    async def _wait_for_cards(self, page: Page, timeout: int = 15000) -> None:  # NOSONAR
         """等待首个搜索卡片出现（尝试多个选择器）"""
         for selector in self.selectors.search_card_candidates():
             try:
-                await page.wait_for_selector(selector, timeout=timeout // len(self.selectors.search_card_candidates()))  # noqa: S7483
+                await page.wait_for_selector(selector, timeout=timeout // len(self.selectors.search_card_candidates()))
                 return
             except PlaywrightTimeout:
                 continue

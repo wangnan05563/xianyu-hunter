@@ -327,7 +327,7 @@ class NotificationRow(Base):
     message: Mapped[str] = mapped_column(Text, nullable=False)
     link: Mapped[str | None] = mapped_column(String, nullable=True)  # 点击跳转 URL
     dedup_key: Mapped[str] = mapped_column(String, nullable=False)  # 同类去重 key
-    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # NULL = 未读
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # NULL 表示未读
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
     # 多用户隔离：通知归属用户 ID
     user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
@@ -349,7 +349,7 @@ class BatchRefreshProgressRow(Base):
     pending_item_ids: Mapped[str] = mapped_column(Text, nullable=False)
     total: Mapped[int] = mapped_column(Integer, nullable=False)
     processed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # paused=暂停中可续传 / running=运行中 / done=已完成 / stopped=已停止
+    # 状态取值 paused 表示暂停中可续传，running 表示运行中，done 表示已完成，stopped 表示已停止
     status: Mapped[str] = mapped_column(String, nullable=False, default="paused")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -384,7 +384,7 @@ class BatchRefreshHistoryRow(Base):
     success: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # completed=正常完成 / cancelled=用户停止 / failed=连续失败熔断 / running=执行中
+    # completed: 正常完成 / cancelled: 用户停止 / failed: 连续失败熔断 / running: 执行中
     status: Mapped[str] = mapped_column(String, nullable=False, default="running")
     # 错误/警告消息聚合（JSON 数组字符串，每条 {item_id, error, timestamp}），上限 50 条
     error_messages: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -512,7 +512,7 @@ class ChatbotMessageRow(Base):
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # M4：用户消息关联的图片（JSON 数组，存 data URL），仅 user 消息有值
     images_json: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # M4：消息撤回标记（0=正常，1=已撤回），软删除保留审计
+    # M4 消息撤回标记，0 表示正常，1 表示已撤回，软删除保留审计
     is_recalled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
@@ -637,7 +637,7 @@ class ChatbotAuditLogRow(Base):
     target: Mapped[str] = mapped_column(String, nullable=False)  # 配置 key / FAQ id / 版本 id
     old_value_hash: Mapped[str | None] = mapped_column(String, nullable=True)  # SHA256
     new_value_hash: Mapped[str | None] = mapped_column(String, nullable=True)  # SHA256
-    # 操作来源：web=Web界面 / api=API调用 / scheduler=调度器 / system=系统自动
+    # 操作来源：web: Web界面 / api: API调用 / scheduler: 调度器 / system: 系统自动
     source: Mapped[str] = mapped_column(String, nullable=False, default="web")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 

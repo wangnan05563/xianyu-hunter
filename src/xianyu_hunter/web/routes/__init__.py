@@ -31,7 +31,7 @@
   api_config.py         — 配置管理（5 Tab + 版本回滚）
   api_logs.py           — 日志搜索/标签/导出/SSE
   api_orders.py         — 抢单记录/人工接管
-  api_evaluations.py    — 评估明细/分布/阈值建议
+  api_evaluations.py    — 评估明细 API 路由聚合入口（聚合 8 个子模块）
   api_items.py          — 商品批量查询
   api_ai.py             — F-01 AI 建任务 + F-06 Vision 成色评估
   api_notifier.py       — P3-F-10 免打扰配置

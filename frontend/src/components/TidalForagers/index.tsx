@@ -85,7 +85,8 @@ interface RenderParams {
 type DeviceTier = 'low' | 'mid' | 'high'
 function detectDeviceTier(): DeviceTier {
   // S7764：用 globalThis.window 替代 window
-  if (typeof globalThis.window === 'undefined') return 'mid'
+  // S7741：globalThis 总是已声明，直接比较即可
+  if (globalThis.window === undefined) return 'mid'
   const cores = navigator.hardwareConcurrency || 4
   const smallScreen = window.innerWidth < 768
   // WebView2/嵌入式浏览器通常 hardwareConcurrency 较小，降级到低端
@@ -101,16 +102,22 @@ function detectDeviceTier(): DeviceTier {
 //
 // 尾部由 3 个控制点组成：尾根、尾中、尾尖
 // 摆动通过 phase 偏移实现，摆幅与速度耦合
+// 鱼身绘制所需的运动状态：合并 headingAngle/speed/phase 三参数降低函数签名复杂度（S107）
+interface FishMotion {
+  headingAngle: number
+  speed: number
+  phase: number
+}
+
 function drawFishBody(
   p: p5,
   pos: p5.Vector,
-  headingAngle: number,
-  speed: number,
-  phase: number,
+  motion: FishMotion,
   colors: Palette,
   params: RenderParams,
   sizeScale: number,
 ) {
+  const { headingAngle, speed, phase } = motion
   const baseSize = params.baseSize * sizeScale
   // 速度越快身体越修长（最大拉伸 1.3 倍）
   const stretch = p.map(speed, 0, 3, 1, 1.3)
@@ -308,7 +315,7 @@ function createFish(
     show(colors: Palette, params: RenderParams) {
       const headingAngle = vel.heading()
       const speed = vel.mag()
-      drawFishBody(p, pos, headingAngle, speed, phase, colors, params, sizeScale)
+      drawFishBody(p, pos, { headingAngle, speed, phase }, colors, params, sizeScale)
     },
   }
   return fish

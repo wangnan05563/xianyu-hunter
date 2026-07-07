@@ -478,7 +478,7 @@ class ImportBody(BaseModel):
     """导入请求：rows 为二维数组（首行为表头，与 schema 列名对应），mode=insert/replace"""
     rows: list[list[Any]]
     headers: list[str] | None = None  # 可选：自定义列名映射，缺省按列顺序
-    mode: str = "insert"  # insert=跳过主键冲突，replace=按主键替换
+    mode: str = "insert"  # insert 表示跳过主键冲突，replace 表示按主键替换
     confirm_token: str = ""
 
 

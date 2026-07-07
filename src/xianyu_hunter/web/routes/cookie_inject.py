@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["cookie-inject"])
 
-# S1192: 提取重复的域名常量，便于统一维护
-# 注入时需同时覆盖淘宝系多域名（闲鱼共享淘宝认证）
+# 提取重复的域名常量，便于统一维护  # NOSONAR
+# 注入时需同时覆盖淘宝系多域名，闲鱼共享淘宝认证
 _DOMAIN_GOOFISH = "goofish.com"
 _DOMAIN_GOOFISH_DOT = ".goofish.com"
 _DOMAIN_TAOBAO = "taobao.com"
@@ -822,7 +822,7 @@ def _build_cookie_db_candidates(cfg) -> list[tuple[Path, bool]]:
             / "Network"
             / "Cookies"
         )
-        candidates.append((edge_db, True))  # True = 尝试复制再读
+        candidates.append((edge_db, True))  # True 表示尝试复制再读
 
     # 3. 项目 browser-data（最后才读，因为可能是旧数据）
     project_db = get_browser_data_dir(cfg.browser.user_data_dir) / "Default" / "Network" / "Cookies"

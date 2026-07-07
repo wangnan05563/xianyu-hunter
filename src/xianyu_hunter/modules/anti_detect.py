@@ -380,7 +380,7 @@ class AntiDetect:
         box = await locator.bounding_box()
         if not box:
             raise ValueError(f"元素 {selector} 不可见或没有 bounding box")
-        # 目标点 = 元素中心 + 随机偏移
+        # 目标点由元素中心加随机偏移得到
         cx = box["x"] + box["width"] / 2
         cy = box["y"] + box["height"] / 2
         tx, ty = random_click_offset(cx, cy, max_offset=3)

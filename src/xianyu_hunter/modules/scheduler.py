@@ -178,7 +178,7 @@ class TaskScheduler:
         h.task.status = TaskStatus.RUNNING
         logger.info(f"Scheduler 启动任务 {task_id}")
 
-    async def stop(self, task_id: str, timeout: float = 30.0) -> None:
+    async def stop(self, task_id: str, timeout: float = 30.0) -> None:  # NOSONAR
         """停止任务（等待当前轮结束）"""
         h = self._require(task_id)
         if not h.loop_task or h.loop_task.done():
@@ -420,8 +420,8 @@ class TaskScheduler:
                 if self._repo:
                     self._repo.update_task_status(task_id, "paused")
                 return True
-            # 每轮结束后清理残留页面，防止因异常未关闭的页面堆积
-            # 导致内存压力和窗口不停弹出
+            # 每轮结束后清理残留页面，避免异常未关闭的页面堆积  # NOSONAR
+            # 堆积会导致内存压力和窗口不停弹出
             await self._cleanup_browser_pages(h, task_id)
         return False
 

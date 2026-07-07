@@ -385,7 +385,7 @@ class BatchRefreshScheduler:
                 f"failed={counters.failed} skipped={counters.skipped} stopped={self._stop_flag}"
             )
 
-            # 计算终态：熔断=failed / 用户停止=cancelled / 正常=completed
+            # 计算终态，熔断对应 failed，用户停止对应 cancelled，正常完成对应 completed
             final_status = self._compute_final_status(counters.circuit_broken)
 
             # 更新历史记录为终态
@@ -469,7 +469,7 @@ class BatchRefreshScheduler:
         items: list[dict],
         task_id: int,
         total: int,
-        started_at: datetime,
+        _started_at: datetime,
         counters: _BatchCounters,
     ) -> None:
         """逐个采集 items，期间响应暂停/停止/熔断
@@ -512,7 +512,7 @@ class BatchRefreshScheduler:
 
             # 处理单个 item；返回 True 表示熔断需跳出循环
             should_break = await self._process_single_item(
-                item_id, item, task_id, started_at, counters, len(items)
+                item_id, item, task_id, counters, len(items)
             )
             if should_break:
                 break
@@ -589,7 +589,7 @@ class BatchRefreshScheduler:
         return True
 
     def _compute_final_status(self, circuit_broken: bool) -> str:
-        """计算批次终态：熔断=failed / 用户停止=cancelled / 正常=completed"""
+        """计算批次终态：熔断→failed / 用户停止→cancelled / 正常→completed"""
         if circuit_broken:
             return "failed"
         if self._stop_flag:

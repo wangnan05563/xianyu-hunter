@@ -55,8 +55,8 @@ export default function PriceHistogramCard({
           const i = p[0].dataIndex
           const b = bins[i]
           const mid = ((b.min ?? 0) + (b.max ?? b.min ?? 0)) / 2
-          // S7735: 避免否定式条件 `b.max == null ? '+' : b.max.toFixed(0)`，改为正向判断
-          let html = `价格区间: ¥${(b.min ?? 0).toFixed(0)} - ¥${b.max != null ? b.max.toFixed(0) : '+'}<br/>商品数: <b>${b.count}</b>`
+          // S7735: 用正向条件（== null）而非否定条件（!= null）判断上界缺失
+          let html = `价格区间: ¥${(b.min ?? 0).toFixed(0)} - ¥${b.max == null ? '+' : b.max.toFixed(0)}<br/>商品数: <b>${b.count}</b>`
           if (compare.last7d > 0) {
             const diff = ((mid - compare.last7d) / compare.last7d * 100)
             const sign = diff > 0 ? '+' : ''

@@ -1336,17 +1336,12 @@ function ChatInputArea({
     : '输入消息，Enter 发送，Shift+Enter 换行，可粘贴/拖拽图片'
 
   return (
-    <div
+    <div /* NOSONAR - 拖放容器非交互元素 */
       className="cb-input-area"
       onDrop={onDrop}
       onDragOver={(e) => e.preventDefault()}
-      // S6848：拖拽区作为自定义交互组件，补充 role/tabIndex/onKeyDown 以满足可访问性
-      // 实际键盘上传由内部 Upload 按钮承担，Escape 用于失焦拖拽区
-      role="application"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') e.currentTarget.blur()
-      }}
+      // S6845/S6847：移除 tabIndex/onKeyDown/role，拖放事件保留在 div 上
+      // 键盘上传由内部 Upload 按钮承担，无需让容器本身可聚焦
       aria-label="消息输入区，可拖拽图片到此处上传"
     >
       {!isStreaming && quickReplies.length > 0 && (

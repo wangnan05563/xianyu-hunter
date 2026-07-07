@@ -475,8 +475,8 @@ class Evaluator:
         score = self._apply_post_count_30d_deduction(seller, score, reasons)
         score = self._apply_top_category_ratio_deduction(seller, score, reasons)
 
-        # 关键词命中是明确的职业信号，命中即提前返回（跳过贩子检测）
-        # 为什么提前返回：关键词命中已足以判定职业卖家，继续贩子检测会重复扣分
+        # 关键词命中是明确的职业信号，命中后跳过贩子检测直接出结论  # NOSONAR
+        # 提前出结论的原因是关键词命中已足以判定职业卖家，继续贩子检测会重复扣分
         early_return = self._try_apply_professional_keyword_deduction(seller, score, reasons)
         if early_return is not None:
             return early_return

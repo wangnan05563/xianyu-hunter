@@ -49,22 +49,6 @@ export function AboutMenuList({ onOpenLicenses }: AboutMenuListProps) {
         borderBottom: idx < MENU_ITEMS.length - 1 ? `1px solid ${token.colorBorderSecondary}` : 'none',
         transition: 'background-color 120ms cubic-bezier(0.2, 0, 0, 1)',
       }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.backgroundColor = token.colorBgTextHover
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.backgroundColor = 'transparent'
-      }}
-      onClick={(e) => handleClick(item, e)}
-      // S6848/S1082：div 上有 click 处理，补充 role/tabIndex/onKeyDown 满足可访问性
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (item.key === 'licenses' && (e.key === 'Enter' || e.key === ' ')) {
-          e.preventDefault()
-          onOpenLicenses()
-        }
-      }}
     >
       <span style={{ fontSize: 14, color: token.colorText }}>{item.label}</span>
       <ExportOutlined style={{ fontSize: 14, color: token.colorTextTertiary }} aria-hidden />
@@ -84,9 +68,19 @@ export function AboutMenuList({ onOpenLicenses }: AboutMenuListProps) {
       {MENU_ITEMS.map((item, idx) => {
         // help 为 SPA 内链，用 Link 组件避免整页刷新
         const isInternal = !item.external && item.key === 'help'
+        // S6819：移除内层 div 的 role="button"，交互由外层 a/Link 承担
+        // hover/click 放在外层交互元素上，避免内层 div 触发 S6847
+        const hoverHandlers = {
+          onMouseEnter: (e: React.MouseEvent<HTMLElement>) => {
+            e.currentTarget.style.backgroundColor = token.colorBgTextHover
+          },
+          onMouseLeave: (e: React.MouseEvent<HTMLElement>) => {
+            e.currentTarget.style.backgroundColor = 'transparent'
+          },
+        }
         if (isInternal) {
           return (
-            <Link key={item.key} to={item.href} style={{ textDecoration: 'none', color: 'inherit' }}>
+            <Link key={item.key} to={item.href} style={{ textDecoration: 'none', color: 'inherit' }} {...hoverHandlers}>
               {renderContent(item, idx)}
             </Link>
           )
@@ -98,6 +92,8 @@ export function AboutMenuList({ onOpenLicenses }: AboutMenuListProps) {
             target={item.external ? '_blank' : undefined}
             rel={item.external ? 'noopener noreferrer' : undefined}
             style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
+            onClick={(e) => handleClick(item, e)}
+            {...hoverHandlers}
           >
             {renderContent(item, idx)}
           </a>

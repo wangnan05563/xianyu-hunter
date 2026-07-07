@@ -42,6 +42,34 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     与 .env 中配置的 WEB_TOKEN 做恒定时间比较。
     """
 
+    def _extract_candidate_tokens(self, request: Request) -> list[str]:
+        """从 Authorization header 和 cookie 中提取候选 token
+
+        Authorization 优先，但失败后继续尝试 cookie，避免前端 localStorage
+        残留旧 token 覆盖刚登录写入的 HttpOnly xh_token cookie。
+        """
+        auth_header = request.headers.get("authorization", "")
+        candidate_tokens: list[str] = []
+        if auth_header.startswith("Bearer "):
+            candidate_tokens.append(auth_header[7:])
+        cookie_token = request.cookies.get("xh_token", "")
+        if cookie_token and cookie_token not in candidate_tokens:
+            candidate_tokens.append(cookie_token)
+        return candidate_tokens
+
+    def _verify_session_token(self, candidate_tokens: list[str], logger) -> str | None:
+        """校验 session token，返回 user_id 或 None"""
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+        for req_token in candidate_tokens:
+            try:
+                user_id = get_user_manager().verify_session(req_token)
+            except Exception as e:
+                logger.warning("[Auth] session 校验异常，降级尝试下一个 token: %s", e)
+                user_id = None
+            if user_id:
+                return user_id
+        return None
+
     async def dispatch(self, request: Request, call_next):
         # 公开路径直接放行
         for prefix in PUBLIC_PREFIXES:
@@ -55,16 +83,8 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         from xianyu_hunter.config import get_settings
         from loguru import logger
 
-        # 从 Authorization header 和 cookie 中取 token。Authorization 优先，
-        # 但失败后继续尝试 cookie，避免前端 localStorage 残留旧 token
-        # 覆盖刚登录写入的 HttpOnly xh_token cookie。
-        auth_header = request.headers.get("authorization", "")
-        candidate_tokens: list[str] = []
-        if auth_header.startswith("Bearer "):
-            candidate_tokens.append(auth_header[7:])
-        cookie_token = request.cookies.get("xh_token", "")
-        if cookie_token and cookie_token not in candidate_tokens:
-            candidate_tokens.append(cookie_token)
+        # 从 Authorization header 和 cookie 中取 token（提取到辅助方法降低认知复杂度）
+        candidate_tokens = self._extract_candidate_tokens(request)
 
         if not candidate_tokens:
             if request.url.path.startswith("/api/"):
@@ -79,18 +99,11 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
                 request.state.user_id = "default"
                 return await call_next(request)
 
-        # 路径 2：session_token 多用户会话校验
-        from xianyu_hunter.web.services.user_manager import get_user_manager
-        for req_token in candidate_tokens:
-            try:
-                user_id = get_user_manager().verify_session(req_token)
-            except Exception as e:
-                logger.warning("[Auth] session 校验异常，降级尝试下一个 token: %s", e)
-                user_id = None
-
-            if user_id:
-                request.state.user_id = user_id
-                return await call_next(request)
+        # 路径 2：session_token 多用户会话校验（提取到辅助方法降低认知复杂度）
+        user_id = self._verify_session_token(candidate_tokens, logger)
+        if user_id:
+            request.state.user_id = user_id
+            return await call_next(request)
 
         # 路径 3：校验失败
         logger.debug(
