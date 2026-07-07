@@ -4,10 +4,10 @@ import ReactECharts from '../../../components/charts/EChart'
 import type { SellerTrendData } from '../utils'
 
 interface TrendSparklineProps {
-  trend: SellerTrendData | undefined
-  loading: boolean
-  error?: string
-  onLoad: () => void
+  readonly trend: SellerTrendData | undefined
+  readonly loading: boolean
+  readonly error?: string
+  readonly onLoad: () => void
 }
 
 // 卖家趋势 sparkline option 构造

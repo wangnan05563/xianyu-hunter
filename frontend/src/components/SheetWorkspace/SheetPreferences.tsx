@@ -5,8 +5,8 @@ import { useSheetStore, DEFAULT_PREFERENCES } from '../../stores/sheetStore'
 const { Text } = Typography
 
 interface SheetPreferencesProps {
-  open: boolean
-  onClose: () => void
+  readonly open: boolean
+  readonly onClose: () => void
 }
 
 export function SheetPreferences({ open, onClose }: SheetPreferencesProps) {

@@ -204,7 +204,7 @@ def get_menu_manager() -> MenuManager:
 
     与 get_user_manager 共享 _DB_PATH，但独立创建 engine：
     MenuManager 的查询路径短（仅 user_menu_configs 单表），
-    NullPool 每次连接开销可接受，无需复用 UserManager 的连接池。
+    NullPool/QueuePool 每次连接开销可接受，无需复用 UserManager 的连接池。
     """
     global _manager
     with _manager_lock:

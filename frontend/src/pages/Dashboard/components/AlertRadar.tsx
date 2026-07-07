@@ -3,10 +3,11 @@ import { WarningOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { TodayAlert } from '../../../api'
 
 interface AlertRadarProps {
-  alertData: TodayAlert | null
-  alertOpen: boolean
-  onToggle: () => void
-  onReload: () => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly alertData: TodayAlert | null
+  readonly alertOpen: boolean
+  readonly onToggle: () => void
+  readonly onReload: () => void
 }
 
 export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }: AlertRadarProps) {
@@ -16,7 +17,12 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
   return (
     <Card style={{ marginTop: 16 }}
       title={
-        <span style={{ cursor: 'pointer' }} onClick={() => { onToggle(); if (!alertOpen) onReload() }}>
+        // S6848/S1082：可点击区域用原生 button 替代 span+onClick，自带键盘可达性
+        <button
+          type="button"
+          onClick={() => { onToggle(); if (!alertOpen) onReload() }}
+          style={{ cursor: 'pointer', border: 'none', background: 'none', padding: 0, font: 'inherit', color: 'inherit', display: 'inline-flex', alignItems: 'center' }}
+        >
           <WarningOutlined style={{ color: token.colorWarning, marginRight: 6 }} />
           异常雷达
           <Badge
@@ -24,7 +30,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
             size="small"
             style={{ marginLeft: 8, backgroundColor: (alertData?.alerts?.counts?.failed ?? 0) > 0 ? token.colorError : token.colorWarning }}
           />
-        </span>
+        </button>
       }
       extra={
         <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>

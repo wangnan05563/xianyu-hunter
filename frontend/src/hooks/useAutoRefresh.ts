@@ -114,7 +114,9 @@ export function useAutoRefresh(opts: AutoRefreshOptions) {
       if (mountedRef.current) {
         setState((s) => ({ ...s, refreshing: false, failCount: 0, lastRefreshAt: Date.now() }))
       }
-    } catch (_err) {
+    } catch (error_) {
+      // S2486：记录异常避免空 catch；后续重试逻辑隐式处理
+      console.warn('[useAutoRefresh] 刷新失败，将重试:', error_)
       retryRef.current += 1
       if (retryRef.current <= MAX_RETRIES) {
         const delay = RETRY_BASE_MS * retryRef.current

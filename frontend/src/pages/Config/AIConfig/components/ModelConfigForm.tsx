@@ -70,31 +70,29 @@ export default function ModelConfigForm({
           {/* API Key（密码类型 + 显示/隐藏切换 + 厂商申请页「获取」链接） */}
           <div>
             <label htmlFor="ai-api-key" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>API Key</label>
-            <Input
-              id="ai-api-key"
-              type={showApiKey ? 'text' : 'password'}
-              value={config.api_key}
-              onChange={(e) => onConfigChange({ api_key: e.target.value })}
-              placeholder="sk-..."
-              style={{ maxWidth: 600 }}
-              addonAfter={
-                <Space size="small">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={showApiKey ? <EyeInvisibleOutlined /> : <EyeOutlined />}
-                    onClick={onToggleShowApiKey}
-                  >
-                    {showApiKey ? '隐藏' : '显示'}
-                  </Button>
-                  {apiKeyUrl && (
-                    <a href={apiKeyUrl} target="_blank" rel="noopener noreferrer">
-                      获取
-                    </a>
-                  )}
-                </Space>
-              }
-            />
+            {/* addonAfter 在 antd v5 已废弃，改用 Space.Compact 紧凑布局（SonarQube S1874） */}
+            <Space.Compact style={{ maxWidth: 600 }}>
+              <Input
+                id="ai-api-key"
+                type={showApiKey ? 'text' : 'password'}
+                value={config.api_key}
+                onChange={(e) => onConfigChange({ api_key: e.target.value })}
+                placeholder="sk-..."
+                style={{ flex: 1 }}
+              />
+              <Button
+                type="default"
+                icon={showApiKey ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+                onClick={onToggleShowApiKey}
+              >
+                {showApiKey ? '隐藏' : '显示'}
+              </Button>
+              {apiKeyUrl && (
+                <Button type="default" href={apiKeyUrl} target="_blank" rel="noopener noreferrer">
+                  获取
+                </Button>
+              )}
+            </Space.Compact>
             <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
               密钥通过系统密钥库（keyring）安全存储，不写入配置文件
             </div>

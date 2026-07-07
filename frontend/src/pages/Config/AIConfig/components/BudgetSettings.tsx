@@ -2,11 +2,11 @@ import { Card, Button, Row, Col, InputNumber } from 'antd'
 import type { AIUsage } from '../../../../api'
 
 interface BudgetSettingsProps {
-  budget: AIUsage['budget']
+  readonly budget: AIUsage['budget']
   // 局部字段更新，避免子组件直接操作父级 setState
-  onBudgetChange: (patch: Partial<AIUsage['budget']>) => void
-  saving: boolean
-  onSave: () => void
+  readonly onBudgetChange: (patch: Partial<AIUsage['budget']>) => void
+  readonly saving: boolean
+  readonly onSave: () => void
 }
 
 export default function BudgetSettings({ budget, onBudgetChange, saving, onSave }: BudgetSettingsProps) {
@@ -21,8 +21,10 @@ export default function BudgetSettings({ budget, onBudgetChange, saving, onSave 
         <Row gutter={16}>
           <Col span={8}>
             <div>
-              <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>每日 Token 上限</label>
+              {/* S6853：用 htmlFor 关联 label 与 input，保证屏幕阅读器可读 */}
+              <label htmlFor="budget-daily-token" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>每日 Token 上限</label>
               <InputNumber
+                id="budget-daily-token"
                 value={budget.daily_token_limit}
                 onChange={(v) => onBudgetChange({ daily_token_limit: v ?? 500000 })}
                 placeholder="500000"
@@ -33,8 +35,9 @@ export default function BudgetSettings({ budget, onBudgetChange, saving, onSave 
           </Col>
           <Col span={8}>
             <div>
-              <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>每日费用上限 (USD)</label>
+              <label htmlFor="budget-daily-cost" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>每日费用上限 (USD)</label>
               <InputNumber
+                id="budget-daily-cost"
                 value={budget.daily_cost_limit_usd}
                 onChange={(v) => onBudgetChange({ daily_cost_limit_usd: v ?? 5 })}
                 placeholder="5.0"
@@ -46,8 +49,9 @@ export default function BudgetSettings({ budget, onBudgetChange, saving, onSave 
           </Col>
           <Col span={8}>
             <div>
-              <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>每分钟调用上限</label>
+              <label htmlFor="budget-rate-limit" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>每分钟调用上限</label>
               <InputNumber
+                id="budget-rate-limit"
                 value={budget.rate_limit_per_min}
                 onChange={(v) => onBudgetChange({ rate_limit_per_min: v ?? 20 })}
                 placeholder="20"

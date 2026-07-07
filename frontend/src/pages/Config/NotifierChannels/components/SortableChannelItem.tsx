@@ -5,8 +5,9 @@ import { CSS } from '@dnd-kit/utilities'
 import type { ChannelDef } from '../constants'
 
 interface SortableChannelItemProps {
-  channel: ChannelDef
-  index: number
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly channel: ChannelDef
+  readonly index: number
 }
 
 export default function SortableChannelItem({ channel, index }: SortableChannelItemProps) {

@@ -6,14 +6,15 @@ import { CSS } from '@dnd-kit/utilities'
 import type { ColumnConfig } from '../../../hooks/useColumnConfig'
 
 interface ColumnSettingsModalProps {
-  open: boolean
-  onClose: () => void
-  definitions: ColumnConfig[]
-  order: string[]
-  hidden: Set<string>
-  onToggleHidden: (key: string) => void
-  onMove: (activeKey: string, overKey: string) => void
-  onReset: () => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly open: boolean
+  readonly onClose: () => void
+  readonly definitions: ColumnConfig[]
+  readonly order: string[]
+  readonly hidden: Set<string>
+  readonly onToggleHidden: (key: string) => void
+  readonly onMove: (activeKey: string, overKey: string) => void
+  readonly onReset: () => void
 }
 
 /** 可拖拽的列项：用 dnd-kit 的 useSortable 实现拖拽 */
@@ -23,10 +24,11 @@ function SortableColumnItem({
   locked,
   onToggle,
 }: {
-  config: ColumnConfig
-  isHidden: boolean
-  locked: boolean
-  onToggle: (key: string) => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly config: ColumnConfig
+  readonly isHidden: boolean
+  readonly locked: boolean
+  readonly onToggle: (key: string) => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: config.key,
@@ -89,7 +91,7 @@ export default function ColumnSettingsModal({
   const defMap = new Map(definitions.map((d) => [d.key, d]))
   const orderedConfigs = order
     .map((k) => defMap.get(k))
-    .filter((d): d is ColumnConfig => Boolean(d))
+    .filter((d): d is ColumnConfig => d != null)
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event

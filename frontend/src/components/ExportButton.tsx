@@ -5,17 +5,17 @@ import { exportApi, type ExportDataset, type ExportParams } from '../api'
 
 interface ExportButtonProps {
   /** 默认导出的数据集（点击按钮直接导出此数据集） */
-  dataset: ExportDataset
+  readonly dataset: ExportDataset
   /** 导出参数（task_id / start / end / status / level） */
-  params?: ExportParams
+  readonly params?: ExportParams
   /** 按钮文字（默认"导出 CSV"） */
-  label?: string
+  readonly label?: string
   /** 按钮大小（默认 small） */
-  size?: 'small' | 'middle' | 'large'
+  readonly size?: 'small' | 'middle' | 'large'
   /** 是否显示下拉菜单（默认 true，允许切换其他数据集）
    * 设为 false 时仅导出当前数据集，无下拉
    */
-  withMenu?: boolean
+  readonly withMenu?: boolean
 }
 
 /**

@@ -7,12 +7,8 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING
 
 from xianyu_hunter.container import Container, build_default_container
-
-if TYPE_CHECKING:
-    pass
 
 
 def _should_start_scheduler() -> bool:

@@ -350,14 +350,17 @@ export default function Maintenance() {
               <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
                 保留天数
               </Text>
-              <InputNumber
-                value={dbForm.days}
-                onChange={(value) => setDbForm({ ...dbForm, days: value ?? 30 })}
-                min={1}
-                max={365}
-                style={{ width: '100%' }}
-                addonAfter="天"
-              />
+              {/* addonAfter 已废弃，改用 Space.Compact 包装静态文本（antd v5） */}
+              <Space.Compact style={{ width: '100%' }}>
+                <InputNumber
+                  value={dbForm.days}
+                  onChange={(value) => setDbForm({ ...dbForm, days: value ?? 30 })}
+                  min={1}
+                  max={365}
+                  style={{ flex: 1 }}
+                />
+                <Button disabled>天</Button>
+              </Space.Compact>
             </div>
 
             <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -420,14 +423,17 @@ export default function Maintenance() {
                 <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
                   保留天数
                 </Text>
-                <InputNumber
-                  value={logForm.days}
-                  onChange={(value) => setLogForm({ ...logForm, days: value ?? 7 })}
-                  min={1}
-                  max={365}
-                  style={{ width: '100%' }}
-                  addonAfter="天"
-                />
+                {/* addonAfter 已废弃，改用 Space.Compact 包装静态文本（antd v5） */}
+                <Space.Compact style={{ width: '100%' }}>
+                  <InputNumber
+                    value={logForm.days}
+                    onChange={(value) => setLogForm({ ...logForm, days: value ?? 7 })}
+                    min={1}
+                    max={365}
+                    style={{ flex: 1 }}
+                  />
+                  <Button disabled>天</Button>
+                </Space.Compact>
               </div>
             )}
 

@@ -4,8 +4,8 @@ import { useState } from 'react'
 import type { KBStatus } from '../types'
 
 interface Props {
-  status: KBStatus
-  onRebuild: (force: boolean) => Promise<void>
+  readonly status: KBStatus
+  readonly onRebuild: (force: boolean) => Promise<void>
 }
 
 // 知识库状态卡片：展示当前版本、片段数、构建时间，支持手动重建

@@ -67,7 +67,8 @@ const parseCookieText = (text: string): Record<string, string> => {
     const value = trimmed.substring(eqIndex + 1).trim()
 
     // 过滤无效 key（必须符合 Cookie 命名规范）和空值
-    if (!key || !/^[a-zA-Z0-9_\-]+$/.test(key)) continue
+    // S6535：字符类中 - 不需转义
+    if (!key || !/^[a-zA-Z0-9_-]+$/.test(key)) continue
     if (!value) continue
 
     result[key] = value
@@ -270,8 +271,9 @@ function BrowserLoginTab({
               {loginStatus && (loginStatus.phase || loginStatus.child_elapsed != null) && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
                   {phaseLabel(loginStatus.phase) || '当前阶段'}
-                  {loginStatus.child_elapsed != null ? ` ${Number(loginStatus.child_elapsed).toFixed(1)}秒` : ''}
-                  {loginStatus.wait_elapsed != null ? `（等待登录 ${loginStatus.wait_elapsed}秒）` : ''}
+                  {/* S7735：避免取反条件，改为 == null 优先返回空串 */}
+                  {loginStatus.child_elapsed == null ? '' : ` ${Number(loginStatus.child_elapsed).toFixed(1)}秒`}
+                  {loginStatus.wait_elapsed == null ? '' : `（等待登录 ${loginStatus.wait_elapsed}秒）`}
                 </Text>
               )}
               {loginStatus && formatTimings(loginStatus.timings) && (
@@ -773,7 +775,8 @@ export default function Login() {
     const parsed = parseCookieText(trimmed)
     const allKeys = Object.keys(parsed)
     if (allKeys.length === 0) {
-      setParseResult({ total: 0, matched: [], missing: [...COOKIE_KEYS.map((ck) => ck.key)] })
+      // S7747：map 已返回新数组，无需展开克隆
+      setParseResult({ total: 0, matched: [], missing: COOKIE_KEYS.map((ck) => ck.key) })
       return
     }
 

@@ -5,10 +5,10 @@ import {
 } from '../utils'
 
 interface EvalHeatmapProps {
-  dist: DistResponse | null
-  distRange: number
-  distLoading: boolean
-  onRangeChange: (v: number) => void
+  readonly dist: DistResponse | null
+  readonly distRange: number
+  readonly distLoading: boolean
+  readonly onRangeChange: (v: number) => void
 }
 
 export default function EvalHeatmap({
@@ -80,7 +80,8 @@ export default function EvalHeatmap({
           size="small"
           options={RANGE_OPTIONS}
           value={distRange}
-          onChange={(v) => onRangeChange(v as number)}
+          // S4325: 用 Number() 转换替代 as 断言
+          onChange={(v) => onRangeChange(Number(v))}
         />
       }
       style={{ marginBottom: 16 }}

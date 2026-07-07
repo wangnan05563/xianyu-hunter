@@ -87,6 +87,6 @@ class TakeoverTimeoutScheduler:
                     "接管超时清理：%d 个订单被标记为 failed（超时 %d 分钟未支付）: %s",
                     len(expired), self._timeout_min, order_ids,
                 )
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             # 清理失败不影响主业务，下次扫描会重试
             logger.exception("接管超时清理任务异常")

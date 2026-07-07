@@ -14,7 +14,7 @@ browser:
   cdp_port: 9222
   proxy_server: ''
 antidetect:
-  qps: 10
+  qps: 20
   min_delay_ms: 3000
   max_delay_ms: 4500
   fail_pause_threshold: 3
@@ -102,6 +102,7 @@ search:
   - personal_idle
   - verified
   - free_shipping
+  - 包邮
 price_strategy:
   enabled_max: true
   max_price: 750

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Card, Button, Tooltip, Spin, Empty, Space, InputNumber, Row, Col, Tag, Progress, Alert, Typography, theme } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { BARGAIN_LEVEL_CONFIG } from '../constants'
@@ -7,13 +8,13 @@ import type { BargainEval } from '../../../api/types'
 const { Text } = Typography
 
 interface BargainEvalCardProps {
-  soldTaskId: string | undefined
-  evalCurrentPrice: number | null
-  evalResult: BargainEval | null
-  evalLoading: boolean
-  onPriceChange: (v: number | null) => void
-  onEvaluate: () => void
-  onRefresh: () => void
+  readonly soldTaskId: string | undefined
+  readonly evalCurrentPrice: number | null
+  readonly evalResult: BargainEval | null
+  readonly evalLoading: boolean
+  readonly onPriceChange: (v: number | null) => void
+  readonly onEvaluate: () => void
+  readonly onRefresh: () => void
 }
 
 // 价格评估卡片
@@ -49,6 +50,54 @@ export default function BargainEvalCard({
 
   const canEvaluate = soldTaskId && evalCurrentPrice != null && evalCurrentPrice > 0
 
+  // S3358: 把嵌套三元（evalLoading ? ... : evalResult ? ... : ...）提取为独立 if/else 赋值
+  let evalContent: ReactNode
+  if (evalLoading) {
+    evalContent = <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+  } else if (evalResult) {
+    evalContent = (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <Row gutter={16} align="middle">
+          <Col xs={24} sm={8}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Text type="secondary">评估等级：</Text>
+              <Tag color={levelConfig.color}>
+                {levelConfig.label}
+              </Tag>
+            </div>
+          </Col>
+          <Col xs={24} sm={16}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Text type="secondary">捡漏得分：</Text>
+              <Progress
+                percent={evalResult.bargain_score}
+                size="small"
+                status={getProgressStatus()}
+                style={{ flex: 1, minWidth: 200, marginBottom: 0 }}
+              />
+            </div>
+          </Col>
+        </Row>
+        <Alert
+          type={getAlertType()}
+          message={evalResult.suggestion}
+        />
+        {evalResult.sold_price_stats && (
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: token.colorTextTertiary }}>
+            <span>已售 P10：<b>{formatPrice(evalResult.sold_price_stats.p10)}</b></span>
+            <span>P25：<b>{formatPrice(evalResult.sold_price_stats.p25)}</b></span>
+            <span>中位数：<b>{formatPrice(evalResult.sold_price_stats.median)}</b></span>
+            <span>P75：<b>{formatPrice(evalResult.sold_price_stats.p75)}</b></span>
+            <span>P90：<b>{formatPrice(evalResult.sold_price_stats.p90)}</b></span>
+            <span>样本数：<b>{evalResult.sold_price_stats.count}</b></span>
+          </div>
+        )}
+      </div>
+    )
+  } else {
+    evalContent = <Empty description={'输入价格并点击"评估"查看捡漏建议'} />
+  }
+
   return (
     <Card
       title="价格评估"
@@ -64,9 +113,8 @@ export default function BargainEvalCard({
         </Tooltip>
       }
     >
-      {!soldTaskId ? (
-        <Empty description={'请先在上方"捡漏价格参考"选择品类，再进行价格评估'} />
-      ) : (
+      {/* S7735: 反转否定条件 !soldTaskId 为肯定条件 soldTaskId */}
+      {soldTaskId ? (
         <>
           <Space wrap style={{ marginBottom: 16 }}>
             <Text type="secondary">当前价格：</Text>
@@ -92,50 +140,10 @@ export default function BargainEvalCard({
               基于任务价格区间 + 已售商品分位数综合评估
             </Text>
           </Space>
-          {evalLoading ? (
-            <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
-          ) : evalResult ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <Row gutter={16} align="middle">
-                <Col xs={24} sm={8}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Text type="secondary">评估等级：</Text>
-                    <Tag color={levelConfig.color}>
-                      {levelConfig.label}
-                    </Tag>
-                  </div>
-                </Col>
-                <Col xs={24} sm={16}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Text type="secondary">捡漏得分：</Text>
-                    <Progress
-                      percent={evalResult.bargain_score}
-                      size="small"
-                      status={getProgressStatus()}
-                      style={{ flex: 1, minWidth: 200, marginBottom: 0 }}
-                    />
-                  </div>
-                </Col>
-              </Row>
-              <Alert
-                type={getAlertType()}
-                message={evalResult.suggestion}
-              />
-              {evalResult.sold_price_stats && (
-                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 12, color: token.colorTextTertiary }}>
-                  <span>已售 P10：<b>{formatPrice(evalResult.sold_price_stats.p10)}</b></span>
-                  <span>P25：<b>{formatPrice(evalResult.sold_price_stats.p25)}</b></span>
-                  <span>中位数：<b>{formatPrice(evalResult.sold_price_stats.median)}</b></span>
-                  <span>P75：<b>{formatPrice(evalResult.sold_price_stats.p75)}</b></span>
-                  <span>P90：<b>{formatPrice(evalResult.sold_price_stats.p90)}</b></span>
-                  <span>样本数：<b>{evalResult.sold_price_stats.count}</b></span>
-                </div>
-              )}
-            </div>
-          ) : (
-            <Empty description={'输入价格并点击"评估"查看捡漏建议'} />
-          )}
+          {evalContent}
         </>
+      ) : (
+        <Empty description={'请先在上方"捡漏价格参考"选择品类，再进行价格评估'} />
       )}
     </Card>
   )

@@ -231,7 +231,7 @@ class LoginOrchestrator:
     # 自动重登冷却时间（秒），失败后避免频繁重试
     _AUTO_RELOGIN_COOLDOWN_SEC = 600
 
-    async def start_session(
+    def start_session(
         self,
         cookie_provider: Callable[[], str | None],
         renew_callback: Callable[[], Awaitable[bool]] | None = None,
@@ -450,7 +450,8 @@ class LoginOrchestrator:
             # 登录成功后重置自愈状态，避免历史失败计数影响新一轮会话
             self._renew_fail_count = 0
             self._auto_relogin_cooldown_until = 0.0
-            await self.start_session(
+            # start_session 是同步函数（无 await 的 async 已移除以避免 S7503）
+            self.start_session(
                 cookie_provider=self._default_cookie_provider,
                 renew_callback=self._default_renew_callback,
             )

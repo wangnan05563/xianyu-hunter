@@ -312,7 +312,8 @@ class BrowserManager:
                     path, _ = winreg.QueryValueEx(key, "")
                     if path and Path(path).exists():
                         return path
-            except (OSError, FileNotFoundError, PermissionError):
+            # S5713: FileNotFoundError/PermissionError 都是 OSError 子类，移除冗余子类
+            except OSError:
                 # 注册表查询失败（非 Windows / Edge 未注册 / 权限不足）时静默回退
                 pass
 

@@ -365,7 +365,7 @@ class Buyer:
         if wait_for_networkidle:
             await self._wait_networkidle_or_pass(page, wait_seconds)
 
-        if await self._poll_order_page_appearance(page, item_id, wait_seconds):
+        if await self._poll_order_page_appearance(page, wait_seconds):
             return True
 
         return await self._handle_order_page_timeout(page, item_id, raise_on_timeout)
@@ -381,7 +381,7 @@ class Buyer:
             pass
 
     async def _poll_order_page_appearance(
-        self, page: Page, item_id: str, wait_seconds: float
+        self, page: Page, wait_seconds: float
     ) -> bool:
         """轮询检测订单确认页是否出现，检测到登录页立即抛 BuyerError
 
@@ -430,7 +430,7 @@ class Buyer:
             )
         raise ButtonNotFoundError("点击「立即购买」后订单确认页未加载完成")
 
-    async def _check_login_redirect(self, page: Page) -> None:
+    def _check_login_redirect(self, page: Page) -> None:
         """检测登录态失效并在失效时抛 BuyerError
 
         放在每轮重试开头而非 _is_out_of_stock 之前：登录态失效是最高频失败原因，
@@ -524,10 +524,10 @@ class Buyer:
         clicked_any = False
         for attempt in range(1, self.config.click_retry_times + 1):
             # 登录页跳转检测：每轮重试开始时检查 URL
-            await self._check_login_redirect(page)
+            self._check_login_redirect(page)
             try:
                 should_return, clicked_any = await self._try_one_buy_now_attempt(
-                    page, item_id, attempt, clicked_any
+                    page, item_id, clicked_any
                 )
                 if should_return:
                     return True
@@ -544,7 +544,7 @@ class Buyer:
         return False
 
     async def _try_one_buy_now_attempt(
-        self, page: Page, item_id: str, attempt: int, clicked_any: bool
+        self, page: Page, item_id: str, clicked_any: bool
     ) -> tuple[bool, bool]:
         """单轮尝试点击立即购买
 
@@ -994,7 +994,7 @@ class Buyer:
         """短超时读取 body 文本，避免 SPA 页面卡住抢单流程。"""
         try:
             return await asyncio.wait_for(
-                page.text_content("body", timeout=int(timeout * 1000)),  # type: ignore[call-arg]
+                page.text_content("body", timeout=int(timeout * 1000)),  # type: ignore[call-arg]  # noqa: S7483
                 timeout=timeout + 0.5,
             ) or ""
         except TypeError:

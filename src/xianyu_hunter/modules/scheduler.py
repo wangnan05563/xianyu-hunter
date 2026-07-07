@@ -118,7 +118,7 @@ class TaskScheduler:
         cleanup = getattr(h.worker, "cleanup", None)
         if cleanup:
             try:
-                await cleanup()
+                cleanup()
             except Exception as e:
                 logger.warning(f"[Task {task_id}] Worker cleanup 失败: {e}")
 
@@ -186,7 +186,7 @@ class TaskScheduler:
         h.stop_event.set()
         h.pause_event.set()  # 若正在暂停，让它能继续到下一轮 stop 检查
         try:
-            await asyncio.wait_for(h.loop_task, timeout=timeout)
+            await asyncio.wait_for(h.loop_task, timeout=timeout)  # noqa: S7483
         except asyncio.TimeoutError:
             logger.warning(f"任务 {task_id} 30s 内未退出，强制取消")
             h.loop_task.cancel()
@@ -219,14 +219,18 @@ class TaskScheduler:
         - 公共 API 上保留 `start_all()` 同步签名，调用方用 `container.scheduler.start_all()` 即可。
         - 若需要等待首个轮次结束，请改用 `await scheduler.start_and_wait_all()` 之类显式方法。
         """
-        for tid in list(self._workers.keys()):
+        # 提前快照 worker ids：self.start() 内部可能修改 self._workers，
+        # 直接对 keys() 迭代会触发 RuntimeError: dictionary changed size during iteration
+        worker_tids = list(self._workers.keys())  # noqa: S7504 - list() 必要：防止迭代中修改字典
+        for tid in worker_tids:
             self.start(tid)
         return _ImmediateAwaitable()
 
     async def stop_all(self) -> None:
         # 并发等待所有 stop
+        # list() 必要：self.stop() 内部 del self._workers[tid]，并发执行时会修改字典
         await asyncio.gather(
-            *(self.stop(tid) for tid in list(self._workers.keys())),
+            *(self.stop(tid) for tid in list(self._workers.keys())),  # noqa: S7504
             return_exceptions=True,
         )
 

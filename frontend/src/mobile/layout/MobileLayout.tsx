@@ -1,13 +1,11 @@
 import { Outlet } from 'react-router-dom'
 import { theme } from 'antd'
-import { useTheme } from '../../contexts/ThemeContext'
 import MobileHeader from './MobileHeader'
 import TabBar from '../components/TabBar'
 import OfflineBanner from '../components/OfflineBanner'
 
 // 移动端主布局：Header + Content + TabBar
 export default function MobileLayout() {
-  const { isDark } = useTheme()
   const { token: themeToken } = theme.useToken()
 
   return (

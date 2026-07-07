@@ -4,9 +4,10 @@ import type { OfficialCollectResult } from '../../../api'
 import { translateDimension, translateRejectReason } from '../dimensionLabels'
 
 interface CollectResultModalProps {
-  open: boolean
-  result: OfficialCollectResult | null
-  onCancel: () => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly open: boolean
+  readonly result: OfficialCollectResult | null
+  readonly onCancel: () => void
 }
 
 export function CollectResultModal({ open, result, onCancel }: CollectResultModalProps) {

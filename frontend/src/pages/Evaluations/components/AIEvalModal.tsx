@@ -2,11 +2,12 @@ import { Modal, Spin, Row, Col, Statistic, Tag, Alert, Collapse, Empty, Button }
 import type { AIConditionResult } from '../../../api'
 
 interface AIEvalModalProps {
-  open: boolean
-  loading: boolean
-  result: AIConditionResult | null
-  itemId: string
-  onCancel: () => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly open: boolean
+  readonly loading: boolean
+  readonly result: AIConditionResult | null
+  readonly itemId: string
+  readonly onCancel: () => void
 }
 
 // S3776 修复：原主组件 CC=28，将大块 JSX 拆分为独立子组件，主函数只剩骨架

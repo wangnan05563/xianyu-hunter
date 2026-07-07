@@ -293,7 +293,7 @@ export default function DatabaseAdmin() {
       setRows(data.rows)
       setTotal(data.total)
       // 搜索成功且关键词非空时记录历史，供后续快速复用
-      if (search && search.trim()) {
+      if (search?.trim()) {
         add(search.trim())
       }
     } catch (e: any) {

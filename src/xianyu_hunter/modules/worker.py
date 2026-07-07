@@ -117,7 +117,7 @@ class TaskWorker:
         # 每轮 run_once 开头重置，避免上一轮的失败影响本轮（Cookie 可能已刷新）
         self._consecutive_collect_failures: int = 0
 
-    async def cleanup(self) -> None:
+    def cleanup(self) -> None:
         """Worker 资源清理钩子
 
         供 TaskScheduler.unregister 调用，确保注销任务时释放持有的资源。
@@ -630,7 +630,13 @@ class TaskWorker:
         try:
             import json as _json
             score_display = eval_result.score if eval_result.score is not None else "N/A"
-            level = "info" if eval_result.is_passed else ("warn" if eval_result.risk_level != RiskLevel.EXTREME else "err")
+            # S3358: 提取嵌套三元为独立变量
+            if eval_result.is_passed:
+                level = "info"
+            elif eval_result.risk_level == RiskLevel.EXTREME:
+                level = "err"
+            else:
+                level = "warn"
             if eval_result.risk_level == RiskLevel.UNKNOWN:
                 level = "warn"  # 数据不足用 warn 级别，避免误报为错误
             self.repo.upsert_eval_event({
@@ -892,7 +898,7 @@ class TaskWorker:
                 except Exception:
                     pass
 
-    async def _finalize_run(self, stats: RunStats, new_items: list[ItemSummary] | None) -> None:
+    def _finalize_run(self, stats: RunStats, new_items: list[ItemSummary] | None) -> None:
         """收尾：设置完成时间 + 持久化 items + 兜底写入 task_links + 写入 search_done 事件"""
         stats.finished_at = datetime.now(timezone.utc)
         # 确保商品持久化到 items 表（去重 + 关联查询依赖此数据）

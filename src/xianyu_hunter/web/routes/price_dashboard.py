@@ -383,15 +383,21 @@ def _load_sold_prices_from_links(
     注意：闲鱼不公开实际成交价，此处的 price 是商品标价，is_sold=true
     表示商品已被买家拍下，标价即近似成交价。
 
-    task_range 非空时按任务价格区间过滤，剔除 1 元引流/配件等异常样本。
+    过滤策略：
+    - task_id 非空：task_range 统一过滤（单一任务单一区间）
+    - task_id 为空：按每个任务各自的价格区间过滤后合并，
+      避免不同任务的价格区间混淆（如 A 任务 600~800 和 B 任务 3000~6000
+      不能用一个统一区间过滤）
+
     返回 (过滤后价格列表, 过滤前原始样本数)，调用方据此计算 filtered_count。
     """
     # json_extract 提取 display 中的 is_sold 和 price 字段
     sold_flag = func.json_extract(TaskLinkRow.display, '$.is_sold')
     price_expr = func.json_extract(TaskLinkRow.display, '$.price')
 
+    # 同时查询 task_id 用于按任务分组过滤
     stmt = (
-        select(price_expr)
+        select(TaskLinkRow.task_id, price_expr)
         .where(TaskLinkRow.link_type == "item")
         .where(sold_flag == 1)  # SQLite json_extract 返回 1/0
     )
@@ -404,20 +410,66 @@ def _load_sold_prices_from_links(
     stmt = stmt.limit(5000)
 
     rows = conn.execute(stmt).all()
-    prices: list[float] = []
+    # 解析 (task_id, price) 二元组列表
+    typed: list[tuple[str | None, float]] = []
     for r in rows:
-        if r[0] is None:
+        if r[1] is None:
             continue
         try:
-            p = float(r[0])
+            p = float(r[1])
             if p > 0:
-                prices.append(p)
+                typed.append((r[0], p))
         except (TypeError, ValueError):
             continue
-    raw_count = len(prices)
-    if task_range:
-        prices = filter_prices_by_task_range(prices, task_range)
+    raw_count = len(typed)
+
+    # task_range 有效时统一过滤（task_id 非空的场景）
+    if task_range and (task_range.get("min_price") is not None or task_range.get("max_price") is not None):
+        prices = filter_prices_by_task_range([p for _, p in typed], task_range)
+    elif not task_id:
+        # 全部任务模式：按每个任务各自的价格区间过滤后合并
+        prices = _filter_by_per_task_range(conn, typed)
+    else:
+        prices = [p for _, p in typed]
     return prices, raw_count
+
+
+def _filter_by_per_task_range(
+    conn, typed_prices: list[tuple[str | None, float]],
+) -> list[float]:
+    """按每个任务各自的价格区间过滤后合并
+
+    全部任务模式下不能使用统一区间过滤（不同任务监控不同价位商品），
+    需要读取每个任务的 min_price/max_price，按各自区间过滤后合并。
+
+    未配置价格区间的任务（min/max 均为 NULL）不过滤，保留全部价格。
+    """
+    # 一次性查询所有任务的价格区间
+    task_rows = conn.execute(
+        select(TaskRow.id, TaskRow.min_price, TaskRow.max_price)
+    ).all()
+    ranges: dict[str, dict[str, float | None]] = {}
+    for tr in task_rows:
+        ranges[tr[0]] = {
+            "min_price": float(tr[1]) if tr[1] is not None else None,
+            "max_price": float(tr[2]) if tr[2] is not None else None,
+        }
+
+    result: list[float] = []
+    for tid, price in typed_prices:
+        tr = ranges.get(tid) if tid else None
+        if not tr:
+            # 任务不存在或无 task_id：保留（无法判断是否异常）
+            result.append(price)
+            continue
+        lo = tr["min_price"]
+        hi = tr["max_price"]
+        if lo is not None and price < lo:
+            continue
+        if hi is not None and price > hi:
+            continue
+        result.append(price)
+    return result
 
 
 def _load_all_prices_from_items(
@@ -429,11 +481,14 @@ def _load_all_prices_from_items(
     items 表不区分已售/在售，包含所有采集到的商品。作为已售数据的回退，
     提供更充分的市场价格参考样本。
 
-    task_range 非空时按任务价格区间过滤，剔除 1 元引流/配件等异常样本，
-    避免回退数据源被异常低价污染。
+    过滤策略与 _load_sold_prices_from_links 一致：
+    - task_id 非空：task_range 统一过滤
+    - task_id 为空：按每个任务各自的价格区间过滤后合并
+
     返回 (过滤后价格列表, 过滤前原始样本数)，调用方据此计算 filtered_count。
     """
-    stmt = select(ItemRow.price)
+    # 同时查询 task_id 用于按任务分组过滤
+    stmt = select(ItemRow.task_id, ItemRow.price)
     if task_id:
         stmt = stmt.where(ItemRow.task_id == task_id)
     if range_days > 0:
@@ -441,10 +496,20 @@ def _load_all_prices_from_items(
         stmt = stmt.where(ItemRow.publish_time >= cutoff)
 
     rows = conn.execute(stmt).all()
-    prices = [float(r[0]) for r in rows if r and r[0] is not None and float(r[0]) > 0]
-    raw_count = len(prices)
-    if task_range:
-        prices = filter_prices_by_task_range(prices, task_range)
+    typed: list[tuple[str | None, float]] = []
+    for r in rows:
+        if r and r[1] is not None:
+            p = float(r[1])
+            if p > 0:
+                typed.append((r[0], p))
+    raw_count = len(typed)
+
+    if task_range and (task_range.get("min_price") is not None or task_range.get("max_price") is not None):
+        prices = filter_prices_by_task_range([p for _, p in typed], task_range)
+    elif not task_id:
+        prices = _filter_by_per_task_range(conn, typed)
+    else:
+        prices = [p for _, p in typed]
     return prices, raw_count
 
 

@@ -37,9 +37,9 @@ const FALLBACK = {
 // 项目规范：用 type 而非 interface 定义组件 Props
 type AccountSwitcherProps = {
   /** 当前账号 user_id（用于标记 is_current 与禁用切换到自身） */
-  currentUserId?: string
+  readonly currentUserId?: string
   /** 切换账号成功后回调（父组件可触发菜单/任务刷新） */
-  onSwitched?: (userId: string) => void
+  readonly onSwitched?: (userId: string) => void
 }
 
 // 账号状态徽标颜色映射
@@ -72,7 +72,6 @@ function AccountMenuItem({
   disabled,
   avatarError,
   onAvatarError,
-  onClick,
 }: {
   readonly account: AccountInfo
   readonly isCurrent: boolean
@@ -80,16 +79,16 @@ function AccountMenuItem({
   readonly disabled: boolean
   readonly avatarError: boolean
   readonly onAvatarError: () => boolean
-  readonly onClick: () => void
 }) {
   const displayName = getDisplayName(account)
   const avatarUrl = account.avatar_url && !avatarError ? account.avatar_url : undefined
   const showNickname = !!account.nickname && !!account.custom_alias && account.custom_alias !== account.nickname
 
+  // S6848/S1082：移除 div 上的 onClick，点击由父级 Dropdown 菜单项的 onClick 统一处理，
+  // 避免 div 被识别为非原生交互元素而需要额外的 role/tabIndex/onKeyDown
   return (
     <div
       style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', minWidth: 220 }}
-      onClick={onClick}
     >
       {avatarUrl ? (
         <Avatar size={28} src={avatarUrl} onError={onAvatarError} />
@@ -143,7 +142,6 @@ function buildAccountMenuItems(
           disabled={switching || isExpired}
           avatarError={!!avatarErrors[account.user_id]}
           onAvatarError={() => handleAvatarError(account.user_id)}
-          onClick={() => { if (!(switching || isExpired)) handleSwitch(account.user_id) }}
         />
       ),
     }
@@ -314,7 +312,6 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
   const safeAccounts = Array.isArray(accounts) ? accounts : []
   const current = safeAccounts.find((a) => a.is_current) || safeAccounts.find((a) => a.user_id === currentUserId)
   const displayName = current ? getDisplayName(current) : '账号'
-  const avatarUrl = current?.avatar_url && !avatarErrors[current.user_id] ? current.avatar_url : undefined
 
   // 头像加载失败时回退到品牌色
   const handleAvatarError = (userId: string) => {
@@ -395,7 +392,8 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
       current={current}
       displayName={displayName}
       avatarError={current ? !!avatarErrors[current.user_id] : false}
-      onAvatarError={() => { if (current) return handleAvatarError(current.user_id); return true }}
+      // S2681：用三元表达式替代 if+return，避免"仅首条语句条件执行"的歧义
+      onAvatarError={() => current ? handleAvatarError(current.user_id) : true}
     />
   )
 

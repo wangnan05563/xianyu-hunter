@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from xianyu_hunter.web.routes.api_evaluations import _ensure_official_collect_cookies
+from xianyu_hunter.web.routes import api_task_links
 from xianyu_hunter.web.routes.api_task_links import _ensure_live_search_cookies
 from xianyu_hunter.web.routes.unified_login import (
     _inject_cookies_to_worker_from_store,
@@ -161,6 +162,64 @@ def test_live_search_replaces_stale_worker_identity_cookies() -> None:
     assert by_name["unb"] == "2209384756290"
     assert by_name["cookie2"] == "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d"
     collector.force_refresh_m5tk_next.assert_called_once()
+
+
+def test_live_search_uses_current_user_cookie_store() -> None:
+    user_id = "2209384756290"
+    fresh = _cookie_sample()
+    _write_cookie_json(fresh, user_id=user_id)
+
+    browser = MagicMock()
+    browser.get_cookies = AsyncMock(side_effect=[_old_identity_cookies(), fresh])
+    browser.add_cookies = AsyncMock(return_value=True)
+    collector = MagicMock()
+    collector.should_reset_m5tk.return_value = False
+    container = MagicMock()
+    container.browser = browser
+    container.collector = collector
+
+    asyncio.run(_ensure_live_search_cookies(container, user_id=user_id))
+
+    browser.add_cookies.assert_awaited_once()
+    injected = browser.add_cookies.await_args.args[0]
+    by_name = {c["name"]: c["value"] for c in injected}
+    assert by_name["unb"] == "2209384756290"
+    assert by_name["cookie2"] == "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d"
+
+
+@pytest.mark.asyncio
+async def test_live_event_stream_passes_current_user_to_cookie_check(monkeypatch) -> None:
+    seen: dict[str, str | None] = {}
+
+    async def fake_cookie_check(container, task_id, inflight_event, user_id=None):
+        seen["user_id"] = user_id
+        return {"stage": "error", "detail": "stop", "status": 499}
+
+    monkeypatch.setattr(api_task_links, "_check_live_cache", lambda task_id, live_start: None)
+    monkeypatch.setattr(api_task_links, "_check_live_cookies_safely", fake_cookie_check)
+    api_task_links._live_inflight.clear()
+
+    stream = api_task_links._live_event_stream(
+        MagicMock(),
+        MagicMock(),
+        "task-1",
+        "keyword",
+        "2209384756290",
+        None,
+        None,
+        None,
+        [],
+        [],
+        "default",
+        "",
+    )
+
+    events = []
+    async for event in stream:
+        events.append(event)
+
+    assert seen["user_id"] == "2209384756290"
+    assert any('"stage": "checking_cookies"' in event for event in events)
 
 
 def test_runtime_cookie_sync_invalidates_cache_and_injects_worker() -> None:

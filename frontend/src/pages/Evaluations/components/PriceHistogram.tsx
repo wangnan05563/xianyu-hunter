@@ -3,7 +3,7 @@ import ReactECharts from '../../../components/charts/EChart'
 import type { DistResponse } from '../utils'
 
 interface PriceHistogramProps {
-  dist: DistResponse | null
+  readonly dist: DistResponse | null
 }
 
 // 分数分布直方图：按后端返回的 distribution 区间统计商品数量

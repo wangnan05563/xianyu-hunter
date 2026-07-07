@@ -61,7 +61,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     # 捕获到 error_logs 表（失败不阻断主流程）
     try:
         from xianyu_hunter.web.middleware.error_capture import capture_request_error
-        await capture_request_error(request, exc)
+        capture_request_error(request, exc)
     except Exception:
         logger.warning("error_logs 捕获失败，跳过 rid={rid}", rid=request_id)
     # 响应头回传流水号，便于前端关联排障
@@ -72,7 +72,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-async def validation_exception_handler(
+def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """处理请求参数校验失败（422）
@@ -90,7 +90,7 @@ async def validation_exception_handler(
     )
 
 
-async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """处理 HTTPException，保持原有 detail 格式
 
     各路由主动抛出的 HTTPException（如 404/400/401）走此通道，

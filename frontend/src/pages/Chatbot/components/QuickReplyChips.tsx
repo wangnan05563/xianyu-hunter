@@ -3,8 +3,8 @@ import { ThunderboltOutlined } from '@ant-design/icons'
 import type { FAQ } from '../types'
 
 interface Props {
-  quickReplies: FAQ[]
-  onSelect: (question: string) => void  // 点击填充到输入框
+  readonly quickReplies: FAQ[]
+  readonly onSelect: (question: string) => void  // 点击填充到输入框
 }
 
 // 输入区上方的快捷回复 Chip 列表

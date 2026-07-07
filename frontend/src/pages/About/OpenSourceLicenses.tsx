@@ -7,10 +7,10 @@ import { TEXTS } from './i18n'
 // 数据来源：frontend/package.json + requirements.txt
 // 字段：name / version / license / repo
 interface Dependency {
-  name: string
-  version: string
-  license: string
-  repo: string
+  readonly name: string
+  readonly version: string
+  readonly license: string
+  readonly repo: string
 }
 
 // 前端依赖（来自 package.json dependencies + devDependencies）
@@ -68,8 +68,8 @@ const ALL_DEPS: Dependency[] = [...FRONTEND_DEPS, ...BACKEND_DEPS].sort((a, b) =
 )
 
 interface OpenSourceLicensesProps {
-  open: boolean
-  onClose: () => void
+  readonly open: boolean
+  readonly onClose: () => void
 }
 
 export function OpenSourceLicenses({ open, onClose }: OpenSourceLicensesProps) {

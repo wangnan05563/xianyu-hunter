@@ -127,7 +127,7 @@ class VectorStore:
 
         try:
             result = await asyncio.to_thread(_sync_query)
-        except Exception as e:
+        except Exception:
             logger.exception("VectorStore 检索失败")
             return []
 
@@ -199,7 +199,7 @@ class VectorStore:
         try:
             await asyncio.to_thread(_sync_upsert)
             return len(chunks)
-        except Exception as e:
+        except Exception:
             # 抛出异常而非返回 0：让 KBManager._do_build 进入 except 块回滚，
             # 避免出现 status=success 但 chunks=0 的误导性版本记录
             logger.exception("VectorStore upsert 失败")
@@ -225,7 +225,7 @@ class VectorStore:
                 return 0
             await asyncio.to_thread(_sync_delete)
             return count
-        except Exception as e:
+        except Exception:
             logger.exception("VectorStore delete_by_source 失败")
             return 0
 
@@ -243,7 +243,7 @@ class VectorStore:
 
         try:
             await asyncio.to_thread(_sync_clear)
-        except Exception as e:
+        except Exception:
             logger.exception("VectorStore clear_collection 失败")
 
     async def export_snapshot(self, snapshot_path: str) -> None:
@@ -267,7 +267,7 @@ class VectorStore:
 
         try:
             await asyncio.to_thread(_sync_export)
-        except Exception as e:
+        except Exception:
             logger.exception("VectorStore export_snapshot 失败")
 
     async def restore_from_snapshot(self, snapshot_path: str) -> None:
@@ -291,7 +291,7 @@ class VectorStore:
 
         try:
             await asyncio.to_thread(_sync_restore)
-        except Exception as e:
+        except Exception:
             logger.exception("VectorStore restore_from_snapshot 失败")
 
     async def count(self) -> int:
@@ -301,6 +301,6 @@ class VectorStore:
 
         try:
             return await asyncio.to_thread(_sync_count)
-        except Exception as e:
+        except Exception:
             logger.exception("VectorStore count 失败")
             return 0

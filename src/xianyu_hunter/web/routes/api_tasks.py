@@ -362,7 +362,7 @@ def get_task_runs(
     return container.repo.get_task_runs(task_id, range_hours=range_hours)
 
 
-async def _handle_scheduler_resume(container: Container, task_id: str, user_id: str) -> str:
+def _handle_scheduler_resume(container: Container, task_id: str, user_id: str) -> str:
     """resume 分支：scheduler.resume 失败时回滚 DB 到 paused 并抛 400
 
     P0-1/P0-2：Cookie 失效或冷却期内拒绝恢复，前端应提示用户重新登录。
@@ -415,7 +415,7 @@ async def _dispatch_scheduler_action(
             container.scheduler.pause(task_id)
             return "已暂停调度器中的任务"
         if action == "resume":
-            return await _handle_scheduler_resume(container, task_id, user_id)
+            return _handle_scheduler_resume(container, task_id, user_id)
         if action == "stop":
             await container.scheduler.stop(task_id)
             return "已停止调度器中的任务"

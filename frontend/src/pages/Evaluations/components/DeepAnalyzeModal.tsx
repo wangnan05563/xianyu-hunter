@@ -2,11 +2,12 @@ import { Modal, Spin, Descriptions, Alert, Tabs, Collapse, Empty, Tag, Row, Col,
 import type { DeepAnalyzeResult, DeepCheckResult } from '../../../api'
 
 interface DeepAnalyzeModalProps {
-  open: boolean
-  loading: boolean
-  result: DeepAnalyzeResult | null
-  itemId: string
-  onCancel: () => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly open: boolean
+  readonly loading: boolean
+  readonly result: DeepAnalyzeResult | null
+  readonly itemId: string
+  readonly onCancel: () => void
 }
 
 function VerdictTag({ verdict }: { readonly verdict: 'recommend' | 'caution' | 'reject' }) {

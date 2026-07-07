@@ -34,7 +34,7 @@ class ParserMixin:
         """等待首个搜索卡片出现（尝试多个选择器）"""
         for selector in self.selectors.search_card_candidates():
             try:
-                await page.wait_for_selector(selector, timeout=timeout // len(self.selectors.search_card_candidates()))
+                await page.wait_for_selector(selector, timeout=timeout // len(self.selectors.search_card_candidates()))  # noqa: S7483
                 return
             except PlaywrightTimeout:
                 continue

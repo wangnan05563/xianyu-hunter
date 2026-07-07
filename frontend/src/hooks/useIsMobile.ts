@@ -10,12 +10,12 @@ import { useEffect, useState } from 'react'
  */
 export function useIsMobile(): boolean {
   const [isMobile, setIsMobile] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.matchMedia('(max-width: 767px)').matches
+    if (typeof globalThis.window === 'undefined') return false
+    return globalThis.matchMedia('(max-width: 767px)').matches
   })
 
   useEffect(() => {
-    const mql = window.matchMedia('(max-width: 767px)')
+    const mql = globalThis.matchMedia('(max-width: 767px)')
     const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
     // 现代浏览器用 addEventListener，避免已废弃的 addListener
     mql.addEventListener('change', handler)

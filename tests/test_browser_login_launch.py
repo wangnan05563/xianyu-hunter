@@ -75,3 +75,32 @@ async def test_collect_settled_cookies_keeps_waiting_while_cookie_count_grows(mo
 
     assert len(cookies) == 75
     assert context.cookies.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_prepare_login_cookie_export_updates_running_status(monkeypatch) -> None:
+    context = AsyncMock()
+    page = AsyncMock()
+    route_handler = AsyncMock()
+    timings: dict[str, float] = {}
+    status_updates: list[dict] = []
+
+    monkeypatch.setattr(browser_login.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(
+        browser_login,
+        "_collect_settled_cookies",
+        AsyncMock(return_value=[{"name": "unb", "value": "2209384756290"}]),
+    )
+
+    cookies = await browser_login._prepare_login_cookie_export(
+        context,
+        page,
+        route_handler,
+        timings,
+        set_status=lambda **kw: status_updates.append(kw),
+    )
+
+    assert cookies == [{"name": "unb", "value": "2209384756290"}]
+    assert status_updates[0]["status"] == "running"
+    assert "保存 Cookie" in status_updates[0]["message"]
+    assert len(status_updates) >= 4

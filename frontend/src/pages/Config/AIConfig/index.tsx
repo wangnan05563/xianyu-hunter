@@ -281,8 +281,9 @@ export default function AIConfig() {
 
         <Tabs
           // 切换 tab 时保留各自表单状态：两个表单共用 config/showApiKey 等 props，
-          // 但 testing/testResult 独立，因此用 destroyInactiveTab={false} 防止切换时丢失测试结果
-          destroyInactiveTabPane={false}
+          // 但 testing/testResult 独立，因此用 destroyOnHidden={false} 防止切换时丢失测试结果
+          // 注：destroyInactiveTabPane 在 antd v5 已废弃，改用 destroyOnHidden（SonarQube S1874）
+          destroyOnHidden={false}
           items={[
             {
               key: 'ai-service',

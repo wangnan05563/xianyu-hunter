@@ -2022,11 +2022,11 @@ def _persist_eval_from_link(
     拆分自 _recompute_from_task_links：把持久化逻辑抽离，主循环只编排"""
     score_display = eval_result.score if eval_result.score is not None else "N/A"
     level = _determine_eval_level(eval_result)
-    if item_id not in existing_item_ids:
-        if _upsert_item_from_link_display(
-            container, item_id, link, display, detail.price, task_id, user_id=user_id,
-        ):
-            existing_item_ids.add(item_id)
+    # S1066：合并嵌套 if，两个条件短路求值语义等价
+    if item_id not in existing_item_ids and _upsert_item_from_link_display(
+        container, item_id, link, display, detail.price, task_id, user_id=user_id,
+    ):
+        existing_item_ids.add(item_id)
     # 使用 upsert 按 task_id+item_id 去重，防止重复评估
     container.repo.upsert_eval_event({
         "type": _EVAL_SCORED_TYPE,
@@ -2803,7 +2803,6 @@ async def _ensure_official_collect_cookies(container: Container) -> None:
         await ItemCollectionService(container).ensure_official_cookies()
     except CollectionError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
-    return
 
 
 async def _extract_reviews_from_page(page) -> list[str]:

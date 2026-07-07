@@ -20,7 +20,7 @@ function PageLoading() {
   )
 }
 
-function NotFoundSheet({ path }: { path: string }) {
+function NotFoundSheet({ path }: { readonly path: string }) {
   return (
     <div style={{ padding: 48 }}>
       <Empty description={`未找到路径对应的页面：${path}`} />
@@ -28,7 +28,7 @@ function NotFoundSheet({ path }: { path: string }) {
   )
 }
 
-export function SheetContent({ sheet }: { sheet?: SheetItem }) {
+export function SheetContent({ sheet }: { readonly sheet?: SheetItem }) {
   // 无 sheet 或激活 sheet 已最小化：显示空状态
   if (!sheet || sheet.minimized) {
     return (

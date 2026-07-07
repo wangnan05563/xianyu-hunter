@@ -107,4 +107,4 @@ class TaskConfig:
     search_sort_type: str = "default"  # 排序方式：default/newest/price_asc/price_desc/want_count
     search_timeout: int = 30          # 单次搜索请求的最大等待秒数
     search_regions: str = ""         # 地区过滤（逗号分隔，空字符串表示全国）
-    search_filter_tags: list = None  # 闲鱼筛选标签列表（如包邮、信用极好等）
+    search_filter_tags: Optional[list] = None  # 闲鱼筛选标签列表（如包邮、信用极好等）

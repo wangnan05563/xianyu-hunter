@@ -1083,6 +1083,11 @@ class DetailMixin:
 
         三个 tab 文本分别为 "全部N"/"在售N"/"已售出N"。
         className 是哈希化的 tabItem--XXX，无法用 CSS 选择器区分，按文本前缀匹配。
+
+        闲鱼改版兜底（2026-07）：新版卖家主页移除"在售/已售"tab，
+        改用"宝贝"tab（商品总数，含已售）和"信用及评价"tab（评价数）。
+        近似映射"宝贝"→on_sale；"信用及评价"是评价数≠已售数，不映射，
+        sold 保持 0 由调用方走 P2 调试 dump。
         """
         on_sale = 0
         sold = 0
@@ -1096,6 +1101,10 @@ class DetailMixin:
             for text in tab_texts or []:
                 on_sale = _parse_single_tab_count(text, "在售", on_sale)
                 sold = _parse_sold_tab_count(text, sold)
+                # 新版改版兜底：旧版"在售"tab 不存在时，用"宝贝"tab 近似映射
+                # 为什么放在循环内而非循环后：tabItem 顺序不固定，逐个尝试最稳妥
+                if on_sale == 0:
+                    on_sale = _parse_single_tab_count(text, "宝贝", on_sale)
         except Exception as e:
             logger.debug(f"tabItem 文本提取失败: {e}")
         return on_sale, sold

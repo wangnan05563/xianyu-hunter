@@ -140,7 +140,7 @@ def start_kb_refresh_scheduler(container: Any) -> None:
         # get_running_loop：startup 事件中事件循环一定在运行
         kb_scheduler.start(asyncio.get_running_loop())
         _kb_refresh_scheduler = kb_scheduler
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         # 启动失败不阻断应用：用户仍可手动通过 POST /api/chatbot/kb/rebuild 触发构建
         logger.exception("知识库定时刷新调度器启动失败")
 
@@ -166,12 +166,12 @@ def start_takeover_timeout_scheduler(container: Any) -> None:
             timeout_min=TAKEOVER_TIMEOUT_MIN,
         )
         _takeover_timeout_scheduler.start()
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         # 启动失败不阻断应用：用户仍可通过手动修改订单状态处理超时
         logger.exception("接管超时清理调度器启动失败")
 
 
-async def start_event_bus_in_background(container: Any) -> None:
+def start_event_bus_in_background(container: Any) -> None:
     """独立启动 EventBus 主循环（与调度器解耦）
 
     为什么独立于 start_scheduler_in_background：原实现把 run_forever()
@@ -198,7 +198,7 @@ async def start_event_bus_in_background(container: Any) -> None:
         except asyncio.CancelledError:
             logger.info("EventBus 正在停止...")
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             # run_forever 内部已隔离 handler 异常，此处兜底防止 task 静默退出
             logger.exception("EventBus 主循环异常退出")
 
@@ -484,7 +484,8 @@ async def _start_all_schedulers(container: Any) -> None:
         # EventBus 必须先于调度器启动：worker.run_once 会在调度循环中
         # publish_nowait(EVAL_PASSED)，若无消费者事件会堆积在队列
         # 无消费者。EventBus 与"是否有 RUNNING 任务"解耦，无条件启动
-        await start_event_bus_in_background(container)
+        # start_event_bus_in_background 已改为同步（无 await 的 async 移除以避免 S7503）
+        start_event_bus_in_background(container)
         await start_scheduler_in_background(container)
 
     # 启动 Cookie 定时同步（如果配置启用）

@@ -312,11 +312,11 @@ export default function PriceStrategy() {
               <div style={{ opacity: strategy.enabled_market_ratio ? 1 : 0.5 }}>
                 <Slider
                   min={0.3}
-                  max={1.0}
+                  max={1}
                   step={0.05}
                   value={strategy.market_ratio}
                   onChange={(v) => setStrategy({ ...strategy, market_ratio: v })}
-                  marks={{ 0.3: '30%', 0.5: '50%', 0.7: '70%', 1.0: '100%' }}
+                  marks={{ 0.3: '30%', 0.5: '50%', 0.7: '70%', 1: '100%' }}
                   tooltip={{ formatter: (v) => `${((v ?? 0) * 100).toFixed(0)}%` }}
                 />
                 <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
@@ -368,10 +368,11 @@ export default function PriceStrategy() {
             <Card title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><TrendPreviewIcon size={20} /> 实时预览：价格分布直方图</span>} style={{ marginBottom: 16 }}>
               <ReactECharts ref={chartRef} option={chartOption} style={{ height: 300 }} />
               <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 8 }}>
-                <span style={{ color: '#52c41a' }}>■</span> 通过 &nbsp;
-                <span style={{ color: '#ff4d4f' }}>■</span> 被过滤 &nbsp;
-                <span style={{ color: '#faad14' }}>┃</span> 下限 &nbsp;
-                <span style={{ color: '#ff4d4f' }}>┃</span> 上限
+                {/* S6772：每个图例单元（图标+文字）整体放入一个 span，避免相邻 span 间空白歧义 */}
+                <span style={{ color: '#52c41a' }}>■&nbsp;通过</span>{' '}
+                <span style={{ color: '#ff4d4f', marginLeft: 8 }}>■&nbsp;被过滤</span>{' '}
+                <span style={{ color: '#faad14', marginLeft: 8 }}>┃&nbsp;下限</span>{' '}
+                <span style={{ color: '#ff4d4f', marginLeft: 8 }}>┃&nbsp;上限</span>
               </div>
             </Card>
 

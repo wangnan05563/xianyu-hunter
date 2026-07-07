@@ -28,7 +28,7 @@ client.interceptors.response.use(
       localStorage.removeItem('xh_token')
       // 避免在登录页本身触发跳转（防止死循环）
       // 路径匹配必须用 /app/login：SPA 挂载在 /app/ 下（vite base + BrowserRouter basename）
-      const currentPath = window.location.pathname + window.location.search
+      const currentPath = globalThis.location.pathname + globalThis.location.search
       const isLoginPage = currentPath.startsWith('/app/login')
       if (!isLoginPage && !isRedirecting) {
         isRedirecting = true

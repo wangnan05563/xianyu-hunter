@@ -22,16 +22,16 @@ function formatPublishDate(iso: string): string {
 }
 
 interface BrandCardProps {
-  version: string
-  buildDate: string
-  gitSha: string
-  state: UpdateState
-  onCheck: () => void
-  onCopy: () => void
+  readonly version: string
+  readonly buildDate: string
+  readonly gitSha: string
+  readonly state: UpdateState
+  readonly onCheck: () => void
+  readonly onCopy: () => void
 }
 
 // 五态按钮渲染：根据状态机（idle/loading/latest/newer/error）分别呈现
-function UpdateButton({ state, onCheck }: { state: UpdateState; onCheck: () => void }) {
+function UpdateButton({ state, onCheck }: { readonly state: UpdateState; readonly onCheck: () => void }) {
   switch (state.kind) {
     case 'loading':
       // antd Button 的 loading prop 已自带 spinner，无需再叠加 LoadingOutlined

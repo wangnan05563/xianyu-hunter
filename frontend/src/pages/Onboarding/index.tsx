@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import {
   Steps,
   Card,
@@ -198,7 +198,7 @@ export default function Onboarding() {
             showIcon
           />
           <Paragraph>
-            前往 <a onClick={() => navigate('/config/notifier')}>通知渠道</a> 页面配置钉钉、企业微信、邮件等通知方式。
+            前往 <Link to="/config/notifier">通知渠道</Link> 页面配置钉钉、企业微信、邮件等通知方式。
           </Paragraph>
           <Button type="primary" onClick={() => setCurrent(3)}>
             下一步

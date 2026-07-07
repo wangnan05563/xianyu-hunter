@@ -25,7 +25,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool
 
 
 def _utcnow() -> datetime:
@@ -776,17 +776,19 @@ class UserSessionEventRow(Base):
 
 
 def create_sqlite_engine(db_path: str = "data/xianyu.db"):
-    """创建 SQLite 引擎（启用 WAL、外键约束、busy_timeout、NullPool）
+    """创建 SQLite 引擎（启用 WAL、外键约束、busy_timeout、QueuePool）
 
-    为什么用 NullPool 而非 StaticPool：
-    StaticPool 全进程共享单连接，配合 check_same_thread=False 让多线程复用
-    同一 sqlite3.Connection。但 sqlite3.Connection 不是线程安全对象，
+    为什么用 QueuePool 而非 NullPool：
+    NullPool 每次 engine.connect() 创建独立连接、关闭时销毁，
+    每次都重新执行 5 个 PRAGMA，单次连接建立开销 ~100ms。
+    一个 API 请求 3 次 DB 往返 = 300ms 纯连接开销。
+    QueuePool 复用连接，PRAGMA 仅在首次建立时执行，后续查询直接复用。
+
+    为什么不用 StaticPool：
+    StaticPool 全进程共享单连接，sqlite3.Connection 不是线程安全对象，
     cursor.execute 与后续 fetchone 在多线程并发时会互相重置 cursor 状态，
     触发 InterfaceError("bad parameter or other API misuse")。
-
-    NullPool 每次 engine.connect() 创建独立连接、关闭时销毁，
-    每个线程持有自己的 Connection，从根本上避免跨线程 cursor 竞争。
-    WAL 模式 + busy_timeout 负责处理多连接的并发读写。
+    QueuePool 每个连接独立，避免此问题。
 
     为什么必须设置 busy_timeout：
     SQLite 默认 busy_timeout=0，遇到锁立即抛 "database is locked"。
@@ -804,13 +806,17 @@ def create_sqlite_engine(db_path: str = "data/xianyu.db"):
         f"sqlite:///{db_path}",
         echo=False,
         future=True,
-        # NullPool：每次 connect() 创建独立 sqlite3.Connection，避免跨线程共享
-        # check_same_thread=False：保留以兼容 anyio worker thread 复用场景
+        # QueuePool：复用连接避免重复建立 + PRAGMA 开销
+        # pool_size=5：够用，SQLite 不像 PostgreSQL 需要多连接
+        # check_same_thread=False：允许 anyio worker thread 复用连接
         connect_args={"check_same_thread": False},
-        poolclass=NullPool,
+        poolclass=QueuePool,
+        pool_size=5,
+        max_overflow=5,
+        pool_pre_ping=True,
     )
 
-    # 每个 DBAPI 连接建立时设置 PRAGMA（NullPool 下每次 connect 都执行）
+    # 每个 DBAPI 连接首次建立时设置 PRAGMA（QueuePool 下仅执行一次）
     @event.listens_for(engine, "connect")
     def _set_sqlite_pragma(dbapi_connection, _):
         cursor = dbapi_connection.cursor()

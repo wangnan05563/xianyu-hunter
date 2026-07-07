@@ -3,10 +3,10 @@ import { Tag, Input, Space } from 'antd'
 import { PlusOutlined, CloseOutlined } from '@ant-design/icons'
 
 interface TagEditorProps {
-  value: string[]
-  onChange: (value: string[]) => void
-  placeholder?: string
-  color?: string
+  readonly value: string[]
+  readonly onChange: (value: string[]) => void
+  readonly placeholder?: string
+  readonly color?: string
 }
 
 /**

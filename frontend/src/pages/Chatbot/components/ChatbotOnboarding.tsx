@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Card, Tag, Space, Button, Empty, Skeleton } from 'antd'
+import { Tag, Space, Button, Empty, Skeleton } from 'antd'
 import {
   CloseOutlined,
   BookOutlined,
@@ -13,8 +13,8 @@ import { chatbotApi } from '../api'
 import type { FAQ, WelcomeInfo } from '../types'
 
 interface Props {
-  onQuestionClick: (q: string) => void  // 点击 FAQ 立即发送
-  onDismiss: () => void  // 关闭引导
+  readonly onQuestionClick: (q: string) => void  // 点击 FAQ 立即发送
+  readonly onDismiss: () => void  // 关闭引导
 }
 
 // 热门功能卡片：硬编码 4 张，点击跳转（不消耗 API）
@@ -120,40 +120,38 @@ export default function ChatbotOnboarding({ onQuestionClick, onDismiss }: Props)
       {/* 常见问题快捷入口 */}
       <div className="cb-onboarding-section">
         <div className="cb-onboarding-section-title">📌 常见问题</div>
-        {loading ? (
-          <Skeleton active paragraph={{ rows: 3 }} />
-        ) : faqs.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="暂无常见问题"
-            style={{ margin: '12px 0' }}
-          />
-        ) : (
-          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-            {faqs.map((faq) => (
-              <div
-                key={faq.id}
-                className="cb-faq-item"
-                onClick={() => onQuestionClick(faq.question)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') onQuestionClick(faq.question)
-                }}
-              >
-                <span className="cb-faq-question">{faq.question}</span>
-                <ArrowRightOutlined className="cb-faq-arrow" />
-              </div>
-            ))}
-          </Space>
-        )}
+        {(() => {
+          // 提取嵌套三元为独立变量，便于阅读
+          const faqContent = faqs.length === 0 ? (
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description="暂无常见问题"
+              style={{ margin: '12px 0' }}
+            />
+          ) : (
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              {faqs.map((faq) => (
+                <button
+                  type="button"
+                  key={faq.id}
+                  className="cb-faq-item"
+                  onClick={() => onQuestionClick(faq.question)}
+                >
+                  <span className="cb-faq-question">{faq.question}</span>
+                  <ArrowRightOutlined className="cb-faq-arrow" />
+                </button>
+              ))}
+            </Space>
+          )
+          return loading ? <Skeleton active paragraph={{ rows: 3 }} /> : faqContent
+        })()}
       </div>
 
       {/* 使用提示 */}
       <div className="cb-onboarding-tips">
         <BulbOutlined style={{ marginRight: 6, color: 'var(--cb-yellow-light, #FFE082)' }} />
-        {TIPS.map((t, i) => (
-          <Tag key={i} className="cb-tip-tag">{t}</Tag>
+        {TIPS.map((t) => (
+          <Tag key={t} className="cb-tip-tag">{t}</Tag>
         ))}
       </div>
     </div>

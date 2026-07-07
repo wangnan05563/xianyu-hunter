@@ -28,7 +28,7 @@ export const errorLogApi = {
         responseType: 'text',
         transformResponse: [(data) => data],
       })
-      .then((r) => r.data as string),
+      .then((r) => r.data),
 
   updateStatus: (id: number, status: string) =>
     client

@@ -3,9 +3,9 @@ import ReactECharts from '../../../components/charts/EChart'
 import type { DistResponse } from '../utils'
 
 interface ResultBarChartProps {
-  dist: DistResponse | null
-  passScore: number
-  autoBuyScore: number
+  readonly dist: DistResponse | null
+  readonly passScore: number
+  readonly autoBuyScore: number
 }
 
 // 结果分布饼图：按当前生效阈值将评估结果分为可抢/通过/驳回三档

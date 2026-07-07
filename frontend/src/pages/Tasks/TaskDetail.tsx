@@ -111,11 +111,11 @@ function TrendSparkline({
   areaColor,
   yAxisMin,
 }: {
-  trend: TrendSeries | null
-  dataKey: 'value' | 'count'
-  lineColor: string
-  areaColor: string
-  yAxisMin?: (value: { min: number }) => number
+  readonly trend: TrendSeries | null
+  readonly dataKey: 'value' | 'count'
+  readonly lineColor: string
+  readonly areaColor: string
+  readonly yAxisMin?: (value: { min: number }) => number
 }) {
   if (!trend || trend.series.length === 0) {
     return <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />

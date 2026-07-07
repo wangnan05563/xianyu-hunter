@@ -13,20 +13,21 @@ const { Text } = Typography
 
 // Embedding 连接测试结果，与 LLM TestResult 结构一致便于复用
 export interface EmbeddingTestResult {
-  success: boolean
-  text: string
+  readonly success: boolean
+  readonly text: string
 }
 
 interface EmbeddingConfigFormProps {
-  config: AIConfigData
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly config: AIConfigData
   // 局部字段更新，避免子组件直接操作父级 setState
-  onConfigChange: (patch: Partial<AIConfigData>) => void
-  showApiKey: boolean
-  onToggleShowApiKey: () => void
-  onApplyPreset: (key: keyof typeof EMBEDDING_PRESETS) => void
-  testing: boolean
-  testResult: EmbeddingTestResult | null
-  onTestConnection: () => void
+  readonly onConfigChange: (patch: Partial<AIConfigData>) => void
+  readonly showApiKey: boolean
+  readonly onToggleShowApiKey: () => void
+  readonly onApplyPreset: (key: keyof typeof EMBEDDING_PRESETS) => void
+  readonly testing: boolean
+  readonly testResult: EmbeddingTestResult | null
+  readonly onTestConnection: () => void
 }
 
 export default function EmbeddingConfigForm({
@@ -86,10 +87,12 @@ export default function EmbeddingConfigForm({
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           {/* Embedding API Base URL */}
           <div>
-            <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
+            {/* htmlFor + id 关联 label 与 input，满足可访问性（SonarQube S6853） */}
+            <label htmlFor="embedding-base-url" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
               Embedding API Base URL
             </label>
             <Input
+              id="embedding-base-url"
               value={config.embedding_base_url ?? ''}
               onChange={(e) => onConfigChange({ embedding_base_url: e.target.value })}
               placeholder="留空 = Python 本地推理；Ollama: http://localhost:11434/v1"
@@ -102,16 +105,17 @@ export default function EmbeddingConfigForm({
 
           {/* Embedding API Key（密码类型 + 显示/隐藏切换 + 厂商申请页「获取」链接） */}
           <div>
-            <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
+            <label htmlFor="embedding-api-key" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
               Embedding API Key
             </label>
             <Input
+              id="embedding-api-key"
               type={showApiKey ? 'text' : 'password'}
               value={config.embedding_api_key ?? ''}
               onChange={(e) => onConfigChange({ embedding_api_key: e.target.value })}
               placeholder="本地模式无需填写；远程 Ollama 填 ollama"
               style={{ maxWidth: 600 }}
-              addonAfter={
+              suffix={
                 <Space size="small">
                   <Button
                     type="text"
@@ -138,10 +142,11 @@ export default function EmbeddingConfigForm({
           <Row gutter={16}>
             <Col span={12}>
               <div>
-                <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
+                <label htmlFor="embedding-model" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
                   Embedding 模型
                 </label>
                 <Input
+                  id="embedding-model"
                   value={config.embedding_model ?? ''}
                   onChange={(e) => onConfigChange({ embedding_model: e.target.value })}
                   placeholder="本地: BAAI/bge-small-zh-v1.5 / 远程: nomic-embed-text"
@@ -153,10 +158,11 @@ export default function EmbeddingConfigForm({
             </Col>
             <Col span={12}>
               <div>
-                <label style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
+                <label htmlFor="embedding-dimensions" style={{ fontWeight: 500, marginBottom: 4, display: 'block' }}>
                   向量维度
                 </label>
                 <InputNumber
+                  id="embedding-dimensions"
                   value={config.embedding_dimensions ?? 0}
                   onChange={(v) => onConfigChange({ embedding_dimensions: v ?? 0 })}
                   min={0}

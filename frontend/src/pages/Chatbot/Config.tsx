@@ -55,10 +55,10 @@ export default function ChatbotConfigPage() {
         safe(chatbotApi.listFAQ(), [] as FAQ[]),
         safe(chatbotApi.listAuditLogs(1, 50), { items: [] as AuditLog[], total: 0 }),
       ])
-      if (!cfg) {
-        message.error('智能客服模块未启用或加载失败')
-      } else {
+      if (cfg) {
         setConfig(cfg)
+      } else {
+        message.error('智能客服模块未启用或加载失败')
       }
       if (status) setKbStatus(status)
       setKbVersions(versions)
@@ -368,7 +368,13 @@ export default function ChatbotConfigPage() {
                     { title: '版本', dataIndex: 'id', key: 'id', render: (v: string) => <Tag>{v.slice(0, 8)}</Tag> },
                     { title: '类型', dataIndex: 'build_type', key: 'build_type' },
                     { title: '片段数', dataIndex: 'chunk_count', key: 'chunk_count' },
-                    { title: '状态', dataIndex: 'status', key: 'status', render: (s: string) => <Tag color={s === 'success' ? 'green' : s === 'partial' ? 'orange' : 'red'}>{s}</Tag> },
+                    { title: '状态', dataIndex: 'status', key: 'status', render: (s: string) => {
+                      // 拆解嵌套三元为独立 if/else，便于阅读
+                      let color = 'red'
+                      if (s === 'success') color = 'green'
+                      else if (s === 'partial') color = 'orange'
+                      return <Tag color={color}>{s}</Tag>
+                    } },
                     { title: '时间', dataIndex: 'created_at', key: 'created_at' },
                     {
                       title: '操作', key: 'actions',
@@ -510,10 +516,10 @@ export default function ChatbotConfigPage() {
 function FaqEditModal({
   open, faq, onSave, onCancel,
 }: {
-  open: boolean
-  faq: FAQ | null
-  onSave: (faq: FAQ) => void
-  onCancel: () => void
+  readonly open: boolean
+  readonly faq: FAQ | null
+  readonly onSave: (faq: FAQ) => void
+  readonly onCancel: () => void
 }) {
   const [form, setForm] = useState<FAQ>({
     question: '',

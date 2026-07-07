@@ -125,7 +125,8 @@ export default function VersionManager() {
     try {
       const data = await configApi.export()
       // 深拷贝后对敏感字段脱敏
-      const sanitized = JSON.parse(JSON.stringify(data))
+      // S7784: 用 structuredClone 替代 JSON.parse(JSON.stringify()) 创建深拷贝
+      const sanitized = structuredClone(data)
       for (const key of SENSITIVE_KEYS) {
         if (sanitized[key] != null && sanitized[key] !== '') {
           sanitized[key] = '***'
@@ -168,8 +169,9 @@ export default function VersionManager() {
           <div>
             <p>将改动 <strong>{previewRes.diff_count}</strong> 处配置项：</p>
             <div style={{ maxHeight: 300, overflow: 'auto', background: 'var(--xh-bg-spotlight)', padding: 12, fontSize: 12 }}>
-              {previewRes.diffs?.slice(0, 20).map((d: { path: string; op: string; old: string; new: string }, i: number) => (
-                <div key={i} style={{ marginBottom: 4 }}>
+              {previewRes.diffs?.slice(0, 20).map((d: { path: string; op: string; old: string; new: string }) => (
+                // S6479: 用 path + op + old + new 业务字段组合作 key，保证稳定唯一
+                <div key={`${d.path}-${d.op}-${d.old}-${d.new}`} style={{ marginBottom: 4 }}>
                   <Tag color={(() => {
                     // op 配色：add=绿 remove=红 其他=橙
                     if (d.op === 'add') return 'green'

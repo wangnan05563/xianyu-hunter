@@ -267,3 +267,68 @@ subprocess_sync:
   poll_interval_sec: 30
   # 启动时是否立即检查 pending 标记（处理上次未消费的信号）
   startup_check_enabled: true
+
+# ============== 状态恢复与日志规范（meta-rules #31/#32 落地）==============
+# 设计文档：docs/standards/四维度复盘方法论与历史教训集成.md
+# 这里的参数是项目代码运行时读取的配置契约，对应 meta-rule #31（状态恢复前置校验）
+# 与 #32（多阶段降级链日志合并）。审查规则参数见
+# .trae/skills/xianyu-backend-code-review/config.yaml#coding_standards.resume_policy
+# 与 log_merge 节点（含 reason_precheck_map 函数路径映射、forbidden_warning_keywords 等）。
+
+# resume 前置校验：异常 pause 后恢复任务前必须校验根因消除（meta-rule #31）
+# 适用：任务调度器 pause/resume、登录会话失效/恢复、断路器开/闭、限流配额恢复
+# 不适用：用户主动 pause（无 root_cause）、一次性任务、纯函数重试
+resume_policy:
+  enabled: true                       # 总开关（false 时仅做冷却期检查，跳过 precheck）
+  cooldown_seconds: 30                # 异常 pause 后冷却期时长（秒），冷却期内拒绝 resume
+  cooldown_default: 30                # 任务/会话无 root_cause 时使用的兜底冷却期
+  require_structured_response: true   # 校验失败时必须返回结构化响应
+  clear_root_cause_on_resume: true    # resume 成功后是否清除 root_cause（避免下次恢复误判）
+  # root_cause 持久化字段契约（与数据库 schema 对齐）
+  root_cause_persistence:
+    storage_field: root_cause         # 数据库存储字段名
+    schema:
+      reason_code: "string"           # 来自 error_code.reason_enum
+      failed_layer: "string"          # identity | session | network | rate_limit | business
+      paused_at: "float"              # epoch seconds
+      extra: "object"                 # 可选，自定义上下文
+
+# 多阶段降级链日志合并（meta-rule #32）
+# 同一逻辑链的多个中间阶段（降级/重试/回退）日志合并为 1 条结构化结果日志
+# 适用：降级链（API→DOM→缓存）、重试链、多策略回退、浏览器自动化多策略尝试
+# 不适用：独立一次性告警、用户操作即时反馈、关键路径 logger.exception()
+log_merge:
+  enabled: true                       # 总开关（false 时按各自步骤独立输出，不强制合并）
+  min_stages_to_merge: 2              # 合并阈值：阶段数 ≥ 该值才必须合并（单阶段无需合并）
+  intermediate_debug_enabled: true    # 中间步骤 DEBUG 化开关（true=logger.debug，false=保持原级别）
+  # 最终结果日志必须含的结构化 extra 字段
+  required_extra_fields:
+    - stages                          # 各中间步骤简述数组
+    - final_reason                    # 最终失败原因
+    - attempts                        # 阶段总数
+  # 推荐携带的上下文（缺失不报警）
+  optional_extra_fields:
+    - keyword
+    - task_id
+    - user_id
+
+# ============== 批量处理断路器（meta-rule #25 落地）==============
+# 设计文档：docs/standards/四维度复盘方法论与历史教训集成.md（工作流模板 C）
+# 项目代码运行时读取的断路器参数；审查规则参数见
+# .trae/skills/xianyu-backend-code-review/config.yaml#coding_standards.batch_circuit_breaker
+
+# 批量采集/刷新断路器：连续失败达阈值后熔断，剩余项标 pending 等待续传
+batch_circuit_breaker:
+  enabled: true
+  failure_threshold: 3                # 连续失败阈值（达到后触发熔断）
+  failure_window_sec: 3600            # 失败计数滑动窗口（秒）
+  mark_remaining_as: pending          # 剩余项处理策略（pending=等待续传，skipped=跳过）
+  persist_keys:                       # 熔断时必须持久化的进度字段
+    - cursor
+    - completed_ids
+    - remaining_ids
+  # 日志措辞三套文案（必须与实际动作一致，避免"暂停"措辞但实际 break）
+  log_phrasing:
+    paused: "批次熔断暂停（可恢复）"   # 熔断可恢复
+    stopped: "批次已停止（用户主动）"   # 用户主动停止
+    failed: "批次失败（异常终止）"      # 异常终止

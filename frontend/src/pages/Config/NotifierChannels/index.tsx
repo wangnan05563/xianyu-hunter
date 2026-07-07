@@ -383,7 +383,8 @@ export default function NotifierChannels() {
               <Checkbox.Group
                 value={subscribedEvents}
                 onChange={(values) => {
-                  const newEvents = values as string[]
+                  // S4325: 类型推断后已是 string[]，无需显式断言
+                  const newEvents = values
                   setSubscribedEvents(newEvents)
                   // 同步到配置（保存时会持久化到 YAML）
                   if (config) {

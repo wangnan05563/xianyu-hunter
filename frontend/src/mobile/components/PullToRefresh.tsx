@@ -1,8 +1,8 @@
 import { useState, useRef, type ReactNode } from 'react'
 
 interface PullToRefreshProps {
-  onRefresh: () => Promise<void>
-  children: ReactNode
+  readonly onRefresh: () => Promise<void>
+  readonly children: ReactNode
 }
 
 // 下拉刷新包装器：监听 touch 事件，下拉超过阈值触发刷新
@@ -16,7 +16,7 @@ export default function PullToRefresh({ onRefresh, children }: PullToRefreshProp
 
   const handleTouchStart = (e: React.TouchEvent) => {
     // 仅在内容滚动到顶部时启用下拉
-    if (containerRef.current && containerRef.current.scrollTop === 0) {
+    if (containerRef.current?.scrollTop === 0) {
       startY.current = e.touches[0].clientY
     } else {
       startY.current = 0

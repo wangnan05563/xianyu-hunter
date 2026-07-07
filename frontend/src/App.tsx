@@ -57,7 +57,7 @@ function PageLoading() {
 // 统一包裹懒加载组件的 Suspense 边界
 // 关键修复：在外层包一层 LazyErrorBoundary，捕获 chunk 加载失败错误，
 // 避免 Suspense 无法捕获同步错误导致白屏
-function LazyRoute({ children }: { children: ReactNode }) {
+function LazyRoute({ children }: { readonly children: ReactNode }) {
   return (
     <LazyErrorBoundary>
       <Suspense fallback={<PageLoading />}>{children}</Suspense>
@@ -71,7 +71,7 @@ export default function App() {
   // 移动端 UA 自动跳转到 /m/* 路由
   // 桌面端访问 /m/* 重定向到桌面路由
   // 路径检测必须带 /app 前缀：SPA 挂载在 /app/ 下（BrowserRouter basename="/app"）
-  if (isMobile && !window.location.pathname.startsWith('/app/m') && !window.location.pathname.startsWith('/app/login')) {
+  if (isMobile && !globalThis.location.pathname.startsWith('/app/m') && !globalThis.location.pathname.startsWith('/app/login')) {
     return <Navigate to="/m" replace />
   }
 

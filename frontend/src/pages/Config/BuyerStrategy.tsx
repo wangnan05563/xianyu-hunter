@@ -67,7 +67,8 @@ export default function BuyerStrategy() {
 
   // 数值防御：确保在 [0, 100] 范围内
   const clamp = (v: number | undefined | null): number => {
-    if (v == null || isNaN(v)) return 0
+    // Number.isNaN 比 isNaN 更严格：不会对非数字类型做隐式转换（SonarQube S7773）
+    if (v == null || Number.isNaN(v)) return 0
     return Math.max(0, Math.min(100, v))
   }
 
@@ -147,14 +148,17 @@ export default function BuyerStrategy() {
               <div style={{ marginBottom: 8 }}>
                 <strong>自动抢单最低分数（auto_buy_score）</strong>
               </div>
-              <InputNumber
-                min={0}
-                max={100}
-                value={clamp(evalConfig.auto_buy_score)}
-                onChange={updateAutoBuyScore}
-                style={{ width: '100%' }}
-                addonAfter="分"
-              />
+              {/* addonAfter 在 antd v5 已废弃，改用 Space.Compact 紧凑布局（SonarQube S1874） */}
+              <Space.Compact style={{ width: '100%' }}>
+                <InputNumber
+                  min={0}
+                  max={100}
+                  value={clamp(evalConfig.auto_buy_score)}
+                  onChange={updateAutoBuyScore}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ display: 'inline-flex', alignItems: 'center', padding: '0 12px', background: 'var(--xh-bg-spotlight)', border: '1px solid var(--xh-border)', borderLeft: 'none' }}>分</span>
+              </Space.Compact>
               <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
                 ≥ 此分数才会自动拍下（在「评估权重」页面设置评分规则）
               </Paragraph>
@@ -166,14 +170,16 @@ export default function BuyerStrategy() {
               <div style={{ marginBottom: 8 }}>
                 <strong>通过分数（pass_score）</strong>
               </div>
-              <InputNumber
-                min={0}
-                max={100}
-                value={clamp(evalConfig.pass_score)}
-                onChange={updatePassScore}
-                style={{ width: '100%' }}
-                addonAfter="分"
-              />
+              <Space.Compact style={{ width: '100%' }}>
+                <InputNumber
+                  min={0}
+                  max={100}
+                  value={clamp(evalConfig.pass_score)}
+                  onChange={updatePassScore}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ display: 'inline-flex', alignItems: 'center', padding: '0 12px', background: 'var(--xh-bg-spotlight)', border: '1px solid var(--xh-border)', borderLeft: 'none' }}>分</span>
+              </Space.Compact>
               <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
                 ≥ 此分数会推送给用户确认
               </Paragraph>

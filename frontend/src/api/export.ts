@@ -51,7 +51,9 @@ export const exportApi = {
     if (params.level) search.set('level', params.level)
     if (params.limit) search.set('limit', String(params.limit))
     const qs = search.toString()
-    return `/api/export/${dataset}${qs ? `?${qs}` : ''}`
+    // S4624：避免嵌套模板字面量，提取为独立变量
+    const querySuffix = qs ? `?${qs}` : ''
+    return `/api/export/${dataset}${querySuffix}`
   },
 
   /** 触发浏览器下载（同源直跳，cookie 自动携带） */

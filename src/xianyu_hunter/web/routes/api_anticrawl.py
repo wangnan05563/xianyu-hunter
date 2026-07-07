@@ -64,7 +64,7 @@ async def _load_and_check_session_layer(
     data = store._read_json()
     if not data or not data.get("cookies"):
         logger.debug("cookie_checker: JSON 无 Cookie 数据，尝试浏览器内存兜底")
-        return await _browser_cookies_fallback(orch), [], set()
+        return await _browser_cookies_fallback(), [], set()
 
     cookies_list = data["cookies"]
     names = {c.get("name", "") for c in cookies_list}
@@ -91,10 +91,10 @@ async def _load_and_check_session_layer(
             return None, cookies_list, names
 
     # JSON 路径已不可信，转浏览器内存兜底
-    return await _browser_cookies_fallback(orch), cookies_list, names
+    return await _browser_cookies_fallback(), cookies_list, names
 
 
-async def _check_identity_layer(names: set[str], orch) -> bool | None:
+async def _check_identity_layer(names: set[str]) -> bool | None:
     """检查 identity 层：至少一个身份 Cookie 存在
 
     返回：
@@ -109,7 +109,7 @@ async def _check_identity_layer(names: set[str], orch) -> bool | None:
     if has_identity:
         return None
     logger.debug("cookie_checker: JSON 中 identity 层 Cookie 缺失 (names=%s)，尝试浏览器内存兜底", names)
-    return await _browser_cookies_fallback(orch)
+    return await _browser_cookies_fallback()
 
 
 def _check_key_cookies_expiry(cookies_list: list[dict]) -> bool:
@@ -239,7 +239,7 @@ def _configure_default_health_checkers(orch) -> None:
                 return result
 
             # 2. identity 层检查
-            identity_result = await _check_identity_layer(names, orch)
+            identity_result = await _check_identity_layer(names)
             if identity_result is not None:
                 return identity_result
 
@@ -292,9 +292,8 @@ async def _try_refresh_m5tk_from_browser(store) -> bool:
             if not value:
                 continue
             # _m_h5_tk 需未过期；_m_h5_tk_enc 是配套加密 token，无 timestamp 无法判过期，直接回写
-            if name == "_m_h5_tk" and not is_m5tk_expired(value):
-                updates[name] = value
-            elif name == "_m_h5_tk_enc":
+            # S1871: 两个分支 body 相同，合并条件
+            if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
                 updates[name] = value
         if not updates:
             return False
@@ -341,7 +340,7 @@ def _clear_collector_sticky_flag(container) -> None:
         pass
 
 
-async def _browser_cookies_fallback(orch) -> bool:
+async def _browser_cookies_fallback() -> bool:
     """JSON 判定 cookie 无效时的浏览器内存兜底复核
 
     为什么需要：JSON 与浏览器内存存在同步延迟（MTOP Set-Cookie 回写失败/部分回写），
@@ -545,7 +544,8 @@ async def start_session(request: dict = Body(default_factory=dict)) -> JSONRespo
         return _read_cookie_provider_value(cookie_name)
 
     try:
-        await orch.start_session(cookie_provider=cookie_provider, renew_callback=_renew_token_via_browser_navigation)
+        # start_session 是同步函数（无 await 的 async 已移除以避免 S7503）
+        orch.start_session(cookie_provider=cookie_provider, renew_callback=_renew_token_via_browser_navigation)
         return JSONResponse(content={
             "ok": True,
             "message": "会话管理已启动，TokenRenewer 后台续期已开启",
@@ -1097,8 +1097,9 @@ def _functional_fallback_restore(orch, user_id: str = "default") -> None:
             reason=f"functional_signals={functional_signals}",
         )
         if restored:
+            # 用 %d/%s 而非 {}：标准 logging 用 % 惰性格式化，{} 不会被替换
             logger.info(
-                "功能可用性兜底恢复: {} 个层已恢复 (signals={})",
+                "功能可用性兜底恢复: %d 个层已恢复 (signals=%s)",
                 len(restored), functional_signals,
             )
     except Exception as e:

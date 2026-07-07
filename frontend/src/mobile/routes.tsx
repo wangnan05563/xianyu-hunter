@@ -19,7 +19,7 @@ function MobilePageLoading() {
   )
 }
 
-function MobileRoute({ children }: { children: ReactNode }) {
+function MobileRoute({ children }: { readonly children: ReactNode }) {
   return (
     <LazyErrorBoundary>
       <Suspense fallback={<MobilePageLoading />}>{children}</Suspense>

@@ -30,7 +30,16 @@ export default function MobileHeader() {
   }, [])
 
   // 调度器状态文本：复用为 a11y 标签与 Tooltip 标题
-  const schedulerLabel = schedulerRunning === null ? '加载中' : schedulerRunning ? '运行中' : '已停止'
+  // S3358：拆分嵌套三元为独立变量
+  let schedulerLabel = '已停止'
+  if (schedulerRunning === null) schedulerLabel = '加载中'
+  else if (schedulerRunning) schedulerLabel = '运行中'
+  // S3358：状态点颜色拆分为独立变量
+  let statusColor = '#ff4d4f'
+  if (schedulerRunning === null) statusColor = '#d9d9d9'
+  else if (schedulerRunning) statusColor = '#52c41a'
+  // S4624：嵌套模板字面量提取为独立变量
+  const alertSuffix = alertCount > 0 ? `，${alertCount} 条未读` : ''
 
   return (
     <header className="m-header">
@@ -45,16 +54,13 @@ export default function MobileHeader() {
         <span className="m-brand-name">闲鱼猎人</span>
       </button>
       <div className="m-header-actions">
-        {/* 调度器状态灯：补 role + aria-label 让屏幕阅读器感知状态变化 */}
+        {/* 调度器状态灯：用 <output> 替代 role="status"，原生 live region 语义 */}
         <Tooltip title={schedulerLabel}>
-          <span
+          <output
             className="m-status-dot"
-            role="status"
             aria-live="polite"
             aria-label={`调度器状态：${schedulerLabel}`}
-            style={{
-              background: schedulerRunning === null ? '#d9d9d9' : schedulerRunning ? '#52c41a' : '#ff4d4f',
-            }}
+            style={{ background: statusColor }}
           />
         </Tooltip>
         {/* 通知铃铛 */}
@@ -64,7 +70,7 @@ export default function MobileHeader() {
             shape="circle"
             size="small"
             icon={<BellOutlined />}
-            aria-label={`通知${alertCount > 0 ? `，${alertCount} 条未读` : ''}`}
+            aria-label={`通知${alertSuffix}`}
           />
         </Badge>
       </div>

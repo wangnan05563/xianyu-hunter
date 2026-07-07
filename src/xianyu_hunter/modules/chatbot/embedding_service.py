@@ -22,7 +22,7 @@ llama-server.exe，本地 sentence-transformers 是最可靠的无外部依赖�
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from loguru import logger
@@ -108,22 +108,28 @@ class EmbeddingService:
         """
         try:
             return await self._call_embedding(text)
-        except Exception as e:
+        except Exception:
             # 基础设施层容错：不向上抛出，避免单次检索失败拖垮整个对话
             logger.exception("Embedding 单条调用失败")
             return []
 
     async def embed_batch(
-        self, texts: list[str]
+        self,
+        texts: list[str],
+        progress_cb: Callable[[int, int], None] | None = None,
     ) -> tuple[list[list[float]] | None, list[int]]:
         """批量向量化
 
         算法：
         1. 本地模式：调用 sentence-transformers 原生 batch 接口（一次 encode 多条文本）
            - 比循环单条快 10-50 倍（向量化 + GPU/CPU 内部并行）
+           - 外层按 _LOCAL_BATCH_CHUNK 分批，每批完成后回调 progress_cb 反馈进度
+             （避免数千片段一次性 encode 时前端进度条无变化被误判为卡死）
         2. 远程模式：并发控制 Semaphore(concurrency) + 每条独立重试 3 次
            - 指数退避 0.5s/1s/2s
            - 失败的文本记录索引，不阻塞其他文本
+           - progress_cb 在所有任务 gather 完成后回调一次（远程 API 自身有速率限制，
+             细粒度进度反馈意义有限且增加回调开销）
         3. 返回 (成功向量列表, 失败索引列表)
 
         边界条件：
@@ -136,7 +142,7 @@ class EmbeddingService:
         self._last_batch_failures = []
 
         if self._is_local:
-            return await self._embed_batch_local(texts)
+            return await self._embed_batch_local(texts, progress_cb=progress_cb)
 
         # 远程模式：单条并发 + 重试
         # 用 dict 保存成功结果，按原始 idx 聚合，最后按顺序输出
@@ -176,12 +182,29 @@ class EmbeddingService:
                 f"({len(failed_indices)}/{len(texts)})，超过 10% 阈值"
             )
 
+        if progress_cb is not None:
+            try:
+                progress_cb(len(texts), len(texts))
+            except Exception:
+                logger.debug("embed_batch 进度回调异常，忽略", exc_info=True)
+
         return success_vectors, failed_indices
 
-    async def _embed_batch_local(self, texts: list[str]) -> tuple[list[list[float]], list[int]]:
+    # 本地模式外层分批大小：sentence-transformers 内部已 batch_size=32，
+    # 外层分批仅用于阶段性进度反馈，不会影响推理性能。
+    # 取 64 平衡「进度反馈频率」和「to_thread 切换开销」。
+    _LOCAL_BATCH_CHUNK = 64
+
+    async def _embed_batch_local(
+        self,
+        texts: list[str],
+        progress_cb: Callable[[int, int], None] | None = None,
+    ) -> tuple[list[list[float]], list[int]]:
         """本地模式批量向量化
 
-        利用 sentence-transformers 原生 batch 接口，一次 encode 所有文本。
+        利用 sentence-transformers 原生 batch 接口。
+        外层按 _LOCAL_BATCH_CHUNK 分批 encode，每批完成后回调 progress_cb，
+        让前端能看到向量化进度，避免数千片段一次性 encode 时被误判为卡死。
         预算检查一次即可（不按条计费），失败时整批失败。
         """
         # 预算检查：本地模式不消耗 token，但仍检查总调用次数预算
@@ -191,17 +214,29 @@ class EmbeddingService:
             return [], list(range(len(texts)))
 
         backend = self._get_local_backend()
+        total = len(texts)
+        chunk = self._LOCAL_BATCH_CHUNK
         try:
-            # to_thread 包装：sentence-transformers 是同步库，避免阻塞事件循环
-            vectors = await asyncio.to_thread(backend.embed_batch, texts)
+            all_vecs: list[list[float]] = []
+            for start in range(0, total, chunk):
+                batch = texts[start:start + chunk]
+                # to_thread 包装：sentence-transformers 是同步库，避免阻塞事件循环
+                vecs = await asyncio.to_thread(backend.embed_batch, batch)
+                all_vecs.extend(vecs)
+                if progress_cb is not None:
+                    try:
+                        progress_cb(min(start + chunk, total), total)
+                    except Exception:
+                        # 进度回调失败不应影响构建主流程
+                        logger.debug("embed_batch 进度回调异常，忽略", exc_info=True)
             # 本地模式不消耗 token，记录用量便于统计调用次数
             self._ai_usage.record_usage(
                 endpoint="chatbot_embedding",
                 model=self._model,
                 response_data={"usage": {"total_tokens": 0}, "data": [{"embedding": []}]},
             )
-            return vectors, []
-        except Exception as e:
+            return all_vecs, []
+        except Exception:
             logger.exception("本地 batch embedding 失败")
             return [], list(range(len(texts)))
 

@@ -4,10 +4,10 @@ import { Link } from 'react-router-dom'
 import { TEXTS } from './i18n'
 
 interface MenuItem {
-  key: string
-  label: string
-  href: string
-  external: boolean
+  readonly key: string
+  readonly label: string
+  readonly href: string
+  readonly external: boolean
 }
 
 // 8 个外部链接；按需求 §5.1 排序
@@ -25,7 +25,7 @@ const MENU_ITEMS: MenuItem[] = [
 ]
 
 interface AboutMenuListProps {
-  onOpenLicenses: () => void
+  readonly onOpenLicenses: () => void
 }
 
 export function AboutMenuList({ onOpenLicenses }: AboutMenuListProps) {
@@ -56,6 +56,15 @@ export function AboutMenuList({ onOpenLicenses }: AboutMenuListProps) {
         e.currentTarget.style.backgroundColor = 'transparent'
       }}
       onClick={(e) => handleClick(item, e)}
+      // S6848/S1082：div 上有 click 处理，补充 role/tabIndex/onKeyDown 满足可访问性
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (item.key === 'licenses' && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault()
+          onOpenLicenses()
+        }
+      }}
     >
       <span style={{ fontSize: 14, color: token.colorText }}>{item.label}</span>
       <ExportOutlined style={{ fontSize: 14, color: token.colorTextTertiary }} aria-hidden />

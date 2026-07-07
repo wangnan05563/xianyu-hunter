@@ -122,7 +122,8 @@ def _check_heartbeat_timeout(status_file: str | None, proc: subprocess.Popen | N
             except OSError:
                 pass
         return True
-    except (json.JSONDecodeError, OSError, ValueError):
+    # S5713: JSONDecodeError 是 ValueError 子类，二者择一即可；OSError 独立
+    except (ValueError, OSError):
         return False
 
 
@@ -155,7 +156,6 @@ def _cleanup_dead_process() -> None:
 
     if _check_heartbeat_timeout(status_file, proc):
         _reset_browser_login_state()
-        return
 
 
 @router.post("/browser-login")

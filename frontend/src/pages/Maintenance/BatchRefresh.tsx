@@ -538,14 +538,23 @@ function CurrentBatchPanel() {
               </Form.Item>
               <Form.Item
                 label="触发间隔"
-                name="interval_minutes"
                 tooltip="修改后立即 reschedule 定时任务，单位：分钟"
-                rules={[
-                  { required: true, message: '请输入触发间隔' },
-                  { type: 'number', min: 1, max: 1440, message: '范围 1-1440 分钟' },
-                ]}
               >
-                <InputNumber min={1} max={1440} style={{ width: 200 }} addonAfter="分钟" />
+                <Space.Compact style={{ width: 200 }}>
+                  <Form.Item
+                    name="interval_minutes"
+                    rules={[
+                      { required: true, message: '请输入触发间隔' },
+                      { type: 'number', min: 1, max: 1440, message: '范围 1-1440 分钟' },
+                    ]}
+                    noStyle
+                  >
+                    <InputNumber min={1} max={1440} style={{ width: '100%' }} />
+                  </Form.Item>
+                  <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                    分钟
+                  </div>
+                </Space.Compact>
               </Form.Item>
             </Form>
           </Card>
@@ -1077,7 +1086,7 @@ function HistoryPanel() {
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         width={640}
-        destroyOnClose
+        destroyOnHidden
       >
         {drawerContent}
       </Drawer>

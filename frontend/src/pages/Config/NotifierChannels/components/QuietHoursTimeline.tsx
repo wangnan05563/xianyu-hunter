@@ -1,6 +1,7 @@
 interface QuietHoursTimelineProps {
-  start: string
-  end: string
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly start: string
+  readonly end: string
 }
 
 export default function QuietHoursTimeline({ start, end }: QuietHoursTimelineProps) {
@@ -41,8 +42,9 @@ export default function QuietHoursTimeline({ start, end }: QuietHoursTimelinePro
         <span>24:00</span>
       </div>
       <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
-        <span style={{ color: '#ff4d4f' }}>■</span> 静默时段 &nbsp;
-        <span style={{ color: '#52c41a' }}>■</span> 推送时段
+        {/* 用显式 {' '} 替代 &nbsp; 避免歧义空格（SonarQube S6772） */}
+        <span style={{ color: '#ff4d4f' }}>■</span>{' '}静默时段{' '}
+        <span style={{ color: '#52c41a' }}>■</span>{' '}推送时段
       </div>
     </div>
   )

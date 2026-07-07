@@ -4,16 +4,16 @@ import { EVENT_TYPE_OPTIONS } from '../../../constants/eventTypes'
 import type { Task } from '../../../api'
 
 interface TimelineFilterProps {
-  types: string
-  taskId: string | undefined
-  tasks: Task[]
-  loading: boolean
-  eventTypeFilter: string[]
-  onTypesChange: (v: string) => void
-  onTaskIdChange: (v: string | undefined) => void
-  onReload: () => void
-  onSyncFromNotifier: () => void
-  onEventTypeFilterChange: (filter: string[]) => void
+  readonly types: string
+  readonly taskId: string | undefined
+  readonly tasks: Task[]
+  readonly loading: boolean
+  readonly eventTypeFilter: string[]
+  readonly onTypesChange: (v: string) => void
+  readonly onTaskIdChange: (v: string | undefined) => void
+  readonly onReload: () => void
+  readonly onSyncFromNotifier: () => void
+  readonly onEventTypeFilterChange: (filter: string[]) => void
 }
 
 export default function TimelineFilter({

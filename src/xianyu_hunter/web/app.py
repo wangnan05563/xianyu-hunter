@@ -119,6 +119,240 @@ _SPA_MEDIA_TYPES = {
 }
 
 
+# OpenAPI tag 元信息：与 src/xianyu_hunter/web/routes/*.py 中 APIRouter(tags=[...]) 保持一一对应
+# Swagger UI 顶部按顺序展示分组；description 支持 Markdown，可写多行
+# 维护原则：新增 tag 必须在此登记，否则 Swagger UI 顶部不展示
+_OPENAPI_TAGS: list[dict[str, str]] = [
+    {
+        "name": "meta",
+        "description": (
+            "**系统元信息**\n\n"
+            "- 版本号、发布日期、Git SHA\n"
+            "- 健康检查 `/healthz`（数据库/登录态/任务/浏览器/通知）\n"
+            "- 检查 GitHub 新版本"
+        ),
+    },
+    {
+        "name": "auth",
+        "description": (
+            "**认证与登录**\n\n"
+            "Token 校验、Cookie 颁发、扫码登录、浏览器 Cookie 注入。"
+        ),
+    },
+    {
+        "name": "accounts",
+        "description": (
+            "**多账号管理**\n\n"
+            "列出所有已登录闲鱼账号、一键切换、退出登录、查询会话事件。"
+        ),
+    },
+    {
+        "name": "accounts-proxies",
+        "description": (
+            "**多账号 + 代理池**\n\n"
+            "账号与代理的 CRUD、健康检查、轮换获取、success/fail 上报（用于权重调整）。"
+        ),
+    },
+    {
+        "name": "tasks",
+        "description": (
+            "**任务 CRUD 与调度**\n\n"
+            "创建/编辑/删除/启停任务，配置关键词、价格区间、执行模式、调度间隔、Cron、闲鱼筛选标签，"
+            "支持任务级 AI 评估阈值与价格/搜索/反检测覆盖。"
+        ),
+    },
+    {
+        "name": "task-deps",
+        "description": "**任务依赖**\n\n任务间的 DAG 依赖关系（A 跑完才能跑 B）。",
+    },
+    {
+        "name": "task-links",
+        "description": "**任务链接/关联**\n\n任务间的双向关联查询与反查。",
+    },
+    {
+        "name": "items",
+        "description": "**商品数据**\n\n商品 summary 批量查询、任务商品列表、商品详情与状态变更。",
+    },
+    {
+        "name": "evaluations",
+        "description": (
+            "**卖家评估**\n\n"
+            "4 维评分（职业度/信用/纠纷/价格异动）、AI 多模态鉴伪、评估反馈。"
+        ),
+    },
+    {
+        "name": "orders",
+        "description": "**抢单记录**\n\n订单状态（成功/失败/超时/已接管）、利润计算、人工接管标记。",
+    },
+    {
+        "name": "stats",
+        "description": "**统计聚合根**\n\n通用统计查询入口。",
+    },
+    {
+        "name": "stats-overview",
+        "description": "**总览统计**\n\n仪表盘 KPI 卡片聚合数据。",
+    },
+    {
+        "name": "stats-today",
+        "description": "**今日数据**\n\n今日抢单/评估/通知等关键指标。",
+    },
+    {
+        "name": "stats-trend",
+        "description": "**趋势统计**\n\n按时间维度的历史趋势查询。",
+    },
+    {
+        "name": "eval-funnel",
+        "description": "**评估漏斗**\n\n搜索→评估→通过的转化漏斗。",
+    },
+    {
+        "name": "business-kpi",
+        "description": "**业务 KPI**\n\n业务核心指标（GMV、成功率、平均捡漏金额等）。",
+    },
+    {
+        "name": "price-dashboard",
+        "description": "**价格看板**\n\n按类目横向对比中位价/最低价/最高价。",
+    },
+    {
+        "name": "price-trend",
+        "description": "**价格趋势**\n\n商品价格历史走势。",
+    },
+    {
+        "name": "prices",
+        "description": "**价格直方图**\n\n仪表盘价格分布。",
+    },
+    {
+        "name": "seller-trend",
+        "description": "**卖家趋势**\n\n卖家评分/上架量的时间变化。",
+    },
+    {
+        "name": "timeline",
+        "description": "**事件时间线**\n\n21 种系统事件类型，跨模块统一时间线。",
+    },
+    {
+        "name": "logs",
+        "description": "**实时日志**\n\nSSE 推送的实时日志（按级别过滤）。",
+    },
+    {
+        "name": "error-logs",
+        "description": "**错误日志**\n\n未处理异常捕获与 AI 诊断上下文导出。",
+    },
+    {
+        "name": "notifications",
+        "description": "**通知中心**\n\n系统通知列表/已读管理/批量操作（订单/登录/系统/配置/任务 5 大类）。",
+    },
+    {
+        "name": "notifier",
+        "description": (
+            "**通知渠道**\n\n"
+            "7+ 渠道 CRUD 与启用：Server酱 / PushPlus / Bark / 钉钉 / 企业微信 / Telegram / ntfy / 通用 Webhook。"
+        ),
+    },
+    {
+        "name": "config",
+        "description": "**配置管理**\n\n全局配置 CRUD、YAML 预览/保存/备份/恢复/分享。",
+    },
+    {
+        "name": "preferences",
+        "description": "**用户偏好**\n\n按用户隔离的偏好持久化（侧边栏状态、列设置等）。",
+    },
+    {
+        "name": "prompts",
+        "description": "**Prompt 编辑器**\n\nAI 提示词在线编辑与版本管理。",
+    },
+    {
+        "name": "cron",
+        "description": "**Cron 表达式**\n\nCron 校验与示例。",
+    },
+    {
+        "name": "templates",
+        "description": "**模板市场**\n\n预置任务模板与用户私有模板。",
+    },
+    {
+        "name": "export",
+        "description": "**数据导出**\n\n商品/评估/订单/事件 4 类数据集 CSV 导出。",
+    },
+    {
+        "name": "maintenance",
+        "description": "**系统清理**\n\n缓存/数据库/日志清理，SQLite VACUUM。",
+    },
+    {
+        "name": "db-admin",
+        "description": "**数据库维护**\n\n11 张业务表在线 CRUD + 自定义 SQL 查询。",
+    },
+    {
+        "name": "vector-admin",
+        "description": "**向量数据库维护**\n\nChromaDB 快照、清理、重建监控。",
+    },
+    {
+        "name": "tunnel",
+        "description": "**内网穿透**\n\n一键远程访问（cpolar/frp）。",
+    },
+    {
+        "name": "menu",
+        "description": "**菜单配置**\n\n用户级菜单可见性/排序，重置默认。",
+    },
+    {
+        "name": "ai",
+        "description": (
+            "**AI 服务**\n\n"
+            "OpenAI 兼容 API：自然语言建任务（`/parse-task`）、条件评估（`/evaluate-condition`）、"
+            "模型配置、用量统计、预算控制、连接测试、Embedding 测试。"
+        ),
+    },
+    {
+        "name": "ai-deep",
+        "description": (
+            "**AI 深度多模态**\n\n"
+            "商品深度分析（图片+文本）、卖家模板检测。"
+        ),
+    },
+    {
+        "name": "chatbot",
+        "description": (
+            "**智能客服**\n\n"
+            "会话管理（增删改查/收藏/结束）、消息收发（SSE 流式）、消息反馈、撤销、转人工、会话导出。"
+        ),
+    },
+    {
+        "name": "chatbot-config",
+        "description": (
+            "**客服配置**\n\n"
+            "RAG/Agent 配置 CRUD、FAQ 问答库、欢迎语、配置审计日志。"
+        ),
+    },
+    {
+        "name": "chatbot-kb",
+        "description": (
+            "**智能客服知识库**\n\n"
+            "KB 重建、状态查询、版本列表与回滚。"
+        ),
+    },
+    {
+        "name": "anticrawl",
+        "description": (
+            "**反爬登录管理**\n\n"
+            "反爬策略配置、扫码/二维码/浏览器 Cookie 注入、会话启停与健康检查、"
+            "指纹伪装、QPS 控制、Cookie 分层管理。"
+        ),
+    },
+    {
+        "name": "batch-refresh",
+        "description": (
+            "**批量采集**\n\n"
+            "定时批量刷新在售商品最新详情，支持手动触发、暂停/继续/停止、失败熔断、执行历史与统计。"
+        ),
+    },
+    {
+        "name": "qr-login",
+        "description": "**二维码登录**\n\n闲鱼 App 扫码登录流程。",
+    },
+    {
+        "name": "sse-stream",
+        "description": "**SSE 流**\n\n服务端事件流（通知、事件、日志等）。",
+    },
+]
+
+
 def _build_favicon_response(static_dir: Path) -> Response:
     """构建 favicon 响应，优先 SPA 构建产物，回退到 frontend/public 源文件
 
@@ -197,12 +431,52 @@ def _collect_health_checks(container: Any) -> tuple[dict[str, Any], bool]:
 
 def create_app() -> FastAPI:
     app = FastAPI(
-        title="XianyuHunter Web",
-        description="闲鱼自动捡漏与抢单系统 - Web 控制台",
-        version="0.1.0",
+        title="XianyuHunter Web API",
+        description=(
+            "## 闲鱼猎人 Web 控制台 API\n\n"
+            "闲鱼猎人（XianyuHunter）是面向闲鱼平台的自动捡漏与抢单系统，"
+            "提供 Web 控制台 + 移动端 + AI 智能客服的完整能力。本文档为后端 REST API 完整参考，"
+            "覆盖 40+ 功能域、300+ 端点。\n\n"
+            "### 鉴权\n\n"
+            "除白名单端点外，所有 API 需在请求头携带 `Authorization: Bearer <token>`，"
+            "或在浏览器请求中携带 `xh_token` Cookie（前端 fetch 默认 `credentials: 'include'`）。\n\n"
+            "**认证白名单**（无需鉴权）：`/api/auth/cookie`、`/api/auth/me`、`/api/auth/import-from-browser`、"
+            "`/import-from-browser/status`、`/api/events/stream`、`/api/notifications`（SSE 内部白名单）、"
+            "`/api/notifier/`、`/api/about`、`/api/about/check-update`、`/healthz`、`/api/docs`、`/openapi.json`、`/app/*` SPA。\n\n"
+            "### 端点分组\n\n"
+            "- **meta**：版本信息、健康检查、关于\n"
+            "- **auth / accounts**：Token 认证、多账号管理、扫码登录\n"
+            "- **tasks / task-deps / task-links**：任务 CRUD、依赖关系、链接管理\n"
+            "- **items / evaluations / orders**：商品、卖家评估、抢单记录\n"
+            "- **stats-\\***：聚合统计（总览/今日/趋势/价格/评估漏斗/卖家趋势）\n"
+            "- **timeline / logs / error-logs / notifications**：事件流、日志、错误、通知\n"
+            "- **config / preferences / prompts / cron / templates**：配置管理\n"
+            "- **ai / ai-deep**：自然语言建任务、深度多模态分析\n"
+            "- **chatbot / chatbot-config / chatbot-kb**：智能客服（会话/RAG/Agent/知识库/FAQ）\n"
+            "- **notifier**：7+ 渠道通知配置（Server酱/PushPlus/Bark/钉钉/企微/Telegram/ntfy/Webhook）\n"
+            "- **anticrawl / batch-refresh / accounts-proxies**：反爬、批量采集、代理池\n"
+            "- **maintenance / db-admin / vector-admin / tunnel / export**：系统维护、数据库、向量库、内网穿透、数据导出\n"
+            "- **menu**：用户级菜单可见性/排序配置\n"
+            "- **sse-stream**：服务端推送（SSE 日志/事件）\n\n"
+            "### 错误格式\n\n"
+            "所有错误统一返回 `{\"detail\": \"...\"}` JSON 对象；401 未授权；403 越权；404 不存在；422 参数校验失败。\n\n"
+            "### 版本\n\n"
+            "API 版本随 `_build_info.py` 的 `__version__` 自动更新；破坏性变更会标记 `Deprecation` 标签。\n"
+        ),
+        version="0.3.0",
         # 禁用默认 docs，使用自定义 Swagger UI（顶部含帮助文档入口按钮）
         docs_url=None,
         redoc_url=None,
+        # openapi_tags：为每个 tag 提供 description，Swagger UI 顶部分类展示
+        openapi_tags=_OPENAPI_TAGS,
+        # 联系信息（GitHub Issues）
+        contact={"name": "GitHub Issues", "url": "https://github.com/xianyu-hunter/xianyu-hunter/issues"},
+        # 开源协议
+        license_info={"name": "MIT", "url": "https://opensource.org/licenses/MIT"},
+        # 术语服务器（占位，便于后续扩展）
+        openapi_extra={
+            "x-logo": {"url": "/favicon.ico", "altText": "闲鱼猎人 Logo"},
+        },
     )
 
     # Token 认证中间件（C-01：所有 API 端点鉴权）

@@ -397,7 +397,7 @@ class ItemCollectionService:
             # _raise_detail_failure_error 总是抛异常，不会返回
             await self._raise_detail_failure_error(item_id)
 
-        return await self._persist_detail_collection(
+        return self._persist_detail_collection(
             item_id, detail, task_id=task_id, existing_item=existing_item, source=source
         )
 
@@ -468,7 +468,7 @@ class ItemCollectionService:
             item_id=item_id,
         )
 
-    async def _persist_detail_collection(
+    def _persist_detail_collection(
         self,
         item_id: str,
         detail: ItemDetail,

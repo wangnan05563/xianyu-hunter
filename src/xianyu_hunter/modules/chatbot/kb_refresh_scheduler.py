@@ -126,7 +126,7 @@ class KBRefreshScheduler:
                         "chunk_count": version.chunk_count,
                     },
                 )
-        except Exception as e:
+        except Exception:
             # 异常仅记录日志，失败事件由 _refresh_job_sync 的 except 分支发布
             # 避免 _refresh_job 内异常被 _refresh_job_sync 重复捕获导致双重发布
             logger.exception("知识库定时更新异常")

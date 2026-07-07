@@ -35,9 +35,8 @@ import {
   CommentOutlined,
   AimOutlined,
 } from '@ant-design/icons'
-import { menuApi } from '../api/menu'
-import type { MenuItem } from '../api/menu'
-import { MENU_GROUP_LABELS } from '../api/menu'
+// 合并 value 与 type 引入，避免 S3863 重复 import
+import { menuApi, MENU_GROUP_LABELS, type MenuItem } from '../api/menu'
 
 // 图标名 → Ant Design 图标组件映射
 // 为什么集中维护：后端返回字符串图标名（如 'DashboardOutlined'），前端需映射到实际组件
@@ -131,12 +130,16 @@ export function buildMenuItems(menus: MenuItem[]): AntMenuItem[] {
   }
 
   // 按 group 内 sort_order 排序，group 间按首个元素的 sort_order 排序
+  // S4043：先在独立语句中排序，再用于 map，避免原地 sort 副作用
   const sortedGroups = Array.from(groups.entries())
-    .map(([g, items]) => ({
-      group: g,
-      items: items.sort((a, b) => a.sort_order - b.sort_order),
-      minSort: Math.min(...items.map((i) => i.sort_order)),
-    }))
+    .map(([g, items]) => {
+      const sortedItems = [...items].sort((a, b) => a.sort_order - b.sort_order)
+      return {
+        group: g,
+        items: sortedItems,
+        minSort: Math.min(...items.map((i) => i.sort_order)),
+      }
+    })
     .sort((a, b) => a.minSort - b.minSort)
 
   const result: AntMenuItem[] = []
@@ -168,7 +171,9 @@ export function buildMenuItems(menus: MenuItem[]): AntMenuItem[] {
   // 底部 system 类别菜单项
   if (system.length > 0) {
     result.push({ type: 'divider' })
-    for (const item of system.sort((a, b) => a.sort_order - b.sort_order)) {
+    // S4043：sort 移到独立语句，避免原地 sort 在 for 中造成副作用
+    const sortedSystem = [...system].sort((a, b) => a.sort_order - b.sort_order)
+    for (const item of sortedSystem) {
       result.push({
         key: item.path,
         icon: renderIcon(item.icon),

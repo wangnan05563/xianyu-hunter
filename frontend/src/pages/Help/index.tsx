@@ -16,6 +16,17 @@ import {
   BulbOutlined,
   WarningOutlined,
   CheckCircleOutlined,
+  DollarOutlined,
+  BellOutlined,
+  RobotOutlined,
+  MessageOutlined,
+  DatabaseOutlined,
+  CloudDownloadOutlined,
+  ExperimentOutlined,
+  AppstoreOutlined,
+  BugOutlined,
+  InfoCircleOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import type React from 'react'
 import { useTheme } from '../../contexts/ThemeContext'
@@ -46,8 +57,9 @@ const steps = (title: string, items: string[]): DocBlock => ({
   title,
   content: (
     <ol style={{ paddingLeft: 20, margin: 0 }}>
-      {items.map((s, i) => (
-        <li key={i} style={{ marginBottom: 6 }}>{s}</li>
+      {/* S6479：用步骤文本作 key 而非数组下标，避免重排导致状态错乱 */}
+      {items.map((s) => (
+        <li key={s} style={{ marginBottom: 6 }}>{s}</li>
       ))}
     </ol>
   ),
@@ -67,8 +79,9 @@ const config = (title: string, rows: [string, string, string][]): DocBlock => ({
           </tr>
         </thead>
         <tbody>
-          {rows.map(([k, v, d], i) => (
-            <tr key={i}>
+          {/* S6479：用参数名作 key 而非下标 */}
+          {rows.map(([k, v, d]) => (
+            <tr key={k}>
               <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--xh-border)' }}><Text code>{k}</Text></td>
               <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--xh-border)', color: 'var(--xh-text-secondary)' }}>{v}</td>
               <td style={{ padding: '8px 12px', borderBottom: '1px solid var(--xh-border)', color: 'var(--xh-text-secondary)' }}>{d}</td>
@@ -86,6 +99,7 @@ const note = (title: string, content: React.ReactNode, type: 'info' | 'warning' 
 })
 
 // ============ 完整文档内容 ============
+// 章节排序与 menu_registry.yaml category 一致：overview → data_view → config → maintenance → other
 const DOC_SECTIONS: DocSection[] = [
   {
     id: 'quickstart',
@@ -93,18 +107,36 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <RocketOutlined />,
     intro: '从安装到首次跑通任务的完整流程，新用户必读。',
     blocks: [
-      feature('核心功能', '闲鱼猎人是闲鱼自动捡漏与抢单工具，支持关键词搜索、价格过滤、卖家评估、自动下单和多渠道通知。'),
+      feature('核心功能', '闲鱼猎人是闲鱼自动捡漏与抢单工具，支持关键词搜索、价格过滤、卖家评估、自动下单和多渠道通知，并提供 Web 控制台、移动端、AI 智能客服等完整能力。'),
       steps('操作步骤', [
         '安装依赖：pip install -r requirements.txt && playwright install chromium',
-        '复制配置：copy .env.example .env，填入推送 Key（SCT_KEY / PUSHPLUS_TOKEN / BARK_KEY）',
+        '复制配置：copy .env.example .env，填入推送 Key（Server酱 / PushPlus / Bark / 钉钉 / 企业微信 / Telegram）',
         '首次登录：python -m xianyu_hunter login，弹出浏览器扫码登录闲鱼',
-        '启动服务：双击 scripts\\启动服务.bat，或 python -m xianyu_hunter web --with-scheduler',
-        '访问控制台：浏览器打开 http://127.0.0.1:8000/app/',
+        // S7780：用 String.raw 避免转义反斜杠，Windows 路径更清晰
+        String.raw`启动服务：双击 scripts\启动服务.bat，或 python -m xianyu_hunter web --with-scheduler`,
+        '访问控制台：浏览器打开 http://127.0.0.1:8000/app/（移动端自动跳转 /m）',
         '创建任务：在「任务管理」页面新建监控任务，设置关键词和价格区间',
         '启动任务：任务创建后默认为 RUNNING 状态，调度器会按间隔自动执行',
       ]),
       scenario('使用场景', '刚部署完系统，需要从零开始配置并跑通第一个监控任务。'),
-      note('注意事项', <>首次登录需人工扫码，登录态持久化到 <Text code>data/browser_data/</Text>。若触发风控滑块会自动暂停，需重新登录。</>, 'warning'),
+      note('注意事项', <>首次登录需人工扫码，登录态持久化到 <Text code>data/browser_data/</Text>。若触发风控滑块会自动暂停，需重新登录。控制台默认开启 Token 鉴权，.env 中 <Text code>WEB_TOKEN</Text> 必填。</>, 'warning'),
+    ],
+  },
+  {
+    id: 'about',
+    title: '关于 / 版本信息',
+    icon: <InfoCircleOutlined />,
+    intro: '系统元信息与文档资源统一入口。',
+    blocks: [
+      feature('核心功能', '展示当前版本号、发布日期、Git SHA；一键检查 GitHub 最新版本；汇总 8 项外部资源链接（用户协议、隐私条款、开源声明、帮助文档、API 文档、联系我们、官方社区、报告问题）；浏览 42 项前后端依赖的开源许可清单。'),
+      steps('操作步骤', [
+        '点击侧边栏「其他」→「关于」，或在顶栏点击 ℹ️ 图标',
+        '查看版本号、发布日期、Git SHA 等元信息',
+        '点击「检查更新」按钮查询 GitHub 最新发布',
+        '点击菜单列表项跳转外部资源或打开开源声明 Modal',
+        '在 Modal 搜索框按包名/许可证过滤依赖',
+      ]),
+      note('注意事项', '自动检查更新：进入页面 5 秒后首次检查，之后每 60 分钟检查一次；后端 5 分钟缓存避免触发 GitHub 限流。', 'warning'),
     ],
   },
   {
@@ -113,7 +145,7 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <DashboardOutlined />,
     intro: '系统总览入口，集中展示 KPI、告警、事件流和价格分布。',
     blocks: [
-      feature('核心功能', '展示今日抢单数、评估数、任务数等关键指标，实时告警雷达，事件流时间线，以及价格分布直方图。'),
+      feature('核心功能', '展示今日抢单数、评估数、任务数等关键指标；告警雷达扫描失败订单、超时订单、低分评估；事件流时间线呈现系统实时活动；价格分布直方图与趋势分析。'),
       steps('操作步骤', [
         '进入控制台首页即为仪表盘',
         '查看顶部 KPI 卡片了解整体运行情况',
@@ -131,7 +163,7 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <UnorderedListOutlined />,
     intro: '创建、编辑、启停监控任务，管理任务依赖关系。',
     blocks: [
-      feature('核心功能', '任务是监控的基本单元，包含关键词、价格区间、执行模式、调度间隔等。支持 start/pause/resume/stop 控制，以及任务间依赖关系。'),
+      feature('核心功能', '任务是监控的基本单元，包含关键词、价格区间、执行模式、调度间隔等。支持 start/pause/resume/stop 控制；任务间依赖（DAG）；任务级 AI 评估配置、任务级价格/搜索/反检测覆盖。'),
       steps('操作步骤', [
         '点击「新建任务」进入任务编辑器',
         '填写关键词（如 iPhone 15 Pro）',
@@ -139,15 +171,21 @@ const DOC_SECTIONS: DocSection[] = [
         '选择执行模式（notify / confirm / auto / semi_auto）',
         '设置调度间隔（interval_seconds，建议 ≥ 60 秒）',
         '可选：配置 Cron 表达式实现定时调度',
+        '可选：配置闲鱼筛选标签（个人闲置 / 已验真 / 担保交易 / 包邮等）',
+        '可选：配置任务级 AI 评估阈值与自定义 Prompt',
         '保存后任务默认为 RUNNING 状态',
       ]),
       config('参数配置', [
         ['keyword', 'iPhone 15', '搜索关键词，必填'],
         ['min_price', '1500', '价格下限（元），留空不限'],
         ['max_price', '2500', '价格上限（元），留空不限'],
+        ['max_publish_days', '7', '仅采集最近 N 天内发布的商品'],
         ['mode', 'auto', '执行模式：notify/confirm/auto/semi_auto'],
         ['interval_seconds', '120', '调度间隔（秒），建议 60-300'],
         ['cron', '0 */2 * * *', 'Cron 表达式，设置后覆盖 interval'],
+        ['search_filters', '["personal_idle","verified"]', '闲鱼筛选标签 JSON 数组'],
+        ['exclude_words', '["抽奖","拼单"]', '排除词列表'],
+        ['eval_threshold', '70', '任务级评估阈值（None 沿用全局）'],
       ]),
       scenario('使用场景', <>监控特定商品捡漏：如设置 <Text code>keyword=iPhone 15</Text>、价格 1500-2500、模式 auto，系统会自动搜索、评估并抢单。</>),
       note('注意事项', <>执行模式说明：<Tag color="blue">notify</Tag>仅通知 <Tag color="orange">confirm</Tag>确认后执行 <Tag color="green">auto</Tag>自动抢单 <Tag color="purple">semi_auto</Tag>半自动。高频任务（&lt;60秒）有封号风险。</>, 'warning'),
@@ -155,19 +193,48 @@ const DOC_SECTIONS: DocSection[] = [
   },
   {
     id: 'items',
-    title: '商品列表',
+    title: '商品中心',
     icon: <ShoppingOutlined />,
-    intro: '查看所有已抓取的商品记录，了解去重机制。',
+    intro: '商品数据统一入口，围绕任务聚合展示、搜索、抢单、导入导出。',
     blocks: [
-      feature('核心功能', '展示任务抓取到的所有商品，包含标题、价格、卖家、评估分数等。系统自动增量去重，已抓过的商品不会重复评估。'),
+      feature('核心功能', '嵌入在「任务详情」内的商品列表 Tab，支持卡片/列表视图切换、多维度筛选（关键词/价格/已售/数据源）、实时搜索、官方采集、直播采集、一键抢单（30 秒冷却保护）、已售检测与标记、CSV 导出、手动导入。系统自动增量去重，已抓取商品不重复评估。'),
       steps('操作步骤', [
-        '进入「商品列表」页面',
-        '使用筛选器按任务、价格、状态过滤',
-        '点击商品查看详情',
-        '查看评估分数判断商品质量',
+        '进入「任务管理」→ 点击目标任务进入任务详情',
+        '切换到「商品列表」Tab',
+        '使用筛选器按关键词、价格、已售状态、数据源过滤',
+        '切换卡片/列表视图',
+        '点击商品查看详情（标题、价格、卖家、发布时间、缩略图、想要数）',
+        '评估通过的商品可点击「抢单」（30 秒冷却）',
+        '已售商品自动标记，记录检测时间',
+        '点击「导出 CSV」按当前筛选导出',
       ]),
-      scenario('使用场景', '回顾历史抓取记录，分析某类商品的价格分布和卖家特征。'),
-      note('注意事项', '去重基于商品 ID，同一商品只会评估一次；如需重新评估需清除去重记录。'),
+      scenario('使用场景', '回顾历史抓取记录，分析某类商品的价格分布和卖家特征；或在任务上下文中快速操作抢单与导出。'),
+      note('注意事项', '商品中心不作为独立顶级页面，统一在任务详情内 Tab 展示；数据源通过标签颜色区分（搜索/官方/直播）。', 'warning'),
+    ],
+  },
+  {
+    id: 'evaluations',
+    title: '卖家评估',
+    icon: <AuditOutlined />,
+    intro: '4 维卖家评估模型及评分解读。',
+    blocks: [
+      feature('核心功能', '从职业度、信用、纠纷、价格异动 4 个维度评估卖家，综合评分决定是否抢单。支持 AI 多模态深度分析、商品图鉴伪、卖家模板检测。评估规则可在「评估规则」配置页调整。'),
+      steps('操作步骤', [
+        '进入「卖家评估」页面',
+        '查看评估列表，按分数排序',
+        '点击评估查看 4 维细分评分',
+        '使用热力图分析评分分布',
+        '点击「AI 深度分析」获取多模态评估结果',
+        '查看趋势 sparkline 了解卖家变化',
+      ]),
+      config('评分维度', [
+        ['职业度', '0-100', '卖家专业程度，越高越可靠'],
+        ['信用', '0-100', '信用评级，反映历史交易信誉'],
+        ['纠纷', '0-100', '纠纷率，越低越好'],
+        ['价格异动', '0-100', '价格波动异常度，越低越稳定'],
+      ]),
+      scenario('使用场景', '分析卖家质量，调整评估阈值以过滤低质量卖家；对可疑卖家触发 AI 鉴伪。'),
+      note('注意事项', '评估阈值在「评估规则」配置页调整；评分低于阈值会自动跳过抢单。'),
     ],
   },
   {
@@ -176,38 +243,16 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <ThunderboltOutlined />,
     intro: '查看所有抢单记录及状态流转。',
     blocks: [
-      feature('核心功能', '记录每次抢单尝试，包含订单状态（成功/失败/超时）、金额、商品信息、失败原因等。'),
+      feature('核心功能', '记录每次抢单尝试，包含订单状态（成功/失败/超时/已接管）、金额、商品信息、失败原因、截图等。支持利润计算、状态流转追踪、人工接管标记。'),
       steps('操作步骤', [
         '进入「抢单记录」页面',
-        '按状态筛选（成功/失败/超时）',
+        '按状态筛选（成功/失败/超时/已接管）',
         '点击订单查看详情',
         '失败订单可查看失败原因和截图',
+        '对超时订单可手动标记为「已接管」',
       ]),
       scenario('使用场景', '排查抢单失败原因，统计成功率，分析失败模式。'),
       note('注意事项', <>抢单窗口通常 &lt; 30 秒，对网络延迟敏感。价格容差校验失败会记录为 <Tag color="red">price_mismatch</Tag>。</>, 'warning'),
-    ],
-  },
-  {
-    id: 'evaluations',
-    title: '评估明细',
-    icon: <AuditOutlined />,
-    intro: '4 维卖家评估模型及评分解读。',
-    blocks: [
-      feature('核心功能', '从职业度、信用、纠纷、价格异动 4 个维度评估卖家，综合评分决定是否抢单。评估规则可在配置中调整。'),
-      steps('操作步骤', [
-        '进入「评估明细」页面',
-        '查看评估列表，按分数排序',
-        '点击评估查看 4 维细分评分',
-        '使用热力图分析评分分布',
-      ]),
-      config('评分维度', [
-        ['职业度', '0-100', '卖家专业程度，越高越可靠'],
-        ['信用', '0-100', '信用评级，反映历史交易信誉'],
-        ['纠纷', '0-100', '纠纷率，越低越好'],
-        ['价格异动', '0-100', '价格波动异常度，越低越稳定'],
-      ]),
-      scenario('使用场景', '分析卖家质量，调整评估阈值以过滤低质量卖家。'),
-      note('注意事项', '评估阈值在「评估规则」配置页调整；评分低于阈值会自动跳过抢单。'),
     ],
   },
   {
@@ -216,7 +261,7 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <FieldTimeOutlined />,
     intro: '系统事件流的可视化展示，支持筛选。',
     blocks: [
-      feature('核心功能', '按时间倒序展示系统事件（搜索、评估、抢单、通知等），支持按事件类型和级别筛选。'),
+      feature('核心功能', '按时间倒序展示系统事件（搜索、评估、抢单、通知、登录等共 21 种类型），支持按事件类型和级别筛选，统一时间线贯穿所有模块。'),
       steps('操作步骤', [
         '进入「事件时间线」页面',
         '使用筛选器按事件类型过滤',
@@ -233,7 +278,7 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <FileTextOutlined />,
     intro: '实时查看系统日志，支持 SSE 流式推送。',
     blocks: [
-      feature('核心功能', '通过 SSE（Server-Sent Events）实时推送日志，支持按级别（DEBUG/INFO/WARN/ERROR）过滤，自动滚动。'),
+      feature('核心功能', '通过 SSE（Server-Sent Events）实时推送日志，支持按级别（DEBUG/INFO/WARN/ERROR）过滤，自动滚动。同时写入 data/logs/*.log（按日滚动），SSE 断连自动重连。'),
       steps('操作步骤', [
         '进入「实时日志」页面',
         '选择日志级别过滤',
@@ -245,16 +290,70 @@ const DOC_SECTIONS: DocSection[] = [
     ],
   },
   {
+    id: 'error-logs',
+    title: '错误日志',
+    icon: <BugOutlined />,
+    intro: '后台异常捕获与 AI 诊断上下文。',
+    blocks: [
+      feature('核心功能', '专门捕获未处理异常与系统错误事件，支持按模块/级别/时间筛选；可导出错误上下文（含堆栈、相关日志、任务状态）用于 AI 诊断或人工排查。'),
+      steps('操作步骤', [
+        '进入「错误日志」页面',
+        '按模块/级别/时间范围筛选',
+        '点击错误查看完整堆栈',
+        '点击「导出上下文」获取诊断信息',
+        '复制堆栈到「智能客服」获取 AI 修复建议',
+      ]),
+      scenario('使用场景', '系统异常时快速定位错误，导出上下文供 AI 客服分析。'),
+      note('注意事项', '错误日志通过全局异常处理器自动采集，无需手工埋点。', 'warning'),
+    ],
+  },
+  {
+    id: 'notifications',
+    title: '通知中心',
+    icon: <BellOutlined />,
+    intro: '系统通知列表与已读管理。',
+    blocks: [
+      feature('核心功能', '聚合所有系统通知（订单 / 登录 / 系统 / 配置 / 任务五大类），支持按已读/未读筛选、批量标记已读、删除；URL 参数保留筛选状态（刷新不丢失）。'),
+      steps('操作步骤', [
+        '点击顶栏铃铛图标或侧边栏「通知中心」',
+        '使用顶部分段控件切换 全部/未读/已读',
+        '点击通知查看详情',
+        '使用「全部已读」批量标记',
+        '可选中通知后批量删除',
+      ]),
+      scenario('使用场景', '集中查看系统通知（订单成功、风控告警、配置变更等），避免遗漏重要事件。'),
+      note('注意事项', '通知通过 NotificationEngine 统一调度，与推送渠道（钉钉/企微等）解耦。', 'warning'),
+    ],
+  },
+  {
+    id: 'price-dashboard',
+    title: '价格行情',
+    icon: <DollarOutlined />,
+    intro: '价格数据分析与多维度对比看板。',
+    blocks: [
+      feature('核心功能', '提供 4 类价格分析：分类对比（按商品类目横向对比中位价/最低价/最高价）、分类统计表、已成交价格区间、议价评估（BargainEval）。支持 TopN、市场参考价、议价幅度分析。'),
+      steps('操作步骤', [
+        '进入「价格行情」页面',
+        '切换不同 Tab 查看分类对比 / 统计 / 已成交 / 议价',
+        '使用筛选器选择时间范围与类目',
+        '点击图表元素下钻到具体商品',
+      ]),
+      scenario('使用场景', '分析某类商品的历史成交价区间，制定合理的捡漏价格策略。'),
+      note('注意事项', '议价评估基于历史成交数据，新类目数据不足时仅供参考。', 'warning'),
+    ],
+  },
+  {
     id: 'config-price',
     title: '价格策略',
     icon: <SettingOutlined />,
     intro: '配置价格过滤和容差规则。',
     blocks: [
-      feature('核心功能', '设置价格区间过滤、价格容差校验（抢单时价格波动超过容差则放弃）。'),
+      feature('核心功能', '设置全局价格区间过滤、价格容差校验（抢单时价格波动超过容差则放弃）。支持 4 种价格策略：保守 / 平衡 / 激进 / 自定义。'),
       config('参数配置', [
         ['price_tolerance', '5%', '抢单时价格容差，超过则放弃'],
         ['min_price_filter', '100', '全局最低价过滤'],
         ['max_price_filter', '10000', '全局最高价过滤'],
+        ['strategy', 'balanced', '策略：conservative/balanced/aggressive/custom'],
       ]),
       note('注意事项', '价格容差防止抢单时价格突变导致错价；任务级价格区间优先于全局配置。', 'warning'),
     ],
@@ -265,13 +364,14 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <SettingOutlined />,
     intro: '调整 4 维评估阈值和权重。',
     blocks: [
-      feature('核心功能', '配置各维度评估阈值和权重，权重总和需为 100%。'),
+      feature('核心功能', '配置各维度评估阈值和权重，权重总和需为 100%。支持 Sigmoid 扣分曲线、一票否决项、阈值建议。'),
       config('参数配置', [
         ['professionality_weight', '30', '职业度权重（%）'],
         ['credit_weight', '30', '信用权重（%）'],
         ['dispute_weight', '20', '纠纷权重（%）'],
         ['price_anomaly_weight', '20', '价格异动权重（%）'],
         ['min_score', '60', '综合评分下限，低于则跳过'],
+        ['veto_rules', '[]', '一票否决规则（如：纠纷率>10% 直接拒）'],
       ]),
       note('注意事项', '权重总和必须为 100%，否则评估结果异常；修改后对新任务生效。', 'warning'),
     ],
@@ -282,11 +382,12 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <SettingOutlined />,
     intro: '配置抢单行为和超时。',
     blocks: [
-      feature('核心功能', '设置抢单超时、重试次数、点击策略等。'),
+      feature('核心功能', '设置抢单超时、重试次数、点击策略、抢单窗口、人机交互模式。'),
       config('参数配置', [
         ['buy_timeout', '30', '抢单超时（秒）'],
         ['retry_count', '2', '失败重试次数'],
         ['click_strategy', 'immediate', '点击策略：immediate/delayed'],
+        ['human_takeover_window', '60', '人工接管窗口（秒）'],
       ]),
       note('注意事项', '抢单窗口短，超时设置过长可能导致错过；过短可能误判失败。', 'warning'),
     ],
@@ -294,17 +395,19 @@ const DOC_SECTIONS: DocSection[] = [
   {
     id: 'config-search',
     title: '搜索参数',
-    icon: <SettingOutlined />,
+    icon: <SearchOutlined />,
     intro: '配置搜索分页、排序、区域过滤。',
     blocks: [
-      feature('核心功能', '设置搜索结果分页大小、排序方式、区域过滤等。'),
+      feature('核心功能', '设置搜索结果分页大小、排序方式、区域过滤、反检测参数、熔断机制、闲鱼筛选标签。'),
       config('参数配置', [
         ['page_size', '20', '每页结果数（10-50）'],
         ['sort_type', 'default', '排序：default/price_asc/price_desc'],
         ['timeout', '60', '搜索超时（秒）'],
         ['regions', '杭州', '区域过滤，逗号分隔'],
+        ['qps', '1.5', '每秒请求数上限（反检测）'],
+        ['fail_pause_threshold', '5', '连续失败 N 次暂停'],
       ]),
-      note('注意事项', 'page_size 过大会增加风控风险，建议 ≤ 30。', 'warning'),
+      note('注意事项', 'page_size 过大会增加风控风险，建议 ≤ 30；QPS 调高需配合 Cookie 轮换。', 'warning'),
     ],
   },
   {
@@ -313,7 +416,7 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <SettingOutlined />,
     intro: '配置多渠道通知及免打扰时段。',
     blocks: [
-      feature('核心功能', '支持 Server酱、PushPlus、Bark、钉钉、企业微信、Telegram 等多渠道并发推送，可配置免打扰时段。'),
+      feature('核心功能', '支持 Server酱、PushPlus、Bark、钉钉、企业微信、Telegram、ntfy、通用 Webhook 等 7+ 渠道并发推送，可配置免打扰时段、事件订阅、模板。'),
       steps('操作步骤', [
         '进入「通知渠道」配置页',
         '点击渠道卡片启用/禁用',
@@ -332,16 +435,42 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <SettingOutlined />,
     intro: '配置 AI 模型、预算和 Prompt。',
     blocks: [
-      feature('核心功能', '支持 OpenAI 兼容 API，用于自然语言建任务、商品深度分析。可配置模型、预算上限、用量统计。'),
+      feature('核心功能', '支持 OpenAI 兼容 API（含 8 家提供商预设：OpenAI/Azure/DeepSeek/通义千问/智谱/月之暗面/Ollama 等），用于自然语言建任务、商品深度分析、多模态鉴伪。Embedding 可选本地 sentence-transformers（BAAI/bge-small-zh-v1.5, dim=512）。可配置模型、预算上限、用量统计、Prompt 编辑器。'),
       config('参数配置', [
         ['api_base', 'https://api.openai.com/v1', 'API 基础地址'],
         ['api_key', 'sk-...', 'API Key（加密存储）'],
         ['model', 'gpt-4o-mini', '模型名称'],
         ['budget_daily', '1.0', '每日预算上限（美元）'],
         ['budget_monthly', '20.0', '每月预算上限（美元）'],
+        ['embedding_backend', 'local', 'embedding 后端：local/openai'],
       ]),
-      scenario('使用场景', '用自然语言描述需求（如"监控 iPhone 15 2500 以内"），AI 自动创建任务。'),
-      note('注意事项', '超出预算上限会自动停止 AI 调用；Prompt 可在「Prompt 编辑器」自定义。', 'warning'),
+      scenario('使用场景', '用自然语言描述需求（如"监控 iPhone 15 2500 以内"），AI 自动创建任务；或对可疑商品触发 AI 多模态鉴伪。'),
+      note('注意事项', '超出预算上限会自动停止 AI 调用；Prompt 可在「Prompt 编辑器」自定义。Embedding 本地后端无需外部 API，避免网络问题。', 'warning'),
+    ],
+  },
+  {
+    id: 'config-chatbot',
+    title: '客服配置',
+    icon: <MessageOutlined />,
+    intro: '智能客服模块配置：RAG / Agent / 知识库 / FAQ / 转人工。',
+    blocks: [
+      feature('核心功能', '配置智能客服的 5 大子模块：RAG 检索增强生成、Agent 工具调用、知识库（KB）管理、FAQ 问答库、人工接管（escalation）策略。支持知识库热更新、审计日志、欢迎语自定义。'),
+      config('参数配置', [
+        ['rag_top_k', '5', 'RAG 检索返回片段数'],
+        ['rag_score_threshold', '0.6', 'RAG 相似度阈值'],
+        ['agent_enabled', 'true', '是否启用 Agent 工具调用'],
+        ['escalation_keywords', '["人工","转人工","投诉"]', '触发转人工的关键词'],
+        ['kb_auto_refresh', 'true', '知识库自动重建（定时）'],
+      ]),
+      steps('操作步骤', [
+        '进入「客服配置」页面',
+        '配置 RAG 检索参数与 Agent 启用',
+        '在「FAQ」Tab 管理问答库',
+        '查看「审计日志」追踪配置变更',
+        '配置欢迎语与转人工触发规则',
+      ]),
+      scenario('使用场景', '调整 AI 客服回答的准确性边界，让系统自动调用工具完成任务（如查任务状态、读错误日志）。'),
+      note('注意事项', '知识库修改后会触发后台重建，期间检索结果可能短暂来自旧版本。', 'warning'),
     ],
   },
   {
@@ -350,7 +479,7 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <SettingOutlined />,
     intro: '配置版本管理与回滚。',
     blocks: [
-      feature('核心功能', '每次配置修改自动保存版本，支持版本对比和一键回滚。'),
+      feature('核心功能', '每次配置修改自动保存版本，支持版本对比和一键回滚；支持配置导入/导出（含脱敏）。'),
       steps('操作步骤', [
         '进入「配置版本」页面',
         '查看历史版本列表',
@@ -358,7 +487,7 @@ const DOC_SECTIONS: DocSection[] = [
         '点击「回滚」恢复到历史版本',
       ]),
       scenario('使用场景', '配置修改后系统异常，快速回滚到上一个正常版本。'),
-      note('注意事项', '配置自动备份到 config/backups/；回滚操作本身也会生成新版本。'),
+      note('注意事项', '配置自动备份到 config/backups/；回滚操作本身也会生成新版本。', 'warning'),
     ],
   },
   {
@@ -367,7 +496,7 @@ const DOC_SECTIONS: DocSection[] = [
     icon: <ToolOutlined />,
     intro: '清理历史数据、缓存、日志。',
     blocks: [
-      feature('核心功能', '清理过期商品、历史事件、旧日志、浏览器缓存等，释放磁盘空间。'),
+      feature('核心功能', '清理过期商品、历史事件、旧日志、浏览器缓存等，释放磁盘空间；支持 VACUUM 收缩 SQLite。'),
       steps('操作步骤', [
         '进入「系统清理」页面',
         '选择清理项目（商品/事件/日志/缓存）',
@@ -381,13 +510,13 @@ const DOC_SECTIONS: DocSection[] = [
   {
     id: 'maintenance-db',
     title: '数据库维护',
-    icon: <ToolOutlined />,
+    icon: <DatabaseOutlined />,
     intro: '在线管理数据库表数据。',
     blocks: [
-      feature('核心功能', '提供业务表的在线 CRUD 操作，支持查看、编辑、删除记录，执行 SQL 查询。'),
+      feature('核心功能', '提供 11 张业务表（tasks/items/orders/evaluations/sellers/notifications/events/error_logs/batch_refresh_history/...）的在线 CRUD 操作，支持查看、编辑、删除记录，执行 SQL 查询，导入导出 CSV。'),
       steps('操作步骤', [
         '进入「数据库维护」页面',
-        '选择业务表（tasks/items/orders/evaluations 等）',
+        '选择业务表',
         '查看表结构和数据',
         '可执行自定义 SQL 查询',
         '支持导出查询结果为 CSV',
@@ -397,12 +526,48 @@ const DOC_SECTIONS: DocSection[] = [
     ],
   },
   {
+    id: 'maintenance-vector',
+    title: '向量数据库维护',
+    icon: <DatabaseOutlined />,
+    intro: 'ChromaDB 知识库快照、清理与监控。',
+    blocks: [
+      feature('核心功能', '管理 ChromaDB 向量数据库：查看 collection 列表、文档数量、占用空间；创建快照备份、清理过期文档、监控重建进度；查看审计日志。'),
+      steps('操作步骤', [
+        '进入「向量数据库维护」页面',
+        '查看 collection 列表与统计',
+        '点击「创建快照」备份当前状态',
+        '按时间/标签清理过期文档',
+        '触发知识库重建并查看进度',
+      ]),
+      scenario('使用场景', '智能客服回答不准时，检查知识库是否过期；定期快照防止数据丢失。'),
+      note('注意事项', '快照文件较大，建议清理前先确认磁盘空间；知识库重建期间检索会回退到 BM25。', 'warning'),
+    ],
+  },
+  {
+    id: 'maintenance-batch',
+    title: '批量采集',
+    icon: <CloudDownloadOutlined />,
+    intro: '定时批量采集在售商品最新数据。',
+    blocks: [
+      feature('核心功能', '按设定间隔（默认 30 分钟）自动采集所有在售商品的最新详情，检测两类变化：已售状态、字段变更。支持手动触发、暂停/继续/停止、失败熔断（默认 3 次）、断点续传、执行历史。'),
+      steps('操作步骤', [
+        '进入「批量采集」页面',
+        '调整采集间隔（1-1440 分钟）',
+        '点击「立即触发」手动启动',
+        '执行中可暂停/继续/停止',
+        '查看「执行历史」标签页',
+      ]),
+      scenario('使用场景', '长期运营时保持商品库新鲜度，及时下线已售商品。'),
+      note('注意事项', '连续失败 3 次自动熔断停止当前批次；中断后下次从断点继续。', 'warning'),
+    ],
+  },
+  {
     id: 'anticrawl',
     title: '反爬登录管理',
-    icon: <ToolOutlined />,
+    icon: <ExperimentOutlined />,
     intro: '管理闲鱼登录态、Cookie 轮换、反爬策略。',
     blocks: [
-      feature('核心功能', '管理闲鱼账号登录状态，支持扫码登录、Cookie 注入、多账号轮换、反爬策略配置。'),
+      feature('核心功能', '管理闲鱼账号登录状态，支持扫码登录、Cookie 注入（浏览器/手动/CDP）、多账号轮换、反爬策略配置、会话健康检查、指纹伪装、QPS 控制、Cookie 分层管理。'),
       steps('操作步骤', [
         '进入「反爬登录管理」页面',
         '查看当前登录状态和 Cookie 有效性',
@@ -418,8 +583,80 @@ const DOC_SECTIONS: DocSection[] = [
         ['fail_pause_threshold', '5', '连续失败 N 次暂停'],
         ['fail_window_sec', '300', '失败统计窗口（秒）'],
       ]),
-      scenario('使用场景', '登录态失效后重新登录；风控触发后调整反爬策略降低频率。'),
+      scenario('使用场景', '登录态失效后重新登录；风控触发后调整反爬策略降低频率；多账号轮换分摊风险。'),
       note('注意事项', <>触发闲鱼 WAF 会自动暂停任务；连续失败请检查 <Text code>infra/selectors.py</Text> 是否需要更新。</>, 'warning'),
+    ],
+  },
+  {
+    id: 'accounts',
+    title: '多账号管理',
+    icon: <TeamOutlined />,
+    intro: '多闲鱼账号列表、切换、退出与会话事件。',
+    blocks: [
+      feature('核心功能', '管理多个闲鱼账号：列表展示（含头像、昵称、最后活跃、状态）、一键切换（自动重置 CookieRotator 状态）、退出当前账号（撤销 session）、查询会话事件日志（登录/切换/退出）。'),
+      steps('操作步骤', [
+        '进入「反爬登录管理」页面添加多个账号',
+        '在顶栏账号切换器查看已登录账号',
+        '点击目标账号切换（自动失效旧 Cookie 缓存）',
+        '在「多账号管理」查看账号列表',
+        '查看「会话事件」追踪所有账号变更',
+      ]),
+      scenario('使用场景', '多账号轮换分摊风控风险；不同账号监控不同类目商品。'),
+      note('注意事项', 'default 用户不可删除但可退出；切换账号会失效旧 Cookie 缓存并重置全局轮换层状态。', 'warning'),
+    ],
+  },
+  {
+    id: 'chatbot',
+    title: '智能客服',
+    icon: <RobotOutlined />,
+    intro: 'RAG + Agent 双引擎的智能助手。',
+    blocks: [
+      feature('核心功能', '基于 RAG 检索 + Agent 工具调用的智能客服：可查询任务状态、读取配置值、搜索错误日志、解答 FAQ。支持会话管理（多会话/收藏/历史）、消息反馈（点赞/点踩）、转人工、上下文记忆。知识库覆盖 6 大训练语料（API 手册、配置参考、对话记录、领域知识、FAQ、故障排查）。'),
+      steps('操作步骤', [
+        '点击顶栏机器人图标或侧边栏「智能客服」',
+        '在欢迎页选择快捷指令或自由提问',
+        '查看 AI 回复（含引用来源）',
+        '对回答进行反馈（👍/👎）',
+        '复杂问题可点击「转人工」',
+        '在左侧会话列表管理历史会话',
+      ]),
+      scenario('使用场景', '新用户咨询功能用法；排查报错时贴堆栈让 AI 分析；查询任务/订单状态。'),
+      note('注意事项', 'AI 回答仅供参考，重要操作前请人工确认；消息支持「撤回」修改后重新生成。', 'warning'),
+    ],
+  },
+  {
+    id: 'export',
+    title: '数据导出',
+    icon: <CloudDownloadOutlined />,
+    intro: '任务/商品/评估/订单四类数据集 CSV 导出。',
+    blocks: [
+      feature('核心功能', '统一导出入口：按任务/时间范围筛选后导出 CSV，支持商品、评估、订单、事件四类数据集。可保存常用导出为预设，重复使用。'),
+      steps('操作步骤', [
+        '进入「数据导出」页面',
+        '选择数据集类型（商品/评估/订单/事件）',
+        '选择任务范围与时间范围',
+        '点击「导出」生成 CSV',
+      ]),
+      scenario('使用场景', '运营周报、月度数据分析；离线备份关键数据。'),
+      note('注意事项', '大量数据导出可能耗时，建议分批或按时间分片。', 'warning'),
+    ],
+  },
+  {
+    id: 'menu-admin',
+    title: '菜单管理',
+    icon: <AppstoreOutlined />,
+    intro: '用户级菜单可见性/排序配置。',
+    blocks: [
+      feature('核心功能', '允许用户自定义侧边栏菜单：拖拽排序、隐藏/显示不需要的菜单项，配置按用户隔离保存。配置存储在 SQLite（user_preferences 表），重置后恢复默认。'),
+      steps('操作步骤', [
+        '进入「菜单管理」页面',
+        '拖拽菜单项调整顺序',
+        '点击眼睛图标切换显示/隐藏',
+        '点击「保存」写入偏好',
+        '可点击「重置」恢复默认',
+      ]),
+      scenario('使用场景', '专注特定工作流时隐藏无关菜单；不同角色（运营/管理员）展示不同菜单组合。'),
+      note('注意事项', '菜单配置与登录用户绑定，不影响其他用户；菜单项仅控制侧边栏显示，不影响 API 访问权限。', 'warning'),
     ],
   },
 ]
@@ -583,8 +820,9 @@ export default function Help() {
                 {section.intro}
               </Paragraph>
               <Divider style={{ margin: '0 0 20px' }} />
-              {section.blocks.map((block, i) => (
-                <div key={i}>{renderBlock(block)}</div>
+              {/* S6479：用 block.title 作 key 而非下标 */}
+              {section.blocks.map((block) => (
+                <div key={block.title}>{renderBlock(block)}</div>
               ))}
             </Card>
           ))}

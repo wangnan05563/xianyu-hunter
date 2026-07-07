@@ -158,9 +158,13 @@ function SecurityFlags({
     }}>
       {SECURITY_FLAG_CONFIGS.map(({ label, key, activeColor }) => {
         const active = flags[key]
-        const text = key === 'is_session_cookie'
-          ? (active ? label : '持久化')
-          : (active ? `✓ ${label}` : `✗ ${label}`)
+        // S3358：嵌套三元拆分为 if/else，避免认知复杂度过高
+        let text: string
+        if (key === 'is_session_cookie') {
+          text = active ? label : '持久化'
+        } else {
+          text = active ? `✓ ${label}` : `✗ ${label}`
+        }
         return (
           <Tag
             key={key}
@@ -190,7 +194,8 @@ const renderHealthDetail = (health: CookieHealthReport | null, themeToken: Retur
   return (
     <>
       <HealthStatusHeader health={health} themeToken={themeToken} />
-      <IntegrityReasonHint reason={!health.is_valid ? health.integrity_reason : undefined} themeToken={themeToken} />
+      {/* S7735：正向条件更易读，避免取反 */}
+      <IntegrityReasonHint reason={health.is_valid ? undefined : health.integrity_reason} themeToken={themeToken} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
         <DetailRow
           icon={<ClockCircleOutlined style={{ color: themeToken.colorPrimary }} />}
@@ -405,24 +410,24 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
       // 鼠标移入面板时保持显示，避免用户想点按钮时面板消失
       mouseEnterDelay={0.2}
       mouseLeaveDelay={0.3}
-      // 主题适配：Popover 默认白底，暗色主题需显式覆盖
-      overlayStyle={{ borderRadius: 8 }}
+      // S1874：overlayStyle 已弃用，改用 styles.root
+      styles={{ root: { borderRadius: 8 } }}
     >
-      <div
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => {
-          // 为什么处理 Enter/Space：div 本身无交互语义，需手动支持键盘触发
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            setOpen((prev) => !prev)
-          }
-        }}
+      {/* S6819：原生 button 替代 div[role="button"]，键盘 Enter/Space 由浏览器原生触发 onClick */}
+      <button
+        type="button"
+        aria-label="悬浮查看 Cookie 状态"
+        onClick={() => setOpen((prev) => !prev)}
         style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: '4px 10px', borderRadius: 20, cursor: 'pointer',
           background: themeToken.colorFillQuaternary,
           transition: 'background 0.2s ease',
+          // 按钮重置：消除浏览器默认样式，保持与原 div 视觉一致
+          border: 'none',
+          outline: 'none',
+          font: 'inherit',
+          color: 'inherit',
         }}
         // 悬浮视觉反馈：背景加深
         onMouseEnter={(e) => {
@@ -442,7 +447,7 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
         >
           {displayName}
         </Text>
-      </div>
+      </button>
     </Popover>
   )
 }

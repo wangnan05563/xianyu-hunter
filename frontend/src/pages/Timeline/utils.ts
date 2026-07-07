@@ -16,7 +16,7 @@ export function parsePayload(item: TimelineEntry) {
 // 兼容旧数据（无 Z 后缀的空格分隔格式）：replace 后仍能被 Date 解析
 export function formatRelativeTime(ts: string): string {
   const d = new Date(ts.replace(' ', 'T'))
-  if (isNaN(d.getTime())) return ts.slice(0, 19)
+  if (Number.isNaN(d.getTime())) return ts.slice(0, 19)
   const now = Date.now()
   const diff = now - d.getTime()
   if (diff < 60000) return '刚刚'

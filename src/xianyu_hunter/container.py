@@ -191,12 +191,12 @@ class Container:
     event_bus: EventBus
     # 可选依赖（生产模式必填；测试模式可注入 fake）
     browser: Any = None
-    antidetect: AntiDetect = None  # type: ignore[assignment]
-    collector: Collector = None  # type: ignore[assignment]
-    dedup: ItemDedup = None  # type: ignore[assignment]
-    price_strategy: PriceStrategy = None  # type: ignore[assignment]
-    evaluator: Evaluator = None  # type: ignore[assignment]
-    buyer: Buyer = None  # type: ignore[assignment]
+    antidetect: Optional[AntiDetect] = None
+    collector: Collector | None = None
+    dedup: Optional[ItemDedup] = None
+    price_strategy: Optional[PriceStrategy] = None
+    evaluator: Optional[Evaluator] = None
+    buyer: Optional[Buyer] = None
     notifier_hub: NotifierHub = field(default_factory=NotifierHub)
     scheduler: TaskScheduler = field(default_factory=TaskScheduler)
     # 浏览器操作互斥锁：防止 Worker 和 live 端点并发使用同一浏览器实例
@@ -547,6 +547,10 @@ def _build_chatbot_container(container: Container) -> Any:
             config=cfg.kb,
             project_root=cfg.kb.project_root,
         )
+        # 启动兜底：清理上次进程异常崩溃残留的「陈旧 building 版本」，
+        # 避免 has_building_kb_version() 持续返回 true 导致前端「重建」按钮灰显
+        # （与 build_all 入口的清理构成双保险）
+        kb_manager._cleanup_stale_building_versions()
 
         # 4. 匹配器群
         faq_matcher = FAQMatcher(

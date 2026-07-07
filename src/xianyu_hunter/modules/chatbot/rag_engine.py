@@ -309,7 +309,7 @@ class RAGEngine:
         # S2737: asyncio.CancelledError 继承自 BaseException，不会被下方 except Exception 捕获，
         # 显式 except+raise 是冗余的，删除以简化
         # S5713: httpx.TimeoutException 是 httpx.HTTPError 的子类，移除冗余子类
-        except httpx.HTTPError as e:
+        except httpx.HTTPError:
             # 网络层异常：记录后向上抛出，由 Orchestrator 决定 LLM_NETWORK 降级
             logger.exception("RAGEngine.generate 网络异常")
             # H5 修复：流式请求中途失败，已生成的 tokens 仍会被 OpenAI 计费，需记录用量
@@ -528,7 +528,8 @@ class RAGEngine:
             content = data["choices"][0]["message"]["content"].strip()
             collected_output.append(content)
             # LLM 可能返回带 markdown 代码块的 JSON，提取首个 JSON 数组
-            json_match = re.search(r'\[.*?\]', content, re.DOTALL)
+            # S5857: 用 [^\]]* 替代 .*?，避免 reluctant 量词回溯开销
+            json_match = re.search(r'\[[^\]]*\]', content, re.DOTALL)
             if not json_match:
                 logger.warning(f"follow_ups 响应非 JSON 数组格式: {content[:100]}")
                 return []

@@ -9,9 +9,10 @@ import ReactECharts from '../../../components/charts/EChart'
 import type { StatsOverview, TrendSeries } from '../../../api'
 
 interface StatCardsSectionProps {
-  overview: StatsOverview | null
-  sparklines: Record<string, TrendSeries | null>
-  onNavigate: (path: string) => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly overview: StatsOverview | null
+  readonly sparklines: Record<string, TrendSeries | null>
+  readonly onNavigate: (path: string) => void
 }
 
 // Sparkline 小图配置（无坐标轴，纯折线 + 渐变填充）

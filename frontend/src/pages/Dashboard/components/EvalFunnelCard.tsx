@@ -5,10 +5,11 @@ import ReactECharts from '../../../components/charts/EChart'
 import type { EvalFunnelData } from '../../../api'
 
 interface EvalFunnelCardProps {
-  data: EvalFunnelData | null
-  loading: boolean
-  rangeDays: number
-  onRangeChange: (days: number) => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly data: EvalFunnelData | null
+  readonly loading: boolean
+  readonly rangeDays: number
+  readonly onRangeChange: (days: number) => void
 }
 
 export default function EvalFunnelCard({ data, loading, rangeDays, onRangeChange }: EvalFunnelCardProps) {
@@ -60,7 +61,8 @@ export default function EvalFunnelCard({ data, loading, rangeDays, onRangeChange
         <Segmented
           size="small"
           value={rangeDays}
-          onChange={(v) => onRangeChange(v as number)}
+          // S4325: 用 Number() 转换替代 as 断言，避免 SonarQube 报告冗余断言
+          onChange={(v) => onRangeChange(Number(v))}
           options={[
             { label: '7天', value: 7 },
             { label: '30天', value: 30 },

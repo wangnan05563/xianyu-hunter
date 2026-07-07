@@ -192,7 +192,9 @@ export default function TaskList() {
       const taskName = tasks.find(t => t.id === taskId)?.name ?? taskId
       if (!success) {
         // 透传后端 detail：避免笼统"自动搜索失败"，让用户知道是 Worker 占用还是别的原因
-        message.warning(`任务「${taskName}」自动搜索失败${detail ? `：${detail}` : ''}`)
+        // S4624：嵌套模板字面量提取为独立变量
+        const detailSuffix = detail ? `：${detail}` : ''
+        message.warning(`任务「${taskName}」自动搜索失败${detailSuffix}`)
       } else if (itemCount > 0) {
         message.success(`任务「${taskName}」自动搜索完成，新增 ${itemCount} 条`)
       }
@@ -623,7 +625,8 @@ export default function TaskList() {
       dataIndex: ['display', 'price'],
       key: 'price',
       width: 90,
-      render: (v: number) => v != null ? `¥${v}` : '-',
+      // S7735：避免取反条件，改为 == null 优先返回 '-'
+      render: (v: number) => v == null ? '-' : `¥${v}`,
     },
     {
       title: '卖家昵称',
@@ -932,12 +935,13 @@ export default function TaskList() {
             total,
             pageSize,
             onChange: (p, ps) => {
+              // S7735：避免取反条件，改为正向判断
               // 切换 pageSize 时重置到第1页
-              if (ps !== pageSize) {
+              if (ps === pageSize) {
+                setPage(p)
+              } else {
                 setPageSize(ps)
                 setPage(1)
-              } else {
-                setPage(p)
               }
             },
             showSizeChanger: true,
@@ -1171,7 +1175,8 @@ export default function TaskList() {
                   dataIndex: ['display', 'price'],
                   key: 'price',
                   width: 90,
-                  render: (v: number) => v != null ? `¥${v}` : '-',
+                  // S7735：避免取反条件，改为 == null 优先返回 '-'
+                  render: (v: number) => v == null ? '-' : `¥${v}`,
                 },
                 {
                   title: '过滤原因',
@@ -1265,13 +1270,14 @@ export default function TaskList() {
         {/* 底部按钮 */}
         <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <Button onClick={() => setAiModalOpen(false)}>取消</Button>
-          {!aiResult ? (
-            <Button type="primary" loading={aiParsing} onClick={doAiParse} icon={<ThunderboltOutlined />}>
-              开始解析
-            </Button>
-          ) : (
+          {/* S7735：避免取反条件，交换分支让 aiResult 为正向判断 */}
+          {aiResult ? (
             <Button type="primary" onClick={applyAiResult}>
               用此结果继续 →
+            </Button>
+          ) : (
+            <Button type="primary" loading={aiParsing} onClick={doAiParse} icon={<ThunderboltOutlined />}>
+              开始解析
             </Button>
           )}
         </div>

@@ -472,4 +472,4 @@ async def test_hub_attach_event_triggers_send() -> None:
 
     # 验证 send 被调用了 1 次（HTTP session 已被消费）
     # 注：无法直接验证，因 _do_send 内联了，我们只验证整体没抛错
-    assert True
+    # S5914：移除常量 boolean 表达式 assert True，测试无异常抛出即视为通过

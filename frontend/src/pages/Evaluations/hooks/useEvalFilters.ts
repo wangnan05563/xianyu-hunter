@@ -17,6 +17,12 @@ import { usePersistentState } from '../../../hooks/usePersistentState'
  */
 export type ResultCategory = 'auto' | 'pass' | 'fail' | 'insufficient' | null
 
+// S4323：将内联联合类型提取为类型别名，便于复用与维护
+export type SoldFilter = 'all' | 'onsale' | 'sold'
+
+// S4323：ISO 日期范围 [start, end] 或 null（未选），在 interface 与持久化校验中复用
+type IsoDateRange = [string, string] | null
+
 export interface EvalFilters {
   itemId: string
   setItemId: (v: string) => void
@@ -27,11 +33,11 @@ export interface EvalFilters {
   scoreRange: [number, number]
   setScoreRange: (v: [number, number]) => void
   dateRange: [dayjs.Dayjs | null, dayjs.Dayjs | null] | null
-  setDateRange: (v: [string, string] | null) => void
+  setDateRange: (v: IsoDateRange) => void
   brandFilter: string
   setBrandFilter: (v: string) => void
-  soldFilter: 'all' | 'onsale' | 'sold'
-  setSoldFilter: (v: 'all' | 'onsale' | 'sold') => void
+  soldFilter: SoldFilter
+  setSoldFilter: (v: SoldFilter) => void
   resultCategory: ResultCategory
   setResultCategory: (v: ResultCategory) => void
   toggleResultCategory: (v: ResultCategory) => void
@@ -54,10 +60,10 @@ export function useEvalFilters(): EvalFilters {
     },
   )
 
-  const [dateRangeIso, setDateRange] = usePersistentState<[string, string] | null>(
+  const [dateRangeIso, setDateRange] = usePersistentState<IsoDateRange>(
     'xh.evals.dateRange', null,
     {
-      validator: (v): v is [string, string] | null =>
+      validator: (v): v is IsoDateRange =>
         v === null || (Array.isArray(v) && v.length === 2 && v.every(s => typeof s === 'string')),
     },
   )
@@ -69,10 +75,10 @@ export function useEvalFilters(): EvalFilters {
   )
 
   const [brandFilter, setBrandFilter] = usePersistentState<string>('xh.evals.brandFilter', '')
-  const [soldFilter, setSoldFilter] = usePersistentState<'all' | 'onsale' | 'sold'>(
+  const [soldFilter, setSoldFilter] = usePersistentState<SoldFilter>(
     'xh.evals.soldFilter', 'all',
     {
-      validator: (v): v is 'all' | 'onsale' | 'sold' => v === 'all' || v === 'onsale' || v === 'sold',
+      validator: (v): v is SoldFilter => v === 'all' || v === 'onsale' || v === 'sold',
     },
   )
 

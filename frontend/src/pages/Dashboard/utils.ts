@@ -14,7 +14,8 @@ export const STAR_THRESHOLDS: Record<string, number[]> = {
 
 // 计算 KPI 米其林星级（1-5），反向指标使用 <= 比较
 export function kpiStar(k: KpiCard): number {
-  if (k == null || k.value == null) return 0
+  // S6582：用可选链替代手动 null 检查
+  if (k?.value == null) return 0
   const v = Number(k.value)
   if (!Number.isFinite(v)) return 0
   const th = STAR_THRESHOLDS[k.id] || []
@@ -77,10 +78,11 @@ export function evMsg(ev: RecentEvent): string {
   if (!p) return ''
   if (typeof p === 'string') return p
   const parts: string[] = []
-  if (p.keyword) parts.push('关键词: ' + p.keyword)
+  // S6551：显式 String() 转换，避免对象被默认 toString 成 [object Object]
+  if (p.keyword) parts.push('关键词: ' + String(p.keyword))
   if (p.title) parts.push(p.title as string)
-  if (p.price != null) parts.push('¥' + p.price)
-  if (p.count != null) parts.push(p.count + ' 件')
+  if (p.price != null) parts.push('¥' + String(p.price))
+  if (p.count != null) parts.push(String(p.count) + ' 件')
   if (p.error) parts.push(p.error as string)
   return parts.join(' · ') || JSON.stringify(p).slice(0, 100)
 }

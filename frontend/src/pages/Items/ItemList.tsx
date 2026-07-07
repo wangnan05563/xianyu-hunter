@@ -895,19 +895,22 @@ export default function ItemList() {
           {autoRefreshEnabled && (
             <Tooltip title={`${liveMode ? '实时搜索' : 'DB'}轮询间隔（${MIN_INTERVAL}-${MAX_INTERVAL}秒），设置已自动保存`}>
               <Space size={4}>
-                <InputNumber
-                  size="small"
-                  min={MIN_INTERVAL}
-                  max={MAX_INTERVAL}
-                  value={liveMode ? liveRefreshInterval : refreshInterval}
-                  onChange={(v) => {
-                    const val = v || DEFAULT_INTERVAL
-                    if (liveMode) setLiveRefreshInterval(val)
-                    else setRefreshInterval(val)
-                  }}
-                  addonAfter="秒"
-                  style={{ width: 90 }}
-                />
+                {/* addonAfter 已废弃，改用 Space.Compact 包装静态文本（antd v5） */}
+                <Space.Compact>
+                  <InputNumber
+                    size="small"
+                    min={MIN_INTERVAL}
+                    max={MAX_INTERVAL}
+                    value={liveMode ? liveRefreshInterval : refreshInterval}
+                    onChange={(v) => {
+                      const val = v || DEFAULT_INTERVAL
+                      if (liveMode) setLiveRefreshInterval(val)
+                      else setRefreshInterval(val)
+                    }}
+                    style={{ width: 70 }}
+                  />
+                  <Button size="small" disabled>秒</Button>
+                </Space.Compact>
               </Space>
             </Tooltip>
           )}

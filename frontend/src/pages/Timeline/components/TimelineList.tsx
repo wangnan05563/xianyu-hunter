@@ -3,15 +3,15 @@ import type { TimelineEntry } from '../../../api'
 import TimelineItem from './TimelineItem'
 
 interface TimelineListProps {
-  items: TimelineEntry[]
-  page: number
-  pageSize: number
-  total: number
-  loading: boolean
-  expandedItems: Set<number>
-  taskMap: Map<string, string>
-  onPageChange: (p: number) => void
-  onToggleExpand: (idx: number) => void
+  readonly items: TimelineEntry[]
+  readonly page: number
+  readonly pageSize: number
+  readonly total: number
+  readonly loading: boolean
+  readonly expandedItems: Set<number>
+  readonly taskMap: Map<string, string>
+  readonly onPageChange: (p: number) => void
+  readonly onToggleExpand: (idx: number) => void
 }
 
 export default function TimelineList({
@@ -39,10 +39,12 @@ export default function TimelineList({
                 if (status === 'succeeded') dotColor = '#52c41a'
                 else if (status === 'failed') dotColor = '#ff4d4f'
                 else if (['pending', 'submitting', 'paying'].includes(status)) dotColor = '#faad14'
-              } else {
-                if (level === 'error' || level === 'err' || eventType === 'order.failed') dotColor = '#ff4d4f'
-                else if (level === 'warning' || level === 'warn') dotColor = '#faad14'
-                else if (eventType.startsWith('eval.passed') || eventType === 'order.paid') dotColor = '#52c41a'
+              } else if (level === 'error' || level === 'err' || eventType === 'order.failed') {
+                dotColor = '#ff4d4f'
+              } else if (level === 'warning' || level === 'warn') {
+                dotColor = '#faad14'
+              } else if (eventType.startsWith('eval.passed') || eventType === 'order.paid') {
+                dotColor = '#52c41a'
               }
 
               const dotIcon = (() => {

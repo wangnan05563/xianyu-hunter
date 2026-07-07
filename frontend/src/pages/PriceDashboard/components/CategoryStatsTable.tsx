@@ -7,10 +7,10 @@ import type { CategoryStat } from '../../../api'
 const { Text } = Typography
 
 interface CategoryStatsTableProps {
-  loading: boolean
-  stats: CategoryStat[]
-  statsTotal: number
-  onRefresh: () => void
+  readonly loading: boolean
+  readonly stats: CategoryStat[]
+  readonly statsTotal: number
+  readonly onRefresh: () => void
 }
 
 // 品类统计明细表格卡片
@@ -45,9 +45,9 @@ export default function CategoryStatsTable({
         }
         return (
           <Tag color="cyan">
-            {tr.min_price != null ? `¥${tr.min_price}` : '—'}
+            {tr.min_price == null ? '—' : `¥${tr.min_price}`}
             {' ~ '}
-            {tr.max_price != null ? `¥${tr.max_price}` : '—'}
+            {tr.max_price == null ? '—' : `¥${tr.max_price}`}
           </Tag>
         )
       },

@@ -213,7 +213,7 @@ def _save_error_log(
         return None
 
 
-async def capture_request_error(request: Any, exc: Exception) -> int | None:
+def capture_request_error(request: Any, exc: Exception) -> int | None:
     """从 FastAPI Request 对象提取上下文并捕获异常
 
     供 exception_handler.py 的 unhandled_exception_handler 调用

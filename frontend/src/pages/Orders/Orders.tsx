@@ -44,7 +44,7 @@ const FEE_RATES = [
   { label: '鱼小铺 1.6%', value: 0.016 },
 ]
 
-function ProfitCalculator({ amount }: { amount: number }) {
+function ProfitCalculator({ amount }: { readonly amount: number }) {
   const [feeRate, setFeeRate] = useState(0.006)
   const [buyPrice, setBuyPrice] = useState<number | null>(amount)
 
@@ -99,10 +99,10 @@ function ProfitCalculator({ amount }: { amount: number }) {
 type TakeoverPhase = 'confirm' | 'progress' | 'done'
 
 interface TakeoverModalProps {
-  open: boolean
-  order: OrderItem | null
-  onClose: () => void
-  onSuccess: () => void
+  readonly open: boolean
+  readonly order: OrderItem | null
+  readonly onClose: () => void
+  readonly onSuccess: () => void
 }
 
 function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) {
@@ -250,11 +250,15 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
 
   const formatTime = (sec: number) => `${Math.floor(sec / 60)}分${sec % 60}秒`
   const progressPct = totalSec.current > 0 ? Math.round(((totalSec.current - remaining) / totalSec.current) * 100) : 0
+  // S3358：用 if/else 替代嵌套三元
+  let phaseTitle = '接管完成'
+  if (phase === 'confirm') phaseTitle = '确认接管'
+  else if (phase === 'progress') phaseTitle = '接管进行中'
 
   return (
     <Modal
       open={open}
-      title={phase === 'confirm' ? '确认接管' : phase === 'progress' ? '接管进行中' : '接管完成'}
+      title={phaseTitle}
       onCancel={handleClose}
       footer={null}
       width={520}
@@ -335,7 +339,10 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
 
       {/* 阶段3：完成 */}
       {phase === 'done' && (
+        // S6848：div 上有鼠标事件，加 role+aria 让屏读器识别为区域
         <div
+          role="region"
+          aria-label="接管完成区域"
           onMouseEnter={() => { autoClosePaused.current = true }}
           onMouseLeave={() => { autoClosePaused.current = false }}
         >
@@ -451,7 +458,8 @@ export default function Orders() {
       es = new EventSource(url)
       es.addEventListener('app_event', (e: MessageEvent) => {
         try {
-          lastEventId = parseInt(e.lastEventId) || lastEventId
+          // S7773：用 Number.parseInt 替代全局 parseInt
+          lastEventId = Number.parseInt(e.lastEventId) || lastEventId
           const ev = JSON.parse(e.data)
           // 监听抢单成功/失败事件，触发列表刷新
           if (ev.type === 'buy.succeeded' || ev.type === 'buy.failed') {

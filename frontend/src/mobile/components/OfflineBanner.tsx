@@ -8,19 +8,19 @@ export default function OfflineBanner() {
   useEffect(() => {
     const goOnline = () => setIsOnline(true)
     const goOffline = () => setIsOnline(false)
-    window.addEventListener('online', goOnline)
-    window.addEventListener('offline', goOffline)
+    globalThis.addEventListener('online', goOnline)
+    globalThis.addEventListener('offline', goOffline)
     return () => {
-      window.removeEventListener('online', goOnline)
-      window.removeEventListener('offline', goOffline)
+      globalThis.removeEventListener('online', goOnline)
+      globalThis.removeEventListener('offline', goOffline)
     }
   }, [])
 
   if (isOnline) return null
 
+  // S6819: 改用 <output> 替代 role="status"，原生具备 live region 语义
   return (
-    <div
-      role="status"
+    <output
       aria-live="polite"
       style={{
         background: '#D4A017',
@@ -36,7 +36,7 @@ export default function OfflineBanner() {
     >
       <WifiOutlined />
       网络已断开，正在显示缓存数据
-    </div>
+    </output>
   )
 }
 

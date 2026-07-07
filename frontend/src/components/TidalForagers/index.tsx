@@ -81,8 +81,11 @@ interface RenderParams {
  * 中端：核心数 <= 8
  * 高端：其他
  */
-function detectDeviceTier(): 'low' | 'mid' | 'high' {
-  if (typeof window === 'undefined') return 'mid'
+// S4323：抽取 type alias 替代内联联合类型
+type DeviceTier = 'low' | 'mid' | 'high'
+function detectDeviceTier(): DeviceTier {
+  // S7764：用 globalThis.window 替代 window
+  if (typeof globalThis.window === 'undefined') return 'mid'
   const cores = navigator.hardwareConcurrency || 4
   const smallScreen = window.innerWidth < 768
   // WebView2/嵌入式浏览器通常 hardwareConcurrency 较小，降级到低端
@@ -125,7 +128,8 @@ function drawFishBody(
   // 尾根 → 尾中（受 phase 摆动） → 尾尖（受 phase 偏移摆动）
   const tailRoot = { x: -fishLen * 0.3, y: 0 }
   const tailMid = { x: -fishLen * 0.6, y: p.sin(phase) * wagAmp * 0.6 }
-  const tailTip = { x: -fishLen, y: p.sin(phase + 1.0) * wagAmp }
+  // S7748：去除零分数 1.0 → 1
+  const tailTip = { x: -fishLen, y: p.sin(phase + 1) * wagAmp }
 
   // 外层辉光（仅高速时显现）
   if (speed > 0.5) {
@@ -354,14 +358,19 @@ export default function TidalForagers() {
   const { isDark } = useTheme()
 
   useEffect(() => {
-    if (!containerRef.current) return
+    // S4325：用本地变量替代 containerRef.current! 断言
+    const container = containerRef.current
+    if (!container) return
 
     const sketch = (p: p5) => {
       // ===== 设备分级（决定鱼群上限与是否启用高细节） =====
       // 显式标注字面量联合类型，避免 TS 收窄后丢失 'low' 可能性
-      const tier: 'low' | 'mid' | 'high' = detectDeviceTier()
+      const tier: DeviceTier = detectDeviceTier()
+      // S3358：嵌套三元拆分为 if/else
       // 鱼群数量上限：低端 80，中端 180，高端 280
-      const FISH_LIMIT = tier === 'low' ? 80 : tier === 'mid' ? 180 : 280
+      let FISH_LIMIT = 280
+      if (tier === 'low') FISH_LIMIT = 80
+      else if (tier === 'mid') FISH_LIMIT = 180
       const highDetail = tier !== 'low'
 
       // ===== Boids 参数 =====
@@ -370,7 +379,8 @@ export default function TidalForagers() {
         alignRadius: 48,
         cohesionRadius: 56,
         sepForce: 1.8,
-        alignForce: 1.0,
+        // S7748：去除零分数 1.0 → 1
+        alignForce: 1,
         cohesionForce: 0.8,
         edgeForce: 0.05,
         maxSpeed: 2.4,
@@ -388,7 +398,8 @@ export default function TidalForagers() {
       const renderParams: RenderParams = {
         highDetail,
         trailAlpha: 22,
-        baseSize: 1.0,
+        // S7748：去除零分数 1.0 → 1
+        baseSize: 1,
       }
 
       // ===== 颜色调色板 =====
@@ -551,7 +562,8 @@ export default function TidalForagers() {
       // ===== p5 生命周期 =====
       p.setup = () => {
         const canvas = p.createCanvas(window.innerWidth, window.innerHeight)
-        canvas.parent(containerRef.current!)
+        // S4325：用闭包内本地变量 container 替代 containerRef.current!
+        canvas.parent(container)
         createBackground()
         fishes = []
         const initialCount = targetFishCount(0)
@@ -614,7 +626,7 @@ export default function TidalForagers() {
       }
     }
 
-    instanceRef.current = new p5(sketch, containerRef.current!)
+    instanceRef.current = new p5(sketch, container)
 
     return () => {
       instanceRef.current?.remove()

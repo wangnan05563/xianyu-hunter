@@ -59,6 +59,10 @@ export default function MobileTasks() {
               goDetail()
             }
           }
+          // S3358：任务模式文本拆为独立 if/else，避免嵌套三元
+          let modeLabel = '确认'
+          if (task.mode === 'auto') modeLabel = '全自动'
+          else if (task.mode === 'semi_auto') modeLabel = '半自动'
           return (
             <Card
               key={task.id}
@@ -78,7 +82,7 @@ export default function MobileTasks() {
                     <Tag color={task.status === 'running' ? 'green' : 'default'}>
                       {task.status === 'running' ? '运行中' : '已暂停'}
                     </Tag>
-                    <Tag>{task.mode === 'auto' ? '全自动' : task.mode === 'semi_auto' ? '半自动' : '确认'}</Tag>
+                    <Tag>{modeLabel}</Tag>
                   </div>
                 </div>
                 {/* 启停开关：阻止冒泡避免触发卡片点击；按钮仍可独立键盘操作 */}

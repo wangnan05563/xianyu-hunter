@@ -2,7 +2,6 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { message } from 'antd'
 import { evalApi } from '../../../api'
 import type { DistResponse } from '../utils'
-import type { ResultCategory } from './useEvalFilters'
 
 /**
  * 分布图数据 Hook

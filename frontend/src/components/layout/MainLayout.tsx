@@ -783,12 +783,10 @@ function LayoutContent({
             <div style={{ textAlign: 'center', color: themeToken.colorTextSecondary, padding: 24 }}>无匹配命令</div>
           ) : (
             filteredCommands.map((item, idx) => (
-              <div
+              <button
+                type="button"
                 key={item.key}
                 onClick={() => { openSheetWithNotification(item.key); setCmdOpen(false) }}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { openSheetWithNotification(item.key); setCmdOpen(false) } }}
-                role="button"
-                tabIndex={0}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -798,13 +796,17 @@ function LayoutContent({
                   background: idx === cmdActive ? themeToken.colorPrimaryBg : undefined,
                   borderRadius: 4,
                   margin: '0 8px',
+                  border: 'none',
+                  width: '100%',
+                  textAlign: 'left',
+                  font: 'inherit',
                 }}
                 onMouseEnter={() => setCmdActive(idx)}
               >
                 <span style={{ fontSize: 16, color: themeToken.colorTextSecondary }}>{item.icon}</span>
                 <span>{item.label}</span>
                 <span style={{ marginLeft: 'auto', fontSize: 12, color: themeToken.colorTextQuaternary }}>{item.key}</span>
-              </div>
+              </button>
             ))
           )}
         </div>

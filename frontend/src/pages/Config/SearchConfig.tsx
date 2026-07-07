@@ -189,15 +189,18 @@ export default function SearchConfig() {
           <Card title="🔍 基础搜索参数" style={{ marginBottom: 16 }}>
             {/* 操作延迟（原"搜索间隔"，实际是单次操作间的人类行为模拟延迟，非任务循环间隔） */}
             <Form.Item label="操作延迟" extra="模拟人类操作的间隔时间（非任务循环间隔），避免被风控（建议 ≥2 秒）">
-              <InputNumber
-                min={1}
-                max={30}
-                step={1}
-                value={searchInterval}
-                onChange={(v) => setSearchInterval(v || 3)}
-                addonAfter="秒"
-                style={{ width: '100%' }}
-              />
+              {/* addonAfter 在 antd v5 已废弃，改用 Space.Compact 紧凑布局（SonarQube S1874） */}
+              <Space.Compact style={{ width: '100%' }}>
+                <InputNumber
+                  min={1}
+                  max={30}
+                  step={1}
+                  value={searchInterval}
+                  onChange={(v) => setSearchInterval(v || 3)}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ display: 'inline-flex', alignItems: 'center', padding: '0 12px', background: 'var(--xh-bg-spotlight)', border: '1px solid var(--xh-border)', borderLeft: 'none' }}>秒</span>
+              </Space.Compact>
             </Form.Item>
 
             {/* 每页结果数量 */}
@@ -222,15 +225,18 @@ export default function SearchConfig() {
 
             {/* 搜索超时 */}
             <Form.Item label="搜索超时" extra="单次搜索请求的最大等待时间">
-              <InputNumber
-                min={10}
-                max={120}
-                step={5}
-                value={timeout}
-                onChange={(v) => setTimeout(v || 30)}
-                addonAfter="秒"
-                style={{ width: '100%' }}
-              />
+              {/* addonAfter 在 antd v5 已废弃，改用 Space.Compact 紧凑布局（SonarQube S1874） */}
+              <Space.Compact style={{ width: '100%' }}>
+                <InputNumber
+                  min={10}
+                  max={120}
+                  step={5}
+                  value={timeout}
+                  onChange={(v) => setTimeout(v || 30)}
+                  style={{ flex: 1 }}
+                />
+                <span style={{ display: 'inline-flex', alignItems: 'center', padding: '0 12px', background: 'var(--xh-bg-spotlight)', border: '1px solid var(--xh-border)', borderLeft: 'none' }}>秒</span>
+              </Space.Compact>
             </Form.Item>
           </Card>
 

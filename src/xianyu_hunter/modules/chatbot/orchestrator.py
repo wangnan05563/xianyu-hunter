@@ -425,13 +425,13 @@ class ChatbotOrchestrator:
             async for event in self._fallback_to_rag_fragments(chunks, reason):
                 yield event
 
-    async def _handle_tool_call_event(self, agent_event, **kwargs) -> tuple[bool, AsyncIterator[SSEEvent]]:
+    def _handle_tool_call_event(self, agent_event, **kwargs) -> tuple[bool, AsyncIterator[SSEEvent]]:
         """处理 tool_call 类型的 Agent 事件，返回 (是否终止, 事件流)"""
         async def _gen():
             yield SSEEvent(event=SSEEventType.TOOL_CALL, data=agent_event.data)
         return False, _gen()
 
-    async def _handle_tool_result_event(self, agent_event, **kwargs) -> tuple[bool, AsyncIterator[SSEEvent]]:
+    def _handle_tool_result_event(self, agent_event, **kwargs) -> tuple[bool, AsyncIterator[SSEEvent]]:
         """处理 tool_result 类型的 Agent 事件，返回 (是否终止, 事件流)
         
         tool_result 转为 TOOL_CALL 事件并标记 status=done，
@@ -447,14 +447,14 @@ class ChatbotOrchestrator:
             )
         return False, _gen()
 
-    async def _handle_done_event(
+    def _handle_done_event(
         self, agent_event, query: str, sources: list, history: list, **kwargs,
     ) -> tuple[bool, AsyncIterator[SSEEvent]]:
         """处理 done 类型的 Agent 事件，返回 (是否终止, 事件流)"""
         content = agent_event.data.get("content", "")
         return True, self._emit_agent_done_event(query, content, sources, history)
 
-    async def _handle_error_event(
+    def _handle_error_event(
         self, agent_event, query: str, context: Context, images: list[str] | None, **kwargs,
     ) -> tuple[bool, AsyncIterator[SSEEvent]]:
         """处理 error 类型的 Agent 事件，返回 (是否终止, 事件流)
@@ -513,7 +513,7 @@ class ChatbotOrchestrator:
                 handler = event_handlers.get(agent_event.type)
                 if not handler:
                     continue
-                should_stop, event_stream = await handler(agent_event, **handler_kwargs)
+                should_stop, event_stream = handler(agent_event, **handler_kwargs)
                 async for event in event_stream:
                     yield event
                 if should_stop:

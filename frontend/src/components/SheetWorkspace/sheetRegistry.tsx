@@ -86,7 +86,7 @@ export const sheetRegistry: SheetMeta[] = [
  */
 function pathToRegex(pattern: string): RegExp {
   // :param 匹配单个路径段（不含 /），避免 /tasks/123/edit 误匹配 /tasks/:id
-  const re = pattern.replace(/:[^/]+/g, '[^/]+')
+  const re = pattern.replaceAll(/:[^/]+/g, '[^/]+')
   return new RegExp(`^${re}$`)
 }
 

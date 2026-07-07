@@ -23,7 +23,8 @@ const renderDiffValue = (v: unknown): string => {
   if (v == null) return '-'
   if (Array.isArray(v)) return v.map(renderDiffValue).join(', ')
   if (typeof v === 'object') return JSON.stringify(v)
-  return String(v)
+  // 到此处 v 只能是 string/number/boolean/bigint/symbol，String() 安全
+  return String(v as string | number | boolean | bigint | symbol)
 }
 const renderOpTag = (op: string) => {
   // op 配色：add=绿 delete=红 其他=橙
@@ -705,15 +706,19 @@ export default function TaskEditor() {
               label="单页搜索条数（page_size）"
               help={`全局当前值：${globalConfig?.search.page_size ?? 20} 条`}
             >
-              <InputNumber
-                min={1}
-                max={100}
-                value={formData.search_config?.page_size ?? null}
-                onChange={(v) => updateSearchOverride('page_size', v)}
-                placeholder={`沿用全局（${effective.pageSize}）`}
-                addonAfter="条"
-                style={{ width: 200 }}
-              />
+              <Space.Compact style={{ width: 200 }}>
+                <InputNumber
+                  min={1}
+                  max={100}
+                  value={formData.search_config?.page_size ?? null}
+                  onChange={(v) => updateSearchOverride('page_size', v)}
+                  placeholder={`沿用全局（${effective.pageSize}）`}
+                  style={{ width: '100%' }}
+                />
+                <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                  条
+                </div>
+              </Space.Compact>
             </Form.Item>
 
             <Form.Item
@@ -734,15 +739,19 @@ export default function TaskEditor() {
               label="搜索超时（timeout）"
               help={`全局当前值：${globalConfig?.search.timeout ?? 30} 秒`}
             >
-              <InputNumber
-                min={5}
-                max={120}
-                value={formData.search_config?.timeout ?? null}
-                onChange={(v) => updateSearchOverride('timeout', v)}
-                placeholder={`沿用全局（${effective.timeout}）`}
-                addonAfter="秒"
-                style={{ width: 200 }}
-              />
+              <Space.Compact style={{ width: 200 }}>
+                <InputNumber
+                  min={5}
+                  max={120}
+                  value={formData.search_config?.timeout ?? null}
+                  onChange={(v) => updateSearchOverride('timeout', v)}
+                  placeholder={`沿用全局（${effective.timeout}）`}
+                  style={{ width: '100%' }}
+                />
+                <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                  秒
+                </div>
+              </Space.Compact>
             </Form.Item>
 
             <Form.Item
@@ -880,14 +889,18 @@ export default function TaskEditor() {
                 label="执行间隔（秒）"
                 tooltip="过短易触发反爬，过长可能错过抢单窗口。建议 60-300 秒"
               >
-                <InputNumber
-                  min={30}
-                  max={3600}
-                  value={intervalSeconds}
-                  onChange={(v) => setIntervalSeconds(v ?? 60)}
-                  addonAfter="秒"
-                  style={{ width: 200 }}
-                />
+                <Space.Compact style={{ width: 200 }}>
+                  <InputNumber
+                    min={30}
+                    max={3600}
+                    value={intervalSeconds}
+                    onChange={(v) => setIntervalSeconds(v ?? 60)}
+                    style={{ width: '100%' }}
+                  />
+                  <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                    秒
+                  </div>
+                </Space.Compact>
                 {intervalSeconds < 60 && (
                   <Alert type="warning" message="执行间隔过短可能触发反爬" style={{ marginTop: 8 }} banner />
                 )}
@@ -1133,18 +1146,22 @@ function Step3AIEval(props: {
           help="留空则使用全局配置。避免拖慢+反爬"
         >
           <Space>
-            <InputNumber
-              min={1}
-              max={20}
-              value={formData.eval_config?.auto_collect_max_per_run ?? null}
-              onChange={(v) => setFormData({
-                ...formData,
-                eval_config: { ...formData.eval_config, auto_collect_max_per_run: v ?? undefined },
-              })}
-              placeholder={`沿用全局（${globalConfig?.eval?.auto_collect_max_per_run ?? 3}）`}
-              style={{ width: 200 }}
-              addonAfter="条"
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={1}
+                max={20}
+                value={formData.eval_config?.auto_collect_max_per_run ?? null}
+                onChange={(v) => setFormData({
+                  ...formData,
+                  eval_config: { ...formData.eval_config, auto_collect_max_per_run: v ?? undefined },
+                })}
+                placeholder={`沿用全局（${globalConfig?.eval?.auto_collect_max_per_run ?? 3}）`}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                条
+              </div>
+            </Space.Compact>
             <Button
               size="small"
               onClick={() => {
@@ -1328,14 +1345,18 @@ function GlobalEvalConfigModal({ open, onClose, onSaved }: { readonly open: bool
               />
             </Form.Item>
             <Form.Item label="每轮最多采集条数" help="避免拖慢+反爬">
-              <InputNumber
-                min={1}
-                max={20}
-                value={evalConfig.auto_collect_max_per_run}
-                onChange={(v) => update({ eval: { ...evalConfig, auto_collect_max_per_run: v || 3 } })}
-                addonAfter="条"
-                style={{ width: 200 }}
-              />
+              <Space.Compact style={{ width: 200 }}>
+                <InputNumber
+                  min={1}
+                  max={20}
+                  value={evalConfig.auto_collect_max_per_run}
+                  onChange={(v) => update({ eval: { ...evalConfig, auto_collect_max_per_run: v || 3 } })}
+                  style={{ width: '100%' }}
+                />
+                <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                  条
+                </div>
+              </Space.Compact>
             </Form.Item>
           </Form>
         </Card>
@@ -1438,34 +1459,46 @@ function GlobalBatchRefreshModal({ open, onClose }: { readonly open: boolean; re
             />
           </Form.Item>
           <Form.Item label="触发间隔（分钟）" help="定时触发间隔，建议 30-60 分钟">
-            <InputNumber
-              min={5}
-              max={1440}
-              value={br.interval_minutes}
-              onChange={(v) => update({ batch_refresh: { ...br, interval_minutes: v || 30 } })}
-              addonAfter="分钟"
-              style={{ width: 200 }}
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={5}
+                max={1440}
+                value={br.interval_minutes}
+                onChange={(v) => update({ batch_refresh: { ...br, interval_minutes: v || 30 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                分钟
+              </div>
+            </Space.Compact>
           </Form.Item>
           <Form.Item label="每批拉取数（batch_size）" help="每批从 DB 拉取的最大商品数（分页控制）">
-            <InputNumber
-              min={10}
-              max={500}
-              value={br.batch_size}
-              onChange={(v) => update({ batch_refresh: { ...br, batch_size: v || 50 } })}
-              addonAfter="条"
-              style={{ width: 200 }}
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={10}
+                max={500}
+                value={br.batch_size}
+                onChange={(v) => update({ batch_refresh: { ...br, batch_size: v || 50 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                条
+              </div>
+            </Space.Compact>
           </Form.Item>
           <Form.Item label="单次最多采集数（max_items_per_run）" help="防止单次运行长时间占用浏览器">
-            <InputNumber
-              min={10}
-              max={1000}
-              value={br.max_items_per_run}
-              onChange={(v) => update({ batch_refresh: { ...br, max_items_per_run: v || 100 } })}
-              addonAfter="条"
-              style={{ width: 200 }}
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={10}
+                max={1000}
+                value={br.max_items_per_run}
+                onChange={(v) => update({ batch_refresh: { ...br, max_items_per_run: v || 100 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                条
+              </div>
+            </Space.Compact>
           </Form.Item>
         </Form>
       </Modal>
@@ -1561,57 +1594,77 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
 
         <Form layout="vertical">
           <Form.Item label="每秒请求上限（qps）" help={`建议 ≤ 5，过高触发反爬。当前：${ad.qps}`}>
-            <InputNumber
-              min={1}
-              max={20}
-              value={ad.qps}
-              onChange={(v) => update({ antidetect: { ...ad, qps: v || 1 } })}
-              addonAfter="次/秒"
-              style={{ width: 200 }}
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={1}
+                max={20}
+                value={ad.qps}
+                onChange={(v) => update({ antidetect: { ...ad, qps: v || 1 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                次/秒
+              </div>
+            </Space.Compact>
             {ad.qps > 5 && (
               <Alert type="error" message="QPS 过高可能触发反爬封号" style={{ marginTop: 8 }} banner />
             )}
           </Form.Item>
           <Form.Item label="最小延迟（min_delay_ms）" help="请求间最小间隔">
-            <InputNumber
-              min={0}
-              max={5000}
-              value={ad.min_delay_ms}
-              onChange={(v) => update({ antidetect: { ...ad, min_delay_ms: v ?? 200 } })}
-              addonAfter="ms"
-              style={{ width: 200 }}
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={0}
+                max={5000}
+                value={ad.min_delay_ms}
+                onChange={(v) => update({ antidetect: { ...ad, min_delay_ms: v ?? 200 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                ms
+              </div>
+            </Space.Compact>
           </Form.Item>
           <Form.Item label="最大延迟（max_delay_ms）" help="请求间最大间隔">
-            <InputNumber
-              min={0}
-              max={10000}
-              value={ad.max_delay_ms}
-              onChange={(v) => update({ antidetect: { ...ad, max_delay_ms: v ?? 1500 } })}
-              addonAfter="ms"
-              style={{ width: 200 }}
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={0}
+                max={10000}
+                value={ad.max_delay_ms}
+                onChange={(v) => update({ antidetect: { ...ad, max_delay_ms: v ?? 1500 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                ms
+              </div>
+            </Space.Compact>
           </Form.Item>
           <Form.Item label="连续失败熔断阈值（fail_pause_threshold）" help="连续失败此次数后暂停任务">
-            <InputNumber
-              min={1}
-              max={50}
-              value={ad.fail_pause_threshold}
-              onChange={(v) => update({ antidetect: { ...ad, fail_pause_threshold: v || 3 } })}
-              addonAfter="次"
-              style={{ width: 200 }}
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={1}
+                max={50}
+                value={ad.fail_pause_threshold}
+                onChange={(v) => update({ antidetect: { ...ad, fail_pause_threshold: v || 3 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                次
+              </div>
+            </Space.Compact>
           </Form.Item>
           <Form.Item label="失败计数窗口（fail_window_sec）" help="在此时间窗口内累计失败次数">
-            <InputNumber
-              min={60}
-              max={86400}
-              value={ad.fail_window_sec}
-              onChange={(v) => update({ antidetect: { ...ad, fail_window_sec: v ?? 3600 } })}
-              addonAfter="秒"
-              style={{ width: 200 }}
-            />
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={60}
+                max={86400}
+                value={ad.fail_window_sec}
+                onChange={(v) => update({ antidetect: { ...ad, fail_window_sec: v ?? 3600 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                秒
+              </div>
+            </Space.Compact>
           </Form.Item>
         </Form>
       </Modal>

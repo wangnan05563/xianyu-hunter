@@ -85,12 +85,13 @@ export function useColumnConfig(
       const set = new Set(prev)
       // 保护：至少保留 1 列可见
       const visibleCount = normalizedOrder.filter((k) => !set.has(k)).length
-      if (!set.has(key)) {
+      // S7735：避免否定条件，正向判断更易读
+      if (set.has(key)) {
+        set.delete(key)
+      } else {
         // 即将隐藏：检查是否会清空所有可见列
         if (visibleCount <= 1) return prev  // 拒绝操作
         set.add(key)
-      } else {
-        set.delete(key)
       }
       return Array.from(set)
     })
@@ -146,7 +147,7 @@ export function useColumnConfig(
     const defMap = new Map(definitions.map((d) => [d.key, d]))
     return normalizedOrder
       .map((k) => defMap.get(k))
-      .filter((d): d is ColumnConfig => Boolean(d))
+      .filter((d): d is ColumnConfig => d !== undefined)
   }, [normalizedOrder, definitions])
 
   return {

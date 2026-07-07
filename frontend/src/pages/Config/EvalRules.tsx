@@ -30,7 +30,8 @@ const computeHeatmapData = (distData: {
   total: number
 } | null): HeatmapCompute => {
   const result: HeatmapCompute = { data: [], max: 1, xLabels: [], yLabels: [] }
-  if (!distData || !distData.buckets?.length) return result
+  // 用可选链合并 null 判断更简洁（SonarQube S6582）
+  if (!distData?.buckets?.length) return result
 
   const sBins = distData.buckets.length
   const pBins = distData.buckets[0]?.length || 5
@@ -66,7 +67,8 @@ const buildHeatmapOption = (
   distData: { buckets: Array<Array<{ count: number; pass: number; auto: number; fail: number }>> } | null,
   heatmap: HeatmapCompute,
 ) => {
-  if (!distData || !distData.buckets?.length) return null
+  // 用可选链合并 null 判断更简洁（SonarQube S6582）
+  if (!distData?.buckets?.length) return null
   return {
     tooltip: {
       position: 'top',
@@ -827,6 +829,15 @@ function CollectStatsPanel({
   readonly nextRefreshStr: string | null
 }) {
   const { token } = theme.useToken()
+  // 提前计算成功率颜色，避免 JSX 中嵌套三元（SonarQube S3358）
+  let rateColor: string = 'red'
+  if (stats) {
+    if (stats.success_rate >= 0.8) {
+      rateColor = 'green'
+    } else if (stats.success_rate >= 0.5) {
+      rateColor = 'orange'
+    }
+  }
   return (
     <div style={{ marginTop: 12, padding: '8px 12px', background: 'var(--xh-bg-spotlight)', borderRadius: 6, fontSize: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -856,10 +867,7 @@ function CollectStatsPanel({
             </span>
             <span>
               成功率{' '}
-              <Tag color={
-                stats.success_rate >= 0.8 ? 'green' :
-                stats.success_rate >= 0.5 ? 'orange' : 'red'
-              }>
+              <Tag color={rateColor}>
                 {(stats.success_rate * 100).toFixed(1)}%
               </Tag>
             </span>
@@ -914,17 +922,18 @@ function WeightSlider({
   originalValue,
   onRevert,
 }: {
-  label: string
-  value: number
-  onChange: (v: number) => void
-  min?: number
-  max?: number
-  step?: number
-  help?: string
-  formatter?: (v: number) => string
-  revertPath?: string
-  originalValue?: unknown
-  onRevert?: (path: string) => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly label: string
+  readonly value: number
+  readonly onChange: (v: number) => void
+  readonly min?: number
+  readonly max?: number
+  readonly step?: number
+  readonly help?: string
+  readonly formatter?: (v: number) => string
+  readonly revertPath?: string
+  readonly originalValue?: unknown
+  readonly onRevert?: (path: string) => void
 }) {
   // 仅当值与原始值不同时显示回滚按钮
   const showRevert = revertPath && originalValue !== undefined && value !== originalValue

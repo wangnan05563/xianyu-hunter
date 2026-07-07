@@ -1,0 +1,93 @@
+﻿=== frontend/src/App.tsx ===
+  L74 [typescript:S7764] Prefer `globalThis` over `window`.
+  L74 [typescript:S7764] Prefer `globalThis` over `window`.
+  L60 [typescript:S6759] Mark the props of the component as read-only.
+=== frontend/src/contexts/ThemeContext.tsx ===
+  L25 [typescript:S6759] Mark the props of the component as read-only.
+  L28 [typescript:S6754] useState call is not destructured into value + setter pair
+  L29 [typescript:S7764] Prefer `globalThis.window` over `window`.
+  L35 [typescript:S7764] Prefer `globalThis.window` over `window`.
+  L48 [typescript:S7764] Prefer `globalThis.window` over `window`.
+=== frontend/src/utils/lazyRetry.tsx ===
+  L109 [typescript:S7764] Prefer `globalThis` over `window`.
+=== frontend/src/hooks/useMenuConfig.tsx ===
+  L38 [typescript:S3863] '../api/menu' imported multiple times.
+  L40 [typescript:S3863] '../api/menu' imported multiple times.
+  L137 [typescript:S4043] Move this array "sort" operation to a separate statement or replace it with "toSorted".
+  L171 [typescript:S4043] Move this array "sort" operation to a separate statement or replace it with "toSorted".
+=== frontend/src/hooks/useIsMobile.ts ===
+  L13 [typescript:S7764] Prefer `globalThis.window` over `window`.
+  L14 [typescript:S7764] Prefer `globalThis` over `window`.
+  L18 [typescript:S7764] Prefer `globalThis` over `window`.
+=== frontend/src/hooks/useColumnConfig.ts ===
+  L88 [typescript:S7735] Unexpected negated condition.
+  L149 [typescript:S7770] arrow function is equivalent to `Boolean`. Use `Boolean` directly.
+=== frontend/src/hooks/useAutoRefresh.ts ===
+  L117 [typescript:S2486] Handle this exception or don't catch it at all.
+  L117 [typescript:S7718] The catch parameter `_err` should be named `error_`.
+=== frontend/src/hooks/usePreferences.ts ===
+  L1 [typescript:S1128] Remove this unused import of 'useRef'.
+=== frontend/src/api/client.ts ===
+  L31 [typescript:S7764] Prefer `globalThis` over `window`.
+  L31 [typescript:S7764] Prefer `globalThis` over `window`.
+=== frontend/src/api/export.ts ===
+  L54 [typescript:S4624] Refactor this code to not use nested template literals.
+=== frontend/src/api/errorLogs.ts ===
+  L31 [typescript:S4325] This assertion is unnecessary since it does not change the type of the expression.
+=== frontend/src/components/SheetWorkspace/SheetTabs.tsx ===
+  L31 [typescript:S6767] 'onActivate' PropType is defined but prop is never used
+  L31 [typescript:S6767] 'onActivate' PropType is defined but prop is never used
+  L33 [typescript:S6767] 'onMinimize' PropType is defined but prop is never used
+  L37 [typescript:S6767] 'borderColor' PropType is defined but prop is never used
+  L38 [typescript:S6767] 'doubleClickCloseEnabled' PropType is defined but prop is never used
+  L38 [typescript:S6767] 'doubleClickCloseEnabled' PropType is defined but prop is never used
+  L39 [typescript:S6767] 'doubleClickInterval' PropType is defined but prop is never used
+  L39 [typescript:S6767] 'doubleClickInterval' PropType is defined but prop is never used
+  L40 [typescript:S6767] 'thumbnailMode' PropType is defined but prop is never used
+  L40 [typescript:S6767] 'thumbnailMode' PropType is defined but prop is never used
+  L41 [typescript:S6767] 'thumbnailTooltipEnabled' PropType is defined but prop is never used
+  L101 [typescript:S6819] Use <input type="button">, <input type="image">, <input type="reset">, <input type="submit">, or <button> instead of the "button" role to ensure accessibility across all devices.
+  L163 [typescript:S3358] Extract this nested ternary operation into an independent statement.
+  L195 [typescript:S6819] Use <input type="button">, <input type="image">, <input type="reset">, <input type="submit">, or <button> instead of the "button" role to ensure accessibility across all devices.
+=== frontend/src/components/SheetWorkspace/SheetContent.tsx ===
+  L23 [typescript:S6759] Mark the props of the component as read-only.
+  L31 [typescript:S6759] Mark the props of the component as read-only.
+=== frontend/src/components/SheetWorkspace/SheetPreferences.tsx ===
+  L12 [typescript:S6759] Mark the props of the component as read-only.
+=== frontend/src/components/SheetWorkspace/sheetRegistry.tsx ===
+  L89 [typescript:S7781] Prefer `String#replaceAll()` over `String#replace()`.
+=== frontend/src/components/layout/MainLayout.tsx ===
+  L786 [typescript:S6819] Use <input type="button">, <input type="image">, <input type="reset">, <input type="submit">, or <button> instead of the "button" role to ensure accessibility across all devices.
+=== frontend/src/components/editors/CronEditor.tsx ===
+  L26 [typescript:S6759] Mark the props of the component as read-only.
+  L86 [typescript:S6479] Do not use Array index in keys
+=== frontend/src/components/editors/TagEditor.tsx ===
+  L16 [typescript:S6759] Mark the props of the component as read-only.
+=== frontend/src/components/ExportButton.tsx ===
+  L30 [typescript:S6759] Mark the props of the component as read-only.
+=== frontend/src/pages/Timeline/components/TimelineList.tsx ===
+  L17 [typescript:S6759] Mark the props of the component as read-only.
+  L43 [typescript:S6660] 'If' statement should not be the only statement in 'else' block
+=== frontend/src/pages/Timeline/components/TimelineFilter.tsx ===
+  L19 [typescript:S6759] Mark the props of the component as read-only.
+=== frontend/src/pages/Timeline/utils.ts ===
+  L19 [typescript:S7773] Prefer `Number.isNaN` over `isNaN`.
+=== frontend/src/pages/Maintenance/BatchRefresh.tsx ===
+  L1080 [typescript:S1874] 'destroyOnClose' is deprecated.
+  L548 [typescript:S1874] 'addonAfter' is deprecated.
+=== frontend/src/pages/Maintenance/Cleanup.tsx ===
+  L359 [typescript:S1874] 'addonAfter' is deprecated.
+  L429 [typescript:S1874] 'addonAfter' is deprecated.
+=== frontend/src/pages/Maintenance/DatabaseAdmin.tsx ===
+  L296 [typescript:S6582] Prefer using an optional chain expression instead, as it's more concise and easier to read.
+=== frontend/src/pages/Logs/ErrorLogs.tsx ===
+  L93 [typescript:S6582] Prefer using an optional chain expression instead, as it's more concise and easier to read.
+=== frontend/src/pages/Export/index.tsx ===
+  L81 [typescript:S6582] Prefer using an optional chain expression instead, as it's more concise and easier to read.
+  L150 [typescript:S4325] This assertion is unnecessary since it does not change the type of the expression.
+=== frontend/src/pages/Items/ItemList.tsx ===
+  L908 [typescript:S1874] 'addonAfter' is deprecated.
+=== frontend/src/pages/AntiCrawl/index.tsx ===
+  L78 [typescript:S6582] Prefer using an optional chain expression instead, as it's more concise and easier to read.
+=== frontend/src/pages/Tasks/TaskDetail.tsx ===
+  L107 [typescript:S6759] Mark the props of the component as read-only.

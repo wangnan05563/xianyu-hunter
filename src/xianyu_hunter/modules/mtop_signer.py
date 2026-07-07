@@ -61,13 +61,13 @@ class MtopRequest:
 class MtopSignedParams:
     """MTOP 签名后的请求参数"""
     jsv: str
-    appKey: str
+    app_key: str     # PEP 8 蛇形命名（HTTP 参数名仍为 "appKey"，见 to_query_string）
     t: str           # 时间戳（毫秒）
     sign: str        # MD5 签名
     api: str
     v: str
     type: str        # 响应类型
-    dataType: str
+    data_type: str   # PEP 8 蛇形命名（HTTP 参数名仍为 "dataType"，见 to_query_string）
     data: str        # 序列化后的 data
 
     def to_query_string(self) -> str:
@@ -181,7 +181,7 @@ class MtopSigner:
 
         return MtopSignedParams(
             jsv=self.JSV,
-            appKey=request.app_key,
+            app_key=request.app_key,
             t=timestamp,
             sign=sign,
             api=request.api,

@@ -106,7 +106,7 @@ export class LazyErrorBoundary extends Component<
             页面加载失败，请重试。
           </p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => globalThis.location.reload()}
             style={{
               padding: '6px 16px', borderRadius: 6, cursor: 'pointer',
               border: '1px solid var(--xh-border)', background: 'var(--xh-bg-spotlight)',

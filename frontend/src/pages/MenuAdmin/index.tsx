@@ -58,8 +58,6 @@ export default function MenuAdmin() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [resetting, setResetting] = useState(false)
-  // 原始菜单数据（用于对比 dirty）
-  const [original, setOriginal] = useState<MenuItem[]>([])
   // 编辑中数据
   const [rows, setRows] = useState<MenuRow[]>([])
 
@@ -68,7 +66,6 @@ export default function MenuAdmin() {
     setLoading(true)
     try {
       const data = await menuApi.get()
-      setOriginal(data)
       setRows(
         data.map((m) => ({
           ...m,

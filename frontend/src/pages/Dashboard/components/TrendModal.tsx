@@ -5,12 +5,13 @@ import ReactECharts from '../../../components/charts/EChart'
 import type { TrendSeries } from '../../../api'
 
 interface TrendModalProps {
-  trendOpen: boolean
-  trendMetric: string
-  trendRange: number
-  trendData: TrendSeries | null
-  onClose: () => void
-  onRangeChange: (range: number) => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly trendOpen: boolean
+  readonly trendMetric: string
+  readonly trendRange: number
+  readonly trendData: TrendSeries | null
+  readonly onClose: () => void
+  readonly onRangeChange: (range: number) => void
 }
 
 export default function TrendModal({

@@ -5,15 +5,15 @@ import ReactECharts from '../../../components/charts/EChart'
 import type { HistogramData } from '../../../api'
 
 interface PriceHistogramCardProps {
-  histogram: HistogramData | null
-  histoTaskId: string
-  histoTasks: Array<{ id: string; name: string; keyword: string }>
-  aiAnalysis: string | null
-  aiLoading: boolean
-  onHistoTaskChange: (taskId: string) => void
-  onAiAnalyze: () => void
-  onClearAiAnalysis: () => void
-  onNavigate: (path: string) => void
+  readonly histogram: HistogramData | null
+  readonly histoTaskId: string
+  readonly histoTasks: Array<{ id: string; name: string; keyword: string }>
+  readonly aiAnalysis: string | null
+  readonly aiLoading: boolean
+  readonly onHistoTaskChange: (taskId: string) => void
+  readonly onAiAnalyze: () => void
+  readonly onClearAiAnalysis: () => void
+  readonly onNavigate: (path: string) => void
 }
 
 export default function PriceHistogramCard({
@@ -55,6 +55,7 @@ export default function PriceHistogramCard({
           const i = p[0].dataIndex
           const b = bins[i]
           const mid = ((b.min ?? 0) + (b.max ?? b.min ?? 0)) / 2
+          // S7735: 避免否定式条件 `b.max == null ? '+' : b.max.toFixed(0)`，改为正向判断
           let html = `价格区间: ¥${(b.min ?? 0).toFixed(0)} - ¥${b.max != null ? b.max.toFixed(0) : '+'}<br/>商品数: <b>${b.count}</b>`
           if (compare.last7d > 0) {
             const diff = ((mid - compare.last7d) / compare.last7d * 100)
@@ -216,9 +217,9 @@ export default function PriceHistogramCard({
               return tpr && (hasMin || hasMax) ? (
                 <span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>
                   <Tag color="green">定价范围</Tag>
-                  {hasMin ? `¥${tpr!.min_price}` : '−'}
+                  {hasMin ? `¥${tpr.min_price}` : '−'}
                   {' ~ '}
-                  {hasMax ? `¥${tpr!.max_price}` : '−'}
+                  {hasMax ? `¥${tpr.max_price}` : '−'}
                 </span>
               ) : null
             })()}

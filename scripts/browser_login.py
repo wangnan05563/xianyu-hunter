@@ -191,6 +191,11 @@ def _cookie_signature(cookies: list[dict]) -> frozenset[tuple[str, str, str]]:
     )
 
 
+def _emit_login_export_status(set_status, message: str) -> None:
+    if set_status is not None:
+        set_status(status="running", message=message)
+
+
 async def _collect_settled_cookies(
     context,
     *,
@@ -230,13 +235,22 @@ async def _collect_settled_cookies(
         await asyncio.sleep(interval)
 
 
-async def _prepare_login_cookie_export(bc, page, route_handler, timings: dict[str, float]) -> list[dict]:
+async def _prepare_login_cookie_export(
+    bc,
+    page,
+    route_handler,
+    timings: dict[str, float],
+    *,
+    set_status=None,
+) -> list[dict]:
     """Switch from fast login loading to complete post-login cookie collection."""
+    _emit_login_export_status(set_status, "登录成功，正在保存 Cookie...")
     try:
         await bc.unroute("**/*", route_handler)
     except Exception:
         pass
 
+    _emit_login_export_status(set_status, "登录成功，正在预热个人页...")
     warmup_start = time.monotonic()
     try:
         await page.goto(
@@ -252,7 +266,9 @@ async def _prepare_login_cookie_export(bc, page, route_handler, timings: dict[st
         pass
     timings["post_login_warmup_sec"] = _elapsed_sec(warmup_start)
 
+    _emit_login_export_status(set_status, "登录成功，正在等待 Cookie 写入...")
     await asyncio.sleep(3)
+    _emit_login_export_status(set_status, "登录成功，正在保存浏览器状态...")
     storage_start = time.monotonic()
     try:
         await bc.storage_state()
@@ -260,6 +276,7 @@ async def _prepare_login_cookie_export(bc, page, route_handler, timings: dict[st
         pass
     timings["storage_state_sec"] = _elapsed_sec(storage_start)
 
+    _emit_login_export_status(set_status, "登录成功，正在等待 Cookie 稳定...")
     settle_start = time.monotonic()
     final_cookies = await _collect_settled_cookies(bc)
     timings["settle_cookies_sec"] = _elapsed_sec(settle_start)
@@ -395,7 +412,7 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                     set_status(status="already_logged", message="检测到已登录状态")
                     export_start = time.monotonic()
                     final_cookies = await _prepare_login_cookie_export(
-                        bc, page, _block_resources, timings
+                        bc, page, _block_resources, timings, set_status=set_status
                     )
                     _export_cookies_to_json(final_cookies, "browser")
                     _save_playwright_cookies(final_cookies)
@@ -436,7 +453,7 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                         # 登录成功后继续预热并等待 cookie jar 稳定，避免只导出半截 cookie。
                         export_start = time.monotonic()
                         final_cookies = await _prepare_login_cookie_export(
-                            bc, page, _block_resources, timings
+                            bc, page, _block_resources, timings, set_status=set_status
                         )
                         final_count = len(final_cookies)
                         _export_cookies_to_json(final_cookies, "browser")

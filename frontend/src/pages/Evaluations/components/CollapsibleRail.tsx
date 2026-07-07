@@ -10,7 +10,7 @@ import {
 
 interface CollapsibleRailProps {
   /** 点击展开面板（主按钮与任意图标均触发） */
-  onExpand: () => void
+  readonly onExpand: () => void
 }
 
 // 右侧分析面板折叠态的窄竖条

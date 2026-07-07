@@ -75,7 +75,8 @@ const parseCookieInput = (input: string): Record<string, string> => {
   const cookies: Record<string, string> = {}
   for (const part of input.split(/[;\n]/)) {
     const trimmed = part.trim()
-    if (!trimmed || !trimmed.includes('=')) continue
+    // 空字符串自然不含 '='，合并条件避免冗余短路判断
+    if (!trimmed.includes('=')) continue
     const [name, ...valueParts] = trimmed.split('=')
     const value = valueParts.join('=')
     if (name && value) {

@@ -796,6 +796,39 @@ class ChatbotRepository:
             )
             return int(session.execute(stmt).scalar() or 0) > 0
 
+    def mark_stale_building_kb_versions_failed(
+        self, older_than_sec: int, error_message: str,
+    ) -> int:
+        """把超过指定时间且仍为 building 的版本标记为 failed
+
+        为什么需要：构建流程异常崩溃（进程被 kill / OOM / 异常被吞没）时，
+        版本记录会卡在 status=building，永远不会被改写。
+        前端 has_building_kb_version() 持续返回 true，导致「重建」按钮一直灰显。
+
+        实现：按 created_at + older_than_sec 阈值筛选 building 记录，
+        批量更新为 failed（带 error_message 便于审计追溯）。
+
+        返回被清理的版本数（供调用方日志统计）。
+        """
+        from datetime import datetime, timedelta, timezone
+        threshold = datetime.now(timezone.utc) - timedelta(seconds=older_than_sec)
+        with self._session() as session:
+            stmt = (
+                update(ChatbotKBVersionRow)
+                .where(ChatbotKBVersionRow.status == "building")
+                .where(ChatbotKBVersionRow.created_at < threshold)
+                .values(
+                    status="failed",
+                    chunk_count=0,
+                    failed_chunk_count=0,
+                    build_duration_sec=None,
+                    error_message=error_message,
+                )
+            )
+            result = session.execute(stmt)
+            session.commit()
+            return int(result.rowcount or 0)
+
     @staticmethod
     def _kb_version_row_to_dict(
         row: ChatbotKBVersionRow, is_current: bool = False

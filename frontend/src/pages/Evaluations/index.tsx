@@ -7,7 +7,7 @@ import {
 import {
   ReloadOutlined, AimOutlined, SearchOutlined, UndoOutlined,
   RetweetOutlined, SettingOutlined, LeftOutlined, RightOutlined,
-  RobotOutlined, ThunderboltOutlined, CloudDownloadOutlined,
+  RobotOutlined, CloudDownloadOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { taskApi, type EvalItem } from '../../api'
@@ -124,7 +124,8 @@ function ExpandedDetail({ r, trendCache, trendLoading, trendError, loadSellerTre
                 {d.imageUrls && d.imageUrls.length > 0 && (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {d.imageUrls.slice(0, 6).map((url, i) => (
-                      <img key={`${url}-${i}`} src={url} width={80} height={80} style={{ objectFit: 'cover', borderRadius: 6 }} />
+                      // S1077：img 必须有 alt 属性，装饰性图片用空字符串
+                      <img key={`${url}-${i}`} src={url} width={80} height={80} alt={`商品图片${i + 1}`} style={{ objectFit: 'cover', borderRadius: 6 }} />
                     ))}
                   </div>
                 )}

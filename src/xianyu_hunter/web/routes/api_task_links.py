@@ -157,7 +157,7 @@ def _build_pw_cookie_item(name: str, value: str, cookie: dict) -> dict:
     return item
 
 
-def _load_pw_cookies_from_json() -> tuple[list[dict], dict[str, str]]:
+def _load_pw_cookies_from_json(user_id: str = "default") -> tuple[list[dict], dict[str, str]]:
     """从 CookieStore JSON 读取 Playwright 格式 Cookie 列表 + identity cookie 值映射
 
     返回 (pw_cookies, identity_values)：
@@ -171,8 +171,8 @@ def _load_pw_cookies_from_json() -> tuple[list[dict], dict[str, str]]:
     """
     from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
     store = get_cookie_store()
-    store.invalidate_cache()
-    json_data = store._read_json()
+    store.invalidate_cache(user_id)
+    json_data = store._read_json(user_id)
     if not json_data or not json_data.get("cookies"):
         return [], {}
 
@@ -293,7 +293,7 @@ def _maybe_reset_m5tk_refresh(container: Container, cookies_injected: bool) -> N
         logger.info("已重置 _m_h5_tk 刷新时间戳（{}），下次搜索将强制刷新 token", reason)
 
 
-async def _ensure_live_search_cookies(container: Container) -> None:
+async def _ensure_live_search_cookies(container: Container, user_id: str = "default") -> None:
     """检查浏览器是否持有有效的闲鱼登录 Cookie，无效时尝试从 JSON 补注入
 
     为什么需要 JSON 补注入：Worker 浏览器实例在登录前已启动，
@@ -311,7 +311,7 @@ async def _ensure_live_search_cookies(container: Container) -> None:
     if not container.browser:
         return
 
-    pw_cookies, json_identity_values = _load_pw_cookies_from_json()
+    pw_cookies, json_identity_values = _load_pw_cookies_from_json(user_id)
     missing, expired, stale = await _collect_cookie_issues(container, json_identity_values)
     cookies_injected = False  # 标记是否进行了 Cookie 补注入
     if missing or expired or stale:
@@ -643,8 +643,6 @@ def delete_link(
     联动清理：删除 item 类型关联时，同步删除 events 表中对应的 eval.* 评估事件，
     避免 task_links 已删但评估明细残留导致的垃圾数据。
     """
-    # 多用户隔离：写入操作用 "default" 兜底
-    user_id = getattr(request.state, "user_id", "default")
     # 删除前先查出关联信息，用于判断是否需要联动清理评估事件
     # 为什么不用 delete_task_link 直接删：它只返回 bool，拿不到 link_type/link_key
     from sqlalchemy import select as _select
@@ -809,7 +807,7 @@ async def refresh_links(
             status_code=503,
             detail="浏览器实例未初始化，请重启服务",
         )
-    await _ensure_live_search_cookies(container)
+    await _ensure_live_search_cookies(container, user_id=user_id)
 
     keyword = task.get("keyword", "")
     if not keyword:
@@ -1276,11 +1274,11 @@ async def _wait_for_inflight_search(
 
 
 async def _check_live_cookies_safely(
-    container: Container, task_id: str, inflight_event: asyncio.Event,
+    container: Container, task_id: str, inflight_event: asyncio.Event, user_id: str | None = None,
 ) -> dict | None:
     """执行 Cookie 检查，失败时返回 SSE 错误事件，成功返回 None"""
     try:
-        await _ensure_live_search_cookies(container)
+        await _ensure_live_search_cookies(container, user_id=user_id or "default")
         return None
     except HTTPException as e:
         _clear_live_inflight(task_id, inflight_event)
@@ -1532,7 +1530,7 @@ async def _live_event_stream(
 
     # 阶段 2：Cookie 检查
     yield sse({"stage": "checking_cookies"})
-    cookie_error = await _check_live_cookies_safely(container, task_id, inflight_event)
+    cookie_error = await _check_live_cookies_safely(container, task_id, inflight_event, user_id=user_id)
     if cookie_error:
         yield sse(cookie_error)
         return

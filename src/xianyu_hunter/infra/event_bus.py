@@ -92,7 +92,7 @@ class EventBus:
         """安全调用 handler，捕获所有异常"""
         try:
             await handler(event)
-        except Exception as e:
+        except Exception:
             logger.exception(f"Handler {handler.__name__} 处理 {event.type.value} 失败")
 
 

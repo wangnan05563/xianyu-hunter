@@ -9,7 +9,6 @@ import {
 import type { EvalItem } from '../../../api'
 import { RISK_LEVEL_CONFIG } from '../../../constants/riskLevels'
 import { isDataInsufficient, getInsufficientReason, resolveActionDisplay, type ActionPlaceholderType } from '../utils'
-import { translateDimension, translateRejectReason } from '../dimensionLabels'
 
 const ACTION_PLACEHOLDER_TEXT: Record<Exclude<ActionPlaceholderType, null>, string> = {
   ordered: '已下单',
@@ -17,7 +16,7 @@ const ACTION_PLACEHOLDER_TEXT: Record<Exclude<ActionPlaceholderType, null>, stri
   below_threshold: '未达阈值',
 }
 
-function ActionPlaceholder({ text }: { text: string }) {
+function ActionPlaceholder({ text }: { readonly text: string }) {
   return <span style={{ color: 'var(--xh-text-quaternary)', fontSize: 11 }}>{text}</span>
 }
 

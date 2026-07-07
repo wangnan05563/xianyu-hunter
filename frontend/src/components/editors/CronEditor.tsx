@@ -5,8 +5,8 @@ import { cronApi } from '../../api'
 const { Text } = Typography
 
 interface CronEditorProps {
-  value: string
-  onChange: (value: string) => void
+  readonly value: string
+  readonly onChange: (value: string) => void
 }
 
 const presets = [
@@ -82,8 +82,8 @@ export default function CronEditor({ value, onChange }: CronEditorProps) {
           <div style={{ background: '#f6ffed', padding: 12, borderRadius: 6, border: '1px solid #b7eb8f' }}>
             <Text strong style={{ fontSize: 12, color: '#52c41a' }}>✓ 表达式有效，未来 5 次触发：</Text>
             <ol style={{ margin: '8px 0 0 20px', fontSize: 12, color: '#52c41a' }}>
-              {nextRuns.map((t, i) => (
-                <li key={i}>{new Date(t).toLocaleString('zh-CN')}</li>
+              {nextRuns.map((t) => (
+                <li key={t}>{new Date(t).toLocaleString('zh-CN')}</li>
               ))}
             </ol>
           </div>

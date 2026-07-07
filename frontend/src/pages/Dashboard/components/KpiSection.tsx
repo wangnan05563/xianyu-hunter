@@ -9,7 +9,8 @@ import type { KpiCard } from '../../../api'
 import { kpiStar, kpiStarTip, fmtKpiValue, deltaText } from '../utils'
 
 interface KpiSectionProps {
-  kpiCards: KpiCard[]
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly kpiCards: KpiCard[]
 }
 
 export default function KpiSection({ kpiCards }: KpiSectionProps) {
@@ -35,6 +36,18 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
           // 上升/下降箭头色：使用 token 中的语义色
           const upColor = isInverted ? token.colorError : token.colorSuccess
           const downColor = isInverted ? token.colorSuccess : token.colorError
+          // S6478：把趋势箭头和 Tag 颜色计算从 JSX 内联 IIFE 提取到外部变量，
+          // 避免 SonarQube 误判为「父组件内定义子组件」
+          let trendPrefix = <MinusOutlined style={{ color: 'var(--xh-text-tertiary)' }} />
+          if (hasDelta) {
+            trendPrefix = deltaUp
+              ? <ArrowUpOutlined style={{ color: upColor }} />
+              : <ArrowDownOutlined style={{ color: downColor }} />
+          }
+          // 反向指标上涨=坏（红），正向指标上涨=好（绿）
+          const deltaTagColor = isInverted
+            ? (deltaUp ? 'red' : 'green')
+            : (deltaUp ? 'green' : 'red')
           return (
             <Col xs={12} md={6} key={k.id}>
               <div style={{ borderLeft: stars === 5 ? `3px solid ${starColor}` : '3px solid transparent', paddingLeft: 8 }}>
@@ -44,20 +57,11 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
                   suffix={isInverted ? '%' : k.unit}
                   precision={k.is_pct && k.value !== 0 && k.value !== 100 ? 1 : 0}
                   valueStyle={stars === 5 ? { color: starColor } : undefined}
-                  prefix={(() => {
-                    // 趋势箭头：有变化按方向显红/绿，无变化显中性灰
-                    if (!hasDelta) return <MinusOutlined style={{ color: 'var(--xh-text-tertiary)' }} />
-                    if (deltaUp) return <ArrowUpOutlined style={{ color: upColor }} />
-                    return <ArrowDownOutlined style={{ color: downColor }} />
-                  })()}
+                  prefix={trendPrefix}
                 />
                 <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
                   {hasDelta && (
-                    <Tag color={(() => {
-                      // 反向指标上涨=坏（红），正向指标上涨=好（绿）
-                      if (isInverted) return deltaUp ? 'red' : 'green'
-                      return deltaUp ? 'green' : 'red'
-                    })()} style={{ fontSize: 11 }}>
+                    <Tag color={deltaTagColor} style={{ fontSize: 11 }}>
                       {deltaText(k)}
                     </Tag>
                   )}

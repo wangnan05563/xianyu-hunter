@@ -5,15 +5,16 @@ import type { ChannelDef } from '../constants'
 import { pricingMeta } from '../constants'
 
 interface ChannelCardProps {
-  channel: ChannelDef
-  config: AppConfig
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly channel: ChannelDef
+  readonly config: AppConfig
   // 当前卡片是否处于测试中
-  testing: boolean
+  readonly testing: boolean
   // 是否有任意卡片处于测试中（用于禁用其他卡片的测试按钮）
-  anyTesting: boolean
-  onToggle: (key: string, enabled: boolean) => void
-  onFieldChange: (channelKey: string, fieldKey: string, value: string) => void
-  onTest: (channelKey: string) => void
+  readonly anyTesting: boolean
+  readonly onToggle: (key: string, enabled: boolean) => void
+  readonly onFieldChange: (channelKey: string, fieldKey: string, value: string) => void
+  readonly onTest: (channelKey: string) => void
 }
 
 export default function ChannelCard({
@@ -30,7 +31,8 @@ export default function ChannelCard({
   return (
     <Card
       size="small"
-      className={`channel-card ${!ch.enabled ? 'channel-card-disabled' : ''}`}
+      // 反转条件避免否定式，提升可读性（SonarQube S7735）
+      className={`channel-card ${ch.enabled ? '' : 'channel-card-disabled'}`}
       style={{ border: ch.enabled ? '1px solid #1677ff' : '1px solid #d9d9d9' }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>

@@ -41,6 +41,17 @@ interface TabItemProps {
   readonly thumbnailTooltipEnabled: boolean
 }
 
+// S6767：子组件仅声明实际使用的 props，避免声明但未使用的 PropType
+// ThumbnailTab 不需要 onActivate/onMinimize/borderColor/doubleClick*/thumbnailMode
+type ThumbnailTabProps = Pick<TabItemProps, 'sheet' | 'active' | 'onClose' | 'activeBg' | 'activeColor' | 'textColor' | 'thumbnailTooltipEnabled'> & {
+  readonly handleClick: (e?: React.MouseEvent<HTMLElement>) => void
+}
+
+// StandardTab 不需要 onActivate/doubleClick*/thumbnailMode/thumbnailTooltipEnabled
+type StandardTabProps = Pick<TabItemProps, 'sheet' | 'active' | 'onClose' | 'onMinimize' | 'activeBg' | 'activeColor' | 'textColor' | 'borderColor'> & {
+  readonly handleClick: (e?: React.MouseEvent<HTMLElement>) => void
+}
+
 function TabItem(props: TabItemProps) {
   // 上次点击时间戳：双击判定依据
   // 为什么用 useRef 而非 state：避免触发重渲染，仅作为内部计时器
@@ -48,7 +59,7 @@ function TabItem(props: TabItemProps) {
 
   // I1: 双击触发关闭后阻止事件冒泡，与关闭按钮的 stopPropagation 行为一致
   // 为什么返回布尔值：handleTabClick 需要告知调用方是否触发了关闭，以便决定是否 stopPropagation
-  const handleClick = (e?: React.MouseEvent<HTMLDivElement>) => {
+  const handleClick = (e?: React.MouseEvent<HTMLElement>) => {
     if (handleTabClick(props, lastClickRef)) {
       e?.stopPropagation()
     }
@@ -96,14 +107,12 @@ function ThumbnailTab({
   textColor,
   thumbnailTooltipEnabled,
   handleClick,
-}: TabItemProps & { readonly handleClick: (e?: React.MouseEvent<HTMLDivElement>) => void }) {
+}: ThumbnailTabProps) {
   const tabContent = (
-    <div
+    <button
+      type="button"
       className={`sheet-tab${active ? ' sheet-tab-active' : ''}${sheet.minimized ? ' sheet-tab-minimized' : ''}`}
       onClick={handleClick}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleClick() }}
-      role="button"
-      tabIndex={0}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -115,6 +124,7 @@ function ThumbnailTab({
         borderRadius: 6,
         background: active ? activeBg : 'transparent',
         color: active ? activeColor : textColor,
+        border: 'none',
         borderLeft: active ? `2px solid ${activeColor}` : '2px solid transparent',
         opacity: sheet.minimized ? 0.5 : 1,
         position: 'relative',
@@ -152,15 +162,16 @@ function ThumbnailTab({
       {sheet.minimized && (
         <span style={{ position: 'absolute', top: 2, right: 2, fontSize: 8, color: activeColor }}>●</span>
       )}
-    </div>
+    </button>
   )
 
   if (!thumbnailTooltipEnabled) {
     return tabContent
   }
 
-  // 提取嵌套三元为局部变量：避免 JSX 内嵌套三元降低可读性（S3358）
-  const statusText = sheet.minimized ? '已最小化' : (active ? '激活中' : '后台')
+  // 提取嵌套三元为独立变量：避免 JSX 内嵌套三元降低可读性（S3358）
+  const activeText = active ? '激活中' : '后台'
+  const statusText = sheet.minimized ? '已最小化' : activeText
   const tooltipContent = (
     <div style={{ maxWidth: 240 }}>
       <div style={{ fontWeight: 600, marginBottom: 4 }}>{sheet.title}</div>
@@ -190,14 +201,12 @@ function StandardTab({
   textColor,
   borderColor,
   handleClick,
-}: TabItemProps & { readonly handleClick: (e?: React.MouseEvent<HTMLDivElement>) => void }) {
+}: StandardTabProps) {
   return (
-    <div
+    <button
+      type="button"
       className={`sheet-tab${active ? ' sheet-tab-active' : ''}${sheet.minimized ? ' sheet-tab-minimized' : ''}`}
       onClick={handleClick}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleClick() }}
-      role="button"
-      tabIndex={0}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -209,6 +218,7 @@ function StandardTab({
         borderRadius: 6,
         background: active ? activeBg : 'transparent',
         color: active ? activeColor : textColor,
+        border: 'none',
         borderLeft: active ? `2px solid ${activeColor}` : '2px solid transparent',
         opacity: sheet.minimized ? 0.5 : 1,
         position: 'relative',
@@ -264,7 +274,7 @@ function StandardTab({
           <span style={{ fontSize: 9, color: activeColor, fontWeight: 500 }}>恢复</span>
         </Tooltip>
       )}
-    </div>
+    </button>
   )
 }
 

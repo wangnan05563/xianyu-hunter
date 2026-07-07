@@ -531,7 +531,6 @@ class BatchRefreshScheduler:
         item_id: str,
         item: dict,
         task_id: int,
-        started_at: datetime,
         counters: _BatchCounters,
         total_items: int,
     ) -> bool:
@@ -552,7 +551,7 @@ class BatchRefreshScheduler:
             return False
         except Exception as e:  # noqa: BLE001
             return self._handle_item_failure(
-                e, task_id, item_id, started_at, counters, total_items
+                e, task_id, item_id, counters, total_items
             )
 
     def _handle_item_failure(
@@ -560,7 +559,6 @@ class BatchRefreshScheduler:
         e: Exception,
         task_id: int,
         item_id: str,
-        started_at: datetime,
         counters: _BatchCounters,
         total_items: int,
     ) -> bool:

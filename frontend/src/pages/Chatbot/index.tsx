@@ -276,7 +276,7 @@ const confirmEscalate = async (targetSessionId: string, deps: EscalateDeps) => {
 // S6819/S6842 修复：img 加 role=button 是非交互元素加交互 role，改用 button 替代
 // 为什么单独抽出来：让 MessageBubble 组件的 JSX 层级扁平，且 TypeScript 收窄
 // imgs 参数为 string[] 后无需再依赖 msg.images 的可能为 null/undefined 的类型
-const renderMessageImages = (imgs: string[], win: Window) => (
+const renderMessageImages = (imgs: string[], win: typeof globalThis) => (
   <div className="cb-msg-images">
     {imgs.map((img, idx) => (
       <button
@@ -1340,6 +1340,13 @@ function ChatInputArea({
       className="cb-input-area"
       onDrop={onDrop}
       onDragOver={(e) => e.preventDefault()}
+      // S6848：拖拽区作为自定义交互组件，补充 role/tabIndex/onKeyDown 以满足可访问性
+      // 实际键盘上传由内部 Upload 按钮承担，Escape 用于失焦拖拽区
+      role="application"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') e.currentTarget.blur()
+      }}
       aria-label="消息输入区，可拖拽图片到此处上传"
     >
       {!isStreaming && quickReplies.length > 0 && (
@@ -1467,7 +1474,7 @@ function MessageBubble({ message: msg, sessionId }: { readonly message: Message;
             {/* M4 图文混排：先渲染图片缩略图，再渲染文本 */}
             {/* msg.images?.length 让 TypeScript 收窄失败（属性别名收窄限制），
                 改用 alias 变量：外层 if 已确保非空，imgs 自动收窄为 string[] */}
-            {msg.images && msg.images.length > 0 && renderMessageImages(msg.images, window)}
+            {msg.images && msg.images.length > 0 && renderMessageImages(msg.images, globalThis)}
             <Typography.Paragraph className="cb-bubble-text">
               {msg.content}
             </Typography.Paragraph>

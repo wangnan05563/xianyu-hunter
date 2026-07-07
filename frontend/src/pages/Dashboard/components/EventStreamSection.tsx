@@ -14,10 +14,11 @@ import { EVENT_COLOR } from '../../../constants/eventTypes'
 import { evTypeLabel, evMsg } from '../utils'
 
 interface EventStreamSectionProps {
-  events: RecentEvent[]
-  streamStatus: string
-  overview: StatsOverview | null
-  onNavigate: (path: string) => void
+  // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
+  readonly events: RecentEvent[]
+  readonly streamStatus: string
+  readonly overview: StatsOverview | null
+  readonly onNavigate: (path: string) => void
 }
 
 export default function EventStreamSection({ events, streamStatus, overview, onNavigate }: EventStreamSectionProps) {

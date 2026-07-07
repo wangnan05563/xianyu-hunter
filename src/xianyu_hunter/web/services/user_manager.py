@@ -93,7 +93,6 @@ class UserManager:
             ).fetchone()
         if not row:
             return None
-        cols = row._mapping.keys()
         return dict(row._mapping)
 
     def update_last_active(self, user_id: str) -> None:
@@ -260,10 +259,12 @@ class UserManager:
             conn.commit()
 
         # 清除缓存中该用户的所有条目，避免撤销后仍命中缓存
+        # 用字典推导式重建而非 in-place del：避免 list() 抑制 S7504，同时保证并发安全
         with self._lock:
-            for thash, (cached_uid, _) in list(self._verify_cache.items()):
-                if cached_uid == user_id:
-                    del self._verify_cache[thash]
+            self._verify_cache = {
+                thash: val for thash, val in self._verify_cache.items()
+                if val[0] != user_id
+            }
 
         # 记录 logout 事件，失败不阻塞退出流程
         try:

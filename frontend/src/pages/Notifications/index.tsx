@@ -200,16 +200,22 @@ export default function Notifications() {
         extra={
           // 内联 Tabs 替代方案：用按钮组切换筛选，避免 Tabs 与 URL 同步的额外复杂度
           <Space>
-            {(['all', 'unread', 'read'] as FilterStatus[]).map((s) => (
-              <Button
-                key={s}
-                size="small"
-                type={filter === s ? 'primary' : 'default'}
-                onClick={() => setFilter(s)}
-              >
-                {s === 'all' ? '全部' : s === 'unread' ? '未读' : '已读'}
-              </Button>
-            ))}
+            {(['all', 'unread', 'read'] as FilterStatus[]).map((s) => {
+              // S3358：嵌套三元拆为独立 if/else，便于阅读
+              let label = '已读'
+              if (s === 'all') label = '全部'
+              else if (s === 'unread') label = '未读'
+              return (
+                <Button
+                  key={s}
+                  size="small"
+                  type={filter === s ? 'primary' : 'default'}
+                  onClick={() => setFilter(s)}
+                >
+                  {label}
+                </Button>
+              )
+            })}
           </Space>
         }
       >
@@ -254,9 +260,10 @@ export default function Notifications() {
                   <List.Item.Meta
                     avatar={
                       // 视觉对齐：未读用小圆点提示，已读无标记
-                      !item.read_at ? (
+                      // S7735：反转条件避免否定
+                      item.read_at ? null : (
                         <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#ff4d4f', marginTop: 8 }} />
-                      ) : null
+                      )
                     }
                     title={
                       <Space size="small" wrap>

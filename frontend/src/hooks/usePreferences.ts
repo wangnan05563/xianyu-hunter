@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { preferencesApi } from '../api/preferences'
 import type { PreferenceValue } from '../api/preferences'

@@ -78,7 +78,7 @@ export default function Export() {
     const f = filters[ds]
     const params: ExportParams = { limit: f.limit }
     if (f.task_id.trim()) params.task_id = f.task_id.trim()
-    if (f.range && f.range.length === 2) {
+    if (f.range?.length === 2) {
       params.start = f.range[0].format('YYYY-MM-DDTHH:mm:ss')
       params.end = f.range[1].format('YYYY-MM-DDTHH:mm:ss')
     }
@@ -147,7 +147,7 @@ export default function Export() {
                   size="small"
                   showTime
                   style={{ width: '100%' }}
-                  value={f.range as [Dayjs, Dayjs] | null}
+                  value={f.range}
                   onChange={(range) => updateFilter(ds.key, { range: range as [Dayjs, Dayjs] | null })}
                 />
               )}

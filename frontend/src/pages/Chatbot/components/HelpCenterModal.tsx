@@ -48,8 +48,8 @@ export default function HelpCenterModal({
   open,
   onClose,
 }: {
-  open: boolean
-  onClose: () => void
+  readonly open: boolean
+  readonly onClose: () => void
 }) {
   const [version, setVersion] = useState<VersionInfo | null>(null)
   const [loading, setLoading] = useState(false)
@@ -127,30 +127,32 @@ export default function HelpCenterModal({
       label: (
         <span><InfoCircleOutlined style={{ marginRight: 6 }} />版本信息</span>
       ),
-      children: (
-        <div className="cb-help-section cb-help-version">
-          {loading ? (
-            <Spin size="small" />
-          ) : version ? (
-            <>
-              <div className="cb-help-version-row">
-                <Text type="secondary">版本</Text>
-                <Text strong>{version.version}</Text>
-              </div>
-              <div className="cb-help-version-row">
-                <Text type="secondary">构建日期</Text>
-                <Text>{version.build_date}</Text>
-              </div>
-              <div className="cb-help-version-row">
-                <Text type="secondary">Git</Text>
-                <Text code>{version.git_sha}</Text>
-              </div>
-            </>
-          ) : (
-            <Text type="secondary">版本信息加载中…</Text>
-          )}
-        </div>
-      ),
+      children: (() => {
+        // 提取嵌套三元为独立变量，避免阅读歧义
+        const versionContent = version ? (
+          <>
+            <div className="cb-help-version-row">
+              <Text type="secondary">版本</Text>
+              <Text strong>{version.version}</Text>
+            </div>
+            <div className="cb-help-version-row">
+              <Text type="secondary">构建日期</Text>
+              <Text>{version.build_date}</Text>
+            </div>
+            <div className="cb-help-version-row">
+              <Text type="secondary">Git</Text>
+              <Text code>{version.git_sha}</Text>
+            </div>
+          </>
+        ) : (
+          <Text type="secondary">版本信息加载中…</Text>
+        )
+        return (
+          <div className="cb-help-section cb-help-version">
+            {loading ? <Spin size="small" /> : versionContent}
+          </div>
+        )
+      })(),
     },
   ]
 
