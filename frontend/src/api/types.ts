@@ -182,6 +182,16 @@ export interface Task {
   // 注意：DB 默认值 60（NOT NULL），此处类型仍允许 null 以支持"未设置"语义
   eval_threshold: number | null
   ai_prompt: string | null
+  // 派生来源：后端 TaskRow.notify_bargain_only（src/xianyu_hunter/infra/db_models.py）
+  // Pydantic 字段：TaskCreate.notify_bargain_only / TaskUpdate.notify_bargain_only
+  // 变更日期：2026-07-07
+  // 约束：DB 存 INTEGER(0/1)，前端读取后用 Boolean() 转 bool；默认 false
+  notify_bargain_only: number
+  // 派生来源：后端 TaskRow.auto_buy_bargain_only（src/xianyu_hunter/infra/db_models.py）
+  // Pydantic 字段：TaskCreate.auto_buy_bargain_only / TaskUpdate.auto_buy_bargain_only
+  // 变更日期：2026-07-07
+  // 约束：DB 存 INTEGER(0/1)，前端读取后用 Boolean() 转 bool；默认 false；mode=notify 时无意义
+  auto_buy_bargain_only: number
   // 任务级配置覆盖（JSON 字段，后端 get_task 已解析为对象；null 表示沿用全局）
   search_config: TaskSearchOverride | null
   price_config: TaskPriceOverride | null
@@ -209,6 +219,10 @@ export interface TaskCreateBody {
   // AI 评估任务级配置：undefined=不更新（编辑模式），null=清除覆盖沿用全局
   eval_threshold?: number | null
   ai_prompt?: string | null
+  // 捡漏价格触发开关：undefined=不更新，bool=设置值
+  // mode=notify 时 auto_buy_bargain_only 无意义（仅通知模式不下单）
+  notify_bargain_only?: boolean
+  auto_buy_bargain_only?: boolean
   // 任务级配置覆盖：undefined=不更新，null/{}=清除覆盖，对象=应用覆盖
   search_config?: TaskSearchOverride | null
   price_config?: TaskPriceOverride | null
@@ -224,6 +238,23 @@ export interface TaskRun {
   hit_count: number
   err_count: number
   warn_count: number
+}
+
+// 任务恢复前置校验结果（meta-rule #31 状态恢复前置校验）
+// 后端权威源：src/xianyu_hunter/modules/scheduler.py::TaskScheduler.precheck_resume
+// 变更日期：2026-07-07
+// 约束：前端"启动/恢复"按钮点击前必须先调用 precheck，resume_blocked=true 时弹 Modal 阻断
+export interface TaskPrecheckResult {
+  // 是否阻止恢复：true 时前端必须弹窗提示用户消除根因后再恢复
+  resume_blocked: boolean
+  // 阻止原因码：ok / cooldown / cookie_invalid / not_registered
+  reason_code: 'ok' | 'cooldown' | 'cookie_invalid' | 'not_registered'
+  // 用户可读提示，可直接展示在 Modal 中
+  user_hint: string
+  // 冷却期剩余秒数（仅 reason_code=cooldown 时有值）
+  retry_after: number | null
+  // 任务是否已注册到调度器（false 时 DB 状态可改但需重启服务才生效）
+  task_registered: boolean
 }
 
 export interface TaskDep {

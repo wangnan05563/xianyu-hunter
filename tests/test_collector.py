@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -155,20 +156,24 @@ class FakeSearchApiResponse:
 
     url = "https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/"
 
+    def __init__(self, body: dict[str, Any] | None = None):
+        self._body = body or {"ret": ["SUCCESS::调用成功"], "data": {}}
+
     async def json(self) -> dict[str, Any]:
-        return {"ret": ["SUCCESS::调用成功"], "data": {}}
+        return self._body
 
 
 class FakeSearchRoute:
     """用于模拟 Playwright Route"""
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, response: FakeSearchApiResponse | None = None):
         self.request = MagicMock(url=url)
+        self._response = response or FakeSearchApiResponse()
         self.fulfilled = False
         self.continued = False
 
     async def fetch(self) -> FakeSearchApiResponse:
-        return FakeSearchApiResponse()
+        return self._response
 
     async def fulfill(self, **kwargs: Any) -> None:
         self.fulfilled = True
@@ -180,12 +185,19 @@ class FakeSearchRoute:
 class FakeSearchApiPage:
     """模拟会发起搜索 API 请求的 Page"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        response: FakeSearchApiResponse | None = None,
+        responses: list[FakeSearchApiResponse] | None = None,
+    ):
         self.context = FakeContext()
         self.route_calls: list[tuple[str, Any]] = []
         self.unroute_calls: list[tuple[str, Any]] = []
         self.url = "https://www.goofish.com/search"
         self._handler = None
+        self._response = response
+        self._responses = list(responses or [])
+        self.goto_count = 0
 
     async def route(self, pattern: str, handler: Any) -> None:
         self.route_calls.append((pattern, handler))
@@ -195,10 +207,13 @@ class FakeSearchApiPage:
         self.unroute_calls.append((pattern, handler))
 
     async def goto(self, url: str, **kwargs: Any) -> None:
+        self.goto_count += 1
         self.url = url
         assert self._handler is not None
+        response = self._responses.pop(0) if self._responses else self._response
         route = FakeSearchRoute(
-            "https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/?data=%7B%7D"
+            "https://h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search/1.0/?data=%7B%7D",
+            response=response,
         )
         await self._handler(route)
 
@@ -293,6 +308,60 @@ async def test_search_api_route_uses_narrow_pattern(fake_browser: Any, fake_ad: 
     assert pattern != "**/*"
     assert "mtop.taobao.idlemtopsearch.pc.search/1.0" in pattern
     assert page.unroute_calls == [(pattern, handler)]
+
+
+@pytest.mark.asyncio
+async def test_search_api_illegal_access_is_retryable_not_session_invalid(fake_browser: Any, fake_ad: Any) -> None:
+    """FAIL_SYS_ILLEGAL_ACCESS 是 MTOP 签名失败，不应直接判定登录失效。"""
+    collector = Collector(browser=fake_browser, antidetect=fake_ad)
+    collector._last_m5tk_refresh = time.monotonic()
+    page = FakeSearchApiPage(
+        response=FakeSearchApiResponse({"ret": ["FAIL_SYS_ILLEGAL_ACCESS::非法请求"], "data": {}})
+    )
+
+    items, session_invalid = await collector._call_search_api(page, "DDR4", max_pages=1, fast=True)
+
+    assert items == []
+    assert session_invalid is False
+    assert page.unroute_calls
+
+
+@pytest.mark.asyncio
+async def test_search_api_repeated_illegal_access_sets_backoff(fake_browser: Any, fake_ad: Any) -> None:
+    """连续 MTOP 签名失败后应短时间跳过 API，避免每轮重复等待失败。"""
+    collector = Collector(browser=fake_browser, antidetect=fake_ad)
+    page = FakeSearchApiPage(
+        responses=[
+            FakeSearchApiResponse({"ret": ["FAIL_SYS_ILLEGAL_ACCESS::非法请求"], "data": {}}),
+            FakeSearchApiResponse({"ret": ["FAIL_SYS_ILLEGAL_ACCESS::非法请求"], "data": {}}),
+        ]
+    )
+
+    items, session_invalid = await collector._call_search_api(page, "DDR4", max_pages=1, fast=True)
+
+    assert items == []
+    assert session_invalid is False
+    assert page.goto_count == 2
+    assert collector._api_auth_backoff_until > time.monotonic()
+
+
+@pytest.mark.asyncio
+async def test_search_api_navigation_keeps_filter_params(fake_browser: Any, fake_ad: Any) -> None:
+    """API 拦截实际导航 URL 应与日志 URL 一致，保留搜索筛选参数。"""
+    collector = Collector(browser=fake_browser, antidetect=fake_ad)
+    page = FakeSearchApiPage()
+
+    await collector._call_search_api(
+        page,
+        "DDR4",
+        max_pages=1,
+        fast=True,
+        filter_params=["sourceType=0", "yhb=1", "postageType=1"],
+    )
+
+    assert "sourceType=0" in page.url
+    assert "yhb=1" in page.url
+    assert "postageType=1" in page.url
 
 
 @pytest.mark.asyncio

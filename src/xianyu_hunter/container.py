@@ -150,11 +150,19 @@ class PriorityBrowserLock:
     def __init__(self):
         self._lock = asyncio.Lock()
         self._high_waiting = 0
+        self._owner_task: asyncio.Task | None = None
 
     @property
     def has_high_priority_waiting(self) -> bool:
         """是否有高优先级请求在等待（Worker 可据此延迟搜索）"""
         return self._high_waiting > 0
+
+    @property
+    def owned_by_current_task(self) -> bool:
+        try:
+            return self._owner_task is asyncio.current_task()
+        except RuntimeError:
+            return False
 
     async def acquire(self, priority: str = "low") -> None:
         if priority == "high":
@@ -165,8 +173,10 @@ class PriorityBrowserLock:
                 self._high_waiting -= 1
         else:
             await self._lock.acquire()
+        self._owner_task = asyncio.current_task()
 
     def release(self) -> None:
+        self._owner_task = None
         self._lock.release()
 
     async def __aenter__(self):
@@ -316,6 +326,9 @@ class Container:
             cron=raw.get("cron") or "*/1 * * * *",
             use_cron=bool(raw.get("use_cron") or 0),
             interval_seconds=float(raw.get("interval_seconds") or 60.0),
+            # 捡漏价格触发开关：DB 存 INTEGER(0/1)，bool() 转换
+            notify_bargain_only=bool(raw.get("notify_bargain_only") or 0),
+            auto_buy_bargain_only=bool(raw.get("auto_buy_bargain_only") or 0),
             eval_threshold=raw.get("eval_threshold"),
             ai_prompt=raw.get("ai_prompt"),
             search_config=task_search_override,

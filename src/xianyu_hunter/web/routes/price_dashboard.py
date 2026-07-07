@@ -576,7 +576,14 @@ def _compute_sold_range(
     min_p = round(sorted_p[0], 2)
     max_p = round(sorted_p[-1], 2)
     median_p = round(_percentile(sorted_p, 0.5), 2)
-    p10 = round(_percentile(sorted_p, 0.10), 2)
+    # 捡漏价格分位数配置化（config.yaml bargain_price.percentile）
+    # 默认 0.10（P10），调高让更多商品被判为可捡漏，调低更严格
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        bargain_percentile = get_config().bargain_price.percentile
+    except Exception:
+        bargain_percentile = 0.10
+    p10 = round(_percentile(sorted_p, bargain_percentile), 2)
     p25 = round(_percentile(sorted_p, 0.25), 2)
     p75 = round(_percentile(sorted_p, 0.75), 2)
     p90 = round(_percentile(sorted_p, 0.90), 2)

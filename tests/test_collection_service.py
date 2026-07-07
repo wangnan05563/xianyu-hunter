@@ -15,6 +15,13 @@ from xianyu_hunter.modules.collection_service import (
 )
 
 
+class _FakeBrowserLock:
+    def __init__(self, *, owned_by_current_task: bool = False) -> None:
+        self.owned_by_current_task = owned_by_current_task
+        self.acquire = AsyncMock()
+        self.release = MagicMock()
+
+
 def test_merge_item_row_preserves_existing_when_incoming_blank() -> None:
     existing = {
         "id": "i1",
@@ -152,3 +159,71 @@ async def test_official_full_writes_seller_and_eval_event() -> None:
     assert payload["data_source"] == "official"
     assert payload["reviews"] == ["review text"]
     page.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_official_full_uses_low_priority_browser_lock_when_not_owned() -> None:
+    page = MagicMock()
+    page.close = AsyncMock()
+    detail = ItemDetail(id="i1", title="title", price=99.0, seller_id="seller1")
+    seller = SellerProfile(id="seller1", nick="seller", credit_score=700)
+    container = MagicMock()
+    container.browser_lock = _FakeBrowserLock(owned_by_current_task=False)
+    container.browser.new_page = AsyncMock(return_value=page)
+    container.collector.detail = AsyncMock(return_value=detail)
+    container.collector.seller_profile = AsyncMock(return_value=seller)
+    container.collector.seller_profile_fallback = MagicMock(return_value=seller)
+    container.repo.get_item.return_value = {"id": "i1"}
+    container.repo.get_eval_payload_by_item.return_value = None
+    container.repo.upsert_item = MagicMock()
+    container.repo.mark_sold = MagicMock()
+    container.repo.update_data_source = MagicMock()
+    container.repo.upsert_seller = MagicMock()
+    container.repo.upsert_eval_event = MagicMock()
+    container.repo.list_link_displays_by_keys.return_value = {}
+    container.repo.upsert_task_link = MagicMock()
+    container.evaluator.evaluate.return_value = _eval_result()
+
+    service = ItemCollectionService(container)
+    service.ensure_official_cookies = AsyncMock()
+    service.extract_reviews_from_page = AsyncMock(return_value=[])
+
+    result = await service.collect("i1", task_id="t1", mode=CollectionMode.OFFICIAL_FULL)
+
+    assert result.ok is True
+    container.browser_lock.acquire.assert_awaited_once_with(priority="low")
+    container.browser_lock.release.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_official_full_does_not_reenter_browser_lock_when_already_owned() -> None:
+    page = MagicMock()
+    page.close = AsyncMock()
+    detail = ItemDetail(id="i1", title="title", price=99.0, seller_id="seller1")
+    seller = SellerProfile(id="seller1", nick="seller", credit_score=700)
+    container = MagicMock()
+    container.browser_lock = _FakeBrowserLock(owned_by_current_task=True)
+    container.browser.new_page = AsyncMock(return_value=page)
+    container.collector.detail = AsyncMock(return_value=detail)
+    container.collector.seller_profile = AsyncMock(return_value=seller)
+    container.collector.seller_profile_fallback = MagicMock(return_value=seller)
+    container.repo.get_item.return_value = {"id": "i1"}
+    container.repo.get_eval_payload_by_item.return_value = None
+    container.repo.upsert_item = MagicMock()
+    container.repo.mark_sold = MagicMock()
+    container.repo.update_data_source = MagicMock()
+    container.repo.upsert_seller = MagicMock()
+    container.repo.upsert_eval_event = MagicMock()
+    container.repo.list_link_displays_by_keys.return_value = {}
+    container.repo.upsert_task_link = MagicMock()
+    container.evaluator.evaluate.return_value = _eval_result()
+
+    service = ItemCollectionService(container)
+    service.ensure_official_cookies = AsyncMock()
+    service.extract_reviews_from_page = AsyncMock(return_value=[])
+
+    result = await service.collect("i1", task_id="t1", mode=CollectionMode.OFFICIAL_FULL)
+
+    assert result.ok is True
+    container.browser_lock.acquire.assert_not_called()
+    container.browser_lock.release.assert_not_called()

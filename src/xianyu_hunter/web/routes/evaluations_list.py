@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -24,9 +26,55 @@ from xianyu_hunter.web.routes.evaluations_common import (
     _USED_TRACE_LABEL,
 )
 from xianyu_hunter.web.routes.evaluations_data_cleaner import clean_dirty_seller_nick
+# 复用 price_dashboard 的 _compute_sold_range 避免口径漂移
+# 为什么导入：评估列表的 bargain_price 必须与价格行情页同源，否则前端展示会矛盾
+from xianyu_hunter.web.routes.price_dashboard import _compute_sold_range
 from xianyu_hunter.web.utils import to_datetime
 
 router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
+
+# 捡漏价格缓存：(task_id, range_days) -> (bargain_price, timestamp)
+# 为什么用模块级缓存：评估列表频繁刷新时避免 N+1 查询 task_links/items 表
+# TTL 5 分钟：捡漏价格基于历史已售数据，短期不会剧烈变化
+_BARGAIN_PRICE_CACHE: dict[tuple[str | None, int], tuple[float | None, float]] = {}
+_BARGAIN_PRICE_CACHE_TTL = 300.0  # 秒
+
+
+def compute_bargain_prices_batch(
+    container: Container, task_ids: list[str | None], range_days: int = 30
+) -> dict[str | None, float | None]:
+    """批量查询多个任务的捡漏价格（P10），带 TTL 缓存
+
+    返回 {task_id: bargain_price} 映射，task_id 为 None 时表示全局统计。
+    缓存未命中时逐任务调用 _compute_sold_range，与价格行情页同源保证口径一致。
+    """
+    now = time.monotonic()
+    result: dict[str | None, float | None] = {}
+    missing: list[str | None] = []
+
+    for tid in task_ids:
+        cache_key = (tid, range_days)
+        cached = _BARGAIN_PRICE_CACHE.get(cache_key)
+        if cached and (now - cached[1]) < _BARGAIN_PRICE_CACHE_TTL:
+            result[tid] = cached[0]
+        else:
+            missing.append(tid)
+
+    if missing:
+        engine = container.repo.engine
+        with engine.connect() as conn:
+            for tid in missing:
+                try:
+                    stats = _compute_sold_range(conn, tid, range_days)
+                    bargain = stats.get("bargain_price")
+                    _BARGAIN_PRICE_CACHE[(tid, range_days)] = (bargain, now)
+                    result[tid] = bargain
+                except Exception as e:
+                    # 捡漏价格查询失败不应阻断评估列表渲染
+                    logger.warning("查询任务 {} 的捡漏价格失败: {}", tid, e)
+                    result[tid] = None
+
+    return result
 
 
 def _coerce_price(v: object) -> float | None:
@@ -384,6 +432,95 @@ def _filter_price_range(
     return False
 
 
+def _resolve_market_ratio(container: Container, task_id: str | None) -> float | None:
+    """解析任务的 market_ratio 配置（任务级 price_config 优先，回退全局）
+
+    为什么不直接复用 container.build_task_price_strategy：该方法只有在
+    task 配置了 min_price 或 max_price 时才会构造任务级 PriceStrategy，
+    否则直接返回全局 strategy，导致任务级 price_config.market_ratio 被忽略。
+    此处独立解析，让 market_ratio 在仅有 price_config 覆盖时也能生效。
+
+    为什么从 container.price_strategy 读全局而非 get_config()：让测试可通过
+    覆盖 container.price_strategy 控制全局 market_ratio，避免依赖全局单例。"""
+    if not task_id:
+        return None
+    try:
+        task_raw = container.repo.get_task(task_id)
+    except Exception as e:
+        logger.warning(f"读取任务 {task_id} market_ratio 配置失败，跳过市场参考价过滤: {e}")
+        return None
+    if not task_raw:
+        return None
+    # 任务级 price_config 覆盖
+    task_price_config = task_raw.get("price_config")
+    if isinstance(task_price_config, str):
+        try:
+            task_price_config = json.loads(task_price_config)
+        except (TypeError, ValueError):
+            task_price_config = None
+    if isinstance(task_price_config, dict) and "market_ratio" in task_price_config:
+        return task_price_config["market_ratio"]
+    # 回退全局：优先用 container.price_strategy（全局策略实例），避免依赖 get_config()
+    global_strategy = getattr(container, "price_strategy", None)
+    if global_strategy is not None:
+        return global_strategy.config.market_ratio
+    return get_config().price_strategy.market_ratio
+
+
+def _compute_eval_market_median(candidates: list[dict]) -> tuple[float | None, int]:
+    """从已 enrich 的评估事件列表中计算价格中位数
+
+    为什么基于已 enrich 的 payload.item_price：评估事件写入时的快照可能已过时，
+    enrich 已用 items 表最新值覆盖，中位数应基于最新价格计算才贴近市场实情。
+
+    为什么 sample_size < 3 时返回 None：与 PriceStrategy.check 一致，
+    样本不足时中位数不稳定，过滤会误伤有效商品。"""
+    prices: list[float] = []
+    for r in candidates:
+        payload = r.get("payload") or {}
+        price_val = payload.get("item_price")
+        if price_val is None:
+            continue
+        try:
+            prices.append(float(price_val))
+        except (TypeError, ValueError):
+            continue
+    if len(prices) < 3:
+        return None, len(prices)
+    prices.sort()
+    n = len(prices)
+    # 与 worker._compute_market_context 保持一致的中位数算法
+    median = prices[n // 2] if n % 2 == 1 else (prices[n // 2 - 1] + prices[n // 2]) / 2
+    return median, n
+
+
+def _filter_market_ratio(
+    payload: dict,
+    market_ratio: float | None,
+    median_price: float | None,
+    sample_size: int,
+) -> bool:
+    """低于市场参考价过滤：返回 True 表示应跳过
+
+    沿用 PriceStrategy.check 中 market_ratio 分支的判断逻辑，
+    保证卖家评估菜单的过滤与 worker 搜索流水线口径一致：
+    - market_ratio 为 None 或 >= 1.0 时禁用
+    - 样本数 < 3 时跳过（中位数不稳定）
+    - 商品价格 > 中位数 × 比率 时拒绝"""
+    if market_ratio is None or market_ratio >= 1.0:
+        return False
+    if median_price is None or sample_size < 3:
+        return False
+    price_val = payload.get("item_price")
+    if price_val is None:
+        return False
+    try:
+        price_float = float(price_val)
+    except (TypeError, ValueError):
+        return False
+    return price_float > median_price * market_ratio
+
+
 def _parse_eval_score(payload: dict) -> float | None:
     """解析 payload 中的 score，失败或缺失返回 None"""
     score = payload.get("score")
@@ -479,10 +616,11 @@ def _should_skip_eval_record(
     min_score: int | None, max_score: int | None,
     result_category: str | None,
     start_dt: Any, end_dt: Any,
+    market_ratio: float | None, median_price: float | None, sample_size: int,
 ) -> bool:
     """判断评估记录是否应被跳过（不满足任一过滤条件返回 True）
 
-    拆分自主循环：把 8 个独立 if 过滤条件收敛到一个函数，
+    拆分自主循环：把 9 个独立 if 过滤条件收敛到一个函数，
     主循环只看到一个判定结果，降低嵌套层级与认知复杂度"""
     if _match_item_id_filter(payload, r, item_id):
         return True
@@ -493,6 +631,8 @@ def _should_skip_eval_record(
     if _filter_sold_status(payload, r, sold_filter, item_sold_map):
         return True
     if _filter_price_range(payload, min_price, max_price, include_out_of_range):
+        return True
+    if not include_out_of_range and _filter_market_ratio(payload, market_ratio, median_price, sample_size):
         return True
     score = _parse_eval_score(payload)
     if _filter_score_range(score, min_score, max_score):
@@ -544,6 +684,13 @@ def list_evaluations(
     - 解决评估明细菜单显示大量超出任务价格范围商品的问题
     - include_out_of_range=True 时跳过价格过滤，用于审计历史超范围商品
     - 价格取自 enrich 后的 payload.item_price（已是 items 表最新值）
+
+    低于市场参考价过滤（market_ratio）：
+    - 解析任务级 price_config.market_ratio（任务级覆盖，回退全局 AppConfig.price_strategy）
+    - 实时计算同 task_id 下所有评估事件的价格中位数（sample_size >= 3 才生效）
+    - 过滤商品价格 > 中位数 × market_ratio 的记录，与 worker 搜索流水线口径一致
+    - include_out_of_range=True 时跳过该过滤（审计场景需要完整历史）
+    - 未传 task_id 时不应用此过滤（无市场参考上下文）
     """
     start_dt, end_dt = _parse_eval_time_range(start_time, end_time)
 
@@ -586,6 +733,10 @@ def list_evaluations(
     )
 
     evals = []
+    # 两段循环：先 enrich 所有候选，再计算市场参考价中位数，最后过滤
+    # 为什么不沿用单段循环：market_ratio 过滤需要中位数，中位数基于 enrich 后的
+    # payload.item_price 计算，必须先全量 enrich 才能得到正确的中位数样本
+    candidates: list[dict] = []
     for r in rows:
         # 只展示 eval.scored 评估事件，排除 eval.passed 等通知事件
         # 为什么不用 startswith("eval.")：NotifierHub 推送钉钉时会写入 type="eval.passed"、
@@ -595,6 +746,24 @@ def list_evaluations(
         if str(r.get("type", "")) != _EVAL_SCORED_TYPE:
             continue
         _enrich_eval_record(r, item_map, link_map, order_map, seller_map)
+        candidates.append(r)
+
+    # 解析 market_ratio 配置（任务级优先，全局回退），实时计算中位数
+    # 为什么 include_out_of_range 时跳过：审计历史超范围商品时不应再叠加市场参考价过滤
+    market_ratio = (
+        _resolve_market_ratio(container, task_id) if not include_out_of_range else None
+    )
+    if market_ratio is not None:
+        # 中位数计算基于硬性价格范围内的样本，避免被 min_price/max_price 过滤的商品扭曲中位数
+        in_range_candidates = [
+            r for r in candidates
+            if not _filter_price_range(r["payload"], min_price, max_price, include_out_of_range)
+        ]
+        median_price, sample_size = _compute_eval_market_median(in_range_candidates)
+    else:
+        median_price, sample_size = None, 0
+
+    for r in candidates:
         payload = r["payload"]
         if _should_skip_eval_record(
             r, payload, item_id, task_id, brand,
@@ -602,17 +771,53 @@ def list_evaluations(
             min_price, max_price, include_out_of_range,
             min_score, max_score, result_category,
             start_dt, end_dt,
+            market_ratio, median_price, sample_size,
         ):
             continue
 
         evals.append(r)
     # 计算成色判断标签（基于商品标题和描述文本，帮助用户判断商品新旧程度）
     _enrich_condition_tags(evals)
+    # 批量注入捡漏价格（P10）与预估盈利（当前价 - P10）
+    # 为什么在分页前注入：bargain_price 按 task_id 缓存，分页前注入可让同 task_id
+    # 的所有商品共享一次缓存查询；分页后只有 20 条会导致同 task_id 多次刷新重复查询
+    _enrich_bargain_and_profit(evals, container)
     total = len(evals)
     # 始终使用 page_num/page_size 分页
     actual_offset = (page_num - 1) * page_size
     paged = evals[actual_offset:actual_offset + page_size]
     return {"items": paged, "count": len(paged), "total": total}
+
+
+def _enrich_bargain_and_profit(evals: list[dict], container: Container) -> None:
+    """为评估记录注入 bargain_price 和 estimated_profit 字段
+
+    bargain_price 来自按 task_id 缓存的 P10 分位数（与价格行情页同源）
+    estimated_profit = 当前价格(item_price) - bargain_price
+    缺失数据时两个字段均为 None，前端用 null 语义区分显示
+    """
+    if not evals:
+        return
+    task_ids = {r.get("task_id") for r in evals if r.get("task_id")}
+    # task_id 为空时也查一次全局统计，让无 task_id 的评估记录也能展示盈利预估
+    if any(not tid for r in evals for tid in [r.get("task_id")]):
+        task_ids.add(None)
+    bargain_map = compute_bargain_prices_batch(container, list(task_ids))
+    for r in evals:
+        payload = r["payload"]
+        tid = r.get("task_id")
+        bargain = bargain_map.get(tid)
+        payload["bargain_price"] = bargain
+        current_price = payload.get("item_price")
+        # 三态语义：bargain 或 current_price 为 None 时 estimated_profit 为 None
+        # 前端用 null 表示"无法计算"，区分于 0 或负数
+        if bargain is not None and current_price is not None:
+            try:
+                payload["estimated_profit"] = round(float(current_price) - float(bargain), 2)
+            except (TypeError, ValueError):
+                payload["estimated_profit"] = None
+        else:
+            payload["estimated_profit"] = None
 
 
 # 商品成色判断关键词库（用户购物时关注的核心维度）

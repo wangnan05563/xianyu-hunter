@@ -486,10 +486,14 @@ async def test_dingtalk_send_business_error() -> None:
 @pytest.mark.asyncio
 async def test_dingtalk_send_without_secret() -> None:
     """钉钉无 secret 时也能推送（不签名）"""
-    notifier = DingTalkNotifier(
-        webhook_url="https://oapi.dingtalk.com/robot/send?access_token=abc",
-        secret="",
-    )
+    # patch get_secret 防止从 keyring 读取真实 secret：
+    # 测试环境 keyring 可能已配置 dingtalk secret，secret="" 时会 fallback
+    # 到 keyring 真实值，导致 URL 含 timestamp/sign 与断言不符
+    with patch("xianyu_hunter.modules.notifier.dingtalk.get_secret", return_value=None):
+        notifier = DingTalkNotifier(
+            webhook_url="https://oapi.dingtalk.com/robot/send?access_token=abc",
+            secret="",
+        )
     resp = make_response(200, '{"errcode":0}')
     session = make_session([resp])
 
@@ -520,7 +524,11 @@ def test_dingtalk_sign_algorithm() -> None:
 @pytest.mark.asyncio
 async def test_dingtalk_missing_url_raises() -> None:
     """钉钉未配置 webhook 应报错"""
-    notifier = DingTalkNotifier(webhook_url="")
+    # patch get_secret 防止从 keyring 读取真实 webhook URL：
+    # 测试环境 keyring 可能已配置 dingtalk webhook，webhook_url="" 时会
+    # fallback 到 keyring 真实值，导致 _do_send 不抛 ValueError 反而真实发送
+    with patch("xianyu_hunter.modules.notifier.dingtalk.get_secret", return_value=None):
+        notifier = DingTalkNotifier(webhook_url="")
     result = await notifier.send(make_eval_event())
     assert result.success is False
     assert "webhook" in result.error

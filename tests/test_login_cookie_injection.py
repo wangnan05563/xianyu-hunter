@@ -10,6 +10,7 @@ import pytest
 from xianyu_hunter.web.routes.api_evaluations import _ensure_official_collect_cookies
 from xianyu_hunter.web.routes import api_task_links
 from xianyu_hunter.web.routes.api_task_links import _ensure_live_search_cookies
+from xianyu_hunter.modules.collection_service import ItemCollectionService
 from xianyu_hunter.web.routes.unified_login import (
     _inject_cookies_to_worker_from_store,
     _verify_cookies,
@@ -141,6 +142,20 @@ def test_official_collect_replaces_stale_worker_identity_cookies() -> None:
     assert by_name["cookie2"] == "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d"
 
 
+def test_official_collect_cookie_store_loader_skips_mtop_token_cookies() -> None:
+    _write_cookie_json(_cookie_sample())
+
+    pw_cookies, identity_values = ItemCollectionService(MagicMock())._read_cookies_from_store()
+
+    injected_names = {cookie["name"] for cookie in pw_cookies}
+    assert not {"_m_h5_tk", "_m_h5_tk_enc"} & injected_names
+    assert identity_values == {
+        "unb": "2209384756290",
+        "cookie2": "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d",
+        "sgcookie": "E100zRxEj%2FbXi%2B%2FbxVSJT%2Fg%2FaDG6MgjhL",
+    }
+
+
 def test_live_search_replaces_stale_worker_identity_cookies() -> None:
     fresh = _cookie_sample()
     _write_cookie_json(fresh)
@@ -162,6 +177,20 @@ def test_live_search_replaces_stale_worker_identity_cookies() -> None:
     assert by_name["unb"] == "2209384756290"
     assert by_name["cookie2"] == "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d"
     collector.force_refresh_m5tk_next.assert_called_once()
+
+
+def test_live_search_cookie_store_loader_skips_mtop_token_cookies() -> None:
+    _write_cookie_json(_cookie_sample())
+
+    pw_cookies, identity_values = api_task_links._load_pw_cookies_from_json()
+
+    injected_names = {cookie["name"] for cookie in pw_cookies}
+    assert not {"_m_h5_tk", "_m_h5_tk_enc"} & injected_names
+    assert identity_values == {
+        "unb": "2209384756290",
+        "cookie2": "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d",
+        "sgcookie": "E100zRxEj%2FbXi%2B%2FbxVSJT%2Fg%2FaDG6MgjhL",
+    }
 
 
 def test_live_search_uses_current_user_cookie_store() -> None:

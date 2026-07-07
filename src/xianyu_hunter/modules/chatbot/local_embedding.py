@@ -96,7 +96,11 @@ class LocalEmbeddingBackend:
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """批量向量化（同步）
 
-        sentence-transformers 内部已做 batch 优化，比循环单条快 10-50 倍
+        sentence-transformers 内部已做 batch 优化，比循环单条快 10-50 倍。
+        开启 show_progress_bar：让外层（to_thread 调用方）能在 stderr 看到 tqdm 进度条，
+        便于运维直接观察 encode 速度，不再需要从日志反推。
+        PyTorch CPU 多线程默认已启用（torch.set_num_threads = CPU 核数），
+        无需额外配置；如需限制可在调用前 set torch.set_num_threads(N)。
         """
         self._ensure_loaded()
         vecs = self._model.encode(
@@ -104,5 +108,8 @@ class LocalEmbeddingBackend:
             convert_to_numpy=True,
             normalize_embeddings=False,
             batch_size=32,
+            # tqdm 进度条写到 stderr，外层 asyncio.to_thread 调用方仍能正常观察
+            # 不影响 logger 输出（loguru 也走 stderr，但独立 handler）
+            show_progress_bar=len(texts) > 100,
         )
         return [v.tolist() for v in vecs]

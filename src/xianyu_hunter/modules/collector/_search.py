@@ -706,11 +706,22 @@ class SearchMixin:
             await self._ensure_fresh_m5tk(page)
 
             # 优先通过 route 拦截捕获 API 响应获取结构化数据
-            api_items, session_invalid = await self._call_search_api(
-                page, keyword, max_pages, fast=fast,
-                skip_rgv587_retry=skip_rgv587_retry,
-                sort_type=sort_type, regions=regions,
-            )
+            api_auth_backoff_remaining = getattr(self, "_api_auth_backoff_until", 0.0) - time.monotonic()
+            if api_auth_backoff_remaining > 0:
+                logger.info(
+                    "搜索 API token/签名近期连续失败，{:.0f}s 内直接走 DOM 回退: keyword={}",
+                    api_auth_backoff_remaining, keyword,
+                )
+                await page.goto(url, wait_until="commit", timeout=15000 if fast else 20000)
+                api_items = []
+                session_invalid = False
+            else:
+                api_items, session_invalid = await self._call_search_api(
+                    page, keyword, max_pages, fast=fast,
+                    skip_rgv587_retry=skip_rgv587_retry,
+                    sort_type=sort_type, regions=regions,
+                    filter_params=filter_params,
+                )
             # 记录会话失效状态，供 Worker 检测后暂停任务
             self.last_session_invalid = session_invalid
             if api_items:
@@ -1064,7 +1075,17 @@ class SearchMixin:
             if new_count == 0:
                 break
 
-    async def _call_search_api(self, page: Page, keyword: str, max_pages: int = 3, fast: bool = False, skip_rgv587_retry: bool = False, sort_type: str = "default", regions: str = "") -> tuple[list[ItemSummary], bool]:
+    async def _call_search_api(
+        self,
+        page: Page,
+        keyword: str,
+        max_pages: int = 3,
+        fast: bool = False,
+        skip_rgv587_retry: bool = False,
+        sort_type: str = "default",
+        regions: str = "",
+        filter_params: list[str] | None = None,
+    ) -> tuple[list[ItemSummary], bool]:
         """通过 Playwright route 拦截捕获搜索 API 响应
 
         页面加载时会自然发起 mtop API 请求获取搜索结果。
@@ -1085,7 +1106,7 @@ class SearchMixin:
         captured_responses: list[dict] = []
         # 用 dict 持有可变状态，便于 _handle_route 闭包修改 session_invalid
         # 闭包内 nonlocal 也可以，但提取为方法后状态需通过引用传递
-        state = {"session_invalid": False}
+        state = {"session_invalid": False, "api_auth_failed": False}
         route_pattern = self._SEARCH_API_ROUTE_PATTERN
         _handle_route = self._make_search_route_handler(page, keyword, captured_responses, state)
         await page.route(route_pattern, _handle_route)
@@ -1094,7 +1115,7 @@ class SearchMixin:
             # 导航 + 等待响应 + 会话失效重试
             session_invalid = await self._navigate_and_wait_for_api(
                 page, keyword, fast, skip_rgv587_retry,
-                sort_type, regions, captured_responses, state,
+                sort_type, regions, filter_params or [], captured_responses, state,
             )
             # 解析捕获到的 API 响应（含翻页滚动）
             await self._parse_captured_responses(page, captured_responses, items, max_pages)
@@ -1104,6 +1125,8 @@ class SearchMixin:
         # 记录是否捕获到 API 响应（供 live_links 判断 Cookie 失效）
         # captured_responses 非空但 items 为空 → 可能是登录墙响应或会话过期
         self._last_api_captured = bool(captured_responses)
+        if captured_responses:
+            self._api_auth_backoff_until = 0.0
         return items, session_invalid
 
     def _make_search_route_handler(
@@ -1173,15 +1196,23 @@ class SearchMixin:
         if not (ret and isinstance(ret, list)):
             return False
         ret_str = str(ret[0]) if ret else ""
-        token_invalid = any(
+        hard_session_invalid = "RGV587" in ret_str
+        retryable_api_auth_failed = any(
             keyword in ret_str
             for keyword in (
-                "RGV587", "TOKEN_EMPTY", "TOKEN_ILLEGAL",
+                "TOKEN_EMPTY", "TOKEN_ILLEGAL",
                 "TOKEN_EXPIRED", "TOKEN_INVALID", "SYS_ILLEGAL_ACCESS",
             )
         )
-        if not token_invalid:
+        if not hard_session_invalid and not retryable_api_auth_failed:
             return False
+        if retryable_api_auth_failed:
+            logger.warning(
+                "搜索 API token/签名校验失败 ({})，将尝试 DOM 回退，不直接判定登录失效: keyword={}",
+                ret_str[:80], keyword,
+            )
+            state["api_auth_failed"] = True
+            return True
         logger.warning(
             "搜索 API 会话失效 ({})，需重新登录闲鱼: keyword={}",
             ret_str[:60], keyword,
@@ -1212,14 +1243,14 @@ class SearchMixin:
 
     async def _navigate_and_wait_for_api(
         self, page: Page, keyword: str, fast: bool, skip_rgv587_retry: bool,
-        sort_type: str, regions: str,
+        sort_type: str, regions: str, filter_params: list[str],
         captured_responses: list[dict], state: dict,
     ) -> bool:
         """导航搜索页 + 等待 API 响应 + 会话失效重试
 
         返回最终 session_invalid 状态（True 表示会话失效）
         """
-        url = build_search_url(keyword, sort_type=sort_type, regions=regions)
+        url = build_search_url(keyword, filter_params=filter_params, sort_type=sort_type, regions=regions)
         # 使用 wait_until="commit"：HTTP 响应头到达即返回，不等待 SPA 水合
         # 闲鱼搜索页是 SPA，domcontentloaded 事件需等待水合完成，网络波动时易超时
         # commit 后 route 拦截器仍可捕获后续 API 请求，等待逻辑由下方轮询负责
@@ -1238,8 +1269,13 @@ class SearchMixin:
         # 等待 API 响应：快速模式最多 8 秒，正常模式最多 15 秒
         wait_rounds = 8 if fast else 15
         await self._poll_for_captured_responses(captured_responses, state, wait_rounds)
-        if not captured_responses and not state["session_invalid"]:
+        if not captured_responses and not state["session_invalid"] and not state.get("api_auth_failed"):
             logger.info("搜索 API 未捕获响应，等待 {}s 后回退 DOM: keyword={}", wait_rounds, keyword)
+
+        if state.get("api_auth_failed") and not captured_responses and not state["session_invalid"]:
+            await self._retry_search_after_api_auth_failure(
+                page, keyword, url, captured_responses, state, wait_rounds, goto_timeout
+            )
 
         # 会话失效时尝试刷新 token 后重试一次
         # skip_rgv587_retry 时跳过重试（Worker 专用，避免 75 秒重试占用 browser_lock）
@@ -1277,9 +1313,42 @@ class SearchMixin:
     ) -> None:
         """轮询等待 route 拦截到响应或会话失效"""
         for _ in range(rounds):
-            if captured_responses or state["session_invalid"]:
+            if captured_responses or state["session_invalid"] or state.get("api_auth_failed"):
                 break
             await asyncio.sleep(1)
+
+    async def _retry_search_after_api_auth_failure(
+        self,
+        page: Page,
+        keyword: str,
+        url: str,
+        captured_responses: list[dict],
+        state: dict,
+        wait_rounds: int,
+        goto_timeout: int,
+    ) -> None:
+        """MTOP token/sign failure is retryable and should not pause the task as logged-out."""
+        logger.info(
+            "搜索 API token/签名校验失败，已同步 MTOP Set-Cookie，等待 cookie 生效后重试 API: keyword={}",
+            keyword,
+        )
+        state["api_auth_failed"] = False
+        await asyncio.sleep(0.8)
+        try:
+            await page.goto(url, wait_until="commit", timeout=goto_timeout)
+            await self._poll_for_captured_responses(captured_responses, state, wait_rounds)
+        except Exception as retry_err:
+            logger.warning("token/签名校验失败后 API 重试导航失败: {}", str(retry_err)[:80])
+        if state.get("api_auth_failed") and not captured_responses:
+            logger.warning("搜索 API token/签名校验重试仍失败，将尝试 DOM 回退: keyword={}", keyword)
+            self._api_auth_backoff_until = max(
+                getattr(self, "_api_auth_backoff_until", 0.0),
+                time.monotonic() + self.API_AUTH_BACKOFF_SECONDS,
+            )
+            logger.info(
+                "搜索 API token/签名进入降级冷却，{:.0f}s 内直接使用 DOM 回退: keyword={}",
+                self.API_AUTH_BACKOFF_SECONDS, keyword,
+            )
 
     async def _retry_search_after_token_refresh(
         self, page: Page, keyword: str, url: str,

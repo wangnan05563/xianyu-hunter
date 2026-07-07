@@ -80,15 +80,23 @@ def _auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {_TEST_TOKEN}"}
 
 
-def _seed_task(repo: Repository, task_id: str, *, min_price: float | None = None, max_price: float | None = None) -> None:
-    repo.upsert_task({
+def _seed_task(
+    repo: Repository, task_id: str, *,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    price_config: dict | None = None,
+) -> None:
+    task_data: dict = {
         "id": task_id,
         "name": f"任务-{task_id}",
         "keyword": "测试关键词",
         "min_price": min_price,
         "max_price": max_price,
         "status": "running",
-    })
+    }
+    if price_config is not None:
+        task_data["price_config"] = json.dumps(price_config)
+    repo.upsert_task(task_data)
 
 
 def _seed_eval_event(repo: Repository, item_id: str, price: float, *, task_id: str = "t1", score: int = 75) -> None:
@@ -375,3 +383,172 @@ def test_build_task_price_strategy_returns_global_when_no_config():
     raw = {"min_price": None, "max_price": None, "price_config": None}
     ps = container.build_task_price_strategy(raw)
     assert ps is global_ps
+
+
+# ============== list_evaluations 低于市场参考价（market_ratio）过滤 ==============
+
+
+def test_market_ratio_filters_items_above_median_times_ratio(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """market_ratio=0.85 时，价格 > 中位数 × 0.85 的商品被过滤
+
+    场景：5 个商品价格 [100, 200, 300, 400, 1000]
+    中位数 = 300，阈值 = 300 × 0.85 = 255
+    应保留 100/200，过滤 300/400/1000
+    """
+    _seed_task(tmp_repo, "t1", price_config={"market_ratio": 0.85})
+    _seed_eval_event(tmp_repo, "item_100", 100.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_200", 200.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_300", 300.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_400", 400.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_1000", 1000.0, task_id="t1")
+
+    resp = client.get(
+        "/api/evaluations",
+        params={"task_id": "t1"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    item_ids = {item["payload"]["item_id"] for item in data["items"]}
+    assert item_ids == {"item_100", "item_200"}, \
+        f"market_ratio=0.85 应只保留 ≤255 的商品，但得到 {item_ids}"
+
+
+def test_market_ratio_skipped_when_sample_size_less_than_three(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """样本数 < 3 时跳过 market_ratio 过滤（中位数不稳定）"""
+    _seed_task(tmp_repo, "t1", price_config={"market_ratio": 0.85})
+    _seed_eval_event(tmp_repo, "item_100", 100.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_1000", 1000.0, task_id="t1")
+
+    resp = client.get(
+        "/api/evaluations",
+        params={"task_id": "t1"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    item_ids = {item["payload"]["item_id"] for item in data["items"]}
+    # 样本不足，不应过滤任何商品
+    assert item_ids == {"item_100", "item_1000"}
+
+
+def test_market_ratio_skipped_when_no_task_id(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """未传 task_id 时不应用 market_ratio 过滤（无市场参考上下文）"""
+    _seed_task(tmp_repo, "t1", price_config={"market_ratio": 0.85})
+    _seed_eval_event(tmp_repo, "item_100", 100.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_1000", 1000.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_2000", 2000.0, task_id="t1")
+
+    # 不传 task_id
+    resp = client.get(
+        "/api/evaluations",
+        params={},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    item_ids = {item["payload"]["item_id"] for item in data["items"]}
+    # 无 task_id 不应用 market_ratio，应全部返回
+    assert item_ids == {"item_100", "item_1000", "item_2000"}
+
+
+def test_market_ratio_skipped_when_include_out_of_range_true(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """include_out_of_range=True 时跳过 market_ratio 过滤（审计场景需要完整历史）"""
+    _seed_task(tmp_repo, "t1", price_config={"market_ratio": 0.85})
+    _seed_eval_event(tmp_repo, "item_100", 100.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_200", 200.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_300", 300.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_400", 400.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_1000", 1000.0, task_id="t1")
+
+    resp = client.get(
+        "/api/evaluations",
+        params={"task_id": "t1", "include_out_of_range": True},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    item_ids = {item["payload"]["item_id"] for item in data["items"]}
+    # 审计场景：不过滤任何商品
+    assert item_ids == {"item_100", "item_200", "item_300", "item_400", "item_1000"}
+
+
+def test_market_ratio_skipped_when_task_not_configured(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """任务未配置 market_ratio 且全局默认 None 时，不应用过滤"""
+    # _FakeContainer.price_strategy = PriceStrategy(PriceConfig())  # market_ratio=None
+    _seed_task(tmp_repo, "t1")  # 不传 price_config
+    _seed_eval_event(tmp_repo, "item_100", 100.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_1000", 1000.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_2000", 2000.0, task_id="t1")
+
+    resp = client.get(
+        "/api/evaluations",
+        params={"task_id": "t1"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    item_ids = {item["payload"]["item_id"] for item in data["items"]}
+    # 未配置 market_ratio，应全部返回
+    assert item_ids == {"item_100", "item_1000", "item_2000"}
+
+
+def test_market_ratio_combined_with_explicit_max_price(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """market_ratio 与显式 max_price 共存时，两个过滤叠加生效
+
+    场景：market_ratio=0.85，max_price=500
+    商品价格 [100, 200, 300, 400, 1000]
+    中位数 = 300，market_ratio 阈值 = 255
+    max_price 阈值 = 500
+    应保留 100/200，过滤 300/400/1000
+    """
+    _seed_task(tmp_repo, "t1", price_config={"market_ratio": 0.85})
+    _seed_eval_event(tmp_repo, "item_100", 100.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_200", 200.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_300", 300.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_400", 400.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_1000", 1000.0, task_id="t1")
+
+    resp = client.get(
+        "/api/evaluations",
+        params={"task_id": "t1", "max_price": 500},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    item_ids = {item["payload"]["item_id"] for item in data["items"]}
+    # max_price=500 不过滤 400，但 market_ratio 过滤 300/400
+    assert item_ids == {"item_100", "item_200"}
+
+
+def test_market_ratio_above_one_skipped(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """market_ratio >= 1.0 时不应用过滤（与 PriceStrategy.check 一致）"""
+    _seed_task(tmp_repo, "t1", price_config={"market_ratio": 1.0})
+    _seed_eval_event(tmp_repo, "item_100", 100.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_1000", 1000.0, task_id="t1")
+    _seed_eval_event(tmp_repo, "item_2000", 2000.0, task_id="t1")
+
+    resp = client.get(
+        "/api/evaluations",
+        params={"task_id": "t1"},
+        headers=_auth_headers(),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    item_ids = {item["payload"]["item_id"] for item in data["items"]}
+    # market_ratio=1.0 不应用过滤
+    assert item_ids == {"item_100", "item_1000", "item_2000"}

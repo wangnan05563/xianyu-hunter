@@ -234,8 +234,11 @@ async def test_worker_run_once_triggers_eval_passed_after_rules_pass():
     mock_collector.seller_profile_fallback = AsyncMock(return_value=seller)
 
     mock_dedup = MagicMock()
-    mock_dedup.filter_new = AsyncMock(return_value=[summary])
-    mock_dedup.save = AsyncMock()
+    # filter_new 与 worker.py 同步调用对齐：worker._dedup_and_limit 中
+    # `new_items = self.dedup.filter_new(items)` 不带 await，
+    # 若用 AsyncMock 会返回 coroutine，`len(coroutine)` 抛 TypeError
+    mock_dedup.filter_new = MagicMock(return_value=[summary])
+    mock_dedup.save = MagicMock()
 
     mock_price = MagicMock()
     mock_price.check = MagicMock(return_value=PriceVerdict(pass_=True, reasons=[]))
@@ -318,8 +321,11 @@ async def test_worker_run_once_no_eval_passed_when_score_below_threshold():
     mock_collector.seller_profile_fallback = AsyncMock(return_value=seller)
 
     mock_dedup = MagicMock()
-    mock_dedup.filter_new = AsyncMock(return_value=[summary])
-    mock_dedup.save = AsyncMock()
+    # filter_new 与 worker.py 同步调用对齐：worker._dedup_and_limit 中
+    # `new_items = self.dedup.filter_new(items)` 不带 await，
+    # 若用 AsyncMock 会返回 coroutine，`len(coroutine)` 抛 TypeError
+    mock_dedup.filter_new = MagicMock(return_value=[summary])
+    mock_dedup.save = MagicMock()
 
     mock_price = MagicMock()
     mock_price.check = MagicMock(return_value=PriceVerdict(pass_=True, reasons=[]))

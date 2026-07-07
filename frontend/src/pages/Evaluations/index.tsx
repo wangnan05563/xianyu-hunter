@@ -7,7 +7,7 @@ import {
 import {
   ReloadOutlined, AimOutlined, SearchOutlined, UndoOutlined,
   RetweetOutlined, SettingOutlined, LeftOutlined, RightOutlined,
-  RobotOutlined, CloudDownloadOutlined,
+  RobotOutlined, CloudDownloadOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { taskApi, type EvalItem } from '../../api'
@@ -39,7 +39,7 @@ import type { DistResponse, SellerTrendData } from './utils'
 
 const { RangePicker } = DatePicker
 
-const SCROLL_X = 2060
+const SCROLL_X = 2170
 
 // S3776 修复：用查表替代原 useMemo 内 switch（5 case 嵌套在 if 内贡献 ~+10 复杂度）
 // 为什么用 Record：列宽/responsive 调整是静态映射，查表比 switch 更扁平
@@ -56,6 +56,7 @@ const COLUMN_DEFINITIONS: ColumnConfig[] = [
   { key: 'thumb', label: '图片' },
   { key: 'title', label: '标题', locked: true },
   { key: 'price', label: '价格' },
+  { key: 'estimated_profit', label: '预估盈利' },
   { key: 'seller', label: '卖家' },
   { key: 'region', label: '地区' },
   { key: 'brand', label: '品牌' },
@@ -547,7 +548,21 @@ export default function Evaluations() {
               { label: '已售', value: 'sold' },
             ]}
           />
-          <span>价格范围：</span>
+          <Tooltip
+            title={
+              <div style={{ lineHeight: 1.6 }}>
+                <div><b>查询规则：</b></div>
+                <div>1. 价格区间：商品价格需在 [最低, 最高] 范围内</div>
+                <div>2. 低于市场参考价：选中任务后，按任务 market_ratio 配置过滤掉价格高于「同任务商品中位数 × market_ratio」的商品（样本数 ≥ 3 才生效）</div>
+                <div style={{ marginTop: 4, color: '#aaa' }}>提示：勾选「显示超范围」可跳过市场参考价过滤，用于审计历史商品</div>
+              </div>
+            }
+          >
+            <span style={{ cursor: 'help', borderBottom: '1px dashed currentColor' }}>
+              价格范围：
+              <QuestionCircleOutlined style={{ marginLeft: 2, fontSize: 12, color: '#999' }} />
+            </span>
+          </Tooltip>
           <InputNumber
             placeholder="最低"
             min={0}

@@ -44,6 +44,8 @@ const ChatbotConfig = lazyRetry(() => import('./pages/Chatbot/Config'))
 const MenuAdmin = lazyRetry(() => import('./pages/MenuAdmin'))
 // 通知中心：系统通知的列表/标记已读/删除
 const Notifications = lazyRetry(() => import('./pages/Notifications'))
+// 半自动模式确认抢单页：外部通知点击链接后到达，复用 manual-takeover 接口
+const ConfirmBuy = lazyRetry(() => import('./pages/ConfirmBuy'))
 
 // 全局 fallback 加载组件：懒加载页面未就绪时展示
 function PageLoading() {
@@ -113,6 +115,8 @@ export default function App() {
             <Route path="menu-admin" element={<LazyRoute><MenuAdmin /></LazyRoute>} />
             {/* 通知中心：系统通知列表与已读管理 */}
             <Route path="notifications" element={<LazyRoute><Notifications /></LazyRoute>} />
+            {/* 半自动模式确认抢单：通知链接回链到本页 */}
+            <Route path="confirm-buy" element={<LazyRoute><ConfirmBuy /></LazyRoute>} />
             {/* 智能客服：对话主页 + 配置页（含知识库管理） */}
             <Route path="chatbot" element={<LazyRoute><Chatbot /></LazyRoute>} />
             <Route path="config/chatbot" element={<LazyRoute><ChatbotConfig /></LazyRoute>} />

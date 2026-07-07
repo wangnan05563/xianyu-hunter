@@ -330,10 +330,14 @@ class TaskSchedulerConfig(BaseModel):
       （用户在页面内切换后会持久化到 localStorage，覆盖此默认值）
     - auto_search_concurrency: 前端自动搜索并发上限（保留字段，当前固定 1）
       未来若需要并行搜索可放宽，需配合后端浏览器锁改造
+    - error_retry_wait_seconds: 单轮 run_once 异常后等待多久再重试（秒）
+      与 resume_policy.cooldown_seconds 语义不同：本字段控制未触发暂停时的
+      重试退避，resume_policy.cooldown_seconds 控制 pause 后用户 resume 的冷却
     """
     default_interval_seconds: int = Field(60, ge=30, le=3600)
     auto_search_enabled: bool = False
     auto_search_concurrency: int = Field(1, ge=1, le=5)
+    error_retry_wait_seconds: int = Field(300, ge=10, le=3600)
 
     @model_validator(mode="after")
     def _warn_concurrency_gt_one(self) -> "TaskSchedulerConfig":
@@ -347,6 +351,17 @@ class TaskSchedulerConfig(BaseModel):
                 stacklevel=2,
             )
         return self
+
+
+class BargainPriceConfig(BaseModel):
+    """捡漏价格配置
+
+    - percentile: 捡漏价格使用的分位数（0~1）
+      默认 0.10（P10），表示取已售价格中最低 10% 的边界值作为捡漏基准
+      调高（如 0.20）会让更多商品被判定为"可捡漏"，调低（如 0.05）则更严格
+      影响：evaluations_list 的 estimated_profit 字段、worker 的 notify_bargain_only/auto_buy_bargain_only 过滤
+    """
+    percentile: float = Field(0.10, gt=0, lt=0.5)
 
 
 # ============== Cookie 自愈体系配置 ==============
@@ -519,6 +534,8 @@ class AppConfig(BaseModel):
     batch_refresh: BatchRefreshConfig = BatchRefreshConfig()
     chatbot: ChatbotConfig = ChatbotConfig()
     task_scheduler: TaskSchedulerConfig = TaskSchedulerConfig()
+    # 捡漏价格配置（P10 分位数可调）
+    bargain_price: BargainPriceConfig = BargainPriceConfig()
     # Cookie 自愈体系（统一管理 75+ cookie 的保留与恢复）
     cookie_management: CookieManagementConfig = CookieManagementConfig()
     token_renewer: TokenRenewerConfig = TokenRenewerConfig()

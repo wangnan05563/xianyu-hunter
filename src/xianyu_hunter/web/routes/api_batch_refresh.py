@@ -96,7 +96,7 @@ def patch_config(body: BatchRefreshConfigPatch) -> dict[str, Any]:
     """运行时热更新配置
 
     - interval_minutes: 修改后立即 reschedule 定时任务
-    - enabled: 仅修改标志位（不影响已注册的 job，下次启动时按此标志决定）
+    - enabled: False 时立即移除定时 job（停止自动触发），True 时恢复定时 job
     """
     scheduler = _get_scheduler()
 

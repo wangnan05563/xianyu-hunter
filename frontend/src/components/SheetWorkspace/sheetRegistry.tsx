@@ -74,6 +74,9 @@ export const sheetRegistry: SheetMeta[] = [
   { path: '/anticrawl', title: '反爬登录管理', icon: <ExperimentOutlined />, component: lazyRetry(() => import('../../pages/AntiCrawl')) },
   { path: '/price-dashboard', title: '价格行情', icon: <DollarOutlined />, component: lazyRetry(() => import('../../pages/PriceDashboard')) },
   { path: '/notifications', title: '通知中心', icon: <BellOutlined />, component: lazyRetry(() => import('../../pages/Notifications')) },
+  // 半自动模式确认抢单页：外部通知链接回链到此，需注册到 sheetRegistry
+  // 否则 SheetWorkspace 不识别该路径，会显示"未打开任何页面"
+  { path: '/confirm-buy', title: '确认抢单', icon: <ThunderboltOutlined />, component: lazyRetry(() => import('../../pages/ConfirmBuy')) },
   { path: '/menu-admin', title: '菜单管理', icon: <SettingOutlined />, component: lazyRetry(() => import('../../pages/MenuAdmin')) },
   { path: '/chatbot', title: '智能客服对话', icon: <MessageOutlined />, component: lazyRetry(() => import('../../pages/Chatbot')) },
   { path: '/about', title: '关于', icon: <InfoCircleOutlined />, component: lazyRetry(() => import('../../pages/About')) },
@@ -93,11 +96,16 @@ function pathToRegex(pattern: string): RegExp {
 /**
  * 按 path 查找 sheet 元数据
  * 优先精确匹配，其次 :param 通配匹配
+ *
+ * query string 处理：传入 path 可能含 ?xxx=yyy（如 /confirm-buy?item_id=aaa），
+ * 必须先剥离再匹配，否则注册表中的 /confirm-buy 无法匹配
  */
 export function findSheetMeta(path: string): SheetMeta | undefined {
+  // 剥离 query string 与 hash，仅保留 pathname 部分用于匹配
+  const pathname = path.split('?')[0].split('#')[0]
   // 1. 精确匹配
-  const exact = sheetRegistry.find((s) => s.path === path)
+  const exact = sheetRegistry.find((s) => s.path === pathname)
   if (exact) return exact
   // 2. :param 通配匹配
-  return sheetRegistry.find((s) => s.path.includes(':') && pathToRegex(s.path).test(path))
+  return sheetRegistry.find((s) => s.path.includes(':') && pathToRegex(s.path).test(pathname))
 }

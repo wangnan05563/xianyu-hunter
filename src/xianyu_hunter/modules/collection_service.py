@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import asyncio
+import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -61,6 +62,7 @@ _DEFAULT_ALWAYS_OVERWRITE = {
 }
 
 _OFFICIAL_COLLECT_IDENTITY_COOKIES = ("cookie2", "sgcookie", "unb")
+_MTOP_RUNTIME_TOKEN_COOKIES = {"_m_h5_tk", "_m_h5_tk_enc", "mtop_partitioned_detect"}
 
 # 详情页 SPA 渲染必需的非身份 cookie（基于完整 22 个 cookie 集推断）
 # 为什么这些 cookie 必需：闲鱼详情页 SPA 依赖 cna/tracknick/_tb_token_/t 等
@@ -120,14 +122,46 @@ class ItemCollectionService:
                 reuse_page=reuse_page,
             )
         if mode == CollectionMode.OFFICIAL_FULL:
-            return await self._collect_official_full(
-                item_id,
-                task_id=task_id,
-                existing_item=existing_item,
-                source=source,
-                reuse_page=reuse_page,
+            return await self._with_browser_lock(
+                lambda: self._collect_official_full(
+                    item_id,
+                    task_id=task_id,
+                    existing_item=existing_item,
+                    source=source,
+                    reuse_page=reuse_page,
+                ),
+                priority="low",
             )
         raise CollectionError(500, f"Unsupported collection mode: {mode}", item_id=item_id)
+
+    def _get_browser_lock(self) -> Any | None:
+        lock = getattr(self.container, "browser_lock", None)
+        acquire = getattr(lock, "acquire", None)
+        release = getattr(lock, "release", None)
+        if not callable(acquire) or not callable(release):
+            return None
+        if not inspect.iscoroutinefunction(acquire):
+            return None
+        return lock
+
+    async def _with_browser_lock(
+        self, operation: Callable[[], Any], *, priority: str = "low"
+    ) -> Any:
+        lock = self._get_browser_lock()
+        if lock is None or getattr(lock, "owned_by_current_task", False) is True:
+            result = operation()
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        await lock.acquire(priority=priority)
+        try:
+            result = operation()
+            if inspect.isawaitable(result):
+                return await result
+            return result
+        finally:
+            lock.release()
 
     async def _get_browser_cookies(self) -> list[dict]:
         """读取浏览器当前 cookie，失败时降级为空列表避免阻塞后续校验"""
@@ -211,15 +245,24 @@ class ItemCollectionService:
 
         pw_cookies: list[dict] = []
         identity_values: dict[str, str] = {}
+        skipped_mtop_tokens: set[str] = set()
         for cookie in json_data["cookies"]:
             name = str(cookie.get("name") or "")
             value = str(cookie.get("value") or "")
             if not self._is_valid_cookie(name, value, is_test_cookie):
                 continue
+            if name in _MTOP_RUNTIME_TOKEN_COOKIES:
+                skipped_mtop_tokens.add(name)
+                continue
 
             pw_cookies.append(self._build_pw_cookie(name, value, cookie))
             if name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
                 identity_values[name] = value
+        if skipped_mtop_tokens:
+            logger.debug(
+                "Official collection skipped CookieStore MTOP runtime token cookies: {}",
+                sorted(skipped_mtop_tokens),
+            )
         return pw_cookies, identity_values
 
     async def _check_cookie_issues(
@@ -280,8 +323,11 @@ class ItemCollectionService:
             return
 
         if pw_cookies:
-            await self._inject_cookies_from_store(
-                container, pw_cookies, missing, expired, stale
+            await self._with_browser_lock(
+                lambda: self._inject_cookies_from_store(
+                    container, pw_cookies, missing, expired, stale
+                ),
+                priority="low",
             )
 
         # 注入后重新检查，仍存在问题则抛错
@@ -573,15 +619,40 @@ class ItemCollectionService:
             changed_fields=changed_fields,
         )
 
+    # detail() 返回 None 时，根据 failure_reason 映射到合适的 HTTP 状态码
+    # 为什么区分：cookie 失效返回 403 让前端提示"重新登录"，而非 410"商品已下架"误导用户
+    _DETAIL_FAILURE_STATUS_MAP: dict[str, int] = {
+        "home_title_redirect": 403,
+        "login_redirect": 403,
+        "verify_redirect": 441,
+    }
+
     async def _collect_detail_and_seller(
         self, item_id: str, page: Any
     ) -> tuple[ItemDetail, SellerProfile | None, list[str]]:
-        """采集 detail + seller + reviews，detail 不可用时抛 CollectionError(410)"""
+        """采集 detail + seller + reviews，detail 不可用时根据原因抛 CollectionError
+
+        为什么记录 failure_reason：detail() 返回 None 有 10+ 种原因（页面关闭/标题提取失败/
+        价格提取失败/会话失效/下架检测等），不记录原因会导致错误无法诊断根因。
+        为什么区分状态码：cookie 失效(403)和反爬拦截(441)是可恢复的，
+        不应与商品下架(410)混为一谈，否则前端无法给出正确的用户引导。
+        """
         detail = await self.container.collector.detail(item_id, page=page)
         if detail is None:
+            reason = getattr(self.container.collector, "last_detail_failure_reason", "unknown")
+            logger.warning(
+                "官方采集 detail 返回 None: item={}, failure_reason={}", item_id, reason,
+            )
+            status_code = self._DETAIL_FAILURE_STATUS_MAP.get(reason, 410)
+            if status_code == 403:
+                detail_msg = f"Failed to collect item {item_id}: login session expired (reason: {reason}), please re-login"
+            elif status_code == 441:
+                detail_msg = f"Failed to collect item {item_id}: anti-crawl verification triggered (reason: {reason})"
+            else:
+                detail_msg = f"Failed to collect item {item_id}: detail page unavailable or item removed (reason: {reason})"
             raise CollectionError(
-                410,
-                f"Failed to collect item {item_id}: detail page unavailable or item removed",
+                status_code,
+                detail_msg,
                 item_id=item_id,
             )
         reviews, seller = await asyncio.gather(
@@ -846,6 +917,16 @@ class ItemCollectionService:
         bus = getattr(self.container, "event_bus", None)
         if bus is None:
             return
+        # task_mode 与 worker 对齐：SEMI_AUTO 模式下模板渲染"确认抢单"链接
+        # task_id 为空时（如独立采集无任务关联）mode 取默认值 confirm，避免 KeyError
+        task_mode = ""
+        if task_id:
+            try:
+                task_row = self.container.repo.get_task(task_id)
+                if task_row:
+                    task_mode = str(task_row.get("mode") or "")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to load task mode for EVAL_PASSED task={}: {}", task_id, exc)
         try:
             bus.publish_nowait(
                 Event(
@@ -865,6 +946,7 @@ class ItemCollectionService:
                         "data_quality": eval_result.data_quality,
                         "reject_reasons": eval_result.reject_reasons or [],
                         "data_source": "official",
+                        "task_mode": task_mode,
                     },
                 )
             )

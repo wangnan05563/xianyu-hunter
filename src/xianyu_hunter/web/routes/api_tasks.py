@@ -71,6 +71,12 @@ class TaskCreate(BaseModel):
     eval_threshold: int | None = Field(None, ge=0, le=100)
     # ai_prompt: 任务级 AI 评估提示词（None 表示不使用自定义提示词）
     ai_prompt: str | None = None
+    # 权威源字段：通知触发开关，启用后仅对价格≤捡漏价(P10)的商品触发通知
+    # 默认 False 保持向后兼容；mode=notify 时仍生效（仅通知模式本身就只通知）
+    notify_bargain_only: bool = Field(False, description="权威源：仅对价格≤捡漏价的商品触发通知")
+    # 权威源字段：自动下单触发开关，启用后仅对价格≤捡漏价(P10)的商品执行自动下单
+    # mode=notify 时无意义（仅通知模式不下单）；mode=auto/semi_auto/confirm 时生效
+    auto_buy_bargain_only: bool = Field(False, description="权威源：仅对价格≤捡漏价的商品执行自动下单")
     # 任务级配置覆盖（JSON dict）：为空表示沿用全局配置
     # 为什么用 dict 而非结构化模型：任务级覆盖字段稀疏，dict 灵活且与前端表单直通；
     # 合并逻辑在 startup.py 中实现（任务级覆盖全局）
@@ -101,6 +107,9 @@ class TaskUpdate(BaseModel):
     # AI 评估任务级配置（与 TaskCreate 对齐）
     eval_threshold: int | None = Field(None, ge=0, le=100)
     ai_prompt: str | None = None
+    # 权威源字段：与 TaskCreate 对齐，PATCH 三态语义（未传=不更新，传 bool=更新）
+    notify_bargain_only: bool | None = Field(None, description="权威源：仅对价格≤捡漏价的商品触发通知")
+    auto_buy_bargain_only: bool | None = Field(None, description="权威源：仅对价格≤捡漏价的商品执行自动下单")
     # 任务级配置覆盖：传 None 清除覆盖，传 dict 设置覆盖
     search_config: dict[str, Any] | None = None
     price_config: dict[str, Any] | None = None
@@ -179,6 +188,9 @@ def create_task(
         # AI 评估任务级配置：序列化存 DB（None 表示沿用全局）
         "eval_threshold": body.eval_threshold,
         "ai_prompt": body.ai_prompt,
+        # 捡漏价格触发开关：bool→int 存储（与 use_cron 一致）
+        "notify_bargain_only": 1 if body.notify_bargain_only else 0,
+        "auto_buy_bargain_only": 1 if body.auto_buy_bargain_only else 0,
         # 任务级配置覆盖：JSON 序列化存 DB（None 或空 dict 表示沿用全局）
         "search_config": json.dumps(body.search_config, ensure_ascii=False) if body.search_config else None,
         "price_config": json.dumps(body.price_config, ensure_ascii=False) if body.price_config else None,
@@ -223,7 +235,7 @@ def _normalize_task_updates(raw: dict[str, Any]) -> dict[str, Any]:
     _apply_mode_update(updates)
     _serialize_json_list_fields(updates)
     _drop_null_nullable_core_fields(updates)
-    _convert_use_cron_to_int(updates)
+    _convert_bool_fields_to_int(updates)
     _serialize_config_overrides(updates)
     return updates
 
@@ -255,10 +267,15 @@ def _drop_null_nullable_core_fields(updates: dict[str, Any]) -> None:
             updates.pop(field, None)
 
 
-def _convert_use_cron_to_int(updates: dict[str, Any]) -> None:
-    """use_cron 在 DB 中是 INTEGER（0/1），Pydantic 收到的是 bool，需转换"""
-    if "use_cron" in updates:
-        updates["use_cron"] = 1 if updates["use_cron"] else 0
+def _convert_bool_fields_to_int(updates: dict[str, Any]) -> None:
+    """bool 字段转 INTEGER 存储（DB schema 与 use_cron 一致用 0/1）
+
+    覆盖字段：use_cron / notify_bargain_only / auto_buy_bargain_only
+    为什么统一处理：3 个字段都是 bool→int 转换，提取避免重复 if
+    """
+    for field in ("use_cron", "notify_bargain_only", "auto_buy_bargain_only"):
+        if field in updates and updates[field] is not None:
+            updates[field] = 1 if updates[field] else 0
 
 
 _CONFIG_OVERRIDE_FIELDS = ("search_config", "price_config", "antidetect_config", "eval_config")
@@ -311,6 +328,13 @@ def delete_task(
 
     # 最后删除任务本身（传入 user_id 兜底）
     container.repo.update_task_status(task_id, "deleted", user_id=user_id)
+
+    # 清理 scheduler 内存中该任务的冷却期记录，避免长期运行后字典无限增长
+    # 为什么用 try/except：scheduler 实例可能未注册该任务（Web only 模式），忽略 KeyError
+    try:
+        container.scheduler.drop_task_state(task_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("清理 scheduler 任务状态失败（忽略）: {}", e)
 
     return {
         "ok": True,
@@ -433,6 +457,36 @@ async def _dispatch_scheduler_action(
         return f"调度器操作异常，仅 DB 状态已更新：{type(e).__name__}: {e}"
 
 
+@router.get("/{task_id}/precheck")
+def precheck_task_resume(
+    task_id: str,
+    request: Request,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """恢复前置校验：前端"启动/恢复"按钮点击前调用，判断是否可恢复
+
+    meta-rule #31 状态恢复前置校验：
+    - 异常 pause（会话失效/连续失败）后直接 resume 会立即再次触发反爬，
+      precheck 提前判断 root_cause 是否消除，避免"恢复→失效→暂停"无效循环
+    - 返回结构化响应 {resume_blocked, reason_code, user_hint, retry_after, task_registered}
+    - 前端根据 resume_blocked 决定是否弹出确认弹窗或直接阻断
+
+    多用户隔离：仅允许校验当前账号拥有的任务。
+    """
+    _check_task_ownership(container, task_id, request)
+    # collector 为 None 表示纯 web 模式（scheduler 未启动），
+    # 此时 resume 不会有反爬风险，直接返回可恢复
+    if container.collector is None:
+        return {
+            "resume_blocked": False,
+            "reason_code": "ok",
+            "user_hint": "纯 web 模式，无需校验",
+            "retry_after": None,
+            "task_registered": False,
+        }
+    return container.scheduler.precheck_resume(task_id)
+
+
 @router.post("/{task_id}/control")
 async def control_task(
     task_id: str,
@@ -525,6 +579,11 @@ def batch_control_tasks(
             if body.action == "delete":
                 container.repo.delete_task_cascade(tid)
                 container.repo.update_task_status(tid, "deleted", user_id=user_id)
+                # 清理 scheduler 内存中该任务的冷却期记录
+                try:
+                    container.scheduler.drop_task_state(tid)
+                except Exception:  # noqa: BLE001
+                    pass
             else:
                 container.repo.update_task_status(tid, new_status, user_id=user_id)
             successes.append(tid)

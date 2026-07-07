@@ -63,8 +63,14 @@ async def test_manual_takeover_uses_browser_lock(monkeypatch) -> None:
 
     container.buyer.buy = AsyncMock(side_effect=_buy)
 
+    # manual_takeover 接口需要 request 参数读取 request.state.user_id 做多用户隔离
+    # 测试环境用 mock request，user_id="default" 兜底
+    mock_request = MagicMock()
+    mock_request.state.user_id = "default"
+
     result = await api_orders.manual_takeover(
         {"item_id": "i1", "task_id": "t1"},
+        mock_request,
         container=container,
     )
 

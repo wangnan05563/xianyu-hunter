@@ -266,10 +266,11 @@ class BatchRefreshScheduler:
         """运行时热更新配置
 
         修改调度器持有的 config 引用字段，同时 reschedule 已注册的 job。
+        enabled=False 时立即暂停定时触发（remove_job），enabled=True 时恢复定时触发。
         """
         if interval_minutes is not None:
             self._config.interval_minutes = interval_minutes
-            if self._scheduler:
+            if self._scheduler and self._config.enabled:
                 self._scheduler.reschedule_job(
                     "batch_refresh",
                     trigger="interval",
@@ -277,6 +278,34 @@ class BatchRefreshScheduler:
                 )
         if enabled is not None:
             self._config.enabled = enabled
+            if not enabled:
+                # 立即移除定时 job：用户禁用后不应再自动触发
+                # 为什么不用 shutdown：shutdown 会关闭整个调度器，后续无法 reschedule，
+                # remove_job 保留调度器实例允许用户重新启用
+                if self._scheduler:
+                    try:
+                        self._scheduler.remove_job("batch_refresh")
+                        logger.info("批量采集已禁用，定时任务已移除")
+                    except Exception:
+                        # job 不存在或已移除，忽略
+                        pass
+            else:
+                # 重新启用：恢复定时 job
+                if self._scheduler and self._main_loop:
+                    next_run = datetime.now() + timedelta(seconds=10)
+                    self._scheduler.add_job(
+                        self._run_batch_job,
+                        "interval",
+                        minutes=self._config.interval_minutes,
+                        next_run_time=next_run,
+                        id="batch_refresh",
+                        replace_existing=True,
+                    )
+                    logger.info(
+                        "批量采集已启用，间隔 %d 分钟，首次执行于 %s",
+                        self._config.interval_minutes,
+                        next_run.strftime("%Y-%m-%d %H:%M:%S"),
+                    )
 
     def _get_progress_snapshot(self) -> dict | None:
         """获取进度快照（计算 elapsed_ms）"""
@@ -299,6 +328,12 @@ class BatchRefreshScheduler:
         为什么用 future.result 而非 fire-and-forget：定时任务需要感知执行异常，
         便于日志排查；超时则释放线程，避免堆积。
         """
+        # 双重保险：enabled=False 时跳过执行
+        # 为什么在 _run_batch_job 也检查而非仅依赖 update_config 移除 job：
+        # update_config 与 APScheduler 触发之间存在竞态，job 可能已被调度到线程池
+        # 队列，仅 remove_job 不能保证正在排队的回调被取消
+        if not self._config.enabled:
+            return
         if self._main_loop is None or self.is_running():
             return
         self._current_task_id += 1

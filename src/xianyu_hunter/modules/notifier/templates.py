@@ -246,6 +246,8 @@ def _extract_eval_payload(event: Event) -> dict:
     if price in (0, None, ""):
         price = _get(p, "price", item, 0)
     
+    # task_id 来自 Event 顶层（worker/collection_service/evaluations_common 三处发布点均设置）
+    task_id = event.task_id or ""
     return {
         "item_id": item_id,
         "title": title,
@@ -258,6 +260,10 @@ def _extract_eval_payload(event: Event) -> dict:
         "reasons": p.get("reject_reasons", []) or [],
         "data_quality": p.get("data_quality", ""),
         "region": _get(p, "region", item, ""),
+        "task_id": task_id,
+        # SEMI_AUTO 模式专属：模板渲染"确认抢单"链接，URL 指向前端 /confirm-buy 页面
+        # 空 task_mode 视为非 SEMI_AUTO（保守降级，与历史 CONFIRM/NOTIFY_ONLY 行为一致）
+        "task_mode": p.get("task_mode", "") or "",
     }
 
 
@@ -310,6 +316,42 @@ def _get_risk_color(risk_level: str) -> str:
     return color_map.get(risk_level, "#FA8C16")
 
 
+def _get_web_base_url() -> str:
+    """获取本系统 Web 服务公网可达 URL，用于通知中渲染"确认抢单"等回链
+
+    优先级：
+    1. tunnel_service.public_url（用户开启了 Cloudflare Tunnel 远程访问）
+    2. http://localhost:{server.port}（本地访问兜底，用户在本机点击通知时可用）
+
+    为什么不在模板层 import 时一次性缓存：tunnel 可能在运行中被启停，
+    每次渲染都重新读取以保证 URL 反映当前隧道状态
+    """
+    try:
+        from xianyu_hunter.web.routes.api_tunnel import get_tunnel_service
+        public = get_tunnel_service().public_url
+        if public:
+            return public.rstrip("/")
+    except Exception:
+        # tunnel_service 未初始化或导入失败时降级，模板渲染不应因 URL 解析失败而中断
+        pass
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        port = get_config().server.port
+    except Exception:
+        port = 8000
+    return f"http://localhost:{port}"
+
+
+def _build_confirm_buy_url(task_id: str, item_id: str) -> str:
+    """构建 SEMI_AUTO 模式下"确认抢单"前端页面 URL
+
+    前端 BrowserRouter basename="/app"，所以路径前缀必须包含 /app
+    页面加载后展示商品快照与"确认抢单"按钮，点击调用 manual-takeover 接口
+    """
+    base = _get_web_base_url()
+    return f"{base}/app/confirm-buy?task_id={task_id}&item_id={item_id}"
+
+
 def _eval_passed(event: Event) -> tuple[str, str]:
     """评估通过模板
 
@@ -356,6 +398,15 @@ def _eval_passed(event: Event) -> tuple[str, str]:
     
     if data["url"]:
         body_lines.append(f"\n🔗 [<font color=\"#0088FF\">立即查看商品详情</font>]({data['url']})")
+    
+    # SEMI_AUTO 半自动模式专属：渲染"确认抢单"链接到本系统 /confirm-buy 页面
+    # 为什么独立于商品详情链接：商品详情链接跳到闲鱼，用户无法在闲鱼触发本系统抢单
+    # 必须有专属链接让用户回到本系统点击确认按钮，才能复用 manual-takeover 接口
+    if data["task_mode"] == "semi_auto" and data["task_id"] and data["item_id"]:
+        confirm_url = _build_confirm_buy_url(data["task_id"], data["item_id"])
+        body_lines.append(
+            f"\n⚡ [<font color=\"#FF6200\">**确认抢单（半自动）**</font>]({confirm_url})"
+        )
     
     body_lines.append(f"\n<font color=\"#999999\">{SEP}_系统自动发送，请尽快确认_</font>")
     return head, "\n".join(line for line in body_lines if line)

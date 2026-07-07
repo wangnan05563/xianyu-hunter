@@ -23,10 +23,12 @@ export function useSheetSync(): void {
   const activeId = useSheetStore((s) => s.activeId)
 
   useEffect(() => {
-    const path = location.pathname
+    // 保留 query string：confirm-buy 等外部通知回链页面依赖 ?task_id=xxx&item_id=yyy
+    // 若只取 pathname，sheet 打开后 URL 丢失 query，组件读不到参数
+    const path = location.pathname + location.search
     const activeSheet = sheets.find((s) => s.id === activeId)
     // 防循环：当前激活 sheet 的 path 已等于 URL 则不操作
     if (activeSheet?.path === path) return
     openSheetWithNotification(path)
-  }, [location.pathname, sheets, activeId])
+  }, [location.pathname, location.search, sheets, activeId])
 }

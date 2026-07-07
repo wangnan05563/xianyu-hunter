@@ -90,7 +90,7 @@ def validation_exception_handler(
     )
 
 
-def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """处理 HTTPException，保持原有 detail 格式
 
     各路由主动抛出的 HTTPException（如 404/400/401）走此通道，

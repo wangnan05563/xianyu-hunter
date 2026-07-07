@@ -14,6 +14,7 @@ import time
 
 import pytest
 
+from xianyu_hunter.container import PriorityBrowserLock
 from xianyu_hunter.web.routes.api_task_links import (
     _LIVE_LOCK_PROGRESS_INTERVAL,
     _LIVE_LOCK_TOTAL_TIMEOUT,
@@ -194,3 +195,18 @@ def test_total_timeout_extended_from_previous_10s():
     # 验证常量值符合"延长到 20s"的决策
     assert _LIVE_LOCK_TOTAL_TIMEOUT == 20.0
     assert _LIVE_LOCK_PROGRESS_INTERVAL == 1.5
+
+
+@pytest.mark.asyncio
+async def test_priority_browser_lock_tracks_current_owner_task():
+    lock = PriorityBrowserLock()
+
+    assert lock.owned_by_current_task is False
+    await lock.acquire(priority="low")
+
+    try:
+        assert lock.owned_by_current_task is True
+    finally:
+        lock.release()
+
+    assert lock.owned_by_current_task is False

@@ -116,6 +116,33 @@ class TaskWorker:
         # 连续采集失败计数器：达到 auto_collect_fail_pause_threshold 后暂停本轮采集
         # 每轮 run_once 开头重置，避免上一轮的失败影响本轮（Cookie 可能已刷新）
         self._consecutive_collect_failures: int = 0
+        # 任务级捡漏价格（P10）缓存：notify_bargain_only/auto_buy_bargain_only 开关启用时使用
+        # 为什么缓存：避免每个商品都查询 task_links/items 表，单轮 run_once 内 P10 不变
+        # None 表示未加载，float | None 表示加载后的值（None=无足够数据计算 P10）
+        self._bargain_price_cache: float | None = None
+        self._bargain_price_loaded: bool = False
+
+    def _get_task_bargain_price(self) -> float | None:
+        """获取当前任务的捡漏价格（P10），单轮 run_once 内缓存
+
+        复用 price_dashboard._compute_sold_range 保证口径与价格行情页一致。
+        查询失败或无足够数据时返回 None，调用方按"未启用过滤"处理。
+        """
+        if self._bargain_price_loaded:
+            return self._bargain_price_cache
+        self._bargain_price_loaded = True
+        if not self.repo:
+            return None
+        try:
+            # 延迟导入避免循环依赖
+            from xianyu_hunter.web.routes.price_dashboard import _compute_sold_range
+            with self.repo.engine.connect() as conn:
+                stats = _compute_sold_range(conn, self.task.id, range_days=30)
+                self._bargain_price_cache = stats.get("bargain_price")
+        except Exception as e:
+            logger.warning("[Task {}] 查询捡漏价格失败，开关过滤降级为未启用: {}", self.task.id, e)
+            self._bargain_price_cache = None
+        return self._bargain_price_cache
 
     def cleanup(self) -> None:
         """Worker 资源清理钩子
@@ -220,6 +247,10 @@ class TaskWorker:
         # 每轮重置连续失败计数器：新一轮可能已修复问题（Cookie 刷新/网络恢复），
         # 应给重新尝试的机会，不延续上一轮的失败状态
         self._consecutive_collect_failures = 0
+        # 每轮重置 P10 缓存：捡漏价格基于历史已售数据，新一轮可能已采集更多样本
+        # 为什么不跨轮缓存：避免长期缓存导致 P10 滞后，开关过滤失效
+        self._bargain_price_cache = None
+        self._bargain_price_loaded = False
 
         try:
             # 1. 搜索阶段：超时/会话失效直接返回，调用方据 stats 决策
@@ -247,7 +278,7 @@ class TaskWorker:
             if early_return is not None:
                 return early_return
         finally:
-            await self._finalize_run(stats, new_items)
+            self._finalize_run(stats, new_items)
 
         logger.info(
             f"[Task {self.task.id}] 本轮完成: 找到 {stats.found} / "
@@ -753,9 +784,23 @@ class TaskWorker:
         - notifier/templates.py 的 _eval_passed 模板优先消费扁平字段
         - 与 collection_service / api_evaluations 补发的 EVAL_PASSED 字段对齐
         - 减少嵌套层级，便于日志/调试
+
+        notify_bargain_only 开关优先级矩阵：
+        - mode=notify/auto/semi_auto/confirm：开关启用时仅价格≤P10 才发通知
+        - 开关关闭：所有通过评估的商品都发通知（向后兼容）
+        - P10 查询失败：降级为未启用过滤，避免阻断通知链
         """
         if self.event_bus is None:
             return
+        # 通知触发开关过滤：价格 > P10 时跳过通知
+        if getattr(self.task, "notify_bargain_only", False):
+            bargain = self._get_task_bargain_price()
+            if bargain is not None and detail.price is not None and detail.price > bargain:
+                logger.info(
+                    "[Task {}] {} 价格 {} > 捡漏价 {}，notify_bargain_only 开关过滤跳过通知",
+                    self.task.id, detail.id, detail.price, bargain,
+                )
+                return
         try:
             self.event_bus.publish_nowait(
                 Event(
@@ -776,6 +821,9 @@ class TaskWorker:
                         "data_quality": eval_result.data_quality,
                         "reject_reasons": eval_result.reject_reasons or [],
                         "pass_score": pass_score,
+                        # SEMI_AUTO 模式下通知模板需要渲染"确认抢单"链接，
+                        # 让用户点击链接跳转到前端 /confirm-buy 页面触发抢单
+                        "task_mode": self.task.mode.value,
                     },
                 )
             )
@@ -842,6 +890,12 @@ class TaskWorker:
         区分推送门槛与抢单门槛：
         - pass_score(60) 用于推送通知（is_passed 已在上方检查）
         - auto_buy_score(75) 用于全自动拍下，避免 60-74 分中等分数商品被误抢单
+
+        auto_buy_bargain_only 开关优先级矩阵：
+        - mode=notify：开关无意义（仅通知模式不下单），_should_buy 已返回 False
+        - mode=auto/semi_auto/confirm：开关启用时仅价格≤P10 才执行抢单
+        - 开关关闭：所有达到 auto_buy_score 的商品都抢单（向后兼容）
+        - P10 查询失败：降级为未启用过滤，避免阻断抢单链
         """
         if not self._should_buy():
             # 为什么加日志：非 AUTO 模式跳过抢单是高频原因，
@@ -857,6 +911,15 @@ class TaskWorker:
                 f"未达 auto_buy_score({_auto_buy_score}) 或非低风险({eval_result.risk_level.value})，跳过抢单"
             )
             return None
+        # 自动下单触发开关过滤：价格 > P10 时跳过抢单
+        if getattr(self.task, "auto_buy_bargain_only", False):
+            bargain = self._get_task_bargain_price()
+            if bargain is not None and detail.price is not None and detail.price > bargain:
+                logger.info(
+                    "[Task {}] {} 价格 {} > 捡漏价 {}，auto_buy_bargain_only 开关过滤跳过抢单",
+                    self.task.id, detail.id, detail.price, bargain,
+                )
+                return None
         # buyer 未注入时跳过落单：with_browser=False 模式下 container.buyer 为 None，
         # 或浏览器启动失败后 Buyer 仍可能未就绪。此时不应抛出 AttributeError 中断流程
         if self.buyer is None:

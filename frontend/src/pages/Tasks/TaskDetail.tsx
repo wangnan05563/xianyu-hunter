@@ -2,14 +2,14 @@ import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Card, Descriptions, Tag, Button, Space, Spin, Row, Col, Table, Empty, message, Tabs, List,
-  Select, Popconfirm, Radio, Tooltip,
+  Select, Popconfirm, Radio, Tooltip, Modal,
 } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined,
   SearchOutlined, SyncOutlined, DeleteOutlined, PlusOutlined, EyeOutlined,
 } from '@ant-design/icons'
 import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
-import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
+import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries, type TaskPrecheckResult } from '../../api'
 import { STATUS_COLOR } from '../../constants/statusColors'
 
 // 过滤掉指定的上游依赖项（S2004 拆出避免函数嵌套过深）
@@ -302,8 +302,26 @@ export default function TaskDetail() {
       .catch(() => message.error('移除依赖失败'))
   }
 
-  const handleControl = (action: 'pause' | 'resume' | 'stop' | 'restart') => {
+  const handleControl = async (action: 'pause' | 'resume' | 'stop' | 'restart') => {
     if (!id) return
+    // restart/resume 前先 precheck：避免 Cookie 失效或冷却期内无效恢复
+    if (action === 'restart' || action === 'resume') {
+      try {
+        const precheck = await taskApi.precheck(id)
+        if (precheck.resume_blocked) {
+          const isCookie = precheck.reason_code === 'cookie_invalid'
+          Modal.warning({
+            title: precheck.reason_code === 'cooldown' ? '⏳ 冷却期内' : '⚠️ 无法恢复',
+            content: <div style={{ lineHeight: 1.8 }}>{precheck.user_hint}</div>,
+            okText: isCookie ? '前往登录' : '知道了',
+            onOk: () => { if (isCookie) navigate('/login') },
+          })
+          return
+        }
+      } catch {
+        // precheck 接口失败不阻断主流程
+      }
+    }
     setActionLoading(true)
     taskApi.control(id, action).then(() => {
       message.success(`操作成功: ${action}`)

@@ -1071,30 +1071,45 @@ class DetailMixin:
             sold = await self._extract_count(page, self.selectors.SELLER_SOLD_ALT)
 
         # P2 调试：每个 seller_id 只 dump 一次 innerText 到 logs/seller_dom_<id>.txt
-        # 当 on_sale 或 sold 选择器失效时（如新版闲鱼改 className），
-        # 文本含"在售 X 件"或"卖出 X 件"模式可辅助人工更新 selectors.py
-        if (on_sale == 0 or sold == 0) and seller_id not in _DUMPED_SELLER_IDS:
+        # 为什么只在 on_sale=0 时 dump：新版闲鱼已移除"已售出"tab，sold=0 是预期行为；
+        # on_sale=0 才是真正的选择器失效（如 className 再次改版），需要 dump 辅助排查
+        if on_sale == 0 and seller_id not in _DUMPED_SELLER_IDS:
             await self._dump_seller_dom_for_debug(page, seller_id, on_sale, sold)
 
         return on_sale, sold
 
     async def _parse_sale_counts_from_tabs(self, page: Page) -> tuple[int, int]:
-        """从新版 tabItem 元素文本中解析在售数/已售数
+        """从卖家主页 tab 元素文本中解析在售数/已售数
 
-        三个 tab 文本分别为 "全部N"/"在售N"/"已售出N"。
-        className 是哈希化的 tabItem--XXX，无法用 CSS 选择器区分，按文本前缀匹配。
+        旧版三个 tab 文本分别为 "全部N"/"在售N"/"已售出N"。
+        新版（2026-07 改版）改为 "宝贝N"/"信用及评价N"，"在售/已售"tab 已移除。
 
-        闲鱼改版兜底（2026-07）：新版卖家主页移除"在售/已售"tab，
-        改用"宝贝"tab（商品总数，含已售）和"信用及评价"tab（评价数）。
-        近似映射"宝贝"→on_sale；"信用及评价"是评价数≠已售数，不映射，
-        sold 保持 0 由调用方走 P2 调试 dump。
+        className 是哈希化的（如 tabItem--XXX），每次改版可能变化，
+        因此用多组选择器兜底 + 文本前缀匹配，而非依赖固定 className。
+
+        近似映射"宝贝"→on_sale（商品总数，含已售）；
+        "信用及评价"是评价数≠已售数，不映射，sold 保持 0。
         """
         on_sale = 0
         sold = 0
         try:
             tab_texts = await page.evaluate(
                 """() => {
-                    const tabs = document.querySelectorAll('[class*="tabItem"]');
+                    // 多组选择器兜底：tabItem（旧版）/ tab-（新版可能的命名）
+                    // 为什么不只用 [class*="tabItem"]：2026-07 改版后该选择器可能失效
+                    let tabs = document.querySelectorAll('[class*="tabItem"]');
+                    if (tabs.length === 0) {
+                        tabs = document.querySelectorAll('[class*="tab"][role="tab"], [class*="Tab"][role="tab"]');
+                    }
+                    if (tabs.length === 0) {
+                        // 最终兜底：扫描所有可点击元素，按已知文本前缀过滤
+                        tabs = Array.from(document.querySelectorAll('div, span, a'))
+                            .filter(el => {
+                                const t = (el.innerText || '').trim();
+                                return t.startsWith('在售') || t.startsWith('已售')
+                                    || t.startsWith('宝贝') || t.startsWith('全部');
+                            });
+                    }
                     return Array.from(tabs).map(t => (t.innerText || '').trim());
                 }"""
             )

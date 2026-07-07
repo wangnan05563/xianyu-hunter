@@ -64,7 +64,9 @@ function showStatusError(
   if (isAxiosTimeout(error)) {
     message.error(timeoutMessage)
   } else if (status != null && statusMessages[status]) {
-    message.error(detail || statusMessages[status])
+    // 已知状态码优先用前端中文消息，后端 detail 仅作为 fallback
+    // 为什么不用 detail 优先：后端返回英文技术消息，对中文用户不友好
+    message.error(statusMessages[status])
   } else {
     message.error(detail || fallbackMessage)
   }

@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from xianyu_hunter.domain.task import Task, TaskStatus
 from xianyu_hunter.infra.logger import get_logger
@@ -29,6 +29,10 @@ logger = get_logger()
 # 会话失效后任务恢复的冷却期（秒）：避免用户在 Cookie 失效后反复点恢复
 # 触发 RGV587 反爬检测，冷却期内 resume/start 会被拒绝并提示前端重新登录
 _RESUME_COOLDOWN_SECONDS = 300
+
+# 单轮 run_once 异常后等待重试的默认秒数
+# 实际值从 task_scheduler.error_retry_wait_seconds 读取，这里仅作兜底
+_DEFAULT_ERROR_RETRY_WAIT_SECONDS = 300
 
 
 class ResumeBlockedError(Exception):
@@ -122,6 +126,17 @@ class TaskScheduler:
             except Exception as e:
                 logger.warning(f"[Task {task_id}] Worker cleanup 失败: {e}")
 
+    def drop_task_state(self, task_id: str) -> None:
+        """同步清理任务的内存残留状态（供 delete API 调用）
+
+        为什么需要独立方法而非复用 unregister：
+        - unregister 是 async 且要求先 stop，delete API 是同步端点且任务可能仍在运行
+        - 本方法仅清理 _resume_cooldown，不动 _workers（_workers 清理需先 stop loop_task）
+        - _workers 中已停止任务的残留条目占用极小，服务重启后自动清空，
+          重点清理 _resume_cooldown 避免长期运行后字典无限增长
+        """
+        self._resume_cooldown.pop(task_id, None)
+
     # ============== 启停控制 ==============
 
     def _check_resume_allowed(self, task_id: str) -> None:
@@ -162,6 +177,67 @@ class TaskScheduler:
             # cookie_store 内部异常（如 RuntimeError/IOError）不应导致 500，
             # 降级为跳过 Cookie 校验，仅依赖冷却期
             logger.warning("[Task %s] Cookie 校验异常，跳过: %s", task_id, e)
+
+    def precheck_resume(self, task_id: str) -> dict[str, Any]:
+        """恢复前置校验：返回结构化结果，不抛异常
+
+        与 _check_resume_allowed 的关系：
+        - _check_resume_allowed 抛 ResumeBlockedError，用于真正执行 resume/start 时阻断
+        - precheck_resume 返回结构化 dict，用于前端"恢复"按钮点击前的预检
+        - 两者复用同一套校验逻辑（冷却期 + Cookie），确保前后端判断一致
+
+        返回结构（meta-rule #31 resume_policy.require_structured_response）：
+        - resume_blocked: bool — 是否阻止恢复
+        - reason_code: str — 阻止原因码（cooldown / cookie_invalid / not_registered / ok）
+        - user_hint: str — 用户可读提示
+        - retry_after: int | None — 冷却期剩余秒数（仅 cooldown 时有值）
+        - task_registered: bool — 任务是否已注册到调度器（未注册需重启服务）
+        """
+        result: dict[str, Any] = {
+            "resume_blocked": False,
+            "reason_code": "ok",
+            "user_hint": "",
+            "retry_after": None,
+            "task_registered": task_id in self._workers,
+        }
+        # 未注册任务：不阻断（DB 状态仍可改），但提示需重启服务
+        if task_id not in self._workers:
+            result["user_hint"] = "任务未注册到调度器，DB 状态将更新但需重启服务才生效"
+            return result
+
+        # 1. 冷却期检查
+        cooldown_until = self._resume_cooldown.get(task_id)
+        if cooldown_until is not None:
+            remaining = cooldown_until - time.monotonic()
+            if remaining > 0:
+                result.update(
+                    resume_blocked=True,
+                    reason_code="cooldown",
+                    user_hint=f"会话失效冷却期内，请 {int(remaining)} 秒后重试，或重新登录后再恢复",
+                    retry_after=int(remaining),
+                )
+                return result
+            # 冷却期已过，清除记录避免字典无限增长
+            self._resume_cooldown.pop(task_id, None)
+
+        # 2. Cookie 有效性检查
+        try:
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+
+            if not get_cookie_store().has_valid_cookies():
+                result.update(
+                    resume_blocked=True,
+                    reason_code="cookie_invalid",
+                    user_hint="Cookie 已失效，请重新登录后再恢复任务",
+                )
+                return result
+        except ImportError:
+            logger.debug("[Task %s] cookie_store 不可用，跳过 Cookie 校验", task_id)
+        except Exception as e:
+            logger.warning("[Task %s] Cookie 校验异常，跳过: %s", task_id, e)
+
+        result["user_hint"] = "可恢复"
+        return result
 
     def start(self, task_id: str) -> None:
         """启动单个任务的后台循环"""
@@ -449,7 +525,7 @@ class TaskScheduler:
     ) -> bool:
         """处理 run_once 抛出异常的分支，返回是否应 continue 下一轮
 
-        返回 True：未达失败阈值，等待 5 分钟后 continue 下一轮。
+        返回 True：未达失败阈值，等待重试间隔后 continue 下一轮。
         返回 False：已达失败阈值，任务已暂停，应 break 主循环。
 
         之所以放在 scheduler 层而非 worker 层：这里是后台任务异常的统一兜底点，
@@ -464,13 +540,24 @@ class TaskScheduler:
         h.consecutive_errors += 1
         if self._pause_if_exceeded_fail_threshold(h, task_id):
             return False
-        # 出错后等待 5 分钟再试（避免刷错误日志）
+        # 出错后等待再试：从 task_scheduler.error_retry_wait_seconds 读取，避免刷错误日志
+        # 与 resume_policy.cooldown_seconds 语义不同：本字段控制未触发暂停时的重试退避
+        retry_wait = self._get_error_retry_wait_seconds()
         try:
-            await asyncio.wait_for(h.stop_event.wait(), timeout=300)
+            await asyncio.wait_for(h.stop_event.wait(), timeout=retry_wait)
         except asyncio.TimeoutError:
             pass
         h.task.status = TaskStatus.RUNNING
         return True
+
+    @staticmethod
+    def _get_error_retry_wait_seconds() -> int:
+        """读取异常重试等待秒数，配置读取失败时回退到默认值 300 秒"""
+        try:
+            from xianyu_hunter.infra.yaml_config import get_config
+            return get_config().task_scheduler.error_retry_wait_seconds
+        except Exception:
+            return _DEFAULT_ERROR_RETRY_WAIT_SECONDS
 
     def _capture_background_error(
         self, e: Exception, task_id: str, current_rid: str
@@ -531,12 +618,25 @@ class TaskScheduler:
 
         P1-7：cron 模式按表达式计算下次运行时间，interval 模式用固定间隔。
         cron 表达式无效时回退到 interval，保证调度不中断。
+
+        P2-3：cron 模式下最小等待秒数不低于 antidetect.min_delay_ms / 1000，
+        避免用户设置激进 cron（如 * * * * * 每分钟）导致请求频率超过反爬最小间隔
         """
         if not cron_expr:
             return interval
         try:
             from xianyu_hunter.modules.cron_utils import seconds_until_next_run
             wait_seconds = seconds_until_next_run(cron_expr)
+            # 最小间隔保护：cron 计算出的等待秒数不得低于反爬最小延迟
+            # 为什么读 min_delay_ms 而非硬编码：antidetect.min_delay_ms 是反爬基线，
+            # 请求频率低于此值会触发 RGV587 检测，cron 间隔应与之对齐
+            min_wait = self._get_min_cron_interval_seconds()
+            if wait_seconds < min_wait:
+                logger.warning(
+                    f"[Task {task_id}] cron={cron_expr!r} 计算间隔 {wait_seconds:.0f}s "
+                    f"低于反爬最小间隔 {min_wait}s，已自动上调"
+                )
+                return min_wait
             logger.debug(
                 f"[Task {task_id}] cron={cron_expr!r} 下次运行在 {wait_seconds:.0f}s 后"
             )
@@ -546,3 +646,12 @@ class TaskScheduler:
                 f"[Task {task_id}] cron 表达式 {cron_expr!r} 无效，回退到 interval={interval}s: {e}"
             )
             return interval
+
+    @staticmethod
+    def _get_min_cron_interval_seconds() -> float:
+        """读取反爬最小延迟作为 cron 模式最小间隔（秒），配置读取失败时回退到 10 秒"""
+        try:
+            from xianyu_hunter.infra.yaml_config import get_config
+            return get_config().antidetect.min_delay_ms / 1000.0
+        except Exception:
+            return 10.0

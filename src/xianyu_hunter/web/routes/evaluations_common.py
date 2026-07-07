@@ -215,6 +215,17 @@ def publish_eval_passed_event(
     bus = getattr(container, "event_bus", None)
     if bus is None:
         return
+    # task_mode 与 worker 对齐：SEMI_AUTO 模式下模板渲染"确认抢单"链接
+    # 补发场景没有 task 对象上下文，需要查 DB；查询失败时 mode 为空字符串，
+    # 模板层视为非 SEMI_AUTO 模式，不渲染确认链接（保守降级）
+    task_mode = ""
+    if task_id:
+        try:
+            task_row = container.repo.get_task(task_id)
+            if task_row:
+                task_mode = str(task_row.get("mode") or "")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to load task mode for EVAL_PASSED task={}: {}", task_id, exc)
     payload: dict[str, Any] = {
         "item_id": item_id,
         "item_title": getattr(detail, "title", "") or "",
@@ -229,6 +240,7 @@ def publish_eval_passed_event(
                       else str(getattr(eval_result, "risk_level", "medium")),
         "data_quality": getattr(eval_result, "data_quality", ""),
         "reject_reasons": getattr(eval_result, "reject_reasons", []) or [],
+        "task_mode": task_mode,
     }
     if data_source:
         payload["data_source"] = data_source

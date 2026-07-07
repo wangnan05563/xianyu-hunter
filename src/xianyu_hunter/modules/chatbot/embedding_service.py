@@ -192,8 +192,20 @@ class EmbeddingService:
 
     # 本地模式外层分批大小：sentence-transformers 内部已 batch_size=32，
     # 外层分批仅用于阶段性进度反馈，不会影响推理性能。
-    # 取 64 平衡「进度反馈频率」和「to_thread 切换开销」。
-    _LOCAL_BATCH_CHUNK = 64
+    # 取 256 平衡「进度反馈频率」和「to_thread 切换开销」：
+    # - 太小（如 64）会导致 10000+ 片段时 to_thread 切换 150+ 次开销显著
+    # - 太大（如 1024）进度回调粒度过粗，前端长时间无变化
+    _LOCAL_BATCH_CHUNK = 256
+
+    # 本地模式单批 encode 超时阈值（秒）：
+    # 用户在 CPU 上跑 10000+ 片段 bge-small 实测 ~1.5h，
+    # 单批 256 片段正常耗时约 30-90s；超过 600s 必为异常（死锁 / OOM 换页 / 模型损坏）
+    # 超时后抛 TimeoutError 让上层 _rollback_build 接管，避免无限卡死。
+    _LOCAL_BATCH_TIMEOUT_SEC = 600
+
+    # 进度日志节流阈值：每处理 N 个片段打一次 INFO 日志
+    # 10000 片段 / 500 = 20 行日志，足够观察趋势又不刷屏
+    _PROGRESS_LOG_EVERY = 500
 
     async def _embed_batch_local(
         self,
@@ -205,6 +217,13 @@ class EmbeddingService:
         利用 sentence-transformers 原生 batch 接口。
         外层按 _LOCAL_BATCH_CHUNK 分批 encode，每批完成后回调 progress_cb，
         让前端能看到向量化进度，避免数千片段一次性 encode 时被误判为卡死。
+
+        看门狗：单批 encode 超过 _LOCAL_BATCH_TIMEOUT_SEC 抛 TimeoutError，
+        避免进程卡死时无限等待（让 _rollback_build 接管清理）。
+
+        日志节流：每 _PROGRESS_LOG_EVERY 个片段打一次 INFO 日志，
+        便于运维事后分析「跑到哪一步」「卡在哪个片段」。
+
         预算检查一次即可（不按条计费），失败时整批失败。
         """
         # 预算检查：本地模式不消耗 token，但仍检查总调用次数预算
@@ -216,16 +235,40 @@ class EmbeddingService:
         backend = self._get_local_backend()
         total = len(texts)
         chunk = self._LOCAL_BATCH_CHUNK
+        start_ts = asyncio.get_event_loop().time()
+        last_log_done = 0
         try:
             all_vecs: list[list[float]] = []
             for start in range(0, total, chunk):
                 batch = texts[start:start + chunk]
                 # to_thread 包装：sentence-transformers 是同步库，避免阻塞事件循环
-                vecs = await asyncio.to_thread(backend.embed_batch, batch)
+                # 看门狗：用 wait_for 包装 to_thread，单批超时则中止
+                # （sentence-transformers 不支持 cancel，但 wait_for 超时后
+                #  调用方会抛 TimeoutError，至少能跳到 except 让 _rollback 接管）
+                vecs = await asyncio.wait_for(
+                    asyncio.to_thread(backend.embed_batch, batch),
+                    timeout=self._LOCAL_BATCH_TIMEOUT_SEC,
+                )
                 all_vecs.extend(vecs)
+                done = min(start + chunk, total)
+
+                # 节流打日志：每 _PROGRESS_LOG_EVERY 个片段或最后一批时打 INFO
+                if done - last_log_done >= self._PROGRESS_LOG_EVERY or done == total:
+                    elapsed = asyncio.get_event_loop().time() - start_ts
+                    if elapsed > 0 and done > 0:
+                        rate = done / elapsed
+                        eta = (total - done) / rate if rate > 0 else 0
+                        logger.info(
+                            f"Embedding 进度: {done}/{total} "
+                            f"({done*100//total}%) {rate:.1f}/s ETA {eta:.0f}s"
+                        )
+                    else:
+                        logger.info(f"Embedding 进度: {done}/{total}")
+                    last_log_done = done
+
                 if progress_cb is not None:
                     try:
-                        progress_cb(min(start + chunk, total), total)
+                        progress_cb(done, total)
                     except Exception:
                         # 进度回调失败不应影响构建主流程
                         logger.debug("embed_batch 进度回调异常，忽略", exc_info=True)
@@ -236,6 +279,16 @@ class EmbeddingService:
                 response_data={"usage": {"total_tokens": 0}, "data": [{"embedding": []}]},
             )
             return all_vecs, []
+        except asyncio.TimeoutError:
+            # 单批 encode 超时：模型可能死锁 / OOM 换页 / 损坏
+            # 不静默重试，直接返回全部失败让 _rollback_build 接管
+            elapsed = asyncio.get_event_loop().time() - start_ts
+            logger.error(
+                f"Embedding 单批 encode 超时 "
+                f"(>{self._LOCAL_BATCH_TIMEOUT_SEC}s)，已处理 {len(all_vecs)}/{total}，"
+                f"耗时 {elapsed:.0f}s，触发回滚"
+            )
+            return [], list(range(len(texts)))
         except Exception:
             logger.exception("本地 batch embedding 失败")
             return [], list(range(len(texts)))

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Table, Button, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary } from '../../api'
+import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
 import { STATUS_COLOR as statusColors } from '../../constants/statusColors'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useAutoLiveSearch } from '../../hooks/useAutoLiveSearch'
@@ -343,8 +343,37 @@ export default function TaskList() {
 
   // ============== 任务操作 ==============
 
+  // precheck 阻断提示：根据 reason_code 选择图标与按钮文案
+  // 为什么独立：handleAction/handleBatchAction 复用，避免重复三元表达式
+  const showPrecheckBlocked = (result: TaskPrecheckResult, onCancel?: () => void) => {
+    const isCookie = result.reason_code === 'cookie_invalid'
+    Modal.warning({
+      title: result.reason_code === 'cooldown' ? '⏳ 冷却期内' : '⚠️ 无法恢复',
+      content: <div style={{ lineHeight: 1.8 }}>{result.user_hint}</div>,
+      okText: isCookie ? '前往登录' : '知道了',
+      onOk: () => {
+        if (isCookie) navigate('/login')
+        onCancel?.()
+      },
+    })
+  }
+
   const handleAction = async (id: string, action: 'start' | 'pause' | 'resume' | 'stop' | 'delete') => {
     try {
+      // start(=restart) / resume 前先 precheck，避免无效恢复循环
+      // pause/stop/delete 不涉及反爬风险，无需 precheck
+      if (action === 'start' || action === 'resume') {
+        try {
+          const precheck = await taskApi.precheck(id)
+          if (precheck.resume_blocked) {
+            showPrecheckBlocked(precheck)
+            return
+          }
+        } catch {
+          // precheck 接口本身失败（如 404/403）不阻断主流程，按原逻辑继续
+          // 为什么不阻断：precheck 是优化体验，不应让接口故障导致用户无法操作
+        }
+      }
       // 停止和删除由行内二次确认机制处理，此处不再弹 Modal
       await taskApi[action](id)
       message.success('操作成功')
@@ -399,7 +428,7 @@ export default function TaskList() {
 
   // ============== 批量操作 ==============
 
-  const handleBatchAction = (action: 'pause' | 'resume' | 'stop' | 'delete') => {
+  const handleBatchAction = async (action: 'pause' | 'resume' | 'stop' | 'delete') => {
     const ids = selectedRowKeys.map(String)
     if (ids.length === 0) return
 
@@ -425,6 +454,19 @@ export default function TaskList() {
     }
 
     // 暂停/恢复直接执行
+    // 批量恢复前先 precheck：任一任务被阻断则提示用户，避免批量恢复导致连锁失效
+    if (action === 'resume') {
+      try {
+        const results = await Promise.all(ids.map((id) => taskApi.precheck(id).catch(() => null)))
+        const blocked = results.find((r) => r?.resume_blocked)
+        if (blocked) {
+          showPrecheckBlocked(blocked)
+          return
+        }
+      } catch {
+        // precheck 全部失败时不阻断批量操作，按原逻辑继续
+      }
+    }
     taskApi.batchControl(ids, action).then(() => {
       message.success(`批量操作成功`)
       setSelectedRowKeys([])

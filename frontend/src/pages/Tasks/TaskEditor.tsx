@@ -119,6 +119,9 @@ const taskToFormData = (task: Task): TaskCreateBody => ({
   // eval_threshold 后端默认 60（NOT NULL），此处保留原值，前端用 null 表示"沿用全局"语义
   eval_threshold: task.eval_threshold ?? null,
   ai_prompt: task.ai_prompt ?? null,
+  // 捡漏价格触发开关：DB 存 INTEGER(0/1)，前端用 Boolean() 转 bool
+  notify_bargain_only: Boolean(task.notify_bargain_only),
+  auto_buy_bargain_only: Boolean(task.auto_buy_bargain_only),
   search_config: task.search_config ?? null,
   price_config: task.price_config ?? null,
   antidetect_config: task.antidetect_config ?? null,
@@ -328,6 +331,9 @@ export default function TaskEditor() {
     // 但需保留字段以便编辑模式下原样回显和保存，避免丢失已有配置
     eval_threshold: null,
     ai_prompt: null,
+    // 捡漏价格触发开关默认关闭，保持向后兼容
+    notify_bargain_only: false,
+    auto_buy_bargain_only: false,
     search_config: null,
     price_config: null,
     antidetect_config: null,
@@ -587,6 +593,54 @@ export default function TaskEditor() {
               </Radio.Group>
             </Form.Item>
           </Form>
+
+          {/* 捡漏价格触发开关：mode 为主开关，*_bargain_only 为价格过滤器
+           * notify_bargain_only：所有 mode 下可用，控制通知仅对价格≤捡漏价(P10)的商品触发
+           * auto_buy_bargain_only：mode=notify 时无意义（仅通知模式不下单），故 disabled
+           * 数据源：后端 TaskRow 字段，DB 存 INTEGER(0/1)，前端用 Boolean() 转 bool */}
+          <Card
+            size="small"
+            style={{ marginTop: 16, background: 'rgba(255, 145, 80, 0.06)' }}
+            title="🎯 捡漏价格触发开关"
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ fontWeight: 600 }}>通知触发开关</div>
+                  <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                    启用后，仅对价格 ≤ 捡漏价格（P10）的商品触发通知提醒
+                  </div>
+                </div>
+                <Switch
+                  checked={Boolean(formData.notify_bargain_only)}
+                  onChange={(checked) => setFormData({ ...formData, notify_bargain_only: checked })}
+                  checkedChildren="开"
+                  unCheckedChildren="关"
+                />
+              </div>
+              <Divider style={{ margin: '4px 0' }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ fontWeight: 600 }}>
+                    自动下单触发开关
+                    {formData.mode === 'notify' && (
+                      <Tag color="default" style={{ marginLeft: 8, fontSize: 11 }}>仅通知模式不可用</Tag>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+                    启用后，仅对价格 ≤ 捡漏价格（P10）的商品执行自动下单操作
+                  </div>
+                </div>
+                <Switch
+                  checked={Boolean(formData.auto_buy_bargain_only)}
+                  onChange={(checked) => setFormData({ ...formData, auto_buy_bargain_only: checked })}
+                  disabled={formData.mode === 'notify'}
+                  checkedChildren="开"
+                  unCheckedChildren="关"
+                />
+              </div>
+            </div>
+          </Card>
 
           {/* 实时预览：搜索 URL */}
           {formData.keyword && (

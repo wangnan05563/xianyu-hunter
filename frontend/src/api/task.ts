@@ -1,5 +1,5 @@
 import client from './client'
-import type { Task, TaskCreateBody, TaskRun, TaskDep, TaskLink, FieldMap } from './types'
+import type { Task, TaskCreateBody, TaskRun, TaskDep, TaskLink, FieldMap, TaskPrecheckResult } from './types'
 
 // 任务 API：负责任务的 CRUD 与运行控制
 // start/pause/resume/stop 统一委托 control 端点，避免后端多次实现相似逻辑
@@ -22,6 +22,11 @@ export const taskApi = {
   // 后端统一控制端点：action=pause|resume|stop|restart
   control: (id: string, action: 'pause' | 'resume' | 'stop' | 'restart') =>
     client.post(`/api/tasks/${id}/control`, null, { params: { action } }).then((r) => r.data),
+
+  // 恢复前置校验：前端"启动/恢复"按钮点击前调用，判断 root_cause 是否消除
+  // 返回 resume_blocked=true 时前端必须弹 Modal 阻断，避免"恢复→失效→暂停"无效循环
+  precheck: (id: string) =>
+    client.get<TaskPrecheckResult>(`/api/tasks/${id}/precheck`).then((r) => r.data),
 
   start: (id: string) => taskApi.control(id, 'restart'),
   pause: (id: string) => taskApi.control(id, 'pause'),

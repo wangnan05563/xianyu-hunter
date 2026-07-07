@@ -22,6 +22,8 @@ class CollectorBase:
     不包含业务方法，仅负责状态初始化。
     """
 
+    API_AUTH_BACKOFF_SECONDS = 300.0
+
     def __init__(
         self,
         browser: BrowserManager,
@@ -53,6 +55,7 @@ class CollectorBase:
         # 上次搜索是否捕获到 API 响应但解析为 0 个商品（可能是登录墙/会话过期）
         # 供 live_links 端点判断是否需要提示用户重新登录
         self._last_api_captured: bool = False
+        self._api_auth_backoff_until: float = 0.0
         # 上次 detail() 返回 None 的具体原因（枚举字符串）
         # 为什么需要：collection_service 抛错时根据 reason 区分 401/429/502/503，
         # 避免所有失败都归为 502 让用户无法判断是该重试、该重登录还是该等待

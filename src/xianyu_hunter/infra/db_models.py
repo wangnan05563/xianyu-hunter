@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+from loguru import logger
 from sqlalchemy import (
     JSON,
     DateTime,
@@ -68,6 +69,13 @@ class TaskRow(Base):
     interval_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=60.0)
     mode: Mapped[str] = mapped_column(String, nullable=False, default="confirm")
     notifier_channels: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    # 通知触发开关：True=仅对价格≤捡漏价(P10)的商品触发通知
+    # 为什么用 Boolean 而非 JSON：单一布尔开关，独立列便于 SQL 过滤与索引；
+    # 默认 False 保持向后兼容，已存在的任务行为不变
+    notify_bargain_only: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # 自动下单触发开关：True=仅对价格≤捡漏价(P10)的商品执行自动下单
+    # 与 notify_bargain_only 独立：通知与下单是两条触发链，可分别配置
+    auto_buy_bargain_only: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     ai_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     # nullable=True：None 表示沿用全局 eval.pass_score，任务级覆盖时才写入具体值
     eval_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -973,6 +981,24 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     for tbl in _MU2_TABLES:
         _migrate_create_index(engine, tbl, f"idx_{tbl}_user", "user_id")
 
+    # 捡漏价格触发开关：通知/自动下单各一个独立布尔字段
+    # 为什么独立 try/except：单个迁移失败不应阻断其他迁移，保留 traceback 便于排查
+    try:
+        _migrate_add_column(engine, "tasks", "notify_bargain_only", "INTEGER NOT NULL DEFAULT 0")
+        with engine.connect() as conn:
+            conn.execute(sa_text("UPDATE tasks SET notify_bargain_only=0 WHERE notify_bargain_only IS NULL"))
+            conn.commit()
+    except Exception as e:
+        logger.exception("迁移 tasks.notify_bargain_only 失败: {}", e)
+
+    try:
+        _migrate_add_column(engine, "tasks", "auto_buy_bargain_only", "INTEGER NOT NULL DEFAULT 0")
+        with engine.connect() as conn:
+            conn.execute(sa_text("UPDATE tasks SET auto_buy_bargain_only=0 WHERE auto_buy_bargain_only IS NULL"))
+            conn.commit()
+    except Exception as e:
+        logger.exception("迁移 tasks.auto_buy_bargain_only 失败: {}", e)
+
 
 def _migrate_add_column(engine: Engine, table: str, column: str, col_type: str) -> None:
     """安全地为已有表添加列（列已存在则跳过）
@@ -1021,7 +1047,6 @@ def _migrate_make_column_nullable(engine: Engine, table: str, column: str) -> No
     事务安全：整个重建过程包裹在单一事务中（engine.begin），任一步骤失败自动回滚。
     残留清理：迁移前先 DROP TABLE IF EXISTS {table}_old，避免上次失败残留导致永久阻塞。
     """
-    from loguru import logger
     if not (_IDENT_RE.match(table) and _IDENT_RE.match(column)):
         return
 

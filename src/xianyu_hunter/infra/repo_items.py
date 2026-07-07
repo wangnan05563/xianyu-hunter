@@ -45,9 +45,12 @@ class ItemsMixin:
             conn.execute(stmt)
         return len(items)
 
-    def get_item(self, item_id: str) -> dict | None:
+    def get_item(self, item_id: str, user_id: str | None = None) -> dict | None:
         with self.engine.connect() as conn:
-            row = conn.execute(select(ItemRow).where(ItemRow.id == item_id)).first()
+            stmt = select(ItemRow).where(ItemRow.id == item_id)
+            if user_id is not None:
+                stmt = stmt.where(ItemRow.user_id == user_id)
+            row = conn.execute(stmt).first()
             return self._row_to_dict(row) if row else None
 
     def list_items(

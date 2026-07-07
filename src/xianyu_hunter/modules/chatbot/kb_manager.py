@@ -109,12 +109,24 @@ class KBManager:
         phase: idle/scanning/snapshotting/embedding/writing/finalizing/done/failed/rolling_back
         percent: 0-100
         message: 人类可读的阶段描述（前端直接展示）
+
+        日志策略：phase 切换或 message 非空时打 INFO，便于运维事后分析构建流程。
+        embedding 阶段细粒度进度由 embed_batch 内部节流打日志，避免这里重复刷屏。
         """
+        prev_phase = self._progress.get("phase", "idle")
         self._progress = {
             "phase": phase,
             "percent": max(0, min(100, percent)),
             "message": message,
         }
+        # 阶段切换 或 有描述消息 时打日志；embedding 阶段的细粒度进度
+        # 由 _embed_batch_local 内部节流打日志（_PROGRESS_LOG_EVERY），这里只在
+        # 进入/离开 embedding 阶段时打一次
+        if phase != prev_phase or message:
+            if phase == "embedding" and prev_phase == "embedding":
+                # 内部进度变化，已被 _embed_batch_local 节流日志覆盖
+                return
+            logger.info(f"[KB进度] {phase} {percent}% {message}".rstrip())
 
     async def build_all(self) -> KBVersion:
         """全量构建：扫描所有 doc_paths → 分块 → 向量化 → 写入 ChromaDB → 创建版本记录
@@ -139,6 +151,28 @@ class KBManager:
                 return self._make_empty_failed_version("无文档片段可构建")
 
             self._set_progress("scanning", 15, f"已扫描到 {len(snippets)} 个片段")
+
+            # 预估信息：参考上次成功构建的耗时，给用户心理预期
+            # 避免 1 小时+ 的 embedding 阶段被误判为「卡死」而中途放弃
+            last_ver = self._repo.get_current_kb_version()
+            if last_ver and last_ver.get("build_duration_sec"):
+                last_dur = last_ver["build_duration_sec"]
+                last_chunks = last_ver.get("chunk_count", 0)
+                # 用片段数比例外推：上次 10000 片段耗时 3600s → 本次 12000 片段预估 4320s
+                if last_chunks > 0:
+                    eta_sec = last_dur * len(snippets) / last_chunks
+                    logger.info(
+                        f"[KB预估] {len(snippets)} 片段，参考上次 {last_chunks} 片段/{last_dur:.0f}s，"
+                        f"预估本次约 {eta_sec:.0f}s ({eta_sec/60:.0f}min)"
+                    )
+                else:
+                    logger.info(
+                        f"[KB预估] {len(snippets)} 片段，参考上次耗时 {last_dur:.0f}s"
+                    )
+            else:
+                logger.info(
+                    f"[KB预估] {len(snippets)} 片段，无历史参考耗时"
+                )
 
             doc_hash = self._compute_doc_hash(snippets)
             version_id = uuid.uuid4().hex

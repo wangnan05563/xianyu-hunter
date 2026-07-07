@@ -46,6 +46,13 @@ class Task:
     interval_seconds: float = 60.0
     mode: TaskMode = TaskMode.CONFIRM
     notifier_channels: list[str] = field(default_factory=lambda: ["serverchan"])
+    # 通知触发开关：True=仅对价格≤捡漏价(P10)的商品触发通知
+    # mode 优先级矩阵：mode=notify 时此开关仍生效（仅通知模式本身就只通知）
+    notify_bargain_only: bool = False
+    # 自动下单触发开关：True=仅对价格≤捡漏价(P10)的商品执行自动下单
+    # mode 优先级矩阵：mode=notify 时此开关无意义（仅通知模式不下单）；
+    # mode=auto/semi_auto/confirm 时作为抢单的额外过滤器
+    auto_buy_bargain_only: bool = False
     ai_prompt: str | None = None
     # None 表示沿用全局 eval.pass_score，具体值表示任务级覆盖
     eval_threshold: int | None = None

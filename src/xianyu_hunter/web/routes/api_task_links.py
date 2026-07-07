@@ -81,6 +81,7 @@ router = APIRouter(prefix="/api/tasks", tags=["task-links"])
 _VALID_TYPES = {"item", "seller"}
 _VALID_SOURCES = {"auto", "manual"}
 _LIVE_SEARCH_IDENTITY_COOKIES = ("cookie2", "sgcookie", "unb")
+_MTOP_RUNTIME_TOKEN_COOKIES = {"_m_h5_tk", "_m_h5_tk_enc", "mtop_partitioned_detect"}
 
 # S1192: 提取重复的错误消息常量
 _TASK_NOT_FOUND = "任务不存在"
@@ -178,6 +179,7 @@ def _load_pw_cookies_from_json(user_id: str = "default") -> tuple[list[dict], di
 
     pw_cookies: list[dict] = []
     identity_values: dict[str, str] = {}
+    skipped_mtop_tokens: set[str] = set()
     for c in json_data["cookies"]:
         name = str(c.get("name") or "")
         value = str(c.get("value") or "")
@@ -187,9 +189,18 @@ def _load_pw_cookies_from_json(user_id: str = "default") -> tuple[list[dict], di
             logger.warning("实时搜索：跳过测试 Cookie {}={}，不注入浏览器", name, value)
             continue
 
+        if name in _MTOP_RUNTIME_TOKEN_COOKIES:
+            skipped_mtop_tokens.add(name)
+            continue
+
         pw_cookies.append(_build_pw_cookie_item(name, value, c))
         if name in _LIVE_SEARCH_IDENTITY_COOKIES:
             identity_values[name] = value
+    if skipped_mtop_tokens:
+        logger.debug(
+            "Live search skipped CookieStore MTOP runtime token cookies: {}",
+            sorted(skipped_mtop_tokens),
+        )
     return pw_cookies, identity_values
 
 

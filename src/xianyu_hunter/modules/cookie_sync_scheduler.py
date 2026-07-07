@@ -45,6 +45,11 @@ class CookieSyncScheduler:
         self._consecutive_failures = 0
         self._current_interval = auto_sync_interval
         self._scheduler: BackgroundScheduler | None = None
+        # 运行时启用标志：与 _run_sync_job 入口配合实现热禁用
+        # 为什么需要独立标志而非仅依赖 stop()：stop() 会关闭整个 APScheduler 实例，
+        # 后续无法 reschedule；_enabled=False 仅跳过本次执行，保留调度器实例
+        # 允许后续通过 enable() 恢复
+        self._enabled: bool = True
 
     def start(self) -> None:
         """启动定时调度"""
@@ -68,6 +73,19 @@ class CookieSyncScheduler:
             self._scheduler = None
             logger.info("Cookie 同步调度器已停止")
 
+    def update_config(self, enabled: bool | None = None) -> None:
+        """运行时热更新启用状态
+
+        enabled=False 时跳过后续所有定时触发（保留调度器实例便于恢复）；
+        enabled=True 时恢复执行。
+        """
+        if enabled is not None:
+            self._enabled = enabled
+            logger.info(
+                "Cookie 同步调度器已%s",
+                "启用" if enabled else "禁用",
+            )
+
     def _run_sync_job(self) -> None:
         """定时任务：检查并同步 Cookie
 
@@ -76,6 +94,9 @@ class CookieSyncScheduler:
         3. 优先离线导入，失败则降级到 CDP
         4. 全部失败则记录日志
         """
+        # 运行时禁用检查：与 update_config(enabled=False) 配合实现热关闭
+        if not self._enabled:
+            return
         if not self._should_sync():
             return
 
