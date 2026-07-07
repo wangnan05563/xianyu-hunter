@@ -149,22 +149,28 @@ function buildAccountMenuItems(
 }
 
 // 下拉触发器按钮组件
+// 必须接收并转发 onClick：Ant Design Dropdown 在 trigger=['click'] 时
+// 通过 cloneElement 给 children 注入 onClick，若 TriggerButton 不转发，
+// 点击事件无法到达 DOM button，Dropdown 的 onOpenChange 不触发，下拉不弹出
 function TriggerButton({
   current,
   displayName,
   avatarError,
   onAvatarError,
+  onClick,
 }: {
   readonly current: AccountInfo | undefined
   readonly displayName: string
   readonly avatarError: boolean
   readonly onAvatarError: () => boolean
+  readonly onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void
 }) {
   const avatarUrl = current?.avatar_url && !avatarError ? current.avatar_url : undefined
   return (
     <button
       type="button"
       aria-label="账号切换"
+      onClick={onClick}
       style={{
         display: 'flex',
         alignItems: 'center',
