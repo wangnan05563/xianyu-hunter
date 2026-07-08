@@ -279,10 +279,22 @@ foreach ($script in @("browser_login.py", "auth_helper.py")) {
     }
 }
 
-# 5.3 Playwright Chromium（从缓存复制，避免重复下载 ~150MB）
+# 5.3 配置文件（menu_registry.yaml 等只读配置，随安装包分发）
+# 为什么需要：menu_manager.py 通过 get_app_dir()/"config"/"menu_registry.yaml" 定位
+# 打包后 get_app_dir() 返回 exe 所在目录，config/ 需复制到 exe 同级
+Write-Host "  [5.3] Copying config files (menu_registry.yaml)..."
+$configTarget = "dist\xianyu-hunter\config"
+New-Item -ItemType Directory -Force $configTarget | Out-Null
+if (Test-Path "config\menu_registry.yaml") {
+    Copy-Item -Force "config\menu_registry.yaml" $configTarget
+} else {
+    Write-Host "  [WARN] 缺少 config\menu_registry.yaml，菜单配置功能将不可用" -ForegroundColor Red
+}
+
+# 5.4 Playwright Chromium（从缓存复制，避免重复下载 ~150MB）
 # 为什么用缓存：dist 每次打包都会删除重建，直接下载到 dist 会每次重下
 # 缓存到 .cache/playwright_browsers/，复制到 dist/xianyu-hunter/playwright_browsers/
-Write-Host "  [5.3] Playwright Chromium..."
+Write-Host "  [5.4] Playwright Chromium..."
 $pwTarget = "dist\xianyu-hunter\playwright_browsers"
 if (Test-Path "$pwCacheDir\chromium-*") {
     Write-Host "  从缓存复制 Chromium...（约 10-30 秒）"
@@ -303,10 +315,10 @@ if (Test-Path "$pwCacheDir\chromium-*") {
     Remove-Item Env:\PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
 }
 
-# 5.4 sentence-transformers 模型（从缓存复制，避免重复下载 ~100MB）
+# 5.5 sentence-transformers 模型（从缓存复制，避免重复下载 ~100MB）
 # 为什么用缓存：同上，dist 每次重建会导致重新下载
 # 缓存到 .cache/models/bge-small-zh-v1.5/，复制到 dist/xianyu-hunter/models/
-Write-Host "  [5.4] sentence-transformers model..."
+Write-Host "  [5.5] sentence-transformers model..."
 $modelTarget = "dist\xianyu-hunter\models\bge-small-zh-v1.5"
 if (Test-Path "$modelCacheDir\config.json") {
     Write-Host "  从缓存复制模型...（约 5-15 秒）"
@@ -336,6 +348,50 @@ print('Model saved to $modelCacheDir')
         Write-Host "  模型已复制到 $modelTarget"
     }
 }
+
+# 5.6 敏感信息扫描（防御性：确保 API Key / .env / .secrets.json 未被打包）
+# 为什么需要：即使 spec 不收集 .env、前面的步骤不复制 .env，
+# 仍需在打包产物中扫描确认，防止未来误改 spec 或新增依赖间接带入敏感信息
+Write-Host "  [5.6] Scanning for sensitive information..."
+$distRoot = "dist\xianyu-hunter"
+
+# 5.6.1 删除可能存在的敏感文件（防御性，即使前面步骤不应复制它们）
+foreach ($sensitiveFile in @(".env", ".env.local", ".secrets.json")) {
+    $sensitivePath = Join-Path $distRoot $sensitiveFile
+    if (Test-Path $sensitivePath) {
+        Write-Host "    [WARN] 发现敏感文件 $sensitiveFile，已删除" -ForegroundColor Red
+        Remove-Item -Force $sensitivePath
+    }
+}
+
+# 5.6.2 扫描打包产物中是否有 API Key 痕迹
+# 扫描模式：sk- 开头（OpenAI/DeepSeek 标准 Key 前缀）、__MIGRATED_TO_KEYRING__ 占位符
+# 注意：仅扫描项目级文件（exe 同级 + config/ + scripts/ + static/），
+# 不扫描 _internal/（第三方库源码中可能含 "deepseek" 等模型名字符串，会误报）
+$scanDirs = @($distRoot, "$distRoot\config", "$distRoot\scripts", "$distRoot\static")
+$leakFound = $false
+foreach ($scanDir in $scanDirs) {
+    if (-not (Test-Path $scanDir)) { continue }
+    $files = Get-ChildItem -Path $scanDir -File -Recurse -ErrorAction SilentlyContinue
+    foreach ($file in $files) {
+        # 跳过二进制文件（exe/dll/pak 等），只扫描文本文件
+        $ext = $file.Extension.ToLower()
+        if ($ext -in @(".exe", ".dll", ".pak", ".bin", ".dat", ".node", ".pyd", ".so")) { continue }
+        try {
+            $content = Get-Content $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop
+            if ($content -match 'sk-[A-Za-z0-9]{20,}' -or $content -match '__MIGRATED_TO_KEYRING__') {
+                Write-Host "    [ERROR] 在 $($file.FullName) 中发现疑似 API Key 痕迹" -ForegroundColor Red
+                $leakFound = $true
+            }
+        } catch {
+            # 读取失败的文件（如编码问题）跳过
+        }
+    }
+}
+if ($leakFound) {
+    throw "打包产物中检测到 API Key 痕迹，已中止构建。请检查 spec 文件和复制步骤。"
+}
+Write-Host "    敏感信息扫描通过（无 API Key 痕迹）" -ForegroundColor Green
 
 # ============== 6. 制作安装包（Inno Setup） ==============
 Write-Host "`n[6/6] Building installer (Inno Setup)..." -ForegroundColor Yellow

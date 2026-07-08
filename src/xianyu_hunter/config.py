@@ -18,8 +18,12 @@ from xianyu_hunter.paths import get_app_dir, get_env_file
 
 class Settings(BaseSettings):
     """全局配置，从 .env 读取"""
+    # 为什么用 get_env_file() 而不是 ".env"：
+    # 打包后 CWD 可能不确定（虽然 launcher.py 已 chdir，但 pydantic-settings
+    # 在模块导入时解析 env_file，如果导入顺序早于 chdir 则读取失败）
+    # 使用绝对路径确保任何情况下都能正确定位 .env
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(get_env_file()),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

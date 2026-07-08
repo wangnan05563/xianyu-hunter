@@ -1,18 +1,22 @@
-import { Button, Badge, Tooltip } from 'antd'
+import { Button, Badge, Tooltip, theme } from 'antd'
 import { BellOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { statsApi } from '../../api'
+import AccountSwitcher from '../components/AccountSwitcher'
 
-// 顶部状态栏：品牌 + 调度器状态灯 + 通知铃铛
+// 顶部状态栏：品牌 + 调度器状态灯 + 通知铃铛 + 账号切换
 export default function MobileHeader() {
   const navigate = useNavigate()
+  const { token: themeToken } = theme.useToken()
   const [schedulerRunning, setSchedulerRunning] = useState<boolean | null>(null)
   const [alertCount, setAlertCount] = useState(0)
 
   // 轮询调度器状态与告警数（30s）
   // 告警数 = 今日失败订单 + 超时待支付 + 低分评估，与 Dashboard 摘要一致
+  // 页面不可见时暂停轮询，恢复时立即拉取 + 重启定时器，省电省流量
   useEffect(() => {
+    let id: ReturnType<typeof setInterval> | null = null
     const poll = async () => {
       try {
         const [overview, today] = await Promise.all([
@@ -24,9 +28,26 @@ export default function MobileHeader() {
         setAlertCount(c.failed + c.timeout + c.low_eval)
       } catch { /* 忽略，弱网下不打断用户 */ }
     }
-    poll()
-    const id = setInterval(poll, 30_000)
-    return () => clearInterval(id)
+
+    const start = () => {
+      poll()
+      id = setInterval(poll, 30_000)
+    }
+    const stop = () => {
+      if (id) { clearInterval(id); id = null }
+    }
+
+    const onVisibility = () => {
+      if (document.hidden) stop()
+      else start()
+    }
+
+    start()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [])
 
   // 调度器状态文本：复用为 a11y 标签与 Tooltip 标题
@@ -35,9 +56,9 @@ export default function MobileHeader() {
   if (schedulerRunning === null) schedulerLabel = '加载中'
   else if (schedulerRunning) schedulerLabel = '运行中'
   // S3358：状态点颜色拆分为独立变量
-  let statusColor = '#ff4d4f'
-  if (schedulerRunning === null) statusColor = '#d9d9d9'
-  else if (schedulerRunning) statusColor = '#52c41a'
+  let statusColor = themeToken.colorError
+  if (schedulerRunning === null) statusColor = themeToken.colorBorder
+  else if (schedulerRunning) statusColor = themeToken.colorSuccess
   // S4624：嵌套模板字面量提取为独立变量
   const alertSuffix = alertCount > 0 ? `，${alertCount} 条未读` : ''
 
@@ -71,8 +92,11 @@ export default function MobileHeader() {
             size="small"
             icon={<BellOutlined />}
             aria-label={`通知${alertSuffix}`}
+            onClick={() => navigate('/m/notifications/')}
           />
         </Badge>
+        {/* 账号切换：Dropdown 菜单，支持多账号切换 + 退出登录 */}
+        <AccountSwitcher />
       </div>
     </header>
   )

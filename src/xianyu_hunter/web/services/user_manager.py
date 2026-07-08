@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 
 # 默认 SQLite 数据库路径：get_user_manager 与 migrate_to_multi_user 共用
-_DB_PATH = "data/xianyu.db"
+# 为什么用 get_data_dir() 而不是 "data/xianyu.db"：
+# 打包后 CWD 不确定，相对路径会写入错误位置，导致 session_token 写入与校验不一致 → 401
+_DB_PATH = str(get_data_dir() / "xianyu.db")
 
 
 def _utcnow_iso() -> str:

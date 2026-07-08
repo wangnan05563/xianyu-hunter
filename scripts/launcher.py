@@ -47,6 +47,15 @@ def _setup_env() -> None:
     """
     if not _is_frozen():
         return
+    # 打包模式：chdir 到用户数据目录，让所有相对路径（data/xxx、.env、config/xxx）正确定位
+    # 为什么 chdir 而不是改每处路径：最小改动，不影响开发模式和 1394 个测试
+    # 为什么不 chdir 到 exe 所在目录：exe 目录可能只读，且用户数据应在 %APPDATA%
+    # 为什么在 sys.path.insert 之前：确保后续 import xianyu_hunter 时 config.py 的
+    #   env_file=".env" 能在 CWD=%APPDATA%/XianyuHunter/ 找到文件
+    _appdata = Path(os.environ.get("APPDATA", "")) / "XianyuHunter"
+    _appdata.mkdir(parents=True, exist_ok=True)
+    os.chdir(str(_appdata))
+
     # 通过 paths.py 推算程序安装目录
     sys.path.insert(0, str(Path(sys.executable).resolve().parent / "_internal"))
     from xianyu_hunter.paths import get_app_dir

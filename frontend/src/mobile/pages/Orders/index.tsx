@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { useEffect, useState, useCallback } from 'react'
 import { orderApi } from '../../../api'
 import type { OrderItem } from '../../../api/types'
+import { extractApiError } from '../../../utils/apiError'
 import PullToRefresh from '../../components/PullToRefresh'
 
 // 状态中文映射
@@ -31,7 +32,7 @@ export default function MobileOrders() {
       const data = await orderApi.list({ status: filterStatus })
       setOrders(data.items)
     } catch {
-      // 弱网保留已有数据
+      // 弱网保留已有数据，不弹错误提示打断用户浏览
     } finally {
       setLoading(false)
     }
@@ -45,8 +46,8 @@ export default function MobileOrders() {
       await orderApi.updateStatus(orderId, newStatus)
       message.success('状态已更新')
       fetchOrders() // 刷新列表
-    } catch {
-      message.error('更新失败')
+    } catch (e) {
+      message.error(extractApiError(e, '更新失败'), 3)
     }
   }
 

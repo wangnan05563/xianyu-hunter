@@ -20,13 +20,18 @@ import yaml
 from sqlalchemy import text as sa_text
 from sqlalchemy.engine import Engine
 
+# menu_registry.yaml 是只读资源（随安装包分发），应从安装目录读取
+# 为什么不用 get_config_dir()：那是可写目录（%APPDATA%），registry 不应运行时修改
+# 为什么不用 Path("config/menu_registry.yaml")：打包后 CWD 不确定，相对路径找不到文件
+from xianyu_hunter.paths import get_app_dir, get_data_dir
+
 logger = logging.getLogger(__name__)
 
 # 默认 SQLite 数据库路径：与 user_manager 共用同一实例
-_DB_PATH = "data/xianyu.db"
+_DB_PATH = str(get_data_dir() / "xianyu.db")
 
-# 菜单注册表路径：相对项目根目录，CWD 通常是项目根
-_REGISTRY_PATH = Path("config/menu_registry.yaml")
+# 菜单注册表路径：从安装目录读取（只读资源，随安装包分发）
+_REGISTRY_PATH = get_app_dir() / "config" / "menu_registry.yaml"
 
 
 def _utcnow_iso() -> str:
