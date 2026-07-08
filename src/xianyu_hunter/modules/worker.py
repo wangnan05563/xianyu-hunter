@@ -120,6 +120,9 @@ class TaskWorker:
         # 为什么缓存：避免每个商品都查询 task_links/items 表，单轮 run_once 内 P10 不变
         # None 表示未加载，float | None 表示加载后的值（None=无足够数据计算 P10）
         self._bargain_price_cache: float | None = None
+        # 捡漏价格数据来源缓存（sold/all_fallback/all_fallback_insufficient/empty）
+        # 为什么单独缓存：通知模板需展示来源，让用户事后能对比价格行情页口径
+        self._bargain_source_cache: str | None = None
         self._bargain_price_loaded: bool = False
 
     def _get_task_bargain_price(self) -> float | None:
@@ -127,6 +130,7 @@ class TaskWorker:
 
         复用 price_dashboard._compute_sold_range 保证口径与价格行情页一致。
         查询失败或无足够数据时返回 None，调用方按"未启用过滤"处理。
+        同时填充 _bargain_source_cache，供通知模板渲染实际数据来源。
         """
         if self._bargain_price_loaded:
             return self._bargain_price_cache
@@ -139,9 +143,11 @@ class TaskWorker:
             with self.repo.engine.connect() as conn:
                 stats = _compute_sold_range(conn, self.task.id, range_days=30)
                 self._bargain_price_cache = stats.get("bargain_price")
+                self._bargain_source_cache = stats.get("source")
         except Exception as e:
             logger.warning("[Task {}] 查询捡漏价格失败，开关过滤降级为未启用: {}", self.task.id, e)
             self._bargain_price_cache = None
+            self._bargain_source_cache = None
         return self._bargain_price_cache
 
     def cleanup(self) -> None:
@@ -250,6 +256,7 @@ class TaskWorker:
         # 每轮重置 P10 缓存：捡漏价格基于历史已售数据，新一轮可能已采集更多样本
         # 为什么不跨轮缓存：避免长期缓存导致 P10 滞后，开关过滤失效
         self._bargain_price_cache = None
+        self._bargain_source_cache = None
         self._bargain_price_loaded = False
 
         try:
@@ -793,12 +800,16 @@ class TaskWorker:
         if self.event_bus is None:
             return
         # 通知触发开关过滤：价格 > P10 时跳过通知
+        # 同时记录实际使用的捡漏价与来源，供通知模板展示口径一致性信息
+        bargain_used: float | None = None
+        bargain_source: str | None = None
         if getattr(self.task, "notify_bargain_only", False):
-            bargain = self._get_task_bargain_price()
-            if bargain is not None and detail.price is not None and detail.price > bargain:
+            bargain_used = self._get_task_bargain_price()
+            bargain_source = self._bargain_source_cache
+            if bargain_used is not None and detail.price is not None and detail.price > bargain_used:
                 logger.info(
                     "[Task {}] {} 价格 {} > 捡漏价 {}，notify_bargain_only 开关过滤跳过通知",
-                    self.task.id, detail.id, detail.price, bargain,
+                    self.task.id, detail.id, detail.price, bargain_used,
                 )
                 return
         try:
@@ -824,6 +835,11 @@ class TaskWorker:
                         # SEMI_AUTO 模式下通知模板需要渲染"确认抢单"链接，
                         # 让用户点击链接跳转到前端 /confirm-buy 页面触发抢单
                         "task_mode": self.task.mode.value,
+                        # 实际过滤使用的捡漏价与数据来源（仅 notify_bargain_only 启用时填充）
+                        # 为什么传给通知：让用户从通知内容能反查为何被推送，
+                        # 避免价格行情页"全部任务聚合值"与 worker"任务级 P10"口径不一致导致困惑
+                        "bargain_price_used": bargain_used,
+                        "bargain_source": bargain_source,
                     },
                 )
             )

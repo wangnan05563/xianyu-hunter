@@ -32,6 +32,8 @@ PUBLIC_PREFIXES = (
     "/api/docs", "/openapi.json",
     "/api/about",                # 关于菜单：系统元信息 + 检查更新
     "/api/tunnel",               # 内网穿透：未登录也需可查询/控制隧道（远程访问引导）
+    "/.well-known/",             # 浏览器/DevTools 自动探测路径（com.chrome.devtools.json 等），无需认证
+    "/@vite/client",             # Vite HMR 客户端：浏览器缓存开发模式 HTML 后误请求生产后端，无需认证
 )
 
 

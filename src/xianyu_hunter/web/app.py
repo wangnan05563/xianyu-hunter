@@ -508,6 +508,18 @@ def create_app() -> FastAPI:
     async def favicon() -> Response:
         return _build_favicon_response(static_dir)
 
+    # 噪音路径静默处理：浏览器/DevTools 自动探测或缓存残留导致的 404 噪音
+    # 返回 204 No Content 即可，无需业务逻辑
+    # - /.well-known/appspecific/com.chrome.devtools.json：Chrome DevTools 自动探测
+    # - /@vite/client：浏览器缓存 Vite dev server HTML 后误请求生产后端
+    @app.get("/.well-known/appspecific/com.chrome.devtools.json", include_in_schema=False)
+    async def chrome_devtools_probe() -> Response:
+        return Response(status_code=204)
+
+    @app.get("/@vite/client", include_in_schema=False)
+    async def vite_client() -> Response:
+        return Response(status_code=204)
+
     # /app/docs 重定向到 FastAPI 内置的 API 文档（docs_url=/api/docs）
     # 避免被下方 SPA catch-all 捕获后返回 index.html，导致前端路由跳回首页
     @app.get("/app/docs", include_in_schema=False)

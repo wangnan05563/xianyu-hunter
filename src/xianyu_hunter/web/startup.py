@@ -538,6 +538,26 @@ def _stop_all_sync_schedulers() -> None:
         _takeover_timeout_scheduler = None
 
 
+def _install_asyncio_exception_handler() -> None:
+    """注册 asyncio 事件循环异常处理器，过滤 Windows 平台 ConnectionResetError 噪音
+
+    背景：Windows ProactorEventLoop 在客户端关闭连接后，_call_connection_lost 回调
+    调用 socket.shutdown(SHUT_RDWR) 会抛出 WinError 10054。该异常由 asyncio 内部
+    回调触发，无法用 try/except 拦截，只能通过 loop.set_exception_handler 静默处理。
+    """
+    loop = asyncio.get_running_loop()
+
+    def _exception_handler(loop, context):
+        exception = context.get("exception")
+        # ConnectionResetError: WinError 10054 客户端主动断开，属正常行为
+        if isinstance(exception, ConnectionResetError):
+            return
+        # 其他异常走默认处理（输出到 stderr）
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_exception_handler)
+
+
 def setup_startup_hooks(app: FastAPI) -> None:
     """注册启动和关闭钩子
 
@@ -553,6 +573,11 @@ def setup_startup_hooks(app: FastAPI) -> None:
 
         # 初始化日志系统（含 run.stdout.log 文件 sink，供 SSE 日志流使用）
         setup_logging()
+
+        # 注册 asyncio 异常处理器：过滤 Windows ProactorEventLoop 的 ConnectionResetError
+        # 客户端关闭连接后，服务端 _call_connection_lost 调用 socket.shutdown(SHUT_RDWR) 抛 WinError 10054
+        # 这是 Windows 平台已知行为，无需告警，避免日志噪音
+        _install_asyncio_exception_handler()
 
         # container 必须先初始化，避免迁移失败时后续调度器启动引用未绑定变量
         container = get_container()

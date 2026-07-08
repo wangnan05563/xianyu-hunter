@@ -264,6 +264,11 @@ def _extract_eval_payload(event: Event) -> dict:
         # SEMI_AUTO 模式专属：模板渲染"确认抢单"链接，URL 指向前端 /confirm-buy 页面
         # 空 task_mode 视为非 SEMI_AUTO（保守降级，与历史 CONFIRM/NOTIFY_ONLY 行为一致）
         "task_mode": p.get("task_mode", "") or "",
+        # notify_bargain_only 启用时实际使用的捡漏价与数据来源
+        # 为什么透传到模板：让用户从通知直接看到本次过滤使用的 P10 与来源，
+        # 避免与价格行情页"全部任务聚合值"混淆
+        "bargain_price_used": p.get("bargain_price_used"),
+        "bargain_source": p.get("bargain_source"),
     }
 
 
@@ -292,6 +297,34 @@ def _build_eval_parts(data: dict, risk_color: str) -> list[str]:
     if data["data_quality"]:
         parts.append(f"**数据：** {data['data_quality']}")
     return parts
+
+
+# 捡漏价格数据来源 → 中文标签映射
+# 与 price_dashboard._compute_sold_range 的 source_label 保持一致，避免硬编码漂移
+_BARGAIN_SOURCE_LABELS: dict[str, str] = {
+    "sold": "已售商品成交价",
+    "all_fallback": "全部商品参考价（已售样本不足）",
+    "all_fallback_insufficient": "全部商品参考价（样本较少）",
+    "empty": "无数据",
+}
+
+
+def _build_bargain_filter_line(data: dict) -> str:
+    """构建捡漏过滤信息行（仅 notify_bargain_only 启用且 bargain_price_used 存在时返回）
+
+    为什么独立函数：渲染条件 + 来源标签查找 + 数值格式化组合，
+    与其他区块构建函数职责对称（_build_meta_parts / _build_eval_parts）。
+    未启用过滤时返回空串，调用方按 falsy 跳过，避免通知噪音。
+    """
+    bargain = data.get("bargain_price_used")
+    if bargain is None:
+        return ""
+    source = data.get("bargain_source") or ""
+    source_label = _BARGAIN_SOURCE_LABELS.get(source, source or "未知")
+    return (
+        f"**捡漏过滤：** 实际阈值 ¥{bargain:.2f}"
+        f"（来源：{source_label}）"
+    )
 
 
 def _build_reasons_lines(reasons: list) -> list[str]:
@@ -389,7 +422,13 @@ def _eval_passed(event: Event) -> tuple[str, str]:
     
     eval_parts = _build_eval_parts(data, risk_color)
     body_lines.append("    ".join(eval_parts))
-    
+
+    # 渲染实际过滤使用的捡漏价与数据来源（仅 notify_bargain_only 启用时填充）
+    # 为什么放在评估信息后、风险项前：让用户先看到价格决策依据，再看风险提示
+    bargain_line = _build_bargain_filter_line(data)
+    if bargain_line:
+        body_lines.append(bargain_line)
+
     if data["reasons"]:
         body_lines.extend(_build_reasons_lines(data["reasons"]))
     

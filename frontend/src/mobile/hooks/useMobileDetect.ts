@@ -8,7 +8,7 @@ const MOBILE_UA_PATTERN = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Op
 // 为什么需要宽度兜底：F12 设备模拟器 / 桌面窗口缩放 等场景下，
 // UA 不含移动端关键字时（如 Edge 中文版简化为 "Linux; Android 10"），
 // 仅靠 UA 识别会失效，导致桌面 SPA 在窄屏下被压成竖条
-const MOBILE_VIEWPORT_MAX = 768
+const MOBILE_VIEWPORT_MAX = 600
 
 export function isMobileUA(userAgent: string): boolean {
   if (MOBILE_UA_PATTERN.test(userAgent)) return true
@@ -19,16 +19,19 @@ export function isMobileUA(userAgent: string): boolean {
   return false
 }
 
-// 综合判定：UA + 视口宽度 + 触屏指针类型
+// 综合判定：UA + 视口宽度
 // 优先级：UA 最强（含 Mobile 关键字直接判为移动端），
-// 视口宽度作为窄屏兜底，触屏指针作为辅助
+// 视口宽度作为窄屏兜底
+// 注意：不要加 pointer:coarse 触屏指针判定！
+// 触屏笔记本 / 二合一设备 / Surface 触屏模式会触发 coarse，
+// 但视口宽度通常 >= 1024（桌面分辨率），若同时判定为移动端会导致
+// 桌面用户被强制跳到 /app/m/ 路由（PC 端完全不可用）。
 function detectMobile(): boolean {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
   if (isMobileUA(navigator.userAgent)) return true
   // 视口宽度兜底：F12 设备模拟器 / 窄屏浏览器自动识别
+  // 阈值从 768 降到 600：避免 1024 横向平板 / 桌面窗口缩到 700px 时误判
   if (window.innerWidth <= MOBILE_VIEWPORT_MAX) return true
-  // 触屏指针：surface / iPad Pro 等设备的细分场景
-  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 1024) return true
   return false
 }
 

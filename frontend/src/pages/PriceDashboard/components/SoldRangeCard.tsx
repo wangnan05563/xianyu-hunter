@@ -52,6 +52,10 @@ export default function SoldRangeCard({
   const hasTaskPriceRange = soldRange?.task_price_range
     && (soldRange.task_price_range.min_price != null || soldRange.task_price_range.max_price != null)
 
+  // 是否处于"全部任务聚合"模式：未选具体任务时返回的捡漏价是跨任务聚合值，
+  // 与 worker 实际过滤使用的"任务级 P10"口径不一致，需提示用户
+  const isAggregated = !soldTaskId
+
   // S4624: 把嵌套模板字面量的内层提取为独立变量，避免模板嵌套
   const filterNote = soldRange?.filtered_count ? `，本次共过滤 ${soldRange.filtered_count} 个` : ''
 
@@ -62,6 +66,15 @@ export default function SoldRangeCard({
   } else if (soldRange && soldRange.sample_size > 0) {
     bodyContent = (
       <>
+        {isAggregated && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12, fontSize: 12 }}
+            message="当前为全部任务聚合视图"
+            description="此处的捡漏价格是跨任务聚合的参考值，不会用于通知/抢单过滤。worker 推送过滤使用的是「具体任务的 P10」。请在下拉中选择对应任务查看实际过滤阈值。"
+          />
+        )}
         <Row gutter={16}>
           <Col xs={12} sm={6}>
             <Statistic
