@@ -104,14 +104,15 @@ class TaskConfig:
     适用于"每天 9:00-22:00 每 10 分钟一次"等作息化场景。
     """
     interval_seconds: float = 60.0
-    max_items_per_run: int = 20
+    max_items_per_run: int = 50
     stop_on_first_buy: bool = True
     cooldown_after_buy: float = 30.0
     # P1-7：是否使用 cron 表达式调度（True 时忽略 interval_seconds）
     use_cron: bool = False
     # 搜索参数（从 AppConfig.search 注入，控制 collector.search() 行为）
-    search_page_size: int = 20        # 单次搜索返回的商品条目数
+    search_page_size: int = 50        # 单次搜索返回的商品条目数
     search_sort_type: str = "default"  # 排序方式：default/newest/price_asc/price_desc/want_count
     search_timeout: int = 30          # 单次搜索请求的最大等待秒数
     search_regions: str = ""         # 地区过滤（逗号分隔，空字符串表示全国）
     search_filter_tags: Optional[list] = None  # 闲鱼筛选标签列表（如包邮、信用极好等）
+    search_max_pages: int = 5         # 搜索结果翻页深度（越大覆盖越全）

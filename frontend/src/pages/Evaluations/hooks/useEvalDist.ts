@@ -53,6 +53,12 @@ export function useEvalDist(
   const [thresholdValue, setThresholdValue] = useState(60)
   const [targetPassRate, setTargetPassRate] = useState(70)
 
+  // 解构出原始值字段，便于在 useEffect 依赖数组中精确订阅筛选变化
+  // 若直接将 filters 整体放入依赖数组会因对象引用每次渲染都变化导致无限刷新
+  const { taskId, priceRange, includeOutOfRange } = filters
+  const minPrice = priceRange[0]
+  const maxPrice = priceRange[1]
+
   const filtersRef = useRef(filters)
   filtersRef.current = filters
 
@@ -78,7 +84,11 @@ export function useEvalDist(
       .finally(() => setDistLoading(false))
   }, [distRange])
 
-  useEffect(() => { loadDist() }, [loadDist])
+  // loadDist 内部用 filtersRef.current 读取最新筛选，但函数引用仅依赖 distRange
+  // 因此显式订阅 taskId/价格范围/超范围切换，确保任务切换时统计栏同步刷新
+  useEffect(() => {
+    loadDist()
+  }, [loadDist, taskId, minPrice, maxPrice, includeOutOfRange])
 
   const fetchSuggestion = useCallback(() => {
     evalApi.thresholdSuggestion(thresholdTarget / 100)

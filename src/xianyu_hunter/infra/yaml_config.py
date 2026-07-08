@@ -191,11 +191,13 @@ class SearchConfig(BaseModel):
     - regions: 地区过滤（逗号分隔，空字符串表示全国）
     - filter_tags: 闲鱼筛选标签列表（如包邮、信用极好等）
     """
-    page_size: int = 20
+    page_size: int = 50
     sort_type: str = "default"
     timeout: int = 30
     regions: str = ""
     filter_tags: list[str] = Field(default_factory=list)
+    # 搜索结果翻页深度（每屏约20-26条，5屏≈100-130条），越大覆盖越全但耗时越长
+    max_pages: int = 5
 
 
 class PriceStrategyConfig(BaseModel):

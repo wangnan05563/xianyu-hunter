@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Card, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Tag, Alert, Spin, Empty, Modal, Table, Switch, theme } from 'antd'
+import { Card, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Tag, Alert, Spin, Empty, Table, Switch, theme } from 'antd'
 import {
   CloudDownloadOutlined,
   DollarCircleOutlined,
@@ -15,6 +15,7 @@ import type { DiffChange } from '../../stores/configStore'
 import { evalApi } from '../../api'
 import TagEditor from '../../components/editors/TagEditor'
 import { useAutoRefresh } from '../../hooks/useAutoRefresh'
+import { DiffPreviewModal } from '../../components/DiffPreviewModal'
 
 // 热力图坐标数据：从 distData.buckets 二维数组计算 ECharts 所需 [x, y, value] 列表与轴标签
 // 为什么提取：原实现包含 4 层嵌套（if + 3 个 for/forEach），留在组件内会让 EvalRules 复杂度超限
@@ -758,48 +759,13 @@ export default function EvalRules() {
         </Col>
       </Row>
 
-      {/* Diff 预览 Modal */}
-      <Modal
-        title="配置变更预览"
+      <DiffPreviewModal
         open={diffModalOpen}
+        diffChanges={diffChanges}
+        loading={saving}
         onCancel={() => setDiffModalOpen(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>
-            取消
-          </Button>,
-          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>
-            确认保存
-          </Button>,
-        ]}
-        width={700}
-      >
-        <Table
-          dataSource={diffChanges}
-          rowKey="path"
-          pagination={false}
-          size="small"
-          columns={[
-            { title: '路径', dataIndex: 'path', key: 'path' },
-            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
-            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
-            {
-              title: '操作',
-              dataIndex: 'op',
-              key: 'op',
-              render: (op: string) => {
-                // op → 颜色/文案映射，未知 op 走 default 分支
-                const opColorMap: Record<string, string> = { add: 'green', delete: 'red' }
-                const opLabelMap: Record<string, string> = { add: '新增', delete: '删除' }
-                return (
-                  <Tag color={opColorMap[op] ?? 'orange'}>
-                    {opLabelMap[op] ?? '修改'}
-                  </Tag>
-                )
-              },
-            },
-          ]}
-        />
-      </Modal>
+        onConfirm={handleConfirmSave}
+      />
     </div>
   )
 }

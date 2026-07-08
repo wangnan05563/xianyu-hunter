@@ -20,11 +20,17 @@ client.interceptors.request.use((config) => {
 // 多次 location.href 跳转会在渲染过程中断页面，可能造成白屏
 let isRedirecting = false
 
-// 响应拦截器：401 自动跳转登录页
+// 响应拦截器：认证 401 自动跳转登录页
+// 为什么区分 detail：业务逻辑（如采集 cookie 失效）也可能返回 401，
+// 但只有认证中间件返回 {"detail":"Unauthorized"} 才是真正的 token 失效，
+// 业务 401 由调用方 catch 自行处理（如显示错误提示），不应跳转登录页
 client.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const isAuthUnauthorized =
+      error.response?.status === 401 &&
+      error.response?.data?.detail === 'Unauthorized'
+    if (isAuthUnauthorized) {
       localStorage.removeItem('xh_token')
       // 避免在登录页本身触发跳转（防止死循环）
       // 路径匹配必须用 /app/login：SPA 挂载在 /app/ 下（vite base + BrowserRouter basename）

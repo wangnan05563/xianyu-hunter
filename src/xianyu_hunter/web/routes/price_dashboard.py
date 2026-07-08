@@ -74,8 +74,13 @@ def _build_task_select(task_id: str | None):
 
     提取为独立函数：消除 _load_category_prices 中 task_id 分支的重复 SQL 构建，
     降低认知复杂度（S3776）。task_id 为 None 时返回全量查询。
+
+    为什么过滤 status != 'deleted'：与 repo_tasks.list_tasks_with_last_seen 保持一致，
+    避免已删除任务仍以"空样本品类"形式出现在价格行情页面。
+    task_id 明确指定时也过滤，防止用户删除后仍能查到该任务的统计。
     """
     stmt = select(TaskRow.id, TaskRow.name, TaskRow.keyword, TaskRow.min_price, TaskRow.max_price)
+    stmt = stmt.where(TaskRow.status != "deleted")
     if task_id:
         stmt = stmt.where(TaskRow.id == task_id)
     return stmt
@@ -250,9 +255,11 @@ def _filter_category_prices_by_range(conn, task_map: dict, range_days: int) -> N
         return
     cutoff = _utcnow() - timedelta(days=range_days)
     # 重新加载带时间过滤的样本
+    # publish_time 为 NULL 的样本也保留：DOM 回退解析可能无法提取发布时间，
+    # 这些商品仍有价格参考价值，不应因时间窗过滤被排除
     item_rows = conn.execute(
         select(ItemRow.task_id, ItemRow.price, ItemRow.publish_time)
-        .where(ItemRow.publish_time >= cutoff)
+        .where((ItemRow.publish_time >= cutoff) | (ItemRow.publish_time.is_(None)))
     ).all()
     # 清空原有 prices，重新填充
     for info in task_map.values():
@@ -368,7 +375,8 @@ def category_comparison(
 # ============== 同类物品已售价格区间（捡漏价格参考）=============
 
 # 已售样本不足时的回退阈值：低于此值时回退到全部商品价格
-_MIN_SOLD_SAMPLES = 3
+# 旧值 3 过低导致"3 笔已售=可信"的误判，实际 3 笔可能都是同一卖家或异常标价
+_MIN_SOLD_SAMPLES = 10
 
 
 def _load_sold_prices_from_links(
@@ -498,7 +506,8 @@ def _load_all_prices_from_items(
         stmt = stmt.where(ItemRow.task_id == task_id)
     if range_days > 0:
         cutoff = _utcnow() - timedelta(days=range_days)
-        stmt = stmt.where(ItemRow.publish_time >= cutoff)
+        # publish_time 为 NULL 的样本也保留（同 _filter_category_prices_by_range 逻辑）
+        stmt = stmt.where((ItemRow.publish_time >= cutoff) | (ItemRow.publish_time.is_(None)))
 
     rows = conn.execute(stmt).all()
     typed: list[tuple[str | None, float]] = []
@@ -536,11 +545,17 @@ def _compute_sold_range(
     source = "sold"
     prices = sold_prices
     raw_total = sold_raw
-    # 已售样本不足时回退到全部商品价格
+    # 已售样本不足时补充全部商品价格
     if len(sold_prices) < _MIN_SOLD_SAMPLES:
         all_prices, all_raw = _load_all_prices_from_items(conn, task_id, range_days, task_range)
         raw_total += all_raw
-        if len(all_prices) >= _MIN_SOLD_SAMPLES:
+        if len(sold_prices) > 0 and len(all_prices) > 0:
+            # 混合模式：已售样本权重2x + 全部商品
+            # 已售样本虽少但代表真实成交价，权重加倍保留参考价值；
+            # 全部商品补充样本量，避免少量已售样本导致的统计偏差
+            prices = sold_prices * 2 + all_prices
+            source = "mixed"
+        elif len(all_prices) >= _MIN_SOLD_SAMPLES:
             prices = all_prices
             source = "all_fallback"
         elif all_prices:
@@ -595,6 +610,7 @@ def _compute_sold_range(
 
     source_label = {
         "sold": "已售商品成交价",
+        "mixed": "已售+全部商品混合价（已售样本较少）",
         "all_fallback": "全部商品参考价（已售样本不足）",
         "all_fallback_insufficient": "全部商品参考价（样本较少）",
     }.get(source, source)

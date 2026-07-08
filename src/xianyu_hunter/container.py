@@ -347,6 +347,7 @@ class Container:
             "timeout": search_cfg.timeout,
             "regions": search_cfg.regions,
             "filter_tags": search_cfg.filter_tags,
+            "max_pages": search_cfg.max_pages,
         }
         if task_search_override:
             for k in effective_search:
@@ -358,6 +359,7 @@ class Container:
             search_timeout=effective_search["timeout"],
             search_regions=effective_search["regions"],
             search_filter_tags=effective_search["filter_tags"],
+            search_max_pages=effective_search["max_pages"],
             use_cron=task.use_cron,
             interval_seconds=task.interval_seconds,
         )

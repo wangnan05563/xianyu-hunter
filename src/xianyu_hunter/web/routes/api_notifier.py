@@ -37,6 +37,22 @@ _CHANNEL_CREATION_PARAMS: dict[str, list[str]] = {
     "ntfy": ["server", "topic", "token"],
 }
 
+# 前端字段名（= keyring KEY = yaml 字段名）→ notifier __init__ 参数名
+# 为什么需要：前端字段名带渠道前缀避免跨渠道冲突，notifier __init__ 用语义化参数名。
+# container._build_yaml_credentials 已做同样映射，test_notify 需保持一致，
+# 否则未映射的参数经 **kwargs 传入 BaseNotifier.__init__ 触发 TypeError
+_FRONTEND_TO_NOTIFIER_PARAMS: dict[str, str] = {
+    "serverchan_send_key": "send_key",
+    "pushplus_token": "token",
+    "bark_server": "server",
+    "bark_key": "key",
+    "telegram_bot_token": "bot_token",
+    "telegram_chat_id": "chat_id",
+    "wecom_webhook": "webhook_url",
+    "dingtalk_webhook": "webhook_url",
+    "dingtalk_secret": "secret",
+}
+
 
 class QuietHoursBody(BaseModel):
     """PUT 请求体：quiet hours 完整配置"""
@@ -165,9 +181,15 @@ async def test_notify(body: TestNotifyBody) -> dict[str, Any]:
 
     try:
         registry = NotifierRegistry.default()
+        # 前端字段名 → notifier __init__ 参数名映射
+        # 不映射则未识别参数经 **kwargs 传入 BaseNotifier 触发 TypeError
+        mapped_credentials = {
+            _FRONTEND_TO_NOTIFIER_PARAMS.get(k, k): v
+            for k, v in body.credentials.items()
+        }
         # 用前端传来的凭据创建 Notifier（而非 keyring 中的值，
         # 因为用户可能正在修改配置，需要验证新值是否有效）
-        notifier = registry.create(channel, **body.credentials)
+        notifier = registry.create(channel, **mapped_credentials)
         result = await notifier.send(test_event)
 
         return {

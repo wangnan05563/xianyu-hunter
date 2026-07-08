@@ -24,6 +24,18 @@ from xianyu_hunter.modules.evaluator import PriceRange
 logger = get_logger()
 
 
+def _should_skip_notify_by_bargain(
+    container: Any, task_id: str, item_price: float | None,
+) -> bool:
+    """notify_bargain_only 过滤的局部转发（避免 collection_service 与 evaluations_common 循环导入）
+
+    为什么用局部 import 而非模块顶部：evaluations_common 间接依赖 collection_service
+    所在的 modules 包，顶部导入有循环风险；函数内导入在调用时才解析，此时模块已加载完毕。
+    """
+    from xianyu_hunter.web.routes.evaluations_common import should_skip_notify_by_bargain
+    return should_skip_notify_by_bargain(container, task_id, item_price)
+
+
 class CollectionMode(str, Enum):
     DETAIL_ONLY = "detail_only"
     OFFICIAL_FULL = "official_full"
@@ -427,10 +439,12 @@ class ItemCollectionService:
         """
         await self._sync_detail_cookies()
         # cookie 完整性预检：detail() 返回 None 时上游无法区分原因，
-        # 预检可在调用前识别 cookie 不完整问题，给出 401 而非含糊的 502
+        # 预检可在调用前识别 cookie 不完整问题，给出 440 而非含糊的 502
+        # 为什么用 440 而非 401：401 与认证中间件冲突，前端会把 401 当作
+        # token 失效跳转登录页；440 (Login Timeout) 与 official-full 一致
         cookie_issue = await self._check_detail_cookie_completeness()
         if cookie_issue:
-            raise CollectionError(401, cookie_issue, item_id=item_id)
+            raise CollectionError(440, cookie_issue, item_id=item_id)
 
         detail = await self.container.collector.detail(item_id, page=reuse_page)
 
@@ -479,16 +493,18 @@ class ItemCollectionService:
         为什么这么做：所有失败都抛 502 会让用户无法判断是该重登录、该等待还是该手动验证。
         总是抛异常，不会正常返回。
         """
-        # detail 失败后再次检查 cookie 完整性：cookie 不完整时给 401 而非 502
+        # detail 失败后再次检查 cookie 完整性：cookie 不完整时给 440 而非 502
+        # 为什么 440 而非 401：与 _collect_detail_only 预检一致，避免与认证中间件 401 冲突
         cookie_issue = await self._check_detail_cookie_completeness()
         if cookie_issue:
-            raise CollectionError(401, cookie_issue, item_id=item_id)
+            raise CollectionError(440, cookie_issue, item_id=item_id)
 
         reason = getattr(self.container.collector, "last_detail_failure_reason", "") or "unknown"
         if reason in ("home_title_redirect", "login_redirect"):
             # cookie 失效或 _m_h5_tk token 过期，需用户重新登录
+            # 440 与 official-full 的 cookie expired 语义一致
             raise CollectionError(
-                401,
+                440,
                 "采集失败：登录态失效或 _m_h5_tk token 过期，请重新登录或导入完整 Cookie",
                 item_id=item_id,
             )
@@ -638,11 +654,19 @@ class ItemCollectionService:
         不应与商品下架(410)混为一谈，否则前端无法给出正确的用户引导。
         """
         detail = await self.container.collector.detail(item_id, page=page)
+
+        # token 失效自动重试：home_title_redirect 通常是 _m_h5_tk 过期被重定向到首页
+        # 与 _collect_detail_only 保持一致，强制刷新 token 后重试一次
+        # 避免用户因偶发 token 过期看到 403（与右上角 cookie 健康检查显示"有效"矛盾）
         if detail is None:
             reason = getattr(self.container.collector, "last_detail_failure_reason", "unknown")
             logger.warning(
                 "官方采集 detail 返回 None: item={}, failure_reason={}", item_id, reason,
             )
+            detail = await self._refresh_token_and_retry_detail(item_id, page)
+
+        if detail is None:
+            reason = getattr(self.container.collector, "last_detail_failure_reason", "unknown")
             status_code = self._DETAIL_FAILURE_STATUS_MAP.get(reason, 410)
             if status_code == 403:
                 detail_msg = f"Failed to collect item {item_id}: login session expired (reason: {reason}), please re-login"
@@ -913,9 +937,15 @@ class ItemCollectionService:
         为什么用 publish_nowait 而非 await publish：
         - 调用方 _collect_official_and_evaluate 虽是 async，但通知是 fire-and-forget
         - 同步入队避免阻塞评估主流程，事件由 EventBus.run_forever 异步消费
+
+        notify_bargain_only 过滤：与 worker 路径对齐，价格 > P10 时跳过通知发布。
+        之前此方法缺失过滤，导致官方采集路径绕过开关，高价商品仍触发钉钉通知。
         """
         bus = getattr(self.container, "event_bus", None)
         if bus is None:
+            return
+        # notify_bargain_only 价格过滤：与 worker._publish_eval_passed_event 对齐
+        if _should_skip_notify_by_bargain(self.container, task_id, detail.price):
             return
         # task_mode 与 worker 对齐：SEMI_AUTO 模式下模板渲染"确认抢单"链接
         # task_id 为空时（如独立采集无任务关联）mode 取默认值 confirm，避免 KeyError

@@ -14,7 +14,7 @@ browser:
   cdp_port: 9222
   proxy_server: ''
 antidetect:
-  qps: 20
+  qps: 5
   min_delay_ms: 3000
   max_delay_ms: 4500
   fail_pause_threshold: 3
@@ -94,9 +94,10 @@ pushplus_token: ''
 bark_server: ''
 bark_key: ''
 search:
-  page_size: 20
+  page_size: 50
   sort_type: newest
   timeout: 90
+  max_pages: 5
   regions: ''
   filter_tags:
   - personal_idle
@@ -105,16 +106,16 @@ search:
   - 包邮
 price_strategy:
   enabled_max: true
-  max_price: 750
+  max_price: 800
   enabled_min: true
-  min_price: 600
+  min_price: 200
   enabled_market_ratio: true
-  market_ratio: 0.85
+  market_ratio: 0.9
   enabled_top_n: true
   top_n: 10
 batch_refresh:
   enabled: true
-  interval_minutes: 30
+  interval_minutes: 60
   batch_size: 50
   max_items_per_run: 100
   history_retention_days: 90
@@ -175,6 +176,43 @@ task_scheduler:
   default_interval_seconds: 60
   auto_search_enabled: false
   auto_search_concurrency: 1
+  error_retry_wait_seconds: 300
+  scheduler_runtime_toggle:
+    enabled: true
+    require_enabled_field: true
+    require_update_config_method: true
+    require_remove_job_on_disable: true
+    target_schedulers:
+    - BatchRefreshScheduler
+    - CookieSyncScheduler
+  time_param_config_driven:
+    enabled: true
+    forbidden_hardcoded_patterns:
+    - time.sleep(300)
+    - asyncio.sleep(300)
+    - await asyncio.sleep(300)
+    require_config_key: true
+    scan_modules:
+    - modules/scheduler.py
+    - modules/batch_refresh_scheduler.py
+    - modules/cookie_sync_scheduler.py
+  lifecycle_resource_cleanup:
+    enabled: true
+    require_drop_method: true
+    target_state_holders:
+    - _resume_cooldown
+    - _task_states
+    - _active_tasks
+    audit_interval_seconds: 3600
+  cron_min_interval_check:
+    enabled: true
+    experimental: true
+    min_interval_seconds: 60
+    blocked_patterns:
+    - '* * * * *'
+    - '*/1 * * * *'
+    require_parser_library: true
+    require_submit_revalidate: true
 cookie_management:
   key_cookies:
   - _m_h5_tk
@@ -265,3 +303,5 @@ subprocess_sync:
   pending_file_path: data/.cookie_sync_pending
   poll_interval_sec: 30
   startup_check_enabled: true
+bargain_price:
+  percentile: 0.1

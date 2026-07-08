@@ -6,7 +6,7 @@ import {
 import {
   ArrowLeftOutlined, ArrowRightOutlined, CheckCircleOutlined, SettingOutlined,
   UndoOutlined, SaveOutlined, ExclamationCircleOutlined, RobotOutlined,
-  CloudDownloadOutlined, ThunderboltOutlined,
+  CloudDownloadOutlined, ThunderboltOutlined, SearchOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import TagEditor from '../../components/editors/TagEditor'
@@ -349,6 +349,7 @@ export default function TaskEditor() {
   const [evalModalOpen, setEvalModalOpen] = useState(false)
   const [batchRefreshModalOpen, setBatchRefreshModalOpen] = useState(false)
   const [antidetectModalOpen, setAntidetectModalOpen] = useState(false)
+  const [searchConfigModalOpen, setSearchConfigModalOpen] = useState(false)
 
   // 草稿自动保存/恢复（迁移到统一 storage 工具，v3 格式与旧版不兼容，旧草稿自动失效）
   // v3：新增任务级覆盖字段，v2 草稿会被 validator 拒绝从而失效，避免字段缺失
@@ -741,7 +742,7 @@ export default function TaskEditor() {
             <Button
               size="small"
               icon={<SettingOutlined />}
-              onClick={() => navigate('/app/config/search')}
+              onClick={() => setSearchConfigModalOpen(true)}
             >
               全局搜索配置
             </Button>
@@ -758,7 +759,7 @@ export default function TaskEditor() {
           <Form layout="vertical">
             <Form.Item
               label="单页搜索条数（page_size）"
-              help={`全局当前值：${globalConfig?.search.page_size ?? 20} 条`}
+              help={`全局当前值：${globalConfig?.search.page_size ?? 50} 条`}
             >
               <Space.Compact style={{ width: 200 }}>
                 <InputNumber
@@ -1055,6 +1056,11 @@ export default function TaskEditor() {
 
       {/* 全局反检测配置快捷入口 Modal */}
       <GlobalAntidetectConfigModal open={antidetectModalOpen} onClose={() => setAntidetectModalOpen(false)} onSaved={() => {
+        configApi.get().then(setGlobalConfig).catch(() => {})
+      }} />
+
+      {/* 全局搜索配置快捷入口 Modal：与其他步骤一致，避免 navigate 跳转导致编辑上下文丢失 */}
+      <GlobalSearchConfigModal open={searchConfigModalOpen} onClose={() => setSearchConfigModalOpen(false)} onSaved={() => {
         configApi.get().then(setGlobalConfig).catch(() => {})
       }} />
     </div>
@@ -1715,6 +1721,168 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
                 秒
               </div>
             </Space.Compact>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="配置变更预览"
+        open={diffModalOpen}
+        onCancel={() => setDiffModalOpen(false)}
+        footer={[
+          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>取消</Button>,
+          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</Button>,
+        ]}
+        width={700}
+      >
+        <Table
+          dataSource={diffChanges}
+          rowKey="path"
+          pagination={false}
+          size="small"
+          columns={[
+            { title: '路径', dataIndex: 'path', key: 'path' },
+            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: renderDiffValue },
+            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: renderDiffValue },
+            { title: '操作', dataIndex: 'op', key: 'op', render: renderOpTag },
+          ]}
+        />
+      </Modal>
+    </>
+  )
+}
+
+// ============== 全局搜索配置快捷入口 Modal ==============
+// 与 GlobalEvalConfigModal/GlobalAntidetectConfigModal 模式一致
+// 为什么用 Modal 而非 navigate：避免离开 TaskEditor 编辑上下文，
+// 且 SheetWorkspace 在 openSheet 失败时（栈满/not_found）不改变 activeId，
+// 但 URL 已变会导致 useParams 返回错误值，使 isEdit 误判为 false
+function GlobalSearchConfigModal({ open, onClose, onSaved }: { readonly open: boolean; readonly onClose: () => void; readonly onSaved: () => void }) {
+  const { config, load, update, previewSave, confirmSave, hasChanges, reset } = useConfigStore()
+  const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
+  const [diffModalOpen, setDiffModalOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (open) load()
+  }, [open, load])
+
+  const handleSave = async () => {
+    if (!config) return
+    try {
+      setSaving(true)
+      const changes = await previewSave()
+      if (changes.length === 0) {
+        message.info('配置未变更')
+        return
+      }
+      setDiffChanges(changes)
+      setDiffModalOpen(true)
+    } catch (e) {
+      message.error(extractApiError(e), 5)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleConfirmSave = async () => {
+    try {
+      setSaving(true)
+      await confirmSave()
+      setDiffModalOpen(false)
+      message.success('全局搜索配置已保存')
+      onSaved()
+      onClose()
+    } catch (e) {
+      message.error(extractApiError(e), 5)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!config) return null
+  const sc = config.search
+
+  return (
+    <>
+      <Modal
+        title={
+          <Space>
+            <SearchOutlined />
+            <span>全局搜索参数配置</span>
+          </Space>
+        }
+        open={open}
+        onCancel={onClose}
+        width={720}
+        footer={[
+          <Button key="cancel" onClick={onClose}>取消</Button>,
+          <Button key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</Button>,
+          <Button key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>,
+        ]}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="此配置为全局设置，对所有任务生效"
+          description="任务级覆盖优先于全局配置。反检测参数（QPS/延迟）请在 Step 5 修改。"
+          style={{ marginBottom: 16 }}
+        />
+
+        <Form layout="vertical">
+          <Form.Item label="每页结果数量（page_size）" help="单次请求返回的商品条目数">
+            <Select
+              value={sc.page_size}
+              onChange={(v) => update({ search: { ...sc, page_size: v } })}
+              options={[
+                { label: '20 条/页', value: 20 },
+                { label: '40 条/页', value: 40 },
+                { label: '60 条/页', value: 60 },
+                { label: '100 条/页', value: 100 },
+              ]}
+              style={{ width: 200 }}
+            />
+          </Form.Item>
+
+          <Form.Item label="排序方式（sort_type）" help="搜索结果的默认排序规则">
+            <Select
+              value={sc.sort_type}
+              onChange={(v) => update({ search: { ...sc, sort_type: v } })}
+              options={sortTypeOptions}
+              style={{ width: 200 }}
+            />
+          </Form.Item>
+
+          <Form.Item label="搜索超时（timeout）" help="单次搜索请求的最大等待时间">
+            <Space.Compact style={{ width: 200 }}>
+              <InputNumber
+                min={10}
+                max={120}
+                value={sc.timeout}
+                onChange={(v) => update({ search: { ...sc, timeout: v ?? 30 } })}
+                style={{ width: '100%' }}
+              />
+              <div className="ant-input-number-group-addon" style={{ display: 'flex', alignItems: 'center', padding: '0 11px', background: 'var(--xh-bg-spotlight, rgba(0,0,0,0.06))', border: '1px solid var(--xh-border-color, #d9d9d9)', borderLeft: 'none', borderRadius: '0 6px 6px 0' }}>
+                秒
+              </div>
+            </Space.Compact>
+          </Form.Item>
+
+          <Form.Item label="地区过滤（regions）" help='多个地区用英文逗号分隔（如 "北京,上海,广州"），空表示全国'>
+            <Input
+              value={sc.regions || ''}
+              onChange={(e) => update({ search: { ...sc, regions: e.target.value } })}
+              placeholder="例：北京,上海,广州"
+            />
+          </Form.Item>
+
+          <Form.Item label="筛选标签（filter_tags）" help="仅显示带有以下标签的商品">
+            <TagEditor
+              value={sc.filter_tags ?? []}
+              onChange={(v) => update({ search: { ...sc, filter_tags: v } })}
+              placeholder="输入筛选标签后回车"
+              color="blue"
+            />
           </Form.Item>
         </Form>
       </Modal>

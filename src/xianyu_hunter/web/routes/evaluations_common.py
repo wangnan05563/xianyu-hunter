@@ -194,6 +194,56 @@ def is_price_skipped(
 
 
 # ============== EVAL_PASSED 事件发布 ==============
+
+def should_skip_notify_by_bargain(
+    container: Container, task_id: str, item_price: float | None,
+) -> bool:
+    """notify_bargain_only 开关过滤：返回 True 表示应跳过通知
+
+    与 worker._publish_eval_passed_event 的过滤逻辑对齐，确保所有 EVAL_PASSED
+    发布点统一遵守价格过滤。解决元规范 #43（事件多发布点字段对齐）违规：
+    之前只有 worker 路径过滤，官方采集/批量评估/重算等旁路绕过过滤，
+    导致启用 notify_bargain_only 后高价商品仍触发钉钉通知。
+
+    适用场景：非 worker 路径的 EVAL_PASSED 发布（官方采集/批量评估/重算/补发）
+    不适用场景：worker 路径（已有实例级 P10 缓存，复用 _get_task_bargain_price 更高效）
+
+    降级策略：开关关闭 / P10 查询失败 / 无足够已售数据 → 返回 False（不过滤），
+    与 worker 的降级行为一致，避免阻断通知链。
+    """
+    if item_price is None:
+        return False
+    try:
+        task_row = container.repo.get_task(task_id)
+        if not task_row:
+            return False
+        # DB 中 notify_bargain_only 是 INTEGER(0/1)，bool() 转换
+        if not bool(task_row.get("notify_bargain_only")):
+            return False
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("notify_bargain_only 开关读取失败 task={}: {}", task_id, exc)
+        return False
+    # 查任务级 P10 捡漏价，与 worker._get_task_bargain_price 口径一致
+    # 为什么 range_days=30：与 worker 保持一致，捡漏参考取近 30 天已售数据
+    try:
+        from xianyu_hunter.web.routes.price_dashboard import _compute_sold_range
+        with container.repo.engine.connect() as conn:
+            stats = _compute_sold_range(conn, task_id, range_days=30)
+        bargain_price = stats.get("bargain_price")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("捡漏价格查询失败，过滤降级为未启用 task={}: {}", task_id, exc)
+        return False
+    if bargain_price is None:
+        return False
+    if item_price > bargain_price:
+        logger.info(
+            "[Task {}] 价格 {} > 捡漏价 {}，notify_bargain_only 过滤跳过通知",
+            task_id, item_price, bargain_price,
+        )
+        return True
+    return False
+
+
 def publish_eval_passed_event(
     container: Container,
     task_id: str,
@@ -211,9 +261,16 @@ def publish_eval_passed_event(
     - 用 getattr 安全访问 detail/seller 字段，兼容 ItemDetail 与 ItemRow 两种类型
 
     为什么用 publish_nowait：调用方在同步函数中，EventBus.run_forever 异步消费
+
+    notify_bargain_only 过滤：与 worker 路径对齐，价格 > P10 时跳过通知发布。
+    之前此函数缺失过滤，导致批量评估/重算路径绕过开关，高价商品仍触发钉钉通知。
     """
     bus = getattr(container, "event_bus", None)
     if bus is None:
+        return
+    # notify_bargain_only 价格过滤：与 worker._publish_eval_passed_event 对齐
+    item_price = getattr(detail, "price", None)
+    if should_skip_notify_by_bargain(container, task_id, item_price):
         return
     # task_mode 与 worker 对齐：SEMI_AUTO 模式下模板渲染"确认抢单"链接
     # 补发场景没有 task 对象上下文，需要查 DB；查询失败时 mode 为空字符串，

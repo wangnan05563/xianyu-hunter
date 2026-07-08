@@ -10,13 +10,12 @@ import {
   Typography,
   Row,
   Col,
-  Modal,
-  Table,
 } from 'antd'
 import { SaveOutlined, UndoOutlined, BellOutlined, AimOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons'
 import { useConfigStore } from '../../stores/configStore'
 import type { DiffChange } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
+import { DiffPreviewModal } from '../../components/DiffPreviewModal'
 
 const { Text, Paragraph } = Typography
 
@@ -243,48 +242,13 @@ export default function BuyerStrategy() {
         />
       </Card>
 
-      {/* Diff 预览 Modal */}
-      <Modal
-        title="配置变更预览"
+      <DiffPreviewModal
         open={diffModalOpen}
+        diffChanges={diffChanges}
+        loading={saving}
         onCancel={() => setDiffModalOpen(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>
-            取消
-          </Button>,
-          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>
-            确认保存
-          </Button>,
-        ]}
-        width={700}
-      >
-        <Table
-          dataSource={diffChanges}
-          rowKey="path"
-          pagination={false}
-          size="small"
-          columns={[
-            { title: '路径', dataIndex: 'path', key: 'path' },
-            { title: '原值', dataIndex: 'old_value', key: 'old_value', render: (v) => v == null ? '-' : String(v) },
-            { title: '新值', dataIndex: 'new_value', key: 'new_value', render: (v) => v == null ? '-' : String(v) },
-            {
-              title: '操作',
-              dataIndex: 'op',
-              key: 'op',
-              render: (op: string) => {
-                // op → 颜色/文案映射，未知 op 走 default 分支
-                const opColorMap: Record<string, string> = { add: 'green', delete: 'red' }
-                const opLabelMap: Record<string, string> = { add: '新增', delete: '删除' }
-                return (
-                  <Tag color={opColorMap[op] ?? 'orange'}>
-                    {opLabelMap[op] ?? '修改'}
-                  </Tag>
-                )
-              },
-            },
-          ]}
-        />
-      </Modal>
+        onConfirm={handleConfirmSave}
+      />
     </div>
   )
 }

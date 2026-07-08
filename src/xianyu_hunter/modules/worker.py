@@ -520,6 +520,7 @@ class TaskWorker:
                     skip_rgv587_retry=True,
                     sort_type=self.config.search_sort_type,
                     regions=self.config.search_regions,
+                    max_pages=self.config.search_max_pages,
                 ),
                 timeout=float(search_timeout),
             )

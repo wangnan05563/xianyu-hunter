@@ -228,9 +228,14 @@ export default function ItemList() {
     taskApi.list({ limit: 200 }).then((res) => {
       const items = res.items || []
       setTasks(items)
-      // 仅在未选择任务时自动选中第一个（首次访问或持久化值为 null）
-      if (items.length > 0 && !selectedTaskRef.current) {
+      // 校验持久化的 selectedTask 是否仍存在：任务被删除后 localStorage 残留旧 ID
+      // 会触发后续 links 接口 404，需在此时重置为第一个可用任务
+      const currentExists = items.some((t) => t.id === selectedTaskRef.current)
+      if (items.length > 0 && (!selectedTaskRef.current || !currentExists)) {
         setSelectedTask(items[0].id)
+      } else if (items.length === 0 && selectedTaskRef.current) {
+        // 任务列表为空时清空残留 ID，避免后续请求 404
+        setSelectedTask(null)
       }
     }).catch(() => message.error('加载任务列表失败'))
   }, [])

@@ -53,7 +53,9 @@ export default function MobileAccountSwitcher() {
     } finally {
       setLoading(false)
     }
-  }, [])
+    // deps 防御性声明：当前全部为稳定引用（模块导入 + useState setter），不会触发重建
+    // 仍显式列出以符合 exhaustive-deps 规范，规避未来若 authApi/extractApiError 改为动态注入时的 stale closure 风险
+  }, [authApi, setAccounts, setLoading, extractApiError])
 
   const handleOpenChange = useCallback((visible: boolean) => {
     setOpen(visible)

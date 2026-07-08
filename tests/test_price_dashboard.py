@@ -283,6 +283,57 @@ def test_category_comparison_empty(client: TestClient, tmp_repo: Repository) -> 
     assert data["overall_mean"] == 0.0
 
 
+def test_category_stats_excludes_deleted_task(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """已删除任务不应出现在价格行情统计
+
+    修复前：_build_task_select 未过滤 status != 'deleted'，
+    导致用户删除任务后价格行情仍显示该品类（样本数为 0 的空品类）。
+    """
+    _seed_multi_category_data(tmp_repo)
+    # 删除任务 t3（手机壳）
+    tmp_repo.update_task_status("t3", "deleted")
+    resp = client.get("/api/prices/category-stats", headers=_auth_headers())
+    assert resp.status_code == 200
+    data = resp.json()
+    # 应只剩 2 个品类（iPhone + 键盘），不是 3 个
+    assert len(data["categories"]) == 2
+    task_ids = {c["task_id"] for c in data["categories"]}
+    assert "t3" not in task_ids
+
+
+def test_category_comparison_excludes_deleted_task(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """已删除任务不应出现在品类横向对比"""
+    _seed_multi_category_data(tmp_repo)
+    tmp_repo.update_task_status("t2", "deleted")
+    resp = client.get(
+        "/api/prices/category-comparison", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["categories"]) == 2
+    task_ids = {c["task_id"] for c in data["categories"]}
+    assert "t2" not in task_ids
+
+
+def test_category_stats_deleted_single_task_returns_empty(
+    client: TestClient, tmp_repo: Repository,
+) -> None:
+    """查询已删除的单个任务时返回空品类列表"""
+    _seed_multi_category_data(tmp_repo)
+    tmp_repo.update_task_status("t1", "deleted")
+    resp = client.get(
+        "/api/prices/category-stats?task_id=t1", headers=_auth_headers()
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["categories"] == []
+    assert data["total_count"] == 0
+
+
 def test_category_stats_has_all_required_fields(client: TestClient, tmp_repo: Repository) -> None:
     """验证返回字段完整性：均价/中位数/历史最低价/价格分位数"""
     _seed_multi_category_data(tmp_repo)
