@@ -121,6 +121,54 @@ task_scheduler:
   auto_search_concurrency: 1        # 前端自动搜索并发上限（保留字段，当前固定 1，未来需配合后端浏览器锁改造）
   error_retry_wait_seconds: 300     # 单轮 run_once 异常后等待重试秒数（避免刷错误日志），范围 10-3600
 
+  # 调度器运行时开关对称性（meta-rule #48 / step 194）
+  # 防止 BatchRefreshScheduler 等调度器禁用后已注册 job 仍按 trigger 触发
+  scheduler_runtime_toggle:
+    enabled: true                       # 启用对称性检查（关闭后调度器违规仅记录 warning）
+    require_enabled_field: true         # 调度器类必须含 _enabled 字段
+    require_update_config_method: true  # 调度器类必须含 update_config(enabled) 方法
+    require_remove_job_on_disable: true # update_config(False) 必须调用 scheduler.remove_job()
+    target_schedulers:                  # 强制约束的目标调度器类名列表
+      - BatchRefreshScheduler
+      - CookieSyncScheduler
+
+  # 时间参数配置化（meta-rule #49 / step 196）
+  # 禁止 scheduler.py 等模块硬编码 time.sleep(300) / asyncio.sleep(300)
+  time_param_config_driven:
+    enabled: true
+    forbidden_hardcoded_patterns:       # 命中即视为违规（grep 扫描）
+      - "time.sleep(300)"
+      - "asyncio.sleep(300)"
+      - "await asyncio.sleep(300)"
+    require_config_key: true            # 时间参数必须有对应 config key，否则报警
+    scan_modules:                       # 扫描范围（相对 src/xianyu_hunter/）
+      - modules/scheduler.py
+      - modules/batch_refresh_scheduler.py
+      - modules/cookie_sync_scheduler.py
+
+  # 长生命周期对象状态清理（meta-rule #50 / step 197）
+  # 防止 _resume_cooldown 等字典在任务删除后内存泄漏
+  lifecycle_resource_cleanup:
+    enabled: true
+    require_drop_method: true           # 任务删除 API 必须调用 drop_task_state 等清理方法
+    target_state_holders:               # 必须支持清理的状态字段
+      - _resume_cooldown
+      - _task_states
+      - _active_tasks
+    audit_interval_seconds: 3600        # 定期审计间隔（默认 1 小时）
+
+  # 用户输入时间表达式校验（meta-rule #51 / step 195，实验性）
+  # 防止 cron 表达式过短导致后端被打满
+  cron_min_interval_check:
+    enabled: true
+    experimental: true                  # 实验性标签，1 季度观察期后转正
+    min_interval_seconds: 60            # 最小允许间隔（秒），默认 60 秒
+    blocked_patterns:                   # 直接拦截的 cron 表达式
+      - "* * * * *"
+      - "*/1 * * * *"
+    require_parser_library: true        # 必须用专业 cron 解析库（如 croniter）
+    require_submit_revalidate: true     # 提交时必须再次校验（防前端绕过）
+
 # 捡漏价格配置：控制捡漏价格的分位数基准
 bargain_price:
   percentile: 0.10                  # 捡漏价格分位数（0~0.5），默认 P10

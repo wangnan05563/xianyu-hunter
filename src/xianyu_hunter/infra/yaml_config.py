@@ -333,11 +333,32 @@ class TaskSchedulerConfig(BaseModel):
     - error_retry_wait_seconds: 单轮 run_once 异常后等待多久再重试（秒）
       与 resume_policy.cooldown_seconds 语义不同：本字段控制未触发暂停时的
       重试退避，resume_policy.cooldown_seconds 控制 pause 后用户 resume 的冷却
+    - scheduler_runtime_toggle: 调度器运行时开关对称性检查（meta-rule #48）
+      防止 BatchRefreshScheduler 等禁用后已注册 job 仍按 trigger 触发
+    - time_param_config_driven: 时间参数配置化（meta-rule #49）
+      禁止 scheduler.py 等模块硬编码 time.sleep(300) / asyncio.sleep(300)
+    - lifecycle_resource_cleanup: 长生命周期对象状态清理（meta-rule #50）
+      防止 _resume_cooldown 等字典在任务删除后内存泄漏
+    - cron_min_interval_check: 用户输入时间表达式校验（meta-rule #51，实验性）
+      防止 cron 表达式过短导致后端被打满
     """
     default_interval_seconds: int = Field(60, ge=30, le=3600)
     auto_search_enabled: bool = False
     auto_search_concurrency: int = Field(1, ge=1, le=5)
     error_retry_wait_seconds: int = Field(300, ge=10, le=3600)
+    # 以下 4 个子节点对应 meta-rules #48-#51，由代码审查技能与运行时检查共同消费
+    scheduler_runtime_toggle: "SchedulerRuntimeToggleConfig" = Field(
+        default_factory=lambda: SchedulerRuntimeToggleConfig()
+    )
+    time_param_config_driven: "TimeParamConfigDrivenConfig" = Field(
+        default_factory=lambda: TimeParamConfigDrivenConfig()
+    )
+    lifecycle_resource_cleanup: "LifecycleResourceCleanupConfig" = Field(
+        default_factory=lambda: LifecycleResourceCleanupConfig()
+    )
+    cron_min_interval_check: "CronMinIntervalCheckConfig" = Field(
+        default_factory=lambda: CronMinIntervalCheckConfig()
+    )
 
     @model_validator(mode="after")
     def _warn_concurrency_gt_one(self) -> "TaskSchedulerConfig":
@@ -351,6 +372,79 @@ class TaskSchedulerConfig(BaseModel):
                 stacklevel=2,
             )
         return self
+
+
+class SchedulerRuntimeToggleConfig(BaseModel):
+    """调度器运行时开关对称性（meta-rule #48 / step 194）
+
+    防止 BatchRefreshScheduler 等调度器禁用后已注册 job 仍按 trigger 触发。
+    对应后端 B-REVIEW-178 / 前端 F-REVIEW-136。
+    """
+    enabled: bool = True
+    require_enabled_field: bool = True
+    require_update_config_method: bool = True
+    require_remove_job_on_disable: bool = True
+    target_schedulers: list[str] = Field(
+        default_factory=lambda: ["BatchRefreshScheduler", "CookieSyncScheduler"]
+    )
+
+
+class TimeParamConfigDrivenConfig(BaseModel):
+    """时间参数配置化（meta-rule #49 / step 196）
+
+    禁止 scheduler.py 等模块硬编码 time.sleep(300) / asyncio.sleep(300)。
+    对应后端 B-REVIEW-179 / 前端 F-REVIEW-137。
+    """
+    enabled: bool = True
+    forbidden_hardcoded_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "time.sleep(300)",
+            "asyncio.sleep(300)",
+            "await asyncio.sleep(300)",
+        ]
+    )
+    require_config_key: bool = True
+    scan_modules: list[str] = Field(
+        default_factory=lambda: [
+            "modules/scheduler.py",
+            "modules/batch_refresh_scheduler.py",
+            "modules/cookie_sync_scheduler.py",
+        ]
+    )
+
+
+class LifecycleResourceCleanupConfig(BaseModel):
+    """长生命周期对象状态清理（meta-rule #50 / step 197）
+
+    防止 _resume_cooldown 等字典在任务删除后内存泄漏。
+    对应后端 B-REVIEW-180 / 前端 F-REVIEW-138。
+    """
+    enabled: bool = True
+    require_drop_method: bool = True
+    target_state_holders: list[str] = Field(
+        default_factory=lambda: ["_resume_cooldown", "_task_states", "_active_tasks"]
+    )
+    audit_interval_seconds: int = Field(3600, ge=60, le=86400)
+
+
+class CronMinIntervalCheckConfig(BaseModel):
+    """用户输入时间表达式校验（meta-rule #51 / step 195，实验性）
+
+    防止 cron 表达式过短导致后端被打满。
+    对应后端 B-REVIEW-181 / 前端 F-REVIEW-139。
+    """
+    enabled: bool = True
+    experimental: bool = True
+    min_interval_seconds: int = Field(60, ge=1, le=86400)
+    blocked_patterns: list[str] = Field(
+        default_factory=lambda: ["* * * * *", "*/1 * * * *"]
+    )
+    require_parser_library: bool = True
+    require_submit_revalidate: bool = True
+
+
+# 解决前向引用：TaskSchedulerConfig 引用的子类在后面定义
+TaskSchedulerConfig.model_rebuild()
 
 
 class BargainPriceConfig(BaseModel):

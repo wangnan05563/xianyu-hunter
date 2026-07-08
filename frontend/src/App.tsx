@@ -74,8 +74,10 @@ export default function App() {
   // 桌面端访问 /m/* 重定向到桌面路由
   // 路径检测必须带 /app 前缀：SPA 挂载在 /app/ 下（BrowserRouter basename="/app"）
   // S7764：用 globalThis 替代 window
+  // Navigate to="/m/" 必须带尾斜杠：父路由 <Route path="/m/*"> 的 splat 要求至少匹配 "/",
+  // 不带尾斜杠的 /m 不会匹配 splat 路由，导致渲染 null（白屏）
   if (isMobile && !globalThis.location.pathname.startsWith('/app/m') && !globalThis.location.pathname.startsWith('/app/login')) {
-    return <Navigate to="/m" replace />
+    return <Navigate to="/m/" replace />
   }
 
   return (

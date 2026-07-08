@@ -30,13 +30,16 @@ function MobileRoute({ children }: { readonly children: ReactNode }) {
 export default function MobileRoutes() {
   return (
     <Routes>
-      <Route path="/m" element={<MobileLayout />}>
+      {/* descendant Routes 看到的 pathname 是去掉父路由 /m 前缀后的剩余路径
+          例如 URL /m/tasks → descendant pathname = "/tasks"
+          所以根路由用 path="/" 匹配剩余路径，子路由用相对路径 tasks/orders 等 */}
+      <Route path="/" element={<MobileLayout />}>
         <Route index element={<MobileRoute><MobileDashboard /></MobileRoute>} />
         <Route path="tasks" element={<MobileRoute><MobileTasks /></MobileRoute>} />
         <Route path="tasks/:id" element={<MobileRoute><MobileTaskDetail /></MobileRoute>} />
         <Route path="orders" element={<MobileRoute><MobileOrders /></MobileRoute>} />
         <Route path="orders/:id" element={<MobileRoute><MobileOrderDetail /></MobileRoute>} />
-        <Route path="*" element={<Navigate to="/m" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   )

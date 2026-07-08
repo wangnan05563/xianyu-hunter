@@ -135,7 +135,11 @@ export default function MainLayout() {
   // 用户信息：供状态栏头像/昵称展示（来自 /api/auth/me）
   const [userInfo, setUserInfo] = useState<AuthMe>({ logged_in: false })
   // 侧边栏收缩状态
-  const [collapsed, setCollapsed] = useState(false)
+  // 窄屏（<=768px）下默认收起 Sider，避免桌面端布局在 F12 设备模拟器下被压成竖条
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.innerWidth <= 768
+  })
 
   // 调度器运行状态（30秒轮询）
   const [schedulerRunning, setSchedulerRunning] = useState<boolean | null>(null)
@@ -339,6 +343,16 @@ export default function MainLayout() {
     }
     return items
   }, [location.pathname])
+
+  // 窗口尺寸变化时同步 Sider 收缩状态：F12 切换设备模拟器实时生效
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handler = () => {
+      if (window.innerWidth <= 768) setCollapsed(true)
+    }
+    window.addEventListener('resize', handler)
+    return () => window.removeEventListener('resize', handler)
+  }, [])
 
   // 未登录：自动跳转到登录页（保存当前路径，登录后跳转回来）
   useEffect(() => {

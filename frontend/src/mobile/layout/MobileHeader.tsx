@@ -47,7 +47,7 @@ export default function MobileHeader() {
       <button
         type="button"
         className="m-brand"
-        onClick={() => navigate('/m')}
+        onClick={() => navigate('/m/')}
         aria-label="返回仪表盘"
       >
         <span className="m-brand-logo" aria-hidden="true">闲</span>
