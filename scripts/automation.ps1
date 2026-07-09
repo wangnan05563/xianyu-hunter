@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     闲鱼猎人项目自动化生命周期管理脚本
 .DESCRIPTION
@@ -81,16 +81,16 @@ function Write-Step {
 
 # ========== 端口与进程检查 ==========
 function Test-PortListening {
-    param([int]$Port = 8000)
+    param([int]$Port = 8001)
     $line = netstat -aon | Select-String ":$Port.*LISTENING"
     return [bool]$line
 }
 
 function Get-PortPid {
-    param([int]$Port = 8000)
+    param([int]$Port = 8001)
     $line = netstat -aon | Select-String ":$Port.*LISTENING" | Select-Object -First 1
     if ($line) {
-        # 形如 "  TCP    0.0.0.0:8000    0.0.0.0:0    LISTENING    12345"
+        # 形如 "  TCP    0.0.0.0:8001    0.0.0.0:0    LISTENING    12345"
         $parts = $line.ToString().Trim() -split '\s+'
         return $parts[-1]
     }
@@ -166,9 +166,9 @@ function Invoke-EnvCheck {
     }
     $results += [pscustomobject]@{ Item = 'web.pid'; Ok = $pidAlive; Fix = '若 PID 已失效，删除 logs\web.pid' }
 
-    # 9. 8000 端口状态
-    $portInUse = Test-PortListening -Port 8000
-    $results += [pscustomobject]@{ Item = 'port 8000'; Ok = $portInUse; Fix = '' }
+    # 9. 8001 端口状态
+    $portInUse = Test-PortListening -Port 8001
+    $results += [pscustomobject]@{ Item = 'port 8001'; Ok = $portInUse; Fix = '' }
     # 注意：端口被占用对 start 是问题，对 stop 是预期
 
     # 输出检查结果表格
@@ -212,7 +212,7 @@ function Invoke-BatScript {
 
 # ========== 等待端口就绪 ==========
 function Wait-PortReady {
-    param([int]$TimeoutSec = 30, [int]$Port = 8000)
+    param([int]$TimeoutSec = 30, [int]$Port = 8001)
     $tries = [int]($TimeoutSec / 2)
     for ($i = 1; $i -le $tries; $i++) {
         Start-Sleep -Seconds 2
@@ -226,7 +226,7 @@ function Wait-PortReady {
 
 # ========== 等待端口释放 ==========
 function Wait-PortFree {
-    param([int]$TimeoutSec = 10, [int]$Port = 8000)
+    param([int]$TimeoutSec = 10, [int]$Port = 8001)
     $tries = [int]($TimeoutSec / 1)
     for ($i = 1; $i -le $tries; $i++) {
         if (-not (Test-PortListening -Port $Port)) {
@@ -248,10 +248,10 @@ function Invoke-Start {
     }
 
     # 端口已占用时给出明确提示
-    if (Test-PortListening -Port 8000) {
-        $pidOcc = Get-PortPid -Port 8000
-        Write-Log -Level 'WARN' -ActionName $Action -Step 'pre-check' -Result 'skip' -Msg "port 8000 already in use by PID $pidOcc"
-        Write-Host "`n[WARN] 端口 8000 已被占用 (PID: $pidOcc)。" -ForegroundColor Yellow
+    if (Test-PortListening -Port 8001) {
+        $pidOcc = Get-PortPid -Port 8001
+        Write-Log -Level 'WARN' -ActionName $Action -Step 'pre-check' -Result 'skip' -Msg "port 8001 already in use by PID $pidOcc"
+        Write-Host "`n[WARN] 端口 8001 已被占用 (PID: $pidOcc)。" -ForegroundColor Yellow
         Write-Host "建议先执行 -Action stop，或手动 taskkill /F /PID $pidOcc" -ForegroundColor Yellow
         return $false
     }
@@ -263,18 +263,18 @@ function Invoke-Start {
         return $false
     }
 
-    Write-Step '[2/2] 验证 8000 端口'
-    if (Wait-PortReady -TimeoutSec 30 -Port 8000) {
-        $newPid = Get-PortPid -Port 8000
+    Write-Step '[2/2] 验证 8001 端口'
+    if (Wait-PortReady -TimeoutSec 30 -Port 8001) {
+        $newPid = Get-PortPid -Port 8001
         Write-Log -ActionName $Action -Step 'verify-port' -Result 'pass' -Msg "PID=$newPid"
         Write-Host "`n[OK] 服务已启动" -ForegroundColor Green
-        Write-Host "  Web:  http://127.0.0.1:8000/app/" -ForegroundColor White
+        Write-Host "  Web:  http://127.0.0.1:8001/app/" -ForegroundColor White
         Write-Host "  PID:  $newPid" -ForegroundColor White
         Write-Host "  Log:  $LogFile" -ForegroundColor White
         return $true
     } else {
-        Write-Log -Level 'ERROR' -ActionName $Action -Step 'verify-port' -Result 'fail' -Msg 'port 8000 not listening after 30s'
-        Write-Host "`n[FAIL] 30 秒内端口 8000 未就绪。" -ForegroundColor Red
+        Write-Log -Level 'ERROR' -ActionName $Action -Step 'verify-port' -Result 'fail' -Msg 'port 8001 not listening after 30s'
+        Write-Host "`n[FAIL] 30 秒内端口 8001 未就绪。" -ForegroundColor Red
         if (Test-Path $WebLog) {
             Write-Host "`n--- logs\web.log 末尾 20 行 ---" -ForegroundColor Yellow
             Get-Content $WebLog -Tail 20 -ErrorAction SilentlyContinue
@@ -296,14 +296,14 @@ function Invoke-Stop {
     }
 
     Write-Step '[verify] 验证端口已释放'
-    if (Wait-PortFree -TimeoutSec 10 -Port 8000) {
+    if (Wait-PortFree -TimeoutSec 10 -Port 8001) {
         Write-Log -ActionName $Action -Step 'verify-stop' -Result 'pass'
-        Write-Host "`n[OK] 服务已停止，端口 8000 已释放" -ForegroundColor Green
+        Write-Host "`n[OK] 服务已停止，端口 8001 已释放" -ForegroundColor Green
         return $true
     } else {
-        $pidOcc = Get-PortPid -Port 8000
-        Write-Log -Level 'WARN' -ActionName $Action -Step 'verify-stop' -Result 'fail' -Msg "port 8000 still in use by PID $pidOcc"
-        Write-Host "`n[WARN] 端口 8000 仍被占用 (PID: $pidOcc)。" -ForegroundColor Yellow
+        $pidOcc = Get-PortPid -Port 8001
+        Write-Log -Level 'WARN' -ActionName $Action -Step 'verify-stop' -Result 'fail' -Msg "port 8001 still in use by PID $pidOcc"
+        Write-Host "`n[WARN] 端口 8001 仍被占用 (PID: $pidOcc)。" -ForegroundColor Yellow
         Write-Host "请打开任务管理器手动结束该进程。" -ForegroundColor Yellow
         return $false
     }
@@ -320,7 +320,7 @@ function Invoke-Rebuild {
         return $false
     }
     # 给端口释放留时间
-    Wait-PortFree -TimeoutSec 10 -Port 8000 | Out-Null
+    Wait-PortFree -TimeoutSec 10 -Port 8001 | Out-Null
 
     Write-Step '[2/3] 构建前端'
     $ok2 = Invoke-BatScript -BatPath $RebuildBat -StepName 'build'
@@ -339,11 +339,11 @@ function Invoke-Rebuild {
         return $false
     }
 
-    if (Wait-PortReady -TimeoutSec 30 -Port 8000) {
-        $newPid = Get-PortPid -Port 8000
+    if (Wait-PortReady -TimeoutSec 30 -Port 8001) {
+        $newPid = Get-PortPid -Port 8001
         Write-Log -ActionName $Action -Step 'verify-port' -Result 'pass' -Msg "PID=$newPid"
         Write-Host "`n[OK] 重建并重启完成" -ForegroundColor Green
-        Write-Host "  Web:  http://127.0.0.1:8000/app/" -ForegroundColor White
+        Write-Host "  Web:  http://127.0.0.1:8001/app/" -ForegroundColor White
         Write-Host "  PID:  $newPid" -ForegroundColor White
         Write-Host "  请在浏览器中 Ctrl+F5 强制刷新以加载新版本。" -ForegroundColor Yellow
         return $true
@@ -356,7 +356,7 @@ function Invoke-Rebuild {
 
 function Invoke-Status {
     Write-Step '[status] 查询服务状态'
-    $portInUse = Test-PortListening -Port 8000
+    $portInUse = Test-PortListening -Port 8001
     $pidExists = Test-Path $PidFile
     $pidValue = $null
     $pidAlive = $false
@@ -366,20 +366,20 @@ function Invoke-Status {
     }
 
     Write-Host ''
-    Write-Host "端口 8000 监听 : $(if ($portInUse) { '是' } else { '否' })" -ForegroundColor $(if ($portInUse) { 'Green' } else { 'Gray' })
+    Write-Host "端口 8001 监听 : $(if ($portInUse) { '是' } else { '否' })" -ForegroundColor $(if ($portInUse) { 'Green' } else { 'Gray' })
     Write-Host "PID 文件存在   : $(if ($pidExists) { '是' } else { '否' })" -ForegroundColor $(if ($pidExists) { 'Green' } else { 'Gray' })
     if ($pidExists) {
         Write-Host "PID 文件值     : $pidValue" -ForegroundColor White
         Write-Host "PID 进程存活   : $(if ($pidAlive) { '是' } else { '否 (僵尸 PID 文件)' })" -ForegroundColor $(if ($pidAlive) { 'Green' } else { 'Yellow' })
     }
     if ($portInUse) {
-        $realPid = Get-PortPid -Port 8000
+        $realPid = Get-PortPid -Port 8001
         Write-Host "实际占用 PID   : $realPid" -ForegroundColor White
     }
 
-    if ($portInUse -and $pidAlive -and ($pidValue -eq (Get-PortPid -Port 8000))) {
+    if ($portInUse -and $pidAlive -and ($pidValue -eq (Get-PortPid -Port 8001))) {
         Write-Host "`n[结论] 服务运行中" -ForegroundColor Green
-        Write-Host "  Web: http://127.0.0.1:8000/app/" -ForegroundColor White
+        Write-Host "  Web: http://127.0.0.1:8001/app/" -ForegroundColor White
     } elseif (-not $portInUse) {
         Write-Host "`n[结论] 服务未运行" -ForegroundColor Gray
     } else {

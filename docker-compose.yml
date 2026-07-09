@@ -23,7 +23,7 @@ services:
     container_name: xianyu-hunter
     restart: unless-stopped
     ports:
-      - "${XH_PORT:-8000}:8000"
+      - "${XH_PORT:-8001}:8001"
     volumes:
       # 数据持久化：SQLite + 日志 + prompts + cookies.json
       - ./data:/app/data
@@ -38,7 +38,7 @@ services:
     # Playwright 需要共享内存（Chromium 渲染崩溃时 OOM）
     shm_size: "1gb"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -56,7 +56,7 @@ services:
     container_name: xianyu-hunter-dev
     restart: unless-stopped
     ports:
-      - "${XH_PORT:-8000}:8000"
+      - "${XH_PORT:-8001}:8001"
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -67,9 +67,9 @@ services:
       - TZ=${TZ:-Asia/Shanghai}
     shm_size: "1gb"
     # 开发模式覆盖启动命令：不启用调度器
-    command: ["python", "-m", "xianyu_hunter", "web", "--port", "8000", "--host", "0.0.0.0"]
+    command: ["python", "-m", "xianyu_hunter", "web", "--port", "8001", "--host", "0.0.0.0"]
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -86,7 +86,7 @@ services:
     container_name: xianyu-hunter-web
     restart: unless-stopped
     ports:
-      - "${XH_PORT:-8000}:8000"
+      - "${XH_PORT:-8001}:8001"
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -96,9 +96,9 @@ services:
       - PYTHONUNBUFFERED=1
       - TZ=${TZ:-Asia/Shanghai}
     shm_size: "1gb"
-    command: ["python", "-m", "xianyu_hunter", "web", "--port", "8000", "--host", "0.0.0.0"]
+    command: ["python", "-m", "xianyu_hunter", "web", "--port", "8001", "--host", "0.0.0.0"]
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

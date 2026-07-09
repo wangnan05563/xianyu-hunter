@@ -31,7 +31,10 @@ PUBLIC_PREFIXES = (
     "/api/notifier/",            # 通知器配置（免打扰等）
     "/api/docs", "/openapi.json",
     "/api/about",                # 关于菜单：系统元信息 + 检查更新
-    "/api/tunnel",               # 内网穿透：未登录也需可查询/控制隧道（远程访问引导）
+    "/api/tunnel/status",        # 内网穿透：未登录也需可查询隧道状态（远程访问引导）
+    "/api/tunnel/start",         # 启动隧道（远程访问引导：未登录时需先建隧道才能访问登录页）
+    "/api/tunnel/stop",          # 停止隧道（与 start 对称）
+    # /api/tunnel/config 不在白名单：修改 provider/authtoken 需认证，防止未授权篡改
     "/.well-known/",             # 浏览器/DevTools 自动探测路径（com.chrome.devtools.json 等），无需认证
     "/@vite/client",             # Vite HMR 客户端：浏览器缓存开发模式 HTML 后误请求生产后端，无需认证
 )

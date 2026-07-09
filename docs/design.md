@@ -1075,7 +1075,7 @@ dependencies = [
 REM scripts\start.cmd
 cd /d %~dp0..
 call .venv\Scripts\activate
-python -m xianyu_hunter start --port 8000
+python -m xianyu_hunter start --port 8001
 ```
 
 ### 8.3 首次登录
@@ -1104,7 +1104,7 @@ copy data\xianyu.db backup\xianyu_%TS%.db
 # config/config.yaml
 server:
   host: 127.0.0.1
-  port: 8000
+  port: 8001
 
 browser:
   headless: true              # 是否无头模式（调试时 false）

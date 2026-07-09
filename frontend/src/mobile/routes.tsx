@@ -17,6 +17,25 @@ const MobileAntiCrawl = lazyRetry(() => import('./pages/AntiCrawl'))
 const MobileItems = lazyRetry(() => import('./pages/Items'))
 const MobileEvaluations = lazyRetry(() => import('./pages/Evaluations'))
 const MobileChatbot = lazyRetry(() => import('./pages/Chatbot'))
+// P0: 高级功能
+const MobileLogs = lazyRetry(() => import('./pages/Logs'))
+const MobileExport = lazyRetry(() => import('./pages/Export'))
+const MobileChatbotConfig = lazyRetry(() => import('./pages/ChatbotConfig'))
+// P1: 配置 + 工具
+const MobileErrorLogs = lazyRetry(() => import('./pages/ErrorLogs'))
+const MobileNotifierChannels = lazyRetry(() => import('./pages/NotifierChannels'))
+const MobilePriceStrategy = lazyRetry(() => import('./pages/PriceStrategy'))
+const MobileCleanup = lazyRetry(() => import('./pages/Cleanup'))
+const MobileMarket = lazyRetry(() => import('./pages/Market'))
+// P2: 高级配置 + 系统工具
+const MobileEvalRules = lazyRetry(() => import('./pages/EvalRules'))
+const MobileBuyConfig = lazyRetry(() => import('./pages/BuyConfig'))
+const MobileSearchConfig = lazyRetry(() => import('./pages/SearchConfig'))
+const MobileAIConfig = lazyRetry(() => import('./pages/AIConfig'))
+const MobileVersionManager = lazyRetry(() => import('./pages/VersionManager'))
+const MobileDatabaseAdmin = lazyRetry(() => import('./pages/DatabaseAdmin'))
+const MobileBatchRefresh = lazyRetry(() => import('./pages/BatchRefresh'))
+const MobileAbout = lazyRetry(() => import('./pages/About'))
 
 function MobilePageLoading() {
   return (
@@ -59,6 +78,26 @@ export default function MobileRoutes() {
         <Route path="evaluations/" element={<MobileRoute><MobileEvaluations /></MobileRoute>} />
         {/* 智能客服 */}
         <Route path="chatbot/" element={<MobileRoute><MobileChatbot /></MobileRoute>} />
+        <Route path="chatbot-config/" element={<MobileRoute><MobileChatbotConfig /></MobileRoute>} />
+        {/* P0: 实时日志 / 数据导出 */}
+        <Route path="logs/" element={<MobileRoute><MobileLogs /></MobileRoute>} />
+        <Route path="export/" element={<MobileRoute><MobileExport /></MobileRoute>} />
+        {/* P1: 配置 + 工具 */}
+        <Route path="error-logs/" element={<MobileRoute><MobileErrorLogs /></MobileRoute>} />
+        <Route path="notifier-channels/" element={<MobileRoute><MobileNotifierChannels /></MobileRoute>} />
+        <Route path="price-strategy/" element={<MobileRoute><MobilePriceStrategy /></MobileRoute>} />
+        <Route path="cleanup/" element={<MobileRoute><MobileCleanup /></MobileRoute>} />
+        <Route path="market/" element={<MobileRoute><MobileMarket /></MobileRoute>} />
+        {/* P2: 高级配置 */}
+        <Route path="eval-rules/" element={<MobileRoute><MobileEvalRules /></MobileRoute>} />
+        <Route path="buy-config/" element={<MobileRoute><MobileBuyConfig /></MobileRoute>} />
+        <Route path="search-config/" element={<MobileRoute><MobileSearchConfig /></MobileRoute>} />
+        <Route path="ai-config/" element={<MobileRoute><MobileAIConfig /></MobileRoute>} />
+        {/* P2: 系统工具 */}
+        <Route path="version-manager/" element={<MobileRoute><MobileVersionManager /></MobileRoute>} />
+        <Route path="db-admin/" element={<MobileRoute><MobileDatabaseAdmin /></MobileRoute>} />
+        <Route path="batch-refresh/" element={<MobileRoute><MobileBatchRefresh /></MobileRoute>} />
+        <Route path="about/" element={<MobileRoute><MobileAbout /></MobileRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

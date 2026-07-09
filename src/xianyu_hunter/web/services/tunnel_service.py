@@ -1,146 +1,98 @@
 # src/xianyu_hunter/web/services/tunnel_service.py
-"""内置 Cloudflare Tunnel 服务，零用户配置开启远程访问。
+"""内网穿透服务：委托给具体 provider 实现。
 
 设计决策：
-- 使用 cloudflared quick tunnel 模式，无需用户注册账号或配置域名
-- 启动时检查二进制是否存在，缺失则自动下载
-- 进程管理通过 subprocess，poll() 检测存活状态
+- TunnelService 作为薄封装，持有当前 provider 实例并委托生命周期管理
+- provider 选择由配置驱动（yaml_config.TunnelConfig.provider）
+- 切换 provider 时需先 stop 当前隧道再创建新 provider
 """
 from __future__ import annotations
 
 import logging
-import subprocess
-import re
-from pathlib import Path
+import os
 from typing import Optional
 
-from xianyu_hunter.paths import get_data_dir
+from xianyu_hunter.infra.yaml_config import get_config
+from xianyu_hunter.web.services.tunnel_providers import (
+    TunnelProvider,
+    create_provider,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class TunnelService:
-    """Cloudflare Tunnel 生命周期管理"""
-
-    # cloudflared 下载地址（Windows x64）
-    BINARY_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-    BINARY_NAME = "cloudflared.exe"
+    """隧道生命周期管理（委托给 provider）"""
 
     def __init__(self, local_port: int = 8000):
         self._local_port = local_port
-        self._process: Optional[subprocess.Popen] = None
-        self._public_url: Optional[str] = None
-        self._binary_path: Optional[Path] = None
+        self._provider: Optional[TunnelProvider] = None
+        self._provider_name: str = ""
+
+    def _resolve_port(self) -> int:
+        """解析实际本地端口：环境变量 > yaml tunnel.local_port > yaml server.port"""
+        # 环境变量优先：__main__.py web 命令 --port 启动时设置
+        env_port = os.environ.get("XH_WEB_PORT")
+        if env_port:
+            try:
+                return int(env_port)
+            except ValueError:
+                logger.warning(f"XH_WEB_PORT 非法值: {env_port}，忽略")
+
+        cfg = get_config().tunnel
+        if cfg.local_port > 0:
+            return cfg.local_port
+        # 回退到 server.port
+        return get_config().server.port
+
+    def _ensure_provider(self) -> TunnelProvider:
+        """按当前配置创建/复用 provider 实例"""
+        cfg = get_config().tunnel
+        provider_name = cfg.provider
+
+        # 配置未变且 provider 已存在：复用
+        if self._provider is not None and self._provider_name == provider_name:
+            return self._provider
+
+        # 切换 provider：先停止旧实例
+        if self._provider is not None:
+            self._provider.stop()
+            self._provider = None
+
+        port = self._resolve_port()
+        # 按 provider 类型传递专属参数
+        kwargs: dict = {"binary_path": cfg.binary_path}
+        if provider_name == "cpolar":
+            kwargs["authtoken"] = cfg.cpolar_authtoken
+
+        self._provider = create_provider(provider_name, port, **kwargs)
+        self._provider_name = provider_name
+        return self._provider
 
     @property
     def status(self) -> str:
         """返回隧道状态：running / stopped"""
-        if self._process is None:
-            # _public_url 存在表示 start() 已成功（含 mock 测试场景），视为运行中
-            return "running" if self._public_url else "stopped"
-        # poll() 返回 None 表示进程仍在运行
-        if self._process.poll() is None:
-            return "running"
-        # 进程已退出，清理状态
-        self._process = None
-        self._public_url = None
-        return "stopped"
+        if self._provider is None:
+            return "stopped"
+        return self._provider.status
 
     @property
     def public_url(self) -> Optional[str]:
-        return self._public_url
+        if self._provider is None:
+            return None
+        return self._provider.public_url
 
-    def _ensure_binary(self) -> Path:
-        """确保 cloudflared 二进制存在，缺失则下载"""
-        # 放在 data 目录下，避免污染系统路径
-        # 走 paths.py 统一入口：避免 __file__ 推算在打包后路径错乱
-        data_dir = get_data_dir()
-        data_dir.mkdir(exist_ok=True)
-        binary_path = data_dir / self.BINARY_NAME
-
-        if not binary_path.exists():
-            logger.info("cloudflared 二进制不存在，开始下载...")
-            self._download_binary(binary_path)
-        return binary_path
-
-    def _download_binary(self, target: Path) -> None:
-        """下载 cloudflared 二进制"""
-        import urllib.request
-        urllib.request.urlretrieve(self.BINARY_URL, str(target))
-        logger.info(f"cloudflared 下载完成: {target}")
-
-    def _run_cloudflared(self) -> str:
-        """启动 cloudflared quick tunnel，返回公网 URL"""
-        self._binary_path = self._binary_path or self._ensure_binary()
-
-        # quick tunnel 模式：无需账号，自动分配 trycloudflare 域名
-        cmd = [
-            str(self._binary_path),
-            "tunnel",
-            "--url", f"http://localhost:{self._local_port}",
-            "--no-autoupdate",
-        ]
-        self._process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
-
-        # 从输出中解析公网 URL（cloudflared 会打印 https://xxx.trycloudflare.com）
-        url = self._wait_for_url(timeout=15)
-        return url
-
-    def _wait_for_url(self, timeout: int = 15) -> str:
-        """从 cloudflared 输出中解析公网 URL"""
-        import time
-        import threading
-
-        url_pattern = re.compile(r"https://[a-z0-9-]+\.(trycloudflare|cfargotunnel)\.com")
-        deadline = time.time() + timeout
-        found_url: list[str] = []
-
-        def read_output():
-            # 防御：若 Popen 未成功设置 PIPE，stdout 可能为 None
-            if self._process.stdout is None:
-                return
-            while time.time() < deadline and not found_url:
-                line = self._process.stdout.readline()
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="ignore")
-                match = url_pattern.search(text)
-                if match:
-                    found_url.append(match.group(0))
-                    return
-                logger.debug(f"cloudflared: {text.strip()}")
-
-        thread = threading.Thread(target=read_output, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout)
-
-        if not found_url:
-            self.stop()
-            raise RuntimeError("cloudflared 启动超时，未能获取公网 URL")
-        return found_url[0]
+    @property
+    def provider_name(self) -> str:
+        """当前 provider 名称（供 API 返回）"""
+        return self._provider_name
 
     def start(self) -> str:
         """启动隧道，返回公网 HTTPS URL"""
-        if self.status == "running":
-            return self._public_url or ""
-        logger.info("启动 Cloudflare Tunnel...")
-        self._public_url = self._run_cloudflared()
-        logger.info(f"隧道已建立: {self._public_url}")
-        return self._public_url
+        provider = self._ensure_provider()
+        return provider.start()
 
     def stop(self) -> None:
         """停止隧道"""
-        if self._process:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-            self._process = None
-        self._public_url = None
-        logger.info("隧道已关闭")
+        if self._provider:
+            self._provider.stop()

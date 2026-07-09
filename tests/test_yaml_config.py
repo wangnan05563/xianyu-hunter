@@ -25,7 +25,7 @@ def test_default_config_loads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     reload_config()
     cfg = get_config()
     assert isinstance(cfg, AppConfig)
-    assert cfg.server.port == 8000
+    assert cfg.server.port == 8001
     assert cfg.antidetect.qps == 1
 
 

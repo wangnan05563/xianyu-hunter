@@ -229,7 +229,7 @@ CLI (__main__.py)
 ## 启动服务
 ```powershell
 # 1. 停止旧进程（如果有）
-$proc = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if ($proc) { Stop-Process -Id $proc.OwningProcess -Force; Start-Sleep -Seconds 2 }
+$proc = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue; if ($proc) { Stop-Process -Id $proc.OwningProcess -Force; Start-Sleep -Seconds 2 }
 
 # 2. 启动新进程（Web + 调度器）
 $env:PYTHONPATH = "d:\code\otherProjects\17_xianyu\src"; $env:PYTHONUNBUFFERED = "1"
@@ -237,8 +237,8 @@ $PY = "d:\code\otherProjects\17_xianyu\.venv\Scripts\python.exe"
 $STDOUT = "d:\code\otherProjects\17_xianyu\logs\uvicorn.out.log"
 $STDERR = "d:\code\otherProjects\17_xianyu\logs\uvicorn.err.log"
 "" | Out-File -Encoding utf8 $STDOUT; "" | Out-File -Encoding utf8 $STDERR
-Start-Process -FilePath $PY -ArgumentList "-u","-m","xianyu_hunter","web","--host","127.0.0.1","--port","8000","--with-scheduler" -WindowStyle Hidden -RedirectStandardOutput $STDOUT -RedirectStandardError $STDERR -WorkingDirectory "d:\code\otherProjects\17_xianyu"
+Start-Process -FilePath $PY -ArgumentList "-u","-m","xianyu_hunter","web","--host","127.0.0.1","--port","8001","--with-scheduler" -WindowStyle Hidden -RedirectStandardOutput $STDOUT -RedirectStandardError $STDERR -WorkingDirectory "d:\code\otherProjects\17_xianyu"
 
 # 3. 验证
-Start-Sleep -Seconds 6; Get-NetTCPConnection -LocalPort 8000 -State Listen | Select-Object LocalAddress, LocalPort, OwningProcess
+Start-Sleep -Seconds 6; Get-NetTCPConnection -LocalPort 8001 -State Listen | Select-Object LocalAddress, LocalPort, OwningProcess
 ```

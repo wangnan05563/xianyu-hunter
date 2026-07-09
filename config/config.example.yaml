@@ -11,7 +11,7 @@
 
 server:
   host: 127.0.0.1        # Web 服务监听地址
-  port: 8000             # Web 服务端口
+  port: 8001             # Web 服务端口
 
 browser:
   headless: true         # 无头模式（生产建议 true；调试时 false 可见浏览器）

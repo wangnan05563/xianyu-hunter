@@ -152,3 +152,35 @@ async def inject_cookie_store_to_worker_browser(
     except Exception as e:  # noqa: BLE001
         logger.debug("%s：运行时 Cookie 注入失败: %s", log_prefix, e)
         return False
+
+
+async def sync_browser_cookies_to_store_after_renew(container, log_prefix: str = "token 续期") -> None:
+    """导航续期后提取浏览器 cookie 回写 CookieStore + 同步层状态
+
+    统一入口：消除 login_orchestrator._default_renew_callback 与
+    api_anticrawl._renew_token_via_browser_navigation 的重复逻辑。
+    两者都是导航到 m.taobao.com 触发 Set-Cookie 后需要回写 JSON + 同步层状态。
+
+    为什么必须回写 + 同步：导航的 Set-Cookie 只更新浏览器内存，
+    CookieStore JSON 和 CookieRotator 层状态仍是旧值，
+    不同步会导致健康检查误判 token 过期、层状态与浏览器振荡。
+    """
+    try:
+        cookies = await container.browser.get_cookies(["goofish.com", "taobao.com"])
+        if not cookies:
+            return
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store
+        # 多用户隔离：回写到最近活跃用户的 cookie 文件
+        try:
+            from xianyu_hunter.web.services.user_manager import get_user_manager
+            renew_user_id = get_user_manager().get_active_user_id()
+        except Exception:
+            renew_user_id = "default"
+        get_cookie_store().export_cookies(cookies, method="renew", user_id=renew_user_id)
+        # 同步层状态：让 CookieRotator 反映续期后的真实状态
+        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+        sync_cookie_layers_from_json()
+        logger.debug("%s：已回写 %d 个 cookie 并同步层状态 [user=%s]", log_prefix, len(cookies), renew_user_id)
+    except Exception as e:
+        # 回写失败不影响续期成功状态（token 已在浏览器内存中刷新）
+        logger.warning("%s：回写 CookieStore / 同步层状态失败: %s", log_prefix, e)

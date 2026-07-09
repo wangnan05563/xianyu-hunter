@@ -122,10 +122,10 @@ def _acquire_single_instance() -> bool:
     return kernel32.GetLastError() != _ERROR_ALREADY_EXISTS
 
 
-def _cleanup_port(port: int = 8000) -> None:
+def _cleanup_port(port: int = 8001) -> None:
     """端口清理：杀掉占用目标端口的进程
 
-    netstat 输出形如：TCP    127.0.0.1:8000      0.0.0.0:0    LISTENING    1234
+    netstat 输出形如：TCP    127.0.0.1:8001      0.0.0.0:0    LISTENING    1234
     需同时匹配端口号与 LISTENING 状态，避免误杀其他端口的进程
     """
     try:
@@ -235,7 +235,7 @@ def main() -> int:
         return dispatched
 
     host = "127.0.0.1"
-    port = 8000
+    port = 8001
 
     _setup_env()
 
@@ -288,7 +288,7 @@ def main() -> int:
                 # CREATE_NO_WINDOW 避免弹黑色控制台
                 subprocess.Popen(
                     ["cmd", "/c", "start", "", url],
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08001000),
                 )
                 opened = True
                 print("  使用 cmd /c start 成功打开浏览器")

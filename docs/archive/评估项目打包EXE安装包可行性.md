@@ -139,7 +139,7 @@ C:\Program Files\XianyuHunter\
   ├── logs\                         # 日志
   └── .env                          # 环境变量
 
-桌面快捷方式 → 启动 web 服务 + 自动打开默认浏览器到 http://127.0.0.1:8000/app/
+桌面快捷方式 → 启动 web 服务 + 自动打开默认浏览器到 http://127.0.0.1:8001/app/
 ```
 
 ### 工具选型
@@ -366,10 +366,10 @@ def _acquire_single_instance() -> bool:
     # ERROR_ALREADY_EXISTS = 183
     return win32api.GetLastError() != 183
 
-def _cleanup_port(port: int = 8000) -> None:
+def _cleanup_port(port: int = 8001) -> None:
     """端口清理（复用 bat 逻辑）
 
-    netstat 输出形如：TCP    127.0.0.1:8000      0.0.0.0:0    LISTENING    1234
+    netstat 输出形如：TCP    127.0.0.1:8001      0.0.0.0:0    LISTENING    1234
     需同时匹配端口号与 LISTENING 状态，避免误杀其他端口的进程
     """
     import re
@@ -409,12 +409,12 @@ def main() -> int:
     import threading
     import uvicorn
     from xianyu_hunter.web.app import app
-    config = uvicorn.Config(app, host="127.0.0.1", port=8000, log_level="info")
+    config = uvicorn.Config(app, host="127.0.0.1", port=8001, log_level="info")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    if _wait_for_port("127.0.0.1", 8000):
-        webbrowser.open("http://127.0.0.1:8000/app/")
+    if _wait_for_port("127.0.0.1", 8001):
+        webbrowser.open("http://127.0.0.1:8001/app/")
     # 阻塞主线程：uvicorn 在子线程运行，主线程 join 等待
     thread.join()
     return 0
@@ -756,7 +756,7 @@ end;
 
 ### P0 阶段验证项
 - [ ] 干净 Windows 10 虚拟机上安装 EXE，无报错
-- [ ] 启动后 uvicorn 监听 8000 端口
+- [ ] 启动后 uvicorn 监听 8001 端口
 - [ ] 自动打开浏览器访问 `/app/`
 - [ ] 配置写入 `%APPDATA%\XianyuHunter\config\config.yaml` 生效
 - [ ] SQLite 数据写入 `%APPDATA%\XianyuHunter\data\xianyu.db`

@@ -76,12 +76,12 @@ ENV PYTHONDONTWRITEBYTECODE=1
 RUN mkdir -p /app/data/prompts /app/config
 
 # 暴露 Web 端口
-EXPOSE 8000
+EXPOSE 8001
 
 # 健康检查：每 30s 检查一次 /healthz
 # start-period=20s 给 Playwright 首次启动留出时间
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://localhost:8000/healthz || exit 1
+    CMD curl -fsS http://localhost:8001/healthz || exit 1
 
 # 默认启动命令：Web + 调度器一键模式
 # 通过环境变量 XH_WITH_SCHEDULER=1 显式启用调度器（与 docker-compose.yml 对齐）
@@ -93,4 +93,4 @@ RUN groupadd -r xhapp && useradd -r -g xhapp -d /app -s /sbin/nologin xhapp \
     && chown -R xhapp:xhapp /app
 USER xhapp
 
-CMD ["python", "-m", "xianyu_hunter", "web", "--port", "8000", "--host", "0.0.0.0", "--with-scheduler"]
+CMD ["python", "-m", "xianyu_hunter", "web", "--port", "8001", "--host", "0.0.0.0", "--with-scheduler"]

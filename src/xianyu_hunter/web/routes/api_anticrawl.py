@@ -156,7 +156,7 @@ def _sync_layer_states_if_needed(orch, cookies_list: list[dict]) -> None:
         orch.cookie_rotator.sync_state_from_cookies(cookie_map)
 
 
-def _check_collector_session(orch, cookies_list: list[dict]) -> bool:
+async def _check_collector_session(orch, cookies_list: list[dict]) -> bool:
     """检查 collector 的会话失效标志（RGV587_ERROR）
 
     返回 True 表示通过，False 表示会话已失效需返回 False。
@@ -167,6 +167,10 @@ def _check_collector_session(orch, cookies_list: list[dict]) -> bool:
     粘性标志清理：_m_h5_tk 实际有效时清除标志，避免反复触发 invalidate。
     为什么需要：DOM 回退失败时 last_session_invalid 保持 True，
     但 cookie 实际可能仍有效（详情页等流程正常），此时不应反复失效 identity。
+
+    最佳实践：检测到 RGV587 后先尝试从 CookieStore JSON 注入 cookie 到浏览器
+    恢复（与 collection_service.ensure_official_cookies 一致），注入后仍失效
+    才标记 identity 层失效。避免 JSON 有新 cookie 但浏览器内存仍是旧值时误判。
     """
     try:
         from xianyu_hunter.web.deps import get_container
@@ -182,12 +186,27 @@ def _check_collector_session(orch, cookies_list: list[dict]) -> bool:
                 logger.info("cookie_checker: last_session_invalid=True 但 _m_h5_tk 实际有效，清除粘性标志")
                 container.collector.last_session_invalid = False
             else:
-                logger.warning("cookie_checker: collector 检测到 RGV587_ERROR，会话已失效")
-                # 主动失效 identity 层（manual=False，可被自动同步恢复）
+                # 先尝试从 CookieStore 注入恢复：浏览器内存 cookie 可能与 JSON 不同步，
+                # JSON 中若有新 cookie（如浏览器登录子进程刷新），注入后可恢复
+                logger.warning("cookie_checker: collector 检测到 RGV587_ERROR，尝试从 CookieStore 注入恢复")
+                try:
+                    from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+                    recovered = await inject_cookie_store_to_worker_browser(
+                        log_prefix="RGV587 恢复"
+                    )
+                    if recovered:
+                        logger.info("cookie_checker: RGV587 后从 CookieStore 注入成功，清除会话失效标志")
+                        container.collector.last_session_invalid = False
+                        return True
+                except Exception as inject_err:
+                    logger.warning("cookie_checker: RGV587 后注入恢复失败: %s", inject_err)
+                # 注入后仍失效，才标记 identity 层失效（manual=False，可被自动同步恢复）
+                logger.warning("cookie_checker: RGV587 注入恢复无效，标记 identity 层失效")
                 orch.cookie_rotator.invalidate_layer(CookieLayer.IDENTITY, manual=False)
                 return False
-    except Exception:
-        pass
+    except Exception as e:
+        # 不吞掉关键错误：记录 debug 日志便于排查容器初始化失败等问题
+        logger.debug("cookie_checker: _check_collector_session 异常: %s", e)
     return True
 
 
@@ -251,7 +270,7 @@ def _configure_default_health_checkers(orch) -> None:
             _sync_layer_states_if_needed(orch, cookies_list)
 
             # 5. 检查 collector 的会话失效标志
-            if not _check_collector_session(orch, cookies_list):
+            if not await _check_collector_session(orch, cookies_list):
                 return False
 
             return True
@@ -493,6 +512,11 @@ async def _renew_token_via_browser_navigation() -> bool:
 
     为什么用导航而非 API：导航是用户自然行为，
     风控压力低于直接调用 getTimestamp API。
+
+    续期后必须回写 JSON + 同步层状态：导航触发的 Set-Cookie 更新了浏览器内存，
+    但 CookieStore JSON 仍是旧值，CookieRotator 层状态也未同步。
+    不回写会导致健康检查误判 token 过期、实时搜索从 JSON 补注入旧 token。
+    与 login_orchestrator._default_renew_callback 保持一致的完整闭环。
     """
     page = None
     try:
@@ -504,9 +528,13 @@ async def _renew_token_via_browser_navigation() -> bool:
         page = await container.browser.new_page()
         try:
             await page.goto("https://h5.m.taobao.com/", wait_until="domcontentloaded", timeout=10000)
-            return True
         finally:
             await page.close()
+
+        # 导航成功后回写 Cookie + 同步层状态（统一入口，消除与其他续期回调的重复）
+        from xianyu_hunter.web.services.cookie_runtime_sync import sync_browser_cookies_to_store_after_renew
+        await sync_browser_cookies_to_store_after_renew(container, log_prefix="api_anticrawl renew")
+        return True
     except Exception as e:
         logger.warning("token 续期回调失败: %s", e)
         return False

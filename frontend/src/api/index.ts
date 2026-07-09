@@ -65,3 +65,5 @@ export type {
   BatchRefreshHistoryStatsResult,
   BatchRefreshHistoryCleanupResult,
 } from './batchRefresh'
+export { tunnelApi } from './tunnel'
+export type { TunnelStatus, TunnelConfig, TunnelConfigBody, TunnelDownloadError } from './tunnel'

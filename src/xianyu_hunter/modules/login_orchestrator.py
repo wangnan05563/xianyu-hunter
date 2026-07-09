@@ -108,6 +108,8 @@ class LoginOrchestrator:
         self._renew_fail_count: int = 0
         self._auto_relogin_callback: Callable[[], Awaitable[bool]] | None = None
         self._auto_relogin_cooldown_until: float = 0.0  # 冷却时间戳，避免频繁重登
+        # 保存异步恢复任务引用，避免被 GC 回收导致任务中途消失
+        self._pending_recover_task: asyncio.Task | None = None
 
     # ============== 初始化 ==============
 
@@ -294,6 +296,12 @@ class LoginOrchestrator:
         为什么先尝试同步：浏览器登录子进程可能已刷新 cookie 但主进程缓存未更新，
         重新读 JSON 有机会恢复，成本远低于重新登录。
 
+        为什么同步后还要异步注入浏览器：sync_cookie_layers_from_json 只更新了
+        CookieRotator 的内存层状态，浏览器上下文仍是失效的旧 cookie。
+        必须将 JSON 中的 cookie 注入浏览器才能形成完整恢复闭环（与
+        collection_service.ensure_official_cookies 的最佳实践一致）。
+        同步函数中无法 await，用 create_task 调度异步注入。
+
         Returns:
             True 表示恢复成功，无需触发自动重登
         """
@@ -302,7 +310,36 @@ class LoginOrchestrator:
             return False
         self._renew_fail_count = 0
         logger.info("Cookie 层同步恢复成功，session 失效已自愈")
+        # 异步注入浏览器 cookie：层状态同步成功说明 JSON 有新数据，
+        # 但浏览器内存仍是旧 cookie，必须注入才能让后续请求使用新 token
+        try:
+            loop = asyncio.get_event_loop()
+            # 保存引用避免任务被 GC 回收（Python 官方文档要求）
+            self._pending_recover_task = loop.create_task(self._inject_cookies_to_browser_after_recover())
+        except RuntimeError:
+            logger.warning("无事件循环可用，cookie 已同步层状态但未注入浏览器")
         return True
+
+    async def _inject_cookies_to_browser_after_recover(self) -> None:
+        """续期失败恢复后异步注入 cookie 到浏览器
+
+        复用 cookie_runtime_sync 的 inject_cookie_store_to_worker_browser，
+        内部已实现 add_cookies + sync_cookie_layers_from_json 完整闭环。
+        """
+        try:
+            from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+            success = await inject_cookie_store_to_worker_browser(
+                log_prefix="续期失败恢复"
+            )
+            if success:
+                logger.info("续期失败恢复后已注入 CookieStore cookie 到浏览器")
+            else:
+                logger.warning("续期失败恢复后注入浏览器 cookie 未通过验证")
+        except asyncio.CancelledError:
+            # 事件循环关闭时任务可能被取消，不应记为错误
+            raise
+        except Exception as e:
+            logger.warning("续期失败恢复后注入浏览器 cookie 失败: {}", e)
 
     def _maybe_trigger_auto_relogin(self) -> None:
         """根据冷却时间和失败次数决定是否触发自动重登
@@ -411,25 +448,9 @@ class LoginOrchestrator:
             finally:
                 await page.close()
 
-            # 导航成功后提取完整 Cookie 回写 CookieStore，保持 JSON 与浏览器内存一致
-            # 只提取 goofish/taobao 域，避免写入无关域的 Cookie
-            try:
-                cookies = await container.browser.get_cookies(["goofish.com", "taobao.com"])
-                if cookies:
-                    from xianyu_hunter.web.services.cookie_store import get_cookie_store
-                    # 多用户隔离：回写到最近活跃用户的 cookie 文件
-                    # 为什么不硬编码 default：login_orchestrator 是全局单例，
-                    # 多用户场景下回写到 default 会导致活跃用户读不到续期后的新 token
-                    try:
-                        from xianyu_hunter.web.services.user_manager import get_user_manager
-                        renew_user_id = get_user_manager().get_active_user_id()
-                    except Exception:
-                        renew_user_id = "default"
-                    get_cookie_store().export_cookies(cookies, method="renew", user_id=renew_user_id)
-                    logger.debug("token 续期后已同步 {} 个 cookie 到 CookieStore [user={}]", len(cookies), renew_user_id)
-            except Exception as e:
-                # 回写失败不影响续期成功状态（token 已在浏览器内存中刷新）
-                logger.warning("token 续期后回写 CookieStore 失败: {}", e)
+            # 导航成功后回写 Cookie + 同步层状态（统一入口，消除与其他续期回调的重复）
+            from xianyu_hunter.web.services.cookie_runtime_sync import sync_browser_cookies_to_store_after_renew
+            await sync_browser_cookies_to_store_after_renew(container, log_prefix="默认 renew_callback")
             return True
         except Exception as e:
             logger.debug("默认 token 续期回调失败: {}", e)

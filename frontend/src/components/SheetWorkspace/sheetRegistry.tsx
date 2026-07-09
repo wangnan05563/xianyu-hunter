@@ -23,6 +23,7 @@ import {
   InfoCircleOutlined,
   BlockOutlined,
   SettingOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons'
 import { lazyRetry } from '../../utils/lazyRetry'
 
@@ -70,6 +71,7 @@ export const sheetRegistry: SheetMeta[] = [
   { path: '/maintenance', title: '系统清理', icon: <ClearOutlined />, component: lazyRetry(() => import('../../pages/Maintenance/Cleanup')) },
   { path: '/maintenance/db', title: '数据库维护', icon: <DatabaseOutlined />, component: lazyRetry(() => import('../../pages/Maintenance/DatabaseAdmin')) },
   { path: '/maintenance/vector', title: '向量数据库维护', icon: <DatabaseOutlined />, component: lazyRetry(() => import('../../pages/Maintenance/VectorAdmin')) },
+  { path: '/maintenance/tunnel', title: '内网穿透', icon: <GlobalOutlined />, component: lazyRetry(() => import('../../pages/Maintenance/Tunnel')) },
   { path: '/batch-refresh', title: '批量采集', icon: <CloudDownloadOutlined />, component: lazyRetry(() => import('../../pages/Maintenance/BatchRefresh')) },
   { path: '/anticrawl', title: '反爬登录管理', icon: <ExperimentOutlined />, component: lazyRetry(() => import('../../pages/AntiCrawl')) },
   { path: '/price-dashboard', title: '价格行情', icon: <DollarOutlined />, component: lazyRetry(() => import('../../pages/PriceDashboard')) },

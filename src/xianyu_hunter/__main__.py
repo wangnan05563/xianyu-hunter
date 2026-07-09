@@ -268,7 +268,7 @@ def config_show() -> None:
 @app.command()
 def web(
     host: str = typer.Option("127.0.0.1", help="监听地址"),
-    port: int = typer.Option(8000, help="监听端口"),
+    port: int = typer.Option(8001, help="监听端口"),
     reload: bool = typer.Option(False, help="开发模式（自动重载）"),
     # 默认启用调度器：实时搜索/批量采集/自动抢单等核心功能都依赖浏览器实例
     # 使用 --no-with-scheduler 可在纯 Web 模式下启动（仅查看数据，不采集）
@@ -296,6 +296,8 @@ def web(
         os.environ.pop("XH_WITH_SCHEDULER", None)
         typer.echo("→ 模式: Web only（纯 Web，实时搜索/批量采集/自动抢单不可用）")
     from xianyu_hunter.web.app import app as web_app
+    # 同步端口到环境变量：内网穿透模块通过 XH_WEB_PORT 感知命令行 --port
+    os.environ["XH_WEB_PORT"] = str(port)
     typer.echo(f"→ 启动 Web 控制台: http://{host}:{port}")
     typer.echo(f"  API 文档:        http://{host}:{port}/api/docs")
     typer.echo("  按 Ctrl+C 退出")

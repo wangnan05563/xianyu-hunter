@@ -143,3 +143,118 @@
   outline: 2px solid #E20613;
   outline-offset: 2px;
 }
+
+/* ============== 移动端 markdown 渲染样式（.m-md）==============
+ * 与桌面端 .cb-md 共享 react-markdown 输出，但移动端要适配：
+ * - 字号更小（避免气泡过宽换行过碎）
+ * - 表格横向滚动（小屏必备）
+ * - 代码块可横向滚动 + 复制按钮
+ * 引用 .cb-md-code-wrap / .cb-md-code-header / .cb-md-code-lang / .cb-md-copy-btn
+ * 等桌面端定义，避免重复样式（chatbot.css 全局可见） */
+.m-md {
+  font-size: 14px;
+  line-height: 1.6;
+  color: inherit;
+  word-break: break-word;
+}
+
+.m-md p {
+  margin: 0 0 8px 0;
+}
+
+.m-md p:last-child {
+  margin-bottom: 0;
+}
+
+.m-md h1,
+.m-md h2,
+.m-md h3,
+.m-md h4,
+.m-md h5,
+.m-md h6 {
+  margin: 12px 0 8px 0;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.m-md h1 { font-size: 20px; }
+.m-md h2 { font-size: 18px; }
+.m-md h3 { font-size: 16px; }
+.m-md h4,
+.m-md h5,
+.m-md h6 { font-size: 14px; }
+
+.m-md ul,
+.m-md ol {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.m-md li {
+  margin: 4px 0;
+}
+
+.m-md code {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--xh-font-mono, monospace);
+  font-size: 12.5px;
+}
+
+/* 助手消息气泡背景较浅，code 背景稍深以保持对比 */
+.m-md pre {
+  background: rgba(0, 0, 0, 0.04);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+  font-size: 12.5px;
+}
+
+.m-md pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* 表格移动端横向滚动：避免列被压成竖条 */
+.m-md table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.m-md th,
+.m-md td {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  padding: 6px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.m-md th {
+  background: rgba(0, 0, 0, 0.04);
+  font-weight: 600;
+}
+
+.m-md blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid rgba(0, 0, 0, 0.2);
+  color: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.m-md a {
+  color: #1677ff;
+  text-decoration: none;
+}
+
+.m-md a:active {
+  opacity: 0.7;
+}
+

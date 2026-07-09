@@ -639,10 +639,16 @@ def threshold_suggestion(
     """
     # 复用 distribution API 获取分数分布（默认 7 天）
     # 多用户隔离：传递 request 以复用用户过滤逻辑
+    # 为什么显式传 None：evaluations_distribution 的 task_id 等参数默认值是 Query(None) 对象
+    # （FastAPI 路由专用），直接当函数调用时 Query 对象会原样透传，下游 task_id.lower() 崩溃
     dist_data = evaluations_distribution(
         range_hours=168,
         price_bin_count=10,
         score_bin_count=10,
+        task_id=None,
+        min_price=None,
+        max_price=None,
+        include_out_of_range=False,
         request=request,
         container=container,
     )

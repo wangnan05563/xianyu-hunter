@@ -367,12 +367,23 @@ foreach ($sensitiveFile in @(".env", ".env.local", ".secrets.json")) {
 # 5.6.2 扫描打包产物中是否有 API Key 痕迹
 # 扫描模式：sk- 开头（OpenAI/DeepSeek 标准 Key 前缀）、__MIGRATED_TO_KEYRING__ 占位符
 # 注意：仅扫描项目级文件（exe 同级 + config/ + scripts/ + static/），
-# 不扫描 _internal/（第三方库源码中可能含 "deepseek" 等模型名字符串，会误报）
-$scanDirs = @($distRoot, "$distRoot\config", "$distRoot\scripts", "$distRoot\static")
+# 不扫描 _internal/（第三方库 dist-info 的 RECORD 文件含 sha256 hash，
+#   如 torch 的 "sha256=...LJsk-trKzjJE0tUMSAsSlfOiR_3c" 会匹配 sk-[A-z0-9]{20,} 误报）
+$scanRootFiles = $distRoot
+$scanSubDirs = @("$distRoot\config", "$distRoot\scripts", "$distRoot\static")
 $leakFound = $false
-foreach ($scanDir in $scanDirs) {
-    if (-not (Test-Path $scanDir)) { continue }
-    $files = Get-ChildItem -Path $scanDir -File -Recurse -ErrorAction SilentlyContinue
+# exe 同级文件不递归（递归会进入 _internal/ 第三方库目录）
+$scanTargets = @(@{ Path = $scanRootFiles; Recurse = $false })
+foreach ($d in $scanSubDirs) {
+    $scanTargets += @(@{ Path = $d; Recurse = $true })
+}
+foreach ($target in $scanTargets) {
+    if (-not (Test-Path $target.Path)) { continue }
+    if ($target.Recurse) {
+        $files = Get-ChildItem -Path $target.Path -File -Recurse -ErrorAction SilentlyContinue
+    } else {
+        $files = Get-ChildItem -Path $target.Path -File -ErrorAction SilentlyContinue
+    }
     foreach ($file in $files) {
         # 跳过二进制文件（exe/dll/pak 等），只扫描文本文件
         $ext = $file.Extension.ToLower()

@@ -1,9 +1,9 @@
 """FastAPI 应用入口
 
 用法：
-    uvicorn xianyu_hunter.web.app:app --reload --port 8000
+    uvicorn xianyu_hunter.web.app:app --reload --port 8001
     或：
-    python -m xianyu_hunter web --port 8000
+    python -m xianyu_hunter web --port 8001
     一键启动（Web + 调度器）：
     python -m xianyu_hunter web --with-scheduler
 """

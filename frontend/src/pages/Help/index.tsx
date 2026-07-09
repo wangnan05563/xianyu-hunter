@@ -114,7 +114,7 @@ const DOC_SECTIONS: DocSection[] = [
         '首次登录：python -m xianyu_hunter login，弹出浏览器扫码登录闲鱼',
         // S7780：用 String.raw 避免转义反斜杠，Windows 路径更清晰
         String.raw`启动服务：双击 scripts\启动服务.bat，或 python -m xianyu_hunter web --with-scheduler`,
-        '访问控制台：浏览器打开 http://127.0.0.1:8000/app/（移动端自动跳转 /m）',
+        '访问控制台：浏览器打开 http://127.0.0.1:8001/app/（移动端自动跳转 /m）',
         '创建任务：在「任务管理」页面新建监控任务，设置关键词和价格区间',
         '启动任务：任务创建后默认为 RUNNING 状态，调度器会按间隔自动执行',
       ]),

@@ -1,6 +1,6 @@
 @echo off
 chcp 936 >nul 2>&1
-REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬Ðè»Øµ½ÏîÄ¿¸ùÄ¿Â¼
+REM ï¿½Å±ï¿½Î»ï¿½ï¿½ scripts/ ï¿½ï¿½Ä¿Â¼ï¿½ï¿½ï¿½ï¿½Øµï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Ä¿Â¼
 cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
@@ -24,9 +24,9 @@ if exist "logs\web.pid" (
     del "logs\web.pid" >nul 2>&1
 )
 
-REM Fallback: kill any process listening on port 8000
+REM Fallback: kill any process listening on port 8001
 if "!WEB_KILLED!"=="0" (
-    for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000.*LISTENING"') do (
+    for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8001.*LISTENING"') do (
         taskkill /F /T /PID %%a >nul 2>&1
         if not errorlevel 1 (
             echo   [OK] Web server stopped (PID %%a, found by port scan)
@@ -36,7 +36,7 @@ if "!WEB_KILLED!"=="0" (
 )
 
 if "!WEB_KILLED!"=="0" (
-    echo   [SKIP] No Web server process found on port 8000.
+    echo   [SKIP] No Web server process found on port 8001.
 )
 
 REM [2/3] Release browser resources (WebView2 + Edge child processes)
@@ -53,10 +53,10 @@ REM [3/3] Verify shutdown - port released and no xianyu_hunter process remaining
 echo [3/3] Verifying shutdown...
 
 set PORT_FREE=1
-netstat -aon | findstr ":8000.*LISTENING" >nul 2>&1
+netstat -aon | findstr ":8001.*LISTENING" >nul 2>&1
 if not errorlevel 1 (
     set PORT_FREE=0
-    echo   [WARN] Port 8000 is still in use!
+    echo   [WARN] Port 8001 is still in use!
 )
 
 if "!PORT_FREE!"=="1" (

@@ -30,6 +30,7 @@ const Maintenance = lazyRetry(() => import('./pages/Maintenance/Cleanup'))
 const DatabaseAdmin = lazyRetry(() => import('./pages/Maintenance/DatabaseAdmin'))
 const VectorAdmin = lazyRetry(() => import('./pages/Maintenance/VectorAdmin'))
 const BatchRefresh = lazyRetry(() => import('./pages/Maintenance/BatchRefresh'))
+const Tunnel = lazyRetry(() => import('./pages/Maintenance/Tunnel'))
 const SearchConfig = lazyRetry(() => import('./pages/Config/SearchConfig'))
 const BuyerStrategy = lazyRetry(() => import('./pages/Config/BuyerStrategy'))
 const Onboarding = lazyRetry(() => import('./pages/Onboarding'))
@@ -111,6 +112,7 @@ export default function App() {
             <Route path="maintenance" element={<LazyRoute><Maintenance /></LazyRoute>} />
             <Route path="maintenance/db" element={<LazyRoute><DatabaseAdmin /></LazyRoute>} />
             <Route path="maintenance/vector" element={<LazyRoute><VectorAdmin /></LazyRoute>} />
+            <Route path="maintenance/tunnel" element={<LazyRoute><Tunnel /></LazyRoute>} />
             <Route path="batch-refresh" element={<LazyRoute><BatchRefresh /></LazyRoute>} />
             <Route path="anticrawl" element={<LazyRoute><AntiCrawl /></LazyRoute>} />
             {/* 菜单管理：用户级菜单可见性/排序配置（MU5） */}

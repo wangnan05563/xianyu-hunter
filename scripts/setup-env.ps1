@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     XianyuHunter 一键环境配置脚本
 .DESCRIPTION
@@ -566,7 +566,7 @@ Write-Host "  1. 编辑 .env 填入推送 Key（SERVERCHAN_KEY / PUSHPLUS_TOKEN 
 Write-Host "  2. 首次登录闲鱼：.venv\Scripts\python.exe -m xianyu_hunter login"
 Write-Host "  3. 启动服务：双击 scripts\启动服务.bat 或执行："
 Write-Host "       .\.venv\Scripts\python.exe -m xianyu_hunter web --with-scheduler"
-Write-Host "  4. 访问：http://127.0.0.1:8000/app/"
+Write-Host "  4. 访问：http://127.0.0.1:8001/app/"
 Write-Host ""
 
 # ---------- 可选：启动服务 ----------
@@ -580,12 +580,12 @@ if ($StartService -and $allPass) {
     $outLog = Join-Path $LogsDir "setup-uvicorn.out.log"
     $errLog = Join-Path $LogsDir "setup-uvicorn.err.log"
     Start-Process -FilePath $VenvPython `
-        -ArgumentList "-u","-m","xianyu_hunter","web","--host","127.0.0.1","--port","8000","--with-scheduler" `
+        -ArgumentList "-u","-m","xianyu_hunter","web","--host","127.0.0.1","--port","8001","--with-scheduler" `
         -WorkingDirectory $ProjectRoot `
         -WindowStyle Hidden `
         -RedirectStandardOutput $outLog `
         -RedirectStandardError $errLog
-    Write-OK "Web 服务已后台启动，访问 http://127.0.0.1:8000/app/"
+    Write-OK "Web 服务已后台启动，访问 http://127.0.0.1:8001/app/"
     Write-Host "  日志: $outLog"
 }
 

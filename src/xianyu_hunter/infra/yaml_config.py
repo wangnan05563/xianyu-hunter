@@ -16,7 +16,7 @@ from xianyu_hunter.paths import get_config_dir, get_chromadb_path
 
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8001
 
 
 class BrowserConfig(BaseModel):
@@ -234,6 +234,21 @@ class BatchRefreshConfig(BaseModel):
     batch_size: int = 50
     max_items_per_run: int = 100
     history_retention_days: int = Field(default=90, ge=0, le=3650)
+
+
+class TunnelConfig(BaseModel):
+    """内网穿透配置（移动端远程访问）
+
+    - provider: 穿透服务提供方，cloudflare 免注册但大陆不稳定，cpolar 国内稳定但需 authtoken
+    - local_port: 隧道转发到的本地端口，0 表示从 server.port 继承
+      命令行 --port 启动时会同步设置 XH_WEB_PORT 环境变量，优先级高于此值
+    - cpolar_authtoken: cpolar 专用认证 token，从 cpolar 控制台获取
+    - binary_path: 手动放置的二进制路径（离线/下载失败场景），留空则自动下载
+    """
+    provider: str = "cloudflare"
+    local_port: int = 0
+    cpolar_authtoken: str = ""
+    binary_path: str = ""
 
 
 # ============== 智能客服模块配置 ==============
@@ -628,6 +643,7 @@ class AppConfig(BaseModel):
     search: SearchConfig = SearchConfig()
     price_strategy: PriceStrategyConfig = PriceStrategyConfig()
     batch_refresh: BatchRefreshConfig = BatchRefreshConfig()
+    tunnel: TunnelConfig = TunnelConfig()
     chatbot: ChatbotConfig = ChatbotConfig()
     task_scheduler: TaskSchedulerConfig = TaskSchedulerConfig()
     # 捡漏价格配置（P10 分位数可调）

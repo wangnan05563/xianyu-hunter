@@ -1,11 +1,15 @@
 // frontend/src/mobile/pages/Chatbot/index.tsx
 // 移动端智能客服对话页（精简版）：不显示会话列表，仅做基础对话
+// 关键修复：assistant 消息用 MarkdownContent 渲染，替代原 whiteSpace: pre-wrap
+// 的纯文本展示（之前会把 markdown 源码（如 # 标题、--- 表格分隔）原样显示，
+// 用户看到的 `?????` 实际是 markdown 表格分隔符在等宽字符下视觉混淆的结果）
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Input, Button, Tag, Spin, App, theme } from 'antd'
 import { SendOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons'
 import { chatbotApi } from '../../../pages/Chatbot/api'
 import { useSSEChat } from '../../../pages/Chatbot/hooks/useSSEChat'
-import type { Session, Message, SSEEvent } from '../../../pages/Chatbot/types'
+import { MarkdownContent } from '../../../pages/Chatbot/components/MarkdownContent'
+import type { Session, Message, SSEEvent, Source } from '../../../pages/Chatbot/types'
 import { extractApiError } from '../../../utils/apiError'
 
 const { TextArea } = Input
@@ -313,14 +317,27 @@ export default function MobileChatbot() {
           style={{
             borderRadius: 12,
             padding: '8px 12px',
-            maxWidth: '80%',
+            maxWidth: '85%',
+            // 用户消息用主色背景，助手消息用容器背景（接近白色）便于区分
             backgroundColor: isUser ? themeToken.colorPrimary : themeToken.colorBgContainer,
-            color: isUser ? 'white' : 'rgba(0,0,0,0.85)',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
+            color: isUser ? '#fff' : 'rgba(0,0,0,0.85)',
+            // 用户消息保留 wordBreak（短文本居多）
+            // 助手消息交给 MarkdownContent 内部样式处理（保留表格/代码块/列表语义）
+            wordBreak: isUser ? 'break-word' : undefined,
           }}
         >
-          {msg.content}
+          {isUser ? (
+            // 用户消息：纯文本，不需要 markdown 渲染
+            <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{msg.content}</span>
+          ) : (
+            // 助手消息：markdown 渲染（标题/列表/代码块/表格/链接）
+            // 桌面/移动端共享同一渲染规则，避免规则漂移
+            <MarkdownContent
+              content={msg.content}
+              sources={msg.sources as ReadonlyArray<Source> | undefined}
+              className="m-md"
+            />
+          )}
           {/* 推荐问题：可点击的小标签，点击后自动发送 */}
           {!isUser && msg.follow_ups && msg.follow_ups.length > 0 && (
             <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -341,6 +358,9 @@ export default function MobileChatbot() {
   }
 
   // ============== 渲染流式响应气泡 ==============
+  // 流式响应期间实时渲染 markdown：每 token 累计后用 MarkdownContent 渲染
+  // 为什么流式也要 markdown：避免 LLM 输出的 markdown 源码（# 标题、--- 表格）逐字
+  // 暴露给用户；流式 markdown 渲染可能略耗性能但用户体验更好
   const renderStreaming = (): React.ReactNode => {
     if (!isStreaming) return null
     const content = streamingContent || (streamingError ? `错误: ${streamingError}` : '')
@@ -371,14 +391,12 @@ export default function MobileChatbot() {
           style={{
             borderRadius: 12,
             padding: '8px 12px',
-            maxWidth: '80%',
+            maxWidth: '85%',
             backgroundColor: '#f5f5f5',
             color: streamingError ? '#ff4d4f' : 'rgba(0,0,0,0.85)',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
           }}
         >
-          {content}
+          <MarkdownContent content={content} className="m-md" />
         </div>
       </div>
     )
@@ -416,21 +434,19 @@ export default function MobileChatbot() {
 
       {/* 消息列表（可滚动区域） */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
-        {/* 欢迎语：仅 UI 展示，不入库 */}
+        {/* 欢迎语：仅 UI 展示，不入库；用 markdown 渲染，配置可支持加粗/链接 */}
         {welcomeMessage && (
           <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
             <div
               style={{
                 borderRadius: 12,
                 padding: '8px 12px',
-                maxWidth: '80%',
+                maxWidth: '85%',
                 backgroundColor: '#f5f5f5',
                 color: 'rgba(0,0,0,0.85)',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
               }}
             >
-              {welcomeMessage}
+              <MarkdownContent content={welcomeMessage} className="m-md" />
             </div>
           </div>
         )}

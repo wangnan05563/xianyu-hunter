@@ -1,6 +1,6 @@
 @echo off
 chcp 936 >nul 2>&1
-REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬Ðè»Øµ½ÏîÄ¿¸ùÄ¿Â¼
+REM ï¿½Å±ï¿½Î»ï¿½ï¿½ scripts/ ï¿½ï¿½Ä¿Â¼ï¿½ï¿½ï¿½ï¿½Øµï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Ä¿Â¼
 cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
@@ -18,8 +18,8 @@ if exist "logs\web.pid" (
     del "logs\web.pid" >nul 2>&1
 )
 
-REM Kill any process listening on port 8000 (fallback when PID file is missing)
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000.*LISTENING"') do (
+REM Kill any process listening on port 8001 (fallback when PID file is missing)
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8001.*LISTENING"') do (
     taskkill /F /T /PID %%a >nul 2>&1
 )
 
@@ -49,12 +49,12 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM [3/4] Start Web server (Ä¬ÈÏµ÷¶ÈÆ÷Ä£Ê½£ºä¯ÀÀÆ÷ + ÈÎÎñÒýÇæ + ÅúÁ¿²É¼¯Í¬½ø³Ì)
-REM ×Ô xianyu web ÃüÁîÄ¬ÈÏÆôÓÃ --with-scheduler£¬ÎÞÐèÏÔÊ½´«²Î
-REM ÈôÐè´¿ Web Ä£Ê½£¨²»Æô¶¯ä¯ÀÀÆ÷£©£¬¸ÄÓÃ: -m xianyu_hunter web --no-with-scheduler
+REM [3/4] Start Web server (Ä¬ï¿½Ïµï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ + ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ + ï¿½ï¿½ï¿½ï¿½ï¿½É¼ï¿½Í¬ï¿½ï¿½ï¿½ï¿½)
+REM ï¿½ï¿½ xianyu web ï¿½ï¿½ï¿½ï¿½Ä¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ --with-schedulerï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½
+REM ï¿½ï¿½ï¿½è´¿ Web Ä£Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: -m xianyu_hunter web --no-with-scheduler
 echo [3/4] Starting Web server (default: with scheduler)...
 
-start "XianyuHunter-Web" cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web 2>&1 & pause"
+start "XianyuHunter-Web" cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web --port 8001 2>&1 & pause"
 
 REM Wait for Web port to be ready (up to 30 seconds)
 echo Waiting for Web server...
@@ -62,7 +62,7 @@ set /a tries=0
 :wait_web
 set /a tries+=1
 ping -n 2 127.0.0.1 >nul 2>&1
-netstat -aon | findstr ":8000.*LISTENING" >nul 2>&1
+netstat -aon | findstr ":8001.*LISTENING" >nul 2>&1
 if errorlevel 1 (
     if !tries! lss 15 goto wait_web
     echo [ERROR] Web server failed to start within 30 seconds!
@@ -72,10 +72,10 @@ if errorlevel 1 (
 )
 
 REM Record Web PID via port scan
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000.*LISTENING"') do (
+for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8001.*LISTENING"') do (
     echo %%a> "logs\web.pid"
 )
-echo   Web server started on port 8000.
+echo   Web server started on port 8001.
 
 REM [4/4] Verify process is alive
 echo [4/4] Verifying service...
@@ -103,13 +103,13 @@ echo.
 echo ========================================
 echo   Service Started!
 echo ========================================
-echo   Web:  http://127.0.0.1:8000
+echo   Web:  http://127.0.0.1:8001
 echo   Mode: Web + Scheduler (with browser)
 echo   Log:  logs\web.log
 echo.
-echo To stop: double-click scripts\Í£Ö¹·þÎñ.bat
+echo To stop: double-click scripts\Í£Ö¹ï¿½ï¿½ï¿½ï¿½.bat
 echo.
 
-start "" http://127.0.0.1:8000/app/
+start "" http://127.0.0.1:8001/app/
 timeout /t 3 >nul 2>&1
 exit

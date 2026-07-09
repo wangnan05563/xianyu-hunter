@@ -3,6 +3,9 @@ import { theme } from 'antd'
 import MobileHeader from './MobileHeader'
 import TabBar from '../components/TabBar'
 import OfflineBanner from '../components/OfflineBanner'
+// 移动端全局样式：TabBar / Header / TaskCard / Markdown 渲染样式
+// 在 main.tsx 引入会污染桌面端布局，必须仅在移动端 Layout 引入
+import '../styles/mobile.css'
 
 // 移动端主布局：Header + Content + TabBar
 export default function MobileLayout() {

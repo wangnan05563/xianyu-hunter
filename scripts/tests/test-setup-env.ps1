@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     setup-env.ps1 单元/集成/边界测试脚本
 .DESCRIPTION
@@ -386,17 +386,17 @@ if (Test-CommandAvailable 'npm') {
 # ============================================================
 Write-Host ""
 Write-Host "--- 边界测试: -StartService 端口冲突 ---" -ForegroundColor Cyan
-# 检查 8000 端口是否被占用
+# 检查 8001 端口是否被占用
 $portInUse = $false
 try {
-    $conn = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+    $conn = Get-NetTCPConnection -LocalPort 8001 -State Listen -ErrorAction SilentlyContinue
     if ($conn) { $portInUse = $true }
 } catch {}
 if ($portInUse) {
-    Write-Host "  端口 8000 已被占用，-StartService 会启动失败但脚本应继续" -ForegroundColor DarkGray
+    Write-Host "  端口 8001 已被占用，-StartService 会启动失败但脚本应继续" -ForegroundColor DarkGray
     Assert-True "端口占用场景已记录" $true
 } else {
-    Write-Host "  端口 8000 空闲，跳过冲突测试" -ForegroundColor DarkGray
+    Write-Host "  端口 8001 空闲，跳过冲突测试" -ForegroundColor DarkGray
     Assert-True "端口空闲，跳过" $true
 }
 

@@ -371,7 +371,7 @@ def _get_web_base_url() -> str:
         from xianyu_hunter.infra.yaml_config import get_config
         port = get_config().server.port
     except Exception:
-        port = 8000
+        port = 8001
     return f"http://localhost:{port}"
 
 

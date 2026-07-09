@@ -14,7 +14,7 @@ import httpx
 from xianyu_hunter.config import get_settings
 
 TOKEN = get_settings().web_token
-URL = "http://127.0.0.1:8000/api/chatbot/chat"
+URL = "http://127.0.0.1:8001/api/chatbot/chat"
 MESSAGE = sys.argv[1] if len(sys.argv) > 1 else "闲鱼猎人怎么创建任务？"
 
 
