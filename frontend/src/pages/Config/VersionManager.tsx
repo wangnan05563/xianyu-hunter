@@ -16,7 +16,6 @@ import {
   Pagination,
 } from 'antd'
 import {
-  HistoryOutlined,
   RollbackOutlined,
   DownloadOutlined,
   UploadOutlined,
@@ -220,10 +219,7 @@ export default function VersionManager() {
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2>
-          <HistoryOutlined /> 配置版本管理
-        </h2>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
             刷新

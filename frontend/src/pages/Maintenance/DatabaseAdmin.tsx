@@ -565,12 +565,9 @@ export default function DatabaseAdmin() {
   return (
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <h2 style={{ margin: 0 }}>数据库维护</h2>
-          <p style={{ margin: 0, color: 'var(--xh-text-tertiary)', fontSize: 13 }}>
-            业务表在线 CRUD · 危险操作需要二次确认（输入 {CONFIRM_TOKEN}）· 所有写操作均记录审计日志
-          </p>
-        </div>
+        <p style={{ margin: 0, color: 'var(--xh-text-tertiary)', fontSize: 13 }}>
+          业务表在线 CRUD · 危险操作需要二次确认（输入 {CONFIRM_TOKEN}）· 所有写操作均记录审计日志
+        </p>
         <Space>
           <Button icon={<FileTextOutlined />} onClick={() => { loadAuditLog(); setAuditDrawerOpen(true) }}>
             审计日志

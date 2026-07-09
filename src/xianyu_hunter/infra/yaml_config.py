@@ -244,11 +244,13 @@ class TunnelConfig(BaseModel):
       命令行 --port 启动时会同步设置 XH_WEB_PORT 环境变量，优先级高于此值
     - cpolar_authtoken: cpolar 专用认证 token，从 cpolar 控制台获取
     - binary_path: 手动放置的二进制路径（离线/下载失败场景），留空则自动下载
+    - auto_start: 后端启动时是否自动启动隧道（后台线程，不阻塞服务启动）
     """
     provider: str = "cloudflare"
     local_port: int = 0
     cpolar_authtoken: str = ""
     binary_path: str = ""
+    auto_start: bool = False
 
 
 # ============== 智能客服模块配置 ==============

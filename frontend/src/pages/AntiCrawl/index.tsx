@@ -29,7 +29,6 @@ import {
   ThunderboltOutlined,
   KeyOutlined,
   HeartOutlined,
-  ExperimentOutlined,
   ExclamationCircleOutlined,
   DownloadOutlined,
 } from '@ant-design/icons'
@@ -543,10 +542,6 @@ export default function AntiCrawl() {
   return (
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
-          <ExperimentOutlined style={{ marginRight: 8 }} />
-          反爬登录管理
-        </Typography.Title>
         <Button icon={<ReloadOutlined />} onClick={loadAll} loading={loadingStrategy}>
           刷新
         </Button>

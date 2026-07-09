@@ -25,7 +25,6 @@ import {
 import type { TableColumnsType, TableProps } from 'antd'
 import type { Dayjs } from 'dayjs'
 import {
-  CloudDownloadOutlined,
   DeleteOutlined,
   EyeOutlined,
   PauseCircleOutlined,
@@ -138,12 +137,6 @@ export default function BatchRefresh() {
   return (
     <div className="page-container">
       <div style={{ marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>
-          <Space>
-            <CloudDownloadOutlined style={{ color: '#FF6200' }} />
-            <span>批量采集</span>
-          </Space>
-        </h2>
         <Text type="secondary" style={{ fontSize: 13 }}>
           定时刷新在售商品详情 · 检测已售状态 · 补全字段变更 · 完整执行历史可追溯
         </Text>

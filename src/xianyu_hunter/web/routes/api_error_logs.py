@@ -38,10 +38,12 @@ ERROR_LOG_NOT_FOUND_MSG = "错误日志不存在"
 class BatchActionRequest(BaseModel):
     """批量操作请求体
 
-    将删除与状态变更统一聚合为单一 action，避免前端为每种操作分别建路由
+    将删除与状态变更统一聚合为单一 action，避免前端为每种操作分别建路由。
+    action 取值与 status 字段保持一致（resolved/ignored/new 过去分词形式），
+    避免 batch_action 直接将 action 写入 status 时产生脏数据。
     """
     ids: list[int] = Field(..., min_length=1, max_length=500)
-    action: str = Field(..., pattern="^(delete|resolve|ignore|new)$")
+    action: str = Field(..., pattern="^(delete|resolved|ignored|new)$")
 
 
 def _parse_json_fields(item: dict) -> dict:
@@ -108,7 +110,7 @@ def batch_action(
     """批量操作错误日志
 
     支持一次性对多条记录执行删除或状态变更，减少前端循环请求次数
-    action: delete | resolve | ignore | new
+    action: delete | resolved | ignored | new
     """
     ids = payload.ids
     action = payload.action

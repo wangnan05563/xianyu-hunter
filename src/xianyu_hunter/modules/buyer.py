@@ -1034,7 +1034,10 @@ class Buyer:
     def _publish_buy_succeeded(self, task_id: str, item_id: str, order: dict) -> None:
         if not self.bus:
             return
-        item = self.repo.get_item(item_id) or {}
+        # 多用户隔离：通过 task_id 反查 user_id，确保只查到本任务所属用户的商品
+        task = self.repo.get_task(task_id)
+        user_id = task.get("user_id") if task else None
+        item = self.repo.get_item(item_id, user_id=user_id) or {}
         self.bus.publish_nowait(
             Event(
                 type=EventType.BUY_SUCCEEDED,

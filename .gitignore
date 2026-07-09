@@ -215,6 +215,23 @@ config_resp.jsonclear
 /not enabled*
 /ubprocess*
 
+# ---------- 第六轮清理新增（2026-07-09）----------
+# 一次性检查 PS1 脚本（check-*.ps1 模式，防止根目录再生成）
+/check-*.ps1
+
+# 临时 HTML 输出（前端页面快照/调试用）
+/_temp_*.html
+
+# 一次性 SonarQube Python 工具（按文件名特征扩展）
+/check_s*.py
+/list_*.py
+/merge_sonar.py
+/parse_sonar.py
+/*_sonar.py
+
+# 异常文件名前缀的 PS1（避免 PowerShell 误重定向）
+# 兜底：所有 PS1 文件都应经过 pre-commit 检查是否在白名单
+
 # ---------- 前端构建产物 ----------
 src/xianyu_hunter/web/static/spa/
 

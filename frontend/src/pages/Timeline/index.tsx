@@ -118,8 +118,6 @@ export default function TimelinePage() {
 
   return (
     <div className="page-container">
-      <h2 style={{ marginBottom: 16 }}>📡 事件时间线</h2>
-
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card size="small">

@@ -591,10 +591,43 @@ def setup_startup_hooks(app: FastAPI) -> None:
         # 启动所有后台调度器（EventBus 优先 → 调度器 → Cookie 同步等）
         await _start_all_schedulers(container)
 
+        # 内网穿透：auto_start 为 True 时后台线程自动启动隧道
+        # 用线程而非 asyncio：cloudflared/cpolar 是阻塞子进程，线程不占用事件循环
+        # daemon=True 确保随主进程退出，shutdown hook 中会显式 stop
+        try:
+            from xianyu_hunter.infra.yaml_config import get_config
+            if get_config().tunnel.auto_start:
+                import threading
+                from xianyu_hunter.web.routes.api_tunnel import get_tunnel_service
+
+                def _auto_start_tunnel():
+                    try:
+                        svc = get_tunnel_service()
+                        svc.start()
+                        logger.info("内网穿透隧道已自动启动: {}", svc.public_url)
+                    except Exception as e:
+                        logger.exception("内网穿透自动启动失败: {}", e)
+
+                threading.Thread(
+                    target=_auto_start_tunnel, daemon=True, name="tunnel-autostart"
+                ).start()
+                logger.info("检测到 tunnel.auto_start=True，已在后台线程启动隧道")
+        except Exception as e:
+            logger.exception("内网穿透 auto_start 检查失败: {}", e)
+
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:
         """优雅停止调度器后台任务"""
         global _scheduler_task, _event_bus_task
+        # 内网穿透隧道优先停止：避免调度器停止后隧道仍转发流量到已关闭的服务
+        try:
+            from xianyu_hunter.web.routes.api_tunnel import get_tunnel_service
+            svc = get_tunnel_service()
+            if svc.status == "running":
+                svc.stop()
+                logger.info("内网穿透隧道已随服务关闭而停止")
+        except Exception:
+            pass  # 隧道模块未初始化或已停止，忽略
         # 同步调度器优先停止（知识库 → 批量采集 → Cookie 同步 → 接管超时）
         _stop_all_sync_schedulers()
         if _scheduler_task and not _scheduler_task.done():

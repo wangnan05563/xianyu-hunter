@@ -4,7 +4,7 @@ import { DownloadOutlined, DatabaseOutlined } from '@ant-design/icons'
 import type { Dayjs } from 'dayjs'
 import { exportApi, type ExportDataset, type ExportDatasetInfo, type ExportParams } from '../../api'
 
-const { Title, Paragraph, Text } = Typography
+const { Paragraph, Text } = Typography
 const { RangePicker } = DatePicker
 
 // 数据集展示元数据：图标颜色 + 中文标题（description 由后端返回）
@@ -200,7 +200,6 @@ export default function Export() {
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: 24 }}>
       <div style={{ marginBottom: 16 }}>
-        <Title level={4} style={{ marginBottom: 4 }}>数据导出</Title>
         <Paragraph type="secondary" style={{ marginBottom: 0 }}>
           将商品、评估、订单、事件数据导出为 CSV（Excel/Numbers 友好，含 UTF-8 BOM）。支持按任务 ID、时间范围、状态、等级筛选。
         </Paragraph>

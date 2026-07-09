@@ -305,3 +305,9 @@ subprocess_sync:
   startup_check_enabled: true
 bargain_price:
   percentile: 0.1
+tunnel:
+  provider: cloudflare
+  local_port: 8001
+  cpolar_authtoken: Y2E3MjkzNGYtYWU0ZC00M2I4LThjZWItMThlNDA3OTJjMDdh
+  binary_path: ''
+  auto_start: false

@@ -123,6 +123,7 @@ class ItemCollectionService:
         source: str = "official",
         reuse_page: Any | None = None,
         evaluate: bool | None = None,
+        user_id: str | None = None,
     ) -> CollectionResult:
         del evaluate
         if mode == CollectionMode.DETAIL_ONLY:
@@ -132,6 +133,7 @@ class ItemCollectionService:
                 existing_item=existing_item,
                 source=source,
                 reuse_page=reuse_page,
+                user_id=user_id,
             )
         if mode == CollectionMode.OFFICIAL_FULL:
             return await self._with_browser_lock(
@@ -141,6 +143,7 @@ class ItemCollectionService:
                     existing_item=existing_item,
                     source=source,
                     reuse_page=reuse_page,
+                    user_id=user_id,
                 ),
                 priority="low",
             )
@@ -432,6 +435,7 @@ class ItemCollectionService:
         existing_item: dict[str, Any] | None,
         source: str,
         reuse_page: Any | None,
+        user_id: str | None = None,
     ) -> CollectionResult:
         """detail-only 模式采集
 
@@ -458,7 +462,7 @@ class ItemCollectionService:
             await self._raise_detail_failure_error(item_id)
 
         return self._persist_detail_collection(
-            item_id, detail, task_id=task_id, existing_item=existing_item, source=source
+            item_id, detail, task_id=task_id, existing_item=existing_item, source=source, user_id=user_id
         )
 
     async def _refresh_token_and_retry_detail(
@@ -538,9 +542,10 @@ class ItemCollectionService:
         task_id: str | None,
         existing_item: dict[str, Any] | None,
         source: str,
+        user_id: str | None = None,
     ) -> CollectionResult:
         """持久化 detail 采集结果：upsert item、标记售出、同步 display"""
-        old_item = existing_item if existing_item is not None else (self.container.repo.get_item(item_id) or {})
+        old_item = existing_item if existing_item is not None else (self.container.repo.get_item(item_id, user_id=user_id) or {})
         effective_task_id = str(old_item.get("task_id") or task_id or "")
         incoming = self._item_row_from_detail(item_id, detail, effective_task_id)
         is_delisted = bool(detail.is_sold and not detail.title)
@@ -589,6 +594,7 @@ class ItemCollectionService:
         existing_item: dict[str, Any] | None,
         source: str,
         reuse_page: Any | None,
+        user_id: str | None = None,
     ) -> CollectionResult:
         """official-full 模式采集
 
@@ -617,7 +623,7 @@ class ItemCollectionService:
             self._merge_detail_seller_fields(seller, detail)
 
         _, effective_task_id, changed_fields = self._persist_official_collection(
-            item_id, detail, seller, task_id=task_id, existing_item=existing_item, source=source
+            item_id, detail, seller, task_id=task_id, existing_item=existing_item, source=source, user_id=user_id
         )
 
         eval_result = self._evaluate_and_notify(
@@ -704,12 +710,13 @@ class ItemCollectionService:
         task_id: str | None,
         existing_item: dict[str, Any] | None,
         source: str,
+        user_id: str | None = None,
     ) -> tuple[dict[str, Any], str, list[str]]:
         """持久化 official 采集结果：upsert item、seller、display sync
 
         返回 (old_item, effective_task_id, changed_fields) 供调用方构建 CollectionResult。
         """
-        old_item = existing_item if existing_item is not None else (self.container.repo.get_item(item_id) or {})
+        old_item = existing_item if existing_item is not None else (self.container.repo.get_item(item_id, user_id=user_id) or {})
         effective_task_id = self._resolve_task_id(item_id, task_id, old_item)
         incoming = self._item_row_from_detail(item_id, detail, effective_task_id)
         changed_fields = self.diff_fields(old_item, incoming)

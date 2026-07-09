@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -66,6 +66,7 @@ async def _collect_official_and_evaluate(
     container: Container,
     item_id: str,
     task_id: str | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     from xianyu_hunter.modules.collection_service import (
         CollectionError,
@@ -79,6 +80,7 @@ async def _collect_official_and_evaluate(
             task_id=task_id,
             mode=CollectionMode.OFFICIAL_FULL,
             source="official",
+            user_id=user_id,
         )
     except CollectionError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
@@ -155,6 +157,7 @@ def _classify_exception_error(e: Exception) -> str:
 
 @router.post("/batch-collect-official")
 async def batch_collect_official(
+    request: Request,
     body: BatchCollectRequest = Body(...),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -178,11 +181,12 @@ async def batch_collect_official(
     results: list[dict] = []
     succeeded = 0
     failed = 0
+    user_id = getattr(request.state, "user_id", None)
 
     for iid in item_ids:
         try:
             async with container.browser_lock:
-                result = await _collect_official_and_evaluate(container, iid)
+                result = await _collect_official_and_evaluate(container, iid, user_id=user_id)
             results.append(result)
             succeeded += 1
         except HTTPException as e:
@@ -223,6 +227,7 @@ async def batch_collect_official(
 @router.post("/{item_id}/collect-official")
 async def collect_official(
     item_id: str,
+    request: Request,
     task_id: str | None = Query(None, description="可选：指定任务 ID"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -245,8 +250,9 @@ async def collect_official(
         )
 
     try:
+        user_id = getattr(request.state, "user_id", None)
         async with container.browser_lock:
-            result = await _collect_official_and_evaluate(container, item_id, task_id)
+            result = await _collect_official_and_evaluate(container, item_id, task_id, user_id=user_id)
         return result
     except HTTPException:
         raise

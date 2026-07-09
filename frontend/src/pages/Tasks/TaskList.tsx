@@ -875,8 +875,7 @@ export default function TaskList() {
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2>任务管理</h2>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
           <Button icon={<ThunderboltOutlined />} onClick={openAiParse}>
             智能建任务

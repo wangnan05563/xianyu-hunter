@@ -12,11 +12,11 @@ import {
   Row,
   Col,
   Tooltip,
+  Switch,
   message,
   Spin,
 } from 'antd'
 import {
-  GlobalOutlined,
   PlayCircleOutlined,
   StopOutlined,
   LinkOutlined,
@@ -26,7 +26,7 @@ import {
 } from '@ant-design/icons'
 import { tunnelApi, type TunnelStatus, type TunnelConfig, type TunnelDownloadError } from '../../api'
 
-const { Text, Paragraph, Title } = Typography
+const { Text, Paragraph } = Typography
 
 const PROVIDER_LABELS: Record<string, string> = {
   cloudflare: 'Cloudflare Tunnel',
@@ -51,6 +51,7 @@ export default function Tunnel() {
   const [formAuthtoken, setFormAuthtoken] = useState('')
   const [formPort, setFormPort] = useState(0)
   const [formBinaryPath, setFormBinaryPath] = useState('')
+  const [formAutoStart, setFormAutoStart] = useState(false)
 
   // 下载失败指引
   const [downloadError, setDownloadError] = useState<TunnelDownloadError | null>(null)
@@ -75,6 +76,7 @@ export default function Tunnel() {
       setFormProvider(data.provider)
       setFormPort(data.local_port)
       setFormBinaryPath(data.binary_path)
+      setFormAutoStart(data.auto_start)
       // authtoken 不回显明文，已配置时显示占位
       setFormAuthtoken('')
     } catch (error) {
@@ -151,6 +153,7 @@ export default function Tunnel() {
         // 空串表示不修改已有 authtoken
         cpolar_authtoken: formAuthtoken,
         binary_path: formBinaryPath,
+        auto_start: formAutoStart,
       })
       message.success('配置已保存，下次启动隧道时生效')
       await loadConfig()
@@ -173,10 +176,6 @@ export default function Tunnel() {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      <Title level={4}>
-        <GlobalOutlined /> 内网穿透
-      </Title>
-
       {/* 状态卡片 */}
       <Card>
         <Row align="middle" gutter={[16, 16]}>
@@ -193,7 +192,13 @@ export default function Tunnel() {
                 )}
               </Space>
               {status?.public_url ? (
-                <Paragraph copyable={{ tooltips: ['复制', '已复制'] }} style={{ margin: 0 }}>
+                <Paragraph
+                  copyable={{
+                    text: status.public_url,
+                    tooltips: ['复制', '已复制'],
+                  }}
+                  style={{ margin: 0 }}
+                >
                   <Text type="success" strong>{status.public_url}</Text>
                 </Paragraph>
               ) : (
@@ -327,6 +332,23 @@ export default function Tunnel() {
                 placeholder="留空自动下载，或指定手动放置路径"
                 style={{ marginTop: 4 }}
               />
+            </Col>
+          </Row>
+
+          <Row align="middle" gutter={16}>
+            <Col>
+              <Space>
+                <Switch
+                  checked={formAutoStart}
+                  onChange={setFormAutoStart}
+                />
+                <Text>开机自启动</Text>
+              </Space>
+            </Col>
+            <Col>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                开启后，后端服务启动时自动在后台线程启动隧道
+              </Text>
             </Col>
           </Row>
 

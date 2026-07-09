@@ -69,6 +69,8 @@ const ROUTE_LABELS: Record<string, string> = {
   '/maintenance': '系统清理',
   '/maintenance/db': '数据库维护',
   '/maintenance/vector': '向量数据库维护',
+  '/maintenance/tunnel': '内网穿透',
+  '/price-dashboard': '价格行情',
   '/batch-refresh': '批量采集',
   '/anticrawl': '反爬登录管理',
   '/chatbot': '智能客服',

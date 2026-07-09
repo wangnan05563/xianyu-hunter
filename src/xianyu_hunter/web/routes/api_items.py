@@ -87,6 +87,7 @@ def items_batch(
 @router.post("/{item_id}/refresh")
 async def refresh_item(
     item_id: str,
+    request: Request,
     task_id: str | None = Query(None, description="可选：指定任务 ID，items 表无记录时用于回填 task_links.display"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -142,12 +143,14 @@ async def refresh_item(
         )
 
     try:
+        user_id = getattr(request.state, "user_id", None)
         result = await asyncio.wait_for(
             ItemCollectionService(container).collect(
                 item_id,
                 task_id=task_id,
                 mode=CollectionMode.DETAIL_ONLY,
                 source="live",
+                user_id=user_id,
             ),
             timeout=60.0,
         )

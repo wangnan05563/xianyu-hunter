@@ -12,7 +12,12 @@ export default defineConfig({
     // 2. workbox 预缓存静态资源 + 运行时缓存只读 GET 接口
     // 3. SSE (/api/events/stream) 和鉴权 (/api/auth/*) 必须排除，避免长连接被 SW 拦截或登录态串号
     VitePWA({
-      registerType: 'prompt', // 有新版本时提示用户刷新，避免静默刷新打断操作
+      // autoUpdate：新 SW 就绪即自动 skipWaiting 激活，下次刷新即拿到新版本
+      // 为什么不用 'prompt'：prompt 模式下新 SW 进入 waiting 状态，
+      // 当旧 SW 缓存的旧 index.html 引用已删除的 JS chunk 时，SPA 启动失败，
+      // ReloadPrompt 组件根本无法 mount 显示更新通知，导致用户被永久卡在白屏/路由不跳转
+      // （此问题已在 2026-07-08 与 2026-07-09 两次复现，故改用 autoUpdate 彻底根治）
+      registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'favicon-32x32.png', 'favicon-48x48.png', 'apple-touch-icon.png'],
       manifest: {
         name: '闲鱼猎人 XianyuHunter',

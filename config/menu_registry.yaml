@@ -166,6 +166,13 @@ menus:
     sort_order: 203
     default_visible: true
     category: maintenance
+  - key: tunnel
+    label: 内网穿透
+    icon: GlobalOutlined
+    path: /maintenance/tunnel
+    sort_order: 204
+    default_visible: true
+    category: maintenance
 
   # ========== 其他（other）：辅助功能入口 ==========
   - key: chatbot

@@ -125,10 +125,7 @@ export default function BuyerStrategy() {
     <div className="page-container">
       {/* 页面标题 + 操作栏 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <h2 style={{ margin: 0, marginBottom: 4 }}>抢单策略</h2>
-          <Text type="secondary">这些参数控制 auto 模式下的抢单行为。notify / confirm 模式不受影响。</Text>
-        </div>
+        <Text type="secondary">这些参数控制 auto 模式下的抢单行为。notify / confirm 模式不受影响。</Text>
         <Space>
           <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置

@@ -221,8 +221,7 @@ export default function NotifierChannels() {
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2>🔔 通知渠道可视化配置</h2>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
           <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置

@@ -8,7 +8,6 @@ import type { DiffChange } from '../../stores/configStore'
 import { priceApi } from '../../api'
 import { DiffPreviewModal } from '../../components/DiffPreviewModal'
 import {
-  PriceStrategyIcon,
   PriceCeilingIcon,
   PriceFloorIcon,
   MarketRatioIcon,
@@ -181,11 +180,7 @@ export default function PriceStrategy() {
 
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2 style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <PriceStrategyIcon size={28} />
-          <span>价格策略可视化配置</span>
-        </h2>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
           <Button icon={<RevertIcon size={16} />} onClick={reset} disabled={!hasChanges()}>
             重置

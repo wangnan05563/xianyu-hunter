@@ -18,7 +18,7 @@ import re
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -887,7 +887,7 @@ def _parse_dim_scores(dim_scores_raw: Any) -> dict[str, Any]:
 
 
 def _get_item_with_payload_fallback(
-    container: Container, item_id: str
+    container: Container, item_id: str, *, user_id: str | None = None
 ) -> dict[str, Any] | None:
     """获取商品信息：优先 items 表，无记录时从 eval 事件 payload 回退
 
@@ -896,7 +896,7 @@ def _get_item_with_payload_fallback(
     需用 payload 字段构造伪 item dict，字段名对齐 items 表结构。
     """
     # 策略1：优先从 items 表查询（数据最完整，含 description 和 image_urls）
-    item = container.repo.get_item(item_id)
+    item = container.repo.get_item(item_id, user_id=user_id)
     if not item:
         # 策略2：items 表无记录时，从评估事件 payload 回退
         payload = container.repo.get_eval_payload_by_item(item_id)
@@ -1052,6 +1052,7 @@ def _cache_eval_result(
 @router.post("/evaluate-condition")
 async def evaluate_condition(
     body: ConditionEvalRequest,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """F-06 AI 多模态成色评估
@@ -1066,7 +1067,8 @@ async def evaluate_condition(
     """
     _check_ai_enabled()
     # 1. 获取商品信息（含 payload 回退）
-    item = _get_item_with_payload_fallback(container, body.item_id)
+    user_id = getattr(request.state, "user_id", None)
+    item = _get_item_with_payload_fallback(container, body.item_id, user_id=user_id)
     if not item:
         raise HTTPException(status_code=404, detail=f"商品 {body.item_id} 不存在")
 

@@ -15,7 +15,7 @@ import {
   Switch,
   Alert,
 } from 'antd'
-import { SaveOutlined, UndoOutlined, SearchOutlined } from '@ant-design/icons'
+import { SaveOutlined, UndoOutlined } from '@ant-design/icons'
 import { useConfigStore } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
 import type { DiffChange } from '../../stores/configStore'
@@ -166,11 +166,7 @@ export default function SearchConfig() {
   return (
     <div className="page-container">
       {/* 页面标题 + 操作按钮 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h2 style={{ margin: 0, color: '#FF6200' }}>
-          <SearchOutlined style={{ marginRight: 8 }} />
-          搜索参数配置
-        </h2>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
         <Space>
           <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置

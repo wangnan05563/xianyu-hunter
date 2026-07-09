@@ -34,6 +34,7 @@ import {
   ShoppingCartOutlined,
   CommentOutlined,
   AimOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons'
 // 合并 value 与 type 引入，避免 S3863 重复 import
 import { menuApi, MENU_GROUP_LABELS, type MenuItem } from '../api/menu'
@@ -80,6 +81,7 @@ const iconMap: Record<string, IconComp> = {
   ShoppingCartOutlined,
   CommentOutlined,
   AimOutlined,
+  GlobalOutlined,
 }
 
 // 分组中文标签：用于 SubMenu 标题

@@ -38,7 +38,7 @@ export const errorLogApi = {
   delete: (id: number) =>
     client.delete<{ status: string }>(`/api/error-logs/${id}`).then((r) => r.data),
 
-  batch: (ids: number[], action: 'delete' | 'resolve' | 'ignore' | 'new') =>
+  batch: (ids: number[], action: 'delete' | 'resolved' | 'ignored' | 'new') =>
     client
       .post<{ affected: number; status: string }>('/api/error-logs/batch', { ids, action })
       .then((r) => r.data),

@@ -28,11 +28,13 @@ export function isMobileUA(userAgent: string): boolean {
 // 桌面用户被强制跳到 /app/m/ 路由（PC 端完全不可用）。
 function detectMobile(): boolean {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
-  if (isMobileUA(navigator.userAgent)) return true
-  // 视口宽度兜底：F12 设备模拟器 / 窄屏浏览器自动识别
-  // 阈值从 768 降到 600：避免 1024 横向平板 / 桌面窗口缩到 700px 时误判
-  if (window.innerWidth <= MOBILE_VIEWPORT_MAX) return true
-  return false
+  const ua = navigator.userAgent
+  const width = window.innerWidth
+  const ontouchend = typeof document !== 'undefined' && 'ontouchend' in document
+  const matchedByPattern = MOBILE_UA_PATTERN.test(ua)
+  const matchedByMac = /Macintosh/i.test(ua) && ontouchend
+  const result = matchedByPattern || matchedByMac || width <= MOBILE_VIEWPORT_MAX
+  return result
 }
 
 export function useMobileDetect(): boolean {

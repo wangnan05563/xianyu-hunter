@@ -14,6 +14,7 @@ export interface TunnelConfig {
   cpolar_authtoken_masked: string
   cpolar_authtoken_configured: boolean
   binary_path: string
+  auto_start: boolean
 }
 
 export interface TunnelConfigBody {
@@ -21,6 +22,7 @@ export interface TunnelConfigBody {
   local_port: number
   cpolar_authtoken: string
   binary_path: string
+  auto_start: boolean
 }
 
 // 下载失败时后端返回的手动放置指引

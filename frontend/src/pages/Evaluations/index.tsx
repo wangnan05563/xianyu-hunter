@@ -483,8 +483,6 @@ export default function Evaluations() {
 
   return (
     <div className="page-container">
-      <h2 style={{ marginBottom: 16 }}>评估明细</h2>
-
       <Card style={{ marginBottom: 16 }}>
         <Space wrap size="middle">
           <span>商品ID：</span>

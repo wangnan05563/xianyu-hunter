@@ -44,6 +44,7 @@ class TunnelConfigBody(BaseModel):
     local_port: int = 0
     cpolar_authtoken: str = ""
     binary_path: str = ""
+    auto_start: bool = False
 
 
 def _config_yaml_path() -> Path:
@@ -131,6 +132,7 @@ def tunnel_config_get() -> JSONResponse:
         "cpolar_authtoken_masked": masked_token,
         "cpolar_authtoken_configured": bool(token),
         "binary_path": cfg.binary_path,
+        "auto_start": cfg.auto_start,
     })
 
 
@@ -150,6 +152,7 @@ def tunnel_config_save(body: TunnelConfigBody) -> JSONResponse:
         "local_port": body.local_port,
         "cpolar_authtoken": new_token,
         "binary_path": body.binary_path,
+        "auto_start": body.auto_start,
     }
 
     try:

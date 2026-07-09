@@ -8,6 +8,23 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **工作空间第六轮清理（2026-07-09）**：根目录文件数 49 → 17，删除 32 个调试/日志/一次性脚本产物，释放约 10.13 MB 空间。备份日志 `logs/cleanup-20260709-210649.log`。
+  - 误重定向：`17_xianyu`、`ubprocess; r=...`（特殊字符文件，使用 .NET `File.Delete` 绕过 `Remove-Item` 限制）
+  - SonarQube 一次性 Python：`check_s6759.py`、`list_issues.py`、`merge_sonar.py`、`parse_sonar.py`
+  - SonarQube 调试输出：`sonar-scan-output.txt`、`sonar_issues_filtered.txt`、`sonar_open_issues.json`、`sonar_scan.log`、`sonar_scan_err.log`、`sonar-scan-log.txt`、`sonar_fix_guide.md`、`pytest-quick-results.txt`
+  - 运行时/构建/调试日志：`run.stdout.log`、`run.stdout.2026-07-05_00-45-22_759023.log`（9.77 MB 历史日志）、`debug.log`、`build.log`、`build2.log`、`tsc.log`、`tsc2.log`、`t1.log`、`t2.log`
+  - skill 集成/git 调试：`stash-full.patch`、`final_status.txt`、`git_op_log.txt`、`git_status_check.txt`、`tmp_skill_new.md`、`dist_list.txt`
+  - 临时脚本：`test-parse.ps1`、`verify_msg.ps1`
+  - 截图：`mobile-blank.png`
+  - frontend 调试：`frontend/.env`、`frontend/frontend-build.log`、`frontend/tsconfig.tsbuildinfo`、`frontend/vitest-result.json`
+  - 稳定性检查二次清理：`b1.log`、`b2.log`、`check_status.ps1`、`_temp_overview.html`（其他 AI session/后台进程在首次稳定性检查后继续创建）
+  - 新增 `.gitignore` 规则：`/check-*.ps1`、`/_temp_*.html`、`/check_s*.py`、`/list_*.py`、`/merge_sonar.py`、`/parse_sonar.py`、`/*_sonar.py`
+  - 扩展 `forbid-root-temp-files` pre-commit 钩子，覆盖上述新模式
+  - 验证：`import xianyu_hunter` 退出码 0，二次稳定性检查（10s）无新文件
+  - 注意事项：`Remove-Item -LiteralPath` 对含 `;()` 等特殊字符的 PowerShell 误重定向文件返回 SUCCESS 但实际未删除，必须用 `[System.IO.File]::Delete($path)` 兜底
+
 ## [0.4.0] - 2026-07-06
 
 ## [0.3.1] - 2026-07-05

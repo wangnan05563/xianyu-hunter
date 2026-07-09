@@ -568,8 +568,6 @@ export default function Orders() {
 
   return (
     <div className="page-container">
-      <h2 style={{ marginBottom: 16 }}>抢单记录</h2>
-
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}><Card><Statistic title="待处理" value={stats.pending} valueStyle={{ color: '#faad14' }} /></Card></Col>
         <Col span={6}><Card><Statistic title="已成功" value={stats.succeeded} valueStyle={{ color: '#52c41a' }} /></Card></Col>

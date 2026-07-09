@@ -19,7 +19,7 @@ from collections import Counter
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -641,6 +641,7 @@ def _filter_unrequested_checks(
 @router.post("/deep-analyze")
 async def deep_analyze(
     body: DeepAnalyzeRequest,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """P1-4 单商品深度多模态分析
@@ -655,7 +656,8 @@ async def deep_analyze(
     """
     _check_ai_enabled()
     # 1. 获取商品信息
-    item = container.repo.get_item(body.item_id)
+    user_id = getattr(request.state, "user_id", None)
+    item = container.repo.get_item(body.item_id, user_id=user_id)
     if not item:
         raise HTTPException(status_code=404, detail=f"商品 {body.item_id} 不存在")
 

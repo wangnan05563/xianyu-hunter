@@ -4,15 +4,16 @@ import { App, Button, Space, Typography } from 'antd'
 const { Text } = Typography
 
 /**
- * O-12-26 PWA 更新提示组件
+ * O-12-26 PWA 状态提示组件
+ *
+ * 配套 vite.config.ts 的 registerType: 'autoUpdate'：
+ * 新 SW 就绪即自动 skipWaiting 激活，无需用户干预即可拿到新版本。
+ * 本组件仅保留 onOfflineReady 通知（应用首次可离线使用时提示一次），
+ * onNeedRefresh 分支在 autoUpdate 模式下不会被调用，但保留兼容代码
+ * 以便未来切回 'prompt' 模式时无需重写。
  *
  * 使用 antd App.useApp() 获取上下文 notification 实例，
  * 确保主题令牌（深浅色）能在通知中正确生效。
- *
- * 行为：
- * - 检测到 SW 有新版本需要更新时，弹出右下角通知
- * - 用户点击"立即刷新"调用 updateServiceWorker(true) 触发 skipWaiting + 重载
- * - 用户点击"稍后"关闭通知，下次刷新仍会再次出现（避免遗漏）
  */
 export default function ReloadPrompt() {
   const { notification } = App.useApp()

@@ -145,8 +145,6 @@ export default function Notifications() {
 
   return (
     <div className="page-container">
-      <h2 style={{ marginBottom: 16 }}>通知中心</h2>
-
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={8}>
           <Card>

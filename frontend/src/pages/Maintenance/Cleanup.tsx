@@ -202,12 +202,9 @@ export default function Maintenance() {
     <div className="page-container">
       {/* 页面标题和刷新按钮 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <div>
-          <h2 style={{ margin: 0 }}>系统维护</h2>
-          <Text type="secondary" style={{ fontSize: 13 }}>
-            缓存清理 · 数据库清理 · 日志清理
-          </Text>
-        </div>
+        <Text type="secondary" style={{ fontSize: 13 }}>
+          缓存清理 · 数据库清理 · 日志清理
+        </Text>
         <Button icon={<ReloadOutlined />} onClick={loadStatus} loading={loading}>
           刷新状态
         </Button>

@@ -161,12 +161,18 @@ class TunnelProvider(ABC):
         return found_url[0]
 
     def _start_process(self, cmd: list[str], url_pattern: re.Pattern, timeout: int = 15) -> str:
-        """启动子进程并解析公网 URL（通用流程）"""
+        """启动子进程并解析公网 URL（通用流程）
+
+        使用 CREATE_NO_WINDOW 而非 CREATE_NEW_CONSOLE：
+        - cloudflared/cpolar 是命令行工具，无需 GUI 窗口
+        - CREATE_NO_WINDOW 静默运行，stdout 仍可重定向到 PIPE 供解析
+        - 注意：WebView2/Playwright 仍需 CREATE_NEW_CONSOLE（项目硬约束），但此处不涉及
+        """
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         url = self._wait_for_url(url_pattern, timeout=timeout)
         logger.info(f"[{self.binary_name}] 隧道已建立: {url}")
@@ -203,9 +209,14 @@ class CpolarProvider(TunnelProvider):
     """cpolar 内网穿透：国内服务器稳定，需 authtoken 配置"""
 
     binary_name = "cpolar.exe"
-    # cpolar 官方 CDN 下载源（zip 格式）
+    # 下载源说明：
+    # - 旧源 cdn.cpolar.com 已废弃（DNS 不可解析，触发 SSL EOF 错误）
+    # - 现采用官网真实下载路径 www.cpolar.com/static/downloads/releases/
+    # - 主源用 latest 自动跟随最新版；备源固定 3.3.18 版本，防 latest 重定向异常
+    # - 两源均为纯 zip（内含 cpolar.exe 单文件），匹配 _do_download 的解压逻辑
     download_urls = [
-        "https://cdn.cpolar.com/cpolar-stable-windows-amd64.zip",
+        "https://www.cpolar.com/static/downloads/releases/latest/cpolar-stable-windows-amd64.zip",
+        "https://www.cpolar.com/static/downloads/releases/3.3.18/cpolar-stable-windows-amd64.zip",
     ]
 
     def __init__(self, local_port: int, authtoken: str = "", binary_path: str = ""):
@@ -248,6 +259,7 @@ class CpolarProvider(TunnelProvider):
             capture_output=True,
             text=True,
             timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if result.returncode != 0:
             raise RuntimeError(f"cpolar authtoken 配置失败: {result.stderr or result.stdout}")
