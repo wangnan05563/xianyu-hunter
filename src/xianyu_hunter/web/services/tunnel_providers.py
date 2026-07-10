@@ -180,7 +180,11 @@ class TunnelProvider(ABC):
 
 
 class CloudflareProvider(TunnelProvider):
-    """Cloudflare quick tunnel：无需账号，自动分配 trycloudflare 域名"""
+    """Cloudflare 隧道：支持 quick（临时域名）和 named（固定域名）两种模式
+
+    - quick 模式：无需账号，自动分配 trycloudflare 域名，每次重启变化
+    - named 模式：需 Cloudflare 账号 + 托管域名，通过 login/create/route-dns 一次性配置后域名永久固定
+    """
 
     binary_name = "cloudflared.exe"
     # 多镜像源：GitHub 主源 + jsDelivr CDN 备源（大陆访问更稳定）
@@ -189,20 +193,203 @@ class CloudflareProvider(TunnelProvider):
         "https://cdn.jsdelivr.net/gh/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe",
     ]
 
+    def __init__(
+        self,
+        local_port: int,
+        binary_path: str = "",
+        tunnel_mode: str = "quick",
+        tunnel_name: str = "",
+        tunnel_id: str = "",
+        credentials_file: str = "",
+        hostname: str = "",
+        cert_file: str = "",
+    ):
+        super().__init__(local_port, binary_path)
+        self._tunnel_mode = tunnel_mode
+        self._tunnel_name = tunnel_name
+        self._tunnel_id = tunnel_id
+        self._credentials_file = credentials_file
+        self._hostname = hostname
+        self._cert_file = cert_file
+
     def start(self) -> str:
         if self.status == "running":
             return self._public_url or ""
         self._binary_path = self._ensure_binary()
+        if self._tunnel_mode == "named":
+            return self._start_named_tunnel()
+        return self._start_quick_tunnel()
+
+    def _start_quick_tunnel(self) -> str:
+        """Quick Tunnel：临时域名，每次启动随机分配"""
         cmd = [
             str(self._binary_path),
             "tunnel",
             "--url", f"http://localhost:{self._local_port}",
             "--no-autoupdate",
         ]
-        # trycloudflare.com 域名
         url_pattern = re.compile(r"(https://[a-z0-9-]+\.trycloudflare\.com)")
         self._public_url = self._start_process(cmd, url_pattern)
         return self._public_url
+
+    def _start_named_tunnel(self) -> str:
+        """Named Tunnel：固定域名，使用 config.yml + cloudflared tunnel run
+
+        前置条件：用户已通过 setup 向导完成 login/create/route-dns，配置了 tunnel_id、
+        credentials_file 和 hostname。此处仅负责生成 config.yml 并启动 run 命令。
+        """
+        if not self._tunnel_id:
+            raise RuntimeError("Named Tunnel 模式需要配置 tunnel_id（请先执行创建隧道步骤）")
+        if not self._credentials_file:
+            raise RuntimeError("Named Tunnel 模式需要配置 credentials_file 路径")
+        if not self._hostname:
+            raise RuntimeError("Named Tunnel 模式需要配置 hostname（固定域名）")
+
+        cred_path = Path(self._credentials_file)
+        if not cred_path.exists():
+            raise RuntimeError(f"凭证文件不存在: {cred_path}，请重新执行创建隧道步骤")
+
+        # 动态生成 config.yml：ingress 规则将 hostname 流量路由到本地端口
+        config_path = self._generate_config_yml()
+        cmd = [
+            str(self._binary_path),
+            "--config", str(config_path),
+            "--no-autoupdate",
+            "tunnel", "run",
+        ]
+        # named tunnel 启动成功的标志是日志中出现 "Registered tunnel connection"
+        ready_pattern = re.compile(r"(Registered tunnel connection)")
+        self._start_process(cmd, ready_pattern, timeout=30)
+        # 域名是固定的，直接用配置的 hostname
+        self._public_url = f"https://{self._hostname}"
+        logger.info(f"[cloudflared] Named Tunnel 已建立: {self._public_url}")
+        return self._public_url
+
+    def _generate_config_yml(self) -> Path:
+        """生成 cloudflared config.yml（ingress 规则将 hostname → localhost:port）
+
+        每次启动都重新生成：local_port 可能从配置继承不同值，确保 ingress 指向正确端口
+        """
+        import yaml
+
+        config_dir = get_data_dir() / "cloudflared"
+        config_dir.mkdir(exist_ok=True)
+        config_path = config_dir / "config.yml"
+
+        config_data = {
+            "tunnel": self._tunnel_id,
+            "credentials-file": str(Path(self._credentials_file).resolve()),
+            "ingress": [
+                {"hostname": self._hostname, "service": f"http://localhost:{self._local_port}"},
+                {"service": "http_status:404"},
+            ],
+        }
+        config_path.write_text(
+            yaml.safe_dump(config_data, allow_unicode=True, default_flow_style=False),
+            encoding="utf-8",
+        )
+        logger.debug(f"[cloudflared] 生成 config.yml: {config_path}")
+        return config_path
+
+    # ---------- Named Tunnel 一次性配置辅助方法 ----------
+
+    def setup_login(self, timeout: int = 120) -> str:
+        """执行 cloudflared tunnel login，返回 cert.pem 路径
+
+        login 是交互式命令：cloudflared 会打开浏览器让用户授权。
+        命令完成后在 ~/.cloudflared/cert.pem 生成证书文件。
+        超时默认 120 秒（用户需要时间在浏览器中操作）。
+        """
+        binary = self._ensure_binary()
+        cmd = [str(binary), "tunnel", "login", "--no-autoupdate"]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"cloudflared login 失败 (exit={result.returncode}): "
+                f"{result.stderr or result.stdout}"
+            )
+        # cert.pem 默认在 ~/.cloudflared/cert.pem
+        default_cert = Path.home() / ".cloudflared" / "cert.pem"
+        if default_cert.exists():
+            return str(default_cert)
+        # 兜底：从 stdout 解析路径
+        m = re.search(r"cert(?:ificate)?\s*(?:file|path)?[:\s]+(.+?cert\.pem)", result.stdout, re.I)
+        if m:
+            return m.group(1).strip()
+        raise RuntimeError("login 似乎成功但未找到 cert.pem，请检查 ~/.cloudflared/ 目录")
+
+    def setup_create(self, tunnel_name: str, cert_file: str = "", timeout: int = 30) -> dict:
+        """执行 cloudflared tunnel create <name>，返回 tunnel_id 和 credentials_file
+
+        需要 cert.pem（login 生成）。如果 cert_file 未指定，使用默认路径 ~/.cloudflared/cert.pem。
+        """
+        binary = self._ensure_binary()
+        cmd = [str(binary), "tunnel", "create"]
+        if cert_file:
+            cmd.extend(["--cert", cert_file])
+        elif self._cert_file:
+            cmd.extend(["--cert", self._cert_file])
+        cmd.extend(["--no-autoupdate", tunnel_name])
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"cloudflared tunnel create 失败 (exit={result.returncode}): "
+                f"{result.stderr or result.stdout}"
+            )
+        # 从输出解析 tunnel_id（UUID 格式）和 credentials_file 路径
+        # 典型输出：Created tunnel <UUID> with credentials file /path/to/<UUID>.json
+        output = result.stdout + "\n" + result.stderr
+        id_match = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", output, re.I)
+        cred_match = re.search(r"credentials file\s+(.+?\.json)", output, re.I)
+        if not id_match or not cred_match:
+            raise RuntimeError(f"无法从 create 输出中解析 tunnel_id 或 credentials_file: {output}")
+        return {
+            "tunnel_id": id_match.group(1),
+            "credentials_file": cred_match.group(1).strip(),
+            "tunnel_name": tunnel_name,
+        }
+
+    def setup_route_dns(
+        self, tunnel_name_or_id: str, hostname: str, cert_file: str = "", timeout: int = 30
+    ) -> str:
+        """执行 cloudflared tunnel route dns <name> <hostname>，创建 CNAME 记录
+
+        需要 cert.pem。hostname 必须是已托管在 Cloudflare DNS 的域名子域。
+        """
+        binary = self._ensure_binary()
+        cmd = [str(binary), "tunnel", "route", "dns"]
+        if cert_file:
+            cmd.extend(["--cert", cert_file])
+        elif self._cert_file:
+            cmd.extend(["--cert", self._cert_file])
+        cmd.extend(["--no-autoupdate", tunnel_name_or_id, hostname])
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"cloudflared route dns 失败 (exit={result.returncode}): "
+                f"{result.stderr or result.stdout}"
+            )
+        return f"https://{hostname}"
 
 
 class CpolarProvider(TunnelProvider):

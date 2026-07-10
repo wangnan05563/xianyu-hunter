@@ -1,7 +1,7 @@
 ' =============================================================
-' Silent Startup - actual launcher (in scripts/)
-' This file is invoked by the root-level é™é»˜å¯åŠ¨.vbs wrapper.
-' It silently launches å¯åŠ¨æœåŠ¡.bat to start the XianyuHunter service.
+' ¾²Ä¬Æô¶¯ - Êµ¼ÊÆô¶¯Æ÷£¨Î»ÓÚ scripts/£©
+' ´ËÎÄ¼şÓÉ¸ùÄ¿Â¼µÄ ¾²Ä¬Æô¶¯.vbs °ü×°Æ÷µ÷ÓÃ
+' ¾²Ä¬Æô¶¯ Æô¶¯·şÎñ.bat ÒÔÆô¶¯ÏĞÓãÁÔÈË·şÎñ
 ' =============================================================
 
 Dim WshShell, FSO, currentDir, targetBatch
@@ -9,19 +9,19 @@ Dim WshShell, FSO, currentDir, targetBatch
 Set WshShell = CreateObject("WScript.Shell")
 Set FSO = CreateObject("Scripting.FileSystemObject")
 
-' å½“å‰è„šæœ¬æ‰€åœ¨ç›®å½•ï¼ˆå³ scripts/ï¼‰ï¼Œéœ€æ‹¼æ¥æ ¹ç›®å½•ä¸‹çš„ å¯åŠ¨æœåŠ¡.bat
+' µ±Ç°½Å±¾ËùÔÚÄ¿Â¼£¨¼´ scripts/£©£¬ĞèÆ´½Ó¸ùÄ¿Â¼ÏÂµÄ Æô¶¯·şÎñ.bat
 currentDir = FSO.GetParentFolderName(WScript.ScriptFullName)
-targetBatch = currentDir & "\å¯åŠ¨æœåŠ¡.bat"
+targetBatch = currentDir & "\Æô¶¯·şÎñ.bat"
 
-' Verify the target batch exists
+' ÑéÖ¤Ä¿±êÅú´¦ÀíÎÄ¼şÊÇ·ñ´æÔÚ
 If Not FSO.FileExists(targetBatch) Then
-    WshShell.Popup "å¯åŠ¨æœåŠ¡.bat not found!" & vbCrLf & targetBatch, _
-                   10, "XianyuHunter Startup Failed", 16
+    WshShell.Popup "Î´ÕÒµ½ Æô¶¯·şÎñ.bat£¡" & vbCrLf & targetBatch, _
+                   10, "ÏĞÓãÁÔÈËÆô¶¯Ê§°Ü", 16
     WScript.Quit 1
 End If
 
-' Launch the service batch silently (window hidden)
-' å‚æ•° 0 = éšè—çª—å£
+' ¾²Ä¬Æô¶¯·şÎñÅú´¦Àí£¨Òş²Ø´°¿Ú£©
+' ²ÎÊı 0 = Òş²Ø´°¿Ú
 WshShell.Run """" & targetBatch & """", 0, False
 
 Set FSO = Nothing

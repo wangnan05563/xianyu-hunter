@@ -1,33 +1,33 @@
 @echo off
 chcp 936 >nul 2>&1
-REM Build script: calls scripts/build-exe.ps1 from project root
+REM 构建脚本：从项目根目录调用 scripts/build-exe.ps1
 cd /d "%~dp0.."
 
 echo ============================================
-echo   XianyuHunter EXE Build
+echo   闲鱼猎人 EXE 构建
 echo ============================================
 echo.
-echo Steps:
-echo   1. Create clean build venv
-echo   2. Install deps + PyInstaller + tray (optional)
-echo   3. Lock deps to requirements-lock.txt
-echo   4. Build SPA (if changed)
-echo   5. PyInstaller packaging (dir mode)
-echo   6. Copy resources (SPA + Chromium + model)
-echo   7. Build installer (Inno Setup, optional)
+echo 构建步骤:
+echo   1. 创建干净的构建 venv
+echo   2. 安装依赖 + PyInstaller + 托盘（可选）
+echo   3. 锁定依赖到 requirements-lock.txt
+echo   4. 构建 SPA（如有变更）
+echo   5. PyInstaller 打包（dir 模式）
+echo   6. 复制资源（SPA + Chromium + 模型）
+echo   7. 构建安装包（Inno Setup，可选）
 echo.
-echo Output: dist\xianyu-hunter\xianyu-hunter.exe
+echo 产物路径: dist\xianyu-hunter\xianyu-hunter.exe
 echo.
 
-REM -NoProfile: skip user PS profile (avoids alias interference)
-REM -ExecutionPolicy Bypass: allow running unsigned script via double-click
-REM -File: target script, %* passes through all CLI args
+REM -NoProfile: 跳过用户 PS profile（避免别名干扰）
+REM -ExecutionPolicy Bypass: 允许通过双击执行未签名脚本
+REM -File: 目标脚本，%* 透传所有命令行参数
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build-exe.ps1" %*
 
-REM Forward PowerShell exit code
+REM 透传 PowerShell 退出码
 if errorlevel 1 (
     echo.
-    echo [ERROR] Build failed. Check output above.
+    echo [ERROR] 构建失败，请查看上方输出
     echo.
     pause
     exit /b 1
@@ -35,14 +35,14 @@ if errorlevel 1 (
 
 echo.
 echo ============================================
-echo   Build complete!
+echo   构建完成！
 echo ============================================
-echo   Output:  dist\xianyu-hunter\
-echo   EXE:     dist\xianyu-hunter\xianyu-hunter.exe
+echo   产物目录:  dist\xianyu-hunter\
+echo   EXE 路径:  dist\xianyu-hunter\xianyu-hunter.exe
 echo.
-echo   Next:
-echo   - Run: dist\xianyu-hunter\xianyu-hunter.exe
-echo   - Installer: dist\XianyuHunter-Setup-v*.exe (needs Inno Setup)
+echo   后续操作:
+echo   - 运行: dist\xianyu-hunter\xianyu-hunter.exe
+echo   - 安装包: dist\XianyuHunter-Setup-v*.exe（需安装 Inno Setup）
 echo ============================================
 echo.
 pause

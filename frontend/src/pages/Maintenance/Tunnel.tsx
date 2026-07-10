@@ -13,6 +13,8 @@ import {
   Col,
   Tooltip,
   Switch,
+  Radio,
+  Steps,
   message,
   Spin,
 } from 'antd'
@@ -23,6 +25,8 @@ import {
   CloudServerOutlined,
   SafetyCertificateOutlined,
   ExclamationCircleOutlined,
+  CheckCircleOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons'
 import { tunnelApi, type TunnelStatus, type TunnelConfig, type TunnelDownloadError } from '../../api'
 
@@ -34,8 +38,210 @@ const PROVIDER_LABELS: Record<string, string> = {
 }
 
 const PROVIDER_DESC: Record<string, string> = {
-  cloudflare: '免注册，自动分配 trycloudflare 域名。大陆访问可能不稳定。',
+  cloudflare: '免注册快速模式，或绑定域名固定地址。大陆访问可能不稳定。',
   cpolar: '国内服务器稳定，需注册账号获取 authtoken。访问 https://dashboard.cpolar.com/signup 注册',
+}
+
+// Named Tunnel 向导步骤定义
+const WIZARD_STEPS = [
+  { title: '授权登录', description: 'Cloudflare 账号授权' },
+  { title: '创建隧道', description: '生成隧道凭证' },
+  { title: '配置 DNS', description: '绑定固定域名' },
+]
+
+// Named Tunnel 配置向导组件
+function NamedTunnelWizard({
+  config,
+  onConfigChanged,
+}: {
+  config: TunnelConfig
+  onConfigChanged: () => void
+}) {
+  const [loginLoading, setLoginLoading] = useState(false)
+  const [createName, setCreateName] = useState(config.tunnel_name || '')
+  const [createLoading, setCreateLoading] = useState(false)
+  const [dnsHostname, setDnsHostname] = useState(config.hostname || '')
+  const [dnsLoading, setDnsLoading] = useState(false)
+
+  // 根据已配置字段自动判断当前步骤
+  const currentStep = !config.cert_file ? 0 : !config.tunnel_id ? 1 : !config.hostname ? 2 : 3
+
+  const handleLogin = async () => {
+    setLoginLoading(true)
+    try {
+      const result = await tunnelApi.cloudflareLogin()
+      message.success(result.message)
+      onConfigChanged()
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '登录失败')
+    } finally {
+      setLoginLoading(false)
+    }
+  }
+
+  const handleCreate = async () => {
+    if (!createName.trim()) {
+      message.warning('请输入隧道名称')
+      return
+    }
+    setCreateLoading(true)
+    try {
+      const result = await tunnelApi.cloudflareCreate({ tunnel_name: createName.trim() })
+      message.success(result.message)
+      onConfigChanged()
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || '创建隧道失败')
+    } finally {
+      setCreateLoading(false)
+    }
+  }
+
+  const handleRouteDns = async () => {
+    if (!dnsHostname.trim()) {
+      message.warning('请输入固定域名')
+      return
+    }
+    setDnsLoading(true)
+    try {
+      const result = await tunnelApi.cloudflareRouteDns({
+        tunnel_name_or_id: config.tunnel_name || config.tunnel_id,
+        hostname: dnsHostname.trim(),
+      })
+      message.success(result.message)
+      onConfigChanged()
+    } catch (error: any) {
+      message.error(error?.response?.data?.detail || 'DNS 路由配置失败')
+    } finally {
+      setDnsLoading(false)
+    }
+  }
+
+  return (
+    <Card
+      title={
+        <Space>
+          <SafetyCertificateOutlined />
+          <Text>固定域名配置向导</Text>
+          {currentStep === 3 && (
+            <Tag color="success" icon={<CheckCircleOutlined />}>已配置</Tag>
+          )}
+        </Space>
+      }
+      size="small"
+      style={{ marginTop: 8 }}
+    >
+      <Steps
+        current={currentStep}
+        size="small"
+        items={WIZARD_STEPS}
+        style={{ marginBottom: 16 }}
+      />
+
+      {/* 步骤 1：授权登录 */}
+      <div style={{ marginBottom: 16 }}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space>
+            <Text strong>① 授权登录</Text>
+            {config.cert_file && <Tag color="success" icon={<CheckCircleOutlined />}>已完成</Tag>}
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            点击下方按钮，浏览器将打开 Cloudflare 授权页面。授权后自动生成 cert.pem 证书文件。
+          </Text>
+          {config.cert_file && (
+            <Text code copyable style={{ fontSize: 12 }}>{config.cert_file}</Text>
+          )}
+          <Button
+            type={config.cert_file ? 'default' : 'primary'}
+            icon={loginLoading ? <LoadingOutlined /> : undefined}
+            loading={loginLoading}
+            onClick={handleLogin}
+            disabled={loginLoading}
+          >
+            {config.cert_file ? '重新授权' : '执行登录'}
+          </Button>
+        </Space>
+      </div>
+
+      {/* 步骤 2：创建隧道 */}
+      <div style={{ marginBottom: 16, opacity: config.cert_file ? 1 : 0.5 }}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space>
+            <Text strong>② 创建隧道</Text>
+            {config.tunnel_id && <Tag color="success" icon={<CheckCircleOutlined />}>已完成</Tag>}
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            输入隧道名称（如 xianyu-hunter），系统将创建命名隧道并生成凭证文件。
+          </Text>
+          <Row gutter={8}>
+            <Col flex="auto">
+              <Input
+                value={createName}
+                onChange={(e) => setCreateName(e.target.value)}
+                placeholder="隧道名称（英文 + 连字符）"
+                disabled={!config.cert_file || createLoading}
+              />
+            </Col>
+            <Col>
+              <Button
+                type={config.tunnel_id ? 'default' : 'primary'}
+                icon={createLoading ? <LoadingOutlined /> : undefined}
+                loading={createLoading}
+                onClick={handleCreate}
+                disabled={!config.cert_file || createLoading}
+              >
+                {config.tunnel_id ? '重新创建' : '创建隧道'}
+              </Button>
+            </Col>
+          </Row>
+          {config.tunnel_id && (
+            <Space direction="vertical" size={0} style={{ width: '100%' }}>
+              <Text code copyable style={{ fontSize: 12 }}>ID: {config.tunnel_id}</Text>
+              <Text code copyable style={{ fontSize: 12 }}>{config.credentials_file}</Text>
+            </Space>
+          )}
+        </Space>
+      </div>
+
+      {/* 步骤 3：配置 DNS */}
+      <div style={{ opacity: config.tunnel_id ? 1 : 0.5 }}>
+        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space>
+            <Text strong>③ 配置 DNS</Text>
+            {config.hostname && <Tag color="success" icon={<CheckCircleOutlined />}>已完成</Tag>}
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            输入已托管在 Cloudflare 的域名子域（如 app.example.com），系统将自动创建 CNAME 记录。
+          </Text>
+          <Row gutter={8}>
+            <Col flex="auto">
+              <Input
+                value={dnsHostname}
+                onChange={(e) => setDnsHostname(e.target.value)}
+                placeholder="固定域名（如 app.example.com）"
+                disabled={!config.tunnel_id || dnsLoading}
+              />
+            </Col>
+            <Col>
+              <Button
+                type={config.hostname ? 'default' : 'primary'}
+                icon={dnsLoading ? <LoadingOutlined /> : undefined}
+                loading={dnsLoading}
+                onClick={handleRouteDns}
+                disabled={!config.tunnel_id || dnsLoading}
+              >
+                {config.hostname ? '重新配置' : '配置路由'}
+              </Button>
+            </Col>
+          </Row>
+          {config.hostname && (
+            <Text type="success" strong>
+              固定地址：https://{config.hostname}
+            </Text>
+          )}
+        </Space>
+      </div>
+    </Card>
+  )
 }
 
 export default function Tunnel() {
@@ -52,6 +258,7 @@ export default function Tunnel() {
   const [formPort, setFormPort] = useState(0)
   const [formBinaryPath, setFormBinaryPath] = useState('')
   const [formAutoStart, setFormAutoStart] = useState(false)
+  const [formTunnelMode, setFormTunnelMode] = useState<'quick' | 'named'>('quick')
 
   // 下载失败指引
   const [downloadError, setDownloadError] = useState<TunnelDownloadError | null>(null)
@@ -77,6 +284,7 @@ export default function Tunnel() {
       setFormPort(data.local_port)
       setFormBinaryPath(data.binary_path)
       setFormAutoStart(data.auto_start)
+      setFormTunnelMode(data.tunnel_mode)
       // authtoken 不回显明文，已配置时显示占位
       setFormAuthtoken('')
     } catch (error) {
@@ -154,6 +362,13 @@ export default function Tunnel() {
         cpolar_authtoken: formAuthtoken,
         binary_path: formBinaryPath,
         auto_start: formAutoStart,
+        // 保留已有 named tunnel 配置（向导直接持久化，此处只传表单中的模式）
+        tunnel_mode: formTunnelMode,
+        tunnel_name: config?.tunnel_name || '',
+        tunnel_id: config?.tunnel_id || '',
+        credentials_file: config?.credentials_file || '',
+        hostname: config?.hostname || '',
+        cert_file: config?.cert_file || '',
       })
       message.success('配置已保存，下次启动隧道时生效')
       await loadConfig()
@@ -165,6 +380,7 @@ export default function Tunnel() {
   }
 
   const isRunning = status?.status === 'running'
+  const isCloudflare = formProvider === 'cloudflare'
 
   if (loading) {
     return (
@@ -189,6 +405,9 @@ export default function Tunnel() {
                   <Tag icon={<CloudServerOutlined />}>
                     {PROVIDER_LABELS[status.provider] || status.provider}
                   </Tag>
+                )}
+                {config?.tunnel_mode === 'named' && config?.hostname && (
+                  <Tag color="blue">固定域名</Tag>
                 )}
               </Space>
               {status?.public_url ? (
@@ -290,6 +509,29 @@ export default function Tunnel() {
             </Text>
           </div>
 
+          {/* Cloudflare 模式选择 */}
+          {isCloudflare && (
+            <div>
+              <Text strong>隧道模式</Text>
+              <Radio.Group
+                value={formTunnelMode}
+                onChange={(e) => setFormTunnelMode(e.target.value)}
+                style={{ marginTop: 4, display: 'block' }}
+              >
+                <Radio value="quick">快速模式（临时域名，每次重启变化）</Radio>
+                <Radio value="named">固定域名模式（需 Cloudflare 账号 + 托管域名）</Radio>
+              </Radio.Group>
+            </div>
+          )}
+
+          {/* Named Tunnel 配置向导 */}
+          {isCloudflare && formTunnelMode === 'named' && config && (
+            <NamedTunnelWizard
+              config={config}
+              onConfigChanged={loadConfig}
+            />
+          )}
+
           {formProvider === 'cpolar' && (
             <div>
               <Text strong>cpolar Authtoken</Text>
@@ -369,11 +611,17 @@ export default function Tunnel() {
         message="使用说明"
         description={
           <Space direction="vertical" size="small">
-            <Text>1. 选择 Provider 并保存配置（cpolar 需填写 Authtoken）</Text>
-            <Text>2. 点击"启动隧道"，系统自动下载二进制并建立公网连接</Text>
-            <Text>3. 复制公网地址，在手机浏览器打开即可远程访问</Text>
-            <Text>4. 隧道运行期间请勿关闭本程序</Text>
-            <Text type="secondary">注意：免费版域名随机且会变化，重启隧道后需更新手机端地址</Text>
+            <Text>1. 选择 Provider 和模式并保存配置</Text>
+            <Text>2. 固定域名模式：按向导完成授权 → 创建隧道 → 配置 DNS 三步</Text>
+            <Text>3. 点击"启动隧道"，系统自动下载二进制并建立公网连接</Text>
+            <Text>4. 复制公网地址，在手机浏览器打开即可远程访问</Text>
+            <Text>5. 隧道运行期间请勿关闭本程序</Text>
+            {formTunnelMode === 'quick' && (
+              <Text type="secondary">注意：快速模式域名随机且会变化，重启隧道后需更新手机端地址。如需固定地址，请切换到"固定域名模式"。</Text>
+            )}
+            {formTunnelMode === 'named' && (
+              <Text type="secondary">固定域名模式：首次配置需 3 步向导，之后每次启动地址不变。</Text>
+            )}
           </Space>
         }
       />

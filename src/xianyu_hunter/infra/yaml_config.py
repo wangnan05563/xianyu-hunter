@@ -245,12 +245,26 @@ class TunnelConfig(BaseModel):
     - cpolar_authtoken: cpolar 专用认证 token，从 cpolar 控制台获取
     - binary_path: 手动放置的二进制路径（离线/下载失败场景），留空则自动下载
     - auto_start: 后端启动时是否自动启动隧道（后台线程，不阻塞服务启动）
+
+    Named Tunnel（固定域名）相关 —— 仅 provider=cloudflare 且 tunnel_mode=named 时生效：
+    - tunnel_mode: "quick" 使用临时域名（每次重启变化），"named" 使用固定域名（需 Cloudflare 账号+域名）
+    - tunnel_name: 命名隧道名称（create 时指定，run 时引用）
+    - tunnel_id: 隧道 UUID（create 命令输出，用于生成 config.yml）
+    - credentials_file: 凭证 JSON 路径（create 命令生成，默认 ~/.cloudflared/<UUID>.json）
+    - hostname: 固定域名（如 app.example.com，需已在 Cloudflare DNS 托管）
+    - cert_file: cert.pem 路径（login 命令生成，create/route-dns 命令需要）
     """
     provider: str = "cloudflare"
     local_port: int = 0
     cpolar_authtoken: str = ""
     binary_path: str = ""
     auto_start: bool = False
+    tunnel_mode: str = "quick"
+    tunnel_name: str = ""
+    tunnel_id: str = ""
+    credentials_file: str = ""
+    hostname: str = ""
+    cert_file: str = ""
 
 
 # ============== 智能客服模块配置 ==============

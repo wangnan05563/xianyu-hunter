@@ -66,4 +66,12 @@ export type {
   BatchRefreshHistoryCleanupResult,
 } from './batchRefresh'
 export { tunnelApi } from './tunnel'
-export type { TunnelStatus, TunnelConfig, TunnelConfigBody, TunnelDownloadError } from './tunnel'
+export type {
+  TunnelStatus,
+  TunnelConfig,
+  TunnelConfigBody,
+  TunnelDownloadError,
+  CloudflareLoginResult,
+  CloudflareCreateResult,
+  CloudflareRouteDnsResult,
+} from './tunnel'

@@ -4,6 +4,7 @@
 提供一键开启/关闭远程访问的能力，返回公网 HTTPS 域名。
 - status/start/stop 免认证（远程访问引导场景：未登录时需先建隧道才能访问登录页）
 - config 端点需认证（防止未授权修改 provider/authtoken）
+- cloudflare setup 端点需认证（一次性配置操作，涉及账号授权）
 """
 from __future__ import annotations
 
@@ -18,7 +19,10 @@ from pydantic import BaseModel
 
 from xianyu_hunter.infra.yaml_config import get_config, reload_config
 from xianyu_hunter.paths import get_config_dir
-from xianyu_hunter.web.services.tunnel_providers import BinaryDownloadError
+from xianyu_hunter.web.services.tunnel_providers import (
+    BinaryDownloadError,
+    CloudflareProvider,
+)
 
 router = APIRouter(prefix="/api/tunnel", tags=["tunnel"])
 
@@ -45,6 +49,25 @@ class TunnelConfigBody(BaseModel):
     cpolar_authtoken: str = ""
     binary_path: str = ""
     auto_start: bool = False
+    tunnel_mode: str = "quick"
+    tunnel_name: str = ""
+    tunnel_id: str = ""
+    credentials_file: str = ""
+    hostname: str = ""
+    cert_file: str = ""
+
+
+class CloudflareCreateBody(BaseModel):
+    """创建命名隧道请求体"""
+    tunnel_name: str
+    cert_file: str = ""
+
+
+class CloudflareRouteDnsBody(BaseModel):
+    """配置 DNS 路由请求体"""
+    tunnel_name_or_id: str
+    hostname: str
+    cert_file: str = ""
 
 
 def _config_yaml_path() -> Path:
@@ -61,6 +84,32 @@ def _load_yaml_raw() -> dict[str, Any]:
 
 def _dump_yaml_raw(data: dict[str, Any]) -> str:
     return yaml.safe_dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+
+def _create_cloudflare_provider_for_setup() -> CloudflareProvider:
+    """创建用于 setup 的 CloudflareProvider 实例（不启动隧道，仅执行一次性配置命令）
+
+    setup 阶段不需要 local_port（只是 provider 初始化需要），用 0 占位即可。
+    """
+    cfg = get_config().tunnel
+    return CloudflareProvider(
+        local_port=0,
+        binary_path=cfg.binary_path,
+        cert_file=cfg.cert_file,
+    )
+
+
+def _save_tunnel_field(field: str, value: str) -> None:
+    """将单个 tunnel 配置字段增量写入 config.yaml 并热重载
+
+    用于 setup 向导：每步执行成功后立即持久化结果，避免后续步骤失败时丢失前序成果。
+    """
+    raw = _load_yaml_raw()
+    tunnel_section = raw.get("tunnel", {})
+    tunnel_section[field] = value
+    raw["tunnel"] = tunnel_section
+    _config_yaml_path().write_text(_dump_yaml_raw(raw), encoding="utf-8")
+    reload_config()
 
 
 # ---------- 状态控制端点（免认证） ----------
@@ -133,6 +182,13 @@ def tunnel_config_get() -> JSONResponse:
         "cpolar_authtoken_configured": bool(token),
         "binary_path": cfg.binary_path,
         "auto_start": cfg.auto_start,
+        "tunnel_mode": cfg.tunnel_mode,
+        "tunnel_name": cfg.tunnel_name,
+        "tunnel_id": cfg.tunnel_id,
+        "credentials_file": cfg.credentials_file,
+        "hostname": cfg.hostname,
+        "cert_file": cfg.cert_file,
+        "cert_file_configured": bool(cfg.cert_file),
     })
 
 
@@ -153,6 +209,12 @@ def tunnel_config_save(body: TunnelConfigBody) -> JSONResponse:
         "cpolar_authtoken": new_token,
         "binary_path": body.binary_path,
         "auto_start": body.auto_start,
+        "tunnel_mode": body.tunnel_mode,
+        "tunnel_name": body.tunnel_name,
+        "tunnel_id": body.tunnel_id,
+        "credentials_file": body.credentials_file,
+        "hostname": body.hostname,
+        "cert_file": body.cert_file,
     }
 
     try:
@@ -171,3 +233,99 @@ def tunnel_config_save(body: TunnelConfigBody) -> JSONResponse:
         _tunnel_service = None
 
     return JSONResponse({"ok": True, "message": "配置已保存，下次启动隧道时生效"})
+
+
+# ---------- Cloudflare Named Tunnel 配置向导端点（需认证） ----------
+
+@router.post("/cloudflare/login")
+def cloudflare_login() -> JSONResponse:
+    """执行 cloudflared tunnel login（交互式，会打开浏览器）
+
+    login 成功后自动将 cert.pem 路径持久化到 config.yaml，后续 create/route-dns 步骤自动读取。
+    超时 120 秒：用户需要在浏览器中完成 Cloudflare 授权。
+    """
+    provider = _create_cloudflare_provider_for_setup()
+    try:
+        cert_path = provider.setup_login(timeout=120)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"login 失败: {e}"},
+        )
+    # 持久化 cert_file 路径，后续 create/route-dns 自动读取
+    _save_tunnel_field("cert_file", cert_path)
+    return JSONResponse({
+        "ok": True,
+        "cert_file": cert_path,
+        "message": "授权成功，cert.pem 已保存，可以继续创建隧道",
+    })
+
+
+@router.post("/cloudflare/create")
+def cloudflare_create(body: CloudflareCreateBody) -> JSONResponse:
+    """执行 cloudflared tunnel create <name>（创建命名隧道）
+
+    需要 cert.pem（login 步骤生成）。成功后自动将 tunnel_id 和 credentials_file 持久化。
+    """
+    cfg = get_config().tunnel
+    # 请求体 cert_file 优先于配置中的 cert_file
+    cert_file = body.cert_file or cfg.cert_file
+    if not cert_file:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "请先执行 login 步骤获取 cert.pem，或手动指定 cert_file 路径"},
+        )
+
+    provider = _create_cloudflare_provider_for_setup()
+    try:
+        result = provider.setup_create(body.tunnel_name, cert_file=cert_file)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"创建隧道失败: {e}"},
+        )
+
+    # 持久化 tunnel_id、credentials_file、tunnel_name
+    _save_tunnel_field("tunnel_id", result["tunnel_id"])
+    _save_tunnel_field("credentials_file", result["credentials_file"])
+    _save_tunnel_field("tunnel_name", result["tunnel_name"])
+    return JSONResponse({
+        "ok": True,
+        "tunnel_id": result["tunnel_id"],
+        "credentials_file": result["credentials_file"],
+        "tunnel_name": result["tunnel_name"],
+        "message": "隧道创建成功，可以继续配置 DNS 路由",
+    })
+
+
+@router.post("/cloudflare/route-dns")
+def cloudflare_route_dns(body: CloudflareRouteDnsBody) -> JSONResponse:
+    """执行 cloudflared tunnel route dns <name> <hostname>（创建 CNAME 记录）
+
+    成功后自动将 hostname 持久化，并切换 tunnel_mode 为 named。
+    """
+    cfg = get_config().tunnel
+    cert_file = body.cert_file or cfg.cert_file
+    if not cert_file:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "请先执行 login 步骤获取 cert.pem，或手动指定 cert_file 路径"},
+        )
+
+    provider = _create_cloudflare_provider_for_setup()
+    try:
+        url = provider.setup_route_dns(body.tunnel_name_or_id, body.hostname, cert_file=cert_file)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"DNS 路由配置失败: {e}"},
+        )
+
+    # 持久化 hostname，并自动切换到 named 模式
+    _save_tunnel_field("hostname", body.hostname)
+    _save_tunnel_field("tunnel_mode", "named")
+    return JSONResponse({
+        "ok": True,
+        "public_url": url,
+        "message": "DNS 路由配置成功，已自动切换到固定域名模式",
+    })

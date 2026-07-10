@@ -1,15 +1,15 @@
 @echo off
 chcp 936 >nul 2>&1
-REM ï¿½Å±ï¿½Î»ï¿½ï¿½ scripts/ ï¿½ï¿½Ä¿Â¼ï¿½ï¿½ï¿½ï¿½Øµï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Ä¿Â¼
+REM ½Å±¾Î»ÓÚ scripts/ Ä¿Â¼£¬ÏÈ»Øµ½ÏîÄ¿¸ùÄ¿Â¼
 cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo   XianyuHunter Starting...
+echo   ÏÐÓãÁÔÈË·þÎñÆô¶¯ÖÐ...
 echo ========================================
 
-REM [1/4] Clean up old processes via PID file + port scan
-echo [1/4] Cleaning up old processes...
+REM [1/4] Í¨¹ý PID ÎÄ¼þ + ¶Ë¿ÚÉ¨ÃèÇåÀí¾É½ø³Ì
+echo [1/4] ÕýÔÚÇåÀí¾É½ø³Ì...
 
 if exist "logs\web.pid" (
     for /f "tokens=*" %%a in (logs\web.pid) do (
@@ -18,46 +18,65 @@ if exist "logs\web.pid" (
     del "logs\web.pid" >nul 2>&1
 )
 
-REM Kill any process listening on port 8001 (fallback when PID file is missing)
+REM É±µôÕ¼ÓÃ 8001 ¶Ë¿ÚµÄ½ø³Ì£¨PID ÎÄ¼þÈ±Ê§Ê±µÄ¶µµ×·½°¸£©
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8001.*LISTENING"') do (
     taskkill /F /T /PID %%a >nul 2>&1
 )
 
 taskkill /F /IM msedgewebview2.exe >nul 2>&1
 taskkill /F /IM msedge.exe >nul 2>&1
+
+REM µÈ´ý¶Ë¿ÚÊÍ·Å£¨×î¶à 5 Ãë£©£¬±ÜÃâ¾É½ø³Ì¸Õ±»É±µ«¶Ë¿ÚÉÐÎ´ÊÍ·Åµ¼ÖÂ°ó¶¨Ê§°Ü
+set /a portWait=0
+:wait_port_release
+netstat -aon | findstr ":8001.*LISTENING" >nul 2>&1
+if not errorlevel 1 (
+    set /a portWait+=1
+    if !portWait! lss 5 (
+        timeout /t 1 >nul 2>&1
+        goto wait_port_release
+    )
+    echo [WARN] ¶Ë¿Ú 8001 ÈÔ±»Õ¼ÓÃ£¬¿ÉÄÜÆô¶¯Ê§°Ü
+)
+
 timeout /t 1 >nul 2>&1
 
-REM [2/4] Check dependencies
-echo [2/4] Checking dependencies...
+REM [2/4] ¼ì²éÒÀÀµ
+echo [2/4] ÕýÔÚ¼ì²éÒÀÀµ...
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [ERROR] .venv not found!
-    echo Run: python -m venv .venv
-    echo Then: .venv\Scripts\pip install -r requirements.txt
+    echo [ERROR] Î´ÕÒµ½ .venv ÐéÄâ»·¾³£¡
+    echo ÇëÖ´ÐÐ: python -m venv .venv
+    echo È»ºóÖ´ÐÐ: .venv\Scripts\pip install -r requirements.txt
     pause
     exit /b 1
 )
 
 if not exist "logs" mkdir logs
 
-REM Verify Python environment can import core modules
+REM ÑéÖ¤ Python »·¾³ÄÜ·ñ¼ÓÔØºËÐÄÄ£¿é
 .venv\Scripts\python.exe -c "import xianyu_hunter; import uvicorn; import fastapi" >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Python dependencies missing!
-    echo Run: .venv\Scripts\pip install -r requirements.txt
+    echo [ERROR] Python ÒÀÀµÈ±Ê§£¡
+    echo ÇëÖ´ÐÐ: .venv\Scripts\pip install -r requirements.txt
     pause
     exit /b 1
 )
 
-REM [3/4] Start Web server (Ä¬ï¿½Ïµï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ + ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ + ï¿½ï¿½ï¿½ï¿½ï¿½É¼ï¿½Í¬ï¿½ï¿½ï¿½ï¿½)
-REM ï¿½ï¿½ xianyu web ï¿½ï¿½ï¿½ï¿½Ä¬ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ --with-schedulerï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½
-REM ï¿½ï¿½ï¿½è´¿ Web Ä£Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: -m xianyu_hunter web --no-with-scheduler
-echo [3/4] Starting Web server (default: with scheduler)...
+REM [3/4] Æô¶¯ Web ·þÎñ£¨Ä¬ÈÏÆôÓÃµ÷¶ÈÆ÷£ºÊµÊ±ËÑË÷ + ÅúÁ¿²É¼¯ + Êý¾Ý¿â¹é¼¯Í¬²½£©
+REM ÓÃ xianyu web ÃüÁîÄ¬ÈÏ´ø --with-scheduler£¬ÎÞÐè¶îÍâ²ÎÊý
+REM ´¿ Web Ä£Ê½£¨²»Æô¶¯µ÷¶ÈÆ÷£©ÇëÊ¹ÓÃ: -m xianyu_hunter web --no-with-scheduler
+echo [3/4] ÕýÔÚÆô¶¯ Web ·þÎñ£¨Ä¬ÈÏÆôÓÃµ÷¶ÈÆ÷£©...
 
-start "XianyuHunter-Web" cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web --port 8001 2>&1 & pause"
+REM Çå¿Õ¾ÉÈÕÖ¾£¬±ÜÃâÐÂ¾ÉÈÕÖ¾»ìÏýµ¼ÖÂÎóÅÐ
+if exist "logs\web.log" del "logs\web.log" >nul 2>&1
+if exist "logs\web.err" del "logs\web.err" >nul 2>&1
 
-REM Wait for Web port to be ready (up to 30 seconds)
-echo Waiting for Web server...
+REM Æô¶¯ Web ·þÎñ²¢ÖØ¶¨ÏòÊä³öµ½ÈÕÖ¾ÎÄ¼þ£¨±ãÓÚÊ§°ÜÊ±ÅÅ²é£©
+start "XianyuHunter-Web" cmd /c ".venv\Scripts\python.exe -m xianyu_hunter web --port 8001 > logs\web.log 2>&1"
+
+REM µÈ´ý Web ¶Ë¿Ú¾ÍÐ÷£¨×î¶à 30 Ãë£©
+echo ÕýÔÚµÈ´ý Web ·þÎñ¾ÍÐ÷...
 set /a tries=0
 :wait_web
 set /a tries+=1
@@ -65,20 +84,28 @@ ping -n 2 127.0.0.1 >nul 2>&1
 netstat -aon | findstr ":8001.*LISTENING" >nul 2>&1
 if errorlevel 1 (
     if !tries! lss 15 goto wait_web
-    echo [ERROR] Web server failed to start within 30 seconds!
-    echo Check logs\web.log and logs\web.err for details.
+    echo [ERROR] Web ·þÎñÔÚ 30 ÃëÄÚÎ´Æô¶¯³É¹¦£¡
+    echo.
+    echo ====== ÈÕÖ¾×îºó 30 ÐÐ ======
+    if exist "logs\web.log" (
+        powershell -NoProfile -Command "Get-Content 'logs\web.log' -Tail 30 -Encoding UTF8"
+    ) else (
+        echo ÈÕÖ¾ÎÄ¼þÎ´Éú³É£¬¿ÉÄÜ½ø³ÌÆô¶¯¼´±ÀÀ£
+    )
+    echo ==============================
+    echo ÍêÕûÈÕÖ¾Çë²é¿´: logs\web.log
     pause
     exit /b 1
 )
 
-REM Record Web PID via port scan
+REM Í¨¹ý¶Ë¿ÚÉ¨Ãè¼ÇÂ¼ Web PID
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8001.*LISTENING"') do (
     echo %%a> "logs\web.pid"
 )
-echo   Web server started on port 8001.
+echo   Web ·þÎñÒÑ¼àÌý 8001 ¶Ë¿Ú
 
-REM [4/4] Verify process is alive
-echo [4/4] Verifying service...
+REM [4/4] ÑéÖ¤½ø³Ì´æ»î
+echo [4/4] ÕýÔÚÑéÖ¤·þÎñ...
 
 set WEB_ALIVE=0
 
@@ -87,27 +114,27 @@ if exist "logs\web.pid" (
         tasklist /FI "PID eq %%a" 2>nul | findstr "%%a" >nul 2>&1
         if not errorlevel 1 (
             set WEB_ALIVE=1
-            echo   [OK] Web server PID %%a
+            echo   [OK] Web ·þÎñ PID %%a
         )
     )
 )
 
 if "!WEB_ALIVE!"=="0" (
-    echo   [FAIL] Web server process not running!
-    echo   Check logs\web.log for details.
+    echo   [FAIL] Web ·þÎñ½ø³ÌÎ´ÔÚÔËÐÐ£¡
+    echo   Çë²é¿´ logs\web.log ÁË½âÏêÇé
     pause
     exit /b 1
 )
 
 echo.
 echo ========================================
-echo   Service Started!
+echo   ÏÐÓãÁÔÈË·þÎñÒÑÆô¶¯
 echo ========================================
 echo   Web:  http://127.0.0.1:8001
-echo   Mode: Web + Scheduler (with browser)
-echo   Log:  logs\web.log
+echo   Ä£Ê½: Web + µ÷¶ÈÆ÷£¨ÊµÊ±²É¼¯£©
+echo   ÈÕÖ¾: logs\web.log
 echo.
-echo To stop: double-click scripts\Í£Ö¹ï¿½ï¿½ï¿½ï¿½.bat
+echo Í£Ö¹·þÎñÇëË«»÷ scripts\Í£Ö¹·þÎñ.bat
 echo.
 
 start "" http://127.0.0.1:8001/app/

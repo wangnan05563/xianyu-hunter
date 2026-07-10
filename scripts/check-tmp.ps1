@@ -1,64 +1,64 @@
-$ErrorActionPreference = 'Continue'
+﻿$ErrorActionPreference = 'Continue'
 $sonarHome = "C:\Users\hspcadmin\.sonar"
 $tmpDir = "$sonarHome\_tmp"
 $cacheDir = "$sonarHome\cache"
 
-Write-Host "=== Sonar Home: $sonarHome ==="
+Write-Host "=== Sonar Home 目录: $sonarHome ==="
 if (Test-Path $sonarHome) {
     $info = Get-Item $sonarHome
-    Write-Host "  Exists: yes"
-    Write-Host "  Attributes: $($info.Attributes)"
+    Write-Host "  存在: 是"
+    Write-Host "  属性: $($info.Attributes)"
     $acl = Get-Acl $sonarHome
-    Write-Host "  Owner: $($acl.Owner)"
-    Write-Host "  Access rules:"
+    Write-Host "  所有者: $($acl.Owner)"
+    Write-Host "  访问规则:"
     foreach ($rule in $acl.Access) {
         Write-Host "    - $($rule.IdentityReference): $($rule.FileSystemRights) ($($rule.AccessControlType))"
     }
 } else {
-    Write-Host "  NOT FOUND"
+    Write-Host "  未找到"
 }
 
 Write-Host ""
-Write-Host "=== _tmp dir: $tmpDir ==="
+Write-Host "=== _tmp 目录: $tmpDir ==="
 if (Test-Path $tmpDir) {
     $info2 = Get-Item $tmpDir
-    Write-Host "  Exists: yes, Attributes: $($info2.Attributes)"
+    Write-Host "  存在: 是, 属性: $($info2.Attributes)"
     $files = Get-ChildItem $tmpDir -Force -ErrorAction SilentlyContinue
-    Write-Host "  Contains $($files.Count) entries"
+    Write-Host "  包含 $($files.Count) 个条目"
     $files | Select-Object -First 5 | ForEach-Object {
         Write-Host "    - $($_.Name) ($($_.Attributes))"
     }
-    # Try to create a test file
+    # 尝试创建测试文件
     try {
         $testFile = "$tmpDir\test_$(Get-Random).tmp"
         "test" | Out-File -FilePath $testFile -NoNewline
-        Write-Host "  WRITE TEST: SUCCESS"
+        Write-Host "  写入测试: 成功"
         Remove-Item $testFile -Force
-        Write-Host "  DELETE TEST: SUCCESS"
+        Write-Host "  删除测试: 成功"
     } catch {
-        Write-Host "  WRITE TEST FAILED: $($_.Exception.Message)"
+        Write-Host "  写入测试失败: $($_.Exception.Message)"
     }
 } else {
-    Write-Host "  NOT FOUND - attempting to create..."
+    Write-Host "  未找到 - 尝试创建..."
     try {
         New-Item -Path $tmpDir -ItemType Directory -Force | Out-Null
-        Write-Host "  CREATED: $tmpDir"
+        Write-Host "  已创建: $tmpDir"
     } catch {
-        Write-Host "  CREATE FAILED: $($_.Exception.Message)"
+        Write-Host "  创建失败: $($_.Exception.Message)"
     }
 }
 
 Write-Host ""
-Write-Host "=== Cache dir: $cacheDir ==="
+Write-Host "=== 缓存目录: $cacheDir ==="
 if (Test-Path $cacheDir) {
     $info3 = Get-Item $cacheDir
-    Write-Host "  Exists: yes, Attributes: $($info3.Attributes)"
+    Write-Host "  存在: 是, 属性: $($info3.Attributes)"
     $cacheFiles = Get-ChildItem $cacheDir -Force -ErrorAction SilentlyContinue
-    Write-Host "  Contains $($cacheFiles.Count) entries"
+    Write-Host "  包含 $($cacheFiles.Count) 个条目"
 }
 
 Write-Host ""
-Write-Host "=== Test temp file creation in different locations ==="
+Write-Host "=== 测试不同位置的临时文件创建 ==="
 $testLocations = @(
     $env:TEMP,
     $sonarHome,
@@ -70,8 +70,8 @@ foreach ($loc in $testLocations) {
         $t = "$loc\sonar_test_$(Get-Random).tmp"
         "test" | Out-File -FilePath $t -NoNewline
         Remove-Item $t -Force
-        Write-Host "  OK: $loc"
+        Write-Host "  成功: $loc"
     } catch {
-        Write-Host "  FAIL: $loc - $($_.Exception.Message)"
+        Write-Host "  失败: $loc - $($_.Exception.Message)"
     }
 }

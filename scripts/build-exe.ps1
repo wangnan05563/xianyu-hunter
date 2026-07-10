@@ -108,16 +108,16 @@ if ($Clean) {
 New-Item -ItemType Directory -Force $cacheDir | Out-Null
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  XianyuHunter EXE Build" -ForegroundColor Cyan
+Write-Host "  闲鱼猎人 EXE 构建" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Repo: $repoRoot"
-Write-Host "Cache: $cacheDir"
-if ($SkipDeps) { Write-Host "Mode: SkipDeps（跳过依赖安装）" }
-if ($SkipSPA)  { Write-Host "Mode: SkipSPA（跳过 SPA 构建）" }
-if ($DepsOnly) { Write-Host "Mode: DepsOnly（仅验证构建依赖）" }
+Write-Host "仓库目录: $repoRoot"
+Write-Host "缓存目录: $cacheDir"
+if ($SkipDeps) { Write-Host "模式: SkipDeps（跳过依赖安装）" }
+if ($SkipSPA)  { Write-Host "模式: SkipSPA（跳过 SPA 构建）" }
+if ($DepsOnly) { Write-Host "模式: DepsOnly（仅验证构建依赖）" }
 
 # ============== 1. venv 增量更新 + 依赖安装 ==============
-Write-Host "`n[1/6] Preparing build venv..." -ForegroundColor Yellow
+Write-Host "`n[1/6] 准备构建 venv..." -ForegroundColor Yellow
 # 为什么不每次删除重建：pip install 对已安装包会自动跳过，删除重建会让所有包重新解压
 # 仅在 venv 不存在或 -Clean 时创建
 if (-not (Test-Path $buildPython)) {
@@ -167,7 +167,7 @@ if (-not (Test-Path ".venv-build\Scripts\pyinstaller.exe")) {
 }
 
 # ============== 2. 锁定依赖 ==============
-Write-Host "`n[2/6] Locking dependencies..." -ForegroundColor Yellow
+Write-Host "`n[2/6] 锁定依赖..." -ForegroundColor Yellow
 & $buildPython -m pip freeze > requirements-lock.txt
 Write-Host "  依赖已锁定到 requirements-lock.txt"
 
@@ -179,7 +179,7 @@ if ($DepsOnly) {
 # ============== 3. 构建 SPA ==============
 # 默认每次都重建：避免前端源码已修改但 SPA 产物未更新导致打包后行为不一致
 # 用 -SkipSPA 跳过（仅当确信前端无变更时使用，可省 1-3 分钟）
-Write-Host "`n[3/6] Building SPA..." -ForegroundColor Yellow
+Write-Host "`n[3/6] 构建 SPA..." -ForegroundColor Yellow
 $spaIndex = "src\xianyu_hunter\web\static\spa\index.html"
 if ($SkipSPA -and (Test-Path $spaIndex)) {
     Write-Host "  SPA 已存在且 -SkipSPA 已指定，跳过构建" -ForegroundColor DarkGray
@@ -245,7 +245,7 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
 }
 
 # ============== 4. PyInstaller 打包 ==============
-Write-Host "`n[4/6] Running PyInstaller..." -ForegroundColor Yellow
+Write-Host "`n[4/6] 运行 PyInstaller 打包..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-3 分钟" -ForegroundColor DarkGray
 # 清理旧产物（dist 每次重建，但缓存独立在 .cache/ 不受影响）
 if (Test-Path "dist\xianyu-hunter") {
@@ -256,18 +256,18 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 Write-Host "  PyInstaller 打包完成"
 
 # ============== 5. 复制外置资源 ==============
-Write-Host "`n[5/6] Copying external resources..." -ForegroundColor Yellow
+Write-Host "`n[5/6] 复制外置资源..." -ForegroundColor Yellow
 
 # 5.1 静态资源（含 SPA + icons，外置到 exe 同级 static 目录）
 # app.py 在打包模式下通过 get_app_dir() / "static" 定位此目录
-Write-Host "  [5.1] Copying static assets (SPA + icons)..."
+Write-Host "  [5.1] 复制静态资源（SPA + icons）..."
 Copy-Item -Recurse -Force "src\xianyu_hunter\web\static" "dist\xianyu-hunter\static"
 
 # 5.2 子进程脚本（auth_helper.py / browser_login.py）
 # 为什么需要：browser_login.py / unified_login.py / auth_manager.py 通过 get_app_dir()/"scripts" 定位这些脚本
 # PyInstaller 不收集 scripts/ 目录（仅打包 src/xianyu_hunter/），必须显式复制
 # 仅复制运行时实际调用的子进程脚本，避免打包测试脚本（test_*.py / perf_test.py 等）
-Write-Host "  [5.2] Copying subprocess scripts (auth_helper, browser_login)..."
+Write-Host "  [5.2] 复制子进程脚本（auth_helper, browser_login）..."
 $scriptsTarget = "dist\xianyu-hunter\scripts"
 New-Item -ItemType Directory -Force $scriptsTarget | Out-Null
 foreach ($script in @("browser_login.py", "auth_helper.py")) {
@@ -282,7 +282,7 @@ foreach ($script in @("browser_login.py", "auth_helper.py")) {
 # 5.3 配置文件（menu_registry.yaml 等只读配置，随安装包分发）
 # 为什么需要：menu_manager.py 通过 get_app_dir()/"config"/"menu_registry.yaml" 定位
 # 打包后 get_app_dir() 返回 exe 所在目录，config/ 需复制到 exe 同级
-Write-Host "  [5.3] Copying config files (menu_registry.yaml)..."
+Write-Host "  [5.3] 复制配置文件（menu_registry.yaml）..."
 $configTarget = "dist\xianyu-hunter\config"
 New-Item -ItemType Directory -Force $configTarget | Out-Null
 if (Test-Path "config\menu_registry.yaml") {
@@ -294,7 +294,7 @@ if (Test-Path "config\menu_registry.yaml") {
 # 5.4 Playwright Chromium（从缓存复制，避免重复下载 ~150MB）
 # 为什么用缓存：dist 每次打包都会删除重建，直接下载到 dist 会每次重下
 # 缓存到 .cache/playwright_browsers/，复制到 dist/xianyu-hunter/playwright_browsers/
-Write-Host "  [5.4] Playwright Chromium..."
+Write-Host "  [5.4] Playwright Chromium..." -ForegroundColor Yellow
 $pwTarget = "dist\xianyu-hunter\playwright_browsers"
 if (Test-Path "$pwCacheDir\chromium-*") {
     Write-Host "  从缓存复制 Chromium...（约 10-30 秒）"
@@ -318,7 +318,7 @@ if (Test-Path "$pwCacheDir\chromium-*") {
 # 5.5 sentence-transformers 模型（从缓存复制，避免重复下载 ~100MB）
 # 为什么用缓存：同上，dist 每次重建会导致重新下载
 # 缓存到 .cache/models/bge-small-zh-v1.5/，复制到 dist/xianyu-hunter/models/
-Write-Host "  [5.5] sentence-transformers model..."
+Write-Host "  [5.5] sentence-transformers 模型..." -ForegroundColor Yellow
 $modelTarget = "dist\xianyu-hunter\models\bge-small-zh-v1.5"
 if (Test-Path "$modelCacheDir\config.json") {
     Write-Host "  从缓存复制模型...（约 5-15 秒）"
@@ -352,7 +352,7 @@ print('Model saved to $modelCacheDir')
 # 5.6 敏感信息扫描（防御性：确保 API Key / .env / .secrets.json 未被打包）
 # 为什么需要：即使 spec 不收集 .env、前面的步骤不复制 .env，
 # 仍需在打包产物中扫描确认，防止未来误改 spec 或新增依赖间接带入敏感信息
-Write-Host "  [5.6] Scanning for sensitive information..."
+Write-Host "  [5.6] 扫描敏感信息..."
 $distRoot = "dist\xianyu-hunter"
 
 # 5.6.1 删除可能存在的敏感文件（防御性，即使前面步骤不应复制它们）
@@ -405,7 +405,7 @@ if ($leakFound) {
 Write-Host "    敏感信息扫描通过（无 API Key 痕迹）" -ForegroundColor Green
 
 # ============== 6. 制作安装包（Inno Setup） ==============
-Write-Host "`n[6/6] Building installer (Inno Setup)..." -ForegroundColor Yellow
+Write-Host "`n[6/6] 构建安装包（Inno Setup）..." -ForegroundColor Yellow
 
 # 6.1 查找 iscc.exe（Inno Setup 编译器）
 function Find-ISCC {
@@ -518,9 +518,9 @@ if (-not $iscc) {
 $distDir = "dist\xianyu-hunter"
 $size = (Get-ChildItem -Recurse $distDir | Measure-Object -Property Length -Sum).Sum / 1MB
 Write-Host "`n========================================" -ForegroundColor Green
-Write-Host "  Build Complete!" -ForegroundColor Green
+Write-Host "  构建完成！" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
-Write-Host "  Output: $distDir"
-Write-Host ("  Size: {0:N1} MB" -f $size)
-Write-Host "  EXE:   $distDir\xianyu-hunter.exe"
+Write-Host "  产物目录: $distDir"
+Write-Host ("  产物大小: {0:N1} MB" -f $size)
+Write-Host "  EXE 路径: $distDir\xianyu-hunter.exe"
 Write-Host "========================================" -ForegroundColor Green

@@ -64,6 +64,16 @@ class TunnelService:
         kwargs: dict = {"binary_path": cfg.binary_path}
         if provider_name == "cpolar":
             kwargs["authtoken"] = cfg.cpolar_authtoken
+        elif provider_name == "cloudflare":
+            # Named Tunnel 参数：quick 模式下这些值被忽略
+            kwargs.update(
+                tunnel_mode=cfg.tunnel_mode,
+                tunnel_name=cfg.tunnel_name,
+                tunnel_id=cfg.tunnel_id,
+                credentials_file=cfg.credentials_file,
+                hostname=cfg.hostname,
+                cert_file=cfg.cert_file,
+            )
 
         self._provider = create_provider(provider_name, port, **kwargs)
         self._provider_name = provider_name

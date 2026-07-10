@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     闲鱼猎人项目自动化生命周期管理脚本
 .DESCRIPTION
@@ -393,10 +393,10 @@ function Invoke-Status {
 
 # ========== 主入口 ==========
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  XianyuHunter Automation: $Action" -ForegroundColor Cyan
+Write-Host "  闲鱼猎人自动化：$Action" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Project: $ProjectRoot"
-Write-Host "  Log:     $LogFile"
+Write-Host "  项目目录: $ProjectRoot"
+Write-Host "  日志文件: $LogFile"
 
 $success = switch ($Action) {
     'start'   { Invoke-Start }
@@ -409,12 +409,12 @@ $success = switch ($Action) {
 Write-Host ''
 if ($success) {
     Write-Host "========================================" -ForegroundColor Green
-    Write-Host "  Action '$Action' completed" -ForegroundColor Green
+    Write-Host "  动作 '$Action' 已完成" -ForegroundColor Green
     Write-Host "========================================" -ForegroundColor Green
     exit 0
 } else {
     Write-Host "========================================" -ForegroundColor Red
-    Write-Host "  Action '$Action' FAILED" -ForegroundColor Red
+    Write-Host "  动作 '$Action' 失败" -ForegroundColor Red
     Write-Host "========================================" -ForegroundColor Red
     exit 1
 }

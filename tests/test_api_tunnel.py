@@ -17,6 +17,7 @@ def test_tunnel_status_initial(client):
         svc = MagicMock()
         svc.status = "stopped"
         svc.public_url = None
+        svc.provider_name = "cloudflare"
         mock_get.return_value = svc
         resp = client.get("/api/tunnel/status")
     assert resp.status_code == 200
@@ -32,6 +33,7 @@ def test_tunnel_start(client):
         svc.start.return_value = "https://test.trycloudflare.com"
         svc.status = "running"
         svc.public_url = "https://test.trycloudflare.com"
+        svc.provider_name = "cloudflare"
         mock_get.return_value = svc
         resp = client.post("/api/tunnel/start")
     assert resp.status_code == 200
@@ -46,6 +48,7 @@ def test_tunnel_stop(client):
         svc = MagicMock()
         svc.status = "stopped"
         svc.public_url = None
+        svc.provider_name = "cloudflare"
         mock_get.return_value = svc
         resp = client.post("/api/tunnel/stop")
     assert resp.status_code == 200

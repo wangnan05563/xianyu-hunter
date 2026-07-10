@@ -58,6 +58,16 @@ export const PRESETS = {
     color: '#0066ff',
     apiKeyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
   },
+  agnes: {
+    // Agnes AI 兼容 OpenAI 接口，文档参考 https://agnes-ai.com/zh-Hans/docs/
+    // 免费额度覆盖文本/图像/视频生成，API Key 从 platform.agnes-ai.com 获取
+    base_url: 'https://apihub.agnes-ai.com/v1',
+    model: 'agnes-2.0-flash',
+    vision_model: 'agnes-2.0-flash',
+    label: 'Agnes AI',
+    color: '#8b5cf6',
+    apiKeyUrl: 'https://platform.agnes-ai.com/',
+  },
   ollama: {
     base_url: 'http://localhost:11434/v1',
     model: 'qwen2.5:7b',

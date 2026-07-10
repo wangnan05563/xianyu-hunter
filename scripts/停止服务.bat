@@ -1,15 +1,15 @@
 @echo off
 chcp 936 >nul 2>&1
-REM ï¿½Å±ï¿½Î»ï¿½ï¿½ scripts/ ï¿½ï¿½Ä¿Â¼ï¿½ï¿½ï¿½ï¿½Øµï¿½ï¿½ï¿½Ä¿ï¿½ï¿½Ä¿Â¼
+REM ½Å±¾Î»ÓÚ scripts/ ×ÓÄ¿Â¼£¬»Øµ½ÏîÄ¿¸ùÄ¿Â¼
 cd /d "%~dp0.."
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo   Stopping XianyuHunter...
+echo   ÕýÔÚÍ£Ö¹ÏÐÓãÁÔÈË·þÎñ...
 echo ========================================
 
-REM [1/3] Stop Web server via PID file, fallback to port scan
-echo [1/3] Stopping Web server...
+REM [1/3] Í¨¹ý PID ÎÄ¼þÍ£Ö¹ Web ·þÎñ£¬Ê§°ÜÔò»ØÍËµ½¶Ë¿ÚÉ¨Ãè
+echo [1/3] ÕýÔÚÍ£Ö¹ Web ·þÎñ...
 
 set WEB_KILLED=0
 
@@ -17,30 +17,30 @@ if exist "logs\web.pid" (
     for /f "tokens=*" %%a in (logs\web.pid) do (
         taskkill /F /T /PID %%a >nul 2>&1
         if not errorlevel 1 (
-            echo   [OK] Web server stopped (PID %%a)
+            echo   [OK] Web ·þÎñÒÑÍ£Ö¹ (PID %%a)
             set WEB_KILLED=1
         )
     )
     del "logs\web.pid" >nul 2>&1
 )
 
-REM Fallback: kill any process listening on port 8001
+REM »ØÍË£ºÉ±µô¼àÌý 8001 ¶Ë¿ÚµÄ½ø³Ì
 if "!WEB_KILLED!"=="0" (
     for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8001.*LISTENING"') do (
         taskkill /F /T /PID %%a >nul 2>&1
         if not errorlevel 1 (
-            echo   [OK] Web server stopped (PID %%a, found by port scan)
+            echo   [OK] Web ·þÎñÒÑÍ£Ö¹ (PID %%a, Í¨¹ý¶Ë¿ÚÉ¨ÃèÕÒµ½)
             set WEB_KILLED=1
         )
     )
 )
 
 if "!WEB_KILLED!"=="0" (
-    echo   [SKIP] No Web server process found on port 8001.
+    echo   [SKIP] Î´ÕÒµ½¼àÌý 8001 ¶Ë¿ÚµÄ Web ·þÎñ½ø³Ì
 )
 
-REM [2/3] Release browser resources (WebView2 + Edge child processes)
-echo [2/3] Cleaning up browser processes...
+REM [2/3] ÊÍ·Åä¯ÀÀÆ÷×ÊÔ´£¨WebView2 + Edge ×Ó½ø³Ì£©
+echo [2/3] ÕýÔÚÇåÀíä¯ÀÀÆ÷½ø³Ì...
 
 taskkill /F /IM msedgewebview2.exe >nul 2>&1
 taskkill /F /IM msedge.exe >nul 2>&1
@@ -49,25 +49,25 @@ taskkill /F /IM chrome.exe >nul 2>&1
 
 timeout /t 1 >nul 2>&1
 
-REM [3/3] Verify shutdown - port released and no xianyu_hunter process remaining
-echo [3/3] Verifying shutdown...
+REM [3/3] ÑéÖ¤¹Ø±Õ½á¹û - ¶Ë¿ÚÒÑÊÍ·ÅÇÒÎÞ xianyu_hunter ½ø³Ì²ÐÁô
+echo [3/3] ÕýÔÚÑéÖ¤¹Ø±Õ½á¹û...
 
 set PORT_FREE=1
 netstat -aon | findstr ":8001.*LISTENING" >nul 2>&1
 if not errorlevel 1 (
     set PORT_FREE=0
-    echo   [WARN] Port 8001 is still in use!
+    echo   [WARN] ¶Ë¿Ú 8001 ÈÔ±»Õ¼ÓÃ£¡
 )
 
 if "!PORT_FREE!"=="1" (
-    echo   [OK] All services stopped successfully.
+    echo   [OK] ËùÓÐ·þÎñÒÑ³É¹¦Í£Ö¹
 ) else (
-    echo   [WARN] Some processes may still be running. Check task manager.
+    echo   [WARN] ²¿·Ö½ø³Ì¿ÉÄÜÈÔÔÚÔËÐÐ£¬Çë¼ì²éÈÎÎñ¹ÜÀíÆ÷
 )
 
 echo.
 echo ========================================
-echo   Services Stopped.
+echo   ·þÎñÒÑÍ£Ö¹
 echo ========================================
 echo.
 timeout /t 2 >nul 2>&1

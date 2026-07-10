@@ -13,8 +13,11 @@ const MOBILE_VIEWPORT_MAX = 600
 export function isMobileUA(userAgent: string): boolean {
   if (MOBILE_UA_PATTERN.test(userAgent)) return true
   // iPadOS 13+ 伪装为桌面 Mac，需检查是否支持触摸
-  if (/Macintosh/i.test(userAgent) && typeof document !== 'undefined') {
-    return 'ontouchend' in document
+  // ontouchend 在 Chrome DevTools / Playwright 设备仿真模式下可能未被正确设置，
+  // 使用 navigator.maxTouchPoints > 0 作为更可靠的触摸能力 fallback
+  if (/Macintosh/i.test(userAgent)) {
+    if (typeof document !== 'undefined' && 'ontouchend' in document) return true
+    if (typeof navigator !== 'undefined' && (navigator.maxTouchPoints || 0) > 0) return true
   }
   return false
 }
@@ -31,8 +34,11 @@ function detectMobile(): boolean {
   const ua = navigator.userAgent
   const width = window.innerWidth
   const ontouchend = typeof document !== 'undefined' && 'ontouchend' in document
+  // 设备仿真模式下 'ontouchend' 可能失效，maxTouchPoints 是更稳定的触摸信号
+  // 仅在 Macintosh UA 分支生效，避免触屏笔记本（Surface 等）误判为移动端
+  const maxTouchPoints = navigator.maxTouchPoints || 0
   const matchedByPattern = MOBILE_UA_PATTERN.test(ua)
-  const matchedByMac = /Macintosh/i.test(ua) && ontouchend
+  const matchedByMac = /Macintosh/i.test(ua) && (ontouchend || maxTouchPoints > 0)
   const result = matchedByPattern || matchedByMac || width <= MOBILE_VIEWPORT_MAX
   return result
 }

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     setup-env.ps1 单元/集成/边界测试脚本
 .DESCRIPTION

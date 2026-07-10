@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     XianyuHunter 一键环境配置脚本
 .DESCRIPTION
