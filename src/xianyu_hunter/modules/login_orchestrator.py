@@ -482,7 +482,11 @@ class LoginOrchestrator:
 
         为什么用导航而非 API：导航是用户自然行为，
         风控压力低于直接调用 getTimestamp API。
-        浏览器不可用时返回 False（由上层回退到 httpx 兜底）。
+        浏览器不可用或重启失败时返回 False（由上层回退到 httpx 兜底）。
+
+        浏览器自愈：_context 非空但连接已断开时（进程崩溃/CDP 中断），
+        new_page 会抛 TargetClosedError。此处调用 ensure_alive 先尝试重启，
+        重启成功后继续导航，重启失败才降级 httpx。
         """
         page = None
         try:
@@ -491,6 +495,12 @@ class LoginOrchestrator:
             if not container.browser or not container.browser._context:
                 logger.debug("renew_via_browser: 浏览器不可用")
                 return False
+            # ensure_alive：_context 存在但连接已断开时自动重启，
+            # 避免对死浏览器调用 new_page 必然抛 TargetClosedError 后才降级
+            if hasattr(container.browser, "ensure_alive"):
+                if not await container.browser.ensure_alive():
+                    logger.debug("renew_via_browser: 浏览器重启失败，降级 httpx")
+                    return False
             page = await container.browser.new_page()
             try:
                 await page.goto("https://h5.m.taobao.com/", wait_until="domcontentloaded", timeout=10000)

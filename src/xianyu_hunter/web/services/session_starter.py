@@ -24,24 +24,18 @@ def trigger_session_start() -> None:
     实现要点：
     - 已活跃时 start_session_default 内部会跳过，无副作用
     - 失败仅记录日志，不抛异常（避免影响登录成功的返回路径）
-    - 后台线程调用时通过 create_task/ensure_future 调度到 FastAPI 主事件循环
+    - start_session_default 是同步方法，直接调用即可；
+      TokenRenewer.start() 内部通过 asyncio.create_task 调度 _renew_loop 协程
     """
     try:
         from xianyu_hunter.modules.login_orchestrator import get_orchestrator
 
         orch = get_orchestrator()
-        # get_running_loop 替代 get_event_loop：前者无运行循环时抛 RuntimeError
-        # 走 except 分支；后者在 3.12+ 已弃用
-        loop = asyncio.get_running_loop()
-        # fire-and-forget：登录流程不应等待会话启动
-        # 保存引用防止任务被 GC 回收
-        _session_task = loop.create_task(orch.start_session_default())
-    except RuntimeError:
-        # 罕见：事件循环未运行时退化为同步执行（一般不会发生）
-        try:
-            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
-            get_orchestrator().start_session_default()
-        except Exception as e:
-            logger.debug("自动启动会话失败: %s", e)
+        # start_session_default 是同步方法（返回 bool），
+        # 不能用 loop.create_task 包装——create_task 要求 coroutine，
+        # 传入 bool 会抛 TypeError 被外层 except 吞掉，导致会话永远不启动。
+        # 直接同步调用：start_session 内部调用 TokenRenewer.start()，
+        # 后者自行 create_task(_renew_loop) 调度后台续期协程。
+        orch.start_session_default()
     except Exception as e:
-        logger.debug("自动启动会话失败: %s", e)
+        logger.warning("自动启动会话失败: %s", e, exc_info=True)

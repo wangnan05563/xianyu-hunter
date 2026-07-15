@@ -95,6 +95,13 @@ async def inject_cookie_store_to_browser(
         logger.warning("%s：CookieStore 中没有可注入的 Cookie", log_prefix)
         return False
 
+    # ensure_alive：浏览器连接断开时自动重启，否则 add_cookies 必然失败
+    # 触发场景：浏览器进程崩溃、CDP 连接意外断开、内存压力下被系统杀死
+    if hasattr(browser, "ensure_alive"):
+        if not await browser.ensure_alive():
+            logger.warning("%s：浏览器不可用且重启失败，跳过注入", log_prefix)
+            return False
+
     success = await browser.add_cookies(pw_cookies)
     if not success:
         logger.warning("%s：注入浏览器后目标 Cookie 验证未通过", log_prefix)

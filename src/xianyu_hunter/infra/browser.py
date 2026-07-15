@@ -78,6 +78,9 @@ class BrowserManager:
         # close_all_pages 跳过这些 page，避免误关并发任务正在用的页面
         # 修复场景：scheduler.run_once 结束清理时，BatchRefreshScheduler.detail() 仍在用 page
         self._external_pages: set = set()
+        # 重启锁：ensure_alive 串行化浏览器重启，避免并发调用方同时重启
+        # 导致 browser-data 目录锁冲突或 Playwright 多实例竞争
+        self._restart_lock = asyncio.Lock()
 
     async def start(self) -> None:
         """启动浏览器（持久化），含自动重试和清理逻辑
@@ -465,22 +468,6 @@ class BrowserManager:
             logger.error("add_cookies 失败: {}", e)
             return False
 
-    def is_alive(self) -> bool:
-        """检查浏览器是否还活着
-
-        通过访问 context.pages 属性验证底层连接是否可用。
-        不创建新页面（避免弹窗），仅读取已有页面列表。
-        """
-        if self._context is None:
-            return False
-        try:
-            # 访问 pages 属性会触发底层 CDP 请求，
-            # 若连接已断开会抛出异常
-            _ = self._context.pages
-            return True
-        except Exception:
-            return False
-
     def _cleanup_orphan_processes(self) -> None:
         """杀掉残留的 msedge/chromium 进程（非当前浏览器实例）
 
@@ -526,18 +513,63 @@ class BrowserManager:
             logger.info("Removed {} stale lock files from {}", cleaned, self.user_data_dir)
 
     async def is_alive(self) -> bool:
-        """检查浏览器是否还活着"""
+        """检查浏览器是否还活着
+
+        通过访问 context.pages 触发底层 CDP 请求验证连接可用性。
+        不要求 pages 非空：刚重启的浏览器可能没有页面，但连接仍可用。
+        """
         if self._context is None:
             return False
         try:
-            # 尝试执行简单JS来验证浏览器是否真正存活
-            pages = self._context.pages
-            if not pages:
-                return False
-            await pages[0].evaluate("1+1")
+            # 访问 pages 属性会触发底层 CDP 请求，
+            # 若连接已断开会抛出异常（Connection closed while reading from the driver）
+            _ = self._context.pages
             return True
         except Exception:
             return False
+
+    async def ensure_alive(self) -> bool:
+        """确保浏览器连接可用，不可用时自动重启
+
+        场景：浏览器进程崩溃/连接意外断开后，_context 仍非 None 但已失效，
+        后续 add_cookies/get_cookies 会反复抛 "Connection closed while reading
+        from the driver"。本方法检测到此情况后自动 close + start 重启浏览器。
+
+        并发安全：用 asyncio.Lock 串行化重启，避免多个调用方同时重启
+        导致 browser-data 目录锁冲突。
+
+        Returns:
+            True 表示浏览器存活（原本就存活或重启成功）；
+            False 表示重启失败（已记日志，调用方应降级处理）。
+        """
+        # 快速路径：大多数情况下浏览器存活，避免 Lock 竞争
+        if await self.is_alive():
+            return True
+
+        # 慢路径：需要重启，加锁串行化
+        async with self._restart_lock:
+            # double-check：可能在等锁期间已被其他任务重启成功
+            if await self.is_alive():
+                return True
+
+            logger.warning("浏览器连接已断开，尝试重启...")
+            try:
+                await self.close()
+            except Exception as e:
+                logger.warning("ensure_alive: close 旧浏览器失败（继续启动新实例）: {}", e)
+
+            try:
+                await self.start()
+                # start 不创建初始页面，验证 context 可达即可
+                alive = await self.is_alive()
+                if alive:
+                    logger.info("浏览器重启成功")
+                else:
+                    logger.error("浏览器重启后 is_alive 仍为 False")
+                return alive
+            except Exception as e:
+                logger.error("浏览器重启失败: {}", e, exc_info=True)
+                return False
 
     async def close(self) -> None:
         """关闭浏览器（保留 Cookie）"""

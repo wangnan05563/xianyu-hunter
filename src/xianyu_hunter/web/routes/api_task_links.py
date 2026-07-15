@@ -105,8 +105,18 @@ async def _get_browser_cookies_by_name(container: Container) -> dict[str, dict]:
 
     读取失败时返回空字典而非抛异常：调用方需要用空集合判断"缺失"状态，
     异常会破坏后续 missing/expired/stale 检查流程。
+
+    浏览器自愈：get_cookies 前先 ensure_alive，连接断开时自动重启，
+    避免对死浏览器反复读取导致误判所有 cookie 缺失。
     """
     try:
+        # ensure_alive：浏览器连接断开（Connection closed while reading
+        # from the driver）时自动 close + start 重启，否则 get_cookies
+        # 必然抛异常返回空字典，导致所有 identity cookie 被误判为 missing
+        if hasattr(container.browser, "ensure_alive"):
+            if not await container.browser.ensure_alive():
+                logger.warning("读取浏览器 Cookie 失败：浏览器不可用且重启失败")
+                return {}
         cookies = await container.browser.get_cookies()
     except Exception as e:
         logger.warning("读取浏览器 Cookie 失败: {}", e)
@@ -241,6 +251,13 @@ async def _inject_cookies_from_json(
         missing, expired, stale,
     )
     try:
+        # ensure_alive：add_cookies 前确保浏览器连接可用，断开时自动重启
+        # 复用 cookie_runtime_sync.inject_cookie_store_to_browser 同款自愈模式，
+        # 避免实时搜索在浏览器崩溃后反复注入失败导致用户被判未登录
+        if hasattr(container.browser, "ensure_alive"):
+            if not await container.browser.ensure_alive():
+                logger.warning("实时搜索：浏览器不可用且重启失败，跳过 cookie 注入")
+                return False
         success = await container.browser.add_cookies(pw_cookies)
         if success:
             # 为什么记录具体名称：排查"补注入 2 个 cookie"时无法定位是哪两个
@@ -332,6 +349,21 @@ async def _ensure_live_search_cookies(container: Container, user_id: str = "defa
         )
         # 重新检查补注入后是否仍缺少/过期/陈旧
         missing, expired, stale = await _collect_cookie_issues(container, json_identity_values)
+        # 二次 cookie 完整性检查（参考 collection_service._raise_detail_failure_error）：
+        # 注入后仍 missing 且 CookieStore JSON 中持有这些 cookie 时，说明是
+        # 浏览器不可用（ensure_alive 重启失败）导致读取失败，而非真正未登录。
+        # 抛 503 而非 403/440，避免误导用户重新登录。
+        if missing and json_identity_values:
+            json_has_missing = {n for n in missing if json_identity_values.get(n)}
+            if json_has_missing:
+                logger.warning(
+                    "实时搜索：浏览器不可用导致 Cookie 读取失败（JSON 持有 {} 但浏览器无法读取），"
+                    "抛 503 而非 403", json_has_missing,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"实时搜索浏览器不可用（{', '.join(missing)} 读取失败），请稍后重试",
+                )
         _raise_live_cookie_errors(missing, expired, stale)
 
     _maybe_reset_m5tk_refresh(container, cookies_injected)

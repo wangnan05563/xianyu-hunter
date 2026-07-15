@@ -361,6 +361,9 @@ class ItemCollectionService:
 
         为什么失败不抛：注入失败后由后续 _raise_cookie_errors 根据 cookie 实际状态
         决定是否抛 440/403，避免注入层与校验层重复决策。
+
+        浏览器自愈：调用 add_cookies 前先 ensure_alive，浏览器连接断开时
+        自动重启，避免对死浏览器反复操作导致批量采集连续失败熔断。
         """
         logger.info(
             "Official collection injecting CookieStore cookies: missing={}, expired={}, stale={}",
@@ -369,6 +372,11 @@ class ItemCollectionService:
             stale,
         )
         try:
+            # ensure_alive：浏览器断开（Connection closed while reading from the driver）
+            # 时自动 close + start 重启，否则 add_cookies 必然失败
+            if not await container.browser.ensure_alive():
+                logger.warning("CookieStore injection skipped: 浏览器不可用且重启失败")
+                return
             success = await container.browser.add_cookies(pw_cookies)
             if success:
                 try:

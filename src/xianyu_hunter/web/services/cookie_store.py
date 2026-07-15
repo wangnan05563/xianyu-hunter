@@ -159,13 +159,31 @@ class CookieStore:
         # 与 /api/anticrawl/health 的 cookie_checker 保持一致（api_anticrawl.py:105-120）
         # 兼容旧数据：无 expires 字段视为 session cookie，不过期
         # Playwright 的 expires 为 Unix 时间戳（秒），-1 或 0 表示 session cookie
+        # 延迟导入避免 cookie_store → cookie_rotator 循环依赖
+        from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+
         now = time.time()
         for c in cookies_list:
-            if c.get("name") not in _GOOFISH_KEY_COOKIES:
+            name = c.get("name")
+            if name not in _GOOFISH_KEY_COOKIES:
                 continue
+
+            # _m_h5_tk 特殊处理：使用内嵌 timestamp 判断过期，而非 expires 字段。
+            # 原因：is_m5tk_expired 文档明确记载 "_m_h5_tk 的 cookie expires 字段
+            # 通常是 -1（session cookie），无法用 cookie.expires 判断过期"。
+            # cookie_rotator / _default_cookie_provider 等全链路均使用 is_m5tk_expired，
+            # 健康检查若用 expires 字段会导致与全链路不一致：
+            # - expires 已过期但内嵌 timestamp 仍有效时误报 cookie_expired
+            # - expires=-1 但 token 实已过期时漏报
+            if name == "_m_h5_tk":
+                value = c.get("value", "")
+                if value and is_m5tk_expired(value):
+                    return False, f"cookie_expired:{name}"
+                continue
+
             expires = c.get("expires", -1)
             if expires and expires > 0 and expires < now:
-                return False, f"cookie_expired:{c.get('name')}"
+                return False, f"cookie_expired:{name}"
 
         return True, "ok"
 

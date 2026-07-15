@@ -1207,8 +1207,10 @@ class SearchMixin:
         if not hard_session_invalid and not retryable_api_auth_failed:
             return False
         if retryable_api_auth_failed:
-            logger.warning(
-                "搜索 API token/签名校验失败 ({})，将尝试 DOM 回退，不直接判定登录失效: keyword={}",
+            # MTOP token/签名失败属预期降级路径（API 失败 → 重试 → DOM 回退 + 冷却），
+            # 用 INFO 避免与真正需重新登录的 RGV587 WARNING 混淆，干扰问题定位
+            logger.info(
+                "搜索 API token/签名校验失败 ({})，将尝试 DOM 回退: keyword={}",
                 ret_str[:80], keyword,
             )
             state["api_auth_failed"] = True
@@ -1340,13 +1342,14 @@ class SearchMixin:
         except Exception as retry_err:
             logger.warning("token/签名校验失败后 API 重试导航失败: {}", str(retry_err)[:80])
         if state.get("api_auth_failed") and not captured_responses:
-            logger.warning("搜索 API token/签名校验重试仍失败，将尝试 DOM 回退: keyword={}", keyword)
+            # 重试仍失败属预期降级路径的最终环节：进入冷却期，直接走 DOM 回退
+            # 合并冷却日志为单条 INFO，避免原 WARNING + INFO 两条语义重复
             self._api_auth_backoff_until = max(
                 getattr(self, "_api_auth_backoff_until", 0.0),
                 time.monotonic() + self.API_AUTH_BACKOFF_SECONDS,
             )
             logger.info(
-                "搜索 API token/签名进入降级冷却，{:.0f}s 内直接使用 DOM 回退: keyword={}",
+                "搜索 API token/签名重试仍失败，进入 {:.0f}s 冷却期，直接走 DOM 回退: keyword={}",
                 self.API_AUTH_BACKOFF_SECONDS, keyword,
             )
 

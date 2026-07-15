@@ -618,6 +618,7 @@ class TestStartSessionDefault:
             container = MagicMock()
             container.browser = MagicMock()
             container.browser._context = MagicMock()
+            container.browser.ensure_alive = AsyncMock(return_value=True)
             page = AsyncMock()
             container.browser.new_page = AsyncMock(return_value=page)
             mock_container_factory.return_value = container
@@ -631,6 +632,61 @@ class TestStartSessionDefault:
                     assert result is True
                     mock_sync.assert_awaited_once()
                     mock_httpx.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_renew_via_browser_calls_ensure_alive_before_new_page(self):
+        """_renew_via_browser 应在 new_page 前调用 ensure_alive（Fix B）
+
+        验证：_context 存在但连接已断开时，ensure_alive 先尝试重启浏览器，
+        重启成功后继续导航而非直接降级 httpx。
+        """
+        orch = LoginOrchestrator()
+
+        with patch(
+            "xianyu_hunter.web.deps.get_container"
+        ) as mock_container_factory:
+            container = MagicMock()
+            container.browser = MagicMock()
+            container.browser._context = MagicMock()
+            container.browser.ensure_alive = AsyncMock(return_value=True)
+            page = AsyncMock()
+            container.browser.new_page = AsyncMock(return_value=page)
+            mock_container_factory.return_value = container
+
+            with patch(
+                "xianyu_hunter.web.services.cookie_runtime_sync.sync_browser_cookies_to_store_after_renew",
+                new_callable=AsyncMock,
+            ):
+                result = await orch._renew_via_browser()
+
+                assert result is True
+                container.browser.ensure_alive.assert_awaited_once()
+                container.browser.new_page.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_renew_via_browser_fallback_to_httpx_when_ensure_alive_fails(self):
+        """ensure_alive 失败时 _renew_via_browser 应返回 False 触发 httpx 降级（Fix B）
+
+        验证：_context 存在但 ensure_alive 重启失败时，不调用 new_page，
+        直接返回 False 让上层 _default_renew_callback 回退到 httpx。
+        """
+        orch = LoginOrchestrator()
+
+        with patch(
+            "xianyu_hunter.web.deps.get_container"
+        ) as mock_container_factory:
+            container = MagicMock()
+            container.browser = MagicMock()
+            container.browser._context = MagicMock()
+            container.browser.ensure_alive = AsyncMock(return_value=False)
+            container.browser.new_page = AsyncMock()
+            mock_container_factory.return_value = container
+
+            result = await orch._renew_via_browser()
+
+            assert result is False
+            container.browser.ensure_alive.assert_awaited_once()
+            container.browser.new_page.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_default_relogin_callback_returns_true_when_inject_succeeds(self):
