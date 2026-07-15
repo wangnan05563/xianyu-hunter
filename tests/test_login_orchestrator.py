@@ -312,8 +312,8 @@ class TestSessionLifecycle:
         """start_session 应激活会话"""
         orch = LoginOrchestrator()
 
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
-            await orch.start_session(cookie_provider=lambda: "token_123")
+        with patch.object(orch._token_renewer, "start"):
+            orch.start_session(cookie_provider=lambda: "token_123")
 
             assert orch.is_session_active is True
             assert orch._started_at > 0
@@ -324,9 +324,9 @@ class TestSessionLifecycle:
         orch = LoginOrchestrator()
         provider = lambda: "token_123"
 
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
+        with patch.object(orch._token_renewer, "start"):
             with patch.object(orch._token_renewer, "set_cookie_provider") as mock_set:
-                await orch.start_session(cookie_provider=provider)
+                orch.start_session(cookie_provider=provider)
                 mock_set.assert_called_once_with(provider)
 
     @pytest.mark.asyncio
@@ -337,9 +337,9 @@ class TestSessionLifecycle:
         async def renew_cb():
             return True
 
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
+        with patch.object(orch._token_renewer, "start"):
             with patch.object(orch._token_renewer, "set_renew_callback") as mock_set:
-                await orch.start_session(
+                orch.start_session(
                     cookie_provider=lambda: "tk",
                     renew_callback=renew_cb,
                 )
@@ -354,9 +354,9 @@ class TestSessionLifecycle:
         """
         orch = LoginOrchestrator()
 
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
+        with patch.object(orch._token_renewer, "start"):
             with patch.object(orch._token_renewer, "set_renew_fail_callback") as mock_set:
-                await orch.start_session(cookie_provider=lambda: "tk")
+                orch.start_session(cookie_provider=lambda: "tk")
                 mock_set.assert_called_once()
                 # 验证回调会触发 session 层失效
                 callback = mock_set.call_args[0][0]
@@ -369,14 +369,14 @@ class TestSessionLifecycle:
         """重复调用 start_session 应被忽略"""
         orch = LoginOrchestrator()
 
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock) as mock_start:
-            await orch.start_session(cookie_provider=lambda: "tk")
+        with patch.object(orch._token_renewer, "start") as mock_start:
+            orch.start_session(cookie_provider=lambda: "tk")
             first_started_at = orch._started_at
 
             # 稍等确保时间不同
             await asyncio.sleep(0.01)
 
-            await orch.start_session(cookie_provider=lambda: "tk")
+            orch.start_session(cookie_provider=lambda: "tk")
             # 第二次不应更新 started_at
             assert orch._started_at == first_started_at
             # start 只应被调用一次
@@ -387,8 +387,8 @@ class TestSessionLifecycle:
         """stop_session 应停止会话"""
         orch = LoginOrchestrator()
 
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
-            await orch.start_session(cookie_provider=lambda: "tk")
+        with patch.object(orch._token_renewer, "start"):
+            orch.start_session(cookie_provider=lambda: "tk")
 
         with patch.object(orch._token_renewer, "stop", new_callable=AsyncMock):
             await orch.stop_session()
@@ -421,8 +421,8 @@ class TestStartSessionDefault:
         """未启动时调用应启动并返回 True"""
         orch = LoginOrchestrator()
 
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
-            result = await orch.start_session_default()
+        with patch.object(orch._token_renewer, "start"):
+            result = orch.start_session_default()
             assert result is True
             assert orch.is_session_active is True
 
@@ -431,12 +431,12 @@ class TestStartSessionDefault:
         """已活跃时应直接返回 True，不重复启动 TokenRenewer"""
         orch = LoginOrchestrator()
 
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock) as mock_start:
-            await orch.start_session_default()
+        with patch.object(orch._token_renewer, "start") as mock_start:
+            orch.start_session_default()
             first_count = mock_start.call_count
 
             # 再次调用：已活跃，应跳过
-            result = await orch.start_session_default()
+            result = orch.start_session_default()
             assert result is True
             assert mock_start.call_count == first_count  # 没有额外调用
 
@@ -454,7 +454,7 @@ class TestStartSessionDefault:
             "start",
             side_effect=RuntimeError("renewer failed"),
         ):
-            result = await orch.start_session_default()
+            result = orch.start_session_default()
             assert result is False
             # 异常后 _session_active 仍为 False（start_session 设置的活跃标志在异常前被设）
             # 这里只验证不抛异常、返回 False
@@ -493,19 +493,211 @@ class TestStartSessionDefault:
             assert orch._default_cookie_provider() == "tk_abc"
 
     @pytest.mark.asyncio
-    async def test_default_renew_callback_returns_false_when_no_browser(self):
-        """浏览器不可用时 _default_renew_callback 应返回 False"""
+    async def test_default_renew_callback_returns_false_when_no_browser_and_no_cookies(self):
+        """浏览器不可用且 CookieStore 无数据时 _default_renew_callback 应返回 False
+
+        覆盖 with_browser=False 模式 + 未登录场景：
+        - 浏览器路径：container.browser 为 None，返回 False
+        - httpx 兜底：CookieStore 无数据，返回 False
+        """
         orch = LoginOrchestrator()
 
         with patch(
             "xianyu_hunter.web.deps.get_container"
         ) as mock_container_factory:
-            from xianyu_hunter.web.deps import get_container
             container = MagicMock()
             container.browser = None
             mock_container_factory.return_value = container
 
-            assert await orch._default_renew_callback() is False
+            with patch(
+                "xianyu_hunter.web.services.cookie_store.get_cookie_store"
+            ) as mock_store_factory:
+                store = MagicMock()
+                store._read_json.return_value = None
+                mock_store_factory.return_value = store
+
+                assert await orch._default_renew_callback() is False
+
+    @pytest.mark.asyncio
+    async def test_default_renew_callback_fallback_to_httpx_when_no_browser(self):
+        """浏览器不可用时应回退到 httpx 续期（with_browser=False 模式核心场景）
+
+        覆盖 Fix 2：无浏览器时通过 httpx 调用 MTOP getTimestamp API 续期。
+        - 浏览器路径：container.browser 为 None，返回 False
+        - httpx 兜底：CookieStore 有数据，httpx 响应含 Set-Cookie，update_cookie_values 成功
+        """
+        orch = LoginOrchestrator()
+
+        with patch(
+            "xianyu_hunter.web.deps.get_container"
+        ) as mock_container_factory:
+            container = MagicMock()
+            container.browser = None
+            mock_container_factory.return_value = container
+
+            with patch(
+                "xianyu_hunter.web.services.cookie_store.get_cookie_store"
+            ) as mock_store_factory:
+                store = MagicMock()
+                store._read_json.return_value = {
+                    "cookies": [
+                        {"name": "_m_h5_tk", "value": "oldtoken_1234567890"},
+                        {"name": "unb", "value": "123456"},
+                    ]
+                }
+                store.update_cookie_values.return_value = True
+                mock_store_factory.return_value = store
+
+                # mock httpx.AsyncClient 的 async with 协议
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.headers.get_list.return_value = [
+                    "_m_h5_tk=newtoken_9876543210; Path=/; Domain=.taobao.com",
+                    "_m_h5_tk_enc=newenc_9876543210; Path=/; Domain=.taobao.com",
+                    "unb=123456; Path=/; Domain=.taobao.com",  # 非 token cookie，应被过滤
+                ]
+                mock_client = AsyncMock()
+                mock_client.__aenter__.return_value = mock_client
+                mock_client.get.return_value = mock_resp
+
+                with patch("httpx.AsyncClient", return_value=mock_client):
+                    result = await orch._default_renew_callback()
+                    assert result is True
+                    # 验证只回写 _m_h5_tk / _m_h5_tk_enc，不回写 unb
+                    store.update_cookie_values.assert_called_once_with({
+                        "_m_h5_tk": "newtoken_9876543210",
+                        "_m_h5_tk_enc": "newenc_9876543210",
+                    })
+
+    @pytest.mark.asyncio
+    async def test_default_renew_callback_httpx_no_set_cookie_returns_false(self):
+        """httpx 响应无 _m_h5_tk Set-Cookie 时应返回 False"""
+        orch = LoginOrchestrator()
+
+        with patch(
+            "xianyu_hunter.web.deps.get_container"
+        ) as mock_container_factory:
+            container = MagicMock()
+            container.browser = None
+            mock_container_factory.return_value = container
+
+            with patch(
+                "xianyu_hunter.web.services.cookie_store.get_cookie_store"
+            ) as mock_store_factory:
+                store = MagicMock()
+                store._read_json.return_value = {
+                    "cookies": [
+                        {"name": "_m_h5_tk", "value": "oldtoken_1234567890"},
+                    ]
+                }
+                mock_store_factory.return_value = store
+
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.headers.get_list.return_value = []  # 无 Set-Cookie
+                mock_client = AsyncMock()
+                mock_client.__aenter__.return_value = mock_client
+                mock_client.get.return_value = mock_resp
+
+                with patch("httpx.AsyncClient", return_value=mock_client):
+                    result = await orch._default_renew_callback()
+                    assert result is False
+                    store.update_cookie_values.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_renew_callback_browser_priority(self):
+        """浏览器可用时应优先用浏览器续期，不调用 httpx
+
+        验证策略分层：浏览器路径成功时不回退到 httpx。
+        """
+        orch = LoginOrchestrator()
+
+        with patch(
+            "xianyu_hunter.web.deps.get_container"
+        ) as mock_container_factory:
+            container = MagicMock()
+            container.browser = MagicMock()
+            container.browser._context = MagicMock()
+            page = AsyncMock()
+            container.browser.new_page = AsyncMock(return_value=page)
+            mock_container_factory.return_value = container
+
+            with patch(
+                "xianyu_hunter.web.services.cookie_runtime_sync.sync_browser_cookies_to_store_after_renew",
+                new_callable=AsyncMock,
+            ) as mock_sync:
+                with patch("httpx.AsyncClient") as mock_httpx:
+                    result = await orch._default_renew_callback()
+                    assert result is True
+                    mock_sync.assert_awaited_once()
+                    mock_httpx.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_relogin_callback_returns_true_when_inject_succeeds(self):
+        """_default_relogin_callback 注入成功时应返回 True"""
+        orch = LoginOrchestrator()
+
+        with patch(
+            "xianyu_hunter.web.services.cookie_runtime_sync.inject_cookie_store_to_worker_browser",
+            new_callable=AsyncMock,
+        ) as mock_inject:
+            mock_inject.return_value = True
+            result = await orch._default_relogin_callback()
+            assert result is True
+            mock_inject.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_default_relogin_callback_returns_false_when_inject_fails(self):
+        """_default_relogin_callback 注入失败时应返回 False"""
+        orch = LoginOrchestrator()
+
+        with patch(
+            "xianyu_hunter.web.services.cookie_runtime_sync.inject_cookie_store_to_worker_browser",
+            new_callable=AsyncMock,
+        ) as mock_inject:
+            mock_inject.return_value = False
+            result = await orch._default_relogin_callback()
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_default_relogin_callback_returns_false_on_exception(self):
+        """_default_relogin_callback 注入异常时应返回 False 而非抛出"""
+        orch = LoginOrchestrator()
+
+        with patch(
+            "xianyu_hunter.web.services.cookie_runtime_sync.inject_cookie_store_to_worker_browser",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("inject boom"),
+        ):
+            result = await orch._default_relogin_callback()
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_start_session_default_injects_default_relogin_callback(self):
+        """start_session_default 应注入默认重登回调（_auto_relogin_callback 为 None 时）
+
+        绑定方法每次访问 obj.method 都会创建新的 method 对象，is 比较恒为 False，
+        因此用 __func__ 比较底层函数对象是否一致。
+        """
+        orch = LoginOrchestrator()
+
+        with patch.object(orch._token_renewer, "start"):
+            orch.start_session_default()
+            assert orch._auto_relogin_callback is not None
+            assert orch._auto_relogin_callback.__func__ is orch._default_relogin_callback.__func__
+
+    @pytest.mark.asyncio
+    async def test_start_session_default_preserves_external_relogin_callback(self):
+        """start_session_default 不应覆盖外部已设置的重登回调"""
+        orch = LoginOrchestrator()
+
+        external_callback = AsyncMock(return_value=True)
+        orch.set_auto_relogin_callback(external_callback)
+
+        with patch.object(orch._token_renewer, "start"):
+            orch.start_session_default()
+            # 外部回调应被保留，未被默认回调覆盖
+            assert orch._auto_relogin_callback is external_callback
 
 
 # ============== 健康检查 ==============
@@ -875,8 +1067,8 @@ class TestIntegrationScenarios:
         assert orch.cookie_rotator.is_layer_valid(CookieLayer.SESSION)
 
         # 启动会话
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
-            await orch.start_session(cookie_provider=lambda: "tk_123")
+        with patch.object(orch._token_renewer, "start"):
+            orch.start_session(cookie_provider=lambda: "tk_123")
 
         # 模拟续期失败回调
         orch._token_renewer._renew_fail_callback()
@@ -899,8 +1091,8 @@ class TestIntegrationScenarios:
         assert not status.active
 
         # 启动
-        with patch.object(orch._token_renewer, "start", new_callable=AsyncMock):
-            await orch.start_session(cookie_provider=lambda: "tk_123")
+        with patch.object(orch._token_renewer, "start"):
+            orch.start_session(cookie_provider=lambda: "tk_123")
 
         # 启动后状态
         status = orch.get_session_status()

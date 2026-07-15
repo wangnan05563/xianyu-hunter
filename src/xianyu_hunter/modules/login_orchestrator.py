@@ -423,24 +423,73 @@ class LoginOrchestrator:
             logger.debug("默认 cookie_provider 读取失败: {}", e)
             return None
 
+    async def _default_relogin_callback(self) -> bool:
+        """默认重登回调：从 CookieStore JSON 强制重新注入 cookie 到 Worker 浏览器
+
+        策略：续期连续失败且 JSON 同步恢复无效时，强制从 CookieStore JSON
+        重新读取 cookie 并注入浏览器。这是 cookie_inject 风格的重登 ——
+        无头、无需用户交互，适用于 session 失效但 JSON 中仍有有效 cookie 的场景。
+
+        为什么复用 inject_cookie_store_to_worker_browser：该函数已封装
+        add_cookies + sync_cookie_layers_from_json 完整闭环，且会按 user_id
+        读取对应 cookie 文件，支持多用户隔离。
+
+        为什么不弹出浏览器重新登录：自动重登是后台自愈机制，弹出浏览器
+        需要用户交互（扫码），无人值守场景下会卡住。cookie_inject 策略
+        依赖之前登录保存的 cookie，若无有效 cookie 则返回 False 等待人工介入。
+        """
+        try:
+            from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+            success = await inject_cookie_store_to_worker_browser(
+                log_prefix="自动重登(cookie_inject)"
+            )
+            if success:
+                logger.info("自动重登(cookie_inject)成功：已从 CookieStore 重新注入 cookie")
+            else:
+                logger.warning("自动重登(cookie_inject)失败：注入浏览器 cookie 未通过验证")
+            return success
+        except Exception as e:
+            logger.error("自动重登(cookie_inject)异常: {}", e)
+            return False
+
     async def _default_renew_callback(self) -> bool:
-        """默认 token 续期回调：通过浏览器导航到 m.taobao.com 触发
+        """默认 token 续期回调：浏览器导航优先，httpx API 兜底
+
+        策略分层：
+        1. 优先用浏览器导航到 m.taobao.com（用户自然行为，风控压力低）
+        2. 浏览器不可用或导航失败时，用 httpx 调用 MTOP getTimestamp API
+           触发续期（无浏览器场景的唯一兜底路径）
+
+        为什么需要 httpx 兜底：Web 进程默认 with_browser=False 省内存，
+        container.browser 为 None，原实现直接返回 False，TokenRenewer 永远
+        无法续期，导致 cookie_expired:_m_h5_tk 恢复机制完全失效。
+        httpx 调用 getTimestamp 是无浏览器场景下唯一可行的续期路径。
+
+        为什么续期后要回写 Cookie：导航或 API 触发的 Set-Cookie 会更新
+        浏览器内存或 httpx 响应，但 CookieStore JSON 仍是旧值。不回写会
+        导致健康检查误判、实时搜索补注入旧 token。回写后形成完整闭环：
+        登录（全量）→ 续期（增量同步）→ 失效重新登录。
+        """
+        # 1. 优先尝试浏览器导航续期
+        if await self._renew_via_browser():
+            return True
+
+        # 2. 浏览器路径失败，回退到 httpx API 续期
+        return await self._renew_via_httpx()
+
+    async def _renew_via_browser(self) -> bool:
+        """通过浏览器导航触发续期（with_browser=True 模式）
 
         为什么用导航而非 API：导航是用户自然行为，
         风控压力低于直接调用 getTimestamp API。
-        浏览器不可用时返回 False（TokenRenewer 续期失败会触发 on_renew_fail）。
-
-        为什么续期后要回写 Cookie：导航触发的 Set-Cookie 会更新 Worker 浏览器
-        内存中的 _m_h5_tk 等 token，但 CookieStore JSON 仍是登录时的旧值。
-        不回写会导致健康检查误判 token 过期、实时搜索从 JSON 补注入旧 token。
-        回写后形成完整闭环：登录（全量）→ 续期（增量同步）→ 失效重新登录。
+        浏览器不可用时返回 False（由上层回退到 httpx 兜底）。
         """
         page = None
         try:
             from xianyu_hunter.web.deps import get_container
             container = get_container()
             if not container.browser or not container.browser._context:
-                logger.debug("默认 renew_callback: 浏览器不可用")
+                logger.debug("renew_via_browser: 浏览器不可用")
                 return False
             page = await container.browser.new_page()
             try:
@@ -450,10 +499,117 @@ class LoginOrchestrator:
 
             # 导航成功后回写 Cookie + 同步层状态（统一入口，消除与其他续期回调的重复）
             from xianyu_hunter.web.services.cookie_runtime_sync import sync_browser_cookies_to_store_after_renew
-            await sync_browser_cookies_to_store_after_renew(container, log_prefix="默认 renew_callback")
+            await sync_browser_cookies_to_store_after_renew(container, log_prefix="renew_callback(浏览器)")
             return True
         except Exception as e:
-            logger.debug("默认 token 续期回调失败: {}", e)
+            logger.debug("浏览器续期失败: {}", e)
+            return False
+
+    async def _renew_via_httpx(self) -> bool:
+        """通过 httpx 调用 MTOP getTimestamp API 触发续期（无浏览器兜底）
+
+        使用场景：
+        - with_browser=False 模式（Web 进程默认配置，省内存）
+        - 浏览器进程崩溃或导航超时后的兜底
+
+        续期流程：
+        1. 从 CookieStore 读取全部 cookies，构造 Cookie header
+        2. 用 MtopSigner 对 getTimestamp API 签名（appKey=COMMON，通用接口）
+        3. httpx GET 请求 h5api.m.goofish.com，携带 Cookie header
+        4. 解析 Set-Cookie 响应头，提取新 _m_h5_tk / _m_h5_tk_enc
+        5. 回写到 CookieStore（update_cookie_values），形成闭环
+
+        为什么 token 已过期仍尝试：getTimestamp 接口对过期 token 会下发
+        新 token（Set-Cookie），这是续期而非签名校验，服务端不依赖 token 有效性。
+        """
+        try:
+            import httpx
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+            from xianyu_hunter.modules.mtop_signer import MtopSigner, MtopRequest, MtopAppKey
+
+            store = get_cookie_store()
+            store.invalidate_cache()
+            data = store._read_json()
+            if not data or not data.get("cookies"):
+                logger.debug("renew_via_httpx: CookieStore 无数据")
+                return False
+
+            cookies_list = data["cookies"]
+            # 构造 name=value; 拼接的 Cookie header，携带全部 cookie
+            # 为什么携带全部而非仅 _m_h5_tk：服务端会校验 identity cookie（unb/cookie2）
+            # 是否与 token 匹配，仅发 _m_h5_tk 会被识别为异常请求触发风控
+            cookie_header = "; ".join(
+                f"{c.get('name', '')}={c.get('value', '')}" for c in cookies_list
+            )
+
+            # 提取 _m_h5_tk 用于签名（MtopSigner 要求非空 token）
+            m5tk_value = None
+            for c in cookies_list:
+                if c.get("name") == "_m_h5_tk":
+                    m5tk_value = c.get("value", "")
+                    break
+
+            if not m5tk_value:
+                logger.warning("renew_via_httpx: 无 _m_h5_tk，无法签名")
+                return False
+
+            # 构造 MTOP 签名请求
+            # 为什么用 COMMON appKey：getTimestamp 是通用接口，不属于搜索/详情业务线
+            signer = MtopSigner()
+            signer.set_token_provider(lambda: m5tk_value)
+            request = MtopRequest(
+                api="mtop.taobao.mtop.common.getTimestamp",
+                data={},
+                method="GET",
+                app_key=MtopAppKey.COMMON,
+            )
+            url = signer.build_url(request)
+
+            headers = {
+                "Cookie": cookie_header,
+                # 模拟浏览器请求头，避免被识别为爬虫
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://h5.m.taobao.com/",
+                "Origin": "https://h5.m.taobao.com",
+            }
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, headers=headers)
+
+            if resp.status_code != 200:
+                logger.warning("renew_via_httpx: HTTP {}", resp.status_code)
+                return False
+
+            # 解析 Set-Cookie 响应头，提取 _m_h5_tk / _m_h5_tk_enc 等新值
+            # httpx Headers.get_list 返回多个 Set-Cookie 头的原始列表
+            set_cookies = resp.headers.get_list("set-cookie")
+            updates: dict[str, str] = {}
+            for sc in set_cookies:
+                # Set-Cookie 格式: name=value; Path=/; Domain=...
+                # 只取第一段 name=value
+                name_value = sc.split(";")[0].strip()
+                if "=" not in name_value:
+                    continue
+                name, _, value = name_value.partition("=")
+                name = name.strip()
+                value = value.strip()
+                # 只回写关键 token cookie，避免覆盖其他 cookie 的过期时间等元数据
+                if name in ("_m_h5_tk", "_m_h5_tk_enc") and value:
+                    updates[name] = value
+
+            if not updates:
+                logger.warning("renew_via_httpx: 响应无 _m_h5_tk Set-Cookie")
+                return False
+
+            # 回写到 CookieStore JSON（不同步 SQLite，避免锁竞争）
+            success = store.update_cookie_values(updates)
+            if success:
+                logger.info("renew_via_httpx: 续期成功，已回写 {} 个 token", len(updates))
+            else:
+                logger.warning("renew_via_httpx: update_cookie_values 未更新任何 cookie")
+            return success
+        except Exception as e:
+            logger.debug("httpx 续期失败: {}", e)
             return False
 
     def start_session_default(self) -> bool:
@@ -471,6 +627,10 @@ class LoginOrchestrator:
             # 登录成功后重置自愈状态，避免历史失败计数影响新一轮会话
             self._renew_fail_count = 0
             self._auto_relogin_cooldown_until = 0.0
+            # 注入默认重登回调：续期连续失败时从 CookieStore 强制重新注入 cookie
+            # 仅在未配置时注入，允许外部通过 set_auto_relogin_callback 覆盖默认策略
+            if self._auto_relogin_callback is None:
+                self._auto_relogin_callback = self._default_relogin_callback
             # start_session 是同步函数，直接调用即可
             self.start_session(
                 cookie_provider=self._default_cookie_provider,

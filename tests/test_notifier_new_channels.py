@@ -383,6 +383,33 @@ async def test_dingtalk_send_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dingtalk_tunnel_started_uses_public_url_action_button() -> None:
+    notifier = DingTalkNotifier(
+        webhook_url="https://oapi.dingtalk.com/robot/send?access_token=abc",
+        secret="SECtest123",
+    )
+    event = Event(
+        type=EventType.TUNNEL_STARTED,
+        payload={
+            "provider_label": "Tailscale Funnel",
+            "public_url": "https://xianyu-hunter.example.ts.net",
+            "local_port": 8001,
+            "action_url": "https://xianyu-hunter.example.ts.net",
+            "action_title": "立即打开闲鱼猎人",
+        },
+    )
+    session = make_session([make_response(200, '{"errcode":0,"errmsg":"ok"}')])
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        result = await notifier.send(event)
+
+    assert result.success is True
+    card = session.post.call_args.kwargs["json"]["actionCard"]
+    assert card["singleTitle"] == "立即打开闲鱼猎人"
+    assert card["singleURL"] == "https://xianyu-hunter.example.ts.net"
+
+
+@pytest.mark.asyncio
 async def test_dingtalk_send_without_thumb_skips_link() -> None:
     """无 thumb_url 时主消息正常发送（v7 单消息策略无副消息可跳过）"""
     notifier = DingTalkNotifier(

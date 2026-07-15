@@ -12,8 +12,8 @@ export const PRESETS = {
   },
   deepseek: {
     base_url: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat',
-    vision_model: 'deepseek-chat',
+    model: 'deepseek-v4-flash',
+    vision_model: 'deepseek-v4-flash',
     label: 'DeepSeek',
     color: '#4d6bfe',
     apiKeyUrl: 'https://platform.deepseek.com/api_keys',
@@ -44,8 +44,8 @@ export const PRESETS = {
   },
   ernie: {
     base_url: 'https://qianfan.baidubce.com/v2',
-    model: 'ernie-speed-128k',
-    vision_model: 'ernie-vision-4k',
+    model: 'ERNIE-Speed-8K',
+    vision_model: 'ERNIE-Vision-4K',
     label: '文心一言',
     color: '#2932e1',
     apiKeyUrl: 'https://console.bce.baidu.com/iam/#/iam/apikey/list',

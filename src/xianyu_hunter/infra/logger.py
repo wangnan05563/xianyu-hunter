@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -20,6 +21,39 @@ from xianyu_hunter.paths import get_log_dir
 
 
 _configured = False
+
+
+# uvicorn access log 中需过滤的敏感路径关键字
+# 为什么与 SecurityMiddleware 的路径列表独立：此处匹配的是日志消息文本（含 METHOD/路径），
+# 而中间件匹配的是纯请求路径；两者格式不同，保持独立更清晰
+_SENSITIVE_LOG_KEYWORDS = (
+    "/.git", "/.svn", "/.ssh", "/.aws", "/.env",
+    "/.htaccess", "/.htpasswd", "/.DS_Store",
+    "/wp-admin", "/wp-content", "/wp-includes", "/phpmyadmin",
+    "/config.xml", "/dump.sql", "/backup.sql", "/backup.zip",
+    "/database_backup.sql", "/db.sql", "/data.sql",
+    "/wp-config.php", "/wp-login.php", "/xmlrpc.php",
+    "/phpinfo.php", "/docker-compose",
+    "/composer.json", "/composer.lock",
+    "/package.json", "/package-lock.json",
+    "/credentials.json", "/service-account.json",
+    "/backup.tar.gz",
+)
+
+
+class _SensitivePathLogFilter(logging.Filter):
+    """过滤 uvicorn access log 中敏感路径扫描的日志
+
+    为什么用 logging.Filter 而非禁用 access log：
+    正常请求的访问日志仍需保留，仅过滤扫描噪声。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        for keyword in _SENSITIVE_LOG_KEYWORDS:
+            if keyword in msg:
+                return False
+        return True
 
 
 def _patcher(record) -> None:
@@ -86,6 +120,12 @@ def setup_logging() -> None:
         rotation="10 MB",
         retention=3,
     )
+
+    # 为 uvicorn.access logger 添加敏感路径过滤器
+    # 为什么在 loguru 初始化时配置：uvicorn 启动时已注册默认 handler，
+    # 需在此处统一添加 Filter，确保所有 access log handler 都过滤敏感路径扫描噪声
+    uvicorn_access = logging.getLogger("uvicorn.access")
+    uvicorn_access.addFilter(_SensitivePathLogFilter())
 
 
 def get_logger():

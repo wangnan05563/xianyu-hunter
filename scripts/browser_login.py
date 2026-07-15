@@ -329,7 +329,14 @@ async def _collect_settled_cookies(
     stable_count = 0
 
     while True:
-        cookies = await context.cookies()
+        # 与主登录轮询循环一致的超时保护：
+        # Playwright 在浏览器进程无响应/IPC 通道阻塞时会永久挂起，
+        # 导致 _prepare_login_cookie_export 期间心跳无法更新，
+        # 后端 90s 后判定卡死报"登录进程无响应"。超时后跳过本轮继续循环。
+        try:
+            cookies = await asyncio.wait_for(context.cookies(), timeout=5.0)
+        except asyncio.TimeoutError:
+            cookies = best
         if len(cookies) >= len(best):
             best = cookies
 
@@ -387,7 +394,8 @@ async def _prepare_login_cookie_export(
     _emit_login_export_status(set_status, "登录成功，正在保存浏览器状态...")
     storage_start = time.monotonic()
     try:
-        await bc.storage_state()
+        # storage_state() 同样可能在 IPC 阻塞时永久挂起，加 10s 超时保护
+        await asyncio.wait_for(bc.storage_state(), timeout=10.0)
     except Exception:
         pass
     timings["storage_state_sec"] = _elapsed_sec(storage_start)

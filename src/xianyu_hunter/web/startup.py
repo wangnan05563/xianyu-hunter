@@ -503,16 +503,16 @@ async def _start_all_schedulers(container: Any) -> None:
     start_takeover_timeout_scheduler(container)
 
     # 启动反爬会话管理（TokenRenewer 后台续期）
-    # 仅在 with_browser=True 时启动：renew_callback 依赖 container.browser 进行 Cookie 续期
-    # 无有效 Cookie 时 start_session_default 内部会失败并记录日志，无副作用
-    # 放在调度器之后：确保浏览器实例已就绪，避免 renew_callback 因 browser=None 反复失效
-    if _should_start_scheduler():
-        try:
-            from xianyu_hunter.web.services.session_starter import trigger_session_start
-            trigger_session_start()
-            logger.info("反爬会话管理已尝试自动启动（若无有效 Cookie 将跳过）")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("反爬会话管理自动启动失败（忽略）: {}", e, exc_info=True)
+    # 无条件启动（不再依赖 _should_start_scheduler 门控）：
+    # _default_renew_callback 已支持 httpx 兜底（with_browser=False 时
+    # 通过 httpx 调用 MTOP getTimestamp API 续期），无浏览器也能续期。
+    # 无有效 Cookie 时 start_session_default 内部会跳过，无副作用。
+    try:
+        from xianyu_hunter.web.services.session_starter import trigger_session_start
+        trigger_session_start()
+        logger.info("反爬会话管理已尝试自动启动（若无有效 Cookie 将跳过）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("反爬会话管理自动启动失败（忽略）: {}", e, exc_info=True)
 
 
 def _stop_all_sync_schedulers() -> None:
@@ -607,6 +607,30 @@ def setup_startup_hooks(app: FastAPI) -> None:
                         logger.info("内网穿透隧道已自动启动: {}", svc.public_url)
                     except Exception as e:
                         logger.exception("内网穿透自动启动失败: {}", e)
+                        # 写入 DB 事件让前端能看到失败原因，而非只写日志
+                        # 否则用户看不到自启动失败，以为"开关没生效"
+                        try:
+                            container.repo.save_event({
+                                "type": "tunnel.autostart_failed",
+                                "task_id": None,
+                                "item_id": None,
+                                "stage": "tunnel",
+                                "level": "err",
+                                "message": f"内网穿透自启动失败: {e}",
+                                "payload": None,
+                            })
+                        except Exception:
+                            pass  # DB 写入失败不二次报错
+                        # 发送失败通知：用户不看 DB 事件也能通过通知渠道获知自启动失败
+                        # 否则用户只看到隧道状态 stopped，不知道是自启动失败了还是没执行
+                        # 复用 notify_tunnel_started 的子线程 + asyncio.run 模式，避免阻塞
+                        try:
+                            from xianyu_hunter.web.services.tunnel_notifications import (
+                                _send_autostart_failed_notification,
+                            )
+                            _send_autostart_failed_notification(str(e))
+                        except Exception:
+                            logger.warning("发送自启动失败通知时出错")
 
                 threading.Thread(
                     target=_auto_start_tunnel, daemon=True, name="tunnel-autostart"

@@ -178,6 +178,12 @@ def get_config() -> dict[str, Any]:
     # 应用 DB 覆盖（仅热更新字段，类型转换与 _UPDATABLE_KEYS 对应）
     _apply_db_overrides(result, db_overrides)
 
+    # welcome_message 单独处理：白名单允许 PUT 热更新，但 _DB_OVERRIDE_RULES
+    # 仅覆盖嵌套路径字段（a.b 形式），而 welcome_message 是顶层字段；
+    # 且空字符串/None 语义上等价于"使用默认欢迎语"，所以原样透传 DB 值
+    # 让前端可读+可写（Config.tsx 用 placeholder 提示默认文案）。
+    result["welcome_message"] = db_overrides.get(KEY_WELCOME_MESSAGE)
+
     result["updatable_keys"] = sorted(_UPDATABLE_KEYS)
     return result
 
@@ -200,6 +206,29 @@ def update_config(req: ConfigUpdateRequest) -> dict[str, Any]:
             "old_value": old_value,
             "new_value": req.value,
             "changed": False,
+        }
+
+    # 空 value 视为"恢复默认"：直接删除 DB 中的覆盖行，而不是写入 value=''
+    # 的空记录（空记录会被 get_config 当成有效覆盖值返回，污染前端状态）。
+    # 仅对非必填的 string 字段启用此短路；其他类型（bool/int/float）传空串
+    # 不会走到这里，因为 pydantic ConfigUpdateRequest 会先校验。
+    if req.value == "":
+        deleted = repo.delete_config(req.key)
+        repo.add_audit_log(
+            action="delete_config",
+            target=req.key,
+            old_value_hash=_hash_value(old_value),
+            new_value_hash=_hash_value(None),
+            source="web",
+        )
+        logger.info(f"配置已恢复默认: key={req.key} (deleted={deleted})")
+        return {
+            "ok": True,
+            "key": req.key,
+            "old_value": old_value,
+            "new_value": None,
+            "changed": True,
+            "deleted": deleted,
         }
 
     repo.set_config(req.key, req.value)

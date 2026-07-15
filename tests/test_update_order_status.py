@@ -35,6 +35,11 @@ def _make_container(order: dict | None = None) -> SimpleNamespace:
     return container
 
 
+def _make_request() -> SimpleNamespace:
+    """构造测试用 Request mock，提供多用户隔离所需的 state.user_id"""
+    return SimpleNamespace(state=SimpleNamespace(user_id="default"))
+
+
 def test_invalid_status_returns_422() -> None:
     """非法状态值（含 takeover_pending 中间态）应返回 422"""
     container = _make_container(order={"id": "o1", "status": "pending_pay"})
@@ -42,7 +47,7 @@ def test_invalid_status_returns_422() -> None:
     for bad in ("takeover_pending", "invalid", "", "PENDING_PAY"):
         with pytest.raises(HTTPException) as exc:
             api_orders.update_order_status(
-                "o1", {"status": bad}, container=container,
+                "o1", {"status": bad}, container=container, request=_make_request(),
             )
         assert exc.value.status_code == 422
     # 不应发生任何写库
@@ -55,7 +60,7 @@ def test_order_not_found_returns_404() -> None:
 
     with pytest.raises(HTTPException) as exc:
         api_orders.update_order_status(
-            "o1", {"status": "succeeded"}, container=container,
+            "o1", {"status": "succeeded"}, container=container, request=_make_request(),
         )
     assert exc.value.status_code == 404
 
@@ -65,7 +70,7 @@ def test_same_status_is_idempotent() -> None:
     container = _make_container(order={"id": "o1", "status": "pending_pay"})
 
     result = api_orders.update_order_status(
-        "o1", {"status": "pending_pay"}, container=container,
+        "o1", {"status": "pending_pay"}, container=container, request=_make_request(),
     )
 
     assert result == {
@@ -91,7 +96,7 @@ def test_pending_pay_to_succeeded_writes_paid_at_and_triggers_dependents() -> No
 
     with patch("xianyu_hunter.web.routes.api_orders._trigger_dependent_tasks") as mock_trigger:
         result = api_orders.update_order_status(
-            "o1", {"status": "succeeded"}, container=container,
+            "o1", {"status": "succeeded"}, container=container, request=_make_request(),
         )
 
     assert result["changed"] is True
@@ -105,7 +110,7 @@ def test_pending_pay_to_succeeded_writes_paid_at_and_triggers_dependents() -> No
     assert "paid_at" in saved
 
     # 验证下游任务触发
-    mock_trigger.assert_called_once_with(container, saved)
+    mock_trigger.assert_called_once_with(container, saved, user_id="default")
 
 
 def test_succeeded_to_pending_pay_does_not_trigger_dependents() -> None:
@@ -115,7 +120,7 @@ def test_succeeded_to_pending_pay_does_not_trigger_dependents() -> None:
 
     with patch("xianyu_hunter.web.routes.api_orders._trigger_dependent_tasks") as mock_trigger:
         result = api_orders.update_order_status(
-            "o1", {"status": "pending_pay"}, container=container,
+            "o1", {"status": "pending_pay"}, container=container, request=_make_request(),
         )
 
     assert result["changed"] is True
@@ -130,7 +135,7 @@ def test_pending_pay_to_cancelled_does_not_trigger_dependents() -> None:
 
     with patch("xianyu_hunter.web.routes.api_orders._trigger_dependent_tasks") as mock_trigger:
         result = api_orders.update_order_status(
-            "o1", {"status": "cancelled"}, container=container,
+            "o1", {"status": "cancelled"}, container=container, request=_make_request(),
         )
 
     assert result["changed"] is True
@@ -145,7 +150,7 @@ def test_takeover_pending_cannot_be_set_manually() -> None:
 
     with pytest.raises(HTTPException) as exc:
         api_orders.update_order_status(
-            "o1", {"status": "takeover_pending"}, container=container,
+            "o1", {"status": "takeover_pending"}, container=container, request=_make_request(),
         )
     assert exc.value.status_code == 422
 
@@ -156,7 +161,7 @@ def test_paid_at_only_set_when_target_is_succeeded() -> None:
     container = _make_container(order=order)
 
     api_orders.update_order_status(
-        "o1", {"status": "failed"}, container=container,
+        "o1", {"status": "failed"}, container=container, request=_make_request(),
     )
 
     saved = container.repo.upsert_order.call_args[0][0]

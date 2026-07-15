@@ -22,12 +22,18 @@ from xianyu_hunter.paths import get_config_dir
 from xianyu_hunter.web.services.tunnel_providers import (
     BinaryDownloadError,
     CloudflareProvider,
+    TailscaleFunnelAuthError,
 )
+from xianyu_hunter.web.services.tunnel_notifications import notify_tunnel_started
 
 router = APIRouter(prefix="/api/tunnel", tags=["tunnel"])
 
 # 全局单例：整个应用共享一个隧道实例
 _tunnel_service = None
+
+# 全局 setup provider：login 是两阶段操作（POST start + GET poll），
+# 必须在同一个 provider 实例上调用，否则 _login_process / _login_output 状态会丢失
+_setup_provider: CloudflareProvider | None = None
 
 
 def get_tunnel_service():
@@ -36,7 +42,7 @@ def get_tunnel_service():
     if _tunnel_service is None:
         from xianyu_hunter.web.services.tunnel_service import TunnelService
         # 端口由 TunnelService._resolve_port() 从配置链解析，此处不再硬编码
-        _tunnel_service = TunnelService()
+        _tunnel_service = TunnelService(on_started=notify_tunnel_started)
     return _tunnel_service
 
 
@@ -90,6 +96,7 @@ def _create_cloudflare_provider_for_setup() -> CloudflareProvider:
     """创建用于 setup 的 CloudflareProvider 实例（不启动隧道，仅执行一次性配置命令）
 
     setup 阶段不需要 local_port（只是 provider 初始化需要），用 0 占位即可。
+    create / route-dns 等独立阻塞命令每次新建实例即可。
     """
     cfg = get_config().tunnel
     return CloudflareProvider(
@@ -97,6 +104,26 @@ def _create_cloudflare_provider_for_setup() -> CloudflareProvider:
         binary_path=cfg.binary_path,
         cert_file=cfg.cert_file,
     )
+
+
+def _get_setup_provider() -> CloudflareProvider:
+    """获取全局 setup provider 单例
+
+    login 两阶段流程要求 start_login 和 check_login_status 在同一实例上调用，
+    因为 _login_process / _login_output / _login_auth_url 都保存在实例上。
+    """
+    global _setup_provider
+    if _setup_provider is None:
+        _setup_provider = _create_cloudflare_provider_for_setup()
+    return _setup_provider
+
+
+def _reset_setup_provider() -> None:
+    """重置 setup provider（login 成功或失败后清理，允许后续重试）"""
+    global _setup_provider
+    if _setup_provider is not None:
+        _setup_provider._cleanup_login_process()
+        _setup_provider = None
 
 
 def _save_tunnel_field(field: str, value: str) -> None:
@@ -145,6 +172,17 @@ def tunnel_start() -> JSONResponse:
                 "error_type": "binary_download_failed",
                 "manual_path": e.manual_path,
                 "download_urls": e.download_urls,
+            },
+        )
+    except TailscaleFunnelAuthError as e:
+        # Tailscale 首次启用 Funnel 需用户在浏览器完成授权
+        # 返回授权链接，前端渲染可点击的超链接指引用户完成授权
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": str(e),
+                "error_type": "tailscale_funnel_auth",
+                "auth_url": e.auth_url,
             },
         )
     except Exception as e:
@@ -227,10 +265,20 @@ def tunnel_config_save(body: TunnelConfigBody) -> JSONResponse:
         )
 
     # 配置变更后重置 service 单例，下次 start 时按新配置创建 provider
+    # 异步 stop 旧 service：Tailscale 等慢命令可能阻塞 10-30s，
+    # 同步 stop 会导致前端 axios 超时报"配置保存失败"
     global _tunnel_service
     if _tunnel_service is not None:
-        _tunnel_service.stop()
+        old_service = _tunnel_service
         _tunnel_service = None
+        import threading
+        def _async_stop():
+            try:
+                old_service.stop()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"配置保存后停止旧隧道失败（忽略）: {e}")
+        threading.Thread(target=_async_stop, daemon=True, name="tunnel-stop-on-config").start()
 
     return JSONResponse({"ok": True, "message": "配置已保存，下次启动隧道时生效"})
 
@@ -239,26 +287,52 @@ def tunnel_config_save(body: TunnelConfigBody) -> JSONResponse:
 
 @router.post("/cloudflare/login")
 def cloudflare_login() -> JSONResponse:
-    """执行 cloudflared tunnel login（交互式，会打开浏览器）
+    """启动 cloudflared tunnel login（非阻塞）
 
-    login 成功后自动将 cert.pem 路径持久化到 config.yaml，后续 create/route-dns 步骤自动读取。
-    超时 120 秒：用户需要在浏览器中完成 Cloudflare 授权。
+    login 是交互式命令：cloudflared 会打开浏览器让用户授权。
+    此端点用 Popen 启动子进程后立即返回授权 URL，不等待用户完成浏览器操作。
+    前端通过 GET /cloudflare/login/status 轮询 cert.pem 是否生成。
+
+    返回:
+        {"status": "waiting", "auth_url": "...", "message": "..."}
+        或 {"status": "failed", "message": "...", "output": "..."}
     """
-    provider = _create_cloudflare_provider_for_setup()
+    provider = _get_setup_provider()
     try:
-        cert_path = provider.setup_login(timeout=120)
+        result = provider.start_login()
     except Exception as e:
+        _reset_setup_provider()
         return JSONResponse(
             status_code=500,
-            content={"detail": f"login 失败: {e}"},
+            content={"detail": f"login 启动失败: {e}"},
         )
-    # 持久化 cert_file 路径，后续 create/route-dns 自动读取
-    _save_tunnel_field("cert_file", cert_path)
-    return JSONResponse({
-        "ok": True,
-        "cert_file": cert_path,
-        "message": "授权成功，cert.pem 已保存，可以继续创建隧道",
-    })
+    # failed 时清理 provider 允许重试；waiting 时保留 provider 供 status 轮询
+    if result.get("status") == "failed":
+        _reset_setup_provider()
+    return JSONResponse(result)
+
+
+@router.get("/cloudflare/login/status")
+def cloudflare_login_status() -> JSONResponse:
+    """轮询 cloudflared login 状态
+
+    前端每 2-3 秒调用一次，直到 status 变为 success 或 failed。
+    - success: cert.pem 已生成，自动持久化 cert_file 路径并清理 provider
+    - failed:  清理 provider 允许重试
+    - waiting: 继续轮询
+    - idle:    login 未启动（provider 被重置或从未调用 POST /login）
+    """
+    provider = _get_setup_provider()
+    result = provider.check_login_status()
+
+    if result["status"] == "success":
+        # 持久化 cert_file，后续 create/route-dns 自动读取
+        _save_tunnel_field("cert_file", result["cert_file"])
+        _reset_setup_provider()
+    elif result["status"] == "failed":
+        _reset_setup_provider()
+
+    return JSONResponse(result)
 
 
 @router.post("/cloudflare/create")

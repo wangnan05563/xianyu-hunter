@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,7 +123,8 @@ def test_create_task_falls_back_to_global_config(
     try:
         container = _FakeContainer(repo)
         body = TaskCreate(keyword="测试自动搜索")
-        result = create_task(body, container=container)
+        request = SimpleNamespace(state=SimpleNamespace(user_id="default"))
+        result = create_task(body, request=request, container=container)
         assert result["ok"] is True
         assert result["task"]["interval_seconds"] == 90
     finally:

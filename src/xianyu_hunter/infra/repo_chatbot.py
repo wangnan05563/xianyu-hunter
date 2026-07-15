@@ -881,6 +881,23 @@ class ChatbotRepository:
                 )
             session.commit()
 
+    def delete_config(self, key: str) -> bool:
+        """删除指定 key 的配置覆盖
+
+        用途：M1 欢迎语"恢复默认"按钮 — 前端传空 value 时后端转调此方法，
+        避免在 DB 留下 value='' 的空行（get_config 会把它当覆盖值返回，污染状态）。
+        返回是否真的删除了一行（key 不存在时返回 False）。
+        """
+        with self._session() as session:
+            row = session.execute(
+                select(ChatbotConfigRow).where(ChatbotConfigRow.key == key)
+            ).scalars().first()
+            if row is None:
+                return False
+            session.delete(row)
+            session.commit()
+            return True
+
     def get_all_config(self) -> dict[str, str]:
         """返回所有配置的 {key: value} 字典"""
         with self._session() as session:

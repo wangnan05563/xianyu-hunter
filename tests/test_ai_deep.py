@@ -46,6 +46,13 @@ def client(tmp_repo: Repository, monkeypatch) -> TestClient:
         lambda: test_settings,
         raising=False,
     )
+    # api_ai_deep 通过 `from xianyu_hunter.config import get_settings` 在模块加载时
+    # 已绑定 get_settings 引用，需额外 patch 模块级引用才能生效
+    monkeypatch.setattr(
+        "xianyu_hunter.web.routes.api_ai_deep.get_settings",
+        lambda: test_settings,
+        raising=False,
+    )
 
     class _FakeContainer:
         def __init__(self, repo):

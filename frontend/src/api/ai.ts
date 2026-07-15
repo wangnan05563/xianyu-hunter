@@ -16,7 +16,7 @@ export const aiApi = {
   getConfig: () => client.get<AIConfig>('/api/ai/config').then((r) => r.data),
 
   putConfig: (config: Partial<AIConfig>) =>
-    client.put('/api/ai/config', config).then((r) => r.data),
+    client.put<AIConfig>('/api/ai/config', config).then((r) => r.data),
 
   testConnection: () =>
     client.post<AITestConnectionResult>('/api/ai/test-connection').then((r) => r.data),

@@ -306,8 +306,14 @@ subprocess_sync:
 bargain_price:
   percentile: 0.1
 tunnel:
-  provider: cloudflare
+  provider: tailscale
   local_port: 8001
   cpolar_authtoken: Y2E3MjkzNGYtYWU0ZC00M2I4LThjZWItMThlNDA3OTJjMDdh
   binary_path: ''
-  auto_start: false
+  auto_start: true
+  tunnel_mode: quick
+  tunnel_name: xianyu-hunter
+  tunnel_id: b1cf81ce-0942-4df6-8509-6dad6ff8f334
+  credentials_file: C:\Users\hspcadmin\.cloudflared\b1cf81ce-0942-4df6-8509-6dad6ff8f334.json
+  hostname: xianyuHunter.com
+  cert_file: C:\Users\hspcadmin\.cloudflared\cert.pem

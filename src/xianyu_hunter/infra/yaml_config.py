@@ -239,11 +239,11 @@ class BatchRefreshConfig(BaseModel):
 class TunnelConfig(BaseModel):
     """内网穿透配置（移动端远程访问）
 
-    - provider: 穿透服务提供方，cloudflare 免注册但大陆不稳定，cpolar 国内稳定但需 authtoken
+    - provider: 穿透服务提供方：cloudflare、cpolar 或 tailscale
     - local_port: 隧道转发到的本地端口，0 表示从 server.port 继承
       命令行 --port 启动时会同步设置 XH_WEB_PORT 环境变量，优先级高于此值
     - cpolar_authtoken: cpolar 专用认证 token，从 cpolar 控制台获取
-    - binary_path: 手动放置的二进制路径（离线/下载失败场景），留空则自动下载
+    - binary_path: 手动指定 CLI 路径；Cloudflare/cpolar 留空时自动下载，Tailscale 留空时检测系统安装
     - auto_start: 后端启动时是否自动启动隧道（后台线程，不阻塞服务启动）
 
     Named Tunnel（固定域名）相关 —— 仅 provider=cloudflare 且 tunnel_mode=named 时生效：

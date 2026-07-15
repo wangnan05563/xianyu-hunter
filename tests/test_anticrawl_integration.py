@@ -190,7 +190,8 @@ class TestMtopTokenIntegration:
         params = signer.sign(req)
 
         # 验证签名使用了正确的 token
-        assert params.appKey == MtopAppKey.SEARCH
+        # MtopSignedParams 遵循 PEP 8 蛇形命名，HTTP 参数名仍为 "appKey"
+        assert params.app_key == MtopAppKey.SEARCH
         assert len(params.sign) == 32
 
     def test_sign_fails_when_token_expired(self) -> None:

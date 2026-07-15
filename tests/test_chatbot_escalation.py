@@ -3,7 +3,6 @@
 用 MagicMock 替换 ChatbotRepository，避免 DB 依赖。
 重点测试：关键词触发、状态机约束、降级响应、PII 脱敏开关。
 """
-import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
@@ -40,11 +39,6 @@ def escalation(mock_repo, config):
     return Escalation(repo=mock_repo, config=config)
 
 
-def _run(coro):
-    """辅助：同步运行 async 方法"""
-    return asyncio.run(coro)
-
-
 class TestShouldEscalateKeywords:
     """触发条件 1：用户消息含转人工关键词"""
 
@@ -56,14 +50,14 @@ class TestShouldEscalateKeywords:
         """任一关键词命中即触发转人工"""
         # 配置 mock 避免其他触发条件干扰：状态非 escalated，无负面反馈，无超时
         mock_repo.get_session.return_value = None
-        should, reason = _run(escalation.should_escalate("s1", f"我要{keyword}", "active"))
+        should, reason = escalation.should_escalate("s1", f"我要{keyword}", "active")
         assert should is True
         assert reason == "用户请求转人工"
 
     def test_keyword_takes_priority_over_other_conditions(self, escalation, mock_repo):
         """关键词触发优先级最高，即使会话已 escalated 也只返回关键词原因"""
         mock_repo.get_session.return_value = None
-        should, reason = _run(escalation.should_escalate("s1", "转人工", "escalated"))
+        should, reason = escalation.should_escalate("s1", "转人工", "escalated")
         assert should is True
         assert reason == "用户请求转人工"  # 而非"会话已转人工"
 
@@ -73,7 +67,7 @@ class TestShouldEscalateStatus:
 
     def test_escalated_status_triggers(self, escalation, mock_repo):
         """context_status=escalated 直接触发（避免重复判定）"""
-        should, reason = _run(escalation.should_escalate("s1", "继续问题", "escalated"))
+        should, reason = escalation.should_escalate("s1", "继续问题", "escalated")
         assert should is True
         assert reason == "会话已转人工"
 
@@ -85,13 +79,13 @@ class TestShouldEscalateFeedback:
         """负面反馈数 < threshold 不触发"""
         mock_repo.count_recent_negative_feedback.return_value = 2  # threshold=3
         mock_repo.get_session.return_value = None
-        should, reason = _run(escalation.should_escalate("s1", "问题", "active"))
+        should, reason = escalation.should_escalate("s1", "问题", "active")
         assert should is False
 
     def test_feedback_at_threshold_triggered(self, escalation, mock_repo):
         """负面反馈数 >= threshold 触发"""
         mock_repo.count_recent_negative_feedback.return_value = 3  # threshold=3
-        should, reason = _run(escalation.should_escalate("s1", "问题", "active"))
+        should, reason = escalation.should_escalate("s1", "问题", "active")
         assert should is True
         assert reason == "负面反馈触发阈值"
 
@@ -104,7 +98,7 @@ class TestShouldEscalateTimeout:
         old_time = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
         mock_repo.get_session.return_value = {"last_active_at": old_time}
         mock_repo.count_recent_negative_feedback.return_value = 0
-        should, reason = _run(escalation.should_escalate("s1", "问题", "active"))
+        should, reason = escalation.should_escalate("s1", "问题", "active")
         assert should is True
         assert reason == "会话超时"
 
@@ -113,14 +107,14 @@ class TestShouldEscalateTimeout:
         old_time = (datetime.now(timezone.utc) - timedelta(minutes=60)).isoformat()
         mock_repo.get_session.return_value = {"last_active_at": old_time}
         mock_repo.count_recent_negative_feedback.return_value = 0
-        should, reason = _run(escalation.should_escalate("s1", "问题", "ended"))
+        should, reason = escalation.should_escalate("s1", "问题", "ended")
         assert should is False
 
     def test_no_session_not_triggered(self, escalation, mock_repo):
         """会话不存在（get_session=None）不触发超时"""
         mock_repo.get_session.return_value = None
         mock_repo.count_recent_negative_feedback.return_value = 0
-        should, reason = _run(escalation.should_escalate("s1", "问题", "active"))
+        should, reason = escalation.should_escalate("s1", "问题", "active")
         assert should is False
 
 
@@ -139,7 +133,7 @@ class TestShouldEscalateLLMFailures:
             {"role": "user", "content": "Q3"},
             {"role": "assistant", "content": "A3", "metadata": {"llm_failed": True}},
         ]
-        should, reason = _run(escalation.should_escalate("s1", "问题", "active"))
+        should, reason = escalation.should_escalate("s1", "问题", "active")
         assert should is True
         assert reason == "LLM 持续失败"
 
@@ -152,7 +146,7 @@ class TestShouldEscalateLLMFailures:
             {"role": "assistant", "content": "A2", "metadata": {"llm_failed": True}},
             {"role": "assistant", "content": "A3", "metadata": {}},
         ]
-        should, reason = _run(escalation.should_escalate("s1", "问题", "active"))
+        should, reason = escalation.should_escalate("s1", "问题", "active")
         assert should is False
 
     def test_failure_streak_broken_not_triggers(self, escalation, mock_repo):
@@ -167,7 +161,7 @@ class TestShouldEscalateLLMFailures:
             {"role": "assistant", "content": "A5", "metadata": {"llm_failed": True}},
         ]
         # 从后向前数：2 次失败（A5、A4），然后 A3 成功打断，不达阈值 3
-        should, reason = _run(escalation.should_escalate("s1", "问题", "active"))
+        should, reason = escalation.should_escalate("s1", "问题", "active")
         assert should is False
 
 

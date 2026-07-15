@@ -103,7 +103,9 @@ def test_import_cdp_e2e():
         mock_store.return_value.export_cookies.return_value = True
 
         from xianyu_hunter.web.routes.browser_import_cdp import import_via_cdp
-        response = import_via_cdp(port=9222)
+        # request 是 FastAPI 注入对象，测试直接调用需手动传入 mock
+        mock_request = MagicMock()
+        response = import_via_cdp(request=mock_request, port=9222)
 
     data = json.loads(response.body)
     assert data["ok"] is True

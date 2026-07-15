@@ -494,7 +494,10 @@ def _make_mock_cookie_data(expires_offset: float = 3600, include_identity: bool 
     now = time.time()
     cookies = []
     if include_token:
-        cookies.append({"name": "_m_h5_tk", "value": "token_123", "domain": ".goofish.com",
+        # is_m5tk_expired 基于 token 内嵌时间戳判断过期（TTL 1200 秒），
+        # 硬编码 "token_123" 会被解析为远古时间戳导致误判过期，必须用动态当前时间戳
+        _m5tk_value = f"abcdef1234567890abcdef1234567890_{int(now * 1000)}"
+        cookies.append({"name": "_m_h5_tk", "value": _m5tk_value, "domain": ".goofish.com",
                         "path": "/", "expires": now + expires_offset})
         cookies.append({"name": "_m_h5_tk_enc", "value": "enc_123", "domain": ".goofish.com",
                         "path": "/", "expires": now + expires_offset})
@@ -680,12 +683,14 @@ class TestCookieCheckerFix:
 
         now = time.time()
         # 旧版格式：无 expires 字段
+        # _m_h5_tk 必须用 32hex_13timestamp 格式：is_m5tk_expired 解析时间戳判断过期（TTL 1200s）
+        _m5tk = f"abcdef1234567890abcdef1234567890_{int(now * 1000)}"
         mock_data = {
             "exported_at": now,
             "method": "browser",
             "cookie_count": 5,
             "cookies": [
-                {"name": "_m_h5_tk", "value": "token_123", "domain": ".goofish.com", "path": "/"},
+                {"name": "_m_h5_tk", "value": _m5tk, "domain": ".goofish.com", "path": "/"},
                 {"name": "_m_h5_tk_enc", "value": "enc_123", "domain": ".goofish.com", "path": "/"},
                 {"name": "unb", "value": "123456", "domain": ".goofish.com", "path": "/"},
                 {"name": "cookie2", "value": "abc", "domain": ".goofish.com", "path": "/"},

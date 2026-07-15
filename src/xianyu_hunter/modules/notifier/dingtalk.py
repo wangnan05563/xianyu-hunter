@@ -100,7 +100,9 @@ class DingTalkNotifier(BaseNotifier):
         # 商品详情 URL（用于 actionCard 按钮跳转）
         # 兼容扁平 / item 子对象两种 payload 格式（同 render()）
         item_obj = event.payload.get("item") if isinstance(event.payload.get("item"), dict) else None
-        item_url = _get(event.payload or {}, "url", item_obj, "")
+        action_url = str((event.payload or {}).get("action_url") or "").strip()
+        action_title = str((event.payload or {}).get("action_title") or "").strip()
+        item_url = action_url or _get(event.payload or {}, "url", item_obj, "")
         if not item_url and event.item_id:
             item_url = GOOFISH_ITEM_URL.format(item_id=event.item_id)
 
@@ -112,7 +114,7 @@ class DingTalkNotifier(BaseNotifier):
             "actionCard": {
                 "title": card_title,
                 "text": text,
-                "singleTitle": "查看商品详情" if item_url else "打开闲鱼猎人",
+                "singleTitle": action_title or ("查看商品详情" if item_url else "打开闲鱼猎人"),
                 "singleURL": item_url or "https://www.goofish.com",
             },
         }

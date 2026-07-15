@@ -24,6 +24,8 @@ interface ModelConfigFormProps {
   readonly showApiKey: boolean
   readonly onToggleShowApiKey: () => void
   readonly onApplyPreset: (key: keyof typeof PRESETS) => void
+  readonly saving: boolean
+  readonly onSaveConfig: () => void
   readonly testing: boolean
   readonly testResult: TestResult | null
   readonly onTestConnection: () => void
@@ -35,6 +37,8 @@ export default function ModelConfigForm({
   showApiKey,
   onToggleShowApiKey,
   onApplyPreset,
+  saving,
+  onSaveConfig,
   testing,
   testResult,
   onTestConnection,
@@ -135,7 +139,7 @@ export default function ModelConfigForm({
       {/* 快捷预设按钮行 */}
       <h3 style={{ marginBottom: 8 }}>快捷预设</h3>
       <p style={{ color: 'var(--xh-text-tertiary)', marginBottom: 16 }}>
-        一键切换到常用 AI 服务商（仅修改 URL 和模型名称，需自行配置 API Key）。
+        一键切换到常用 AI 服务商，API Key 会按预设独立保存并随切换返显。
       </p>
       <Space wrap style={{ marginBottom: 24 }}>
         {(Object.entries(PRESETS) as [keyof typeof PRESETS, typeof PRESETS[keyof typeof PRESETS]][]).map(
@@ -155,6 +159,9 @@ export default function ModelConfigForm({
       {/* 连接测试按钮 + 结果展示 */}
       <div style={{ marginBottom: 24 }}>
         <Space align="center">
+          <Button type="primary" loading={saving} onClick={onSaveConfig} disabled={!config.ai_enabled}>
+            保存配置
+          </Button>
           <Button
             icon={<ApiOutlined />}
             loading={testing}

@@ -114,3 +114,14 @@ export const storage = {
   remove,
   isAvailable,
 }
+
+/**
+ * 仅用于测试：重置可用性缓存和内存回退存储
+ *
+ * 为什么需要：_available 是模块级缓存（只检测一次），测试 mock localStorage 后
+ * 必须重置缓存才能让 isAvailable 重新检测，否则测试间状态泄漏
+ */
+export function __resetForTesting(): void {
+  _available = null
+  memoryStore.clear()
+}

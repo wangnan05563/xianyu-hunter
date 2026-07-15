@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -37,6 +37,26 @@ HTTP_TIMEOUT_SEC = 25.0
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 AUTH_BEARER_PREFIX = "Bearer "
 CONTENT_TYPE_JSON = "application/json"
+
+AI_PRESET_BASE_URLS = {
+    "openai": "https://api.openai.com/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+    "moonshot": "https://api.moonshot.cn/v1",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "ernie": "https://qianfan.baidubce.com/v2",
+    "doubao": "https://ark.cn-beijing.volces.com/api/v3",
+    "agnes": "https://apihub.agnes-ai.com/v1",
+    "ollama": "http://localhost:11434/v1",
+}
+
+
+def _preset_id_for_base_url(base_url: str) -> str | None:
+    normalized = base_url.rstrip("/")
+    return next(
+        (preset_id for preset_id, url in AI_PRESET_BASE_URLS.items() if url.rstrip("/") == normalized),
+        None,
+    )
 
 # Vision 能力关键字白名单：模型名包含任一关键字即视为支持多模态。
 # 升级模型时只需在此处追加（如新增 "gemini-2.0-flash"），所有调用点自动生效。
@@ -1113,6 +1133,10 @@ class AIConfigBody(BaseModel):
     api_key: str | None = None
     model: str | None = None
     vision_model: str | None = None
+    preset_id: Literal[
+        "openai", "deepseek", "zhipu", "moonshot", "qwen",
+        "ernie", "doubao", "agnes", "ollama",
+    ] | None = None
     # Embedding 配置（独立于 LLM，DeepSeek 等厂商不支持 /embeddings 时需单独配置）
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
@@ -1141,6 +1165,7 @@ def get_ai_config() -> dict[str, Any]:
         "api_key": _mask_key(settings.openai_api_key),
         "model": settings.openai_model,
         "vision_model": settings.openai_vision_model,
+        "preset_id": _preset_id_for_base_url(settings.openai_base_url),
         "has_key": bool(settings.openai_api_key),
         # Embedding 配置：留空表示 fallback 到 LLM（向后兼容）
         "embedding_base_url": settings.embedding_base_url,
@@ -1158,6 +1183,9 @@ def save_ai_config(body: AIConfigBody) -> dict[str, Any]:
     API Key 通过 keyring 安全存储，其余配置写入 .env。
     embedding_* 字段全为 None 时跳过更新（前端只改 LLM 部分时不影响 embedding）。
     """
+    settings_before = get_settings()
+    current_preset_id = _preset_id_for_base_url(settings_before.openai_base_url)
+
     # API Key 特殊处理：空字符串表示清除，"****xxxx" 表示未修改
     api_key = body.api_key
     if api_key is not None:
@@ -1169,6 +1197,29 @@ def save_ai_config(body: AIConfigBody) -> dict[str, Any]:
             from xianyu_hunter.infra import secrets as sec
             sec.delete_secret(sec.KEY_OPENAI_API_KEY)
             api_key = ""  # 写入 .env 为空
+
+    if body.preset_id is not None:
+        from xianyu_hunter.infra import secrets as sec
+
+        # 首次启用分槽存储时，把当前全局 Key 迁移到原预设，避免切走后丢失。
+        if (
+            current_preset_id
+            and current_preset_id != body.preset_id
+            and settings_before.openai_api_key
+        ):
+            sec.set_secret(
+                sec.ai_preset_key_name(current_preset_id),
+                settings_before.openai_api_key,
+            )
+
+        target_key_name = sec.ai_preset_key_name(body.preset_id)
+        if api_key is None and current_preset_id != body.preset_id:
+            # 切换预设：恢复目标预设自己的 Key；未配置时清空返显。
+            api_key = sec.get_secret(target_key_name) or ""
+        elif api_key == "":
+            sec.delete_secret(target_key_name)
+        elif api_key is not None:
+            sec.set_secret(target_key_name, api_key)
 
     # Embedding API Key 同样处理：脱敏值跳过，空字符串清除
     emb_api_key = body.embedding_api_key
@@ -1193,7 +1244,11 @@ def save_ai_config(body: AIConfigBody) -> dict[str, Any]:
     )
 
     logger.info("[AI Config] 配置已更新（热更新，无需重启）")
-    return {"ok": True, "message": "AI 配置已保存并即时生效"}
+    return {
+        "ok": True,
+        "message": "AI 配置已保存并即时生效",
+        **get_ai_config(),
+    }
 
 
 @router.post("/test-connection")

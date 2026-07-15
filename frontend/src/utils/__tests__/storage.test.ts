@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { storage } from '../storage'
+import { storage, __resetForTesting } from '../storage'
 
 // Mock localStorage
 const store = new Map<string, string>()
@@ -13,8 +13,8 @@ const localStorageMock = {
 beforeEach(() => {
   store.clear()
   vi.clearAllMocks()
-  // 每次测试前重置 storage 模块的 _available 缓存
-  // 通过让 localStorageMock 正常工作来确保 isAvailable 返回 true
+  // 重置模块级缓存：isAvailable 只检测一次，测试间必须重置才能正确 mock
+  __resetForTesting()
   Object.defineProperty(globalThis, 'localStorage', {
     value: localStorageMock,
     writable: true,

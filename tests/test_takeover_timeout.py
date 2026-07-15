@@ -85,6 +85,11 @@ def _make_container(repo: Repository | None = None) -> SimpleNamespace:
     return container
 
 
+def _make_request() -> SimpleNamespace:
+    """构造测试用 Request mock，提供多用户隔离所需的 state.user_id"""
+    return SimpleNamespace(state=SimpleNamespace(user_id="default"))
+
+
 # ============== repo.expire_takeover_pending_orders 测试 ==============
 
 
@@ -266,7 +271,7 @@ def test_takeover_rejects_already_takeover_pending() -> None:
     }
 
     with pytest.raises(HTTPException) as exc:
-        api_orders.takeover_order("o1", container=container)
+        api_orders.takeover_order("o1", container=container, request=_make_request())
 
     assert exc.value.status_code == 409
     assert "takeover_pending" in exc.value.detail
@@ -281,7 +286,7 @@ def test_takeover_rejects_failed_order() -> None:
     }
 
     with pytest.raises(HTTPException) as exc:
-        api_orders.takeover_order("o1", container=container)
+        api_orders.takeover_order("o1", container=container, request=_make_request())
 
     assert exc.value.status_code == 409
     container.repo.upsert_order.assert_not_called()
@@ -295,7 +300,7 @@ def test_takeover_rejects_succeeded_order() -> None:
     }
 
     with pytest.raises(HTTPException) as exc:
-        api_orders.takeover_order("o1", container=container)
+        api_orders.takeover_order("o1", container=container, request=_make_request())
 
     assert exc.value.status_code == 409
     container.repo.upsert_order.assert_not_called()
@@ -309,7 +314,7 @@ def test_takeover_rejects_cancelled_order() -> None:
     }
 
     with pytest.raises(HTTPException) as exc:
-        api_orders.takeover_order("o1", container=container)
+        api_orders.takeover_order("o1", container=container, request=_make_request())
 
     assert exc.value.status_code == 409
 
@@ -321,7 +326,7 @@ def test_takeover_accepts_pending_pay() -> None:
         "id": "o1", "status": "pending_pay", "price": 100.0,
     }
 
-    result = api_orders.takeover_order("o1", container=container)
+    result = api_orders.takeover_order("o1", container=container, request=_make_request())
 
     assert result["ok"] is True
     assert result["status"] == "takeover_pending"
@@ -339,6 +344,6 @@ def test_takeover_returns_404_when_order_not_found() -> None:
     container.repo.get_order.return_value = None
 
     with pytest.raises(HTTPException) as exc:
-        api_orders.takeover_order("o_not_exist", container=container)
+        api_orders.takeover_order("o_not_exist", container=container, request=_make_request())
 
     assert exc.value.status_code == 404

@@ -28,19 +28,10 @@ import {
   CheckCircleOutlined,
   LoadingOutlined,
 } from '@ant-design/icons'
-import { tunnelApi, type TunnelStatus, type TunnelConfig, type TunnelDownloadError } from '../../api'
+import { tunnelApi, type TunnelStatus, type TunnelConfig, type TunnelDownloadError, type TunnelTailscaleAuthError } from '../../api'
+import { TUNNEL_PROVIDERS, TUNNEL_PROVIDER_OPTIONS } from './tunnelProviders'
 
 const { Text, Paragraph } = Typography
-
-const PROVIDER_LABELS: Record<string, string> = {
-  cloudflare: 'Cloudflare Tunnel',
-  cpolar: 'cpolar（国内推荐）',
-}
-
-const PROVIDER_DESC: Record<string, string> = {
-  cloudflare: '免注册快速模式，或绑定域名固定地址。大陆访问可能不稳定。',
-  cpolar: '国内服务器稳定，需注册账号获取 authtoken。访问 https://dashboard.cpolar.com/signup 注册',
-}
 
 // Named Tunnel 向导步骤定义
 const WIZARD_STEPS = [
@@ -58,22 +49,87 @@ function NamedTunnelWizard({
   onConfigChanged: () => void
 }) {
   const [loginLoading, setLoginLoading] = useState(false)
+  const [loginAuthUrl, setLoginAuthUrl] = useState<string | null>(null)
+  const [loginPolling, setLoginPolling] = useState(false)
   const [createName, setCreateName] = useState(config.tunnel_name || '')
   const [createLoading, setCreateLoading] = useState(false)
   const [dnsHostname, setDnsHostname] = useState(config.hostname || '')
   const [dnsLoading, setDnsLoading] = useState(false)
 
+  const loginPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   // 根据已配置字段自动判断当前步骤
   const currentStep = !config.cert_file ? 0 : !config.tunnel_id ? 1 : !config.hostname ? 2 : 3
 
+  const stopLoginPoll = useCallback(() => {
+    if (loginPollRef.current) {
+      clearInterval(loginPollRef.current)
+      loginPollRef.current = null
+    }
+    setLoginPolling(false)
+  }, [])
+
+  // 组件卸载时清理轮询，防止内存泄漏和卸载后 setState
+  useEffect(() => {
+    return () => stopLoginPoll()
+  }, [stopLoginPoll])
+
+  const startLoginPoll = useCallback(() => {
+    stopLoginPoll()
+    setLoginPolling(true)
+    loginPollRef.current = setInterval(async () => {
+      try {
+        const result = await tunnelApi.cloudflareLoginStatus()
+        if (result.status === 'success') {
+          stopLoginPoll()
+          message.success(result.message || '授权成功')
+          onConfigChanged()
+        } else if (result.status === 'failed') {
+          stopLoginPoll()
+          message.error(result.message || '登录失败')
+          if (result.output) {
+            console.error('cloudflared login 输出:', result.output)
+          }
+          if (result.checked_paths?.length) {
+            console.error('已检查的 cert.pem 路径:', result.checked_paths)
+          }
+        } else if (result.status === 'idle') {
+          // provider 被重置（服务重启等），停止轮询
+          stopLoginPoll()
+          message.warning('登录会话已失效，请重新点击执行登录')
+        } else {
+          // waiting：更新授权 URL（start 时可能未拿到，轮询时才拿到）
+          if (result.auth_url) {
+            setLoginAuthUrl((prev) => prev ?? result.auth_url)
+          }
+        }
+      } catch (error: any) {
+        stopLoginPoll()
+        message.error(error?.response?.data?.detail || '轮询登录状态失败')
+      }
+    }, 2500)
+  }, [stopLoginPoll, onConfigChanged])
+
   const handleLogin = async () => {
     setLoginLoading(true)
+    setLoginAuthUrl(null)
+    stopLoginPoll()
     try {
-      const result = await tunnelApi.cloudflareLogin()
-      message.success(result.message)
-      onConfigChanged()
+      const result = await tunnelApi.cloudflareLoginStart()
+      if (result.status === 'failed') {
+        message.error(result.message || '登录启动失败')
+        if (result.output) {
+          console.error('cloudflared login 输出:', result.output)
+        }
+        return
+      }
+      // waiting：显示授权 URL，开始轮询
+      if (result.auth_url) {
+        setLoginAuthUrl(result.auth_url)
+      }
+      startLoginPoll()
     } catch (error: any) {
-      message.error(error?.response?.data?.detail || '登录失败')
+      message.error(error?.response?.data?.detail || '登录启动失败')
     } finally {
       setLoginLoading(false)
     }
@@ -150,14 +206,36 @@ function NamedTunnelWizard({
           {config.cert_file && (
             <Text code copyable style={{ fontSize: 12 }}>{config.cert_file}</Text>
           )}
+          {/* 轮询中：显示等待提示和授权链接（浏览器未自动打开时可手动点击） */}
+          {loginPolling && (
+            <Alert
+              type="info"
+              showIcon
+              icon={<LoadingOutlined />}
+              message="等待 Cloudflare 授权..."
+              description={
+                <Space direction="vertical" size="small">
+                  <Text>请在浏览器中完成 Cloudflare 账号授权，完成后此页面将自动检测到。</Text>
+                  {loginAuthUrl && (
+                    <Space>
+                      <Text type="secondary">浏览器未打开？</Text>
+                      <a href={loginAuthUrl} target="_blank" rel="noopener noreferrer">
+                        手动打开授权链接
+                      </a>
+                    </Space>
+                  )}
+                </Space>
+              }
+            />
+          )}
           <Button
             type={config.cert_file ? 'default' : 'primary'}
-            icon={loginLoading ? <LoadingOutlined /> : undefined}
+            icon={loginLoading || loginPolling ? <LoadingOutlined /> : undefined}
             loading={loginLoading}
             onClick={handleLogin}
-            disabled={loginLoading}
+            disabled={loginLoading || loginPolling}
           >
-            {config.cert_file ? '重新授权' : '执行登录'}
+            {loginPolling ? '等待授权中...' : config.cert_file ? '重新授权' : '执行登录'}
           </Button>
         </Space>
       </div>
@@ -262,6 +340,8 @@ export default function Tunnel() {
 
   // 下载失败指引
   const [downloadError, setDownloadError] = useState<TunnelDownloadError | null>(null)
+  // Tailscale Funnel 首次授权失败指引
+  const [tailscaleAuthError, setTailscaleAuthError] = useState<TunnelTailscaleAuthError | null>(null)
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -317,8 +397,15 @@ export default function Tunnel() {
 
   // 启动隧道
   const handleStart = async () => {
+    // 表单中的 provider 与已保存不一致时，先同步配置再启动。
+    // 否则后端读到的仍是旧 provider，启动的还是 Cloudflare。
+    if (config && formProvider !== config.provider) {
+      const ok = await handleSaveConfig(true)
+      if (!ok) return
+    }
     setStarting(true)
     setDownloadError(null)
+    setTailscaleAuthError(null)
     try {
       const data = await tunnelApi.start()
       setStatus(data)
@@ -329,6 +416,10 @@ export default function Tunnel() {
       if (errData?.error_type === 'binary_download_failed') {
         setDownloadError(errData)
         message.error('二进制下载失败，请按提示手动放置')
+      } else if (errData?.error_type === 'tailscale_funnel_auth') {
+        // Tailscale 首次启用 Funnel 需用户在浏览器完成授权
+        setTailscaleAuthError(errData)
+        message.error('需要在 Tailscale 管理后台完成授权')
       } else {
         message.error(errData?.detail || '隧道启动失败')
       }
@@ -352,7 +443,9 @@ export default function Tunnel() {
   }
 
   // 保存配置
-  const handleSaveConfig = async () => {
+  // auto_start=true 时表示启动隧道前的自动同步，文案要即时反馈；
+  // 手动点保存按钮时 next 启动才生效，文案应强调"下次启动生效"
+  const handleSaveConfig = async (autoStart = false): Promise<boolean> => {
     setSavingConfig(true)
     try {
       await tunnelApi.saveConfig({
@@ -370,10 +463,12 @@ export default function Tunnel() {
         hostname: config?.hostname || '',
         cert_file: config?.cert_file || '',
       })
-      message.success('配置已保存，下次启动隧道时生效')
+      message.success(autoStart ? '配置已同步，正在启动隧道...' : '配置已保存，下次启动隧道时生效')
       await loadConfig()
+      return true
     } catch (error: any) {
       message.error(error?.response?.data?.detail || '配置保存失败')
+      return false
     } finally {
       setSavingConfig(false)
     }
@@ -381,6 +476,7 @@ export default function Tunnel() {
 
   const isRunning = status?.status === 'running'
   const isCloudflare = formProvider === 'cloudflare'
+  const isTailscale = formProvider === 'tailscale'
 
   if (loading) {
     return (
@@ -389,6 +485,11 @@ export default function Tunnel() {
       </div>
     )
   }
+
+  // 顶部状态卡片的标签跟随当前表单选择（formProvider），让用户切换 provider 时立即看到变化。
+  // 已保存/运行态的差异由后端 status 字段在保存或启动后覆盖。
+  const displayProvider = status?.provider && status.status === 'running' ? status.provider : formProvider
+  const isCloudflareDisplay = displayProvider === 'cloudflare'
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -401,12 +502,10 @@ export default function Tunnel() {
                 <Tag color={isRunning ? 'green' : 'default'}>
                   {isRunning ? '● 运行中' : '○ 已停止'}
                 </Tag>
-                {status?.provider && (
-                  <Tag icon={<CloudServerOutlined />}>
-                    {PROVIDER_LABELS[status.provider] || status.provider}
-                  </Tag>
-                )}
-                {config?.tunnel_mode === 'named' && config?.hostname && (
+                <Tag icon={<CloudServerOutlined />}>
+                  {TUNNEL_PROVIDERS[displayProvider]?.label || displayProvider}
+                </Tag>
+                {isCloudflareDisplay && config?.tunnel_mode === 'named' && config?.hostname && (
                   <Tag color="blue">固定域名</Tag>
                 )}
               </Space>
@@ -490,6 +589,53 @@ export default function Tunnel() {
         />
       )}
 
+      {/* Tailscale Funnel 授权指引（类似固定域名向导的体验） */}
+      {tailscaleAuthError && (
+        <Card
+          size="small"
+          style={{ marginTop: 8, borderColor: '#faad14', borderWidth: 1 }}
+          title={
+            <Space>
+              <SafetyCertificateOutlined style={{ color: '#faad14' }} />
+              <Text>Tailscale Funnel 首次授权向导</Text>
+            </Space>
+          }
+        >
+          <Steps
+            size="small"
+            current={0}
+            style={{ marginBottom: 16 }}
+            items={[
+              { title: '打开授权页', description: '浏览器访问授权链接' },
+              { title: '启用 Funnel', description: '在 Tailscale 后台开启' },
+              { title: '重新启动', description: '回到本页点击启动' },
+            ]}
+          />
+          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Tailscale Funnel 是将本地服务暴露到公网的功能，首次使用需要在 Tailscale 管理后台完成一次性授权。
+            </Text>
+            <Text strong>操作步骤：</Text>
+            <Text>① 点击下方按钮，浏览器将打开 Tailscale 授权页面（含当前节点标识）</Text>
+            <Text>② 在页面中确认并启用 Funnel 功能（可能需要登录 Tailscale 账号）</Text>
+            <Text>③ 授权完成后，回到本页面重新点击"启动隧道"</Text>
+            <Button
+              type="primary"
+              icon={<LinkOutlined />}
+              href={tailscaleAuthError.auth_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ marginTop: 8 }}
+            >
+              打开 Tailscale Funnel 授权页面
+            </Button>
+            <Text type="secondary" style={{ fontSize: 12 }} copyable>
+              授权链接：{tailscaleAuthError.auth_url}
+            </Text>
+          </Space>
+        </Card>
+      )}
+
       {/* 配置卡片 */}
       <Card title={<><SafetyCertificateOutlined /> Provider 配置</>}>
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
@@ -499,13 +645,10 @@ export default function Tunnel() {
               value={formProvider}
               onChange={setFormProvider}
               style={{ width: '100%', marginTop: 4 }}
-              options={Object.entries(PROVIDER_LABELS).map(([value, label]) => ({
-                value,
-                label,
-              }))}
+              options={TUNNEL_PROVIDER_OPTIONS}
             />
             <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
-              {PROVIDER_DESC[formProvider]}
+              {TUNNEL_PROVIDERS[formProvider]?.description}
             </Text>
           </div>
 
@@ -529,6 +672,29 @@ export default function Tunnel() {
             <NamedTunnelWizard
               config={config}
               onConfigChanged={loadConfig}
+            />
+          )}
+
+          {isTailscale && (
+            <Alert
+              type="info"
+              showIcon
+              message="使用免费的固定 ts.net 地址"
+              description={
+                <Space direction="vertical" size={4}>
+                  <Text>
+                    启动前请先安装 Tailscale、登录账号，并保持后台服务运行。
+                    首次启用 Funnel 时可能会打开浏览器请求授权。
+                  </Text>
+                  <a
+                    href={TUNNEL_PROVIDERS.tailscale.installUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    下载 Tailscale for Windows
+                  </a>
+                </Space>
+              }
             />
           )}
 
@@ -571,7 +737,9 @@ export default function Tunnel() {
               <Input
                 value={formBinaryPath}
                 onChange={(e) => setFormBinaryPath(e.target.value)}
-                placeholder="留空自动下载，或指定手动放置路径"
+                placeholder={isTailscale
+                  ? '留空自动检测系统安装，或指定 tailscale.exe 路径'
+                  : '留空自动下载，或指定手动放置路径'}
                 style={{ marginTop: 4 }}
               />
             </Col>
@@ -597,7 +765,7 @@ export default function Tunnel() {
           <Button
             type="primary"
             loading={savingConfig}
-            onClick={handleSaveConfig}
+            onClick={() => handleSaveConfig()}
           >
             保存配置
           </Button>
@@ -613,14 +781,17 @@ export default function Tunnel() {
           <Space direction="vertical" size="small">
             <Text>1. 选择 Provider 和模式并保存配置</Text>
             <Text>2. 固定域名模式：按向导完成授权 → 创建隧道 → 配置 DNS 三步</Text>
-            <Text>3. 点击"启动隧道"，系统自动下载二进制并建立公网连接</Text>
+            <Text>3. 点击"启动隧道"，系统将检测或准备 Provider CLI 并建立公网连接</Text>
             <Text>4. 复制公网地址，在手机浏览器打开即可远程访问</Text>
             <Text>5. 隧道运行期间请勿关闭本程序</Text>
-            {formTunnelMode === 'quick' && (
+            {isCloudflare && formTunnelMode === 'quick' && (
               <Text type="secondary">注意：快速模式域名随机且会变化，重启隧道后需更新手机端地址。如需固定地址，请切换到"固定域名模式"。</Text>
             )}
-            {formTunnelMode === 'named' && (
+            {isCloudflare && formTunnelMode === 'named' && (
               <Text type="secondary">固定域名模式：首次配置需 3 步向导，之后每次启动地址不变。</Text>
+            )}
+            {isTailscale && (
+              <Text type="secondary">Tailscale Funnel：首次授权后获得固定 ts.net 地址，无需购买域名。</Text>
             )}
           </Space>
         }

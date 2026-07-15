@@ -19,6 +19,7 @@ export default function AIConfig() {
     api_key: '',
     model: '',
     vision_model: '',
+    preset_id: null,
     embedding_base_url: '',
     embedding_api_key: '',
     embedding_model: '',
@@ -53,6 +54,7 @@ export default function AIConfig() {
   const [embTesting, setEmbTesting] = useState(false)
   const [embTestResult, setEmbTestResult] = useState<EmbeddingTestResult | null>(null)
   const [saving, setSaving] = useState(false)
+  const [configSaving, setConfigSaving] = useState(false)
 
   // 初始化加载配置和用量数据
   useEffect(() => {
@@ -67,6 +69,7 @@ export default function AIConfig() {
           api_key: configData.api_key ?? '',
           model: configData.model ?? '',
           vision_model: configData.vision_model ?? '',
+          preset_id: configData.preset_id ?? null,
           // embedding 字段：后端可能不返回（旧版本），用 ?? 兜底
           embedding_base_url: configData.embedding_base_url ?? '',
           embedding_api_key: configData.embedding_api_key ?? '',
@@ -104,7 +107,7 @@ export default function AIConfig() {
     setConfig((prev) => ({ ...prev, ...patch }))
   }
 
-  // 应用预设配置：仅修改 URL 和模型，API Key 需用户自行填写
+  // 应用预设配置：后端按 preset_id 切换独立 API Key，并返回脱敏值返显
   // 必须持久化到后端，否则刷新页面后预设丢失，且 message.success 会误导用户
   const applyPreset = async (presetKey: keyof typeof PRESETS) => {
     const preset = PRESETS[presetKey]
@@ -113,14 +116,29 @@ export default function AIConfig() {
       base_url: preset.base_url,
       model: preset.model,
       vision_model: preset.vision_model,
+      preset_id: presetKey,
     }
     try {
       // 先落库再更新本地状态，确保 UI 与后端一致
-      await aiApi.putConfig(patch)
-      setConfig((prev) => ({ ...prev, ...patch }))
+      const saved = await aiApi.putConfig(patch)
+      setConfig((prev) => ({ ...prev, ...patch, ...saved }))
       message.success(`已切换到 ${preset.label} 预设`)
     } catch {
       message.error('切换预设失败')
+    }
+  }
+
+  // 显式保存表单：文本解析模型等输入不再依赖“测试连接”才能持久化
+  const handleSaveConfig = async () => {
+    setConfigSaving(true)
+    try {
+      const saved = await aiApi.putConfig(config)
+      setConfig((prev) => ({ ...prev, ...saved }))
+      message.success('AI 服务配置已保存')
+    } catch (e) {
+      message.error(extractApiError(e), 5)
+    } finally {
+      setConfigSaving(false)
     }
   }
 
@@ -295,6 +313,8 @@ export default function AIConfig() {
                   showApiKey={showApiKey}
                   onToggleShowApiKey={() => setShowApiKey(!showApiKey)}
                   onApplyPreset={applyPreset}
+                  saving={configSaving}
+                  onSaveConfig={handleSaveConfig}
                   testing={testing}
                   testResult={testResult}
                   onTestConnection={handleTestConnection}

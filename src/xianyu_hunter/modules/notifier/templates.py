@@ -225,6 +225,8 @@ def render(event: Event) -> tuple[str, str]:
         return _order_placed(event)
     if event.type == EventType.TASK_ERROR:
         return _task_error(event)
+    if event.type == EventType.TUNNEL_STARTED:
+        return _tunnel_started(event)
     # 未支持的事件：退化为通用提示
     return _generic(event)
 
@@ -498,6 +500,29 @@ def _task_error(event: Event) -> tuple[str, str]:
         "请尽快检查任务状态和 Cookie 有效性。",
     ]
     return head, "\n".join(line for line in body_lines if line)
+
+
+def _tunnel_started(event: Event) -> tuple[str, str]:
+    """内网穿透启动成功模板：突出可点击公网地址。"""
+    payload = event.payload or {}
+    provider = payload.get("provider_label") or payload.get("provider") or "未知 Provider"
+    public_url = str(payload.get("public_url") or "").strip()
+    local_port = payload.get("local_port")
+    started_at = event.timestamp.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+    body_lines = [
+        "# 🌐 内网穿透已启动",
+        "",
+        f"**穿透服务：** {provider}",
+        f"**本地端口：** `{local_port}`" if local_port else "",
+        f"**启动时间：** {started_at}",
+        "",
+        f"**公网地址：** `{public_url}`" if public_url else "",
+        f"[立即打开闲鱼猎人]({public_url})" if public_url else "",
+        "",
+        "请保持闲鱼猎人和隧道服务持续运行。",
+    ]
+    return "[闲鱼猎人] 内网穿透已启动", "\n".join(line for line in body_lines if line or line == "")
 
 
 def _generic(event: Event) -> tuple[str, str]:

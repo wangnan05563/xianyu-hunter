@@ -120,6 +120,8 @@ export interface ChatbotConfig {
     contact: string
     sanitize_pii: boolean
   }
+  // 欢迎语：M1 引导卡数据源。null/空串 = 使用后端 _DEFAULT_WELCOME_MESSAGE 兜底文案
+  welcome_message: string | null
 }
 
 export interface AuditLog {

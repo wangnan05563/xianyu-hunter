@@ -97,12 +97,13 @@ def _load_secrets_from_keyring(s: Settings) -> None:
     """
     from xianyu_hunter.infra import secrets as _secret_store
     api_key = _secret_store.get_secret(_secret_store.KEY_OPENAI_API_KEY)
-    if api_key:
+    # 空字符串也是有效状态：表示当前预设明确没有 Key，必须覆盖旧 .env 值。
+    if api_key is not None:
         s.openai_api_key = api_key
     # Embedding API Key 独立存储：DeepSeek 等不支持 /embeddings 时需切换到
     # Ollama/Jina 等服务，凭证不应与 LLM 混用
     emb_key = _secret_store.get_secret(_secret_store.KEY_EMBEDDING_API_KEY)
-    if emb_key:
+    if emb_key is not None:
         s.embedding_api_key = emb_key
 
 

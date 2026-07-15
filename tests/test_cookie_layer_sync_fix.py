@@ -57,11 +57,14 @@ def _write_mock_json(cookies: list[dict], method: str = "test") -> None:
 
 def _real_cookie_sample() -> list[dict]:
     """构造真实格式的 Cookie 样本（通过 is_test_cookie 校验）"""
+    # is_m5tk_expired 基于 _m_h5_tk token 内嵌时间戳判断过期（TTL 1200 秒），
+    # 硬编码时间戳会随时间推移过期，必须使用动态当前时间戳
+    _current_m5tk = f"c7b2c44645275604a525e6287fea2c3a_{int(time.time() * 1000)}"
     return [
         {"name": "unb", "value": "2209384756290", "domain": ".goofish.com", "path": "/", "expires": -1},
         {"name": "cookie2", "value": "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d", "domain": ".goofish.com", "path": "/", "expires": -1},
         {"name": "sgcookie", "value": "E100zRxEj%2FbXi%2B%2FbxVSJT%2Fg%2FaDG6MgjhL", "domain": ".goofish.com", "path": "/", "expires": -1},
-        {"name": "_m_h5_tk", "value": "c7b2c44645275604a525e6287fea2c3a_1782530783399", "domain": ".goofish.com", "path": "/", "expires": -1},
+        {"name": "_m_h5_tk", "value": _current_m5tk, "domain": ".goofish.com", "path": "/", "expires": -1},
         {"name": "_m_h5_tk_enc", "value": "abc123enc456def789", "domain": ".goofish.com", "path": "/", "expires": -1},
         {"name": "cna", "value": "YcHJH+IsChycAXTQMyRJqgj+", "domain": ".goofish.com", "path": "/", "expires": -1},
         {"name": "tfstk", "value": "e1NjUcFrYBFsf7ReJcFrZ", "domain": ".goofish.com", "path": "/", "expires": -1},
@@ -172,11 +175,13 @@ class TestSyncCookieLayersFromJson:
         """
         # 构造过期 cookie：identity 层全部过期，session 层是 session cookie（不过期）
         past = time.time() - 3600
+        # _m_h5_tk token 内嵌时间戳须为当前时间，确保 session 失效是因为级联而非 token 过期
+        _current_m5tk = f"c7b2c44645275604a525e6287fea2c3a_{int(time.time() * 1000)}"
         expired_cookies = [
             {"name": "unb", "value": "2209384756290", "domain": ".goofish.com", "path": "/", "expires": past},
             {"name": "cookie2", "value": "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d", "domain": ".goofish.com", "path": "/", "expires": past},
             {"name": "sgcookie", "value": "E100zRxEj%2FbXi%2B%2FbxVSJT%2Fg%2FaDG6MgjhL", "domain": ".goofish.com", "path": "/", "expires": past},
-            {"name": "_m_h5_tk", "value": "c7b2c44645275604a525e6287fea2c3a_1782530783399", "domain": ".goofish.com", "path": "/", "expires": -1},
+            {"name": "_m_h5_tk", "value": _current_m5tk, "domain": ".goofish.com", "path": "/", "expires": -1},
             {"name": "_m_h5_tk_enc", "value": "abc123enc456def789", "domain": ".goofish.com", "path": "/", "expires": -1},
         ]
         _write_mock_json(expired_cookies)
@@ -526,12 +531,14 @@ class TestEnsureLiveSearchCookiesSync:
         # 第一次调用（检测缺失）：只返回 cna，缺少 identity cookie
         # 第二次调用（补注入后复查）：返回完整 cookie，补注入成功
         cookies_before = [{"name": "cna", "value": "xxx", "domain": ".goofish.com"}]
+        # _m_h5_tk token 内嵌时间戳须为当前时间，避免 is_m5tk_expired 误判过期导致兜底同步失败
+        _current_m5tk = f"c7b2c44645275604a525e6287fea2c3a_{int(time.time() * 1000)}"
         cookies_after = [
             {"name": "cna", "value": "xxx", "domain": ".goofish.com"},
             {"name": "unb", "value": "2209384756290", "domain": ".goofish.com"},
             {"name": "cookie2", "value": "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d", "domain": ".goofish.com"},
             {"name": "sgcookie", "value": "E100zRxEj%2FbXi%2B%2FbxVSJT%2Fg%2FaDG6MgjhL", "domain": ".goofish.com"},
-            {"name": "_m_h5_tk", "value": "c7b2c44645275604a525e6287fea2c3a_1782530783399", "domain": ".goofish.com"},
+            {"name": "_m_h5_tk", "value": _current_m5tk, "domain": ".goofish.com"},
             {"name": "_m_h5_tk_enc", "value": "abc123enc456def789", "domain": ".goofish.com"},
         ]
         mock_browser.get_cookies = AsyncMock(side_effect=[cookies_before, cookies_after])
@@ -589,11 +596,13 @@ class TestBrowserFallbackSync:
         mock_browser = MagicMock()
         mock_context = MagicMock()
 
+        # _m_h5_tk token 内嵌时间戳须为当前时间，避免 is_m5tk_expired 误判过期导致浏览器兜底同步失败
+        _current_m5tk = f"c7b2c44645275604a525e6287fea2c3a_{int(time.time() * 1000)}"
         browser_cookies = [
             {"name": "unb", "value": "2209384756290", "domain": ".goofish.com", "path": "/", "expires": -1},
             {"name": "cookie2", "value": "c8421f9e5b6d7a3b9c0e1f2d3a4b5c6d", "domain": ".goofish.com", "path": "/", "expires": -1},
             {"name": "sgcookie", "value": "E100zRxEj%2FbXi%2B%2FbxVSJT%2Fg%2FaDG6MgjhL", "domain": ".goofish.com", "path": "/", "expires": -1},
-            {"name": "_m_h5_tk", "value": "c7b2c44645275604a525e6287fea2c3a_1782530783399", "domain": ".goofish.com", "path": "/", "expires": -1},
+            {"name": "_m_h5_tk", "value": _current_m5tk, "domain": ".goofish.com", "path": "/", "expires": -1},
             {"name": "_m_h5_tk_enc", "value": "abc123enc456def789", "domain": ".goofish.com", "path": "/", "expires": -1},
         ]
         mock_browser.get_cookies = AsyncMock(return_value=browser_cookies)
@@ -866,8 +875,10 @@ class TestLayerDependencyValidation:
         场景：JSON 中只有 _m_h5_tk，缺少 identity 层所有 cookie，
         sync 后 session 层应被强制失效（依赖层无效）
         """
+        # _m_h5_tk token 内嵌时间戳须为当前时间，确保 session 失效是因为 identity 缺失而非 token 过期
+        _current_m5tk = f"c7b2c44645275604a525e6287fea2c3a_{int(time.time() * 1000)}"
         session_only = [
-            {"name": "_m_h5_tk", "value": "c7b2c44645275604a525e6287fea2c3a_1782530783399", "domain": ".goofish.com", "path": "/", "expires": -1},
+            {"name": "_m_h5_tk", "value": _current_m5tk, "domain": ".goofish.com", "path": "/", "expires": -1},
             {"name": "_m_h5_tk_enc", "value": "abc123enc456def789", "domain": ".goofish.com", "path": "/", "expires": -1},
         ]
         _write_mock_json(session_only)

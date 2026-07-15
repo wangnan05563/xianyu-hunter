@@ -156,13 +156,13 @@ def test_sign_includes_required_params() -> None:
     params = signer.sign(req)
 
     assert params.jsv == "2.7.2"
-    assert params.appKey == MtopAppKey.SEARCH
+    assert params.app_key == MtopAppKey.SEARCH
     assert params.t  # 时间戳非空
     assert params.sign  # 签名非空
     assert params.api == "test.api"
     assert params.v == "1.0"
     assert params.type == "originaljson"
-    assert params.dataType == "json"
+    assert params.data_type == "json"
     assert params.data == '{"q":"test"}'
 
 
@@ -240,13 +240,13 @@ def test_signed_params_to_query_string() -> None:
     """to_query_string 生成有效查询字符串"""
     params = MtopSignedParams(
         jsv="2.7.2",
-        appKey="34839810",
+        app_key="34839810",
         t="1700000000000",
         sign="abc123",
         api="test.api",
         v="1.0",
         type="originaljson",
-        dataType="json",
+        data_type="json",
         data='{"q":"test"}',
     )
     qs = params.to_query_string()
@@ -259,8 +259,8 @@ def test_signed_params_to_query_string() -> None:
 def test_signed_params_to_dict() -> None:
     """to_dict 返回所有字段"""
     params = MtopSignedParams(
-        jsv="2.7.2", appKey="34839810", t="123", sign="abc",
-        api="test", v="1.0", type="json", dataType="json", data="{}",
+        jsv="2.7.2", app_key="34839810", t="123", sign="abc",
+        api="test", v="1.0", type="json", data_type="json", data="{}",
     )
     d = params.to_dict()
     assert d["jsv"] == "2.7.2"

@@ -142,6 +142,24 @@ def test_template_generic_fallback() -> None:
     assert "t1" in body
 
 
+def test_template_tunnel_started_contains_clickable_public_url() -> None:
+    event = Event(
+        type=EventType.TUNNEL_STARTED,
+        payload={
+            "provider_label": "Tailscale Funnel",
+            "public_url": "https://xianyu-hunter.example.ts.net",
+            "local_port": 8001,
+        },
+    )
+
+    title, body = render(event)
+
+    assert "内网穿透已启动" in title
+    assert "Tailscale Funnel" in body
+    assert "8001" in body
+    assert "[立即打开闲鱼猎人](https://xianyu-hunter.example.ts.net)" in body
+
+
 # ============== BaseNotifier 重试逻辑 ==============
 
 

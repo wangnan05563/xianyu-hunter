@@ -416,6 +416,7 @@ export interface AIConfig {
   api_key: string
   model: string
   vision_model: string
+  preset_id?: string | null
   // Embedding 配置（独立于 LLM，DeepSeek 等厂商不支持 /embeddings 时需单独配置）
   // 留空时后端 fallback 到 LLM 配置（向后兼容）
   embedding_base_url?: string

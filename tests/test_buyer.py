@@ -220,6 +220,8 @@ class FakeRepository:
     def __init__(self):
         self.orders: list[dict] = []
         self.items: dict[str, dict] = {}
+        # buyer._publish_buy_succeeded 通过 repo.get_task 反查 user_id 做多用户隔离，fake 必须提供该存储
+        self.tasks: dict[str, dict] = {}
 
     def find_order_by_task_item(self, task_id: str, item_id: str) -> dict | None:
         for o in reversed(self.orders):
@@ -231,8 +233,13 @@ class FakeRepository:
         # 简化：直接 append
         self.orders.append(dict(order))
 
-    def get_item(self, item_id: str) -> dict | None:
+    # 真实 Repository.get_item 带 user_id 参数做多用户隔离，fake 必须对齐签名，避免传入时 TypeError
+    def get_item(self, item_id: str, user_id: str | None = None) -> dict | None:
         return self.items.get(item_id)
+
+    def get_task(self, task_id: str, user_id: str | None = None) -> dict | None:
+        # buyer._publish_buy_succeeded 用 task_id 反查所属 user_id，缺失该方法会抛 AttributeError 使成功路径测试全部失败
+        return self.tasks.get(task_id)
 
 
 # ============== 工厂 ==============

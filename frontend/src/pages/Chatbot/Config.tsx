@@ -223,6 +223,32 @@ export default function ChatbotConfigPage() {
                     style={{ marginLeft: 16 }}
                   />
                 </div>
+                {/* M1 欢迎语：与文档《客服配置-详细设计》§1.4 对齐。
+                    原 Config.tsx 漏掉了这个字段的 UI，导致 DB 一旦被写入脏值
+                    （如历史遗留的占位串）就再也无法从界面清掉，引导卡顶部会一直
+                    显示乱码。这里补上 200 字符 TextArea + 500ms 防抖保存 +
+                    恢复默认按钮（点击 → PUT 空串 → 后端 DELETE 该行）。 */}
+                <div>
+                  <Typography.Text>欢迎语（留空使用默认文案）</Typography.Text>
+                  <Input.TextArea
+                    value={config.welcome_message ?? ''}
+                    onChange={(e) => updateConfig('welcome_message', e.target.value)}
+                    placeholder="默认：Hi，我是智能客服小蜜，请问有什么可以帮您？"
+                    maxLength={200}
+                    showCount
+                    autoSize={{ minRows: 2, maxRows: 4 }}
+                    style={{ marginTop: 8 }}
+                  />
+                  <Button
+                    size="small"
+                    type="link"
+                    disabled={!config.welcome_message}
+                    onClick={() => updateConfig('welcome_message', '')}
+                    style={{ paddingLeft: 0, marginTop: 4 }}
+                  >
+                    恢复默认
+                  </Button>
+                </div>
               </Space>
             ),
           },

@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -34,6 +36,22 @@ class BinaryDownloadError(RuntimeError):
         # 前端读取这两个字段渲染手动放置指引
         self.manual_path = manual_path
         self.download_urls = download_urls
+
+
+class TailscaleFunnelAuthError(RuntimeError):
+    """Tailscale Funnel 首次启用需要用户在浏览器完成授权
+
+    携带授权链接和操作指引，让前端能渲染可点击的超链接引导用户完成授权。
+    auth_url 优先使用命令输出的一次性链接（含 node 参数，直接授权当前节点），
+    无链接时回退到管理后台 Funnel 配置页
+    """
+
+    # 回退链接：Tailscale 管理后台 Funnel 配置页
+    FALLBACK_AUTH_URL = "https://login.tailscale.com/admin/dns/funnel"
+
+    def __init__(self, message: str, auth_url: str | None = None):
+        super().__init__(message)
+        self.auth_url = auth_url or self.FALLBACK_AUTH_URL
 
 
 class TunnelProvider(ABC):
@@ -133,9 +151,15 @@ class TunnelProvider(ABC):
         urllib.request.urlretrieve(url, str(target))
 
     def _wait_for_url(self, url_pattern: re.Pattern, timeout: int = 15) -> str:
-        """从子进程输出中解析公网 URL（通用实现）"""
+        """从子进程输出中解析公网 URL（通用实现）
+
+        超时时收集最近 20 行 stdout 输出和进程状态包含在异常消息中，
+        让调用方和前端能看到 CLI 实际输出了什么、进程是否存活
+        """
         deadline = time.time() + timeout
         found_url: list[str] = []
+        # 收集最近输出：超时诊断的关键信息，否则用户无法定位原因
+        recent_lines: list[str] = []
 
         def read_output():
             if self._process is None or self._process.stdout is None:
@@ -149,15 +173,37 @@ class TunnelProvider(ABC):
                 if match:
                     found_url.append(match.group(1))
                     return
-                logger.debug(f"[{self.binary_name}] {text.strip()}")
+                stripped = text.strip()
+                if stripped:
+                    recent_lines.append(stripped)
+                    # 保留最近 20 行，避免内存无限增长
+                    if len(recent_lines) > 20:
+                        recent_lines.pop(0)
+                    logger.info(f"[{self.binary_name}] {stripped}")
 
         thread = threading.Thread(target=read_output, daemon=True)
         thread.start()
         thread.join(timeout=timeout)
 
         if not found_url:
+            # 收集进程状态：无输出时需判断是进程已退出还是卡住等待输入
+            process_status = "未知"
+            exit_code = None
+            if self._process is not None:
+                poll_result = self._process.poll()
+                if poll_result is None:
+                    process_status = "仍在运行（可能卡住等待输入或网络连接）"
+                else:
+                    process_status = f"已退出（exit code={poll_result}）"
+                    exit_code = poll_result
             self.stop()
-            raise RuntimeError(f"[{self.binary_name}] 启动超时，未能获取公网 URL")
+            # 包含最近输出和进程状态帮助诊断
+            recent_output = "\n".join(recent_lines[-20:]) if recent_lines else "（无输出）"
+            raise RuntimeError(
+                f"[{self.binary_name}] 启动超时（{timeout}s），未能获取公网 URL。\n"
+                f"进程状态: {process_status}\n"
+                f"最近输出:\n{recent_output}"
+            )
         return found_url[0]
 
     def _start_process(self, cmd: list[str], url_pattern: re.Pattern, timeout: int = 15) -> str:
@@ -167,9 +213,12 @@ class TunnelProvider(ABC):
         - cloudflared/cpolar 是命令行工具，无需 GUI 窗口
         - CREATE_NO_WINDOW 静默运行，stdout 仍可重定向到 PIPE 供解析
         - 注意：WebView2/Playwright 仍需 CREATE_NEW_CONSOLE（项目硬约束），但此处不涉及
+
+        stdin=DEVNULL：防止子进程卡在等待用户输入（cpolar 首次运行可能提示确认）
         """
         self._process = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NO_WINDOW,
@@ -211,6 +260,10 @@ class CloudflareProvider(TunnelProvider):
         self._credentials_file = credentials_file
         self._hostname = hostname
         self._cert_file = cert_file
+        # login 异步状态：start_login 启动子进程后，check_login_status 轮询
+        self._login_process: Optional[subprocess.Popen] = None
+        self._login_auth_url: Optional[str] = None
+        self._login_output: list[str] = []
 
     def start(self) -> str:
         if self.status == "running":
@@ -222,11 +275,12 @@ class CloudflareProvider(TunnelProvider):
 
     def _start_quick_tunnel(self) -> str:
         """Quick Tunnel：临时域名，每次启动随机分配"""
+        # --no-autoupdate 是全局标志，必须在子命令 tunnel 之前
         cmd = [
             str(self._binary_path),
+            "--no-autoupdate",
             "tunnel",
             "--url", f"http://localhost:{self._local_port}",
-            "--no-autoupdate",
         ]
         url_pattern = re.compile(r"(https://[a-z0-9-]+\.trycloudflare\.com)")
         self._public_url = self._start_process(cmd, url_pattern)
@@ -257,9 +311,9 @@ class CloudflareProvider(TunnelProvider):
             "--no-autoupdate",
             "tunnel", "run",
         ]
-        # named tunnel 启动成功的标志是日志中出现 "Registered tunnel connection"
-        ready_pattern = re.compile(r"(Registered tunnel connection)")
-        self._start_process(cmd, ready_pattern, timeout=30)
+        # named tunnel 启动成功标志：多版本兼容（Registered tunnel connection / Registered tunnel connector）
+        ready_pattern = re.compile(r"(Registered tunnel (?:connection|connector))")
+        self._start_process(cmd, ready_pattern, timeout=60)
         # 域名是固定的，直接用配置的 hostname
         self._public_url = f"https://{self._hostname}"
         logger.info(f"[cloudflared] Named Tunnel 已建立: {self._public_url}")
@@ -293,49 +347,201 @@ class CloudflareProvider(TunnelProvider):
 
     # ---------- Named Tunnel 一次性配置辅助方法 ----------
 
-    def setup_login(self, timeout: int = 120) -> str:
-        """执行 cloudflared tunnel login，返回 cert.pem 路径
+    def _find_cert_pem_paths(self) -> list[Path]:
+        """查找所有可能的 cert.pem 位置
+
+        cloudflared 在不同平台/版本可能使用不同的配置目录：
+        - Windows 默认: %USERPROFILE%\\.cloudflared\\cert.pem
+        - 部分 Windows 版本: %LOCALAPPDATA%\\.cloudflared\\cert.pem
+        - 从 login 输出中提取的路径（兜底）
+        """
+        paths: list[Path] = [Path.home() / ".cloudflared" / "cert.pem"]
+        # Windows 上部分版本使用 LOCALAPPDATA
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            paths.append(Path(local_app_data) / ".cloudflared" / "cert.pem")
+        # APPDATA 兜底
+        app_data = os.environ.get("APPDATA")
+        if app_data:
+            paths.append(Path(app_data) / ".cloudflared" / "cert.pem")
+        # 从 login 输出中正则提取路径（cloudflared 可能输出 cert.pem 的绝对路径）
+        output = "".join(self._login_output)
+        # 匹配 Windows 路径 (C:\...\cert.pem) 和 Unix 路径 (/.../cert.pem)
+        m = re.search(r"([A-Za-z]:[\\\/][^\s]*cert\.pem|/[^\s]*cert\.pem)", output)
+        if m:
+            paths.append(Path(m.group(1)))
+        return paths
+
+    def start_login(self) -> dict:
+        """启动 cloudflared tunnel login（非阻塞），返回授权 URL 和状态
 
         login 是交互式命令：cloudflared 会打开浏览器让用户授权。
-        命令完成后在 ~/.cloudflared/cert.pem 生成证书文件。
-        超时默认 120 秒（用户需要时间在浏览器中操作）。
+        此方法用 Popen 启动子进程，后台线程读取 stdout 提取授权 URL，
+        然后立即返回，不等待用户完成浏览器操作。
+        前端通过 check_login_status() 轮询 cert.pem 是否生成。
+
+        返回:
+            {"status": "waiting", "auth_url": "...", "message": "..."}
+            或 {"status": "failed", "message": "...", "output": "..."}
         """
+        # 如果已有 login 在进行中，直接返回当前状态
+        if self._login_process is not None and self._login_process.poll() is None:
+            return {
+                "status": "waiting",
+                "auth_url": self._login_auth_url,
+                "message": "login 已在进行中，请在浏览器中完成授权",
+            }
+
         binary = self._ensure_binary()
-        cmd = [str(binary), "tunnel", "login", "--no-autoupdate"]
-        result = subprocess.run(
+        # --no-autoupdate 是全局标志，必须在子命令 tunnel 之前
+        cmd = [str(binary), "--no-autoupdate", "tunnel", "login"]
+
+        # 不用 capture_output（会阻塞到命令完成），改用 Popen + 后台线程实时读取
+        self._login_process = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"cloudflared login 失败 (exit={result.returncode}): "
-                f"{result.stderr or result.stdout}"
-            )
-        # cert.pem 默认在 ~/.cloudflared/cert.pem
-        default_cert = Path.home() / ".cloudflared" / "cert.pem"
-        if default_cert.exists():
-            return str(default_cert)
-        # 兜底：从 stdout 解析路径
-        m = re.search(r"cert(?:ificate)?\s*(?:file|path)?[:\s]+(.+?cert\.pem)", result.stdout, re.I)
-        if m:
-            return m.group(1).strip()
-        raise RuntimeError("login 似乎成功但未找到 cert.pem，请检查 ~/.cloudflared/ 目录")
+        self._login_auth_url = None
+        self._login_output = []
 
-    def setup_create(self, tunnel_name: str, cert_file: str = "", timeout: int = 30) -> dict:
+        # 后台线程实时读取 stdout，提取授权 URL
+        def read_login_output():
+            if self._login_process is None or self._login_process.stdout is None:
+                return
+            # cloudflared login 输出的授权 URL 格式：https://dash.cloudflare.com/argotunnel?...
+            url_pattern = re.compile(r"(https://[^\s]+)")
+            for line in self._login_process.stdout:
+                self._login_output.append(line)
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                # 提取第一个包含 cloudflare 的 URL（授权链接）
+                if self._login_auth_url is None:
+                    match = url_pattern.search(line_stripped)
+                    if match and "cloudflare" in match.group(1):
+                        self._login_auth_url = match.group(1)
+                        logger.info(f"[cloudflared] login 授权 URL: {self._login_auth_url}")
+                logger.debug(f"[cloudflared login] {line_stripped}")
+
+        thread = threading.Thread(target=read_login_output, daemon=True)
+        thread.start()
+
+        # 等待最多 10 秒，看能否提取到授权 URL 或进程退出
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if self._login_auth_url:
+                break
+            if self._login_process.poll() is not None:
+                break
+            time.sleep(0.5)
+
+        if self._login_auth_url:
+            return {
+                "status": "waiting",
+                "auth_url": self._login_auth_url,
+                "message": "请在浏览器中完成 Cloudflare 授权",
+            }
+
+        # 进程已退出但未提取到 URL
+        if self._login_process.poll() is not None:
+            output = "".join(self._login_output)
+            exit_code = self._login_process.returncode
+            self._login_process = None
+            return {
+                "status": "failed",
+                "message": f"cloudflared login 进程已退出（exit code={exit_code}）",
+                "output": output,
+            }
+
+        # 进程仍在运行但未输出 URL：浏览器可能已自动打开
+        return {
+            "status": "waiting",
+            "auth_url": None,
+            "message": "cloudflared login 已启动，浏览器应该已自动打开。如果未打开，请稍等...",
+        }
+
+    def check_login_status(self) -> dict:
+        """检查 login 状态：检查 cert.pem 是否已生成
+
+        前端轮询此方法，直到 status 变为 success 或 failed。
+
+        返回:
+            {"status": "success", "cert_file": "...", "message": "..."}
+            {"status": "waiting", "auth_url": "...", "message": "..."}
+            {"status": "failed", "message": "...", "output": "...", "checked_paths": [...]}
+            {"status": "idle", "message": "login 未启动"}
+        """
+        if self._login_process is None:
+            return {"status": "idle", "message": "login 未启动"}
+
+        # 检查所有可能的 cert.pem 位置
+        cert_paths = self._find_cert_pem_paths()
+        for path in cert_paths:
+            if path.exists():
+                # login 成功：清理子进程引用
+                self._cleanup_login_process()
+                return {
+                    "status": "success",
+                    "cert_file": str(path),
+                    "message": "授权成功，cert.pem 已生成",
+                }
+
+        # 检查进程是否已退出
+        if self._login_process.poll() is not None:
+            output = "".join(self._login_output)
+            exit_code = self._login_process.returncode
+            self._login_process = None
+            if exit_code == 0:
+                # 进程退出码 0 但没找到 cert.pem
+                return {
+                    "status": "failed",
+                    "message": "login 进程已退出但未找到 cert.pem",
+                    "output": output,
+                    "checked_paths": [str(p) for p in cert_paths],
+                }
+            return {
+                "status": "failed",
+                "message": f"login 失败（exit code={exit_code}）",
+                "output": output,
+            }
+
+        # 仍在等待用户在浏览器中完成授权
+        return {
+            "status": "waiting",
+            "auth_url": self._login_auth_url,
+            "message": "等待用户在浏览器中完成授权...",
+        }
+
+    def _cleanup_login_process(self) -> None:
+        """清理 login 子进程：terminate → wait → kill"""
+        if self._login_process is None:
+            return
+        try:
+            self._login_process.terminate()
+            self._login_process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            self._login_process.kill()
+        except Exception as e:
+            logger.warning(f"[cloudflared] 清理 login 子进程异常: {e}")
+        finally:
+            self._login_process = None
+
+    def setup_create(self, tunnel_name: str, cert_file: str = "", timeout: int = 60) -> dict:
         """执行 cloudflared tunnel create <name>，返回 tunnel_id 和 credentials_file
 
-        需要 cert.pem（login 生成）。如果 cert_file 未指定，使用默认路径 ~/.cloudflared/cert.pem。
+        需要 cert.pem（login 生成）。如果 cert_file 未指定，使用 provider 配置的 cert_file。
         """
         binary = self._ensure_binary()
-        cmd = [str(binary), "tunnel", "create"]
+        # --no-autoupdate 是全局标志，必须在子命令 tunnel 之前
+        cmd = [str(binary), "--no-autoupdate", "tunnel"]
         if cert_file:
-            cmd.extend(["--cert", cert_file])
+            cmd.extend(["--origincert", cert_file])
         elif self._cert_file:
-            cmd.extend(["--cert", self._cert_file])
-        cmd.extend(["--no-autoupdate", tunnel_name])
+            cmd.extend(["--origincert", self._cert_file])
+        cmd.extend(["create", tunnel_name])
 
         result = subprocess.run(
             cmd,
@@ -344,38 +550,48 @@ class CloudflareProvider(TunnelProvider):
             timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        output = result.stdout + "\n" + result.stderr
         if result.returncode != 0:
             raise RuntimeError(
-                f"cloudflared tunnel create 失败 (exit={result.returncode}): "
-                f"{result.stderr or result.stdout}"
+                f"cloudflared tunnel create 失败 (exit={result.returncode}): {output.strip()}"
             )
         # 从输出解析 tunnel_id（UUID 格式）和 credentials_file 路径
         # 典型输出：Created tunnel <UUID> with credentials file /path/to/<UUID>.json
-        output = result.stdout + "\n" + result.stderr
-        id_match = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", output, re.I)
-        cred_match = re.search(r"credentials file\s+(.+?\.json)", output, re.I)
+        id_match = re.search(
+            r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", output, re.I
+        )
+        # 兼容新旧 cloudflared 输出：
+        # - Created tunnel ... with credentials file <path>
+        # - Tunnel credentials written to <path>
+        # 路径可能被引号包裹，也可能包含空格。
+        cred_match = re.search(
+            r"(?:credentials file|tunnel credentials written to)\s+\"?(.+?\.json)\"?",
+            output, re.I,
+        )
         if not id_match or not cred_match:
-            raise RuntimeError(f"无法从 create 输出中解析 tunnel_id 或 credentials_file: {output}")
+            raise RuntimeError(f"无法从 create 输出中解析 tunnel_id 或 credentials_file: {output.strip()}")
+        cred_path = cred_match.group(1).strip()
         return {
             "tunnel_id": id_match.group(1),
-            "credentials_file": cred_match.group(1).strip(),
+            "credentials_file": cred_path,
             "tunnel_name": tunnel_name,
         }
 
     def setup_route_dns(
-        self, tunnel_name_or_id: str, hostname: str, cert_file: str = "", timeout: int = 30
+        self, tunnel_name_or_id: str, hostname: str, cert_file: str = "", timeout: int = 60
     ) -> str:
         """执行 cloudflared tunnel route dns <name> <hostname>，创建 CNAME 记录
 
         需要 cert.pem。hostname 必须是已托管在 Cloudflare DNS 的域名子域。
         """
         binary = self._ensure_binary()
-        cmd = [str(binary), "tunnel", "route", "dns"]
+        # --no-autoupdate 是全局标志，必须在子命令 tunnel 之前
+        cmd = [str(binary), "--no-autoupdate", "tunnel"]
         if cert_file:
-            cmd.extend(["--cert", cert_file])
+            cmd.extend(["--origincert", cert_file])
         elif self._cert_file:
-            cmd.extend(["--cert", self._cert_file])
-        cmd.extend(["--no-autoupdate", tunnel_name_or_id, hostname])
+            cmd.extend(["--origincert", self._cert_file])
+        cmd.extend(["route", "dns", tunnel_name_or_id, hostname])
 
         result = subprocess.run(
             cmd,
@@ -384,10 +600,10 @@ class CloudflareProvider(TunnelProvider):
             timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        output = result.stdout + "\n" + result.stderr
         if result.returncode != 0:
             raise RuntimeError(
-                f"cloudflared route dns 失败 (exit={result.returncode}): "
-                f"{result.stderr or result.stdout}"
+                f"cloudflared route dns 失败 (exit={result.returncode}): {output.strip()}"
             )
         return f"https://{hostname}"
 
@@ -435,7 +651,10 @@ class CpolarProvider(TunnelProvider):
                 tmp_path.unlink()
 
     def _configure_authtoken(self, binary: Path) -> None:
-        """首次启动前配置 authtoken（写入 cpolar 配置文件，只需一次）"""
+        """首次启动前配置 authtoken（写入 cpolar 配置文件，只需一次）
+
+        返回 authtoken 命令的完整输出，供 start 失败时诊断
+        """
         if not self._authtoken:
             raise RuntimeError(
                 "cpolar 需要配置 authtoken，请在设置页填写或访问 https://dashboard.cpolar.com/signup 获取"
@@ -450,24 +669,202 @@ class CpolarProvider(TunnelProvider):
         )
         if result.returncode != 0:
             raise RuntimeError(f"cpolar authtoken 配置失败: {result.stderr or result.stdout}")
+        logger.info(f"[cpolar] authtoken 配置成功: {(result.stdout or '').strip()}")
 
     def start(self) -> str:
         if self.status == "running":
             return self._public_url or ""
         self._binary_path = self._ensure_binary()
         self._configure_authtoken(self._binary_path)
-        # cpolar http <port> 启动 HTTP 隧道，输出 Forwarding https://xxx.cpolar.top
-        cmd = [str(self._binary_path), "http", str(self._local_port)]
-        # cpolar 域名后缀多样：.cpolar.top / .cpolar.io / .cpolar.cn
-        url_pattern = re.compile(r"(https://[a-z0-9-]+\.(?:cpolar\.(?:top|io|cn|com)))")
-        self._public_url = self._start_process(cmd, url_pattern)
+        # cpolar http <port> 启动 HTTP 隧道，输出 Tunnel established at https://xxx.cpolar.top
+        # --log stdout 确保日志输出到 stdout 而非文件，否则 _wait_for_url 读不到任何输出
+        cmd = [str(self._binary_path), "http", str(self._local_port), "--log", "stdout"]
+        # 域名格式：xxx.cpolar.top / xxx.r5.cpolar.top（含区域中间层）
+        # 正则必须匹配多级子域名，否则 URL 已输出但正则不匹配导致超时
+        url_pattern = re.compile(r"(https://[a-z0-9-]+(?:\.[a-z0-9]+)*\.cpolar\.[a-z]+)")
+        # 超时 40s：cpolar 免费版首次连接服务器分配域名需 ~22s
+        self._public_url = self._start_process(cmd, url_pattern, timeout=40)
         return self._public_url
+
+
+class TailscaleProvider(TunnelProvider):
+    """Tailscale Funnel：使用已安装并登录的 Tailscale 提供固定 ts.net 地址。
+
+    Tailscale CLI 只负责配置系统后台服务，因此运行状态不能用子进程存活判断，
+    必须通过 ``tailscale funnel status --json`` 查询。
+    """
+
+    binary_name = "tailscale.exe"
+    download_urls: list[str] = []
+
+    def _ensure_binary(self) -> Path:
+        if self._manual_binary_path:
+            manual = Path(self._manual_binary_path)
+            if manual.exists():
+                return manual
+            raise RuntimeError(f"配置的 Tailscale 路径不存在: {manual}")
+
+        discovered = shutil.which("tailscale")
+        if discovered:
+            return Path(discovered)
+
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        standard_path = Path(program_files) / "Tailscale" / "tailscale.exe"
+        if standard_path.exists():
+            return standard_path
+
+        raise RuntimeError(
+            "未检测到 Tailscale。请先安装并登录 Tailscale："
+            "https://tailscale.com/download/windows"
+        )
+
+    def _run_cli(self, *args: str, timeout: int = 20) -> subprocess.CompletedProcess:
+        if self._binary_path is None:
+            self._binary_path = self._ensure_binary()
+        result = subprocess.run(
+            [str(self._binary_path), *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout).strip()
+            raise RuntimeError(f"Tailscale 命令执行失败: {output or result.returncode}")
+        return result
+
+    @staticmethod
+    def _parse_json_output(output: str, command: str) -> dict:
+        try:
+            data = json.loads(output)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"无法解析 {command} 输出，请确认 Tailscale 版本为最新版") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError(f"{command} 返回了无效的 JSON 对象")
+        return data
+
+    @staticmethod
+    def _funnel_url_from_status(data: dict) -> str | None:
+        allow_funnel = data.get("AllowFunnel")
+        if not isinstance(allow_funnel, dict):
+            return None
+        for endpoint, enabled in allow_funnel.items():
+            if not enabled:
+                continue
+            host = str(endpoint).rsplit(":", 1)[0].rstrip(".")
+            if host.lower().endswith(".ts.net"):
+                return f"https://{host}"
+        return None
+
+    @property
+    def status(self) -> str:
+        if self._binary_path is None:
+            return "stopped"
+        try:
+            result = self._run_cli("funnel", "status", "--json")
+            data = self._parse_json_output(result.stdout, "tailscale funnel status")
+            self._public_url = self._funnel_url_from_status(data)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            logger.warning(f"[tailscale] 查询 Funnel 状态失败: {exc}")
+            self._public_url = None
+        return "running" if self._public_url else "stopped"
+
+    def start(self) -> str:
+        self._binary_path = self._ensure_binary()
+        status_result = self._run_cli("status", "--json")
+        status_data = self._parse_json_output(status_result.stdout, "tailscale status")
+        if status_data.get("BackendState") != "Running":
+            raise RuntimeError("请先打开并登录 Tailscale，然后重新启动隧道")
+
+        self_info = status_data.get("Self")
+        dns_name = self_info.get("DNSName", "") if isinstance(self_info, dict) else ""
+        dns_name = str(dns_name).strip().rstrip(".")
+        if not dns_name.lower().endswith(".ts.net"):
+            raise RuntimeError("Tailscale 尚未启用 MagicDNS，无法生成固定 ts.net 地址")
+
+        # 用 Popen 非阻塞读取输出，而非 subprocess.run 阻塞等待。
+        # 原因：tailscale funnel --bg --yes 在首次启用时会输出授权链接后不退出，
+        # 等待用户在浏览器完成授权。用 subprocess.run 会阻塞 60s，
+        # 而前端 axios 30s 就超时了，用户看不到授权指引。
+        # 改为 Popen + 读取输出，检测到授权链接立即提取并返回错误
+        process = subprocess.Popen(
+            [str(self._binary_path), "funnel", "--bg", "--yes", f"http://127.0.0.1:{self._local_port}"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        auth_url_match: list[str] = []
+        recent_lines: list[str] = []
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            line = process.stdout.readline() if process.stdout else ""
+            if not line:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.2)
+                continue
+            stripped = line.strip()
+            if stripped:
+                recent_lines.append(stripped)
+                logger.info(f"[tailscale] {stripped}")
+            # 检测一次性授权链接：tailscale 输出格式为 https://login.tailscale.com/f/funnel?node=xxx
+            url_match = re.search(r"(https://login\.tailscale\.com/f/funnel\?node=\S+)", stripped)
+            if url_match:
+                auth_url_match.append(url_match.group(1))
+                break
+            # 检测成功标志：funnel 已建立
+            if "Funnel started" in stripped or "listening on" in stripped.lower():
+                self._public_url = f"https://{dns_name}"
+                logger.info(f"[tailscale] Funnel 已建立: {self._public_url}")
+                return self._public_url
+
+        # 进程未输出成功标志
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+        if auth_url_match:
+            raise TailscaleFunnelAuthError(
+                "首次启用 Funnel 需要在浏览器完成授权，请点击下方链接完成授权后重新启动隧道",
+                auth_url=auth_url_match[0],
+            )
+
+        # 检查进程是否已退出
+        exit_code = process.returncode
+        recent_output = "\n".join(recent_lines[-20:]) if recent_lines else "（无输出）"
+        if exit_code is not None and exit_code != 0:
+            raise RuntimeError(
+                f"Tailscale Funnel 启动失败（exit code={exit_code}）。\n输出:\n{recent_output}"
+            )
+        raise RuntimeError(
+            f"Tailscale Funnel 启动超时（30s），未能确认 Funnel 状态。\n"
+            f"进程状态: {'已退出' if exit_code is not None else '仍在运行'}\n"
+            f"输出:\n{recent_output}"
+        )
+
+    def stop(self) -> None:
+        # 关闭 Funnel：tailscale funnel off 即可，不需要 --https=443 端口参数
+        # 捕获异常不抛出：stop 失败不应阻塞配置保存或服务关闭等调用方操作
+        # timeout=10s：funnel off 是本地命令应很快返回，
+        # Tailscale 服务未运行时命令会卡住等待连接，10s 足够判断
+        if self._binary_path is not None:
+            try:
+                self._run_cli("funnel", "off", timeout=10)
+            except Exception as e:
+                logger.warning(f"[tailscale] 关闭 Funnel 失败（忽略）: {e}")
+        self._public_url = None
+        logger.info("[tailscale] Funnel 已关闭")
 
 
 # provider 注册表：新增 provider 只需在此注册，无需改动 TunnelService
 _PROVIDER_REGISTRY: dict[str, type[TunnelProvider]] = {
     "cloudflare": CloudflareProvider,
     "cpolar": CpolarProvider,
+    "tailscale": TailscaleProvider,
 }
 
 

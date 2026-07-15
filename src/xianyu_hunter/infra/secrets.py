@@ -51,9 +51,16 @@ KEY_NTFY_TOPIC = "ntfy_topic"
 KEY_NTFY_TOKEN = "ntfy_token"
 # AI 服务密钥
 KEY_OPENAI_API_KEY = "openai_api_key"
+# 快捷预设独立密钥槽；真实值仍由 keyring / DPAPI 保护。
+AI_PRESET_KEY_PREFIX = "openai_api_key_preset_"
 # Embedding 服务密钥（与 LLM 解耦：DeepSeek 等不支持 /embeddings 时需独立配置）
 KEY_EMBEDDING_API_KEY = "embedding_api_key"
 COOKIE_PREFIX = "cookie_"
+
+
+def ai_preset_key_name(preset_id: str) -> str:
+    """返回快捷预设对应的密钥库键名。"""
+    return f"{AI_PRESET_KEY_PREFIX}{preset_id}"
 
 
 def is_available() -> bool:

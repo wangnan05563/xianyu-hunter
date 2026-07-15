@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from typing import Optional
 
 from xianyu_hunter.infra.yaml_config import get_config
@@ -24,10 +25,15 @@ logger = logging.getLogger(__name__)
 class TunnelService:
     """隧道生命周期管理（委托给 provider）"""
 
-    def __init__(self, local_port: int = 8000):
+    def __init__(
+        self,
+        local_port: int = 8000,
+        on_started: Callable[[str, str, int], None] | None = None,
+    ):
         self._local_port = local_port
         self._provider: Optional[TunnelProvider] = None
         self._provider_name: str = ""
+        self._on_started = on_started
 
     def _resolve_port(self) -> int:
         """解析实际本地端口：环境变量 > yaml tunnel.local_port > yaml server.port"""
@@ -100,7 +106,13 @@ class TunnelService:
     def start(self) -> str:
         """启动隧道，返回公网 HTTPS URL"""
         provider = self._ensure_provider()
-        return provider.start()
+        public_url = provider.start()
+        if self._on_started:
+            try:
+                self._on_started(self._provider_name, public_url, self._resolve_port())
+            except Exception as exc:
+                logger.warning(f"隧道已启动，但启动通知调度失败: {exc}")
+        return public_url
 
     def stop(self) -> None:
         """停止隧道"""

@@ -134,8 +134,12 @@ def _classify_item_prices(
         if price is None:
             continue
         p = float(price)
-        if not tid or tid not in task_map:
+        if not tid:
+            # task_id 为 NULL 的真正孤儿商品，归入"未分类"
             orphan_prices.append(p)
+            continue
+        if tid not in task_map:
+            # task_id 指向已删除或不存在的任务，跳过不显示
             continue
         if apply_task_range_filter:
             tr = task_map[tid]["task_price_range"]
@@ -276,8 +280,9 @@ def _filter_category_prices_by_range(conn, task_map: dict, range_days: int) -> N
             if not _price_in_range(p, tr):
                 continue
             task_map[tid]["prices"].append(p)
-        else:
+        elif tid is None:
             orphan_prices.append(p)
+        # tid 非 None 但不在 task_map：已删除任务的商品，跳过
     if orphan_prices:
         task_map["__orphan__"] = {
             "name": "未分类",

@@ -270,7 +270,7 @@ async def test_live_evaluation_triggers_auto_buy_for_qualified_item() -> None:
             await coro
 
         with patch("asyncio.create_task", side_effect=lambda c: asyncio.ensure_future(c)):
-            await _trigger_live_evaluation(container, "t1", items)
+            _trigger_live_evaluation(container, "t1", items)
             # 等待 create_task 创建的协程完成
             await asyncio.sleep(0.1)
 
@@ -308,7 +308,7 @@ async def test_live_evaluation_skips_auto_buy_for_unqualified_item() -> None:
     }]
 
     with patch("xianyu_hunter.web.routes.api_task_links._trigger_live_auto_buy", new_callable=AsyncMock) as mock_auto_buy:
-        await _trigger_live_evaluation(container, "t1", items)
+        _trigger_live_evaluation(container, "t1", items)
 
     mock_auto_buy.assert_not_called()
 
@@ -344,7 +344,7 @@ async def test_live_evaluation_triggers_auto_buy_only_for_qualified() -> None:
 
     with patch("xianyu_hunter.web.routes.api_task_links._trigger_live_auto_buy", new_callable=AsyncMock) as mock_auto_buy:
         with patch("asyncio.create_task", side_effect=lambda c: asyncio.ensure_future(c)):
-            await _trigger_live_evaluation(container, "t1", items)
+            _trigger_live_evaluation(container, "t1", items)
             await asyncio.sleep(0.1)
 
     # 只触发 1 次（达标商品）
@@ -388,7 +388,7 @@ async def test_live_evaluation_skips_auto_buy_when_price_above_max() -> None:
     }]
 
     with patch("xianyu_hunter.web.routes.api_task_links._trigger_live_auto_buy", new_callable=AsyncMock) as mock_auto_buy:
-        await _trigger_live_evaluation(container, "t1", items)
+        _trigger_live_evaluation(container, "t1", items)
 
     # 价格超 max_price，不应触发抢单
     mock_auto_buy.assert_not_called()
@@ -420,7 +420,7 @@ async def test_live_evaluation_skips_auto_buy_when_price_below_min() -> None:
     }]
 
     with patch("xianyu_hunter.web.routes.api_task_links._trigger_live_auto_buy", new_callable=AsyncMock) as mock_auto_buy:
-        await _trigger_live_evaluation(container, "t1", items)
+        _trigger_live_evaluation(container, "t1", items)
 
     mock_auto_buy.assert_not_called()
 
@@ -453,7 +453,7 @@ async def test_live_evaluation_auto_buy_when_price_within_range() -> None:
 
     with patch("xianyu_hunter.web.routes.api_task_links._trigger_live_auto_buy", new_callable=AsyncMock) as mock_auto_buy:
         with patch("asyncio.create_task", side_effect=lambda c: asyncio.ensure_future(c)):
-            await _trigger_live_evaluation(container, "t1", items)
+            _trigger_live_evaluation(container, "t1", items)
             await asyncio.sleep(0.1)
 
     mock_auto_buy.assert_called_once()
@@ -491,7 +491,7 @@ async def test_live_evaluation_price_filter_only_blocks_auto_buy_not_eval_write(
     }]
 
     with patch("xianyu_hunter.web.routes.api_task_links._trigger_live_auto_buy", new_callable=AsyncMock) as mock_auto_buy:
-        await _trigger_live_evaluation(container, "t1", items)
+        _trigger_live_evaluation(container, "t1", items)
 
     # 抢单不触发
     mock_auto_buy.assert_not_called()
@@ -537,7 +537,7 @@ async def test_live_evaluation_mixed_pricing_only_qualifies_in_range() -> None:
 
     with patch("xianyu_hunter.web.routes.api_task_links._trigger_live_auto_buy", new_callable=AsyncMock) as mock_auto_buy:
         with patch("asyncio.create_task", side_effect=lambda c: asyncio.ensure_future(c)):
-            await _trigger_live_evaluation(container, "t1", items)
+            _trigger_live_evaluation(container, "t1", items)
             await asyncio.sleep(0.1)
 
     # 只有价格合适的商品触发抢单
@@ -576,7 +576,7 @@ async def test_live_evaluation_uses_global_market_ratio_when_task_no_override() 
     ]
 
     with patch("xianyu_hunter.web.routes.api_task_links._trigger_live_auto_buy", new_callable=AsyncMock) as mock_auto_buy:
-        await _trigger_live_evaluation(container, "t1", items)
+        _trigger_live_evaluation(container, "t1", items)
 
     # 全局 market_ratio=0.8 触发过滤（与 worker 行为一致）
     mock_auto_buy.assert_not_called()

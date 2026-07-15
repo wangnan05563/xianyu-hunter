@@ -26,6 +26,7 @@ class EventType(str, Enum):
     BUY_FAILED = "buy.failed"
     # 通知
     NOTIFY_SENT = "notify.sent"
+    TUNNEL_STARTED = "tunnel.started"
     # 安全
     WAF_TRIGGERED = "waf.triggered"
     WAF_BLOCKED = "waf.blocked"
@@ -74,6 +75,7 @@ EVENT_SEVERITY: dict[EventType, str] = {
     EventType.ITEM_DISCOVERED: "info",
     EventType.ITEM_FOUND: "info",          # 旧枚举兼容
     EventType.NOTIFY_SENT: "info",
+    EventType.TUNNEL_STARTED: "critical",  # 隧道启动是用户主动操作，需穿透免打扰送达
     EventType.BUY_REQUESTED: "info",
     EventType.TASK_STARTED: "info",
     EventType.TASK_STOPPED: "info",       # 任务正常停止

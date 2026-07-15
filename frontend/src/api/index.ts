@@ -71,7 +71,10 @@ export type {
   TunnelConfig,
   TunnelConfigBody,
   TunnelDownloadError,
-  CloudflareLoginResult,
+  TunnelTailscaleAuthError,
+  CloudflareLoginStatus,
+  CloudflareLoginStartResult,
+  CloudflareLoginStatusResult,
   CloudflareCreateResult,
   CloudflareRouteDnsResult,
 } from './tunnel'

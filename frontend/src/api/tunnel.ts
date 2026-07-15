@@ -46,11 +46,34 @@ export interface TunnelDownloadError {
   download_urls: string[]
 }
 
+// Tailscale Funnel 首次启用需要用户在浏览器完成授权
+export interface TunnelTailscaleAuthError {
+  detail: string
+  error_type: 'tailscale_funnel_auth'
+  auth_url: string
+}
+
 // Named Tunnel setup 向导各步骤的响应
-export interface CloudflareLoginResult {
-  ok: boolean
-  cert_file: string
+
+// login 两阶段 API：POST start（非阻塞）+ GET poll
+// cloudflared tunnel login 是交互式命令，会打开浏览器让用户授权。
+// 前端先调 cloudflareLoginStart() 拿到授权 URL，再轮询 cloudflareLoginStatus() 等 cert.pem 生成。
+export type CloudflareLoginStatus = 'waiting' | 'success' | 'failed' | 'idle'
+
+export interface CloudflareLoginStartResult {
+  status: CloudflareLoginStatus
+  auth_url: string | null
   message: string
+  output?: string
+}
+
+export interface CloudflareLoginStatusResult {
+  status: CloudflareLoginStatus
+  auth_url: string | null
+  cert_file?: string
+  message: string
+  output?: string
+  checked_paths?: string[]
 }
 
 export interface CloudflareCreateResult {
@@ -84,8 +107,12 @@ export const tunnelApi = {
     client.post<{ ok: boolean; message: string }>('/api/tunnel/config', body).then((r) => r.data),
 
   // Named Tunnel 配置向导
-  cloudflareLogin: () =>
-    client.post<CloudflareLoginResult>('/api/tunnel/cloudflare/login').then((r) => r.data),
+  // login 两阶段：start 启动子进程拿授权 URL，status 轮询 cert.pem 是否生成
+  cloudflareLoginStart: () =>
+    client.post<CloudflareLoginStartResult>('/api/tunnel/cloudflare/login').then((r) => r.data),
+
+  cloudflareLoginStatus: () =>
+    client.get<CloudflareLoginStatusResult>('/api/tunnel/cloudflare/login/status').then((r) => r.data),
 
   cloudflareCreate: (body: { tunnel_name: string; cert_file?: string }) =>
     client.post<CloudflareCreateResult>('/api/tunnel/cloudflare/create', body).then((r) => r.data),
