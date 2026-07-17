@@ -150,9 +150,9 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
         : <span style={{ color: '#f5222d', fontWeight: 600 }}>¥{Number(r.payload.item_price).toFixed(2)}</span>,
     },
     {
-      // 预估盈利 = 当前价格 - 捡漏价格(P10)
+      // 预估盈利 = 均价(avg_price) - 当前价格(item_price)
       // 数据来源：后端 _enrich_bargain_and_profit 注入到 payload
-      // 三态语义：正数=绿色（盈利）/ 负数=红色（亏损）/ null=灰色（无捡漏价格数据或当前价缺失）
+      // 三态语义：正数=绿色（盈利，当前价低于均价）/ 负数=红色（亏损，当前价高于均价）/ null=灰色（无均价数据或当前价缺失）
       title: '预估盈利', key: 'estimated_profit', width: 110,
       sorter: (a: EvalItem, b: EvalItem) => {
         // payload 字段为 unknown，需显式断言为 number | null | undefined
@@ -163,10 +163,10 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
       },
       render: (_: unknown, r: EvalItem) => {
         const profit = r.payload?.estimated_profit as number | null | undefined
-        // null/undefined 语义：捡漏价格未计算或当前价缺失，统一显示灰色 "—"
+        // null/undefined 语义：均价未计算或当前价缺失，统一显示灰色 "—"
         if (profit == null) {
           return (
-            <Tooltip title="无捡漏价格数据或当前价格缺失，无法计算预估盈利">
+            <Tooltip title="无市场均价数据或当前价格缺失，无法计算预估盈利">
               <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
             </Tooltip>
           )
@@ -175,7 +175,7 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
         const prefix = profit > 0 ? '+' : profit < 0 ? '-' : ''
         const color = profit > 0 ? '#52c41a' : profit < 0 ? '#ff4d4f' : 'var(--xh-text-secondary)'
         return (
-          <Tooltip title={`当前价 ¥${Number(r.payload?.item_price ?? 0).toFixed(2)} − 捡漏价 ¥${Number(r.payload?.bargain_price ?? 0).toFixed(2)}`}>
+          <Tooltip title={`均价 ¥${Number(r.payload?.avg_price ?? 0).toFixed(2)} − 当前价 ¥${Number(r.payload?.item_price ?? 0).toFixed(2)}`}>
             <span style={{ color, fontWeight: 600 }}>{prefix}¥{absStr}</span>
           </Tooltip>
         )

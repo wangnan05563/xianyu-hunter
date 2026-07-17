@@ -583,6 +583,7 @@ def _compute_sold_range(
             "min_price": None,
             "max_price": None,
             "median_price": None,
+            "mean_price": None,
             "bargain_price": None,
             "p10": None, "p25": None, "p75": None, "p90": None,
             "sample_size": 0,
@@ -595,6 +596,9 @@ def _compute_sold_range(
     n = len(sorted_p)
     min_p = round(sorted_p[0], 2)
     max_p = round(sorted_p[-1], 2)
+    # 均价：算术平均价，用于评估明细"预估盈利 = 均价 - 当前价"
+    # 与 median_price 同源（基于过滤后的 prices 列表），保证口径一致
+    mean_p = round(sum(prices) / n, 2)
     median_p = round(_percentile(sorted_p, 0.5), 2)
     # 捡漏价格分位数配置化（config.yaml bargain_price.percentile）
     # 默认 0.10（P10），调高让更多商品被判为可捡漏，调低更严格
@@ -624,6 +628,7 @@ def _compute_sold_range(
         "min_price": min_p,
         "max_price": max_p,
         "median_price": median_p,
+        "mean_price": mean_p,
         "bargain_price": bargain_p,
         "p10": p10, "p25": p25, "p75": p75, "p90": p90,
         "sample_size": n,

@@ -304,6 +304,47 @@ async def _ensure_session_cookies_injected() -> None:
     if success:
         with _session_lock:
             _session["cookies_injected"] = True
+        # 健康探测：注入成功后检查身份 cookie 完整性，
+        # 提前发现"登录成功但 cookie 不完整/服务端未建立会话"问题
+        await _post_login_cookie_health_check()
+
+
+async def _post_login_cookie_health_check() -> None:
+    """登录后 cookie 健康探测：验证身份 cookie 完整性
+
+    为什么需要：登录子进程写 JSON + 主进程注入浏览器后，仍可能因
+    cookie 不完整/服务端会话未建立导致采集立即失败。探测身份 cookie
+    的存在性，可在登录后立即告警，而非等到 BatchRefresh 连续失败 3 次。
+
+    设计取舍：只做静态检查（cookie 存在性+过期时间），不主动打开页面
+    访问详情页，避免增加登录流程延迟。服务端会话有效性由后续采集时
+    的 _refresh_token_and_retry_detail 两级自愈兜底。
+    """
+    try:
+        from xianyu_hunter.web.deps import get_container
+
+        container = get_container()
+        browser = getattr(container, "browser", None)
+        if not browser:
+            return
+
+        cookies = await browser.get_cookies()
+        cookie_names = {c.get("name", "") for c in cookies}
+        # 身份 cookie：闲鱼登录态的核心标识
+        identity_cookies = ("cookie2", "sgcookie", "unb")
+        missing = [name for name in identity_cookies if name not in cookie_names]
+
+        if missing:
+            logger.warning(
+                "登录后健康探测失败：身份 cookie 缺失 %s（共 %d 个 cookie），"
+                "采集可能立即失败，建议检查登录子进程 cookie 导出是否完整",
+                missing,
+                len(cookies),
+            )
+        else:
+            logger.info("登录后健康探测通过：身份 cookie 齐全（共 %d 个 cookie）", len(cookies))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("登录后健康探测异常（不影响登录流程）: %s", e)
 
 
 def _trigger_session_start() -> None:

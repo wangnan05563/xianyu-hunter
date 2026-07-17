@@ -33,29 +33,35 @@ from xianyu_hunter.web.utils import to_datetime
 
 router = APIRouter(prefix="/api/evaluations", tags=["evaluations"])
 
-# 捡漏价格缓存：(task_id, range_days) -> (bargain_price, timestamp)
+# 市场价格统计缓存：(task_id, range_days) -> (stats_dict, timestamp)
 # 为什么用模块级缓存：评估列表频繁刷新时避免 N+1 查询 task_links/items 表
-# TTL 5 分钟：捡漏价格基于历史已售数据，短期不会剧烈变化
-_BARGAIN_PRICE_CACHE: dict[tuple[str | None, int], tuple[float | None, float]] = {}
-_BARGAIN_PRICE_CACHE_TTL = 300.0  # 秒
+# TTL 5 分钟：bargain_price/mean_price 基于历史已售数据，短期不会剧烈变化
+_MARKET_STATS_CACHE: dict[tuple[str | None, int], tuple[dict[str, float | None], float]] = {}
+_MARKET_STATS_CACHE_TTL = 300.0  # 秒
 
 
-def compute_bargain_prices_batch(
+def compute_market_stats_batch(
     container: Container, task_ids: list[str | None], range_days: int = 30
-) -> dict[str | None, float | None]:
-    """批量查询多个任务的捡漏价格（P10），带 TTL 缓存
+) -> dict[str | None, dict[str, float | None]]:
+    """批量查询多个任务的市场价格统计（bargain_price + mean_price），带 TTL 缓存
 
-    返回 {task_id: bargain_price} 映射，task_id 为 None 时表示全局统计。
+    返回 {task_id: {"bargain_price": ..., "mean_price": ...}} 映射，
+    task_id 为 None 时表示全局统计。
     缓存未命中时逐任务调用 _compute_sold_range，与价格行情页同源保证口径一致。
+
+    为什么同时返回 bargain_price 和 mean_price：
+    - bargain_price (P10)：捡漏参考价，用于前端"捡漏价格"展示
+    - mean_price (算术平均价)：市场均价，用于"预估盈利 = 均价 - 当前价"计算
+    两者同源（_compute_sold_range 一次查询），避免两次 DB 调用。
     """
     now = time.monotonic()
-    result: dict[str | None, float | None] = {}
+    result: dict[str | None, dict[str, float | None]] = {}
     missing: list[str | None] = []
 
     for tid in task_ids:
         cache_key = (tid, range_days)
-        cached = _BARGAIN_PRICE_CACHE.get(cache_key)
-        if cached and (now - cached[1]) < _BARGAIN_PRICE_CACHE_TTL:
+        cached = _MARKET_STATS_CACHE.get(cache_key)
+        if cached and (now - cached[1]) < _MARKET_STATS_CACHE_TTL:
             result[tid] = cached[0]
         else:
             missing.append(tid)
@@ -66,13 +72,16 @@ def compute_bargain_prices_batch(
             for tid in missing:
                 try:
                     stats = _compute_sold_range(conn, tid, range_days)
-                    bargain = stats.get("bargain_price")
-                    _BARGAIN_PRICE_CACHE[(tid, range_days)] = (bargain, now)
-                    result[tid] = bargain
+                    market_stats = {
+                        "bargain_price": stats.get("bargain_price"),
+                        "mean_price": stats.get("mean_price"),
+                    }
+                    _MARKET_STATS_CACHE[(tid, range_days)] = (market_stats, now)
+                    result[tid] = market_stats
                 except Exception as e:
-                    # 捡漏价格查询失败不应阻断评估列表渲染
-                    logger.warning("查询任务 {} 的捡漏价格失败: {}", tid, e)
-                    result[tid] = None
+                    # 市场价格查询失败不应阻断评估列表渲染
+                    logger.warning("查询任务 {} 的市场价格统计失败: {}", tid, e)
+                    result[tid] = {"bargain_price": None, "mean_price": None}
 
     return result
 
@@ -778,8 +787,8 @@ def list_evaluations(
         evals.append(r)
     # 计算成色判断标签（基于商品标题和描述文本，帮助用户判断商品新旧程度）
     _enrich_condition_tags(evals)
-    # 批量注入捡漏价格（P10）与预估盈利（当前价 - P10）
-    # 为什么在分页前注入：bargain_price 按 task_id 缓存，分页前注入可让同 task_id
+    # 批量注入捡漏价格（P10）、均价（mean_price）与预估盈利（均价 - 当前价）
+    # 为什么在分页前注入：市场价格统计按 task_id 缓存，分页前注入可让同 task_id
     # 的所有商品共享一次缓存查询；分页后只有 20 条会导致同 task_id 多次刷新重复查询
     _enrich_bargain_and_profit(evals, container)
     total = len(evals)
@@ -790,11 +799,18 @@ def list_evaluations(
 
 
 def _enrich_bargain_and_profit(evals: list[dict], container: Container) -> None:
-    """为评估记录注入 bargain_price 和 estimated_profit 字段
+    """为评估记录注入 bargain_price、avg_price 和 estimated_profit 字段
 
-    bargain_price 来自按 task_id 缓存的 P10 分位数（与价格行情页同源）
-    estimated_profit = 当前价格(item_price) - bargain_price
-    缺失数据时两个字段均为 None，前端用 null 语义区分显示
+    bargain_price：P10 分位数（捡漏参考价，与价格行情页同源）
+    avg_price：算术平均价（市场均价，用于预估盈利计算）
+    estimated_profit = avg_price - 当前价格(item_price)
+    缺失数据时字段均为 None，前端用 null 语义区分显示
+
+    为什么用"均价-当前价"而非"当前价-捡漏价"：
+    预估盈利的语义是"买入后以市场均价卖出的预期利润"。
+    当前价是买入成本，均价是预期卖出价，盈利 = 卖出 - 买入 = 均价 - 当前价。
+    正数（均价 > 当前价）= 当前价低于市场均价，有利润空间（捡漏机会）；
+    负数（均价 < 当前价）= 当前价高于市场均价，无利润空间。
     """
     if not evals:
         return
@@ -802,18 +818,21 @@ def _enrich_bargain_and_profit(evals: list[dict], container: Container) -> None:
     # task_id 为空时也查一次全局统计，让无 task_id 的评估记录也能展示盈利预估
     if any(not tid for r in evals for tid in [r.get("task_id")]):
         task_ids.add(None)
-    bargain_map = compute_bargain_prices_batch(container, list(task_ids))
+    market_map = compute_market_stats_batch(container, list(task_ids))
     for r in evals:
         payload = r["payload"]
         tid = r.get("task_id")
-        bargain = bargain_map.get(tid)
+        stats = market_map.get(tid) or {}
+        bargain = stats.get("bargain_price")
+        avg_price = stats.get("mean_price")
         payload["bargain_price"] = bargain
+        payload["avg_price"] = avg_price
         current_price = payload.get("item_price")
-        # 三态语义：bargain 或 current_price 为 None 时 estimated_profit 为 None
+        # 三态语义：avg_price 或 current_price 为 None 时 estimated_profit 为 None
         # 前端用 null 表示"无法计算"，区分于 0 或负数
-        if bargain is not None and current_price is not None:
+        if avg_price is not None and current_price is not None:
             try:
-                payload["estimated_profit"] = round(float(current_price) - float(bargain), 2)
+                payload["estimated_profit"] = round(float(avg_price) - float(current_price), 2)
             except (TypeError, ValueError):
                 payload["estimated_profit"] = None
         else:

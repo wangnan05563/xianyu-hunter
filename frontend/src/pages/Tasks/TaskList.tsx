@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { Table, Button, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch } from 'antd'
-import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined } from '@ant-design/icons'
+import { Table, Button, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch, Dropdown } from 'antd'
+import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined, MoreOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
 import { STATUS_COLOR as statusColors } from '../../constants/statusColors'
@@ -861,9 +861,22 @@ export default function TaskList() {
             <Button size="small" icon={<CopyOutlined />} onClick={() => cloneTask(record)}>
               复制
             </Button>
-            <Button size="small" onClick={() => saveAsTemplate(record)}>
-              另存为模板
-            </Button>
+            {/* "另存为模板"是低频操作，移入更多下拉菜单以压缩操作列宽度，避免超出页面可视区 */}
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  {
+                    key: 'saveAsTemplate',
+                    label: '另存为模板',
+                    icon: <SaveOutlined />,
+                    onClick: () => saveAsTemplate(record),
+                  },
+                ],
+              }}
+            >
+              <Button size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+            </Dropdown>
             <Button size="small" danger icon={<DeleteOutlined />} onClick={() => doArmConfirm(record.id, 'delete', '删除', '删除后不可恢复')}>
               删除
             </Button>
@@ -967,6 +980,8 @@ export default function TaskList() {
           dataSource={tasks}
           rowKey="id"
           loading={loading}
+          // 横向滚动：列较多时允许用户滚动浏览，避免列被强制压缩到看不清
+          scroll={{ x: 'max-content' }}
           rowSelection={{
             selectedRowKeys,
             onChange: setSelectedRowKeys,
@@ -1042,7 +1057,22 @@ export default function TaskList() {
                             <Button size="small" danger icon={<StopOutlined />} onClick={() => doArmConfirm(task.id, 'stop', '停止', '停止后任务将不再运行')}>停止</Button>
                           )}
                           <Button size="small" icon={<CopyOutlined />} onClick={() => cloneTask(task)}>复制</Button>
-                          <Button size="small" onClick={() => saveAsTemplate(task)}>另存为模板</Button>
+                          {/* 同步：与表格视图一致，"另存为模板"收起到更多下拉菜单 */}
+                          <Dropdown
+                            trigger={['click']}
+                            menu={{
+                              items: [
+                                {
+                                  key: 'saveAsTemplate',
+                                  label: '另存为模板',
+                                  icon: <SaveOutlined />,
+                                  onClick: () => saveAsTemplate(task),
+                                },
+                              ],
+                            }}
+                          >
+                            <Button size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+                          </Dropdown>
                           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => doArmConfirm(task.id, 'delete', '删除', '删除后不可恢复')}>删除</Button>
                         </>
                       )}

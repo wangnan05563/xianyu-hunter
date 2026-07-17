@@ -476,28 +476,117 @@ class ItemCollectionService:
     async def _refresh_token_and_retry_detail(
         self, item_id: str, reuse_page: Any
     ) -> ItemDetail | None:
-        """token 失效时强制刷新 _m_h5_tk 后重试 detail
+        """token/cookie 失效时两级自愈重试 detail
 
         仅在 last_detail_failure_reason == home_title_redirect 时尝试，
         其他失败原因直接返回 None 由调用方走错误映射。
+
+        两级自愈设计：
+        1. 刷新 _m_h5_tk token 后重试（覆盖偶发 token 过期）
+        2. 仍失败时从 cookie_store 强制注入完整 cookie 后再重试
+           （覆盖身份 cookie 服务端失效，ensure_official_cookies 的
+           missing/expired/stale 检查无法识别此场景）
         """
         reason = getattr(self.container.collector, "last_detail_failure_reason", "") or ""
         if reason != "home_title_redirect" or self.container.collector is None:
             return None
         try:
+            # 第一级自愈：刷新 _m_h5_tk
             refresh_page = await self.container.browser.new_page()
             try:
-                await self.container.collector._ensure_fresh_m5tk(refresh_page, force=True)
+                # 重置熔断标志：detail() 入口(_detail.py:781)检查 last_session_invalid，
+                # 为 True 时直接短路返回 None。若不重置，刷新 _m_h5_tk 后的重试
+                # 根本不会发起 HTTP 请求，重试形同虚设。重试时若仍检测到首页标题，
+                # _mark_detail_session_invalid 会再次设置标志，不影响 Worker 熔断。
+                self.container.collector.last_session_invalid = False
+                refreshed = await self.container.collector._ensure_fresh_m5tk(refresh_page, force=True)
             finally:
                 try:
                     await refresh_page.close()
                 except Exception:
                     pass
-            logger.info("token 失效，已强制刷新 _m_h5_tk 后重试 item={}", item_id)
-            return await self.container.collector.detail(item_id, page=reuse_page)
+            # 区分"已刷新"和"跳过刷新（5分钟内已刷新过）"，避免日志误导
+            # 为什么：_ensure_fresh_m5tk force=True 时仍有 5 分钟最小间隔，
+            # 连续失败时第 2、3 个商品会跳过刷新，但旧日志统一打印"已强制刷新"
+            if refreshed:
+                logger.info("已强制刷新 _m_h5_tk 后重试 item={}", item_id)
+            else:
+                logger.info("跳过 _m_h5_tk 刷新（5分钟内已刷新），直接重试 item={}", item_id)
+
+            detail = await self.container.collector.detail(item_id, page=reuse_page)
+            if detail is not None:
+                return detail
+
+            # 第二级自愈：_m_h5_tk 刷新后仍失败，说明身份 cookie 也失效
+            # 从 cookie_store 强制注入完整 cookie，覆盖"cookie 存在但服务端已注销"场景
+            logger.warning(
+                "_m_h5_tk 刷新后重试仍失败 item={}, reason={}，尝试从 cookie_store 重新注入完整 cookie",
+                item_id,
+                getattr(self.container.collector, "last_detail_failure_reason", ""),
+            )
+            await self._force_reinject_cookies_from_store()
+            # 再次重置熔断标志，让重试能真正执行
+            self.container.collector.last_session_invalid = False
+            detail = await self.container.collector.detail(item_id, page=reuse_page)
+            if detail is not None:
+                logger.info("cookie 重新注入后重试成功 item={}", item_id)
+                return detail
+
+            # 两级自愈均失败，记录诊断日志便于定位根因
+            await self._log_cookie_diagnostics(item_id)
+            return None
         except Exception as exc:  # noqa: BLE001
             logger.warning("token 刷新重试失败 item={}: {}", item_id, exc)
             return None
+
+    async def _force_reinject_cookies_from_store(self) -> None:
+        """从 cookie_store 强制注入完整 cookie 到浏览器
+
+        为什么需要：ensure_official_cookies 只在 missing/expired/stale 时注入，
+        无法覆盖"cookie 存在且值一致但服务端已失效"场景。强制注入会覆盖
+        浏览器所有 cookie，确保与 cookie_store JSON 完全一致。
+        """
+        try:
+            from xianyu_hunter.web.services.cookie_runtime_sync import (
+                inject_cookie_store_to_worker_browser,
+            )
+            await inject_cookie_store_to_worker_browser(
+                "detail 重试 cookie 强制注入", force_refresh_m5tk=False
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("强制注入 cookie 失败: {}", exc)
+
+    async def _log_cookie_diagnostics(self, item_id: str) -> None:
+        """记录浏览器 cookie 诊断信息，便于定位会话失效根因
+
+        为什么需要：home_title_redirect 可能是 cookie 缺失/过期/服务端失效，
+        不记录具体状态无法区分。记录身份 cookie 的存在性和过期时间，
+        可以快速判断是"cookie 不完整"还是"cookie 完整但服务端拒绝"。
+        """
+        try:
+            cookies = await self._get_browser_cookies()
+            cookies_by_name = self._cookies_indexed_by_name(cookies)
+            now = datetime.now(timezone.utc).timestamp()
+            identity_status = []
+            for name in _OFFICIAL_COLLECT_IDENTITY_COOKIES:
+                cookie = cookies_by_name.get(name)
+                if not cookie:
+                    identity_status.append(f"{name}=缺失")
+                else:
+                    expires = cookie.get("expires", -1)
+                    if expires > 0 and expires < now:
+                        identity_status.append(f"{name}=已过期")
+                    else:
+                        identity_status.append(f"{name}=存在")
+            logger.warning(
+                "会话失效诊断 item={}, cookie总数={}, 身份cookie[{}]，"
+                "若身份cookie均存在但仍失效，说明服务端已注销会话，需重新登录",
+                item_id,
+                len(cookies),
+                ", ".join(identity_status),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("cookie 诊断日志记录失败 item={}: {}", item_id, exc)
 
     async def _raise_detail_failure_error(self, item_id: str) -> None:
         """detail 失败后根据 reason 映射到对应 status_code 并抛 CollectionError

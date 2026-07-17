@@ -482,11 +482,14 @@ class BatchRefreshScheduler:
     async def _sync_cookie_before_batch(
         self, task_id: int, started_at: datetime
     ) -> None:
-        """新批次开始前同步 Cookie 到 worker 浏览器
+        """新批次开始前同步 Cookie 到 worker 浏览器并做有效性预检
 
         为什么每批次只同步一次：Cookie 同步涉及磁盘 I/O 与浏览器 IPC，
         每商品都同步会显著拖慢采集；同批次内 Cookie 通常不会中途失效。
         同步失败仅记日志与错误累积，不阻断批次（后续 _refresh_one 会再次校验）。
+
+        预检增强：注入后调用 ensure_official_cookies 检查 missing/expired/stale，
+        在批次开始前就识别 cookie 问题，避免连续 3 次失败熔断浪费时间。
         """
         try:
             from xianyu_hunter.web.services.cookie_runtime_sync import (
@@ -498,6 +501,17 @@ class BatchRefreshScheduler:
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[BatchRefresh#{task_id}] Cookie 同步失败: {e}")
             self._append_error("cookie_sync", str(e), started_at)
+            return
+
+        # 预检：注入后检查 cookie 有效性，提前发现问题避免批次内连续失败
+        try:
+            from xianyu_hunter.modules.collection_service import ItemCollectionService
+            service = ItemCollectionService(self._container)
+            await service.ensure_official_cookies()
+            logger.info(f"[BatchRefresh#{task_id}] 批次前 Cookie 预检通过")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[BatchRefresh#{task_id}] 批次前 Cookie 预检失败: {e}")
+            self._append_error("cookie_precheck", str(e), started_at)
 
     async def _process_items_loop(
         self,
