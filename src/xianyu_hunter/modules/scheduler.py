@@ -165,18 +165,26 @@ class TaskScheduler:
         # 2. Cookie 有效性检查：延迟导入避免循环依赖
         # 为什么延迟导入：cookie_store 属于 web 层，scheduler 属于 modules 层，
         # 编译期直接导入会引入分层违规；运行时延迟导入在测试中可被 mock 替换
+        # 为什么需要 active user_id：多用户场景下 cookies_{user_id}.json 按用户隔离，
+        # 默认 "default" 在多用户环境下永远找不到 cookie，导致任务被误判为未登录
         try:
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
+            from xianyu_hunter.web.services.user_manager import get_user_manager
 
-            if not get_cookie_store().has_valid_cookies():
+            user_id = get_user_manager().get_active_user_id()
+            if not get_cookie_store().has_valid_cookies(user_id):
                 raise ResumeBlockedError("Cookie 已失效，请重新登录后再恢复任务")
         except ImportError:
             # 测试环境或 cookie_store 不可用时跳过 Cookie 校验，仅依赖冷却期
-            logger.debug("[Task %s] cookie_store 不可用，跳过 Cookie 校验", task_id)
+            logger.debug(f"[Task {task_id}] cookie_store 不可用，跳过 Cookie 校验")
+        except ResumeBlockedError:
+            # ResumeBlockedError 必须重新抛出，否则 Cookie 失效时任务仍会启动
+            # （原 except Exception 会误吞 ResumeBlockedError，导致校验形同虚设）
+            raise
         except Exception as e:
             # cookie_store 内部异常（如 RuntimeError/IOError）不应导致 500，
             # 降级为跳过 Cookie 校验，仅依赖冷却期
-            logger.warning("[Task %s] Cookie 校验异常，跳过: %s", task_id, e)
+            logger.warning(f"[Task {task_id}] Cookie 校验异常，跳过: {e}")
 
     def precheck_resume(self, task_id: str) -> dict[str, Any]:
         """恢复前置校验：返回结构化结果，不抛异常
@@ -223,8 +231,10 @@ class TaskScheduler:
         # 2. Cookie 有效性检查
         try:
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
+            from xianyu_hunter.web.services.user_manager import get_user_manager
 
-            if not get_cookie_store().has_valid_cookies():
+            user_id = get_user_manager().get_active_user_id()
+            if not get_cookie_store().has_valid_cookies(user_id):
                 result.update(
                     resume_blocked=True,
                     reason_code="cookie_invalid",
@@ -232,9 +242,9 @@ class TaskScheduler:
                 )
                 return result
         except ImportError:
-            logger.debug("[Task %s] cookie_store 不可用，跳过 Cookie 校验", task_id)
+            logger.debug(f"[Task {task_id}] cookie_store 不可用，跳过 Cookie 校验")
         except Exception as e:
-            logger.warning("[Task %s] Cookie 校验异常，跳过: %s", task_id, e)
+            logger.warning(f"[Task {task_id}] Cookie 校验异常，跳过: {e}")
 
         result["user_hint"] = "可恢复"
         return result
@@ -514,7 +524,7 @@ class TaskScheduler:
         try:
             await browser.close_all_pages()
         except Exception as e:
-            logger.warning("[Task %s] 清理残留页面失败: %s", task_id, e)
+            logger.warning(f"[Task {task_id}] 清理残留页面失败: {e}")
 
     async def _handle_run_once_exception(
         self,

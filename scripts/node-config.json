@@ -1,0 +1,23 @@
+{
+  "_comment": "Node.js 工具链配置 - 所有脚本统一从此文件读取 node 路径，避免硬编码",
+  "node": {
+    "exe_path": "D:\\code\\nodejs24\\node.exe",
+    "dir_path": "D:\\code\\nodejs24",
+    "min_version": [18, 0, 0],
+    "search_paths": [
+      "D:\\code\\nodejs24\\node.exe",
+      "D:\\code\\nodejs\\node.exe",
+      "%ProgramFiles%\\nodejs\\node.exe",
+      "%LOCALAPPDATA%\\Programs\\nodejs\\node.exe"
+    ],
+    "npm_ci_args": ["ci"],
+    "npm_install_args": ["install"],
+    "npm_build_script": "run build"
+  },
+  "frontend": {
+    "dir": "frontend",
+    "vite_js": "frontend/node_modules/vite/bin/vite.js",
+    "package_lock": "frontend/package-lock.json",
+    "install_stamp": "frontend/node_modules/.install-stamp"
+  }
+}

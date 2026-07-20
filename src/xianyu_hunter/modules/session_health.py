@@ -218,9 +218,7 @@ class SessionHealthChecker:
 
         self._last_report = report
         logger.info(
-            "健康检查完成: score=%d, cookie=%s, api=%s, page=%s, waf=%s, action=%s",
-            total_score, cookie_valid, api_reachable, page_accessible,
-            waf_status.value, action.value,
+            f"健康检查完成: score={total_score}, cookie={cookie_valid}, api={api_reachable}, page={page_accessible}, waf={waf_status.value}, action={action.value}",
         )
         return report
 
@@ -237,7 +235,7 @@ class SessionHealthChecker:
                 result = await result
             return result
         except Exception as e:
-            logger.error("Cookie 检查异常: %s", e)
+            logger.error(f"Cookie 检查异常: {e}")
             return False
 
     async def _check_api(self) -> bool:
@@ -247,7 +245,7 @@ class SessionHealthChecker:
         try:
             return await self._api_checker()
         except Exception as e:
-            logger.error("API 检查异常: %s", e)
+            logger.error(f"API 检查异常: {e}")
             return False
 
     async def _check_page(self) -> bool:
@@ -257,7 +255,7 @@ class SessionHealthChecker:
         try:
             return await self._page_checker()
         except Exception as e:
-            logger.error("页面检查异常: %s", e)
+            logger.error(f"页面检查异常: {e}")
             return False
 
     def _get_waf_status(self) -> WAFStatus:
@@ -267,7 +265,7 @@ class SessionHealthChecker:
         try:
             return self._waf_provider()
         except Exception as e:
-            logger.error("WAF 状态获取异常: %s", e)
+            logger.error(f"WAF 状态获取异常: {e}")
             return WAFStatus.WARNING
 
     # ============== 状态查询 ==============

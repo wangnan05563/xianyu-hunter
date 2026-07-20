@@ -127,6 +127,6 @@ def submit_eval_feedback(
     if not updated:
         raise HTTPException(status_code=404, detail=f"未找到商品 {item_id} 的评估记录")
 
-    logger.info("评估反馈: item=%s feedback=%s note=%s", item_id, feedback, note or "")
+    logger.info(f"评估反馈: item={item_id} feedback={feedback} note={note or ''}")
 
     return {"ok": True, "item_id": item_id, "feedback": feedback}

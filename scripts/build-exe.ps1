@@ -35,6 +35,18 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
 Set-Location $repoRoot
 
+# 清除可能干扰 pip/npm 的代理环境变量
+# 为什么：用户系统可能配置了 HTTP_PROXY/HTTPS_PROXY 指向本地代理（如 VPN 客户端未启动），
+# 会导致 pip 在 PEP 517 构建隔离环境中下载 setuptools/wheel 时 SSL 握手超时
+# 仅影响当前脚本进程，不修改用户系统环境变量
+foreach ($p in @("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy")) {
+    Remove-Item Env:\$p -ErrorAction SilentlyContinue
+}
+# 配置 pip 使用阿里云镜像（国内访问最快，避免 PyPI 偶发超时）
+# 构建隔离环境会继承此变量，确保 setuptools/wheel 也能从镜像下载
+$env:PIP_INDEX_URL = "https://mirrors.aliyun.com/pypi/simple/"
+$env:PIP_TRUSTED_HOST = "mirrors.aliyun.com"
+
 # 缓存目录（独立于 dist，dist 每次删除不影响缓存）
 $cacheDir = "$repoRoot\.cache"
 $pwCacheDir = "$cacheDir\playwright_browsers"
@@ -186,7 +198,32 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
 } else {
     # Node 版本检测：vite 5 + ??= 运算符需要 Node 18+
     # 为什么检测：用户机器可能装了多个 Node 版本，PATH 指向旧版会导致构建静默失败
-    $nodeVersion = (node --version 2>$null) -replace '[v\n\r]', ''
+    # 优先用 scripts/node-config.json 中配置的 node 路径，避免 PATH 中旧版优先（陷阱 5）
+    $nodeConfigPath = Join-Path $PSScriptRoot "node-config.json"
+    $configuredNodeExe = $null
+    if (Test-Path $nodeConfigPath) {
+        $nodeConfig = Get-Content $nodeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        # 遍历 search_paths 找到第一个存在的 node.exe
+        foreach ($p in $nodeConfig.node.search_paths) {
+            $expanded = [System.Environment]::ExpandEnvironmentVariables($p)
+            if (Test-Path $expanded) {
+                $configuredNodeExe = $expanded
+                break
+            }
+        }
+    }
+
+    if ($configuredNodeExe) {
+        # 把配置的 node 目录前置到 PATH，确保后续 npm/node 调用都走指定版本
+        $nodeDir = Split-Path $configuredNodeExe -Parent
+        $env:Path = "$nodeDir;$env:Path"
+        Write-Host "  使用配置的 Node: $configuredNodeExe" -ForegroundColor DarkGray
+        $nodeVersion = (& $configuredNodeExe --version 2>$null) -replace '[v\n\r]', ''
+    } else {
+        # 回退到 PATH 中的 node（无配置时的兜底方案）
+        $nodeVersion = (node --version 2>$null) -replace '[v\n\r]', ''
+    }
+
     if ($nodeVersion) {
         $nodeMajor = [int]($nodeVersion.Split('.')[0])
         if ($nodeMajor -lt 18) {
@@ -196,7 +233,7 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
         }
         Write-Host "  Node 版本：$nodeVersion" -ForegroundColor DarkGray
     } else {
-        throw "未检测到 Node.js，请安装 Node 18+ 后重试"
+        throw "未检测到 Node.js，请安装 Node 18+ 后重试（或配置 scripts\node-config.json）"
     }
 
     Push-Location frontend

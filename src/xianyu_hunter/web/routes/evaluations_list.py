@@ -163,10 +163,22 @@ def _apply_positive_fields(payload: dict, candidates: dict) -> None:
     拆分自 _apply_enrich_fields：将 price/want_cnt/view_cnt 等
     "需 >0 才覆盖"的字段用查表法统一处理，替代多个平铺 if（S3776）。
 
-    为什么 0 不覆盖：选择器未命中时采集器可能返回 0，不应覆盖历史有效数据。"""
+    为什么 0 不覆盖：选择器未命中时采集器可能返回 0，不应覆盖历史有效数据。
+
+    item_price 快照：覆盖前把评估时的原始价格保存到 _eval_snapshot_price，
+    供 _filter_price_range 使用。为什么需要快照：官方采集会更新 items 表价格，
+    enrich 用最新价格覆盖 payload.item_price 后，按任务价格范围的过滤会误判
+    旧 eval 事件超范围而隐藏（用户报告"官方采集后商品消失"的根因）。
+    过滤应基于评估时的价格（评估通过即说明当时价格在范围内），展示用最新价格。
+    """
     for src_key, dst_key in _POSITIVE_FIELD_MAP.items():
         value = candidates.get(src_key)
         if value is not None and value > 0:
+            if src_key == "price" and "_eval_snapshot_price" not in payload:
+                # 首次覆盖前保存评估时价格快照（仅一次，后续 enrich 不刷新），
+                # 保留评估入库时的价格供 _filter_price_range 使用，避免官方采集
+                # 更新 items 表价格后旧 eval 事件被按最新价格误过滤
+                payload["_eval_snapshot_price"] = payload.get(dst_key)
             payload[dst_key] = value
 
 
@@ -422,12 +434,20 @@ def _filter_price_range(
 ) -> bool:
     """价格范围过滤：返回 True 表示应跳过
 
-    为什么放在 enrich 之后：item_price 已由 _enrich_eval_with_item 用 items 表最新值覆盖
+    为什么用 _eval_snapshot_price 优先：评估时价格是评估入库时的快照，
+    评估通过即说明当时价格在任务范围内。enrich 后的 item_price 是 items 表
+    最新值（可能被官方采集更新），用它过滤会误判旧 eval 事件超范围而隐藏。
+    展示仍用 item_price（最新值），过滤用评估时价格，二者职责分离。
     为什么 include_out_of_range 跳过：用户审计历史超范围商品时需要能查看
     为什么 price=None 时不过滤：评估时可能未采集到价格，保留避免误删"""
     if include_out_of_range or (min_price is None and max_price is None):
         return False
-    price_val = payload.get("item_price")
+    # 评估时价格快照优先：_eval_snapshot_price 存在（含 None）说明已 enrich，
+    # 用评估时价格过滤；不存在则回退到 item_price（兼容未 enrich 的旧事件）
+    if "_eval_snapshot_price" in payload:
+        price_val = payload.get("_eval_snapshot_price")
+    else:
+        price_val = payload.get("item_price")
     if price_val is None:
         return False
     try:

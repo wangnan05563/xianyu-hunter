@@ -511,7 +511,7 @@ class DetailMixin:
                     m = re.search(r"/user/(\d+)", href)
                 if m:
                     seller_id = m.group(1)
-                    logger.debug("通过选择器 %s 提取卖家ID: %s", sel, seller_id)
+                    logger.debug(f"通过选择器 {sel} 提取卖家ID: {seller_id}")
                     break
 
         # P2 调试：详情页 seller_id 提取失败时 dump 页面诊断信息
@@ -1197,7 +1197,7 @@ class DetailMixin:
 
         # 检查缓存（同一卖家不重复计算）
         if cache_key and cache_key in self._seller_profile_cache:
-            logger.debug("[SellerProfile降级] 命中缓存: seller_id=%s", cache_key)
+            logger.debug(f"[SellerProfile降级] 命中缓存: seller_id={cache_key}")
             return self._seller_profile_cache[cache_key]
 
         # 合并 summary + detail 中的卖家信息（detail 优先级高于 summary）

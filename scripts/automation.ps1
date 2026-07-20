@@ -44,7 +44,27 @@ $Script:StartBat  = Join-Path $ProjectRoot 'scripts\启动服务.bat'
 $Script:StopBat   = Join-Path $ProjectRoot 'scripts\停止服务.bat'
 $Script:RebuildBat = Join-Path $ProjectRoot 'scripts\重新构建.bat'
 $Script:VenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
-$Script:NodeExe    = 'D:\code\nodejs24\node.exe'
+# Node.exe 路径从 scripts/node-config.json 读取，避免硬编码（便于跨环境迁移）
+# 为什么不直接写死路径：不同机器 Node 安装位置不同，配置化便于切换版本
+$Script:NodeExe    = $null
+$nodeConfigPath = Join-Path $ScriptRoot 'node-config.json'
+if (Test-Path $nodeConfigPath) {
+    try {
+        $nodeConfig = Get-Content $nodeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        # 按 search_paths 顺序查找第一个存在的 node.exe
+        foreach ($p in $nodeConfig.node.search_paths) {
+            $expanded = [System.Environment]::ExpandEnvironmentVariables($p)
+            if (Test-Path $expanded) { $Script:NodeExe = $expanded; break }
+        }
+    } catch {
+        Write-Host "[WARN] node-config.json 解析失败，将回退到 PATH 中的 node" -ForegroundColor Yellow
+    }
+}
+# 兜底：配置文件缺失时用 PATH 中的 node
+if (-not $Script:NodeExe) {
+    $cmd = Get-Command node -ErrorAction SilentlyContinue
+    if ($cmd) { $Script:NodeExe = $cmd.Source }
+}
 $Script:ViteJs     = Join-Path $ProjectRoot 'frontend\node_modules\vite\bin\vite.js'
 $Script:ConfigYaml = Join-Path $ProjectRoot 'config\config.yaml'
 $Script:EnvFile    = Join-Path $ProjectRoot '.env'

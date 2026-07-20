@@ -484,12 +484,16 @@ class TaskWorker:
         """
         try:
             from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_browser
+            from xianyu_hunter.web.services.user_manager import get_user_manager
 
+            # 多用户场景下必须传当前活跃 user_id，否则默认 "default" 找不到 cookies_default.json
+            # 导致 CookieStore 为空 → 浏览器无 Cookie → 反爬拦截 → 卖家信息提取失败
             await inject_cookie_store_to_browser(
                 getattr(self.collector, "browser", None),
                 "后台任务搜索前 Cookie 同步",
                 collector=self.collector,
                 force_refresh_m5tk=False,
+                user_id=get_user_manager().get_active_user_id(),
             )
         except Exception as e:
             logger.debug(f"[Task {self.task.id}] 搜索前 Cookie 同步失败: {e}")
@@ -593,6 +597,19 @@ class TaskWorker:
                 logger.info("[Task {}] 卖家主页获取失败，使用降级策略评估 {}", self.task.id, summary.id)
                 # 降级策略：合并搜索结果+详情页的卖家信息构建基本画像
                 seller = await self._seller_profile_fallback(summary=summary, detail=detail)
+            # 合并详情页卖家字段：seller_profile 可能因页面变更/反爬返回部分字段为空的 SellerProfile，
+            # 用 detail 页的 detail_credit_score/detail_register_days/detail_sold_count/detail_seller_nick
+            # 补充缺失字段，避免 evaluator 因维度数据不足触发 _evaluate_insufficient 模式（cap 65 分）。
+            # 与 collection_service._collect_official_full line 720 的 _merge_detail_seller_fields 对齐。
+            if seller and detail:
+                if not getattr(seller, 'nick', None) and getattr(detail, 'detail_seller_nick', None):
+                    seller.nick = detail.detail_seller_nick
+                if getattr(seller, 'credit_score', None) is None and getattr(detail, 'detail_credit_score', None) is not None:
+                    seller.credit_score = detail.detail_credit_score
+                if not getattr(seller, 'sold_count', None) and getattr(detail, 'detail_sold_count', None):
+                    seller.sold_count = detail.detail_sold_count
+                if not getattr(seller, 'register_days', None) and getattr(detail, 'detail_register_days', None):
+                    seller.register_days = detail.detail_register_days
         except Exception as e:
             logger.warning("[Task {}] 采集异常 {}: {}", self.task.id, summary.id, e)
             detail = None

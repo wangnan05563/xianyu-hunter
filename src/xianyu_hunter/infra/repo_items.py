@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -13,10 +14,27 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from xianyu_hunter.infra.db_models import ItemRow
 
 
+def _normalize_item_row(item: dict) -> dict:
+    """规范化 item dict，确保 JSON 字段类型正确
+
+    为什么需要这层转换：_row_to_dict 为了方便前端/API 使用，
+    自动把 image_urls 等 JSON 字段解析为 Python list/dict。
+    当 merge_item_row 在 incoming 值为空时回退用 existing 的值，
+    会把 list 形式的 image_urls 传回 upsert_item，sqlite3 会报
+    "type 'list' is not supported"。数据访问层必须保证写入类型正确。
+    """
+    raw = item.get("image_urls")
+    if isinstance(raw, (list, dict)):
+        # 复制 dict 避免修改调用方传入的对象（防止副作用）
+        item = {**item, "image_urls": json.dumps(raw, ensure_ascii=False) if raw else None}
+    return item
+
+
 class ItemsMixin:
     """Items 领域的 Repository 方法"""
 
     def upsert_item(self, item: dict) -> None:
+        item = _normalize_item_row(item)
         with self.engine.begin() as conn:
             stmt = sqlite_insert(ItemRow).values(**item)
             update_cols = {
@@ -33,6 +51,7 @@ class ItemsMixin:
         """
         if not items:
             return 0
+        items = [_normalize_item_row(it) for it in items]
         # 取第一条的 key 集合作为模板（假设所有 item 结构相同）
         sample = items[0]
         update_cols = {

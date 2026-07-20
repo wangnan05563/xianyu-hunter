@@ -156,7 +156,7 @@ class MtopSigner:
         """
         local_ms = int(time.time() * 1000)
         self._timestamp_offset_ms = server_timestamp_ms - local_ms
-        logger.info("MTOP 时间戳偏移校准: %dms", self._timestamp_offset_ms)
+        logger.info(f"MTOP 时间戳偏移校准: {self._timestamp_offset_ms}ms")
 
     # ============== 签名 ==============
 
@@ -216,7 +216,7 @@ class MtopSigner:
                 return value.split("_", 1)[0]
             return value
         except Exception as e:
-            logger.error("获取 token 失败: %s", e)
+            logger.error(f"获取 token 失败: {e}")
             return None
 
     def _get_timestamp(self) -> str:

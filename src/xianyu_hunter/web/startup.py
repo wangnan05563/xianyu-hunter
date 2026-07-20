@@ -228,7 +228,7 @@ async def start_scheduler_in_background(container: Any) -> None:
             await container.browser.start()
             logger.info("浏览器实例已就绪")
         except Exception as e:
-            logger.error("浏览器启动失败: %s（实时搜索功能将不可用）", e)
+            logger.error(f"浏览器启动失败: {e}（实时搜索功能将不可用）")
             # 不 return——允许其他功能继续工作，只是实时搜索不可用
 
     # 读取全局配置作为基线（任务级覆盖会合并到此之上）

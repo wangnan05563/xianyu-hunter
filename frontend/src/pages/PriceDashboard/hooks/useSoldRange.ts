@@ -28,6 +28,10 @@ export function useSoldRange() {
   const [soldTaskId, setSoldTaskId] = useState<string | undefined>(undefined)
   const [soldRangeDays, setSoldRangeDays] = useState(30)
   const [tasks, setTasks] = useState<Task[]>([])
+  // 为什么用 tasksLoaded：默认 soldTaskId 为 undefined 会触发"全部任务聚合视图"请求，
+  // 该聚合值与 worker 实际过滤口径不一致，对用户无意义；用此标记延迟首次请求，
+  // 等任务列表加载后自动选中首个任务再发起查询，避免浪费一次聚合请求
+  const [tasksLoaded, setTasksLoaded] = useState(false)
 
   const fetchSoldRange = useCallback(async () => {
     setSoldLoading(true)
@@ -45,13 +49,26 @@ export function useSoldRange() {
   }, [soldTaskId, soldRangeDays])
 
   // 拉取任务列表，用于捡漏价格参考的品类下拉
+  // 为什么自动选中首个任务：聚合视图的捡漏价是跨任务 P10，与 worker 通知/抢单过滤
+  // 使用的"任务级 P10"口径不一致，默认显示首个任务更贴合用户预期
   useEffect(() => {
-    taskApi.list({ limit: 200 }).then((r) => setTasks(r.items || [])).catch(() => setTasks([]))
+    taskApi.list({ limit: 200 })
+      .then((r) => {
+        const items = r.items || []
+        setTasks(items)
+        if (items.length > 0) {
+          setSoldTaskId(items[0].id)
+        }
+      })
+      .catch(() => setTasks([]))
+      .finally(() => setTasksLoaded(true))
   }, [])
 
+  // 在任务列表加载完成前不发起请求，避免默认进入"全部任务聚合视图"
   useEffect(() => {
+    if (!tasksLoaded) return
     void fetchSoldRange()
-  }, [fetchSoldRange])
+  }, [fetchSoldRange, tasksLoaded])
 
   return {
     soldRange,

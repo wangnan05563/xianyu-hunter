@@ -69,7 +69,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
             try:
                 user_id = get_user_manager().verify_session(req_token)
             except Exception as e:
-                logger.warning("[Auth] session 校验异常，降级尝试下一个 token: %s", e)
+                logger.warning(f"[Auth] session 校验异常，降级尝试下一个 token: {e}")
                 user_id = None
             if user_id:
                 return user_id
@@ -112,8 +112,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         # 路径 3：校验失败
         logger.debug(
-            "[Auth] path=%s has_cookie=%s web_token_match=False session_invalid=True",
-            request.url.path, 'xh_token' in request.cookies,
+            f"[Auth] path={request.url.path} has_cookie={'xh_token' in request.cookies} web_token_match=False session_invalid=True",
         )
         if request.url.path.startswith("/api/"):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})

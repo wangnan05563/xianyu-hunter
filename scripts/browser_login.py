@@ -19,6 +19,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -320,8 +321,14 @@ async def _collect_settled_cookies(
     interval: float = 1.0,
     stable_rounds: int = 2,
     min_full_count: int = 60,
+    best_holder: list | None = None,
 ) -> list[dict]:
-    """Read cookies until post-login async writes have had time to settle."""
+    """Read cookies until post-login async writes have had time to settle.
+
+    best_holder：调用方传入的可变 list 容器，每轮 best 更新时同步写入。
+    为什么需要：外层 asyncio.wait_for 超时取消本协程时，返回值会丢失，
+    调用方通过 best_holder 仍能拿到最后一次成功读取的 cookies 作为兜底。
+    """
     start = time.monotonic()
     deadline = start + max_wait
     best: list[dict] = []
@@ -339,6 +346,10 @@ async def _collect_settled_cookies(
             cookies = best
         if len(cookies) >= len(best):
             best = cookies
+            # 同步到外部 holder，供外层 wait_for 超时后兜底读取
+            if best_holder is not None:
+                best_holder.clear()
+                best_holder.extend(best)
 
         signature = _cookie_signature(cookies)
         if signature == last_signature:
@@ -368,8 +379,11 @@ async def _prepare_login_cookie_export(
 ) -> list[dict]:
     """Switch from fast login loading to complete post-login cookie collection."""
     _emit_login_export_status(set_status, "登录成功，正在保存 Cookie...")
+    # bc.unroute 加超时：unroute 会等待正在执行的 route_handler 完成，
+    # 若 route_handler 卡在 route.abort()/continue_() 上 IPC 阻塞，
+    # unroute 可能永久挂起。超时后跳过，由 bc.close() 统一清理
     try:
-        await bc.unroute("**/*", route_handler)
+        await asyncio.wait_for(bc.unroute("**/*", route_handler), timeout=5.0)
     except Exception:
         pass
 
@@ -402,7 +416,50 @@ async def _prepare_login_cookie_export(
 
     _emit_login_export_status(set_status, "登录成功，正在等待 Cookie 稳定...")
     settle_start = time.monotonic()
-    final_cookies = await _collect_settled_cookies(bc)
+
+    # 独立心跳线程：与 _collect_settled_cookies 并行运行，每 3s 更新 status file
+    # 为什么用线程而非 asyncio.Task：_collect_settled_cookies 内部
+    # await asyncio.wait_for(context.cookies(), timeout=5.0) 在 Edge 进程卡死时
+    # 可能无法可靠取消 Playwright IPC future（Playwright 1.60.0 的 _channel.send
+    # 在浏览器进程无响应时 cancel 信号传播不完整），甚至可能阻塞整个事件循环
+    # （Playwright async 版本的 transport 在 IPC 通道异常时可能阻塞事件循环线程）。
+    # 线程是独立的操作系统调度单元，即使事件循环被阻塞，线程仍能继续运行，
+    # 持续更新 status file 的 ts 字段，避免后端 _handle_heartbeat_timeout
+    # 误判为"登录进程无响应"。
+    #
+    # set_status 是写文件操作，是线程安全的（原子写：先更新 dict 再 write_text），
+    # 虽然写文件时可能与主事件循环线程存在竞争，但最坏情况是一次写入内容不完整，
+    # 下一次心跳会覆盖修复，不影响存活检测（只需要 ts 字段更新）。
+    _heartbeat_stop = threading.Event()
+
+    def _heartbeat_thread() -> None:
+        while not _heartbeat_stop.is_set():
+            time.sleep(3)
+            if _heartbeat_stop.is_set():
+                return
+            _emit_login_export_status(set_status, "登录成功，正在等待 Cookie 稳定...")
+
+    heartbeat_thread = threading.Thread(target=_heartbeat_thread, daemon=True)
+    heartbeat_thread.start()
+    # best_holder 用于外层 wait_for 超时取消后兜底读取最后已知 cookies
+    best_holder: list[dict] = []
+    try:
+        # 整体硬超时：即使内层 asyncio.wait_for(context.cookies()) 取消信号
+        # 传播不完整导致 _collect_settled_cookies 卡住，30s 后强制结束。
+        # 超时后用 best_holder 兜底（可能为空列表，调用方需处理）
+        final_cookies = await asyncio.wait_for(
+            _collect_settled_cookies(bc, best_holder=best_holder),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        print(
+            "[browser_login] _collect_settled_cookies 整体超时(30s)，使用最后已知 cookie",
+            file=sys.stderr,
+        )
+        final_cookies = best_holder
+    finally:
+        _heartbeat_stop.set()
+        heartbeat_thread.join(timeout=5)
     timings["settle_cookies_sec"] = _elapsed_sec(settle_start)
     return final_cookies
 
@@ -519,7 +576,14 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                 # 验证通过即视为已登录，无需再访问 personal 页做服务端二次验证
                 # （避免开第 2 个标签导致窗口出现 3 个标签）
                 cookie_start = time.monotonic()
-                cookies = await bc.cookies()
+                # bc.cookies() 加超时：与主循环一致，防止 IPC 阻塞导致首次读取卡死
+                # 历史状态文件显示 initial_cookie_read_sec 曾达 6.38s，
+                # 若 Edge 进程启动初期 IPC 通道未稳定，可能永久挂起
+                try:
+                    cookies = await asyncio.wait_for(bc.cookies(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    print("[browser_login] initial bc.cookies() 超时(5s)，跳过已登录检测", file=sys.stderr)
+                    cookies = []
                 timings["initial_cookie_read_sec"] = _elapsed_sec(cookie_start)
 
                 if _validate_login_cookies(cookies):

@@ -1,4 +1,4 @@
-﻿﻿<#
+﻿<#
 .SYNOPSIS
     XianyuHunter 一键环境配置脚本
 .DESCRIPTION
@@ -283,20 +283,34 @@ if ($SkipSystem) {
     }
 
     # --- Node.js ---
+    # 优先从 scripts/node-config.json 读取配置的 search_paths（配置化，便于跨环境迁移）
     $nodeExe = $null
-    if (Test-CommandAvailable 'node') {
+    $nodeConfigPath = Join-Path $PSScriptRoot 'node-config.json'
+    if (Test-Path $nodeConfigPath) {
+        try {
+            $nodeConfig = Get-Content $nodeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($p in $nodeConfig.node.search_paths) {
+                $expanded = [System.Environment]::ExpandEnvironmentVariables($p)
+                if (Test-Path $expanded) {
+                    $ver = Get-NodeVersion $expanded
+                    if ($ver -and (Test-VersionSatisfy $ver $NodeMinMajor $NodeMinMinor)) {
+                        $nodeExe = $expanded
+                        break
+                    }
+                }
+            }
+        } catch {
+            Write-Warn "node-config.json 解析失败: $($_.Exception.Message)"
+        }
+    }
+
+    # 回退 1：PATH 中的 node
+    if (-not $nodeExe -and (Test-CommandAvailable 'node')) {
         $ver = Get-NodeVersion 'node'
         if ($ver -and (Test-VersionSatisfy $ver $NodeMinMajor $NodeMinMinor)) {
             $nodeExe = 'node'
         } else {
             Write-Warn "检测到 Node.js $($ver.Major).$($ver.Minor)，但需要 >= $NodeMinMajor.$NodeMinMinor"
-        }
-    }
-    # 兼容 `重新构建.bat` 中硬编码的 D:\code\nodejs24 路径
-    if (-not $nodeExe -and (Test-Path 'D:\code\nodejs24\node.exe')) {
-        $ver = Get-NodeVersion 'D:\code\nodejs24\node.exe'
-        if ($ver -and (Test-VersionSatisfy $ver $NodeMinMajor $NodeMinMinor)) {
-            $nodeExe = 'D:\code\nodejs24\node.exe'
         }
     }
 

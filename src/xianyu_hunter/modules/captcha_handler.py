@@ -152,12 +152,11 @@ class CaptchaHandler:
             if detection.detected:
                 self._stats["total_detected"] += 1
                 logger.warning(
-                    "检测到验证码: type=%s, url=%s",
-                    detection.captcha_type.value, detection.page_url,
+                    f"检测到验证码: type={detection.captcha_type.value}, url={detection.page_url}",
                 )
             return detection
         except Exception as e:
-            logger.error("验证码检测异常: %s", e)
+            logger.error(f"验证码检测异常: {e}")
             return CaptchaDetection(detected=False)
 
     async def solve(self, detection: CaptchaDetection) -> SolveResult:
@@ -208,7 +207,7 @@ class CaptchaHandler:
 
         for attempt in range(1, self._max_attempts + 1):
             attempts = attempt
-            logger.info("自动处理验证码 (尝试 %d/%d)", attempt, self._max_attempts)
+            logger.info(f"自动处理验证码 (尝试 {attempt}/{self._max_attempts})")
             try:
                 success = await self._auto_solver(detection)  # type: ignore
                 if success:
@@ -220,7 +219,7 @@ class CaptchaHandler:
                 last_error = "自动解决器返回 False"
             except Exception as e:
                 last_error = str(e)
-                logger.warning("自动处理验证码失败 (尝试 %d): %s", attempt, e)
+                logger.warning(f"自动处理验证码失败 (尝试 {attempt}): {e}")
 
         return SolveResult(
             success=False,

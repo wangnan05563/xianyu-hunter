@@ -1,0 +1,8 @@
+2026/07/18-15:03:30.375 82b4 Creating DB D:\code\otherProjects\17_xianyu\browser-data.recovery-20260718-150258\Default\Local Storage\leveldb since it was missing.
+2026/07/18-15:03:30.502 82b4 Reusing MANIFEST D:\code\otherProjects\17_xianyu\browser-data.recovery-20260718-150258\Default\Local Storage\leveldb/MANIFEST-000001
+2026/07/18-15:03:50.472 82b4 Level-0 table #5: started
+2026/07/18-15:03:50.502 82b4 Level-0 table #5: 86022 bytes OK
+2026/07/18-15:03:50.505 82b4 Delete type=0 #3
+2026/07/18-15:04:30.708 82b4 Level-0 table #7: started
+2026/07/18-15:04:30.809 82b4 Level-0 table #7: 85135 bytes OK
+2026/07/18-15:04:30.816 82b4 Delete type=0 #4

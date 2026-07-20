@@ -357,4 +357,4 @@ def _persist_record(record: UsageRecord) -> None:
 
         USAGE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as e:
-        logger.warning("AI 用量记录持久化失败: %s", e)
+        logger.warning(f"AI 用量记录持久化失败: {e}")

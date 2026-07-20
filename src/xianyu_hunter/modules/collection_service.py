@@ -724,7 +724,7 @@ class ItemCollectionService:
         )
 
         eval_result = self._evaluate_and_notify(
-            item_id, detail, seller, reviews, effective_task_id
+            item_id, detail, seller, reviews, effective_task_id, user_id=user_id
         )
 
         return CollectionResult(
@@ -841,12 +841,17 @@ class ItemCollectionService:
         seller: SellerProfile | None,
         reviews: list[str],
         effective_task_id: str,
+        *,
+        user_id: str | None = None,
     ) -> EvalResult:
         """评估 + 通知：价格门禁通过时写入 eval 事件并发布 EVAL_PASSED
 
         价格门禁：与 worker.py 搜索流水线一致，超范围商品不写入 eval.scored 事件。
         为什么仍调用 evaluator.evaluate：官方采集弹窗需展示评估分给用户，
         但超范围商品不应进入评估明细菜单（list_evaluations 的价格过滤会二次兜底）。
+
+        user_id 透传到 _save_eval_event → upsert_eval_event，确保写入的评估事件
+        归属当前用户，避免 list_evaluations 的多用户隔离过滤把官方采集的评估记录隐藏。
         """
         price_range = self._price_range_for_task(item_id, effective_task_id)
         if price_range is None:
@@ -858,7 +863,10 @@ class ItemCollectionService:
         price_filtered = self._check_price_filter(item_id, detail, effective_task_id)
         if not effective_task_id or price_filtered:
             return eval_result
-        self._save_eval_event(effective_task_id, item_id, detail, seller, reviews, eval_result)
+        self._save_eval_event(
+            effective_task_id, item_id, detail, seller, reviews, eval_result,
+            user_id=user_id,
+        )
         # 评估通过才发 EVAL_PASSED，与 worker.py 第 320 行 should_pass 判定语义一致
         # 为什么放在 _save_eval_event 之后：事件落库用于时间线/审计，通知是独立通道，
         # 二者解耦避免通知失败阻塞事件写入；通知失败仅 warning 不影响主流程
@@ -973,6 +981,8 @@ class ItemCollectionService:
         seller: SellerProfile | None,
         reviews: list[str],
         eval_result: EvalResult,
+        *,
+        user_id: str | None = None,
     ) -> None:
         score_display = eval_result.score if eval_result.score is not None else "N/A"
         if eval_result.is_passed:
@@ -1019,7 +1029,7 @@ class ItemCollectionService:
                     f"({eval_result.risk_level.value}) [data_quality: {eval_result.data_quality}]"
                 ),
                 "payload": json.dumps(payload, ensure_ascii=False, default=str),
-            })
+            }, user_id=user_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to upsert evaluation event item={}: {}", item_id, exc)
 
