@@ -45,11 +45,16 @@ def reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     orig_records = ai_usage._today_records[:]
     orig_timestamps = ai_usage._minute_timestamps[:]
     orig_budget = ai_usage._budget
+    orig_budget_loaded = ai_usage._budget_loaded
 
     # 重置为初始状态
     ai_usage._today_records.clear()
     ai_usage._minute_timestamps.clear()
     ai_usage._budget = BudgetConfig()
+    # 标记已加载，跳过 _ensure_budget_loaded() 从真实 YAML 读取，保证测试隔离
+    ai_usage._budget_loaded = True
+    # mock 写盘函数，避免 update_budget 测试污染真实 config/config.yaml
+    monkeypatch.setattr(ai_usage, "_persist_budget_to_yaml", lambda patch: None)
 
     yield ai_usage
 
@@ -57,6 +62,7 @@ def reset_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     ai_usage._today_records[:] = orig_records
     ai_usage._minute_timestamps[:] = orig_timestamps
     ai_usage._budget = orig_budget
+    ai_usage._budget_loaded = orig_budget_loaded
 
 
 def _make_response(input_tokens: int, output_tokens: int) -> dict:
@@ -420,6 +426,30 @@ def test_update_budget_affects_check_budget(reset_state) -> None:
     allowed, reason = check_budget()
     assert allowed is False
     assert "Token 超限" in reason
+
+
+def test_update_budget_triggers_yaml_persist(reset_state, monkeypatch: pytest.MonkeyPatch) -> None:
+    """update_budget 应调用 _persist_budget_to_yaml 持久化字段变更"""
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        ai_usage, "_persist_budget_to_yaml",
+        lambda patch: calls.append(patch),
+    )
+    update_budget(daily_token_limit=200_000, rate_limit_per_min=30)
+    # 应只调用一次，且包含两个字段
+    assert len(calls) == 1
+    assert calls[0] == {"daily_token_limit": 200_000, "rate_limit_per_min": 30}
+
+
+def test_update_budget_skips_persist_when_no_change(reset_state, monkeypatch: pytest.MonkeyPatch) -> None:
+    """所有参数为 None 时不应触发写盘"""
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        ai_usage, "_persist_budget_to_yaml",
+        lambda patch: calls.append(patch),
+    )
+    update_budget()
+    assert calls == []
 
 
 # ============== 持久化清理 ==============

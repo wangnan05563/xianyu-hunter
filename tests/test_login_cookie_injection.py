@@ -128,6 +128,9 @@ def test_official_collect_replaces_stale_worker_identity_cookies() -> None:
     _write_cookie_json(fresh)
 
     browser = MagicMock()
+    # ensure_alive 是 BrowserManager 自愈接口（async），返回 True 表示浏览器可用
+    # 缺失会导致 `await MagicMock()` 抛 TypeError，让 add_cookies 永远不被调用
+    browser.ensure_alive = AsyncMock(return_value=True)
     browser.get_cookies = AsyncMock(side_effect=[_old_identity_cookies(), fresh])
     browser.add_cookies = AsyncMock(return_value=True)
     container = MagicMock()
@@ -161,6 +164,8 @@ def test_live_search_replaces_stale_worker_identity_cookies() -> None:
     _write_cookie_json(fresh)
 
     browser = MagicMock()
+    # ensure_alive 是 BrowserManager 自愈接口（async），返回 True 表示浏览器可用
+    browser.ensure_alive = AsyncMock(return_value=True)
     browser.get_cookies = AsyncMock(side_effect=[_old_identity_cookies(), fresh])
     browser.add_cookies = AsyncMock(return_value=True)
     collector = MagicMock()
@@ -199,6 +204,8 @@ def test_live_search_uses_current_user_cookie_store() -> None:
     _write_cookie_json(fresh, user_id=user_id)
 
     browser = MagicMock()
+    # ensure_alive 是 BrowserManager 自愈接口（async），返回 True 表示浏览器可用
+    browser.ensure_alive = AsyncMock(return_value=True)
     browser.get_cookies = AsyncMock(side_effect=[_old_identity_cookies(), fresh])
     browser.add_cookies = AsyncMock(return_value=True)
     collector = MagicMock()
@@ -259,6 +266,8 @@ def test_runtime_cookie_sync_invalidates_cache_and_injects_worker() -> None:
     _write_cookie_json_without_cache_invalidation(_cookie_sample())
 
     browser = MagicMock()
+    # ensure_alive 是 BrowserManager 自愈接口（async），返回 True 表示浏览器可用
+    browser.ensure_alive = AsyncMock(return_value=True)
     browser.add_cookies = AsyncMock(return_value=True)
     collector = MagicMock()
     container = MagicMock()

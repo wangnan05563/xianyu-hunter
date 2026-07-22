@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Card, Tag, Spin, App, Button, Space, Empty, theme, Popconfirm, Alert,
 } from 'antd'
-import { ReloadOutlined, RollbackOutlined, DownloadOutlined, UploadOutlined } from '@ant-design/icons'
+import { ReloadOutlined, RollbackOutlined, DownloadOutlined } from '@ant-design/icons'
 import { configApi } from '../../../api/config'
 import type { BackupItem } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
@@ -76,7 +76,7 @@ export default function MobileVersionManager() {
       document.body.appendChild(a)
       a.click()
       requestAnimationFrame(() => {
-        document.body.removeChild(a)
+        a.remove()
         URL.revokeObjectURL(url)
       })
       message.success('已导出')
@@ -137,7 +137,7 @@ export default function MobileVersionManager() {
         }
       >
         {backups.length === 0 ? (
-          <Empty description="暂无备份" imageStyle={{ height: 60 }} />
+          <Empty description="暂无备份" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变 Empty 自带图标的布局语义，暂不迁移 */ />
         ) : (
           <Space direction="vertical" size={6} style={{ width: '100%' }}>
             {backups.map((bk) => (

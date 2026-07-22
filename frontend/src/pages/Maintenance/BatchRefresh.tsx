@@ -173,7 +173,13 @@ function CurrentBatchPanel() {
   // 为什么需要：trigger 后端是异步启动批次，status 不会立即变为 running，
   // 默认 10s 间隔会让用户感觉"页面未更新"
   const [forceFastPoll, setForceFastPoll] = useState(false)
-  const [form] = Form.useForm<{ enabled: boolean; interval_minutes: number }>()
+  const [form] = Form.useForm<{
+    enabled: boolean
+    interval_minutes: number
+    batch_size: number
+    max_items_per_run: number
+    history_retention_days: number
+  }>()
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // 标记表单是否已被用户修改，避免轮询拉取的状态覆盖用户正在编辑的未保存值
   const formDirtyRef = useRef(false)
@@ -190,6 +196,9 @@ function CurrentBatchPanel() {
         form.setFieldsValue({
           enabled: data.enabled,
           interval_minutes: data.interval_minutes,
+          batch_size: data.batch_size,
+          max_items_per_run: data.max_items_per_run,
+          history_retention_days: data.history_retention_days,
         })
       }
     } catch (e) {
@@ -329,6 +338,9 @@ function CurrentBatchPanel() {
       await batchRefreshApi.patchConfig({
         enabled: values.enabled,
         interval_minutes: values.interval_minutes,
+        batch_size: values.batch_size,
+        max_items_per_run: values.max_items_per_run,
+        history_retention_days: values.history_retention_days,
       })
       message.success('配置已热更新')
       // 保存成功后清除 dirty 标记，让后续轮询可以同步后端值
@@ -510,7 +522,7 @@ function CurrentBatchPanel() {
             }
           >
             <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 16 }}>
-              仅支持运行时热更新启用状态与触发间隔。如需修改 batch_size / max_items_per_run，请前往任务编辑器 Step 6 的「批量采集配置」弹窗。
+              启用状态与触发间隔修改后立即生效；批次大小、单次上限与历史保留天数保存后写入配置文件，下次批次运行时生效。
             </Paragraph>
             <Form
               form={form}
@@ -548,6 +560,27 @@ function CurrentBatchPanel() {
                     分钟
                   </div>
                 </Space.Compact>
+              </Form.Item>
+              <Form.Item
+                label="批次大小"
+                name="batch_size"
+                tooltip="每批从数据库拉取的最大商品数（分页控制），范围 1-500"
+              >
+                <InputNumber min={1} max={500} style={{ width: 200 }} />
+              </Form.Item>
+              <Form.Item
+                label="单次运行上限"
+                name="max_items_per_run"
+                tooltip="单次批量采集最多处理的商品数，防止长时间占用浏览器，范围 1-10000"
+              >
+                <InputNumber min={1} max={10000} style={{ width: 200 }} />
+              </Form.Item>
+              <Form.Item
+                label="历史保留天数"
+                name="history_retention_days"
+                tooltip="执行历史保留天数，超过此天数启动时自动清理；0=永不清理，范围 0-3650"
+              >
+                <InputNumber min={0} max={3650} style={{ width: 200 }} />
               </Form.Item>
             </Form>
           </Card>

@@ -203,18 +203,21 @@ class BrowserManager:
         - 若 orchestrator 未初始化，回退到原有 STEALTH_SCRIPT_V2，保持向后兼容
         """
         # 反爬启动参数：--headless=new（Chromium ≥128）比旧 headless 更难检测
+        # 注意：--disable-features 只能出现一次，多个 feature 用逗号分隔
+        # 为什么禁用 QUIC：国内网络环境下 QUIC 经常被防火墙拦截，
+        # 触发 ERR_DNS_NO_MATCHING_SUPPORTED_ALPN 错误，强制 HTTP/2 over TCP 更稳定
         launch_args = [
             "--headless=new",
             "--disable-blink-features=AutomationControlled",
             "--no-first-run",
             "--no-default-browser-check",
-            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-features=IsolateOrigins,site-per-process,VizDisplayCompositor,Http3",
+            "--disable-quic",
             "--disable-infobars",
             "--disable-dev-shm-usage",
             "--disable-setuid-sandbox",
             "--no-sandbox",
             "--disable-web-security",
-            "--disable-features=VizDisplayCompositor",
             "--ignore-certificate-errors",
             "--enable-features=NetworkService,NetworkServiceInProcess",
             "--force-color-profile=srgb",
@@ -512,7 +515,7 @@ class BrowserManager:
         if cleaned:
             logger.info("Removed {} stale lock files from {}", cleaned, self.user_data_dir)
 
-    async def is_alive(self) -> bool:
+    async def is_alive(self) -> bool:  # NOSONAR S7503:async 为接口一致性(调用方均 await),内部同步访问 pages 属性
         """检查浏览器是否还活着
 
         通过访问 context.pages 触发底层 CDP 请求验证连接可用性。

@@ -11,6 +11,10 @@ import { chatbotApi } from '../../../pages/Chatbot/api'
 import type { ChatbotConfig, FAQ, WelcomeInfo } from '../../../pages/Chatbot/types'
 import { extractApiError } from '../../../utils/apiError'
 
+// 提取到模块级别以避免在 Modal.confirm 的 onOk 回调内多层嵌套 setFaqs + filter 回调（S2004）
+const filterFaqById = (list: FAQ[], id: number | undefined): FAQ[] =>
+  list.filter((f) => f.id !== id)
+
 export default function MobileChatbotConfig() {
   const { message } = App.useApp()
   const { token: themeToken } = theme.useToken()
@@ -83,7 +87,7 @@ export default function MobileChatbotConfig() {
         try {
           await chatbotApi.deleteFAQ(faq.id!)
           message.success('已删除')
-          setFaqs((prev) => prev.filter((f) => f.id !== faq.id))
+          setFaqs((prev) => filterFaqById(prev, faq.id))
         } catch (e) {
           message.error(extractApiError(e, '删除失败'), 3)
         }
@@ -172,7 +176,7 @@ export default function MobileChatbotConfig() {
         }
       >
         {faqs.length === 0 ? (
-          <Empty description="暂无 FAQ" imageStyle={{ height: 60 }} />
+          <Empty description="暂无 FAQ" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变布局语义，暂不迁移 */ />
         ) : (
           <List
             size="small"

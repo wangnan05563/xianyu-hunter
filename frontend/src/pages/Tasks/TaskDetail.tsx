@@ -9,7 +9,7 @@ import {
   SearchOutlined, SyncOutlined, DeleteOutlined, PlusOutlined, EyeOutlined,
 } from '@ant-design/icons'
 import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
-import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries, type TaskPrecheckResult } from '../../api'
+import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
 import { STATUS_COLOR } from '../../constants/statusColors'
 
 // 过滤掉指定的上游依赖项（S2004 拆出避免函数嵌套过深）

@@ -406,6 +406,11 @@ class TaskScheduler:
         按 Task.cron 表达式计算下次运行时间，sleep 到该时间点再执行。
 
         重构说明：主循环只保留调度骨架，单轮执行与等待下沉到独立私有方法（S3776）。
+
+        会话失效暂停语义：should_pause=True 时只 clear pause_event，
+        不 break 主循环——让循环回到顶部阻塞在 pause_event.wait()，
+        等待 resume 唤醒。原实现 return True 导致 break 退出，
+        resume 调用 pause_event.set() 时无循环在 wait，任务永久卡死。
         """
         h = self._require(task_id)
         interval = h.worker.config.interval_seconds
@@ -423,6 +428,10 @@ class TaskScheduler:
             # 单轮执行：返回 True 表示应跳出主循环
             if await self._run_one_iteration(h, task_id, current_rid):
                 break
+            # 会话失效已 clear pause_event：跳过等待，直接回到顶部阻塞
+            # 避免 interval 等待后才阻塞，也避免 resume 后立即触发下一轮
+            if not h.pause_event.is_set():
+                continue
             # 等待下一轮（可被 stop 提前唤醒）
             await self._wait_for_next_round(h, cron_expr, interval, task_id)
         logger.info(f"任务 {task_id} 循环退出")
@@ -445,15 +454,19 @@ class TaskScheduler:
     ) -> bool:
         """执行一轮 run_once，返回是否应跳出主循环
 
-        返回 True：会话失效已自动暂停，或已达失败阈值，调用方应 break。
-        返回 False：本轮正常完成或异常后将继续下一轮，调用方应进入等待。
+        返回 True：stop 信号到达，调用方应 break。
+        返回 False：本轮正常完成或会话失效已暂停，调用方应回到主循环。
+        - 会话失效时 pause_event 已 clear，不重置 consecutive_errors（暂停非成功）。
         """
         try:
-            # should_break=True 表示会话失效或 stop 信号，需跳出主循环
+            # should_break=True 表示 stop 信号，需跳出主循环
             should_break = await self._execute_run_once_locked(h, task_id)
             if should_break:
                 return True
-            h.consecutive_errors = 0  # 成功后重置连续失败计数
+            # 会话失效暂停时不重置 consecutive_errors：pause_event 已 clear
+            # 表示本轮因会话失效暂停，不是成功完成
+            if h.pause_event.is_set():
+                h.consecutive_errors = 0  # 成功后重置连续失败计数
             return False
         except Exception as e:  # noqa: BLE001
             # should_continue=True 表示未达阈值等待重试，False 表示已达阈值已暂停
@@ -484,8 +497,10 @@ class TaskScheduler:
         为什么需要返回 bool 而非 raise：should_pause 是业务预期内的暂停（会话失效），
         不是异常；用返回值语义化地表达"应跳出循环"，避免与下方 except 混淆。
 
-        返回 True：会话失效已自动暂停，或 stop 信号到达，调用方应 break。
-        返回 False：本轮正常完成，调用方应重置 consecutive_errors 并进入下一轮等待。
+        返回 True：stop 信号到达，调用方应 break。
+        返回 False：本轮正常完成或会话失效已暂停，调用方应回到主循环顶部。
+        - 会话失效时 pause_event 已 clear，主循环顶部 pause_event.wait() 会阻塞，
+          直到 resume 唤醒。原实现返回 True 导致 break，resume 无法唤醒任务。
         """
         # 全局锁：串行化所有任务的 run_once，避免并发弹出多个浏览器窗口
         async with self._run_lock:
@@ -504,8 +519,15 @@ class TaskScheduler:
                 )
                 # 同步数据库状态，确保 API 读取到正确的 paused 状态
                 if self._repo:
-                    self._repo.update_task_status(task_id, "paused")
-                return True
+                    try:
+                        self._repo.update_task_status(task_id, "paused")
+                        logger.info(f"[Task {task_id}] DB 状态已同步为 paused")
+                    except Exception as db_err:
+                        logger.warning(f"[Task {task_id}] DB 状态同步失败: {db_err}")
+                else:
+                    logger.warning(f"[Task {task_id}] _repo 为 None，DB 状态未同步")
+                # 返回 False：不 break 主循环，让循环回到顶部阻塞在 pause_event.wait()
+                return False
             # 每轮结束后清理残留页面，避免异常未关闭的页面堆积  # NOSONAR
             # 堆积会导致内存压力和窗口不停弹出
             await self._cleanup_browser_pages(h, task_id)

@@ -184,6 +184,147 @@ export default function BuyerStrategy() {
         </Row>
       </Card>
 
+      {/* 抢单运行时参数（替代 buyer_config.py 硬编码） */}
+      <Card title="抢单运行时参数" style={{ marginBottom: 24 }}>
+        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 16 }}>
+          控制自动抢单流程的细节参数。修改后保存即可生效，无需重启服务。
+        </Paragraph>
+        <Row gutter={24}>
+          <Col span={8}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>点击重试次数</strong></div>
+              <InputNumber
+                min={0}
+                max={10}
+                value={config.buyer.click_retry_times}
+                onChange={(v) => update({ buyer: { ...config.buyer, click_retry_times: v ?? 0 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                点击"立即购买"按钮失败时的重试次数
+              </Paragraph>
+            </div>
+          </Col>
+          <Col span={8}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>点击重试间隔（秒）</strong></div>
+              <InputNumber
+                min={0}
+                max={10}
+                step={0.1}
+                value={config.buyer.click_retry_interval}
+                onChange={(v) => update({ buyer: { ...config.buyer, click_retry_interval: v ?? 0 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                两次点击之间的退避秒数
+              </Paragraph>
+            </div>
+          </Col>
+          <Col span={8}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>确认按钮超时（秒）</strong></div>
+              <InputNumber
+                min={1}
+                max={60}
+                value={config.buyer.confirm_button_timeout}
+                onChange={(v) => update({ buyer: { ...config.buyer, confirm_button_timeout: v ?? 10 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                等待"提交订单"按钮出现的超时
+              </Paragraph>
+            </div>
+          </Col>
+          <Col span={8}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>价格容差</strong></div>
+              <InputNumber
+                min={0}
+                max={1}
+                step={0.01}
+                value={config.buyer.price_tolerance}
+                onChange={(v) => update({ buyer: { ...config.buyer, price_tolerance: v ?? 0 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                拍下价格相对预期价格的允许偏差（0.05=5%）
+              </Paragraph>
+            </div>
+          </Col>
+          <Col span={8}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>两次落单最小间隔（秒）</strong></div>
+              <InputNumber
+                min={0}
+                max={3600}
+                value={config.buyer.min_interval_between_orders}
+                onChange={(v) => update({ buyer: { ...config.buyer, min_interval_between_orders: v ?? 0 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                防手抖：两次落单间的最小间隔，0=不限制
+              </Paragraph>
+            </div>
+          </Col>
+          <Col span={8}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>人工接管超时（分钟）</strong></div>
+              <InputNumber
+                min={1}
+                max={120}
+                value={config.buyer.takeover_timeout_min}
+                onChange={(v) => update({ buyer: { ...config.buyer, takeover_timeout_min: v ?? 30 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                与闲鱼订单关闭时间对齐，超时未接管则订单流转到下一状态
+              </Paragraph>
+            </div>
+          </Col>
+        </Row>
+      </Card>
+
+      {/* 账号轮换调度参数（替代 account_rotator.py 硬编码） */}
+      <Card title="账号轮换调度" style={{ marginBottom: 24 }}>
+        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 16 }}>
+          多账号轮换调度器的冷却与失败阈值。触发风控后账号进入冷却，连续失败超阈值则自动禁用。
+          修改后保存即生效（已创建的调度器实例会在下次启动时读取新值）。
+        </Paragraph>
+        <Row gutter={24}>
+          <Col span={12}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>冷却时间（秒）</strong></div>
+              <InputNumber
+                min={60}
+                max={86400}
+                value={config.account_rotator.cooldown_sec}
+                onChange={(v) => update({ account_rotator: { ...config.account_rotator, cooldown_sec: v ?? 1800 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                触发风控后的冷却秒数（默认 1800=30 分钟），冷却结束后自动恢复
+              </Paragraph>
+            </div>
+          </Col>
+          <Col span={12}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>连续失败阈值</strong></div>
+              <InputNumber
+                min={1}
+                max={50}
+                value={config.account_rotator.fail_threshold}
+                onChange={(v) => update({ account_rotator: { ...config.account_rotator, fail_threshold: v ?? 5 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                连续失败次数超过此值自动禁用账号（默认 5），需人工介入恢复
+              </Paragraph>
+            </div>
+          </Col>
+        </Row>
+      </Card>
+
       {/* 任务级模式说明 */}
       <Card title="任务级模式" style={{ marginBottom: 24 }}>
         <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>

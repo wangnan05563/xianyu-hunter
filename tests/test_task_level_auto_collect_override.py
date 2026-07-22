@@ -26,11 +26,20 @@ from xianyu_hunter.infra.yaml_config import AppConfig
 from xianyu_hunter.modules.worker import TaskWorker
 
 # 复用 test_worker_auto_collect 的工厂与 patch_eval_config 模式，保持测试风格统一
-from tests.test_worker_auto_collect import (
-    build_worker,
-    make_eval_config,
-    patch_eval_config,
-)
+# pytest 默认 prepend import 模式下测试模块不带包前缀，用 test_worker_auto_collect 直接导入
+# 兼容 tests 包模式（如果未来加 __init__.py）通过 try/except 回退
+try:  # pragma: no cover - 选择分支由 pytest import mode 决定
+    from test_worker_auto_collect import (
+        build_worker,
+        make_eval_config,
+        patch_eval_config,
+    )
+except ImportError:  # pragma: no cover
+    from tests.test_worker_auto_collect import (  # type: ignore[no-redef]
+        build_worker,
+        make_eval_config,
+        patch_eval_config,
+    )
 
 
 # ============== SubTask 13.2 单元测试：_effective_eval_cfg 合并逻辑 ==============

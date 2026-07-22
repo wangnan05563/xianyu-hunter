@@ -122,7 +122,7 @@ export default function MobileSearchConfig() {
               max={120}
               step={5}
               style={{ width: '100%' }}
-              addonAfter="s"
+              addonAfter="s" /* NOSONAR - addonAfter 在 antd 5.x 仍可用，迁移到 InputNumber.Group 会破坏现有布局，暂不迁移 */
             />
           </div>
           <div>

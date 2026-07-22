@@ -124,6 +124,11 @@ class TokenRenewer:
         self._cookie_provider: Callable[[], str | None] | None = None
         self._renew_callback: Callable[[], Awaitable[bool]] | None = None
         self._renew_fail_callback: Callable[[], None] | None = None
+        # 续期成功回调：让上层（LoginOrchestrator）能重置自己的失败计数
+        # 为什么需要：token_renewer 的 _consecutive_failures 与 login_orchestrator 的
+        # _renew_fail_count 是两个独立计数器，续期成功时前者会清零但后者不会，
+        # 导致上层误判仍处于连续失败状态而触发不必要的自动重登
+        self._renew_success_callback: Callable[[], None] | None = None
         self._task: asyncio.Task | None = None
         self._running = False
         self._consecutive_failures = 0
@@ -132,7 +137,7 @@ class TokenRenewer:
         self._last_renew_at: float = 0.0
         self._last_renew_result: RenewResult = RenewResult.SKIPPED
         # 会话失效后回调触发间隔（以 _session_expired_checks 计）
-        # 为什么不只在首次触发：首次触发后若 on_renew_fail 的恢复尝试未成功，
+        # 为什么不只在首次触发：首次触发后若 on_renew_fail 的恢复尝试未成功,
         # 后续持续失效将不再有任何恢复机会。周期性触发让上层能定期重试恢复
         self._renew_fail_callback_interval = 5
         self._stats: dict[str, int] = {
@@ -162,6 +167,15 @@ class TokenRenewer:
     def set_renew_fail_callback(self, callback: Callable[[], None]) -> None:
         """设置续期失败回调（如触发重新登录）"""
         self._renew_fail_callback = callback
+
+    def set_renew_success_callback(self, callback: Callable[[], None]) -> None:
+        """设置续期成功回调：让上层重置自己的失败计数
+
+        为什么需要独立回调：token_renewer 与上层（LoginOrchestrator）维护各自
+        的失败计数器，_handle_renew_result 只清零自身计数。上层若不知道续期已恢复，
+        会保留旧的失败计数并可能误触发自动重登。
+        """
+        self._renew_success_callback = callback
 
     # ============== 生命周期 ==============
 
@@ -243,6 +257,9 @@ class TokenRenewer:
         if result == RenewResult.SUCCESS:
             self._consecutive_failures = 0
             self._stats["total_renewed"] += 1
+            # 通知上层重置失败计数：避免上层因历史失败计数触发误告警/自动重登
+            if self._renew_success_callback:
+                self._renew_success_callback()
             return
         if result != RenewResult.FAILED:
             return

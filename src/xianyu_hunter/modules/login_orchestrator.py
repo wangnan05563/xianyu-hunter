@@ -108,6 +108,10 @@ class LoginOrchestrator:
         self._renew_fail_count: int = 0
         self._auto_relogin_callback: Callable[[], Awaitable[bool]] | None = None
         self._auto_relogin_cooldown_until: float = 0.0  # 冷却时间戳，避免频繁重登
+        # 重登失败计数 + 长冷却：cookie_inject 反复失败时进入长冷却，
+        # 避免无意义重试；用户手动重新登录后由 on_login_success 复位
+        self._relogin_fail_count: int = 0
+        self._relogin_long_cooldown_until: float = 0.0
         # 保存异步恢复任务引用，避免被 GC 回收导致任务中途消失
         self._pending_recover_task: asyncio.Task | None = None
 
@@ -195,7 +199,25 @@ class LoginOrchestrator:
         """登录成功后更新 Cookie
 
         自动分类 Cookie 到对应层并原子更新。
+
+        复位自愈状态：用户手动登录是最高优先级的会话恢复方式，
+        成功后必须复位所有失败计数和冷却时间，否则历史失败会
+        持续影响后续自愈决策（如长冷却未到期导致下次自动重登被跳过）。
         """
+        # 复位自愈状态：续期失败计数 + 重登失败计数 + 短/长冷却
+        # 为什么在 on_login_success 而非 start_session：用户可能通过其他入口
+        # （如 cookie_inject API、浏览器导入）更新 cookie 而不经 start_session，
+        # on_login_success 是所有登录路径的共同后置钩子
+        if self._renew_fail_count or self._relogin_fail_count:
+            logger.info(
+                "登录成功，复位自愈状态（原：续期失败 {} 次，重登失败 {} 次）",
+                self._renew_fail_count, self._relogin_fail_count,
+            )
+        self._renew_fail_count = 0
+        self._relogin_fail_count = 0
+        self._auto_relogin_cooldown_until = 0.0
+        self._relogin_long_cooldown_until = 0.0
+
         # 分离 identity 和 session 层 Cookie
         identity_cookies = {}
         session_cookies = {}
@@ -232,6 +254,11 @@ class LoginOrchestrator:
     _RENEW_FAIL_THRESHOLD = 2
     # 自动重登冷却时间（秒），失败后避免频繁重试
     _AUTO_RELOGIN_COOLDOWN_SEC = 600
+    # 自动重登连续失败阈值：触达后进入长冷却
+    # 为什么设为 3：1-2 次失败可能是 cookie 短暂抖动，3 次基本可判定 JSON 中 cookie 已失效
+    _RELOGIN_LONG_COOLDOWN_THRESHOLD = 3
+    # 自动重登长冷却时间（秒）：30 分钟，等待用户手动扫码登录
+    _RELOGIN_LONG_COOLDOWN_SEC = 1800
 
     def start_session(
         self,
@@ -261,11 +288,25 @@ class LoginOrchestrator:
 
         # 续期失败回调：拆分为多个原子方法，避免单函数嵌套过深
         self._token_renewer.set_renew_fail_callback(self._on_renew_fail)
+        # 续期成功回调：重置失败计数，避免历史失败累计误触发自动重登
+        # 为什么需要：token_renewer 自身续期成功时只清零自己的 _consecutive_failures，
+        # 不通知上层；上层的 _renew_fail_count 会一直累加直至触发自动重登
+        self._token_renewer.set_renew_success_callback(self._on_renew_success)
 
         # 启动后台续期
         self._token_renewer.start()
 
         logger.info("会话管理已启动")
+
+    def _on_renew_success(self) -> None:
+        """Token 续期成功回调：重置失败计数
+
+        为什么需要：续期成功说明会话已恢复，应清零历史失败计数，
+        否则下次偶发失败会立刻达到阈值触发不必要的自动重登。
+        """
+        if self._renew_fail_count > 0:
+            logger.info("Token 续期成功，失败计数已重置（原 {} 次）", self._renew_fail_count)
+            self._renew_fail_count = 0
 
     def _on_renew_fail(self) -> None:
         """Token 续期失败回调（同步入口）
@@ -358,7 +399,13 @@ class LoginOrchestrator:
         self._schedule_auto_relogin()
 
     def _should_trigger_relogin(self) -> bool:
-        """是否应该触发自动重登：需要回调 + 连续失败次数达标 + 冷却期已过"""
+        """是否应该触发自动重登：需要回调 + 连续失败次数达标 + 冷却期已过
+
+        双层冷却：
+        - 短冷却（_auto_relogin_cooldown_until, 10 分钟）：单次失败后避免立即重试
+        - 长冷却（_relogin_long_cooldown_until, 30 分钟）：连续失败 3 次后，
+          cookie_inject 已无效，等待用户手动介入
+        """
         if not self._auto_relogin_callback:
             if self._renew_fail_count >= self._RENEW_FAIL_THRESHOLD:
                 logger.error(
@@ -367,6 +414,14 @@ class LoginOrchestrator:
                 )
             return False
         if self._renew_fail_count < self._RENEW_FAIL_THRESHOLD:
+            return False
+        # 长冷却期内不再触发自动重登，避免 cookie_inject 反复失败浪费资源
+        if time.time() < self._relogin_long_cooldown_until:
+            remaining = int(self._relogin_long_cooldown_until - time.time())
+            logger.debug(
+                "自动重登处于长冷却期，剩余 {} 秒，等待用户手动登录",
+                remaining,
+            )
             return False
         return time.time() >= self._auto_relogin_cooldown_until
 
@@ -380,17 +435,75 @@ class LoginOrchestrator:
         loop.create_task(self._do_auto_relogin())
 
     async def _do_auto_relogin(self) -> None:
-        """执行自动重登：调用回调并根据结果重置/保留失败计数"""
+        """执行自动重登：调用回调并根据结果重置/保留失败计数
+
+        可观测性设计：
+        - 成功：INFO + 复位失败计数 + 复位长冷却
+        - 失败/异常：ERROR + 累加 _relogin_fail_count + 触达阈值进入长冷却
+          + 通过 EventBus 发布 LOGIN_EXPIRED 事件让 NotifierHub 通知用户介入
+        - 为什么需要通知：自动重登是后台自愈机制，用户无感知；
+          连续失败表明 cookie_inject 已无法恢复，必须人工扫码登录
+        """
         try:
             success = await self._auto_relogin_callback()
         except Exception as exc:  # noqa: BLE001 - 自动重登失败需记录原始异常
-            logger.error("自动重登异常: {}", exc)
+            self._relogin_fail_count += 1
+            logger.error(
+                "自动重登异常（连续第 {} 次）: {}",
+                self._relogin_fail_count, exc,
+            )
+            await self._handle_relogin_failure()
             return
         if success:
             self._renew_fail_count = 0
-            logger.info("自动重登成功，session 已恢复")
-        else:
-            logger.error("自动重登返回失败，等待下次重试")
+            self._relogin_fail_count = 0
+            self._relogin_long_cooldown_until = 0.0
+            logger.info("自动重登成功，session 已恢复，失败计数与长冷却均已复位")
+            return
+        self._relogin_fail_count += 1
+        logger.error(
+            "自动重登返回失败（连续第 {} 次），等待下次重试",
+            self._relogin_fail_count,
+        )
+        await self._handle_relogin_failure()
+
+    async def _handle_relogin_failure(self) -> None:
+        """重登失败统一处理：长冷却 + 通知用户
+
+        为什么抽独立方法：异常分支和失败分支都需要相同的"长冷却+通知"处理，
+        避免重复代码；同时便于单测 mock 验证通知调用
+        """
+        # 触达长冷却阈值：进入 30 分钟冷却，避免 cookie_inject 反复失败浪费资源
+        if self._relogin_fail_count >= self._RELOGIN_LONG_COOLDOWN_THRESHOLD:
+            self._relogin_long_cooldown_until = (
+                time.time() + self._RELOGIN_LONG_COOLDOWN_SEC
+            )
+            logger.error(
+                "自动重登连续失败 {} 次，进入长冷却 {} 秒，请手动重新登录",
+                self._relogin_fail_count,
+                self._RELOGIN_LONG_COOLDOWN_SEC,
+            )
+        # 通过 EventBus 发布 LOGIN_EXPIRED 事件，NotifierHub 会按渠道推送告警
+        # 为什么用 publish_nowait：本方法可能在无事件循环上下文中被调用，
+        # publish_nowait 只入队不阻塞，EventBus 主循环会异步消费
+        try:
+            from xianyu_hunter.domain.events import Event, EventType
+            from xianyu_hunter.infra.event_bus import get_event_bus
+            bus = get_event_bus()
+            bus.publish_nowait(Event(
+                type=EventType.LOGIN_EXPIRED,
+                payload={
+                    "reason": "auto_relogin_failed",
+                    "consecutive_failures": self._relogin_fail_count,
+                    "in_long_cooldown": (
+                        time.time() < self._relogin_long_cooldown_until
+                    ),
+                    "hint": "自动重登连续失败，请打开登录页面手动扫码",
+                },
+            ))
+        except Exception as notify_err:
+            # 通知失败不影响主流程，仅记录告警
+            logger.warning("自动重登失败后发送通知异常: {}", notify_err)
 
     # ============== 默认会话启动（登录后自动调用） ==============
 
@@ -553,11 +666,7 @@ class LoginOrchestrator:
             )
 
             # 提取 _m_h5_tk 用于签名（MtopSigner 要求非空 token）
-            m5tk_value = None
-            for c in cookies_list:
-                if c.get("name") == "_m_h5_tk":
-                    m5tk_value = c.get("value", "")
-                    break
+            m5tk_value = self._extract_m5tk_from_cookies(cookies_list)
 
             if not m5tk_value:
                 logger.warning("renew_via_httpx: 无 _m_h5_tk，无法签名")
@@ -593,19 +702,7 @@ class LoginOrchestrator:
             # 解析 Set-Cookie 响应头，提取 _m_h5_tk / _m_h5_tk_enc 等新值
             # httpx Headers.get_list 返回多个 Set-Cookie 头的原始列表
             set_cookies = resp.headers.get_list("set-cookie")
-            updates: dict[str, str] = {}
-            for sc in set_cookies:
-                # Set-Cookie 格式: name=value; Path=/; Domain=...
-                # 只取第一段 name=value
-                name_value = sc.split(";")[0].strip()
-                if "=" not in name_value:
-                    continue
-                name, _, value = name_value.partition("=")
-                name = name.strip()
-                value = value.strip()
-                # 只回写关键 token cookie，避免覆盖其他 cookie 的过期时间等元数据
-                if name in ("_m_h5_tk", "_m_h5_tk_enc") and value:
-                    updates[name] = value
+            updates = self._parse_set_cookie_token_updates(set_cookies)
 
             if not updates:
                 logger.warning("renew_via_httpx: 响应无 _m_h5_tk Set-Cookie")
@@ -621,6 +718,39 @@ class LoginOrchestrator:
         except Exception as e:
             logger.debug("httpx 续期失败: {}", e)
             return False
+
+    def _extract_m5tk_from_cookies(self, cookies_list: list[dict]) -> str | None:
+        """从 cookie 列表中提取 _m_h5_tk 值
+
+        为什么单独提取：MtopSigner 要求 token 非空，提取逻辑独立后
+        _renew_via_httpx 的认知复杂度可降至阈值以下，且便于单元测试。
+        """
+        for c in cookies_list:
+            if c.get("name") == "_m_h5_tk":
+                return c.get("value", "")
+        return None
+
+    def _parse_set_cookie_token_updates(self, set_cookies: list[str]) -> dict[str, str]:
+        """解析 Set-Cookie 响应头，提取 _m_h5_tk / _m_h5_tk_enc 新值
+
+        为什么只回写关键 token cookie：避免覆盖其他 cookie 的过期时间等元数据，
+        CookieStore.update_cookie_values 仅按 name 更新 value，但仍需限制范围
+        避免误覆盖其他 cookie 的内存值。
+        """
+        updates: dict[str, str] = {}
+        for sc in set_cookies:
+            # Set-Cookie 格式: name=value; Path=/; Domain=...
+            # 只取第一段 name=value
+            name_value = sc.split(";")[0].strip()
+            if "=" not in name_value:
+                continue
+            name, _, value = name_value.partition("=")
+            name = name.strip()
+            value = value.strip()
+            # 只回写关键 token cookie，避免覆盖其他 cookie 的过期时间等元数据
+            if name in ("_m_h5_tk", "_m_h5_tk_enc") and value:
+                updates[name] = value
+        return updates
 
     def start_session_default(self) -> bool:
         """使用默认 cookie_provider + renew_callback 启动会话

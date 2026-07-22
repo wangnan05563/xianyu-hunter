@@ -3,7 +3,7 @@
 // 设计要点：保留 trigger/pause/resume/stop 四控制 + interval_minutes 热更新
 import { useEffect, useState, useCallback } from 'react'
 import {
-  Card, Tag, Spin, App, Button, Space, Empty, theme, InputNumber, Switch, Descriptions, Alert,
+  Card, Tag, Spin, App, Button, Space, theme, InputNumber, Switch, Descriptions,
 } from 'antd'
 import {
   PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined, CloudDownloadOutlined,
@@ -184,7 +184,7 @@ export default function MobileBatchRefresh() {
               min={1}
               max={1440}
               style={{ width: '100%' }}
-              addonAfter="min"
+              addonAfter="min" /* NOSONAR - addonAfter 在 antd 5.x 仍可用，暂不迁移 */
             />
           </div>
           <Button
@@ -202,9 +202,9 @@ export default function MobileBatchRefresh() {
       {status?.change_log && status.change_log.length > 0 && (
         <Card size="small" style={{ marginBottom: 12 }} title="最近变更">
           <Space direction="vertical" size={4} style={{ width: '100%' }}>
-            {status.change_log.slice(0, 5).map((change: BatchRefreshChangeLogEntry, idx: number) => (
+            {status.change_log.slice(0, 5).map((change: BatchRefreshChangeLogEntry) => (
               <div
-                key={idx}
+                key={`${change.item_id}-${change.timestamp}`}
                 style={{
                   padding: '4px 0',
                   borderBottom: `1px solid ${themeToken.colorBorderSecondary}`,

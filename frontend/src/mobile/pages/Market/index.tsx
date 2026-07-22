@@ -73,6 +73,11 @@ export default function MobileMarket() {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
   }
 
+  // 把过滤信息提取为独立变量以避免嵌套模板字符串（S4624）
+  const filterInfo = soldRange?.filtered_count
+    ? `（已过滤 ${soldRange.filtered_count} 个超范围样本）`
+    : ''
+
   return (
     <div>
       {/* 任务 + 范围过滤 */}
@@ -147,12 +152,12 @@ export default function MobileMarket() {
             <Alert
               type="info"
               showIcon
-              message={`样本 ${soldRange.sample_size} 条${soldRange.filtered_count ? `（已过滤 ${soldRange.filtered_count} 个超范围样本）` : ''}`}
+              message={`样本 ${soldRange.sample_size} 条${filterInfo}`}
               style={{ fontSize: 11 }}
             />
           </>
         ) : (
-          <Empty description="暂无可用样本" imageStyle={{ height: 60 }} />
+          <Empty description="暂无可用样本" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变布局语义，暂不迁移 */ />
         )}
       </Card>
 
@@ -167,7 +172,7 @@ export default function MobileMarket() {
         }
       >
         {categories.length === 0 ? (
-          <Empty description="暂无数据" imageStyle={{ height: 60 }} />
+          <Empty description="暂无数据" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变布局语义，暂不迁移 */ />
         ) : (
           categories.map((c) => (
             <div

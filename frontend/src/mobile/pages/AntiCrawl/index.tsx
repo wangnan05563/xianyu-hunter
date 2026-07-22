@@ -17,6 +17,29 @@ const formatDuration = (sec: number | null | undefined): string => {
   return `${s}s`
 }
 
+// 提取到模块级：分支逻辑下沉以降低 MobileAntiCrawl 认知复杂度（S3776），并便于单独测试
+const getSessionLight = (
+  session: SessionStatus | null,
+  themeToken: ReturnType<typeof theme.useToken>['token'],
+): { color: string; text: string } => {
+  // active 优先；其次 token_expired 用橙色提示 token 失效但会话未结束；默认红色 inactive
+  if (session?.active) return { color: themeToken.colorSuccess, text: '运行中' }
+  if (session?.token_expired) return { color: themeToken.colorWarning, text: 'Token 失效' }
+  return { color: themeToken.colorError, text: '未激活' }
+}
+
+// 提取到模块级：用 if 替代嵌套三元，同时解决 S3358 可读性问题
+const getScoreColor = (
+  score: number | null,
+  themeToken: ReturnType<typeof theme.useToken>['token'],
+): string => {
+  // 健康分颜色档位：绿/橙/红/灰，给用户直观等级感
+  if (score === null) return themeToken.colorTextDisabled
+  if (score >= 80) return themeToken.colorSuccess
+  if (score >= 50) return themeToken.colorWarning
+  return themeToken.colorError
+}
+
 export default function MobileAntiCrawl() {
   const { message } = App.useApp()
   const { token: themeToken } = theme.useToken()
@@ -86,19 +109,11 @@ export default function MobileAntiCrawl() {
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
   // 状态灯颜色：active 优先，其次 token_expired 用橙色提示 token 失效但会话未结束
-  let lightColor = themeToken.colorError // 默认红色：inactive
-  let lightText = '未激活'
-  if (session?.active) {
-    lightColor = themeToken.colorSuccess
-    lightText = '运行中'
-  } else if (session?.token_expired) {
-    lightColor = themeToken.colorWarning
-    lightText = 'Token 失效'
-  }
+  const { color: lightColor, text: lightText } = getSessionLight(session, themeToken)
 
   // 健康分颜色档位：绿/橙/红，给用户直观等级感
   const healthScore = health?.score ?? session?.health_score ?? null
-  const scoreColor = healthScore === null ? themeToken.colorTextDisabled : healthScore >= 80 ? themeToken.colorSuccess : healthScore >= 50 ? themeToken.colorWarning : themeToken.colorError
+  const scoreColor = getScoreColor(healthScore, themeToken)
 
   return (
     <PullToRefresh onRefresh={fetchAll}>

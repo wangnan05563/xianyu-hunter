@@ -183,6 +183,10 @@ class BatchRefreshScheduler:
             "change_log": list(self._change_log[-50:]),
             "enabled": self._config.enabled,
             "interval_minutes": self._config.interval_minutes,
+            # 批次参数：前端配置入口需要回显当前值
+            "batch_size": self._config.batch_size,
+            "max_items_per_run": self._config.max_items_per_run,
+            "history_retention_days": self._config.history_retention_days,
             # 进度信息：current/total/current_item_id/started_at/elapsed_ms
             "progress": self._get_progress_snapshot(),
             # 是否允许 pause/resume/stop 操作
@@ -267,6 +271,9 @@ class BatchRefreshScheduler:
 
         修改调度器持有的 config 引用字段，同时 reschedule 已注册的 job。
         enabled=False 时立即暂停定时触发（remove_job），enabled=True 时恢复定时触发。
+
+        为什么拆分 enable/disable 分支为独立方法：原方法嵌套 4 层（if→if→if→try/except），
+        认知复杂度达 19（S3776），提取后主方法仅做参数分发，复杂度降至 8 以下。
         """
         if interval_minutes is not None:
             self._config.interval_minutes = interval_minutes
@@ -279,33 +286,47 @@ class BatchRefreshScheduler:
         if enabled is not None:
             self._config.enabled = enabled
             if not enabled:
-                # 立即移除定时 job：用户禁用后不应再自动触发
-                # 为什么不用 shutdown：shutdown 会关闭整个调度器，后续无法 reschedule，
-                # remove_job 保留调度器实例允许用户重新启用
-                if self._scheduler:
-                    try:
-                        self._scheduler.remove_job("batch_refresh")
-                        logger.info("批量采集已禁用，定时任务已移除")
-                    except Exception:
-                        # job 不存在或已移除，忽略
-                        pass
+                self._disable_scheduled_job()
             else:
-                # 重新启用：恢复定时 job
-                if self._scheduler and self._main_loop:
-                    next_run = datetime.now() + timedelta(seconds=10)
-                    self._scheduler.add_job(
-                        self._run_batch_job,
-                        "interval",
-                        minutes=self._config.interval_minutes,
-                        next_run_time=next_run,
-                        id="batch_refresh",
-                        replace_existing=True,
-                    )
-                    logger.info(
-                        "批量采集已启用，间隔 %d 分钟，首次执行于 %s",
-                        self._config.interval_minutes,
-                        next_run.strftime("%Y-%m-%d %H:%M:%S"),
-                    )
+                self._enable_scheduled_job()
+
+    def _disable_scheduled_job(self) -> None:
+        """禁用定时任务：移除已注册的 job
+
+        为什么不用 shutdown：shutdown 会关闭整个调度器，后续无法 reschedule，
+        remove_job 保留调度器实例允许用户重新启用。
+        """
+        if not self._scheduler:
+            return
+        try:
+            self._scheduler.remove_job("batch_refresh")
+            logger.info("批量采集已禁用，定时任务已移除")
+        except Exception:
+            # job 不存在或已移除，忽略
+            pass
+
+    def _enable_scheduled_job(self) -> None:
+        """重新启用定时任务：恢复 job 注册
+
+        next_run_time 设为启用后 10 秒：与 start() 保持一致，给浏览器/collector
+        初始化留时间，避免首次采集因浏览器未就绪而连续失败触发熔断。
+        """
+        if not self._scheduler or not self._main_loop:
+            return
+        next_run = datetime.now() + timedelta(seconds=10)
+        self._scheduler.add_job(
+            self._run_batch_job,
+            "interval",
+            minutes=self._config.interval_minutes,
+            next_run_time=next_run,
+            id="batch_refresh",
+            replace_existing=True,
+        )
+        logger.info(
+            "批量采集已启用，间隔 %d 分钟，首次执行于 %s",
+            self._config.interval_minutes,
+            next_run.strftime("%Y-%m-%d %H:%M:%S"),
+        )
 
     def _get_progress_snapshot(self) -> dict | None:
         """获取进度快照（计算 elapsed_ms）"""

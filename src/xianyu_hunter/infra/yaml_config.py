@@ -491,6 +491,44 @@ class BargainPriceConfig(BaseModel):
     percentile: float = Field(0.10, gt=0, lt=0.5)
 
 
+class BuyerRuntimeConfig(BaseModel):
+    """抢单运行时参数（对应 modules/buyer_config.BuyerConfig）
+
+    原 BuyerConfig dataclass 完全硬编码，无 YAML 配置层覆盖；
+    配置化后用户可在前端「抢单策略」页面调整，避免修改源码。
+    """
+    click_retry_times: int = Field(2, ge=0, le=10, description="点击'立即购买'按钮的重试次数")
+    click_retry_interval: float = Field(1.0, ge=0.0, le=10.0, description="两次点击之间的退避秒数")
+    confirm_button_timeout: float = Field(10.0, ge=1.0, le=60.0, description="等待'提交订单'按钮出现的超时（秒）")
+    price_tolerance: float = Field(0.05, ge=0.0, le=1.0, description="拍下价格相对预期价格的允许偏差（0.05=5%）")
+    min_interval_between_orders: float = Field(0.0, ge=0.0, le=3600.0, description="两次落单间的最小间隔（秒），防手抖")
+    # 人工接管超时：闲鱼"待付款"订单默认 30 分钟自动关闭，
+    # 留足时间给用户切到 App 完成支付，又不至于无限等待
+    takeover_timeout_min: int = Field(30, ge=1, le=120, description="人工接管超时（分钟），与闲鱼订单关闭时间对齐")
+
+
+class AccountRotatorConfig(BaseModel):
+    """账号轮换调度器配置（对应 modules/account_rotator.py）
+
+    原硬编码 DEFAULT_COOLDOWN_SEC=1800 / DEFAULT_FAIL_THRESHOLD=5；
+    配置化后用户可在 YAML 调整，无需修改源码。
+    """
+    cooldown_sec: int = Field(1800, ge=60, le=86400, description="触发风控后的冷却秒数")
+    fail_threshold: int = Field(5, ge=1, le=50, description="连续失败阈值，超过自动禁用账号")
+
+
+class AIBudgetConfig(BaseModel):
+    """AI 用量预算配置（对应 infra/ai_usage.BudgetConfig）
+
+    原硬编码在 ai_usage.py 模块级 _budget 单例，仅内存态、重启即丢；
+    配置化后用户在前端「AI 配置」页面的「预算控制」卡片保存即持久化到 YAML，
+    下次启动自动加载，与 check_budget 频率/token/费用三道闸门联动。
+    """
+    daily_token_limit: int = Field(500000, ge=0, le=100_000_000, description="每日 token 上限")
+    daily_cost_limit_usd: float = Field(5.0, ge=0.0, le=1000.0, description="每日费用上限（USD）")
+    rate_limit_per_min: int = Field(20, ge=0, le=1000, description="每分钟最大调用次数")
+
+
 # ============== Cookie 自愈体系配置 ==============
 # 设计文档：docs/plans/cookie-self-healing-optimization.md
 # 统一管理 Cookie 三层架构、续期、跨进程同步等关键参数，替代散落在
@@ -664,6 +702,12 @@ class AppConfig(BaseModel):
     task_scheduler: TaskSchedulerConfig = TaskSchedulerConfig()
     # 捡漏价格配置（P10 分位数可调）
     bargain_price: BargainPriceConfig = BargainPriceConfig()
+    # 抢单运行时参数（替代 buyer_config.BuyerConfig 硬编码默认值）
+    buyer: BuyerRuntimeConfig = BuyerRuntimeConfig()
+    # 账号轮换调度器参数（替代 account_rotator.py 硬编码默认值）
+    account_rotator: AccountRotatorConfig = AccountRotatorConfig()
+    # AI 用量预算（替代 ai_usage.py 内存态 _budget 单例，支持持久化）
+    ai_budget: AIBudgetConfig = AIBudgetConfig()
     # Cookie 自愈体系（统一管理 75+ cookie 的保留与恢复）
     cookie_management: CookieManagementConfig = CookieManagementConfig()
     token_renewer: TokenRenewerConfig = TokenRenewerConfig()
@@ -682,6 +726,11 @@ class AppConfig(BaseModel):
     dingtalk_webhook: str = ""
     dingtalk_secret: str = ""
     webhook_url: str = ""
+    # ntfy：免费跨平台推送（公共实例 https://ntfy.sh，可自托管）
+    # 与 secrets.KEY_NTFY_* 对齐，前端 NotifierChannels 页面提供配置入口
+    ntfy_server: str = ""
+    ntfy_topic: str = ""
+    ntfy_token: str = ""
 
 
 # ============== 加载逻辑 ==============

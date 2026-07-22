@@ -30,6 +30,7 @@ export interface AppConfig {
       wecom: boolean
       dingtalk: boolean
       webhook: boolean
+      ntfy: boolean
     }
     quiet_hours: {
       enabled: boolean
@@ -92,6 +93,21 @@ export interface AppConfig {
     interval_minutes: number
     batch_size: number
     max_items_per_run: number
+    history_retention_days: number
+  }
+  // 抢单运行时参数（对应后端 BuyerRuntimeConfig 模型）
+  buyer: {
+    click_retry_times: number
+    click_retry_interval: number
+    confirm_button_timeout: number
+    price_tolerance: number
+    min_interval_between_orders: number
+    takeover_timeout_min: number
+  }
+  // 账号轮换调度器参数（对应后端 AccountRotatorConfig 模型）
+  account_rotator: {
+    cooldown_sec: number
+    fail_threshold: number
   }
   // 任务调度默认值（对应后端 TaskSchedulerConfig 模型）
   task_scheduler: {
@@ -110,6 +126,10 @@ export interface AppConfig {
   dingtalk_webhook: string
   dingtalk_secret: string
   webhook_url: string
+  // ntfy：免费跨平台推送
+  ntfy_server: string
+  ntfy_topic: string
+  ntfy_token: string
 }
 
 export interface BackupItem {

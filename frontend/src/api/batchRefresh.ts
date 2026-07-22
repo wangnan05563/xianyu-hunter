@@ -29,6 +29,10 @@ export interface BatchRefreshStatus {
   change_log: BatchRefreshChangeLogEntry[]
   enabled: boolean
   interval_minutes: number
+  // 批次参数：前端配置入口回显当前值
+  batch_size: number
+  max_items_per_run: number
+  history_retention_days: number
   progress: BatchRefreshProgress | null
   control_available: boolean
 }
@@ -37,6 +41,9 @@ export interface BatchRefreshStatus {
 export interface BatchRefreshConfigPatch {
   interval_minutes?: number
   enabled?: boolean
+  batch_size?: number
+  max_items_per_run?: number
+  history_retention_days?: number
 }
 
 // PATCH /api/batch-refresh/config 返回结构
@@ -46,6 +53,7 @@ export interface BatchRefreshConfigResult {
   interval_minutes: number
   batch_size: number
   max_items_per_run: number
+  history_retention_days: number
 }
 
 // POST /api/batch-refresh/trigger 返回结构

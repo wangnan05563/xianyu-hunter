@@ -139,8 +139,10 @@ export default function MainLayout() {
   // 侧边栏收缩状态
   // 窄屏（<=768px）下默认收起 Sider，避免桌面端布局在 F12 设备模拟器下被压成竖条
   const [collapsed, setCollapsed] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.innerWidth <= 768
+    // 用 globalThis.window 而非裸 window 触发 S7764；直接与 undefined 比较（S7741），
+    // SSR 构建期 globalThis.window 为 undefined，浏览器运行期必定有值
+    if (globalThis.window === undefined) return false
+    return globalThis.window.innerWidth <= 768
   })
 
   // 调度器运行状态（30秒轮询）
@@ -348,12 +350,12 @@ export default function MainLayout() {
 
   // 窗口尺寸变化时同步 Sider 收缩状态：F12 切换设备模拟器实时生效
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (globalThis.window === undefined) return
     const handler = () => {
-      if (window.innerWidth <= 768) setCollapsed(true)
+      if (globalThis.window.innerWidth <= 768) setCollapsed(true)
     }
-    window.addEventListener('resize', handler)
-    return () => window.removeEventListener('resize', handler)
+    globalThis.window.addEventListener('resize', handler)
+    return () => globalThis.window.removeEventListener('resize', handler)
   }, [])
 
   // 未登录：自动跳转到登录页（保存当前路径，登录后跳转回来）

@@ -326,7 +326,7 @@ def _compute_security_flags(data: dict | None, expiry_ts: float | None) -> dict[
 
 
 @router.get("/cookie/health")
-def cookie_health(request: Request) -> JSONResponse:
+async def cookie_health(request: Request) -> JSONResponse:
     """轻量级 Cookie 健康检查（< 300ms）
 
     供状态栏用户头像悬浮面板调用，纯文件读取无网络请求，
@@ -339,6 +339,10 @@ def cookie_health(request: Request) -> JSONResponse:
     多用户场景：从 xh_token 识别当前会话用户，按 user_id 读取对应 cookie 文件，
     避免硬编码 default 导致多用户登录后状态栏显示"无 Cookie"。
 
+    浏览器内存兜底：JSON 中 _m_h5_tk 过期时，实时搜索可能已刷新浏览器内存中的
+    token 但未回写 JSON（_ensure_fresh_m5tk 不回写），此时从浏览器内存读取最新
+    token 回写 JSON 再重新判断，避免"实时搜索可用但右上角显示无效"的不一致。
+
     重构说明：分层状态计算和安全标记推断下沉到独立函数（S3776），
     主函数只做流程编排和结果组装，降低嵌套层级与认知负担。
     """
@@ -349,6 +353,17 @@ def cookie_health(request: Request) -> JSONResponse:
     store.invalidate_cache(current_uid)
 
     is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
+
+    # JSON 中 _m_h5_tk 过期时，尝试从浏览器内存刷新回写 JSON
+    # 为什么需要：_ensure_fresh_m5tk（实时搜索）和 MTOP API 响应会刷新浏览器内存中的
+    # token 但不回写 JSON，导致 JSON 中 token 的内嵌 timestamp 过期（>20分钟），
+    # 而 /api/anticrawl/cookies/layers 已有同样的兜底逻辑（_try_refresh_m5tk_from_browser）
+    if not is_valid and "cookie_expired:_m_h5_tk" in reason:
+        refreshed = await _try_refresh_m5tk_from_browser_for_health(store, current_uid)
+        if refreshed:
+            store.invalidate_cache(current_uid)
+            is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
+
     info = store.get_cookie_info(user_id=current_uid)
     expiry_ts = store.get_cookie_expiry(user_id=current_uid)
 
@@ -375,6 +390,41 @@ def cookie_health(request: Request) -> JSONResponse:
         "method": info.get("method", "unknown"),
         "elapsed_ms": elapsed_ms,
     })
+
+
+async def _try_refresh_m5tk_from_browser_for_health(store, user_id: str) -> bool:
+    """从浏览器内存读取最新 _m_h5_tk 并回写 JSON（供 cookie_health 轻量级健康检查使用）
+
+    与 api_anticrawl._try_refresh_m5tk_from_browser 的区别：
+    - 支持多用户隔离（传入 user_id，回写到正确的 cookies_{user_id}.json）
+    - 独立实现避免 auth_query → api_anticrawl 跨路由模块依赖
+
+    Returns:
+        True 表示成功从浏览器内存读取到未过期 token 并回写 JSON
+    """
+    try:
+        from xianyu_hunter.web.deps import get_container
+        from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+
+        container = get_container()
+        if not container.browser:
+            return False
+        cookies = await container.browser.get_cookies()
+        updates: dict[str, str] = {}
+        for c in cookies:
+            name = c.get("name", "")
+            value = c.get("value", "")
+            if not value:
+                continue
+            # _m_h5_tk 需未过期；_m_h5_tk_enc 是配套加密 token，无 timestamp 无法判过期，直接回写
+            if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
+                updates[name] = value
+        if not updates:
+            return False
+        return store.update_cookie_values(updates, user_id=user_id)
+    except Exception as e:
+        logger.debug("cookie_health: 从浏览器内存刷新 _m_h5_tk 失败: %s", e)
+        return False
 
 
 # ============================================================

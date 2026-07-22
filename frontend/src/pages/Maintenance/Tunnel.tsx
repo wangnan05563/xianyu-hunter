@@ -40,13 +40,95 @@ const WIZARD_STEPS = [
   { title: '配置 DNS', description: '绑定固定域名' },
 ]
 
+// 处理 cloudflared 登录轮询结果。提取为模块级函数以降低 NamedTunnelWizard 认知复杂度
+async function pollCloudflareLogin(callbacks: {
+  onStop: () => void
+  onConfigChanged: () => void
+  onAuthUrl: (url: string) => void
+}) {
+  try {
+    const result = await tunnelApi.cloudflareLoginStatus()
+    if (result.status === 'success') {
+      callbacks.onStop()
+      message.success(result.message || '授权成功')
+      callbacks.onConfigChanged()
+    } else if (result.status === 'failed') {
+      callbacks.onStop()
+      message.error(result.message || '登录失败')
+      if (result.output) {
+        console.error('cloudflared login 输出:', result.output)
+      }
+      if (result.checked_paths?.length) {
+        console.error('已检查的 cert.pem 路径:', result.checked_paths)
+      }
+    } else if (result.status === 'idle') {
+      // provider 被重置（服务重启等），停止轮询
+      callbacks.onStop()
+      message.warning('登录会话已失效，请重新点击执行登录')
+    } else if (result.auth_url) {
+      // waiting：更新授权 URL（start 时可能未拿到，轮询时才拿到）
+      callbacks.onAuthUrl(result.auth_url)
+    }
+  } catch (error: any) {
+    callbacks.onStop()
+    message.error(error?.response?.data?.detail || '轮询登录状态失败')
+  }
+}
+
+// 根据已配置字段自动判断当前步骤。提取为模块级函数避免嵌套三元（S3358）与否定条件（S7735），并降低组件复杂度（S3776）
+function getCurrentStep(config: TunnelConfig): number {
+  if (config.cert_file) {
+    if (config.tunnel_id) {
+      if (config.hostname) return 3
+      return 2
+    }
+    return 1
+  }
+  return 0
+}
+
+// 执行 Cloudflare 登录流程。提取为模块级函数降低 NamedTunnelWizard 认知复杂度（S3776），
+// 通过 callbacks 注入状态 setter，避免直接依赖组件闭包
+async function doCloudflareLogin(handlers: {
+  onStartLoading: () => void
+  onResetAuthUrl: () => void
+  onStopPoll: () => void
+  onSetAuthUrl: (url: string) => void
+  onStartPoll: () => void
+  onEndLoading: () => void
+}) {
+  handlers.onStartLoading()
+  handlers.onResetAuthUrl()
+  handlers.onStopPoll()
+  try {
+    const result = await tunnelApi.cloudflareLoginStart()
+    if (result.status === 'failed') {
+      message.error(result.message || '登录启动失败')
+      if (result.output) {
+        console.error('cloudflared login 输出:', result.output)
+      }
+      return
+    }
+    // waiting：显示授权 URL，开始轮询
+    if (result.auth_url) {
+      handlers.onSetAuthUrl(result.auth_url)
+    }
+    handlers.onStartPoll()
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '登录启动失败')
+  } finally {
+    handlers.onEndLoading()
+  }
+}
+
 // Named Tunnel 配置向导组件
 function NamedTunnelWizard({
   config,
   onConfigChanged,
 }: {
-  config: TunnelConfig
-  onConfigChanged: () => void
+  // readonly 修饰符满足 S6759：组件 props 在运行时不应变更
+  readonly config: TunnelConfig
+  readonly onConfigChanged: () => void
 }) {
   const [loginLoading, setLoginLoading] = useState(false)
   const [loginAuthUrl, setLoginAuthUrl] = useState<string | null>(null)
@@ -58,8 +140,8 @@ function NamedTunnelWizard({
 
   const loginPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // 根据已配置字段自动判断当前步骤
-  const currentStep = !config.cert_file ? 0 : !config.tunnel_id ? 1 : !config.hostname ? 2 : 3
+  // 根据已配置字段自动判断当前步骤（提取为模块级函数 getCurrentStep）
+  const currentStep = getCurrentStep(config)
 
   const stopLoginPoll = useCallback(() => {
     if (loginPollRef.current) {
@@ -74,66 +156,30 @@ function NamedTunnelWizard({
     return () => stopLoginPoll()
   }, [stopLoginPoll])
 
+  // 提取为 useCallback：原 startLoginPoll 内嵌 setInterval -> pollCloudflareLogin -> onAuthUrl lambda 共 5 层触发 S2004
+  // 独立后 startLoginPoll 内只剩 setInterval -> pollCloudflareLogin 共 4 层，符合阈值
+  const handleAuthUrl = useCallback((url: string) => {
+    setLoginAuthUrl((prev) => prev ?? url)
+  }, [])
+
   const startLoginPoll = useCallback(() => {
     stopLoginPoll()
     setLoginPolling(true)
-    loginPollRef.current = setInterval(async () => {
-      try {
-        const result = await tunnelApi.cloudflareLoginStatus()
-        if (result.status === 'success') {
-          stopLoginPoll()
-          message.success(result.message || '授权成功')
-          onConfigChanged()
-        } else if (result.status === 'failed') {
-          stopLoginPoll()
-          message.error(result.message || '登录失败')
-          if (result.output) {
-            console.error('cloudflared login 输出:', result.output)
-          }
-          if (result.checked_paths?.length) {
-            console.error('已检查的 cert.pem 路径:', result.checked_paths)
-          }
-        } else if (result.status === 'idle') {
-          // provider 被重置（服务重启等），停止轮询
-          stopLoginPoll()
-          message.warning('登录会话已失效，请重新点击执行登录')
-        } else {
-          // waiting：更新授权 URL（start 时可能未拿到，轮询时才拿到）
-          if (result.auth_url) {
-            setLoginAuthUrl((prev) => prev ?? result.auth_url)
-          }
-        }
-      } catch (error: any) {
-        stopLoginPoll()
-        message.error(error?.response?.data?.detail || '轮询登录状态失败')
-      }
-    }, 2500)
-  }, [stopLoginPoll, onConfigChanged])
+    loginPollRef.current = setInterval(() => pollCloudflareLogin({
+      onStop: stopLoginPoll,
+      onConfigChanged,
+      onAuthUrl: handleAuthUrl,
+    }), 2500)
+  }, [stopLoginPoll, onConfigChanged, handleAuthUrl])
 
-  const handleLogin = async () => {
-    setLoginLoading(true)
-    setLoginAuthUrl(null)
-    stopLoginPoll()
-    try {
-      const result = await tunnelApi.cloudflareLoginStart()
-      if (result.status === 'failed') {
-        message.error(result.message || '登录启动失败')
-        if (result.output) {
-          console.error('cloudflared login 输出:', result.output)
-        }
-        return
-      }
-      // waiting：显示授权 URL，开始轮询
-      if (result.auth_url) {
-        setLoginAuthUrl(result.auth_url)
-      }
-      startLoginPoll()
-    } catch (error: any) {
-      message.error(error?.response?.data?.detail || '登录启动失败')
-    } finally {
-      setLoginLoading(false)
-    }
-  }
+  const handleLogin = () => doCloudflareLogin({
+    onStartLoading: () => setLoginLoading(true),
+    onResetAuthUrl: () => setLoginAuthUrl(null),
+    onStopPoll: stopLoginPoll,
+    onSetAuthUrl: setLoginAuthUrl,
+    onStartPoll: startLoginPoll,
+    onEndLoading: () => setLoginLoading(false),
+  })
 
   const handleCreate = async () => {
     if (!createName.trim()) {
@@ -170,6 +216,14 @@ function NamedTunnelWizard({
     } finally {
       setDnsLoading(false)
     }
+  }
+
+  // 登录按钮文案：优先显示轮询状态，其次按是否已配置区分
+  let loginButtonText = '执行登录'
+  if (loginPolling) {
+    loginButtonText = '等待授权中...'
+  } else if (config.cert_file) {
+    loginButtonText = '重新授权'
   }
 
   return (
@@ -235,7 +289,7 @@ function NamedTunnelWizard({
             onClick={handleLogin}
             disabled={loginLoading || loginPolling}
           >
-            {loginPolling ? '等待授权中...' : config.cert_file ? '重新授权' : '执行登录'}
+            {loginButtonText}
           </Button>
         </Space>
       </div>

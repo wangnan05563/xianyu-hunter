@@ -106,6 +106,13 @@ def _build_yaml_credentials(cfg: Any) -> dict[str, dict[str, str]]:
         }
     if cfg.webhook_url:
         yaml_credentials["webhook"] = {"webhook_url": cfg.webhook_url}
+    # ntfy：topic 必填，server/token 可选（server 默认 https://ntfy.sh）
+    if cfg.ntfy_topic:
+        yaml_credentials["ntfy"] = {
+            "server": cfg.ntfy_server or "",
+            "topic": cfg.ntfy_topic,
+            "token": cfg.ntfy_token or "",
+        }
     return yaml_credentials
 
 
@@ -439,7 +446,20 @@ def build_default_container(
         ))
 
         collector = Collector(browser=browser, antidetect=antidetect, browser_lock=_browser_lock)
-        buyer = Buyer(browser=browser, repository=repo, event_bus=bus, config=BuyerConfig())
+        # 从 YAML 配置读取抢单参数，替代 BuyerConfig() 硬编码默认值
+        buyer_cfg = self.config.buyer
+        buyer = Buyer(
+            browser=browser,
+            repository=repo,
+            event_bus=bus,
+            config=BuyerConfig(
+                click_retry_times=buyer_cfg.click_retry_times,
+                click_retry_interval=buyer_cfg.click_retry_interval,
+                confirm_button_timeout=buyer_cfg.confirm_button_timeout,
+                price_tolerance=buyer_cfg.price_tolerance,
+                min_interval_between_orders=buyer_cfg.min_interval_between_orders,
+            ),
+        )
 
     dedup = ItemDedup(repo=repo)
     price = PriceStrategy(PriceConfig(

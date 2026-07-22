@@ -31,6 +31,14 @@ function getDisplayName(account: AccountInfo): string {
   return account.user_id.slice(0, 4)
 }
 
+// 触发器文案优先级：current > switching 空串 > 默认"账号"
+// 拆出独立函数规避嵌套三元（SonarQube S3358），同时让优先级判定显式化
+function getTriggerLabel(current: AccountInfo | undefined, switching: boolean): string {
+  if (current) return getDisplayName(current)
+  if (switching) return ''
+  return '账号'
+}
+
 // 默认头像：闲鱼头像常因防盗链加载失败，回退到品牌色占位
 const DEFAULT_AVATAR_BG = 'linear-gradient(135deg, #FF6200, #FF8C00)'
 
@@ -177,7 +185,7 @@ export default function MobileAccountSwitcher() {
 
   // 触发器：头像 + 显示名
   // 切换中显示 Spin 让用户知道操作在进行
-  const triggerLabel = current ? getDisplayName(current) : (switching ? '' : '账号')
+  const triggerLabel = getTriggerLabel(current, switching)
 
   return (
     <Dropdown

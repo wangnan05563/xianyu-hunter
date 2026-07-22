@@ -555,7 +555,7 @@ def _compute_sold_range(
         all_prices, all_raw = _load_all_prices_from_items(conn, task_id, range_days, task_range)
         raw_total += all_raw
         if len(sold_prices) > 0 and len(all_prices) > 0:
-            # 混合模式：已售样本权重2x + 全部商品
+            # 混合模式：已售样本权重2x + 全部商品  # NOSONAR S125:为业务说明非注释代码
             # 已售样本虽少但代表真实成交价，权重加倍保留参考价值；
             # 全部商品补充样本量，避免少量已售样本导致的统计偏差
             prices = sold_prices * 2 + all_prices

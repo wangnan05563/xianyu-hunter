@@ -30,10 +30,11 @@ export function isMobileUA(userAgent: string): boolean {
 // 但视口宽度通常 >= 1024（桌面分辨率），若同时判定为移动端会导致
 // 桌面用户被强制跳到 /app/m/ 路由（PC 端完全不可用）。
 function detectMobile(): boolean {
-  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
-  const ua = navigator.userAgent
-  const width = window.innerWidth
-  const ontouchend = typeof document !== 'undefined' && 'ontouchend' in document
+  // 用 globalThis.* + 直接与 undefined 比较（避免 S7764/S7741 误报）
+  if (globalThis.window === undefined || globalThis.navigator === undefined) return false
+  const ua = globalThis.navigator.userAgent
+  const width = globalThis.window.innerWidth
+  const ontouchend = globalThis.document !== undefined && 'ontouchend' in globalThis.document
   // 设备仿真模式下 'ontouchend' 可能失效，maxTouchPoints 是更稳定的触摸信号
   // 仅在 Macintosh UA 分支生效，避免触屏笔记本（Surface 等）误判为移动端
   const maxTouchPoints = navigator.maxTouchPoints || 0
@@ -51,8 +52,8 @@ export function useMobileDetect(): boolean {
   useEffect(() => {
     const handler = () => setIsMobile(detectMobile())
     // 监听窗口尺寸变化（如 F12 切换设备模拟器），实时同步路由
-    window.addEventListener('resize', handler)
-    return () => window.removeEventListener('resize', handler)
+    globalThis.window.addEventListener('resize', handler)
+    return () => globalThis.window.removeEventListener('resize', handler)
   }, [])
 
   return isMobile

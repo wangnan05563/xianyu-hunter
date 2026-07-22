@@ -120,7 +120,7 @@ class TaskWorker:
         # 为什么缓存：避免每个商品都查询 task_links/items 表，单轮 run_once 内 P10 不变
         # None 表示未加载，float | None 表示加载后的值（None=无足够数据计算 P10）
         self._bargain_price_cache: float | None = None
-        # 捡漏价格数据来源缓存（sold/all_fallback/all_fallback_insufficient/empty）
+        # 捡漏价格数据来源缓存（sold/all_fallback/all_fallback_insufficient/empty）  # NOSONAR S125:括号内为枚举值说明非注释代码
         # 为什么单独缓存：通知模板需展示来源，让用户事后能对比价格行情页口径
         self._bargain_source_cache: str | None = None
         self._bargain_price_loaded: bool = False
@@ -573,18 +573,12 @@ class TaskWorker:
         # 初始化 seller 避免 except 块中引用未定义变量
         seller = None
         try:
-            # 复用详情页（首次创建，后续复用）
-            if _has_browser and shared_pages["detail"] is None:
-                shared_pages["detail"] = await self.collector.browser.new_page()
-            detail = await self.collector.detail(summary.id, page=shared_pages["detail"])
-            if getattr(self.collector, 'last_session_invalid', False):
-                logger.warning(
-                    "[Task {}] 详情页检测到闲鱼会话失效，停止本轮并暂停任务",
-                    self.task.id,
-                )
+            detail, should_pause = await self._fetch_detail_with_session_check(
+                summary, shared_pages, _has_browser
+            )
+            if should_pause:
                 return None, None, True
-            if not detail:
-                logger.warning("[Task {}] 详情页获取失败，跳过 {}", self.task.id, summary.id)
+            if detail is None:
                 return None, None, False
             # 复用卖家页（首次创建，后续复用）
             # seller_profile 失败时使用降级策略（搜索页+详情页信息），而非空默认值
@@ -597,19 +591,7 @@ class TaskWorker:
                 logger.info("[Task {}] 卖家主页获取失败，使用降级策略评估 {}", self.task.id, summary.id)
                 # 降级策略：合并搜索结果+详情页的卖家信息构建基本画像
                 seller = await self._seller_profile_fallback(summary=summary, detail=detail)
-            # 合并详情页卖家字段：seller_profile 可能因页面变更/反爬返回部分字段为空的 SellerProfile，
-            # 用 detail 页的 detail_credit_score/detail_register_days/detail_sold_count/detail_seller_nick
-            # 补充缺失字段，避免 evaluator 因维度数据不足触发 _evaluate_insufficient 模式（cap 65 分）。
-            # 与 collection_service._collect_official_full line 720 的 _merge_detail_seller_fields 对齐。
-            if seller and detail:
-                if not getattr(seller, 'nick', None) and getattr(detail, 'detail_seller_nick', None):
-                    seller.nick = detail.detail_seller_nick
-                if getattr(seller, 'credit_score', None) is None and getattr(detail, 'detail_credit_score', None) is not None:
-                    seller.credit_score = detail.detail_credit_score
-                if not getattr(seller, 'sold_count', None) and getattr(detail, 'detail_sold_count', None):
-                    seller.sold_count = detail.detail_sold_count
-                if not getattr(seller, 'register_days', None) and getattr(detail, 'detail_register_days', None):
-                    seller.register_days = detail.detail_register_days
+            self._merge_detail_seller_fields(seller, detail)
         except Exception as e:
             logger.warning("[Task {}] 采集异常 {}: {}", self.task.id, summary.id, e)
             detail = None
@@ -617,6 +599,49 @@ class TaskWorker:
             if not seller and hasattr(self, 'collector'):
                 seller = await self._seller_profile_fallback(summary=summary, detail=detail)
         return detail, seller, False
+
+    async def _fetch_detail_with_session_check(
+        self, summary: ItemSummary, shared_pages: dict, _has_browser: bool
+    ) -> tuple[Any, bool]:
+        """获取详情页并检测会话失效
+
+        返回 (detail, should_pause)：
+        - should_pause=True 表示会话失效，调用方应暂停任务
+        - detail 为 None 表示采集失败（会话失效或详情获取失败）
+        """
+        # 复用详情页（首次创建，后续复用）
+        if _has_browser and shared_pages["detail"] is None:
+            shared_pages["detail"] = await self.collector.browser.new_page()
+        detail = await self.collector.detail(summary.id, page=shared_pages["detail"])
+        if getattr(self.collector, 'last_session_invalid', False):
+            logger.warning(
+                "[Task {}] 详情页检测到闲鱼会话失效，停止本轮并暂停任务",
+                self.task.id,
+            )
+            return None, True
+        if not detail:
+            logger.warning("[Task {}] 详情页获取失败，跳过 {}", self.task.id, summary.id)
+            return None, False
+        return detail, False
+
+    def _merge_detail_seller_fields(self, seller: Any, detail: Any) -> None:
+        """用详情页字段补充 seller_profile 缺失的卖家维度
+
+        为什么需要：seller_profile 可能因页面变更/反爬返回部分字段为空的 SellerProfile，
+        用 detail 页的 detail_credit_score/detail_register_days/detail_sold_count/detail_seller_nick
+        补充缺失字段，避免 evaluator 因维度数据不足触发 _evaluate_insufficient 模式（cap 65 分）。
+        与 collection_service._collect_official_full line 720 的 _merge_detail_seller_fields 对齐。
+        """
+        if not (seller and detail):
+            return
+        if not getattr(seller, 'nick', None) and getattr(detail, 'detail_seller_nick', None):
+            seller.nick = detail.detail_seller_nick
+        if getattr(seller, 'credit_score', None) is None and getattr(detail, 'detail_credit_score', None) is not None:
+            seller.credit_score = detail.detail_credit_score
+        if not getattr(seller, 'sold_count', None) and getattr(detail, 'detail_sold_count', None):
+            seller.sold_count = detail.detail_sold_count
+        if not getattr(seller, 'register_days', None) and getattr(detail, 'detail_register_days', None):
+            seller.register_days = detail.detail_register_days
 
     async def _seller_profile_fallback(self, summary: ItemSummary | None = None, detail: Any | None = None) -> Any | None:
         fallback = getattr(self.collector, "seller_profile_fallback", None)

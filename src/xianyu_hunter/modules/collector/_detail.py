@@ -36,6 +36,36 @@ _LAZY_SRC_ATTRS = ("data-src", "data-original", "data-lazy-src", "data-img")
 # 占位图标记：搜索 API 返回的 1x1 透明 PNG，详情页也可能出现
 _PLACEHOLDER_MARKS = ("tps-2-2", "2-2.png", "1x1.png")
 
+# 网络层瞬时故障关键字：这些异常可重试，不应记为 ERROR 污染告警
+# 为什么单独归类：ERR_NAME_NOT_RESOLVED/ERR_NETWORK_CHANGED 等是 DNS/网络抖动，
+# 与 cookie 失效/反爬拦截等业务异常不同，记为 ERROR 会触发误告警和连锁自愈
+_NETWORK_TRANSIENT_KEYWORDS = (
+    "ERR_NAME_NOT_RESOLVED",
+    "ERR_NETWORK_CHANGED",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_TIMED_OUT",
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_RESET",
+    "ERR_TUNNEL_CONNECTION_FAILED",
+    "ERR_ADDRESS_UNREACHABLE",
+    "ERR_NAME_RESOLUTION_FAILED",
+    "ERR_DNS_NO_MATCHING_SUPPORTED_ALPN",  # HTTP/3 ALPN 协商失败，降级 HTTP/2 即可
+    "net::ERR_",  # 兜底匹配其他 Chromium 网络错误码
+)
+
+# Playwright 导航超时关键字：页面加载慢或资源服务器响应慢
+# 为什么单独归类：与 cookie 失效无关，不应触发自愈链路；与网络瞬时故障类似可重试
+_PLAYWRIGHT_TIMEOUT_KEYWORDS = (
+    "Timeout",
+    "exceeded",
+    "page.goto",
+    "waiting for",
+)
+
+# 重复日志抑制阈值：相同失败原因连续 N 次后降级为 DEBUG，避免日志噪音
+# 为什么 5 次：1-2 次需要完整堆栈定位问题，5 次以上基本可判定为持续性问题
+_REPEAT_SUPPRESSION_THRESHOLD = 5
+
 
 def _is_valid_image_src(src: str) -> bool:
     """判断图片 URL 是否有效：非空、非 data: 占位符、非 1x1 透明 PNG
@@ -318,10 +348,14 @@ class DetailMixin:
         if not any(marker in title for marker in _HOME_PAGE_TITLE_MARKERS):
             return False
         self.last_detail_failure_reason = "home_title_redirect"
-        self._mark_detail_session_invalid(item_id, f"首页标题 title={title}")
-        logger.warning(
-            f"详情页 {item_id} 提取到首页标题（title={title}），cookie 可能失效被重定向到首页，主动返回 None"
+        # 合并日志：原 _mark_detail_session_invalid + 调用方各打印一次 WARNING，
+        # 102 次日志中 51 次为重复。现统一由 _mark_detail_session_invalid 输出
+        # 调用方仅在 DEBUG 级别补充上下文，便于排查时定位具体检测位置
+        self._mark_detail_session_invalid(
+            item_id,
+            f"首页标题 title={title}（cookie 可能失效被重定向到首页，主动返回 None）",
         )
+        logger.debug(f"详情页 {item_id} 早期首页标题检测命中（title={title}）")
         return True
 
     def _is_login_or_verify_redirect(self, page: Page, item_id: str) -> bool:
@@ -713,10 +747,12 @@ class DetailMixin:
         # 修复：早期检测 _is_home_page_title_early 调用了 _mark_detail_session_invalid
         # 但晚期检测漏调用，导致 Worker 无法感知此类失效继续调度任务
         self.last_detail_failure_reason = "home_title_redirect"
-        self._mark_detail_session_invalid(item_id, f"二次首页标题 title={title}")
-        logger.warning(
-            f"详情页 {item_id} 提取到首页标题（title={title}），cookie 可能失效被重定向到首页，主动返回 None"
+        # 合并日志：与早期检测一致，统一由 _mark_detail_session_invalid 输出 WARNING
+        self._mark_detail_session_invalid(
+            item_id,
+            f"二次首页标题 title={title}（cookie 可能失效被重定向到首页，主动返回 None）",
         )
+        logger.debug(f"详情页 {item_id} 晚期首页标题检测命中（title={title}）")
         return True
 
     def _is_redirected_away_from_item(self, page: Page, item_id: str) -> bool:
@@ -925,19 +961,67 @@ class DetailMixin:
         )
 
     def _handle_detail_exception(self, item_id: str, e: Exception) -> None:
-        """处理 detail() 采集异常：TargetClosedError 降级为 WARNING，其他为 ERROR
+        """处理 detail() 采集异常：按异常类型分级降级
 
-        TargetClosedError 是已知并发场景（BatchRefreshScheduler 与 TaskScheduler.run_once
-        并发清理），降级避免污染 ERROR 日志；page 已不可用，统一返回 None。
+        异常分类优先级（从高到低）：
+        1. TargetClosedError：并发清理场景，降级为 WARNING
+        2. 网络层瞬时故障（DNS/连接重置等）：可重试，降级为 WARNING
+        3. Playwright 导航超时：页面加载慢，降级为 WARNING
+        4. 其他异常：保留 ERROR 级别 + 完整堆栈
+
+        重复日志抑制：相同 failure_reason 连续超过阈值次后降级为 DEBUG，
+        避免持续性问题污染日志（如服务端持续返回异常结构）
         """
         err_msg = str(e)
         if "Target" in err_msg and "closed" in err_msg:
             self.last_detail_failure_reason = "target_closed_exception"
-            logger.warning(f"详情页 {item_id} 采集失败（页面被并发关闭）: {e}")
+            self._log_detail_failure(item_id, "页面被并发关闭", e)
+        elif any(kw in err_msg for kw in _NETWORK_TRANSIENT_KEYWORDS):
+            # 网络层瞬时故障可恢复，不应触发 cookie 自愈链路
+            self.last_detail_failure_reason = "network_transient"
+            self._log_detail_failure(item_id, "网络瞬时故障", e)
+        elif any(kw in err_msg for kw in _PLAYWRIGHT_TIMEOUT_KEYWORDS):
+            # Playwright 导航/等待超时：页面加载慢，与 cookie 失效无关
+            # 为什么单独归类：超时可能因闲鱼服务端响应慢、资源服务器抖动，
+            # 归为 unknown_exception 会触发 ERROR 级告警和连锁自愈，实际上重试即可
+            self.last_detail_failure_reason = "playwright_timeout"
+            self._log_detail_failure(item_id, "Playwright 超时", e)
         else:
             self.last_detail_failure_reason = "unknown_exception"
-            logger.exception(f"采集详情失败 {item_id}")
+            self._log_detail_failure(item_id, "采集详情失败", e, level="error")
         return None
+
+    def _log_detail_failure(
+        self, item_id: str, label: str, e: Exception, level: str = "warning",
+    ) -> None:
+        """统一日志输出 + 重复抑制
+
+        相同 failure_reason 连续超过 _REPEAT_SUPPRESSION_THRESHOLD 次后降级为 DEBUG，
+        避免持续性问题（如服务端结构变更、Selector 失效）产生大量 ERROR 日志。
+
+        为什么用类属性计数器而非模块级：每个 Collector 实例独立计数，
+        避免多 Worker 共享状态时计数错乱
+        """
+        reason = self.last_detail_failure_reason
+        counter = getattr(self, "_detail_fail_counts", None)
+        if counter is None:
+            counter = {}
+            self._detail_fail_counts = counter
+        count = counter.get(reason, 0) + 1
+        counter[reason] = count
+
+        # 超过阈值后降级为 DEBUG，避免日志噪音
+        if count > _REPEAT_SUPPRESSION_THRESHOLD and level == "error":
+            logger.debug(
+                f"详情页 {item_id} 采集失败（{label}, reason={reason}）"
+                f"，连续第 {count} 次，已降级为 DEBUG: {str(e)[:200]}"
+            )
+            return
+
+        if level == "error":
+            logger.exception(f"{label} {item_id}")
+        else:
+            logger.warning(f"详情页 {item_id} 采集失败（{label}）: {e}")
 
     async def seller_profile(
         self, seller_id: str, page: Page | None = None

@@ -89,14 +89,12 @@ class DingTalkNotifier(BaseNotifier):
         ).digest()
         return quote(base64.b64encode(hmac_code).decode("utf-8"), safe="")
 
-    async def _do_send(self, event: Event) -> str:
-        if not self.webhook_url:
-            raise ValueError("钉钉 webhook_url 未配置（keyring 缺失或为空）")
-        title, body = render(event)
-        # body 已经按钉钉 markdown 优化（首行 # 标题、<font> 颜色、引用、风险项翻译等），
-        # 只需做最小降级（移除 _ 斜体）
-        text = _to_dingtalk_markdown(body)
+    def _resolve_action(self, event: Event) -> tuple[str, str, str]:
+        """从事件 payload 解析 (item_url, action_title, action_url)
 
+        将 URL 与按钮文案的多源兜底逻辑独立出来，避免 _do_send 因多重 or/三元
+        嵌套导致认知复杂度超标；行为与原内联实现完全一致。
+        """
         # 商品详情 URL（用于 actionCard 按钮跳转）
         # 兼容扁平 / item 子对象两种 payload 格式（同 render()）
         item_obj = event.payload.get("item") if isinstance(event.payload.get("item"), dict) else None
@@ -105,6 +103,17 @@ class DingTalkNotifier(BaseNotifier):
         item_url = action_url or _get(event.payload or {}, "url", item_obj, "")
         if not item_url and event.item_id:
             item_url = GOOFISH_ITEM_URL.format(item_id=event.item_id)
+        return item_url, action_title, action_url
+
+    async def _do_send(self, event: Event) -> str:
+        if not self.webhook_url:
+            raise ValueError("钉钉 webhook_url 未配置（keyring 缺失或为空）")
+        title, body = render(event)
+        # body 已经按钉钉 markdown 优化（首行 # 标题、<font> 颜色、引用、风险项翻译等），
+        # 只需做最小降级（移除 _ 斜体）
+        text = _to_dingtalk_markdown(body)
+
+        item_url, action_title, _ = self._resolve_action(event)
 
         # 构造主消息（actionCard 富文本卡片）
         # 商品图作为 markdown 链接已嵌入 text 末尾（由 templates._eval_passed 渲染）

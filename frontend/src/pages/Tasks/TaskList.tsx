@@ -870,7 +870,8 @@ export default function TaskList() {
                     key: 'saveAsTemplate',
                     label: '另存为模板',
                     icon: <SaveOutlined />,
-                    onClick: () => saveAsTemplate(record),
+                    // void 操作符显式丢弃 Promise，符合 S6544 期望的 void 返回类型
+                    onClick: () => { void saveAsTemplate(record) },
                   },
                 ],
               }}
@@ -1066,7 +1067,7 @@ export default function TaskList() {
                                   key: 'saveAsTemplate',
                                   label: '另存为模板',
                                   icon: <SaveOutlined />,
-                                  onClick: () => saveAsTemplate(task),
+                                  onClick: () => { void saveAsTemplate(task) },
                                 },
                               ],
                             }}

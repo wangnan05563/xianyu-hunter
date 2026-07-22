@@ -90,11 +90,14 @@ def validation_exception_handler(
     )
 
 
-async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
     """处理 HTTPException，保持原有 detail 格式
 
     各路由主动抛出的 HTTPException（如 404/400/401）走此通道，
     响应体保持 {"detail": ...} 结构，与现有前端契约一致。
+
+    为什么用 sync 而非 async：函数体内无 await，FastAPI 的 add_exception_handler
+    对 sync/async 处理器均兼容（sync 会在 threadpool 执行），避免 S7503 误报。
     """
     if exc.status_code >= 500:
         # 502 采集失败（Cookie失效）降级为 INFO，避免会话失效期间 WARNING 日志刷屏

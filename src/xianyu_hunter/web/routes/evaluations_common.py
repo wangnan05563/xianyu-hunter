@@ -244,6 +244,36 @@ def should_skip_notify_by_bargain(
     return False
 
 
+def _load_task_mode(container: Container, task_id: str) -> str:
+    """读取 task_mode（SEMI_AUTO 模式下模板渲染"确认抢单"链接）
+
+    为什么独立函数：补发场景没有 task 对象上下文，需查 DB；
+    查询失败时返回空字符串，模板层视为非 SEMI_AUTO 模式（保守降级）。
+    """
+    if not task_id:
+        return ""
+    try:
+        task_row = container.repo.get_task(task_id)
+        if task_row:
+            return str(task_row.get("mode") or "")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to load task mode for EVAL_PASSED task={}: {}", task_id, exc)
+    return ""
+
+
+def _resolve_risk_level_value(eval_result: Any) -> str:
+    """统一 risk_level 序列化：兼容 enum 与裸字符串两种类型
+
+    为什么需要兼容：eval_result 可能来自不同 evaluator 实现，
+    有的返回 RiskLevel 枚举（有 .value），有的直接传字符串。
+    """
+    risk_level = getattr(eval_result, "risk_level", None)
+    if hasattr(risk_level, "value"):
+        return risk_level.value
+    # 属性缺失时回退 "medium"；裸字符串/None 时转字符串（与原内联三元一致）
+    return str(getattr(eval_result, "risk_level", "medium"))
+
+
 def publish_eval_passed_event(
     container: Container,
     task_id: str,
@@ -273,16 +303,7 @@ def publish_eval_passed_event(
     if should_skip_notify_by_bargain(container, task_id, item_price):
         return
     # task_mode 与 worker 对齐：SEMI_AUTO 模式下模板渲染"确认抢单"链接
-    # 补发场景没有 task 对象上下文，需要查 DB；查询失败时 mode 为空字符串，
-    # 模板层视为非 SEMI_AUTO 模式，不渲染确认链接（保守降级）
-    task_mode = ""
-    if task_id:
-        try:
-            task_row = container.repo.get_task(task_id)
-            if task_row:
-                task_mode = str(task_row.get("mode") or "")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to load task mode for EVAL_PASSED task={}: {}", task_id, exc)
+    task_mode = _load_task_mode(container, task_id)
     payload: dict[str, Any] = {
         "item_id": item_id,
         "item_title": getattr(detail, "title", "") or "",
@@ -292,9 +313,7 @@ def publish_eval_passed_event(
         "seller_id": getattr(detail, "seller_id", "") or "",
         "seller_nick": getattr(seller, "nick", "") or "",
         "score": getattr(eval_result, "score", 0),
-        "risk_level": getattr(eval_result, "risk_level", RiskLevel.MEDIUM).value
-                      if hasattr(getattr(eval_result, "risk_level", None), "value")
-                      else str(getattr(eval_result, "risk_level", "medium")),
+        "risk_level": _resolve_risk_level_value(eval_result),
         "data_quality": getattr(eval_result, "data_quality", ""),
         "reject_reasons": getattr(eval_result, "reject_reasons", []) or [],
         "task_mode": task_mode,

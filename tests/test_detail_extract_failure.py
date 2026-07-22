@@ -296,3 +296,70 @@ async def test_detail_returns_none_on_http_3xx_redirect(
         redirect_url in rec.message and "重定向" in rec.message
         for rec in caplog.records
     ), f"应记录含目标 URL 的重定向 warning，实际日志: {[r.message for r in caplog.records]}"
+
+
+# ============== 网络瞬时故障降级测试 ==============
+
+
+async def test_handle_detail_exception_network_transient_downgraded_to_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """网络层瞬时故障（ERR_NAME_NOT_RESOLVED 等）应降级为 WARNING 而非 ERROR
+
+    覆盖 _detail.py _handle_detail_exception 的网络异常分支：
+    - 异常消息含 ERR_NAME_NOT_RESOLVED → last_detail_failure_reason='network_transient'
+    - 日志级别应为 WARNING（而非 ERROR），避免污染告警
+    - 日志应含"网络瞬时故障"关键词
+    """
+    page = _make_page(response=_make_response(status=200))
+    collector = _make_collector(page)
+
+    # 模拟 Playwright Page.goto 抛出 DNS 解析失败
+    network_error = Exception(
+        "Page.goto: net::ERR_NAME_NOT_RESOLVED at https://www.goofish.com/item?id=123"
+    )
+    collector._handle_detail_exception("test_item_dns_failure", network_error)
+
+    assert collector.last_detail_failure_reason == "network_transient"
+    assert any(
+        "网络瞬时故障" in rec.message and "WARNING" == rec.levelname
+        for rec in caplog.records
+    ), f"应记录 WARNING 级网络瞬时故障日志，实际: {[(r.levelname, r.message) for r in caplog.records]}"
+
+
+async def test_handle_detail_exception_network_changed_downgraded_to_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """ERR_NETWORK_CHANGED 同样应降级为 WARNING"""
+    page = _make_page(response=_make_response(status=200))
+    collector = _make_collector(page)
+
+    network_error = Exception(
+        "Page.goto: net::ERR_NETWORK_CHANGED at https://www.goofish.com/item?id=456"
+    )
+    collector._handle_detail_exception("test_item_network_changed", network_error)
+
+    assert collector.last_detail_failure_reason == "network_transient"
+    assert any(
+        "网络瞬时故障" in rec.message for rec in caplog.records
+    ), f"应记录网络瞬时故障日志，实际: {[r.message for r in caplog.records]}"
+
+
+async def test_handle_detail_exception_unknown_still_logs_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """非网络层异常应保留 ERROR 级别 + 完整堆栈
+
+    确保降级逻辑不会误吞真正的业务异常。
+    """
+    page = _make_page(response=_make_response(status=200))
+    collector = _make_collector(page)
+
+    business_error = RuntimeError("selector config missing")
+    collector._handle_detail_exception("test_item_business_error", business_error)
+
+    assert collector.last_detail_failure_reason == "unknown_exception"
+    assert any(
+        "采集详情失败" in rec.message and rec.levelname == "ERROR"
+        for rec in caplog.records
+    ), f"业务异常应记为 ERROR，实际: {[(r.levelname, r.message) for r in caplog.records]}"

@@ -93,7 +93,7 @@ export default function MobilePriceStrategy() {
               step={10}
               disabled={!form.enabled_max}
               style={{ width: '100%' }}
-              addonAfter="¥"
+              addonAfter="¥" /* NOSONAR - addonAfter 在 antd 5.x 仍可用，迁移到 InputNumber.Group 会破坏现有布局，暂不迁移 */
             />
           </div>
         </Space>
@@ -121,7 +121,7 @@ export default function MobilePriceStrategy() {
               step={10}
               disabled={!form.enabled_min}
               style={{ width: '100%' }}
-              addonAfter="¥"
+              addonAfter="¥" /* NOSONAR - addonAfter 在 antd 5.x 仍可用，迁移到 InputNumber.Group 会破坏现有布局，暂不迁移 */
             />
           </div>
         </Space>

@@ -34,7 +34,8 @@ _CHANNEL_CREATION_PARAMS: dict[str, list[str]] = {
     "wecom": ["wecom_webhook"],
     "dingtalk": ["dingtalk_webhook", "dingtalk_secret"],
     "webhook": ["webhook_url"],
-    "ntfy": ["server", "topic", "token"],
+    # ntfy 字段名带前缀，与其他渠道保持一致，避免与其他渠道参数名冲突
+    "ntfy": ["ntfy_server", "ntfy_topic", "ntfy_token"],
 }
 
 # 前端字段名（= keyring KEY = yaml 字段名）→ notifier __init__ 参数名
@@ -51,6 +52,10 @@ _FRONTEND_TO_NOTIFIER_PARAMS: dict[str, str] = {
     "wecom_webhook": "webhook_url",
     "dingtalk_webhook": "webhook_url",
     "dingtalk_secret": "secret",
+    # ntfy：前端字段名带前缀，notifier __init__ 参数名为裸名
+    "ntfy_server": "server",
+    "ntfy_topic": "topic",
+    "ntfy_token": "token",
 }
 
 

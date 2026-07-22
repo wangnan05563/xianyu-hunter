@@ -558,6 +558,69 @@ def _install_asyncio_exception_handler() -> None:
     loop.set_exception_handler(_exception_handler)
 
 
+def _start_tunnel_autostart_in_thread(container: Any) -> None:
+    """根据配置在后台线程启动内网穿透隧道
+
+    用线程而非 asyncio：cloudflared/cpolar 是阻塞子进程，线程不占用事件循环；
+    daemon=True 确保随主进程退出，shutdown hook 中会显式 stop。
+    """
+    from loguru import logger
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        if not get_config().tunnel.auto_start:
+            return
+        import threading
+
+        threading.Thread(
+            target=_run_tunnel_autostart,
+            args=(container,),
+            daemon=True,
+            name="tunnel-autostart",
+        ).start()
+        logger.info("检测到 tunnel.auto_start=True，已在后台线程启动隧道")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("内网穿透 auto_start 检查失败: {}", e)
+
+
+def _run_tunnel_autostart(container: Any) -> None:
+    """内网穿透自动启动线程目标函数
+
+    失败时除写日志外，还写入 DB 事件并发送通知：避免用户只看到隧道状态
+    stopped 却不知是自启动失败还是未执行。
+    """
+    from loguru import logger
+    try:
+        from xianyu_hunter.web.routes.api_tunnel import get_tunnel_service
+        svc = get_tunnel_service()
+        svc.start()
+        logger.info("内网穿透隧道已自动启动: {}", svc.public_url)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("内网穿透自动启动失败: {}", e)
+        # 写入 DB 事件让前端能看到失败原因，而非只写日志
+        # 否则用户看不到自启动失败，以为"开关没生效"
+        try:
+            container.repo.save_event({
+                "type": "tunnel.autostart_failed",
+                "task_id": None,
+                "item_id": None,
+                "stage": "tunnel",
+                "level": "err",
+                "message": f"内网穿透自启动失败: {e}",
+                "payload": None,
+            })
+        except Exception:
+            pass  # DB 写入失败不二次报错
+        # 发送失败通知：用户不看 DB 事件也能通过通知渠道获知自启动失败
+        # 复用 notify_tunnel_started 的子线程 + asyncio.run 模式，避免阻塞
+        try:
+            from xianyu_hunter.web.services.tunnel_notifications import (
+                _send_autostart_failed_notification,
+            )
+            _send_autostart_failed_notification(str(e))
+        except Exception:
+            logger.warning("发送自启动失败通知时出错")
+
+
 def setup_startup_hooks(app: FastAPI) -> None:
     """注册启动和关闭钩子
 
@@ -592,52 +655,7 @@ def setup_startup_hooks(app: FastAPI) -> None:
         await _start_all_schedulers(container)
 
         # 内网穿透：auto_start 为 True 时后台线程自动启动隧道
-        # 用线程而非 asyncio：cloudflared/cpolar 是阻塞子进程，线程不占用事件循环
-        # daemon=True 确保随主进程退出，shutdown hook 中会显式 stop
-        try:
-            from xianyu_hunter.infra.yaml_config import get_config
-            if get_config().tunnel.auto_start:
-                import threading
-                from xianyu_hunter.web.routes.api_tunnel import get_tunnel_service
-
-                def _auto_start_tunnel():
-                    try:
-                        svc = get_tunnel_service()
-                        svc.start()
-                        logger.info("内网穿透隧道已自动启动: {}", svc.public_url)
-                    except Exception as e:
-                        logger.exception("内网穿透自动启动失败: {}", e)
-                        # 写入 DB 事件让前端能看到失败原因，而非只写日志
-                        # 否则用户看不到自启动失败，以为"开关没生效"
-                        try:
-                            container.repo.save_event({
-                                "type": "tunnel.autostart_failed",
-                                "task_id": None,
-                                "item_id": None,
-                                "stage": "tunnel",
-                                "level": "err",
-                                "message": f"内网穿透自启动失败: {e}",
-                                "payload": None,
-                            })
-                        except Exception:
-                            pass  # DB 写入失败不二次报错
-                        # 发送失败通知：用户不看 DB 事件也能通过通知渠道获知自启动失败
-                        # 否则用户只看到隧道状态 stopped，不知道是自启动失败了还是没执行
-                        # 复用 notify_tunnel_started 的子线程 + asyncio.run 模式，避免阻塞
-                        try:
-                            from xianyu_hunter.web.services.tunnel_notifications import (
-                                _send_autostart_failed_notification,
-                            )
-                            _send_autostart_failed_notification(str(e))
-                        except Exception:
-                            logger.warning("发送自启动失败通知时出错")
-
-                threading.Thread(
-                    target=_auto_start_tunnel, daemon=True, name="tunnel-autostart"
-                ).start()
-                logger.info("检测到 tunnel.auto_start=True，已在后台线程启动隧道")
-        except Exception as e:
-            logger.exception("内网穿透 auto_start 检查失败: {}", e)
+        _start_tunnel_autostart_in_thread(container)
 
     @app.on_event("shutdown")
     async def _on_shutdown() -> None:

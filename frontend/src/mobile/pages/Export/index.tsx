@@ -27,7 +27,7 @@ export default function MobileExport() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [taskId, setTaskId] = useState<string | undefined>(undefined)
   const [range, setRange] = useState<[string, string] | null>(null)
-  const [limit, setLimit] = useState<number>(5000)
+  const [limit] = useState<number>(5000)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
 
@@ -75,7 +75,7 @@ export default function MobileExport() {
       document.body.appendChild(a)
       a.click()
       // 立即移除：download 是异步的，但点击已触发
-      requestAnimationFrame(() => document.body.removeChild(a))
+      requestAnimationFrame(() => a.remove())
       message.success('已开始下载')
     } catch (e) {
       message.error(extractApiError(e, '下载失败'), 3)

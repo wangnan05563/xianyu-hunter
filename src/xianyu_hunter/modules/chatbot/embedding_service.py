@@ -251,27 +251,10 @@ class EmbeddingService:
                 )
                 all_vecs.extend(vecs)
                 done = min(start + chunk, total)
-
-                # 节流打日志：每 _PROGRESS_LOG_EVERY 个片段或最后一批时打 INFO
-                if done - last_log_done >= self._PROGRESS_LOG_EVERY or done == total:
-                    elapsed = asyncio.get_event_loop().time() - start_ts
-                    if elapsed > 0 and done > 0:
-                        rate = done / elapsed
-                        eta = (total - done) / rate if rate > 0 else 0
-                        logger.info(
-                            f"Embedding 进度: {done}/{total} "
-                            f"({done*100//total}%) {rate:.1f}/s ETA {eta:.0f}s"
-                        )
-                    else:
-                        logger.info(f"Embedding 进度: {done}/{total}")
-                    last_log_done = done
-
-                if progress_cb is not None:
-                    try:
-                        progress_cb(done, total)
-                    except Exception:
-                        # 进度回调失败不应影响构建主流程
-                        logger.debug("embed_batch 进度回调异常，忽略", exc_info=True)
+                last_log_done = self._log_batch_progress(
+                    done, total, start_ts, last_log_done
+                )
+                self._safe_invoke_progress_cb(progress_cb, done, total)
             # 本地模式不消耗 token，记录用量便于统计调用次数
             self._ai_usage.record_usage(
                 endpoint="chatbot_embedding",
@@ -292,6 +275,48 @@ class EmbeddingService:
         except Exception:
             logger.exception("本地 batch embedding 失败")
             return [], list(range(len(texts)))
+
+    def _log_batch_progress(
+        self,
+        done: int,
+        total: int,
+        start_ts: float,
+        last_log_done: int,
+    ) -> int:
+        """节流打日志：每 _PROGRESS_LOG_EVERY 个片段或最后一批时打 INFO
+
+        返回新的 last_log_done（供下次调用对比），未到节流阈值时返回原值。
+        提取为独立方法以降低 _embed_batch_local 的嵌套认知复杂度。
+        """
+        # 节流阈值未到且非最后一批：跳过日志
+        if done - last_log_done < self._PROGRESS_LOG_EVERY and done != total:
+            return last_log_done
+        elapsed = asyncio.get_event_loop().time() - start_ts
+        if elapsed > 0 and done > 0:
+            rate = done / elapsed
+            eta = (total - done) / rate if rate > 0 else 0
+            logger.info(
+                f"Embedding 进度: {done}/{total} "
+                f"({done*100//total}%) {rate:.1f}/s ETA {eta:.0f}s"
+            )
+        else:
+            logger.info(f"Embedding 进度: {done}/{total}")
+        return done
+
+    def _safe_invoke_progress_cb(
+        self,
+        progress_cb: Callable[[int, int], None] | None,
+        done: int,
+        total: int,
+    ) -> None:
+        """进度回调的安全包装：回调失败不影响构建主流程"""
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(done, total)
+        except Exception:
+            # 进度回调失败不应影响构建主流程
+            logger.debug("embed_batch 进度回调异常，忽略", exc_info=True)
 
     @property
     def last_batch_failure_count(self) -> int:

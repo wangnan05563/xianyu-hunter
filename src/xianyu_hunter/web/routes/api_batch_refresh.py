@@ -33,6 +33,11 @@ class BatchRefreshConfigPatch(BaseModel):
     """PATCH /config 请求体（所有字段可选）"""
     interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     enabled: bool | None = None
+    # 批次大小与单次上限：写入 YAML 持久化，下次运行生效
+    batch_size: int | None = Field(default=None, ge=1, le=500)
+    max_items_per_run: int | None = Field(default=None, ge=1, le=10000)
+    # 历史保留天数：0=永不清理，>0 启动时自动清理超过此天数的记录
+    history_retention_days: int | None = Field(default=None, ge=0, le=3650)
 
 
 def _get_scheduler():
@@ -64,6 +69,9 @@ def get_status() -> dict[str, Any]:
             "change_log": [],
             "enabled": cfg.enabled,
             "interval_minutes": cfg.interval_minutes,
+            "batch_size": cfg.batch_size,
+            "max_items_per_run": cfg.max_items_per_run,
+            "history_retention_days": cfg.history_retention_days,
             "progress": None,
             "control_available": False,
         }
@@ -95,19 +103,50 @@ def trigger_batch() -> dict[str, Any]:
 def patch_config(body: BatchRefreshConfigPatch) -> dict[str, Any]:
     """运行时热更新配置
 
-    - interval_minutes: 修改后立即 reschedule 定时任务
-    - enabled: False 时立即移除定时 job（停止自动触发），True 时恢复定时 job
+    - interval_minutes / enabled: 立即 reschedule 定时任务（热生效）
+    - batch_size / max_items_per_run / history_retention_days: 写入 YAML 持久化，
+      下次批次运行时生效（不在当前批次中途变更避免数据竞争）
     """
     scheduler = _get_scheduler()
 
     # 调度器未启动时，仍允许更新全局 config 单例，下次启动时生效
-    from xianyu_hunter.infra.yaml_config import get_config
+    from xianyu_hunter.infra.yaml_config import get_config, reload_config
     cfg = get_config().batch_refresh
 
+    # 收集需要持久化到 YAML 的字段（非热更新字段也写盘，保证下次启动一致）
+    yaml_patch: dict[str, Any] = {}
     if body.interval_minutes is not None:
         cfg.interval_minutes = body.interval_minutes
+        yaml_patch["interval_minutes"] = body.interval_minutes
     if body.enabled is not None:
         cfg.enabled = body.enabled
+        yaml_patch["enabled"] = body.enabled
+    if body.batch_size is not None:
+        cfg.batch_size = body.batch_size
+        yaml_patch["batch_size"] = body.batch_size
+    if body.max_items_per_run is not None:
+        cfg.max_items_per_run = body.max_items_per_run
+        yaml_patch["max_items_per_run"] = body.max_items_per_run
+    if body.history_retention_days is not None:
+        cfg.history_retention_days = body.history_retention_days
+        yaml_patch["history_retention_days"] = body.history_retention_days
+
+    # 持久化到 config.yaml（仅当有字段变更时）
+    if yaml_patch:
+        from pathlib import Path
+        import yaml as _yaml
+        cfg_path = Path("config/config.yaml")
+        raw: dict[str, Any] = {}
+        if cfg_path.exists():
+            raw = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        raw.setdefault("batch_refresh", {})
+        raw["batch_refresh"].update(yaml_patch)
+        cfg_path.write_text(
+            _yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        # 重新加载全局 config 单例，保证其他模块读取到最新值
+        reload_config()
 
     if scheduler is not None:
         scheduler.update_config(
@@ -121,6 +160,7 @@ def patch_config(body: BatchRefreshConfigPatch) -> dict[str, Any]:
         "interval_minutes": cfg.interval_minutes,
         "batch_size": cfg.batch_size,
         "max_items_per_run": cfg.max_items_per_run,
+        "history_retention_days": cfg.history_retention_days,
     }
 
 

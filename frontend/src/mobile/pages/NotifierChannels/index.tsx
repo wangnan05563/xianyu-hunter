@@ -3,7 +3,7 @@
 // 设计要点：去掉桌面端的拖拽排序/分类定价/限额展示，保留核心"启停 + 填凭据 + 测试"
 import { useEffect, useState, useCallback } from 'react'
 import {
-  Card, Tag, Spin, App, Switch, Button, Input, Space, Modal, Empty, theme, message as antdMessage,
+  Card, Tag, Spin, App, Switch, Button, Input, Space, Modal, Empty, theme,
 } from 'antd'
 import { EditOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { configApi } from '../../../api/config'
@@ -36,7 +36,6 @@ export default function MobileNotifierChannels() {
       setChannels(defaultChannels.map((ch) => ({ ...ch, enabled: enabled[ch.key] })))
       // 凭据字段：直接读 cfg 的顶层字段
       const creds: Record<string, string> = {}
-      cfg.notifier.channels // 确保 notifier 段存在
       creds.serverchan_send_key = cfg.serverchan_send_key
       creds.pushplus_token = cfg.pushplus_token
       creds.bark_server = cfg.bark_server
@@ -203,7 +202,7 @@ export default function MobileNotifierChannels() {
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             {editing.obtainUrl && (
               <div style={{ fontSize: 12, color: themeToken.colorTextSecondary }}>
-                获取凭据：
+                {'获取凭据：'}
                 <a href={editing.obtainUrl} target="_blank" rel="noopener noreferrer">
                   {editing.obtainUrl}
                 </a>

@@ -544,6 +544,9 @@ class TestEnsureLiveSearchCookiesSync:
         mock_browser.get_cookies = AsyncMock(side_effect=[cookies_before, cookies_after])
         # add_cookies 也是 async 方法；实时搜索通过 BrowserManager 封装注入，避免绕过统一校验。
         mock_browser.add_cookies = AsyncMock(return_value=True)
+        # ensure_alive 是 BrowserManager 自愈接口（async），返回 True 表示浏览器可用
+        # 缺失会导致 `await MagicMock()` 抛 TypeError，让 add_cookies 永远不被调用
+        mock_browser.ensure_alive = AsyncMock(return_value=True)
         mock_browser._context = mock_context
         mock_container.browser = mock_browser
         mock_container.collector = None

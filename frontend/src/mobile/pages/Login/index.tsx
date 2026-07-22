@@ -11,6 +11,133 @@ function getResultError(result: CookieInjectResult): string | undefined {
   return result.error || result.hint
 }
 
+// 导入流程共享的回调集合：result 失败与 catch 失败分离，保留原 duration 差异
+// 为什么用对象：参数过多会降低可读性，命名字段让调用点意图清晰
+type RunImportFlowOptions = {
+  setImporting: (v: boolean) => void
+  apiCall: () => Promise<CookieInjectResult>
+  onSuccess: (r: CookieInjectResult) => void
+  onResultError: (msg: string) => void
+  onCatchError: (msg: string) => void
+  fallbackErrorMsg: string
+  catchErrorMsg: string
+}
+
+// 统一封装 setImporting + try/catch/finally + result.ok 分支的样板代码
+// 为什么提取：MobileLogin 内 3 个导入 handler 结构同构，重复 if/else + try/catch
+// 导致认知复杂度累积到 27，超过 SonarQube S3776 阈值 15
+async function runImportFlow(opts: RunImportFlowOptions) {
+  const { setImporting, apiCall, onSuccess, onResultError, onCatchError, fallbackErrorMsg, catchErrorMsg } = opts
+  setImporting(true)
+  try {
+    const result = await apiCall()
+    if (result.ok) {
+      onSuccess(result)
+    } else {
+      onResultError(getResultError(result) || fallbackErrorMsg)
+    }
+  } catch (e) {
+    onCatchError(extractApiError(e, catchErrorMsg))
+  } finally {
+    setImporting(false)
+  }
+}
+
+// 单浏览器状态展示行。提取为子组件避免在父组件 JSX 内堆叠多个嵌套三元（S3358）
+// 并显著降低 MobileLogin 认知复杂度（S3776）
+function BrowserStatusRow({
+  name,
+  exists,
+  hasCookie,
+}: {
+  // readonly 修饰符满足 S6759：组件 props 运行时不应变更
+  readonly name: string
+  readonly exists: boolean
+  readonly hasCookie: boolean
+}) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <span>{name}</span>
+      <Space size={4}>
+        <Tag color={exists ? 'green' : 'default'}>
+          {exists ? '已安装' : '未安装'}
+        </Tag>
+        {exists && (
+          <Tag color={hasCookie ? 'green' : 'orange'}>
+            {hasCookie ? '已登录' : '未登录'}
+          </Tag>
+        )}
+      </Space>
+    </div>
+  )
+}
+
+// 浏览器导入 Card 内容。用 if 提前 return 替代 loadingStatus ? A : browserStatus ? B : C 嵌套三元（S3358）
+function BrowserImportContent({
+  loadingStatus,
+  browserStatus,
+  importing,
+  onImportFromEdge,
+  onImportFromChrome,
+  onAutoImport,
+}: {
+  readonly loadingStatus: boolean
+  readonly browserStatus: BrowserImportStatus | null
+  readonly importing: boolean
+  readonly onImportFromEdge: () => void
+  readonly onImportFromChrome: () => void
+  readonly onAutoImport: () => void
+}) {
+  if (loadingStatus) {
+    return <div style={{ textAlign: 'center', padding: 16 }}><Spin /></div>
+  }
+  if (!browserStatus) {
+    return <div style={{ color: '#999', textAlign: 'center', padding: 16 }}>无法获取浏览器状态</div>
+  }
+  return (
+    <>
+      <Space direction="vertical" style={{ width: '100%', marginBottom: 12 }} size={8}>
+        <BrowserStatusRow
+          name="Edge"
+          exists={browserStatus.edge.exists}
+          hasCookie={browserStatus.edge.has_goofish_cookie}
+        />
+        <BrowserStatusRow
+          name="Chrome"
+          exists={browserStatus.chrome.exists}
+          hasCookie={browserStatus.chrome.has_goofish_cookie}
+        />
+      </Space>
+      <Space direction="vertical" style={{ width: '100%' }} size={8}>
+        <Space style={{ width: '100%' }}>
+          <Button
+            block
+            disabled={importing || !browserStatus.edge.exists}
+            onClick={onImportFromEdge}
+          >
+            从 Edge 导入
+          </Button>
+          <Button
+            block
+            disabled={importing || !browserStatus.chrome.exists}
+            onClick={onImportFromChrome}
+          >
+            从 Chrome 导入
+          </Button>
+        </Space>
+        <Button
+          type="primary"
+          block
+          loading={importing}
+          onClick={onAutoImport}
+        >
+          自动导入
+        </Button>
+      </Space>
+    </>
+  )
+}
+
 export default function MobileLogin() {
   const { message } = App.useApp()
   const [browserStatus, setBrowserStatus] = useState<BrowserImportStatus | null>(null)
@@ -45,37 +172,30 @@ export default function MobileLogin() {
 
   // 单浏览器导入：auto_close=true 让后端处理文件锁
   // 为什么用 true：闲鱼进程常驻导致 SQLite 锁，自动关闭可显著提升成功率
+  // void 操作符显式丢弃 message.error 的返回值，符合 S6544 期望的 void 返回类型
   const handleImportFromBrowser = useCallback(async (browser: 'edge' | 'chrome') => {
-    setImporting(true)
-    try {
-      const result = await authApi.importFromBrowser(browser, true)
-      if (result.ok) {
-        handleImportSuccess(result)
-      } else {
-        message.error(getResultError(result) || '导入失败，请重试')
-      }
-    } catch (e) {
-      message.error(extractApiError(e, '导入失败，请检查浏览器是否已登录闲鱼'), 3)
-    } finally {
-      setImporting(false)
-    }
+    await runImportFlow({
+      setImporting,
+      apiCall: () => authApi.importFromBrowser(browser, true),
+      onSuccess: handleImportSuccess,
+      onResultError: (m) => { void message.error(m) },
+      onCatchError: (m) => { void message.error(m, 3) },
+      fallbackErrorMsg: '导入失败，请重试',
+      catchErrorMsg: '导入失败，请检查浏览器是否已登录闲鱼',
+    })
   }, [message, handleImportSuccess])
 
   // 自动导入：后端依次尝试 Edge + Chrome
   const handleAutoImport = useCallback(async () => {
-    setImporting(true)
-    try {
-      const result = await authApi.autoImportFromBrowser()
-      if (result.ok) {
-        handleImportSuccess(result)
-      } else {
-        message.error(getResultError(result) || '自动导入失败')
-      }
-    } catch (e) {
-      message.error(extractApiError(e, '自动导入失败，请手动选择浏览器或粘贴 Cookie'), 3)
-    } finally {
-      setImporting(false)
-    }
+    await runImportFlow({
+      setImporting,
+      apiCall: () => authApi.autoImportFromBrowser(),
+      onSuccess: handleImportSuccess,
+      onResultError: (m) => { void message.error(m) },
+      onCatchError: (m) => { void message.error(m, 3) },
+      fallbackErrorMsg: '自动导入失败',
+      catchErrorMsg: '自动导入失败，请手动选择浏览器或粘贴 Cookie',
+    })
   }, [message, handleImportSuccess])
 
   // 手动注入 Cookie：用户从浏览器开发者工具复制 Cookie 字符串粘贴
@@ -85,87 +205,29 @@ export default function MobileLogin() {
       message.warning('请粘贴 Cookie 字符串')
       return
     }
-    setImporting(true)
-    try {
-      const result = await authApi.injectCookie(trimmed)
-      if (result.ok) {
-        handleImportSuccess(result)
-      } else {
-        message.error(getResultError(result) || 'Cookie 注入失败')
-      }
-    } catch (e) {
-      message.error(extractApiError(e, 'Cookie 注入失败，请检查格式'), 3)
-    } finally {
-      setImporting(false)
-    }
+    await runImportFlow({
+      setImporting,
+      apiCall: () => authApi.injectCookie(trimmed),
+      onSuccess: handleImportSuccess,
+      onResultError: (m) => { void message.error(m) },
+      onCatchError: (m) => { void message.error(m, 3) },
+      fallbackErrorMsg: 'Cookie 注入失败',
+      catchErrorMsg: 'Cookie 注入失败，请检查格式',
+    })
   }, [cookieText, message, handleImportSuccess])
 
   return (
     <div style={{ padding: 12, maxWidth: 600, margin: '0 auto' }}>
       {/* 浏览器导入 Card */}
       <Card title="浏览器导入" size="small" style={{ marginBottom: 12 }}>
-        {loadingStatus ? (
-          <div style={{ textAlign: 'center', padding: 16 }}><Spin /></div>
-        ) : browserStatus ? (
-          <>
-            <Space direction="vertical" style={{ width: '100%', marginBottom: 12 }} size={8}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>Edge</span>
-                <Space size={4}>
-                  <Tag color={browserStatus.edge.exists ? 'green' : 'default'}>
-                    {browserStatus.edge.exists ? '已安装' : '未安装'}
-                  </Tag>
-                  {browserStatus.edge.exists && (
-                    <Tag color={browserStatus.edge.has_goofish_cookie ? 'green' : 'orange'}>
-                      {browserStatus.edge.has_goofish_cookie ? '已登录' : '未登录'}
-                    </Tag>
-                  )}
-                </Space>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span>Chrome</span>
-                <Space size={4}>
-                  <Tag color={browserStatus.chrome.exists ? 'green' : 'default'}>
-                    {browserStatus.chrome.exists ? '已安装' : '未安装'}
-                  </Tag>
-                  {browserStatus.chrome.exists && (
-                    <Tag color={browserStatus.chrome.has_goofish_cookie ? 'green' : 'orange'}>
-                      {browserStatus.chrome.has_goofish_cookie ? '已登录' : '未登录'}
-                    </Tag>
-                  )}
-                </Space>
-              </div>
-            </Space>
-            <Space direction="vertical" style={{ width: '100%' }} size={8}>
-              <Space style={{ width: '100%' }}>
-                <Button
-                  block
-                  disabled={importing || !browserStatus.edge.exists}
-                  onClick={() => { void handleImportFromBrowser('edge') }}
-                >
-                  从 Edge 导入
-                </Button>
-                <Button
-                  block
-                  disabled={importing || !browserStatus.chrome.exists}
-                  onClick={() => { void handleImportFromBrowser('chrome') }}
-                >
-                  从 Chrome 导入
-                </Button>
-              </Space>
-              <Button
-                type="primary"
-                block
-                loading={importing}
-                onClick={() => { void handleAutoImport() }}
-              >
-                自动导入
-              </Button>
-            </Space>
-          </>
-        ) : (
-          <div style={{ color: '#999', textAlign: 'center', padding: 16 }}>无法获取浏览器状态</div>
-        )}
+        <BrowserImportContent
+          loadingStatus={loadingStatus}
+          browserStatus={browserStatus}
+          importing={importing}
+          onImportFromEdge={() => { void handleImportFromBrowser('edge') }}
+          onImportFromChrome={() => { void handleImportFromBrowser('chrome') }}
+          onAutoImport={() => { void handleAutoImport() }}
+        />
       </Card>
 
       {/* 手动 Cookie 注入 Card */}

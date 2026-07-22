@@ -1151,6 +1151,21 @@ def _mask_key(key: str) -> str:
     return "****" + key[-4:] if len(key) > 4 else "****"
 
 
+def _normalize_masked_api_key(raw: str | None) -> str | None:
+    """归一化前端回传的 API Key，统一处理脱敏值判断
+
+    返回三态语义供调用方分支处理：
+    - None：未提交或脱敏值（****开头），表示未修改，跳过更新
+    - ""：用户清空，调用方需删除 keyring 旧值
+    - 其他：用户输入的新值
+    """
+    if raw is None:
+        return None
+    if raw.startswith("****"):
+        return None
+    return raw
+
+
 @router.get("/config")
 def get_ai_config() -> dict[str, Any]:
     """获取当前 AI 配置（API Key 脱敏显示）
@@ -1187,16 +1202,11 @@ def save_ai_config(body: AIConfigBody) -> dict[str, Any]:
     current_preset_id = _preset_id_for_base_url(settings_before.openai_base_url)
 
     # API Key 特殊处理：空字符串表示清除，"****xxxx" 表示未修改
-    api_key = body.api_key
-    if api_key is not None:
-        # 前端回传的脱敏值（****开头）表示未修改，跳过
-        if api_key.startswith("****"):
-            api_key = None
-        elif api_key == "":
-            # 清除 API Key
-            from xianyu_hunter.infra import secrets as sec
-            sec.delete_secret(sec.KEY_OPENAI_API_KEY)
-            api_key = ""  # 写入 .env 为空
+    api_key = _normalize_masked_api_key(body.api_key)
+    if api_key == "":
+        # 清除 API Key
+        from xianyu_hunter.infra import secrets as sec
+        sec.delete_secret(sec.KEY_OPENAI_API_KEY)
 
     if body.preset_id is not None:
         from xianyu_hunter.infra import secrets as sec
@@ -1222,14 +1232,10 @@ def save_ai_config(body: AIConfigBody) -> dict[str, Any]:
             sec.set_secret(target_key_name, api_key)
 
     # Embedding API Key 同样处理：脱敏值跳过，空字符串清除
-    emb_api_key = body.embedding_api_key
-    if emb_api_key is not None:
-        if emb_api_key.startswith("****"):
-            emb_api_key = None
-        elif emb_api_key == "":
-            from xianyu_hunter.infra import secrets as sec
-            sec.delete_secret(sec.KEY_EMBEDDING_API_KEY)
-            emb_api_key = ""
+    emb_api_key = _normalize_masked_api_key(body.embedding_api_key)
+    if emb_api_key == "":
+        from xianyu_hunter.infra import secrets as sec
+        sec.delete_secret(sec.KEY_EMBEDDING_API_KEY)
 
     update_ai_config(
         ai_enabled=body.ai_enabled,

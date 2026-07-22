@@ -1,12 +1,26 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from scripts import browser_login
+
+# scripts 目录不是 Python 包（无 __init__.py），无法用 `from scripts import browser_login`
+# 通过 importlib 从文件路径直接加载模块，避免改动 scripts 目录结构
+def _load_browser_login_module():
+    project_root = Path(__file__).resolve().parent.parent
+    module_path = project_root / "scripts" / "browser_login.py"
+    spec = importlib.util.spec_from_file_location("browser_login", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+browser_login = _load_browser_login_module()
 
 
 def test_login_launch_args_disable_system_proxy_when_not_configured() -> None:

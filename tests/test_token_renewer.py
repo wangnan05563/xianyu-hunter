@@ -284,3 +284,52 @@ async def test_get_status_after_renew() -> None:
     assert status["stats"]["total_renewed"] == 1
     assert status["last_renew_result"] == "success"
     assert status["last_renew_at"] > 0
+
+
+@pytest.mark.asyncio
+async def test_renew_success_callback_triggered_on_success() -> None:
+    """续期成功时应触发 success_callback，让上层重置失败计数"""
+    cfg = RenewerConfig(token_ttl_sec=1200, renew_before_expiry_sec=600)
+    renewer = TokenRenewer(cfg)
+    aging_value = f"token_{int((time.time() - 900) * 1000)}"
+    renewer.set_cookie_provider(lambda: aging_value)
+    renewer.set_renew_callback(AsyncMock(return_value=True))
+
+    success_cb = MagicMock()
+    renewer.set_renew_success_callback(success_cb)
+
+    await renewer.check_and_renew()
+
+    success_cb.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_renew_success_callback_not_triggered_on_failure() -> None:
+    """续期失败时不应触发 success_callback"""
+    renewer = TokenRenewer()
+    aging_value = f"token_{int((time.time() - 900) * 1000)}"
+    renewer.set_cookie_provider(lambda: aging_value)
+    renewer.set_renew_callback(AsyncMock(return_value=False))
+
+    success_cb = MagicMock()
+    renewer.set_renew_success_callback(success_cb)
+
+    await renewer.check_and_renew()
+
+    success_cb.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_renew_success_callback_not_triggered_on_skip() -> None:
+    """token 新鲜（跳过续期）时不应触发 success_callback"""
+    cfg = RenewerConfig(token_ttl_sec=1200, renew_before_expiry_sec=600)
+    renewer = TokenRenewer(cfg)
+    fresh_value = f"token_{int(time.time() * 1000)}"
+    renewer.set_cookie_provider(lambda: fresh_value)
+
+    success_cb = MagicMock()
+    renewer.set_renew_success_callback(success_cb)
+
+    result = await renewer.check_and_renew()
+    assert result == RenewResult.SKIPPED
+    success_cb.assert_not_called()

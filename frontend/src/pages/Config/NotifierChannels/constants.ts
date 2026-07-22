@@ -118,6 +118,22 @@ export const defaultChannels: ChannelDef[] = [
     obtainUrl: 'https://webhook.site/',
     fields: [{ key: 'webhook_url', label: 'URL', placeholder: 'https://your-server.com/hook' }],
   },
+  {
+    key: 'ntfy',
+    name: 'ntfy',
+    icon: '🔔',
+    desc: '跨平台推送（Android/iOS/Web，可自托管）',
+    enabled: false,
+    pricing: 'free',
+    recommended: true,
+    featureScore: 5,
+    obtainUrl: 'https://ntfy.sh',
+    fields: [
+      { key: 'ntfy_server', label: 'Server URL', placeholder: 'https://ntfy.sh' },
+      { key: 'ntfy_topic', label: 'Topic', placeholder: 'xianyu_hunter_alerts' },
+      { key: 'ntfy_token', label: 'Access Token', placeholder: 'tk_xxx（可选，私有 topic 鉴权）', secret: true },
+    ],
+  },
 ]
 
 // 事件类型定义（22 种）：与 Timeline EVENT_TYPE_OPTIONS / ENUM_TO_DOT 对齐

@@ -13,11 +13,18 @@ from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 
-# 人工接管默认超时：30 分钟。
+# 人工接管超时：从 YAML 配置 buyer.takeover_timeout_min 读取，默认 30 分钟。
 # 为什么 30min：闲鱼"待付款"订单默认 30 分钟自动关闭，
 # 留足时间给用户切到 App 完成支付，又不至于无限等待
 # 把订单卡在 takeover_pending 让异常雷达"超时"列永远有数据。
-TAKEOVER_TIMEOUT_MIN = 30
+def _get_takeover_timeout_min() -> int:
+    """从全局配置读取人工接管超时（分钟）
+
+    每次调用实时读取：用户可在前端修改后立即生效，无需重启。
+    """
+    from xianyu_hunter.infra.yaml_config import get_config
+    return get_config().buyer.takeover_timeout_min
+
 
 # S1192: 提取重复的错误消息常量
 _ORDER_NOT_FOUND = "订单不存在"
@@ -49,7 +56,7 @@ def _apply_takeover_deadline(o: dict, now: datetime) -> None:
     """
     ts_dt = _parse_takeover_ts(o.get("confirmed_at"))
     if ts_dt is not None:
-        deadline = ts_dt + timedelta(minutes=TAKEOVER_TIMEOUT_MIN)
+        deadline = ts_dt + timedelta(minutes=_get_takeover_timeout_min())
         remaining = int((deadline - now).total_seconds())
         o["takeover_deadline"] = deadline.isoformat(timespec="seconds")
         o["takeover_remaining_sec"] = max(0, remaining)
@@ -171,14 +178,15 @@ def takeover_order(
     # 返回时再把字符串给前端，避免污染其他读取方。
     o["confirmed_at"] = now
     container.repo.upsert_order(o, user_id=user_id)
-    deadline = now + timedelta(minutes=TAKEOVER_TIMEOUT_MIN)
+    timeout_min = _get_takeover_timeout_min()
+    deadline = now + timedelta(minutes=timeout_min)
     return {
         "ok": True,
         "id": order_id,
         "status": "takeover_pending",
         "takeover_at": now.isoformat(timespec="seconds"),
         "takeover_deadline": deadline.isoformat(timespec="seconds"),
-        "timeout_min": TAKEOVER_TIMEOUT_MIN,
+        "timeout_min": timeout_min,
     }
 
 

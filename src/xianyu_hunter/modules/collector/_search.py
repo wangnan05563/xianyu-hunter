@@ -58,6 +58,25 @@ _PREFERRED_NESTED_KEYS = (
 # 协议补全前缀：闲鱼 CDN 图片/链接常以 // 开头（协议相对 URL），需补 https: 才能直接访问
 _HTTPS_PREFIX = "https:"
 
+# 网络瞬时故障关键字：搜索流程异常分类用，与 _detail.py 的 _NETWORK_TRANSIENT_KEYWORDS 对齐
+# 为什么复用而非直接 import：避免 Mixin 间循环依赖，且搜索场景需要额外包含
+# Timeout/exceeded 等 Playwright 超时关键字（搜索的 Page.goto 超时是常见瞬时故障）
+_SEARCH_NETWORK_TRANSIENT_KEYWORDS = (
+    "ERR_NAME_NOT_RESOLVED",
+    "ERR_NETWORK_CHANGED",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_TIMED_OUT",
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_RESET",
+    "ERR_TUNNEL_CONNECTION_FAILED",
+    "ERR_ADDRESS_UNREACHABLE",
+    "ERR_NAME_RESOLUTION_FAILED",
+    "ERR_DNS_NO_MATCHING_SUPPORTED_ALPN",
+    "net::ERR_",
+    "Timeout",
+    "exceeded",
+)
+
 
 def _normalize_key(key: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(key).lower())
@@ -738,7 +757,17 @@ class SearchMixin:
         except Exception as e:
             elapsed = time.monotonic() - search_start
             self._last_search_error = str(e)
-            logger.exception("搜索失败 {}: {}, 耗时 {:.1f}s", keyword, e, elapsed)
+            # 网络瞬时故障降级为 WARNING，避免触发 cookie 自愈链路和误告警
+            # 为什么不直接 logger.exception：DNS/超时类错误在日志中重复出现时
+            # 会被误判为系统级故障，实际上重试即可恢复
+            err_msg = str(e)
+            if any(kw in err_msg for kw in _SEARCH_NETWORK_TRANSIENT_KEYWORDS):
+                logger.warning(
+                    "搜索失败 {}（网络瞬时故障）: {}, 耗时 {:.1f}s",
+                    keyword, e, elapsed,
+                )
+            else:
+                logger.exception("搜索失败 {}: {}, 耗时 {:.1f}s", keyword, e, elapsed)
         finally:
             await self._cleanup_search_resources(page, own_page, release_lock)
         return items
@@ -1385,9 +1414,13 @@ class SearchMixin:
         """解除 route 拦截：超时+异常保护避免页面已损坏时卡住
 
         只解除当前搜索 API handler，避免 page.unroute("**/*") 等待页面所有路由清理
+
+        超时时间从 1.0s 提升到 2.5s：实测 1s 在高频搜索场景下频繁超时（40 次/日），
+        route handler 内部如有待处理请求需等待 Playwright 内部队列，2.5s 可覆盖
+        95% 的正常清理场景，同时不至于阻塞搜索主流程
         """
         try:
-            await asyncio.wait_for(page.unroute(route_pattern, handler), timeout=1.0)
+            await asyncio.wait_for(page.unroute(route_pattern, handler), timeout=2.5)
             logger.info("page.unroute 完成")
         except asyncio.TimeoutError:
             logger.warning("page.unroute 超时，可能影响后续 DOM 解析")

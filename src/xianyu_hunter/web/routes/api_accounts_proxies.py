@@ -76,9 +76,26 @@ class ProxyUpdateBody(BaseModel):
 
 # ============== 工具函数 ==============
 def _get_rotator(container: Container) -> AccountRotator:
-    """获取 AccountRotator 实例（惰性创建）"""
+    """获取 AccountRotator 实例（惰性创建 + 热更新）
+
+    从 YAML 配置 account_rotator 节点读取冷却时间与失败阈值，
+    替代原 AccountRotator 默认参数（DEFAULT_COOLDOWN_SEC / DEFAULT_FAIL_THRESHOLD）。
+
+    热更新策略：已缓存实例每次调用时同步最新 YAML 配置到 _cooldown_sec / _fail_threshold，
+    让用户在前端修改后立即生效（report_fail 调用时读取最新值），无需重启服务。
+    """
+    from xianyu_hunter.infra.yaml_config import get_config
+    cfg = get_config().account_rotator
     if not hasattr(container, "_account_rotator") or container._account_rotator is None:
-        container._account_rotator = AccountRotator(container.repo.engine)
+        container._account_rotator = AccountRotator(
+            container.repo.engine,
+            cooldown_sec=cfg.cooldown_sec,
+            fail_threshold=cfg.fail_threshold,
+        )
+    else:
+        # 热更新：同步最新 YAML 配置到已缓存实例
+        container._account_rotator._cooldown_sec = cfg.cooldown_sec
+        container._account_rotator._fail_threshold = cfg.fail_threshold
     return container._account_rotator
 
 

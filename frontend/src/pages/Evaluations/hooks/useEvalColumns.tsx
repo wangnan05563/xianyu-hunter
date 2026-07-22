@@ -172,8 +172,16 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
           )
         }
         const absStr = Math.abs(profit).toFixed(2)
-        const prefix = profit > 0 ? '+' : profit < 0 ? '-' : ''
-        const color = profit > 0 ? '#52c41a' : profit < 0 ? '#ff4d4f' : 'var(--xh-text-secondary)'
+        // 拆分嵌套三元，便于阅读与静态分析
+        let prefix = ''
+        let color = 'var(--xh-text-secondary)'
+        if (profit > 0) {
+          prefix = '+'
+          color = '#52c41a'
+        } else if (profit < 0) {
+          prefix = '-'
+          color = '#ff4d4f'
+        }
         return (
           <Tooltip title={`均价 ¥${Number(r.payload?.avg_price ?? 0).toFixed(2)} − 当前价 ¥${Number(r.payload?.item_price ?? 0).toFixed(2)}`}>
             <span style={{ color, fontWeight: 600 }}>{prefix}¥{absStr}</span>

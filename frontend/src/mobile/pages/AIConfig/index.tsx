@@ -56,7 +56,9 @@ export default function MobileAIConfig() {
     try {
       const res = await aiApi.testConnection()
       if (res.ok) {
-        message.success(`连接成功${res.model ? `（${res.model}）` : ''}`)
+        // 将后缀提取为独立变量，避免嵌套模板字符串降低可读性
+        const modelSuffix = res.model ? `（${res.model}）` : ''
+        message.success(`连接成功${modelSuffix}`)
       } else {
         message.error(`连接失败：${res.detail || '未知错误'}`, 4)
       }
@@ -72,7 +74,9 @@ export default function MobileAIConfig() {
     try {
       const res = await aiApi.testEmbedding()
       if (res.ok) {
-        message.success(`Embedding 连接成功${res.dimensions ? `（维度 ${res.dimensions}）` : ''}`)
+        // 将维度后缀提取为独立变量，避免嵌套模板字符串降低可读性
+        const dimSuffix = res.dimensions ? `（维度 ${res.dimensions}）` : ''
+        message.success(`Embedding 连接成功${dimSuffix}`)
       } else {
         message.error(`Embedding 失败：${res.detail || '未知错误'}`, 4)
       }

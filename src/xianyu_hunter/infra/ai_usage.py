@@ -86,7 +86,37 @@ class BudgetConfig:
 _lock = threading.Lock()
 _today_records: list[UsageRecord] = []
 _minute_timestamps: list[float] = []  # 滑动窗口：最近1分钟的调用时间戳
+# 初始占位：实际值在 _ensure_budget_loaded() 中从 YAML 同步，避免 import 时循环依赖
 _budget = BudgetConfig()
+_budget_loaded = False
+
+
+def _ensure_budget_loaded() -> None:
+    """懒加载：首次调用时从 YAML 读取 ai_budget 配置同步到内存 _budget
+
+    为什么懒加载而非 import 时加载：
+    1. ai_usage 是底层模块，被 api_ai.py / container.py 等多处 import；
+       若在模块顶层调用 get_config()，会触发 yaml_config 完整加载链路，
+       与 paths.py / db_models.py 形成潜在循环导入。
+    2. 测试场景下若直接 import ai_usage 但未初始化 YAML 配置目录，
+       顶层 get_config() 会抛异常；懒加载只在真正读写预算时触发。
+    """
+    global _budget_loaded
+    if _budget_loaded:
+        return
+    with _lock:
+        if _budget_loaded:
+            return
+        try:
+            from xianyu_hunter.infra.yaml_config import get_config
+            cfg = get_config().ai_budget
+            _budget.daily_token_limit = cfg.daily_token_limit
+            _budget.daily_cost_limit_usd = cfg.daily_cost_limit_usd
+            _budget.rate_limit_per_min = cfg.rate_limit_per_min
+        except Exception as e:
+            # YAML 未初始化或字段缺失时沿用 dataclass 默认值，不阻断 AI 调用
+            logger.warning(f"[ai_usage] 从 YAML 加载 ai_budget 失败，使用默认值: {e}")
+        _budget_loaded = True
 
 
 def _today_key() -> str:
@@ -150,6 +180,7 @@ def check_budget() -> tuple[bool, str]:
 
     返回 (允许调用, 原因说明)
     """
+    _ensure_budget_loaded()
     with _lock:
         # 检查频率限制
         cutoff = time.time() - 60
@@ -310,23 +341,71 @@ def get_recent_usage(days: int = 7) -> list[dict[str, Any]]:
     ]
 
 
+def _persist_budget_to_yaml(yaml_patch: dict[str, Any]) -> None:
+    """把 ai_budget 字段增量写入 config.yaml 并触发 reload_config
+
+    独立为函数便于单元测试 mock：测试场景下 monkeypatch 此函数为 no-op，
+    避免污染真实 config.yaml。
+
+    失败时仅 warning，不抛异常：内存 _budget 已经更新，本次仍生效，
+    只是下次启动会回退到旧值。
+    """
+    try:
+        from pathlib import Path
+        import yaml as _yaml
+        cfg_path = Path("config/config.yaml")
+        raw: dict[str, Any] = {}
+        if cfg_path.exists():
+            raw = _yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        raw.setdefault("ai_budget", {})
+        raw["ai_budget"].update(yaml_patch)
+        cfg_path.write_text(
+            _yaml.safe_dump(raw, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        from xianyu_hunter.infra.yaml_config import reload_config
+        reload_config()
+        logger.info(f"[ai_usage] ai_budget 已持久化: {yaml_patch}")
+    except Exception as e:
+        logger.warning(f"[ai_usage] ai_budget 写盘失败，仅内存生效: {e}")
+
+
 def update_budget(
     daily_token_limit: int | None = None,
     daily_cost_limit_usd: float | None = None,
     rate_limit_per_min: int | None = None,
 ) -> None:
-    """更新预算配置"""
+    """更新预算配置
+
+    持久化策略：
+    1. 内存 _budget 立即更新（check_budget 实时生效）
+    2. 同步写盘到 config.yaml 的 ai_budget 段，下次启动自动加载
+    3. 调用 reload_config() 让其他模块从单例读到的也是最新值
+
+    为什么不只在 YAML 写盘后靠 reload 同步内存：
+    reload 会重建整个 AppConfig 单例，期间若有并发 check_budget 读取旧 _budget，
+    可能产生短窗口不一致；先改内存再写盘更稳妥。
+    """
+    _ensure_budget_loaded()
+    yaml_patch: dict[str, Any] = {}
     with _lock:
         if daily_token_limit is not None:
             _budget.daily_token_limit = daily_token_limit
+            yaml_patch["daily_token_limit"] = daily_token_limit
         if daily_cost_limit_usd is not None:
             _budget.daily_cost_limit_usd = daily_cost_limit_usd
+            yaml_patch["daily_cost_limit_usd"] = daily_cost_limit_usd
         if rate_limit_per_min is not None:
             _budget.rate_limit_per_min = rate_limit_per_min
+            yaml_patch["rate_limit_per_min"] = rate_limit_per_min
+
+    if yaml_patch:
+        _persist_budget_to_yaml(yaml_patch)
 
 
 def get_budget_config() -> BudgetConfig:
     """获取当前预算配置"""
+    _ensure_budget_loaded()
     return _budget
 
 

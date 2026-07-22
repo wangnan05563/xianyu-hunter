@@ -18,11 +18,22 @@ const codeStyle: CSSProperties = {
 }
 
 interface DiffPreviewModalProps {
-  open: boolean
-  diffChanges: DiffChange[]
-  loading: boolean
-  onCancel: () => void
-  onConfirm: () => void
+  // 组件内部不应修改 props：加 readonly 防止意外赋值，符合 React 单向数据流
+  readonly open: boolean
+  readonly diffChanges: DiffChange[]
+  readonly loading: boolean
+  readonly onCancel: () => void
+  readonly onConfirm: () => void
+}
+
+// 单元格值格式化：null/undefined → '-'；对象/数组 → JSON 缩进；字符串原样返回；其他走 String()。
+// 提取为独立函数避免 JSX render 回调中出现嵌套三元（SonarQube S3358），并通过显式 if-链
+// 让 SonarQube 识别 v 在 String() 处已排除对象分支，避免 [object Object] 警告（S6551）。
+function formatCellValue(v: unknown): string {
+  if (v == null) return '-'
+  if (typeof v === 'object') return JSON.stringify(v, null, 2)
+  if (typeof v === 'string') return v
+  return String(v) // NOSONAR - 前置 typeof 已排除 object 分支，此处 v 只可能是 number/boolean/symbol
 }
 
 /**
@@ -71,9 +82,7 @@ export function DiffPreviewModal({
             key: 'old_value',
             width: 280,
             render: (v: unknown) => {
-              if (v == null) return '-'
-              // 对象/数组用 JSON.stringify 缩进展示，避免单行 JSON 阅读困难
-              const text = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)
+              const text = formatCellValue(v)
               return (
                 <code style={codeStyle}>
                   {text || '""'}
@@ -86,8 +95,7 @@ export function DiffPreviewModal({
             dataIndex: 'new_value',
             key: 'new_value',
             render: (v: unknown) => {
-              if (v == null) return '-'
-              const text = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)
+              const text = formatCellValue(v)
               return (
                 <code style={codeStyle}>
                   {text || '""'}

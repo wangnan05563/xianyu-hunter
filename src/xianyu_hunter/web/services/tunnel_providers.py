@@ -27,6 +27,12 @@ from xianyu_hunter.paths import get_data_dir
 
 logger = logging.getLogger(__name__)
 
+# S1192: 重复字面量提取为常量
+# cloudflared 配置目录名（多平台一致）
+_CLOUDFLARED_DIR = ".cloudflared"
+# cloudflared 证书文件名
+_CERT_PEM_FILE = "cert.pem"
+
 
 class BinaryDownloadError(RuntimeError):
     """二进制下载失败，附带手动放置指引"""
@@ -173,38 +179,45 @@ class TunnelProvider(ABC):
                 if match:
                     found_url.append(match.group(1))
                     return
-                stripped = text.strip()
-                if stripped:
-                    recent_lines.append(stripped)
-                    # 保留最近 20 行，避免内存无限增长
-                    if len(recent_lines) > 20:
-                        recent_lines.pop(0)
-                    logger.info(f"[{self.binary_name}] {stripped}")
+                self._collect_recent_output_line(text, recent_lines)
 
         thread = threading.Thread(target=read_output, daemon=True)
         thread.start()
         thread.join(timeout=timeout)
 
         if not found_url:
-            # 收集进程状态：无输出时需判断是进程已退出还是卡住等待输入
-            process_status = "未知"
-            exit_code = None
-            if self._process is not None:
-                poll_result = self._process.poll()
-                if poll_result is None:
-                    process_status = "仍在运行（可能卡住等待输入或网络连接）"
-                else:
-                    process_status = f"已退出（exit code={poll_result}）"
-                    exit_code = poll_result
-            self.stop()
-            # 包含最近输出和进程状态帮助诊断
-            recent_output = "\n".join(recent_lines[-20:]) if recent_lines else "（无输出）"
-            raise RuntimeError(
-                f"[{self.binary_name}] 启动超时（{timeout}s），未能获取公网 URL。\n"
-                f"进程状态: {process_status}\n"
-                f"最近输出:\n{recent_output}"
-            )
+            self._raise_url_timeout_error(timeout, recent_lines)
         return found_url[0]
+
+    def _collect_recent_output_line(self, text: str, recent_lines: list[str]) -> None:
+        """收集子进程输出最近 20 行用于超时诊断，超长时丢弃旧行避免内存增长"""
+        stripped = text.strip()
+        if not stripped:
+            return
+        recent_lines.append(stripped)
+        if len(recent_lines) > 20:
+            recent_lines.pop(0)
+        logger.info(f"[{self.binary_name}] {stripped}")
+
+    def _describe_process_status(self) -> str:
+        """生成子进程状态描述用于错误诊断：无输出时判断是已退出还是卡住"""
+        if self._process is None:
+            return "未知"
+        poll_result = self._process.poll()
+        if poll_result is None:
+            return "仍在运行（可能卡住等待输入或网络连接）"
+        return f"已退出（exit code={poll_result}）"
+
+    def _raise_url_timeout_error(self, timeout: int, recent_lines: list[str]) -> None:
+        """超时后收集诊断信息并抛出异常：先停进程再拼装输出"""
+        process_status = self._describe_process_status()
+        self.stop()
+        recent_output = "\n".join(recent_lines[-20:]) if recent_lines else "（无输出）"
+        raise RuntimeError(
+            f"[{self.binary_name}] 启动超时（{timeout}s），未能获取公网 URL。\n"
+            f"进程状态: {process_status}\n"
+            f"最近输出:\n{recent_output}"
+        )
 
     def _start_process(self, cmd: list[str], url_pattern: re.Pattern, timeout: int = 15) -> str:
         """启动子进程并解析公网 URL（通用流程）
@@ -355,15 +368,15 @@ class CloudflareProvider(TunnelProvider):
         - 部分 Windows 版本: %LOCALAPPDATA%\\.cloudflared\\cert.pem
         - 从 login 输出中提取的路径（兜底）
         """
-        paths: list[Path] = [Path.home() / ".cloudflared" / "cert.pem"]
+        paths: list[Path] = [Path.home() / _CLOUDFLARED_DIR / _CERT_PEM_FILE]
         # Windows 上部分版本使用 LOCALAPPDATA
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
-            paths.append(Path(local_app_data) / ".cloudflared" / "cert.pem")
+            paths.append(Path(local_app_data) / _CLOUDFLARED_DIR / _CERT_PEM_FILE)
         # APPDATA 兜底
         app_data = os.environ.get("APPDATA")
         if app_data:
-            paths.append(Path(app_data) / ".cloudflared" / "cert.pem")
+            paths.append(Path(app_data) / _CLOUDFLARED_DIR / _CERT_PEM_FILE)
         # 从 login 输出中正则提取路径（cloudflared 可能输出 cert.pem 的绝对路径）
         output = "".join(self._login_output)
         # 匹配 Windows 路径 (C:\...\cert.pem) 和 Unix 路径 (/.../cert.pem)
@@ -408,36 +421,53 @@ class CloudflareProvider(TunnelProvider):
         self._login_output = []
 
         # 后台线程实时读取 stdout，提取授权 URL
-        def read_login_output():
-            if self._login_process is None or self._login_process.stdout is None:
-                return
-            # cloudflared login 输出的授权 URL 格式：https://dash.cloudflare.com/argotunnel?...
-            url_pattern = re.compile(r"(https://[^\s]+)")
-            for line in self._login_process.stdout:
-                self._login_output.append(line)
-                line_stripped = line.strip()
-                if not line_stripped:
-                    continue
-                # 提取第一个包含 cloudflare 的 URL（授权链接）
-                if self._login_auth_url is None:
-                    match = url_pattern.search(line_stripped)
-                    if match and "cloudflare" in match.group(1):
-                        self._login_auth_url = match.group(1)
-                        logger.info(f"[cloudflared] login 授权 URL: {self._login_auth_url}")
-                logger.debug(f"[cloudflared login] {line_stripped}")
-
-        thread = threading.Thread(target=read_login_output, daemon=True)
+        thread = threading.Thread(target=self._read_login_output, daemon=True)
         thread.start()
-
         # 等待最多 10 秒，看能否提取到授权 URL 或进程退出
-        deadline = time.time() + 10
+        self._wait_for_login_url_or_exit(timeout=10)
+        return self._build_login_result()
+
+    def _read_login_output(self) -> None:
+        """后台线程：实时读取 login 子进程 stdout，匹配到授权 URL 即记录
+
+        cloudflared login 输出的授权 URL 格式：https://dash.cloudflare.com/argotunnel?...
+        """
+        if self._login_process is None or self._login_process.stdout is None:
+            return
+        # 仅编译一次：线程内反复编译无意义且影响可读性
+        url_pattern = re.compile(r"(https://[^\s]+)")
+        for line in self._login_process.stdout:
+            self._login_output.append(line)
+            self._try_capture_login_url(line, url_pattern)
+            logger.debug(f"[cloudflared login] {line.strip()}")
+
+    def _try_capture_login_url(self, line: str, url_pattern: re.Pattern) -> None:
+        """从输出行中提取授权 URL，仅首次匹配成功后记录
+
+        多次输出相同 URL 时不覆盖，避免后续 unrelated 日志把 auth_url 清掉
+        """
+        line_stripped = line.strip()
+        if not line_stripped or self._login_auth_url is not None:
+            return
+        match = url_pattern.search(line_stripped)
+        # 必须包含 cloudflare，避免匹配到无关 URL（如文档链接）
+        if match and "cloudflare" in match.group(1):
+            self._login_auth_url = match.group(1)
+            logger.info(f"[cloudflared] login 授权 URL: {self._login_auth_url}")
+
+    def _wait_for_login_url_or_exit(self, timeout: int) -> None:
+        """等待授权 URL 出现或进程退出，最多 timeout 秒
+
+        超过 timeout 仍未提取到 URL 也返回，由 _build_login_result 决定如何回复前端
+        """
+        deadline = time.time() + timeout
         while time.time() < deadline:
-            if self._login_auth_url:
-                break
-            if self._login_process.poll() is not None:
-                break
+            if self._login_auth_url or self._login_process.poll() is not None:
+                return
             time.sleep(0.5)
 
+    def _build_login_result(self) -> dict:
+        """根据 login 进程当前状态构造返回结果：URL 优先 / 进程退出 / 仍在运行"""
         if self._login_auth_url:
             return {
                 "status": "waiting",
@@ -771,6 +801,24 @@ class TailscaleProvider(TunnelProvider):
 
     def start(self) -> str:
         self._binary_path = self._ensure_binary()
+        dns_name = self._get_tailscale_dns_name()
+        # 用 Popen 非阻塞读取输出，而非 subprocess.run 阻塞等待。
+        # 原因：tailscale funnel --bg --yes 在首次启用时会输出授权链接后不退出，
+        # 等待用户在浏览器完成授权。用 subprocess.run 会阻塞 60s，
+        # 而前端 axios 30s 就超时了，用户看不到授权指引。
+        # 改为 Popen + 读取输出，检测到授权链接立即提取并返回错误
+        process = self._start_funnel_process()
+
+        auth_url_match: list[str] = []
+        recent_lines: list[str] = []
+        if self._read_funnel_output(process, dns_name, auth_url_match, recent_lines):
+            return self._public_url or ""
+
+        self._terminate_funnel_process(process)
+        self._raise_funnel_failure(process, auth_url_match, recent_lines)
+
+    def _get_tailscale_dns_name(self) -> str:
+        """校验 Tailscale 已登录并启用 MagicDNS，返回可用的 ts.net DNS 名"""
         status_result = self._run_cli("status", "--json")
         status_data = self._parse_json_output(status_result.stdout, "tailscale status")
         if status_data.get("BackendState") != "Running":
@@ -781,13 +829,11 @@ class TailscaleProvider(TunnelProvider):
         dns_name = str(dns_name).strip().rstrip(".")
         if not dns_name.lower().endswith(".ts.net"):
             raise RuntimeError("Tailscale 尚未启用 MagicDNS，无法生成固定 ts.net 地址")
+        return dns_name
 
-        # 用 Popen 非阻塞读取输出，而非 subprocess.run 阻塞等待。
-        # 原因：tailscale funnel --bg --yes 在首次启用时会输出授权链接后不退出，
-        # 等待用户在浏览器完成授权。用 subprocess.run 会阻塞 60s，
-        # 而前端 axios 30s 就超时了，用户看不到授权指引。
-        # 改为 Popen + 读取输出，检测到授权链接立即提取并返回错误
-        process = subprocess.Popen(
+    def _start_funnel_process(self) -> subprocess.Popen:
+        """启动 funnel 子进程：--bg 后台运行，--yes 跳过交互确认"""
+        return subprocess.Popen(
             [str(self._binary_path), "funnel", "--bg", "--yes", f"http://127.0.0.1:{self._local_port}"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -795,14 +841,24 @@ class TailscaleProvider(TunnelProvider):
             text=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        auth_url_match: list[str] = []
-        recent_lines: list[str] = []
+
+    def _read_funnel_output(
+        self,
+        process: subprocess.Popen,
+        dns_name: str,
+        auth_url_match: list[str],
+        recent_lines: list[str],
+    ) -> bool:
+        """读取 funnel 进程输出，成功返回 True
+
+        三种退出条件：检测到成功标志（返回 True）、授权链接 break、进程退出或超时（返回 False）
+        """
         deadline = time.time() + 30
         while time.time() < deadline:
             line = process.stdout.readline() if process.stdout else ""
             if not line:
                 if process.poll() is not None:
-                    break
+                    return False
                 time.sleep(0.2)
                 continue
             stripped = line.strip()
@@ -813,20 +869,29 @@ class TailscaleProvider(TunnelProvider):
             url_match = re.search(r"(https://login\.tailscale\.com/f/funnel\?node=\S+)", stripped)
             if url_match:
                 auth_url_match.append(url_match.group(1))
-                break
+                return False
             # 检测成功标志：funnel 已建立
             if "Funnel started" in stripped or "listening on" in stripped.lower():
                 self._public_url = f"https://{dns_name}"
                 logger.info(f"[tailscale] Funnel 已建立: {self._public_url}")
-                return self._public_url
+                return True
+        return False
 
-        # 进程未输出成功标志
+    def _terminate_funnel_process(self, process: subprocess.Popen) -> None:
+        """终止 funnel 子进程：terminate → wait → kill"""
         process.terminate()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
 
+    def _raise_funnel_failure(
+        self,
+        process: subprocess.Popen,
+        auth_url_match: list[str],
+        recent_lines: list[str],
+    ) -> None:
+        """根据 funnel 进程退出状态抛出对应异常：授权链接优先 / 失败 / 超时"""
         if auth_url_match:
             raise TailscaleFunnelAuthError(
                 "首次启用 Funnel 需要在浏览器完成授权，请点击下方链接完成授权后重新启动隧道",

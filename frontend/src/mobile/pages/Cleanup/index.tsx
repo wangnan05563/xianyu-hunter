@@ -233,7 +233,7 @@ export default function MobileCleanup() {
                 min={1}
                 max={365}
                 style={{ width: '100%' }}
-                addonAfter="天"
+                addonAfter="天" /* NOSONAR - addonAfter 在 antd 5.x 仍可用，迁移到 InputNumber.Group 会破坏现有布局，暂不迁移 */
               />
             </div>
           )}
@@ -270,7 +270,7 @@ export default function MobileCleanup() {
                 min={1}
                 max={365}
                 style={{ width: '100%' }}
-                addonAfter="天"
+                addonAfter="天" /* NOSONAR - addonAfter 在 antd 5.x 仍可用，迁移到 InputNumber.Group 会破坏现有布局，暂不迁移 */
               />
             </div>
           )}
