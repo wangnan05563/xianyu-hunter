@@ -146,40 +146,41 @@ def logout_account(request: Request) -> JSONResponse:
 @router.get("/session-events")
 def get_session_events(
     request: Request,
-    user_id: str | None = None,
     limit: int = 100,
 ) -> dict[str, Any]:
-    """查询会话事件日志
+    """查询当前登录用户的会话事件日志
 
-    支持按 user_id 过滤；按 created_at 降序返回最近 limit 条事件。
+    安全修复（mu-audit Critical）：移除 user_id 查询参数，强制只查当前登录用户事件。
+    原实现接受 user_id 查询参数直接过滤 user_session_events 表，但未校验调用方权限，
+    任何登录用户均可通过 ?user_id=other_user_id 越权查询其他用户的事件流
+    （登录/退出/Cookie 过期等），泄露账号活跃状态画像。
+
+    修复后从 request.state.user_id 读取中间件注入的当前用户身份，
+    拒绝任何外部传入的 user_id 覆盖，确保用户只能查看自己的事件。
+    按 created_at DESC 返回最近 limit 条事件。
     detail 字段在写入时已脱敏（不含 token 原文 / Cookie 值），可直接返回。
     """
     user_manager = get_user_manager()
     # 防滥用：limit 上限 1000，与 api_tasks.list_tasks 的限制风格一致
     effective_limit = max(1, min(limit, _MAX_EVENT_LIMIT))
 
+    # 强制使用中间件注入的当前用户身份，忽略任何外部传入的 user_id
+    # 为什么不读 query 参数：原 user_id 参数是越权根因，移除后从源头杜绝覆盖
+    user_id = getattr(request.state, "user_id", _DEFAULT_USER_ID)
+
     # 直接通过 user_manager 的 engine 查询 user_session_events 表
     # 为什么不在 UserManager 中加 query_events 方法：会话事件查询是展示层需求，
     # 不属于用户身份管理核心职责，放在路由内保持 UserManager 接口精简
     engine = user_manager._engine
     with engine.connect() as conn:
-        if user_id:
-            rows = conn.execute(
-                sa_text(
-                    "SELECT id, user_id, event_type, detail, created_at "
-                    "FROM user_session_events WHERE user_id=:uid "
-                    "ORDER BY created_at DESC LIMIT :limit"
-                ),
-                {"uid": user_id, "limit": effective_limit},
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                sa_text(
-                    "SELECT id, user_id, event_type, detail, created_at "
-                    "FROM user_session_events ORDER BY created_at DESC LIMIT :limit"
-                ),
-                {"limit": effective_limit},
-            ).fetchall()
+        rows = conn.execute(
+            sa_text(
+                "SELECT id, user_id, event_type, detail, created_at "
+                "FROM user_session_events WHERE user_id=:uid "
+                "ORDER BY created_at DESC LIMIT :limit"
+            ),
+            {"uid": user_id, "limit": effective_limit},
+        ).fetchall()
 
     items = [
         {
