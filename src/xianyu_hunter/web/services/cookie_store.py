@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -93,7 +94,9 @@ def is_test_cookie(name: str, value: str) -> bool:
     # 不在黑名单中但也不符合真实格式，必须拦截以防污染 JSON 存储
     pattern = _COOKIE_FORMAT_PATTERNS.get(name)
     if pattern and not pattern.match(value):
-        logger.warning("Cookie %s 值不符合真实格式，识别为测试数据: %s", name, value)
+        # 只记录长度而非完整 value：Cookie value 是敏感会话凭证，
+        # 完整记录会泄露到日志文件，存在信息泄露风险
+        logger.warning("Cookie %s 值不符合真实格式，识别为测试数据 (len=%d)", name, len(value))
         return True
     return False
 
@@ -337,11 +340,16 @@ class CookieStore:
                 ],
             }
             success = self._write_json(data, user_id)
-            if success:
-                # 同步全部合并后的 cookie（不仅仅是新注入的），
-                # 确保 SQLite 与 JSON 状态一致
-                self._sync_to_sqlite(merged_cookies)
-            return success
+
+        # _sync_to_sqlite 移到锁外执行：sqlite3.connect + 批量写入可能耗时数百毫秒，
+        # 持锁会阻塞其他 CookieStore 操作（has_valid_cookies/get_cookie_info 等）。
+        # merged_cookies 在锁内计算完成，锁外传给 _sync_to_sqlite 不会读到中间态。
+        # 与 export_cookies 的模式保持一致（export_cookies 也是锁外调用 _sync_to_sqlite）
+        if success:
+            # 同步全部合并后的 cookie（不仅仅是新注入的），
+            # 确保 SQLite 与 JSON 状态一致
+            self._sync_to_sqlite(merged_cookies)
+        return success
 
     def sync_to_sqlite(self, cookies: list[dict]) -> bool:
         """外部调用：将 Cookie 同步到 browser-data SQLite
@@ -532,6 +540,12 @@ class CookieStore:
             with self._lock:
                 if self._cache is None:
                     self._cache = {}
+                # double-check: 读文件期间不持锁，其他线程可能已通过 _write_json
+                # 写入更新的数据并更新缓存。若此时直接覆盖会用刚读到的旧文件数据
+                # 覆盖较新的缓存，造成缓存回退。这里重新检查缓存，若已被更新则用缓存值
+                cached = self._cache.get(user_id)
+                if cached and (time.time() - cached[1]) < _CACHE_TTL:
+                    return cached[0]
                 self._cache[user_id] = (data, time.time())
             return data
         except (json.JSONDecodeError, OSError):
@@ -541,7 +555,10 @@ class CookieStore:
         """原子写入指定用户的 JSON Cookie 文件"""
         path = _cookie_json_path(user_id)
         try:
-            tmp = path.with_suffix(".tmp")
+            # 使用 pid + thread id 生成唯一 tmp 文件名，避免并发写入竞争同一个 .tmp 路径
+            # 为什么不用固定 .tmp：两个并发的 _write_json(user_id="default") 会
+            # 同时写 cookies_default.tmp 造成数据损坏，即便最终 replace 是原子的
+            tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(path)
