@@ -20,6 +20,11 @@ def make_auth_response(data: dict, session_token: str | None = None) -> JSONResp
     """
     resp = JSONResponse(content=data)
     token = session_token if session_token else get_settings().web_token
+    # 设计说明：samesite="none" 允许移动端跨域携带 Cookie（PWA / 内网穿透访问场景必需）
+    # CSRF 风险评估：本工具定位为本地个人工具，不对外公网开放；
+    # 通过内网穿透暴露时，应在网络层（反向代理 / 防火墙）限制访问来源，
+    # 而非在应用层校验 Origin（个人工具增加 Origin 校验会拖累开发体验且收益有限）。
+    # 如未来需增强安全：可在 auth 中间件中对 POST/PUT/DELETE 校验 Origin header 白名单。
     resp.set_cookie(
         key="xh_token",
         value=token,

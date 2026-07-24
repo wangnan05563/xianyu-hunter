@@ -413,6 +413,11 @@ def _finalize_multi_user_login() -> str | None:
     except Exception as e:
         # 降级为单用户模式：登录主流程已成功，不应因多用户接入失败而回滚
         logger.error("多用户接入异常，降级为单用户模式: %s", e)
+        # 重置幂等标志：异常退出时未真正完成多用户接入，
+        # 若保持 True，后续调用在第 372-373 行直接返回 _session.get("session_token")
+        # 即 None，导致永久降级为单用户模式且无法自愈
+        with _session_lock:
+            _session["multi_user_finalized"] = False
         return None
 
 
