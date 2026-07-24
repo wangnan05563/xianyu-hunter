@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -18,6 +19,8 @@ from sqlalchemy import text as sa_text
 
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
 from xianyu_hunter.web.services.user_manager import get_user_manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["accounts"])
 
@@ -95,8 +98,9 @@ def switch_account(body: SwitchAccountBody, request: Request) -> Any:
         try:
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
             get_cookie_store().invalidate_cache(old_user_id)
-        except Exception:
-            pass
+        except Exception as e:
+            # 不阻断主流程，但记录告警便于排查缓存同步异常
+            logger.warning("切换账号时旧用户缓存失效失败 user_id=%s: %s", old_user_id, e)
 
     token = user_manager.issue_session(body.target_user_id)
     user_manager.update_last_active(body.target_user_id)
@@ -108,13 +112,13 @@ def switch_account(body: SwitchAccountBody, request: Request) -> Any:
     try:
         from xianyu_hunter.web.services.cookie_store import get_cookie_store
         get_cookie_store().invalidate_cache(body.target_user_id)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("切换账号时新用户缓存失效失败 user_id=%s: %s", body.target_user_id, e)
     try:
         from xianyu_hunter.modules.login_orchestrator import get_orchestrator
         get_orchestrator().cookie_rotator.invalidate_all()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("切换账号时重置 CookieRotator 层状态失败: %s", e)
 
     result = {
         "ok": True,
@@ -195,15 +199,22 @@ def get_session_events(
     return {"items": items, "count": len(items)}
 
 
-def _safe_parse_json(value: str | None) -> Any:
-    """安全解析 JSON 字符串，失败时返回原始字符串或空 dict
+def _safe_parse_json(value: str | None) -> dict:
+    """安全解析 JSON 字符串，统一返回 dict
 
     为什么需要：user_session_events.detail 字段虽约定为 JSON，
     但历史数据或异常写入可能不是合法 JSON，避免解析失败导致整个响应 500。
+    为什么统一返回 dict：原实现空值返回 {}、合法 JSON 返回原始类型、非法 JSON 返回 str，
+    类型不一致让下游消费者需要多处 isinstance 判断；统一包装为 dict 后下游可直接 .get()。
     """
     if not value:
         return {}
     try:
-        return json.loads(value)
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+        # list/str/number 等非 dict 类型包装为 dict，保留原始值供下游消费
+        return {"_raw": parsed}
     except (json.JSONDecodeError, TypeError):
-        return value
+        # 非法 JSON 包装为 dict，避免返回 str 让下游 isinstance 判断失效
+        return {"_raw": value}

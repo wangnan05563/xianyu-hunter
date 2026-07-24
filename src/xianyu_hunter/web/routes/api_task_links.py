@@ -720,25 +720,16 @@ def delete_link(
 
     # 删除前先查出关联信息，用于判断是否需要联动清理评估事件
     # 为什么不用 delete_task_link 直接删：它只返回 bool，拿不到 link_type/link_key
-    from sqlalchemy import select as _select
-    from xianyu_hunter.infra.db_models import TaskLinkRow
-
-    with container.repo.engine.connect() as conn:
-        # 防线 2：按 user_id 过滤查询，防止拿到他人 task 下的关联行
-        # 为什么在路由层重复过滤：delete_task_link 内部也过滤，但此处先取 link_type/link_key，
-        # 若不过滤会泄露他人行的 link_type/link_key 信息
-        stmt = (
-            _select(TaskLinkRow.link_type, TaskLinkRow.link_key)
-            .where(TaskLinkRow.id == link_id)
-            .where(TaskLinkRow.task_id == task_id)
-            .where(TaskLinkRow.user_id == user_id)
-        )
-        row = conn.execute(stmt).first()
-        if not row:
-            raise HTTPException(status_code=404, detail="关联不存在")
-        # 必须在 with 块内提取值，连接关闭后 Row 对象可能失效
-        link_type: str = row.link_type
-        link_key: str = row.link_key
+    # 为什么走 Repository.get_task_link：原实现直接访问 engine 绕过 Repository 层，
+    # 破坏了数据访问封装；改用 Repository 方法集中管理 SQL 与过滤逻辑
+    link_row = container.repo.get_task_link(link_id, user_id=user_id)
+    # 防线 2：按 user_id 过滤查询，防止拿到他人 task 下的关联行
+    # 为什么在路由层重复过滤：delete_task_link 内部也过滤，但此处先取 link_type/link_key，
+    # 若不过滤会泄露他人行的 link_type/link_key 信息
+    if not link_row or link_row.get("task_id") != task_id:
+        raise HTTPException(status_code=404, detail="关联不存在")
+    link_type: str = link_row.get("link_type")
+    link_key: str = link_row.get("link_key")
     # 防线 3：delete_task_link 也传 user_id 做深度防御
     ok = container.repo.delete_task_link(link_id, user_id=user_id)
     if not ok:

@@ -139,7 +139,9 @@ def list_tasks(
     offset = max(0, offset)
     # repo 层已默认排除 deleted 任务，统一由 SQL 层过滤以保证 limit/offset 准确性
     effective_status = status
-    user_id = getattr(request.state, "user_id", None)
+    # 与 _check_task_ownership 保持一致：用 "default" 兜底，避免 user_id=None 时
+    # list_tasks_with_last_seen / count_tasks 不附加 WHERE user_id 过滤导致跨用户泄露
+    user_id = getattr(request.state, "user_id", "default")
     rows = container.repo.list_tasks_with_last_seen(
         status=effective_status, limit=limit, offset=offset, user_id=user_id,
     )

@@ -432,7 +432,12 @@ class TaskLinksMixin:
         user_id: str | None = None,
     ) -> list[dict]:
         with self.engine.connect() as conn:
-            task_row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
+            # 安全：task 查询也加 user_id 过滤，防止拿到他人 task 的配置
+            # （min_price/max_price 等），否则会用他人的过滤条件过滤自己的关联数据
+            task_stmt = select(TaskRow).where(TaskRow.id == task_id)
+            if user_id is not None:
+                task_stmt = task_stmt.where(TaskRow.user_id == user_id)
+            task_row = conn.execute(task_stmt).first()
             task = self._row_to_dict(task_row) if task_row else None
             stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
             if link_type:
@@ -651,7 +656,12 @@ class TaskLinksMixin:
     ) -> dict[str, int]:
         """按类型返回关联计数（与 list_task_links 的过滤逻辑保持一致）"""
         with self.engine.connect() as conn:
-            task_row = conn.execute(select(TaskRow).where(TaskRow.id == task_id)).first()
+            # 安全：task 查询也加 user_id 过滤，与 list_task_links 保持一致
+            # 防止用他人 task 的过滤条件影响计数结果
+            task_stmt = select(TaskRow).where(TaskRow.id == task_id)
+            if user_id is not None:
+                task_stmt = task_stmt.where(TaskRow.user_id == user_id)
+            task_row = conn.execute(task_stmt).first()
             task = self._row_to_dict(task_row) if task_row else None
             stmt = select(TaskLinkRow).where(TaskLinkRow.task_id == task_id)
             if link_type:
@@ -676,6 +686,22 @@ class TaskLinksMixin:
                 stmt = stmt.where(TaskLinkRow.user_id == user_id)
             result = conn.execute(stmt)
             return (result.rowcount or 0) > 0
+
+    def get_task_link(self, link_id: int, user_id: str | None = None) -> dict | None:
+        """获取单个 task_link 记录（含 link_type/link_key 用于删除联动）
+
+        为什么需要：delete_link 路由层原本直接访问 engine 绕过 Repository 层，
+        此方法提供正式的 Repository 接口，集中数据访问逻辑。
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户读取（深度防御）。
+        """
+        with self.engine.connect() as conn:
+            stmt = select(TaskLinkRow).where(TaskLinkRow.id == link_id)
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
+            row = conn.execute(stmt).fetchone()
+        if not row:
+            return None
+        return dict(row._mapping)
 
     def delete_task_links_by_task(
         self, task_id: str, source: str | None = None, user_id: str | None = None
