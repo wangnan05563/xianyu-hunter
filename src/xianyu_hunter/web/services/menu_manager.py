@@ -79,7 +79,17 @@ class MenuManager:
             logger.error("菜单注册表加载失败: %s", e, exc_info=True)
             self._registry = []
             return
-        self._registry = list(data.get("menus", []))
+        # 类型校验：menus 字段必须是 list，否则 list("string") 会拆成字符列表，
+        # 后续 item.get() 调用会抛 AttributeError 中断启动
+        menus = data.get("menus", [])
+        if not isinstance(menus, list):
+            logger.error(
+                "menu_registry.yaml 的 menus 字段必须是列表，实际: %s，使用空列表兜底",
+                type(menus).__name__,
+            )
+            self._registry = []
+            return
+        self._registry = menus
         logger.info("已加载菜单注册表: %d 项", len(self._registry))
 
     def _load_user_configs(self, user_id: str) -> dict[str, dict[str, Any]]:
@@ -163,13 +173,18 @@ class MenuManager:
                         continue
                     visible = 1 if bool(m.get("visible", True)) else 0
                     sort_order = int(m.get("sort_order", 0))
-                    # SQLite 的 INSERT OR REPLACE 会按主键冲突替换整行
+                    # 使用 ON CONFLICT 而非 INSERT OR REPLACE：
+                    # INSERT OR REPLACE 在 UNIQUE 冲突时会先删除整行再插入新行，
+                    # 导致未在 SQL 中指定的 group_name/custom_label 被重置为默认值（空串）。
+                    # ON CONFLICT DO UPDATE 仅更新指定列，保留 group_name/custom_label 既有值。
                     # 主键 (user_id, menu_key) 已在 db_models.UserMenuConfigRow 定义
                     conn.execute(
                         sa_text(
-                            "INSERT OR REPLACE INTO user_menu_configs "
+                            "INSERT INTO user_menu_configs "
                             "(user_id, menu_key, visible, sort_order, updated_at) "
-                            "VALUES (:uid, :key, :vis, :sort, :now)"
+                            "VALUES (:uid, :key, :vis, :sort, :now) "
+                            "ON CONFLICT(user_id, menu_key) DO UPDATE SET "
+                            "visible=:vis, sort_order=:sort, updated_at=:now"
                         ),
                         {
                             "uid": user_id,
