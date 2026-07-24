@@ -148,6 +148,14 @@ class UserManager:
                 conn.execute(sa_text(
                     "UPDATE user_sessions SET is_active=0 WHERE user_id=:uid AND is_active=1"
                 ), {"uid": user_id})
+                # 清除该用户所有 token 的缓存条目，避免旧 token 在缓存 TTL 内仍命中
+                # 为什么在这里清缓存：issue_session 撤销了 DB 中所有旧 session，
+                # 但 _verify_cache 仍持有旧 token_hash → user_id 映射，
+                # 不清理会导致旧 token 在 5 分钟 TTL 内绕过会话固定防护
+                self._verify_cache = {
+                    thash: val for thash, val in self._verify_cache.items()
+                    if val[0] != user_id
+                }
                 # 写入新 session（client_ip 为 NOT NULL，ORM default 仅 Python 端生效，需显式提供）
                 conn.execute(sa_text(
                     "INSERT INTO user_sessions (user_id, token_hash, issued_at, expires_at, last_renewed_at, client_ip, is_active) "
@@ -371,6 +379,14 @@ class UserManager:
                     {"status": status, "now": now, "uid": user_id},
                 )
                 conn.commit()
+                # disabled 用户的 token 应立即失效，清除缓存避免 5 分钟窗口内仍可访问
+                # 为什么仅 disabled 分支清缓存：active/expired 是正常状态流转，
+                # 用户 token 仍应可用；disabled 是终止态（不可恢复），必须即时吊销缓存
+                if status == "disabled":
+                    self._verify_cache = {
+                        thash: val for thash, val in self._verify_cache.items()
+                        if val[0] != user_id
+                    }
 
         # 事件记录与业务解耦：_log_event 失败不阻塞状态变更
         try:
