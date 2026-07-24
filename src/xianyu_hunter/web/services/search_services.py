@@ -20,9 +20,19 @@ from xianyu_hunter.web.services.search_base import SearchParams, SearchService
 # ============== A1: 任务关联搜索 ==============
 
 class TaskLinkSearchParams(SearchParams):
-    def __init__(self, q: str, link_type: str | None = None, limit: int = 50, offset: int = 0):
+    def __init__(
+        self,
+        q: str,
+        link_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        user_id: str | None = None,
+    ):
         super().__init__(q=q, limit=limit, offset=offset)
         self.link_type = link_type
+        # user_id：跨用户隔离参数，None 表示不过滤（向后兼容旧调用方）
+        # 路由层应始终传 request.state.user_id，避免跨用户数据泄露
+        self.user_id = user_id
 
 
 class TaskLinkSearchService(SearchService):
@@ -40,8 +50,11 @@ class TaskLinkSearchService(SearchService):
         return None
 
     def _execute(self, query: Any, params: TaskLinkSearchParams) -> tuple[list[dict], int]:
+        # 传递 user_id 给 repo.search_task_links 做跨用户隔离
+        # 为什么必传：search 是跨任务模糊搜索，若不过滤 user_id 会返回所有用户的关联行
         rows = self._repo.search_task_links(
             q=params.q, link_type=params.link_type, limit=params.limit,
+            user_id=params.user_id,
         )
         return rows, len(rows)
 

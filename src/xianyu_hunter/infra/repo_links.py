@@ -276,6 +276,9 @@ class TaskLinksMixin:
                 display = row.get("display")
                 if isinstance(display, dict):
                     display = json.dumps(display, ensure_ascii=False)
+                # 修复：显式写入 user_id，避免 SQLite DEFAULT 把所有行设为 "default"
+                # 导致跨用户隔离失效（auto-migrate / batch_upsert 路径写入的行会被
+                # 后续 list/count 端点用 user_id=None 漏出，引发越权读取）
                 stmt = sqlite_insert(TaskLinkRow).values(
                     task_id=row["task_id"],
                     link_type=row["link_type"],
@@ -283,7 +286,9 @@ class TaskLinksMixin:
                     display=display,
                     source=row.get("source", "auto"),
                     note=row.get("note"),
+                    user_id=row.get("user_id", "default"),
                 )
+                # 不更新 user_id：避免不同用户重复关联时归属权被覆盖，保留首次写入的用户
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["task_id", "link_type", "link_key"],
                     set_={
@@ -688,6 +693,38 @@ class TaskLinksMixin:
             result = conn.execute(stmt)
             return result.rowcount or 0
 
+    def get_existing_task_link_keys(
+        self,
+        task_id: str,
+        link_type: str,
+        link_keys: list[str],
+    ) -> set[str]:
+        """批量查询任务已关联的 link_key 集合
+
+        用于按 task_id 隔离的去重：不同任务可独立发现同一商品，
+        同一任务不重复处理已关联过的商品。
+
+        为什么不复用 items_exist：items 表是全局共享的（upsert 时 task_id 被覆盖），
+        无法区分"哪个任务已处理过"。task_links 的 UNIQUE(task_id, link_type, link_key)
+        约束保证了任务级关联的唯一性。
+        """
+        if not link_keys:
+            return set()
+        result: set[str] = set()
+        batch_size = 500
+        with self.engine.connect() as conn:
+            for i in range(0, len(link_keys), batch_size):
+                batch = link_keys[i:i + batch_size]
+                stmt = (
+                    select(TaskLinkRow.link_key)
+                    .where(TaskLinkRow.task_id == task_id)
+                    .where(TaskLinkRow.link_type == link_type)
+                    .where(TaskLinkRow.link_key.in_(batch))
+                )
+                rows = conn.execute(stmt).all()
+                result.update(row[0] for row in rows)
+        return result
+
     def lookup_task_links(
         self,
         link_type: str,
@@ -792,20 +829,25 @@ class TaskLinksMixin:
             stmt = stmt.order_by(TaskLinkRow.created_at.desc()).limit(limit)
             return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
 
-    def auto_migrate_task_links(self) -> int:
+    def auto_migrate_task_links(self, user_id: str | None = None) -> int:
         """一次性把 items 表里已有的隐式关联搬到 task_links
 
         性能优化：原实现循环调用 insert_link 逐条 INSERT，N 条记录产生 N 次
         execute 调用。现改为收集所有记录后批量 INSERT，仅 2 次 execute
         （item 关联 + seller 关联），大幅减少事务内执行次数。
+
+        user_id：迁移数据归属的用户 ID。None 时由 batch_upsert_task_links 兜底为 "default"。
+        为什么需要 user_id：路由层 auto-migrate 端点会传 request.state.user_id，
+        迁移后的 task_links 行需归属到调用用户，否则后续 list/count 端点用
+        user_id 过滤时会漏查这些行（Critical #2 + #5 越权隔离修复）。
         """
         inserted = 0
         with self.engine.begin() as conn:
-            inserted += self._migrate_items_to_task_links(conn)
-            inserted += self._backfill_seller_links_from_legacy(conn)
+            inserted += self._migrate_items_to_task_links(conn, user_id=user_id)
+            inserted += self._backfill_seller_links_from_legacy(conn, user_id=user_id)
         return inserted
 
-    def _migrate_items_to_task_links(self, conn) -> int:
+    def _migrate_items_to_task_links(self, conn, user_id: str | None = None) -> int:
         """阶段1：从 items 表迁移 item + seller 关联到 task_links"""
         rows = conn.execute(
             select(
@@ -836,6 +878,7 @@ class TaskLinksMixin:
                     "link_key": link_key,
                     "display": json.dumps(display, ensure_ascii=False),
                     "source": "auto",
+                    "user_id": user_id or "default",
                 })
         if not batch:
             return 0
@@ -846,7 +889,7 @@ class TaskLinksMixin:
         result = conn.execute(stmt)
         return result.rowcount or 0
 
-    def _backfill_seller_links_from_legacy(self, conn) -> int:
+    def _backfill_seller_links_from_legacy(self, conn, user_id: str | None = None) -> int:
         """阶段2：从已有 task_links(item) 补建 seller 关联
 
         仅迁移标题匹配任务关键词的行，避免污染无关数据
@@ -860,7 +903,7 @@ class TaskLinksMixin:
         seller_batch: list[dict] = []
         for tid, item_id, raw_display, keyword in legacy_rows:
             self._collect_seller_link_from_legacy_row(
-                tid, item_id, raw_display, keyword, seller_batch
+                tid, item_id, raw_display, keyword, seller_batch, user_id=user_id
             )
         if not seller_batch:
             return 0
@@ -873,7 +916,7 @@ class TaskLinksMixin:
 
     def _collect_seller_link_from_legacy_row(
         self, tid: str, item_id: str, raw_display, keyword: str | None,
-        seller_batch: list[dict],
+        seller_batch: list[dict], user_id: str | None = None,
     ) -> None:
         """从单条 legacy item 行提取 seller 关联并追加到 seller_batch
 
@@ -902,4 +945,5 @@ class TaskLinksMixin:
                 "link_key": link_key,
                 "display": json.dumps(derived_display, ensure_ascii=False),
                 "source": "auto",
+                "user_id": user_id or "default",
             })

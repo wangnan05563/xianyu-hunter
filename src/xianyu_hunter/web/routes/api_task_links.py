@@ -52,12 +52,15 @@ def _get_live_cache_ttl() -> int:
 
 
 def _should_skip_empty_result() -> bool:
-    """从配置读取是否跳过空结果缓存，配置加载失败时默认跳过（true）"""
+    """从配置读取是否跳过空结果缓存。
+    
+    配置加载失败时默认不跳过（False），避免空结果不被缓存导致反复触发搜索加剧反爬。
+    """
     try:
         from xianyu_hunter.infra.yaml_config import get_config
         return get_config().cache.empty_result_skip
     except Exception:
-        return True
+        return False
 
 # live 抢单冷却：避免实时搜索频繁触发抢单冲击闲鱼下单接口
 # 为什么需要：live 搜索可能每分钟触发多次，不加冷却会短时间内重复尝试下单
@@ -702,24 +705,42 @@ def delete_link(
 
     联动清理：删除 item 类型关联时，同步删除 events 表中对应的 eval.* 评估事件，
     避免 task_links 已删但评估明细残留导致的垃圾数据。
+
+    安全：先调 _check_task_ownership 校验任务归属，再按 user_id 过滤查 TaskLinkRow，
+    delete_task_link 也传 user_id 做深度防御，三道防线避免 IDOR 越权删除。
     """
+    # 防线 1：任务归属校验，不属于当前用户直接 403
+    # 为什么复用 api_tasks._check_task_ownership：与其他写端点保持一致的越权判断与日志
+    from xianyu_hunter.web.routes.api_tasks import _check_task_ownership
+
+    _check_task_ownership(container, task_id, request)
+
+    # 多用户隔离：删除属写入操作，用 "default" 兜底（与 _check_task_ownership 内部一致）
+    user_id = getattr(request.state, "user_id", "default")
+
     # 删除前先查出关联信息，用于判断是否需要联动清理评估事件
     # 为什么不用 delete_task_link 直接删：它只返回 bool，拿不到 link_type/link_key
     from sqlalchemy import select as _select
     from xianyu_hunter.infra.db_models import TaskLinkRow
 
     with container.repo.engine.connect() as conn:
-        row = conn.execute(
+        # 防线 2：按 user_id 过滤查询，防止拿到他人 task 下的关联行
+        # 为什么在路由层重复过滤：delete_task_link 内部也过滤，但此处先取 link_type/link_key，
+        # 若不过滤会泄露他人行的 link_type/link_key 信息
+        stmt = (
             _select(TaskLinkRow.link_type, TaskLinkRow.link_key)
             .where(TaskLinkRow.id == link_id)
             .where(TaskLinkRow.task_id == task_id)
-        ).first()
+            .where(TaskLinkRow.user_id == user_id)
+        )
+        row = conn.execute(stmt).first()
         if not row:
             raise HTTPException(status_code=404, detail="关联不存在")
         # 必须在 with 块内提取值，连接关闭后 Row 对象可能失效
         link_type: str = row.link_type
         link_key: str = row.link_key
-    ok = container.repo.delete_task_link(link_id)
+    # 防线 3：delete_task_link 也传 user_id 做深度防御
+    ok = container.repo.delete_task_link(link_id, user_id=user_id)
     if not ok:
         raise HTTPException(status_code=404, detail="关联不存在")
 
@@ -2172,6 +2193,7 @@ def lookup(
 
 @_links_lookup.get("/search")
 def search(
+    request: Request,
     q: str = Query(..., min_length=1, max_length=200),
     type: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
@@ -2180,13 +2202,19 @@ def search(
     """跨任务模糊搜索（key 或 display 字段包含 q）
 
     通过 TaskLinkSearchService 间接调用 repo.search_task_links，
-    不直接调用 Repository 层方法，user_id 隔离将由后续任务在 Service 层补齐。
+    不直接调用 Repository 层方法。
+    user_id 隔离：从 request.state.user_id 取，传给 Service 层做 SQL WHERE 过滤，
+    防止跨用户数据泄露（Critical #4 修复）。
     """
     if type is not None and type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
+    # 多用户隔离：search 跨任务查询，必须按 user_id 过滤避免泄露他人关联
+    user_id = getattr(request.state, "user_id", None)
     # 使用 SearchService 统一处理分页/慢查询埋点/响应结构
     service = TaskLinkSearchService(container.repo)
-    result = service.search(TaskLinkSearchParams(q=q, link_type=type, limit=limit))
+    result = service.search(
+        TaskLinkSearchParams(q=q, link_type=type, limit=limit, user_id=user_id)
+    )
     # 保留原有响应字段（向后兼容前端期望的 count/q/type）
     return {"items": result["items"], "count": len(result["items"]), "q": q, "type": type}
 
