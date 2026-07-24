@@ -12,7 +12,10 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,11 +36,39 @@ _DB_PATH = str(get_data_dir() / "xianyu.db")
 # 菜单注册表路径：从安装目录读取（只读资源，随安装包分发）
 _REGISTRY_PATH = get_app_dir() / "config" / "menu_registry.yaml"
 
+# get_menus 缓存 TTL：60 秒内重复查询命中缓存，避免高频菜单拉取打 DB
+# 为什么 60s：菜单变更频率极低（用户主动调整），60s 足以覆盖一次会话的连续刷新
+_CACHE_TTL = 60.0
 
-def _utcnow_iso() -> str:
-    """返回 ISO8601 格式的当前 UTC 时间"""
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+
+def _utcnow() -> datetime:
+    """返回当前 UTC 时间（datetime 对象）
+
+    为什么返回 datetime 而非 ISO 字符串：
+    ORM 的 UserMenuConfigRow.updated_at default=_utcnow 返回 datetime，
+    raw SQL 也传 datetime 才能保证存储格式一致（避免混合存储导致排序/比较异常）。
+    SQLAlchemy 的 DateTime 类型会自动将 datetime 序列化为 SQLite 兼容格式。
+    """
+    return datetime.now(timezone.utc)
+
+
+def _resolve_registry_path() -> Path:
+    """解析 menu_registry.yaml 的实际路径，兼容开发/打包两种模式
+
+    为什么需要 fallback：PyInstaller 打包后 _REGISTRY_PATH（基于 get_app_dir）
+    指向 exe 所在目录，但实际资源被解压到 sys._MEIPASS 临时目录下。
+    没有此 fallback 时打包版会找不到 yaml 而使用空 registry，前端菜单为空。
+    """
+    candidate = _REGISTRY_PATH
+    if candidate.exists():
+        return candidate
+    # PyInstaller 打包模式：资源在 _MEIPASS 临时解压目录下
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        packaged = Path(meipass) / "config" / "menu_registry.yaml"
+        if packaged.exists():
+            return packaged
+    return candidate
 
 
 class MenuManager:
@@ -50,13 +81,17 @@ class MenuManager:
     - 合并后输出字段统一为 visible/sort_order（与 PUT API 入参对齐）。
     """
 
-    def __init__(self, engine: Engine, registry_path: Path | str = _REGISTRY_PATH) -> None:
+    def __init__(self, engine: Engine, registry_path: Path | str | None = None) -> None:
         self._engine = engine
-        self._registry_path = Path(registry_path)
-        # 内部锁：保护 update/reset 操作的读改写临界区
+        # registry_path 仅用于测试注入；生产路径由 _resolve_registry_path 解析
+        self._registry_path = Path(registry_path) if registry_path is not None else None
+        # 内部锁：保护 update/reset 操作的读改写临界区 + 缓存失效
         # get_menus 为只读且无副作用，无需持锁，依赖 SQLite 自身的并发控制
         self._lock = threading.RLock()
         self._registry: list[dict[str, Any]] = []
+        # get_menus 结果缓存：user_id → (timestamp, merged_list)
+        # 为什么用 dict 而非 lru_cache：需要按 user_id 精细失效，lru_cache 不支持
+        self._cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         self._load_registry()
 
     # ---------- 内部加载 ----------
@@ -67,12 +102,18 @@ class MenuManager:
         为什么在 __init__ 中加载而非延迟加载：YAML 文件小（<10KB），
         一次性加载避免每次 get_menus 都读文件 IO；启动时加载失败可立即暴露。
         """
-        if not self._registry_path.exists():
-            logger.warning("菜单注册表不存在: %s，使用空列表兜底", self._registry_path)
+        # 路径解析：优先用测试注入路径，否则走 _resolve_registry_path 兼容打包模式
+        if self._registry_path is not None:
+            path = self._registry_path
+        else:
+            path = _resolve_registry_path()
+
+        if not path.exists():
+            logger.warning("菜单注册表不存在: %s，使用空列表兜底", path)
             self._registry = []
             return
         try:
-            with open(self._registry_path, encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
         except (OSError, yaml.YAMLError) as e:
             # YAML 解析失败不阻塞服务启动，使用空 registry 让前端展示空菜单
@@ -123,7 +164,15 @@ class MenuManager:
         3. 按 sort_order 升序排列；
         4. 仅返回 visible=True 的项；
         5. 用户无配置时返回 registry 默认值（default_visible=True 的项）。
+
+        缓存：60 秒 TTL，update_menu_config / reset_menu_config 主动失效。
+        为什么不在缓存命中时返回拷贝：调用方只读消费，未观察到外部 mutate 行为，
+        避免深拷贝开销；如未来需要外部修改，再调整为返回 copy.deepcopy。
         """
+        cached = self._cache.get(user_id)
+        if cached and (time.time() - cached[0]) < _CACHE_TTL:
+            return cached[1]
+
         user_configs = self._load_user_configs(user_id)
 
         merged: list[dict[str, Any]] = []
@@ -151,7 +200,11 @@ class MenuManager:
 
         # 排序在过滤前完成，保证 hidden 项不影响可见项的相对顺序
         merged.sort(key=lambda x: x["sort_order"])
-        return [m for m in merged if m["visible"]]
+        merged = [m for m in merged if m["visible"]]
+
+        # 写入缓存：dict 读写原子性由 GIL 保证，无需持锁
+        self._cache[user_id] = (time.time(), merged)
+        return merged
 
     def update_menu_config(self, user_id: str, menus: list[dict[str, Any]]) -> None:
         """更新用户菜单配置（UPSERT）
@@ -164,12 +217,18 @@ class MenuManager:
         if not menus:
             return
 
+        # menu_key 白名单校验：阻止未在 registry 中定义的 key 写入 DB
+        # 为什么校验：registry 是菜单元数据单一事实源，写入未定义 key 会留下
+        # 孤儿记录（前端永远拿不到对应菜单项），且增加 DB 体积无业务价值
+        valid_keys = {item.get("key") for item in self._registry if item.get("key")}
+
         with self._lock:
-            now = _utcnow_iso()
+            now = _utcnow()
             with self._engine.begin() as conn:
                 for m in menus:
                     key = str(m.get("key", "")).strip()
-                    if not key:
+                    if not key or key not in valid_keys:
+                        logger.warning("跳过未知 menu_key: %s", key)
                         continue
                     visible = 1 if bool(m.get("visible", True)) else 0
                     sort_order = int(m.get("sort_order", 0))
@@ -194,6 +253,9 @@ class MenuManager:
                             "now": now,
                         },
                     )
+            # 写操作完成后失效该用户的缓存，下次 get_menus 重新从 DB 读取
+            # 为什么在锁内失效：避免与并发 update/reset 产生缓存与 DB 不一致窗口
+            self._cache.pop(user_id, None)
         logger.info("用户菜单配置已更新: user_id=%s, 项数=%d", user_id, len(menus))
 
     def reset_menu_config(self, user_id: str) -> None:
@@ -208,6 +270,8 @@ class MenuManager:
                     sa_text("DELETE FROM user_menu_configs WHERE user_id = :uid"),
                     {"uid": user_id},
                 )
+            # 失效缓存：reset 后下次 get_menus 应回退到 registry 默认值
+            self._cache.pop(user_id, None)
         logger.info("用户菜单配置已重置: user_id=%s", user_id)
 
 
@@ -219,19 +283,23 @@ _manager_lock = threading.Lock()
 def get_menu_manager() -> MenuManager:
     """获取全局 MenuManager 单例
 
-    延迟初始化：首次调用时创建 engine 并加载 registry，
+    延迟初始化：首次调用时复用 UserManager 的 engine 并加载 registry，
     避免在 import 阶段触发文件 IO 影响模块加载速度。
 
-    与 get_user_manager 共享 _DB_PATH，但独立创建 engine：
-    MenuManager 的查询路径短（仅 user_menu_configs 单表），
-    NullPool/QueuePool 每次连接开销可接受，无需复用 UserManager 的连接池。
+    为什么复用 UserManager 的 engine：
+    - SQLite 多连接模式下，独立 engine 会创建独立连接池，WAL 模式下虽不会死锁，
+      但连接池各自维护 PRAGMA 和生命周期，增加内存与文件描述符开销；
+    - 复用 engine 让 user_manager / menu_manager / preferences 共享同一连接池，
+      单连接开销摊薄到所有模块，符合 SQLite 单写多读模型。
     """
     global _manager
     with _manager_lock:
         if _manager is None:
-            from xianyu_hunter.infra.db_models import create_sqlite_engine, init_db
+            from xianyu_hunter.infra.db_models import init_db
+            from xianyu_hunter.web.services.user_manager import get_user_manager
             # 延迟调用 init_db 确保 user_menu_configs 表存在
+            # 为什么仍要 init_db：get_user_manager 内部已调用，但显式调用确保
+            # 即使 get_user_manager 实现变化（移除内部 init_db），MenuManager 仍可用
             init_db(_DB_PATH)
-            engine = create_sqlite_engine(_DB_PATH)
-            _manager = MenuManager(engine)
+            _manager = MenuManager(get_user_manager().engine)
         return _manager

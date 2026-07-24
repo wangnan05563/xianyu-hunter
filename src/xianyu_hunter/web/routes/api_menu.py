@@ -13,13 +13,16 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from xianyu_hunter.web.services.menu_manager import get_menu_manager
+from xianyu_hunter.web.services.user_manager import UserManager
 
 router = APIRouter(prefix="/api/menu", tags=["menu"])
 
-# default 用户兜底：WEB_TOKEN 管理令牌直通场景下 request.state.user_id 可能缺失
-_DEFAULT_USER_ID = "default"
+# 复用 UserManager 的 default 用户常量，避免"魔法字符串"散落多处
+# WEB_TOKEN 管理令牌直通场景下 request.state.user_id 可能缺失，需要兜底
+_DEFAULT_USER_ID = UserManager.DEFAULT_USER_ID
 
 
 class MenuItemUpdate(BaseModel):
@@ -31,7 +34,9 @@ class MenuItemUpdate(BaseModel):
 
 class MenuUpdateBody(BaseModel):
     """PUT /api/menu 请求体"""
-    menus: list[MenuItemUpdate]
+    # 限制 menus 长度：registry 总共约 25 项，100 上限足以覆盖未来扩展，
+    # 同时阻止恶意提交超大数组撑爆 UPSERT 循环与数据库 IO
+    menus: list[MenuItemUpdate] = Field(..., max_length=100)
 
 
 @router.get("")
@@ -64,6 +69,13 @@ def update_menu(body: MenuUpdateBody, request: Request) -> dict[str, Any]:
         # 入参类型错误（如 sort_order 非整数）已由 Pydantic 拦截，
         # 此处仅兜底 UPSERT 过程中的类型转换异常
         raise HTTPException(status_code=400, detail=f"菜单配置更新失败: {e}") from e
+    except OperationalError as e:
+        # SQLite 锁等待超时 / 磁盘故障等可恢复异常：客户端可重试
+        # 为什么 503 而非 500：503 Service Unavailable 语义上更准确，提示客户端稍后重试
+        raise HTTPException(status_code=503, detail="数据库暂时不可用，请重试") from e
+    except SQLAlchemyError as e:
+        # 其他 SQLAlchemy 异常（如约束冲突）：视为内部错误，不暴露细节给客户端
+        raise HTTPException(status_code=500, detail=f"数据库错误: {e}") from e
     return {"ok": True}
 
 

@@ -50,6 +50,15 @@ class UserManager:
         self._lock = threading.RLock()
         self._verify_cache: dict[str, tuple[str, float]] = {}  # token_hash → (user_id, ts)
 
+    @property
+    def engine(self):
+        """暴露 engine 供其他模块复用（如 MenuManager / Preferences），避免直接访问 _engine
+
+        为什么不用 public engine 字段：保留 _engine 私有使未来替换连接池实现时
+        不破坏外部契约；property 提供只读视图，外部无法意外覆盖。
+        """
+        return self._engine
+
     # ---------- 用户身份 ----------
 
     def identify_or_create(self, cookies: list[dict]) -> str:
