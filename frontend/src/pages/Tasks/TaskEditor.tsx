@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import {
   Steps, Card, Form, Input, InputNumber, Slider, Button, Space, Radio,
   message, Result, Spin, Alert, Modal, Switch, Tag, Divider, Table, Select,
@@ -11,6 +11,7 @@ import {
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import TagEditor from '../../components/editors/TagEditor'
 import CronEditor from '../../components/editors/CronEditor'
+import { ParamCalculatorPanel } from '../../components/ParamCalculator'
 import { taskApi, configApi, TaskCreateBody, TaskSearchOverride, AppConfig } from '../../api'
 import type { Task } from '../../api/types'
 import { storage } from '../../utils/storage'
@@ -489,6 +490,16 @@ export default function TaskEditor() {
     filterTags: formData.search_config?.filter_tags ?? globalConfig?.search.filter_tags ?? [],
     evalThreshold: formData.eval_threshold ?? globalConfig?.eval?.pass_score ?? 60,
   }
+
+  // 参数计算器校验字段：合并任务字段 + 调度字段，供后端跨段交叉校验
+  // 为什么用 useMemo：避免父组件每次 render 都触发 ParamCalculatorPanel 的 fields 变化检测
+  // buildTaskSubmitBody 已包含 use_cron/interval_seconds/cron，无需重复构造
+  // 为什么用 as unknown as：TaskCreateBody 是具体接口无字符串索引签名，TS 不允许直接赋值给 Record<string, unknown>；
+  // 字段均为可序列化值，断言为 Record 传给后端校验是安全的
+  const validationFields = useMemo<Record<string, unknown>>(
+    () => buildTaskSubmitBody(formData, cron, useCron, intervalSeconds) as unknown as Record<string, unknown>,
+    [formData, cron, useCron, intervalSeconds],
+  )
 
   // 标题预计算：提取到组件主体以避免 JSX 内嵌套三元
   const pageTitle = getPageTitle(isEdit, prefillKeyword)
@@ -1019,6 +1030,16 @@ export default function TaskEditor() {
             />
           </Form>
         </Card>
+      )}
+
+      {/* 参数计算器：进入参数配置阶段（Step 2 起）持续校验，自动监听 fields 变化触发 */}
+      {/* 编辑模式 validateOnMount=true，进入即校验当前任务配置 */}
+      {current >= 1 && (
+        <ParamCalculatorPanel
+          scenario={isEdit ? 'task_edit' : 'task_create'}
+          fields={validationFields}
+          validateOnMount={isEdit}
+        />
       )}
 
       {/* 步骤导航 */}

@@ -151,19 +151,19 @@ def start_takeover_timeout_scheduler(container: Any) -> None:
     独立于 with_browser 模式：本调度器只读/写 DB，不依赖浏览器实例，
     即使 Web 进程（with_browser=False）也需启动，避免订单永久卡在 takeover_pending。
 
-    超时阈值复用 api_orders.TAKEOVER_TIMEOUT_MIN（30 分钟），
+    超时阈值复用 api_orders._get_takeover_timeout_min()（默认 30 分钟），
     与 list_orders 中 takeover_deadline 计算保持一致。
     扫描间隔默认 5 分钟，平衡时效性与 DB 开销。
     """
     global _takeover_timeout_scheduler
     from loguru import logger
     from xianyu_hunter.modules.takeover_timeout_scheduler import TakeoverTimeoutScheduler
-    from xianyu_hunter.web.routes.api_orders import TAKEOVER_TIMEOUT_MIN
+    from xianyu_hunter.web.routes.api_orders import _get_takeover_timeout_min
 
     try:
         _takeover_timeout_scheduler = TakeoverTimeoutScheduler(
             container=container,
-            timeout_min=TAKEOVER_TIMEOUT_MIN,
+            timeout_min=_get_takeover_timeout_min(),
         )
         _takeover_timeout_scheduler.start()
     except Exception:  # noqa: BLE001

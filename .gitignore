@@ -44,6 +44,7 @@ frontend/tsconfig.tsbuildinfo
 # 浏览器用户数据（登录态/Cookie）
 browser-data/
 browser-data.bak/
+browser-data.recovery-*/
 
 # 应用运行时数据目录（仅保留 .gitkeep 占位）
 data/
@@ -113,6 +114,7 @@ _git_status.txt
 /test_result.txt
 /test_debug_output.txt
 /pytest*.txt
+/test-results.txt
 
 # ---------- 临时调试脚本（根目录以 _ 开头）----------
 /_*.py

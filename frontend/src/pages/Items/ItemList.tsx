@@ -614,10 +614,17 @@ export default function ItemList() {
         clearTimeout(progressTimer)
         message.destroy('live-search')
         const detail = errDetail(err)
-        // 401 表示搜索令牌临时过期
-        if (detail.includes('令牌临时过期') || detail.includes('重新登录')) {
+        const status = (err as { response?: { status?: number } })?.response?.status
+        // 按 HTTP 状态码分支：后端 _raise_live_cookie_errors 抛出的具体业务错误
+        // 440: cookie 过期或陈旧；403: cookie 缺失；503: 浏览器不可用
+        if (status === 440 || status === 403 || detail.includes('已过期') || detail.includes('不完整') || detail.includes('未刷新到实时搜索浏览器') || detail.includes('重新登录')) {
           setSessionExpired(true)
-        } else if (err?.code === 'ECONNABORTED' || detail.includes('timeout')) {
+        } else if (status === 503 || detail.includes('浏览器不可用')) {
+          message.error('浏览器不可用，请稍后重试')
+        } else if (detail.includes('系统正在执行后台搜索任务')) {
+          // browser_lock 竞争：worker 持锁中，live 等待 20s 超时
+          message.warning('系统正在执行后台搜索任务，请 30 秒后重试')
+        } else if ((err as { code?: string })?.code === 'ECONNABORTED' || detail.includes('timeout')) {
           message.error('搜索超时，闲鱼页面加载缓慢或会话已失效，请稍后重试')
         } else {
           message.error(detail || '实时搜索失败')

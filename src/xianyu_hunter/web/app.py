@@ -50,6 +50,7 @@ from xianyu_hunter.web.routes import (
     api_notifications,
     api_notifier,
     api_orders,
+    api_param_calculator,  # 参数计算器：任务/配置参数校验与建议
     api_prompts,
     api_stats,
     api_task_deps,
@@ -582,6 +583,7 @@ def create_app() -> FastAPI:
     app.include_router(api_export.router)  # P1-5：数据导出（CSV）
     app.include_router(api_prompts.router)  # P1-8：Prompt 在线编辑器
     app.include_router(api_cron.router)  # P1-7：Cron 表达式校验
+    app.include_router(api_param_calculator.router)  # 参数计算器：任务/配置参数校验
     app.include_router(price_dashboard.router)  # P1-6：价格行情看板增强
     app.include_router(api_maintenance.router)  # 系统维护：缓存/数据库/日志清理
     app.include_router(api_db_admin.router)  # 系统维护 → 数据库维护：业务表在线 CRUD

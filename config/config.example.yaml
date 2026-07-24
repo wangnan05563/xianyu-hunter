@@ -117,7 +117,10 @@ batch_refresh:
 # 任务调度默认值：新建任务未指定时的兜底配置
 task_scheduler:
   default_interval_seconds: 60      # 默认采集周期（秒），范围 30-3600，过短易触发反爬，过长错过抢单窗口
-  auto_search_enabled: false        # 任务管理页前端「自动搜索」开关初始默认值（用户切换后持久化到 localStorage 覆盖此值）
+  # 注意：此字段仅控制前端任务页"自动实时搜索"开关的初始默认值
+  # 后端调度器在服务启动时无条件 start_all()（startup.py:266），不受此字段控制
+  # 用户在页面切换开关后会持久化到 localStorage（xh.tasks.autoSearchEnabled），覆盖此默认值
+  auto_search_enabled: false
   auto_search_concurrency: 1        # 前端自动搜索并发上限（保留字段，当前固定 1，未来需配合后端浏览器锁改造）
   error_retry_wait_seconds: 300     # 单轮 run_once 异常后等待重试秒数（避免刷错误日志），范围 10-3600
 

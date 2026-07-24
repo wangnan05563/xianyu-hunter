@@ -686,6 +686,25 @@ class SubprocessSyncConfig(BaseModel):
     startup_check_enabled: bool = True
 
 
+class CacheConfig(BaseModel):
+    """应用层缓存配置
+
+    统一管理各模块的内存缓存 TTL 与写入策略，避免缓存参数散落在各模块常量中。
+    支持运行时热更新（reload_config 后生效），替代各模块硬编码的 _LIVE_CACHE_TTL 等常量。
+
+    设计原则：
+    - 业务参数（TTL、是否跳过空结果）走配置，技术常量（缓存字典结构）保持代码内
+    - 每个缓存场景独立配置项，避免全局 TTL 误伤不同时效需求的场景
+    """
+    # 实时搜索结果缓存 TTL（秒）
+    # 缩短至 5 秒平衡数据新鲜度与命中率：闲鱼搜索 15-20s，5s TTL 可避免短时间重复搜索
+    # 同时保证缓存数据与数据库实际数据在 5 秒内的一致性
+    live_search_ttl: int = 5
+    # 空结果是否跳过缓存（推荐 true：0 条记录不缓存，下次请求触发新查询）
+    # 避免空结果被缓存后，5 秒内的请求都返回 0 条
+    empty_result_skip: bool = True
+
+
 class AppConfig(BaseModel):
     """根配置"""
     server: ServerConfig = ServerConfig()
@@ -714,6 +733,8 @@ class AppConfig(BaseModel):
     login_orchestrator: LoginOrchestratorConfig = LoginOrchestratorConfig()
     mtop_sync: MtopSyncConfig = MtopSyncConfig()
     subprocess_sync: SubprocessSyncConfig = SubprocessSyncConfig()
+    # 应用层缓存（统一管理各模块缓存 TTL 与写入策略，替代模块级硬编码常量）
+    cache: CacheConfig = CacheConfig()
     # 通知渠道凭据（明文存到 yaml，前端用 Input.Password 组件隐藏）
     # keyring 是设计首选，但前端需要回显已配置值，暂存 yaml
     serverchan_send_key: str = ""

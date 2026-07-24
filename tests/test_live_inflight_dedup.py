@@ -10,9 +10,9 @@ import asyncio
 import pytest
 
 from xianyu_hunter.web.routes.api_task_links import (
-    _LIVE_CACHE_TTL,
     _LIVE_INFLIGHT_WAIT_TIMEOUT,
     _clear_live_inflight,
+    _get_live_cache_ttl,
     _live_cache,
     _live_inflight,
 )
@@ -100,8 +100,11 @@ def test_inflight_wait_timeout_covers_normal_search_duration() -> None:
 
 
 def test_live_cache_ttl_is_reasonable() -> None:
-    """缓存 TTL 应在合理范围内（60s）：避免短时间重复搜索"""
-    assert _LIVE_CACHE_TTL == 60
+    """缓存 TTL 应在合理范围内：与轮询周期对齐，避免短时间重复搜索加剧反爬"""
+    # TTL 从 config.yaml 的 cache.live_search_ttl 读取，应与前端轮询周期（默认 60s）对齐
+    ttl = _get_live_cache_ttl()
+    assert ttl <= 120, f"缓存 TTL 应 ≤120s 避免数据过时，实际: {ttl}"
+    assert ttl >= 5, f"缓存 TTL 应 ≥5s 避免缓存无意义，实际: {ttl}"
 
 
 def teardown_function(_function) -> None:

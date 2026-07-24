@@ -1,8 +1,8 @@
-﻿<#
+<#
 .SYNOPSIS
     闲鱼猎人项目自动化生命周期管理脚本
 .DESCRIPTION
-    整合 启动服务.bat / 停止服务.bat / 重新构建.bat 三个脚本，
+    整合 启动服务.bat / 停止服务.bat / 前端构建.bat 三个脚本，
     提供统一的 start/stop/rebuild/check/status 接口，
     包含环境预检查、日志记录、错误处理与回滚提示。
 .PARAMETER Action
@@ -42,12 +42,12 @@ try { chcp 65001 > $null } catch { }
 # 项目常量
 $Script:StartBat  = Join-Path $ProjectRoot 'scripts\启动服务.bat'
 $Script:StopBat   = Join-Path $ProjectRoot 'scripts\停止服务.bat'
-$Script:RebuildBat = Join-Path $ProjectRoot 'scripts\重新构建.bat'
+$Script:RebuildBat = Join-Path $ProjectRoot 'scripts\前端构建.bat'
 $Script:VenvPython = Join-Path $ProjectRoot '.venv\Scripts\python.exe'
 # Node.exe 路径从 scripts/node-config.json 读取，避免硬编码（便于跨环境迁移）
 # 为什么不直接写死路径：不同机器 Node 安装位置不同，配置化便于切换版本
 $Script:NodeExe    = $null
-$nodeConfigPath = Join-Path $ScriptRoot 'node-config.json'
+$nodeConfigPath = Join-Path $PSScriptRoot 'node-config.json'
 if (Test-Path $nodeConfigPath) {
     try {
         $nodeConfig = Get-Content $nodeConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json

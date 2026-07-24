@@ -38,9 +38,26 @@ from xianyu_hunter.web.deps import get_container
 logger = get_logger()
 
 # 实时搜索结果缓存：task_id -> (monotonic_timestamp, result_dict)
-# 60 秒 TTL：避免短时间重复搜索闲鱼（每次搜索 15-20s），60 秒内返回缓存结果
+# TTL 与写入策略从 config.yaml 的 cache 块读取，支持运行时热更新
 _live_cache: dict[str, tuple[float, dict]] = {}
-_LIVE_CACHE_TTL = 60
+
+
+def _get_live_cache_ttl() -> int:
+    """从配置读取实时搜索缓存 TTL（秒），配置加载失败时回退到默认值 5 秒"""
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        return get_config().cache.live_search_ttl
+    except Exception:
+        return 5
+
+
+def _should_skip_empty_result() -> bool:
+    """从配置读取是否跳过空结果缓存，配置加载失败时默认跳过（true）"""
+    try:
+        from xianyu_hunter.infra.yaml_config import get_config
+        return get_config().cache.empty_result_skip
+    except Exception:
+        return True
 
 # live 抢单冷却：避免实时搜索频繁触发抢单冲击闲鱼下单接口
 # 为什么需要：live 搜索可能每分钟触发多次，不加冷却会短时间内重复尝试下单
@@ -1281,7 +1298,7 @@ def _build_live_search_error_sse(err_msg: str) -> dict:
 def _check_live_cache(task_id: str, live_start: float) -> dict | None:
     """检查 live 缓存，命中时返回归一化结果，未命中返回 None"""
     cached = _live_cache.get(task_id)
-    if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
+    if cached and (time.monotonic() - cached[0]) < _get_live_cache_ttl():
         logger.info("live_links 命中缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
         return _normalize_live_result(cached[1])
     return None
@@ -1303,7 +1320,7 @@ async def _wait_for_inflight_search(
         return {"stage": "error", "detail": "搜索耗时较长，请稍后重试", "status": 503}
     # in-flight 搜索完成，检查缓存是否已写入
     cached = _live_cache.get(task_id)
-    if cached and (time.monotonic() - cached[0]) < _LIVE_CACHE_TTL:
+    if cached and (time.monotonic() - cached[0]) < _get_live_cache_ttl():
         logger.info("live_links 命中 in-flight 缓存 task={}, 耗时 {:.3f}s", task_id, time.monotonic() - live_start)
         return {"stage": "done", **_normalize_live_result(cached[1])}
     # in-flight 搜索完成但缓存未命中（搜索失败或 0 结果未缓存）：
@@ -1648,7 +1665,8 @@ async def _live_event_stream(
         task_id, keyword, container, items, sellers, filtered, merged_field_map, filter_summary,
     )
     # 写入缓存：仅当查询结果非空时缓存，0 条记录不缓存以便下次请求重新触发实时查询
-    if filtered:
+    # empty_result_skip 配置控制是否跳过空结果（默认 true）
+    if filtered or not _should_skip_empty_result():
         _live_cache[task_id] = (time.monotonic(), result)
     elapsed = time.monotonic() - live_start
     logger.info("live_links 完成 task={}, {} 个商品, 耗时 {:.1f}s", task_id, len(items), elapsed)

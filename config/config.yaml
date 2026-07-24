@@ -22,6 +22,11 @@ antidetect:
 waf:
   enabled: true
   login_check_interval_min: 30
+cache:
+  # 与 task_scheduler.default_interval_seconds 对齐：避免 5s 缓存对 60s 轮询形同虚设
+  live_search_ttl: 60
+  # false：反爬返回的空结果也缓存，避免反复触发搜索加剧反爬触发
+  empty_result_skip: false
 notifier:
   default_channels:
   - serverchan
@@ -110,7 +115,7 @@ price_strategy:
   enabled_min: true
   min_price: 200
   enabled_market_ratio: true
-  market_ratio: 0.9
+  market_ratio: 0.95
   enabled_top_n: true
   top_n: 10
 batch_refresh:
@@ -174,6 +179,7 @@ wecom_webhook: ''
 webhook_url: ''
 task_scheduler:
   default_interval_seconds: 60
+  # 仅控制前端任务页"自动实时搜索"开关初始默认值；后端调度器无条件 start_all()
   auto_search_enabled: false
   auto_search_concurrency: 1
   error_retry_wait_seconds: 300
@@ -317,3 +323,20 @@ tunnel:
   credentials_file: C:\Users\hspcadmin\.cloudflared\b1cf81ce-0942-4df6-8509-6dad6ff8f334.json
   hostname: xianyuHunter.com
   cert_file: C:\Users\hspcadmin\.cloudflared\cert.pem
+buyer:
+  click_retry_times: 2
+  click_retry_interval: 1
+  confirm_button_timeout: 10
+  price_tolerance: 0.05
+  min_interval_between_orders: 0
+  takeover_timeout_min: 30
+account_rotator:
+  cooldown_sec: 1800
+  fail_threshold: 5
+ai_budget:
+  daily_token_limit: 500000
+  daily_cost_limit_usd: 5
+  rate_limit_per_min: 20
+ntfy_server: ''
+ntfy_topic: ''
+ntfy_token: ''

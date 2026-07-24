@@ -8,6 +8,15 @@ export * from './types'
 export { aboutApi } from './about'
 export type { AboutInfo, UpdateCheckResult } from './about'
 export { configApi } from './config'
+export { paramCalculatorApi } from './paramCalculator'
+export type {
+  ParamScenario,
+  RuleMeta,
+  RuleCategory,
+  Severity,
+  Suggestion,
+  ValidationReport,
+} from './paramCalculator'
 export { taskApi, cronApi, taskDetailApi, taskLinkApi } from './task'
 export type { LiveProgress, LiveFilterSummary, LiveFilteredItem } from './task'
 export { statsApi } from './stats'

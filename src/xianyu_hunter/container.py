@@ -447,7 +447,7 @@ def build_default_container(
 
         collector = Collector(browser=browser, antidetect=antidetect, browser_lock=_browser_lock)
         # 从 YAML 配置读取抢单参数，替代 BuyerConfig() 硬编码默认值
-        buyer_cfg = self.config.buyer
+        buyer_cfg = cfg.buyer
         buyer = Buyer(
             browser=browser,
             repository=repo,
