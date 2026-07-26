@@ -102,11 +102,11 @@ export function useSSEChat() {
         if (!resp.ok) {
           // 401：清除失效 token 并跳转登录页
           // 硬约束：401 必须触发重定向，不能静默吞掉
-          // 必须用 /app/login：浏览器原生跳转不走 react-router，
+          // 必须用 /xianyu/login：浏览器原生跳转不走 react-router，
           // 不会自动补 basename 前缀，直接用 /login 会被后端返回 404
           if (resp.status === 401) {
             localStorage.removeItem('xh_token')
-            globalThis.location.href = '/app/login'
+            globalThis.location.href = '/xianyu/login'
             return
           }
           throw new Error(`HTTP ${resp.status}`)

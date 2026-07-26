@@ -301,6 +301,14 @@ class TaskWorker:
         会话失效检测放在搜索之后：detail 阶段若已会话失效，
         collector 会置 last_session_invalid=True，由调用方统一处理暂停
         """
+        # 前置检查：TokenRenewer 已报告会话失效时直接跳过本轮搜索
+        # 为什么需要前置检查：日志显示 token 失效后仍持续 90s 搜索超时，
+        # 浪费 browser_lock 占用时间。TokenRenewer 后台续期成功后下一轮自动恢复
+        if self._is_session_expired_before_search():
+            logger.info(f"[Task {self.task.id}] 会话已失效（_m_h5_tk 缺失/过期），跳过本轮搜索等待续期恢复")
+            stats.finished_at = datetime.now(timezone.utc)
+            return []
+
         logger.info(f"[Task {self.task.id}] 搜索「{self.task.keyword}」")
         await self._sync_cookie_before_search()
         combined_filters = self._build_combined_search_filters()
@@ -325,10 +333,10 @@ class TaskWorker:
     def _dedup_and_limit(self, items: list[ItemSummary], stats: RunStats) -> list[ItemSummary] | None:
         """去重 + 限制每轮条数，无可处理商品返回 None
 
-        ItemDedup.filter_new 是同步方法（基于 repo.items_exist 批量查询），
-        无需 await——之前误用 await 会被 async FakeDedup 掩盖，生产环境会抛 TypeError
+        按任务隔离去重：查询 task_links 表中当前任务已关联的商品 ID，
+        只保留尚未关联的商品。不同任务可独立发现同一商品。
         """
-        new_items = self.dedup.filter_new(items)
+        new_items = self.dedup.filter_new(items, task_id=self.task.id)
         stats.deduped = stats.found - len(new_items)
         if not new_items:
             logger.info(f"[Task {self.task.id}] 全部已看过，本轮跳过")
@@ -544,6 +552,26 @@ class TaskWorker:
         if _lock is not None and getattr(_lock, 'has_high_priority_waiting', False):
             logger.info(f"[Task {self.task.id}] 检测到实时查询等待中，延迟 3 秒让出浏览器")
             await asyncio.sleep(3)
+
+    def _is_session_expired_before_search(self) -> bool:
+        """搜索前检查 TokenRenewer 是否已标记会话失效
+
+        为什么读 _last_renew_result 而非 cookie_rotator.is_layer_valid：
+        TokenRenewer 是会话失效的权威来源（基于 _m_h5_tk 时间戳判断），
+        cookie_rotator 层状态可能被 force_restore_layers 误恢复；
+        读 RenewResult.SESSION_EXPIRED 可避免误判
+
+        失败降级：任何异常都返回 False（不跳过搜索），保留原行为
+        """
+        try:
+            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+            from xianyu_hunter.modules.token_renewer import RenewResult
+            renewer = getattr(get_orchestrator(), "_token_renewer", None)
+            if renewer is None:
+                return False
+            return getattr(renewer, "_last_renew_result", None) == RenewResult.SESSION_EXPIRED
+        except Exception:
+            return False
 
     def _invalidate_session_identity(self) -> None:
         """主动失效 orchestrator 的 identity 层，让健康检查反映真实状态

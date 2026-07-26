@@ -109,6 +109,10 @@ export interface AppConfig {
     cooldown_sec: number
     fail_threshold: number
   }
+  // 捡漏价格配置（对应后端 BargainPriceConfig 模型）
+  bargain_price: {
+    percentile: number
+  }
   // 任务调度默认值（对应后端 TaskSchedulerConfig 模型）
   task_scheduler: {
     default_interval_seconds: number
@@ -594,6 +598,11 @@ export interface KpiCard {
   unit: string
   range_days: number
   generated_at: string
+  /** 异常场景下的引导动作，如分母为 0 时引导用户前往配置页 */
+  hint_action?: {
+    label: string
+    route: string
+  }
 }
 
 export interface RecentEvent {

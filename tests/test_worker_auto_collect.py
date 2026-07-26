@@ -78,7 +78,7 @@ class FakeDedup:
     def __init__(self, existing: set[str] | None = None):
         self.existing = existing or set()
 
-    def filter_new(self, items: list[ItemSummary]) -> list[ItemSummary]:
+    def filter_new(self, items: list[ItemSummary], task_id: str | None = None) -> list[ItemSummary]:
         return [i for i in items if i.id not in self.existing]
 
     def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:

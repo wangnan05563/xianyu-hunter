@@ -17,6 +17,7 @@ _scheduler_task: asyncio.Task | None = None
 
 # Cookie 定时同步调度器引用（用于 shutdown 时优雅停止）
 _cookie_sync_scheduler = None
+_cookie_health_probe_task: asyncio.Task | None = None
 
 # 批量采集调度器引用（用于 shutdown 时优雅停止 + API 端点访问）
 _batch_refresh_scheduler = None
@@ -80,6 +81,60 @@ def start_cookie_sync_scheduler(container: Any) -> None:
         cdp_port=cfg.browser.cdp_port,
     )
     _cookie_sync_scheduler.start()
+
+
+
+def start_cookie_health_probe(container: Any) -> None:
+    """?? Cookie ???????????????? Cookie ??????? expired ? active?
+
+    ??????probe_all_accounts ??????????active?expired?active??
+    ??????????????????????????????
+    ???? 300s?? SessionHealthChecker.CHECK_INTERVAL ???
+    """
+    global _cookie_health_probe_task
+    from loguru import logger
+    import time
+
+    PROBE_INTERVAL_SEC = 300  # 5 ??
+
+    def _probe_once():
+        """?????? database ?? active ?????????? cookie ?????"""
+        try:
+            from xianyu_hunter.web.services.user_manager import get_user_manager
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+
+            um = get_user_manager()
+            store = get_cookie_store()
+
+            # ???? active ??????????
+            users = um.list_users()
+            active_users = [u for u in users if u.get("status") == "active"]
+            if not active_users:
+                return
+
+            for user in active_users:
+                uid = user["user_id"]
+                try:
+                    is_valid, reason = store.validate_cookies_with_expiry(user_id=uid)
+                    um.set_user_status(uid, "active" if is_valid else "expired")
+                except Exception:
+                    logger.warning("Cookie ???? user_id=%s", uid, exc_info=True)
+
+        except Exception:
+            logger.debug("Cookie ??????", exc_info=True)
+
+    async def _probe_loop():
+        while True:
+            try:
+                await asyncio.sleep(PROBE_INTERVAL_SEC)
+                _probe_once()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("Cookie ????????: {}", e)
+
+    _cookie_health_probe_task = asyncio.create_task(_probe_loop())
+    logger.info("Cookie ????????????? %ds?", PROBE_INTERVAL_SEC)
 
 
 def start_batch_refresh_scheduler(container: Any) -> None:
@@ -535,6 +590,11 @@ def _stop_all_sync_schedulers() -> None:
         _cookie_sync_scheduler = None
     if _takeover_timeout_scheduler:
         _takeover_timeout_scheduler.stop()
+
+    # Cookie ??????
+    if _cookie_health_probe_task and not _cookie_health_probe_task.done():
+        _cookie_health_probe_task.cancel()
+        _cookie_health_probe_task = None
         _takeover_timeout_scheduler = None
 
 
@@ -681,7 +741,10 @@ def setup_startup_hooks(app: FastAPI) -> None:
         # EventBus 在调度器之后停止：调度器 stop_all 时可能还会 publish
         # 事件（如任务停止事件），EventBus 需存活到调度器完全停止后才能关闭
         if _event_bus_task and not _event_bus_task.done():
-            container.event_bus.stop()
+            try:
+                get_container().event_bus.stop()
+            except Exception:
+                pass
             _event_bus_task.cancel()
             with suppress(asyncio.CancelledError):
                 await _event_bus_task

@@ -33,9 +33,16 @@ def _kpi_block(
     sample_size: int,
     hint: str,
     is_pct: bool = False,
+    hint_action: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """构造一个 KPI 卡的统一结构"""
-    return {
+    """构造一个 KPI 卡的统一结构
+
+    Args:
+        hint_action: 可选的引导动作，结构 {"label": "前往配置", "route": "/config/buyer"}
+            为什么需要：分母为 0 等异常场景下，纯文本 hint 无法让用户直达配置页，
+            携带 route 让前端渲染可点击链接，缩短用户排查路径
+    """
+    block = {
         "id": kpi_id,
         "title": title,
         "value": value,
@@ -45,6 +52,9 @@ def _kpi_block(
         "hint": hint,
         "is_pct": is_pct,
     }
+    if hint_action is not None:
+        block["hint_action"] = hint_action
+    return block
 
 
 def _safe_pct_change(current: float, previous: float) -> float | None:
@@ -122,10 +132,18 @@ def _kpi_order_success_rate(
         )
     cur_order_rate = (cur_paid / cur_total * 100) if cur_total else 0.0
     prev_order_rate = (prev_paid / prev_total * 100) if prev_total else 0.0
+    # 分母为 0 时携带引导动作：让前端渲染"前往配置"链接直达抢单策略页，
+    # 避免 user 看到 0% 却不知下一步该检查哪里
+    hint_action = (
+        {"label": "前往抢单策略", "route": "/config/buyer"}
+        if cur_total == 0
+        else None
+    )
     return _kpi_block(
         kpi_id="order_success_rate", title="抢单成功率", value=round(cur_order_rate, 1), unit="%",
         delta_pct=_safe_pct_change(cur_order_rate, prev_order_rate), sample_size=cur_total,
         hint="已支付订单 / 总订单", is_pct=True,
+        hint_action=hint_action,
     )
 
 

@@ -259,6 +259,9 @@ class TunnelConfig(BaseModel):
     cpolar_authtoken: str = ""
     binary_path: str = ""
     auto_start: bool = False
+    # Tailscale 路径区分模式：非空时用 --set-path 注册路径前缀
+    # 多应用同节点共存时各分配独立前缀（如 /xianyu/、/news/）
+    path_prefix: str = "/xianyu/"
     tunnel_mode: str = "quick"
     tunnel_name: str = ""
     tunnel_id: str = ""

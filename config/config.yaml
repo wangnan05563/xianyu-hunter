@@ -1,4 +1,4 @@
-server:
+﻿﻿server:
   host: 127.0.0.1
   port: 8001
 browser:
@@ -106,7 +106,6 @@ search:
   regions: ''
   filter_tags:
   - personal_idle
-  - verified
   - free_shipping
   - 包邮
 price_strategy:
@@ -179,7 +178,7 @@ wecom_webhook: ''
 webhook_url: ''
 task_scheduler:
   default_interval_seconds: 60
-  # 仅控制前端任务页"自动实时搜索"开关初始默认值；后端调度器无条件 start_all()
+  # 仅控制前端任务页"自动实时搜索"开关初始默认值；后端调度器无条件 start_all()。注意：此参数不控制后端行为，仅前端默认值。
   auto_search_enabled: false
   auto_search_concurrency: 1
   error_retry_wait_seconds: 300

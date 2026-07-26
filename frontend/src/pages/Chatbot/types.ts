@@ -110,7 +110,14 @@ export interface ChatbotConfig {
   max_history_turns: number
   session_timeout_min: number
   rag: { top_k: number; similarity_threshold: number; max_context_chars: number }
-  llm: { model: string; temperature: number; max_tokens: number }
+  llm: {
+    model: string
+    temperature: number
+    max_tokens: number
+    http_timeout_sec: number
+    first_token_timeout_sec: number
+    vision_model: string | null
+  }
   agent: { enable_tools: boolean; max_tool_rounds: number; tool_trigger_mode: string }
   kb: { auto_update_enabled: boolean; update_interval_hours: number }
   faq: { similarity_threshold: number; confirm_threshold: number }

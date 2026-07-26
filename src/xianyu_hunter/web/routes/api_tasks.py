@@ -388,6 +388,34 @@ def get_task_runs(
     return container.repo.get_task_runs(task_id, range_hours=range_hours)
 
 
+
+async def _hot_load_task_for_scheduler(
+    container: Container, task_id: str, user_id: str,
+) -> tuple[bool, str]:
+    """Hot-load an unregistered running task into the scheduler at runtime.
+
+    Called when user clicks start/resume from UI but the task was not loaded
+    during startup (e.g., task was created or status changed after service start).
+    Returns (success, note).
+    """
+    raw = container.repo.get_task(task_id)
+    if not raw:
+        return False, "任务不存在"
+
+    registered_ids = {t.id for t in container.scheduler.list_tasks()}
+    if task_id in registered_ids:
+        return True, "任务已在调度器中"
+
+    worker = container.build_worker_from_raw_task(raw)
+    if worker is None:
+        return False, "无法构造任务 Worker（请确认任务状态为 running）"
+
+    await container.scheduler.register(worker.task, worker)
+    container.scheduler.start(task_id)
+    logger.info(f"[Hot-load] 热加载任务 {task_id} 到调度器")
+    return True, f"已启动任务 {task_id}（热加载）"
+
+
 def _handle_scheduler_resume(container: Container, task_id: str, user_id: str) -> str:
     """resume 分支：scheduler.resume 失败时回滚 DB 到 paused 并抛 400
 
@@ -413,7 +441,16 @@ async def _handle_scheduler_restart(container: Container, task_id: str, user_id:
     # 未注册任务（新建后未重启服务）需重启服务才会被加载
     registered_ids = {t.id for t in container.scheduler.list_tasks()}
     if task_id not in registered_ids:
-        return "任务未注册到调度器，需重启服务加载"
+        try:
+            success, note = await _hot_load_task_for_scheduler(
+                container, task_id, user_id,
+            )
+            if success:
+                container.scheduler.start(task_id)
+                return "已重启调度器中的任务（热加载）"
+            return note
+        except Exception:
+            return "任务未注册到调度器，需重启服务加载"
 
     is_running = container.scheduler.is_running(task_id)
     if is_running:
@@ -448,8 +485,17 @@ async def _dispatch_scheduler_action(
         if action == "restart":
             return await _handle_scheduler_restart(container, task_id, user_id)
         return ""  # 不会到达：上层已校验 action 合法性
-    except KeyError as e:
-        # 任务未注册到 scheduler：仅 DB 状态生效，不阻断请求
+    except KeyError as e:        # 任务未注册到 scheduler：尝试热加载后重试 resume
+        try:
+            success, note = await _hot_load_task_for_scheduler(
+                container, task_id, user_id,
+            )
+            if success:
+                container.scheduler.resume(task_id)
+                return note
+            return note
+        except Exception:
+            pass
         return f"调度器未注册该任务，仅 DB 状态已更新：{e}"
     except HTTPException:
         # P0-1/P0-2：ResumeBlockedError 转换的 400 需向上传播，不能被兜底 except 吞掉

@@ -52,14 +52,14 @@ class FakeCollector:
 class FakeDedup:
     """默认全部新；可通过 existing 控制
 
-    签名与真实 ItemDedup 一致（filter_new/save 均为同步方法，save 接受 task_id），
+    签名与真实 ItemDedup 一致（filter_new/save 均为同步方法，均接受 task_id），
     避免 worker.py 同步调用时报 'coroutine has no len()' 或 'unexpected keyword argument'
     """
     def __init__(self, existing: set[str] | None = None):
         self.existing = existing or set()
         self.saved: list[str] = []
 
-    def filter_new(self, items: list[ItemSummary]) -> list[ItemSummary]:
+    def filter_new(self, items: list[ItemSummary], task_id: str | None = None) -> list[ItemSummary]:
         return [i for i in items if i.id not in self.existing]
 
     def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:

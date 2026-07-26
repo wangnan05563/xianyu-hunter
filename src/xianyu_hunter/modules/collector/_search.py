@@ -399,14 +399,12 @@ async def _sync_response_cookies_to_context(page: Page, response: Any) -> int:
 # 替代逐个 query_selector 的串行模式，将 150+ 次 DOM 往返压缩为 1 次 evaluate 调用
 _BATCH_PARSE_SCRIPT = r"""
 () => {
-  // 选择器必须与 _find_cards 的 card_selectors 保持一致
-  // 为什么：之前只用 2 种选择器（feeds-item-wrap/feeds-item），
-  // 而 _find_cards 用 6 种。闲鱼搜索页大量卡片使用 item-card/search-item/product-card 等其他 class，
-  // 批量脚本与 _find_cards 不一致导致 31 个卡片只提取到 1 条
+  // 选择器必须与 _collect_dom_cards 的 card_selectors 保持一致
+  // 不含 [class*='search-item']：会误匹配搜索建议词而非商品卡片
   const cards = document.querySelectorAll(
     "[class*='feeds-item-wrap'], [class*='feeds-item'], " +
-    "[class*='item-card'], [class*='search-item'], " +
-    "[class*='product-card'], [data-spm*='item']"
+    "[class*='item-card'], [class*='product-card'], " +
+    "[data-spm*='item']"
   );
   const results = [];
   cards.forEach(card => {
@@ -860,6 +858,10 @@ class SearchMixin:
         # 降级链日志合并（meta-rule #32）：收集多阶段信息，最终输出一条结构化日志
         # 避免一次 DOM 回退产生 5+ 条分散日志，导致日志噪音和排查困难
         chain: list[str] = ["API会话失效" if session_invalid else "API不可用"]
+        # 等待页面渲染完成：commit 模式只等了 HTTP 响应头，SPA 可能尚未完成渲染
+        # 失败不阻塞：domcontentloaded 超时或异常时仍继续 DOM 回退
+        with suppress(Exception):
+            await page.wait_for_load_state("domcontentloaded", timeout=5000)
         await self.ad.human_delay(1000, 2000)
         cards = await self._collect_dom_cards(page, keyword)
         items: list[ItemSummary] = []
@@ -918,8 +920,8 @@ class SearchMixin:
     async def _collect_dom_cards(self, page: Page, keyword: str) -> list:
         """DOM 回退：检测页面跳转并查找搜索卡片
 
-        包含卡片数量评估、首次为 0 时 2 秒重试、查找超时保护。
-        选择器必须与 _BATCH_PARSE_SCRIPT 保持一致，否则会漏卡片。
+        包含卡片数量评估、首次为 0 时等待渲染后重试、查找超时保护。
+        选择器必须与 selectors.py 的 search_card_candidates 和 _BATCH_PARSE_SCRIPT 保持一致。
         """
         # 检查页面是否被重定向到非搜索页面（RGV587 可能触发验证页面跳转）
         try:
@@ -929,17 +931,21 @@ class SearchMixin:
                 return []
             # 先用 evaluate 检查卡片数量（不会卡住），再决定是否执行 query_selector_all
             # 多选择器容错：闲鱼前端可能调整 class 命名，覆盖多种历史与当前结构
+            # 注意：不含 [class*='search-item']，该选择器会误匹配搜索建议词而非商品卡片
             card_selectors = (
                 "[class*='feeds-item-wrap'], [class*='feeds-item'], "
-                "[class*='item-card'], [class*='search-item'], "
-                "[class*='product-card'], [data-spm*='item']"
+                "[class*='item-card'], [class*='product-card'], "
+                "[data-spm*='item']"
             )
             card_count = await asyncio.wait_for(
                 page.evaluate(f"() => document.querySelectorAll(\"{card_selectors}\").length"),
                 timeout=5.0,
             )
-            # 首次未检测到卡片时，等待 2 秒后重试一次（页面可能仍在异步渲染）
+            # 首次未检测到卡片时，等待页面渲染完成后重试一次（SPA 可能仍在异步渲染）
             if card_count == 0:
+                # 等待 DOM 解析完成：commit 模式只等了 HTTP 响应头，SPA 可能尚未渲染
+                with suppress(Exception):
+                    await page.wait_for_load_state("domcontentloaded", timeout=3000)
                 await asyncio.sleep(2)
                 card_count = await asyncio.wait_for(
                     page.evaluate(f"() => document.querySelectorAll(\"{card_selectors}\").length"),

@@ -70,6 +70,9 @@ class TunnelService:
         kwargs: dict = {"binary_path": cfg.binary_path}
         if provider_name == "cpolar":
             kwargs["authtoken"] = cfg.cpolar_authtoken
+        elif provider_name == "tailscale":
+            # 路径区分模式：path_prefix 非空时启用多应用路径前缀
+            kwargs["path_prefix"] = cfg.path_prefix
         elif provider_name == "cloudflare":
             # Named Tunnel 参数：quick 模式下这些值被忽略
             kwargs.update(

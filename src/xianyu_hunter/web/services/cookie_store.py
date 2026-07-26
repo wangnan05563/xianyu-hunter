@@ -179,9 +179,16 @@ class CookieStore:
             # - expires 已过期但内嵌 timestamp 仍有效时误报 cookie_expired
             # - expires=-1 但 token 实已过期时漏报
             if name == "_m_h5_tk":
-                value = c.get("value", "")
-                if value and is_m5tk_expired(value):
-                    return False, f"cookie_expired:{name}"
+                m5tk_value = c.get("value", "")
+                if m5tk_value and is_m5tk_expired(m5tk_value):
+                    return False, "cookie_expired:_m_h5_tk"
+                continue
+
+            # _m_h5_tk_enc ? _m_h5_tk ????? token?????????????
+            # ? expires ???????????session cookie??????????? _m_h5_tk
+            # ? _m_h5_tk ??? _m_h5_tk_enc ?????????????????
+            # ???? expires ??????? cookie_expired:_m_h5_tk_enc
+            if name == "_m_h5_tk_enc":
                 continue
 
             expires = c.get("expires", -1)

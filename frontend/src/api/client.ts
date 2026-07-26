@@ -33,18 +33,18 @@ client.interceptors.response.use(
     if (isAuthUnauthorized) {
       localStorage.removeItem('xh_token')
       // 避免在登录页本身触发跳转（防止死循环）
-      // 路径匹配必须用 /app/login：SPA 挂载在 /app/ 下（vite base + BrowserRouter basename）
+      // 路径匹配必须用 /xianyu/login：SPA 挂载在 /xianyu/ 下（vite base + BrowserRouter basename）
       const currentPath = globalThis.location.pathname + globalThis.location.search
-      const isLoginPage = currentPath.startsWith('/app/login')
+      const isLoginPage = currentPath.startsWith('/xianyu/login')
       if (!isLoginPage && !isRedirecting) {
         isRedirecting = true
         // 保存当前路径，登录后跳转回来
         const redirect = encodeURIComponent(currentPath)
         // 使用 replace 避免在历史记录中留下当前页面，
         // 防止用户后退回到已失效的认证态页面
-        // 必须用 /app/login：浏览器原生跳转不走 react-router，
+        // 必须用 /xianyu/login：浏览器原生跳转不走 react-router，
         // 不会自动补 basename 前缀，直接用 /login 会被后端返回 404
-        globalThis.location.replace(`/app/login?redirect=${redirect}`)
+        globalThis.location.replace(`/xianyu/login?redirect=${redirect}`)
       }
     }
     return Promise.reject(error)

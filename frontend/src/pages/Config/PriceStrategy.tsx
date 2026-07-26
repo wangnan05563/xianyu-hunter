@@ -84,6 +84,10 @@ export default function PriceStrategy() {
     try {
       // 将本地 strategy 修改同步到 configStore 后再预览
       update({ price_strategy: strategy })
+      // 同步 bargain_price.percentile 到 configStore（与 price_strategy 一起保存）
+      if (config?.bargain_price) {
+        update({ bargain_price: { ...config.bargain_price } })
+      }
       setSaving(true)
       const changes = await previewSave()
       if (changes.length === 0) {
@@ -111,6 +115,9 @@ export default function PriceStrategy() {
       setSaving(false)
     }
   }
+
+  // 提取局部变量收窄类型，避免 JSX 中直接访问 config?.bargain_price?.percentile 触发 TS18047
+  const bargainPercentile = config?.bargain_price?.percentile ?? 0.10
 
   // 模拟策略命中预览
   const previewResults = (() => {
@@ -195,6 +202,27 @@ export default function PriceStrategy() {
         {/* 左侧：策略配置 */}
         <Col span={12}>
           <Card title="策略配置（4 种策略独立开关）">
+            {/* 捡漏价格 P10 分位数配置（对应后端 BargainPriceConfig） */}
+            <Card
+              size="small"
+              style={{ marginBottom: 12 }}
+              title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><PriceFloorIcon size={20} /> 捡漏价格分位数</span>}
+            >
+              <Slider
+                min={0.01}
+                max={0.49}
+                step={0.01}
+                value={bargainPercentile}
+                onChange={(v) => update({ bargain_price: { percentile: v } })}
+                marks={{ 0.05: '5%', 0.10: '10%', 0.20: '20%', 0.49: '49%' }}
+                tooltip={{ formatter: (v) => `${((v ?? 0) * 100).toFixed(0)}% (P${Math.round((v ?? 0) * 100)})` }}
+              />
+              <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
+                取已售价格中最低 {bargainPercentile * 100}% 的边界值作为捡漏基准。
+                调高让更多商品被判定为"可捡漏"，调低则更严格。
+              </div>
+            </Card>
+
             {/* 策略 1：硬性上限 */}
             <Card
               size="small"

@@ -288,6 +288,68 @@ export default function ChatbotConfigPage() {
             ),
           },
           {
+            key: 'llm',
+            label: 'LLM 模型',
+            children: (
+              <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+                <div>
+                  <Typography.Text>模型名（热更新）</Typography.Text>
+                  <Input
+                    value={config.llm.model}
+                    onChange={(e) => updateConfig('llm.model', e.target.value)}
+                    placeholder="如 gpt-4o-mini / qwen-plus / glm-4-flash"
+                    style={{ marginLeft: 16, width: 300 }}
+                  />
+                </div>
+                <div>
+                  <Typography.Text>采样温度（0-2，热更新）</Typography.Text>
+                  <Slider
+                    min={0} max={2} step={0.1}
+                    value={config.llm.temperature}
+                    onChange={(v) => updateConfig('llm.temperature', v)}
+                    style={{ width: 300, marginLeft: 16, display: 'inline-flex' }}
+                  />
+                </div>
+                <div>
+                  <Typography.Text>单次回复最大 token（1-4096）</Typography.Text>
+                  <InputNumber
+                    min={1} max={4096}
+                    value={config.llm.max_tokens}
+                    onChange={(v) => v && updateConfig('llm.max_tokens', v)}
+                    style={{ marginLeft: 16 }}
+                  />
+                </div>
+                <div>
+                  <Typography.Text>HTTP 总超时（5-120 秒）</Typography.Text>
+                  <InputNumber
+                    min={5} max={120}
+                    value={config.llm.http_timeout_sec}
+                    onChange={(v) => v && updateConfig('llm.http_timeout_sec', v)}
+                    style={{ marginLeft: 16 }}
+                  />
+                </div>
+                <div>
+                  <Typography.Text>首 token 超时（3-60 秒）</Typography.Text>
+                  <InputNumber
+                    min={3} max={60}
+                    value={config.llm.first_token_timeout_sec}
+                    onChange={(v) => v && updateConfig('llm.first_token_timeout_sec', v)}
+                    style={{ marginLeft: 16 }}
+                  />
+                </div>
+                <div>
+                  <Typography.Text>视觉模型（留空则用主模型处理图片）</Typography.Text>
+                  <Input
+                    value={config.llm.vision_model ?? ''}
+                    onChange={(e) => updateConfig('llm.vision_model', e.target.value)}
+                    placeholder="如 gpt-4o / qwen-vl-max（留空=不单独配置）"
+                    style={{ marginLeft: 16, width: 300 }}
+                  />
+                </div>
+              </Space>
+            ),
+          },
+          {
             key: 'agent',
             label: 'AGENT 工具',
             children: (

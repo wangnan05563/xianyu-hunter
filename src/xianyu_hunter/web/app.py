@@ -379,19 +379,27 @@ def _build_favicon_response(static_dir: Path) -> Response:
 
 
 def _serve_spa_request(spa_dir: Path, full_path: str) -> Response:
-    """SPA catch-all 请求处理：静态文件直接返回，其余返回注入登录浮层的 index.html
+    """SPA catch-all 请求处理：API 路径 404，剥离路径前缀后返回静态文件或 index.html
 
+    Funnel 路径区分模式下，Funnel 剥离 /xianyu/ 前缀后后端收到不带前缀的路径；
+    直接访问后端时浏览器按 base='/xianyu/' 请求前端路由（路径含 /xianyu/ 前缀）。
     独立为模块级函数以降低 create_app 认知复杂度（S3776）。
     """
-    if full_path:
-        file_path = spa_dir / full_path
+    # API 路径不 fallback，返回 404 JSON（避免 API 404 被误返回 index.html）
+    # 同时识别带 /xianyu/ 前缀的 API 路径（直接访问后端场景）
+    if full_path.startswith(("api/", "xianyu/api/")):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    # 剥离 /xianyu/ 前缀：直接访问后端时浏览器按 base='/xianyu/' 请求前端路由
+    rel_path = full_path[7:] if full_path.startswith("xianyu/") else full_path
+    if rel_path:
+        file_path = spa_dir / rel_path
         if file_path.is_file():
             ext = file_path.suffix.lower()
             media_type = _SPA_MEDIA_TYPES.get(ext, "application/octet-stream")
             # assets/ 下是带 hash 的构建产物，可长期强缓存；其余路径禁缓存以保证 index.html 实时性
             headers = (
                 {"Cache-Control": "public, max-age=31536000, immutable"}
-                if full_path.startswith("assets/")
+                if rel_path.startswith("assets/")
                 else {"Cache-Control": "no-cache"}
             )
             return Response(content=file_path.read_bytes(), media_type=media_type, headers=headers)
@@ -444,7 +452,7 @@ def create_app() -> FastAPI:
             "或在浏览器请求中携带 `xh_token` Cookie（前端 fetch 默认 `credentials: 'include'`）。\n\n"
             "**认证白名单**（无需鉴权）：`/api/auth/cookie`、`/api/auth/me`、`/api/auth/import-from-browser`、"
             "`/import-from-browser/status`、`/api/events/stream`、`/api/notifications`（SSE 内部白名单）、"
-            "`/api/notifier/`、`/api/about`、`/api/about/check-update`、`/healthz`、`/api/docs`、`/openapi.json`、`/app/*` SPA。\n\n"
+            "`/api/notifier/`、`/api/about`、`/api/about/check-update`、`/healthz`、`/api/docs`、`/openapi.json`、`/xianyu/*` SPA。\n\n"
             "### 端点分组\n\n"
             "- **meta**：版本信息、健康检查、关于\n"
             "- **auth / accounts**：Token 认证、多账号管理、扫码登录\n"
@@ -525,9 +533,9 @@ def create_app() -> FastAPI:
     async def vite_client() -> Response:
         return Response(status_code=204)
 
-    # /app/docs 重定向到 FastAPI 内置的 API 文档（docs_url=/api/docs）
+    # /docs 重定向到 FastAPI 内置的 API 文档（docs_url=/api/docs）
     # 避免被下方 SPA catch-all 捕获后返回 index.html，导致前端路由跳回首页
-    @app.get("/app/docs", include_in_schema=False)
+    @app.get("/docs", include_in_schema=False)
     async def redirect_app_docs() -> RedirectResponse:
         return RedirectResponse(url="/api/docs", status_code=302)
 
@@ -537,26 +545,10 @@ def create_app() -> FastAPI:
     async def custom_docs() -> HTMLResponse:
         return HTMLResponse(_SWAGGER_UI_HTML)
 
-    # SPA 可视化配置控制台（React 构建产物）
-    # 访问 /app/* 时服务 SPA，支持客户端路由
-    # vite base='/app/'，构建产物资源路径为 /app/assets/*
-    # 注意：不使用 StaticFiles mount，因为 Windows 上 MIME 类型识别不准确
-    #       统一由 spa_index catch-all 处理，确保 JS/CSS 等资源有正确的 Content-Type
+    # SPA 路由注册延后到所有 API 路由之后（见文件末尾）
+    # 为什么延后：FastAPI 路由按注册顺序匹配，catch-all /{full_path:path}
+    # 必须在所有 /api/* 路由之后注册，否则会拦截 API 请求
     spa_dir = static_dir / "spa"
-    if spa_dir.exists():
-        @app.get("/app/{full_path:path}")
-        async def spa_index(full_path: str) -> Response:
-            """SPA catch-all：所有 /app/* 路径，静态文件直接返回，其余返回 index.html
-
-            未登录时在 index.html 中注入登录引导浮层，
-            引导用户跳转到 /app/login 完成登录后返回 /app。
-            """
-            return _serve_spa_request(spa_dir, full_path)
-
-    # 根路径重定向到新版 SPA：旧版 SSR 已下线，所有用户访问 / 时跳转到 /app/
-    @app.get("/", include_in_schema=False)
-    async def redirect_to_spa() -> RedirectResponse:
-        return RedirectResponse(url="/app/", status_code=302)
 
     # 路由
     app.include_router(api_tasks.router)
@@ -639,6 +631,29 @@ def create_app() -> FastAPI:
         )
         return resp
 
+    # SPA catch-all 路由：必须在所有 API 路由之后注册
+    # 为什么延后：FastAPI 路由按注册顺序匹配，/{full_path:path} 会拦截所有 GET 请求，
+    # 若在 API 路由之前注册，API 请求会到达 catch-all 而非真正的处理器
+    if spa_dir.exists():
+        @app.get("/", include_in_schema=False)
+        async def spa_root() -> Response:
+            """根路径直接返回 SPA index.html
+
+            不重定向到 /xianyu/：Funnel 模式下 /xianyu/ 剥离前缀后回到 /，
+            重定向会导致无限循环。直接返回 index.html 让前端路由接管。
+            """
+            return _serve_spa_request(spa_dir, "")
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_index(full_path: str) -> Response:
+            """SPA catch-all：接管所有未匹配的 GET 请求
+
+            Funnel 剥离 /xianyu/ 前缀后后端收到不带前缀的路径；
+            未登录时在 index.html 中注入登录引导浮层，
+            引导用户跳转到 /xianyu/login 完成登录后返回 /xianyu/。
+            """
+            return _serve_spa_request(spa_dir, full_path)
+
     return app
 
 
@@ -654,11 +669,11 @@ _SPA_LOGIN_OVERLAY = """<style>
 #xh-login-overlay .xh-login-btn:hover{background:#e55a00}
 #xh-login-overlay .xh-login-checking{color:#999;font-size:13px}
 </style>
-<div id="xh-login-overlay" style="display:none"><div class="xh-login-card"><div class="xh-login-icon">🔑</div><div class="xh-login-title">需要登录闲鱼账号</div><div class="xh-login-desc">控制台需要登录后才能使用<br>点击下方按钮前往登录页面</div><a class="xh-login-btn" href="/app/login">前往登录</a></div></div>
+<div id="xh-login-overlay" style="display:none"><div class="xh-login-card"><div class="xh-login-icon">🔑</div><div class="xh-login-title">需要登录闲鱼账号</div><div class="xh-login-desc">控制台需要登录后才能使用<br>点击下方按钮前往登录页面</div><a class="xh-login-btn" href="/xianyu/login">前往登录</a></div></div>
 <script>
 (function(){
   // 已在登录页时不显示浮层，避免遮挡前端登录界面
-  if(window.location.pathname.indexOf('/app/login')!==-1)return;
+  if(window.location.pathname.indexOf('/xianyu/login')!==-1)return;
   var overlay=document.getElementById('xh-login-overlay');
   if(!overlay)return;
   // 检查登录状态：/api/auth/me 在白名单中，无需 token 即可调用
@@ -725,8 +740,8 @@ _SWAGGER_UI_HTML = """<!DOCTYPE html>
     <span>闲鱼猎人 · API 文档</span>
   </div>
   <div class="xh-actions">
-    <a class="xh-btn xh-btn-default" href="/app/" target="_blank">控制台</a>
-    <a class="xh-btn xh-btn-primary" href="/app/about" target="_blank">📖 关于</a>
+    <a class="xh-btn xh-btn-default" href="/xianyu/" target="_blank">控制台</a>
+    <a class="xh-btn xh-btn-primary" href="/xianyu/about" target="_blank">📖 关于</a>
   </div>
 </div>
 <div id="swagger-ui"></div>

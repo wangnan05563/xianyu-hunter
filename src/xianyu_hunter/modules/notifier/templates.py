@@ -380,11 +380,11 @@ def _get_web_base_url() -> str:
 def _build_confirm_buy_url(task_id: str, item_id: str) -> str:
     """构建 SEMI_AUTO 模式下"确认抢单"前端页面 URL
 
-    前端 BrowserRouter basename="/app"，所以路径前缀必须包含 /app
+    前端 BrowserRouter basename="/xianyu"，所以路径前缀必须包含 /xianyu
     页面加载后展示商品快照与"确认抢单"按钮，点击调用 manual-takeover 接口
     """
     base = _get_web_base_url()
-    return f"{base}/app/confirm-buy?task_id={task_id}&item_id={item_id}"
+    return f"{base}/xianyu/confirm-buy?task_id={task_id}&item_id={item_id}"
 
 
 def _eval_passed(event: Event) -> tuple[str, str]:

@@ -18,7 +18,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # SSE 流免认证（未登录时返回空流）；通知接口免认证（供外部回调调用）
 PUBLIC_PREFIXES = (
     "/static/", "/healthz",
-    "/app/",                     # SPA 可视化控制台页面（API 调用仍需 token）
+    "/xianyu/",                  # SPA 可视化控制台页面（API 调用仍需 token）
     "/api/auth/login", "/api/auth/verify",
     "/api/auth/cookie",          # 手动 Cookie 注入（未登录时也需要调用）
     "/api/auth/me",              # 登录状态检测（未登录时返回 logged_in=false）

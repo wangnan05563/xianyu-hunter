@@ -19,6 +19,9 @@ class SelectorRepo:
     # 旧的 SearchCard/GoodsCard 命名已不再匹配。
     SEARCH_CARD_MAIN = "[class*='feeds-item-wrap']"
     SEARCH_CARD_ALT_1 = "[class*='feeds-item']"
+    SEARCH_CARD_ALT_2 = "[class*='item-card']"
+    SEARCH_CARD_ALT_3 = "[class*='product-card']"
+    SEARCH_CARD_ALT_4 = "[data-spm*='item']"
     # 注意：[class*='search-item'] 会误匹配搜索建议词（如"笔记本电脑""电动车"），
     # 而非商品卡片，已移除。保留此注释以防闲鱼改版后需要添加新选择器。
 
@@ -150,8 +153,17 @@ class SelectorRepo:
 
     @classmethod
     def search_card_candidates(cls) -> list[str]:
-        """搜索卡片的所有候选选择器（按优先级）"""
-        return [cls.SEARCH_CARD_MAIN, cls.SEARCH_CARD_ALT_1]
+        """搜索卡片的所有候选选择器（按优先级）
+
+        不含 [class*='search-item']：该选择器会误匹配搜索建议词而非商品卡片。
+        """
+        return [
+            cls.SEARCH_CARD_MAIN,
+            cls.SEARCH_CARD_ALT_1,
+            cls.SEARCH_CARD_ALT_2,
+            cls.SEARCH_CARD_ALT_3,
+            cls.SEARCH_CARD_ALT_4,
+        ]
 
     @classmethod
     def title_candidates(cls) -> list[str]:

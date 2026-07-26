@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     // O-12-26 PWA 移动端优化：让 SPA 可被"添加到主屏幕"并支持离线访问
     // 关键设计：
-    // 1. manifest 跟随 base('/app/')，scope/start_url 自动指向 /app/
+    // 1. manifest 跟随 base('/xianyu/')，scope/start_url 自动指向 /xianyu/
     // 2. workbox 预缓存静态资源 + 运行时缓存只读 GET 接口
     // 3. SSE (/api/events/stream) 和鉴权 (/api/auth/*) 必须排除，避免长连接被 SW 拦截或登录态串号
     VitePWA({
@@ -27,10 +27,10 @@ export default defineConfig({
         background_color: '#FFFFFF',
         display: 'standalone',
         orientation: 'portrait-primary',
-        // scope 与 start_url 不写，让 vite-plugin-pwa 自动用 base 派生为 /app/
+        // scope 与 start_url 不写，让 vite-plugin-pwa 自动用 base 派生为 /xianyu/
         lang: 'zh-CN',
-        start_url: '/app/',
-        scope: '/app/',
+        start_url: '/xianyu/',
+        scope: '/xianyu/',
         icons: [
           // SVG 矢量图标：Chrome/Edge/Android 支持，任意尺寸自适应
           { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
@@ -83,8 +83,8 @@ export default defineConfig({
       },
     }),
   ],
-  // SPA 挂载在 /app/ 路径下，构建产物资源路径需以 /app/ 为前缀
-  base: '/app/',
+  // SPA 挂载在 /xianyu/ 路径下，构建产物资源路径需以 /xianyu/ 为前缀
+  base: '/xianyu/',
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -94,9 +94,10 @@ export default defineConfig({
     port: 5173,
     // 开发模式代理 API 到 FastAPI 后端
     proxy: {
-      '/api': {
+      '/xianyu/api': {
         target: 'http://127.0.0.1:8001',
         changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/xianyu/, ''),
       },
     },
   },

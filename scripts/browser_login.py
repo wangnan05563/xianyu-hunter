@@ -492,6 +492,18 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
     else:
         print("[browser_login] Edge 未找到，使用 Playwright 内置 Chromium", file=sys.stderr)
 
+    # Background heartbeat during slow launch/nav to prevent backend 90s timeout.
+    _hb_stop = threading.Event()
+    def _hb():
+        while not _hb_stop.is_set():
+            try:
+                _set_status(status_file, status="starting", message="正在启动浏览器...")
+            except OSError:
+                pass
+            _hb_stop.wait(5.0)
+    _hb_thread = threading.Thread(target=_hb, daemon=True)
+    _hb_thread.start()
+
     try:
         async with async_playwright() as pw:
             launch_kwargs: dict = {
@@ -610,6 +622,10 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                 # 轮询检测 Cookie（严格验证 Cookie 值，而非仅检测名称存在）
                 start = time.monotonic()
                 last_heartbeat = 0.0  # 上次心跳写入时间，用于保证 status file 持续更新
+                # Stop startup heartbeat; the polling loop has its own heartbeat
+                _hb_stop.set()
+                _hb_thread.join(timeout=3)
+
                 HEARTBEAT_INTERVAL = 3.0  # 心跳间隔（秒），保证子进程存活时 status file 一定被更新
 
                 while time.monotonic() - start < timeout:

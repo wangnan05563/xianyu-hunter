@@ -28,7 +28,7 @@ export function isMobileUA(userAgent: string): boolean {
 // 注意：不要加 pointer:coarse 触屏指针判定！
 // 触屏笔记本 / 二合一设备 / Surface 触屏模式会触发 coarse，
 // 但视口宽度通常 >= 1024（桌面分辨率），若同时判定为移动端会导致
-// 桌面用户被强制跳到 /app/m/ 路由（PC 端完全不可用）。
+// 桌面用户被强制跳到 /xianyu/m/ 路由（PC 端完全不可用）。
 function detectMobile(): boolean {
   // 用 globalThis.* + 直接与 undefined 比较（避免 S7764/S7741 误报）
   if (globalThis.window === undefined || globalThis.navigator === undefined) return false

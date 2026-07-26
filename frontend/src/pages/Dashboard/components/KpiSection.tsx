@@ -5,6 +5,7 @@ import {
   RiseOutlined,
   MinusOutlined,
 } from '@ant-design/icons'
+import { useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { KpiCard } from '../../../api'
 import { kpiStar, kpiStarTip, fmtKpiValue, deltaText } from '../utils'
@@ -52,6 +53,8 @@ function computeKpiTrend(
 export default function KpiSection({ kpiCards }: KpiSectionProps) {
   // 从 antd token 读取主题色，自动响应主题切换
   const { token } = theme.useToken()
+  // hint_action 跳转用：分母为 0 等异常场景下点击链接直达配置页
+  const navigate = useNavigate()
 
   // 无 KPI 数据时不渲染整块卡片，避免空容器占用布局
   if (kpiCards.length === 0) return null
@@ -90,7 +93,18 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
                     </span>
                   </Tooltip>
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 2 }}>{k.hint}</div>
+                <div style={{ fontSize: 11, color: 'var(--xh-text-tertiary)', marginTop: 2 }}>
+                  {k.hint}
+                  {/* 异常场景引导：如分母为 0 时直达抢单策略配置页 */}
+                  {k.hint_action && (
+                    <a
+                      style={{ marginLeft: 6, fontSize: 11 }}
+                      onClick={() => navigate(k.hint_action!.route)}
+                    >
+                      {k.hint_action.label}
+                    </a>
+                  )}
+                </div>
               </div>
             </Col>
           )

@@ -166,7 +166,7 @@ export default function MobileLogin() {
   const handleImportSuccess = useCallback((result: CookieInjectResult) => {
     message.success(result.message || '导入成功')
     setTimeout(() => {
-      globalThis.location.href = '/app/m/'
+      globalThis.location.href = '/xianyu/m/'
     }, 1000)
   }, [message])
 

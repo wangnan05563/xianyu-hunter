@@ -72,6 +72,9 @@ export default function SearchConfig() {
   // 任务调度默认值（对应后端 TaskSchedulerConfig）
   const [defaultInterval, setDefaultInterval] = useState(60) // 新建任务默认采集周期（秒）
   const [autoSearchDefault, setAutoSearchDefault] = useState(false) // 任务列表自动搜索初始默认开关
+  // WAF 反爬检测配置（对应后端 WAFConfig）
+  const [wafEnabled, setWafEnabled] = useState(true) // WAF 开关
+  const [wafCheckInterval, setWafCheckInterval] = useState(30) // 登录状态检查间隔（分钟）
 
   useEffect(() => {
     load()
@@ -99,6 +102,12 @@ export default function SearchConfig() {
       if (ts) {
         setDefaultInterval(ts.default_interval_seconds ?? 60)
         setAutoSearchDefault(ts.auto_search_enabled ?? false)
+      }
+      // WAF 配置初始化
+      const waf = config.waf
+      if (waf) {
+        setWafEnabled(waf.enabled ?? true)
+        setWafCheckInterval(waf.login_check_interval_min ?? 30)
       }
     }
   }, [config])
@@ -133,6 +142,10 @@ export default function SearchConfig() {
           auto_search_enabled: autoSearchDefault,
           // 保留原有并发上限，本页面不暴露编辑入口（当前固定 1）
           auto_search_concurrency: config.task_scheduler?.auto_search_concurrency ?? 1,
+        },
+        waf: {
+          enabled: wafEnabled,
+          login_check_interval_min: wafCheckInterval,
         },
       })
       setSaving(true)
@@ -298,6 +311,47 @@ export default function SearchConfig() {
                 checkedChildren="开"
                 unCheckedChildren="关"
               />
+            </Form.Item>
+          </Card>
+
+          {/* WAF 反爬检测配置 */}
+          <Card title="🛡️ 反爬检测（WAF）" style={{ marginTop: 16 }}>
+            <Alert
+              type="info"
+              showIcon
+              message="定期检测闲鱼登录状态，失效时自动暂停任务并通知用户"
+              style={{ marginBottom: 16 }}
+            />
+            <Form.Item
+              label="启用 WAF 检测"
+              help="关闭后不再自动检测登录状态，任务可能因 Cookie 失效而持续失败"
+            >
+              <Switch
+                checked={wafEnabled}
+                onChange={setWafEnabled}
+                checkedChildren="开"
+                unCheckedChildren="关"
+              />
+            </Form.Item>
+            <Form.Item
+              label="登录检查间隔"
+              help="多久检测一次闲鱼登录状态，过短增加服务器压力，过长延迟发现失效"
+            >
+              <Space.Compact style={{ width: '100%' }}>
+                <InputNumber
+                  min={5}
+                  max={1440}
+                  step={5}
+                  value={wafCheckInterval}
+                  onChange={(v) => setWafCheckInterval(v ?? 30)}
+                  style={{ width: '100%' }}
+                />
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', padding: '0 11px',
+                  background: 'rgba(0,0,0,0.02)', border: '1px solid var(--xh-border)',
+                  borderLeft: 'none', borderRadius: '0 6px 6px 0', color: 'var(--xh-text-tertiary)',
+                }}>分钟</span>
+              </Space.Compact>
             </Form.Item>
           </Card>
         </Col>

@@ -284,20 +284,46 @@ def _format_expiry(expiry_ts: float | None) -> str:
     return "不足 1 分钟"
 
 
-_IDENTITY_LAYER_COOKIES = {"unb", "cookie2", "sgcookie", "t", "_tb_token_", "lg2"}
-_SESSION_LAYER_COOKIES = {"_m_h5_tk", "_m_h5_tk_enc"}
-_TRACKING_LAYER_COOKIES = {"cna", "tfstk", "xlly_s"}
+# 复用 CookieRotator 的配置化 LAYER_DEFINITIONS，避免硬编码与配置漂移
+# 原硬编码 tracking 层只有 3 个 cookie，配置化有 5 个（含 ali_aplus_v3/utdid），
+# 导致右上角与 AntiCrawl 页面对同一层显示不一致状态
+from xianyu_hunter.modules.cookie_rotator import (
+    LAYER_DEFINITIONS,
+    CookieLayer,
+    is_m5tk_expired,
+)
 
 
-def _compute_layers_status(names: set[str]) -> dict[str, bool]:
+def _compute_layers_status(names: set[str], cookies_list: list[dict] | None = None) -> dict[str, bool]:
     """计算 Cookie 三层（identity/session/tracking）的齐全状态
 
-    拆分自 cookie_health：将三层集合交集判断收敛到单一函数，
-    降低主函数的认知复杂度（S3776）。"""
+    复用 LAYER_DEFINITIONS 配置消除名单漂移，与 /api/anticrawl/cookies/layers
+    使用同一份配置，确保两条链路对同一层显示一致状态。
+
+    session 层额外检查 _m_h5_tk 内嵌 timestamp 是否过期：
+    - CookieRotator 通过 is_m5tk_expired 判断 token 真实有效性
+    - 若不检查，JSON 中 token 名字存在但已过期时，右上角显示"已就绪"
+      而 AntiCrawl 显示"失效"，造成用户困惑
+    """
+    identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
+    session_cookies = LAYER_DEFINITIONS[CookieLayer.SESSION].cookies
+    tracking_cookies = LAYER_DEFINITIONS[CookieLayer.TRACKING].cookies
+
+    # session 层：名字齐全 + token 未过期
+    session_ready = bool(session_cookies & names)
+    if session_ready and cookies_list:
+        # _m_h5_tk 的 cookie.expires=-1 无法判断过期，必须检查内嵌 timestamp
+        # 与 validate_cookies_with_expiry / CookieRotator.sync_state_from_cookies 保持一致
+        for c in cookies_list:
+            if c.get("name") == "_m_h5_tk":
+                if is_m5tk_expired(c.get("value", "")):
+                    session_ready = False
+                break
+
     return {
-        "identity": bool(_IDENTITY_LAYER_COOKIES & names),
-        "session": bool(_SESSION_LAYER_COOKIES & names),
-        "tracking": bool(_TRACKING_LAYER_COOKIES & names),
+        "identity": bool(identity_cookies & names),
+        "session": session_ready,
+        "tracking": bool(tracking_cookies & names),
     }
 
 
@@ -358,7 +384,7 @@ async def cookie_health(request: Request) -> JSONResponse:
     # 为什么需要：_ensure_fresh_m5tk（实时搜索）和 MTOP API 响应会刷新浏览器内存中的
     # token 但不回写 JSON，导致 JSON 中 token 的内嵌 timestamp 过期（>20分钟），
     # 而 /api/anticrawl/cookies/layers 已有同样的兜底逻辑（_try_refresh_m5tk_from_browser）
-    if not is_valid and "cookie_expired:_m_h5_tk" in reason:
+    if not is_valid and ("cookie_expired:_m_h5_tk" in reason or "cookie_expired:_m_h5_tk_enc" in reason):
         refreshed = await _try_refresh_m5tk_from_browser_for_health(store, current_uid)
         if refreshed:
             store.invalidate_cache(current_uid)
@@ -368,9 +394,11 @@ async def cookie_health(request: Request) -> JSONResponse:
     expiry_ts = store.get_cookie_expiry(user_id=current_uid)
 
     data = store._read_json(user_id=current_uid)
-    names = {c.get("name", "") for c in (data or {}).get("cookies", [])} if data else set()
+    cookies_list = (data or {}).get("cookies", []) if data else []
+    names = {c.get("name", "") for c in cookies_list}
 
-    layers_status = _compute_layers_status(names)
+    # 传入 cookies_list 让 _compute_layers_status 检查 _m_h5_tk 内嵌 timestamp 过期
+    layers_status = _compute_layers_status(names, cookies_list)
     security_flags = _compute_security_flags(data, expiry_ts)
 
     elapsed_ms = int((time.time() - start_ts) * 1000)

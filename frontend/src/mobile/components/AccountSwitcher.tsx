@@ -94,13 +94,13 @@ export default function MobileAccountSwitcher() {
   }, [message])
 
   // 退出登录：清空当前 session，跳登录页
-  // 路径 /app/login：SPA 挂在 /app/ 下，浏览器完整 URL 跳转绕过路由
+  // 路径 /xianyu/login：SPA 挂在 /xianyu/ 下，浏览器完整 URL 跳转绕过路由
   const handleLogout = useCallback(async () => {
     setSwitching(true)
     try {
       await authApi.logoutAccount()
       setOpen(false)
-      globalThis.location.href = '/app/login'
+      globalThis.location.href = '/xianyu/login'
     } catch (e) {
       message.error(extractApiError(e, '退出失败，请重试'), 3)
     } finally {
