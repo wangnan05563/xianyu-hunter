@@ -32,6 +32,11 @@ _kb_refresh_scheduler = None
 # 即使 Web 进程（with_browser=False）也需启动，避免订单永久卡在 takeover_pending
 _takeover_timeout_scheduler = None
 
+# 预聚合调度器引用（P4-3，用于 shutdown 时优雅停止）
+# 为什么独立于 with_browser 模式：本调度器只读/写 DB，不依赖浏览器实例，
+# 即使 Web 进程（with_browser=False）也需启动，定期刷新 stats 快照到 DB
+_pre_aggregation_scheduler = None
+
 # EventBus 主循环后台任务引用（用于 shutdown 时优雅停止）
 # 为什么独立于 _scheduler_task：EventBus 是事件分发基础设施，
 # 不应与"是否有 RUNNING 任务"耦合。原实现把 run_forever() 放在
@@ -85,20 +90,20 @@ def start_cookie_sync_scheduler(container: Any) -> None:
 
 
 def start_cookie_health_probe(container: Any) -> None:
-    """?? Cookie ???????????????? Cookie ??????? expired ? active?
+    """启动 Cookie 健康探测任务，定期检查用户 Cookie 状态（expired 或 active）
 
-    ??????probe_all_accounts ??????????active?expired?active??
-    ??????????????????????????????
-    ???? 300s?? SessionHealthChecker.CHECK_INTERVAL ???
+    设计理由：probe_all_accounts 需要遍历所有用户（active+expired），active 用户
+    需要主动探测以在 Cookie 即将过期时提前预警，避免后续搜索/采集任务失败。
+    探测间隔 300s（5 分钟），与 SessionHealthChecker.CHECK_INTERVAL 对齐
     """
     global _cookie_health_probe_task
     from loguru import logger
     import time
 
-    PROBE_INTERVAL_SEC = 300  # 5 ??
+    PROBE_INTERVAL_SEC = 300  # 5 分钟
 
     def _probe_once():
-        """?????? database ?? active ?????????? cookie ?????"""
+        """单次探测：从 database 中筛选 active 用户，验证其 cookie 有效性"""
         try:
             from xianyu_hunter.web.services.user_manager import get_user_manager
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
@@ -106,7 +111,7 @@ def start_cookie_health_probe(container: Any) -> None:
             um = get_user_manager()
             store = get_cookie_store()
 
-            # ???? active ??????????
+            # 筛选 active 用户进行探测
             users = um.list_users()
             active_users = [u for u in users if u.get("status") == "active"]
             if not active_users:
@@ -118,10 +123,10 @@ def start_cookie_health_probe(container: Any) -> None:
                     is_valid, reason = store.validate_cookies_with_expiry(user_id=uid)
                     um.set_user_status(uid, "active" if is_valid else "expired")
                 except Exception:
-                    logger.warning("Cookie ???? user_id=%s", uid, exc_info=True)
+                    logger.warning("Cookie 探测失败 user_id=%s", uid, exc_info=True)
 
         except Exception:
-            logger.debug("Cookie ??????", exc_info=True)
+            logger.debug("Cookie 探测异常忽略", exc_info=True)
 
     async def _probe_loop():
         while True:
@@ -131,10 +136,10 @@ def start_cookie_health_probe(container: Any) -> None:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning("Cookie ????????: {}", e)
+                logger.warning("Cookie 探测循环异常: {}", e)
 
     _cookie_health_probe_task = asyncio.create_task(_probe_loop())
-    logger.info("Cookie ????????????? %ds?", PROBE_INTERVAL_SEC)
+    logger.info("Cookie 健康探测任务已启动，间隔 %ds", PROBE_INTERVAL_SEC)
 
 
 def start_batch_refresh_scheduler(container: Any) -> None:
@@ -224,6 +229,29 @@ def start_takeover_timeout_scheduler(container: Any) -> None:
     except Exception:  # noqa: BLE001
         # 启动失败不阻断应用：用户仍可通过手动修改订单状态处理超时
         logger.exception("接管超时清理调度器启动失败")
+
+
+def start_pre_aggregation_scheduler(container: Any, loop: Any) -> None:
+    """启动预聚合调度器（P4-3）
+
+    独立于 with_browser 模式：本调度器只读/写 DB，不依赖浏览器实例，
+    即使 Web 进程（with_browser=False）也可启动。
+
+    为什么需要 loop：stats 计算函数是 async def，必须在主事件循环中执行，
+    BackgroundScheduler 通过 run_coroutine_threadsafe 桥接。
+    启动失败不阻断应用：stats 接口仍有 60s TTL 缓存兜底。
+    """
+    global _pre_aggregation_scheduler
+    from loguru import logger
+    from xianyu_hunter.modules.pre_aggregation_scheduler import PreAggregationScheduler
+
+    try:
+        _pre_aggregation_scheduler = PreAggregationScheduler(
+            container=container,
+        )
+        _pre_aggregation_scheduler.start(loop)
+    except Exception:  # noqa: BLE001
+        logger.exception("预聚合调度器启动失败")
 
 
 def start_event_bus_in_background(container: Any) -> None:
@@ -316,6 +344,10 @@ async def start_scheduler_in_background(container: Any) -> None:
         EventBus 消费已解耦到 start_event_bus_in_background，本循环只负责
         保持调度器运行；移除原 bus_task 状态检测，因为 EventBus 异常退出
         已在 _bus_loop 内部记录日志，无需此处重复告警。
+
+        异常处理：原 implementation 只捕获 CancelledError，导致 start_all 抛出的
+        其他异常（如 ResumeBlockedError）被 asyncio.create_task 静默吞掉，
+        _run_loop 从未启动，后台周期搜索完全不工作（meta-rule #26 关键路径异常保 traceback）。
         """
         try:
             container.scheduler.start_all()
@@ -329,6 +361,12 @@ async def start_scheduler_in_background(container: Any) -> None:
             await container.scheduler.stop_all()
             logger.info("调度器已停止")
             # 重新抛出以传播取消信号，符合 S7497
+            raise
+        except Exception as e:
+            # 关键路径异常必须保 traceback（meta-rule #26）
+            # start_all 已容错单个任务失败，此处捕获的是 start_all 之外的异常
+            # （如 workers 列表构造异常、stop_event 创建失败等）
+            logger.exception(f"调度器主循环启动失败: {e}")
             raise
 
     global _scheduler_task
@@ -501,6 +539,64 @@ def _migrate_to_multi_user(container: Any) -> None:
         logger.warning("C-07 多用户迁移失败（忽略）: {}", e, exc_info=True)
 
 
+def _migrate_events_score_value(container: Any, insp: Any) -> None:
+    """C-08 迁移：events.score_value 列化（P1-3 性能优化）
+
+    背景：原 eval.scored 事件的 score 存在 payload JSON 字段中，
+    查询 `score < 0.5` 需要 json_extract 全表扫描，stats_today 接口
+    在 100 并发下平均 1.9s。列化后查询走索引，预期 <100ms。
+
+    幂等：每次启动检查 score_value 列是否存在，不存在则 ALTER TABLE 添加。
+    历史数据回填：扫描所有 type='eval.scored' 且 score_value IS NULL 的记录，
+    从 payload JSON 中提取 score 写入新列。重复执行只回填新 NULL 行。
+    """
+    from loguru import logger
+    from sqlalchemy import inspect as sa_inspect
+
+    try:
+        if not insp.has_table("events"):
+            return
+        columns = {c["name"] for c in insp.get_columns("events")}
+        if "score_value" not in columns:
+            with container.repo.engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "ALTER TABLE events ADD COLUMN score_value REAL"
+                )
+            logger.info("events.score_value 列已添加（C-08 迁移）")
+            # 重新 inspect 以反映新列
+            insp = sa_inspect(container.repo.engine)
+
+        # 回填历史数据：仅处理 eval.scored 类型且 score_value 为 NULL 的记录
+        # 用 json_extract 从 payload 提取 score，UPDATE 一次性回填
+        with container.repo.engine.begin() as conn:
+            # 检查是否还有未回填的 eval.scored 记录
+            pending = conn.exec_driver_sql(
+                "SELECT COUNT(*) FROM events "
+                "WHERE type = 'eval.scored' AND score_value IS NULL "
+                "AND payload IS NOT NULL"
+            ).scalar()
+            if pending and pending > 0:
+                conn.exec_driver_sql(
+                    "UPDATE events "
+                    "SET score_value = CAST(json_extract(payload, '$.score') AS REAL) "
+                    "WHERE type = 'eval.scored' AND score_value IS NULL "
+                    "AND payload IS NOT NULL "
+                    "AND json_extract(payload, '$.score') IS NOT NULL"
+                )
+                logger.info(f"已回填 {pending} 条 eval.scored 事件的 score_value（C-08）")
+
+        # 创建联合索引（type, score_value, created_at）：加速 stats_today 低分过滤
+        # 为什么包含 created_at：stats_today 同时按 created_at>=today_start 过滤
+        with container.repo.engine.begin() as conn:
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_events_eval_score_value "
+                "ON events (type, score_value, created_at)"
+            )
+        logger.info("events.score_value 联合索引已就绪（C-08 迁移）")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("C-08 events.score_value 迁移失败（忽略）: {}", e, exc_info=True)
+
+
 def run_migrations(container: Any) -> None:
     """执行数据库增量迁移
 
@@ -523,6 +619,9 @@ def run_migrations(container: Any) -> None:
     _cleanup_old_batch_history(container)
     # 多用户迁移放最后：依赖 init_db 创建的多用户表已就绪
     _migrate_to_multi_user(container)
+    # P1-3 优化：events.score_value 列化，消除 json_extract 全表扫描
+    # 放最后：依赖 eval.scored 去重迁移已完成，回填时只处理有效记录
+    _migrate_events_score_value(container, insp)
 
 
 async def _start_all_schedulers(container: Any) -> None:
@@ -557,6 +656,11 @@ async def _start_all_schedulers(container: Any) -> None:
     # 为什么放最后：本调度器只读写 DB，无外部依赖，启动失败不影响主业务
     start_takeover_timeout_scheduler(container)
 
+    # 启动预聚合调度器（P4-3，独立于 with_browser 模式）
+    # 放最后：只读 DB，启动失败不影响主业务，stats 接口有 60s TTL 缓存兜底
+    # 传入主事件循环：stats 计算函数是 async，需在主循环执行
+    start_pre_aggregation_scheduler(container, asyncio.get_running_loop())
+
     # 启动反爬会话管理（TokenRenewer 后台续期）
     # 无条件启动（不再依赖 _should_start_scheduler 门控）：
     # _default_renew_callback 已支持 httpx 兜底（with_browser=False 时
@@ -576,7 +680,7 @@ def _stop_all_sync_schedulers() -> None:
     为什么独立：_on_shutdown 中 4 个 if scheduler: stop + None 模式重复，
     集中维护停止顺序（知识库优先，避免主调度器停止时新任务被提交）。
     """
-    global _kb_refresh_scheduler, _batch_refresh_scheduler, _cookie_sync_scheduler, _takeover_timeout_scheduler
+    global _kb_refresh_scheduler, _batch_refresh_scheduler, _cookie_sync_scheduler, _takeover_timeout_scheduler, _pre_aggregation_scheduler
 
     # 知识库调度器优先停止：避免停止主调度器时新任务仍被提交
     if _kb_refresh_scheduler:
@@ -590,12 +694,15 @@ def _stop_all_sync_schedulers() -> None:
         _cookie_sync_scheduler = None
     if _takeover_timeout_scheduler:
         _takeover_timeout_scheduler.stop()
+        _takeover_timeout_scheduler = None
+    if _pre_aggregation_scheduler:
+        _pre_aggregation_scheduler.stop()
+        _pre_aggregation_scheduler = None
 
-    # Cookie ??????
+    # Cookie 健康探测任务（async task 类型，需 cancel + await suppress）
     if _cookie_health_probe_task and not _cookie_health_probe_task.done():
         _cookie_health_probe_task.cancel()
         _cookie_health_probe_task = None
-        _takeover_timeout_scheduler = None
 
 
 def _install_asyncio_exception_handler() -> None:
@@ -690,6 +797,37 @@ def setup_startup_hooks(app: FastAPI) -> None:
     from xianyu_hunter.infra.logger import setup_logging
     from xianyu_hunter.web.deps import get_container, _should_start_scheduler
 
+    async def _warm_stats_cache(container: Any) -> None:
+        """P4-3：启动时预热 stats 缓存
+
+        调用 4 个核心计算函数填充 TTL 缓存，避免首个用户请求冷启动。
+        每个调用独立 try/except：一个失败不影响其他预热。
+        """
+        from loguru import logger
+
+        async def _warm_one(name: str, coro_func, *args, **kwargs) -> None:
+            try:
+                await coro_func(*args, **kwargs)
+                logger.info(f"缓存预热完成：{name}")
+            except Exception:  # noqa: BLE001
+                logger.warning(f"缓存预热失败（{name}）：首个请求将正常计算", exc_info=True)
+
+        # 1. business_kpi (range_days=30)
+        from xianyu_hunter.web.routes.business_kpi import _compute_business_kpi
+        await _warm_one("business_kpi:30", _compute_business_kpi, range_days=30, container=container)
+
+        # 2. stats_today
+        from xianyu_hunter.web.routes.stats_today import _compute_stats_today
+        await _warm_one("stats_today", _compute_stats_today, container=container)
+
+        # 3. stats_overview
+        from xianyu_hunter.web.routes.stats_overview import _overview
+        await _warm_one("stats_overview", _overview, container=container)
+
+        # 4. stats_trend (metric=events, range_hours=24)
+        from xianyu_hunter.web.routes.trend import _compute_stats_trend
+        await _warm_one("stats_trend:events:24", _compute_stats_trend, metric="events", range_hours=24, task_id=None, container=container)
+
     @app.on_event("startup")
     async def _on_startup() -> None:
         from loguru import logger
@@ -713,6 +851,11 @@ def setup_startup_hooks(app: FastAPI) -> None:
 
         # 启动所有后台调度器（EventBus 优先 → 调度器 → Cookie 同步等）
         await _start_all_schedulers(container)
+
+        # P4-3 预热：调用所有 stats 计算函数，填充 TTL 缓存
+        # 放在调度器之后：预聚合调度器首次刷新在 5 分钟后，
+        # 先主动调用一次让缓存立即可用，避免首个用户请求 ~300ms 冷启动
+        await _warm_stats_cache(container)
 
         # 内网穿透：auto_start 为 True 时后台线程自动启动隧道
         _start_tunnel_autostart_in_thread(container)

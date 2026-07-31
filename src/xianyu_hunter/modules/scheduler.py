@@ -304,12 +304,31 @@ class TaskScheduler:
           返回 None，若包成 async + await 会导致调用方得到空 await，徒增复杂度。
         - 公共 API 上保留 `start_all()` 同步签名，调用方用 `container.scheduler.start_all()` 即可。
         - 若需要等待首个轮次结束，请改用 `await scheduler.start_and_wait_all()` 之类显式方法。
+
+        容错语义：单个任务 start 失败（如 Cookie 失效抛 ResumeBlockedError）不阻塞其他任务。
+        为什么不 re-raise：start_all 在 _scheduler_loop 中调用，若抛异常会导致整个
+        调度器循环静默失败（_scheduler_loop 只捕获 CancelledError），所有任务都不会运行。
+        线上实测 bug：服务重启时 Cookie 失效，start_all 抛 ResumeBlockedError 被静默吞掉，
+        _run_loop 从未启动，后台周期搜索完全不工作，日志中无任何 worker 搜索记录。
         """
         # 提前快照 worker ids：self.start() 内部可能修改 self._workers，
         # 直接对 keys() 迭代会触发 RuntimeError: dictionary changed size during iteration
         worker_tids = list(self._workers.keys())  # noqa: S7504 - list() 必要：防止迭代中修改字典
+        started: list[str] = []
+        failed: list[tuple[str, str]] = []
         for tid in worker_tids:
-            self.start(tid)
+            try:
+                self.start(tid)
+                started.append(tid)
+            except Exception as e:
+                # 单个任务启动失败（如 ResumeBlockedError）不阻塞其他任务
+                # 异常详情记录 warning 日志，调用方可通过 list_tasks/is_running 查询实际状态
+                logger.warning(f"任务 {tid} 启动失败，跳过: {e}")
+                failed.append((tid, str(e)))
+        if failed:
+            logger.warning(
+                f"start_all 完成: 成功 {len(started)} 个, 失败 {len(failed)} 个: {failed}"
+            )
         return _ImmediateAwaitable()
 
     async def stop_all(self) -> None:

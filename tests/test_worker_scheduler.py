@@ -475,6 +475,44 @@ async def test_scheduler_start_all_stop_all() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_all_continues_when_one_task_fails() -> None:
+    """回归测试：start_all 容错单个任务启动失败
+
+    复现线上 bug：服务重启时 Cookie 失效，_check_resume_allowed 抛 ResumeBlockedError，
+    原 start_all 不捕获异常导致整个调度器循环静默失败，所有任务都不会运行。
+    修复后 start_all 容错：单个任务失败记录 warning 日志，其他任务正常启动。
+    """
+    from unittest.mock import patch
+    from xianyu_hunter.modules.scheduler import ResumeBlockedError
+
+    buyer1 = FakeBuyer()
+    buyer2 = FakeBuyer()
+    w1, _, _, _, _ = make_worker(buyer=buyer1)
+    w2, _, _, _, _ = make_worker(buyer=buyer2)
+    w2.task.id = "t2"
+    w2.task.name = "Mac"
+
+    sch = TaskScheduler()
+    await sch.register(w1.task, w1)
+    await sch.register(w2.task, w2)
+
+    # mock _check_resume_allowed：对 t1 抛 ResumeBlockedError，对 t2 通过
+    def _fake_check(task_id: str) -> None:
+        if task_id == "t1":
+            raise ResumeBlockedError("Cookie 已失效，请重新登录后再恢复任务")
+
+    with patch.object(sch, "_check_resume_allowed", side_effect=_fake_check):
+        sch.start_all()
+
+    # t1 启动失败（ResumeBlockedError），t2 应正常启动
+    assert not sch.is_running("t1"), "t1 启动失败，不应运行"
+    assert sch.is_running("t2"), "t2 应正常启动，不受 t1 失败影响"
+
+    # 清理：停止 t2
+    await sch.stop("t2")
+
+
+@pytest.mark.asyncio
 async def test_scheduler_register_duplicate_raises() -> None:
     """重复注册抛错"""
     worker, _, _, _, _ = make_worker()

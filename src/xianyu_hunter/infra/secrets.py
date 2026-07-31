@@ -20,13 +20,22 @@ from pathlib import Path
 # 跨用户/跨机器不可读，正好满足"个人辅助工具"的安全边界。
 try:
     import keyring
+    from keyring.errors import NoKeyringError
     KEYRING_AVAILABLE = True
 except ImportError:
     KEYRING_AVAILABLE = False
+    NoKeyringError = None  # type: ignore[assignment,misc]
 
 from xianyu_hunter.infra.logger import get_logger
 
 logger = get_logger()
+
+# 运行时降级标志：keyring import 成功 ≠ 后端可用
+# 为什么需要这个标志：在受限会话（服务账户/SSH/未启动 Credential Locker 服务）中，
+# keyring 后端为 fail.Keyring，每次调用都会抛 NoKeyringError。
+# 进程生命周期内后端不会变化，所以一旦确认不可用就永久降级到 fallback，
+# 避免每次调用都重复抛错并污染日志。
+_RUNTIME_BROKEN = False
 
 # 服务名（keyring 中的"应用名"分组）
 SERVICE_NAME = "XianyuHunter"
@@ -64,49 +73,77 @@ def ai_preset_key_name(preset_id: str) -> str:
 
 
 def is_available() -> bool:
-    """检查 keyring 在当前系统是否可用"""
-    return KEYRING_AVAILABLE
+    """检查 keyring 在当前系统是否可用（含运行时降级状态）"""
+    return KEYRING_AVAILABLE and not _RUNTIME_BROKEN
 
 
 def set_secret(key: str, value: str) -> None:
     """存储一个密钥到 keyring"""
-    if not KEYRING_AVAILABLE:
-        logger.warning("keyring 不可用，回退到 .env 文件")
+    global _RUNTIME_BROKEN
+    # keyring import 失败 或 运行时已确认后端不可用，直接走 fallback
+    if not KEYRING_AVAILABLE or _RUNTIME_BROKEN:
         _fallback_set(key, value)
         return
     try:
         keyring.set_password(SERVICE_NAME, key, value)
         logger.debug(f"已加密存储 {key}")
+    except NoKeyringError:
+        # 无后端是稳定的运行时事实，永久降级，避免后续重复抛错
+        _RUNTIME_BROKEN = True
+        logger.warning(
+            f"keyring 后端不可用，永久切换到 fallback 模式（key={key}）。"
+            "可能原因：Credential Locker 服务未启动 / 受限会话 / 未安装推荐后端。"
+        )
+        _fallback_set(key, value)
     except Exception:
-        logger.exception(f"keyring 存储失败 {key}: ，回退到 .env")
+        # 其他瞬时异常（如单次凭证损坏）不永久降级，下次仍尝试 keyring
+        logger.warning(f"keyring 存储失败 {key}，临时回退到 fallback", exc_info=True)
         _fallback_set(key, value)
 
 
 def get_secret(key: str) -> str | None:
     """读取密钥"""
-    if not KEYRING_AVAILABLE:
+    global _RUNTIME_BROKEN
+    if not KEYRING_AVAILABLE or _RUNTIME_BROKEN:
         return _fallback_get(key)
     try:
         return keyring.get_password(SERVICE_NAME, key)
+    except NoKeyringError:
+        _RUNTIME_BROKEN = True
+        logger.warning(
+            f"keyring 后端不可用，永久切换到 fallback 模式（key={key}）。"
+            "可能原因：Credential Locker 服务未启动 / 受限会话 / 未安装推荐后端。"
+        )
+        return _fallback_get(key)
     except Exception:
-        logger.exception(f"keyring 读取失败 {key}")
+        logger.warning(f"keyring 读取失败 {key}，临时回退到 fallback", exc_info=True)
         return _fallback_get(key)
 
 
 def delete_secret(key: str) -> None:
     """删除一个密钥"""
-    if KEYRING_AVAILABLE:
-        try:
-            keyring.delete_password(SERVICE_NAME, key)
-            return
-        except Exception:
-            pass
-    _fallback_delete(key)
+    global _RUNTIME_BROKEN
+    if not KEYRING_AVAILABLE or _RUNTIME_BROKEN:
+        _fallback_delete(key)
+        return
+    try:
+        keyring.delete_password(SERVICE_NAME, key)
+    except NoKeyringError:
+        _RUNTIME_BROKEN = True
+        logger.warning(
+            f"keyring 后端不可用，永久切换到 fallback 模式（key={key}）。"
+            "可能原因：Credential Locker 服务未启动 / 受限会话 / 未安装推荐后端。"
+        )
+        _fallback_delete(key)
+    except Exception:
+        # 删除失败静默处理（原逻辑也是 pass）
+        _fallback_delete(key)
 
 
 def list_keys() -> list[str]:
     """列出所有已存密钥（仅名字）"""
-    if KEYRING_AVAILABLE:
+    # 走 get_secret 统一入口：内部会自动处理运行时降级，避免重复抛 NoKeyringError
+    if KEYRING_AVAILABLE and not _RUNTIME_BROKEN:
         try:
             # keyring 没有 list 接口，遍历预定义键
             keys = [

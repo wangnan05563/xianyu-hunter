@@ -2,9 +2,14 @@
 
 端点：
 - GET /api/stats/trend     多指标趋势数据（事件/订单/评分/成功率）
+
+性能优化（P3-1）：
+- 路由改为 async def，避免占用 anyio worker thread
+- DB 查询通过 asyncio.to_thread 卸载到线程池，事件循环可并发处理其他请求
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -13,6 +18,7 @@ from sqlalchemy import select
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.db_models import EventRow, OrderRow, _utcnow
+from xianyu_hunter.web.cache import cached_ttl
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.utils import to_datetime
 
@@ -141,28 +147,14 @@ def _build_trend_metric_rows(
     return None
 
 
-@router.get("/stats/trend")
-def stats_trend(
-    metric: str = "events",
-    range_hours: int = 24,
-    task_id: str | None = None,
-    container: Container = Depends(get_container),
-) -> dict[str, Any]:
-    """P3-UX-07：Dashboard sparkline 趋势数据"""
-    if range_hours not in (24, 72, 168, 720, 2160):
-        range_hours = 24
-    bucket_count = _RANGE_BUCKET_COUNT.get(range_hours, 24)
+def _load_trend_data(engine, container: Container, metric: str, task_id: str | None, cutoff) -> tuple[list[dict], list[dict], str | None]:
+    """加载趋势数据（events 或 orders 之一，按 metric 分发）
 
-    now = _utcnow()
-    cutoff = now - timedelta(hours=range_hours)
-    skipped_reason: str | None = None
-
-    # 性能优化：原实现拉取 list_events(5000) + list_orders(5000) 到内存再过滤，
-    # 现改为 SQL WHERE created_at >= cutoff 直接在数据库端过滤时间窗，
-    # 且仅查询当前 metric 需要的表，避免无谓的全量加载。
+    P3-1：独立 connection，通过 asyncio.to_thread 卸载到线程池
+    """
     events: list[dict] = []
     orders: list[dict] = []
-    engine = container.repo.engine
+    skipped_reason: str | None = None
     with engine.connect() as conn:
         if metric in ("events", "eval_score"):
             events = _load_trend_events(conn, container, task_id, cutoff)
@@ -171,6 +163,40 @@ def stats_trend(
                 # OrderRow 有 task_id 列，原注释"无 task_id 字段"过时，但保留 skipped_reason 行为不变
                 skipped_reason = f"metric={metric} 暂不支持按 task_id 过滤（Order 模型无 task_id 字段）"
             orders = _load_trend_orders(conn, container, cutoff)
+    return events, orders, skipped_reason
+
+
+@cached_ttl(300, key_fn=lambda metric, range_hours, task_id, container: f"trend:{metric}:{range_hours}:{task_id or 'all'}")
+async def _compute_stats_trend(
+    metric: str,
+    range_hours: int,
+    task_id: str | None,
+    container: Container,
+) -> dict[str, Any]:
+    """趋势数据核心计算（被缓存包裹）
+
+    为什么缓存 60s：
+    - sparkline 每小时一个点（24h range），60s 内桶边界不会变化
+    - 趋势查询拉取 5000 条 events/orders，缓存命中后省去全量加载与内存聚合
+    - 同一 metric/range_hours/task_id 组合的并发请求合并为一次实际计算
+
+    P3-UX-07：Dashboard sparkline 趋势数据
+
+    P3-1：路由改 async def，DB 查询通过 asyncio.to_thread 卸载到线程池，
+    事件循环可并发处理其他 stats 请求（如 business-kpi / today 同时到来时）。
+    """
+    if range_hours not in (24, 72, 168, 720, 2160):
+        range_hours = 24
+    bucket_count = _RANGE_BUCKET_COUNT.get(range_hours, 24)
+
+    now = _utcnow()
+    cutoff = now - timedelta(hours=range_hours)
+    engine = container.repo.engine
+
+    # P3-1：DB 查询卸载到线程池，避免阻塞事件循环
+    events, orders, skipped_reason = await asyncio.to_thread(
+        _load_trend_data, engine, container, metric, task_id, cutoff
+    )
 
     rows = _build_trend_metric_rows(metric, events, orders, cutoff)
     if rows is None:
@@ -193,3 +219,17 @@ def stats_trend(
         "summary": summary,
         "skipped_reason": skipped_reason,
     }
+
+
+@router.get("/stats/trend")
+async def stats_trend(
+    metric: str = "events",
+    range_hours: int = 24,
+    task_id: str | None = None,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """Dashboard sparkline 趋势数据（60s 缓存，路由仅做依赖注入和调用）
+
+    P3-1：路由改 async def，DB 查询卸载到线程池
+    """
+    return await _compute_stats_trend(metric, range_hours, task_id, container)

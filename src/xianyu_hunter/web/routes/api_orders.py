@@ -356,11 +356,20 @@ def _parse_takeover_payload(payload: dict[str, Any]) -> tuple[str, str]:
     return item_id, task_id
 
 
-def _ensure_takeover_prerequisites(container: Container) -> None:
+async def _ensure_takeover_prerequisites(container: Container, user_id: str = "default") -> None:
     """前置校验：buyer 注入态 + 闲鱼登录态，任一缺失直接抛 HTTPException
 
     未登录时点击「立即购买」会跳转到登录页，导致找不到「提交订单」按钮，
     浪费一次浏览器自动化流程，因此在抢单前就拦截。
+
+    为什么传 user_id：多用户场景下 cookie 文件按 user_id 隔离
+    （cookies_{user_id}.json），不传 user_id 会默认 "default" 读取错误的
+    cookie 文件，导致"右上角显示有效但抢单报过期"的状态不一致。
+
+    为什么走浏览器内存兜底：JSON 与浏览器内存存在同步延迟
+    （MTOP Set-Cookie 回写 JSON 可能失败/部分回写），只读 JSON 会误判。
+    与 /api/auth/cookie/health 和 cookie_checker 的兜底逻辑对齐，
+    避免不同入口校验深度不一致（meta-rule #101 多写入路径状态一致性）。
     """
     # 检查 buyer 是否注入：Web 进程默认 with_browser=False，buyer 为 None
     if container.buyer is None:
@@ -372,12 +381,108 @@ def _ensure_takeover_prerequisites(container: Container) -> None:
     from xianyu_hunter.web.services.cookie_store import get_cookie_store
 
     cookie_store = get_cookie_store()
-    cookie_store.invalidate_cache()
-    if not cookie_store.has_valid_cookies():
-        raise HTTPException(
-            status_code=403,
-            detail="闲鱼登录已过期，请先在「Cookie 注入」页面重新登录闲鱼",
+    cookie_store.invalidate_cache(user_id)
+
+    # 第一层：严格校验（含过期检查），与 /cookie/health 同源
+    is_valid, reason = cookie_store.validate_cookies_with_expiry(user_id=user_id)
+    if is_valid:
+        return
+
+    # 第二层：_m_h5_tk 过期时，尝试从浏览器内存刷新回写 JSON（与 /cookie/health 一致）
+    # 为什么只刷新 m5tk：JSON 与浏览器内存最常见的不同步是 _m_h5_tk，
+    # MTOP API 响应的 Set-Cookie 会实时更新浏览器内存 token 但回写 JSON 可能失败
+    if "cookie_expired:_m_h5_tk" in reason or "cookie_expired:_m_h5_tk_enc" in reason:
+        from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+
+        try:
+            if container.browser:
+                cookies = await container.browser.get_cookies()
+                updates: dict[str, str] = {}
+                for c in cookies:
+                    name = c.get("name", "")
+                    value = c.get("value", "")
+                    if not value:
+                        continue
+                    # _m_h5_tk 需未过期；_m_h5_tk_enc 是配套加密 token，无 timestamp 无法判过期，直接回写
+                    if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
+                        updates[name] = value
+                if updates and cookie_store.update_cookie_values(updates, user_id=user_id):
+                    cookie_store.invalidate_cache(user_id)
+                    is_valid, _ = cookie_store.validate_cookies_with_expiry(user_id=user_id)
+                    if is_valid:
+                        return
+        except Exception as e:
+            from loguru import logger
+            logger.debug(f"[ManualTakeover] 从浏览器内存刷新 _m_h5_tk 失败: {e}")
+
+    # 第三层：浏览器内存兜底（与 cookie_checker 的 _browser_cookies_fallback 一致）
+    # 为什么需要：JSON 完全为空或与浏览器内存严重不同步时，浏览器内存仍是
+    # 实时搜索/采集实际使用的数据源，以它为兜底标准能与实际行为对齐
+    if await _browser_cookies_fallback_for_takeover(container):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail="闲鱼登录已过期，请先在「Cookie 注入」页面重新登录闲鱼",
+    )
+
+
+async def _browser_cookies_fallback_for_takeover(container: Container) -> bool:
+    """浏览器内存兜底校验：JSON 判定无效时复核浏览器内存 Cookie
+
+    与 api_anticrawl._browser_cookies_fallback 的判定标准对齐：
+    - _m_h5_tk 存在、有值、未过期
+    - identity 层至少一个 cookie 存在
+    - 关键 cookie（identity + session 层）的 expires 未过期
+
+    为什么独立实现而非复用 api_anticrawl._browser_cookies_fallback：
+    避免跨路由模块依赖（api_orders → api_anticrawl），且抢单场景无需
+    collector 会话失效标志处理等业务逻辑，保持兜底校验最小化。
+    """
+    try:
+        if not container.browser:
+            return False
+        cookies = await container.browser.get_cookies()
+        if not cookies:
+            return False
+
+        from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+        from xianyu_hunter.modules.cookie_rotator import LAYER_DEFINITIONS, CookieLayer
+
+        # 1. _m_h5_tk 必须存在、有值、未过期
+        has_valid_m5tk = any(
+            c.get("name") == "_m_h5_tk" and c.get("value")
+            and not is_m5tk_expired(c.get("value", ""))
+            for c in cookies
         )
+        if not has_valid_m5tk:
+            return False
+
+        names = {c.get("name", "") for c in cookies}
+
+        # 2. identity 层至少一个
+        identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
+        if not (identity_cookies & names):
+            return False
+
+        # 3. 关键 cookie（identity + session 层）的 expires 未过期
+        key_cookie_names = identity_cookies | LAYER_DEFINITIONS[CookieLayer.SESSION].cookies
+        import time as _time
+        now = _time.time()
+        for c in cookies:
+            if c.get("name") not in key_cookie_names:
+                continue
+            expires = c.get("expires", -1)
+            if expires and expires > 0 and expires < now:
+                return False
+
+        from loguru import logger
+        logger.info("[ManualTakeover] JSON 判定无效，但浏览器内存 cookie 有效（兜底通过）")
+        return True
+    except Exception as e:
+        from loguru import logger
+        logger.debug(f"[ManualTakeover] 浏览器内存兜底检查失败: {e}")
+        return False
 
 
 def _resolve_takeover_item(
@@ -461,10 +566,14 @@ async def manual_takeover(
     from loguru import logger
 
     item_id, task_id = _parse_takeover_payload(payload)
-    _ensure_takeover_prerequisites(container)
 
-    # 多用户隔离：写入操作用 "default" 兜底
+    # 多用户隔离：从 request.state 读取中间件注入的当前用户 ID
+    # 为什么提前到 _ensure_takeover_prerequisites 之前：Cookie 校验需要按 user_id
+    # 读取对应的 cookies_{user_id}.json，否则多用户场景下会读取错误的 cookie 文件
     user_id = getattr(request.state, "user_id", "default")
+
+    await _ensure_takeover_prerequisites(container, user_id=user_id)
+
     expected_price, task_id = _resolve_takeover_item(container, item_id, task_id, user_id=user_id)
 
     # 幂等检查：避免重复抢单

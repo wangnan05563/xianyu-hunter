@@ -127,6 +127,37 @@ def _compute_idle_gaps(buckets: list[dict[str, Any]], idle_gap_minutes: int) -> 
     return idle_gaps
 
 
+def _sync_score_value(event: dict) -> None:
+    """从 payload JSON 中提取 score 同步写入 score_value 列（P1-3 优化）
+
+    为什么独立：save_event 与 upsert_eval_event 两条写入路径都需要相同的列化逻辑，
+    提取后避免重复实现。仅 eval.scored 类型且 payload 含 score 字段时写入；
+    其他事件保持 score_value=None，不影响联合索引选择性。
+
+    幂等：event 已显式设置 score_value 时跳过，允许调用方覆盖。
+    """
+    # 已显式设置则不覆盖（保留调用方控制权）
+    if "score_value" in event:
+        return
+    if event.get("type") != "eval.scored":
+        return
+    payload_raw = event.get("payload")
+    if not payload_raw:
+        return
+    # payload 可能是 str（已序列化）或 dict（调用方未序列化）
+    if isinstance(payload_raw, (dict,)):
+        score = payload_raw.get("score")
+    else:
+        try:
+            payload = json.loads(payload_raw)
+            score = payload.get("score") if isinstance(payload, dict) else None
+        except (json.JSONDecodeError, TypeError):
+            return
+    # 仅写入数值型 score；非数值（如 None / 字符串）保持 NULL
+    if isinstance(score, (int, float)):
+        event["score_value"] = float(score)
+
+
 class EventsMixin:
     """Events 领域的 Repository 方法"""
 
@@ -138,6 +169,8 @@ class EventsMixin:
             rid = get_request_id()
             if rid:
                 event["request_id"] = rid
+        # P1-3：eval.scored 事件同步写入 score_value 列，避免 json_extract 全表扫描
+        _sync_score_value(event)
         with self.engine.begin() as conn:
             result = conn.execute(EventRow.__table__.insert().values(**event))
             return result.inserted_primary_key[0]
@@ -169,6 +202,8 @@ class EventsMixin:
         # 让 INSERT 路径自动写入 EventRow.user_id 列
         if user_id is not None and "user_id" not in event:
             event["user_id"] = user_id
+        # P1-3：同步提取 score 到 score_value 列（仅 eval.scored 类型有效）
+        _sync_score_value(event)
         with self.engine.begin() as conn:
             # 先删除已有的相同 (task_id, item_id, type) eval.scored 记录
             # 附加 user_id 过滤防止跨用户误删（与 list_events 的 user_id 隔离语义一致）

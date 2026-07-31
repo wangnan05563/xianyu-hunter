@@ -515,18 +515,23 @@ class BrowserManager:
         if cleaned:
             logger.info("Removed {} stale lock files from {}", cleaned, self.user_data_dir)
 
-    async def is_alive(self) -> bool:  # NOSONAR S7503:async 为接口一致性(调用方均 await),内部同步访问 pages 属性
+    async def is_alive(self) -> bool:
         """检查浏览器是否还活着
 
-        通过访问 context.pages 触发底层 CDP 请求验证连接可用性。
-        不要求 pages 非空：刚重启的浏览器可能没有页面，但连接仍可用。
+        通过执行轻量 CDP 调用（cookies）验证底层连接可用性。
+        不要求 cookies 非空：刚重启的浏览器可能没有 Cookie，但连接仍可用。
+
+        为什么不用 context.pages：pages 是同步 property，返回内部缓存的页面对象列表，
+        不会触发 CDP 请求。连接已断开时 pages 仍可访问并返回缓存列表，
+        导致 is_alive 错误返回 True，ensure_alive 不触发重启，后续 add_cookies/get_cookies
+        反复抛 "Connection closed while reading from the driver"（线上实测 bug）。
         """
         if self._context is None:
             return False
         try:
-            # 访问 pages 属性会触发底层 CDP 请求，
-            # 若连接已断开会抛出异常（Connection closed while reading from the driver）
-            _ = self._context.pages
+            # cookies() 是 async CDP 调用（Network.getAllCookies），
+            # 连接已断开时会抛异常（Connection closed while reading from the driver）
+            await self._context.cookies()
             return True
         except Exception:
             return False

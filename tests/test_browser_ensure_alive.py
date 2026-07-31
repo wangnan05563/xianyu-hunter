@@ -119,21 +119,45 @@ class TestIsAlive:
         assert await manager.is_alive() is False
 
     @pytest.mark.asyncio
-    async def test_is_alive_returns_true_when_pages_accessible(self, manager):
-        """context.pages 可访问时返回 True（不要求 pages 非空）"""
-        # 模拟 context：pages 属性返回空列表（刚重启的浏览器）
+    async def test_is_alive_returns_true_when_cookies_accessible(self, manager):
+        """context.cookies() 可调用时返回 True（不要求 cookies 非空）
+
+        覆盖刚重启浏览器场景：连接可用但无 Cookie。
+        """
         mock_context = MagicMock()
-        mock_context.pages = []
+        mock_context.cookies = AsyncMock(return_value=[])
         manager._context = mock_context
 
         assert await manager.is_alive() is True
+        mock_context.cookies.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_is_alive_returns_false_when_pages_raises(self, manager):
-        """context.pages 抛异常（连接断开）时返回 False"""
+    async def test_is_alive_returns_false_when_cookies_raises(self, manager):
+        """context.cookies() 抛异常（连接断开）时返回 False"""
         mock_context = MagicMock()
-        type(mock_context).pages = property(lambda _: (_ for _ in ()).throw(
-            RuntimeError("Connection closed while reading from the driver")
+        mock_context.cookies = AsyncMock(side_effect=RuntimeError(
+            "Connection closed while reading from the driver"
+        ))
+        manager._context = mock_context
+
+        assert await manager.is_alive() is False
+        mock_context.cookies.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_is_alive_detects_closed_connection_when_pages_cached(self, manager):
+        """回归测试：pages 同步属性可访问但底层连接已断开时必须返回 False
+
+        复现线上 bug：旧实现用 self._context.pages（同步 property）检测连接，
+        但 pages 返回内部缓存列表，连接断开时不抛异常，
+        导致 ensure_alive 走快速路径不触发重启，后续 add_cookies 抛
+        "Connection closed while reading from the driver"，实时搜索报 503。
+        """
+        mock_context = MagicMock()
+        # pages 仍可访问（返回缓存的空列表，不抛异常）
+        mock_context.pages = []
+        # 但 cookies() 抛 Connection closed，证明底层 CDP 通道已断
+        mock_context.cookies = AsyncMock(side_effect=RuntimeError(
+            "Connection closed while reading from the driver"
         ))
         manager._context = mock_context
 

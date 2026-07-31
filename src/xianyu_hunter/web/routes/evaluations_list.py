@@ -936,18 +936,67 @@ def _init_empty_condition(r: dict) -> None:
     r["has_repair"] = False
 
 
+# 否定词前缀：修饰负面关键词时表示该情况不存在（如"无划痕磕碰"中的"无"）
+# 为什么需要否定词感知：朴素子串匹配会把"无划痕"中的"划痕"误判为 worn 类别命中
+_NEGATION_PREFIXES = ("无", "没有", "不含", "未见", "没")
+
+# 需要否定词感知的类别：仅负面类别做否定检测，避免误伤正面/中性关键词
+# 例如 completeness_missing 类别本身就有"无包装"这类关键词，不应再被否定逻辑处理
+_NEGATION_AWARE_CATEGORIES = {"used", "worn", "broken"}
+
+# 否定词与关键词之间的断句标点：标点会断开否定关系
+# 例如"无划痕、磕碰"中"磕碰"前的"、"断开了"无"的修饰范围
+_NEGATION_BREAKING_PUNCTS = "，。；、,.;！？!?"
+
+
+def _is_negated(text: str, label: str, label_pos: int) -> bool:
+    """检查关键词在文本中是否被否定词修饰
+
+    通过检查关键词前 10 个字符窗口内是否包含否定词来判断。
+    窗口内若存在断句标点，则只看最后一个断句标点之后的内容，
+    因为标点会断开否定关系（如"无划痕、磕碰"中"磕碰"未被否定）。
+
+    为什么窗口取 10 字符：常见否定表达如"没有任何"、"无任何"加上被修饰词
+    总长不超过 10 字符，过短会漏判（如"无任何划痕"中"划痕"前 5 字符为"无任何"，
+    但"没有划痕和磕碰"中"磕碰"前 5 字符为"划痕和"，需 10 字符窗口才能覆盖"没有"）。
+    """
+    window_start = max(0, label_pos - 10)
+    prefix = text[window_start:label_pos]
+    # 找到窗口内最后一个断句标点，只看其之后的内容
+    last_punct_idx = -1
+    for punct in _NEGATION_BREAKING_PUNCTS:
+        idx = prefix.rfind(punct)
+        if idx > last_punct_idx:
+            last_punct_idx = idx
+    if last_punct_idx != -1:
+        prefix = prefix[last_punct_idx + 1:]
+    # 在剩余前缀中查找否定词
+    return any(neg in prefix for neg in _NEGATION_PREFIXES)
+
+
 def _scan_condition_keywords(text: str) -> tuple[list[dict], int]:
     """扫描文本中的成色关键词，返回 (tags, score)
 
-    每个 category 只算一次（避免同一类别多关键词重复加分）"""
+    每个 category 只算一次（避免同一类别多关键词重复加分）。
+
+    否定词感知：负面类别（used/worn/broken）的关键词若被否定词修饰
+    （如"无划痕磕碰"中的"磕碰"），不计为命中，避免误判为明显使用。
+    同一关键词在文本中多次出现时，只要有一次未被否定即视为命中。
+    """
     tags: list[dict] = []
     score = 0
     for category, info in _CONDITION_KEYWORDS.items():
         for label in info["labels"]:
-            if label in text:
+            pos = text.find(label)
+            matched = False
+            while pos != -1 and not matched:
+                # 负面类别需检查否定词修饰；被否定的出现位置跳过，继续查找下一次出现
+                if category in _NEGATION_AWARE_CATEGORIES and _is_negated(text, label, pos):
+                    pos = text.find(label, pos + len(label))
+                    continue
                 tags.append({"category": category, "label": label})
                 score += info["score_bonus"]
-                break
+                matched = True
     return tags, score
 
 

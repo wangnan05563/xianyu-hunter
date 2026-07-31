@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -44,3 +45,56 @@ def test_is_available_returns_bool() -> None:
     """is_available 返回布尔"""
     result = secrets.is_available()
     assert isinstance(result, bool)
+
+
+def test_runtime_broken_after_no_keyring_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """运行时抛 NoKeyringError 后应永久降级到 fallback
+
+    为什么需要这个测试：keyring import 成功 ≠ 后端可用。在受限会话中
+    （服务账户/SSH/Credential Locker 未启动），每次调用都会抛 NoKeyringError，
+    必须一次性切换到 fallback 模式，避免重复抛错污染日志。
+    """
+    # 重置运行时降级标志
+    monkeypatch.setattr(secrets, "_RUNTIME_BROKEN", False)
+    monkeypatch.setattr(secrets, "KEYRING_AVAILABLE", True)
+    monkeypatch.setattr(secrets, "_FALLBACK_FILE", tmp_path / "secrets.json")
+
+    # mock keyring.get_password 抛 NoKeyringError
+    from keyring.errors import NoKeyringError
+
+    mock_keyring = MagicMock()
+    mock_keyring.get_password.side_effect = NoKeyringError("no backend")
+    monkeypatch.setattr(secrets, "keyring", mock_keyring)
+
+    # 首次调用：应触发降级
+    assert secrets._RUNTIME_BROKEN is False
+    result = secrets.get_secret("openai_api_key")
+    assert result is None  # fallback 文件不存在，返回 None
+    assert secrets._RUNTIME_BROKEN is True
+    assert secrets.is_available() is False
+
+    # 第二次调用：keyring 不应被再次调用（直接走 fallback）
+    mock_keyring.get_password.reset_mock()
+    secrets.get_secret("embedding_api_key")
+    mock_keyring.get_password.assert_not_called()
+
+
+def test_runtime_broken_skips_keyring_on_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """_RUNTIME_BROKEN=True 时 set_secret 应直接走 fallback"""
+    monkeypatch.setattr(secrets, "_RUNTIME_BROKEN", True)
+    monkeypatch.setattr(secrets, "KEYRING_AVAILABLE", True)
+    monkeypatch.setattr(secrets, "_FALLBACK_FILE", tmp_path / "secrets.json")
+
+    mock_keyring = MagicMock()
+    monkeypatch.setattr(secrets, "keyring", mock_keyring)
+
+    secrets.set_secret("test_key", "test_value")
+
+    # keyring.set_password 不应被调用
+    mock_keyring.set_password.assert_not_called()
+    # fallback 文件应包含值
+    assert secrets.get_secret("test_key") == "test_value"
