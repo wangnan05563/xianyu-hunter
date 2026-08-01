@@ -292,6 +292,12 @@ if (Test-Path "dist\xianyu-hunter") {
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 Write-Host "  PyInstaller 打包完成"
 
+# ============== 4.5 修复 PyInstaller 收集的 sentence_transformers 包完整性 ==============
+Write-Host "`n[4.5] 修复 sentence_transformers 包完整性..." -ForegroundColor Yellow
+& .venv-build\Scripts\python "$PSScriptRoot\sync-sentence-transformers.py"
+if ($LASTEXITCODE -ne 0) { Write-Host "  [WARN] sentence_transformers 修复失败，继续构建" -ForegroundColor Yellow }
+else { Write-Host "  sentence_transformers 包完整性修复完成" -ForegroundColor Green }
+
 # ============== 5. 复制外置资源 ==============
 Write-Host "`n[5/6] 复制外置资源..." -ForegroundColor Yellow
 

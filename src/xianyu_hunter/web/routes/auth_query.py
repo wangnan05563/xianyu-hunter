@@ -19,7 +19,7 @@ from sqlalchemy import text as sa_text
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.yaml_config import get_config
-from xianyu_hunter.paths import get_browser_data_dir
+from xianyu_hunter.paths import get_browser_data_dir, get_data_dir
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.services.auth_manager import get_auth_manager
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
@@ -74,7 +74,24 @@ def _check_cookies(user_id: str = "default") -> bool:
     """
     store = get_cookie_store()
     store.invalidate_cache(user_id)
-    return store.has_valid_cookies(user_id=user_id)
+    if store.has_valid_cookies(user_id=user_id):
+        return True
+    # 回退：检查 last_login_cookies.json（auth_helper 写入的公共 cookie 文件）
+    # 原因：auth_helper 子进程仅写 last_login_cookies.json，不写 cookies_{user_id}.json
+    # fallback: check last_login_cookies.json for all users
+    last_login = get_data_dir() / 'last_login_cookies.json'
+    if last_login.exists():
+        try:
+            import json as _json
+            data = _json.loads(last_login.read_text(encoding='utf-8'))
+            cookies = data if isinstance(data, list) else data.get('cookies', [])
+            if cookies:
+                names = {c['name'] for c in cookies}
+                if _KEY_COOKIES & names:
+                    return True
+        except Exception:
+            pass
+    return False
 
 
 def _sync_nick_to_users_table(user_id: str, nick: str) -> tuple[str, str]:
@@ -552,3 +569,6 @@ def logout() -> JSONResponse:
     })
     resp.delete_cookie(key="xh_token", path="/", domain=None)
     return resp
+134300469763651521
+
+# touch
