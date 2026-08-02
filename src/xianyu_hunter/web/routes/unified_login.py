@@ -35,11 +35,12 @@ from xianyu_hunter.web.routes.auth_helpers import make_auth_response
 from xianyu_hunter.web.services.cookie_store import get_cookie_store
 # 打包后 __file__ 在 _internal/ 下，parents[4] 会指错位置；统一走 paths.get_app_dir()
 # 开发模式返回项目根 CWD，打包模式返回 exe 同级目录（安装时复制 scripts/ 子进程脚本）
-from xianyu_hunter.paths import get_app_dir
+from xianyu_hunter.paths import get_app_dir, get_data_dir
 
 logger = logging.getLogger(__name__)
 
 _REPO = get_app_dir()
+_DATA_DIR = get_data_dir()
 _BROWSER_LOGIN_SCRIPT = _REPO / "scripts" / "browser_login.py"
 _AUTH_HELPER_SCRIPT = _REPO / "scripts" / "auth_helper.py"
 _TERMINAL_STATUSES = {"success", "cancelled", "error", "timeout"}
@@ -393,16 +394,15 @@ def _finalize_multi_user_login() -> str | None:
         # 将 Cookie 从 default 迁移到 user_id 维度的独立文件
         store.export_cookies(cookies, method="login", user_id=user_id)
 
-        # 迁移完成后清理 default 文件，避免多用户串号
-        # 为什么必须清理：若不清理，default 文件仍保留真实用户 Cookie，
-        # has_valid_cookies("default") 仍返回 True，下次登录子进程会覆写
-        # default 文件，但本次用户的 Cookie 仍残留在 default 中造成串号
-        default_path = _cookie_json_path("default")
+        # ?? default ?????remote URL ???? xh_token cookie?
+        # /api/auth/me ? /api/auth/cookie/health ???? default ?????
+        # ??????????? no_cookie_data??????????
+        # ????????? xh_token ?????default ????????
         try:
-            default_path.unlink(missing_ok=True)
+            store.export_cookies(cookies, method="login", user_id="default")
+            store.invalidate_cache("default")
         except OSError as e:
-            logger.warning("清理 default Cookie 文件失败: %s", e)
-        store.invalidate_cache("default")
+            logger.warning("?? default Cookie ????: %s", e)
 
         with _session_lock:
             _session["session_token"] = session_token
@@ -412,7 +412,7 @@ def _finalize_multi_user_login() -> str | None:
         return session_token
     except Exception as e:
         # 降级为单用户模式：登录主流程已成功，不应因多用户接入失败而回滚
-        logger.error("多用户接入异常，降级为单用户模式: %s", e)
+        logger.error("多用户接入异常，降级为单用户模式: %s", e, exc_info=True)
         # 重置幂等标志：异常退出时未真正完成多用户接入，
         # 若保持 True，后续调用在第 372-373 行直接返回 _session.get("session_token")
         # 即 None，导致永久降级为单用户模式且无法自愈
@@ -536,6 +536,7 @@ def _start_browser_login() -> JSONResponse:
             _BROWSER_LOGIN_SCRIPT,
             "--status-file", str(status_file),
             "--timeout", "300",
+            "--data-dir", str(_DATA_DIR),
         )
         proc = subprocess.Popen(
             cmd,
@@ -954,3 +955,78 @@ def cancel_login() -> dict:
         _session["qr_png_b64"] = None
 
     return {"ok": True, "message": "已取消"}
+
+# ============================================================
+# 启动时会话恢复：供 startup.py 调用 + 前端轮询端点
+# ============================================================
+def _restore_session_on_startup() -> dict | None:
+    """启动时恢复已登录会话：从 Cookie 文件识别用户 + 签发 session_token
+
+    为什么需要：进程重启后 _session 内存状态丢失，但数据库中的用户记录和
+    Cookie 文件仍然有效。本函数读取 Cookie → 识别用户 → 签发新 token → 写入
+    内存 _session，使前端无需重新登录即可继续使用。
+
+    注意：session_token 是随机生成的，不能从旧进程恢复，只能重新签发。
+    前端通过 GET /api/auth/restore-session 获取新 token 并更新认证状态。
+
+    Returns:
+        dict 含 session_token + user_id，或 None（无有效 Cookie 时跳过）
+    """
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+        from loguru import logger
+
+        store = get_cookie_store()
+        # 先检查 default 文件（兼容旧版和登录子进程写入路径）
+        data = store._read_json("default")
+        cookies = None
+        if data and data.get("cookies"):
+            cookies = data["cookies"]
+        else:
+            # 检查各用户的独立文件
+            active_uid = get_user_manager().get_active_user_id()
+            if active_uid and active_uid != "default":
+                store.invalidate_cache(active_uid)
+                data = store._read_json(active_uid)
+                if data and data.get("cookies"):
+                    cookies = data["cookies"]
+
+        if not cookies:
+            logger.info("启动会话恢复：无有效 Cookie 文件，跳过")
+            return None
+
+        mgr = get_user_manager()
+        user_id = mgr.identify_or_create(cookies)
+        session_token = mgr.issue_session(user_id)
+
+        # 更新内存 session（与登录完成时保持一致）
+        with _session_lock:
+            _session["status"] = "success"
+            _session["session_token"] = session_token
+            _session["current_user_id"] = user_id
+            _session["multi_user_finalized"] = True
+            _session["cookies_injected"] = True
+
+        logger.info("启动会话恢复成功: user_id=%s", user_id)
+        return {"session_token": session_token, "user_id": user_id}
+    except Exception as e:
+        logger.warning("启动会话恢复失败: %s", e, exc_info=True)
+        return None
+
+
+@router.get("/restore-session")
+def restore_session() -> dict:
+    """前端启动时调用：恢复已登录会话，返回 session_token
+
+    与 /api/auth/me 不同：本端点无需认证（在 PUBLIC_PREFIXES 中），
+    专门用于进程重启后让前端自动恢复认证态，避免用户重复登录。
+    """
+    result = _restore_session_on_startup()
+    if result:
+        return {
+            "ok": True,
+            "restored": True,
+            "session_token": result["session_token"],
+            "user_id": result["user_id"],
+        }
+    return {"ok": True, "restored": False, "session_token": None}

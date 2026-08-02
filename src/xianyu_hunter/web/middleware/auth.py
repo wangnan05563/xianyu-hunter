@@ -22,6 +22,7 @@ PUBLIC_PREFIXES = (
     "/api/auth/login", "/api/auth/verify",
     "/api/auth/cookie",          # 手动 Cookie 注入（未登录时也需要调用）
     "/api/auth/me",              # 登录状态检测（未登录时返回 logged_in=false）
+    "/api/auth/restore-session",  # ???????????????????
     "/api/auth/verify-session",  # 会话有效性验证
     "/api/auth/import-from-browser",  # 从系统浏览器导入 Cookie（未登录时也需要调用）
     "/api/auth/browser-login",   # Playwright 浏览器登录（推荐方式）

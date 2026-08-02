@@ -11,6 +11,8 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from xianyu_hunter.web.routes.unified_login import _restore_session_on_startup
+
 
 # 调度器后台任务引用（用于 shutdown 时优雅停止）
 _scheduler_task: asyncio.Task | None = None
@@ -842,6 +844,7 @@ def setup_startup_hooks(app: FastAPI) -> None:
 
         # container 必须先初始化，避免迁移失败时后续调度器启动引用未绑定变量
         container = get_container()
+        _restore_session_on_startup()
         try:
             run_migrations(container)
         except Exception as e:  # noqa: BLE001
