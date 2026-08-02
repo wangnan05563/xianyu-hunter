@@ -288,6 +288,12 @@ Write-Host "  预计耗时：约 1-3 分钟" -ForegroundColor DarkGray
 if (Test-Path "dist\xianyu-hunter") {
     Remove-Item -Recurse -Force "dist\xianyu-hunter"
 }
+# 清理 src/ 下所有 __pycache__ 目录，防止 PyInstaller 使用过期的 .pyc 字节码
+Get-ChildItem -Path "src" -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | ForEach-Object {
+    Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "  清理过期 pyc: " + $_.FullName -ForegroundColor DarkGray
+}
+Write-Host "  __pycache__ 清理完成" -ForegroundColor DarkGray
 & .venv-build\Scripts\pyinstaller xianyu-hunter.spec --noconfirm
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 Write-Host "  PyInstaller 打包完成"
