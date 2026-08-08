@@ -67,14 +67,23 @@ function New-BuildVenv {
 
 function Test-BuildPip {
     if (-not (Test-Path $buildPython)) { return $false }
-    & $buildPython -m pip --version *> $null
-    return ($LASTEXITCODE -eq 0)
+    try {
+        & $buildPython -m pip --version *> $null
+        return ($LASTEXITCODE -eq 0)
+    } catch {
+        # base Python broken (e.g. missing stdlib) -> return false so caller rebuilds instead of aborting
+        return $false
+    }
 }
 
 function Repair-BuildPip {
     if (-not (Test-Path $buildPython)) { return $false }
     Write-Host "  [WARN] build venv 中 pip 不可用，尝试 ensurepip 修复..." -ForegroundColor Yellow
-    & $buildPython -m ensurepip --upgrade *> $null
+    try {
+        & $buildPython -m ensurepip --upgrade *> $null
+    } catch {
+        return $false
+    }
     if ($LASTEXITCODE -ne 0) { return $false }
     return (Test-BuildPip)
 }
@@ -286,7 +295,7 @@ Write-Host "`n[4/6] 运行 PyInstaller 打包..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-3 分钟" -ForegroundColor DarkGray
 # 清理旧产物（dist 每次重建，但缓存独立在 .cache/ 不受影响）
 if (Test-Path "dist\xianyu-hunter") {
-    Remove-Item -Recurse -Force "dist\xianyu-hunter"
+    Remove-Item -Recurse -Force "dist\xianyu-hunter" -ErrorAction SilentlyContinue
 }
 # 清理 src/ 下所有 __pycache__ 目录，防止 PyInstaller 使用过期的 .pyc 字节码
 Get-ChildItem -Path "src" -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | ForEach-Object {
@@ -518,6 +527,8 @@ AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\XianyuHunter
 DefaultGroupName=XianyuHunter
 UninstallDisplayIcon={app}\xianyu-hunter.exe
+; Reuse the app icon so the installer and uninstaller don't show the default Inno Setup icon
+SetupIconFile=assets\xianyu-hunter.ico
 OutputDir=dist
 OutputBaseFilename=XianyuHunter-Setup-v{#MyAppVersion}
 Compression=lzma2

@@ -1,0 +1,1966 @@
+{
+  "description": "闲鱼猎人技术栈版本、路径与硬约束配置",
+  "_ref": "所有版本号与路径均从 pyproject.toml、package.json、Dockerfile、docs 实测提取，无硬编码推测",
+  "project": {
+    "name": "XianyuHunter",
+    "chineseName": "闲鱼猎人",
+    "version": "0.3.0",
+    "versioning": "Semantic Versioning 2.0.0",
+    "versionSource": "src/xianyu_hunter/__init__.py::__version__",
+    "versionSync": "scripts/bump_version.py 同步到 pyproject.toml、_build_info.py、CHANGELOG.md"
+  },
+  "paths": {
+    "projectRoot": "d:\\code\\otherProjects\\17_xianyu",
+    "backend": {
+      "source": "src/xianyu_hunter",
+      "entry": "src/xianyu_hunter/__main__.py",
+      "webApp": "src/xianyu_hunter/web/app.py",
+      "container": "src/xianyu_hunter/container.py",
+      "startup": "src/xianyu_hunter/web/startup.py",
+      "domain": "src/xianyu_hunter/domain",
+      "infra": "src/xianyu_hunter/infra",
+      "modules": "src/xianyu_hunter/modules",
+      "webRoutes": "src/xianyu_hunter/web/routes",
+      "webMiddleware": "src/xianyu_hunter/web/middleware",
+      "webServices": "src/xianyu_hunter/web/services",
+      "dbModels": "src/xianyu_hunter/infra/db_models.py",
+      "repositoryBase": "src/xianyu_hunter/infra/repository_base.py",
+      "repositoryFacade": "src/xianyu_hunter/infra/repository.py",
+      "yamlConfig": "src/xianyu_hunter/infra/yaml_config.py",
+      "eventBus": "src/xianyu_hunter/infra/event_bus.py",
+      "logger": "src/xianyu_hunter/infra/logger.py",
+      "secrets": "src/xianyu_hunter/infra/secrets.py",
+      "requestContext": "src/xianyu_hunter/infra/request_context.py"
+    },
+    "frontend": {
+      "source": "frontend/src",
+      "entry": "frontend/src/main.tsx",
+      "app": "frontend/src/App.tsx",
+      "api": "frontend/src/api",
+      "apiClient": "frontend/src/api/client.ts",
+      "apiTypes": "frontend/src/api/types.ts",
+      "apiIndex": "frontend/src/api/index.ts",
+      "components": "frontend/src/components",
+      "sheetWorkspace": "frontend/src/components/SheetWorkspace",
+      "mainLayout": "frontend/src/components/layout/MainLayout.tsx",
+      "sheetRegistry": "frontend/src/components/SheetWorkspace/sheetRegistry.tsx",
+      "hooks": "frontend/src/hooks",
+      "pages": "frontend/src/pages",
+      "stores": "frontend/src/stores",
+      "utils": "frontend/src/utils",
+      "constants": "frontend/src/constants",
+      "contexts": "frontend/src/contexts"
+    },
+    "config": {
+      "env": ".env",
+      "envExample": ".env.example",
+      "main": "config/config.yaml",
+      "mainExample": "config/config.example.yaml",
+      "eval": "config/eval.yaml",
+      "evalExample": "config/eval.example.yaml"
+    },
+    "data": {
+      "root": "data",
+      "logs": "data/logs",
+      "chromadb": "data/chromadb",
+      "cookiesPattern": "data/cookies_{user_id}.json",
+      "sqlite": "data/xianyu.db",
+      "prompts": "data/prompts"
+    },
+    "scripts": {
+      "root": "scripts",
+      "automation": "scripts/automation.ps1",
+      "setupEnv": "scripts/setup-env.ps1",
+      "startService": "scripts/启动服务.bat",
+      "stopService": "scripts/停止服务.bat",
+      "rebuild": "scripts/重新构建.bat",
+      "silentStart": "scripts/静默启动.vbs",
+      "buildInfo": "scripts/build_info.py",
+      "buildKb": "scripts/build_kb.py",
+      "bumpVersion": "scripts/bump_version.py",
+      "sonarFetch": "scripts/sonar_fetch.py",
+      "sonarCritical": "scripts/sonar_critical.py"
+    },
+    "tests": {
+      "backend": "tests",
+      "backendConftest": "tests/conftest.py",
+      "frontendSetup": "frontend/src/test-setup.ts",
+      "vitestConfig": "frontend/vitest.config.ts"
+    },
+    "docs": {
+      "root": "docs",
+      "standards": "docs/standards",
+      "directoryStructure": "docs/standards/directory-structure.md",
+      "deployment": "docs/standards/deployment.md",
+      "michelinDesignSystem": "docs/standards/michelin-design-system.md",
+      "designDoc": "docs/概要设计文档.md"
+    },
+    "deploy": {
+      "dockerfile": "Dockerfile",
+      "dockerCompose": "docker-compose.yml",
+      "sonarProject": "sonar-project.properties",
+      "preCommit": ".pre-commit-config.yaml"
+    }
+  },
+  "backend": {
+    "python": {
+      "requires": ">=3.10",
+      "dockerImage": "python:3.12-slim",
+      "devEnvironment": "3.14",
+      "sonarVersion": "3.10"
+    },
+    "frameworks": {
+      "fastapi": "0.136.3",
+      "uvicorn": "0.48.0",
+      "typer": "0.26.6",
+      "pydantic": "2.13.4",
+      "pydantic-settings": "2.14.1",
+      "sqlalchemy": "2.0.50",
+      "aiosqlite": "0.22.1",
+      "playwright": "1.60.0",
+      "httpx": "0.28.1",
+      "aiohttp": "3.14.0",
+      "apscheduler": "3.11.2",
+      "loguru": "0.7.3",
+      "keyring": "25.7.0",
+      "tenacity": "9.1.4",
+      "cryptography": "49.0.0",
+      "chromadb": ">=1.0.0"
+    },
+    "test": {
+      "pytest": "9.0.3",
+      "pytest-asyncio": "1.4.0",
+      "asyncioMode": "auto",
+      "testpaths": "tests",
+      "pythonpath": "src"
+    },
+    "build": {
+      "buildSystem": "setuptools>=68.0",
+      "buildBackend": "setuptools.build_meta",
+      "packageDiscovery": "src layout (packages.find where=src)",
+      "packageData": "xianyu_hunter = [web/static/**/*]",
+      "scriptEntry": "xianyu-hunter = xianyu_hunter.__main__:app"
+    }
+  },
+  "frontend": {
+    "node": {
+      "dockerImage": "node:20-alpine",
+      "compatibility": ">=18",
+      "devEnvironment": "24"
+    },
+    "frameworks": {
+      "react": "^18.3.1",
+      "react-dom": "^18.3.1",
+      "react-router-dom": "^6.26.0",
+      "antd": "^5.21.0",
+      "@ant-design/icons": "^5.5.0",
+      "zustand": "^4.5.0",
+      "axios": "^1.7.0",
+      "echarts": "^5.5.0",
+      "echarts-for-react": "^3.0.2",
+      "@dnd-kit/core": "^6.1.0",
+      "@dnd-kit/sortable": "^8.0.0",
+      "@dnd-kit/utilities": "^3.0.0",
+      "dayjs": "^1.11.0",
+      "react-markdown": "^9.1.0",
+      "rehype-highlight": "^7.0.2",
+      "remark-gfm": "^4.0.1",
+      "highlight.js": "^11.11.1",
+      "react-flow-renderer": "^10.3.17",
+      "p5": "^2.3.0",
+      "@types/p5": "^1.7.7"
+    },
+    "build": {
+      "vite": "^5.4.0",
+      "@vitejs/plugin-react": "^4.3.0",
+      "typescript": "^5.5.0",
+      "vite-plugin-pwa": "^1.3.0",
+      "base": "/app/",
+      "outDir": "../src/xianyu_hunter/web/static/spa",
+      "devPort": 5173,
+      "devProxy": "/api -> http://127.0.0.1:8000"
+    },
+    "test": {
+      "vitest": "^4.1.9",
+      "@testing-library/react": "^16.3.2",
+      "@testing-library/jest-dom": "^6.9.1",
+      "@testing-library/user-event": "^14.6.1",
+      "jsdom": "^29.1.1",
+      "environment": "jsdom",
+      "globals": true,
+      "setupFiles": "./src/test-setup.ts"
+    },
+    "typescript": {
+      "target": "ES2020",
+      "lib": "ES2021/DOM/DOM.Iterable",
+      "module": "ESNext",
+      "moduleResolution": "bundler",
+      "strict": true,
+      "noUnusedLocals": false,
+      "noUnusedParameters": false,
+      "noFallthroughCasesInSwitch": true,
+      "isolatedModules": true,
+      "moduleDetection": "force",
+      "useDefineForClassFields": true,
+      "skipLibCheck": true,
+      "resolveJsonModule": true,
+      "allowImportingTsExtensions": true,
+      "jsx": "react-jsx",
+      "noEmit": true,
+      "pathAlias": "@/* -> src/*",
+      "baseUrl": "."
+    },
+    "pwa": {
+      "registerType": "prompt",
+      "themeColor": "#FF6200",
+      "backgroundColor": "#FFFFFF",
+      "display": "standalone",
+      "lang": "zh-CN",
+      "startUrl": "/app/",
+      "scope": "/app/",
+      "maximumFileSizeToCacheInBytes": "4MB",
+      "navigateFallback": "index.html",
+      "navigateFallbackDenylist": [
+        "/^\\/api\\//"
+      ],
+      "runtimeCacheApiDenylist": [
+        "/api/events/stream",
+        "/api/auth/*",
+        "/api/export/*"
+      ]
+    },
+    "manualChunks": {
+      "react-vendor": [
+        "react",
+        "react-dom",
+        "react-router-dom"
+      ],
+      "antd-vendor": [
+        "antd",
+        "@ant-design/icons"
+      ],
+      "echarts-vendor": [
+        "echarts"
+      ],
+      "dnd-vendor": [
+        "@dnd-kit/core",
+        "@dnd-kit/sortable",
+        "@dnd-kit/utilities"
+      ]
+    }
+  },
+  "database": {
+    "engine": "SQLite",
+    "journalMode": "WAL",
+    "foreignKeys": "ON",
+    "synchronous": "NORMAL",
+    "busyTimeout": 10000,
+    "cacheSize": -20000,
+    "poolClass": "NullPool",
+    "orm": "SQLAlchemy 2.0 (DeclarativeBase + Mapped + mapped_column)",
+    "vectorDb": "ChromaDB 1.x (data/chromadb/)",
+    "migration": "init_db() 幂等增量迁移（无 Alembic）",
+    "tables": {
+      "main": [
+        "tasks",
+        "items",
+        "sellers",
+        "evaluations",
+        "orders",
+        "events",
+        "error_logs",
+        "task_links",
+        "task_deps",
+        "notifications",
+        "batch_refresh_progress",
+        "batch_refresh_history",
+        "accounts",
+        "proxies"
+      ],
+      "chatbot": [
+        "chatbot_sessions",
+        "chatbot_messages",
+        "chatbot_faqs",
+        "chatbot_feedback",
+        "chatbot_kb_versions",
+        "chatbot_config",
+        "chatbot_audit_logs"
+      ],
+      "multiUser": [
+        "users",
+        "user_sessions",
+        "user_cookies",
+        "user_menu_configs",
+        "user_preferences",
+        "user_session_events"
+      ]
+    }
+  },
+  "docker": {
+    "stages": [
+      {
+        "name": "frontend",
+        "image": "node:20-alpine",
+        "workdir": "/app/frontend"
+      },
+      {
+        "name": "builder",
+        "image": "python:3.12-slim",
+        "install": "pip install --no-cache-dir --user -e ."
+      },
+      {
+        "name": "runtime",
+        "image": "python:3.12-slim",
+        "user": "xhapp"
+      }
+    ],
+    "compose": {
+      "profiles": [
+        "prod",
+        "dev",
+        "split"
+      ],
+      "port": "${XH_PORT:-8000}:8000",
+      "volumes": [
+        "./data:/app/data",
+        "./config:/app/config",
+        "./.env:/app/.env:ro"
+      ],
+      "shmSize": "1gb",
+      "healthcheck": "curl -fsS http://localhost:8000/healthz"
+    }
+  },
+  "hardConstraints": {
+    "memory": "Web process must use with_browser=False to save 100-200MB memory",
+    "authWhitelist": [
+      "/api/auth/cookie",
+      "/api/auth/me",
+      "/api/auth/import-from-browser",
+      "/import-from-browser/status",
+      "/api/events/stream",
+      "/api/notifications",
+      "/api/notifier/",
+      "/api/about",
+      "/api/about/check-update"
+    ],
+    "frontendCredentials": "fetch/axios must include credentials: 'include'",
+    "htmxAuth": "htmx must use official <meta> config for credentials",
+    "unauthorizedResponse": "401 must return JSON {\"detail\": \"Unauthorized\"}",
+    "tokenComparison": "Must use hmac.compare_digest() to prevent timing attacks",
+    "sensitiveFieldsLogging": "Only record boolean match results, never log token length",
+    "tokenWriteFailure": "Must trigger logging.warning() alert",
+    "missingImports": "re, threading, logging must be added at module level",
+    "dbIndexes": [
+      "task_id",
+      "seller_id",
+      "first_seen",
+      "publish_time",
+      "created_at",
+      "request_id"
+    ],
+    "dbCountOptimization": "COUNT queries in _overview() must use CASE WHEN aggregate to reduce DB calls by 67%",
+    "redundantImports": "Move in-function imports to module level",
+    "webViewProcess": "Use CREATE_NEW_CONSOLE flag instead of CREATE_NO_WINDOW to prevent GUI window crash",
+    "webViewStdout": "WebView2 child processes must not redirect stdout/stderr to DEVNULL",
+    "webViewStorage": "webview.start() must set private_mode=False and unique storage_path (webview_data_{pid}_{timestamp})",
+    "kbScanWhitelist": "Exclude web/static/, web/templates/, __pycache__/, node_modules/, .git/, dist/, build/; only index .md/.py/.jsonl/.txt",
+    "embeddingMirror": "local_embedding.py must set os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com') at module top-level",
+    "embeddingBackend": "EmbeddingService uses local sentence-transformers (BAAI/bge-small-zh-v1.5, dim=512) when EMBEDDING_BASE_URL empty or 'local'",
+    "embeddingCompat": "sentence-transformers 5.x renamed get_sentence_embedding_dimension to get_embedding_dimension; use getattr fallback",
+    "cacheInvalidation": {
+      "requireExplicitInvalidate": true,
+      "ttlGraceSeconds": 0,
+      "failLogLevel": "warning",
+      "cacheFieldPatterns": [
+        "_cache",
+        "_cache_time",
+        "_cached_.*"
+      ],
+      "crossProcessNotification": "sse_push"
+    },
+    "stateDetectionBootstrap": {
+      "requiredMarker": "timestamp",
+      "signalLayerMapping": {
+        "collector_signal": [
+          "identity",
+          "session",
+          "tracking"
+        ],
+        "m5tk_signal": [
+          "session"
+        ]
+      },
+      "unknownSignalStrategy": "set"
+    },
+    "migrationTransaction": {
+      "requireSingleTransaction": true,
+      "cleanupResidualTable": true,
+      "recoverFromOld": true,
+      "exceptionLogLevel": "error",
+      "unsafePatterns": [
+        "ALTER TABLE.*MODIFY COLUMN",
+        "ALTER TABLE.*ALTER COLUMN"
+      ]
+    },
+    "stateFunctionalAlign": {
+      "requiredCheckMarker": true,
+      "unknownStatusDisplay": "未检测",
+      "ssePushRequired": true,
+      "ttlGraceSeconds": 0,
+      "staleThresholdSeconds": 3600,
+      "statusFieldMapping": {
+        "cookie_layer": {
+          "required": [
+            "lastCheckedAt",
+            "useCount"
+          ],
+          "initialValue": "unknown"
+        },
+        "sse_connection": {
+          "required": [
+            "lastEventAt",
+            "reconnectCount"
+          ],
+          "initialValue": "unknown"
+        },
+        "api_health": {
+          "required": [
+            "lastHealthCheckAt",
+            "consecutiveSuccesses"
+          ],
+          "initialValue": "unknown"
+        },
+        "collector_running": {
+          "required": [
+            "lastRunAt",
+            "runCount"
+          ],
+          "initialValue": "unknown"
+        }
+      },
+      "statusColorMapping": {
+        "valid": "success",
+        "invalid": "error",
+        "unknown": "default",
+        "stale": "warning"
+      }
+    },
+    "antidetect": {
+      "qps": 6,
+      "minDelayMs": 10000,
+      "maxDelayMs": 15000,
+      "failPauseThreshold": 3,
+      "failWindowSec": 3600
+    },
+    "evalWeights": {
+      "professional": 30,
+      "credit": 30,
+      "dispute": 25,
+      "price": 15,
+      "sum": 100,
+      "passScore": 60,
+      "autoBuyScore": 80,
+      "creditScoreMin": 60,
+      "badReviewMax": 3,
+      "registerDaysMin": 30
+    },
+    "notifier": {
+      "channels": [
+        "serverchan",
+        "pushplus",
+        "bark",
+        "telegram",
+        "wecom",
+        "dingtalk",
+        "webhook",
+        "ntfy"
+      ],
+      "quietHours": "23:00-07:00",
+      "criticalOnly": true,
+      "subscribedEvents": 12
+    },
+    "sse": {
+      "maxConnections": 10,
+      "reconnectParam": "last_event_id"
+    },
+    "llmCapabilityKeywords": {
+      "visionKeywords": [
+        "vision",
+        "gpt-4o",
+        "gpt-4-vision",
+        "qvq",
+        "qwen-vl",
+        "glm-4v",
+        "claude-3",
+        "opus",
+        "sonnet",
+        "haiku"
+      ],
+      "functionCallKeywords": [
+        "gpt-4",
+        "gpt-3.5-turbo-1106",
+        "claude-3",
+        "qwen-max",
+        "qwen-plus",
+        "deepseek-chat",
+        "function-calling"
+      ],
+      "jsonModeKeywords": [
+        "gpt-4",
+        "gpt-3.5-turbo-1106",
+        "claude-3",
+        "qwen-max",
+        "qwen-plus",
+        "json-mode"
+      ],
+      "caseInsensitive": true,
+      "sharedUtilLocation": "src/xianyu_hunter/web/routes/api_ai.py",
+      "sharedFunctionName": "_is_vision_capable"
+    },
+    "sharedUtilRules": {
+      "minCallSites": 2,
+      "minModuleCount": 2,
+      "pureFunctionRequired": true,
+      "requireTypeAnnotation": true,
+      "requireUnitTest": true,
+      "sharedFunctionDocstringRequired": true
+    },
+    "llmDowngrade": {
+      "optionalCapabilities": [
+        "vision",
+        "function_call",
+        "json_mode"
+      ],
+      "downgradeLogLevel": "warning",
+      "downgradeMarkerFormat": "mode=downgrade reason={capability}_missing model={model_name}",
+      "promptTemplates": {
+        "vision_missing": "图片请参考以下文字描述：{image_url}",
+        "function_call_missing": "请以 JSON 格式输出：{tool_schema}",
+        "json_mode_missing": "请以 JSON 格式输出结果。"
+      },
+      "coreCapabilitiesNotDowngradable": [
+        "chat",
+        "text_generation",
+        "embedding"
+      ]
+    },
+    "batchCircuitBreaker": {
+      "failureThreshold": 3,
+      "failureWindowSec": 3600,
+      "pendingMarkerDir": "data/markers",
+      "logPhrasing": {
+        "paused": "批次熔断暂停（可恢复）",
+        "stopped": "批次已停止（用户主动）",
+        "failed": "批次失败（异常终止）"
+      },
+      "markRemainingAs": "pending",
+      "persistKeys": [
+        "cursor",
+        "completed_ids",
+        "remaining_ids"
+      ]
+    },
+    "criticalPathException": {
+      "criticalPathPatterns": [
+        "_on_startup",
+        "run_migrations",
+        "_init_db",
+        "_init_session_manager",
+        "_on_close",
+        "_shutdown",
+        "_register_signal_handlers",
+        "_register_routes"
+      ],
+      "requireLoggerException": true,
+      "forbiddenPatterns": [
+        "logger.warning\\(f\\\"\\.\\.\\.\\{e\\}\\\"\\)",
+        "logger.error\\(f\\\"\\.\\.\\.\\{e\\}\\\"\\)"
+      ],
+      "independentTryBlocks": true
+    },
+    "datetimeStrategy": {
+      "storageTimezone": "UTC",
+      "preferredNowFactory": "datetime.now(timezone.utc)",
+      "forbiddenPatterns": [
+        "datetime\\.now\\(\\)",
+        "datetime\\.utcnow\\(\\)"
+      ],
+      "serializationFormat": "iso8601_with_tz",
+      "naiveUnifyHelper": "_utcnow().replace(tzinfo=None)"
+    },
+    "stateSyncMarkers": {
+      "markerDir": "data/markers",
+      "markerFormat": "{category}_{user_id}_{timestamp}.json",
+      "maxRetryCount": 5,
+      "cleanupOnSuccess": true,
+      "startupCheckRequired": true,
+      "scanIntervalSec": 60
+    },
+    "errorCodeContract": {
+      "responseSchema": {
+        "error_code": "string (from reason_enum)",
+        "user_message": "string (人类可读)",
+        "detail": "string (技术细节)"
+      },
+      "reasonEnum": [
+        "token_expired",
+        "anti_crawler",
+        "page_unavailable",
+        "rate_limited",
+        "login_expired",
+        "session_invalid",
+        "permission_denied",
+        "validation_error",
+        "internal_error",
+        "service_unavailable"
+      ],
+      "frontendConstantsFile": "frontend/src/constants/errorCode.ts",
+      "forbidSubstringJudgment": true
+    },
+    "businessKeywords": {
+      "sold": [
+        "卖掉了",
+        "已售",
+        "已售罄",
+        "宝贝不存在",
+        "宝贝走丢了",
+        "该宝贝不存在",
+        "商品不存在",
+        "已删除",
+        "已被删除"
+      ],
+      "deleted": [
+        "宝贝不存在",
+        "宝贝走丢了",
+        "该宝贝不存在",
+        "商品不存在",
+        "已删除",
+        "已被删除"
+      ],
+      "loginExpired": [
+        "登录已过期",
+        "会话已失效",
+        "未登录",
+        "请重新登录"
+      ],
+      "antiCrawler": [
+        "访问频率过高",
+        "请稍后再试",
+        "触发风控",
+        "需要验证"
+      ],
+      "frontendConstantsFile": "frontend/src/constants/businessKeywords.ts",
+      "consistencyTest": "tests/test_keyword_consistency.py"
+    },
+    "asyncAwaitCheck": {
+      "requireTrueAwait": true,
+      "pythonMinVersionForRuntimeWarning": "3.14",
+      "forbiddenPatterns": [
+        "async def.*\\n.*return <value>"
+      ],
+      "exemptDecorators": [
+        "@asynccontextmanager",
+        "@pytest.fixture"
+      ],
+      "reviewCheckpoint": "B-REVIEW-182 / F-REVIEW-148",
+      "stepRef": 198
+    },
+    "resourcePoolBenchmark": {
+      "requireDocstring": true,
+      "requireBenchmarkScript": true,
+      "benchmarkScriptDir": "tests/benchmarks/",
+      "slowQueryThresholdMs": 50,
+      "monitorDaysAfterChange": 7,
+      "systemOverheadAlertMs": 50,
+      "reviewCheckpoint": "B-REVIEW-183",
+      "stepRef": 199
+    },
+    "httpStatusCodeMapping": {
+      "mappingConfigPath": "config/http_status_code_mapping.yaml",
+      "requireConsistencyCheck": true,
+      "frontendClassificationRequired": true,
+      "reviewRequiredForChange": true,
+      "forbiddenMappings": [
+        {
+          "error": "RGV587",
+          "forbiddenStatus": [
+            401
+          ]
+        },
+        {
+          "error": "_m_h5_tk_expired",
+          "forbiddenStatus": [
+            401
+          ]
+        }
+      ],
+      "reviewCheckpoint": "B-REVIEW-184 / F-REVIEW-149",
+      "stepRef": 200
+    },
+    "statusCodeLayering": {
+      "_doc": "HTTP 状态码语义分层所有权与冲突避免规则 (meta-rule #66)。同一状态码不应跨层共用，业务代码不得抛出认证层专属状态码。",
+      "layers": {
+        "auth_layer": {
+          "codes": [
+            401
+          ],
+          "owner": "middleware",
+          "description": "认证未通过，仅认证中间件（BearerAuthMiddleware）可返回",
+          "frontend_action": "redirect_to_login",
+          "detail_signature": "Unauthorized"
+        },
+        "external_cred_layer": {
+          "codes": [
+            440
+          ],
+          "owner": "business",
+          "description": "外部服务凭证失效（如闲鱼 cookie 过期、_m_h5_tk token 过期）",
+          "frontend_action": "caller_catch_display_detail"
+        },
+        "validation_layer": {
+          "codes": [
+            422
+          ],
+          "owner": "framework",
+          "description": "请求参数校验失败，由 FastAPI Pydantic 自动返回",
+          "frontend_action": "caller_catch_display_field_errors"
+        },
+        "anti_crawler_layer": {
+          "codes": [
+            429
+          ],
+          "owner": "business",
+          "description": "触发反爬限制，调用方需退避重试",
+          "frontend_action": "caller_catch_display_retry_hint"
+        },
+        "not_found_layer": {
+          "codes": [
+            404,
+            410
+          ],
+          "owner": "business",
+          "description": "资源不存在或已下架",
+          "frontend_action": "caller_catch_display_not_found"
+        },
+        "server_error_layer": {
+          "codes": [
+            500,
+            502,
+            503
+          ],
+          "owner": "framework",
+          "description": "服务器错误或上游故障",
+          "frontend_action": "caller_catch_display_generic_error"
+        }
+      },
+      "reserved_for_middleware": [
+        401
+      ],
+      "forbidden_business_codes": [
+        401,
+        403
+      ],
+      "consistency_rules": [
+        {
+          "semantic": "cookie_expired",
+          "expected_code": 440,
+          "applies_to": [
+            "detail_only",
+            "official_full"
+          ],
+          "_doc": "同一语义（cookie 过期）在不同模式必须使用相同状态码 440"
+        },
+        {
+          "semantic": "anti_crawler",
+          "expected_code": 429,
+          "applies_to": [
+            "detail_only",
+            "official_full"
+          ]
+        },
+        {
+          "semantic": "page_unavailable",
+          "expected_code": 410,
+          "applies_to": [
+            "detail_only",
+            "official_full"
+          ]
+        }
+      ],
+      "frontend_interceptor_requirements": {
+        "auth_redirect_must_check_detail": true,
+        "auth_redirect_detail_signature": "Unauthorized",
+        "_doc": "前端全局响应拦截器跳转登录页必须同时校验 status===401 且 detail==='Unauthorized'，禁止仅凭 status 跳转"
+      },
+      "reviewCheckpoint": "B-REVIEW-189 / F-REVIEW-154",
+      "stepRef": 207
+    },
+    "cssSelectorFallback": {
+      "requiredLevels": 3,
+      "fallbackChainLogLevel": "debug",
+      "finalFailureLogLevel": "warning",
+      "dumpTriggerBasedOnBusinessSemantics": true,
+      "selectorRepositoryRequired": true,
+      "selectorRepoPath": "src/xianyu_hunter/modules/collector/selectors.py",
+      "reviewCheckpoint": "B-REVIEW-185",
+      "stepRef": 201
+    },
+    "exceptionLogSemantic": {
+      "criticalPathUseException": true,
+      "requireBusinessContext": true,
+      "contextFields": [
+        "item_id",
+        "user_id",
+        "task_id",
+        "request_id"
+      ],
+      "nonCriticalMinLogLevel": "warning",
+      "forbiddenPatterns": [
+        "except: pass",
+        "except Exception: pass",
+        "logger.warning(f\"...{e}\")"
+      ],
+      "sensitiveFieldsToRedact": [
+        "token",
+        "password",
+        "cookie",
+        "authorization"
+      ],
+      "reviewCheckpoint": "B-REVIEW-186 / F-REVIEW-150",
+      "stepRef": 202
+    },
+    "externalResourceLifecycle": {
+      "requiredPairMethods": [
+        [
+          "register",
+          "unregister"
+        ],
+        [
+          "acquire",
+          "release"
+        ]
+      ],
+      "strongReferenceRequired": true,
+      "isClosedCheckBeforeUse": true,
+      "cleanupInFinally": true,
+      "lockRequiredForUnregister": true,
+      "reviewCheckpoint": "B-REVIEW-187 / F-REVIEW-151",
+      "stepRef": 203
+    },
+    "dbWriteIdentityTrace": {
+      "requiredUserIdParam": true,
+      "userIdParamType": "str | None = None",
+      "whereFilterRequired": true,
+      "callSiteMustPassUserId": true,
+      "typeAnnotationRequired": true,
+      "exemptFunctions": [
+        "admin_queries",
+        "health_check",
+        "system_stats"
+      ],
+      "userIdIsolationRequired": true,
+      "userIdFromAuthContextOnly": true,
+      "adminExemptDecoratorName": "require_admin",
+      "auditLogRequiredForWrite": true,
+      "auditLogFields": [
+        "user_id",
+        "operation",
+        "resource_id",
+        "timestamp"
+      ],
+      "reviewCheckpoint": "B-REVIEW-188",
+      "stepRef": 204
+    },
+    "asyncTimeoutProtection": {
+      "_doc": "async 阻塞调用超时保护配置（meta-rule #80）",
+      "enabled": true,
+      "timeoutByCategory": {
+        "lightweightRead": 5.0,
+        "heavySerialize": 10.0,
+        "evaluate": 15.0
+      },
+      "fallbackStrategy": "best_effort",
+      "auditGrepPattern": "await\\s+\\w+\\.(cookies|storage_state|snapshot|title|url|evaluate)\\(",
+      "reviewCheckpoint": "B-REVIEW-226",
+      "stepRef": 233
+    },
+    "subprocessHeartbeat": {
+      "_doc": "子进程心跳与阶段超时协同配置（meta-rule #81）",
+      "enabled": true,
+      "timeoutByStatus": {
+        "starting": 90.0,
+        "opening": 90.0,
+        "running": 90.0,
+        "waiting": 30.0,
+        "already_logged": 90.0
+      },
+      "safetyMargin": 0.3,
+      "maxAccumulatedTimeoutWarn": 30.0,
+      "reviewCheckpoint": "B-REVIEW-227",
+      "stepRef": 234
+    },
+    "consistencyCheck": {
+      "_doc": "跨代码块一致性检查配置（meta-rule #82 experimental）",
+      "enabled": true,
+      "minOccurrences": 2,
+      "scanPaths": [
+        "scripts/browser_login.py",
+        "scripts/auth_helper.py",
+        "src/xianyu_hunter/infra/browser.py",
+        "src/xianyu_hunter/modules/worker.py",
+        "src/xianyu_hunter/modules/collector/_search.py"
+      ],
+      "reviewCheckpoint": "B-REVIEW-228",
+      "stepRef": 235
+    },
+    "uiLayout": {
+      "_doc": "UI 水平空间溢出诊断与操作项分级保留配置（meta-rule #83）",
+      "enabled": true,
+      "actionButtonVisibleThreshold": 5,
+      "lowFrequencyThresholdPerMonth": 1,
+      "collapseContainerStrategy": {
+        "le3": "Dropdown",
+        "3to6": "Popover",
+        "gt6": "Drawer"
+      },
+      "scrollFallback": "max-content",
+      "multiViewSyncRequired": true,
+      "multiViewSyncScanGlob": "frontend/src/pages/**/*.tsx",
+      "tableViewMatchers": [
+        "<Table",
+        "columns=",
+        "scroll="
+      ],
+      "cardViewMatchers": [
+        "<Card",
+        "actions=",
+        "cover="
+      ],
+      "reviewCheckpoint": "F-REVIEW-197 / F-REVIEW-198",
+      "stepRef": "236/237/238"
+    },
+    "configFieldCoverage": {
+      "_doc": "配置字段全链路覆盖检查参数（meta-rule #86/#87 落地，2026-07-11 智能客服乱码 Bug 复盘）",
+      "required_layers": [
+        "db_key",
+        "get_config",
+        "update_config",
+        "types_ts",
+        "config_ui"
+      ],
+      "layer_descriptions": {
+        "db_key": "DB 表（如 chatbot_config）中该 key 可读写",
+        "get_config": "后端 get_config 端点返回该字段",
+        "update_config": "后端 update_config 端点接受该字段的 PUT",
+        "types_ts": "前端 types.ts 有该字段的类型定义",
+        "config_ui": "前端 Config.tsx 有该字段的编辑 UI"
+      },
+      "empty_means_reset": {
+        "applicable_types": [
+          "string"
+        ],
+        "non_applicable_types": [
+          "int",
+          "float",
+          "bool"
+        ],
+        "delete_on_empty": true,
+        "provide_reset_button": true,
+        "disabled_when_default": true
+      }
+    },
+    "loginSideEffect": {
+      "_doc": "登录后副作用自动化参数（meta-rule #89 落地，2026-07-22 会话管理自动启动复盘）",
+      "triggerFunction": "trigger_session_start",
+      "helperModule": "web/services/session_starter",
+      "dispatchMethod": "asyncio.ensure_future",
+      "failureLogLevel": "debug",
+      "frontendFallbackCondition": "session.active == false && cookie_layers.identity == true",
+      "frontendAlertType": "warning",
+      "entryPoints": [
+        "web/routes/unified_login.py#_background_wait_qr",
+        "web/routes/unified_login.py#_background_wait",
+        "web/routes/unified_login.py#login_status",
+        "web/routes/browser_login.py#login_status",
+        "web/routes/browser_import.py#export_cookies",
+        "web/routes/cookie_inject.py#inject_cookie",
+        "web/routes/cookie_inject.py#import_from_browser"
+      ],
+      "applicableScenarios": [
+        "登录后自动启动续期会话",
+        "导入数据后自动刷新列表",
+        "配置变更后自动重载缓存"
+      ],
+      "inapplicableScenarios": [
+        "同步要求的操作（必须等结果）",
+        "用户主动触发的操作",
+        "高频事件（需防抖）"
+      ]
+    },
+    "uiPersistence": {
+      "_doc": "UI偏好持久化参数（meta-rule #102 落地，2026-07-22 页面设置持久化功能复盘）",
+      "storageKeyPrefix": "xh.",
+      "defaultDebounceMs": 300,
+      "draftDebounceMs": 500,
+      "storageVersionField": "__v",
+      "currentStorageVersion": 1,
+      "memoryFallbackEnabled": true,
+      "validatorRequired": true,
+      "persistablePreferences": [
+        "pageSize",
+        "viewMode",
+        "filterStatus",
+        "filterType",
+        "regionFilter",
+        "autoRefreshEnabled",
+        "refreshInterval",
+        "useCdp",
+        "theme"
+      ],
+      "nonPersistableStates": [
+        "loading",
+        "modalOpen",
+        "searchKeyword",
+        "formData (except draft)",
+        "sensitiveData"
+      ],
+      "applicableScenarios": [
+        "分页大小、视图模式、筛选条件、开关偏好",
+        "跨会话需保留的设置",
+        "主题/语言/布局偏好"
+      ],
+      "inapplicableScenarios": [
+        "loading 状态、modal 开关",
+        "搜索关键词（用户可能希望每次重新输入）",
+        "表单数据（除非草稿）",
+        "敏感数据（不应存 localStorage）"
+      ]
+    },
+    "multiWritePathCheck": {
+      "_doc": "多写入路径状态一致性检查参数（meta-rule #101 落地，2026-07-22 Cookie状态异常复盘）",
+      "autoSyncEnabled": true,
+      "syncMethodPattern": "sync_state_from_",
+      "validateActualDataPreferred": true,
+      "intermediateStatePatterns": [
+        "_layer_states",
+        ".valid",
+        ".active",
+        "_state_cache"
+      ],
+      "writeEntryPatterns": [
+        "export_cookies",
+        "on_login_success",
+        "atomic_update",
+        "save_event",
+        "upsert_"
+      ],
+      "applicableScenarios": [
+        "健康检查接口（如 cookie_checker）",
+        "状态检查接口",
+        "依赖运行时内存状态的验证函数"
+      ],
+      "inapplicableScenarios": [
+        "单一写入路径",
+        "纯数据验证（无中间层状态）",
+        "瞬态状态（无需持久）"
+      ]
+    },
+    "spaRenderResilience": {
+      "_doc": "SPA 渲染容错体系参数（meta-rule #95 落地，2026-07-22 React SPA 间歇性白屏修复复盘）",
+      "globalErrorBoundary": {
+        "enabled": true,
+        "resetKeyTypeWhitelist": [
+          "string",
+          "number",
+          "boolean"
+        ],
+        "requireReloadButton": true
+      },
+      "lazyRetry": {
+        "enabled": true,
+        "maxRetries": 3,
+        "storageKeyPrefix": "lazy-retry-",
+        "chunkErrorPatterns": [
+          "ChunkLoadError",
+          "Failed to fetch dynamically imported module",
+          "Loading chunk"
+        ]
+      },
+      "routeErrorBoundary": {
+        "enabled": true,
+        "resetKeySource": "location.pathname",
+        "preserveLayout": true
+      },
+      "apiArrayDefense": {
+        "enabled": true,
+        "requireOptionalChaining": true,
+        "emptyListFallback": true
+      },
+      "http401Debounce": {
+        "enabled": true,
+        "redirectMethod": "replace",
+        "flagVariableName": "isRedirecting"
+      },
+      "applicableScenarios": [
+        "所有 React SPA 项目（含路由 + 懒加载 + API 调用）",
+        "CI/CD 频繁部署导致 chunk hash 变更的项目",
+        "含认证的 SPA（401 拦截器）",
+        "路由切换频繁的应用"
+      ],
+      "inapplicableScenarios": [
+        "SSR 应用（错误处理与跳转策略不同）",
+        "纯静态页面无路由无 API",
+        "无认证的公开 API（无 401 拦截器）"
+      ]
+    },
+    "configRefactoring": {
+      "_doc": "配置化重构 5 步法参数（step 262~264 落地，基于历史 NameError/ImportError 复盘）",
+      "enabled": true,
+      "grepTool": "Grep (ripgrep)",
+      "grepIncludePattern": "--include=*.py",
+      "scopeContractCheck": true,
+      "importChangeChecklist": {
+        "requireGrepBeforeDelete": true,
+        "requireCallSiteUpdate": true,
+        "requireImportVerification": true,
+        "verificationCommand": "python -c \"import <module>\""
+      },
+      "applicableScenarios": [
+        "硬编码常量迁移到配置文件",
+        "模块级常量重构为函数",
+        "跨文件符号重命名",
+        "模块 API 重构、模块拆分/合并"
+      ],
+      "inapplicableScenarios": [
+        "单文件内符号重命名",
+        "纯私有（_ 前缀）符号变更",
+        "一次性脚本"
+      ]
+    },
+    "powershellLongTask": {
+      "_doc": "PowerShell 长任务日志输出参数（step 265 落地，基于 F6 复盘）",
+      "enabled": true,
+      "longTaskThresholdSeconds": 30,
+      "redirectStrategy": "file_redirect",
+      "forbiddenSinkCmdlets": [
+        "Select-Object -Last N",
+        "Where-Object ... | Select-Object"
+      ],
+      "recommendedRedirect": "> <file>",
+      "recommendedStartProcess": "Start-Process -RedirectStandardOutput <file>",
+      "tailViewCommand": "Get-Content -Tail N <file>",
+      "followViewCommand": "Get-Content -Wait <file>",
+      "applicableScenarios": [
+        "SonarQube 扫描",
+        "全量 pytest",
+        "npm build",
+        "Docker 构建",
+        "执行时长 > 30 秒的命令"
+      ],
+      "inapplicableScenarios": [
+        "短命令（< 30 秒）",
+        "交互式命令（需实时输入）",
+        "GUI 程序"
+      ]
+    },
+    "longTaskFallback": {
+      "_doc": "系统资源过载容错参数（step 266 落地，基于完整测试集超时复盘）",
+      "enabled": true,
+      "tier1TimeoutSec": 600,
+      "tier2Enabled": true,
+      "tier3Enabled": true,
+      "cpuThresholdPercent": 50,
+      "memoryThresholdPercent": 85,
+      "tier1Command": "pytest tests/",
+      "tier2Command": "python -c \"import <changed_module>\"",
+      "tier3Command": "python -m py_compile <file>",
+      "resourceMonitorCommand": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 10",
+      "applicableScenarios": [
+        "CI 环境",
+        "本地开发机资源紧张",
+        "紧急修复需快速验证"
+      ],
+      "inapplicableScenarios": [
+        "发布前最终验证（必须 Tier 1）",
+        "跨模块重构（必须 Tier 1）",
+        "数据库迁移（必须 Tier 1）"
+      ]
+    },
+    "configAccess": {
+      "_doc": "配置访问统一入口参数（step 268 落地，禁止模块级硬编码常量）",
+      "enabled": true,
+      "forbiddenPatterns": [
+        "^_[A-Z_]+ = \\d+$",
+        "^_[A-Z_]+ = \\d+\\.\\d+$"
+      ],
+      "requireTryExcept": true,
+      "requireConfigYamlRead": true,
+      "exemptPatterns": [
+        "纯算法常量（如 π）",
+        "框架约定固定值（如 HTTP 状态码 200）",
+        "枚举值"
+      ],
+      "applicableScenarios": [
+        "TTL、超时秒数",
+        "重试次数、QPS 限制",
+        "阈值、间隔、批大小",
+        "缓存容量等业务参数"
+      ],
+      "inapplicableScenarios": [
+        "纯算法常量",
+        "框架约定固定值",
+        "枚举值"
+      ]
+    },
+    "longTaskPrecheck": {
+      "_doc": "长任务执行资源预检参数（step 269 落地）",
+      "enabled": true,
+      "cpuThresholdPercent": 50,
+      "diskSpaceMultiplier": 2,
+      "lockFilePatterns": [
+        ".git/index.lock",
+        ".scannerwork/",
+        "data/*.lock"
+      ],
+      "dependencyProcesses": [
+        "SonarQube Server",
+        "Docker daemon"
+      ],
+      "configFilesToCheck": [
+        "config/config.yaml",
+        "sonar-project.properties"
+      ],
+      "applicableScenarios": [
+        "执行时长 > 5 分钟的任务",
+        "生产构建",
+        "CI 流水线",
+        "数据库迁移"
+      ],
+      "inapplicableScenarios": [
+        "短命令（< 5 分钟）",
+        "纯本地开发命令",
+        "增量构建"
+      ]
+    },
+    "resilienceRecovery": {
+      "_doc": "弹性恢复机制配置化参数（step 270 落地，质量门禁 C2 弹性恢复）",
+      "enabled": true,
+      "esReadOnlyRecovery": {
+        "detectKey": "cluster.read_only",
+        "recoveryCommand": "PUT _all/_settings {\"index.blocks.read_only_allow_delete\": null}",
+        "maxRetries": 3,
+        "retryIntervalSec": 5
+      },
+      "ceReportPolling": {
+        "pollIntervalSec": 2,
+        "maxWaitSec": 300
+      },
+      "nosonarPositionTolerance": 1,
+      "sandboxBypass": {
+        "detectMode": "env",
+        "envKey": "TRAE_SANDBOX"
+      },
+      "lockCleanup": {
+        "lockPaths": [
+          ".scannerwork/",
+          ".git/index.lock"
+        ],
+        "cleanupStrategy": "auto"
+      },
+      "applicableScenarios": [
+        "SonarQube 质量门禁全流程",
+        "长任务执行",
+        "跨进程协作"
+      ],
+      "inapplicableScenarios": [
+        "一次性脚本",
+        "纯本地开发",
+        "无外部依赖的纯算法任务"
+      ]
+    },
+    "idempotentResourceCreation": {
+      "description": "资源创建/启动/注册接口必须幂等，已是目标状态时返回 ok:True + already_active 标志，禁止用 ok:False 表达已存在",
+      "routePatterns": [
+        "/start",
+        "/create",
+        "/register",
+        "/launch"
+      ],
+      "requiredResponseFields": [
+        "ok",
+        "already_active",
+        "message"
+      ],
+      "forbiddenFailureForExisting": true,
+      "requiredTestSuffixes": [
+        "_already_active",
+        "_already_exists",
+        "_idempotent"
+      ],
+      "applicableScenarios": [
+        "资源创建/启动/注册接口",
+        "网络重试场景",
+        "前端启动/恢复按钮后端"
+      ],
+      "inapplicableScenarios": [
+        "纯查询接口（天然幂等）",
+        "计数器递增",
+        "一次性副作用（如发短信验证码，需用 token 防重）"
+      ]
+    },
+    "asyncHandlerThreeBranch": {
+      "description": "前端 async handler 三分支（success/else/catch）必须都显示具体错误 + 调用 loadXxx() 刷新状态",
+      "handlerNamePatterns": [
+        "handle.*",
+        "on.*Click",
+        "on.*Submit"
+      ],
+      "requiredRefreshCallPattern": "load.*\\(\\)",
+      "requiredBranches": [
+        "success",
+        "else",
+        "catch"
+      ],
+      "forbiddenCatchOnlyConsole": true,
+      "requiredErrorExtractor": "extractApiError",
+      "applicableScenarios": [
+        "所有触发后端写操作的 async handler",
+        "用户操作 → API → UI 状态更新场景"
+      ],
+      "inapplicableScenarios": [
+        "纯查询 handler（无 UI 状态矛盾风险）",
+        "fire-and-forget 副作用（用 warning Alert 兜底）"
+      ]
+    },
+    "operationResultContract": {
+      "description": "写操作响应必须用统一 OperationResult 模型，字段集固定；后端新增响应字段时前端 types.ts 必须同步声明",
+      "requiredFields": [
+        "ok"
+      ],
+      "optionalFields": [
+        "already_active",
+        "already_exists",
+        "error",
+        "error_code",
+        "detail",
+        "message",
+        "affected_id"
+      ],
+      "frontendTypesFile": "frontend/src/api/*.ts",
+      "requiredFieldSyncCheck": true,
+      "applicableScenarios": [
+        "所有写操作（create/update/delete/start/stop）响应",
+        "后端响应结构变更同步检查"
+      ],
+      "inapplicableScenarios": [
+        "前端内部状态类型（无后端对应）",
+        "第三方 SDK 类型（按 SDK 文档）"
+      ]
+    },
+    "eventTriggerTiming": {
+      "_doc": "PASSED 事件触发时机锚点配置（step 16 v4.64.0 升级，钉钉通知时机 Bug 复盘落地）",
+      "passedEventNamePattern": ".*_PASSED$",
+      "passedEventAnchor": "业务最终步骤之后",
+      "forbiddenTriggerPoints": [
+        "前置条件变更（如评估配置加载完成）",
+        "中间状态变更（如任务状态变为 running）",
+        "通知构造完成（必须等通知渠道 API 返回成功）"
+      ],
+      "passedEventExamples": {
+        "EVAL_PASSED": "AI 评估返回结果并写入 DB 之后",
+        "NOTIFY_SENT": "通知渠道（钉钉/企微/邮件）API 返回成功之后",
+        "TASK_COMPLETED": "任务结果持久化 + 关联资源清理之后"
+      },
+      "eventBusPreferred": true,
+      "eventBusReason": "通过 EventBus 解耦事件发布与业务逻辑，避免直接回调导致时机错乱",
+      "reviewCheckpoint": "B-REVIEW-173 / F-REVIEW-131",
+      "stepRef": 16,
+      "applicableScenarios": [
+        "所有含 PASSED/SENT/COMPLETED 语义的事件触发",
+        "钉钉/企微/邮件等通知集成",
+        "AI 评估/任务完成等业务关键节点"
+      ],
+      "inapplicableScenarios": [
+        "STARTED/BEGIN 语义事件（业务开始前触发）",
+        "纯查询无副作用事件",
+        "调试用临时事件"
+      ]
+    },
+    "searchServiceTemplate": {
+      "_doc": "SearchService 模板方法模式配置（step 19 v4.64.0 升级，搜索接口标准化复盘落地）",
+      "baseClassFile": "src/xianyu_hunter/web/services/search_base.py",
+      "servicesFile": "src/xianyu_hunter/web/services/search_services.py",
+      "hooks": [
+        "_build_query",
+        "_execute",
+        "_extract_facets",
+        "_paginate"
+      ],
+      "hookContracts": {
+        "_build_query": "接收 params，返回 query 对象",
+        "_execute": "接收 (query, params)，返回 (rows, total)",
+        "_extract_facets": "接收 rows，返回 dict（可空）",
+        "_paginate": "接收 (rows, params)，返回 list[R]；默认内存分页，子类可重写为 SQL 层分页"
+      },
+      "slowQueryThresholdMs": 100,
+      "verySlowQueryThresholdMs": 1000,
+      "responseFields": [
+        "items",
+        "total",
+        "matched_facets",
+        "query_meta"
+      ],
+      "responseShape": {
+        "items": "list[R]（当前页数据）",
+        "total": "int（满足过滤条件的总行数）",
+        "matched_facets": "dict（分面直方图，可空）",
+        "query_meta": {
+          "elapsed_ms": "float（端到端耗时毫秒）",
+          "cache_hit": "bool（当前固定 False，预留缓存扩展）"
+        }
+      },
+      "defaultDebounceMs": 400,
+      "defaultLimit": 50,
+      "defaultOffset": 0,
+      "minInterfacesToExtract": 2,
+      "sqlLayerPaginationThreshold": 500,
+      "reviewCheckpoint": "B-REVIEW-324 / B-REVIEW-325 / B-REVIEW-326",
+      "stepRef": 19,
+      "applicableScenarios": [
+        "项目内出现 ≥2 个搜索接口时必须抽取基类",
+        "任务关联/错误日志/数据库维护/智能客服会话等列表搜索",
+        "需要分页 + 计数 + 分面直方图的搜索场景"
+      ],
+      "inapplicableScenarios": [
+        "主键精确查询（无分页需求）",
+        "流式爬取（无请求-响应模型）",
+        "单接口场景（无需抽取基类）"
+      ]
+    },
+    "searchHookDebounce": {
+      "_doc": "useSearch Hook 防抖与并发保护配置（step 271 v4.64.0 新增，搜索接入扩展复盘落地）",
+      "hookFile": "frontend/src/hooks/useSearch.ts",
+      "defaultDebounceMs": 400,
+      "debounceAlignWith": "Alpine @input.debounce.400ms",
+      "requestIdFieldName": "requestIdRef",
+      "requestIdStrategy": "每次发起请求递增，响应回来时比对，过期响应丢弃",
+      "enabledDefault": true,
+      "enabledUsage": "弹窗/抽屉内的条件搜索（如 modalOpen 为 false 时跳过请求）",
+      "cleanupOnUnmount": true,
+      "cleanupField": "debounceRef",
+      "refHolderPattern": "useRef + 每次渲染更新 ref.current",
+      "reviewCheckpoint": "F-REVIEW-236 / F-REVIEW-237 / F-REVIEW-238",
+      "stepRef": 271,
+      "applicableScenarios": [
+        "用户输入关键词的实时搜索",
+        "与 Alpine @input.debounce.400ms 对齐的搜索场景",
+        "弹窗/抽屉内的条件搜索"
+      ],
+      "inapplicableScenarios": [
+        "筛选器 + 查询按钮模式（用户主动点击触发）",
+        "主键精确查询（无并发风险）",
+        "SSE/WebSocket 流式搜索"
+      ]
+    },
+    "searchHistoryPersistence": {
+      "_doc": "useSearchHistory 持久化配置（step 272 v4.64.0 新增，搜索历史 Hook 抽取复盘落地）",
+      "hookFile": "frontend/src/hooks/useSearchHistory.ts",
+      "storageKeyPrefix": "xh_search_history_",
+      "storageKeyStabilizer": "useMemo",
+      "storageKeyStabilizerReason": "避免每次渲染生成新字符串导致 useCallback 依赖变化",
+      "defaultMaxItems": 20,
+      "deduplicationStrategy": "filter_then_unshift",
+      "deduplicationImpl": "先 filter 掉重复项，再 unshift 到头部",
+      "fallbackStrategy": "silent_empty",
+      "fallbackReason": "localStorage 不可用或数据损坏时静默降级为空数组，禁止抛异常阻塞渲染",
+      "namespaceList": [
+        "chatbot",
+        "items",
+        "logs",
+        "db_maintenance"
+      ],
+      "hooksOrderRule": "useSearchHistory 必须声明在依赖其 add/clear/remove 的 useCallback 之前（避免 TDZ 错误）",
+      "reviewCheckpoint": "F-REVIEW-239 / F-REVIEW-240",
+      "stepRef": 272,
+      "applicableScenarios": [
+        "关键词搜索页面的历史记录持久化",
+        "跨会话需保留的用户搜索行为",
+        "多搜索页之间历史隔离"
+      ],
+      "inapplicableScenarios": [
+        "枚举值筛选（无需历史）",
+        "敏感数据搜索（不应持久化到 localStorage）",
+        "一次性查询（无需历史）"
+      ]
+    },
+    "powershellOutputTrap": {
+      "_doc": "PowerShell 管道吞输出陷阱配置（step 133 v4.64.0 升级，pytest 输出丢失复盘落地）",
+      "forbiddenSinkCmdlets": [
+        "Select-Object",
+        "Where-Object",
+        "More",
+        "Out-Host -Paging"
+      ],
+      "forbiddenReason": "这些 cmdlet 会缓冲并丢弃部分输出（尤其是 stderr 与彩色 ANSI 转义序列）",
+      "recommendedRedirect": "> <file> 2>&1",
+      "recommendedStartProcess": "Start-Process -RedirectStandardOutput <file> -RedirectStandardError <err> -NoNewWindow -Wait",
+      "tailViewCommand": "Get-Content -Tail N <file>",
+      "followViewCommand": "Get-Content -Wait <file>",
+      "affectedCommands": [
+        "pytest",
+        "npm run build",
+        "docker compose build",
+        "sonar-scanner"
+      ],
+      "reviewCheckpoint": "step 133",
+      "stepRef": 133,
+      "applicableScenarios": [
+        "pytest 全量测试执行",
+        "npm build / Docker 构建等长任务",
+        "SonarQube 扫描输出查看",
+        "任何输出超过 50 行的命令"
+      ],
+      "inapplicableScenarios": [
+        "短命令（< 10 行输出，管道无影响）",
+        "交互式命令（需实时输入）",
+        "GUI 程序"
+      ]
+    },
+    "testRouteConsistency": {
+      "_doc": "测试路由一致性配置（step 133 v4.64.0 升级，FAQ 403 Bug 复盘落地）",
+      "routeDecoratorPatterns": [
+        "@bp.route",
+        "@bp.post",
+        "@bp.get",
+        "@bp.put",
+        "@bp.delete",
+        "@bp.patch"
+      ],
+      "testClientMethods": [
+        "client.get",
+        "client.post",
+        "client.put",
+        "client.delete",
+        "client.patch"
+      ],
+      "commonTraps": {
+        "pluralVsSingular": "/faq vs /faqs（路由单数，测试复数 → 404）",
+        "httpMethodMismatch": "路由无 PUT 但测试用 PUT → 405 Method Not Allowed",
+        "prefixDuplication": "/api/chatbot/faq vs /chatbot/faq（前缀重复或缺失）",
+        "idInUrlVsBody": "upsert 时 id 应在 body 而非 URL（@bp.post('/faq') + id in body）"
+      },
+      "verificationMethod": "测试编写前 grep '@bp\\.(post|put|delete|get)' <route_file> 列出所有路由装饰器，与测试 client 调用逐一比对",
+      "reviewCheckpoint": "step 133",
+      "stepRef": 133,
+      "applicableScenarios": [
+        "FastAPI/Flask 路由测试编写",
+        "测试 404/405 错误排查",
+        "API 重构后的测试同步检查"
+      ],
+      "inapplicableScenarios": [
+        "无路由的纯函数测试",
+        "前端组件测试（无路由概念）",
+        "单元测试中 mock 掉的路由层"
+      ]
+    },
+    "presetSwitchContract": {
+      "_doc": "预设切换与状态回传契约配置（coding-standards v1.3 §2.25/§2.26，AI 服务菜单改造复盘落地）",
+      "frontendPresetFile": "frontend/src/pages/Config/AIConfig/constants.ts",
+      "presetVarName": "PRESETS",
+      "presetRequiredFields": [
+        "base_url",
+        "model",
+        "vision_model",
+        "label",
+        "color",
+        "apiKeyUrl"
+      ],
+      "backendApplyEndpoint": "POST /api/ai/apply-preset",
+      "applyPresetRequiredParams": [
+        "from_preset",
+        "to_preset",
+        "base_url",
+        "model",
+        "vision_model"
+      ],
+      "forbidBackendPresetTable": true,
+      "forbidFrontendPlaintextKey": true,
+      "useReturnedMaskedKey": true,
+      "maskedKeyField": "api_key",
+      "maskFormat": "{prefix}***...{suffix}",
+      "maskPrefixLen": 3,
+      "maskSuffixLen": 3,
+      "testEndpoints": [
+        {
+          "path": "/api/ai/test-connection",
+          "statusField": "model",
+          "requireRuntimeValue": true
+        },
+        {
+          "path": "/api/ai/test-embedding",
+          "statusField": "model_status",
+          "requireEnumStatus": true,
+          "enumValues": [
+            "downloaded",
+            "not_downloaded",
+            "checking",
+            "unknown"
+          ]
+        }
+      ],
+      "requireStatusOnFailure": true,
+      "hfCacheCheckMethod": "directory_existence",
+      "forbidModelInstantiation": true,
+      "forbidClassNames": [
+        "SentenceTransformer(",
+        "AutoModel.from_pretrained(",
+        "AutoTokenizer.from_pretrained("
+      ],
+      "hfCacheRootEnvVars": [
+        "HF_HOME",
+        "HF_HUB_CACHE"
+      ],
+      "defaultCacheRoot": "~/.cache/huggingface/hub",
+      "hfCacheDirNamePattern": "models--{model_name_with_slash_to_dash}",
+      "requireSnapshotsNonEmpty": true,
+      "statusDisplayCentralMap": {
+        "requireCentralRecord": true,
+        "requireExhaustiveRecord": true,
+        "requiredFields": [
+          "text",
+          "color",
+          "icon"
+        ],
+        "forbidInlineStatusBranching": true,
+        "statusFieldCandidates": [
+          "modelStatus",
+          "status",
+          "downloadStatus",
+          "connectionStatus"
+        ]
+      },
+      "externalLinkSecurity": {
+        "requireRelNoopener": true,
+        "includeAntdButtonHref": true,
+        "exemptSameOrigin": true
+      },
+      "sensitiveDataBackendOwned": {
+        "requireHmacCompareDigest": true,
+        "forbidDirectEqualsCompare": true,
+        "requireWriteFailureWarning": true,
+        "forbidLogSensitiveValue": true,
+        "requireKeyringStorage": true,
+        "require401JsonResponse": true
+      },
+      "reviewCheckpoint": "B-REVIEW-327 / B-REVIEW-328 / B-REVIEW-329 / F-REVIEW-241 / F-REVIEW-242 / F-REVIEW-243",
+      "codingStandardRef": "§2.25 / §2.26",
+      "applicableScenarios": [
+        "AI 服务预设切换（DeepSeek/Doubao/Qwen 等）",
+        "Embedding 预设切换",
+        "通知渠道预设切换",
+        "API Key / Token / 密码等敏感数据存储与比较",
+        "测试连接类接口（需回传状态字段）",
+        "HuggingFace 模型缓存状态检测",
+        "UI 多状态展示（下载/连接/运行等）",
+        "外部链接跳转按钮（target=_blank）"
+      ],
+      "inapplicableScenarios": [
+        "单字段直接编辑（无预设概念）",
+        "首次初始化（无 from_preset 可归档）",
+        "非敏感配置（端点 URL、模型名、UI 偏好）",
+        "纯查询接口（非测试类，无需状态回传）",
+        "模型实际加载与推理（必须实例化）",
+        "二值状态（如 enabled/disabled，直接用 Switch）",
+        "同源链接（站内导航）"
+      ]
+    },
+    "typeAnnotationContract": {
+      "enabled": true,
+      "complexReturnTypes": [
+        "list[dict]",
+        "list[TypedDict]",
+        "list[Pydantic BaseModel]",
+        "dict[str, Any]"
+      ],
+      "alignmentSources": [
+        "pydantic_response_model",
+        "frontend_types_ts"
+      ],
+      "authoritativeSource": "pydantic_response_model",
+      "fallbackAuthoritativeSource": "frontend_types_ts",
+      "testAssertionLevel": "full_structure",
+      "observationPeriodQuarters": 1,
+      "observationEndDate": "2026-10-26",
+      "promotionThreshold": 2,
+      "applicableScenarios": [
+        "前后端分离 API",
+        "返回复杂嵌套结构的端点"
+      ],
+      "nonApplicableScenarios": [
+        "返回基本类型",
+        "纯内部 helper",
+        "动态结构通用序列化"
+      ]
+    },
+    "eventBusStartupDecoupling": {
+      "enabled": true,
+      "infrastructureTypes": [
+        "event_bus",
+        "message_queue",
+        "pub_sub_loop"
+      ],
+      "startupOrder": "before_business_scheduler",
+      "shutdownOrder": "after_business_scheduler",
+      "requireIdempotentGuard": true,
+      "requireExceptionIsolation": true,
+      "requireStartupLog": true,
+      "observationPeriodQuarters": 1,
+      "observationEndDate": "2026-10-26",
+      "promotionThreshold": 2,
+      "applicableScenarios": [
+        "EventBus/MessageQueue 消费者循环",
+        "发布-订阅模式基础设施",
+        "后台调度器依赖的事件分发机制"
+      ],
+      "nonApplicableScenarios": [
+        "同步调用（无 publish-subscribe）",
+        "一次性任务（启动即完成）",
+        "进程内函数直接 invoke",
+        "前端组件间通信（React Context/Zustand）"
+      ]
+    },
+    "dualDataSourceConsistency": {
+      "enabled": true,
+      "fallbackToRuntime": true,
+      "syncBackOnUpdate": true,
+      "logLevelOnSyncFailure": "warning",
+      "checkerScopeAlignment": true,
+      "asyncCheckerCompatibility": true,
+      "exceptionObservabilityGrading": {
+        "syncFailure": "warning",
+        "queryFailure": "debug",
+        "fallbackTriggered": "info",
+        "configMissing": "warning",
+        "criticalPathFailure": "error"
+      },
+      "observationPeriodQuarters": 1,
+      "observationEndDate": "2026-10-26",
+      "promotionThreshold": 2,
+      "applicableScenarios": [
+        "持久化层（JSON/DB/文件）+ 运行时层（内存/缓存/浏览器上下文）双数据源",
+        "检查器（健康检查/状态查询）与消费者（业务流程）分离",
+        "存在回写失败/部分回写/缓存窗口期的场景"
+      ],
+      "nonApplicableScenarios": [
+        "单一数据源（无需兜底）",
+        "检查器与消费者同源（不存在不一致）",
+        "强一致性要求场景（应使用事务而非兜底）"
+      ]
+    },
+    "batchStartFaultIsolation": {
+      "_doc": "批量启动容错隔离配置（step 275 v4.69.0 新增，服务重启 Cookie 失效导致调度器静默失败复盘落地）",
+      "enabled": true,
+      "batchMethodPatterns": [
+        "start_all",
+        "register_all",
+        "init_all",
+        "resume_all",
+        "restart_all",
+        "stop_all"
+      ],
+      "requireSuccessFailureLog": true,
+      "failureLogLevel": "warning",
+      "retryableExceptions": [
+        "ResumeBlockedError",
+        "TimeoutError",
+        "ConnectionError"
+      ],
+      "forbidReraise": true,
+      "requireContainerSnapshot": true,
+      "auditSignals": {
+        "batchMethodGrep": "def (start_all|register_all|init_all|resume_all|restart_all|stop_all)",
+        "missingTryExcept": "for.*in.*(workers|items|tasks).*\\n.*self\\.(start|register|init|resume|restart|stop)\\(",
+        "missingStatsLog": "成功.*失败|failed.*started",
+        "forbiddenReraise": "raise\\s+(ResumeBlockedError|TimeoutError|ConnectionError)"
+      },
+      "reviewCheckpoint": "B-REVIEW-332",
+      "stepRef": 275,
+      "applicableScenarios": [
+        "批量启动/注册/初始化方法（start_all/register_all/init_all/resume_all/restart_all/stop_all）",
+        "服务重启时需容错单个任务失败的场景",
+        "调度器主循环调用批量方法的入口"
+      ],
+      "inapplicableScenarios": [
+        "单任务启动（非批量场景）",
+        "事务性批量操作（需全部成功或全部回滚）",
+        "紧耦合任务链（前置失败后续无法执行）"
+      ]
+    },
+    "externalResourceAsyncLiveness": {
+      "_doc": "外部资源活性真异步检测配置（step 276 v4.69.0 新增，浏览器不可用 503 复盘落地）",
+      "enabled": true,
+      "forbidSyncPropertyCheck": true,
+      "forbiddenSyncProperties": [
+        "pages",
+        "_context",
+        "_browser",
+        "_page",
+        "_cached_alive"
+      ],
+      "requiredAsyncCallType": "cdp_or_rpc",
+      "livenessCheckMethod": "is_alive",
+      "asyncProbeOperations": [
+        "cookies()",
+        "title()",
+        "evaluate('1')"
+      ],
+      "restartOnFailure": true,
+      "restartMethod": "ensure_alive",
+      "connectionErrorSignatures": [
+        "Connection closed while reading from the driver",
+        "Target page has been closed",
+        "Browser has been closed"
+      ],
+      "auditSignals": {
+        "syncPropertyInAsyncCheck": "async def is_alive.*\\n.*self\\._context\\.(pages|_cached)",
+        "missingAwaitInLivenessCheck": "def is_alive.*\\n.*return (True|False|self\\._)"
+      },
+      "reviewCheckpoint": "B-REVIEW-333",
+      "stepRef": 276,
+      "applicableScenarios": [
+        "Playwright BrowserContext/Browser/Page 活性检测",
+        "外部 RPC 连接活性检测（CDP/HTTP/WebSocket）",
+        "长生命周期外部资源的 ensure_alive 守卫"
+      ],
+      "inapplicableScenarios": [
+        "纯内存对象活性检测（无外部连接）",
+        "同步资源（文件句柄等，同步检测即可）",
+        "启动时首次初始化检测（无缓存可误判）"
+      ]
+    },
+    "createTaskExceptionVisibility": {
+      "_doc": "create_task 异常显式捕获配置（step 277 v4.69.0 新增，调度器主循环静默失败复盘落地）",
+      "enabled": true,
+      "requireTryExceptInCreateTask": true,
+      "forbidSilentSwallow": true,
+      "exceptionLogLevel": "error",
+      "requireReRaise": false,
+      "requireTaskExceptionCheck": true,
+      "auditSignals": {
+        "createTaskWithoutTryExcept": "asyncio\\.create_task\\([^)]*\\)(?!.*try)",
+        "silentSwallowPattern": "except.*:\\s*\\n\\s*pass",
+        "missingExceptionLog": "except.*:\\s*\\n\\s*(?!.*logger)"
+      },
+      "reviewCheckpoint": "B-REVIEW-334",
+      "stepRef": 277,
+      "applicableScenarios": [
+        "asyncio.create_task 包装的协程",
+        "后台任务启动入口（_scheduler_loop / _worker_loop 等）",
+        "fire-and-forget 异步任务"
+      ],
+      "inapplicableScenarios": [
+        "await 直接等待的协程（异常会自然传播）",
+        "短生命周期一次性任务（异常可见性无要求）",
+        "已由上层 try/except 覆盖的任务"
+      ]
+    },
+    "containerIterationSnapshot": {
+      "_doc": "容器迭代快照配置（step 278 v4.69.0 新增，dictionary changed size during iteration 复盘落地）",
+      "enabled": true,
+      "requireListSnapshot": true,
+      "snapshotFunctions": [
+        "list()",
+        "tuple()",
+        "dict().keys()",
+        "dict().values()",
+        "dict().items()"
+      ],
+      "detectSignal": "RuntimeError: dictionary changed size during iteration",
+      "forbidDirectIterationOnMutableContainer": true,
+      "mutableContainerTypes": [
+        "dict",
+        "list",
+        "set",
+        "collections.defaultdict"
+      ],
+      "auditSignals": {
+        "directIterationOnDict": "for\\s+\\w+\\s+in\\s+self\\._\\w+\\.(keys|values|items)\\(\\)(?!.*list)",
+        "directIterationOnList": "for\\s+\\w+\\s+in\\s+self\\._\\w+(?!.*list)(?!.*\\[)",
+        "runtimeErrorSignal": "RuntimeError.*dictionary changed size"
+      },
+      "reviewCheckpoint": "B-REVIEW-335",
+      "stepRef": 278,
+      "applicableScenarios": [
+        "迭代过程中可能修改字典/列表/集合的循环",
+        "批量操作方法（start_all/stop_all 等）迭代内部容器",
+        "回调注册表遍历时可能触发注销"
+      ],
+      "inapplicableScenarios": [
+        "只读迭代（迭代期间不修改容器）",
+        "不可变容器（tuple/frozenset）",
+        "明确不会并发修改的单线程场景"
+      ]
+    },
+    "schedulerLoopLayeredException": {
+      "_doc": "调度器主循环异常分层捕获配置（step 279 v4.69.0 新增，调度器主循环静默失败复盘落地）",
+      "enabled": true,
+      "exceptionLayeringOrder": [
+        "CancelledError",
+        "Exception"
+      ],
+      "forbidBaseExceptionCatch": true,
+      "requireReRaise": true,
+      "requireExceptionLog": true,
+      "exceptionLogLevel": "error",
+      "cleanupOnCancelled": true,
+      "cleanupMethod": "stop_all",
+      "auditSignals": {
+        "missingExceptionLayer": "async def _.*loop.*\\n.*try.*\\n.*except (?!asyncio\\.CancelledError)",
+        "baseExceptionCatch": "except BaseException",
+        "missingReRaise": "except.*:\\s*\\n\\s*(?!.*raise)"
+      },
+      "reviewCheckpoint": "B-REVIEW-336",
+      "stepRef": 279,
+      "applicableScenarios": [
+        "调度器主循环（_scheduler_loop / _worker_loop）",
+        "被 asyncio.create_task 包装的长生命周期协程",
+        "需要区分取消信号与业务异常的后台任务"
+      ],
+      "inapplicableScenarios": [
+        "短生命周期一次性协程（异常自然传播即可）",
+        "纯计算函数（无异步操作）",
+        "已由上层统一异常处理的入口"
+      ]
+    }
+  },
+  "sonarqube": {
+    "projectKey": "xianyu_hunter",
+    "projectName": "Xianyu Hunter",
+    "sources": "src/xianyu_hunter,frontend/src",
+    "tests": "tests",
+    "pythonVersion": "3.10",
+    "tsconfigPath": "frontend/tsconfig.json",
+    "frontendRules": {
+      "S2004": "嵌套层级 ≤ 4，超限时提取模块级函数",
+      "S3358": "嵌套三元拆为变量",
+      "S6757": "SFC 内不用 this，工厂函数替代 class",
+      "S7784": "使用 structuredClone 替代 JSON.parse(JSON.stringify())",
+      "S6848": "clickableProps 工厂函数配键盘事件",
+      "S1128": "删除未使用 import",
+      "S4325": "移除不必要类型断言",
+      "S3776": "认知复杂度，拆 case 为模块级 handler"
+    }
+  },
+  "preCommit": {
+    "hooks": [
+      "check-added-large-files (--maxkb=1024)",
+      "check-merge-conflict",
+      "check-yaml",
+      "end-of-file-fixer",
+      "trailing-whitespace",
+      "forbid-root-temp-files (local)",
+      "forbid-scannerwork (local)",
+      "forbid-browser-cache (local)"
+    ]
+  }
+}

@@ -2,6 +2,7 @@ import { Card, theme } from 'antd'
 import { ExportOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { TEXTS } from './i18n'
+import { API_BASE } from '../../utils/apiBase'
 
 interface MenuItem {
   readonly key: string
@@ -18,7 +19,7 @@ const MENU_ITEMS: MenuItem[] = [
   { key: 'licenses', label: TEXTS.menu.licenses, href: '#licenses', external: false },
   // help 为 SPA 内链（保留 /help 路由作回流入口）
   { key: 'help', label: TEXTS.menu.help, href: '/help', external: false },
-  { key: 'api', label: TEXTS.menu.api, href: '/api/docs', external: true },
+  { key: 'api', label: TEXTS.menu.api, href: `${API_BASE}api/docs`, external: true },
   { key: 'contact', label: TEXTS.menu.contact, href: 'mailto:dev@example.com', external: true },
   { key: 'community', label: TEXTS.menu.community, href: 'https://example.com/community', external: true },
   { key: 'report', label: TEXTS.menu.report, href: 'https://example.com/issues/new', external: true },

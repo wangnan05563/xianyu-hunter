@@ -206,6 +206,24 @@ def test_tailscale_stop_disables_only_https_funnel() -> None:
     assert provider.public_url is None
 
 
+def test_tailscale_stop_path_prefix_clears_binary_path() -> None:
+    """path_prefix 模式下 stop 不调用 funnel off，但清除 _binary_path 使 status 返回 stopped"""
+    provider = tunnel_providers.TailscaleProvider(local_port=8001, path_prefix="/xianyu/")
+    provider._binary_path = Path("tailscale.exe")
+    provider._public_url = "https://xianyu-hunter.example.ts.net/xianyu/"
+
+    with patch(
+        "xianyu_hunter.web.services.tunnel_providers.subprocess.run",
+    ) as run:
+        provider.stop()
+
+    # path_prefix 模式不应调用 funnel off（避免影响其他应用）
+    run.assert_not_called()
+    assert provider.public_url is None
+    # 修复后：_binary_path 被清除，status 应短路返回 "stopped"
+    assert provider.status == "stopped"
+
+
 def test_tailscale_is_registered_provider() -> None:
     provider = tunnel_providers.create_provider("tailscale", local_port=8001)
     assert isinstance(provider, tunnel_providers.TailscaleProvider)

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -368,6 +369,110 @@ def _compute_security_flags(data: dict | None, expiry_ts: float | None) -> dict[
     return flags
 
 
+def _validate_cookies_list_with_expiry(cookies_list: list[dict]) -> tuple[bool, str]:
+    """验证 cookie 列表是否有效（含过期时间判断）
+
+    与 CookieStore.validate_cookies_with_expiry 逻辑保持一致，
+    但直接操作 cookie 列表，用于 fallback 数据源的健康检查。
+    """
+    if not cookies_list:
+        return False, "no_cookie_data"
+
+    names = {c.get("name", "") for c in cookies_list}
+    if not (_KEY_COOKIES & names):
+        return False, "no_key_cookies"
+
+    from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+
+    now = time.time()
+    for c in cookies_list:
+        name = c.get("name")
+        if name not in _KEY_COOKIES:
+            continue
+
+        if name == "_m_h5_tk":
+            m5tk_value = c.get("value", "")
+            if m5tk_value and is_m5tk_expired(m5tk_value):
+                return False, "cookie_expired:_m_h5_tk"
+            continue
+
+        if name == "_m_h5_tk_enc":
+            continue
+
+        expires = c.get("expires", -1)
+        if expires and expires > 0 and expires < now:
+            return False, f"cookie_expired:{name}"
+
+    return True, "ok"
+
+
+def _compute_expiry_ts(cookies_list: list[dict] | None) -> float | None:
+    """计算 cookie 列表中最早过期的关键 Cookie 过期时间"""
+    if not cookies_list:
+        return None
+    key_cookies = [
+        c for c in cookies_list
+        if c.get("name") in _KEY_COOKIES
+    ]
+    if not key_cookies:
+        return None
+    expiries = [
+        c.get("expires", -1) for c in key_cookies
+        if c.get("expires", -1) and c.get("expires", -1) > 0
+    ]
+    return min(expiries) if expiries else None
+
+
+def _load_cookie_data_for_health(
+    store, user_id: str
+) -> tuple[dict | None, list[dict] | None]:
+    """按优先级加载 Cookie 数据供健康检查使用
+
+    优先级：
+    1. cookies_{user_id}.json（多用户隔离主数据源）
+    2. last_login_cookies.json（登录子进程/浏览器导入遗留的公共 Cookie 文件）
+    3. cookies_default.json（单用户模式或迁移前文件）
+
+    为什么需要：首次登录后 cookies_{user_id}.json 可能为空或损坏
+    （issue: 多用户迁移时 export_cookies 写入 user_id 文件失败），
+    但 cookies_default.json / last_login_cookies.json 仍有有效 Cookie。
+    此时 /api/auth/me 因 _check_cookies 有 last_login 回退而显示已登录，
+    而 /api/auth/cookie/health 直接返回 no_cookie_data，导致状态栏显示不一致。
+
+    Returns:
+        (data, cookies_list) - data 为 JSON 包装对象（含 exported_at/method），
+        cookies_list 为实际 cookie 列表。两者可能来自不同文件格式。
+    """
+    # 1. 多用户隔离主文件
+    data = store._read_json(user_id=user_id)
+    if data and data.get("cookies"):
+        return data, data["cookies"]
+
+    # 2. 登录子进程/浏览器导入遗留的公共 Cookie 文件（列表格式）
+    last_login = get_data_dir() / "last_login_cookies.json"
+    if last_login.exists():
+        try:
+            raw = json.loads(last_login.read_text(encoding="utf-8"))
+            if isinstance(raw, list) and raw:
+                # 统一包装为 cookies_{user_id}.json 的 dict 格式，方便后续字段访问
+                data = {
+                    "exported_at": raw[0].get("expires", 0) if isinstance(raw[0], dict) else 0,
+                    "method": "last_login_fallback",
+                    "cookie_count": len(raw),
+                    "cookies": raw,
+                }
+                return data, raw
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 3. 单用户模式/迁移前 default 文件
+    data = store._read_json(user_id="default")
+    if data and data.get("cookies"):
+        return data, data["cookies"]
+
+    return None, None
+
+
 @router.get("/cookie/health")
 async def cookie_health(request: Request) -> JSONResponse:
     """轻量级 Cookie 健康检查（< 300ms）
@@ -385,6 +490,9 @@ async def cookie_health(request: Request) -> JSONResponse:
     浏览器内存兜底：JSON 中 _m_h5_tk 过期时，实时搜索可能已刷新浏览器内存中的
     token 但未回写 JSON（_ensure_fresh_m5tk 不回写），此时从浏览器内存读取最新
     token 回写 JSON 再重新判断，避免"实时搜索可用但右上角显示无效"的不一致。
+
+    Cookie 文件兜底：首次登录后 cookies_{user_id}.json 可能为空/损坏，
+    此时回退到 last_login_cookies.json / cookies_default.json，并尝试修复 user_id 文件。
 
     重构说明：分层状态计算和安全标记推断下沉到独立函数（S3776），
     主函数只做流程编排和结果组装，降低嵌套层级与认知负担。
@@ -407,11 +515,43 @@ async def cookie_health(request: Request) -> JSONResponse:
             store.invalidate_cache(current_uid)
             is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
 
-    info = store.get_cookie_info(user_id=current_uid)
-    expiry_ts = store.get_cookie_expiry(user_id=current_uid)
+    # 主文件无效且原因是"无数据/无关键 Cookie"时，尝试 fallback 数据源
+    # 并顺带修复空的 user_id 文件，避免下次仍显示异常
+    fallback_used = False
+    if not is_valid and ("no_cookie_data" in reason or "no_key_cookies" in reason):
+        fb_data, fb_cookies = _load_cookie_data_for_health(store, current_uid)
+        if fb_data and fb_cookies:
+            logger.info(
+                "cookie_health: cookies_%s.json 不可用，回退到 %s，尝试修复 user_id 文件",
+                current_uid, fb_data.get("method", "unknown"),
+            )
+            # 修复 user_id 文件：把 fallback 的 cookie 写回 cookies_{user_id}.json
+            try:
+                store.export_cookies(fb_cookies, method=fb_data.get("method", "fallback_recovery"), user_id=current_uid)
+                store.invalidate_cache(current_uid)
+                is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
+                fallback_used = True
+            except OSError as e:
+                logger.warning("cookie_health: 修复 cookies_%s.json 失败: %s", current_uid, e)
+            # 如果修复后仍无效，至少用 fallback 数据计算健康状态
+            if not is_valid:
+                data, cookies_list = fb_data, fb_cookies
+                is_valid, reason = _validate_cookies_list_with_expiry(cookies_list)
+                fallback_used = True
 
-    data = store._read_json(user_id=current_uid)
-    cookies_list = (data or {}).get("cookies", []) if data else []
+    if not fallback_used:
+        data = store._read_json(user_id=current_uid)
+        cookies_list = (data or {}).get("cookies", []) if data else []
+
+    info = store.get_cookie_info(user_id=current_uid) if not fallback_used else {
+        "logged_in": True,
+        "source": data.get("method", "unknown") if data else "none",
+        "cookie_count": len(cookies_list) if cookies_list else 0,
+        "exported_at": data.get("exported_at", 0) if data else 0,
+        "method": data.get("method", "unknown") if data else "unknown",
+    }
+    expiry_ts = _compute_expiry_ts(cookies_list)
+
     names = {c.get("name", "") for c in cookies_list}
 
     # 传入 cookies_list 让 _compute_layers_status 检查 _m_h5_tk 内嵌 timestamp 过期

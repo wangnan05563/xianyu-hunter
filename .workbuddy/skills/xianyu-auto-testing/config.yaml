@@ -1,0 +1,4168 @@
+# xianyu-auto-testing 技能配置
+# 所有可参数化项集中在此文件管理，SKILL.md 和 references 只引用变量
+# 修改项目路径/端口/正则/命令时只需改本文件，无需改 SKILL.md
+
+# ============== 项目路径 ==============
+project:
+  # 项目根目录（绝对路径，由调用方传入或自动检测）
+  root_dir: "."
+  # 前端源码目录（相对 root_dir）
+  frontend_dir: "frontend"
+  # 前端构建产物目录（相对 root_dir；非 vite 默认 outDir，由 vite.config.ts 指定）
+  # 该项目 outDir 配置为 '../src/xianyu_hunter/web/static/spa'
+  build_output_dir: "src/xianyu_hunter/web/static/spa"
+  # 后端源码目录（相对 root_dir）
+  backend_dir: "src/xianyu_hunter"
+
+# ============== SPA 子路径部署（🆕v2.9 模式 AL） ==============
+# 所有子路径/域名模式相关参数集中此处，模式 AL 与代码审查维度据此校验，禁止硬编码 /xianyu/
+spa:
+  # SPA 部署子路径（对应 vite.config.ts 的 base 与 BrowserRouter basename）
+  basename: "/xianyu"
+  # API 前缀（对应前端 API_BASE 与后端双挂载前缀 /xianyu/api）
+  api_prefix: "/xianyu/api"
+  # 移动端入口路径（相对 basename）
+  mobile_path: "/m"
+  # 构建产物中期望出现的特征字符串（用于 AL1/AL2/AL5 产物核对）
+  expected_bundle_baseurl: "/xianyu/"
+  expected_sw_api_prefix: "xianyu/api"
+
+# ============== Web 进程 ==============
+web_process:
+  # 监听端口
+  port: 8001
+  # 监听地址
+  host: "127.0.0.1"
+  # 启动命令模板（{port} 占位符）
+  start_command: ".venv\\Scripts\\python.exe -m xianyu_hunter web --port {port}"
+  # 进程名匹配（用于 Get-Process / Get-CimInstance 过滤）
+  process_name_pattern: "python"
+  # 命令行匹配（用于精确识别本项目的 web 进程，避免误报其他 python 进程）
+  cmdline_pattern: "xianyu_hunter web"
+
+# ============== 前端构建 ==============
+build:
+  # 构建命令（在 frontend_dir 下执行）
+  command: "npm run build"
+  # 构建后产物时间戳允许延迟（秒）：构建完成到 dist 文件落盘
+  fs_sync_delay_sec: 5
+  # SPA index.html 期望大小范围（字节）：用于判断 HTML 是否正常返回
+  # 过小（< 100）通常是错误页；过大（> 10000）可能是注入了登录引导浮层
+  expected_html_size_range:
+    min: 1000
+    max: 5000
+
+# ============== SPA 路由 ==============
+spa:
+  # BrowserRouter basename（react-router v6 配置）
+  basename: "/app"
+  # 移动端路由前缀（在 react-router 内部，不带 basename）
+  mobile_route_prefix: "/m/"
+  # 登录页路径（在 react-router 内部，不带 basename）
+  login_route: "/login"
+  # 引导页路径
+  onboarding_route: "/onboarding"
+  # 根路径重定向目标（后端 RedirectResponse）
+  root_redirect_to: "/app/"
+  # 移动端首页路径（浏览器实际路径，带 basename）
+  mobile_home_path: "/app/m/"
+  # 桌面端首页路径（浏览器实际路径，带 basename）
+  desktop_home_path: "/app/"
+
+# ============== 关键文件（相对 frontend_dir） ==============
+key_files:
+  # 入口文件
+  main_tsx: "src/main.tsx"
+  # 根 App 组件（含 isMobile Navigate 跳转逻辑）
+  app_tsx: "src/App.tsx"
+  # 桌面端路由注册
+  main_layout: "src/components/layout/MainLayout.tsx"
+  # 移动端路由注册
+  mobile_routes: "src/mobile/routes.tsx"
+  # 移动端布局
+  mobile_layout: "src/mobile/layout/MobileLayout.tsx"
+  # 移动端检测 Hook
+  use_mobile_detect: "src/mobile/hooks/useMobileDetect.ts"
+  # PWA 配置
+  vite_config: "vite.config.ts"
+  # PWA 更新提示组件
+  reload_prompt: "src/components/ReloadPrompt.tsx"
+  # 移动端 Dashboard（默认跳转目标）
+  mobile_dashboard: "src/mobile/pages/Dashboard/index.tsx"
+  # 移动端全局样式
+  mobile_styles: "src/mobile/styles/mobile.css"
+
+# ============== 后端关键文件（相对 backend_dir） ==============
+backend_key_files:
+  # 后端入口（FastAPI app 实例、根路径 RedirectResponse 与 SPA catch-all 路由注册位置）
+  app_py: "web/app.py"
+
+# ============== 移动端检测 ==============
+mobile_detect:
+  # UA 正则：覆盖 iPhone/Android/iPad 等
+  # 注意：iPadOS 13+ UA 与桌面 macOS 一致，需额外检测
+  ua_pattern: "Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini"
+  # iPadOS 13+ 桌面 UA 兜底：检查 Macintosh + ontouchend
+  macintosh_pattern: "Macintosh"
+  # 视口宽度阈值（像素）：低于此值视为窄屏移动端
+  # 为什么不设 768：避免 1024 横向平板 / 桌面窗口缩到 700px 时误判
+  viewport_max_width: 600
+  # iPadOS 13+ 触摸事件检测字段
+  touch_event_property: "ontouchend"
+  # 触摸检测 fallback 属性列表（meta-rule #67：必须 ≥2 独立属性）
+  touch_detection_properties:
+    - "ontouchend"
+    - "maxTouchPoints"
+  # UI 响应式阈值（与 antd sm/md 断点对齐，控制桌面端 Sheet 布局）
+  # 与 viewport_max_width 不同：路由跳转（600px）有更强副作用，UI 响应式（767px）仅控制布局
+  ui_responsive_max_width: 767
+  # CSS 媒体查询断点（与 ui_responsive_max_width +1 对齐）
+  css_media_breakpoint: 768
+  # 设备仿真模式下 JS 属性覆盖脚本模板（{ua} 和 {maxTouchPoints} 占位符）
+  ua_override_script_template: "Object.defineProperty(navigator, 'userAgent', {value: '{ua}', configurable: true}); Object.defineProperty(navigator, 'maxTouchPoints', {value: {maxTouchPoints}, configurable: true}); window.dispatchEvent(new Event('resize'));"
+
+# ============== PWA 配置 ==============
+pwa:
+  # 推荐的 registerType
+  # autoUpdate：新 SW 就绪即自动 skipWaiting 激活，下次刷新即拿到新版本
+  # 为什么不用 'prompt'：prompt 模式下新 SW 进入 waiting 状态，
+  # 当旧 SW 缓存的旧 index.html 引用已删除的 JS chunk 时 SPA 启动失败，
+  # ReloadPrompt 无法 mount 显示更新通知，导致用户被永久卡在白屏
+  recommended_register_type: "autoUpdate"
+  # 预缓存文件数期望范围（用于判断构建产物是否完整）
+  expected_precache_count_range:
+    min: 100
+    max: 200
+  # service worker 文件名
+  sw_filename: "sw.js"
+  # workbox 运行时文件名前缀
+  workbox_filename_prefix: "workbox-"
+
+# ============== 浏览器自动化 ==============
+browser_automation:
+  # 浏览器自动化工具类型：playwright_mcp | browser_use
+  # playwright_mcp: 通过 MCP 调用 Playwright，支持 evaluate/click/navigate 等细粒度操作
+  # browser_use: 通过 Task subagent 调用，功能受限（无法切 UA、无法执行任意 JS）
+  tool_type: "playwright_mcp"
+  # subagent 类型（仅在 tool_type 为 browser_use 时使用）
+  subagent_type: "browser_use"
+  # 验证场景列表（每个场景是一个独立的浏览器调用）
+  scenarios:
+    desktop_root:
+      description: "桌面 UA 访问根路径（基准对照）"
+      url_template: "http://{host}:{port}/"
+      expected_status: 200
+      expected_final_url_pattern: ".*\\/app\\/?$"
+    desktop_app_m:
+      description: "桌面 UA 直接访问移动端路径（验证渲染）"
+      url_template: "http://{host}:{port}/app/m/"
+      expected_status: 200
+      expected_title_contains: "XianyuHunter"
+    mobile_root:
+      description: "移动端 UA 访问根路径（验证自动跳转）"
+      url_template: "http://{host}:{port}/"
+      expected_final_url_pattern: ".*\\/app\\/m\\/?$"
+  # browser_use 已知限制
+  known_limitations:
+    - "无法切换 User-Agent（不支持 --user-agent 启动参数）"
+    - "无法访问 DevTools Application 面板（不能 Unregister SW / Clear site data）"
+    - "无法执行 browser_evaluate 任意 JS"
+    - "实际 navigator.userAgent 是 Electron 桌面环境"
+  # 当 browser_use 无法切换 UA 时的 fallback 策略
+  ua_fallback_strategy: "代码层面分析 + 用户实际设备验证"
+  # Playwright MCP 设备预设（tool_type 为 playwright_mcp 时使用）
+  playwright_mcp:
+    # 设备预设名称（对应 playwright_resize 的 device 参数）
+    device_preset: "iPhone 13"
+    # 视口宽度（像素）
+    viewport_width: 390
+    # 视口高度（像素）
+    viewport_height: 664
+    # 是否移动端
+    is_mobile: true
+    # 是否支持触摸
+    has_touch: true
+    # 设备缩放比例
+    device_scale_factor: 3
+    # 响应式测试多设备覆盖列表（meta-rule #69：至少覆盖窄屏/宽屏/桌面三场景）
+    device_presets:
+      - { device: "iPhone 13", width: 390, height: 664, is_mobile: true, has_touch: true, category: "narrow_phone" }
+      - { device: "iPad Pro 11", width: 834, height: 1194, is_mobile: true, has_touch: true, category: "wide_tablet" }
+      - { device: "Desktop Chrome", width: 1280, height: 720, is_mobile: false, has_touch: false, category: "desktop" }
+    # 桌面端防误判视口宽度（meta-rule #69：修复后必须验证桌面端不被误判）
+    desktop_viewport_width: 1280
+    # iPad OS 13+ 模拟环境（UA 伪装为 Macintosh + maxTouchPoints > 0）
+    ipados_simulation:
+      ua: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+      max_touch_points: 5
+
+# ============== 诊断输出 ==============
+diagnostic:
+  # 临时诊断日志前缀（用于 console 过滤）
+  console_prefix: "[detectMobile]"
+  # 诊断 query string 参数名
+  query_param_name: "debug"
+  # 诊断 query string 触发值
+  query_param_value: "mobile"
+  # 诊断浮层显示的字段列表
+  visible_fields:
+    - "isMobile"
+    - "pathname"
+    - "innerWidth"
+    - "ontouchend in document"
+    - "UA"
+    - "判定逻辑（3 条分支命中情况）"
+    - "预期跳转"
+
+# ============== 清缓存指导（按浏览器类型） ==============
+cache_cleanup:
+  # 推荐优先策略：无痕模式（一次性，最彻底）
+  primary_strategy: "incognito_mode"
+  # 按浏览器类型的清缓存路径
+  browser_guides:
+    iphone_safari:
+      label: "iPhone Safari"
+      steps:
+        - "设置 → Safari → 高级 → 网站数据"
+        - "找到 tunnel 域名（如 trycloudflare.com）"
+        - "左滑删除对应站点数据"
+      incognito_steps:
+        - "Safari 底部标签页按钮 → 右下角新建无痕浏览标签页"
+        - "在无痕模式下访问 tunnel URL"
+    android_chrome:
+      label: "Android Chrome"
+      steps:
+        - "长按 Chrome 图标 → 应用信息"
+        - "存储 → 清除数据（含 Cache 和 Site data）"
+      incognito_steps:
+        - "Chrome 右上角三点 → 新建无痕标签页"
+        - "在无痕模式下访问 tunnel URL"
+    desktop_chrome:
+      label: "桌面 Chrome"
+      steps:
+        - "F12 → Application → Service Workers → Unregister"
+        - "Application → Storage → Clear site data"
+      incognito_steps:
+        - "Ctrl+Shift+N 新建无痕窗口"
+
+# ============== memory 检索 ==============
+memory_search:
+  # 项目 memory 根目录（绝对路径）
+  memory_root: "c:\\Users\\hspcadmin\\.trae-cn\\memory\\projects"
+  # 搜索关键词（用于查找历史类似诊断）
+  # 多个关键词用 | 分隔（grep 正则）
+  search_keywords:
+    - "移动端.*跳|跳.*移动端"
+    - "service worker|sw\\.js|PWA"
+    - "Navigate.*m/|basename|isMobile"
+    - "白屏|路由不跳转|跳不过去"
+  # 搜索结果上限
+  max_hits: 20
+
+# ============== 决策树（路由不跳转场景） ==============
+decision_tree:
+  # 场景：用户报告"移动端地址跳不过去"
+  # 按以下顺序逐项检查，命中即停
+  route_not_redirect:
+    - id: "DT-01"
+      condition: "web 进程未运行或端口未监听"
+      check: "Get-Process / netstat"
+      fix: "启动 web 进程"
+      next: null
+    - id: "DT-02"
+      condition: "构建产物不存在或时间戳早于 web 进程启动"
+      check: "Test-Path / Get-ChildItem LastWriteTime"
+      fix: "重新构建并重启 web 进程"
+      next: null
+    - id: "DT-03"
+      condition: "后端根路径不返回 302 或 SPA 路径不返回 200"
+      check: "curl.exe 根路径 / SPA 路径"
+      fix: "检查后端 app.py 路由注册"
+      next: null
+    - id: "DT-04"
+      condition: "App.tsx 中 isMobile Navigate 条件被破坏"
+      check: "Read App.tsx 的 Navigate 跳转逻辑"
+      fix: "恢复 Navigate 跳转条件"
+      next: null
+    - id: "DT-05"
+      condition: "PWA registerType 为 'prompt' 导致 SW 死锁"
+      check: "Read vite.config.ts registerType"
+      fix: "改为 'autoUpdate' 并重新构建"
+      next: "DT-06"
+    - id: "DT-06"
+      condition: "用户浏览器残留旧 SW 缓存"
+      check: "询问用户清缓存方式"
+      fix: "按 browser_guides 指导清缓存或用无痕模式"
+      next: null
+    - id: "DT-07"
+      condition: "useMobileDetect UA 正则不匹配用户手机"
+      check: "加诊断浮层 ?debug=mobile 让用户报告 UA"
+      fix: "扩展 ua_pattern 或加 ontouchend 兜底"
+      next: null
+    - id: "DT-08"
+      condition: "MainLayout useEffect 未登录拦截优先于 isMobile 跳转"
+      check: "Read MainLayout.tsx 认证拦截逻辑"
+      fix: "调整 useEffect 时序或 isMobile 检查位置"
+      next: null
+    - id: "DT-09"
+      condition: "设备仿真模式下 Playwright 未修改 UA/maxTouchPoints"
+      check: "playwright_evaluate 检查 navigator.userAgent/maxTouchPoints 是否与设备预设一致"
+      fix: "通过 JS Object.defineProperty 覆盖 navigator 属性模拟真实设备环境"
+      next: null
+    - id: "DT-10"
+      condition: "iPadOS 13+ 触摸检测仅依赖 ontouchend，缺少 maxTouchPoints fallback"
+      check: "Read useMobileDetect.ts，grep ontouchend 但无 maxTouchPoints"
+      fix: "增加 navigator.maxTouchPoints > 0 作为 ontouchend fallback（仅 Macintosh 分支）"
+      next: null
+    - id: "DT-11"
+      condition: "PWA SW 缓存旧 JS 导致 MIME 类型错误或白屏"
+      check: "console error 含 'unsupported MIME type' 或 root innerHTML 为空"
+      fix: "unregister SW + caches.delete + 重新导航（带 ?_t= 时间戳绕缓存）"
+      next: null
+
+# ============== 全面功能测试 ==============
+# 仅在"全面测试模式"下使用，诊断模式不需要读取此段
+test_execution:
+  # 后端注入的登录引导浮层 CSS 选择器（未登录闲鱼账号时后端注入，需隐藏以避免遮挡页面）
+  login_overlay_selector: ".xh-login-card"
+  # 页面内容容器 CSS 选择器（用于检查页面是否正常渲染）
+  content_container_selector: "#m-content"
+
+  # 页面遍历配置
+  page_traversal:
+    # 等待策略：poll（轮询检查 DOM 内容长度）| fixed_wait（固定等待）
+    wait_strategy: "poll"
+    # 轮询间隔（毫秒）
+    poll_interval_ms: 500
+    # 轮询最大重试次数
+    poll_max_retries: 6
+    # 页面内容最小长度（字节），低于此值视为未加载完成
+    content_min_length: 100
+    # 已知异步加载页面（Suspense 懒加载，首次渲染内容为空需额外等待）
+    async_load_pages:
+      - "/m/cleanup/"
+      - "/m/db-admin/"
+
+  # 按钮交互配置
+  button_interaction:
+    # 测试策略：all（全量测试所有按钮）| whitelist（仅测试白名单）| blacklist（排除黑名单）
+    strategy: "blacklist"
+    # 黑名单按钮文本（有副作用或不可逆操作的按钮，跳过点击）
+    skip_button_texts:
+      - "删除"
+      - "清空"
+      - "回滚"
+      - "恢复此版本"
+      - "保存配置（热更新）"
+    # 等待 toast 出现的毫秒数
+    toast_wait_ms: 2000
+    # 等待 URL 变化的毫秒数
+    url_change_wait_ms: 1000
+    # toast CSS 选择器（Ant Design message 通知）
+    toast_selector: ".ant-message-notice, .ant-notification-notice"
+    # modal CSS 选择器（Ant Design modal 弹窗）
+    modal_selector: ".ant-modal"
+    # loading CSS 选择器（按钮加载状态）
+    loading_selector: ".ant-btn-loading"
+
+  # 动态路由处理
+  dynamic_routes:
+    # 策略：skip（跳过不测试）| mock_id（使用 mock ID 替换 :id 参数）
+    strategy: "skip"
+    # mock ID 映射（strategy 为 mock_id 时使用）
+    mock_ids:
+      "tasks/:id": "1"
+      "orders/:id": "1"
+
+  # Service Worker 缓存清理（回归测试时使用）
+  sw_cleanup:
+    # JS 代码模板：注销所有 SW + 清空所有 caches
+    # 通过 playwright_evaluate 执行
+    unregister_script: |
+      (function(){
+        return new Promise(function(resolve){
+          if('serviceWorker' in navigator){
+            navigator.serviceWorker.getRegistrations().then(function(regs){
+              var promises = regs.map(function(r){ return r.unregister(); });
+              Promise.all(promises).then(function(){
+                caches.keys().then(function(names){
+                  var delPromises = names.map(function(n){ return caches.delete(n); });
+                  Promise.all(delPromises).then(function(){
+                    resolve('unregistered ' + regs.length + ' SW, cleared ' + names.length + ' caches');
+                  });
+                });
+              });
+            });
+          } else { resolve('no SW'); }
+        });
+      })()
+    # 验证 JS 文件是否包含指定字符串（用于确认构建产物已更新）
+    verify_script_template: |
+      (function(){
+        return new Promise(function(resolve){
+          fetch('{js_path}').then(function(r){ return r.text(); }).then(function(t){
+            resolve(JSON.stringify({hasString: t.includes('{search_string}'), fileSize: t.length}));
+          });
+        });
+      })()
+
+  # ---- TR1: 测试超时与分批运行 ----
+  # 为什么需要：大规模测试（>batch_threshold 用例）长时间运行无输出会让 agent 难以判断是否卡死，
+  # 必须依赖 pytest-timeout 强制超时，并按模块分组分批运行以便定位失败模块
+  timeout_seconds: 30
+  batch_threshold: 200
+  plugin_required: "pytest-timeout"
+
+  # ---- TR2: PowerShell 测试输出编码 ----
+  # 为什么需要：PowerShell 重定向 stdout 默认使用 CLIXML 序列化，导致日志文件含 <Objs> 标签无法直接阅读，
+  # 必须用 Out-File -Encoding utf8 显式指定编码
+  output_encoding: "utf8"
+  output_file: "test-results.txt"
+  avoid_clixml: true
+
+  # ---- TR3: 测试失败分类修复策略 ----
+  # 为什么需要：大规模测试失败（>10 个）逐个串行修复成本极高，按错误签名聚类后并行子代理修复可显著提速
+  failure_classification:
+    enabled: true
+    # 并行子代理数量上限（与失败分类数取较小值）
+    parallel_agents: 4
+    # 触发并行修复的失败用例阈值（≤ 此值则串行修复）
+    trigger_threshold: 10
+    # 错误类型 → 根因类别映射表（按错误签名聚类，分配子代理并行修复）
+    # signature 为正则片段，匹配 pytest 失败堆栈首行
+    rules:
+      - signature: "TypeError: missing required argument|missing 1 required positional argument"
+        root_cause: "endpoint_signature_change"
+        description: "端点签名变更类（端点函数新增/删除了参数）"
+      - signature: "TypeError: 'NoneType'/'bool' can't be awaited|can't be used in 'await' expression"
+        root_cause: "sync_async_mismatch"
+        description: "同步/异步不匹配类（await 了非 awaitable 对象）"
+      - signature: "AttributeError: .* has no attribute"
+        root_cause: "attribute_rename"
+        description: "属性名重构类（对象属性被重命名或删除）"
+      - signature: "AssertionError: assert .* == .*"
+        root_cause: "business_logic"
+        description: "业务逻辑类（断言值不匹配，需核对预期值）"
+
+  # ---- TR4: 测试修复验证策略 ----
+  # 为什么需要：单个子代理修复后单独验证能快速定位回归，批量验证确保整体不退化
+  verify_per_module: true
+  verify_batch: true
+
+  # ---- TR5: 端点直接调用 mock Request 构造 ----
+  # 为什么需要：测试直接调用 FastAPI 端点函数时，端点签名要求 request 参数，
+  # 必须用 SimpleNamespace 构造轻量 mock，避免启动完整 ASGI 上下文
+  mock_request:
+    default_user_id: "default"
+    # 模板字符串：{user_id} 占位符，执行时替换为 default_user_id 或测试指定值
+    template: "SimpleNamespace(state=SimpleNamespace(user_id=\"{user_id}\"))"
+
+  # ---- TR6: monkeypatch 模块级绑定检测 ----
+  # 为什么需要：`from X import Y` 执行后 Y 已绑定到当前模块命名空间，
+  # monkeypatch.setattr(X, "Y", ...) 只影响源模块 X 的 Y，被测代码读到的仍是导入时绑定的旧值
+  monkeypatch_scan:
+    # 扫描模式：{config_module} 占位符，替换为被 patch 的源模块路径
+    scan_pattern: "from {config_module} import"
+    # 是否自动 patch 所有命中模块的模块级引用
+    auto_patch_all: true
+
+# ============== 路由发现 ==============
+routes_discovery:
+  # 来源：manual（手动配置 routes 列表）| auto_from_file（从路由文件自动发现）
+  source: "manual"
+  # 路由文件路径（相对 frontend_dir，source 为 auto_from_file 时使用）
+  routes_file: "src/mobile/routes.tsx"
+  # 手动配置的移动端页面路由列表
+  # 每个条目包含：path（路由路径）、name（页面名称）、expected_content（预期内容关键词）
+  manual_routes:
+    - { path: "/m/", name: "仪表盘", expected_content: "统计" }
+    - { path: "/m/tasks/", name: "任务", expected_content: "任务" }
+    - { path: "/m/orders/", name: "抢单", expected_content: "订单" }
+    - { path: "/m/notifications/", name: "告警", expected_content: "通知" }
+    - { path: "/m/chatbot/", name: "客服", expected_content: "对话" }
+    - { path: "/m/logs/", name: "实时日志", expected_content: "日志" }
+    - { path: "/m/market/", name: "价格行情", expected_content: "价格" }
+    - { path: "/m/export/", name: "数据导出", expected_content: "下载" }
+    - { path: "/m/error-logs/", name: "错误日志", expected_content: "错误" }
+    - { path: "/m/notifier-channels/", name: "通知渠道", expected_content: "渠道" }
+    - { path: "/m/price-strategy/", name: "价格策略", expected_content: "策略" }
+    - { path: "/m/cleanup/", name: "系统清理", expected_content: "存储" }
+    - { path: "/m/chatbot-config/", name: "客服配置", expected_content: "FAQ" }
+    - { path: "/m/eval-rules/", name: "评估规则", expected_content: "权重" }
+    - { path: "/m/buy-config/", name: "抢单策略", expected_content: "分数" }
+    - { path: "/m/search-config/", name: "搜索参数", expected_content: "分页" }
+    - { path: "/m/ai-config/", name: "AI服务", expected_content: "LLM" }
+    - { path: "/m/version-manager/", name: "配置版本", expected_content: "版本" }
+    - { path: "/m/db-admin/", name: "数据库维护", expected_content: "表" }
+    - { path: "/m/batch-refresh/", name: "批量采集", expected_content: "采集" }
+    - { path: "/m/about/", name: "关于", expected_content: "版本" }
+    - { path: "/m/timeline/", name: "时间线", expected_content: "事件" }
+    - { path: "/m/anticrawl/", name: "反爬管理", expected_content: "会话" }
+    - { path: "/m/items/", name: "商品列表", expected_content: "任务" }
+    - { path: "/m/evaluations/", name: "评估明细", expected_content: "评估" }
+    - { path: "/m/tasks/new", name: "新建任务", expected_content: "关键词" }
+
+  # 按钮选择器配置（用于按钮交互测试）
+  button_selectors:
+    # TabBar 导航按钮选择器
+    tabbar_button: ".m-tab-item"
+    # TabBar 活跃状态选择器
+    tabbar_active: ".m-tab-item.active"
+    # TabBar 按钮标签选择器
+    tabbar_label: ".m-tab-label"
+    # 页面内容区域的按钮选择器
+    content_button: "#m-content button"
+    # 全局按钮选择器（包含 header 中的按钮）
+    global_button: "button"
+
+# ============== 认证配置 ==============
+auth:
+  # 认证方式：cookie | header | none
+  type: "cookie"
+  # cookie 名称
+  cookie_name: "xh_token"
+  # token 来源：env_file（从 .env 文件读取）| config（从本配置文件读取）| manual（手动传入）
+  token_source: "env_file"
+  # .env 文件路径（相对 project.root_dir，token_source 为 env_file 时使用）
+  env_file_path: ".env"
+  # .env 文件中的 key 名称
+  env_file_key: "WEB_TOKEN"
+  # cookie 作用域路径
+  cookie_path: "/"
+  # cookie 有效期（秒）
+  cookie_max_age: 86400
+  # header 名称（type 为 header 时使用）
+  header_name: "Authorization"
+  # header 前缀（type 为 header 时使用）
+  header_prefix: "Bearer "
+
+# ============== 测试报告 ==============
+report:
+  # 报告格式：markdown（内联输出）| json（结构化数据）
+  format: "markdown"
+  # 是否包含截图（playwright_mcp 支持，browser_use 不支持）
+  include_screenshots: false
+  # 报告输出方式：inline（直接在对话中输出）| file（写入文件）
+  output: "inline"
+  # 报告文件输出目录（output 为 file 时使用，相对 project.root_dir）
+  output_dir: "./test-reports"
+
+# ============== 外部命令交互测试（meta-rule #79 落地） ==============
+# 对应 xianyu-hunter-dev coding-rules step 216-221 / meta-rule #79
+external_command_testing:
+  # 是否启用外部命令交互测试
+  enabled: true
+  _doc: "长时交互式外部命令两阶段异步模式的测试配置（meta-rule #79），所有参数集中管理"
+  # 两阶段端点测试：验证 POST /start + GET /status 契约
+  two_phase_endpoint_test:
+    # start 端点必须返回的必要字段
+    start_response_fields:
+      - "status"      # waiting | failed
+      - "auth_url"    # 关键信息（可为 null）
+      - "message"     # 用户可读消息
+    # status 端点必须返回的必要字段
+    status_response_fields:
+      - "status"          # waiting | success | failed | idle
+      - "message"         # 用户可读消息
+      - "cert_file"       # success 时必须有
+      - "checked_paths"   # failed 时必须有（诊断信息）
+      - "output"          # failed 时必须有（子进程输出）
+    # 必须覆盖的状态转换路径
+    state_transitions:
+      - "idle → waiting"          # 首次 POST /start
+      - "waiting → success"       # 用户完成授权
+      - "waiting → failed"        # 进程退出但未找到完成标志
+      - "waiting → idle"          # 服务重启后单例重置
+  # 多路径检测测试：验证完成标志在所有配置路径下都能被检测到
+  multi_path_detection_test:
+    # 测试路径列表（与 external_command_interaction.completion_detection 对齐）
+    test_paths:
+      - "platform_default"     # Path.home()/.cloudflared/cert.pem
+      - "localappdata_derived" # %LOCALAPPDATA%/.cloudflared/cert.pem
+      - "appdata_derived"      # %APPDATA%/.cloudflared/cert.pem
+      - "output_regex_extracted" # 从命令输出正则提取的路径
+    # 每条路径的测试策略
+    test_strategy: "在对应路径放置 mock cert.pem，验证 status 端点返回 success 并包含正确路径"
+  # 子进程清理测试：验证三步协议和幂等性
+  cleanup_protocol_test:
+    # 必须验证的清理场景
+    scenarios:
+      - "success_cleanup"      # success 后 reset 调用清理
+      - "failed_cleanup"       # failed 后 reset 调用清理
+      - "exception_cleanup"    # 异常后 reset 调用清理
+      - "idempotent_cleanup"   # 多次调用 reset 不抛异常
+    # 清理顺序验证
+    expected_order: ["terminate", "wait", "kill"]
+  # 前端轮询测试：验证四态处理和定时器清理
+  frontend_polling_test:
+    # 必须测试的状态分支
+    state_branches:
+      - "waiting → 继续 setInterval"
+      - "success → clearInterval + 成功回调"
+      - "failed → clearInterval + 错误展示"
+      - "idle → clearInterval + 重新触发提示"
+    # 定时器泄漏检测
+    leak_detection:
+      check_unmount_cleanup: true
+      _doc: "组件卸载后验证 clearInterval 已被调用（useEffect cleanup）"
+    # 轮询间隔验证（与 async_polling_pattern.interval_ms 对齐）
+    expected_interval_ms: 2500
+
+# ============== 后端 Cookie 自愈测试（模式 C） ==============
+# 仅在"后端 Cookie 自愈测试模式"下使用，模式 A/B 不需要读取此段
+# 对应 xianyu-hunter 历史修复：token 刷新 + cookie 强制注入两级自愈机制
+backend_cookie_healing:
+  _doc: "后端 Cookie 两级自愈机制的测试配置（模式 C），覆盖单元测试、集成日志序列、登录健康探测与批次预检"
+  # 路径基准：以下所有文件路径均相对 project.root_dir
+  # 关键代码路径（用于代码变更后回归测试范围判定）
+  key_files:
+    - "src/xianyu_hunter/modules/collection_service.py"
+    - "src/xianyu_hunter/modules/batch_refresh_scheduler.py"
+    - "src/xianyu_hunter/web/routes/unified_login.py"
+    - "tests/test_collection_service.py"
+
+  # 单元测试配置
+  unit_test:
+    # 测试文件路径（相对 project.root_dir）
+    test_file: "tests/test_collection_service.py"
+    # pytest 单个用例命令模板（{test_file} 与 {test_name} 占位符）
+    # 为什么用 -v：需要看到每个测试用例的通过/失败状态
+    # 为什么用 .venv 中的 python：与 web_process.start_command 保持一致，避免环境污染
+    pytest_command_template: ".venv\\Scripts\\python.exe -m pytest {test_file}::{test_name} -v"
+    # 运行全部自愈测试的命令模板（{test_file} 占位符）
+    pytest_command_all: ".venv\\Scripts\\python.exe -m pytest {test_file} -v"
+    # 自愈相关测试用例列表
+    healing_test_cases:
+      - name: "test_refresh_token_resets_session_invalid_before_retry"
+        description: "验证熔断标志重置（重试前重置 session_invalid，重试失败时重新设置）"
+      - name: "test_refresh_token_second_level_heal_succeeds"
+        description: "验证两级自愈（第一级失败 → 第二级 cookie 注入成功）"
+      - name: "test_refresh_token_both_levels_fail_logs_diagnostics"
+        description: "验证诊断日志（两级均失败时记录 _log_cookie_diagnostics）"
+      - name: "test_refresh_token_skips_when_reason_not_home_title_redirect"
+        description: "验证非相关原因跳过（reason 不匹配 home_title_redirect 时不进入自愈）"
+
+  # 集成测试配置（启动服务后验证日志序列）
+  integration_test:
+    # 日志文件路径（相对 project.root_dir）
+    # stdout 纯文本日志：包含所有 logger 输出，便于 grep 匹配中文日志模式
+    stdout_log_file: "run.stdout.log"
+    # JSON 结构化日志目录（按日滚动，文件名格式 xianyu_YYYY-MM-DD.log）
+    data_logs_dir: "data/logs"
+    # 日志序列验证（按顺序匹配，用于验证两级自愈流程是否完整触发）
+    # 匹配策略：每个 pattern 在日志中按出现顺序检查；非时序强相关用例可单独验证
+    expected_log_sequence:
+      - pattern: "已强制刷新 _m_h5_tk 后重试"
+        description: "第一级自愈日志（token 刷新后重试）"
+      - pattern: "跳过 _m_h5_tk 刷新"
+        description: "跳过刷新日志（5 分钟内已刷新时跳过 token 刷新）"
+      - pattern: "_m_h5_tk 刷新后重试仍失败"
+        description: "第二级自愈触发日志（进入 cookie 强制注入分支）"
+      - pattern: "cookie 重新注入后重试成功"
+        description: "第二级自愈成功日志"
+      - pattern: "会话失效诊断"
+        description: "诊断日志（两级均失败时记录）"
+    # 登录后健康探测（unified_login._post_login_cookie_health_check）
+    login_health_check:
+      expected_log: "登录后健康探测通过"
+      failure_log: "登录后健康探测失败"
+    # 批次级预检（batch_refresh_scheduler._sync_cookie_before_batch）
+    batch_precheck:
+      expected_log: "批次前 Cookie 预检通过"
+      failure_log: "批次前 Cookie 预检失败"
+
+# ============== Playwright 超时保护测试（模式 D） ==============
+async_timeout_test:
+  _doc: "Playwright/async 阻塞调用超时保护测试配置（对应 xianyu-hunter-dev meta-rule #80/#81/#82）"
+  enabled: true
+
+  # 关联代码文件（grep 扫描目标）
+  key_files:
+    - path: "scripts/browser_login.py"
+      desc: "浏览器登录主脚本，_prepare_login_cookie_export 和 _collect_settled_cookies 是重点检查区域"
+    - path: "scripts/auth_helper.py"
+      desc: "认证辅助脚本，可能调用 Playwright API"
+    - path: "src/xianyu_hunter/infra/browser.py"
+      desc: "浏览器基础设施，Worker 浏览器管理"
+    - path: "src/xianyu_hunter/modules/worker.py"
+      desc: "Worker 模块，长期轮询场景"
+    - path: "src/xianyu_hunter/modules/collector/_search.py"
+      desc: "采集器搜索模块，Playwright 采集调用"
+
+  # 需超时保护的 API 列表（按成本分类）
+  protected_apis:
+    lightweight_read:
+      timeout_sec: 5.0
+      apis: ["cookies()", "title()", "url()"]
+    heavy_serialize:
+      timeout_sec: 10.0
+      apis: ["storage_state()", "snapshot()"]
+    evaluate:
+      timeout_sec: 15.0
+      apis: ["evaluate()"]
+
+  # 心跳与阶段超时协同验证
+  heartbeat_coordination:
+    status_file_field: "ts"
+    stages:
+      - status: "starting"
+        timeout_sec: 90.0
+      - status: "opening"
+        timeout_sec: 90.0
+      - status: "running"
+        timeout_sec: 90.0
+      - status: "waiting"
+        timeout_sec: 30.0
+      - status: "already_logged"
+        timeout_sec: 90.0
+    safety_margin: 0.3
+    # 阶段内阻塞调用超时之和必须 < 阈值 * (1 - safety_margin)
+    max_accumulated_timeout_sec: 30.0
+
+  # 跨代码块一致性检查
+  consistency_check:
+    min_occurrences: 2
+    # 同一 API 在 ≥2 处调用时保护措施必须一致
+    protected_measures: ["asyncio.wait_for", "try/except", "fallback"]
+
+  # 测试场景
+  scenarios:
+    - id: "AT-PT-001"
+      name: "async 阻塞调用超时保护验证"
+      type: "static_scan"
+      desc: "grep 扫描所有 await bc.xxx()/page.xxx() 调用，验证是否有 asyncio.wait_for 包裹"
+      grep_pattern: 'await\s+\w+\.(cookies|storage_state|snapshot|title|url|evaluate)\('
+      expect: "每个匹配项必须被 asyncio.wait_for(..., timeout=N) 包裹"
+      severity: critical
+
+    - id: "AT-PT-002"
+      name: "心跳与阶段超时协同验证"
+      type: "static_scan"
+      desc: "验证子进程心跳架构中每阶段有独立 status + 独立超时阈值"
+      grep_pattern: 'subprocess\.Popen.*status_file|set_status\('
+      expect: "阶段内所有阻塞调用超时之和 < 心跳阈值 * (1 - safety_margin)"
+      severity: critical
+
+    - id: "AT-PT-003"
+      name: "跨代码块一致性检查"
+      type: "static_scan"
+      desc: "统计同一 API 在不同文件的调用次数，对比保护措施是否一致"
+      expect: "同一 API ≥2 处调用时保护措施必须一致"
+      severity: major
+
+    - id: "AT-PT-004"
+      name: "fallback 策略验证"
+      type: "static_scan"
+      desc: "验证超时后有 fallback 不中断主流程"
+      expect: "asyncio.wait_for 的 except 块必须提供 fallback 值（如 best/空列表/None）"
+      severity: major
+
+# ============== UI 布局溢出回归测试（模式 F） ==============
+# 对应 xianyu-hunter-dev meta-rule #83 + step 236/237/238
+# 对应 xianyu-frontend-code-review F-REVIEW-197 / F-REVIEW-198
+# 对应 xianyu-backend-code-review B-REVIEW-237
+# 阈值与 xianyu-hunter-dev/config/tech-stack.json#hardConstraints.uiLayout 保持一致，避免双重真相源
+ui_layout_overflow_test:
+  _doc: "UI 操作项分级保留 / 多视图一致性 / 横向滚动 fallback / 接口字段对齐四类回归测试配置（meta-rule #83 落地）"
+  enabled: true
+  severity: major
+
+  # 关联代码文件（grep 扫描目标，识别哪些文件变更时触发模式 F）
+  key_files:
+    - path: "frontend/src/pages/TaskList.tsx"
+      desc: "任务列表页，表格视图 + 卡片视图双视图组件，操作列按钮分级保留的典型样例"
+    - path: "frontend/src/hooks/useTaskActionHandlers.ts"
+      desc: "任务操作 handler 共享 Hook，多视图操作集合一致性的核心实现"
+    - path: "frontend/src/components/TaskCard.tsx"
+      desc: "任务卡片组件，卡片视图操作集合"
+    - path: "src/xianyu_hunter/web/api/tasks.py"
+      desc: "任务列表/详情接口，ResponseModel 字段与 UI 操作集合对齐的后端契约"
+
+  # 扫描范围（默认覆盖所有页面级 .tsx 文件）
+  scan_glob: "frontend/src/pages/**/*.tsx"
+  scan_exclude:
+    - "**/__tests__/**"
+    - "**/*.test.tsx"
+    - "**/*.spec.tsx"
+    - "**/*.stories.tsx"
+
+  # === 分级保留阈值（与 xianyu-hunter-dev tech-stack.json#uiLayout 保持一致） ===
+  action_button_visible_threshold: 5
+  low_frequency_threshold_per_month: 1
+
+  # 分级保留容器策略（按钮数 → 收起容器类型）
+  collapse_container_strategy:
+    le3: "Dropdown"      # 按钮数 ≤ 3 时收入 Dropdown
+    "3to6": "Popover"    # 按钮数 4-6 时收入 Popover
+    gt6: "Drawer"        # 按钮数 > 6 时收入 Drawer
+
+  # 横向滚动 fallback（Ant Design Table scroll 属性）
+  scroll_fallback: "max-content"
+
+  # 视图识别正则（识别哪些 .tsx 包含表格视图 / 卡片视图）
+  table_view_matchers:
+    - "<Table"
+    - "columns="
+    - "scroll="
+  card_view_matchers:
+    - "<Card"
+    - "actions="
+    - "cover="
+
+  # === 多视图一致性 ===
+  multi_view_sync_required: true
+  multi_view_sync_scan_glob: "frontend/src/pages/**/*.tsx"
+
+  # === 接口字段与 UI 操作集合对齐（F-04） ===
+  api_field_alignment:
+    # 列表接口识别正则
+    # 用双引号字符串避免单引号中 ' 转义问题；正则中 " 与 ' 均匹配引号字符
+    list_response_pattern: "useQuery\\([\"'](/api/tasks).*list[\"']"
+    # 详情接口识别正则
+    detail_response_pattern: "useQuery\\([\"'](/api/tasks)/\\$\\{.*\\}[\"']"
+    # 列表接口允许的最大返回字段数（超过则标记 over-fetching）
+    max_fields_per_list_response: 15
+    # 详情接口允许的最大返回字段数
+    max_fields_per_detail_response: 30
+    # 操作按钮分支显示所必需的字段（缺失则按钮无法正确分支）
+    required_status_fields_for_action_buttons:
+      - "status"
+      - "task_id"
+      - "seller_id"
+      - "is_running"
+      - "last_run_at"
+    # 后端 ResponseModel 扫描路径（用于抽取返回字段集合）
+    backend_response_model_paths:
+      - "src/xianyu_hunter/web/schemas/task.py"
+      - "src/xianyu_hunter/web/schemas/common.py"
+    # ResponseModel 识别正则
+    response_model_patterns:
+      - 'class\s+\w+Response\b.*BaseModel'
+      - 'class\s+\w+Item\b.*BaseModel'
+
+  # === 检测信号（用于自动扫描） ===
+  detection_signals:
+    button_overflow:
+      - "操作列内 <Button 数量 > action_button_visible_threshold"
+      - "操作列内 <a> / <Typography.Link 数量 > action_button_visible_threshold"
+    multi_view_inconsistency:
+      - "同文件中 <Table 与 <Card 并存但 columns.render 与 actions 数组按钮 key 集合不一致"
+      - "useTaskActionHandlers Hook 在表格视图与卡片视图中分别实例化（应共享）"
+    missing_scroll_fallback:
+      - "<Table 未声明 scroll 属性且操作列宽度可能超出容器"
+    field_misalignment:
+      - "UI 操作按钮 onClick 中引用 record.{field} 但接口 ResponseModel 未声明 {field}"
+      - "接口返回字段数 > max_fields_per_list_response / max_fields_per_detail_response"
+
+  # === 修复指引（与 step 236/237/238 一致） ===
+  fix_guidance:
+    button_overflow:
+      action: "将低频按钮收入 Dropdown/Popover/Drawer，保留高频按钮平铺"
+      ref_step: 236
+      ref_meta_rule: 83
+      ref_review: "F-REVIEW-197"
+    multi_view_inconsistency:
+      action: "抽取 useTaskActionHandlers Hook 共享 action 集合，两视图调用同一 Hook 实例"
+      ref_step: 237
+      ref_meta_rule: 83
+      ref_review: "F-REVIEW-198"
+    missing_scroll_fallback:
+      action: "在 <Table 上追加 scroll={{ x: 'max-content' }} 或显式像素值"
+      ref_step: 238
+      ref_meta_rule: 83
+      ref_review: "F-REVIEW-197"
+    field_misalignment:
+      action: "对齐前后端契约：over-fetching 删除冗余字段；under-fetching 补充 ResponseModel 字段；联动 xianyu-backend-code-review B-REVIEW-237 修复"
+      ref_meta_rule: 83
+      ref_review: "B-REVIEW-237"
+
+  # === 适用场景 ===
+  applicable:
+    - "Ant Design Table + Card 双视图组件"
+    - "操作列含多按钮（≥3 个）的列表页"
+    - "使用 useQuery / useMutation 的数据驱动组件"
+    - "前后端 ResponseModel 契约明确的接口"
+
+  # === 不适用场景 ===
+  not_applicable:
+    - "纯展示型组件（无操作列）"
+    - "表单页（无列表/卡片视图）"
+    - "无后端契约的纯前端组件（如配置面板）"
+    - "使用非 Ant Design UI 库的组件（需扩展 *_view_matchers）"
+
+  # === 测试场景（F-01 ~ F-04） ===
+  scenarios:
+    - id: "F-01"
+      name: "操作列按钮数量阈值测试"
+      type: "static_scan"
+      desc: "扫描所有表格/卡片视图，统计操作列按钮数量，验证超过 action_button_visible_threshold 时是否触发分级保留"
+      grep_pattern: '<Button|<a\s|<Typography\.Link'
+      expect: "按钮数 > 阈值时必须有 ≥1 个按钮收入 Dropdown/Popover/Drawer"
+      severity: major
+
+    - id: "F-02"
+      name: "多视图模式一致性测试"
+      type: "static_scan"
+      desc: "识别同时声明 <Table 与 <Card 的组件文件，比较两视图操作集合是否按 key 严格一致"
+      grep_pattern: '(columns=.*render|actions=\[).*(<Button|<a\s|<Typography\.Link)'
+      expect: "表格视图与卡片视图操作集合按 key 严格一致，且共享 useTaskActionHandlers Hook"
+      severity: major
+
+    - id: "F-03"
+      name: "横向滚动 fallback 测试"
+      type: "static_scan"
+      desc: "验证所有表格视图声明 scroll 属性，避免操作列过宽导致横向溢出无兜底"
+      grep_pattern: '<Table[^>]*>'
+      expect: "<Table 必须声明 scroll={{ x: 'max-content' }} 或显式像素值"
+      severity: minor
+
+    - id: "F-04"
+      name: "接口返回字段与 UI 操作集合对齐测试"
+      type: "contract_alignment"
+      desc: "扫描 UI 操作按钮依赖的字段，对比后端 ResponseModel 字段声明，识别 over-fetching / under-fetching / action 字段缺失"
+      expect: "UI 依赖字段必须在 ResponseModel 中声明；返回字段数不超阈值；required_status_fields_for_action_buttons 必须全部存在"
+      severity: critical
+
+  # === 关联规范与审查点 ===
+  corresponding_meta_rule: 83
+  corresponding_steps:
+    - 236
+    - 237
+    - 238
+  corresponding_frontend_review:
+    - "F-REVIEW-197"
+    - "F-REVIEW-198"
+  corresponding_backend_review:
+    - "B-REVIEW-237"
+
+# ============== 数据透传完整性测试（模式 G） ==============
+# 对应 2026-07-18 卖家评估 Bug 复盘 Bug 2A（user_id 传递断裂）
+# 验证跨层调用链（如 collect → _evaluate_and_notify → _save_eval_event → upsert_eval_event）
+# 的 user_id 等关键字段透传完整性，覆盖静态签名检查 / 运行时追踪 / 多用户隔离三类场景
+data_propagation_integrity_test:
+  _doc: "跨层数据透传完整性测试配置（模式 G），验证 user_id 等关键字段在多层调用链中正确传递至最底层数据库写入"
+
+  # 需要验证的透传链路列表
+  # 新增链路只需追加条目，不改 SKILL.md 流程
+  propagation_chains:
+    - name: "官方采集评估事件写入链路"
+      # 入口方法（用户 API 调用入口）
+      entry_method: "ItemCollectionService.collect"
+      # 中间方法（透传链路上的层层调用）
+      intermediate_methods:
+        - "_collect_official_full"
+        - "_evaluate_and_notify"
+        - "_save_eval_event"
+      # 最底层 sink 方法（实际写入数据库的方法）
+      sink_method: "upsert_eval_event"
+      # 必须从入口透传至 sink 的字段
+      required_fields:
+        - user_id
+      # 测试用用户 ID（必须非默认值 "default"，否则无法检测默认值掩盖断裂的 Bug）
+      test_user_id: "test_propagation_user"
+      # 触发 API 端点（相对 web_process.host:port）
+      trigger_endpoint: "/api/evaluations/official-collect"
+      # 验证查询端点（用于检查写入的记录是否能被对应用户查询到）
+      verify_endpoint: "/api/evaluations"
+
+    - name: "worker 首次采集评估事件写入链路"
+      entry_method: "TaskWorker.run_once"
+      intermediate_methods:
+        - "_collect_detail_and_seller"
+        - "_evaluate_item"
+        - "_save_eval_event"
+      sink_method: "upsert_eval_event"
+      required_fields:
+        - task_id
+      # worker 是后台任务，user_id 可能为 None（合理场景），需豁免
+      exempt_fields:
+        - user_id
+
+  # 关键文件（相对 backend_dir）
+  # 任一文件被修改后需要回归验证模式 G
+  key_files:
+    - "modules/collection_service.py"
+    - "modules/worker.py"
+    - "infra/repo_events.py"
+    - "web/routes/evaluations_official.py"
+
+# ============== 快照与最新值一致性测试（模式 H） ==============
+# 对应 2026-07-18 卖家评估 Bug 复盘 Bug 1（seller 字段未合并）与 Bug 2B（价格快照缺失）
+# 验证评估事件中"快照值"（评估时入库的值）与"最新值"（enrich 后的 items 表最新值）的职责分离
+# 覆盖快照保存 / 过滤优先级 / fallback 数据合并三类场景
+snapshot_consistency_test:
+  _doc: "快照与最新值一致性测试配置（模式 H），验证评估事件快照字段与最新值的职责分离是否正确"
+
+  # 需要验证的快照字段列表
+  # 新增字段只需追加条目，不改 SKILL.md 流程
+  snapshot_fields:
+    - name: "评估时价格"
+      # 快照字段名（评估事件 payload 中保存评估时的值）
+      snapshot_field: "_eval_snapshot_price"
+      # 最新值字段名（items 表中的当前值，enrich 阶段可能覆盖）
+      latest_field: "item_price"
+      # enrich 覆盖函数（可能用 latest_field 覆盖 snapshot_field 的函数）
+      enrich_functions:
+        - "_apply_positive_fields"
+        - "_enrich_eval_with_item"
+      # 过滤函数（应优先用 snapshot_field 而非 latest_field）
+      filter_functions:
+        - "_filter_price_range"
+        - "_filter_market_ratio"
+
+  # fallback 函数验证（验证主源失败时 fallback 是否合并所有可用来源）
+  fallback_functions:
+    - name: "seller_profile 降级"
+      # 主源函数（正常情况下调用的函数）
+      primary_function: "collector.seller_profile"
+      # fallback 函数（主源失败时调用的降级函数）
+      fallback_function: "seller_profile_fallback"
+      # 主源成功后是否也必须合并次源字段（补全主源未提供的空字段）
+      merge_on_primary_success: true
+      # 需要合并的字段列表（主源 + 次源都应提供这些字段的非空值）
+      merge_fields:
+        - nick
+        - credit_score
+        - register_days
+        - sold_count
+
+  # 测试场景（构造具体数据验证过滤优先级）
+  # 每个场景声明 eval_price（评估时值）、latest_price（enrich 后值）、min/max_price（过滤范围）、expected_filtered（预期是否被过滤）
+  test_scenarios:
+    # 场景 1：评估时价格在范围内，enrich 后超范围 → 不应过滤
+    # 因为过滤函数应优先用 snapshot_field（评估时值）而非 latest_field（最新值）
+    - name: "评估时在范围内，enrich 后超范围"
+      eval_price: 50
+      latest_price: 150
+      min_price: 10
+      max_price: 100
+      expected_filtered: false
+
+    # 场景 2：评估时价格超范围，enrich 后在范围内 → 应过滤
+    # 即使最新值在范围内，仍按评估时值过滤（保留评估时的判定结果）
+    - name: "评估时超范围，enrich 后在范围内"
+      eval_price: 200
+      latest_price: 50
+      min_price: 10
+      max_price: 100
+      expected_filtered: true
+
+    # 场景 3：评估时无价格，enrich 后有价格 → 不应过滤
+    # 评估时无值时 fallback 用最新值，避免误删有效记录
+    - name: "评估时无价格，enrich 后有价格"
+      eval_price: null
+      latest_price: 150
+      min_price: 10
+      max_price: 100
+      expected_filtered: false
+
+  # 关键文件（相对 backend_dir）
+  # 任一文件被修改后需要回归验证模式 H
+  key_files:
+    - "web/routes/evaluations_list.py"
+    - "modules/collection_service.py"
+    - "modules/worker.py"
+    - "modules/collector/_detail.py"
+
+# ============== Cookie-Token 一致性测试（模式 I）==============
+# 对应 2026-07-22 FAIL_SYS_ILLEGAL_ACCESS token 不匹配问题复盘
+# 验证身份 Cookie 与签名 token（_m_h5_tk）的状态分离与一致性保障
+# 覆盖 Cookie 补注入 / Token 重置独立性 / 续期闭环回写 / 日志占位符 / 静默异常禁止五类场景
+cookie_token_consistency_test:
+  _doc: "Cookie-Token 一致性测试配置（模式 I），验证身份 Cookie 与签名 token 的状态分离、续期闭环完整性及日志规范"
+
+  # === 场景 1：Cookie 补注入测试 ===
+  # 浏览器缺身份 Cookie 时必须从 CookieStore JSON 补注入
+  cookie_injection:
+    # 身份 Cookie 列表（必须全部存在才认为身份 Cookie 完整）
+    identity_cookies:
+      - unb
+      - cookie2
+      - sgcookie
+      - _tb_token_
+      - t
+    # 允许补注入的域（只注入这些域的 Cookie，防止跨域污染）
+    inject_domains:
+      - goofish.com
+      - taobao.com
+    # 测试用例
+    test_cases:
+      - id: "I-01"
+        name: "缺所有身份 Cookie 时全量补注入"
+        desc: "浏览器 Cookie 为空，应从 CookieStore JSON 补注入所有 identity_cookies"
+        initial_browser_cookies: []
+        expected_injected_cookies: [unb, cookie2, sgcookie, _tb_token_, t]
+        expected_inject_domains: [goofish.com, taobao.com]
+        severity: critical
+
+      - id: "I-02"
+        name: "缺部分身份 Cookie 时增量补注入"
+        desc: "浏览器只有 unb，缺 cookie2/sgcookie/_tb_token_/t，应增量补注入缺失项"
+        initial_browser_cookies: [unb]
+        expected_injected_cookies: [cookie2, sgcookie, _tb_token_, t]
+        severity: critical
+
+      - id: "I-03"
+        name: "身份 Cookie 完整时不触发补注入"
+        desc: "浏览器已有所有 identity_cookies，不应执行补注入"
+        initial_browser_cookies: [unb, cookie2, sgcookie, _tb_token_, t]
+        expected_injected_cookies: []
+        severity: major
+
+  # === 场景 2：Token 重置独立性测试 ===
+  # 无论是否执行了 Cookie 补注入，都必须重置 token 刷新时间戳
+  token_reset_independence:
+    # token 刷新时间戳字段名
+    token_refresh_field: "_last_m5tk_refresh"
+    # 重置值（强制刷新）
+    token_reset_value: 0.0
+    # 测试用例
+    test_cases:
+      - id: "I-04"
+        name: "补注入后必须重置 token"
+        desc: "执行了 Cookie 补注入后，token_refresh_field 必须被重置为 token_reset_value"
+        cookie_injected: true
+        expected_token_reset: true
+        severity: critical
+
+      - id: "I-05"
+        name: "未补注入时也必须重置 token"
+        desc: "身份 Cookie 完整未触发补注入，token_refresh_field 仍必须被重置为 token_reset_value"
+        cookie_injected: false
+        expected_token_reset: true
+        severity: critical
+
+  # === 场景 3：续期闭环回写测试 ===
+  # 续期回调导航刷新 token 后必须提取完整 Cookie 回写 CookieStore JSON + SQLite
+  renewal_loop_writeback:
+    # 续期导航 URL
+    nav_url: "https://h5.m.taobao.com/"
+    # 导航超时（毫秒）
+    nav_timeout_ms: 10000
+    # 回写域（提取这些域的 Cookie 回写）
+    export_domains:
+      - goofish.com
+      - taobao.com
+    # 回写方法标记（用于日志区分回写来源）
+    method_tag: "renew"
+    # 回写失败是否阻断续期（false 表示只记 warning 不阻断）
+    writeback_failure_blocks_renewal: false
+    # 测试用例
+    test_cases:
+      - id: "I-06"
+        name: "续期后必须回写 CookieStore JSON"
+        desc: "导航成功后必须调用 browser.get_cookies(export_domains) + export_cookies(method=method_tag) 回写 JSON"
+        nav_success: true
+        expected_json_writeback: true
+        expected_sqlite_writeback: true
+        severity: critical
+
+      - id: "I-07"
+        name: "回写失败不阻断续期"
+        desc: "回写失败时只记 logger.warning，不返回 False 阻断续期流程"
+        nav_success: true
+        writeback_success: false
+        expected_renewal_return: "success"
+        expected_log_level: "warning"
+        severity: major
+
+  # === 场景 4：日志占位符合规性测试 ===
+  # loguru 用 {} 占位符，禁止 %s/%d/%f
+  loguru_placeholder:
+    # 日志库
+    logger_library: "loguru"
+    # 正确占位符
+    correct_placeholder: "{}"
+    # 禁止占位符列表
+    forbidden_placeholders:
+      - "%s"
+      - "%d"
+      - "%f"
+      - "%r"
+    # 异常对象日志是否用 {} 而非 f-string
+    exceptions_use_brace_not_fstring: true
+    # 测试用例
+    test_cases:
+      - id: "I-08"
+        name: "loguru 日志禁止使用 %s 占位符"
+        desc: "扫描所有 logger.xxx() 调用，禁止在 loguru 日志中使用 forbidden_placeholders 中的占位符"
+        scan_pattern: 'logger\.\w+\(.*%[sdrf].*\)'
+        expected: "所有 loguru 日志使用 {} 占位符"
+        severity: major
+
+      - id: "I-09"
+        name: "异常对象日志用大括号而非 f-string"
+        desc: "记录异常对象时应用 logger.exception 占位符传参，而非用 f-string 嵌入异常对象"
+        scan_pattern: "logger\\.\\w+\\(f[\"'].*\\{.*\\}.*[\"']"
+        expected: "异常日志用大括号占位符传参，禁止 f-string 嵌入异常对象"
+        severity: minor
+
+  # === 场景 5：静默异常禁止测试 ===
+  # 禁止 except: pass，关键路径必须 logger.exception()
+  silent_exception_ban:
+    # 关键路径方法名模式（必须用 logger.exception）
+    critical_path_patterns:
+      - "_on_startup"
+      - "run_migrations"
+      - "_init_"
+      - "_shutdown"
+      - "_on_close"
+    # 关键路径最小日志级别
+    critical_path_min_level: "exception"
+    # 辅助路径最小日志级别
+    auxiliary_path_min_level: "warning"
+    # 禁止的异常处理模式（正则）
+    forbidden_patterns:
+      - 'except.*:\s*pass'
+      - 'except.*:\s*\.\.\.'
+      - 'except.*:\s*$'
+    # 允许 debug 级别的预期异常类型
+    exceptions_allowed_debug:
+      - KeyError
+      - FileNotFoundError
+      - AttributeError
+    # 测试用例
+    test_cases:
+      - id: "I-10"
+        name: "禁止 except: pass 静默异常"
+        desc: "扫描所有 except 块，禁止完全静默（pass / ... / 空）"
+        scan_pattern: 'except.*:\s*(pass|\.\.\.|\s*$)'
+        expected: "所有 except 块至少有 logger.warning 或 logger.exception"
+        severity: critical
+
+      - id: "I-11"
+        name: "关键路径必须用 logger.exception"
+        desc: "关键路径方法（_on_startup/run_migrations/_init_ 等）的 except 块必须用 logger.exception 输出完整 traceback"
+        scan_pattern: 'def\s+(_on_startup|run_migrations|_init_|_shutdown|_on_close)'
+        expected: "关键路径 except 块用 logger.exception，禁止 logger.warning(f'...')"
+        severity: critical
+
+  # === 关键文件（相对 backend_dir）===
+  # 任一文件被修改后需要回归验证模式 I
+  key_files:
+    - "modules/api_task_links.py"
+    - "modules/login_orchestrator.py"
+    - "modules/worker.py"
+    - "modules/cookie_store.py"
+    - "modules/_search.py"
+
+  # === 关联规范与审查点 ===
+  corresponding_meta_rule: 84
+  corresponding_steps:
+    - 243
+    - 244
+    - 245
+    - 246
+  # 注意：B-REVIEW-242~244 和 F-REVIEW-199 已被 meta-rule #85（v4.51.0）占用
+  # 模式 I 对应的审查点编号待创建后更新
+  corresponding_backend_review: []
+  corresponding_frontend_review: []
+
+# ============== 关键路径可观测性与状态同步测试（模式 J） ==============
+# 对应 2026-07-22 抢单超时 + image_urls 清空 Bug 复盘（meta-rule #85）
+# 覆盖多步骤进度编号日志 / 超时异常用户友好语义 / 组件复用状态重置 / 字段覆盖集合选择四类场景
+# 所有参数集中管理，新增检查项只需追加 scenarios 条目
+critical_path_observability_test:
+  _doc: "关键路径可观测性与状态同步测试配置（模式 J），验证多步骤日志编号、超时异常语义、React 组件复用状态重置、字段覆盖集合选择四类规则"
+
+  # === 场景 1：多步骤进度编号日志测试（step 247 STEP-PROGRESS-LOG-01）===
+  # ≥3 步骤的关键路径必须打编号日志 "步骤X/N <描述> <标识>"
+  step_progress_log:
+    # 触发测试的最小步骤数（少于此次数的不要求编号日志）
+    min_steps_threshold: 3
+    # 日志编号格式正则（匹配 "步骤X/N" 或 "Step X/N"）
+    log_pattern_regex: '(步骤|Step)\s*\d+/\d+'
+    # 关键路径方法名模式（必须打编号日志的方法）
+    critical_path_method_patterns:
+      - "async def _do_"
+      - "async def _collect_"
+      - "async def _navigate_"
+      - "async def _click_"
+      - "async def _submit_"
+      - "def _run_migrations"
+      - "async def _login"
+    # 关键标识字段（编号日志中必须包含至少一个）
+    required_identifiers:
+      - "task_id"
+      - "item_id"
+      - "user_id"
+      - "request_id"
+    # 测试用例
+    test_cases:
+      - id: "J-01"
+        name: "关键路径多步骤编号日志验证"
+        type: "static_scan"
+        desc: "扫描关键路径方法，验证 ≥min_steps_threshold 步骤的方法在每个步骤前有编号日志"
+        expect: "每个步骤前有 logger.info/debug 包含 log_pattern_regex 匹配的编号格式"
+        severity: major
+
+      - id: "J-02"
+        name: "编号日志包含关键标识"
+        type: "static_scan"
+        desc: "验证编号日志中包含至少一个 required_identifiers 中的标识字段"
+        expect: "编号日志格式为 '步骤X/N <描述> <标识>=<值>'"
+        severity: minor
+
+  # === 场景 2：超时异常用户友好语义测试（step 248 TIMEOUT-ERROR-SEMANTICS-01）===
+  # asyncio.wait_for 的 except 块必须先捕获 TimeoutError 再捕获 Exception
+  timeout_error_semantics:
+    # 超时保护包裹函数名
+    timeout_wrapper: "asyncio.wait_for"
+    # 必须单独捕获的异常类型
+    specific_exception: "asyncio.TimeoutError"
+    # 通用异常类型（必须在特定异常之后）
+    generic_exception: "Exception"
+    # 错误消息必须包含的三要素
+    error_message_elements:
+      - "timeout_sec"      # 超时秒数
+      - "possible_cause"   # 可能原因
+      - "suggested_action" # 建议操作
+    # 友好错误消息模板示例（供参考，实际消息从 config 读取）
+    message_template_examples:
+      - "浏览器自动化流程超时（{timeout_sec}秒），请检查闲鱼登录状态后重试"
+      - "抢单流程超时（{timeout_sec}秒），可能原因：页面加载缓慢，建议：检查网络后重试"
+    # 测试用例
+    test_cases:
+      - id: "J-03"
+        name: "TimeoutError 单独捕获验证"
+        type: "static_scan"
+        desc: "扫描 asyncio.wait_for 的 try/except 块，验证 except asyncio.TimeoutError 在 except Exception 之前"
+        scan_pattern: 'asyncio\.wait_for.*\n.*try:|except\s+(asyncio\.)?TimeoutError|except\s+Exception'
+        expect: "except asyncio.TimeoutError 必须在 except Exception 之前单独出现"
+        severity: critical
+
+      - id: "J-04"
+        name: "超时错误消息三要素验证"
+        type: "static_scan"
+        desc: "验证 TimeoutError 分支的错误消息包含超时秒数+可能原因+建议操作"
+        expect: "错误消息含 timeout_sec 值 + 可能原因描述 + 建议操作描述"
+        severity: major
+
+      - id: "J-05"
+        name: "超时异常不走通用分支"
+        type: "runtime"
+        desc: "触发超时场景，验证用户看到的错误消息是友好语义而非 '未知异常'"
+        expect: "前端/toast 显示的超时消息包含三要素，不出现 '未知异常' / 'Unknown error'"
+        severity: critical
+
+  # === 场景 3：React 组件复用状态重置测试（step 249 COMPONENT-REUSE-STATE-RESET-01）===
+  # 被复用的组件在 props 变化时必须重置 useState 状态
+  component_reuse_state_reset:
+    # 需要检测的组件模式（组件名 → 关键 props）
+    # 新增组件只需追加条目
+    watched_components:
+      - name: "ThumbCell"
+        # 状态重置触发 props（这些 props 变化时必须重置内部状态）
+        reset_trigger_props:
+          - "url"
+          - "src"
+        # 内部状态字段（需要重置的 useState）
+        state_fields_to_reset:
+          - "errored"
+      - name: "ImagePreview"
+        reset_trigger_props:
+          - "imageUrls"
+          - "currentIndex"
+        state_fields_to_reset:
+          - "scale"
+          - "rotation"
+    # 通用检测正则（识别所有可能需要状态重置的组件）
+    # 匹配模式：组件同时声明 useState 和接收 props
+    component_detection_regex: 'function\s+\w+\(\{.*\}.*\).*\{.*useState'
+    # useState 声明正则
+    use_state_regex: 'const\s+\[(\w+),\s*set\w+\]\s*=\s*useState'
+    # useEffect 依赖数组正则
+    use_effect_regex: 'useEffect\(\(\)\s*=>\s*\{.*\},\s*\[(.*?)\]'
+    # 测试用例
+    test_cases:
+      - id: "J-06"
+        name: "ThumbCell url 变化时 errored 重置"
+        type: "browser"
+        desc: "在商品列表中切换商品，验证 ThumbCell 组件的 errored 状态在新 url 时重置为 false"
+        expect: "图片加载失败后切换商品，新图片不显示错误占位图"
+        severity: critical
+
+      - id: "J-07"
+        name: "所有 watched_components 有状态重置 useEffect"
+        type: "static_scan"
+        desc: "扫描所有 watched_components，验证有 useEffect 监听 reset_trigger_props 并重置 state_fields_to_reset"
+        expect: "每个 watched_component 有 useEffect(() => { setX(false) }, [trigger_prop])"
+        severity: major
+
+      - id: "J-08"
+        name: "通用组件状态重置检测"
+        type: "static_scan"
+        desc: "扫描所有组件，识别同时使用 useState 和 props 的组件，检查 props 变化时是否重置状态"
+        expect: "所有接收 props 且有内部状态的组件，关键 props 变化时有 useEffect 重置逻辑"
+        severity: minor
+
+  # === 场景 4：字段覆盖集合选择测试（step 250 OVERWRITE-SET-SELECTION-01）===
+  # _ALWAYS_OVERWRITE 集合只放"每次采集必定获取到+新值更准确"的字段
+  overwrite_set_selection:
+    # 覆盖集合变量名（在代码中搜索此变量名）
+    overwrite_set_var: "_ALWAYS_OVERWRITE"
+    # 合并策略函数名
+    coalesce_function: "_coalesce"
+    # 允许放入 _ALWAYS_OVERWRITE 的字段特征
+    # 必须同时满足：每次采集必定获取到 + 新值更准确
+    allowed_overwrite_field_criteria:
+      - "每次采集必定获取到（非 None/非空）"
+      - "新值比旧值更准确（如计数器、时间戳）"
+    # 禁止放入 _ALWAYS_OVERWRITE 的字段特征
+    # 采集可能返回 None/空值但旧值有价值的字段必须走 _coalesce
+    forbidden_overwrite_field_criteria:
+      - "采集可能返回 None/空值（如图片 URL）"
+      - "旧值有历史价值（如首次采集的图片）"
+      - "字段来自不稳定数据源（可能间歇性失败）"
+    # 已知的正确 _ALWAYS_OVERWRITE 字段（参考）
+    known_correct_overwrite_fields:
+      - "task_id"
+      - "publish_time"
+      - "view_cnt"
+      - "want_cnt"
+      - "region"
+      - "seller_id"
+    # 已知的应走 _coalesce 的字段（参考）
+    known_coalesce_fields:
+      - "image_urls"
+      - "title"
+      - "desc"
+    # 测试用例
+    test_cases:
+      - id: "J-09"
+        name: "_ALWAYS_OVERWRITE 字段合规性验证"
+        type: "static_scan"
+        desc: "扫描 _ALWAYS_OVERWRITE 集合的每个字段，验证是否符合 allowed_overwrite_field_criteria"
+        expect: "集合中每个字段都满足'每次必定获取到+新值更准确'，不包含可能返回 None 的字段"
+        severity: critical
+
+      - id: "J-10"
+        name: "可能返回 None 的字段走 _coalesce"
+        type: "static_scan"
+        desc: "识别采集可能返回 None 的字段（image_urls 等），验证它们不在 _ALWAYS_OVERWRITE 中而在 _coalesce 逻辑中"
+        expect: "known_coalesce_fields 中的字段不在 _ALWAYS_OVERWRITE 集合中"
+        severity: major
+
+      - id: "J-11"
+        name: "数据合并后旧值保留验证"
+        type: "runtime"
+        desc: "采集返回 image_urls=None 时，验证数据库中旧的 image_urls 值不被覆盖为 None"
+        expect: "采集返回 None 的字段保留数据库旧值，不出现旧值被清空的 Bug"
+        severity: critical
+
+  # === 关键文件（相对 backend_dir / frontend_dir）===
+  # 任一文件被修改后需要回归验证模式 J
+  key_files:
+    backend:
+      - "modules/buyer.py"
+      - "modules/collection_service.py"
+      - "modules/worker.py"
+      - "web/api/evaluations.py"
+    frontend:
+      - "src/components/ThumbCell.tsx"
+      - "src/components/ImagePreview.tsx"
+
+  # === 关联规范与审查点 ===
+  corresponding_meta_rule: 85
+  corresponding_steps:
+    - 247
+    - 248
+    - 249
+    - 250
+  corresponding_backend_review:
+    - "B-REVIEW-242"
+    - "B-REVIEW-243"
+    - "B-REVIEW-244"
+  corresponding_frontend_review:
+    - "F-REVIEW-199"
+
+# ============== 模式 K：DB 脏值诊断测试（meta-rule #86 落地） ==============
+# 对应 xianyu-hunter-dev meta-rule #86（配置字段全链路覆盖检查）
+# 复盘来源：2026-07-11 智能客服新建会话乱码 Bug（DB welcome_message 被写入占位串 '??????????!'）
+# 适用场景：用户报告"显示乱码/问号/方块/不可读字符"时，先诊断 DB 是否有脏值
+mode_k_db_dirty_value_diagnosis_test:
+  # 模式标识
+  mode_id: "K"
+  mode_name: "db_dirty_value_diagnosis_test"
+  mode_description: "DB 脏值诊断测试：检查 DB 中是否存在字面占位串（如 '????'）或编码乱码（UTF-8 多字节序列乱序）"
+
+  # === 触发条件 ===
+  trigger_conditions:
+    # 用户报告关键词（任一命中即触发模式 K）
+    user_report_keywords:
+      - "乱码"
+      - "问号"
+      - "方块"
+      - "不可读"
+      - "显示异常"
+      - "garbled"
+      - "mojibake"
+    # 触发场景（功能层面）
+    trigger_scenarios:
+      - "用户新建会话/记录后显示异常字符"
+      - "配置项值显示为问号或方块"
+      - "前端渲染出现未预期字符"
+
+  # === 诊断步骤 ===
+  diagnosis_steps:
+    - id: "K-01"
+      name: "定位脏值字段"
+      description: "根据用户报告的功能模块，定位可能存在脏值的 DB 表和字段"
+      # 功能模块 → DB 表/字段映射（可扩展）
+      module_field_map:
+        chatbot:
+          table: "chatbot_config"
+          fields: ["welcome_message", "system_prompt", "fallback_response"]
+        task:
+          table: "tasks"
+          fields: ["name", "description", "config_json"]
+        order:
+          table: "orders"
+          fields: ["item_title", "seller_name", "notes"]
+        evaluation:
+          table: "evaluations"
+          fields: ["reason", "detail", "summary"]
+      # 通用 fallback：扫描所有 TEXT 字段
+      fallback_scan_all_text_fields: true
+
+    - id: "K-02"
+      name: "hex 字节检查"
+      description: "使用 SQLite hex() 函数检查字段值的字节序列，区分编码乱码与字面占位串"
+      # SQL 模板（{table}、{field}、{where_clause} 占位符）
+      sql_template: "SELECT id, {field}, hex({field}) as hex_bytes FROM {table} {where_clause}"
+      # 判断规则
+      byte_analysis_rules:
+        # 字面占位串：ASCII 0x3F = '?'，连续多个 3F 即为占位串
+        literal_placeholder_pattern: "^(3F)+$"
+        literal_placeholder_description: "字面占位串（如 '??????????!'），通常由 DB 迁移脚本写入未初始化的默认值"
+        # UTF-8 编码乱码：多字节序列乱序（如 EF BF BD = U+FFFD 替换字符）
+        utf8_mojibake_patterns:
+          - "EFBFBD"           # U+FFFD 替换字符（UTF-8 解码失败时的兜底）
+          - "C3A2C282C2AC"    # UTF-8 双重编码的 €
+          - "E282AC"           # UTF-8 正确的 €（用于对比）
+        utf8_mojibake_description: "UTF-8 编码乱码，通常由编码转换错误导致"
+        # GBK 误读为 UTF-8 的常见模式
+        gbk_misread_patterns:
+          - "CED2C3C7"        # "我们" 的 GBK 编码被误读
+        gbk_misread_description: "GBK 编码被误读为 UTF-8，通常由 Windows 中文环境导致"
+      # hex 检查命令模板（PowerShell 兼容）
+      powershell_sql_template: ".venv\\Scripts\\python.exe -c \"import sqlite3; conn=sqlite3.connect('data/xianyu.db'); cur=conn.cursor(); cur.execute('{sql}'); print(cur.fetchall())\""
+
+    - id: "K-03"
+      name: "脏值清理"
+      description: "确认脏值后，执行 DELETE 或 UPDATE 清理"
+      # 清理策略
+      cleanup_strategies:
+        # 策略 1：DELETE 整行（适用于配置覆盖行，删除后回退默认值）
+        delete_row:
+          applicable_when: "字段有默认值回退机制（如 chatbot_config 表的覆盖行）"
+          sql_template: "DELETE FROM {table} WHERE key = '{key}'"
+        # 策略 2：UPDATE 为 NULL（适用于允许 NULL 的字段）
+        update_null:
+          applicable_when: "字段允许 NULL 且业务逻辑能处理 NULL"
+          sql_template: "UPDATE {table} SET {field} = NULL WHERE id = {id}"
+        # 策略 3：UPDATE 为默认值（适用于有明确默认值的字段）
+        update_default:
+          applicable_when: "字段有明确的默认值"
+          sql_template: "UPDATE {table} SET {field} = '{default_value}' WHERE id = {id}"
+      # 清理后必须验证
+      verify_after_cleanup: true
+      verify_sql_template: "SELECT {field} FROM {table} WHERE id = {id}"
+
+    - id: "K-04"
+      name: "全链路覆盖回归测试"
+      description: "清理脏值后，验证配置字段的 5 层链路是否完整（meta-rule #86）"
+      # 5 层链路检查（引用 meta-rule #86）
+      full_chain_check:
+        enabled: true
+        meta_rule_ref: "meta-rule #86"
+        layers:
+          - name: "db_schema"
+            check: "grep '{field}' src/xianyu_hunter/models/ 或 grep 'ALTER TABLE.*{field}' migrations/"
+          - name: "get_config_return"
+            check: "grep '{field}' src/xianyu_hunter/web/routes/api_chatbot_config.py（get_config 函数返回 dict）"
+          - name: "update_config_handle"
+            check: "grep '{field}' src/xianyu_hunter/web/routes/api_chatbot_config.py（update_config 函数体）"
+          - name: "frontend_types"
+            check: "grep '{field}' frontend/src/pages/Chatbot/types.ts"
+          - name: "frontend_ui"
+            check: "grep '{field}' frontend/src/pages/Chatbot/Config.tsx"
+        # 缺失层级的处理建议
+        missing_layer_advice:
+          db_schema: "需新增迁移脚本 ALTER TABLE ADD COLUMN"
+          get_config_return: "需在 get_config 返回 dict 中追加该字段"
+          update_config_handle: "需在 update_config 中显式处理该字段（含空值短路）"
+          frontend_types: "需在 types.ts 接口中新增字段"
+          frontend_ui: "需在 Config.tsx 中新增编辑控件（Input/TextArea + 恢复默认按钮）"
+
+  # === 测试用例模板 ===
+  test_cases:
+    - id: "K-TC-01"
+      name: "字面占位串诊断"
+      precondition: "DB chatbot_config 表 welcome_message 字段值为 '??????????!'"
+      steps:
+        - "执行 K-01 定位字段"
+        - "执行 K-02 hex 检查，预期 hex_bytes 为 3F3F3F3F3F3F3F3F3F21"
+        - "执行 K-03 DELETE 清理"
+        - "执行 K-04 验证 get_config 返回默认值"
+      expected_result: "welcome_message 字段返回默认值 'Hi，我是智能客服小蜜...'，前端正常显示"
+
+    - id: "K-TC-02"
+      name: "UTF-8 编码乱码诊断"
+      precondition: "DB 字段值包含 U+FFFD 替换字符"
+      steps:
+        - "执行 K-01 定位字段"
+        - "执行 K-02 hex 检查，预期 hex_bytes 包含 EFBFBD"
+        - "执行 K-03 UPDATE 为 NULL 或默认值"
+        - "执行 K-04 验证字段值正确"
+      expected_result: "字段值恢复正常，前端无乱码显示"
+
+    - id: "K-TC-03"
+      name: "配置字段全链路覆盖回归"
+      precondition: "新增配置字段后，验证 5 层链路完整"
+      steps:
+        - "执行 K-04 全链路检查，grep 5 个位置"
+        - "如有缺失层，按 missing_layer_advice 修复"
+      expected_result: "5 层链路全部覆盖，无缺失"
+
+  # === 与其他模式的协作 ===
+  mode_collaboration:
+    # 模式 K 诊断完成后，可触发以下模式做回归
+    trigger_after_diagnosis:
+      - mode_id: "C"
+        description: "单元测试回归（确保清理脏值后业务逻辑正常）"
+      - mode_id: "J"
+        description: "关键路径测试（确保配置字段链路完整）"
+    # 模式 K 不适用于以下场景（应改用其他模式）
+    not_applicable_redirect:
+      - scenario: "前端渲染乱码但 DB 值正常"
+        redirect_to: "模式 F（UI 布局溢出回归测试）或浏览器 console 检查"
+      - scenario: "API 返回乱码但 DB 值正常"
+        redirect_to: "检查后端响应头 Content-Type 是否含 charset=utf-8"
+
+  # === 输出报告格式 ===
+  report_format:
+    title: "DB 脏值诊断测试报告（模式 K）"
+    sections:
+      - "1. 触发条件与用户报告"
+      - "2. 脏值定位（表/字段/原始值/hex 字节）"
+      - "3. 脏值类型判定（字面占位串 / UTF-8 乱码 / GBK 误读）"
+      - "4. 清理操作（SQL 语句 + 影响行数）"
+      - "5. 全链路覆盖检查（5 层 grep 结果）"
+      - "6. 回归测试结果"
+      - "7. 根因分析与预防建议（引用 meta-rule #86/#87）"
+
+  # ============================================================
+  # 模式 L：状态机死锁回归测试配置
+  # 对应 meta-rule #86 / B-REVIEW-245
+  # ============================================================
+  mode_l_state_machine_deadlock_test:
+    enabled: true
+    description: "调度器状态机 pause/resume 闭环验证与死锁回归测试"
+
+    # 关键代码文件（修改后需回归）
+    key_files:
+      backend:
+        - "src/xianyu_hunter/modules/scheduler.py"
+        - "src/xianyu_hunter/modules/scheduler.py::_run_loop"
+        - "src/xianyu_hunter/modules/scheduler.py::_execute_run_once_locked"
+        - "src/xianyu_hunter/modules/scheduler.py::_run_one_iteration"
+      api:
+        - "src/xianyu_hunter/web/routes/api_tasks.py"
+
+    # 单元测试配置
+    unit_test:
+      test_file: "tests/test_scheduler_state_machine.py"
+      # 单用例超时秒数（与 test_execution.timeout_seconds 解耦，状态机测试通常需要更长超时）
+      timeout_seconds: 30
+      # pytest 命令模板：{python}/{test_file}/{test_name}/{timeout_seconds} 占位符
+      # 为什么用占位符而非硬编码：避免超时值变更时需要同步修改多处
+      pytest_command_all: "{python} -m pytest {test_file} -v --timeout={timeout_seconds}"
+      pytest_command_template: "{python} -m pytest {test_file}::{test_name} -v --timeout={timeout_seconds}"
+      test_cases:
+        - name: "test_pause_resume_event_pairing"
+          description: "pause_event.set() 有对应 wait()"
+        - name: "test_pause_returns_to_loop_top_not_break"
+          description: "暂停后 loop 回到顶部阻塞，不 break 退出"
+        - name: "test_should_pause_returns_false_not_true"
+          description: "should_pause 返回 False（继续循环）而非 True（退出循环）"
+        - name: "test_error_count_not_reset_on_session_pause"
+          description: "会话失效暂停时不重置 consecutive_errors"
+        - name: "test_resume_precheck_root_cause"
+          description: "resume 前检查根因消除"
+        - name: "test_deadlock_detection_after_resume"
+          description: "resume 后 60s 内有周期执行日志"
+
+    # 集成测试配置
+    integration_test:
+      stdout_log_file: "logs/web.log"
+      pause_log:
+        expected_pattern: "任务已暂停|session.*pause|should_pause"
+        failure_pattern: "任务已停止|loop.*break|return True"
+      resume_log:
+        expected_pattern: "任务已恢复|resume|pause_event.*set"
+        failure_pattern: "无周期执行|deadlock"
+      state_machine_checks:
+        pause_status_field: "is_paused"
+        resume_verification: "周期执行日志"
+        deadlock_detection:
+          timeout_seconds: 60
+          check_interval: 5
+
+    # 状态机校验项清单
+    state_machine_checks:
+      - id: "SM-01"
+        check: "pause_event.set() 有对应 wait()"
+        severity: "critical"
+      - id: "SM-02"
+        check: "暂停后 loop 回到顶部阻塞（continue），不 break 退出"
+        severity: "critical"
+      - id: "SM-03"
+        check: "should_pause 返回 False（继续循环）"
+        severity: "critical"
+      - id: "SM-04"
+        check: "会话失效暂停时不重置 consecutive_errors"
+        severity: "warning"
+      - id: "SM-05"
+        check: "resume 前 precheck 校验根因消除"
+        severity: "warning"
+
+    # 报告格式
+    report_format:
+      title: "状态机死锁回归测试报告（模式 L）"
+      sections:
+        - "1. 单元测试通过率"
+        - "2. 集成测试状态机闭环验证"
+        - "3. 死锁检测结果"
+        - "4. 发现的问题与修复建议（引用 meta-rule #86）"
+
+  # ============================================================
+  # 模式 M：跨层数据契约一致性测试配置
+  # 对应 meta-rule #88 / B-REVIEW-248 / F-REVIEW-200
+  # ============================================================
+  mode_m_cross_layer_contract_test:
+    enabled: true
+    description: "跨层数据字段覆盖策略、组件复用状态重置、空值语义区分验证"
+
+    # 关键代码文件（修改后需回归）
+    key_files:
+      backend:
+        - "src/xianyu_hunter/web/routes/api_evaluations.py"
+        - "src/xianyu_hunter/infra/repo_items.py"
+        - "src/xianyu_hunter/modules/collector.py"
+      frontend:
+        - "frontend/src/pages/Evaluations/index.tsx"
+        - "frontend/src/types.ts"
+
+    # 覆盖策略集合定义与字段映射
+    overwrite_strategy:
+      scan_command: "Select-String -Path 'src/xianyu_hunter/**/*.py' -Pattern '_ALWAYS_OVERWRITE|_coalesce|_NULL_SAFE'"
+      field_classification:
+        always_overwrite_fields:
+          - "title"
+          - "price"
+          - "updated_at"
+          - "status"
+        coalesce_fields:
+          - "image_urls"
+          - "brand"
+          - "description"
+          - "seller_credit"
+        null_safe_fields: []
+      empty_value_test_cases:
+        - name: "explicit_none_overwrites"
+          description: "API 返回 None（显式空值）→ 覆盖旧值"
+        - name: "field_missing_keeps_old"
+          description: "API 未返回该字段（字段缺失）→ 保留旧值"
+
+    # 前端测试配置
+    frontend_test:
+      component_scan_command: "Select-String -Path 'frontend/src/pages/**/*.tsx' -Pattern 'useState.*(errored|loaded|loading)'"
+      build_command: "cd frontend; npm run build"
+      component_reuse_test_cases:
+        - name: "thumbcell_errored_reset"
+          description: "ThumbCell URL 变化时 errored 状态重置"
+          component: "ThumbCell"
+          reset_fields: ["errored"]
+        - name: "imagepreview_loaded_reset"
+          description: "ImagePreview src 变化时 loaded 状态重置"
+          component: "ImagePreview"
+          reset_fields: ["loaded", "loading"]
+      reset_fields: ["errored", "loaded", "loading"]
+
+    # 集成测试配置
+    integration_test:
+      trigger_endpoint: "/api/items/{item_id}/refresh"
+      db_check_query: "SELECT image_urls, brand FROM items WHERE item_id = '{item_id}'"
+      api_check_endpoint: "/api/items/{item_id}"
+      frontend_check_selector: ".item-image img"
+      empty_value_scenario:
+        description: "模拟采集未获取到图片"
+        mock_command: "UPDATE items SET image_urls = NULL WHERE item_id = '{item_id}'"
+        expected_behavior: "前端仍显示旧图片（不应显示占位图）"
+
+    # 报告格式
+    report_format:
+      title: "跨层数据契约一致性测试报告（模式 M）"
+      sections:
+        - "1. 后端覆盖策略验证结果"
+        - "2. 前端组件复用状态重置验证结果"
+        - "3. 集成测试链路验证结果"
+        - "4. 发现的问题与修复建议（引用 meta-rule #88）"
+
+# --- 模式 N：登录副作用自动化测试配置（v1.5.0 新增）---
+# 配套 B-REVIEW-250 / F-REVIEW-205 / meta-rule #89
+# 所有参数通过此节点管理，不硬编码
+mode_n:
+  enabled: true                          # 模式总开关
+  name: "login_side_effect_automation_test"
+  description: "登录副作用自动化测试"
+  # === 测试步骤配置 ===
+  steps:
+    n1_helper_call_coverage:
+      enabled: true
+      grep_pattern: "login.*success|登录成功"
+      helper_pattern: "trigger_session_start"
+      scope: "src/xianyu_hunter/web/routes/"
+      pass_condition: "login_count == helper_count"
+    n2_fire_and_forget:
+      enabled: true
+      forbidden_patterns:
+        - "await.*start_session"
+        - "await.*token_renewer"
+      scope: "src/xianyu_hunter/web/routes/"
+      pass_condition: "no_match"
+    n3_helper_module_independence:
+      enabled: true
+      forbidden_scope: "src/xianyu_hunter/web/routes/"
+      helper_pattern: "async def trigger_session_start"
+      expected_module: "src/xianyu_hunter/web/services/session_starter.py"
+      pass_condition: "not_in_routes"
+    n4_failure_safety:
+      enabled: true
+      test_file: "tests/test_login_side_effect.py"
+      test_function: "test_login_survives_side_effect_failure"
+      pass_condition: "login_returns_200_on_helper_failure"
+    n5_frontend_fallback_alert:
+      enabled: true
+      grep_pattern: "Alert.*warning"
+      scope: "frontend/src/pages/AntiCrawl/"
+      additional_pattern: "session|side_effect"
+      pass_condition: "has_match"
+    n6_entry_completeness:
+      enabled: true
+      test_file: "tests/test_login_side_effect.py"
+      entry_points_ref: "backend_code_review.login_side_effect.entry_points"
+      pass_condition: "all_entries_trigger_helper"
+  # === 引用配置 ===
+  refs:
+    backend_rule: "B-REVIEW-250"
+    frontend_rule: "F-REVIEW-205"
+    meta_rule: "#89"
+    dev_step: "step 253"
+  # === 关键文件（修改后触发回归）===
+  key_files:
+    backend:
+      - "src/xianyu_hunter/web/routes/api_auth.py"
+      - "src/xianyu_hunter/web/services/session_starter.py"
+      - "src/xianyu_hunter/core/login_orchestrator.py"
+      - "src/xianyu_hunter/core/token_renewer.py"
+    frontend:
+      - "frontend/src/pages/AntiCrawl/index.tsx"
+      - "frontend/src/pages/AntiCrawl/SessionManager.tsx"
+  # === 适用场景 ===
+  applicable_scenarios:
+    - "登录成功但会话未启动"
+    - "修改登录路由/session_starter/TokenRenewer"
+    - "B-REVIEW-250/F-REVIEW-205 审查违规"
+    - "登录流程回归测试"
+
+# --- 模式 O：回退构造关联键一致性测试配置（v1.6.0 新增）---
+# 配套 B-REVIEW-251 / F-REVIEW-206 / meta-rule #90
+# 源自 2026-07-22 price_range 注入 Bug 复盘：回退构造伪 item 时遗漏 task_id 导致下游价格区间查询被跳过
+# 同时覆盖 #91（时间窗口全量回退）和 #92（PowerShell 外部命令显式后缀）的测试基础设施
+# 所有参数通过此节点管理，不硬编码
+mode_o:
+  enabled: true                          # 模式总开关
+  name: "fallback_preserve_key_consistency_test"
+  description: "回退构造关联键一致性测试 + 时间窗口全量回退测试 + PowerShell 外部命令测试基础设施"
+  # === 测试步骤配置 ===
+  steps:
+    # O-1: 回退构造关联键完整性测试（对应 meta-rule #90）
+    o1_fallback_key_completeness:
+      enabled: true
+      description: "回退构造的实体必须包含所有必需关联键"
+      test_file: "tests/test_fallback_preserve_key.py"
+      test_cases:
+        - name: "test_pseudo_item_has_task_id"
+          description: "回退构造的伪 item dict 必须包含 task_id"
+          scan_files:
+            - "src/xianyu_hunter/web/routes/api_ai.py"
+            - "src/xianyu_hunter/infra/repo_events.py"
+          required_keys: ["task_id", "seller_id"]
+          pass_condition: "all_keys_present_in_fallback"
+        - name: "test_fallback_no_silent_skip"
+          description: "回退构造无 task_id 时下游价格区间查询不应被静默跳过"
+          test_scenario: "构造无 task_id 的伪 item，调用 get_eval_payload_by_item，验证价格区间查询仍执行或抛出明确异常"
+          pass_condition: "query_executed_or_explicit_exception"
+        - name: "test_fallback_logs_missing_key"
+          description: "回退构造关联键缺失时必须记录 WARNING 日志"
+          pass_condition: "log_contains_WARNING_with_missing_key"
+
+    # O-2: 时间窗口全量回退测试（对应 meta-rule #91）
+    o2_time_window_fallback:
+      enabled: true
+      description: "时间窗口查询返回空时必须回退到全量查询"
+      test_file: "tests/test_time_window_fallback.py"
+      test_cases:
+        - name: "test_30day_window_empty_fallback_to_full"
+          description: "30 天窗口查询返回空时回退到 range_days=0 全量查询"
+          test_scenario: "mock 数据库中商品数据时间超过 30 天，验证查询回退到全量"
+          pass_condition: "fallback_query_executed_with_range_days_0"
+        - name: "test_fallback_result_has_source_field"
+          description: "全量回退结果应通过 source 字段标识来源"
+          pass_condition: "result_has_source_field_equal_full_fallback"
+        - name: "test_no_fallback_when_window_has_data"
+          description: "窗口查询有数据时不触发全量回退"
+          pass_condition: "no_fallback_query_executed"
+
+    # O-3: PowerShell 外部命令测试基础设施（对应 meta-rule #92）
+    o3_powershell_command_infra:
+      enabled: true
+      description: "PowerShell 环境下外部命令调用测试基础设施"
+      # 为什么需要：测试脚本本身可能需要在 PowerShell 中执行 curl 等命令
+      # 测试基础设施必须遵循 meta-rule #92，否则测试脚本自身会失败
+      test_infra_checks:
+        - name: "test_no_curl_alias_in_test_scripts"
+          description: "测试脚本中不使用 curl 别名（必须用 curl.exe）"
+          scan_globs: ["tests/**/*.ps1", ".trae/skills/**/*.md"]
+          forbidden_pattern: "(?<!\\.exe)\\bcurl\\b"
+          pass_condition: "no_match"
+        - name: "test_json_body_via_file_in_test_scripts"
+          description: "测试脚本中复杂 JSON 参数通过文件传递"
+          scan_globs: ["tests/**/*.ps1"]
+          forbidden_pattern: "-d\\s+['\"]\\{.*\\}['\"]"
+          pass_condition: "no_match"
+        - name: "test_command_length_under_limit"
+          description: "测试脚本中单条命令长度不超过限制"
+          scan_globs: ["tests/**/*.ps1"]
+          max_length: 200
+          pass_condition: "all_commands_under_limit"
+
+    # O-4: 跨层一致性测试（后端回退构造 → 前端条件渲染）
+    o4_cross_layer_consistency:
+      enabled: true
+      description: "后端回退构造的关联键与前端条件渲染的一致性"
+      test_file: "tests/test_fallback_cross_layer.py"
+      test_cases:
+        - name: "test_backend_fallback_keys_match_frontend_render"
+          description: "后端回退构造的关联键必须与前端条件渲染依赖的字段一致"
+          backend_scan_files:
+            - "src/xianyu_hunter/web/routes/api_ai.py"
+          frontend_scan_files:
+            - "frontend/src/pages/Evaluations/index.tsx"
+          pass_condition: "backend_keys_subset_of_frontend_render_deps"
+        - name: "test_frontend_handles_missing_key_gracefully"
+          description: "前端在关联键缺失时应优雅降级（显示占位或隐藏元素），不报错"
+          pass_condition: "no_uncaught_error_on_missing_key"
+
+  # === 引用配置 ===
+  refs:
+    backend_rule: "B-REVIEW-251"
+    backend_rule_2: "B-REVIEW-252"
+    backend_rule_3: "B-REVIEW-253"
+    frontend_rule: "F-REVIEW-206"
+    meta_rule: "#90"
+    meta_rule_2: "#91"
+    meta_rule_3: "#92"
+    dev_step: "step 254"
+    dev_step_2: "step 255"
+    dev_step_3: "step 256"
+  # === 关键文件（修改后触发回归）===
+  key_files:
+    backend:
+      - "src/xianyu_hunter/web/routes/api_ai.py"
+      - "src/xianyu_hunter/infra/repo_events.py"
+      - "src/xianyu_hunter/infra/repo_items.py"
+    frontend:
+      - "frontend/src/pages/Evaluations/index.tsx"
+      - "frontend/src/pages/Evaluations/dimensionLabels.ts"
+    test_infra:
+      - "tests/test_fallback_preserve_key.py"
+      - "tests/test_time_window_fallback.py"
+      - "tests/test_fallback_cross_layer.py"
+  # === 适用场景 ===
+  applicable_scenarios:
+    - "修改回退构造逻辑（伪 item、默认响应）"
+    - "修改时间窗口查询逻辑"
+    - "修改测试脚本中的 PowerShell 命令"
+    - "B-REVIEW-251/252/253 或 F-REVIEW-206 审查违规"
+    - "price_range 注入相关 Bug 修复后回归"
+  # === 报告格式 ===
+  report_format:
+    title: "回退构造关联键一致性测试报告（模式 O）"
+    sections:
+      - "1. 回退构造关联键完整性验证（O-1）"
+      - "2. 时间窗口全量回退验证（O-2）"
+      - "3. PowerShell 测试基础设施验证（O-3）"
+      - "4. 跨层一致性验证（O-4）"
+      - "5. 发现的问题与修复建议（引用 meta-rule #90/#91/#92）"
+
+# ============== 模式 P：评估去重验证测试 ==============
+mode_p_eval_dedup_test:
+  # 触发条件与配置引用见 SKILL.md 模式 P
+  # 配套 meta-rules #95（UPSERT-DEDUP-DEFENSE）+ #94（DATA-QUALITY-PRE-ASSESSMENT）
+  # 配套 B-REVIEW-256（UPSERT-DEDUP-DEFENSE）+ B-REVIEW-255（DATA-QUALITY-PRE-ASSESSMENT）
+
+  key_files:
+    backend:
+      - "src/xianyu_hunter/infra/repo_events.py"           # upsert_eval_event 函数定义
+      - "src/xianyu_hunter/modules/worker.py"              # eval 写入路径 1
+      - "src/xianyu_hunter/web/routes/api_task_links.py"   # eval 写入路径 2
+      - "src/xianyu_hunter/web/routes/api_evaluations.py"  # eval 写入路径 3
+      - "src/xianyu_hunter/web/startup.py"                 # C-05 迁移 + 部分唯一索引
+
+  eval_write_patterns:
+    - "save_event"
+    - "upsert_eval_event"
+    - "eval.scored"
+
+  dedup_unique_index_name: "idx_eval_scored_unique"
+  dedup_unique_condition: "type = 'eval.scored'"
+
+  steps:
+    p1_upsert_logic:
+      description: "验证所有 eval 写入路径使用 upsert 而非 save"
+      test_cases:
+        - "worker.py 调用 upsert_eval_event"
+        - "api_task_links.py 调用 upsert_eval_event"
+        - "api_evaluations.py 调用 upsert_eval_event"
+      pass_condition: "所有写入路径均使用 upsert_eval_event"
+
+    p2_unique_index:
+      description: "验证部分唯一索引存在且条件正确"
+      sql_check: "SELECT name, sql FROM sqlite_master WHERE type='index' AND name LIKE '%eval%'"
+      pass_condition: "idx_eval_scored_unique 存在且含 WHERE type = 'eval.scored'"
+
+    p3_migration_idempotent:
+      description: "验证 C-05 迁移幂等性"
+      pass_condition: "多次重启服务后 C-05 迁移不报错"
+
+    p4_no_duplicate_records:
+      description: "验证无重复 eval.scored 记录"
+      sql_check: "SELECT task_id, item_id, COUNT(*) as cnt FROM events WHERE type='eval.scored' GROUP BY task_id, item_id HAVING cnt > 1"
+      pass_condition: "查询结果为空（0 条重复）"
+
+  refs:
+    - "meta-rule #95 UPSERT-DEDUP-DEFENSE"
+    - "meta-rule #94 DATA-QUALITY-PRE-ASSESSMENT"
+    - "B-REVIEW-256 UPSERT-DEDUP-DEFENSE"
+    - "B-REVIEW-255 DATA-QUALITY-PRE-ASSESSMENT"
+
+  report_sections:
+    - "1. upsert 逻辑状态（P-1）"
+    - "2. 部分唯一索引状态（P-2）"
+    - "3. 迁移幂等性状态（P-3）"
+    - "4. 数据去重状态（P-4）"
+    - "5. 发现的问题与修复建议（引用 meta-rule #95）"
+
+# ============== 模式 Q：构建产物验证测试 ==============
+mode_q_build_product_test:
+  # 触发条件与配置引用见 SKILL.md 模式 Q
+  # 配套 meta-rules #98（BUILD-ENVIRONMENT-TOOLCHAIN-CHECK）+ #100（WINDOWS-SCRIPT-ENCODING）
+  # 配套 B-REVIEW-261 + B-REVIEW-260 / F-REVIEW-208
+
+  key_files:
+    backend:
+      - "*.bat"                                # 构建脚本
+      - "vite.config.ts"                       # Vite 配置
+      - "package.json"                         # Node.js 依赖
+    frontend:
+      - "frontend/vite.config.ts"
+      - "frontend/package.json"
+
+  required_node_version: "18"                  # 最低 Node.js 主版本
+  required_python_version: "3.10"              # 最低 Python 主版本
+
+  # 构建产物中期望存在的关键字符串（用于验证 chunk 完整性）
+  # 所有参数通过配置文件管理，不硬编码
+  expected_chunk_patterns:
+    - "XianyuHunter"                           # 应用名（应在 index.html 中）
+    - "isMobile"                               # 移动端检测
+    - "BrowserRouter"                          # 路由
+
+  # 构建脚本 PATH 设置检测模式
+  path_set_pattern: "set PATH=|PATH%="
+
+  # 非 ASCII 字符检测（BAT 文件不应包含）
+  non_ascii_pattern: "[^\\x00-\\x7F]"
+
+  steps:
+    q1_toolchain_version:
+      description: "验证工具链版本符合要求"
+      commands:
+        - "node --version"
+        - "python --version"
+      pass_condition: "Node >= required_node_version, Python >= required_python_version"
+
+    q2_build_script:
+      description: "验证构建脚本合规性（PATH 设置、版本打印、无乱码）"
+      checks:
+        - "构建脚本顶部设置 PATH 优先级"
+        - "构建前打印 node --version"
+        - "BAT 文件无非 ASCII 字符"
+      pass_condition: "所有检查通过"
+
+    q3_build_product:
+      description: "验证构建产物完整性"
+      checks:
+        - "build_output_dir 目录存在且有时间戳最新的文件"
+        - "index.html 大小在 expected_html_size_range 内"
+        - ".js chunk 包含 expected_chunk_patterns 中的关键字符串"
+      pass_condition: "所有检查通过"
+
+    q4_e2e_verification:
+      description: "端到端验证（页面可访问、核心功能正常）"
+      checks:
+        - "根路径返回 302/200"
+        - "SPA 路径返回 200"
+        - "核心页面正常渲染"
+      pass_condition: "所有检查通过"
+
+  refs:
+    - "meta-rule #98 BUILD-ENVIRONMENT-TOOLCHAIN-CHECK"
+    - "meta-rule #100 WINDOWS-SCRIPT-ENCODING"
+    - "B-REVIEW-261 BUILD-ENVIRONMENT-TOOLCHAIN-CHECK"
+    - "B-REVIEW-260 WINDOWS-SCRIPT-ENCODING"
+    - "F-REVIEW-208 BUILD-ENVIRONMENT-TOOLCHAIN-FRONTEND"
+
+  report_sections:
+    - "1. 工具链版本状态（Q-1）"
+    - "2. 构建脚本状态（Q-2）"
+    - "3. 构建产物状态（Q-3）"
+    - "4. 端到端验证状态（Q-4）"
+    - "5. 发现的问题与修复建议（引用 meta-rule #98/#100）"
+
+# ===== 模式 R：性能优化回归测试（v1.8.0 新增）=====
+# 对应 meta-rule #93（性能优化量化验证）/ #94（缓存TTL合理性校验）
+# 对应 PS-010~024（performance-and-security-patterns.md）
+# 对应 B-REVIEW-262~267 / F-REVIEW-211~213
+mode_r_performance_test:
+  enabled: true
+  description: "性能优化回归测试：验证8类优化方案（SSE/缓存/SQL下推/list+count/优先级锁/useMemo/run_in_executor/批量upsert）的运行时效果"
+
+  # --- 关键文件（变更后触发回归测试）---
+  key_files:
+    backend:
+      - "src/xianyu_hunter/web/routes/api_task_links.py"
+      - "src/xianyu_hunter/infra/repo_links.py"
+      - "src/xianyu_hunter/container.py"
+      - "src/xianyu_hunter/modules/worker.py"
+    frontend:
+      - "frontend/src/api/task.ts"
+      - "frontend/src/pages/Tasks/TaskList.tsx"
+
+  # --- SSE 流式响应验证 ---
+  sse_test:
+    enabled: true
+    # SSE 接口路径（从 web_process 配置拼接）
+    endpoint_pattern: "/api/tasks/{task_id}/links/live"
+    # 预期阶段事件序列（按执行顺序）
+    expected_stages:
+      - "checking_cache"
+      - "checking_cookies"
+      - "acquiring_lock"
+      - "searching"
+      - "filtering"
+      - "writing_db"
+      - "done"
+    # 预期响应头
+    expected_content_type: "text/event-stream"
+    expected_transfer_encoding: "chunked"
+    # 前置检查应返回的 HTTP 错误码（非 SSE 事件）
+    precheck_status_codes: [404, 400, 403]
+    # SSE 超时（秒）
+    timeout_seconds: 60
+
+  # --- 缓存命中验证 ---
+  cache_test:
+    enabled: true
+    # 缓存 TTL（秒）——必须与代码中的 _LIVE_CACHE_TTL 一致
+    ttl_seconds: 60
+    # 缓存命中响应时间阈值（ms）——低于此值视为命中
+    hit_threshold_ms: 10
+    # 被缓存操作的平均耗时阈值（ms）——高于此值才值得缓存
+    operation_cost_threshold_ms: 1000
+    # 采样次数（计算命中率）
+    sample_count: 5
+    # 空结果策略：empty_result_cache=false 表示空结果不缓存
+    empty_result_cache: false
+
+  # --- SQL 层过滤验证 ---
+  sql_filter_test:
+    enabled: true
+    # 价格区间（用于验证 SQL 过滤）
+    price_min: 1500
+    price_max: 2000
+    # 价格容忍度（浮点比较）
+    price_tolerance: 0.01
+    # DB 查询日志中应包含的关键字
+    expected_sql_keywords:
+      - "json_extract"
+      - "cast"
+    # DB 查询日志路径
+    db_log_file: "logs/xianyu_hunter.log"
+
+  # --- list+count 合并查询验证 ---
+  list_count_test:
+    enabled: true
+    # 预期 DB 往返次数（合并查询应为 1）
+    expected_db_round_trips: 1
+    # 分页参数
+    page_size: 20
+    # 验证 total 与 list 长度一致（在非末页时）
+    verify_total_consistency: true
+
+  # --- 优先级锁验证 ---
+  priority_lock_test:
+    enabled: true
+    # high 优先级最大等待时间（ms）
+    high_max_wait_ms: 5000
+    # low 优先级让出延迟（ms）——应与代码中的 yield_delay 一致
+    yield_delay_ms: 3000
+    # high/low 标识
+    high_priority: "high"
+    low_priority: "low"
+
+  # --- 前端 useMemo 验证 ---
+  usememo_test:
+    enabled: true
+    # 验证方式：performance.mark/measure
+    verify_method: "performance_api"
+    # 派生计算选择器（用于 hook performance.mark）
+    derived_calc_selector: "filteredItems|sortedItems|stats"
+    # 依赖项变更后应重新计算的次数
+    expected_recompute_on_deps_change: 1
+
+  # --- 性能指标对比表格模板 ---
+  metrics_comparison:
+    - metric: "SSE 响应时间"
+      before: "4240ms"
+      after: "<10ms（缓存命中）"
+    - metric: "缓存命中率"
+      before: "0%"
+      after: ">80%"
+    - metric: "DB 查询往返次数（list+count）"
+      before: "2"
+      after: "1"
+    - metric: "SQL 过滤方式"
+      before: "Python 层全量过滤"
+      after: "SQL 层 json_extract+cast"
+    - metric: "批量写入 IO 次数"
+      before: "N 次（逐条 commit）"
+      after: "1 次（单事务 commit）"
+    - metric: "事件循环阻塞"
+      before: "同步 DB 调用阻塞"
+      after: "run_in_executor 异步"
+    - metric: "优先级锁等待"
+      before: "15-20s（普通 Lock）"
+      after: "<5s（优先级锁让出）"
+
+  refs:
+    - "meta-rule #93 PERFORMANCE-QUANTITATIVE-VERIFICATION"
+    - "meta-rule #94 CACHE-TTL-RATIONALITY-CHECK"
+    - "PS-010 async 函数中同步 DB 调用必须用 run_in_executor"
+    - "PS-011 优先级锁设计"
+    - "PS-012 批量写入必须用单事务批 upsert"
+    - "PS-013 分页接口 list+count 必须合并查询"
+    - "PS-014 SQL 层过滤优先于 Python 层过滤"
+    - "PS-015 缓存 TTL 必须大于被缓存操作平均耗时"
+    - "PS-016 缓存策略必须区分空结果与非空结果"
+    - "PS-017 SSE 前置检查返回 HTTP 错误码"
+    - "PS-018 SSE 阶段事件必须映射真实执行链路"
+    - "PS-019 需要自定义 Header 的 SSE 必须用 fetch+ReadableStream"
+    - "PS-020 列表派生计算必须用 useMemo"
+    - "B-REVIEW-262 ASYNC-SYNC-DB-RUN-IN-EXECUTOR"
+    - "B-REVIEW-263 BATCH-UPSERT-SINGLE-COMMIT"
+    - "B-REVIEW-264 SQL-FILTER-PUSHDOWN"
+    - "B-REVIEW-265 LIST-COUNT-MERGED-QUERY"
+    - "B-REVIEW-266 PRIORITY-LOCK-YIELD"
+    - "B-REVIEW-267 CACHE-TTL-GT-OPERATION-COST"
+    - "F-REVIEW-211 SSE-PRECHECK-HTTP-ERROR-CODE"
+    - "F-REVIEW-212 LIST-DERIVED-USEMEMO"
+    - "F-REVIEW-213 SSE-FETCH-READABLESTREAM"
+
+  report_sections:
+    - "1. SSE 流式响应状态（R-1）"
+    - "2. 缓存命中状态（R-2）"
+    - "3. SQL 层过滤状态（R-3）"
+    - "4. list+count 合并状态（R-4）"
+    - "5. 优先级锁状态（R-5）"
+    - "6. useMemo 状态（R-6）"
+    - "7. 性能优化前/后指标对比（R-7）"
+
+# ============== 模式 U：SPA 白屏回归测试（v1.9.0 新增） ==============
+# 对应 meta-rule #95（SPA-WHITE-SCREEN-DEFENSE）
+# 对应 F-REVIEW-214~219 / step 254-261
+# 复盘来源：2026-07-22 间歇性白屏 Bug 修复（5 类根因）
+# 验证 React SPA 渲染容错体系完整性：全局 ErrorBoundary + lazyRetry 包装 + 路由级 ErrorBoundary + API 防御性兜底 + 401 拦截器防抖
+# 所有参数通过此节点管理，不硬编码
+mode_u_spa_white_screen_test:
+  enabled: true
+  error_boundary_check:
+    scan_command: "grep -c \"<ErrorBoundary\" frontend/src/App.tsx"
+    required_files:
+      - "frontend/src/components/ErrorBoundary.tsx"
+    wrapper_location: "App.tsx"
+    min_match_count: 1
+  lazy_retry_check:
+    scan_command: "grep \"\\blazy(\" frontend/src/ | grep -v lazyRetry"
+    required_files:
+      - "frontend/src/utils/lazyRetry.tsx"
+    max_retries: 3
+    retry_storage_key_prefix: "__retry_"
+    chunk_error_patterns:
+      - "Failed to fetch dynamically imported module"
+      - "Loading chunk \\d+ failed"
+      - "Loading CSS chunk \\d+ failed"
+  route_error_boundary_check:
+    scan_command: "grep \"resetKeys\" frontend/src/components/layout/MainLayout.tsx"
+    wrapper_location: "MainLayout.tsx"
+    reset_key_strategy: "location.pathname"
+    allowed_reset_key_types:
+      - "string"
+      - "number"
+    forbidden_reset_key_types:
+      - "object"
+      - "array"
+  api_array_defense_check:
+    scan_command: "grep -E \"\\b(res|data|response)\\.(items|tables|list|records|data|results)\\.\" frontend/src/"
+    array_field_patterns:
+      - "items"
+      - "tables"
+      - "list"
+      - "records"
+      - "data"
+      - "results"
+    required_fallback_pattern: "|| []"
+  http_401_debounce_check:
+    scan_command: "grep \"401\" frontend/src/api/client.ts"
+    debounce_flag: "isRedirecting"
+    required_redirect_method: "replace"
+    forbidden_redirect_method: "href"
+  unit_test:
+    error_boundary_test_command: "npx vitest run frontend/src/components/__tests__/ErrorBoundary.test.tsx"
+    lazy_retry_test_command: "npx vitest run frontend/src/utils/__tests__/lazyRetry.test.tsx"
+    error_boundary_test_cases:
+      - "正常渲染不触发错误界面"
+      - "子组件抛错显示错误界面"
+      - "点击重试按钮清除错误状态"
+      - "resetKeys 变化自动重置错误状态"
+      - "onError 回调被正确调用"
+      - "自定义 fallback 替代默认 UI"
+    lazy_retry_test_cases:
+      - "isChunkLoadError 识别各类 chunk 错误"
+      - "非 chunk 错误不识别"
+      - "正常加载不触发重试"
+      - "chunk 失败自动重试到上限"
+      - "LazyErrorBoundary 兜底渲染"
+      - "resetKey 变化触发重置"
+    antd_chinese_button_regex: "getByRole('button', { name: /文\\s*案/ })"
+    forbidden_antd_button_match: "getByText('文案')"
+  key_files:
+    frontend:
+      - "frontend/src/components/ErrorBoundary.tsx"
+      - "frontend/src/utils/lazyRetry.tsx"
+      - "frontend/src/App.tsx"
+      - "frontend/src/components/layout/MainLayout.tsx"
+      - "frontend/src/api/client.ts"
+      - "frontend/src/components/__tests__/ErrorBoundary.test.tsx"
+      - "frontend/src/utils/__tests__/lazyRetry.test.tsx"
+  refs:
+    meta_rules:
+      - 95
+    steps:
+      - 254
+      - 255
+      - 256
+      - 257
+      - 258
+      - 259
+      - 260
+      - 261
+    frontend_reviews:
+      - 214
+      - 215
+      - 216
+      - 217
+      - 218
+      - 219
+
+# ============== 模式 V：UI视觉回归测试 ==============
+mode_v_visual_regression_test:
+  enabled: true
+  key_files:
+    - "frontend/src/components/layout/MainLayout.tsx"
+    - "frontend/src/theme/"
+    - "frontend/src/components/icons/"
+  pages_to_capture:
+    - path: "/"
+      name: "仪表盘"
+    - path: "/tasks"
+      name: "任务管理"
+    - path: "/items"
+      name: "商品列表"
+    - path: "/config/price"
+      name: "价格策略"
+  screenshot_dir: "test_screenshots"
+  diff_threshold_percent: 5
+  report_format: "html"
+
+# ============== 模式 W：缓存守卫验证测试 ==============
+mode_w_cache_guard_test:
+  enabled: true
+  key_files:
+    - "src/xianyu_hunter/web/routes/api_task_links.py"
+    - "src/xianyu_hunter/infra/yaml_config.py"
+    - "config/config.yaml"
+  ttl_detection_patterns:
+    - "_TTL\\s*="
+    - "_CACHE_TTL"
+    - "cache_ttl"
+  empty_result_check:
+    enabled: true
+    test_with_empty_query: true
+  guard_independence_check:
+    enabled: true
+    cache_condition_patterns:
+      - "if filtered:"
+      - "if items:"
+  pytest_args: "-xvs"
+
+# ============== 模式 X：状态机完整性测试 ==============
+mode_x_state_machine_test:
+  enabled: true
+  key_files:
+    - "src/xianyu_hunter/core/scheduler.py"
+    - "src/xianyu_hunter/core/login_orchestrator.py"
+    - "src/xianyu_hunter/core/session_manager.py"
+  states_to_check:
+    - "idle"
+    - "running"
+    - "paused"
+    - "stopped"
+    - "error"
+  transitions_to_verify:
+    - from: "idle"
+      to: "running"
+      trigger: "start"
+    - from: "running"
+      to: "paused"
+      trigger: "pause"
+    - from: "paused"
+      to: "running"
+      trigger: "resume"
+    - from: "running"
+      to: "stopped"
+      trigger: "stop"
+    - from: "paused"
+      to: "stopped"
+      trigger: "stop"
+  return_semantics_check:
+    enabled: true
+    true_means: "continue_or_complete"
+    false_means: "should_break_or_error"
+  pytest_args: "-xvs"
+
+# ============== 测试验证三档机制（跨模式通用） ==============
+# 对应复盘规范集 C3 / D1 / D2
+# 复盘来源：
+#   - 2026-07 完整 pytest 测试集（1621 个测试）在 CPU 99% 过载环境下超时
+#   - 改用直接 import 测试 5 个改动文件，5/5 通过
+#   - PowerShell Tee-Object 缓冲导致日志文件为空，改用 Start-Process -RedirectStandardOutput 绕过
+# 适用场景：所有涉及测试验证的模式（A~X）在执行前必须按此机制选择验证档位
+# 不适用场景：纯静态扫描类测试（如模式 F/G/H 的 grep 扫描）无需三档机制
+tiered_test_verification:
+  _doc: "测试验证三档机制配置：根据系统资源与改动类型选择 Tier 1/2/3 验证档位，避免过载环境下完整测试集超时"
+
+  # === 档位定义 ===
+  tiers:
+    tier_1:
+      name: "完整测试集"
+      description: "pytest tests/ + tsc --noEmit 全量验证"
+      # 适用改动类型（D1 契约）
+      applicable_change_types:
+        - "refactor"          # 重构类改动必须运行 Tier 1
+      # 执行命令模板（{python} 占位符）
+      pytest_command: "{python} -m pytest tests/ -v --timeout={timeout_seconds}"
+      tsc_command: "npx tsc --noEmit"
+      # 预期最大执行时长（秒），超过则触发降级检查
+      max_duration_sec: 600
+      # 历史参考：完整测试集用例数（用于评估执行规模）
+      historical_full_test_count: 1621
+
+    tier_2:
+      name: "直接 import 测试"
+      description: "系统资源受限时，仅验证改动文件的核心功能（直接 import 改动模块）"
+      applicable_change_types:
+        - "bugfix"            # Bug 修复运行 Tier 2 即可
+      # import 测试脚本模板（{python}/{changed_file} 占位符）
+      import_test_template: "{python} -c \"import ast; ast.parse(open(r'{changed_file}', encoding='utf-8').read()); print('OK: {changed_file}')\""
+      # 改动文件列表来源：从 git diff 动态获取
+      changed_files_source: "git_diff"
+      # 单文件 import 超时（秒）
+      per_file_timeout_sec: 10
+
+    tier_3:
+      name: "改动文件 5/5 验证"
+      description: "最小验证，仅验证改动的文件能正确 import（语法+导入链路）"
+      applicable_change_types:
+        - "feature"           # 新增功能运行 Tier 3 即可
+      # 最小验证文件数（D1 契约：改动文件 5/5 验证）
+      min_files_to_verify: 5
+      # 当改动文件数 < min_files_to_verify 时，验证全部改动文件
+      verify_all_when_less_than_threshold: true
+
+  # === 降级触发条件（C3 规范）===
+  # 为什么需要降级：CPU 过载时完整测试集会超时无输出，浪费 agent 轮次
+  downgrade_triggers:
+    # CPU 使用率触发：持续 duration_sec 秒超过 cpu_percent → 降级到 Tier 2
+    high_cpu:
+      enabled: true
+      cpu_percent: 90
+      duration_sec: 30
+      downgrade_to: "tier_2"
+    # 文件 IO 延迟触发：单次文件读写延迟 > latency_sec → 降级到 Tier 2
+    high_io_latency:
+      enabled: true
+      latency_sec: 5
+      downgrade_to: "tier_2"
+    # 级联降级：Tier 2 失败 → 降级到 Tier 3
+    tier_2_failure:
+      enabled: true
+      downgrade_to: "tier_3"
+
+  # === 测试覆盖契约（D1 规范）===
+  coverage_contract:
+    # 改动类型 → 最低档位要求
+    change_type_to_min_tier:
+      refactor: "tier_1"   # 重构类改动必须运行 Tier 1 完整测试集
+      bugfix: "tier_2"     # Bug 修复运行 Tier 2 直接 import 测试即可
+      feature: "tier_3"   # 新增功能运行 Tier 3 改动文件验证即可
+    # 强制升级条件：即使改动类型为 feature，触及以下关键文件时升级到 Tier 1
+    force_upgrade_files:
+      - "src/xianyu_hunter/web/startup.py"        # 启动文件
+      - "src/xianyu_hunter/container.py"           # 依赖注入容器
+      - "src/xianyu_hunter/core/scheduler.py"      # 核心调度器
+    force_upgrade_to: "tier_1"
+
+  # === 测试环境隔离（D2 规范）===
+  environment_isolation:
+    # 测试前必须检查环境资源（CPU/内存/磁盘）
+    pre_check_resources: true
+    # 长任务必须重定向到日志文件
+    long_task_redirect_required: true
+    # 测试结果必须保存到指定路径
+    result_save_path: "test-results/"
+    # 资源检查命令模板（PowerShell）
+    resource_check_commands:
+      cpu: "Get-Counter '\\Processor(_Total)\\% Processor Time' -SampleInterval 1 -MaxSamples 3 | Select-Object -ExpandProperty CounterSamples | Select-Object -ExpandProperty CookedValue"
+      memory: "Get-Counter '\\Memory\\Available MBytes' -SampleInterval 1 -MaxSamples 1 | Select-Object -ExpandProperty CounterSamples | Select-Object -ExpandProperty CookedValue"
+      disk: "Get-Counter '\\PhysicalDisk(_Total)\\Avg. Disk sec/Transfer' -SampleInterval 1 -MaxSamples 1 | Select-Object -ExpandProperty CounterSamples | Select-Object -ExpandProperty CookedValue"
+
+  # === 历史失败案例（必须真实引用，用于警示）===
+  historical_failures:
+    - id: "HF-001"
+      date: "2026-07"
+      scenario: "完整 pytest 测试集（1621 个测试）在 CPU 99% 过载环境下超时"
+      root_cause: "CPU 持续 99% 占用导致 pytest 调度饥饿，无输出超 10 分钟"
+      resolution: "改用直接 import 测试 5 个改动文件，5/5 通过"
+      lesson: "过载环境下完整测试集不可靠，必须降级到 Tier 2"
+    - id: "HF-002"
+      date: "2026-07"
+      scenario: "PowerShell Tee-Object 缓冲导致日志文件为空"
+      root_cause: "Tee-Object 是 sink cmdlet，必须等待所有输入才能输出，长任务下日志文件长时间为空"
+      resolution: "改用 Start-Process -RedirectStandardOutput 绕过缓冲"
+      lesson: "长任务日志输出禁用 sink cmdlet，详见 long_task_logging 配置段"
+
+# ============== 长任务日志输出规范（B1 规范） ==============
+# 对应复盘规范集 B1
+# 适用场景：执行时长 > long_task_threshold_sec 的命令（pytest/sonar-scanner/playwright test）
+# 不适用场景：执行时长 < long_task_threshold_sec 的短命令（直接输出即可）
+long_task_logging:
+  _doc: "PowerShell 长任务日志输出规范：避免 sink cmdlet 缓冲导致日志文件为空"
+
+  # 长任务判定阈值（秒）：执行时长超过此值即视为长任务
+  long_task_threshold_sec: 30
+
+  # === 禁用模式（B1 规范）===
+  # 为什么禁用：sink cmdlet 必须缓冲所有输入才能输出，长任务下日志文件长时间为空
+  forbidden_patterns:
+    - pattern: "| Select-Object -Last N"
+      reason: "Select-Object 是 sink cmdlet，必须缓冲所有输入才能输出最后 N 行"
+    - pattern: "Tee-Object"
+      reason: "Tee-Object 是 sink cmdlet，必须缓冲所有输入才能输出（历史失败案例 HF-002）"
+    - pattern: "| More"
+      reason: "More 是分页 sink cmdlet，必须缓冲所有输入"
+
+  # === 推荐模式（B1 规范）===
+  recommended_patterns:
+    - name: "Start-Process 重定向"
+      # 为什么首选：完全绕过 PowerShell 管道缓冲，子进程直接写文件
+      command_template: "Start-Process -FilePath '{python}' -ArgumentList '{args}' -RedirectStandardOutput '{output_file}' -RedirectStandardError '{error_file}' -NoNewWindow -Wait"
+      use_case: "需要精确控制子进程且避免任何管道缓冲时"
+    - name: "Out-File 重定向"
+      # 为什么次选：流式写入（非 sink cmdlet），但仍有管道开销
+      command_template: "{command} 2>&1 | Out-File -FilePath '{output_file}' -Encoding {output_encoding}"
+      use_case: "需要合并 stderr 且控制编码时（避免 CLIXML）"
+    - name: "直接重定向"
+      # 为什么备选：最简单，但无法控制编码（可能 CLIXML）
+      command_template: "{command} > '{output_file}' 2>&1"
+      use_case: "对编码无要求且命令简单时"
+
+  # === 日志查看方式（B1 规范）===
+  # 为什么用 Get-Content 而非 cat/type：支持 -Tail 和 -Wait 实时跟踪
+  view_commands:
+    tail: "Get-Content -Tail {n} '{output_file}'"
+    follow: "Get-Content -Wait '{output_file}'"
+
+  # === 适用工具列表 ===
+  applicable_tools:
+    - "pytest"
+    - "sonar-scanner"
+    - "playwright test"
+    - "npm run build"
+    - "tsc --noEmit"
+
+# ============== 系统资源过载容错（B2 规范） ==============
+# 对应复盘规范集 B2
+# 适用场景：长任务执行前的资源检查与过载容错
+# 不适用场景：已确定资源充足时的快速测试
+system_resource_monitoring:
+  _doc: "系统资源过载容错配置：长任务前检查 CPU/内存/磁盘，过载时降级测试档位"
+
+  # === 资源检查项 ===
+  checks:
+    cpu:
+      # CPU 使用率阈值（百分比），超过则视为过载
+      threshold_percent: 90
+      # 持续时间阈值（秒），超过阈值持续此时长才判定为过载
+      duration_sec: 30
+      # 检查命令（PowerShell）
+      check_command: "Get-Counter '\\Processor(_Total)\\% Processor Time' -SampleInterval 1 -MaxSamples 3 | Select-Object -ExpandProperty CounterSamples | Select-Object -ExpandProperty CookedValue"
+      # 过载时的处理策略
+      on_overload: "downgrade_to_tier_2"
+    memory:
+      # 可用内存阈值（MB），低于此值视为过载
+      threshold_available_mb: 512
+      check_command: "Get-Counter '\\Memory\\Available MBytes' -SampleInterval 1 -MaxSamples 1 | Select-Object -ExpandProperty CounterSamples | Select-Object -ExpandProperty CookedValue"
+      on_overload: "downgrade_to_tier_2"
+    disk_io:
+      # 磁盘 IO 延迟阈值（秒），超过此值视为过载
+      threshold_latency_sec: 5
+      check_command: "Get-Counter '\\PhysicalDisk(_Total)\\Avg. Disk sec/Transfer' -SampleInterval 1 -MaxSamples 1 | Select-Object -ExpandProperty CounterSamples | Select-Object -ExpandProperty CookedValue"
+      on_overload: "downgrade_to_tier_2"
+
+  # === 进程监控（B2 规范）===
+  # 为什么监控 Top 10 进程：定位资源占用源头，必要时可建议用户关闭无关进程
+  top_processes_command: "Get-Process | Sort-Object CPU -Descending | Select-Object -First 10"
+  top_processes_count: 10
+
+  # === 容错策略 ===
+  fault_tolerance:
+    # 完整测试集超时时改用直接 import 测试验证改动文件
+    full_test_timeout_fallback: "direct_import_test"
+    # 直接 import 测试失败时改用语法检查（最小验证）
+    import_test_failure_fallback: "syntax_check_only"
+    # 语法检查命令模板（{changed_file} 占位符）
+    syntax_check_command: "{python} -c \"import ast; ast.parse(open(r'{changed_file}', encoding='utf-8').read()); print('SYNTAX OK: {changed_file}')\""
+
+# ============== 模式 Y：前端韧性回归测试（v2.2.0 新增） ==============
+# 对应检查点：xianyu-frontend-code-review v4.62.0 F-REVIEW-227~232
+# 配套编码规范：coding-standards v1.3 §3.10-3.15
+# 适用场景：Markdown 渲染/SSE 流式响应/定时器/可访问性相关代码修改后回归验证
+# 不适用场景：纯后端代码修改（应改用模式 Z）；非 React 项目
+mode_y_frontend_resilience_test:
+  _doc: "前端韧性六项检查点回归测试配置（F-REVIEW-227~232）"
+
+  # === 关键文件（相对 frontend_dir）===
+  # 为什么列这些文件：智能客服相关代码集中了所有六项检查点的风险
+  key_files:
+    - "src/pages/Chatbot/index.tsx"
+    - "src/pages/Chatbot/components/AssistantMessage.tsx"
+    - "src/pages/Chatbot/components/CodeBlock.tsx"
+    - "src/components/MarkdownRenderer.tsx"
+    - "src/api/sse.ts"
+    - "src/hooks/useSSE.ts"
+
+  # === F-REVIEW-227 Markdown 预处理代码块保护 ===
+  markdown_check:
+    severity: CRITICAL
+    # 检测信号：对 Markdown 字符串直接做 replace
+    detection_patterns:
+      - "\\.replace\\(.*content"
+      - "content\\.replace"
+      - "processedContent"
+    # 代码块分割正则
+    codeblock_split_pattern: '(```[\\s\\S]*?```|`[^`]+`)'
+    # 必须先分割再替换
+    require_split_before_replace: true
+
+  # === F-REVIEW-228 React render 阶段副作用禁令 ===
+  react_render_check:
+    severity: CRITICAL
+    # 检测信号：函数组件主体内的 .current = 赋值
+    detection_patterns:
+      - "\\.current\\s*="
+    # 必须在 useEffect/useLayoutEffect/事件回调内
+    require_in_effect_or_handler: true
+    # StrictMode 双调用测试
+    require_strict_mode_test: true
+
+  # === F-REVIEW-229 SSE 事件运行时类型校验 ===
+  sse_type_check:
+    severity: CRITICAL
+    # 禁止的 as 断言模式
+    forbidden_patterns:
+      - "JSON\\.parse.*as\\s"
+      - "event\\.data.*as\\s"
+      - "\\.follow_ups.*as\\s"
+    # 必须用 zod safeParse
+    require_zod_safe_parse: true
+    # 校验失败时降级返回 fallback 值
+    require_fallback_on_invalid: true
+
+  # === F-REVIEW-230 定时器清理与竞态防护 ===
+  timer_check:
+    severity: HIGH
+    # 检测信号：setTimeout/setInterval
+    detection_patterns:
+      - "setTimeout"
+      - "setInterval"
+    # 必须有对应 cleanup
+    require_cleanup_pair: true
+    # 连续触发必须用 useRef 存储 ID
+    require_ref_for_consecutive_trigger: true
+    # 快速连续触发测试次数
+    consecutive_trigger_test_count: 5
+
+  # === F-REVIEW-231 交互元素可访问性 ===
+  a11y_check:
+    severity: MEDIUM
+    # 检测信号：非原生交互元素
+    detection_patterns:
+      - "<div.*onClick"
+      - "<span.*onClick"
+      - "<li.*onClick"
+    # 必须三件套齐全
+    require_three_piecemeal: [tabIndex, role, onKeyDown]
+    # 键盘测试键列表
+    keyboard_test_keys: [Tab, Enter, Space]
+    # 优先用原生 button
+    prefer_native_button: true
+
+  # === F-REVIEW-232 流式响应 onComplete 数据完整性 ===
+  oncomplete_check:
+    severity: HIGH
+    # 检测信号：onComplete 回调
+    detection_patterns:
+      - "onComplete"
+      - "content\\.length"
+    # 持久化条件必须基于"任一产出非空"
+    require_any_output_check: true
+    # 禁止仅检查主回答
+    forbid_main_only_check: true
+    # 测试场景：主回答为空但有 follow_ups
+    test_empty_main_with_followups: true
+
+  # === vitest 命令参数 ===
+  vitest_args: "tests/chatbot tests/resilience --reporter=verbose"
+
+# ============== 模式 Z：LLM 治理回归测试（v2.2.0 新增） ==============
+# 对应检查点：xianyu-backend-code-review v4.62.0 B-REVIEW-291~294
+# 配套编码规范：coding-standards v1.3 §2.21-2.24
+# 适用场景：rag_engine/orchestrator 等 LLM 多调用代码修改后回归验证
+# 不适用场景：纯前端代码修改（应改用模式 Y）；单次 LLM 调用代码
+mode_z_llm_governance_test:
+  _doc: "LLM 多调用治理四项检查点回归测试配置（B-REVIEW-291~294）"
+
+  # === 关键文件（相对 backend_dir）===
+  # 为什么列这些文件：所有 LLM 多调用治理风险点集中在此
+  key_files:
+    - "modules/chatbot/rag_engine.py"
+    - "modules/chatbot/orchestrator.py"
+    - "modules/chatbot/budget.py"
+    - "modules/chatbot/llm_client.py"
+
+  # === 附加 LLM 调用方法名清单 ===
+  # 为什么列这些方法名：grep 命中即触发预算/超时/解析/一致性审查
+  aux_call_methods:
+    - "generate_follow_ups"
+    - "generate_title"
+    - "generate_tags"
+    - "generate_summary"
+
+  # === B-REVIEW-291 附加调用预算与用量闭环 ===
+  budget_check:
+    severity: CRITICAL
+    # 附加调用前必须有 check_budget
+    require_check_budget: true
+    # 附加调用后必须有 _record_llm_usage
+    require_record_usage: true
+    # 必须复用主调用的 BudgetContext
+    require_shared_budget_context: true
+    # 预算超限测试场景
+    test_budget_exceeded: true
+    # 预算上下文传递字段
+    budget_context_fields: [user_id, session_id, request_id]
+
+  # === B-REVIEW-292 附加调用独立超时 ===
+  timeout_check:
+    severity: CRITICAL
+    # 必须用 asyncio.wait_for
+    require_wait_for: true
+    # 主调用默认超时（秒）
+    main_call_timeout_sec: 30
+    # 附加调用默认超时（秒）
+    aux_call_timeout_sec: 10
+    # 附加超时必须 < 主调用超时
+    require_aux_less_than_main: true
+    # 超时降级测试
+    test_timeout_degrade: true
+    # 超时降级返回值
+    degrade_return_value: []
+
+  # === B-REVIEW-293 响应结构化解析 ===
+  parse_check:
+    severity: CRITICAL
+    # 禁止的正则提取模式
+    forbidden_patterns:
+      - "re\\.search.*\\\\\\{.*\\\\\\}"
+      - "re\\.findall.*\\\\\\{.*\\\\\\}"
+      - "eval\\("
+    # 必须用 json.loads 或 pydantic.model_validate_json
+    require_json_loads: true
+    # 必须做类型校验
+    require_type_validation: true
+    # 必须剥离代码块
+    require_codeblock_strip: true
+    # 畸形响应测试场景
+    test_malformed_responses:
+      - "codeblock_wrapped_json"
+      - "nested_json"
+      - "malformed_json"
+      - "empty_response"
+
+  # === B-REVIEW-294 多调用一致性 ===
+  consistency_check:
+    severity: WARNING
+    # 异常处理必须与主调用一致
+    require_consistent_except: true
+    # 日志格式必须与主调用一致
+    require_consistent_log_format: true
+    # 降级策略必须与主调用一致
+    require_consistent_degradation: true
+    # 附加异常不冒泡到主调用
+    require_aux_exception_catch: true
+    # 异常冒泡测试
+    test_exception_propagation: true
+
+  # === pytest 命令参数 ===
+  pytest_args: "tests/test_rag_engine.py tests/test_orchestrator.py tests/test_llm_governance.py -v"
+
+# ============================================================================
+# v2.3.0 新增：模式 AA - 资源创建幂等性与状态闭环回归测试（第八轮复盘落地）
+# 配套：xianyu-hunter-dev 规范 31-32 + coding-standards v1.3 §2.25-2.26
+# 后端联动：xianyu-backend-code-review v4.64.0 B-REVIEW-313~315
+# 前端联动：xianyu-frontend-code-review v4.63.0 F-REVIEW-233~235
+# ============================================================================
+
+mode_aa_idempotent_resource_creation_test:
+  _doc: "资源创建幂等性与状态闭环六项检查点回归测试配置（B-REVIEW-313~315 + F-REVIEW-233~235）"
+
+  # === 关键文件（相对项目根目录）===
+  # 为什么列这些文件：所有资源创建幂等性与状态闭环风险点集中在此
+  key_files:
+    backend:
+      - "src/xianyu_hunter/web/routes/api_anticrawl.py"
+      - "src/xianyu_hunter/modules/login_orchestrator.py"
+    frontend:
+      - "frontend/src/api/anticrawl.ts"
+      - "frontend/src/api/types.ts"
+      - "frontend/src/pages/AntiCrawl/index.tsx"
+
+  # === B-REVIEW-313 资源创建接口幂等性 ===
+  backend_idempotent_check:
+    severity: CRITICAL
+    # 资源创建类路由模式
+    route_patterns:
+      - "/start"
+      - "/create"
+      - "/register"
+      - "/launch"
+    # 适用路由关键字（路由路径必须包含这些关键字才触发检查）
+    applicable_route_keywords:
+      - "session"
+      - "task"
+      - "connection"
+    # 必须的响应字段
+    required_response_fields:
+      - "ok"
+      - "already_active"
+      - "message"
+    # 禁止用 ok:False 表达已存在
+    forbidden_failure_for_existing: true
+    # 必须的测试用例后缀
+    required_test_suffixes:
+      - "_already_active"
+      - "_already_exists"
+      - "_idempotent"
+    # 检测信号
+    detection_signals:
+      - "路由返回 ok:False 表达已存在 → 违规"
+      - "路由无 already_active 字段 → 违规"
+      - "缺少 _already_active 单元测试 → 违规"
+    applicable_scenarios:
+      - "资源创建/启动/注册接口"
+      - "网络重试场景"
+      - "前端启动/恢复按钮后端"
+    inapplicable_scenarios:
+      - "纯查询接口（天然幂等）"
+      - "计数器递增"
+      - "一次性副作用（如发短信验证码，需用 token 防重）"
+
+  # === B-REVIEW-314 OperationResult 响应结构契约 ===
+  operation_result_check:
+    severity: HIGH
+    # 写操作路由模式
+    write_operation_patterns:
+      - "/start"
+      - "/stop"
+      - "/create"
+      - "/update"
+      - "/delete"
+      - "/register"
+    # 必填字段
+    required_fields:
+      - "ok"
+    # 可选字段（幂等标志 + 错误信息 + 消息）
+    optional_fields:
+      - "already_active"
+      - "already_exists"
+      - "error"
+      - "error_code"
+      - "detail"
+      - "message"
+      - "affected_id"
+      - "warnings"
+    # 禁止的非契约字段
+    forbidden_extra_fields:
+      - "msg"
+      - "success"
+      - "result"
+    # OperationResult 模型定义路径
+    model_definition_path: "src/xianyu_hunter/web/routes/api_anticrawl.py"
+    detection_signals:
+      - "写操作响应缺 ok 字段 → 违规"
+      - "响应包含 msg/success 等非契约字段 → 违规"
+    applicable_scenarios:
+      - "所有写操作响应"
+      - "后端响应结构变更同步检查"
+    inapplicable_scenarios:
+      - "纯查询接口（用专用 DTO）"
+      - "流式响应（SSE/WebSocket，用专用 schema）"
+
+  # === B-REVIEW-315 前端状态刷新闭环（后端侧）===
+  frontend_sync_check:
+    severity: HIGH
+    # 前端 types.ts 文件路径
+    frontend_types_file: "frontend/src/api/types.ts"
+    # 必须同步检查
+    required_sync_check: true
+    # 后端响应 grep 模式
+    backend_response_grep_patterns:
+      - "JSONResponse"
+      - "return.*ok.*True"
+      - "return.*ok.*False"
+    # 前端 usage grep 模式
+    grep_frontend_usage_patterns:
+      - "interface OperationResult"
+      - "type OperationResult"
+      - "already_active"
+    detection_signals:
+      - "后端响应有 already_active 但前端 types.ts 无此字段 → 违规"
+      - "API 函数返回类型与后端响应模型不匹配 → 违规"
+    applicable_scenarios:
+      - "后端响应字段变更同步"
+      - "新增 API 端点"
+      - "字段重命名/废弃全链路同步"
+    inapplicable_scenarios:
+      - "前端内部状态类型（无后端对应）"
+      - "第三方 SDK 类型"
+
+  # === F-REVIEW-233 前端 async handler 三分支完整性 ===
+  async_handler_check:
+    severity: CRITICAL
+    # async handler 命名模式
+    handler_patterns:
+      - "handleStart"
+      - "handleStop"
+      - "handleCreate"
+      - "handleUpdate"
+      - "handleDelete"
+      - "handleResume"
+      - "handlePause"
+      - "handleLaunch"
+      - "handleRegister"
+    # 状态刷新函数命名模式
+    refresh_function_patterns:
+      - "load"
+      - "refresh"
+      - "mutate"
+      - "refetch"
+    # 三分支都必须调用 loadXxx 刷新状态
+    require_load_in_all_branches: true
+    # else 分支禁止固定失败文案
+    require_specific_error_in_else: true
+    # catch 分支必须用 extractApiError
+    require_extract_api_error_in_catch: true
+    detection_signals:
+      - "else 分支显示 message.error('启动失败') 等固定文案 → 违规"
+      - "catch 分支无 loadXxx 调用 → 违规"
+      - "success 分支无 loadXxx 刷新 → 违规"
+    applicable_scenarios:
+      - "所有触发网络请求的前端 async 事件 handler"
+      - "资源创建/启动/停止/恢复类按钮 onClick"
+      - "表单提交 onFinish handler"
+    inapplicable_scenarios:
+      - "纯查询的 loadXxx 函数"
+      - "不发起网络请求的本地状态变更"
+      - "防抖/节流的中间函数"
+
+  # === F-REVIEW-234 API 函数返回类型契约 ===
+  api_return_type_check:
+    severity: HIGH
+    # 资源创建类 API 必须使用的返回类型
+    required_return_type: "OperationResult"
+    # 资源创建类 API 函数命名模式
+    api_function_patterns:
+      - "start"
+      - "create"
+      - "register"
+      - "launch"
+      - "resume"
+    # 必须包含的幂等标志字段（至少一个）
+    required_idempotent_fields:
+      - "already_active"
+      - "already_exists"
+    # 禁止使用的返回类型
+    forbidden_return_types:
+      - "any"
+      - "unknown"
+      - "Promise<any>"
+      - "Promise<unknown>"
+    # OperationResult 接口定义位置
+    operation_result_interface_path: "frontend/src/api/types.ts"
+    detection_signals:
+      - "API 函数返回类型为 Promise<any> → 违规"
+      - "OperationResult 接口缺少 already_active 字段 → 违规"
+      - "调用点使用 as 强制断言 → 违规"
+    applicable_scenarios:
+      - "所有资源创建/启动/注册类前端 API 函数"
+      - "后端响应结构变更时同步检查"
+      - "新增 API 端点的类型契约对齐"
+    inapplicable_scenarios:
+      - "纯查询接口（用专用 DTO 类型）"
+      - "SSE/WebSocket 流式响应（用专用 schema）"
+      - "第三方 SDK 类型定义"
+
+  # === F-REVIEW-235 UI 与后端状态一致性强制刷新 ===
+  ui_state_check:
+    severity: CRITICAL
+    # 写操作后必须调用 loadXxx 刷新
+    require_refresh_after_write: true
+    # 三分支都必须刷新
+    require_refresh_in_all_branches: true
+    # 业务状态必须来自 API 响应
+    require_api_source_for_business_state: true
+    # loading 状态必须独立于业务状态
+    require_independent_loading_state: true
+    # 写操作命名模式
+    write_operation_patterns:
+      - "start"
+      - "create"
+      - "update"
+      - "delete"
+      - "stop"
+      - "resume"
+      - "pause"
+    # 状态刷新函数命名模式
+    refresh_function_patterns:
+      - "load"
+      - "refresh"
+      - "mutate"
+      - "refetch"
+    detection_signals:
+      - "写操作后无 loadXxx 调用 → 违规"
+      - "业务状态用 useState 独立维护 → 违规"
+      - "错误分支无 loadXxx 刷新 → 违规"
+      - "loading 状态与业务状态耦合 → 违规"
+    applicable_scenarios:
+      - "所有涉及后端资源状态的前端 UI"
+      - "写操作的前端 handler"
+      - "网络不稳定或 fire-and-forget 后端调用场景"
+    inapplicable_scenarios:
+      - "纯前端 UI 状态（Modal 显示/表单输入值）"
+      - "防抖/节流的中间状态"
+      - "loading 状态本身"
+
+  # === pytest 命令参数 ===
+  pytest_args: "tests/test_api_anticrawl.py -v"
+
+  # === vitest 命令参数 ===
+  vitest_args: "frontend/src/api/anticrawl.test.ts frontend/src/pages/AntiCrawl/index.test.tsx"
+
+# ============================================================================
+# v2.4.0 新增：模式 AB - 搜索服务模板方法模式回归测试（第九轮复盘落地）
+# 配套：xianyu-hunter-dev 规范 19 + coding-standards v1.3 §2.27
+# 后端联动：xianyu-backend-code-review v4.65.0 B-REVIEW-324~326
+# ============================================================================
+
+mode_ab_search_service_template_test:
+  _doc: "搜索服务模板方法模式三项检查点回归测试配置（B-REVIEW-324~326）"
+
+  # === 关键文件（相对项目根目录）===
+  # 为什么列这些文件：SearchService 基类 + 已有子类实现 + 慢查询日志配置源
+  key_files:
+    backend:
+      - "src/xianyu_hunter/web/services/search_base.py"
+      - "src/xianyu_hunter/web/services/search_items.py"
+      - "src/xianyu_hunter/web/services/search_sellers.py"
+      - "src/xianyu_hunter/web/services/search_logs.py"
+      - "src/xianyu_hunter/web/services/search_evaluations.py"
+    frontend: []
+    config:
+      - "config.yaml"
+
+  # === B-REVIEW-324 SEARCH-SERVICE-TEMPLATE 模板方法模式 ===
+  template_method_pattern:
+    severity: CRITICAL
+    # 触发基类抽取的搜索接口数量阈值
+    # 为什么默认 2：1 个接口无需抽象，≥2 个接口必须抽取避免重复实现
+    min_interfaces_to_extract: 2
+    # SearchService 抽象基类文件路径
+    base_class_path: "src/xianyu_hunter/web/services/search_base.py"
+    # 基类名
+    base_class_name: "SearchService"
+    # 唯一入口方法名（子类禁止覆写）
+    entry_method: "search"
+    # 是否禁止子类覆写入口方法
+    forbid_override_entry_method: true
+    # 5 步流程编排顺序（必须按此顺序调用）
+    orchestration_order:
+      - "_build_query"
+      - "_execute"
+      - "_extract_facets"
+      - "_paginate"
+      - "_maybe_log_slow"
+    # 路由 grep 模式（识别搜索接口）
+    route_grep_patterns:
+      - "@router\\.post.*search"
+      - "@router\\.get.*search"
+      - "@router\\.post.*query"
+      - "@router\\.get.*query"
+    # 搜索接口路径关键字（路径包含这些关键字才计入搜索接口计数）
+    route_path_keywords:
+      - "search"
+      - "query"
+      - "list"
+    # 搜索参数关键字（参数包含这些关键字才计入搜索接口计数）
+    search_param_keywords:
+      - "keyword"
+      - "query"
+      - "q"
+    detection_signals:
+      - "搜索接口数量 ≥ 2 但无 SearchService 基类 → 违规"
+      - "搜索服务子类未继承 SearchService → 违规"
+      - "子类覆写 search() 入口方法 → 违规"
+    applicable_scenarios:
+      - "新增搜索接口时验证是否抽取基类"
+      - "SearchService 基类重构后回归"
+      - "搜索服务子类签名变更后验证"
+    inapplicable_scenarios:
+      - "单搜索接口（无需抽象）"
+      - "纯 CRUD 列表接口（无搜索关键字参数）"
+      - "聚合统计接口（用专用 Service）"
+
+  # === B-REVIEW-325 SEARCH-HOOK-METHOD-CONTRACT 4 钩子方法契约 ===
+  hook_method_contract:
+    severity: CRITICAL
+    # 4 个钩子方法定义
+    hooks:
+      _build_query:
+        # 构建 SQLAlchemy Select 或 SearchQuery 对象
+        signature: "async def _build_query(self, params: SearchParams) -> Select | SearchQuery"
+        return_type: "Select | SearchQuery"
+        responsibility: "构建查询语句（WHERE/ORDER BY/JOIN）"
+      _execute:
+        # 执行查询，返回 ORM 列表
+        signature: "async def _execute(self, query: Select) -> list[ORM]"
+        return_type: "Result | list[ORM]"
+        responsibility: "执行数据库查询"
+      _extract_facets:
+        # 提取聚合分面（可选，无分面返回 None）
+        signature: "async def _extract_facets(self, query: Select) -> dict[str, FacetResult] | None"
+        return_type: "dict[str, FacetResult] | None"
+        responsibility: "提取聚合分面（如分类/状态/标签）"
+      _paginate:
+        # 分页处理，返回 PaginationResult
+        signature: "async def _paginate(self, items: list[ORM], total: int, page: int, page_size: int) -> PaginationResult"
+        return_type: "PaginationResult"
+        responsibility: "分页切片与元数据封装"
+        pagination_result_fields:
+          - "items"
+          - "total"
+          - "page"
+          - "page_size"
+    # 签名一致性检查项
+    require_signature_match: true
+    # 返回类型契约检查项
+    require_return_type_match: true
+    detection_signals:
+      - "子类钩子方法缺失 → 违规"
+      - "子类钩子方法签名与基类不一致 → 违规"
+      - "_paginate 返回值缺 items/total/page/page_size 字段 → 违规"
+    applicable_scenarios:
+      - "搜索服务子类实现审查"
+      - "钩子方法签名变更时全量子类同步验证"
+    inapplicable_scenarios:
+      - "基类内部辅助方法（非钩子）"
+      - "测试 mock 子类"
+
+  # === B-REVIEW-326 SEARCH-SLOW-QUERY-LOG 慢查询日志 ===
+  slow_query_log:
+    severity: HIGH
+    # 慢查询阈值（毫秒），从 config.yaml 读取禁止硬编码
+    # 注意：此处是测试用的阈值，与项目 config.yaml#search_service_template.slow_query_log.threshold_ms 对齐
+    threshold_ms: 500
+    # 阈值配置源（指向项目 config.yaml 节点）
+    threshold_config_source: "config.yaml#search_service_template.slow_query_log.threshold_ms"
+    # 必须包含的日志字段
+    required_log_fields:
+      - "elapsed_ms"
+      - "service_class"
+      - "query_keywords"
+      - "total_count"
+    # 日志级别
+    log_level: "WARNING"
+    # 调用时机约束（必须在 _execute 之后）
+    require_call_after_execute: true
+    # 禁止调用时机
+    forbidden_call_before: "_build_query"
+    forbidden_call_after: "_paginate"
+    detection_signals:
+      - "慢查询阈值硬编码在模块级常量 → 违规"
+      - "慢查询日志缺 elapsed_ms/service_class 字段 → 违规"
+      - "_maybe_log_slow 在 _build_query 之前调用 → 违规"
+      - "_maybe_log_slow 在 _paginate 之后调用 → 违规"
+    applicable_scenarios:
+      - "SearchService 基类慢查询日志实现验证"
+      - "新搜索子类接入慢查询日志验证"
+    inapplicable_scenarios:
+      - "单元测试 mock 日志"
+      - "本地开发环境（可关闭日志）"
+
+  # === 跨技能交叉验证：测试路由一致性 ===
+  route_test_consistency:
+    severity: HIGH
+    # 历史失败案例（用于警示）
+    historical_failure_cases:
+      - file: "tests/test_chatbot_api_degraded.py"
+        issue: "测试路径用复数 /faqs 但路由定义为单数 /faq"
+        fix: "改为 /faq 并将 PUT 改为 POST upsert"
+    # 路由装饰器 grep 模式
+    route_decorator_patterns:
+      - "@router\\.(post|get|put|delete|patch)\\("
+    # 测试 client 调用 grep 模式
+    test_client_patterns:
+      - "client\\.(post|get|put|delete|patch)\\("
+    detection_signals:
+      - "测试 client 调用路径与路由定义不匹配 → 违规"
+      - "测试 HTTP 方法与路由装饰器不匹配 → 违规"
+      - "单复数路径不一致 → 违规"
+    applicable_scenarios:
+      - "新增搜索接口测试时验证路由一致性"
+      - "路由路径重命名后全量测试同步"
+    inapplicable_scenarios:
+      - "纯单元测试（不调用 client）"
+      - "集成测试 mock 路由"
+
+  # === 测试用例命名约定 ===
+  test_case_naming:
+    required_suffixes:
+      - "test_search_service_template_method_"
+      - "test_search_service_hook_contract_"
+      - "test_search_service_slow_query_log_"
+      - "test_search_service_pagination_"
+      - "test_search_route_consistency_"
+
+  # === pytest 命令参数 ===
+  pytest_args: "tests/test_search_service_template_method.py tests/test_search_service_hook_contract.py tests/test_search_service_slow_query_log.py -v"
+
+# ============================================================================
+# v2.4.0 新增：模式 AC - 搜索 Hook 模式回归测试（第九轮复盘落地）
+# 配套：xianyu-hunter-dev step 271/272 + coding-standards v1.3 §3.16-3.20
+# 前端联动：xianyu-frontend-code-review v4.65.0 F-REVIEW-236~240
+# ============================================================================
+
+mode_ac_search_hook_test:
+  _doc: "搜索 Hook 模式六项检查点回归测试配置（F-REVIEW-236~240）"
+
+  # === 关键文件（相对项目根目录）===
+  key_files:
+    frontend:
+      - "frontend/src/hooks/useSearch.ts"
+      - "frontend/src/hooks/useSearchHistory.ts"
+      - "frontend/src/pages/Items/index.tsx"
+      - "frontend/src/pages/Sellers/index.tsx"
+      - "frontend/src/pages/Logs/Logs.tsx"
+      - "frontend/src/pages/Chatbot/index.tsx"
+    backend: []
+    test:
+      - "frontend/src/hooks/__tests__/useSearch.test.ts"
+      - "frontend/src/hooks/__tests__/useSearchHistory.test.ts"
+
+  # === F-REVIEW-236 USE-SEARCH-DEBOUNCE-CONCURRENCY useSearch 防抖与并发保护 ===
+  use_search_debounce:
+    severity: CRITICAL
+    # useSearch Hook 文件路径
+    hook_path: "frontend/src/hooks/useSearch.ts"
+    # 防抖时间（毫秒）
+    # 为什么默认 400：用户输入平均间隔 ~300ms，400ms 防抖可覆盖大部分输入停顿
+    debounce_ms: 400
+    # requestId 并发保护字段名
+    request_id_field: "requestIdRef"
+    # 禁止裸 setTimeout/fetch 模式
+    forbid_raw_settimeout: true
+    # 红旗 grep 模式
+    grep_red_flags:
+      - "setTimeout\\(.*search"
+      - "setTimeout\\(.*fetch"
+      - "setTimeout\\(.*query"
+    # 搜索接入页面 glob
+    search_page_globs:
+      - "frontend/src/pages/**/*.tsx"
+    # 豁免页面（不接入 useSearch 的页面，因不涉及搜索防抖）
+    # 为什么豁免：纯手动搜索按钮、setTimeout 不涉及搜索防抖
+    exempt_pages:
+      - "frontend/src/pages/TaskDetail.tsx"
+      - "frontend/src/pages/Evaluations/index.tsx"
+      - "frontend/src/pages/BatchRefresh.tsx"
+      - "frontend/src/pages/Logs/Logs.tsx"
+      - "frontend/src/pages/Chatbot/index.tsx"
+    detection_signals:
+      - "useSearch 无 setTimeout/clearTimeout 防抖 → 违规"
+      - "useSearch 无 requestIdRef 并发保护 → 违规"
+      - "搜索接入页面裸 setTimeout(.*search → 违规"
+      - "搜索接入页面裸 setTimeout(.*fetch → 违规"
+    applicable_scenarios:
+      - "useSearch Hook 实现审查"
+      - "新页面接入搜索功能时验证使用 useSearch"
+      - "搜索防抖阈值调整后回归"
+    inapplicable_scenarios:
+      - "纯展示页面（无搜索功能）"
+      - "服务端搜索（无前端防抖需求）"
+      - "豁免页面（手动搜索按钮模式）"
+
+  # === F-REVIEW-237 USE-SEARCH-ENABLED-CLEANUP useSearch enabled 条件搜索与卸载清理 ===
+  use_search_enabled_cleanup:
+    severity: CRITICAL
+    # 是否必须支持 enabled 参数
+    require_enabled_param: true
+    # 是否必须清理 setTimeout
+    require_clear_timeout_on_unmount: true
+    # 是否必须取消进行中请求
+    require_cancel_pending_request: true
+    # 取消请求机制
+    cancel_mechanisms:
+      - "AbortController"
+      - "requestIdRef"
+    detection_signals:
+      - "useSearch 无 enabled 参数支持 → 违规"
+      - "组件卸载未 clearTimeout → 违规"
+      - "组件卸载未取消进行中请求 → 违规"
+      - "卸载后 setState 警告 → 违规"
+    applicable_scenarios:
+      - "useSearch Hook 实现审查"
+      - "条件搜索场景（如选择分类后才搜索）"
+      - "频繁挂载/卸载的搜索组件"
+    inapplicable_scenarios:
+      - "全局搜索（永不卸载）"
+      - "一次性搜索（无防抖需求）"
+
+  # === F-REVIEW-238 USE-SEARCH-HISTORY-PERSISTENCE useSearchHistory localStorage 持久化与去重 ===
+  use_search_history:
+    severity: CRITICAL
+    # useSearchHistory Hook 文件路径
+    hook_path: "frontend/src/hooks/useSearchHistory.ts"
+    # localStorage key 前缀
+    storage_key_prefix: "xh_search_history"
+    # 历史记录上限
+    # 为什么默认 20：覆盖常用搜索场景，超过则 LRU 淘汰
+    max_items: 20
+    # LRU 语义（新搜索将旧记录移到首位，相同关键词只保留一条）
+    lru_semantics: true
+    # 是否必须持久化到 localStorage
+    require_localstorage_persistence: true
+    # 是否必须去重
+    require_dedup: true
+    # 是否必须上限保护
+    require_max_items_limit: true
+    detection_signals:
+      - "useSearchHistory 无 localStorage 持久化 → 违规"
+      - "相同关键词出现多条记录 → 违规"
+      - "历史记录数量超过 max_items 未淘汰 → 违规"
+    applicable_scenarios:
+      - "useSearchHistory Hook 实现审查"
+      - "搜索框历史下拉功能验证"
+      - "刷新页面后历史保留验证"
+    inapplicable_scenarios:
+      - "无痕模式（localStorage 不可用，需降级内存存储）"
+      - "一次性搜索（无需历史）"
+
+  # === F-REVIEW-239 USE-SEARCH-HISTORY-NAMESPACE useSearchHistory 命名空间隔离 ===
+  use_search_history_namespace:
+    severity: HIGH
+    # 是否必须支持 namespace 参数
+    require_namespace_param: true
+    # 默认命名空间（未指定时使用）
+    default_namespace: "default"
+    # 常用命名空间示例
+    common_namespaces:
+      - "items"
+      - "sellers"
+      - "logs"
+      - "chatbot"
+      - "evaluations"
+    # 是否禁止跨命名空间污染
+    forbid_cross_namespace_pollution: true
+    # storageKey 格式
+    storage_key_format: "{storage_key_prefix}.{namespace}"
+    detection_signals:
+      - "useSearchHistory 无 namespace 参数 → 违规"
+      - "不同命名空间共享同一 localStorage key → 违规"
+      - "在 items 命名空间搜索后 sellers 历史被污染 → 违规"
+    applicable_scenarios:
+      - "多页面搜索功能（每页独立历史）"
+      - "多租户场景（每租户独立历史）"
+    inapplicable_scenarios:
+      - "单页面搜索（无需命名空间）"
+      - "全局共享搜索历史（设计上共享）"
+
+  # === F-REVIEW-240 USE-SEARCH-HISTORY-DECLARATION-ORDER useSearchHistory 声明顺序与依赖稳定性 ===
+  use_search_history_declaration_order:
+    severity: HIGH
+    # 是否必须用 useMemo 固定 storageKey
+    require_memo_storage_key: true
+    # add/clear/remove 是否必须用 useCallback
+    require_callback_for_actions: true
+    # useCallback 依赖必须为稳定的 storageKey（来自 useMemo）
+    require_stable_dependency: true
+    # 声明顺序约束（被依赖者先声明）
+    require_dependency_first: true
+    # 历史失败案例
+    historical_failure_cases:
+      - file: "frontend/src/pages/Chatbot/index.tsx"
+        issue: "addSessionHistory 在 loadSessions 之后声明，但 loadSessions 的 useCallback 依赖了它"
+        fix: "将 useSearchHistory 声明移到 loadSessions 之前"
+      - file: "frontend/src/hooks/useSearchHistory.ts"
+        issue: "storageKey 每次渲染生成新字符串，导致 add/clear/remove 的 useCallback 依赖变化"
+        fix: "用 useMemo 固定 storageKey"
+    detection_signals:
+      - "storageKey 未用 useMemo 固定 → 违规"
+      - "add/clear/remove 的 useCallback 依赖为临时字符串 → 违规"
+      - "useSearchHistory 在依赖它的 useCallback 之后声明 → 违规"
+      - "useCallback 依赖数组缺失 storageKey → 违规"
+    applicable_scenarios:
+      - "useSearchHistory Hook 实现审查"
+      - "Hook 接入页面审查"
+      - "React 依赖循环问题排查"
+    inapplicable_scenarios:
+      - "无 useCallback 的简单场景"
+      - "类组件（不使用 Hook）"
+
+  # === 测试用例命名约定 ===
+  test_case_naming:
+    required_test_files:
+      - "frontend/src/hooks/__tests__/useSearch.test.ts"
+      - "frontend/src/hooks/__tests__/useSearchHistory.test.ts"
+    required_test_suites:
+      - "防抖与并发保护"
+      - "enabled 条件搜索"
+      - "卸载清理"
+      - "localStorage 持久化"
+      - "LRU 去重"
+      - "命名空间隔离"
+      - "声明顺序与依赖稳定性"
+
+  # === vitest 命令参数 ===
+  vitest_args: "frontend/src/hooks/__tests__/useSearch.test.ts frontend/src/hooks/__tests__/useSearchHistory.test.ts"
+
+# ===== 模式 AD：AI 服务测试连接与预设切换回归测试模式（v2.5.0 新增） =====
+# 来源：AI 服务菜单改造经验沉淀（API Key 关联存储、测试接口状态回传、HF cache 轻量检测、UI 状态集中映射、外部链接安全）
+# 配套检查点：B-REVIEW-327~329（后端预设切换与状态回传契约）/ F-REVIEW-241~243（前端 UI 状态映射与链接安全）
+# 配套编码规范：xianyu-hunter-dev coding-standards v1.3 §2.25（预设切换双步模式与归档加载契约）+ §2.26（敏感数据后端主导原则）
+mode_ad_ai_service_test_connection_test:
+  _doc: "AI 服务测试连接与预设切换六项检查点回归测试配置（B-REVIEW-327~329 + F-REVIEW-241~243）"
+
+  # === 关键文件（相对项目根目录）===
+  key_files:
+    frontend:
+      - "frontend/src/pages/Config/AIConfig/constants.ts"
+      - "frontend/src/pages/Config/AIConfig/index.tsx"
+      - "frontend/src/pages/Config/AIConfig/components/ModelConfigForm.tsx"
+      - "frontend/src/pages/Config/AIConfig/components/EmbeddingConfigForm.tsx"
+      - "frontend/src/api/ai.ts"
+      - "frontend/src/api/types.ts"
+    backend:
+      - "src/xianyu_hunter/web/routes/api_ai.py"
+      - "src/xianyu_hunter/infra/secrets.py"
+    test:
+      - "frontend/src/pages/Config/AIConfig/__tests__/preset-switch.test.ts"
+      - "tests/web/test_api_ai_preset.py"
+
+  # === B-REVIEW-327 PRESET-DEFINITION-FRONTEND-ONLY 预设定义前后端分离 ===
+  preset_definition_frontend_only:
+    severity: ERROR
+    # 前端预设定义文件
+    frontend_preset_file: "frontend/src/pages/Config/AIConfig/constants.ts"
+    # 预设对象变量名
+    preset_var_name: "PRESETS"
+    # 必须包含的字段
+    required_fields:
+      - "base_url"
+      - "model"
+      - "vision_model"
+      - "label"
+      - "color"
+      - "apiKeyUrl"
+    # 后端切换预设接口路径
+    backend_apply_endpoint: "POST /api/ai/apply-preset"
+    # 后端禁止硬编码预设列表
+    forbid_backend_preset_table: true
+    # 违规 grep 模式
+    grep_violation_patterns:
+      - "PRESETS\\s*=\\s*\\{"
+      - "preset_table\\s*=\\s*\\{"
+      - "PRESET_LIST\\s*=\\s*\\["
+    detection_signals:
+      - "后端代码出现 PRESETS = {...} 字典 → 违反前后端分离"
+      - "前端 constants.ts 缺失 apiKeyUrl 字段 → '获取'按钮无法跳转"
+      - "后端 apply-preset 接口不接受 from_preset/to_preset 参数 → 违反双步模式"
+    applicable_scenarios:
+      - "AI 服务预设列表新增/删除/修改"
+      - "新增模型供应商接入（如 doubao/qwen）"
+      - "apply-preset 接口签名变更"
+    inapplicable_scenarios:
+      - "前端单字段编辑（无预设概念）"
+      - "首次初始化（无 from_preset 可归档）"
+
+  # === B-REVIEW-328 TEST-ENDPOINT-STATUS-ECHO 测试接口回传状态字段 ===
+  test_endpoint_status_echo:
+    severity: ERROR
+    # 强制要求测试接口返回状态字段
+    require_status_field: true
+    # 测试接口与对应状态字段映射
+    test_endpoints:
+      - path: "/api/ai/test-connection"
+        status_field: "model"
+        # 状态字段必须反映实际使用模型，而非配置文件中的模型
+        require_runtime_value: true
+      - path: "/api/ai/test-embedding"
+        status_field: "model_status"
+        # 状态字段必须为枚举值
+        require_enum_status: true
+        enum_values:
+          - "downloaded"
+          - "not_downloaded"
+          - "checking"
+          - "unknown"
+    # 失败时也必须返回状态字段
+    require_status_on_failure: true
+    detection_signals:
+      - "测试接口只返回 {\"ok\": true} 无状态字段 → 违反"
+      - "状态字段为配置文件值而非运行时值 → 误导前端"
+      - "失败响应无 model_status → 前端无法更新 UI"
+    applicable_scenarios:
+      - "测试连接接口实现"
+      - "测试 Embedding 接口实现"
+      - "其他需要回传状态的测试类接口"
+    inapplicable_scenarios:
+      - "纯查询接口（非测试类）"
+      - "无状态概念的简单接口"
+
+  # === B-REVIEW-329 HF-CACHE-LIGHTWEIGHT-CHECK 模型缓存轻量检测 ===
+  hf_cache_lightweight_check:
+    severity: ERROR
+    # 检测方法：仅检查目录存在性
+    check_method: "directory_existence"
+    # 禁止实例化模型
+    forbid_model_instantiation: true
+    # 违规类名
+    forbid_class_names:
+      - "SentenceTransformer("
+      - "AutoModel.from_pretrained("
+      - "AutoTokenizer.from_pretrained("
+    # HF 缓存根目录环境变量
+    cache_root_env_vars:
+      - "HF_HOME"
+      - "HF_HUB_CACHE"
+    # 默认缓存根目录
+    default_cache_root: "~/.cache/huggingface/hub"
+    # 缓存目录名模式
+    dir_name_pattern: "models--{model_name_with_slash_to_dash}"
+    # snapshots 子目录必须非空
+    require_snapshots_non_empty: true
+    # 状态检测接口路径
+    status_endpoint: "GET /api/ai/embedding-model-status"
+    detection_signals:
+      - "状态检测函数内出现 SentenceTransformer( → 违反轻量检测"
+      - "未检查 snapshots 目录非空 → 误判已下载但实际未完成"
+      - "未支持 HF_HOME 环境变量 → 自定义缓存路径误判"
+    applicable_scenarios:
+      - "Embedding 模型下载状态检测"
+      - "其他 HuggingFace 模型缓存状态检测"
+    inapplicable_scenarios:
+      - "模型实际加载与推理（必须实例化）"
+      - "非 HuggingFace 模型缓存"
+
+  # === F-REVIEW-241 STATUS-DISPLAY-CENTRAL-MAP 状态映射集中配置 ===
+  status_display_central_map:
+    severity: ERROR
+    # 强制要求集中 Record 定义
+    require_central_record: true
+    # 强制穷举所有枚举值
+    require_exhaustive_record: true
+    # 必须包含的字段
+    required_fields:
+      - "text"
+      - "color"
+      - "icon"
+    # 禁止内联状态分支
+    forbid_inline_status_branching: true
+    # 违规 grep 模式
+    grep_violation_patterns:
+      - "status\\s*===\\s*['\"].*['\"]\\s*\\?"
+      - "status\\s*===\\s*['\"].*['\"]\\s*&&"
+    # 状态字段名候选（适配多种业务场景）
+    status_field_candidates:
+      - "modelStatus"
+      - "status"
+      - "downloadStatus"
+      - "connectionStatus"
+    detection_signals:
+      - "JSX 中出现 status === 'xxx' ? ... : ... → 违反集中配置"
+      - "Record<Status, Display> 缺失 icon 字段 → 显示不一致"
+      - "新增状态枚举值未更新 STATUS_DISPLAY → 显示 fallback"
+    applicable_scenarios:
+      - "Embedding 模型下载状态显示"
+      - "连接测试结果状态显示"
+      - "其他多状态 UI 显示场景"
+    inapplicable_scenarios:
+      - "二值状态（如 enabled/disabled，直接用 Switch 即可）"
+      - "一次性状态（如 loading，无需 Record）"
+
+  # === F-REVIEW-242 EXTERNAL-LINK-SECURITY 外部链接安全属性 ===
+  external_link_security:
+    severity: ERROR
+    # 强制 rel="noopener noreferrer"
+    require_rel_noopener: true
+    # 包含 antd Button 组件 href 属性
+    include_antd_button_href: true
+    # 同源链接豁免
+    exempt_same_origin: true
+    # 违规 grep 模式（用双引号字符串：正则中的 " 转义为 \"，' 原样保留）
+    grep_violation_patterns:
+      - "target=[\"']_blank[\"'](?![^>]*rel=[\"'][^\"']*noopener)"
+      - "Button[^>]*href=[\"']https?://(?![^>]*rel=[\"'][^\"']*noopener)"
+    detection_signals:
+      - "target=\"_blank\" 但无 rel=\"noopener\" → 安全漏洞"
+      - "antd Button href 指向外链但无 rel → window.opener 风险"
+      - "Antd <Button> 用 onClick 跳转外链但未加 rel → 同样风险"
+    applicable_scenarios:
+      - "'获取 API Key' 等外链跳转按钮"
+      - "文档链接、官网链接"
+      - "任何 target=_blank 的外链"
+    inapplicable_scenarios:
+      - "同源链接（站内导航）"
+      - "弹窗内链接（不打开新标签）"
+
+  # === F-REVIEW-243 PRESET-SWITCH-ARCHIVE-LOAD 预设切换归档加载双步模式 ===
+  preset_switch_archive_load:
+    severity: ERROR
+    # 强制 from_preset 和 to_preset 双参数
+    require_from_and_to_preset: true
+    # 禁止前端明文 Key
+    forbid_frontend_plaintext_key: true
+    # 使用后端返回的脱敏 Key
+    use_returned_masked_key: true
+    # 强制活跃预设追踪
+    require_active_preset_tracking: true
+    # 违规 grep 模式
+    grep_violation_patterns:
+      - "localStorage\\.setItem\\(['\"].*key"
+      - "sessionStorage\\.setItem\\(['\"].*key"
+      - "applyPreset\\([^,]*\\)$"
+    # 归档-加载原子性验证
+    require_atomic_archive_load: true
+    # 返回脱敏 Key 字段名
+    masked_key_field: "api_key"
+    # 脱敏格式（保留前3后3）
+    mask_format: "{prefix}***...{suffix}"
+    mask_prefix_len: 3
+    mask_suffix_len: 3
+    detection_signals:
+      - "前端 applyPreset 只传 to_preset → 当前 key 无法归档"
+      - "前端 localStorage.setItem 存储 key → 明文泄漏风险"
+      - "后端 apply-preset 未返回脱敏 api_key → 前端无法回显"
+      - "切换预设后 activePresetKey 未更新 → '获取'按钮显示错误"
+    applicable_scenarios:
+      - "AI 服务预设切换（DeepSeek/Doubao/Qwen 等）"
+      - "Embedding 预设切换"
+      - "通知渠道预设切换"
+    inapplicable_scenarios:
+      - "单字段直接编辑（无预设概念）"
+      - "首次初始化（无 from_preset 可归档）"
+
+  # === 测试用例命名约定 ===
+  test_case_naming:
+    required_test_files:
+      - "frontend/src/pages/Config/AIConfig/__tests__/preset-switch.test.ts"
+      - "tests/web/test_api_ai_preset.py"
+    required_test_suites:
+      - "预设定义前后端分离"
+      - "测试接口状态回传"
+      - "HF 缓存轻量检测"
+      - "UI 状态集中映射"
+      - "外部链接安全"
+      - "预设切换归档加载"
+
+  # === vitest 命令参数（前端单测）===
+  vitest_args: "frontend/src/pages/Config/AIConfig/__tests__/preset-switch.test.ts"
+
+  # === pytest 命令参数（后端单测）===
+  pytest_args: "tests/web/test_api_ai_preset.py -v"
+
+# ============================================================
+# 模式 AE：类型注解契约对齐回归测试（B-REVIEW-330 + F-REVIEW-244）
+# 配套规范：xianyu-hunter-dev meta-rule #110 + step 273 + coding-standards §2.27
+# 配置来源：复杂返回类型列表与权威源优先级从 tech-stack.json#hardConstraints.typeAnnotationContract 同步
+# ============================================================
+type_annotation_contract_test:
+  _doc: "类型注解契约对齐回归测试配置：验证后端函数返回类型注解 ↔ Pydantic ResponseModel ↔ 前端 types.ts 三方契约对齐，防止'类型注解 list[str] 但实际返回 list[dict]'导致前端取到 undefined 的 Bug 再次出现（B-REVIEW-330 + F-REVIEW-244）"
+
+  # === 关键文件（相对项目根目录）===
+  key_files:
+    frontend:
+      - "frontend/src/api/types.ts"
+      - "frontend/src/pages/Evaluations/index.tsx"
+    backend:
+      - "src/xianyu_hunter/web/routes/api_ai_deep.py"
+    test:
+      - "tests/test_ai_deep.py"
+
+  # === B-REVIEW-330 TYPE-ANNOTATION-CONTRACT-ALIGNMENT 后端函数注解与返回结构一致性 ===
+  type_annotation_contract_alignment:
+    severity: ERROR
+    # 触发规范的复杂返回类型列表（从 tech-stack.json 同步，禁止硬编码到流程）
+    complex_return_types:
+      - "list[dict]"
+      - "list[TypedDict]"
+      - "list[Pydantic BaseModel]"
+      - "dict[str, Any]"
+    # 权威源优先级（高 → 低）
+    authoritative_source: "pydantic_response_model"
+    fallback_authoritative_source: "frontend_types_ts"
+    alignment_sources:
+      - "pydantic_response_model"
+      - "frontend_types_ts"
+    # 单元测试断言级别
+    test_assertion_level: "full_structure"
+    # 违规断言模式（禁止仅断言长度）
+    violation_assertion_patterns:
+      - "len\\(.*\\)\\s*==\\s*\\d+"  # 仅断言长度
+      - "assert\\s+\\w+\\s+is\\s+not\\s+None"  # 仅断言非空
+    # 合规断言模式（必须断言完整结构）
+    required_assertion_elements:
+      - "isinstance\\(.*,.+\\)"  # 类型断言
+      - "in\\s+\\w+"  # 字段存在性
+      - "isinstance\\(\\w+\\[.+\\]"  # 字段类型断言
+
+  # === F-REVIEW-244 FRONTEND-TYPE-CONTRACT-REVERSE-VALIDATION 前端 types.ts 反向校验 ===
+  frontend_type_contract_reverse_validation:
+    severity: ERROR
+    # 前端类型声明文件
+    types_ts_file: "frontend/src/api/types.ts"
+    # 字段类型映射（前端 TS ↔ 后端 Python）
+    type_mapping:
+      string: ["str"]
+      number: ["int", "float"]
+      boolean: ["bool"]
+      Array: ["list", "tuple"]
+      object: ["dict", "TypedDict", "BaseModel"]
+    # 未声明字段检测
+    undeclared_field_detection: true
+    # 可选字段标注（?）
+    optional_field_marker: "?"
+
+  # === 扫描范围（grep 范围配置）===
+  scan_scope:
+    # 后端函数扫描目录
+    backend_scan_dirs:
+      - "src/xianyu_hunter/web/routes/"
+      - "src/xianyu_hunter/web/services/"
+    # 后端函数扫描正则
+    function_signature_regex: "def\\s+\\w+.*->.*(list\\[|dict\\[)"
+    # 单元测试扫描目录
+    test_scan_dirs:
+      - "tests/"
+
+  # === 报告与修复建议 ===
+  reporting:
+    # 检查点状态分类
+    status_categories:
+      - "三方一致"
+      - "三方不一致"
+      - "无前端消费方"
+      - "无 Pydantic ResponseModel"
+    # 修复建议引用的规范源
+    fix_reference_rules:
+      - "xianyu-hunter-dev/references/meta-rules.md #110"
+      - "xianyu-hunter-dev/assets/guides/coding-rules/type-annotation-contract.md (step 273)"
+      - "xianyu-hunter-dev/assets/guides/coding-standards.md §2.27"
+    # 跨技能交叉验证
+    cross_skill_validation:
+      - "xianyu-backend-code-review B-REVIEW-330"
+      - "xianyu-frontend-code-review F-REVIEW-244"
+
+  # === experimental 观察期管理 ===
+  experimental_governance:
+    # 观察期季度数
+    observation_period_quarters: 1
+    # 观察期截止日期
+    observation_end_date: "2026-10-26"
+    # 升正阈值（同期出现 N 次同类 Bug 即升正）
+    promotion_threshold: 2
+    # 待沉淀候选清单（来自 2026-06-29 8 个 P0-P3 修复覆盖分析）
+    pending_sedimentation_candidates:
+      - "sqlite3.InterfaceError → NullPool"
+      - "Playwright TargetClosedError → is_closed()"
+      - "端口 8000 冲突 → 端口释放等待"
+
+  # === 适用与不适用场景 ===
+  applicable_scenarios:
+    - "后端函数返回 list[dict] / list[TypedDict] / 嵌套 Pydantic BaseModel / dict[str, Any] 的端点"
+    - "前后端分离项目的 API 契约验证"
+    - "单元测试断言复杂结构的端点"
+    - "修复'前端显示 undefined'类 Bug 后的回归测试"
+  inapplicable_scenarios:
+    - "返回基本类型（str/int/bool）的端点"
+    - "纯内部 helper 函数（无前端消费方）"
+    - "动态结构通用序列化（结构由 DB schema 决定）"
+    - "已有 Pydantic ResponseModel 严格校验的端点（ResponseModel 本身即契约源）"
+
+  # === 测试用例命名约定 ===
+  test_case_naming:
+    required_test_files:
+      - "tests/test_ai_deep.py"
+    required_test_suites:
+      - "类型注解契约对齐"
+      - "前端 types.ts 反向校验"
+      - "单元测试完整结构断言"
+      - "复杂返回结构端点扫描"
+
+  # === vitest 命令参数（前端单测）===
+  vitest_args: "frontend/src/api/__tests__/types-contract.test.ts"
+
+  # === pytest 命令参数（后端单测）===
+  pytest_args: "tests/test_ai_deep.py -v -k image_hashes"
+
+# ============================================================
+# 健康检查端到端测试配置（v4.69.0 新增）
+# 规范源：xianyu-hunter-dev/references/dual-data-source-consistency.md
+# ============================================================
+health_check_e2e_test:
+  enabled: true
+  # T005: JSON 无效 + 浏览器内存有效 → 健康检查通过
+  t005_browser_fallback:
+    enabled: true
+    # 模拟的浏览器内存 cookie 数据
+    mockBrowserCookies:
+      - name: "_m_h5_tk"
+        value: "valid_token_<future_timestamp>"
+        domain: ".goofish.com"
+      - name: "_m_h5_tk_enc"
+        value: "enc_valid"
+        domain: ".goofish.com"
+      - name: "unb"
+        value: "123456"
+        domain: ".goofish.com"
+      - name: "cookie2"
+        value: "abc"
+        domain: ".goofish.com"
+    # JSON 失效场景（none/empty/expired）
+    jsonInvalidScenario: "none"
+  # T006: MTOP Set-Cookie 回写失败 → warning 日志
+  t006_sync_failure_warning:
+    enabled: true
+    expectedLogLevel: "warning"
+    forbiddenLogLevel: "debug"
+  # T007: 异步检查器兼容验证
+  t007_async_checker_compat:
+    enabled: true
+    requiredFunction: "inspect.isawaitable"
+    forbiddenFunction: "asyncio.iscoroutinefunction"
+  # 观察期配置
+  observationPeriodQuarters: 1
+  observationEndDate: "2026-10-26"
+
+# ============================================================
+# v2.6.0 新增 - 基于 2026-07-30 调度器静默失败与浏览器连接检测复盘
+# 配套规范：xianyu-hunter-dev step 275-279
+# 配套审查：xianyu-backend-code-review B-REVIEW-332~336
+# ============================================================
+
+# 模式 AG：批量启动容错回归测试（B-REVIEW-332 + step 275）
+batch_start_fault_isolation_test:
+  _doc: "批量启动容错回归测试配置：验证 start_all/register_all 等批量操作方法容错单个项目失败，单个失败不阻塞其他项目，完成后记录成功/失败统计日志"
+  enabled: true
+  key_files:
+    backend:
+      - "src/xianyu_hunter/modules/scheduler.py"
+      - "src/xianyu_hunter/web/startup.py"
+    test:
+      - "tests/test_worker_scheduler.py"
+  test_cases:
+    t01_single_failure_no_block:
+      enabled: true
+      scenario: "mock _check_resume_allowed 对 t1 抛 ResumeBlockedError，验证 t2 正常启动"
+      assertions:
+        - "not sch.is_running('t1')"
+        - "sch.is_running('t2')"
+      mock_setup:
+        target: "_check_resume_allowed"
+        side_effect: "对 t1 抛 ResumeBlockedError，对 t2 通过"
+    t02_stats_log:
+      enabled: true
+      scenario: "验证批量操作完成后输出成功/失败统计日志"
+      expected_log_pattern: "成功.*失败|failed.*started"
+      log_level: "warning"
+    t03_no_reraise:
+      enabled: true
+      scenario: "验证批量操作方法不 re-raise 异常阻断调用方"
+      forbidden_pattern: "raise\\s+(ResumeBlockedError|TimeoutError)"
+  scan_scope:
+    batch_method_grep: "def (start_all|register_all|init_all|resume_all|restart_all|stop_all)"
+    missing_try_except_pattern: "for.*in.*(workers|items|tasks).*\\n.*self\\.(start|register|init|resume|restart|stop)\\("
+  pytest_args: "tests/test_worker_scheduler.py -v -k start_all_continues_when_one_task_fails"
+  cross_skill_validation:
+    - "xianyu-backend-code-review B-REVIEW-332"
+    - "xianyu-hunter-dev step 275"
+
+# 模式 AH：外部资源活性真异步检测回归测试（B-REVIEW-333 + step 276）
+external_resource_async_liveness_test:
+  _doc: "外部资源活性真异步检测回归测试配置：验证 is_alive/ensure_alive 方法用真异步 CDP 调用检测连接，禁止用同步 property"
+  enabled: true
+  key_files:
+    backend:
+      - "src/xianyu_hunter/infra/browser.py"
+    test:
+      - "tests/test_browser_ensure_alive.py"
+  test_cases:
+    t01_pages_cached_but_dead:
+      enabled: true
+      scenario: "mock_context.pages 返回缓存空列表，mock_context.cookies 抛 Connection closed，验证 is_alive 返回 False"
+      assertions:
+        - "await manager.is_alive() is False"
+      mock_setup:
+        context_pages: "[]"
+        context_cookies_side_effect: "RuntimeError('Connection closed while reading from the driver')"
+    t02_cookies_empty_but_alive:
+      enabled: true
+      scenario: "mock_context.cookies 返回空列表，验证 is_alive 返回 True（刚重启时 cookies 为空但连接可用）"
+      assertions:
+        - "await manager.is_alive() is True"
+      mock_setup:
+        context_cookies_return: "[]"
+    t03_real_async:
+      enabled: true
+      scenario: "验证 is_alive 方法体内含 await 表达式"
+      forbidden_pattern: "async def is_alive[^}]*}$"
+  scan_scope:
+    liveness_method_grep: "def (is_alive|ensure_alive|health_check|check_connection)"
+    sync_property_pattern: "\\.(pages|is_connected|is_closed|_alive|_connected)\\b"
+  pytest_args: "tests/test_browser_ensure_alive.py -v -k is_alive_detects_closed_connection"
+  cross_skill_validation:
+    - "xianyu-backend-code-review B-REVIEW-333"
+    - "xianyu-hunter-dev step 276"
+
+# 模式 AI：create_task 异常可见性回归测试（B-REVIEW-334 + step 277）
+create_task_exception_visibility_test:
+  _doc: "create_task 异常可见性回归测试配置：验证 asyncio.create_task 包装的协程用 try/except Exception 兜底，分层捕获 CancelledError → Exception，logger.exception 保 traceback"
+  enabled: true
+  key_files:
+    backend:
+      - "src/xianyu_hunter/web/startup.py"
+      - "src/xianyu_hunter/modules/scheduler.py"
+    test:
+      - "tests/test_worker_scheduler.py"
+      - "tests/test_startup.py"
+  test_cases:
+    t01_start_all_exception_logged:
+      enabled: true
+      scenario: "mock start_all 抛 RuntimeError，验证 _scheduler_loop 用 logger.exception 记录并 re-raise"
+      assertions:
+        - "logger.exception 被调用"
+        - "task 进入 done 状态"
+        - "task.exception() 返回 RuntimeError"
+      mock_setup:
+        target: "container.scheduler.start_all"
+        side_effect: "RuntimeError('test error')"
+    t02_cancelled_error_handled:
+      enabled: true
+      scenario: "取消 _scheduler_loop task，验证 CancelledError 被捕获、stop_all 被调用、re-raise 传播取消信号"
+      assertions:
+        - "container.scheduler.stop_all 被调用"
+        - "CancelledError 被重新抛出"
+    t03_no_base_exception:
+      enabled: true
+      scenario: "静态检查：_scheduler_loop 方法体内不含 except BaseException"
+      forbidden_pattern: "except BaseException"
+    t04_no_error_with_fstring:
+      enabled: true
+      scenario: "静态检查：关键路径不用 logger.error(f\"...{e}\") 而用 logger.exception"
+      forbidden_pattern: "logger\\.(error|warning)\\(f[\"'].*\\{e\\}[\"']"
+  scan_scope:
+    create_task_grep: "asyncio\\.create_task"
+    cancelled_only_grep: "except asyncio\\.CancelledError(?!\\s*\\n\\s*except)"
+  pytest_args: "tests/test_startup.py -v -k scheduler_loop_exception"
+  cross_skill_validation:
+    - "xianyu-backend-code-review B-REVIEW-334"
+    - "xianyu-hunter-dev step 277"
+
+# 模式 AJ：容器迭代快照回归测试（B-REVIEW-335 + step 278）
+container_iteration_snapshot_test:
+  _doc: "容器迭代快照回归测试配置：验证迭代中可能修改的字典/集合用 list()/tuple() 快照，附注释说明快照原因"
+  enabled: true
+  key_files:
+    backend:
+      - "src/xianyu_hunter/modules/scheduler.py"
+    test:
+      - "tests/test_worker_scheduler.py"
+  test_cases:
+    t01_snapshot_before_iteration:
+      enabled: true
+      scenario: "验证 start_all 方法用 list(self._workers.keys()) 快照，迭代中 start() 修改字典不触发 RuntimeError"
+      assertions:
+        - "start_all 完成后所有 worker 都被处理"
+        - "无 RuntimeError: dictionary changed size during iteration"
+      mock_setup:
+        worker_count: 5
+        start_side_effect: "部分 worker 的 start 内部修改 self._workers"
+    t02_comment_explanation:
+      enabled: true
+      scenario: "静态检查：list(self._workers.keys()) 后有注释说明快照原因"
+      required_pattern: "list\\(self\\.\\w+\\.keys\\(\\)\\)\\s*#"
+    t03_lock_required:
+      enabled: true
+      scenario: "并发场景下迭代共享容器在锁内快照"
+      required_pattern: "with self\\._lock:.*list\\(self\\._"
+  scan_scope:
+    dict_iteration_grep: "for\\s+\\w+\\s+in\\s+.*\\.(keys\\(\\)|values\\(\\)|items\\(\\))"
+    self_container_iteration: "for\\s+\\w+\\s+in\\s+self\\.\\w+s\\b"
+  pytest_args: "tests/test_worker_scheduler.py -v -k start_all_snapshot"
+  cross_skill_validation:
+    - "xianyu-backend-code-review B-REVIEW-335"
+    - "xianyu-hunter-dev step 278"
+
+# 模式 AK：调度器主循环异常分层回归测试（B-REVIEW-336 + step 279）
+scheduler_loop_layered_exception_test:
+  _doc: "调度器主循环异常分层回归测试配置：验证 _scheduler_loop/_bus_loop 按 CancelledError → Exception 顺序分层捕获，logger.exception 保 traceback，re-raise 让 task 可查"
+  enabled: true
+  key_files:
+    backend:
+      - "src/xianyu_hunter/web/startup.py"
+    test:
+      - "tests/test_startup.py"
+      - "tests/test_worker_scheduler.py"
+  test_cases:
+    t01_layered_exception:
+      enabled: true
+      scenario: "静态检查：_scheduler_loop 方法体内含 except asyncio.CancelledError 后跟 except Exception"
+      required_pattern: "except asyncio\\.CancelledError[\\s\\S]*except Exception"
+    t02_cancelled_cleanup_reraise:
+      enabled: true
+      scenario: "取消 _scheduler_loop task，验证 CancelledError 块中调用 stop_all 并 re-raise"
+      assertions:
+        - "container.scheduler.stop_all 被调用"
+        - "CancelledError 被重新抛出"
+    t03_exception_logger_reraise:
+      enabled: true
+      scenario: "mock start_all 抛异常，验证 Exception 块中用 logger.exception 记录并 re-raise"
+      assertions:
+        - "logger.exception 被调用（非 logger.error）"
+        - "异常被重新抛出"
+        - "task 进入 done 状态"
+    t04_startup_log:
+      enabled: true
+      scenario: "验证 start_all 后记录启动成功日志"
+      required_pattern: "logger\\.info.*调度器已启动|logger\\.info.*主循环启动"
+    t05_no_base_exception:
+      enabled: true
+      scenario: "静态检查：_scheduler_loop 不含 except BaseException"
+      forbidden_pattern: "except BaseException"
+  scan_scope:
+    loop_method_grep: "async def (_scheduler_loop|_bus_loop|_health_check_loop|_cookie_sync_loop)"
+    cancelled_only_grep: "except asyncio\\.CancelledError(?!\\s*\\n\\s*except)"
+    base_exception_grep: "except BaseException"
+  pytest_args: "tests/test_startup.py -v -k scheduler_loop_layered"
+  cross_skill_validation:
+    - "xianyu-backend-code-review B-REVIEW-336"
+    - "xianyu-hunter-dev step 279"
+
+# 🆕v4.70.0 模式 AK：源码文件编码完整性（与模式 K DB 脏值诊断正交互补）
+# 检测源码文件本体中文→字面量 ? / GBK 误读乱码；所有扫描参数配置化，禁止硬编码路径/阈值/严重级
+# 配套：xianyu-hunter-dev step 280 / 前端 F-REVIEW-246 / 后端 B-REVIEW-337
+mode_ak_source_file_encoding_integrity:
+  enabled: true
+  description: "源码文件编码完整性测试：扫描源码文件本体，检测中文被替换为连续 ? / U+FFFD / GBK 误读乱码"
+  trigger_keywords: ["源码中文变?", "源码乱码", "GBK误读", "mojibake", "编码损坏", "问号", "源码编码完整性"]
+  # 扫描范围全部配置化（glob），不硬编码项目路径
+  scan_globs:
+    - "src/**/*.py"
+    - "scripts/**/*.py"
+    - "frontend/src/**/*.{ts,tsx,js,jsx}"
+  scan_exclude:
+    - "dist/**"
+    - "node_modules/**"
+    - "**/__pycache__/**"
+    - "*.pyc"
+  min_consecutive: 3               # 判定违规的连续 ? 最小个数（与前后端审查一致）
+  check_fffd: true                 # 是否检测 U+FFFD 替换字符
+  check_gbk_misdecode: false       # 是否检测 GBK-as-UTF-8 误读特征（按需开启）
+  severity: "high"                 # 违规严重级别（可由业务场景调整）
+  gate: true                       # 是否作为 pre-commit / CI 门禁阻断
+  # 修复协议（只读扫描 → 人工确认 → 还原 → 语法校验 → 全仓回扫 → 门禁）
+  fix_protocol:
+    - "S1 分类：源码本体损坏（本模式）还是运行时数据损坏（→ 模式 K）"
+    - "S2 按 scan_globs 扫描，输出 file:line 证据（不自动改写）"
+    - "S3 匹配信号：连续 ? 非ASCII上下文 / U+FFFD / GBK 误读特征"
+    - "S4 人工确认排除合法 ?（URL 模板 / 正则可选匹配 / SQL ? 占位）"
+    - "S5 还原中文 + py_compile / tsc --noEmit 校验语法"
+    - "S6 全仓复扫确认 0 命中（必要时修正 HEAD 已提交版本）"
+    - "S7 接入 pre-commit / CI 门禁"
+  cross_skill_validation:
+    - "xianyu-hunter-dev step 280"
+    - "xianyu-frontend-code-review F-REVIEW-246"
+    - "xianyu-backend-code-review B-REVIEW-337"
+

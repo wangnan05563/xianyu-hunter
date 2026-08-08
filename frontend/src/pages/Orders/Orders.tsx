@@ -14,6 +14,7 @@ import { ORDER_STATUS_CONFIG } from '../../constants/orderStatus'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
+import { API_BASE } from '../../utils/apiBase'
 
 // 列配置元数据：key 必须与下方 columns 定义中的 key 完全一致
 const COLUMN_DEFINITIONS: ColumnConfig[] = [
@@ -452,8 +453,8 @@ export default function Orders() {
       if (reconnectAttempts >= MAX_RECONNECT) return
 
       const url = lastEventId > 0
-        ? `/api/events/stream?last_event_id=${lastEventId}`
-        : '/api/events/stream'
+        ? `${API_BASE}api/events/stream?last_event_id=${lastEventId}`
+        : `${API_BASE}api/events/stream`
       es = new EventSource(url)
       es.addEventListener('app_event', (e: MessageEvent) => {
         try {

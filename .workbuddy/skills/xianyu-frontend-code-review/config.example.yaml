@@ -1,0 +1,2327 @@
+# ===== Xianyu Frontend Code Review 技能配置示例 v4.40.0 =====
+# 首次使用：复制本文件为 config.yaml 并按项目实际情况修改
+# 所有评审规则、硬约束、项目规范均通过本文件管理，技能本身不含硬编码值
+# 完整审查维度对照见 SKILL.md 附录C（34 维度，v4.40.0）
+
+# --- 评审范围 ---
+scope:
+  # 包含的路径（支持 glob）
+  include_paths:
+    - "frontend/src/**/*.tsx"
+    - "frontend/src/**/*.ts"
+    - "frontend/src/**/*.js"
+  # 排除的路径（支持 glob）
+  exclude_paths:
+    - "**/node_modules/**"
+    - "**/__tests__/**"  # 测试文件单独评审，不在此处
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/*.d.ts"
+    - "**/vite.config.ts"
+    - "**/tsconfig.json"
+  # 评审的文件扩展名
+  file_extensions:
+    - ".tsx"
+    - ".ts"
+    - ".js"
+  # 单次评审最大文件数（避免单次评审过多）
+  max_files_per_run: 20
+
+# --- 优先级排序 ---
+priority:
+  # severity 排序（从高到低）
+  severity_order:
+    - CRITICAL
+    - HIGH
+    - MEDIUM
+    - LOW
+    - INFO
+  # category 排序（按 19 维度优先级，类型安全 > 业务逻辑 > 性能 > ...）
+  # 与 checklist 的 key 一一对应
+  category_order:
+    - type_safety            # 维度 11
+    - business_logic         # 维度 11 子项
+    - api_call               # 维度 7（含硬约束 withCredentials）
+    - auth                   # 认证规范
+    - zustand                # 维度 6
+    - hooks_design           # 维度 10
+    - react_component        # 维度 3
+    - typescript_strict      # 维度 4
+    - antd_theme             # 维度 5
+    - routing_lazy           # 维度 8
+    - sheet_workspace        # 维度 9
+    - sonarqube              # 维度 12
+    - pwa                    # 维度 13
+    - three_mappings         # 维度 14
+    - sse_reconnect          # 维度 15
+    - performance            # 维度 16
+    - accessibility          # 维度 17
+    - testability            # 可测试性
+    - directory_structure    # 维度 1
+    - naming                 # 维度 2
+    - code_quality           # 通用代码质量
+    - project_specific       # 维度 18
+    - cross_component_state_deadcode  # 维度 19：跨组件状态同步与死代码检测（🆕v4.3）
+    - failure_reason_chain_frontend  # 维度 25：端到端失败原因链前端侧同步原则（🆕v4.27）
+    - cross_boundary_contract_frontend  # 维度 26：跨边界访问契约前端侧（🆕v4.30）
+    - business_keyword_and_field_contract  # 维度 27：业务关键字常量集中管理与字段名大小写敏感（🆕v4.31）
+  # 报告阈值：低于此 severity 的问题仅记录不突出显示
+  report_threshold: "LOW"
+
+# --- 评审检查清单（27 大类，按需开关）---
+# 与 SKILL.md 的 27 维度一一对应
+checklist:
+  directory_structure: true     # 维度 1：目录结构
+  naming: true                  # 维度 2：命名规范
+  react_component: true         # 维度 3：React 组件规范
+  typescript_strict: true       # 维度 4：TypeScript 严格规范
+  antd_theme: true              # 维度 5：AntD 5 主题规范
+  zustand: true                 # 维度 6：Zustand 状态管理
+  api_call: true                # 维度 7：API 调用规范
+  routing_lazy: true            # 维度 8：路由与懒加载
+  sheet_workspace: true         # 维度 9：SheetWorkspace 多页签
+  hooks_design: true            # 维度 10：Hooks 设计模式
+  type_safety: true             # 维度 11：类型安全
+  sonarqube: true               # 维度 12：SonarQube 合规
+  pwa: true                     # 维度 13：PWA 配置
+  three_mappings: true          # 维度 14：三处映射同步
+  sse_reconnect: true           # 维度 15：SSE 重连
+  performance: true             # 维度 16：性能
+  accessibility: true          # 维度 17：可访问性
+  project_specific: true        # 维度 18：闲鱼项目规范
+  cross_component_state_deadcode: true  # 维度 19：跨组件状态同步与死代码检测（🆕v4.3）
+  failure_reason_chain_frontend: true  # 维度 25：端到端失败原因链前端侧同步原则（🆕v4.27）
+  cross_boundary_contract_frontend: true  # 维度 26：跨边界访问契约前端侧（🆕v4.30）
+  business_keyword_and_field_contract: true  # 维度 27：业务关键字常量集中管理与字段名大小写敏感（🆕v4.31）
+
+# --- 硬约束检查（可扩展）---
+# 每条规则会在代码库中扫描，违规会写入报告
+# 这些规则来源于闲鱼猎人项目的 project_memory.md 硬约束
+hard_constraints:
+  rules:
+    # === 认证类 ===
+    - name: "fetch_credentials_include"
+      pattern: "fetch\\([^)]*\\)(?!.*credentials)"
+      message: "fetch 请求必须包含 credentials: 'include' 以通过后端认证"
+      severity: CRITICAL
+      auto_fix: false
+    - name: "axios_with_credentials"
+      pattern: "axios\\.create\\([^)]*\\)(?!.*withCredentials)"
+      message: "axios.create 必须设置 withCredentials: true"
+      severity: CRITICAL
+      auto_fix: false
+    - name: "no_token_in_localstorage"
+      pattern: "localStorage\\.(setItem|getItem).*token"
+      message: "token 不应写入 localStorage，优先使用 httpOnly cookie，避免 XSS 攻击窃取"
+      severity: HIGH
+      auto_fix: false
+
+    # === 安全类 ===
+    - name: "no_dangerously_set_inner_html"
+      pattern: "dangerouslySetInnerHTML"
+      message: "禁止使用 dangerouslySetInnerHTML，存在 XSS 风险；如必须使用，需对内容进行转义"
+      severity: HIGH
+      auto_fix: false
+    - name: "no_any_type"
+      pattern: ":\\s*any\\b"
+      message: "禁止使用 any 类型（SonarQube S4325），必要时使用 unknown + 类型守卫"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 错误处理类 ===
+    - name: "no_bare_async_catch"
+      pattern: "\\.catch\\(\\s*\\)\\s*\\{\\s*\\}"
+      message: "禁止空 catch 块，至少应记录错误或返回友好提示"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 可访问性类 ===
+    - name: "icon_button_needs_aria_label"
+      pattern: "<Button[^>]*icon=\\{[^}]*\\}[^>]*>"
+      message: "图标按钮应有 aria-label，便于屏幕阅读器识别"
+      severity: LOW
+      auto_fix: false
+
+    # === TypeScript 类 ===
+    - name: "no_enum_use_union"
+      pattern: "^\\s*enum\\s+\\w+"
+      message: "禁止使用 enum，应用字符串字面量联合（type TaskStatus = 'active' | 'paused'）"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 性能类 ===
+    - name: "no_index_as_key"
+      pattern: "\\.map\\([^)]*\\)\\s*=>.*key=\\{(?:index|i|idx)\\}"
+      message: "禁止使用 index 作为 key，应用稳定的唯一标识"
+      severity: HIGH
+      auto_fix: false
+
+    # === SonarQube 类 ===
+    - name: "no_json_parse_stringify_deep_copy"
+      pattern: "JSON\\.parse\\(JSON\\.stringify\\("
+      message: "禁止用 JSON.parse(JSON.stringify()) 深拷贝（SonarQube S7784），应用 structuredClone"
+      severity: HIGH
+      auto_fix: false
+
+    # === React 组件类 ===
+    - name: "no_arrow_function_component"
+      pattern: "^\\s*const\\s+\\w+\\s*=\\s*\\([^)]*\\)\\s*=>\\s*\\(<"
+      message: "应用 function 关键字定义组件（项目规范），而非箭头函数"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === Zustand 类 ===
+    - name: "zustand_persist_partialize"
+      pattern: "persist\\("
+      message: "Zustand persist 必须配置 partialize 过滤 ReactNode 等不可序列化字段"
+      severity: HIGH
+      auto_fix: false
+
+    # === SSE 重连类 ===
+    - name: "sse_missing_visibilitychange"
+      pattern: "new EventSource\\([^)]+\\)(?![\\s\\S]*visibilitychange)"
+      message: "SSE 连接必须监听 visibilitychange 事件，页面恢复可见时重建连接"
+      severity: HIGH
+      auto_fix: false
+    - name: "sse_missing_max_reconnect"
+      pattern: "addEventListener\\('error'[\\s\\S]*setTimeout\\(connect"
+      message: "SSE error 重连必须有 MAX_RECONNECT 次数限制，超限后退化为轮询"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.3 死代码与资源生命周期类 ===
+    # F-REVIEW-DEAD-CODE：Proxy/Observer 创建后赋值给局部变量（无生命周期）
+    - name: "proxy_assigned_to_local_var"
+      pattern: "(?:const|let)\\s+\\w+\\s*=\\s*new Proxy\\("
+      message: "new Proxy() 必须赋值给有生命周期的变量（实例属性或 ref），局部变量会被 GC 回收导致代理失效"
+      severity: HIGH
+      auto_fix: false
+    - name: "mutation_observer_local_var"
+      pattern: "(?:const|let)\\s+\\w+\\s*=\\s*new MutationObserver\\("
+      message: "MutationObserver 必须赋值给实例属性并调用 observe()，局部变量会被 GC 回收导致观察失效"
+      severity: HIGH
+      auto_fix: false
+    - name: "intersection_observer_local_var"
+      pattern: "(?:const|let)\\s+\\w+\\s*=\\s*new IntersectionObserver\\("
+      message: "IntersectionObserver 必须赋值给实例属性并调用 observe()"
+      severity: MEDIUM
+      auto_fix: false
+    - name: "resize_observer_local_var"
+      pattern: "(?:const|let)\\s+\\w+\\s*=\\s*new ResizeObserver\\("
+      message: "ResizeObserver 必须赋值给实例属性并调用 observe()"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.3 try/finally 变量未初始化 ===
+    # F-REVIEW-TRY-FINALLY-INIT：try 块内赋值、finally 块引用的变量必须前置初始化
+    - name: "try_finally_var_not_initialized"
+      pattern: "try:\\s*\\n\\s*(?:const|let)\\s+(\\w+)\\s*=.*\\nfinally:.*\\1"
+      message: "try 块内赋值的变量在 finally 中引用时必须前置初始化（如 let page: Page | null = null）"
+      severity: HIGH
+      auto_fix: false
+
+    # === 🆕v4.3 错误提示端点可操作性 ===
+    # F-REVIEW-ERROR-HINT-ROUTABLE：错误提示中引用的端点/路由必须实际存在
+    - name: "error_hint_references_nonexistent_route"
+      pattern: "(?:throw new Error|message:\\s*)['\"][^'\"]*(?:\\/api\\/|\\/app\\/)[^'\"]+['\"]"
+      message: "错误提示中引用的 URL/路由必须实际存在于路由注册表中，否则用户无法操作"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.23 模型能力元数据集中展示类 ===
+    # F-REVIEW-MODEL-CAPABILITY-CENTRALIZATION：LLM 能力关键字禁止内联到前端组件
+    - name: "frontend_vision_keyword_inline"
+      pattern: "['\"](?:vision|gpt-4o|qwen-vl)['\"].*?\\.includes\\("
+      message: "LLM 能力关键字（vision/gpt-4o/qwen-vl 等）禁止内联到前端组件，应统一从 @/utils/modelCapability 共享函数导入"
+      severity: HIGH
+      auto_fix: false
+    # F-REVIEW-MODEL-CAPABILITY-CENTRALIZATION：禁止每页独立 fetch /api/config
+    - name: "frontend_capability_independent_fetch"
+      pattern: "useEffect\\(\\s*\\(\\s*\\)\\s*=>\\s*\\{[\\s\\S]{0,200}fetch\\(['\\\"]/api/config['\\\"]\\)"
+      message: "禁止每页独立 fetch /api/config 获取 vision_model，应统一通过共享的 getCapabilityDisplay() 函数"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.27 端到端失败原因链前端侧同步原则类 ===
+    # F-REVIEW-ERROR-CODE-BRANCH：禁止按文案子串判断后端错误类型
+    - name: "frontend_error_substring_branch"
+      pattern: "if\\s*\\(\\s*\\w+\\.(message|detail|msg)\\.(includes|indexOf|search|match)\\(['\"](?:expired|unavailable|rate limited|page unavailable|login expired)"
+      message: "前端错误展示禁止按文案子串判断后端错误类型（如 if (msg.includes('expired'))），应改为 switch (err.error_code) 按 error_code 字段分支，与后端 failure_reason_propagation.reason_enum 一一对应"
+      severity: HIGH
+      auto_fix: false
+    # F-REVIEW-PRECHECK-API-DELEGATION：禁止前端自行实现数据完整性预检
+    - name: "frontend_self_precheck_data_completeness"
+      pattern: "if\\s*\\(\\s*\\w+\\.length\\s*<\\s*\\d+\\s*\\)\\s*\\{[^}]*message\\.(warning|error)\\(['\"](?:cookie|登录|过期)"
+      message: "前端禁止自行实现数据完整性预检（如 if (cookies.length < 10)），应调用后端预检端点（如 /api/cookies/precheck）获取 passed 字段决定是否继续调用主接口"
+      severity: MEDIUM
+      auto_fix: false
+    # F-REVIEW-MOCK-FIELD-SET-SYNC：禁止 mock 数据用 as 类型断言绕过字段完整性检查
+    - name: "frontend_mock_as_type_assertion"
+      pattern: "const\\s+mock\\w+\\s*=\\s*\\{[^}]*\\}\\s*as\\s+(Item|Task|Order|Config|Cookie|Collection)\\b"
+      message: "前端 mock 数据禁止用 as 类型断言绕过字段完整性检查，应建立完整字段集基线文件（frontend/src/test/mocks/）+ 测试用例在基线上 override 需要的字段，与后端 Pydantic 模型保持一致"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.30 跨边界访问契约前端侧类 ===
+    # F-REVIEW-DATETIME-RENDER-CONTRACT：后端 ISO 字符串直接字符串拼接展示
+    # 详见 references/code-quality.md §9.1 后端 datetime 字段渲染契约
+    # 字段后缀列表参照 cross_boundary_contract_frontend.datetime_render_contract.backend_datetime_field_suffixes
+    - name: "datetime_iso_string_concat_display"
+      pattern: "\\b\\w+_(at|seen|time|active)\\.(replace|slice|substring|substr)\\("
+      message: "后端 ISO datetime 字段串禁止用字符串方法（replace/slice/substring）直接拼接展示，应用 new Date(isoStr).toLocaleString() 显式解析并转本地时区"
+      severity: HIGH
+      auto_fix: false
+    # F-REVIEW-DATETIME-RENDER-CONTRACT：用 toString() 而非 toISOString() 传递时间给后端
+    - name: "datetime_tostring_to_backend"
+      pattern: "(time|date|at|Time|Date|At)\\s*:\\s*\\w+\\.toString\\(\\)"
+      message: "前端 → 后端传递时间必须用 Date.toISOString() 保留时区，禁止 toString() 丢失时区信息"
+      severity: HIGH
+      auto_fix: false
+    # F-REVIEW-PRIVATE-HOOK-ENCAPSULATION：跨组件访问 _ 前缀 hooks/state
+    # 详见 references/code-quality.md §9.2 跨组件访问私有 hooks/state 封装
+    - name: "cross_component_private_hook_access"
+      pattern: "use\\w+Store\\(\\s*s\\s*=>\\s*s\\._\\w+"
+      message: "跨组件访问 Zustand store 的 _ 前缀私有字段禁止，应通过 store 暴露的公共 action 修改"
+      severity: HIGH
+      auto_fix: false
+    # F-REVIEW-PRIVATE-HOOK-ENCAPSULATION：父组件通过 ref 访问子组件内部 state
+    - name: "parent_ref_internal_state_access"
+      pattern: "\\w+Ref\\.current\\?\\._\\w+"
+      message: "父组件通过 ref 访问子组件 _ 前缀内部 state 禁止，应用 useImperativeHandle 显式声明可暴露的方法"
+      severity: HIGH
+      auto_fix: false
+    # F-REVIEW-NAMING-CONSISTENCY-FRONTEND：store 字段 snake_case 命名（应 camelCase）
+    - name: "store_field_snake_case"
+      pattern: "interface\\s+\\w+Store[\\s\\S]{0,500}?\\s+[a-z]+_[a-z]+\\s*:"
+      message: "Zustand store 字段命名应 camelCase（与前端规范一致），禁止 snake_case（与后端字段混淆）"
+      severity: MEDIUM
+      auto_fix: false
+  # 硬约束违规时是否阻止合并
+  block_on_violation: true
+
+# --- 抽象建议阈值（闲鱼项目特色）---
+# 当重复代码达到以下阈值时，建议抽取共享组件/常量/纯函数
+abstraction_thresholds:
+  # 重复内联样式达到 N 处时，建议抽取样式常量或共享组件
+  inline_style_repeat: 3
+  # 重复文案达到 N 处时，建议抽取共享文案常量
+  text_literal_repeat: 2
+  # 函数行数超过 N 行时，建议拆分
+  function_max_lines: 50
+  # 组件行数超过 N 行时，建议拆分
+  component_max_lines: 300
+  # 嵌套深度超过 N 层时，建议重构（SonarQube S2004）
+  max_nesting_depth: 4
+  # 认知复杂度超过 N 时，建议重构（SonarQube S3776）
+  max_cognitive_complexity: 15
+
+# --- 报告配置 ---
+report:
+  # 报告输出目录（为空则不写文件，仅输出到对话）
+  output_dir: ""
+  # 报告格式
+  format: "markdown"
+  # 是否包含好的实践（正面反馈）
+  include_good_practices: true
+  # 最大建议数（超过则概括）
+  max_suggestions: 10
+
+# --- 验证配置 ---
+verify:
+  # 评审后是否运行测试
+  run_tests_after_review: false
+  # 测试命令（PowerShell 用 ; 分隔，不支持 &&）
+  test_command: "npm --prefix frontend test ; npm --prefix frontend run typecheck"
+  # 发现 CRITICAL 问题时是否失败
+  fail_on_critical: true
+
+# --- 项目专属规范（供评审参考，非扫描规则）---
+# 这些规范来源于 project_memory.md 和 xianyu-hunter-dev/assets/guides/frontend-guide.md
+project_conventions:
+  # UI 组件库
+  ui_library: "Ant Design"
+  ui_library_version: "5.21"
+
+  # 视觉风格偏好（来自 user_profile.md）
+  visual_style:
+    design_language: "干净明亮的扁平化设计语言"
+    color_scheme: "清新治愈的 macaron 配色，浅粉/浅青为主"
+    primary_color: "#FF6200"  # 闲鱼品牌橙
+    corner_style: "大圆角 (borderRadius: 8)"
+    texture: "轻透磨砂玻璃质感"
+
+  # 认证要求
+  auth_requirements:
+    fetch_credentials: "include"
+    axios_with_credentials: true
+    htmx_meta_config: "使用官方 <meta> 配置 credentials，确保初始化时机可靠"
+    no_token_in_localstorage: true
+
+  # 认证白名单端点（前端用于识别哪些 endpoint 不需要 Authorization header，便于做请求优化与降级）
+  # 与后端 xianyu-backend-code-review/project_conventions.auth_whitelist 保持一致
+  auth_whitelist:
+    - "/api/auth/cookie"
+    - "/api/auth/me"
+    - "/api/auth/import-from-browser"
+    - "/import-from-browser/status"
+    - "/api/events/stream"
+    - "/api/notifications"
+    - "/api/notifier/"
+    - "/api/about"
+    - "/api/about/check-update"
+
+  # 测试框架
+  test_framework: "vitest"
+  test_framework_version: "4.1"
+  test_setup_libraries:
+    - "@testing-library/react 16.3"
+    - "jsdom 29.1"
+  test_file_location: "组件/hook 同级目录 __tests__/<Component>.test.tsx"
+
+  # 类型定义位置
+  types_location: "frontend/src/api/types.ts"
+
+  # 路由配置
+  routing:
+    library: "react-router-dom"
+    version: "6.26+"
+    basename: "/app"
+    lazy_loading: "lazy + lazyRetry"
+    lazy_retry_config:
+      max_retries: 3
+      backoff_ms: [1000, 2000, 4000]  # 指数退避
+    independent_routes: ["/login", "/onboarding", "/help", "/about"]
+    error_boundary_layers: 2  # LazyErrorBoundary + 顶层
+
+  # PWA 配置
+  pwa:
+    base: "/app/"
+    output_dir: "../src/xianyu_hunter/web/static/spa"
+    register_type: "prompt"
+    manifest_theme_color: "#FF6200"
+    workbox_max_file_size: "4MB"
+    runtime_caching_excludes:
+      - "/api/events/stream"
+      - "/api/auth/"
+      - "/api/export/"
+    dev_options_enabled: false
+
+  # 三处映射同步
+  three_mappings:
+    - file: "frontend/src/App.tsx"
+      purpose: "路由声明"
+    - file: "frontend/src/components/layout/MainLayout.tsx"
+      purpose: "menuItems 菜单注册"
+    - file: "frontend/src/components/SheetWorkspace/sheetRegistry.tsx"
+      purpose: "path → component 映射"
+
+  # SSE 重连
+  sse_reconnect:
+    last_event_id_key: "xh_sse_last_event_id"
+    storage: "localStorage"
+    reconnect_param: "?last_event_id="
+    max_reconnect_attempts: 10              # 最大重连次数，超限退化为轮询
+    reconnect_interval_ms: 3000             # 重连间隔
+    require_visibilitychange: true          # 必须监听 visibilitychange 恢复连接
+    require_last_event_id_replay: true      # 必须传递 last_event_id 启用回放
+    reset_count_on_visible: true            # 页面恢复可见时重置重连计数
+
+  # SheetWorkspace 多页签
+  sheet_workspace:
+    location: "frontend/src/components/SheetWorkspace/"
+    files: 6
+    open_sheet_branches:
+      - activateExistingSheet
+      - performCircularReplace
+      - replaceMobileActiveSheet
+      - createNewSheet
+    sheet_preferences:
+      maxSheets: [1, 10]
+      doubleClickInterval: [200, 800]
+
+  # SonarQube 8 条规则
+  sonarqube_rules:
+    - id: "S2004"
+      description: "函数嵌套层级不超过 4"
+      fix: "提取子函数"
+    - id: "S3358"
+      description: "三元表达式不超过 2 层"
+      fix: "拆分为变量"
+    - id: "S6757"
+      description: "SFC 内不用 this"
+      fix: "工厂函数替代 class"
+    - id: "S7784"
+      description: "字符串字面量应使用单引号 / 用 structuredClone"
+      fix: "统一单引号 / structuredClone"
+    - id: "S6848"
+      description: "HTML 属性必须用双引号 / clickableProps 配键盘事件"
+      fix: "工厂函数 + 键盘事件"
+    - id: "S1128"
+      description: "未使用的导入必须移除"
+      fix: "清理 import"
+    - id: "S4325"
+      description: "类型注解必须正确，禁止 any"
+      fix: "修复类型 / 用类型守卫"
+    - id: "S3776"
+      description: "认知复杂度不超过 15"
+      fix: "拆分函数"
+
+  # 🆕v4.0 布局重构规范（多视图切换）
+  layout_conventions:
+    # 多视图共享数据时 state 必须提升至父组件
+    require_state_lifting: true
+    # 容器组件保留非活动 Tab 的 DOM
+    destroy_inactive_tab_pane: false
+    # 标题职责归容器，子组件只保留功能说明
+    title_owned_by_container: true
+    # 适用场景：多视图共享数据源
+    applicable: "多视图（Tab/Accordion/Collapse/Drawer）共享同一数据源"
+    not_applicable: "各视图有独立数据源"
+
+  # 🆕v4.0 外部链接安全
+  external_link_safety:
+    # target="_blank" 必须配 rel="noopener noreferrer"
+    require_rel_noopener_noreferrer: true
+    reason: "防 window.opener 钓鱼攻击 + 不泄露 Referer"
+
+  # 🆕v4.0 搜索接口标准化
+  search_standardization:
+    # 防抖间隔（毫秒，搜索场景统一）
+    debounce_ms: 400
+    # 统一参数命名
+    params:
+      keyword: "keyword"          # 搜索关键词
+      page: "page"                # 页码
+      page_size: "page_size"      # 每页条数
+    # 统一响应结构
+    response_fields: ["items", "total", "page", "page_size"]
+    # requestId 竞态保护
+    require_request_id: true
+    # 适用场景
+    applicable: "实时搜索（用户输入 + 防抖 + 流式/分页）"
+    not_applicable: "主键精确查询、固定条件列表"
+
+  # 🆕v4.0 代码质量通用规范
+  code_quality_v4:
+    # 禁止 JSX 内 IIFE
+    forbid_jsx_iife: true
+    # 显式样式优于 JSX 空格间距
+    require_explicit_spacing: true
+    spacing_method: "style={{ marginRight: N }} 或 Space 组件"
+    # 注释必须与代码逻辑一致
+    require_comment_code_consistency: true
+    # 动态资源映射分离
+    require_mapping_function_separation: true
+
+  # 🆕v4.2 UI 状态独立性原则：受控 UI 状态不应通过 useEffect 联动路由
+  # 详见 references/hooks-and-state.md
+  ui_state_independence:
+    enabled: true
+    controlled_state_fields: ["openKeys", "expandedKeys", "activeKey", "open"]
+    route_dependencies: ["location.pathname", "useNavigate", "autoOpenKeys", "useLocation"]
+    allowed_derived_fields: ["selectedKeys", "breadcrumbItems", "pageTitle"]
+    fix_pattern: "useState(() => autoOpenKeys) 首次挂载初始化 + 移除 useEffect 联动 + 由 onOpenChange 用户控制"
+
+  # 推荐的抽象模式
+  abstraction_patterns:
+    - name: "纯函数 + 组件 + 常量"
+      description: "业务逻辑抽取为纯函数（便于单元测试），样式抽取为共享组件，文案抽取为常量"
+      example: "resolveActionDisplay (纯函数) + ActionPlaceholder (组件) + ACTION_PLACEHOLDER_TEXT (常量)"
+
+  # 构建命令
+  build_commands:
+    dev: "npm run dev"
+    build: "npm run build"  # tsc -b && vite build
+    test: "npx vitest run"
+    typecheck: "npx tsc -b"
+    lint: "npm run lint"
+
+  # 技术栈版本
+  tech_stack:
+    react: "18.3.1"
+    typescript: "5.5"
+    ant_design: "5.21"
+    zustand: "4.5"
+    vite: "5.4"
+    vitest: "4.1"
+    vite_plugin_pwa: "1.3"
+    axios: "1.7"
+    echarts: "5.5"
+
+  # 🆕v4.3 跨组件状态同步与死代码检测（维度 19）
+  # 详见 references/code-quality.md §9
+  cross_component_state_and_deadcode:
+    # F-REVIEW-DEAD-CODE：死代码模式（必须赋值给有生命周期的变量）
+    dead_code_patterns:
+      - pattern_type: "new Proxy()"
+        severity: HIGH
+        fix_pattern: "this._proxy = new Proxy(...)"
+      - pattern_type: "new MutationObserver()"
+        severity: HIGH
+        fix_pattern: "this._observer = new MutationObserver(...); this._observer.observe(...)"
+      - pattern_type: "new IntersectionObserver()"
+        severity: MEDIUM
+        fix_pattern: "this._io = new IntersectionObserver(...)"
+      - pattern_type: "new ResizeObserver()"
+        severity: MEDIUM
+        fix_pattern: "this._ro = new ResizeObserver(...)"
+
+    # F-REVIEW-TRY-FINALLY-INIT：try/finally 变量前置初始化
+    try_finally_init:
+      enabled: true
+      check_pattern: "try { const x = ... } finally { x.close() }  // ❌ x 未初始化"
+      fix_pattern: "let x: Type | null = null; try { x = ... } finally { x?.close() }"
+
+    # F-REVIEW-CROSS-COMPONENT-STATE：跨组件状态双向同步
+    cross_component_state_sync:
+      enabled: true
+      shared_concepts:
+        - concept: "session_invalid"
+          single_source_of_truth: "cookie_rotator._layer_states"
+        - concept: "task_paused"
+          single_source_of_truth: "scheduler._job_states"
+      single_source_of_truth_required: true
+
+    # F-REVIEW-ERROR-HINT-ROUTABLE：错误提示端点可操作性
+    error_hint_routable:
+      enabled: true
+      route_registry_files:
+        - "frontend/src/App.tsx"
+        - "frontend/src/components/layout/MainLayout.tsx"
+      valid_api_endpoints_source: "backend src/xianyu_hunter/web/routes/api_*.py"
+
+  # 🆕v4.6 前端多源状态同步统一入口（与后端 v4.5.0 对应）
+  # 维度 6 Zustand 状态管理：多入口更新同一份状态时必须统一通过 refetch 函数
+  # 详见 references/hooks-and-state.md
+  state_sync_frontend:
+    # F-REVIEW-MULTI-WRITE-ENTRY-FRONTEND：前端统一状态更新入口
+    unified_state_hooks:
+      enabled: true
+      hooks:
+        - hook_name: "useCookieLayersStore"
+          backend_endpoint: "/cookies/layers"
+          managed_state: "cookie_layer_states (identity/session/tracking)"
+          refetch_method: "refetchCookieLayers()"
+          write_entry_paths:
+            - "src/api/cookie.ts:injectCookies"
+            - "src/api/cookie.ts:importFromBrowser"
+            - "src/api/login.ts:unifiedLogin"
+            - "src/api/login.ts:browserLogin"
+        - hook_name: "useAuthStore"
+          backend_endpoint: "/api/auth/me"
+          managed_state: "current_user"
+          refetch_method: "refetchCurrentUser()"
+          write_entry_paths:
+            - "src/api/auth.ts:login"
+            - "src/api/auth.ts:logout"
+            - "src/api/auth.ts:importFromBrowser"
+        - hook_name: "useAppConfigStore"
+          backend_endpoint: "/api/about / /api/about/check-update"
+          managed_state: "app_info / update_available"
+          refetch_method: "refetchAppInfo()"
+          write_entry_paths:
+            - "src/api/about.ts:triggerUpdateCheck"
+    forbidden_patterns:
+      - pattern: "useEffect\\(\\(\\)\\s*=>\\s*\\{[\\s\\S]*?fetch\\([^)]*\\)[\\s\\S]*?\\},\\s*\\[\\]\\)"
+        message: "禁止 useEffect + fetch 模式拉取统一状态，应用统一 refetch()"
+        severity: HIGH
+      - pattern: "useEffect\\(\\(\\)\\s*=>\\s*\\{[\\s\\S]*?axios\\.[a-z]+\\([^)]*\\)[\\s\\S]*?\\},\\s*\\[\\]\\)"
+        message: "禁止 useEffect + axios 模式拉取统一状态，应用统一 refetch()"
+        severity: HIGH
+
+  # v4.22 PWA 缓存验证
+  pwa_cache_verify:
+    description: 前端功能不可见时三层验证 + registerType 模式检查
+    verify_layers:
+      - source_code
+      - build_output
+      - sw_precache
+    register_type: prompt  # prompt | autoUpdate
+    prompt_fallback_required: true
+    reload_prompt_component: ReloadPrompt
+    build_time_check: true
+    verify_keywords:
+      - 执行历史
+      - HistoryPanel
+    chunk_pattern: "BatchRefresh-*.js"
+
+# --- 🆕v4.7 异步操作用户反馈三态 ---
+# F-REVIEW-ASYNC-FEEDBACK：前端异步操作必须实现 loading → success → error 三态反馈
+# 详见 references/code-quality.md
+async_feedback:
+  loading_duration: 0
+  success_auto_hide_ms: 3000
+  error_auto_hide_ms: 5000
+  feedback_components:
+    default: "message"
+    batch_operation: "notification"
+    long_running: "notification"
+  message_templates:
+    loading: "正在{operation}..."
+    success: "{operation}完成"
+    success_with_count: "{operation}完成，共 {count} 条"
+    error: "{operation}失败，请稍后重试"
+    network_error: "网络异常，请检查网络连接"
+  forbidden_patterns:
+    - ".catch(() => {})"
+    - ".catch(() => '')"
+    - ".catch(() => null)"
+
+# --- 🆕v4.7 数据流转完整性 5 点追踪（前端侧）---
+# F-REVIEW-DATA-FLOW-TRACE-FRONTEND：前端"字段为空"类问题必须配合后端按 5 点逐层追踪
+# 详见 references/state-and-consistency-checks.md
+data_flow_trace_frontend:
+  trace_nodes_frontend:
+    - name: "frontend_types"
+      check_command: "grep -n '<field_name>' frontend/src/api/types.ts"
+    - name: "render"
+      check_command: "grep -rn '<field_name>' frontend/src/pages/ frontend/src/components/"
+  required_fields: ["order_id", "status", "price", "title", "seller_id", "publish_time"]
+  null_value_patterns: ["field || '—'", "field ?? '暂无'", "field ? field : '—'"]
+  render_states:
+    - name: "loading"
+      pattern: "Skeleton / Spin / Loading"
+    - name: "empty"
+      pattern: "Empty / '暂无数据'"
+    - name: "missing"
+      pattern: "'—' / '暂无'"
+
+# --- 🆕v4.7 过滤逻辑场景区分（前端侧）---
+# F-REVIEW-FILTER-SCENARIO-FRONTEND：前端调用后端查询接口时必须按场景显式传递场景标志
+# 详见 references/state-and-consistency-checks.md
+filter_scenario_frontend:
+  scenario_flag_field: "include_failed"
+  display_history_routes: ["/eval/detail", "/orders/history", "/tasks/history"]
+  operation_judge_routes: ["/dashboard", "/tasks/active"]
+  scenario_mapping:
+    - api: "list_orders_by_item_ids"
+      scenes:
+        - route: "/eval/detail"
+          include_failed: true
+        - route: "/dashboard"
+          include_failed: false
+    - api: "list_tasks_with_last_seen"
+      scenes:
+        - route: "/tasks/history"
+          include_deleted: true
+        - route: "/dashboard"
+          include_deleted: false
+
+# --- 🆕v4.7 复用既有模式原则（前端侧）---
+# F-REVIEW-REUSE-PATTERN-FRONTEND：新增前端功能前必须 grep 项目内相似实现
+# 详见 references/code-quality.md
+reuse_pattern_frontend:
+  search_keywords:
+    - "message.loading"
+    - "message.success"
+    - "message.error"
+    - "lazyRetry"
+    - "structuredClone"
+    - "useDebounce"
+    - "useEventSource"
+    - "useInterval"
+    - "requestId"
+    - "visibilitychange"
+  similarity_threshold: 0.7
+  reuse_priority:
+    - "项目内既有 Hook（如 useDebounce / useEventSource / useInterval）"
+    - "项目内既有工具函数（如 lazyRetry / resolveActionDisplay）"
+    - "项目内既有模式（如 message.loading + try/catch + message.success/error 三态反馈）"
+    - "标准库函数（如 structuredClone）"
+    - "第三方库函数（如 Ant Design message/notification）"
+
+# --- 🆕v4.8 AntD 主题 token 动态覆盖 ---
+# F-REVIEW-ANTD-THEME-TOKEN-OVERRIDE：项目支持暗色主题时，显式指定的主题相关 token 必须根据 isDark 动态覆盖
+# antd v5 核心机制：darkAlgorithm 仅重算未指定 token，显式指定的 token 被原样继承
+# 详见 references/antd-patterns.md
+antd_theme_override:
+  enabled: true
+  theme_token_whitelist: ["Color", "Bg", "Border", "Hover", "Active", "Focus"]
+  dark_value_strategy:
+    hover_active: "brand_overlay"
+    background: "dark_step"
+    text: "white_alpha"
+    border: "white_alpha"
+  brand_color: "#FF6200"
+  brand_overlay_alpha: 0.08
+  wcag_level: "AA"
+  cssvar_enabled: false
+  known_theme_tokens:
+    - component: "Table"
+      token: "rowHoverBg"
+      light_value: "#fff7f0"
+      dark_value: "rgba(255, 98, 0, 0.08)"
+    - component: "Table"
+      token: "headerBg"
+      light_value: "#fafafa"
+      dark_value: "#1f1f1f"
+    - component: "Table"
+      token: "headerColor"
+      light_value: "#262626"
+      dark_value: "rgba(255, 255, 255, 0.88)"
+  fix_pattern: "在 ThemedRoot 内 spread baseTheme 后按 isDark 覆盖 components.<Component>.<token>"
+  detect_patterns:
+    - pattern: "components\\.[A-Z]\\w+\\.\\w*(?:Color|Bg|Border|Hover|Active|Focus)\\s*:\\s*['\"]#[0-9a-fA-F]+['\"]"
+      message: "显式指定了主题相关 token，必须根据 isDark 在 ThemedRoot 内动态覆盖"
+      severity: HIGH
+    - pattern: "--ant-[a-z-]+\\s*:"
+      message: "index.css 中存在 --ant-* CSS 变量，未启用 cssVar 模式时为死代码，应清理或迁移到 ConfigProvider"
+      severity: MEDIUM
+
+# --- 🆕v4.9 累计统计类 API 定时刷新（与后端 v4.8.0 B-REVIEW-ISLAND-MODULE 配合）---
+# F-REVIEW-FREQ-STATS-POLLING：累计统计类 API（频率伪装统计 / 采样器 / 计数器 / 令牌桶 / 健康评分）
+# 必须在 useEffect 中通过 setInterval 定时刷新，禁止只依赖"页面加载时拉一次"
+# 详见 references/hooks-and-state.md
+freq_stats_polling:
+  enabled: true
+  interval_ms: 10000           # 快速刷新间隔（频率伪装统计 / 实时计数器类）
+  slow_interval_ms: 30000      # 慢速刷新间隔（Cookie 层状态 / 健康评分等变化缓慢的统计）
+  fail_silent: true            # 轮询失败仅 console.error，不弹 message.error
+  on_error: "console_only"     # 可选：console_only / message_warning / silent
+  applicable_pages:
+    - page: "AntiCrawl"
+      stats_apis:
+        - endpoint: "/api/anticrawl/freq/stats"
+          interval: "interval_ms"
+          loader_func: "loadFreqStats"
+        - endpoint: "/api/cookies/layers"
+          interval: "slow_interval_ms"
+          loader_func: "loadCookieLayers"
+    - page: "Dashboard"
+      stats_apis:
+        - endpoint: "/api/dashboard/overview"
+          interval: "slow_interval_ms"
+          loader_func: "loadOverview"
+  exempt_apis:
+    - reason: "SSE 实时推送"
+      endpoints: ["/api/events/stream", "/api/notifications/stream"]
+    - reason: "Chart 库内置轮询（echarts）"
+      endpoints: ["/api/dashboard/timeline"]
+  detect_patterns:
+    - pattern: "(loadFreqStats|loadStats|fetchStats|loadMetrics|loadHealthScore|loadTokenBucket)\\(\\)"
+      message: "页面内有 loadStats 函数但需验证 useEffect 是否有对应 setInterval 定时器"
+      severity: HIGH
+    - pattern: "setInterval\\([^,]+,\\s*\\d{4,}\\s*\\)"
+      message: "setInterval 间隔数字硬编码在组件内，应来自 config 或 POLL_INTERVALS 常量"
+      severity: MEDIUM
+    - pattern: "setInterval\\([^)]+\\)(?![\\s\\S]{0,500}clearInterval)"
+      message: "setInterval 在 useEffect 中必须配套 clearInterval 清理"
+      severity: HIGH
+
+# --- 🆕v4.12 异步配置加载与竞态保护 ---
+# F-REVIEW-ASYNC-CONFIG-LOAD：usePersistentState + configApi 异步加载配置
+# 详见 references/hooks-and-state.md
+async_config_load:
+  required_double_check: true       # 必须双重检查 localStorage 防止竞态
+  required_cancelled_flag: true     # 必须有 cancelled 标志防止组件卸载后 setState
+  user_preference_priority: true    # 用户偏好优先于全局配置
+  fallback_default_value: false     # config 加载失败时的兜底值
+
+# --- 🆕v4.12 InputNumber 边界约束 ---
+# F-REVIEW-INPUT-NUMBER-BOUNDS：InputNumber 必须设置 min/max 边界
+# 详见 references/code-quality.md
+input_number_bounds:
+  required_min: true
+  required_max: true
+  scenario_min_values:
+    interval: 1          # 间隔时间必须 >= 1
+    retry_count: 0       # 重试次数允许 0（表示不重试）
+    page_size: 1         # 分页大小必须 >= 1
+    max_price: 0         # 价格允许 0（免费商品）
+
+# --- 🆕v4.12 null/undefined/空字符串语义区分 ---
+# F-REVIEW-NULL-SEMANTICS：类型必须明确区分三种语义
+# 详见 references/code-quality.md
+null_semantics:
+  strict_mode: true
+  forbidden_union_types: ["string | null | undefined"]
+  if_check_pattern: "if\\s*\\(\\s*\\w+\\s*\\)\\s*\\{[^}]*\\bstring\\b"
+
+# --- 🆕v4.12 用户输入字段 HTML 转义 ---
+# F-REVIEW-XSS-ESCAPE：用户输入字段必须 HTML 转义 + JSX 双重保护
+# 详见 references/security-and-a11y.md
+xss_escape:
+  required_for_fields: ["source", "title", "nickname", "description", "name"]
+  forbidden_directives: ["dangerouslySetInnerHTML"]
+  url_protocol_whitelist: ["http:", "https:"]
+  double_protection: true
+
+# --- 🆕v4.12 批量操作完整流程 ---
+# F-REVIEW-BATCH-OPERATION：批量操作必须 Modal.confirm + loading + 反馈 + 异常处理 + 刷新
+# 详见 references/code-quality.md
+batch_operation:
+  required_steps: ["confirm", "loading", "feedback", "refresh"]
+  confirm_component: "Modal.confirm"
+  max_preview_items: 5
+  error_message_max_length: 100
+
+# --- 🆕v4.13 前后端错误码契约与超时识别 ---
+# F-REVIEW-ERROR-CONTRACT-TIMEOUT：模块级 statusMessages map + isAxiosTimeout() 函数
+# axios 超时无 response.status，必须用 error.code === 'ECONNABORTED' 识别
+# 详见 references/api-contract.md
+frontend_error_contract:
+  timeout_codes: ["ECONNABORTED", "ETIMEDOUT"]
+  timeout_patterns: ["timeout", "exceeded"]
+  # 模块级状态码 → 文案 map（在 api/<域>.ts 顶层声明，禁止散落在组件内）
+  status_message_map:
+    400: "请求参数错误"
+    401: "未登录，请重新登录"
+    403: "权限不足"
+    404: "资源不存在"
+    410: "资源已下架"
+    440: "Cookie 已过期，请重新登录"      # 与后端 status_code_semantics 对齐
+    441: "Token 已过期，请重新登录"       # 与后端 status_code_semantics 对齐
+    502: "服务异常，请稍后重启"
+    503: "服务繁忙，请稍后重试"
+    504: "网关超时，请稍后重试"
+  timeout_priority: "code_first"     # 超时识别优先级（code 优先于 message）
+  export_helper: true                # 在 api 模块统一导出 isAxiosTimeout 工具函数
+
+# --- 🆕v4.13 前端可重试错误集与退避策略 ---
+# F-REVIEW-RETRY-BACKOFF：区分可重试错误（410/441/502/超时）与用户介入错误（403/440/503）
+# 重试过程中静默（不弹 message），避免用户感知到失败后立即成功
+# 详见 references/api-contract.md
+frontend_retry_strategy:
+  retryable_statuses: [410, 441, 502, 504]      # 可重试状态码（瞬时失败）
+  non_retryable_statuses: [401, 403, 440, 503]  # 不可重试状态码（用户介入错误）
+  retry_delays_ms: [500, 1500, 3000]            # 重试退避延迟（毫秒，按重试次数索引）
+  max_retries: 3
+  silent_on_retry: true
+  show_final_error: true
+  retry_on_timeout: true
+
+# --- 🆕v4.14 前端过滤与后端分类对齐 ---
+# F-REVIEW-FILTER-BACKEND-ALIGN：实现前端过滤功能前必须先 grep 后端确认分类互斥性
+# 详见 references/state-and-consistency-checks.md
+filter_backend_align:
+  enabled: true
+  backend_classification_fields: ["insufficient_count", "marginals", "result"]
+  # 后端分类逻辑映射（前端 filterStatus 必须与后端分类一致）
+  classification_mapping:
+    - filter_status: "insufficient"
+      backend_condition: "score == null"
+    - filter_status: "auto"
+      backend_condition: "score >= autoBuyScore"
+    - filter_status: "pass"
+      backend_condition: "passScore <= score < autoBuyScore"
+    - filter_status: "fail"
+      backend_condition: "score < passScore"
+  threshold_params:
+    auto_buy_score_field: "autoBuyScore"
+    pass_score_field: "passScore"
+  require_exclusive_verification: true
+  backend_source_files:
+    - "src/xianyu_hunter/web/routes/api_evaluations.py"
+    - "src/xianyu_hunter/domain/evaluation.py"
+
+# --- 🆕v4.14 前端过滤后分页参数适配 ---
+# F-REVIEW-FILTER-PAGINATION-ADAPT：添加 filterStatus 状态后必须同步调整 pagination 三参数
+# 详见 references/state-and-consistency-checks.md
+filter_pagination_adapt:
+  enabled: true
+  # 过滤时分页三参数策略
+  pagination_strategy:
+    total: "filteredItems.length"          # 基于过滤后的数据量
+    current: 1                             # 切换过滤条件时重置到第一页
+    page_size: "filteredItems.length || 1" # 全量显示避免截断
+  filter_status_field: "filterStatus"
+  no_filter_value: "all"
+  detect_patterns:
+    - pattern: "filterStatus.*pagination.*items\\.length"
+      message: "filterStatus 存在时 pagination 的 total 必须用 filteredItems.length"
+      severity: HIGH
+    - pattern: "setFilterStatus\\([^)]*\\)(?![\\s\\S]{0,200}setCurrent\\(1\\))"
+      message: "切换 filterStatus 后必须重置 current=1"
+      severity: MEDIUM
+
+# --- 🆕v4.14 过滤空状态区分 ---
+# F-REVIEW-FILTER-EMPTY-STATE：空状态判断必须用 filteredItems.length 而非原始 items.length
+# 详见 references/state-and-consistency-checks.md
+filter_empty_state:
+  enabled: true
+  # 空状态文案（区分两种语义）
+  empty_messages:
+    no_data:
+      message: "暂无数据"
+      condition: "items.length === 0"
+    no_match:
+      message: "当前过滤条件下无匹配记录"
+      condition: "filteredItems.length === 0 && items.length > 0"
+  required_field: "filteredItems.length"
+  forbidden_field: "items.length"
+  detect_patterns:
+    - pattern: "filterStatus[^\\n]{0,200}items\\.length\\s*===\\s*0"
+      message: "过滤场景下空状态判断必须用 filteredItems.length，禁止用 items.length"
+      severity: HIGH
+    - pattern: "filteredItems\\.length\\s*===\\s*0[^\\n]{0,100}暂无数据"
+      message: "过滤后无匹配应显示「当前过滤条件下无匹配记录」"
+      severity: MEDIUM
+
+# --- 🆕v4.15 临时 DEBUG 代码清理（前端侧）---
+# F-REVIEW-DEBUG-CODE-CLEANUP：问题修复后必须清理临时 DEBUG 代码
+# 详见 references/code-quality.md
+debug_code_cleanup:
+  enabled: true
+  detect_patterns:
+    - pattern: "console\\.log\\("
+      message: "生产代码禁止 console.log 调试输出"
+      severity: MEDIUM
+      scope: "frontend/src/**/*.{ts,tsx,js}"
+    - pattern: "console\\.warn\\("
+      message: "生产代码禁止 console.warn 临时警告输出（正式警告应用 antd message.warning）"
+      severity: LOW
+      scope: "frontend/src/**/*.{ts,tsx,js}"
+    - pattern: "console\\.error\\("
+      message: "生产代码禁止 console.error 临时错误输出（正式错误应用 antd message.error）"
+      severity: MEDIUM
+      scope: "frontend/src/**/*.{ts,tsx,js}"
+    - pattern: "^\\s*debugger\\s*;?\\s*$"
+      message: "生产代码禁止 debugger 调试器语句"
+      severity: HIGH
+      scope: "frontend/src/**/*.{ts,tsx,js}"
+    - pattern: "import\\s+.*\\b(pdb|ipdb|pudb|vite-plugin-inspect)\\b"
+      message: "生产代码禁止 import 调试工具"
+      severity: HIGH
+      scope: "frontend/src/**/*.{ts,tsx,js}"
+    - pattern: "localStorage\\.setItem\\(['\"](?:debug|tmp|test)_"
+      message: "生产代码禁止 localStorage 调试键值（debug_/tmp_/test_ 前缀）"
+      severity: MEDIUM
+      scope: "frontend/src/**/*.{ts,tsx,js}"
+  lifecycle:
+    debug_phase_enabled: true        # 调试期允许临时插入
+    maintenance_phase_enabled: false  # 长期维护期强制清理
+
+# --- 🆕v4.16 状态显示与功能可用性一致 ---
+# F-REVIEW-STATE-FUNCTIONAL-ALIGN：UI 状态显示必须与功能实际可用性一致
+# 详见 references/state-and-consistency-checks.md
+state_functional_align:
+  enabled: true
+  required_check_marker: true       # 必须有"已检测"标记（lastCheckedAt > 0 / useCount > 0 / hasRun）
+  unknown_status_display: "未检测"
+  sse_push_required: true           # 跨进程状态变更必须 SSE 推送（禁止 TTL 兜底）
+  ttl_grace_seconds: 0
+  stale_threshold_seconds: 3600     # 已检测状态超过该秒数视为 stale
+  status_field_mapping:
+    cookie_layer:
+      required: ["lastCheckedAt", "useCount"]
+      initialValue: "unknown"
+    sse_connection:
+      required: ["lastEventAt", "reconnectCount"]
+      initialValue: "unknown"
+    api_health:
+      required: ["lastHealthCheckAt", "consecutiveSuccesses"]
+      initialValue: "unknown"
+    collector_running:
+      required: ["lastRunAt", "runCount"]
+      initialValue: "unknown"
+  status_color_mapping:
+    valid: "success"
+    invalid: "error"
+    unknown: "default"
+    stale: "warning"
+  status_text_mapping:
+    valid: "有效"
+    invalid: "失效"
+    unknown: "未检测"
+    stale: "检测超时"
+  detect_patterns:
+    - pattern: "<(?:StatusTag|LayerStatusBadge|HealthIndicator)\\s+[^>]*\\bvalid\\s*=\\s*\\{"
+      message: "UI 状态显示组件仅依据 valid 布尔字段，应改用 status: LayerStatus 四态"
+      severity: HIGH
+      scope: "frontend/src/**/*.tsx"
+    - pattern: "valid\\s*:\\s*boolean"
+      message: "API types.ts 中 valid:boolean 缺少 lastCheckedAt/useCount 标记"
+      severity: MEDIUM
+      scope: "frontend/src/api/types.ts"
+    - pattern: "setInterval\\([^,]+,\\s*30\\s*\\*\\s*1000\\)"
+      message: "跨进程状态同步依赖 30 秒 setInterval TTL 兜底，应改用 SSE 推送"
+      severity: MEDIUM
+      scope: "frontend/src/**/*.tsx"
+
+# --- 🆕v4.16 前后端字段契约对齐（与后端 v4.16.0 配合）---
+# F-REVIEW-FIELD-CONTRACT-ALIGN：后端归一化字段时前端必须注释 + 禁止动态 key 取值
+# 详见 references/api-contract.md
+field_contract_align:
+  enabled: true
+  require_doc_comment: true
+  detect_dynamic_key_access: true
+  fallback_to_legacy_field: false
+  detect_patterns: ["check\\[signalKey\\]", "as string\\[\\] \\| undefined", "\\[key\\] as"]
+  backend_normalize_functions: ["_normalize", "_unify", "_merge", "_flatten"]
+
+# --- 🆕v4.16 长耗时异步请求 race condition 防护 ---
+# F-REVIEW-ASYNC-RACE-CONDITION：timeout >= 3s 的异步请求必须用 useRef 跟踪最新请求 ID
+# 详见 references/hooks-and-state.md
+async_race_condition:
+  enabled: true
+  threshold_ms: 3000
+  detect_patterns: ["timeout:\\s*\\d{4,}", "aiApi\\.deepAnalyze", "aiApi\\.evaluateCondition", "evalApi\\.batchEvaluate"]
+  abort_controller_preferred: false
+  fallback_strategy: "useRef"
+
+# --- 🆕v4.16 重复错误处理抽取 ---
+# F-REVIEW-ERROR-HANDLER-EXTRACT：两处以上相同 if-else 状态码分支必须抽取工具函数
+# 详见 references/api-contract.md
+error_handler_extract:
+  enabled: true
+  min_duplicate_count: 2
+  detect_patterns: ["status === 403", "status === 404", "status === 422"]
+  unified_signature: "handleXxxError(err, fallbackMsg, closeModal)"
+
+# --- 🆕v4.19 调度器状态展示 ---
+# F-REVIEW-SCHEDULER-STATUS-DISPLAY：调度器状态必须在前端可见，未启动时显示醒目告警
+# 与后端 B-REVIEW-SCHEDULER-STARTUP-VISIBILITY 对应
+# 详见 references/code-quality.md
+scheduler_status_display:
+  enabled: true
+  require_about_endpoint_consumption: true  # 必须消费 /api/about 端点获取调度器状态
+  require_disabled_hint: true                # 调度器未启动时必须显示醒目告警
+  require_realtime_refresh: true             # 必须实时刷新调度器状态
+  refresh_interval_ms: 30000
+  status_color_mapping:
+    enabled: "success"
+    disabled: "error"
+    unknown: "default"
+  startup_command_hint: "python -m xianyu_hunter web --with-scheduler"
+  affected_scope:
+    - "商品 is_sold 状态回查"
+    - "已售商品检测"
+    - "自动登录与 Cookie 检查"
+
+# --- 🆕v4.20 元数据源显示对齐 ---
+# F-REVIEW-VERSION-SOURCE-ALIGN：前端显示构建期元数据必须调用语义对齐 API
+# 与后端 B-REVIEW-VERSION-SOURCE-SINGLE 对应
+# 详见 references/code-quality.md
+version_source_management:
+  enabled: true
+  forbidden_version_endpoints: ["/api/config/version"]  # 实际返回 len(backups)，语义不对齐
+  forbidden_placeholders: ["1.0", "0.0.0", "unknown version"]
+  required_semantic_api: "/api/about"
+  parallel_fetch_required: true              # 新增元数据 API 调用必须 Promise.all 并行化
+  dead_code_cleanup_required: true           # 修复时必须同步清理只 set 不 read 的死代码 state
+  cross_layer_fix_required: true
+  protected_metadata_fields: ["version", "build_date", "git_sha", "build_host"]
+  parallel_with_existing_apis: ["configApi.listBackups", "configApi.getBackupKeep"]
+  dead_code_patterns: ["const\\s+\\[\\s*,\\s*set\\w+\\s*\\]\\s*=\\s*useState"]
+
+# --- 🆕v4.23 模型能力元数据集中展示与降级状态可视化 ---
+# F-REVIEW-MODEL-CAPABILITY-CENTRALIZATION：前端展示 LLM 模型能力 + 用户交互时降级提示
+# 与后端 v4.23 B-REVIEW-LLM-CAPABILITY-DISPATCH / B-REVIEW-SHARED-UTIL-CENTRALIZATION 配合
+# 详见 references/code-quality.md
+model_capability_centralization:
+  enabled: true
+  shared_util_path: "frontend/src/utils/modelCapability.ts"
+  shared_function_name: "isVisionCapable"
+  shared_display_function_name: "getCapabilityDisplay"
+  # 关键字白名单（与后端 api_ai._VISION_CAPABLE_KEYWORDS 保持同步）
+  vision_keywords: ["vision", "gpt-4o", "gpt-4-vision", "qvq", "qwen-vl", "glm-4v", "claude-3", "opus", "sonnet", "haiku"]
+  capability_source: ["/api/config", "/api/about"]
+  require_centralized_fetch: true            # 禁止每页独立 fetch
+  require_downgrade_visualization: true      # 用户上传图片时必须 message.warning 提示
+  tag_color_mapping:
+    supported: "success"
+    unsupported: "warning"
+    unknown: "default"
+  alert_message: "当前模型不支持 {capability}，已自动降级为 {fallback}"
+  warning_message: "当前模型不支持 {capability}，将使用 {fallback}"
+
+# --- 🆕v4.24 用户偏好类 UI 状态持久化 ---
+# F-REVIEW-UI-PREFERENCE-PERSISTENCE：用户偏好类 UI 状态必须用 usePersistentState 持久化
+# 详见 references/hooks-and-state.md
+ui_preference_persistence:
+  enabled: true
+  # 触发检查的变量名关键词（变量名包含这些词认为是用户偏好类）
+  preference_keywords:
+    - "autoRefresh"
+    - "autoRefreshEnabled"
+    - "viewMode"
+    - "columnConfig"
+    - "columnVisibility"
+    - "density"
+    - "collapsed"
+    - "expandedKeys"
+    - "themePreference"
+    - "recentItems"
+    - "rememberLast"
+    - "showHidden"
+    - "showSold"
+    - "compactMode"
+  required_hook: "usePersistentState"
+  required_hook_path: "frontend/src/hooks/usePersistentState.ts"
+  required_key_pattern: "^xh\\.[a-zA-Z][a-zA-Z0-9_]*\\.[a-zA-Z][a-zA-Z0-9_]*$"  # xh.<page>.<field>
+  require_validator: true                    # 防止 localStorage 脏数据导致 UI 异常
+  require_memory_fallback: true              # localStorage 不可用时自动内存回退
+  backend_persisted_fields_skip:
+    - field: "enabled"
+      api: "PATCH /api/batch-refresh/config"
+    - field: "interval_minutes"
+      api: "PATCH /api/batch-refresh/config"
+  skip_scenarios: ["business_data", "session_state", "temporary_state", "sensitive_data", "backend_persisted"]
+  detection_signals:
+    - pattern: "const\\s+\\[\\s*(autoRefresh|viewMode|columnConfig|density|collapsed|expandedKeys|themePreference|recentItems|rememberLast|showSold|compactMode)\\s*,\\s*\\w+\\]\\s*=\\s*useState"
+      message: "用户偏好类 UI 状态应使用 usePersistentState 而非 useState"
+      severity: HIGH
+    - pattern: "localStorage\\.(getItem|setItem)\\("
+      message: "禁止自行实现 localStorage 读写，应使用项目既有 usePersistentState hook"
+      severity: MEDIUM
+    - pattern: "usePersistentState\\(\\s*['\"](?!xh\\.)"
+      message: "localStorage key 必须遵循 xh.<page>.<field> 命名模式"
+      severity: MEDIUM
+    - pattern: "usePersistentState\\([^)]+\\)\\s*(?!.*validator)"
+      message: "usePersistentState 必须传入 validator 防止脏数据"
+      severity: MEDIUM
+
+# --- 🆕v4.27 端到端失败原因链前端侧同步原则（与后端 v4.27.0 维度 29 配合）---
+# 包含 3 项 F-REVIEW 检查点：
+#   F-REVIEW-ERROR-CODE-BRANCH：错误展示按 error_code 字段分支（非文案子串）
+#   F-REVIEW-PRECHECK-API-DELEGATION：数据完整性预检委托后端（非前端自行判断）
+#   F-REVIEW-MOCK-FIELD-SET-SYNC：mock 数据完整字段集同步（与后端 Pydantic 模型一致）
+# 详见 references/api-contract.md 和 references/version-changelog.md
+failure_reason_chain_frontend:
+  # F-REVIEW-ERROR-CODE-BRANCH：错误展示按 error_code 字段分支
+  error_code_branch:
+    enabled: true
+    required_error_code_field: "error_code"
+    forbidden_substring_markers: ["expired", "unavailable", "rate limited", "page unavailable", "login expired"]
+    required_branch_pattern: "switch\\s*\\(\\s*\\w+\\.error_code\\s*\\)"
+    backend_reason_enum_source: "xianyu-backend-code-review.failure_reason_propagation.reason_enum"
+    # 前端必须识别的 error_code 枚举值（与后端 reason_enum 一一对应，lower_snake_case）
+    recognized_error_codes:
+      - "cookie_incomplete"      # Cookie 不完整（HTTP 401）
+      - "session_expired"        # 会话过期（HTTP 440）
+      - "token_invalid"          # 令牌失效（HTTP 441）
+      - "rate_limited"           # 频率限制（HTTP 429）
+      - "page_unavailable"       # 页面不可用（HTTP 503）
+      - "network_timeout"        # 网络超时（HTTP 504）
+      - "permission_denied"      # 权限不足（HTTP 403）
+    # error_code 到 UI 反馈策略的映射
+    error_code_ui_strategy:
+      cookie_incomplete:
+        message_type: "warning"
+        message_text: "登录信息不完整，请补齐后重试"
+        action: "show_detail"
+      session_expired:
+        message_type: "warning"
+        message_text: "登录已过期，请重新登录"
+        action: "redirect_login"
+      token_invalid:
+        message_type: "warning"
+        message_text: "令牌已失效，请重新获取"
+        action: "redirect_login"
+      rate_limited:
+        message_type: "warning"
+        message_text: "操作过于频繁，请稍后重试"
+        action: "retry_with_backoff"
+      page_unavailable:
+        message_type: "error"
+        message_text: "页面不可用，可能需要重新登录"
+        action: "redirect_login"
+      network_timeout:
+        message_type: "warning"
+        message_text: "网络超时，请稍后重试"
+        action: "retry"
+      permission_denied:
+        message_type: "error"
+        message_text: "权限不足，请联系管理员"
+        action: "show_detail"
+    detection_signals:
+      - ".includes('expired')"
+      - ".indexOf('unavailable')"
+      - ".match(/rate limited/i)"
+      - ".search('page unavailable')"
+
+  # F-REVIEW-PRECHECK-API-DELEGATION：数据完整性预检委托后端
+  precheck_api_delegation:
+    enabled: true
+    precheck_endpoint_pattern: "/api/<resource>/precheck"
+    known_precheck_endpoints: ["/api/cookies/precheck", "/api/items/precheck", "/api/collections/precheck"]
+    precheck_result_field: "passed"
+    precheck_reason_field: "reason"
+    precheck_missing_field: "missing_fields"
+    # 禁止前端自行实现的预检模式
+    forbidden_frontend_precheck_patterns:
+      - "length\\s*<\\s*\\d+"
+      - "!\\w+\\.token"
+      - "!\\w+\\.(title|price)"
+      - "Object\\.keys\\(\\w+\\)\\.length"
+    backend_precheck_method_source: "xianyu-backend-code-review.data_completeness_precheck.method_name_pattern"
+    backend_precheck_signature: "async def _check_xxx_completeness(self) -> str | None"
+    backend_precheck_return_semantics:
+      none: "预检通过，可继续调用主接口"
+      string: "预检失败，字符串为错误描述"
+
+  # F-REVIEW-MOCK-FIELD-SET-SYNC：mock 数据完整字段集同步
+  mock_field_set_sync:
+    enabled: true
+    mock_field_set_source: "backend_pydantic_model"
+    require_baseline_file: true
+    baseline_file_path: "frontend/src/test/mocks/"
+    baseline_file_pattern: "<ModelName>Mocks.ts"
+    forbidden_partial_mock_patterns:
+      - "as\\s+(Item|Task|Order|Config|Cookie|Collection)\\b"
+      - "const\\s+mock\\w+\\s*=\\s*\\{\\s*id:"
+      - "Partial<(Item|Task|Order|Config)>"
+    backend_mock_sync_source: "xianyu-backend-code-review.test_mock_synchronization.scenario_full_field_sets"
+    backend_model_paths: ["src/xianyu_hunter/domain/", "src/xianyu_hunter/web/schemas/"]
+    frontend_types_path: "frontend/src/api/types.ts"
+    detection_signals: ["as Item", "as Task", "as Order", "as Config", "const mock.*=.*{id:", "Partial<Item>"]
+
+  # 与后端的契约同步检查清单（PR 审查时执行）
+  backend_contract_sync_checklist:
+    - "后端 failure_reason_propagation.reason_enum 与前端 recognized_error_codes 是否 1:1 对齐"
+    - "后端 data_completeness_precheck.method_name_pattern 对应的预检端点是否在前端 known_precheck_endpoints 中"
+    - "后端 test_mock_synchronization.scenario_full_field_sets 与前端 mock 基线文件字段集是否一致"
+
+# --- 🆕v4.30 跨边界访问契约前端侧（维度 26） ---
+# 复盘来源：后端两个 Bug 的共同根因「跨边界契约不明确」在前端的对应场景
+#   1. 后端 datetime aware/naive → 前端 ISO 字符串渲染契约
+#   2. 后端跨模块访问私有属性 → 前端跨组件访问私有 hooks/state
+#   3. 后端命名一致性 → 前端 hooks/store 字段命名一致性
+# 配套规范：xianyu-hunter-dev/references/coding-standards.md §2.14
+# 审查要点：references/code-quality.md §9
+cross_boundary_contract_frontend:
+  # F-REVIEW-DATETIME-RENDER-CONTRACT：后端 datetime 字段渲染契约
+  datetime_render_contract:
+    enabled: true
+    required_parse_method: "new Date()"
+    forbidden_parse_methods:
+      - "字符串方法（replace/slice/substring/substr）"
+      - "直接拼接展示"
+      - "Date.parse() 直接返回数字"
+    naive_iso_strategy: "append_z_suffix"
+    naive_iso_pattern: "new Date(isoStr + 'Z')"
+    aware_iso_strategy: "direct_parse"
+    aware_iso_pattern: "new Date(isoStr)"
+    display_localization_required: true
+    display_method: "toLocaleString('zh-CN', { hour12: false })"
+    send_to_backend_method: "Date.toISOString()"
+    forbidden_send_methods: ["Date.toString()", "Date.toLocaleString()"]
+    # 必须显式 new Date() 解析的后端 datetime 字段后缀
+    backend_datetime_field_suffixes:
+      - "created_at"
+      - "updated_at"
+      - "confirmed_at"
+      - "first_seen"
+      - "last_seen"
+      - "publish_time"
+      - "expires_at"
+      - "last_active"
+
+  # F-REVIEW-PRIVATE-HOOK-ENCAPSULATION：跨组件访问私有 hooks/state 封装
+  private_hook_encapsulation:
+    enabled: true
+    private_prefix: "_"
+    # 跨组件访问私有属性的禁止模式
+    forbidden_cross_component_patterns:
+      - pattern: "useXxxStore(s => s._xxx)"
+        fix: "通过 store 暴露的公共 action 修改"
+      - pattern: "childRef.current?._xxx"
+        fix: "用 useImperativeHandle 显式声明可暴露的方法"
+      - pattern: "useXxxStore(s => s._setXxx)"
+        fix: "通过公共 action 间接调用内部私有 action"
+    public_hook_api_patterns:
+      - "useXxxState(): [state, setState]"
+      - "useXxxStore(): { data, update, reset }"
+    store_private_field_convention:
+      private_field_prefix: "_"
+      public_field_no_prefix: true
+      private_action_prefix: "_"
+      public_action_no_prefix: true
+    parent_child_communication:
+      required_pattern: "useImperativeHandle"
+
+  # F-REVIEW-NAMING-CONSISTENCY-FRONTEND：命名一致性验证（前端侧）
+  naming_consistency_frontend:
+    enabled: true
+    naming_conventions:
+      - type: "变量 / 函数"
+        case: "camelCase"
+        example: "autoBuyScore, extractApiError"
+      - type: "组件 / 类型 / 接口"
+        case: "PascalCase"
+        example: "BuyerStrategy, AppConfig"
+      - type: "常量"
+        case: "UPPER_SNAKE_CASE"
+        example: "MAX_RETRY_COUNT"
+      - type: "CSS class"
+        case: "kebab-case"
+        example: ".diff-preview-modal"
+      - type: "私有属性 / 私有方法"
+        case: "_ 前缀 + camelCase"
+        example: "_internalState, _invalidateCache"
+      - type: "hooks"
+        case: "use 前缀 + PascalCase"
+        example: "useXxxState, useXxxStore"
+    cross_component_reference_match_required: true
+    hooks_variant_detection:
+      - variant_type: "case"
+        examples: ["usePersistentState → usepersistentstate, usePersistentstate"]
+      - variant_type: "prefix"
+        examples: ["useXxx → UseXxx（错误，应小写 use 开头）"]
+    store_field_variant_detection:
+      - variant_type: "case"
+        examples: ["config → Config, CONFIG"]
+      - variant_type: "case_mismatch"
+        examples: ["updateConfig → update_config（前端应 camelCase）"]
+
+  # 跨边界访问契约总原则（前端侧）
+  boundary_types_frontend:
+    - boundary: "backend → frontend"
+      contract: "后端 datetime 字段的时区状态（ISO 8601 with/without tz）"
+      implementation: "后端返回 ISO 字符串 + 前端 new Date(isoStr) 显式解析"
+    - boundary: "hooks"
+      contract: "hooks 内部状态的可访问性（public / private）"
+      implementation: "_ 前缀私有 + 公共 hooks API 封装"
+    - boundary: "store"
+      contract: "store 字段的可访问性（public / private）"
+      implementation: "_ 前缀私有字段 + 公共 action 封装修改"
+    - boundary: "component ref"
+      contract: "ref 内部属性的可访问性"
+      implementation: "useImperativeHandle 显式声明可暴露的方法"
+    - boundary: "module"
+      contract: "导出 API 的稳定性（稳定 / 实验）"
+      implementation: "export 显式声明 + 公共 hooks docstring"
+
+# --- 🆕v4.28 工作流元规范硬约束（与 xianyu-hunter-dev meta-rules #21-24 对应）---
+# 复盘来源：docs/standards/四维度复盘方法论与历史教训集成.md
+# 自动化扫描从 83 项扩展到 87 项
+# 详见 references/version-changelog.md
+workflow_meta_rules_frontend:
+  # F-REVIEW-WF-ERROR-HANDLING：前端错误处理决策树（meta-rule #21）
+  error_handling_decision_tree:
+    enabled: true
+    # 关键路径外层 .catch 禁止空实现或仅 console.log
+    forbidden_catch_patterns:
+      - pattern: "\\.catch\\(\\s*\\(\\s*\\)\\s*=>\\s*\\{\\s*\\}\\s*\\)"
+        message: "禁止空 catch 块（meta-rule #21 错误处理决策树）"
+        severity: HIGH
+      - pattern: "\\.catch\\(\\s*console\\.error\\s*\\)"
+        message: "关键路径 .catch 应分级处理（warning→message.warning / error→message.error），禁止仅 console.error"
+        severity: MEDIUM
+      - pattern: "\\.catch\\(\\s*\\(e\\)\\s*=>\\s*logger\\.warning\\("
+        message: "前端关键路径（认证/支付/会话初始化）禁止仅 logger.warning，必须 message.error 提示用户"
+        severity: MEDIUM
+    # 异步操作反馈三态（与 v4.7 配合）
+    required_three_state: ["loading", "success", "error"]
+    required_hide_pattern: "message.loading(text) 返回 hide() 在 then/catch 都调用"
+    # error_code 分支（与 v4.27 failure_reason_chain_frontend 配合）
+    require_error_code_branch: true
+    applicable: "所有 fetch/axios/EventSource 调用的 .catch 分支"
+    not_applicable: "测试 mock / 一次性脚本"
+
+  # F-REVIEW-WF-BATCH-CIRCUIT-BREAKER：前端批处理熔断（meta-rule #22）
+  # 适用场景：前端调用批量接口（批量删除/批量导入/批量重试）时需要展示熔断状态
+  batch_circuit_breaker_frontend:
+    enabled: true
+    failure_threshold: 3
+    # 前端必须展示的熔断状态
+    required_state_display:
+      - state: "running"
+        show: "进度条 + 实时计数"
+      - state: "paused"
+        show: "warning 提示 + 「继续」按钮"
+      - state: "failed"
+        show: "error 提示 + 失败原因"
+      - state: "completed"
+        show: "success 提示 + 成功率统计"
+    # 熔断后必须展示的信息
+    required_pause_info:
+      - "已成功 X 项"
+      - "剩余 Y 项标记为 pending（可恢复）"
+      - "失败原因：Z"
+      - "恢复入口：继续按钮 / 重新开始"
+    detect_patterns:
+      - pattern: "setBatchState\\(['\"]paused['\"]\\)"
+        message: "前端熔断状态展示应使用统一的 BatchStatus 联合类型，配置化颜色与文案"
+        severity: LOW
+
+  # F-REVIEW-WF-RESOURCE-LIFECYCLE：前端资源生命周期（meta-rule #23）
+  resource_lifecycle_frontend:
+    enabled: true
+    required_holder_patterns:
+      - "new Proxy / Reflect"
+      - "new MutationObserver"
+      - "new IntersectionObserver"
+      - "new ResizeObserver"
+      - "new EventSource"
+      - "new WebSocket"
+    cleanup_hook_required: true
+    cleanup_pattern: "useEffect(() => { ...; return () => resource.close() }, [])"
+    # 局部变量持有禁止（GC 风险）
+    forbidden_local_var_patterns:
+      - pattern: "(?:const|let)\\s+\\w+\\s*=\\s*new\\s+(Proxy|MutationObserver|IntersectionObserver|ResizeObserver)\\("
+        message: "Proxy/Observer 必须持有为实例属性或 ref，局部变量会被 GC 回收（meta-rule #23）"
+        severity: HIGH
+      - pattern: "useEffect\\(\\s*\\(\\s*\\)\\s*=>\\s*\\{[^}]*new\\s+EventSource\\([^)]*\\)(?![\\s\\S]{0,500}return\\s+\\(\\s*\\)\\s*=>\\s*\\w+\\.close\\(\\))"
+        message: "EventSource/WebSocket 必须在 useEffect cleanup 中调用 close()"
+        severity: HIGH
+    applicable: "所有 useEffect 中创建的长生命周期资源"
+    not_applicable: "一次性计算 / 短生命周期对象 / 测试 mock"
+
+  # F-REVIEW-WF-STATE-SYNC：前端跨组件状态同步（meta-rule #24）
+  state_sync_workflow_frontend:
+    enabled: true
+    single_source_of_truth_required: true
+    unified_refetch_required: true
+    sse_push_required: true
+    ttl_grace_seconds: 0
+    # 单一可信源 API 列表（与 v4.6 state_sync_frontend 配合）
+    single_source_of_truth_apis:
+      - endpoint: "/api/cookies/layers"
+        state_hook: "useCookieLayersStore"
+      - endpoint: "/api/auth/me"
+        state_hook: "useAuthStore"
+      - endpoint: "/api/batch-refresh/config"
+        state_hook: "useBatchRefreshConfigStore"
+    # 禁止的前端重复持久化模式
+    forbidden_persistence_patterns:
+      - pattern: "usePersistentState\\(\\s*['\"]xh\\.(?:config|task|cookie)\\.\\w+['\"]"
+        message: "该字段在后端有 GET API，禁止前端 usePersistentState 重复持久化（meta-rule #24）"
+        severity: HIGH
+    # TTL 兜底禁止
+    forbidden_ttl_patterns:
+      - pattern: "setInterval\\([^,]+,\\s*30\\s*\\*\\s*1000\\)"
+        message: "禁止用 30 秒 TTL setInterval 同步跨进程状态，必须用 SSE 推送"
+        severity: MEDIUM
+      - pattern: "setInterval\\([^,]+,\\s*60\\s*\\*\\s*1000\\)"
+        message: "禁止用 60 秒 TTL setInterval 同步跨进程状态，必须用 SSE 推送"
+        severity: MEDIUM
+    # 后端契约同步检查清单（与 v4.27 配合）
+    backend_contract_sync:
+      - "后端 single_source_of_truth 列表与前端统一 Hook 列表 1:1 对齐"
+      - "后端 sse_push_required_for 列表中的字段在前端必须用 useSseEvent 订阅"
+      - "ttl_grace_seconds 必须为 0，禁止前端 TTL 兜底"
+
+# 四维度复盘报告新增章节（v4.28）
+# 在 report-template.md 中追加：
+#   1. 四维度复盘：本次审查问题对应四维度的分布
+#   2. 工作流元规范触发：触发的元规范编号（#21-24）+ 配置节点
+#   3. 配置变更点：本次审查触发的 config.yaml 变更建议
+
+# --- 🆕v4.31 业务关键字常量集中管理与字段名大小写敏感（维度 27） ---
+# 复盘来源：2026-07-05 解决的 3 类前端反模式
+#   1. 业务文案硬编码：前端硬编码 "卖掉了" 等业务关键字，与后端规则不一致
+#   2. 事件类型前缀过滤：前端用 startsWith('eval.') 误包含子类型事件
+#   3. 字段名大小写不一致：前端 totalForType vs 后端 total_for_type 导致显示 0 条
+# 配套规范：xianyu-hunter-dev step 129/130/131
+# 审查要点：SKILL.md 维度 27 章节
+# 与后端 v4.31.0 维度 30 的 6 项 B-REVIEW 联动
+business_keyword_and_field_contract:
+  # F-REVIEW-BUSINESS-KEYWORD-CENTRALIZATION：业务关键字常量集中管理
+  business_keyword_centralization:
+    enabled: true
+    config_endpoint_pattern: "/api/config/text_features"
+    forbidden_hardcoded_patterns:
+      - "const\\s+\\w*_KEYWORDS?\\s*=\\s*\\["
+      - "\\.includes\\(['\"][^'\"]*(卖掉了|已售|已下架|已成交)"
+    required_helper_pattern: "is\\w+ByText"
+    backend_keyword_source: "xianyu-backend-code-review.business_keyword_centralization.SOLD_TEXT_KEYWORDS"
+    # 兜底默认关键字（仅在配置端点不可达时使用）
+    fallback_keywords:
+      sold_keywords: ["卖掉了"]
+    # 业务关键字分类（与后端 config.yaml#external_platform.text_features 一一对应）
+    keyword_categories:
+      - "sold_keywords"        # 售出状态关键字
+      - "removed_keywords"     # 下架状态关键字
+      - "evaluated_keywords"   # 已评估关键字
+    detection_signals:
+      - "const \\w*_KEYWORDS?\\s*=\\s*\\["
+      - "\\.includes\\(['\"](卖掉了|已售|已下架|已成交)"
+      - "\\.indexOf\\(['\"](卖掉了|已售|已下架|已成交)"
+
+  # F-REVIEW-EVENT-TYPE-EXACT-MATCH：事件类型过滤精确匹配
+  event_type_exact_match:
+    enabled: true
+    forbidden_prefix_patterns:
+      - "startsWith\\(['\"]\\w+\\."
+      - "indexOf\\(['\"]\\w+\\.\\w"
+    required_match_pattern:
+      - "==="
+      - "Set\\.has\\("
+      - "switch.*case"
+    notification_event_separation_required: true
+    # 允许前缀匹配的统计/日志场景
+    allowed_prefix_grouping_scenarios:
+      - "statistics_aggregation"   # 统计聚合场景（如统计 eval.* 类型事件总数）
+      - "log_filtering"            # 日志过滤场景（如过滤 task.* 类型事件）
+    # 前端必须识别的事件类型枚举（与后端事件类型枚举一一对应）
+    recognized_event_types:
+      - "task.created"
+      - "task.started"
+      - "task.completed"
+      - "task.failed"
+      - "eval.started"
+      - "eval.passed"
+      - "eval.failed"
+      - "eval.error"
+      - "notification.created"
+      - "notification.read"
+    # 事件类型分类（业务事件 vs 通知事件，必须分离处理）
+    event_type_categories:
+      business_events:
+        - "task.*"
+        - "eval.*"
+      notification_events:
+        - "notification.*"
+    detection_signals:
+      - "\\.startsWith\\(['\"]\\w+\\."
+      - "\\.indexOf\\(['\"]\\w+\\.\\w"
+      - "\\.match\\(/\\w+\\./i\\)"
+
+  # F-REVIEW-FIELD-NAME-CASE-SENSITIVE：前后端字段名大小写敏感检查
+  field_name_case_sensitive:
+    enabled: true
+    backend_field_naming_style: "snake_case"
+    forbidden_frontend_naming_styles:
+      - "camelCase"
+      - "PascalCase"
+    require_type_sync: true
+    forbidden_bypass_patterns:
+      - "as\\s+any\\b"
+      - "as\\s+unknown\\s+as"
+    detection_signals:
+      - "\\.\\w*[A-Z]\\w*\\b"
+      - "as\\s+any\\b"
+    backend_model_source: "xianyu-backend-code-review.field_name_contract.models"
+    # 前端类型定义文件路径
+    frontend_types_path: "frontend/src/api/types.ts"
+    # 后端 Pydantic 模型路径（用于 grep 双向匹配验证）
+    backend_model_paths:
+      - "src/xianyu_hunter/domain/"
+      - "src/xianyu_hunter/web/schemas/"
+    # 已知的大小写敏感字段对（前端易出错）
+    known_case_sensitive_fields:
+      - backend: "total_for_type"
+        frontend_wrong: "totalForType"
+        description: "评估明细按类型总数"
+      - backend: "is_sold"
+        frontend_wrong: "isSold"
+        description: "商品售出状态"
+      - backend: "seller_id"
+        frontend_wrong: "sellerId"
+        description: "卖家 ID"
+      - backend: "publish_time"
+        frontend_wrong: "publishTime"
+        description: "发布时间"
+      - backend: "_session"
+        frontend_wrong: "_Session"
+        description: "私有会话属性（大小写敏感）"
+    # grep 双向匹配验证配置
+    bidirectional_match_required: true
+    bidirectional_match_method: "grep backend field name in frontend types.ts AND grep frontend field name in backend models"
+
+# ============================================================
+# 🆕v4.32 多用户认证上下文隔离（新增维度 28）
+# 对应 SKILL.md §28 + F-REVIEW-MULTI-USER-CONTEXT-ISOLATION + F-REVIEW-AUTH-TOKEN-COOKIE-HANDLING
+# 与 xianyu-hunter-dev step 134-137（多用户资源隔离 + 认证中间件 + 会话 token + 快照覆盖决策）对应
+# 详见 references/version-changelog.md
+# ============================================================
+multi_user_context_isolation:
+  # F-REVIEW-MULTI-USER-CONTEXT-ISOLATION：多用户上下文隔离
+  enabled: true
+  # 用户特定 store 必须按 user_id 分桶（Record<UserId, UserState>）
+  require_user_id_in_store: true
+  # 用户切换时必须清空旧用户缓存（queryClient.clear / store.reset / invalidate）
+  require_invalidate_on_user_switch: true
+  # 禁止全局单例承接多用户数据的代码模式
+  forbidden_global_singleton_patterns:
+    - pattern: "create<[^>]*>\\(\\s*\\)\\s*=>\\s*\\(\\s*\\{\\s*orders:"
+      message: "禁止全局单例 store 承接多用户订单数据，必须按 user_id 分桶（Record<UserId, UserState>）"
+      severity: HIGH
+    - pattern: "create<[^>]*>\\(\\s*\\)\\s*=>\\s*\\(\\s*\\{\\s*preferences:"
+      message: "禁止全局单例 store 承接多用户偏好数据，必须按 user_id 分桶"
+      severity: HIGH
+  # 前端获取当前 user_id 的端点（与后端 /api/auth/me 契约对齐）
+  user_id_source: "/api/auth/me"
+  # 后端资源隔离规范来源（前后端契约对齐）
+  backend_isolation_source: "xianyu-hunter-dev.multi_user_resource_isolation"
+  # 用户切换钩子必须调用的清理函数模式
+  required_cleanup_on_switch:
+    - "queryClient.clear()"
+    - "useGlobalStore.getState().reset()"
+    - "usePersistentState.invalidate()"
+  # 检测信号：用户反馈触发检查的关键词
+  detection_signals:
+    - "切换账号后看到上一个账号的数据"
+    - "用户数据跨账号泄漏"
+  applicable: "多用户系统（用户切换/多账号管理）、多租户 SaaS、需按用户隔离缓存/状态/请求的场景"
+  not_applicable: "单用户系统（无用户切换需求）、纯内部工具（无登录态）、纯只读公共数据展示（无用户特定数据）"
+
+# F-REVIEW-AUTH-TOKEN-COOKIE-HANDLING：认证 token cookie 处理
+auth_token_cookie_handling:
+  enabled: true
+  # fetch 必须显式声明 credentials: 'include'
+  require_credentials_include: true
+  # axios 必须设置 withCredentials: true
+  require_axios_with_credentials: true
+  # 禁止存储 token 的位置（XSS 可读取）
+  forbidden_token_storage:
+    - "localStorage"
+    - "sessionStorage"
+  # 状态码到前端动作的映射（与后端状态码语义精细化 step 71 对齐）
+  status_code_semantics:
+    "401":
+      action: "redirect_login"
+      message: "未登录，请先登录"
+      redirect_to: "/login"
+    "440":
+      action: "redirect_relogin"
+      message: "Cookie 已过期，请重新登录"
+      redirect_to: "/relogin"
+    "441":
+      action: "refresh_token"
+      message: "会话 Token 已过期，自动刷新中"
+      retry_after_refresh: true
+    "403":
+      action: "show_permission_error"
+      message: "权限不足"
+      redirect_to: null
+  # 后端写入的认证 cookie 名称
+  cookie_name: "xh_token"
+  # 后端 cookie 属性契约（前端不可读取但会自动携带）
+  cookie_attributes:
+    httpOnly: true
+    samesite: "lax"
+    max_age: 2592000  # 30 天 = 86400 * 30
+  # htmx credentials 配置方式（初始化时机可靠）
+  htmx_credentials_meta: "<meta name=\"htmx-config\" content='{\"withCredentials\": true}'>"
+  # 后端认证中间件规范来源（前后端契约对齐）
+  backend_auth_source: "xianyu-hunter-dev.auth_multi_path_validation"
+  # 检测信号：用户反馈触发检查的关键词
+  detection_signals:
+    - "频繁被踢出登录"
+    - "刷新页面后丢失登录态"
+    - "登录后请求被 401 拒绝"
+  # 禁止的错误处理模式
+  forbidden_error_handling_patterns:
+    - pattern: "(401|440|441).*redirectTo\\(['\"]\\/login['\"]\\)"
+      message: "禁止所有认证失败一律跳登录页，必须按 401/440/441/403 状态码语义分支处理"
+      severity: HIGH
+    - pattern: "localStorage\\.(get|set)Item\\(['\"]xh_token['\"]"
+      message: "禁止将认证 token 存入 localStorage（XSS 可读取），应通过 httpOnly cookie 由后端写入"
+      severity: CRITICAL
+  applicable: "所有涉及认证的 API 请求、登录/会话管理、SSE 事件流认证、多角色权限控制"
+  not_applicable: "纯公共 API（无需认证）、第三方 OAuth 回调（按 OAuth 规范处理）、内部微服务间调用（无 cookie 概念）"
+
+# ============================================================
+# 🆕v4.45 全局拦截器状态码区分审计（meta-rule #66 前端落地）
+# F-REVIEW-154 INTERCEPTOR-STATUS-CODE-DISCRIMINATION：拦截器跳转登录页必须基于 status + detail 双重校验
+# 复盘来源：业务 401（闲鱼 cookie 过期，detail 为业务消息）与认证 401（系统 token 失效，detail='Unauthorized'）状态码冲突，前端误判跳转登录页
+# ============================================================
+# ===== F-REVIEW-154 全局拦截器状态码区分审计 (v4.45.0, meta-rule #66) =====
+# 与 auth_token_cookie_handling.forbidden_error_handling_patterns 关注点不同：
+# - forbidden_error_handling_patterns 关注「业务代码 catch 块的错误处理模式」
+# - interceptor_audit 关注「axios/fetch 全局响应拦截器层面的精确化跳转条件」
+interceptor_audit:
+  _doc: "全局响应拦截器跳转登录页必须基于 status + detail 双重校验，禁止仅凭 status 跳转。业务错误（440/422/429）应由调用方 catch 后展示 detail，不应被全局拦截器拦截。"
+
+  # 认证跳转条件：必须同时满足 status + detail
+  auth_redirect:
+    conditions:
+      - status: 401
+        detail_equals: "Unauthorized"
+        action: "redirect_to_login"
+        _doc: "401 + detail='Unauthorized' 才跳转登录页，业务 401（detail 为业务消息）由调用方处理"
+    require_all_conditions: true
+    _doc: "require_all_conditions: true 表示必须同时满足 status 和 detail 才跳转，禁止仅凭 status 跳转"
+
+    # 禁止的拦截器模式：仅凭 status 跳转
+    forbidden_interceptor_patterns:
+      - pattern: "error\\.response\\?\\.status === 401"
+        without_detail_check: true
+        message: "拦截器仅凭 status === 401 即跳转，未检查 detail === 'Unauthorized'，会把业务 401 误判为认证失效"
+      - pattern: "if \\(status === 401\\) redirect"
+        without_detail_check: true
+        message: "拦截器仅凭 status === 401 即跳转，需补充 detail 字段校验"
+      - pattern: "case 401:"
+        without_detail_check: true
+        message: "switch case 401 直接跳转，需补充 detail 字段校验区分认证 401 与业务 401"
+
+    # 推荐的拦截器模式
+    recommended_pattern: |
+      # 同时校验 status + detail，业务 401 由调用方 catch 处理
+      const isAuthUnauthorized =
+        error.response?.status === 401 &&
+        error.response?.data?.detail === 'Unauthorized'
+      if (isAuthUnauthorized) {
+        // 跳转登录页（清 token + replace + redirect 参数）
+      }
+      return Promise.reject(error)
+
+  # 业务错误处理：应由调用方 catch，不应被全局拦截器拦截跳转
+  business_error_handling:
+    - status: 440
+      action: "caller_catch_display_detail"
+      _doc: "外部凭证失效（如闲鱼 cookie 过期），由调用方 catch 后展示 detail"
+    - status: 422
+      action: "caller_catch_display_field_errors"
+      _doc: "参数校验失败，由调用方 catch 后展示字段错误"
+    - status: 429
+      action: "caller_catch_display_retry_hint"
+      _doc: "反爬限制，由调用方 catch 后展示重试提示"
+    - status: 410
+      action: "caller_catch_display_not_found"
+      _doc: "资源不存在或已下架，由调用方 catch 后展示"
+
+  # 与其他规则的关联
+  related_rules:
+    - "auth_token_cookie_handling.status_code_semantics"
+    - "auth_token_cookie_handling.forbidden_error_handling_patterns"
+    - "frontend_error_contract.status_message_map"
+    - "frontend_retry_strategy.non_retryable_statuses"
+
+  # 拦截器必须 reject 错误（不吞错误），由调用方继续处理
+  require_reject_after_intercept: true
+  _doc_reject: "拦截器处理后必须 return Promise.reject(error)，让调用方 catch 继续处理业务错误"
+
+  applicable: "axios/fetch 全局响应拦截器；带 Bearer/JWT 认证的前端应用；SPA 应用；与后端 FastAPI BearerAuthMiddleware 配套的前端"
+  not_applicable: "无认证应用；纯 SSR 应用；测试 mock"
+
+# ============================================================
+# 🆕v4.36 注册式资源三件套契约（meta-rule #33 落地，新增维度 31）
+# F-REVIEW-117 REGISTRATION-COMPLETENESS：5 层契约必须齐备，缺一即视为 CRITICAL
+# 复盘来源：2026-07-06 "通知中心菜单点击无反应" 根因——menu_registry 已注册但路由/页面/API/后端 endpoint 缺失
+# 详见 references/registration-completeness.md
+# ============================================================
+frontend_registration_completeness:
+  enabled: true
+  check_command: "python .trae/skills/xianyu-hunter-dev/scripts/check_registration.py"
+  required_layers:
+    - layer: "L1"
+      name: "menu_registry"
+      path: "config/menu_registry.yaml"
+      required_field: "path"
+    - layer: "L2"
+      name: "router"
+      path: "frontend/src/App.tsx"
+      required_field: "<Route path="
+    - layer: "L3"
+      name: "page"
+      path: "frontend/src/pages/<domain>/index.tsx"
+      required_field: "export default"
+    - layer: "L4"
+      name: "api_wrapper"
+      path: "frontend/src/api/<domain>.ts"
+      required_field: "export const <domain>Api"
+    - layer: "L5"
+      name: "backend_endpoint"
+      path: "src/xianyu_hunter/web/routes/api_<domain>.py"
+      required_field: "@router.<method>"
+  fail_on_missing_layer: "CRITICAL"
+  # 跨层一致性约束
+  consistency_rules:
+    - "L1 path 字段值必须与 L2 <Route path> 值完全相同（含前导斜杠）"
+    - "L3 page 文件名应与 L1 path 末段一致（如 /notifications → pages/Notifications/index.tsx）"
+    - "L4 api_wrapper 导出对象的方法名应与 L5 endpoint @router.<method> 路径末段一致"
+  # 已知的 5 层齐全资源（参考基线）
+  known_complete_resources:
+    - "tasks"
+    - "items"
+    - "evaluations"
+    - "chatbot"
+    - "config"
+    - "logs"
+    - "timeline"
+    - "about"
+  # 自动化验证脚本
+  auto_verification:
+    enabled: true
+    exit_code_zero_required: true
+    output_format: "table+json"
+    pre_commit_hook: true
+    ci_integration: true
+  detection_signals:
+    - pattern: "<Route path=['\"]\\*['\"]"
+      message: "fallback <Route path='*'> 静默重定向会掩盖注册缺口，建议 5 层契约都通过后再加 fallback"
+      severity: MEDIUM
+  applicable: "所有用户可点击/可导航的功能入口（新菜单、新页面、新功能模块）"
+  not_applicable: "纯内部组件（不暴露给用户导航）、第三方嵌入式组件、纯静态展示页（无交互）"
+
+# ============================================================
+# 🆕v4.36 修复前全链路根因扫描协议（meta-rule #34 落地，新增维度 32）
+# F-REVIEW-118 ROOT-CAUSE-MIN-COUNT：修复非平凡 bug 前必须列 ≥3 根因
+# 复盘来源：通知中心菜单问题修复时发现「仅修路由」未扫描全链路，导致回归
+# 详见 references/root-cause-protocol.md
+# ============================================================
+root_cause_protocol:
+  enabled: true
+  min_root_causes: 3
+  # 5 个扫描维度（与 registration_completeness 5 层呼应）
+  required_chain_check_dimensions:
+    - "menu_registry"        # L1：菜单是否注册
+    - "router"               # L2：路由是否注册
+    - "page"                 # L3：页面是否实现
+    - "api_wrapper"          # L4：API wrapper 是否存在
+    - "backend_endpoint"     # L5：后端 endpoint 是否存在
+  # 必填的修复前 PR 描述段
+  required_pr_sections:
+    - "≥3 根因列表（覆盖用户层/接口层/数据层/配置层/历史层 5 维度）"
+    - "每个根因的验证工具与结果（Grep/Glob/Read/RunCommand）"
+    - "最小修改清单（仅改根因相关行，不顺便重构）"
+    - "全链路反查结果（修改后 grep 验证 ≥3 处关键 pattern）"
+    - "防回归测试（unit test + integration test + B/F-REVIEW 检查点）"
+  # 最小修改原则
+  min_modification_principle:
+    enabled: true
+    unrelated_files_threshold: 3  # git diff 涉及 ≥3 个无关文件视为违反
+    require_pr_description_section: true
+  # 测试覆盖要求
+  test_coverage:
+    new_logic_unit_test_required: true  # 新增逻辑无 unit test 视为 WARNING
+    integration_test_required: false    # 跨层修改才需要 integration test
+  required_verification_tools:
+    - "Grep"
+    - "Glob"
+    - "Read"
+    - "RunCommand"
+  # 检测信号
+  detection_signals:
+    - "PR 描述无'根因列表'段"
+    - "git diff 涉及 ≥3 个无关文件"
+    - "新增函数无对应 unit test"
+    - "修复同一类型 bug 在最近 3 个 PR 中重复出现"
+  applicable: "所有非平凡 bug 修复（影响 > 1 个文件、需要修改 ≥2 层、用户报告具体异常现象）"
+  not_applicable: "简单 typo 修复、单行配置修改、纯文案/注释修改、依赖升级（按 changelog 处理）"
+
+# ============================================================
+# 🆕v4.36 前后端字段契约单一可信源（meta-rule #35 落地，新增维度 33）
+# F-REVIEW-119 CONTRACT-SINGLE-SOURCE：后端 Pydantic/DB Row 为权威源，前端 types.ts 必须显式标注
+# 复盘来源：通知中心修复时发现前端 types.ts 字段命名与后端 Pydantic 不一致
+# 详见 references/contract-single-source.md
+# ============================================================
+contract_single_source:
+  enabled: true
+  # 权威源配置（后端为唯一可信源）
+  authority_source:
+    primary: "backend_pydantic_model"      # Pydantic v2 BaseModel 字段
+    secondary: "backend_db_row"            # SQLAlchemy Row 字段（兜底）
+    forbidden_alternative_sources:
+      - "frontend_types_only"              # 禁止仅以前端 types 为准
+      - "api_response_sample"              # 禁止用一次抓包响应定字段
+      - "openapi_schema_only"              # 禁止仅依赖自动生成 schema
+  # 前端 types.ts 必填注释段
+  required_type_annotation_sections:
+    - section: "派生来源"
+      format: "src/xianyu_hunter/infra/db_models.py:<ModelName> + src/xianyu_hunter/web/routes/api_*.py:<ItemName>"
+      required: true
+    - section: "Pydantic 字段"
+      format: "id / level / category / title / message / link / dedup_key / read_at / created_at"
+      required: true
+    - section: "变更日期"
+      format: "YYYY-MM-DD（初版/修订）"
+      required: true
+    - section: "约束"
+      format: "snake_case 严格保留 / ISO 8601 / null 语义 / 必填 vs 可选"
+      required: true
+  # 字段命名规则
+  field_naming:
+    backend_style: "snake_case"
+    forbidden_frontend_styles:
+      - "camelCase"
+      - "PascalCase"
+    require_exact_match: true   # 严格匹配，禁止转换
+    require_null_semantic_annotation: true  # null 必须注释其语义（未读/未知/缺省）
+  # 双向一致性检查（后端变更 → 前端同步 + 前端 types 变更 → 后端模型同步）
+  bidirectional_consistency_check:
+    enabled: true
+    backend_change_triggers:
+      - "Pydantic model 字段增删 → 前端 types.ts 必须同步"
+      - "DB Row 字段重命名 → 前端 types.ts 必须同步"
+    frontend_change_triggers:
+      - "types.ts 新增字段 → 后端 Pydantic model 必须有对应字段"
+      - "types.ts 修改字段类型 → 后端 Pydantic model 类型必须兼容"
+  # 命名漂移检测（CRITICAL）
+  naming_drift_detection:
+    enabled: true
+    drift_patterns:
+      - pattern: "xxx_yyy"
+        frontend_wrong: "xxxYyy"
+        severity: CRITICAL
+        message: "后端 Pydantic 字段 xxx_yyy + 前端 types.ts 字段 xxxYyy = CRITICAL 命名漂移"
+      - pattern: "is_xxx"
+        frontend_wrong: "isXxx"
+        severity: CRITICAL
+        message: "is_ 前缀字段禁止转 camelCase"
+      - pattern: "_xxx"
+        frontend_wrong: "Xxx"
+        severity: CRITICAL
+        message: "_ 前缀私有字段禁止转 PascalCase"
+  # 检测信号
+  detection_signals:
+    - pattern: "^\\s*\\w+:\\s*\\w+;?$"
+      message: "types.ts 字段定义缺少'派生来源'注释段"
+      severity: HIGH
+    - pattern: "([a-z])_+([a-z])+\\s*:\\s*[a-zA-Z]+"
+      message: "前端 types.ts 出现 snake_case 字段命名（应转 camelCase 或严格保留 snake_case）"
+      severity: HIGH
+  # 同步检查清单
+  sync_checklist:
+    - "后端 Pydantic 字段列表与前端 types.ts 字段列表 1:1 对齐（数量+名称+类型+null 语义）"
+    - "后端 datetime 字段在前端必须 new Date() 解析（与 cross_boundary_contract_frontend.datetime_render_contract 一致）"
+    - "后端枚举值与前端 union type 1:1 对齐"
+  applicable: "所有前后端交互的 DTO/Response/Request 模型（特别是新增接口 + 修改现有接口）"
+  not_applicable: "纯前端计算字段（total = price * quantity）、纯前端 UI 状态（modalOpen/drawerVisible）、第三方 API wrapper（按第三方契约）"
+
+
+# ============================================================
+# 🆕v4.43 编码规范防御性复盘（meta-rules #57-63 前端落地）
+# 对应 SKILL.md §34 + F-REVIEW-148/149/150/151
+# 与 xianyu-hunter-dev v4.38.0 step 189-195（meta-rules #57-63）对应
+# 自动化扫描从 135 项扩展到 139 项
+# 详见 references/version-changelog.md
+# ============================================================
+# 复盘来源：本轮对话解决的 8 类问题
+#   1. async/await 副作用包裹缺失（useEffect 直接传 async 函数）
+#   2. HTTP 错误本地化不足（优先用后端英文 detail）
+#   3. 错误链路不透明（仅展示"采集失败"无 reason）
+#   4. 外部资源 cleanup 缺失（useEffect 创建 WebSocket 无 close）
+#   5-8. 其他 4 类问题（详见 xianyu-hunter-dev v4.38.0 meta-rules #57-63）
+meta_rules_57_63_frontend:
+  # ----------------------------------------------------------
+  # F-REVIEW-148 ASYNC-AWAIT-SYNC-CHECK-FRONTEND
+  # async/await 同步性检查（meta-rule #57 前端侧）
+  # ----------------------------------------------------------
+  # 规则：React useEffect 内 async 函数必须用 .then() 或 IIFE 包裹
+  # 禁止 async () => {} 直接传给 useEffect
+  # 事件回调中的 async 函数必须处理 rejection
+  #
+  # 判断信号：
+  #   grep "useEffect(async" frontend/src/         → 视为违规
+  #   grep "useEffect.*async.*=>" frontend/src/    → 视为违规
+  #
+  # 反模式：
+  #   useEffect(async () => {
+  #     const data = await fetchData();
+  #     setData(data);
+  #   }, []);
+  #
+  # 正确模式：
+  #   useEffect(() => {
+  #     let cancelled = false;
+  #     (async () => {
+  #       const data = await fetchData();
+  #       if (!cancelled) setData(data);
+  #     })();
+  #     return () => { cancelled = true; };
+  #   }, []);
+  #
+  # 历史教训：useEffect 直接传 async 函数导致 React 警告
+  #   "Effect callback cannot be async"，且 cleanup 返回 Promise
+  #   导致取消逻辑失效，组件卸载后异步操作仍 setState 引发内存泄漏
+  frontend_async_await_check:
+    enabled: true
+    severity: CRITICAL
+    # 禁止的模式（grep 匹配）
+    forbidden_patterns:
+      - "useEffect(async"
+      - "useEffect.*async.*=>"
+    # 是否允许 top-level await（模块顶层）
+    allow_top_level_await: false
+    # 是否强制 cancelled 标志防止组件卸载后 setState
+    require_cancellation_flag: true
+    # 适用场景
+    applicable: "React useEffect 副作用、事件回调（onClick/onSubmit 等）中的 async 函数"
+    not_applicable: "top-level await（模块顶层）、await import() 动态导入、async generator 函数"
+
+  # ----------------------------------------------------------
+  # F-REVIEW-149 HTTP-ERROR-LOCALIZATION
+  # HTTP 错误本地化（meta-rule #59 前端侧）
+  # ----------------------------------------------------------
+  # 规则：已知状态码优先用前端中文 statusMessages[status]
+  # 后端 detail 仅作 fallback
+  # 多状态码场景必须建立状态码 → 中文消息映射表
+  #
+  # 判断信号：
+  #   grep "detail ||" frontend/src/                    → 视为违规
+  #   grep "message.error.*detail" frontend/src/        → 视为违规
+  #
+  # 反模式：
+  #   catch (err) {
+  #     const status = err?.response?.status;
+  #     const detail = err?.response?.data?.detail;
+  #     message.error(detail || statusMessages[status]);
+  #   }
+  #
+  # 正确模式：
+  #   const COLLECT_OFFICIAL_ERROR_MESSAGES: Record<number, string> = {
+  #     503: '官方采集需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动',
+  #     403: '闲鱼登录已过期，请重新登录闲鱼',
+  #     440: '闲鱼登录已过期，请重新登录闲鱼',
+  #     441: '触发闲鱼反爬限制，请稍后重试或手动完成验证',
+  #     410: '商品详情页加载失败或已下架，请稍后重试',
+  #     502: '浏览器连接异常，请重启服务后重试',
+  #   };
+  #   catch (err) {
+  #     const status = err?.response?.status;
+  #     if (status != null && statusMessages[status]) {
+  #       message.error(statusMessages[status]);
+  #     } else {
+  #       message.error(detail || fallbackMessage);
+  #     }
+  #   }
+  #
+  # 历史教训：useEvalCollect.ts 优先用后端 detail 展示
+  #   "Failed to collect item 1053036882534: detail page unavailable or item removed"
+  #   对中文用户不友好，用户无法理解错误含义
+  frontend_http_error_localization:
+    enabled: true
+    severity: WARNING
+    # 已知状态码优先前端中文消息
+    prefer_frontend_message: true
+    # 多状态码场景必须建立状态码 → 中文消息映射表
+    status_messages_required: true
+    # 未知状态码是否回退到后端 detail
+    fallback_to_detail: true
+    # 本地化语言列表
+    localized_languages: ["zh-CN"]
+    # 已知状态码 → 中文消息映射（参考基线，按业务域扩展）
+    # 实际项目中应在 api/<域>.ts 顶层声明（禁止散落在组件内）
+    status_message_examples:
+      503: "官方采集需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动"
+      403: "闲鱼登录已过期，请重新登录闲鱼"
+      440: "闲鱼登录已过期，请重新登录闲鱼"
+      441: "触发闲鱼反爬限制，请稍后重试或手动完成验证"
+      410: "商品详情页加载失败或已下架，请稍后重试"
+      502: "浏览器连接异常，请重启服务后重试"
+    # 适用场景
+    applicable: "所有 HTTP 错误响应处理（catch 块中读取 err.response.status 与 err.response.data.detail）"
+    not_applicable: "前端无对应状态码映射的未知错误、调试模式需展示原始 detail、纯技术内部错误不向用户展示"
+
+  # ----------------------------------------------------------
+  # F-REVIEW-150 ERROR-CHAIN-TRANSPARENT
+  # 错误链透明化（meta-rule #61 前端侧）
+  # ----------------------------------------------------------
+  # 规则：错误链路需透明展示 reason/failure_reason
+  # 多阶段降级链合并展示最终生效路径
+  # 用户可见错误必须含可操作建议
+  #
+  # 判断信号：
+  #   grep "message.error\|notification.error" frontend/src/
+  #   后检查错误消息是否含 reason 与建议
+  #
+  # 反模式：
+  #   message.error('采集失败');
+  #
+  # 正确模式：
+  #   message.error({
+  #     content: `采集失败：${reason}。建议：${actionHint}`,
+  #     duration: 8,
+  #   });
+  #   // 或结构化展示
+  #   const errorDisplay = {
+  #     title: '官方采集失败',
+  #     reason: failure_reason,
+  #     suggestion: getSuggestionByReason(failure_reason),
+  #     retryable: isRetryable(failure_reason),
+  #   };
+  #
+  # 历史教训：前端仅展示"采集失败"无 reason，用户无法判断
+  #   是 cookie 过期还是反爬限制，需查看后端日志才能定位
+  frontend_error_chain_transparent:
+    enabled: true
+    severity: WARNING
+    # 错误消息必须含 reason 字段（来自后端 failure_reason）
+    require_reason: true
+    # 错误消息必须含可操作建议（如"请重新登录闲鱼"）
+    require_suggestion: true
+    # 错误必须标注 retryable 让用户知道是否可重试
+    require_retryable_flag: true
+    # 多阶段降级链必须合并展示最终生效路径
+    # 如"官方采集失败 → 降级到模拟采集"必须在 UI 体现
+    multi_stage_merge: true
+    # 错误展示模板（含 reason + suggestion + retryable）
+    error_display_template: "message.error({ content: `${title}：${reason}。建议：${suggestion}`, duration: 8 })"
+    # 适用场景
+    applicable: "所有错误展示组件（message.error/notification.error/Modal.error）"
+    not_applicable: "纯成功场景、loading 状态、开发调试日志（console.error）"
+
+  # ----------------------------------------------------------
+  # F-REVIEW-151 EXTERNAL-RESOURCE-CLEANUP-FRONTEND
+  # 外部资源清理（meta-rule #62 前端侧）
+  # ----------------------------------------------------------
+  # 规则：useEffect 内创建的订阅/定时器/AbortController
+  # 必须在 cleanup 中释放
+  # 事件监听器必须 removeEventListener
+  # WebSocket 必须关闭
+  #
+  # 判断信号：
+  #   grep "useEffect" frontend/src/ 后检查是否返回 cleanup 函数
+  #   grep "setInterval\|setTimeout\|addEventListener\|new WebSocket\|new AbortController"
+  #     检查是否在 cleanup 中释放
+  #
+  # 反模式：
+  #   useEffect(() => {
+  #     const ws = new WebSocket('ws://localhost:8080');
+  #     ws.onmessage = (e) => setMessage(e.data);
+  #     // 缺少 return () => ws.close();
+  #   }, []);
+  #
+  # 正确模式：
+  #   useEffect(() => {
+  #     const controller = new AbortController();
+  #     const ws = new WebSocket('ws://localhost:8080');
+  #     ws.onmessage = (e) => setMessage(e.data);
+  #     return () => {
+  #       controller.abort();
+  #       ws.close();
+  #     };
+  #   }, []);
+  #
+  # 历史教训：useEffect 创建 WebSocket 但无 cleanup
+  #   组件卸载后 WebSocket 仍保持连接
+  #   导致内存泄漏与重复消息（每次组件重新挂载都会新建连接）
+  frontend_external_resource_cleanup:
+    enabled: true
+    severity: CRITICAL
+    # 需检查的资源类型列表
+    resource_types:
+      - "WebSocket"          # 必须 ws.close()
+      - "EventSource"        # 必须 es.close()
+      - "setInterval"        # 必须 clearInterval()
+      - "setTimeout"         # 必须 clearTimeout()（长定时器场景）
+      - "addEventListener"   # 必须 removeEventListener()
+      - "AbortController"    # 必须 controller.abort()
+    # useEffect 必须返回 cleanup 函数
+    require_cleanup_return: true
+    # 创建与释放必须配对
+    pair_required: true
+    # 检测信号：useEffect 内创建资源但无 cleanup return
+    detection_patterns:
+      - pattern: "useEffect\\([^)]*new\\s+WebSocket\\((?![\\s\\S]{0,500}return\\s+\\(\\s*\\)\\s*=>\\s*\\w+\\.close\\(\\))"
+        message: "useEffect 内 new WebSocket 必须在 cleanup 中 ws.close()（F-REVIEW-151 / meta-rule #62）"
+        severity: CRITICAL
+      - pattern: "useEffect\\([^)]*setInterval\\((?![\\s\\S]{0,500}return\\s+\\(\\s*\\)\\s*=>\\s*clearInterval\\()"
+        message: "useEffect 内 setInterval 必须在 cleanup 中 clearInterval()（F-REVIEW-151）"
+        severity: CRITICAL
+      - pattern: "useEffect\\([^)]*addEventListener\\((?![\\s\\S]{0,500}return\\s+\\(\\s*\\)\\s*=>\\s*removeEventListener\\()"
+        message: "useEffect 内 addEventListener 必须在 cleanup 中 removeEventListener()（F-REVIEW-151）"
+        severity: CRITICAL
+    # 适用场景
+    applicable: "所有 useEffect 副作用中创建的外部资源（WebSocket/EventSource/定时器/事件监听器/AbortController）"
+    not_applicable: "无副作用的纯渲染组件、React 组件卸载时自动清理的资源（如 useState 管理的状态）"
+
+
+# ============================================================
+# 🆕v4.42 前端参数链闭环验证（meta-rule #52 前端落地，F-REVIEW-144）
+# ============================================================
+param_chain_exec_frontend:
+  enabled: true
+  description: "前端定义的过滤参数必须能在后端找到对应的消费逻辑"
+  metadata_whitelist:
+    - "page"
+    - "page_size"
+    - "limit"
+    - "offset"
+    - "sort"
+    - "order"
+  filter_param_prefixes:
+    - "filter_"
+    - "range_"
+    - "min_"
+    - "max_"
+    - "ratio_"
+  detection_signals:
+    - pattern: "market_ratio|price_range|filter_"
+      message: "前端传递过滤参数，需确认后端有对应消费逻辑"
+      severity: HIGH
+  sync_checklist:
+    - "前端 types.ts 过滤参数字段与后端 API 签名一致"
+    - "前端单元测试验证传参 vs 不传参的请求 URL 差异"
+  applicable: "所有有过滤参数的列表查询 API 前端调用"
+  not_applicable:
+    - "GET 单个资源详情"
+    - "DELETE 接口"
+    - "创建类 POST 接口"
+
+# ============================================================
+# 🆕v4.42 前端业务模式纵向链路一致性（meta-rule #53 前端落地，F-REVIEW-145）
+# ============================================================
+mode_vertical_chain_frontend:
+  enabled: true
+  description: "前端必须为每个 mode 枚举值提供对应路由、页面、组件"
+  required_layers:
+    - "router"
+    - "page"
+    - "component"
+    - "api_wrapper"
+  mode_field_names:
+    - "task_mode"
+    - "execution_mode"
+    - "notification_mode"
+  detection_signals:
+    - pattern: "SEMI_AUTO|AUTO|MANUAL"
+      message: "前端枚举值需在路由/页面/组件中都有引用"
+      severity: HIGH
+    - pattern: "taskMode|executionMode"
+      message: "前端字段名 camelCase 而后端 snake_case，命名漂移"
+      severity: CRITICAL
+  sync_checklist:
+    - "前端枚举值与后端一致"
+    - "mode 字段名严格 snake_case 透传"
+  applicable: "任务执行模式、通知模式、采集模式的前端实现"
+  not_applicable:
+    - "纯展示型 mode 字段"
+    - "内部状态字段"
+    - "单一布尔开关"
+
+# ============================================================
+# 🆕v4.42 前端 mock 同步与边界精确性（meta-rule #55 前端落地，F-REVIEW-146）
+# ============================================================
+mock_sync_frontend:
+  enabled: true
+  description: "前端 vitest mock 类型必须与被 mock 对象同步/异步特性匹配"
+  type_mapping:
+    sync: "vi.fn()"
+    async: "vi.fn().mockResolvedValue()"
+  required_assertions:
+    - "no_real_api_request"
+    - "no_real_router_change"
+  detection_signals:
+    - pattern: "vi\\.fn\\(\\)"
+      message: "需确认被 mock 函数是否为 async"
+      severity: HIGH
+  sync_checklist:
+    - "同步函数用 vi.fn()，异步函数用 vi.fn().mockResolvedValue()"
+    - "mock 数据覆盖完整字段集"
+    - "断言副作用未发生"
+  applicable: "所有 vitest 单元测试、集成测试中的 mock"
+  not_applicable:
+    - "E2E 测试"
+    - "快照测试"
+
+# ============================================================
+# 🆕v4.42 过滤结果透明化 UI（meta-rule #56 前端落地，F-REVIEW-147）
+# ============================================================
+filter_transparency_ui:
+  enabled: true
+  description: "列表查询 UI 同时有 ≥2 个过滤参数时必须透明化展示"
+  min_filter_params: 2
+  required_elements:
+    - "tooltip"
+    - "filter_summary"
+  filter_summary_states:
+    - "no_data"
+    - "filtered_empty"
+    - "all_data"
+  tooltip_required_fields:
+    - "price_range"
+    - "market_ratio"
+  detection_signals:
+    - pattern: "filter.*range|market.*ratio|min.*max"
+      message: "列表 UI 有多个过滤参数，需检查是否有 Tooltip/filter_summary"
+      severity: MEDIUM
+    - pattern: "empty.*data|no.*data"
+      message: "空状态需区分无数据 vs 被过滤排除"
+      severity: MEDIUM
+  sync_checklist:
+    - "≥2 个过滤参数时有关键参数的 Tooltip 说明"
+    - "空结果区分无数据/被过滤排除/全部数据三态"
+    - "业务参数展示语义化文案"
+  applicable: "所有多参数列表查询 UI"
+  not_applicable:
+    - "单一过滤参数"
+    - "用户主动输入的查询条件"
+    - "详情页"
+
+
+

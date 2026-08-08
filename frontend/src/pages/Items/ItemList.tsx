@@ -16,6 +16,7 @@ import { useSearch } from '../../hooks/useSearch'
 import { useSearchHistory } from '../../hooks/useSearchHistory'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
 import { ExportButton } from '../../components/ExportButton'
+import { API_BASE } from '../../utils/apiBase'
 
 // 相对时间插件：用于 updated_at 列渲染"3分钟前"等格式
 // dayjs 默认不包含 fromNow()，需 extend 插件并切换中文 locale
@@ -457,8 +458,8 @@ export default function ItemList() {
 
       // P1: 传递 last_event_id 启用断线回放，后端会推送此 ID 之后的所有事件
       const url = lastEventId > 0
-        ? `/api/events/stream?last_event_id=${lastEventId}`
-        : '/api/events/stream'
+        ? `${API_BASE}api/events/stream?last_event_id=${lastEventId}`
+        : `${API_BASE}api/events/stream`
       const es = new EventSource(url)
       sseRef.current = es
       es.addEventListener('app_event', (e: MessageEvent) => {

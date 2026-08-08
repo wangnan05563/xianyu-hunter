@@ -18,8 +18,11 @@ import time
 from pathlib import Path
 
 # 允许从仓库根直接运行
-_REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO / "src"))
+# In packaged mode (frozen), modules are bundled in the PYZ; the launcher already
+# inserted sys.executable/parent/_internal into sys.path.  Do not override it.
+if not getattr(sys, "frozen", False):
+    _REPO = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(_REPO / "src"))
 
 from xianyu_hunter.paths import get_browser_data_dir
 

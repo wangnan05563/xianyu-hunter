@@ -1,0 +1,4414 @@
+# ===== Xianyu Backend Code Review 技能配置示例 v2.0.0 =====
+# 首次使用：复制本文件为 config.yaml 并按项目实际情况修改
+# 所有评审规则、硬约束、项目规范均通过本文件管理，技能本身不含硬编码值
+# 完整审查维度对照见 SKILL.md 附录C（34 维度，v4.31.0）
+
+# --- 评审范围 ---
+scope:
+  # 包含的路径（支持 glob）
+  include_paths:
+    - "src/xianyu_hunter/**/*.py"
+    - "tests/**/*.py"
+  # 排除的路径（支持 glob）
+  exclude_paths:
+    - "**/__pycache__/**"
+    - "**/migrations/**"
+    - "**/.venv/**"
+    - "**/node_modules/**"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/web/static/**"        # 前端构建产物，不属于后端审查范围
+    - "**/web/templates/**"     # Jinja2 模板，单独审查
+  # 评审的文件扩展名
+  file_extensions:
+    - ".py"
+  # 单次评审最大文件数（避免单次评审过多）
+  max_files_per_run: 20
+
+# --- 优先级排序 ---
+priority:
+  # severity 排序（从高到低）
+  severity_order:
+    - CRITICAL
+    - HIGH
+    - MEDIUM
+    - LOW
+    - INFO
+  # category 排序（按 29 维度优先级，安全 > 数据库 > 异步 > 分层 > ...）
+  # 与 checklist 的 key 一一对应
+  category_order:
+    - security              # 维度 7
+    - sqlite_optimization   # 维度 6
+    - sqlalchemy            # 维度 5
+    - async_scheduler       # 维度 9
+    - event_bus             # 维度 10
+    - composition_root      # 维度 16
+    - chatbot               # 维度 17
+    - process_management    # 维度 15
+    - config_management     # 维度 14
+    - error_handling        # 维度 11
+    - logging               # 维度 12
+    - performance           # 维度 8
+    - layering              # 维度 1 + 21
+    - architecture          # 维度 21
+    - web_layer             # 维度 18
+    - api_design            # 维度 19
+    - pydantic              # 维度 4
+    - type_annotation       # 维度 3
+    - naming                # 维度 2
+    - code_quality          # 维度 13
+    - testing               # 维度 20
+    - project_specific      # 维度 22
+    - git_operations        # 维度 23：Git 操作规范（🆕v2.1）
+    - cross_field_hardcoded # 维度 24：跨字段一致性与硬编码属性禁用（🆕v4.2）
+    - state_management      # 维度 25：状态管理与日志治理（🆕v4.8）
+    - failure_reason_chain  # 维度 29：端到端失败原因链与数据完整性闭环（🆕v4.27）
+    - business_keyword_and_field_contract  # 维度 30：业务关键字常量集中管理与跨端契约对齐（🆕v4.31）
+    - cross_boundary_contract  # v4.30 半成品：跨边界访问契约（待整合到维度 30）
+  # 报告阈值：低于此 severity 的问题仅记录不突出显示
+  report_threshold: "LOW"
+
+# --- 评审检查清单（34 大类，按需开关）---
+# 与 SKILL.md 的 34 维度一一对应
+# 注：cross_boundary_contract（v4.30 半成品）的 SKILL.md 维度章节尚未落地，
+#     当前维度 30 已由 business_keyword_and_field_contract（v4.31）占用，待后续整合
+checklist:
+  layering: true                # 维度 1：分层架构
+  naming: true                  # 维度 2：命名规范
+  type_annotation: true        # 维度 3：类型注解
+  pydantic: true                # 维度 4：Pydantic 2.x
+  sqlalchemy: true             # 维度 5：SQLAlchemy 2.0
+  sqlite_optimization: true    # 维度 6：SQLite 优化与索引
+  security: true                # 维度 7：安全性
+  performance: true             # 维度 8：性能
+  async_scheduler: true         # 维度 9：异步与调度器
+  event_bus: true               # 维度 10：事件总线
+  error_handling: true          # 维度 11：错误处理
+  logging: true                 # 维度 12：日志规约
+  code_quality: true            # 维度 13：代码质量
+  config_management: true      # 维度 14：配置管理
+  process_management: true     # 维度 15：进程管理
+  composition_root: true       # 维度 16：Composition Root
+  chatbot: true                 # 维度 17：智能客服专项
+  web_layer: true               # 维度 18：Web 层规范
+  api_design: true              # 维度 19：API 设计
+  testing: true                 # 维度 20：测试建议
+  architecture: true            # 维度 21：架构与分层
+  project_specific: true        # 维度 22：闲鱼项目规范
+  git_operations: true          # 维度 23：Git 操作规范（🆕v2.1）
+  cross_field_hardcoded: true   # 维度 24：跨字段一致性与硬编码属性禁用（🆕v4.2）
+  state_management: true        # 维度 25：状态管理与日志治理（🆕v4.8）
+  failure_reason_chain: true    # 维度 29：端到端失败原因链与数据完整性闭环（🆕v4.27）
+  business_keyword_and_field_contract: true  # 维度 30：业务关键字常量集中管理与跨端契约对齐（🆕v4.31）
+  cross_boundary_contract: true  # v4.30 半成品：跨边界访问契约（config + template 已落地，SKILL.md 维度章节待整合到维度 30）
+
+# --- 硬约束检查（可扩展）---
+# 每条规则会在代码库中扫描，违规会写入报告
+# 这些规则来源于闲鱼猎人项目的 project_memory.md 硬约束
+hard_constraints:
+  rules:
+    # === 安全类 ===
+    - name: "hmac_compare_digest_for_token"
+      pattern: "==\\s*['\"]?\\w*token"
+      message: "token 比较应使用 hmac.compare_digest() 防止时序攻击"
+      severity: CRITICAL
+      auto_fix: false
+    - name: "no_hardcoded_credentials"
+      pattern: "(password|secret|token|api_key|access_key|webhook_secret|dingtalk_secret)\\s*[:=]\\s*['\"][^'\"]{8,}['\"]"
+      message: "检测到硬编码凭据，请从环境变量、.env 文件或 keyring 读取"
+      severity: CRITICAL
+      auto_fix: false
+    - name: "no_credentials_in_config_yaml"
+      pattern: "(webhook_secret|access_token|secret_key)\\s*[:=]\\s*['\"][^'\"]+['\"]"
+      message: "config/config.yaml 中明文暴露凭据（如钉钉推送 Key），必须迁移到 keyring"
+      severity: CRITICAL
+      auto_fix: false
+      scope: "config/config.yaml"
+    - name: "bare_except_pass"
+      pattern: "except\\s*:.*pass"
+      message: "禁止裸 except + pass，会静默吞掉所有异常（包括 CancelledError）"
+      severity: HIGH
+      auto_fix: false
+
+    # === 进程管理类 ===
+    - name: "no_devnull_redirect_for_webview2"
+      pattern: "subprocess\\.(Popen|run).*DEVNULL"
+      message: "WebView2 子进程不应重定向 stdout/stderr 到 DEVNULL，保留调试输出"
+      severity: HIGH
+      auto_fix: false
+    - name: "create_no_window_flag"
+      pattern: "CREATE_NO_WINDOW"
+      message: "WebView2/Playwright 子进程应使用 CREATE_NEW_CONSOLE 标志，而非 CREATE_NO_WINDOW，防止 GUI 窗口闪退"
+      severity: HIGH
+      auto_fix: false
+
+    # === 数据库类 ===
+    - name: "deprecated_utcnow"
+      pattern: "datetime\\.utcnow\\(\\)"
+      message: "datetime.utcnow() 已弃用，应用 _utcnow = lambda: datetime.now(timezone.utc)"
+      severity: HIGH
+      auto_fix: false
+    - name: "staticpool_usage"
+      pattern: "poolclass\\s*=\\s*StaticPool"
+      message: "SQLite 引擎应用 NullPool，禁止 StaticPool（会跨线程 cursor 竞争）"
+      severity: HIGH
+      auto_fix: false
+
+    # === 配置类 ===
+    - name: "missing_module_level_imports"
+      pattern: "^\\s*import\\s+(re|threading|logging)\\s*$"
+      message: "re/threading/logging 等应放在模块级导入，避免函数内缺失导入导致 NameError"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === Pydantic 类 ===
+    - name: "pydantic_v1_dict_method"
+      pattern: "\\.dict\\(\\)|\\.json\\(\\)"
+      message: "Pydantic 1.x 的 .dict()/.json() 已弃用，应用 model_dump()/model_dump_json()"
+      severity: HIGH
+      auto_fix: false
+
+    # === 智能客服类 ===
+    - name: "missing_hf_endpoint"
+      pattern: "import sentence_transformers"
+      message: "local_embedding.py 必须在 import sentence_transformers 之前设置 HF_ENDPOINT 镜像"
+      severity: HIGH
+      auto_fix: false
+      scope: "src/xianyu_hunter/modules/chatbot/local_embedding.py"
+
+    # === 日志格式类 ===
+    - name: "loguru_printf_style"
+      pattern: "logger\\.(info|warning|error|debug|exception)\\([^)]*%[sdf]"
+      message: "loguru 必须使用 {} 占位符，禁用 %s/%d/%f printf 风格（loguru 不解析，导致参数未替换）"
+      severity: HIGH
+      auto_fix: false
+
+    # === 查询性能类 ===
+    - name: "python_layer_filter_after_select_all"
+      pattern: "\\[r for r in .*(?:all_rows|rows).*if "
+      message: "禁止 Python 层全量加载后内存过滤，应将过滤条件下推到 SQL WHERE"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.2 跨字段一致性类 ===
+    # B-REVIEW-CROSS-FIELD：dataclass/Pydantic 字段间语义关联必须构造时校验
+    - name: "dataclass_missing_cross_field_validator"
+      pattern: "@dataclass\\s*\\nclass\\s+\\w+.*?(?=vendor|renderer|platform|userAgent)"
+      message: "包含语义关联字段（vendor/renderer, platform/userAgent）的 dataclass 必须实现 __post_init__ 校验一致性"
+      severity: HIGH
+      auto_fix: false
+    - name: "pydantic_missing_model_validator"
+      pattern: "class\\s+\\w+\\(BaseModel\\).*?(?=pass_score|auto_buy_score|start_time|end_time)"
+      message: "包含语义关联字段的 Pydantic 模型必须用 @model_validator(mode='after') 校验一致性"
+      severity: HIGH
+      auto_fix: false
+
+    # === 🆕v4.2 硬编码属性禁用类 ===
+    # B-REVIEW-NO-HARDCODED-PROPS：写入外部系统的属性必须从数据语义派生
+    - name: "cookie_hardcoded_httponly"
+      pattern: "['\"]httpOnly['\"]\\s*:\\s*True"
+      message: "Cookie httpOnly 不应硬编码为 True，应由来源 cookie 数据语义决定（来源是否 httpOnly）"
+      severity: HIGH
+      auto_fix: false
+    - name: "cookie_hardcoded_secure"
+      pattern: "['\"]secure['\"]\\s*:\\s*True"
+      message: "Cookie secure 不应硬编码为 True，应由来源 cookie 数据语义决定"
+      severity: HIGH
+      auto_fix: false
+    - name: "fingerprint_hardcoded_vendor"
+      pattern: "vendor\\s*=\\s*['\"](?:Intel Inc\\.|Google Inc\\. \\(AMD\\)|Google Inc\\. \\(NVIDIA\\))['\"]"
+      message: "fingerprint vendor 必须从 GPU renderer 推导，不批量硬编码（避免 vendor/renderer 矛盾）"
+      severity: HIGH
+      auto_fix: false
+
+    # === 🆕v4.2 跨线程异步调用禁用类 ===
+    # B-REVIEW-NO-CROSS-THREAD-ASYNC：run_coroutine_threadsafe + .result() 死锁组合
+    - name: "cross_thread_async_deadlock"
+      pattern: "run_coroutine_threadsafe.*\\.result\\(\\)"
+      message: "禁止 run_coroutine_threadsafe + future.result() 组合，跨线程阻塞会导致死锁；应用 fire-and-forget 或不 await result"
+      severity: CRITICAL
+      auto_fix: false
+
+    # === 🆕v4.2 try/finally 变量未初始化类 ===
+    # B-REVIEW-TRY-FINALLY-INIT：try 块内赋值、finally 引用变量必须前置初始化
+    - name: "try_finally_var_unbound"
+      pattern: "try:\\s*\\n\\s*(\\w+)\\s*=.*\\nfinally:.*\\1\\b"
+      message: "try 块内赋值的变量在 finally 中引用时必须前置初始化（如 page = None）"
+      severity: HIGH
+      auto_fix: false
+
+    # === 🆕v4.2 错误提示端点可操作性类 ===
+    # B-REVIEW-ERROR-HINT-ROUTABLE：错误提示中引用的端点必须实际存在
+    - name: "error_hint_nonexistent_endpoint"
+      pattern: "(?:HTTPException|raise\\s+\\w+Error)\\([^)]*['\"][^'\"]*\\/api\\/[^'\"]+['\"]"
+      message: "HTTPException detail 或 Error 消息中引用的 /api/* 端点必须实际存在于路由注册表中"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.8 状态管理与日志治理类 ===
+    # B-REVIEW-STATE-FLAG-PRECHECK：状态标志设置后必须有前置检查
+    - name: "state_flag_no_precheck"
+      pattern: "self\\.(last_session_invalid|degraded_mode|rate_limited|embedding_unavailable)\\s*=\\s*True"
+      message: "状态标志设置后，后续操作入口必须用 getattr(self, 'flag', False) 检查标志提前返回"
+      severity: HIGH
+      auto_fix: false
+    # B-REVIEW-LOG-DOWNGRADE-STABILITY：日志降级判断禁止用魔法字符串
+    - name: "log_downgrade_magic_string"
+      pattern: "logger\\.log\\([^)]*\"(Failed|Cookie|session|expired)"
+      message: "日志降级判断字符串必须提取为模块级常量（禁止魔法字符串），并注释文案来源"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.23 LLM 端点能力派发类 ===
+    # B-REVIEW-LLM-CAPABILITY-DISPATCH：vision/function_call/json_mode 调用前必须预检模型能力
+    - name: "llm_image_url_no_capability_check"
+      pattern: "\\{[\\s\\S]*?\"type\":\\s*\"image_url\"[\\s\\S]*?\\}"
+      message: "检测到 payload 含 image_url content block，必须先用共享的 _is_vision_capable(model) 预检目标模型能力，能力不匹配时降级为文本表达"
+      severity: CRITICAL
+      auto_fix: false
+    - name: "llm_capability_keyword_inline"
+      pattern: "[\"']vision[\"'].*[\"']gpt-4o[\"']|[\"']gpt-4o[\"'].*[\"']vision[\"']"
+      message: "LLM 能力关键字白名单禁止内联到调用函数中，必须集中到 api_ai._VISION_CAPABLE_KEYWORDS 并通过共享函数复用"
+      severity: HIGH
+      auto_fix: false
+    # B-REVIEW-SHARED-UTIL-CENTRALIZATION：跨模块复用的关键字/正则/常量必须共享
+    - name: "vision_capable_inline_keyword_list"
+      pattern: "any\\(\\s*kw\\s+in\\s+\\w+\\.lower\\(\\)\\s+for\\s+kw\\s+in\\s+\\[[\\s\\S]*?[\"']vision[\"']"
+      message: "vision_capable 关键字列表必须从 api_ai._VISION_CAPABLE_KEYWORDS 导入，禁止在调用函数内联定义（散落修改风险）"
+      severity: HIGH
+      auto_fix: false
+    # B-REVIEW-SILENT-DOWNGRADE-PRECHECK：可选增强能力降级必须有可观测性
+    - name: "llm_downgrade_no_log"
+      pattern: "if not vision_capable:.*?user_content\\s*="
+      message: "vision 能力缺失降级时必须 logger.warning('mode=downgrade reason=vision_missing model={}')，禁止静默降级"
+      severity: HIGH
+      auto_fix: false
+
+    # === 🆕v4.27 端到端失败原因链与数据完整性闭环类 ===
+    # B-REVIEW-FAILURE-REASON-PROPAGATION：失败原因传递禁止用字符串子串判断
+    - name: "failure_reason_substring_marker"
+      pattern: "if\\s+[\"'](expired|unavailable|rate limited|page unavailable|login expired)[\"']\\s+in\\s+\\w+"
+      message: "失败原因传递禁止用字符串子串做日志降级 marker（如 if 'expired' in detail），应提取为可枚举常量并通过 status_code 映射判断"
+      severity: HIGH
+      auto_fix: false
+    # B-REVIEW-DATA-COMPLETENESS-PRECHECK：预检方法签名必须为 str | None
+    - name: "precheck_method_wrong_signature"
+      pattern: "async\\s+def\\s+_check_\\w+_completeness.*->\\s*(bool|int|str)\\s*:"
+      message: "数据完整性预检方法签名必须为 async def _check_xxx_completeness(self) -> str | None，返回 None 表示通过、字符串表示错误描述"
+      severity: MEDIUM
+      auto_fix: false
+    # B-REVIEW-DATA-COMPLETENESS-PRECHECK：禁止单阈值预检
+    - name: "precheck_single_threshold"
+      pattern: "if\\s+len\\(\\w+\\)\\s*<\\s*\\d+\\s*:\\s*return\\s+(False|None)"
+      message: "数据完整性预检禁止用单一阈值（如 if len(cookies) < 10），必须用双阈值 AND 判断（总数 + 关键项命中数）"
+      severity: MEDIUM
+      auto_fix: false
+    # B-REVIEW-MERGE-VS-OVERWRITE-WRITE：浏览器 Cookie 导入禁止覆盖写
+    - name: "cookie_import_overwrite_write"
+      pattern: "export_cookies\\s*\\(\\s*new_cookies\\s*\\)|save_cookies\\s*\\(\\s*new_cookies\\s*\\)"
+      message: "浏览器 Cookie 导入（部分集）禁止用覆盖写（export_cookies/save_cookies），必须用合并写 merge_cookies 避免丢失旧文件中其他 cookie"
+      severity: HIGH
+      auto_fix: false
+    # B-REVIEW-ERROR-MESSAGE-CONSTANT：错误响应缺失 error_code 字段
+    - name: "error_response_missing_error_code"
+      pattern: "HTTPException\\s*\\(\\s*status_code\\s*=\\s*\\d+\\s*,\\s*detail\\s*=\\s*[\"']"
+      message: "HTTPException 的 detail 为字符串字面量时缺少 error_code 字段，应改为 detail={'error_code': 'xxx', 'message': '...'} 让前端按 error_code 分支"
+      severity: MEDIUM
+      auto_fix: false
+
+    # === 🆕v4.30 跨边界访问契约类 ===
+    # B-REVIEW-DATETIME-TZ-CONSISTENCY：datetime aware/naive 混用相减
+    # 详见 references/sqlalchemy.md §十五、datetime 时区一致性
+    # 字段后缀列表参照 cross_boundary_contract.datetime_tz_consistency.db_datetime_field_suffixes
+    - name: "datetime_aware_naive_mix"
+      pattern: "_utcnow\\(\\)\\s*-\\s*\\w+\\.\\w+_(at|seen|time|active)"
+      message: "_utcnow() 返回 aware datetime，SQLite DateTime 列读回 naive，相减前必须 .replace(tzinfo=None) 统一时区状态"
+      severity: CRITICAL
+      auto_fix: false
+    # B-REVIEW-FROMISOFORMAT-NO-FALLBACK：fromisoformat 解析后未兜底补时区
+    - name: "fromisoformat_no_tzinfo_fallback"
+      pattern: "datetime\\.fromisoformat\\([^)]+\\)(?!\\s*\\n\\s*if\\s+\\w+\\.tzinfo\\s+is\\s+None)"
+      message: "fromisoformat 解析外部时间字符串后必须检查 tzinfo is None 并显式补时区，避免 aware/naive 混用"
+      severity: HIGH
+      auto_fix: false
+    # B-REVIEW-ISOFORMAT-NO-TZ：isoformat 序列化无时区信息
+    - name: "isoformat_no_tzinfo"
+      pattern: "datetime\\.now\\(\\)\\.isoformat\\(\\)|datetime\\.utcnow\\(\\)\\.isoformat\\(\\)"
+      message: "跨进程传递的 isoformat 字符串必须含时区偏移，应用 datetime.now(timezone.utc).isoformat() 或 _utcnow().isoformat()"
+      severity: HIGH
+      auto_fix: false
+    # B-REVIEW-CROSS-MODULE-PRIVATE-ACCESS：跨模块访问 _ 前缀私有属性
+    # 详见 references/maintainability.md §4.4 私有属性封装
+    - name: "cross_module_private_attr_access"
+      pattern: "\\b(repo|service|manager|client|controller|handler)\\._[A-Z]\\w*\\b"
+      message: "跨模块访问 _ 前缀私有属性禁止（且大写字母开头违反 PEP 8 实例属性 snake_case 约定），应通过公共方法封装访问"
+      severity: HIGH
+      auto_fix: false
+    # B-REVIEW-NAMING-CONSISTENCY：类内属性命名大小写不一致变体引用
+    # 详见 references/consistency-and-state-checks.md §维度 19 命名一致性验证
+    - name: "naming_case_inconsistency"
+      pattern: "self\\._[A-Z]\\w*\\s*="
+      message: "实例属性应 snake_case（self._xxx），禁止 self._Xxx / self._XXX 形式（常量除外应放模块级 UPPER_SNAKE）"
+      severity: MEDIUM
+      auto_fix: false
+  # 硬约束违规时是否阻止合并
+  block_on_violation: true
+
+# --- 报告配置 ---
+report:
+  # 报告输出目录（为空则不写文件，仅输出到对话）
+  output_dir: ""
+  # 报告格式
+  format: "markdown"
+  # 是否包含好的实践（正面反馈）
+  include_good_practices: true
+  # 最大建议数（超过则概括）
+  max_suggestions: 10
+
+# --- 验证配置 ---
+verify:
+  # 评审后是否运行测试
+  run_tests_after_review: false
+  # 测试命令（PowerShell 用 ; 分隔，不支持 &&）
+  test_command: "pytest tests/ -x"
+  # 发现 CRITICAL 问题时是否失败
+  fail_on_critical: true
+
+# --- 项目专属规范（供评审参考，非扫描规则）---
+# 这些规范来源于 project_memory.md 和 xianyu-hunter-dev/references/project-rules.md
+project_conventions:
+  # 分层依赖方向（单向）
+  layering:
+    direction: "web → modules → infra → domain"
+    composition_root: "container.py"
+    domain_pure: true  # domain 不依赖任何层
+
+  # 认证白名单端点（必须放行，不要求 token）
+  auth_whitelist:
+    - "/api/auth/cookie"
+    - "/api/auth/me"
+    - "/api/auth/import-from-browser"
+    - "/import-from-browser/status"
+    - "/api/events/stream"
+    - "/api/notifications"
+    - "/api/notifier/"
+    - "/api/about"
+    - "/api/about/check-update"
+
+  # 必须有索引的数据库字段
+  required_indexes:
+    - task_id
+    - seller_id
+    - first_seen
+    - publish_time
+    - created_at
+    - request_id
+  # 必须有复合索引（优化 Dashboard 查询）
+  required_composite_indexes: true
+
+  # COUNT 查询合并要求
+  count_query_optimization: "_overview() 使用 CASE WHEN 聚合查询合并 COUNT，减少 DB 调用 67%"
+
+  # WebView2 配置要求
+  webview2_config:
+    private_mode: false
+    storage_path_format: "webview_data_{pid}_{timestamp}"
+    subprocess_flag: "CREATE_NEW_CONSOLE"  # 禁止 CREATE_NO_WINDOW
+    stdout_redirect: "保留"  # 禁止 DEVNULL
+
+  # SQLite 引擎配置要求
+  sqlite_engine_config:
+    poolclass: "NullPool"  # 禁止 StaticPool
+    connect_args:
+      timeout: 10
+      check_same_thread: false
+    pragmas:
+      journal_mode: "WAL"
+      busy_timeout: 10000
+      cache_size: -20000
+
+  # 知识库索引白名单（仅索引这些扩展名）
+  kb_index_whitelist:
+    - ".md"
+    - ".py"
+    - ".jsonl"
+    - ".txt"
+  # 知识库索引排除路径
+  kb_index_excludes:
+    - "web/static/"
+    - "web/templates/"
+    - "__pycache__/"
+    - "node_modules/"
+    - ".git/"
+    - "dist/"
+    - "build/"
+
+  # HuggingFace 镜像（避免国内访问超时）
+  hf_endpoint: "https://hf-mirror.com"
+  hf_endpoint_set_location: "模块顶层，在 import sentence_transformers 之前"
+
+  # Embedding 本地化配置
+  embedding:
+    backend: "local"  # EMBEDDING_BASE_URL 为空或 "local" 时启用
+    model: "BAAI/bge-small-zh-v1.5"
+    dim: 512
+    cross_version_compat: "getattr(model, 'get_sentence_embedding_dimension', getattr(model, 'get_embedding_dimension', None))()"
+
+  # 不可移动目录（代码硬编码引用）
+  immutable_dirs:
+    - "src/xianyu_hunter/"
+    - "config/"
+    - "data/"
+    - "browser-data/"
+    - "frontend/"
+    - "tests/"
+
+  # Docker 三阶段构建
+  docker_stages:
+    - name: "frontend"
+      base: "node:20-alpine"
+    - name: "builder"
+      base: "python:3.12-slim"
+    - name: "runtime"
+      base: "python:3.12-slim"
+      no_build_tools: true  # runtime 阶段不包含构建工具
+
+  # ChatbotOrchestrator 设计约束
+  chatbot_orchestrator:
+    stateless: true  # 不持有请求级状态
+    per_session_lock: "_locks_guard 保护 _session_locks 字典"
+    exception_handling: "异常转 SSEEvent(ERROR) 或 SSEEvent(ESCALATE)"
+    cancelled_error: "向上传播以触发资源清理"
+
+  # 时间字段统一 UTC
+  utc_time:
+    helper: "_utcnow = lambda: datetime.now(timezone.utc)"
+    deprecated: "datetime.utcnow()"
+
+  # 性能监控配置（查询性能埋点阈值）
+  performance_monitoring:
+    repository_layer_threshold_ms: 100    # Repository 层慢查询阈值
+    api_layer_threshold_ms: 200           # API 端点慢响应阈值
+    log_level_slow: "WARNING"             # 超阈值日志级别
+    log_level_normal: "DEBUG"             # 正常日志级别
+    required_methods:                      # 必须有埋点的方法名模式
+      - "list_*"
+      - "count_*"
+      - "list_and_count_*"
+
+  # 索引一致性检查
+  index_consistency:
+    orm_definition_location: "__table_args__ 中的 Index(...)"
+    migration_location: "init_db() 中的 _migrate_create_index(...)"
+    check_method: "PRAGMA index_list 比对 ORM 定义"
+    require_bidirectional_sync: true       # ORM 与迁移必须双向同步
+
+  # 🆕v4.0 事件触发时机规范
+  # "已完成"语义事件必须在业务逻辑完成后触发，禁止前置触发
+  event_trigger_timing:
+    # "已完成"类事件（如 EVAL_PASSED、TASK_COMPLETED）必须在业务逻辑完成后触发
+    completed_events_must_be_post: true
+    # 业务逻辑示例：update_eval_result() 完成后再触发 EVAL_PASSED
+    typical_pattern: "update_business_state() -> emit_completed_event()"
+    # 适用场景
+    applicable: "状态变更类事件（评估通过、任务完成、订单关闭等）"
+    not_applicable: "进度类事件（开始处理、心跳、日志流）"
+    # 反例（禁止）
+    antipattern: "先 emit EVAL_PASSED 再 update_eval_result()，会导致订阅方读到未更新状态"
+
+  # 🆕v4.0 字段覆盖策略（按语义分类）
+  # 防止"只填缺失"一刀切导致数值/状态字段无法更新
+  field_overwrite_strategy:
+    semantic_based: true
+    # 各类字段的覆盖策略
+    rules:
+      - category: "基本信息"               # 如 title、description
+        strategy: "fill_missing"          # 仅填缺失（避免覆盖人工修改）
+      - category: "数值"                   # 如 price、view_count
+        strategy: "take_larger"           # 取较大值（防止降级攻击）
+      - category: "状态"                   # 如 status、is_sold
+        strategy: "priority_order"        # 按优先级覆盖（如已售 > 待售）
+      - category: "标识符"                 # 如 order_id、trade_id
+        strategy: "fill_when_target_nonempty"  # 仅在原值为空且新值非空时覆盖
+    # 适用场景
+    applicable: "聚合多数据源的详情接口（如评估详情合并多接口数据）"
+    not_applicable: "单一数据源的 CRUD 接口"
+
+  # 🆕v4.0 资源创建幂等性
+  # 防止重复登录/重复创建会话/重复初始化
+  idempotent_create:
+    require_already_active_flag: true
+    # 检测到已激活资源时直接返回，不重复创建
+    pattern: "if already_active: return existing_resource"
+    # 适用场景
+    applicable: "登录、会话初始化、浏览器启动、知识库构建等有副作用的创建接口"
+    not_applicable: "无状态查询接口"
+    # 反例（禁止）
+    antipattern: "每次调用都重新创建资源（如重复 login 创建多个 session）"
+
+  # 🆕v4.0 搜索接口标准化
+  # 多个搜索接口必须统一参数命名与响应结构
+  search_standardization:
+    unified_params: true
+    unified_response: true
+    # 统一参数命名
+    params:
+      keyword: "keyword"          # 搜索关键词
+      page: "page"                # 页码（从 1 开始）
+      page_size: "page_size"      # 每页条数
+    # 统一响应结构
+    response_fields: ["items", "total", "page", "page_size"]
+    # requestId 竞态保护
+    require_request_id: true
+    request_id_field: "request_id"   # 客户端生成唯一 ID，响应中原样返回
+    race_protection: "丢弃 requestId 不匹配的过期响应"
+    # 适用场景
+    applicable: "实时搜索（用户输入 + 防抖 + 分页/流式）"
+    not_applicable: "主键精确查询、固定条件列表"
+
+  # 🆕v4.0 代码质量通用规范
+  code_quality_v4:
+    # 注释必须与代码逻辑一致
+    require_comment_code_consistency: true
+    comment_review_checklist: "评审时校验注释中描述的约束、顺序、依赖关系是否与代码真实行为一致"
+    # 动态资源映射必须分离（映射表 + 推断函数）
+    require_mapping_function_separation: true
+    mapping_pattern: "模块级常量映射表 + 纯推断函数（如 API_KEY_URLS + getApiKeyUrlByBaseUrl）"
+    # 反例（禁止）
+    antipattern: "JSX/IIFE 内联映射逻辑（难扩展、难单测、难维护）"
+
+  # 🆕v4.2 跨字段一致性与硬编码属性禁用
+  # 维度 24：基于反爬模块全面评估复盘提炼
+  cross_field_and_hardcoded:
+    # === B-REVIEW-CROSS-FIELD：跨字段一致性校验对 ===
+    # 同一实体内语义关联字段必须构造时校验一致性（避免 vendor/renderer 矛盾）
+    cross_field_consistency_checks:
+      - entity: "fingerprint Profile"
+        field_pairs:
+          - { field_a: "vendor", field_b: "renderer", constraint: "vendor 必须匹配 GPU renderer 的厂商" }
+          - { field_a: "platform", field_b: "userAgent", constraint: "platform 必须匹配 UA 的 OS" }
+        check_pattern: "construct-time validation（__post_init__ 或 Pydantic @model_validator）"
+        fix_pattern: "派生字段从语义源字段推导（vendor 从 renderer 解析），不独立设置"
+        antipattern: "vendor='Intel Inc.' 与 renderer='ANGLE (AMD, AMD Radeon)' 矛盾"
+        applicable: "包含语义关联字段的 dataclass、Pydantic 模型"
+        not_applicable: "完全独立的字段（如 id 与 created_at）"
+      - entity: "TaskCreate / BuyerStrategy"
+        field_pairs:
+          - { field_a: "pass_score", field_b: "auto_buy_score", constraint: "pass_score <= auto_buy_score" }
+        check_pattern: "Pydantic @model_validator(mode='after')"
+        fix_pattern: "validator 中抛 ValueError('pass_score 不能大于 auto_buy_score')"
+        applicable: "数值阈值类字段（最小/最大、起始/结束）"
+        not_applicable: "无依赖关系的数值字段"
+      - entity: "time_range"
+        field_pairs:
+          - { field_a: "start_time", field_b: "end_time", constraint: "start_time < end_time" }
+        check_pattern: "Pydantic @model_validator"
+        fix_pattern: "validator 中抛 ValueError"
+        applicable: "时间区间、有效期、调度窗口"
+        not_applicable: "单时间点字段"
+
+    # === B-REVIEW-NO-HARDCODED-PROPS：硬编码属性映射禁用 ===
+    # 写入外部系统的属性必须从数据语义派生，不能批量硬编码固定值
+    hardcoded_property_mappings:
+      - context: "Cookie 写入（cookie_rotator._batch_write）"
+        forbidden_hardcoded:
+          - { prop: "httpOnly", reason: "应由来源 cookie 数据语义决定（来源 cookie 是否 httpOnly）" }
+          - { prop: "secure", reason: "应由来源 cookie 决定（来源是否 secure）" }
+          - { prop: "expiry", reason: "应保留来源 cookie 的 expiry，不硬编码" }
+        allowed:
+          - { prop: "sameSite", value: "Lax", reason: "默认 Lax 平衡安全与可用性（CSRF 防护 + 顶层导航可用）" }
+        antipattern: "_batch_write 中所有 cookie 强制 httpOnly=True, secure=True（来源 cookie 实际不是 httpOnly 时被覆盖）"
+        applicable: "Cookie 同步、HTTP Header 生成、User-Agent 构造"
+        not_applicable: "API 协议要求的固定字段（如 Content-Type: application/json）"
+      - context: "fingerprint generation"
+        forbidden_hardcoded:
+          - { prop: "vendor", reason: "必须从 GPU renderer 推导（如 renderer 含 'AMD' → vendor='Google Inc. (AMD)'）" }
+          - { prop: "userAgent", reason: "必须从 platform + browser_version 派生，不硬编码固定字符串" }
+        allowed: []
+        antipattern: "Profile 2 vendor='Intel Inc.' 与 renderer='ANGLE (AMD, AMD Radeon)' 矛盾"
+        applicable: "设备指纹生成、UA 构造、平台标识"
+        not_applicable: "完全从输入派生的字段（如 hash、id）"
+      - context: "HTTP headers"
+        forbidden_hardcoded:
+          - { prop: "User-Agent", reason: "必须从设备指纹派生，不硬编码固定字符串" }
+          - { prop: "Accept-Language", reason: "应从 locale 配置派生" }
+        allowed:
+          - { prop: "Accept", value: "application/json", reason: "API 协议固定值" }
+        antipattern: "headers = {'User-Agent': 'Mozilla/5.0...'} 固定 UA"
+        applicable: "HTTP 请求构造、API 客户端"
+        not_applicable: "协议固定字段"
+
+    # === B-REVIEW-NO-CROSS-THREAD-ASYNC：跨线程异步调用禁用模式 ===
+    # 禁止 run_coroutine_threadsafe + future.result() 组合（跨线程阻塞死锁）
+    cross_thread_async_patterns:
+      forbidden_combinations:
+        - pattern: "run_coroutine_threadsafe(coro, loop).result()"
+          reason: "跨线程调用 .result() 会阻塞调用线程，可能导致死锁（事件循环在另一线程，调用线程等待结果）"
+          fix: "fire-and-forget（不 await result）或使用 loop.call_soon_threadsafe 同步回调"
+          severity: CRITICAL
+      safe_patterns:
+        - "asyncio.run_coroutine_threadsafe(coro, loop)  # 不调用 .result()，fire-and-forget"
+        - "loop.call_soon_threadsafe(callback, *args)   # 同步回调，无返回值等待"
+        - "future = asyncio.run_coroutine_threadsafe(...); future.add_done_callback(cb)  # 回调式"
+      check_method: "扫描 run_coroutine_threadsafe 的调用，检查是否调用 .result() 阻塞"
+      antipattern: "sync_writer 中 fut = run_coroutine_threadsafe(writer.write(cookie), loop); fut.result()  # ❌ 死锁风险"
+      applicable: "FastAPI 路由同步调用 async 协程、子线程访问事件循环"
+      not_applicable: "同线程 async 调用（直接 await）、纯同步代码"
+
+    # === B-REVIEW-TRY-FINALLY-INIT：try/finally 变量未初始化 ===
+    try_finally_init:
+      enabled: true
+      # try 块内赋值、finally 块引用的变量必须在 try 之前初始化为 None/默认值
+      # 防止 try 块在赋值前抛异常导致 finally 引用未定义变量（UnboundLocalError）
+      check_pattern: "try:\\n\\s*(\\w+)\\s*=.*\\nfinally:.*\\1"
+      fix_pattern: "变量前置初始化（如 page = None）"
+      examples:
+        - bad: |
+            try:
+                page = await browser.new_page()
+            finally:
+                await page.close()  # ❌ page 可能未定义
+          good: |
+            page = None
+            try:
+                page = await browser.new_page()
+            finally:
+                if page:
+                    await page.close()
+      applicable: "async 资源管理（Page、Response、Stream、ClientSession）、可能抛异常的初始化"
+      not_applicable: "纯计算函数（无资源创建）、with 语句（自动管理）"
+
+    # === B-REVIEW-CROSS-COMPONENT-STATE：跨组件状态双向同步 ===
+    cross_component_state_sync:
+      enabled: true
+      # 多组件对同一业务概念独立判断时必须建立双向同步机制
+      shared_concepts:
+        - concept: "session_invalid"
+          detectors:
+            - "cookie_checker（检查本地 cookie 存在性 + identity layer 有效性）"
+            - "worker（通过 API 响应检测 RGV587_ERROR）"
+            - "cookie_rotator.invalidate_layer(IDENTITY)（被 worker 调用）"
+          sync_strategy: "双向同步：worker 检测到 RGV587 时调用 invalidate_layer；checker 增加 collector.last_session_invalid 标志检查"
+          single_source_of_truth: "cookie_rotator._layer_states"
+          antipattern: "checker 只检查本地存在性，worker 只检查 API 响应，两者脱钩导致健康检查显示'有效'但任务被暂停"
+          applicable: "多组件独立判断同一业务概念（登录态、任务暂停、健康状态）"
+          not_applicable: "组件内部状态、派生状态"
+        - concept: "task_paused"
+          detectors:
+            - "TaskControl API"
+            - "scheduler.pause(job_id)"
+            - "worker self-pause"
+          sync_strategy: "单一权威源：scheduler.pause(job_id)，其他组件订阅"
+          single_source_of_truth: "scheduler._job_states"
+          applicable: "任务状态管理"
+          not_applicable: "无状态查询接口"
+
+    # === B-REVIEW-ERROR-HINT-ROUTABLE：错误提示端点可操作性验证 ===
+    error_hint_endpoint_validation:
+      enabled: true
+      # 验证策略：扫描错误消息中的 URL/方法名 → 比对路由注册表
+      scan_strategy: "extract_urls_from_error_messages → compare_with_route_registry"
+      # 路由注册表位置（后端维护）
+      route_registry_files:
+        - "src/xianyu_hunter/web/routes/api_*.py"
+        - "src/xianyu_hunter/web/app.py"
+      # 验证步骤
+      validation_steps:
+        - "提取错误消息中的 URL（regex: /(https?:\\/\\/[^\\s]+|\\/api\\/[^\\s'\"\\)]+)/)"
+        - "比对 API 路由注册（FastAPI app.routes 或 api_*.py 中的 @router.get/post）"
+        - "若端点不存在 → CRITICAL 问题"
+      # 反例（错误提示中引用不存在的端点）
+      antipatterns:
+        - message: "请先调用 /api/anticrawl/health/configure"
+          reason: "端点不存在（实际是 /api/anticrawl/initialize 自动配置）"
+          fix: "改为'系统将自动配置健康检查器，请稍后重试'或'请调用 /api/anticrawl/initialize'"
+        - message: "请访问 /admin/settings"
+          reason: "路由未注册（实际为 /app/config 或 /app/anticrawl）"
+          fix: "改为正确的前端路由"
+      applicable: "包含 URL/路由引用的错误提示、HTTPException detail、Toast 文案、ErrorBoundary fallback"
+      not_applicable: "纯文字描述（如'操作失败，请重试'）"
+
+  # 🆕v4.3 浏览器 Cookie 导入增强
+  # 维度 7/9/14/15/16/20 补充检查项：基于 v20 加密 + 多 Profile + 自动同步复盘
+  browser_cookie_import:
+    # === B-REVIEW-ENCRYPTION-DEGRADATION：加密升级退化策略 ===
+    # 依赖外部进程状态的加密机制无法离线解密时，选择运行时接管（CDP/IPC）
+    encryption_solutions:
+      - name: "Chrome v20 App-Bound Encryption"
+        detect_signals:
+          - "App-Bound"
+          - "IElevator COM interface"
+          - "local_key_unavailable"
+        resolution: "runtime_takeover"
+        fallback_priority: 2
+        fallback_chain:
+          - priority: 0
+            name: "v10 AES (offline decryption)"
+            applicable: "可离线解密的旧版 Chrome"
+          - priority: 1
+            name: "v20 CDP runtime takeover"
+            method: "Playwright.connect_over_cdp() → Network.getAllCookies"
+            applicable: "Chrome 136+ with v20 encryption"
+          - priority: 2
+            name: "v20 IElevator COM (deprecated)"
+            applicable: "已弃用方案，不推荐"
+      - name: "standard AES-256-GCM"
+        detect_signals:
+          - "cryptography 49.0.0+"
+        resolution: "offline_decrypt"
+        fallback_priority: 0
+
+    # === B-REVIEW-MULTI-PROFILE-DISCOVERY：多配置文件发现 ===
+    multi_profile_discovery:
+      enabled: true
+      search_paths:
+        - "${LOCALAPPDATA}\\Google\\Chrome\\User Data"
+        - "${LOCALAPPDATA}\\Microsoft\\Edge\\User Data"
+      default_profile: "Default"
+      profile_glob: "Profile*"
+
+    # === B-REVIEW-FILE-LOCK-BYPASS：SQLite immutable 文件锁绕过 ===
+    sqlite_file_lock:
+      immutable_flag: true
+      lock_timeout_ms: 5000
+      uri_format: "file:./Cookies?immutable=1"
+
+    # === B-REVIEW-SCHEDULER-ISOLATION：独立调度器隔离 ===
+    isolated_schedulers:
+      - name: "cookie_sync_scheduler"
+        max_instances: 1
+        coalesce: true
+        misfire_grace_time: 60
+        isolated_from_main: true
+
+    # === B-REVIEW-CONFIG-DRIVEN-TOGGLE：配置驱动功能开关 ===
+    config_driven_toggles:
+      - "auto_sync.enabled"
+      - "auto_sync.interval_minutes"
+      - "cdp.port"
+      - "encryption.fallback_priority"
+
+    # CDP 端口（可配置）
+    cdp_port: 9222
+    cdp_port_configurable: true
+
+    # 自动同步调度器配置
+    auto_sync:
+      enabled: false  # 默认关闭，需用户在 config.yaml 显式开启
+      interval_minutes: 30
+      scheduler_isolated: true
+
+  # 🆕v4.5 Cookie 分层管理架构修复复盘配置
+  # 维度 6/10/13/14 补充检查项：基于"5 个登录路径不更新层状态 + cookie_checker 覆盖手动失效 + MTOP Set-Cookie 不回写 JSON"复盘
+  cookie_layer_state_sync:
+    # === B-REVIEW-MULTI-WRITE-ENTRY：多源状态同步统一入口 ===
+    # 多入口写入同一份状态时必须有显式同步入口函数
+    state_sync:
+      enabled: true
+      # 同步入口函数命名模式（grep 关键标识）
+      sync_entry_patterns:
+        - "sync_cookie_layers_from_json"
+        - "sync_xxx_from_<主数据源>"
+      # 需要触发同步入口的写入路径
+      write_entry_paths:
+        - "src/xianyu_hunter/web/routes/cookie_inject.py"
+        - "src/xianyu_hunter/web/routes/browser_import.py"
+        - "src/xianyu_hunter/web/routes/unified_login.py"
+        - "src/xianyu_hunter/web/routes/browser_login.py"
+        - "src/xianyu_hunter/web/routes/api_anticrawl.py"
+      # 死代码检测模式（应避免）
+      dead_code_callbacks:
+        - "on_login_success"
+        - "on_<event>_triggered"
+        - "_on_<event>"
+      check_method: "grep -rn '<callback_name>' src/ tests/ # 无结果时必须清理或恢复调用"
+      applicable: "核心状态有 ≥ 2 个写入入口 + 状态分布在多个存储介质（JSON/SQLite/浏览器/内存）"
+      not_applicable: "单一写入入口、状态天然同步、纯计算型状态"
+      antipattern: "定义回调后无任何调用方触发（'逻辑上应该被触发'但实际是死代码）"
+
+    # === B-REVIEW-INACTIVE-STATE-PRESERVE：状态条件区分"从未初始化"与"主动失效" ===
+    # 状态补救同步条件必须用 updated_at == 0.0 而非 not valid，避免覆盖手动失效
+    state_semantics:
+      enabled: true
+      # 用于判断"从未初始化"的字段名
+      inactive_check_field: "updated_at"
+      inactive_check_value: 0.0
+      # 三种状态语义及对应处理
+      state_categories:
+        - state: "never_initialized"
+          condition: "updated_at == 0.0"
+          action: "可主动补救同步（读主数据源、读浏览器内存兜底）"
+        - state: "actively_invalidated"
+          condition: "updated_at > 0.0 and not valid"
+          action: "保留状态不覆盖（用户/系统已显式标记失效）"
+        - state: "active_valid"
+          condition: "updated_at > 0.0 and valid"
+          action: "正常返回"
+      # 反例（禁止）
+      antipattern: "if not state.valid: # 补救同步 → 会覆盖主动失效状态"
+      applicable: "有'主动失效'语义的状态机（Cookie 层状态、用户会话状态、健康检查状态）"
+      not_applicable: "纯二元状态（有效/无效）、无'主动失效'语义的标志位"
+
+    # === B-REVIEW-BROWSER-FALLBACK-SYNC：浏览器内存兜底同步 ===
+    # 状态查询端点（如 /cookies/layers）必须实现两步同步：主数据源补救 + 浏览器内存兜底
+    cookie_fallback:
+      enabled: true
+      fallback_enabled_domains:
+        - "goofish.com"
+        - ".goofish.com"
+        - "taobao.com"
+        - ".taobao.com"
+      fallback_layer_check: "updated_at == 0.0 and not state.valid"
+      fallback_write_strategy: "upsert"  # 更新+添加，而非仅 update
+      fallback_whitelist_cookies:
+        - "_m_h5_tk"
+        - "_m_h5_tk_enc"
+        - "unb"
+        - "sgcookie"
+        - "cookie2"
+        - "lg2"
+      applicable: "浏览器 Cookie 多源持久化、CDP/Playwright 抓取场景、外部进程状态回写"
+      not_applicable: "无运行时载体的纯文件存储、有强一致要求的场景"
+
+    # === B-REVIEW-UPDATE-VS-UPSERT：Update vs Upsert 语义区分 ===
+    # 持久化层方法命名必须语义清晰：update_* 只更新已存在、upsert_* 更新+添加
+    persistence_semantics:
+      enabled: true
+      update_methods:        # 只更新已存在（name 存在 → 替换 value；不存在 → 跳过）
+        - "update_cookie_values"
+        - "update_xxx_values"
+      upsert_methods:        # 更新+添加（name 存在 → 替换；不存在 → 追加新条目）
+        - "upsert_cookie_values"
+        - "upsert_xxx_values"
+      # 强制约束
+      forbidden_combined_methods:
+        - name: "用 update_* 方法但实际更新或新增"
+          example: "def update_cookies(updates): for u in updates: data.append(u)  # 应改名为 upsert"
+        - name: "用 upsert_* 但实际只更新"
+          example: "def upsert_cookies(upserts): # 实际只更新已存在的，应改名为 update"
+      # 并发安全要求
+      concurrent_safety:
+        required_lock: "self._lock (RLock)"
+        required_scope: "整个读-改-写事务"
+        applicable: "所有持久化层的写操作方法"
+      # 元数据保护
+      metadata_protection:
+        pattern: "if '<tag>' not in existing_method: data['method'] = existing_method + '+<tag>'"
+        antipattern: "data['method'] = existing_method + '+mtop_refresh'  # 重复调用会无限追加"
+      applicable: "所有持久化层的数据合并操作（Cookie/缓存/索引）"
+      not_applicable: "纯 add-only 日志、纯 replace 全量覆盖"
+
+    # === B-REVIEW-POST-WRITE-HOOK：写后钩子规范 ===
+    # 写主数据源后必须显式调用同步钩子，禁止依赖隐式回调
+    post_write_hooks:
+      enabled: true
+      # 钩子函数名列表
+      hook_functions:
+        - "sync_cookie_layers_from_json"
+      # 需要触发钩子的写入路径
+      write_entry_paths:
+        - "src/xianyu_hunter/web/routes/cookie_inject.py"
+        - "src/xianyu_hunter/web/routes/browser_import.py"
+        - "src/xianyu_hunter/web/routes/unified_login.py"
+        - "src/xianyu_hunter/web/routes/browser_login.py"
+        - "src/xianyu_hunter/web/routes/api_anticrawl.py"
+        - "src/xianyu_hunter/web/routes/api_task_links.py"
+        - "src/xianyu_hunter/web/routes/api_evaluations.py"
+      # 钩子设计约束
+      hook_constraints:
+        - "幂等：可重复调用而不会产生副作用"
+        - "失败仅记录日志不抛异常（try/except + logger.debug）"
+        - "重新读主数据源（不依赖调用方传入的列表）"
+        - "在写入成功分支（if json_written:）后调用"
+      applicable: "所有'写后需要同步派生状态'的场景（Cookie 状态机、缓存失效、索引重建、计数器重置）"
+      not_applicable: "单写入入口且无派生状态、性能敏感场景"
+
+    # === B-REVIEW-DEAD-CODE-CLEANUP：死代码检测与清理 ===
+    dead_code_cleanup:
+      enabled: true
+      check_method: "git log -p --all -S '<func_name>' | grep -rn '<func_name>' src/ tests/"
+      # 保留作为 API 接口的方法名白名单（即便未被内部调用）
+      ignore_list:
+        - "BaseModel.__init__"
+        - "ABC.__abstractmethods__"
+        - "TestCase.setUp"
+        - "TestCase.tearDown"
+        # pytest fixture
+        - "conftest.py:setup_method"
+        - "conftest.py:teardown_method"
+      # 清理策略
+      cleanup_strategies:
+        - name: "找到调用方"
+          description: "恢复调用路径（适合误删调用方导致的死代码）"
+          pattern: "git log --all -S '<func_name>'  # 找到曾经的调用方"
+        - name: "改写为入口函数"
+          description: "将死代码改写为'统一同步入口'（如 on_login_success → sync_cookie_layers_from_json）"
+          applicable: "存在'应该被调用但未调用'的语义"
+        - name: "直接删除"
+          description: "无任何依赖时直接删除"
+          applicable: "无外部依赖 + 无文档引用 + 无 git 历史调用"
+      check_frequency: "每个大版本（v4.x → v4.x+1）"
+      applicable: "所有'定义即遗忘'的函数/回调/事件订阅/类方法"
+      not_applicable: "保留作为 API 接口的方法、测试 fixture、抽象基类"
+
+  # v4.22 启动钩子完整性检查
+  startup_hook_completeness:
+    description: 依赖 container.browser/collector 的组件必须有对应 startup.py 启动钩子
+    required_components:
+      - name: batch_refresh_scheduler
+        dependency: container.collector
+        startup_function: start_batch_refresh_scheduler
+      - name: cookie_sync_scheduler
+        dependency: container.cookie_store
+        startup_function: start_cookie_sync_scheduler
+      - name: kb_refresh_scheduler
+        dependency: container.chatbot
+        startup_function: start_kb_refresh_scheduler
+      - name: session_manager
+        dependency: container.browser
+        startup_function: trigger_session_start
+    dependency_check_fields:
+      - container.browser
+      - container.collector
+    startup_order:
+      - start_scheduler_in_background
+      - start_cookie_sync_scheduler
+      - start_batch_refresh_scheduler
+      - start_kb_refresh_scheduler
+      - trigger_session_start
+
+  # v4.22 任务历史持久化三层状态保护
+  task_history_protection:
+    description: 写入 running 状态的代码路径必须有对应 finalize 调用更新为终态
+    required_states:
+      - running
+      - completed
+      - failed
+      - cancelled
+    exception_fallback_required: true
+    max_error_messages: 50
+    counter_init_query: SELECT MAX(task_id) FROM batch_refresh_history
+
+  # v4.22 业务自增计数器 DB MAX 初始化
+  counter_db_max_init:
+    description: 业务自增 ID 必须从 DB MAX 初始化，不能依赖内存初始化
+    counter_fields:
+      - task_id
+      - batch_id
+      - run_id
+    init_query_template: SELECT MAX({field}) FROM {table}
+    fallback_value: 0
+    warning_on_failure: true
+
+  # v4.22 APScheduler interval 触发器首次执行控制
+  apscheduler_interval_first_run:
+    description: interval 触发器必须明确首次执行时间
+    default_next_run_delay_seconds: 10
+    needs_immediate_execution: true
+    log_format: "调度器已启动，间隔 %d 分钟，首次执行于 %s"
+
+# --- 🆕v4.6 异步操作整体超时保护 ---
+# B-REVIEW-ASYNC-TIMEOUT：await 外部资源必须在调用层用 asyncio.wait_for 包装
+# 历史教训：page.query_selector 无 timeout 参数会无限挂起，导致评估明细标题采集卡死
+async_timeout:
+  # 各类异步操作的超时阈值（秒）
+  timeout_seconds:
+    browser_query_selector: 5      # page.query_selector 等浏览器查询
+    browser_evaluate: 10           # page.evaluate JavaScript 执行
+    browser_wait_for_selector: 10  # page.wait_for_selector
+    http_request: 30               # httpx/aiohttp 外部 HTTP 请求
+    file_io: 10                    # 异步文件读写
+    db_query: 15                   # 数据库查询
+    default: 10                    # 兜底默认值
+  # 超时后返回的 HTTP 状态码映射
+  status_code_mapping:
+    browser: 504                   # 浏览器操作超时
+    http: 504                      # HTTP 请求超时
+    db: 504                        # 数据库超时
+    default: 504                   # 默认超时状态码
+  # 最大重试次数（超时后是否重试）
+  max_retries:
+    browser: 1
+    http: 2
+    db: 1
+    default: 1
+  # 超时错误消息模板
+  error_message_template: "操作超时（{operation}，{timeout}s），请稍后重试"
+  # 适用场景
+  applicable:
+    - "await page.query_selector / page.evaluate 等浏览器调用"
+    - "await httpx/aiohttp 外部 HTTP 请求"
+    - "await 异步文件 IO"
+  # 不适用场景
+  not_applicable:
+    - "已有 tenacity 重试装饰器的方法（装饰器内已处理超时）"
+    - "CancelledError 处理（应用 suppress 包裹）"
+    - "CPU 密集型同步操作（应用 asyncio.to_thread）"
+
+# --- 🆕v4.6 数据流转完整性 5 点追踪 ---
+# B-REVIEW-DATA-FLOW-TRACE：字段为空类问题必须按 5 点逐层追踪
+# 历史教训：评估明细订单字段为空，根因是 Repo 层一刀切过滤 failed 订单
+data_flow_trace:
+  # 5 个追踪节点（按顺序逐层验证）
+  trace_nodes:
+    - name: "db_schema"
+      description: "DB schema 字段存在"
+      check_command: "grep -n '<field_name>' src/xianyu_hunter/infra/db_models.py"
+    - name: "repo_query"
+      description: "Repo 查询未过滤该字段"
+      check_command: "grep -n '<field_name>' src/xianyu_hunter/infra/repo_*.py"
+    - name: "api_response"
+      description: "API 响应注入该字段"
+      check_command: "grep -n '<field_name>' src/xianyu_hunter/web/routes/api_*.py"
+    - name: "frontend_types"
+      description: "前端 types 声明该字段"
+      check_command: "grep -n '<field_name>' frontend/src/api/types.ts"
+    - name: "render"
+      description: "render 取值正确"
+      check_command: "grep -n '<field_name>' frontend/src/pages/**/*.tsx"
+  # 必查字段（高频问题字段）
+  required_fields:
+    - "order_id"
+    - "status"
+    - "price"
+    - "title"
+    - "seller_id"
+    - "publish_time"
+  # 空值检查模式（前端兜底渲染）
+  null_value_check:
+    - "if not field: return None"
+    - "if field == '—': return None"
+    - "field or '—'"
+  # 适用场景
+  applicable:
+    - "用户反馈'字段为空'/'数据丢失'/'显示异常'"
+    - "新增字段后验证全链路传递"
+  # 不适用场景
+  not_applicable:
+    - "前端布局问题（非数据问题）"
+    - "样式渲染问题"
+    - "权限问题（用户看不到数据）"
+
+# --- 🆕v4.6 过滤逻辑场景区分 ---
+# B-REVIEW-FILTER-SCENARIO：同一查询被多场景复用时必须参数化场景标志
+# 历史教训：list_orders_by_item_ids 无条件跳过 failed 订单，导致评估明细页看不到失败订单
+filter_scenario:
+  # 场景标志字段名（默认 include_failed，可扩展 include_deleted/scope）
+  scenario_flag_field: "include_failed"
+  # 状态白名单（默认展示 succeeded + pending，跳过 failed）
+  status_whitelist:
+    - "succeeded"
+    - "pending"
+  # 多场景调用点列表（需要检查的场景函数）
+  multi_scene_callsites:
+    - function: "list_orders_by_item_ids"
+      scenes:
+        - name: "operation_judge"      # 操作判断场景
+          include_failed: false
+          description: "抢单操作判断时跳过失败订单"
+        - name: "display_history"      # 展示历史场景
+          include_failed: true
+          description: "评估明细页展示完整订单记录（含失败）"
+    - function: "list_tasks_with_last_seen"
+      scenes:
+        - name: "dashboard_overview"
+          include_deleted: false
+          description: "仪表盘概览不展示已删除任务"
+        - name: "history_query"
+          include_deleted: true
+          description: "历史查询展示全部任务"
+  # 关键约束
+  constraints:
+    - "场景标志必须默认安全（include_failed=False 默认跳过失败）"
+    - "调用方必须显式传值，不依赖默认值"
+    - "必须新增回归测试覆盖两种场景"
+  # 适用场景
+  applicable:
+    - "同一查询被'操作判断'与'展示历史'两种场景复用"
+    - "订单/任务/日志类查询"
+  # 不适用场景
+  not_applicable:
+    - "单一场景的查询（如报表统计只看成功）"
+    - "有独立 Repo 方法的查询"
+    - "权限过滤（应单独抽取）"
+
+# --- 🆕v4.6 复用既有模式原则 ---
+# B-REVIEW-REUSE-PATTERN：新增功能前必须 grep 项目内相似实现
+# 历史教训：评估明细采集超时未复用 asyncio.wait_for 模式，导致重新实现但漏掉超时保护
+reuse_pattern:
+  # 搜索关键词（新增功能前用这些关键词 grep 项目）
+  search_keywords:
+    - "asyncio.wait_for"          # 异步超时保护
+    - "hmac.compare_digest"       # 凭据安全比较
+    - "_escape_like"              # SQL LIKE 转义
+    - "_utcnow"                   # UTC 时间生成
+    - "_migrate_add_column"       # 幂等迁移
+    - "_migrate_create_index"     # 幂等索引
+    - "structuredClone"           # 前端深拷贝
+    - "lazyRetry"                 # 前端懒加载
+    - "tenacity.retry"            # 重试装饰器
+  # 相似度阈值（新增函数与既有函数语义重复时建议复用）
+  similarity_threshold: 0.7
+  # 复用优先级（从高到低）
+  reuse_priority:
+    - "项目内既有 helper 函数（如 _escape_like / _utcnow）"
+    - "项目内既有工具函数（如 _migrate_add_column）"
+    - "项目内既有模式（如 asyncio.wait_for 整体超时保护）"
+    - "标准库函数（如 hmac.compare_digest）"
+    - "第三方库函数（如 tenacity 装饰器）"
+  # 检查方法
+  check_method:
+    - "新增函数前先 grep 项目内相似实现"
+    - "找到相似实现后评估是否可直接复用"
+    - "不能直接复用时评估是否可抽取为共享 helper"
+  # 适用场景
+  applicable:
+    - "新增功能开发前"
+    - "代码审查时发现重复实现"
+  # 不适用场景
+  not_applicable:
+    - "首次实现的基础设施代码（无既有实现可复用）"
+    - "业务逻辑差异较大的场景（强行复用会导致耦合）"
+
+# --- 🆕v4.8 孤岛模块检测（与前端 v4.9 F-REVIEW-FREQ-STATS-POLLING 配合）---
+# B-REVIEW-ISLAND-MODULE：统计/计数器/采样类模块必须有业务调用方，否则视为孤岛
+# 修复模式：grep 检测调用方 + Orchestrator 入口封装 + 业务模块集成 + 前端定时刷新
+# 历史教训：FreqDisguise 模块设计完整（含 next_interval/should_insert_noise/get_stats），
+# /api/anticrawl/freq/stats 端点也正确返回 stats，但所有业务模块（collector/buyer/notifier）
+# 从未调用过任何方法，统计永远为 0
+freq_disguise_stats:
+  # === B-REVIEW-ISLAND-MODULE：孤岛模块检测 ===
+  enabled: true
+
+  # 孤岛判定信号
+  detection_signals:
+    - "模块有 _total_count / _history 等内部状态"
+    - "grep -rn '<核心方法名>' src/ frontend/src/ 业务模块调用方数量 < 2"
+    - "前端页面 useEffect 仅初始化时拉一次 API，没有 setInterval 定时刷新"
+    - "API 端点正确返回数据，但 UI 持续为 0"
+
+  # 必须有业务调用方的核心模块清单
+  core_modules:
+    - module_name: "FreqDisguise"
+      core_methods:
+        - method: "next_interval"
+          method_full: "FreqDisguise.next_interval"
+          module_path: "src/xianyu_hunter/modules/freq_disguise.py"
+        - method: "should_insert_noise"
+          method_full: "FreqDisguise.should_insert_noise"
+          module_path: "src/xianyu_hunter/modules/freq_disguise.py"
+        - method: "record_request"
+          method_full: "FreqDisguise.record_request"
+          module_path: "src/xianyu_hunter/modules/freq_disguise.py"
+        - method: "get_stats"
+          method_full: "FreqDisguise.get_stats"
+          module_path: "src/xianyu_hunter/modules/freq_disguise.py"
+      # 必须调用上述方法的业务模块（grep 目标）
+      must_be_called_by:
+        - "src/xianyu_hunter/modules/login_orchestrator.py"
+        - "src/xianyu_hunter/modules/collector/_search.py"
+        - "src/xianyu_hunter/modules/buyer.py"
+        - "src/xianyu_hunter/modules/notifier/*.py"
+      # Orchestrator 入口封装（必填）
+      orchestrator_entry:
+        orchestrator_class: "LoginOrchestrator"
+        singleton_factory: "get_orchestrator"
+        convenience_methods:
+          - "apply_freq_delay"
+          - "record_freq_request"
+      # API 端点
+      api_endpoint: "/api/anticrawl/freq/stats"
+      # 前端页面与定时刷新（与前端 F-REVIEW-FREQ-STATS-POLLING 配合）
+      frontend_page: "AntiCrawl"
+      frontend_loader: "loadFreqStats"
+      frontend_refresh_interval_ms: 10000
+
+  # 修复模式（供报告生成时引用）
+  fix_pattern:
+    step_1_detection:
+      action: "grep -rn '<核心方法名>' src/ frontend/src/"
+      purpose: "检测核心方法是否有业务调用方"
+      threshold: "调用方数量 < 2 时判定为孤岛"
+    step_2_orchestrator_entry:
+      action: "在 LoginOrchestrator 暴露 apply_xxx / record_xxx 便捷方法"
+      purpose: "统一封装'核心方法 + sleep/异常处理'，业务模块只调 Orchestrator"
+      example: |
+        # LoginOrchestrator
+        async def apply_freq_delay(self, action: ActionType) -> float:
+            delay = self._freq_disguiser.next_interval(action)
+            await asyncio.sleep(delay)
+            return delay
+
+        def record_freq_request(self, action: ActionType) -> None:
+            self._freq_disguiser.record_request(action)
+    step_3_business_integration:
+      action: "在 collector / buyer / notifier 关键路径调用 Orchestrator 便捷方法"
+      purpose: "让统计真正被累加"
+      pattern: |
+        # 业务模块
+        try:
+            get_orchestrator().record_freq_request(ActionType.LOGIN)
+        except Exception:
+            logger.warning("[Buyer] record_freq_request 失败，忽略不影响抢单")
+    step_4_frontend_polling:
+      action: "前端 useEffect 中加 setInterval 定时刷新"
+      purpose: "让 UI 反映后端持续累加的统计"
+      pattern: |
+        useEffect(() => {
+          loadAll()
+          const freqInterval = setInterval(loadFreqStats, POLL_INTERVALS.freqStats)
+          return () => clearInterval(freqInterval)
+        }, [loadAll])
+
+  # 关键约束
+  constraints:
+    - "业务模块集成时必须用 try/except 包裹 Orchestrator 调用（fail-safe 设计）"
+    - "Orchestrator 单例初始化失败不应影响调用方"
+    - "前端必须实现定时刷新才能反映业务模块持续调用的累计结果"
+    - "核心模块的 get_stats() 必须实时反映内部状态，不延迟"
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 核心方法没有业务调用方
+    - pattern: "def\\s+next_interval|def\\s+should_insert_noise|def\\s+record_request|def\\s+get_stats"
+      message: "FreqDisguise 核心方法（next_interval/should_insert_noise/record_request/get_stats）必须被业务模块调用，否则视为孤岛"
+      severity: HIGH
+      check_command: "grep -rn 'apply_freq_delay\\|record_freq_request\\|next_interval\\|should_insert_noise\\|record_request' src/xianyu_hunter/modules/ | grep -v freq_disguise.py"
+    # API 端点未被任何前端页面调用
+    - pattern: "/api/anticrawl/freq/stats"
+      message: "API 端点必须被前端页面调用 + 定时刷新，否则视为孤岛"
+      severity: HIGH
+
+  # 适用场景
+  applicable:
+    - "统计/计数器/采样类模块（FreqDisguise / MetricsCollector / Sampler）"
+    - "内部状态需持续累加的模块（频率统计、采样器、计数器、令牌桶、健康评分）"
+
+  # 不适用场景
+  not_applicable:
+    - "纯计算型工具函数（无内部状态）"
+    - "一次性使用的辅助方法"
+    - "纯前端 store 状态（无后端对应）"
+
+# --- 🆕v4.8 时间敏感场景的延迟/统计分离 ---
+# B-REVIEW-TIME-SENSITIVE-SPLIT：业务操作存在延迟容忍度差异时，核心模块必须提供
+# "延迟+统计"与"仅统计"两种入口，业务模块按场景选择，禁止一刀切
+# 历史教训：抢单（buyer.buy）是秒级竞争，若调用 apply_freq_delay(LOGIN) 会引入 5-60s 延迟
+# 导致抢单失败；原实现 _search.py 中 fast=True 完全跳过 apply_freq_delay 导致搜索统计缺失
+freq_disguise_time_sensitive:
+  # === B-REVIEW-TIME-SENSITIVE-SPLIT：时间敏感场景的延迟/统计分离 ===
+  enabled: true
+
+  # 时间敏感操作类型列表（这些操作必须提供"仅统计"入口，不 sleep）
+  time_sensitive_actions:
+    - action: "LOGIN"
+      reason: "抢单/秒杀是秒级竞争，不能引入 5-60s 延迟"
+      required_methods:
+        - "next_interval"        # 完整版（采样+截断+写 history+累加）
+        - "record_request"       # 简化版（仅采样+写 history+累加，不 sleep）
+
+  # 默认 sleep 操作类型列表（这些操作可用完整版"延迟+统计"入口）
+  default_actions:
+    - "SEARCH"
+    - "DETAIL"
+    - "BROWSE"
+    - "SCROLL"
+
+  # 核心模块 API 规范
+  core_api_requirements:
+    - method_name: "next_interval"
+      full_signature: "next_interval(self, action: ActionType) -> float"
+      responsibility: "采样 + 截断 + 写 history + 累加 _total_count"
+      used_by: "LoginOrchestrator.apply_freq_delay"
+    - method_name: "record_request"
+      full_signature: "record_request(self, action: ActionType) -> None"
+      responsibility: "复用 next_interval 逻辑（不重复实现），仅跳过 sleep"
+      used_by: "LoginOrchestrator.record_freq_request"
+
+  # Orchestrator 便捷方法规范
+  orchestrator_methods:
+    - method_name: "apply_freq_delay"
+      full_signature: "async def apply_freq_delay(self, action: ActionType) -> float"
+      return_type: "float"  # delay_sec，便于调用方二次处理
+      used_by:
+        - "collector._search（fast=False）"
+        - "collector._detail"
+    - method_name: "record_freq_request"
+      full_signature: "def record_freq_request(self, action: ActionType) -> None"
+      return_type: "None"  # 无副作用
+      used_by:
+        - "buyer.buy（抢单场景）"
+        - "collector._search（fast=True）"
+
+  # 业务模块调用模式
+  business_call_patterns:
+    - scenario: "抢单场景（时间敏感）"
+      pattern: |
+        try:
+            get_orchestrator().record_freq_request(ActionType.LOGIN)
+        except Exception:
+            logger.warning("[Buyer] record_freq_request 失败，忽略不影响抢单")
+    - scenario: "采集场景（fast=True）"
+      pattern: |
+        from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+        from xianyu_hunter.modules.freq_disguise import ActionType
+        if not fast:
+            await get_orchestrator().apply_freq_delay(ActionType.SEARCH)
+        else:
+            get_orchestrator().record_freq_request(ActionType.SEARCH)
+    - scenario: "采集场景（fast=False）"
+      pattern: |
+        from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+        from xianyu_hunter.modules.freq_disguise import ActionType
+        await get_orchestrator().apply_freq_delay(ActionType.SEARCH)
+
+  # 关键约束
+  constraints:
+    - "record_request 必须复用 next_interval 的采样+截断+累加逻辑，禁止重复实现（消除代码重复）"
+    - "apply_freq_delay 返回 float（delay_sec），record_freq_request 返回 None，禁止两个方法都返回被忽略的标志位"
+    - "fast 模式必须保持统计连续：快速模式仅跳过 sleep，禁止完全跳过核心模块"
+    - "try/except 包裹 Orchestrator 调用：Orchestrator 初始化失败不应阻塞业务主流程"
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 业务模块完全跳过核心模块（fast 模式一刀切）
+    - pattern: "if\\s+fast\\s*:\\s*return\\s*$|if\\s+not\\s+fast\\s*:\\s*$"
+      message: "fast 模式不能一刀切跳过核心模块，必须用 record_freq_request 仅记录统计"
+      severity: HIGH
+    # 抢单场景调用 apply_freq_delay（应改为 record_freq_request）
+    - pattern: "buyer.*apply_freq_delay|apply_freq_delay.*ActionType\\.LOGIN"
+      message: "抢单场景调用 apply_freq_delay 会引入 5-60s 延迟导致抢单失败，应改用 record_freq_request"
+      severity: CRITICAL
+
+  # 适用场景
+  applicable:
+    - "所有业务操作存在延迟容忍度差异的场景（抢单 vs 采集、实时通知 vs 批量推送、即时反馈 vs 后台同步）"
+
+  # 不适用场景
+  not_applicable:
+    - "业务操作延迟容忍度一致的场景（全部秒级或全部分钟级）"
+
+# --- 🆕v4.8 辅助功能异常日志级别 ---
+# B-REVIEW-AUX-LOG-LEVEL：辅助功能调用失败时必须用 logger.warning 记录
+# 禁止 logger.debug（默认不输出）和 logger.error（过度严重）
+# 历史教训：buyer.py 中 record_freq_request 失败时用 logger.debug 记录，
+# 导致默认日志级别下完全看不到失败信息
+log_level_strategy:
+  # === B-REVIEW-AUX-LOG-LEVEL：辅助功能异常日志级别 ===
+  enabled: true
+
+  # 辅助功能调用场景（这些场景下异常处理必须用 logger.warning）
+  auxiliary_log_level: "warning"
+
+  # 可恢复异常类型（用 logger.warning）
+  recoverable_exceptions:
+    - "辅助功能调用失败（统计、装饰、日志、监控、采样）"
+    - "配置项缺失或格式错误"
+    - "可选资源不可用"
+    - "降级方案触发"
+    - "重试继续"
+
+  # 需人工介入的异常类型（用 logger.error）
+  critical_exceptions:
+    - "主流程失败"
+    - "数据丢失"
+    - "安全事件"
+    - "数据库不可用"
+    - "认证失败"
+
+  # 业务关键路径（用 logger.info）
+  business_critical_paths:
+    - "抢单触发"
+    - "采集完成"
+    - "推送发送"
+    - "会话启动/停止"
+    - "协调器初始化"
+
+  # 调试信息（用 logger.debug，仅开发环境可见）
+  debug_use_cases:
+    - "中间状态输出"
+    - "循环内的临时变量"
+    - "可选日志开关的内部状态"
+
+  # 日志级别映射标准模式
+  log_level_patterns:
+    good_example: |
+      try:
+          get_orchestrator().record_freq_request(ActionType.LOGIN)
+      except Exception:  # noqa: BLE001
+          logger.warning("[Buyer] record_freq_request 失败，忽略不影响抢单")
+    bad_debug_example: |
+      try:
+          ...
+      except Exception:
+          logger.debug("record_freq_request 失败")  # 默认级别看不到！
+    bad_error_example: |
+      try:
+          ...
+      except Exception:
+          logger.error("record_freq_request 失败")  # 会触发告警，但功能失败不影响主流程
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 辅助功能失败用 logger.debug 记录
+    - pattern: "try:[\\s\\S]*?except[^:]*:[\\s\\S]*?logger\\.debug\\([\\s\\S]*?(?:record_freq|record_request|apply_freq|orchestrator)"
+      message: "辅助功能失败用 logger.debug 记录会导致默认日志级别下看不到，应用 logger.warning"
+      severity: MEDIUM
+    # 辅助功能失败用 logger.error 记录（会触发告警但功能失败不影响主流程）
+    - pattern: "try:[\\s\\S]*?except[^:]*:[\\s\\S]*?logger\\.error\\([\\s\\S]*?(?:record_freq|record_request|apply_freq|orchestrator)"
+      message: "辅助功能失败用 logger.error 会触发告警（功能失败不影响主流程），应用 logger.warning"
+      severity: MEDIUM
+
+  # 关键约束
+  constraints:
+    - "logger.warning 用于可恢复异常 / 降级 / 重试"
+    - "logger.error 用于需人工介入的失败"
+    - "logger.info 用于业务关键路径"
+    - "logger.debug 用于调试信息（默认 INFO 级别不输出）"
+
+  # 适用场景
+  applicable:
+    - "所有辅助功能调用（统计、装饰、日志、监控、采样）的异常处理"
+
+  # 不适用场景
+  not_applicable:
+    - "主流程失败的异常处理（应用 logger.error）"
+    - "调试期主动记录上下文（应用 logger.debug）"
+
+# --- 🆕v4.8 Orchestrator 便捷方法封装 ---
+# B-REVIEW-ORCHESTRATOR-CONVENIENCE：多业务模块依赖同一核心模块时，
+# 必须在 Orchestrator 层提供便捷方法封装，业务模块通过 Orchestrator 集成而非直接调用核心模块
+# 历史教训：collector 和 buyer 都需要调用 FreqDisguise 但各自直接 import，
+# 自己处理 sleep 和异常，导致异常/日志/编排逻辑重复
+orchestrator_pattern:
+  # === B-REVIEW-ORCHESTRATOR-CONVENIENCE：Orchestrator 便捷方法封装 ===
+  enabled: true
+
+  # Orchestrator 单例工厂名称（项目惯例：get_orchestrator）
+  orchestrator_singleton_name: "get_orchestrator"
+
+  # 便捷方法命名前缀
+  convenience_method_prefix:
+    - "apply_"   # 应用副作用（async def，含 sleep 等异步操作）
+    - "record_"  # 仅记录（同步，def，无副作用）
+
+  # 核心模块在 Orchestrator 中的别名映射
+  core_module_aliases:
+    FreqDisguise: "_freq_disguiser"
+
+  # Orchestrator 设计要求
+  requirements:
+    singleton:
+      enabled: true
+      reason: "确保全局状态一致（如 _freq_disguiser 单一实例累加统计）"
+      pattern: "_instance = None\\s+def get_orchestrator\\(\\)\\s*->\\s*['\\\"]LoginOrchestrator['\\\"]"
+    async_safe:
+      enabled: true
+      reason: "便捷方法应支持 async def（核心逻辑是同步的则内部用 asyncio.sleep 包装）"
+      pattern: "async def apply_\\w+"
+    no_direct_business_calls:
+      enabled: true
+      reason: "业务模块只调 Orchestrator 方法，不直接 import 核心模块"
+      pattern: "from\\s+xianyu_hunter\\.modules\\.freq_disguise\\s+import"
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 业务模块直接 import 核心模块（应通过 Orchestrator）
+    - pattern: "from\\s+xianyu_hunter\\.modules\\.freq_disguise\\s+import\\s+(?!ActionType|FreqDisguise)"
+      message: "业务模块直接 import 核心模块（freq_disguise），应通过 LoginOrchestrator.get_orchestrator() 集成"
+      severity: MEDIUM
+    # 业务模块直接调用 next_interval（应通过 Orchestrator）
+    - pattern: "\\.next_interval\\("
+      message: "业务模块直接调用 next_interval，应通过 get_orchestrator().apply_freq_delay() 封装"
+      severity: MEDIUM
+
+  # 关键约束
+  constraints:
+    - "Orchestrator 必须是单例（如 get_orchestrator() 工厂函数），确保全局状态一致"
+    - "便捷方法命名应明确业务语义（如 apply_freq_delay 表达'应用延迟'），不是 do_thing 之类的泛化命名"
+    - "核心模块的纯逻辑方法应在 Orchestrator 中也暴露（如 next_interval 与 apply_freq_delay 并存）"
+    - "便捷方法应支持异步（async def），如果核心逻辑是同步的则内部用 asyncio.sleep 包装"
+    - "异常处理集中在 Orchestrator 内部，转换为业务可理解的错误"
+
+  # 适用场景
+  applicable:
+    - "多业务模块依赖同一核心模块、需要统一异常/日志/编排处理的场景"
+
+  # 不适用场景
+  not_applicable:
+    - "单一业务模块使用核心模块（直接调用即可）"
+    - "核心模块本身已有业务友好 API"
+
+# --- 🆕v4.11 配置项边界值校验 ---
+# B-REVIEW-CONFIG-VALIDATION：数值型配置项必须有边界值校验
+# 历史教训：ai_suggestion_interval=0 未校验直接用于 asyncio.sleep(interval/2) 导致 ZeroDivisionError
+config_validation:
+  # 每条规则定义字段名、约束条件、默认值
+  rules:
+    - field: "ai_suggestion_interval"
+      min: 1
+      max: 3600
+      non_zero: true
+      default: 60
+    - field: "max_consecutive_errors"
+      min: 1
+      max: 100
+      non_zero: true
+      default: 10
+    - field: "page_size"
+      min: 1
+      max: 100
+      non_zero: true
+      default: 20
+    - field: "retry_count"
+      min: 0
+      max: 10
+      non_zero: false
+      default: 3
+  # 无效值处理策略
+  on_invalid: "warn_and_fallback"  # 可选 "raise"
+  # 适用场景
+  applicable:
+    - "数值型配置项（间隔时间/阈值/并发数/超时/重试次数）"
+    - "字符串枚举值（用 regex 校验）"
+  # 不适用场景
+  not_applicable:
+    - "布尔型配置项"
+    - "纯展示型字符串"
+
+# --- 🆕v4.11 DB 迁移失败处理 ---
+# B-REVIEW-MIGRATION-FAILURE-HANDLING：_migrate_* 函数失败必须明确策略
+# 历史教训：_migrate_create_index 失败被 except:pass 吞掉，索引长期缺失导致查询慢 10 倍
+migration_failure_strategy:
+  # 关键迁移函数名列表（失败必须 raise RuntimeError 中断启动）
+  critical_migrations:
+    - "_migrate_add_column"
+    - "_migrate_make_column_nullable"
+    - "_migrate_rename_column"
+  # 非关键迁移函数名列表（失败 warning + 继续启动）
+  non_critical_migrations:
+    - "_migrate_create_index"
+    - "_migrate_backfill_data"
+    - "_migrate_cleanup_orphans"
+  # 默认策略（未在上述列表中的迁移函数）
+  default_strategy: "warn"  # 可选 "raise"
+  # 适用场景
+  applicable:
+    - "所有 _migrate_* 函数"
+    - "数据库 schema 变更"
+  # 不适用场景
+  not_applicable:
+    - "迁移幂等性检查（已通过 duplicate column 等错误识别处理）"
+    - "测试代码中的迁移"
+
+# --- 🆕v4.11 状态码语义精细化 ---
+# B-REVIEW-STATUS-CODE-SEMANTICS：HTTP 状态码按语义精细化区分
+# 历史教训：Cookie 过期、Token 过期、未登录全部映射为 401，前端无法区分应跳转登录还是刷新 Token
+status_code_semantics:
+  # 错误场景到状态码的映射
+  mapping:
+    not_logged_in: 401           # 完全未登录
+    permission_denied: 403       # 已登录但无权限
+    cookie_expired: 440          # Cookie 过期，需重新登录
+    token_expired: 441           # 临时 Token 过期，需刷新
+    gateway_timeout: 504         # 网关超时
+    rate_limited: 429            # 限流
+  # 状态码到前端动作的映射
+  frontend_actions:
+    401: "redirect_login"        # 跳转登录页
+    403: "show_permission_error" # 显示权限不足
+    440: "redirect_relogin"      # 跳转重新登录页
+    441: "refresh_token"         # 静默刷新 Token 后重试
+    504: "retry_later"           # 提示稍后重试
+    429: "retry_after_backoff"   # 退避后重试
+  # 适用场景
+  applicable:
+    - "所有认证相关 API（登录/Cookie 校验/Token 刷新/权限检查）"
+    - "SSE error 事件的状态码字段"
+  # 不适用场景
+  not_applicable:
+    - "业务错误（404/409/422）"
+    - "纯内部 API"
+    - "健康检查端点"
+
+# --- 🆕v4.11 LLM 响应防御性三层级解析 ---
+# B-REVIEW-LLM-DEFENSIVE-PARSING：LLM API 响应必须三层级防御性解析
+# 历史教训：_call_ai_suggestion 直接链式访问 response["choices"][0]["message"]["content"]
+#           LLM 服务异常返回 {"error":"..."} 导致 KeyError 未捕获
+llm_defensive_parsing:
+  # 必须校验的层级
+  required_layers:
+    - "choices"
+    - "message"
+    - "content"
+  # 空 content 是否视为失败
+  allow_empty_content: false
+  # 失败兜底策略
+  fallback_strategy: "return_none"  # 可选 "raise"
+  # 支持的 API 类型
+  supported_apis:
+    - "openai_compatible"
+    - "anthropic"
+    - "ollama"
+    - "sentence-transformers"
+  # 适用场景
+  applicable:
+    - "所有调用 LLM API 的代码"
+    - "流式响应（每个 chunk 也需校验）"
+  # 不适用场景
+  not_applicable:
+    - "本地模型直接返回对象"
+    - "Embedding API 响应"
+    - "Mock 测试响应"
+
+# --- 🆕v4.11 调度器状态与 DB 同步 ---
+# B-REVIEW-SCHEDULER-DB-SYNC：调度器内存状态变更必须同步 DB
+# 历史教训：调度器连续失败触发 pause_event.clear() 自动暂停，但未调 update_task_status
+#           API 仍返回 running，前端显示"运行中"但任务实际已停止
+scheduler_db_sync:
+  # 必须同步 DB 的状态转换列表
+  required_transitions:
+    - "running→paused"
+    - "paused→running"
+    - "running→stopped"
+    - "running→error_paused"
+    - "paused→stopped"
+  # 同步失败处理策略
+  sync_failure_strategy: "warn"  # 可选 "raise"
+  # 状态字段名
+  status_field: "status"
+  # 适用场景
+  applicable:
+    - "所有调度器状态变更（auto_pause/manual_pause/resume/stop/unregister）"
+    - "任务状态机转换"
+  # 不适用场景
+  not_applicable:
+    - "纯计算状态（如 consecutive_errors 计数器）"
+    - "临时状态（如 pause_event 内部信号）"
+    - "fire-and-forget 任务"
+
+# --- 🆕v4.11 后台任务健康监控 ---
+# B-REVIEW-BACKGROUND-TASK-MONITOR：后台 asyncio.Task 必须用轮询监控
+# 历史教训：startup._scheduler_loop 用 await stop_event.wait() 等待关闭信号
+#           EventBus 任务异常退出时主循环无感知，事件推送静默失效 30 分钟
+background_task_monitor:
+  # 轮询间隔（秒）
+  poll_interval_seconds: 10
+  # 必须监控的后台任务名列表
+  monitored_tasks:
+    - "event_bus"
+    - "scheduler_loop"
+    - "health_check"
+    - "cookie_sync"
+    - "kb_refresh"
+  # 任务退出时的处理策略
+  on_task_exit: "log_and_break"  # 可选 "restart"
+  # restart 策略下的最大重启次数
+  restart_max_attempts: 3
+  # 适用场景
+  applicable:
+    - "所有后台 asyncio.Task（EventBus/Scheduler/Health Checker/Cookie Sync/KB Refresh）"
+    - "需要在主循环中感知子任务退出的场景"
+  # 不适用场景
+  not_applicable:
+    - "fire-and-forget 任务"
+    - "一次性任务（如启动初始化）"
+    - "有 done_callback 处理的任务"
+
+# --- 🆕v4.11 文本数值提取模式 ---
+# B-REVIEW-NUMERIC-EXTRACTION：多数字文本必须用 re.findall 取 numbers[-1]
+# 历史教训：_extract_actual_price 用 re.search 取第一个数字
+#           订单页文本为"原价 1000 现价 500"时误取 1000，导致价格校验失败
+numeric_extraction_strategy:
+  # 默认提取策略
+  default_strategy: "last"  # 可选 "first"/"max"/"min"
+  # 场景到策略的映射
+  scenarios:
+    price_extraction: "last"        # 价格提取取最后（实际成交价）
+    quantity_extraction: "first"    # 数量提取取第一（原数量）
+    max_value_extraction: "max"     # 最大值提取
+    min_value_extraction: "min"     # 最小值提取
+  # 正则模式
+  regex_pattern: "\\d+(?:\\.\\d+)?"
+  # 适用场景
+  applicable:
+    - "从自由文本提取数值（价格/数量/评分/版本号）"
+    - "多数字场景（原价 X 现价 Y、最小 X 最大 Y）"
+  # 不适用场景
+  not_applicable:
+    - "单一数字文本（如纯数字字符串）"
+    - "结构化数据（JSON 字段直接取值）"
+    - "有明确位置的文本（应用分组提取）"
+
+# --- 🆕v4.12 DOM 多层兜底链模式 ---
+# B-REVIEW-DOM-FALLBACK-CHAIN：SPA 数据提取必须 DOM → og:meta → document.title 多层兜底
+# 与 v4.3 B-REVIEW-FALLBACK-CHAIN（多方案降级）语义不同，本节点专指 DOM 提取兜底
+# 历史教训：官方采集仅用 .item-title 单一选择器，闲鱼页面改版后选择器失效直接返回 None
+#           下游字段覆盖逻辑被 None 覆盖历史有效值，最终用户看到"采集失败"
+dom_fallback_chain:
+  # 兜底层级列表（按语义忠实度递减排序）
+  strategies:
+    - "dom"              # 主路径：DOM 选择器（最忠实）
+    - "og_meta"          # 第二层：og:meta 标签
+    - "document_title"   # 最终兜底：document.title（保证非空）
+  # 主路径 DOM 选择器集合（业务场景为 key）
+  dom_selectors:
+    title: ".item-title"
+    price: ".item-price"
+    seller: ".seller-name"
+    image: ".item-image"
+  # og:meta 选择器集合
+  meta_selectors:
+    title: "meta[property='og:title']"
+    image: "meta[property='og:image']"
+    description: "meta[property='og:description']"
+  # 最终兜底函数名
+  final_fallback: "page.title"
+  # 全部失败时是否触发 dump（与 failure_dump 联动）
+  dump_on_all_fail: true
+  # 兜底成功时是否标注来源
+  tag_source: true
+  # 适用场景
+  applicable:
+    - "SPA 数据采集（标题/价格/卖家/图片）"
+    - "动态渲染页面的关键字段提取"
+    - "可能因站点改版失效的 DOM 选择器"
+  # 不适用场景
+  not_applicable:
+    - "静态 JSON API（结构稳定，单一解析即可）"
+    - "写入操作（无兜底语义）"
+    - "用户输入校验"
+
+# --- 🆕v4.12 失败诊断 dump 机制 ---
+# B-REVIEW-FAILURE-DUMP：关键选择器失败必须 dump page.content() 到 logs/ 目录
+# dump 不得阻塞主流程（异步执行或 fire-and-forget）
+# 历史教训：官方采集失败时仅日志记录"选择器失效"，无法定位是页面改版还是 Cookie 失效
+failure_dump:
+  # 总开关
+  enabled: true
+  # 输出目录（默认 logs/）
+  dump_dir: "logs"
+  # 文件名模板（支持 {scenario}/{id}/{timestamp} 占位符）
+  filename_pattern: "{scenario}_{id}_{timestamp}.html"
+  # 单文件大小上限（MB）
+  max_file_size_mb: 10
+  # 每场景保留文件数上限（超出按时间清理最旧）
+  max_files_per_scenario: 50
+  # 启用 dump 的场景列表
+  scenarios:
+    - "official_collect"
+    - "seller_fetch"
+    - "order_fetch"
+    - "login_flow"
+  # 需脱敏的正则列表（dump 前替换为 [REDACTED]）
+  sensitive_patterns:
+    - "cookie17=([^;\\s]+)"
+    - "_m_h5_tk=([^;\\s]+)"
+    - "unb=([^;\\s]+)"
+    - "Authorization:\\s*Bearer\\s+([^\\s]+)"
+  # dump 写入方式（async_write_text / create_task）
+  write_mode: "create_task"
+  # dump 失败时是否记录日志
+  log_on_dump_failure: true
+  # 适用场景
+  applicable:
+    - "所有 Playwright/浏览器自动化采集"
+    - "DOM 选择器失败时"
+    - "关键路径异常时"
+  # 不适用场景
+  not_applicable:
+    - "纯 API 调用（已有完整请求/响应日志）"
+    - "本地纯函数（无外部状态）"
+    - "单测/集成测试场景"
+
+# --- 🆕v4.12 关键路径计时埋点 ---
+# B-REVIEW-TIMING-INSTRUMENTATION：page.goto/wait_for_selector/HTTP/DB 必须用 perf_counter 计时
+# 超阈值告警，禁止仅用 logger.info 文本日志（难以聚合分析）
+# 历史教训：官方采集偶发慢，仅 logger.info 无结构化 timing，无法区分 goto 慢还是 wait_for_selector 慢
+timing_instrumentation:
+  # 按操作类型配置阈值（毫秒）
+  thresholds_ms:
+    goto: 5000              # page.goto 阈值
+    wait_for_selector: 3000 # wait_for_selector 阈值
+    http_request: 2000      # HTTP 外部调用阈值
+    db_query: 1000          # DB 查询阈值
+    browser_launch: 10000   # 浏览器启动阈值
+  # 正常日志级别
+  log_level_normal: "DEBUG"
+  # 超阈值日志级别
+  log_level_slow: "WARNING"
+  # 启用计时的场景列表
+  enabled_scenarios:
+    - "official_collect"
+    - "seller_fetch"
+    - "order_fetch"
+    - "api_endpoint"
+  # 计时函数名（默认 time.perf_counter，精度纳秒级）
+  timer_function: "time.perf_counter"
+  # 是否在 try/finally 中包裹（确保异常路径也记录耗时）
+  use_try_finally: true
+  # 适用场景
+  applicable:
+    - "所有 page.goto/wait_for_selector 操作"
+    - "HTTP 外部调用"
+    - "DB 查询"
+    - "关键 async 任务链"
+  # 不适用场景
+  not_applicable:
+    - "单测/集成测试（无需生产级埋点）"
+    - "纯内存计算（耗时极短）"
+    - "本地开发调试（临时 print 即可）"
+
+# --- 🆕v4.12 凭证前置校验与并行采集 ---
+# B-REVIEW-PRECHECK-AND-PARALLEL：高开销操作前必须校验 Cookie 凭证有效性
+# 独立 IO 任务必须用 asyncio.gather(*tasks, return_exceptions=True) 并行执行
+# 历史教训：官方采集启动 Chromium 后才发现 _m_h5_tk 过期，浪费 3-5 秒浏览器启动时间
+precheck_parallel:
+  # 凭证前置校验总开关
+  credential_check_enabled: true
+  # 身份 Cookie 名称白名单（这些 Cookie 过期则前置返回 440）
+  identity_cookies_whitelist:
+    - "_m_h5_tk"           # 闲鱼会话 token
+    - "cookie17"           # 身份 Cookie
+    - "unb"                # 用户唯一标识
+  # 是否跳过 session cookie（expires=-1，无法预判）
+  skip_session_cookies: true
+  # 过期时返回状态码（与前端 frontend_error_contract.status_message_map 对齐）
+  expiry_status_code: 440
+  # 并行 gather 是否传 return_exceptions（默认 true，独立任务互不影响）
+  parallel_gather_return_exceptions: true
+  # 最大并发数（0 表示不限制）
+  parallel_gather_max_concurrency: 5
+  # 启用并行的场景列表
+  parallel_scenarios:
+    - "official_collect"   # 多商品并行采集
+    - "seller_fetch"       # 多卖家并行查询
+    - "order_fetch"        # 多订单并行拉取
+  # 凭证校验失败时是否清理失效 Cookie
+  cleanup_expired_cookies: true
+  # 适用场景
+  applicable:
+    - "所有需要 Cookie 凭证的外部采集"
+    - "独立 IO 任务并行（多商品/多卖家/多 API 调用）"
+    - "浏览器自动化前置校验"
+  # 不适用场景
+  not_applicable:
+    - "有依赖关系的串行任务（B 依赖 A 的结果）"
+    - "纯本地计算"
+    - "Cookie 仅用于读操作且无成本（如读本地 JSON）"
+
+# --- 🆕v4.8 状态标志前置检查 ---
+# B-REVIEW-STATE-FLAG-PRECHECK：检测到异常状态后设置标志，后续操作入口必须检查标志提前返回
+# 历史教训：_detail.py 检测到 Cookie 失效后设置 last_session_invalid=True，但 detail() 未检查，导致 300+ WARNING 刷屏
+state_flag_precheck:
+  # 检查总开关
+  enabled: true
+  # 需要检查的状态标志名列表（grep 这些标志的设置点 → 检查操作入口是否有前置检查）
+  state_flag_names:
+    - "last_session_invalid"
+    - "degraded_mode"
+    - "rate_limited"
+    - "embedding_unavailable"
+  # 是否要求有重置机制（grep flag = False 确认重置点）
+  require_reset_mechanism: true
+  # 重置点检查方法
+  reset_check_method: "grep '<flag_name> = False' 确认至少 1 处重置点"
+  # 前置检查模式
+  precheck_pattern: "getattr(self, '<flag_name>', False)"
+  # 提前返回值
+  early_return_value: "None"
+  # 日志级别（避免刷屏）
+  log_level: "DEBUG"
+  # 日志占位符风格
+  log_placeholder_style: "{}"
+  # 适用场景
+  applicable:
+    - "会话失效（Cookie 过期、session 失效）"
+    - "服务降级（外部依赖不可用）"
+    - "限流（API 限速）"
+    - "依赖不可用（如 embedding 服务离线）"
+  # 不适用场景
+  not_applicable:
+    - "一次性错误（单条请求失败，不需全局标志）"
+    - "无恢复机制的场景（标志永远为 True 等于永久禁用）"
+    - "高频变化的状态（每次检查都需实时查询，缓存标志会失效）"
+
+# --- 🆕v4.8 日志级别动态降级 ---
+# B-REVIEW-LOG-DOWNGRADE-STABILITY：已知业务场景的错误日志可降级，判断字符串提取为模块级常量
+# 历史教训：exception_handler.py 用 "Failed to collect item detail" in str(exc.detail) 判断，字符串未提取为常量
+log_downgrade:
+  # 检查总开关
+  enabled: true
+  # 降级规则列表（每条含匹配模式、目标级别、detail 标识、文案来源注释）
+  downgrade_rules:
+    - match_status_code: 502
+      target_level: "INFO"
+      detail_marker: "Failed to collect item detail"
+      source_comment: "# 文案来源：collection_service.py 的 CollectionError(502, ...)"
+      constant_name: "_COOKIE_EXPIRED_DETAIL_MARKER"
+    - match_status_code: 503
+      target_level: "INFO"
+      detail_marker: "rate_limited"
+      source_comment: "# 文案来源：api_anticrawl.py 的限流响应"
+      constant_name: "_RATE_LIMITED_MARKER"
+  # 默认日志级别（未命中降级规则的 500+ 错误）
+  default_level: "WARNING"
+  # 是否允许降级安全相关错误
+  allow_downgrade_security_errors: false
+  # 动态日志方法
+  dynamic_log_method: "logger.log(log_level, ...)"
+  # 日志占位符风格
+  log_placeholder_style: "{}"
+  # 适用场景
+  applicable:
+    - "已知业务异常日志治理（Cookie 失效 502、重试中 WARNING）"
+    - "外部依赖偶发失败（网络超时、API 限流）"
+  # 不适用场景
+  not_applicable:
+    - "未知错误（无法预定义判断条件）"
+    - "安全相关错误（不应降级，必须保持 WARNING/ERROR）"
+    - "首次出现的错误（需要保持高级别以便发现）"
+    - "需要用户介入的错误（保持 WARNING 以便告警）"
+
+# --- 🆕v4.8 修改后验证流程 ---
+# B-REVIEW-EDIT-VERIFY：使用 Edit 工具修改文件后，必须立即用 Grep 或 Read 验证修改是否真正生效
+# 历史教训：Edit 工具返回"修改成功"但实际修改未保存，导致评审了未修改的代码
+edit_verify:
+  # 检查总开关
+  enabled: true
+  # 验证方法（Edit 后执行的验证步骤）
+  verify_steps:
+    - step: "Edit 返回成功"
+      action: "不信任返回结果"
+    - step: "Grep 搜索新增的标志性代码"
+      action: "grep 新增的变量名/函数名/常量名"
+    - step: "若 Grep 无匹配"
+      action: "重新执行 Edit，检查 old_string 是否唯一匹配"
+    - step: "若 Grep 有匹配"
+      action: "确认修改生效，继续下一步"
+  # 验证标志要求
+  verify_marker_requirement: "新增代码中的唯一标识符（变量名、函数名、常量名）"
+  # 批量修改时每个文件都需独立验证
+  require_per_file_verify: true
+  # 适用场景
+  applicable:
+    - "所有使用 Edit 工具的修改场景"
+    - "尤其是批量修改多个文件时"
+  # 不适用场景
+  not_applicable:
+    - "Read/Write 工具（这些工具本身有返回验证）"
+
+# --- 🆕v4.13 统计分类互斥性 ---
+# B-REVIEW-STATS-EXCLUSIVE：统计接口返回的分类计数必须互斥，total = sum(各分类计数)
+# 历史教训：评估明细页面优化中，前端过滤需与后端统计分类逻辑对齐
+# api_evaluations.py 的 dist 统计中 insufficient(score==null) 与 auto/pass/fail(有评分) 互斥
+# 原实现未校验 total = 各分类之和，导致统计数量与实际不符
+stats_exclusive:
+  # === B-REVIEW-STATS-EXCLUSIVE：统计分类互斥性 ===
+  enabled: true
+
+  # 互斥分类组定义（每组内的分类必须互斥，total = sum(各分类计数)）
+  exclusive_groups:
+    # 评估分布统计（api_evaluations.py 的 dist）
+    - context: "evaluation_distribution"
+      api_endpoint: "/api/evaluations/dist"
+      categories:
+        - name: "insufficient"
+          condition: "score == null"
+          description: "未评分（评分不足）"
+        - name: "auto"
+          condition: "score is not null and score >= auto_threshold"
+          description: "自动通过"
+        - name: "pass"
+          condition: "score is not null and pass_threshold <= score < auto_threshold"
+          description: "通过"
+        - name: "fail"
+          condition: "score is not null and score < pass_threshold"
+          description: "失败"
+      total_check: "total = insufficient_count + auto + pass + fail"
+      # 互斥约束：score==null 与 score-based 分类互斥
+      mutual_exclusion_constraint: "score==null 的记录只能计入 insufficient，有 score 的记录只能计入 auto/pass/fail 之一"
+
+  # 检查方法
+  check_method:
+    - "grep 后端统计代码，确认分类逻辑互斥（无一个记录同时计入两个分类）"
+    - "验证 total 是否等于各分类计数之和"
+    - "确认 insufficient(score==null) 与 score-based 分类(auto/pass/fail) 互斥"
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 统计接口未校验 total = sum(各分类)
+    - pattern: "return\\s*\\{.*total.*:.*\\}"
+      message: "统计接口返回的 total 必须等于各分类计数之和，应增加 total == sum(categories) 断言"
+      severity: HIGH
+    # score==null 与 score-based 分类未互斥
+    - pattern: "if\\s+score\\s*==\\s*None.*if\\s+score\\s*[<>]=?"
+      message: "score==null 与 score-based 分类必须互斥，禁止一个记录同时计入两个分类"
+      severity: HIGH
+
+  # 关键约束
+  constraints:
+    - "分类计数必须互斥：一个记录只能计入一个分类"
+    - "total 必须等于各分类计数之和：total = sum(categories)"
+    - "score==null 的记录（insufficient）与有 score 的记录（auto/pass/fail）互斥"
+    - "新增分类时必须更新互斥约束和 total 检查"
+
+  # 适用场景
+  applicable:
+    - "评分分布统计（evaluation distribution）"
+    - "状态分组统计（status group stats）"
+    - "任何返回分类计数的 API（如 /api/evaluations/dist）"
+    - "Dashboard 上的分类计数组件"
+
+  # 不适用场景
+  not_applicable:
+    - "非互斥分类（如标签统计，一个记录可属于多个分类）"
+    - "纯计数接口（无分类，仅返回 total）"
+    - "时间序列统计（按时间维度分组，非分类计数）"
+
+# --- 🆕v4.14 临时 DEBUG 代码清理 ---
+# B-REVIEW-DEBUG-CODE-CLEANUP：问题修复后必须清理临时 DEBUG 代码
+# 历史教训：登录流程性能优化 + Cookie 层同步测试中残留了 print(import pdb) 等临时代码
+debug_code_cleanup:
+  # === B-REVIEW-DEBUG-CODE-CLEANUP：临时 DEBUG 代码清理 ===
+  enabled: true
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # Python print 调试输出（生产代码禁止 print）
+    - pattern: "^\\s*print\\([^)]*\\)"
+      message: "生产代码禁止 print 调试输出，应使用 logger.debug/info 替代"
+      severity: MEDIUM
+    # Python import pdb / ipdb / pudb 调试器导入
+    - pattern: "^\\s*import\\s+(pdb|ipdb|pudb)"
+      message: "生产代码禁止 import pdb/ipdb/pudb 调试器，问题修复后必须移除"
+      severity: HIGH
+    # 临时日志文件写入
+    - pattern: "(with open\\([^)]*['\"]debug['\"]|open\\(['\"].*debug_log)"
+      message: "生产代码禁止临时日志文件写入，问题修复后必须移除"
+      severity: MEDIUM
+    # 临时环境变量 DEBUG 标志
+    - pattern: "os\\.environ\\.get\\(['\"]DEBUG['\"]\\)"
+      message: "生产代码禁止临时环境变量 DEBUG 检查，问题修复后必须移除"
+      severity: MEDIUM
+    # 前端 console.log 调试
+    - pattern: "console\\.log\\("
+      message: "生产代码禁止 console.log 调试输出"
+      severity: MEDIUM
+      scope: "frontend/src/**/*.{ts,tsx,js}"
+    # 临时文件路径硬编码
+    - pattern: "['\"]/tmp/[a-zA-Z_]+debug['\"]"
+      message: "生产代码禁止硬编码临时调试文件路径"
+      severity: LOW
+
+  # 调试期 vs 长期维护期
+  lifecycle:
+    debug_phase_enabled: true       # 调试期允许临时插入
+    maintenance_phase_enabled: false  # 长期维护期强制清理
+
+  # 关键约束
+  constraints:
+    - "DEBUG 代码必须在问题修复后立即移除"
+    - "调试器导入（pdb/ipdb/pudb）必须移除而非注释"
+    - "临时日志文件必须删除文件写入代码"
+    - "前端 console.log 必须删除而非注释"
+    - "所有 DEBUG 代码不允许通过 PR 进入主分支"
+
+  # 适用场景
+  applicable:
+    - "所有生产代码（src/、frontend/src/）"
+    - "修复 BUG 时的临时调试代码"
+    - "性能分析时的临时埋点"
+  # 不适用场景
+  not_applicable:
+    - "tests/ 目录下的测试代码（允许 print）"
+    - "scripts/ 一次性脚本（明确标记为 DEBUG 用途）"
+    - "docs/ 文档代码示例"
+
+# --- 🆕v4.15 缓存失效传播完整性 ---
+# B-REVIEW-CACHE-INVALIDATION：持久化层变更后必须显式调用 invalidate_cache()
+# 历史教训：CookieStore 用 30 秒 TTL 兜底缓存，浏览器子进程登录后只更新子进程自己的缓存，
+# 主进程仍读到旧缓存，导致 3 个 Cookie 层显示失效（功能实际可用）
+cache_invalidation:
+  # === B-REVIEW-CACHE-INVALIDATION：缓存失效传播完整性 ===
+  enabled: true
+
+  # 是否强制启用显式失效
+  require_explicit_invalidate: true
+  # TTL 兜底秒数（0 即不依赖 TTL）
+  ttl_grace_seconds: 0
+  # 同步钩子失败的日志级别
+  fail_log_level: "warning"
+  # 缓存字段正则列表
+  cache_field_patterns:
+    - "_cache"
+    - "_cache_time"
+    - "_cached_.*"
+  # 跨进程通知方式
+  cross_process_notification: "sse_push"  # 禁止 setInterval 轮询
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 类含 _cache 字段但无 invalidate_cache 方法
+    - pattern: "def\\s+__init__[^)]*_cache[^)]*\\):(?!.*def\\s+invalidate_cache)"
+      message: "类含 _cache 字段但未定义 invalidate_cache() 方法，违反显式失效规范"
+      severity: HIGH
+    # 写入主数据源后未调用 invalidate_cache
+    - pattern: "def\\s+(update_|upsert_|write_)[a-z_]+\\(self[^)]*\\):(?!.*invalidate_cache)"
+      message: "写入主数据源方法（update_*/upsert_*/write_*）未在写后调用 invalidate_cache()"
+      severity: HIGH
+    # 依赖 TTL 兜底
+    - pattern: "time\\.time\\(\\)\\s*-\\s*self\\._cache_time\\s*<\\s*\\d+"
+      message: "依赖 TTL 兜底（time.time() - self._cache_time < N）违反显式失效规范"
+      severity: MEDIUM
+
+  # 关键约束
+  constraints:
+    - "持久化层（JSON/SQLite/外部配置）变更后必须显式调用 invalidate_cache()"
+    - "跨进程变更必须主动通知主进程失效缓存"
+    - "同步钩子失败仅 logger.warning 不抛异常阻塞主流程"
+    - "TTL 兜底不替代主动失效"
+
+  # 适用场景
+  applicable:
+    - "JSON 持久化层（CookieStore / ConfigStore / SessionStore）"
+    - "跨进程 Cookie/状态同步（子进程写→主进程读）"
+    - "内存缓存与文件副本同步"
+    - "登录态多进程写入"
+  # 不适用场景
+  not_applicable:
+    - "纯函数、纯计算缓存（LRU math 缓存）"
+    - "无外部数据源同步的内部状态"
+
+# --- 🆕v4.15 状态判定需区分"未检测"与"已检测未失效" ---
+# B-REVIEW-STATE-DETECTION-BOOTSTRAP：功能信号字段必须配合"已发生过检测"标记
+# 历史教训：collector 刚启动 last_session_invalid=False 被解读为"会话有效"，
+# 强制恢复所有 Cookie 层（包括实际已失效的 IDENTITY），导致"状态闪烁"
+state_detection_bootstrap:
+  # === B-REVIEW-STATE-DETECTION-BOOTSTRAP：状态判定需区分"未检测"与"已检测未失效" ===
+  enabled: true
+
+  # 前置条件类型：timestamp / counter / flag
+  required_marker: "timestamp"
+  # 信号到层范围映射（强制恢复需白名单）
+  signal_layer_mapping:
+    collector_signal: ["identity", "session", "tracking"]
+    m5tk_signal: ["session"]
+  # 未识别信号组合的处理策略
+  unknown_signal_strategy: "set"  # set() 即不恢复所有层
+  # 布尔字段默认值正则
+  boolean_field_default_pattern: "False"
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 强制恢复仅依赖布尔字段未配合"已检测"标记
+    - pattern: "if\\s+not\\s+\\w+\\.(last_session_invalid|is_healthy|is_connected)\\s*:"
+      message: "强制恢复/兜底逻辑仅依赖布尔字段未配合'已发生过检测'标记（_last_m5tk_refresh > 0）"
+      severity: HIGH
+    # 信号恢复范围超出其能证明有效的层
+    - pattern: "m5tk.*identity|json_has_valid_m5tk.*identity"
+      message: "m5tk_signal 只能恢复 session 层，不应恢复 identity 层（信号范围溢出）"
+      severity: HIGH
+
+  # 关键约束
+  constraints:
+    - "功能信号字段不能仅用布尔初始值代表'未检测'"
+    - "必须配合'已发生过检测'标记（时间戳/计数器/标志位）"
+    - "强制恢复需白名单：信号只能恢复其能证明有效的层范围"
+    - "未识别的信号组合不默认恢复所有层"
+
+  # 适用场景
+  applicable:
+    - "跨进程/跨模块状态判定"
+    - "Cookie 层状态自愈"
+    - "容器健康检查、服务可用性兜底"
+  # 不适用场景
+  not_applicable:
+    - "纯客户端 UI 状态"
+    - "单次函数返回值"
+    - "无初始歧义的开关字段"
+
+# --- 🆕v4.15 SQLite DDL 修改列约束必须用表重建 + 事务安全 ---
+# B-REVIEW-MIGRATION-TRANSACTION：SQLite 列约束变更必须 engine.begin() 单事务 + 残留清理
+# 历史教训：旧版 _migrate_make_column_nullable 用 3 个独立 commit 拆分布骤，
+# 步骤失败时旧表已 RENAME 但新表未创建完成，tasks 表变空且 tasks_old 残留，
+# 下次启动时 RENAME 因目标已存在永久阻塞
+migration_transaction:
+  # === B-REVIEW-MIGRATION-TRANSACTION：SQLite DDL 修改列约束必须用表重建 + 事务安全 ===
+  enabled: true
+
+  # DDL 必须单事务包裹
+  require_single_transaction: true
+  # 迁移前自动 DROP {table}_old
+  cleanup_residual_table: true
+  # 失败后从 {table}_old RENAME 恢复
+  recover_from_old: true
+  # DDL 失败日志级别
+  exception_log_level: "error"
+  # 禁用模式正则
+  unsafe_patterns:
+    - "ALTER TABLE.*MODIFY COLUMN"
+    - "ALTER TABLE.*ALTER COLUMN"
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # _migrate_* 函数含多个 conn.commit()
+    - pattern: "def\\s+_migrate_\\w+\\([^)]*\\):[\\s\\S]{0,2000}conn\\.commit\\(\\)[\\s\\S]{0,2000}conn\\.commit\\(\\)"
+      message: "_migrate_* 函数含多个 conn.commit()，应拆分为单一 engine.begin() 事务"
+      severity: CRITICAL
+    # SQLite 不支持的 ALTER COLUMN
+    - pattern: "ALTER\\s+TABLE\\s+\\w+\\s+(MODIFY|ALTER)\\s+COLUMN"
+      message: "SQLite 不支持 ALTER TABLE ... MODIFY/ALTER COLUMN，必须用表重建（_migrate_make_column_nullable 模式）"
+      severity: CRITICAL
+    # DDL 操作未传 conn 给 orm_table.create
+    - pattern: "orm_table\\.create\\(\\s*\\)"
+      message: "orm_table.create() 应传入 conn 而非 engine，确保 DDL 纳入事务"
+      severity: HIGH
+
+  # 关键约束
+  constraints:
+    - "事务包裹：整个表重建用 engine.begin() 包裹"
+    - "残留清理：迁移前 DROP TABLE IF EXISTS {table}_old"
+    - "连接传参：orm_table.create(conn, checkfirst=True) 传入连接"
+    - "数据复制：用列名交集复制数据"
+    - "异常恢复：失败后从 {table}_old RENAME 恢复"
+
+  # 适用场景
+  applicable:
+    - "SQLite 修改列约束（NOT NULL → nullable、类型变更）"
+    - "SQLite 表重建、任何不可逆 DDL"
+  # 不适用场景
+  not_applicable:
+    - "PostgreSQL/MySQL（有原生 DDL 事务）"
+    - "新增列（直接 ADD COLUMN）"
+    - "纯查询/插入操作"
+
+# --- 🆕v4.25 迁移块独立容错 ---
+# B-REVIEW-MIGRATION-BLOCK-ISOLATION：迁移函数内多个独立迁移块必须各自 try/except
+# 历史教训：run_migrations 内 C-01 auto_migrate_task_links() 抛异常，外层 try/except 吞掉异常，
+# 导致 C-04（添加 notifications.read_at 列）被跳过，运行时 INSERT 报 "no such column"
+migration_block_isolation:
+  enabled: true
+
+  # 迁移函数名模式（匹配这些模式的函数需检查块独立性）
+  function_patterns:
+    - "run_migrations"
+    - "_migrate_all_*"
+    - "_apply_migrations"
+
+  # 迁移块边界标识符（注释中含这些标识符表示一个独立迁移块）
+  block_markers:
+    - "C-01"
+    - "C-02"
+    - "C-03"
+    - "C-04"
+    - "C-05"
+    - "C-06"
+    - "C-07"
+
+  # 是否要求每个迁移块各自 try/except
+  require_independent_try: true
+
+  # 强依赖场景允许合并（如表重建 + 数据回填必须在同一事务内）
+  allow_merge_when_dependent: true
+
+  # 合并时必须包含的注释关键词
+  merge_comment_keyword: "强依赖"
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 外层统一 try/except 包裹多个迁移块
+    - pattern: "def\\s+run_migrations\\([^)]*\\):[\\s\\S]{0,5000}try:[\\s\\S]{0,5000}except\\s+Exception\\s+as\\s+\\w+:\\s*logger\\.warning"
+      message: "run_migrations 函数内多个迁移块被外层统一 try/except 包裹，应改为各自独立 try/except"
+      severity: CRITICAL
+    # auto_migrate_task_links 等可能抛异常的调用在统一 try 内
+    - pattern: "auto_migrate_task_links\\(\\)[\\s\\S]{0,1000}(?!except)"
+      message: "auto_migrate_task_links() 等可能抛异常的调用应各自 try/except，不应在统一 try 内"
+      severity: HIGH
+
+  # 违规提示模板
+  violation_message: "迁移块 {block_id} 未独立 try/except，外层统一 try/except 会导致后续迁移块被跳过"
+
+  # 关键约束
+  constraints:
+    - "块独立：每个迁移块（C-01/C-02/...）各自 try/except"
+    - "强依赖合并：表重建 + 数据回填等强依赖场景允许合并，但注释中必须说明合并原因"
+    - "异常记录：每个块的 except 必须用 logger.warning 或 logger.exception 记录，禁止 except: pass"
+    - "联动检查：与 B-REVIEW-CRITICAL-PATH-NO-SWALLOW 联动，外层启动钩子需用 logger.exception()"
+
+  # 适用场景
+  applicable:
+    - "含多个独立迁移块的迁移函数（run_migrations / _migrate_all_*）"
+    - "数据库 schema 增量迁移"
+    - "启动时的初始化迁移"
+  # 不适用场景
+  not_applicable:
+    - "单一迁移块（无独立性问题）"
+    - "强依赖的迁移步骤（允许合并）"
+    - "事务内 DDL（由 migration_transaction 管控）"
+
+# --- 🆕v4.25 关键路径异常可见性 ---
+# B-REVIEW-CRITICAL-PATH-NO-SWALLOW：关键路径外层 except 必须用 logger.exception() 输出完整 traceback
+# 历史教训：_on_startup 的外层 try/except 用 logger.warning(f"...{e}") 吞掉异常，
+# 丢失 traceback，无法定位是哪个迁移块失败
+critical_path_no_swallow:
+  enabled: true
+
+  # 关键路径函数名列表（这些函数的外层 except 必须用 logger.exception）
+  critical_functions:
+    - "_on_startup"
+    - "run_migrations"
+    - "_init_schedulers"
+    - "_init_components"
+    - "_init_database"
+    - "_init_repositories"
+
+  # 是否要求 logger.exception()（而非 logger.warning）
+  require_exception_logger: true
+
+  # 禁止的日志模式正则列表
+  forbidden_patterns:
+    # warning + f-string 丢失堆栈
+    - 'logger\.warning\(f".*\{e\}"'
+    # warning + loguru 占位符也不保留 traceback
+    - 'logger\.warning\(".*:\s*\{\}",\s*e\)'
+    # silent pass 完全吞掉
+    - 'except[^:]*:\s*pass'
+    # logger.debug 默认不输出
+    - 'logger\.debug\(.*\)'
+
+  # 允许的简单 warning 场景（非关键路径，不触发违规）
+  allowed_simple_warning:
+    - "_refresh_cache"
+    - "_cleanup_temp"
+    - "_update_metric"
+    - "_log_status"
+
+  # 检测模式（自动扫描时的正则模式）
+  detect_patterns:
+    # 关键路径函数中含 warning + f-string
+    - pattern: "def\\s+(_on_startup|run_migrations|_init_\\w+)\\([^)]*\\):[\\s\\S]{0,3000}except\\s+Exception\\s+as\\s+\\w+:\\s*logger\\.warning\\(f"
+      message: "关键路径函数的外层 except 用 logger.warning(f\"...{e}\") 丢失堆栈，应改为 logger.exception()"
+      severity: CRITICAL
+    # 关键路径函数中含 silent pass
+    - pattern: "def\\s+(_on_startup|run_migrations|_init_\\w+)\\([^)]*\\):[\\s\\S]{0,3000}except[^:]*:\\s*pass"
+      message: "关键路径函数的外层 except 用 pass 静默吞掉异常，必须用 logger.exception() 记录"
+      severity: CRITICAL
+
+  # 关键约束
+  constraints:
+    - "异常可见性：关键路径外层 except 必须用 logger.exception() 输出完整 traceback"
+    - "禁止模式：logger.warning(f\"...{e}\") / logger.warning(\"...:{}\", e) / except: pass"
+    - "允许例外：非关键路径（如 _refresh_cache）可用简单 warning"
+    - "联动检查：与 B-REVIEW-MIGRATION-BLOCK-ISOLATION 联动，迁移块各自 try/except 后外层仍需 logger.exception() 兜底"
+
+  # 适用场景
+  applicable:
+    - "启动钩子（@app.on_event('startup')）"
+    - "数据库迁移函数（run_migrations / _migrate_*）"
+    - "组件初始化函数（_init_*）"
+    - "任何失败即影响核心功能的关键路径"
+  # 不适用场景
+  not_applicable:
+    - "非关键路径（如可选缓存刷新、临时文件清理）"
+    - "已由 migration_failure_strategy 管控的迁移函数内部策略"
+    - "用户请求处理（应由路由层异常处理器管控）"
+
+# --- 🆕v4.16 字段归一化文档化 ---
+# B-REVIEW-FIELD-NORMALIZE-DOC：后端归一化字段时必须在前端 types.ts 注释 + 禁止动态 key 取值
+field_normalize_doc:
+  enabled: true
+  require_doc_comment: true
+  detect_dynamic_key_access: true
+  fallback_to_legacy_field: false
+  detect_patterns:
+    - "_normalize"
+    - "_unify"
+    - "_merge"
+    - "_flatten"
+  applicable:
+    - "后端有 _normalize / _unify / _merge / _flatten 等归一化函数"
+    - "前端通过动态 key（如 check[signalKey]）取值"
+  not_applicable:
+    - "后端直接返回原始响应无转换"
+    - "前端类型声明与后端 pydantic 模型一一对应"
+
+# --- 🆕v4.16 除零兜底禁止凑数 ---
+# B-REVIEW-DIVZERO-FALLBACK：除零/空值兜底禁止用凑数小数伪装比值
+divzero_fallback:
+  enabled: true
+  detect_patterns:
+    - "/\\s*0\\.1"
+    - "/\\s*0\\.01"
+    - "/\\s*max\\("
+  display_value_for_empty_baseline: "N/A"
+  applicable:
+    - "比值/比率/百分比计算"
+    - "previous_count/baseline 可能为 0 的对比场景"
+    - "写入 reason/log 展示给用户的数值"
+  not_applicable:
+    - "内部计算用途的兜底（如 max(prev, 1) 防止除零但结果不展示）"
+    - "倒计时/计时器场景"
+
+# --- 🆕v4.19 选择器仓库同步与单一数据源 ---
+# B-REVIEW-SELECTOR-REPOSITORY-SYNC：同一 DOM 数据源的所有解析路径必须引用同一选择器仓库
+selector_repository_sync:
+  enabled: true
+  # 选择器仓库必须提供 to_js_selector_string() 方法供 JS 脚本消费
+  require_js_consumer_method: true
+  # 需要稽查选择器一致性的文件列表
+  audit_files:
+    - "_search.py"
+    - "_parser.py"
+    - "_detail.py"
+  # 批量解析脚本变量名标识（grep 此变量名查找 JS 字符串中的硬编码选择器）
+  batch_script_marker: "_BATCH_PARSE_SCRIPT"
+  # ID 提取兜底层数（data-* 属性 → 内部任意 a[href] → /item/数字 路径）
+  require_id_fallback_layers: 3
+  applicable:
+    - "同一 DOM 数据源有多条解析路径（主解析 + 批量解析 + 降级解析）"
+    - "DOM 解析脚本嵌入到 Playwright page.evaluate 中执行"
+    - "闲鱼/淘宝/第三方网站前端 DOM 结构频繁变更的场景"
+  not_applicable:
+    - "API 响应解析（结构固定，无 DOM 选择器概念）"
+    - "单次单卡片解析（无批量场景）"
+    - "一次性爬虫脚本（无长期维护需求）"
+
+# --- 🆕v4.19 外部系统文本特征集中管理 ---
+# B-REVIEW-EXTERNAL-TEXT-PATTERN-CENTRALIZE：外部系统文本特征必须提取为模块级常量 + 纯函数
+external_text_pattern_centralize:
+  enabled: true
+  # 强制提取为模块级常量（tuple[str, ...] 或 frozenset[str]）
+  require_constant_extraction: true
+  # 强制封装为纯函数（check_xxx(text: str) -> bool）
+  require_pure_function: true
+  # 需要稽查的关键词样例（grep 这些关键词检查是否多处重复）
+  audit_keywords:
+    - "已售"
+    - "卖掉了"
+    - "已下架"
+    - "已删除"
+  # 同一关键词在代码中出现 >1 次且未引用常量 → 违规
+  max_inline_occurrences: 1
+  # 常量定义处必须注释历史遗漏案例
+  require_version_comment: true
+  applicable:
+    - "外部系统文案检测（已售/下架/错误状态/异常提示）"
+    - "错误码识别（HTTP 状态码/业务错误码/反爬识别）"
+    - "第三方 API 响应文本特征提取"
+    - "多处消费同一类文本特征的场景"
+  not_applicable:
+    - "内部状态判断（如 task.status == 'completed'，前端可控）"
+    - "单一消费点的临时字符串比较"
+    - "配置文件中已管理的关键词（无需再提取为代码常量）"
+
+# --- 🆕v4.19 关键调度器启动状态可见性 ---
+# B-REVIEW-SCHEDULER-STARTUP-VISIBILITY：关键调度器启动状态必须对用户可见
+scheduler_startup_visibility:
+  enabled: true
+  # 关键调度器名单（影响业务正确性的，未启动时必须 WARNING 提示）
+  critical_schedulers:
+    - "BatchRefreshScheduler"
+    - "AutoLoginScheduler"
+    - "CookieCheckerScheduler"
+  # 强制启动日志（启动时输出 INFO + 间隔）
+  require_startup_log: true
+  # 未启动时强制 WARNING + 醒目提示 + 启动命令 + 影响范围
+  require_warning_when_disabled: true
+  # --help 输出必须说明启动参数影响范围
+  require_help_doc: true
+  # /api/about 端点必须返回调度器状态
+  require_about_endpoint: true
+  # 启动参数与环境变量映射（如 --with-scheduler ↔ XH_WITH_SCHEDULER）
+  startup_param_env_mapping:
+    "--with-scheduler": "XH_WITH_SCHEDULER"
+  applicable:
+    - "关键后台调度器（批量采集/状态回查/数据同步/定时清理）"
+    - "通过启动参数或环境变量控制的功能开关"
+    - "影响业务正确性的后台任务"
+  not_applicable:
+    - "调试用的可选功能（如 --debug 模式）"
+    - "默认启动且无法关闭的核心功能"
+    - "一次性任务（如启动时迁移）"
+
+# --- 🆕v4.20 元数据源单源管理 ---
+# B-REVIEW-VERSION-SOURCE-SINGLE：构建期元数据必须有唯一源头 + 多端点读取封装辅助函数
+# 与前端 F-REVIEW-VERSION-SOURCE-ALIGN 对应（前端负责调用语义对齐 API，后端负责源管理 + 辅助函数）
+version_source_management:
+  enabled: true
+  # 元数据唯一源头文件路径
+  single_source_file: "src/xianyu_hunter/__init__.py"
+  # 源头字段名
+  source_field_name: "__version__"
+  # 自动生成文件路径（由专门脚本维护）
+  auto_generated_file: "src/xianyu_hunter/_build_info.py"
+  # 自动生成脚本路径
+  auto_generator_script: "scripts/build_info.py"
+  # 多端点读取必须封装的辅助函数名
+  safe_helper_function: "_safe_app_version"
+  # 三层回退的最终默认值（禁止使用占位符）
+  fallback_default: "unknown"
+  # 禁止作为版本号回退值的占位符（看起来像合法版本号，比 unknown 更具误导性）
+  forbidden_placeholders:
+    - "1.0"
+    - "0.0.0"
+    - "unknown version"
+  # 命名含 "version" 但实际返回业务计数的端点（应在 docstring 中明确语义）
+  forbidden_version_endpoints:
+    - "/api/config/version"  # 实际返回 len(backups)，受 BACKUP_KEEP 上限影响
+  # grep "from xxx import __version__" 出现 ≥ N 处时必须封装辅助函数
+  helper_threshold: 2
+  # 跨端数据流问题必须前后端协同修复（后端源管理问题时必须同步修复前端 API 调用）
+  cross_layer_fix_required: true
+  # 受保护的元数据字段（多端点响应中涉及这些字段必须调用辅助函数）
+  protected_metadata_fields:
+    - "version"
+    - "build_date"
+    - "git_sha"
+    - "build_host"
+  # 必须调用辅助函数的端点列表
+  required_helper_endpoints:
+    - "/api/about"
+    - "/api/config/export"
+    - "/api/health"
+    - "/api/version"
+  applicable:
+    - "版本号/构建时间/git_sha/构建主机等构建期元数据的读取与响应"
+    - "多端点读取同一元数据的场景"
+    - "/api/about / /api/config/export / /api/health / /api/version 等元数据相关端点"
+  not_applicable:
+    - "业务数据计数（如备份数/任务数/商品数）"
+    - "临时调试变量"
+    - "跨服务边界元数据（应通过专门 API 同步）"
+    - "核心依赖版本（如 FastAPI/SQLAlchemy 版本，由 requirements.txt 管理）"
+    - "Pydantic 模型字段（由后端类型系统管理）"
+
+# --- 🆕v4.23 LLM 端点能力派发（capability-driven dispatch）---
+# B-REVIEW-LLM-CAPABILITY-DISPATCH：能力预检 + 关键字白名单集中化 + 共享函数复用
+# 与前端 v4.23 F-REVIEW-MODEL-CAPABILITY-CENTRALIZATION 对应（前端消费端展示，后端服务端能力派发）
+llm_capability_keywords:
+  enabled: true
+  # Vision 能力关键字白名单（与 xianyu-hunter-dev/config/tech-stack.json 保持单一来源）
+  vision_keywords:
+    - "vision"
+    - "gpt-4o"
+    - "gpt-4-vision"
+    - "qvq"
+    - "qwen-vl"
+    - "glm-4v"
+    - "claude-3"
+    - "opus"
+    - "sonnet"
+    - "haiku"
+  # Function Call 能力关键字白名单
+  function_call_keywords:
+    - "gpt-4"
+    - "gpt-3.5-turbo-1106"
+    - "claude-3"
+    - "qwen-max"
+    - "qwen-plus"
+    - "deepseek-chat"
+    - "function-calling"
+  # JSON Mode 能力关键字白名单
+  json_mode_keywords:
+    - "gpt-4"
+    - "gpt-3.5-turbo-1106"
+    - "claude-3"
+    - "qwen-max"
+    - "qwen-plus"
+    - "json-mode"
+  # 关键字匹配是否大小写不敏感
+  case_insensitive: true
+  # 共享工具函数位置（权威源）
+  shared_util_location: "src/xianyu_hunter/web/routes/api_ai.py"
+  shared_function_name: "_is_vision_capable"
+  shared_constant_name: "_VISION_CAPABLE_KEYWORDS"
+  # 必须使用共享函数的模块清单（这些模块内禁止内联关键字列表）
+  consumer_modules:
+    - "src/xianyu_hunter/web/routes/api_ai.py"
+    - "src/xianyu_hunter/web/routes/api_ai_deep.py"
+  applicable:
+    - "调用外部 LLM endpoint（OpenAI/Claude/通义千问/DeepSeek/Ollama）"
+    - "多模态调用（Vision/Audio）"
+    - "function call / tool use"
+    - "structured output / JSON mode"
+  not_applicable:
+    - "调用固定单一能力的稳定服务"
+    - "本地固定函数（无外部 endpoint）"
+    - "已由 SDK 强制约束的调用"
+
+# --- 🆕v4.23 共享工具函数规范（避免散落内联判断）---
+# B-REVIEW-SHARED-UTIL-CENTRALIZATION：跨模块复用的判断逻辑必须抽取为共享函数/常量
+shared_util_rules:
+  enabled: true
+  # 触发抽取的最小调用点数（≤ 此值不强制抽取）
+  min_call_sites: 2
+  # 触发抽取的最小模块数（跨模块复用才抽取）
+  min_module_count: 2
+  # 共享函数必须为纯函数（无副作用）
+  pure_function_required: true
+  # 共享函数必须有完整类型注解
+  require_type_annotation: true
+  # 共享函数必须有单测覆盖
+  require_unit_test: true
+  # 共享函数 docstring 必须注明"为什么共享"
+  shared_function_docstring_required: true
+  # 共享函数位置选择原则：业务最早引入该逻辑的模块作为权威源
+  authority_module_selection: "first_introducer"
+  applicable:
+    - "跨模块复用的关键字白名单/正则/常量"
+    - "模型/接口/协议的版本判断"
+    - "权限/角色/能力位判断"
+    - "业务规则判断（如'是否已售'关键词）"
+  not_applicable:
+    - "仅单模块内部使用的 helper"
+    - "逻辑需要复用的同时还要扩展（应抽象为基类/策略模式）"
+    - "性能敏感的 hot path 抽取会带来 import 开销"
+
+# --- 🆕v4.23 静默降级预检（不支持能力 → 友好降级）---
+# B-REVIEW-SILENT-DOWNGRADE-PRECHECK：可选增强能力预检失败时降级为等价文本表达
+llm_downgrade:
+  enabled: true
+  # 可选增强能力（这些能力缺失时可降级，不影响主流程）
+  optional_capabilities:
+    - "vision"
+    - "function_call"
+    - "json_mode"
+  # 核心能力（这些能力缺失时必须报错，不能静默降级）
+  core_capabilities_not_downgradable:
+    - "chat"
+    - "text_generation"
+    - "embedding"
+  # 降级日志级别（按 xianyu-hunter-dev step 59 规范用 warning）
+  downgrade_log_level: "warning"
+  # 降级标记格式（用于日志聚合分析）
+  downgrade_marker_format: "mode=downgrade reason={capability}_missing model={model_name}"
+  # 降级 prompt 模板（集中管理，禁止在调用点拼接）
+  prompt_templates:
+    vision_missing: "图片请参考以下文字描述：{image_url}"
+    function_call_missing: "请以 JSON 格式输出：{tool_schema}"
+    json_mode_missing: "请以 JSON 格式输出结果。"
+  # 降级路径必须输出可观测性日志（含降级标记 + 模型名 + 缺失能力）
+  require_observability: true
+  # 预检失败的默认行为（true=降级 / false=抛错）
+  default_action: "downgrade"
+  applicable:
+    - "外部 LLM endpoint + payload 含可选能力字段"
+    - "多模态/function call/structured output 调用"
+    - "用户上传图片但模型可能不支持 Vision"
+    - "用户启用 tool 但模型可能不支持 function call"
+  not_applicable:
+    - "核心能力缺失（chat 文本生成失败必须报错）"
+    - "用户明确要求某能力（如选择 vision-only 模型）"
+    - "预检与降级开销大于直接调用（极简场景）"
+
+# --- 🆕v4.27 失败原因传递链（reason propagation chain）---
+# B-REVIEW-FAILURE-REASON-PROPAGATION：失败原因必须分三层传递（底层 → 中层 → 高层）
+failure_reason_propagation:
+  enabled: true
+  # reason 可枚举集合（必须为有限集，集中定义为模块级常量 FAILURE_REASONS: tuple[str, ...]）
+  reason_enum:
+    - "cookie_incomplete"
+    - "session_expired"
+    - "rate_limited"
+    - "page_unavailable"
+    - "network_timeout"
+    - "token_invalid"
+    - "permission_denied"
+  # reason → HTTP 状态码映射（中层消费）
+  reason_to_status_code:
+    cookie_incomplete: 401
+    session_expired: 440
+    token_invalid: 441
+    rate_limited: 429
+    page_unavailable: 503
+    network_timeout: 504
+    permission_denied: 403
+  # reason → 用户可读文案映射（高层消费，禁止散落 if/elif 分支）
+  reason_to_message:
+    cookie_incomplete: "闲鱼登录 Cookie 不完整，请重新登录或从浏览器导出完整 Cookie 导入"
+    session_expired: "闲鱼会话已过期，请重新登录"
+    rate_limited: "请求被限流，请稍后重试"
+    page_unavailable: "闲鱼详情页暂时不可用，请稍后重试"
+    network_timeout: "网络请求超时，请稍后重试"
+    token_invalid: "Token 无效，请重新登录"
+    permission_denied: "权限不足"
+  # 禁止用作降级判断的字符串子串黑名单（grep 命中即违规）
+  forbidden_substring_markers:
+    - "expired"
+    - "unavailable"
+    - "rate limited"
+    - "page unavailable"
+    - "login expired"
+  # 错误响应必须含 error_code 字段（前端按 error_code 分支而非按文案子串）
+  require_error_code_field: true
+  # 底层属性名模式（grep 此模式找设置点，检查是否被中层 status_code 映射消费）
+  bottom_layer_attr_pattern: "last_.*_failure_reason"
+  # 中层映射函数名模式（grep 此模式找消费点，检查是否根据 reason 映射 status_code）
+  middle_layer_map_pattern: "reason_to_status_code"
+  applicable:
+    - "含多层架构（collector → service → route）的失败处理链"
+    - "多类失败原因需要不同 HTTP 状态码区分的场景"
+    - "前端需要按 error_code 分支展示不同提示的场景"
+  not_applicable:
+    - "单层函数内部错误（无传递链）"
+    - "纯输入校验错误（422 直接返回）"
+    - "不可恢复的系统级错误（500 直接抛出）"
+
+# --- 🆕v4.27 数据完整性预检（pre-call completeness check）---
+# B-REVIEW-DATA-COMPLETENESS-PRECHECK：调用外部依赖前必须执行数据完整性预检 + 调用后二次检查
+data_completeness_precheck:
+  enabled: true
+  # 预检方法名模式（grep 此模式找预检方法）
+  method_name_pattern: "_check_*_completeness"
+  # 预检方法返回类型（必须为 str | None，None 表示通过、字符串表示错误描述）
+  return_type: "str | None"
+  # 强制双阈值 AND 判断（总数阈值 + 关键项命中数阈值）
+  require_dual_threshold: true
+  # 强制调用后二次检查（防御外部依赖中途失效）
+  require_post_call_check: true
+  # 错误信息必须含具体缺失清单（禁止笼统"数据不完整"）
+  require_missing_list_in_message: true
+  # 总数阈值默认值（可被具体场景覆盖）
+  min_count: 10
+  # 关键项命中数阈值默认值
+  min_key_hits: 3
+  # 各场景的具体阈值（覆盖默认值）
+  scenario_thresholds:
+    detail_cookie:
+      min_count: 10
+      min_key_hits: 3
+      identity_cookie_count: 4
+      session_cookie_count: 5
+    search_token:
+      min_count: 3
+      min_key_hits: 2
+  applicable:
+    - "调用浏览器自动化（依赖完整 cookie 集）"
+    - "调用第三方 API（依赖完整请求头/认证 token）"
+    - "调用本地服务（依赖完整配置文件）"
+    - "任何'数据不完整即调用失败'的场景"
+  not_applicable:
+    - "幂等查询接口（缺数据可返回空集合，无需预检）"
+    - "纯计算函数（无外部依赖）"
+    - "用户输入校验（由 Pydantic 模型校验）"
+
+# --- 🆕v4.27 合并写入 vs 覆盖写入决策（merge vs overwrite write strategy）---
+# B-REVIEW-MERGE-VS-OVERWRITE-WRITE：按数据来源选择写入策略（部分集→合并写，完整集→覆盖写）
+write_strategy_decision:
+  enabled: true
+  # 合并写方法名模式（部分集数据必须用此模式）
+  merge_method_pattern: "merge_*"
+  # 覆盖写方法名模式（完整集数据可用此模式）
+  overwrite_method_pattern: "save_*|export_*"
+  # 合并后必须日志输出合并前后数量变化
+  require_log_on_merge: true
+  # 覆盖写前必须预检新集完整（调用 _check_*_completeness）
+  require_precheck_before_overwrite: true
+  # 唯一 key 字段示例（合并时作为索引）
+  unique_key_field_examples:
+    - "name"   # cookie 合并以 name 为 key
+    - "id"     # 用户/任务合并以 id 为 key
+    - "key"    # 配置项合并以 key 为 key
+  # 数据来源 → 写入策略映射
+  source_to_strategy:
+    browser_cookie_import: "merge"        # 浏览器 Cookie 导入是部分集
+    user_preference_import: "merge"       # 用户偏好导入是部分集
+    config_incremental_update: "merge"    # 配置增量更新是部分集
+    full_backup_restore: "overwrite"      # 全量备份恢复是完整集
+    first_init: "overwrite"               # 首次初始化无旧文件
+  applicable:
+    - "浏览器 Cookie 导入（部分集，必须合并写）"
+    - "用户偏好导入（部分集）"
+    - "配置文件增量更新（部分集）"
+    - "全量备份恢复（完整集，可覆盖写）"
+    - "首次初始化（无旧文件，可覆盖写）"
+  not_applicable:
+    - "内存缓存更新（无持久化）"
+    - "日志文件追加（无合并概念）"
+    - "临时文件写入（无历史数据需要保留）"
+
+# --- 🆕v4.27 文案常量集中管理（error message constant centralization）---
+# B-REVIEW-ERROR-MESSAGE-CONSTANT：错误文案/日志降级 marker/用户提示信息必须提取为模块级常量
+error_message_centralization:
+  enabled: true
+  # 强制提取为模块级常量（tuple[str, ...] 或 dict[str, str]）
+  require_constant_extraction: true
+  # 常量定义处必须注释历史来源（如 # 来源：闲鱼详情页错误提示，v4.27 修复时提炼）
+  require_version_comment: true
+  # 错误响应必须含 error_code 字段（machine-readable）
+  require_error_code_field: true
+  # 禁止用作降级判断的字符串子串黑名单
+  forbidden_substring_markers:
+    - "expired"
+    - "unavailable"
+    - "rate limited"
+    - "page unavailable"
+    - "login expired"
+  # 同一文案允许内联次数（≥ 此值必须提取为常量）
+  max_inline_occurrences: 1
+
+# ===== 🆕v4.31 维度 30：业务关键字常量集中管理与跨端契约对齐 =====
+# 完整审查维度对照见 SKILL.md 附录C（34 维度，v4.31.0）
+# 对应编码规范详见 xianyu-hunter-dev v4.29.0 的 step 129-133
+
+# --- 🆕v4.31 业务关键字常量集中管理（business keyword centralization）---
+# B-REVIEW-BUSINESS-KEYWORD-CENTRALIZATION：外部平台文本特征集中到单一模块的 *_TEXT_KEYWORDS 常量
+business_keyword_centralization:
+  enabled: true
+  # 关键字分类清单（每类对应一个常量与统一访问函数）
+  keyword_categories:
+    - "sold"        # 已售关键字
+    - "ordered"     # 已下单关键字
+    - "region"      # 区域关键字
+    - "status"      # 状态文案关键字
+  # 集中模块路径（业务关键字必须集中到此模块）
+  centralized_module: "src/xianyu_hunter/modules/collector/collector_utils.py"
+  # 统一访问函数命名模式（业务代码必须通过统一函数调用，禁止直接引用常量内联判断）
+  unified_function_pattern: "check_text_*"
+  # 已注册的统一访问函数清单
+  registered_unified_functions:
+    - "check_text_sold"
+    - "check_text_ordered"
+    - "check_text_region"
+  # 禁止的内联判断模式（grep 检测到即违规）
+  forbidden_inline_patterns:
+    - "any\\(kw in text for kw in"
+    - "any\\(keyword in text for keyword in"
+  # 关键字清单（从 config.yaml 管理，不硬编码在技能中）
+  keyword_lists:
+    sold_keywords:
+      - "已售"
+      - "已下架"
+      - "卖掉了"
+      - "宝贝不存在"
+      - "宝贝走丢了"
+      - "该宝贝不存在"
+      - "商品不存在"
+      - "已删除"
+      - "已被删除"
+    ordered_keywords:
+      - "已下单"
+      - "已购买"
+      - "交易成功"
+    region_keywords:
+      - "北京"
+      - "上海"
+      - "广州"
+      - "深圳"
+  # 适用场景
+  applicable:
+    - "外部平台文本特征识别（已售/已下单/区域/状态文案）"
+    - "第三方系统响应文案解析"
+    - "任何需要全链路同步更新的关键字常量"
+  # 不适用场景
+  not_applicable:
+    - "框架内部固定文案（如 antd 默认 placeholder）"
+    - "单次使用的字符串字面量（无复用需求）"
+    - "协议固定值（如 HTTP method）"
+
+# --- 🆕v4.31 事件类型过滤精确匹配（event type exact match）---
+# B-REVIEW-EVENT-TYPE-EXACT-MATCH：业务查询事件类型必须用 == 精确匹配
+event_type_exact_match:
+  enabled: true
+  # 禁止的前缀过滤模式（grep 检测到即违规，统计聚合场景除外）
+  forbidden_prefix_patterns:
+    - "startsWith\\(['\"]\\w+\\."
+    - "endswith\\(['\"]\\w+\\."
+    - "\\.startswith\\(['\"]eval\\."
+    - "\\.startswith\\(['\"]notify\\."
+  # 要求的精确匹配模式（业务查询必须用以下模式之一）
+  required_match_pattern:
+    - "=="
+    - "Set\\.has\\("
+    - "switch.*case"
+    - "filter\\(.*== "
+  # 允许前缀分组场景白名单（仅这些场景允许 startswith）
+  allowed_prefix_grouping_scenarios:
+    - "statistics_aggregation"   # 统计聚合（如所有 eval.* 事件总数）
+    - "log_filtering"            # 日志过滤（模糊匹配是预期行为）
+  # 事件类型分类清单（业务事件与通知事件必须使用不同命名空间）
+  event_type_categories:
+    business_events:
+      - "eval.scored"            # 业务事件：评估明细查询
+      - "order.created"          # 业务事件：订单创建
+      - "task.started"           # 业务事件：任务启动
+    notification_events:
+      - "notify.sent"            # 通知事件：KPI 统计
+      - "eval.passed"            # 通知事件：评估通过通知（禁止与业务事件同前缀）
+      - "eval.failed"            # 通知事件：评估失败通知
+  # 适用场景
+  applicable:
+    - "业务事件查询（评估明细/订单列表/任务列表）"
+    - "KPI 统计（按事件类型计数）"
+    - "事件订阅（EventBus 订阅特定事件）"
+  # 不适用场景
+  not_applicable:
+    - "全量事件导出（无需过滤）"
+    - "日志搜索（模糊匹配是预期行为）"
+    - "调试查询（临时性，非生产代码）"
+
+# --- 🆕v4.31 前后端字段名大小写敏感检查（field name case sensitive）---
+# B-REVIEW-FIELD-NAME-CASE-SENSITIVE：Python 类私有属性与 API 字段名前后端严格大小写一致
+field_name_case_sensitive:
+  enabled: true
+  # 后端字段命名风格（前端必须对齐）
+  backend_field_naming_style: "snake_case"
+  # 前端字段命名风格（与后端不同时必须显式转换）
+  frontend_field_naming_style: "camelCase"
+  # 禁止的绕过模式（前端用 as any / as unknown as 绕过字段名检查即违规）
+  forbidden_bypass_patterns:
+    - "as\\s+any\\b"
+    - "as\\s+unknown\\s+as"
+  # 已知大小写敏感字段清单（含 backend 与 frontend_wrong 对照）
+  known_case_sensitive_fields:
+    - backend: "_session"
+      frontend_wrong: "_Session"
+      description: "Python 类私有属性，小写 _session"
+    - backend: "total_for_type"
+      frontend_wrong: "totalForType"
+      description: "API 响应字段名，后端 snake_case"
+    - backend: "min_price"
+      frontend_wrong: "minPrice"
+      description: "API 请求/响应字段名，后端 snake_case"
+    - backend: "interval_seconds"
+      frontend_wrong: "intervalSeconds"
+      description: "API 请求/响应字段名，后端 snake_case"
+  # 是否要求前后端双向 grep 匹配（新增字段时必须 grep 双向验证）
+  bidirectional_match_required: true
+  # 适用场景
+  applicable:
+    - "Python 类私有属性（_xxx 命名）"
+    - "API 请求/响应字段名（前后端契约）"
+    - "DB schema 字段名与 ORM model 字段名对齐"
+    - "TypeScript interface 与 Python Pydantic model 字段对齐"
+  # 不适用场景
+  not_applicable:
+    - "框架内置属性（如 __init__/__str__，由 Python 规范保证）"
+    - "第三方库字段名（无法控制）"
+
+# --- 🆕v4.31 服务重启验证清单（post restart verification）---
+# B-REVIEW-SERVICE-RESTART-VERIFICATION：Python 后端代码修改后必须重启服务 + 验证清单
+post_restart:
+  enabled: true
+  # 重启验证清单（重启后必须逐项验证）
+  checklist:
+    - "port_listening"            # 端口监听验证
+    - "health_check"              # 健康检查端点返回 200
+    - "data_state"                # 关键数据状态验证
+    - "startup_log"               # 启动日志无异常
+  # 健康检查端点清单（重启后必须验证返回 200）
+  health_check_endpoints:
+    - path: "/api/about"
+      expected_status: 200
+      description: "系统元信息（含版本号）"
+    - path: "/api/tasks"
+      expected_status: 200
+      description: "任务列表"
+    - path: "/api/scheduler/status"
+      expected_status: 200
+      description: "调度器状态"
+    - path: "/api/anticrawl/cookies/layers"
+      expected_status: 200
+      description: "Cookie 层状态"
+  # 启动日志关键词（重启后必须确认这些关键词出现）
+  startup_log_keywords:
+    required:
+      - "Application startup complete."
+      - "Scheduler started"
+    forbidden:
+      - "ImportError"
+      - "ModuleNotFoundError"
+      - "OperationalError"
+      - "AttributeError"
+  # 前端是否需要重新构建（前端代码修改后需 npm run build + 浏览器强制刷新）
+  frontend_build_required: true
+  # 重启命令参考（PowerShell）
+  restart_commands:
+    - "Stop-Process -Name python -Force -ErrorAction SilentlyContinue; python -m xianyu_hunter web --with-scheduler"
+    - ".\\scripts\\automation.ps1 -Action rebuild"
+  # 适用场景
+  applicable:
+    - "Python 后端代码修改后（任何 .py 文件）"
+    - "前端代码修改后（需 npm run build + 浏览器强制刷新）"
+    - "数据库迁移后"
+  # 不适用场景
+  not_applicable:
+    - "开发模式 --reload 启用（自动热重载）"
+    - "纯文档修改（无代码变更）"
+    - "配置文件修改（部分配置支持热加载）"
+
+# --- 🆕v4.31 Windows 终端编码与 Shell 语法兼容（cross platform）---
+# B-REVIEW-WINDOWS-TERMINAL-ENCODING：Windows PowerShell 脚本必须显式设置 UTF-8 编码
+cross_platform:
+  enabled: true
+  # 编码设置（PowerShell 脚本必须显式设置）
+  encoding: "UTF-8"
+  # PowerShell 编码设置命令（脚本开头必须执行）
+  powershell_encoding_commands:
+    - "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8"
+    - "$OutputEncoding = [System.Text.Encoding]::UTF8"
+    - "chcp 65001 > $null"
+  # shell 参数引用规则（含特殊字符的参数必须加引号）
+  shell_quoting:
+    required_for:
+      - "stash@{N}"              # git stash apply 'stash@{0}'
+      - "branch@{N}"             # git reflog show 'branch@{0}'
+    quote_style: "single_quote"  # PowerShell 单引号更安全
+  # 路径分隔符处理（必须用 pathlib 或 os.path 跨平台）
+  path_separator: "pathlib"
+  # 命令分隔符（PowerShell 用 ;，Linux 用 &&）
+  command_separator:
+    powershell: ";"
+    bash: "&&"
+  # 禁止的 PowerShell 语法（grep 检测到即违规）
+  forbidden_powershell_patterns:
+    - "&&"                       # PowerShell 不支持 && 语法
+    - "stash@{[0-9]+}"           # 不加引号的 stash@{N}
+  # Python 脚本 stdout 编码设置（Windows 环境必须显式设置）
+  python_stdout_encoding:
+    required: true
+    method: "sys.stdout.reconfigure(encoding='utf-8')"
+    env_var: "PYTHONIOENCODING=utf-8"
+  # 适用场景
+  applicable:
+    - "Windows PowerShell 脚本调用 API（含中文 body）"
+    - "Python 脚本在 Windows 环境输出中文到日志"
+    - "git 操作（stash/branch 等含特殊字符的参数）"
+    - "跨平台部署的脚本（Windows + Linux）"
+  # 不适用场景
+  not_applicable:
+    - "Linux/Mac 环境的 shell 脚本（默认 UTF-8）"
+    - "Docker 容器内脚本（容器内默认 UTF-8）"
+    - "纯英文内容的脚本（无编码问题）"
+  # 常量命名前缀约定
+  constant_prefixes:
+    error_message: "_ERROR_MSG_"
+    log_marker: "_LOG_MARKER_"
+    downgrade_reasons: "_DOWNGRADE_REASONS"
+    failure_reasons: "FAILURE_REASONS"
+  applicable:
+    - "错误响应文案（401/403/500 等）"
+    - "日志降级 marker"
+    - "用户提示信息（前端 toast/message）"
+    - "跨模块复用的常量文案"
+  not_applicable:
+    - "一次性临时调试日志（无需提取）"
+    - "动态生成的文案（如 f'task {task_id} failed'）"
+    - "纯内部断言消息（如 assert x > 0, 'x must be positive'）"
+
+# --- 🆕v4.27 修改-验证-部署闭环（edit-verify-deploy closed loop）---
+# B-REVIEW-EDIT-VERIFY-DEPLOY-LOOP：Edit 修改后必须 Grep 验证 + Python 修改后必须重启服务 + 重启后验证端口+数据
+edit_verify_deploy_loop:
+  enabled: true
+  # Edit 后必须 Grep 验证标志性标识符确实存在
+  require_grep_verify_after_edit: true
+  # 全局 grep 旧文案确认无残留（可能多处内联，必须全部修改）
+  require_global_grep_old_message: true
+  # Python 修改后必须重启服务（旧进程仍在运行旧代码）
+  require_restart_python_service: true
+  # 重启后必须验证端口监听
+  require_port_verify_after_restart: true
+  # 重启后必须验证数据状态（如 cookie 数量、配置文件内容）
+  require_data_state_verify: true
+  # git stash 前必须先 git commit 保底（避免 stash 丢失）
+  require_commit_before_stash: true
+  # 验证端口默认值
+  verify_port: 8000
+  # 验证数据文件示例（重启后检查这些文件的数据状态）
+  verify_data_file_examples:
+    - "data/cookies_default.json"
+    - "config/config.yaml"
+  # 重启命令模板（Windows PowerShell）
+  restart_command_template: ".venv\\Scripts\\python.exe -m xianyu_hunter web"
+  # 终止旧进程命令模板（Windows PowerShell）
+  kill_command_template: "taskkill /F /T /PID {pid}"
+  applicable:
+    - "AI 助手使用 Edit 工具修改代码后"
+    - "Python 服务代码修改后需重启的场景"
+    - "多文件修改后需全局验证的场景"
+    - "使用 git stash 的工作流"
+  not_applicable:
+    - "纯前端修改（前端 vite 热更新，无需重启）"
+    - "纯文档修改（不影响运行时）"
+    - "纯测试代码修改（pytest 重新执行即生效）"
+    - "使用 git worktree 的隔离工作流（无需 stash）"
+
+# --- 🆕v4.27 测试 mock 同步（test mock synchronization）---
+# B-REVIEW-TEST-MOCK-SYNC：修改前置条件时必须同步更新测试 mock 数据，mock 数据必须覆盖完整字段集
+test_mock_synchronization:
+  enabled: true
+  # mock 数据必须覆盖完整字段集（如 22 个 cookie 而非 4 个）
+  require_full_field_set: true
+  # mock 数据集中管理在 conftest.py（禁止在多个测试文件重复定义）
+  require_centralized_management: true
+  # 修改前置条件时必须同步更新 mock（新增预检方法/配置项/方法参数）
+  require_sync_on_precondition_change: true
+  # 测试失败时优先检查前置条件变更（grep 最近修改的方法签名）
+  priority_check_on_failure: "precondition_change"
+  # 详情采集测试 mock cookie 最小数量
+  min_cookie_count_for_detail_test: 22
+  # mock 数据集中管理位置
+  mock_data_location: "tests/conftest.py"
+  # 各场景的 mock 数据完整字段集示例
+  scenario_full_field_sets:
+    detail_cookie:
+      identity_cookies: ["cookie2", "sgcookie", "unb", "_m_h5_tk"]
+      session_cookies: ["cna", "tracknick", "_tb_token_", "t", "tfstk"]
+      other_cookies: ["xlly_s", "_samesite_flag_", "KLNotice", "isg", "tfstk", "_m_h5_tk_enc", "mtop_partitioning_detect", "csg", "sn", "_l_l_g", "sca", "_tb_token_", "unb", "_csrf_token"]
+      total_min: 22
+    search_token:
+      required_fields: ["_m_h5_tk", "cookie2", "sgcookie", "unb"]
+      total_min: 4
+  applicable:
+    - "修改前置条件（新增预检方法、新增配置项、新增方法参数）后"
+    - "测试失败时优先排查方向"
+    - "mock 数据管理"
+    - "新增测试用例时参考完整字段集"
+  not_applicable:
+    - "纯 UI 测试（无前置条件依赖）"
+    - "一次性临时测试（无需集中管理）"
+    - "纯函数测试（无外部依赖 mock）"
+
+# --- 🆕v4.30 跨边界访问契约（维度 30） ---
+# 复盘来源：两个 Bug 的共同根因都是「跨边界契约不明确」
+#   1. Bug 1: TypeError aware/naive datetime 相减 —— 应用层与 DB 层时区契约不明确
+#   2. Bug 2: AttributeError _Session —— 类定义与外部调用命名契约不明确
+# 核心原则：跨边界访问必须明确契约，不能依赖隐式约定
+# 配套规范：xianyu-hunter-dev/references/coding-standards.md §2.11/2.12/2.13/2.14
+# 审查要点：
+#   - references/sqlalchemy.md §十五、datetime 时区一致性
+#   - references/maintainability.md §4.4 私有属性封装
+#   - references/consistency-and-state-checks.md §维度 19 命名一致性验证
+
+# --- 🆕v4.28 工作流元规范硬约束（与 xianyu-hunter-dev meta-rules #21-24 对应）---
+# 复盘来源：docs/standards/四维度复盘方法论与历史教训集成.md
+# 自动化扫描从 120 项扩展到 124 项
+# 详见 references/version-changelog.md
+workflow_meta_rules_backend:
+  # B-REVIEW-WF-ERROR-HANDLING：后端错误处理决策树（meta-rule #21）
+  error_handling_decision_tree:
+    enabled: true
+    # 关键路径外层 except 禁止用 logger.warning(f"...{e}") 丢失堆栈
+    forbidden_critical_path_patterns:
+      - pattern: "except\\s+Exception\\s+as\\s+\\w+:\\s*\\n\\s*logger\\.warning\\(f['\"][^{]*\\{(\\w+)\\}['\"]"
+        message: "关键路径（启动/迁移/初始化）外层 except 禁止 logger.warning(f\"...{e}\") 丢失堆栈，必须 logger.exception()（meta-rule #21）"
+        severity: CRITICAL
+      - pattern: "except\\s*:\\s*\\n\\s*pass"
+        message: "禁止 except: pass 静默吞异常（meta-rule #21）"
+        severity: HIGH
+    # 关键路径函数名模式（启动/迁移/初始化，从 config 读取）
+    critical_path_patterns:
+      - "^startup_"
+      - "^migrate_"
+      - "^init_"
+      - "^_on_startup$"
+      - "^run_migrations$"
+    # 多迁移块独立 try/except（强依赖场景允许合并但需注释说明）
+    multi_block_isolation:
+      enabled: true
+      check_pattern: "try:\\s*\\n[\\s\\S]{0,2000}?except[\\s\\S]{0,500}?except[\\s\\S]{0,500}?except"
+      fix_pattern: "每个独立迁移块必须各自 try/except，块边界用 C-01/C-02 等注释标识"
+      block_identifier_pattern: "C-\\d{2}"
+    # 关键路径日志级别
+    critical_path_log_level: "logger.exception"
+    applicable: "所有启动/迁移/初始化函数；所有多步骤独立 try/except 块"
+    not_applicable: "性能 hot path / 测试代码（pytest.raises 期望异常）"
+
+  # B-REVIEW-WF-BATCH-CIRCUIT-BREAKER：后端批处理熔断（meta-rule #22）
+  # 关键约束：熔断时必须 save_progress() 持久化剩余项，断点续传才能恢复
+  batch_circuit_breaker_backend:
+    enabled: true
+    failure_threshold: 3
+    save_progress_on_circuit_break: true
+    # 状态机：running / paused / stopped / failed / completed
+    required_states: ["running", "paused", "stopped", "failed", "completed"]
+    # 终态不可复活（必须 persist + 时间戳）
+    terminal_states: ["stopped", "failed", "completed"]
+    # 熔断时必须持久化的字段
+    required_persist_keys:
+      - "batch_id"
+      - "cursor"
+      - "completed_ids"
+      - "remaining_ids"
+      - "paused_at"
+      - "pause_reason"
+    # 剩余项处理策略
+    remaining_item_strategy: "pending"  # pending / skipped
+    # 日志文案（避免"暂停"与 break 混用）
+    log_phrasing:
+      paused: "批次熔断暂停（可恢复），剩余 {count} 项标记为 pending"
+      stopped: "批次终止（用户主动），剩余 {count} 项不处理"
+      failed: "批次失败（异常退出），剩余 {count} 项标记为 skipped"
+    detect_patterns:
+      - pattern: "consecutive.*failure.*\\n[\\s\\S]{0,500}break(?!.*save_progress)"
+        message: "熔断分支 break 后必须调用 save_progress() 持久化剩余项（meta-rule #22）"
+        severity: CRITICAL
+      - pattern: "break(?!.*save_progress)(?![\\s\\S]{0,300}save_progress)"
+        message: "break 跳出批处理循环时必须配套 save_progress() 持久化"
+        severity: HIGH
+    applicable: "批量采集、批量导入、批量上报、长任务"
+    not_applicable: "实时单次请求 / 幂等小批量（≤3 个）/ 用户主动取消（走 stopped 分支）"
+
+  # B-REVIEW-WF-RESOURCE-LIFECYCLE：后端资源生命周期（meta-rule #23）
+  resource_lifecycle_backend:
+    enabled: true
+    required_holder_patterns:
+      - "playwright Page/Browser/Context"
+      - "aiohttp ClientSession"
+      - "httpx AsyncClient"
+      - "asyncio.Task"
+      - "asyncio.Lock"
+      - "SQLAlchemy Session"
+    cleanup_hook_required: true
+    cleanup_pattern: "stop() / close() / cancel() / __aexit__"
+    # 异步 Task 引用必须保留
+    required_task_holders:
+      - pattern: "asyncio\\.create_task\\(([^)]+)\\)"
+        check_method: "返回值必须赋值给 self._xxx_task（实例属性）"
+        fix_pattern: "self._xxx_task = asyncio.create_task(coro)"
+        severity: HIGH
+    # try/finally 变量必须前置初始化
+    try_finally_init_required: true
+    try_finally_init_pattern:
+      check: "try:\\s*\\n\\s*(\\w+)\\s*=.*\\nfinally:.*\\1"
+      fix: "变量前置初始化（如 page = None）"
+      severity: HIGH
+    applicable: "所有 Playwright/httpx/asyncio.Task/Session 创建"
+    not_applicable: "短生命周期对象 / 测试 mock / with 语句（自动管理）"
+
+  # B-REVIEW-WF-STATE-SYNC：后端跨进程状态同步（meta-rule #24）
+  state_sync_workflow_backend:
+    enabled: true
+    single_source_of_truth_required: true
+    cross_process_sse_push_required: true
+    ttl_grace_seconds: 0
+    # 单一可信源（主进程从哪个源读，避免子进程与主进程状态不一致）
+    single_source_of_truth_sources:
+      - concept: "cookie_layer"
+        source: "CookieRotator._layer_states"
+        consumers: ["worker", "cookie_checker", "/api/cookies/layers"]
+      - concept: "scheduler_status"
+        source: "Scheduler._job_states"
+        consumers: ["/api/about", "DingTalk notifier"]
+      - concept: "task_status"
+        source: "TaskRow.status (DB)"
+        consumers: ["scheduler", "worker", "/api/tasks"]
+    # 跨进程状态变更必须显式调用 invalidate_cache() 失效主进程缓存
+    invalidation_required: true
+    invalidation_methods:
+      - "CookieRotator.invalidate_cache()"
+      - "Scheduler.refresh_status()"
+      - "Repository.expire_all()"
+    # 禁止 TTL 兜底（必须显式失效 + SSE 推送）
+    forbidden_ttl_patterns:
+      - pattern: "cache_ttl_seconds\\s*=\\s*30"
+        message: "禁止 30 秒 TTL 缓存兜底跨进程状态，必须显式 invalidate_cache() + SSE 推送"
+        severity: HIGH
+      - pattern: "cache_ttl_seconds\\s*=\\s*60"
+        message: "禁止 60 秒 TTL 缓存兜底跨进程状态"
+        severity: MEDIUM
+    # "已检测"标记强制（避免 initial=False 被解读为"未检测"）
+    state_detection_bootstrap_required: true
+    required_check_markers:
+      - "last_checked_at > 0"
+      - "use_count > 0"
+      - "has_run = True"
+    applicable: "跨进程状态管理 / 跨模块状态广播 / SSE 推送"
+    not_applicable: "同进程单例状态 / 一次性函数返回值"
+
+# 四维度复盘报告新增章节（v4.28）
+# 在 report-template.md 中追加：
+#   1. 四维度复盘：本次审查问题对应四维度的分布
+#   2. 工作流元规范触发：触发的元规范编号（#21-24）+ 配置节点
+#   3. 配置变更点：本次审查触发的 config.yaml 变更建议
+cross_boundary_contract:
+  # === B-REVIEW-DATETIME-TZ-CONSISTENCY：datetime 时区一致性 ===
+  datetime_tz_consistency:
+    enabled: true
+
+    # 项目约定的时区策略：naive（与 SQLite 默认行为对齐）
+    # 可选值：naive | aware
+    project_tz_strategy: "naive"
+
+    # 应用层获取当前 UTC 时间的工具函数名（返回 aware datetime）
+    # 该函数返回 aware，与 DB 读回的 naive 相减前必须 .replace(tzinfo=None)
+    utcnow_helper_function: "_utcnow"
+
+    # 必须显式对齐时区的 DB datetime 字段后缀（这些字段从 DB 读回为 naive）
+    db_datetime_field_suffixes:
+      - "created_at"
+      - "updated_at"
+      - "confirmed_at"
+      - "first_seen"
+      - "last_seen"
+      - "publish_time"
+      - "expires_at"
+      - "last_active"
+
+    # 必须 .replace(tzinfo=None) 的场景（应用层 aware datetime → naive）
+    naive_alignment_patterns:
+      - operation: "subtract"
+        description: "aware datetime - naive datetime 抛 TypeError"
+        fix_pattern: "_utcnow().replace(tzinfo=None) - row.created_at"
+      - operation: "compare"
+        description: "aware datetime 与 naive datetime 比较结果不可预期"
+        fix_pattern: "_utcnow().replace(tzinfo=None) > row.created_at"
+
+    # fromisoformat 解析外部时间字符串后必须兜底补时区
+    fromisoformat_fallback_required: true
+    fromisoformat_fallback_pattern: |
+      last_dt = datetime.fromisoformat(s)
+      if last_dt.tzinfo is None:
+          last_dt = last_dt.replace(tzinfo=timezone.utc)
+
+    # isoformat 跨进程序列化必须保留时区信息
+    isoformat_keep_tz_required: true
+    # 禁止的 isoformat 调用模式（这些会丢失时区信息）
+    forbidden_isoformat_patterns:
+      - "datetime.now().isoformat()"        # 无 tzinfo
+      - "datetime.utcnow().isoformat()"     # 无 tzinfo + utcnow 已弃用
+    # 推荐的 isoformat 调用模式
+    recommended_isoformat_patterns:
+      - "datetime.now(timezone.utc).isoformat()"
+      - "_utcnow().isoformat()"
+
+    # ORM 模型 DateTime 列时区声明约束
+    orm_datetime_column:
+      # 项目默认：DateTime 不声明 timezone=True（与 SQLite 行为对齐）
+      default_timezone: false
+      # 应用层必须显式 .replace(tzinfo=None) 对齐
+      app_layer_alignment_required: true
+
+    # 适用场景
+    applicable:
+      - "任何对 datetime 做相减 / 比较 / 排序的代码"
+      - "跨 DB 边界读取 datetime 字段（SQLAlchemy ORM / text() 原始 SQL）"
+      - "跨进程传递 datetime（如子进程 → 主进程 → 前端）"
+      - "反序列化外部时间字符串（ISO format / RFC 2822）"
+      - "SQLite DateTime 列（默认 naive）+ 应用层 _utcnow()（aware）的混合场景"
+    # 不适用场景
+    not_applicable:
+      - "仅展示 datetime 字符串（不参与运算）"
+      - "使用 isoformat() 序列化且两端都遵循 aware 约定的场景"
+      - "PostgreSQL TIMESTAMP WITH TIME ZONE 列（读回始终 aware）"
+
+  # === B-REVIEW-PRIVATE-ATTR-ENCAPSULATION：私有属性封装 ===
+  private_attr_encapsulation:
+    enabled: true
+
+    # Python 私有属性前缀（社区约定）
+    private_prefix: "_"
+    # 双下划线前缀（名称改写，强烈禁止跨模块访问）
+    name_mangling_prefix: "__"
+
+    # 跨模块访问私有属性的禁止模式（grep 检测信号）
+    # 这些变量名前缀代表「外部对象」，访问其 _ 前缀属性视为跨模块访问
+    external_object_prefixes:
+      - "repo"
+      - "service"
+      - "manager"
+      - "client"
+      - "controller"
+      - "handler"
+      - "factory"
+      - "provider"
+
+    # 跨模块访问私有属性的合规修复方式
+    compliant_fix_patterns:
+      - pattern: "public_method"
+        description: "在类中提供公共方法封装跨模块访问"
+        example: "repo.get_config_value() 而非 repo._session()"
+      - pattern: "property"
+        description: "用 @property 暴露只读属性"
+        example: "@property\\ndef session(self): return self._session"
+      - pattern: "dependency_injection"
+        description: "通过构造函数注入依赖而非暴露内部状态"
+        example: "把 session 作为参数传给外部模块"
+
+    # 公共方法契约文档要求
+    public_method_contract_required:
+      - "docstring 说明返回值语义"
+      - "docstring 说明并发安全性（线程安全 / 协程安全）"
+      - "docstring 说明生命周期（何时创建、何时销毁）"
+
+    # 适用场景
+    applicable:
+      - "任何跨模块 / 跨类访问的场景"
+      - "仓储层（Repository）被业务层 / Web 层调用"
+      - "工具类被多个调用方使用"
+      - "单例 / 工厂模式中被外部访问的内部状态"
+    # 不适用场景
+    not_applicable:
+      - "类内部方法访问自身私有属性（合法且推荐）"
+      - "测试代码访问被测类的私有属性（应优先 mock 公共方法）"
+      - "子类访问父类的 _ 前缀属性（受保护属性，Python 惯例允许）"
+
+  # === B-REVIEW-NAMING-CONSISTENCY：命名一致性验证 ===
+  naming_consistency:
+    enabled: true
+
+    # 实例属性命名规范（PEP 8）
+    instance_attr_case: "snake_case"        # self._session ✅, self._Session ❌
+    # 类常量命名规范（即使实例属性也应 UPPER_SNAKE）
+    class_constant_case: "UPPER_SNAKE_CASE"  # self._MAX_RETRIES ✅
+    # 私有属性前缀
+    private_prefix: "_"
+    # 双下划线名称改写前缀（仅用于避免子类冲突）
+    name_mangling_prefix: "__"
+
+    # 属性名变体检测策略（审查时用 Grep 搜索这些变体）
+    variant_detection:
+      - variant_type: "case"
+        description: "大小写变体"
+        examples: ["_session → _Session, _SESSION"]
+      - variant_type: "plurality"
+        description: "单复数变体"
+        examples: ["_url → _urls, _urls → _url"]
+      - variant_type: "prefix"
+        description: "前缀变体"
+        examples: ["_x → __x, x → _x"]
+
+    # 类内属性命名一致性检查
+    intra_class_consistency_required: true
+    # 跨模块引用必须与定义完全一致（含大小写）
+    cross_module_reference_match_required: true
+
+    # 审查方法（属性名变体 Grep 法）
+    audit_method:
+      - step: 1
+        action: "提取类定义的所有 self._xxx 属性名"
+        command: "rg \"self\\.(_[a-zA-Z]\\w*)\" src/ -r '$1' | sort -u"
+      - step: 2
+        action: "对每个属性名生成变体（大小写/单复数/前缀）"
+      - step: 3
+        action: "Grep 全代码库搜索变体"
+        command: "rg \"\\._(Session|SESSION|sessions)\\b\" src/"
+      - step: 4
+        action: "重点检查跨模块引用"
+        command: "rg \"from.*import.*\\b\\w+\\b\" src/ -A 5 | rg \"\\._\\w+\""
+
+    # 适用场景
+    applicable:
+      - "任何有类属性 / 实例属性的代码审查"
+      - "跨模块引用类属性的场景"
+      - "重命名属性后的回归检查"
+      - "多人协作项目中属性命名风格统一"
+    # 不适用场景
+    not_applicable:
+      - "局部变量（函数内变量无跨模块访问问题）"
+      - "类型注解（TypeAlias / TypeVar 命名遵循独立规范）"
+      - "测试代码内部 Mock 对象的属性"
+
+  # === 跨边界访问契约总原则 ===
+  # 核心原则：跨边界访问必须明确契约，不能依赖隐式约定
+  boundary_types:
+    - boundary: "DB"
+      contract: "datetime 字段的时区状态（naive / aware）"
+      implementation: "ORM 模型字段声明 timezone=True 或应用层统一 .replace(tzinfo=None)"
+      audit_checklist: "是否存在跨 DB 边界的 datetime 读写？时区状态是否一致？"
+    - boundary: "class"
+      contract: "属性 / 方法的可访问性（public / private）"
+      implementation: "_ 前缀私有 + 公共方法封装跨模块访问"
+      audit_checklist: "是否存在跨模块访问 _ 前缀私有属性？是否有公共方法封装？"
+    - boundary: "module"
+      contract: "导出 API 的稳定性（稳定 / 实验）"
+      implementation: "__all__ 显式声明导出 + 公共 API docstring"
+      audit_checklist: "是否存在跨模块引用未通过 __all__ 声明的 API？"
+    - boundary: "process"
+      contract: "序列化格式（ISO 8601 / timestamp）"
+      implementation: "isoformat() 序列化 + fromisoformat 解析兜底"
+      audit_checklist: "是否存在跨进程传递 datetime？序列化格式是否一致？"
+
+  # 整体适用场景
+  applicable:
+    - "跨 DB 边界读写 datetime 字段"
+    - "跨模块访问类属性 / 方法"
+    - "跨进程传递 datetime / 序列化对象"
+    - "代码审查时检查跨边界契约一致性"
+  # 整体不适用场景
+  not_applicable:
+    - "类内部访问自身属性（无跨边界）"
+    - "纯函数计算（无外部边界）"
+    - "单进程单模块的局部变量"
+
+# ---------- v4.28.0 多用户与认证安全 ----------
+# B-REVIEW-MULTI-USER-RESOURCE-ISOLATION：单用户→多用户升级时全局单例资源必须按 user_id 维度隔离
+# 维度 21 多用户隔离
+multi_user_resource_isolation:
+  enabled: true
+  # user_id 白名单正则（防路径遍历，禁止 ./\ 等危险字符）
+  user_id_pattern: "^[A-Za-z0-9_-]{1,64}$"
+  # 默认用户 ID（兜底降级值，单用户兼容模式）
+  default_user_id: "default"
+  # 资源隔离维度（grep 检查每个维度是否按 user_id 分桶）
+  isolation_dimensions:
+    - file        # 文件路径按 user_id 分文件（如 cookies_{uid}.json）
+    - cache       # 缓存按 user_id 分桶（dict[str, tuple[dict, float]]）
+    - sqlite      # SQLite 兜底判断 default（无需分库，仅条件分支）
+  # 排除路径（这些路径不需要 user_id 隔离，如全局日志/配置）
+  exclude_paths: []
+  description: "单用户→多用户升级时资源隔离规范"
+  applicable:
+    - "单用户→多用户升级"
+    - "多租户系统"
+    - "多账号管理（如多闲鱼账号）"
+  not_applicable:
+    - "纯内部工具（无用户概念）"
+    - "单租户 SaaS（用户数固定为 1）"
+    - "无状态计算服务（无持久化资源）"
+
+# B-REVIEW-AUTH-MULTI-PATH-VALIDATION：多种认证方式时中间件必须按优先级链式校验
+# 维度 7 安全性
+auth_multi_path_validation:
+  enabled: true
+  # 管理令牌比较函数（必须常量时间比较防时序攻击）
+  web_token_compare_func: "hmac.compare_digest"
+  # 会话 token 验证方法名（查库校验，返回 user_id 或 None）
+  session_verify_method: "verify_session"
+  # 异常降级日志级别（必须 warning，禁止 debug 静默）
+  exception_log_level: "warning"
+  # 公开路径白名单配置节点引用（前缀放行，不进认证）
+  public_prefixes_config: "auth.public_prefixes"
+  # 禁止的日志级别（这些级别会吞掉异常）
+  forbidden_log_levels:
+    - "debug"
+  description: "认证中间件多路校验规范"
+  applicable:
+    - "管理后台 + 用户前台混合认证"
+    - "多角色系统（管理员/普通用户/访客）"
+    - "API 网关需区分内部服务调用与外部用户调用"
+  not_applicable:
+    - "单一认证方式（仅一种 token）"
+    - "纯 API 网关（无业务认证逻辑）"
+    - "内部微服务（mTLS 已保证身份）"
+
+# B-REVIEW-SESSION-TOKEN-SECURITY：会话 token 的生成/存储/校验/撤销必须遵循安全最佳实践
+# 维度 7 安全性
+session_token_security:
+  enabled: true
+  # token 生成函数（必须密码学安全随机）
+  token_generate_func: "secrets.token_urlsafe"
+  # token 生成长度（字节）
+  token_generate_length: 48
+  # token 存储哈希算法（禁止存明文）
+  token_hash_algo: "sha256"
+  # token 校验比较函数（防时序攻击）
+  compare_func: "hmac.compare_digest"
+  # token 总有效期（天）
+  ttl_days: 30
+  # 滑动续期阈值（距过期不足 N 天时延长 ttl_days）
+  renewal_threshold_days: 7
+  # 撤销时是否清缓存（必须清，否则撤销不生效）
+  revoke_clear_cache: true
+  # 会话固定防护（签发新 session 前失效旧 session）
+  session_fixation_protection: true
+  description: "会话 token 安全管理规范"
+  applicable:
+    - "涉及用户会话的系统"
+    - "需防御时序攻击的 token 校验"
+    - "需滑动续期的长期会话"
+    - "登录后绑定敏感操作的场景"
+  not_applicable:
+    - "无状态 JWT（无服务端存储）"
+    - "一次性 token（如邮件验证链接）"
+    - "内部服务通信（mTLS 替代）"
+    - "极短生命周期 token（< 1 分钟）"
+
+# B-REVIEW-SNAPSHOT-REALTIME-OVERWRITE：历史快照与实时采集数据合并时必须按字段类型分档覆盖
+# 维度 13 代码质量
+snapshot_realtime_overwrite:
+  enabled: true
+  # 覆盖策略：按字段类型分四档
+  overwrite_strategy:
+    # 非空字段：新值存在（非 None / 非空字符串）则覆写
+    non_empty_fields:
+      - title
+      - url
+      - id
+      - region
+      - brand
+      - seller_id
+      - publish_time
+    # 数值字段：新值 > 0 才覆写（防止 0 误覆盖真实数据）
+    positive_numeric_fields:
+      - price
+      - count
+      - view_cnt
+      - want_cnt
+    # 状态字段：始终覆写（实时性最高）
+    state_fields:
+      - is_sold
+      - is_deleted
+    # 标识字段：只填缺失（标识稳定不变，禁止覆写）
+    identity_fields:
+      - seller_nick
+      - nickname
+  # 每档覆盖策略必须有单元测试覆盖
+  require_unit_test: true
+  description: "快照与实时数据覆盖决策规范"
+  applicable:
+    - "数据采集系统（历史快照 + 实时更新）"
+    - "缓存与源数据同步"
+    - "多源数据合并（如浏览器 + API + DB）"
+    - "历史快照与实时更新并存的场景"
+  not_applicable:
+    - "纯实时系统（无历史快照）"
+    - "纯审计系统（仅追加不修改）"
+    - "纯日志系统（无字段覆盖语义）"
+
+# B-REVIEW-USER-IDENTITY-PRIORITY：用户身份识别必须有明确优先级链且配置化管理
+# 维度 21 多用户隔离
+user_identity_priority:
+  enabled: true
+  # 优先级链（从高到低，每级有 source/pattern/hash/description）
+  priority_chain:
+    - source: "cookie.unb"
+      pattern: "^\\d{8,}$"
+      description: "闲鱼用户 ID（8 位以上数字，最权威）"
+    - source: "cookie.cookie2"
+      hash: "sha256"
+      length: 16
+      description: "cookie2 哈希降级（无 unb 时使用）"
+    - source: "default"
+      value: "default"
+      description: "最终降级（兜底，禁止抛错）"
+  # 识别后必须调用 identify_or_create 确保库内有记录
+  require_identify_or_create: true
+  description: "用户身份识别优先级规范"
+  applicable:
+    - "多用户系统（需识别当前操作者）"
+    - "Cookie 认证场景（多 cookie 字段降级）"
+    - "多账号管理（账号切换时身份重新识别）"
+  not_applicable:
+    - "无用户概念的工具（如纯计算服务）"
+    - "固定用户系统（用户数固定为 1，无需识别）"
+    - "已通过中间件注入 user_id 的下游模块（无需重复识别）"
+
+# ============================================================
+# 🆕v4.31 注册式资源 endpoint 契约（meta-rule #33 后端落地，新增维度 32）
+# B-REVIEW-159 REGISTRATION-ENDPOINT-CHECK：前端已在 menu_registry/router/page/api_wrapper 注册的资源
+# 后端必须在 api_<domain>.py 提供对应 @router.<method> endpoint，缺一即 CRITICAL
+# 复盘来源：2026-07-06 "通知中心菜单点击无反应" 根因——5 层契约中 L5 后端 endpoint 已存在但 L2 路由缺失
+# 详见 xianyu-hunter-dev/references/registration-completeness.md
+# ============================================================
+backend_registration_endpoint:
+  enabled: true
+  check_command: "python .trae/skills/xianyu-hunter-dev/scripts/check_registration.py"
+  fail_on_missing_endpoint: "CRITICAL"
+  # 5 层契约（与前端 frontend_registration_completeness.required_layers 对应）
+  precheck_layers:
+    - layer: "L1"
+      name: "menu_registry"
+      path: "config/menu_registry.yaml"
+      required_field: "path"
+    - layer: "L2"
+      name: "router"
+      path: "frontend/src/App.tsx"
+      required_field: "<Route path="
+    - layer: "L3"
+      name: "page"
+      path: "frontend/src/pages/<domain>/index.tsx"
+      required_field: "export default"
+    - layer: "L4"
+      name: "api_wrapper"
+      path: "frontend/src/api/<domain>.ts"
+      required_field: "export const <domain>Api"
+    - layer: "L5"
+      name: "backend_endpoint"
+      path: "src/xianyu_hunter/web/routes/api_<domain>.py"
+      required_field: "@router.<method>"
+  # 后端 endpoint 必须提供的最小集（菜单注册后必须实现的 API）
+  required_endpoint_methods:
+    - "GET"      # 列表/详情
+    - "POST"     # 创建（幂等）
+    - "PATCH"    # 部分更新（三态语义）
+  # 已知的 5 层齐全资源（参考基线，前端 L1-L4 + 后端 L5 都齐全）
+  known_complete_resources:
+    - "tasks"
+    - "items"
+    - "evaluations"
+    - "chatbot"
+    - "config"
+    - "logs"
+    - "timeline"
+    - "about"
+  # 跨层字段映射（L1 path → L5 endpoint 末段）
+  required_field_mapping:
+    - "L1 menu_registry.path 末段 == L2 <Route path> 末段"
+    - "L2 <Route path> 末段 == L3 pages 目录名（PascalCase）"
+    - "L3 pages 目录名（小写） == L4 api/<domain>.ts"
+    - "L4 <domain> == L5 api_<domain>.py 路由前缀"
+  # 自动化校验
+  auto_verification:
+    enabled: true
+    exit_code_zero_required: true
+    output_format: "table+json"
+    pre_commit_hook: true
+    ci_integration: true
+  # 缺失 endpoint 的常见表现（与用户反馈症状对应）
+  symptom_to_missing_layer:
+    "菜单点击 URL 不变": "L2 router 或 L3 page 缺失"
+    "菜单点击 404": "L5 backend_endpoint 缺失"
+    "菜单点击页面空白": "L3 page 存在但 render 逻辑未实现"
+    "菜单点击 401": "L4 api_wrapper 调用了未在 auth 白名单的 endpoint"
+  detection_signals:
+    - pattern: "src/xianyu_hunter/web/routes/api_(\\w+)\\.py"
+      message: "后端已存在该域的 endpoint 路由文件，应配合前端 5 层契约检查"
+      severity: INFO
+  applicable: "所有用户可点击/可导航的功能入口（新菜单、新页面、新功能模块）"
+  not_applicable: "纯内部 API（无前端消费方）、批量任务回调、第三方 webhook"
+
+# ============================================================
+# 🆕v4.31 修复前全链路根因扫描协议（meta-rule #34 后端落地，新增维度 33）
+# B-REVIEW-160 ROOT-CAUSE-CHAIN-CHECK：修复非平凡 bug 前必须列 ≥3 根因并按 5 维度链式检查
+# 复盘来源：通知中心菜单问题修复时发现「仅修路由」未扫描全链路，导致回归
+# 详见 xianyu-hunter-dev/references/root-cause-protocol.md
+# ============================================================
+root_cause_chain_check:
+  enabled: true
+  min_root_causes: 3
+  # 5 个根因扫描维度（与 backend_registration_endpoint 5 层契约呼应）
+  required_chain_check_dimensions:
+    - dimension: "用户层"
+      description: "用户具体反馈是什么？期待什么行为？实际发生什么？"
+      check_methods: ["重现 bug", "对照预期 vs 实际"]
+    - dimension: "接口层"
+      description: "API endpoint 返回是否正确？HTTP 状态码？错误信息？"
+      check_methods: ["curl 调用", "检查 OpenAPI 文档", "grep 路由注册"]
+    - dimension: "数据层"
+      description: "DB 中数据是否存在？过滤逻辑是否误过滤？schema 是否一致？"
+      check_methods: ["sqlite3 直查", "Repo 层方法断点", "migrations 检查"]
+    - dimension: "配置层"
+      description: "config.yaml / .env / menu_registry.yaml 是否正确？feature flag？"
+      check_methods: ["cat config.yaml", "grep menu_registry", "检查白名单"]
+    - dimension: "历史层"
+      description: "近期 git log 中是否有相关变更？是否有被回退的代码？"
+      check_methods: ["git log --oneline", "git diff HEAD~5", "git stash list"]
+  # 必填的修复前 PR 描述段
+  required_pr_sections:
+    - "≥3 根因列表（覆盖用户层/接口层/数据层/配置层/历史层 5 维度）"
+    - "每个根因的验证工具与结果（Grep/Glob/Read/RunCommand）"
+    - "最小修改清单（仅改根因相关行，不顺便重构）"
+    - "全链路反查结果（修改后 grep 验证 ≥3 处关键 pattern）"
+    - "防回归测试（unit test + integration test + B/F-REVIEW 检查点）"
+  # 最小修改原则
+  min_modification_principle:
+    enabled: true
+    unrelated_files_threshold: 3   # git diff 涉及 ≥3 个无关文件视为违反
+    require_pr_description_section: true
+    forbidden_in_fix_pr:
+      - "顺手重构无关代码"
+      - "升级依赖版本（必须单独 PR）"
+      - "修改与 bug 无关的测试"
+      - "添加与 bug 无关的新功能"
+  # 测试覆盖要求
+  test_coverage:
+    new_logic_unit_test_required: true   # 新增逻辑无 unit test 视为 WARNING
+    integration_test_required: false     # 跨层修改才需要 integration test
+  required_verification_tools:
+    - "Grep"
+    - "Glob"
+    - "Read"
+    - "RunCommand"
+  # 5 步 SOP
+  sop_steps:
+    - step: 1
+      name: "列根因"
+      output: "≥3 个独立的根因列表"
+    - step: 2
+      name: "排根因"
+      output: "用 Grep/Glob/Read/RunCommand 逐一验证每个根因"
+    - step: 3
+      name: "修复"
+      output: "只修根因相关行（最小修改原则）"
+    - step: 4
+      name: "反查"
+      output: "修复后用脚本/grep 验证全链路是否还有类似缺口"
+    - step: 5
+      name: "防回归"
+      output: "unit test + integration test + B/F-REVIEW 检查点"
+  # 检测信号
+  detection_signals:
+    - "PR 描述无'根因列表'段"
+    - "git diff 涉及 ≥3 个无关文件"
+    - "新增函数无对应 unit test"
+    - "修复同一类型 bug 在最近 3 个 PR 中重复出现"
+    - "PR 含 '顺便'/'顺便改一下'/'同时优化' 等字样"
+  applicable: "所有非平凡 bug 修复（影响 > 1 个文件、需要修改 ≥2 层、用户报告具体异常现象）"
+  not_applicable:
+    - "简单 typo 修复"
+    - "单行配置修改"
+    - "纯文案/注释修改"
+    - "依赖升级（按 changelog 处理）"
+
+# ============================================================
+# 🆕v4.31 前后端字段契约单一可信源（meta-rule #35 后端落地，新增维度 34）
+# B-REVIEW-161 CONTRACT-OWNER-MARKER：后端 Pydantic/DB Row 字段 = 权威源，必须显式标注
+# 复盘来源：通知中心修复时发现前端 types.ts 字段命名与后端 Pydantic 不一致
+# 详见 xianyu-hunter-dev/references/contract-single-source.md
+# ============================================================
+contract_owner_marker:
+  enabled: true
+  # 权威源配置（后端为唯一可信源）
+  authority_source:
+    primary: "backend_pydantic_model"   # Pydantic v2 BaseModel 字段
+    secondary: "backend_db_row"         # SQLAlchemy Row 字段（兜底）
+    forbidden_alternative_sources:
+      - "frontend_types_only"
+      - "api_response_sample"
+      - "openapi_schema_only"
+  # 后端 Pydantic BaseModel 必填的标注
+  required_marker_fields:
+    - field_name: "id"
+      marker_type: "primary_key"
+      required_in_db: true
+    - field_name: "created_at"
+      marker_type: "timestamp_utc"
+      required_in_db: true
+      frontend_render: "new Date(isoStr)"
+  # 后端字段变更必须同步通知前端的列表（受影响的 frontend/src/api/types.ts 文件）
+  affected_frontend_types_files:
+    - "frontend/src/api/notifications.ts"
+    - "frontend/src/api/tasks.ts"
+    - "frontend/src/api/items.ts"
+    - "frontend/src/api/evaluations.ts"
+  # 字段命名规则
+  field_naming:
+    backend_style: "snake_case"
+    forbidden_frontend_styles:
+      - "camelCase"
+      - "PascalCase"
+    require_exact_match: true   # 严格匹配，禁止转换
+    require_null_semantic_annotation: true  # null 必须注释其语义
+  # 双向一致性检查
+  bidirectional_consistency_check:
+    enabled: true
+    backend_change_triggers:
+      - "Pydantic model 字段增删 → 前端 types.ts 必须同步"
+      - "DB Row 字段重命名 → 前端 types.ts 必须同步"
+      - "字段类型变更 → 前端 types.ts 必须同步"
+    frontend_change_triggers:
+      - "types.ts 新增字段 → 后端 Pydantic model 必须有对应字段"
+      - "types.ts 修改字段类型 → 后端 Pydantic model 类型必须兼容"
+    notification_method: "PR description + Slack/dingtalk notification"
+  # 命名漂移检测（CRITICAL）
+  naming_drift_detection:
+    enabled: true
+    drift_patterns:
+      - pattern: "xxx_yyy"
+        frontend_wrong: "xxxYyy"
+        severity: CRITICAL
+        message: "后端 Pydantic 字段 xxx_yyy + 前端 types.ts 字段 xxxYyy = CRITICAL 命名漂移"
+      - pattern: "is_xxx"
+        frontend_wrong: "isXxx"
+        severity: CRITICAL
+        message: "is_ 前缀字段禁止转 camelCase"
+      - pattern: "_xxx"
+        frontend_wrong: "Xxx"
+        severity: CRITICAL
+        message: "_ 前缀私有字段禁止转 PascalCase"
+  # Pydantic 模型必填的标注方法
+  required_pydantic_markers:
+    - "@field_validator 校验关键字段"
+    - "Field(..., description=...) 标明权威源角色"
+    - "model_config = ConfigDict(from_attributes=True) 允许 ORM 转换"
+  # 检测信号
+  detection_signals:
+    - pattern: "class \\w+\\(BaseModel\\):(?!\\s*\\n\\s*model_config)"
+      message: "Pydantic BaseModel 必须有 model_config 配置"
+      severity: MEDIUM
+    - pattern: "class \\w+\\(BaseModel\\):[\\s\\S]{0,500}^\\s+(\\w+):\\s+\\w+(?!.*description=)"
+      message: "Pydantic 字段应使用 Field(..., description=...) 标明权威源角色"
+      severity: LOW
+  # 同步检查清单
+  sync_checklist:
+    - "后端 Pydantic 字段列表与前端 types.ts 字段列表 1:1 对齐（数量+名称+类型+null 语义）"
+    - "后端 datetime 字段在前端必须 new Date() 解析"
+    - "后端枚举值与前端 union type 1:1 对齐"
+    - "后端字段变更 PR 必须列在 affected_frontend_types_files 中"
+  applicable: "所有前后端交互的 DTO/Response/Request 模型（特别是新增接口 + 修改现有接口）"
+  not_applicable:
+    - "纯后端内部模型（无 API 暴露）"
+    - "第三方 API wrapper（按第三方契约）"
+    - "纯计算/转换中间模型"
+
+# =============================================================================
+# 🆕v4.37 编码规范防御性复盘（meta-rules #57-63 后端落地）
+# =============================================================================
+# 配套规范：xianyu-hunter-dev v4.37.0 step 189-195
+# 复盘背景：基于本轮对话解决的 8 类问题（async/await 误用 / NullPool 性能问题 /
+# HTTP 状态码语义模糊 / CSS 选择器失效 / 异常日志丢失 traceback /
+# 并发安全 page closure / 参数传递缺失 / 日志质量退化链）
+# 所有参数通过此节点管理，不硬编码
+meta_rules_57_63:
+  # ---------------------------------------------------------------------------
+  # B-REVIEW-182 ASYNC-AWAIT-STATIC-CHECK（meta-rule #57 后端落地）
+  # ---------------------------------------------------------------------------
+  # 检查点：async def 方法体内若不含 await 表达式，必须改为同步 def
+  # 历史教训：worker.py _finalize_run 标记为 async def 但方法体全同步，
+  #           Python 3.14 优化后返回 None，await None 触发 TypeError 导致调度器崩溃
+  async_await_check:
+    enabled: true
+    severity: CRITICAL
+    # 白名单装饰器：这些装饰器的 async def 可豁免（接口定义/上下文管理器）
+    whitelist_decorators:
+      - "@abstractmethod"
+      - "@contextlib.asynccontextmanager"
+    # async generator（含 yield 的 async def）豁免
+    allow_async_generators: true
+
+  # ---------------------------------------------------------------------------
+  # B-REVIEW-183 RESOURCE-POOL-BENCHMARK（meta-rule #58 后端落地）
+  # ---------------------------------------------------------------------------
+  # 检查点：数据库/HTTP/浏览器资源池配置必须有性能基准数据支持
+  # 历史教训：db_models.py 使用 NullPool 导致 list_and_count_task_links 慢查询 231ms
+  #           （其中 ~300ms 是 PRAGMA 开销），改为 QueuePool 后降至 11.9ms（19x 提升）
+  resource_pool_benchmark:
+    enabled: true
+    severity: WARNING
+    # 系统层开销阈值（>50ms 必须排查资源池配置）
+    overhead_threshold_ms: 50
+    # 资源池类型清单
+    pool_types:
+      - NullPool      # 每次新建连接，仅用于测试/单次请求
+      - QueuePool     # 复用连接，生产环境推荐
+      - StaticPool    # 单连接，测试隔离用
+    # 是否要求 docstring 说明选择理由
+    require_docstring: true
+
+  # ---------------------------------------------------------------------------
+  # B-REVIEW-184 HTTP-STATUS-CODE-MAPPING（meta-rule #59 后端落地）
+  # ---------------------------------------------------------------------------
+  # 检查点：底层模块返回多原因的 None/错误时，必须建立 reason_code → status_code 映射表
+  # 历史教训：collection_service.py 将所有 detail() None 映射为 410，
+  #           前端展示"商品详情页加载失败或已下架"，实际原因是 cookie 过期需重新登录
+  http_status_code_mapping:
+    enabled: true
+    severity: CRITICAL
+    # 底层失败原因字段名（底层模块设置 last_*_failure_reason）
+    reason_to_status_map_field: "last_detail_failure_reason"
+    # 默认状态码（仅用于未映射的兜底）
+    default_status_code: 410
+    # 是否要求底层模块设置 reason 属性
+    required_reason_attribute: true
+
+  # ---------------------------------------------------------------------------
+  # B-REVIEW-185 CSS-SELECTOR-FALLBACK（meta-rule #60 后端落地）
+  # ---------------------------------------------------------------------------
+  # 检查点：依赖第三方网站 DOM 的选择器必须有 ≥3 级降级
+  # 历史教训：_detail.py _parse_sale_counts_from_tabs 单一选择器 [class*="tabItem"]
+  #           在闲鱼改版后失效，on_sale=0 sold=0 误报，添加三级降级后修复
+  css_selector_fallback:
+    enabled: true
+    severity: CRITICAL
+    # 最少降级级数（业务语义 className → HTML role 属性 → 文本内容前缀扫描）
+    min_fallback_levels: 3
+    # 调试 dump 触发条件（收窄到核心字段失败，避免每次失败都 dump）
+    dump_trigger_condition: "on_sale==0"
+    # 豁免选择器（业务语义稳定，无需降级）
+    excluded_selectors:
+      - "[id="
+      - "[data-"
+
+  # ---------------------------------------------------------------------------
+  # B-REVIEW-186 EXCEPTION-LOG-SEMANTIC（meta-rule #61 后端落地）
+  # ---------------------------------------------------------------------------
+  # 检查点：except 块内必须用 logger.exception('描述') 保留完整 traceback
+  # 历史教训：关键路径用 logger.warning(f"...{e}") 丢失 traceback，
+  #           定位问题耗时 30+ 分钟才能复现
+  exception_log_semantic:
+    enabled: true
+    severity: CRITICAL
+    # 禁用的日志模式（在 except 块内）
+    forbidden_patterns:
+      - 'logger\.warning.*f["\u201c][^"]*\{e\}'    # 禁用 logger.warning(f'...{e}') 丢堆栈
+      - 'logger\.exception.*f["\u201c]'            # 禁用 logger.exception(f'...') 多余 f-string
+    # 必须的日志模式
+    required_patterns:
+      - "logger.exception"
+    # 关键路径函数（必须用 logger.exception()）
+    critical_path_functions:
+      - "_on_startup"
+      - "run_migrations"
+      - "_init_*"
+
+  # ---------------------------------------------------------------------------
+  # B-REVIEW-187 EXTERNAL-RESOURCE-LIFECYCLE（meta-rule #62 后端落地）
+  # ---------------------------------------------------------------------------
+  # 检查点：外部传入的资源（Page/Connection/Lock）必须配对调用 register/unregister
+  # 历史教训：collection_service.py 接收外部 page 但未注册，并发采集时 page 被主流程关闭
+  external_resource_lifecycle:
+    enabled: true
+    severity: CRITICAL
+    # 外部资源类型清单
+    resource_types:
+      - Page           # Playwright Page
+      - Connection     # DB Connection
+      - Lock           # asyncio.Lock
+    # 必须配对的函数名
+    pair_required_functions:
+      - "register_external_page"
+      - "unregister_external_page"
+    # 是否要求在 finally 块中 unregister
+    finally_block_required: true
+
+  # ---------------------------------------------------------------------------
+  # B-REVIEW-188 DB-WRITE-IDENTITY-TRACE（meta-rule #63 后端落地）
+  # ---------------------------------------------------------------------------
+  # 检查点：数据库写入函数必须含 user_id 参数；converter 处理 re.Match 必须 m.group(1)
+  # 历史教训：_SELLER_LABEL_PATTERNS 用 int 作为 converter，但 re.findall 返回 Match 对象，
+  #           int(m) 报错；upsert_eval_event 缺 user_id 导致跨用户数据删除
+  db_write_identity_trace:
+    enabled: true
+    severity: CRITICAL
+    # 必须含 user_id 参数的函数名模式
+    required_user_id_functions:
+      - "upsert_*"
+      - "insert_*"
+      - "update_*"
+      - "create_*"
+    # converter 函数处理 re.Match 必须显式 m.group(1)
+    converter_match_required: true
+    # 豁免函数（系统级写入无需 user_id）
+    excluded_functions:
+      - "_log_*"       # 日志表写入
+      - "_stats_*"     # 统计表写入
+
+  # ---------------------------------------------------------------------------
+  # B-REVIEW-182~188 自动扫描规则
+  # ---------------------------------------------------------------------------
+  hard_constraints:
+    rules:
+      # 🆕v4.38 B-REVIEW-182 异步方法 await 语义静态校验（meta-rule #57）
+      - name: "B-REVIEW-182 ASYNC-AWAIT-STATIC-CHECK"
+        pattern: "async\\s+def\\s+\\w+\\([^)]*\\)[^:]*:[^\\n]*\\n(?!(?:.*\\n)*?.*await)"
+        message: "async def 方法体内必须含 await 表达式，否则改同步 def；调用点同步移除 await（meta-rules #57），Python 3.14 优化后 await None 触发 TypeError"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-183 资源池配置性能基准（meta-rule #58）
+      - name: "B-REVIEW-183 RESOURCE-POOL-BENCHMARK"
+        pattern: "poolclass=NullPool"
+        message: "NullPool 每次新建连接执行 5 条 PRAGMA ~100ms，生产环境必须用 QueuePool 并在 docstring 记录性能基准（meta-rules #58）"
+        severity: WARNING
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-184 HTTP 状态码语义映射（meta-rule #59）
+      - name: "B-REVIEW-184 HTTP-STATUS-CODE-MAPPING"
+        pattern: "raise\\s+HTTPException\\((410|502)\\b"
+        message: "多原因 None 必须建立 reason_code → status_code 映射表，禁止多原因一律映射同一码（meta-rules #59），底层设置 last_*_failure_reason"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-185 CSS 选择器降级链（meta-rule #60）
+      - name: "B-REVIEW-185 CSS-SELECTOR-FALLBACK"
+        pattern: "querySelector(All)?\\(['\"][^'\"]+['\"]\\)\\s*(?!.*length)"
+        message: "第三方网站 DOM 选择器必须有 ≥3 级降级（业务语义 className → HTML role 属性 → 文本内容前缀扫描），单一选择器视为违规（meta-rules #60）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-186 异常日志语义完整性（meta-rule #61）
+      - name: "B-REVIEW-186 EXCEPTION-LOG-SEMANTIC"
+        pattern: "except\\s+Exception\\s+as\\s+e:\\s*\\n[^\\n]*logger\\.warning\\(f"
+        message: "except 块内必须用 logger.exception('描述') 保留 traceback，禁用 logger.warning(f'...{e}') 丢失堆栈（meta-rules #61）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-187 外部资源生命周期（meta-rule #62）
+      - name: "B-REVIEW-187 EXTERNAL-RESOURCE-LIFECYCLE"
+        pattern: "reuse_page\\s*=\\s*Page\\s*\\|\\s*None"
+        message: "外部传入的 Page/Connection/Lock 必须配对调用 register/unregister，且在 finally 块 unregister 避免泄漏（meta-rules #62）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-188 数据库写入身份追踪（meta-rule #63）
+      - name: "B-REVIEW-188 DB-WRITE-IDENTITY-TRACE"
+        pattern: "def\\s+(upsert|insert|update|create)_\\w+\\([^)]*\\)\\s*(?!.*user_id)"
+        message: "数据库写入函数必须含 user_id 参数用于跨用户隔离；converter 处理 re.Match 必须显式 m.group(1) 再转型，禁用 int(m)（meta-rules #63）"
+        severity: CRITICAL
+        auto_fix: false
+
+# ============================================================
+# 🆕v4.34 工程闭环元规范（meta-rules #52-#55 落地，新增维度 36）
+# B-REVIEW-177 PARAM-CHAIN-EXEC：参数链闭环验证
+# B-REVIEW-178 MODE-VERTICAL-CHAIN：业务模式纵向链路一致性
+# B-REVIEW-179 PARSER-FALLBACK-CHAIN：外部页面解析容错
+# B-REVIEW-180 MOCK-SYNC-BOUNDARY：mock 同步与边界精确性
+# ============================================================
+param_chain_exec:
+  enabled: true
+  description: "过滤类参数从 API 接收后必须存在对应的消费点"
+  metadata_whitelist:
+    - "page"
+    - "page_size"
+    - "limit"
+    - "offset"
+    - "sort"
+    - "order"
+    - "order_by"
+    - "fields"
+    - "select"
+  filter_param_prefixes:
+    - "filter_"
+    - "range_"
+    - "min_"
+    - "max_"
+    - "ratio_"
+  detection_signals:
+    - pattern: "def\\s+\\w+\\([^)]*\\b(market_ratio|price_range|filter_)\\w*\\b[^)]*\\)"
+      message: "API 接收过滤参数但未验证是否消费"
+      severity: HIGH
+    - pattern: "return\\s+\\{[^}]*\\b(market_ratio|price_range)\\b"
+      message: "参数仅出现在 return 中未消费"
+      severity: CRITICAL
+  sync_checklist:
+    - "过滤参数必须出现在函数调用或条件分支中"
+    - "单元测试必须含传参 vs 不传参对比用例"
+    - "元数据参数白名单在 config 管理"
+  applicable: "所有有过滤参数的列表查询 API（list_evaluations / list_items / search_* / list_orders）、PATCH/PUT 接口的可空字段"
+  not_applicable:
+    - "GET 单个资源详情（无过滤）"
+    - "DELETE 接口（参数仅定位资源）"
+    - "仅作元数据返回的字段（total_count）"
+    - "创建类 POST 接口"
+
+mode_vertical_chain:
+  enabled: true
+  description: "业务模式枚举必须在 6 层纵向一致传递"
+  required_layers:
+    - "decision"
+    - "event"
+    - "notification"
+    - "router"
+    - "endpoint"
+    - "state_machine"
+  optional_layers: []
+  mode_field_names:
+    - "task_mode"
+    - "execution_mode"
+    - "notification_mode"
+  detection_signals:
+    - pattern: "def\\s+_should_buy\\([^)]*\\)"
+      message: "决策函数必须根据 mode 返回不同决策"
+      severity: HIGH
+    - pattern: "Event\\(type=\"EVAL_PASSED\"[^)]*\\)"
+      message: "事件 payload 必须含 task_mode"
+      severity: CRITICAL
+  sync_checklist:
+    - "grep mode 枚举值，每个值必须在 6 个层都至少出现 1 次"
+    - "中间状态必须显式声明（如 pending_confirm）"
+    - "mode 字段名在 6 层必须严格一致（snake_case 透传）"
+  applicable: "所有引入 mode 枚举且影响后续行为的业务（任务执行模式、采集模式、通知模式、订单确认模式）"
+  not_applicable:
+    - "纯展示型 mode 字段（仅日志记录不影响流转）"
+    - "内部状态字段（不跨层传递）"
+    - "单一布尔开关（无枚举语义，归 #40 MULTI-FIELD-LINKED-SWITCH）"
+
+parser_fallback:
+  enabled: true
+  description: "解析第三方页面 DOM 必须多级 fallback selector 策略"
+  fallback_levels: 3
+  selectors:
+    - "[class*='tabItem']"
+    - "[class*='tab'][role='tab']"
+    - "text_prefix_scan"
+  debug_dump_trigger: "on_sale == 0"
+  detection_signals:
+    - pattern: "soup\\.select\\(['\"]\\.[\\w-]+['\"]\\)"
+      message: "单一 selector 无 fallback"
+      severity: HIGH
+    - pattern: "tabItem|tab.*role.*tab"
+      message: "selector 字符串硬编码（应配置化）"
+      severity: MEDIUM
+  sync_checklist:
+    - "三级 fallback：结构化 selector → 属性 selector → 文本扫描"
+    - "debug dump 触发条件基于业务语义（on_sale==0）而非实现细节（sold==0）"
+    - "selector 列表在 config 管理，禁止硬编码"
+  applicable: "所有解析闲鱼 / 淘宝 / 天猫 / 京东等第三方页面的代码（_detail.py / _parse_* 函数 / Playwright page.evaluate 返回值解析）"
+  not_applicable:
+    - "解析自己生成的内容（本地 HTML 模板）"
+    - "解析 API 返回的 JSON（结构稳定）"
+    - "解析固定 schema 的 XML/YAML"
+
+mock_sync:
+  enabled: true
+  description: "mock 类型与边界必须与被 mock 对象同步"
+  type_mapping:
+    sync: "MagicMock"
+    async: "AsyncMock"
+  required_assertions:
+    - "no_real_network_request"
+    - "no_file_write"
+    - "no_email_send"
+  detection_signals:
+    - pattern: "AsyncMock\\(.*\\)"
+      message: "需检查被 mock 函数是否为 async def"
+      severity: HIGH
+    - pattern: "patch\\(['\"]\\w+\\.\\w+['\"]"
+      message: "需检查 patch 路径是否为实际调用点"
+      severity: MEDIUM
+  sync_checklist:
+    - "同步函数用 MagicMock / 异步函数用 AsyncMock"
+    - "patch 实际调用点（如 worker.get_secret）而非定义点（如 secrets.get_secret）"
+    - "mock 数据覆盖被测代码访问的所有字段"
+    - "测试必须断言副作用未发生（如未发起真实网络请求）"
+  applicable: "所有 unit test / 集成测试中的 mock 替身"
+  not_applicable:
+    - "E2E 测试（应使用真实环境）"
+    - "快照测试（snapshot test）"
+
+# ============================================================
+# 🆕v4.40 B-REVIEW-189 状态码分层所有权审计（meta-rule #66 后端落地）
+# ============================================================
+# 检查点：业务代码不得抛出认证层专属状态码；多模式业务需保持状态码一致性
+# 历史教训：collection_service.py 抛 CollectionError(401, ...)，
+#           前端 axios 拦截器把所有 401 当认证失效跳转登录页，破坏用户工作流
+# 对应 xianyu-hunter-dev v4.40.0 meta-rule #66
+# 审查要点：SKILL.md B-REVIEW-189
+# 与 meta_rules_57_63.http_status_code_mapping 关注点不同：
+# - http_status_code_mapping 关注「多原因 None → 状态码映射」（同层内多原因细分）
+# - status_code_audit 关注「同一状态码跨层语义冲突」（层间所有权划分）
+status_code_audit:
+  _doc: "HTTP 状态码分层所有权与冲突避免审计规则。业务代码不得抛出认证层专属状态码，多模式业务需保持状态码一致性。"
+
+  # 状态码分层定义：每个状态码应有明确的所有权层
+  layers:
+    auth_layer:
+      codes: [401]
+      owner: middleware
+      description: "认证未通过，仅认证中间件（BearerAuthMiddleware）可返回"
+      detail_signature: "Unauthorized"
+      frontend_action: "redirect_to_login"
+    external_cred_layer:
+      codes: [440]
+      owner: business
+      description: "外部服务凭证失效（如闲鱼 cookie 过期、_m_h5_tk token 过期）"
+      frontend_action: "caller_catch_display_detail"
+    validation_layer:
+      codes: [422]
+      owner: framework
+      description: "请求参数校验失败，由 FastAPI Pydantic 自动返回"
+      frontend_action: "caller_catch_display_field_errors"
+    anti_crawler_layer:
+      codes: [429]
+      owner: business
+      description: "触发反爬限制，调用方需退避重试"
+      frontend_action: "caller_catch_display_retry_hint"
+    not_found_layer:
+      codes: [404, 410]
+      owner: business
+      description: "资源不存在或已下架"
+      frontend_action: "caller_catch_display_not_found"
+    server_error_layer:
+      codes: [500, 502, 503]
+      owner: framework
+      description: "服务器错误或上游故障"
+      frontend_action: "caller_catch_display_generic_error"
+
+  # 保留给中间件的状态码：业务代码不得使用
+  reserved_for_middleware: [401]
+
+  # 业务代码禁止抛出的状态码（属于认证/授权层）
+  forbidden_business_codes: [401, 403]
+
+  # 一致性规则：同一语义在不同业务模式必须使用相同状态码
+  # applies_to 为数组，新增模式只需追加，无需改规则
+  consistency_rules:
+    - semantic: "cookie_expired"
+      expected_code: 440
+      applies_to: ["detail_only", "official_full"]
+      _doc: "同一语义（cookie 过期）在不同模式必须使用 440"
+    - semantic: "anti_crawler"
+      expected_code: 429
+      applies_to: ["detail_only", "official_full"]
+    - semantic: "page_unavailable"
+      expected_code: 410
+      applies_to: ["detail_only", "official_full"]
+
+  # 静态检查模式：用于 grep 自动扫描
+  detection_patterns:
+    business_forbidden_in_raise:
+      - pattern: 'CollectionError\\(401'
+        message: "业务代码 CollectionError 抛出认证层专属状态码 401，应改为 440"
+      - pattern: 'raise HTTPException\\(status_code=401'
+        message: "非认证中间件代码抛出 401，违反状态码所有权"
+      - pattern: 'CollectionError\\(403'
+        message: "业务代码抛出授权层专属状态码 403，应由授权中间件返回"
+
+    # 拦截器透传检查：路由层不得无条件透传状态码而不校验是否属于认证层
+    route_transparent_pass:
+      require_check: "raise HTTPException(status_code=e.status_code, detail=e.detail)"
+      check_detail: "需确认 e.status_code 不属于 reserved_for_middleware"
+      _doc: "路由层透传 CollectionError 时，应确保上游未抛出认证层专属状态码"
+
+# ===== B-REVIEW-226~228 async_timeout_protection 配置驱动 (v4.48.0) =====
+async_timeout_protection:
+  _doc: "async 阻塞调用超时保护配置（meta-rule #80, B-REVIEW-226）"
+  enabled: true
+  timeout_by_category:
+    lightweight_read: 5.0
+    heavy_serialize: 10.0
+    evaluate: 15.0
+  fallback_strategy: best_effort
+  audit_grep_pattern: 'await\s+\w+\.(cookies|storage_state|snapshot|title|url|evaluate)\('
+
+subprocess_heartbeat:
+  _doc: "子进程心跳与阶段超时协同配置（meta-rule #81, B-REVIEW-227）"
+  enabled: true
+  timeout_by_status:
+    starting: 90.0
+    opening: 90.0
+    running: 90.0
+    waiting: 30.0
+    already_logged: 90.0
+  safety_margin: 0.3
+  max_accumulated_timeout_warn: 30.0
+
+consistency_check:
+  _doc: "跨代码块一致性检查配置（meta-rule #82 experimental, B-REVIEW-228）"
+  enabled: true
+  min_occurrences: 2
+  scan_paths:
+    - scripts/browser_login.py
+    - scripts/auth_helper.py
+    - src/xianyu_hunter/infra/browser.py
+    - src/xianyu_hunter/modules/worker.py
+    - src/xianyu_hunter/modules/collector/_search.py
+
+# ===== B-REVIEW-226~228 审查规则 (v4.48.0) =====
+hard_constraints:
+  rules:
+    - name: "B-REVIEW-226 ASYNC-BLOCKING-CALL-TIMEOUT"
+      severity: critical
+      check: "所有 async API 阻塞调用必须有 asyncio.wait_for 超时保护"
+      config_ref: "async_timeout_protection"
+      grep_signal: 'await\s+\w+\.(cookies|storage_state|snapshot|title|url|evaluate)\('
+      applicable:
+        - Playwright async API 调用（cookies/storage_state/snapshot）
+        - httpx 长连接池调用
+        - aiohttp websocket 长连接
+      not_applicable:
+        - Playwright 自带 timeout 参数的调用（page.goto/wait_for_load_state）
+        - 同步 API 调用
+        - 一次性调用且失败即终止的场景
+    - name: "B-REVIEW-227 SUBPROCESS-HEARTBEAT-STAGE-COORDINATION"
+      severity: critical
+      check: "子进程心跳架构中每阶段必须有独立 status + 独立超时阈值，阻塞调用超时之和 < 阈值*(1-margin)"
+      config_ref: "subprocess_heartbeat"
+      grep_signal: 'subprocess.Popen.*status_file'
+      applicable:
+        - subprocess.Popen + status file 心跳架构
+        - 多阶段长时间任务（登录→导出→采集）
+        - 后端轮询前端状态的场景
+      not_applicable:
+        - 同步请求-响应模式（FastAPI 路由直接 await）
+        - 后台一次性任务
+        - 纯前端状态管理
+    - name: "B-REVIEW-228 CROSS-BLOCK-CONSISTENCY-CHECK"
+      severity: major
+      check: "同一 API 在 ≥2 处调用时保护措施必须一致"
+      config_ref: "consistency_check"
+      grep_signal: "同一 API 名出现 ≥ min_occurrences 次"
+      applicable:
+        - 同一 API 在多处调用的场景
+        - 复用代码片段（多个登录方式）
+        - 重构后检查是否漏改
+      not_applicable:
+        - 首次实现的唯一调用点
+        - 故意差异化的实现（测试 vs 生产）
+        - 不同框架的类似操作

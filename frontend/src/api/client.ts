@@ -1,8 +1,10 @@
 import axios, { AxiosInstance } from 'axios'
+import { API_BASE } from '../utils/apiBase'
 
 // Axios 实例：自动携带认证凭证
+// baseURL 必须带上 SPA 部署子路径（/xianyu/），否则域名模式下 /api/* 落到根路径被代理拦截
 const client: AxiosInstance = axios.create({
-  baseURL: '',
+  baseURL: API_BASE,
   timeout: 30000,
   withCredentials: true,
 })

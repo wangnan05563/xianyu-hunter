@@ -14,6 +14,7 @@ import EventStreamSection from './components/EventStreamSection'
 import PriceHistogramCard from './components/PriceHistogramCard'
 import EvalFunnelCard from './components/EvalFunnelCard'
 import TrendModal from './components/TrendModal'
+import { API_BASE } from '../../utils/apiBase'
 
 // SSE lastEventId 持久化 key：提取到模块级，供 handleSseAppEvent 与 connect 共享（S2004 提取避免嵌套过深）
 const SSE_LAST_EVENT_ID_KEY = 'xh.sse.lastEventId'
@@ -158,7 +159,7 @@ export default function Dashboard() {
       // O-14-26：重连时从 localStorage 读取 lastEventId，附加到 URL
       // 后端会补拉 id > lastEventId 的事件，避免断网期间漏掉关键告警
       const lastId = localStorage.getItem(SSE_LAST_EVENT_ID_KEY)
-      const url = lastId ? `/api/events/stream?last_event_id=${lastId}` : '/api/events/stream'
+      const url = lastId ? `${API_BASE}api/events/stream?last_event_id=${lastId}` : `${API_BASE}api/events/stream`
       const es = new EventSource(url)
       esRef.current = es
       setStreamStatus('连接中…')

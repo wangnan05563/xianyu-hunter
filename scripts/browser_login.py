@@ -23,8 +23,11 @@ import threading
 import time
 from pathlib import Path
 
-_REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_REPO / "src"))
+# In packaged mode (frozen), modules are bundled in the PYZ; the launcher already
+# inserted sys.executable/parent/_internal into sys.path.  Do not override it.
+if not getattr(sys, "frozen", False):
+    _REPO = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(_REPO / "src"))
 
 from xianyu_hunter.paths import get_browser_data_dir
 
@@ -51,19 +54,23 @@ def _elapsed_sec(start: float) -> float:
     return round(time.monotonic() - start, 2)
 
 
-def _export_cookies_to_json(cookies: list[dict], method: str) -> None:
+def _export_cookies_to_json(cookies: list[dict], method: str, data_dir: Path | None = None) -> None:
     """登录成功后导出 Cookie 到 JSON 文件（供 Web 后端立即验证）"""
     try:
-        # 需要将 scripts 目录加入 sys.path 才能 import cookie_store
-        _repo = Path(__file__).resolve().parents[1]
-        sys.path.insert(0, str(_repo / "src"))
-        from xianyu_hunter.web.services.cookie_store import get_cookie_store
-        get_cookie_store().export_cookies(cookies, method=method)
+        if data_dir is not None:
+            import xianyu_hunter.web.services.cookie_store as _cs_mod
+            _cs_mod._COOKIE_JSON_DIR = data_dir
+            _cs_mod.get_cookie_store().export_cookies(cookies, method=method)
+        else:
+            _repo = Path(__file__).resolve().parents[1]
+            sys.path.insert(0, str(_repo / "src"))
+            from xianyu_hunter.web.services.cookie_store import get_cookie_store
+            get_cookie_store().export_cookies(cookies, method=method)
     except Exception as e:
         print(f"[browser_login] Cookie JSON 导出失败: {e}", file=sys.stderr)
 
 
-def _save_playwright_cookies(cookies: list[dict]) -> None:
+def _save_playwright_cookies(cookies: list[dict], data_dir: Path | None = None) -> None:
     """保存 Playwright 格式的 Cookie 到文件，供 Worker 浏览器实例注入
 
     Worker 的 BrowserManager 在登录前就已启动，内存中没有登录 Cookie。
@@ -71,8 +78,10 @@ def _save_playwright_cookies(cookies: list[dict]) -> None:
     "闲鱼登录 Cookie 不完整"。
     """
     try:
-        _repo = Path(__file__).resolve().parents[1]
-        cookie_file = _repo / "data" / "last_login_cookies.json"
+        if data_dir is not None:
+            cookie_file = data_dir / "last_login_cookies.json"
+        else:
+            cookie_file = get_browser_data_dir() / "last_login_cookies.json"
         cookie_file.parent.mkdir(parents=True, exist_ok=True)
         # 只保存 goofish.com / taobao.com 域的 Cookie，减少文件大小
         domain_cookies = [
@@ -464,7 +473,7 @@ async def _prepare_login_cookie_export(
     return final_cookies
 
 
-async def _cmd_login(status_file: Path, timeout: int) -> int:
+async def _cmd_login(status_file: Path, timeout: int, data_dir: Path | None = None) -> int:
     """启动有头浏览器，等待用户登录"""
     from playwright.async_api import async_playwright
 
@@ -486,6 +495,11 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
     edge_path = _get_edge_path()
     # 使用已有的 browser-data 目录，登录后 Cookie 与 Worker 共享
     user_data_dir = get_browser_data_dir(cfg.user_data_dir)
+
+    # 如果传入了显式 data_dir，用它覆盖 get_browser_data_dir 的行为
+    if data_dir is not None:
+        import xianyu_hunter.paths as _paths_mod
+        _paths_mod.get_browser_data_dir = lambda configured="./browser-data": data_dir / (configured if isinstance(configured, Path) else Path(configured))
 
     if edge_path:
         print(f"[browser_login] 使用系统 Edge: {edge_path}", file=sys.stderr)
@@ -604,8 +618,8 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                     final_cookies = await _prepare_login_cookie_export(
                         bc, page, _block_resources, timings, set_status=set_status
                     )
-                    _export_cookies_to_json(final_cookies, "browser")
-                    _save_playwright_cookies(final_cookies)
+                    _export_cookies_to_json(final_cookies, "browser", data_dir)
+                    _save_playwright_cookies(final_cookies, data_dir)
                     timings["export_cookies_sec"] = _elapsed_sec(export_start)
                     set_status(
                         status="success",
@@ -619,21 +633,44 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                     message=f"请在浏览器窗口中登录闲鱼（{timeout}s 超时）",
                 )
 
-                # 轮询检测 Cookie（严格验证 Cookie 值，而非仅检测名称存在）
+                # 启动 Cookie 轮询循环 + Cookie 心跳线程持续同步状态
                 start = time.monotonic()
                 last_heartbeat = 0.0  # 上次心跳写入时间，用于保证 status file 持续更新
-                # Stop startup heartbeat; the polling loop has its own heartbeat
+                # Stop startup heartbeat; replaced by polling heartbeat thread below
                 _hb_stop.set()
                 _hb_thread.join(timeout=3)
 
                 HEARTBEAT_INTERVAL = 3.0  # 心跳间隔（秒），保证子进程存活时 status file 一定被更新
 
+                # 独立心跳线程：每 3s 写入一次 status file
+                # 改用线程而非 asyncio.Task：bc.cookies() 是
+                # 跨进程 IPC 调用，长时间阻塞会卡死事件循环，
+                # 30s 内无 ts 更新，后端将误判子进程无响应
+                _poll_hb_stop = threading.Event()
+
+                def _poll_heartbeat() -> None:
+                    while not _poll_hb_stop.is_set():
+                        time.sleep(HEARTBEAT_INTERVAL)
+                        if _poll_hb_stop.is_set():
+                            return
+                        try:
+                            elapsed = int(time.monotonic() - start)
+                            _set_status(
+                                status_file,
+                                status="waiting",
+                                message=f"等待登录中... 剩余 {timeout - elapsed}s",
+                                wait_elapsed=elapsed,
+                                elapsed=_elapsed_sec(flow_start),
+                                timings=timings,
+                            )
+                        except OSError:
+                            pass
+
+                _poll_hb_thread = threading.Thread(target=_poll_heartbeat, daemon=True)
+                _poll_hb_thread.start()
+
                 while time.monotonic() - start < timeout:
                     await asyncio.sleep(1)
-                    # bc.cookies() 加超时保护：
-                    # Playwright 在浏览器进程无响应/IPC 通道阻塞时会永久挂起，
-                    # 导致下方心跳逻辑无法执行，status_file 停在最后一次写入的
-                    # "剩余 Ns"，前端秒数一直不变化。超时后跳过本轮检测继续心跳。
                     try:
                         cookies = await asyncio.wait_for(bc.cookies(), timeout=5.0)
                     except asyncio.TimeoutError:
@@ -644,48 +681,34 @@ async def _cmd_login(status_file: Path, timeout: int) -> int:
                         cookies = []
 
                     if _validate_login_cookies(cookies):
-                        # 登录成功后继续预热并等待 cookie jar 稳定，避免只导出半截 cookie。
                         export_start = time.monotonic()
                         final_cookies = await _prepare_login_cookie_export(
                             bc, page, _block_resources, timings, set_status=set_status
                         )
                         final_count = len(final_cookies)
-                        _export_cookies_to_json(final_cookies, "browser")
-                        # 保存 Playwright 格式 Cookie 供 Worker 注入
-                        _save_playwright_cookies(final_cookies)
+                        _export_cookies_to_json(final_cookies, "browser", data_dir)
+                        _save_playwright_cookies(final_cookies, data_dir)
                         timings["export_cookies_sec"] = _elapsed_sec(export_start)
                         set_status(
                             status="success",
                             message="检测到登录成功，Cookie 已保存",
                             cookie_count=final_count,
                         )
-                        # 再等 2 秒让 Chromium 异步 flush SQLite：
-                        # bc.close() 之前 SQLite 写入可能未完成，立即退出
-                        # 会导致其他 Chromium 进程（auth_helper / Worker）读到不完整 cookie
                         await asyncio.sleep(2)
+                        _poll_hb_stop.set()
+                        _poll_hb_thread.join(timeout=2)
                         return 0
 
-                    # 更新状态消息
                     names = {c["name"] for c in cookies}
                     elapsed = int(time.monotonic() - start)
 
-                    # 心跳：每 HEARTBEAT_INTERVAL 秒无条件更新 status file
-                    # 为什么需要心跳：原实现每 10s 才更新一次（elapsed % 10 < 2），
-                    # 若 bc.cookies() 在两次更新之间卡住，子进程被 kill 时 status file
-                    # 永远停留在 "waiting" 终态，前端无法感知已超时。
-                    # 心跳保证子进程存活时 status file 持续被更新，后端可基于 ts 判断存活状态。
-                    if elapsed - last_heartbeat >= HEARTBEAT_INTERVAL:
-                        last_heartbeat = elapsed
-                        set_status(
-                            status="waiting",
-                            message=f"等待登录中... 剩余 {timeout - elapsed}s",
-                            wait_elapsed=elapsed,
-                        )
-
                 set_status(status="timeout", message=f"登录超时（{timeout}s）")
+                _poll_hb_stop.set()
+                _poll_hb_thread.join(timeout=2)
                 return 2
-
             finally:
+                _poll_hb_stop.set()
+                _poll_hb_thread.join(timeout=2)
                 await bc.close()
     except Exception as e:
         _set_status(
@@ -702,13 +725,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Playwright 有头浏览器登录")
     parser.add_argument("--status-file", required=True, help="状态文件路径 (JSON)")
     parser.add_argument("--timeout", type=int, default=300, help="登录超时秒数")
+    parser.add_argument("--data-dir", type=Path, default=None, help="显式数据目录（覆盖 CWD 依赖）")
     args = parser.parse_args()
 
     status_file = Path(args.status_file)
     status_file.parent.mkdir(parents=True, exist_ok=True)
 
     _set_status(status_file, status="pending", message="初始化...")
-    return asyncio.run(_cmd_login(status_file, args.timeout))
+    return asyncio.run(_cmd_login(status_file, args.timeout, args.data_dir))
 
 
 if __name__ == "__main__":

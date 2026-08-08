@@ -1,4 +1,5 @@
 import client from './client'
+import { API_BASE } from '../utils/apiBase'
 import type { TimelineEntry, LogEntry } from './types'
 
 // 时间线 API：聚合订单与事件为统一时间线视图
@@ -28,5 +29,6 @@ export const logApi = {
       .then((r) => r.data),
 
   // 导出 URL 直接交给浏览器下载，无需经过 axios
-  exportUrl: (format: 'csv' | 'log') => `/api/logs/export?format=${format}`,
+  // 必须带部署子路径前缀（API_BASE），否则域名模式 /xianyu 下落到根路径被代理拦截
+  exportUrl: (format: 'csv' | 'log') => `${API_BASE}api/logs/export?format=${format}`,
 }

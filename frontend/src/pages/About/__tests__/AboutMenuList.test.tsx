@@ -4,6 +4,7 @@ import { ConfigProvider } from 'antd'
 import { MemoryRouter } from 'react-router-dom'
 import { AboutMenuList } from '../AboutMenuList'
 import { TEXTS } from '../i18n'
+import { API_BASE } from '@/utils/apiBase'
 
 // MemoryRouter 包装：AboutMenuList 内部用 Link 渲染 help 项
 function renderList(onOpenLicenses = vi.fn()) {
@@ -54,9 +55,10 @@ describe('AboutMenuList', () => {
     expect(helpLink).toHaveAttribute('href', '/help')
   })
 
-  it('api 项 href 指向 /api/docs', () => {
+  it('api 项 href 指向 API_BASE + api/docs', () => {
     renderList()
     const apiLink = screen.getByText(TEXTS.menu.api).closest('a')
-    expect(apiLink).toHaveAttribute('href', '/api/docs')
+    // 部署子路径前缀（BASE_URL）：本地/测试为 /xianyu/，确保域名模式 /xianyu 下文档链接可达
+    expect(apiLink).toHaveAttribute('href', `${API_BASE}api/docs`)
   })
 })

@@ -16,6 +16,8 @@ AppPublisher=XianyuHunter
 DefaultDirName={autopf}\XianyuHunter
 DefaultGroupName=XianyuHunter
 UninstallDisplayIcon={app}\xianyu-hunter.exe
+; Reuse the app icon so the installer and uninstaller don't show the default Inno Setup icon
+SetupIconFile=assets\xianyu-hunter.ico
 OutputDir=dist
 OutputBaseFilename=XianyuHunter-Setup-v{#MyAppVersion}
 Compression=lzma2

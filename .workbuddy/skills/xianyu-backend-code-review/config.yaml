@@ -1,0 +1,3972 @@
+# ===== Xianyu Backend Code Review 技能配置 v4.38.0 =====
+# 首次使用：复制本文件为 config.yaml 并按项目实际情况修改
+# 所有评审规则、硬约束、项目规范均通过本文件管理，技能本身不含硬编码值
+# 完整审查维度对照见 SKILL.md 附录C（31 维度，v4.31.0）
+#
+# v4.31.0 新增：coding_standards.resume_policy / log_merge 节点完整定义（B-REVIEW-157 / B-REVIEW-158 配套，meta-rules #31/#32 落地）
+# v4.30.0 新增：B-REVIEW-157 / B-REVIEW-158 规则（meta-rules #31/#32 落地）
+# v4.29.0 新增：B-REVIEW-151~156 检查点（meta-rules #25-30 数据契约与时序落地）
+# v4.28.0 新增：coding_standards 节点（编码规范阈值配置）
+# 其他节点配置请参考 config.example.yaml
+# 当 config.yaml 缺失时，技能会使用内置默认配置并提示用户创建 config.yaml
+
+# --- 编码规范阈值配置（v4.28.0 新增）---
+# 对应 B-REVIEW-121 ~ B-REVIEW-150 共 30 个检查点的配置参数
+# 所有参数通过此节点管理，不硬编码
+coding_standards:
+  datetime:
+    default_timezone: naive          # naive | aware，项目级默认时区策略（B-REVIEW-121）
+    raw_sql_coerce: true             # 是否对 raw SQL 结果强制类型转换（B-REVIEW-122）
+  migration:
+    independent_steps: [C-01, C-02, C-03, C-04, C-05]  # 独立迁移步骤列表（B-REVIEW-123）
+    allow_merge_when: strong_dependency  # strong_dependency 时允许合并
+  null_defense:
+    enabled: true
+    check_fields: [interval_seconds, use_cron]  # 需 null 防御的字段（B-REVIEW-124）
+  query_filter:
+    precision_check: true            # 是否检查过滤条件精度（B-REVIEW-125）
+  enum_consistency:
+    enabled: true
+    status_fields: [order_status, eval_status, notify_status]  # B-REVIEW-126
+  error_attribution:
+    status_mapping:                  # 失败原因到状态码的映射（B-REVIEW-127）
+      token_expired: 401
+      anti_crawler: 429
+      page_unavailable: 503
+      other: 502
+  log_noise:
+    suppress_patterns:               # 降噪模式（B-REVIEW-131）
+      - pattern: 'cookie_expired'
+        first_level: WARNING
+        repeat_level: DEBUG
+        cooldown_seconds: 300
+  circuit_breaker:
+    cleanup_checklist: [save_progress, record_state, notify_downstream]  # B-REVIEW-132
+  state_sync:
+    pending_marker_dir: data/markers
+    check_on_startup: true           # B-REVIEW-136
+  credential_stores:
+    list:
+      - yaml
+      - keyring
+    sync_direction: yaml_to_keyring  # B-REVIEW-141
+  retry:
+    default_count: 3                 # B-REVIEW-130
+    default_interval: 1.0
+    backoff: exponential
+  param_chain:
+    required_fields: [sort_type, region, fail_pause_threshold]  # B-REVIEW-138
+  dataclass:
+    disallow_getattr_fallback: true  # B-REVIEW-147
+  subpath_deployment:                # 🆕v4.70 维度 41/42
+    enabled: true
+    namespace_prefix: "/xianyu"       # 反向代理保留前缀（no-strip）；strip 模式设为 "/"
+    dual_mount: true                 # API router 同时在 /api/* 与 /xianyu/api/* 挂载
+    pwa_covers_prefixed_api: true    # sw.js 的 denylist/runtimeCaching 必须覆盖 /xianyu/api
+  optional_dependency:              # 🆕v4.70 维度 43
+    degrade_explicitly: true         # 缺失时必须显式降级 + 日志，不得静默
+    disabled_status_code: 403        # 禁用时返回明确禁用码（如 CHATBOT_DISABLED）
+    fail_fast_for_required: true     # 必选依赖缺失应 fail-fast
+  startup:
+    components: [scheduler, session_manager, migration, cookie_sync, embedding]  # B-REVIEW-148
+  mock:
+    async_check_enabled: true        # B-REVIEW-149
+  cookie:
+    required_cookies: [unb, _m_h5_tk, cookie2, t, _tb_token_]  # B-REVIEW-150
+    import_full: true
+  parser:
+    fallback_enabled: true
+  encoding:
+    default: utf-8                   # B-REVIEW-146
+  # 🆕v4.70.0 源码文件编码完整性（B-REVIEW-337，配套 xianyu-hunter-dev step 280 + 前端 F-REVIEW-246 + 测试模式 AK）
+  # 检测后端源码本体中文→字面量 ? / GBK 误读乱码；所有扫描参数配置化，禁止硬编码路径/阈值/严重级
+  source_file_encoding_integrity:
+    scan_globs:
+      - "src/**/*.py"
+      - "scripts/**/*.py"
+    scan_exclude:
+      - "dist/**"
+      - "node_modules/**"
+      - "**/__pycache__/**"
+      - "*.pyc"
+    min_consecutive: 3               # 连续 ? 最小个数判定违规（与前端一致）
+    check_fffd: true                 # 是否检测 U+FFFD 替换字符
+    check_gbk_misdecode: false       # 是否检测 GBK-as-UTF-8 误读特征（按需开启）
+    severity: "high"                 # 违规严重级别（可由业务场景调整）
+  dry:
+    threshold_lines: 3               # B-REVIEW-145
+    threshold_occurrences: 2
+  contract:
+    check_ts_interface_match: true   # B-REVIEW-143
+  persist:
+    business_switch_must_persist: true  # B-REVIEW-140
+  race:
+    check_request_id: true           # B-REVIEW-137
+  keywords:
+    sold: ['卖掉了', '已售', '已售罄', '宝贝不存在', '宝贝走丢了', '该宝贝不存在', '商品不存在', '已删除', '已被删除']  # B-REVIEW-139
+    deleted: ['宝贝不存在', '宝贝走丢了', '该宝贝不存在', '商品不存在', '已删除', '已被删除']
+  # 🆕v4.29 数据契约与时序扩展
+  batch_circuit_breaker:
+    failure_threshold: 3                       # B-REVIEW-151 连续失败阈值
+    failure_window_sec: 3600                   # 失败计数滑动窗口
+    log_phrasing:                              # 日志措辞三套文案（必须与动作一致）
+      paused: "批次熔断暂停（可恢复）"
+      stopped: "批次已停止（用户主动）"
+      failed: "批次失败（异常终止）"
+    mark_remaining_as: pending                 # 剩余项处理策略
+    persist_keys: [cursor, completed_ids, remaining_ids]
+  critical_path:
+    patterns:                                  # B-REVIEW-152 关键路径模式列表
+      - "_on_startup"
+      - "run_migrations"
+      - "_init_db"
+      - "_init_session_manager"
+      - "_on_close"
+      - "_shutdown"
+    require_logger_exception: true             # 外层 except 必须用 logger.exception()
+    forbidden_log_patterns:                    # 禁用的丢堆栈日志模式
+      - 'logger\.warning\(f["\u201c][^"]*\{e\}'
+      - 'logger\.error\(f["\u201c][^"]*\{e\}'
+  datetime:
+    storage_timezone: UTC                      # B-REVIEW-153 存储一律 UTC
+    preferred_now: 'datetime.now(timezone.utc)' # 推荐的 now 工厂
+    forbidden_now_patterns:                    # 禁用的 now 模式
+      - 'datetime\.now\(\)'
+      - 'datetime\.utcnow\(\)'
+    serialization_format: iso8601_with_tz      # 序列化格式
+    naive_unify_helper: '_utcnow().replace(tzinfo=None)'  # 与 DB naive 算术的 helper
+  state_sync_marker:
+    marker_dir: 'data/markers'                 # B-REVIEW-154 marker 目录
+    startup_check_required: true               # 启动时必须检查未处理 marker
+    scan_interval_sec: 60                      # 同步器扫描间隔
+    max_retry_count: 5
+    marker_format: '{category}_{user_id}_{timestamp}.json'
+  error_code:
+    reason_enum:                               # B-REVIEW-155 reason 枚举（前后端契约）
+      - 'token_expired'
+      - 'anti_crawler'
+      - 'page_unavailable'
+      - 'rate_limited'
+      - 'login_expired'
+      - 'session_invalid'
+      - 'permission_denied'
+      - 'validation_error'
+      - 'internal_error'
+      - 'service_unavailable'
+    response_schema:                           # 错误响应统一结构
+      error_code: 'string (from reason_enum)'
+      user_message: 'string (人类可读)'
+      detail: 'string (技术细节)'
+    require_in_http_exception: true            # raise HTTPException 必须含 error_code
+  business_keyword:
+    sold:                                      # B-REVIEW-156 业务关键字集中管理
+      - '卖掉了'
+      - '已售'
+      - '已售罄'
+      - '宝贝不存在'
+      - '宝贝走丢了'
+      - '该宝贝不存在'
+      - '商品不存在'
+      - '已删除'
+      - '已被删除'
+    deleted:
+      - '宝贝不存在'
+      - '宝贝走丢了'
+      - '该宝贝不存在'
+      - '商品不存在'
+      - '已删除'
+      - '已被删除'
+    frontend_constants_file: 'frontend/src/constants/businessKeywords.ts'
+    consistency_test: 'tests/test_keyword_consistency.py'
+  # 🆕v4.31 B-REVIEW-157 状态恢复前置校验（meta-rule #31）
+  # 配套规范：xianyu-hunter-dev/assets/guides/coding-rules/state-management.md step 179 RESUME-01
+  resume_policy:
+    enabled: true                          # resume 前置校验总开关（false 时仅做冷却期检查，跳过 precheck）
+    cooldown_seconds: 30                   # 异常 pause 后冷却期时长（秒），冷却期内拒绝 resume 避免无效循环
+    cooldown_default: 30                   # 任务/会话无 root_cause 时使用的兜底冷却期
+    require_structured_response: true      # 校验失败时必须返回 {resume_blocked, reason_code, user_hint, retry_after}
+    clear_root_cause_on_resume: true       # resume 成功后是否清除 root_cause（避免下次恢复时误判）
+    reason_precheck_map:                   # reason_code → precheck 函数路径映射表（按 B-REVIEW-157 检查点）
+      # 示例条目：项目实际使用时应替换为真实 reason_code 与校验函数路径
+      RGV587_SESSION_EXPIRED: "xianyu_hunter.core.cookie_rotator.is_identity_valid"
+      TOKEN_EXPIRED: "xianyu_hunter.core.auth_helper.is_token_valid"
+      COOKIE_INVALID: "xianyu_hunter.core.cookie_rotator.is_cookie_fresh"
+      QUOTA_EXHAUSTED: "xianyu_hunter.core.rate_limiter.has_quota"
+      CONNECTION_LOST: "xianyu_hunter.core.network.is_endpoint_reachable"
+    backend_root_cause_persistence:        # root_cause 持久化字段契约（与数据库 schema 对齐）
+      storage_field: root_cause
+      schema:
+        reason_code: "string (from error_code.reason_enum)"
+        failed_layer: "string (identity | session | network | rate_limit | business)"
+        paused_at: "float (epoch seconds)"
+        extra: "object (可选，自定义上下文)"
+  # 🆕v4.31 B-REVIEW-158 降级链日志合并（meta-rule #32）
+  # 配套规范：xianyu-hunter-dev/assets/guides/coding-rules/error-handling.md step 180 LOGMERGE-01
+  log_merge:
+    enabled: true                          # 降级链日志合并总开关（false 时按各自步骤独立输出，不强制合并）
+    min_stages_to_merge: 2                 # 合并阈值：同一逻辑链阶段数 ≥ 该值才必须合并（单阶段无需合并）
+    intermediate_debug_enabled: true       # 中间步骤 DEBUG 化开关（true=用 logger.debug，false=保持原级别）
+    required_extra_fields:                 # 最终结果日志必须含的结构化 extra 字段
+      - stages                              # 各中间步骤简述数组
+      - final_reason                        # 最终失败原因
+      - attempts                            # 阶段总数
+    optional_extra_fields:                 # 推荐携带的上下文（缺失不报警）
+      - keyword
+      - task_id
+      - user_id
+    forbidden_warning_keywords:            # 视为「中间步骤」应 DEBUG 化的关键词（用于自动扫描）
+      - "尝试"
+      - "刷新"
+      - "回退"
+      - "重试"
+      - "降级"
+    detection_signals:                     # 自动扫描信号（用于 detect_log_merge_violation）
+      - "连续多个 logger.warning 在同一 try/except 链中"
+      - "末尾 raise 前未聚合 stages 到 extra"
+  # 🆕v4.29 硬约束规则（自动扫描）
+  hard_constraints:
+    rules:
+      # B-REVIEW-151 批量断路器四要素
+      - name: "circuit_breaker_no_save_progress"
+        pattern: "consecutive failure|consecutive_failures"
+        message: "批量处理断路器必调用 save_progress() 持久化进度（meta-rule #25 / B-REVIEW-151），熔断分支与用户停止分支对称"
+        severity: CRITICAL
+        auto_fix: false
+      - name: "log_paused_actual_break"
+        pattern: "logger\\.(info|warning|debug).*[\\u4e2d\\u6587]?.*[\\u6682\\u505c]"
+        message: "日志使用「暂停」措辞必须与实际动作一致（break+save_progress 对应「可恢复」），禁止语义不一致（B-REVIEW-151）"
+        severity: MEDIUM
+        auto_fix: false
+      # B-REVIEW-152 关键路径异常保留 traceback
+      - name: "critical_path_warning_fstring_e"
+        pattern: "def\\s+(_on_startup|run_migrations|_init_\\w+|_on_close|_shutdown)"
+        message: "关键路径函数必须用 logger.exception() 输出完整 traceback，禁止 logger.warning(f'...{e}') 丢堆栈（B-REVIEW-152 / meta-rule #26）"
+        severity: CRITICAL
+        auto_fix: false
+      # B-REVIEW-153 datetime 统一时区策略
+      - name: "datetime_now_no_tzinfo"
+        pattern: "datetime\\.now\\(\\)"
+        message: "禁止 datetime.now() 无 tzinfo，应使用 datetime.now(timezone.utc) 存储 UTC（B-REVIEW-153 / meta-rule #27）"
+        severity: HIGH
+        auto_fix: false
+      - name: "datetime_utcnow_deprecated"
+        pattern: "datetime\\.utcnow\\(\\)"
+        message: "datetime.utcnow() 已在 Python 3.12+ 弃用，应使用 datetime.now(timezone.utc)（B-REVIEW-153）"
+        severity: HIGH
+        auto_fix: false
+      # B-REVIEW-154 跨进程状态同步六步法
+      - name: "write_marker_without_scan"
+        pattern: "write_marker|write_pending_marker"
+        message: "写端写 marker 必须配对存在 scan_marker 同步器，否则 marker 永不被消费（B-REVIEW-154 / meta-rule #28）"
+        severity: HIGH
+        auto_fix: false
+      # B-REVIEW-155 前后端错误码契约
+      - name: "http_exception_no_error_code"
+        pattern: "raise\\s+HTTPException\\("
+        message: "raise HTTPException 必须包含 error_code 字段（来自 reason_enum），否则前端无法按 error_code 分支（B-REVIEW-155 / meta-rule #29）"
+        severity: HIGH
+        auto_fix: false
+      # B-REVIEW-156 业务关键字集中管理
+      - name: "business_keyword_inline"
+        pattern: "['\"](?:已售|已删除|宝贝不存在|卖掉了|已售罄)['\"]"
+        message: "业务关键字（已售/已删除/宝贝不存在）禁止内联到代码，应从 config.yaml#business_keywords 读取（B-REVIEW-156 / meta-rule #30）"
+        severity: MEDIUM
+        auto_fix: false
+      # 🆕v4.30 B-REVIEW-157 RESUME-PRECHECK 状态恢复前置校验（meta-rule #31）
+      - name: "B-REVIEW-157 RESUME-PRECHECK"
+        pattern: "def (resume|start|unpause|activate).*\\n(?!.*precheck|.*_check_prerequisite)"
+        message: "resume/start/unpause 操作缺前置校验 precheck，异常pause后恢复需校验根因消除（meta-rules #31）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.30 B-REVIEW-158 LOG-MERGE 多阶段降级链日志合并（meta-rule #32）
+      - name: "B-REVIEW-158 LOG-MERGE"
+        pattern: "logger\\.warning.*(尝试|刷新|回退|重试)"
+        message: "降级链中间步骤应用 logger.debug，最终结果合并为1条结构化 WARNING（meta-rules #32）"
+        severity: MAJOR
+        auto_fix: false
+  block_on_violation: true
+
+# --- 规范治理（v4.33.0 新增）---
+# meta-rules #36（规范沉淀门槛）与 #37（规范退化机制）的配置参数
+# 用于防止过度规范化和规范膨胀，保持规范体系的健康度
+meta_rules_governance:
+  # === #36 规范沉淀门槛（防过度规范化）===
+  sedimentation_threshold: 3                # 相似 bug 计数门槛（≥3 个才可立规范）
+  sedimentation_time_window_months: 6       # 相似 bug 计数时间窗口（月）
+  experimental_observation_quarters: 1      # experimental 标签观察期（季度）
+  # 例外豁免类别（无需 ≥3 次即可立即立规范）
+  sedimentation_exemption_categories:
+    - "security_vulnerability"              # 安全漏洞（如 token 泄露）
+    - "data_loss"                           # 数据丢失（如 DB 迁移失败）
+    - "payment_damage"                      # 付费受损（如订单金额错误）
+  # === #37 规范退化机制（防规范膨胀）===
+  degradation_threshold: 3                  # 利用率退化阈值（次/季度，<3 则标记待合并/待废弃）
+  observation_period_quarters: 1            # 待废弃观察期（季度，期间无命中则废弃）
+  # 安全类规范永不退化（即使 0 命中也保留）
+  degradation_exemption_categories:
+    - "security"                            # token 比较 / 加密 / 认证白名单等
+    - "config_driven"                       # 配置驱动类规范（依赖 config 存在）
+  # === B-REVIEW-162/163 自动扫描规则 ===
+  hard_constraints:
+    rules:
+      # 🆕v4.33 B-REVIEW-162 规范立项前置计数（meta-rule #36）
+      - name: "B-REVIEW-162 SEDIMENTATION-THRESHOLD"
+        pattern: "## \\d+\\. .*🆕v4\\.\\d+"
+        message: "新立 meta-rule 必须满足 ≥3 个相似 bug 门槛（meta-rules #36），单一 bug 立规范需标 experimental 标签 + 1 季度观察期"
+        severity: MAJOR
+        auto_fix: false
+      # 🆕v4.33 B-REVIEW-163 规范退化清理（meta-rule #37）
+      - name: "B-REVIEW-163 DEGRADATION-CLEANUP"
+        pattern: "待废弃|deprecated"
+        message: "利用率 < 3 次/季度的 step/B-REVIEW 必须标记待合并/待废弃，1 季度观察期后废弃并移入 version-history.md Deprecated 章节（meta-rules #37）"
+        severity: MINOR
+        auto_fix: false
+
+# --- 列表聚合与状态联动（v4.34.0 新增）---
+# meta-rules #38-42 后端落地，配套 xianyu-hunter-dev v4.34.0 step 184-188
+# 用于防止全局聚合越界数据 / N+1 查询性能退化 / 联动开关逻辑错误 /
+# precheck 抛异常 / 配置缺失即崩溃
+# 所有参数通过此节点管理，不硬编码
+meta_rules_38_42:
+  # === B-REVIEW-164 全局聚合任务级过滤（meta-rule #38）===
+  global_aggregate_filter:
+    enabled: true
+    severity: CRITICAL
+    required_filter_function: "_filter_by_per_task_range"
+    task_config_fields:
+      - "price_range"
+      - "market_ratio"
+
+  # === B-REVIEW-165 列表交叉数据批量注入（meta-rule #39）===
+  cross_domain_inject:
+    enabled: true
+    severity: WARNING
+    cache_ttl_seconds: 300
+    batch_size_limit: 500
+    forbidden_loop_patterns:
+      - "for.*in.*items:.*db.query"
+
+  # === B-REVIEW-166 多字段联动开关范式（meta-rule #40）===
+  linked_switch_priority:
+    enabled: true
+    severity: MAJOR
+    main_switch_field: "mode"
+    filter_suffix: "_bargain_only"
+    priority_matrix:
+      auto_buy: "filter_active"
+      semi_auto: "filter_active"
+      notify: "filter_disabled"
+
+  # === B-REVIEW-167 状态恢复前置校验结构化响应（meta-rule #41）===
+  precheck_structured_fields:
+    enabled: true
+    severity: CRITICAL
+    required_fields:
+      - "resume_blocked"
+      - "reason_code"
+      - "user_hint"
+      - "retry_after"
+      - "task_registered"
+    forbid_raise: true
+    api_error_status: 400
+
+  # === B-REVIEW-168 配置化阈值兜底范式（meta-rule #42）===
+  config_fallback_defaults:
+    enabled: true
+    severity: MAJOR
+    fallback_defaults:
+      p10_percentile: 0.10
+      market_ratio_threshold: 0.85
+      price_range_tolerance: 0.05
+    require_warning_log: true
+
+  # === B-REVIEW-164~168 自动扫描规则 ===
+  hard_constraints:
+    rules:
+      # 🆕v4.34 B-REVIEW-164 全局聚合任务级过滤（meta-rule #38）
+      - name: "B-REVIEW-164 GLOBAL-AGGREGATE-TASK-FILTER"
+        pattern: "task_id\\s*=\\s*None(?!.*_filter_by_per_task_range)"
+        message: "全局视图（无 task_id）列表查询必须按各任务个体配置范围过滤，禁止只用全局默认范围（meta-rules #38）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.34 B-REVIEW-165 列表交叉数据批量注入（meta-rule #39）
+      - name: "B-REVIEW-165 LIST-CROSS-DOMAIN-INJECT"
+        pattern: "for\\s+\\w+\\s+in\\s+\\w+:\\s*\\n[^\\n]*db\\.query"
+        message: "列表交叉数据源必须批量查询 + TTL 缓存，禁止 N+1 单条查询（meta-rules #39）"
+        severity: WARNING
+        auto_fix: false
+      # 🆕v4.34 B-REVIEW-166 多字段联动开关范式（meta-rule #40）
+      - name: "B-REVIEW-166 MULTI-FIELD-LINKED-SWITCH"
+        pattern: "bargain_only(?!.*if\\s+mode\\s*==)"
+        message: "联动字段必须声明「主开关→过滤器」优先级矩阵，主开关失效时子过滤器自动禁用（meta-rules #40）"
+        severity: MAJOR
+        auto_fix: false
+      # 🆕v4.34 B-REVIEW-167 状态恢复前置校验结构化响应（meta-rule #41）
+      - name: "B-REVIEW-167 RESUME-PRECHECK-STRUCTURED"
+        pattern: "def\\s+precheck_\\w+\\([^)]*\\)[^:]*:[^\\n]*\\n(?!(?:.*\\n)*?.*return\\s*\\{)"
+        message: "precheck 必须返回 5 字段结构化 dict 不抛异常，API 层直接透传（meta-rules #41）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.34 B-REVIEW-168 配置化阈值兜底范式（meta-rule #42）
+      - name: "B-REVIEW-168 CONFIG-DRIVEN-THRESHOLD-FALLBACK"
+        pattern: "config\\.bargain_price\\.\\w+(?!.*try)"
+        message: "从 config 读取的阈值必须有 try/except 兜底默认值，禁止配置缺失即崩溃（meta-rules #42）"
+        severity: MAJOR
+        auto_fix: false
+
+# --- 🆕v4.35 跨层契约与测试同步（meta-rules #47-#51 后端落地）---
+# 复盘来源：2026-07-07 解决的 SEMI_AUTO 模式通知未触发确认问题
+# （EVAL_PASSED 事件三处发布点 task_mode 字段不对齐 / 前端路由注册与后端 endpoint 契约缺失 /
+#   回链 URL query string 构造与消费不一致 / 历史测试 mock 类型不匹配 + keyring fallback +
+#   接口签名变更未同步测试）
+# 对应 xianyu-hunter-dev v4.35.0 meta-rules #47-#51
+# 审查要点：SKILL.md 维度 36 章节（B-REVIEW-173~177）
+# 与前端 v4.39.0 F-REVIEW-131~135 对应
+meta_rules_47_51:
+  # === B-REVIEW-173 事件多发布点字段对齐（meta-rule #47）===
+  event_multi_emit_alignment:
+    enabled: true
+    severity: CRITICAL
+    # 业务事件在多个层（worker/service/route/SSE 推送器）有发布点时，每处 payload 字段集必须一致
+    require_field_set_consistency: true       # 所有发布点 payload 字段集必须一致
+    require_fallback_branch: true             # 消费方按字段分支必须有 else/default
+    # 事件类型清单（从 config 读取，不硬编码具体事件名）
+    event_types: []
+    # 必传字段集（从 config 读取）
+    required_fields: []
+    # 适用场景
+    applicable: "业务事件在多层有发布点的场景（worker → service → route → 通知模板）"
+    not_applicable: "单一发布点的内部事件、纯调试日志事件、一次性脚本事件"
+
+  # === B-REVIEW-174 路由注册与后端 endpoint 契约（meta-rule #48）===
+  frontend_route_registration:
+    enabled: true
+    severity: CRITICAL
+    # 前端路由注册表中的每条路由，后端必须提供对应 endpoint
+    require_endpoint_mapping: true            # 前端路由必须有后端 endpoint 对应
+    # 路由清单（从 config 读取，不硬编码具体路径）
+    route_list: []
+    # endpoint 映射表（path → handler）
+    endpoint_mapping: {}
+    # 适用场景
+    applicable: "所有前端路由对应的后端 endpoint 检查"
+    not_applicable: "纯前端 SPA 路由无后端数据、静态资源路由"
+
+  # === B-REVIEW-175 回链 URL query string 构造（meta-rule #49）===
+  external_callback_query_retention:
+    enabled: true
+    severity: CRITICAL
+    # 后端构造的回链 URL 必须包含前端所需的所有 query string 参数
+    require_all_params: true                  # 回链 URL 必须包含所有必传参数
+    # 回链路由清单（从 config 读取）
+    callback_routes: []
+    # 必传参数清单（从 config 读取）
+    required_params: []
+    # 适用场景
+    applicable: "通知/邮件中的回链 URL 构造"
+    not_applicable: "纯内部 API 调用、无 query string 的路由"
+
+  # === B-REVIEW-176 接口签名变更测试同步（meta-rule #50）===
+  test_synchronization:
+    enabled: true
+    severity: MAJOR
+    # 接口签名变更后必须同步更新所有测试调用
+    require_signature_sync: true              # 签名变更必须同步测试
+    require_mock_type_sync: true              # async↔sync 重构时 AsyncMock↔MagicMock 必须同步
+    require_field_set_sync: true              # mock 数据必须与生产 Pydantic 模型字段集 1:1 对齐
+    # 签名变更检查模式（从 config 读取）
+    signature_check_patterns:
+      - "def\\s+\\w+\\(.*\\)\\s*->"
+      - "async\\s+def\\s+\\w+\\(.*\\)\\s*->"
+    # mock 类型映射表
+    mock_type_mapping:
+      async_to_sync: "AsyncMock → MagicMock"
+      sync_to_async: "MagicMock → AsyncMock"
+    # 适用场景
+    applicable: "所有接口签名重构（新增/删除/重命名参数）、async/await 重构"
+    not_applicable: "纯内部实现重构（不改变接口签名）、新增功能（不破坏现有测试）"
+
+  # === B-REVIEW-177 外部依赖隔离测试可重复性（meta-rule #51）===
+  external_dependency_isolation:
+    enabled: true
+    severity: MAJOR
+    # 测试中依赖外部资源必须显式 patch
+    require_explicit_patch: true              # 外部依赖必须显式 patch
+    forbidden_fallback: true                  # 禁止依赖生产 fallback
+    # 外部依赖类型清单
+    dependency_types:
+      - "keyring"                             # 必须 patch("...get_secret", return_value=None)
+      - "env"                                 # 必须 monkeypatch.setenv 或 patch.dict(os.environ, ...)
+      - "file"                                # 必须 tmp_path fixture
+      - "network"                             # 必须 respx/responses/MagicMock
+      - "system_api"                          # 必须 MagicMock
+    # 隔离策略映射
+    isolation_strategies:
+      keyring: "patch return_value=None"
+      env: "monkeypatch.setenv 或 patch.dict"
+      file: "tmp_path fixture"
+      network: "respx/responses/MagicMock"
+      system_api: "MagicMock"
+    # 适用场景
+    applicable: "所有依赖外部资源的测试、CI/CD 需可重复的场景、跨平台测试"
+    not_applicable: "纯函数测试（无外部依赖）、使用 pytest fixture 已隔离的测试、集成测试（故意依赖真实外部资源）"
+
+# --- 🆕v4.38 异步同步性 / 资源池基准 / HTTP 状态码映射 / CSS 选择器降级 /
+# 异常日志语义 / 外部资源生命周期 / 数据库写入身份追溯（meta-rules #57-#63 后端落地）---
+# 复盘背景：基于本轮对话解决的 7 类问题（async/await 误用 / NullPool 性能问题 /
+# HTTP 状态码语义模糊 / CSS 选择器失效 / 异常日志丢失 traceback /
+# 并发安全 page closure / 数据库写入身份追溯与 converter 类型安全）
+# 对应 xianyu-hunter-dev v4.38.0 meta-rules #57-#63
+# 审查要点：SKILL.md B-REVIEW-182~188
+# 所有参数通过此节点管理，不硬编码
+meta_rules_57_63:
+  # === B-REVIEW-182 ASYNC-AWAIT-SYNC-CHECK（meta-rule #57）===
+  # 检查点：async def 方法体内若不含 await 表达式，必须改为同步 def
+  # 历史教训：worker.py _finalize_run 标记为 async def 但方法体全同步，
+  #           Python 3.14 优化后返回 None，await None 触发 TypeError 导致调度器崩溃
+  async_await_check:
+    enabled: true
+    severity: CRITICAL
+    # 白名单装饰器：这些装饰器的 async def 可豁免（接口定义/上下文管理器）
+    whitelist_decorators:
+      - "@abstractmethod"
+      - "@contextlib.asynccontextmanager"
+    # async generator（含 yield 的 async def）豁免
+    allow_async_generators: true
+    # 推荐用 AST 分析而非正则，准确识别方法体内是否含 await 节点
+    use_ast_analysis: true
+    # 适用场景
+    applicable: "Python 3.11+ 异步代码；使用 asyncio 的 FastAPI/uvicorn 项目；含 async def 的 worker/scheduler/service 层"
+    not_applicable: "纯接口定义（@abstractmethod）；上下文管理器；async generator；测试代码中的 async def test_*"
+
+  # === B-REVIEW-183 RESOURCE-POOL-BENCHMARK（meta-rule #58）===
+  # 检查点：数据库/HTTP/浏览器资源池配置必须有性能基准数据支持
+  # 历史教训：db_models.py 使用 NullPool 导致 list_and_count_task_links 慢查询 231ms
+  #           （其中 ~100ms 是 PRAGMA 开销），改为 QueuePool 后降至 11.9ms（19x 提升）
+  resource_pool_benchmark:
+    enabled: true
+    severity: WARNING
+    # 系统层开销阈值（>50ms 必须排查资源池配置）
+    overhead_threshold_ms: 50
+    # 生产环境禁用的资源池类型
+    forbidden_pool_types_in_prod:
+      - NullPool      # 每次新建连接，仅用于测试/单次请求
+      - StaticPool    # 单连接，测试隔离用
+    # 资源池类型清单
+    pool_types:
+      - NullPool      # 每次新建连接，仅用于测试/单次请求
+      - QueuePool     # 复用连接，生产环境推荐
+      - StaticPool    # 单连接，测试隔离用
+    # 是否要求 docstring 说明选择理由
+    require_docstring: true
+    # 适用场景
+    applicable: "所有资源池选择；含 PRAGMA/init/重试开销的资源初始化；数据库连接池、HTTP 连接池、浏览器实例池"
+    not_applicable: "测试环境（用 StaticPool 保证隔离）；单次请求资源；内存数据结构；CLI 一次性脚本"
+
+  # === B-REVIEW-184 HTTP-STATUS-CODE-MAPPING（meta-rule #59）===
+  # 检查点：底层模块返回多原因的 None/错误时，必须建立 reason_code → status_code 映射表
+  # 历史教训：collection_service.py 将所有 detail() None 映射为 410，
+  #           前端展示"商品详情页加载失败或已下架"，实际原因是 cookie 过期需重新登录
+  http_status_code_mapping:
+    enabled: true
+    severity: CRITICAL
+    # 底层失败原因字段名（底层模块设置 last_*_failure_reason）
+    reason_to_status_map_field: "last_detail_failure_reason"
+    # 默认状态码（仅用于未映射的兜底）
+    default_status_code: 410
+    # 是否要求底层模块设置 reason 属性
+    required_reason_attribute: true
+    # 映射表示例（实际映射表在代码中定义）
+    mapping_table_example:
+      home_title_redirect: 403
+      login_redirect: 403
+      verify_redirect: 441
+      item_not_found: 410
+      item_removed: 410
+      anti_crawler: 429
+      network_timeout: 504
+    # 适用场景
+    applicable: "所有 HTTP 错误响应；多原因返回 None/错误的底层模块（如 detail() 返回 None 有 10+ 原因）"
+    not_applicable: "唯一原因的错误码（如 404 仅表示资源不存在）；内部异常不向用户暴露；健康检查端点"
+
+  # === B-REVIEW-185 CSS-SELECTOR-FALLBACK（meta-rule #60）===
+  # 检查点：依赖第三方网站 DOM 的选择器必须有 ≥3 级降级
+  # 历史教训：_detail.py _parse_sale_counts_from_tabs 单一选择器 [class*="tabItem"]
+  #           在闲鱼改版后失效，on_sale=0 sold=0 误报，添加三级降级后修复
+  css_selector_fallback:
+    enabled: true
+    severity: CRITICAL
+    # 最少降级级数（业务语义 className → HTML role 属性 → 文本内容前缀扫描）
+    min_fallback_levels: 3
+    # 调试 dump 触发字段（收窄到核心字段失败，避免每次失败都 dump）
+    dump_trigger_fields:
+      - "on_sale"
+    # 每小时 dump 上限（防止 dump 文件爆炸）
+    dump_max_per_hour: 10
+    # 豁免选择器（业务语义稳定，无需降级）
+    excluded_selectors:
+      - "[id="
+      - "[data-"
+    # 适用场景
+    applicable: "第三方网站 DOM 解析（闲鱼/淘宝/天猫/京东）；依赖 className 的选择器；Playwright page.querySelectorAll 返回值解析"
+    not_applicable: "自有代码 DOM；ID 选择器；data-* 属性选择器；后端 API JSON 解析；SSR 页面"
+
+  # === B-REVIEW-186 EXCEPTION-LOG-SEMANTIC（meta-rule #61）===
+  # 检查点：except 块内必须用 logger.exception('描述') 保留完整 traceback
+  # 历史教训：关键路径用 logger.warning(f"...{e}") 丢失 traceback，
+  #           定位问题耗时 30+ 分钟才能复现
+  exception_log_semantic:
+    enabled: true
+    severity: CRITICAL
+    # 禁用的日志模式（在 except 块内）
+    forbidden_patterns:
+      - 'logger\.warning.*f["\u201c][^"]*\{e\}'    # 禁用 logger.warning(f'...{e}') 丢堆栈
+      - 'logger\.error.*f["\u201c][^"]*\{e\}'      # 禁用 logger.error(f'...{e}') 丢堆栈
+      - 'logger\.exception.*f["\u201c]'            # 禁用 logger.exception(f'...') 多余 f-string
+    # 必须的日志模式
+    required_pattern: "logger.exception"
+    # 关键路径函数（必须用 logger.exception()）
+    critical_path_functions:
+      - "_on_startup"
+      - "run_migrations"
+      - "_init_db"
+      - "_init_scheduler"
+    # 适用场景
+    applicable: "所有异常处理代码；关键路径（启动/迁移/初始化）；多阶段降级链路；后台任务异常处理；API 路由异常处理"
+    not_applicable: "纯性能日志；DEBUG 级别日志；非 except 块的 warning（用 exc_info=True）；测试代码"
+
+  # === B-REVIEW-187 EXTERNAL-RESOURCE-LIFECYCLE（meta-rule #62）===
+  # 检查点：外部传入的资源（Page/Connection/Lock）必须配对调用 register/unregister
+  # 历史教训：collection_service.py 接收外部 page 但未注册，并发采集时 page 被主流程关闭
+  external_resource_lifecycle:
+    enabled: true
+    severity: CRITICAL
+    # 外部资源类型清单
+    resource_types:
+      - Page           # Playwright Page
+      - Connection     # DB Connection
+      - Lock           # asyncio.Lock
+    # 必须配对的函数名
+    pair_required_functions:
+      - "register_external_page"
+      - "unregister_external_page"
+    # 是否要求在 finally 块中 unregister
+    require_finally_block: true
+    # 是否使用引用计数管理
+    use_reference_counting: true
+    # 适用场景
+    applicable: "外部资源传入（Page/Connection/Lock/SSE 连接）；并发采集场景；Playwright Page 共享；跨函数/跨模块资源传递"
+    not_applicable: "内部创建的资源；单线程使用；一次性资源；with 语句管理的资源"
+
+  # === B-REVIEW-188 DB-WRITE-IDENTITY-TRACE（meta-rule #63）===
+  # 检查点：数据库写入函数必须含 user_id 参数；converter 处理 re.Match 必须 m.group(1)
+  # 历史教训：_SELLER_LABEL_PATTERNS 用 int 作为 converter，但 re.findall 返回 Match 对象，
+  #           int(m) 报错；upsert_eval_event 缺 user_id 导致跨用户数据删除
+  db_write_identity_trace:
+    enabled: true
+    severity: CRITICAL
+    # 必须含 user_id 参数的函数名模式
+    function_name_patterns:
+      - "def upsert_"
+      - "def insert_"
+      - "def update_"
+      - "def create_"
+    required_param_name: "user_id"
+    # converter 函数处理 re.Match 必须显式 m.group(1)
+    converter_match_required: true
+    # 禁用的 converter 模式
+    forbidden_converter_patterns:
+      - "lambda m: int(m)"
+      - "lambda m: float(m)"
+    # 豁免函数（系统级写入无需 user_id）
+    excluded_functions:
+      - "_log_*"       # 日志表写入
+      - "_stats_*"     # 统计表写入
+    # 适用场景
+    applicable: "所有数据库写入函数；正则 converter 函数；跨用户系统；含 re.findall + converter 的解析逻辑"
+    not_applicable: "系统级写入（日志表/统计表/全局配置表）；单一调用点的函数；Pydantic 入口校验后的函数；纯查询函数"
+
+  # === B-REVIEW-182~188 自动扫描规则 ===
+  hard_constraints:
+    rules:
+      # 🆕v4.38 B-REVIEW-182 异步方法 await 语义静态校验（meta-rule #57）
+      - name: "B-REVIEW-182 ASYNC-AWAIT-SYNC-CHECK"
+        pattern: "async\\s+def\\s+\\w+\\([^)]*\\)[^:]*:[^\\n]*\\n(?!(?:.*\\n)*?.*await)"
+        message: "async def 方法体内必须含 await 表达式，否则改同步 def；调用点同步移除 await（meta-rules #57），Python 3.14 优化后 await None 触发 TypeError"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-183 资源池配置性能基准（meta-rule #58）
+      - name: "B-REVIEW-183 RESOURCE-POOL-BENCHMARK"
+        pattern: "poolclass=NullPool"
+        message: "NullPool 每次新建连接执行 5 条 PRAGMA ~100ms，生产环境必须用 QueuePool 并在 docstring 记录性能基准（meta-rules #58）"
+        severity: WARNING
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-184 HTTP 状态码语义映射（meta-rule #59）
+      - name: "B-REVIEW-184 HTTP-STATUS-CODE-MAPPING"
+        pattern: "raise\\s+HTTPException\\((410|502)\\b"
+        message: "多原因 None 必须建立 reason_code → status_code 映射表，禁止多原因一律映射同一码（meta-rules #59），底层设置 last_*_failure_reason"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-185 CSS 选择器降级链（meta-rule #60）
+      - name: "B-REVIEW-185 CSS-SELECTOR-FALLBACK"
+        pattern: "querySelector(All)?\\(['\"][^'\"]+['\"]\\)\\s*(?!.*length)"
+        message: "第三方网站 DOM 选择器必须有 ≥3 级降级（业务语义 className → HTML role 属性 → 文本内容前缀扫描），单一选择器视为违规（meta-rules #60）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-186 异常日志语义完整性（meta-rule #61）
+      - name: "B-REVIEW-186 EXCEPTION-LOG-SEMANTIC"
+        pattern: "except\\s+Exception\\s+as\\s+e:\\s*\\n[^\\n]*logger\\.warning\\(f"
+        message: "except 块内必须用 logger.exception('描述') 保留 traceback，禁用 logger.warning(f'...{e}') 丢失堆栈（meta-rules #61）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-187 外部资源生命周期（meta-rule #62）
+      - name: "B-REVIEW-187 EXTERNAL-RESOURCE-LIFECYCLE"
+        pattern: "reuse_page\\s*=\\s*Page\\s*\\|\\s*None"
+        message: "外部传入的 Page/Connection/Lock 必须配对调用 register/unregister，且在 finally 块 unregister 避免泄漏（meta-rules #62）"
+        severity: CRITICAL
+        auto_fix: false
+      # 🆕v4.38 B-REVIEW-188 数据库写入身份追踪（meta-rule #63）
+      - name: "B-REVIEW-188 DB-WRITE-IDENTITY-TRACE"
+        pattern: "def\\s+(upsert|insert|update|create)_\\w+\\([^)]*\\)\\s*(?!.*user_id)"
+        message: "数据库写入函数必须含 user_id 参数用于跨用户隔离；converter 处理 re.Match 必须显式 m.group(1) 再转型，禁用 int(m)（meta-rules #63）"
+        severity: CRITICAL
+        auto_fix: false
+
+# ===== B-REVIEW-189 状态码分层所有权审计 (v4.40.0, meta-rule #66) =====
+# 与 meta_rules_57_63.http_status_code_mapping 关注点不同：
+# - http_status_code_mapping 关注「多原因 None → 状态码映射」（同层内多原因细分）
+# - status_code_audit 关注「同一状态码跨层语义冲突」（层间所有权划分）
+status_code_audit:
+  _doc: "HTTP 状态码分层所有权与冲突避免审计规则。业务代码不得抛出认证层专属状态码，多模式业务需保持状态码一致性。"
+
+  # 状态码分层定义：每个状态码应有明确的所有权层
+  layers:
+    auth_layer:
+      codes: [401]
+      owner: middleware
+      description: "认证未通过，仅认证中间件（BearerAuthMiddleware）可返回"
+      detail_signature: "Unauthorized"
+      frontend_action: "redirect_to_login"
+    external_cred_layer:
+      codes: [440]
+      owner: business
+      description: "外部服务凭证失效（如闲鱼 cookie 过期、_m_h5_tk token 过期）"
+      frontend_action: "caller_catch_display_detail"
+    validation_layer:
+      codes: [422]
+      owner: framework
+      description: "请求参数校验失败，由 FastAPI Pydantic 自动返回"
+      frontend_action: "caller_catch_display_field_errors"
+    anti_crawler_layer:
+      codes: [429]
+      owner: business
+      description: "触发反爬限制，调用方需退避重试"
+      frontend_action: "caller_catch_display_retry_hint"
+    not_found_layer:
+      codes: [404, 410]
+      owner: business
+      description: "资源不存在或已下架"
+      frontend_action: "caller_catch_display_not_found"
+    server_error_layer:
+      codes: [500, 502, 503]
+      owner: framework
+      description: "服务器错误或上游故障"
+      frontend_action: "caller_catch_display_generic_error"
+
+  # 保留给中间件的状态码：业务代码不得使用
+  reserved_for_middleware: [401]
+
+  # 业务代码禁止抛出的状态码（属于认证/授权层）
+  forbidden_business_codes: [401, 403]
+
+  # 一致性规则：同一语义在不同业务模式必须使用相同状态码
+  # applies_to 为数组，新增模式只需追加，无需改规则
+  consistency_rules:
+    - semantic: "cookie_expired"
+      expected_code: 440
+      applies_to: ["detail_only", "official_full"]
+      _doc: "同一语义（cookie 过期）在不同模式必须使用 440"
+    - semantic: "anti_crawler"
+      expected_code: 429
+      applies_to: ["detail_only", "official_full"]
+    - semantic: "page_unavailable"
+      expected_code: 410
+      applies_to: ["detail_only", "official_full"]
+
+  # 静态检查模式：用于 grep 自动扫描
+  detection_patterns:
+    business_forbidden_in_raise:
+      - pattern: 'CollectionError\\(401'
+        message: "业务代码 CollectionError 抛出认证层专属状态码 401，应改为 440"
+      - pattern: 'raise HTTPException\\(status_code=401'
+        message: "非认证中间件代码抛出 401，违反状态码所有权"
+      - pattern: 'CollectionError\\(403'
+        message: "业务代码抛出授权层专属状态码 403，应由授权中间件返回"
+
+    # 拦截器透传检查：路由层不得无条件透传状态码而不校验是否属于认证层
+    route_transparent_pass:
+      require_check: "raise HTTPException(status_code=e.status_code, detail=e.detail)"
+      check_detail: "需确认 e.status_code 不属于 reserved_for_middleware"
+      _doc: "路由层透传 CollectionError 时，应确保上游未抛出认证层专属状态码"
+# ===== B-REVIEW-200~202 配置驱动 (v4.43) =====
+api:
+  mutation_response_echo:
+    enabled: true
+    include_derived_fields: [preset_id, has_key, masking_applied]
+    call_get_handler: true
+    _doc: "PUT 响应必须包含完整配置状态，通过调用 GET 处理器构建避免重复"
+  literal_preset_ids:
+    enabled: true
+    known_values: [openai, deepseek, zhipu, moonshot, qwen, ernie, doubao, agnes, ollama]
+    _doc: "preset_id 必须使用 Literal 类型标注已知值"
+
+credential_storage:
+  frontend_contract:
+    accept_missing_api_key_on_preset_switch: true
+    restore_from_slot_when_missing: true
+    _doc: "前端在预设切换时可不发送 api_key，后端必须从目标槽位恢复"
+# ===== B-REVIEW-200~202 审查规则 (v4.43) =====
+# 维度 39: Per-Preset Credential Frontend Contract
+hard_constraints:
+  - name: "B-REVIEW-200 MUTATION-ECHO-FULL"
+    pattern: "def save_ai_config"
+    check: "mutation response must include **get_ai_config() unpack"
+    message: "PUT /api/ai/config 响应必须回显完整配置状态"
+    severity: CRITICAL
+    auto_fix: false
+  - name: "B-REVIEW-201 PRESET-ID-LITERAL-TYPE"
+    pattern: "preset_id: (str|str \\| None)"
+    message: "preset_id 必须使用 Literal 类型标注已知预设值"
+    severity: CRITICAL
+    auto_fix: false
+  - name: "B-REVIEW-202 FRONTEND-KEY-FIELD-CONTRACT"
+    pattern: "api_key is None.*preset.*switch|preset.*switch.*api_key is None"
+    message: "后端必须接受前端在预设切换时不发送 api_key，从槽位恢复"
+    severity: CRITICAL
+    auto_fix: false
+
+# ===== B-REVIEW-203~208 审查规则 (v4.44) =====
+hard_constraints:
+  - name: "B-REVIEW-203 MODEL-NAME-OFFICIAL-ACCURACY"
+    pattern: "openai_model.*=.*[\"']deepseek"
+    check: "model name must match vendor docs exactly including case"
+    message: "后端默认模型名称必须与官网逐字符一致（含大小写）"
+    severity: CRITICAL
+    auto_fix: false
+  - name: "B-REVIEW-204 CAPABILITY-CHECK-SHARED"
+    pattern: "_is_vision_capable"
+    check: "must use .lower() for case-insensitive keyword matching"
+    message: "模型能力判断函数必须使用 .lower() 做大小写不敏感匹配"
+    severity: HIGH
+    auto_fix: false
+  - name: "B-REVIEW-205 MODEL-LITERAL-TYPE"
+    pattern: "preset_id: (str|str \\| None)"
+    message: "preset_id 必须使用 Literal 类型标注已知预设值"
+    severity: CRITICAL
+    auto_fix: false
+  - name: "B-REVIEW-206 CONFIG-PERSIST-ENV-UPDATE"
+    pattern: "update_ai_config"
+    check: "non-secret fields must be written to .env via _persist_to_env"
+    message: "非密钥字段变更必须立即持久化到 .env 文件"
+    severity: HIGH
+    auto_fix: false
+  - name: "B-REVIEW-207 MASKED-KEY-RETURN"
+    pattern: "get_ai_config|save_ai_config"
+    check: "api_key must be masked in GET, echoed in PUT response"
+    message: "GET 返回脱敏 api_key，PUT 响应回显完整配置状态"
+    severity: HIGH
+    auto_fix: false
+  - name: "B-REVIEW-208 KEY-RING-INDEPENDENT"
+    pattern: "set_secret.*KEY_OPENAI_API_KEY|set_secret.*KEY_EMBEDDING_API_KEY"
+    check: "each key must use separate keyring service+key pairs"
+    message: "每个 API Key 必须独立存储在 keyring 中"
+    severity: CRITICAL
+    auto_fix: false
+
+# ===== B-REVIEW-222~225 配置驱动 (v4.50) =====
+# 维度 40: External Command Interaction（meta-rule #79 落地，coding-rules step 223-228）
+external_command_interaction:
+  enabled: true
+  _doc: "长时交互式外部命令两阶段异步模式（meta-rule #79）的所有参数集中管理，禁止硬编码"
+  # 两阶段触发条件：命令满足任一条件即必须拆分为 POST /start + GET /status
+  two_phase_trigger:
+    requires_user_interaction: true        # 需要用户交互（浏览器授权、确认提示）
+    unpredictable_duration: true            # 运行时间不可预测（依赖用户操作/网络）
+    output_contains_key_info: true          # 输出含关键信息（授权 URL/token/session ID）
+    completion_is_file_generation: true     # 完成标志为文件生成（cert.pem/credentials.json）
+  # Phase 1 启动后等待关键信息的短时窗口（秒）
+  start_wait_timeout: 10
+  # 子进程清理：terminate 后等待超时（秒），超时后 kill
+  cleanup_terminate_timeout: 3
+  # 完成标志多路径检测配置
+  completion_detection:
+    # 平台默认路径（Path.home() 派生）
+    platform_default_subdir: ".cloudflared"
+    platform_default_filename: "cert.pem"
+    # 环境变量派生路径（缺失时跳过，不抛异常）
+    env_derived_paths:
+      - env_var: "LOCALAPPDATA"
+        subdir: ".cloudflared"
+      - env_var: "APPDATA"
+        subdir: ".cloudflared"
+    # 从命令输出正则提取路径（兜底，兼容 Windows/Unix 路径及空格）
+    output_regex: "([A-Za-z]:[\\\\\\/][^\\s]*cert\\.pem|/[^\\s]*cert\\.pem)"
+  # 输出关键信息提取正则（支持多模式 fallback）
+  output_parsing:
+    auth_url_pattern: "(https://[^\\s]+)"
+    auth_url_keyword_filter: "cloudflare"
+  # 全局单例清理路径（三条退出路径都必须调用 reset）
+  singleton_cleanup_paths:
+    - "success"     # Phase 2 返回 success
+    - "failed"      # Phase 2 返回 failed，或 Phase 1 启动失败
+    - "exception"   # 任何未捕获异常
+  # idle 状态语义：Phase 2 在单例未初始化时返回 idle（非异常）
+  idle_on_no_singleton: true
+  # 适用场景
+  applicable:
+    - "交互式外部命令（OAuth 授权、浏览器登录、SSH key 确认）"
+    - "运行时间不可预测的命令（依赖用户操作、网络条件）"
+    - "输出包含关键信息的命令（授权 URL、token、session ID）"
+    - "完成标志为文件生成的命令（cert.pem、credentials.json）"
+    - "需跨 HTTP 请求保持子进程状态的场景"
+  # 不适用场景
+  not_applicable:
+    - "短时确定性命令（ls、git status、curl 简单请求）"
+    - "无需用户交互的批处理命令（异步任务队列）"
+    - "输出无需实时提取的命令（capture_output 即可）"
+    - "单次请求内完成的操作（无需全局单例）"
+    - "完成标志明确单一的命令（无需多路径检测）"
+
+# ===== B-REVIEW-222~225 审查规则 (v4.50) =====
+# 维度 40: External Command Interaction（meta-rule #79 落地）
+hard_constraints:
+  - name: "B-REVIEW-222 SUBPROCESS-RUN-INTERACTIVE-BLOCK"
+    pattern: "subprocess\\.run\\([^)]*timeout="
+    check: "if command involves user interaction, must use two-phase Popen pattern"
+    message: "交互式命令禁止用 subprocess.run 阻塞调用，必须拆分为 POST /start + GET /status 两阶段（meta-rule #79）"
+    severity: CRITICAL
+    auto_fix: false
+  - name: "B-REVIEW-223 CAPTURE-OUTPUT-SWALLOWS-KEY-INFO"
+    pattern: "capture_output=True"
+    check: "if output contains key info (auth URL/token), must use Popen+PIPE+background thread"
+    message: "capture_output=True 会吞掉关键信息（授权 URL），必须用 Popen+后台线程实时读取 stdout（meta-rule #79）"
+    severity: CRITICAL
+    auto_fix: false
+  - name: "B-REVIEW-224 SINGLE-PATH-COMPLETION-DETECTION"
+    pattern: "Path\\.home\\(\\)\\s*/\\s*[\"']\\.[^\"']+[\"']\\s*/\\s*[\"'][^\"']+[\"']"
+    check: "completion detection must include env-derived paths (LOCALAPPDATA/APPDATA) and output regex extraction"
+    message: "完成标志检测禁止单一路径，必须含平台默认+环境变量派生+输出正则提取（meta-rule #79）"
+    severity: HIGH
+    auto_fix: false
+  - name: "B-REVIEW-225 SINGLETON-RESET-MISSING-CLEANUP"
+    pattern: "_setup_provider\\s*=\\s*None"
+    check: "reset function must call _cleanup_login_process() before setting None"
+    message: "全局单例 reset 禁止只置 None，必须先调用子进程清理方法 terminate→wait→kill（meta-rule #79）"
+    severity: HIGH
+    auto_fix: false
+# ===== B-REVIEW-MULTI-LEVEL-HEALING / CIRCUIT-BREAKER-RETRY / DIAGNOSTIC-LOGGING / PRE-CHECK-BATCH 配置驱动 (v4.46.0) =====
+# 维度 15: 自愈与可靠性（Cookie 自愈机制修复复盘落地）
+# 复盘来源：最近 3 次会话的 Cookie 自愈机制修复过程
+# - collection_service.py: _refresh_token_and_retry_detail 两级自愈 + _log_cookie_diagnostics 诊断日志 + _force_reinject_cookies_from_store 强制注入
+# - batch_refresh_scheduler.py: _sync_cookie_before_batch 批次级预检
+# - unified_login.py: _post_login_cookie_health_check 登录后健康探测
+# 所有参数通过此节点管理，不硬编码
+cookie_self_healing:
+  # === B-REVIEW-MULTI-LEVEL-HEALING 多级自愈完整性检查 ===
+  # 检查点：多个独立恢复手段时必须分级自愈（低成本→中成本→放弃）
+  # 历史教训：collection_service.py 仅用 cookie 强制注入单一手段，错过 token 刷新更低成本的恢复机会
+  multi_level_healing:
+    enabled: true
+    severity: CRITICAL              # 缺级别导致无法自愈；缺诊断日志降为 WARNING
+    warning_severity: WARNING       # 缺诊断日志时的严重级别
+    # 自愈级别列表（从低成本到高成本，最后一级必须是 give_up）
+    healing_levels:
+      - "token_refresh"            # 低成本：刷新 m5tk token
+      - "cookie_force_inject"       # 中成本：从 store 强制注入 cookie
+      - "give_up"                   # 放弃：记录诊断日志后返回 None
+    # 每级重试前必须重置的熔断标志列表
+    reset_before_each_level:
+      - "_circuit_breaker_triggered"
+      - "_consecutive_failures"
+    # 每级失败必须调用的诊断日志函数名模式
+    diagnostic_log_required: true
+    diagnostic_log_pattern: "_log_*_diagnostics"
+    # 适用场景
+    applicable: "有多个独立恢复手段的系统（token + cookie + 重登录）"
+    not_applicable: "单一恢复手段的系统"
+
+  # === B-REVIEW-CIRCUIT-BREAKER-RETRY 熔断标志与重试协调检查 ===
+  # 检查点：重试前必须重置熔断标志，否则重试被短路形成假重试
+  # 历史教训：collection_service.py 重试前未重置 _circuit_breaker_triggered，重试入口立即返回 None
+  circuit_breaker_retry:
+    enabled: true
+    severity: CRITICAL              # 重试被短路=假重试
+    # 熔断标志字段名模式（重试入口前必须重置）
+    breaker_flag_patterns:
+      - "_circuit_breaker_triggered"
+      - "_breaker_triggered"
+      - "_is_fused"
+    # 重试函数名模式（必须检查重试前是否重置熔断标志）
+    retry_function_patterns:
+      - "def.*retry.*"
+      - "def.*healing.*"
+      - "def.*recover.*"
+    # 熔断标志必须由业务逻辑设置（连续失败计数器等），禁止手动设置
+    require_business_logic_set: true
+    forbidden_manual_set_patterns:
+      - "self\\._circuit_breaker.*=\\s*True"
+    # 适用场景
+    applicable: "熔断与自动重试共存的场景"
+    not_applicable: "无熔断机制的系统"
+
+  # === B-REVIEW-DIAGNOSTIC-LOGGING 诊断日志完整性检查 ===
+  # 检查点：自愈均失败时必须记录关键状态变量（存在性/过期时间/值一致性）
+  # 历史教训：collection_service.py 自愈失败时无诊断日志，生产事故无法定位根因
+  diagnostic_logging:
+    enabled: true
+    severity: WARNING                # 缺诊断日志导致无法定位根因
+    # 诊断日志必须记录的关键状态变量列表（配置化，新增变量只改配置）
+    diagnostic_variables:
+      - "cookie_exists"              # 存在性：cookie 是否在 store 中
+      - "cookie_expires_at"          # 过期时间：expires 字段或内嵌 timestamp
+      - "cookie_value_hash"          # 值哈希：用于对比 store 与运行时一致性
+      - "store_runtime_consistent"   # 一致性：store 与运行时是否一致
+      - "last_failure_reason"        # 上次失败原因
+      - "healing_stage"              # 当前自愈阶段
+    # 日志格式必须含状态摘要字段
+    require_summary_field: true
+    summary_field_name: "summary"
+    # 诊断日志函数名模式
+    diagnostic_log_pattern: "_log_*_diagnostics"
+    # 适用场景
+    applicable: "失败原因多样的场景（cookie 失效可能 token 过期/cookie 被覆盖/服务端变更/网络问题）"
+    not_applicable: "失败原因单一的场景"
+
+  # === B-REVIEW-PRE-CHECK-BATCH 批量操作预检检查 ===
+  # 检查点：批量操作前预检关键依赖；关键操作后健康探测；预检失败仅告警不阻断
+  # 历史教训：batch_refresh_scheduler.py 批次前未预检 cookie，整批失败浪费时间
+  pre_check_batch:
+    enabled: true
+    severity: WARNING                # 缺预检导致批量失败浪费时间
+    # 预检检查项列表（配置化）
+    pre_check_items:
+      - "cookie_valid"               # cookie 有效性
+      - "network_reachable"          # 网络连接
+      - "config_complete"            # 配置完整性
+    # 预检阈值（按检查项配置）
+    pre_check_thresholds:
+      cookie_valid:
+        min_identity_cookies: 3        # 身份 cookie 最少数量
+        identity_cookie_names: ["unb", "cookie2", "_tb_token_"]  # 身份 cookie 名单
+      network_reachable:
+        timeout_sec: 5
+      config_complete:
+        required_fields: ["api_base", "api_key"]
+    # 预检失败处理策略：仅告警不阻断（后续操作有兜底）
+    on_failure: "warn_continue"
+    forbid_raise: true
+    # 关键操作后健康探测函数名模式
+    post_action_health_check_patterns:
+      - "_post_login_*_health_check"
+      - "_post_*_verify"
+    # 批量操作入口函数名模式
+    batch_entry_patterns:
+      - "def batch_refresh.*"
+      - "def run_batch.*"
+      - "def process_batch.*"
+    # 适用场景
+    applicable: "批量操作场景（批次刷新/批量采集/批量推送）"
+    not_applicable: "单次操作场景"
+
+  # === B-REVIEW-MULTI-LEVEL-HEALING / CIRCUIT-BREAKER-RETRY / DIAGNOSTIC-LOGGING / PRE-CHECK-BATCH 自动扫描规则 ===
+  hard_constraints:
+    rules:
+      # v4.46 B-REVIEW-MULTI-LEVEL-HEALING 多级自愈完整性
+      - name: "B-REVIEW-MULTI-LEVEL-HEALING"
+        pattern: "def\\s+(_refresh_token_and_retry|_retry_detail|_healing)"
+        check: "must implement multi-level healing (token_refresh -> cookie_force_inject -> give_up) with config-driven levels"
+        message: "多个独立恢复手段时必须分级自愈（低成本→中成本→放弃），每级重试前重置熔断标志，每级失败记录诊断日志，自愈级别配置化（v4.46.0 Cookie 自愈机制修复复盘）"
+        severity: CRITICAL
+        auto_fix: false
+      # v4.46 B-REVIEW-CIRCUIT-BREAKER-RETRY 熔断标志与重试协调
+      - name: "B-REVIEW-CIRCUIT-BREAKER-RETRY"
+        pattern: "def\\s+\\w*(retry|healing|recover)\\w*\\([^)]*\\)[^:]*:[^\\n]*\\n(?!(?:.*\\n)*?.*_circuit_breaker.*=\\s*False)"
+        check: "retry function must reset circuit breaker flag before retrying"
+        message: "重试前必须重置熔断标志，否则重试被短路形成假重试；重试失败时熔断标志必须由业务逻辑（连续失败计数器）设置而非手动设置（v4.46.0 Cookie 自愈机制修复复盘）"
+        severity: CRITICAL
+        auto_fix: false
+      # v4.46 B-REVIEW-DIAGNOSTIC-LOGGING 诊断日志完整性
+      - name: "B-REVIEW-DIAGNOSTIC-LOGGING"
+        pattern: "return\\s+None(?!.*_log_.*_diagnostics)"
+        check: "self-healing give-up branch must call _log_*_diagnostics before returning None"
+        message: "自愈均失败时必须记录关键状态变量（存在性/过期时间/值一致性），日志含状态摘要，诊断变量列表配置化（v4.46.0 Cookie 自愈机制修复复盘）"
+        severity: WARNING
+        auto_fix: false
+      # v4.46 B-REVIEW-PRE-CHECK-BATCH 批量操作预检
+      - name: "B-REVIEW-PRE-CHECK-BATCH"
+        pattern: "def\\s+(batch_refresh|run_batch|process_batch)\\w*\\([^)]*\\)[^:]*:[^\\n]*\\n(?!(?:.*\\n)*?.*_pre_check|_sync_cookie_before)"
+        check: "batch entry must call _pre_check_* or _sync_cookie_before_batch before processing"
+        message: "批量操作前必须预检关键依赖（cookie/连接/配置），关键操作后健康探测，预检失败仅告警不阻断，预检参数配置化（v4.46.0 Cookie 自愈机制修复复盘）"
+        severity: WARNING
+        auto_fix: false
+
+# ===== B-REVIEW-226~228 async_timeout_protection 配置驱动 (v4.48.0) =====
+async_timeout_protection:
+  _doc: "async 阻塞调用超时保护配置（meta-rule #80, B-REVIEW-226）"
+  enabled: true
+  timeout_by_category:
+    lightweight_read: 5.0
+    heavy_serialize: 10.0
+    evaluate: 15.0
+  fallback_strategy: best_effort
+  audit_grep_pattern: 'await\s+\w+\.(cookies|storage_state|snapshot|title|url|evaluate)\('
+
+subprocess_heartbeat:
+  _doc: "子进程心跳与阶段超时协同配置（meta-rule #81, B-REVIEW-227）"
+  enabled: true
+  timeout_by_status:
+    starting: 90.0
+    opening: 90.0
+    running: 90.0
+    waiting: 30.0
+    already_logged: 90.0
+  safety_margin: 0.3
+  max_accumulated_timeout_warn: 30.0
+
+consistency_check:
+  _doc: "跨代码块一致性检查配置（meta-rule #82 experimental, B-REVIEW-228）"
+  enabled: true
+  min_occurrences: 2
+  scan_paths:
+    - scripts/browser_login.py
+    - scripts/auth_helper.py
+    - src/xianyu_hunter/infra/browser.py
+    - src/xianyu_hunter/modules/worker.py
+    - src/xianyu_hunter/modules/collector/_search.py
+
+# ===== B-REVIEW-226~228 审查规则 (v4.48.0) =====
+hard_constraints:
+  rules:
+    - name: "B-REVIEW-226 ASYNC-BLOCKING-CALL-TIMEOUT"
+      severity: critical
+      check: "所有 async API 阻塞调用必须有 asyncio.wait_for 超时保护"
+      config_ref: "async_timeout_protection"
+      grep_signal: 'await\s+\w+\.(cookies|storage_state|snapshot|title|url|evaluate)\('
+      applicable:
+        - Playwright async API 调用（cookies/storage_state/snapshot）
+        - httpx 长连接池调用
+        - aiohttp websocket 长连接
+      not_applicable:
+        - Playwright 自带 timeout 参数的调用（page.goto/wait_for_load_state）
+        - 同步 API 调用
+        - 一次性调用且失败即终止的场景
+    - name: "B-REVIEW-227 SUBPROCESS-HEARTBEAT-STAGE-COORDINATION"
+      severity: critical
+      check: "子进程心跳架构中每阶段必须有独立 status + 独立超时阈值，阻塞调用超时之和 < 阈值*(1-margin)"
+      config_ref: "subprocess_heartbeat"
+      grep_signal: 'subprocess.Popen.*status_file'
+      applicable:
+        - subprocess.Popen + status file 心跳架构
+        - 多阶段长时间任务（登录→导出→采集）
+        - 后端轮询前端状态的场景
+      not_applicable:
+        - 同步请求-响应模式（FastAPI 路由直接 await）
+        - 后台一次性任务
+        - 纯前端状态管理
+    - name: "B-REVIEW-228 CROSS-BLOCK-CONSISTENCY-CHECK"
+      severity: major
+      check: "同一 API 在 ≥2 处调用时保护措施必须一致"
+      config_ref: "consistency_check"
+      grep_signal: "同一 API 名出现 ≥ min_occurrences 次"
+      applicable:
+        - 同一 API 在多处调用的场景
+        - 复用代码片段（多个登录方式）
+        - 重构后检查是否漏改
+      not_applicable:
+        - 首次实现的唯一调用点
+        - 故意差异化的实现（测试 vs 生产）
+        - 不同框架的类似操作
+
+# ===== B-REVIEW-229~236 配置驱动 (v4.49.1) =====
+# 维度 37: 测试质量与同步性 / 软删除隔离 / ES 弹性预检 / 多用户透传
+# 复盘来源：最近的 SonarQube 扫描与测试修复过程
+# - 6 类测试失败：monkeypatch 覆盖不全 / await 调用与 async/sync 不匹配 /
+#   属性名重构后序列化协议字段被破坏 / FastAPI 端点签名变更后测试未传新参数 /
+#   软删除数据被错误归类 / 大规模测试无超时挂起
+# - 2 项后端代码质量：ES read_only 锁未预检导致扫描数据不更新 /
+#   多用户场景 user_id 在端点获取后未透传到下游 service/repository
+# 对应 xianyu-hunter-dev v4.49.1 step 236-243
+# 审查要点：SKILL.md B-REVIEW-229~236
+# 所有参数通过此节点管理，禁止硬编码
+
+# === 测试质量保护节点（BR1 / BR2 / BR3 / BR4 / BR7）===
+test_quality_protection:
+  _doc: "测试质量与同步性保护配置（B-REVIEW-229~232 / B-REVIEW-235）。覆盖 monkeypatch 完整性、async/sync 调用匹配、属性重构与序列化字段分离、端点签名同步、pytest 超时配置等测试场景。"
+
+  # === B-REVIEW-229 MONKEYPATCH-FROM-IMPORT-COVERAGE 模块级 from-import 覆盖完整性 ===
+  # 检查点：测试 monkeypatch 必须覆盖被测代码所有 `from X import Y` 的模块级引用
+  # 历史教训：测试只 patch 源模块（`module.sub.func`）但被测代码已 `from module.sub import func`
+  #           patch 不生效，测试通过但生产仍报错
+  monkeypatch_coverage:
+    enabled: true
+    severity: CRITICAL                 # patch 漏覆盖导致测试通过但生产失败
+    # 检测模式：扫描测试文件中 monkeypatch.setattr / patch 的目标
+    detection_patterns:
+      - "monkeypatch\\.setattr\\("
+      - "patch\\(['\"]([^'\"]+)\\.\\w+['\"]"
+      - "patch\\.object\\("
+    # 禁用模式：只 patch 源模块路径，未 patch 命中的模块级 from-import 引用
+    forbidden_partial_patch:
+      - "patch\\(['\"]xianyu_hunter\\.core\\.auth_helper\\.is_token_valid['\"]\\)"
+      # 当被测代码存在 `from xianyu_hunter.core.auth_helper import is_token_valid` 时视为违规
+    # 推荐策略优先级（从高到低）
+    recommended_strategies:
+      - "fastapi_dependency_injection"  # 优先用 FastAPI Depends 重写，避免 patch 散点
+      - "patch_all_call_sites"          # 逐一 patch 所有命中模块的引用
+      - "patch_source_module"            # 仅 patch 源模块（最弱策略，需在 review 中说明）
+    # 适用场景
+    applicable: "测试代码使用 monkeypatch / unittest.mock.patch 且被测代码含模块级 from-import"
+    not_applicable: "纯函数测试（无外部依赖导入）；FastAPI Depends 已封装的依赖；测试 fixture 已统一隔离"
+
+  # === B-REVIEW-230 ASYNC-SYNC-TEST-CALL-MATCH 同步/异步方法测试调用匹配 ===
+  # 检查点：测试的 await 调用必须与方法的 async/sync 定义匹配
+  # 历史教训：被测方法被重构为同步但测试仍 `await method()`，
+  #           抛 `TypeError: 'NoneType' object can't be awaited` 或 `coroutine never awaited`
+  async_sync_test_match:
+    enabled: true
+    severity: CRITICAL                 # await/sync 不匹配测试运行即崩溃
+    # TypeError 错误信号（出现即触发违规）
+    error_signatures:
+      - "TypeError: 'NoneType' object can't be awaited"
+      - "TypeError: 'bool' object can't be awaited"
+      - "coroutine '.*' was never awaited"
+      - "RuntimeWarning: coroutine '.*' was never awaited"
+    # mock 类型对齐策略：sync 方法用 MagicMock，async 方法用 AsyncMock
+    mock_type_alignment:
+      sync_implementation: "MagicMock"      # 同步方法对应 MagicMock
+      async_implementation: "AsyncMock"     # 异步方法对应 AsyncMock
+      # 当源代码 async↔sync 重构时必须同步切换 mock 类型
+      refactoring_swap_required: true
+    # 检测模式：测试文件中的 await 调用需校验对应方法签名
+    detection_patterns:
+      - "await\\s+\\w+\\.\\w+\\("
+      - "await\\s+\\w+\\("
+    # 适用场景
+    applicable: "FastAPI async 端点测试 / async service 测试 / async↔sync 重构后的回归测试"
+    not_applicable: "纯同步代码测试（无 await）；纯 async 代码且 mock 已对齐"
+
+  # === B-REVIEW-231 PROPERTY-RENAME-SERIALIZE-FIELD-SEP 属性名重构与序列化字段名分离 ===
+  # 检查点：数据类属性名重构（驼峰→蛇形）时测试必须同步；序列化方法必须保留协议字段名
+  # 历史教训：将 `appKey` 重构为 `app_key` 后未同步测试，且 to_dict 丢失协议字段名 `appKey`
+  #           导致 AttributeError: has no attribute 'appKey' / TypeError: unexpected keyword argument
+  property_rename_serialize:
+    enabled: true
+    severity: CRITICAL                 # 重构未同步导致测试与协议双双失效
+    # 错误信号
+    attribute_error_signatures:
+      - "AttributeError: .* has no attribute 'appKey'"
+      - "AttributeError: .* has no attribute 'userId'"
+      - "AttributeError: .* has no attribute 'presetId'"
+    type_error_signatures:
+      - "TypeError: .* unexpected keyword argument 'appKey'"
+      - "TypeError: .* unexpected keyword argument 'userId'"
+    # 序列化方法保留协议字段名（蛇形属性名 → 驼峰协议字段名）
+    serialization_field_retention:
+      require_protocol_field: true       # to_dict / model_dump 必须保留协议字段名
+      # 属性名→协议字段名映射示例（项目实际映射在代码中定义）
+      mapping_example:
+        app_key: "appKey"
+        user_id: "userId"
+        preset_id: "presetId"
+    # 测试同步要求
+    test_sync_required: true            # 属性名重构时测试必须同步
+    # 检测模式：dataclass / pydantic 模型含驼峰属性的（疑似待重构）
+    detection_patterns:
+      - "@dataclass.*\\n.*\\w+.*:\\s*str.*=.*Field"
+      - "class\\s+\\w+\\(BaseModel\\):"
+    # 适用场景
+    applicable: "dataclass/pydantic 模型属性名重构（驼峰→蛇形）；含 to_dict / model_dump 序列化方法的模型"
+    not_applicable: "纯内部数据结构（无序列化需求）；ORM 行类（属性名与列名一致）"
+
+  # === B-REVIEW-232 FASTAPI-ENDPOINT-SIGNATURE-TEST-SYNC 端点签名变更测试同步 ===
+  # 检查点：端点新增 request/user_id 参数时测试必须传入对应参数；下游调用断言必须适配
+  # 历史教训：端点签名新增 `request: Request` 后测试调用未传 request
+  #           抛 `TypeError: missing 1 required positional argument: 'request'`
+  fastapi_endpoint_test_sync:
+    enabled: true
+    severity: CRITICAL                 # 端点签名变更未同步测试调用即失败
+    # TypeError 错误信号
+    error_signatures:
+      - "TypeError: \\w+\\(\\) missing 1 required positional argument: 'request'"
+      - "TypeError: \\w+\\(\\) missing 1 required positional argument: 'user_id'"
+    # 端点新增参数时的测试 mock 模板（Request mock 构造方式）
+    request_mock_template:
+      # 用 SimpleNamespace 构造最小 Request mock，避免引入 starlette.Request 复杂依赖
+      use_simplenamespace: true
+      construct_pattern: "SimpleNamespace(state=SimpleNamespace(user_id=mock_user_id))"
+      # 默认 mock user_id（从 config 读取，禁止硬编码）
+      mock_user_id_default: "default"
+      # 默认 mock state 字段（按需扩展）
+      mock_state_fields:
+        - "user_id"
+        - "session_id"
+    # 端点签名变更检测模式：def 函数签名新增 request / user_id 参数
+    signature_change_patterns:
+      - "async\\s+def\\s+\\w+\\([^)]*request:\\s*Request"
+      - "def\\s+\\w+\\([^)]*user_id:\\s*str"
+    # 适用场景
+    applicable: "FastAPI 端点签名新增参数（request / user_id / session_id）后的测试同步；下游调用断言适配"
+    not_applicable: "纯参数校验重构（Pydantic 模型字段变更）；测试已通过 fixture 注入 request 的场景"
+
+  # === B-REVIEW-235 PYTEST-TIMEOUT-CONFIG 测试超时配置 ===
+  # 检查点：pyproject.toml 必须配置 pytest 超时；大规模测试必须支持分批运行
+  # 历史教训：测试无 timeout 配置，单个测试卡死导致整批 CI 超时无输出
+  pytest_timeout_config:
+    enabled: true
+    severity: HIGH                      # 无 timeout 配置导致 CI 卡死浪费资源
+    # pytest 超时插件名称（必须安装）
+    required_plugin: "pytest-timeout"
+    # 默认超时秒数（从 config 读取，禁止硬编码到 addopts）
+    default_timeout_sec: 30
+    # pyproject.toml addopts 必须包含的配置
+    required_addopts:
+      - "--timeout=30"
+      - "--timeout-method=thread"
+    # 大规模测试分批运行配置
+    batch_run:
+      enabled: true
+      # 单批最大测试数量（超过则建议分批运行）
+      max_tests_per_batch: 200
+      # 分批运行命令模板（{batch_id} 占位符）
+      batch_command_template: "pytest tests/ --timeout={timeout} -q"
+    # 检测模式：pyproject.toml 缺少 timeout 配置
+    detection_patterns:
+      - "\\[tool\\.pytest\\]"
+      - "addopts"
+    # 适用场景
+    applicable: "pyproject.toml 配置 pytest 的项目；CI/CD 流水线测试；大规模测试套件"
+    not_applicable: "纯单元测试（<10 个）；一次性脚本测试；不使用 pytest 的项目"
+
+# === B-REVIEW-233 SOFT-DELETE-CATEGORY-ISOLATION 软删除数据分类隔离 ===
+soft_delete_data_isolation:
+  _doc: "软删除数据分类隔离配置（B-REVIEW-233）。区分 NULL 外键（孤儿数据，归入未分类）与已删除外键（跳过统计），避免合并判断导致分类统计错误。"
+  enabled: true
+  severity: HIGH                         # 合并判断导致分类统计错误，影响业务决策
+  # 检测模式：合并判断的反模式（grep 命中即触发违规）
+  # 历史教训：`if not tid or tid not in task_map` 把 None（孤儿）与已删除（跳过）混为一类
+  detection_patterns:
+    - "if\\s+not\\s+\\w+\\s+or\\s+\\w+\\s+not\\s+in"
+    - "if\\s+not\\s+tid\\s+or\\s+tid\\s+not\\s+in\\s+task_map"
+  # 正确的分类规则（必须拆分为两个独立判断）
+  classification_rules:
+    # 第一类：NULL 外键（孤儿数据）→ 归入「未分类」
+    orphan_rule:
+      condition: "if tid is None"
+      action: "归入未分类（uncategorized）"
+      reason: "外键为 NULL 表示数据创建时未关联分类，应参与统计而非跳过"
+    # 第二类：已删除外键（外键指向的分类已被软删除）→ 跳过统计
+    deleted_rule:
+      condition: "if tid not in task_map"
+      action: "跳过统计"
+      reason: "外键指向的分类已被软删除，数据无有效归属，不应参与分类统计"
+  # 分类字段名（可扩展为列表）
+  foreign_key_fields:
+    - "task_id"
+    - "category_id"
+    - "preset_id"
+  # 适用场景
+  applicable: "含软删除外键的分类统计；聚合查询按外键归类；list_and_count 类接口的 dist 统计"
+  not_applicable: "硬删除外键（CASCADE）；无外键关联的纯数据表；外键从不为 NULL 的强约束表"
+
+# === B-REVIEW-234 ES-RESILIENCE-PRECHECK ES 弹性预检（扫描前检查）===
+es_resilience_precheck:
+  _doc: "SonarQube 扫描前的 Elasticsearch 弹性预检配置（B-REVIEW-234）。扫描前必须检测 ES read_only 锁并解锁，避免 CE 报告处理 FAILED 或扫描数据不更新。配套 sonarqube-mcp core_config.json es_resilience 节点。"
+  enabled: true
+  severity: HIGH                         # ES 锁未预检导致扫描数据陈旧
+  # ES 健康检查端点配置（从 config 读取，禁止硬编码端口）
+  es_endpoint:
+    host: "localhost"
+    port: 9200
+    protocol: "http"
+    # 健康检查路径
+    health_check_path: "/_cluster/health"
+    # 超时秒数（从 config 读取）
+    request_timeout_sec: 5
+  # read_only 锁标识
+  read_only_indicator:
+    # 健康检查响应中标识 read_only 锁的字段
+    field_name: "read_only_allow_delete"
+    # 当响应含此字段且为 true 时视为 ES 被锁定
+    locked_value: true
+  # 解锁动作配置
+  unlock_action:
+    # 解锁 HTTP 方法与路径
+    method: "PUT"
+    path: "/_all/_settings"
+    # 解锁请求体（移除 read_only_allow_delete 锁）
+    body: '{"index.blocks.read_only_allow_delete": null}'
+    # 解锁失败时的策略
+    on_failure: "warn_and_continue"     # 仅告警不阻断扫描
+  # 扫描前预检流程
+  pre_scan_steps:
+    - "query_es_health"                  # 1. 查询 ES /_cluster/health
+    - "detect_read_only_lock"            # 2. 检测 read_only_allow_delete 字段
+    - "unlock_if_locked"                 # 3. 若锁定则解锁
+    - "log_precheck_result"              # 4. 记录预检结果
+  # 检测模式：扫描脚本中缺少预检
+  detection_patterns:
+    - "sonar-scanner"
+    - "ce_task"
+    - "compute_engine"
+  # 适用场景
+  applicable: "SonarQube 扫描前的 ES 预检；CE 报告处理 FAILED 的根因排查；扫描数据不更新场景"
+  not_applicable: "无 ES 依赖的项目；非 SonarQube 扫描；ES 健康检查已由运维层处理"
+
+# === B-REVIEW-236 MULTI-USER-ID-PROPAGATION 多用户隔离 user_id 透传一致性 ===
+multi_user_id_propagation:
+  _doc: "多用户隔离 user_id 透传一致性配置（B-REVIEW-236）。request.state.user_id 必须在所有下游调用中正确传递，禁止端点获取后丢弃。"
+  enabled: true
+  severity: CRITICAL                     # user_id 透传缺失导致跨用户数据污染
+  # 端点获取 user_id 的来源
+  user_id_source:
+    # 从 request.state 获取（FastAPI 中间件注入）
+    extraction_pattern: "request.state.user_id"
+    # 默认值（从 config 读取，单用户兼容场景）
+    default_value: "default"
+    # 单用户模式兼容（保留默认值不阻断）
+    single_user_compat: true
+  # 透传检查模式
+  propagation_check_patterns:
+    # 端点签名必须从 request.state 获取 user_id
+    - "async\\s+def\\s+\\w+\\([^)]*request:\\s*Request"
+    # 下游 service / repository 方法必须接受 user_id 参数
+    - "def\\s+\\w+\\([^)]*user_id:\\s*str"
+    - "def\\s+\\w+\\([^)]*user_id:\\s*str\\s*=\\s*[\"']default[\"']"
+  # 违规信号：端点获取了 user_id 但下游调用未传入
+  forbidden_patterns:
+    # 端点获取了 request.state.user_id 但调用下游方法时未传 user_id
+    - "user_id\\s*=\\s*request\\.state\\.user_id.*\\n(?!.*user_id=user_id)"
+    # 调用 service / repository 方法时缺少 user_id 参数
+    - "service\\.(create|update|delete|get|list)_\\w+\\([^)]*\\)(?!.*user_id)"
+  # 透传必经的层（从端点 → 中间件 → service → repository）
+  required_propagation_layers:
+    - "route"           # 路由层从 request.state 提取
+    - "service"         # service 层接受 user_id 参数
+    - "repository"      # repository 层接受 user_id 参数并过滤
+    - "external_api"    # 外部 API 调用必须携带 user_id 标识
+  # 适用场景
+  applicable: "多用户系统；含 user_id 隔离的 service / repository；FastAPI 端点 + 中间件架构"
+  not_applicable: "单用户系统（无 user_id 概念）；系统级操作（如 _log_* / _stats_*）；纯查询无写入的接口"
+
+# ===== B-REVIEW-229~236 审查规则 (v4.49.1) =====
+hard_constraints:
+  rules:
+    # 🆕v4.49.1 B-REVIEW-229 MONKEYPATCH-FROM-IMPORT-COVERAGE monkeypatch 覆盖完整性
+    - name: "B-REVIEW-229 MONKEYPATCH-FROM-IMPORT-COVERAGE"
+      pattern: "monkeypatch\\.setattr\\([^)]*\\)|patch\\(['\"]([^'\"]+)\\.\\w+['\"]\\)"
+      check: "monkeypatch/patch 必须覆盖所有模块级 from-import 引用，禁止只 patch 源模块"
+      message: "测试 monkeypatch 必须覆盖被测代码所有 `from X import Y` 的模块级引用；优先用 FastAPI 依赖注入避免 patch 散点（xianyu-hunter-dev step 236）"
+      severity: CRITICAL
+      config_ref: "test_quality_protection.monkeypatch_coverage"
+      grep_signal: "monkeypatch.setattr\\(|patch\\(['\"]"
+      applicable:
+        - 测试代码使用 monkeypatch.setattr / patch
+        - 被测代码含模块级 from-import 引用
+        - async service 测试中 patch 多个发布点
+      not_applicable:
+        - 纯函数测试（无外部依赖导入）
+        - FastAPI Depends 已封装的依赖
+        - 测试 fixture 已统一隔离的场景
+    # 🆕v4.49.1 B-REVIEW-230 ASYNC-SYNC-TEST-CALL-MATCH 同步/异步方法测试调用匹配
+    - name: "B-REVIEW-230 ASYNC-SYNC-TEST-CALL-MATCH"
+      pattern: "await\\s+\\w+\\.\\w+\\("
+      check: "测试的 await 调用必须与方法的 async/sync 定义匹配；mock 类型用 MagicMock 对齐同步实现"
+      message: "被测方法被重构为同步但测试仍 `await method()` 触发 TypeError: 'NoneType' object can't be awaited；同步方法移除 await，mock 类型用 MagicMock 对齐同步实现（xianyu-hunter-dev step 237）"
+      severity: CRITICAL
+      config_ref: "test_quality_protection.async_sync_test_match"
+      grep_signal: "await\\s+\\w+\\.\\w+\\(|TypeError: 'NoneType' object can't be awaited|coroutine.*was never awaited"
+      applicable:
+        - FastAPI async 端点测试
+        - async service 测试
+        - async↔sync 重构后的回归测试
+      not_applicable:
+        - 纯同步代码测试（无 await）
+        - 纯 async 代码且 mock 已对齐
+    # 🆕v4.49.1 B-REVIEW-231 PROPERTY-RENAME-SERIALIZE-FIELD-SEP 属性名重构与序列化字段名分离
+    - name: "B-REVIEW-231 PROPERTY-RENAME-SERIALIZE-FIELD-SEP"
+      pattern: "AttributeError:.*has no attribute '(appKey|userId|presetId)'|TypeError:.*unexpected keyword argument '(appKey|userId|presetId)'"
+      check: "数据类属性名重构时测试必须同步；序列化方法必须保留协议字段名"
+      message: "属性名重构（驼峰→蛇形）后测试未同步且 to_dict 丢失协议字段名；测试改用蛇形属性名，序列化方法保留协议字段名（xianyu-hunter-dev step 238）"
+      severity: CRITICAL
+      config_ref: "test_quality_protection.property_rename_serialize"
+      grep_signal: "AttributeError:.*has no attribute '(appKey|userId|presetId)'|TypeError:.*unexpected keyword argument"
+      applicable:
+        - dataclass / pydantic 模型属性名重构
+        - 含 to_dict / model_dump 序列化方法的模型
+        - 前后端协议字段名约定场景
+      not_applicable:
+        - 纯内部数据结构（无序列化需求）
+        - ORM 行类（属性名与列名一致）
+    # 🆕v4.49.1 B-REVIEW-232 FASTAPI-ENDPOINT-SIGNATURE-TEST-SYNC FastAPI 端点签名变更测试同步
+    - name: "B-REVIEW-232 FASTAPI-ENDPOINT-SIGNATURE-TEST-SYNC"
+      pattern: "async\\s+def\\s+\\w+\\([^)]*request:\\s*Request"
+      check: "端点新增 request/user_id 参数时测试必须传入对应参数；下游调用断言必须适配"
+      message: "端点签名新增 request/user_id 参数后测试未传新参数；构造 SimpleNamespace(state=SimpleNamespace(user_id=mock_user_id)) mock Request（xianyu-hunter-dev step 239）"
+      severity: CRITICAL
+      config_ref: "test_quality_protection.fastapi_endpoint_test_sync"
+      grep_signal: "TypeError:.*missing 1 required positional argument: 'request'|async def\\s+\\w+\\([^)]*request:\\s*Request"
+      applicable:
+        - FastAPI 端点签名新增参数（request / user_id / session_id）
+        - 测试调用端点时的参数同步
+        - 下游调用断言适配
+      not_applicable:
+        - 纯参数校验重构（Pydantic 模型字段变更）
+        - 测试已通过 fixture 注入 request
+    # 🆕v4.49.1 B-REVIEW-233 SOFT-DELETE-CATEGORY-ISOLATION 软删除数据分类隔离
+    - name: "B-REVIEW-233 SOFT-DELETE-CATEGORY-ISOLATION"
+      pattern: "if\\s+not\\s+\\w+\\s+or\\s+\\w+\\s+not\\s+in"
+      check: "分类统计必须区分 NULL 外键（孤儿）与已删除外键（跳过），禁止合并判断"
+      message: "软删除数据分类统计合并判断导致 None（孤儿）与已删除（跳过）混为一类；拆分为 `if tid is None`（归入未分类）和 `if tid not in task_map`（跳过）（xianyu-hunter-dev step 240）"
+      severity: HIGH
+      config_ref: "soft_delete_data_isolation"
+      grep_signal: "if not tid or tid not in task_map|if\\s+not\\s+\\w+\\s+or\\s+\\w+\\s+not\\s+in"
+      applicable:
+        - 含软删除外键的分类统计
+        - 聚合查询按外键归类
+        - list_and_count 类接口的 dist 统计
+      not_applicable:
+        - 硬删除外键（CASCADE）
+        - 无外键关联的纯数据表
+        - 外键从不为 NULL 的强约束表
+    # 🆕v4.49.1 B-REVIEW-234 ES-RESILIENCE-PRECHECK ES 弹性预检（扫描前检查）
+    - name: "B-REVIEW-234 ES-RESILIENCE-PRECHECK"
+      pattern: "sonar-scanner|ce_task|compute_engine"
+      check: "SonarQube 扫描前必须检测 ES read_only 锁并解锁"
+      message: "SonarQube 扫描前未检测 ES read_only 锁导致 CE 报告处理 FAILED；扫描前查询 ES /_cluster/health，检测到 read_only_allow_delete 则解锁（sonarqube-mcp core_config.json es_resilience）"
+      severity: HIGH
+      config_ref: "es_resilience_precheck"
+      grep_signal: "sonar-scanner|ce_task|compute_engine"
+      applicable:
+        - SonarQube 扫描前的 ES 预检
+        - CE 报告处理 FAILED 的根因排查
+        - 扫描数据不更新场景
+      not_applicable:
+        - 无 ES 依赖的项目
+        - 非 SonarQube 扫描
+        - ES 健康检查已由运维层处理
+    # 🆕v4.49.1 B-REVIEW-235 PYTEST-TIMEOUT-CONFIG 测试超时配置
+    - name: "B-REVIEW-235 PYTEST-TIMEOUT-CONFIG"
+      pattern: "\\[tool\\.pytest\\]|addopts"
+      check: "pyproject.toml 必须配置 pytest 超时；大规模测试必须支持分批运行"
+      message: "pyproject.toml 缺少 pytest 超时配置导致 CI 卡死；安装 pytest-timeout 并配置 addopts = \"--timeout=30\"（xianyu-hunter-dev step 38）"
+      severity: HIGH
+      config_ref: "test_quality_protection.pytest_timeout_config"
+      grep_signal: "\\[tool\\.pytest\\]|addopts|pytest-timeout"
+      applicable:
+        - pyproject.toml 配置 pytest 的项目
+        - CI/CD 流水线测试
+        - 大规模测试套件
+      not_applicable:
+        - 纯单元测试（<10 个）
+        - 一次性脚本测试
+        - 不使用 pytest 的项目
+    # 🆕v4.49.1 B-REVIEW-236 MULTI-USER-ID-PROPAGATION 多用户隔离 user_id 透传一致性
+    - name: "B-REVIEW-236 MULTI-USER-ID-PROPAGATION"
+      pattern: "async\\s+def\\s+\\w+\\([^)]*request:\\s*Request"
+      check: "request.state.user_id 必须在所有下游调用中正确传递"
+      message: "端点获取 request.state.user_id 后下游 service / repository 调用未传入 user_id 导致跨用户数据污染；所有下游方法新增 user_id 参数并透传（xianyu-hunter-dev step 243）"
+      severity: CRITICAL
+      config_ref: "multi_user_id_propagation"
+      grep_signal: "request\\.state\\.user_id|service\\.(create|update|delete|get|list)_\\w+\\("
+      applicable:
+        - 多用户系统
+        - 含 user_id 隔离的 service / repository
+        - FastAPI 端点 + 中间件架构
+      not_applicable:
+        - 单用户系统（无 user_id 概念）
+        - 系统级操作（如 _log_* / _stats_*）
+        - 纯查询无写入的接口
+
+    # 🆕v4.50.0 B-REVIEW-237 API-RESPONSE-FIELD-UI-ALIGNMENT 接口返回字段与 UI 操作集合对齐（meta-rule #83 后端侧）
+    - name: "B-REVIEW-237 API-RESPONSE-FIELD-UI-ALIGNMENT"
+      pattern: "async\\s+def\\s+(list_|get_).*\\(.*\\).*->.*"
+      check: "列表/详情接口返回字段必须与前端 UI 操作集合对齐，禁止 over-fetching（返回 UI 不需要的字段）或 under-fetching（缺失 UI 做 disabled/分级判定所需的状态字段）"
+      message: "后端接口返回字段必须包含前端 UI 操作集合（编辑/启停/停止/复制/删除/另存为模板等）所需的全部状态字段（如 status / running / deletable / template_savable），且不返回 UI 不需要的字段；前端被迫展示多余按钮或缺少 disabled 判定字段时，根因在后端接口契约未对齐 UI 需求（xianyu-hunter-dev step 236/237/238 配套）"
+      severity: HIGH
+      config_ref: "api_response_field_ui_alignment"
+      grep_signal: "async\\s+def\\s+(list_|get_).*\\(.*\\).*->.*|class\\s+\\w+Response.*BaseModel"
+      applicable:
+        - 列表接口（/api/tasks、/api/orders、/api/items）
+        - 详情接口（/api/tasks/{id}、/api/orders/{id}）
+        - 同时返回多个资源的批量接口
+        - AntD Table columns render 的数据源接口
+      not_applicable:
+        - 系统级接口（/api/healthz、/api/about）
+        - 仅后端内部调用的 service 方法
+        - 不参与 UI 展示的 webhook/回调接口
+        - 字段数 ≤ 3 的简单响应
+
+# ===== B-REVIEW-237 api_response_field_ui_alignment 配置驱动 (v4.50.0) =====
+# 维度 38: 接口契约与前端 UI 对齐（meta-rule #83 后端侧）
+# 对应前端 F-REVIEW-197（操作项分级保留）/ F-REVIEW-198（多视图模式一致性）
+# 所有阈值参数通过此节点集中管理，禁止代码硬编码
+api_response_field_ui_alignment:
+  enabled: true
+  severity: HIGH
+  _doc: "接口返回字段与 UI 操作集合对齐审查配置（meta-rule #83 后端侧）。后端接口返回字段必须包含前端 UI 操作集合所需的全部状态字段（如 status/running/deletable/template_savable），且不返回 UI 不需要的字段（over-fetching 防护）。"
+  # over-fetching 防护参数
+  max_fields_per_list_response: 20
+  max_fields_per_detail_response: 40
+  # under-fetching 防护参数
+  required_status_fields_for_action_buttons:
+    edit: ["id", "status"]
+    toggle: ["id", "status", "running"]
+    stop: ["id", "status", "running"]
+    copy: ["id", "status"]
+    delete: ["id", "status", "deletable"]
+    save_as_template: ["id", "status", "template_savable"]
+  # 扫描范围
+  scan_paths:
+    - "src/xianyu_hunter/web/routes/"
+    - "src/xianyu_hunter/web/services/"
+  response_model_patterns:
+    - "class\\s+\\w+Response.*BaseModel"
+    - "class\\s+\\w+Out.*BaseModel"
+    - "async\\s+def\\s+(list_|get_).*\\(.*\\).*->.*"
+  # 检测信号
+  detection_signals:
+    - "Response 字段数 > max_fields_per_list_response（默认 20）→ 疑似 over-fetching"
+    - "Response 缺失 required_status_fields_for_action_buttons 中某按钮所需字段 → under-fetching"
+    - "前端 grep disabled= 但后端 Response 无对应字段 → 接口契约与 UI 需求脱节"
+    - "后端 Response 含 password / token / cookie 等敏感字段但前端 UI 不展示 → 必须移除"
+  # 修复建议
+  fix_guidance: "梳理前端 UI 操作集合所需的状态字段，确保 Response 模型包含全部 required_status_fields；移除 UI 不展示的字段（over-fetching 防护）；新增状态字段时同步更新前端类型定义与 UI 判定逻辑"
+  # 适用场景
+  applicable: "列表接口（/api/tasks、/api/orders、/api/items）；详情接口；同时返回多个资源的批量接口；AntD Table columns render 的数据源接口"
+  not_applicable: "系统级接口（/api/healthz、/api/about）；仅后端内部调用的 service 方法；不参与 UI 展示的 webhook/回调接口；字段数 ≤ 3 的简单响应"
+  # 与现有规则的关系
+  related_rules:
+    - "field_contract_align（B-REVIEW-FIELD-CONTRACT-ALIGN）：通用字段契约对齐，本规则专注 UI 操作集合所需状态字段"
+    - "coding_standards.response_model：Response 模型设计规范"
+  # 对应规范
+  corresponding_steps:
+    - "xianyu-hunter-dev step 236（操作项分级保留规范）"
+    - "xianyu-hunter-dev step 237（多视图模式一致性规范）"
+    - "xianyu-hunter-dev step 238（UI 水平空间溢出诊断与横向滚动容错规范）"
+  corresponding_meta_rule: "meta-rule #83 (UI-ACTION-TIER-RETAIN-AND-MULTI-VIEW-CONSISTENCY experimental)"
+  corresponding_frontend_review: "F-REVIEW-197 / F-REVIEW-198 (维度 46)"
+
+# --- 数据透传与职责分离规范（v4.50.0 新增，meta-rules #83 落地）---
+# 对应 B-REVIEW-238 ~ B-REVIEW-241 检查点的配置参数
+# 源自 2026-07-18 卖家评估 Bug 复盘：三个同源 Bug 均为信息传递断裂
+data_propagation:
+  # B-REVIEW-238: 跨层数据透传完整性
+  propagation_integrity:
+    # 必须完整透传的标识字段（入口→中间→最底层）
+    required_propagation_fields:
+      - user_id
+      - task_id
+      - request_id
+    # 检查模式：static（静态签名检查）| dynamic（运行时追踪）
+    check_mode: static
+    # 豁免场景：后台任务（无 HTTP 请求上下文）
+    exempt_scenarios:
+      - background_task
+      - scheduler_internal
+
+  # B-REVIEW-239: 快照与最新值职责分离
+  snapshot_latest_separation:
+    # 需要快照的字段（enrich 覆盖前必须保存快照）
+    snapshot_required_fields:
+      - item_price
+      - seller_credit_score
+    # 快照字段命名规范：_{评估时前缀}_{原字段名}
+    snapshot_field_prefix: "_eval_snapshot_"
+    # 过滤函数优先用快照的判断方式
+    filter_priority: snapshot_first
+
+  # B-REVIEW-240: Fallback 路径数据合并完整性
+  fallback_data_merge:
+    # 需要检查合并的 fallback 函数列表
+    fallback_functions:
+      - seller_profile_fallback
+      - _seller_profile_fallback
+    # 主源成功后是否也必须合并次源字段
+    merge_on_primary_success: true
+    # 判断字段为空的语义（is None / not / == ''）
+    empty_check_semantics: is_none_or_not
+
+  # B-REVIEW-241: 多用户隔离写入一致性
+  multiuser_write_consistency:
+    # 必须显式传入 user_id 的写入方法
+    required_user_id_methods:
+      - upsert_eval_event
+      - upsert_item
+      - save_event
+      - upsert_seller
+    # 依赖默认值是否视为 Bug
+    default_value_is_bug: true
+    # 深度防御：DELETE 是否附加 user_id 过滤
+    delete_with_user_filter: true
+
+# --- Cookie-Token 一致性与日志规范（v4.51.0 新增，meta-rules #84 落地）---
+# 对应 B-REVIEW-242 ~ B-REVIEW-245 检查点的配置参数
+# 源自 2026-06-26 FAIL_SYS_ILLEGAL_ACCESS 问题复盘：5 个同源 Bug 均为状态同步断裂
+cookie_token_consistency:
+  # B-REVIEW-242: Cookie-Token 一致性审查
+  # 为什么需要：Worker 浏览器启动时生成匿名 _m_h5_tk token，登录后身份 Cookie 注入但 token 未刷新
+  # 导致 MTOP API 签名验证失败（FAIL_SYS_ILLEGAL_ACCESS）
+  consistency_check:
+    enabled: true
+    # 身份 Cookie 白名单（缺任一则需补注入）
+    identity_cookies:
+      - unb
+      - cookie2
+      - sgcookie
+      - _tb_token_
+      - t
+    # 补注入域过滤列表（只注入这些域的 Cookie）
+    inject_domains:
+      - goofish.com
+      - taobao.com
+    # token 刷新时间戳字段名
+    token_refresh_field: "_last_m5tk_refresh"
+    # 重置值（强制下次搜索刷新 token）
+    token_reset_value: 0.0
+    # Cookie 不完整时的 HTTP 状态码
+    incomplete_status_code: 401
+    # 检测信号
+    detection_signals:
+      - "grep '_last_m5tk_refresh' 找到 token 时间戳 → 检查重置逻辑是否在 Cookie 补注入分支外部"
+      - "token 重置逻辑在 if missing: 分支内 → 违规（耦合了 Cookie 补注入与 token 重置）"
+      - "grep 'add_cookies' 找到补注入逻辑 → 检查是否按域过滤"
+      - "实时搜索报 FAIL_SYS_ILLEGAL_ACCESS 但健康检查 Cookie 有效 → token 与 Cookie 不匹配"
+    # 修复建议
+    fix_guidance: "将 token 重置逻辑移到 Cookie 补注入分支外部，无论是否补注入都执行重置"
+    # 适用场景
+    applicable: "多进程共享浏览器实例；token 与身份 Cookie 分离管理的认证体系；浏览器在登录前启动的场景"
+    not_applicable: "单进程内完成登录和请求；无 token 机制的纯 Cookie 认证；无浏览器实例的纯 API 调用"
+    # 对应规范
+    corresponding_steps:
+      - "xianyu-hunter-dev step 243（Cookie-Token 一致性保障规范）"
+    corresponding_meta_rule: "meta-rule #84 (COOKIE-TOKEN-STATE-SEPARATION)"
+
+  # B-REVIEW-243: 续期闭环完整性审查
+  renewal_loop:
+    enabled: true
+    # 续期导航 URL
+    nav_url: "https://h5.m.taobao.com/"
+    # 导航超时（毫秒）
+    nav_timeout_ms: 10000
+    # 回写域过滤列表
+    export_domains:
+      - goofish.com
+      - taobao.com
+    # 回写方法标记
+    method_tag: "renew"
+    # 回写失败日志级别
+    writeback_failure_level: "warning"
+    # 回写失败是否阻断续期（false=不阻断，token 已在内存中刷新）
+    writeback_failure_blocks_renewal: false
+    # 检测信号
+    detection_signals:
+      - "grep '_default_renew_callback|renew_callback' 找到续期回调 → 检查导航后是否回写 CookieStore"
+      - "续期回调只 return True 无 export_cookies 调用 → 违规"
+      - "data/cookies.json 中 _m_h5_tk 值长期不变但健康检查报 token 有效 → 回写闭环断裂"
+    fix_guidance: "续期回调导航成功后提取完整 Cookie，调用 export_cookies(method='renew') 回写 JSON + SQLite"
+    applicable: "所有需要续期回调的认证机制；多存储介质同步（浏览器内存 + JSON + SQLite）"
+    not_applicable: "单存储介质的 token 续期；无续期机制的认证；纯 API token 续期"
+    corresponding_steps:
+      - "xianyu-hunter-dev step 244（续期闭环完整性规范）"
+    corresponding_meta_rule: "meta-rule #84 (COOKIE-TOKEN-STATE-SEPARATION)"
+
+  # B-REVIEW-244: 日志占位符格式审查
+  loguru_placeholder:
+    enabled: true
+    # 日志库类型
+    logger_library: "loguru"
+    # 正确占位符
+    correct_placeholder: "{}"
+    # 禁止的占位符（标准库 logging 风格）
+    forbidden_placeholders:
+      - "%s"
+      - "%d"
+      - "%f"
+      - "%r"
+    # 异常对象日志是否强制用 {} 而非 f-string
+    exceptions_use_brace_not_fstring: true
+    # 检测信号
+    detection_signals:
+      - "grep 'logger\\.(info|warning|error|debug).*%s' 命中 → loguru 日志用了 %s 占位符"
+      - "grep 'logger\\.(info|warning|error|debug).*%[df]' 命中 → loguru 日志用了 %d/%f 占位符"
+      - "日志输出含 %s 字面量而非实际值 → 占位符风格错误"
+    fix_guidance: "将 %s 改为 {}（loguru 风格），异常对象日志用 logger.warning('失败: {}', e) 而非 f-string"
+    applicable: "所有使用 loguru 的 Python 项目；从标准库 logging 迁移到 loguru 的项目"
+    not_applicable: "使用标准库 logging 的项目（用 %s）；使用 structlog 等其他日志库的项目"
+    corresponding_steps:
+      - "xianyu-hunter-dev step 245（日志占位符格式规范）"
+    corresponding_meta_rule: "meta-rule #84 (COOKIE-TOKEN-STATE-SEPARATION)"
+
+  # B-REVIEW-245: 静默异常禁止审查（config.yaml 中保留 v4.51.0 的 Cookie-Token 语境编号）
+  # 注意：SKILL.md v4.55.0 章节中 B-REVIEW-245 = SCHEDULER-STATE-MACHINE-RECOVERY，属于编号体系不一致的既存问题
+  silent_exception_ban:
+    enabled: true
+    # 关键路径函数名模式（这些函数的 except 块必须用 logger.exception）
+    critical_path_patterns:
+      - "_on_startup"
+      - "run_migrations"
+      - "_init_"
+      - "_shutdown"
+      - "_on_close"
+    # 关键路径最低日志级别
+    critical_path_min_level: "exception"
+    # 辅助路径最低日志级别
+    auxiliary_path_min_level: "warning"
+    # 禁止的静默模式正则
+    forbidden_patterns:
+      - 'except.*:\s*pass'
+      - 'except.*:\s*\.\.\.'
+      - 'except.*:\s*$'
+    # 允许用 debug 的预期异常类型
+    exceptions_allowed_debug:
+      - KeyError
+      - FileNotFoundError
+      - AttributeError
+    # 检测信号
+    detection_signals:
+      - "grep 'except.*:\\s*$' 下一行为 pass/... → 静默异常"
+      - "grep 'except.*pass' 直接命中 → 静默异常"
+      - "grep 'except.*:' -A 1 下一行无 logger 调用 → 静默异常"
+      - "关键路径函数的 except 块用 logger.warning(f'...{e}') 而非 logger.exception() → 违规"
+    fix_guidance: "关键路径用 logger.exception()，辅助路径至少用 logger.warning('失败: {}', e)，禁止 except: pass"
+    applicable: "所有生产代码的异常处理；关键路径（启动/迁移/初始化）；辅助路径（资源清理/fire-and-forget）"
+    not_applicable: "测试代码中的异常断言（pytest.raises）；上下文管理器 __exit__ 中的异常抑制；预期异常用于控制流（如 StopIteration）"
+    corresponding_steps:
+      - "xianyu-hunter-dev step 246（静默异常禁止规范）"
+      - "xianyu-hunter-dev step 202（异常日志语义保留规范，互补关系）"
+    corresponding_meta_rule: "meta-rule #84 (COOKIE-TOKEN-STATE-SEPARATION)"
+
+# ============== v4.55.0 B-REVIEW-247/248 配置字段全链路覆盖 + 跨层写回保护 ==============
+# 对应 xianyu-hunter-dev meta-rule #86（配置字段全链路覆盖检查）和 #87（空值=恢复默认语义）
+# 复盘来源：2026-07-11 智能客服新建会话乱码 Bug（DB welcome_message 脏值 + Config.tsx 缺 UI）
+# 注意：SKILL.md v4.55.0 章节中 B-REVIEW-245~249 的编号体系与 config.yaml v4.51.0 不完全一致，
+# 此处仅补全与 meta-rule #86/#87 直接相关的 B-REVIEW-247/248 配置节点
+config_field_coverage_backend:
+  # === B-REVIEW-247 CONFIG-FIELD-FIVE-LAYER 配置字段五层链路覆盖审查（meta-rule #86 落地）===
+  # 后端侧负责 3 层：DB schema / get_config 返回 / update_config 处理
+  # 前端侧 2 层（types.ts + Config.tsx UI）由 F-REVIEW-200 检查
+  full_chain_coverage:
+    enabled: true
+    severity: CRITICAL
+    # 后端必须覆盖的 3 层
+    required_layers:
+      - name: "db_schema"
+        description: "DB 表必须有对应字段（迁移脚本 ALTER TABLE 或模型 Column 定义）"
+        check_method: "grep 'ALTER TABLE.*ADD COLUMN' migrations 或 grep 'Column(' models"
+      - name: "get_config_return"
+        description: "get_config 响应必须包含该字段（即使 DB 无值也要返回默认值或 null）"
+        check_method: "grep 新增字段名 在 get_config 返回 dict 中"
+      - name: "update_config_handle"
+        description: "update_config 必须显式处理该字段（写入或空值短路 delete_config）"
+        check_method: "grep 新增字段名 在 update_config 函数体中"
+    # 配套前端 2 层由 F-REVIEW-200 检查
+    frontend_layers_ref: "F-REVIEW-200"
+    # 5 层全链路检查命令模板（{field} 占位符）
+    full_chain_grep_template: "grep -rn '{field}' src/xianyu_hunter/ frontend/src/pages/ --include='*.py' --include='*.ts' --include='*.tsx'"
+    # DB 默认值占位符检测（复盘根因：welcome_message 被写入 '??????????!'）
+    placeholder_patterns:
+      - "\\?\\?\\?\\?+"
+      - "TODO"
+      - "FIXME"
+      - "placeholder"
+      - "XXXX"
+    # 豁免场景（不需要 UI 编辑的内部字段）
+    exempt_categories:
+      - "internal_counter"        # 内部计数器（如 audit_log 序号）
+      - "system_generated"        # 系统自动生成字段（如 last_updated_at）
+      - "deprecated_field"        # 已废弃但保留兼容的字段
+    # 检测信号
+    detection_signals:
+      - "get_config 返回字段数 < DB schema 字段数 → 第 2 层缺失"
+      - "update_config 不支持该字段 → 第 3 层缺失"
+      - "DB 默认值为占位符字符串 → 用户看到乱码"
+      - "get_config 读取字段时不验证值有效性 → 脏值直接返回前端"
+    fix_guidance: "新增配置字段时同步覆盖 5 层：DB 迁移脚本 + get_config 返回 + update_config 处理 + types.ts 类型 + Config.tsx 编辑控件"
+    applicable: "用户可编辑配置项；DB 持久化的配置表；迁移脚本新增配置字段"
+    not_applicable: "代码内常量；环境变量；启动参数；只读配置"
+    corresponding_steps:
+      - "xianyu-hunter-dev step 251（配置字段 5 层覆盖规范）"
+    corresponding_meta_rule: "meta-rule #86 (CONFIG-FIELD-FULL-CHAIN-COVERAGE)"
+
+  # === B-REVIEW-248 CROSS-LAYER-WRITEBACK-PROTECTION 跨层写回保护审查（meta-rule #87 落地）===
+  # 含空值语义区分：空 value 触发 delete_config（恢复默认）而非写入空串
+  empty_means_reset:
+    enabled: true
+    severity: HIGH
+    # 空值短路模式：update_config 检测空 value 时调用 delete_config
+    required_short_circuit: true
+    # 短路逻辑检查模板（{update_config_file} 占位符）
+    short_circuit_check_template: "grep -A 5 'if req.value == \"\"' {update_config_file} | grep 'delete_config'"
+    # 适用字段类型（有默认值回退的 string 字段）
+    applicable_field_types:
+      - "string_with_default"
+      - "text_with_default"
+    # 不适用场景（空值有业务含义的字段）
+    not_applicable_scenarios:
+      - "field_where_empty_means_disable"  # 空值=禁用功能（如 welcome_message 为空=不显示欢迎语）
+      - "field_where_empty_means_clear"    # 空值=主动清空（如 blacklist 为空=清空黑名单）
+      - "numeric_field"                    # 数值字段空值应走 0 或默认值
+      - "json_field"                       # JSON 字段空值应走 {} 或默认对象
+    # 前端配套检查（"恢复默认"按钮）由 F-REVIEW-201 检查
+    frontend_button_ref: "F-REVIEW-201"
+    # 审计日志要求（恢复默认操作必须记录审计日志）
+    audit_log_required: true
+    audit_log_action: "delete_config"
+    audit_log_fields:
+      - "action"
+      - "target"
+      - "old_value_hash"
+      - "new_value_hash"
+      - "source"
+    # 检测信号
+    detection_signals:
+      - "grep 'if req.value == \"\"' 无 delete_config 短路 → 空值写入空串污染 get_config"
+      - "delete_config 调用后无 add_audit_log → 恢复默认操作无追溯"
+      - "update_config 直接写入空串到 DB → get_config 返回空串覆盖默认值"
+    fix_guidance: "空 value 短路调用 delete_config，并 add_audit_log 记录恢复默认操作"
+    applicable: "有默认值回退的 string/text 字段；配置覆盖表（如 chatbot_config）"
+    not_applicable: "空值=禁用功能；空值=主动清空；数值字段；JSON 字段"
+    corresponding_steps:
+      - "xianyu-hunter-dev step 252（空值=恢复默认设计模式）"
+    corresponding_meta_rule: "meta-rule #87 (EMPTY-MEANS-RESET)"
+
+  # === 自动扫描硬约束规则 ===
+  hard_constraints:
+    rules:
+      # B-REVIEW-247 配置字段全链路覆盖-后端侧
+      - name: "B-REVIEW-247 CONFIG-FIELD-FIVE-LAYER"
+        pattern: "def get_config.*\\n(?!.*return.*\\{)"
+        message: "get_config 返回的 dict 必须包含所有可配置字段（meta-rule #86），新增字段未在 get_config 返回会导致前端拿到 undefined"
+        severity: CRITICAL
+        auto_fix: false
+      - name: "B-REVIEW-247 UPDATE-CONFIG-MISSING-FIELD"
+        pattern: "def update_config.*\\n(?!.*req\\.key)"
+        message: "update_config 必须显式处理新增字段（meta-rule #86），未处理的字段写入 DB 后无法通过 API 修改"
+        severity: HIGH
+        auto_fix: false
+      - name: "B-REVIEW-247 DB-PLACEHOLDER-DEFAULT"
+        pattern: "['\"](\\?{4,}|TODO|FIXME|placeholder)['\"]"
+        message: "DB 默认值禁止使用占位符字符串（meta-rule #86），用户会看到乱码或无意义文本"
+        severity: CRITICAL
+        auto_fix: false
+      # B-REVIEW-248 空值=恢复默认语义-后端侧
+      - name: "B-REVIEW-248 EMPTY-MEANS-RESET-BACKEND"
+        pattern: "if req\\.value == ['\"]['\"]:"
+        message: "空 value 必须短路调用 delete_config（meta-rule #87），直接写入空串会污染 get_config 返回值"
+        severity: HIGH
+        auto_fix: false
+      - name: "B-REVIEW-248 NO-AUDIT-LOG-ON-RESET"
+        pattern: "delete_config\\("
+        message: "delete_config 调用后必须 add_audit_log 记录恢复默认操作（meta-rule #87），便于追溯"
+        severity: MEDIUM
+        auto_fix: false
+    block_on_violation: true
+
+# --- 登录副作用自动化配置（v4.56.0 新增）---
+# B-REVIEW-250 LOGIN-SIDE-EFFECT-AUTOMATION（meta-rule #89 落地）
+# 配套规范：xianyu-hunter-dev/assets/guides/coding-rules/concurrency.md step 253
+# 所有参数通过此节点管理，不硬编码
+login_side_effect:
+  enabled: true                          # 总开关（false 时跳过 B-REVIEW-250 检查）
+  severity: MAJOR                        # 违规严重级别
+  # === 共享 helper 规范 ===
+  helper_module: "xianyu_hunter.web.services.session_starter"  # helper 必须所在的独立模块路径
+  helper_function: "trigger_session_start"                      # helper 函数名
+  # === 调度方式规范 ===
+  dispatch_method: "asyncio.ensure_future"  # 必须使用的调度方式（禁止 await）
+  forbidden_await_patterns:                  # 禁止 await 的模式
+    - "await.*start_session"
+    - "await.*token_renewer"
+    - "await.*side_effect"
+  # === 失败处理规范 ===
+  failure_log_level: "debug"             # 副作用失败时日志级别（禁止 error/exception）
+  failure_action: "silent"               # 失败动作（silent=仅记录日志，不抛异常）
+  # === 入口覆盖完整性 ===
+  entry_points:                          # 必须调用 helper 的登录入口列表
+    - name: "cookie_import"
+      route_pattern: "/api/auth/import-from-browser"
+      signal: "import.*success"
+    - name: "browser_login"
+      route_pattern: "/api/auth/cookie"
+      signal: "login.*success"
+    - name: "token_import"
+      route_pattern: "/api/auth/token"
+      signal: "token.*imported"
+    - name: "qr_login"
+      route_pattern: "/api/auth/qr-callback"
+      signal: "qr.*login.*success"
+    - name: "session_resume"
+      route_pattern: "/api/auth/resume"
+      signal: "session.*resumed"
+    - name: "auto_login"
+      route_pattern: "/api/auth/auto"
+      signal: "auto.*login.*success"
+    - name: "refresh_login"
+      route_pattern: "/api/auth/refresh"
+      signal: "refresh.*success"
+  # === 自动扫描规则 ===
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-250 LOGIN-SIDE-EFFECT-HELPER-MISSING"
+        pattern: "login.*success|登录成功"
+        negative_pattern: "trigger_session_start|session_starter"
+        message: "登录成功路径必须调用 trigger_session_start 共享 helper（meta-rule #89 / B-REVIEW-250），禁止内联副作用逻辑"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-250 LOGIN-SIDE-EFFECT-AWAIT-FORBIDDEN"
+        pattern: "await.*(start_session|token_renewer|side_effect)"
+        message: "登录副作用必须用 asyncio.ensure_future() 调度，禁止 await 阻塞登录响应（meta-rule #89 / B-REVIEW-250）"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-250 LOGIN-SIDE-EFFECT-HELPER-INLINE"
+        pattern: "async def (trigger_session_start|_start_side_effect)"
+        scope: "src/xianyu_hunter/web/routes/"
+        message: "副作用 helper 必须在独立模块（session_starter.py），禁止内联到 routes/ 目录（meta-rule #89 / B-REVIEW-250）"
+        severity: MAJOR
+        auto_fix: false
+  # === 适用/不适用场景 ===
+  applicable_scenarios:
+    - "登录成功后的会话续期、状态同步、缓存预热"
+    - "多入口统一触发非关键副作用"
+  inapplicable_scenarios:
+    - "登录主流程的核心数据写入（cookie 持久化）— 必须同步 await"
+    - "副作用失败会导致数据不一致 — 应改为同步调用"
+    - "一次性脚本或 CLI 工具 — 无事件循环"
+  block_on_violation: true
+
+# --- 回退构造保留关联键配置（v4.57.0 新增）---
+# B-REVIEW-251 FALLBACK-PRESERVE-KEY（meta-rule #90 落地）
+# 配套规范：xianyu-hunter-dev/assets/guides/coding-rules/data-contract.md step 254
+# 源自 2026-07-22 price_range 注入 Bug 复盘：回退构造伪 item 时遗漏 task_id 导致下游价格区间查询被跳过
+# 所有参数通过此节点管理，不硬编码
+fallback_preserve_key:
+  enabled: true                          # 总开关（false 时跳过 B-REVIEW-251 检查）
+  severity: CRITICAL                    # 违规严重级别（关联键缺失会导致下游逻辑静默跳过，定为 CRITICAL）
+  # === 必须保留的关联键清单 ===
+  # 为什么需要：回退构造的实体（如伪 item dict）被下游逻辑依赖关联键做条件判断
+  # 遗漏关联键会导致 `if task_id:` 等条件判断被跳过，下游功能静默失效
+  required_keys:                        # 回退构造必须保留的关联键清单（可扩展）
+    - "task_id"                         # 任务 ID（价格区间查询、事件关联依赖）
+    - "user_id"                         # 用户 ID（多租户隔离依赖）
+    - "seller_id"                       # 卖家 ID（卖家评估依赖）
+  # === 扫描范围 ===
+  scan_globs:                           # 扫描的文件 glob（覆盖回退构造可能出现的位置）
+    - "src/xianyu_hunter/infra/repo_*.py"   # 仓储层回退构造
+    - "src/xianyu_hunter/web/routes/api_*.py" # 路由层回退构造
+  # === 回退构造识别模式 ===
+  # 为什么用这些模式：回退构造通常出现在 try/except 或 if/else 的 fallback 分支
+  fallback_patterns:
+    - "fallback.*item|pseudo.*item|伪.*item|回退.*构造"  # 回退构造的命名特征
+    - "except.*:.*\\n.*return.*\\{"                      # except 分支返回 dict（回退构造）
+    - "if.*not.*found:.*\\n.*return.*\\{"                # 未找到时返回 dict（回退构造）
+  # === 日志规范 ===
+  log_on_missing_key: true              # 关联键缺失时是否记录 WARNING（默认 true）
+  log_level: "WARNING"                  # 日志级别
+  log_message_template: "回退构造实体缺少关联键 {missing_key}，下游逻辑可能被跳过"
+  # === 自动扫描规则 ===
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-251 FALLBACK-PRESERVE-KEY-MISSING"
+        pattern: "fallback.*item|pseudo.*item|回退.*构造"
+        negative_pattern: "task_id|user_id|seller_id"
+        message: "回退构造实体必须保留关联键（task_id/user_id/seller_id）（meta-rule #90 / B-REVIEW-251），遗漏会导致下游逻辑静默跳过"
+        severity: CRITICAL
+        auto_fix: false
+      - name: "B-REVIEW-251 FALLBACK-NO-LOG-ON-MISSING"
+        pattern: "fallback.*item|pseudo.*item"
+        negative_pattern: "logger\\.(warning|error)|logging\\.(warning|error)"
+        message: "回退构造关联键缺失时必须记录 WARNING 日志（meta-rule #90 / B-REVIEW-251），便于排查下游逻辑跳过问题"
+        severity: MAJOR
+        auto_fix: false
+  # === 适用/不适用场景 ===
+  applicable_scenarios:
+    - "事件/缓存回退构造伪实体时（如 payload 中无完整 item，构造伪 item dict）"
+    - "仓储层 find_or_fallback 模式"
+    - "路由层构造默认响应实体"
+  inapplicable_scenarios:
+    - "从数据库查询的完整实体（已有所有字段）"
+    - "前端构造的展示用对象（不参与下游条件判断）"
+    - "测试 fixtures（明确测试特定字段缺失场景）"
+  block_on_violation: true
+
+# --- 时间窗口查询全量回退配置（v4.57.0 新增）---
+# B-REVIEW-252 TIME-WINDOW-FULL-FALLBACK（meta-rule #91 落地）
+# 配套规范：xianyu-hunter-dev/assets/guides/coding-rules/data-query.md step 255
+# 源自 2026-07-22 价格区间 30 天窗口无数据 Bug 复盘：数据库中商品数据时间较早，超过默认窗口导致返回空
+# 所有参数通过此节点管理，不硬编码
+time_window_fallback:
+  enabled: true                          # 总开关（false 时跳过 B-REVIEW-252 检查）
+  severity: MAJOR                        # 违规严重级别
+  # === 默认时间窗口配置 ===
+  default_window_days: 30                # 默认时间窗口（天）
+  # === 全量回退策略 ===
+  # 为什么需要：数据可能集中在较早的时间段，默认窗口查询返回空时必须有全量回退
+  fallback_to_full: true                 # 窗口查询返回空时是否回退到全量查询（range_days=0）
+  fallback_window_days: 0                # 全量回退时使用的窗口值（0 表示无窗口限制）
+  # === 源字段配置 ===
+  # 为什么用 source 字段：区分"窗口查询结果"和"全量回退结果"，便于下游感知数据来源
+  source_field_name: "source"            # 标识数据来源的字段名
+  source_value_windowed: "windowed"      # 窗口查询结果的标识值
+  source_value_full: "full_fallback"     # 全量回退结果的标识值
+  # === 扫描范围 ===
+  scan_globs:
+    - "src/xianyu_hunter/infra/repo_*.py"
+    - "src/xianyu_hunter/web/routes/api_*.py"
+  # === 识别模式 ===
+  # 为什么用这些模式：时间窗口查询通常包含 range_days / days / window 参数
+  window_query_patterns:
+    - "range_days|window_days|time_window|days_back"
+    - "WHERE.*publish_time.*>|WHERE.*created_at.*>|WHERE.*first_seen.*>"
+  # === 自动扫描规则 ===
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-252 TIME-WINDOW-NO-FALLBACK"
+        pattern: "range_days|window_days|time_window"
+        negative_pattern: "fallback|range_days.*=.*0|full_query|全量"
+        message: "时间窗口查询必须有全量回退策略（meta-rule #91 / B-REVIEW-252），窗口查询返回空时应回退到 range_days=0"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-252 TIME-WINDOW-NO-SOURCE-FIELD"
+        pattern: "range_days.*=.*0|fallback.*full|全量回退"
+        negative_pattern: "source|data_source|来源"
+        message: "全量回退结果应通过 source 字段标识来源（meta-rule #91 / B-REVIEW-252），便于下游感知数据完整性"
+        severity: MINOR
+        auto_fix: false
+  # === 适用/不适用场景 ===
+  applicable_scenarios:
+    - "基于时间窗口的统计查询（价格区间、销量统计、热度排名）"
+    - "数据可能集中在较早时间段的查询"
+    - "AI 评估注入历史数据时"
+  inapplicable_scenarios:
+    - "实时性要求高的查询（如当前库存、实时价格）"
+    - '明确只查最近 N 天数据的场景（如"最近 7 天通知"）'
+    - "数据量极大且全量查询性能不可接受的场景（应改用分页或缓存）"
+  block_on_violation: true
+
+# --- PowerShell 外部命令显式后缀配置（v4.57.0 新增）---
+# B-REVIEW-253 POWERSHELL-EXPLICIT-SUFFIX（meta-rule #92 落地）
+# 配套规范：xianyu-hunter-dev/assets/guides/coding-rules/shell-scripting.md step 256
+# 源自 2026-07-22 PowerShell curl 别名冲突 Bug 复盘：PowerShell 的 curl 是 Invoke-WebRequest 别名，不支持 -s/-w 等参数
+# 所有参数通过此节点管理，不硬编码
+powershell_explicit_suffix:
+  enabled: true                          # 总开关（false 时跳过 B-REVIEW-253 检查）
+  severity: MAJOR                        # 违规严重级别
+  # === 冲突别名清单 ===
+  # 为什么需要：PowerShell 为部分命令定义了别名，这些别名与原生命令行为不同
+  # curl → Invoke-WebRequest（不支持 -s/-w/-d 等 curl 参数）
+  # wget → Invoke-WebRequest（同上）
+  # rmdir → Remove-Item（行为不同）
+  conflicting_aliases:                  # PowerShell 中存在别名冲突的命令清单（可扩展）
+    - "curl"                             # curl 是 Invoke-WebRequest 的别名
+    - "wget"                             # wget 是 Invoke-WebRequest 的别名
+    - "rmdir"                            # rmdir 是 Remove-Item 的别名
+  # === 显式后缀配置 ===
+  required_suffix: ".exe"                # 调用外部命令时必须添加的后缀
+  # === JSON body 传递规范 ===
+  # 为什么需要：PowerShell 中 -d "{\"key\":\"value\"}" 和 -d '{"key":"value"}' 都因引号转义失败
+  # 通过文件传递可避免所有引号转义问题
+  json_body_via_file: true               # 复杂 JSON 参数是否通过文件传递
+  json_body_temp_dir: "$env:TEMP"        # 临时文件目录
+  json_body_temp_prefix: "req_body_"     # 临时文件前缀
+  json_body_temp_suffix: ".json"         # 临时文件后缀
+  # === 命令长度限制 ===
+  # 为什么需要：PowerShell 命令行长度有限制，超长命令可能被截断
+  command_max_length: 200                # 单条命令最大长度（超过应改用文件传递参数）
+  # === 扫描范围 ===
+  scan_globs:
+    - "**/*.ps1"                         # PowerShell 脚本
+    - "**/*.bat"                         # 批处理脚本（可能调用 PowerShell）
+    - ".trae/skills/**/*.md"             # 技能文件中的 Shell 命令示例
+  # === 自动扫描规则 ===
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-253 POWERSHELL-CURL-ALIAS"
+        pattern: "(?<!\\.exe)\\bcurl\\b"
+        scope: "**/*.ps1"
+        message: "PowerShell 中必须用 curl.exe 而非 curl（别名 Invoke-WebRequest）（meta-rule #92 / B-REVIEW-253），别名不支持 -s/-w/-d 等参数"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-253 POWERSHELL-WGET-ALIAS"
+        pattern: "(?<!\\.exe)\\bwget\\b"
+        scope: "**/*.ps1"
+        message: "PowerShell 中必须用 wget.exe 而非 wget（别名 Invoke-WebRequest）（meta-rule #92 / B-REVIEW-253）"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-253 POWERSHELL-JSON-BODY-INLINE"
+        pattern: "-d\\s+['\"]\\{.*\\}['\"]"
+        scope: "**/*.ps1"
+        message: "PowerShell 中复杂 JSON 参数应通过文件传递（-d @file）（meta-rule #92 / B-REVIEW-253），内联 JSON 会因引号转义失败"
+        severity: MAJOR
+        auto_fix: false
+  # === 适用/不适用场景 ===
+  applicable_scenarios:
+    - "PowerShell 脚本中调用 curl/wget 等外部命令"
+    - "技能文件中的 Shell 命令示例（需跨平台兼容）"
+    - "Windows 环境下的 HTTP 接口测试"
+  inapplicable_scenarios:
+    - "Linux/macOS 环境（bash/zsh 中 curl/wget 是原生命令）"
+    - "Python 脚本中的 subprocess 调用（Python 有自己的参数处理）"
+    - "PowerShell 原生命令（如 Get-Content、Invoke-RestMethod）"
+  block_on_violation: true
+
+# --- 第四轮复盘新增（v4.39.0）---
+# meta-rules #93-#100 后端落地，配套 xianyu-hunter-dev v4.58.0
+# 涵盖：重构导入完整性、数据质量前置评估、去重防御、数据流闭环、
+# 外部API结构防御、构建工具链验证、超时档位配置、Windows脚本编码
+
+# === B-REVIEW-254 REFACTOR-IMPORT-COMPLETENESS（meta-rule #93 落地）===
+refactor_import_completeness:
+  enabled: true
+  severity: CRITICAL
+  description: "代码跨文件移动/提取后必须检查所有符号依赖是否完整导入"
+  detection_signals:
+    - "代码从 A 文件移动到 B 文件后，B 文件缺少 A 文件原有的 import"
+    - "NameError 运行时报错但静态检查未捕获"
+    - "try/except Exception 静默吞掉 NameError"
+  key_files:
+    - "src/xianyu_hunter/web/routes/api_evaluations.py"
+    - "src/xianyu_hunter/web/routes/api_task_links.py"
+    - "src/xianyu_hunter/modules/worker.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-254 REFACTOR-IMPORT-MISSING"
+        pattern: "from\\s+\\w+.*import.*\\n(?!.*# refactoring-check)"
+        scope: "src/xianyu_hunter/web/routes/*.py"
+        message: "跨文件移动代码后必须检查并同步所有 import（meta-rule #93 / B-REVIEW-254），缺失导入会导致 NameError 被 try/except 静默吞掉"
+        severity: CRITICAL
+        auto_fix: false
+      - name: "B-REVIEW-254 SILENT-NAMEERROR-IN-EXCEPT"
+        pattern: "except\\s+Exception.*:\\s*\\n\\s*(logger\\.(warning|debug|info)|pass)"
+        scope: "src/xianyu_hunter/**/*.py"
+        message: "except Exception 块中不应静默吞掉 NameError（meta-rule #93 / B-REVIEW-254），建议至少 logger.exception() 输出完整堆栈"
+        severity: MAJOR
+        auto_fix: false
+  applicable_scenarios:
+    - "代码跨文件移动/提取/重构后验证"
+    - "新增文件引用了其他模块的符号"
+    - "import 重排后验证依赖完整性"
+  inapplicable_scenarios:
+    - "同文件内代码移动"
+    - "纯新增代码（非移动）"
+  block_on_violation: true
+
+# === B-REVIEW-255 DATA-QUALITY-PRE-ASSESSMENT（meta-rule #94 落地）===
+data_quality_pre_assessment:
+  enabled: true
+  severity: MAJOR
+  description: "依赖字段做排序/过滤/聚合前必须评估数据填充率"
+  min_fill_rate: 0.5                    # 最低可接受填充率（低于此值告警）
+  warning_fill_rate: 0.8               # 建议填充率（低于此值提示）
+  detection_signals:
+    - "ORDER BY 字段大量 NULL 导致排序无效"
+    - "WHERE 过滤条件依赖的字段填充率极低"
+    - "聚合查询结果与预期不符（因 NULL 被排除）"
+  key_files:
+    - "src/xianyu_hunter/infra/repo_events.py"
+    - "src/xianyu_hunter/infra/repo_items.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-255 SORT-FIELD-LOW-FILL-RATE"
+        pattern: "order_by\\(.*(?:publish_time|updated_at|last_seen)\\)"
+        scope: "src/xianyu_hunter/infra/*.py"
+        message: "排序字段填充率 < min_fill_rate 时排序无效（meta-rule #94 / B-REVIEW-255），必须评估数据质量或改用其他排序策略"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-255 FILTER-FIELD-NO-FILL-RATE-CHECK"
+        pattern: "filter\\(.*\\.(status|type|source).*=="
+        scope: "src/xianyu_hunter/infra/*.py"
+        message: "过滤字段使用前应确认填充率（meta-rule #94 / B-REVIEW-255），NULL 字段会被 WHERE 排除导致结果集偏差"
+        severity: WARNING
+        auto_fix: false
+  applicable_scenarios:
+    - "新增排序/过滤/聚合功能前"
+    - "依赖数据库字段做业务逻辑判断"
+    - "查询结果与用户预期不符时排查"
+  inapplicable_scenarios:
+    - "纯展示字段（无业务逻辑依赖）"
+    - "有 NOT NULL 约束的字段"
+  block_on_violation: false
+
+# === B-REVIEW-256 UPSERT-DEDUP-DEFENSE（meta-rule #95 落地）===
+upsert_dedup_defense:
+  enabled: true
+  severity: CRITICAL
+  description: "多来源写入同一逻辑实体时必须有去重防护（DELETE+INSERT + 部分唯一索引）"
+  detection_signals:
+    - "多处代码写入同一 (task_id, item_id) + type 组合"
+    - "save_event 被多处调用写入相同 event type"
+    - "数据库中同一逻辑记录出现多条"
+  key_files:
+    - "src/xianyu_hunter/infra/repo_events.py"
+    - "src/xianyu_hunter/modules/worker.py"
+    - "src/xianyu_hunter/web/routes/api_task_links.py"
+    - "src/xianyu_hunter/web/routes/api_evaluations.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-256 MULTIPLE-WRITE-NO-UPSERT"
+        pattern: "save_event\\(.*type.*eval"
+        scope: "src/xianyu_hunter/**/*.py"
+        message: "多路径写入 eval 类型事件必须用 upsert_eval_event（DELETE+INSERT）（meta-rule #95 / B-REVIEW-256），save_event 会产生重复记录"
+        severity: CRITICAL
+        auto_fix: false
+      - name: "B-REVIEW-256 NO-PARTIAL-UNIQUE-INDEX"
+        pattern: "CREATE\\s+(UNIQUE\\s+)?INDEX"
+        scope: "src/xianyu_hunter/web/startup.py"
+        message: "多写入路径实体必须创建部分唯一索引（WHERE type = 'xxx'）（meta-rule #95 / B-REVIEW-256），作为数据库层去重防线"
+        severity: CRITICAL
+        auto_fix: false
+      - name: "B-REVIEW-256 MIGRATION-MISSING-DEDUP-CLEANUP"
+        pattern: "def run_migrations"
+        scope: "src/xianyu_hunter/web/startup.py"
+        message: "新增去重索引前必须有迁移清理历史重复记录（meta-rule #95 / B-REVIEW-256），否则建索引会因重复数据失败"
+        severity: HIGH
+        auto_fix: false
+  applicable_scenarios:
+    - "评估、订单、通知等多来源写入实体"
+    - "同一事件类型从多个 API 入口写入"
+    - "新增写入路径时验证去重防护"
+  inapplicable_scenarios:
+    - "单一写入路径的实体"
+    - "需保留历史版本的实体（审计日志等）"
+  block_on_violation: true
+
+# === B-REVIEW-257 API-RESPONSE-STRUCTURE-DEFENSE（meta-rule #97 落地）===
+api_response_structure_defense:
+  enabled: true
+  severity: HIGH
+  description: "外部 API 响应必须有结构验证/归一化层，防止第三方变更导致静默失败"
+  detection_signals:
+    - "硬编码嵌套路径如 result['data']['item']"
+    - "第三方 API 响应结构变更后数据静默丢失"
+    - "爬虫返回空数据但无告警"
+  key_files:
+    - "src/xianyu_hunter/modules/collector/_search.py"
+    - "src/xianyu_hunter/modules/collector/_detail.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-257 HARDCODED-NESTED-PATH"
+        pattern: "\\[.data.\\]\\[.item.\\]|\\[.result.\\]\\[.\\d+.\\]"
+        scope: "src/xianyu_hunter/modules/**/*.py"
+        message: "外部 API 响应硬编码嵌套路径必须有 fallback 检测（meta-rule #97 / B-REVIEW-257），结构变更会导致 KeyError 静默失败"
+        severity: HIGH
+        auto_fix: false
+      - name: "B-REVIEW-257 NO-STRUCTURE-CHANGE-LOG"
+        pattern: "resultList|data\\.item"
+        scope: "src/xianyu_hunter/modules/**/*.py"
+        message: "检测到外部 API 响应结构路径但无结构变更日志（meta-rule #97 / B-REVIEW-257），应添加 logger.warning 记录结构变更事件"
+        severity: WARNING
+        auto_fix: false
+  applicable_scenarios:
+    - "爬虫/第三方 API 响应解析"
+    - "无版本通知的外部接口"
+    - "数据源结构可能变更的场景"
+  inapplicable_scenarios:
+    - "内部 API（自有契约，变更可控）"
+    - "有 OpenAPI/Swagger 规范的接口"
+  block_on_violation: false
+
+# === B-REVIEW-258 DATA-FLOW-COMPLETENESS（meta-rule #96 落地）===
+data_flow_completeness:
+  enabled: true
+  severity: HIGH
+  description: "数据产生操作默认应持久化结果，除非显式声明为瞬态"
+  detection_signals:
+    - "搜索/采集/评估操作返回结果但不写入 DB"
+    - "前端展示数据刷新后丢失"
+    - "API 返回数据但下游查询不到"
+  key_files:
+    - "src/xianyu_hunter/web/routes/api_task_links.py"
+    - "src/xianyu_hunter/modules/worker.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-258 LIVE-MODE-NO-PERSIST"
+        pattern: "async def live_links|def live_|return.*results.*# no persist"
+        scope: "src/xianyu_hunter/web/routes/*.py"
+        message: "数据产生操作（live_links/search）必须持久化到 DB（meta-rule #96 / B-REVIEW-258），除非接口名含 'preview' 或 'dry_run'"
+        severity: HIGH
+        auto_fix: false
+      - name: "B-REVIEW-258 EVAL-NO-TRIGGER"
+        pattern: "return.*items|return.*results"
+        scope: "src/xianyu_hunter/web/routes/api_task_links.py"
+        message: "搜索结果写入后必须触发轻量评估（meta-rule #96 / B-REVIEW-258），否则评估明细无数据"
+        severity: MAJOR
+        auto_fix: false
+  applicable_scenarios:
+    - "搜索、采集、评估、抢单等数据产生操作"
+    - "新增 API 端点返回数据时"
+    - "数据流断裂导致下游无数据时"
+  inapplicable_scenarios:
+    - "显式声明为瞬态的接口（preview/dry_run/debug）"
+    - "纯查询接口（不产生新数据）"
+  block_on_violation: true
+
+# === B-REVIEW-259 WORKER-TIMEOUT-PROFILE（meta-rule #99 落地）===
+worker_timeout_profile:
+  enabled: true
+  severity: HIGH
+  description: "后台任务超时必须与操作实际耗时匹配，支持 fast/normal 多档配置"
+  default_timeout_seconds: 30           # 默认超时（秒）
+  fast_mode_timeout_seconds: 45         # fast 模式允许的最大操作耗时
+  normal_mode_timeout_seconds: 60       # normal 模式允许的最大操作耗时
+  detection_signals:
+    - "asyncio.wait_for 超时但操作实际耗时更长"
+    - "Worker 任务被超时中断但操作仍在进行"
+    - "超时后无日志说明原因"
+  key_files:
+    - "src/xianyu_hunter/modules/worker.py"
+    - "src/xianyu_hunter/modules/scheduler.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-259 TIMEOUT-SHORTER-THAN-OPERATION"
+        pattern: "asyncio\\.wait_for.*timeout.*=.*\\d+"
+        scope: "src/xianyu_hunter/modules/**/*.py"
+        message: "asyncio.wait_for 超时值必须 >= 操作最大耗时（meta-rule #99 / B-REVIEW-259），超时中断会导致数据不一致"
+        severity: HIGH
+        auto_fix: false
+      - name: "B-REVIEW-259 NO-FAST-MODE-PARAM"
+        pattern: "def.*search.*\\(.*\\).*:"
+        scope: "src/xianyu_hunter/modules/**/*.py"
+        message: "长操作函数应支持 fast=True 参数以降低耗时适配超时（meta-rule #99 / B-REVIEW-259），否则无法在 Worker 超时内完成"
+        severity: WARNING
+        auto_fix: false
+  applicable_scenarios:
+    - "Worker 后台任务超时配置"
+    - "asyncio.wait_for 超时保护"
+    - "长操作（搜索/采集/评估）超时策略"
+  inapplicable_scenarios:
+    - "无超时的同步操作"
+    - "快速操作（< 5 秒）无需分档"
+  block_on_violation: false
+
+# === B-REVIEW-260 WINDOWS-SCRIPT-ENCODING（meta-rule #100 落地）===
+windows_script_encoding:
+  enabled: true
+  severity: MAJOR
+  description: "Windows 批处理脚本必须使用纯 ASCII 或与系统代码页一致的编码"
+  detection_signals:
+    - ".bat 文件包含中文字符导致 GBK 解析乱码"
+    - "chcp 65001 只影响输出不影响文件解析"
+    - "脚本执行报错含不可读字符"
+  key_files:
+    - "*.bat"
+    - "*.cmd"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-260 BAT-NON-ASCII-CHARS"
+        pattern: "[^\\x00-\\x7F]"
+        scope: "*.bat"
+        message: ".bat 文件包含非 ASCII 字符（meta-rule #100 / B-REVIEW-260），cmd.exe 使用系统代码页（GBK）解析文件，非 ASCII 字符会乱码"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-260 CHCP-NOT-FIX-ENCODING"
+        pattern: "chcp\\s+65001"
+        scope: "*.bat"
+        message: "chcp 65001 只影响控制台输出编码，不影响 cmd.exe 对 .bat 文件的解析编码（meta-rule #100 / B-REVIEW-260），应改用纯英文或 GBK 编码"
+        severity: WARNING
+        auto_fix: false
+  applicable_scenarios:
+    - "Windows .bat/.cmd 脚本"
+    - "跨平台构建脚本"
+    - "部署自动化脚本"
+  inapplicable_scenarios:
+    - "PowerShell .ps1 脚本（支持 UTF-8 BOM）"
+    - "Python/Node.js 脚本（自行管理编码）"
+    - "Linux/macOS Shell 脚本（默认 UTF-8）"
+  block_on_violation: true
+
+# === B-REVIEW-261 BUILD-ENVIRONMENT-TOOLCHAIN-CHECK（meta-rule #98 落地）===
+build_environment_toolchain_check:
+  enabled: true
+  severity: MAJOR
+  description: "构建脚本必须验证/设置工具链版本，避免旧版工具链导致构建失败"
+  required_node_version: "18"          # 最低 Node.js 主版本
+  required_python_version: "3.10"      # 最低 Python 主版本
+  detection_signals:
+    - "构建报错含语法不支持（如 ??=）"
+    - "node --version 返回旧版本"
+    - "构建脚本的 PATH 优先级不正确"
+  key_files:
+    - "*.bat"
+    - "package.json"
+    - "vite.config.ts"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-261 BUILD-NO-VERSION-CHECK"
+        pattern: "npm run build|node.*build"
+        scope: "*.bat"
+        message: "构建脚本必须包含工具链版本验证（meta-rule #98 / B-REVIEW-261），旧版 Node.js 不支持 ??= 等语法会导致构建失败"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-261 BUILD-NO-PATH-SET"
+        pattern: "npm run build|npx vite build"
+        scope: "*.bat"
+        message: "构建脚本必须在执行构建前设置 PATH 优先级（meta-rule #98 / B-REVIEW-261），避免系统旧版 Node.js 优先"
+        severity: WARNING
+        auto_fix: false
+  applicable_scenarios:
+    - "生产构建脚本（npm run build, pip install）"
+    - "CI/CD 构建流水线"
+    - "部署自动化脚本"
+  inapplicable_scenarios:
+    - "开发环境（nvm/pyenv 等版本管理器已处理）"
+    - "Docker 构建（基础镜像已固定版本）"
+  block_on_violation: false
+
+# === B-REVIEW-262 ASYNC-SYNC-DB-RUN-IN-EXECUTOR（meta-rule #93 落地，PS-010）===
+async_sync_db_run_in_executor:
+  enabled: true
+  severity: CRITICAL
+  description: "async 函数中同步 DB 调用必须用 run_in_executor 包装，避免阻塞事件循环"
+  detection_signals:
+    - "async def 函数体内直接调用同步 DB 方法（session.execute/query/commit）"
+    - "并发请求被串行化，响应时间线性增长"
+    - "事件循环被 DB IO 阻塞"
+  key_files:
+    - "src/xianyu_hunter/web/routes/api_task_links.py"
+    - "src/xianyu_hunter/web/routes/api_items.py"
+    - "src/xianyu_hunter/web/routes/api_orders.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-262 ASYNC-DEF-SYNC-DB-CALL"
+        pattern: "async def.*\\n.*session\\.(execute|query|commit|add)|async def.*\\n.*repo\\.(get|list|count|create|update|delete)"
+        scope: "src/xianyu_hunter/web/routes/"
+        negative_pattern: "run_in_executor|asyncio\\.to_thread"
+        message: "async def 函数体内直接调用同步 DB 方法会阻塞事件循环（meta-rule #93 / B-REVIEW-262 / PS-010），必须用 run_in_executor 或 asyncio.to_thread 包装"
+        severity: CRITICAL
+        auto_fix: false
+  applicable_scenarios:
+    - "FastAPI async 路由调用同步 ORM（SQLAlchemy 同步模式）"
+    - "async 函数调用同步外部库"
+    - "事件循环内有阻塞 IO 调用"
+  inapplicable_scenarios:
+    - "已使用原生 async 驱动（asyncpg/aiomysql/databases）"
+    - "同步路由（def 而非 async def）"
+    - "CPU 密集型计算（应用 ProcessPoolExecutor）"
+  block_on_violation: true
+
+# === B-REVIEW-263 BATCH-UPSERT-SINGLE-COMMIT（PS-012）===
+batch_upsert_single_commit:
+  enabled: true
+  severity: MAJOR
+  description: "批量写入必须用单事务批 upsert（session.add_all + 单次 commit），禁止循环内逐条 commit"
+  detection_signals:
+    - "for 循环内 db.add + session.commit"
+    - "批量写入耗时与数据量线性增长"
+    - "N 次磁盘 IO 导致写入退化"
+  key_files:
+    - "src/xianyu_hunter/infra/repo_links.py"
+    - "src/xianyu_hunter/infra/repo_items.py"
+    - "src/xianyu_hunter/infra/repo_events.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-263 LOOP-COMMIT-IN-BATCH"
+        pattern: "for.*in.*:.*\\n.*session\\.(add|merge).*\\n.*session\\.commit"
+        scope: "src/xianyu_hunter/infra/"
+        negative_pattern: "add_all|bulk_save_objects|bulk_insert_mappings"
+        message: "批量写入必须用 session.add_all + 单次 commit（PS-012 / B-REVIEW-263），禁止 for 循环内逐条 commit（N 次磁盘 IO）"
+        severity: MAJOR
+        auto_fix: false
+  applicable_scenarios:
+    - "批量数据同步、批量事件写入、批量采集结果落库"
+    - "需要 upsert（INSERT ON CONFLICT UPDATE）的场景"
+  inapplicable_scenarios:
+    - "需要独立事务边界（每条写入需独立提交/回滚）"
+    - "需要逐条失败处理的场景"
+    - "单条写入"
+  block_on_violation: true
+
+# === B-REVIEW-264 SQL-FILTER-PUSHDOWN（PS-014）===
+sql_filter_pushdown:
+  enabled: true
+  severity: MAJOR
+  description: "SQL 层过滤优先于 Python 层过滤，使用 json_extract+cast 将过滤条件下推到 DB"
+  detection_signals:
+    - "从 DB 取出全量数据后用 Python filter/list comprehension 过滤"
+    - "JSON 字段属性用 LIKE 查询而非 json_extract"
+    - "全表扫描导致响应时间退化"
+  key_files:
+    - "src/xianyu_hunter/infra/repo_links.py"
+    - "src/xianyu_hunter/infra/repo_items.py"
+    - "src/xianyu_hunter/web/routes/api_task_links.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-264 PYTHON-FILTER-AFTER-DB-QUERY"
+        pattern: "session\\.(query|execute).*\\.all\\(\\).*\\n.*\\[.*for.*in.*if"
+        scope: "src/xianyu_hunter/"
+        negative_pattern: "\\.where\\(|\\.filter\\(|json_extract"
+        message: "禁止取出全量数据后用 Python filter（PS-014 / B-REVIEW-264），过滤条件必须下推到 SQL 层（json_extract+cast）"
+        severity: MAJOR
+        auto_fix: false
+      - name: "B-REVIEW-264 JSON-LIKE-FULL-SCAN"
+        pattern: "\\.like\\(['\"]%"
+        scope: "src/xianyu_hunter/infra/"
+        negative_pattern: "json_extract"
+        message: "JSON 字段查询必须用 json_extract 替代 LIKE（PS-002 / B-REVIEW-264），LIKE 全表扫描无法用索引"
+        severity: MAJOR
+        auto_fix: false
+  applicable_scenarios:
+    - "JSON 字段属性过滤、数值范围过滤、简单逻辑过滤"
+    - "分页查询的过滤条件"
+    - "聚合统计的过滤条件"
+  inapplicable_scenarios:
+    - "需要调用外部 API 判断的过滤"
+    - "需要复杂 Python 业务逻辑的过滤"
+    - "过滤条件依赖运行时外部变量"
+  block_on_violation: true
+
+# === B-REVIEW-265 LIST-COUNT-MERGED-QUERY（PS-013）===
+list_count_merged_query:
+  enabled: true
+  severity: MAJOR
+  description: "分页接口 list+count 必须合并为单次查询，禁止分两次查询"
+  detection_signals:
+    - "分页接口分别执行 list 查询和 count 查询"
+    - "两次 DB 往返导致响应时间加倍"
+    - "count 与 list 过滤条件不一致"
+  key_files:
+    - "src/xianyu_hunter/infra/repo_links.py"
+    - "src/xianyu_hunter/infra/repo_items.py"
+    - "src/xianyu_hunter/infra/repo_orders.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-265 SEPARATE-COUNT-QUERY"
+        pattern: "func\\.count\\(\\*\\).*scalar\\(\\)|\\.count\\(\\)"
+        scope: "src/xianyu_hunter/infra/"
+        negative_pattern: "func\\.count\\(\\)\\.over\\(\\)|COUNT.*OVER"
+        message: "分页接口 list+count 必须合并查询（PS-013 / B-REVIEW-265），用 COUNT(*) OVER() 窗口函数，禁止分两次查询"
+        severity: MAJOR
+        auto_fix: false
+  applicable_scenarios:
+    - "分页列表接口，count 与 list 过滤条件相同"
+    - "需要返回 total 和 items 的 API"
+  inapplicable_scenarios:
+    - "count 需要跨表聚合"
+    - "count 与 list 过滤条件不同"
+    - "无需分页的列表接口"
+  block_on_violation: true
+
+# === B-REVIEW-266 PRIORITY-LOCK-YIELD（PS-011）===
+priority_lock_yield:
+  enabled: true
+  severity: MAJOR
+  description: "共享资源竞争场景必须评估优先级锁需求，high 优先级等待时 low 主动让出"
+  detection_signals:
+    - "实时用户请求被后台周期任务长时间阻塞"
+    - "所有任务共用普通 asyncio.Lock"
+    - "浏览器实例/API 调用等共享资源无优先级区分"
+  key_files:
+    - "src/xianyu_hunter/container.py"
+    - "src/xianyu_hunter/modules/worker.py"
+    - "src/xianyu_hunter/web/routes/api_task_links.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-266 SHARED-LOCK-NO-PRIORITY"
+        pattern: "asyncio\\.Lock\\(\\)"
+        scope: "src/xianyu_hunter/"
+        negative_pattern: "PriorityBrowserLock|PriorityLock|priority"
+        message: "共享资源（浏览器/API）竞争场景必须评估优先级锁需求（PS-011 / B-REVIEW-266），实时请求与后台任务共用普通 Lock 会导致实时请求被阻塞"
+        severity: WARNING
+        auto_fix: false
+  applicable_scenarios:
+    - "浏览器自动化、外部 API 调用等共享资源竞争且有优先级区分"
+    - "实时用户请求与后台周期任务竞争同一资源"
+  inapplicable_scenarios:
+    - "无优先级区分的场景（用普通 asyncio.Lock）"
+    - "资源充足无需竞争的场景"
+    - "无并发竞争的场景"
+  block_on_violation: false
+
+# === B-REVIEW-267 CACHE-TTL-GT-OPERATION-COST（meta-rule #94 落地，PS-015）===
+cache_ttl_gt_operation_cost:
+  enabled: true
+  severity: CRITICAL
+  description: "缓存 TTL 必须大于被缓存操作平均耗时，代码注释必须说明取值依据"
+  detection_signals:
+    - "缓存 TTL 小于被缓存操作平均耗时"
+    - "缓存命中率接近零"
+    - "TTL 值硬编码且无注释说明取值依据"
+  key_files:
+    - "src/xianyu_hunter/web/routes/api_task_links.py"
+    - "src/xianyu_hunter/modules/worker.py"
+    - "src/xianyu_hunter/infra/cache.py"
+  hard_constraints:
+    rules:
+      - name: "B-REVIEW-267 HARDCODED-TTL-NO-COMMENT"
+        pattern: "_TTL\\s*=\\s*\\d+|_CACHE_TTL\\s*=\\s*\\d+|cache_ttl\\s*=\\s*\\d+"
+        scope: "src/xianyu_hunter/"
+        negative_pattern: "config\\.|settings\\.|#.*TTL|#.*耗时|#.*平均"
+        message: "缓存 TTL 必须从 config 读取且注释说明取值依据（meta-rule #94 / PS-015 / B-REVIEW-267），禁止硬编码且无注释"
+        severity: CRITICAL
+        auto_fix: false
+      - name: "B-REVIEW-267 TTL-LESS-THAN-30"
+        pattern: "_TTL\\s*=\\s*([1-9]|[12][0-9])\\b|cache_ttl.*=.*([1-9]|[12][0-9])\\b"
+        scope: "src/xianyu_hunter/"
+        negative_pattern: "#.*测试|#.*debug|#.*mock"
+        message: "缓存 TTL < 30 秒需特别审查（meta-rule #94 / B-REVIEW-267），确保 TTL >= 被缓存操作平均耗时 × 3"
+        severity: WARNING
+        auto_fix: false
+  applicable_scenarios:
+    - "所有缓存代码（内存缓存、Redis 缓存、HTTP 缓存）"
+    - "缓存配置审查"
+    - "新增缓存代码时"
+  inapplicable_scenarios:
+    - "无缓存的代码"
+    - "强一致性要求的缓存（TTL 设为 0 是有意选择）"
+    - "静态数据缓存（TTL 可设为无限大）"
+  block_on_violation: true
+
+# === B-REVIEW-275 CACHE-GUARD-3RULES（缓存守卫三原则）===
+cache_guard:
+  enabled: true
+  ttlConfigPath: "cache.live_search_ttl"
+  cacheEmptyResult: false
+  guardIndependent: true
+  detectionPatterns:
+    - "_TTL\\s*="
+    - "cache\\[.*\\]\\s*="
+
+# === B-REVIEW-276 FIELD-STRATEGY（数据写入策略字段级决策）===
+field_strategy:
+  enabled: true
+  alwaysOverwriteFields:
+    - is_sold
+    - status
+    - updated_at
+  coalesceFields:
+    - image_urls
+    - title
+    - seller_nick
+
+# === B-REVIEW-277 STATE-MACHINE-RETURN（状态机返回值语义）===
+state_machine_return:
+  enabled: true
+  returnSemanticsDocument: true
+  pauseResumeVerify: true
+
+# === B-REVIEW-278 CALLBACK-INJECTION（回调注入默认值）===
+callback_injection:
+  enabled: true
+  defaultBehaviorStrategy: safe_headless
+  allowOverride: true
+
+# === B-REVIEW-279 CROSS-LAYER-CLOSED-LOOP（跨层闭环验证）===
+cross_layer_closed_loop:
+  enabled: true
+  layersToCheck:
+    - cookie_store
+    - token_renewer
+    - db_row
+    - frontend_types
+  syncMethodPattern: "sync_state_from_"
+
+# === B-REVIEW-280 WINDOWS-ENCODING（Windows编码规范）===
+windows_encoding:
+  enabled: true
+  forbidChineseInBat: true
+  requireNodePathSpec: true
+  requireUtf8Declaration: true
+
+# ===== B-REVIEW-281~290 重构安全性检查（v4.61.0 新增）=====
+# 配套文件：references/refactoring-safety-checks.md
+# 设计目标：防止配置化重构、长任务执行、质量门禁、跨文件契约四类高风险场景的低级失误
+# 所有阈值/路径/异常清单通过本节点管理，技能本身不含硬编码值
+# 历史失败案例：container.py:450 / startup.py:161 / _LIVE_CACHE_TTL 硬编码
+refactoring_safety:
+  enabled: true
+  _doc: "配置化重构/长任务执行/质量门禁/跨文件契约的安全性审查参数集中管理，禁止硬编码"
+
+  # --- A 类：配置化重构规范 ---
+
+  # B-REVIEW-281 CONFIG-REFACTOR-5STEP 配置化重构 5 步法
+  refactor_5step:
+    enabled: true
+    severity: critical
+    required_steps: [grep_references, add_config_field, add_yaml_block, convert_to_function, verify_all_references]
+    # 步骤 1 的 grep 命令模板（{old_constant} 为占位符）
+    grep_pattern_template: 'grep -rn "{old_constant}" --include="*.py"'
+    # 步骤 4 必须含异常回退的函数命名模式
+    function_naming_pattern: '_get_{snake_name}'
+    require_exception_fallback: true
+
+  # B-REVIEW-282 SCOPE-CONTRACT-CHECK 作用域契约校验
+  scope_contract:
+    enabled: true
+    severity: critical
+    # 模块级函数允许访问的变量来源
+    module_function_allowed: [local_var, get_config, module_constant]
+    # 实例方法允许访问的变量来源
+    method_allowed: [self, instance_attr, local_var]
+    # 类方法允许访问的变量来源
+    classmethod_allowed: [cls, class_attr, local_var]
+    # 静态方法禁止访问的变量来源
+    static_method_forbidden: [self, cls]
+
+  # B-REVIEW-283 IMPORT-NAME-CHECKLIST 导入名称变更 checklist
+  import_name_change:
+    enabled: true
+    severity: critical
+    # 删除导出名前必须执行的 grep 模板
+    check_before_delete_template: 'grep -rn "from {module} import {name}"'
+    # 常量改名为函数后调用方必须加 ()
+    constant_to_function_requires_paren: true
+    # 常量改名为类后调用方必须实例化
+    constant_to_class_requires_instantiate: true
+    # 改名后启动验证命令模板
+    verify_import_template: 'python -c "from xianyu_hunter import {affected_modules}"'
+
+  # --- B 类：长任务执行规范 ---
+
+  # B-REVIEW-284 POWERSHELL-LONG-TASK-OUTPUT PowerShell 长任务日志输出
+  long_task_output:
+    enabled: true
+    severity: warning
+    # 长任务判定阈值（秒）：执行时长超过此值视为长任务
+    long_task_threshold_sec: 30
+    # 禁用的 sink cmdlet 模式（必须缓冲整流导致内存爆涨）
+    forbidden_patterns:
+      - '\\| Select-Object -Last'
+      - '\\| Select -Last'
+      - '\\| more'
+    # 推荐的输出重定向模式
+    recommended_patterns:
+      - '> {file}'
+      - 'Start-Process -RedirectStandardOutput {file}'
+    # 推荐的日志查看模式
+    view_patterns:
+      - 'Get-Content -Tail {n} {file}'
+      - 'Get-Content -Wait {file}'
+
+  # B-REVIEW-285 RESOURCE-OVERLOAD-TOLERANCE 系统资源过载容错
+  resource_overload_tolerance:
+    enabled: true
+    severity: warning
+    # CPU 占用阈值（%）：超过则触发降级
+    cpu_threshold_pct: 90
+    # 内存占用阈值（%）：超过则提前终止
+    memory_threshold_pct: 85
+    # 完整测试集超时阈值（秒）：超过则降级到 Tier 2
+    full_test_timeout_sec: 300
+    # 资源监控命令（PowerShell）
+    monitor_command: 'Get-Process | Sort CPU -Desc | Select -First 10'
+    # 完整 pytest 超时时的降级策略
+    fallback_strategy: direct_import  # direct_import | py_compile_only
+
+  # --- C 类：质量门禁规范 ---
+
+  # B-REVIEW-286 SONARQUBE-PIPELINE-CLOSED-LOOP SonarQube 15 阶段闭环
+  sonarqube_pipeline:
+    enabled: true
+    severity: warning
+    # SonarQube 闭环必需阶段（顺序敏感）
+    required_stages:
+      - server_detect
+      - es_precheck
+      - env_compat
+      - mcp_detect
+      - module_locate
+      - quality_gate
+      - scan
+      - ce_polling
+      - fix
+      - nosonar_verify
+      - validate
+      - report
+    # 单阶段失败是否允许继续（true=弹性，false=严格）
+    allow_continue_on_stage_failure: true
+
+  # B-REVIEW-287 RESILIENCE-RECOVERY 弹性恢复机制
+  resilience_recovery:
+    enabled: true
+    severity: warning
+    # ES read-only 锁自愈
+    es_readonly_autoclean: true
+    # CE 报告轮询（超时降级为只读模式）
+    ce_report_polling: true
+    # CE 轮询超时阈值（秒）
+    ce_polling_timeout_sec: 120
+    # NOSONAR 位置校验
+    nosonar_position_verify: true
+    # TRAE 沙箱旁路（输出到临时目录再复制）
+    trae_sandbox_bypass: true
+    # 项目锁清理（扫描前检查残留锁）
+    project_lock_cleanup: true
+
+  # B-REVIEW-288 TEST-VERIFY-TIERS 测试验证三档
+  test_verify_tiers:
+    enabled: true
+    severity: warning
+    tier1_full_test:
+      # Tier 1 触发的最大文件数（超过则降级到 Tier 2）
+      max_files: 200
+      # Tier 1 单次测试超时（秒）
+      timeout_sec: 300
+      command_template: 'pytest tests/ -x --timeout={timeout_sec}'
+    tier2_direct_import:
+      # Tier 2 触发的最大文件数（超过则降级到 Tier 3）
+      max_files: 50
+      command_template: 'python -c "from xianyu_hunter.{module} import {symbol}"'
+    tier3_changed_file:
+      # Tier 3 仅验证改动文件语法
+      command_template: 'py_compile {changed_file}'
+    # Tier 1 超时后是否自动降级到 Tier 2
+    auto_downgrade_on_timeout: true
+
+  # --- D 类：跨文件契约规范 ---
+
+  # B-REVIEW-289 CROSS-FILE-REFERENCE-SYNC 跨文件引用同步校验
+  cross_file_sync:
+    enabled: true
+    severity: critical
+    # 修改导出符号前必须 grep 所有引用点
+    grep_before_export_change: true
+    # 重构后必须执行的验证类型
+    verify_after_refactor: [start_service, run_tests]
+    # 跨文件契约破裂的异常清单（这两类异常是直接信号）
+    catch_exceptions: [ImportError, NameError]
+    # 启动服务验证命令模板
+    start_service_template: 'python -m xianyu_hunter.web.startup'
+    # 运行测试验证命令模板
+    run_tests_template: 'pytest tests/ -x --timeout=60'
+
+  # B-REVIEW-290 CONFIG-ACCESS-UNIFIED-ENTRY 配置访问统一入口
+  config_access_unified:
+    enabled: true
+    severity: critical
+    # 必须从 config.yaml 读取的业务参数类型
+    business_params_from_yaml: [TTL, timeout, threshold, interval, retry_count, batch_size]
+    # 禁止模块级硬编码业务参数常量
+    forbidden_module_constants: true
+    # 配置读取函数必须有异常回退到默认值
+    require_fallback_default: true
+    # 配置访问统一入口函数名
+    unified_entry_function: get_config
+    # 历史失败案例（用于审查时引用）
+    historical_cases:
+      container_py_450: 'self.config.buyer 应为 cfg.buyer（模块级函数误用 self）'
+      startup_py_161: 'from xxx import TAKEOVER_TIMEOUT_MIN 应为 _get_takeover_timeout_min'
+      live_cache_ttl: '_LIVE_CACHE_TTL 重构为 CacheConfig.live_search_ttl'
+
+  # 硬约束（违反则 P0 阻塞）
+  hard_constraints:
+    - '禁止模块级硬编码业务参数常量（TTL/超时/阈值/间隔必须从 config.yaml 读取）'
+    - '禁止 PowerShell 长任务用 | Select-Object -Last（sink cmdlet 必须缓冲导致内存爆涨）'
+    - '禁止删除/重命名导出符号前未 grep 所有引用点'
+    - '禁止配置化重构后未执行运行时验证（启动服务或运行测试）'
+    - '禁止配置读取函数无异常回退到默认值'
+
+# ===== B-REVIEW-291~294 LLM 多调用治理（v4.62.0 新增）=====
+# 配套规范：coding-standards v1.3 §2.21-2.24
+# 配套文件：references/llm-governance-checks.md
+# 设计目标：一个请求触发 ≥2 次 LLM 调用时，治理附加调用的预算/超时/解析/一致性
+# 所有阈值/异常清单/降级策略通过本节点管理，禁止硬编码
+# 历史失败案例：rag_engine.py generate_follow_ups 未复用 check_budget/_record_llm_usage
+llm_call_governance:
+  enabled: true
+  _doc: "LLM 多调用治理参数集中管理（B-REVIEW-291~294），覆盖附加调用预算/超时/解析/一致性四类场景"
+
+  # --- A 类：附加调用预算与用量闭环 ---
+
+  # B-REVIEW-291 LLM-AUX-CALL-BUDGET 附加调用预算与用量闭环
+  aux_call_budget:
+    enabled: true
+    severity: critical
+    # 附加调用前必须复用主调用的 BudgetContext
+    require_check_budget: true
+    # 附加调用后必须记录用量到共享 BudgetContext
+    require_record_usage: true
+    # 必须复用主调用已建立的预算上下文（user_id/session_id 维度）
+    reuse_main_call_util: true
+    # 预算超限时的策略：skip_with_warning（跳过并记录 WARNING）
+    budget_exceeded_strategy: skip_with_warning
+    # 需要预算治理的附加调用方法名清单（grep 命中即触发审查）
+    detection_patterns:
+      - generate_follow_ups
+      - generate_title
+      - generate_tags
+      - generate_summary
+    # 预算上下文传递字段（必须与主调用一致）
+    budget_context_fields: [user_id, session_id, request_id]
+
+  # --- B 类：附加调用独立超时 ---
+
+  # B-REVIEW-292 LLM-AUX-CALL-TIMEOUT 附加调用独立超时
+  aux_call_timeout:
+    enabled: true
+    severity: critical
+    # 附加调用必须用 asyncio.wait_for 设置独立超时
+    require_wait_for: true
+    # 主调用默认超时（秒）
+    main_call_timeout_sec: 30
+    # 附加调用默认超时（秒，必须 < main_call_timeout_sec，避免阻塞主流程）
+    aux_call_timeout_sec: 10
+    # 超时时的降级策略：degrade_with_warning（降级返回空 + WARNING 日志）
+    timeout_strategy: degrade_with_warning
+    # 超时日志格式（必须包含 stage/elapsed/timeout/model 四要素）
+    log_format: "stage={stage} elapsed={elapsed} timeout={timeout} model={model}"
+    # 触发降级时的返回值约定
+    degrade_return_value: empty_list
+
+  # --- C 类：响应结构化解析 ---
+
+  # B-REVIEW-293 LLM-RESPONSE-STRUCTURED-PARSE 响应结构化解析
+  response_parse:
+    enabled: true
+    severity: critical
+    # 禁止用正则提取 JSON（re.search(r'\{.*\}', ...) 易误匹配嵌套结构）
+    forbid_regex_extract: true
+    # 必须用 json.loads 解析
+    require_json_loads: true
+    # 解析结果必须做元素类型校验（isinstance + 长度检查）
+    require_type_validation: true
+    # LLM 响应可能包裹在 markdown 代码块中，解析前必须剥离
+    require_codeblock_strip: true
+    # 允许的解析方法白名单
+    allowed_parse_methods:
+      - json.loads
+      - pydantic.model_validate_json
+    # 禁止的解析方法黑名单
+    forbidden_parse_methods:
+      - re.search
+      - re.findall
+      - eval
+    # 代码块剥离的正则模式（匹配 ```json ... ``` 或 ``` ... ```）
+    codeblock_strip_pattern: '```(?:json)?\\s*([\\s\\S]*?)```'
+
+  # --- D 类：多调用一致性 ---
+
+  # B-REVIEW-294 LLM-MULTI-CALL-CONSISTENCY 多调用一致性
+  multi_call_consistency:
+    enabled: true
+    severity: warning
+    # 异常处理必须与主调用一致（同样的异常类型 + 同样的处理策略）
+    require_consistent_except: true
+    # 日志格式必须与主调用一致（同 stage/model/elapsed/tokens 字段集）
+    require_consistent_log_format: true
+    # 降级策略必须与主调用一致（同样的 fallback 顺序）
+    require_consistent_degradation: true
+    # 统一日志格式模板
+    log_format_template: "stage={stage} model={model} elapsed={elapsed} tokens={tokens}"
+    # 多调用编排模式：parallel（asyncio.gather）/ sequential（串行）
+    orchestration_modes: [parallel, sequential]
+    # 附加调用异常不应冒泡到主调用（必须 catch 并降级）
+    aux_exception_must_catch: true
+
+  # 硬约束（违反则 P0 阻塞）
+  hard_constraints:
+    - '禁止附加 LLM 调用跳过 check_budget 直接发起请求'
+    - '禁止附加 LLM 调用使用与主调用相同的超时（必须独立且更短）'
+    - '禁止用 re.search/re.findall 提取 LLM 返回的 JSON'
+    - '禁止附加调用异常冒泡到主调用导致主回答失败'
+
+# ===== B-REVIEW-295~312 多用户安全与并发审计（v4.63.0 新增）=====
+# 2026-07-25 代码走查复盘：MU1-MU6 全量审查发现 10 Critical + 22 Important
+# 覆盖缓存一致性/并发安全/越权防护/数据完整性/工程实践五类场景
+mu_audit_2026_07:
+  _doc: "多用户安全与并发审计参数集中管理（B-REVIEW-295~312），2026-07-25 全量代码走查复盘提炼"
+  _review_scope: "MU1-MU6 多用户登录切换全链路（user_manager/cookie_store/auth/api_accounts/repo_tasks/repo_links/menu_manager/api_preferences）"
+
+  # B-REVIEW-295 SESSION-CACHE-INVALIDATION-ON-ISSUE 签发新 token 时清除旧 token 缓存
+  session_cache_invalidation:
+    # issue_session 撤销旧 session 时必须同步清除 _verify_cache 中该 user_id 的所有条目
+    # 否则旧 token 在缓存 TTL 内仍命中 verify_session，绕过会话固定防护
+    clear_on_issue: true
+    # set_user_status 禁用用户时也必须清除缓存（disabled 是终止态，token 应即时吊销）
+    clear_on_disable: true
+    # 缓存清理必须在 self._lock 内执行，与 verify_session/revoke_session 互斥
+    require_lock: true
+    # 缓存清理方式：dict 推导式重建（避免 in-place del 迭代错误 + 抑制 lint 告警）
+    method: dict_comprehension
+
+  # B-REVIEW-296 STATUS-CHANGE-CACHE-CLEAR 状态变更时清除缓存
+  # 与 B-REVIEW-295 的 clear_on_disable 配合，覆盖所有状态变更路径
+  status_change_cache:
+    # 仅 disabled 状态需要清缓存（active/expired 是正常流转，token 仍可用）
+    clear_on_disabled: true
+    # active 恢复时不需要清缓存（缓存中无该用户条目，自然过期）
+    clear_on_active: false
+
+  # B-REVIEW-297 TMP-FILE-UNIQUE-NAME 并发写入时 tmp 文件名必须唯一
+  tmp_file_naming:
+    # 原子写入模式：tmp 文件名包含 pid + thread_id 避免并发竞争
+    pattern: ".{pid}.{thread_id}.tmp"
+    # 禁止使用固定 .tmp 后缀（两个并发 _write_json 同 user_id 会竞争同一 tmp 路径）
+    forbid_fixed_tmp: true
+
+  # B-REVIEW-298 CACHE-READ-DOUBLE-CHECK 读文件后重新检查缓存
+  cache_read_double_check:
+    # _read_json 读完文件后、写缓存前，重新检查缓存是否已被其他线程更新
+    # 避免两段式锁（持锁检查→释放锁读文件→持锁写缓存）导致旧数据覆盖新缓存
+    enabled: true
+    # double-check 命中时返回缓存值而非刚读的文件值
+    prefer_cache_on_conflict: true
+
+  # B-REVIEW-299 LOCK-OUTSIDE-IO 持锁调用 IO 操作阻塞其他操作
+  lock_outside_io:
+    # merge_cookies 中的 _sync_to_sqlite 调用应移到 with self._lock 块之外
+    # 与 export_cookies 的模式一致（锁内完成 JSON 读写，锁外调用 SQLite 同步）
+    move_io_outside_lock: true
+    # 锁内只允许：缓存读写、JSON 文件读写、内存数据计算
+    lock_scope: [cache_read, cache_write, json_read, json_write, memory_compute]
+    # 锁外允许：SQLite 同步、网络请求、长时间 IO
+    outside_lock_scope: [sqlite_sync, network_request, long_io]
+
+  # B-REVIEW-300 LOG-NO-SENSITIVE-VALUE 日志不应记录敏感信息
+  log_sensitive_value:
+    # Cookie value 不应记录到日志（只记录 name + len(value)）
+    forbid_cookie_value: true
+    # token/session_token 不应记录明文（只记录 hash 前 8 位或长度）
+    forbid_token_plaintext: true
+    # 用户密码不应出现在任何日志中
+    forbid_password: true
+    # 敏感字段的日志格式：只记录长度或哈希前缀
+    safe_format: "len={length}"
+
+  # B-REVIEW-301 IDOR-TRIPLE-DEFENSE 越权防护三道防线
+  idor_triple_defense:
+    # 防线1：路由层调用 _check_task_ownership 校验任务归属权
+    route_layer_check: true
+    # 防线2：ORM 查询附加 user_id 过滤条件
+    orm_filter: true
+    # 防线3：Repo 层方法接受 user_id 参数做深度防御
+    repo_layer_param: true
+    # 三道防线必须同时存在，任一缺失视为 Critical
+    require_all_three: true
+
+  # B-REVIEW-302 SEARCH-USERID-PROPAGATION 搜索服务必须传递 user_id
+  search_userid_propagation:
+    # 搜索服务的 SearchParams 必须包含 user_id 字段
+    params_must_include_userid: true
+    # _execute 调用 repo.search 时必须传 user_id
+    execute_must_pass_userid: true
+    # 路由层必须从 request.state.user_id 获取并传入
+    route_must_inject: true
+
+  # B-REVIEW-303 BATCH-UPSERT-USERID-FIELD 批量插入必须包含 user_id
+  batch_upsert_userid:
+    # sqlite_insert().values() 必须显式包含 user_id 字段
+    require_userid_in_values: true
+    # 未指定 user_id 时兜底为 "default"
+    default_value: "default"
+    # on_conflict_do_update 的 set_ 不应更新 user_id（避免归属权被覆盖）
+    forbid_update_userid_on_conflict: true
+
+  # B-REVIEW-304 INSERT-OR-REPLACE-SEMANTICS SQLite REPLACE 语义陷阱
+  insert_or_replace_semantics:
+    # INSERT OR REPLACE 在 UNIQUE 冲突时先删除整行再插入，丢失未指定字段
+    # 禁止在有多列需要保留的表上使用 INSERT OR REPLACE
+    forbid_when_preserve_columns: true
+    # 应改用 ON CONFLICT(...) DO UPDATE SET 只更新指定列
+    prefer_on_conflict: true
+    # 受影响的表清单（有 group_name/custom_label 等需要保留的字段）
+    affected_tables: [user_menu_configs, user_preferences]
+
+  # B-REVIEW-305 DELETE-ENDPOINT-COMPLETENESS API 契约要求 DELETE 端点
+  delete_endpoint_completeness:
+    # API 契约定义了 GET/PUT/DELETE 时，DELETE 端点必须实现
+    require_delete_when_contracted: true
+    # DELETE 端点应支持按 key/path 参数删除单个资源
+    support_single_delete: true
+    # 可选：支持批量删除（接收 keys 数组）
+    support_batch_delete: false
+
+  # B-REVIEW-306 BODY-SIZE-LIMIT-DOS API body 必须有大小限制
+  body_size_limit:
+    # dict body 的 keys 数量上限
+    max_keys: 100
+    # 单个 value 序列化后的字节上限
+    max_value_size: 65536  # 64KB
+    # list body 的长度上限（Pydantic Field max_length）
+    max_list_length: 100
+    # 超限时返回 400 而非 413（FastAPI 默认）
+    over_limit_status: 400
+
+  # B-REVIEW-307 YAML-TYPE-VALIDATION 加载 YAML 时校验字段类型
+  yaml_type_validation:
+    # list(data.get("menus", [])) 不安全：字符串会拆成字符列表
+    forbid_list_coerce: true
+    # 应使用 isinstance 校验后再赋值
+    require_isinstance_check: true
+    # 校验失败时返回空列表而非抛异常（保持启动不中断）
+    fallback_on_error: empty_list
+
+  # B-REVIEW-308 ENGINE-PROPERTY-ENCAPSULATION 不应直接访问 _engine
+  engine_encapsulation:
+    # 禁止外部模块直接访问 user_manager._engine
+    forbid_private_engine_access: true
+    # 应通过 UserManager.engine 只读 property 暴露
+    expose_via_property: true
+    # 同样适用于其他 Manager 类的私有 engine
+    affected_managers: [UserManager, MenuManager]
+
+  # B-REVIEW-309 DATETIME-FORMAT-CONSISTENCY datetime 格式一致性
+  datetime_format_consistency:
+    # raw SQL 和 ORM default 应使用相同的 datetime 格式
+    require_same_format: true
+    # ORM default 返回 datetime 对象时，raw SQL 也应传 datetime 对象
+    prefer_datetime_object: true
+    # 禁止 raw SQL 用 isoformat() 字符串而 ORM default 用 datetime 对象
+    forbid_mixed_format: true
+
+  # B-REVIEW-310 EXCEPTION-FLAG-RESET 异常时重置标志
+  exception_flag_reset:
+    # try 块中设置的标志（如 multi_user_finalized=True）在 except 中必须重置
+    require_reset_in_except: true
+    # 不重置会导致后续调用直接返回 None，永久降级且无法自愈
+    impact: permanent_degradation
+
+  # B-REVIEW-311 CACHE-FAILURE-LOGGING 缓存失效失败应记录日志
+  cache_failure_logging:
+    # 缓存失效操作的 try/except 不应静默 pass
+    forbid_silent_pass: true
+    # 应记录 warning 级别日志（不阻断主流程但可观测）
+    log_level: warning
+    # 日志应包含 user_id 和异常信息
+    log_fields: [user_id, exception]
+
+  # B-REVIEW-312 USERID-DEFAULT-UNIFICATION user_id 默认值统一
+  userid_default_unification:
+    # 所有端点的 getattr(request.state, "user_id", ...) 兜底值必须统一
+    require_consistent_default: true
+    # 推荐兜底值："default"（而非 None，None 会导致 repo 层不过滤 user_id）
+    recommended_default: "default"
+    # 禁止同一文件中混用 "default" 和 None 兜底
+    forbid_mixed_defaults: true
+
+  # 硬约束（违反则 P0 阻塞）
+  hard_constraints:
+    - '禁止 issue_session 撤销旧 session 后不清除 _verify_cache 缓存'
+    - '禁止 _write_json 使用固定 .tmp 文件名（必须含 pid+thread_id）'
+    - '禁止 delete_link 端点不调用 _check_task_ownership 校验'
+    - '禁止 batch_upsert_task_links 的 values() 不包含 user_id 字段'
+    - '禁止在 user_menu_configs 表上使用 INSERT OR REPLACE（会丢失 group_name/custom_label）'
+    - '禁止 API body 无大小限制（max_keys + max_value_size 必须配置）'
+    - '禁止日志中记录 Cookie value 或 token 明文'
+    - '禁止外部模块直接访问 user_manager._engine（应通过 engine property）'
+    - '禁止 try 块设置标志后 except 不重置（会导致永久降级）'
+    - '禁止缓存失效操作的 except 静默 pass（必须记录 warning 日志）'
+
+# ========== 第八轮复盘新增（v4.64.0，2026-07-25） ==========
+# 来源：xianyu-hunter-dev/references/retrospective-2026-07-25-r2.md 第八轮复盘
+# 配套规范：xianyu-hunter-dev 规范 31（资源创建接口幂等性设计）+ 规范 32（前端 async handler 三分支完整性）
+
+idempotent_resource_creation:
+  enabled: true
+  severity: CRITICAL
+  route_patterns: ["/start", "/create", "/register", "/launch"]
+  required_response_fields: ["ok", "already_active", "message"]
+  forbidden_failure_for_existing: true
+  required_test_suffixes: ["_already_active", "_already_exists", "_idempotent"]
+  applicable_route_keywords: ["session", "task", "connection"]
+  applicable_scenarios:
+    - "资源创建/启动/注册接口"
+    - "网络重试场景"
+    - "前端启动/恢复按钮后端"
+  inapplicable_scenarios:
+    - "纯查询接口（天然幂等）"
+    - "计数器递增"
+    - "一次性副作用（如发短信验证码，需用 token 防重）"
+  reference_review_ids: ["B-REVIEW-313"]
+  reference_dev_spec: "xianyu-hunter-dev 规范 31"
+
+operation_result_contract:
+  enabled: true
+  severity: ERROR
+  required_fields: ["ok"]
+  optional_fields:
+    - "already_active"
+    - "already_exists"
+    - "error"
+    - "error_code"
+    - "detail"
+    - "message"
+    - "affected_id"
+    - "warnings"
+  forbidden_extra_fields: false
+  model_definition_path: "src/xianyu_hunter/web/schemas/operation_result.py"
+  applicable_scenarios:
+    - "所有写操作（create/update/delete/start/stop）响应"
+    - "后端响应结构变更同步检查"
+  inapplicable_scenarios:
+    - "纯查询接口（用专用 DTO）"
+    - "流式响应（SSE/WebSocket，用专用 schema）"
+  reference_review_ids: ["B-REVIEW-314"]
+  reference_frontend_review: "F-REVIEW-234"
+
+frontend_state_refresh_closed_loop:
+  enabled: true
+  severity: ERROR
+  frontend_types_file: "frontend/src/api/*.ts"
+  required_sync_check: true
+  grep_frontend_usage_patterns:
+    - "interface.*Result"
+    - "client\\.(get|post|put|delete)<.*>"
+  backend_response_grep_patterns:
+    - "JSONResponse"
+    - "content=\\{"
+  applicable_scenarios:
+    - "后端响应字段变更同步"
+    - "新增 API 端点"
+    - "字段重命名/废弃"
+  inapplicable_scenarios:
+    - "前端内部状态类型（无后端对应）"
+    - "第三方 SDK 类型"
+  reference_review_ids: ["B-REVIEW-315"]
+  reference_frontend_review: "F-REVIEW-235"
+
+# ===== v4.65.0 新增（2026-07-25 第九轮复盘：架构层依赖强化 + SQLAlchemy 写路径并发保护 + 搜索服务模板方法模式） =====
+
+# 维度 38：架构层依赖强化（B-REVIEW-316~319，配套 _skill_optim/architecture-rule.md 沉淀）
+architecture_layering:
+  enabled: true
+  severity: ERROR
+
+  # B-REVIEW-316 LAYER-DEPENDENCY-DIRECTION 层依赖方向铁律
+  layer_dependency_direction:
+    # 项目分层依赖方向：web → modules → infra → domain，禁止反向
+    # 与 references/architecture.md §2 依赖方向铁律互补，本节点强调 grep 检测信号
+    allowed_directions:
+      web_to_modules: true
+      web_to_infra: true
+      modules_to_infra: true
+      modules_to_domain: true
+      infra_to_domain: true
+    forbidden_directions:
+      domain_to_infra: true
+      domain_to_modules: true
+      domain_to_web: true
+      infra_to_modules: true
+      infra_to_web: true
+      modules_to_web: true
+    # 检测信号：domain/*.py 中 import xianyu_hunter.infra/modules/web 视为违规
+    grep_patterns:
+      - "from xianyu_hunter\\.infra import"
+      - "from xianyu_hunter\\.modules import"
+      - "from xianyu_hunter\\.web import"
+    scan_scope: "src/xianyu_hunter/domain/**/*.py"
+
+  # B-REVIEW-317 LIBS-BUSINESS-AGNOSTIC 公共工具库业务无关
+  libs_business_agnostic:
+    # infra/ 下的通用工具模块（如 utils/、helper/）必须保持业务无关
+    # 禁止在公共工具库中导入 services/modules/domain 模块
+    forbid_business_logic_in_libs: true
+    # 公共工具函数应只接受原始参数，禁止依赖业务上下文（如 request、current_user）
+    forbid_business_context_dependency: true
+    # 检测范围：infra/utils/、infra/helper/、infra/common/
+    scan_scope:
+      - "src/xianyu_hunter/infra/utils/**/*.py"
+      - "src/xianyu_hunter/infra/helper/**/*.py"
+      - "src/xianyu_hunter/infra/common/**/*.py"
+    forbidden_import_patterns:
+      - "from xianyu_hunter\\.modules\\."
+      - "from xianyu_hunter\\.web\\.services\\."
+      - "from xianyu_hunter\\.domain\\."
+    # 业务逻辑应提取到对应 services/ 或 modules/ 中
+    refactor_target: "services/ or modules/"
+
+  # B-REVIEW-318 BUSINESS-LOGIC-OUT-OF-CONTROLLER 路由层业务逻辑剥离
+  business_logic_out_of_controller:
+    # web/routes/api_*.py 路由函数应保持 thin，只做编排
+    # 业务决策（如角色校验、状态变更、副作用调度）必须移到 service 层
+    route_function_max_lines: 15
+    forbid_business_decisions_in_route: true
+    # 禁止在路由函数中直接 session.execute / db.commit
+    forbid_direct_db_operation: true
+    # 检测信号：路由函数中出现 if/else 业务分支、raise ValueError（业务异常）
+    grep_red_flags:
+      - "session\\.execute"
+      - "session\\.commit"
+      - "db\\.session\\."
+      - "raise ValueError\\("
+    scan_scope: "src/xianyu_hunter/web/routes/api_*.py"
+
+  # B-REVIEW-319 REPOSITORY-ABSTRACTION-REUSE 仓储抽象复用
+  repository_abstraction_reuse:
+    # 已存在仓储抽象的表，所有读写必须通过仓储，禁止 ad-hoc SQLAlchemy 查询
+    reuse_existing_repository: true
+    # 添加新查询方法前必须检查 repo_*.py 是否已有类似方法
+    check_existing_method_before_add: true
+    # 仓储方法缺失时应扩展仓储，而非绕过仓储在 service 中直接查询
+    extend_repository_not_bypass: true
+    # 检测信号：service 层直接使用 select() / update() / delete() 而非调用 repo 方法
+    grep_red_flags:
+      - "session\\.execute\\(select\\("
+      - "session\\.execute\\(update\\("
+      - "session\\.execute\\(delete\\("
+    # 仓储目录位置
+    repo_directories:
+      - "src/xianyu_hunter/infra/"
+    repo_file_pattern: "repo_*.py"
+
+# 维度 39：SQLAlchemy 写路径并发保护（B-REVIEW-320~323，配套 _skill_optim/sqlalchemy-rule.md 沉淀）
+sqlalchemy_patterns:
+  enabled: true
+  severity: ERROR
+
+  # B-REVIEW-320 SESSION-CONTEXT-MANAGER Session 上下文管理与显式事务控制
+  session_context_manager:
+    # 写路径必须使用 async with async_session() 显式管理 session 生命周期
+    require_async_with: true
+    # 写操作必须显式 commit，禁止依赖上下文退出自动 commit
+    require_explicit_commit: true
+    # 异常时必须显式 rollback
+    require_rollback_on_exception: true
+    # 事务窗口应保持短小，事务内禁止网络 I/O / 重计算
+    forbid_network_io_in_transaction: true
+    # 检测信号：session = async_session()（无 with）或 with session.begin() 内调用外部 API
+    grep_red_flags:
+      - "session\\s*=\\s*async_session\\(\\)"
+      - "call_external_api\\("
+    # 推荐模式：async with async_session() as session + 显式 commit/rollback
+    recommended_pattern: "async with async_session() as session: try: ... await session.commit() except: await session.rollback(); raise"
+
+  # B-REVIEW-321 TENANT-USERID-SCOPING 多租户 user_id 隔离（通用版，与 B-REVIEW-301/302 互补）
+  tenant_userid_scoping:
+    # 多用户表的读写必须按 user_id 过滤，防止跨用户数据泄露
+    require_userid_filter: true
+    # user_id 应从 request.state.user_id 注入到 service / repo，禁止从客户端参数读取
+    inject_userid_from_request_state: true
+    # 与 B-REVIEW-301 IDOR-TRIPLE-DEFENSE 互补：本检查点强调通用 user_id 过滤，
+    # B-REVIEW-301 强调三道防线（路由/ORM/Repo），两者配套使用
+    complementary_review_ids: ["B-REVIEW-301", "B-REVIEW-302"]
+    # 检测信号：select/update/delete 语句中缺少 user_id 条件
+    grep_red_flags:
+      - "select\\(\\w+ORM\\)\\.where\\(\\w+\\.id\\s*=="
+      - "update\\(\\w+ORM\\)\\.where\\(\\w+\\.id\\s*=="
+    # 多用户表的清单（应从 config 读取，避免硬编码）
+    multi_user_tables: ["tasks", "items", "orders", "user_preferences", "user_menu_configs"]
+
+  # B-REVIEW-322 WRITE-PATH-CONCURRENCY-SAFEGUARD 写路径并发保护选型
+  write_path_concurrency_safeguard:
+    # 多写路径必须有显式并发控制，禁止默认无保护并发写入
+    require_explicit_concurrency_control: true
+    # 三种并发保护策略选型（基于争用级别、锁范围、吞吐成本）
+    strategies:
+      # 乐观锁：适用于低争用、可重试场景，WHERE 加 version/updated_at 条件，rowcount==0 视为冲突
+      optimistic_lock:
+        applicable: "low_contention_retryable"
+        check_rowcount: true
+        version_field: "version"
+      # Redis 分布式锁：适用于跨进程/跨 worker 互斥场景
+      redis_distributed_lock:
+        applicable: "cross_worker_mutual_exclusion"
+        require_release_on_finally: true
+      # SELECT ... FOR UPDATE：适用于同行高争用、需事务内串行化场景
+      select_for_update:
+        applicable: "high_contention_same_row"
+        keep_transaction_short: true
+    # 所有策略都必须按 user_id 范围限制，并校验受影响行数
+    require_userid_scope: true
+    require_rowcount_verify: true
+    # 检测信号：update 语句无 version 条件、无 FOR UPDATE、无 redis lock
+    grep_red_flags:
+      - "session\\.execute\\(update\\(\\w+\\)\\.where\\(\\w+\\.id\\s*==[^)]+\\)\\.values\\("
+    inapplicable_scenarios:
+      - "单写者场景（天然无并发）"
+      - "幂等资源创建接口（用 B-REVIEW-313 IDEMPOTENT-RESOURCE-CREATION）"
+
+  # B-REVIEW-323 PREFER-ORM-EXPRESSION 优先 SQLAlchemy 表达式而非原生 SQL
+  prefer_orm_expression:
+    # 默认使用 ORM/Core 表达式，原生 SQL 应为例外
+    prefer_orm_over_raw_sql: true
+    # 原生 SQL 仅在明确技术约束下使用（如复杂聚合、性能优化、ORM 不支持的语法）
+    raw_sql_allowed_when:
+      - "复杂聚合查询（GROUP BY + 多列 HAVING）"
+      - "ORM 不支持的特殊语法（如 window function、CTE）"
+      - "性能优化（实测 ORM 查询慢于原生 SQL 5 倍以上）"
+    # 原生 SQL 必须参数化，禁止字符串拼接
+    require_parameterized: true
+    # 检测信号：text() 调用、字符串拼接 SQL
+    grep_red_flags:
+      - "text\\(f['\"]"
+      - "text\\(.*%s.*\\)"
+      - "execute\\(f['\"]SELECT"
+    # 允许的 text() 使用：必须用命名参数 :param
+    allowed_text_pattern: "text\\(['\"][^'\"]*:[a-z_]+['\"]\\)"
+
+# 维度 40：搜索服务模板方法模式（B-REVIEW-324~326，配套 coding-standards v1.3 §2.27 + 规范 19 升级）
+search_service_template:
+  enabled: true
+  severity: ERROR
+
+  # 基类文件位置（与 xianyu-hunter-dev/config/tech-stack.json#searchServiceTemplate 对齐）
+  base_class_file: "src/xianyu_hunter/web/services/search_base.py"
+
+  # B-REVIEW-324 SEARCH-SERVICE-TEMPLATE 搜索服务模板方法模式
+  template_method_pattern:
+    # 当项目内出现 ≥2 个搜索接口时，必须抽取为 SearchService 抽象基类
+    threshold_extract_base_class: 2
+    # 基类 search() 为唯一入口，编排 5 步流程
+    base_class_entry_method: "search"
+    # 5 步流程：_build_query → _execute → _extract_facets → _paginate → _maybe_log_slow
+    flow_steps:
+      - "_build_query"
+      - "_execute"
+      - "_extract_facets"
+      - "_paginate"
+      - "_maybe_log_slow"
+    # 子类禁止覆写 search() 方法
+    forbid_override_entry: true
+    # 检测信号：多个 service 中重复实现分页/计数/过滤逻辑
+    grep_duplication_patterns:
+      - "def list_.*\\(.*offset.*limit"
+      - "def count_.*\\(.*filters"
+      - "total.*=.*len\\(.*items\\)"
+
+  # B-REVIEW-325 SEARCH-HOOK-METHOD-CONTRACT 搜索服务 4 钩子方法契约
+  hook_method_contract:
+    # 4 个钩子由子类实现，必须遵守方法签名与返回类型契约
+    hooks:
+      _build_query:
+        signature: "_build_query(self, params: SearchParams) -> Select"
+        return_type: "sqlalchemy.sql.Select"
+      _execute:
+        signature: "_execute(self, query: Select, params: SearchParams) -> Sequence[Row]"
+        return_type: "Sequence[Row]"
+      _extract_facets:
+        signature: "_extract_facets(self, rows: Sequence[Row]) -> dict"
+        return_type: "dict"
+        # 可选钩子，子类不实现时返回空 dict
+        optional: true
+      _paginate:
+        signature: "_paginate(self, rows: Sequence[Row], params: SearchParams) -> list"
+        return_type: "list"
+    # 子类必须实现非 optional 钩子，否则实例化时 TypeError
+    require_all_non_optional_hooks: true
+    # 钩子方法禁止调用其他钩子（保持单一职责）
+    forbid_cross_hook_call: true
+
+  # B-REVIEW-326 SEARCH-SLOW-QUERY-LOG 搜索服务慢查询日志
+  slow_query_log:
+    # _maybe_log_slow 必须在 _execute 之后调用，记录查询耗时
+    require_slow_query_logging: true
+    # 慢查询阈值（从 config.yaml 读取，禁止硬编码）
+    slow_query_threshold_ms: 100
+    # 极慢查询阈值（触发 WARNING 级别日志）
+    very_slow_query_threshold_ms: 1000
+    # 日志必须包含：查询耗时、SearchParams 关键字段、service 类名
+    log_required_fields:
+      - "elapsed_ms"
+      - "search_params"
+      - "service_class"
+    # 慢查询日志级别：slow=INFO，very_slow=WARNING
+    log_level:
+      slow: "INFO"
+      very_slow: "WARNING"
+    # 不适用场景：单元测试（mock _execute）、开发环境（可通过 config 关闭）
+    inapplicable_scenarios:
+      - "单元测试（mock _execute）"
+      - "开发环境（可通过 config 关闭）"
+    reference_coding_standard: "xianyu-hunter-dev step 19 v4.64.0 升级"
+
+# ===== 维度 41：预设切换与状态回传契约（B-REVIEW-327~329，v4.45 新增） =====
+# 来源：AI 服务菜单改造经验沉淀（API Key 关联存储、测试接口状态回传、HF cache 轻量检测）
+# 配套 xianyu-hunter-dev/coding-standards §2.25 预设切换双步模式 + §2.26 敏感数据后端主导原则
+preset_and_status_contract:
+  enabled: true
+  severity: ERROR
+
+  # B-REVIEW-327 PRESET-DEFINITION-FRONTEND-ONLY 预设定义前后端分离
+  # 设计原因：预设含 base_url/model/vision_model/apiKeyUrl 等展示属性，
+  # 后端硬编码会与前端 constants.ts 重复维护，导致不一致
+  preset_definition_frontend_only:
+    # 预设定义（含 URL/模型/标签/颜色/申请页地址）只存在于前端 constants.ts
+    frontend_preset_file: "frontend/src/pages/Config/AIConfig/constants.ts"
+    # 后端接收预设参数（from_preset/to_preset/base_url/model/vision_model）执行业务
+    backend_apply_endpoint: "POST /api/ai/apply-preset"
+    # 禁止后端硬编码预设列表（如 PRESETS dict）
+    forbid_backend_preset_table: true
+    # 检测信号：后端出现与前端 constants.ts 重复的预设字典
+    # 用单引号字符串：YAML 单引号不解析 \ 转义，正则原样保留
+    grep_violation_patterns:
+      - 'PRESETS\s*=\s*\{'
+      - 'preset_table\s*=\s*\{'
+    # 适用：LLM/Embedding 等多厂商预设切换；通知渠道预设；任何前端展示+后端执行的预设
+    # 不适用：纯后端配置项（如数据库连接池大小）；安全敏感的预设（如内网端点白名单）
+
+  # B-REVIEW-328 TEST-ENDPOINT-STATUS-ECHO 测试接口回传状态字段
+  # 设计原因：测试连接接口执行后已知实际状态（如模型已下载、服务可用），
+  # 回传状态字段让前端无需额外查询，减少一次往返
+  test_endpoint_status_echo:
+    # 测试接口必须回传 status 类字段，前端用其更新本地状态
+    require_status_field: true
+    # 已知测试接口列表（需回传状态字段）
+    test_endpoints:
+      - path: "/api/ai/test-connection"
+        status_field: "model"
+        desc: "回传服务端实际模型名（可能是别名路由后的版本）"
+      - path: "/api/ai/test-embedding"
+        status_field: "model_status"
+        desc: "回传模型下载状态：downloaded/not_downloaded/remote/unknown"
+    # 状态字段必须用枚举值，禁止自由文本
+    require_enum_status: true
+    # 失败时也必须回传状态（如 not_downloaded），便于前端更新 UI
+    require_status_on_failure: true
+    # 适用：所有"测试连接"类接口；执行后有副作用的接口（如触发下载）
+    # 不适用：纯查询接口（GET /config）；幂等无副作用接口
+
+  # B-REVIEW-329 HF-CACHE-LIGHTWEIGHT-CHECK 模型缓存轻量检测
+  # 设计原因：完整加载模型验证需数秒+数百 MB 内存，状态检测应只查目录存在性
+  hf_cache_lightweight_check:
+    # 检测方式：检查 ~/.cache/huggingface/hub/models--<org>--<name>/snapshots/ 目录
+    check_method: "directory_existence"
+    # 禁止检测时实例化模型（SentenceTransformer(...) 会触发加载）
+    forbid_model_instantiation: true
+    # cache 根目录解析优先级
+    cache_root_env_vars:
+      - "HF_HOME"
+      - "HF_HUB_CACHE"
+    default_cache_root: "~/.cache/huggingface/hub"
+    # 目录命名规则：models--<org>--<name>（/ 替换为 --）
+    dir_name_pattern: "models--{model_name_with_slash_to_dash}"
+    # 必须检查 snapshots 子目录非空（避免只下载 meta 未下载权重）
+    require_snapshots_non_empty: true
+    # 适用：HuggingFace 模型下载状态；sentence-transformers 模型；任何有本地 cache 的模型
+    # 不适用：远程 API 模型（无下载概念）；Ollama 模型（用 ollama list 命令检测）
+
+# ============================================================
+# B-REVIEW-330 TYPE-ANNOTATION-CONTRACT-ALIGNMENT 类型注解契约对齐（v4.67.0 experimental）
+# 配套规范：xianyu-hunter-dev meta-rule #110 + step 273 + coding-standards §2.27
+# 配置来源：复杂返回类型列表与权威源优先级从 tech-stack.json#hardConstraints.typeAnnotationContract 同步
+# 设计原因：后端函数注解 -> list[str] 但实际返回 list[dict] 时，前端按 types.ts 取 .url/.hash 得到 undefined
+# ============================================================
+type_annotation_contract:
+  enabled: true
+  severity: ERROR
+  experimental: true
+
+  # 触发规范的复杂返回类型列表（从 tech-stack.json#hardConstraints.typeAnnotationContract.complexReturnTypes 同步）
+  complex_return_types:
+    - "list[dict]"
+    - "list[TypedDict]"
+    - "list[Pydantic BaseModel]"
+    - "dict[str, Any]"
+
+  # 权威源优先级（高 → 低）
+  # 设计原因：Pydantic ResponseModel 在运行时强制校验，最可信；
+  # 前端 types.ts 是消费方契约，无 ResponseModel 时作为反向校验源；
+  # 后端函数注解最弱（无运行时校验，容易过时）
+  authoritative_source: "pydantic_response_model"
+  fallback_authoritative_source: "frontend_types_ts"
+  alignment_sources:
+    - "pydantic_response_model"
+    - "frontend_types_ts"
+
+  # 单元测试断言级别
+  # 设计原因：仅断言 len() 假设元素是字符串，无法发现"返回 dict 而非 str"的结构错误
+  test_assertion_level: "full_structure"
+  violation_assertion_patterns:
+    - "len\\(.*\\)\\s*==\\s*\\d+"
+    - "assert\\s+\\w+\\s+is\\s+not\\s+None"
+  required_assertion_elements:
+    - "isinstance\\(.*,.+\\)"
+    - "in\\s+\\w+"
+
+  # 扫描范围
+  scan_scope:
+    backend_scan_dirs:
+      - "src/xianyu_hunter/web/routes/"
+      - "src/xianyu_hunter/web/services/"
+    function_signature_regex: "def\\s+\\w+.*->.*(list\\[|dict\\[)"
+
+  # experimental 观察期管理
+  experimental_governance:
+    observation_period_quarters: 1
+    observation_end_date: "2026-10-26"
+    promotion_threshold: 2
+    pending_sedimentation_candidates:
+      - "sqlite3.InterfaceError → NullPool"
+      - "Playwright TargetClosedError → is_closed()"
+      - "端口 8000 冲突 → 端口释放等待"
+
+  # 适用与不适用场景
+  applicable_scenarios:
+    - "后端函数返回 list[dict] / list[TypedDict] / 嵌套 Pydantic BaseModel / dict[str, Any] 的端点"
+    - "前后端分离项目的 API 契约验证"
+    - "单元测试断言复杂结构的端点"
+  inapplicable_scenarios:
+    - "返回基本类型（str/int/bool）的端点"
+    - "纯内部 helper 函数（无前端消费方）"
+    - "动态结构通用序列化（结构由 DB schema 决定）"
+    - "已有 Pydantic ResponseModel 严格校验的端点（ResponseModel 本身即契约源）"
+
+# v4.68.0 experimental - 事件驱动基础设施启动解耦（meta-rule #111 / step 274 / B-REVIEW-331）
+event_bus_startup_decoupling:
+  enabled: true
+  infrastructure_types:
+    - 'event_bus'
+    - 'message_queue'
+    - 'pub_sub_loop'
+  startup_order: 'before_business_scheduler'
+  shutdown_order: 'after_business_scheduler'
+  require_idempotent_guard: true
+  require_exception_isolation: true
+  require_startup_log: true
+  experimental_governance:
+    observation_period_quarters: 1
+    observation_end_date: '2026-10-26'
+    promotion_threshold: 2
+  applicable_scenarios:
+    - 'EventBus/MessageQueue 消费者循环'
+    - '发布-订阅模式基础设施'
+    - '后台调度器依赖的事件分发机制'
+  inapplicable_scenarios:
+    - '同步调用（无 publish-subscribe）'
+    - '一次性任务（启动即完成）'
+    - '进程内函数直接 invoke'
+    - '前端组件间通信（React Context/Zustand）'
+  # 审查扫描目录与信号
+  audit_signals:
+    consumer_loop_pattern: 'run_forever|consume_loop|_dispatch'
+    publish_pattern: 'publish_nowait|publish\('
+    startup_block_pattern: 'if not workers|if not.*RUNNING|if not container.collector'
+    runtime_entry_pattern: 'control_task|resume|restart'
+
+# ============================================================
+# 双数据源一致性保障（v4.69.0 新增）
+# 规范源：xianyu-hunter-dev/references/dual-data-source-consistency.md
+# ============================================================
+dual_data_source_consistency:
+  enabled: true
+  # 检查器以持久化层为主源判定无效时，是否回退运行时层兜底复核
+  fallbackToRuntime: true
+  # 运行时层更新后是否回写持久化层
+  syncBackOnUpdate: true
+  # 回写失败时的日志级别（warning/debug/error）
+  logLevelOnSyncFailure: warning
+  # 检查器检查范围是否与消费者依赖范围对齐
+  checkerScopeAlignment: true
+  # 检查器接口是否支持 async 实现（inspect.isawaitable 兼容）
+  asyncCheckerCompatibility: true
+  # 异常可观测性分级（流程 15）
+  exceptionObservabilityGrading:
+    syncFailure: warning
+    queryFailure: debug
+    fallbackTriggered: info
+    configMissing: warning
+    criticalPathFailure: error
+  # 观察期配置（experimental → stable 升正条件）
+  observationPeriodQuarters: 1
+  observationEndDate: "2026-10-26"
+  promotionThreshold: 2
+  applicableScenarios:
+    - cookie_json_and_browser_memory
+    - db_and_redis_cache
+    - file_and_memory_mapping
+  nonApplicableScenarios:
+    - single_data_source
+    - checker_and_consumer_same_source
+    - strong_consistency_required
+
+# ============================================================
+# v4.69.0 新增 - 基于 2026-07-30 调度器静默失败与浏览器连接检测复盘
+# 规范源：xianyu-hunter-dev/assets/guides/coding-rules/
+#   - concurrency.md step 275/277/278
+#   - browser-automation.md step 276
+#   - scheduler.md step 279
+# ============================================================
+
+# B-REVIEW-332 批量启动容错隔离（step 275 / BATCH-START-FAULT-ISOLATION-01）
+batch_start_fault_isolation:
+  enabled: true
+  # 批量操作方法名模式（触发审查）
+  batch_method_patterns:
+    - 'start_all'
+    - 'register_all'
+    - 'init_all'
+    - 'resume_all'
+    - 'restart_all'
+    - 'stop_all'
+  # 是否强制记录成功/失败统计日志
+  require_success_failure_log: true
+  # 失败日志级别
+  failure_log_level: 'warning'
+  # 可重试的异常类型（不阻塞其他项目）
+  retryable_exceptions:
+    - 'ResumeBlockedError'
+    - 'TimeoutError'
+    - 'ConnectionError'
+  # 是否禁止 re-raise 阻断调用方
+  forbid_reraise: true
+  applicable_scenarios:
+    - '调度器批量启动任务（TaskScheduler.start_all）'
+    - '批量注册组件（Worker/Adapter/Plugin 批量 register）'
+    - '批量初始化资源（多用户 Cookie 批量导入）'
+    - '批量恢复任务（resume_all / restart_all）'
+  inapplicable_scenarios:
+    - '单个关键资源启动失败应 fast-fail（如数据库连接）'
+    - '操作有严格原子性要求（全成功或全失败）→ 用事务'
+    - '单次操作（非批量）→ 直接 try/except'
+  audit_signals:
+    batch_method_grep: 'def (start_all|register_all|init_all|resume_all|restart_all|stop_all)'
+    missing_try_except: 'for.*in.*(workers|items|tasks).*\n.*self\.(start|register|init|resume|restart|stop)\('
+    missing_stats_log: '成功.*失败|failed.*started'
+    forbidden_reraise: 'raise\s+(ResumeBlockedError|TimeoutError|ConnectionError)'
+
+# B-REVIEW-333 外部资源活性真异步检测（step 276 / EXTERNAL-RESOURCE-ASYNC-LIVENESS-01）
+external_resource_async_liveness:
+  enabled: true
+  # 活性检测方法名（触发审查）
+  liveness_method_patterns:
+    - 'is_alive'
+    - 'ensure_alive'
+    - 'health_check'
+    - 'check_connection'
+  # 禁止用于活性检测的同步属性
+  forbidden_sync_properties:
+    - 'pages'
+    - 'is_connected'
+    - '_alive'
+    - '_connected'
+  # 是否要求返回值非空（默认 false，刚重启时结果可能为空）
+  require_non_null_result: false
+  # 异常即不可用
+  exception_means_dead: true
+  # 结果缓存时间（秒，0=不缓存，最大 5）
+  cache_ttl_seconds: 0
+  # 适用的资源类型
+  applicable_resources:
+    - 'BrowserContext'
+    - 'Page'
+    - 'HttpClient'
+    - 'DatabaseConnection'
+    - 'WebSocket'
+  applicable_scenarios:
+    - 'Playwright BrowserContext/Page 连接活性检测'
+    - 'HTTP 连接池活性检测（httpx.AsyncClient / aiohttp.ClientSession）'
+    - '数据库连接活性检测（SQLAlchemy engine / connection）'
+    - 'WebSocket 连接活性检测'
+  inapplicable_scenarios:
+    - '内存对象活性检测（用 is None 即可）'
+    - '同步资源活性检测（如 file.closed）'
+    - '有内建健康检查的资源（如 httpx.AsyncClient.is_closed）'
+    - '测试代码中的 mock 对象'
+  audit_signals:
+    liveness_method_grep: 'def (is_alive|ensure_alive|health_check|check_connection)'
+    sync_property_in_liveness: '\.(pages|is_connected|is_closed|_alive|_connected)\b'
+    async_without_await: 'async def (is_alive|ensure_alive|health_check|check_connection)[^}]*}$'
+    require_non_empty: 'len\(.*\)\s*>\s*0|bool\(.*\)'
+    exception_return_true: 'except.*:\s*\n\s*return True'
+
+# B-REVIEW-334 create_task 异常显式捕获（step 277 / CREATE-TASK-EXCEPTION-VISIBILITY-01）
+create_task_exception_visibility:
+  enabled: true
+  # 是否强制异常分层捕获（CancelledError → Exception）
+  require_exception_layering: true
+  # 禁止的宽泛异常类型（不允许单独使用而不分层）
+  forbidden_broad_except:
+    - 'BaseException'
+  # 关键路径异常最低日志级别
+  required_log_level: 'exception'
+  # 是否强制重新抛出
+  require_reraise: true
+  # 必须监控的后台任务名
+  monitored_task_names:
+    - 'scheduler_loop'
+    - 'event_bus'
+    - 'health_check'
+    - 'cookie_sync'
+  applicable_scenarios:
+    - '所有 asyncio.create_task(coro()) 包装的后台协程'
+    - 'fire-and-forget 模式的后台任务（创建后不 await）'
+    - '长期运行的后台循环（while True / await stop_event.wait()）'
+    - '应用启动钩子（_on_startup）中创建的后台任务'
+  inapplicable_scenarios:
+    - '被 await 的 task（调用方会直接拿到异常）'
+    - '有 done_callback 处理异常的 task'
+    - '短时一次性 task（create_task 后立即 await）'
+    - '测试代码中的 task（pytest-asyncio 框架捕获异常）'
+  audit_signals:
+    create_task_grep: 'asyncio\.create_task'
+    cancelled_only_grep: 'except asyncio\.CancelledError(?!\s*\n\s*except)'
+    base_exception_grep: 'except BaseException'
+    error_with_fstring: 'logger\.(error|warning)\(f["''].*\{e\}["'']'
+    missing_reraise: 'except Exception[^}]*\n(?!.*raise)'
+
+# B-REVIEW-335 容器迭代快照（step 278 / CONTAINER-ITERATION-SNAPSHOT-01）
+container_iteration_snapshot:
+  enabled: true
+  # 是否强制注释说明快照原因
+  require_comment_explanation: true
+  # 触发快照的方法名模式
+  triggering_method_patterns:
+    - 'start'
+    - 'stop'
+    - 'register'
+    - 'unregister'
+    - 'add'
+    - 'remove'
+    - 'delete'
+  # 快照函数列表
+  snapshot_functions:
+    - 'list'
+    - 'tuple'
+  # 并发场景是否强制锁内快照
+  concurrent_lock_required: true
+  applicable_scenarios:
+    - '字典/集合迭代时调用可能修改容器的方法'
+    - '并发场景下迭代共享容器（多协程/多线程访问同一字典）'
+    - '批量操作方法（start_all/stop_all/register_all）'
+    - '迭代中根据条件增删容器元素'
+  inapplicable_scenarios:
+    - '迭代体内不修改容器且无并发访问（只读迭代）'
+    - 'for item in list_: 迭代列表（列表迭代时修改不触发 RuntimeError）'
+    - 'with 语句管理的同步迭代（无并发风险）'
+    - '测试代码中的固定数据迭代（无修改风险）'
+  audit_signals:
+    dict_iteration_grep: 'for\s+\w+\s+in\s+.*\.(keys\(\)|values\(\)|items\(\))'
+    self_container_iteration: 'for\s+\w+\s+in\s+self\.\w+s\b'
+    missing_snapshot: 'for\s+\w+\s+in\s+self\.\w+(s|es)\b[^=]*(?!.*list\()'
+    missing_comment: 'list\(self\.\w+\.keys\(\)\)(?!\s*#)'
+
+# B-REVIEW-336 调度器主循环异常分层捕获（step 279 / SCHEDULER-LOOP-LAYERED-EXCEPTION-01）
+scheduler_loop_layered_exception:
+  enabled: true
+  # 是否强制 CancelledError 单独捕获
+  require_cancelled_error_layer: true
+  # 是否强制 Exception 兜底捕获
+  require_exception_layer: true
+  # 禁止的宽泛异常类型
+  forbidden_broad_except:
+    - 'BaseException'
+  # 是否强制重新抛出
+  require_reraise: true
+  # 是否强制用 logger.exception 而非 logger.error
+  require_logger_exception: true
+  # 是否强制启动成功日志
+  require_startup_log: true
+  # 适用的循环类型
+  applicable_loops:
+    - 'scheduler_loop'
+    - 'event_bus_loop'
+    - 'health_check_loop'
+    - 'cookie_sync_loop'
+  applicable_scenarios:
+    - '调度器主循环（_scheduler_loop）'
+    - '事件总线消费者循环（_bus_loop，与 B-REVIEW-331 配合）'
+    - '健康检查循环（_health_check_loop）'
+    - 'Cookie 同步循环（_cookie_sync_loop）'
+    - '所有被 asyncio.create_task 包装的长期运行后台循环'
+  inapplicable_scenarios:
+    - '短时一次性 task（create_task 后立即 await）'
+    - '有 done_callback 处理异常的 task'
+    - '测试代码中的 task（pytest-asyncio 框架捕获异常）'
+    - '同步函数（无 asyncio.CancelledError 概念）'
+  audit_signals:
+    loop_method_grep: 'async def (_scheduler_loop|_bus_loop|_health_check_loop|_cookie_sync_loop)'
+    cancelled_only_grep: 'except asyncio\.CancelledError(?!\s*\n\s*except)'
+    base_exception_grep: 'except BaseException'
+    cancelled_no_reraise: 'except asyncio\.CancelledError[^}]*\n(?!.*raise)'
+    error_with_fstring: 'logger\.(error|warning)\(f["''].*\{e\}["'']'
+    exception_no_reraise: 'except Exception[^}]*\n(?!.*raise)'
+    missing_startup_log: 'logger\.info.*调度器已启动|logger\.info.*主循环启动'
+

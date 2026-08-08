@@ -45,7 +45,8 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, // 4MB，容纳 echarts/antd 大 chunk
         navigateFallback: 'index.html', // SPA 路由回退
-        navigateFallbackDenylist: [/^\/api\//], // API 请求不走 SPA 回退
+        // API 请求不走 SPA 回退（同时覆盖根路径 /api/ 与子路径部署命名空间 /xianyu/api/）
+        navigateFallbackDenylist: [/^\/api\//, /^\/xianyu\/api\//],
         runtimeCaching: [
           {
             // 静态图片资源：长期缓存
@@ -62,12 +63,21 @@ export default defineConfig({
             //  - /api/events/stream: SSE 长连接，被 SW 拦截会让 EventSource 卡住
             //  - /api/auth/*: 鉴权接口，缓存会串号或污染登录态
             //  - /api/export/*: 流式响应，缓存会破坏分块下载
-            urlPattern: ({ url, request }) =>
-              request.method === 'GET'
-              && url.pathname.startsWith('/api/')
-              && !url.pathname.startsWith('/api/events/stream')
-              && !url.pathname.startsWith('/api/auth/')
-              && !url.pathname.startsWith('/api/export/'),
+            // 子路径部署下接口前缀为 /xianyu/api/，需同步覆盖
+            urlPattern: ({ url, request }) => {
+              const p = url.pathname
+              const isApi = p.startsWith('/api/') || p.startsWith('/xianyu/api/')
+              return (
+                request.method === 'GET'
+                && isApi
+                && !p.startsWith('/api/events/stream')
+                && !p.startsWith('/xianyu/api/events/stream')
+                && !p.startsWith('/api/auth/')
+                && !p.startsWith('/xianyu/api/auth/')
+                && !p.startsWith('/api/export/')
+                && !p.startsWith('/xianyu/api/export/')
+              )
+            },
             handler: 'NetworkFirst',
             options: {
               cacheName: 'xh-api-cache',

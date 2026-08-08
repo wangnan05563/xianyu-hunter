@@ -36,6 +36,7 @@ import { authApi } from '../../api'
 import type { LoginStatus, SavedCookieInfo } from '../../api/auth'
 import TidalForagers from '../../components/TidalForagers'
 import { useTheme } from '../../contexts/ThemeContext'
+import { API_BASE } from '../../utils/apiBase'
 
 const { TextArea } = Input
 const { Text, Title } = Typography
@@ -700,7 +701,7 @@ export default function Login() {
     authApi.getBrowserImportStatus().then(setBrowserStatus).catch(() => {})
 
     // 自动获取已保存的 cookie 值填充到输入框（让用户看到当前值）
-    fetch('/api/auth/cookie/fetch-keys?keys=_m_h5_tk,cookie2,sgcookie,unb', { credentials: 'include' })
+    fetch(`${API_BASE}api/auth/cookie/fetch-keys?keys=_m_h5_tk,cookie2,sgcookie,unb`, { credentials: 'include' })
       .then((r) => r.json())
       .then((data) => {
         if (data.ok && data.cookies) {
@@ -803,7 +804,7 @@ export default function Login() {
     setAutoFilling(true)
     setAutoFillResult(null)
     try {
-      const r = await fetch('/api/auth/cookie/fetch-keys?keys=_m_h5_tk,cookie2,sgcookie,unb', {
+      const r = await fetch(`${API_BASE}api/auth/cookie/fetch-keys?keys=_m_h5_tk,cookie2,sgcookie,unb`, {
         credentials: 'include',
       })
       const data = await r.json()

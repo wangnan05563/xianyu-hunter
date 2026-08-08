@@ -1,4 +1,5 @@
 import client from './client'
+import { API_BASE } from '../utils/apiBase'
 import type { Task, TaskCreateBody, TaskRun, TaskDep, TaskLink, FieldMap, TaskPrecheckResult } from './types'
 
 // 任务 API：负责任务的 CRUD 与运行控制
@@ -178,8 +179,9 @@ export const taskLinkApi = {
     onProgress?: (data: LiveProgress) => void,
   ): Promise<{ items: TaskLink[]; session_expired?: boolean; field_map?: FieldMap; filter_summary?: LiveFilterSummary }> => {
     const token = localStorage.getItem('xh_token')
-    return fetch(`/api/tasks/${taskId}/links/live`, {
+    return fetch(`${API_BASE}api/tasks/${taskId}/links/live`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: 'include',
     }).then(async (response) => {
       // 前置检查失败（HTTP 错误码），按 axios 兼容格式抛出
       if (!response.ok) {

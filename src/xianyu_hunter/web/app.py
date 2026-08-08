@@ -541,7 +541,11 @@ def create_app() -> FastAPI:
 
     # 自定义 Swagger UI 页面：在顶部导航栏注入「帮助文档」入口按钮
     # docs_url=None 禁用默认 docs，由本路由提供含帮助入口的增强版 Swagger UI
+    # 同时注册 /xianyu/api/docs：域名模式反代透传全路径（no-strip）时，
+    # 前端 API 链接统一带 /xianyu 前缀，否则会落到 SPA catch-all 返回 index.html。
+    # 与 API_ROUTERS 双挂载保持同一套「根路径 + /xianyu 命名空间」语义。
     @app.get("/api/docs", include_in_schema=False)
+    @app.get("/xianyu/api/docs", include_in_schema=False)
     async def custom_docs() -> HTMLResponse:
         return HTMLResponse(_SWAGGER_UI_HTML)
 
@@ -550,46 +554,54 @@ def create_app() -> FastAPI:
     # 必须在所有 /api/* 路由之后注册，否则会拦截 API 请求
     spa_dir = static_dir / "spa"
 
-    # 路由
-    app.include_router(api_tasks.router)
-    app.include_router(api_task_deps.router)  # F-16：任务依赖关系
-    app.include_router(api_task_links.router)
-    # api_task_links 暴露两个 APIRouter：主路由挂在 /api/tasks，反查路由挂在 /api/tasks/links
-    app.include_router(api_task_links._links_lookup)
-    app.include_router(api_config.router)
-    app.include_router(api_stats.router)
-    app.include_router(api_logs.router)
-    app.include_router(api_orders.router)
-    app.include_router(api_evaluations.router)
-    app.include_router(api_auth.router)
-    app.include_router(api_accounts.router)  # 多账号管理：/api/auth/accounts 列表/切换/退出
-    app.include_router(api_about.router)  # 关于菜单：版本信息 + 检查更新
-    app.include_router(api_anticrawl.router)  # 反爬登录管理：策略/会话/健康/Cookie 分层
-    app.include_router(api_notifications.router)
-    app.include_router(api_items.router)  # P3-UX-02：商品 summary 批量接口（抢单记录列表）
-    app.include_router(api_ai.router)  # F-01：AI 自然语言建任务（OpenAI 兼容 + 规则 fallback）
-    app.include_router(api_ai_deep.router)  # P1-4：AI 深度多模态分析增强
-    app.include_router(api_accounts_proxies.router)  # P1-2：多账号轮换 + 代理池
-    app.include_router(api_notifier.router)  # P3-F-10：免打扰时段配置 API
-    app.include_router(api_templates.router)  # F-11：模板市场（预置 + 私有模板）
-    app.include_router(api_export.router)  # P1-5：数据导出（CSV）
-    app.include_router(api_prompts.router)  # P1-8：Prompt 在线编辑器
-    app.include_router(api_cron.router)  # P1-7：Cron 表达式校验
-    app.include_router(api_param_calculator.router)  # 参数计算器：任务/配置参数校验
-    app.include_router(price_dashboard.router)  # P1-6：价格行情看板增强
-    app.include_router(api_maintenance.router)  # 系统维护：缓存/数据库/日志清理
-    app.include_router(api_db_admin.router)  # 系统维护 → 数据库维护：业务表在线 CRUD
-    app.include_router(api_vector_admin.router)  # 系统维护 → 向量数据库维护：ChromaDB 快照/清理/监控
-    app.include_router(api_error_logs.router)  # 后台错误日志：异常捕获 + AI 诊断上下文
-    app.include_router(api_batch_refresh.router)  # 批量采集调度器：定时刷新在售商品详情
-    app.include_router(api_tunnel.router)  # 内网穿透：一键远程访问
-    app.include_router(api_menu.router)  # 用户级菜单可见性/排序：/api/menu GET/PUT + /api/menu/reset
-    # 智能客服模块路由：api_chatbot（会话/消息/SSE/反馈）、api_kb（知识库版本/重建）、api_chatbot_config（热更新配置）
-    # 为什么放在最后：chatbot 为可选模块，容器构造时若依赖缺失返回 None，
-    # 路由内通过 get_container().chatbot 判空返回 503，不影响主系统路由注册
-    app.include_router(api_chatbot.router)
-    app.include_router(api_kb.router)
-    app.include_router(api_chatbot_config.router)
+    # ===== API 路由表（单一数据源）=====
+    # 以 (模块, router 属性名) 列表集中描述，循环两次挂载：
+    #   1) 根路径 /api/*    —— 打包模式 localhost、以及代理剥离 /xianyu 前缀的域名模式
+    #   2) /xianyu/api/*    —— 代理透传全路径的域名模式
+    # 两份挂载共用同一组 router 对象，避免根挂载与 /xianyu 挂载列表分两处维护导致漂移。
+    # Swagger 分组顺序由 _OPENAPI_TAGS 决定，与列表顺序无关；chatbot 模块虽放列表中部，
+    # 但其路由内部对依赖缺失判空返回 503，不影响主系统（原注释已说明其可选性）。
+    API_ROUTERS: list[tuple[Any, str]] = [
+        (api_tasks, "router"),               # tasks：任务 CRUD 与调度
+        (api_task_deps, "router"),           # task-deps：任务依赖 DAG
+        (api_task_links, "router"),          # task-links：任务关联（主路由 /api/tasks）
+        (api_task_links, "_links_lookup"),   # task-links：反查路由（独立 APIRouter 对象，挂在 /api/tasks/links）
+        (api_config, "router"),              # config：全局配置
+        (api_stats, "router"),               # stats：聚合统计
+        (api_logs, "router"),                # logs：实时日志
+        (api_orders, "router"),              # orders：抢单记录
+        (api_evaluations, "router"),         # evaluations：卖家评估
+        (api_auth, "router"),                # auth：认证与登录
+        (api_accounts, "router"),            # accounts：多账号管理
+        (api_about, "router"),               # about：版本信息 + 检查更新
+        (api_anticrawl, "router"),           # anticrawl：反爬登录管理
+        (api_notifications, "router"),       # notifications：通知中心
+        (api_items, "router"),               # items：商品数据
+        (api_ai, "router"),                  # ai：自然语言建任务
+        (api_ai_deep, "router"),             # ai-deep：深度多模态分析
+        (api_accounts_proxies, "router"),    # accounts-proxies：多账号 + 代理池
+        (api_notifier, "router"),            # notifier：通知渠道
+        (api_templates, "router"),           # templates：模板市场
+        (api_export, "router"),              # export：数据导出
+        (api_prompts, "router"),             # prompts：Prompt 编辑器
+        (api_cron, "router"),                # cron：Cron 校验
+        (api_param_calculator, "router"),    # param-calculator：参数计算器
+        (price_dashboard, "router"),         # price-dashboard：价格行情看板
+        (api_maintenance, "router"),         # maintenance：系统清理
+        (api_db_admin, "router"),            # db-admin：数据库维护
+        (api_vector_admin, "router"),        # vector-admin：向量库维护
+        (api_error_logs, "router"),          # error-logs：后台错误日志
+        (api_batch_refresh, "router"),       # batch-refresh：批量采集
+        (api_tunnel, "router"),              # tunnel：内网穿透
+        (api_menu, "router"),                # menu：用户级菜单配置
+        (api_chatbot, "router"),             # chatbot：智能客服会话/消息/SSE
+        (api_kb, "router"),                  # chatbot-kb：知识库
+        (api_chatbot_config, "router"),      # chatbot-config：客服配置
+    ]
+    for _mod, _attr in API_ROUTERS:
+        _router = getattr(_mod, _attr)
+        app.include_router(_router)                    # /api/*
+        app.include_router(_router, prefix="/xianyu")  # /xianyu/api/*
 
     @app.get("/healthz", tags=["meta"])
     def healthz() -> JSONResponse:
@@ -677,7 +689,9 @@ _SPA_LOGIN_OVERLAY = """<style>
   var overlay=document.getElementById('xh-login-overlay');
   if(!overlay)return;
   // 检查登录状态：/api/auth/me 在白名单中，无需 token 即可调用
-  fetch('/api/auth/me',{credentials:'include'}).then(function(r){return r.json()}).then(function(data){
+  // 前端以 /xianyu/ 子路径部署，API 必须带前缀；按当前 pathname 推导 base
+  var _xyBase = (window.location.pathname.indexOf('/xianyu/') === 0) ? '/xianyu' : '';
+  fetch(_xyBase + '/api/auth/me',{credentials:'include'}).then(function(r){return r.json()}).then(function(data){
     if(!data||!data.logged_in){
       overlay.style.display='flex';
       document.body.style.overflow='hidden';

@@ -15,14 +15,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 # 不需要认证的路径前缀
 # SPA 页面本身免认证（API 调用仍需 token）；认证相关接口免认证（否则登录流程无法启动）；
-# SSE 流免认证（未登录时返回空流）；通知接口免认证（供外部回调调用）
+# SSE 流免认证（未登录时返回空流）；通知接口免认证（供外部回调调用）。
+#
+# ⚠️ 域名模式（/xianyu 子路径）：鉴权在 dispatch 中把 /xianyu 命名空间前缀归一化掉，
+#    /xianyu/api/X -> /api/X、/xianyu/login -> /login，使本白名单与 401 逻辑对
+#    /api 与 /xianyu/api 完全复用。因此此处【不再】保留 blanket "/xianyu/"，
+#    否则会让 /xianyu/api/* 全部免认证而扩大暴露面（见 P1 安全观察）。
 PUBLIC_PREFIXES = (
     "/static/", "/healthz",
-    "/xianyu/",                  # SPA 可视化控制台页面（API 调用仍需 token）
     "/api/auth/login", "/api/auth/verify",
     "/api/auth/cookie",          # 手动 Cookie 注入（未登录时也需要调用）
     "/api/auth/me",              # 登录状态检测（未登录时返回 logged_in=false）
-    "/api/auth/restore-session",  # ???????????????????
+    "/api/auth/restore-session",  # 会话恢复（免登录即可触发首启动重建会话）
     "/api/auth/verify-session",  # 会话有效性验证
     "/api/auth/import-from-browser",  # 从系统浏览器导入 Cookie（未登录时也需要调用）
     "/api/auth/browser-login",   # Playwright 浏览器登录（推荐方式）
@@ -77,13 +81,25 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         return None
 
     async def dispatch(self, request: Request, call_next):
-        # 公开路径直接放行
+        path = request.url.path
+        # 域名模式归一化：前端以 /xianyu/ 子路径部署，API 经 /xianyu/api/ 透传后端。
+        # 剥离命名空间前缀后 /api/* 与 /xianyu/api/* 走同一套白名单与 401 逻辑，
+        # 既避免双份维护，也防止 /xianyu/api/* 被 blanket 放行而免认证面扩大。
+        #   /xianyu/        -> /          （SPA 根，按根路径放行）
+        #   /xianyu/login   -> /login     （SPA 页面，非 API，无 token 也放行）
+        #   /xianyu/api/me  -> /api/me    （API，沿用 /api 白名单与 401 逻辑）
+        if path.startswith("/xianyu"):
+            norm_path = path[7:] or "/"
+        else:
+            norm_path = path
+
+        # 公开路径直接放行（已归一化）
         for prefix in PUBLIC_PREFIXES:
-            if request.url.path.startswith(prefix):
+            if norm_path.startswith(prefix):
                 return await call_next(request)
 
         # 根路径放行（前端会处理认证跳转）
-        if request.url.path == "/":
+        if norm_path == "/":
             return await call_next(request)
 
         from xianyu_hunter.config import get_settings
@@ -93,7 +109,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         candidate_tokens = self._extract_candidate_tokens(request)
 
         if not candidate_tokens:
-            if request.url.path.startswith("/api/"):
+            if norm_path.startswith("/api/"):
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
             return await call_next(request)
 
@@ -113,9 +129,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
         # 路径 3：校验失败
         logger.debug(
-            f"[Auth] path={request.url.path} has_cookie={'xh_token' in request.cookies} web_token_match=False session_invalid=True",
+            f"[Auth] path={norm_path} has_cookie={'xh_token' in request.cookies} web_token_match=False session_invalid=True",
         )
-        if request.url.path.startswith("/api/"):
+        if norm_path.startswith("/api/"):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
         return await call_next(request)
 

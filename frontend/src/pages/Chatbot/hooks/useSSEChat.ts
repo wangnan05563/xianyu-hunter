@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from 'react'
 import { message } from 'antd'
 import type { SSEEvent } from '../types'
+import { API_BASE } from '../../../utils/apiBase'
 
 interface UseSSEChatOptions {
   sessionId: string
@@ -91,7 +92,7 @@ export function useSSEChat() {
       try {
         // 认证：cookie 为主（withCredentials），Authorization header 为辅（兼容）
         const token = localStorage.getItem('xh_token')
-        const resp = await fetch('/api/chatbot/chat', {
+        const resp = await fetch(`${API_BASE}api/chatbot/chat`, {
           method: 'POST',
           credentials: 'include',
           headers: buildChatHeaders(token),

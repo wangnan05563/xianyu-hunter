@@ -394,15 +394,15 @@ def _finalize_multi_user_login() -> str | None:
         # 将 Cookie 从 default 迁移到 user_id 维度的独立文件
         store.export_cookies(cookies, method="login", user_id=user_id)
 
-        # ?? default ?????remote URL ???? xh_token cookie?
-        # /api/auth/me ? /api/auth/cookie/health ???? default ?????
-        # ??????????? no_cookie_data??????????
-        # ????????? xh_token ?????default ????????
+        # 同时写入 default：远程 URL 不带 user_id，需 xh_token cookie 兜底
+        # /api/auth/me 与 /api/auth/cookie/health 仍读取 default 维度
+        # 写入失败（如 no_cookie_data）仅告警，不影响主登录流程
+        # 双重保险：保证 xh_token 在 default 维度始终可用
         try:
             store.export_cookies(cookies, method="login", user_id="default")
             store.invalidate_cache("default")
         except OSError as e:
-            logger.warning("?? default Cookie ????: %s", e)
+            logger.warning("写入 default Cookie 失败: %s", e)
 
         with _session_lock:
             _session["session_token"] = session_token

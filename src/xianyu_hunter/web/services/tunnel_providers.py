@@ -978,8 +978,12 @@ class TailscaleProvider(TunnelProvider):
         # 路径区分模式：不调用 funnel off，避免关闭其他应用的 Funnel 路径
         # Tailscale 无移除单个路径的命令，停止后路径配置保留（访问会连接失败），
         # 重新启动应用后 --set-path 幂等更新配置自动恢复
+        #
+        # 同时清除 _binary_path：让 status 属性走短路返回 "stopped"，
+        # 避免查询 tailscale funnel status --json 时因 Funnel 仍活跃而返回 "running"。
         if self._path_prefix:
             self._public_url = None
+            self._binary_path = None
             logger.info(f"[tailscale] 路径区分模式：保留 Funnel 配置 {self._path_prefix}")
             return
 

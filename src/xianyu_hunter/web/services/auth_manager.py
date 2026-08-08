@@ -29,11 +29,28 @@ logger = logging.getLogger(__name__)
 from xianyu_hunter.paths import get_app_dir, get_data_dir
 _REPO = get_app_dir()
 _HELPER = _REPO / "scripts" / "auth_helper.py"
+# 打包模式子进程脚本分发标志：与 launcher.py 的 _SCRIPT_DISPATCH_FLAG 保持一致
+# 为什么需要：打包后 sys.executable 是 xianyu-hunter.exe，不能直接传脚本路径，
+# 必须通过 --xh-run-script 标志告诉 launcher 运行内部脚本。
+# 与 unified_login.py 的 _build_script_subprocess_command 逻辑一致。
+_PACKAGED_SCRIPT_FLAG = "--xh-run-script"
 _OUT_DIR = get_data_dir() / "auth_cache"
 # status.json 文件名：_STATUS_FILE 路径、_set_status_file 写入、start_qr_login 清理复用
 _STATUS_JSON_FILENAME = "status.json"
 _USERINFO_FILE = _OUT_DIR / "userinfo.json"
 _STATUS_FILE = _OUT_DIR / _STATUS_JSON_FILENAME
+
+
+def _build_script_command(script_path: Path, *args: str) -> list[str]:
+    """构建子进程脚本命令：开发模式直接传脚本路径，打包模式通过 --xh-run-script 分发
+
+    为什么需要此函数：与 unified_login.py 的 _build_script_subprocess_command 逻辑一致。
+    打包后 sys.executable 指向 xianyu-hunter.exe，不能直接传脚本路径作为参数，
+    launcher.py 的 _dispatch_helper_script 要求 argv[1] 必须是 --xh-run-script。
+    """
+    if getattr(sys, "frozen", False):
+        return [sys.executable, _PACKAGED_SCRIPT_FLAG, script_path.stem, *args]
+    return [sys.executable, str(script_path), *args]
 
 
 @dataclass
@@ -151,8 +168,9 @@ class AuthManager:
 
     def _refresh_userinfo_sync(self) -> None:
         try:
+            cmd = _build_script_command(_HELPER, "info", "--out-dir", str(_OUT_DIR))
             proc = subprocess.run(
-                [sys.executable, str(_HELPER), "info", "--out-dir", str(_OUT_DIR)],
+                cmd,
                 timeout=60,
                 capture_output=True,
             )
@@ -209,8 +227,11 @@ class AuthManager:
 
     def _launch_qr_subprocess(self, timeout: int) -> None:
         try:
+            cmd = _build_script_command(
+                _HELPER, "qr", "--out-dir", str(_OUT_DIR), "--timeout", str(timeout),
+            )
             self._qr_proc = subprocess.Popen(
-                [sys.executable, str(_HELPER), "qr", "--out-dir", str(_OUT_DIR), "--timeout", str(timeout)],
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 # Windows 下 CREATE_NEW_PROCESS_GROUP 便于 cancel
