@@ -127,7 +127,7 @@ def switch_account(body: SwitchAccountBody, request: Request) -> Any:
         "avatar_url": target.get("avatar_url", ""),
         "session_set": True,
     }
-    return make_auth_response(result, session_token=token)
+    return make_auth_response(result, session_token=token, request=request)
 
 
 @router.post("/logout")

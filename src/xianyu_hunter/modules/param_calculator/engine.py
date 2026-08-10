@@ -105,8 +105,6 @@ class ParamCalculatorEngine:
                 suggestions = rule.check(context)
                 all_suggestions.extend(suggestions)
             except Exception:
-                # 单条规则异常不影响其他规则：记录但不阻断
-                # 为什么不抛出：参数校验是辅助功能，不应阻断主流程
                 import logging
                 logging.getLogger(__name__).warning(
                     "param_calculator_rule_failed code=%s",

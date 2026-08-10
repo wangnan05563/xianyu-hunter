@@ -1,7 +1,3 @@
-"""系统配置规则集
-
-校验跨段配置的一致性与资源占用，预防系统级问题。
-"""
 from __future__ import annotations
 
 from xianyu_hunter.domain.param_calculator import (

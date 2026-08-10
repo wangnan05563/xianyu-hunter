@@ -1424,14 +1424,55 @@ class SearchMixin:
         超时时间从 1.0s 提升到 2.5s：实测 1s 在高频搜索场景下频繁超时（40 次/日），
         route handler 内部如有待处理请求需等待 Playwright 内部队列，2.5s 可覆盖
         95% 的正常清理场景，同时不至于阻塞搜索主流程
+
+        修复 TargetClosedError "Future exception was never retrieved"：
+        当页面/上下文/浏览器已被关闭（调度器 close_all_pages 或浏览器重启
+        ensure_alive→close）时，page.unroute 会等待仍在飞行的 route handler
+        （route.fetch 正在等响应）。wait_for 超时取消内层 unroute 会连带取消
+        route 的内部响应 future，使其带上 TargetClosedError 且无人取回，从而产生
+        该告警。故做两件事：
+        (1) 关闭状态下直接跳过 unroute（无需也无法解除，避免超时与孤儿 future）；
+        (2) 存活状态下用 asyncio.shield 包裹 unroute，超时只取消外层等待而非内部
+            unroute task，让其后台自然结束并用 done_callback 取回异常，避免告警。
         """
+        # (1) 页面/上下文/浏览器已关闭：无需也无法 unroute，直接返回
         try:
-            await asyncio.wait_for(page.unroute(route_pattern, handler), timeout=2.5)
+            if page is None:
+                return
+            if getattr(page, "is_closed", None) and page.is_closed():
+                logger.debug("page 已关闭，跳过 unroute（避免 TargetClosedError）")
+                return
+            ctx = getattr(page, "context", None)
+            if ctx is not None and getattr(ctx, "is_closed", None) and ctx.is_closed():
+                logger.debug("context 已关闭，跳过 unroute（避免 TargetClosedError）")
+                return
+            browser = getattr(ctx, "browser", None) if ctx is not None else None
+            if (
+                browser is not None
+                and getattr(browser, "is_connected", None)
+                and not browser.is_connected()
+            ):
+                logger.debug("browser 已断开，跳过 unroute（避免 TargetClosedError）")
+                return
+        except Exception:
+            # 状态探测本身异常（连接已死）也视为已关闭，走下方兜底
+            pass
+
+        # (2) 存活状态下解除路由；shield 包裹，超时只取消外层等待而非内部 unroute，
+        #     避免取消 route 的内部响应 future 产生 "never retrieved" 告警
+        unroute_task = asyncio.ensure_future(page.unroute(route_pattern, handler))
+        try:
+            await asyncio.wait_for(asyncio.shield(unroute_task), timeout=2.5)
             logger.info("page.unroute 完成")
         except asyncio.TimeoutError:
-            logger.warning("page.unroute 超时，可能影响后续 DOM 解析")
-        except Exception as e:
-            logger.warning("page.unroute 异常: {}", str(e)[:80])
+            # 后台继续清理；注册 done_callback 取回可能的异常，抑制 asyncio 告警
+            unroute_task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() else None
+            )
+            logger.warning("page.unroute 超时（后台继续清理，不影响 DOM 解析）")
+        except Exception as e:  # TargetClosedError / Error 等并发关闭兜底
+            # 即使状态探测通过，unroute 时页面又被并发关闭，直接忽略
+            logger.debug("page.unroute 异常(忽略): {}", str(e)[:80])
 
     async def _parse_captured_responses(
         self, page: Page, captured_responses: list[dict],

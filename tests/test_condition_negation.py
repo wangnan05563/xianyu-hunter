@@ -26,35 +26,35 @@ def test_is_negated_by_wu() -> None:
     """'无'修饰关键词时识别为否定"""
     text = "无划痕磕碰"
     # "磕碰"位置在 3，前缀"无划痕"包含"无"
-    assert _is_negated(text, "磕碰", 3) is True
+    assert _is_negated(text, 3) is True
 
 
 def test_is_negated_by_meiyou() -> None:
     """'没有'修饰关键词时识别为否定"""
     text = "没有划痕和磕碰"
     # "磕碰"位置在 5，前缀"没有划痕和"包含"没有"
-    assert _is_negated(text, "磕碰", 5) is True
+    assert _is_negated(text, 5) is True
 
 
 def test_is_negated_by_buhan() -> None:
     """'不含'修饰关键词时识别为否定"""
     text = "不含老化配件"
     # "老化"位置在 2，前缀"不含"包含"不含"
-    assert _is_negated(text, "老化", 2) is True
+    assert _is_negated(text, 2) is True
 
 
 def test_is_negated_by_weijian() -> None:
     """'未见'修饰关键词时识别为否定"""
     text = "未见维修痕迹"
     # "维修"位置在 2，前缀"未见"包含"未见"
-    assert _is_negated(text, "维修", 2) is True
+    assert _is_negated(text, 2) is True
 
 
 def test_is_negated_false_when_no_negation() -> None:
     """无否定词修饰时不识别为否定"""
     text = "商品有明显划痕"
     # "划痕"位置在 5，前缀"商品有明显"无否定词
-    assert _is_negated(text, "划痕", 5) is False
+    assert _is_negated(text, 5) is False
 
 
 def test_is_negated_false_when_punct_breaks() -> None:
@@ -62,7 +62,7 @@ def test_is_negated_false_when_punct_breaks() -> None:
     text = "无划痕、磕碰"
     # "磕碰"位置在 4，前缀"无划痕、"中"、"是断句标点
     # 标点之后无否定词，"磕碰"未被否定
-    assert _is_negated(text, "磕碰", 4) is False
+    assert _is_negated(text, 4) is False
 
 
 def test_is_negated_false_when_punct_comma_breaks() -> None:
@@ -70,7 +70,7 @@ def test_is_negated_false_when_punct_comma_breaks() -> None:
     text = "无划痕，有磕碰"
     # "磕碰"位置在 5，前缀"无划痕，有"中"，"是断句标点
     # 标点之后是"有"，无否定词
-    assert _is_negated(text, "磕碰", 5) is False
+    assert _is_negated(text, 5) is False
 
 
 def test_is_negated_with_window_boundary() -> None:
@@ -78,7 +78,7 @@ def test_is_negated_with_window_boundary() -> None:
     # "没有"在位置 0，"磕碰"在位置 10，窗口刚好覆盖
     text = "没有任何划痕和磕碰"
     pos = text.find("磕碰")
-    assert _is_negated(text, "磕碰", pos) is True
+    assert _is_negated(text, pos) is True
 
 
 # ==== _scan_condition_keywords 集成测试 ====

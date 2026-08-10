@@ -1,0 +1,392 @@
+# XianyuHunter 主配置模板
+#
+# 使用方式：
+#   copy config\config.example.yaml config\config.yaml
+#   然后按需修改 config.yaml
+#
+# 说明：
+# - config.yaml 为实际运行配置（可被 Web UI 修改并自动备份到 config/backups/）
+# - 本模板包含全部配置项及默认值，供新部署参考
+# - 敏感字段（推送 Key）请通过 .env 或 keyring 配置，不写入此文件
+
+server:
+  host: 127.0.0.1        # Web 服务监听地址
+  port: 8001             # Web 服务端口
+
+browser:
+  headless: true         # 无头模式（生产建议 true；调试时 false 可见浏览器）
+  user_data_dir: ./browser-data  # 浏览器用户数据目录（登录态持久化）
+  viewport_width: 1024
+  viewport_height: 768
+  user_agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
+    like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0
+  # 浏览器代理服务器配置
+  # - 留空（默认）：禁用系统代理，避免 Clash/V2Ray 等代理软件未运行时
+  #   触发 ERR_PROXY_CONNECTION_FAILED（闲鱼为国内站点，无需代理）
+  # - 海外部署需代理访问闲鱼时配置，示例：socks5://127.0.0.1:7890 或 http://127.0.0.1:7890
+  proxy_server: ""
+  # Cookie 定时自动同步（详见 docs/plans/2026-06-25-browser-cookie-import-enhancement-design.md）
+  auto_sync: false                    # 默认关闭，需显式启用
+  auto_sync_interval: 30              # 同步间隔（分钟）
+  auto_sync_expiry_threshold: 10      # Cookie 剩余有效期阈值（分钟），低于此值触发同步
+  cdp_port: 9222                      # CDP 调试端口
+
+# 反检测策略：控制请求频率与行为模拟
+antidetect:
+  qps: 6                       # 全局每秒请求上限
+  min_delay_ms: 10000          # 页面操作最小间隔（毫秒）
+  max_delay_ms: 15000          # 页面操作最大间隔（毫秒）
+  fail_pause_threshold: 3      # 连续失败 N 次触发熔断
+  fail_window_sec: 3600        # 失败计数窗口（秒）
+
+# WAF 风控检测
+waf:
+  enabled: true                       # 启用 WAF 检测
+  login_check_interval_min: 30        # 登录态检查间隔（分钟）
+
+# 推送通知配置
+notifier:
+  default_channels: [serverchan, pushplus, bark]  # 默认推送渠道
+  channels:
+    serverchan: true    # Server 酱（需配置 SERVERCHAN_KEY）
+    pushplus: true       # PushPlus（需配置 PUSHPLUS_TOKEN）
+    bark: true           # Bark（需配置 BARK_KEY）
+    telegram: false      # Telegram Bot（需配置 TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID）
+    wecom: false         # 企业微信机器人（需配置 WECOM_WEBHOOK_URL）
+    dingtalk: false      # 钉钉机器人（需配置 DINGTALK_WEBHOOK_URL + DINGTALK_SECRET）
+    webhook: false       # 自定义 Webhook（需配置 WEBHOOK_URL + WEBHOOK_TOKEN）
+    ntfy: false          # ntfy 跨平台推送（需配置 NTFY_TOPIC，可选 NTFY_SERVER/NTFY_TOKEN）
+
+  # 免打扰时段
+  quiet_hours:
+    enabled: false       # 总开关
+    start: '23:00'       # 开始时间（24h 制）
+    end: 07:00           # 结束时间（支持跨午夜）
+    critical_only: true  # 免打扰时段仅推送 critical 级别事件
+    weekend_only: false  # 仅周末启用免打扰
+
+  # 事件订阅：勾选的事件类型才会推送
+  subscribed_events:
+    - EVAL_PASSED
+    - BUY_SUCCEEDED
+    - TASK_STARTED
+    - TASK_PAUSED
+    - EVAL_REJECTED
+    - BUY_FAILED
+    - ITEM_DISCOVERED
+    - BUY_REQUESTED
+    - WAF_TRIGGERED
+    - LOGIN_EXPIRED
+    - TASK_ERROR
+
+# 以下字段为兼容旧配置保留，实际 Key 从 .env / keyring 读取
+serverchan_send_key: ''
+pushplus_token: ''
+bark_server: ''
+bark_key: ''
+ntfy_server: ''        # ntfy 服务器地址（默认 https://ntfy.sh，可自托管）
+ntfy_topic: ''          # ntfy topic（必填，建议使用不易被猜到的字符串）
+ntfy_token: ''          # ntfy 鉴权 token（可选，自托管或公共实例私有 topic 需要）
+
+# 搜索参数
+search:
+  page_size: 20          # 单次搜索返回条目数
+  sort_type: default      # 排序：default/newest/price_asc/price_desc/want_count
+  timeout: 60             # 搜索超时（秒）
+  regions: ''             # 地区过滤（逗号分隔，空=全国）
+  filter_tags: []         # 闲鱼筛选标签
+
+# 价格策略（4 种独立开关）
+price_strategy:
+  enabled_max: true       # 启用价格上限
+  max_price: 800           # 最高可接受价格
+  enabled_min: true       # 启用价格下限（防 1 元引流）
+  min_price: 100           # 最低价格
+  enabled_market_ratio: true  # 启用市场参考价比例
+  market_ratio: 0.8        # 低于市场参考价的比例阈值
+  enabled_top_n: true      # 启用同类低价 TopN
+  top_n: 5                 # 保留前 N 个低价商品
+
+# 批量采集调度器：定时刷新在售商品详情（检测已售状态、补全字段）
+batch_refresh:
+  enabled: true                # 总开关
+  interval_minutes: 30         # 定时触发间隔（分钟）
+  batch_size: 50               # 每批从 DB 拉取的最大商品数
+  max_items_per_run: 100       # 单次运行最多采集的商品数
+
+# 任务调度默认值：新建任务未指定时的兜底配置
+task_scheduler:
+  default_interval_seconds: 60      # 默认采集周期（秒），范围 30-3600，过短易触发反爬，过长错过抢单窗口
+  # 注意：此字段仅控制前端任务页"自动实时搜索"开关的初始默认值
+  # 后端调度器在服务启动时无条件 start_all()（startup.py:266），不受此字段控制
+  # 用户在页面切换开关后会持久化到 localStorage（xh.tasks.autoSearchEnabled），覆盖此默认值
+  auto_search_enabled: false
+  auto_search_concurrency: 1        # 前端自动搜索并发上限（保留字段，当前固定 1，未来需配合后端浏览器锁改造）
+  error_retry_wait_seconds: 300     # 单轮 run_once 异常后等待重试秒数（避免刷错误日志），范围 10-3600
+
+  # 调度器运行时开关对称性（meta-rule #48 / step 194）
+  # 防止 BatchRefreshScheduler 等调度器禁用后已注册 job 仍按 trigger 触发
+  scheduler_runtime_toggle:
+    enabled: true                       # 启用对称性检查（关闭后调度器违规仅记录 warning）
+    require_enabled_field: true         # 调度器类必须含 _enabled 字段
+    require_update_config_method: true  # 调度器类必须含 update_config(enabled) 方法
+    require_remove_job_on_disable: true # update_config(False) 必须调用 scheduler.remove_job()
+    target_schedulers:                  # 强制约束的目标调度器类名列表
+      - BatchRefreshScheduler
+      - CookieSyncScheduler
+
+  # 时间参数配置化（meta-rule #49 / step 196）
+  # 禁止 scheduler.py 等模块硬编码 time.sleep(300) / asyncio.sleep(300)
+  time_param_config_driven:
+    enabled: true
+    forbidden_hardcoded_patterns:       # 命中即视为违规（grep 扫描）
+      - "time.sleep(300)"
+      - "asyncio.sleep(300)"
+      - "await asyncio.sleep(300)"
+    require_config_key: true            # 时间参数必须有对应 config key，否则报警
+    scan_modules:                       # 扫描范围（相对 src/xianyu_hunter/）
+      - modules/scheduler.py
+      - modules/batch_refresh_scheduler.py
+      - modules/cookie_sync_scheduler.py
+
+  # 长生命周期对象状态清理（meta-rule #50 / step 197）
+  # 防止 _resume_cooldown 等字典在任务删除后内存泄漏
+  lifecycle_resource_cleanup:
+    enabled: true
+    require_drop_method: true           # 任务删除 API 必须调用 drop_task_state 等清理方法
+    target_state_holders:               # 必须支持清理的状态字段
+      - _resume_cooldown
+      - _task_states
+      - _active_tasks
+    audit_interval_seconds: 3600        # 定期审计间隔（默认 1 小时）
+
+  # 用户输入时间表达式校验（meta-rule #51 / step 195，实验性）
+  # 防止 cron 表达式过短导致后端被打满
+  cron_min_interval_check:
+    enabled: true
+    experimental: true                  # 实验性标签，1 季度观察期后转正
+    min_interval_seconds: 60            # 最小允许间隔（秒），默认 60 秒
+    blocked_patterns:                   # 直接拦截的 cron 表达式
+      - "* * * * *"
+      - "*/1 * * * *"
+    require_parser_library: true        # 必须用专业 cron 解析库（如 croniter）
+    require_submit_revalidate: true     # 提交时必须再次校验（防前端绕过）
+
+# 捡漏价格配置：控制捡漏价格的分位数基准
+bargain_price:
+  percentile: 0.10                  # 捡漏价格分位数（0~0.5），默认 P10
+                                   # 调高（如 0.20）让更多商品被判为可捡漏，调低（如 0.05）更严格
+                                   # 影响：评估列表"预估盈利"字段、任务的 notify_bargain_only/auto_buy_bargain_only 过滤
+
+# 评估配置：商品评估打分阈值与 AI 自动化开关
+eval:
+  weights:                          # 评估维度权重（和应为 100）
+    professional: 30                # 职业卖家维度权重
+    credit: 30                      # 信用维度权重
+    dispute: 25                     # 纠纷维度权重
+    price: 15                       # 价格维度权重
+  thresholds:                       # 评估阈值（任一命中视为风险）
+    on_sale_count: 30               # 在售商品数超过此值视为职业
+    post_count_30d: 15              # 近 30 天发帖数阈值
+    top_category_ratio: 0.8         # 主营类目占比阈值
+    credit_score_min: 600           # 信用分低于此值一票否决
+    bad_review_max: 3               # 差评数上限
+    register_days_min: 30           # 注册天数下限
+  professional_keywords:            # 职业卖家关键词命中列表
+    - 批发
+    - 代理
+    - 代购
+    - 大量
+    - 店铺
+    - 厂家
+    - 直发
+    - 一手
+  # 以下两个为预留字段，当前未在 EvalConfig 中定义，后续启用
+  filter_tags: []                   # 评估过滤标签列表
+  exclude_keywords: []              # 评估排除关键词列表
+  pass_score: 60                    # 通过分数（≥此值通过，范围 0-100）
+  auto_buy_score: 80                # 自动拍下分数（≥此值全自动拍下，须 ≥ pass_score）
+  ai_auto_eval: false               # 调度流程中自动调用 AI 评估（消耗 token）
+  ai_auto_deep_analyze: false       # 调度流程中自动深度分析（消耗更多 token）
+  # 自动官方采集：对通过 pass_score 的商品自动调用官方采集做深度验证
+  auto_collect_official: false
+  # 每轮 run_once 最多自动官方采集的商品数（避免拖慢 + 反爬）
+  auto_collect_max_per_run: 3
+  # 自动官方采集去重窗口（分钟）：同一商品在窗口内不被重复采集
+  # 默认 30 分钟，避免短时间内重复采集浪费配额
+  auto_collect_dedup_window_minutes: 30
+  # 自动官方采集失败退避阈值：连续失败达到此次数后暂停本轮自动采集
+  # 默认 3 次，避免连续失败浪费配额；通过 notifier 发送告警
+  auto_collect_fail_pause_threshold: 3
+  # AI 多轮优化建议：累积 N 轮后调用 LLM 生成自然语言优化建议
+  ai_multi_run_suggestion: false
+  # 每隔多少轮生成一次 AI 建议（太小浪费 token，太大反馈滞后）
+  ai_suggestion_interval: 5
+
+# ============== Cookie 自愈体系 ==============
+# 设计文档：docs/plans/cookie-self-healing-optimization.md
+# 75 个 cookie 齐全时各类问题大幅度减少，本节统一管理 cookie 三层架构、
+# 续期、跨进程同步等关键参数，替代散落在 cookie_rotator / cookie_store /
+# token_renewer / login_orchestrator / _search / browser_import / cookie_inject
+# 等模块的硬编码常量，避免名单漂移导致 cookie 丢失。
+
+# Cookie 管理统一配置（聚合 cookie_store / cookie_rotator / browser_import / cookie_inject）
+cookie_management:
+  # 关键 Cookie 名单：用于 JSON 持久化时的关键字段过滤
+  key_cookies:
+    - _m_h5_tk          # MTOP 会话 token（核心，TTL 15-22min）
+    - _m_h5_tk_enc      # MTOP 会话 token 加密版
+    - unb               # 用户唯一标识
+    - sgcookie          # 安全 cookie
+    - cookie2           # 登录态 cookie
+    - lg2               # 登录态保留 cookie
+  # CookieStore 内存缓存 TTL（秒）
+  cache_ttl_sec: 30.0
+  # 测试用 Cookie 值：用于过滤无效的占位符值（避免测试数据被当作有效 cookie）
+  test_cookie_values:
+    unb: ["123456", "123"]
+    cookie2: ["abc"]
+    _m_h5_tk: ["abc"]
+    _m_h5_tk_enc: ["enc", "enc_123", "abc123enc456"]
+    sgcookie: ["sg", "sg_token"]
+  # Cookie 格式正则（字符串形式，运行时编译为 re.Pattern）
+  cookie_format_patterns:
+    _m_h5_tk: '^[0-9a-fA-F]{32}_\d{13}$'      # 32 位 hex + 13 位时间戳
+    unb: '^\d{8,}$'                              # 至少 8 位数字
+    cookie2: '^[0-9a-fA-F]{32,}$'               # 至少 32 位 hex
+    sgcookie: '^.{20,}$'                         # 至少 20 字符
+    _m_h5_tk_enc: '^.{16,}$'                     # 至少 16 字符
+  # 三层架构定义：层间依赖决定恢复顺序
+  # identity 失效需重登录 / session 失效可续期 / tracking 失效可重建
+  layer_definitions:
+    identity:
+      cookies: [unb, cookie2, sgcookie, t, _tb_token_, lg2]
+      ttl: session              # 随浏览器会话
+      depends_on: null          # 无依赖
+    session:
+      cookies: [_m_h5_tk, _m_h5_tk_enc]
+      ttl: 15-22min             # MTOP token TTL
+      depends_on: identity      # 依赖身份层
+    tracking:
+      cookies: [cna, tfstk, xlly_s, ali_aplus_v3, utdid]
+      ttl: dynamic              # 动态更新
+      depends_on: null          # 无依赖
+  # Cookie 写入的目标域名（必须同时包含 .xxx.com 与 xxx.com 两种形式）
+  domains:
+    - .goofish.com
+    - goofish.com
+    - .taobao.com
+    - taobao.com
+    - .alipay.com
+    - alipay.com
+    - login.taobao.com
+    - .login.taobao.com
+  # browser_import 是否全量导入：true=保留所有 75+ cookie（推荐）
+  # false=仅导入 key_cookies 白名单（会丢失 68 个 cookie，不推荐）
+  import_full: true
+
+# Token 续期器配置（_m_h5_tk 主动续期）
+token_renewer:
+  renew_before_expiry_sec: 600     # 提前多少秒续期（避免临到期才触发失败）
+  check_interval_sec: 120          # 检查间隔（秒）
+  token_ttl_sec: 1200              # Token 预估 TTL（秒）
+  max_renew_attempts: 3            # 最大续期尝试次数（超过触发重登录）
+  retry_interval_sec: 30           # 续期失败后的重试间隔
+  # 续期调用的 MTOP API 名：getTimestamp 轻量且无需业务参数
+  timestamp_api: mtop.taobao.mtop.common.getTimestamp
+
+# 登录协调器配置
+login_orchestrator:
+  renew_fail_threshold: 2          # 续期失败 N 次触发自动重登录
+  auto_relogin_cooldown_sec: 600   # 自动重登录冷却（秒），防止反复弹登录框
+
+# MTOP 响应 Set-Cookie 回写同步配置
+mtop_sync:
+  # 触发 JSON 回写的关键 cookie 名单（默认与 cookie_management.key_cookies 一致）
+  key_cookie_names:
+    - _m_h5_tk
+    - _m_h5_tk_enc
+    - unb
+    - sgcookie
+    - cookie2
+    - lg2
+  # 是否启用节流（推荐 true：高频搜索时大幅减少 sync 调用次数）
+  throttle_enabled: true
+  # 节流间隔（秒）：同一 cookie 名在间隔内只触发一次 sync
+  throttle_interval_sec: 5.0
+
+# 子进程 Cookie 同步配置
+# 子进程（auth_helper.py / browser_login.py）无法访问主进程单例，
+# 采用"文件信号 + 主进程轮询"方案触发 sync_cookie_layers_from_json
+subprocess_sync:
+  # pending 标记文件路径（子进程写入，主进程读取后删除）
+  pending_file_path: data/.cookie_sync_pending
+  # 主进程轮询间隔（秒）
+  poll_interval_sec: 30
+  # 启动时是否立即检查 pending 标记（处理上次未消费的信号）
+  startup_check_enabled: true
+
+# ============== 状态恢复与日志规范（meta-rules #31/#32 落地）==============
+# 设计文档：docs/standards/四维度复盘方法论与历史教训集成.md
+# 这里的参数是项目代码运行时读取的配置契约，对应 meta-rule #31（状态恢复前置校验）
+# 与 #32（多阶段降级链日志合并）。审查规则参数见
+# .trae/skills/xianyu-backend-code-review/config.yaml#coding_standards.resume_policy
+# 与 log_merge 节点（含 reason_precheck_map 函数路径映射、forbidden_warning_keywords 等）。
+
+# resume 前置校验：异常 pause 后恢复任务前必须校验根因消除（meta-rule #31）
+# 适用：任务调度器 pause/resume、登录会话失效/恢复、断路器开/闭、限流配额恢复
+# 不适用：用户主动 pause（无 root_cause）、一次性任务、纯函数重试
+resume_policy:
+  enabled: true                       # 总开关（false 时仅做冷却期检查，跳过 precheck）
+  cooldown_seconds: 30                # 异常 pause 后冷却期时长（秒），冷却期内拒绝 resume
+  cooldown_default: 30                # 任务/会话无 root_cause 时使用的兜底冷却期
+  require_structured_response: true   # 校验失败时必须返回结构化响应
+  clear_root_cause_on_resume: true    # resume 成功后是否清除 root_cause（避免下次恢复误判）
+  # root_cause 持久化字段契约（与数据库 schema 对齐）
+  root_cause_persistence:
+    storage_field: root_cause         # 数据库存储字段名
+    schema:
+      reason_code: "string"           # 来自 error_code.reason_enum
+      failed_layer: "string"          # identity | session | network | rate_limit | business
+      paused_at: "float"              # epoch seconds
+      extra: "object"                 # 可选，自定义上下文
+
+# 多阶段降级链日志合并（meta-rule #32）
+# 同一逻辑链的多个中间阶段（降级/重试/回退）日志合并为 1 条结构化结果日志
+# 适用：降级链（API→DOM→缓存）、重试链、多策略回退、浏览器自动化多策略尝试
+# 不适用：独立一次性告警、用户操作即时反馈、关键路径 logger.exception()
+log_merge:
+  enabled: true                       # 总开关（false 时按各自步骤独立输出，不强制合并）
+  min_stages_to_merge: 2              # 合并阈值：阶段数 ≥ 该值才必须合并（单阶段无需合并）
+  intermediate_debug_enabled: true    # 中间步骤 DEBUG 化开关（true=logger.debug，false=保持原级别）
+  # 最终结果日志必须含的结构化 extra 字段
+  required_extra_fields:
+    - stages                          # 各中间步骤简述数组
+    - final_reason                    # 最终失败原因
+    - attempts                        # 阶段总数
+  # 推荐携带的上下文（缺失不报警）
+  optional_extra_fields:
+    - keyword
+    - task_id
+    - user_id
+
+# ============== 批量处理断路器（meta-rule #25 落地）==============
+# 设计文档：docs/standards/四维度复盘方法论与历史教训集成.md（工作流模板 C）
+# 项目代码运行时读取的断路器参数；审查规则参数见
+# .trae/skills/xianyu-backend-code-review/config.yaml#coding_standards.batch_circuit_breaker
+
+# 批量采集/刷新断路器：连续失败达阈值后熔断，剩余项标 pending 等待续传
+batch_circuit_breaker:
+  enabled: true
+  failure_threshold: 3                # 连续失败阈值（达到后触发熔断）
+  failure_window_sec: 3600            # 失败计数滑动窗口（秒）
+  mark_remaining_as: pending          # 剩余项处理策略（pending=等待续传，skipped=跳过）
+  persist_keys:                       # 熔断时必须持久化的进度字段
+    - cursor
+    - completed_ids
+    - remaining_ids
+  # 日志措辞三套文案（必须与实际动作一致，避免"暂停"措辞但实际 break）
+  log_phrasing:
+    paused: "批次熔断暂停（可恢复）"   # 熔断可恢复
+    stopped: "批次已停止（用户主动）"   # 用户主动停止
+    failed: "批次失败（异常终止）"      # 异常终止

@@ -13,11 +13,12 @@ import hmac
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from xianyu_hunter.web.middleware.auth import setup_auth_middleware
+from xianyu_hunter.web.routes.auth_helpers import RequestSchemeMiddleware
 from xianyu_hunter.web.middleware.exception_handler import register_exception_handlers
 from xianyu_hunter.web.middleware.request_id import setup_request_id_middleware
 from xianyu_hunter.web.middleware.security import setup_security_middleware
@@ -52,6 +53,7 @@ from xianyu_hunter.web.routes import (
     api_orders,
     api_param_calculator,  # 参数计算器：任务/配置参数校验与建议
     api_prompts,
+    api_preferences,  # preferences：用户级偏好持久化（按 user_id 隔离）
     api_stats,
     api_task_deps,
     api_task_links,
@@ -499,6 +501,11 @@ def create_app() -> FastAPI:
     # 安全中间件：最后注册（LIFO 最先执行），在 auth/request_id 之前拦截敏感路径扫描
     setup_security_middleware(app)
 
+    # 请求协议中间件：最外层原始 ASGI 中间件，写入当前请求 scheme 到 ContextVar，
+    # 供 make_auth_response 按协议决定 xh_token cookie 的 Secure/SameSite（见 auth_helpers）。
+    # 必须注册在最后（成为最外层），否则无法在端点之前写入 scheme。
+    app.add_middleware(RequestSchemeMiddleware)
+
     # 全局异常处理器（兜底未捕获异常 + 统一 422/HTTPException 响应格式）
     register_exception_handlers(app)
 
@@ -583,7 +590,8 @@ def create_app() -> FastAPI:
         (api_notifier, "router"),            # notifier：通知渠道
         (api_templates, "router"),           # templates：模板市场
         (api_export, "router"),              # export：数据导出
-        (api_prompts, "router"),             # prompts：Prompt 编辑器
+        (api_prompts, "router"),
+        (api_preferences, "router"),          # preferences：用户偏好（修复 P0-2 405：此前未挂载）             # prompts：Prompt 编辑器
         (api_cron, "router"),                # cron：Cron 校验
         (api_param_calculator, "router"),    # param-calculator：参数计算器
         (price_dashboard, "router"),         # price-dashboard：价格行情看板
@@ -620,12 +628,13 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/api/auth/verify", tags=["auth"])
-    def verify_token(token: str):
+    def verify_token(token: str, request: Request):
         """验证 Bearer Token 并设置 cookie
 
         前端首次访问时调用此端点，成功后浏览器自动携带 cookie。
         """
         from xianyu_hunter.config import get_settings
+        from xianyu_hunter.web.routes.auth_helpers import _resolve_secure_policy
 
         expected = get_settings().web_token
         # 使用恒定时间比较防止时序攻击，与中间件保持一致
@@ -633,12 +642,13 @@ def create_app() -> FastAPI:
             # 401 响应格式与中间件统一为 {"detail": ...}，便于前端解析
             return JSONResponse(status_code=401, content={"detail": "invalid token"})
         resp = JSONResponse(content={"ok": True})
+        secure, samesite = _resolve_secure_policy(request)
         resp.set_cookie(
             key="xh_token",
             value=token,
             httponly=True,
-            samesite="none",  # 改为 none，支持移动端跨域访问
-            secure=True,      # SameSite=None 要求 Secure
+            samesite=samesite,  # 改为 none，支持移动端跨域访问（仅 HTTPS）
+            secure=secure,      # SameSite=None 要求 Secure；HTTP 下改 lax 且不加 Secure
             max_age=86400 * 30,  # 30 天
         )
         return resp

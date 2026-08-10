@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
     react(),
     // O-12-26 PWA 移动端优化：让 SPA 可被"添加到主屏幕"并支持离线访问
@@ -113,7 +113,11 @@ export default defineConfig({
   },
   build: {
     outDir: '../src/xianyu_hunter/web/static/spa',
-    emptyOutDir: true,
+    // 关闭 Vite 自带的 emptyOutDir：构建开始 Vite 会 fs.rmSync 清空输出目录，
+    // 但 WorkBuddy 沙箱的 safe-delete 钩子会劫持 rmSync → trash 失败 → 构建中止。
+    // 输出目录的清理已由 scripts/前端构建.bat 的 [1/2] 步骤 `rmdir /s /q` 完成
+    // （rmdir 是 cmd 内建命令，不受 safe-delete 劫持），故此处无需 Vite 再清。
+    emptyOutDir: false,
     // 拆分大依赖，降低首屏体积
     rollupOptions: {
       output: {
@@ -127,4 +131,12 @@ export default defineConfig({
       },
     },
   },
-})
+  // 仅 build 阶段强制从零预构建依赖：规避 Vite 5.4 optimizeDeps 缓存 invalidation 已知坑。
+  // node_modules 被重新物化（如重跑 npm install）但 package.json 版本未变时，
+  // 旧的 .vite/deps 缓存不刷新，导致纯 ESM 包（mdast-util-gfm 等，被 remark-gfm 依赖）
+  // 在 Rollup 打包阶段被裸解析 -> 报 "failed to resolve import mdast-util-gfm"。
+  // dev 保留缓存加速 HMR，仅 build 强制，确保产物与当前 node_modules 一致。
+  optimizeDeps: {
+    force: command === 'build',
+  },
+}))

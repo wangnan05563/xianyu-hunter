@@ -77,12 +77,6 @@
   --xh-brand-gradient-to: #FF8533;
   --xh-brand-shadow: 0 2px 8px rgba(255, 98, 0, 0.45);
   --xh-ai-loading-text: #FFD666;
-}
-
-/* 暗色主题下 Ant Design 组件的硬覆盖
-   原因：某些 antd 组件的子元素（如 Table 表头、Modal/Drawer 背景、Segmented 选中态）
-   在 darkAlgorithm 下偶尔仍渲染为亮色，这里用 CSS 变量强制覆盖。 */
-[data-theme="dark"] {
   /* Table 表头：与卡片背景同色，避免亮色头 */
   --ant-table-header-bg: #1f1f1f;
   --ant-table-header-color: rgba(255, 255, 255, 0.88);
@@ -179,14 +173,14 @@ body {
 }
 
 .weight-total-ok {
-  background: rgba(82, 196, 26, 0.12);
-  color: #52c41a;
+  background: #f0fae8; /* 实色等效 rgba(82, 196, 26, 0.12) 在白色背景上的合成效果 */
+  color: #237804; /* 进一步加深，确保在浅绿背景上对比度 ≥ 4.5:1 */
   border: 1px solid rgba(82, 196, 26, 0.3);
 }
 
 .weight-total-warn {
-  background: rgba(250, 173, 20, 0.12);
-  color: #faad14;
+  background: #fef3e0; /* 实色等效 rgba(250, 173, 20, 0.12) 在白色背景上的合成效果 */
+  color: #8c5200; /* 进一步加深琥珀色，确保在浅黄背景上对比度 ≥ 4.5:1 */
   border: 1px solid rgba(250, 173, 20, 0.3);
 }
 
@@ -316,7 +310,7 @@ body {
   position: absolute;
   top: 8px;
   right: 8px;
-  background: rgba(255, 77, 79, 0.9);
+  background: rgba(217, 46, 48, 0.92); /* 加深背景红，确保白色文字对比度 ≥ 4.5:1 */
   color: #fff;
   padding: 2px 8px;
   border-radius: 4px;

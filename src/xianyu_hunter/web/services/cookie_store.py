@@ -19,6 +19,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from xianyu_hunter.infra.yaml_config import get_config
@@ -157,27 +158,20 @@ class CookieStore:
             return False, "no_key_cookies"
 
         # 过期时间检查：仅检查关键 Cookie（identity + session 层）
-        # 为什么不检查所有 Cookie：x5secdata/cna/tfstk 等追踪层或安全令牌 Cookie
-        # 过期时间很短（几小时），过期不影响闲鱼核心登录态，但会导致健康检查误判。
-        # 与 /api/anticrawl/health 的 cookie_checker 保持一致（api_anticrawl.py:105-120）
-        # 兼容旧数据：无 expires 字段视为 session cookie，不过期
-        # Playwright 的 expires 为 Unix 时间戳（秒），-1 或 0 表示 session cookie
         # 延迟导入避免 cookie_store → cookie_rotator 循环依赖
         from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
 
+        return self._check_key_cookies_expiry(cookies_list, is_m5tk_expired)
+
+    def _check_key_cookies_expiry(self, cookies_list: list[dict], is_m5tk_expired: Callable) -> tuple[bool, str]:
+        """检查关键 Cookie 的过期时间，返回 (is_valid, reason)"""
         now = time.time()
         for c in cookies_list:
             name = c.get("name")
             if name not in _GOOFISH_KEY_COOKIES:
                 continue
 
-            # _m_h5_tk 特殊处理：使用内嵌 timestamp 判断过期，而非 expires 字段。
-            # 原因：is_m5tk_expired 文档明确记载 "_m_h5_tk 的 cookie expires 字段
-            # 通常是 -1（session cookie），无法用 cookie.expires 判断过期"。
-            # cookie_rotator / _default_cookie_provider 等全链路均使用 is_m5tk_expired，
-            # 健康检查若用 expires 字段会导致与全链路不一致：
-            # - expires 已过期但内嵌 timestamp 仍有效时误报 cookie_expired
-            # - expires=-1 但 token 实已过期时漏报
+            # _m_h5_tk 特殊处理：使用内嵌 timestamp 判断过期，而非 expires 字段
             if name == "_m_h5_tk":
                 m5tk_value = c.get("value", "")
                 if m5tk_value and is_m5tk_expired(m5tk_value):
@@ -185,9 +179,6 @@ class CookieStore:
                 continue
 
             # _m_h5_tk_enc 同 _m_h5_tk：内嵌 token，无法用 expires 判断过期
-            # 其 expires 通常为 -1（session cookie），不能据此判断 _m_h5_tk
-            # 与 _m_h5_tk 一样跳过 expires 检测，避免漏报
-            # 不依赖 expires 字段，否则会误报 cookie_expired:_m_h5_tk_enc
             if name == "_m_h5_tk_enc":
                 continue
 

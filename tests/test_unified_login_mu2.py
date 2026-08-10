@@ -81,11 +81,16 @@ def test_finalize_multi_user_login_calls_identify_issue_export():
     mgr.identify_or_create.assert_called_once_with(fake_cookies)
     # issue_session 用 user_id 调用
     mgr.issue_session.assert_called_once_with("12345678")
-    # export_cookies 按 user_id 存储（不写入 default）
-    store.export_cookies.assert_called_once()
-    kwargs = store.export_cookies.call_args.kwargs
-    assert kwargs.get("user_id") == "12345678"
-    assert kwargs.get("method") == "login"
+    # export_cookies 被调用两次：一次按 user_id 存储，一次写入 default 兜底
+    assert store.export_cookies.call_count == 2
+    # 第一次调用是 user_id 维度
+    first_kwargs = store.export_cookies.call_args_list[0].kwargs
+    assert first_kwargs.get("user_id") == "12345678"
+    assert first_kwargs.get("method") == "login"
+    # 第二次调用是 default 维度兜底
+    second_kwargs = store.export_cookies.call_args_list[1].kwargs
+    assert second_kwargs.get("user_id") == "default"
+    assert second_kwargs.get("method") == "login"
 
 
 def test_finalize_multi_user_login_stores_session_token_in_session():

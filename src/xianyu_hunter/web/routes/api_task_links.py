@@ -370,20 +370,30 @@ async def _ensure_live_search_cookies(container: Container, user_id: str = "defa
         # 重新检查补注入后是否仍缺少/过期/陈旧
         missing, expired, stale = await _collect_cookie_issues(container, json_identity_values)
         # 二次 cookie 完整性检查（参考 collection_service._raise_detail_failure_error）：
-        # 注入后仍 missing 且 CookieStore JSON 中持有这些 cookie 时，说明是
-        # 浏览器不可用（ensure_alive 重启失败）导致读取失败，而非真正未登录。
-        # 抛 503 而非 403/440，避免误导用户重新登录。
+        # 注入后仍 missing 且 CookieStore JSON 中持有这些 cookie 时，需区分两种根因：
+        # 1) cookies_injected=False（ensure_alive 重启失败 / add_cookies 异常）——浏览器真不可用；
+        # 2) cookies_injected=True（注入成功但个别 cookie 如 unb 在浏览器内存中仍读不到）
+        #    ——这是单条 Cookie 同步失败，浏览器本身是活的（cookie2/sgcookie 等其他 cookie 读得到）。
+        # 二者都抛 503（实时搜索暂不可用），但文案必须准确，避免误导用户"稍后重试"或"重新登录"。
         if missing and json_identity_values:
             json_has_missing = {n for n in missing if json_identity_values.get(n)}
             if json_has_missing:
-                logger.warning(
-                    "实时搜索：浏览器不可用导致 Cookie 读取失败（JSON 持有 {} 但浏览器无法读取），"
-                    "抛 503 而非 403", json_has_missing,
-                )
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"实时搜索浏览器不可用（{', '.join(missing)} 读取失败），请稍后重试",
-                )
+                missing_label = ", ".join(sorted(json_has_missing))
+                if cookies_injected:
+                    # 浏览器活着，单条 Cookie 同步失败：准确报错，引导重登/重启而非"稍后重试"
+                    msg = (
+                        f"实时搜索：登录态 Cookie 同步失败（{missing_label} 已注入浏览器但内存中无法确认），"
+                        f"实时搜索暂不可用，请重新登录闲鱼或重启服务"
+                    )
+                    logger.warning(msg)
+                else:
+                    # ensure_alive 失败 / add_cookies 异常：浏览器真的不可用
+                    msg = (
+                        f"实时搜索：浏览器不可用（{missing_label} 读取失败），"
+                        f"请稍后重试或重启服务"
+                    )
+                    logger.warning(msg)
+                raise HTTPException(status_code=503, detail=msg)
         _raise_live_cookie_errors(missing, expired, stale)
 
     _maybe_reset_m5tk_refresh(container, cookies_injected)

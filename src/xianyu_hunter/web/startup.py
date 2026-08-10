@@ -21,7 +21,10 @@ _scheduler_task: asyncio.Task | None = None
 _cookie_sync_scheduler = None
 _cookie_health_probe_task: asyncio.Task | None = None
 
-# 批量采集调度器引用（用于 shutdown 时优雅停止 + API 端点访问）
+# Cookie 健康探测间隔（5 分钟），与 SessionHealthChecker.CHECK_INTERVAL 对齐
+_PROBE_INTERVAL_SEC = 300
+
+# 批量采集调度器引用（用于 shutdown 时优雅停止） + API 端点访问）
 _batch_refresh_scheduler = None
 
 # 智能客服知识库定时刷新调度器引用（用于 shutdown 时优雅停止）
@@ -91,7 +94,47 @@ def start_cookie_sync_scheduler(container: Any) -> None:
 
 
 
-def start_cookie_health_probe(container: Any) -> None:
+def _probe_once() -> None:
+    """单次探测：从 database 中筛选 active 用户，验证其 cookie 有效性"""
+    try:
+        from loguru import logger
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store
+
+        um = get_user_manager()
+        store = get_cookie_store()
+
+        # 筛选 active 用户进行探测
+        users = um.list_users()
+        active_users = [u for u in users if u.get("status") == "active"]
+        if not active_users:
+            return
+
+        for user in active_users:
+            uid = user["user_id"]
+            try:
+                is_valid, _ = store.validate_cookies_with_expiry(user_id=uid)
+                um.set_user_status(uid, "active" if is_valid else "expired")
+            except Exception:
+                logger.warning("Cookie 探测失败 user_id=%s", uid, exc_info=True)
+
+    except Exception:
+        logger.debug("Cookie 探测异常忽略", exc_info=True)
+
+
+async def _probe_loop() -> None:
+    from loguru import logger
+    while True:
+        try:
+            await asyncio.sleep(_PROBE_INTERVAL_SEC)
+            _probe_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Cookie 探测循环异常: {}", e)
+
+
+def start_cookie_health_probe(_container: Any) -> None:
     """启动 Cookie 健康探测任务，定期检查用户 Cookie 状态（expired 或 active）
 
     设计理由：probe_all_accounts 需要遍历所有用户（active+expired），active 用户
@@ -100,48 +143,9 @@ def start_cookie_health_probe(container: Any) -> None:
     """
     global _cookie_health_probe_task
     from loguru import logger
-    import time
-
-    PROBE_INTERVAL_SEC = 300  # 5 分钟
-
-    def _probe_once():
-        """单次探测：从 database 中筛选 active 用户，验证其 cookie 有效性"""
-        try:
-            from xianyu_hunter.web.services.user_manager import get_user_manager
-            from xianyu_hunter.web.services.cookie_store import get_cookie_store
-
-            um = get_user_manager()
-            store = get_cookie_store()
-
-            # 筛选 active 用户进行探测
-            users = um.list_users()
-            active_users = [u for u in users if u.get("status") == "active"]
-            if not active_users:
-                return
-
-            for user in active_users:
-                uid = user["user_id"]
-                try:
-                    is_valid, reason = store.validate_cookies_with_expiry(user_id=uid)
-                    um.set_user_status(uid, "active" if is_valid else "expired")
-                except Exception:
-                    logger.warning("Cookie 探测失败 user_id=%s", uid, exc_info=True)
-
-        except Exception:
-            logger.debug("Cookie 探测异常忽略", exc_info=True)
-
-    async def _probe_loop():
-        while True:
-            try:
-                await asyncio.sleep(PROBE_INTERVAL_SEC)
-                _probe_once()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning("Cookie 探测循环异常: {}", e)
 
     _cookie_health_probe_task = asyncio.create_task(_probe_loop())
-    logger.info("Cookie 健康探测任务已启动，间隔 %ds", PROBE_INTERVAL_SEC)
+    logger.info("Cookie 健康探测任务已启动，间隔 %ds", _PROBE_INTERVAL_SEC)
 
 
 def start_batch_refresh_scheduler(container: Any) -> None:
@@ -682,7 +686,7 @@ def _stop_all_sync_schedulers() -> None:
     为什么独立：_on_shutdown 中 4 个 if scheduler: stop + None 模式重复，
     集中维护停止顺序（知识库优先，避免主调度器停止时新任务被提交）。
     """
-    global _kb_refresh_scheduler, _batch_refresh_scheduler, _cookie_sync_scheduler, _takeover_timeout_scheduler, _pre_aggregation_scheduler
+    global _kb_refresh_scheduler, _batch_refresh_scheduler, _cookie_sync_scheduler, _takeover_timeout_scheduler, _pre_aggregation_scheduler, _cookie_health_probe_task
 
     # 知识库调度器优先停止：避免停止主调度器时新任务仍被提交
     if _kb_refresh_scheduler:
@@ -790,6 +794,38 @@ def _run_tunnel_autostart(container: Any) -> None:
             logger.warning("发送自启动失败通知时出错")
 
 
+async def _warm_stats_cache(container: Any) -> None:
+    """P4-3：启动时预热 stats 缓存
+
+    调用 4 个核心计算函数填充 TTL 缓存，避免首个用户请求冷启动。
+    每个调用独立 try/except：一个失败不影响其他预热。
+    """
+    from loguru import logger
+
+    async def _warm_one(name: str, coro_func, *args, **kwargs) -> None:
+        try:
+            await coro_func(*args, **kwargs)
+            logger.info(f"缓存预热完成：{name}")
+        except Exception:  # noqa: BLE001
+            logger.warning(f"缓存预热失败（{name}）：首个请求将正常计算", exc_info=True)
+
+    # 1. business_kpi (range_days=30)
+    from xianyu_hunter.web.routes.business_kpi import _compute_business_kpi
+    await _warm_one("business_kpi:30", _compute_business_kpi, range_days=30, container=container)
+
+    # 2. stats_today
+    from xianyu_hunter.web.routes.stats_today import _compute_stats_today
+    await _warm_one("stats_today", _compute_stats_today, container=container)
+
+    # 3. stats_overview
+    from xianyu_hunter.web.routes.stats_overview import _overview
+    await _warm_one("stats_overview", _overview, container=container)
+
+    # 4. stats_trend (metric=events, range_hours=24)
+    from xianyu_hunter.web.routes.trend import _compute_stats_trend
+    await _warm_one("stats_trend:events:24", _compute_stats_trend, metric="events", range_hours=24, task_id=None, container=container)
+
+
 def setup_startup_hooks(app: FastAPI) -> None:
     """注册启动和关闭钩子
 
@@ -798,37 +834,6 @@ def setup_startup_hooks(app: FastAPI) -> None:
     """
     from xianyu_hunter.infra.logger import setup_logging
     from xianyu_hunter.web.deps import get_container, _should_start_scheduler
-
-    async def _warm_stats_cache(container: Any) -> None:
-        """P4-3：启动时预热 stats 缓存
-
-        调用 4 个核心计算函数填充 TTL 缓存，避免首个用户请求冷启动。
-        每个调用独立 try/except：一个失败不影响其他预热。
-        """
-        from loguru import logger
-
-        async def _warm_one(name: str, coro_func, *args, **kwargs) -> None:
-            try:
-                await coro_func(*args, **kwargs)
-                logger.info(f"缓存预热完成：{name}")
-            except Exception:  # noqa: BLE001
-                logger.warning(f"缓存预热失败（{name}）：首个请求将正常计算", exc_info=True)
-
-        # 1. business_kpi (range_days=30)
-        from xianyu_hunter.web.routes.business_kpi import _compute_business_kpi
-        await _warm_one("business_kpi:30", _compute_business_kpi, range_days=30, container=container)
-
-        # 2. stats_today
-        from xianyu_hunter.web.routes.stats_today import _compute_stats_today
-        await _warm_one("stats_today", _compute_stats_today, container=container)
-
-        # 3. stats_overview
-        from xianyu_hunter.web.routes.stats_overview import _overview
-        await _warm_one("stats_overview", _overview, container=container)
-
-        # 4. stats_trend (metric=events, range_hours=24)
-        from xianyu_hunter.web.routes.trend import _compute_stats_trend
-        await _warm_one("stats_trend:events:24", _compute_stats_trend, metric="events", range_hours=24, task_id=None, container=container)
 
     @app.on_event("startup")
     async def _on_startup() -> None:

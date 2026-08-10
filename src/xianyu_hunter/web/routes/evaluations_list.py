@@ -949,7 +949,7 @@ _NEGATION_AWARE_CATEGORIES = {"used", "worn", "broken"}
 _NEGATION_BREAKING_PUNCTS = "，。；、,.;！？!?"
 
 
-def _is_negated(text: str, label: str, label_pos: int) -> bool:
+def _is_negated(text: str, label_pos: int) -> bool:
     """检查关键词在文本中是否被否定词修饰
 
     通过检查关键词前 10 个字符窗口内是否包含否定词来判断。
@@ -991,7 +991,7 @@ def _scan_condition_keywords(text: str) -> tuple[list[dict], int]:
             matched = False
             while pos != -1 and not matched:
                 # 负面类别需检查否定词修饰；被否定的出现位置跳过，继续查找下一次出现
-                if category in _NEGATION_AWARE_CATEGORIES and _is_negated(text, label, pos):
+                if category in _NEGATION_AWARE_CATEGORIES and _is_negated(text, pos):
                     pos = text.find(label, pos + len(label))
                     continue
                 tags.append({"category": category, "label": label})

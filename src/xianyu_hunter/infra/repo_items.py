@@ -72,6 +72,25 @@ class ItemsMixin:
             row = conn.execute(stmt).first()
             return self._row_to_dict(row) if row else None
 
+    def get_items_by_ids(self, ids: list[str], user_id: str | None = None) -> dict[str, dict]:
+        """批量按 id 查询商品，单次 IN 查询返回 {id: row_dict}。
+
+        相比循环调用 get_item，单次 IN 查询将每请求的 N 次连接获取降为 1 次，
+        避免高并发下连接池耗尽（P0-3：批量接口此前因每 id 开连接导致 SocketException）。
+        """
+        if not ids:
+            return {}
+        with self.engine.connect() as conn:
+            stmt = select(ItemRow).where(ItemRow.id.in_(ids))
+            if user_id is not None:
+                stmt = stmt.where(ItemRow.user_id == user_id)
+            rows = conn.execute(stmt).all()
+        result: dict[str, dict] = {}
+        for r in rows:
+            d = self._row_to_dict(r)
+            result[d["id"]] = d
+        return result
+
     def list_items(
         self,
         task_id: str | None = None,

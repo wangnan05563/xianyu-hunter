@@ -117,7 +117,7 @@ export default function PriceStrategy() {
   }
 
   // 提取局部变量收窄类型，避免 JSX 中直接访问 config?.bargain_price?.percentile 触发 TS18047
-  const bargainPercentile = config?.bargain_price?.percentile ?? 0.10
+  const bargainPercentile = config?.bargain_price?.percentile ?? 0.1
 
   // 模拟策略命中预览
   const previewResults = (() => {
@@ -214,7 +214,7 @@ export default function PriceStrategy() {
                 step={0.01}
                 value={bargainPercentile}
                 onChange={(v) => update({ bargain_price: { percentile: v } })}
-                marks={{ 0.05: '5%', 0.10: '10%', 0.20: '20%', 0.49: '49%' }}
+                marks={{ 0.05: '5%', 0.1: '10%', 0.2: '20%', 0.49: '49%' }}
                 tooltip={{ formatter: (v) => `${((v ?? 0) * 100).toFixed(0)}% (P${Math.round((v ?? 0) * 100)})` }}
               />
               <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>

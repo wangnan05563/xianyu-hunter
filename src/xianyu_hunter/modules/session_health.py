@@ -122,12 +122,15 @@ class SessionHealthChecker:
 
     # ============== 配置 ==============
 
-    def set_cookie_checker(self, checker: Callable[[], bool | Awaitable[bool]]) -> None:
+    def set_cookie_checker(self, checker: Callable[[str | None], bool | Awaitable[bool]]) -> None:
         """设置 Cookie 有效性检查器
 
-        checker 可以是同步或异步函数，返回 True 表示 Cookie 有效。
+        checker 可以是同步或异步函数，接受可选 user_id 参数（多用户隔离），
+        返回 True 表示 Cookie 有效。
         为什么支持异步：cookie_checker 需要从浏览器内存读取 cookie 做兜底复核，
         而浏览器内存读取是 async 操作。
+        为什么传 user_id：不同用户 cookie 文件隔离（cookies_{user_id}.json），
+        硬编码 default 会导致多用户场景与导航栏状态矛盾（meta-rule #96）。
         """
         self._cookie_checker = checker
 
@@ -151,16 +154,20 @@ class SessionHealthChecker:
 
     # ============== 核心检查 ==============
 
-    async def check(self) -> HealthReport:
+    async def check(self, user_id: str | None = None) -> HealthReport:
         """执行多维度健康检查
 
         按权重计算总分，返回建议动作。
+
+        Args:
+            user_id: 目标用户标识，透传给 cookie_checker 实现多用户隔离。
+                None 时 checker 自行退化为 default（单用户/管理令牌场景）。
         """
         self._check_count += 1
         details: dict[str, Any] = {}
 
         # 1. Cookie 有效性（权重 40）
-        cookie_valid = await self._check_cookies()
+        cookie_valid = await self._check_cookies(user_id)
         details["cookie_valid"] = cookie_valid
         cookie_score = self.WEIGHT_COOKIE if cookie_valid else 0
 
@@ -224,17 +231,39 @@ class SessionHealthChecker:
 
     # ============== 内部检查方法 ==============
 
-    async def _check_cookies(self) -> bool:
-        """检查 Cookie 有效性"""
+    async def _check_cookies(self, user_id: str | None = None) -> bool:
+        """检查 Cookie 有效性
+
+        Args:
+            user_id: 透传给 cookie_checker，实现多用户隔离（与导航栏读取同一文件）。
+
+        兼容性：cookie_checker 可能为旧式无参签名（测试/历史调用）或新式接受
+        user_id 的签名，按参数数量自适应调用，避免破坏既有调用方与测试。
+        """
         if not self._cookie_checker:
             return True  # 未设置检查器，默认有效
         try:
-            result = self._cookie_checker()
+            # 按签名参数数量自适应：无参 checker（lambda: True）不传 user_id，
+            # 新式 checker（接受 user_id）透传以实现多用户隔离
+            if len(inspect.signature(self._cookie_checker).parameters) == 0:
+                result = self._cookie_checker()
+            else:
+                result = self._cookie_checker(user_id)
             # 兼容 async 检查器：浏览器内存兜底等场景需要异步读取 cookie
             if inspect.isawaitable(result):
                 result = await result
             return result
-        except Exception as e:
+        except TypeError:
+            # 兜底：旧式无参 checker 在被传入 user_id 时报错，重试无参调用
+            try:
+                result = self._cookie_checker()
+                if inspect.isawaitable(result):
+                    result = await result
+                return result
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Cookie 检查异常: {e}")
+                return False
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Cookie 检查异常: {e}")
             return False
 

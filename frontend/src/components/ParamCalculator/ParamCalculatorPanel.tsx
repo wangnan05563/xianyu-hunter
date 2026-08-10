@@ -5,6 +5,27 @@ import { useParamCalculator } from '../../hooks/useParamCalculator'
 import type { ParamScenario } from '../../api'
 import { SuggestionList } from './SuggestionList'
 
+// 校验状态标签：提取为独立组件避免嵌套三元运算（S3358）和组件定义在父组件内（S6478）
+function ValidationStatusTag({ hasBlocking, isValidating }: Readonly<{ hasBlocking: boolean; isValidating: boolean }>) {
+  let tagColor: string
+  let tagText: string
+  if (hasBlocking) {
+    tagColor = 'red'
+    tagText = '阻断'
+  } else if (isValidating) {
+    tagColor = 'processing'
+    tagText = '校验中'
+  } else {
+    tagColor = 'green'
+    tagText = '通过'
+  }
+  return (
+    <Tag color={tagColor} style={{ fontSize: 11 }}>
+      {tagText}
+    </Tag>
+  )
+}
+
 // 参数计算器面板：集成 Hook 自动校验 + 渲染建议列表
 //
 // 用法：
@@ -19,19 +40,17 @@ import { SuggestionList } from './SuggestionList'
 
 interface ParamCalculatorPanelProps {
   /** 校验场景：task_create / task_edit / config_update */
-  scenario: ParamScenario
+  readonly scenario: ParamScenario
   /** 待校验的参数对象（变化时自动触发校验） */
-  fields: Record<string, unknown>
+  readonly fields: Record<string, unknown>
   /** 面板标题 */
-  title?: string
-  /** 是否默认折叠（暂未实现，预留扩展点） */
-  defaultCollapsed?: boolean
+  readonly title?: string
   /** 是否启用紧凑模式（单 Alert 摘要） */
-  compact?: boolean
+  readonly compact?: boolean
   /** 是否在挂载时立即校验一次（编辑模式恢复初始建议） */
-  validateOnMount?: boolean
+  readonly validateOnMount?: boolean
   /** 是否显示在 Card 内（false 时无 Card 包装，直接渲染 SuggestionList） */
-  bordered?: boolean
+  readonly bordered?: boolean
 }
 
 const SCENARIO_LABEL: Record<ParamScenario, string> = {
@@ -47,7 +66,7 @@ export function ParamCalculatorPanel({
   compact = false,
   validateOnMount = false,
   bordered = true,
-}: ParamCalculatorPanelProps) {
+}: Readonly<ParamCalculatorPanelProps>) {
   const {
     suggestions,
     hasBlocking,
@@ -113,9 +132,7 @@ export function ParamCalculatorPanel({
         <Space size={6}>
           <BulbOutlined />
           <span>{title}</span>
-          <Tag color={hasBlocking ? 'red' : isValidating ? 'processing' : 'green'} style={{ fontSize: 11 }}>
-            {hasBlocking ? '阻断' : isValidating ? '校验中' : '通过'}
-          </Tag>
+          <ValidationStatusTag hasBlocking={hasBlocking} isValidating={isValidating} />
           {lastElapsedMs > 0 && (
             <Tooltip title="校验耗时（响应预算 300ms）">
               <Tag color="default" style={{ fontSize: 11 }}>

@@ -48,13 +48,25 @@ def _is_invalid_nick(nick: str | None) -> bool:
 
 
 def _resolve_current_user_id(request: Request) -> str | None:
-    """从 xh_token cookie 识别当前多用户会话用户 ID
+    """从 xh_token cookie 或 Authorization: Bearer 头识别当前多用户会话用户 ID
 
-    为什么不依赖中间件注入：/api/auth/me 在 PUBLIC_PREFIXES 中，中间件不会
-    对其执行会话校验和 user_id 注入。这里主动调用 verify_session 拿 user_id，
+    为什么不依赖中间件注入：/api/auth/cookie 在 PUBLIC_PREFIXES 中，中间件不会
+    对其执行会话校验和 user_id 注入。这里主动从 token 拿 user_id，
     既能识别多用户会话，又能让 PUBLIC 路径感知到当前登录身份。
+
+    token 来源优先级（与 BearerAuthMiddleware._extract_candidate_tokens 一致）：
+    1. xh_token cookie：HTTPS/域名场景可用（Secure cookie 被浏览器保留）
+    2. Authorization: Bearer 头：HTTP/IP 场景下浏览器会丢弃 Secure cookie，
+       但前端始终通过 localStorage 在 header 携带 token，故回退到此，
+       避免 IP 登录后导航栏读取错误（default）用户的 cookie 文件而误报
+       "Cookie 异常"/身份层/会话层/追踪层"缺失"。
     """
     token = request.cookies.get("xh_token", "")
+    if not token:
+        # HTTP(IP) 场景回退：浏览器丢弃 Secure cookie，改用 Bearer 头携带的 token
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[len("Bearer "):].strip()
     if not token:
         return None
     try:
@@ -243,7 +255,7 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
 
     # 已登录时确保浏览器持有 xh_token 认证 cookie
     if result.get("logged_in"):
-        return make_auth_response(result, session_token=current_session_token)
+        return make_auth_response(result, session_token=current_session_token, request=request)
 
     return result
 
@@ -369,6 +381,29 @@ def _compute_security_flags(data: dict | None, expiry_ts: float | None) -> dict[
     return flags
 
 
+def _check_single_cookie_expiry(c: dict, now: float) -> str | None:
+    """检查单个 cookie 是否过期，返回过期原因或 None"""
+    from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+
+    name = c.get("name")
+    if name not in _KEY_COOKIES:
+        return None
+
+    if name == "_m_h5_tk":
+        m5tk_value = c.get("value", "")
+        if m5tk_value and is_m5tk_expired(m5tk_value):
+            return "cookie_expired:_m_h5_tk"
+        return None
+
+    if name == "_m_h5_tk_enc":
+        return None
+
+    expires = c.get("expires", -1)
+    if expires and expires > 0 and expires < now:
+        return f"cookie_expired:{name}"
+    return None
+
+
 def _validate_cookies_list_with_expiry(cookies_list: list[dict]) -> tuple[bool, str]:
     """验证 cookie 列表是否有效（含过期时间判断）
 
@@ -378,30 +413,14 @@ def _validate_cookies_list_with_expiry(cookies_list: list[dict]) -> tuple[bool, 
     if not cookies_list:
         return False, "no_cookie_data"
 
-    names = {c.get("name", "") for c in cookies_list}
-    if not (_KEY_COOKIES & names):
+    if not (_KEY_COOKIES & {c.get("name", "") for c in cookies_list}):
         return False, "no_key_cookies"
-
-    from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
 
     now = time.time()
     for c in cookies_list:
-        name = c.get("name")
-        if name not in _KEY_COOKIES:
-            continue
-
-        if name == "_m_h5_tk":
-            m5tk_value = c.get("value", "")
-            if m5tk_value and is_m5tk_expired(m5tk_value):
-                return False, "cookie_expired:_m_h5_tk"
-            continue
-
-        if name == "_m_h5_tk_enc":
-            continue
-
-        expires = c.get("expires", -1)
-        if expires and expires > 0 and expires < now:
-            return False, f"cookie_expired:{name}"
+        reason = _check_single_cookie_expiry(c, now)
+        if reason:
+            return False, reason
 
     return True, "ok"
 
@@ -473,91 +492,72 @@ def _load_cookie_data_for_health(
     return None, None
 
 
-@router.get("/cookie/health")
-async def cookie_health(request: Request) -> JSONResponse:
-    """轻量级 Cookie 健康检查（< 300ms）
+def _repair_user_json_from_fallback(store, current_uid: str, fb_data, fb_cookies) -> tuple[bool, str, bool]:
+    """尝试将 fallback cookie 数据回写到 user_id 专属 JSON 文件"""
+    try:
+        store.export_cookies(fb_cookies, method=fb_data.get("method", "fallback_recovery"), user_id=current_uid)
+        store.invalidate_cache(current_uid)
+        is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
+        return is_valid, reason, True
+    except OSError as e:
+        logger.warning("cookie_health: 修复 cookies_%s.json 失败: %s", current_uid, e)
+        return False, "", False
 
-    供状态栏用户头像悬浮面板调用，纯文件读取无网络请求，
-    返回 Cookie 完整性、有效期、安全标记、分层状态等关键信息。
 
-    与 /api/anticrawl/health 的区别：
-    - /anticrawl/health：重量级检查（含浏览器访问、API 探测），耗时数秒
-    - /cookie/health：仅读取 cookies_{user_id}.json 文件，毫秒级返回
+def _read_local_cookies(store, current_uid: str) -> tuple[list, list]:
+    """读取本地 cookie JSON 文件，返回 (data, cookies_list)"""
+    data = store._read_json(user_id=current_uid)
+    cookies_list = (data or {}).get("cookies", []) if data else []
+    return data, cookies_list
 
-    多用户场景：从 xh_token 识别当前会话用户，按 user_id 读取对应 cookie 文件，
-    避免硬编码 default 导致多用户登录后状态栏显示"无 Cookie"。
 
-    浏览器内存兜底：JSON 中 _m_h5_tk 过期时，实时搜索可能已刷新浏览器内存中的
-    token 但未回写 JSON（_ensure_fresh_m5tk 不回写），此时从浏览器内存读取最新
-    token 回写 JSON 再重新判断，避免"实时搜索可用但右上角显示无效"的不一致。
+def _try_fallback_cookie_data(store, current_uid: str, is_valid: bool, reason: str):
+    """尝试从 fallback 数据源加载 Cookie 数据并修复主文件
 
-    Cookie 文件兜底：首次登录后 cookies_{user_id}.json 可能为空/损坏，
-    此时回退到 last_login_cookies.json / cookies_default.json，并尝试修复 user_id 文件。
+    当主文件 cookies_{user_id}.json 不可用时，回退到 last_login_cookies.json
+    或 cookies_default.json，并尝试修复 user_id 文件。
 
-    重构说明：分层状态计算和安全标记推断下沉到独立函数（S3776），
-    主函数只做流程编排和结果组装，降低嵌套层级与认知负担。
+    Returns:
+        (fallback_used, data, cookies_list, is_valid, reason)
     """
-    start_ts = time.time()
-    current_uid = _resolve_current_user_id(request) or "default"
+    # 无需 fallback 时直接返回当前数据
+    if is_valid or not ("no_cookie_data" in reason or "no_key_cookies" in reason):
+        data, cookies_list = _read_local_cookies(store, current_uid)
+        return False, data, cookies_list, is_valid, reason
 
-    store = get_cookie_store()
-    store.invalidate_cache(current_uid)
+    # 尝试加载 fallback 数据源
+    fb_data, fb_cookies = _load_cookie_data_for_health(store, current_uid)
+    if not fb_data or not fb_cookies:
+        data, cookies_list = _read_local_cookies(store, current_uid)
+        return False, data, cookies_list, is_valid, reason
 
-    is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
+    logger.info(
+        "cookie_health: cookies_%s.json 不可用，回退到 %s，尝试修复 user_id 文件",
+        current_uid, fb_data.get("method", "unknown"),
+    )
 
-    # JSON 中 _m_h5_tk 过期时，尝试从浏览器内存刷新回写 JSON
-    # 为什么需要：_ensure_fresh_m5tk（实时搜索）和 MTOP API 响应会刷新浏览器内存中的
-    # token 但不回写 JSON，导致 JSON 中 token 的内嵌 timestamp 过期（>20分钟），
-    # 而 /api/anticrawl/cookies/layers 已有同样的兜底逻辑（_try_refresh_m5tk_from_browser）
-    if not is_valid and ("cookie_expired:_m_h5_tk" in reason or "cookie_expired:_m_h5_tk_enc" in reason):
-        refreshed = await _try_refresh_m5tk_from_browser_for_health(store, current_uid)
-        if refreshed:
-            store.invalidate_cache(current_uid)
-            is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
+    # 尝试将 fallback 数据写入 user_id 专属文件并重新校验
+    repaired, rep_reason, repaired_ok = _repair_user_json_from_fallback(store, current_uid, fb_data, fb_cookies)
+    if repaired_ok and repaired:
+        data, cookies_list = _read_local_cookies(store, current_uid)
+        return True, data, cookies_list, repaired, rep_reason
 
-    # 主文件无效且原因是"无数据/无关键 Cookie"时，尝试 fallback 数据源
-    # 并顺带修复空的 user_id 文件，避免下次仍显示异常
-    fallback_used = False
-    if not is_valid and ("no_cookie_data" in reason or "no_key_cookies" in reason):
-        fb_data, fb_cookies = _load_cookie_data_for_health(store, current_uid)
-        if fb_data and fb_cookies:
-            logger.info(
-                "cookie_health: cookies_%s.json 不可用，回退到 %s，尝试修复 user_id 文件",
-                current_uid, fb_data.get("method", "unknown"),
-            )
-            # 修复 user_id 文件：把 fallback 的 cookie 写回 cookies_{user_id}.json
-            try:
-                store.export_cookies(fb_cookies, method=fb_data.get("method", "fallback_recovery"), user_id=current_uid)
-                store.invalidate_cache(current_uid)
-                is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
-                fallback_used = True
-            except OSError as e:
-                logger.warning("cookie_health: 修复 cookies_%s.json 失败: %s", current_uid, e)
-            # 如果修复后仍无效，至少用 fallback 数据计算健康状态
-            if not is_valid:
-                data, cookies_list = fb_data, fb_cookies
-                is_valid, reason = _validate_cookies_list_with_expiry(cookies_list)
-                fallback_used = True
+    data, cookies_list = fb_data, fb_cookies
+    is_valid, reason = _validate_cookies_list_with_expiry(cookies_list)
+    return True, data, cookies_list, is_valid, reason
 
-    if not fallback_used:
-        data = store._read_json(user_id=current_uid)
-        cookies_list = (data or {}).get("cookies", []) if data else []
 
-    info = store.get_cookie_info(user_id=current_uid) if not fallback_used else {
-        "logged_in": True,
-        "source": data.get("method", "unknown") if data else "none",
-        "cookie_count": len(cookies_list) if cookies_list else 0,
-        "exported_at": data.get("exported_at", 0) if data else 0,
-        "method": data.get("method", "unknown") if data else "unknown",
-    }
-    expiry_ts = _compute_expiry_ts(cookies_list)
-
-    names = {c.get("name", "") for c in cookies_list}
-
-    # 传入 cookies_list 让 _compute_layers_status 检查 _m_h5_tk 内嵌 timestamp 过期
-    layers_status = _compute_layers_status(names, cookies_list)
-    security_flags = _compute_security_flags(data, expiry_ts)
-
+def _build_health_response(
+    start_ts: float,
+    is_valid: bool,
+    reason: str,
+    info: dict,
+    names: set,
+    expiry_ts: float | None,
+    layers_status: dict,
+    security_flags: dict,
+) -> JSONResponse:
+    """构建 cookie/health 响应"""
     elapsed_ms = int((time.time() - start_ts) * 1000)
     return JSONResponse(content={
         "ok": True,
@@ -575,6 +575,65 @@ async def cookie_health(request: Request) -> JSONResponse:
         "method": info.get("method", "unknown"),
         "elapsed_ms": elapsed_ms,
     })
+
+
+async def _try_refresh_m5tk_if_needed(store, current_uid: str) -> tuple[bool, str]:
+    """JSON 中 _m_h5_tk 过期时尝试从浏览器内存刷新回写"""
+    is_valid, reason = store.validate_cookies_with_expiry(user_id=current_uid)
+    if is_valid or not ("cookie_expired:_m_h5_tk" in reason or "cookie_expired:_m_h5_tk_enc" in reason):
+        return is_valid, reason
+    refreshed = await _try_refresh_m5tk_from_browser_for_health(store, current_uid)
+    if refreshed:
+        store.invalidate_cache(current_uid)
+        return store.validate_cookies_with_expiry(user_id=current_uid)
+    return is_valid, reason
+
+
+def _build_fallback_info(data: dict | None, cookies_list: list[dict]) -> dict:
+    """从 fallback 数据源构建 cookie info"""
+    source = data.get("method", "unknown") if data else "none"
+    cookie_count = len(cookies_list) if cookies_list else 0
+    exported_at = data.get("exported_at", 0) if data else 0
+    method = data.get("method", "unknown") if data else "unknown"
+    return {
+        "logged_in": True,
+        "source": source,
+        "cookie_count": cookie_count,
+        "exported_at": exported_at,
+        "method": method,
+    }
+
+
+@router.get("/cookie/health")
+async def cookie_health(request: Request) -> JSONResponse:
+    """轻量级 Cookie 健康检查（< 300ms）
+
+    供状态栏用户头像悬浮面板调用，返回 Cookie 完整性、有效期、安全标记、
+    分层状态等关键信息。
+
+    与 /api/anticrawl/health 的区别：
+    - /anticrawl/health：重量级检查（含浏览器访问、API 探测），耗时数秒
+    - /cookie/health：文件读取 + 轻量浏览器读取，毫秒级返回
+
+    多用户场景：从 xh_token 识别当前会话用户，按 user_id 读取对应 cookie 文件，
+    避免硬编码 default 导致多用户登录后状态栏显示"无 Cookie"。
+
+    同步机制（meta-rule #96）：本端点与 /api/anticrawl/health（反爬健康检查）、
+    api_orders 抢单校验共用 evaluate_cookie_status() 单一调度函数，
+    统一 user_id 解析 + 文件校验 + last_login/default 兜底 + m5tk 浏览器刷新
+    + 浏览器内存兜底 + collector 会话失效标志，消除"不同入口校验深度不一致"
+    导致的状态矛盾（如右上角显示正常但反爬显示无效）。
+    """
+    start_ts = time.time()
+    current_uid = _resolve_current_user_id(request) or "default"
+
+    # 单一调度函数：导航栏与反爬健康检查共用，保证两处 Cookie 状态一致
+    from xianyu_hunter.web.services.cookie_status import evaluate_cookie_status
+    status = await evaluate_cookie_status(current_uid)
+
+    payload = status.as_navbar_payload()
+    payload["elapsed_ms"] = int((time.time() - start_ts) * 1000)
+    return JSONResponse(content=payload)
 
 
 async def _try_refresh_m5tk_from_browser_for_health(store, user_id: str) -> bool:
@@ -709,12 +768,3 @@ def logout() -> JSONResponse:
     })
     resp.delete_cookie(key="xh_token", path="/", domain=None)
     return resp
-134300469763651521
-
-# touch
-# rebuild touch
-# rebuild2
-# rebuild3
-# BUILD_MARKER_20250802
-
-# FIX_VERIFIED_20250802_0430

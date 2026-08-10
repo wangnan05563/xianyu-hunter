@@ -97,12 +97,13 @@ export default function KpiSection({ kpiCards }: KpiSectionProps) {
                   {k.hint}
                   {/* 异常场景引导：如分母为 0 时直达抢单策略配置页 */}
                   {k.hint_action && (
-                    <a
-                      style={{ marginLeft: 6, fontSize: 11 }}
+                    <button
+                      type="button"
+                      style={{ marginLeft: 6, fontSize: 11, padding: 0, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--xh-link-color, #1677ff)', textDecoration: 'underline' }}
                       onClick={() => navigate(k.hint_action!.route)}
                     >
                       {k.hint_action.label}
-                    </a>
+                    </button>
                   )}
                 </div>
               </div>

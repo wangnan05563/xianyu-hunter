@@ -390,7 +390,7 @@ def get_task_runs(
 
 
 async def _hot_load_task_for_scheduler(
-    container: Container, task_id: str, user_id: str,
+    container: Container, task_id: str, _user_id: str,
 ) -> tuple[bool, str]:
     """Hot-load an unregistered running task into the scheduler at runtime.
 

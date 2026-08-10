@@ -256,9 +256,12 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
       // 清空 sheet 栈，避免看到上一用户的 sheet
       useSheetStore.getState().closeAll()
       storage.remove('xh.sheets.state')
-      // 清除 localStorage 中的旧 token：后端 verify_session 有 5 分钟缓存，
-      // 若不清除，整页刷新后 Bearer 头携带旧 token 会被缓存命中，
-      // 导致中间件认证为旧用户而非新切换的用户
+      // 防御性清除 localStorage 中的 xh_token：
+      // 前端从未把 token 写入 localStorage（xh_token 是 HttpOnly cookie，JS 无法读取回写），
+      // 故此处实际为 no-op；保留以防未来若改为前端持久化 token。
+      // 切换后正确识别新用户依赖后端：switch_account 经 Set-Cookie 下发新 session_token
+      // （HTTP 下为 non-Secure cookie，协议自适应见 auth_helpers._resolve_secure_policy），
+      // 整页刷新后中间件 / 导航栏即可解析到新 user_id，而非误读 cookies_default.json。
       storage.remove('xh_token')
       hide()
       message.success('账号切换成功')
@@ -267,7 +270,12 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
       onSwitched?.(userId)
       // 整页刷新：最可靠的重置方式，确保所有组件重新拉取新用户数据
       // 为什么用 replace：避免后退回到上一账号的页面
-      globalThis.location.replace('/')
+      // 为什么用 BASE_URL 而非 '/'：SPA 以 /xianyu/ 为部署子路径部署
+      // （vite base + BrowserRouter basename 均为 /xianyu），路由仅在 /xianyu/* 下匹配。
+      // replace('/') 会跳到服务器根 http://127.0.0.1:8001/，虽后端也返回 index.html，
+      // 但前端路由 basename=/xianyu 匹配不到 pathname='/' → 整页白板。
+      // 必须跳到 SPA 入口 BASE_URL（/xianyu/），与 client.ts 的登录跳转保持一致。
+      globalThis.location.replace(import.meta.env.BASE_URL)
     } catch (err) {
       hide()
       message.error(extractApiError(err, '账号切换失败，请重试'))

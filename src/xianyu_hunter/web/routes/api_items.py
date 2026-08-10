@@ -69,10 +69,18 @@ def items_batch(
         raise HTTPException(status_code=400, detail="一次最多 50 个")
     # 多用户隔离：仅返回当前账号拥有的商品
     user_id = getattr(request.state, "user_id", None)
+    # P0-3：改用单次 IN 查询（repo.get_items_by_ids），将每请求 N 次连接获取降为 1 次，
+    # 避免高并发下连接池耗尽导致 SocketException；数据库异常显式返回 500 而非静默重置连接。
+    try:
+        items_map = container.repo.get_items_by_ids(id_list, user_id=user_id)
+    except Exception as e:
+        from loguru import logger
+        logger.warning(f"[ItemsBatch] 批量查询商品失败: {e}")
+        raise HTTPException(status_code=500, detail=f"批量查询商品失败：{e}")
     summaries: dict[str, Any] = {}
     missing: list[str] = []
     for iid in id_list:
-        item = container.repo.get_item(iid, user_id=user_id)
+        item = items_map.get(iid)
         if not item:
             missing.append(iid)
             continue

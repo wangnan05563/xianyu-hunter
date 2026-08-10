@@ -22,6 +22,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.cache import cached_ttl
 
 router = APIRouter(prefix="/api/vector-admin", tags=["vector-admin"])
 
@@ -134,6 +135,7 @@ class CleanupAllBody(BaseModel):
 # ============== 状态监控 ==============
 
 @router.get("/status")
+@cached_ttl(60, key_fn=lambda: "vector_status")
 async def get_status() -> dict[str, Any]:
     """向量库状态总览：片段数、目录大小、快照数、持久化路径、集合名"""
     chatbot = _get_chatbot_or_403()

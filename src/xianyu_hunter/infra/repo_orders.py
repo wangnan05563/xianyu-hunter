@@ -21,9 +21,12 @@ class OrdersMixin:
             stmt = stmt.on_conflict_do_update(index_elements=["id"], set_=update_cols)
             conn.execute(stmt)
 
-    def get_order(self, order_id: str) -> dict | None:
+    def get_order(self, order_id: str, user_id: str | None = None) -> dict | None:
         with self.engine.connect() as conn:
-            row = conn.execute(select(OrderRow).where(OrderRow.id == order_id)).first()
+            stmt = select(OrderRow).where(OrderRow.id == order_id)
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
+            row = conn.execute(stmt).first()
             return self._row_to_dict(row) if row else None
 
     def list_orders(

@@ -60,7 +60,11 @@ export default function AIConfig() {
   useEffect(() => {
     Promise.all([
       aiApi.getConfig().catch(() => null),
-      aiApi.getUsage().catch(() => null),
+      // 用量加载失败时打日志而非静默回退默认零值，避免「仪表盘一直空白」却无任何线索
+      aiApi.getUsage().catch((e) => {
+        console.warn('[AIConfig] 用量数据加载失败，已回退默认零值：', e)
+        return null
+      }),
     ]).then(([configData, usageData]) => {
       if (configData) {
         setConfig({

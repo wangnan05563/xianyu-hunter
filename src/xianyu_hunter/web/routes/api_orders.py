@@ -356,6 +356,34 @@ def _parse_takeover_payload(payload: dict[str, Any]) -> tuple[str, str]:
     return item_id, task_id
 
 
+async def _try_refresh_m5tk_from_browser_for_takeover(container, cookie_store, user_id: str) -> bool:
+    """尝试从浏览器内存刷新 _m_h5_tk 回写 JSON，成功返回 True"""
+    from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+
+    try:
+        if not container.browser:
+            return False
+        cookies = await container.browser.get_cookies()
+        updates: dict[str, str] = {}
+        for c in cookies:
+            name = c.get("name", "")
+            value = c.get("value", "")
+            if not value:
+                continue
+            # _m_h5_tk 需未过期；_m_h5_tk_enc 是配套加密 token，无 timestamp 无法判过期，直接回写
+            if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
+                updates[name] = value
+        if updates and cookie_store.update_cookie_values(updates, user_id=user_id):
+            cookie_store.invalidate_cache(user_id)
+            is_valid, _ = cookie_store.validate_cookies_with_expiry(user_id=user_id)
+            return is_valid
+        return False
+    except Exception as e:
+        from loguru import logger
+        logger.debug(f"[ManualTakeover] 从浏览器内存刷新 _m_h5_tk 失败: {e}")
+        return False
+
+
 async def _ensure_takeover_prerequisites(container: Container, user_id: str = "default") -> None:
     """前置校验：buyer 注入态 + 闲鱼登录态，任一缺失直接抛 HTTPException
 
@@ -391,29 +419,9 @@ async def _ensure_takeover_prerequisites(container: Container, user_id: str = "d
     # 第二层：_m_h5_tk 过期时，尝试从浏览器内存刷新回写 JSON（与 /cookie/health 一致）
     # 为什么只刷新 m5tk：JSON 与浏览器内存最常见的不同步是 _m_h5_tk，
     # MTOP API 响应的 Set-Cookie 会实时更新浏览器内存 token 但回写 JSON 可能失败
-    if "cookie_expired:_m_h5_tk" in reason or "cookie_expired:_m_h5_tk_enc" in reason:
-        from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
-
-        try:
-            if container.browser:
-                cookies = await container.browser.get_cookies()
-                updates: dict[str, str] = {}
-                for c in cookies:
-                    name = c.get("name", "")
-                    value = c.get("value", "")
-                    if not value:
-                        continue
-                    # _m_h5_tk 需未过期；_m_h5_tk_enc 是配套加密 token，无 timestamp 无法判过期，直接回写
-                    if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
-                        updates[name] = value
-                if updates and cookie_store.update_cookie_values(updates, user_id=user_id):
-                    cookie_store.invalidate_cache(user_id)
-                    is_valid, _ = cookie_store.validate_cookies_with_expiry(user_id=user_id)
-                    if is_valid:
-                        return
-        except Exception as e:
-            from loguru import logger
-            logger.debug(f"[ManualTakeover] 从浏览器内存刷新 _m_h5_tk 失败: {e}")
+    m5tk_expired = "cookie_expired:_m_h5_tk" in reason or "cookie_expired:_m_h5_tk_enc" in reason
+    if m5tk_expired and await _try_refresh_m5tk_from_browser_for_takeover(container, cookie_store, user_id):
+        return
 
     # 第三层：浏览器内存兜底（与 cookie_checker 的 _browser_cookies_fallback 一致）
     # 为什么需要：JSON 完全为空或与浏览器内存严重不同步时，浏览器内存仍是

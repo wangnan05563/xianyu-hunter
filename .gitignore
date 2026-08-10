@@ -24,6 +24,7 @@ build/
 .coverage_html/
 coverage.xml
 coverage*.json
+frontend/coverage/
 htmlcov/
 
 # ---------- Node.js ----------
@@ -273,6 +274,30 @@ test-screenshots/
 *.swo
 .DS_Store
 Thumbs.db
+
+# ---------- 第七轮清理新增（2026-08-08）----------
+# 根目录 PID 文件（SonarQube 扫描残留）
+/scan.pid
+# 根目录测试结果 XML（pytest 生成）
+/pytest-results.xml
+# PyInstaller 构建 spec（xianyu-hunter.spec 是手工维护的源码文件，必须随仓库提交）
+# 历史误区：曾误标为"由构建脚本生成不应提交"并加入忽略，但 build-exe.ps1 从不生成该
+#   spec，只调用 `pyinstaller xianyu-hunter.spec`，导致 spec 丢失后构建直接报
+#   "Spec file not found"。因此改为纳入版本控制，避免再次静默丢失。
+# xianyu-hunter.spec
+# 根目录临时调试脚本（非 _ 前缀，但一次性使用）
+/check_fix.py
+# 根目录 VBS 脚本（应移至 scripts/）
+/静默启动.vbs
+# SonarQube 调试输出目录（临时诊断文件）
+docs/04-系统维护/sonar-reports/diag*.json
+docs/04-系统维护/sonar-reports/fetch_status*.py
+docs/04-系统维护/sonar-reports/sonar-current-status.json
+docs/04-系统维护/sonar-reports/test_ping.py
+docs/04-系统维护/sonar-reports/test_write.txt
+docs/04-系统维护/sonar-reports/pytest*.log
+docs/04-系统维护/sonar-reports/sonar-status.log
+docs/04-系统维护/sonar-reports/test_pwsh.txt
 
 # ---------- Git Worktrees ----------
 .worktrees/

@@ -1,86 +1,91 @@
-# xianyu-hunter.spec
-# PyInstaller 目录模式打包配置
+# -*- mode: python ; coding: utf-8 -*-
 #
-# 构建：pyinstaller xianyu-hunter.spec --noconfirm
-# 产物：dist/xianyu-hunter/xianyu-hunter.exe + dist/xianyu-hunter/_internal/
+# XianyuHunter PyInstaller spec（onedir 模式）
 #
-# 设计要点：
-# - 目录模式（非 onefile）：启动快、对 Playwright/chromadb 兼容性好
-# - chromadb/onnxruntime/duckdb 是 C 扩展依赖，必须 collect_submodules 显式收集
-# - sentence_transformers 含模型权重等数据文件，需 collect_data_files
-# - SPA 静态资源外置：不打入 _internal，由安装包单独分发到 spa/ 目录
-# - UPX 压缩 DLL 会导致加载失败，必须 upx_exclude
+# 入口：scripts/launcher.py（启动 uvicorn + 自动开浏览器 + 单实例锁的打包入口）
+# pathex：scripts（入口与子进程脚本所在目录）+ src（xianyu_hunter 包根）
+#
+# 关键 hiddenimports：
+#   (a) Repository 动态 Mixin（repository_base.py 用 importlib.import_module 按字符串加载
+#       10 个 repo_* 模块）。这些是字符串导入，PyInstaller 静态分析无法发现，必须显式声明，
+#       否则运行到 Repository 组合时会 ModuleNotFoundError。
+#   (b) uvicorn.* 的 loops/protocols/lifespan 子模块（uvicorn 运行时按配置动态导入，
+#       PyInstaller 不一定能静态捕获）。
+#   (c) chromadb / onnxruntime / sentence_transformers —— 含大量 C 扩展与动态子模块，
+#       标准做法是用 collect_submodules 全量收集（见 docs/archive/评估项目打包EXE安装包可行性.md）。
+#
+# 关于 duckdb：chromadb 1.x 已不再将 duckdb 作为依赖引入（旧版 design doc 中的
+#   collect_submodules('duckdb') 在当前依赖树下会因 ModuleNotFoundError 直接让 spec 崩溃），
+#   因此本 spec 仅在 duckdb 实际可导入时才收集，缺失则安全跳过。
+#
+# 防御性收集：所有 collect_submodules 都包了 try/except，任一可选 C 扩展包缺失都不会阻断构建。
+#
+# 其余依赖（fastapi / torch / playwright / loguru 等）均为静态 import，由 PyInstaller
+#   模块发现 + 各包 hook 自动收集（含约 5600 个包内 DATA 文件），无需在此显式列出。
+#
+# 运行时只读资源（static / scripts / models / playwright_browsers）由 build-exe.ps1
+#   的"复制外置资源"步骤放入 dist/xianyu-hunter/，本 spec 不再重复打包，避免路径错乱。
+#
+# 配置 config/*.yaml 在冻结模式从 %APPDATA%/XianyuHunter/config 读取（运行时目录，
+#   非打包内），本 spec 不打包配置。
 
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+import os
 
-# ============== 收集 C 扩展与动态导入 ==============
-hiddenimports = []
+from PyInstaller.utils.hooks import collect_submodules
 
-# chromadb 链：chromadb -> onnxruntime + duckdb
-# chromadb 在 vector_store.py 中是 try/except 可选导入，收集失败不阻断打包
-for mod in ('chromadb', 'onnxruntime', 'duckdb', 'sentence_transformers'):
+repo_root = os.path.dirname(os.path.abspath(SPEC))  # spec 所在目录 = 仓库根
+
+
+def safe_collect_submodules(pkg_name):
+    """收集子模块；若顶层包不可导入（缺失/可选依赖）则安全返回空列表，不阻断构建。"""
     try:
-        hiddenimports += collect_submodules(mod)
+        return collect_submodules(pkg_name)
     except Exception:
-        # 可选依赖未安装时静默跳过：主功能不依赖 chromadb
-        pass
+        return []
 
-# uvicorn 动态导入：PyInstaller 静态分析无法识别
-# 缺失会导致启动时报错 ModuleNotFoundError: No module named 'uvicorn.logging'
+
+# (c) 含 C 扩展的依赖全量子模块收集（缺失则跳过）
+hiddenimports = []
+hiddenimports += safe_collect_submodules('chromadb')
+hiddenimports += safe_collect_submodules('onnxruntime')
+hiddenimports += safe_collect_submodules('sentence_transformers')
+hiddenimports += safe_collect_submodules('duckdb')  # chromadb 1.x 通常不再需要，缺失则跳过
+
+# (b) uvicorn 动态子模块
 hiddenimports += [
     'uvicorn.logging',
     'uvicorn.loops.auto',
     'uvicorn.protocols.http.auto',
     'uvicorn.protocols.websockets.auto',
     'uvicorn.lifespan.on',
-    'uvicorn.protocols.utils',
 ]
 
-# 系统托盘（可选）：pystray + PIL 已安装时才收集
-# launcher.py 中 try/except 导入，未安装时跳过托盘功能
-for mod in ('pystray', 'PIL', 'PIL.Image', 'PIL.ImageDraw'):
-    try:
-        hiddenimports += collect_submodules(mod)
-    except Exception:
-        pass
+# (a) Repository 动态 Mixin（importlib.import_module 字符串加载，必须显式声明）
+hiddenimports += [
+    'xianyu_hunter.infra.repo_tasks',
+    'xianyu_hunter.infra.repo_items',
+    'xianyu_hunter.infra.repo_events',
+    'xianyu_hunter.infra.repo_error_logs',
+    'xianyu_hunter.infra.repo_deps',
+    'xianyu_hunter.infra.repo_links',
+    'xianyu_hunter.infra.repo_evaluations',
+    'xianyu_hunter.infra.repo_orders',
+    'xianyu_hunter.infra.repo_notifications',
+    'xianyu_hunter.infra.repo_sellers',
+]
 
-# ============== 数据文件 ==============
-datas = []
-
-# sentence_transformers：模型权重、tokenizer 配置等
-for mod in ('sentence_transformers', 'chromadb'):
-    try:
-        datas += collect_data_files(mod)
-    except Exception:
-        pass
-
-# SPA 静态资源：外置目录模式
-# 不打入 _internal，由构建脚本复制到 dist/xianyu-hunter/spa/
-# 原因：_internal 打入会膨胀体积且每次版本变更需重新打包
-# datas += collect_data_files('xianyu_hunter.web.static')
-
-# ============== Analysis ==============
 a = Analysis(
-    ['scripts/launcher.py'],
-    pathex=['src'],
+    [os.path.join(repo_root, 'scripts', 'launcher.py')],
+    pathex=[os.path.join(repo_root, 'scripts'), os.path.join(repo_root, 'src')],
     binaries=[],
-    datas=datas,
+    datas=[],
     hiddenimports=hiddenimports,
     hookspath=[],
+    hooksconfig={},
     runtime_hooks=[],
-    # 排除明确未使用的模块以减小体积
-    # - pytest 系列：测试框架，生产环境无需
-    # - sklearn：业务未直接使用，transformers 通过 is_sklearn_available() 按需加载
-    #   （transformers 用 sklearn 仅做 KMeans 聚类，sentence-transformers 不依赖）
-    # 注意：scipy 不排除 — chromadb/transformers 可能通过 scipy.sparse 间接使用
-    excludes=[
-        'pytest', '_pytest', 'pluggy', 'iniconfig', 'py',
-        'sklearn', 'sklearn.externals',
-        'IPython', 'jupyter', 'notebook', 'jupyter_client',
-        'matplotlib', 'pandas', 'pandas.testing',
-    ],
+    excludes=[],
     noarchive=False,
-    cipher=None,  # 不加密字节码（加密会增加启动耗时且无明显保护效果）
+    optimize=0,
 )
 
 pyz = PYZ(a.pure)
@@ -89,15 +94,21 @@ exe = EXE(
     pyz,
     a.scripts,
     [],
-    exclude_binaries=True,  # 目录模式（非 onefile）：依赖由 COLLECT 收集到 _internal
+    exclude_binaries=True,
     name='xianyu-hunter',
-    console=True,  # 保留控制台便于查看日志，P2 阶段改为 False + GUI 加载窗口
-    # 复用 frontend/public/favicon.ico（米其林指南风格品牌符号）
-    icon='assets/xianyu-hunter.ico',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
     disable_windowed_traceback=False,
+    argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=os.path.join(repo_root, 'assets', 'xianyu-hunter.ico'),
 )
 
 coll = COLLECT(
@@ -105,16 +116,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,  # UPX 压缩减小体积
-    # 避免压缩 DLL/SO 导致加载失败（Windows 上 UPX 压缩的 DLL 会被某些杀软误判）
-    upx_exclude=[
-        '*.dll',
-        '*.so',
-        'python3*.dll',
-        'VCRUNTIME*.dll',
-        'ucrtbase.dll',
-        'libcrypto-*.dll',
-        'libssl-*.dll',
-    ],
+    upx=True,
+    upx_exclude=[],
     name='xianyu-hunter',
 )

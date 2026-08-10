@@ -851,10 +851,11 @@ def create_sqlite_engine(db_path: str = "data/xianyu.db"):
         # check_same_thread=False：允许 anyio worker thread 复用连接
         connect_args={"check_same_thread": False},
         poolclass=QueuePool,
-        # P4-2：pool_size 5→10，配合 async stats 接口的 asyncio.gather 并发读
-        # 4个stats接口每个最多5个并发查询，峰值需要20+connections
-        pool_size=10,
-        max_overflow=5,
+        # P1-3：pool_size 10→20、max_overflow 5→10，配合 P0-3 批量接口单次 IN 查询，
+        # 将高并发下的连接池天花板抬高，缓解连接被重置（SocketException）。
+        # SQLite WAL 模式允许多读，增大池对读密集场景收益明显；写仍串行但有 busy_timeout 排队。
+        pool_size=20,
+        max_overflow=10,
         pool_pre_ping=True,
     )
 
@@ -924,6 +925,15 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     # ix_task_links_task_type_created：list_and_count_task_links 核心查询路径使用
     # 覆盖 (task_id, link_type, created_at) 三元组，避免 ORDER BY 临时 B-Tree 排序
     _migrate_create_index(engine, "task_links", "ix_task_links_task_type_created", "task_id, link_type, created_at")
+
+    # P1-2：高频过滤/计数列补建复合索引，降低统计类查询与清理查询延迟
+    # events(created_at, type)：events 表时间线/聚合查询（stats、清理旧事件）的覆盖索引
+    # notifications(user_id, read_at)：通知列表/未读计数的等值+排序覆盖索引
+    # items(first_seen)：清理旧商品、列表按首次发现时间排序的覆盖索引
+    # （task_links(link_type) 已由 ix_task_links_type_key 的左前缀覆盖，无需重复建）
+    _migrate_create_index(engine, "events", "ix_events_created_type", "created_at, type")
+    _migrate_create_index(engine, "notifications", "ix_notifications_user_read", "user_id, read_at")
+    _migrate_create_index(engine, "items", "ix_items_first_seen", "first_seen")
 
     # schema 修复：将 tasks.eval_threshold 从旧版 NOT NULL 迁移为 nullable
     # 为什么需要：模型已改为 nullable=True（None 表示沿用全局 eval.pass_score），

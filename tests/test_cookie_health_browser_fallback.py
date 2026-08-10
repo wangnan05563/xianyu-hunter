@@ -95,6 +95,7 @@ class TestCookieHealthBrowserFallback:
         mock_browser = _mock_browser_with_cookies(browser_cookies)
         mock_container = MagicMock()
         mock_container.browser = mock_browser
+        mock_container.collector = None
 
         with patch("xianyu_hunter.web.deps.get_container", return_value=mock_container):
             response = client.get("/api/auth/cookie/health", cookies=_AUTH_COOKIE)
@@ -140,6 +141,7 @@ class TestCookieHealthBrowserFallback:
         mock_browser = _mock_browser_with_cookies(browser_cookies)
         mock_container = MagicMock()
         mock_container.browser = mock_browser
+        mock_container.collector = None
 
         with patch("xianyu_hunter.web.deps.get_container", return_value=mock_container):
             response = client.get("/api/auth/cookie/health", cookies=_AUTH_COOKIE)
@@ -161,6 +163,7 @@ class TestCookieHealthBrowserFallback:
         mock_browser = _mock_browser_with_cookies([])
         mock_container = MagicMock()
         mock_container.browser = mock_browser
+        mock_container.collector = None
 
         with patch("xianyu_hunter.web.deps.get_container", return_value=mock_container):
             response = client.get("/api/auth/cookie/health", cookies=_AUTH_COOKIE)
@@ -200,6 +203,7 @@ class TestTryRefreshM5tkForHealth:
         mock_browser = _mock_browser_with_cookies(browser_cookies)
         mock_container = MagicMock()
         mock_container.browser = mock_browser
+        mock_container.collector = None
 
         with patch("xianyu_hunter.web.deps.get_container", return_value=mock_container):
             result = await _try_refresh_m5tk_from_browser_for_health(store, "default")
@@ -219,6 +223,7 @@ class TestTryRefreshM5tkForHealth:
         mock_browser = _mock_browser_with_cookies(browser_cookies)
         mock_container = MagicMock()
         mock_container.browser = mock_browser
+        mock_container.collector = None
 
         with patch("xianyu_hunter.web.deps.get_container", return_value=mock_container):
             result = await _try_refresh_m5tk_from_browser_for_health(store, "user_123")
@@ -239,6 +244,7 @@ class TestTryRefreshM5tkForHealth:
         mock_browser.get_cookies = AsyncMock(side_effect=RuntimeError("browser crash"))
         mock_container = MagicMock()
         mock_container.browser = mock_browser
+        mock_container.collector = None
 
         with patch("xianyu_hunter.web.deps.get_container", return_value=mock_container):
             result = await _try_refresh_m5tk_from_browser_for_health(store, "default")

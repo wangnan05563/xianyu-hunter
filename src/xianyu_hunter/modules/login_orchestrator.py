@@ -452,7 +452,7 @@ class LoginOrchestrator:
                 "自动重登异常（连续第 {} 次）: {}",
                 self._relogin_fail_count, exc,
             )
-            await self._handle_relogin_failure()
+            self._handle_relogin_failure()
             return
         if success:
             self._renew_fail_count = 0
@@ -465,9 +465,9 @@ class LoginOrchestrator:
             "自动重登返回失败（连续第 {} 次），等待下次重试",
             self._relogin_fail_count,
         )
-        await self._handle_relogin_failure()
+        self._handle_relogin_failure()
 
-    async def _handle_relogin_failure(self) -> None:
+    def _handle_relogin_failure(self) -> None:
         """重登失败统一处理：长冷却 + 通知用户
 
         为什么抽独立方法：异常分支和失败分支都需要相同的"长冷却+通知"处理，
@@ -822,9 +822,9 @@ class LoginOrchestrator:
         if waf_provider:
             self._health_checker.set_waf_status_provider(waf_provider)
 
-    async def check_health(self):
+    async def check_health(self, user_id: str | None = None):
         """执行健康检查"""
-        return await self._health_checker.check()
+        return await self._health_checker.check(user_id=user_id)
 
     # ============== 频率伪装 ==============
 

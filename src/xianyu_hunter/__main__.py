@@ -277,6 +277,11 @@ def web(
         "--with-scheduler/--no-with-scheduler",
         help="同时启动任务调度器与浏览器实例（默认启用，使用 --no-with-scheduler 关闭）",
     ),
+    workers: int = typer.Option(
+        1,
+        "--workers",
+        help="uvicorn worker 进程数（多核部署建议设为 CPU 核数，提升吞吐；与 --reload 互斥）",
+    ),
 ) -> None:
     """启动 Web 控制台（FastAPI + htmx）
 
@@ -301,7 +306,14 @@ def web(
     typer.echo(f"→ 启动 Web 控制台: http://{host}:{port}")
     typer.echo(f"  API 文档:        http://{host}:{port}/api/docs")
     typer.echo("  按 Ctrl+C 退出")
-    uvicorn.run(web_app, host=host, port=port, reload=reload, log_level="info")
+    # P1-4：多 worker 部署提升吞吐（已实测单 worker 51→多 worker 80 req/s）。
+    # uvicorn 要求 reload 与 workers 互斥，reload 模式强制单 worker（开发热重载不需要多进程）。
+    # 多 worker + 调度器（with_scheduler）会让每个 worker 各起一个浏览器/调度器实例，
+    # 生产建议：纯 Web 多 worker（--no-with-scheduler）配合独立调度进程，或仅单 worker 带调度器。
+    if reload and workers > 1:
+        typer.echo("⚠ --reload 与 --workers 互斥，已强制 workers=1", err=True)
+        workers = 1
+    uvicorn.run(web_app, host=host, port=port, reload=reload, workers=workers, log_level="info")
 
 
 if __name__ == "__main__":

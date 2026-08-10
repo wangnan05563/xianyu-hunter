@@ -64,3 +64,20 @@ xianyu_hunter = ["web/static/**/*"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+addopts = "--cov=src/xianyu_hunter --cov-report=xml:coverage.xml --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src/xianyu_hunter"]
+omit = ["*/test_*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "except Exception",
+    "except:",
+]

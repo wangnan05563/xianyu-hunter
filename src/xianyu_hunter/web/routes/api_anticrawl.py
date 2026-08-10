@@ -36,107 +36,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/anticrawl", tags=["anticrawl"])
 
 
-def _has_valid_m5tk_in_list(cookies_list: list[dict]) -> bool:
-    """检查 cookie 列表中是否存在未过期的 _m_h5_tk
-
-    为什么独立：session 层检查与 _browser_cookies_fallback 都用此判断，
-    提取后避免规则漂移（一处改过期判断另一处漏改）。
-    """
-    return any(
-        c.get("name") == "_m_h5_tk" and c.get("value")
-        and not is_m5tk_expired(c.get("value", ""))
-        for c in cookies_list
-    )
-
-
-async def _load_and_check_session_layer(  # NOSONAR
-    store, _orch,
-) -> tuple[bool | None, list[dict], set[str]]:
-    """加载 JSON cookie 数据并完成 session 层（_m_h5_tk）检查
-
-    返回 (result, cookies_list, names)：
-    - result=None: 通过，继续下一步，cookies_list/names 为最新数据（可能已被浏览器刷新回写更新）
-    - result=True/False: 已有结论（来自 _browser_cookies_fallback），直接返回该值
-
-    为什么同时承担数据加载：刷新 m5tk 后 cookies_list 会更新，后续步骤需用新数据，
-    将加载与 session 检查合并可避免主函数处理"刷新后重新加载"的副作用。
-    """
-    data = store._read_json()
-    if not data or not data.get("cookies"):
-        logger.debug("cookie_checker: JSON 无 Cookie 数据，尝试浏览器内存兜底")
-        return await _browser_cookies_fallback(), [], set()
-
-    cookies_list = data["cookies"]
-    names = {c.get("name", "") for c in cookies_list}
-
-    # 1. session 层：_m_h5_tk 必须存在且有值，且未过期
-    # 为什么检查 timestamp 过期：_m_h5_tk 的 cookie.expires=-1 无法判断真实过期，
-    # 但 token 内嵌 timestamp + 服务端 TTL 决定真实有效期。
-    # 若不检查，cookie_checker 会把过期的旧 token 当作有效，导致健康检查误判为健康
-    if _has_valid_m5tk_in_list(cookies_list):
-        return None, cookies_list, names
-
-    # JSON 中 token 过期/缺失时，尝试从浏览器内存读取最新 token 回写 JSON
-    # 为什么需要：MTOP 搜索 API 响应的 Set-Cookie 会更新浏览器内存中的 token，
-    # 但 _sync_response_cookies_to_context 回写 JSON 可能失败（被静默吞掉），
-    # 导致 JSON 中的 token 落后于浏览器内存。健康检查前先尝试同步，避免误判
-    logger.debug("cookie_checker: JSON 中 _m_h5_tk 缺失/过期，尝试从浏览器内存刷新回写 JSON")
-    refreshed = await _try_refresh_m5tk_from_browser(store)
-    if refreshed:
-        store.invalidate_cache()
-        data = store._read_json()
-        cookies_list = data["cookies"] if data and data.get("cookies") else []
-        names = {c.get("name", "") for c in cookies_list}
-        if _has_valid_m5tk_in_list(cookies_list):
-            return None, cookies_list, names
-
-    # JSON 路径已不可信，转浏览器内存兜底
-    return await _browser_cookies_fallback(), cookies_list, names
-
-
-async def _check_identity_layer(names: set[str]) -> bool | None:
-    """检查 identity 层：至少一个身份 Cookie 存在
-
-    返回：
-    - None: 通过，继续下一步
-    - True/False: 来自 _browser_cookies_fallback 的结论，直接返回
-
-    为什么用"至少一个"而非"全部"：不同登录方式返回的 Cookie 集合不同，
-    扫码登录可能不返回 sgcookie，强制要求全部会导致误判。
-    """
-    identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
-    has_identity = bool(identity_cookies & names)
-    if has_identity:
-        return None
-    logger.debug("cookie_checker: JSON 中 identity 层 Cookie 缺失 (names=%s)，尝试浏览器内存兜底", names)
-    return await _browser_cookies_fallback()
-
-
-def _check_key_cookies_expiry(cookies_list: list[dict]) -> bool:
-    """检查关键 cookie（identity + session 层）的 expires 是否过期
-
-    返回 True 表示通过，False 表示有关键 cookie 已过期。
-
-    为什么不再检查所有 cookie：tracking 层 cookie（cna/tfstk 等）过期不影响
-    实时搜索，但会导致健康检查误判 cookie 无效。实时搜索只依赖 identity + session 层。
-    关键 cookie 过期是真失效，不兜底（兜底也无法绕过服务端过期判定）。
-    """
-    identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
-    key_cookie_names = identity_cookies | LAYER_DEFINITIONS[CookieLayer.SESSION].cookies
-    now = time.time()
-    for c in cookies_list:
-        if c.get("name") not in key_cookie_names:
-            continue
-        expires = c.get("expires", -1)
-        if expires and expires > 0 and expires < now:
-            logger.warning(
-                "cookie_checker: 关键 Cookie 已过期: %s (expires=%d, now=%d)",
-                c.get("name"), expires, now,
-            )
-            return False
-    return True
-
-
 def _sync_layer_states_if_needed(orch, cookies_list: list[dict]) -> None:
     """自动同步层状态（对所有非用户主动失效的层）
 
@@ -154,60 +53,6 @@ def _sync_layer_states_if_needed(orch, cookies_list: list[dict]) -> None:
         logger.info("cookie_checker: Cookie 有效但层状态失效，自动同步")
         cookie_map = {c.get("name", ""): c.get("value", "") for c in cookies_list}
         orch.cookie_rotator.sync_state_from_cookies(cookie_map)
-
-
-async def _check_collector_session(orch, cookies_list: list[dict]) -> bool:
-    """检查 collector 的会话失效标志（RGV587_ERROR）
-
-    返回 True 表示通过，False 表示会话已失效需返回 False。
-
-    为什么需要：cookie 存在不代表服务端仍认可，RGV587_ERROR 表示
-    服务端已注销会话，此时 cookie 虽在本地但已失效。
-
-    粘性标志清理：_m_h5_tk 实际有效时清除标志，避免反复触发 invalidate。
-    为什么需要：DOM 回退失败时 last_session_invalid 保持 True，
-    但 cookie 实际可能仍有效（详情页等流程正常），此时不应反复失效 identity。
-
-    最佳实践：检测到 RGV587 后先尝试从 CookieStore JSON 注入 cookie 到浏览器
-    恢复（与 collection_service.ensure_official_cookies 一致），注入后仍失效
-    才标记 identity 层失效。避免 JSON 有新 cookie 但浏览器内存仍是旧值时误判。
-    """
-    try:
-        from xianyu_hunter.web.deps import get_container
-        container = get_container()
-        if container.collector and getattr(container.collector, 'last_session_invalid', False):
-            # 注意：此处仅检查 _m_h5_tk 存在且有值，不检查 timestamp 过期
-            # 语义与 session 层不同：只要 token 存在就认为可以清除粘性标志
-            has_valid_token = any(
-                c.get("name") == "_m_h5_tk" and c.get("value")
-                for c in cookies_list
-            )
-            if has_valid_token:
-                logger.info("cookie_checker: last_session_invalid=True 但 _m_h5_tk 实际有效，清除粘性标志")
-                container.collector.last_session_invalid = False
-            else:
-                # 先尝试从 CookieStore 注入恢复：浏览器内存 cookie 可能与 JSON 不同步，
-                # JSON 中若有新 cookie（如浏览器登录子进程刷新），注入后可恢复
-                logger.warning("cookie_checker: collector 检测到 RGV587_ERROR，尝试从 CookieStore 注入恢复")
-                try:
-                    from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
-                    recovered = await inject_cookie_store_to_worker_browser(
-                        log_prefix="RGV587 恢复"
-                    )
-                    if recovered:
-                        logger.info("cookie_checker: RGV587 后从 CookieStore 注入成功，清除会话失效标志")
-                        container.collector.last_session_invalid = False
-                        return True
-                except Exception as inject_err:
-                    logger.warning("cookie_checker: RGV587 后注入恢复失败: %s", inject_err)
-                # 注入后仍失效，才标记 identity 层失效（manual=False，可被自动同步恢复）
-                logger.warning("cookie_checker: RGV587 注入恢复无效，标记 identity 层失效")
-                orch.cookie_rotator.invalidate_layer(CookieLayer.IDENTITY, manual=False)
-                return False
-    except Exception as e:
-        # 不吞掉关键错误：记录 debug 日志便于排查容器初始化失败等问题
-        logger.debug("cookie_checker: _check_collector_session 异常: %s", e)
-    return True
 
 
 def _compute_waf_status(orch) -> WAFStatus:
@@ -246,34 +91,30 @@ def _configure_default_health_checkers(orch) -> None:
     # 为什么需要浏览器内存兜底：JSON 与浏览器内存存在同步延迟
     # （MTOP Set-Cookie 回写 JSON 可能失败/部分回写），健康检查只读 JSON 会误判。
     # 浏览器内存是实时搜索实际使用的数据源，以它为兜底标准能与实时搜索行为对齐。
-    async def cookie_checker() -> bool:
+    async def cookie_checker(user_id: str | None = None) -> bool:
+        """Cookie 检查器：委托统一判定 evaluate_cookie_status（meta-rule #96）
+
+        与导航栏 /api/auth/cookie/health 共用同一调度函数，按同一 user_id
+        读取 cookies_{user_id}.json，消除"右上角正常 / 反爬无效"的状态矛盾。
+
+        user_id 透传：多用户场景读取当前会话用户的 cookie 文件，
+        单用户/管理令牌场景中间件注入 user_id="default"。
+
+        保留的副作用：Cookie 有效时同步 CookieRotator 层状态（与 /cookies/layers 对齐）。
+        collector 会话失效标志不再在此静默恢复（注入恢复改由显式动作完成），
+        保证与导航栏（纯判定）状态一致。
+        """
         try:
-            from xianyu_hunter.web.services.cookie_store import get_cookie_store
-            store = get_cookie_store()
-            store.invalidate_cache()
-
-            # 1. 加载数据 + session 层检查（_m_h5_tk）
-            result, cookies_list, names = await _load_and_check_session_layer(store, orch)
-            if result is not None:
-                return result
-
-            # 2. identity 层检查
-            identity_result = await _check_identity_layer(names)
-            if identity_result is not None:
-                return identity_result
-
-            # 3. 关键 cookie 过期时间检查
-            if not _check_key_cookies_expiry(cookies_list):
-                return False
-
-            # 4. 自动同步层状态
-            _sync_layer_states_if_needed(orch, cookies_list)
-
-            # 5. 检查 collector 的会话失效标志
-            if not await _check_collector_session(orch, cookies_list):
-                return False
-
-            return True
+            uid = user_id or "default"
+            from xianyu_hunter.web.services.cookie_status import evaluate_cookie_status
+            status = await evaluate_cookie_status(uid)
+            if status.is_valid:
+                # 保留历史副作用：Cookie 有效时同步层状态（/cookies/layers 也做同样同步）
+                _sync_layer_states_if_needed(orch, status.cookies_list)
+                return True
+            # 失效：统一判定已含 collector 会话失效标志；反爬页面如实反映状态，
+            # RGV587 注入恢复交由显式动作（重新登录/恢复按钮），不再静默恢复。
+            return False
         except Exception as e:
             logger.warning("cookie_checker 失败: %s", e)
             return False
@@ -286,126 +127,6 @@ def _configure_default_health_checkers(orch) -> None:
         cookie_checker=cookie_checker,
         waf_provider=waf_provider,
     )
-
-
-async def _try_refresh_m5tk_from_browser(store) -> bool:
-    """从浏览器内存读取最新 _m_h5_tk 并回写 JSON
-
-    为什么需要：MTOP 搜索 API 响应的 Set-Cookie 会实时更新浏览器内存中的 token，
-    但 _sync_response_cookies_to_context 回写 JSON 可能失败（被 except 静默吞掉），
-    导致 JSON 中的 token 落后于浏览器内存。健康检查前先尝试同步，避免误判。
-
-    Returns:
-        True 表示成功从浏览器内存读取到未过期 token 并回写 JSON
-    """
-    try:
-        from xianyu_hunter.web.deps import get_container
-        container = get_container()
-        if not container.browser:
-            return False
-        cookies = await container.browser.get_cookies()
-        updates: dict[str, str] = {}
-        for c in cookies:
-            name = c.get("name", "")
-            value = c.get("value", "")
-            if not value:
-                continue
-            # _m_h5_tk 需未过期；_m_h5_tk_enc 是配套加密 token，无 timestamp 无法判过期，直接回写
-            # S1871: 两个分支 body 相同，合并条件
-            if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
-                updates[name] = value
-        if not updates:
-            return False
-        return store.update_cookie_values(updates)
-    except Exception as e:
-        logger.debug("从浏览器内存刷新 _m_h5_tk 回写 JSON 失败: %s", e)
-        return False
-
-
-def _check_browser_key_cookies_expiry(cookies: list[dict]) -> bool:
-    """检查浏览器内存中关键 cookie（identity + session 层）的 expires 是否过期
-
-    返回 True 表示通过，False 表示有关键 cookie 已过期。
-    为什么独立：原 _browser_cookies_fallback 中 for + if + if(三重 and) 嵌套
-    是认知复杂度的主要来源。
-    """
-    identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
-    key_cookie_names = identity_cookies | LAYER_DEFINITIONS[CookieLayer.SESSION].cookies
-    now = time.time()
-    for c in cookies:
-        if c.get("name") not in key_cookie_names:
-            continue
-        expires = c.get("expires", -1)
-        if expires and expires > 0 and expires < now:
-            logger.warning(
-                "cookie_checker(兜底): 浏览器内存关键 Cookie 已过期: %s (expires=%d, now=%d)",
-                c.get("name"), expires, now,
-            )
-            return False
-    return True
-
-
-def _clear_collector_sticky_flag(container) -> None:
-    """浏览器内存 token 实际有效时清除 collector 的 last_session_invalid 粘性标志
-
-    为什么与 JSON 路径一致：last_session_invalid 可能被 DOM 回退重置前触发，
-    浏览器内存 token 有效说明会话实际可用，应清除标志避免反复失效。
-    """
-    try:
-        if container.collector and getattr(container.collector, 'last_session_invalid', False):
-            logger.info("cookie_checker(兜底): last_session_invalid=True 但浏览器内存 token 有效，清除粘性标志")
-            container.collector.last_session_invalid = False
-    except Exception:
-        pass
-
-
-async def _browser_cookies_fallback() -> bool:
-    """JSON 判定 cookie 无效时的浏览器内存兜底复核
-
-    为什么需要：JSON 与浏览器内存存在同步延迟（MTOP Set-Cookie 回写失败/部分回写），
-    健康检查只读 JSON 会误判。浏览器内存是实时搜索实际使用的数据源，
-    以它为兜底标准能与实时搜索行为对齐。
-
-    判定标准与实时搜索 _ensure_live_search_cookies 对齐：
-    - _m_h5_tk 存在、有值、未过期
-    - identity 层至少一个 cookie 存在
-    - 关键 cookie（identity + session 层）的 expires 未过期
-    - collector.last_session_invalid 粘性标志处理
-    """
-    try:
-        from xianyu_hunter.web.deps import get_container
-        container = get_container()
-        if not container.browser:
-            return False
-        cookies = await container.browser.get_cookies()
-        if not cookies:
-            return False
-
-        names = {c.get("name", "") for c in cookies}
-
-        # 1. _m_h5_tk 必须有效（复用 _has_valid_m5tk_in_list 保持判定一致）
-        if not _has_valid_m5tk_in_list(cookies):
-            logger.debug("cookie_checker(兜底): 浏览器内存 _m_h5_tk 缺失/过期")
-            return False
-
-        # 2. identity 层至少一个
-        identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
-        if not (identity_cookies & names):
-            logger.debug("cookie_checker(兜底): 浏览器内存 identity 层 Cookie 缺失 (names=%s)", names)
-            return False
-
-        # 3. 关键 cookie 的 expires 未过期
-        if not _check_browser_key_cookies_expiry(cookies):
-            return False
-
-        # 4. collector 会话失效标志：浏览器内存 token 实际有效时清除粘性标志
-        _clear_collector_sticky_flag(container)
-
-        logger.info("cookie_checker: JSON 判定无效，但浏览器内存 cookie 有效（兜底通过）")
-        return True
-    except Exception as e:
-        logger.debug("浏览器内存兜底检查失败: %s", e)
-        return False
 
 
 # ============================================================
@@ -606,7 +327,7 @@ async def stop_session() -> JSONResponse:
 # 健康检查
 # ============================================================
 @router.get("/health")
-async def check_health() -> JSONResponse:
+async def check_health(request: Request) -> JSONResponse:
     """执行健康检查
 
     返回 HealthReport，包含：
@@ -626,8 +347,13 @@ async def check_health() -> JSONResponse:
             "hint": "initialize 会自动配置默认的 cookie 和 waf 检查器",
         })
 
+    # 透传当前会话用户（多用户隔离）：与导航栏 /api/auth/cookie/health 读取同一
+    # cookies_{user_id}.json，消除"右上角正常但反爬无效"的状态矛盾（meta-rule #96）。
+    # 单用户/管理令牌场景中间件注入 user_id="default"，多用户场景为真实 user_id。
+    current_user_id = getattr(getattr(request, "state", None), "user_id", None) or "default"
+
     try:
-        report = await orch.check_health()
+        report = await orch.check_health(user_id=current_user_id)
         return JSONResponse(content={
             "ok": True,
             "score": report.score,

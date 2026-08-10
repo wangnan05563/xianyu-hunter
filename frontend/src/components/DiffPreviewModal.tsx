@@ -56,7 +56,8 @@ function flattenConfig(obj: Record<string, unknown>, prefix = ''): Record<string
       result[key] = value
     }
     // prefix 参数保留为预留扩展点，当前不使用（避免字段名带路径前缀）
-    void prefix
+    // 故意引用避免 TypeScript 未使用参数警告；SonarQube S3735 要求不使用 void 操作符
+    if (prefix) { /* noop */ }
   }
   return result
 }

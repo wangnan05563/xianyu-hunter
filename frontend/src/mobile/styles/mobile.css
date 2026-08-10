@@ -69,10 +69,7 @@
 
 .m-content {
   padding: 12px;
-}
-
-/* 移动端正文 15px，比桌面 14px 大，提升可读性 */
-.m-content {
+  /* 移动端正文 15px，比桌面 14px 大，提升可读性 */
   font-size: 15px;
 }
 
@@ -245,8 +242,8 @@
   margin: 8px 0;
   padding: 4px 12px;
   border-left: 3px solid rgba(0, 0, 0, 0.2);
-  color: rgba(0, 0, 0, 0.6);
-  background: rgba(0, 0, 0, 0.02);
+  color: #404040; /* 使用实色确保 SonarQube 正确计算对比度 */
+  background: #fafafa; /* 实色背景，避免 SonarQube 对 rgba 半透明背景的误判 */
 }
 
 .m-md a {

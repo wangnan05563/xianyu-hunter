@@ -113,7 +113,14 @@ def test_seller_upsert_and_get(tmp_repo: Repository) -> None:
 
 
 def test_evaluation_save_and_get_latest(tmp_repo: Repository) -> None:
-    """评估结果保存与查最新"""
+    """评估结果保存与查最新
+
+    为什么用显式 created_at 而非默认值：SQLite 默认时间精度为秒级，
+    连续 3 次 insert 可能在同秒内完成，导致 order_by(created_at desc)
+    排序不唯一，测试结果不稳定。用显式时间确保排序确定性。
+    """
+    from datetime import datetime, timezone
+
     for i in range(3):
         tmp_repo.save_evaluation({
             "item_id": "i1",
@@ -122,6 +129,7 @@ def test_evaluation_save_and_get_latest(tmp_repo: Repository) -> None:
             "risk_level": "low",
             "dimension_scores": "{}",
             "reject_reasons": "[]",
+            "created_at": datetime(2026, 1, 1, 0, 0, i, tzinfo=timezone.utc),
         })
 
     latest = tmp_repo.get_latest_evaluation("i1")

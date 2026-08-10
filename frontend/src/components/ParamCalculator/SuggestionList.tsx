@@ -71,13 +71,20 @@ const SEVERITY_ORDER: Record<Severity, number> = {
   info: 2,
 }
 
+// severity 转 CSS 变量名：提取为独立函数避免嵌套三元（SonarQube S3358）
+function severityBg(s: Severity): string {
+  if (s === 'error') return 'danger'
+  if (s === 'warning') return 'warning'
+  return 'info'
+}
+
 export function SuggestionList({
   suggestions,
   isValidating = false,
   elapsedMs,
   compact = false,
   emptyText = '参数配置无异常',
-}: SuggestionListProps) {
+}: Readonly<SuggestionListProps>) {
   // 校验中：显示加载提示
   if (isValidating) {
     return (
@@ -181,8 +188,8 @@ export function SuggestionList({
               key={`${s.code}-${i}`}
               style={{
                 padding: '8px 12px',
-                background: `var(--xh-bg-${s.severity === 'error' ? 'danger' : s.severity === 'warning' ? 'warning' : 'info'}, rgba(0,0,0,0.02))`,
-                borderLeft: `3px solid var(--xh-${s.severity === 'error' ? 'danger' : s.severity === 'warning' ? 'warning' : 'info'}-border, ${meta.color})`,
+                background: `var(--xh-bg-${severityBg(s.severity)}, rgba(0,0,0,0.02))`,
+                borderLeft: `3px solid var(--xh-${severityBg(s.severity)}-border, ${meta.color})`,
                 borderRadius: 4,
               }}
             >

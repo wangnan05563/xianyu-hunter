@@ -1,7 +1,0 @@
-﻿powershell : PowerShell.exe execution failed with exit code: 1
-At line:15 char:7001
-+ ... \17_xianyu; powershell -NoProfile -ExecutionPolicy Bypass -Command "& ...
-+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (:) [__Safe-Rm-Invoke-PowerShell], Exception
-    + FullyQualifiedErrorId : PowerShellExecutionFailed,__Safe-Rm-Invoke-PowerShell
- 

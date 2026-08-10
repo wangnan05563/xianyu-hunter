@@ -466,6 +466,35 @@ class BrowserManager:
                 f"✓ {requested & names}" if requested & names else "✗ 未找到目标 Cookie",
                 f"✓ {found}" if found else "✗ 未找到关键身份 Cookie",
             )
+            # 部分 Cookie 注入后未落地（实测：CDP/真实 Edge 对 secure/sameSite 有约束，
+            # 个别身份 Cookie 如 unb 会被静默丢弃，而 cookie2/sgcookie 正常）。
+            # 仅对「未落地」的 cookie 用显式 secure=True/sameSite=Lax 重试一次，
+            # 命中则修复，未命中则明确告警命名，避免后续误判为"浏览器不可用"。
+            missing = requested - names
+            if missing:
+                logger.warning(
+                    "add_cookies: 以下 Cookie 注入后未落地，尝试显式属性重试: {}",
+                    sorted(missing),
+                )
+                retry_items = []
+                for c in cookies:
+                    if str(c.get("name") or "") in missing:
+                        item = dict(c)
+                        item["secure"] = True
+                        item["sameSite"] = "Lax"
+                        retry_items.append(item)
+                try:
+                    await self._context.add_cookies(retry_items)
+                    re_injected = await self._context.cookies()
+                    re_names = {c["name"] for c in re_injected}
+                    still = missing - re_names
+                    if still:
+                        logger.warning("add_cookies: 显式属性重试后仍缺失: {}", sorted(still))
+                    else:
+                        logger.info("add_cookies: 显式属性重试后缺失 Cookie 已补齐: {}", sorted(missing))
+                    names |= re_names
+                except Exception as e:
+                    logger.warning("add_cookies: 显式属性重试失败: {}", e)
             return bool(requested & names)
         except Exception as e:
             logger.error("add_cookies 失败: {}", e)

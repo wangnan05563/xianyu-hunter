@@ -810,37 +810,39 @@ class TailscaleProvider(TunnelProvider):
         根路径模式下，URL 为 https://host（旧行为）。
         通过匹配 Handlers 中的路径前缀确认当前应用的 Funnel 配置是否存在。
         """
+        host = self._extract_funnel_host(data)
+        if not host:
+            return None
+        if self._path_prefix:
+            return self._check_funnel_path_prefix(data, host)
+        return f"https://{host}"
+
+    @staticmethod
+    def _extract_funnel_host(data: dict) -> str | None:
+        """从 AllowFunnel 中提取第一个启用 Funnel 的 ts.net 主机名"""
         allow_funnel = data.get("AllowFunnel")
         if not isinstance(allow_funnel, dict):
             return None
-        # 提取 ts.net 主机名
-        host: str | None = None
         for endpoint, enabled in allow_funnel.items():
             if not enabled:
                 continue
             h = str(endpoint).rsplit(":", 1)[0].rstrip(".")
             if h.lower().endswith(".ts.net"):
-                host = h
-                break
-        if not host:
+                return h
+        return None
+
+    def _check_funnel_path_prefix(self, data: dict, host: str) -> str | None:
+        """路径区分模式：检查 Handlers 中是否存在自己的路径前缀"""
+        web = data.get("Web", {})
+        handlers = {}
+        if isinstance(web, dict):
+            for _endpoint, cfg in web.items():
+                if isinstance(cfg, dict) and "Handlers" in cfg:
+                    handlers = cfg["Handlers"]
+                    break
+        if not isinstance(handlers, dict) or self._path_prefix not in handlers:
             return None
-
-        # 路径区分模式：检查 Handlers 中是否存在自己的路径前缀
-        if self._path_prefix:
-            web = data.get("Web", {})
-            handlers = {}
-            if isinstance(web, dict):
-                # Web 的 key 格式为 "host:443"，取第一个匹配的
-                for _endpoint, cfg in web.items():
-                    if isinstance(cfg, dict) and "Handlers" in cfg:
-                        handlers = cfg["Handlers"]
-                        break
-            if not isinstance(handlers, dict) or self._path_prefix not in handlers:
-                return None
-            return f"https://{host}{self._path_prefix}"
-
-        # 根路径模式（旧行为）：URL 不含路径前缀
-        return f"https://{host}"
+        return f"https://{host}{self._path_prefix}"
 
     @property
     def status(self) -> str:

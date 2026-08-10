@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from xianyu_hunter.container import Container
 from xianyu_hunter.paths import get_data_dir, get_log_dir
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.cache import cached_ttl
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
@@ -66,6 +67,7 @@ def _iter_pycache_dirs(root: Path = Path(".")) -> list[Path]:
 
 # ============== 清理前状态查询 ==============
 @router.get("/status")
+@cached_ttl(60, key_fn=lambda container: "maintenance_status", stale_while_revalidate=True)
 def maintenance_status(
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:

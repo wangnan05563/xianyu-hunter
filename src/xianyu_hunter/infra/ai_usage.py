@@ -21,8 +21,14 @@ from typing import Any
 
 from loguru import logger
 
-# 用量数据文件路径
-USAGE_FILE = Path("data/ai_usage.json")
+from xianyu_hunter.paths import get_data_dir
+
+# 用量数据文件路径：统一走 paths.get_data_dir()，
+# 开发模式落在 data/（与 SQLite/cookies 同级），打包(frozen)模式落在 %APPDATA%/XianyuHunter/data，
+# 避免此前硬编码 Path("data/...") 在 PyInstaller 冻结版 / 非项目根 CWD 下读错位置，
+# 导致「AI 用量仪表盘」长期读不到历史用量（今日=0、近 7 天趋势空白）。
+def _usage_file() -> Path:
+    return get_data_dir() / "ai_usage.json"
 
 # 各模型每 1K token 价格（USD）
 MODEL_PRICING: dict[str, dict[str, float]] = {
@@ -250,9 +256,9 @@ def get_daily_summary() -> DailyUsage:
             )
 
     # 从持久化文件补充今日历史记录（覆盖服务重启前已写入的部分）
-    if USAGE_FILE.exists():
+    if _usage_file().exists():
         try:
-            data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
+            data = json.loads(_usage_file().read_text(encoding="utf-8"))
             for entry in data.get("records", []):
                 date_key = datetime.fromtimestamp(
                     entry["timestamp"], tz=timezone.utc
@@ -297,10 +303,10 @@ def _load_history_from_file(summaries: dict[str, DailyUsage], today: str) -> Non
 
     独立出 get_recent_usage 的文件解析循环，集中处理 JSON 异常与日期过滤。
     """
-    if not USAGE_FILE.exists():
+    if not _usage_file().exists():
         return
     try:
-        data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(_usage_file().read_text(encoding="utf-8"))
     except (json.JSONDecodeError, KeyError):
         return
     for entry in data.get("records", []):
@@ -412,11 +418,11 @@ def get_budget_config() -> BudgetConfig:
 def _persist_record(record: UsageRecord) -> None:
     """将调用记录追加到 JSON 文件"""
     try:
-        USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _usage_file().parent.mkdir(parents=True, exist_ok=True)
         data: dict[str, Any] = {"records": []}
-        if USAGE_FILE.exists():
+        if _usage_file().exists():
             try:
-                data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
+                data = json.loads(_usage_file().read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -434,6 +440,6 @@ def _persist_record(record: UsageRecord) -> None:
         if len(data["records"]) > max_records:
             data["records"] = data["records"][-max_records:]
 
-        USAGE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _usage_file().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as e:
         logger.warning(f"AI 用量记录持久化失败: {e}")
