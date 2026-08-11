@@ -25,7 +25,12 @@ export default function MobileAIConfig() {
     try {
       const [cfg, use] = await Promise.all([
         aiApi.getConfig(),
-        aiApi.getUsage().catch(() => null),
+        // 用量加载失败时打日志而非静默回退 null，避免「今日用量」卡片
+        // 凭空消失却无任何线索（与桌面端 AIConfig 保持一致的诊断行为）。
+        aiApi.getUsage().catch((e) => {
+          console.warn('[MobileAIConfig] 用量数据加载失败，已隐藏卡片：', e)
+          return null
+        }),
       ])
       setForm(cfg)
       if (use) setUsage(use)

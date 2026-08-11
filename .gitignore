@@ -301,3 +301,9 @@ docs/04-系统维护/sonar-reports/test_pwsh.txt
 
 # ---------- Git Worktrees ----------
 .worktrees/
+
+# ---------- 第八轮清理新增（2026-08-11）----------
+# 以下目录在本轮清理中已删除，加入忽略以防再次累积/误提交
+test_results/
+temp/
+tmp/

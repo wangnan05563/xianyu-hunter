@@ -1,0 +1,58 @@
+{
+  "categories": {
+    "pycache": {
+      "files": 3784,
+      "bytes": 63071802,
+      "dirs": 0
+    },
+    "browser-data": {
+      "files": 428,
+      "bytes": 52966361,
+      "dirs": 0
+    },
+    ".pytest_cache": {
+      "files": 5,
+      "bytes": 144323,
+      "dirs": 0
+    },
+    ".scannerwork": {
+      "files": 2,
+      "bytes": 277,
+      "dirs": 0
+    },
+    "temp": {
+      "files": 124,
+      "bytes": 4650489,
+      "dirs": 0
+    },
+    "tmp": {
+      "files": 1,
+      "bytes": 68533,
+      "dirs": 0
+    },
+    "logs": {
+      "files": 5,
+      "bytes": 29191094,
+      "dirs": 0
+    },
+    "root_logs": {
+      "files": 11,
+      "bytes": 14027323,
+      "dirs": 0
+    },
+    "helper_scripts": {
+      "files": 8,
+      "bytes": 89250,
+      "dirs": 0
+    }
+  },
+  "files": 4360,
+  "bytes": 164209452,
+  "dirs": 0,
+  "started": "2026-08-11T01:34:17",
+  "files_deleted_ok": 4360,
+  "files_bad": 0,
+  "dirs_removed_ok": 3439,
+  "dirs_bad": 0,
+  "finished": "2026-08-11T01:57:02"
+}

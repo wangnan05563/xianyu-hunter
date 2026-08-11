@@ -255,11 +255,15 @@ class EmbeddingService:
                     done, total, start_ts, last_log_done
                 )
                 self._safe_invoke_progress_cb(progress_cb, done, total)
-            # 本地模式不消耗 token，记录用量便于统计调用次数
+            # 本地模式无远程 token 费用，但按批量文本总字符估算 token 量回填统计，
+            # 让仪表盘能反映 embedding 负载；费用明确置 0（本地不花钱）。
+            total_chars = sum(len(t) for t in texts)
             self._ai_usage.record_usage(
                 endpoint="chatbot_embedding",
                 model=self._model,
-                response_data={"usage": {"total_tokens": 0}, "data": [{"embedding": []}]},
+                input_tokens_override=max(1, int(total_chars / 1.5)),
+                cost_override=0.0,
+                billable=False,
             )
             return all_vecs, []
         except asyncio.TimeoutError:
@@ -341,16 +345,27 @@ class EmbeddingService:
             return await self._call_local(text)
         return await self._call_remote(text)
 
+    def _estimate_local_tokens(self, text: str) -> int:
+        """本地 embedding 不消耗远程 token/费用，但用字符数粗略估算 token 量，
+        让「今日 Tokens / 近 7 天趋势」能反映 embedding 真实负载，
+        避免本地大量 embedding 调用在仪表盘上完全不可见（看起来像漏记）。
+        中文约 1.5 字符/token；按字符数 / 1.5 估算并取整，至少记 1。
+        """
+        return max(1, int(len(text) / 1.5))
+
     async def _call_local(self, text: str) -> list[float]:
         """本地 backend 调用：通过 to_thread 包装同步推理"""
         backend = self._get_local_backend()
         # to_thread：sentence-transformers 是同步库，避免阻塞事件循环
         vec = await asyncio.to_thread(backend.embed, text)
-        # 本地模式不消耗 token，但仍记录用量便于统计调用次数
+        # 本地模式无远程 token 费用，但用估算 token 量回填用量统计，
+        # 让仪表盘能反映 embedding 负载；费用明确置 0（本地不花钱）。
         self._ai_usage.record_usage(
             endpoint="chatbot_embedding",
             model=self._model,
-            response_data={"usage": {"total_tokens": 0}, "data": [{"embedding": []}]},
+            input_tokens_override=self._estimate_local_tokens(text),
+            cost_override=0.0,
+            billable=False,
         )
         return vec
 

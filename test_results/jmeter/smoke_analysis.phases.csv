@@ -1,2 +1,0 @@
-phase,samples,errors,error_rate,avg,min,max,p50,p90,p95,p99,throughput,kb_per_s,avg_connect,avg_latency
-Smoke(3c/5s),1432,0,0.0,9.09217877094972,3,165,8.0,12.0,14.0,29.0,311.304347826087,185.3050696331522,0.63268156424581,9.049581005586592

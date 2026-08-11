@@ -14,7 +14,7 @@ version: "2.9.0"
 
 | 模式 | 名称 | 触发关键词 | 配置节点 | references 文件 |
 |------|------|-----------|----------|----------------|
-| A | 诊断模式 | 白屏/路由不跳转/PWA/移动端地址跳不过去 | `decision_tree` | references/diagnostic-output.md |
+| A | 诊断模式 | 白屏/路由不跳转/PWA/移动端地址跳不过去/隧道裸根404 | `decision_tree` | references/diagnostic-output.md |
 | B | 全面测试 | 全面功能测试/遍历所有菜单/点击所有按钮/生成测试报告 | `test_execution + routes_discovery` | references/page-traversal.md |
 | C | Cookie 自愈 | Cookie自愈/token刷新/重试机制/登录后立即失效 | `backend_cookie_healing` | references/backend-cookie-healing-test.md |
 | D | Playwright 超时 | async阻塞调用超时/心跳协同/context.cookies()阻塞 | `async_timeout_test` | references/playwright-timeout-test.md |
@@ -49,6 +49,7 @@ version: "2.9.0"
 | AJ | 健康检查端到端 | 双数据源一致性/health endpoint/check-update | `mode_aj_health_check_e2e_test` | references/health-check-e2e-test.md |
 | AK | 源码编码完整性 | 源码中文变?/源码乱码/GBK误读/mojibake/编码损坏/问号 | `mode_ak_source_file_encoding_integrity` | references/source-file-encoding-integrity-test.md |
 | AL | 子路径部署一致性 | 子路径/域名模式部署、API前缀、双挂载、PWA规则、导航链接前缀 | `subpath_deployment` | references/subpath-deployment-test.md |
+| AM | 隧道/域名访问 404 | 隧道裸根404/域名访问404/page not found/账户切换跳404 | `tunnel_access_404` | references/tunnel-access-404-test.md |
 
 ## 共享步骤
 
@@ -156,6 +157,7 @@ version: "2.9.0"
 ## 版本历史
 
 - **v2.9.0** (2026-08-08)：新增模式 AL（子路径部署一致性验证），`config.yaml` 新增 `spa.basename`/`spa.api_prefix` 配置节点，强化"禁止硬编码前缀、全部参数走配置"的泛化约束
+- **v2.10.0** (2026-08-11)：新增模式 AM（隧道/域名访问 404 诊断，决策树 DT-12），覆盖 SPA 重定向裸根 / 部署副本陈旧 / 隧道 path_prefix 不一致 / PWA SW 陈旧缓存四类根因；与 xianyu-hunter-dev 规范 23-26、xianyu-frontend-code-review（维度 46）、xianyu-backend-code-review（维度 37）保持跨技能一致。全部参数走 `tunnel_access_404` 配置节点，无硬编码。
 - **v2.8.0** (2026-07-31)：文档结构重构，SKILL.md 精简为模式速查表 + 设计原则 + 共享步骤索引，详细内容全部拆分到 references/ 按需加载
 - **v2.7.0**：新增模式 AD/AE/AF/AJ
 - **v2.3.0**：新增模式 AA：资源创建幂等性与状态闭环回归测试

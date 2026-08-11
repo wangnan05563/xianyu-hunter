@@ -15,7 +15,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +65,7 @@ class UsageRecord:
     input_tokens: int
     output_tokens: int
     cost_usd: float   # 估算费用（USD）
+    billable: bool = True  # 是否计入每日预算；本地 embedding 等免费调用置 False
 
 
 @dataclass
@@ -125,8 +126,19 @@ def _ensure_budget_loaded() -> None:
         _budget_loaded = True
 
 
+def _date_key_of(ts: float) -> str:
+    """把 unix 时间戳转成本地日期键（YYYY-MM-DD）
+
+    统一用「本地时区」而非 UTC：本应用面向中国用户，若用 UTC 会在跨日界
+    （北京时间 08:00 前）把「今日」误归到前一天，导致今日调用/Tokens 与
+    近 7 天趋势整体偏移一天。历史记录存的是原始 epoch，读取时统一按本地分桶，
+    无需迁移旧数据。
+    """
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+
+
 def _today_key() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return _date_key_of(time.time())
 
 
 def _estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
@@ -139,10 +151,21 @@ def record_usage(
     endpoint: str,
     model: str,
     response_data: dict[str, Any] | None = None,
+    *,
+    input_tokens_override: int | None = None,
+    output_tokens_override: int | None = None,
+    cost_override: float | None = None,
+    billable: bool = True,
 ) -> dict[str, Any]:
     """记录一次 AI 调用的用量
 
-    从 OpenAI 兼容响应中提取 usage 字段。
+    优先从 OpenAI 兼容响应中提取 usage 字段；
+    对于 embedding 端点，远程响应常只返回 total_tokens（无 completion_tokens），
+    若 prompt_tokens/completion_tokens 都为 0 则兜底用 total_tokens 回填，
+    避免远程 embedding 调用漏记 token。
+    input_tokens_override / output_tokens_override / cost_override 用于本地
+    embedding 等场景：本地不消耗远程 token 费用，但可用估算 token 量回填统计，
+    让仪表盘反映真实负载，同时把费用明确置 0（本地不花钱）。
     返回用量摘要 dict。
     """
     input_tokens = 0
@@ -152,8 +175,21 @@ def record_usage(
         usage = response_data["usage"]
         input_tokens = usage.get("prompt_tokens", 0)
         output_tokens = usage.get("completion_tokens", 0)
+        # embedding 端点通常只有 total_tokens，无 completion_tokens；
+        # 两者都为 0 时尝试用 total_tokens 兜底，避免漏记远程 embedding token。
+        if input_tokens == 0 and output_tokens == 0:
+            input_tokens = usage.get("total_tokens", 0)
 
-    cost = _estimate_cost(model, input_tokens, output_tokens)
+    if input_tokens_override is not None:
+        input_tokens = input_tokens_override
+    if output_tokens_override is not None:
+        output_tokens = output_tokens_override
+
+    cost = (
+        cost_override
+        if cost_override is not None
+        else _estimate_cost(model, input_tokens, output_tokens)
+    )
     record = UsageRecord(
         timestamp=time.time(),
         endpoint=endpoint,
@@ -161,6 +197,7 @@ def record_usage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost,
+        billable=billable,
     )
 
     with _lock:
@@ -194,13 +231,14 @@ def check_budget() -> tuple[bool, str]:
         if len(recent) >= _budget.rate_limit_per_min:
             return False, f"频率超限：每分钟最多 {_budget.rate_limit_per_min} 次"
 
-        # 检查每日 token 上限
-        total_tokens = sum(r.input_tokens + r.output_tokens for r in _today_records)
+        # 检查每日 token 上限（仅统计 billable 记录；
+        # 本地 embedding 等免费调用虽记录估算 token 供仪表盘展示，但不占用预算）
+        total_tokens = sum(r.input_tokens + r.output_tokens for r in _today_records if r.billable)
         if total_tokens >= _budget.daily_token_limit:
             return False, f"Token 超限：今日已用 {total_tokens:,}，上限 {_budget.daily_token_limit:,}"
 
-        # 检查每日费用上限
-        total_cost = sum(r.cost_usd for r in _today_records)
+        # 检查每日费用上限（同样仅统计 billable 记录）
+        total_cost = sum(r.cost_usd for r in _today_records if r.billable)
         if total_cost >= _budget.daily_cost_limit_usd:
             return False, f"费用超限：今日已用 ${total_cost:.2f}，上限 ${_budget.daily_cost_limit_usd:.2f}"
 
@@ -260,9 +298,7 @@ def get_daily_summary() -> DailyUsage:
         try:
             data = json.loads(_usage_file().read_text(encoding="utf-8"))
             for entry in data.get("records", []):
-                date_key = datetime.fromtimestamp(
-                    entry["timestamp"], tz=timezone.utc
-                ).strftime("%Y-%m-%d")
+                date_key = _date_key_of(entry["timestamp"])
                 if date_key == today:
                     # 文件中的记录与内存可能重叠（同一请求既在内存也在文件），
                     # 但 record_usage 先写内存再异步写文件，且文件是追加模式，
@@ -310,9 +346,7 @@ def _load_history_from_file(summaries: dict[str, DailyUsage], today: str) -> Non
     except (json.JSONDecodeError, KeyError):
         return
     for entry in data.get("records", []):
-        date_key = datetime.fromtimestamp(
-            entry["timestamp"], tz=timezone.utc
-        ).strftime("%Y-%m-%d")
+        date_key = _date_key_of(entry["timestamp"])
         if date_key == today:
             continue  # 今日数据已从内存加载
         if date_key not in summaries:
@@ -433,6 +467,7 @@ def _persist_record(record: UsageRecord) -> None:
             "input_tokens": record.input_tokens,
             "output_tokens": record.output_tokens,
             "cost_usd": record.cost_usd,
+            "billable": record.billable,
         })
 
         # 保留最近 30 天数据（按条数估算：每天最多1000条）
