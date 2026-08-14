@@ -23,7 +23,7 @@
 
 **测试日期**：{测试日期}
 **测试环境**：{浏览器工具类型}（{设备预设}：{视口宽度}x{视口高度}, {移动端标记}, {触摸标记}, {缩放比例}x scale）
-**测试地址**：http://{host}:{port}/app/
+**测试地址**：http://{host}:{port}/xianyu/
 **认证方式**：{认证类型}
 
 ---
@@ -148,7 +148,7 @@
     "tool": "{浏览器工具类型}",
     "device": "{设备预设}",
     "viewport": "{宽度}x{高度}",
-    "url": "http://{host}:{port}/app/",
+    "url": "http://{host}:{port}/xianyu/",
     "auth_type": "{认证类型}"
   },
   "scope": {

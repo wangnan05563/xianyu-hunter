@@ -20,6 +20,9 @@ template: "templates/report-template.md"
 
 | 版本 | 新增检查点 | 维度 | 扫描�?| 核心变化 |
 |---|---|---|---|---|
+| v4.70.0 | B-REVIEW-291 BUILD-ARTIFACT-RESOURCE-EXPLICIT / B-REVIEW-292 BUILD-RUNTIME-PYTHON-PINNING / B-REVIEW-293 ASYNC-CLEANUP-SHIELD-RETRIEVE / B-REVIEW-294 EXTERNAL-PAGE-RESTART-INVALIDATION / B-REVIEW-295 BUILD-SCRIPT-CONFIG-DRIVEN | 5 | 280->295 |
+| v4.71.0 | B-REVIEW-296 SOURCE-FILE-PROTECTION | 1 | 295->296 | 源码受保护（清理脚本禁删/截断 tracked 源，meta-rule #116 落地，与 frontend 维度 42 / F-REVIEW-236 对齐） |
+| v4.72.0 | B-REVIEW-338 COOKIE-TOKEN-LIFECYCLE / B-REVIEW-339 INVALID-RESPONSE-DIAGNOSTICS / B-REVIEW-340 WRAPPER-API-VERIFY / B-REVIEW-341 PROXY-REDIRECT-SAFETY | 4 | 338->341 | 登录/Cookie/测试专项（meta-rules #120,#121,#122,#123,#126，retrospective-2026-08-13-login-cookie）：Cookie 预热首页+注入后 rehydrate / 错误响应诊断契约禁 0空误导 / 包装器 API 核实 / 反代重定向安全；参数经 config.yaml#cookie_warmup#cookie_rehydrate#invalid_response_diagnostics#proxy_redirect_safety 管理，无硬编码 |
 | v4.50.0 | B-REVIEW-238 DATA-PROPAGATION-INTEGRITY / B-REVIEW-239 SNAPSHOT-VS-LATEST-SEPARATION / B-REVIEW-240 FALLBACK-DATA-MERGE-COMPLETENESS / B-REVIEW-241 MULTIUSER-ISOLATION-WRITE-CONSISTENCY | 10,10,10,10 | 236->240 | �������͸�������� / ����������ְֵ����� / fallback ���ݺϲ������� / ���û�����д��һ���ԣ�meta-rules #83 ��أ�2026-07-18 ������� Bug ���̣� |
 | v4.60.0 | B-REVIEW-275 CACHE-GUARD-3RULES / B-REVIEW-276 FIELD-STRATEGY / B-REVIEW-277 STATE-MACHINE-RETURN / B-REVIEW-278 CALLBACK-INJECTION / B-REVIEW-279 CROSS-LAYER-CLOSED-LOOP / B-REVIEW-280 WINDOWS-ENCODING | 8,8,8,8,8,8 | 274->280 | 缓存守卫三原则/数据写入策略字段级决策/状态机返回值语义/回调注入默认值/跨层闭环验证/Windows编码规范（meta-rule #102，2026-07-23 四维度复盘） |
 | v4.61.0 | B-REVIEW-281 CONFIG-REFACTOR-5STEP / B-REVIEW-282 SCOPE-CONTRACT-CHECK / B-REVIEW-283 IMPORT-NAME-CHECKLIST / B-REVIEW-284 POWERSHELL-LONG-TASK-OUTPUT / B-REVIEW-285 RESOURCE-OVERLOAD-TOLERANCE / B-REVIEW-286 SONARQUBE-PIPELINE-CLOSED-LOOP / B-REVIEW-287 RESILIENCE-RECOVERY / B-REVIEW-288 TEST-VERIFY-TIERS / B-REVIEW-289 CROSS-FILE-REFERENCE-SYNC / B-REVIEW-290 CONFIG-ACCESS-UNIFIED-ENTRY | 42 | 280->290 | 重构安全性审查（配置化重构5步法/作用域契约/导入名称checklist/PowerShell长任务/资源过载容错/SonarQube闭环/弹性恢复/测试三档/跨文件同步/配置统一入口，2026-07-23 复盘规范集后端落地） |
@@ -1796,7 +1799,8 @@ class TaskRow(Base):
 
 - 【强制】FastAPI 应用�?`create_app()` 工厂
 - 【强制】中间件 LIFO 注册顺序：RequestId �?BearerAuth �?路由
-- 【强制】SPA catch-all 处理 `/app/{full_path:path}`，返�?`index.html`
+- 【强制】SPA catch-all 处理 `/{full_path:path}`（及根 `/`），返�?`index.html`；`/xianyu/*` 由 `_serve_spa_request` 剥离 `xianyu/` 前缀定位 `static/spa/assets/*`（与 `vite.config.ts base:'/xianyu/'` 对齐）。禁止写死 `/app/` 或裸根重定向（Funnel 下会 404 / 重定向循环）
+- 【强制】`/xianyu/*` 由 `_serve_spa_request` 剥离 `xianyu/` 前缀定位 `static/spa/assets/*`（与 `vite.config.ts base:'/xianyu/'` 对齐）；禁止写死 `/app/` 或裸根重定向（Funnel 下 `/xianyu/` 裸根会 404、重定向会无限循环）
 - 【强制】`APIRouter(prefix="/api/<�?", tags=["<�?"])`
 - 【强制】Swagger UI 自定�?`_SWAGGER_UI_HTML` 注入导航�?
 - 【推荐】启动钩�?`startup.py` 管理 `startup`/`shutdown` 事件
@@ -6284,3 +6288,136 @@ Get-ChildItem -Path "scripts/" -Filter "*.ps1","*.bat" -Recurse | Select-String 
 ---
 
 > **v4.60.0 B-REVIEW-275~280 四维度复盘编码规范落地**：基于12个历史问题复盘，新增缓存守卫三原则/数据写入策略字段级决策/状态机返回值语义/回调注入默认值/跨层闭环验证/Windows编码规范 6 项审查要点，config.yaml 已补全 cache_guard / field_strategy / state_machine_return / callback_injection / cross_layer_closed_loop / windows_encoding 配置节点。
+
+---
+
+## 47. 构建与运行时韧性（Build & Runtime Resilience）v4.70 🆕
+
+> 对应 `xianyu-hunter-dev` meta-rules #112~#115（2026-08 三起构建/运行时问题四维度复盘）。
+> 所有审查参数（图标路径/钉选 Python 路径/超时秒数/选择器/严重级）均在 `config.yaml` 对应节点管理，**禁止硬编码**；判断一律用 grep 信号，禁止语义判断。
+
+### B-REVIEW-291: BUILD-ARTIFACT-RESOURCE-EXPLICIT 构建产物资源指令显式化
+
+- **配置节点**：`config.yaml#build_artifact_resource`
+- **问题**：安装包/卸载程序缺 `SetupIconFile` 用默认图标；构建脚本内嵌 `installer.iss` 模板未同步同指令，删文件重建即丢失；"复用系统图标"误绑定系统资源（构建工具只接受具体 `.ico`）。
+- **关键要求**：安装包图标（SetupIconFile）与应用 exe 图标（spec `icon=`）分别显式声明；手写 `installer.iss` 与构建脚本自动生成模板必须同步同一指令；系统图标须先抽取成 `.ico` 再引用（版权风险）。
+- **定位方式**：
+  ```powershell
+  grep "SetupIconFile" installer.iss
+  grep "icon=" xianyu-hunter.spec
+  grep "SetupIconFile" scripts/build-exe.ps1
+  ```
+- **判断标准**：
+  1. `installer.iss` 缺 `SetupIconFile` → **CRITICAL**（安装包默认图标）
+  2. 构建脚本模板缺 `SetupIconFile` → **HIGH**（重建丢失）
+  3. 引用 `shell32.dll`/`imageres.dll` 系统图标 → **WARNING**（须抽取成 `.ico`，版权风险）
+- **修复方案**：加 `SetupIconFile=assets\xianyu-hunter.ico`；同步模板；用 `extract-system-icon.ps1` 抽取系统图标成 `.ico`。
+- **结果呈现**：⚠️ 构建产物资源未显式化——[文件] 缺 `SetupIconFile` 将使用默认图标
+- **适用**：Inno Setup/NSIS/PyInstaller/MSIX 打包；需自定义图标的发布包
+- **不适用**：纯开发运行；Web 静态部署；第三方默认资源且产品允许
+
+### B-REVIEW-292: BUILD-RUNTIME-PYTHON-PINNING 构建运行时 Python 钉选与自愈
+
+- **配置节点**：`config.yaml#build_runtime_python`
+- **问题**：构建脚本裸依赖 PATH 的 `python` 创建 venv；当 PATH 中基础 Python 标准库损坏（`Lib\os.py` 缺失），venv 的 `pyvenv.cfg` 的 `home` 指向死 Python，运行 `python -m pip` 报 `Could not find platform independent libraries <prefix>`。
+- **关键要求**：钉选已知完好运行时（启动器 `set "PATH=%MGPy%;%PATH%"` 前置）；创建 venv 前校验 base 健康；pip/ensurepip 调用 `try/catch` 包裹，损坏时 fail-soft 返回"重建"而非硬中止。
+- **定位方式**：
+  ```powershell
+  grep "python" scripts/*.ps1 scripts/*.bat        # 是否裸用 python 不前置钉选
+  # 读 .venv-build/pyvenv.cfg 的 home → 指向 Python 是否 Lib\os.py 存在
+  grep "try" scripts/build-exe.ps1                  # pip 调用是否 fail-soft
+  ```
+- **判断标准**：
+  1. 裸用 `python` 而不前置钉选运行时 → **HIGH**
+  2. pip 调用无 `try/catch`，损坏即 `RemoteException` 硬中止 → **HIGH**
+  3. 误用 `$HOME` 自动变量（`$home` 碰撞）→ **WARNING**
+- **修复方案**：启动器前置托管 Python 3.13.12 到 PATH；`Test-BuildPip`/`Repair-BuildPip` 加 `try/catch` 软返回重建 venv。
+- **结果呈现**：⚠️ 构建运行时未钉选——PATH 中 `python` 可能损坏导致 venv 继承死 stdlib
+- **适用**：依赖 venv、从 PATH 解析 Python 的构建/部署脚本；CI 多版本并存
+- **不适用**：Dockerfile 显式基础镜像（PATH 确定）；PATH 受控单机；纯前端构建
+
+### B-REVIEW-293: ASYNC-CLEANUP-SHIELD-RETRIEVE 异步清理 shield + 异常取回
+
+- **配置节点**：`config.yaml#async_cleanup_resilience`
+- **问题**：`asyncio.wait_for(cleanup(), timeout=T)` 包裹在飞异步清理（Playwright `page.unroute`、task cancel、连接关闭），超时取消会连带取消 cleanup 内部在飞的 future，使其带 `TargetClosedError` 且无人取回 → `Future exception was never retrieved` 刷屏。
+- **关键要求**：① 清理前先探测 `page.is_closed()`/`context.is_closed()`/`browser.is_connected()` 关闭态短路；② 存活态用 `asyncio.shield` 包裹，超时只取消"等待"不取消"清理本身"；③ 给内部 task 加 `add_done_callback` 取回异常；④ 禁遗留未取回 future（每个 `create_task` 必须有 `await` 或 `done_callback`）。
+- **定位方式**：
+  ```powershell
+  grep "wait_for.*unroute|unroute(" src/      # 是否 shield + 关闭态短路
+  grep "asyncio.wait_for" src/                # 内部 task 是否被取消且异常未取回
+  grep "create_task|ensure_future" src/        # 每个 future 是否都有 await/done_callback
+  ```
+- **判断标准**：
+  1. `unroute` 等清理无关闭态短路且无 `shield` → **HIGH**
+  2. 内部 task 异常未 `done_callback` 取回 → **HIGH**
+  3. `create_task` 无 `await`/`done_callback` → **MEDIUM**
+- **修复方案**：先 `is_closed` 短路；`asyncio.shield` 包裹；`add_done_callback` 取回异常。
+- **结果呈现**：⚠️ 异步清理竞态——[调用点] 超时取消内部 future 将触发 never-retrieved 刷屏
+- **适用**：Playwright unroute / task cancel / 连接关闭；并发关闭可能竞态
+- **不适用**：纯同步清理；确定不并发关闭的单 owner 资源；短生命周期一次性脚本
+
+### B-REVIEW-294: EXTERNAL-PAGE-RESTART-INVALIDATION 外部页面重启失效
+
+- **配置节点**：`config.yaml#external_page_lifecycle`
+- **问题**：调度器/后台任务与实时请求共用浏览器实例时，live search 持有的 `Page` 经 `register_external_page` 注册以避免被 `close_all_pages` 误关；但整浏览器重启（`ensure_alive`→`close`）销毁已注册页面，仅依赖"跳过注册页"拦不住重启路径。
+- **关键要求**：`register_external_page` 必须；整浏览器重启须使 `_external_pages` 失效（标记/迁移）；关闭态短接（B-REVIEW-293）为最后防线。
+- **定位方式**：
+  ```powershell
+  grep "ensure_alive|close_all_pages|register_external_page" src/infra/browser.py
+  # → 重启路径是否对 _external_pages 做失效处理
+  ```
+- **判断标准**：
+  1. 重启路径未对 `_external_pages` 做失效 → **HIGH**
+  2. 清理路径无 `is_closed` 短接 → **MEDIUM**
+- **修复方案**：重启时失效注册页 + 日志；清理加关闭态短接。
+- **结果呈现**：⚠️ 外部页面生命周期失效——[重启路径] 未使注册页失效，可能并发关页面
+- **适用**：共用浏览器实例；有 `register_external_page` 封装；重启/故障转移路径
+- **不适用**：每请求独立 browser/context；纯无头一次性抓取
+
+### B-REVIEW-295: BUILD-SCRIPT-CONFIG-DRIVEN 构建脚本配置驱动
+
+- **配置节点**：`config.yaml#build_script_config_driven`
+- **问题**：构建/部署脚本硬编码绝对路径、超时秒数、选择器，违反配置驱动原则（meta-rule #1）且跨环境不可移植；与"无硬编码、参数全部配置化"的泛化要求冲突。
+- **关键要求**：路径/超时/选择器全部走 `config.yaml` 对应节点（build / build_runtime_python / spa 等）；禁止在脚本或技能中硬编码。
+- **定位方式**：
+  ```powershell
+  grep -nE "[A-Za-z]:\\|/usr/|/opt/" scripts/   # 硬编码绝对路径
+  grep -nE "timeout\s*=\s*[0-9]+|Timeout\s*=\s*[0-9]+" scripts/ src/  # 硬编码超时
+  grep -nE "querySelector|goto\(" scripts/ src/   # 硬编码选择器
+  ```
+- **判断标准**：
+  1. 硬编码绝对路径 → **MEDIUM**
+  2. 硬编码超时秒数 → **MEDIUM**
+  3. 硬编码选择器 → **LOW**
+- **修复方案**：提取到 `config.yaml` 对应节点（如 `build.command` / `build_runtime_python.pinned_python_path` / `spa.basename`）。
+- **结果呈现**：⚠️ 构建脚本硬编码——[文件] 含硬编码 [路径/超时/选择器]，违反配置驱动
+- **适用**：构建/部署/启动脚本（`.ps1`/`.bat`/`.py`）
+- **不适用**：语言级常量（HTTP 200）；协议固定值；安全必需固定值
+
+### B-REVIEW-296: SOURCE-FILE-PROTECTION 源码受保护（清理脚本禁删/截断 tracked 源）
+
+- **配置节点**：`config.yaml#source_file_protection`
+- **问题**：清理临时文件/构建产物的一键脚本（`scripts/*.bat`/`*.ps1`/`*.py`）若删除命令匹配 `src/`、`*.py`、`*.css`、`*.ts(x)` 等 tracked 源，会在提交时截断源码（历史已发生 Chatbot CSS 被 `cleanup` 提交从 1638 行截断至 43 行），上线后功能/样式大面积丢失。
+- **关键要求**：①清理脚本不得匹配 `protected_patterns`（src/scripts/*.py/*.css/*.ts(x)）；②删除动作禁止 `rm -rf` 整目录式覆盖，必须走"枚举清单 + 分片 + 备份清单"；③执行前必须有 `git status --short` 守卫（require_git_status_guard），确认不误伤 tracked 源；④清理白名单仅含 `allowed_cleanup_targets`（build/node_modules/.cache/__pycache__/dist/logs/临时日志），不在白名单的路径拒绝清理；⑤清理目标从配置读取，不把路径硬编码进脚本体。
+- **定位方式**：
+  ```powershell
+  grep -rn "rm -rf|Remove-Item|del " scripts/ | grep -E "src/|scripts/|\*\.py|\*\.css|\*\.tsx"
+  grep -rn "git status" scripts/ | Select-Object -First 1   # 是否有守卫
+  ```
+- **判断标准**：
+  1. 删除命令匹配 `protected_patterns` → **CRITICAL**
+  2. 清理脚本无 `git status` 守卫 / 无白名单排除 `src/` → **HIGH**
+  3. 清理路径硬编码、无法参数化 → **MEDIUM**
+- **修复方案**：清理脚本加 `git status --short` 守卫；白名单仅含 `allowed_cleanup_targets`；清理目标从 `source_file_protection` 配置节点读取。
+- **结果呈现**：⚠️ 源码受保护缺失——[脚本] 清理逻辑可匹配 [src/*.py/*.css]，存在截断 tracked 源风险
+- **适用**：本地一键清理脚本（bat/ps1/py）；CI temporary artifact cleanup；构建前后临时目录清理
+- **不适用**：路径写死且明确只含单文件临时产物（如 `rm build/output.zip`，不含 src/）；纯内存数据清理；第三方库内部清理逻辑
+
+### 审查流程与结果呈现增强（v4.70）
+
+- **流程**：对构建/部署脚本与异步资源清理，按 B-REVIEW-291~295 执行配置驱动核查——优先用上述 grep 信号定位，禁止"语义判断"等模糊描述；命中后回查 `config.yaml` 对应节点确认参数来源。
+- **呈现**：每条 finding 除既有 `FilePath / Explanation / Suggested Fix` 外，须标注 **①关联 meta-rule（#112~#115）②配置节点（`config.yaml#...`）③适用/不适用场景**，确保与整体工作流（xianyu-hunter-dev 规范 SOP、xianyu-auto-testing 模式 AN）高度一致、可追溯。
+
+> **v4.70.0 B-REVIEW-291~295 构建与运行时韧性落地**：基于 2026-08 三起构建/运行时问题（安装包默认图标 / 打包 Python 损坏 / 实时搜索 TargetClosedError）四维度复盘，新增构建产物资源显式化/构建运行时 Python 钉选自愈/异步清理 shield+取回/外部页重启失效/构建脚本配置驱动 5 项审查要点，config.yaml 已补全 build_artifact_resource / build_runtime_python / async_cleanup_resilience / external_page_lifecycle / build_script_config_driven 配置节点，全部参数化、无硬编码。对应 xianyu-hunter-dev meta-rules #112~#115 + 复盘 retrospective-2026-08-12；前端对应 xianyu-frontend-code-review F-REVIEW-227~230；测试对应 xianyu-auto-testing 模式 AN。
+
+> **v4.71.0 B-REVIEW-296 源码受保护落地**：基于 2026-08-13 复盘 retrospective-2026-08-13（Chatbot CSS 被清理脚本截断），新增源码受保护审查要点（meta-rule #116 落地），config.yaml 已补全 `source_file_protection` 节点（protected_patterns / allowed_cleanup_targets / require_git_status_guard / severity），全部参数化、无硬编码。前端对应 xianyu-frontend-code-review 维度 42 / F-REVIEW-236；测试对应 xianyu-auto-testing 模式（清理类脚本通用）。

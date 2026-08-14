@@ -283,12 +283,85 @@ async def _inject_cookies_to_worker_from_store() -> bool:
                 sync_cookie_layers_from_json()
             except Exception as e:
                 logger.debug("Cookie 注入后同步层状态失败: %s", e)
+            # O-08-11 修复：注入后再让 Worker 访问一次 goofish 首页，触发 MTOP
+            # 刷新 _m_h5_tk/_m_h5_tk_enc，并把新 token 回写 JSON。
+            # 根因：刚注入的是登录子进程导出的旧 token（可能已临近/超过 15-22 分钟 TTL），
+            # 若不刷新，/api/auth/cookie/health 会立刻报 cookie_expired_m_h5_tk，
+            # 用户悬浮查看 Cookie 状态看到"异常"。访问首页后浏览器内存有了新 token，
+            # 回写 JSON 保证下次重启也能加载到有效 token。
+            await _refresh_worker_m5tk_after_inject(user_id=_current_user_id())
         else:
             logger.warning("Cookie 注入 Worker 浏览器后关键 Cookie 验证未通过")
         return success
     except Exception as e:
         logger.debug("Cookie 注入 Playwright 上下文失败: %s", e)
         return False
+
+
+def _current_user_id() -> str:
+    """读取当前登录用户 ID（多用户隔离），无则 default"""
+    with _session_lock:
+        return _session.get("current_user_id") or "default"
+
+
+async def _refresh_worker_m5tk_after_inject(user_id: str) -> None:
+    """Worker 注入 cookie 后访问首页刷新 _m_h5_tk 并回写 JSON
+
+    仅在 collection_service 等采集入口之外、登录注入后主动做一次，
+    因为登录子进程导出的 token 可能已过期（尤其经历 30s 卡顿重试时）。
+    与 api_anticrawl/_try_refresh_m5tk_from_browser 互补：
+    那里是"JSON 过期→从浏览器内存读"，这里是"浏览器内存也可能只有旧 token→先访问首页刷新"。
+    """
+    try:
+        from xianyu_hunter.web.deps import get_container
+        from xianyu_hunter.web.services.cookie_store import get_cookie_store
+        from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+
+        container = get_container()
+        browser = getattr(container, "browser", None)
+        if not browser:
+            return
+
+        # 访问首页触发 MTOP token 刷新（与 browser_login 预热同源：首页才会刷新 _m_h5_tk）
+        page = None
+        try:
+            page = await browser.new_page()
+            await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=15000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+        except Exception as e:
+            logger.debug("Worker 刷新 token：访问首页失败（不致命）: %s", e)
+        finally:
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+
+        # 从刷新后的浏览器内存读取新 token 回写 JSON
+        try:
+            cookies = await browser.get_cookies()
+            updates: dict[str, str] = {}
+            for c in cookies:
+                name = c.get("name", "")
+                value = c.get("value", "")
+                if not value:
+                    continue
+                if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
+                    updates[name] = value
+            if updates:
+                store = get_cookie_store()
+                if store.update_cookie_values(updates, user_id=user_id):
+                    logger.info("Worker 刷新 token 成功：已回写 %s 到 JSON", sorted(updates))
+                else:
+                    logger.debug("Worker 刷新 token：JSON 无匹配 cookie，跳过回写")
+        except Exception as e:
+            logger.debug("Worker 刷新 token：读取/回写 cookie 失败（不致命）: %s", e)
+    except Exception as e:
+        logger.debug("Worker 刷新 token 异常（不影响登录主流程）: %s", e)
 
 
 async def _ensure_session_cookies_injected() -> None:

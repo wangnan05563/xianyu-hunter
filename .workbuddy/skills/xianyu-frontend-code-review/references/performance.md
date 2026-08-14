@@ -111,7 +111,7 @@ import { lazy, Suspense } from 'react'
 const BuyerStrategy = lazy(() => import('./pages/Config/BuyerStrategy'))
 
 <Route
-  path="/app/config/buyer"
+  path="/xianyu/config/buyer"
   element={
     <Suspense fallback={<Spin />}>
       <BuyerStrategy />

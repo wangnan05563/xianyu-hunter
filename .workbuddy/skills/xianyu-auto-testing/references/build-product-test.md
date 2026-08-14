@@ -14,6 +14,15 @@
 2. 检查 npm/pnpm 版本
 3. 验证 PATH 优先级（避免系统自带旧版本覆盖）
 
+### 步骤 1.5：构建依赖完整性（W1/W2/W3 固化）
+
+> 配置节点：`config.yaml#build_integrity`，禁止硬编码具体包名与标志
+
+1. **W1 — PWA peer 依赖声明**：`vite-plugin-pwa` 将 `workbox-build`/`workbox-window` 视为 peer 依赖，`npm ci` 会移除未显式声明的项。检查 `frontend/package.json` 的 `devDependencies` 是否包含 `build_integrity.workbox_peer_deps` 列表中的全部包；缺失则构建期报 `Cannot find module 'workbox-build'`。
+2. **W2 — emptyOutDir 与沙箱 safe-delete 冲突**：检查 `vite.config.ts` 的 `build.emptyOutDir` 是否为 `build_integrity.empty_out_dir`（默认 `false`）；输出目录清理由构建脚本以 `rmdir /s /q`（cmd 内建，不经被劫持的 `rm`/`del`）负责，避免 safe-delete fail-closed 中断 `emptyDir`。
+3. **W3 — optimizeDeps 缓存失效**：检查 `vite.config.ts` 是否对 `build` 命令设置 `optimizeDeps.force`（对应 `build_integrity.optimize_deps_force_on_build`，默认 `true`），避免重装 `node_modules` 后陈旧 `.vite/deps` 缓存导致纯 ESM 包 `Rollup failed to resolve import`。
+4. 构建后核对 `dist/index.html` 引用的入口 chunk 真实存在（`build_integrity.verify_entry_chunk`），且无裸根 `location.replace('/')`（旧构建标志）。
+
 ### 步骤 2：构建产物完整性验证
 1. 执行 `build.command` 构建
 2. 验证 `dist/` 目录下关键文件存在（index.html, assets/*.js, assets/*.css）

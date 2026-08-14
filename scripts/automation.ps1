@@ -288,7 +288,7 @@ function Invoke-Start {
         $newPid = Get-PortPid -Port 8001
         Write-Log -ActionName $Action -Step 'verify-port' -Result 'pass' -Msg "PID=$newPid"
         Write-Host "`n[OK] 服务已启动" -ForegroundColor Green
-        Write-Host "  Web:  http://127.0.0.1:8001/app/" -ForegroundColor White
+        Write-Host "  Web:  http://127.0.0.1:8001/xianyu/" -ForegroundColor White
         Write-Host "  PID:  $newPid" -ForegroundColor White
         Write-Host "  Log:  $LogFile" -ForegroundColor White
         return $true
@@ -363,7 +363,7 @@ function Invoke-Rebuild {
         $newPid = Get-PortPid -Port 8001
         Write-Log -ActionName $Action -Step 'verify-port' -Result 'pass' -Msg "PID=$newPid"
         Write-Host "`n[OK] 重建并重启完成" -ForegroundColor Green
-        Write-Host "  Web:  http://127.0.0.1:8001/app/" -ForegroundColor White
+        Write-Host "  Web:  http://127.0.0.1:8001/xianyu/" -ForegroundColor White
         Write-Host "  PID:  $newPid" -ForegroundColor White
         Write-Host "  请在浏览器中 Ctrl+F5 强制刷新以加载新版本。" -ForegroundColor Yellow
         return $true
@@ -399,7 +399,7 @@ function Invoke-Status {
 
     if ($portInUse -and $pidAlive -and ($pidValue -eq (Get-PortPid -Port 8001))) {
         Write-Host "`n[结论] 服务运行中" -ForegroundColor Green
-        Write-Host "  Web: http://127.0.0.1:8001/app/" -ForegroundColor White
+        Write-Host "  Web: http://127.0.0.1:8001/xianyu/" -ForegroundColor White
     } elseif (-not $portInUse) {
         Write-Host "`n[结论] 服务未运行" -ForegroundColor Gray
     } else {

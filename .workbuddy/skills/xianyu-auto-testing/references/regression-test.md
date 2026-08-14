@@ -65,7 +65,7 @@ PWA `autoUpdate` 模式下，重新构建部署后：
 将 `verify_script_template` 中的 `{js_path}` 替换为实际路径，`{search_string}` 替换为要检查的字符串。
 
 例如验证诊断日志已移除：
-- `{js_path}` = `/app/assets/index-XXXXX.js`
+- `{js_path}` = `/xianyu/assets/index-XXXXX.js`
 - `{search_string}` = `detectMobile`
 
 预期结果：`"hasString": false`

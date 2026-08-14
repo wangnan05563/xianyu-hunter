@@ -580,7 +580,7 @@ Write-Host "  1. 编辑 .env 填入推送 Key（SERVERCHAN_KEY / PUSHPLUS_TOKEN 
 Write-Host "  2. 首次登录闲鱼：.venv\Scripts\python.exe -m xianyu_hunter login"
 Write-Host "  3. 启动服务：双击 scripts\启动服务.bat 或执行："
 Write-Host "       .\.venv\Scripts\python.exe -m xianyu_hunter web --with-scheduler"
-Write-Host "  4. 访问：http://127.0.0.1:8001/app/"
+Write-Host "  4. 访问：http://127.0.0.1:8001/xianyu/"
 Write-Host ""
 
 # ---------- 可选：启动服务 ----------
@@ -599,7 +599,7 @@ if ($StartService -and $allPass) {
         -WindowStyle Hidden `
         -RedirectStandardOutput $outLog `
         -RedirectStandardError $errLog
-    Write-OK "Web 服务已后台启动，访问 http://127.0.0.1:8001/app/"
+    Write-OK "Web 服务已后台启动，访问 http://127.0.0.1:8001/xianyu/"
     Write-Host "  日志: $outLog"
 }
 

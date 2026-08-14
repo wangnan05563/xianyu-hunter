@@ -181,7 +181,7 @@ def test_save_invalid_score_should_return_400():
 
 ### 前端（手动 E2E）
 
-1. 打开 `/app/config/buyer`
+1. 打开 `/xianyu/config/buyer`
 2. 把 `pass_score` 改成比 `auto_buy_score` 大的值
 3. 点击保存
 4. 预期：message 显示"配置校验失败，未保存：通过分数 pass_score(90) 不能大于 自动抢单分数 auto_buy_score(70)"

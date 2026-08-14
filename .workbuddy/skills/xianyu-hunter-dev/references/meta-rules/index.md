@@ -168,3 +168,12 @@
 | 109 | 状态机返回值语义校验 | state-machine-return | return True/False 语义与调用方对齐 |
 | 110 | 类型注解契约对齐 | type-annotation-contract | 三方类型定义一致性检查 |
 | 111 | 事件驱动基础设施启动解耦 | event-bus-startup | EventBus 启动独立于业务任务 |
+
+## 前端部署韧性（#116-#119）
+
+| # | 规则 | 关键词 | 概述 |
+|---|------|--------|------|
+| 116 | 源码受保护（清理禁删 tracked 源） | source-file-protection | 清理脚本白名单守卫，禁删/截断 src/ 下 tracked 源 |
+| 117 | PWA 子路径导航回退绝对化 | pwa-subpath-navfallback | navigateFallback 绝对路径 + cleanupOutdatedCaches + 加载占位 |
+| 118 | SPA 基路径三处对齐 | spa-basename-consistency | vite base ⇄ BrowserRouter basename ⇄ 后端剥离前缀一致 |
+| 119 | 前端设计令牌集中化 | design-tokens | 禁硬编码色，CSS 变量集中，装饰色移除改灰阶 |

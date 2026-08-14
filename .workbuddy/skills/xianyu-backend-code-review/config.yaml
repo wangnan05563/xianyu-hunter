@@ -1,7 +1,7 @@
-# ===== Xianyu Backend Code Review 技能配置 v4.38.0 =====
+# ===== Xianyu Backend Code Review 技能配置 v4.71.0 =====
 # 首次使用：复制本文件为 config.yaml 并按项目实际情况修改
 # 所有评审规则、硬约束、项目规范均通过本文件管理，技能本身不含硬编码值
-# 完整审查维度对照见 SKILL.md 附录C（31 维度，v4.31.0）
+# 完整审查维度对照见 SKILL.md 附录C（44 维度，v4.71.0）
 #
 # v4.31.0 新增：coding_standards.resume_policy / log_merge 节点完整定义（B-REVIEW-157 / B-REVIEW-158 配套，meta-rules #31/#32 落地）
 # v4.30.0 新增：B-REVIEW-157 / B-REVIEW-158 规则（meta-rules #31/#32 落地）
@@ -9,6 +9,7 @@
 # v4.28.0 新增：coding_standards 节点（编码规范阈值配置）
 # 其他节点配置请参考 config.example.yaml
 # 当 config.yaml 缺失时，技能会使用内置默认配置并提示用户创建 config.yaml
+# v4.71.0 新增：source_file_protection 节点（B-REVIEW-296 配套，meta-rule #116 落地，与 frontend 维度 42 / F-REVIEW-236 对齐）
 
 # --- 编码规范阈值配置（v4.28.0 新增）---
 # 对应 B-REVIEW-121 ~ B-REVIEW-150 共 30 个检查点的配置参数
@@ -63,6 +64,11 @@ coding_standards:
     namespace_prefix: "/xianyu"       # 反向代理保留前缀（no-strip）；strip 模式设为 "/"
     dual_mount: true                 # API router 同时在 /api/* 与 /xianyu/api/* 挂载
     pwa_covers_prefixed_api: true    # sw.js 的 denylist/runtimeCaching 必须覆盖 /xianyu/api
+  spa:                              # 🆕v4.71 维度 37 配套（与 frontend / auto-testing 对齐，spa.basename 单一可信源）
+    # SPA 部署子路径（对应 vite.config.ts base 与 BrowserRouter basename；B-REVIEW-NO-HARDCODED-BASEPATH 引用）
+    basename: "/xianyu"
+    # API 前缀（对应前端 API_BASE 与后端双挂载前缀 /xianyu/api）
+    api_prefix: "/xianyu/api"
   optional_dependency:              # 🆕v4.70 维度 43
     degrade_explicitly: true         # 缺失时必须显式降级 + 日志，不得静默
     disabled_status_code: 403        # 禁用时返回明确禁用码（如 CHATBOT_DISABLED）
@@ -93,6 +99,26 @@ coding_standards:
     check_fffd: true                 # 是否检测 U+FFFD 替换字符
     check_gbk_misdecode: false       # 是否检测 GBK-as-UTF-8 误读特征（按需开启）
     severity: "high"                 # 违规严重级别（可由业务场景调整）
+  # 🆕v4.71 源码受保护（清理脚本禁删/截断 tracked 源，meta-rule #116，与 frontend 维度 42 / F-REVIEW-236 对齐）
+  # 检测 scripts/*.bat / *.ps1 / *.py 清理逻辑是否匹配受保护源码模式；禁止整目录 rm -rf 覆盖 tracked 源
+  source_file_protection:
+    protected_patterns:
+      - "src/"
+      - "scripts/"
+      - "*.py"
+      - "*.css"
+      - "*.ts"
+      - "*.tsx"
+    allowed_cleanup_targets:
+      - "build/"
+      - "node_modules/"
+      - ".cache/"
+      - "__pycache__/"
+      - "dist/"
+      - "logs/"
+      - "**/*.log"
+    require_git_status_guard: true
+    severity: "critical"
   dry:
     threshold_lines: 3               # B-REVIEW-145
     threshold_occurrences: 2
@@ -3970,3 +3996,108 @@ scheduler_loop_layered_exception:
     exception_no_reraise: 'except Exception[^}]*\n(?!.*raise)'
     missing_startup_log: 'logger\.info.*调度器已启动|logger\.info.*主循环启动'
 
+# ===== B-REVIEW-291~295 构建与运行时韧性（v4.70.0 新增）=====
+# 配套：xianyu-hunter-dev meta-rules #112~#115 + 复盘 retrospective-2026-08-12
+# 设计目标：构建产物资源显式化 / 构建运行时 Python 钉选自愈 / 异步清理 shield+取回 /
+#          外部页重启失效 / 构建脚本配置驱动
+# 所有路径/超时/选择器/严重级通过本节点管理，技能本身不含硬编码值
+
+build_artifact_resource:
+  enabled: true
+  require_installer_setup_icon_file: true
+  require_spec_icon: true
+  require_template_sync: true
+  installer_icon_path_default: "assets/xianyu-hunter.ico"
+  forbid_system_icon_binding: true
+  recommend_size_px: 256
+  audit_signals:
+    missing_setup_icon: 'SetupIconFile'
+    missing_spec_icon: 'icon='
+    template_missing_sync: 'SetupIconFile'
+    system_icon_ref: 'shell32\.dll|imageres\.dll'
+
+build_runtime_python:
+  enabled: true
+  require_pinned_runtime: true
+  require_base_health_check: true
+  require_fail_soft_pip: true
+  pinned_python_path_default: "C:/Users/hspcadmin/.workbuddy/binaries/python/versions/3.13.12/python.exe"
+  health_check_commands:
+    - 'Lib\\os.py'
+    - 'python -m pip --version'
+  audit_signals:
+    bare_python_usage: 'python'
+    missing_try_wrap_pip: 'pip --version'
+    var_collision_home: '\$home\b'
+
+async_cleanup_resilience:
+  enabled: true
+  require_close_state_short_circuit: true
+  require_shield: true
+  require_done_callback_retrieve: true
+  forbid_unretrieved_future: true
+  timeout_seconds_default: 2.5
+  audit_signals:
+    wait_for_unroute: 'wait_for.*unroute|unroute\('
+    wait_for_general: 'asyncio\.wait_for'
+    unretrieved_future: 'create_task|ensure_future'
+
+external_page_lifecycle:
+  enabled: true
+  require_register_external_page: true
+  require_invalidate_on_restart: true
+  require_close_state_fallback: true
+  audit_signals:
+    restart_path: 'ensure_alive|close_all_pages|register_external_page'
+    close_state_probe: 'is_closed|is_connected'
+
+build_script_config_driven:
+  enabled: true
+  forbid_hardcoded_path: true
+  forbid_hardcoded_timeout: true
+  forbid_hardcoded_selector: true
+  audit_signals:
+    hardcoded_abs_path: '[A-Za-z]:\\|/usr/|/opt/'
+    hardcoded_timeout: 'timeout\s*=\s*[0-9]+|Timeout\s*=\s*[0-9]+'
+    hardcoded_selector: 'querySelector|goto\('
+
+
+cookie_warmup:
+  enabled: true
+  # 登录/导出前预热必须触达平台首页（触发 MTOP _m_h5_tk 刷新）
+  homepage_url: "https://www.goofish.com/"
+  wait_networkidle_timeout_sec: 8
+  sleep_buffer_sec: 2
+  # 禁止仅访问子页（不触发刷新 -> 导出过期令牌）
+  forbidden_warmup_paths:
+    - "/personal"
+  meta_rule: "#121"
+
+cookie_rehydrate:
+  enabled: true
+  # 注入 cookie 到 Worker 后必须 rehydrate 会话令牌（注入 != 生效）
+  homepage_url: "https://www.goofish.com/"
+  sleep_buffer_sec: 2
+  meta_rule: "#122"
+
+invalid_response_diagnostics:
+  enabled: true
+  # invalid/错误响应必须返回的真实诊断字段
+  required_fields:
+    - "cookie_count"
+    - "layers_status"
+    - "security_flags"
+    - "key_cookies_found"
+  # 禁止返回 0/空误导
+  forbid_zero_or_empty: true
+  meta_rule: "#123"
+
+proxy_redirect_safety:
+  enabled: true
+  strip_prefix_deployment: true
+  constraint_keywords:
+    - "Funnel"
+    - "proxy"
+    - "redirect"
+    - "loop"
+  meta_rule: "#120"

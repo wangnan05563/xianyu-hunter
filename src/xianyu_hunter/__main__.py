@@ -303,7 +303,7 @@ def web(
     from xianyu_hunter.web.app import app as web_app
     # 同步端口到环境变量：内网穿透模块通过 XH_WEB_PORT 感知命令行 --port
     os.environ["XH_WEB_PORT"] = str(port)
-    typer.echo(f"→ 启动 Web 控制台: http://{host}:{port}")
+    typer.echo(f"→ 启动 Web 控制台: http://{host}:{port}/xianyu")
     typer.echo(f"  API 文档:        http://{host}:{port}/api/docs")
     typer.echo("  按 Ctrl+C 退出")
     # P1-4：多 worker 部署提升吞吐（已实测单 worker 51→多 worker 80 req/s）。

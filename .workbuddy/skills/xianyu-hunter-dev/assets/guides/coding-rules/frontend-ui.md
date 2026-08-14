@@ -163,7 +163,7 @@
               },
             }}
           >
-            <BrowserRouter basename="/app">
+            <BrowserRouter basename="/xianyu">
               <App />
             </BrowserRouter>
           </ConfigProvider>

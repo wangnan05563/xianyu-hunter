@@ -101,7 +101,7 @@ const config = await configApi.get()
 
 ```typescript
 // ✅ 颠倒加载顺序：避免 eval.yaml 整体覆盖 config.yaml 的 eval 子字段
-//   旧实现用 data.update() 浅合且 config.yaml 先加载 → 用户在 /app/config/buyer
+//   旧实现用 data.update() 浅合且 config.yaml 先加载 → 用户在 /xianyu/config/buyer
 //   修改的 pass_score 会被 eval.yaml 默认值覆盖
 const data = { ...evalYaml, ...configYaml }
 ```

@@ -1,0 +1,214 @@
+# ============================================================
+# Workspace Cleanup 配置 - 项目：17_xianyu (XianyuHunter)
+# 由 workspace-cleanup skill 生成（2026-08-14）。配置驱动，无硬编码。
+# 注意：本配置已吸收首轮人工核查结论，尤其是 .cache/ 的陷阱。
+# ============================================================
+
+workspace:
+  root: "."
+  script_dir: "scripts"
+  docs_dir: "docs"
+  logs_dir: "cleanup-logs"
+  frontend_dir: "frontend"
+  frontend_src_dir: "src"
+
+# 根目录允许清单（保留项）。命中扩展名或白名单才允许留在根目录。
+root_allowlist:
+  extensions: [".md",".txt",".yaml",".yml",".toml",".json",".example",".properties",".html",".py",".ico"]
+  files:
+    - "README.md"
+    - "CHANGELOG.md"
+    - "Dockerfile"
+    - "docker-compose.yml"
+    - "pyproject.toml"
+    - "requirements.txt"
+    - "requirements-build.txt"   # 经核查为构建依赖清单（untracked 但属源码类），保留
+    - "package.json"
+    - "package-lock.json"
+    - ".gitignore"
+    - ".dockerignore"
+    - ".pre-commit-config.yaml"
+    - "sonar-project.properties"
+    - "xianyu-hunter.spec"        # 手工维护的 PyInstaller spec，必须随仓库提交
+    - "installer.iss"
+    # 真实密钥 / 运行配置（绝不删）
+    - ".env"
+    - "src/.env"
+    - "xiaoya_config.json"
+  allowed_root_scripts: []
+
+script_extensions: [".py",".ps1",".bat",".sh",".js",".vbs"]
+
+script_exclude_dirs:
+  - "src/"
+  - "frontend/src/"
+  - "frontend/public/"
+  - "tests/"
+  - "scripts/tests/"
+  - "node_modules/"
+  - ".venv/"
+  - "venv/"
+  - "env/"
+
+# ---------- 垃圾文件模式（本项目适配） ----------
+garbage_patterns:
+  compiled_intermediates:
+    - "/build/"                 # PyInstaller 中间产物（含 79MB 中间 exe，可重生成）
+    - "*.pyc"
+    - "*.class"
+  test_outputs:
+    - "/**/*.log"              # 含根目录 pytest_*.log / run.stdout.log
+    - "/pytest_output*"
+    - "/test_result*"
+  cache_dirs:
+    - ".scannerwork/"
+    - ".pytest_cache/"
+    - ".ruff_cache/"
+    - ".mypy_cache/"
+    - "__pycache__/"
+    - ".next/cache/"
+    - "node_modules/.cache/"
+    - "frontend/coverage/"
+    - ".coverage"
+    - ".trae/"                 # Trae IDE 缓存
+    - ".vscode/"
+    - ".idea/"
+    - ".uploads/"
+    - ".worktrees/"
+    - "scripts/test_results/"
+    - "src/xianyu_hunter.egg-info/"
+    - "config/backups/"
+  ide_caches:
+    - "*.suo"
+  os_junk:
+    - "Thumbs.db"
+    - ".DS_Store"
+    - "*.tmp"
+    - "*.bak"
+    - "*.orig"
+    - "*.swp"
+  redirect_artifacts:
+    - "/nul"                   # PowerShell `> nul` 误生成的设备名文件（55B）
+    - "/_r.json"
+
+# ---------- 释放物 / 依赖确认门（绝不自动删） ----------
+# 这些"看起来像垃圾、却可能是依赖或交付物"的模式，走 Phase 3 确认门。
+review_categories:
+  enabled: true
+  require_explicit_confirm: true
+  patterns:
+    - "/frontend/node_modules/"   # 构建依赖，npm ci 可重建，但删除后需重装才能构建
+    - "/.cache/"                  # ⚠️ 陷阱：683MB=Playwright 浏览器(抓取依赖)+92MB=ML 模型，运行时必需，保留
+    - "/.venv/"
+    - "/.venv-build/"
+  reference_probe_extensions: [".py",".js",".ts",".json",".yml",".yaml",".toml",".xml",".ps1",".bat"]
+
+# ---------- 保留根（被实际伺服/交付/运行时依赖，绝不可当垃圾） ----------
+preserve_roots:
+  - "dist/"                                # 运行时交付根：PyInstaller exe + 已部署 SPA
+  - "frontend/"                            # 前端源码 + node_modules（node_modules 见 review）
+  - "browser-data/"                        # 运行时登录态/Cookie（Playwright profile）
+  - "data/"                                # 运行时模型/SQLite（300 .bin + 75 .pickle）
+  - ".cache/"                              # 运行时依赖：Playwright 浏览器 + ML 模型
+  - ".venv/"                               # Python 运行环境
+  - "src/config/"                          # 源码配置目录（untracked 但属源码，勿删）
+  - "src/xianyu_hunter/resources/"         # 源码资源目录（untracked 但属源码，勿删）
+  - "src/xianyu_hunter/web/static/spa/"    # 前端构建产物（exe 从 dist 副本加载；可重建，REVIEW 级）
+  - "frontend/public/"                     # favicon 等被 SPA 引用的必要资产（*.png 被全局忽略但必需）
+  - "scripts/export_embedding_onnx.py"     # 源码脚本（untracked，勿删）
+  - "scripts/quantize_embedding_onnx.py"   # 源码脚本（untracked，勿删）
+  - "tests/"                               # 测试源码（untracked，勿删）
+  - ".env"
+  - "src/.env"
+  - ".workbuddy/"                          # WorkBuddy 技能/记忆（仅删其中的 *.bak 备份）
+  - "plugins/"                             # 插件技能内容（勿批量删）
+
+detection:
+  enabled: true
+  prefix_indicators: ["_",".tmp_"]
+  name_keywords: ["debug","diag","investigation","trace","smoke","verify","tmp","bak"]
+  infer_confidence_threshold: 0.7
+  auto_add_inferred_to_gitignore: true
+
+# 服务检测（Phase 3）：本工作区当前无常驻服务；端口 8000/8001/8080/5173 均无监听。
+service_indicators:
+  pid_files: ["logs/web.pid"]
+  ports: [8000,8001,8080,5173]
+  process_names: ["uvicorn","python","node","java"]
+  file_occupancy_probes: ["run.stdout.log","data/app.db"]
+
+stability_check:
+  enabled: true
+  wait_seconds: 5
+  max_recurrence: 3
+  recurrence_patterns: ["*.log","run.stdout.log"]
+  recurrence_action: "warn"
+
+audit:
+  hash_algorithm: "sha256"
+  targets_file: "cleanup-logs/cleanup-targets.txt"
+  slice_size: 200
+
+execution:
+  max_external_process_seconds: 0   # 本环境无调度器 kill，跳过时间窗口逻辑
+  deadline_cap_seconds: 0
+  resume_targets_file: "cleanup-logs/cleanup-targets.resume.txt"
+  auto_background_when_overflow: true
+  per_file_estimate_seconds: 0.02
+
+platform:
+  current: "windows"
+  list_files:
+    windows: 'Get-ChildItem -Path "{path}" -File | Sort-Object Name'
+  file_hash:
+    windows: 'Get-FileHash -LiteralPath "{path}" -Algorithm SHA256'
+  remove_file_python_s:
+    windows: 'python -S -c "import os; os.remove(r"{path}")"'
+  remove_dir_python_s:
+    windows: 'python -S -c "import shutil; shutil.rmtree(r"{path}")"'
+  venv_python:
+    windows: ".venv/Scripts/python.exe"
+
+verification:
+  python_imports: []
+  command: ""
+  file_existence_checks:
+    - "xianyu-hunter.spec"
+    - "src/xianyu_hunter/web/app.py"
+    - "dist/"
+    - "browser-data/"
+    - "data/"
+    - "frontend/public/favicon-16x16.png"
+  on_failure:
+    - "检查 cleanup-logs/cleanup-*.log 中的 hash 记录"
+    - "从 git 恢复：git checkout HEAD -- <file>"
+
+archive:
+  changelog_path: "docs/standards/directory-structure.md"
+  gitignore_path: ".gitignore"
+  precommit_path: ".pre-commit-config.yaml"
+  auto_update_gitignore: true
+  auto_update_precommit: false
+
+git_integration:
+  enabled: true
+  tracked_deleted_check: "git ls-files --deleted"
+  unstage_command: "git rm --cached --ignore-unmatch {files}"
+  delete_index_command: "git rm --cached --ignore-unmatch {file}"
+  delete_physical_template: "remove_file_{backend}"
+  add_gitignore_patterns: true
+
+safety:
+  require_stopped_service: true
+  backup_log_format: "cleanup-{YYYYMMDD-HHmmss}.log"
+  dry_run: false
+  min_confidence_to_delete: 0.8
+  max_files_per_batch: 50
+  max_files_per_call: 200
+  parallel_delete: false
+  large_file_sequential: true
+  large_file_threshold_mb: 5
+  special_filename_handling: "safe"
+  verify_after_each_batch: true
+  soft_delete: false
+  bypass_hook_mode: "python_s"   # 绕过 safe-delete 钩子（python -S 原生删除）

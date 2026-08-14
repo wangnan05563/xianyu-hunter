@@ -137,13 +137,13 @@ echo.
 echo ========================================
 echo   闲鱼猎人服务已启动
 echo ========================================
-echo   Web:  http://127.0.0.1:8001
+echo   Web:  http://127.0.0.1:8001/xianyu
 echo   模式: Web + 调度器（实时采集）
 echo   日志: 子窗口实时显示 + data\logs\ 文件
 echo.
 echo 停止服务请双击 scripts\停止服务.bat
 echo.
 
-start "" http://127.0.0.1:8001/app/
+start "" http://127.0.0.1:8001/xianyu/
 timeout /t 3 >nul 2>&1
 exit

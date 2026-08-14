@@ -1,0 +1,12 @@
+# 本目录存放本地 embedding 的 ONNX 工件（构建期生成，不入库）：
+#   bge_small_zh.onnx          fp32 权重（~90MB，由 scripts/export_embedding_onnx.py 生成）
+#   bge_small_zh.int8.onnx     int8 量化权重（~55MB，由 scripts/quantize_embedding_onnx.py 生成，运行期优先）
+#   tokenizer.json             分词器（由导出脚本重建，词表完整）
+#   meta.json                 导出元信息
+#
+# 生成方式（需先 pip install -e .[build] 或 onnx）：
+#   python scripts/export_embedding_onnx.py
+#   python scripts/quantize_embedding_onnx.py --verify
+#
+# 运行期 OnnxEmbeddingBackend 优先加载 int8，缺失回退 fp32。
+# 等价性测试（tests/test_embedding_backend_equivalence.py）缺件时自动 skip。

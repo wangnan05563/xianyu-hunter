@@ -35,7 +35,7 @@
 | LOW | X |
 | INFO | X |
 
-### 按 category 分布（18 维度）
+### 按 category 分布（38 维度）
 
 | Category | 数量 |
 |----------|------|
@@ -427,7 +427,7 @@ pwsh .trae/skills/xianyu-frontend-code-review/scripts/auto-scan.ps1
          if (error.response?.status === 401) {
            // 业务 401（闲鱼 cookie 过期，detail 为业务消息）也会被误判为认证失效
            localStorage.removeItem('xh_token')
-           window.location.href = '/app/login'
+           window.location.href = '/xianyu/login'
          }
          return Promise.reject(error)
        },
@@ -445,11 +445,11 @@ pwsh .trae/skills/xianyu-frontend-code-review/scripts/auto-scan.ps1
          if (isAuthUnauthorized) {
            localStorage.removeItem('xh_token')
            const currentPath = globalThis.location.pathname + globalThis.location.search
-           const isLoginPage = currentPath.startsWith('/app/login')
+           const isLoginPage = currentPath.startsWith('/xianyu/login')
            if (!isLoginPage && !isRedirecting) {
              isRedirecting = true
              const redirect = encodeURIComponent(currentPath)
-             globalThis.location.replace(`/app/login?redirect=${redirect}`)
+             globalThis.location.replace(`/xianyu/login?redirect=${redirect}`)
            }
          }
          return Promise.reject(error)
@@ -477,7 +477,7 @@ pwsh .trae/skills/xianyu-frontend-code-review/scripts/auto-scan.ps1
     (response) => response,
     (error) => {
       if (error.response?.status >= 400 && error.response?.status < 500) {
-        window.location.href = '/app/login'
+        window.location.href = '/xianyu/login'
       }
       return Promise.reject(error)
     },
@@ -797,7 +797,7 @@ pwsh .trae/skills/xianyu-frontend-code-review/scripts/auto-scan.ps1
        (response) => response,
        (error) => {
          if (error.response?.status === 401 || error.response?.status === 440) {
-           window.location.href = '/app/login';
+           window.location.href = '/xianyu/login';
          }
          return Promise.reject(error);
        },
@@ -1147,3 +1147,71 @@ pwsh .trae/skills/xianyu-frontend-code-review/scripts/auto-scan.ps1
 - **规范引用**：xianyu-hunter-dev step 280 / 后端 B-REVIEW-337 / 测试模式 AK
 - **适用**：含中文的源码文件；跨工具保存后可疑 `?`
 - **不适用**：运行时数据乱码（→ ENC/模式 K）；纯 ASCII 文件；正则中合法 `?`
+
+## 🆕 v4.71.0 前端部署韧性审查报告条目（F-REVIEW-236~239）
+
+> 本节为 v4.71.0 新增 4 项检查点（基于 2026-08-13 复盘 `retrospective-2026-08-13`：Chatbot CSS 被清理脚本截断 / PWA 子路径白屏 / SPA 基路径不一致 / 设计令牌硬编码）。配套 xianyu-hunter-dev meta-rules #116-#119、后端 B-REVIEW（源码受保护联动）、测试模式 AL/U/V。**全部判定参数来自 `config.yaml` 对应节点，禁止硬编码**路径/阈值/严重级**。扫描**只读**，仅输出 `file:line` 证据，不自动改写。
+
+### F-REVIEW-236~239 检查结果汇总
+
+| F-REVIEW | 检查点 | 维度 | 严重级 | 配置节点 | 扫描 | 结论 |
+|:--|:--|:--|:--|:--|:--|:--|
+| F-REVIEW-236 | SOURCE-FILE-PROTECTION 清理脚本禁删/截断 tracked 源 | 42 | CRITICAL | `source_file_protection` | X | ✅ 通过 / ❌ 违规 |
+| F-REVIEW-237 | PWA-SUBPATH-NAVFALLBACK 子路径导航回退绝对化 | 43 | CRITICAL | `pwa_subpath_navfallback` | X | ✅ 通过 / ❌ 违规 |
+| F-REVIEW-238 | DESIGN-TOKENS-NO-HARDCODE 设计令牌集中化禁硬编码色 | 44 | HIGH | `design_tokens` | X | ✅ 通过 / ❌ 违规 |
+| F-REVIEW-239 | SPA-BASENAME-CONSISTENCY 基路径三处对齐 | 45 | CRITICAL | `spa_basename_consistency` | X | ✅ 通过 / ❌ 违规 |
+
+### F-REVIEW-236 SOURCE-FILE-PROTECTION 违规详情
+
+- **位置**：`scripts/清理临时文件.bat` / `scripts/cleanup.ps1` 第 X 行（扫描证据 `file:line`）
+- **证据**：`grep -rn "rm -rf\|Remove-Item\|del " scripts/ config/ | grep -E "src/|frontend/src/|\*\.css|\*\.tsx|\*\.py"` 命中 → 清理命令匹配 `protected_patterns`
+- **问题**：清理脚本匹配 tracked 源文件，历史已发生 Chatbot CSS 被 `cleanup` 提交截断（80778fdd 1638 行 → df009dc6 43 行），上线后样式大面积丢失
+- **修复建议**：清理脚本加 `git status --short` 守卫；白名单仅含 `allowed_cleanup_targets`（build/node_modules/.cache/__pycache__/临时日志）；清理目标从配置读取，不写死路径
+- **配置节点**：`source_file_protection`
+- **规范引用**：xianyu-hunter-dev meta-rule #116 / 后端 B-REVIEW（源码受保护联动）
+
+### F-REVIEW-237 PWA-SUBPATH-NAVFALLBACK 违规详情
+
+- **位置**：`frontend/vite.config.ts` 第 X 行
+- **证据**：`grep -n "navigateFallback\|cleanupOutdatedCaches\|base:" frontend/vite.config.ts`；`base` 非 `/` 且 `navigateFallback` 为 `'index.html'`/相对路径，或缺失 `cleanupOutdatedCaches`
+- **问题**：非根部署（`base:'/xianyu/'`）下 navigateFallback 用相对路径，移动端切换设备模拟时子路由 `/xianyu/m/` 回退到错误入口 → 整页白屏；旧 SW 缓存在 prompt 模式/无 cleanup 时永久下发旧 chunk
+- **修复建议**：`navigateFallback` 改为绝对路径 `expected_navigate_fallback`；`cleanupOutdatedCaches:true`；`registerType:autoUpdate`；`index.html` 加 `loading_splash_selector` 加载占位
+- **配置节点**：`pwa_subpath_navfallback`
+- **规范引用**：xianyu-hunter-dev meta-rule #117 / 测试模式 AL、U
+
+### F-REVIEW-238 DESIGN-TOKENS-NO-HARDCODE 违规详情
+
+- **位置**：`frontend/src/pages/*.tsx` / `*.tsx` 内联 `style` 第 X 行（扫描证据 `file:line`）
+- **证据**：`grep -rn "#[0-9a-fA-F]\{6\}" frontend/src/pages/ frontend/src/components/ --include="*.tsx" --include="*.ts" | grep -v "theme.ts" | grep -v "tokens.css" | grep -v "\.svg"` 命中；或残留装饰色 `grep -rniE "#(FFB3CC|FF8FAB|6ECDB4|A8E6CF|FFD6E8|E8D5F2)"`
+- **问题**：组件内联硬编码十六进制色，绕过品牌灰阶 token；马卡龙装饰色与整体视觉不一致；对比度不达标（WCAG AA 正文 < 4.5）
+- **修复建议**：颜色改从 `:root` CSS 变量 / 主题 token 引用；移除装饰色改品牌灰阶（背景 `#ffffff`、主文本 `#111111`、次要 `#777777`）；圆角/间距/阴影亦纳入 token
+- **配置节点**：`design_tokens`
+- **规范引用**：xianyu-hunter-dev meta-rule #119 / 测试模式 V
+
+### F-REVIEW-239 SPA-BASENAME-CONSISTENCY 违规详情
+
+- **位置**：`frontend/vite.config.ts` / `frontend/src/main.tsx` / `web/app.py` / `scripts/启动服务.bat` 等第 X 行
+- **证据**：`grep -n "base:" frontend/vite.config.ts`、`grep -n "basename" frontend/src/main.tsx`、`grep -rn "/app/\|http://{host}:{port}/" scripts/`；三处 `base`/`basename`/后端剥离前缀不一致，或入口含 `forbidden_entry_prefixes`
+- **问题**：`vite base` ⇄ `BrowserRouter basename` ⇄ 后端 `_serve_spa_request` 剥离前缀三处不一致 → index.html 返回 200 但路由匹配不到，整页白板；自动打开入口错写成 `/app/` 或裸 `/`
+- **修复建议**：三处统一 `expected_base`（如 `/xianyu/`）；所有启动/自动打开脚本入口指向 `<base>`（或 `<base>/`），清理 `forbidden_entry_prefixes`
+- **配置节点**：`spa_basename_consistency`
+- **规范引用**：xianyu-hunter-dev meta-rule #118 / 测试模式 AL
+
+### v4.71.0 配置变更点
+
+| 变更类型 | 配置节点 | 默认值 | 新值 | 触发场景 | 关联 |
+|:--|:--|:--|:--|:--|:--|
+| 清单/阈值调整 | `source_file_protection.protected_patterns` | `[src/, frontend/src/, *.css, *.ts(x), *.py]` | `[...现有, <新源模式>]` | 项目新增受保护源码类型 | F-REVIEW-236（meta-rule #116） |
+| 清单/阈值调整 | `source_file_protection.allowed_cleanup_targets` | `[build/, node_modules/, .cache/, __pycache__/, 临时日志]` | `[...现有, <新临时目录>]` | 清理脚本新增合法目标 | F-REVIEW-236 |
+| 路径/阈值调整 | `pwa_subpath_navfallback.expected_navigate_fallback` | `/xianyu/index.html` | `<新绝对路径>` | 部署子路径变更 | F-REVIEW-237（meta-rule #117） |
+| 选择器调整 | `pwa_subpath_navfallback.loading_splash_selector` | `#xh-loading-splash` | `<新占位选择器>` | 加载占位 DOM 结构变更 | F-REVIEW-237 |
+| 清单/阈值调整 | `design_tokens.hex_exclude_patterns` | `[theme.ts, tokens.css, *.svg]` | `[...现有, <新例外>]` | 新增 token 定义/图标约定文件 | F-REVIEW-238（meta-rule #119） |
+| 路径/阈值调整 | `spa_basename_consistency.expected_base` | `/xianyu/` | `<新 base>` | 部署子路径变更 | F-REVIEW-239（meta-rule #118） |
+| 清单/阈值调整 | `spa_basename_consistency.launch_entry_scripts` | `[scripts/启动服务.bat, scripts/launcher.py, scripts/automation.ps1]` | `[...现有, <新入口脚本>]` | 新增自动打开入口 | F-REVIEW-239 |
+
+- [ ] references/dimensions/42-source-file-protection.md 已追加（🆕v4.71.0）
+- [ ] references/dimensions/43-pwa-subpath-navfallback.md 已追加（🆕v4.71.0）
+- [ ] references/dimensions/44-design-tokens.md 已追加（🆕v4.71.0）
+- [ ] references/dimensions/45-spa-basename-consistency.md 已追加（🆕v4.71.0）
+- [ ] SKILL.md 附录C 维度对照表已追加 42-45 行（38 维度）
+- [ ] config.yaml#checklist 已开启 source_file_protection / pwa_subpath_navfallback / design_tokens_no_hardcode / spa_basename_consistency

@@ -44,6 +44,12 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]
+# 构建期专用依赖（运行期无需，不进安装包）：
+# - onnx：scripts/export_embedding_onnx.py（torch.onnx.export）与 quantize_embedding_onnx.py（int8 量化）必需。
+#   运行期仅需 onnxruntime（由 chromadb 间接带入），切勿把 onnx 列入主依赖。
+build = [
+    "onnx>=1.16",
+]
 # 系统托盘（EXE 安装包可选启用）
 # 启用方式：pip install -e .[tray] 或 build-exe.ps1 中安装
 tray = [

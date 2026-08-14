@@ -175,7 +175,7 @@
       "@vitejs/plugin-react": "^4.3.0",
       "typescript": "^5.5.0",
       "vite-plugin-pwa": "^1.3.0",
-      "base": "/app/",
+      "base": "/xianyu/",
       "outDir": "../src/xianyu_hunter/web/static/spa",
       "devPort": 5173,
       "devProxy": "/api -> http://127.0.0.1:8000"
@@ -216,8 +216,8 @@
       "backgroundColor": "#FFFFFF",
       "display": "standalone",
       "lang": "zh-CN",
-      "startUrl": "/app/",
-      "scope": "/app/",
+      "startUrl": "/xianyu/",
+      "scope": "/xianyu/",
       "maximumFileSizeToCacheInBytes": "4MB",
       "navigateFallback": "index.html",
       "navigateFallbackDenylist": [

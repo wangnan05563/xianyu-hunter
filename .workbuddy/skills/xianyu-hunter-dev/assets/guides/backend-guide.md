@@ -402,7 +402,7 @@ def _is_real_cookie(value: str) -> bool:
 ### 7.9 认证白名单
 
 `BearerAuthMiddleware` 的 `PUBLIC_PREFIXES`：
-- `/static/` / `/healthz` / `/app/`
+- `/static/` / `/healthz`
 - `/api/auth/login` / `/api/events/stream`
 - `/api/about` / `/api/about/check-update`
 - `/api/auth/cookie` / `/api/auth/me` / `/api/auth/import-from-browser`
@@ -851,7 +851,7 @@ def setup_startup_hooks(app: FastAPI):
 
 ```python
 PUBLIC_PREFIXES = (
-    "/static/", "/healthz", "/app/",
+    "/static/", "/healthz",
     "/api/auth/login", "/api/events/stream",
     "/api/about", "/api/about/check-update",
     "/api/auth/cookie", "/api/auth/me", "/api/auth/import-from-browser",

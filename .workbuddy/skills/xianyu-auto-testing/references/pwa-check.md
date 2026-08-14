@@ -13,7 +13,7 @@
    - 若为 `'prompt'` → **DT-05 命中**
 
 2. **manifest 配置**：
-   - `start_url` 应指向 SPA basename（如 `/app/`）
+   - `start_url` 应指向 SPA basename（如 `/xianyu/`）
    - `scope` 应与 basename 一致
    - `theme_color` 等品牌色
 

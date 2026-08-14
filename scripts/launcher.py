@@ -191,7 +191,7 @@ def _try_start_tray(host: str, port: int, on_quit) -> threading.Thread | None:
         draw.ellipse((x - 2, y - 2, x + 2, y + 2), fill=(201, 169, 97, 255))
 
     def on_open(icon, item):
-        webbrowser.open(f"http://{host}:{port}/app/")
+        webbrowser.open(f"http://{host}:{port}/xianyu/")
 
     def on_quit_item(icon, item):
         icon.stop()
@@ -222,7 +222,7 @@ def _print_banner(host: str, port: int) -> None:
     print("=" * 40)
     print("  闲鱼猎人 启动中...")
     print("=" * 40)
-    print(f"  Web:  http://{host}:{port}/app/")
+    print(f"  Web:  http://{host}:{port}/xianyu/")
     print(f"  Mode: Web + 调度器（含浏览器）")
     print(f"  提示: 按 Ctrl+C 停止")
     print("=" * 40)
@@ -270,7 +270,7 @@ def main() -> int:
         # 3) PyInstaller 打包的 webbrowser 模块未能正确读取注册表
         # fallback 1：os.startfile 走 ShellExecuteW
         # fallback 2：cmd /c start 走 cmd.exe 解析，能在更多边缘场景成功
-        url = f"http://{host}:{port}/app/"
+        url = f"http://{host}:{port}/xianyu/"
         opened = False
         try:
             opened = webbrowser.open(url)

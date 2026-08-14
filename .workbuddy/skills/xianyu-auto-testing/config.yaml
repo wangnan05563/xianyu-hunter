@@ -1,6 +1,7 @@
 # xianyu-auto-testing 技能配置
 # 所有可参数化项集中在此文件管理，SKILL.md 和 references 只引用变量
 # 修改项目路径/端口/正则/命令时只需改本文件，无需改 SKILL.md
+# v2.10 变更：原重复 spa: 节点（第二处 basename: "/app"）已并入此处并统一为 /xianyu，避免 YAML 重复键导致 basename 解析为旧的 /app
 
 # ============== 项目路径 ==============
 project:
@@ -26,6 +27,19 @@ spa:
   # 构建产物中期望出现的特征字符串（用于 AL1/AL2/AL5 产物核对）
   expected_bundle_baseurl: "/xianyu/"
   expected_sw_api_prefix: "xianyu/api"
+  # --- 路由（react-router 内部，不带 basename） ---
+  mobile_route_prefix: "/m/"
+  login_route: "/login"
+  onboarding_route: "/onboarding"
+  # --- 浏览器实际路径（带 basename，禁止硬编码 /app/，统一 /xianyu） ---
+  root_redirect_to: "/xianyu/"
+  mobile_home_path: "/xianyu/m/"
+  desktop_home_path: "/xianyu/"
+  # 🆕v2.12 启动/自动打开入口禁止前缀（meta-rule #118，与 frontend 维度 45 / F-REVIEW-239 对齐）
+  # 所有自动打开浏览器入口必须统一指向 <basename>（或 <basename>/），禁止以下前缀
+  forbidden_entry_prefixes:
+    - "/app/"
+    - "/"
 
 # ============== Web 进程 ==============
 web_process:
@@ -52,22 +66,19 @@ build:
     min: 1000
     max: 5000
 
-# ============== SPA 路由 ==============
-spa:
-  # BrowserRouter basename（react-router v6 配置）
-  basename: "/app"
-  # 移动端路由前缀（在 react-router 内部，不带 basename）
-  mobile_route_prefix: "/m/"
-  # 登录页路径（在 react-router 内部，不带 basename）
-  login_route: "/login"
-  # 引导页路径
-  onboarding_route: "/onboarding"
-  # 根路径重定向目标（后端 RedirectResponse）
-  root_redirect_to: "/app/"
-  # 移动端首页路径（浏览器实际路径，带 basename）
-  mobile_home_path: "/app/m/"
-  # 桌面端首页路径（浏览器实际路径，带 basename）
-  desktop_home_path: "/app/"
+# ============== 构建依赖完整性（🆕v2.11 模式 Q 固化 W1/W2/W3，禁止硬编码） ==============
+# 对应 vite 构建三类中断的预防性检查，全部参数化
+build_integrity:
+  # W1：vite-plugin-pwa 把 workbox 当 peer，必须显式声明于 devDependencies
+  workbox_peer_deps: [workbox-build, workbox-window]
+  # W2：沙箱 safe-delete 劫持 rmSync → emptyOutDir 必须 false，清理交脚本 rmdir /s /q
+  empty_out_dir: false
+  # W3：Vite optimizeDeps 缓存失效 → build 时强制从零预构建
+  optimize_deps_force_on_build: true
+  # 构建后核对入口 chunk 真实存在且无裸根 location.replace('/')
+  verify_entry_chunk: true
+
+# ============== SPA 路由参数已并入上方 spa: 节点（消除重复键，basename 统一为 /xianyu） ==============
 
 # ============== 关键文件（相对 frontend_dir） ==============
 key_files:
@@ -137,6 +148,55 @@ pwa:
   sw_filename: "sw.js"
   # workbox 运行时文件名前缀
   workbox_filename_prefix: "workbox-"
+  # 🆕v2.12 PWA 子路径导航回退绝对化（meta-rule #117，与 frontend 维度 43 / F-REVIEW-237 对齐）
+  # base 非 / 时 navigateFallback 必须为绝对路径，禁止相对 'index.html'
+  navigate_fallback_absolute_path: "/xianyu/index.html"
+  # 必须开启 cleanupOutdatedCaches，避免旧 SW 缓存旧 chunk 永久白屏
+  require_cleanup_outdated_caches: true
+  # index.html 加载占位选择器（JS 挂载后替换，避免纯白白屏）
+  loading_splash_selector: "#xh-loading-splash"
+
+# ============== 设计令牌（🆕v2.12 模式 V 静态 grep，meta-rule #119，与 frontend 维度 44 / F-REVIEW-238 对齐） ==============
+design_tokens:
+  # 扫描路径（组件/页面内联 style 与样式文件）
+  scan_paths:
+    - "frontend/src/pages"
+    - "frontend/src/components"
+  # 十六进制色排除清单（token 定义文件 / svg 图标约定）
+  hex_exclude_patterns:
+    - "theme.ts"
+    - "tokens.css"
+    - "*.svg"
+  # 文本/背景最小对比度（WCAG AA 正文）
+  min_contrast_ratio: 4.5
+  # 装饰色（马卡龙系）禁用清单，命中即违规
+  forbidden_decorative_hex:
+    - "#FFB3CC"
+    - "#FF8FAB"
+    - "#6ECDB4"
+    - "#A8E6CF"
+    - "#FFD6E8"
+    - "#E8D5F2"
+
+# ============== 源码受保护（🆕v2.12 模式 AL 静态兜底，meta-rule #116，与 frontend 维度 42 / F-REVIEW-236 / backend B-REVIEW-296 对齐） ==============
+# 主责在代码审查技能；auto-testing 仅做静态 grep 兜底，命中即提示转 code-review
+source_file_protection:
+  protected_patterns:
+    - "src/"
+    - "scripts/"
+    - "*.py"
+    - "*.css"
+    - "*.ts"
+    - "*.tsx"
+  allowed_cleanup_targets:
+    - "build/"
+    - "node_modules/"
+    - ".cache/"
+    - "__pycache__/"
+    - "dist/"
+    - "logs/"
+    - "**/*.log"
+  require_git_status_guard: true
 
 # ============== 浏览器自动化 ==============
 browser_automation:
@@ -155,7 +215,7 @@ browser_automation:
       expected_final_url_pattern: ".*\\/app\\/?$"
     desktop_app_m:
       description: "桌面 UA 直接访问移动端路径（验证渲染）"
-      url_template: "http://{host}:{port}/app/m/"
+      url_template: "http://{host}:{port}/xianyu/m/"
       expected_status: 200
       expected_title_contains: "XianyuHunter"
     mobile_root:
@@ -4166,3 +4226,84 @@ mode_ak_source_file_encoding_integrity:
     - "xianyu-frontend-code-review F-REVIEW-246"
     - "xianyu-backend-code-review B-REVIEW-337"
 
+# ============== 模式 AN：构建与运行时韧性回归测试 ==============
+# 对应 xianyu-hunter-dev meta-rules #112~#115；审查 B-REVIEW-291~295 / F-REVIEW-227~228
+# 详细操作步骤见 references/build-runtime-resilience-test.md；测试过程复盘见 references/test-process-retrospective.md
+mode_an_build_runtime_resilience:
+  enabled: true
+  description: "构建与运行时韧性回归测试：构建产物资源显式化、构建运行时 Python 钉选、异步清理 shield+取回、脚本编码 BOM/CRLF、修复回归测试生成（配置驱动，无硬编码）"
+  trigger_keywords: ["安装包默认图标", "构建产物图标", "SetupIconFile", "打包Python损坏", "venv继承死stdlib", "Could not find platform independent libraries", "TargetClosedError", "Future exception was never retrieved", "unroute超时", "构建脚本编码", "ps1 BOM", "脚本乱码"]
+  references_file: "references/build-runtime-resilience-test.md"
+  retrospective_file: "references/test-process-retrospective.md"
+  # 步骤 1：构建产物资源显式化（#112 / B-REVIEW-291 / F-REVIEW-227）
+  build_artifact_resource:
+    installer_icon_path_default: "assets/app.ico"   # 品牌 ico，installer.iss 的 SetupIconFile 必须引用（缺失则安装包用默认图标）
+    forbid_system_icon_binding: true                 # 禁止引用 shell32.dll / imageres.dll 系统图标（版权风险）
+    recommend_size_px: "256x256"                     # 推荐多尺寸 ico
+    audit_signals:                                   # grep 信号：缺 SetupIconFile / 引用系统 dll
+      - "SetupIconFile"
+      - "shell32.dll"
+      - "imageres.dll"
+  # 步骤 2：构建运行时 Python 钉选（#113 / B-REVIEW-292）
+  build_runtime_python:
+    pinned_python_path_default: "C:\\Python313\\python.exe"   # 已知完好运行时，前置钉选到 PATH（按本机覆盖）
+    health_check_commands:                           # venv home 指向的 Python 健康探测
+      - "python -c \"import os; print(os.__file__)\""
+      - "python -m pip --version"
+    require_fail_soft_pip: true                      # pip/ensurepip 调用须 try/catch fail-soft（返回重建而非硬中止）
+  # 步骤 3：异步清理 shield + 取回回归（#114 / B-REVIEW-293）
+  async_cleanup_resilience:
+    timeout_seconds_default: 2.5                     # 方法真实耗时约 2.5s，无 hang
+    require_shield: true                             # 必须 asyncio.shield 保护内部 unroute task
+    require_done_callback_retrieve: true             # 必须 add_done_callback 取回异常，抑制 never retrieved
+    regression_test_file: "tests/test_unroute_search_api.py"
+    regression_test_cases: 5
+  # 步骤 4：脚本编码 BOM/CRLF（#112 反模式 / B-REVIEW-280 / B-REVIEW-295）
+  encoding_check:
+    ps1_require_bom: true                            # .ps1 必须 UTF-8 BOM（编辑后校验首 3 字节 EF BB BF）
+    bat_prefer_ascii: true                           # .bat 建议纯 ASCII / 无 BOM（消除 GBK 乱码脆弱性）
+    forbidden_hardcoded:                             # grep 扫描：禁止在脚本内硬编码路径/超时/选择器
+      audit_signals:
+        - 'C:\\'                                     # 硬编码 Windows 绝对路径
+        - '(/Users/|/home/)'                         # 硬编码 Unix 绝对路径
+        - 'sleep\s+\d+'                              # 硬编码 sleep 超时
+  # 步骤 5：修复回归测试生成（通用配置驱动）
+  regression_test_generation:
+    tests_dir: "tests"
+    naming_pattern: "test_{fix}.py"
+    mock_style: "MagicMock + __new__() 跳过 __init__"   # 最小 mock，不启动真实浏览器/服务
+    require_config_driven_asserts: true                  # 超时/路径/选择器全部从 config.yaml 读取
+    index:                                          # 修复回归测试登记（与 references 索引一致）
+      - fix: "实时搜索 TargetClosedError"
+        test_file: "tests/test_unroute_search_api.py"
+        config_node: "async_cleanup_resilience"
+      - fix: "安装包默认图标"
+        test_file: "(待补充)"
+        config_node: "build_artifact_resource"
+      - fix: "打包 Python 损坏"
+        test_file: "(待补充)"
+        config_node: "build_runtime_python"
+  cross_skill_validation:
+    - "xianyu-hunter-dev meta-rules #112~#115"
+    - "xianyu-frontend-code-review F-REVIEW-227~228"
+    - "xianyu-backend-code-review B-REVIEW-291~295"
+
+
+sandbox_test_protocol:
+  enabled: true
+  # 沙箱(safe-delete 钩子 fail-closed)下测试必须走项目 venv + 禁用 cov
+  venv_pytest: ".venv/Scripts/pytest.exe"
+  pytest_args: "--no-cov -p no:cacheprovider"
+  # flake 测试最小运行次数（排除环境崩溃误判）
+  flaky_min_runs: 2
+  # 判定标准：以「无 FAILED/AssertionError」为准；exit1 无 summary 视为环境崩溃
+  verdict_by: "no_failed_or_assertion"
+  meta_rule: "#124"
+
+regression_guard:
+  enabled: true
+  # 每条修复必须配基线红灯/修复绿灯回归测试
+  baseline_red_fix_green: true
+  # 验证手法：git checkout 基线 -> 测试应红灯 -> 还原修复 -> 应绿灯
+  verify_method: "git_checkout_baseline_then_restore"
+  meta_rule: "#125"

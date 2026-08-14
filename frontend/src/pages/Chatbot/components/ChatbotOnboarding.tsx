@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Tag, Space, Button, Empty, Skeleton } from 'antd'
+import { Button, Empty, Skeleton } from 'antd'
 import {
   CloseOutlined,
   BookOutlined,
@@ -17,20 +17,16 @@ interface Props {
   readonly onDismiss: () => void  // 关闭引导
 }
 
-// 热门功能卡片：硬编码 4 张，点击跳转（不消耗 API）
+// 能力标签：图标 + 一句话，横向平铺，克制不喧宾夺主
 const HOT_FEATURES = [
-  { key: 'kb', icon: <BookOutlined />, title: '知识库问答', desc: '从项目文档中检索答案' },
-  { key: 'tools', icon: <ToolOutlined />, title: '工具调用', desc: '查询任务、评估、配置' },
-  { key: 'human', icon: <CustomerServiceOutlined />, title: '人工转接', desc: '点踩两次或主动触发' },
-  { key: 'vision', icon: <PictureOutlined />, title: '图片识别', desc: '上传图片让 AI 解析' },
+  { key: 'kb', icon: <BookOutlined />, title: '知识库问答' },
+  { key: 'tools', icon: <ToolOutlined />, title: '工具调用' },
+  { key: 'human', icon: <CustomerServiceOutlined />, title: '人工转接' },
+  { key: 'vision', icon: <PictureOutlined />, title: '图片识别' },
 ] as const
 
-// 使用提示：硬编码 3 条小贴士
-const TIPS = [
-  'Shift+Enter 换行，Enter 发送',
-  '拖拽 / 粘贴 / 点击图片按钮上传图片',
-  '点赞 / 点踩帮助我们改进回复质量',
-]
+// 使用提示：合并为一行，降低底部信息密度
+const TIPS = 'Shift+Enter 换行 · 拖拽 / 粘贴 / 点击上传图片 · 点赞 / 点踩帮助我们改进'
 
 const ONBOARDING_DISMISSED_KEY = 'chatbot_onboarding_dismissed'
 
@@ -57,7 +53,7 @@ function personalizeWelcome(base: string, hasHistory: boolean): string {
   const hour = new Date().getHours()
   const isNight = hour >= 22 || hour < 7
   if (isNight) return '夜深了，有什么需要帮忙的吗？'
-  if (hasHistory) return '欢迎回来！请继续提问或选择下方常见问题'
+  if (hasHistory) return '欢迎回来，有什么可以帮您的？'
   return base
 }
 
@@ -73,11 +69,11 @@ export default function ChatbotOnboarding({ onQuestionClick, onDismiss }: Props)
         if (!alive) return
         if (w.status === 'fulfilled') setWelcome(w.value)
         if (f.status === 'fulfilled') {
-          // 只取 enabled=true 且 id 存在（避免空对象），按 sort_order 排序后取前 5
+          // 只取 enabled=true 且 id 存在（避免空对象），按 sort_order 排序后取前 6
           setFaqs(
             f.value
               .filter((x) => x.enabled && x.id !== undefined)
-              .slice(0, 5),
+              .slice(0, 6),
           )
         }
         setLoading(false)
@@ -90,69 +86,70 @@ export default function ChatbotOnboarding({ onQuestionClick, onDismiss }: Props)
   // 欢迎语：DB 配置 → 个性化策略兜底
   const greeting = welcome
     ? personalizeWelcome(welcome.message, false)
-    : 'Hi，我是智能客服小蜜，请问有什么可以帮您？'
+    : '有什么可以帮您的？'
 
   return (
     <div className="cb-onboarding">
-      {/* 头部欢迎语 + 关闭 */}
-      <div className="cb-onboarding-header">
-        <div className="cb-onboarding-greeting">{greeting}</div>
-        <Button
-          type="text"
-          size="small"
-          icon={<CloseOutlined />}
-          onClick={onDismiss}
-          className="cb-onboarding-close"
-        />
-      </div>
+      <Button
+        type="text"
+        size="small"
+        icon={<CloseOutlined />}
+        onClick={onDismiss}
+        className="cb-onboarding-close"
+        aria-label="关闭引导"
+      />
 
-      {/* 热门功能卡片 */}
-      <div className="cb-onboarding-features">
-        {HOT_FEATURES.map((f) => (
-          <div key={f.key} className="cb-feature-card">
-            <div className="cb-feature-icon">{f.icon}</div>
-            <div className="cb-feature-title">{f.title}</div>
-            <div className="cb-feature-desc">{f.desc}</div>
-          </div>
-        ))}
-      </div>
+      <div className="cb-onboarding-center">
+        <div className="cb-onboarding-hero">
+          <h1 className="cb-onboarding-greeting">{greeting}</h1>
+          <p className="cb-onboarding-subtitle">
+            基于项目知识库与工具调用，为您提供准确答案
+          </p>
+        </div>
 
-      {/* 常见问题快捷入口 */}
-      <div className="cb-onboarding-section">
-        <div className="cb-onboarding-section-title">📌 常见问题</div>
-        {(() => {
-          // 提取嵌套三元为独立变量，便于阅读
-          const faqContent = faqs.length === 0 ? (
+        {/* 能力标签 */}
+        <div className="cb-onboarding-features">
+          {HOT_FEATURES.map((f) => (
+            <div key={f.key} className="cb-feature-card">
+              <span className="cb-feature-icon">{f.icon}</span>
+              <span className="cb-feature-title">{f.title}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* 常见问题快捷入口 */}
+        <div className="cb-onboarding-section">
+          <div className="cb-onboarding-section-title">常见问题</div>
+          {loading ? (
+            <Skeleton active paragraph={{ rows: 2 }} title={false} />
+          ) : faqs.length === 0 ? (
             <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description="暂无常见问题"
-              style={{ margin: '12px 0' }}
+              style={{ margin: '24px 0', color: 'var(--cb-text-tertiary)' }}
             />
           ) : (
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <div className="cb-faq-grid">
               {faqs.map((faq) => (
                 <button
                   type="button"
                   key={faq.id}
-                  className="cb-faq-item"
+                  className="cb-faq-card"
                   onClick={() => onQuestionClick(faq.question)}
                 >
                   <span className="cb-faq-question">{faq.question}</span>
                   <ArrowRightOutlined className="cb-faq-arrow" />
                 </button>
               ))}
-            </Space>
-          )
-          return loading ? <Skeleton active paragraph={{ rows: 3 }} /> : faqContent
-        })()}
-      </div>
+            </div>
+          )}
+        </div>
 
-      {/* 使用提示 */}
-      <div className="cb-onboarding-tips">
-        <BulbOutlined style={{ marginRight: 6, color: 'var(--cb-yellow-light, #FFE082)' }} />
-        {TIPS.map((t) => (
-          <Tag key={t} className="cb-tip-tag">{t}</Tag>
-        ))}
+        {/* 使用提示 */}
+        <div className="cb-onboarding-tips">
+          <BulbOutlined style={{ fontSize: 12 }} />
+          <span>{TIPS}</span>
+        </div>
       </div>
     </div>
   )

@@ -14,6 +14,7 @@ import {
   SearchOutlined,
   QuestionCircleOutlined,
   CustomerServiceOutlined,
+  MessageOutlined,
 } from '@ant-design/icons'
 import { useSSEChat } from './hooks/useSSEChat'
 import { useSearch } from '../../hooks/useSearch'
@@ -299,62 +300,21 @@ const renderMessageImages = (imgs: string[], win: typeof globalThis) => (
   </div>
 )
 
-// 可爱卡通机器人头像 SVG：圆润造型 + 马卡龙配色，契合治愈系 UI
+// 极简商务头像：深色方块 + "AI" 字母，替代原机器人图标
 function BotAvatar() {
   return (
-    <svg viewBox="0 0 40 40" width="22" height="22" fill="none">
-      {/* 头部圆角矩形 */}
-      <rect x="8" y="6" width="24" height="20" rx="8" fill="#fff" opacity="0.95" />
-      {/* 天线 */}
-      <circle cx="20" cy="4" r="2" fill="#fff" />
-      <line x1="20" y1="6" x2="20" y2="4" stroke="#fff" strokeWidth="1.5" />
-      {/* 左眼 */}
-      <circle cx="15" cy="15" r="2.5" fill="#6ECDB4" />
-      {/* 右眼 */}
-      <circle cx="25" cy="15" r="2.5" fill="#6ECDB4" />
-      {/* 腮红 */}
-      <ellipse cx="12" cy="20" rx="2" ry="1.5" fill="#FFB3CC" opacity="0.7" />
-      <ellipse cx="28" cy="20" rx="2" ry="1.5" fill="#FFB3CC" opacity="0.7" />
-      {/* 嘴巴微笑 */}
-      <path d="M17 20 Q20 22 23 20" stroke="#6ECDB4" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-      {/* 身体小圆角 */}
-      <rect x="12" y="26" width="16" height="8" rx="4" fill="#fff" opacity="0.8" />
-    </svg>
+    <div className="cb-avatar cb-avatar-bot" aria-label="AI 助手">
+      AI
+    </div>
   )
 }
 
-// 空状态插画：机器人打招呼
+// 空状态插画：极简聊天气泡图标，替代原机器人插画
 function EmptyIllustration() {
   return (
-    <svg viewBox="0 0 120 120" width="120" height="120" fill="none">
-      {/* 背景圆 */}
-      <circle cx="60" cy="60" r="50" fill="#FFD6E8" opacity="0.3" />
-      <circle cx="60" cy="60" r="40" fill="#C8F1E2" opacity="0.35" />
-      {/* 机器人头部 */}
-      <rect x="35" y="30" width="50" height="42" rx="16" fill="#fff" />
-      {/* 天线 */}
-      <circle cx="60" cy="22" r="4" fill="#FF8FAB" />
-      <line x1="60" y1="30" x2="60" y2="26" stroke="#FFB3CC" strokeWidth="2" />
-      {/* 眼睛 */}
-      <circle cx="48" cy="48" r="5" fill="#6ECDB4" />
-      <circle cx="72" cy="48" r="5" fill="#6ECDB4" />
-      <circle cx="48" cy="47" r="1.5" fill="#fff" />
-      <circle cx="72" cy="47" r="1.5" fill="#fff" />
-      {/* 腮红 */}
-      <ellipse cx="42" cy="58" rx="4" ry="3" fill="#FFB3CC" opacity="0.6" />
-      <ellipse cx="78" cy="58" rx="4" ry="3" fill="#FFB3CC" opacity="0.6" />
-      {/* 微笑 */}
-      <path d="M50 60 Q60 68 70 60" stroke="#6ECDB4" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-      {/* 身体 */}
-      <rect x="42" y="72" width="36" height="20" rx="10" fill="#A8E6CF" opacity="0.8" />
-      {/* 小手臂 */}
-      <circle cx="35" cy="78" r="5" fill="#FFB3CC" opacity="0.7" />
-      <circle cx="85" cy="78" r="5" fill="#FFB3CC" opacity="0.7" />
-      {/* 装饰小星星 */}
-      <text x="20" y="40" fontSize="14" fill="#FF8FAB" opacity="0.5">✦</text>
-      <text x="95" y="75" fontSize="12" fill="#6ECDB4" opacity="0.5">✦</text>
-      <text x="90" y="35" fontSize="10" fill="#FFB3CC" opacity="0.4">●</text>
-    </svg>
+    <div className="cb-empty-illustration" aria-hidden="true">
+      <MessageOutlined />
+    </div>
   )
 }
 
@@ -904,13 +864,12 @@ export default function ChatbotPage() {
   return (
     <Layout className="cb-root">
       <Sider
-        width={280}
+        width={260}
         theme="light"
         className={`cb-sider ${siderOpen ? 'cb-sider-open' : ''}`}
       >
         <div className="cb-sider-inner">
           <Button
-            type="primary"
             icon={<PlusOutlined />}
             block
             onClick={handleCreateSession}
@@ -1399,7 +1358,6 @@ function ChatInputArea({
           </Button>
         ) : (
           <Button
-            type="primary"
             onClick={onSend}
             disabled={!inputValue.trim()}
             className="cb-send-btn"
@@ -1420,7 +1378,7 @@ function ChatInputArea({
   )
 }
 
-// 消息气泡：区分用户/助手样式，马卡龙渐变气泡 + 圆润头像
+// 消息气泡：区分用户/助手样式，极简商务深浅气泡 + 方正头像
 function MessageBubble({ message: msg, sessionId }: { readonly message: Message; readonly sessionId: string }) {
   const isUser = msg.role === 'user'
   // M3 重试：失败时点击重发（仅用户消息 + 有 retry_payload）

@@ -399,7 +399,7 @@ export const handlers = [
 import { test, expect } from '@playwright/test'
 
 test('保存失败应显示具体错误', async ({ page }) => {
-  await page.goto('/app/config/buyer')
+  await page.goto('/xianyu/config/buyer')
   await page.fill('.ant-input-number-input', '90')  // pass_score = 90
   await page.fill('.ant-input-number-input >> nth=1', '70')  // auto_buy_score = 70
   await page.click('button.ant-btn-primary')

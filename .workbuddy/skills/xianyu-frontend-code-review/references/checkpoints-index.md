@@ -161,3 +161,9 @@
 - v4.63.0 新增：F-REVIEW-233~235（资源创建幂等性与前端状态闭环，配套 references/idempotent-resource-creation-checks.md）
 - v4.67.0 experimental 新增：F-REVIEW-244（前端 types.ts 反向校验，配套 meta-rule #110 + step 273 + B-REVIEW-330）
 - v4.70.0 新增：F-REVIEW-246（源码文件编码完整性，配套 xianyu-hunter-dev step 280 + 后端 B-REVIEW-337 + 测试模式 AK；覆盖源码本体中文→字面量? / GBK 误读乱码，与运行时 ENC 规范正交互补）
+
+## 新增检查点（v4.72.0 · 2026-08-13 登录/Cookie/测试专项）
+
+| ID | 名称 | 维度 | 版本 | 配置节点 | 规范源 |
+|----|------|------|------|----------|--------|
+| F-REVIEW-247 | PROXY-REDIRECT-SAFETY 重定向/中间件不得破坏反代（Funnel 回环安全） | 48 | v4.72.0 | `proxy_redirect_safety` | meta-rule #120 / step 登录专项 |

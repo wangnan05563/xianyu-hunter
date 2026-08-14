@@ -307,3 +307,18 @@ docs/04-系统维护/sonar-reports/test_pwsh.txt
 test_results/
 temp/
 tmp/
+
+# ---------- ONNX / 量化 embedding 工件（构建期由脚本生成，体积大，不入库）----------
+# 由 scripts/export_embedding_onnx.py（fp32）与 scripts/quantize_embedding_onnx.py（int8）
+# 在构建/开发期生成；运行期从 resources/embedding 或 dist 加载。
+# 等价性测试缺件会自动 skip，故不入库不影响 CI 绿。
+# 仅忽略构建生成的工件（*.onnx / tokenizer.json / meta.json）；目录本身不忽略，
+# 靠 .gitkeep 保留结构，clone 后知道此处应放 ONNX embedding 工件
+src/xianyu_hunter/resources/embedding/*.onnx
+src/xianyu_hunter/resources/embedding/tokenizer.json
+src/xianyu_hunter/resources/embedding/meta.json
+
+# ---------- 清理工具产物（旧 cleanup manifests，已取消跟踪 2026-08-14）----------
+/cleanup-manifest-*.txt
+/cleanup_manifest.json
+/cleanup-manifest-*

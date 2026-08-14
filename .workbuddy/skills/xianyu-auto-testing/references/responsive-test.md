@@ -38,12 +38,12 @@ JSON.stringify({
 
 | 场景 | UA | maxTouchPoints | innerWidth | ontouchend | 预期跳转 |
 |------|----|----|----|----|----|
-| 真实 iPhone | 含 iPhone | 5 | 390 | true | → /app/m/ |
-| 真实 iPad Pro | 含 Macintosh | 5 | 834 | true | → /app/m/ |
-| 仿真 iPhone 13 | 桌面 UA（不变） | 0（不变） | 390 | false | → /app/m/（视口兜底） |
-| 仿真 iPad Pro | 桌面 UA（不变） | 0（不变） | 834 | false | → /app/（仿真失败） |
-| JS 覆盖 iPad | Macintosh | 5 | 834 | false | → /app/m/（fallback 生效） |
-| 桌面 Chrome | Windows | 0 | 1280 | false | → /app/（保持桌面） |
+| 真实 iPhone | 含 iPhone | 5 | 390 | true | → /xianyu/m/ |
+| 真实 iPad Pro | 含 Macintosh | 5 | 834 | true | → /xianyu/m/ |
+| 仿真 iPhone 13 | 桌面 UA（不变） | 0（不变） | 390 | false | → /xianyu/m/（视口兜底） |
+| 仿真 iPad Pro | 桌面 UA（不变） | 0（不变） | 834 | false | → /xianyu/（仿真失败） |
+| JS 覆盖 iPad | Macintosh | 5 | 834 | false | → /xianyu/m/（fallback 生效） |
+| 桌面 Chrome | Windows | 0 | 1280 | false | → /xianyu/（保持桌面） |
 
 **注意**：Playwright `playwright_resize` 只调整视口尺寸，不修改 UA 和 maxTouchPoints。
 这是已知限制（config.yaml `browser_automation.known_limitations`）。
@@ -86,9 +86,9 @@ window.dispatchEvent(new Event('resize'));
 
 | 设备类别 | 操作 | 预期结果 |
 |---------|------|---------|
-| narrow_phone | `playwright_resize` + 导航到根路径 | 跳转到 /app/m/ |
-| wide_tablet | `playwright_resize` + JS 属性覆盖 + 导航 | 跳转到 /app/m/（验证 fallback） |
-| desktop | `playwright_resize` + 导航到 /app/ | 保持 /app/（防误判） |
+| narrow_phone | `playwright_resize` + 导航到根路径 | 跳转到 /xianyu/m/ |
+| wide_tablet | `playwright_resize` + JS 属性覆盖 + 导航 | 跳转到 /xianyu/m/（验证 fallback） |
+| desktop | `playwright_resize` + 导航到 /xianyu/ | 保持 /xianyu/（防误判） |
 
 ---
 
@@ -98,7 +98,7 @@ window.dispatchEvent(new Event('resize'));
 
 1. 调用 `playwright_resize` 设置 `desktop_viewport_width` x 720
 2. 导航到 `config.yaml#spa.desktop_home_path`
-3. 验证 `window.location.pathname` 保持为 `/app/`（不跳转到 /m/）
+3. 验证 `window.location.pathname` 保持为 `/xianyu/`（不跳转到 /m/）
 4. 验证无 `.m-tabbar` 元素（桌面端不应渲染移动端 TabBar）
 5. 验证 `#root` innerHTML 长度 > 0（React 应用已挂载）
 

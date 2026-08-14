@@ -1418,6 +1418,53 @@ function FollowUpTagBad({ question, onClick }: Props) {
 
 ---
 
+### 3.16 前端样式与 PWA 子路径部署规范
+
+> **复盘来源**：`references/retrospective-2026-08-13.md`（案例 D：CSS 被截断误删 / 案例 E：PWA 子路径白屏 / 案例 F：SPA 基路径一致性）；对应 meta-rules #116-#119。
+
+#### 3.16.1 源码受保护：清理脚本不得删/截断 tracked 源文件（#116）
+
+| 规则 | 说明 |
+|---|---|
+| **清理前必查 git status** | 任何「清理临时文件/清理构建产物」脚本执行前必须 `git status --short`，确认不会误伤 tracked 源文件 |
+| **白名单守卫** | 清理白名单只含：`build 产物目录` / `node_modules` / `.cache` / 临时日志 / `__pycache__`；**绝对禁止**匹配 `src/`、`frontend/src/`、`*.css`、`*.ts(x)`、`*.py` 等 tracked 源码 |
+| **删除动作清单化** | 删除走「枚举清单 + 分片 + 备份清单」，禁止 `rm -rf` 整目录（沙箱 safe-delete 钩子也会 fail-closed 拦截） |
+
+- 适用：任何执行「清理/删除」的脚本或命令；CI temporary artifact cleanup；本地一键清理 bat/ps1/sh。
+- 不适用：路径写死且明确只含单文件临时产物（如 `rm build/output.zip`，不含 `src/`）；纯内存数据清理。
+
+#### 3.16.2 PWA 子路径导航回退绝对化（#117）
+
+| 规则 | 说明 |
+|---|---|
+| **navigateFallback 绝对路径** | `vite.config.ts` 的 PWA `navigateFallback` 必须写 `base + 'index.html'`（如 `/xianyu/index.html`），禁止相对路径 `'index.html'`（子路径下会被拼成 `/xianyu/m/index.html` → 404 白屏） |
+| **cleanupOutdatedCaches** | workbox 必须 `cleanupOutdatedCaches: true`，新构建自动清旧 precache，避免旧 `index.html` 引用已删除 chunk |
+| **加载占位** | `index.html` 的 `#root` 内必须有加载占位（spinner + 品牌名 + 文案），JS 挂载后替换，避免纯白白屏 |
+
+- 适用：以非根路径（`base` 非 `/`）部署的 PWA；Service Worker 含 `navigateFallback`；含子路由（如 `/xianyu/m/`）的 SPA。
+- 不适用：根路径部署（`base: '/'`）且反向代理 strip 模式（可跳过绝对化，但 `cleanupOutdatedCaches` 仍建议开启）；非 PWA（无 SW）；SSR/多页应用。
+
+#### 3.16.3 SPA 基路径三处对齐（#118）
+
+| 规则 | 说明 |
+|---|---|
+| **三处一致** | `vite.config.ts base: '/xianyu/'` ⇄ `main.tsx <BrowserRouter basename="/xianyu">` ⇄ 后端 `_serve_spa_request` 剥离 `xianyu/` 前缀，必须一致 |
+| **入口统一** | 所有「自动打开浏览器」入口统一指向 `/xianyu`（或 `/xianyu/`），**禁止** `/` 或 `/app/` |
+
+- 适用：子路径部署的 SPA；含 `BrowserRouter basename` 的 React 项目。
+- 不适用：根路径部署 SPA；HashRouter / MemoryRouter（无 basename）；后端 `*.py` 路由（由后端维度约束）。
+
+#### 3.16.4 设计令牌集中化（#119）
+
+| 规则 | 说明 |
+|---|---|
+| **禁硬编码色** | 颜色/圆角/间距集中在 `:root` CSS 变量或主题 token；禁止在组件/页面内硬编码十六进制色值（如 `#FFB3CC`、`#6ECDB4`） |
+| **移除装饰色** | 马卡龙等装饰色一律移除，改用品牌灰阶（背景 `#ffffff`、主文本 `#111111`、次要 `#777777`） |
+| **对比度达标** | 文本主色/次要色/边框/背景必须从 token 引用，满足 WCAG AA 对比度 |
+
+- 适用：任何前端样式文件（`.css`/`.scss`/`styled`）；含主题切换、品牌色、深浅色模式的项目。
+- 不适用：一次性内联调试样式（临时验证，不入库）；第三方组件库内部样式（不受本仓库 token 约束）。
+
 ## 四、配置规范
 
 ### 4.1 文件职责
@@ -1653,3 +1700,22 @@ Card(title=<Space><DollarCircleOutlined />任务价格区间梯度评分</Space>
 | **配置来源** | 是否标注了规则来自任务级配置？ |
 | **构建通过** | tsc --noEmit + vite build 都通过？ |
 | **PWA 刷新** | 提示用户强制刷新或 unregister SW？ |
+
+---
+
+## 十五、2026-08-13 专项规范（登录/Cookie/测试）
+
+> 本会话（开发模式根路径白板 / 浏览器登录 30s 无响应 + Cookie 异常 / safe-delete 测试陷阱）复盘提炼的 7 条新规范，详情见：
+> - 复盘：`retrospective-2026-08-13-login-cookie.md`（Sequential Thinking 四维度）
+> - 专项标准：`coding-standards-2026-08-13.md`（部署入口/重定向安全、Cookie 令牌生命周期、错误响应诊断契约、沙箱测试协议、包装器 API 核实）
+> - 元规范：`meta-rules/14-testing-deployment-review.md`（#120-#126）
+
+| 规范 | 一句话 | 配置节点 |
+|------|--------|----------|
+| #120 PROXY-REDIRECT-SAFETY | 新增重定向/中间件前先 grep 反代约束，禁止造成前缀剥离回环 | `proxy.strip_prefix_deployment` |
+| #121 COOKIE-WARMUP-HOMEPAGE | 登录/导出前预热必须触达平台首页刷新 `_m_h5_tk` | `cookie.homepage_url` |
+| #122 COOKIE-INJECT-REHYDRATE | 注入 cookie 后必须 rehydrate 会话令牌 | `cookie.rehydrate.*` |
+| #123 INVALID-RESPONSE-DIAGNOSTICS | invalid 响应必须返回真实诊断字段，禁止 0/空误导 | `cookie_status` 字段 |
+| #124 SANDBOX-SAFE-TEST | 沙箱测试用项目 venv + `--no-cov -p no:cacheprovider` | `test.venv_pytest` / `test.safe_delete_workaround` |
+| #125 REGRESSION-GUARD | 修复即附基线红灯/修复绿灯回归测试 | `regression.baseline_red_fix_green` |
+| #126 WRAPPER-API-VERIFY | 调用包装器前核实真实 API 签名 | （依赖 `browser` 包装器定义） |

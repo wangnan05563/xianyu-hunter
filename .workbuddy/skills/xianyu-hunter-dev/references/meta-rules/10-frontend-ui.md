@@ -2,7 +2,7 @@
 
 > 移动端检测、响应式断点、设备仿真、操作项分级、SPA 渲染容错、UI 视觉门控、React 状态选型、过滤结果透明化、URL 状态同步、SW 缓存版本同步。
 >
-> 涵盖规范: #56, #64, #65, #67, #68, #69, #83, #95, #103, #107
+> 涵盖规范: #56, #64, #65, #67, #68, #69, #83, #95, #103, #107, #116, #117, #118, #119
 >
 > 完整内容见 [../meta-rules.md](../meta-rules.md) | [返回索引](index.md)
 
@@ -47,3 +47,19 @@ iPadOS 13+ UA 伪装为 macOS，触摸检测需要 `ontouchend` + `maxTouchPoint
 ### #107 React 状态选型判断矩阵
 usePersistentState（跨刷新）> Zustand（跨组件）> useState（组件内）；禁止 useState 存持久化偏好
 - grep: `grep "useState" <file>.tsx` 变量名含 `mode`/`theme`/`view` → 应改为 usePersistentState
+
+### #116 源码受保护（清理脚本禁删/截断 tracked 源文件）
+任何「清理/删除」脚本或命令执行前必须 `git status --short` 守卫，清理白名单只含 build 产物 / node_modules / .cache / 临时日志 / __pycache__；**绝对禁止**匹配 `src/`、`frontend/src/`、`*.css`、`*.ts(x)`、`*.py` 等 tracked 源码
+- grep: `grep -rn "rm -rf\|Remove-Item\|del " scripts/ config/ --include="*.bat" --include="*.ps1"` 命中但无 `git status` 守卫 / 无白名单排除 `src/` → 违规
+
+### #117 PWA 子路径导航回退绝对化
+`base` 非 `/` 时 `navigateFallback` 必须绝对路径 `base + 'index.html'`（如 `/xianyu/index.html`）；workbox 必须 `cleanupOutdatedCaches: true`；`index.html` 必须有加载占位
+- grep: `grep "navigateFallback" frontend/vite.config.ts` 值为 `'index.html'` 或相对路径 → 违规；`grep "cleanupOutdatedCaches" frontend/vite.config.ts` 缺失 → 违规
+
+### #118 SPA 基路径三处对齐
+`vite.config.ts base` ⇄ `main.tsx <BrowserRouter basename>` ⇄ 后端 `_serve_spa_request` 剥离前缀 三处一致；所有「自动打开浏览器」入口统一 `<base>`，禁止 `/` 或 `/app/`
+- grep: `grep "basename" frontend/src/main.tsx` 与 `grep "base:" frontend/vite.config.ts` 不一致 → 违规；`grep "start.*http" scripts/` 含 `/app/` 或裸 `/` 入口 → 违规
+
+### #119 前端设计令牌集中化
+颜色/圆角/间距集中在 `:root` CSS 变量或主题 token，禁止组件/页面内硬编码十六进制色值；装饰色一律移除改用品牌灰阶，文本色满足 WCAG AA
+- grep: `grep -rn "#[0-9a-fA-F]\{6\}" frontend/src/pages/**/*.tsx` 组件内联 style 含硬编码色值 → 违规（排除 token 定义文件与 svg fill 约定）

@@ -385,7 +385,7 @@ project_conventions:
   routing:
     library: "react-router-dom"
     version: "6.26+"
-    basename: "/app"
+    basename: "/xianyu"
     lazy_loading: "lazy + lazyRetry"
     lazy_retry_config:
       max_retries: 3
@@ -395,7 +395,7 @@ project_conventions:
 
   # PWA 配置
   pwa:
-    base: "/app/"
+    base: "/xianyu/"
     output_dir: "../src/xianyu_hunter/web/static/spa"
     register_type: "prompt"
     manifest_theme_color: "#FF6200"

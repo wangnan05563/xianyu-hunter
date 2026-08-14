@@ -3,7 +3,7 @@ name: "xianyu-frontend-code-review"
 description: "对闲鱼猎人项目前端代码（frontend/src/ �?React/TypeScript/Ant Design/Zustand 文件）进行全面评审与逻辑审查，覆盖类型安全、业务逻辑、Zustand 状态管理、API 契约、Hooks 设计、路由懒加载、AntD 主题、性能、可访问性、可测试性、认证规范、SonarQube 合规、注册式资源三件套契约等 36 个维度。当用户要求'审查/检�?走查/把关/review/评估/看看对不�?规范不规�?前端 React/TS 代码�?.tsx/.ts 文件修改'�?迭代发布前前端走�?，或提到'前端评审/frontend review/React 代码审查/TypeScript 评审/组件代码走查'时调用。仅审查前端 .tsx/.ts 文件；纯后端 .py 文件审查请改�?xianyu-backend-code-review�?
 whenToUse: "需要审查闲鱼猎人前端代码（frontend/src/ �?.tsx/.ts 文件，含 pages/页面、components/组件、hooks/、stores/Zustand、api/、routes/路由、App.tsx、main.tsx）是否符合项目规�?
 triggers: "前端代码 走查/审查/审核/把关/review/检�?评估 | 前端评审/frontend review/React 代码审查/TypeScript 评审/组件代码走查/AntD 评审/Zustand 评审 | .tsx/.ts 文件 修改/变更/迭代 走查 | 迭代发布�?前端 代码 走查 | 这段前端代码/组件/Hook 写得对不�?规范不规�?| 闲鱼 前端 代码 review | 页面/组件/Hook/Store/路由 代码 审查"
-version: "4.68.0"
+version: "4.69.0"
 updated: "2026-08-11"
 config: "config.yaml"
 scripts: "scripts/auto-scan.ps1"
@@ -71,6 +71,9 @@ template: "templates/report-template.md"
 | v4.57.0 | F-REVIEW-206 FALLBACK-PRESERVE-KEY-FRONTEND | 11 | 115->116 | ���˹��������ǰ����飨meta-rule #90 ��أ�2026-07-22 price_range ע�� Bug ���̣� |
 | v4.59.0 | F-REVIEW-214 GLOBAL-ERROR-BOUNDARY / F-REVIEW-215 LAZY-RETRY-WRAPPER / F-REVIEW-216 ROUTE-ERROR-BOUNDARY-RESET-KEYS / F-REVIEW-217 API-ARRAY-DEFENSE-FALLBACK / F-REVIEW-218 VITEST-ENV-CHECKLIST / F-REVIEW-219 ANTD-CHINESE-BUTTON-TEST-REGEX | 3,10,10,7,12,12 | 119->125 | SPA��Ⱦ�ݴ�������(ȫ��ErrorBoundary/lazyRetry/·�ɼ�resetKeys) / API��������Զ��� / Vitest��������嵥 / antd���İ�ť��������meta-rule #95 ��أ�2026-07-22 �����޸����̣� |
 | v4.60.0 | F-REVIEW-UI-PREVIEW-GATE / F-REVIEW-STATE-SELECTION / F-REVIEW-DEFENSIVE-RENDER / F-REVIEW-COMPONENT-REUSE-RESET | 3,10,7,3 | 125->129 | UI变更门控/状态选型/防御性渲染/组件复用重置（2026-07-23 12项历史问题复盘提炼） |
+| v4.70.0 | F-REVIEW-227 BUILD-ARTIFACT-ICON-BRAND-CONSISTENCY / F-REVIEW-228 DEPLOY-CACHE-INVALIDATION | 2 | 227->228 | 构建产物图标品牌一致性 / 部署缓存失效一致性（meta-rule #112，2026-08 构建产物图标 + 部署缓存复盘） |
+| v4.71.0 | F-REVIEW-236 SOURCE-FILE-PROTECTION / F-REVIEW-237 PWA-SUBPATH-NAVFALLBACK / F-REVIEW-238 DESIGN-TOKENS-NO-HARDCODE / F-REVIEW-239 SPA-BASENAME-CONSISTENCY | 42,43,44,45 | 42->45 | 前端部署韧性 4 维度（meta-rules #116-#119，2026-08-13 复盘 retrospective-2026-08-13）：清理脚本禁删 tracked 源 / PWA 子路径导航回退绝对化 / 设计令牌集中化禁硬编码色 / SPA 基路径三处对齐；全部参数经 config.yaml 节点管理，禁硬编码 |
+| v4.72.0 | F-REVIEW-247 PROXY-REDIRECT-SAFETY | 1 | 247->247 | 重定向/中间件不得破坏反代（Funnel 回环安全，meta-rule #120，retrospective-2026-08-13-login-cookie）：根路径白板靠统一入口指向子路径，禁止加重定向（避免反代前缀剥离无限回环）；参数经 config.yaml#proxy_redirect_safety 管理，无硬编码 |
 | v4.61.0 | F-REVIEW-220~226 重构安全性检查（7项） | 11/4,3/10,11/2,12,12/16,11/6,6/10 | 125->132 | 常量配置化5步法/Hooks作用域契约/导入名变更checklist/长任务日志输出/资源过载容错/跨文件契约同步/状态持久化统一入口（复盘规范集A/B/D三类前端落地） |
 | v4.58.0 | F-REVIEW-211 SSE-PRECHECK-HTTP-ERROR-CODE / F-REVIEW-212 LIST-DERIVED-USEMEMO / F-REVIEW-213 SSE-FETCH-READABLESTREAM | 15,10,10 | 116->119 | SSEǰ�ü��HTTP������/useMemo/fetch+ReadableStream��meta-rule #93 ��أ�2026-07-22 �����Ż�8�������̣� |
 
@@ -396,7 +399,7 @@ type TaskStatus = 'active' | 'paused' | 'stopped'
             },
           }}
         >
-          <BrowserRouter basename="/app">
+          <BrowserRouter basename="/xianyu">
             <App />
           </BrowserRouter>
         </ConfigProvider>
@@ -434,7 +437,7 @@ function ThemedRoot() {
         },
       }}
     >
-      <BrowserRouter basename="/app">
+      <BrowserRouter basename="/xianyu">
         <App />
       </BrowserRouter>
     </ConfigProvider>
@@ -729,7 +732,7 @@ live: async () => {
 
 ### 8. 路由与懒加载 🆕v2.0
 
-- 【强制】使�?`react-router-dom` 6.26+ + `BrowserRouter basename="/app"`
+- 【强制】使�?`react-router-dom` 6.26+ + `BrowserRouter basename="/xianyu"`
 - 【强制】约 26 条业务路由（`App.tsx`�?- 【强制】所有业务页面用 `lazy(() => lazyRetry(() => import('./pages/<�?')))` 懒加�?- 【强制】`lazyRetry` 包装 chunk 失败重试：`MAX_RETRIES=3`�?s/2s/4s 指数退�?- 【强制】独立路由（不进 MainLayout）：`/login`、`/onboarding`、`/help`、`/about`
 - 【强制】双�?ErrorBoundary：`LazyErrorBoundary`（路由级�? 顶层 ErrorBoundary
 - 【强制】路由切换用 `requestAnimationFrame` 重置滚动位置
@@ -1235,7 +1238,7 @@ live: async () => {
 
 ### 13. PWA 配置 🆕v2.0
 
-- 【强制】`vite.config.ts` 配置 `base: '/app/'`
+- 【强制】`vite.config.ts` 配置 `base: '/xianyu/'`
 - 【强制】构建产物输出到 `../src/xianyu_hunter/web/static/spa`
 - 【强制】`VitePWA` `registerType: 'prompt'`
 - 【强制】`manifest.theme_color: '#FF6200'`
@@ -1244,7 +1247,12 @@ live: async () => {
   - `/api/events/stream`
   - `/api/auth/`
   - `/api/export/`
+  - `/xianyu/api/`
 - 【强制】`devOptions.enabled: false`
+- 【强制】`workbox-build` / `workbox-window` 必须在 `frontend/package.json` 的 `devDependencies` 中显式声明（vite-plugin-pwa 将其列为 peerDependency；未声明时 `npm ci` 会移除，构建报 `Cannot find module 'workbox-build'`）。Signal: `grep -n "workbox-build\|workbox-window" frontend/package.json`
+- 【强制】`vite.config.ts` 必须 `build.emptyOutDir: false`，输出目录清理改由构建脚本用 `rmdir /s /q`（cmd 内建，不经沙箱 safe-delete 劫持）或 .NET 直接删除负责；禁止依赖 vite 构建开始的 emptyOutDir 清空（沙箱 safe-delete 守卫会中断 `fs.rmSync`）。Signal: `grep -n "emptyOutDir" frontend/vite.config.ts`
+- 【强制】`vite.config.ts` 使用函数式 `defineConfig(({ command }) => ({...}))` 并在 `optimizeDeps` 设 `force: command === 'build'`（仅 build 强制从零预构建，避免 `node_modules` 重装后陈旧 `.vite/deps` 缓存导致 Rollup `failed to resolve import` 纯 ESM 包）。Signal: `grep -n "optimizeDeps" frontend/vite.config.ts`
+- 【强制】`runtimeCaching` 排除规则与 `navigateFallbackDenylist` 必须同时覆盖 `spa.api_prefix`（默认 `/xianyu/api`）与裸 `/api/`（双前缀部署下真实 API 路径为 `/xianyu/api/*`）。Signal: `grep -n "navigateFallbackDenylist\|runtimeCaching" frontend/vite.config.ts`
 
 ### 14. 三处映射同步 🆕v2.0
 
@@ -2778,7 +2786,7 @@ useEffect(() => {
 **正确模式**：`useEffect` �?`findSheetMeta(pathname)` �?`openSheet(sheet.id)` 失败�?sheet 未找到时 `navigate(activeSheet.path, { replace: true })` 回退 + `logger.debug` 记录
 
 **配置参数**：`url_state_sync_fallback` 节点（在 `config.yaml` 管理，不硬编码）�?- `enabled`（默�?`true`，开关本检查）
-- `fallback_strategy`（默�?`replace`，回退策略：replace/push�?- `detection_patterns`（默�?`["navigate", "openSheet", "findSheetMeta"]`，需要检测的函数�?- `applicable_routes`（默�?`["/app/tasks", "/app/config/search"]`，适用路由白名单）
+- `fallback_strategy`（默�?`replace`，回退策略：replace/push�?- `detection_patterns`（默�?`["navigate", "openSheet", "findSheetMeta"]`，需要检测的函数�?- `applicable_routes`（默�?`["/tasks", "/config/search"]`，适用路由白名单，均为 basename 内相对路由，不含 `/xianyu` 前缀）
 
 **对应编码规范**：详�?`xianyu-hunter-dev` v4.39.0 experimental meta-rule #64
 
@@ -2844,7 +2852,7 @@ VitePWA({
 // 禁止：拦截器仅凭 status === 401 即跳转登录页，业�?401（闲�?cookie 过期）也会被误判为认证失效；应同时校�?detail === 'Unauthorized' 或使�?440 状态码区分
 ```
 
-**正确模式**：拦截器 `status === 401 && detail === 'Unauthorized'` 双重校验 �?`localStorage.removeItem('xh_token')` + `globalThis.location.replace('/app/login?redirect=...')`（排�?login �?+ `isRedirecting` 防重复跳转）�?业务 401 由调用方 catch
+**正确模式**：拦截器 `status === 401 && detail === 'Unauthorized'` 双重校验 �?`localStorage.removeItem('xh_token')` + `globalThis.location.replace(import.meta.env.BASE_URL + 'login?redirect=...')`（排�?login �?+ `isRedirecting` 防重复跳转）�?业务 401 由调用方 catch（整页跳转必须用 `import.meta.env.BASE_URL`，禁止硬编码 `/app/` 或 `/xianyu/`）
 
 **配置参数**：`interceptor_audit` 节点（在 `config.yaml` 管理，不硬编码）�?- `auth_redirect.conditions`（默�?`[{status: 401, detail_equals: "Unauthorized", action: "redirect_to_login"}]`，跳转条件数组）
 - `auth_redirect.require_all_conditions`（默�?`true`，必须同时满�?status �?detail 才跳转）
@@ -3562,7 +3570,7 @@ checklist:
 | `pwa` | PWA 配置 |
 | `sonarqube_rules` | SonarQube 8 条规�?|
 
-## 附录C�?4 维度对照�?
+## 附录C�?38 维度对照�?
 | # | 维度 | 核心规则 |
 |:--|:---|:---|
 | 1 | 目录结构 | `frontend/src/<分类>/` 规范路径 |
@@ -3577,7 +3585,7 @@ checklist:
 | 10 | Hooks 设计模式 | 常量模块级、ref 持有最新闭包、requestId 竞态保护、🆕v4.24 F-REVIEW-UI-PREFERENCE-PERSISTENCE（用户偏好类 UI 状态强制复�?usePersistentState�?|
 | 11 | 类型安全 | 前后端字段对齐、可选链、联合类型、🆕v4.4 配置驱动功能开关（F-REVIEW-CONFIG-DRIVEN-TOGGLE�?|
 | 12 | SonarQube 合规 | 8 条规则：S2004/S3358/S6757/S7784/S6848/S1128/S4325/S3776 |
-| 13 | PWA 配置 | base:'/app/'、runtimeCaching 排除规则 |
+| 13 | PWA 配置 | base:'/xianyu/'、runtimeCaching 排除规则（含 /xianyu/api）、构建依赖与缓存完整性（workbox peer deps / emptyOutDir / optimizeDeps.force） |
 | 14 | 三处映射同步 | App.tsx + MainLayout.tsx + sheetRegistry.tsx |
 | 15 | SSE 重连 | lastEventId 持久化重连、🆕v4.1 F-REVIEW-SSE-ERROR-HANDLING（stage='error' �?status 分类处理 + "前往登录"跳转引导�?|
 | 16 | 性能 | useMemo/useCallback、虚拟化、稳�?key |
@@ -3599,6 +3607,10 @@ checklist:
 | 32 | 修复前根因扫描协议前端侧（meta-rule #34 落地�?| 🆕v4.36 前端在修复前根因扫描协议维度�?1 项落地检查点：F-REVIEW-118 ROOT-CAUSE-MIN-COUNT（修复非平凡 bug 前必须先�?�? 个根因覆盖用户层/接口�?数据�?配置�?历史层；PR 描述必含"�? 根因列表"段；git diff 涉及 �? 个无关文件视为违反最小修改原则）�? 项检查点对应 xianyu-hunter-dev v4.32.0 meta-rule #34 + 后端 B-REVIEW-160；参数在 `root_cause_protocol` 节点管理 |
 | 33 | 前后端字段契约单一可信源前端侧（meta-rule #35 落地�?| 🆕v4.36 前端在前后端字段契约单一可信源维度的 1 项落地检查点：F-REVIEW-119 CONTRACT-SINGLE-SOURCE（后�?Pydantic/DB Row 字段=权威源，前端 types.ts 必须显式标注"派生来源+Pydantic 字段+变更日期+约束"4 段注释；snake_case 严格透传禁止�?camelCase；命名漂�?CRITICAL）；1 项检查点对应 xianyu-hunter-dev v4.32.0 meta-rule #35 + 后端 B-REVIEW-161；参数在 `contract_single_source` 节点管理 |
 | 34 | 规范治理（meta-rules #36-37 落地�?| 🆕v4.37 前端在规范治理维度的 2 项落地检查点：F-REVIEW-120 SEDIMENTATION-THRESHOLD（新立编码规范必须满�?�? 个相�?bug 门槛，单一 bug 立规范需�?experimental 标签 + 1 季度观察期，安全/数据丢失/付费受损豁免）、F-REVIEW-121 DEGRADATION-CLEANUP（利用率 < 3 �?季度�?F-REVIEW 必须标记待合�?待废弃，1 季度观察期后废弃并移�?version-history.md Deprecated 章节，安全类永不退化）�? 项检查点对应 xianyu-hunter-dev v4.33.0 meta-rules #36-37 + 后端 B-REVIEW-162/163；参数在 `meta_rules_governance` 节点管理 |
+| 42 | 源码受保护（清理禁删 tracked 源）| 🆕v4.71 meta-rule #116 落地：清理脚本 git status 守卫 + 白名单只含 build/node_modules/.cache/__pycache__，禁匹配 src//*.css/*.ts(x)/*.py；参数在 `source_file_protection` 节点管理 |
+| 43 | PWA 子路径导航回退绝对化 | 🆕v4.71 meta-rule #117 落地：base 非 `/` 时 navigateFallback 必须绝对路径 base+'index.html'，workbox cleanupOutdatedCaches:true，index.html 有加载占位；参数在 `pwa_subpath_navfallback` 节点管理 |
+| 44 | 设计令牌集中化（禁硬编码色）| 🆕v4.71 meta-rule #119 落地：颜色/圆角/间距集中在 CSS 变量/token，组件内禁止硬编码十六进制色，装饰色移除改品牌灰阶，满足 WCAG AA；参数在 `design_tokens` 节点管理 |
+| 45 | SPA 基路径三处对齐 | 🆕v4.71 meta-rule #118 落地：vite base ⇄ BrowserRouter basename ⇄ 后端剥离前缀 三处一致，自动打开入口统一 <base> 禁 /app/ 裸 /；参数在 `spa_basename_consistency` 节点管理 |
 
 
 ---
@@ -4618,7 +4630,11 @@ function ThumbCell({ item, src }: ThumbCellProps) {
 
 ---
 
-## 46. SPA Subpath / Base-Path Consistency (redirect scope + deploy basepath) v4.68
+> **v4.69.0 F-REVIEW-SPA-AUTO-OPEN-ENTRY / 维度 13 构建依赖与缓存完整性 规范已补全**：对应 xianyu-hunter-dev S1 步骤8（自动打开浏览器入口 URL 必须 = SPA 基路径）+ S4（前端构建依赖与缓存完整性：workbox peer deps / emptyOutDir+safe-delete / optimizeDeps.force / PWA denylist 覆盖 /xianyu/api）。config.yaml 已补全 `spa` 节点（basename / api_prefix），并修正 stale `/app` → `/xianyu`。auto-testing 对应模式 AL/AM + 构建产物核对。
+
+---
+
+## 46. SPA Subpath / Base-Path Consistency (redirect scope + deploy basepath) v4.69
 
 - Severity: HIGH (P0, white-board / tunnel 404 root cause)
 - Reference: xianyu-hunter-dev 规范 23-24 / meta-rules #111-#112
@@ -4637,5 +4653,51 @@ function ThumbCell({ item, src }: ThumbCellProps) {
   - Applicable: vite.config.ts, index.html, manifest.webmanifest, sw.js, app.py SPA serving.
   - Not applicable: dev server (proxy rewrites `/xianyu`).
 
+- **F-REVIEW-SPA-AUTO-OPEN-ENTRY: auto-open browser entry & full-page navigation must target SPA basename**
+  - All "auto-open browser" entry points (launcher scripts, server-start logs, tray `on_open`, setup/automation scripts) and any full-page navigation (`location.replace`/`location.href` to app root) MUST target `spa.basename` (default `/xianyu/`), never a bare `/` or stale `/app/`. A bare `/` or `/app/` entry loads `index.html` 200 but `BrowserRouter basename="/xianyu"` fails to match routes → white screen.
+  - Signal: `grep -rnE "start \"\" \"?http://[^\"]*/(app/)?\"?|location\.replace\(['\"]/?['\"]\)|webbrowser\.open\(['\"]http://[^'\"]*/(app/)?['\"]\)" scripts/ src/`
+  - Config param: `spa.basename` (default `/xianyu/`) — single source, no hardcoded literal. In-app full-page jumps reuse `import.meta.env.BASE_URL`.
+  - Applicable: scripts/启动服务.bat, scripts/launcher.py, scripts/automation.ps1, scripts/setup-env.ps1, web command logs, AccountSwitcher.tsx.
+  - Not applicable: deep-link to a specific sub-route (must still sit under basename); dev server.
+
 - **Applicable**: all frontend changes touching routing, redirects, build config, or static asset references
 - **Not applicable**: pure backend changes; SSR apps; non-PWA apps
+
+---
+
+## 47. 构建产物图标与部署缓存（Build Artifact & Deploy Cache）v4.70 🆕
+
+> 对应 `xianyu-hunter-dev` meta-rule #112（2026-08 构建产物图标复盘）。
+> 所有审查参数（品牌图标路径/尺寸/严重级）均在 `config.yaml` 对应节点管理，**禁止硬编码**；判断用 grep 信号，禁止语义判断。
+
+### F-REVIEW-227: BUILD-ARTIFACT-ICON-BRAND-CONSISTENCY 构建产物图标品牌一致性
+
+- All shipped product icons — installer `SetupIconFile` / app exe icon (PyInstaller `.spec` `icon=`) / PWA `manifest.webmanifest` `icons` / favicon — MUST use the brand `.ico` (`assets/xianyu-hunter.ico`), never default builder icons nor bound system resources.
+- No `shell32.dll` / `imageres.dll` system-icon binding: system icons are Microsoft copyright; binding them into a distributed product carries trademark/copyright risk. Formal products should use their own brand icon.
+- Signal:
+  ```powershell
+  grep "SetupIconFile" installer.iss                              # 缺失 → 安装包默认图标
+  grep "icon=" xianyu-hunter.spec                                # 缺失 → app exe 默认图标
+  # 检查 manifest.webmanifest icons 指向品牌资源
+  grep "shell32\|imageres" installer.iss scripts/                # 系统图标绑定 → WARNING
+  ```
+- Config param: `build_artifact_icon.brand_icon_path_default` / `forbid_system_icon_binding` / `recommend_size_px`（默认 256，避免高分屏大图标偏糊）— single source，no hardcoded literal。
+- Applicable: 打包配置（installer.iss / .spec）、PWA manifest、favicon。
+- Not applicable: dev server；第三方库默认资源且产品允许。
+
+### F-REVIEW-228: DEPLOY-CACHE-INVALIDATION 部署缓存失效一致性
+
+- After redeploying the SPA build to disk (the project deploys SPA from `src/.../static/spa/` to `dist/.../static/spa/` without a full PyInstaller rebuild), the PWA Service Worker MUST be version-bumped / cache invalidated. A stale SW serving an old entry chunk causes white screen or stale behavior; base path + auto-open entry must still match `spa.basename`.
+- Signal:
+  ```powershell
+  grep -rn "sw.js\|serviceWorker\|registration" frontend/src/   # 确认 SW 版本键在部署时递增
+  grep -rn "location.replace(['\"]/?['\"])|start \"\".*/(app/)? " scripts/ src/  # 入口仍指向 spa.basename
+  ```
+- Config param: `deploy_cache_invalidation.require_sw_version_bump` / `spa.basename`（单一可信源，禁止硬编码 `/xianyu/`）。
+- Applicable: PWA-enabled deploy；磁盘 SPA 热更新（不整包重建）；隧道/子路径部署。
+- Not applicable: dev server；非 PWA 应用。
+
+### 审查流程与结果呈现增强（v4.70）
+
+- **流程**：对打包配置与 PWA 部署，按 F-REVIEW-227~228 执行配置驱动核查——优先用上述 grep 信号定位，禁止"语义判断"；命中后回查 `config.yaml` 对应节点确认参数来源。
+- **呈现**：每条 finding 除既有结构外，须标注 **①关联 meta-rule（#112）②配置节点（`config.yaml#...`）③适用/不适用场景**，确保与整体工作流（xianyu-hunter-dev 规范 SOP、xianyu-backend-code-review B-REVIEW-291、xianyu-auto-testing 模式 AN）高度一致、可追溯。

@@ -347,13 +347,26 @@ def _make_invalid_status(
     uid: str, reason: str,
     data: dict | None, cookies_list: list[dict], names: set[str],
 ) -> CookieStatus:
-    """组装无效的 CookieStatus（统一字段拼装，消除重复）"""
+    """组装无效的 CookieStatus（统一字段拼装，消除重复）
+
+    O-08-11 修复：invalid 场景也必须返回真实的 cookie_count / layers_status /
+    security_flags，否则前端会显示"Cookie 数 0 个"与"各层缺失"——明明 JSON 里有
+    15 个 cookie，却报 0 个，严重误导用户。无效仅表示 key cookie（如 _m_h5_tk）过期
+    或服务端会话失效，不等于没有 cookie。
+    """
+    # 即使无效，也从实际 cookie 计算层数状态，让用户看到"身份层✓/会话层✗"而非全空
+    layers_status = _compute_layers_status(names) if names else {}
+    security_flags = _compute_security_flags(data)
     return CookieStatus(
         is_valid=False, reason=reason,
         user_id=uid,
         source=_get_source_str(data),
         method=_get_method_str(data),
         cookies_list=cookies_list, names=names,
+        cookie_count=len(cookies_list),
+        key_cookies_found=sorted(_GOOFISH_KEY_COOKIES & names),
+        layers_status=layers_status,
+        security_flags=security_flags,
     )
 
 

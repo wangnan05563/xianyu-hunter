@@ -1,6 +1,6 @@
 # 元规范（Meta-Rules）
 
-> 📂 **已拆分为 12 个分类文件，按需查阅。**
+> 📂 **已拆分为 14 个分类文件，按需查阅。**
 >
 > | 分类 | 文件 | 规范数 |
 > |------|------|--------|
@@ -11,15 +11,17 @@
 > | 跨层测试 | [05-cross-layer-testing.md](meta-rules/05-cross-layer-testing.md) | #43-#47 |
 > | 调度器治理 | [06-scheduler-governance.md](meta-rules/06-scheduler-governance.md) | #48-#51, #86 |
 > | 工程闭环 | [07-engineering-closure.md](meta-rules/07-engineering-closure.md) | #31, #52-#55, #111 |
-> | 异步资源 | [08-async-resource.md](meta-rules/08-async-resource.md) | #57-#63, #79-#82, #92 |
+> | 异步资源 | [08-async-resource.md](meta-rules/08-async-resource.md) | #57-#63, #79-#82, #92, #114, #115 |
 > | Cookie 认证 | [09-cookie-auth.md](meta-rules/09-cookie-auth.md) | #72-#78, #96-#102 |
-> | 前端 UI | [10-frontend-ui.md](meta-rules/10-frontend-ui.md) | #56, #64-#65, #67-#69, #83, #95, #103, #107 |
+> | 前端 UI | [10-frontend-ui.md](meta-rules/10-frontend-ui.md) | #56, #64-#65, #67-#69, #83, #95, #103, #107, #116-#119 |
 > | 性能缓存 | [11-performance.md](meta-rules/11-performance.md) | #93-#94, #104-#106 |
 > | 配置安全 | [12-config-security.md](meta-rules/12-config-security.md) | #70, #87 |
+> | 构建运行时韧性 | [13-build-runtime-resilience.md](meta-rules/13-build-runtime-resilience.md) | #112, #113 |
+| 测试与部署审查 | [14-testing-deployment-review.md](meta-rules/14-testing-deployment-review.md) | #120-#126 |
 >
 > **[📋 完整索引（含关键词速查）](meta-rules/index.md)** | 主索引见 [SKILL.md](../SKILL.md)
 >
-> ⚠️ 以下为 111 条规范的**完整原文（canonical source）**，各分类文件仅提供摘要。
+> ⚠️ 以下为 126 条规范的**完整原文（canonical source）**，各分类文件仅提供摘要。
 
 ## 1. 配置驱动原则
 
@@ -3689,5 +3691,133 @@ checkSWUpdate()
 **历史教训**：2026-07-26 用户反馈评分 80 以上商品未触发钉钉通知。配置全正常（`pass_score: 70`、`dingtalk: true`、`quiet_hours.enabled: false`、`subscribed_events` 含 `EVAL_PASSED`），根因是 `EventBus.run_forever()` 被嵌套在 `start_scheduler_in_background` 的 `_scheduler_loop` 内部，三重前置条件任一不满足即 return：① `XH_WITH_SCHEDULER=1` ② `container.collector is not None` ③ 启动时有 RUNNING 任务。第③条最隐蔽——启动时无 RUNNING 任务则 EventBus 永不启动，且 `api_tasks.py` 的 `control_task`（resume/restart）完全不补启动 EventBus。结果 `worker.publish_nowait(EVAL_PASSED)` 事件入队但无消费者，NotifierHub 永远收不到事件，钉钉永不触发，且无任何报错日志。修复：抽离 `start_event_bus_in_background()` 独立启动函数，在 `_on_startup` 中无条件启动（先于调度器），`_on_shutdown` 中独立停止（后于调度器），含幂等防护与异常隔离。
 
 **experimental 升正条件**：1 季度内（截至 2026-10-26）同类根因再发 ≥ 2 次
+
+
+---
+
+## 112. 构建产物资源指令显式化（BUILD-ARTIFACT-RESOURCE-EXPLICIT）🆕v4.69 experimental
+
+**问题**：安装包/卸载程序（Inno Setup `SetupIconFile`、NSIS、MSIX 等）与应用的图标/版本信息/清单是**独立**的资源指令。应用 exe 图标由 PyInstaller `--icon`/`.spec` 指定后正常，但安装包若缺 `SetupIconFile` 会用构建器默认图标；且构建器（如 `build-exe.ps1` 内嵌 `installer.iss` 模板）自动生成配置时若未同步同一指令，删文件重建即丢失。另外"复用系统图标"诉求常被误解为可直接绑定系统资源——构建工具只接受**具体 `.ico` 文件**，不能直接绑定 `shell32.dll,42` 之类资源。
+
+**核心规则**：
+1. 应用 exe 图标（PyInstaller `--icon` / `.spec` icon 字段）与安装包图标（Inno Setup `SetupIconFile`）分别显式声明，二者互不等价
+2. 手写 `installer.iss` 与构建脚本中**自动生成**的 `installer.iss` 模板必须同步同一 `SetupIconFile` 指令
+3. "复用系统/他人图标"必须先抽取成 `.ico` 文件再引用；系统图标属 Microsoft 版权，打包分发产品存在商标/版权风险，正式产品建议用自有图标
+4. 品牌 `.ico` 建议含 256×256 尺寸，避免高分屏大图标视图偏糊
+
+**判断信号**：
+- `grep "SetupIconFile" installer.iss` 缺失 → 安装包用默认图标（违反规则1）
+- `grep "icon=" xianyu-hunter.spec` 缺失 → app exe 用默认图标
+- `grep "SetupIconFile" scripts/build-exe.ps1` 缺失 → 模板未同步，重建即丢失（违反规则2）
+- 引用系统资源（如 `shell32.dll,42` / `imageres.dll`）→ 必须改为抽取成 `.ico` 文件再引用（违反规则3）
+
+**配置参数**：`buildArtifactResource` 节点（enabled / installerIconPath / appIconPathInSpec / autoTemplateSyncCheck / recommendSizePx / forbidSystemIconBinding / observationPeriodQuarters / observationEndDate / promotionThreshold / applicableScenarios / nonApplicableScenarios）
+
+**适用**：所有打包产物（Inno Setup / NSIS / PyInstaller / electron-builder / MSIX）需自定义图标/版本信息/清单的构建；需避免默认图标的发布包
+**不适用**：纯开发态运行（无需打包）；Web 静态部署（无 exe 图标概念）；第三方库自带默认资源且产品允许；一次性内部脚本
+
+**与既有规范的关系**：
+- step 280（源码编码完整性）/ B-REVIEW-280（Windows 编码）：管脚本/源码编码，本规范管构建产物资源指令，互补
+- create-bat 技能（脚本编码 BOM/CRLF）：管 `extract-system-icon.ps1` 等生成脚本的编码，本规范管其产出的 `.ico` 引用方式，互补
+
+**历史教训**：2026-08 用户反馈安装包/卸载程序用默认图标。诊断：`installer.iss` 缺 `SetupIconFile`（app exe 图标已由 `.spec` 指定，正常）。修复：在 `installer.iss` 与 `build-exe.ps1` 内嵌模板同步加 `SetupIconFile=assets\xianyu-hunter.ico`；并澄清"复用系统图标"需先抽取成 `.ico`（新建 `scripts/extract-system-icon.ps1`，UTF-8 BOM+CRLF，实测可用），但提醒系统图标版权风险。
+
+**experimental 升正条件**：1 季度内（截至 2026-11-12）同类根因再发 ≥ 2 次
+
+
+---
+
+## 113. 构建运行时 Python 钉选与自愈（BUILD-RUNTIME-PYTHON-PINNING）🆕v4.69 experimental
+
+**问题**：打包构建脚本（如 `构建打包.bat`→`build-exe.ps1`）裸依赖 PATH 中的 `python` 创建 venv。当 PATH 里的"基础 Python"标准库损坏（如 `Lib\os.py` 缺失），venv 的 `pyvenv.cfg` 的 `home` 指向该死 Python，运行 `python -m pip` 即报 `Could not find platform independent libraries <prefix>` / `No module named 'encodings'`，且脚本若未做容错会 `RemoteException` 硬中止。
+
+**核心规则**：
+1. 构建脚本禁止裸依赖 PATH 的 `python`；优先钉选托管/已知完好运行时（启动器开头 `set "PATH=%MGPy%;%PATH%"` 前置）
+2. 创建 venv 前校验 base Python 健康：`home\Lib\os.py` 存在 + `python -m pip --version` 退出码 0
+3. 外部工具调用（pip / ensurepip）用 `try/catch` 包裹，损坏时返回"重建"而非硬中止（fail-soft），让 `New-BuildVenv` 用新 Python 重建
+4. venv `pyvenv.cfg` 的 `home` 必须指向可用 Python；base 损坏则重建 venv
+5. 写脚本避免与 PowerShell 自动变量同名（`$pid`/`$?`/`$HOME`/`$args` 只读或预定义）；破坏式文件操作走 `.NET` 直调（`[System.IO.File]::Delete`）绕过安全守卫，避免 `%VAR%` cmd 风格语法触发拦截
+
+**判断信号**：
+- `grep "python" scripts/*.ps1 scripts/*.bat` 裸用 `python` 而不前置钉选运行时 → 违反规则1
+- 读 `.venv-build/pyvenv.cfg` 的 `home` → 指向的 Python 是否 `Lib\os.py` 存在
+- `grep "try" ` 包裹 pip 调用缺失 → 损坏环境会硬中止（违反规则3）
+- `grep "\$home\b" *.ps1` 误用 `$HOME` 自动变量 → 路径检查命中错误目录（违反规则5）
+
+**配置参数**：`buildRuntimePython` 节点（enabled / pinnedPythonPath / healthCheckCommands / failSoftOnBrokenBase / venvRebuildOnBroken / forbiddenVarNames / destructiveOpViaDotNet / observationPeriodQuarters / observationEndDate / promotionThreshold / applicableScenarios / nonApplicableScenarios）
+
+**适用**：所有依赖 venv/虚拟环境、从 PATH 解析 Python 的构建/部署脚本；CI 中多 Python 版本并存环境
+**不适用**：容器化构建（Dockerfile 显式指定基础镜像 Python，PATH 确定）；单版本且 PATH 受控的本地开发机（低风险）；纯前端构建（Node 单一版本受控）
+
+**与既有规范的关系**：
+- B-REVIEW-280（Windows 编码）/ step 280（源码编码完整性）：管脚本编码，本规范管脚本解析的 Python 运行时健康，互补
+- #80（async 阻塞调用超时保护）：管运行时外部调用超时，本规范管构建期运行时可用性，互补
+
+**历史教训**：2026-08 打包构建报错 `Could not find platform independent libraries <prefix>`。诊断：`.venv-build/pyvenv.cfg` 的 `home = F:\Program Files\Python3.14`，其 `Lib\os.py` 与 `Lib\site-packages\pip` 均缺失（基础 Python 标准库损坏），venv 继承死 stdlib。修复：启动器前置托管 Python 3.13.12 到 PATH（改 `.bat` 为纯 ASCII/无 BOM/CRLF 消除 GBK 脆弱性）；`build-exe.ps1` 的 `Test-BuildPip`/`Repair-BuildPip` 加 `try/catch` 失败软返回"重建"。重建后 venv `home` 指向 3.13.12，产物构建于 2026-08-11。
+
+**experimental 升正条件**：1 季度内（截至 2026-11-12）同类根因再发 ≥ 2 次
+
+
+---
+
+## 114. 异步清理 shield + 异常取回（ASYNC-CLEANUP-SHIELD-RETRIEVE）🆕v4.69 experimental
+
+**问题**：取消/解注册在飞异步资源（Playwright `page.unroute`、asyncio task cancel、连接关闭）时，若直接用 `asyncio.wait_for(cleanup(), timeout=T)` 包裹，超时取消会**连带取消 cleanup 内部在飞的 future**（如 route 内部响应 future），使其带上 `TargetClosedError` 且无人取回 → 触发 `Future exception was never retrieved` 刷屏。
+
+**核心规则**：
+1. 清理在飞异步资源前，先探测目标是否已关闭（`page.is_closed()` / `context.is_closed()` / `browser.is_connected()`），已关闭直接短路 return，根本不调清理
+2. 存活态用 `asyncio.shield(cleanup_task)` 包裹，使外层 `wait_for` 超时只取消"等待"、不取消"清理本身"；清理在后台自然结束
+3. 给被 shield 的内部 task 加 `add_done_callback` 取回异常，彻底抑制 "never retrieved" 告警
+4. 禁止遗留 fire-and-forget future 不取回：任何 `create_task`/`ensure_future` 的 task 必须有 `await` 或 `done_callback`
+5. `except Exception` 兜底并发关闭（`CancelledError` 是 BaseException 子类，不被 `except Exception` 捕获，清理代码需单独处理）
+
+**判断信号**：
+- `grep "wait_for.*unroute\|wait_for.*cancel\|unroute(" src/` 命中 → 检查是否 shield + 关闭态短路（违反规则1/2）
+- `grep "asyncio.wait_for" src/` → 内部 task 是否被超时取消且异常未取回（违反规则2/3）
+- `grep "create_task\|ensure_future" src/` → 是否每个 future 都有 `await` 或 `add_done_callback`（违反规则4）
+
+**配置参数**：`asyncCleanupResilience` 节点（enabled / closeStateProbeMethods / shieldEnabled / doneCallbackRetrieve / forbidUnretrievedFuture / timeoutSeconds / observationPeriodQuarters / observationEndDate / promotionThreshold / applicableScenarios / nonApplicableScenarios）
+
+**适用**：Playwright route unroute、asyncio task 取消、aiohttp/websocket 连接关闭、任何"超时包裹在飞异步清理"且并发关闭可能竞态的场景
+**不适用**：纯粹同步清理（无 event loop）；确定不会并发关闭的单 owner 资源；短生命周期一次性脚本（异常未取回影响极小）
+
+**与既有规范的关系**：
+- #62（外部资源生命周期配对 register/unregister）：管资源注册配对，本规范管"已注册资源被并发关闭时的清理容错"，互补
+- #80（async 阻塞调用超时保护）：管外部调用超时返回语义，本规范管"超时不应取消内部清理 task"，互补且细化
+- #115（EXTERNAL-PAGE-RESTART-INVALIDATION）：管整浏览器重启使注册页失效，本规范管清理时的 shield+取回兜底，互补
+
+**历史教训**：2026-08 实时搜索日志刷 `page.unroute 超时` + `TargetClosedError: Future exception was never retrieved`。根因：`_call_search_api` 的 `finally` 调 `_unroute_search_api`，原 `await asyncio.wait_for(page.unroute(...), 2.5)`；页面在 route handler 仍在 `route.fetch()` 时被并发关闭（调度器 `close_all_pages` 或浏览器重启），超时取消连带取消 route 内部响应 future 带 `TargetClosedError` 且无人取回。修复：`_unroute_search_api` 先探测关闭态短接，存活态 `asyncio.shield` + `add_done_callback` 取回异常；新增 `tests/test_unroute_search_api.py`（5 用例全过），probe 实测耗时 2.508s（无 hang）、`SLOW_CANCELLED=False`（shield 生效）。
+
+**experimental 升正条件**：1 季度内（截至 2026-11-12）同类根因再发 ≥ 2 次
+
+
+---
+
+## 115. 外部页面生命周期重启失效（EXTERNAL-PAGE-RESTART-INVALIDATION）🆕v4.69 experimental
+
+**问题**：调度器/后台任务与实时请求共用浏览器实例时，live search 等长任务持有的 `Page` 通过 `register_external_page` 注册以避免被 `close_all_pages()` 误关。但当**整浏览器重启**（`ensure_alive`→`close`）时，已注册页面对象被销毁，注册集合中的引用失效——仅依赖"跳过注册页"的机制拦不住重启路径，页面仍会被关，进而触发 #114 描述的清理竞态。
+
+**核心规则**：
+1. live search / 长任务持有的 `Page` 必须 `register_external_page`，避免被调度器 `close_all_pages` 误关（既有 #62）
+2. 整浏览器重启（ensure_alive→close）必须使 `_external_pages` 中的页面失效（标记/迁移），而非仅"跳过注册页"
+3. 关闭态短接（#114 规则1）是最后防线：即便注册机制漏拦，unroute 等清理也不应抛 "never retrieved"
+4. 重启路径需对失效页面做日志与重建引导，避免静默引用死对象
+
+**判断信号**：
+- `grep "ensure_alive\|close_all_pages\|register_external_page" src/infra/browser.py` → 重启路径是否对 `_external_pages` 做失效处理（违反规则2 的信号：重启未清注册集）
+- `grep "is_closed\|is_connected" src/` 清理路径 → 是否关闭态短接（违反规则3）
+
+**配置参数**：`externalPageLifecycle` 节点（enabled / registerRequired / invalidateOnBrowserRestart / closeStateShortCircuitAsFallback / logInvalidatedPages / observationPeriodQuarters / observationEndDate / promotionThreshold / applicableScenarios / nonApplicableScenarios）
+
+**适用**：调度器/后台任务与实时请求共用浏览器实例；有 register_external_page 机制的 Playwright 封装；整浏览器重启/故障转移路径
+**不适用**：每请求新建独立 browser/context（无共享注册集）；纯无头一次性抓取（无长生命周期页面）
+
+**与既有规范的关系**：
+- #62（外部资源生命周期配对）：管 register/unregister 配对，本规范管"重启使注册失效"，互补
+- #114（ASYNC-CLEANUP-SHIELD-RETRIEVE）：管清理容错兜底，本规范管注册机制在重启路径的失效处理，互补——#114 防刷屏，本规范防漏拦根因
+
+**历史教训**：2026-08 实时搜索报错。`close_all_pages` 已跳过 `register_external_page` 注册的页面（live search 已注册），但真正杀页面的是整浏览器重启这类注册机制拦不住的路径。确认根因属"重启未使注册页失效"，而关闭态短接（#114）是最后防线。本规范与 #114 协同闭环。
+
+**experimental 升正条件**：1 季度内（截至 2026-11-12）同类根因再发 ≥ 2 次
 
 **对应 step**：step 274（scheduler.md）。

@@ -723,7 +723,7 @@ project_conventions:
           reason: "端点不存在（实际是 /api/anticrawl/initialize 自动配置）"
           fix: "改为'系统将自动配置健康检查器，请稍后重试'或'请调用 /api/anticrawl/initialize'"
         - message: "请访问 /admin/settings"
-          reason: "路由未注册（实际为 /app/config 或 /app/anticrawl）"
+          reason: "路由未注册（实际为 /xianyu/config 或 /xianyu/anticrawl）"
           fix: "改为正确的前端路由"
       applicable: "包含 URL/路由引用的错误提示、HTTPException detail、Toast 文案、ErrorBoundary fallback"
       not_applicable: "纯文字描述（如'操作失败，请重试'）"

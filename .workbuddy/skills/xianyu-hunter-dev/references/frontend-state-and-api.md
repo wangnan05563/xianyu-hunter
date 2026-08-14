@@ -328,7 +328,7 @@ test('previewSave 应该调用 API 并存储 diffs', async () => {
 
 ```typescript
 // 1. 导航
-await playwright_navigate({ url: '/app/config/buyer' })
+await playwright_navigate({ url: '/xianyu/config/buyer' })
 // 2. 修改字段
 await playwright_fill({ selector: '.ant-input-number-input', value: '75' })
 // 3. 点击保存

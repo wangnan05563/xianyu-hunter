@@ -1,8 +1,9 @@
-# ===== Xianyu Frontend Code Review 技能配置 v4.40.0 =====
+# ===== Xianyu Frontend Code Review 技能配置 v4.71.0 =====
 # 本文件由 config.example.yaml 复制并按项目实际情况修改
 # 所有评审规则、硬约束、项目规范均通过本文件管理，技能本身不含硬编码值
-# 完整审查维度对照见 SKILL.md 附录C（34 维度，v4.40.0）
+# 完整审查维度对照见 SKILL.md 附录C（38 维度，v4.71.0）
 #
+# v4.71.0 新增：源码受保护/PWA子路径导航回退/设计令牌/基路径一致性 4 维度（F-REVIEW-236~239 配套，meta-rules #116-#119 落地，关联 retrospective-2026-08-13）
 # v4.38.0 新增：meta_rules_38_42_frontend 节点完整定义（F-REVIEW-122~126 配套，meta-rules #38-42 前端落地）
 # v4.37.0 新增：meta_rules_governance 节点完整定义（F-REVIEW-120/121 配套，meta-rules #36-37 落地）
 # v4.36.0 新增：resume_policy_precheck 节点完整定义（F-REVIEW-116 配套，meta-rule #31 落地）
@@ -71,6 +72,10 @@ priority:
     - failure_reason_chain_frontend  # 维度 25：端到端失败原因链前端侧同步原则（🆕v4.27）
     - cross_boundary_contract_frontend  # 维度 26：跨边界访问契约前端侧（🆕v4.30）
     - business_keyword_and_field_contract  # 维度 27：业务关键字常量集中管理与字段名大小写敏感（🆕v4.31）
+    - source_file_protection    # 维度 42：源码受保护（清理禁删 tracked 源，meta-rule #116）
+    - pwa_subpath_navfallback   # 维度 43：PWA 子路径导航回退绝对化（meta-rule #117）
+    - design_tokens             # 维度 44：设计令牌集中化（禁硬编码色，meta-rule #119）
+    - spa_basename_consistency  # 维度 45：SPA 基路径三处对齐（meta-rule #118）
   # 报告阈值：低于此 severity 的问题仅记录不突出显示
   report_threshold: "LOW"
 # --- 评审检查清单（34 大类，按需开关）---
@@ -105,6 +110,85 @@ checklist:
   contract_single_source_frontend: true  # 维度 33：前后端字段契约单一可信源前端侧（🆕v4.36，meta-rule #35 落地）
   meta_rules_governance_frontend: true  # 维度 34：规范治理（🆕v4.37，meta-rules #36-37 落地）
   subpath_deployment: true        # 维度 41：SPA 子路径/域名模式部署前缀一致性（🆕v4.67）
+  source_file_protection: true    # 维度 42：源码受保护（清理脚本禁删/截断 tracked 源，meta-rule #116）
+  pwa_subpath_navfallback: true    # 维度 43：PWA 子路径导航回退绝对化（meta-rule #117）
+  design_tokens_no_hardcode: true  # 维度 44：设计令牌集中化（禁硬编码色，meta-rule #119）
+  spa_basename_consistency: true   # 维度 45：SPA 基路径三处对齐（meta-rule #118）
+
+# --- 源码受保护（维度 42，meta-rule #116）---
+source_file_protection:
+  enabled: true
+  # 清理脚本所在目录（相对仓库根）
+  cleanup_script_dirs:
+    - "scripts/"
+    - "config/"
+  # 清理脚本文件后缀
+  cleanup_script_exts: [".bat", ".ps1", ".sh"]
+  # 受保护的 tracked 源文件模式（绝对禁止被清理匹配）
+  protected_patterns:
+    - "src/"
+    - "frontend/src/"
+    - "*.css"
+    - "*.ts"
+    - "*.tsx"
+    - "*.py"
+  # 要求清理脚本执行前必须有 git status 守卫
+  require_git_status_guard: true
+  # 允许的清理白名单目录（仅这些可被清理）
+  allowed_cleanup_targets:
+    - "build/"
+    - "node_modules/"
+    - ".cache/"
+    - "__pycache__/"
+    - "*.log"
+
+# --- PWA 子路径导航回退（维度 43，meta-rule #117）---
+pwa_subpath_navfallback:
+  enabled: true
+  # 部署 base（与 vite.config.ts base 对齐）
+  expected_base: "/xianyu/"
+  # 期望的 navigateFallback 绝对路径
+  expected_navigate_fallback: "/xianyu/index.html"
+  # 是否要求 workbox cleanupOutdatedCaches
+  require_cleanup_outdated_caches: true
+  # index.html 加载占位选择器（存在即视为有占位）
+  loading_splash_selector: "#xh-loading-splash"
+  # 仅当 base 非根时强制（根路径部署可跳过绝对化）
+  only_enforce_when_base_non_root: true
+
+# --- 设计令牌集中化（维度 44，meta-rule #119）---
+design_tokens:
+  enabled: true
+  # 受检页面/组件目录
+  scan_paths:
+    - "frontend/src/pages/"
+    - "frontend/src/components/"
+  # 允许硬编码色值的例外（token 定义文件、svg 约定、第三方）
+  hex_exclude_patterns:
+    - "**/theme.ts"
+    - "**/tokens.css"
+    - "**/*.svg"
+  # WCAG AA 正文最小对比度比值
+  min_contrast_ratio: 4.5
+  # 文本色 token 名称约定（用于校验引用而非硬编码）
+  text_primary_token: "--cb-text-primary"
+  text_secondary_token: "--cb-text-secondary"
+
+# --- SPA 基路径一致性（维度 45，meta-rule #118）---
+spa_basename_consistency:
+  enabled: true
+  expected_base: "/xianyu/"
+  # 自动打开浏览器入口所在脚本
+  launch_entry_scripts:
+    - "scripts/启动服务.bat"
+    - "scripts/launcher.py"
+    - "scripts/automation.ps1"
+  # 禁止的入口前缀（会导致 BrowserRouter basename 不匹配白板）
+  forbidden_entry_prefixes:
+    - "/app/"
+    - "http://{host}:{port}/"
+  # 后端剥离前缀一致性（仅校验存在性）
+  backend_strip_prefix_check: true
 
 # --- 硬约束检查（可扩展）---
 # 每条规则会在代码库中扫描，违规会写入报告
@@ -446,7 +530,7 @@ project_conventions:
   routing:
     library: "react-router-dom"
     version: "6.26+"
-    basename: "/app"
+    basename: "/xianyu"
     lazy_loading: "lazy + lazyRetry"
     lazy_retry_config:
       max_retries: 3
@@ -456,7 +540,7 @@ project_conventions:
 
   # PWA 配置
   pwa:
-    base: "/app/"
+    base: "/xianyu/"
     output_dir: "../src/xianyu_hunter/web/static/spa"
     register_type: "prompt"
     manifest_theme_color: "#FF6200"
@@ -4312,3 +4396,49 @@ health_display_consistency:
   observationPeriodQuarters: 1
   observationEndDate: "2026-10-26"
   promotionThreshold: 2
+
+# ============== SPA 部署子路径（与 xianyu-auto-testing spa 节点对齐，禁止硬编码 /xianyu/） ==============
+spa:
+  # SPA 部署子路径（对应 vite.config.ts base 与 BrowserRouter basename；维度 41 / F-REVIEW-SPA-* 单一可信源）
+  basename: "/xianyu"
+  # API 前缀（对应前端 API_BASE 与后端双挂载前缀 /xianyu/api）
+  api_prefix: "/xianyu/api"
+
+# ===== F-REVIEW-227~228 构建产物图标与部署缓存（v4.70.0 新增）=====
+# 配套：xianyu-hunter-dev meta-rule #112 + 复盘 retrospective-2026-08-12
+# 设计目标：构建产物图标品牌一致性 / 部署缓存失效一致性
+# 所有图标路径/尺寸/严重级通过本节点管理，技能本身不含硬编码值
+
+build_artifact_icon:
+  enabled: true
+  brand_icon_path_default: "assets/xianyu-hunter.ico"
+  forbid_system_icon_binding: true
+  recommend_size_px: 256
+  audit_signals:
+    missing_installer_icon: 'SetupIconFile'
+    missing_spec_icon: 'icon='
+    system_icon_ref: 'shell32\.dll|imageres\.dll'
+    manifest_icon_brand: 'manifest.webmanifest'
+
+deploy_cache_invalidation:
+  enabled: true
+  require_sw_version_bump: true
+  require_basename_consistency: true
+  audit_signals:
+    sw_no_version: 'serviceWorker|registration'
+    basename_mismatch: 'location\.replace\([''""'']?[''""'']\)|start "".*/(app/)?'
+
+proxy_redirect_safety:
+  enabled: true
+  # 是否经反向代理剥离前缀（Funnel 等）；true 时禁止 / -> /xianyu/ 类重定向
+  strip_prefix_deployment: true
+  # 新增全局重定向/中间件前必须核查这些约束关键词
+  constraint_keywords:
+    - "Funnel"
+    - "proxy"
+    - "redirect"
+    - "loop"
+  # 禁止的重定向模式（会造成前缀剥离回环）
+  forbidden_redirect_patterns:
+    - "root_to_subpath_redirect"
+  meta_rule: "#120"

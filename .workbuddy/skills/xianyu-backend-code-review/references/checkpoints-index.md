@@ -303,3 +303,12 @@
 - **B-REVIEW-NAME**（语义命名）：v4.0-v4.27 的命名体系（如 B-REVIEW-COOKIE-CHECK），描述性强但不便检索
 - **混用现状**：两套体系并行使用，ID 段优先用于跨版本引用与 changelog 追踪，NAME 段保留历史阅读习惯
 - **新增建议**：v4.40+ 统一用数字 ID，按当前最大号 +1 递增（如新增则用 B-REVIEW-291）
+
+## 新增检查点（v4.72.0 · 2026-08-13 登录/Cookie/测试专项）
+
+| ID | 名称 | 维度 | 版本 | 配置节点 | 规范源 |
+|----|------|------|------|----------|--------|
+| B-REVIEW-338 | COOKIE-TOKEN-LIFECYCLE 预热首页 + 注入后 rehydrate | 45 | v4.72.0 | `cookie_warmup` / `cookie_rehydrate` | meta-rule #121 / #122 |
+| B-REVIEW-339 | INVALID-RESPONSE-DIAGNOSTICS 错误响应诊断契约（禁止 0/空误导） | 46 | v4.72.0 | `invalid_response_diagnostics` | meta-rule #123 |
+| B-REVIEW-340 | WRAPPER-API-VERIFY 调用包装器前核实真实 API 签名 | 47 | v4.72.0 | （依赖 browser 包装器定义） | meta-rule #126 |
+| B-REVIEW-341 | PROXY-REDIRECT-SAFETY 重定向/中间件不得破坏反代 | 48 | v4.72.0 | `proxy_redirect_safety` | meta-rule #120 |

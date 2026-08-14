@@ -44,7 +44,13 @@ export default defineConfig(({ command }) => ({
         // 预缓存构建产物 + public 静态资源
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024, // 4MB，容纳 echarts/antd 大 chunk
-        navigateFallback: 'index.html', // SPA 路由回退
+        // SPA 路由回退：必须写绝对路径 /xianyu/index.html。
+        // 原因：PWA scope 与 SW 注册在 /xianyu/ 下，相对路径 'index.html' 在子路径
+        // （如 /xianyu/m/）导航时可能被 Workbox 解析为 /xianyu/m/index.html，导致 404
+        // 白屏；刷新后浏览器从网络拿到正确 index.html，才恢复正常。
+        navigateFallback: '/xianyu/index.html',
+        // 新构建发布后自动清理旧 precache，避免旧 SW 残留引用已删除的 hash chunk
+        cleanupOutdatedCaches: true,
         // API 请求不走 SPA 回退（同时覆盖根路径 /api/ 与子路径部署命名空间 /xianyu/api/）
         navigateFallbackDenylist: [/^\/api\//, /^\/xianyu\/api\//],
         runtimeCaching: [

@@ -194,8 +194,8 @@ selector: "{tabbar_button}:nth-child({i})"
 
 | # | 页面 | 按钮名称 | 状态 | Toast/Modal | URL 变化 | 备注 |
 |---|------|---------|------|-------------|---------|------|
-| 1 | TabBar | 仪表盘 Tab | PASS | - | /app/m/ | 跳转正常 |
-| 2 | TabBar | 任务 Tab | PASS | - | /app/m/tasks/ | 跳转正常 |
+| 1 | TabBar | 仪表盘 Tab | PASS | - | /xianyu/m/ | 跳转正常 |
+| 2 | TabBar | 任务 Tab | PASS | - | /xianyu/m/tasks/ | 跳转正常 |
 | ... | ... | ... | ... | ... | ... | ... |
 
 状态取值：PASS / FAIL / SKIP

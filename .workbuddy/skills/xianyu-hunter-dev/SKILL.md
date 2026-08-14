@@ -12,8 +12,8 @@ triggers:
   - "闲鱼 项目 涉及 数据库迁移索引/SQLAlchemy 模型"
   - "闲鱼 项目 涉及 调度器/后台任务/定时任务/APScheduler"
   - "闲鱼 项目 涉及 智能客服/RAG/Agent/向量库"
-version: "4.68.0"
-updated: "2026-07-26"
+version: "4.69.0"
+updated: "2026-08-12"
 config: "config/tech-stack.json"
 ---
 

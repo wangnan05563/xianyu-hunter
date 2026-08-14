@@ -354,7 +354,7 @@ useEffect(() => {
 **正确模式**：`useEffect` �?`findSheetMeta(pathname)` �?`openSheet(sheet.id)` 失败�?sheet 未找到时 `navigate(activeSheet.path, { replace: true })` 回退 + `logger.debug` 记录
 
 **配置参数**：`url_state_sync_fallback` 节点（在 `config.yaml` 管理，不硬编码）�?- `enabled`（默�?`true`，开关本检查）
-- `fallback_strategy`（默�?`replace`，回退策略：replace/push�?- `detection_patterns`（默�?`["navigate", "openSheet", "findSheetMeta"]`，需要检测的函数�?- `applicable_routes`（默�?`["/app/tasks", "/app/config/search"]`，适用路由白名单）
+- `fallback_strategy`（默�?`replace`，回退策略：replace/push�?- `detection_patterns`（默�?`["navigate", "openSheet", "findSheetMeta"]`，需要检测的函数�?- `applicable_routes`（默�?`["/tasks", "/config/search"]`，适用路由白名单）
 
 **对应编码规范**：详�?`xianyu-hunter-dev` v4.39.0 experimental meta-rule #64
 
@@ -420,7 +420,7 @@ VitePWA({
 // 禁止：拦截器仅凭 status === 401 即跳转登录页，业�?401（闲�?cookie 过期）也会被误判为认证失效；应同时校�?detail === 'Unauthorized' 或使�?440 状态码区分
 ```
 
-**正确模式**：拦截器 `status === 401 && detail === 'Unauthorized'` 双重校验 �?`localStorage.removeItem('xh_token')` + `globalThis.location.replace('/app/login?redirect=...')`（排�?login �?+ `isRedirecting` 防重复跳转）�?业务 401 由调用方 catch
+**正确模式**：拦截器 `status === 401 && detail === 'Unauthorized'` 双重校验 �?`localStorage.removeItem('xh_token')` + `globalThis.location.replace(import.meta.env.BASE_URL + 'login?redirect=...')`（排�?login �?+ `isRedirecting` 防重复跳转）�?业务 401 由调用方 catch
 
 **配置参数**：`interceptor_audit` 节点（在 `config.yaml` 管理，不硬编码）�?- `auth_redirect.conditions`（默�?`[{status: 401, detail_equals: "Unauthorized", action: "redirect_to_login"}]`，跳转条件数组）
 - `auth_redirect.require_all_conditions`（默�?`true`，必须同时满�?status �?detail 才跳转）
@@ -1150,7 +1150,7 @@ checklist:
 | 10 | Hooks 设计模式 | 常量模块级、ref 持有最新闭包、requestId 竞态保护、🆕v4.24 F-REVIEW-UI-PREFERENCE-PERSISTENCE（用户偏好类 UI 状态强制复�?usePersistentState�?|
 | 11 | 类型安全 | 前后端字段对齐、可选链、联合类型、🆕v4.4 配置驱动功能开关（F-REVIEW-CONFIG-DRIVEN-TOGGLE�?|
 | 12 | SonarQube 合规 | 8 条规则：S2004/S3358/S6757/S7784/S6848/S1128/S4325/S3776 |
-| 13 | PWA 配置 | base:'/app/'、runtimeCaching 排除规则 |
+| 13 | PWA 配置 | base:'/xianyu/'、runtimeCaching 排除规则 |
 | 14 | 三处映射同步 | App.tsx + MainLayout.tsx + sheetRegistry.tsx |
 | 15 | SSE 重连 | lastEventId 持久化重连、🆕v4.1 F-REVIEW-SSE-ERROR-HANDLING（stage='error' �?status 分类处理 + "前往登录"跳转引导�?|
 | 16 | 性能 | useMemo/useCallback、虚拟化、稳�?key |

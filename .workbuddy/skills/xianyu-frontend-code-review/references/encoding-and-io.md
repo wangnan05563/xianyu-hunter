@@ -289,7 +289,7 @@ describe('编码回归测试', () => {
 import { test, expect } from '@playwright/test'
 
 test('FAQ 创建中文内容不乱码', async ({ page }) => {
-  await page.goto('/app/chatbot/config')
+  await page.goto('/xianyu/chatbot/config')
   await page.fill('[placeholder="请输入问题"]', '如何退款')
   await page.fill('[placeholder="请输入答案"]', '请联系客服')
   await page.click('button:has-text("保存")')

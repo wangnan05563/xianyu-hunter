@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     # 0 表示未配置，由 cfg.kb.embedding_dimensions 兜底
     embedding_dimensions: int = 0
+    # 本地 embedding 引擎：st=sentence-transformers(torch) / onnx=ONNX Runtime(无 torch)
+    # 默认 "st"（行为不变）；设为 "onnx" 可移除 torch 依赖（需先运行导出脚本生成工件）
+    embedding_engine: str = "st"
 
     # Web 认证：留空则首次启动自动生成并写入 .env
     # 本地个人工具场景下，token 防止同网络其他设备随意访问

@@ -12,8 +12,8 @@
 2. **Navigate 跳转条件**：
    ```tsx
    if (isMobile
-     && !globalThis.location.pathname.startsWith('<basename><mobile_route_prefix>')  // 如 /app/m
-     && !globalThis.location.pathname.startsWith('<basename><login_route>')) {       // 如 /app/login
+     && !globalThis.location.pathname.startsWith('<basename><mobile_route_prefix>')  // 如 /xianyu/m
+     && !globalThis.location.pathname.startsWith('<basename><login_route>')) {       // 如 /xianyu/login
      return <Navigate to="<mobile_route_prefix>" replace />                          // 如 /m/
    }
    ```

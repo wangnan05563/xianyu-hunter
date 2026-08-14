@@ -85,19 +85,57 @@ class EmbeddingService:
                 timeout=httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=2.0),
             )
 
+    def _build_local_backend(self, engine: str) -> Any:
+        """按引擎名构建一个本地 backend 实例；失败返回 None（不抛异常）
+
+        - engine="onnx"：OnnxEmbeddingBackend（ONNX Runtime，无 torch）
+        - engine="st"（默认）：LocalEmbeddingBackend（sentence-transformers + torch）
+        均延迟 import，避免在未安装对应依赖的环境（如 onnx 构建排除 torch）崩溃。
+        """
+        if engine == "onnx":
+            try:
+                from xianyu_hunter.modules.chatbot.onnx_embedding import OnnxEmbeddingBackend
+                return OnnxEmbeddingBackend(self._model)
+            except Exception as e:
+                logger.warning(f"无法加载 ONNX embedding 后端: {type(e).__name__}: {e}")
+                return None
+        # 默认 st
+        try:
+            from xianyu_hunter.modules.chatbot.local_embedding import LocalEmbeddingBackend
+            return LocalEmbeddingBackend(self._model)
+        except Exception as e:
+            logger.warning(f"无法加载 sentence-transformers embedding 后端: {type(e).__name__}: {e}")
+            return None
+
     def _get_local_backend(self) -> Any:
         """懒加载本地 embedding backend
 
-        首次调用时实例化 LocalEmbeddingBackend 并加载模型（约 95MB for bge-small-zh-v1.5）。
-        后续调用直接复用，避免重复加载。
+        首次调用时按 settings.embedding_engine 实例化对应后端并加载模型
+        （约 95MB for bge-small-zh-v1.5）。后续调用直接复用，避免重复加载。
+
+        健壮性：首选引擎不可用时（如 onnx 构建但配置为 st，或反之）自动回退到另一引擎，
+        避免构建/运行时配置不匹配导致整页崩溃。回退后行为仍等价于某一可用后端。
         """
         if self._local_backend is None:
-            # 延迟导入：避免未安装 torch 时整个模块 import 失败
-            # 远程模式用户无需安装 torch
-            from xianyu_hunter.modules.chatbot.local_embedding import LocalEmbeddingBackend
-            self._local_backend = LocalEmbeddingBackend(self._model)
-            # 触发模型加载（首次会下载权重到 HuggingFace cache）
-            # 通过 to_thread 异步加载，避免阻塞事件循环
+            settings = get_settings()
+            engine = (settings.embedding_engine or "st").strip().lower()
+            backend = self._build_local_backend(engine)
+            if backend is None:
+                # 首选引擎不可用 → 回退另一引擎
+                fallback = "st" if engine == "onnx" else "onnx"
+                logger.warning(
+                    f"本地 embedding 引擎 '{engine}' 不可用，回退到 '{fallback}'"
+                )
+                backend = self._build_local_backend(fallback)
+            if backend is None:
+                # 两个后端都不可用（依赖缺失），记错误，后续 embed 会走容错返回空
+                logger.error(
+                    "本地 embedding 两个后端均不可用（缺 torch 或 ONNX 工件），"
+                    "请检查依赖安装 / 运行 scripts/export_embedding_onnx.py"
+                )
+            self._local_backend = backend
+            # 触发模型加载（首次会下载权重到 HuggingFace cache / 读取 ONNX 工件）
+            # 通过 to_thread 异步加载，避免阻塞事件循环（首次 embed 时）
         return self._local_backend
 
     async def embed(self, text: str) -> list[float]:

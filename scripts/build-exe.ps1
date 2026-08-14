@@ -28,12 +28,24 @@ param(
     [switch]$SkipSPA,
     [switch]$SkipDeps,
     [switch]$DepsOnly,
-    [switch]$Clean
+    [switch]$Clean,
+    # 本地 embedding 引擎：st（默认，sentence-transformers+torch，行为不变）/
+    # onnx（ONNX Runtime，排除 torch 约 -320MB，需先运行 scripts/export_embedding_onnx.py）
+    [string]$EmbeddingEngine = "st"
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path "$PSScriptRoot\.."
 Set-Location $repoRoot
+
+# 校验 embedding 引擎参数（st / onnx），未知值回退 st
+$EmbeddingEngine = $EmbeddingEngine.Trim().ToLower()
+if ($EmbeddingEngine -notin @("st", "onnx")) {
+    Write-Host "[WARN] 未知 EmbeddingEngine='$EmbeddingEngine'，回退到 st" -ForegroundColor Yellow
+    $EmbeddingEngine = "st"
+}
+# 导出给 PyInstaller spec（xianyu-hunter.spec 读取此变量决定 exclude torch 与否）
+$env:XH_EMBEDDING_ENGINE = $EmbeddingEngine
 
 # 清除可能干扰 pip/npm 的代理环境变量
 # 为什么：用户系统可能配置了 HTTP_PROXY/HTTPS_PROXY 指向本地代理（如 VPN 客户端未启动），
@@ -136,6 +148,8 @@ Write-Host "缓存目录: $cacheDir"
 if ($SkipDeps) { Write-Host "模式: SkipDeps（跳过依赖安装）" }
 if ($SkipSPA)  { Write-Host "模式: SkipSPA（跳过 SPA 构建）" }
 if ($DepsOnly) { Write-Host "模式: DepsOnly（仅验证构建依赖）" }
+if ($EmbeddingEngine -eq "onnx") { Write-Host "Embedding 引擎: onnx（排除 torch，约 -320MB；需先运行 export_embedding_onnx.py）" -ForegroundColor Cyan }
+else { Write-Host "Embedding 引擎: st（sentence-transformers + torch，默认行为）" }
 
 # ============== 1. venv 增量更新 + 依赖安装 ==============
 Write-Host "`n[1/6] 准备构建 venv..." -ForegroundColor Yellow
@@ -166,7 +180,8 @@ if (-not (Test-BuildPip)) {
 
 if (-not $SkipDeps) {
     Write-Host "  安装项目依赖（pip 自动跳过已安装包）..."
-    Invoke-BuildPip -PipArgs @("install", "-e", ".", "--quiet") -FailureMessage "项目依赖安装失败" -RetryAfterRebuild
+    # 安装项目依赖 + 构建期 extra（.[build] 含 onnx，供 ONNX 导出 / int8 量化使用，运行期不进包）
+    Invoke-BuildPip -PipArgs @("install", "-e", ".[build]", "--quiet") -FailureMessage "项目依赖安装失败" -RetryAfterRebuild
 
     Invoke-BuildPip -PipArgs @("install", "pyinstaller", "--quiet") -FailureMessage "PyInstaller 安装失败"
 
@@ -308,10 +323,15 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 Write-Host "  PyInstaller 打包完成"
 
 # ============== 4.5 修复 PyInstaller 收集的 sentence_transformers 包完整性 ==============
-Write-Host "`n[4.5] 修复 sentence_transformers 包完整性..." -ForegroundColor Yellow
-& .venv-build\Scripts\python "$PSScriptRoot\sync-sentence-transformers.py"
-if ($LASTEXITCODE -ne 0) { Write-Host "  [WARN] sentence_transformers 修复失败，继续构建" -ForegroundColor Yellow }
-else { Write-Host "  sentence_transformers 包完整性修复完成" -ForegroundColor Green }
+# onnx 模式已 exclude sentence_transformers，无需也无法修复该包完整性
+if ($EmbeddingEngine -eq "onnx") {
+    Write-Host "`n[4.5] onnx 模式已排除 sentence_transformers，跳过包完整性修复" -ForegroundColor DarkGray
+} else {
+    Write-Host "`n[4.5] 修复 sentence_transformers 包完整性..." -ForegroundColor Yellow
+    & .venv-build\Scripts\python "$PSScriptRoot\sync-sentence-transformers.py"
+    if ($LASTEXITCODE -ne 0) { Write-Host "  [WARN] sentence_transformers 修复失败，继续构建" -ForegroundColor Yellow }
+    else { Write-Host "  sentence_transformers 包完整性修复完成" -ForegroundColor Green }
+}
 
 # ============== 5. 复制外置资源 ==============
 Write-Host "`n[5/6] 复制外置资源..." -ForegroundColor Yellow
@@ -373,22 +393,84 @@ if (Test-Path "$pwCacheDir\chromium-*") {
     Remove-Item Env:\PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
 }
 
-# 5.5 sentence-transformers 模型（从缓存复制，避免重复下载 ~100MB）
-# 为什么用缓存：同上，dist 每次重建会导致重新下载
-# 缓存到 .cache/models/bge-small-zh-v1.5/，复制到 dist/xianyu-hunter/models/
-Write-Host "  [5.5] sentence-transformers 模型..." -ForegroundColor Yellow
-$modelTarget = "dist\xianyu-hunter\models\bge-small-zh-v1.5"
-if (Test-Path "$modelCacheDir\config.json") {
-    Write-Host "  从缓存复制模型...（约 5-15 秒）"
-    New-Item -ItemType Directory -Force (Split-Path $modelTarget) | Out-Null
-    Copy-Item -Recurse -Force $modelCacheDir $modelTarget
-    Write-Host "  模型已从缓存复制到 $modelTarget"
+# 5.5 embedding 工件（按引擎分支）
+# - onnx：复制 scripts/export_embedding_onnx.py 生成的 ONNX + tokenizer 工件
+#         （src/xianyu_hunter/resources/embedding → dist/xianyu-hunter/resources/embedding），
+#         不再下载 sentence-transformers 模型（torch 已被排除）。
+# - st（默认）：复制 sentence-transformers 模型（从缓存或下载），行为不变。
+if ($EmbeddingEngine -eq "onnx") {
+    Write-Host "  [5.5] ONNX embedding 工件（onnx 模式）..." -ForegroundColor Yellow
+
+    # 5.5.0 onnx 依赖自检（关键！-SkipDeps 模式会跳过 step 1 安装，onnx 可能缺失）
+    # export / quantize 都依赖 onnx 包；缺失时提前给出可操作报错，而非在 5.5.1/5.5.2 才失败
+    $onnxOk = $false
+    try {
+        & .venv-build\Scripts\python -c "import onnx" 2>$null
+        if ($LASTEXITCODE -eq 0) { $onnxOk = $true }
+    } catch {
+        $onnxOk = $false
+    }
+    if (-not $onnxOk) {
+        if ($SkipDeps) {
+            Write-Host "  [ERROR] ONNX 导出/量化依赖 onnx 包缺失，但当前为 -SkipDeps 模式（step 1 依赖安装已跳过）" -ForegroundColor Red
+            Write-Host "  解决：去掉 -SkipDeps 重新构建（step 1 会随 .[build] extra 安装 onnx），或手动执行：" -ForegroundColor Yellow
+            Write-Host "    .venv-build\Scripts\pip install -r requirements-build.txt" -ForegroundColor Cyan
+            throw "ONNX 依赖缺失，构建中止"
+        } else {
+            Write-Host "  [ERROR] ONNX 导出/量化依赖 onnx 包缺失，但 step 1 应已随 .[build] extra 安装" -ForegroundColor Red
+            Write-Host "  请检查 step 1 依赖安装是否成功，或手动执行：" -ForegroundColor Yellow
+            Write-Host "    .venv-build\Scripts\pip install -r requirements-build.txt" -ForegroundColor Cyan
+            throw "ONNX 依赖缺失，构建中止"
+        }
+    }
+
+    $onnxSrc = "src\xianyu_hunter\resources\embedding"
+    $onnxTarget = "dist\xianyu-hunter\resources\embedding"
+    $fp32 = "$onnxSrc\bge_small_zh.onnx"
+    $int8 = "$onnxSrc\bge_small_zh.int8.onnx"
+
+    # 5.5.1 fp32 工件缺失则先导出（需要 torch，走构建 venv）
+    if (-not (Test-Path $fp32)) {
+        Write-Host "  fp32 工件缺失，运行导出脚本生成..." -ForegroundColor Yellow
+        & .venv-build\Scripts\python "$PSScriptRoot\export_embedding_onnx.py"
+        if (-not (Test-Path $fp32)) { throw "导出 fp32 ONNX 失败，构建中止" }
+    }
+
+    # 5.5.2 int8 量化（二次瘦身，~90MB -> ~55MB；onnx 已在 step 1 随 .[build] extra 预装）
+    if (-not (Test-Path $int8)) {
+        Write-Host "  int8 量化中（二次瘦身）..." -ForegroundColor Yellow
+        & .venv-build\Scripts\python "$PSScriptRoot\quantize_embedding_onnx.py"
+        if (-not (Test-Path $int8)) {
+            throw "int8 量化失败，构建中止（如报 onnx 缺失，请确认 step 1 已安装 pyproject 的 build 可选依赖组，该组含 onnx）"
+        }
+    }
+
+    # 5.5.3 仅复制 int8 onnx + tokenizer + meta（fp32 不进包，进一步瘦身）
+    # 运行期 OnnxEmbeddingBackend 优先加载 int8，缺失才回退 fp32
+    Write-Host "  复制 int8 工件（int8 onnx + tokenizer.json + meta.json）..." -ForegroundColor Yellow
+    New-Item -ItemType Directory -Force $onnxTarget | Out-Null
+    Copy-Item -Force "$onnxSrc\bge_small_zh.int8.onnx" $onnxTarget
+    Copy-Item -Force "$onnxSrc\tokenizer.json" $onnxTarget
+    if (Test-Path "$onnxSrc\meta.json") { Copy-Item -Force "$onnxSrc\meta.json" $onnxTarget }
+    $int8Size = [math]::Round((Get-Item "$onnxTarget\bge_small_zh.int8.onnx").Length / 1MB, 1)
+    Write-Host "  ONNX int8 工件已复制到 $onnxTarget（$int8Size MB）"
 } else {
-    Write-Host "  缓存不存在，下载模型...（下载约 100MB）"
-    # 设置 HF 镜像，避免国内访问 huggingface.co 超时
-    $env:HF_ENDPOINT = "https://hf-mirror.com"
-    New-Item -ItemType Directory -Force $modelCacheDir | Out-Null
-    & .venv-build\Scripts\python -c @"
+    # 5.5 sentence-transformers 模型（从缓存复制，避免重复下载 ~100MB）
+    # 为什么用缓存：同上，dist 每次重建会导致重新下载
+    # 缓存到 .cache/models/bge-small-zh-v1.5/，复制到 dist/xianyu-hunter/models/
+    Write-Host "  [5.5] sentence-transformers 模型..." -ForegroundColor Yellow
+    $modelTarget = "dist\xianyu-hunter\models\bge-small-zh-v1.5"
+    if (Test-Path "$modelCacheDir\config.json") {
+        Write-Host "  从缓存复制模型...（约 5-15 秒）"
+        New-Item -ItemType Directory -Force (Split-Path $modelTarget) | Out-Null
+        Copy-Item -Recurse -Force $modelCacheDir $modelTarget
+        Write-Host "  模型已从缓存复制到 $modelTarget"
+    } else {
+        Write-Host "  缓存不存在，下载模型...（下载约 100MB）"
+        # 设置 HF 镜像，避免国内访问 huggingface.co 超时
+        $env:HF_ENDPOINT = "https://hf-mirror.com"
+        New-Item -ItemType Directory -Force $modelCacheDir | Out-Null
+        & .venv-build\Scripts\python -c @"
 import os
 os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')
 from sentence_transformers import SentenceTransformer
@@ -396,14 +478,15 @@ m = SentenceTransformer('BAAI/bge-small-zh-v1.5')
 m.save(r'$modelCacheDir')
 print('Model saved to $modelCacheDir')
 "@
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  [WARN] 模型预置失败（首次运行将联网下载）" -ForegroundColor Red
-    } else {
-        Write-Host "  模型已下载到缓存 $modelCacheDir"
-        # 复制到 dist
-        New-Item -ItemType Directory -Force (Split-Path $modelTarget) | Out-Null
-        Copy-Item -Recurse -Force $modelCacheDir $modelTarget
-        Write-Host "  模型已复制到 $modelTarget"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [WARN] 模型预置失败（首次运行将联网下载）" -ForegroundColor Red
+        } else {
+            Write-Host "  模型已下载到缓存 $modelCacheDir"
+            # 复制到 dist
+            New-Item -ItemType Directory -Force (Split-Path $modelTarget) | Out-Null
+            Copy-Item -Recurse -Force $modelCacheDir $modelTarget
+            Write-Host "  模型已复制到 $modelTarget"
+        }
     }
 }
 

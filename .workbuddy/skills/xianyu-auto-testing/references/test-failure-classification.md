@@ -324,3 +324,20 @@ monkeypatch.setattr(target_module, "SETTING_A", mock_value)
 3. **并行安全**：子代理之间无共享状态，每个子代理独立修复独立模块，避免文件冲突。
 4. **回归保护**：批量验证失败时回到 TR3 重新分类，避免修复引入新问题被掩盖。
 5. **PowerShell 适配**：所有命令示例为 PowerShell 语法，`2>&1` 合并 stderr 后必须用 `Out-File -Encoding utf8` 重定向。
+
+---
+
+## 安全测试协议（safe-delete 沙箱）与回归守护
+
+> 对应 config.yaml#sandbox_test_protocol (#124) + config.yaml#regression_guard (#125)；复盘 retrospective-2026-08-13-login-cookie.md。
+
+### TR7：safe-delete 沙箱测试协议
+- **现象**：pytest 带 coverage 时清 `.coverage.*` 被 safe-delete 钩子 fail-closed 拦截 → INTERNALERROR；收尾清理 C:\pyfix_tmp\*garbage* 也被拦截 → 偶发 exit1 无 summary。
+- **协议**：用项目 venv 的 pytest（sandbox_test_protocol.venv_pytest，本仓 .venv/Scripts/pytest.exe），加 sandbox_test_protocol.pytest_args（--no-cov -p no:cacheprovider）。
+- **判定**：以「无 FAILED/AssertionError」为准；exit1 无 summary 视为环境崩溃，非回归。
+- **flake 处理**：易 flaky 测试跑 sandbox_test_protocol.flaky_min_runs（默认 2）次，隔离单测确认。
+
+### TR8：回归守护（基线红灯 / 修复绿灯）
+- 每条修复必须配回归测试，且测试在 pre-fix 代码必须失败。
+- 验证手法（regression_guard.verify_method）：git checkout -- <改动文件> 取基线 → 跑测试应红灯 → 还原修复 → 应绿灯，证明测试真正守卫修复。
+- 单跑一次的 F 不足以判回归；必须与 baseline 交叉验证排除环境崩溃。

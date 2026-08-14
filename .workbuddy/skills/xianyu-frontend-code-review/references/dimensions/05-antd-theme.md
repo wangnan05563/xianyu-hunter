@@ -39,7 +39,7 @@
             },
           }}
         >
-          <BrowserRouter basename="/app">
+          <BrowserRouter basename="/xianyu">
             <App />
           </BrowserRouter>
         </ConfigProvider>
@@ -93,7 +93,7 @@ function ThemedRoot() {
         },
       }}
     >
-      <BrowserRouter basename="/app">
+      <BrowserRouter basename="/xianyu">
         <App />
       </BrowserRouter>
     </ConfigProvider>

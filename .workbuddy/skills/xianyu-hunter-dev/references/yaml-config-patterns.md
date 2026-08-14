@@ -8,7 +8,7 @@
 ## 一、问题原型
 
 **用户报告**：
-> 修改"抢单策略"页面（`/app/config/buyer`）的 `auto_buy_score` 从 80 改为 75 → 点击保存 → 看到"保存成功" → 刷新页面 → 数值回到 80。
+> 修改"抢单策略"页面（`/xianyu/config/buyer`）的 `auto_buy_score` 从 80 改为 75 → 点击保存 → 看到"保存成功" → 刷新页面 → 数值回到 80。
 
 **根因**：
 1. 加载顺序错误：`config.yaml` 先加载，`eval.yaml` 后加载用 `data.update()` 浅合并

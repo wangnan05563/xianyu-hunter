@@ -23,15 +23,28 @@
 # 其余依赖（fastapi / torch / playwright / loguru 等）均为静态 import，由 PyInstaller
 #   模块发现 + 各包 hook 自动收集（含约 5600 个包内 DATA 文件），无需在此显式列出。
 #
-# 运行时只读资源（static / scripts / models / playwright_browsers）由 build-exe.ps1
+# 运行时只读资源（static / scripts / models / resources / playwright_browsers）由 build-exe.ps1
 #   的"复制外置资源"步骤放入 dist/xianyu-hunter/，本 spec 不再重复打包，避免路径错乱。
 #
 # 配置 config/*.yaml 在冻结模式从 %APPDATA%/XianyuHunter/config 读取（运行时目录，
 #   非打包内），本 spec 不打包配置。
+#
+# ===== 本地 embedding 引擎切换（安装包瘦身 P0）=====
+# 由环境变量 XH_EMBEDDING_ENGINE 控制（build-exe.ps1 在 PyInstaller 前设置）：
+#   - "st"（默认）：sentence-transformers(torch) 后端，行为不变（约 +320MB）
+#   - "onnx"：ONNX Runtime 后端，exclude torch / sentence_transformers / transformers，
+#     运行时只靠 onnxruntime + tokenizers(Rust) + numpy，安装包可减 ~320MB。
+# 注：tokenizers 在两种模式下都需要（ONNX 后端运行期也要分词），故始终收集，不 exclude。
 
 import os
 
 from PyInstaller.utils.hooks import collect_submodules
+
+# 读取构建期 embedding 引擎选择；缺省 "st"（与历史构建一致）
+_EMBEDDING_ENGINE = os.environ.get("XH_EMBEDDING_ENGINE", "st").strip().lower()
+if _EMBEDDING_ENGINE not in ("st", "onnx"):
+    # 防御：未知值回退到 st，避免构建出无法加载 embedding 的包
+    _EMBEDDING_ENGINE = "st"
 
 repo_root = os.path.dirname(os.path.abspath(SPEC))  # spec 所在目录 = 仓库根
 
@@ -48,7 +61,15 @@ def safe_collect_submodules(pkg_name):
 hiddenimports = []
 hiddenimports += safe_collect_submodules('chromadb')
 hiddenimports += safe_collect_submodules('onnxruntime')
-hiddenimports += safe_collect_submodules('sentence_transformers')
+# tokenizers：ONNX 后端运行期需要分词，两种引擎模式都保留（不 exclude）
+hiddenimports += safe_collect_submodules('tokenizers')
+if _EMBEDDING_ENGINE == "onnx":
+    # onnx 模式：不收集 sentence_transformers（已被 exclude），省去 torch 子模块收集
+    logger_extra = f"[spec] embedding_engine=onnx：跳过 sentence_transformers 收集，准备 exclude torch"
+    print(logger_extra)
+else:
+    # st 模式（默认）：收集 sentence-transformers 全部子模块（含其 tokenizers 依赖）
+    hiddenimports += safe_collect_submodules('sentence_transformers')
 hiddenimports += safe_collect_submodules('duckdb')  # chromadb 1.x 通常不再需要，缺失则跳过
 
 # (b) uvicorn 动态子模块
@@ -74,6 +95,14 @@ hiddenimports += [
     'xianyu_hunter.infra.repo_sellers',
 ]
 
+# onnx 模式：排除 torch / sentence_transformers / transformers（约 -320MB）
+# 注意保留 tokenizers（ONNX 后端运行期仍需分词，由上面的 hiddenimports 收集）
+if _EMBEDDING_ENGINE == "onnx":
+    _excludes = ['torch', 'sentence_transformers', 'transformers']
+    print("[spec] embedding_engine=onnx：exclude torch/sentence_transformers/transformers")
+else:
+    _excludes = []
+
 a = Analysis(
     [os.path.join(repo_root, 'scripts', 'launcher.py')],
     pathex=[os.path.join(repo_root, 'scripts'), os.path.join(repo_root, 'src')],
@@ -83,7 +112,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=_excludes,
     noarchive=False,
     optimize=0,
 )

@@ -1,7 +1,7 @@
 ---
 name: "xianyu-auto-testing"
 description: "闲鱼猎人前端 SPA/PWA/移动端测试工作流。当用户报告白屏/路由不跳转/PWA缓存问题，或要求全面功能测试/Cookie自愈/Playwright超时/状态机/LLM治理等回归测试时触发。配置驱动，30+模式按需加载。"
-version: "2.9.0"
+version: "2.12.0"
 ---
 
 # Xianyu Auto Testing
@@ -48,8 +48,9 @@ version: "2.9.0"
 | AF | 事件驱动启动解联 | EventBus启动/消费者循环/启动顺序/幂等防护 | `event_bus_startup_decoupling_test` | references/event-bus-startup-test.md |
 | AJ | 健康检查端到端 | 双数据源一致性/health endpoint/check-update | `mode_aj_health_check_e2e_test` | references/health-check-e2e-test.md |
 | AK | 源码编码完整性 | 源码中文变?/源码乱码/GBK误读/mojibake/编码损坏/问号 | `mode_ak_source_file_encoding_integrity` | references/source-file-encoding-integrity-test.md |
-| AL | 子路径部署一致性 | 子路径/域名模式部署、API前缀、双挂载、PWA规则、导航链接前缀 | `subpath_deployment` | references/subpath-deployment-test.md |
+| AL | 子路径部署一致性 | 子路径/域名模式部署、API前缀、双挂载、PWA规则(导航回退绝对化)、基路径三处对齐、设计令牌、源码受保护静态兜底 | `subpath_deployment` | references/subpath-deployment-test.md |
 | AM | 隧道/域名访问 404 | 隧道裸根404/域名访问404/page not found/账户切换跳404 | `tunnel_access_404` | references/tunnel-access-404-test.md |
+| AN | 构建与运行时韧性 | 安装包默认图标/打包Python损坏/TargetClosedError/脚本BOM乱码 | `mode_an_build_runtime_resilience` | references/build-runtime-resilience-test.md |
 
 ## 共享步骤
 
@@ -156,11 +157,16 @@ version: "2.9.0"
 
 ## 版本历史
 
+- **v2.12.0** (2026-08-12)：新增模式 AN（构建与运行时韧性回归测试），`config.yaml` 新增 `mode_an_build_runtime_resilience` 节点（构建产物资源显式化 / 构建运行时 Python 钉选 / 异步清理 shield+取回 / 脚本编码 BOM/CRLF / 修复回归测试生成）；配套 `references/build-runtime-resilience-test.md` 与 `references/test-process-retrospective.md`；与 xianyu-hunter-dev meta-rules #112~#115、xianyu-backend-code-review B-REVIEW-291~295、xianyu-frontend-code-review F-REVIEW-227~228 跨技能一致，全参数走配置、无硬编码。
 - **v2.9.0** (2026-08-08)：新增模式 AL（子路径部署一致性验证），`config.yaml` 新增 `spa.basename`/`spa.api_prefix` 配置节点，强化"禁止硬编码前缀、全部参数走配置"的泛化约束
 - **v2.10.0** (2026-08-11)：新增模式 AM（隧道/域名访问 404 诊断，决策树 DT-12），覆盖 SPA 重定向裸根 / 部署副本陈旧 / 隧道 path_prefix 不一致 / PWA SW 陈旧缓存四类根因；与 xianyu-hunter-dev 规范 23-26、xianyu-frontend-code-review（维度 46）、xianyu-backend-code-review（维度 37）保持跨技能一致。全部参数走 `tunnel_access_404` 配置节点，无硬编码。
+- **v2.11.0** (2026-08-11)：模式 Q 新增步骤 1.5「构建依赖完整性（W1/W2/W3 固化）」，覆盖 vite 构建三类中断（workbox peer 依赖未声明 / emptyOutDir 与沙箱 safe-delete 冲突 / optimizeDeps 缓存失效）；`config.yaml` 新增 `build_integrity` 配置节点，全部参数化、无硬编码。与 xianyu-hunter-dev 规范 S4、xianyu-frontend-code-review 维度 13 保持跨技能一致。
+- **v2.13.0** (2026-08-13)：模式 AL 新增 AL6 PWA 子路径导航回退绝对化 / AL7 SPA 基路径三处对齐 / AL8 设计令牌静态 grep / AL9 源码受保护静态兜底 4 项检查；模式 U 新增第 7 节「子路径 navigateFallback 相对化导致移动端白屏」；`config.yaml` 新增 `pwa.navigate_fallback_absolute_path` / `pwa.require_cleanup_outdated_caches` / `pwa.loading_splash_selector`、`spa.forbidden_entry_prefixes`、`design_tokens`、`source_file_protection` 节点，全部参数化、无硬编码，泛化适配不同部署子路径。基于复盘 retrospective-2026-08-13，与 xianyu-hunter-dev meta-rules #116~#119、xianyu-frontend-code-review 维度 42-45（F-REVIEW-236~239）、xianyu-backend-code-review B-REVIEW-296 保持跨技能一致。
 - **v2.8.0** (2026-07-31)：文档结构重构，SKILL.md 精简为模式速查表 + 设计原则 + 共享步骤索引，详细内容全部拆分到 references/ 按需加载
 - **v2.7.0**：新增模式 AD/AE/AF/AJ
 - **v2.3.0**：新增模式 AA：资源创建幂等性与状态闭环回归测试
 - **v2.2.0**：新增模式 Y/Z：前端韧性回归测试 + LLM 治理回归测试
 - **v2.1.0**：新增测试验证三档机制（B1/B2/C3/D1/D2 复盘规范），新增 references/tiered-test-verification.md
 - **v2.0.0**：新增模式 V/W/X：UI视觉回归测试、缓存守卫验证测试、状态机完整性测试
+
+- **v2.14.0** (2026-08-13)：新增 safe-delete 沙箱安全测试协议（config#sandbox_test_protocol，TR7：项目 venv + --no-cov -p no:cacheprovider + flaky>=2 次）与回归守护（config#regression_guard，TR8：基线红灯/修复绿灯）；模式 E 参考 test-failure-classification.md 增强 TR7/TR8。基于复盘 retrospective-2026-08-13-login-cookie.md，与 xianyu-hunter-dev meta-rules #124/#125、xianyu-backend-code-review 维度 20（测试）保持跨技能一致。全参数走配置、无硬编码。

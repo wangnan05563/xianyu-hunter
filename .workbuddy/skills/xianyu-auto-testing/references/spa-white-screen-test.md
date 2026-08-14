@@ -509,6 +509,39 @@ if (retryCount >= maxRetries) {
 
 ---
 
+## 7. 子路径 navigateFallback 相对化导致移动端白屏（meta-rule #117 / F-REVIEW-237）
+
+> 对应 2026-08-13 复盘（retrospective-2026-08-13）：非根路径部署（`base` 非 `/`，如 `/xianyu/`）下，`navigateFallback` 用相对 `'index.html'`，移动端切换设备模拟访问子路由 `/xianyu/m/` 时 SW 回退到错误入口 → 整页白板。
+> 所有参数从 `config.yaml#pwa` 读取（navigate_fallback_absolute_path / require_cleanup_outdated_caches / loading_splash_selector），禁止硬编码。
+
+### 7.1 根因识别
+- `vite.config.ts` 的 `base` 非 `/` 但 `navigateFallback` 为相对 `'index.html'`（或 SW 构建后 `createHandlerBoundToURL` 指向相对路径）。
+- 移动端 UA 切换设备模拟时，子路由 `/xianyu/m/` 的导航请求被 SW 拦截回退，相对路径在子路径下解析错误 → 返回 200 但入口 chunk 错乱 → 白板。
+- 旧 SW 在 `prompt` 模式 / 无 `cleanupOutdatedCaches` 时缓存旧 chunk，永久卡白屏。
+
+### 7.2 验证步骤
+1. 读 `pwa.navigate_fallback_absolute_path`，确认 `vite.config.ts` 的 `navigateFallback` 与 sw.js 的 `createHandlerBoundToURL` 均为该绝对路径。
+2. 确认 `cleanupOutdatedCaches: true`（`pwa.require_cleanup_outdated_caches`）。
+3. 确认 `index.html` 含 `loading_splash_selector` 加载占位（JS 挂载后替换）。
+4. 浏览器自动化：桌面 UA 访问 `/xianyu/` 正常 → 切移动端 UA / 设备模拟访问 `/xianyu/m/` → 应正常渲染（非白板）。
+
+```powershell
+# base 非根 + 相对回退（命中即 P0）
+Select-String -Path "frontend/vite.config.ts" -Pattern 'base:\s*[''"]/xianyu'
+Select-String -Path "frontend/vite.config.ts" -Pattern "navigateFallback:\s*['\"]index\.html['\"]"
+# sw.js 绝对化回退（正则子串提取，规避精确引号比对误判）
+Select-String -Path "<build_output_dir>/sw.js" -Pattern "createHandlerBoundToURL\(['\"]<navigate_fallback_absolute_path 去引号>['\"]\)"
+```
+
+### 7.3 修复与缓解
+- `navigateFallback` 改为绝对路径 `navigate_fallback_absolute_path`；`cleanupOutdatedCaches: true`；`registerType: autoUpdate`。
+- `index.html` 加 `loading_splash_selector` 加载占位，避免纯白白屏。
+- 部署对齐后清 PWA Service Worker 缓存 / 硬刷新一次（旧 SW 短暂下发旧入口 chunk）。
+
+**通过条件**：`base` 非 `/` 时 navigateFallback 绝对化 + cleanupOutdatedCaches 开启 + 加载占位存在 + 移动端子路由访问非白板。
+
+---
+
 ## 6. 测试报告模板
 
 ```markdown
@@ -534,6 +567,7 @@ if (retryCount >= maxRetries) {
 | U-03 | 并发场景 | PASS/FAIL | 5 并发仅 1 次跳转 |
 | U-04 | ErrorBoundary 测试 | PASS/FAIL | 6/6 用例通过 |
 | U-05 | lazyRetry 测试 | PASS/FAIL | 6/6 用例通过 |
+| U-07 | 子路径 navigateFallback 绝对化 | PASS/FAIL | base 非 / 时绝对回退 + cleanupOutdatedCaches + 加载占位 |
 
 ### 发现的问题
 {问题描述} | 关联文件: {key_file} | 关联编号: {step/F-REVIEW} | 建议修复: {方案}

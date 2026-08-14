@@ -2,7 +2,7 @@
 
 > async/await 同步性检查、资源池性能基准、HTTP 状态码映射、CSS 选择器降级、异常日志语义、外部资源生命周期、DB 写入身份追溯、异步阻塞超时、子进程心跳等。
 >
-> 涵盖规范: #57, #58, #59, #60, #61, #62, #63, #79, #80, #81, #82, #92
+> 涵盖规范: #57, #58, #59, #60, #61, #62, #63, #79, #80, #81, #82, #92, #114, #115
 >
 > 完整内容见 [../meta-rules.md](../meta-rules.md) | [返回索引](index.md)
 
@@ -50,3 +50,12 @@ async调用外部资源必须asyncio.wait_for超时保护。超时返回语义�
 
 ### #92 PowerShell 外部命令显式后缀
 Windows PowerShell调用Python脚本必须用显式`.py`后缀。禁止依赖PATHEXT自动解析
+
+### #114 异步清理 shield + 异常取回（ASYNC-CLEANUP-SHIELD-RETRIEVE）
+在飞异步清理（unroute/task cancel/连接关闭）前先探测关闭态短路；存活态用 asyncio.shield 防超时取消内部 task；done_callback 取回异常，禁遗留未取回 future
+- grep: `grep "wait_for.*unroute\|unroute(" src/` 命中 → 检查是否 shield + 关闭态短路
+- grep: `grep "create_task\|ensure_future" src/` → 每个 future 是否都有 await/done_callback
+
+### #115 外部页面生命周期重启失效（EXTERNAL-PAGE-RESTART-INVALIDATION）
+整浏览器重启须使已注册外部页面失效；关闭态短接为最后防线
+- grep: `grep "ensure_alive\|close_all_pages\|register_external_page" src/infra/browser.py` → 重启路径是否对 _external_pages 做失效处理

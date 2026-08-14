@@ -396,18 +396,26 @@ async def _prepare_login_cookie_export(
     except Exception:
         pass
 
-    _emit_login_export_status(set_status, "登录成功，正在预热个人页...")
+    # O-08-11 修复：登录导出前的预热必须从个人页改为 goofish 首页。
+    # 根因：_m_h5_tk（MTOP 会话 token，TTL 15-22 分钟）只在访问首页或调用
+    # MTOP 接口时被服务端刷新；/personal 页不会触发 token 刷新。登录流程若耗时
+    # 较长（含 30s 卡顿重试），导出时 token 可能已过期，导致后续 /api/auth/cookie/health
+    # 报 cookie_expired_m_h5_tk。改为访问首页可确保导出的是最新 token。
+    _emit_login_export_status(set_status, "登录成功，正在预热首页以刷新会话令牌...")
     warmup_start = time.monotonic()
     try:
         await page.goto(
-            "https://www.goofish.com/personal",
+            "https://www.goofish.com/",
             wait_until="domcontentloaded",
             timeout=15000,
         )
-    except Exception:
-        pass
-    try:
-        await page.wait_for_load_state("networkidle", timeout=5000)
+        # 等待 MTOP 接口完成（首页会发起 mtop 请求，服务端据此刷新 _m_h5_tk）
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        # 再给 token 一次刷新落地的缓冲（MTOP 响应 + Set-Cookie 写入有时延）
+        await asyncio.sleep(2)
     except Exception:
         pass
     timings["post_login_warmup_sec"] = _elapsed_sec(warmup_start)

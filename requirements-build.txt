@@ -1,0 +1,14 @@
+# 构建期专用依赖（运行期不需要，不进安装包）
+#
+# 仅用于本地 embedding 的 ONNX 导出与 int8 量化：
+#   - onnx: scripts/export_embedding_onnx.py（torch.onnx.export）与
+#           scripts/quantize_embedding_onnx.py（onnxruntime.quantization）必需。
+#
+# 与 pyproject.toml 的 [project.optional-dependencies].build 保持同步（那里用下限 onnx>=1.16，
+# 这里用本仓库 .venv-build 验证过的锁定版本）。运行期只需 onnxruntime（由 chromadb 间接带入），
+# 切勿把 onnx 列入运行期依赖 / requirements.txt。
+#
+# 使用方式（二选一，等价）：
+#   pip install -r requirements-build.txt
+#   pip install -e ".[build]"          # 安装 pyproject 的 build 可选依赖组
+onnx==1.22.0
