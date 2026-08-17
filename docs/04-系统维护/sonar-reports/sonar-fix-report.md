@@ -82,7 +82,7 @@
 
 | 文件 | 行 | 修复方法 |
 |------|----|----------|
-| `src/xianyu_hunter/web/routes/api_task_links.py` | 363 | 将 `_enrich_with_item_data` 中所有 `return links` 改为 `return list(links)`，返回新列表引用以满足规则（4 处） |
+| `backend/xianyu_hunter/web/routes/api_task_links.py` | 363 | 将 `_enrich_with_item_data` 中所有 `return links` 改为 `return list(links)`，返回新列表引用以满足规则（4 处） |
 | `frontend/src/pages/Maintenance/DatabaseAdmin.tsx` | 470 | **拆分函数**: 将 `handleImportFile` 核心逻辑提取到 `processImportFile`（返回 void），`handleImportFile` 作为 `beforeUpload` 钩子统一返回 `false` |
 | `frontend/src/pages/Config/VersionManager.tsx` | 150 | **拆分函数**: 同上模式，提取 `processImport` 内部函数处理实际逻辑，`handleImport` 钩子统一返回 `false` |
 
@@ -92,7 +92,7 @@
 
 | 文件 | 行 | 修复方法 |
 |------|----|----------|
-| `src/xianyu_hunter/modules/login_strategy.py` | 71 | 重命名实例属性 `cdp_port` 为 `cdp_target_port`，参数同步重命名 |
+| `backend/xianyu_hunter/modules/login_strategy.py` | 71 | 重命名实例属性 `cdp_port` 为 `cdp_target_port`，参数同步重命名 |
 
 ### 3.2 P0 阶段 — CRITICAL 数组排序 Bug 修复 (3 处)
 
@@ -132,11 +132,11 @@
 
 | 文件 | 行 | 修复方法 |
 |------|----|----------|
-| `src/xianyu_hunter/__main__.py` | 274 | 添加 `from contextlib import suppress`，使用 `with suppress(asyncio.CancelledError): await bus_task` |
-| `src/xianyu_hunter/web/startup.py` | 274, 281, 450 | 3 处：主调度器循环添加 `raise`，子任务用 `suppress` 包装 |
-| `src/xianyu_hunter/modules/token_renewer.py` | 176, 192 | 176 行使用 `suppress` 包装 `await self._task`；192 行 `_renew_loop` 中 `break` 改为 `raise` |
-| `src/xianyu_hunter/web/routes/api_logs.py` | 324 | SSE 生成器 `break` 改为 `raise` |
-| `src/xianyu_hunter/web/routes/sse_stream.py` | 102 | SSE 生成器 `break` 改为 `raise` |
+| `backend/xianyu_hunter/__main__.py` | 274 | 添加 `from contextlib import suppress`，使用 `with suppress(asyncio.CancelledError): await bus_task` |
+| `backend/xianyu_hunter/web/startup.py` | 274, 281, 450 | 3 处：主调度器循环添加 `raise`，子任务用 `suppress` 包装 |
+| `backend/xianyu_hunter/modules/token_renewer.py` | 176, 192 | 176 行使用 `suppress` 包装 `await self._task`；192 行 `_renew_loop` 中 `break` 改为 `raise` |
+| `backend/xianyu_hunter/web/routes/api_logs.py` | 324 | SSE 生成器 `break` 改为 `raise` |
+| `backend/xianyu_hunter/web/routes/sse_stream.py` | 102 | SSE 生成器 `break` 改为 `raise` |
 
 ### 3.4 P1 二次修复 — 工厂函数重构引入的 S2004 (13 处)
 
@@ -168,11 +168,11 @@
 
 | 文件 | 修复方法 |
 |------|----------|
-| `src/xianyu_hunter/web/routes/cookie_inject.py` | 提取 `_DOMAIN_GOOFISH`、`_DOMAIN_GOOFISH_DOT`、`_DOMAIN_TAOBAO`、`_DOMAIN_TAOBAO_DOT`、`_DOMAIN_ALIPAY`、`_DOMAIN_ALIPAY_DOT`、`_DOMAIN_LOGIN_TAOBAO`、`_DOMAIN_LOGIN_TAOBAO_DOT` 8 个域名常量；`_INJECT_DOMAINS` 和 `_GOOFISH_DOMAINS` 引用常量；调用点 804、841 行的字面量改用常量引用 |
-| `src/xianyu_hunter/web/routes/api_tasks.py` | `_TASK_NOT_FOUND` 常量 |
-| `src/xianyu_hunter/web/routes/api_task_links.py` | `_TASK_NOT_FOUND` 常量 |
-| `src/xianyu_hunter/web/routes/api_orders.py` | `_ORDER_NOT_FOUND` 常量 |
-| `src/xianyu_hunter/infra/db_models.py` | 正则常量提取 |
+| `backend/xianyu_hunter/web/routes/cookie_inject.py` | 提取 `_DOMAIN_GOOFISH`、`_DOMAIN_GOOFISH_DOT`、`_DOMAIN_TAOBAO`、`_DOMAIN_TAOBAO_DOT`、`_DOMAIN_ALIPAY`、`_DOMAIN_ALIPAY_DOT`、`_DOMAIN_LOGIN_TAOBAO`、`_DOMAIN_LOGIN_TAOBAO_DOT` 8 个域名常量；`_INJECT_DOMAINS` 和 `_GOOFISH_DOMAINS` 引用常量；调用点 804、841 行的字面量改用常量引用 |
+| `backend/xianyu_hunter/web/routes/api_tasks.py` | `_TASK_NOT_FOUND` 常量 |
+| `backend/xianyu_hunter/web/routes/api_task_links.py` | `_TASK_NOT_FOUND` 常量 |
+| `backend/xianyu_hunter/web/routes/api_orders.py` | `_ORDER_NOT_FOUND` 常量 |
+| `backend/xianyu_hunter/infra/db_models.py` | 正则常量提取 |
 
 #### S1128/S1481/S1854/S125: 未使用代码清理 (~55 处)
 
@@ -205,8 +205,8 @@
 
 | 文件 | 行 | 修复方法 |
 |------|----|----------|
-| `src/xianyu_hunter/infra/repo_error_logs.py` | 91 | `datetime.utcnow()` → `datetime.now(timezone.utc)` |
-| `src/xianyu_hunter/web/routes/api_db_admin.py` | 389 | `datetime.utcfromtimestamp(raw)` → `datetime.fromtimestamp(raw, tz=timezone.utc)` |
+| `backend/xianyu_hunter/infra/repo_error_logs.py` | 91 | `datetime.utcnow()` → `datetime.now(timezone.utc)` |
+| `backend/xianyu_hunter/web/routes/api_db_admin.py` | 389 | `datetime.utcfromtimestamp(raw)` → `datetime.fromtimestamp(raw, tz=timezone.utc)` |
 
 #### S7761: 应使用 dataset (MAJOR, 1 处)
 
@@ -353,15 +353,15 @@ Python imports OK
 
 ### Python 文件 (10 个)
 
-1. `src/xianyu_hunter/__main__.py` — S7497
-2. `src/xianyu_hunter/web/startup.py` — S7497 (3 处)
-3. `src/xianyu_hunter/modules/token_renewer.py` — S7497 (2 处)
-4. `src/xianyu_hunter/web/routes/api_logs.py` — S7497
-5. `src/xianyu_hunter/web/routes/sse_stream.py` — S7497
-6. `src/xianyu_hunter/web/routes/api_task_links.py` — S3516, S1192
-7. `src/xianyu_hunter/web/routes/api_db_admin.py` — S6903
-8. `src/xianyu_hunter/web/routes/cookie_inject.py` — S1192, S125, S1128
-9. `src/xianyu_hunter/modules/login_strategy.py` — S1845
+1. `backend/xianyu_hunter/__main__.py` — S7497
+2. `backend/xianyu_hunter/web/startup.py` — S7497 (3 处)
+3. `backend/xianyu_hunter/modules/token_renewer.py` — S7497 (2 处)
+4. `backend/xianyu_hunter/web/routes/api_logs.py` — S7497
+5. `backend/xianyu_hunter/web/routes/sse_stream.py` — S7497
+6. `backend/xianyu_hunter/web/routes/api_task_links.py` — S3516, S1192
+7. `backend/xianyu_hunter/web/routes/api_db_admin.py` — S6903
+8. `backend/xianyu_hunter/web/routes/cookie_inject.py` — S1192, S125, S1128
+9. `backend/xianyu_hunter/modules/login_strategy.py` — S1845
 10. 其他 P2 阶段批量修复文件（详见 3.5 节）
 
 ### TypeScript/TSX 文件 (15+ 个)

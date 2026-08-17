@@ -1,0 +1,1 @@
+const l={succeeded:{color:"green",label:"成功"},pending_pay:{color:"orange",label:"待支付"},paid:{color:"blue",label:"已支付"},submitting:{color:"blue",label:"提交中"},paying:{color:"blue",label:"支付中"},failed:{color:"red",label:"失败"},cancelled:{color:"default",label:"已取消"},takeover_pending:{color:"blue",label:"人工接管"}};export{l as O};

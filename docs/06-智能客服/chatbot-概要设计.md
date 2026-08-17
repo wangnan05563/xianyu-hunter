@@ -41,7 +41,7 @@
 
 ### 1.2 设计原则
 
-1. **复用优先**：最大限度复用现有基础设施（[container.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/container.py) DI、[ai_usage.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/ai_usage.py) 预算、[auth.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/middleware/auth.py) 认证、[event_bus.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/event_bus.py) 事件、[api_prompts.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_prompts.py) 热更新、[batch_refresh_scheduler.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/batch_refresh_scheduler.py) APScheduler 模式）
+1. **复用优先**：最大限度复用现有基础设施（[container.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/container.py) DI、[ai_usage.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/ai_usage.py) 预算、[auth.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/middleware/auth.py) 认证、[event_bus.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/event_bus.py) 事件、[api_prompts.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_prompts.py) 热更新、[batch_refresh_scheduler.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/batch_refresh_scheduler.py) APScheduler 模式）
 2. **模块解耦**：业务模块层各组件单一职责，通过 Orchestrator 编排，避免相互直接依赖
 3. **同步优先 + 异步增强**：核心路径同步实现保证可靠性，耗时操作（标题生成、知识库构建）异步化
 4. **降级显式**：每一级降级都有明确的触发条件、用户感知与日志记录（见 §7）
@@ -126,7 +126,7 @@ graph TD
 
 ### 2.3 依赖注入
 
-在 [container.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/container.py) 中扩展注册：
+在 [container.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/container.py) 中扩展注册：
 
 ```python
 # 容器初始化时按顺序构造，避免循环依赖
@@ -195,7 +195,7 @@ container.chatbot_orchestrator = ChatbotOrchestrator(
 
 **关键设计**：
 - 配置存储为 SQLite `chatbot_config` 表（key-value，value 为 JSON）
-- `PUT /config` 合并更新（`model_dump(exclude_unset=True)`，与 [api_tasks.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_tasks.py) 任务级覆盖语义一致）
+- `PUT /config` 合并更新（`model_dump(exclude_unset=True)`，与 [api_tasks.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_tasks.py) 任务级覆盖语义一致）
 - 写入失败触发 `logging.warning()` 告警（遵循硬约束）
 - 配置变更通过事件总线发布 `chatbot.config_changed`，订阅者（Orchestrator、KBManager）刷新本地缓存
 - 敏感配置项（如 `escalation_contact`）的 value 不发布到事件，仅发布 `has_sensitive_value` 布尔
@@ -280,7 +280,7 @@ class RAGEngine:
   - 第 2 个 User Message：`【知识库参考】\n[1] 来源：...\n内容：...`
   - 第 3 个 User Message：用户原始问题
 - **截断策略**：从最低相似度片段开始整片丢弃，剩余 <3 片时标记 `context_truncated=true`
-- **超时控制**：HTTP 超时 25s（与 [api_ai.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_ai.py) `HTTP_TIMEOUT_SEC` 一致），首 token 超时 15s（超时触发降级）
+- **超时控制**：HTTP 超时 25s（与 [api_ai.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_ai.py) `HTTP_TIMEOUT_SEC` 一致），首 token 超时 15s（超时触发降级）
 - **复用 api_ai.py 调用模式**：httpx 直调 OpenAI 兼容接口，非函数复用（api_ai.py 无 `_call_llm` 抽象）
 
 #### 3.2.3 `agent.py` — AGENT 智能代理
@@ -337,7 +337,7 @@ class IntentClassifier:
 **关键设计决策**：
 - **规则优先**：白名单（"任务"/"评估"/"配置"等关键词）+ 黑名单（"天气"/"诗"等）覆盖 80% 场景，避免 LLM 调用
 - **LLM 兜底**：仅规则无法判定时调用，endpoint 命名 `chatbot_intent`，纳入预算控制
-- **Prompt 热更新**：LLM 分类 Prompt 通过 [api_prompts.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_prompts.py) 管理，key 为 `chatbot_intent`
+- **Prompt 热更新**：LLM 分类 Prompt 通过 [api_prompts.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_prompts.py) 管理，key 为 `chatbot_intent`
 - **响应缓存**：相同问题 5 分钟内复用结果（LRU 缓存，上限 256 条）
 
 #### 3.2.5 `kb_manager.py` — 知识库管理器
@@ -517,7 +517,7 @@ class EmbeddingService:
 
 **关键设计决策**：
 - **模型**：`text-embedding-3-small`，向量维度 1536
-- **API Key 复用**：从现有配置读取（与 [api_ai.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_ai.py) 共享）
+- **API Key 复用**：从现有配置读取（与 [api_ai.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_ai.py) 共享）
 - **预算计入**：endpoint 命名 `chatbot_embedding`，调用 `ai_usage.record_usage`
 - **重试策略**：失败重试 3 次，指数退避 1s/2s/4s
 - **限流处理**：429 时指数退避，3 次仍失败则暂停构建并告警
@@ -733,7 +733,7 @@ class LLMTimeoutError(ChatbotException):
 
 ### 5.1 SQLAlchemy 模型定义
 
-在 [db_models.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/db_models.py) 中新增 6 张表，遵循现有命名规范（snake_case）与索引策略。
+在 [db_models.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/db_models.py) 中新增 6 张表，遵循现有命名规范（snake_case）与索引策略。
 
 #### 5.1.1 `chatbot_sessions`
 
@@ -1080,7 +1080,7 @@ LLM 不可用 → RAG 检索片段 + 免责声明
 
 ### 8.1 认证与授权
 
-- **SR-8.1.1**：所有对话接口必须通过现有 [auth.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/middleware/auth.py) 认证中间件
+- **SR-8.1.1**：所有对话接口必须通过现有 [auth.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/middleware/auth.py) 认证中间件
 - **SR-8.1.2**：对话接口**不加入**认证白名单（与 `/api/auth/cookie` 等不同）
 - **SR-8.1.3**：会话隔离：用户只能访问自己的会话（当前单用户场景预留多用户扩展）
 - **SR-8.1.4**：配置修改接口需管理员权限（复用现有权限体系）
@@ -1109,7 +1109,7 @@ LLM 不可用 → RAG 检索片段 + 免责声明
   - 扫描正则：`(?i)(api[_-]?key|secret|token|cookie|password)\s*[=:]\s*['"]?[A-Za-z0-9_\-\.]{8,}['"]?`
   - 命中：替换为 `<REDACTED>` 后向量化，metadata 标记 `redacted=true`
   - 整片段为敏感配置：直接丢弃
-- **SR-8.3.3**：LLM 调用复用 [ai_usage.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/ai_usage.py) 预算控制
+- **SR-8.3.3**：LLM 调用复用 [ai_usage.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/ai_usage.py) 预算控制
   - Endpoint 命名规范：`chatbot_chat`、`chatbot_intent`、`chatbot_title`、`chatbot_embedding`、`chatbot_tool_call_<tool>`
 - **SR-8.3.4**：API Key 不记录到日志（遵循硬约束）
 - **SR-8.3.5**：转人工时复制的会话记录自动脱敏（移除 API Key、Cookie、Token 等）
@@ -1129,7 +1129,7 @@ LLM 不可用 → RAG 检索片段 + 免责声明
 - **SR-8.5.2**：记录知识库构建/更新/回滚操作日志（含 `doc_hash`、版本号、耗时）
 - **SR-8.5.3**：记录配置变更日志（`key`、`old_value`、`new_value`、`timestamp`）
   - 敏感配置项（如 `escalation_contact` 含邮箱）的 value 不记录，仅记录 `key changed`
-- **SR-8.5.4**：日志格式复用现有 [logger.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/logger.py) loguru 配置
+- **SR-8.5.4**：日志格式复用现有 [logger.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/logger.py) loguru 配置
 - **SR-8.5.5**：配置写入失败触发 `logging.warning()` 告警（遵循硬约束）
 
 ---
@@ -1141,7 +1141,7 @@ LLM 不可用 → RAG 检索片段 + 免责声明
 #### 9.1.1 模块目录
 
 ```
-src/xianyu_hunter/
+backend/xianyu_hunter/
 ├── modules/chatbot/
 │   ├── __init__.py
 │   ├── orchestrator.py          # 对话编排器
@@ -1171,7 +1171,7 @@ src/xianyu_hunter/
 
 #### 9.1.2 路由注册
 
-在 [startup.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/startup.py) 中：
+在 [startup.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/startup.py) 中：
 
 ```python
 from xianyu_hunter.web.routes import api_chatbot, api_kb, api_chatbot_config
@@ -1183,7 +1183,7 @@ app.include_router(api_chatbot_config.router)
 
 #### 9.1.3 数据库迁移
 
-在 [db_models.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/db_models.py) 中新增 6 张表定义，复用现有 `create_all` 机制（启动时自动创建）。
+在 [db_models.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/db_models.py) 中新增 6 张表定义，复用现有 `create_all` 机制（启动时自动创建）。
 
 **迁移策略**：
 - 新增表不影响现有表结构，无需迁移脚本
@@ -1192,7 +1192,7 @@ app.include_router(api_chatbot_config.router)
 
 #### 9.1.4 定时任务集成
 
-**新建 `KBRefreshScheduler`**（参考 [batch_refresh_scheduler.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/batch_refresh_scheduler.py) 的 APScheduler 模式）：
+**新建 `KBRefreshScheduler`**（参考 [batch_refresh_scheduler.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/batch_refresh_scheduler.py) 的 APScheduler 模式）：
 
 ```python
 class KBRefreshScheduler:
@@ -1218,7 +1218,7 @@ class KBRefreshScheduler:
             logger.error("知识库定时更新失败: %s", e)
 ```
 
-**不扩展 [scheduler.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/scheduler.py)（TaskScheduler）**，避免与任务调度耦合。
+**不扩展 [scheduler.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/scheduler.py)（TaskScheduler）**，避免与任务调度耦合。
 
 ### 9.2 前端集成
 

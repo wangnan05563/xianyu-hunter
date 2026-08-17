@@ -351,7 +351,7 @@ requirements.md（需求规格）
 
 - 项目路径：`d:\code\otherProjects\17_xianyu`
 - 前端源码：`frontend/`
-- 后端源码：`src/xianyu_hunter/`
+- 后端源码：`backend/xianyu_hunter/`
 - 配置文件：`config/`
 
 ---

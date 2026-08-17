@@ -11,7 +11,7 @@
 | 关联路由 | `/config/ai`（前端）/ `/api/ai/*`、`/api/ai/deep-analyze`、`/api/ai/seller-template-check`、`/api/ai/test-embedding`（后端） |
 | 文档用途 | 开发团队技术指导 / 智能客服向量库训练素材                       |
 | 维护人   | XianyuHunter 团队                                               |
-| 关联代码 | `frontend/src/pages/Config/AIConfig/`、`frontend/src/api/ai.ts`、`src/xianyu_hunter/web/routes/api_ai.py`、`src/xianyu_hunter/web/routes/api_ai_deep.py`、`src/xianyu_hunter/modules/chatbot/local_embedding.py`、`src/xianyu_hunter/infra/yaml_config.py` |
+| 关联代码 | `frontend/src/pages/Config/AIConfig/`、`frontend/src/api/ai.ts`、`backend/xianyu_hunter/web/routes/api_ai.py`、`backend/xianyu_hunter/web/routes/api_ai_deep.py`、`backend/xianyu_hunter/modules/chatbot/local_embedding.py`、`backend/xianyu_hunter/infra/yaml_config.py` |
 
 > **v1.0 → v2.0 主要差异**：
 >
@@ -304,7 +304,7 @@ interface AITestEmbeddingResult {
 
 ### 6.6 后端 Settings（BaseSettings）
 
-位置：`src/xianyu_hunter/config.py`（从 `.env` 读取）
+位置：`backend/xianyu_hunter/config.py`（从 `.env` 读取）
 
 | 字段                     | 来源      | 说明                                       |
 | ------------------------ | --------- | ------------------------------------------ |
@@ -358,7 +358,7 @@ export const ENDPOINT_LABELS: Record<string, string> = {
 
 ### 7.1 AI 总开关与降级机制
 
-位置：`src/xianyu_hunter/web/routes/api_ai.py` `_check_ai_enabled()` 函数
+位置：`backend/xianyu_hunter/web/routes/api_ai.py` `_check_ai_enabled()` 函数
 
 - 所有 AI 端点（除 config GET/PUT）调用前先执行 `_check_ai_enabled()`。
 - `ai_enabled=false` 时抛 HTTP 403，`detail="AI 功能已关闭，请在「AI 服务」配置页面开启"`。
@@ -374,7 +374,7 @@ export const ENDPOINT_LABELS: Record<string, string> = {
 - **内存单例**：`Settings()` 单例，启动时从 .env + keyring 加载。
 
 #### `update_ai_config()` 热更新
-位置：`src/xianyu_hunter/config.py`
+位置：`backend/xianyu_hunter/config.py`
 
 1. 更新内存单例字段。
 2. 写入 `.env` 文件（API Key 除外）。
@@ -388,7 +388,7 @@ export const ENDPOINT_LABELS: Record<string, string> = {
 
 ### 7.3 Vision 能力检测（v2.0 抽取为共享函数）
 
-位置：`src/xianyu_hunter/web/routes/api_ai.py`
+位置：`backend/xianyu_hunter/web/routes/api_ai.py`
 
 ```python
 _VISION_CAPABLE_KEYWORDS: tuple[str, ...] = (
@@ -413,7 +413,7 @@ def _is_vision_capable(model_name: str | None) -> bool:
 
 ### 7.4 Prompt 热更新（v2.0 新增）
 
-位置：`src/xianyu_hunter/web/routes/api_ai.py`（P1-8 Prompt 热更新）
+位置：`backend/xianyu_hunter/web/routes/api_ai.py`（P1-8 Prompt 热更新）
 
 ```python
 from xianyu_hunter.web.routes.api_prompts import get_active_prompt
@@ -428,7 +428,7 @@ system_prompt = get_active_prompt("parse_task") or _SYSTEM_PROMPT
 
 ### 7.5 价格区间注入（v2.0 新增）
 
-位置：`src/xianyu_hunter/web/routes/api_ai.py` `_query_price_range()` 函数
+位置：`backend/xianyu_hunter/web/routes/api_ai.py` `_query_price_range()` 函数
 
 - **设计动机**：评估商品时注入同类物品已售价格区间，让 LLM 判断价格合理性有依据。
 - 数据来源：`price_dashboard.sold_range(keyword, days=30)`，从 sold_items 表查近 30 天已售商品价格区间。
@@ -439,7 +439,7 @@ system_prompt = get_active_prompt("parse_task") or _SYSTEM_PROMPT
 
 ### 7.6 评估结果缓存（v2.0 新增）
 
-位置：`src/xianyu_hunter/web/routes/api_ai.py` `_get_cached_ai_eval()` / `_cache_eval_result()` 函数
+位置：`backend/xianyu_hunter/web/routes/api_ai.py` `_get_cached_ai_eval()` / `_cache_eval_result()` 函数
 
 - **设计动机**：同一商品多次评估时避免重复调用 LLM 浪费 token。
 - 缓存位置：`evaluations` 表 `dimension_scores` 字段（JSON），key 为 `ai_condition_eval`。
@@ -477,7 +477,7 @@ system_prompt = get_active_prompt("parse_task") or _SYSTEM_PROMPT
 #### 7.7.3 `deep_analyze` 4 维度深度分析
 - **超时**：`DEEP_ANALYZE_TIMEOUT_SEC=90s`（v1.0 文档说 60s 是错的，多图 Vision 推理较慢）。
 - **模型**：`openai_vision_model`。
-- **位置**：`src/xianyu_hunter/web/routes/api_ai_deep.py`。
+- **位置**：`backend/xianyu_hunter/web/routes/api_ai_deep.py`。
 - **请求体**：
   ```python
   class DeepAnalyzeRequest(BaseModel):
@@ -502,7 +502,7 @@ system_prompt = get_active_prompt("parse_task") or _SYSTEM_PROMPT
 #### 7.7.4 `seller_template_check` 卖家模板化检测（纯规则）
 - **超时**：同步规则计算（毫秒级），前端 30s。
 - **模型**：无（**纯规则不调 LLM**，v1.0 文档说用 `openai_model` 是错的）。
-- **位置**：`src/xianyu_hunter/web/routes/api_ai_deep.py`。
+- **位置**：`backend/xianyu_hunter/web/routes/api_ai_deep.py`。
 - **请求体**：
   ```python
   class SellerTemplateCheckRequest(BaseModel):
@@ -541,7 +541,7 @@ system_prompt = get_active_prompt("parse_task") or _SYSTEM_PROMPT
 
 #### 7.7.6 `test_embedding` Embedding 连接测试（v2.0 新增）
 - **超时**：前端 180s（覆盖本地首次加载模型 ~30s + 模型下载 ~95MB）。
-- **位置**：`src/xianyu_hunter/web/routes/api_ai.py` `test_embedding_connection` 端点。
+- **位置**：`backend/xianyu_hunter/web/routes/api_ai.py` `test_embedding_connection` 端点。
 - **流程**：
   1. 优先使用 `Settings.embedding_*` 字段；为空时 fallback 到 `cfg.kb.embedding_model` / `embedding_dimensions`。
   2. **本地模式**（base_url 空 + model 有值）：调 `_test_local_embedding()` → `LocalEmbeddingBackend.embed("hi")`。
@@ -561,7 +561,7 @@ system_prompt = get_active_prompt("parse_task") or _SYSTEM_PROMPT
 
 #### 7.8.2 `LocalEmbeddingBackend` 类
 
-位置：`src/xianyu_hunter/modules/chatbot/local_embedding.py`
+位置：`backend/xianyu_hunter/modules/chatbot/local_embedding.py`
 
 ```python
 class LocalEmbeddingBackend:
@@ -605,7 +605,7 @@ class LocalEmbeddingBackend:
 
 ### 7.9 预算控制机制
 
-位置：`src/xianyu_hunter/infra/ai_usage.py`
+位置：`backend/xianyu_hunter/infra/ai_usage.py`
 
 - `check_budget()`：每次 AI 调用前检查，返回 `(allowed: bool, reason: str)`。
 - 三道防线：
@@ -664,50 +664,50 @@ class LocalEmbeddingBackend:
 
 | 文件路径                                                  | 行号/章节 | 说明                                                         |
 | --------------------------------------------------------- | --------- | ------------------------------------------------------------ |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_VISION_CAPABLE_KEYWORDS` | Vision 关键字白名单元组（10 个关键字）            |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_is_vision_capable(model_name)` | Vision 能力检测共享函数（被 api_ai_deep 复用）    |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_check_ai_enabled()` | AI 开关检查（403）                                     |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `HTTP_TIMEOUT_SEC=25.0` | parse_task 超时                                        |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `VISION_TIMEOUT_SEC=60.0` | evaluate_condition 超时                                |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `ParseTaskBody` | Pydantic 请求模型（text 1-2000）                          |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_call_llm` | 文本 LLM 调用 + Prompt 热更新                              |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_rule_parse` | 规则解析 fallback                                         |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_call_llm_vision` | Vision LLM 调用（60s，含 price_range 注入）          |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_query_price_range` | 价格区间查询（调 price_dashboard.sold_range）          |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_get_cached_ai_eval` / `_cache_eval_result` | 评估结果缓存（evaluations 表）             |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_rule_eval_condition` | 规则评估 fallback（含 price_range 支持）              |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `AIConfigBody` | Pydantic 配置模型（含 5 个 embedding_* 字段）            |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_mask_key` | API Key 脱敏                                              |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `get_ai_config` | 获取 AI 配置（LLM + Embedding 双组，含 has_key）        |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `save_ai_config` | 保存 AI 配置（热更新 + keyring）                        |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `test_ai_connection` | LLM 连接测试（15s，最小化请求）                      |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_test_local_embedding` | 本地 Embedding 测试（调 LocalEmbeddingBackend）     |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `_test_remote_embedding` | 远程 Embedding 测试（dimensions=0 不传，兼容 Ollama） |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `test_embedding_connection` | Embedding 连接测试端点（settings 优先，空时 fallback cfg.kb） |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `get_ai_usage` | 用量统计（today/budget/history，CNY=USD*7.2）          |
-| `src/xianyu_hunter/web/routes/api_ai.py`                  | `update_ai_budget` | 预算更新                                                  |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `DEEP_ANALYZE_TIMEOUT_SEC=90.0` | 深度分析超时（v1.0 文档说 60s 是错的）          |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_RULE_DETAIL_PREFIX` | 规则模拟前缀常量                                         |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `DeepAnalyzeRequest` | Pydantic 请求模型（item_id + checks 默认 4 项）        |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `SellerTemplateCheckRequest` | Pydantic 请求模型（seller_id + sample_size 3-50 默认 20） |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_DEEP_ANALYZE_PROMPT` | 4 维度深度分析 Prompt                                    |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_call_llm_deep_analyze` | LLM Vision 深度分析（90s，最多 6 张图，纯文本模型跳过图片） |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_rule_check_stolen_image` / `_rule_check_damage` / `_rule_check_consistency` / `_rule_check_template` | 4 维度规则模拟 |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_compute_overall_verdict` | 综合判定（has_high→reject, has_medium→caution, 全 low→recommend） |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_rule_deep_analyze` | 规则模拟深度分析 fallback                                |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_normalize_deep_result` | 响应归一化（统一 LLM 与规则输出）                       |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_compute_image_url_hash` | 图片哈希（MD5 截前 12 位）                              |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_get_seller_items` | 卖家商品查询（仅 template 检查时）                       |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `@router.post("/deep-analyze")` | 深度分析端点                                       |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `_count_template_keywords` / `_compute_desc_length_variance` / `_find_shared_sentences` / `_compute_template_score` / `_infer_template_risk_level` | 卖家模板化检测算法 |
-| `src/xianyu_hunter/web/routes/api_ai_deep.py`             | `@router.post("/seller-template-check")` | 卖家模板化检测端点（**纯规则不调 LLM**）        |
-| `src/xianyu_hunter/modules/chatbot/local_embedding.py`    | 全文      | `LocalEmbeddingBackend` 类（懒加载 + 线程安全 + 5.x 兼容）   |
-| `src/xianyu_hunter/modules/chatbot/local_embedding.py`    | 模块顶部 | `os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")` |
-| `src/xianyu_hunter/modules/chatbot/local_embedding.py`    | `_ensure_loaded` | 懒加载模型（threading.Lock 保护）                       |
-| `src/xianyu_hunter/modules/chatbot/local_embedding.py`    | `embed` / `embed_batch` | 同步向量化接口（batch_size=32）                       |
-| `src/xianyu_hunter/infra/yaml_config.py`                  | `ChatbotKBConfig` | KB 配置（embedding_model/embedding_dimensions 等默认值） |
-| `src/xianyu_hunter/config.py`                             | `update_ai_config` | 配置热更新（内存单例 + .env + keyring）                  |
-| `src/xianyu_hunter/infra/ai_usage.py`                     | `check_budget` / `record_usage` | 预算检查 + 用量记录                          |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_VISION_CAPABLE_KEYWORDS` | Vision 关键字白名单元组（10 个关键字）            |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_is_vision_capable(model_name)` | Vision 能力检测共享函数（被 api_ai_deep 复用）    |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_check_ai_enabled()` | AI 开关检查（403）                                     |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `HTTP_TIMEOUT_SEC=25.0` | parse_task 超时                                        |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `VISION_TIMEOUT_SEC=60.0` | evaluate_condition 超时                                |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `ParseTaskBody` | Pydantic 请求模型（text 1-2000）                          |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_call_llm` | 文本 LLM 调用 + Prompt 热更新                              |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_rule_parse` | 规则解析 fallback                                         |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_call_llm_vision` | Vision LLM 调用（60s，含 price_range 注入）          |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_query_price_range` | 价格区间查询（调 price_dashboard.sold_range）          |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_get_cached_ai_eval` / `_cache_eval_result` | 评估结果缓存（evaluations 表）             |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_rule_eval_condition` | 规则评估 fallback（含 price_range 支持）              |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `AIConfigBody` | Pydantic 配置模型（含 5 个 embedding_* 字段）            |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_mask_key` | API Key 脱敏                                              |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `get_ai_config` | 获取 AI 配置（LLM + Embedding 双组，含 has_key）        |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `save_ai_config` | 保存 AI 配置（热更新 + keyring）                        |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `test_ai_connection` | LLM 连接测试（15s，最小化请求）                      |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_test_local_embedding` | 本地 Embedding 测试（调 LocalEmbeddingBackend）     |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_test_remote_embedding` | 远程 Embedding 测试（dimensions=0 不传，兼容 Ollama） |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `test_embedding_connection` | Embedding 连接测试端点（settings 优先，空时 fallback cfg.kb） |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `get_ai_usage` | 用量统计（today/budget/history，CNY=USD*7.2）          |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `update_ai_budget` | 预算更新                                                  |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `DEEP_ANALYZE_TIMEOUT_SEC=90.0` | 深度分析超时（v1.0 文档说 60s 是错的）          |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_RULE_DETAIL_PREFIX` | 规则模拟前缀常量                                         |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `DeepAnalyzeRequest` | Pydantic 请求模型（item_id + checks 默认 4 项）        |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `SellerTemplateCheckRequest` | Pydantic 请求模型（seller_id + sample_size 3-50 默认 20） |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_DEEP_ANALYZE_PROMPT` | 4 维度深度分析 Prompt                                    |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_call_llm_deep_analyze` | LLM Vision 深度分析（90s，最多 6 张图，纯文本模型跳过图片） |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_rule_check_stolen_image` / `_rule_check_damage` / `_rule_check_consistency` / `_rule_check_template` | 4 维度规则模拟 |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_compute_overall_verdict` | 综合判定（has_high→reject, has_medium→caution, 全 low→recommend） |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_rule_deep_analyze` | 规则模拟深度分析 fallback                                |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_normalize_deep_result` | 响应归一化（统一 LLM 与规则输出）                       |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_compute_image_url_hash` | 图片哈希（MD5 截前 12 位）                              |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_get_seller_items` | 卖家商品查询（仅 template 检查时）                       |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `@router.post("/deep-analyze")` | 深度分析端点                                       |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `_count_template_keywords` / `_compute_desc_length_variance` / `_find_shared_sentences` / `_compute_template_score` / `_infer_template_risk_level` | 卖家模板化检测算法 |
+| `backend/xianyu_hunter/web/routes/api_ai_deep.py`             | `@router.post("/seller-template-check")` | 卖家模板化检测端点（**纯规则不调 LLM**）        |
+| `backend/xianyu_hunter/modules/chatbot/local_embedding.py`    | 全文      | `LocalEmbeddingBackend` 类（懒加载 + 线程安全 + 5.x 兼容）   |
+| `backend/xianyu_hunter/modules/chatbot/local_embedding.py`    | 模块顶部 | `os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")` |
+| `backend/xianyu_hunter/modules/chatbot/local_embedding.py`    | `_ensure_loaded` | 懒加载模型（threading.Lock 保护）                       |
+| `backend/xianyu_hunter/modules/chatbot/local_embedding.py`    | `embed` / `embed_batch` | 同步向量化接口（batch_size=32）                       |
+| `backend/xianyu_hunter/infra/yaml_config.py`                  | `ChatbotKBConfig` | KB 配置（embedding_model/embedding_dimensions 等默认值） |
+| `backend/xianyu_hunter/config.py`                             | `update_ai_config` | 配置热更新（内存单例 + .env + keyring）                  |
+| `backend/xianyu_hunter/infra/ai_usage.py`                     | `check_budget` / `record_usage` | 预算检查 + 用量记录                          |
 
 ---
 

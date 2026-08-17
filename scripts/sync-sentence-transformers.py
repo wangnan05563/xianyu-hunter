@@ -4,9 +4,9 @@ import os, shutil
 import sys
 
 venv_st = sys.argv[1] if len(sys.argv) > 1 else r'D:\code\otherProjects\17_xianyu\.venv-build\Lib\site-packages\sentence_transformers'
-dist_st = sys.argv[2] if len(sys.argv) > 2 else r'D:\code\otherProjects\17_xianyu\dist\xianyu-hunter\_internal\sentence_transformers'
+dist_st = sys.argv[2] if len(sys.argv) > 2 else r'D:\code\otherProjects\17_xianyu\release\xianyu-hunter\_internal\sentence_transformers'
 venv_site = sys.argv[3] if len(sys.argv) > 3 else r'D:\code\otherProjects\17_xianyu\.venv-build\Lib\site-packages'
-dist_internal = sys.argv[4] if len(sys.argv) > 4 else r'D:\code\otherProjects\17_xianyu\dist\xianyu-hunter\_internal'
+dist_internal = sys.argv[4] if len(sys.argv) > 4 else r'D:\code\otherProjects\17_xianyu\release\xianyu-hunter\_internal'
 
 def sync_missing(venv_dir, dist_dir):
     missing = 0

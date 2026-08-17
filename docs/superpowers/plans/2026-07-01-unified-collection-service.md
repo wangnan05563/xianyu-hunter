@@ -12,11 +12,11 @@
 
 ## File Structure
 
-- Create `src/xianyu_hunter/modules/collection_service.py`: collection modes, result/error types, merge helpers, cookie/review helpers, and `ItemCollectionService`.
+- Create `backend/xianyu_hunter/modules/collection_service.py`: collection modes, result/error types, merge helpers, cookie/review helpers, and `ItemCollectionService`.
 - Create `tests/test_collection_service.py`: service-level unit tests for old-value protection, official collection persistence, sold handling, and route-compatible result shape.
-- Modify `src/xianyu_hunter/web/routes/api_items.py`: delegate `/api/items/{item_id}/refresh` to the service.
-- Modify `src/xianyu_hunter/web/routes/api_evaluations.py`: keep public route functions but delegate `_collect_official_and_evaluate` to the service and remove duplicated persistence logic after tests pass.
-- Modify `src/xianyu_hunter/modules/batch_refresh_scheduler.py`: delegate `_refresh_one()` to the service and use returned `changed_fields`.
+- Modify `backend/xianyu_hunter/web/routes/api_items.py`: delegate `/api/items/{item_id}/refresh` to the service.
+- Modify `backend/xianyu_hunter/web/routes/api_evaluations.py`: keep public route functions but delegate `_collect_official_and_evaluate` to the service and remove duplicated persistence logic after tests pass.
+- Modify `backend/xianyu_hunter/modules/batch_refresh_scheduler.py`: delegate `_refresh_one()` to the service and use returned `changed_fields`.
 - Modify `tests/test_batch_refresh_scheduler.py`: assert the scheduler invokes the service path and preserves existing counters.
 - Modify `tests/test_official_collect_integration.py`: update mocks to target service delegation while keeping old-value protection and `data_source="official"` assertions.
 
@@ -24,7 +24,7 @@
 
 **Files:**
 - Create: `tests/test_collection_service.py`
-- Create: `src/xianyu_hunter/modules/collection_service.py`
+- Create: `backend/xianyu_hunter/modules/collection_service.py`
 
 - [ ] **Step 1: Write failing tests for merge and detail-only collection**
 
@@ -121,7 +121,7 @@ Expected: fail with `ModuleNotFoundError: No module named 'xianyu_hunter.modules
 
 - [ ] **Step 3: Add service skeleton and merge helper**
 
-Create `src/xianyu_hunter/modules/collection_service.py`:
+Create `backend/xianyu_hunter/modules/collection_service.py`:
 
 ```python
 from __future__ import annotations
@@ -314,7 +314,7 @@ Expected: both tests pass.
 ## Task 2: Official Full Collection In Service
 
 **Files:**
-- Modify: `src/xianyu_hunter/modules/collection_service.py`
+- Modify: `backend/xianyu_hunter/modules/collection_service.py`
 - Modify: `tests/test_collection_service.py`
 
 - [ ] **Step 1: Write failing official-full test**
@@ -399,7 +399,7 @@ Expected: fail with `CollectionError: Unsupported collection mode`.
 
 - [ ] **Step 3: Implement official-full path**
 
-Update `src/xianyu_hunter/modules/collection_service.py`:
+Update `backend/xianyu_hunter/modules/collection_service.py`:
 
 ```python
 import asyncio
@@ -619,8 +619,8 @@ Expected: all tests pass.
 ## Task 3: Move Cookie Helper Into Service
 
 **Files:**
-- Modify: `src/xianyu_hunter/modules/collection_service.py`
-- Modify: `src/xianyu_hunter/web/routes/api_evaluations.py`
+- Modify: `backend/xianyu_hunter/modules/collection_service.py`
+- Modify: `backend/xianyu_hunter/web/routes/api_evaluations.py`
 
 - [ ] **Step 1: Copy official cookie check into service**
 
@@ -656,8 +656,8 @@ Expected: pass or only fail where mocks need route-to-service retargeting.
 ## Task 4: Route Delegation
 
 **Files:**
-- Modify: `src/xianyu_hunter/web/routes/api_items.py`
-- Modify: `src/xianyu_hunter/web/routes/api_evaluations.py`
+- Modify: `backend/xianyu_hunter/web/routes/api_items.py`
+- Modify: `backend/xianyu_hunter/web/routes/api_evaluations.py`
 - Modify: `tests/test_official_collect_integration.py`
 
 - [ ] **Step 1: Update `api_items.refresh_item`**
@@ -802,7 +802,7 @@ Expected: pass.
 ## Task 5: Batch Refresh Delegation
 
 **Files:**
-- Modify: `src/xianyu_hunter/modules/batch_refresh_scheduler.py`
+- Modify: `backend/xianyu_hunter/modules/batch_refresh_scheduler.py`
 - Modify: `tests/test_batch_refresh_scheduler.py`
 
 - [ ] **Step 1: Write failing scheduler delegation test**
@@ -900,7 +900,7 @@ Expected: pass.
 Run:
 
 ```powershell
-python -m compileall src/xianyu_hunter/modules/collection_service.py src/xianyu_hunter/web/routes/api_items.py src/xianyu_hunter/web/routes/api_evaluations.py src/xianyu_hunter/modules/batch_refresh_scheduler.py
+python -m compileall backend/xianyu_hunter/modules/collection_service.py backend/xianyu_hunter/web/routes/api_items.py backend/xianyu_hunter/web/routes/api_evaluations.py backend/xianyu_hunter/modules/batch_refresh_scheduler.py
 ```
 
 Expected: all files compile without syntax errors.
@@ -916,7 +916,7 @@ Expected: changed files are limited to the new service, service tests, route del
 Run:
 
 ```powershell
-git add src/xianyu_hunter/modules/collection_service.py src/xianyu_hunter/web/routes/api_items.py src/xianyu_hunter/web/routes/api_evaluations.py src/xianyu_hunter/modules/batch_refresh_scheduler.py tests/test_collection_service.py tests/test_batch_refresh_scheduler.py tests/test_official_collect_integration.py
+git add backend/xianyu_hunter/modules/collection_service.py backend/xianyu_hunter/web/routes/api_items.py backend/xianyu_hunter/web/routes/api_evaluations.py backend/xianyu_hunter/modules/batch_refresh_scheduler.py tests/test_collection_service.py tests/test_batch_refresh_scheduler.py tests/test_official_collect_integration.py
 git commit -m "feat: unify item collection service"
 ```
 

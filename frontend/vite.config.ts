@@ -118,7 +118,7 @@ export default defineConfig(({ command }) => ({
     },
   },
   build: {
-    outDir: '../src/xianyu_hunter/web/static/spa',
+    outDir: '../release/spa',
     // 关闭 Vite 自带的 emptyOutDir：构建开始 Vite 会 fs.rmSync 清空输出目录，
     // 但 WorkBuddy 沙箱的 safe-delete 钩子会劫持 rmSync → trash 失败 → 构建中止。
     // 输出目录的清理已由 scripts/前端构建.bat 的 [1/2] 步骤 `rmdir /s /q` 完成

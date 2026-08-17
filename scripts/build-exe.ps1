@@ -8,7 +8,7 @@
 #   powershell -File scripts/build-exe.ps1 -DepsOnly  # 仅验证/修复构建 venv 与 Python 依赖
 #   powershell -File scripts/build-exe.ps1 -Clean     # 清理所有缓存重新下载（怀疑缓存损坏时用）
 #
-# 产物：dist/xianyu-hunter/ 目录 + dist/XianyuHunter-Setup-v*.exe
+# 产物：release/xianyu-hunter/ 目录 + release/XianyuHunter-Setup-v*.exe
 #
 # 缓存策略（避免重复下载）：
 # - .venv-build/         venv 增量更新（pip install 自动跳过已安装包）
@@ -129,7 +129,7 @@ function Invoke-BuildPip {
 # -Clean：清理所有缓存
 if ($Clean) {
     Write-Host "[Clean] 清理所有缓存..." -ForegroundColor Yellow
-    foreach ($p in @(".venv-build", "frontend\node_modules", $cacheDir, "dist")) {
+    foreach ($p in @(".venv-build", "frontend\node_modules", $cacheDir, "release")) {
         if (Test-Path $p) {
             Write-Host "  删除 $p"
             Remove-Item -Recurse -Force $p -ErrorAction SilentlyContinue
@@ -216,7 +216,7 @@ if ($DepsOnly) {
 # 默认每次都重建：避免前端源码已修改但 SPA 产物未更新导致打包后行为不一致
 # 用 -SkipSPA 跳过（仅当确信前端无变更时使用，可省 1-3 分钟）
 Write-Host "`n[3/6] 构建 SPA..." -ForegroundColor Yellow
-$spaIndex = "src\xianyu_hunter\web\static\spa\index.html"
+$spaIndex = "release\spa\index.html"
 if ($SkipSPA -and (Test-Path $spaIndex)) {
     Write-Host "  SPA 已存在且 -SkipSPA 已指定，跳过构建" -ForegroundColor DarkGray
 } else {
@@ -309,16 +309,16 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
 Write-Host "`n[4/6] 运行 PyInstaller 打包..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-3 分钟" -ForegroundColor DarkGray
 # 清理旧产物（dist 每次重建，但缓存独立在 .cache/ 不受影响）
-if (Test-Path "dist\xianyu-hunter") {
-    Remove-Item -Recurse -Force "dist\xianyu-hunter" -ErrorAction SilentlyContinue
+if (Test-Path "release\xianyu-hunter") {
+    Remove-Item -Recurse -Force "release\xianyu-hunter" -ErrorAction SilentlyContinue
 }
-# 清理 src/ 下所有 __pycache__ 目录，防止 PyInstaller 使用过期的 .pyc 字节码
-Get-ChildItem -Path "src" -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | ForEach-Object {
+# 清理 backend/ 下所有 __pycache__ 目录，防止 PyInstaller 使用过期的 .pyc 字节码
+Get-ChildItem -Path "backend" -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | ForEach-Object {
     Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "  清理过期 pyc: " + $_.FullName -ForegroundColor DarkGray
 }
 Write-Host "  __pycache__ 清理完成" -ForegroundColor DarkGray
-& .venv-build\Scripts\pyinstaller xianyu-hunter.spec --noconfirm
+& .venv-build\Scripts\pyinstaller xianyu-hunter.spec --noconfirm --distpath release --workpath release/.work
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 Write-Host "  PyInstaller 打包完成"
 
@@ -339,14 +339,23 @@ Write-Host "`n[5/6] 复制外置资源..." -ForegroundColor Yellow
 # 5.1 静态资源（含 SPA + icons，外置到 exe 同级 static 目录）
 # app.py 在打包模式下通过 get_app_dir() / "static" 定位此目录
 Write-Host "  [5.1] 复制静态资源（SPA + icons）..."
-Copy-Item -Recurse -Force "src\xianyu_hunter\web\static" "dist\xianyu-hunter\static"
+# 5.1 静态资源（icons 来自 backend 包内静态目录；SPA 来自前端编译产物 release/spa）
+Write-Host "  [5.1] 复制静态资源（icons + SPA）..."
+# icons 等包内静态资源（backend/xianyu_hunter/web/static，含 icons/；SPA 已改由 vite 输出到 release/spa）
+Copy-Item -Recurse -Force "backend\xianyu_hunter\web\static" "release\xianyu-hunter\static"
+# 前端编译产物（release/spa）→ 打包后 static/spa（app.py 打包模式从 get_app_dir()/static/spa 伺服）
+if (Test-Path "release\spa") {
+    Copy-Item -Recurse -Force "release\spa" "release\xianyu-hunter\static\spa"
+} else {
+    Write-Host "  [WARN] release\spa 不存在，SPA 未构建，请先执行前端构建" -ForegroundColor Red
+}
 
 # 5.2 子进程脚本（auth_helper.py / browser_login.py）
 # 为什么需要：browser_login.py / unified_login.py / auth_manager.py 通过 get_app_dir()/"scripts" 定位这些脚本
-# PyInstaller 不收集 scripts/ 目录（仅打包 src/xianyu_hunter/），必须显式复制
+# PyInstaller 不收集 scripts/ 目录（仅打包 backend/xianyu_hunter/），必须显式复制
 # 仅复制运行时实际调用的子进程脚本，避免打包测试脚本（test_*.py / perf_test.py 等）
 Write-Host "  [5.2] 复制子进程脚本（auth_helper, browser_login）..."
-$scriptsTarget = "dist\xianyu-hunter\scripts"
+$scriptsTarget = "release\xianyu-hunter\scripts"
 New-Item -ItemType Directory -Force $scriptsTarget | Out-Null
 foreach ($script in @("browser_login.py", "auth_helper.py")) {
     $src = "scripts\$script"
@@ -361,7 +370,7 @@ foreach ($script in @("browser_login.py", "auth_helper.py")) {
 # 为什么需要：menu_manager.py 通过 get_app_dir()/"config"/"menu_registry.yaml" 定位
 # 打包后 get_app_dir() 返回 exe 所在目录，config/ 需复制到 exe 同级
 Write-Host "  [5.3] 复制配置文件（menu_registry.yaml）..."
-$configTarget = "dist\xianyu-hunter\config"
+$configTarget = "release\xianyu-hunter\config"
 New-Item -ItemType Directory -Force $configTarget | Out-Null
 if (Test-Path "config\menu_registry.yaml") {
     Copy-Item -Force "config\menu_registry.yaml" $configTarget
@@ -371,9 +380,9 @@ if (Test-Path "config\menu_registry.yaml") {
 
 # 5.4 Playwright Chromium（从缓存复制，避免重复下载 ~150MB）
 # 为什么用缓存：dist 每次打包都会删除重建，直接下载到 dist 会每次重下
-# 缓存到 .cache/playwright_browsers/，复制到 dist/xianyu-hunter/playwright_browsers/
+# 缓存到 .cache/playwright_browsers/，复制到 release/xianyu-hunter/playwright_browsers/
 Write-Host "  [5.4] Playwright Chromium..." -ForegroundColor Yellow
-$pwTarget = "dist\xianyu-hunter\playwright_browsers"
+$pwTarget = "release\xianyu-hunter\playwright_browsers"
 if (Test-Path "$pwCacheDir\chromium-*") {
     Write-Host "  从缓存复制 Chromium...（约 10-30 秒）"
     Copy-Item -Recurse -Force $pwCacheDir $pwTarget
@@ -395,7 +404,7 @@ if (Test-Path "$pwCacheDir\chromium-*") {
 
 # 5.5 embedding 工件（按引擎分支）
 # - onnx：复制 scripts/export_embedding_onnx.py 生成的 ONNX + tokenizer 工件
-#         （src/xianyu_hunter/resources/embedding → dist/xianyu-hunter/resources/embedding），
+#         （backend/xianyu_hunter/resources/embedding → release/xianyu-hunter/resources/embedding），
 #         不再下载 sentence-transformers 模型（torch 已被排除）。
 # - st（默认）：复制 sentence-transformers 模型（从缓存或下载），行为不变。
 if ($EmbeddingEngine -eq "onnx") {
@@ -424,8 +433,8 @@ if ($EmbeddingEngine -eq "onnx") {
         }
     }
 
-    $onnxSrc = "src\xianyu_hunter\resources\embedding"
-    $onnxTarget = "dist\xianyu-hunter\resources\embedding"
+    $onnxSrc = "backend\xianyu_hunter\resources\embedding"
+    $onnxTarget = "release\xianyu-hunter\resources\embedding"
     $fp32 = "$onnxSrc\bge_small_zh.onnx"
     $int8 = "$onnxSrc\bge_small_zh.int8.onnx"
 
@@ -457,9 +466,9 @@ if ($EmbeddingEngine -eq "onnx") {
 } else {
     # 5.5 sentence-transformers 模型（从缓存复制，避免重复下载 ~100MB）
     # 为什么用缓存：同上，dist 每次重建会导致重新下载
-    # 缓存到 .cache/models/bge-small-zh-v1.5/，复制到 dist/xianyu-hunter/models/
+    # 缓存到 .cache/models/bge-small-zh-v1.5/，复制到 release/xianyu-hunter/models/
     Write-Host "  [5.5] sentence-transformers 模型..." -ForegroundColor Yellow
-    $modelTarget = "dist\xianyu-hunter\models\bge-small-zh-v1.5"
+    $modelTarget = "release\xianyu-hunter\models\bge-small-zh-v1.5"
     if (Test-Path "$modelCacheDir\config.json") {
         Write-Host "  从缓存复制模型...（约 5-15 秒）"
         New-Item -ItemType Directory -Force (Split-Path $modelTarget) | Out-Null
@@ -494,7 +503,7 @@ print('Model saved to $modelCacheDir')
 # 为什么需要：即使 spec 不收集 .env、前面的步骤不复制 .env，
 # 仍需在打包产物中扫描确认，防止未来误改 spec 或新增依赖间接带入敏感信息
 Write-Host "  [5.6] 扫描敏感信息..."
-$distRoot = "dist\xianyu-hunter"
+$distRoot = "release\xianyu-hunter"
 
 # 5.6.1 删除可能存在的敏感文件（防御性，即使前面步骤不应复制它们）
 foreach ($sensitiveFile in @(".env", ".env.local", ".secrets.json")) {
@@ -612,7 +621,7 @@ DefaultGroupName=XianyuHunter
 UninstallDisplayIcon={app}\xianyu-hunter.exe
 ; Reuse the app icon so the installer and uninstaller don't show the default Inno Setup icon
 SetupIconFile=assets\xianyu-hunter.ico
-OutputDir=dist
+OutputDir=release
 OutputBaseFilename=XianyuHunter-Setup-v{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
@@ -623,7 +632,7 @@ DisableProgramGroupPage=yes
 [Tasks]
 Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional:"
 [Files]
-Source: "dist\xianyu-hunter\*"; DestDir: "{app}"; Excludes: "*.log,data\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "release\xianyu-hunter\*"; DestDir: "{app}"; Excludes: "*.log,data\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
 Name: "{group}\XianyuHunter"; Filename: "{app}\xianyu-hunter.exe"
 Name: "{commondesktop}\XianyuHunter"; Filename: "{app}\xianyu-hunter.exe"; Tasks: desktopicon
@@ -640,7 +649,7 @@ if (-not $iscc) {
     Write-Host "  手动安装：https://jrsoftware.org/isdl.php" -ForegroundColor DarkGray
 } else {
     # 从 __init__.py 读取版本号
-    $initFile = "src\xianyu_hunter\__init__.py"
+    $initFile = "backend\xianyu_hunter\__init__.py"
     $version = "0.0.0.0"
     if (Test-Path $initFile) {
         $line = Get-Content $initFile | Where-Object { $_ -match '__version__' } | Select-Object -First 1
@@ -652,13 +661,13 @@ if (-not $iscc) {
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [WARN] 安装包编译失败" -ForegroundColor Red
     } else {
-        $setupExe = "dist\XianyuHunter-Setup-v$version.exe"
+        $setupExe = "release\XianyuHunter-Setup-v$version.exe"
         Write-Host "  安装包已生成：$setupExe" -ForegroundColor Green
     }
 }
 
 # ============== 完成 ==============
-$distDir = "dist\xianyu-hunter"
+$distDir = "release\xianyu-hunter"
 $size = (Get-ChildItem -Recurse $distDir | Measure-Object -Property Length -Sum).Sum / 1MB
 Write-Host "`n========================================" -ForegroundColor Green
 Write-Host "  构建完成！" -ForegroundColor Green

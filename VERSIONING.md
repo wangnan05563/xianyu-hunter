@@ -18,15 +18,15 @@
 
 ## 2. 版本号源头
 
-**单一源头**：`src/xianyu_hunter/__init__.py` 的 `__version__` 字段。
+**单一源头**：`backend/xianyu_hunter/__init__.py` 的 `__version__` 字段。
 
 所有其他位置的版本号必须从此源头同步，不得独立修改：
 
 | 文件 | 用途 | 同步方式 |
 |---|---|---|
-| `src/xianyu_hunter/__init__.py` | **源头** | 手动或 `bump_version.py` |
+| `backend/xianyu_hunter/__init__.py` | **源头** | 手动或 `bump_version.py` |
 | `pyproject.toml` | setuptools 打包元数据 | `bump_version.py` 自动同步 |
-| `src/xianyu_hunter/_build_info.py` | About API 读取 | `build_info.py` 自动生成 |
+| `backend/xianyu_hunter/_build_info.py` | About API 读取 | `build_info.py` 自动生成 |
 | `CHANGELOG.md` | 变更记录 | `bump_version.py` 封版 |
 
 **禁止**：在 `pyproject.toml` 中使用 `dynamic = ["version"]` 动态读取，因为 About API 需要静态字符串便于运行时反射。
@@ -179,7 +179,7 @@ git push origin --tags
    ```
 4. **提交变更**：
    ```powershell
-   git add src/xianyu_hunter/__init__.py pyproject.toml CHANGELOG.md src/xianyu_hunter/_build_info.py
+   git add backend/xianyu_hunter/__init__.py pyproject.toml CHANGELOG.md backend/xianyu_hunter/_build_info.py
    git commit -m "chore(release): v0.2.0"
    ```
 5. **推送 commit 与 tag**：
@@ -212,9 +212,9 @@ git push origin --tags
 
 | 文件 | 作用 |
 |---|---|
-| `src/xianyu_hunter/__init__.py` | 版本号源头（`__version__`） |
+| `backend/xianyu_hunter/__init__.py` | 版本号源头（`__version__`） |
 | `pyproject.toml` | 打包元数据（`version` 字段同步） |
-| `src/xianyu_hunter/_build_info.py` | 构建信息（自动生成，About API 读取） |
+| `backend/xianyu_hunter/_build_info.py` | 构建信息（自动生成，About API 读取） |
 | `scripts/build_info.py` | 生成 `_build_info.py` 的脚本 |
 | `scripts/bump_version.py` | 版本号递增与同步脚本 |
 | `CHANGELOG.md` | 变更记录 |

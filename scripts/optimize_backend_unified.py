@@ -30,8 +30,8 @@ def optimize_backend(file_path: str) -> None:
     print(f"原始长度: {original_len} 字符")
 
     # === 1. 精简 frontmatter description ===
-    old_desc = 'description: "对闲鱼猎人项目后端代码（src/xianyu_hunter/ Python/FastAPI/SQLAlchemy 文件）进行全面评审与逻辑审查，覆盖分层架构、异步并发、数据库规约、安全、性能、错误处理、日志规范、配置驱动、注册式资源 endpoint 契约、编码规范防御性复盘、跨层契约与测试同步、LLM 多调用治理，37 个维度。当用户要求\'审查/检、走查/把关/review/评估/看看对不对、规范不规范、后端 Python 代码的 .py 文件修改\'、迭代发布前后端走，或提到\'后端评审/backend review/Python 代码审查/FastAPI 评审/SQLAlchemy 评审\'时调用。仅审查后端 .py 文件；纯前端 .tsx/.ts 文件审查请改用 xianyu-frontend-code-review"'
-    new_desc = 'description: "闲鱼猎人项目后端代码（src/xianyu_hunter/ Python/FastAPI/SQLAlchemy .py 文件）全面评审，覆盖分层架构、异步并发、数据库规约、安全、性能、错误处理、日志规范、配置驱动、跨层契约、LLM 治理等 37 个维度。当用户要求\'审查/走查/把关/review/评估/看看对不对、规范不规范、后端 Python 代码的 .py 文件修改\'、迭代发布前后端走查，或提到\'后端评审/backend review/Python 代码审查/FastAPI 评审/SQLAlchemy 评审\'时调用。仅审查后端 .py 文件；纯前端 .tsx/.ts 文件审查请改用 xianyu-frontend-code-review"'
+    old_desc = 'description: "对闲鱼猎人项目后端代码（backend/xianyu_hunter/ Python/FastAPI/SQLAlchemy 文件）进行全面评审与逻辑审查，覆盖分层架构、异步并发、数据库规约、安全、性能、错误处理、日志规范、配置驱动、注册式资源 endpoint 契约、编码规范防御性复盘、跨层契约与测试同步、LLM 多调用治理，37 个维度。当用户要求\'审查/检、走查/把关/review/评估/看看对不对、规范不规范、后端 Python 代码的 .py 文件修改\'、迭代发布前后端走，或提到\'后端评审/backend review/Python 代码审查/FastAPI 评审/SQLAlchemy 评审\'时调用。仅审查后端 .py 文件；纯前端 .tsx/.ts 文件审查请改用 xianyu-frontend-code-review"'
+    new_desc = 'description: "闲鱼猎人项目后端代码（backend/xianyu_hunter/ Python/FastAPI/SQLAlchemy .py 文件）全面评审，覆盖分层架构、异步并发、数据库规约、安全、性能、错误处理、日志规范、配置驱动、跨层契约、LLM 治理等 37 个维度。当用户要求\'审查/走查/把关/review/评估/看看对不对、规范不规范、后端 Python 代码的 .py 文件修改\'、迭代发布前后端走查，或提到\'后端评审/backend review/Python 代码审查/FastAPI 评审/SQLAlchemy 评审\'时调用。仅审查后端 .py 文件；纯前端 .tsx/.ts 文件审查请改用 xianyu-frontend-code-review"'
     if old_desc in content:
         content = content.replace(old_desc, new_desc)
         print("  [OK] frontmatter description 精简完成")
@@ -39,12 +39,12 @@ def optimize_backend(file_path: str) -> None:
         print("  [WARN] frontmatter description 未找到精确匹配")
 
     # === 2. 精简简介段落（L15）===
-    old_intro_prefix = "对闲鱼猎人项目后端代码（`src/xianyu_hunter/` 下的 Python/FastAPI/SQLAlchemy 文件）进行全面的代码评审及逻辑审查。"
+    old_intro_prefix = "对闲鱼猎人项目后端代码（`backend/xianyu_hunter/` 下的 Python/FastAPI/SQLAlchemy 文件）进行全面的代码评审及逻辑审查。"
     if old_intro_prefix in content:
         intro_start = content.find(old_intro_prefix)
         intro_end = content.find("\n## ", intro_start)
         if intro_end > 0:
-            new_intro = "对闲鱼猎人项目后端代码（`src/xianyu_hunter/` 下的 Python/FastAPI/SQLAlchemy 文件）进行全面的代码评审及逻辑审查，覆盖 36 个维度（分层架构/异步并发/数据库规约/安全/性能/错误处理/日志规约/配置管理/智能客服/Git 规范/跨字段一致性/LLM 治理/多用户隔离/跨层契约与测试同步等）。详细规则分布在本文件与 `references/` 下 16 个主题文件中，按需加载。\n\n"
+            new_intro = "对闲鱼猎人项目后端代码（`backend/xianyu_hunter/` 下的 Python/FastAPI/SQLAlchemy 文件）进行全面的代码评审及逻辑审查，覆盖 36 个维度（分层架构/异步并发/数据库规约/安全/性能/错误处理/日志规约/配置管理/智能客服/Git 规范/跨字段一致性/LLM 治理/多用户隔离/跨层契约与测试同步等）。详细规则分布在本文件与 `references/` 下 16 个主题文件中，按需加载。\n\n"
             content = content[:intro_start] + new_intro + content[intro_end:]
             print("  [OK] 简介段落精简完成")
 
@@ -236,7 +236,7 @@ def optimize_backend(file_path: str) -> None:
 
 ### 场景2：指定文件审查
 ```
-用户：审查 src/xianyu_hunter/web/routes/api_accounts.py
+用户：审查 backend/xianyu_hunter/web/routes/api_accounts.py
 技能：读取指定文件 → 加载相关 references（architecture/security/sqlalchemy）→ 输出问题清单
 ```
 

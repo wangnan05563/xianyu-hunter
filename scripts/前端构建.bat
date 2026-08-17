@@ -27,8 +27,8 @@ REM 脚本位于 scripts/ 子目录，切换到 frontend 目录
 cd /d "%~dp0..\frontend"
 
 echo [1/2] 正在清理旧构建产物...
-if exist "..\src\xianyu_hunter\web\static\spa" (
-    rmdir /s /q "..\src\xianyu_hunter\web\static\spa"
+if exist "..\release\spa" (
+    rmdir /s /q "..\release\spa"
     echo   旧产物已清理
 )
 

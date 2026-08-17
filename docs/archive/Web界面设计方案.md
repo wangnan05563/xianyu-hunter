@@ -22,7 +22,7 @@
 ## 3. 技术栈
 
 **当前架构（已迁移）**：
-- **后端**：FastAPI（`src/xianyu_hunter/web/routes/*.py`）
+- **后端**：FastAPI（`backend/xianyu_hunter/web/routes/*.py`）
 - **前端**：React + TypeScript + Ant Design + Vite（`frontend/src/`）
 - **数据流**：SSE 实时事件 + REST API + React Query
 
@@ -126,7 +126,7 @@ frontend/src/
 ├── mobile/                     # 移动端专属组件（TabBar / PullToRefresh / MobileLayout）
 └── utils/                      # 工具函数（lazyRetry / apiError / storage）
 
-src/xianyu_hunter/
+backend/xianyu_hunter/
 ├── web/
 │   ├── routes/                 # 所有 API 路由（api_*.py）
 │   ├── services/               # 服务层（auth_manager / cookie_store / notification_engine / session_starter / tunnel_service / user_manager / menu_manager / browser_profile）

@@ -5,7 +5,7 @@
 
 运行依赖：
 - onnxruntime + tokenizers + numpy（ONNX 后端必需）
-- 工件 src/xianyu_hunter/resources/embedding/
+- 工件 backend/xianyu_hunter/resources/embedding/
   - bge_small_zh.onnx（fp32，由 scripts/export_embedding_onnx.py 生成）
   - bge_small_zh.int8.onnx（int8 量化，由 scripts/quantize_embedding_onnx.py 生成）
   - tokenizer.json
@@ -39,7 +39,7 @@ import pytest
 # 工件目录：与 scripts/export_embedding_onnx.py 默认输出一致
 _EMBEDDING_ARTIFACT_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "..", "src", "xianyu_hunter", "resources", "embedding",
+    "..", "backend", "xianyu_hunter", "resources", "embedding",
 )
 from xianyu_hunter.modules.chatbot.onnx_embedding import _ONNX_FP32, _ONNX_INT8
 _ONNX_PATH = os.path.join(_EMBEDDING_ARTIFACT_DIR, _ONNX_FP32)
@@ -117,7 +117,7 @@ def _load_reference_backend(model_name: str):
 pytestmark = pytest.mark.skipif(
     (not os.path.isfile(_ONNX_PATH) and not os.path.isfile(_INT8_PATH))
     or not os.path.isfile(_TOK_PATH),
-    reason="缺少 ONNX embedding 工件（src/xianyu_hunter/resources/embedding/），"
+    reason="缺少 ONNX embedding 工件（backend/xianyu_hunter/resources/embedding/），"
            "请先运行 scripts/export_embedding_onnx.py 与 scripts/quantize_embedding_onnx.py",
 )
 

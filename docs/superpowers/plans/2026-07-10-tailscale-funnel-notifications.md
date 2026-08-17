@@ -21,7 +21,7 @@
 ### Task 1: Tailscale Provider
 
 **Files:**
-- Modify: `src/xianyu_hunter/web/services/tunnel_providers.py`
+- Modify: `backend/xianyu_hunter/web/services/tunnel_providers.py`
 - Test: `tests/test_tunnel_providers.py`
 
 **Interfaces:**
@@ -49,11 +49,11 @@ Expected: all tunnel provider tests pass.
 ### Task 2: Unified Tunnel Start Notification
 
 **Files:**
-- Modify: `src/xianyu_hunter/domain/events.py`
-- Modify: `src/xianyu_hunter/modules/notifier/templates.py`
-- Modify: `src/xianyu_hunter/modules/notifier/dingtalk.py`
-- Modify: `src/xianyu_hunter/web/services/tunnel_service.py`
-- Modify: `src/xianyu_hunter/web/routes/api_tunnel.py`
+- Modify: `backend/xianyu_hunter/domain/events.py`
+- Modify: `backend/xianyu_hunter/modules/notifier/templates.py`
+- Modify: `backend/xianyu_hunter/modules/notifier/dingtalk.py`
+- Modify: `backend/xianyu_hunter/web/services/tunnel_service.py`
+- Modify: `backend/xianyu_hunter/web/routes/api_tunnel.py`
 - Test: `tests/test_notifier.py`
 - Test: `tests/test_notifier_new_channels.py`
 - Create: `tests/test_tunnel_service.py`
@@ -84,7 +84,7 @@ Expected: all selected tests pass.
 ### Task 3: Configuration and Frontend
 
 **Files:**
-- Modify: `src/xianyu_hunter/infra/yaml_config.py`
+- Modify: `backend/xianyu_hunter/infra/yaml_config.py`
 - Modify: `frontend/src/pages/Maintenance/Tunnel.tsx`
 - Create: `frontend/src/pages/Maintenance/__tests__/tunnelProviders.test.ts`
 

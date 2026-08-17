@@ -150,7 +150,7 @@ chatbot:
     update_interval_hours: 6
     doc_paths:
     - docs/
-    - src/xianyu_hunter/
+    - backend/xianyu_hunter/
     embedding_concurrency: 5
     embedding_model: BAAI/bge-small-zh-v1.5
     embedding_dimensions: 512

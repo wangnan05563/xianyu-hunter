@@ -1,4 +1,4 @@
-"""pytest 配置：让 tests/ 目录能 import src/xianyu_hunter，并隔离生产数据
+"""pytest 配置：让 tests/ 目录能 import backend/xianyu_hunter，并隔离生产数据
 
 为什么需要 Cookie JSON 隔离：tests/test_cookie_layers_sync_repro.py 和
 tests/test_api_anticrawl.py 通过 client.post('/api/anticrawl/cookies/update')
@@ -28,7 +28,7 @@ from unittest.mock import patch
 import pytest
 
 # 把项目根加入 sys.path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
 
 @pytest.fixture(autouse=True)

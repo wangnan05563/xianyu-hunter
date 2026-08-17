@@ -8,10 +8,10 @@
     python scripts/bump_version.py 1.5.0        # 直接指定版本号
 
 同步范围：
-1. src/xianyu_hunter/__init__.py（__version__ 字段，单一源头）
+1. backend/xianyu_hunter/__init__.py（__version__ 字段，单一源头）
 2. pyproject.toml（version 字段，从 __init__.py 同步）
 3. CHANGELOG.md（[Unreleased] 段落改写为新版本号 + 日期）
-4. src/xianyu_hunter/_build_info.py（重新生成）
+4. backend/xianyu_hunter/_build_info.py（重新生成）
 5. git tag（可选，--tag 参数触发）
 
 为什么不用 bumpversion / bump2version：
@@ -35,10 +35,10 @@ from pathlib import Path
 
 # 项目根目录（scripts/ 的上一级）
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-INIT_FILE = PROJECT_ROOT / "src" / "xianyu_hunter" / "__init__.py"
+INIT_FILE = PROJECT_ROOT / "backend" / "xianyu_hunter" / "__init__.py"
 PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
 CHANGELOG_FILE = PROJECT_ROOT / "CHANGELOG.md"
-BUILD_INFO_FILE = PROJECT_ROOT / "src" / "xianyu_hunter" / "_build_info.py"
+BUILD_INFO_FILE = PROJECT_ROOT / "backend" / "xianyu_hunter" / "_build_info.py"
 BUILD_INFO_SCRIPT = PROJECT_ROOT / "scripts" / "build_info.py"
 
 # semver 正则：MAJOR.MINOR.PATCH，无预发布后缀（项目目前不使用预发布）

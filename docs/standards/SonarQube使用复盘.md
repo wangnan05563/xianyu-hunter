@@ -216,7 +216,7 @@
 |---|---|---|
 | `sonar.projectKey` | `xianyu_hunter` | 项目唯一标识 |
 | `sonar.projectName` | `Xianyu Hunter` | 项目展示名 |
-| `sonar.sources` | `src/xianyu_hunter,frontend/src` | 后端 + 前端源码 |
+| `sonar.sources` | `backend/xianyu_hunter,frontend/src` | 后端 + 前端源码 |
 | `sonar.tests` | `tests` | 测试目录 |
 | `sonar.test.inclusions` | `**/*.test.ts,**/*.test.tsx,**/__tests__/**,**/test_*.py,**/*_test.py` | 测试文件匹配模式 |
 | `sonar.exclusions` | `**/node_modules/**,**/__pycache__/**,...` | 排除依赖、缓存、构建产物 |

@@ -67,14 +67,14 @@
 ### 2.1 【主导原因】`collector/detail.py::detail()` 提取超时 + 字段缺失
 
 **问题定位**：
-- [_detail.py::detail()](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/collector/_detail.py#L29-L157) 中 `page.wait_for_selector` 设置了 10s 超时
+- [_detail.py::detail()](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/collector/_detail.py#L29-L157) 中 `page.wait_for_selector` 设置了 10s 超时
 - 实际日志显示：`WARNING 详情页 1057557421004 标题未出现`（命中超时）
 - 即便标题未出现，`detail()` 仍 `return ItemDetail(... 默认值 ...)`，**不抛错、不返回失败标记**
 - 后续字段提取（卖家昵称、信用分、地区、想要数、浏览数）连环超时失败
 
 **为什么商品存在却超时**：
 - 闲鱼详情页采用 SPA 渲染，部分关键 DOM（如商品标题 H1）需要等待 JS hydration 完成
-- 现有选择器 [DETAIL_TITLE](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/selectors.py#L36) 可能与新版 className 不匹配
+- 现有选择器 [DETAIL_TITLE](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/selectors.py#L36) 可能与新版 className 不匹配
 - 页面可能存在懒加载/骨架屏，需要滚动触发后才出现
 
 **问题结果**：
@@ -98,18 +98,18 @@
 - ❌ `thumb_url`（首图）—— 没有 `DETAIL_THUMB` 选择器
 - ❌ `publish_time`（真实发布时间）—— 直接 `datetime.now()` 兜底
 
-[selectors.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/selectors.py) 确实没有 `DETAIL_REGION / DETAIL_WANT / DETAIL_VIEW / DETAIL_THUMB` 等选择器常量。
+[selectors.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/selectors.py) 确实没有 `DETAIL_REGION / DETAIL_WANT / DETAIL_VIEW / DETAIL_THUMB` 等选择器常量。
 
 ### 2.3 【回流缺失】`seller_nick` / `credit_score` 在降级路径下丢失
 
-- [_detail.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/collector/_detail.py#L109-L136) 在循环中尝试提取 `detail_seller_nick / detail_credit_score`
+- [_detail.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/collector/_detail.py#L109-L136) 在循环中尝试提取 `detail_seller_nick / detail_credit_score`
 - 提取字段名是 `detail_*` 前缀，但 `ItemDetail` dataclass 没有这些字段
 - 写入 `ItemDetail` 时字段被丢弃，**回传到 `_collect_official_and_evaluate` 时永远是空值**
 - 即使调用 `seller_profile()` 拿到完整卖家信息，弹窗中显示的仍是 "—"
 
 ### 2.4 【评估链路污染】采集结果直接覆盖原有 `items` 行
 
-[api_evaluations.py L1416-L1433](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_evaluations.py#L1416-L1433)：
+[api_evaluations.py L1416-L1433](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_evaluations.py#L1416-L1433)：
 ```python
 await asyncio.to_thread(repo.upsert_item, item_row)
 ```
@@ -120,7 +120,7 @@ await asyncio.to_thread(repo.upsert_item, item_row)
 ### 2.5 【描述被覆盖】description 字段在 SPA 渲染时拿到的是"运费条款"
 
 - 闲鱼详情页 DOM 中，"满足条件时，买家可退货且运费由卖家承担" 这段文案是固定的运费说明区域
-- 现有 [DETAIL_DESC](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/selectors.py) 选择器可能错误命中了这个区域
+- 现有 [DETAIL_DESC](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/selectors.py) 选择器可能错误命中了这个区域
 - 真正的商品描述"32GB DDR4 3200MHz笔记本内存条，拆机闲置..."在更深层 DOM 中
 
 ### 2.6 【卖家主页未采集成功】所有卖家侧字段都是默认值
@@ -205,7 +205,7 @@ WARNING  xianyu_hunter.modules.collector._detail:detail:47 - 详情页 105755742
 ## 5. 修复建议（按 ROI 排序）
 
 ### 5.1 【P0】`detail()` 提取失败时主动返回失败标记
-在 [_detail.py::detail()](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/collector/_detail.py#L138-L151) 末尾增加：
+在 [_detail.py::detail()](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/collector/_detail.py#L138-L151) 末尾增加：
 ```python
 # 如果核心字段（标题）未提取成功，主动返回失败
 if not item_detail.title or item_detail.title == "默认标题":
@@ -224,7 +224,7 @@ def _coalesce(new_val, old_val):
 ```
 
 ### 5.3 【P1】补齐 `region / want_cnt / view_cnt / thumb_url` 提取
-- 在 [selectors.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/selectors.py) 增加：
+- 在 [selectors.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/selectors.py) 增加：
   ```python
   DETAIL_REGION = "[class*='areaName'], [class*='region'], [class*='area-name']"
   DETAIL_WANT = "[class*='wantCount'], [class*='fishTag--']"
@@ -234,12 +234,12 @@ def _coalesce(new_val, old_val):
 - 在 `_detail.py::detail()` 增加对应的 `query_selector` 循环
 
 ### 5.4 【P1】修复描述选择器
-- 调整 [DETAIL_DESC](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/selectors.py) 排除运费条款区域
+- 调整 [DETAIL_DESC](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/selectors.py) 排除运费条款区域
 - 增加更精准的选择器定位 "宝贝详情介绍" 模块
 
 ### 5.5 【P1】修复 `seller_nick` / `credit_score` 回流
-- [ItemDetail](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/domain/item.py) 增加 `seller_nick / seller_credit_score` 字段
-- [api_evaluations.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_evaluations.py) 调用 `seller_profile_fallback` 时显式从 `detail` 提取
+- [ItemDetail](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/domain/item.py) 增加 `seller_nick / seller_credit_score` 字段
+- [api_evaluations.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_evaluations.py) 调用 `seller_profile_fallback` 时显式从 `detail` 提取
 
 ### 5.6 【P2】评价选择器优化
 扩展 `review_selectors`，覆盖闲鱼实际 class 命名（如 `[class*='commentItem']`、`[class*='feed-item']`）

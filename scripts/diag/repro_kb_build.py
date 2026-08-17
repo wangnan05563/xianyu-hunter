@@ -10,7 +10,7 @@ from pathlib import Path
 
 # 项目根目录加进 sys.path
 ROOT = Path(r"d:\code\otherProjects\17_xianyu")
-sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "backend"))
 
 from loguru import logger
 

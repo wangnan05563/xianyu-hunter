@@ -3,7 +3,7 @@
 用途：生成 OnnxEmbeddingBackend 运行期需要的产物，使最终分发包可移除 torch /
 sentence-transformers / transformers（约 -320MB）。
 
-输出目录（默认）：src/xianyu_hunter/resources/embedding/
+输出目录（默认）：backend/xianyu_hunter/resources/embedding/
   - bge_small_zh.onnx   单一图：transformer + CLS pooling + L2 归一化（输出已归一化）
   - tokenizer.json      由完整 vocab 构建的 tokenizers.WordPiece（含 "iphone" 等 Latin token）
   - meta.json           记录源模型名与维度，便于排查
@@ -151,13 +151,13 @@ def main() -> int:
         "--out-dir",
         default=os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "..", "src", "xianyu_hunter", "resources", "embedding",
+            "..", "backend", "xianyu_hunter", "resources", "embedding",
         ),
     )
     args = parser.parse_args()
 
     export(args.model, os.path.abspath(args.out_dir))
-    print("[export] 完成。构建时 build-exe.ps1 会将该目录复制到 dist/xianyu-hunter/resources/embedding/")
+    print("[export] 完成。构建时 build-exe.ps1 会将该目录复制到 release/xianyu-hunter/resources/embedding/")
     return 0
 
 

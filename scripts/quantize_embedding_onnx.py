@@ -39,7 +39,7 @@ def _default_embedding_dir() -> str:
     return os.path.abspath(
         os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
-            "..", "src", "xianyu_hunter", "resources", "embedding",
+            "..", "backend", "xianyu_hunter", "resources", "embedding",
         )
     )
 

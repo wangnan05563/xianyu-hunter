@@ -76,7 +76,7 @@
 ### 2.1 设计约束
 
 1. **复用主 `Repository.engine`**：不独立 `create_engine`（见概要设计 §3.11 P0 修订）
-2. **SQLAlchemy 2.0 风格**：`Mapped` + `mapped_column`，与现有 [db_models.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/db_models.py) 一致
+2. **SQLAlchemy 2.0 风格**：`Mapped` + `mapped_column`，与现有 [db_models.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/db_models.py) 一致
 3. **UTC 时间**：所有 datetime 列使用 `datetime.now(timezone.utc)`，与主系统 `_utcnow()` 一致
 4. **JSON 存储**：SQLite 用 `Text` 列存 JSON 字符串，应用层序列化/反序列化
 5. **表命名**：统一 `chatbot_` 前缀，避免与主系统表冲突
@@ -395,7 +395,7 @@ def _init_default_config(self) -> None:
 
 ### 3.1 Pydantic 模型定义
 
-**位置**：[infra/yaml_config.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/yaml_config.py) 追加
+**位置**：[infra/yaml_config.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/yaml_config.py) 追加
 
 ```python
 from pydantic import BaseModel, Field, field_validator
@@ -443,7 +443,7 @@ class ChatbotKBConfig(BaseModel):
     auto_update_enabled: bool = Field(True, description="是否启用定时自动更新")
     update_interval_hours: int = Field(6, ge=1, le=168, description="自动更新间隔（小时）")
     doc_paths: list[str] = Field(
-        default_factory=lambda: ["docs/", "src/xianyu_hunter/"],
+        default_factory=lambda: ["docs/", "backend/xianyu_hunter/"],
         description="文档扫描路径列表",
     )
     embedding_concurrency: int = Field(5, ge=1, le=20, description="Embedding 并发数")
@@ -522,7 +522,7 @@ chatbot:
     update_interval_hours: 6
     doc_paths:
       - "docs/"
-      - "src/xianyu_hunter/"
+      - "backend/xianyu_hunter/"
     embedding_concurrency: 5
     embedding_model: text-embedding-3-small
     embedding_dimensions: 1536
@@ -1086,7 +1086,7 @@ class FAQUpsertResponse(BaseModel):
 
 ### 5.0 模块设计约定
 
-1. **类型定义集中**：跨模块共享的数据类型（`SSEEvent`、`RetrievedChunk`、`Source`、`Message`、`ToolResult` 等）统一定义在 [modules/chatbot/types.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/types.py)，各模块按需导入，避免循环依赖
+1. **类型定义集中**：跨模块共享的数据类型（`SSEEvent`、`RetrievedChunk`、`Source`、`Message`、`ToolResult` 等）统一定义在 [modules/chatbot/types.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/types.py)，各模块按需导入，避免循环依赖
 2. **配置注入**：所有模块通过构造函数注入 `ChatbotConfig` 或其子配置（§3.1），运行时只读，热更新字段通过 `ConfigManager.get_effective_config()` 在每次请求开始时刷新
 3. **异常边界**：模块内部异常不向外抛出，统一转为业务返回值（如 `ToolResult(success=False)`）或 `SSEEvent(type=ERROR)`；`asyncio.CancelledError` 是唯一例外，向上传播以触发资源清理
 4. **日志规范**：所有模块使用 `from loguru import logger`，关键节点（降级、转人工、构建失败、超时）必须 `logger.warning` 或 `logger.exception`
@@ -1094,7 +1094,7 @@ class FAQUpsertResponse(BaseModel):
 
 ### 5.1 ChatbotOrchestrator（对话编排器）
 
-**位置**：[modules/chatbot/orchestrator.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/orchestrator.py)
+**位置**：[modules/chatbot/orchestrator.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/orchestrator.py)
 
 **职责**：串联 FAQ → Intent → RAG → Agent → Context → Escalation，编排完整对话流程；管理 per-session 锁；实现降级链。
 
@@ -1383,7 +1383,7 @@ class ChatbotOrchestrator:
 
 ### 5.2 RAGEngine（RAG 引擎）
 
-**位置**：[modules/chatbot/rag_engine.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/rag_engine.py)
+**位置**：[modules/chatbot/rag_engine.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/rag_engine.py)
 
 **职责**：文档检索 + context 构建 + LLM 流式生成 + 引用后处理。
 
@@ -1623,7 +1623,7 @@ class RAGEngine:
 
 ### 5.3 Agent（智能代理）
 
-**位置**：[modules/chatbot/agent.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/agent.py)
+**位置**：[modules/chatbot/agent.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/agent.py)
 
 **职责**：基于 LLM function calling 的多步工具调用与推理。
 
@@ -1885,7 +1885,7 @@ class ToolRegistry:
 
 ### 5.4 IntentClassifier（意图分类器）
 
-**位置**：[modules/chatbot/intent_classifier.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/intent_classifier.py)
+**位置**：[modules/chatbot/intent_classifier.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/intent_classifier.py)
 
 **职责**：判断用户问题是否在闲鱼猎人系统范围内，避免 LLM 被滥用回答无关问题。
 
@@ -2015,7 +2015,7 @@ class IntentClassifier:
 
 ### 5.5 KBManager（知识库管理器）
 
-**位置**：[modules/chatbot/kb_manager.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/kb_manager.py)
+**位置**：[modules/chatbot/kb_manager.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/kb_manager.py)
 
 **职责**：文档扫描、切片、向量化、ChromaDB 写入、版本管理、增量更新、回滚。
 
@@ -2360,7 +2360,7 @@ class KBManager:
 
 ### 5.6 FAQMatcher（FAQ 匹配器）
 
-**位置**：[modules/chatbot/faq_matcher.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/faq_matcher.py)
+**位置**：[modules/chatbot/faq_matcher.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/faq_matcher.py)
 
 **职责**：FAQ 关键词匹配 + 编辑距离相似度计算，快速命中常见问题。
 
@@ -2500,7 +2500,7 @@ class FAQMatcher:
 
 ### 5.7 ContextManager（上下文管理器）
 
-**位置**：[modules/chatbot/context_manager.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/context_manager.py)
+**位置**：[modules/chatbot/context_manager.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/context_manager.py)
 
 **职责**：会话上下文加载、历史消息裁剪、会话超时管理、标题生成。
 
@@ -2674,7 +2674,7 @@ class ContextManager:
 
 ### 5.8 Escalation（转人工处理）
 
-**位置**：[modules/chatbot/escalation.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/escalation.py)
+**位置**：[modules/chatbot/escalation.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/escalation.py)
 
 **职责**：转人工触发判定、话术生成、PII 脱敏。
 
@@ -2804,7 +2804,7 @@ class Escalation:
 
 ### 5.9 EmbeddingService（向量化服务）
 
-**位置**：[modules/chatbot/embedding_service.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/embedding_service.py)
+**位置**：[modules/chatbot/embedding_service.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/embedding_service.py)
 
 **职责**：调用 OpenAI Embedding API，支持批量并发 + 重试 + 部分失败容忍。
 
@@ -2946,7 +2946,7 @@ class EmbeddingService:
 
 ### 5.10 VectorStore（ChromaDB 适配器）
 
-**位置**：[modules/chatbot/vector_store.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/vector_store.py)
+**位置**：[modules/chatbot/vector_store.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/vector_store.py)
 
 **职责**：封装 ChromaDB 的增删改查 + 快照导出/恢复。
 
@@ -3136,7 +3136,7 @@ class VectorStore:
 
 ### 5.11 ChatbotRepository（对话仓储）
 
-**位置**：[infra/repo_chatbot.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/repo_chatbot.py)
+**位置**：[infra/repo_chatbot.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/repo_chatbot.py)
 
 **职责**：封装 7 张 chatbot_* 表的 CRUD，复用主 Repository.engine。
 
@@ -3529,7 +3529,7 @@ class ChatbotRepository:
 
 ### 5.12 KBRefreshScheduler（知识库定时更新调度器）
 
-**位置**：[modules/chatbot/kb_refresh_scheduler.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/kb_refresh_scheduler.py)
+**位置**：[modules/chatbot/kb_refresh_scheduler.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/kb_refresh_scheduler.py)
 
 **职责**：定时检测文档变更，触发 KBManager.incremental_update。
 
@@ -3638,7 +3638,7 @@ class KBRefreshScheduler:
 
 ### 5.13 安全规则子模块
 
-**位置**：[modules/chatbot/security/](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/chatbot/security/)
+**位置**：[modules/chatbot/security/](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/chatbot/security/)
 
 **职责**：集中管理 Prompt Injection 检测、敏感字段扫描、PII 脱敏的正则规则。
 
@@ -4869,7 +4869,7 @@ data: {"degraded": true}
 [pytest]
 asyncio_mode = auto
 testpaths = tests/chatbot
-addopts = -v --cov=src/xianyu_hunter/modules/chatbot --cov-report=term-missing --cov-report=html
+addopts = -v --cov=backend/xianyu_hunter/modules/chatbot --cov-report=term-missing --cov-report=html
 markers =
     unit: 单元测试
     integration: 集成测试

@@ -243,7 +243,7 @@ def test_scheduler_error_retry_wait_no_hardcoded_300() -> None:
 
     scheduler_path = (
         Path(__file__).parent.parent
-        / "src"
+        / "backend"
         / "xianyu_hunter"
         / "modules"
         / "scheduler.py"

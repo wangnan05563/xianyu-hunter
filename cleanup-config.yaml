@@ -10,7 +10,7 @@ workspace:
   docs_dir: "docs"
   logs_dir: "cleanup-logs"
   frontend_dir: "frontend"
-  frontend_src_dir: "src"
+  frontend_src_dir: "frontend/src"
 
 # 根目录允许清单（保留项）。命中扩展名或白名单才允许留在根目录。
 root_allowlist:
@@ -33,14 +33,14 @@ root_allowlist:
     - "installer.iss"
     # 真实密钥 / 运行配置（绝不删）
     - ".env"
-    - "src/.env"
+    - "backend/.env"
     - "xiaoya_config.json"
   allowed_root_scripts: []
 
 script_extensions: [".py",".ps1",".bat",".sh",".js",".vbs"]
 
 script_exclude_dirs:
-  - "src/"
+  - "backend/"
   - "frontend/src/"
   - "frontend/public/"
   - "tests/"
@@ -53,7 +53,7 @@ script_exclude_dirs:
 # ---------- 垃圾文件模式（本项目适配） ----------
 garbage_patterns:
   compiled_intermediates:
-    - "/build/"                 # PyInstaller 中间产物（含 79MB 中间 exe，可重生成）
+    - "/release/.work/"            # PyInstaller 中间产物（release/.work，可重生成）
     - "*.pyc"
     - "*.class"
   test_outputs:
@@ -76,7 +76,7 @@ garbage_patterns:
     - ".uploads/"
     - ".worktrees/"
     - "scripts/test_results/"
-    - "src/xianyu_hunter.egg-info/"
+    - "backend/xianyu_hunter.egg-info/"
     - "config/backups/"
   ide_caches:
     - "*.suo"
@@ -105,21 +105,21 @@ review_categories:
 
 # ---------- 保留根（被实际伺服/交付/运行时依赖，绝不可当垃圾） ----------
 preserve_roots:
-  - "dist/"                                # 运行时交付根：PyInstaller exe + 已部署 SPA
+  - "release/"                             # 统一生成物根：PyInstaller exe + 安装包 + SPA + 中间产物
   - "frontend/"                            # 前端源码 + node_modules（node_modules 见 review）
   - "browser-data/"                        # 运行时登录态/Cookie（Playwright profile）
   - "data/"                                # 运行时模型/SQLite（300 .bin + 75 .pickle）
   - ".cache/"                              # 运行时依赖：Playwright 浏览器 + ML 模型
   - ".venv/"                               # Python 运行环境
-  - "src/config/"                          # 源码配置目录（untracked 但属源码，勿删）
-  - "src/xianyu_hunter/resources/"         # 源码资源目录（untracked 但属源码，勿删）
-  - "src/xianyu_hunter/web/static/spa/"    # 前端构建产物（exe 从 dist 副本加载；可重建，REVIEW 级）
+  - "backend/config/"                          # 源码配置目录（untracked 但属源码，勿删）
+  - "backend/xianyu_hunter/resources/"         # 源码资源目录（untracked 但属源码，勿删）
+  - "release/spa/"                         # 前端编译产物（vite outDir；exe 从 release 副本加载；可重建，REVIEW 级）
   - "frontend/public/"                     # favicon 等被 SPA 引用的必要资产（*.png 被全局忽略但必需）
   - "scripts/export_embedding_onnx.py"     # 源码脚本（untracked，勿删）
   - "scripts/quantize_embedding_onnx.py"   # 源码脚本（untracked，勿删）
   - "tests/"                               # 测试源码（untracked，勿删）
   - ".env"
-  - "src/.env"
+  - "backend/.env"
   - ".workbuddy/"                          # WorkBuddy 技能/记忆（仅删其中的 *.bak 备份）
   - "plugins/"                             # 插件技能内容（勿批量删）
 
@@ -174,8 +174,8 @@ verification:
   command: ""
   file_existence_checks:
     - "xianyu-hunter.spec"
-    - "src/xianyu_hunter/web/app.py"
-    - "dist/"
+    - "backend/xianyu_hunter/web/app.py"
+    - "release/"
     - "browser-data/"
     - "data/"
     - "frontend/public/favicon-16x16.png"

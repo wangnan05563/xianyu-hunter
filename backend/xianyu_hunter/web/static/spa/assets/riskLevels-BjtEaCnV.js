@@ -1,0 +1,1 @@
+const l={low:{color:"green",label:"低风险"},medium:{color:"orange",label:"中风险"},high:{color:"red",label:"高风险"},extreme:{color:"red",label:"极高风险"},critical:{color:"red",label:"极高风险"},unknown:{color:"default",label:"卖家信息缺失"}};export{l as R};

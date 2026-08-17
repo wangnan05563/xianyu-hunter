@@ -58,7 +58,7 @@ sonar.projectKey=xianyu_hunter
 sonar.projectName=Xianyu Hunter
 sonar.projectVersion=0.1.0
 sonar.projectDescription=Multi-component project: Python FastAPI backend + React TypeScript frontend
-sonar.sources=src/xianyu_hunter,frontend/src
+sonar.sources=backend/xianyu_hunter,frontend/src
 sonar.tests=tests
 sonar.test.inclusions=**/*.test.ts,**/*.test.tsx,**/__tests__/**,**/test_*.py,**/*_test.py
 sonar.exclusions=**/node_modules/**,**/__pycache__/**,**/*.pyc,**/dist/**,**/build/**,**/.venv/**,**/venv/**,**/coverage/**,**/test-setup.ts,**/vite-env.d.ts,**/*.svg,**/*.ico,**/*.html,**/*.css
@@ -146,9 +146,9 @@ sonar.sourceEncoding=UTF-8
 
 | # | 规则 | 文件:行 | 描述 | 工时 |
 |---|------|---------|------|------|
-| 1 | python:S3516 | [api_task_links.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_task_links.py#L363) | 函数始终返回相同值,存在不可达分支 | 2 min |
+| 1 | python:S3516 | [api_task_links.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_task_links.py#L363) | 函数始终返回相同值,存在不可达分支 | 2 min |
 | 2 | typescript:S3516 | [DatabaseAdmin.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Maintenance/DatabaseAdmin.tsx#L473) | 函数始终返回相同值,逻辑缺陷 | 8 min |
-| 3 | python:S1845 | [login_strategy.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/login_strategy.py#L71) | 字段名 "cdp_port" 与第 65 行 "CDP_PORT" 仅大小写不同,易混淆 | 10 min |
+| 3 | python:S1845 | [login_strategy.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/login_strategy.py#L71) | 字段名 "cdp_port" 与第 65 行 "CDP_PORT" 仅大小写不同,易混淆 | 10 min |
 | 4 | typescript:S3516 | [VersionManager.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Config/VersionManager.tsx#L150) | 函数始终返回相同值,逻辑缺陷 | 4 min |
 
 **风险分析**:
@@ -164,10 +164,10 @@ sonar.sourceEncoding=UTF-8
 |---------|-----------|------|----------|
 | [Evaluations/index.tsx:195](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Evaluations/index.tsx#L195) | **84** | 15 | **5.6x** 🔴 |
 | [TaskEditor.tsx:55](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Tasks/TaskEditor.tsx#L55) | **68** | 15 | **4.5x** 🔴 |
-| [repo_links.py:317](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/repo_links.py#L317) | **62** | 15 | **4.1x** 🔴 |
+| [repo_links.py:317](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/repo_links.py#L317) | **62** | 15 | **4.1x** 🔴 |
 | [Config/EvalRules.tsx:12](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Config/EvalRules.tsx#L12) | 33 | 15 | 2.2x |
 | [Items/ItemList.tsx:127](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Items/ItemList.tsx#L127) | 29 | 15 | 1.9x |
-| [repo_links.py:399](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/repo_links.py#L399) | 24 | 15 | 1.6x |
+| [repo_links.py:399](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/repo_links.py#L399) | 24 | 15 | 1.6x |
 | [api/task.ts:134](file:///d:/code/otherProjects/17_xianyu/frontend/src/api/task.ts#L134) | 21 | 15 | 1.4x |
 | [Login/index.tsx:110](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Login/index.tsx#L110) | 21 | 15 | 1.4x |
 | [PriceHistogramCard.tsx:49](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Dashboard/components/PriceHistogramCard.tsx#L49) | 17 | 15 | 1.1x |
@@ -245,21 +245,21 @@ sonar.sourceEncoding=UTF-8
 | 1 | [TidalForagers/index.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/components/TidalForagers/index.tsx) | 59 | S6757 (this 滥用) | 🔴 高 |
 | 2 | [Evaluations/index.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Evaluations/index.tsx) | 43 | S3776, S6479, S2871 | 🔴 高 |
 | 3 | [Tasks/TaskEditor.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Tasks/TaskEditor.tsx) | 36 | S3776, S1874 | 🔴 高 |
-| 4 | [api_evaluations.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_evaluations.py) | 28 | S3776, S1192 | 🟠 中 |
+| 4 | [api_evaluations.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_evaluations.py) | 28 | S3776, S1192 | 🟠 中 |
 | 5 | [DatabaseAdmin.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Maintenance/DatabaseAdmin.tsx) | 24 | S3516, S6479 | 🔴 高 |
 | 6 | [GeometricIcons.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/components/icons/GeometricIcons.tsx) | 20 | S1854 | 🟠 中 |
 | 7 | [ItemList.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Items/ItemList.tsx) | 18 | S3776, S2871, S6479 | 🔴 高 |
-| 8 | [cookie_inject.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/cookie_inject.py) | 17 | S3776, S1192 | 🟠 中 |
+| 8 | [cookie_inject.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/cookie_inject.py) | 17 | S3776, S1192 | 🟠 中 |
 | 9 | [TaskList.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Tasks/TaskList.tsx) | 16 | S6479, S6757 | 🟠 中 |
-| 10 | [buyer.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/buyer.py) | 16 | S3776, S1192 | 🟠 中 |
+| 10 | [buyer.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/buyer.py) | 16 | S3776, S1192 | 🟠 中 |
 | 11 | [TimelineItem.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Timeline/components/TimelineItem.tsx) | 15 | (多类型) | 🟠 中 |
 | 12 | [EvalRules.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Config/EvalRules.tsx) | 12 | S3776, S1854 | 🟠 中 |
 | 13 | [MainLayout.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/components/layout/MainLayout.tsx) | 11 | (多类型) | 🟢 低 |
 | 14 | [PriceStrategy.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Config/PriceStrategy.tsx) | 11 | (多类型) | 🟢 低 |
-| 15 | [api_ai_deep.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_ai_deep.py) | 11 | S3776 | 🟠 中 |
+| 15 | [api_ai_deep.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_ai_deep.py) | 11 | S3776 | 🟠 中 |
 | 16 | [Login/index.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Login/index.tsx) | 10 | S3776, S7747 | 🟠 中 |
-| 17 | [repo_links.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/repo_links.py) | 10 | S3776 (62!) | 🔴 高 |
-| 18 | [api_task_links.py](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_task_links.py) | 10 | S3516 (BLOCKER) | 🔴 高 |
+| 17 | [repo_links.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/repo_links.py) | 10 | S3776 (62!) | 🔴 高 |
+| 18 | [api_task_links.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_task_links.py) | 10 | S3516 (BLOCKER) | 🔴 高 |
 | 19 | [TaskDetail.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Tasks/TaskDetail.tsx) | 9 | (多类型) | 🟢 低 |
 | 20 | [BuyerStrategy.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Config/BuyerStrategy.tsx) | 8 | (多类型) | 🟢 低 |
 
@@ -412,9 +412,9 @@ items.sort((a, b) => a.name.localeCompare(b.name))  // 字符串排序
 #### 任务 1: 修复 4 个 BLOCKER 逻辑缺陷
 - **预估工时**: 24 分钟
 - **优先文件**:
-  1. [api_task_links.py:363](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/routes/api_task_links.py#L363) - 检查函数返回逻辑
+  1. [api_task_links.py:363](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_task_links.py#L363) - 检查函数返回逻辑
   2. [DatabaseAdmin.tsx:473](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Maintenance/DatabaseAdmin.tsx#L473) - 检查分支条件
-  3. [login_strategy.py:71](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/modules/login_strategy.py#L71) - 重命名 `cdp_port` 字段
+  3. [login_strategy.py:71](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/modules/login_strategy.py#L71) - 重命名 `cdp_port` 字段
   4. [VersionManager.tsx:150](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Config/VersionManager.tsx#L150) - 检查函数返回逻辑
 - **验证**: 修复后运行单元测试,确保功能正常
 
@@ -433,7 +433,7 @@ items.sort((a, b) => a.name.localeCompare(b.name))  // 字符串排序
 - **优先文件**:
   1. [Evaluations/index.tsx:195](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Evaluations/index.tsx#L195) - 复杂度 84 → 拆分为 5-6 个子函数
   2. [TaskEditor.tsx:55](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Tasks/TaskEditor.tsx#L55) - 复杂度 68 → 拆分向导步骤为独立组件
-  3. [repo_links.py:317](file:///d:/code/otherProjects/17_xianyu/src/xianyu_hunter/infra/repo_links.py#L317) - 复杂度 62 → 提取 SQL 构造逻辑为独立函数
+  3. [repo_links.py:317](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/repo_links.py#L317) - 复杂度 62 → 提取 SQL 构造逻辑为独立函数
 - **方法**: 应用 Extract Function 重构模式,每个子函数复杂度 < 15
 
 #### 任务 4: 修复 S6757 函数组件 this 误用 (57 处)
@@ -487,10 +487,10 @@ items.sort((a, b) => a.name.localeCompare(b.name))  // 字符串排序
 - **当前覆盖率**: 0.0%
 - **目标**: 核心模块覆盖率达到 60%+,整体达到 40%+
 - **优先模块**:
-  1. `src/xianyu_hunter/modules/buyer.py` (订单核心)
-  2. `src/xianyu_hunter/modules/evaluator.py` (评估核心)
-  3. `src/xianyu_hunter/modules/worker.py` (任务调度核心)
-  4. `src/xianyu_hunter/infra/repo_links.py` (数据访问层)
+  1. `backend/xianyu_hunter/modules/buyer.py` (订单核心)
+  2. `backend/xianyu_hunter/modules/evaluator.py` (评估核心)
+  3. `backend/xianyu_hunter/modules/worker.py` (任务调度核心)
+  4. `backend/xianyu_hunter/infra/repo_links.py` (数据访问层)
 - **方法**:
   1. 为现有 `tests/` 目录补充覆盖率统计 (pytest-cov)
   2. 在 sonar-project.properties 中配置 `sonar.python.coverage.reportPaths`

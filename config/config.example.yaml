@@ -144,7 +144,7 @@ task_scheduler:
       - "asyncio.sleep(300)"
       - "await asyncio.sleep(300)"
     require_config_key: true            # 时间参数必须有对应 config key，否则报警
-    scan_modules:                       # 扫描范围（相对 src/xianyu_hunter/）
+    scan_modules:                       # 扫描范围（相对 backend/xianyu_hunter/）
       - modules/scheduler.py
       - modules/batch_refresh_scheduler.py
       - modules/cookie_sync_scheduler.py

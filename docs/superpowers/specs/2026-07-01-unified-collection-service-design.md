@@ -33,7 +33,7 @@
 
 新增服务模块：
 
-`src/xianyu_hunter/modules/collection_service.py`
+`backend/xianyu_hunter/modules/collection_service.py`
 
 核心对象：
 

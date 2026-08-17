@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>XianyuHunter 闲鱼猎人</title>
+    <!-- Favicon：仅引用实际存在的 favicon.ico，避免 png 资源 404 -->
+    <link rel="icon" type="image/x-icon" href="./favicon.ico" />
+    <link rel="shortcut icon" href="./favicon.ico" />
+    <!-- O-12-26 PWA 移动端优化 meta -->
+    <!-- theme-color：浏览器地址栏配色，与 manifest 一致使用品牌橙 -->
+    <meta name="theme-color" content="#FF6200" />
+    <!-- iOS Safari 全屏 PWA 模式 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <!-- Android/Chrome 全屏 PWA 模式：apple-mobile-web-app-capable 已被 W3C 标准化为 mobile-web-app-capable -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="闲鱼猎人" />
+    <!-- iOS 主屏图标：SVG 不被支持，必须 PNG -->
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <style>
+      #xh-loading-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #ffffff;
+        color: #111111;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        z-index: 99999;
+      }
+      #xh-loading-splash .xh-spinner {
+        width: 44px;
+        height: 44px;
+        border: 3px solid #f0f0f0;
+        border-top-color: #FF6200;
+        border-radius: 50%;
+        animation: xh-spin 0.9s linear infinite;
+        margin-bottom: 20px;
+      }
+      #xh-loading-splash .xh-title {
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+      #xh-loading-splash .xh-subtitle {
+        font-size: 13px;
+        color: #777777;
+        margin-top: 6px;
+      }
+      @keyframes xh-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+    <script type="module" crossorigin src="/xianyu/assets/index-a3jJcnwL.js"></script>
+    <link rel="modulepreload" crossorigin href="/xianyu/assets/react-vendor-BL3jMz4R.js">
+    <link rel="modulepreload" crossorigin href="/xianyu/assets/antd-vendor-DshBcMjh.js">
+    <link rel="stylesheet" crossorigin href="/xianyu/assets/index-CWRgutxy.css">
+  <link rel="manifest" href="/xianyu/manifest.webmanifest"></head>
+  <body>
+    <div id="root">
+      <div id="xh-loading-splash">
+        <div class="xh-spinner"></div>
+        <div class="xh-title">闲鱼猎人</div>
+        <div class="xh-subtitle">正在加载…</div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -13,8 +13,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-# _build_info.py 输出路径：src/xianyu_hunter/_build_info.py
-PKG_ROOT = Path(__file__).resolve().parents[1] / "src" / "xianyu_hunter"
+# _build_info.py 输出路径：backend/xianyu_hunter/_build_info.py
+PKG_ROOT = Path(__file__).resolve().parents[1] / "backend" / "xianyu_hunter"
 INIT_FILE = PKG_ROOT / "__init__.py"
 OUT_FILE = PKG_ROOT / "_build_info.py"
 # 项目根目录（用于 git rev-parse）

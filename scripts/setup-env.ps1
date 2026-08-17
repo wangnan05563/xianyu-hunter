@@ -519,11 +519,11 @@ if ($SkipFrontend) {
 
             # ---------- Step 8: 构建前端 ----------
             Write-Step "[8/9] 构建前端 SPA 产物"
-            # 构建产物输出到 src/xianyu_hunter/web/static/spa，被 FastAPI 作为静态资源服务
+            # 构建产物输出到 release/spa，dev 模式由 app.py 从 release/spa 伺服
             Invoke-Safe { & $npmCmd run build } "vite build"
-            $spaDir = Join-Path $ProjectRoot "src\xianyu_hunter\web\static\spa"
+            $spaDir = Join-Path $ProjectRoot "release\spa"
             if (Test-Path (Join-Path $spaDir "index.html")) {
-                Write-OK "前端构建完成，产物位于 src/xianyu_hunter/web/static/spa"
+                Write-OK "前端构建完成，产物位于 release/spa"
             } else {
                 Write-Warn "构建完成但未找到 SPA 入口 index.html，请检查 vite 配置"
             }
@@ -550,7 +550,7 @@ $checklist = @(
     @{ Name = "data 目录"; Test = { Test-Path $DataDir } }
 )
 if (-not $SkipFrontend) {
-    $checklist += @{ Name = "前端 SPA 产物"; Test = { Test-Path (Join-Path $ProjectRoot "src\xianyu_hunter\web\static\spa\index.html") } }
+    $checklist += @{ Name = "前端 SPA 产物"; Test = { Test-Path (Join-Path $ProjectRoot "release\spa\index.html") } }
 }
 
 $allPass = $true
@@ -587,7 +587,7 @@ Write-Host ""
 
 if ($StartService -and $allPass) {
     Write-Step "启动 Web 服务（-StartService）"
-    $env:PYTHONPATH = Join-Path $ProjectRoot "src"
+    $env:PYTHONPATH = Join-Path $ProjectRoot "backend"
     $env:PYTHONUNBUFFERED = "1"
     # 后台启动，输出重定向到 logs，避免阻塞当前会话
     if (-not (Test-Path $LogsDir)) { New-Item -ItemType Directory -Path $LogsDir -Force | Out-Null }

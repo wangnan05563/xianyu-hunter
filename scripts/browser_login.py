@@ -27,7 +27,7 @@ from pathlib import Path
 # inserted sys.executable/parent/_internal into sys.path.  Do not override it.
 if not getattr(sys, "frozen", False):
     _REPO = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(_REPO / "src"))
+    sys.path.insert(0, str(_REPO / "backend"))
 
 from xianyu_hunter.paths import get_browser_data_dir
 
@@ -63,7 +63,7 @@ def _export_cookies_to_json(cookies: list[dict], method: str, data_dir: Path | N
             _cs_mod.get_cookie_store().export_cookies(cookies, method=method)
         else:
             _repo = Path(__file__).resolve().parents[1]
-            sys.path.insert(0, str(_repo / "src"))
+            sys.path.insert(0, str(_repo / "backend"))
             from xianyu_hunter.web.services.cookie_store import get_cookie_store
             get_cookie_store().export_cookies(cookies, method=method)
     except Exception as e:

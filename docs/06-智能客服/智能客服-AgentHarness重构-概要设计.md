@@ -801,7 +801,7 @@ class ToolMetadata(BaseModel):
 
 ### 6.1 路由文件
 
-新增 `src/xianyu_hunter/web/routes/api_chatbot_agent.py`，前缀 `/api/chatbot/agent`。
+新增 `backend/xianyu_hunter/web/routes/api_chatbot_agent.py`，前缀 `/api/chatbot/agent`。
 
 ### 6.2 端点清单
 

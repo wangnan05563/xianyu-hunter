@@ -32,8 +32,8 @@
 
 现有系统已具备以下基础：
 
-- 智能客服模块：`src/xianyu_hunter/modules/chatbot/`
-- Agent 工具注册表：`src/xianyu_hunter/modules/chatbot/tool_registry.py`
+- 智能客服模块：`backend/xianyu_hunter/modules/chatbot/`
+- Agent 工具注册表：`backend/xianyu_hunter/modules/chatbot/tool_registry.py`
 - 只读工具：任务状态、评估分数、配置值、错误日志、帮助检索
 - 配置 API：`/api/config/preview`、`/api/config/save`、`/api/config/rollback`
 - 订单 API：`/api/orders/manual-takeover`、订单状态更新、接管确认/取消

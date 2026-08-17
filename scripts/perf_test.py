@@ -15,7 +15,7 @@ from pathlib import Path
 
 # 确保使用项目代码
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
 from xianyu_hunter.infra.repository import Repository
 from xianyu_hunter.infra.db_models import init_db

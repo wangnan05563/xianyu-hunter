@@ -20,7 +20,7 @@
 | `frontend/src/pages/Dashboard/index.tsx` | 改 | `EventSource` → 带前缀 |
 | `frontend/src/pages/Orders/Orders.tsx` | 改 | `EventSource` → 带前缀 |
 | `frontend/vite.config.ts` | 改 | PWA SW `navigateFallbackDenylist` + `runtimeCaching.urlPattern` 覆盖 `/xianyu/api/` |
-| `src/xianyu_hunter/web/app.py` | 改 | 以 `prefix="/xianyu"` 重复挂载全部 API 路由；登录浮层 `fetch` 按 pathname 推导前缀 |
+| `backend/xianyu_hunter/web/app.py` | 改 | 以 `prefix="/xianyu"` 重复挂载全部 API 路由；登录浮层 `fetch` 按 pathname 推导前缀 |
 
 ---
 

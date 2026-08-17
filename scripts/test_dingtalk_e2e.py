@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 # 确保能 import xianyu_hunter
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
 from xianyu_hunter.domain.events import Event, EventType
 from xianyu_hunter.infra.yaml_config import get_config

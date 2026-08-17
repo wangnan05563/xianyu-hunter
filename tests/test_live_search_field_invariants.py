@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-SEARCH_PY = REPO / "src" / "xianyu_hunter" / "modules" / "collector" / "_search.py"
+SEARCH_PY = REPO / "backend" / "xianyu_hunter" / "modules" / "collector" / "_search.py"
 
 
 # 字段名清单：item 行和 seller 行都必须具备（值允许为空）

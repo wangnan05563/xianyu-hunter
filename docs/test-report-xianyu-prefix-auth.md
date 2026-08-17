@@ -124,8 +124,8 @@
 
 本次改动（前缀修复 + P1/P2/P3）均已完成并验证：
 
-- **P1 路径归一化** — `middleware/auth.py`：[文件链接](file:///D:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/middleware/auth.py) ✅ 13 运行时用例 + 12 精准单测通过
-- **P2 路由去重** — `app.py`：[文件链接](file:///D:/code/otherProjects/17_xianyu/src/xianyu_hunter/web/app.py) ✅ 单表双挂载、无路由遗漏
+- **P1 路径归一化** — `middleware/auth.py`：[文件链接](file:///D:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/middleware/auth.py) ✅ 13 运行时用例 + 12 精准单测通过
+- **P2 路由去重** — `app.py`：[文件链接](file:///D:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/app.py) ✅ 单表双挂载、无路由遗漏
 - **P3 凭证** — `task.ts`：[文件链接](file:///D:/code/otherProjects/17_xianyu/frontend/src/api/task.ts) ✅ `credentials:'include'`
 - **前端前缀** — `apiBase.ts` / `client.ts`：[链接](file:///D:/code/otherProjects/17_xianyu/frontend/src/utils/apiBase.ts) ✅ 构建产物核对通过
 - **PWA** — `vite.config.ts`：[链接](file:///D:/code/otherProjects/17_xianyu/frontend/vite.config.ts) ✅ `sw.js` 含 `/xianyu/api/`

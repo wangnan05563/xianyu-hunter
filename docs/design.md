@@ -664,7 +664,7 @@ async def ws_logs(ws: WebSocket):
         event_bus.unsubscribe_log(queue)
 
 # 静态资源（Vue 编译产物）
-app.mount("/", StaticFiles(directory="src/xianyu_hunter/web/static", html=True))
+app.mount("/", StaticFiles(directory="backend/xianyu_hunter/web/static", html=True))
 ```
 
 **REST API 端点**：

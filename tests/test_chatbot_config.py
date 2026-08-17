@@ -90,7 +90,7 @@ class TestChatbotKBConfig:
     def test_doc_paths_default(self):
         cfg = ChatbotKBConfig()
         assert "docs/" in cfg.doc_paths
-        assert "src/xianyu_hunter/" in cfg.doc_paths
+        assert "backend/xianyu_hunter/" in cfg.doc_paths
 
 
 class TestChatbotFAQConfig:

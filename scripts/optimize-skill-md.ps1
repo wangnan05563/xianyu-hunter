@@ -80,7 +80,7 @@ $configSection = @"
 $content = Replace-Section -content $content -startMarker "## 配置驱动" -endMarker "## 审查模式" -replacement $configSection
 
 # === 3. 精简简介（L15）===
-$content = $content -replace '对闲鱼猎人项目后端代码（`src/xianyu_hunter/` 下的 Python/FastAPI/SQLAlchemy 文件）进行全面的代码评审及逻辑审查。评审涵、\*36 个维、\*，包括[^。]*等、', '对闲鱼猎人项目后端代码（`src/xianyu_hunter/` 下的 Python/FastAPI/SQLAlchemy 文件）进行全面的代码评审及逻辑审查，覆盖 36 个维度（分层架构/异步并发/数据库规约/安全/性能/错误处理/日志规约/配置管理/智能客服/Git 规范/跨字段一致性/LLM 治理/多用户隔离/跨层契约与测试同步等）。详细规则分布在本文件与 `references/` 下的 16 个主题文件中，按需加载。'
+$content = $content -replace '对闲鱼猎人项目后端代码（`backend/xianyu_hunter/` 下的 Python/FastAPI/SQLAlchemy 文件）进行全面的代码评审及逻辑审查。评审涵、\*36 个维、\*，包括[^。]*等、', '对闲鱼猎人项目后端代码（`backend/xianyu_hunter/` 下的 Python/FastAPI/SQLAlchemy 文件）进行全面的代码评审及逻辑审查，覆盖 36 个维度（分层架构/异步并发/数据库规约/安全/性能/错误处理/日志规约/配置管理/智能客服/Git 规范/跨字段一致性/LLM 治理/多用户隔离/跨层契约与测试同步等）。详细规则分布在本文件与 `references/` 下的 16 个主题文件中，按需加载。'
 
 # 写回文件
 [System.IO.File]::WriteAllText($FilePath, $content, [System.Text.Encoding]::UTF8)

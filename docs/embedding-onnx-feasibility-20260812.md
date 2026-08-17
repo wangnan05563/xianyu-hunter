@@ -12,7 +12,7 @@
 | 项 | 值 |
 |---|---|
 | 模型 | `BAAI/bge-small-zh-v1.5`（512 维，~95MB，已缓存在本地 HF cache） |
-| 当前后端 | `src/xianyu_hunter/modules/chatbot/local_embedding.py::LocalEmbeddingBackend`（sentence-transformers，CPU） |
+| 当前后端 | `backend/xianyu_hunter/modules/chatbot/local_embedding.py::LocalEmbeddingBackend`（sentence-transformers，CPU） |
 | 项目 venv 已装 | `sentence_transformers` / `transformers` / `torch` / `onnxruntime` / `numpy` |
 | 验证新增安装 | `onnx`（仅用于导出，运行期不需要） |
 | 模型流水线（来自 `modules.json` + `1_Pooling/config.json`） | `Transformer → Pooling(CLS token) → Normalize(L2)` |
@@ -144,10 +144,10 @@ tok.post_processor = processors.TemplateProcessing(
 
 | 文件 | 变更 | 说明 |
 |---|---|---|
-| `src/xianyu_hunter/modules/chatbot/onnx_embedding.py` | 新增 | `OnnxEmbeddingBackend`：与 `LocalEmbeddingBackend` 同接口（`embed`/`embed_batch`/`dimensions`），无 torch 依赖（onnxruntime/tokenizers/numpy 均延迟导入）。 |
+| `backend/xianyu_hunter/modules/chatbot/onnx_embedding.py` | 新增 | `OnnxEmbeddingBackend`：与 `LocalEmbeddingBackend` 同接口（`embed`/`embed_batch`/`dimensions`），无 torch 依赖（onnxruntime/tokenizers/numpy 均延迟导入）。 |
 | `scripts/export_embedding_onnx.py` | 新增 | 构建期导出脚本：生成 `bge_small_zh.onnx`(90.5MB) + `tokenizer.json` + `meta.json`；优先 sentence-transformers，缺失时回退 transformers。 |
-| `src/xianyu_hunter/config.py` | 修改 | 新增 `embedding_engine: str = "st"`（"st"=sentence-transformers / "onnx"=ONNX Runtime）。 |
-| `src/xianyu_hunter/modules/chatbot/embedding_service.py` | 修改 | `_get_local_backend` 按 `embedding_engine` 选择后端；首选引擎不可用时回退另一引擎（构建/运行配置不匹配也不崩）。 |
+| `backend/xianyu_hunter/config.py` | 修改 | 新增 `embedding_engine: str = "st"`（"st"=sentence-transformers / "onnx"=ONNX Runtime）。 |
+| `backend/xianyu_hunter/modules/chatbot/embedding_service.py` | 修改 | `_get_local_backend` 按 `embedding_engine` 选择后端；首选引擎不可用时回退另一引擎（构建/运行配置不匹配也不崩）。 |
 | `xianyu-hunter.spec` | 修改 | 读取 `XH_EMBEDDING_ENGINE`：`onnx` 模式 exclude `torch`/`sentence_transformers`/`transformers`（保留 `tokenizers`），不收集 `sentence_transformers` 子模块。 |
 | `scripts/build-exe.ps1` | 修改 | 新增 `-EmbeddingEngine` 参数（默认 `st`）；onnx 模式跳过 `sync-sentence-transformers` 与重模型下载，改为复制 `resources/embedding` 工件。 |
 | `tests/test_embedding_backend_equivalence.py` | 新增 | 等价性回归：逐句余弦 > 0.999、top-1 一致、维度=512、分词器词表完整、后端选择接线。工件缺失时整体 skip。 |
@@ -157,7 +157,7 @@ tok.post_processor = processors.TemplateProcessing(
 ```powershell
 # 1) 生成 ONNX + tokenizer 工件（需 torch，构建机已有完整依赖）
 python scripts/export_embedding_onnx.py
-#    -> src/xianyu_hunter/resources/embedding/{bge_small_zh.onnx, tokenizer.json, meta.json}
+#    -> backend/xianyu_hunter/resources/embedding/{bge_small_zh.onnx, tokenizer.json, meta.json}
 
 # 2) 打包（排除 torch，约 -320MB）
 powershell -File scripts/build-exe.ps1 -EmbeddingEngine onnx
@@ -200,7 +200,7 @@ powershell -File scripts/build-exe.ps1 -EmbeddingEngine onnx
 
 ### 8.5 工件与提交说明
 
-- `src/xianyu_hunter/resources/embedding/` 的**生成物**已加入 `.gitignore`（不入库）：
+- `backend/xianyu_hunter/resources/embedding/` 的**生成物**已加入 `.gitignore`（不入库）：
   `*.onnx`（fp32 90.5MB / int8 ~55MB）、`tokenizer.json`、`meta.json` 被忽略；
   目录本身不忽略，由 `.gitkeep`（含用法说明）占位入库，clone 后结构可见但约 150MB 二进制不进仓库。
   工件由 `export_embedding_onnx.py`（fp32）与 `quantize_embedding_onnx.py`（int8）在开发/构建期生成；

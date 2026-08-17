@@ -23,9 +23,9 @@
 - 诊断日志习惯落 `build_runN.log`，便于回溯；记得 `node_modules` 应被 gitignore（`.vite` 在 `node_modules/.vite` 下，依赖此保证不入库）。
 
 ## 前端部署约定（关键）
-- **前端 SPA 部署在磁盘 `dist/xianyu-hunter/static/spa/`，exe 从磁盘加载（非嵌入、非 _MEIPASS）**；入口 chunk 由 `index.html` 的 `<script src="/xianyu/assets/index-<hash>.js">` 指定。
-- 刷新部署的前端而**无需整包 PyInstaller 重建**：把 `src/xianyu_hunter/web/static/spa/` 整份复制到 `dist/xianyu-hunter/static/spa/`。删旧目录须用 `[System.IO.Directory]::Delete($p,$true)`（.NET 直接调用）绕过沙箱 safe-delete 守卫；再 `shutil.copytree(src, dist)`。
-- `frontend/node_modules` 现已就绪（2026-08-12 确认），可直接 `npm run build`（`tsc -b && vite build`）全量构建；产物直接落到 `src/xianyu_hunter/web/static/spa/`，再同步 dist 即完成部署对齐。历史上"node_modules 缺失、build 不可靠"的约束已作废（若未来再次缺失，再回退到"拷 src 产物到 dist"手段）。
+- **前端 SPA 部署在磁盘 `release/xianyu-hunter/static/spa/`，exe 从磁盘加载（非嵌入、非 _MEIPASS）**；入口 chunk 由 `index.html` 的 `<script src="/xianyu/assets/index-<hash>.js">` 指定。
+- 刷新部署的前端而**无需整包 PyInstaller 重建**：先 `npm run build`（产物落 `release/spa/`），再由 `scripts/build-exe.ps1` 的"5.1 复制 SPA"步骤把 `release/spa/` 整份复制到 `release/xianyu-hunter/static/spa/`（exe 同级）。删旧目录须用 `[System.IO.Directory]::Delete($p,$true)`（.NET 直接调用）绕过沙箱 safe-delete 守卫。
+- `frontend/node_modules` 现已就绪（2026-08-12 确认），可直接 `npm run build`（`tsc -b && vite build`）全量构建；产物直接落到 `release/spa/`，再经 `scripts/build-exe.ps1` 同步到 `release/xianyu-hunter/static/spa/` 即完成部署对齐。历史上"node_modules 缺失、build 不可靠"的约束已作废。
 - 部署对齐后仍需用户在浏览器**清 PWA Service Worker 缓存 / 硬刷新**一次，否则旧 SW 会短暂继续下发旧入口 chunk。
 
 ## SPA 基路径 `/xianyu`（路由与入口铁律）
@@ -40,3 +40,12 @@
 - 切换账户（桌面 `AccountSwitcher.tsx`）用 `location.replace(import.meta.env.BASE_URL)`（= `/xianyu/`）→ 正确；从该入口切换不会白板。
 - 自动打开入口统一在：`scripts/启动服务.bat`（line 147 `start ""`）、`scripts/launcher.py`（自动开 + 托盘 `on_open` + banner）、`scripts/automation.ps1`、`scripts/setup-env.ps1`、后端 `web` 命令日志（`__main__.py`）。曾错误地写成 `/app/`，已全部改为 `/xianyu/`。
 - 排查白板：先看地址栏是不是 `/xianyu` 开头；若是 `/` 或 `/app/` 就是入口错。旧 PWA Service Worker 也可能短暂下发旧入口 chunk，需清 SW/硬刷新一次。
+
+## 目录边界约定（assets / release）
+
+六分类（frontend / backend / script / release / log / docs）之外的"额外目录"边界，2026-08-17 评估确认：
+
+- **`assets/`（根）**：仅 `xianyu-hunter.ico`，是**桌面 exe + Inno Setup 安装包品牌图标**，被 `xianyu-hunter.spec:140`、`installer.iss:20`、`scripts/build-exe.ps1:614` 三方在**打包后端时**引用。属*打包资源*，**不是前端资源**（前端资源在 `frontend/public`，构建后落入 SPA `assets/`）。**结论：保留根 `assets/`，不挪 `frontend/`**；若想更自解释可改名 `branding/`/`resources/`，但仍属打包资源。
+- **`release/` 统一生成物根**：PyInstaller 的 distpath 与 workpath 现已统一到 `release/`——`release/` = **distpath（最终出货**，`release/xianyu-hunter/xianyu-hunter.exe` 才是真正发布物）；`release/.work/` = **workpath（中间产物** `.toc`/`.pyz`/`.pkg`/`.xref`/含中间态 exe）。spec 通过 `scripts/build-exe.ps1` 传 `--distpath release --workpath release/.work` 指定。**结论：distpath 与 workpath 都集中在 `release/`，中间产物放 `release/.work/` 子目录避免污染出货目录。**
+- 二者均已被 `.gitignore`（第 21–22 行）忽略，本就是生成物；`release/.work/` 下旧中间物可安全删除（走 `.NET` 直接调用绕过 safe-delete），下次 `pyinstaller` 自动重建。`build/` 与 `dist/` 历史目录已废弃，本次重构统一为 `release/`。
+- 顺带：根 `scripts/` 维持复数（用户仅授权 `src→backend`，未授权 `scripts→script`），符合构建契约无需改动。

@@ -1,6 +1,6 @@
 """回归测试：SearchMixin._unroute_search_api 的 TargetClosedError 修复
 
-修复点回顾（src/xianyu_hunter/modules/collector/_search.py）：
+修复点回顾（backend/xianyu_hunter/modules/collector/_search.py）：
   (1) 页面/上下文/浏览器已关闭时直接跳过 unroute —— 避免 wait_for 超时与
       孤儿 future；
   (2) 存活态用 asyncio.shield 包裹 unroute，wait_for 超时只取消外层等待、

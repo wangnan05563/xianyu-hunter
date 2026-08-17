@@ -61,19 +61,19 @@ tray = [
 xianyu-hunter = "xianyu_hunter.__main__:app"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["backend"]
 
 [tool.setuptools.package-data]
 xianyu_hunter = ["web/static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["backend"]
 asyncio_mode = "auto"
-addopts = "--cov=src/xianyu_hunter --cov-report=xml:coverage.xml --cov-report=term-missing"
+addopts = "--cov=backend/xianyu_hunter --cov-report=xml:coverage.xml --cov-report=term-missing"
 
 [tool.coverage.run]
-source = ["src/xianyu_hunter"]
+source = ["backend/xianyu_hunter"]
 omit = ["*/test_*", "*/__pycache__/*"]
 
 [tool.coverage.report]

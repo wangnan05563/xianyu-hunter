@@ -13,7 +13,7 @@
 ### Task 1: Price Range Scoring Core
 
 **Files:**
-- Modify: `src/xianyu_hunter/modules/evaluator.py`
+- Modify: `backend/xianyu_hunter/modules/evaluator.py`
 - Test: `tests/test_evaluator.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -39,10 +39,10 @@ Expected: PASS.
 ### Task 2: Wire Task Price Context
 
 **Files:**
-- Modify: `src/xianyu_hunter/modules/worker.py`
-- Modify: `src/xianyu_hunter/modules/collection_service.py`
-- Modify: `src/xianyu_hunter/web/routes/api_evaluations.py`
-- Modify: `src/xianyu_hunter/web/routes/api_task_links.py`
+- Modify: `backend/xianyu_hunter/modules/worker.py`
+- Modify: `backend/xianyu_hunter/modules/collection_service.py`
+- Modify: `backend/xianyu_hunter/web/routes/api_evaluations.py`
+- Modify: `backend/xianyu_hunter/web/routes/api_task_links.py`
 - Test: `tests/test_evaluator.py`
 
 - [ ] **Step 1: Add helper and tests**
@@ -68,8 +68,8 @@ Expected: PASS.
 ### Task 3: Consistency Cleanup and Verification
 
 **Files:**
-- Modify: `src/xianyu_hunter/modules/evaluator.py`
-- Modify: `src/xianyu_hunter/infra/yaml_config.py`
+- Modify: `backend/xianyu_hunter/modules/evaluator.py`
+- Modify: `backend/xianyu_hunter/infra/yaml_config.py`
 - Test: `tests/test_evaluator.py`
 
 - [ ] **Step 1: Fix credit threshold fallback**
@@ -84,6 +84,6 @@ Expected: PASS.
 
 - [ ] **Step 3: Review diff**
 
-Run: `git diff -- src/xianyu_hunter/modules/evaluator.py src/xianyu_hunter/infra/yaml_config.py src/xianyu_hunter/modules/worker.py src/xianyu_hunter/modules/collection_service.py src/xianyu_hunter/web/routes/api_evaluations.py src/xianyu_hunter/web/routes/api_task_links.py tests/test_evaluator.py`
+Run: `git diff -- backend/xianyu_hunter/modules/evaluator.py backend/xianyu_hunter/infra/yaml_config.py backend/xianyu_hunter/modules/worker.py backend/xianyu_hunter/modules/collection_service.py backend/xianyu_hunter/web/routes/api_evaluations.py backend/xianyu_hunter/web/routes/api_task_links.py tests/test_evaluator.py`
 
 Expected: Only scoped evaluator, wiring, and tests changes.

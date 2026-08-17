@@ -3,7 +3,7 @@
 # XianyuHunter PyInstaller spec（onedir 模式）
 #
 # 入口：scripts/launcher.py（启动 uvicorn + 自动开浏览器 + 单实例锁的打包入口）
-# pathex：scripts（入口与子进程脚本所在目录）+ src（xianyu_hunter 包根）
+# pathex：scripts（入口与子进程脚本所在目录）+ backend（xianyu_hunter 包根）
 #
 # 关键 hiddenimports：
 #   (a) Repository 动态 Mixin（repository_base.py 用 importlib.import_module 按字符串加载
@@ -24,7 +24,7 @@
 #   模块发现 + 各包 hook 自动收集（含约 5600 个包内 DATA 文件），无需在此显式列出。
 #
 # 运行时只读资源（static / scripts / models / resources / playwright_browsers）由 build-exe.ps1
-#   的"复制外置资源"步骤放入 dist/xianyu-hunter/，本 spec 不再重复打包，避免路径错乱。
+#   的"复制外置资源"步骤放入 release/xianyu-hunter/，本 spec 不再重复打包，避免路径错乱。
 #
 # 配置 config/*.yaml 在冻结模式从 %APPDATA%/XianyuHunter/config 读取（运行时目录，
 #   非打包内），本 spec 不打包配置。
@@ -105,7 +105,7 @@ else:
 
 a = Analysis(
     [os.path.join(repo_root, 'scripts', 'launcher.py')],
-    pathex=[os.path.join(repo_root, 'scripts'), os.path.join(repo_root, 'src')],
+    pathex=[os.path.join(repo_root, 'scripts'), os.path.join(repo_root, 'backend')],
     binaries=[],
     datas=[],
     hiddenimports=hiddenimports,

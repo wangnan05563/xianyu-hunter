@@ -77,7 +77,7 @@ def optimize_backend_round2(file_path: str) -> None:
 
 ### 场景2：指定文件审查
 ```
-用户：审查 src/xianyu_hunter/web/routes/api_accounts.py
+用户：审查 backend/xianyu_hunter/web/routes/api_accounts.py
 技能：读取指定文件 → 加载相关 references（architecture/security/sqlalchemy）→ 输出问题清单
 ```
 

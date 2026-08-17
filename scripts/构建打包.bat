@@ -16,7 +16,7 @@ echo   5. PyInstaller package (dir mode)
 echo   6. Copy resources (SPA + Chromium + model)
 echo   7. Build installer (Inno Setup, optional)
 echo.
-echo Output: dist\xianyu-hunter\xianyu-hunter.exe
+echo Output: release\xianyu-hunter\xianyu-hunter.exe
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build-exe.ps1" %*
@@ -33,12 +33,12 @@ echo.
 echo ============================================
 echo   Build complete!
 echo ============================================
-echo   Dist dir:  dist\xianyu-hunter\
-echo   EXE path:  dist\xianyu-hunter\xianyu-hunter.exe
+echo   Dist dir:  release\xianyu-hunter\
+echo   EXE path:  release\xianyu-hunter\xianyu-hunter.exe
 echo.
 echo   Next:
-echo   - Run: dist\xianyu-hunter\xianyu-hunter.exe
-echo   - Installer: dist\XianyuHunter-Setup-v*.exe (needs Inno Setup)
+echo   - Run: release\xianyu-hunter\xianyu-hunter.exe
+echo   - Installer: release\XianyuHunter-Setup-v*.exe (needs Inno Setup)
 echo ============================================
 echo.
 pause
