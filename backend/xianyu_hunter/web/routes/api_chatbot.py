@@ -71,6 +71,9 @@ class ChatRequest(BaseModel):
         max_length=4,
         description="图片 base64 data URL 列表（最多 4 张），需配置 vision_model 才能解析",
     )
+    # 模型覆盖：用户在知识库问答界面下拉选择的模型，覆盖 config.llm.model 仅对本次
+    # 对话生效（请求级），避免修改全局热更新配置引发跨会话竞态。None 用 config 默认值。
+    model: str | None = Field(None, description="覆盖本次对话使用的模型；None 用 config.llm.model")
 
     @field_validator("message")
     @classmethod
@@ -138,6 +141,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 message=req.message,
                 enable_tools=req.enable_tools,
                 images=req.images,
+                model=req.model,
             ):
                 # 每个事件前检查断开，避免向已关闭连接写数据
                 if await request.is_disconnected():

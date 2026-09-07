@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Col, Row, Typography, Tag, Input, DatePicker, InputNumber, Button, Space, Spin, Empty, message, theme } from 'antd'
+import { Card, Col, Row, Typography, Tag, Input, DatePicker, InputNumber, Space, Spin, Empty, message, theme } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { DownloadOutlined, DatabaseOutlined } from '@ant-design/icons'
 import type { Dayjs } from 'dayjs'
 import { exportApi, type ExportDataset, type ExportDatasetInfo, type ExportParams } from '../../api'
@@ -181,14 +182,15 @@ export default function Export() {
                     style={{ width: 100 }}
                   />
                 </Space>
-                <Button
+                <TipButton
+                  tip={`导出 ${display.title} 为 CSV 文件`}
                   type="primary"
                   size="small"
                   icon={<DownloadOutlined />}
                   onClick={() => handleExport(ds.key)}
                 >
                   导出 CSV
-                </Button>
+                </TipButton>
               </Space>
             </Space>
           </Card>

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { Card, Space, Select, Button, Tooltip, Spin, Empty, Statistic, Row, Col, Tag, Alert, Typography, theme } from 'antd'
+import { Card, Space, Select, Tooltip, Spin, Empty, Statistic, Row, Col, Tag, Alert, Typography, theme } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { ReloadOutlined } from '@ant-design/icons'
 import { RANGE_OPTIONS } from '../constants'
 import type { Task } from '../../../api/types'
@@ -151,9 +152,7 @@ export default function SoldRangeCard({
             onChange={onRangeDaysChange}
             options={RANGE_OPTIONS.filter((o) => o.value !== 0)}
           />
-          <Tooltip title="刷新">
-            <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh} loading={loading} />
-          </Tooltip>
+          <TipButton size="small" icon={<ReloadOutlined />} onClick={onRefresh} loading={loading} tip="刷新捡漏价格参考数据" />
         </Space>
       }
     >

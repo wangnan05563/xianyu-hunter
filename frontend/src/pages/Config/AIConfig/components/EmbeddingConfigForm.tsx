@@ -1,4 +1,5 @@
-import { Card, Input, Button, Space, Row, Col, Tag, InputNumber, Typography, Alert } from 'antd'
+import { Card, Input, Space, Row, Col, Tag, InputNumber, Typography, Alert } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import {
   EyeInvisibleOutlined,
   EyeOutlined,
@@ -117,14 +118,15 @@ export default function EmbeddingConfigForm({
               style={{ maxWidth: 600 }}
               suffix={
                 <Space size="small">
-                  <Button
+                  <TipButton
+                    tip="切换显示或隐藏 API Key 明文"
                     type="text"
                     size="small"
                     icon={showApiKey ? <EyeInvisibleOutlined /> : <EyeOutlined />}
                     onClick={onToggleShowApiKey}
                   >
                     {showApiKey ? '隐藏' : '显示'}
-                  </Button>
+                  </TipButton>
                   {embeddingApiKeyUrl && (
                     <a href={embeddingApiKeyUrl} target="_blank" rel="noopener noreferrer">
                       获取
@@ -205,14 +207,15 @@ export default function EmbeddingConfigForm({
       {/* 连接测试按钮 + 结果展示 */}
       <div style={{ marginBottom: 24 }}>
         <Space align="center">
-          <Button
+          <TipButton
+            tip="测试 Embedding 连接是否可用"
             icon={<ApiOutlined />}
             loading={testing}
             onClick={onTestConnection}
             disabled={!config.ai_enabled}
           >
             {testing ? '测试中…（本地首次加载模型较慢）' : '🔗 测试 Embedding 连接'}
-          </Button>
+          </TipButton>
           {testResult && (
             <Text style={{ color: testResult.success ? '#52c41a' : '#ff4d4f' }}>
               {testResult.success ? <CheckCircleOutlined /> : <CloseCircleOutlined />} {testResult.text}

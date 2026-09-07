@@ -8,11 +8,12 @@
 设计要点（详见 docs/chatbot-详细设计.md §5.12、docs/chatbot-概要设计.md §9.1.4）：
 - 参考 batch_refresh_scheduler.py 的成熟模式
 - max_instances=1 防止任务堆积，coalesce=True 错过多次触发仅执行一次
-- 600 秒超时保护，避免 BackgroundScheduler 线程被永久阻塞
+- 刷新超时保护（默认 1800s，可配置 kb.refresh_timeout_sec），避免 BackgroundScheduler 线程被永久阻塞
 """
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -24,10 +25,6 @@ from xianyu_hunter.domain.events import Event, EventType
 if TYPE_CHECKING:
     from xianyu_hunter.infra.yaml_config import ChatbotKBConfig
     from xianyu_hunter.modules.chatbot.kb_manager import KBManager
-
-
-# 单次刷新任务的超时保护（秒），防止 BackgroundScheduler 线程被永久阻塞
-_REFRESH_TIMEOUT_SEC = 600
 
 
 class KBRefreshScheduler:
@@ -92,11 +89,18 @@ class KBRefreshScheduler:
             return
         try:
             future = asyncio.run_coroutine_threadsafe(self._refresh_job(), self._loop)
-            future.result(timeout=_REFRESH_TIMEOUT_SEC)
-        except TimeoutError as e:
-            # future.result 超时：任务仍在主循环中运行，但调度线程不再等待
-            logger.error(f"知识库定时更新超时（>{_REFRESH_TIMEOUT_SEC}s）: {e}")
-            self._publish_failure_event(e)
+            start = time.monotonic()
+            timeout = self._config.refresh_timeout_sec
+            future.result(timeout=timeout)
+            logger.info(f"知识库更新完成，耗时 {time.monotonic() - start:.1f}s")
+        except TimeoutError:
+            # future.result 超时：任务仍在主循环后台运行，仅调度线程不再等待。
+            # 全量重建（doc_paths 含 backend 源码时）可能远超旧默认 600s，超时≠失败，
+            # 最终结果以 kb_versions 版本状态为准，此处不发布失败事件避免误报。
+            logger.warning(
+                f"知识库定时更新超过 {timeout}s 仍在后台运行"
+                f"（已等待 {time.monotonic() - start:.1f}s），最终状态见知识库版本列表"
+            )
         except Exception as e:
             logger.exception("知识库定时更新失败")
             self._publish_failure_event(e)
@@ -107,7 +111,8 @@ class KBRefreshScheduler:
         - 调用 kb_manager.incremental_update()
         - 无变更（返回 None）：记录 info 日志
         - 有变更（返回 KBVersion）：发布 CHATBOT_KB_UPDATED 事件
-        - 异常时记录 error 日志（失败事件由 _refresh_job_sync 发布）
+        - 异常时记录 error 日志并发布 CHATBOT_KB_FAILED 事件（作业异常被本方法吞掉，
+          不会到达 _refresh_job_sync，失败事件只能在本地发布）
         """
         try:
             version = await self._kb_manager.incremental_update()
@@ -126,10 +131,11 @@ class KBRefreshScheduler:
                         "chunk_count": version.chunk_count,
                     },
                 )
-        except Exception:
-            # 异常仅记录日志，失败事件由 _refresh_job_sync 的 except 分支发布
-            # 避免 _refresh_job 内异常被 _refresh_job_sync 重复捕获导致双重发布
+        except Exception as e:
+            # 作业异常会被本方法吞掉，future.result() 不会把异常抛给 _refresh_job_sync，
+            # 因此失败事件必须在此处发布——否则后台失败时 CHATBOT_KB_FAILED 永不发出。
             logger.exception("知识库定时更新异常")
+            self._publish_failure_event(e)
 
     def _publish_failure_event(self, error: Exception) -> None:
         """发布 CHATBOT_KB_FAILED 事件（同步方法，用 run_coroutine_threadsafe 提交）

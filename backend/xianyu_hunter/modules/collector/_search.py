@@ -923,6 +923,11 @@ class SearchMixin:
         包含卡片数量评估、首次为 0 时等待渲染后重试、查找超时保护。
         选择器必须与 selectors.py 的 search_card_candidates 和 _BATCH_PARSE_SCRIPT 保持一致。
         """
+        # 会话已知失效时直接跳过 DOM 回退：页面已被重定向到首页/登录页，
+        # 继续查找卡片只会空等 5s+2s+5s 超时（历史日志中该路径 30s 超时高发）
+        if getattr(self, "last_session_invalid", False):
+            logger.debug("DOM 回退: 会话已知失效，跳过查找卡片")
+            return []
         # 检查页面是否被重定向到非搜索页面（RGV587 可能触发验证页面跳转）
         try:
             current_url = page.url
@@ -1469,7 +1474,8 @@ class SearchMixin:
             unroute_task.add_done_callback(
                 lambda t: t.exception() if not t.cancelled() else None
             )
-            logger.warning("page.unroute 超时（后台继续清理，不影响 DOM 解析）")
+            # 不影响 DOM 解析且后台会继续清理，属可预期的并发关闭场景，降级为 DEBUG 避免刷屏
+            logger.debug("page.unroute 超时（后台继续清理，不影响 DOM 解析）")
         except Exception as e:  # TargetClosedError / Error 等并发关闭兜底
             # 即使状态探测通过，unroute 时页面又被并发关闭，直接忽略
             logger.debug("page.unroute 异常(忽略): {}", str(e)[:80])

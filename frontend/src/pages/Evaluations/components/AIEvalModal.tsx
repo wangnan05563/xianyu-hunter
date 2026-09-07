@@ -1,4 +1,5 @@
-import { Modal, Spin, Row, Col, Statistic, Tag, Alert, Collapse, Empty, Button } from 'antd'
+import { Modal, Spin, Row, Col, Statistic, Tag, Alert, Collapse, Empty } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import type { AIConditionResult } from '../../../api'
 
 interface AIEvalModalProps {
@@ -166,7 +167,7 @@ export function AIEvalModal({ open, loading, result, itemId, onCancel }: AIEvalM
       title={`AI 成色评估 - ${itemId}`}
       open={open}
       onCancel={onCancel}
-      footer={<Button onClick={onCancel}>关闭</Button>}
+      footer={<TipButton onClick={onCancel} tip="关闭 AI 评估弹窗">关闭</TipButton>}
       width={560}
     >
       <Spin spinning={loading}>

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Card,
   Switch,
-  Button,
   Space,
   message,
   Row,
@@ -14,6 +13,7 @@ import {
   Segmented,
 } from 'antd'
 import { SaveOutlined, UndoOutlined, BellOutlined } from '@ant-design/icons'
+import { TipButton } from '@/components/TipButton'
 import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import dayjs from 'dayjs'
@@ -223,12 +223,12 @@ export default function NotifierChannels() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton tip="放弃未保存的修改并重置" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置
-          </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={loading}>
+          </TipButton>
+          <TipButton tip="保存通知渠道配置" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={loading}>
             保存
-          </Button>
+          </TipButton>
         </Space>
       </div>
 

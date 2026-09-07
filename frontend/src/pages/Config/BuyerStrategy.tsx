@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   Card,
   InputNumber,
-  Button,
   Space,
   message,
   Tag,
@@ -12,6 +11,7 @@ import {
   Col,
 } from 'antd'
 import { SaveOutlined, UndoOutlined, BellOutlined, AimOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons'
+import { TipButton } from '@/components/TipButton'
 import { useConfigStore } from '../../stores/configStore'
 import type { DiffChange } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
@@ -127,12 +127,12 @@ export default function BuyerStrategy() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Text type="secondary">这些参数控制 auto 模式下的抢单行为。notify / confirm 模式不受影响。</Text>
         <Space>
-          <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton tip="放弃未保存的修改并重置" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置
-          </Button>
-          <Button type="primary" style={{ backgroundColor: '#FF6200' }} icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
+          </TipButton>
+          <TipButton tip="保存抢单策略配置" type="primary" style={{ backgroundColor: '#FF6200' }} icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             保存
-          </Button>
+          </TipButton>
         </Space>
       </div>
 

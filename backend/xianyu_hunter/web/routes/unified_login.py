@@ -305,13 +305,7 @@ def _current_user_id() -> str:
 
 
 async def _refresh_worker_m5tk_after_inject(user_id: str) -> None:
-    """Worker 注入 cookie 后访问首页刷新 _m_h5_tk 并回写 JSON
-
-    仅在 collection_service 等采集入口之外、登录注入后主动做一次，
-    因为登录子进程导出的 token 可能已过期（尤其经历 30s 卡顿重试时）。
-    与 api_anticrawl/_try_refresh_m5tk_from_browser 互补：
-    那里是"JSON 过期→从浏览器内存读"，这里是"浏览器内存也可能只有旧 token→先访问首页刷新"。
-    """
+    """Worker 注入 cookie 后访问首页刷新 _m_h5_tk 并回写 JSON"""
     try:
         from xianyu_hunter.web.deps import get_container
         from xianyu_hunter.web.services.cookie_store import get_cookie_store
@@ -322,46 +316,62 @@ async def _refresh_worker_m5tk_after_inject(user_id: str) -> None:
         if not browser:
             return
 
-        # 访问首页触发 MTOP token 刷新（与 browser_login 预热同源：首页才会刷新 _m_h5_tk）
-        page = None
-        try:
-            page = await browser.new_page()
-            await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=15000)
-            try:
-                await page.wait_for_load_state("networkidle", timeout=8000)
-            except Exception:
-                pass
-            await asyncio.sleep(2)
-        except Exception as e:
-            logger.debug("Worker 刷新 token：访问首页失败（不致命）: %s", e)
-        finally:
-            if page is not None:
-                try:
-                    await page.close()
-                except Exception:
-                    pass
-
-        # 从刷新后的浏览器内存读取新 token 回写 JSON
-        try:
-            cookies = await browser.get_cookies()
-            updates: dict[str, str] = {}
-            for c in cookies:
-                name = c.get("name", "")
-                value = c.get("value", "")
-                if not value:
-                    continue
-                if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
-                    updates[name] = value
-            if updates:
-                store = get_cookie_store()
-                if store.update_cookie_values(updates, user_id=user_id):
-                    logger.info("Worker 刷新 token 成功：已回写 %s 到 JSON", sorted(updates))
-                else:
-                    logger.debug("Worker 刷新 token：JSON 无匹配 cookie，跳过回写")
-        except Exception as e:
-            logger.debug("Worker 刷新 token：读取/回写 cookie 失败（不致命）: %s", e)
+        await _visit_homepage(browser)
+        await _read_and_backfill_tokens(browser, user_id, get_cookie_store, is_m5tk_expired)
     except Exception as e:
         logger.debug("Worker 刷新 token 异常（不影响登录主流程）: %s", e)
+
+
+async def _visit_homepage(browser: Any) -> None:
+    """访问闲鱼首页触发 MTOP token 刷新
+
+    与 browser_login 预热同源：首页才会刷新 _m_h5_tk。
+    浏览器内存也可能只有旧 token，需要先访问首页刷新。
+    """
+    page = None
+    try:
+        page = await browser.new_page()
+        await page.goto("https://www.goofish.com/", wait_until="domcontentloaded", timeout=15000)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)
+    except Exception as e:
+        logger.debug("Worker 刷新 token：访问首页失败（不致命）: %s", e)
+    finally:
+        if page is not None:
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+
+async def _read_and_backfill_tokens(
+    browser: Any,
+    user_id: str,
+    get_cookie_store: Any,
+    is_m5tk_expired: Any,
+) -> None:
+    """从浏览器内存读取 token 回写 JSON"""
+    try:
+        cookies = await browser.get_cookies()
+        updates: dict[str, str] = {}
+        for c in cookies:
+            name = c.get("name", "")
+            value = c.get("value", "")
+            if not value:
+                continue
+            if (name == "_m_h5_tk" and not is_m5tk_expired(value)) or name == "_m_h5_tk_enc":
+                updates[name] = value
+        if updates:
+            store = get_cookie_store()
+            if store.update_cookie_values(updates, user_id=user_id):
+                logger.info("Worker 刷新 token 成功：已回写 %s 到 JSON", sorted(updates))
+            else:
+                logger.debug("Worker 刷新 token：JSON 无匹配 cookie，跳过回写")
+    except Exception as e:
+        logger.debug("Worker 刷新 token：读取/回写 cookie 失败（不致命）: %s", e)
 
 
 async def _ensure_session_cookies_injected() -> None:
@@ -456,8 +466,22 @@ def _finalize_multi_user_login() -> str | None:
         # 登录子进程写入 default 文件，这里读取它做用户识别
         data = store._read_json("default")
         if not data or not data.get("cookies"):
-            logger.warning("多用户接入失败：default 文件无 Cookie 数据")
-            return None
+            # 竞态兜底：登录子进程可能尚未把 Cookie 导出到 default 文件
+            # （子进程先写 success 状态、后异步导出），此时回退读取公共
+            # last_login_cookies.json（auth_helper/browser_login 的公共导出路径）。
+            # 不回退会导致多用户接入失败降级为单用户模式：xh_token 回落
+            # web_token，/me 识别不到真实 user_id，前端显示"未登录"/"默"字。
+            last_login = get_data_dir() / "last_login_cookies.json"
+            if last_login.exists():
+                try:
+                    raw = json.loads(last_login.read_text(encoding="utf-8"))
+                    if isinstance(raw, list) and raw:
+                        data = {"cookies": raw}
+                except (json.JSONDecodeError, OSError):
+                    data = None
+            if not data or not data.get("cookies"):
+                logger.warning("多用户接入失败：default 文件与 last_login 均无 Cookie 数据")
+                return None
 
         cookies = data["cookies"]
         mgr = get_user_manager()
@@ -1080,10 +1104,11 @@ def _restore_session_on_startup() -> dict | None:
             _session["multi_user_finalized"] = True
             _session["cookies_injected"] = True
 
-        logger.info("启动会话恢复成功: user_id=%s", user_id)
+        # 用 f-string 预格式化：loguru 拦截 stdlib 日志时 %-style 会原样输出，导致 %s 不被替换
+        logger.info(f"启动会话恢复成功: user_id={user_id}")
         return {"session_token": session_token, "user_id": user_id}
     except Exception as e:
-        logger.warning("启动会话恢复失败: %s", e, exc_info=True)
+        logger.warning(f"启动会话恢复失败: {e}", exc_info=True)
         return None
 
 
@@ -1103,3 +1128,5 @@ def restore_session() -> dict:
             "user_id": result["user_id"],
         }
     return {"ok": True, "restored": False, "session_token": None}
+
+

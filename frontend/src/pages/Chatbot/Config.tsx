@@ -7,6 +7,7 @@ import { PlusOutlined, DeleteOutlined, RollbackOutlined, HistoryOutlined } from 
 import { chatbotApi } from './api'
 import { KBStatusCard } from './components/KBStatusCard'
 import { VectorAdminPanel } from './components/VectorAdminPanel'
+import { TipButton } from '@/components/TipButton'
 import type { ChatbotConfig, KBStatus, KBVersion, FAQ, AuditLog } from './types'
 
 // 按点分路径更新嵌套字段（如 'rag.top_k'），返回新对象保持不可变
@@ -239,15 +240,16 @@ export default function ChatbotConfigPage() {
                     autoSize={{ minRows: 2, maxRows: 4 }}
                     style={{ marginTop: 8 }}
                   />
-                  <Button
+                  <TipButton
                     size="small"
                     type="link"
+                    tip="清空欢迎语，恢复默认文案"
                     disabled={!config.welcome_message}
                     onClick={() => updateConfig('welcome_message', '')}
                     style={{ paddingLeft: 0, marginTop: 4 }}
                   >
                     恢复默认
-                  </Button>
+                  </TipButton>
                 </div>
               </Space>
             ),
@@ -467,14 +469,15 @@ export default function ChatbotConfigPage() {
                     {
                       title: '操作', key: 'actions',
                       render: (_: unknown, record: KBVersion) => (
-                        <Button
+                        <TipButton
                           size="small"
+                          tip="回滚知识库至该版本"
                           icon={<RollbackOutlined />}
                           disabled={record.is_current}
                           onClick={() => handleRollback(record.id)}
                         >
                           回滚
-                        </Button>
+                        </TipButton>
                       ),
                     },
                   ]}
@@ -487,14 +490,15 @@ export default function ChatbotConfigPage() {
             label: 'FAQ 管理',
             children: (
               <>
-                <Button
+                <TipButton
+                  tip="新增一条 FAQ"
                   type="primary"
                   icon={<PlusOutlined />}
                   style={{ marginBottom: 16 }}
                   onClick={() => { setEditingFaq(null); setFaqModalOpen(true) }}
                 >
                   新增 FAQ
-                </Button>
+                </TipButton>
                 <Table
                   size="small"
                   rowKey="id"
@@ -509,8 +513,8 @@ export default function ChatbotConfigPage() {
                       title: '操作', key: 'actions',
                       render: (_: unknown, record: FAQ) => (
                         <Space>
-                          <Button size="small" onClick={() => { setEditingFaq(record); setFaqModalOpen(true) }}>编辑</Button>
-                          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => record.id && handleDeleteFaq(record.id)} />
+                          <TipButton size="small" tip="编辑该条 FAQ" onClick={() => { setEditingFaq(record); setFaqModalOpen(true) }}>编辑</TipButton>
+                          <TipButton size="small" tip="删除该条 FAQ" danger icon={<DeleteOutlined />} onClick={() => record.id && handleDeleteFaq(record.id)} />
                         </Space>
                       ),
                     },
@@ -578,7 +582,7 @@ export default function ChatbotConfigPage() {
             label: '审计日志',
             children: (
               <>
-                <Button style={{ marginBottom: 16 }} onClick={loadAuditLogs}>刷新</Button>
+                <TipButton tip="刷新审计日志列表" style={{ marginBottom: 16 }} onClick={loadAuditLogs}>刷新</TipButton>
                 <Table
                   size="small"
                   rowKey="id"

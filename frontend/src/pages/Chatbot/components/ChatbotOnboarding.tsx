@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Button, Empty, Skeleton } from 'antd'
+﻿import { useEffect, useState } from 'react'
+import { Empty, Skeleton } from 'antd'
 import {
   CloseOutlined,
   BookOutlined,
@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons'
 import { chatbotApi } from '../api'
 import type { FAQ, WelcomeInfo } from '../types'
+import { TipButton } from '@/components/TipButton'
 
 interface Props {
   readonly onQuestionClick: (q: string) => void  // 点击 FAQ 立即发送
@@ -88,11 +89,36 @@ export default function ChatbotOnboarding({ onQuestionClick, onDismiss }: Props)
     ? personalizeWelcome(welcome.message, false)
     : '有什么可以帮您的？'
 
+  // 常见问题区：提取为独立变量消除嵌套三元 (typescript:S3358)
+  const faqSection = loading ? (
+    <Skeleton active paragraph={{ rows: 2 }} title={false} />
+  ) : faqs.length === 0 ? (
+    <Empty
+      image={Empty.PRESENTED_IMAGE_SIMPLE}
+      description="暂无常见问题"
+      style={{ margin: '24px 0', color: 'var(--cb-text-tertiary)' }}
+    />
+  ) : (
+    <div className="cb-faq-grid">
+      {faqs.map((faq) => (
+        <button
+          type="button"
+          key={faq.id}
+          className="cb-faq-card"
+          onClick={() => onQuestionClick(faq.question)}
+        >
+          <span className="cb-faq-question">{faq.question}</span>
+          <ArrowRightOutlined className="cb-faq-arrow" />
+        </button>
+      ))}
+    </div>
+  )
   return (
     <div className="cb-onboarding">
-      <Button
+      <TipButton
         type="text"
         size="small"
+        tip="关闭引导卡片"
         icon={<CloseOutlined />}
         onClick={onDismiss}
         className="cb-onboarding-close"
@@ -120,29 +146,7 @@ export default function ChatbotOnboarding({ onQuestionClick, onDismiss }: Props)
         {/* 常见问题快捷入口 */}
         <div className="cb-onboarding-section">
           <div className="cb-onboarding-section-title">常见问题</div>
-          {loading ? (
-            <Skeleton active paragraph={{ rows: 2 }} title={false} />
-          ) : faqs.length === 0 ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="暂无常见问题"
-              style={{ margin: '24px 0', color: 'var(--cb-text-tertiary)' }}
-            />
-          ) : (
-            <div className="cb-faq-grid">
-              {faqs.map((faq) => (
-                <button
-                  type="button"
-                  key={faq.id}
-                  className="cb-faq-card"
-                  onClick={() => onQuestionClick(faq.question)}
-                >
-                  <span className="cb-faq-question">{faq.question}</span>
-                  <ArrowRightOutlined className="cb-faq-arrow" />
-                </button>
-              ))}
-            </div>
-          )}
+          {faqSection}
         </div>
 
         {/* 使用提示 */}

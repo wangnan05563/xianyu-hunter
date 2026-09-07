@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback, type Dispatch, type SetStateAction } from 'react'
 // 删除未使用的 theme 导入（S1128）
-import { Spin, Card, Col, Row, Alert, Button, Space } from 'antd'
+import { Spin, Card, Col, Row, Alert, Space } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import {
   taskApi, statsApi, priceApi,
@@ -15,6 +15,7 @@ import PriceHistogramCard from './components/PriceHistogramCard'
 import EvalFunnelCard from './components/EvalFunnelCard'
 import TrendModal from './components/TrendModal'
 import { API_BASE } from '../../utils/apiBase'
+import { TipButton } from '@/components/TipButton'
 
 // SSE lastEventId 持久化 key：提取到模块级，供 handleSseAppEvent 与 connect 共享（S2004 提取避免嵌套过深）
 const SSE_LAST_EVENT_ID_KEY = 'xh.sse.lastEventId'
@@ -234,12 +235,12 @@ export default function Dashboard() {
             style={{ marginBottom: 16 }}
             action={
               <Space direction="vertical">
-                <Button size="small" type="primary" onClick={() => navigate('/tasks/new')}>
+                <TipButton size="small" type="primary" onClick={() => navigate('/tasks/new')} tip="创建新的监控任务">
                   创建任务
-                </Button>
-                <Button size="small" onClick={() => navigate('/onboarding')}>
+                </TipButton>
+                <TipButton size="small" onClick={() => navigate('/onboarding')} tip="查看新手引导说明">
                   查看引导
-                </Button>
+                </TipButton>
               </Space>
             }
           />

@@ -114,6 +114,7 @@ checklist:
   pwa_subpath_navfallback: true    # 维度 43：PWA 子路径导航回退绝对化（meta-rule #117）
   design_tokens_no_hardcode: true  # 维度 44：设计令牌集中化（禁硬编码色，meta-rule #119）
   spa_basename_consistency: true   # 维度 45：SPA 基路径三处对齐（meta-rule #118）
+  build_output_central: true      # 维度 49：构建产物集中化/SPA 单一来源/路径零硬编码（🆕v4.73.0，规范 29/30/33）
 
 # --- 源码受保护（维度 42，meta-rule #116）---
 source_file_protection:
@@ -4442,3 +4443,31 @@ proxy_redirect_safety:
   forbidden_redirect_patterns:
     - "root_to_subpath_redirect"
   meta_rule: "#120"
+
+# --- 构建产物与路径标准（维度 49，规范 29/30/33，🆕v4.73.0）---
+# F-REVIEW-248：release 集中化 / SPA 单一来源 / 路径零硬编码
+build_output_standards:
+  enabled: true
+  # 唯一编译产物根（vite outDir 必须指向此，禁止写死其它散落目录）
+  release_dir: "release"
+  spa_source_dir: "release/spa"
+  # 安装包 SPA 拷贝：源必须是 release/spa；若需拷 backend/.../static 等次级目录必须先排除 spa 子目录
+  forbid_secondary_spa_copy: true
+  # 输出根 / base path / 构建参数全部走配置，禁止散落绝对盘符路径
+  forbid_hardcoded_drive_paths: true
+  # 七处路径引用必须同步对齐（变更输出根 / base path 时）
+  alignment_points:
+    - "vite.config.ts outDir"
+    - "build-exe.ps1 --distpath / --workpath"
+    - "installer.iss OutputDir"
+    - "部署复制源"
+    - "app.py 伺服路径 (get_project_root()/release/spa)"
+    - "子脚本默认路径"
+    - "cleanup + .gitignore"
+  # 残留旧产物引用（应清零）
+  forbidden_residual_patterns:
+    - "dist\\\\xianyu-hunter"
+    - "dist\\\\XianyuHunter-Setup"
+    - "frontend/dist"
+    - "backend/.*/static/spa"
+  corresponding_dev_spec: "规范 29/30/33"

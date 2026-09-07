@@ -387,7 +387,12 @@ def _find_expired_cookie(
     now = time.time()
     for c in cookies_list:
         name = c.get("name")
-        if name not in (identity_cookies | session_cookies) or name == "_m_h5_tk":
+        # 跳过 _m_h5_tk 与 _m_h5_tk_enc：两者都是内嵌 timestamp 的 token，
+        # expires 字段无可靠语义（旧副本可能残留过期值），有效性统一由
+        # _has_valid_m5tk_in_list 判定。与 cookie_store._check_key_cookies_expiry、
+        # auth_query._check_single_cookie_expiry 的特判保持一致，避免规则漂移
+        # 误报 cookie_expired:_m_h5_tk_enc（登录后 cookie 正常却显示异常）。
+        if name not in (identity_cookies | session_cookies) or name in ("_m_h5_tk", "_m_h5_tk_enc"):
             continue
         expires = c.get("expires", -1)
         if expires and expires > 0 and expires < now:

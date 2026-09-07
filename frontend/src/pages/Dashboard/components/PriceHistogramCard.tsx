@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { Card, Select, Empty, Button, Tag, Spin, Alert, theme } from 'antd'
+import { Card, Select, Empty, Tag, Spin, Alert, theme } from 'antd'
 import { RobotOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
+import { TipButton } from '@/components/TipButton'
 import type { HistogramData } from '../../../api'
 
 interface PriceHistogramCardProps {
@@ -152,7 +153,7 @@ export default function PriceHistogramCard({
               )}
             </span>
           )}
-          <Button size="small" onClick={() => onNavigate('/items')}>查看商品</Button>
+          <TipButton size="small" onClick={() => onNavigate('/items')} tip="进入商品列表页面">查看商品</TipButton>
         </div>
       }>
       {histogramOption ? (
@@ -228,18 +229,19 @@ export default function PriceHistogramCard({
           {/* AI 分析按钮 + 结果 */}
           <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: aiAnalysis ? 12 : 0 }}>
-              <Button
+              <TipButton
                 type="primary"
                 ghost
                 icon={<RobotOutlined />}
                 loading={aiLoading}
                 onClick={onAiAnalyze}
                 size="small"
+                tip="基于价格分布调用 AI 生成分析建议"
               >
                 AI 智能分析
-              </Button>
+              </TipButton>
               {aiAnalysis && (
-                <Button type="link" size="small" onClick={onClearAiAnalysis}>清除</Button>
+                <TipButton type="link" size="small" onClick={onClearAiAnalysis} tip="清除当前 AI 分析结果">清除</TipButton>
               )}
               <span style={{ fontSize: 11, color: 'var(--xh-text-quaternary)' }}>基于价格分布数据，AI 生成参考建议</span>
             </div>

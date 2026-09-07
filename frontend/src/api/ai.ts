@@ -9,6 +9,7 @@ import type {
   AIConditionResult,
   DeepAnalyzeResult,
   SellerTemplateCheckResult,
+  AIListModelsResult,
 } from './types'
 
 // AI 服务 API:管理模型配置、用量预算与条件评估等智能能力
@@ -20,6 +21,14 @@ export const aiApi = {
 
   testConnection: () =>
     client.post<AITestConnectionResult>('/api/ai/test-connection').then((r) => r.data),
+
+  // 拉取可用模型列表：基于 AI 服务已配置的 base_url / api_key（服务端存储，
+  // 避免暴露前端脱敏后的 key）请求上游 OpenAI 兼容 /models。
+  // base_url / api_key 可选：传空则复用服务端配置；传入则用于临时连接预览。
+  listModels: (body?: { base_url?: string; api_key?: string }) =>
+    client
+      .post<AIListModelsResult>('/api/ai/models', body ?? {})
+      .then((r) => r.data),
 
   // Embedding 连接测试：独立于 LLM 测试，验证向量端点可用性
   // 本地模式首次调用需下载 ~95MB 模型权重，180s 超时覆盖慢网络场景

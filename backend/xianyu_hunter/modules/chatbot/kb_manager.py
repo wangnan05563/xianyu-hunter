@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import hashlib
+import json
 import shutil
 import time
 import uuid
@@ -144,7 +145,7 @@ class KBManager:
 
         async with self._build_lock:
             self._set_progress("scanning", 5, "扫描文档中...")
-            snippets = self._scan_and_chunk()
+            snippets, fingerprints = self._scan_and_chunk_with_fingerprints()
             if not snippets:
                 logger.warning("未扫描到任何文档片段，跳过构建")
                 self._set_progress("failed", 100, "无文档片段可构建")
@@ -184,17 +185,21 @@ class KBManager:
                 snapshot_path=snapshot_path,
                 doc_hash=doc_hash,
                 build_type="build",
+                file_fingerprints=json.dumps(fingerprints),
+                full_rebuild=True,
             )
 
     async def incremental_update(self) -> KBVersion | None:
-        """增量更新：扫描文档 → 计算内容 hash → 与当前版本 doc_hash 对比
+        """增量更新：扫描文档 → 文件级指纹对比 → 只重建变更/新增文件，删除已移除文件
 
-        - hash 未变：返回 None（无需更新）
-        - hash 变化：调用 _do_build 重新构建（build_type=incremental）
+        - 文件级指纹（{source_file: content_md5}）无变化：返回 None（无需更新）
+        - 有变化：只对变更/新增文件重新分块+embedding，删除已消失文件的旧片段，
+          不清空集合（F8 根治：从"全量重建"降为"文件级增量"）
+        - 旧版本无指纹（老库 / 回滚版本）时降级为全量重建，保证正确性
         """
         async with self._build_lock:
             self._set_progress("scanning", 5, "增量扫描文档中...")
-            snippets = self._scan_and_chunk()
+            snippets, fingerprints = self._scan_and_chunk_with_fingerprints()
             if not snippets:
                 logger.info("增量更新：未扫描到文档，跳过")
                 self._set_progress("idle", 0, "")
@@ -202,20 +207,51 @@ class KBManager:
 
             current_hash = self._compute_doc_hash(snippets)
             last_version = self._repo.get_current_kb_version()
-            if last_version and last_version.get("doc_hash") == current_hash:
-                logger.info("知识库 doc_hash 无变化，跳过增量更新")
+            prev_fp = self._parse_fingerprints(last_version)
+            if prev_fp is not None and prev_fp == fingerprints:
+                logger.info("知识库文件指纹无变化，跳过增量更新")
                 self._set_progress("idle", 0, "")
                 return None
+
+            if prev_fp is None:
+                # 首次构建 / 老版本无指纹：降级为全量重建
+                changed_snippets = snippets
+                sources_to_replace: set[str] = set()
+                full_rebuild = True
+            else:
+                removed_files = set(prev_fp) - set(fingerprints)
+                changed_files = {
+                    f for f in fingerprints if prev_fp.get(f) != fingerprints[f]
+                }
+                changed_snippets = [
+                    s for s in snippets
+                    if s.source_file in changed_files or s.source_file not in prev_fp
+                ]
+                sources_to_replace = changed_files | removed_files
+                full_rebuild = not sources_to_replace
+                if not changed_snippets and not removed_files:
+                    # 指纹不同但分块结果无差异（如仅空白变化），无需重建
+                    logger.info("知识库内容无片段级变化，跳过增量更新")
+                    self._set_progress("idle", 0, "")
+                    return None
+                logger.info(
+                    f"增量更新: 变更/新增文件 {len(changed_files)} 个，"
+                    f"移除文件 {len(removed_files)} 个，"
+                    f"待 embedding 片段 {len(changed_snippets)}/{len(snippets)}"
+                )
 
             version_id = uuid.uuid4().hex
             snapshot_path = self._make_snapshot_path(version_id)
 
             return await self._do_build(
-                snippets=snippets,
+                snippets=changed_snippets,
                 version_id=version_id,
                 snapshot_path=snapshot_path,
                 doc_hash=current_hash,
                 build_type="incremental",
+                file_fingerprints=json.dumps(fingerprints),
+                sources_to_replace=sources_to_replace,
+                full_rebuild=full_rebuild,
             )
 
     async def rollback(self, version_id: str) -> KBVersion:
@@ -247,6 +283,8 @@ class KBManager:
             version_id=new_version_id,
             snapshot_path=new_snapshot_path,
             doc_hash=doc_hash,
+            # 回滚后集合内容与目标版本一致，沿用其文件指纹以支持后续文件级增量
+            file_fingerprints=target.get("file_fingerprints"),
             build_type="rollback",
         )
         self._repo.update_kb_version_status(
@@ -314,6 +352,9 @@ class KBManager:
         snapshot_path: str,
         doc_hash: str,
         build_type: str,
+        file_fingerprints: str | None = None,
+        sources_to_replace: set[str] | None = None,
+        full_rebuild: bool = True,
     ) -> KBVersion:
         """两阶段提交的核心实现
 
@@ -329,6 +370,7 @@ class KBManager:
             version_id=version_id,
             snapshot_path=snapshot_path,
             doc_hash=doc_hash,
+            file_fingerprints=file_fingerprints,
             build_type=build_type,
         )
         self._repo.update_kb_version_status(
@@ -394,8 +436,13 @@ class KBManager:
                     "writing", 70,
                     f"写入向量库（{total - failed_count}/{total} 片段）"
                 )
-                # 清空集合 → 按 embeddings 顺序对齐 snippets 构造 upsert 数据
-                await self._vector_store.clear_collection()
+                # 全量重建：清空集合后写入全部；
+                # 增量合并：先删变更/移除文件的旧片段再 upsert 新片段，保留未变文件的向量
+                if full_rebuild:
+                    await self._vector_store.clear_collection()
+                else:
+                    for src in (sources_to_replace or set()):
+                        await self._vector_store.delete_by_source(src)
                 chunks_with_vectors: list[dict] = []
                 failed_set = set(failed_indices)
                 vec_idx = 0
@@ -418,6 +465,12 @@ class KBManager:
                     vec_idx += 1
 
                 upserted = await self._vector_store.upsert(chunks_with_vectors)
+                # 增量合并后总片段数 = 集合实际数量（未变片段 + 新写片段）
+                final_chunk_count = (
+                    upserted
+                    if full_rebuild
+                    else await self._vector_store.count()
+                )
 
                 # 状态判定：>50% 已回滚；>10% partial；其他 success
                 if fail_rate > self._PARTIAL_FAIL_RATE:
@@ -430,7 +483,7 @@ class KBManager:
                 self._repo.update_kb_version_status(
                     version_id=version_id,
                     status=status,
-                    chunk_count=upserted,
+                    chunk_count=final_chunk_count,
                     failed_chunk_count=failed_count,
                     build_duration_sec=duration,
                     error_message=None,
@@ -441,11 +494,11 @@ class KBManager:
 
                 self._set_progress(
                     "done", 100,
-                    f"构建完成: {upserted} 片段，状态 {status}"
+                    f"构建完成: {final_chunk_count} 片段，状态 {status}"
                 )
                 logger.info(
                     f"知识库构建完成: version={version_id} type={build_type} "
-                    f"status={status} chunks={upserted} failed={failed_count} "
+                    f"status={status} chunks={final_chunk_count} failed={failed_count} "
                     f"duration={duration:.2f}s"
                 )
                 return self._repo_to_version(self._repo.get_kb_version(version_id))
@@ -525,18 +578,22 @@ class KBManager:
             files.append(fp)
         return files
 
-    def _chunk_file_by_suffix(self, file_path: Path, rel_path: str) -> list[DocSnippet]:
-        """按后缀选择对应的分块器，返回该文件的片段列表"""
+    def _chunk_file_by_suffix(self, file_path: Path, rel_path: str, content: str | None = None) -> list[DocSnippet]:
+        """按后缀选择对应的分块器，返回该文件的片段列表
+
+        content 可预传入（扫描时已读文件用于指纹，避免二次读盘）；为 None 时内部读取。
+        """
         suffix = file_path.suffix.lower()
+        if content is None:
+            content = self._read_text(file_path)
         if suffix == ".md":
-            return self._chunk_markdown(self._read_text(file_path), rel_path)
+            return self._chunk_markdown(content, rel_path)
         if suffix == ".py":
-            return self._chunk_python(self._read_text(file_path), rel_path)
+            return self._chunk_python(content, rel_path)
         if suffix == ".jsonl":
             # JSONL 训练材料：每行一个独立训练样本，按行解析而非字符切分
-            return self._chunk_jsonl(self._read_text(file_path), rel_path)
+            return self._chunk_jsonl(content, rel_path)
         # .txt 及其他白名单内但无专门分块器的文件
-        content = self._read_text(file_path)
         if not content:
             return []
         return self._chunk_plain(content, rel_path)
@@ -551,7 +608,12 @@ class KBManager:
                 s.redacted = True
 
     def _scan_and_chunk(self) -> list[DocSnippet]:
-        """扫描 config.doc_paths 下所有文件，按文件类型分块
+        """兼容入口：仅返回片段列表（文件级指纹由 _scan_and_chunk_with_fingerprints 提供）"""
+        snippets, _fingerprints = self._scan_and_chunk_with_fingerprints()
+        return snippets
+
+    def _scan_and_chunk_with_fingerprints(self) -> tuple[list[DocSnippet], dict[str, str]]:
+        """扫描 config.doc_paths 下所有文件，返回 (snippets, {source_file: content_md5})
 
         - .md 文件：用 _chunk_markdown（按 H2 分割 + 代码块单独提取）
         - .py 文件：用 _chunk_python（AST 解析 docstring）
@@ -559,8 +621,12 @@ class KBManager:
         - .txt 文件：用 _chunk_plain（按 chunk_size 固定长度分块）
         - 其他文件类型跳过（前端构建产物等对 RAG 无价值）
         - 含敏感数据的片段标记 redacted=True 但保留
+
+        source_file 统一为相对 project_root 的 posix 路径（与 upsert 的 metadata 一致）；
+        content hash 为文件级指纹，供增量更新只重建变更文件（F8 根治）。
         """
         snippets: list[DocSnippet] = []
+        fingerprints: dict[str, str] = {}
         for doc_path in self._config.doc_paths:
             root = self._project_root / doc_path
             if not root.exists():
@@ -577,12 +643,18 @@ class KBManager:
                 except ValueError:
                     rel_path = file_path.as_posix()
 
-                file_snippets = self._chunk_file_by_suffix(file_path, rel_path)
+                content = self._read_text(file_path)
+                if not content:
+                    continue
+                fingerprints[rel_path] = hashlib.md5(content.encode("utf-8")).hexdigest()
+                file_snippets = self._chunk_file_by_suffix(
+                    file_path, rel_path, content=content
+                )
                 # 敏感数据扫描：标记 redacted=True 但保留片段
                 self._mark_sensitive_snippets(file_snippets)
                 snippets.extend(file_snippets)
 
-        return snippets
+        return snippets, fingerprints
 
     def _read_text(self, file_path: Path) -> str:
         """读取文件文本内容，失败时返回空字符串（避免单文件失败中断整个扫描）"""
@@ -1077,6 +1149,24 @@ class KBManager:
             h.update(s.content.encode("utf-8"))
             h.update(b"\x01")
         return h.hexdigest()
+
+    @staticmethod
+    def _parse_fingerprints(last_version: dict | None) -> dict[str, str] | None:
+        """从版本记录解析文件级指纹 {source_file: content_md5}
+
+        记录缺失或字段为空（老库 / 回滚产生的版本）返回 None，
+        调用方据此降级为全量重建，保证正确性。
+        """
+        if not last_version:
+            return None
+        raw = last_version.get("file_fingerprints")
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except (TypeError, ValueError):
+            return None
 
     def _make_snapshot_path(self, version_id: str) -> str:
         """生成快照路径：data/chromadb/snapshots/{version_id}/

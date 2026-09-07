@@ -122,12 +122,16 @@ async def _cmd_info(out_dir: Path) -> int:
             _cleanup_lock_files(user_data_dir)
             ctx = await pw.chromium.launch_persistent_context(
                 user_data_dir=str(user_data_dir),
-                headless=True,
+                # P1 瘦身：headless=False + --headless=new 强制用完整 Chromium 内核无头运行，
+                # 避免 Playwright 在 headless=True 时选用独立的 chromium-headless-shell 二进制
+                # （打包可省约 267MB）。new headless 更接近完整内核，也更难被反爬检测。
+                headless=False,
                 user_agent=cfg.user_agent,
                 viewport={"width": 1280, "height": 800},
                 locale="zh-CN",
                 timezone_id="Asia/Shanghai",
                 args=[
+                    "--headless=new",
                     "--disable-blink-features=AutomationControlled",
                     "--no-first-run",
                     "--disable-infobars",

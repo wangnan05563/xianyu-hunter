@@ -600,6 +600,8 @@ class ChatbotKBVersionRow(Base):
     snapshot_path: Mapped[str] = mapped_column(Text, nullable=False)
     # 文档内容 hash（MD5）：用于增量更新时检测是否真的变更
     doc_hash: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    # 文件级指纹 JSON（{source_file: content_md5}）：支持文件级增量，只重建变更文件
+    file_fingerprints: Mapped[str | None] = mapped_column(Text, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_chunk_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # build：全量构建 / incremental：增量更新 / rollback：回滚产生

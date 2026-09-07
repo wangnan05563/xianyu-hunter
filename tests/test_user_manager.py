@@ -701,3 +701,171 @@ def test_migrate_to_multi_user_no_cookie_file(tmp_db, monkeypatch):
                 sa_text("SELECT COUNT(*) FROM users WHERE user_id='default'")
             ).fetchone()[0]
             assert count == 1
+
+
+# ============ 重复账号自动合并（防复发） ============
+
+def _insert_user_with_nick(user_mgr, user_id: str, nick: str, status: str = "active") -> None:
+    """辅助：直接插入带昵称的用户记录（users 表 NOT NULL 列需显式提供）"""
+    from sqlalchemy import text as sa_text
+    now = "2026-01-01T00:00:00+00:00"
+    with user_mgr._engine.connect() as conn:
+        conn.execute(sa_text(
+            "INSERT INTO users (user_id, nickname, avatar_url, custom_alias, status, "
+            "created_at, last_active_at, updated_at) "
+            "VALUES (:uid, :nick, '', '', :st, :now, :now, :now)"
+        ), {"uid": user_id, "nick": nick, "st": status, "now": now})
+        conn.commit()
+
+
+def test_pick_merge_direction_hash_to_unb():
+    """合并方向固定：cookie2 哈希 → unb"""
+    from xianyu_hunter.web.services.user_manager import UserManager
+    unb = "220812345678"
+    hash_id = "abcdef0123456789"
+    assert UserManager._pick_merge_direction(unb, hash_id) == (hash_id, unb)
+    assert UserManager._pick_merge_direction(hash_id, unb) == (hash_id, unb)
+
+
+def test_pick_merge_direction_same_type_none():
+    """同类型账号（两个 unb / 两个哈希）不合并，避免不同用户同昵称被误合并"""
+    from xianyu_hunter.web.services.user_manager import UserManager
+    assert UserManager._pick_merge_direction("220812345678", "220812345679") is None
+    assert UserManager._pick_merge_direction("abc11111111111", "abc22222222222") is None
+
+
+def test_merge_duplicate_accounts_hash_to_unb(user_mgr):
+    """同昵称的 cookie2 哈希账号数据自动归并到 unb 账号，源账号标记 disabled"""
+    import hashlib
+    from sqlalchemy import text as sa_text
+
+    unb_id = "220812345678"
+    hash_id = hashlib.sha256(b"c" * 32).hexdigest()[:16]
+    _insert_user_with_nick(user_mgr, unb_id, "南屿轻舟")
+    _insert_user_with_nick(user_mgr, hash_id, "南屿轻舟")
+
+    # 给哈希账号插入任务和偏好数据
+    with user_mgr._engine.connect() as conn:
+        conn.execute(sa_text(
+            "INSERT INTO tasks (id, name, keyword, cron, use_cron, interval_seconds, mode, status, created_at, updated_at, user_id) "
+            "VALUES ('t1', 'test', 'iphone', '*/5 * * * *', 0, 60.0, 'confirm', 'running', '2026-01-01', '2026-01-01', :uid)"
+        ), {"uid": hash_id})
+        conn.execute(sa_text(
+            "INSERT INTO user_preferences (user_id, pref_key, pref_value, updated_at) "
+            "VALUES (:uid, 'columns', '{}', '2026-01-01')"
+        ), {"uid": hash_id})
+        conn.commit()
+
+    merged = user_mgr.merge_duplicate_accounts(hash_id)
+
+    assert len(merged) == 1
+    assert merged[0]["from"] == hash_id
+    assert merged[0]["to"] == unb_id
+
+    with user_mgr._engine.connect() as conn:
+        # 任务已归 unb
+        row = conn.execute(sa_text("SELECT user_id FROM tasks WHERE id='t1'")).fetchone()
+        assert row[0] == unb_id
+        # 偏好已归 unb
+        row = conn.execute(
+            sa_text("SELECT user_id FROM user_preferences WHERE pref_key='columns'")
+        ).fetchone()
+        assert row[0] == unb_id
+        # 源账号标记 disabled
+        status = conn.execute(
+            sa_text("SELECT status FROM users WHERE user_id=:uid"), {"uid": hash_id}
+        ).fetchone()[0]
+        assert status == "disabled"
+
+
+def test_merge_duplicate_accounts_target_preferred_on_conflict(user_mgr):
+    """目标 unb 已有同键数据时保留目标值（目标优先）"""
+    import hashlib
+    from sqlalchemy import text as sa_text
+
+    unb_id = "220812345678"
+    hash_id = hashlib.sha256(b"e" * 32).hexdigest()[:16]
+    _insert_user_with_nick(user_mgr, unb_id, "南屿轻舟")
+    _insert_user_with_nick(user_mgr, hash_id, "南屿轻舟")
+
+    # 双方都有同名偏好键，值不同
+    for uid, val in ((unb_id, "target"), (hash_id, "source")):
+        with user_mgr._engine.connect() as conn:
+            conn.execute(sa_text(
+                "INSERT INTO user_preferences (user_id, pref_key, pref_value, updated_at) "
+                "VALUES (:uid, 'columns', :val, '2026-01-01')"
+            ), {"uid": uid, "val": val})
+            conn.commit()
+
+    user_mgr.merge_duplicate_accounts(hash_id)
+
+    with user_mgr._engine.connect() as conn:
+        row = conn.execute(
+            sa_text("SELECT user_id, pref_value FROM user_preferences WHERE pref_key='columns'")
+        ).fetchone()
+        # 冲突键保留目标账号的值
+        assert row[0] == unb_id
+        assert row[1] == "target"
+
+
+def test_merge_duplicate_accounts_no_merge_same_type(user_mgr):
+    """两个同昵称 unb 账号不合并（可能是不同用户），返回空列表"""
+    _insert_user_with_nick(user_mgr, "220812345678", "测试")
+    _insert_user_with_nick(user_mgr, "220812345679", "测试")
+
+    assert user_mgr.merge_duplicate_accounts("220812345678") == []
+
+
+def test_merge_duplicate_accounts_skips_disabled(user_mgr):
+    """disabled 账号不参与合并（终止态）"""
+    import hashlib
+    from sqlalchemy import text as sa_text
+
+    unb_id = "220812345678"
+    hash_id = hashlib.sha256(b"f" * 32).hexdigest()[:16]
+    _insert_user_with_nick(user_mgr, unb_id, "南屿轻舟")
+    # 哈希账号已是 disabled → 不应被再次合并
+    _insert_user_with_nick(user_mgr, hash_id, "南屿轻舟", status="disabled")
+
+    assert user_mgr.merge_duplicate_accounts(unb_id) == []
+
+    # 两个账号状态不变
+    with user_mgr._engine.connect() as conn:
+        statuses = {
+            row[0]: row[1]
+            for row in conn.execute(sa_text("SELECT user_id, status FROM users")).fetchall()
+        }
+    assert statuses[unb_id] == "active"
+    assert statuses[hash_id] == "disabled"
+
+
+def test_merge_duplicate_accounts_moves_active_session(user_mgr):
+    """合并后源账号的活跃 session 归属主账号，旧 token 无感切到主账号身份"""
+    import hashlib
+    from sqlalchemy import text as sa_text
+
+    unb_id = "220812345678"
+    hash_id = hashlib.sha256(b"a" * 32).hexdigest()[:16]
+    _insert_user_with_nick(user_mgr, unb_id, "南屿轻舟")
+    _insert_user_with_nick(user_mgr, hash_id, "南屿轻舟")
+
+    # 以哈希账号身份签发会话并写入缓存
+    token = user_mgr.issue_session(hash_id)
+    assert user_mgr.verify_session(token) == hash_id
+
+    user_mgr.merge_duplicate_accounts(hash_id)
+
+    # 同一 token 校验返回 unb 账号（session 已归属主账号，无需重新登录）
+    assert user_mgr.verify_session(token) == unb_id
+
+
+def test_merge_duplicate_accounts_no_duplicate_returns_empty(user_mgr):
+    """无重复账号时返回空列表"""
+    import hashlib
+
+    unb_id = "220812345678"
+    _insert_user_with_nick(user_mgr, unb_id, "南屿轻舟")
+    hash_id = hashlib.sha256(b"b" * 32).hexdigest()[:16]
+    _insert_user_with_nick(user_mgr, hash_id, "另一个昵称")
+
+    assert user_mgr.merge_duplicate_accounts(unb_id) == []

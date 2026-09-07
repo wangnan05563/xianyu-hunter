@@ -1,4 +1,5 @@
-import { Modal, Checkbox, Button, Space, Tag, Tooltip, Empty } from 'antd'
+import { Modal, Checkbox, Space, Tag, Tooltip, Empty } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { HolderOutlined, UndoOutlined, LockOutlined, EyeInvisibleOutlined } from '@ant-design/icons'
 import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
@@ -108,12 +109,12 @@ export default function ColumnSettingsModal({
       width={480}
       footer={
         <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-          <Button icon={<UndoOutlined />} onClick={onReset}>
+          <TipButton icon={<UndoOutlined />} onClick={onReset} tip="恢复列为默认顺序与显示状态">
             恢复默认
-          </Button>
-          <Button type="primary" onClick={onClose}>
+          </TipButton>
+          <TipButton type="primary" onClick={onClose} tip="保存列配置并关闭弹窗">
             完成
-          </Button>
+          </TipButton>
         </Space>
       }
     >

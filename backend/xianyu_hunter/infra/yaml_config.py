@@ -321,6 +321,9 @@ class ChatbotKBConfig(BaseModel):
     chunk_size: int = Field(500, ge=100, le=2000, description="分块字符数")
     chunk_overlap: int = Field(50, ge=0, le=500, description="分块重叠字符数")
     snapshot_max_keep: int = Field(10, ge=1, le=50, description="快照保留数量上限")
+    # 定时刷新超时（秒）：doc_paths 含整个 backend 源码时全量重建可能远超 600s，
+    # 超时只停止调度线程等待（后台任务继续运行），此值应留足余量避免误报失败。
+    refresh_timeout_sec: int = Field(1800, ge=120, le=7200, description="知识库定时更新超时（秒）")
     persist_path: str = Field(str(get_chromadb_path()), description="ChromaDB 持久化路径")
     collection_name: str = Field("xianyu_hunter_docs", description="ChromaDB 集合名")
     project_root: str = Field(".", description="知识库扫描项目根目录")

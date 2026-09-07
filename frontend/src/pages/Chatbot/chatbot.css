@@ -32,6 +32,70 @@
   --cb-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.08);
 }
 
+/* ============ 模型选择器（问答模型下拉） ============ */
+.cb-model-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--cb-border-light);
+  background: var(--cb-bg);
+}
+
+.cb-model-bar-label {
+  font-size: 13px;
+  color: var(--cb-text-secondary);
+  white-space: nowrap;
+}
+
+.cb-model-select {
+  /* antd Select 容器尺寸已由内联 style 控制，这里只做微调 */
+}
+
+/* 下拉底部"刷新模型列表"入口 */
+.cb-model-dropdown-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--cb-text-secondary);
+  border-top: 1px solid var(--cb-border-light);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cb-model-dropdown-footer:hover {
+  color: var(--cb-text-primary);
+  background: var(--cb-bg-hover);
+}
+
+/* 错误提示：notFoundContent 内与内联提示共用 */
+.cb-model-error {
+  color: #cf1322;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.cb-model-error-inline {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 移动端：模型栏与移动端顶部工具条共存时收紧内边距 */
+@media (max-width: 768px) {
+  .cb-model-bar {
+    padding: 8px 12px;
+  }
+  .cb-model-select {
+    min-width: 0 !important;
+    flex: 1;
+  }
+}
+
 /* ============ 根布局 ============ */
 .cb-root {
   display: flex;

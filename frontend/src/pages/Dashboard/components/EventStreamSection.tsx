@@ -1,4 +1,4 @@
-import { Card, Col, Row, List, Tag, Empty, Button, Badge, Descriptions, theme } from 'antd'
+import { Card, Col, Row, List, Tag, Empty, Badge, Descriptions, theme } from 'antd'
 import {
   SettingOutlined,
   DatabaseOutlined,
@@ -12,6 +12,7 @@ import {
 import type { RecentEvent, StatsOverview } from '../../../api'
 import { EVENT_COLOR } from '../../../constants/eventTypes'
 import { evTypeLabel, evMsg } from '../utils'
+import { TipButton } from '@/components/TipButton'
 
 interface EventStreamSectionProps {
   // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
@@ -32,7 +33,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
           extra={
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 11, color: streamStatus.includes('已连接') ? token.colorSuccess : 'var(--xh-text-tertiary)' }}>{streamStatus}</span>
-              <Button size="small" onClick={() => onNavigate('/timeline')}>查看全部</Button>
+              <TipButton size="small" onClick={() => onNavigate('/timeline')} tip="跳转事件时间线查看全部事件">查看全部</TipButton>
             </span>
           }>
           {events.length === 0 ? (
@@ -83,10 +84,10 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
             </Descriptions.Item>
           </Descriptions>
           <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Button size="small" onClick={() => onNavigate('/tasks')}>任务管理</Button>
-            <Button size="small" onClick={() => onNavigate('/config/ai')}>配置</Button>
-            <Button size="small" onClick={() => onNavigate('/logs')}>实时日志</Button>
-            <Button size="small" onClick={() => onNavigate('/orders')}>抢单记录</Button>
+            <TipButton size="small" onClick={() => onNavigate('/tasks')} tip="进入任务管理页面">任务管理</TipButton>
+            <TipButton size="small" onClick={() => onNavigate('/config/ai')} tip="进入 AI 配置页面">配置</TipButton>
+            <TipButton size="small" onClick={() => onNavigate('/logs')} tip="进入实时日志页面">实时日志</TipButton>
+            <TipButton size="small" onClick={() => onNavigate('/orders')} tip="进入抢单记录页面">抢单记录</TipButton>
           </div>
         </Card>
       </Col>

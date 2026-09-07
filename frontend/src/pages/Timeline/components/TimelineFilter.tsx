@@ -1,6 +1,7 @@
-import { Space, Select, Button, Tag } from 'antd'
+import { Space, Select, Tag } from 'antd'
 import { ReloadOutlined, SyncOutlined } from '@ant-design/icons'
 import { EVENT_TYPE_OPTIONS } from '../../../constants/eventTypes'
+import { TipButton } from '@/components/TipButton'
 import type { Task } from '../../../api'
 
 interface TimelineFilterProps {
@@ -43,20 +44,20 @@ export default function TimelineFilter({
           onChange={(v) => onTaskIdChange(v)}
           options={tasks.map((t) => ({ label: `${t.name}（${t.keyword}）`, value: t.id }))}
         />
-        <Button icon={<ReloadOutlined />} onClick={onReload} loading={loading}>刷新</Button>
+        <TipButton tip="重新加载时间线数据" icon={<ReloadOutlined />} onClick={onReload} loading={loading}>刷新</TipButton>
       </Space>
 
       {/* 事件类型过滤（与通知订阅联动） */}
       <div style={{ marginBottom: 16, padding: '8px 12px', background: 'var(--xh-bg-spotlight)', borderRadius: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
           <span style={{ fontWeight: 500, fontSize: 13 }}>事件类型过滤</span>
-          <Button size="small" icon={<SyncOutlined />} onClick={onSyncFromNotifier} title="从通知配置同步订阅规则">
+          <TipButton tip="从通知配置同步订阅规则" size="small" icon={<SyncOutlined />} onClick={onSyncFromNotifier}>
             同步订阅
-          </Button>
+          </TipButton>
           {eventTypeFilter.length > 0 && (
-            <Button size="small" type="link" onClick={() => onEventTypeFilterChange([])}>
+            <TipButton tip="清除事件类型过滤" size="small" type="link" onClick={() => onEventTypeFilterChange([])}>
               清除过滤
-            </Button>
+            </TipButton>
           )}
           <span style={{ color: 'var(--xh-text-tertiary)', fontSize: 11, marginLeft: 'auto' }}>
             {eventTypeFilter.length > 0

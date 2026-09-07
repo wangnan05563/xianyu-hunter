@@ -312,3 +312,9 @@
 | B-REVIEW-339 | INVALID-RESPONSE-DIAGNOSTICS 错误响应诊断契约（禁止 0/空误导） | 46 | v4.72.0 | `invalid_response_diagnostics` | meta-rule #123 |
 | B-REVIEW-340 | WRAPPER-API-VERIFY 调用包装器前核实真实 API 签名 | 47 | v4.72.0 | （依赖 browser 包装器定义） | meta-rule #126 |
 | B-REVIEW-341 | PROXY-REDIRECT-SAFETY 重定向/中间件不得破坏反代 | 48 | v4.72.0 | `proxy_redirect_safety` | meta-rule #120 |
+
+## 新增检查点（v4.73.0 · 2026-08-16 构建产物与路径标准专项）
+
+| ID | 名称 | 维度 | 版本 | 配置节点 | 规范源 |
+|----|------|------|------|----------|--------|
+| B-REVIEW-342 | BUILD-OUTPUT-PATH-STANDARDS 构建打包与路径标准（release 集中化 / SPA 单一来源 / 路径溯源 / 沙箱安全删除 / 路径零硬编码） | 49 | v4.73.0 | `build_output_standards` | xianyu-hunter-dev 规范 29/30/31/32/33 / F-REVIEW-248 配套 |

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
+import { TipButton } from '@/components/TipButton'
 import {
   Card,
-  Button,
   Row,
   Col,
   Space,
@@ -542,9 +542,9 @@ export default function AntiCrawl() {
   return (
     <div style={{ padding: 24 }}>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ReloadOutlined />} onClick={loadAll} loading={loadingStrategy}>
+        <TipButton tip="刷新全部数据" icon={<ReloadOutlined />} onClick={loadAll} loading={loadingStrategy}>
           刷新
-        </Button>
+        </TipButton>
       </Space>
 
       <Row gutter={[16, 16]}>
@@ -587,7 +587,8 @@ export default function AntiCrawl() {
               </>
             )}
             <Divider style={{ margin: '12px 0' }} />
-            <Button
+            <TipButton
+              tip="初始化反爬协调器，启动登录策略"
               type="primary"
               icon={<PlayCircleOutlined />}
               onClick={handleInitialize}
@@ -595,7 +596,7 @@ export default function AntiCrawl() {
               block
             >
               初始化协调器（{useCdp ? 'CDP' : 'Launch'} 模式）
-            </Button>
+            </TipButton>
           </Card>
         </Col>
 
@@ -627,13 +628,15 @@ export default function AntiCrawl() {
             }
             extra={
               <Space>
-                <Button
+                <TipButton
+                  tip="打开分层 Cookie 更新弹窗"
                   size="small"
                   onClick={openCookieModal}
                 >
                   更新 Cookie
-                </Button>
-                <Button
+                </TipButton>
+                <TipButton
+                  tip="刷新 Cookie 层状态"
                   icon={<ReloadOutlined />}
                   size="small"
                   onClick={loadCookieLayers}
@@ -663,7 +666,8 @@ export default function AntiCrawl() {
                         </Text>
                       </div>
                       {state.valid && (
-                        <Button
+                        <TipButton
+                          tip="主动失效该 Cookie 层"
                           size="small"
                           danger
                           type="link"
@@ -672,7 +676,7 @@ export default function AntiCrawl() {
                           style={{ padding: '4px 0', fontSize: 12 }}
                         >
                           主动失效
-                        </Button>
+                        </TipButton>
                       )}
                     </Card>
                   </Col>
@@ -761,7 +765,8 @@ export default function AntiCrawl() {
               </Space>
             }
             extra={
-              <Button
+              <TipButton
+                tip="刷新频率伪装统计"
                 icon={<ReloadOutlined />}
                 size="small"
                 onClick={loadFreqStats}
@@ -862,14 +867,15 @@ export default function AntiCrawl() {
               { value: 'chrome', label: 'Chrome' },
             ]}
           />
-          <Button
+          <TipButton
+            tip="从浏览器导入 Cookie 覆盖文本框"
             icon={<DownloadOutlined />}
             loading={loadingImport}
             onClick={handleImportFromBrowser}
             style={{ flex: 1 }}
           >
             从浏览器导入（覆盖文本框）
-          </Button>
+          </TipButton>
         </Space.Compact>
 
         <Spin spinning={loadingPrefill} tip="正在读取当前 Cookie...">
@@ -953,7 +959,8 @@ function SessionCardCol(props: {
         )}
         <Divider style={{ margin: '12px 0' }} />
         <Space>
-          <Button
+          <TipButton
+            tip="启动会话管理并开始续期"
             type="primary"
             icon={<PlayCircleOutlined />}
             onClick={onStart}
@@ -961,8 +968,9 @@ function SessionCardCol(props: {
             disabled={session?.active}
           >
             启动会话
-          </Button>
-          <Button
+          </TipButton>
+          <TipButton
+            tip="停止会话管理与后台续期"
             danger
             icon={<StopOutlined />}
             onClick={onStop}
@@ -970,7 +978,7 @@ function SessionCardCol(props: {
             disabled={!session?.active}
           >
             停止会话
-          </Button>
+          </TipButton>
         </Space>
       </Card>
     </Col>
@@ -997,14 +1005,15 @@ function HealthCardCol(props: {
           </Space>
         }
         extra={
-          <Button
+          <TipButton
+            tip="执行健康检查"
             icon={<ReloadOutlined />}
             onClick={onCheck}
             loading={loadingHealth}
             size="small"
           >
             检查
-          </Button>
+          </TipButton>
         }
       >
         {health?.ok ? (

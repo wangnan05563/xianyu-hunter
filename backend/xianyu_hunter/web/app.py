@@ -515,7 +515,7 @@ def create_app() -> FastAPI:
     # 静态资源
     # 打包模式：static 外置到 exe 同级目录（与 launcher.py、build-exe.ps1 外置策略一致）
     # 开发模式：源码目录
-    from xianyu_hunter.paths import is_frozen, get_app_dir
+    from xianyu_hunter.paths import is_frozen, get_app_dir, get_project_root
     if is_frozen():
         static_dir = get_app_dir() / "static"
     else:
@@ -559,14 +559,15 @@ def create_app() -> FastAPI:
     # SPA 路由注册延后到所有 API 路由之后（见文件末尾）
     # 为什么延后：FastAPI 路由按注册顺序匹配，catch-all /{full_path:path}
     # 必须在所有 /api/* 路由之后注册，否则会拦截 API 请求
-    # SPA 目录：开发模式统一指向前端编译产物 release/spa（与 vite.config.ts outDir 一致），
-    # 打包模式仍是 exe 同级 static/spa。兜底：release/spa 不存在时回退到包内 static/spa。
+    # SPA 目录：
+    # 打包模式 = exe 同级 static/spa（由 build-exe.ps1 从 release/spa 复制而来）
+    # 开发模式 = 前端编译产物 release/spa（与 vite.config.ts outDir 一致，单一来源）
+    # 不再依赖 backend/.../static/spa（已失管删除）；未构建前端时 release/spa 不存在，
+    # 由下方 spa_dir.exists() 守卫降级（SPA 路由不挂载，返回 404，不崩溃）。
     if is_frozen():
         spa_dir = get_app_dir() / "static" / "spa"
     else:
-        _spa_release = Path(__file__).resolve().parents[3] / "release" / "spa"
-        _spa_pkg = Path(__file__).resolve().parent / "static" / "spa"
-        spa_dir = _spa_release if _spa_release.exists() else _spa_pkg
+        spa_dir = get_project_root() / "release" / "spa"
 
     # ===== API 路由表（单一数据源）=====
     # 以 (模块, router 属性名) 列表集中描述，循环两次挂载：

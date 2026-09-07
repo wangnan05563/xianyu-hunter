@@ -1,4 +1,5 @@
-import { Modal, Spin, Descriptions, Alert, Tabs, Collapse, Empty, Tag, Row, Col, Statistic, Button } from 'antd'
+import { Modal, Spin, Descriptions, Alert, Tabs, Collapse, Empty, Tag, Row, Col, Statistic } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import type { DeepAnalyzeResult, DeepCheckResult } from '../../../api'
 
 interface DeepAnalyzeModalProps {
@@ -81,7 +82,7 @@ export function DeepAnalyzeModal({ open, loading, result, itemId, onCancel }: De
       title={`AI 深度鉴伪 - ${itemId}`}
       open={open}
       onCancel={onCancel}
-      footer={<Button onClick={onCancel}>关闭</Button>}
+      footer={<TipButton onClick={onCancel} tip="关闭 AI 深度鉴伪弹窗">关闭</TipButton>}
       width={720}
     >
       <Spin spinning={loading} tip="多模态分析中，最多 90s...">

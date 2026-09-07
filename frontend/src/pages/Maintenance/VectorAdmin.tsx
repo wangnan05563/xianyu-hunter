@@ -32,6 +32,7 @@ import {
   type VectorSnapshot,
   type VectorAuditLog,
 } from '../../api/vectorAdmin'
+import { TipButton } from '@/components/TipButton'
 
 export default function VectorAdmin() {
   const [status, setStatus] = useState<VectorStatus | null>(null)
@@ -218,8 +219,8 @@ export default function VectorAdmin() {
           </p>
         </div>
         <Space>
-          <Button icon={<FileTextOutlined />} onClick={loadAuditLogs}>审计日志</Button>
-          <Button icon={<ReloadOutlined />} onClick={loadAll} loading={loading}>刷新</Button>
+          <TipButton tip="查看向量库审计日志" icon={<FileTextOutlined />} onClick={loadAuditLogs}>审计日志</TipButton>
+          <TipButton tip="重新加载向量库状态" icon={<ReloadOutlined />} onClick={loadAll} loading={loading}>刷新</TipButton>
         </Space>
       </div>
 
@@ -280,13 +281,14 @@ export default function VectorAdmin() {
             children: (
               <>
                 <Space style={{ marginBottom: 12 }}>
-                  <Button
+                  <TipButton
+                    tip="创建向量库快照备份"
                     type="primary"
                     icon={<CameraOutlined />}
                     onClick={() => setCreateOpen(true)}
                   >
                     创建快照
-                  </Button>
+                  </TipButton>
                 </Space>
                 <Table
                   rowKey="id"
@@ -313,15 +315,17 @@ export default function VectorAdmin() {
                       width: 160,
                       render: (_: unknown, record: VectorSnapshot) => (
                         <Space size="small">
-                          <Button
+                          <TipButton
+                            tip="从快照恢复并覆盖当前集合"
                             size="small"
                             type="link"
                             icon={<RollbackOutlined />}
                             onClick={() => handleRestore(record)}
                           >
                             恢复
-                          </Button>
-                          <Button
+                          </TipButton>
+                          <TipButton
+                            tip="删除该快照（不可恢复）"
                             size="small"
                             type="link"
                             danger
@@ -329,7 +333,7 @@ export default function VectorAdmin() {
                             onClick={() => handleDeleteSnapshot(record)}
                           >
                             删除
-                          </Button>
+                          </TipButton>
                         </Space>
                       ),
                     },
@@ -347,9 +351,9 @@ export default function VectorAdmin() {
                   <p style={{ color: 'var(--xh-text-tertiary)', marginBottom: 12 }}>
                     删除集合中的所有片段。通常在知识库全量重建前调用。
                   </p>
-                  <Button danger icon={<DeleteOutlined />} onClick={handleCleanupAll}>
+                  <TipButton tip="清空集合中全部片段" danger icon={<DeleteOutlined />} onClick={handleCleanupAll}>
                     清空集合
-                  </Button>
+                  </TipButton>
                 </Card>
                 <Card title="按来源文件删除" size="small">
                   <p style={{ color: 'var(--xh-text-tertiary)', marginBottom: 12 }}>
@@ -363,9 +367,9 @@ export default function VectorAdmin() {
                       onChange={(e) => setSourceFile(e.target.value)}
                       style={{ width: 360 }}
                     />
-                    <Button danger icon={<DeleteOutlined />} onClick={handleCleanupBySource}>
+                    <TipButton tip="删除指定来源的所有片段" danger icon={<DeleteOutlined />} onClick={handleCleanupBySource}>
                       删除
-                    </Button>
+                    </TipButton>
                   </Space>
                 </Card>
               </Space>

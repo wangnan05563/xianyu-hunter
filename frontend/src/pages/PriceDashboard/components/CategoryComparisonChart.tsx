@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { Card, Space, Select, Button, Tooltip, Spin, Empty, theme } from 'antd'
+import { Card, Space, Select, Spin, Empty, theme } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { ReloadOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
 import type { EChartOption } from '../../../components/charts/EChart'
@@ -77,9 +78,7 @@ export default function CategoryComparisonChart({
             onChange={onRangeDaysChange}
             options={RANGE_OPTIONS}
           />
-          <Tooltip title="刷新">
-            <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh} loading={loading} />
-          </Tooltip>
+          <TipButton size="small" icon={<ReloadOutlined />} onClick={onRefresh} loading={loading} tip="刷新品类对比图表数据" />
         </Space>
       }
     >

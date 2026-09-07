@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
-import { Result, Button, Space, Typography } from 'antd'
+import { Result, Space, Typography } from 'antd'
+import { TipButton } from '@/components/TipButton'
 
 const { Paragraph, Text } = Typography
 
@@ -68,8 +69,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           subTitle="页面在渲染过程中发生错误，可以尝试重试或刷新页面。"
           extra={
             <Space>
-              <Button type="primary" onClick={this.reset}>重试</Button>
-              <Button onClick={() => globalThis.location.reload()}>刷新页面</Button>
+              <TipButton tip="重新渲染页面，尝试恢复正常" type="primary" onClick={this.reset}>重试</TipButton>
+              <TipButton tip="重新加载整个页面" onClick={() => globalThis.location.reload()}>刷新页面</TipButton>
             </Space>
           }
         >

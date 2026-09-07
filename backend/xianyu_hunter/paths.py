@@ -33,6 +33,25 @@ def get_app_dir() -> Path:
     return Path(".")
 
 
+def get_project_root() -> Path:
+    """项目根目录（含 frontend/、backend/、pyproject.toml）
+
+    开发模式下 app.py 需要定位前端编译产物 release/spa，而该路径相对仓库根
+    而非相对 app.py 文件。此处向上探测锚点目录，避免硬编码 parents[N] 魔法数
+    （app.py 一旦被移动就会静默落到错误路径）。
+
+    探测失败时兜底回退到历史的 parents[3] 布局，保证旧结构下不崩。
+    """
+    markers = {"pyproject.toml", "frontend", "backend"}
+    cur = Path(__file__).resolve().parent
+    while cur != cur.parent:
+        if markers.issubset({p.name for p in cur.iterdir()}):
+            return cur
+        cur = cur.parent
+    # 兜底：backend/xianyu_hunter/web/app.py 向上三级即仓库根
+    return Path(__file__).resolve().parents[3]
+
+
 def get_data_dir() -> Path:
     """用户数据目录（可写：SQLite、cookies、chromadb）
 

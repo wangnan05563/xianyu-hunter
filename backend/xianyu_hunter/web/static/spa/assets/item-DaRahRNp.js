@@ -1,1 +1,0 @@
-import{c as e}from"./index-a3jJcnwL.js";const m={summary:t=>e.get(`/api/items/${t}/summary`).then(a=>a.data),batch:t=>e.get("/api/items/batch",{params:{ids:t.join(",")}}).then(a=>a.data),refresh:(t,a)=>e.post(`/api/items/${t}/refresh`,null,{params:a?{task_id:a}:{}}).then(i=>i.data)};export{m as i};

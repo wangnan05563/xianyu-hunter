@@ -1,4 +1,5 @@
-import { Card, Button, Tooltip, theme } from 'antd'
+import { Card, theme } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import {
   CopyOutlined,
   ReloadOutlined,
@@ -36,56 +37,52 @@ function UpdateButton({ state, onCheck }: { readonly state: UpdateState; readonl
     case 'loading':
       // antd Button 的 loading prop 已自带 spinner，无需再叠加 LoadingOutlined
       return (
-        <Button loading>
+        <TipButton tip="正在检查更新" loading>
           {TEXTS.updateLoading}
-        </Button>
+        </TipButton>
       )
     case 'latest':
       return (
-        <Button type="text" icon={<CheckCircleFilled style={{ color: '#52c41a' }} />}>
+        <TipButton tip="已是最新版本" type="text" icon={<CheckCircleFilled style={{ color: '#52c41a' }} />}>
           {TEXTS.updateLatest}
-        </Button>
+        </TipButton>
       )
     case 'newer':
       // 新版本可用：按钮跳转到 GitHub release 页面；title 展示发布时间（若有）
       // 为什么用 title 而非内联文本：避免按钮宽度溢出，发布时间作为补充信息悬浮展示
       return (
-        <Tooltip
-          title={
+        <TipButton
+          tip={
             state.publishedAt
               ? `${TEXTS.updatePublishedOn} ${formatPublishDate(state.publishedAt)}`
               : TEXTS.updateNewer
           }
+          type="primary"
+          icon={<ArrowUpOutlined />}
+          onClick={() => globalThis.open(state.url, '_blank', 'noopener,noreferrer')}
         >
-          <Button
-            type="primary"
-            icon={<ArrowUpOutlined />}
-            onClick={() => globalThis.open(state.url, '_blank', 'noopener,noreferrer')}
-          >
-            {TEXTS.updateNewer} ({state.latest})
-          </Button>
-        </Tooltip>
+          {TEXTS.updateNewer} ({state.latest})
+        </TipButton>
       )
     case 'error':
       return (
-        <Button
+        <TipButton
+          tip="检查更新失败，点击重试"
           danger
           type="text"
           icon={<WarningFilled />}
           onClick={onCheck}
         >
           {state.reason === 'network' ? TEXTS.updateErrorNetwork : TEXTS.updateErrorServer} · {TEXTS.updateRetry}
-        </Button>
+        </TipButton>
       )
     case 'idle':
     default:
       // idle 态通过 Tooltip 告知用户「会自动检查」，避免用户误以为必须手动点击
       return (
-        <Tooltip title={TEXTS.updateAutoCheckHint}>
-          <Button type="primary" icon={<ReloadOutlined />} onClick={onCheck}>
-            {TEXTS.updateIdle}
-          </Button>
-        </Tooltip>
+        <TipButton tip={TEXTS.updateAutoCheckHint} type="primary" icon={<ReloadOutlined />} onClick={onCheck}>
+          {TEXTS.updateIdle}
+        </TipButton>
       )
   }
 }
@@ -131,15 +128,14 @@ export function BrandCard({ version, buildDate, gitSha, state, onCheck, onCopy }
             <span style={{ fontSize: 18, fontWeight: 600, color: token.colorText }}>
               {TEXTS.versionLabel}: {version}
             </span>
-            <Tooltip title={TEXTS.copyHint}>
-              <Button
-                type="text"
-                size="small"
-                icon={<CopyOutlined />}
-                onClick={onCopy}
-                aria-label={TEXTS.copyAriaLabel}
-              />
-            </Tooltip>
+            <TipButton
+              tip={TEXTS.copyHint}
+              type="text"
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={onCopy}
+              aria-label={TEXTS.copyAriaLabel}
+            />
           </div>
           <div style={{ fontSize: 13, color: token.colorTextSecondary, marginTop: 4 }}>
             {TEXTS.releasedOn} {buildDate}

@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { Table, Button, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch, Dropdown } from 'antd'
+import { Table, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch, Dropdown } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined, MoreOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
 import { STATUS_COLOR as statusColors } from '../../constants/statusColors'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useAutoLiveSearch } from '../../hooks/useAutoLiveSearch'
+import { TipButton } from '@/components/TipButton'
 
 // 让 Tag/span 等非原生交互元素获得键盘可访问性（S6848：onClick 需配合键盘事件）
 // 用结构类型避免引入 React 命名空间依赖
@@ -705,25 +706,23 @@ export default function TaskList() {
       render: (_: unknown, record: TaskLink & { _isLive?: boolean }) => (
         <Space size="small">
           {record.display?.url && (
-            <Tooltip title="打开原帖">
-              <Button
-                size="small"
-                type="link"
-                icon={<EyeOutlined />}
-                onClick={() => globalThis.open(record.display.url, '_blank')}
-              />
-            </Tooltip>
+            <TipButton
+              tip="打开原帖"
+              size="small"
+              type="link"
+              icon={<EyeOutlined />}
+              onClick={() => globalThis.open(record.display.url, '_blank')}
+            />
           )}
           {!record._isLive && record.link_id > 0 && (
-            <Tooltip title="删除关联">
-              <Button
-                size="small"
-                type="link"
-                danger
-                icon={<MinusCircleOutlined />}
-                onClick={() => handleRemoveLink(record.link_id)}
-              />
-            </Tooltip>
+            <TipButton
+              tip="删除该关联"
+              size="small"
+              type="link"
+              danger
+              icon={<MinusCircleOutlined />}
+              onClick={() => handleRemoveLink(record.link_id)}
+            />
           )}
         </Space>
       ),
@@ -736,7 +735,7 @@ export default function TaskList() {
       dataIndex: 'name',
       key: 'name',
       render: (text: string, record: Task) => (
-        <Button type="link" onClick={() => navigate(`/tasks/${record.id}/edit`)} style={{ padding: 0 }}>{text}</Button>
+        <TipButton tip="打开该任务编辑页" type="link" onClick={() => navigate(`/tasks/${record.id}/edit`)} style={{ padding: 0 }}>{text}</TipButton>
       ),
     },
     { title: '关键词', dataIndex: 'keyword', key: 'keyword' },
@@ -814,9 +813,9 @@ export default function TaskList() {
       key: 'links',
       width: 80,
       render: (_: unknown, record: Task) => (
-        <Button type="link" onClick={() => navigate(`/tasks/${record.id}`)} style={{ padding: 0 }}>
+        <TipButton tip="查看该任务详情与关联数" type="link" onClick={() => navigate(`/tasks/${record.id}`)} style={{ padding: 0 }}>
           <LinkOutlined /> {linkCounts[record.id] ?? '-'}
-        </Button>
+        </TipButton>
       ),
     },
     {
@@ -828,39 +827,39 @@ export default function TaskList() {
         if (arm) {
           return (
             <Space size="small">
-              <Button size="small" type="primary" danger onClick={() => executeArmConfirm(record.id)}>
+              <TipButton tip="确认执行该危险操作" size="small" type="primary" danger onClick={() => executeArmConfirm(record.id)}>
                 确认{arm.label}
-              </Button>
-              <Button size="small" onClick={() => cancelArmConfirm(record.id)}>
+              </TipButton>
+              <TipButton tip="取消本次危险操作确认" size="small" onClick={() => cancelArmConfirm(record.id)}>
                 取消
-              </Button>
+              </TipButton>
             </Space>
           )
         }
         // 正常状态：显示所有操作按钮
         return (
           <Space size="small">
-            <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${record.id}/edit`)}>
+            <TipButton tip="编辑该任务" size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${record.id}/edit`)}>
               编辑
-            </Button>
+            </TipButton>
             {record.status === 'running' ? (
-              <Button size="small" icon={<PauseCircleOutlined />} onClick={() => handleAction(record.id, 'pause')}>
+              <TipButton tip="暂停该任务" size="small" icon={<PauseCircleOutlined />} onClick={() => handleAction(record.id, 'pause')}>
                 暂停
-              </Button>
+              </TipButton>
             ) : (
-              <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleAction(record.id, 'start')}>
+              <TipButton tip="启动该任务" size="small" icon={<PlayCircleOutlined />} onClick={() => handleAction(record.id, 'start')}>
                 启动
-              </Button>
+              </TipButton>
             )}
             {/* 运行中或已暂停时显示停止按钮（危险操作，需行内确认） */}
             {(record.status === 'running' || record.status === 'paused') && (
-              <Button size="small" danger icon={<StopOutlined />} onClick={() => doArmConfirm(record.id, 'stop', '停止', '停止后任务将不再运行')}>
+              <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />} onClick={() => doArmConfirm(record.id, 'stop', '停止', '停止后任务将不再运行')}>
                 停止
-              </Button>
+              </TipButton>
             )}
-            <Button size="small" icon={<CopyOutlined />} onClick={() => cloneTask(record)}>
+            <TipButton tip="复制该任务为新任务" size="small" icon={<CopyOutlined />} onClick={() => cloneTask(record)}>
               复制
-            </Button>
+            </TipButton>
             {/* "另存为模板"是低频操作，移入更多下拉菜单以压缩操作列宽度，避免超出页面可视区 */}
             <Dropdown
               trigger={['click']}
@@ -876,11 +875,11 @@ export default function TaskList() {
                 ],
               }}
             >
-              <Button size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+              <TipButton tip="展开更多操作" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
             </Dropdown>
-            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => doArmConfirm(record.id, 'delete', '删除', '删除后不可恢复')}>
+            <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />} onClick={() => doArmConfirm(record.id, 'delete', '删除', '删除后不可恢复')}>
               删除
-            </Button>
+            </TipButton>
           </Space>
         )
       },
@@ -891,32 +890,31 @@ export default function TaskList() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <Button icon={<ThunderboltOutlined />} onClick={openAiParse}>
+          <TipButton tip="用一句话 AI 智能创建任务" icon={<ThunderboltOutlined />} onClick={openAiParse}>
             智能建任务
-          </Button>
-          <Button icon={<AppstoreOutlined />} onClick={openTemplateMarket}>
+          </TipButton>
+          <TipButton tip="打开任务模板市场" icon={<AppstoreOutlined />} onClick={openTemplateMarket}>
             模板市场
-          </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/tasks/new')}>
+          </TipButton>
+          <TipButton tip="新建一个任务" type="primary" icon={<PlusOutlined />} onClick={() => navigate('/tasks/new')}>
             新增任务
-          </Button>
+          </TipButton>
         </Space>
       </div>
 
       <Space style={{ marginBottom: 16 }}>
         {/* 全部启动：放在状态筛选前作为视觉焦点，使用品牌色渐变提升可发现性 */}
-        <Tooltip title="一键启动所有非运行中的任务">
-          <Button
-            type="primary"
-            className="xh-btn-brand"
-            icon={<ThunderboltOutlined />}
-            loading={startAllLoading}
-            onClick={handleStartAll}
-            disabled={tasks.length === 0}
-          >
-            全部启动
-          </Button>
-        </Tooltip>
+        <TipButton
+          tip="一键启动所有非运行中的任务"
+          type="primary"
+          className="xh-btn-brand"
+          icon={<ThunderboltOutlined />}
+          loading={startAllLoading}
+          onClick={handleStartAll}
+          disabled={tasks.length === 0}
+        >
+          全部启动
+        </TipButton>
         <Tooltip title="开启后，运行中的任务按各自采集周期自动触发实时搜索（串行队列，页面不可见时暂停）">
           <Space size={4}>
             <Switch
@@ -965,11 +963,11 @@ export default function TaskList() {
           message={
             <Space>
               <span>已选 {selectedRowKeys.length} 项</span>
-              <Button size="small" icon={<PauseCircleOutlined />} onClick={() => handleBatchAction('pause')}>暂停</Button>
-              <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleBatchAction('resume')}>恢复</Button>
-              <Button size="small" icon={<StopOutlined />} danger onClick={() => handleBatchAction('stop')}>停止</Button>
-              <Button size="small" icon={<DeleteOutlined />} danger onClick={() => handleBatchAction('delete')}>删除</Button>
-              <Button size="small" icon={<ClearOutlined />} onClick={() => setSelectedRowKeys([])}>清除选择</Button>
+              <TipButton tip="批量暂停选中任务" size="small" icon={<PauseCircleOutlined />} onClick={() => handleBatchAction('pause')}>暂停</TipButton>
+              <TipButton tip="批量恢复选中任务" size="small" icon={<PlayCircleOutlined />} onClick={() => handleBatchAction('resume')}>恢复</TipButton>
+              <TipButton tip="批量停止选中任务" size="small" icon={<StopOutlined />} danger onClick={() => handleBatchAction('stop')}>停止</TipButton>
+              <TipButton tip="批量删除选中任务" size="small" icon={<DeleteOutlined />} danger onClick={() => handleBatchAction('delete')}>删除</TipButton>
+              <TipButton tip="清除已选中的任务" size="small" icon={<ClearOutlined />} onClick={() => setSelectedRowKeys([])}>清除选择</TipButton>
             </Space>
           }
         />
@@ -1018,9 +1016,9 @@ export default function TaskList() {
               const isRunning = task.status === 'running'
               const showStopBtn = isRunning || task.status === 'paused'
               const startPauseBtn = isRunning ? (
-                <Button size="small" icon={<PauseCircleOutlined />} onClick={() => handleAction(task.id, 'pause')}>暂停</Button>
+                <TipButton tip="暂停该任务" size="small" icon={<PauseCircleOutlined />} onClick={() => handleAction(task.id, 'pause')}>暂停</TipButton>
               ) : (
-                <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleAction(task.id, 'start')}>启动</Button>
+                <TipButton tip="启动该任务" size="small" icon={<PlayCircleOutlined />} onClick={() => handleAction(task.id, 'start')}>启动</TipButton>
               )
               return (
                 <Col key={task.id} xs={24} sm={12} md={8} lg={8}>
@@ -1030,7 +1028,7 @@ export default function TaskList() {
                     styles={{ body: { padding: '12px 16px' } }}
                   >
                     <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 14 }}>
-                      <Button type="link" onClick={() => navigate(`/tasks/${task.id}/edit`)} style={{ padding: 0, fontWeight: 600 }}>{task.name || task.keyword}</Button>
+                      <TipButton tip="打开该任务编辑页" type="link" onClick={() => navigate(`/tasks/${task.id}/edit`)} style={{ padding: 0, fontWeight: 600 }}>{task.name || task.keyword}</TipButton>
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--xh-text-secondary)', marginBottom: 8 }}>
                       关键词：{task.keyword}
@@ -1045,19 +1043,19 @@ export default function TaskList() {
                     <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                       {arm ? (
                         <>
-                          <Button size="small" type="primary" danger onClick={() => executeArmConfirm(task.id)}>
+                          <TipButton tip="确认执行该危险操作" size="small" type="primary" danger onClick={() => executeArmConfirm(task.id)}>
                             确认{arm.label}
-                          </Button>
-                          <Button size="small" onClick={() => cancelArmConfirm(task.id)}>取消</Button>
+                          </TipButton>
+                          <TipButton tip="取消本次危险操作确认" size="small" onClick={() => cancelArmConfirm(task.id)}>取消</TipButton>
                         </>
                       ) : (
                         <>
-                          <Button size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</Button>
+                          <TipButton tip="编辑该任务" size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</TipButton>
                           {startPauseBtn}
                           {showStopBtn && (
-                            <Button size="small" danger icon={<StopOutlined />} onClick={() => doArmConfirm(task.id, 'stop', '停止', '停止后任务将不再运行')}>停止</Button>
+                            <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />} onClick={() => doArmConfirm(task.id, 'stop', '停止', '停止后任务将不再运行')}>停止</TipButton>
                           )}
-                          <Button size="small" icon={<CopyOutlined />} onClick={() => cloneTask(task)}>复制</Button>
+                          <TipButton tip="复制该任务为新任务" size="small" icon={<CopyOutlined />} onClick={() => cloneTask(task)}>复制</TipButton>
                           {/* 同步：与表格视图一致，"另存为模板"收起到更多下拉菜单 */}
                           <Dropdown
                             trigger={['click']}
@@ -1072,9 +1070,9 @@ export default function TaskList() {
                               ],
                             }}
                           >
-                            <Button size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+                            <TipButton tip="展开更多操作" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
                           </Dropdown>
-                          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => doArmConfirm(task.id, 'delete', '删除', '删除后不可恢复')}>删除</Button>
+                          <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />} onClick={() => doArmConfirm(task.id, 'delete', '删除', '删除后不可恢复')}>删除</TipButton>
                         </>
                       )}
                     </div>
@@ -1086,9 +1084,9 @@ export default function TaskList() {
           {tasks.length > 0 && (
             <div style={{ textAlign: 'center', marginTop: 16 }}>
               <Space>
-                <Button disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</Button>
+                <TipButton tip="返回上一页" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</TipButton>
                 <span>{page} / {Math.max(1, Math.ceil(total / pageSize))}</span>
-                <Button disabled={page >= Math.ceil(total / pageSize)} onClick={() => setPage(page + 1)}>下一页</Button>
+                <TipButton tip="前往下一页" disabled={page >= Math.ceil(total / pageSize)} onClick={() => setPage(page + 1)}>下一页</TipButton>
               </Space>
             </div>
           )}
@@ -1124,14 +1122,15 @@ export default function TaskList() {
                     style={{ width: 220 }}
                     allowClear
                   />
-                  <Button
+                  <TipButton
+                    tip="实时查询关联数据"
                     icon={<ReloadOutlined />}
                     loading={liveLoading}
                     onClick={handleLive}
                     disabled={!linkTaskId || searchingIds.has(linkTaskId)}
                   >
                     {searchingIds.has(linkTaskId) ? '自动搜索中...' : '实时查询'}
-                  </Button>
+                  </TipButton>
                   {liveLoading && liveStage && (
                     <span style={{ color: '#1677ff', fontSize: 13 }}>
                       <Spin size="small" style={{ marginRight: 6 }} />
@@ -1140,21 +1139,23 @@ export default function TaskList() {
                   )}
                   {/* 被过滤结果入口：仅当存在 filtered_out 时显示，避免无谓按钮 */}
                   {liveFilterSummary && liveFilterSummary.filtered_out?.length > 0 && (
-                    <Button
+                    <TipButton
+                      tip="查看被实时搜索过滤掉的结果"
                       size="small"
                       type="link"
                       onClick={() => setFilteredModalOpen(true)}
                     >
                       查看被过滤的 {liveFilterSummary.filtered_out.length} 条结果
-                    </Button>
+                    </TipButton>
                   )}
-                  <Button
+                  <TipButton
+                    tip="手动添加一条关联"
                     icon={<PlusOutlined />}
                     onClick={() => setAddModalOpen(true)}
                     disabled={!linkTaskId}
                   >
                     手动添加
-                  </Button>
+                  </TipButton>
                 </div>
 
                 {/* Tab 切换：商品 / 卖家 */}
@@ -1341,16 +1342,16 @@ export default function TaskList() {
 
         {/* 底部按钮 */}
         <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button onClick={() => setAiModalOpen(false)}>取消</Button>
+          <TipButton tip="关闭智能建任务弹窗" onClick={() => setAiModalOpen(false)}>取消</TipButton>
           {/* S7735：避免取反条件，交换分支让 aiResult 为正向判断 */}
           {aiResult ? (
-            <Button type="primary" onClick={applyAiResult}>
+            <TipButton tip="用解析结果前往创建任务" type="primary" onClick={applyAiResult}>
               用此结果继续 →
-            </Button>
+            </TipButton>
           ) : (
-            <Button type="primary" loading={aiParsing} onClick={doAiParse} icon={<ThunderboltOutlined />}>
+            <TipButton tip="让 AI 解析需求并创建任务" type="primary" loading={aiParsing} onClick={doAiParse} icon={<ThunderboltOutlined />}>
               开始解析
-            </Button>
+            </TipButton>
           )}
         </div>
       </Modal>
@@ -1428,7 +1429,8 @@ export default function TaskList() {
                 </div>
                 {/* 私有模板显示删除按钮 */}
                 {!tpl.is_preset && (
-                  <Button
+                  <TipButton
+                    tip="删除该私有模板"
                     type="text"
                     size="small"
                     danger

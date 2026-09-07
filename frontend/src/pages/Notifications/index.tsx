@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { TipButton } from '@/components/TipButton'
 import {
-  Card, Button, Space, Tag, Empty, Spin, message, Row, Col, Statistic,
-  List, Popconfirm, Tooltip,
+  Card, Space, Tag, Empty, Spin, message, Row, Col, Statistic,
+  List, Popconfirm,
 } from 'antd'
 import {
   ReloadOutlined, CheckOutlined, CheckSquareOutlined, DeleteOutlined, ClearOutlined,
@@ -159,7 +160,8 @@ export default function Notifications() {
         <Col span={8}>
           <Card>
             <Space direction="vertical" style={{ width: '100%' }}>
-              <Button
+              <TipButton
+                tip="将所有未读通知标记为已读"
                 type="primary"
                 icon={<CheckSquareOutlined />}
                 onClick={handleMarkAllRead}
@@ -168,7 +170,7 @@ export default function Notifications() {
                 block
               >
                 全部标记已读
-              </Button>
+              </TipButton>
               <Popconfirm
                 title="确认清空所有已读通知？"
                 description="此操作不可恢复，未读通知将保留。"
@@ -177,9 +179,9 @@ export default function Notifications() {
                 cancelText="取消"
                 okButtonProps={{ danger: true }}
               >
-                <Button icon={<ClearOutlined />} danger disabled={readCount === 0} block>
+                <TipButton tip="清空所有已读通知（不可恢复）" icon={<ClearOutlined />} danger disabled={readCount === 0} block>
                   清空已读
-                </Button>
+                </TipButton>
               </Popconfirm>
             </Space>
           </Card>
@@ -190,9 +192,7 @@ export default function Notifications() {
         title={
           <Space>
             <span>通知列表</span>
-            <Tooltip title="刷新">
-              <Button icon={<ReloadOutlined />} onClick={() => { loadList(); loadUnread() }} size="small" />
-            </Tooltip>
+            <TipButton tip="刷新通知列表与未读数" icon={<ReloadOutlined />} onClick={() => { loadList(); loadUnread() }} size="small" />
           </Space>
         }
         extra={
@@ -203,15 +203,17 @@ export default function Notifications() {
               let label = '已读'
               if (s === 'all') label = '全部'
               else if (s === 'unread') label = '未读'
+              const filterTip = s === 'all' ? '显示全部通知' : s === 'unread' ? '仅显示未读通知' : '仅显示已读通知'
               return (
-                <Button
+                <TipButton
                   key={s}
+                  tip={filterTip}
                   size="small"
                   type={filter === s ? 'primary' : 'default'}
                   onClick={() => setFilter(s)}
                 >
                   {label}
-                </Button>
+                </TipButton>
               )
             })}
           </Space>
@@ -228,15 +230,16 @@ export default function Notifications() {
                 const actions: ReactNode[] = []
                 if (!item.read_at) {
                   actions.push(
-                    <Button
+                    <TipButton
                       key="read"
+                      tip="标记该通知为已读"
                       size="small"
                       type="link"
                       icon={<CheckOutlined />}
                       onClick={() => handleMarkRead(item)}
                     >
                       标记已读
-                    </Button>,
+                    </TipButton>,
                   )
                 }
                 actions.push(
@@ -248,9 +251,9 @@ export default function Notifications() {
                     cancelText="取消"
                     okButtonProps={{ danger: true }}
                   >
-                    <Button size="small" type="link" danger icon={<DeleteOutlined />}>
+                    <TipButton tip="删除该通知（不可恢复）" size="small" type="link" danger icon={<DeleteOutlined />}>
                       删除
-                    </Button>
+                    </TipButton>
                   </Popconfirm>,
                 )
                 return (

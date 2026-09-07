@@ -104,6 +104,15 @@ def _check_cookies(user_id: str = "default") -> bool:
                     return True
         except Exception:
             pass
+    # 多用户隔离兜底：user_id 专属文件缺失时回退 default 文件
+    # 为什么需要：扫码/浏览器登录子进程可能只导出到 cookies_default.json
+    # （公共导出路径），而 xh_token 识别出的 user_id（如 cookie2 哈希账号）
+    # 专属文件尚未生成。不回退会导致 /me 误判未登录 → MainLayout 跳登录页，
+    # 与 /cookie/health 的 _load_cookie_data_for_health 三段 fallback 链不一致。
+    if user_id != "default":
+        store.invalidate_cache("default")
+        if store.has_valid_cookies(user_id="default"):
+            return True
     return False
 
 
@@ -148,6 +157,13 @@ def _sync_nick_to_users_table(user_id: str, nick: str) -> tuple[str, str]:
                 ), {"nick": valid_nick, "now": now_iso, "uid": user_id})
                 conn.commit()
             logger.info("已同步闲鱼昵称到 users 表: user_id=%s, nick=%s", user_id, valid_nick)
+            # 防复发：昵称就绪后检测同昵称重复账号（unb vs cookie2 哈希），自动合并
+            # 为什么在昵称写入成功后才触发：识别重复依赖 nickname 非空，
+            # identify_or_create 建号时 nickname 为空，此时检测必然无结果
+            try:
+                mgr.merge_duplicate_accounts(user_id)
+            except Exception as e:
+                logger.warning("重复账号自动合并检测失败 user_id=%s: %s", user_id, e)
             return (valid_nick, custom_alias)
 
         # 情况2：新 nick 无效但库里也是无效值 → 清空库里的无效 nickname
@@ -241,8 +257,13 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
 
     # 3. 同步 nick 到 users 表，并在响应中追加 local_username/custom_alias
     #    传入 valid_nick：已过滤无效值，_sync_nick_to_users_table 会据此清空库里旧无效值
+    #    为什么用 info.user_id 兜底：无有效会话（current_uid 为空，如会话被 web_token
+    #    降级）时若传空 user_id，_sync 会提前返回空，导致 users 表昵称不同步、
+    #    local_username 退化为裸 user_id，前端 UserMenu 直接显示"未登录"。
+    #    userinfo 缓存里的 user_id 由登录子进程识别（unb 优先），可作兜底身份。
+    sync_uid = current_uid or info.get("user_id") or ""
     nickname, custom_alias = _sync_nick_to_users_table(
-        current_uid or "", valid_nick
+        sync_uid, valid_nick
     )
     # local_username 优先级：自定义别名 > 闲鱼昵称 > user_id
     # 为什么自定义别名优先：用户主动设置的标识更具辨识度，闲鱼昵称可能因反爬抓不到

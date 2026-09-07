@@ -1,4 +1,5 @@
-import { Layout, Menu, theme, Breadcrumb, Spin, Button, Badge, Drawer, Collapse, List, Tag, Tooltip, Modal, Input } from 'antd'
+import { Layout, Menu, theme, Breadcrumb, Spin, Badge, Drawer, Collapse, List, Tag, Modal, Input } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import {
   DashboardOutlined,
   UnorderedListOutlined,
@@ -552,7 +553,8 @@ function LayoutContent({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {/* 侧边栏收缩/展开按钮 */}
-            <Button
+            <TipButton
+              tip="展开或收起侧边栏"
               type="text"
               icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
               onClick={() => setCollapsed(!collapsed)}
@@ -562,49 +564,43 @@ function LayoutContent({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {/* Command Palette 触发按钮 */}
-            <Tooltip title="命令面板 (Ctrl+K)">
-              <Button
-                type="text"
-                shape="circle"
-                size="small"
-                icon={<MacCommandOutlined />}
-                style={{ fontSize: 16, width: 28, height: 28 }}
-                onClick={() => { setCmdOpen(true); setCmdSearch(''); setCmdActive(0) }}
-              />
-            </Tooltip>
+            <TipButton
+              tip="打开命令面板（Ctrl+K）"
+              type="text"
+              shape="circle"
+              size="small"
+              icon={<MacCommandOutlined />}
+              style={{ fontSize: 16, width: 28, height: 28 }}
+              onClick={() => { setCmdOpen(true); setCmdSearch(''); setCmdActive(0) }}
+            />
             {/* 调度器状态指示灯：绿色=运行中，红色=已停止 */}
-            <Tooltip title={(() => {
-              // 调度器三态文案：null=加载中 true=运行 false=停止
-              if (schedulerRunning === null) return '加载中…'
-              if (schedulerRunning) return '调度器运行中'
-              return '调度器已停止'
-            })()}>
-              <Button
-                type="text"
-                shape="circle"
-                size="small"
-                style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                onClick={() => openSheetWithNotification('/')}
-              >
-                <span
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: '50%',
-                    background: (() => {
-                      if (schedulerRunning === null) return '#d9d9d9'
-                      if (schedulerRunning) return '#52c41a'
-                      return '#ff4d4f'
-                    })(),
-                    display: 'inline-block',
-                  }}
-                />
-              </Button>
-            </Tooltip>
+            <TipButton
+              tip={schedulerRunning === null ? '加载中…' : schedulerRunning ? '调度器运行中' : '调度器已停止'}
+              type="text"
+              shape="circle"
+              size="small"
+              style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              onClick={() => openSheetWithNotification('/')}
+            >
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: '50%',
+                  background: (() => {
+                    if (schedulerRunning === null) return '#d9d9d9'
+                    if (schedulerRunning) return '#52c41a'
+                    return '#ff4d4f'
+                  })(),
+                  display: 'inline-block',
+                }}
+              />
+            </TipButton>
 
             {/* 通知铃铛：Badge 显示今日告警总数 */}
             <Badge count={alertCount} size="small" offset={[-2, 2]}>
-              <Button
+              <TipButton
+                tip="打开今日告警通知"
                 type="text"
                 shape="circle"
                 size="small"
@@ -615,39 +611,36 @@ function LayoutContent({
             </Badge>
 
             {/* 主题切换按钮 */}
-            <Tooltip title={isDark ? '切换亮色主题' : '切换暗色主题'}>
-              <Button
-                type="text"
-                icon={isDark ? <SunOutlined /> : <MoonOutlined />}
-                size="small"
-                style={{ fontSize: 16, width: 28, height: 28 }}
-                onClick={onToggleTheme}
-              />
-            </Tooltip>
+            <TipButton
+              tip={isDark ? '切换为亮色主题' : '切换为暗色主题'}
+              type="text"
+              icon={isDark ? <SunOutlined /> : <MoonOutlined />}
+              size="small"
+              style={{ fontSize: 16, width: 28, height: 28 }}
+              onClick={onToggleTheme}
+            />
 
             {/* 帮助文档入口：在 SheetWorkspace 内打开 /help sheet，与其他菜单一致 */}
-            <Tooltip title="帮助文档">
-              <Button
-                type="text"
-                shape="circle"
-                size="small"
-                icon={<QuestionCircleOutlined />}
-                style={{ fontSize: 16, width: 28, height: 28 }}
-                onClick={() => openSheetWithNotification('/help')}
-              />
-            </Tooltip>
+            <TipButton
+              tip="打开帮助文档"
+              type="text"
+              shape="circle"
+              size="small"
+              icon={<QuestionCircleOutlined />}
+              style={{ fontSize: 16, width: 28, height: 28 }}
+              onClick={() => openSheetWithNotification('/help')}
+            />
 
             {/* 关于入口：在 SheetWorkspace 内打开 /about sheet，展示版本/许可/文档资源 */}
-            <Tooltip title="关于">
-              <Button
-                type="text"
-                shape="circle"
-                size="small"
-                icon={<InfoCircleOutlined />}
-                style={{ fontSize: 16, width: 28, height: 28 }}
-                onClick={() => openSheetWithNotification('/about')}
-              />
-            </Tooltip>
+            <TipButton
+              tip="查看关于与版本信息"
+              type="text"
+              shape="circle"
+              size="small"
+              icon={<InfoCircleOutlined />}
+              style={{ fontSize: 16, width: 28, height: 28 }}
+              onClick={() => openSheetWithNotification('/about')}
+            />
 
             {/* 账号切换器：多账号管理入口（MU7），切换后整页刷新确保数据隔离 */}
             <AccountSwitcher currentUserId={userInfo.user_id} />

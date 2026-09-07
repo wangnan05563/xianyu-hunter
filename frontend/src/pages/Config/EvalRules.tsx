@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Card, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Tag, Alert, Spin, Empty, Table, Switch, theme } from 'antd'
+import { Card, Slider, InputNumber, Row, Col, Space, message, Divider, Tag, Alert, Spin, Empty, Table, Switch, theme } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import {
   CloudDownloadOutlined,
   DollarCircleOutlined,
@@ -338,12 +339,12 @@ export default function EvalRules() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton tip="放弃未保存的修改并重置" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置
-          </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
+          </TipButton>
+          <TipButton tip="保存评估规则配置" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             保存
-          </Button>
+          </TipButton>
         </Space>
       </div>
 
@@ -353,9 +354,9 @@ export default function EvalRules() {
           type="warning"
           message={`权重总和为 ${weightsTotal}，建议为 100（否则分数会被归一化）`}
           action={
-            <Button size="small" onClick={normalize}>
+            <TipButton tip="将权重总和自动归一化为 100" size="small" onClick={normalize}>
               一键归一化
-            </Button>
+            </TipButton>
           }
           style={{ marginBottom: 16 }}
         />
@@ -497,7 +498,7 @@ export default function EvalRules() {
                     <strong>通过分数（pass_score）：</strong>
                     <Tag color="green">{evalConfig.pass_score}</Tag>
                     {evalConfig.pass_score !== getFieldOriginal('eval.pass_score') && (
-                      <Button size="small" type="link" onClick={() => revertField('eval.pass_score')} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                      <TipButton tip="恢复 pass_score 原始值" size="small" type="link" onClick={() => revertField('eval.pass_score')} style={{ padding: 0, fontSize: 12 }}>⏪</TipButton>
                     )}
                   </Space>
                   <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>≥ 此分数：通知用户</span>
@@ -521,7 +522,7 @@ export default function EvalRules() {
                     <strong>自动抢单分数（auto_buy_score）：</strong>
                     <Tag color="orange">{evalConfig.auto_buy_score}</Tag>
                     {evalConfig.auto_buy_score !== getFieldOriginal('eval.auto_buy_score') && (
-                      <Button size="small" type="link" onClick={() => revertField('eval.auto_buy_score')} style={{ padding: 0, fontSize: 12 }}>⏪</Button>
+                      <TipButton tip="恢复 auto_buy_score 原始值" size="small" type="link" onClick={() => revertField('eval.auto_buy_score')} style={{ padding: 0, fontSize: 12 }}>⏪</TipButton>
                     )}
                   </Space>
                   <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>≥ 此分数：全自动拍下</span>
@@ -908,9 +909,9 @@ function WeightSlider({
         <span style={{ fontSize: 13, fontWeight: 500 }}>{label}</span>
         <Space size={4}>
           {showRevert && (
-            <Button size="small" type="link" onClick={() => onRevert?.(revertPath)} style={{ padding: 0, fontSize: 12 }}>
+            <TipButton tip="恢复该项权重原始值" size="small" type="link" onClick={() => onRevert?.(revertPath)} style={{ padding: 0, fontSize: 12 }}>
               ⏪
-            </Button>
+            </TipButton>
           )}
           <InputNumber
             size="small"

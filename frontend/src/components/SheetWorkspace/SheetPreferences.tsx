@@ -1,4 +1,5 @@
-import { Drawer, Form, InputNumber, Switch, Button, Space, Typography, Divider, Tag } from 'antd'
+import { Drawer, Form, InputNumber, Switch, Space, Typography, Divider, Tag } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { SwapOutlined } from '@ant-design/icons'
 import { useSheetStore, DEFAULT_PREFERENCES } from '../../stores/sheetStore'
 
@@ -94,14 +95,15 @@ export function SheetPreferences({ open, onClose }: SheetPreferencesProps) {
                   · {r.title} <Text type="secondary" style={{ fontSize: 11, opacity: 0.65 }}>({r.path})</Text>
                 </Text>
               ))}
-              <Button
+              <TipButton
+                tip="清空已淘汰 sheet 的回收记录"
                 size="small"
                 type="link"
                 onClick={clearReplacedHistory}
                 style={{ padding: 0, alignSelf: 'flex-start' }}
               >
                 清空回收栈
-              </Button>
+              </TipButton>
             </Space>
           </Form.Item>
         )}
@@ -179,8 +181,8 @@ export function SheetPreferences({ open, onClose }: SheetPreferencesProps) {
 
         <Form.Item>
           <Space>
-            <Button onClick={onClose}>完成</Button>
-            <Button onClick={handleReset}>恢复默认</Button>
+            <TipButton tip="关闭偏好设置面板" onClick={onClose}>完成</TipButton>
+            <TipButton tip="恢复所有偏好为默认值" onClick={handleReset}>恢复默认</TipButton>
           </Space>
         </Form.Item>
 

@@ -51,6 +51,8 @@ version: "2.12.0"
 | AL | 子路径部署一致性 | 子路径/域名模式部署、API前缀、双挂载、PWA规则(导航回退绝对化)、基路径三处对齐、设计令牌、源码受保护静态兜底 | `subpath_deployment` | references/subpath-deployment-test.md |
 | AM | 隧道/域名访问 404 | 隧道裸根404/域名访问404/page not found/账户切换跳404 | `tunnel_access_404` | references/tunnel-access-404-test.md |
 | AN | 构建与运行时韧性 | 安装包默认图标/打包Python损坏/TargetClosedError/脚本BOM乱码 | `mode_an_build_runtime_resilience` | references/build-runtime-resilience-test.md |
+| AO | release 构建路径一致性 | 构建产物集中release/spa/SPA单一来源/零dist\xianyu-hunter残留/七处路径对齐 | `mode_ao_release_build_path` | references/release-build-path-test.md |
+| AP | 沙箱安全删除范式 | safe-delete守卫绕过(.NET/ctypes)/大目录分片或os.rename逃逸/禁rm/del | `mode_ap_sandbox_safe_deletion` | references/sandbox-safe-deletion-test.md |
 
 ## 共享步骤
 
@@ -158,6 +160,7 @@ version: "2.12.0"
 ## 版本历史
 
 - **v2.12.0** (2026-08-12)：新增模式 AN（构建与运行时韧性回归测试），`config.yaml` 新增 `mode_an_build_runtime_resilience` 节点（构建产物资源显式化 / 构建运行时 Python 钉选 / 异步清理 shield+取回 / 脚本编码 BOM/CRLF / 修复回归测试生成）；配套 `references/build-runtime-resilience-test.md` 与 `references/test-process-retrospective.md`；与 xianyu-hunter-dev meta-rules #112~#115、xianyu-backend-code-review B-REVIEW-291~295、xianyu-frontend-code-review F-REVIEW-227~228 跨技能一致，全参数走配置、无硬编码。
+- **v2.14.0** (2026-08-16)：新增模式 AO（release 构建路径一致性）与模式 AP（沙箱安全删除范式），`config.yaml` 新增 `mode_ao_release_build_path` / `mode_ap_sandbox_safe_deletion` 节点（vite outDir 集中 release/spa / SPA 单一来源 / 零 dist\xianyu-hunter 残留 / 七处路径对齐 / 删除绕过 safe-delete 守卫 / 大目录分片或 os.rename 逃逸）；配套 `references/release-build-path-test.md` 与 `references/sandbox-safe-deletion-test.md`；与 xianyu-hunter-dev 规范 29/30/31/32/33、xianyu-frontend-code-review F-REVIEW-248（维度 49）、xianyu-backend-code-review B-REVIEW-342（维度 49）跨技能一致，全参数走配置、无硬编码。
 - **v2.9.0** (2026-08-08)：新增模式 AL（子路径部署一致性验证），`config.yaml` 新增 `spa.basename`/`spa.api_prefix` 配置节点，强化"禁止硬编码前缀、全部参数走配置"的泛化约束
 - **v2.10.0** (2026-08-11)：新增模式 AM（隧道/域名访问 404 诊断，决策树 DT-12），覆盖 SPA 重定向裸根 / 部署副本陈旧 / 隧道 path_prefix 不一致 / PWA SW 陈旧缓存四类根因；与 xianyu-hunter-dev 规范 23-26、xianyu-frontend-code-review（维度 46）、xianyu-backend-code-review（维度 37）保持跨技能一致。全部参数走 `tunnel_access_404` 配置节点，无硬编码。
 - **v2.11.0** (2026-08-11)：模式 Q 新增步骤 1.5「构建依赖完整性（W1/W2/W3 固化）」，覆盖 vite 构建三类中断（workbox peer 依赖未声明 / emptyOutDir 与沙箱 safe-delete 冲突 / optimizeDeps 缓存失效）；`config.yaml` 新增 `build_integrity` 配置节点，全部参数化、无硬编码。与 xianyu-hunter-dev 规范 S4、xianyu-frontend-code-review 维度 13 保持跨技能一致。

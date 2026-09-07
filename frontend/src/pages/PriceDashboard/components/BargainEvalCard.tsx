@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { Card, Button, Tooltip, Spin, Empty, Space, InputNumber, Row, Col, Tag, Progress, Alert, Typography, theme } from 'antd'
+import { Card, Spin, Empty, Space, InputNumber, Row, Col, Tag, Progress, Alert, Typography, theme } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { ReloadOutlined } from '@ant-design/icons'
 import { BARGAIN_LEVEL_CONFIG } from '../constants'
 import { formatPrice } from '../utils'
@@ -102,15 +103,14 @@ export default function BargainEvalCard({
     <Card
       title="价格评估"
       extra={
-        <Tooltip title="刷新">
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            onClick={onRefresh}
-            loading={evalLoading}
-            disabled={!canEvaluate}
-          />
-        </Tooltip>
+        <TipButton
+          size="small"
+          icon={<ReloadOutlined />}
+          onClick={onRefresh}
+          loading={evalLoading}
+          disabled={!canEvaluate}
+          tip="刷新评估结果与分位数数据"
+        />
       }
     >
       {/* S7735: 反转否定条件 !soldTaskId 为肯定条件 soldTaskId */}
@@ -127,15 +127,16 @@ export default function BargainEvalCard({
               placeholder="输入待评估价格"
               style={{ width: 180 }}
             />
-            <Button
+            <TipButton
               type="primary"
               size="small"
               onClick={onEvaluate}
               loading={evalLoading}
               disabled={evalCurrentPrice == null || evalCurrentPrice <= 0}
+              tip="按当前价格评估捡漏等级与得分"
             >
               评估
-            </Button>
+            </TipButton>
             <Text type="secondary" style={{ fontSize: 12 }}>
               基于任务价格区间 + 已售商品分位数综合评估
             </Text>

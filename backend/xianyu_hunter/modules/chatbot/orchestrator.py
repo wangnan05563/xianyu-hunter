@@ -102,6 +102,7 @@ class ChatbotOrchestrator:
         message: str,
         enable_tools: bool | None = None,
         images: list[str] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[SSEEvent]:
         """编排对话流程，流式返回 SSE 事件
 
@@ -163,7 +164,7 @@ class ChatbotOrchestrator:
                 return
 
             # 6. 意图分类：超范围则拒绝，避免 LLM 被滥用回答无关问题
-            intent = await self._intent.classify(message)
+            intent = await self._intent.classify(message, model=model)
             yield SSEEvent(
                 event=SSEEventType.INTENT,
                 data={
@@ -187,9 +188,9 @@ class ChatbotOrchestrator:
             # 闭包工厂模式：提取 flow 事件跟踪逻辑，避免 if/else 两分支重复 async for + 状态更新
             flow_tracker, flow_state = self._make_flow_state_tracker()
             flow = (
-                self._run_agent_flow(message, context, images)
+                self._run_agent_flow(message, context, images, model)
                 if self._should_trigger_agent(intent, enable_tools)
-                else self._run_rag_flow(message, context, images)
+                else self._run_rag_flow(message, context, images, model)
             )
             async for event in flow_tracker(flow):
                 yield event
@@ -328,6 +329,7 @@ class ChatbotOrchestrator:
 
     async def _run_rag_flow(
         self, query: str, context: Context, images: list[str] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[SSEEvent]:
         """RAG + LLM 流式生成流程（含降级链）
 
@@ -351,7 +353,7 @@ class ChatbotOrchestrator:
 
         try:
             full_response: list[str] = []
-            async for token in self._rag.generate(query, context_str, history, images):
+            async for token in self._rag.generate(query, context_str, history, images, model):
                 full_response.append(token)
                 yield SSEEvent(event=SSEEventType.TOKEN, data={"content": token})
 
@@ -362,7 +364,7 @@ class ChatbotOrchestrator:
             follow_ups: list[str] = []
             if self._config.rag.enable_follow_ups:
                 follow_ups = await self._rag.generate_follow_ups(
-                    query, response, history, self._config.rag.follow_up_count,
+                    query, response, history, self._config.rag.follow_up_count, model,
                 )
 
             yield SSEEvent(
@@ -448,14 +450,14 @@ class ChatbotOrchestrator:
         return False, _gen()
 
     def _handle_done_event(
-        self, agent_event, query: str, sources: list, history: list, **kwargs,
+        self, agent_event, query: str, sources: list, history: list, model: str | None = None, **kwargs,
     ) -> tuple[bool, AsyncIterator[SSEEvent]]:
         """处理 done 类型的 Agent 事件，返回 (是否终止, 事件流)"""
         content = agent_event.data.get("content", "")
-        return True, self._emit_agent_done_event(query, content, sources, history)
+        return True, self._emit_agent_done_event(query, content, sources, history, model)
 
     def _handle_error_event(
-        self, agent_event, query: str, context: Context, images: list[str] | None, **kwargs,
+        self, agent_event, query: str, context: Context, images: list[str] | None, model: str | None = None, **kwargs,
     ) -> tuple[bool, AsyncIterator[SSEEvent]]:
         """处理 error 类型的 Agent 事件，返回 (是否终止, 事件流)
         
@@ -463,11 +465,12 @@ class ChatbotOrchestrator:
         """
         logger.warning(f"Agent 异常，降级到 RAG flow: {agent_event.data}")
         return True, self._fallback_to_rag_flow(
-            query, context, images, agent_event.data.get("message", ""),
+            query, context, images, agent_event.data.get("message", ""), model,
         )
 
     async def _run_agent_flow(
         self, query: str, context: Context, images: list[str] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[SSEEvent]:
         """Agent 多步工具调用流程
 
@@ -506,10 +509,11 @@ class ChatbotOrchestrator:
             "history": history,
             "context": context,
             "images": images,
+            "model": model,
         }
 
         try:
-            async for agent_event in self._agent.run(query, context_str, history, images):
+            async for agent_event in self._agent.run(query, context_str, history, images, model):
                 handler = event_handlers.get(agent_event.type)
                 if not handler:
                     continue
@@ -523,7 +527,7 @@ class ChatbotOrchestrator:
         except Exception as e:
             logger.exception("Agent flow 异常，降级到 RAG flow")
             async for event in self._fallback_to_rag_flow(
-                query, context, images, str(e),
+                query, context, images, str(e), model,
             ):
                 yield event
 
@@ -533,6 +537,7 @@ class ChatbotOrchestrator:
         content: str,
         sources: list,
         history: list,
+        model: str | None = None,
     ) -> AsyncIterator[SSEEvent]:
         """构造 Agent flow 的 TOKEN + DONE 事件流
 
@@ -545,7 +550,7 @@ class ChatbotOrchestrator:
         follow_ups: list[str] = []
         if self._config.rag.enable_follow_ups:
             follow_ups = await self._rag.generate_follow_ups(
-                query, content, history, self._config.rag.follow_up_count,
+                query, content, history, self._config.rag.follow_up_count, model,
             )
 
         yield SSEEvent(
@@ -568,6 +573,7 @@ class ChatbotOrchestrator:
         context: Context,
         images: list[str] | None,
         reason: str,
+        model: str | None = None,
     ) -> AsyncIterator[SSEEvent]:
         """Agent 失败后降级到 RAG flow（含降级事件发布）
 
@@ -575,7 +581,7 @@ class ChatbotOrchestrator:
         publish_degraded + _run_rag_flow 转发，重复逻辑导致认知复杂度叠加。
         """
         await self._publish_degraded("agent", "rag", reason)
-        async for event in self._run_rag_flow(query, context, images):
+        async for event in self._run_rag_flow(query, context, images, model):
             yield event
 
     async def _fallback_to_rag_fragments(

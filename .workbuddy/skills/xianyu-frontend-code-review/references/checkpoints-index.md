@@ -167,3 +167,9 @@
 | ID | 名称 | 维度 | 版本 | 配置节点 | 规范源 |
 |----|------|------|------|----------|--------|
 | F-REVIEW-247 | PROXY-REDIRECT-SAFETY 重定向/中间件不得破坏反代（Funnel 回环安全） | 48 | v4.72.0 | `proxy_redirect_safety` | meta-rule #120 / step 登录专项 |
+
+## 新增检查点（v4.73.0 · 2026-08-16 构建产物与路径标准专项）
+
+| ID | 名称 | 维度 | 版本 | 配置节点 | 规范源 |
+|----|------|------|------|----------|--------|
+| F-REVIEW-248 | BUILD-OUTPUT-PATH-STANDARDS 构建产物与路径标准（release 集中化 / SPA 单一来源 / 路径零硬编码） | 49 | v4.73.0 | `build_output_central` / `build_output_standards` | xianyu-hunter-dev 规范 29/30/33 / B-REVIEW-342 配套 |

@@ -1,5 +1,6 @@
-import { notification, Button } from 'antd'
+import { notification } from 'antd'
 import { useSheetStore } from '../../stores/sheetStore'
+import { TipButton } from '@/components/TipButton'
 
 /**
  * 带通知的 openSheet 包装函数
@@ -34,7 +35,8 @@ export function openSheetWithNotification(path: string) {
       placement: 'topRight',
       // 撤销按钮：点击后调用 restoreReplaced 从回收栈恢复被替换的 sheet
       btn: (
-        <Button
+        <TipButton
+          tip="恢复被自动替换的 sheet"
           type="primary"
           size="small"
           onClick={() => {
@@ -43,7 +45,7 @@ export function openSheetWithNotification(path: string) {
           }}
         >
           撤销
-        </Button>
+        </TipButton>
       ),
     })
   }

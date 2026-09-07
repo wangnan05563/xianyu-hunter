@@ -1,4 +1,5 @@
-import { Card, Button, Row, Col, InputNumber } from 'antd'
+import { Card, Row, Col, InputNumber } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import type { AIUsage } from '../../../../api'
 
 interface BudgetSettingsProps {
@@ -62,9 +63,9 @@ export default function BudgetSettings({ budget, onBudgetChange, saving, onSave 
           </Col>
         </Row>
         <div style={{ marginTop: 16 }}>
-          <Button type="primary" loading={saving} onClick={onSave}>
+          <TipButton tip="保存当前预算设置" type="primary" loading={saving} onClick={onSave}>
             保存预算设置
-          </Button>
+          </TipButton>
         </div>
       </Card>
     </>

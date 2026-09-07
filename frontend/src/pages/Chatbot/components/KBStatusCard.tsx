@@ -1,7 +1,8 @@
-import { Card, Button, Tag, Modal, Progress, message, Typography } from 'antd'
+import { Card, Tag, Modal, Progress, message, Typography } from 'antd'
 import { ReloadOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import type { KBStatus } from '../types'
+import { TipButton } from '@/components/TipButton'
 
 interface Props {
   readonly status: KBStatus
@@ -39,14 +40,15 @@ export function KBStatusCard({ status, onRebuild }: Props) {
     <Card
       title="知识库状态"
       extra={
-        <Button
+        <TipButton
+          tip="重建知识库索引（使用最新文档）"
           icon={<ReloadOutlined />}
           onClick={handleRebuild}
           loading={isBuilding}
           disabled={isBuilding}
         >
           重建
-        </Button>
+        </TipButton>
       }
     >
       <p>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Card, Table, Button, Space, Spin, Input, Select, Slider, Row, Col,
+  Card, Table, Space, Spin, Input, Select, Slider, Row, Col,
   Empty, DatePicker, Alert, Progress, Checkbox, Tag, Statistic, InputNumber,
   Tooltip,
 } from 'antd'
@@ -23,6 +23,7 @@ import { ExportButton } from '../../components/ExportButton'
 import { AIEvalModal } from './components/AIEvalModal'
 import { DeepAnalyzeModal } from './components/DeepAnalyzeModal'
 import { CollectResultModal } from './components/CollectResultModal'
+import { TipButton } from '@/components/TipButton'
 
 import { useEvalFilters, type ResultCategory } from './hooks/useEvalFilters'
 import { useEvalList } from './hooks/useEvalList'
@@ -235,9 +236,9 @@ function AnalysisPanel({
       <Card title={<><AimOutlined style={{ marginRight: 6 }} />阈值建议</>} style={{ marginTop: 16 }}>
         <div style={{ marginBottom: 8 }}>目标通过率：{thresholdTarget}%</div>
         <Slider value={thresholdTarget} onChange={onThresholdTargetChange} min={10} max={90} step={5} />
-        <Button type="primary" icon={<AimOutlined />} onClick={fetchSuggestion} style={{ marginTop: 8 }} block>
+        <TipButton type="primary" icon={<AimOutlined />} onClick={fetchSuggestion} style={{ marginTop: 8 }} block tip="根据目标通过率计算建议评分阈值">
           计算建议阈值
-        </Button>
+        </TipButton>
         {suggestion && (
           <div style={{ marginTop: 16, padding: 12, background: 'rgba(82, 196, 26, 0.08)', borderRadius: 4 }}>
             <div>建议阈值：<b style={{ color: '#52c41a' }}>{suggestion.suggested_threshold}</b></div>
@@ -360,13 +361,13 @@ function BatchSelectionAlert({
       message={
         <Space>
           <span>已选择 <b>{selectedCount}</b> 项</span>
-          <Button type="primary" size="small" icon={<RobotOutlined />} loading={batchAIEvaluating} onClick={onBatchAIEval}>
+          <TipButton type="primary" size="small" icon={<RobotOutlined />} loading={batchAIEvaluating} onClick={onBatchAIEval} tip="对选中商品批量执行 AI 成色评估">
             批量 AI 评估 ({selectedCount} 项)
-          </Button>
-          <Button size="small" icon={<CloudDownloadOutlined />} loading={batchCollecting} onClick={onBatchCollectOfficial}>
+          </TipButton>
+          <TipButton size="small" icon={<CloudDownloadOutlined />} loading={batchCollecting} onClick={onBatchCollectOfficial} tip="对选中商品批量访问官方页面采集">
             批量官方采集 ({selectedCount} 项)
-          </Button>
-          <Button size="small" onClick={onClearSelection}>取消选择</Button>
+          </TipButton>
+          <TipButton size="small" onClick={onClearSelection} tip="取消已选中的商品">取消选择</TipButton>
         </Space>
       }
       description={showProgress && (
@@ -584,12 +585,12 @@ export default function Evaluations() {
               显示超范围
             </Checkbox>
           </Tooltip>
-          <Button type="primary" icon={<SearchOutlined />} onClick={onSearch}>查询</Button>
-          <Button icon={<UndoOutlined />} onClick={onReset}>重置</Button>
-          <Button icon={<ReloadOutlined />} onClick={list.load} loading={list.loading}>刷新</Button>
-          <Button icon={<RetweetOutlined />} onClick={batch.onRecompute} loading={batch.recomputing}>重新评估</Button>
-          <Button icon={<RetweetOutlined />} onClick={batch.onBatchEvaluateUnevaluated} loading={batch.batchEvaluating}>批量评估未评估商品</Button>
-          <Button icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)}>列配置</Button>
+          <TipButton type="primary" icon={<SearchOutlined />} onClick={onSearch} tip="按当前筛选条件查询评估记录">查询</TipButton>
+          <TipButton icon={<UndoOutlined />} onClick={onReset} tip="重置全部筛选条件">重置</TipButton>
+          <TipButton icon={<ReloadOutlined />} onClick={list.load} loading={list.loading} tip="重新加载评估列表数据">刷新</TipButton>
+          <TipButton icon={<RetweetOutlined />} onClick={batch.onRecompute} loading={batch.recomputing} tip="重新计算所有商品评估分值">重新评估</TipButton>
+          <TipButton icon={<RetweetOutlined />} onClick={batch.onBatchEvaluateUnevaluated} loading={batch.batchEvaluating} tip="对尚未评估的商品批量评估">批量评估未评估商品</TipButton>
+          <TipButton icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)} tip="打开列显示与排序配置">列配置</TipButton>
           <ExportButton dataset="evaluations" params={{ task_id: filters.taskId || undefined }} />
         </Space>
       </Card>
@@ -618,14 +619,13 @@ export default function Evaluations() {
         <Col span={panelCollapsed ? 23 : 16}>
           <Card style={{ transition: 'all 0.2s ease' }}
             extra={
-              <Tooltip title={panelCollapsed ? '展开分析面板' : '收起分析面板'}>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={panelCollapsed ? <RightOutlined /> : <LeftOutlined />}
-                  onClick={() => setPanelCollapsed(!panelCollapsed)}
-                />
-              </Tooltip>
+              <TipButton
+                type="text"
+                size="small"
+                icon={panelCollapsed ? <RightOutlined /> : <LeftOutlined />}
+                onClick={() => setPanelCollapsed(!panelCollapsed)}
+                tip={panelCollapsed ? '展开分析面板' : '收起分析面板'}
+              />
             }
           >
             <BatchSelectionAlert

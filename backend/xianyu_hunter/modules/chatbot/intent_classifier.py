@@ -93,7 +93,7 @@ class IntentClassifier:
         else:
             self._http = None
 
-    async def classify(self, message: str) -> IntentResult:
+    async def classify(self, message: str, model: str | None = None) -> IntentResult:
         """两阶段分类
 
         阶段1：_rule_classify（关键词规则），命中即返回
@@ -102,6 +102,8 @@ class IntentClassifier:
         边界条件：
         - 空字符串：直接拒绝（in_scope=False），避免无意义调用
         - LLM 不可用/失败：保守放行，让 RAG/AGENT 兜底
+
+        model：请求级模型覆盖，None 时用 config.llm.model。
         """
         message = message.strip()
         if not message:
@@ -116,7 +118,7 @@ class IntentClassifier:
             return rule_result
 
         # 阶段 2：LLM 兜底
-        return await self._llm_classify(message)
+        return await self._llm_classify(message, model)
 
     def _rule_classify(self, message: str) -> IntentResult | None:
         """规则预筛
@@ -152,7 +154,7 @@ class IntentClassifier:
             return "agent"
         return "rag"
 
-    async def _llm_classify(self, message: str) -> IntentResult:
+    async def _llm_classify(self, message: str, model: str | None = None) -> IntentResult:
         """LLM 兜底分类
 
         失败策略：网络异常/超时/预算超限时保守返回 in_scope=True，
@@ -194,7 +196,7 @@ class IntentClassifier:
             resp = await self._http.post(
                 f"{self._base_url}/chat/completions",
                 json={
-                    "model": self._config.llm.model,
+                    "model": model or self._config.llm.model,
                     "temperature": 0.0,  # 分类任务用确定性输出，避免随机性
                     "max_tokens": 200,
                     "messages": [
@@ -210,7 +212,7 @@ class IntentClassifier:
             try:
                 self._ai_usage.record_usage(
                     endpoint="chatbot_intent",
-                    model=self._config.llm.model,
+                    model=model or self._config.llm.model,
                     response_data=data,
                 )
             except Exception as e:

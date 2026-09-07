@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { TipButton } from '@/components/TipButton'
 import {
   Steps,
   Card,
-  Button,
   Input,
   InputNumber,
   Select,
@@ -101,24 +101,26 @@ export default function Onboarding() {
           <Card size="small" style={{ background: 'var(--xh-bg-code)', fontFamily: 'monospace' }}>
             <Space>
               <Text code>python -m xianyu_hunter qr-login</Text>
-              <Button
+              <TipButton
+                tip="复制扫码登录命令"
                 size="small"
                 icon={<CopyOutlined />}
                 onClick={() => copyCommand('python -m xianyu_hunter qr-login')}
               >
                 复制
-              </Button>
+              </TipButton>
             </Space>
           </Card>
           <div style={{ textAlign: 'center' }}>
-            <Button
+            <TipButton
+              tip="刷新并检测当前登录状态"
               type="primary"
               icon={<ReloadOutlined />}
               loading={checking}
               onClick={checkLogin}
             >
               刷新登录状态
-            </Button>
+            </TipButton>
             {loginChecked && (
               <Text type="success" style={{ marginLeft: 12 }}>
                 <CheckCircleOutlined /> 已登录
@@ -175,7 +177,8 @@ export default function Onboarding() {
               ]}
             />
           </div>
-          <Button
+          <TipButton
+            tip="创建监控任务"
             type="primary"
             icon={<RocketOutlined />}
             loading={submitting}
@@ -183,7 +186,7 @@ export default function Onboarding() {
             block
           >
             创建任务
-          </Button>
+          </TipButton>
         </Space>
       ),
     },
@@ -200,9 +203,9 @@ export default function Onboarding() {
           <Paragraph>
             前往 <Link to="/config/notifier">通知渠道</Link> 页面配置钉钉、企业微信、邮件等通知方式。
           </Paragraph>
-          <Button type="primary" onClick={() => setCurrent(3)}>
+          <TipButton tip="进入下一步配置通知" type="primary" onClick={() => setCurrent(3)}>
             下一步
-          </Button>
+          </TipButton>
         </Space>
       ),
     },
@@ -215,18 +218,19 @@ export default function Onboarding() {
           <Card size="small" style={{ background: 'var(--xh-bg-code)', fontFamily: 'monospace' }}>
             <Space>
               <Text code>python -m xianyu_hunter worker</Text>
-              <Button
+              <TipButton
+                tip="复制启动调度器命令"
                 size="small"
                 icon={<CopyOutlined />}
                 onClick={() => copyCommand('python -m xianyu_hunter worker')}
               >
                 复制
-              </Button>
+              </TipButton>
             </Space>
           </Card>
-          <Button type="primary" onClick={() => setCurrent(4)} block>
+          <TipButton tip="完成初始化设置" type="primary" onClick={() => setCurrent(4)} block>
             完成设置
-          </Button>
+          </TipButton>
         </Space>
       ),
     },
@@ -242,9 +246,9 @@ export default function Onboarding() {
             title="设置完成！"
             subTitle="闲鱼猎人已就绪，开始你的智能监控之旅"
             extra={
-              <Button type="primary" size="large" onClick={() => navigate('/')}>
+              <TipButton tip="进入系统仪表盘" type="primary" size="large" onClick={() => navigate('/')}>
                 进入仪表盘
-              </Button>
+              </TipButton>
             }
           />
         </Card>
@@ -260,14 +264,14 @@ export default function Onboarding() {
           {steps[current].content}
         </div>
         <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between' }}>
-          <Button disabled={current === 0} onClick={() => setCurrent(current - 1)}>
+          <TipButton tip="返回上一步" disabled={current === 0} onClick={() => setCurrent(current - 1)}>
             上一步
-          </Button>
+          </TipButton>
           {/* Step 1 允许跳过（已登录或不想检查），Step 3 由内部按钮控制 */}
           {current !== 2 && (
-            <Button type="link" onClick={() => setCurrent(current + 1)}>
-              跳过
-            </Button>
+          <TipButton tip="跳过本步骤" type="link" onClick={() => setCurrent(current + 1)}>
+            跳过
+          </TipButton>
           )}
         </div>
       </Card>

@@ -1257,6 +1257,87 @@ def save_ai_config(body: AIConfigBody) -> dict[str, Any]:
     }
 
 
+class ModelsRequest(BaseModel):
+    """模型列表请求
+
+    base_url / api_key 留空时复用服务端已配置的 AI 设置（settings.openai_*），
+    避免前端把脱敏后的 key（****xxxx）回传；也支持传入临时值做连接预览。
+    """
+
+    base_url: str | None = None
+    api_key: str | None = None
+
+
+@router.post("/models")
+def list_models(body: ModelsRequest) -> dict[str, Any]:
+    """拉取可用模型列表（OpenAI 兼容 /models 端点）
+
+    用于「AI 服务」配置与「知识库问答」模型下拉：根据用户（在 AI 服务中）提供的
+    API Base URL 与 API Key，请求上游 /models 并解析返回的模型 id 列表。
+
+    错误映射（统一通过 HTTPException + 中文 detail，前端按 status 友好提示）：
+    - 400：base_url 未配置 / 格式非法
+    - 400：api_key 未配置
+    - 401/403：API Key 无效或无权限
+    - 502：网络/超时/上游返回非 200/返回体无法解析
+    """
+    settings = get_settings()
+    base_url = (body.base_url or "").strip() or settings.openai_base_url
+    api_key = body.api_key if body.api_key else settings.openai_api_key
+
+    if not base_url:
+        raise HTTPException(status_code=400, detail="API Base URL 未配置，请在「AI 服务」中填写")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API Key 未配置，请在「AI 服务」中填写")
+
+    # URL 格式校验：非法地址（如缺少协议、含空格）直接拦截，避免 httpx 在请求时才抛错
+    try:
+        httpx.URL(base_url)
+    except httpx.InvalidURL:
+        raise HTTPException(status_code=400, detail=f"API Base URL 格式无效: {base_url}")
+
+    url = base_url.rstrip("/") + "/models"
+    headers = {
+        "Authorization": AUTH_BEARER_PREFIX + api_key,
+        "Content-Type": CONTENT_TYPE_JSON,
+    }
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            r = client.get(url, headers=headers)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=502, detail="连接模型服务超时（>20s），请检查网络或地址")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"连接模型服务失败: {e}")
+
+    # 鉴权失败：API Key 无效或无权访问模型列表
+    if r.status_code in (401, 403):
+        raise HTTPException(
+            status_code=r.status_code,
+            detail=f"API Key 无效或无权限访问模型列表（HTTP {r.status_code}）",
+        )
+    if r.status_code != 200:
+        snippet = r.text[:200]
+        raise HTTPException(status_code=502, detail=f"模型服务返回 {r.status_code}: {snippet}")
+
+    # 解析上游返回的模型列表：OpenAI 兼容格式为 {"object":"list","data":[{id,...}]}
+    try:
+        data = r.json()
+        raw_models = data.get("data", []) if isinstance(data, dict) else []
+        models = [
+            {
+                "id": m.get("id"),
+                "owned_by": m.get("owned_by"),
+                "created": m.get("created"),
+            }
+            for m in raw_models
+            if isinstance(m, dict) and m.get("id")
+        ]
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=502, detail="模型服务返回格式异常，无法解析模型列表")
+
+    return {"ok": True, "models": models, "base_url": base_url}
+
+
 @router.post("/test-connection")
 def test_ai_connection() -> dict[str, Any]:
     """测试 AI 服务连接

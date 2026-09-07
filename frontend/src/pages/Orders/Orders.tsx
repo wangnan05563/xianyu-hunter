@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
-  Card, Table, Tag, Select, Button, Space, Spin, Statistic, Row, Col,
+  Card, Table, Tag, Select, Space, Spin, Statistic, Row, Col,
   message, Empty, Modal, Steps, Progress, Radio, InputNumber, Result,
   Popconfirm,
 } from 'antd'
@@ -9,6 +9,7 @@ import {
   SmileOutlined, LoadingOutlined, DollarOutlined, SettingOutlined,
   DeleteOutlined,
 } from '@ant-design/icons'
+import { TipButton } from '@/components/TipButton'
 import { orderApi, type OrderItem } from '../../api'
 import { ORDER_STATUS_CONFIG } from '../../constants/orderStatus'
 import { usePersistentState } from '../../hooks/usePersistentState'
@@ -291,10 +292,10 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
 
           <div style={{ textAlign: 'right' }}>
             <Space>
-              <Button onClick={handleClose}>取消</Button>
-              <Button type="primary" icon={<ThunderboltOutlined />} loading={loading} onClick={handleTakeover}>
+              <TipButton tip="关闭接管弹窗" onClick={handleClose}>取消</TipButton>
+              <TipButton tip="开始接管此订单" type="primary" icon={<ThunderboltOutlined />} loading={loading} onClick={handleTakeover}>
                 确认接管
-              </Button>
+              </TipButton>
             </Space>
           </div>
         </div>
@@ -327,12 +328,12 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
 
           <div style={{ textAlign: 'right' }}>
             <Space>
-              <Button danger icon={<CloseOutlined />} loading={loading} onClick={handleCancel}>
+              <TipButton tip="取消接管并保留订单为待处理" danger icon={<CloseOutlined />} loading={loading} onClick={handleCancel}>
                 取消接管
-              </Button>
-              <Button type="primary" icon={<CheckOutlined />} loading={loading} onClick={handleConfirm}>
+              </TipButton>
+              <TipButton tip="确认已在闲鱼完成支付" type="primary" icon={<CheckOutlined />} loading={loading} onClick={handleConfirm}>
                 确认完成
-              </Button>
+              </TipButton>
             </Space>
           </div>
         </div>
@@ -353,7 +354,7 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
           />
           <ProfitCalculator amount={order.price} />
           <div style={{ textAlign: 'right', marginTop: 16 }}>
-            <Button onClick={handleClose}>关闭</Button>
+            <TipButton tip="关闭完成提示" onClick={handleClose}>关闭</TipButton>
           </div>
         </section>
       )}
@@ -538,14 +539,15 @@ export default function Orders() {
       render: (_: unknown, r: OrderItem) => (
         <Space size="small">
           {(r.status === 'pending' || r.status === 'takeover_pending') && (
-            <Button
+            <TipButton
+              tip={r.status === 'pending' ? '接管此待处理订单' : '查看接管进度'}
               type="link"
               icon={<ThunderboltOutlined />}
               size="small"
               onClick={() => openTakeoverModal(r)}
             >
               {r.status === 'pending' ? '接管' : '查看'}
-            </Button>
+            </TipButton>
           )}
           <Popconfirm
             title="确认删除此订单？"
@@ -555,9 +557,9 @@ export default function Orders() {
             cancelText="取消"
             okButtonProps={{ danger: true }}
           >
-            <Button type="link" danger icon={<DeleteOutlined />} size="small">
+            <TipButton tip="删除此订单（不可恢复）" type="link" danger icon={<DeleteOutlined />} size="small">
               删除
-            </Button>
+            </TipButton>
           </Popconfirm>
         </Space>
       ),
@@ -592,8 +594,8 @@ export default function Orders() {
               { label: '人工接管', value: 'takeover_pending' },
             ]}
           />
-          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
-          <Button icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)}>列配置</Button>
+          <TipButton tip="重新加载订单列表" icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</TipButton>
+          <TipButton tip="自定义表格显示列与顺序" icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)}>列配置</TipButton>
         </Space>
 
         <Spin spinning={loading}>

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Card, Descriptions, Tag, Button, Space, Spin, Row, Col, Table, Empty, message, Tabs, List,
-  Select, Popconfirm, Radio, Tooltip, Modal,
+  Select, Popconfirm, Radio, Modal,
 } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined,
@@ -11,6 +11,7 @@ import {
 import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
 import { STATUS_COLOR } from '../../constants/statusColors'
+import { TipButton } from '@/components/TipButton'
 
 // 过滤掉指定的上游依赖项（S2004 拆出避免函数嵌套过深）
 // 为什么提取：handleRemoveDep → .then → setDeps(prev =>) → filter(d =>) 嵌套达 5 层
@@ -403,19 +404,16 @@ export default function TaskDetail() {
         <Space size="small">
           {/* 打开原帖：与 TaskList「闲鱼内容关联」风格保持一致 */}
           {r.display?.url && (
-            <Tooltip title="打开原帖">
-              <Button
-                size="small"
-                type="link"
-                icon={<EyeOutlined />}
-                onClick={() => globalThis.open(r.display.url, '_blank')}
-              />
-            </Tooltip>
+            <TipButton
+              tip="打开原帖"
+              size="small"
+              type="link"
+              icon={<EyeOutlined />}
+              onClick={() => globalThis.open(r.display.url, '_blank')}
+            />
           )}
           <Popconfirm title="确认删除此关联？" onConfirm={() => handleRemoveLink(r.link_id)} okText="删除" cancelText="取消">
-            <Tooltip title="删除关联">
-              <Button type="link" danger size="small" icon={<DeleteOutlined />} />
-            </Tooltip>
+            <TipButton tip="删除该关联" type="link" danger size="small" icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
       ),
@@ -429,8 +427,8 @@ export default function TaskDetail() {
   return (
     <div className="page-container">
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')}>返回列表</Button>
-        <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
+        <TipButton tip="返回任务列表" icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')}>返回列表</TipButton>
+        <TipButton tip="重新加载任务详情" icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</TipButton>
       </Space>
 
       <Spin spinning={loading}>
@@ -438,10 +436,10 @@ export default function TaskDetail() {
           <>
             <Card title={`任务详情：${task.name}`} style={{ marginBottom: 16 }}>
               <Space style={{ marginBottom: 16 }}>
-                <Button type="primary" icon={<PlayCircleOutlined />} loading={actionLoading} onClick={() => handleControl('restart')} disabled={task.status === 'running'}>启动</Button>
-                <Button icon={<PauseCircleOutlined />} loading={actionLoading} onClick={() => handleControl('pause')} disabled={task.status !== 'running'}>暂停</Button>
-                <Button danger icon={<StopOutlined />} loading={actionLoading} onClick={() => handleControl('stop')} disabled={task.status === 'stopped'}>停止</Button>
-                <Button onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</Button>
+                <TipButton tip="启动或重启该任务" type="primary" icon={<PlayCircleOutlined />} loading={actionLoading} onClick={() => handleControl('restart')} disabled={task.status === 'running'}>启动</TipButton>
+                <TipButton tip="暂停当前运行中的任务" icon={<PauseCircleOutlined />} loading={actionLoading} onClick={() => handleControl('pause')} disabled={task.status !== 'running'}>暂停</TipButton>
+                <TipButton tip="停止当前任务" danger icon={<StopOutlined />} loading={actionLoading} onClick={() => handleControl('stop')} disabled={task.status === 'stopped'}>停止</TipButton>
+                <TipButton tip="编辑该任务配置" onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</TipButton>
               </Space>
 
               <Descriptions bordered column={2} size="small">
@@ -550,14 +548,15 @@ export default function TaskDetail() {
                           title="上游依赖（本任务依赖的任务）"
                           size="small"
                           extra={
-                            <Button
+                            <TipButton
+                              tip="加载可选任务以添加上游依赖"
                               type="link"
                               size="small"
                               icon={<PlusOutlined />}
                               onClick={loadAllTasks}
                             >
                               添加依赖
-                            </Button>
+                            </TipButton>
                           }
                         >
                           {/* 添加依赖的输入行 */}
@@ -572,7 +571,8 @@ export default function TaskDetail() {
                                 optionFilterProp="label"
                                 options={availableTasks.map((t) => ({ value: t.id, label: `${t.name} (${t.keyword})` }))}
                               />
-                              <Button
+                              <TipButton
+                                tip="添加选中的上游依赖"
                                 type="primary"
                                 size="small"
                                 loading={addDepLoading}
@@ -580,7 +580,7 @@ export default function TaskDetail() {
                                 onClick={handleAddDep}
                               >
                                 添加
-                              </Button>
+                              </TipButton>
                             </div>
                           )}
                           {deps.length === 0 ? <Empty description="无上游依赖" /> : (
@@ -591,7 +591,7 @@ export default function TaskDetail() {
                                 <List.Item
                                   extra={
                                     <Popconfirm title="确认移除此依赖？" onConfirm={() => handleRemoveDep(d.depends_on)} okText="移除" cancelText="取消">
-                                      <Button type="link" danger size="small">移除</Button>
+                                      <TipButton tip="移除该上游依赖" type="link" danger size="small">移除</TipButton>
                                     </Popconfirm>
                                   }
                                 >
@@ -643,21 +643,23 @@ export default function TaskDetail() {
                           ]}
                         />
                         {/* 实时查询：长轮询拉取最新数据 */}
-                        <Button
+                        <TipButton
+                          tip="实时查询最新关联数据"
                           icon={<SearchOutlined />}
                           loading={liveLoading}
                           onClick={handleLive}
                         >
                           实时查询
-                        </Button>
+                        </TipButton>
                         {/* 刷新数据源：触发后端重新搜索并写入 */}
-                        <Button
+                        <TipButton
+                          tip="重新拉取并写入数据源"
                           icon={<SyncOutlined />}
                           loading={refreshLoading}
                           onClick={handleRefresh}
                         >
                           刷新数据源
-                        </Button>
+                        </TipButton>
                       </Space>
                       <Table
                         columns={linkColumns}

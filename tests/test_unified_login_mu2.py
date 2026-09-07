@@ -117,11 +117,13 @@ def test_finalize_multi_user_login_stores_session_token_in_session():
     assert ul._session.get("current_user_id") == "12345678"
 
 
-def test_finalize_multi_user_login_returns_none_on_empty_cookies():
-    """无 Cookie 数据时返回 None（降级单用户模式）"""
+def test_finalize_multi_user_login_returns_none_on_empty_cookies(tmp_path):
+    """default 与 last_login 均无 Cookie 数据时返回 None（降级单用户模式）"""
     with patch(
         "xianyu_hunter.web.routes.unified_login.get_cookie_store"
     ) as mock_store, patch(
+        "xianyu_hunter.web.routes.unified_login.get_data_dir", return_value=tmp_path
+    ) as mock_dir, patch(
         "xianyu_hunter.web.services.user_manager.get_user_manager"
     ) as mock_mgr:
         store = MagicMock()
@@ -136,6 +138,45 @@ def test_finalize_multi_user_login_returns_none_on_empty_cookies():
     assert token is None
     # 失败时不调用 identify_or_create
     mgr.identify_or_create.assert_not_called()
+
+
+def test_finalize_multi_user_login_falls_back_to_last_login(tmp_path):
+    """default 文件无数据时回退 last_login_cookies.json 完成多用户接入
+
+    为什么需要：登录子进程先写 success 状态、后异步导出 Cookie，
+    _finalize 读取 default 文件时可能尚未写入；last_login_cookies.json
+    是 auth_helper/browser_login 的公共导出路径，可作兜底识别源，
+    避免会话降级为单用户模式导致前端显示"未登录"/"默"字。
+    """
+    fake_cookies = [
+        {"name": "unb", "value": "12345678", "domain": ".goofish.com"},
+        {"name": "cookie2", "value": "a" * 32, "domain": ".taobao.com"},
+    ]
+    (tmp_path / "last_login_cookies.json").write_text(
+        json.dumps(fake_cookies), encoding="utf-8"
+    )
+
+    with patch(
+        "xianyu_hunter.web.routes.unified_login.get_cookie_store"
+    ) as mock_store, patch(
+        "xianyu_hunter.web.routes.unified_login.get_data_dir", return_value=tmp_path
+    ) as mock_dir, patch(
+        "xianyu_hunter.web.services.user_manager.get_user_manager"
+    ) as mock_mgr:
+        store = MagicMock()
+        store._read_json.return_value = {"cookies": []}
+        mock_store.return_value = store
+
+        mgr = MagicMock()
+        mgr.identify_or_create.return_value = "12345678"
+        mgr.issue_session.return_value = "session_token_fb"
+        mock_mgr.return_value = mgr
+
+        token = _finalize_multi_user_login()
+
+    assert token == "session_token_fb"
+    # 用 last_login 的 cookies 做用户识别
+    mgr.identify_or_create.assert_called_once_with(fake_cookies)
 
 
 def test_finalize_multi_user_login_returns_none_on_exception():

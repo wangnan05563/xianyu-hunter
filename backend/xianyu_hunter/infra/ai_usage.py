@@ -30,6 +30,9 @@ from xianyu_hunter.paths import get_data_dir
 def _usage_file() -> Path:
     return get_data_dir() / "ai_usage.json"
 
+# 测试通过 monkeypatch 此属性指向临时路径来隔离持久化
+USAGE_FILE = _usage_file()
+
 # 各模型每 1K token 价格（USD）
 MODEL_PRICING: dict[str, dict[str, float]] = {
     # OpenAI
@@ -294,9 +297,9 @@ def get_daily_summary() -> DailyUsage:
             )
 
     # 从持久化文件补充今日历史记录（覆盖服务重启前已写入的部分）
-    if _usage_file().exists():
+    if USAGE_FILE.exists():
         try:
-            data = json.loads(_usage_file().read_text(encoding="utf-8"))
+            data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
             for entry in data.get("records", []):
                 date_key = _date_key_of(entry["timestamp"])
                 if date_key == today:
@@ -339,10 +342,10 @@ def _load_history_from_file(summaries: dict[str, DailyUsage], today: str) -> Non
 
     独立出 get_recent_usage 的文件解析循环，集中处理 JSON 异常与日期过滤。
     """
-    if not _usage_file().exists():
+    if not USAGE_FILE.exists():
         return
     try:
-        data = json.loads(_usage_file().read_text(encoding="utf-8"))
+        data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, KeyError):
         return
     for entry in data.get("records", []):
@@ -452,11 +455,11 @@ def get_budget_config() -> BudgetConfig:
 def _persist_record(record: UsageRecord) -> None:
     """将调用记录追加到 JSON 文件"""
     try:
-        _usage_file().parent.mkdir(parents=True, exist_ok=True)
+        USAGE_FILE.parent.mkdir(parents=True, exist_ok=True)
         data: dict[str, Any] = {"records": []}
-        if _usage_file().exists():
+        if USAGE_FILE.exists():
             try:
-                data = json.loads(_usage_file().read_text(encoding="utf-8"))
+                data = json.loads(USAGE_FILE.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -475,6 +478,6 @@ def _persist_record(record: UsageRecord) -> None:
         if len(data["records"]) > max_records:
             data["records"] = data["records"][-max_records:]
 
-        _usage_file().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        USAGE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError as e:
         logger.warning(f"AI 用量记录持久化失败: {e}")

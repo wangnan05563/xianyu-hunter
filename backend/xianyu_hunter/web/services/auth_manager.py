@@ -118,7 +118,7 @@ class AuthManager:
         1. SQLite Cookie 数据库锁冲突 → Cookie 写入丢失（38→18 个）
         2. Chromium 启动变慢（等待锁释放）
         3. auth_helper 读 Cookie 不完整 → 读不到 unb → user_id 降级为 sha256(cookie2)
-        4. auth_helper 的 Chromium 虽然 headless=True，启动瞬间可能闪现窗口
+        4. auth_helper 的 Chromium 以 --headless=new 无头运行，不闪现窗口
         登录路径调用时传 delay=5.0，让 browser_login 的 Chromium 先退出。
         """
         if not _HELPER.exists():

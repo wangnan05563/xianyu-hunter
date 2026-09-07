@@ -1,1 +1,0 @@
-import{A as i,c as e}from"./index-a3jJcnwL.js";const o={list:t=>e.get("/api/timeline",{params:t}).then(a=>a.data)},l={list:t=>e.get("/api/logs",{params:t}).then(a=>a.data),search:t=>e.get("/api/logs/search",{params:t}).then(a=>a.data),exportUrl:t=>`${i}api/logs/export?format=${t}`};export{l,o as t};

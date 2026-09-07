@@ -9,6 +9,7 @@ import {
 } from '@ant-design/icons'
 import { vectorAdminApi } from '../../../api/vectorAdmin'
 import type { VectorStatus, VectorSnapshot, VectorAuditLog } from '../../../api/vectorAdmin'
+import { TipButton } from '@/components/TipButton'
 
 // 向量库维护面板：状态总览 + 快照管理 + 数据清理 + 审计日志
 // 危险操作（恢复/删除快照/清空/按来源删除）通过 Popconfirm 二次确认，
@@ -112,7 +113,7 @@ export function VectorAdminPanel() {
       {/* 状态总览卡片 */}
       <Card
         title="向量库状态"
-        extra={<Button icon={<ReloadOutlined />} onClick={loadAll} loading={loading}>刷新</Button>}
+        extra={<TipButton tip="刷新向量库状态、快照与审计日志" icon={<ReloadOutlined />} onClick={loadAll} loading={loading}>刷新</TipButton>}
       >
         {status && (
           <Row gutter={[16, 16]}>
@@ -145,13 +146,14 @@ export function VectorAdminPanel() {
       {/* 快照管理 */}
       <Card title="快照管理">
         <Space style={{ marginBottom: 16 }}>
-          <Button
+          <TipButton
+            tip="为当前集合创建一份快照备份"
             type="primary"
             icon={<CameraOutlined />}
             onClick={() => setSnapshotModalOpen(true)}
           >
             创建快照
-          </Button>
+          </TipButton>
         </Space>
         <Table
           size="small"
@@ -182,7 +184,7 @@ export function VectorAdminPanel() {
                     cancelText="取消"
                     okButtonProps={{ danger: true }}
                   >
-                    <Button size="small" icon={<RollbackOutlined />}>恢复</Button>
+                    <TipButton size="small" tip="用该快照覆盖当前集合数据" icon={<RollbackOutlined />}>恢复</TipButton>
                   </Popconfirm>
                   <Popconfirm
                     title="删除快照"
@@ -193,7 +195,7 @@ export function VectorAdminPanel() {
                     cancelText="取消"
                     okButtonProps={{ danger: true }}
                   >
-                    <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                    <TipButton size="small" tip="删除该快照文件，不影响当前集合" danger icon={<DeleteOutlined />}>删除</TipButton>
                   </Popconfirm>
                 </Space>
               ),
@@ -214,16 +216,16 @@ export function VectorAdminPanel() {
             cancelText="取消"
             okButtonProps={{ danger: true }}
           >
-            <Button danger icon={<DeleteOutlined />}>清空集合</Button>
+            <TipButton tip="删除集合内全部片段（危险操作）" danger icon={<DeleteOutlined />}>清空集合</TipButton>
           </Popconfirm>
-          <Button icon={<FileSearchOutlined />} onClick={() => setCleanupSourceOpen(true)}>
+          <TipButton tip="按来源文件删除其全部片段" icon={<FileSearchOutlined />} onClick={() => setCleanupSourceOpen(true)}>
             按来源文件删除
-          </Button>
+          </TipButton>
         </Space>
       </Card>
 
       {/* 审计日志 */}
-      <Card title="维护审计日志" extra={<Button icon={<ReloadOutlined />} onClick={loadAll}>刷新</Button>}>
+      <Card title="维护审计日志" extra={<TipButton tip="刷新向量库维护审计日志" icon={<ReloadOutlined />} onClick={loadAll}>刷新</TipButton>}>
         <Table
           size="small"
           rowKey="id"

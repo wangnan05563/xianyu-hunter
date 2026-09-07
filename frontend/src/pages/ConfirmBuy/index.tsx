@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Card, Button, Result, Spin, Typography, Space, Tag, Alert, App } from 'antd'
+import { Card, Result, Spin, Typography, Space, Tag, Alert, App } from 'antd'
 import { ThunderboltOutlined, ArrowLeftOutlined } from '@ant-design/icons'
+import { TipButton } from '@/components/TipButton'
 import { itemApi, orderApi } from '../../api'
 import type { ItemSummary } from '../../api/types'
 
@@ -90,9 +91,9 @@ export default function ConfirmBuy() {
           title="链接参数不完整"
           subTitle={errorMsg || '链接缺少 item_id 参数'}
           extra={
-            <Button type="primary" onClick={() => navigate('/')}>
+            <TipButton tip="返回系统首页" type="primary" onClick={() => navigate('/')}>
               返回首页
-            </Button>
+            </TipButton>
           }
         />
       </Card>
@@ -118,8 +119,8 @@ export default function ConfirmBuy() {
           subTitle={errorMsg || '商品可能已被删除或链接无效'}
           extra={
             <Space>
-              <Button onClick={() => navigate('/evaluations')}>查看评估列表</Button>
-              <Button type="primary" onClick={() => navigate('/')}>返回首页</Button>
+              <TipButton tip="前往评估明细列表" onClick={() => navigate('/evaluations')}>查看评估列表</TipButton>
+              <TipButton tip="返回系统首页" type="primary" onClick={() => navigate('/')}>返回首页</TipButton>
             </Space>
           }
         />
@@ -130,9 +131,9 @@ export default function ConfirmBuy() {
   return (
     <Card>
       <Space style={{ marginBottom: 16 }}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/evaluations')}>
+        <TipButton tip="返回评估明细列表" icon={<ArrowLeftOutlined />} onClick={() => navigate('/evaluations')}>
           返回评估列表
-        </Button>
+        </TipButton>
         <Tag color="orange">半自动模式</Tag>
       </Space>
 
@@ -190,7 +191,8 @@ export default function ConfirmBuy() {
       />
 
       <Space>
-        <Button
+        <TipButton
+          tip="创建待支付订单并提交抢单"
           type="primary"
           size="large"
           icon={<ThunderboltOutlined />}
@@ -198,10 +200,10 @@ export default function ConfirmBuy() {
           onClick={handleConfirm}
         >
           确认抢单
-        </Button>
-        <Button size="large" onClick={() => navigate('/evaluations')}>
+        </TipButton>
+        <TipButton tip="放弃抢单并返回评估列表" size="large" onClick={() => navigate('/evaluations')}>
           取消
-        </Button>
+        </TipButton>
       </Space>
     </Card>
   )

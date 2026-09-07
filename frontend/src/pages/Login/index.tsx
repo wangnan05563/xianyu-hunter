@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { TipButton } from '@/components/TipButton'
 import {
   Card,
-  Button,
   Input,
   Tabs,
   message,
@@ -241,7 +241,8 @@ function BrowserLoginTab({
       />
 
       {showStartButton ? (
-        <Button
+        <TipButton
+          tip="启动浏览器窗口并手动登录闲鱼"
           type="primary"
           size="large"
           icon={<LoginOutlined />}
@@ -250,7 +251,7 @@ function BrowserLoginTab({
           style={{ background: '#FF6200', borderColor: '#FF6200', width: 'fit-content' }}
         >
           启动浏览器窗口登录
-        </Button>
+        </TipButton>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* 登录进度 */}
@@ -296,9 +297,9 @@ function BrowserLoginTab({
 
           {/* 取消按钮 */}
           {!isTerminal && (
-            <Button icon={<SwapOutlined />} onClick={onCancel}>
+            <TipButton tip="取消当前登录过程" icon={<SwapOutlined />} onClick={onCancel}>
               取消登录
-            </Button>
+            </TipButton>
           )}
 
           {/* 终态重试：success/cancelled/error/timeout 都允许重新登录
@@ -306,11 +307,11 @@ function BrowserLoginTab({
               - cancelled：用户主动取消后可能想重新尝试
               - success：跳转失败的兜底（onLoginSuccess 未成功跳转时用户可手动重试） */}
           {isTerminal && (
-            <Button type="primary" icon={<ReloadOutlined />} onClick={onStart}
+            <TipButton type="primary" tip="重新启动浏览器窗口登录" icon={<ReloadOutlined />} onClick={onStart}
               loading={startingBrowser}
               style={{ background: '#FF6200', borderColor: '#FF6200' }}>
               重新登录
-            </Button>
+            </TipButton>
           )}
         </div>
       )}
@@ -349,23 +350,24 @@ function CookieInjectTab({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* 顶部操作栏：自动获取 + 当前状态 + 清空 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <Button
+        <TipButton
+          tip="从系统浏览器读取 Cookie 并填充"
           size="small"
           icon={<GlobalOutlined />}
           loading={autoFilling}
           onClick={onAutoFill}
         >
           {autoFilling ? '读取中…' : '从浏览器自动获取'}
-        </Button>
+        </TipButton>
         {autoFillResult && (
           <span style={{ fontSize: 12, color: autoFillResult.error ? themeToken.colorError : themeToken.colorSuccess }}>
             {autoFillResult.text}
           </span>
         )}
         {hasAnyCookie && (
-          <Button size="small" icon={<ClearOutlined />} onClick={onClear}>
+          <TipButton tip="清空已填写的 Cookie 字段" size="small" icon={<ClearOutlined />} onClick={onClear}>
             清空
-          </Button>
+          </TipButton>
         )}
       </div>
 
@@ -472,7 +474,8 @@ function CookieInjectTab({
 
       {/* 操作按钮 */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <Button
+        <TipButton
+          tip="注入 Cookie 完成登录"
           type="primary"
           icon={<KeyOutlined />}
           loading={injecting}
@@ -481,7 +484,7 @@ function CookieInjectTab({
           style={{ background: '#FF6200', borderColor: '#FF6200' }}
         >
           注入 Cookie 登录
-        </Button>
+        </TipButton>
 
         <Divider type="vertical" style={{ height: 24 }} />
 
@@ -493,9 +496,9 @@ function CookieInjectTab({
           showUploadList={false}
           beforeUpload={onFileUpload}
         >
-          <Button icon={<UploadOutlined />} size="small" loading={injecting}>
+          <TipButton tip="从文件导入 Cookie" icon={<UploadOutlined />} size="small" loading={injecting}>
             上传文件
-          </Button>
+          </TipButton>
         </Upload>
       </div>
     </div>
@@ -551,7 +554,8 @@ function BrowserImportTab({
 
       {/* 操作按钮 */}
       <Space wrap>
-        <Button
+        <TipButton
+          tip="从 Edge 浏览器导入 Cookie"
           type="primary"
           icon={<ImportOutlined />}
           loading={importing}
@@ -560,18 +564,19 @@ function BrowserImportTab({
           style={{ background: '#FF6200', borderColor: '#FF6200' }}
         >
           从 Edge 导入
-        </Button>
-        <Button
+        </TipButton>
+        <TipButton
+          tip="从 Chrome 浏览器导入 Cookie"
           icon={<ImportOutlined />}
           loading={importing}
           onClick={() => onImport('chrome')}
           disabled={!browserStatus?.chrome?.exists}
         >
           从 Chrome 导入
-        </Button>
-        <Button icon={<ReloadOutlined />} onClick={onOpenBrowser}>
+        </TipButton>
+        <TipButton tip="在系统浏览器打开闲鱼登录页" icon={<ReloadOutlined />} onClick={onOpenBrowser}>
           打开闲鱼网页
-        </Button>
+        </TipButton>
       </Space>
 
       {/* 文件锁定时的解决方案 */}
@@ -594,7 +599,8 @@ function BrowserImportTab({
 
       {/* 自动关闭浏览器并导入按钮 */}
       <Space wrap>
-        <Button
+        <TipButton
+          tip="自动关闭 Edge 后导入 Cookie"
           icon={<ThunderboltOutlined />}
           loading={importing}
           onClick={() => onImport('edge', true)}
@@ -602,8 +608,9 @@ function BrowserImportTab({
           danger
         >
           自动关闭 Edge 并导入
-        </Button>
-        <Button
+        </TipButton>
+        <TipButton
+          tip="自动关闭 Chrome 后导入 Cookie"
           icon={<ThunderboltOutlined />}
           loading={importing}
           onClick={() => onImport('chrome', true)}
@@ -611,7 +618,7 @@ function BrowserImportTab({
           danger
         >
           自动关闭 Chrome 并导入
-        </Button>
+        </TipButton>
       </Space>
 
       {/* 导入结果提示（支持多行显示） */}
@@ -632,9 +639,9 @@ function BrowserImportTab({
       </Divider>
 
       <Space>
-        <Button icon={<ReloadOutlined />} onClick={onRefreshStatus}>
+        <TipButton tip="重新检测浏览器状态" icon={<ReloadOutlined />} onClick={onRefreshStatus}>
           刷新检测
-        </Button>
+        </TipButton>
       </Space>
     </div>
   )
@@ -1075,7 +1082,8 @@ export default function Login() {
 
           {/* 辅助功能：获取 Cookie 教程 */}
           <div style={{ textAlign: 'center', marginTop: 16 }}>
-            <Button
+            <TipButton
+              tip="查看获取 Cookie 的图文教程"
               type="link"
               size="small"
               icon={<QuestionCircleOutlined />}
@@ -1083,7 +1091,7 @@ export default function Login() {
               style={{ color: themeToken.colorTextSecondary }}
             >
               如何获取 Cookie？
-            </Button>
+            </TipButton>
           </div>
         </Card>
       </div>
@@ -1094,7 +1102,7 @@ export default function Login() {
         open={tutorialVisible}
         onCancel={() => setTutorialVisible(false)}
         footer={[
-          <Button key="close" onClick={() => setTutorialVisible(false)}>知道了</Button>,
+          <TipButton key="close" tip="关闭教程弹窗" onClick={() => setTutorialVisible(false)}>知道了</TipButton>,
         ]}
       >
         <div style={{ lineHeight: 1.8 }}>

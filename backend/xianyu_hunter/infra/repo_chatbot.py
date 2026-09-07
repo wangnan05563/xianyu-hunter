@@ -17,8 +17,10 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Engine, delete, func, or_, select, update
+from sqlalchemy import Engine, delete, func, inspect, or_, select, update
 from sqlalchemy.orm import sessionmaker
+
+from loguru import logger
 
 from xianyu_hunter.infra.db_models import (
     Base,
@@ -73,7 +75,33 @@ class ChatbotRepository:
             ],
             checkfirst=True,
         )
+        # 老库迁移：create_all(checkfirst=True) 不会给已存在的表加列，
+        # 老库升级后 insert/select file_fingerprints 会报 no such column。
+        self._ensure_kb_version_file_fingerprints_column()
         self._init_default_config()
+
+    def _ensure_kb_version_file_fingerprints_column(self) -> None:
+        """老库迁移：为 chatbot_kb_versions 补 file_fingerprints 列（幂等）
+
+        create_all(checkfirst=True) 只建新表不 alter 旧表，老库直接使用该列
+        会在 insert/select 时报 no such column，因此启动时显式补列。
+        失败不阻断初始化（表可能尚不存在等场景）。
+        """
+        try:
+            cols = {
+                c["name"]
+                for c in inspect(self.engine).get_columns("chatbot_kb_versions")
+            }
+            if "file_fingerprints" in cols:
+                return
+            with self.engine.begin() as conn:
+                conn.exec_driver_sql(
+                    "ALTER TABLE chatbot_kb_versions "
+                    "ADD COLUMN file_fingerprints TEXT"
+                )
+            logger.info("chatbot_kb_versions 已补充 file_fingerprints 列（老库迁移）")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("chatbot_kb_versions 补 file_fingerprints 列失败（可忽略）: {}", e)
 
     # ==================== 会话表（chatbot_sessions）====================
 
@@ -682,6 +710,7 @@ class ChatbotRepository:
         snapshot_path: str,
         doc_hash: str,
         build_type: str = "build",
+        file_fingerprints: str | None = None,
     ) -> dict:
         """创建 KB 版本记录，初始 status='building'，由后续 update_kb_version_status 修正
 
@@ -694,6 +723,7 @@ class ChatbotRepository:
                 id=version_id,
                 snapshot_path=snapshot_path,
                 doc_hash=doc_hash,
+                file_fingerprints=file_fingerprints,
                 build_type=build_type,
                 status="building",
                 created_at=now,
@@ -837,6 +867,7 @@ class ChatbotRepository:
             "id": row.id,
             "snapshot_path": row.snapshot_path,
             "doc_hash": row.doc_hash,
+            "file_fingerprints": row.file_fingerprints,
             "chunk_count": row.chunk_count,
             "failed_chunk_count": row.failed_chunk_count,
             "build_type": row.build_type,

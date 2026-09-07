@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { Card, Space, Tag, Button, Tooltip } from 'antd'
+import { Card, Space, Tag, Tooltip } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { ReloadOutlined, BulbOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { useParamCalculator } from '../../hooks/useParamCalculator'
 import type { ParamScenario } from '../../api'
@@ -143,18 +144,17 @@ export function ParamCalculatorPanel({
         </Space>
       }
       extra={
-        <Tooltip title="重新校验">
-          <Button
-            size="small"
-            type="text"
-            icon={<ReloadOutlined />}
-            loading={isValidating}
-            onClick={() => {
-              if (isConfig) validateConfig(fields)
-              else validateTask(fields)
-            }}
-          />
-        </Tooltip>
+        <TipButton
+          tip="重新执行参数校验"
+          size="small"
+          type="text"
+          icon={<ReloadOutlined />}
+          loading={isValidating}
+          onClick={() => {
+            if (isConfig) validateConfig(fields)
+            else validateTask(fields)
+          }}
+        />
       }
     >
       {content}

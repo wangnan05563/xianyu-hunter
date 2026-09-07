@@ -1,4 +1,5 @@
-import { Button, Spin, Row, Col, Statistic, Badge, Empty, Alert } from 'antd'
+import { Spin, Row, Col, Statistic, Badge, Empty, Alert } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { LineChartOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
 import type { SellerTrendData } from '../utils'
@@ -52,9 +53,9 @@ export default function TrendSparkline({ trend, loading, error, onLoad }: TrendS
   if (!trend && !loading) {
     return (
       <div style={{ padding: '8px 0' }}>
-        <Button size="small" icon={<LineChartOutlined />} onClick={onLoad}>
+        <TipButton size="small" icon={<LineChartOutlined />} onClick={onLoad} tip="加载该卖家的价格趋势数据">
           加载卖家价格趋势
-        </Button>
+        </TipButton>
       </div>
     )
   }

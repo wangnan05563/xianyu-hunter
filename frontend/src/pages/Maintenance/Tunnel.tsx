@@ -11,7 +11,6 @@ import {
   Alert,
   Row,
   Col,
-  Tooltip,
   Switch,
   Radio,
   Steps,
@@ -30,6 +29,7 @@ import {
 } from '@ant-design/icons'
 import { tunnelApi, type TunnelStatus, type TunnelConfig, type TunnelDownloadError, type TunnelTailscaleAuthError } from '../../api'
 import { TUNNEL_PROVIDERS, TUNNEL_PROVIDER_OPTIONS } from './tunnelProviders'
+import { TipButton } from '@/components/TipButton'
 
 const { Text, Paragraph } = Typography
 
@@ -282,7 +282,8 @@ function NamedTunnelWizard({
               }
             />
           )}
-          <Button
+          <TipButton
+            tip="执行 Cloudflare 授权登录"
             type={config.cert_file ? 'default' : 'primary'}
             icon={loginLoading || loginPolling ? <LoadingOutlined /> : undefined}
             loading={loginLoading}
@@ -290,7 +291,7 @@ function NamedTunnelWizard({
             disabled={loginLoading || loginPolling}
           >
             {loginButtonText}
-          </Button>
+          </TipButton>
         </Space>
       </div>
 
@@ -314,7 +315,8 @@ function NamedTunnelWizard({
               />
             </Col>
             <Col>
-              <Button
+              <TipButton
+                tip="创建命名隧道（或重新创建）"
                 type={config.tunnel_id ? 'default' : 'primary'}
                 icon={createLoading ? <LoadingOutlined /> : undefined}
                 loading={createLoading}
@@ -322,7 +324,7 @@ function NamedTunnelWizard({
                 disabled={!config.cert_file || createLoading}
               >
                 {config.tunnel_id ? '重新创建' : '创建隧道'}
-              </Button>
+              </TipButton>
             </Col>
           </Row>
           {config.tunnel_id && (
@@ -354,7 +356,8 @@ function NamedTunnelWizard({
               />
             </Col>
             <Col>
-              <Button
+              <TipButton
+                tip="配置 DNS 路由（CNAME 记录）"
                 type={config.hostname ? 'default' : 'primary'}
                 icon={dnsLoading ? <LoadingOutlined /> : undefined}
                 loading={dnsLoading}
@@ -362,7 +365,7 @@ function NamedTunnelWizard({
                 disabled={!config.tunnel_id || dnsLoading}
               >
                 {config.hostname ? '重新配置' : '配置路由'}
-              </Button>
+              </TipButton>
             </Col>
           </Row>
           {config.hostname && (
@@ -580,7 +583,8 @@ export default function Tunnel() {
           </Col>
           <Col>
             <Space>
-              <Button
+              <TipButton
+                tip="启动隧道建立公网连接"
                 type="primary"
                 icon={<PlayCircleOutlined />}
                 loading={starting}
@@ -588,8 +592,9 @@ export default function Tunnel() {
                 onClick={handleStart}
               >
                 启动隧道
-              </Button>
-              <Button
+              </TipButton>
+              <TipButton
+                tip="停止当前隧道"
                 danger
                 icon={<StopOutlined />}
                 loading={stopping}
@@ -597,14 +602,13 @@ export default function Tunnel() {
                 onClick={handleStop}
               >
                 停止
-              </Button>
+              </TipButton>
               {status?.public_url && (
-                <Tooltip title="在新窗口打开">
-                  <Button
-                    icon={<LinkOutlined />}
-                    onClick={() => window.open(status.public_url!, '_blank')}
-                  />
-                </Tooltip>
+                <TipButton
+                  tip="在新窗口打开公网地址"
+                  icon={<LinkOutlined />}
+                  onClick={() => window.open(status.public_url!, '_blank')}
+                />
               )}
             </Space>
           </Col>
@@ -625,8 +629,9 @@ export default function Tunnel() {
               <Text code copyable>{downloadError.manual_path}</Text>
               <Space wrap>
                 {downloadError.download_urls.map((url) => (
-                  <Button
+                  <TipButton
                     key={url}
+                    tip="下载 cloudflared 二进制文件"
                     type="link"
                     size="small"
                     href={url}
@@ -634,7 +639,7 @@ export default function Tunnel() {
                     style={{ padding: 0 }}
                   >
                     {url.length > 60 ? url.slice(0, 60) + '...' : url}
-                  </Button>
+                  </TipButton>
                 ))}
               </Space>
               <Text type="secondary">放置后重新点击"启动隧道"即可</Text>
@@ -673,7 +678,8 @@ export default function Tunnel() {
             <Text>① 点击下方按钮，浏览器将打开 Tailscale 授权页面（含当前节点标识）</Text>
             <Text>② 在页面中确认并启用 Funnel 功能（可能需要登录 Tailscale 账号）</Text>
             <Text>③ 授权完成后，回到本页面重新点击"启动隧道"</Text>
-            <Button
+            <TipButton
+              tip="打开 Tailscale Funnel 授权页面"
               type="primary"
               icon={<LinkOutlined />}
               href={tailscaleAuthError.auth_url}
@@ -682,7 +688,7 @@ export default function Tunnel() {
               style={{ marginTop: 8 }}
             >
               打开 Tailscale Funnel 授权页面
-            </Button>
+            </TipButton>
             <Text type="secondary" style={{ fontSize: 12 }} copyable>
               授权链接：{tailscaleAuthError.auth_url}
             </Text>
@@ -816,13 +822,14 @@ export default function Tunnel() {
             </Col>
           </Row>
 
-          <Button
+          <TipButton
+            tip="保存隧道配置（下次启动生效）"
             type="primary"
             loading={savingConfig}
             onClick={() => handleSaveConfig()}
           >
             保存配置
-          </Button>
+          </TipButton>
         </Space>
       </Card>
 

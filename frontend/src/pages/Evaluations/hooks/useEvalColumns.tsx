@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
-import { Tag, Button, Space, Tooltip, Image } from 'antd'
+import { Tag, Space, Tooltip, Image } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import {
   RobotOutlined, ThunderboltOutlined, CloudDownloadOutlined,
   EnvironmentOutlined, ClockCircleOutlined, UserOutlined,
@@ -37,17 +38,16 @@ function FeedbackButton({
   readonly onClick: () => void
 }) {
   return (
-    <Tooltip title={title}>
-      <Button
-        size="small"
-        type={active ? 'primary' : 'text'}
-        ghost={active}
-        icon={icon}
-        loading={submitting}
-        onClick={onClick}
-        style={active ? { background: color, borderColor: color } : { color }}
-      />
-    </Tooltip>
+    <TipButton
+      tip={title}
+      size="small"
+      type={active ? 'primary' : 'text'}
+      ghost={active}
+      icon={icon}
+      loading={submitting}
+      onClick={onClick}
+      style={active ? { background: color, borderColor: color } : { color }}
+    />
   )
 }
 
@@ -385,37 +385,34 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
       title: 'AI', key: 'ai', width: 110,
       render: (_: unknown, r: EvalItem) => (
         <Space size={4}>
-          <Tooltip title="AI 成色评估">
-            <Button
-              size="small"
-              icon={<RobotOutlined />}
-              onClick={() => onAIEval(r.item_id)}
-              disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
-            />
-          </Tooltip>
-          <Tooltip title="深度鉴伪（盗图/损坏/一致性/模板）">
-            <Button
-              size="small"
-              icon={<ThunderboltOutlined />}
-              onClick={() => onDeepAnalyze(r.item_id)}
-              disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
-            />
-          </Tooltip>
+          <TipButton
+            tip="AI 成色评估"
+            size="small"
+            icon={<RobotOutlined />}
+            onClick={() => onAIEval(r.item_id)}
+            disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
+          />
+          <TipButton
+            tip="深度鉴伪（盗图/损坏/一致性/模板）"
+            size="small"
+            icon={<ThunderboltOutlined />}
+            onClick={() => onDeepAnalyze(r.item_id)}
+            disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
+          />
         </Space>
       ),
     },
     {
       title: '官方采集', key: 'collect', width: 90,
       render: (_: unknown, r: EvalItem) => (
-        <Tooltip title="访问闲鱼官方页面采集完整数据并重新评估">
-          <Button
-            size="small"
-            type="default"
-            icon={<CloudDownloadOutlined />}
-            loading={collecting[r.item_id]}
-            onClick={() => onCollectOfficial(r)}
-          />
-        </Tooltip>
+        <TipButton
+          tip="访问闲鱼官方页面采集完整数据并重新评估"
+          size="small"
+          type="default"
+          icon={<CloudDownloadOutlined />}
+          loading={collecting[r.item_id]}
+          onClick={() => onCollectOfficial(r)}
+        />
       ),
     },
     {
@@ -461,16 +458,15 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
         }
         const score = r.payload.score ?? 0
         return (
-          <Tooltip title={`手动抢单（评分 ${score.toFixed(0)} ≥ ${autoBuyScore}）`}>
-            <Button
-              size="small"
-              type="primary"
-              ghost
-              icon={<ThunderboltOutlined />}
-              loading={manualTaking[r.item_id]}
-              onClick={() => onManualTakeover(r)}
-            />
-          </Tooltip>
+          <TipButton
+            tip={`手动抢单（评分 ${score.toFixed(0)} ≥ ${autoBuyScore}）`}
+            size="small"
+            type="primary"
+            ghost
+            icon={<ThunderboltOutlined />}
+            loading={manualTaking[r.item_id]}
+            onClick={() => onManualTakeover(r)}
+          />
         )
       },
     },

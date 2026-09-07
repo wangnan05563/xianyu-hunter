@@ -1,1 +1,0 @@
-import{c as a}from"./index-a3jJcnwL.js";const c={getStorageStatus:()=>a.get("/api/maintenance/status").then(t=>t.data),cleanup:(t,e)=>a.post(`/api/maintenance/${t}`,e).then(n=>n.data)};export{c as m};

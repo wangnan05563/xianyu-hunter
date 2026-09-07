@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { App, Button, Space, Typography } from 'antd'
+import { App, Space, Typography } from 'antd'
+import { TipButton } from '@/components/TipButton'
 
 const { Text } = Typography
 
@@ -50,10 +51,11 @@ export default function ReloadPrompt() {
       duration: 0, // 不自动关闭，避免用户错过
       btn: (
         <Space>
-          <Button size="small" onClick={() => notification.destroy(key)}>
+          <TipButton tip="稍后更新，关闭此提示" size="small" onClick={() => notification.destroy(key)}>
             稍后
-          </Button>
-          <Button
+          </TipButton>
+          <TipButton
+            tip="立即应用新版本并刷新页面"
             type="primary"
             size="small"
             onClick={() => {
@@ -66,7 +68,7 @@ export default function ReloadPrompt() {
             }}
           >
             立即刷新
-          </Button>
+          </TipButton>
         </Space>
       ),
     })
@@ -85,9 +87,9 @@ export default function ReloadPrompt() {
       ),
       duration: 4,
       btn: (
-        <Button size="small" onClick={() => notification.destroy(key)}>
+        <TipButton tip="关闭此提示" size="small" onClick={() => notification.destroy(key)}>
           知道了
-        </Button>
+        </TipButton>
       ),
     })
   }, [offlineReady, notification])

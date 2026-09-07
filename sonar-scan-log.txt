@@ -1,0 +1,151 @@
+﻿18:05:16.646 INFO  Scanner configuration file: D:\code\sonar\sonar-scanner-8.0.1.6346-windows-x64\bin\..\conf\sonar-scanner.properties
+18:05:16.660 INFO  Project root configuration file: D:\code\otherProjects\17_xianyu\sonar-project.properties
+18:05:16.679 INFO  SonarScanner CLI 8.0.1.6346
+18:05:16.687 INFO  Windows 10 10.0 amd64
+18:05:25.931 INFO  Communicating with SonarQube Community Build 26.1.0.118079
+18:05:25.933 INFO  JRE provisioning: os[windows], arch[amd64]
+18:05:28.060 INFO  Starting SonarScanner Engine...
+18:05:28.061 INFO  Java 21.0.9 Eclipse Adoptium (64-bit)
+18:05:37.466 INFO  Load global settings
+18:05:37.631 INFO  Load global settings (done) | time=166ms
+18:05:37.636 INFO  Server id: 147B411E-AZzcVKmnyzfMcUBUvV2G
+18:05:37.647 INFO  Loading required plugins
+18:05:37.648 INFO  Load plugins index
+18:05:37.668 INFO  Load plugins index (done) | time=20ms
+18:05:37.669 INFO  Load/download plugins
+18:05:37.782 INFO  Load/download plugins (done) | time=114ms
+18:05:38.190 INFO  Process project properties
+18:05:38.212 INFO  Process project properties (done) | time=22ms
+18:05:38.232 INFO  Project key: xianyu_hunter
+18:05:38.232 INFO  Base dir: D:\code\otherProjects\17_xianyu
+18:05:38.233 INFO  Working dir: D:\code\otherProjects\17_xianyu\.scannerwork
+18:05:38.246 INFO  Load project settings for component key: 'xianyu_hunter'
+18:05:38.261 INFO  Load project settings for component key: 'xianyu_hunter' (done) | time=15ms
+18:05:38.294 INFO  Load quality profiles
+18:05:38.375 INFO  Load quality profiles (done) | time=82ms
+18:05:38.451 INFO  Load active rules
+18:05:39.065 INFO  Load active rules (done) | time=613ms
+18:05:39.076 INFO  Load analysis cache
+18:05:39.258 INFO  Load analysis cache | time=183ms
+18:05:39.371 INFO  Preprocessing files...
+18:05:42.047 INFO  2 languages detected in 544 preprocessed files (done) | time=2675ms
+18:05:42.047 INFO  551 files ignored because of inclusion/exclusion patterns
+18:05:42.047 INFO  6 files ignored because of scm ignore settings
+18:05:42.049 INFO  Loading plugins for detected languages
+18:05:42.049 INFO  Load/download plugins
+18:05:42.106 INFO  Load/download plugins (done) | time=56ms
+18:05:42.374 INFO  Load project repositories
+18:05:42.570 INFO  Load project repositories (done) | time=197ms
+18:05:42.603 INFO  Indexing files...
+18:05:42.603 INFO  Project configuration:
+18:05:42.604 INFO    Excluded sources: **/node_modules/**, **/__pycache__/**, **/*.pyc, **/dist/**, **/build/**, **/.venv/**, **/venv/**, **/coverage/**, **/test-setup.ts, **/vite-env.d.ts, **/*.svg, **/*.ico, **/*.html, **/*.css, **/*.test.ts, **/*.test.tsx, **/__tests__/**, **/test_*.py, **/*_test.py
+18:05:42.604 INFO    Included tests: **/*.test.ts, **/*.test.tsx, **/__tests__/**, **/test_*.py, **/*_test.py
+18:05:42.605 INFO    Excluded sources for coverage: **/test_*.py, **/*_test.py, **/*.test.ts, **/*.test.tsx, tests/**, frontend/src/**/__tests__/**
+18:05:42.605 INFO    Excluded sources for duplication: **/*.yaml, **/*.yml, **/*.json, **/package-lock.json
+18:05:42.897 INFO  544 files indexed (done) | time=295ms
+18:05:42.899 INFO  Quality profile for py: Sonar way
+18:05:42.900 INFO  Quality profile for ts: Sonar way
+18:05:42.900 INFO  ------------- Run sensors on module Xianyu Hunter
+18:05:42.944 INFO  Load metrics repository
+18:05:42.979 INFO  Load metrics repository (done) | time=36ms
+18:05:43.943 INFO  Sensor IaC hadolint report Sensor [iac]
+18:05:43.944 INFO  Sensor IaC hadolint report Sensor [iac] (done) | time=3ms
+18:05:43.945 INFO  Sensor Java Config Sensor [iac]
+18:05:43.967 INFO  There are no files to be analyzed for the Java language
+18:05:43.967 INFO  Sensor Java Config Sensor [iac] (done) | time=22ms
+18:05:43.967 INFO  Sensor IaC Docker Sensor [iac]
+18:05:43.974 INFO  There are no files to be analyzed for the Docker language
+18:05:43.975 INFO  Sensor IaC Docker Sensor [iac] (done) | time=8ms
+18:05:43.975 INFO  Sensor Python Sensor [python]
+18:05:44.489 INFO  Starting global symbols computation
+18:05:44.493 INFO  327 source files to be analyzed
+18:05:50.549 INFO  327/327 source files have been analyzed
+18:05:50.550 INFO  Finished step global symbols computation in 6059ms
+18:05:50.830 INFO  Starting rules execution
+18:05:50.832 INFO  327 source files to be analyzed
+18:06:00.833 INFO  103/327 files analyzed, current files: api_task_links.py, buyer.py, db_models.py, ...
+18:06:11.081 INFO  325/327 files analyzed, current files: api_db_admin.py, api_orders.py
+18:06:14.824 INFO  327/327 source files have been analyzed
+18:06:14.825 INFO  Finished step rules execution in 23993ms
+18:06:14.825 INFO  The Python analyzer was able to leverage cached data from previous analyses for 0 out of 327 files. These files were not parsed.
+18:06:14.828 INFO  Sensor Python Sensor [python] (done) | time=30853ms
+18:06:14.828 INFO  Sensor Cobertura Sensor for Python coverage [python]
+18:07:00.759 INFO  Python test coverage
+18:07:00.762 INFO  Parsing report 'D:\code\otherProjects\17_xianyu\coverage.xml'
+18:07:01.384 INFO  Sensor Cobertura Sensor for Python coverage [python] (done) | time=46556ms
+18:07:01.384 INFO  Sensor PythonXUnitSensor [python]
+18:07:37.564 INFO  Sensor PythonXUnitSensor [python] (done) | time=36179ms
+18:07:37.564 INFO  Sensor Python Dependency Sensor [python]
+18:07:37.568 INFO  Sensor Python Dependency Sensor [python] (done) | time=4ms
+18:07:37.568 INFO  Sensor JavaScript/TypeScript analysis [javascript]
+18:07:38.446 INFO  Detected os: Windows 10 arch: amd64 alpine: false. Platform: WIN_X64
+18:07:38.447 INFO  Deploy location C:\Users\hspcadmin\.sonar\js\node-runtime, tagetRuntime: C:\Users\hspcadmin\.sonar\js\node-runtime\node.exe,  version: C:\Users\hspcadmin\.sonar\js\node-runtime\version.txt
+18:07:40.936 INFO  Using embedded Node.js runtime.
+18:07:40.936 INFO  Using Node.js executable: 'C:\Users\hspcadmin\.sonar\js\node-runtime\node.exe'.
+18:07:48.005 ERROR [baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+18:07:48.501 INFO  Memory configuration: OS (65264 MB), Node.js (4288 MB).
+18:07:48.669 INFO  WebSocket client connected on /ws
+18:07:48.672 INFO  Plugin version: [11.7.1.36988]
+18:07:50.851 ERROR [baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+18:07:52.619 INFO  Resolving provided TSConfig files using 'D:/code/otherProjects/17_xianyu/frontend/tsconfig.json'
+18:56:35.337 INFO  Found 1 tsconfig.json file(s): [D:/code/otherProjects/17_xianyu/frontend/tsconfig.json]
+18:56:35.338 INFO  215 source files to be analyzed
+18:56:35.338 INFO  Creating TypeScript program
+18:56:35.338 INFO  TypeScript(5.9.3) configuration file D:/code/otherProjects/17_xianyu/frontend/tsconfig.json
+18:56:35.339 INFO  215/215 source files have been analyzed
+18:56:35.348 INFO  Hit the cache for 0 out of 215
+18:56:35.349 INFO  Miss the cache for 215 out of 215: ANALYSIS_MODE_INELIGIBLE [215/215]
+18:56:35.349 INFO  Sensor JavaScript/TypeScript analysis [javascript] (done) | time=2937781ms
+18:56:35.349 INFO  Sensor CSS Rules [javascript]
+18:56:35.350 INFO  No CSS, PHP, HTML or VueJS files are found in the project. CSS analysis is skipped.
+18:56:35.350 INFO  Sensor CSS Rules [javascript] (done) | time=2ms
+18:56:35.350 INFO  Sensor JavaScript/TypeScript Coverage [javascript]
+18:58:14.532 INFO  No LCOV files were found using frontend/coverage/lcov.info
+18:58:14.532 WARN  No coverage information will be saved because all LCOV files cannot be found.
+18:58:14.533 INFO  Sensor JavaScript/TypeScript Coverage [javascript] (done) | time=99181ms
+18:58:14.533 INFO  Sensor TextAndSecretsSensor [text]
+18:58:14.849 INFO  Available processors: 8
+18:58:14.849 INFO  Using 8 threads for analysis.
+18:58:16.099 INFO  Start fetching files for the text and secrets analysis
+18:58:20.331 INFO  Using Git CLI to retrieve untracked files
+18:58:20.988 INFO  Retrieving language associated files and files included via "sonar.text.inclusions" that are tracked by git
+18:58:20.990 INFO  Starting the text and secrets analysis
+18:58:20.995 INFO  542 source files to be analyzed for the text and secrets analysis
+18:58:23.495 INFO  542/542 source files have been analyzed for the text and secrets analysis
+18:58:23.507 INFO  Sensor TextAndSecretsSensor [text] (done) | time=8976ms
+18:58:23.515 INFO  ------------- Run sensors on project
+18:58:23.794 INFO  Sensor Zero Coverage Sensor
+18:58:24.217 INFO  Sensor Zero Coverage Sensor (done) | time=423ms
+18:58:24.218 INFO  ------------- Gather SCA dependencies on project
+18:58:24.223 INFO  Dependency analysis skipped
+18:58:24.482 INFO  SCM Publisher SCM provider for this project is: git
+18:58:24.484 INFO  SCM Publisher 238 source files to be analyzed
+18:58:34.529 INFO  
+18:58:44.553 INFO  
+18:58:54.558 INFO  
+18:59:04.569 INFO  
+18:59:14.582 INFO  
+18:59:18.994 INFO  SCM Publisher 231/238 source files have been analyzed (done) | time=54509ms
+18:59:18.995 WARN  Missing blame information for the following files:
+18:59:18.995 WARN    * backend/xianyu_hunter/web/app.py
+18:59:18.996 WARN    * frontend/src/pages/Logs/ErrorLogs.tsx
+18:59:18.997 WARN    * backend/xianyu_hunter/paths.py
+18:59:18.997 WARN    * frontend/src/mobile/pages/Logs/index.tsx
+18:59:18.998 WARN    * backend/xianyu_hunter/web/startup.py
+18:59:18.998 WARN    * frontend/src/pages/Logs/Logs.tsx
+18:59:18.998 WARN    * backend/xianyu_hunter/_build_info.py
+18:59:18.999 WARN  This may lead to missing/broken features in SonarQube
+18:59:19.182 INFO  CPD Executor 21 files had no CPD blocks
+18:59:19.182 INFO  CPD Executor Calculating CPD for 410 files
+18:59:19.956 INFO  CPD Executor CPD calculation finished (done) | time=773ms
+18:59:19.975 INFO  SCM revision ID '738f46a4ca4887c6834ad918e26a0da703e66ee8'
+18:59:24.296 INFO  Analysis report generated in 1521ms, dir size=15.3 MB
+19:01:21.001 INFO  Analysis report compressed in 116704ms, zip size=8.6 MB
+19:01:21.390 INFO  Analysis report uploaded in 389ms
+19:01:21.394 INFO  ANALYSIS SUCCESSFUL, you can find the results at: http://localhost:9000/dashboard?id=xianyu_hunter
+19:01:21.394 INFO  Note that you will be able to access the updated dashboard once the server has processed the submitted analysis report
+19:01:21.394 INFO  More about the report processing at http://localhost:9000/api/ce/task?id=b956b5bd-c5a0-405c-b5b1-aab714dcbf4f
+19:01:25.547 INFO  Analysis total time: 55:47.699 s
+19:01:25.553 INFO  SonarScanner Engine completed successfully
+19:01:26.941 INFO  EXECUTION SUCCESS
+19:01:26.942 INFO  Total time: 56:10.300s

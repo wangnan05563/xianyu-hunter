@@ -26,6 +26,7 @@ import {
   type CleanupResult,
   type CleanupBody,
 } from '../../api'
+import { TipButton } from '@/components/TipButton'
 
 const { Text } = Typography
 
@@ -205,9 +206,9 @@ export default function Maintenance() {
         <Text type="secondary" style={{ fontSize: 13 }}>
           缓存清理 · 数据库清理 · 日志清理
         </Text>
-        <Button icon={<ReloadOutlined />} onClick={loadStatus} loading={loading}>
+        <TipButton tip="刷新存储状态概览" icon={<ReloadOutlined />} onClick={loadStatus} loading={loading}>
           刷新状态
-        </Button>
+        </TipButton>
       </div>
 
       {/* 存储状态概览卡片 */}
@@ -296,7 +297,8 @@ export default function Maintenance() {
               {!cacheForm.dry_run && <Tag color="red">将执行真实删除</Tag>}
             </div>
 
-            <Button
+            <TipButton
+              tip="清理所选范围的缓存（预览或真实执行）"
               type="primary"
               icon={<DeleteOutlined />}
               block
@@ -305,7 +307,7 @@ export default function Maintenance() {
               style={{ backgroundColor: cacheForm.dry_run ? undefined : '#ff4d4f' }}
             >
               清理缓存
-            </Button>
+            </TipButton>
 
             {renderResult(cacheResult)}
           </Card>
@@ -369,7 +371,8 @@ export default function Maintenance() {
               {!dbForm.dry_run && <Tag color="red">将执行真实删除</Tag>}
             </div>
 
-            <Button
+            <TipButton
+              tip="清理数据库冗余数据（预览或真实执行）"
               type="primary"
               icon={<DatabaseOutlined />}
               block
@@ -378,7 +381,7 @@ export default function Maintenance() {
               style={{ backgroundColor: dbForm.dry_run ? undefined : '#ff4d4f' }}
             >
               清理数据库
-            </Button>
+            </TipButton>
 
             {renderResult(dbResult)}
           </Card>
@@ -443,7 +446,8 @@ export default function Maintenance() {
               {!logForm.dry_run && <Tag color="red">将执行真实删除</Tag>}
             </div>
 
-            <Button
+            <TipButton
+              tip="清理旧日志文件释放磁盘空间"
               type="primary"
               icon={<FileTextOutlined />}
               block
@@ -452,7 +456,7 @@ export default function Maintenance() {
               style={{ backgroundColor: logForm.dry_run ? undefined : '#ff4d4f' }}
             >
               清理日志
-            </Button>
+            </TipButton>
 
             {renderResult(logResult)}
           </Card>

@@ -305,7 +305,9 @@ class TaskWorker:
         # 为什么需要前置检查：日志显示 token 失效后仍持续 90s 搜索超时，
         # 浪费 browser_lock 占用时间。TokenRenewer 后台续期成功后下一轮自动恢复
         if self._is_session_expired_before_search():
-            logger.info(f"[Task {self.task.id}] 会话已失效（_m_h5_tk 缺失/过期），跳过本轮搜索等待续期恢复")
+            # 会话失效期间每轮都打 INFO 会形成数千行刷屏（历史日志 6 天无有效搜索），
+            # 降级为 DEBUG；会话失效本身已由 TokenRenewer/login_orchestrator 以 WARNING/ERROR 上报
+            logger.debug(f"[Task {self.task.id}] 会话已失效（_m_h5_tk 缺失/过期），跳过本轮搜索等待续期恢复")
             stats.finished_at = datetime.now(timezone.utc)
             return []
 
@@ -339,7 +341,8 @@ class TaskWorker:
         new_items = self.dedup.filter_new(items, task_id=self.task.id)
         stats.deduped = stats.found - len(new_items)
         if not new_items:
-            logger.info(f"[Task {self.task.id}] 全部已看过，本轮跳过")
+            # “全部已看过”属常态轮空（任务每 ~1-2 分钟跑一轮），降级为 DEBUG 避免刷屏
+            logger.debug(f"[Task {self.task.id}] 全部已看过，本轮跳过")
             stats.finished_at = datetime.now(timezone.utc)
             return None
         # 限制每轮条数：使用用户配置的 page_size（默认 20）

@@ -124,22 +124,23 @@ function buildAccountMenuItems(
   switching: boolean,
   avatarErrors: Record<string, boolean>,
   handleAvatarError: (userId: string) => boolean,
-  handleSwitch: (userId: string) => void,
+  handleSwitch: (account: AccountInfo) => void,
 ): MenuItem[] {
   return accounts.map((account) => {
     const isCurrent = account.is_current || account.user_id === currentUserId
     const isExpired = account.status !== 'active'
     return {
       key: `account-${account.user_id}`,
-      disabled: switching || isExpired,
-      // S3735：移除 void 操作符，handleSwitch 内部已有 try/catch，可直接调用
-      onClick: () => { handleSwitch(account.user_id) },
+      // 仅切换中禁用全部项；已禁用/已过期账号不置 disabled，
+      // 否则 AntD 会吞掉 onClick，用户点击无任何反馈
+      disabled: switching,
+      onClick: () => { handleSwitch(account) },
       label: (
         <AccountMenuItem
           account={account}
           isCurrent={isCurrent}
           isExpired={isExpired}
-          disabled={switching || isExpired}
+          disabled={switching}
           avatarError={!!avatarErrors[account.user_id]}
           onAvatarError={() => handleAvatarError(account.user_id)}
         />
@@ -240,16 +241,28 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
   }, [fetchAccounts, switching])
 
   // 切换账号：调用 API 后失效菜单/偏好缓存，刷新页面
-  const handleSwitch = useCallback(async (userId: string) => {
-    // 已是当前账号：直接关闭下拉
-    if (userId === currentUserId) {
+  const handleSwitch = useCallback(async (account: AccountInfo) => {
+    const { user_id, status } = account
+    // 已是当前账号：明确提示，避免用户误以为"点了没反应"
+    if (user_id === currentUserId) {
       setOpen(false)
+      message.info('当前已是该账号')
+      return
+    }
+    // 非 active 账号不可切换：给出具体原因，不让用户困惑于"点了没反应"
+    if (status !== 'active') {
+      setOpen(false)
+      message.warning(
+        status === 'disabled'
+          ? '该账号已禁用，需重新添加后才能使用'
+          : '该账号 Cookie 已过期，请重新登录后再切换',
+      )
       return
     }
     setSwitching(true)
     const hide = message.loading('正在切换账号…', 0)
     try {
-      await authApi.switchAccount(userId)
+      await authApi.switchAccount(user_id)
       // 切换成功：失效所有用户级缓存
       invalidateMenuCache()
       invalidatePreferenceCache()
@@ -267,7 +280,7 @@ export default function AccountSwitcher({ currentUserId, onSwitched }: AccountSw
       message.success('账号切换成功')
       setOpen(false)
       // 通知父组件刷新菜单/任务
-      onSwitched?.(userId)
+      onSwitched?.(user_id)
       // 整页刷新：最可靠的重置方式，确保所有组件重新拉取新用户数据
       // 为什么用 replace：避免后退回到上一账号的页面
       // 为什么用 BASE_URL 而非 '/'：SPA 以 /xianyu/ 为部署子路径部署

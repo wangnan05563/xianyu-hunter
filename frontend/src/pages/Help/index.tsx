@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
-import { Layout, Typography, Anchor, Button, Space, Tag, Alert, Card, Divider, theme, Input } from 'antd'
+import { TipButton } from '@/components/TipButton'
+import { Layout, Typography, Anchor, Space, Tag, Alert, Card, Divider, theme, Input } from 'antd'
 import {
   ApiOutlined,
   RocketOutlined,
@@ -818,13 +819,14 @@ export default function Help() {
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
                   <Title level={3} style={{ margin: 0 }}>闲鱼猎人使用文档</Title>
-                  <Button
+                  <TipButton
+                    tip="在新标签页打开 API 文档"
                     type="text"
                     icon={<ApiOutlined />}
                     onClick={() => globalThis.open(`${API_BASE}api/docs`, '_blank')}
                   >
                     API 文档
-                  </Button>
+                  </TipButton>
                 </div>
                 <Paragraph style={{ color: 'var(--xh-text-secondary)', marginTop: 8, marginBottom: 0 }}>
                   系统涵盖监控、评估、抢单、通知全流程。本文档详细介绍各功能模块的使用方法，

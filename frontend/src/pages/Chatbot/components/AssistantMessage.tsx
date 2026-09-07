@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Typography, Tag, Tooltip, Progress, Collapse, Button, Modal, Input, Alert, Rate, Select, message } from 'antd'
+import { Typography, Tag, Tooltip, Progress, Collapse, Modal, Input, Alert, Rate, Select, message } from 'antd'
 import { CopyOutlined } from '@ant-design/icons'
 import type { Message, Source } from '../types'
 import { chatbotApi } from '../api'
 import { MarkdownContent } from './MarkdownContent'
+import { TipButton } from '@/components/TipButton'
 
 interface Props {
   readonly message: Message
@@ -142,9 +143,9 @@ export function AssistantMessage({ message: msg, sessionId, onFeedbackDone }: Pr
           message="已转人工客服"
           description={msg.escalate_reason || '请联系管理员处理'}
           action={
-            <Button size="small" icon={<CopyOutlined />} onClick={copySession}>
+            <TipButton size="small" tip="复制当前会话记录到剪贴板" icon={<CopyOutlined />} onClick={copySession}>
               复制会话记录
-            </Button>
+            </TipButton>
           }
           style={{ marginBottom: 8 }}
         />

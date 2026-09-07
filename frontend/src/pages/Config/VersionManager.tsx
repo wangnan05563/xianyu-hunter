@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import {
   Card,
   Timeline,
-  Button,
   Space,
   message,
   Modal,
@@ -15,6 +14,7 @@ import {
   Input,
   Pagination,
 } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import {
   RollbackOutlined,
   DownloadOutlined,
@@ -221,17 +221,17 @@ export default function VersionManager() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
+          <TipButton tip="重新加载版本与备份信息" icon={<ReloadOutlined />} onClick={load} loading={loading}>
             刷新
-          </Button>
-          <Button icon={<DownloadOutlined />} onClick={handleExport}>
+          </TipButton>
+          <TipButton tip="导出当前配置为 JSON 文件" icon={<DownloadOutlined />} onClick={handleExport}>
             导出配置
-          </Button>
-          <Button icon={<ShareAltOutlined />} onClick={handleShare} loading={shareLoading}>
+          </TipButton>
+          <TipButton tip="生成脱敏配置用于分享" icon={<ShareAltOutlined />} onClick={handleShare} loading={shareLoading}>
             分享配置
-          </Button>
+          </TipButton>
           <Upload beforeUpload={handleImport} accept=".json" showUploadList={false}>
-            <Button icon={<UploadOutlined />}>导入配置</Button>
+            <TipButton tip="从 JSON 文件导入配置" icon={<UploadOutlined />}>导入配置</TipButton>
           </Upload>
         </Space>
       </div>
@@ -267,7 +267,8 @@ export default function VersionManager() {
         </Col>
         <Col span={6}>
           <Card>
-            <Button
+            <TipButton
+              tip="回滚到上一版本备份"
               type="primary"
               danger
               icon={<RollbackOutlined />}
@@ -276,7 +277,7 @@ export default function VersionManager() {
               block
             >
               一键回滚
-            </Button>
+            </TipButton>
           </Card>
         </Col>
       </Row>
@@ -312,7 +313,8 @@ export default function VersionManager() {
                         </Space>
                       </div>
                       <Space>
-                        <Button
+                        <TipButton
+                          tip="查看该备份的详细信息"
                           size="small"
                           onClick={() => {
                             setSelectedBackup(backup)
@@ -320,15 +322,16 @@ export default function VersionManager() {
                           }}
                         >
                           查看详情
-                        </Button>
-                        <Button
+                        </TipButton>
+                        <TipButton
+                          tip="从该备份恢复配置"
                           size="small"
                           type="dashed"
                           icon={<RollbackOutlined />}
                           onClick={() => handleRestore(backup)}
                         >
                           恢复
-                        </Button>
+                        </TipButton>
                       </Space>
                     </div>
                   ),
@@ -357,11 +360,12 @@ export default function VersionManager() {
         open={diffModalVisible}
         onCancel={() => setDiffModalVisible(false)}
         footer={[
-          <Button key="close" onClick={() => setDiffModalVisible(false)}>
+          <TipButton key="close" tip="关闭备份详情弹窗" onClick={() => setDiffModalVisible(false)}>
             关闭
-          </Button>,
-          <Button
+          </TipButton>,
+          <TipButton
             key="restore"
+            tip="用当前备份覆盖现有配置"
             type="primary"
             danger
             icon={<RollbackOutlined />}
@@ -373,7 +377,7 @@ export default function VersionManager() {
             }}
           >
             从此备份恢复
-          </Button>,
+          </TipButton>,
         ]}
         width={600}
       >
@@ -405,12 +409,12 @@ export default function VersionManager() {
         open={shareModalOpen}
         onCancel={() => setShareModalOpen(false)}
         footer={[
-          <Button key="cancel" onClick={() => setShareModalOpen(false)}>
+          <TipButton key="cancel" tip="关闭分享配置弹窗" onClick={() => setShareModalOpen(false)}>
             关闭
-          </Button>,
-          <Button key="copy" type="primary" icon={<CopyOutlined />} onClick={handleCopyShare}>
+          </TipButton>,
+          <TipButton key="copy" tip="复制配置文本到剪贴板" type="primary" icon={<CopyOutlined />} onClick={handleCopyShare}>
             复制到剪贴板
-          </Button>,
+          </TipButton>,
         ]}
         width={700}
       >

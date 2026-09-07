@@ -1,5 +1,6 @@
-import { Tag, Tooltip, Button, Descriptions } from 'antd'
+import { Tag, Tooltip, Descriptions } from 'antd'
 import type { TimelineEntry } from '../../../api'
+import { TipButton } from '@/components/TipButton'
 import {
   EVENT_TYPE_LABELS, SEVERITY_CONFIG,
 } from '../../../constants/eventTypes'
@@ -163,14 +164,15 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
       {/* 展开详情 */}
       {payload && (
         <>
-          <Button
+          <TipButton
+            tip="展开或收起该事件的详细载荷"
             type="link"
             size="small"
             style={{ padding: 0, fontSize: 11, color: 'var(--xh-text-tertiary)' }}
             onClick={() => onToggleExpand(idx)}
           >
             {isExpanded ? '收起详情' : '查看详情'}
-          </Button>
+          </TipButton>
           {isExpanded && (
             <div style={{
               marginTop: 8,

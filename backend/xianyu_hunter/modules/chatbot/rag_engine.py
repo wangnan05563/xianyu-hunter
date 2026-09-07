@@ -226,6 +226,7 @@ class RAGEngine:
         context: str,
         history: list[dict],
         images: list[str] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[str]:
         """流式生成 LLM 回复
 
@@ -247,11 +248,11 @@ class RAGEngine:
         - asyncio.CancelledError：向上传播触发资源清理
         """
         messages = self._build_messages(query, context, history, images)
-        # 有图片时用 vision_model（如已配置），否则用主 model（可能不支持 vision）
+        # 有图片时用 vision_model（如已配置），否则用主 model（可能被请求级覆盖）
         use_model = (
             self._llm_config.vision_model
             if images and self._llm_config.vision_model
-            else self._llm_config.model
+            else (model or self._llm_config.model)
         )
         payload = {
             "model": use_model,
@@ -348,7 +349,7 @@ class RAGEngine:
             output_tokens = sum(len(t) for t in collected_output) // 4
             self._ai_usage.record_usage(
                 endpoint="chatbot_llm",
-                model=self._llm_config.model,
+                model=use_model,
                 response_data={
                     "usage": {
                         "prompt_tokens": input_tokens,
@@ -465,6 +466,7 @@ class RAGEngine:
         answer: str,
         history: list[dict],
         count: int = 3,
+        model: str | None = None,
     ) -> list[str]:
         """生成后续推荐问题
 
@@ -507,7 +509,7 @@ class RAGEngine:
             },
         ]
         payload = {
-            "model": self._llm_config.model,
+            "model": model or self._llm_config.model,
             "messages": messages,
             "temperature": 0.5,  # 略高于主回答的 0.3，鼓励问题多样性
             "max_tokens": 300,  # 3-5 个问题足够，避免浪费

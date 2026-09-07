@@ -32,6 +32,19 @@ logger = logging.getLogger(__name__)
 # 打包后 CWD 不确定，相对路径会写入错误位置，导致 session_token 写入与校验不一致 → 401
 _DB_PATH = str(get_data_dir() / "xianyu.db")
 
+# unb 用户 ID 模式：闲鱼数字 ID（8 位以上），是强标识；
+# 区别于 cookie2 哈希降级（16 位 hex）。合并重复账号时以 unb 为主账号。
+_UNB_ID_RE = re.compile(r"^\d{8,}$")
+
+
+def _is_unb_id(user_id: str) -> bool:
+    """判断 user_id 是否来自 unb 字段（闲鱼数字 ID）而非 cookie2 哈希降级
+
+    为什么需要：Cookie 未带 unb 时 identify_or_create 会降级为
+    sha256(cookie2)[:16]，同一账号可能产生两条记录，需区分强弱标识。
+    """
+    return bool(_UNB_ID_RE.match(user_id))
+
 
 def _utcnow_iso() -> str:
     """返回 ISO8601 格式的当前 UTC 时间"""
@@ -356,6 +369,166 @@ class UserManager:
                 "用户已退出并清理数据: user_id=%s, delete_tasks=%s",
                 user_id, delete_tasks,
             )
+
+    @staticmethod
+    def _pick_merge_direction(a: str, b: str) -> tuple[str, str] | None:
+        """决定两个同昵称账号的合并方向，返回 (from_id, to_id) 或 None
+
+        为什么保守：闲鱼昵称可重复，同类型账号（两个 unb / 两个哈希）
+        无法证明是同一人，不合并；仅当一方是 unb（强标识）、另一方是
+        cookie2 哈希（弱标识）时才合并，方向固定为 哈希 → unb。
+        """
+        a_unb, b_unb = _is_unb_id(a), _is_unb_id(b)
+        if a_unb and not b_unb:
+            return (b, a)
+        if b_unb and not a_unb:
+            return (a, b)
+        return None
+
+    def merge_duplicate_accounts(self, user_id: str) -> list[dict]:
+        """自动合并与指定账号同昵称的重复账号（防复发）
+
+        触发场景：同一闲鱼账号的 Cookie 有时带 unb、有时不带。不带 unb 时
+        identify_or_create 降级为 sha256(cookie2)[:16] 生成新 user_id，
+        昵称同步后与已存在的 unb 账号重复，前端出现两个同名账号。
+
+        数据归并：tasks / user_cookies / user_menu_configs / user_preferences
+        迁往主账号（目标已有键则目标优先）；活跃 session 一并归属主账号，
+        使当前浏览器无需重新登录即可切到主账号身份。合并后源账号标记
+        disabled（沿用 delete_user 的状态机，不可恢复）。
+
+        返回合并记录列表（含迁移统计），无重复时返回空列表。
+        """
+        user = self.get_user(user_id)
+        nickname = (user or {}).get("nickname") or ""
+        if not nickname.strip() or not user or user.get("status") != "active":
+            return []
+
+        merged: list[dict] = []
+        with self._lock:
+            with self._engine.connect() as conn:
+                rows = conn.execute(sa_text(
+                    "SELECT user_id, status FROM users "
+                    "WHERE nickname=:nick AND status='active' AND user_id!=:uid"
+                ), {"nick": nickname.strip(), "uid": user_id}).fetchall()
+
+            for row in rows:
+                other_id = row[0]
+                direction = self._pick_merge_direction(user_id, other_id)
+                if not direction:
+                    continue
+                from_id, to_id = direction
+                # 仅合并与触发账号相关的配对，避免重复账号间互相触发
+                if from_id != user_id and to_id != user_id:
+                    continue
+                try:
+                    stats = self._merge_account_data(from_id, to_id)
+                    merged.append({"from": from_id, "to": to_id, **stats})
+                    logger.info(
+                        "已合并重复账号: from=%s to=%s stats=%s",
+                        from_id, to_id, stats,
+                    )
+                except Exception as e:
+                    # 单账号合并失败不阻断其他配对
+                    logger.warning("合并重复账号失败 from=%s to=%s: %s", from_id, to_id, e)
+        return merged
+
+    def _merge_account_data(self, from_id: str, to_id: str) -> dict:
+        """在单个事务内迁移 from 账号数据到 to 账号，并标记 from 为 disabled
+
+        迁移策略（为什么 INSERT OR IGNORE + DELETE 而非 UPDATE user_id）：
+        user_cookies 等表有 (user_id, 唯一键) 复合约束，直接 UPDATE 会撞
+        唯一约束使 SQLite 事务进入 aborted 状态；INSERT OR IGNORE 跳过目标
+        已存在的键（目标优先），再删除源行，事务始终安全。
+
+        Returns:
+            迁移统计 dict：tasks / cookies / menus / prefs / sessions
+        """
+        stats = {"tasks": 0, "cookies": 0, "menus": 0, "prefs": 0, "sessions": 0}
+
+        with self._lock:
+            with self._engine.begin() as conn:
+                # tasks：id 主键全局唯一，直接改归属
+                r = conn.execute(sa_text(
+                    "UPDATE tasks SET user_id=:to WHERE user_id=:from"
+                ), {"to": to_id, "from": from_id})
+                stats["tasks"] = r.rowcount
+
+                # 复合唯一约束表：先 INSERT OR IGNORE 迁移目标不存在的行，
+                # 再删除源行；目标已存在的键保留目标值
+                migrations = (
+                    (
+                        "user_cookies", "user_id, host_key, name, value, path, "
+                        "expires, is_secure, is_httponly, created_at, updated_at",
+                        "cookies",
+                    ),
+                    (
+                        "user_menu_configs", "user_id, menu_key, visible, sort_order, "
+                        "group_name, custom_label, updated_at",
+                        "menus",
+                    ),
+                    (
+                        "user_preferences", "user_id, pref_key, pref_value, updated_at",
+                        "prefs",
+                    ),
+                )
+                for table, columns, stat_key in migrations:
+                    # 源列 = 除 user_id 外的全部列（user_id 由 :to 占位符提供）
+                    src_cols = ", ".join(
+                        c.strip() for c in columns.split(",") if c.strip() != "user_id"
+                    )
+                    r = conn.execute(sa_text(
+                        f"INSERT OR IGNORE INTO {table} ({columns}) "
+                        f"SELECT :to, {src_cols} FROM {table} WHERE user_id=:from"
+                    ), {"to": to_id, "from": from_id})
+                    conn.execute(sa_text(
+                        f"DELETE FROM {table} WHERE user_id=:from"
+                    ), {"from": from_id})
+                    # rowcount 语义：INSERT OR IGNORE 的忽略行不计入，
+                    # 以源行删除数作为迁移规模（仅用于审计展示）
+                    stats[stat_key] = r.rowcount
+
+                # 活跃 session 归属主账号：当前浏览器 token 不变，下次请求
+                # verify_session 即返回主账号身份，实现无感切换
+                r = conn.execute(sa_text(
+                    "UPDATE user_sessions SET user_id=:to "
+                    "WHERE user_id=:from AND is_active=1"
+                ), {"to": to_id, "from": from_id})
+                stats["sessions"] = r.rowcount
+
+                # 标记源账号 disabled（终止态，不可恢复）
+                conn.execute(sa_text(
+                    "UPDATE users SET status='disabled', updated_at=:now "
+                    "WHERE user_id=:from"
+                ), {"from": from_id, "now": _utcnow_iso()})
+
+            # 清除 from 的会话缓存条目，避免 5 分钟 TTL 内仍命中旧身份
+            self._verify_cache = {
+                thash: val for thash, val in self._verify_cache.items()
+                if val[0] != from_id
+            }
+
+            # Cookie 文件：目标无文件则迁移源文件，目标已有则删除源文件
+            # 为什么目标优先：主账号的 cookie 已存在时不应被覆盖
+            try:
+                from xianyu_hunter.web.services.cookie_store import _cookie_json_path
+                from_path = _cookie_json_path(from_id)
+                to_path = _cookie_json_path(to_id)
+                if from_path.exists() and not to_path.exists():
+                    from_path.rename(to_path)
+                elif from_path.exists():
+                    from_path.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                logger.warning("合并重复账号时 Cookie 文件迁移失败 from=%s", from_id, exc_info=True)
+
+        # 审计事件，失败不阻断合并
+        try:
+            self._log_event(to_id, "account_merged", {"from": from_id})
+            self._log_event(from_id, "account_merged_out", {"to": to_id})
+        except Exception:
+            logger.warning("记录合并事件失败 from=%s to=%s", from_id, to_id, exc_info=True)
+
+        return stats
 
     def list_users(self) -> list[dict]:
         """列出所有已登录账号（含状态）。

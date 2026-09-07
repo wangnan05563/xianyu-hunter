@@ -1,5 +1,6 @@
-import { Card, Switch, Input, Button, Space, Tag, Tooltip, Typography } from 'antd'
+import { Card, Switch, Input, Space, Tag, Tooltip, Typography } from 'antd'
 import { SendOutlined, StarFilled, LinkOutlined } from '@ant-design/icons'
+import { TipButton } from '@/components/TipButton'
 import type { AppConfig } from '../../../../api'
 import type { ChannelDef } from '../constants'
 import { pricingMeta } from '../constants'
@@ -89,7 +90,8 @@ export default function ChannelCard({
               />
             </div>
           ))}
-          <Button
+          <TipButton
+            tip="向该渠道发送测试推送消息"
             size="small"
             type="dashed"
             icon={<SendOutlined />}
@@ -99,7 +101,7 @@ export default function ChannelCard({
             disabled={anyTesting && !testing}
           >
             {testing ? '发送中...' : '发送测试'}
-          </Button>
+          </TipButton>
         </div>
       )}
     </Card>

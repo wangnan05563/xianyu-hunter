@@ -19,6 +19,17 @@ echo.
 echo Output: release\xianyu-hunter\xianyu-hunter.exe
 echo.
 
+echo.
+echo [Pre-build] Generating unique patch version...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0update-build-version.ps1"
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Version generation failed, see output above
+    pause
+    exit /b 1
+)
+echo.
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build-exe.ps1" %*
 
 if errorlevel 1 (

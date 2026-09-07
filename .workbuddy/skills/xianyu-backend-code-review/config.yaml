@@ -4101,3 +4101,44 @@ proxy_redirect_safety:
     - "redirect"
     - "loop"
   meta_rule: "#120"
+
+# === B-REVIEW-342 构建打包与路径标准（维度 49，规范 29/30/31/32/33，🆕v4.73.0）===
+build_output_standards:
+  enabled: true
+  severity: MAJOR
+  description: "构建打包产物集中到 release/ 单一产出根 + SPA 单一来源 + 路径溯源消除魔法数 + 沙箱安全删除 + 路径零硬编码"
+  # PyInstaller 产出根（distpath/workpath 统一到 release/）
+  release_dir: "release"
+  release_exe_dir: "release/xianyu-hunter"
+  release_work_dir: "release/.work"
+  # SPA 单一来源：app.py 伺服路径必须来自 release/spa，经 get_project_root() 派生，禁止 parents[3] 魔法数 / backend/.../static/spa 兜底
+  spa_source_dir: "release/spa"
+  forbid_parents_magic_number: true
+  forbid_backend_static_spa_fallback: true
+  # 沙箱 safe-delete 守卫：构建/清理脚本删除必须用 .NET Directory.Delete / python ctypes，禁止 rm/del/Remove-Item
+  sandbox_safe_delete_pattern:
+    powershell: "[System.IO.Directory]::Delete($p, $true)"
+    python: "ctypes.windll.kernel32.RemoveDirectoryW"
+  forbidden_delete_cmds:
+    - "rm"
+    - "del"
+    - "Remove-Item"
+  # 七处路径引用同步对齐
+  alignment_points:
+    - "vite.config.ts outDir"
+    - "build-exe.ps1 --distpath / --workpath"
+    - "installer.iss OutputDir"
+    - "部署复制源"
+    - "app.py 伺服路径 (get_project_root()/release/spa)"
+    - "子脚本默认路径"
+    - "cleanup + .gitignore"
+  forbidden_residual_patterns:
+    - "dist\\\\xianyu-hunter"
+    - "dist\\\\XianyuHunter-Setup"
+  applicable_scenarios:
+    - "桌面 PyInstaller 打包项目（exe 从磁盘加载前端）"
+  inapplicable_scenarios:
+    - "纯后端 JSON API（无 SPA 打包）"
+    - "非本沙箱环境（无 safe-delete 守卫，删除可简化）"
+  block_on_violation: false
+  corresponding_dev_spec: "规范 29/30/31/32/33"

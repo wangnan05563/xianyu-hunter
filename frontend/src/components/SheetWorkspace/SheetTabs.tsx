@@ -1,6 +1,7 @@
 import { useRef, useMemo } from 'react'
 import type { MutableRefObject } from 'react'
-import { Button, Tooltip, theme, Badge } from 'antd'
+import { Tooltip, theme, Badge } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { CloseOutlined, MinusOutlined, SettingOutlined, SwapOutlined } from '@ant-design/icons'
 import type { SheetItem, SheetPreferences } from '../../stores/sheetStore'
 
@@ -135,7 +136,8 @@ function ThumbnailTab({
       {/* 缩略图模式激活态显示微型关闭按钮：
           双击关闭禁用时缩略图模式原本无任何关闭途径，属于可用性阻塞 */}
       {active && !sheet.minimized && (
-        <Button
+        <TipButton
+          tip="关闭此 sheet"
           type="text"
           size="small"
           danger
@@ -247,25 +249,23 @@ function StandardTab({
       {/* 操作按钮：激活态显示 */}
       {active && !sheet.minimized && (
         <span style={{ display: 'flex', gap: 2, marginTop: 2 }}>
-          <Tooltip title="最小化">
-            <Button
-              type="text"
-              size="small"
-              icon={<MinusOutlined style={{ fontSize: 10 }} />}
-              onClick={(e) => { e.stopPropagation(); onMinimize() }}
-              style={{ padding: '0 2px', height: 18 }}
-            />
-          </Tooltip>
-          <Tooltip title="关闭">
-            <Button
-              type="text"
-              size="small"
-              danger
-              icon={<CloseOutlined style={{ fontSize: 10 }} />}
-              onClick={(e) => { e.stopPropagation(); onClose() }}
-              style={{ padding: '0 2px', height: 18 }}
-            />
-          </Tooltip>
+          <TipButton
+            tip="最小化此 sheet"
+            type="text"
+            size="small"
+            icon={<MinusOutlined style={{ fontSize: 10 }} />}
+            onClick={(e) => { e.stopPropagation(); onMinimize() }}
+            style={{ padding: '0 2px', height: 18 }}
+          />
+          <TipButton
+            tip="关闭此 sheet"
+            type="text"
+            size="small"
+            danger
+            icon={<CloseOutlined style={{ fontSize: 10 }} />}
+            onClick={(e) => { e.stopPropagation(); onClose() }}
+            style={{ padding: '0 2px', height: 18 }}
+          />
         </span>
       )}
       {/* 最小化时显示恢复提示：用 colorPrimary 确保可见性 */}
@@ -349,15 +349,14 @@ export function SheetTabs({
       ))}
       {/* 底部偏好设置入口 */}
       <div style={{ marginTop: 'auto' }}>
-        <Tooltip title={preferences.thumbnailMode ? summary : 'Sheet 偏好设置'}>
-          <Button
-            type="text"
-            icon={<SettingOutlined />}
-            onClick={onOpenPreferences}
-            block
-            style={{ marginTop: 8 }}
-          />
-        </Tooltip>
+        <TipButton
+          tip={preferences.thumbnailMode ? summary : '打开 Sheet 偏好设置'}
+          type="text"
+          icon={<SettingOutlined />}
+          onClick={onOpenPreferences}
+          block
+          style={{ marginTop: 8 }}
+        />
       </div>
     </div>
   )

@@ -18,7 +18,6 @@ import {
   Table,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
   message,
 } from 'antd'
@@ -45,6 +44,7 @@ import {
 } from '../../api'
 import { extractApiError } from '../../utils/apiError'
 import { usePersistentState } from '../../hooks/usePersistentState'
+import { TipButton } from '@/components/TipButton'
 
 const { Text, Paragraph } = Typography
 const { RangePicker } = DatePicker
@@ -371,7 +371,7 @@ function CurrentBatchPanel() {
     ? `成功 ${lastResult.success} · 失败 ${lastResult.failed} · 跳过 ${lastResult.skipped}${stoppedSuffix}`
     : '暂无执行记录'
   // 触发按钮 Tooltip：用 if/else 替代嵌套三元（SonarQube S3358）
-  let triggerTooltipText = ''
+  let triggerTooltipText = '立即触发一次批量采集'
   if (inProgress) triggerTooltipText = '已有批次在运行，请先停止'
   else if (unavailable) triggerTooltipText = '调度器未启动'
 
@@ -385,9 +385,9 @@ function CurrentBatchPanel() {
             <Text type="secondary" style={{ fontSize: 12 }}>自动刷新</Text>
             <Switch size="small" checked={autoRefresh} onChange={setAutoRefresh} />
           </Space>
-          <Button icon={<ReloadOutlined />} onClick={() => loadStatus()} loading={loading}>
+          <TipButton tip="刷新当前批次执行状态" icon={<ReloadOutlined />} onClick={() => loadStatus()} loading={loading}>
             刷新状态
-          </Button>
+          </TipButton>
         </Space>
       </div>
 
@@ -509,7 +509,8 @@ function CurrentBatchPanel() {
             title="配置热更新"
             style={{ marginBottom: 16 }}
             extra={
-              <Button
+              <TipButton
+                tip="保存并热更新配置"
                 type="primary"
                 size="small"
                 icon={<SaveOutlined />}
@@ -518,7 +519,7 @@ function CurrentBatchPanel() {
                 onClick={handleSaveConfig}
               >
                 保存
-              </Button>
+              </TipButton>
             }
           >
             <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 16 }}>
@@ -591,25 +592,25 @@ function CurrentBatchPanel() {
             </Paragraph>
 
             {/* 触发按钮：仅空闲态可用 */}
-            <Tooltip title={triggerTooltipText}>
-              <Button
-                type="primary"
-                icon={<PlayCircleOutlined />}
-                loading={triggering}
-                disabled={unavailable || inProgress}
-                onClick={handleTrigger}
-                block
-                style={{ marginBottom: 12 }}
-              >
-                立即触发批量采集
-              </Button>
-            </Tooltip>
+            <TipButton
+              tip={triggerTooltipText}
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              loading={triggering}
+              disabled={unavailable || inProgress}
+              onClick={handleTrigger}
+              block
+              style={{ marginBottom: 12 }}
+            >
+              立即触发批量采集
+            </TipButton>
 
             {/* 控制按钮组：暂停/继续/停止 */}
             <Space style={{ width: '100%' }} direction="vertical">
               <Row gutter={8}>
                 <Col span={12}>
-                  <Button
+                  <TipButton
+                    tip="暂停当前批次，采集完成后生效"
                     block
                     icon={<PauseCircleOutlined />}
                     loading={controlling === 'pause'}
@@ -617,10 +618,11 @@ function CurrentBatchPanel() {
                     onClick={handlePause}
                   >
                     暂停
-                  </Button>
+                  </TipButton>
                 </Col>
                 <Col span={12}>
-                  <Button
+                  <TipButton
+                    tip="从断点继续批量采集"
                     block
                     type="primary"
                     icon={<PlayCircleOutlined />}
@@ -629,10 +631,11 @@ function CurrentBatchPanel() {
                     onClick={handleResume}
                   >
                     继续
-                  </Button>
+                  </TipButton>
                 </Col>
               </Row>
-              <Button
+              <TipButton
+                tip="停止批次并持久化进度"
                 block
                 danger
                 icon={<StopOutlined />}
@@ -641,7 +644,7 @@ function CurrentBatchPanel() {
                 onClick={handleStop}
               >
                 停止（持久化进度，可续传）
-              </Button>
+              </TipButton>
             </Space>
           </Card>
         </Col>
@@ -885,23 +888,24 @@ function HistoryPanel() {
       fixed: 'right',
       render: (_: unknown, r: BatchRefreshHistoryItem) => (
         <Space size={4}>
-          <Button
+          <TipButton
+            tip="查看该条执行历史详情"
             type="link"
             size="small"
             icon={<EyeOutlined />}
             onClick={() => handleViewDetail(r)}
           >
             详情
-          </Button>
+          </TipButton>
           <Popconfirm
             title="确认删除此条历史记录？"
             onConfirm={() => handleDelete(r.id)}
             okText="删除"
             cancelText="取消"
           >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+            <TipButton tip="删除该条历史记录，操作不可恢复" type="link" size="small" danger icon={<DeleteOutlined />}>
               删除
-            </Button>
+            </TipButton>
           </Popconfirm>
         </Space>
       ),
@@ -1044,24 +1048,22 @@ function HistoryPanel() {
           </Col>
           <Col>
             <Space>
-              <Button type="primary" icon={<SearchOutlined />} onClick={handleSearch}>
+              <TipButton tip="按筛选条件查询执行历史" type="primary" icon={<SearchOutlined />} onClick={handleSearch}>
                 查询
-              </Button>
-              <Button onClick={handleReset}>重置</Button>
+              </TipButton>
+              <TipButton tip="重置所有筛选条件" onClick={handleReset}>重置</TipButton>
             </Space>
           </Col>
           <Col flex="auto" style={{ textAlign: 'right' }}>
             <Space>
-              <Tooltip title="清理 30 天前的历史记录">
-                <Popconfirm
-                  title="确认清理 30 天前的历史记录？"
-                  onConfirm={() => handleCleanup(30)}
-                  okText="清理"
-                  cancelText="取消"
-                >
-                  <Button icon={<DeleteOutlined />}>清理 30 天前</Button>
-                </Popconfirm>
-              </Tooltip>
+              <Popconfirm
+                title="确认清理 30 天前的历史记录？"
+                onConfirm={() => handleCleanup(30)}
+                okText="清理"
+                cancelText="取消"
+              >
+                <TipButton tip="清理 30 天前的历史记录" icon={<DeleteOutlined />}>清理 30 天前</TipButton>
+              </Popconfirm>
               <Popconfirm
                 title="确认清空全部历史记录？此操作不可恢复。"
                 onConfirm={() => handleCleanup(0)}
@@ -1069,11 +1071,11 @@ function HistoryPanel() {
                 okButtonProps={{ danger: true }}
                 cancelText="取消"
               >
-                <Button danger icon={<DeleteOutlined />}>清空全部</Button>
+                <TipButton tip="清空全部历史记录，不可恢复" danger icon={<DeleteOutlined />}>清空全部</TipButton>
               </Popconfirm>
-              <Button icon={<ReloadOutlined />} onClick={loadList} loading={loading}>
+              <TipButton tip="重新加载执行历史列表" icon={<ReloadOutlined />} onClick={loadList} loading={loading}>
                 刷新
-              </Button>
+              </TipButton>
             </Space>
           </Col>
         </Row>

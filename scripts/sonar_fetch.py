@@ -1,8 +1,12 @@
 """Query SonarQube API for current issue status summary."""
 import json
+import os
 import urllib.request
 
-token = "sqa_fe4b774b40e19eca12e0f46a2f2f771f2d1a23bd"
+# 从环境变量读取，避免把 SonarQube 凭据硬编码进仓库
+token = os.environ.get("SONAR_TOKEN", "").strip()
+if not token:
+    raise SystemExit("未设置 SONAR_TOKEN 环境变量，无法访问 SonarQube。")
 headers = {"Authorization": f"Bearer {token}"}
 
 

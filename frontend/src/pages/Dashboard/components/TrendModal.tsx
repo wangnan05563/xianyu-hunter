@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { Modal, Button, Empty } from 'antd'
+import { Modal, Empty } from 'antd'
 import { ExpandOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
+import { TipButton } from '@/components/TipButton'
 import type { TrendSeries } from '../../../api'
 
 interface TrendModalProps {
@@ -102,14 +103,14 @@ export default function TrendModal({
       styles={{ body: { padding: '12px 24px' } }}>
       <div style={{ marginBottom: 12, display: 'flex', gap: 8 }}>
         {[168, 720, 2160].map(h => (
-          <Button key={h} size="small" type={trendRange === h ? 'primary' : 'default'} onClick={() => onRangeChange(h)}>
+          <TipButton key={h} size="small" type={trendRange === h ? 'primary' : 'default'} onClick={() => onRangeChange(h)} tip={h === 168 ? '查看近 7 天趋势' : h === 720 ? '查看近 30 天趋势' : '查看近 90 天趋势'}>
             {(() => {
               // 时间范围文案
               if (h === 168) return '7 天'
               if (h === 720) return '30 天'
               return '90 天'
             })()}
-          </Button>
+          </TipButton>
         ))}
       </div>
       {trendOption ? (

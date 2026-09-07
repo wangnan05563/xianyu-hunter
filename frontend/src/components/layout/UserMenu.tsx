@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Avatar, Typography, Tag, Spin, Button, Tooltip, theme, Empty, message, Popover } from 'antd'
+import { Avatar, Typography, Tag, Spin, theme, Empty, message, Popover } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import {
   SwapOutlined,
   LogoutOutlined,
@@ -359,17 +360,16 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
             </Text>
           )}
         </div>
-        <Tooltip title={refreshingUser ? '正在刷新用户信息和健康状态...' : '刷新用户信息与健康状态'}>
-          <Button
-            type="text"
-            size="small"
-            icon={<ReloadOutlined />}
-            loading={loading}
-            // 同时刷新 userInfo + cookie health：触发后端 nick 重抓并更新顶部 displayName
-            onClick={() => fetchHealth({ withUserInfo: true })}
-            aria-label="刷新用户信息与健康状态"
-          />
-        </Tooltip>
+        <TipButton
+          tip={refreshingUser ? '正在刷新用户信息和健康状态...' : '刷新用户信息与健康状态'}
+          type="text"
+          size="small"
+          icon={<ReloadOutlined />}
+          loading={loading}
+          // 同时刷新 userInfo + cookie health：触发后端 nick 重抓并更新顶部 displayName
+          onClick={() => fetchHealth({ withUserInfo: true })}
+          aria-label="刷新用户信息与健康状态"
+        />
       </div>
 
       {/* Cookie 健康状态 */}
@@ -380,14 +380,16 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
         display: 'flex', gap: 8, marginTop: 12,
         paddingTop: 12, borderTop: `1px solid ${themeToken.colorBorderSecondary}`,
       }}>
-        <Button
+        <TipButton
+          tip="切换到其他闲鱼账号"
           block
           icon={<SwapOutlined />}
           onClick={handleSwitchAccount}
         >
           换号
-        </Button>
-        <Button
+        </TipButton>
+        <TipButton
+          tip="退出当前账号并清除登录态"
           block
           danger
           icon={<LogoutOutlined />}
@@ -395,7 +397,7 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
           onClick={handleLogout}
         >
           退出
-        </Button>
+        </TipButton>
       </div>
     </div>
   )

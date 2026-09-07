@@ -14,6 +14,8 @@ interface SendMessageParams {
   message: string
   enableTools?: boolean
   images?: string[]
+  // 模型覆盖：知识库问答界面下拉选择的模型，随请求上送，覆盖服务端默认模型
+  model?: string
 }
 
 // 构造认证请求头：cookie 为主（withCredentials），Authorization header 为辅（兼容场景）
@@ -30,6 +32,8 @@ const buildChatBody = (opts: UseSSEChatOptions & SendMessageParams) => ({
   message: opts.message,
   enable_tools: opts.enableTools ?? true,
   images: opts.images ?? [],
+  // model 仅在用户显式选择时上送，留空则服务端用默认模型
+  ...(opts.model ? { model: opts.model } : {}),
 })
 
 // 终止事件类型集合：done/error/escalate 触发 onComplete 后立即结束流

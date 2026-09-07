@@ -1,4 +1,4 @@
-"""Playwright 浏览器封装（持久化 User Data Dir）
+﻿"""Playwright 浏览器封装（持久化 User Data Dir）
 
 设计文档 §3.3 - 首次扫码登录后复用 Cookie。
 
@@ -92,22 +92,22 @@ class BrowserManager:
         if self._browser is not None:
             return
 
-        max_retries = 2
+        _MAX_RETRIES = 2
 
-        for attempt in range(max_retries + 1):
+        for attempt in range(_MAX_RETRIES + 1):
             try:
                 logger.info(
                     "Starting browser: mode={}, headless={}, data={} (attempt {}/{})",
                     "cdp" if self.use_cdp else "launch", self.headless,
-                    self.user_data_dir, attempt + 1, max_retries + 1,
+                    self.user_data_dir, attempt + 1, _MAX_RETRIES + 1,
                 )
                 self._playwright = await async_playwright().start()
                 break
             except Exception as e:
-                if attempt < max_retries:
+                if attempt < _MAX_RETRIES:
                     logger.warning(
                         "Browser start failed (attempt {}/{}): {}, cleaning up...",
-                        attempt + 1, max_retries + 1, e,
+                        attempt + 1, _MAX_RETRIES + 1, e,
                     )
                     self._cleanup_orphan_processes()
                     self._cleanup_lock_files()
@@ -454,47 +454,17 @@ class BrowserManager:
             return False
         try:
             await self._context.add_cookies(cookies)
-            # 验证目标 Cookie 是否已进入浏览器；同时记录关键身份 Cookie，便于排查登录态问题。
             injected = await self._context.cookies()
-            names = {c["name"] for c in injected}
-            requested = {str(c.get("name") or "") for c in cookies if c.get("name")}
-            key_cookies = {"cookie2", "sgcookie", "unb"}
-            found = key_cookies & names
+            names = {c['name'] for c in injected}
+            requested = {str(c.get('name') or '') for c in cookies if c.get('name')}
+            found = _KEY_COOKIES & names
             logger.info(
-                "add_cookies: 注入 {} 个 Cookie，目标 Cookie 验证: {}，关键身份 Cookie: {}",
+                'add_cookies: 注入 {} 个 Cookie，目标 Cookie 验证: {}，关键身份 Cookie: {}',
                 len(cookies),
-                f"✓ {requested & names}" if requested & names else "✗ 未找到目标 Cookie",
-                f"✓ {found}" if found else "✗ 未找到关键身份 Cookie",
+                f'✓ {requested & names}' if requested & names else '✗ 未找到目标 Cookie',
+                f'✓ {found}' if found else '✗ 未找到关键身份 Cookie',
             )
-            # 部分 Cookie 注入后未落地（实测：CDP/真实 Edge 对 secure/sameSite 有约束，
-            # 个别身份 Cookie 如 unb 会被静默丢弃，而 cookie2/sgcookie 正常）。
-            # 仅对「未落地」的 cookie 用显式 secure=True/sameSite=Lax 重试一次，
-            # 命中则修复，未命中则明确告警命名，避免后续误判为"浏览器不可用"。
-            missing = requested - names
-            if missing:
-                logger.warning(
-                    "add_cookies: 以下 Cookie 注入后未落地，尝试显式属性重试: {}",
-                    sorted(missing),
-                )
-                retry_items = []
-                for c in cookies:
-                    if str(c.get("name") or "") in missing:
-                        item = dict(c)
-                        item["secure"] = True
-                        item["sameSite"] = "Lax"
-                        retry_items.append(item)
-                try:
-                    await self._context.add_cookies(retry_items)
-                    re_injected = await self._context.cookies()
-                    re_names = {c["name"] for c in re_injected}
-                    still = missing - re_names
-                    if still:
-                        logger.warning("add_cookies: 显式属性重试后仍缺失: {}", sorted(still))
-                    else:
-                        logger.info("add_cookies: 显式属性重试后缺失 Cookie 已补齐: {}", sorted(missing))
-                    names |= re_names
-                except Exception as e:
-                    logger.warning("add_cookies: 显式属性重试失败: {}", e)
+            names = await _retry_missing_cookies(self._context, cookies, requested, names)
             return bool(requested & names)
         except Exception as e:
             logger.error("add_cookies 失败: {}", e)
@@ -645,3 +615,54 @@ class BrowserManager:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.close()
+
+
+
+# 提取关键身份 Cookie 常量（用于验证注入结果）
+_KEY_COOKIES = {"cookie2", "sgcookie", "unb"}
+# 已知无害 Cookie：缺失不影响登录态，无需告警（避免注入时高频刷屏）
+_BENIGN_COOKIES = {"xlly_s"}
+
+
+async def _retry_missing_cookies(
+    context: BrowserContext,
+    cookies: list[dict],
+    requested: set[str],
+    current_names: set[str],
+) -> set[str]:
+    """对未注入成功的 Cookie 尝试显式属性重试（secure/sameSite 约束修复）
+
+    部分真实 Edge/CDP 环境会静默丢弃 secure/sameSite 属性不匹配的 Cookie，
+    这里对缺失项用标准 Lax/True 重试一次，修复大多数静默丢弃问题。
+    """
+    missing = requested - current_names
+    if not missing:
+        return current_names
+
+    retry_items: list[dict] = []
+    for c in cookies:
+        if str(c.get("name") or "") in missing:
+            item = dict(c)
+            item["secure"] = True
+            item["sameSite"] = "Lax"
+            retry_items.append(item)
+    try:
+        await context.add_cookies(retry_items)
+        re_injected = await context.cookies()
+        re_names = {c["name"] for c in re_injected}
+        still = missing - re_names
+        # 合并原“尝试重试”+“仍缺失”两条日志为一条，避免同一次注入成对刷屏；
+        # 已知无害 Cookie（如 xlly_s）缺失时降级为 DEBUG
+        benign_missing = still & _BENIGN_COOKIES
+        real_missing = still - _BENIGN_COOKIES
+        if real_missing:
+            logger.warning("add_cookies: 关键 Cookie 注入后仍缺失（已显式重试）: {}", sorted(real_missing))
+        if benign_missing:
+            logger.debug("add_cookies: 非关键 Cookie 未落地（已忽略）: {}", sorted(benign_missing))
+        if not still:
+            logger.info("add_cookies: 缺失 Cookie 已补齐: {}", sorted(missing))
+        return current_names | re_names
+    except Exception as e:
+        logger.warning("add_cookies: 显式属性重试失败: {}", e)
+        return current_names
+

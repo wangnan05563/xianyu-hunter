@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import {
-  Steps, Card, Form, Input, InputNumber, Slider, Button, Space, Radio,
+  Steps, Card, Form, Input, InputNumber, Slider, Space, Radio,
   message, Result, Spin, Alert, Modal, Switch, Tag, Divider, Table, Select,
 } from 'antd'
 import {
@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import TagEditor from '../../components/editors/TagEditor'
+import { TipButton } from '@/components/TipButton'
 import CronEditor from '../../components/editors/CronEditor'
 import { ParamCalculatorPanel } from '../../components/ParamCalculator'
 import { taskApi, configApi, TaskCreateBody, TaskSearchOverride, AppConfig } from '../../api'
@@ -509,9 +510,9 @@ export default function TaskEditor() {
 
   return (
     <div className="page-container">
-      <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')} style={{ marginBottom: 16 }}>
+      <TipButton tip="返回任务列表" icon={<ArrowLeftOutlined />} onClick={() => navigate('/tasks')} style={{ marginBottom: 16 }}>
         返回列表
-      </Button>
+      </TipButton>
 
       <h2>{pageTitle}</h2>
 
@@ -524,7 +525,7 @@ export default function TaskEditor() {
           closable
           onClose={() => setDraftRestored(false)}
           action={
-            <Button size="small" danger onClick={clearDraft}>清除草稿</Button>
+            <TipButton tip="清除本地草稿" size="small" danger onClick={clearDraft}>清除草稿</TipButton>
           }
           style={{ marginBottom: 16 }}
         />
@@ -545,11 +546,11 @@ export default function TaskEditor() {
             title={loadError}
             extra={
               <Space>
-                <Button onClick={() => navigate('/tasks')}>返回列表</Button>
+                <TipButton tip="返回任务列表" onClick={() => navigate('/tasks')}>返回列表</TipButton>
                 {loadError.includes('登录') && (
-                  <Button type="primary" onClick={() => navigate('/login')} style={{ background: '#FF6200', borderColor: '#FF6200' }}>
+                  <TipButton tip="前往登录页" type="primary" onClick={() => navigate('/login')} style={{ background: '#FF6200', borderColor: '#FF6200' }}>
                     前往登录
-                  </Button>
+                  </TipButton>
                 )}
               </Space>
             }
@@ -750,13 +751,14 @@ export default function TaskEditor() {
             </Space>
           }
           extra={
-            <Button
+            <TipButton
+              tip="编辑全局搜索配置"
               size="small"
               icon={<SettingOutlined />}
               onClick={() => setSearchConfigModalOpen(true)}
             >
               全局搜索配置
-            </Button>
+            </TipButton>
           }
         >
           <Alert
@@ -868,13 +870,14 @@ export default function TaskEditor() {
             </Space>
           }
           extra={
-            <Button
+            <TipButton
+              tip="编辑全局反检测配置"
               size="small"
               icon={<SettingOutlined />}
               onClick={() => setAntidetectModalOpen(true)}
             >
               修改全局反检测配置
-            </Button>
+            </TipButton>
           }
         >
           <Alert
@@ -928,13 +931,14 @@ export default function TaskEditor() {
         <Card
           title="Step 6 · 调度与确认"
           extra={
-            <Button
+            <TipButton
+              tip="编辑全局批量采集配置"
               size="small"
               icon={<CloudDownloadOutlined />}
               onClick={() => setBatchRefreshModalOpen(true)}
             >
               批量采集配置
-            </Button>
+            </TipButton>
           }
         >
           <Form layout="vertical">
@@ -1044,22 +1048,23 @@ export default function TaskEditor() {
 
       {/* 步骤导航 */}
       <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between' }}>
-        <Button
+        <TipButton
+          tip="返回上一步"
           disabled={current === 0}
           onClick={() => setCurrent(current - 1)}
           icon={<ArrowLeftOutlined />}
         >
           上一步
-        </Button>
+        </TipButton>
         <Space>
           {current < steps.length - 1 ? (
-            <Button type="primary" onClick={handleNext} icon={<ArrowRightOutlined />}>
+            <TipButton tip="进入下一步" type="primary" onClick={handleNext} icon={<ArrowRightOutlined />}>
               下一步
-            </Button>
+            </TipButton>
           ) : (
-            <Button type="primary" loading={loading} onClick={handleSubmit} icon={<CheckCircleOutlined />}>
+            <TipButton tip="提交创建或保存任务" type="primary" loading={loading} onClick={handleSubmit} icon={<CheckCircleOutlined />}>
               {isEdit ? '保存修改' : '创建任务'}
-            </Button>
+            </TipButton>
           )}
         </Space>
       </div>
@@ -1109,13 +1114,14 @@ function Step3AIEval(props: {
         </Space>
       }
       extra={
-        <Button
+        <TipButton
+          tip="编辑全局 AI 评估配置"
           size="small"
           icon={<SettingOutlined />}
           onClick={onOpenGlobalConfig}
         >
           全局 AI 评估配置
-        </Button>
+        </TipButton>
       }
     >
       <Alert
@@ -1153,13 +1159,14 @@ function Step3AIEval(props: {
               placeholder={`沿用全局（${effectiveEvalThreshold}）`}
               style={{ width: 120 }}
             />
-            <Button
+            <TipButton
+              tip="重置评估阈值为全局值"
               size="small"
               onClick={() => setFormData({ ...formData, eval_threshold: null })}
               disabled={formData.eval_threshold === null}
             >
               重置为全局
-            </Button>
+            </TipButton>
           </Space>
         </Form.Item>
 
@@ -1208,7 +1215,8 @@ function Step3AIEval(props: {
                 return `沿用全局（${globalConfig?.eval?.auto_collect_official ? '已开启' : '已关闭'}）`
               })()}
             </Tag>
-            <Button
+            <TipButton
+              tip="重置自动采集开关为全局值"
               size="small"
               onClick={() => {
                 const next = { ...formData.eval_config }
@@ -1218,7 +1226,7 @@ function Step3AIEval(props: {
               disabled={formData.eval_config?.auto_collect_official == null}
             >
               重置为全局
-            </Button>
+            </TipButton>
           </Space>
         </Form.Item>
 
@@ -1243,7 +1251,8 @@ function Step3AIEval(props: {
                 条
               </div>
             </Space.Compact>
-            <Button
+            <TipButton
+              tip="重置每轮采集条数为全局值"
               size="small"
               onClick={() => {
                 const next = { ...formData.eval_config }
@@ -1253,7 +1262,7 @@ function Step3AIEval(props: {
               disabled={formData.eval_config?.auto_collect_max_per_run == null}
             >
               重置为全局
-            </Button>
+            </TipButton>
           </Space>
         </Form.Item>
       </Form>
@@ -1366,9 +1375,9 @@ function GlobalEvalConfigModal({ open, onClose, onSaved }: { readonly open: bool
         onCancel={onClose}
         width={720}
         footer={[
-          <Button key="cancel" onClick={onClose}>取消</Button>,
-          <Button key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</Button>,
-          <Button key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>,
+          <TipButton tip="关闭弹窗" key="cancel" onClick={onClose}>取消</TipButton>,
+          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</TipButton>,
+          <TipButton tip="保存配置" key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</TipButton>,
         ]}
       >
         <Alert
@@ -1449,8 +1458,8 @@ function GlobalEvalConfigModal({ open, onClose, onSaved }: { readonly open: bool
         open={diffModalOpen}
         onCancel={() => setDiffModalOpen(false)}
         footer={[
-          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>取消</Button>,
-          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</Button>,
+          <TipButton tip="取消保存" key="cancel" onClick={() => setDiffModalOpen(false)}>取消</TipButton>,
+          <TipButton tip="确认保存并写入配置" key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</TipButton>,
         ]}
         width={700}
       >
@@ -1519,9 +1528,9 @@ function GlobalBatchRefreshModal({ open, onClose }: { readonly open: boolean; re
         onCancel={onClose}
         width={600}
         footer={[
-          <Button key="cancel" onClick={onClose}>取消</Button>,
-          <Button key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</Button>,
-          <Button key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>,
+          <TipButton tip="关闭弹窗" key="cancel" onClick={onClose}>取消</TipButton>,
+          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</TipButton>,
+          <TipButton tip="保存配置" key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</TipButton>,
         ]}
       >
         <Alert
@@ -1589,8 +1598,8 @@ function GlobalBatchRefreshModal({ open, onClose }: { readonly open: boolean; re
         open={diffModalOpen}
         onCancel={() => setDiffModalOpen(false)}
         footer={[
-          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>取消</Button>,
-          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</Button>,
+          <TipButton tip="取消保存" key="cancel" onClick={() => setDiffModalOpen(false)}>取消</TipButton>,
+          <TipButton tip="确认保存并写入配置" key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</TipButton>,
         ]}
         width={700}
       >
@@ -1656,9 +1665,9 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
         onCancel={onClose}
         width={600}
         footer={[
-          <Button key="cancel" onClick={onClose}>取消</Button>,
-          <Button key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</Button>,
-          <Button key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => previewConfigSave({ setSaving, previewSave, setDiffChanges, setDiffModalOpen })}>保存</Button>,
+          <TipButton tip="关闭弹窗" key="cancel" onClick={onClose}>取消</TipButton>,
+          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</TipButton>,
+          <TipButton tip="保存配置" key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => previewConfigSave({ setSaving, previewSave, setDiffChanges, setDiffModalOpen })}>保存</TipButton>,
         ]}
       >
         <Alert
@@ -1751,8 +1760,8 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
         open={diffModalOpen}
         onCancel={() => setDiffModalOpen(false)}
         footer={[
-          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>取消</Button>,
-          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</Button>,
+          <TipButton tip="取消保存" key="cancel" onClick={() => setDiffModalOpen(false)}>取消</TipButton>,
+          <TipButton tip="确认保存并写入配置" key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</TipButton>,
         ]}
         width={700}
       >
@@ -1837,9 +1846,9 @@ function GlobalSearchConfigModal({ open, onClose, onSaved }: { readonly open: bo
         onCancel={onClose}
         width={720}
         footer={[
-          <Button key="cancel" onClick={onClose}>取消</Button>,
-          <Button key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</Button>,
-          <Button key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>,
+          <TipButton tip="关闭弹窗" key="cancel" onClick={onClose}>取消</TipButton>,
+          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</TipButton>,
+          <TipButton tip="保存配置" key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</TipButton>,
         ]}
       >
         <Alert
@@ -1913,8 +1922,8 @@ function GlobalSearchConfigModal({ open, onClose, onSaved }: { readonly open: bo
         open={diffModalOpen}
         onCancel={() => setDiffModalOpen(false)}
         footer={[
-          <Button key="cancel" onClick={() => setDiffModalOpen(false)}>取消</Button>,
-          <Button key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</Button>,
+          <TipButton tip="取消保存" key="cancel" onClick={() => setDiffModalOpen(false)}>取消</TipButton>,
+          <TipButton tip="确认保存并写入配置" key="confirm" type="primary" loading={saving} onClick={handleConfirmSave}>确认保存</TipButton>,
         ]}
         width={700}
       >

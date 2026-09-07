@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { TipButton } from '@/components/TipButton'
 import {
   Layout,
   Typography,
-  Button,
   Space,
   Table,
   Switch,
@@ -251,7 +251,8 @@ export default function MenuAdmin() {
         }}
       >
         <Space>
-          <Button
+          <TipButton
+            tip="返回上一页"
             type="text"
             icon={<ArrowLeftOutlined />}
             onClick={() => navigate(-1)}
@@ -260,24 +261,26 @@ export default function MenuAdmin() {
           <Title level={4} style={{ margin: 0 }}>菜单管理</Title>
         </Space>
         <Space>
-          <Button
+          <TipButton
+            tip="重新加载菜单配置"
             icon={<ReloadOutlined />}
             onClick={() => void loadMenus()}
             disabled={loading || saving || resetting}
           >
             刷新
-          </Button>
+          </TipButton>
           <Popconfirm
             title="重置为默认配置"
             description="将清除所有自定义菜单配置，是否继续？"
             onConfirm={() => void handleReset()}
             disabled={loading || saving || resetting}
           >
-            <Button icon={<UndoOutlined />} disabled={loading || saving || resetting}>
+            <TipButton tip="重置为默认菜单配置" icon={<UndoOutlined />} disabled={loading || saving || resetting}>
               重置为默认
-            </Button>
+            </TipButton>
           </Popconfirm>
-          <Button
+          <TipButton
+            tip="保存菜单配置修改"
             type="primary"
             icon={<SaveOutlined />}
             onClick={() => void handleSave()}
@@ -285,7 +288,7 @@ export default function MenuAdmin() {
             loading={saving}
           >
             保存{hasDirty ? ` (${rows.filter((r) => r.dirty).length})` : ''}
-          </Button>
+          </TipButton>
         </Space>
       </Header>
       <Content style={{ overflow: 'auto', padding: 16, background: token.colorBgLayout }}>

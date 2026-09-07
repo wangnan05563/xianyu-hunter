@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Layout, List, Button, Input, Typography, Tag, Popconfirm, Empty, Spin, Upload, message, Modal } from 'antd'
+import { Layout, List, Input, Typography, Tag, Popconfirm, Empty, Spin, Upload, Select, message, Modal } from 'antd'
 import {
   PlusOutlined,
   UserOutlined,
@@ -17,6 +17,7 @@ import {
   MessageOutlined,
 } from '@ant-design/icons'
 import { useSSEChat } from './hooks/useSSEChat'
+import { useModelList } from './hooks/useModelList'
 import { useSearch } from '../../hooks/useSearch'
 import { useSearchHistory } from '../../hooks/useSearchHistory'
 import { chatbotApi } from './api'
@@ -27,6 +28,7 @@ import ChatbotOnboarding, {
 } from './components/ChatbotOnboarding'
 import QuickReplyChips from './components/QuickReplyChips'
 import HelpCenterModal from './components/HelpCenterModal'
+import { TipButton } from '@/components/TipButton'
 import type { Session, Message, SSEEvent, ToolCall, FAQ } from './types'
 import './chatbot.css'
 
@@ -459,6 +461,8 @@ export default function ChatbotPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const { isStreaming, sendMessage, cancel } = useSSEChat()
+  // 模型列表：下拉展示 / 自动刷新 / localStorage 记忆（需求 2/3/5/6）
+  const modelList = useModelList()
 
   // M1 引导卡关闭状态：localStorage 记忆 + 会话切换重置
   const [onboardingDismissed, setOnboardingDismissed] = useState<boolean>(
@@ -752,6 +756,8 @@ export default function ChatbotPage() {
       message: text,
       enableTools,
       images: pendingImages.length > 0 ? [...pendingImages] : [],
+      // 模型覆盖：下拉选中的模型立即随请求上送（需求 3）；undefined 则服务端用默认
+      model: modelList.selectedModel,
       onEvent: handleSSEEvent,
       // S2004 修复：onError/onComplete 提取到模块级工厂，消除 sendMessage 选项内的多层嵌套
       onError: createSendErrorHandler(tempId, { setMessages }),
@@ -869,14 +875,15 @@ export default function ChatbotPage() {
         className={`cb-sider ${siderOpen ? 'cb-sider-open' : ''}`}
       >
         <div className="cb-sider-inner">
-          <Button
+          <TipButton
+            tip="新建一个会话"
             icon={<PlusOutlined />}
             block
             onClick={handleCreateSession}
             className="cb-new-btn"
           >
             新建会话
-          </Button>
+          </TipButton>
           {/* M2：搜索框 + 收藏过滤 */}
           <div className="cb-search-bar">
             <Input
@@ -887,7 +894,8 @@ export default function ChatbotPage() {
               onChange={(e) => setSearchKeyword(e.target.value)}
               className="cb-search-input"
             />
-            <Button
+            <TipButton
+              tip="切换只显示收藏的会话"
               type={favoriteOnly ? 'primary' : 'text'}
               size="small"
               icon={favoriteOnly ? <StarFilled /> : <StarOutlined />}
@@ -908,32 +916,34 @@ export default function ChatbotPage() {
                     {kw}
                   </Tag>
                 ))}
-                <Button type="link" size="small" onClick={clearSessionHistory} style={{ padding: 0, fontSize: 11 }}>
+                <TipButton type="link" size="small" tip="清空搜索历史" onClick={clearSessionHistory} style={{ padding: 0, fontSize: 11 }}>
                   清空
-                </Button>
+                </TipButton>
               </div>
             )}
             {/* M5：帮助中心 + 立即转人工 */}
             <div className="cb-quick-actions">
-              <Button
+              <TipButton
                 block
                 size="small"
+                tip="打开帮助中心"
                 icon={<QuestionCircleOutlined />}
                 onClick={() => setHelpOpen(true)}
                 className="cb-action-btn"
               >
                 帮助中心
-              </Button>
-              <Button
+              </TipButton>
+              <TipButton
                 block
                 size="small"
+                tip="转接至人工客服"
                 icon={<CustomerServiceOutlined />}
                 onClick={handleEscalate}
                 loading={escalating}
                 className="cb-action-btn cb-action-btn-escalate"
               >
                 立即转人工
-              </Button>
+              </TipButton>
             </div>
             {sessionListBody}
         </div>
@@ -955,8 +965,9 @@ export default function ChatbotPage() {
       <Content className="cb-content">
         {/* 移动端顶部工具条：桌面端 display:none 不显示，仅 ≤768px 可见 */}
         <div className="cb-mobile-bar">
-          <Button
+          <TipButton
             type="text"
+            tip="打开会话列表"
             icon={<MenuOutlined />}
             onClick={() => setSiderOpen(true)}
             className="cb-mobile-toggle"
@@ -966,6 +977,49 @@ export default function ChatbotPage() {
             {currentSession ? (currentSession.title || '新会话') : '智能客服'}
           </span>
         </div>
+        {/* 模型选择器：下拉展示可用模型 + 随时切换 + 自动刷新 + 错误提示（需求 2/3/4/5/6） */}
+        {currentSession && (
+          <div className="cb-model-bar">
+            <span className="cb-model-bar-label">问答模型</span>
+            <Select
+              size="small"
+              className="cb-model-select"
+              value={modelList.selectedModel}
+              onChange={modelList.selectModel}
+              loading={modelList.loading && modelList.models.length === 0}
+              disabled={modelList.loading && modelList.models.length === 0}
+              placeholder="选择问答模型"
+              style={{ minWidth: 240 }}
+              status={modelList.error && modelList.models.length === 0 ? 'error' : undefined}
+              options={modelList.models.map((m) => ({ label: m.id, value: m.id }))}
+              notFoundContent={
+                modelList.error ? (
+                  <span className="cb-model-error">{modelList.error}</span>
+                ) : (
+                  '暂无可用模型'
+                )
+              }
+              dropdownRender={(menu) => (
+                <div>
+                  {menu}
+                  <div
+                    className="cb-model-dropdown-footer"
+                    // 阻止 mousedown 冒泡，避免点击刷新时下拉被关闭
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={modelList.refresh}
+                  >
+                    <SyncOutlined spin={modelList.refreshing} /> 刷新模型列表
+                  </div>
+                </div>
+              )}
+            />
+            {modelList.error && modelList.models.length > 0 && (
+              <span className="cb-model-error cb-model-error-inline" title={modelList.error}>
+                刷新失败：{modelList.error}
+              </span>
+            )}
+          </div>
+        )}
         {/* S3358/S7735：主内容区已提取为 mainContentBody 变量（见 return 前 if-else） */}
         {mainContentBody}
 
@@ -1333,8 +1387,9 @@ function ChatInputArea({
           accept="image/*"
           disabled={isStreaming || pendingImages.length >= 4}
         >
-          <Button
+          <TipButton
             type="text"
+            tip="上传图片（最多 4 张）"
             icon={<PictureOutlined />}
             disabled={isStreaming || pendingImages.length >= 4}
             className="cb-upload-btn"
@@ -1353,17 +1408,18 @@ function ChatInputArea({
           disabled={isStreaming || isEscalated}
         />
         {isStreaming ? (
-          <Button icon={<StopOutlined />} onClick={onStop} className="cb-stop-btn">
+          <TipButton tip="停止当前流式生成" icon={<StopOutlined />} onClick={onStop} className="cb-stop-btn">
             停止
-          </Button>
+          </TipButton>
         ) : (
-          <Button
+          <TipButton
+            tip="发送消息（Enter）"
             onClick={onSend}
             disabled={!inputValue.trim()}
             className="cb-send-btn"
           >
             发送
-          </Button>
+          </TipButton>
         )}
       </div>
       <label className="cb-tools-label">
@@ -1442,27 +1498,29 @@ function MessageBubble({ message: msg, sessionId }: { readonly message: Message;
                 <span className="cb-msg-status-sent">已送达 ✓</span>
               )}
               {msg.status === 'failed' && (
-                <Button
+                <TipButton
                   size="small"
                   type="link"
+                  tip="重新发送该消息"
                   danger
                   icon={<SyncOutlined />}
                   onClick={handleRetry}
                   className="cb-msg-retry-btn"
                 >
                   发送失败 · 重试
-                </Button>
+                </TipButton>
               )}
               {/* M4：已送达消息显示撤回按钮（2 分钟内） */}
               {canRecall && !msg.status && (
-                <Button
+                <TipButton
                   size="small"
                   type="link"
+                  tip="撤回这条消息（2 分钟内）"
                   onClick={handleRecall}
                   className="cb-msg-recall-btn"
                 >
                   撤回
-                </Button>
+                </TipButton>
               )}
             </div>
           </>

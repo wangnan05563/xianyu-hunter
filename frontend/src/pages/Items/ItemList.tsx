@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type KeyboardEvent } from 'react'
-import { Card, Table, Tag, Select, Button, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
+import { Card, Table, Tag, Select, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined, ThunderboltOutlined, ClockCircleOutlined, LoadingOutlined, CheckCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { AxiosError } from 'axios'
@@ -797,7 +798,7 @@ export default function ItemList() {
       key: 'action',
       width: 80,
       render: (_: unknown, record: TaskLink) => (
-        <Button type="link" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.link_id)} size="small" disabled={!record.link_id || liveMode} />
+        <TipButton tip="删除此商品关联（不可恢复）" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.link_id)} size="small" disabled={!record.link_id || liveMode} />
       ),
     })
 
@@ -819,12 +820,13 @@ export default function ItemList() {
           message="闲鱼登录态不可用，实时搜索暂时不可用"
           description="当前浏览器缺少闲鱼搜索所需的登录 Cookie，或搜索临时令牌已过期。请重新登录闲鱼后再试。"
           action={
-            <Button
+            <TipButton
+              tip="前往登录页刷新闲鱼 Cookie"
               icon={<LoginOutlined />}
               onClick={() => navigate(`/?redirect=${encodeURIComponent('/items')}`)}
             >
               重新登录
-            </Button>
+            </TipButton>
           }
           style={{ marginBottom: 16, borderRadius: 8 }}
         />
@@ -839,7 +841,8 @@ export default function ItemList() {
             onChange={(v) => { setSelectedTask(v); setPage(1); setLiveMode(false) }}
             options={tasks.map((t) => ({ label: `${t.name}（${t.keyword}）`, value: t.id }))}
           />
-          <Button
+          <TipButton
+            tip="调用闲鱼实时搜索并写入最新商品"
             type={liveMode ? 'primary' : 'default'}
             icon={<SearchOutlined />}
             loading={liveLoading}
@@ -847,15 +850,16 @@ export default function ItemList() {
             disabled={!selectedTask}
           >
             实时搜索
-          </Button>
-          <Button
+          </TipButton>
+          <TipButton
+            tip="刷新当前任务的商品数据"
             icon={<ReloadOutlined />}
             onClick={handleRefresh}
             loading={loading || liveLoading || refreshing}
             disabled={!selectedTask}
           >
             刷新
-          </Button>
+          </TipButton>
           <Input
             placeholder="搜索标题"
             prefix={<SearchOutlined />}
@@ -922,23 +926,24 @@ export default function ItemList() {
                     }}
                     style={{ width: 70 }}
                   />
-                  <Button size="small" disabled>秒</Button>
+                  <TipButton tip="轮询间隔单位（秒）" size="small" disabled>秒</TipButton>
                 </Space.Compact>
               </Space>
             </Tooltip>
           )}
           {/* 上次刷新时间已移至商品列表 Card 顶部的醒目指示器中，避免工具栏信息冗余 */}
-          <Button type="link" icon={<LinkOutlined />} onClick={() => navigate('/tasks')}>
+          <TipButton tip="前往任务管理页面" type="link" icon={<LinkOutlined />} onClick={() => navigate('/tasks')}>
             管理任务
-          </Button>
+          </TipButton>
           {/* 列配置：拖拽调整列顺序 + 显示/隐藏字段，配置持久化到 localStorage（仅表格模式生效） */}
-          <Button
+          <TipButton
+            tip="拖拽调整列顺序或显示/隐藏字段"
             icon={<SettingOutlined />}
             onClick={() => setColumnConfigOpen(true)}
             disabled={viewMode !== 'table'}
           >
             列配置
-          </Button>
+          </TipButton>
           {/* O-05-26 数据导出：按当前选中任务过滤导出商品 CSV */}
           <ExportButton dataset="items" params={{ task_id: selectedTask || undefined }} />
           <div style={{ marginLeft: 'auto' }}>
@@ -964,9 +969,9 @@ export default function ItemList() {
                 {kw}
               </Tag>
             ))}
-            <Button type="link" size="small" onClick={clear} style={{ padding: 0, fontSize: 11 }}>
+            <TipButton tip="清空搜索历史关键词" type="link" size="small" onClick={clear} style={{ padding: 0, fontSize: 11 }}>
               清空
-            </Button>
+            </TipButton>
           </div>
         )}
       </Card>

@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { Card, Space, Button, Tooltip, Table, Alert, Tag, Typography, Empty, theme } from 'antd'
+import { Card, Space, Table, Alert, Tag, Typography, Empty, theme } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { ReloadOutlined } from '@ant-design/icons'
 import { formatPrice } from '../utils'
 import type { CategoryStat } from '../../../api'
@@ -71,9 +72,7 @@ export default function CategoryStatsTable({
           <span style={{ fontSize: 12, color: token.colorTextTertiary }}>
             共 {statsTotal} 件商品 · {stats.length} 个品类
           </span>
-          <Tooltip title="刷新">
-            <Button size="small" icon={<ReloadOutlined />} onClick={onRefresh} loading={loading} />
-          </Tooltip>
+          <TipButton size="small" icon={<ReloadOutlined />} onClick={onRefresh} loading={loading} tip="刷新品类统计明细数据" />
         </Space>
       }
     >

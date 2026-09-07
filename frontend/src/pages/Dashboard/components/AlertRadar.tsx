@@ -1,5 +1,6 @@
-import { Card, Col, Row, List, Spin, Button, Badge, Collapse, theme } from 'antd'
+import { Card, Col, Row, List, Spin, Badge, Collapse, theme } from 'antd'
 import { WarningOutlined, ReloadOutlined } from '@ant-design/icons'
+import { TipButton } from '@/components/TipButton'
 import type { TodayAlert } from '../../../api'
 
 interface AlertRadarProps {
@@ -35,7 +36,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
       extra={
         <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>
           今日 {alertData?.today?.orders ?? 0} 单 / {alertData?.today?.events ?? 0} 事件
-          <Button type="text" size="small" icon={<ReloadOutlined />} onClick={onReload} style={{ marginLeft: 4 }} />
+          <TipButton type="text" size="small" icon={<ReloadOutlined />} onClick={onReload} style={{ marginLeft: 4 }} tip="重新拉取最新预警数据" />
         </span>
       }>
       <Collapse activeKey={alertOpen ? ['alert'] : []} onChange={onToggle} bordered={false}

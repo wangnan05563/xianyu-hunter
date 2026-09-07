@@ -1,5 +1,6 @@
 import { type CSSProperties } from 'react'
-import { Modal, Table, Button, Tag } from 'antd'
+import { Modal, Table, Tag } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import type { DiffChange } from '../stores/configStore'
 import { useConfigStore } from '../stores/configStore'
 import { ParamCalculatorPanel } from './ParamCalculator'
@@ -98,12 +99,12 @@ export function DiffPreviewModal({
       open={open}
       onCancel={onCancel}
       footer={[
-        <Button key="cancel" onClick={onCancel}>
+        <TipButton tip="取消保存并关闭预览" key="cancel" onClick={onCancel}>
           取消
-        </Button>,
-        <Button key="confirm" type="primary" loading={loading} onClick={onConfirm}>
+        </TipButton>,
+        <TipButton tip="确认并保存配置变更" key="confirm" type="primary" loading={loading} onClick={onConfirm}>
           确认保存
-        </Button>,
+        </TipButton>,
       ]}
       width={960}
       styles={{ body: { maxHeight: '60vh', overflow: 'auto' } }}

@@ -490,6 +490,20 @@ export interface AITestEmbeddingResult {
   detail?: string
 }
 
+// 单个模型信息（上游 OpenAI 兼容 /models 返回的 data[] 项）
+export interface AIModelInfo {
+  id: string
+  owned_by?: string
+  created?: number
+}
+
+// POST /api/ai/models 响应：可用模型列表
+export interface AIListModelsResult {
+  ok: boolean
+  models: AIModelInfo[]
+  base_url?: string
+}
+
 export interface AIBudgetBody {
   daily_token_limit: number
   daily_cost_limit_usd: number

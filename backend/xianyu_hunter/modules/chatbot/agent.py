@@ -100,15 +100,19 @@ class Agent:
         context: str,
         history: list[dict],
         images: list[str] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """AGENT 多步推理主循环
 
         用 asyncio.timeout 包裹整个循环，超时后 yield error 事件并结束。
         所有异常均转换为 error 事件，由 Orchestrator 决定降级链。
+
+        model：请求级模型覆盖，覆盖 config.llm.model 仅本次对话生效；
+        None 时使用配置模型。
         """
         try:
             async with asyncio.timeout(self._config.tool_total_timeout_sec):
-                async for event in self._run_loop(query, context, history, images):
+                async for event in self._run_loop(query, context, history, images, model):
                     yield event
         except asyncio.TimeoutError:
             # M-3 修复：提取消息变量复用，避免字符串重复构造且未来修改只需改一处
@@ -131,6 +135,7 @@ class Agent:
         context: str,
         history: list[dict],
         images: list[str] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """单轮工具调用循环
 
@@ -145,7 +150,7 @@ class Agent:
         tools_schema = self._tools.get_openai_schemas()
 
         for _ in range(self._config.max_tool_rounds):
-            response = await self._call_llm(messages, tools_schema, images)
+            response = await self._call_llm(messages, tools_schema, images, model)
 
             tool_calls = response.get("tool_calls")
             if tool_calls:
@@ -212,12 +217,15 @@ class Agent:
         messages: list[dict],
         tools: list[dict],
         images: list[str] | None = None,
+        model: str | None = None,
     ) -> dict:
         """调用 OpenAI Chat Completions（非流式，带 tools 参数）
 
         返回结构：{"content": str | None, "tool_calls": list[dict] | None}
 
         多模态：images 非空且配置了 vision_model 时切换到视觉模型。
+        模型覆盖：model 非空时作为主模型（图片且无 vision_model 时使用它），
+        否则用 config.llm.model。
 
         超时：tool_llm_timeout_sec（单轮 LLM 决策上限）
         预算：调用前 check_budget，调用后 record_usage（endpoint=chatbot_agent）
@@ -232,11 +240,11 @@ class Agent:
             if not budget_ok:
                 raise RuntimeError(f"AGENT LLM 预算超限: {reason}")
 
-        # 有图片时用 vision_model（如已配置）
+        # 有图片时用 vision_model（如已配置）；否则用主模型（可能被请求级覆盖）
         use_model = (
             self._llm_config.vision_model
             if images and self._llm_config.vision_model
-            else self._llm_config.model
+            else (model or self._llm_config.model)
         )
         payload: dict[str, Any] = {
             "model": use_model,
@@ -270,7 +278,7 @@ class Agent:
             try:
                 self._ai_usage.record_usage(
                     endpoint="chatbot_agent",
-                    model=self._llm_config.model,
+                    model=use_model,
                     response_data=data,
                 )
             except Exception as e:

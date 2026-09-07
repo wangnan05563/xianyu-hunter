@@ -18,6 +18,15 @@
    - 修复：`frontend/vite.config.ts` 改为函数式 `defineConfig(({ command }) => ({...}))` + `optimizeDeps: { force: command === 'build' }`（仅 build 强制从零预构建，dev 保留缓存加速 HMR）。
    - 排查技巧：先用 `node --input-type=module -e "await import('包')"` 确认包本体健康（区分"包损坏" vs "Vite 解析层问题"）；再查 `node_modules/.vite/deps` 是否陈旧。
 
+## 沙箱文件监视器对构建辅助产物的写锁（环境级·间歇性）
+
+在沙箱内跑 `npm run build`（`tsc -b && vite build`）时，构建辅助产物 `frontend/tsconfig.tsbuildinfo` 与 `release/spa/sw.js`（及 `workbox-*.js`）**可能被**沙箱文件监视器以**非写共享**方式持锁：tsc/workbox 改写报 `EPERM: operation not permitted`，连 `[System.IO.File]::Delete()` 直接调也返回"访问被拒绝"。
+- 识别：同一文件反复 EPERM（先 sw.js、后 tsbuildinfo），`ls` 显示非只读、且 `Get-CimInstance Win32_Process` 查不到残留 tsc/vite/esbuild 进程。
+- **实测结论（2026-08-18，跨两次会话）**：此锁**兼具间歇性与会话内持续性**——同一会话内偶尔前几次失败、隔一轮重试即可放行（当晚 23:24 后台 `npm run build` 完整成功，含 SW 生成，`✓ built in 1m 10s`）；但**另一回合（Tooltip 收口）也实测到会话内连续多次（≥3 次）在 tsconfig.tsbuildinfo 或 sw.js 上 EPERM，`.NET` 直接 Delete 同样"访问被拒绝"**，即锁也可能在会话内持续。
+- **处置规则（修正）**：首次遇到 EPERM 不必立刻断定"沙箱外才能构建"，可**隔一轮重试 1–2 次**；但若**会话内连续 2–3 次失败**，即应停止无限重试、改为**沙箱外跑 `cd frontend && npm run build`** 产出完整 bundle，而非死磕。无论哪种情况，应用代码编译与类型正确性都独立于 SW 写盘，可用 `npx tsc -b`（零错误即通过）+ `vite build` 的模块 transform 计数（约 4679）先行验证。
+- 影响：即便被锁，也仅阻断最终 PWA SW 写盘与 tsbuildinfo 增量缓存，**不影响应用代码编译**——4678 模块 transform 正常、新 asset chunk 已写出；类型正确性可单独 `npx tsc -b` 验证（零错误即通过）。完整 bundle 以 `npm run build` 最终成功那次为准。
+- 处置：属环境限制，非代码/配置缺陷；优先重试，而非绕过。
+
 ## 通用约定
 - 构建前若 `node_modules` 被重装过，最稳是让 `optimizeDeps.force`（build）兜底，避免陈旧 `.vite` 缓存坑。
 - 诊断日志习惯落 `build_runN.log`，便于回溯；记得 `node_modules` 应被 gitignore（`.vite` 在 `node_modules/.vite` 下，依赖此保证不入库）。
@@ -27,6 +36,7 @@
 - 刷新部署的前端而**无需整包 PyInstaller 重建**：先 `npm run build`（产物落 `release/spa/`），再由 `scripts/build-exe.ps1` 的"5.1 复制 SPA"步骤把 `release/spa/` 整份复制到 `release/xianyu-hunter/static/spa/`（exe 同级）。删旧目录须用 `[System.IO.Directory]::Delete($p,$true)`（.NET 直接调用）绕过沙箱 safe-delete 守卫。
 - `frontend/node_modules` 现已就绪（2026-08-12 确认），可直接 `npm run build`（`tsc -b && vite build`）全量构建；产物直接落到 `release/spa/`，再经 `scripts/build-exe.ps1` 同步到 `release/xianyu-hunter/static/spa/` 即完成部署对齐。历史上"node_modules 缺失、build 不可靠"的约束已作废。
 - 部署对齐后仍需用户在浏览器**清 PWA Service Worker 缓存 / 硬刷新**一次，否则旧 SW 会短暂继续下发旧入口 chunk。
+- **SPA 单一来源铁律（2026-08-17 收口）**：前端编译产物只有 `release/spa/` 一份。`build-exe.ps1` 5.1 步骤**只**从 `backend/xianyu_hunter/web/static` 拷贝非 `spa` 子目录（当前为 `icons/`），SPA 仅由 `release/spa` 复制到 `release/xianyu-hunter/static/spa`；严禁再从 `backend/.../static/spa` 拷贝，避免陈旧 hash 资源混入安装包。dev 模式下 `app.py` 经 `paths.get_project_root()/"release"/"spa"` 定位（已用 `get_project_root()` 取代 `parents[3]` 魔法数）；旧的 `backend/.../static/spa` 兜底目录已删除（曾 git 跟踪，删除后 git status 显示一次 deletion，提交时一并纳入）。
 
 ## SPA 基路径 `/xianyu`（路由与入口铁律）
 

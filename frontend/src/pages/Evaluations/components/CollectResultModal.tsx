@@ -1,4 +1,5 @@
-import { Modal, Row, Col, Card, Statistic, Tag, Image, Button, Space } from 'antd'
+import { Modal, Row, Col, Card, Statistic, Tag, Image, Space } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { GlobalOutlined } from '@ant-design/icons'
 import type { OfficialCollectResult } from '../../../api'
 import { translateDimension, translateRejectReason } from '../dimensionLabels'
@@ -22,7 +23,7 @@ export function CollectResultModal({ open, result, onCancel }: CollectResultModa
       }
       open={open}
       onCancel={onCancel}
-      footer={<Button onClick={onCancel}>关闭</Button>}
+      footer={<TipButton onClick={onCancel} tip="关闭官方采集结果弹窗">关闭</TipButton>}
       width={720}
     >
       {result && (

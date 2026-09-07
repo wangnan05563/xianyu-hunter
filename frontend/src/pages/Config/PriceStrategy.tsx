@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
-import { Card, Switch, Slider, InputNumber, Row, Col, Button, Space, message, Divider, Statistic } from 'antd'
+import { Card, Switch, Slider, InputNumber, Row, Col, Space, message, Divider, Statistic } from 'antd'
+import { TipButton } from '@/components/TipButton'
 import { SaveOutlined, ExperimentOutlined } from '@ant-design/icons'
 import ReactECharts, { type EChartRef } from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
@@ -189,12 +190,12 @@ export default function PriceStrategy() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <Button icon={<RevertIcon size={16} />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton tip="放弃未保存的修改并重置" icon={<RevertIcon size={16} />} onClick={reset} disabled={!hasChanges()}>
             重置
-          </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
+          </TipButton>
+          <TipButton tip="保存价格策略配置" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             保存
-          </Button>
+          </TipButton>
         </Space>
       </div>
 
@@ -238,9 +239,9 @@ export default function PriceStrategy() {
                     硬性上限
                   </span>
                   {strategy.max_price !== getFieldOriginal('price_strategy.max_price') && (
-                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, max_price: getFieldOriginal('price_strategy.max_price') as number })} style={{ padding: 0, fontSize: 12 }}>
+                    <TipButton tip="恢复最高价原始值" size="small" type="link" onClick={() => setStrategy({ ...strategy, max_price: getFieldOriginal('price_strategy.max_price') as number })} style={{ padding: 0, fontSize: 12 }}>
                       <RevertIcon size={12} />
-                    </Button>
+                    </TipButton>
                   )}
                 </Space>
               }
@@ -282,9 +283,9 @@ export default function PriceStrategy() {
                     硬性下限（防 1 元引流）
                   </span>
                   {strategy.min_price !== getFieldOriginal('price_strategy.min_price') && (
-                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, min_price: getFieldOriginal('price_strategy.min_price') as number })} style={{ padding: 0, fontSize: 12 }}>
+                    <TipButton tip="恢复最低价原始值" size="small" type="link" onClick={() => setStrategy({ ...strategy, min_price: getFieldOriginal('price_strategy.min_price') as number })} style={{ padding: 0, fontSize: 12 }}>
                       <RevertIcon size={12} />
-                    </Button>
+                    </TipButton>
                   )}
                 </Space>
               }
@@ -326,9 +327,9 @@ export default function PriceStrategy() {
                     低于市场参考价
                   </span>
                   {strategy.market_ratio !== getFieldOriginal('price_strategy.market_ratio') && (
-                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, market_ratio: getFieldOriginal('price_strategy.market_ratio') as number })} style={{ padding: 0, fontSize: 12 }}>
+                    <TipButton tip="恢复市场价比例原始值" size="small" type="link" onClick={() => setStrategy({ ...strategy, market_ratio: getFieldOriginal('price_strategy.market_ratio') as number })} style={{ padding: 0, fontSize: 12 }}>
                       <RevertIcon size={12} />
-                    </Button>
+                    </TipButton>
                   )}
                 </Space>
               }
@@ -363,9 +364,9 @@ export default function PriceStrategy() {
                     同类低价 TopN
                   </span>
                   {strategy.top_n !== getFieldOriginal('price_strategy.top_n') && (
-                    <Button size="small" type="link" onClick={() => setStrategy({ ...strategy, top_n: getFieldOriginal('price_strategy.top_n') as number })} style={{ padding: 0, fontSize: 12 }}>
+                    <TipButton tip="恢复 TopN 原始值" size="small" type="link" onClick={() => setStrategy({ ...strategy, top_n: getFieldOriginal('price_strategy.top_n') as number })} style={{ padding: 0, fontSize: 12 }}>
                       <RevertIcon size={12} />
-                    </Button>
+                    </TipButton>
                   )}
                 </Space>
               }
@@ -423,7 +424,8 @@ export default function PriceStrategy() {
 
               <Divider />
 
-              <Button
+              <TipButton
+                tip="重新生成策略命中预览数据"
                 type="dashed"
                 block
                 icon={<ExperimentOutlined />}
@@ -437,7 +439,7 @@ export default function PriceStrategy() {
                 }}
               >
                 刷新预览数据
-              </Button>
+              </TipButton>
             </Card>
           </div>
         </Col>

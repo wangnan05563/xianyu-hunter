@@ -156,7 +156,8 @@ chatbot:
     embedding_dimensions: 512
     chunk_size: 500
     chunk_overlap: 50
-    snapshot_max_keep: 10
+    snapshot_max_keep: 2
+    refresh_timeout_sec: 1800
     persist_path: data/chromadb
     collection_name: xianyu_hunter_docs
     project_root: .

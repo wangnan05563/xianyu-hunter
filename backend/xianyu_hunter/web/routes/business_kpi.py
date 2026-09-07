@@ -273,10 +273,21 @@ async def _compute_business_kpi(range_days: int, container: Container) -> dict[s
 
     # KPI3：抢单成功率
     if cur_orders_total == 0:
-        logger.warning(
-            f"[business_kpi] 抢单成功率分母为 0：近 {range_days} 天无订单记录，"
-            "可能抢单未触发或订单数据采集异常"
-        )
+        # 仅在“有订单→无订单”状态切换时告警一次，避免常态零订单每 ~5 分钟刷屏
+        # （缓存预热 + API 调用都会走到这里，连续刷屏无信息量）
+        _zero_warned = getattr(_compute_business_kpi, "_zero_warned", {})
+        if not _zero_warned.get(range_days, False):
+            logger.warning(
+                f"[business_kpi] 抢单成功率分母为 0：近 {range_days} 天无订单记录，"
+                "可能抢单未触发或订单数据采集异常"
+            )
+            _zero_warned[range_days] = True
+            _compute_business_kpi._zero_warned = _zero_warned
+    else:
+        _zero_warned = getattr(_compute_business_kpi, "_zero_warned", {})
+        if _zero_warned.get(range_days, False):
+            _zero_warned[range_days] = False
+            _compute_business_kpi._zero_warned = _zero_warned
     cur_order_rate = (cur_paid / cur_orders_total * 100) if cur_orders_total else 0.0
     prev_order_rate = (prev_paid / prev_total_orders * 100) if prev_total_orders else 0.0
     # 分母为 0 时携带引导动作：让前端渲染"前往配置"链接直达抢单策略页，

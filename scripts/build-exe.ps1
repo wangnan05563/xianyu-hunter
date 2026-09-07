@@ -336,16 +336,20 @@ if ($EmbeddingEngine -eq "onnx") {
 # ============== 5. 复制外置资源 ==============
 Write-Host "`n[5/6] 复制外置资源..." -ForegroundColor Yellow
 
-# 5.1 静态资源（含 SPA + icons，外置到 exe 同级 static 目录）
-# app.py 在打包模式下通过 get_app_dir() / "static" 定位此目录
-Write-Host "  [5.1] 复制静态资源（SPA + icons）..."
-# 5.1 静态资源（icons 来自 backend 包内静态目录；SPA 来自前端编译产物 release/spa）
-Write-Host "  [5.1] 复制静态资源（icons + SPA）..."
-# icons 等包内静态资源（backend/xianyu_hunter/web/static，含 icons/；SPA 已改由 vite 输出到 release/spa）
-Copy-Item -Recurse -Force "backend\xianyu_hunter\web\static" "release\xianyu-hunter\static"
-# 前端编译产物（release/spa）→ 打包后 static/spa（app.py 打包模式从 get_app_dir()/static/spa 伺服）
+# 5.1 静态资源（外置到 exe 同级 static 目录，app.py 打包模式经 get_app_dir()/"static" 定位）
+# SPA 单一来源 = 前端编译产物 release/spa（vite outDir）。严禁再从 backend/.../static/spa 拷贝，
+# 避免陈旧 SPA 资源（旧 hash 的 JS/CSS）作为孤儿文件混入安装包。
+# backend/.../static 下仅拷贝非 spa 子目录（当前为 icons/），未来新增静态子目录亦自动包含。
+$staticTarget = "release\xianyu-hunter\static"
+New-Item -ItemType Directory -Force $staticTarget | Out-Null
+$backendStatic = "backend\xianyu_hunter\web\static"
+foreach ($sub in Get-ChildItem $backendStatic -Directory -ErrorAction SilentlyContinue) {
+    if ($sub.Name -eq "spa") { continue }
+    Copy-Item -Recurse -Force $sub.FullName "$staticTarget\$($sub.Name)"
+}
+# 前端编译产物（release/spa）→ 打包后 static/spa
 if (Test-Path "release\spa") {
-    Copy-Item -Recurse -Force "release\spa" "release\xianyu-hunter\static\spa"
+    Copy-Item -Recurse -Force "release\spa" "$staticTarget\spa"
 } else {
     Write-Host "  [WARN] release\spa 不存在，SPA 未构建，请先执行前端构建" -ForegroundColor Red
 }
@@ -401,6 +405,11 @@ if (Test-Path "$pwCacheDir\chromium-*") {
     }
     Remove-Item Env:\PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
 }
+# P1 瘦身：只保留完整 Chromium，剔除 chromium_headless_shell-*（约 -267MB）。
+# auth_helper 已改用 --headless=new 走完整内核，运行期不再需要 headless-shell。
+# 增量打包时目标目录可能残留旧版本，故复制后统一清理（幂等）。
+Get-ChildItem "$pwTarget" -Directory -Filter "chromium_headless_shell-*" -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
 
 # 5.5 embedding 工件（按引擎分支）
 # - onnx：复制 scripts/export_embedding_onnx.py 生成的 ONNX + tokenizer 工件

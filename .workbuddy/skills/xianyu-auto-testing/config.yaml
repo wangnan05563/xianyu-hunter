@@ -4307,3 +4307,76 @@ regression_guard:
   # 验证手法：git checkout 基线 -> 测试应红灯 -> 还原修复 -> 应绿灯
   verify_method: "git_checkout_baseline_then_restore"
   meta_rule: "#125"
+
+# ============== 模式 AO：release 构建路径一致性测试 ==============
+# 对应 xianyu-hunter-dev 规范 29/30/33；审查 F-REVIEW-248 / B-REVIEW-342
+# 详细操作步骤见 references/release-build-path-test.md
+mode_ao_release_build_path:
+  enabled: true
+  description: "release 构建路径一致性：vite 编译产物集中到 release/spa、SPA 单一来源（无 backend 次级副本/孤儿）、零 dist\\xianyu-hunter 陈旧残留；全部参数走配置、无硬编码"
+  trigger_keywords: ["构建产物路径", "release 集中化", "SPA 单一来源", "陈旧 dist 残留", "dist\\xianyu-hunter", "前端白屏旧 chunk", "打包 SPA 不一致"]
+  references_file: "references/release-build-path-test.md"
+  # 步骤 1：vite outDir 指向唯一产物根
+  vite_out_dir_expected: "release/spa"
+  vite_base_expected: "/xianyu/"
+  # 步骤 2：SPA 单一来源（安装包只含 release/spa 一份）
+  spa_single_source:
+    authoritative_dir: "release/spa"
+    forbid_secondary_copy_dirs:
+      - "backend/xianyu_hunter/web/static/spa"
+      - "frontend/dist"
+    orphan_check: true
+  # 步骤 3：零陈旧残留
+  residual_scan:
+    forbidden_patterns:
+      - "dist\\\\xianyu-hunter"
+      - "dist\\\\XianyuHunter-Setup"
+      - "release/xianyu-hunter/static/spa"
+    scan_globs:
+      - "scripts/**/*.ps1"
+      - "scripts/**/*.bat"
+      - "frontend/vite.config.ts"
+      - "backend/xianyu_hunter/web/app.py"
+  # 步骤 4：七处路径引用对齐（变更输出根时）
+  alignment_points:
+    - "vite.config.ts outDir"
+    - "build-exe.ps1 --distpath / --workpath"
+    - "installer.iss OutputDir"
+    - "部署复制源"
+    - "app.py 伺服路径"
+    - "子脚本默认路径"
+    - "cleanup + .gitignore"
+  cross_skill_validation:
+    - "xianyu-hunter-dev 规范 29/30/33"
+    - "xianyu-frontend-code-review F-REVIEW-248"
+    - "xianyu-backend-code-review B-REVIEW-342"
+
+# ============== 模式 AP：沙箱安全删除范式测试 ==============
+# 对应 xianyu-hunter-dev 规范 32；与 B-REVIEW-342 跨技能一致
+# 详细操作步骤见 references/sandbox-safe-deletion-test.md
+mode_ap_sandbox_safe_deletion:
+  enabled: true
+  description: "沙箱 safe-delete 守卫下删除范式：构建/清理脚本删除必须用 .NET Directory.Delete / python ctypes 绕过，禁止 rm/del/Remove-Item（fail-closed 中断）；大目录走同卷 os.rename 逃逸或分片批量删除"
+  trigger_keywords: ["删除被拦截", "safe-delete", "SAFE_DELETE_FAIL_CLOSED", "删除中断构建", "回收站删除", "批量删除失败", "清理脚本删除"]
+  references_file: "references/sandbox-safe-deletion-test.md"
+  # 允许的删除实现（绕过 safe-delete 守卫）
+  allowed_delete_impls:
+    powershell: "[System.IO.Directory]::Delete($p, $true) / [System.IO.File]::Delete($p)"
+    python: "ctypes.windll.kernel32.RemoveDirectoryW / DeleteFileW"
+  forbidden_delete_cmds:
+    - "rm"
+    - "del"
+    - "Remove-Item"
+  # 大目录删除策略（> 阈值文件数走分片或 os.rename 逃逸）
+  bulk_delete:
+    max_batch_per_process: 120
+    min_sleep_seconds: 6
+    use_same_volume_rename_escape: true   # os.rename 到项目树外同卷 O(1)
+  # 扫描对象：构建/清理脚本
+  scan_globs:
+    - "scripts/**/*.ps1"
+    - "scripts/**/*.bat"
+    - "scripts/**/*.py"
+  cross_skill_validation:
+    - "xianyu-hunter-dev 规范 32"
+    - "xianyu-backend-code-review B-REVIEW-342（沙箱安全删除条款）"

@@ -322,3 +322,6 @@ backend/xianyu_hunter/resources/embedding/meta.json
 /cleanup-manifest-*.txt
 /cleanup_manifest.json
 /cleanup-manifest-*
+
+# ---------- 构建版本号计数器（update-build-version.ps1 维护，每次构建递增）----------
+.build-counter.json

@@ -34,6 +34,7 @@ import {
 import { dbAdminApi, type DbColumn, type DbTableInfo } from '../../api/dbAdmin'
 import { useSearch } from '../../hooks/useSearch'
 import { useSearchHistory } from '../../hooks/useSearchHistory'
+import { TipButton } from '@/components/TipButton'
 
 // 与后端约定的危险操作确认 token
 const CONFIRM_TOKEN = 'CONFIRM_DELETE'
@@ -569,12 +570,12 @@ export default function DatabaseAdmin() {
           业务表在线 CRUD · 危险操作需要二次确认（输入 {CONFIRM_TOKEN}）· 所有写操作均记录审计日志
         </p>
         <Space>
-          <Button icon={<FileTextOutlined />} onClick={() => { loadAuditLog(); setAuditDrawerOpen(true) }}>
+          <TipButton tip="查看数据库维护审计日志" icon={<FileTextOutlined />} onClick={() => { loadAuditLog(); setAuditDrawerOpen(true) }}>
             审计日志
-          </Button>
-          <Button icon={<ReloadOutlined />} onClick={() => { loadTables(); loadRows() }} loading={rowsLoading}>
+          </TipButton>
+          <TipButton tip="刷新表列表与数据" icon={<ReloadOutlined />} onClick={() => { loadTables(); loadRows() }} loading={rowsLoading}>
             刷新
-          </Button>
+          </TipButton>
         </Space>
       </div>
 
@@ -635,24 +636,24 @@ export default function DatabaseAdmin() {
             <>
               {/* 工具栏 */}
               <Space style={{ marginBottom: 12 }} wrap>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setEditing({ mode: 'create' }) }}>
+                <TipButton tip="新增一行记录" type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setEditing({ mode: 'create' }) }}>
                   新增
-                </Button>
-                <Button danger icon={<DeleteOutlined />} disabled={selectedRowKeys.length === 0} onClick={openBatchDeleteConfirm}>
+                </TipButton>
+                <TipButton tip="批量删除选中行（需确认）" danger icon={<DeleteOutlined />} disabled={selectedRowKeys.length === 0} onClick={openBatchDeleteConfirm}>
                   批量删除 {selectedRowKeys.length > 0 && `(${selectedRowKeys.length})`}
-                </Button>
-                <Button icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
+                </TipButton>
+                <TipButton tip="打开数据导入弹窗" icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
                   导入
-                </Button>
-                <Button icon={<DownloadOutlined />} onClick={() => handleExport('csv')}>
+                </TipButton>
+                <TipButton tip="导出当前表数据为 CSV" icon={<DownloadOutlined />} onClick={() => handleExport('csv')}>
                   导出 CSV
-                </Button>
-                <Button icon={<DownloadOutlined />} onClick={() => handleExport('json')}>
+                </TipButton>
+                <TipButton tip="导出当前表数据为 JSON" icon={<DownloadOutlined />} onClick={() => handleExport('json')}>
                   导出 JSON
-                </Button>
-                <Button icon={<TableOutlined />} onClick={() => setSchemaDrawerOpen(true)}>
+                </TipButton>
+                <TipButton tip="查看当前表字段结构" icon={<TableOutlined />} onClick={() => setSchemaDrawerOpen(true)}>
                   查看表结构
-                </Button>
+                </TipButton>
                 <Input
                   placeholder="搜索文本列"
                   allowClear
@@ -662,7 +663,7 @@ export default function DatabaseAdmin() {
                   onPressEnter={() => { setPage(1); doSearch() }}
                   style={{ width: 200 }}
                 />
-                <Button onClick={() => { setPage(1); doSearch() }}>查询</Button>
+                <TipButton tip="按关键词查询表数据" onClick={() => { setPage(1); doSearch() }}>查询</TipButton>
               </Space>
               {/* 搜索历史小药丸：点击复用历史关键词，避免重复输入 */}
               {history.length > 0 && (
@@ -676,9 +677,9 @@ export default function DatabaseAdmin() {
                       {kw}
                     </Tag>
                   ))}
-                  <Button type="link" size="small" onClick={clear} style={{ padding: 0, fontSize: 11 }}>
+                  <TipButton tip="清空搜索历史关键词" type="link" size="small" onClick={clear} style={{ padding: 0, fontSize: 11 }}>
                     清空
-                  </Button>
+                  </TipButton>
                 </div>
               )}
 
@@ -693,7 +694,8 @@ export default function DatabaseAdmin() {
                     fixed: 'right',
                     render: (_: unknown, record: Record<string, unknown>) => (
                       <Space size="small">
-                        <Button
+                        <TipButton
+                          tip="编辑该行记录"
                           size="small"
                           type="link"
                           icon={<EditOutlined />}
@@ -704,8 +706,8 @@ export default function DatabaseAdmin() {
                           }}
                         >
                           编辑
-                        </Button>
-                        <Button size="small" type="link" danger icon={<DeleteOutlined />} onClick={() => openDeleteConfirm(record[pkCol!.name])}>删除</Button>
+                        </TipButton>
+                        <TipButton size="small" type="link" danger icon={<DeleteOutlined />} tip="删除该行（需输入确认码）" onClick={() => openDeleteConfirm(record[pkCol!.name])}>删除</TipButton>
                       </Space>
                     ),
                   },
@@ -774,7 +776,7 @@ export default function DatabaseAdmin() {
                 <div>
                   <p>CSV 列顺序需与表头一致；首行为表头（列名），后续每行一条记录。</p>
                   <Upload accept=".csv" beforeUpload={handleImportFile} showUploadList={false}>
-                    <Button icon={<UploadOutlined />}>选择 CSV 文件</Button>
+                    <TipButton tip="选择本地 CSV 文件上传" icon={<UploadOutlined />}>选择 CSV 文件</TipButton>
                   </Upload>
                 </div>
               ),
@@ -786,7 +788,7 @@ export default function DatabaseAdmin() {
                 <div>
                   <p>JSON 为对象数组，例如：<code>[&#123;"id":"1","name":"a"&#125;]</code></p>
                   <Upload accept=".json" beforeUpload={handleImportFile} showUploadList={false}>
-                    <Button icon={<UploadOutlined />}>选择 JSON 文件</Button>
+                    <TipButton tip="选择本地 JSON 文件上传" icon={<UploadOutlined />}>选择 JSON 文件</TipButton>
                   </Upload>
                 </div>
               ),

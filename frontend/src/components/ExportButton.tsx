@@ -1,7 +1,8 @@
-import { Button, Dropdown, message, Tooltip } from 'antd'
+import { Dropdown, message } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import type { MenuProps } from 'antd'
 import { exportApi, type ExportDataset, type ExportParams } from '../api'
+import { TipButton } from '@/components/TipButton'
 
 interface ExportButtonProps {
   /** 默认导出的数据集（点击按钮直接导出此数据集） */
@@ -46,11 +47,14 @@ export function ExportButton({
   // 不带下拉菜单：单按钮直接导出
   if (!withMenu) {
     return (
-      <Tooltip title={`导出 ${dataset} 为 CSV（Excel 友好）`}>
-        <Button size={size} icon={<DownloadOutlined />} onClick={() => handleExport(dataset)}>
-          {label}
-        </Button>
-      </Tooltip>
+      <TipButton
+        tip={`导出 ${dataset} 为 CSV（Excel 友好）`}
+        size={size}
+        icon={<DownloadOutlined />}
+        onClick={() => handleExport(dataset)}
+      >
+        {label}
+      </TipButton>
     )
   }
 

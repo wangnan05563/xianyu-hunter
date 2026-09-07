@@ -5,7 +5,6 @@ import {
   InputNumber,
   Select,
   Input,
-  Button,
   Space,
   message,
   Row,
@@ -16,6 +15,7 @@ import {
   Alert,
 } from 'antd'
 import { SaveOutlined, UndoOutlined } from '@ant-design/icons'
+import { TipButton } from '@/components/TipButton'
 import { useConfigStore } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
 import type { DiffChange } from '../../stores/configStore'
@@ -181,12 +181,12 @@ export default function SearchConfig() {
       {/* 页面标题 + 操作按钮 */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
         <Space>
-          <Button icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton tip="放弃未保存的修改并重置" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
             重置
-          </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
+          </TipButton>
+          <TipButton tip="保存搜索参数配置" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
             保存配置
-          </Button>
+          </TipButton>
         </Space>
       </div>
 
@@ -392,7 +392,8 @@ export default function SearchConfig() {
               <Text type="secondary" style={{ fontSize: 12 }}>常用预设：</Text>
               <Space size={[4, 8]} wrap style={{ marginLeft: 8 }}>
                 {['包邮', '信用极好', '同款', '全新', '可小刀'].map((tag) => (
-                  <Button
+                  <TipButton
+                    tip={`点击切换筛选标签「${tag}」`}
                     key={tag}
                     size="small"
                     type={filterTags.includes(tag) ? 'primary' : 'default'}
@@ -411,7 +412,7 @@ export default function SearchConfig() {
                     }}
                   >
                     {tag}
-                  </Button>
+                  </TipButton>
                 ))}
               </Space>
             </div>
