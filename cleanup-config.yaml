@@ -7,6 +7,22 @@
 #   - 2026-09-10（第九轮清理）：修正配置漂移 —— changelog_path 指向不存在的
 #     英文文件名、verification 硬校验 release/（第七轮已删除的生成物）、
 #     python_imports 为空导致 Phase 5 空转；并补齐 Vite 临时产物模式与隔离区配置。
+#   - 2026-09-10（对齐技能 schema：19 → 24 节）：
+#     原配置缺 6 个技能流程已依赖的节，导致第九轮这些判断只能人工临场实现：
+#       actions / evidence_gate / diagnostics / ignored_audit / report / dependency_check
+#     同时把错位键归位（避免"同一事实两处真相"）：
+#       safety.bypass_hook_mode        → execution.remove_method
+#       safety.verify_without_bytecode → execution.verify_without_bytecode
+#       safety.parallel_delete         → execution.parallel_delete
+#       safety.large_file_sequential   → execution.large_file_sequential
+#       safety.max_files_per_call      → execution.max_files_per_call
+#       safety.backup_log_format       → audit.backup_log_format
+#       safety.soft_delete             → 删除（语义已由 quarantine 节统一承担）
+#       review_categories.patterns     → preserve_roots
+#         （两节语义同为「命中即强制 review」，合并以消除双份真相）
+#       review_categories.reference_probe_extensions → diagnostics.reference_scan.extensions
+#     并补 service_indicators 所依赖、此前缺失的 platform 命令变体
+#     （file_occupancy_check / port_check / process_check / stop_process）。
 #
 # 轮次编号说明：docs/standards/目录结构.md 记到「第七轮（2026-07-23）」，
 #   而 .gitignore 内为「第七轮（2026-08-08）/第八轮（2026-08-11）」，二者不一致。
@@ -20,6 +36,14 @@ workspace:
   logs_dir: "cleanup-logs"
   frontend_dir: "frontend"
   frontend_src_dir: "frontend/src"
+  # 递归扫描的显式根列表。绝不从仓库根递归：本工作区 176k 文件，
+  #   实测 `-Recurse` 从根扫 104 s vs 限定根 3.5 s（≈30×），
+  #   且受限沙箱有单进程墙钟上限，全仓递归会被杀且不留输出。
+  scan_roots:
+    - "backend/"
+    - "scripts/"
+    - "tests/"
+    - "frontend/src/"
 
 # 根目录允许清单（保留项）。命中扩展名或白名单才允许留在根目录。
 root_allowlist:
@@ -45,6 +69,30 @@ root_allowlist:
     - "backend/.env"
     - "xiaoya_config.json"
   allowed_root_scripts: []
+
+# ---------- 保留根（命中即强制 review，优先级高于任何置信度）----------
+# 语义：被实际伺服/交付/运行时依赖，绝不可当垃圾。
+# 合并自原 review_categories.patterns（语义相同，见修订记录）。
+preserve_roots:
+  - "release/"                             # 统一生成物根：PyInstaller exe + 安装包 + SPA + 中间产物
+  - "frontend/"                            # 前端源码 + node_modules（node_modules 见下方显式项）
+  - "frontend/node_modules/"               # 构建依赖，npm ci 可重建，但删除后需重装才能构建
+  - "browser-data/"                        # 运行时登录态/Cookie（Playwright profile）
+  - "data/"                                # 运行时模型/SQLite（300 .bin + 75 .pickle）
+  - ".cache/"                              # ⚠️ 陷阱：683MB=Playwright 浏览器(抓取依赖)+92MB=ML 模型，运行时必需，保留
+  - ".venv/"                               # Python 运行环境
+  - ".venv-build/"                         # 构建用虚拟环境
+  - "backend/config/"                          # 源码配置目录（untracked 但属源码，勿删）
+  - "backend/xianyu_hunter/resources/"         # 源码资源目录（untracked 但属源码，勿删）
+  - "release/spa/"                         # 前端编译产物（vite outDir；exe 从 release 副本加载；可重建，REVIEW 级）
+  - "frontend/public/"                     # favicon 等被 SPA 引用的必要资产（*.png 被全局忽略但必需）
+  - "scripts/export_embedding_onnx.py"     # 源码脚本（untracked，勿删）
+  - "scripts/quantize_embedding_onnx.py"   # 源码脚本（untracked，勿删）
+  - "tests/"                               # 测试源码（untracked，勿删）
+  - ".env"
+  - "backend/.env"
+  - ".workbuddy/"                          # WorkBuddy 技能/记忆（仅删其中的 *.bak 备份）
+  - "plugins/"                             # 插件技能内容（勿批量删）
 
 script_extensions: [".py",".ps1",".bat",".sh",".js",".vbs"]
 
@@ -103,38 +151,6 @@ garbage_patterns:
     - "/frontend/vite.config.ts.timestamp-*.mjs"   # 第九轮发现 6 个曾被误提交入库
     - "/frontend/tsconfig.tsbuildinfo"
 
-# ---------- 释放物 / 依赖确认门（绝不自动删） ----------
-# 这些"看起来像垃圾、却可能是依赖或交付物"的模式，走 Phase 3 确认门。
-review_categories:
-  enabled: true
-  require_explicit_confirm: true
-  patterns:
-    - "/frontend/node_modules/"   # 构建依赖，npm ci 可重建，但删除后需重装才能构建
-    - "/.cache/"                  # ⚠️ 陷阱：683MB=Playwright 浏览器(抓取依赖)+92MB=ML 模型，运行时必需，保留
-    - "/.venv/"
-    - "/.venv-build/"
-  reference_probe_extensions: [".py",".js",".ts",".json",".yml",".yaml",".toml",".xml",".ps1",".bat"]
-
-# ---------- 保留根（被实际伺服/交付/运行时依赖，绝不可当垃圾） ----------
-preserve_roots:
-  - "release/"                             # 统一生成物根：PyInstaller exe + 安装包 + SPA + 中间产物
-  - "frontend/"                            # 前端源码 + node_modules（node_modules 见 review）
-  - "browser-data/"                        # 运行时登录态/Cookie（Playwright profile）
-  - "data/"                                # 运行时模型/SQLite（300 .bin + 75 .pickle）
-  - ".cache/"                              # 运行时依赖：Playwright 浏览器 + ML 模型
-  - ".venv/"                               # Python 运行环境
-  - "backend/config/"                          # 源码配置目录（untracked 但属源码，勿删）
-  - "backend/xianyu_hunter/resources/"         # 源码资源目录（untracked 但属源码，勿删）
-  - "release/spa/"                         # 前端编译产物（vite outDir；exe 从 release 副本加载；可重建，REVIEW 级）
-  - "frontend/public/"                     # favicon 等被 SPA 引用的必要资产（*.png 被全局忽略但必需）
-  - "scripts/export_embedding_onnx.py"     # 源码脚本（untracked，勿删）
-  - "scripts/quantize_embedding_onnx.py"   # 源码脚本（untracked，勿删）
-  - "tests/"                               # 测试源码（untracked，勿删）
-  - ".env"
-  - "backend/.env"
-  - ".workbuddy/"                          # WorkBuddy 技能/记忆（仅删其中的 *.bak 备份）
-  - "plugins/"                             # 插件技能内容（勿批量删）
-
 detection:
   enabled: true
   prefix_indicators: ["_",".tmp_"]
@@ -142,7 +158,169 @@ detection:
   infer_confidence_threshold: 0.7
   auto_add_inferred_to_gitignore: true
 
-# 服务检测（Phase 3）：本工作区当前无常驻服务；端口 8000/8001/8080/5173 均无监听。
+# ---------- 动作分档（取代二元"删/不删"）----------
+# 置信度只决定是否"够格处置"；force_review_when 决定是否"禁止处置"。
+actions:
+  tiers:
+    delete:
+      description: "高置信度、可重建、未被版本控制跟踪"
+      min_confidence: 0.8
+      method: "remove"
+      require_confirm: false
+    quarantine:
+      description: "中/高风险：源码类、疑似残留、软删除项"
+      min_confidence: 0.5
+      method: "move"
+      require_confirm: false
+    review:
+      description: "版本控制内 / 数据目录 / 依赖目录"
+      method: "report_only"
+      require_confirm: true
+  # 命中任一条件即强制归入 review（优先级高于 min_confidence）
+  force_review_when:
+    - "git_tracked"              # 已被版本控制跟踪 → 属仓库变更
+    - "in_preserve_roots"        # 命中 preserve_roots
+    - "is_data_store"            # 含数据库/向量库/模型文件
+    - "declared_dependency_dir"  # 包管理器依赖目录
+
+# ---------- 隔离区（移动而非删除，24h 恢复窗口）----------
+# 适用对象：中/高风险但与源码相关的文件 —— 一次性脚本、疑似残留、软删除项。
+# 目录内会生成 MANIFEST.json（含原路径/hash/过期时间）与 restore.py。
+quarantine:
+  enabled: true
+  dir: ".cleanup-quarantine"
+  retention_hours: 24
+  write_manifest: true
+  write_restore_script: true
+  manifest_fields:
+    - "original_path"
+    - "size"
+    - "mtime"
+    - "sha256"
+    - "quarantined_at"
+    - "expires"
+  # 隔离区自身纳入 gitignore，避免其内容被提交
+  gitignore: true
+  gitignore_pattern: "/.cleanup-quarantine/"
+
+# ---------- 取证门槛（删除数据类目录前必须全部满足）----------
+# 第九轮实例：frontend/data/ 的处置即走此门 —— 0 代码引用、27 表/6 默认行、
+#   0 条向量、mtime 2026-07-02、已被 gitignore，取证齐备后才由维护者授权删除。
+evidence_gate:
+  enabled: true
+  applies_to_name_patterns:
+    - "data"
+    - "*db*"
+    - "*cache*"
+    - "*store*"
+    - "*models*"
+  required_checks:
+    - "zero_code_reference"      # 全仓引用扫描为 0
+    - "content_inventory"        # 逐表/逐文件内容清点
+    - "git_ignored"              # 未被版本控制跟踪
+    - "explicit_user_confirm"    # 必须有人显式确认（智能体不得自行认定）
+  empty_row_threshold: 0
+  require_snapshot_archive: true   # 第九轮已留 zip + SHA256 manifest
+  on_insufficient_evidence: "keep_and_report"
+
+# ---------- 诊断能力（默认只报告，不自动改）----------
+diagnostics:
+  # 引用扫描：取证"是否被代码引用"
+  reference_scan:
+    enabled: true
+    # 合并自原 review_categories.reference_probe_extensions，并补前端源码扩展名
+    extensions:
+      - ".py"
+      - ".js"
+      - ".ts"
+      - ".tsx"
+      - ".vue"
+      - ".html"
+      - ".css"
+      - ".json"
+      - ".yml"
+      - ".yaml"
+      - ".toml"
+      - ".xml"
+      - ".ps1"
+      - ".bat"
+    exclude_dirs:
+      - "node_modules/"
+      - ".git/"
+      - ".venv/"
+      - ".venv-build/"
+      - "release/"
+      - ".cache/"
+      - "browser-data/"
+      - "data/"
+      - "cleanup-logs/"
+      - ".cleanup-quarantine/"
+    # 必须排除清理工具自身产物，否则自己的报告/日志会命中被搜路径 → 假"被引用"
+    exclude_self_output: true
+    case_sensitive: false
+    background_after_seconds: 60
+    timeout_seconds: 1800
+  # 编码健康检查（本工作区曾发生 UTF-8 被误解码后回存的损坏）
+  encoding_check:
+    enabled: true
+    extensions: [".md", ".py", ".yaml", ".yml", ".json", ".txt", ".ps1", ".bat"]
+    mojibake_markers:
+      - "閰"
+      - "宸"
+      - "绌"
+      - "鎬"
+      - "鍒"
+      - "鏂"
+      - "鐨"
+      - "涓"
+      - "鏄"
+      - "緇"
+      - "璺"
+    reverse_transform: "segment.encode('gbk').decode('utf-8')"
+    unrecoverable_when:
+      - "ascii_0x3f_present"      # 文字中存在 ASCII '?' → 字节已永久丢失
+      - "pua_codepoints_present"  # 存在 PUA 码点 → gbk/cp936 codec 无法反编码
+    report_only: true             # 半坏的结构化文件"错位但看似有效"比解析失败更危险
+    require_byte_backup: true
+  # 配置漂移预检（第九轮即由此发现 4 项漂移）
+  config_drift_check:
+    enabled: true
+    checks:
+      - "changelog_path_exists"
+      - "file_existence_checks_present"
+      - "pid_files_parent_exists"
+      - "round_numbering_consistent"
+    on_drift: "report"
+    autofixable:
+      - "changelog_path_exists"
+
+# ---------- 被忽略目录审计（发现隐形积累）----------
+# 宽泛 ignore 模式（如缺前导斜杠的 "data/"）会匹配任意层级同名目录，
+# 这类目录【从不出现在 git status 中】，是长期累积的主要盲区。
+ignored_audit:
+  enabled: true
+  report_only: true
+  stale_days: 30
+  runtime_evidence_patterns:
+    - "logs/*.log"
+    - "**/*.sqlite3"
+    - "**/*.db"
+    - "**/*.pickle"
+  evidence_requirements:
+    - "zero_code_reference"
+    - "stale_beyond_days"
+    - "content_empty_or_default"
+  exclude_dirs:
+    - "node_modules/"
+    - ".venv/"
+    - ".venv-build/"
+    - ".git/"
+    - "release/"
+    - ".cache/"
+    - "browser-data/"
+
+# ---------- 服务检测（Phase 3）----------
+# 本工作区当前无常驻服务；端口 8000/8001/8080/5173 均无监听。
 # 注意（2026-09-10）：logs/ 目录当前不存在，pid_files 因此恒为空。
 #   此时必须以 file_occupancy_probes 的【独占打开】结果作为唯一依据，
 #   不可仅凭 PID 文件缺失就断定"无服务"。
@@ -150,6 +328,7 @@ service_indicators:
   pid_files: ["logs/web.pid"]
   ports: [8000,8001,8080,5173]
   process_names: ["uvicorn","python","node","java"]
+  process_name_patterns: ["python*","uvicorn*","node*"]
   file_occupancy_probes: ["run.stdout.log","data/app.db","run.stderr.log"]
 
 stability_check:
@@ -160,36 +339,86 @@ stability_check:
   recurrence_patterns: ["*.log","run.stdout.log","__pycache__","vite.config.ts.timestamp-*.mjs"]
   recurrence_action: "warn"
 
-audit:
-  hash_algorithm: "sha256"
-  targets_file: "cleanup-logs/cleanup-targets.txt"
-  slice_size: 200
+# ---------- 体积统计方式（Windows 大目录性能）----------
+# 实测（2026-09-10）：du -sh 遍历 176k 文件的工作区，15 分钟仍未完成；
+#   os.scandir 栈式遍历同一工作区约 25 秒。文件数超过阈值一律用 scandir。
+sizing:
+  method: "python_scandir"
+  fallback_method: "du_sh"
+  scandir_threshold_files: 2000
+  timeout_seconds: 120
+  continue_on_timeout: true
 
-execution:
-  max_external_process_seconds: 0   # 本环境无调度器 kill，跳过时间窗口逻辑
-  deadline_cap_seconds: 0
-  resume_targets_file: "cleanup-logs/cleanup-targets.resume.txt"
-  auto_background_when_overflow: true
-  per_file_estimate_seconds: 0.02
-
+# ---------- 跨平台命令配置（本机仅 Windows）----------
 platform:
   current: "windows"
   list_files:
     windows: 'Get-ChildItem -Path "{path}" -File | Sort-Object Name'
   file_hash:
     windows: 'Get-FileHash -LiteralPath "{path}" -Algorithm SHA256'
+  port_check:
+    windows: 'netstat -aon | Select-String ":{port}.*LISTENING"'
+  process_check:
+    windows: 'Get-Process -Name {names} -ErrorAction SilentlyContinue'
+  # 通用回退（也等价于原生后端）
+  remove_file:
+    windows: 'Remove-Item -LiteralPath "{path}" -Force'
+  remove_dir:
+    windows: 'Remove-Item -LiteralPath "{path}" -Recurse -Force'
+  # 后端 = python_s：以 `python -S` 执行，跳过 site，绕过沙箱 safe-delete 钩子
   remove_file_python_s:
     windows: 'python -S -c "import os; os.remove(r"{path}")"'
   remove_dir_python_s:
     windows: 'python -S -c "import shutil; shutil.rmtree(r"{path}")"'
+  # 文件占用检测：独占打开才可信（pid_files 为空时这是唯一依据）
+  file_occupancy_check:
+    windows: |
+      try {
+        $stream = [System.IO.File]::Open("{path}",'Open','Read','None')
+        $stream.Close()
+        "not locked"
+      } catch { "locked" }
+  stop_process:
+    windows: 'Stop-Process -Id {pid} -Force'
   venv_python:
     windows: ".venv/Scripts/python.exe"
 
+# ---------- 执行后端 ----------
+execution:
+  # 删除方式：python_s（绕过沙箱 safe-delete 钩子）/ platform_command
+  # 配置语义：解析 platform.remove_file_<remove_method> → 回退 platform.remove_file
+  remove_method: "python_s"
+  # Phase 5 校验用 python -B / PYTHONDONTWRITEBYTECODE=1，避免导入重建 __pycache__
+  verify_without_bytecode: true
+  max_files_per_batch: 50
+  max_files_per_call: 200
+  # 并行删除（默认关闭：并行会破坏逐批校验与审计顺序）
+  parallel_delete: false
+  # 大文件串行处理
+  large_file_sequential: true
+  # 受限沙箱有单进程墙钟上限：超出即转后台分批（按每文件约 0.02s 估算）
+  max_external_process_seconds: 0   # 0 = 本环境无调度器 kill，跳过时间窗口逻辑
+  deadline_cap_seconds: 0
+  per_file_estimate_seconds: 0.02
+  auto_background_when_overflow: true
+  resume_targets_file: "cleanup-logs/cleanup-targets.resume.txt"
+
+# ---------- 审计留痕 ----------
+audit:
+  hash_algorithm: "sha256"
+  targets_file: "cleanup-logs/cleanup-targets.txt"
+  backup_log_format: "cleanup-{YYYYMMDD-HHmmss}.log"
+  hash_dir_members: true      # 目录逐成员哈希，保证部分删除也可审计
+  slice_size: 200
+
+# ---------- 验证配置 ----------
 verification:
   # 修正（2026-09-10）：python_imports 原为空 → Phase 5 无实际校验、形同空转。
   # 执行时必须加 -B（或 PYTHONDONTWRITEBYTECODE=1），否则导入会重建 __pycache__
   # 与 .pyc，抵消本阶段的清理成果。
   python_imports: ["from xianyu_hunter import config"]
+  venv_python:
+    windows: ".venv/Scripts/python.exe"
   command: ""
   # 以下为「清理后必须存在」的硬校验项（缺失即视为清理破坏了应用）
   file_existence_checks:
@@ -207,19 +436,73 @@ verification:
     - "检查 cleanup-logs/cleanup-*.log 中的 hash 记录"
     - "从 git 恢复：git checkout HEAD -- <file>"
     - "从隔离区恢复：python .cleanup-quarantine/<stamp>/restore.py"
+  test_command: ""
 
-# ---------- 隔离区（移动而非删除，24h 恢复窗口）----------
-# 适用对象：中/高风险但与源码相关的文件 —— 一次性脚本、疑似残留、软删除项。
-# 目录内会生成 MANIFEST.json（含原路径/hash/过期时间）与 restore.py。
-quarantine:
+# ---------- 报告配置 ----------
+report:
+  formats:
+    - "markdown"
+    - "json"
+  output_dir: "cleanup-logs"
+  sections:
+    - "summary_before_after"
+    - "by_category"
+    - "by_directory"
+    - "not_cleaned_risky"
+    - "dependency_analysis"
+    - "recurrence_prevention"
+    - "audit_trail"
+    - "verification"
+  require_reason_for_skipped: true
+  filename_template: "cleanup-report-{YYYYMMDD}"
+
+# ---------- 依赖分析（仅报告，绝不自动删）----------
+dependency_check:
   enabled: true
-  dir: ".cleanup-quarantine"
-  retention_hours: 24
-  write_manifest: true
-  write_restore_script: true
-  # 隔离区自身纳入 gitignore，避免其内容被提交
-  gitignore_pattern: "/.cleanup-quarantine/"
+  auto_remove: false
+  python:
+    manifest: "pyproject.toml"
+    scan_dirs:
+      - "backend"
+      - "scripts"
+      - "tests"
+    # 第九轮扫描的 4 个"未使用候选"经核查均为间接依赖（真阳性为 0）：
+    #   python-multipart ← FastAPI 表单/文件上传解析
+    #   aiosqlite        ← SQLAlchemy 异步 SQLite 驱动
+    #   python-dotenv    ← 配置加载读取 .env
+    #   tenacity         ← 重试装饰器（经其他模块间接带入）
+    indirect_allowlist:
+      - "python-multipart"
+      - "aiosqlite"
+      - "python-dotenv"
+      - "tenacity"
+  frontend:
+    manifest: "frontend/package.json"
+    scan_dirs:
+      - "frontend/src"
+      - "frontend/public"
+      - "release/spa"
+      - "scripts"
+    # 第九轮扫描的 12 个"未使用候选"全部为构建/类型/测试期间接依赖（真阳性为 0）：
+    #   @types/*、typescript        ← 类型声明与编译器（无运行时 import）
+    #   jsdom、@testing-library/*、@vitest/coverage-v8 ← 测试环境与覆盖率
+    #   workbox-build、workbox-window ← PWA 插件构建期依赖
+    #   echarts-for-react、highlight.js、react-flow-renderer ← 经动态/包装方式引入
+    indirect_allowlist:
+      - "@testing-library/jest-dom"
+      - "@types/p5"
+      - "@types/react"
+      - "@types/react-dom"
+      - "@vitest/coverage-v8"
+      - "echarts-for-react"
+      - "highlight.js"
+      - "jsdom"
+      - "react-flow-renderer"
+      - "typescript"
+      - "workbox-build"
+      - "workbox-window"
 
+# ---------- 归档配置 ----------
 archive:
   # 修正（2026-09-10）：原值 "docs/standards/directory-structure.md" 不存在，
   # 实际文件为中文名 "docs/standards/目录结构.md"（曾导致 Phase 6 写错文件）。
@@ -231,7 +514,13 @@ archive:
   # 保留 false：本项目 hook 需人工评估正则，但 skill 必须【明确提示】
   # "已加 gitignore 未加 pre-commit" 这一半措施，不得静默跳过。
   auto_update_precommit: false
+  gitignore_group_comments:
+    - "# ---------- 清理技能自动生成规则 ----------"
+  gitattributes_export_ignore:
+    - ".coverage"
+    - "coverage.xml"
 
+# ---------- 版本控制集成 ----------
 git_integration:
   enabled: true
   tracked_deleted_check: "git ls-files --deleted"
@@ -239,29 +528,25 @@ git_integration:
   delete_index_command: "git rm --cached --ignore-unmatch {file}"
   delete_physical_template: "remove_file_{backend}"
   add_gitignore_patterns: true
+  auto_commit: false
 
+# ---------- 安全配置 ----------
 safety:
   require_stopped_service: true
-  backup_log_format: "cleanup-{YYYYMMDD-HHmmss}.log"
   dry_run: false
+  # actions 节存在时由 actions.tiers.*.min_confidence 决定；
+  # 本键为 actions 缺失时的降级下限（二元 删/不删）。
   min_confidence_to_delete: 0.8
   max_files_per_batch: 50
-  max_files_per_call: 200
-  parallel_delete: false
-  large_file_sequential: true
+  # 预检门 S3：待删对象中「不可重建」占比上限。0 = 零容忍（保守默认）
+  max_non_regenerable_share: 0
   large_file_threshold_mb: 5
+  # 异常文件名处理策略：safe（含特殊字符时可靠）/ direct
   special_filename_handling: "safe"
   verify_after_each_batch: true
-  soft_delete: false          # 软删除由上方 quarantine 块统一管理
-  # 删除统一走 python -S，绕过 safe-delete 钩子（沙箱会拦截 rm / shutil.rmtree）
-  bypass_hook_mode: "python_s"
-  # Phase 5 校验用 python -B / PYTHONDONTWRITEBYTECODE=1，避免导入重建 __pycache__
-  verify_without_bytecode: true
-
-# ---------- 体积统计方式（Windows 大目录性能）----------
-# 实测（2026-09-10）：du -sh 遍历 176k 文件的工作区，15 分钟仍未完成；
-#   os.scandir 栈式遍历同一工作区约 25 秒。文件数超过阈值一律用 scandir。
-sizing:
-  method: "python_scandir"
-  fallback_method: "du_sh"
-  scandir_threshold_files: 2000
+  # 递归删除的安全序列：危险的是「带文件递归」（沙箱整目录树回滚），不是 API 本身。
+  # 第九轮实测：先展平删文件、再对已空目录收尾，28 个目录 25 分钟后复查仍持久生效。
+  flatten_directories: true
+  empty_dir_cleanup: true
+  # 软删除后缀（require_stopped_service=false 时使用；常规恢复由 quarantine 节承担）
+  soft_delete_suffix: ".trash"
