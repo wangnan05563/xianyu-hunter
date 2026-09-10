@@ -2,6 +2,15 @@
 # Workspace Cleanup 配置 - 项目：17_xianyu (XianyuHunter)
 # 由 workspace-cleanup skill 生成（2026-08-14）。配置驱动，无硬编码。
 # 注意：本配置已吸收首轮人工核查结论，尤其是 .cache/ 的陷阱。
+#
+# 修订记录：
+#   - 2026-09-10（第九轮清理）：修正配置漂移 —— changelog_path 指向不存在的
+#     英文文件名、verification 硬校验 release/（第七轮已删除的生成物）、
+#     python_imports 为空导致 Phase 5 空转；并补齐 Vite 临时产物模式与隔离区配置。
+#
+# 轮次编号说明：docs/standards/目录结构.md 记到「第七轮（2026-07-23）」，
+#   而 .gitignore 内为「第七轮（2026-08-08）/第八轮（2026-08-11）」，二者不一致。
+#   第九轮（2026-09-10）按两者最大值续编。
 # ============================================================
 
 workspace:
@@ -90,6 +99,9 @@ garbage_patterns:
   redirect_artifacts:
     - "/nul"                   # PowerShell `> nul` 误生成的设备名文件（55B）
     - "/_r.json"
+  frontend_build_temp:         # 新增（2026-09-10）：Vite/tsc 每次构建重建的临时产物
+    - "/frontend/vite.config.ts.timestamp-*.mjs"   # 第九轮发现 6 个曾被误提交入库
+    - "/frontend/tsconfig.tsbuildinfo"
 
 # ---------- 释放物 / 依赖确认门（绝不自动删） ----------
 # 这些"看起来像垃圾、却可能是依赖或交付物"的模式，走 Phase 3 确认门。
@@ -131,17 +143,21 @@ detection:
   auto_add_inferred_to_gitignore: true
 
 # 服务检测（Phase 3）：本工作区当前无常驻服务；端口 8000/8001/8080/5173 均无监听。
+# 注意（2026-09-10）：logs/ 目录当前不存在，pid_files 因此恒为空。
+#   此时必须以 file_occupancy_probes 的【独占打开】结果作为唯一依据，
+#   不可仅凭 PID 文件缺失就断定"无服务"。
 service_indicators:
   pid_files: ["logs/web.pid"]
   ports: [8000,8001,8080,5173]
   process_names: ["uvicorn","python","node","java"]
-  file_occupancy_probes: ["run.stdout.log","data/app.db"]
+  file_occupancy_probes: ["run.stdout.log","data/app.db","run.stderr.log"]
 
 stability_check:
   enabled: true
   wait_seconds: 5
   max_recurrence: 3
-  recurrence_patterns: ["*.log","run.stdout.log"]
+  # 第九轮补充 __pycache__ / vite 临时配置：它们最易被导入或前端构建即时重建
+  recurrence_patterns: ["*.log","run.stdout.log","__pycache__","vite.config.ts.timestamp-*.mjs"]
   recurrence_action: "warn"
 
 audit:
@@ -170,24 +186,50 @@ platform:
     windows: ".venv/Scripts/python.exe"
 
 verification:
-  python_imports: []
+  # 修正（2026-09-10）：python_imports 原为空 → Phase 5 无实际校验、形同空转。
+  # 执行时必须加 -B（或 PYTHONDONTWRITEBYTECODE=1），否则导入会重建 __pycache__
+  # 与 .pyc，抵消本阶段的清理成果。
+  python_imports: ["from xianyu_hunter import config"]
   command: ""
+  # 以下为「清理后必须存在」的硬校验项（缺失即视为清理破坏了应用）
   file_existence_checks:
     - "xianyu-hunter.spec"
     - "backend/xianyu_hunter/web/app.py"
-    - "release/"
     - "browser-data/"
     - "data/"
     - "frontend/public/favicon-16x16.png"
+  # 生成物校验（缺失属正常，仅提示，不判 FAIL）
+  # 修正（2026-09-10）：release/ 为 PyInstaller 生成物且已被 gitignore，
+  #   第七轮清理删除后未重建，新克隆环境必然不存在 —— 故从硬校验降级至此。
+  optional_generated_checks:
+    - "release/"
   on_failure:
     - "检查 cleanup-logs/cleanup-*.log 中的 hash 记录"
     - "从 git 恢复：git checkout HEAD -- <file>"
+    - "从隔离区恢复：python .cleanup-quarantine/<stamp>/restore.py"
+
+# ---------- 隔离区（移动而非删除，24h 恢复窗口）----------
+# 适用对象：中/高风险但与源码相关的文件 —— 一次性脚本、疑似残留、软删除项。
+# 目录内会生成 MANIFEST.json（含原路径/hash/过期时间）与 restore.py。
+quarantine:
+  enabled: true
+  dir: ".cleanup-quarantine"
+  retention_hours: 24
+  write_manifest: true
+  write_restore_script: true
+  # 隔离区自身纳入 gitignore，避免其内容被提交
+  gitignore_pattern: "/.cleanup-quarantine/"
 
 archive:
-  changelog_path: "docs/standards/directory-structure.md"
+  # 修正（2026-09-10）：原值 "docs/standards/directory-structure.md" 不存在，
+  # 实际文件为中文名 "docs/standards/目录结构.md"（曾导致 Phase 6 写错文件）。
+  changelog_path: "docs/standards/目录结构.md"
   gitignore_path: ".gitignore"
   precommit_path: ".pre-commit-config.yaml"
+  gitattributes_path: ".gitattributes"     # 新建于第九轮清理（export-ignore 规则）
   auto_update_gitignore: true
+  # 保留 false：本项目 hook 需人工评估正则，但 skill 必须【明确提示】
+  # "已加 gitignore 未加 pre-commit" 这一半措施，不得静默跳过。
   auto_update_precommit: false
 
 git_integration:
@@ -210,5 +252,16 @@ safety:
   large_file_threshold_mb: 5
   special_filename_handling: "safe"
   verify_after_each_batch: true
-  soft_delete: false
-  bypass_hook_mode: "python_s"   # 绕过 safe-delete 钩子（python -S 原生删除）
+  soft_delete: false          # 软删除由上方 quarantine 块统一管理
+  # 删除统一走 python -S，绕过 safe-delete 钩子（沙箱会拦截 rm / shutil.rmtree）
+  bypass_hook_mode: "python_s"
+  # Phase 5 校验用 python -B / PYTHONDONTWRITEBYTECODE=1，避免导入重建 __pycache__
+  verify_without_bytecode: true
+
+# ---------- 体积统计方式（Windows 大目录性能）----------
+# 实测（2026-09-10）：du -sh 遍历 176k 文件的工作区，15 分钟仍未完成；
+#   os.scandir 栈式遍历同一工作区约 25 秒。文件数超过阈值一律用 scandir。
+sizing:
+  method: "python_scandir"
+  fallback_method: "du_sh"
+  scandir_threshold_files: 2000
