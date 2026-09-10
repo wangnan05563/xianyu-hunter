@@ -50,7 +50,7 @@ repos:
 
       - id: forbid-frontend-debug-files
         name: 🚫 拦截 frontend 根目录调试产物
-        entry: bash -c 'if git diff --cached --name-only --diff-filter=A | grep -E "^frontend/(check_tsc\.js|run_tsc\.js|run-tsc\.ps1|tsc_check\.js|tsc_runner\.js|tsc_simple\.js|vitest_runner\.js|build\.log|test\.log|test2\.log|tsc\.log|vite_stderr\.log|vite_stdout\.log|run\.stdout\.log|_ps_test\.txt|ws_test2\.txt)$"; then echo "❌ 检测到 frontend 根目录调试文件被提交，请先清理后再提交"; exit 1; fi'
+        entry: bash -c 'if git diff --cached --name-only --diff-filter=A | grep -E "^frontend/(check_tsc\.js|run_tsc\.js|run-tsc\.ps1|tsc_check\.js|tsc_runner\.js|tsc_simple\.js|vitest_runner\.js|build\.log|test\.log|test2\.log|tsc\.log|vite_stderr\.log|vite_stdout\.log|run\.stdout\.log|_ps_test\.txt|ws_test2\.txt|vite\.config\.ts\.timestamp-.*\.mjs)$"; then echo "❌ 检测到 frontend 根目录调试文件被提交，请先清理后再提交"; exit 1; fi'
         language: system
         pass_filenames: false
         stages: [pre-commit]
@@ -65,6 +65,14 @@ repos:
       - id: forbid-browser-cache
         name: 🚫 拦截浏览器缓存文件
         entry: bash -c 'if git diff --cached --name-only | grep -E "^browser-data/.*/(Cache|Code Cache|GPUCache|DawnWebGPUCache|DawnGraphiteCache|EdgeCoupons)/"; then echo "❌ 检测到浏览器缓存被提交，请先清理后再提交"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      # 第九轮清理新增（2026-09-10）
+      - id: forbid-cleanup-artifacts
+        name: 🚫 拦截清理工具产物（审计日志 / 隔离区）
+        entry: bash -c 'if git diff --cached --name-only --diff-filter=A | grep -E "^(cleanup-logs/|\.cleanup-quarantine/)"; then echo "❌ 检测到清理工具产物被提交（应为本地临时文件），请先加入 .gitignore 或移除暂存"; exit 1; fi'
         language: system
         pass_filenames: false
         stages: [pre-commit]

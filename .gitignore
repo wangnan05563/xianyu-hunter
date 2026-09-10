@@ -325,3 +325,12 @@ backend/xianyu_hunter/resources/embedding/meta.json
 
 # ---------- 构建版本号计数器（update-build-version.ps1 维护，每次构建递增）----------
 .build-counter.json
+
+# ---------- 第九轮清理新增（2026-09-10）----------
+# Vite 生成的临时配置文件（每次启动/构建重建，不应入库）
+# 历史误提交的 6 个 vite.config.ts.timestamp-*.mjs 已于本轮清理移除跟踪，
+# 此规则防止再次被提交（pre-commit 亦有对应拦截 hook）
+/frontend/vite.config.ts.timestamp-*.mjs
+# 清理工具自身的审计输出与隔离区（本地可追溯的临时产物，不入库）
+/cleanup-logs/
+/.cleanup-quarantine/

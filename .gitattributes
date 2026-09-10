@@ -1,0 +1,44 @@
+# ============================================================
+# XianyuHunter .gitattributes
+# 用途：git archive 导出/交付时排除开发期产物与历史遗留垃圾文件
+# 参考：第九轮工作空间清理（2026-09-10）
+# ============================================================
+# 说明：export-ignore 只影响 `git archive` 的导出内容，
+#       文件本身仍保留在版本库历史中，可随时追溯与恢复。
+
+# ---------- 清理工具产物（本地审计/隔离区）----------
+/cleanup-logs/                 export-ignore
+/.cleanup-quarantine/          export-ignore
+
+# ---------- 测试与覆盖率产物 ----------
+/.coverage                     export-ignore
+/coverage.xml                  export-ignore
+
+# ---------- 编辑器 / IDE 配置 ----------
+/.vscode/                      export-ignore
+/.idea/                        export-ignore
+/.trae/                        export-ignore
+
+# ---------- 前端构建缓存 ----------
+/frontend/tsconfig.tsbuildinfo export-ignore
+/frontend/vite.config.ts.timestamp-*.mjs export-ignore
+
+# ---------- 工具链缓存 ----------
+/.scannerwork/                 export-ignore
+/.pytest_cache/                export-ignore
+/.mypy_cache/                  export-ignore
+/.ruff_cache/                  export-ignore
+
+# ---------- 二进制资产（不做行尾转换与文本 diff）----------
+*.ico    binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.db     binary
+*.sqlite3 binary
+*.pickle binary
+*.bin    binary
+*.onnx   binary
+*.whl    binary
+*.exe    binary
