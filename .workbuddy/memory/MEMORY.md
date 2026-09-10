@@ -59,3 +59,25 @@
 - **`release/` 统一生成物根**：PyInstaller 的 distpath 与 workpath 现已统一到 `release/`——`release/` = **distpath（最终出货**，`release/xianyu-hunter/xianyu-hunter.exe` 才是真正发布物）；`release/.work/` = **workpath（中间产物** `.toc`/`.pyz`/`.pkg`/`.xref`/含中间态 exe）。spec 通过 `scripts/build-exe.ps1` 传 `--distpath release --workpath release/.work` 指定。**结论：distpath 与 workpath 都集中在 `release/`，中间产物放 `release/.work/` 子目录避免污染出货目录。**
 - 二者均已被 `.gitignore`（第 21–22 行）忽略，本就是生成物；`release/.work/` 下旧中间物可安全删除（走 `.NET` 直接调用绕过 safe-delete），下次 `pyinstaller` 自动重建。`build/` 与 `dist/` 历史目录已废弃，本次重构统一为 `release/`。
 - 顺带：根 `scripts/` 维持复数（用户仅授权 `src→backend`，未授权 `scripts→script`），符合构建契约无需改动。
+
+## 清理配置的权威 schema（24 节，长期约定）
+
+`cleanup-config.yaml` 与 `workspace-cleanup` 技能共享**同一份 schema，当前 24 个配置节**。
+2026-09-10 已把项目配置从 19 节对齐到 24 节（提交 `613200e0`）。改配置时注意：
+
+- **不要新增项目私有节名**。项目侧曾有 `review_categories`，语义与 `preserve_roots` 重复
+  （都是"命中即强制 review"），已合并 —— **同一事实不要有两处真相**。
+- **删除命令是「操作 × 后端」的组合**，不是单一命令。解析规则（自上而下）：
+  `platform.remove_file_<execution.remove_method>` → `platform.remove_file` → 都没有就**停止**。
+  新增后端只需追加 `platform.remove_file_<method>`，流程零改动。
+- **改完必须跑校验**：
+  `python <skills>/workspace-cleanup/scripts/validate_skill.py`（退出码 0 才算过），
+  它校验文档里每个 `config.*` 引用都能在 schema 中解析、正文声明的节数与 schema 一致、
+  无项目特征字符串泄漏、无 BOM/正文乱码。
+- 项目侧一致性抽查：两配置**节名集合**是否一致、`archive.changelog_path` 是否存在、
+  `verification.file_existence_checks` 是否清理前就存在、删除命令是否可解析。
+
+**已知且接受的状态**：`service_indicators.pid_files` 的父目录 `logs/` 不存在
+（第九轮清理后无日志目录）。**非缺陷** —— 此时以 `file_occupancy_probes` 的**独占打开**结果
+为判定服务状态的唯一依据，不可仅凭 PID 文件缺失就断定"无服务"。
+
