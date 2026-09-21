@@ -46,6 +46,7 @@ import { useSheetStore } from '../../stores/sheetStore'
 import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
 import { useMenuConfig } from '../../hooks/useMenuConfig'
 import AccountSwitcher from './AccountSwitcher'
+import { GuideController } from '../../guides/GuideController'
 
 const { Header, Sider, Content } = Layout
 
@@ -822,6 +823,9 @@ function LayoutContent({
           )}
         </div>
       </Modal>
+
+      {/* 全站引导向导：常驻悬浮按钮 + 首访自动触发 */}
+      <GuideController />
     </Layout>
   )
 }
