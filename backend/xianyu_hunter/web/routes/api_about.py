@@ -1,28 +1,41 @@
-"""About API：暴露系统元信息 + 检查更新。
+"""About API：暴露系统元信息 + 检查更新 + 一键下载安装更新。
 
 实现：
 - GET /api/about 返回 _build_info.py 写入的版本/日期/SHA
 - GET /api/about/check-update 调用 GitHub Releases API 查询最新版本
   - 失败安全降级：网络/限速/解析错误时返回 has_update=False, source='local'
   - 缓存：5 分钟内复用上次结果，避免触发 GitHub 限速（60/小时/IP）
+- GET /api/about/update/download?latest=... 流式下载指定版本安装包到 data/updates/
+  - 下载在后台任务进行，返回当前进度（bytes_downloaded/total），前端轮询
+  - 下载 URL 白名单校验：仅允许指向 github.com 的安装包地址，防 SSRF
+- POST /api/about/update/install 静默运行已下载的安装包（Inno Setup /VERYSILENT）
+  - 静默安装会触发 Windows UAC 提权，由 Inno Setup 安装程序自身弹窗请求
+  - 安装完成后新版本自动覆盖旧程序目录
 
 隐私与安全：
 - 仅查询公开仓库的 release 元信息，不携带任何认证 token
 - 不发送用户身份、cookie、设备指纹等任何信息给 GitHub
 - release_url 仅作为跳转链接返回前端，由用户主动打开
+- 下载安装包前校验 URL 域名归属（防恶意重定向/SSRF）
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import platform as _platform
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 from loguru import logger
+
+from xianyu_hunter.paths import get_data_dir
 
 router = APIRouter(prefix="/api/about", tags=["meta"])
 
@@ -165,6 +178,10 @@ async def _fetch_latest_release() -> dict[str, Any] | None:
             "html_url": str(data.get("html_url", _RELEASE_URL)),
             "published_at": str(data.get("published_at", "")),
             "name": str(data.get("name", "")),
+            # 提取安装包下载地址：从 release assets 中匹配 XianyuHunter-Setup-*.exe
+            # 为什么只取 Windows 安装包：本项目唯一分发包形态是 Inno Setup 安装程序
+            # （installer.iss 产物 XianyuHunter-Setup-v<version>.exe）
+            "download_url": _extract_setup_download_url(data.get("assets", [])),
         }
     except httpx.TimeoutException:
         logger.warning("[about] GitHub API 请求超时，降级返回本地版本")
@@ -176,6 +193,29 @@ async def _fetch_latest_release() -> dict[str, Any] | None:
         # JSON 解析、未知异常等：吞掉防止 check-update 端点 500
         logger.warning(f"[about] GitHub API 未知异常: {e}")
         return None
+
+
+def _extract_setup_download_url(assets: list[Any]) -> str:
+    """从 GitHub release assets 中匹配 Windows 安装包下载地址
+
+    匹配规则：name 匹配 XianyuHunter-Setup-v*.exe（防止误配源码 zip / Linux 包），
+    且 browser_download_url 存在。未找到返回空串（前端据此隐藏「一键更新」按钮，
+    仅保留跳转 GitHub 的手动下载入口）。
+
+    Args:
+        assets: GitHub Releases API 的 assets 数组（含 name/browser_download_url）
+    """
+    if not isinstance(assets, list):
+        return ""
+    for a in assets:
+        if not isinstance(a, dict):
+            continue
+        name = str(a.get("name", "") or "")
+        if re.match(r"^XianyuHunter-Setup-v.+\.exe$", name):
+            url = str(a.get("browser_download_url", "") or "")
+            if url:
+                return url
+    return ""
 
 
 @router.get("", include_in_schema=False)
@@ -234,6 +274,9 @@ async def check_update() -> dict[str, Any]:
         "source": "remote",
         # 额外元信息（可选，前端用于展示发布时间）
         "published_at": release["published_at"],
+        # 安装包直接下载地址（仅 has_update 且有安装包资产时非空）。
+        # 前端据此渲染「一键更新」按钮；为空则降级为跳转 GitHub 手动下载
+        "download_url": release.get("download_url", "") if has_update else "",
     }
 
     # 写入缓存：仅缓存成功响应
@@ -246,3 +289,187 @@ def _reset_cache_for_test() -> None:
     """测试专用：清空缓存。生产代码不要调用。"""
     _cache["data"] = None
     _cache["fetched_at"] = 0.0
+
+
+# ---------------------------------------------------------------------------
+# 一键下载安装更新
+# ---------------------------------------------------------------------------
+# 下载状态存放目录：data/updates/ （与上一版构建产物目录一致）
+_UPDATES_DIR = get_data_dir() / "updates"
+
+# 内存下载任务表：{download_url: DownloadTask}
+# 为什么用内存表而非 DB：下载是短生命周期后台任务，进程内记录足够；
+# 进程重启后未完成的下载丢弃，由前端重新发起（断点续传非首版目标）
+_download_tasks: dict[str, dict[str, Any]] = {}
+
+
+def _updates_dir() -> Path:
+    """确保下载目录存在并返回其 Path（并发调用安全，mkdir exist_ok 幂等）"""
+    _UPDATES_DIR.mkdir(parents=True, exist_ok=True)
+    return _UPDATES_DIR
+
+
+def _validate_download_url(url: str) -> str:
+    """校验下载 URL 归属，防 SSRF。
+
+    仅允许 github.com（含 objects.githubusercontent.com 重定向资产 CDN）——这是
+    GitHub releases 安装包的实际下载域名。校验不通过抛 ValueError，调用方转为 400。
+    """
+    if not url:
+        raise ValueError("缺少下载地址")
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower()
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"非法下载地址: {e}") from e
+    allowed_suffix = (".github.com", "github.com", ".githubusercontent.com", "githubusercontent.com")
+    if not any(host == s or host.endswith("." + s.lstrip(".")) for s in allowed_suffix):
+        raise ValueError(f"下载地址域名不受信任: {host}")
+    return url
+
+
+def _sanitize_filename(url: str, fallback: str) -> str:
+    """从下载 URL 提取安全的文件名，防路径穿越与无关文件名。
+
+    下载对象必定是 Inno Setup 安装包（.exe），故仅接受以 .exe 结尾的 basename；
+    同时拒绝含分隔符/上级目录/盘符的名称。未通过任一条件则回退 fallback。
+    """
+    from urllib.parse import urlparse, unquote
+    path = unquote(urlparse(url).path)
+    name = os.path.basename(path.rstrip("/"))
+    if (
+        not name
+        or not name.lower().endswith(".exe")
+        or not re.match(r"^[A-Za-z0-9._-]+$", name)
+        or ".." in name  # 防路径穿越（..%2F 解出后 basename 可能是 ..）
+    ):
+        return fallback
+    return name
+
+
+async def _run_download(url: str, task: dict[str, Any]) -> None:
+    """后台流式下载安装包到 data/updates/，实时更新进度。
+
+    为什么流式：安装包约 100-300MB，一次性读入内存会撑爆 Web 进程；
+    用 httpx 的 iter_bytes 边下边写并累计进度，供前端轮询展示进度条。
+    """
+    try:
+        task["status"] = "downloading"
+        task["error"] = ""
+        dest_dir = _updates_dir()
+        filename = _sanitize_filename(url, "XianyuHunter-Setup.exe")
+        dest = dest_dir / filename
+
+        headers = {**_HTTP_HEADERS}
+        # 残留文件处理：存在旧安装包则覆盖重下（首版不做真正断点续传——那需要校验
+        # 服务端 206 状态与 ETag 一致性，复杂度高；下载失败重下成本可接受）
+        if os.path.exists(dest) and dest.stat().st_size > 0:
+            dest.unlink()
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=30.0)) as client:
+            async with client.stream("GET", url, headers=headers) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("content-length", "0") or 0)
+                task["total"] = total
+                done = 0
+                with open(dest, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                        f.write(chunk)
+                        done += len(chunk)
+                        task["bytes_downloaded"] = done
+        task["status"] = "done"
+        task["bytes_downloaded"] = done
+        task["path"] = str(dest)
+        logger.info("[about] 更新包下载完成: {} ({} bytes)", filename, done)
+    except Exception as e:  # noqa: BLE001
+        task["status"] = "error"
+        task["error"] = f"下载失败: {e}"
+        logger.warning("[about] 更新包下载失败: {}", e)
+
+
+@router.get("/update/download", include_in_schema=False)
+async def update_download(download_url: str = "", latest: str = "") -> dict[str, Any]:
+    """发起/查询安装包下载。
+
+    幂等设计：同一 download_url 已有进行中任务则直接返回其进度，不重复发起。
+    下载在后台执行，立即返回当前状态，前端轮询本端点获取进度。
+
+    Args:
+        download_url: 安装包直接下载地址（来自 check-update 的 download_url）
+        latest: 目标版本号（用于日志/提示，不参与下载逻辑）
+    """
+    try:
+        url = _validate_download_url(download_url)
+    except ValueError as e:
+        return {"ok": False, "status": "error", "error": str(e)}
+
+    task = _download_tasks.get(url)
+    if task is None:
+        task = {"status": "pending", "total": 0, "bytes_downloaded": 0, "latest": latest}
+        _download_tasks[url] = task
+        asyncio.create_task(_run_download(url, task))
+
+    return {
+        "ok": True,
+        "status": task["status"],
+        "latest": task.get("latest", latest),
+        "total": task.get("total", 0),
+        "bytes_downloaded": task.get("bytes_downloaded", 0),
+        "error": task.get("error", ""),
+        "progress": task.get("progress", 0),
+    }
+
+
+@router.post("/update/install", include_in_schema=False)
+async def update_install(download_url: str = Body(default="", embed=True)) -> dict[str, Any]:
+    """静默运行已下载的安装包完成安装。
+
+    触发策略：找到该 URL 对应已下载的安装包，用 subprocess.Popen 以静默参数
+    （/VERYSILENT /SP- /NORESTART）启动。Inno Setup 安装程序自身带
+    requireAdministrator manifest，启动时会弹 UAC 提权确认框，
+    用户确认后后台静默安装，过程中本项目进程应退出以避免文件占用冲突。
+    """
+    try:
+        url = _validate_download_url(download_url)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+    task = _download_tasks.get(url)
+    if task is None or task.get("status") != "done" or not task.get("path"):
+        return {"ok": False, "error": "安装包未就绪，请先完成下载"}
+
+    setup_path = task["path"]
+    if not os.path.exists(setup_path):
+        return {"ok": False, "error": f"安装包不存在: {setup_path}"}
+
+    try:
+        # Inno Setup 静默安装参数：
+        #   /VERYSILENT        完全静默（无进度条窗口）
+        #   /SP-               跳过"是否确认安装"提示
+        #   /NORESTART         安装完成后不强制重启系统
+        # 安装程序自身会触发 UAC 提权弹窗，无需本进程提前提权
+        subprocess.Popen(
+            [setup_path, "/VERYSILENT", "/SP-", "/NORESTART", "/SUPPRESSMSGBOXES"],
+            close_fds=True,
+        )
+        logger.info("[about] 已启动安装程序: {}", os.path.basename(setup_path))
+        return {
+            "ok": True,
+            "message": "安装程序已启动，请在弹出的 UAC 授权后等待安装完成",
+            "path": setup_path,
+        }
+    except OSError as e:
+        logger.warning("[about] 启动安装程序失败: {}", e)
+        return {"ok": False, "error": f"启动安装程序失败: {e}"}
+
+
+def _reset_download_tasks_for_test() -> None:
+    """测试专用：清空下载任务表与已下载文件。生产代码不要调用。"""
+    _download_tasks.clear()
+    if _UPDATES_DIR.exists():
+        for f in _UPDATES_DIR.iterdir():
+            if f.is_file():
+                try:
+                    f.unlink()
+                except OSError:
+                    pass

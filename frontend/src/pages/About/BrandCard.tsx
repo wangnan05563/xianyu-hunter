@@ -1,4 +1,4 @@
-import { Card, theme } from 'antd'
+import { Card, Progress, theme } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import {
   CopyOutlined,
@@ -6,8 +6,10 @@ import {
   CheckCircleFilled,
   ArrowUpOutlined,
   WarningFilled,
+  DownloadOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons'
-import type { UpdateState } from './useUpdateChecker'
+import type { UpdateState, UpdateDownload } from './useUpdateChecker'
 import { TEXTS } from './i18n'
 
 // 格式化 ISO 发布时间为本地可读日期（YYYY-MM-DD）
@@ -22,17 +24,35 @@ function formatPublishDate(iso: string): string {
   return `${y}-${m}-${day}`
 }
 
+// 计算下载百分比（total 为 0 时显示不确定进度）
+function downloadPercent(download: UpdateDownload): number {
+  if (download.total <= 0) return 0
+  return Math.min(100, Math.round((download.done / download.total) * 100))
+}
+
 interface BrandCardProps {
   readonly version: string
   readonly buildDate: string
   readonly gitSha: string
   readonly state: UpdateState
+  readonly download: UpdateDownload
   readonly onCheck: () => void
   readonly onCopy: () => void
+  readonly onUpdate: () => void
+  readonly onInstall: () => void
 }
 
-// 五态按钮渲染：根据状态机（idle/loading/latest/newer/error）分别呈现
-function UpdateButton({ state, onCheck }: { readonly state: UpdateState; readonly onCheck: () => void }) {
+// 五态更新按钮：根据状态机（idle/loading/latest/newer/error）渲染；
+// newrer 态细分为「立即更新 / 下载进度 / 安装」三阶段
+function UpdateButton({
+  state, onCheck, download, onUpdate, onInstall,
+}: {
+  readonly state: UpdateState
+  readonly onCheck: () => void
+  readonly download: UpdateDownload
+  readonly onUpdate: () => void
+  readonly onInstall: () => void
+}) {
   switch (state.kind) {
     case 'loading':
       // antd Button 的 loading prop 已自带 spinner，无需再叠加 LoadingOutlined
@@ -47,9 +67,43 @@ function UpdateButton({ state, onCheck }: { readonly state: UpdateState; readonl
           {TEXTS.updateLatest}
         </TipButton>
       )
-    case 'newer':
-      // 新版本可用：按钮跳转到 GitHub release 页面；title 展示发布时间（若有）
-      // 为什么用 title 而非内联文本：避免按钮宽度溢出，发布时间作为补充信息悬浮展示
+    case 'newer': {
+      // 下载进行中：展示进度，不可重复点击
+      if (download.status === 'downloading' || download.status === 'done') {
+        const installing = download.installing
+        const done = download.status === 'done'
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 120 }}>
+              <Progress
+                percent={done ? 100 : downloadPercent(download)}
+                size="small"
+                showInfo={done}
+                strokeColor={done ? '#52c41a' : undefined}
+              />
+            </div>
+            <TipButton
+              tip={done ? TEXTS.updateInstallConfirm : TEXTS.updateDownloadProgress}
+              type={done ? 'primary' : 'default'}
+              icon={done ? <ThunderboltOutlined /> : <DownloadOutlined />}
+              loading={installing}
+              disabled={!done}
+              onClick={onInstall}
+            >
+              {done ? TEXTS.updateInstallConfirm : TEXTS.updateDownloadProgress}
+            </TipButton>
+          </div>
+        )
+      }
+      // 下载出错：显示错误 + 重试下载按钮
+      if (download.status === 'error') {
+        return (
+          <TipButton tip={download.message || '下载失败，点击重试'} danger icon={<WarningFilled />} onClick={onUpdate}>
+            {download.message || '下载失败，重试'}
+          </TipButton>
+        )
+      }
+      // 空闲：展示「立即更新」主按钮
       return (
         <TipButton
           tip={
@@ -59,11 +113,12 @@ function UpdateButton({ state, onCheck }: { readonly state: UpdateState; readonl
           }
           type="primary"
           icon={<ArrowUpOutlined />}
-          onClick={() => globalThis.open(state.url, '_blank', 'noopener,noreferrer')}
+          onClick={onUpdate}
         >
-          {TEXTS.updateNewer} ({state.latest})
+          {TEXTS.updateInstallNow} ({state.latest})
         </TipButton>
       )
+    }
     case 'error':
       return (
         <TipButton
@@ -87,7 +142,9 @@ function UpdateButton({ state, onCheck }: { readonly state: UpdateState; readonl
   }
 }
 
-export function BrandCard({ version, buildDate, gitSha, state, onCheck, onCopy }: BrandCardProps) {
+export function BrandCard({
+  version, buildDate, gitSha, state, onCheck, onCopy, download, onUpdate, onInstall,
+}: BrandCardProps) {
   const { token } = theme.useToken()
   // git_sha 为 unknown 时不显示（避免误导用户）
   const showSha = gitSha && gitSha !== 'unknown'
@@ -144,7 +201,13 @@ export function BrandCard({ version, buildDate, gitSha, state, onCheck, onCopy }
             )}
           </div>
         </div>
-        <UpdateButton state={state} onCheck={onCheck} />
+        <UpdateButton
+          state={state}
+          onCheck={onCheck}
+          download={download}
+          onUpdate={onUpdate}
+          onInstall={onInstall}
+        />
       </div>
     </Card>
   )

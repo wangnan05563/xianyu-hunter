@@ -31,7 +31,7 @@ export default function About() {
     )
   }, [])
 
-  const { state, run, copy } = useUpdateChecker(info.version)
+  const { state, run, copy, download, update, install } = useUpdateChecker(info.version)
 
   // 嵌入 MainLayout 的 SheetWorkspace 内：不再渲染自有 Header/Layout/返回按钮，
   // 由 SheetWorkspace 的 sheet-content-area 提供滚动容器，标签栏提供关闭入口
@@ -42,8 +42,11 @@ export default function About() {
         buildDate={info.buildDate}
         gitSha={info.gitSha}
         state={state}
+        download={download}
         onCheck={run}
         onCopy={copy}
+        onUpdate={() => update(state)}
+        onInstall={() => install(state)}
       />
       <AboutMenuList onOpenLicenses={() => setLicensesOpen(true)} />
       <OpenSourceLicenses

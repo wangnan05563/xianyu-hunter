@@ -82,6 +82,7 @@ describe('useUpdateChecker', () => {
     expect(result.current.state).toEqual({
       kind: 'newer',
       url: 'https://example.com/release/v2.0.0',
+      downloadUrl: '',
       latest: '2.0.0',
       publishedAt: undefined,
     })
@@ -107,6 +108,7 @@ describe('useUpdateChecker', () => {
     expect(result.current.state).toEqual({
       kind: 'newer',
       url: 'https://github.com/wangnan05563/xianyu-hunter/releases/tag/v2.0.0',
+      downloadUrl: '',
       latest: '2.0.0',
       publishedAt: '2026-06-15T00:00:00Z',
     })
