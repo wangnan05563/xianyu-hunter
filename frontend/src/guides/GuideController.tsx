@@ -137,44 +137,56 @@ export function GuideController() {
     [],
   )
 
-  // 常驻按钮区：仅当存在可用引导时显示（避免无意义悬浮按钮）
-  if (!routesReady) return null
-
+  // 常驻悬浮按钮区：全站始终显示（不再因无引导配置而整组隐藏）
+  // 为什么无条件渲染：此前 `if (!routesReady) return null` 会让 /help、/about 等
+  // 未配置引导的路由整个按钮组消失，用户反馈"引导按钮默认隐藏"。改为：
+  // - 有引导配置：主按钮打开本页引导 + 演示按钮
+  // - 无引导配置（且无可用步骤）：主按钮降级跳转帮助文档，保证入口常驻
   return (
     <>
-      <Tour
-        open={open}
-        current={current}
-        onClose={onTourClose}
-        steps={tourSteps}
-        onChange={onStepChange}
-        onFinish={() => {
-          stopAuto()
-          setOpen(false)
-          if (guide) markGuideDone(guide.route)
-        }}
-      />
-
-      {/* 常驻悬浮交互按钮组：引导唤起 + 自动演示 + 帮助入口
-          为什么用 Button.Group：将首次引导、演示、帮助收敛在一个悬浮簇，避免页面堆叠多个浮动按钮 */}
-      <FloatButton.Group shape="square" style={{ right: 24, bottom: 120 }}>
-        <FloatButton
-          icon={<CompassOutlined />}
-          onClick={openGuide}
-          tooltip="开始本页引导（首次访问会自动弹出）"
-        />
-        <FloatButton
-          icon={mode === 'auto' ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-          onClick={() => {
-            if (mode === 'auto') {
-              switchToManual()
-            } else {
-              setCurrent(0)
-              startAutoPlay(tourSteps.length)
-            }
+      {routesReady && (
+        <Tour
+          open={open}
+          current={current}
+          onClose={onTourClose}
+          steps={tourSteps}
+          onChange={onStepChange}
+          onFinish={() => {
+            stopAuto()
+            setOpen(false)
+            if (guide) markGuideDone(guide.route)
           }}
-          tooltip={mode === 'auto' ? '暂停自动播放' : '自动播放本页全流程演示'}
         />
+      )}
+
+      <FloatButton.Group shape="square" style={{ right: 24, bottom: 120 }}>
+        {routesReady ? (
+          <FloatButton
+            icon={<CompassOutlined />}
+            onClick={openGuide}
+            tooltip="开始本页引导（首次访问会自动弹出）"
+          />
+        ) : (
+          <FloatButton
+            icon={<CompassOutlined />}
+            href="#/help"
+            tooltip="查看使用说明与帮助文档"
+          />
+        )}
+        {routesReady && (
+          <FloatButton
+            icon={mode === 'auto' ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+            onClick={() => {
+              if (mode === 'auto') {
+                switchToManual()
+              } else {
+                setCurrent(0)
+                startAutoPlay(tourSteps.length)
+              }
+            }}
+            tooltip={mode === 'auto' ? '暂停自动播放' : '自动播放本页全流程演示'}
+          />
+        )}
         <FloatButton
           icon={<QuestionCircleOutlined />}
           href="#/help"
