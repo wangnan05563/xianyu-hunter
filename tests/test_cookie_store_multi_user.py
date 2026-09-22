@@ -132,18 +132,23 @@ def test_validate_m5tk_expires_field_ignored_when_timestamp_valid(store):
 
 
 def test_validate_other_cookie_expired_by_expires_field(store):
-    """非 _m_h5_tk 的关键 cookie 仍用 expires 字段判断过期
+    """非跳过名单的关键 cookie 仍用 expires 字段判断过期
 
-    验证 Fix 1 只改了 _m_h5_tk 的判断逻辑，其他 cookie 仍用 expires 字段。
+    验证 Fix 1 只改了 _m_h5_tk 的判断逻辑，其他登录态 cookie 仍用 expires 字段。
+    注意：验证用的 cookie 从 unb 换成 cookie2——unb 是纯用户唯一ID标识
+    （identity 层 ttl=session），扫码登录/本地导出时 expires 会被写成过去的
+    绝对时间戳而实际登录态有效，故 unb 已纳入跳过名单（与 _m_h5_tk_enc 一致），
+    不再承担 expires 过期判定；cookie2 是真正登录态 cookie，用 32 位 hex 值规避
+    test_cookie_values 误判。
     """
     import time as _time
     cookies = [
         {"name": "_m_h5_tk", "value": _make_m5tk_value(age_sec=60), "domain": ".taobao.com", "expires": -1},
-        {"name": "unb", "value": "12345678", "domain": ".taobao.com",
-         "expires": _time.time() - 3600},  # unb expires 1 小时前已过期
+        {"name": "cookie2", "value": "a" * 32, "domain": ".taobao.com",
+         "expires": _time.time() - 3600},  # cookie2 expires 1 小时前已过期
     ]
     store.export_cookies(cookies, method="browser")
 
     is_valid, reason = store.validate_cookies_with_expiry()
     assert is_valid is False
-    assert reason == "cookie_expired:unb"
+    assert reason == "cookie_expired:cookie2"

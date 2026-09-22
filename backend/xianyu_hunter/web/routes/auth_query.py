@@ -419,6 +419,14 @@ def _check_single_cookie_expiry(c: dict, now: float) -> str | None:
     if name == "_m_h5_tk_enc":
         return None
 
+    # unb：纯用户唯一ID标识（identity 层 ttl=session），扫码登录/本地持久化导出时
+    # expires 会被写成过去的绝对时间戳（实际登录态有效），据此误判会报
+    # cookie_expired:unb。真正登录态由 cookie2/_m_h5_tk 判定，unb 只做存在性检查。
+    # 与 cookie_status._find_expired_cookie、cookie_store._check_key_cookies_expiry
+    # 保持同一跳过名单，避免规则漂移导致「导航栏/反爬/抢单」判定不一致。
+    if name == "unb":
+        return None
+
     expires = c.get("expires", -1)
     if expires and expires > 0 and expires < now:
         return f"cookie_expired:{name}"

@@ -387,12 +387,16 @@ def _find_expired_cookie(
     now = time.time()
     for c in cookies_list:
         name = c.get("name")
-        # 跳过 _m_h5_tk 与 _m_h5_tk_enc：两者都是内嵌 timestamp 的 token，
-        # expires 字段无可靠语义（旧副本可能残留过期值），有效性统一由
-        # _has_valid_m5tk_in_list 判定。与 cookie_store._check_key_cookies_expiry、
-        # auth_query._check_single_cookie_expiry 的特判保持一致，避免规则漂移
-        # 误报 cookie_expired:_m_h5_tk_enc（登录后 cookie 正常却显示异常）。
-        if name not in (identity_cookies | session_cookies) or name in ("_m_h5_tk", "_m_h5_tk_enc"):
+        # 跳过 _m_h5_tk / _m_h5_tk_enc / unb：三者都是「expires 字段不可靠」的 cookie。
+        # - _m_h5_tk/_m_h5_tk_enc：内嵌 timestamp 的 token，expires 字段无可靠语义，
+        #   有效性统一由 _has_valid_m5tk_in_list 判定（本地多处特判保持一致）。
+        # - unb：纯用户唯一ID标识（identity 层 ttl=session），扫码登录/本地持久化
+        #   导出时其 expires 会被写成过去的绝对时间戳（实际登录态有效），
+        #   据此误判会报 cookie_expired:unb。真正登录态由 cookie2/_m_h5_tk 判定，
+        #   unb 只做存在性检查，其 expires 字段不应作为过期依据。
+        #   与 cookie_store._check_key_cookies_expiry、auth_query._check_single_cookie_expiry
+        #   保持同一跳过名单，避免规则漂移导致「导航栏/反爬/抢单」判定不一致。
+        if name not in (identity_cookies | session_cookies) or name in ("_m_h5_tk", "_m_h5_tk_enc", "unb"):
             continue
         expires = c.get("expires", -1)
         if expires and expires > 0 and expires < now:
