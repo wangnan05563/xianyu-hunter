@@ -35,7 +35,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = Resolve-Path "$PSScriptRoot\.."
+$repoRoot = (Resolve-Path "$PSScriptRoot\..").Path  # 取纯字符串路径：Resolve-Path 返回 PathInfo 对象，其无部分字符串方法（如 StartsWith）
 Set-Location $repoRoot
 
 # 校验 embedding 引擎参数（st / onnx），未知值回退 st
@@ -63,6 +63,11 @@ $env:PIP_TRUSTED_HOST = "mirrors.aliyun.com"
 $cacheDir = "$repoRoot\.cache"
 $pwCacheDir = "$cacheDir\playwright_browsers"
 $modelCacheDir = "$cacheDir\models\bge-small-zh-v1.5"
+# PyInstaller 工作目录（--workpath）。原本放在 release/.work，现独立到 .cache：
+#   为什么：workpath 是构建期临时缓存而非发布产物。release 被整体清理时本无需连带清掉它，
+#   迁出后 release 只含纯产物（整目录删除可由脚本完整重建），且 workpath 增量缓存得以保留，
+#   减少 release 体积（约 -257MB）与磁盘压力。
+$pyiWorkDir = "$cacheDir\pyinstaller-work"
 $buildVenv = ".venv-build"
 $buildPython = "$buildVenv\Scripts\python.exe"
 $buildVenvReadyMarker = "$buildVenv\.xh-build-ready"
@@ -124,6 +129,31 @@ function Invoke-BuildPip {
     }
 
     throw $FailureMessage
+}
+
+function Assert-BuildDiskSpace {
+    # PyInstaller 打包峰值净增需求（MB）：dist 产物 ~500 + workpath 全新 ~500 + 分析临时 + 缓冲。
+    # 旧 release/xianyu-hunter 在打包前会被脚本删除，其占用的空间可抵扣，故此处为"净增"的保守上界。
+    # 为什么在打包前预检：磁盘不足若发生在 PyInstaller 中途，会留下半成品并报 Errno 28（难定位），
+    # 提前报错并给出可清理的大体量目录，比继续硬跑更可诊断。
+    $requiredFreeMB = 1200
+    # 注意：$repoRoot（小写盘符）与 $_.Root（大写盘符）大小写可能不同，StartsWith 需忽略大小写，
+    # 否则找不到仓库所在磁盘，预检会静默失效。
+    $drive = Get-PSDrive -PSProvider FileSystem | Where-Object { $repoRoot.StartsWith($_.Root, [System.StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
+    if (-not $drive) { return }  # 无法定位仓库所在磁盘，交由打包本身报错
+    $freeMB = [long]([math]::Floor($drive.Free / 1MB))
+    if ($freeMB -lt $requiredFreeMB) {
+        Write-Host "[ERROR] 磁盘剩余空间不足：$freeMB MB < 需 $requiredFreeMB MB" -ForegroundColor Red
+        Write-Host "  已占用较大的目录（按需清理后重试；脚本 -Clean 参数会清空所有缓存）：" -ForegroundColor Yellow
+        foreach ($d in @("data", ".venv-build", ".venv", "frontend\node_modules", ".cache")) {
+            $p = Join-Path $repoRoot $d
+            if (Test-Path $p) {
+                $s = [long](Get-ChildItem -Recurse -Force $p -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+                Write-Host ("    {0,-36} {1,8} MB" -f $d, [math]::Round($s / 1MB, 0))
+            }
+        }
+        throw "磁盘剩余空间不足，打包中止"
+    }
 }
 
 # -Clean：清理所有缓存
@@ -306,11 +336,16 @@ if ($SkipSPA -and (Test-Path $spaIndex)) {
 }
 
 # ============== 4. PyInstaller 打包 ==============
+Assert-BuildDiskSpace
 Write-Host "`n[4/6] 运行 PyInstaller 打包..." -ForegroundColor Yellow
 Write-Host "  预计耗时：约 1-3 分钟" -ForegroundColor DarkGray
 # 清理旧产物（dist 每次重建，但缓存独立在 .cache/ 不受影响）
 if (Test-Path "release\xianyu-hunter") {
     Remove-Item -Recurse -Force "release\xianyu-hunter" -ErrorAction SilentlyContinue
+}
+# workpath 已迁至 .cache/pyinstaller-work，删除 release 下旧 .work 残留，避免继续占用发布目录空间
+if (Test-Path "release\.work") {
+    Remove-Item -Recurse -Force "release\.work" -ErrorAction SilentlyContinue
 }
 # 清理 backend/ 下所有 __pycache__ 目录，防止 PyInstaller 使用过期的 .pyc 字节码
 Get-ChildItem -Path "backend" -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue | ForEach-Object {
@@ -318,7 +353,7 @@ Get-ChildItem -Path "backend" -Recurse -Directory -Filter "__pycache__" -ErrorAc
     Write-Host "  清理过期 pyc: " + $_.FullName -ForegroundColor DarkGray
 }
 Write-Host "  __pycache__ 清理完成" -ForegroundColor DarkGray
-& .venv-build\Scripts\pyinstaller xianyu-hunter.spec --noconfirm --distpath release --workpath release/.work
+& .venv-build\Scripts\pyinstaller xianyu-hunter.spec --noconfirm --distpath release --workpath $pyiWorkDir
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 Write-Host "  PyInstaller 打包完成"
 

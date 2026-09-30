@@ -97,9 +97,11 @@ hiddenimports += [
 
 # onnx 模式：排除 torch / sentence_transformers / transformers（约 -320MB）
 # 注意保留 tokenizers（ONNX 后端运行期仍需分词，由上面的 hiddenimports 收集）
+# 追加 scipy / sklearn：二者仅被 sentence-transformers 链路需要（pip show Required-by 实测），
+# 但 PyInstaller 会经间接 import 链（非 ST 路径的潜在 import）继续收集（实测 -320MB 后仍占 67MB），故显式排除。
 if _EMBEDDING_ENGINE == "onnx":
-    _excludes = ['torch', 'sentence_transformers', 'transformers']
-    print("[spec] embedding_engine=onnx：exclude torch/sentence_transformers/transformers")
+    _excludes = ['torch', 'sentence_transformers', 'transformers', 'scipy', 'sklearn']
+    print("[spec] embedding_engine=onnx：exclude torch/sentence_transformers/transformers/scipy/sklearn")
 else:
     _excludes = []
 

@@ -270,6 +270,7 @@ test-screenshots/
 .idea/
 .vscode/
 .trae/
+.workbuddy/
 *.swp
 *.swo
 .DS_Store
@@ -334,3 +335,4 @@ backend/xianyu_hunter/resources/embedding/meta.json
 # 清理工具自身的审计输出与隔离区（本地可追溯的临时产物，不入库）
 /cleanup-logs/
 /.cleanup-quarantine/
+
