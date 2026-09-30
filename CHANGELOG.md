@@ -13,7 +13,16 @@
 - **根目录整理（2026-09-30）**：散落文件归类，根目录文件数 27 → 24
   - 移动：`run_sonar.bat` → `scripts/`；`VERSIONING.md` → `docs/standards/`（同步更新 CHANGELOG、概要设计文档、目录结构.md 中的引用链接）
   - 删除（维护者确认的一次性 Sonar 调试快照，可从 git 历史找回）：`issues.json`、`qg.json`、`sonar-scan-log.txt`
+  - 删除（维护者确认）：`.cleanup-quarantine/`（过期隔离区）、`cleanup-logs/`（第五轮清理审计记录，含 frontend/data 删除取证，经确认不留档）；保留 `cleanup-config.yaml` 供周期性维护复用
   - 保留根目录（工具约定/相对路径引用）：`xianyu-hunter.spec`、`installer.iss`、`.build-counter.json`、`coverage.xml`/`.coverage`、各构建与配置文件
+
+### Removed
+
+- **彻底移除 Docker 部署功能（2026-09-30，维护者确认）**
+  - 删除 `Dockerfile`、`docker-compose.yml`、`.dockerignore`
+  - 改写 `app.py` healthz 注释、`setup-env.ps1` 版本对齐注释
+  - 保留 `security.py`/`logger.py` 中 `/docker-compose` 探测屏蔽条目（防外部扫描，与项目自身部署无关）
+  - 文档同步：README、部署指南（删 Docker 章节、重编号、命令改原生部署）、目录结构.md、docs/README.md、cleanup-config.yaml 白名单
 - **工作空间第六轮清理（2026-07-09）**：根目录文件数 49 → 17，删除 32 个调试/日志/一次性脚本产物，释放约 10.13 MB 空间。备份日志 `logs/cleanup-20260709-210649.log`。
   - 误重定向：`17_xianyu`、`ubprocess; r=...`（特殊字符文件，使用 .NET `File.Delete` 绕过 `Remove-Item` 限制）
   - SonarQube 一次性 Python：`check_s6759.py`、`list_issues.py`、`merge_sonar.py`、`parse_sonar.py`

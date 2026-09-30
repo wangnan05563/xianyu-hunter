@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     XianyuHunter 一键环境配置脚本
 .DESCRIPTION
@@ -193,7 +193,7 @@ $Script:ConfigDir     = Join-Path $ProjectRoot "config"
 $Script:Requirements  = Join-Path $ProjectRoot "requirements.txt"
 $Script:Pyproject     = Join-Path $ProjectRoot "pyproject.toml"
 
-# 版本门槛：与 pyproject.toml requires-python>=3.10、Dockerfile python:3.12 对齐
+# 版本门槛：与 pyproject.toml requires-python>=3.10 对齐
 $Script:PythonMinMajor = 3
 $Script:PythonMinMinor = 12
 # 前端构建脚本（重新构建.bat）显式使用 nodejs24 路径，此处与之一致

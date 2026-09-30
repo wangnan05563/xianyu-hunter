@@ -226,7 +226,7 @@ docs/
 |------|------|------|
 | UI 设计规范 | 米其林风格、CSS Token、双主题 | [michelin-design-system.md](./standards/michelin-design-system.md) |
 | 目录结构规范 | 项目文件组织、命名约定 | [directory-structure.md](./standards/directory-structure.md) |
-| 部署指南 | Docker、服务器、本地部署 | [deployment.md](./standards/deployment.md) |
+| 部署指南 | 服务器、本地部署 | [deployment.md](./standards/deployment.md) |
 | 编码规范总纲 | 5 步法 + 铁律 + 反模式（前后端通用） | [coding-standards.md](./standards/coding-standards.md) |
 
 ### 项目技能集（AI Agent 索引）

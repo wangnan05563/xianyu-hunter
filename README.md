@@ -129,8 +129,6 @@ python -m xianyu_hunter config-show
 scripts\启动服务.bat
 ```
 
-也支持 Docker 部署（`Dockerfile` + `docker-compose.yml`）。
-
 ## 配置
 
 | 文件 | 说明 |
@@ -186,8 +184,7 @@ CLI (__main__.py)
 ├── browser-data/           # 浏览器用户数据（gitignore）
 ├── pyproject.toml          # Python 项目配置
 ├── requirements.txt        # Python 依赖
-├── Dockerfile              # Docker 镜像构建
-└── docker-compose.yml      # Docker Compose 部署
+└── installer.iss           # Inno Setup 安装包脚本
 ```
 
 详细规范见 [项目目录结构规范](docs/directory-structure.md)。

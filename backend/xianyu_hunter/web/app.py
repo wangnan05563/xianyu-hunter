@@ -623,7 +623,7 @@ def create_app() -> FastAPI:
     def healthz() -> JSONResponse:
         """健康检查：检查数据库、登录态、任务、浏览器、通知渠道
 
-        仅数据库故障时返回 503（Docker HEALTHCHECK 据此判定不健康）；
+        仅数据库故障时返回 503（供外部探活与进程守护判定）；
         其他检查项为信息性指标，不影响 HTTP 状态码。
         """
         from xianyu_hunter.web.deps import get_container

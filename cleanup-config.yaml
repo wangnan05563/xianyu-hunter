@@ -51,15 +51,12 @@ root_allowlist:
   files:
     - "README.md"
     - "CHANGELOG.md"
-    - "Dockerfile"
-    - "docker-compose.yml"
     - "pyproject.toml"
     - "requirements.txt"
     - "requirements-build.txt"   # 经核查为构建依赖清单（untracked 但属源码类），保留
     - "package.json"
     - "package-lock.json"
     - ".gitignore"
-    - ".dockerignore"
     - ".pre-commit-config.yaml"
     - "sonar-project.properties"
     - "xianyu-hunter.spec"        # 手工维护的 PyInstaller spec，必须随仓库提交
