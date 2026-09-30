@@ -218,7 +218,7 @@ git push origin --tags
 | `scripts/build_info.py` | 生成 `_build_info.py` 的脚本 |
 | `scripts/bump_version.py` | 版本号递增与同步脚本 |
 | `CHANGELOG.md` | 变更记录 |
-| `VERSIONING.md` | 本文档 |
+| `docs/standards/VERSIONING.md` | 本文档 |
 
 ## 10. 常见问题
 

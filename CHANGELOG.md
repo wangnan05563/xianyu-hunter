@@ -2,7 +2,7 @@
 
 本文件记录 XianyuHunter（闲鱼猎人）的所有版本变化，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式与 [Semantic Versioning](https://semver.org/lang/zh-CN/) 2.0.0 规范。
 
-版本号变更规则见 [VERSIONING.md](VERSIONING.md)。
+版本号变更规则见 [VERSIONING.md](docs/standards/VERSIONING.md)。
 
 ---
 
@@ -10,6 +10,10 @@
 
 ### Changed
 
+- **根目录整理（2026-09-30）**：散落文件归类，根目录文件数 27 → 24
+  - 移动：`run_sonar.bat` → `scripts/`；`VERSIONING.md` → `docs/standards/`（同步更新 CHANGELOG、概要设计文档、目录结构.md 中的引用链接）
+  - 删除（维护者确认的一次性 Sonar 调试快照，可从 git 历史找回）：`issues.json`、`qg.json`、`sonar-scan-log.txt`
+  - 保留根目录（工具约定/相对路径引用）：`xianyu-hunter.spec`、`installer.iss`、`.build-counter.json`、`coverage.xml`/`.coverage`、各构建与配置文件
 - **工作空间第六轮清理（2026-07-09）**：根目录文件数 49 → 17，删除 32 个调试/日志/一次性脚本产物，释放约 10.13 MB 空间。备份日志 `logs/cleanup-20260709-210649.log`。
   - 误重定向：`17_xianyu`、`ubprocess; r=...`（特殊字符文件，使用 .NET `File.Delete` 绕过 `Remove-Item` 限制）
   - SonarQube 一次性 Python：`check_s6759.py`、`list_issues.py`、`merge_sonar.py`、`parse_sonar.py`
