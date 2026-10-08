@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -114,6 +115,28 @@ def _check_cookies(user_id: str = "default") -> bool:
         if store.has_valid_cookies(user_id="default"):
             return True
     return False
+
+
+def _uid_from_cookies(store, user_id: str) -> str:
+    """从本地 Cookie 文件解析权威用户身份（unb），无则返回空串
+
+    为什么需要：auth_cache/userinfo.json 的 user_id 可能来自降级身份
+    （子进程读不到 unb 时用 sha256(cookie2) 生成），该 id 在 users 表没有记录，
+    导致 _sync_nick_to_users_table 拿不到已存昵称，/me 的 local_username 退化为
+    裸 user_id，前端显示"未登录"；而 /cookie/health 只看 Cookie 文件故显示正常，
+    同一份 Cookie 出现两处矛盾状态。Cookie 文件里的 unb 是登录子进程实际写入的
+    身份标识，与 identify_or_create 同一优先级口径，作为 /me 的身份兜底最可靠。
+    """
+    try:
+        _, cookies = _load_cookie_data_for_health(store, user_id)
+        for c in cookies or []:
+            if c.get("name") == "unb":
+                value = str(c.get("value") or "").strip()
+                if re.match(r"^\d{8,}$", value):
+                    return value
+    except Exception as e:
+        logger.debug("从 Cookie 文件解析 unb 失败: %s", e)
+    return ""
 
 
 def _sync_nick_to_users_table(user_id: str, nick: str) -> tuple[str, str]:
@@ -255,15 +278,22 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
     # 构建返回结果
     result = _build_auth_me_result(has_cookie, info, valid_nick)
 
+    # 身份校正：会话 user_id 缺失（xh_token 过期/被 Secure 策略丢弃）时，
+    # userinfo 缓存里的降级 user_id 在 users 表无记录，昵称同步与展示全部失效
+    effective_uid = current_uid or (
+        _uid_from_cookies(get_cookie_store(), cookie_user_id) if has_cookie else ""
+    ) or info.get("user_id", "")
+    if has_cookie and effective_uid and effective_uid != result.get("user_id"):
+        result["user_id"] = effective_uid
+
     # 3. 同步 nick 到 users 表，并在响应中追加 local_username/custom_alias
     #    传入 valid_nick：已过滤无效值，_sync_nick_to_users_table 会据此清空库里旧无效值
-    #    为什么用 info.user_id 兜底：无有效会话（current_uid 为空，如会话被 web_token
+    #    为什么用 effective_uid：无有效会话（current_uid 为空，如会话被 web_token
     #    降级）时若传空 user_id，_sync 会提前返回空，导致 users 表昵称不同步、
     #    local_username 退化为裸 user_id，前端 UserMenu 直接显示"未登录"。
-    #    userinfo 缓存里的 user_id 由登录子进程识别（unb 优先），可作兜底身份。
-    sync_uid = current_uid or info.get("user_id") or ""
+    #    优先级 会话 user_id > Cookie 文件 unb > userinfo 缓存 user_id。
     nickname, custom_alias = _sync_nick_to_users_table(
-        sync_uid, valid_nick
+        effective_uid, valid_nick
     )
     # local_username 优先级：自定义别名 > 闲鱼昵称 > user_id
     # 为什么自定义别名优先：用户主动设置的标识更具辨识度，闲鱼昵称可能因反爬抓不到

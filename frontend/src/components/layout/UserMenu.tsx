@@ -32,12 +32,16 @@ interface UserMenuProps {
 // 后端 /api/auth/me 返回的 avatar_url 即闲鱼官方头像，无值时用品牌色兜底
 const DEFAULT_AVATAR_BG = 'linear-gradient(135deg, #FF6200, #FF8C00)'
 
-// 计算顶部显示名：local_username > nick > '未登录'
+// 计算顶部显示名：local_username > nick > 已登录兜底 > '未登录'
 // 为什么提取：原代码内联嵌套三元，认知复杂度高；优先级规则集中一处便于维护
-const computeDisplayName = (info: AuthMe): string => {
+// 为什么用 logged_in 兜底：昵称抓取失败时（反爬/DOM 变化）名字字段全空，
+// 旧逻辑直接显示"未登录"，与同面板的"Cookie 状态正常"自相矛盾
+export const computeDisplayName = (info: AuthMe): string => {
   // local_username 后端已合并 custom_alias > nickname > user_id，等值 user_id 时降级
   if (info.local_username && info.local_username !== info.user_id) return info.local_username
   if (info.nick && info.nick !== info.user_id) return info.nick
+  if (info.logged_in) return info.user_id || '已登录'
+  if (info.detecting) return '检测中'
   return '未登录'
 }
 
