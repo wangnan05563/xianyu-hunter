@@ -265,7 +265,14 @@ class BrowserManager:
 
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(self.user_data_dir),
-            headless=self.headless,
+            # 固定传 False，无头行为由上方 launch_args 里的 --headless=new 提供。
+            # 为什么不传 self.headless：Playwright 在 headless=True 时会选用独立的
+            # chromium_headless_shell-* 二进制，而打包版自 19ea1634 起已剔除该目录
+            # （省 267MB），导致打包版 Worker 浏览器启动直接报
+            # "Executable doesn't exist at ...chrome-headless-shell.exe"。
+            # launch_args 本就无条件带 --headless=new，headless=True 反而造成
+            # 双重无头标志互相矛盾；与 scripts/auth_helper.py 同一口径。
+            headless=False,
             user_agent=effective_ua,
             viewport=effective_viewport,
             locale="zh-CN",
