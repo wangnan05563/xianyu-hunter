@@ -102,6 +102,33 @@ function HealthStatusHeader({
   )
 }
 
+// 昵称未同步提示：auth_helper 抓取失败时给出明确原因，替代过去的静默空昵称
+// 为什么需要：打包版 Worker 常驻浏览器独占 browser-data，auth_helper 启动即失败，
+// 前端过去只看到裸账号 ID，用户无法判断是"未登录"还是"抓取失败"
+function NickSyncHint({
+  userInfo,
+  themeToken,
+}: {
+  readonly userInfo: AuthMe
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}) {
+  // 已有真实昵称（浏览器抓取成功）时不提示
+  const hasRealNick = Boolean(userInfo.nick)
+  if (userInfo.nick_sync_state !== 'failed' || hasRealNick) return null
+  return (
+    <div style={{
+      fontSize: 11, color: themeToken.colorWarning,
+      marginTop: 4, padding: '4px 6px',
+      background: themeToken.colorFillQuaternary,
+      borderRadius: 4,
+      display: 'flex', alignItems: 'center', gap: 4,
+    }}>
+      <ExclamationCircleFilled style={{ fontSize: 11 }} />
+      <span>昵称未同步（浏览器抓取失败），当前显示账号名</span>
+    </div>
+  )
+}
+
 // 异常原因提示：仅在 is_valid=false 且有原因时显示
 function IntegrityReasonHint({
   reason,
@@ -346,12 +373,23 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
           <Text strong style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {displayName}
           </Text>
-          {/* 闲鱼昵称行：仅当 nick 与 displayName 不同时展示，让用户看到原始昵称 */}
+          {/* 闲鱼昵称行：仅当 nick 与 displayName 不同时展示，让用户看到原始昵称
+              nick 来自浏览器抓取的真实昵称，Cookie 账号名兜底不会落到这里，
+              因此兜底名永远不会被标成「闲鱼昵称」 */}
           {userInfo.nick && userInfo.nick !== displayName && (
             <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
               闲鱼昵称：{userInfo.nick}
             </Text>
           )}
+          {/* 账号名行：昵称抓取失败时用 Cookie tracknick 兜底，显式标注为「账号名」
+              而非「闲鱼昵称」，避免误导用户以为这是闲鱼展示昵称 */}
+          {userInfo.display_name_source === 'cookie_account' && (
+            <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+              账号名：{displayName}
+            </Text>
+          )}
+          {/* 昵称未同步提示 */}
+          <NickSyncHint userInfo={userInfo} themeToken={themeToken} />
           {/* 自定义别名行：用户在多用户管理页设置的标识 */}
           {userInfo.custom_alias && (
             <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>

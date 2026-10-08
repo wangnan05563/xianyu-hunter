@@ -54,6 +54,10 @@ class _FakeAuthManager:
             "fetched_at": 1_700_000_000,
         }
 
+    def get_refresh_status(self) -> dict:
+        # /me 需要刷新状态用于「昵称未同步」提示（T01633）
+        return {"state": "never", "error": "", "at": 0.0}
+
     def trigger_refresh_userinfo_async(self, delay: float = 0.0) -> None:
         pass
 

@@ -14,6 +14,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -136,6 +137,30 @@ def _uid_from_cookies(store, user_id: str) -> str:
                     return value
     except Exception as e:
         logger.debug("从 Cookie 文件解析 unb 失败: %s", e)
+    return ""
+
+
+def _account_name_from_cookies(store, user_id: str) -> str:
+    """从本地 Cookie 的 tracknick 取出账号名（浏览器不可用时的昵称兜底）
+
+    为什么需要：auth_helper 抓取依赖 Chromium，打包版共享 profile 被 Worker 独占时
+    会静默失败，userinfo.json 长期缺失 → /me 只有裸 user_id（如 135379349）。
+    Cookie 里的 tracknick 是登录时服务端下发的账号名（实测 "dosufo"），零成本可读。
+
+    为什么不算「闲鱼昵称」：tracknick 是登录账号名，与闲鱼个人页展示昵称不是同一
+    字段，因此只作为展示兜底，不回写 users.nickname（避免污染昵称字段）。
+    """
+    try:
+        _, cookies = _load_cookie_data_for_health(store, user_id)
+        for c in cookies or []:
+            if c.get("name") != "tracknick":
+                continue
+            value = unquote(str(c.get("value") or "").strip())
+            # 过滤占位值：闲鱼未登录/异常时会下发空串或 null
+            if value and value.lower() not in ("null", "undefined", "-"):
+                return value
+    except Exception as e:
+        logger.debug("从 Cookie 解析 tracknick 失败: %s", e)
     return ""
 
 
@@ -295,11 +320,41 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
     nickname, custom_alias = _sync_nick_to_users_table(
         effective_uid, valid_nick
     )
-    # local_username 优先级：自定义别名 > 闲鱼昵称 > user_id
-    # 为什么自定义别名优先：用户主动设置的标识更具辨识度，闲鱼昵称可能因反爬抓不到
-    result["local_username"] = custom_alias or nickname or result.get("user_id", "") or ""
+    # local_username 兜底链：
+    #   自定义别名 > users.nickname > userinfo 有效 nick > Cookie tracknick 账号名 > user_id
+    # 为什么加入 tracknick：auth_helper 依赖 Chromium，打包版 Worker 常驻浏览器独占
+    # browser-data 时抓取会静默失败（见 T01633），此时裸 user_id 可读性极差；
+    # tracknick 是本地 Cookie 里已有的账号名，零成本且无需浏览器。
+    # 为什么不回写 users.nickname：tracknick 是登录账号名而非闲鱼展示昵称，
+    # 回写会把账号名污染成昵称，后续无法区分（T01634 口径）。
+    account_name = _account_name_from_cookies(get_cookie_store(), cookie_user_id) if has_cookie else ""
+    result["local_username"] = (
+        custom_alias or nickname or valid_nick or account_name or result.get("user_id", "") or ""
+    )
     result["nickname"] = nickname
     result["custom_alias"] = custom_alias
+    # 展示名来源：供前端区分「闲鱼昵称」与「账号名兜底」，避免把账号名标成闲鱼昵称
+    if custom_alias:
+        result["display_name_source"] = "custom_alias"
+    elif nickname:
+        result["display_name_source"] = "users_nickname"
+    elif valid_nick:
+        result["display_name_source"] = "userinfo_nick"
+    elif account_name:
+        result["display_name_source"] = "cookie_account"
+    else:
+        result["display_name_source"] = "user_id"
+
+    # userinfo 刷新可观测：auth_helper 启动失败时前端要显示「昵称未同步」而非静默空值
+    # 为什么做 isinstance 兜底：/me 的 AuthManager 在部分场景会被替换成桩对象，
+    # 刷新状态拿不到时降级为 never，不能让整个 /me 因此 500
+    refresh_status = am.get_refresh_status() if hasattr(am, "get_refresh_status") else None
+    if not isinstance(refresh_status, dict):
+        refresh_status = {}
+    refresh_state = str(refresh_status.get("state") or "never")
+    result["nick_sync_state"] = refresh_state
+    if refresh_state == "failed":
+        result["nick_sync_error"] = str(refresh_status.get("error") or "")
 
     # 检测登录态掉线 → 生成业务通知（失败不影响主路径）
     scan_and_notify(container, auth_state=result)

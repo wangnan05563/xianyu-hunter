@@ -13,7 +13,9 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -54,6 +56,126 @@ def _cleanup_lock_files(user_data_dir: Path) -> None:
                 Path(f).unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+# Chromium 退出码 RESULT_CODE_PROFILE_IN_USE（=21）：同一 user_data_dir 已被另一个
+# Chromium 实例独占，新实例启动后立即退出。Playwright 侧不暴露退出码，只抛
+# TargetClosedError("Target page, context or browser has been closed")。
+# 为什么必须识别：打包版 Worker 的常驻浏览器一直占用 browser-data，auth_helper 每次
+# info 都撞这堵墙 → status.json 恒为 error、userinfo.json 永不生成 → /me 拿不到昵称。
+# 实测两种文案（不同 Playwright 版本措辞不同）：
+# - "Failed to create a ProcessSingleton for your profile directory. This usually means
+#    that the profile is already in use by another instance of Chromium."
+# - "Target page, context or browser has been closed"（打包版 status.json 实测，
+#   此时 Chromium 以 RESULT_CODE_PROFILE_IN_USE=21 退出）
+_PROFILE_IN_USE_MARKERS = (
+    "target page, context or browser has been closed",
+    "processsingleton",
+    "profile in use",
+    "profile is already in use",
+    "user data directory is already in use",
+)
+
+
+def _is_profile_in_use_error(exc: BaseException) -> bool:
+    """判断启动失败是否源自 Chromium profile 被其他实例独占"""
+    text = str(exc).lower()
+    return any(m in text for m in _PROFILE_IN_USE_MARKERS)
+
+
+def _normalize_cookie_for_playwright(c: dict) -> dict | None:
+    """把本地 Cookie JSON 条目规范化为 Playwright add_cookies 可接受的格式
+
+    sameSite/expires 必须收敛到 Playwright 允许的取值，否则 add_cookies 整批抛错，
+    隔离 profile 会退化成"无登录态"，抓取必然失败。
+    """
+    name = (c.get("name") or "").strip()
+    value = c.get("value") or ""
+    if not name or not value:
+        return None
+    domain = (c.get("domain") or "").strip() or ".goofish.com"
+    try:
+        expires = float(c.get("expires") or -1)
+    except (TypeError, ValueError):
+        expires = -1
+    same_site = (c.get("sameSite") or c.get("same_site") or "Lax").strip()
+    if same_site not in ("Strict", "Lax", "None"):
+        same_site = "Lax"
+    return {
+        "name": name,
+        "value": value,
+        "domain": domain,
+        "path": (c.get("path") or "/").strip() or "/",
+        # Playwright 只接受 -1（会话级）或 >0 的绝对时间戳
+        "expires": expires if expires > 0 else -1,
+        "httpOnly": bool(c.get("httpOnly", c.get("httponly", False))),
+        "secure": bool(c.get("secure", False)),
+        "sameSite": same_site,
+    }
+
+
+def _load_local_cookies_for_injection() -> list[dict]:
+    """汇总 data 目录下的本地 Cookie，供隔离 profile 注入登录态
+
+    为什么需要：共享 profile 被 Worker 浏览器独占时，auth_helper 只能用一次性临时
+    profile 启动；临时 profile 没有登录态，必须把本地 Cookie 注入才能访问
+    /personal 并抓到昵称。
+
+    数据源沿用 /api/auth/cookie/health 的三段回退口径：
+    cookies_<uid>.json（全部用户） + last_login_cookies.json（登录子进程公共导出）。
+    多份文件按 (name, domain) 去重合并，保证 unb/_m_h5_tk/cookie2 不遗漏。
+    """
+    try:
+        from xianyu_hunter.paths import get_data_dir
+    except Exception as e:  # noqa: BLE001
+        print(f"[auth_helper] 无法定位 data 目录: {e}", file=sys.stderr)
+        return []
+
+    data_dir = Path(get_data_dir())
+    files = sorted(data_dir.glob("cookies_*.json")) + [data_dir / "last_login_cookies.json"]
+    merged: dict[tuple[str, str], dict] = {}
+    for f in files:
+        if not f.exists():
+            continue
+        try:
+            raw = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        cookies = raw if isinstance(raw, list) else (raw.get("cookies") or [])
+        for c in cookies:
+            if not isinstance(c, dict):
+                continue
+            norm = _normalize_cookie_for_playwright(c)
+            if norm:
+                merged[(norm["name"], norm["domain"])] = norm
+    return list(merged.values())
+
+
+async def _launch_isolated_context(pw, launch_kwargs: dict, out_dir: Path):
+    """用一次性临时 profile 启动浏览器，并注入本地 Cookie 恢复登录态
+
+    Returns: (context, temp_dir) —— temp_dir 由调用方在 close 后清理
+    """
+    tmp_dir = tempfile.mkdtemp(prefix="xh-auth-profile-")
+    ctx = await pw.chromium.launch_persistent_context(
+        user_data_dir=tmp_dir, **launch_kwargs
+    )
+    cookies = _load_local_cookies_for_injection()
+    if not cookies:
+        print("[auth_helper] 本地无可用 Cookie，隔离 profile 将以未登录态抓取", file=sys.stderr)
+        return ctx, tmp_dir
+    try:
+        await ctx.add_cookies(cookies)
+    except Exception as e:  # noqa: BLE001
+        # 单个 cookie 格式异常会让整批失败，降级为逐个注入，尽可能保住 unb
+        print(f"[auth_helper] Cookie 批量注入失败，逐个重试: {e}", file=sys.stderr)
+        for c in cookies:
+            try:
+                await ctx.add_cookies([c])
+            except Exception:  # noqa: BLE001
+                continue
+    _set_status(out_dir, state="fetching", message=f"已注入 {len(cookies)} 个本地 Cookie")
+    return ctx, tmp_dir
 
 
 def _export_cookies_to_json(cookies: list[dict], method: str) -> None:
@@ -106,25 +228,29 @@ async def _cmd_info(out_dir: Path) -> int:
     2) 访问 /personal 页面：以页面 DOM 为准（DOM 有"登录"链接 = 未登录）
     3) 从页面抓昵称/头像；过滤掉"登录/登錄"等按钮文本
     4) 从 cookie 提取 user id（unb → _tb_token_）
+
+    启动策略（关键）：
+    - 优先用共享 profile（browser-data），登录态最真实；
+    - 若共享 profile 已被 Worker 常驻浏览器独占（Chromium ProcessSingleton 让第二个
+      实例以 RESULT_CODE_PROFILE_IN_USE=21 退出），自动回退到一次性临时 profile，
+      并把本地 Cookie 注入以恢复登录态。
+      为什么必须回退：不回退时打包版 userinfo.json 永不生成，/me 的昵称/头像恒为空。
     """
     from playwright.async_api import async_playwright
 
     cfg = _get_browser_cfg()
     user_data_dir = get_browser_data_dir(cfg.user_data_dir)
     _set_status(out_dir, state="starting", message="启动浏览器…")
+    tmp_profile: str | None = None
     try:
         async with async_playwright() as pw:
             # 反检测参数：闲鱼对 headless 浏览器有较强的指纹检测
             # --disable-blink-features=AutomationControlled 去掉 navigator.webdriver=true
             # 其余参数减少自动化特征暴露
-            # 清理残留锁文件：Worker 异常退出后 SingletonLock 会残留，
-            # 导致 launch_persistent_context 启动后无法创建 page，nick 抓取整个流程不执行
-            _cleanup_lock_files(user_data_dir)
-            ctx = await pw.chromium.launch_persistent_context(
-                user_data_dir=str(user_data_dir),
-                # P1 瘦身：headless=False + --headless=new 强制用完整 Chromium 内核无头运行，
-                # 避免 Playwright 在 headless=True 时选用独立的 chromium-headless-shell 二进制
-                # （打包可省约 267MB）。new headless 更接近完整内核，也更难被反爬检测。
+            # P1 瘦身：headless=False + --headless=new 强制用完整 Chromium 内核无头运行，
+            # 避免 Playwright 在 headless=True 时选用独立的 chromium-headless-shell 二进制
+            # （打包可省约 267MB）。new headless 更接近完整内核，也更难被反爬检测。
+            launch_kwargs = dict(
                 headless=False,
                 user_agent=cfg.user_agent,
                 viewport={"width": 1280, "height": 800},
@@ -142,6 +268,24 @@ async def _cmd_info(out_dir: Path) -> int:
                     "--disable-web-security",  # 允许跨域（登录页需要）
                 ],
             )
+            # 清理残留锁文件：Worker 异常退出后 SingletonLock 会残留，
+            # 导致 launch_persistent_context 启动后无法创建 page，nick 抓取整个流程不执行
+            _cleanup_lock_files(user_data_dir)
+            profile_mode = "shared"
+            try:
+                ctx = await pw.chromium.launch_persistent_context(
+                    user_data_dir=str(user_data_dir), **launch_kwargs
+                )
+            except Exception as e:  # noqa: BLE001
+                if not _is_profile_in_use_error(e):
+                    raise
+                # 共享 profile 被占用 → 回退隔离 profile + Cookie 注入
+                _set_status(
+                    out_dir, state="starting",
+                    message="共享浏览器配置被占用，改用临时配置 + 本地 Cookie 抓取…",
+                )
+                ctx, tmp_profile = await _launch_isolated_context(pw, launch_kwargs, out_dir)
+                profile_mode = "isolated"
             try:
                 _set_status(out_dir, state="fetching", message="访问个人主页…")
                 page = await ctx.new_page()
@@ -363,6 +507,9 @@ async def _cmd_info(out_dir: Path) -> int:
                     "title": info.get("title", ""),
                     "url": cur_url,
                     "fetched_at": time.time(),
+                    # shared=共享 profile（Worker 浏览器未占用）；isolated=回退临时 profile
+                    # 为什么落盘：排查"昵称抓不到"时可直接判断是走了哪条路径
+                    "profile_mode": profile_mode,
                 }
                 (out_dir / "userinfo.json").write_text(
                     json.dumps(result, ensure_ascii=False), encoding="utf-8"
@@ -370,7 +517,8 @@ async def _cmd_info(out_dir: Path) -> int:
                 _set_status(
                     out_dir,
                     state="done",
-                    message=f"logged_in={logged_in}, nick='{raw_nick}', uid='{uid[:8]}', url={cur_url}",
+                    message=f"logged_in={logged_in}, nick='{raw_nick}', uid='{uid[:8]}', "
+                            f"profile={profile_mode}, url={cur_url}",
                 )
                 return 0
             finally:
@@ -378,6 +526,10 @@ async def _cmd_info(out_dir: Path) -> int:
     except Exception as e:  # noqa: BLE001
         _set_status(out_dir, state="error", message=str(e))
         return 1
+    finally:
+        # 隔离 profile 是一次性临时目录，用完即删，避免 %TEMP% 堆积
+        if tmp_profile:
+            shutil.rmtree(tmp_profile, ignore_errors=True)
 
 
 # ============== qr: 启动登录流程 + 截屏二维码 ==============

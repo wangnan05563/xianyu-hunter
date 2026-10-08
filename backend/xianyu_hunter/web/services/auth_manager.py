@@ -86,7 +86,27 @@ class AuthManager:
         # 两个 Chromium 争用同一 user_data_dir → SingletonLock 冲突 → 卡死
         self._refresh_lock = threading.Lock()
         self._refreshing = False
+        # 最近一次 userinfo 刷新结果：供 /api/auth/me 暴露给前端，
+        # 避免 auth_helper 失败时前端只看到空昵称而无任何可排查线索
+        self._last_refresh_error: str = ""
+        self._last_refresh_error_at: float = 0.0
+        self._last_refresh_ok_at: float = 0.0
         self._ensure_out_dir()
+
+    def get_refresh_status(self) -> dict:
+        """返回 userinfo 后台刷新的可观测状态
+
+        state: ok=最近刷新成功 / failed=最近刷新失败 / never=从未成功刷新过
+        """
+        with self._lock:
+            err = self._last_refresh_error
+            err_at = self._last_refresh_error_at
+            ok_at = self._last_refresh_ok_at
+        if ok_at and (not err_at or ok_at >= err_at):
+            return {"state": "ok", "error": "", "at": ok_at}
+        if err_at:
+            return {"state": "failed", "error": err, "at": err_at}
+        return {"state": "never", "error": "", "at": 0.0}
 
     @staticmethod
     def _ensure_out_dir() -> None:
@@ -178,6 +198,9 @@ class AuthManager:
                 with self._lock:
                     self._userinfo = json.loads(_USERINFO_FILE.read_text(encoding="utf-8"))
                     self._userinfo_at = time.time()
+                    self._last_refresh_ok_at = self._userinfo_at
+                    self._last_refresh_error = ""
+                    self._last_refresh_error_at = 0.0
             elif proc.returncode != 0:
                 # 记录失败原因：之前静默吞掉异常，导致 auth_helper 启动失败时
                 # _userinfo 保持旧值（nick=""），前端一直显示"未登录"且无日志可查
@@ -186,10 +209,21 @@ class AuthManager:
                     "auth_helper info 失败 (returncode=%d): %s",
                     proc.returncode, stderr,
                 )
+                self._record_refresh_error(f"auth_helper 退出码 {proc.returncode}: {stderr[:300]}")
+                # 同步写 status.json：打包版排障时用户只能看到这个文件
+                _set_status_file(_OUT_DIR, refresh_error=self._last_refresh_error, refresh_error_at=time.time())
         except subprocess.TimeoutExpired:
             logger.warning("auth_helper info 超时（60s）")
+            self._record_refresh_error("auth_helper info 超时（60s）")
         except Exception as e:
             logger.warning("auth_helper info 异常: %s", e)
+            self._record_refresh_error(f"auth_helper info 异常: {e}")
+
+    def _record_refresh_error(self, message: str) -> None:
+        """记录刷新失败原因（线程安全）"""
+        with self._lock:
+            self._last_refresh_error = message
+            self._last_refresh_error_at = time.time()
 
     def _qr_state_dict(self) -> dict:
         """把内部 _qr_state 序列化为对外字典"""

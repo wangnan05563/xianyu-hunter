@@ -861,4 +861,11 @@ export interface AuthMe {
   local_username?: string
   nickname?: string
   custom_alias?: string
+  // 展示名来源：区分「闲鱼昵称」与「Cookie 账号名兜底」
+  // custom_alias=别名 / users_nickname=库里昵称 / userinfo_nick=浏览器抓取 / cookie_account=Cookie tracknick / user_id=裸 ID
+  display_name_source?: 'custom_alias' | 'users_nickname' | 'userinfo_nick' | 'cookie_account' | 'user_id'
+  // 昵称后台刷新状态：ok=已成功 / failed=刷新失败 / never=从未成功
+  nick_sync_state?: 'ok' | 'failed' | 'never'
+  // nick_sync_state=failed 时的失败原因（后端 auth_helper 报错摘要）
+  nick_sync_error?: string
 }
