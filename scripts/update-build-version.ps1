@@ -63,20 +63,25 @@ $newVersion = "$base.$today.$seq"
 Write-Host "[update-build-version] 新版本号: $newVersion (base=$base, date=$today, seq=$seq)" -ForegroundColor Cyan
 
 # 4. 写回 pyproject.toml 的 version 字段
-$newTomlContent = $tomlContent -replace '(?m)^version\s*=\s*"[^"]+"', "version = `"$newVersion`""
-if ($newTomlContent -eq $tomlContent) {
+# 判定标准是"正则是否命中"，而非"替换前后文本是否变化"：
+# 同日重跑构建时新版本号可能与当前值相同（幂等），此时替换后内容不变属正常情况，
+# 若按文本比较判定会把幂等场景误报为"替换失败"（2026-10-09 实测：counter seq=1、
+# 文件已是 0.4.20261009.2，脚本算出同样版本号后直接 throw 中止构建）
+if ($tomlContent -notmatch '(?m)^version\s*=\s*"[^"]+"') {
     throw "pyproject.toml [project] 段未找到 version 字段，替换失败"
 }
+$newTomlContent = $tomlContent -replace '(?m)^version\s*=\s*"[^"]+"', "version = `"$newVersion`""
 [System.IO.File]::WriteAllText((Resolve-Path $pyprojectPath).Path, $newTomlContent, $utf8NoBom)
 Write-Host "[update-build-version] pyproject.toml version 已更新" -ForegroundColor Green
 
 # 5. 写回 backend/xianyu_hunter/__init__.py 的 __version__
 if (Test-Path $initPath) {
     $initContent = Get-Content $initPath -Raw -Encoding UTF8
-    $newInitContent = $initContent -replace '__version__\s*=\s*"[^"]+"', "__version__ = `"$newVersion`""
-    if ($newInitContent -eq $initContent) {
+    # 与 pyproject 同理：按正则是否命中判定，不按替换前后文本比较（幂等场景内容不变属正常）
+    if ($initContent -notmatch '__version__\s*=\s*"[^"]+"') {
         Write-Host "[WARN] $initPath 中未找到 __version__，跳过同步" -ForegroundColor Yellow
     } else {
+        $newInitContent = $initContent -replace '__version__\s*=\s*"[^"]+"', "__version__ = `"$newVersion`""
         [System.IO.File]::WriteAllText((Resolve-Path $initPath).Path, $newInitContent, $utf8NoBom)
         Write-Host "[update-build-version] $initPath __version__ 已同步" -ForegroundColor Green
     }
