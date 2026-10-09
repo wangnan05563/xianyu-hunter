@@ -13,6 +13,7 @@ r"""PyInstaller 打包入口
 """
 from __future__ import annotations
 
+import argparse
 import ctypes
 import os
 import re
@@ -33,6 +34,43 @@ _SCRIPT_DISPATCH: dict[str, str] = {
     "browser_login": "browser_login.py",
     "auth_helper": "auth_helper.py",
 }
+# 端口清理白名单：仅这些映像名视为"本应用残留实例"允许强杀，
+# 其余进程（用户的其他服务）只告警不杀，避免误杀
+_KILLABLE_IMAGE_NAMES = {"xianyu-hunter.exe", "python.exe", "pythonw.exe"}
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """CLI 参数定义：与开发模式 xianyu_hunter.__main__.py 的 web 命令对齐
+
+    未识别的参数 argparse 会打印 error 并以退出码 2 结束（告警而非静默丢弃）。
+    """
+    parser = argparse.ArgumentParser(
+        prog="xianyu-hunter",
+        description="闲鱼猎人 桌面启动器（打包版入口）",
+    )
+    parser.add_argument(
+        "command", nargs="?", default="web", choices=("web",),
+        help="子命令（当前仅支持 web，缺省即 web）",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）",
+    )
+    parser.add_argument(
+        "--port", type=int, default=8001, help="监听端口（默认 8001）",
+    )
+    parser.add_argument(
+        "--with-scheduler", dest="with_scheduler", action="store_true", default=True,
+        help="同时启动任务调度器与浏览器实例（默认启用）",
+    )
+    parser.add_argument(
+        "--no-with-scheduler", dest="with_scheduler", action="store_false",
+        help="纯 Web 模式：不启动调度器与浏览器实例",
+    )
+    return parser
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return _build_arg_parser().parse_args(argv)
 
 
 def _is_frozen() -> bool:
@@ -107,42 +145,90 @@ def _dispatch_helper_script() -> int | None:
     return 0
 
 
-def _acquire_single_instance() -> bool:
+def _acquire_single_instance(mutex_name: str = "XianyuHunter-Mutex") -> bool:
     """单实例锁：通过 kernel32.CreateMutexW 防止多开
 
     用 ctypes 直接调用 Windows API，避免依赖 pywin32 完整版
     （项目仅安装 pywin32-ctypes，不含 win32event 模块）
+
+    mutex_name 按监听端口区分：默认端口沿用全局锁（双击防多开）；
+    自定义端口用独立锁，允许与默认实例共存（冒烟/多实例验证场景）。
 
     返回 True 表示获取锁成功（首次启动），False 表示已有实例运行
     """
     kernel32 = ctypes.windll.kernel32
     # CreateMutexW(lpMutexAttributes, bInitialOwner, lpName)
     # 返回句柄；GetLastError() == 183 表示已存在同名 Mutex
-    kernel32.CreateMutexW(None, False, "XianyuHunter-Mutex")
+    kernel32.CreateMutexW(None, False, mutex_name)
     return kernel32.GetLastError() != _ERROR_ALREADY_EXISTS
 
 
-def _cleanup_port(port: int = 8001) -> None:
-    """端口清理：杀掉占用目标端口的进程
+def _mutex_name_for_port(port: int) -> str:
+    """单实例锁名：默认端口沿用全局锁（双击防多开）；自定义端口独立锁，允许与默认实例共存"""
+    return "XianyuHunter-Mutex" if port == 8001 else f"XianyuHunter-Mutex-{port}"
 
-    netstat 输出形如：TCP    127.0.0.1:8001      0.0.0.0:0    LISTENING    1234
-    需同时匹配端口号与 LISTENING 状态，避免误杀其他端口的进程
+
+def _get_process_image_name(pid: str) -> str:
+    """tasklist 查询进程映像名（小写）；查询失败返回空串
+
+    显式 errors="replace"：tasklist 输出是 OEM/GBK 编码，本机 Python 若启用
+    UTF-8 模式，text=True 默认解码会抛 UnicodeDecodeError 使 stdout 变 None；
+    映像名本身是 ASCII，乱码替换不影响解析。
     """
     try:
         result = subprocess.run(
-            ["netstat", "-aon"], capture_output=True, text=True, timeout=5
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=5,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return ""
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        # CSV 首列即映像名："xianyu-hunter.exe","1234","Console",...
+        if line.startswith('"'):
+            return line.split('","', 1)[0].lstrip('"').lower()
+    return ""
+
+
+def _cleanup_port(port: int = 8001) -> None:
+    """端口清理：杀掉占用目标端口的残留实例
+
+    netstat 输出形如：TCP    127.0.0.1:8001      0.0.0.0:0    LISTENING    1234
+    需同时匹配端口号与 LISTENING 状态，避免误杀其他端口的进程。
+
+    防误杀（T01676）：杀前用 tasklist 核对进程映像名，仅强杀本应用相关进程
+    （xianyu-hunter.exe / python / pythonw）；其余进程只告警跳过。
+    查询不到映像名（tasklist 异常等）时保持旧行为照杀并打日志，保证端口可用。
+    """
+    try:
+        result = subprocess.run(
+            ["netstat", "-aon"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=5,
         )
     except (subprocess.SubprocessError, FileNotFoundError):
         return
     # 正则匹配：:PORT 任意空白 远程地址 任意空白 LISTENING 任意空白 PID
-    pattern = re.compile(rf":{port}\s+\S+\s+\S+\s+LISTENING\s+(\d+)")
+    # 注意：Windows netstat -aon 的 TCP 行为 4 列数据（local remote state pid），
+    # 旧正则写成 `:PORT \S+ \S+ LISTENING`（5 列）从未匹配成功过——一并修正（T01676）
+    # encoding 见 _get_process_image_name：OEM/GBK 输出在 UTF-8 模式下必须 errors="replace"
+    pattern = re.compile(rf":{port}\s+\S+\s+LISTENING\s+(\d+)")
     killed: set[str] = set()
-    for line in result.stdout.splitlines():
+    for line in (result.stdout or "").splitlines():
         m = pattern.search(line)
         if m:
             pid = m.group(1)
             if pid in killed or pid == str(os.getpid()):
                 continue
+            image = _get_process_image_name(pid)
+            if image and image not in _KILLABLE_IMAGE_NAMES:
+                print(
+                    f"  [WARN] 端口 {port} 被非本应用进程占用："
+                    f"{image} (PID {pid})，跳过清理；如需释放请手动处理"
+                )
+                continue
+            label = f" {image}" if image else ""
+            print(f"  Killing stale process{label} (PID {pid}) on port {port}...")
             try:
                 subprocess.run(
                     ["taskkill", "/F", "/T", "/PID", pid],
@@ -207,7 +293,7 @@ def _try_start_tray(host: str, port: int, on_quit) -> threading.Thread | None:
     return thread
 
 
-def _print_banner(host: str, port: int) -> None:
+def _print_banner(host: str, port: int, with_scheduler: bool = True) -> None:
     """打印启动横幅（控制台模式）
 
     强制 stdout 使用 UTF-8 编码，避免 Windows 控制台 OEM 编码（如 GBK/CP936）下中文乱码。
@@ -219,11 +305,12 @@ def _print_banner(host: str, port: int) -> None:
         sys.stderr.reconfigure(encoding="utf-8")
     except (AttributeError, OSError):
         pass
+    mode = "Web + 调度器（含浏览器）" if with_scheduler else "Web only（纯 Web，不含调度器）"
     print("=" * 40)
     print("  闲鱼猎人 启动中...")
     print("=" * 40)
     print(f"  Web:  http://{host}:{port}/xianyu/")
-    print(f"  Mode: Web + 调度器（含浏览器）")
+    print(f"  Mode: {mode}")
     print(f"  提示: 按 Ctrl+C 停止")
     print("=" * 40)
 
@@ -234,16 +321,28 @@ def main() -> int:
     if dispatched is not None:
         return dispatched
 
-    host = "127.0.0.1"
-    port = 8001
+    args = _parse_args(sys.argv[1:])
+    host = args.host
+    port = args.port
 
     _setup_env()
 
-    if not _acquire_single_instance():
+    # 调度器开关：--no-with-scheduler 覆盖 _setup_env 在打包模式下的默认启用，
+    # 与开发模式 __main__.py web 命令的 XH_WITH_SCHEDULER 口径一致
+    if args.with_scheduler:
+        os.environ["XH_WITH_SCHEDULER"] = "1"
+    else:
+        os.environ.pop("XH_WITH_SCHEDULER", None)
+    # 端口同步到环境变量：内网穿透模块通过 XH_WEB_PORT 感知命令行 --port
+    os.environ["XH_WEB_PORT"] = str(port)
+
+    # 单实例锁：默认端口沿用全局锁（双击防多开）；自定义端口用独立锁，
+    # 允许与默认实例共存（多实例冒烟/验证场景）
+    if not _acquire_single_instance(_mutex_name_for_port(port)):
         print("已在运行，请勿重复启动")
         return 1
 
-    _print_banner(host, port)
+    _print_banner(host, port, args.with_scheduler)
 
     # 端口清理：杀掉残留的旧实例
     print("[1/3] Cleaning up old processes...")
