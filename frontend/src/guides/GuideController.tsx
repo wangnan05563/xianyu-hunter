@@ -10,6 +10,7 @@ import {
 import type { GuideStep, GuidePlayMode } from './types'
 import { findMenuGuide } from './menuGuides'
 import { isGuideDone, markGuideDone } from './guideStorage'
+import { resolveTourTarget } from './target'
 
 /** 自动播放时每步停留时长（毫秒） */
 const AUTO_PLAY_INTERVAL = 3000
@@ -101,24 +102,18 @@ export function GuideController() {
   useEffect(() => stopAuto, [stopAuto])
 
   // 把 GuideStep 配置映射为 antd Tour 步骤
-  // 为什么用 IIFE 赋值 target：让 selector 的类型收窄在闭包内清晰可见，
-  // 直接内联三元会因箭头函数捕获 string|undefined 触发 TS2769
+  // target 必须是**函数**（惰性实时查询），否则路由切换时会拿到已卸载的旧节点，
+  // 导致气泡定位到左上角且被裁切 —— 详见 resolveTourTarget 注释（T01713）
   const tourSteps: TourStepProps[] = useMemo(() => {
     if (!guide) return []
-    return guide.steps.map((s: GuideStep) => {
-      const target = s.selector
-        ? (((() => document.querySelector(s.selector as string) as HTMLElement | null)) as TourStepProps['target'])
-        : undefined
-      return {
-        // target 缺省时为 undefined → antd 居中展示；selector 找不到时 querySelector 返回 null
-        // 同样走向中展示，保证容错
-        target,
-        title: s.title,
-        description: s.description,
-        // 无目标时 antd 默认 center 放置；有目标时缺省 bottom
-        placement: (s.placement ?? 'bottom') as TourStepProps['placement'],
-      }
-    })
+    return guide.steps.map((s: GuideStep) => ({
+      // selector 缺省 → undefined（antd 居中）；查询不到或已脱离文档 → null（同样居中）
+      target: resolveTourTarget(s.selector),
+      title: s.title,
+      description: s.description,
+      // 无目标时 antd 默认 center 放置；有目标时缺省 bottom
+      placement: (s.placement ?? 'bottom') as TourStepProps['placement'],
+    }))
   }, [guide])
 
   const onTourClose = useCallback(() => {

@@ -92,7 +92,7 @@ class FakeBuyer:
         self.calls = []
         self._lock = asyncio.Lock()
 
-    async def buy(self, task_id, item_id, expected_price):
+    async def buy(self, task_id, item_id, expected_price, dry_run=False):
         async with self._lock:
             self.calls.append({"task_id": task_id, "item_id": item_id, "price": expected_price})
         return BuyResult(

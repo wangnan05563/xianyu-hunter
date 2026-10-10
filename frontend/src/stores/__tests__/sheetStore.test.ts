@@ -662,14 +662,14 @@ describe('sheetStore', () => {
   })
 
   describe('hydrate 兼容 circularReplaceEnabled 字段', () => {
-    it('旧版本持久化数据缺失 circularReplaceEnabled 时回退默认 false', () => {
+    it('旧版本持久化数据缺失 circularReplaceEnabled 时回退默认 true（T01724 起默认开启）', () => {
       // 模拟旧版本偏好：仅含 maxSheets（无 circularReplaceEnabled）
       memoryStore.set('xh.sheets.preferences', JSON.stringify({
         __v: 1,
         data: { maxSheets: 4, enableAnimation: true, minimizeInsteadOfClose: false },
       }))
       useSheetStore.getState().hydrate()
-      expect(useSheetStore.getState().preferences.circularReplaceEnabled).toBe(false)
+      expect(useSheetStore.getState().preferences.circularReplaceEnabled).toBe(true)
     })
 
     it('新版本持久化数据保留 circularReplaceEnabled=true', () => {

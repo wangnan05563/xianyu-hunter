@@ -123,7 +123,9 @@ class TestCookieHealthBrowserFallback:
         assert response.status_code == 200
         data = response.json()
         assert data["is_valid"] is False
-        assert "cookie_expired:_m_h5_tk" in data["reason"]
+        # 2026-10-10 起归为 mtop_token_stale：身份层（cookie2/sgcookie）仍在，
+        # 仅 MTOP 运行时令牌待自动恢复，前端显示警告而非"Cookie 异常"
+        assert data["reason"] == "mtop_token_stale"
 
     def test_expired_m5tk_browser_also_expired_returns_invalid(self, tmp_path):
         """浏览器内存中 token 也过期时，应返回 is_valid=False
@@ -149,7 +151,38 @@ class TestCookieHealthBrowserFallback:
         assert response.status_code == 200
         data = response.json()
         assert data["is_valid"] is False
-        assert "cookie_expired:_m_h5_tk" in data["reason"]
+        # 身份层仍在 → mtop_token_stale（同上）
+        assert data["reason"] == "mtop_token_stale"
+
+    def test_expired_m5tk_without_identity_cookies_reports_expired(self, tmp_path):
+        """身份层 Cookie 也缺失时，仍应报 cookie_expired:_m_h5_tk（真正未登录）
+
+        场景：JSON 里只有已过期的 _m_h5_tk，无 cookie2/sgcookie 等 identity Cookie，
+        属于"真正未登录"而非"令牌待恢复"，不应归为 mtop_token_stale。
+        """
+        cookie_json = tmp_path / "cookies_default.json"
+        _write_cookie_json(cookie_json, _make_expired_m5tk())
+
+        mock_container = MagicMock()
+        mock_container.browser = None
+
+        with patch("xianyu_hunter.web.deps.get_container", return_value=mock_container), \
+             patch(
+                 "xianyu_hunter.web.services.cookie_status._load_cookie_data_for_health",
+                 return_value=(
+                     {"method": "test", "exported_at": 0},
+                     [
+                         {"name": "_m_h5_tk", "value": _make_expired_m5tk(), "domain": ".goofish.com", "path": "/", "expires": -1},
+                         {"name": "_m_h5_tk_enc", "value": "abc123enc456def789", "domain": ".goofish.com", "path": "/", "expires": -1},
+                     ],
+                 ),
+             ):
+            response = client.get("/api/auth/cookie/health", cookies=_AUTH_COOKIE)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["is_valid"] is False
+        assert data["reason"] == "cookie_expired:_m_h5_tk"
 
     def test_valid_m5tk_no_browser_refresh(self, tmp_path):
         """JSON 中 _m_h5_tk 未过期时，不应触发浏览器内存兜底

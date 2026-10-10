@@ -187,8 +187,24 @@ def _export_cookies_to_json(cookies: list[dict], method: str) -> None:
         print(f"[auth_helper] Cookie JSON 导出失败: {e}", file=sys.stderr)
 
 
+# 闲鱼个人页/我的淘宝页在「未登录态」会渲染的占位欢迎语与按钮文本（T01714）
+# 为什么集中成常量：原先散落 5 处且清单不一致 —— myTaobao 兜底分支漏了
+# "Hi! 你好"，导致未登录态抓到的占位文案被当 成真实昵称写进 userinfo.json，
+# 形成「status=done、logged_in=True 但 nick 是占位语」的假成功。
+_PLACEHOLDER_NICKS = {
+    "登录", "登錄", "Login", "Sign in", "立即登录",
+    "Hi! 你好", "Hi！你好", "你好", "Hi", "Hi!",
+}
+
+
 def _set_status(out_dir: Path, **kw) -> None:
-    """原子写入 status.json；web 后端轮询此文件"""
+    """原子写入 status.json；web 后端轮询此文件
+
+    error 状态额外持久化 last_error / last_error_at（T01714）：
+    state/message 会被下一轮运行（starting → done）覆盖，导致失败原因丢失；
+    last_error 独立保留，即使子进程已退出、stderr 未被父进程捕获，
+    排障时也能从此字段回溯最近一次失败原因。
+    """
     s = {}
     p = out_dir / "status.json"
     if p.exists():
@@ -196,6 +212,9 @@ def _set_status(out_dir: Path, **kw) -> None:
             s = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             s = {}
+    if kw.get("state") == "error" and kw.get("message"):
+        s["last_error"] = str(kw["message"])
+        s["last_error_at"] = time.time()
     s.update(kw)
     s["ts"] = time.time()
     p.write_text(json.dumps(s, ensure_ascii=False), encoding="utf-8")
@@ -359,10 +378,7 @@ async def _cmd_info(out_dir: Path) -> int:
                 # 不在登录页 URL → SPA 还在渲染中，再等 5s 重抓
                 # 为什么不再等更久：8s 是单次抓取上限场景下剩余预算，超过则进入
                 # 下一阶段（淘宝 myTaobao.htm / unb 兜底）
-                _is_invalid_first = (not raw_nick) or (raw_nick in (
-                    "登录", "登錄", "Login", "Sign in", "立即登录",
-                    "Hi! 你好", "Hi！你好", "你好", "Hi", "Hi!",
-                ))
+                _is_invalid_first = (not raw_nick) or (raw_nick in _PLACEHOLDER_NICKS)
                 if _is_invalid_first and not is_login_url:
                     try:
                         # 优先等昵称元素挂载（比固定 sleep 更精准），最长 5s
@@ -401,12 +417,9 @@ async def _cmd_info(out_dir: Path) -> int:
                         }"""
                     )
                     retry_nick = (info.get("nick") or "").strip()
-                    if retry_nick and retry_nick not in (
-                        "登录", "登錄", "Login", "Sign in", "立即登录",
-                        "Hi! 你好", "Hi！你好", "你好", "Hi", "Hi!",
-                    ):
+                    if retry_nick and retry_nick not in _PLACEHOLDER_NICKS:
                         raw_nick = retry_nick
-                if raw_nick in ("登录", "登錄", "Login", "Sign in", "立即登录", "Hi! 你好", "Hi！你好", "你好", ""):
+                if raw_nick in _PLACEHOLDER_NICKS or raw_nick == "":
                     raw_nick = ""
                 # 3) cookie 信息
                 # 关键身份 cookie（unb/cookie2/_tb_token_）实际存储在 .taobao.com 域名下，
@@ -488,7 +501,7 @@ async def _cmd_info(out_dir: Path) -> int:
                               return '';
                             }"""
                         )
-                        if info2 and info2 not in ("登录", "登錄", "Login", "Sign in"):
+                        if info2 and info2 not in _PLACEHOLDER_NICKS:
                             raw_nick = info2
                     except Exception:
                         pass
@@ -524,6 +537,10 @@ async def _cmd_info(out_dir: Path) -> int:
             finally:
                 await ctx.close()
     except Exception as e:  # noqa: BLE001
+        # T01714：异常必须同步打到 stderr —— 调用方（auth_manager）靠 proc.stderr
+        # 记录失败原因，只写 status.json 会被下一轮覆盖，/me 只能看到空的
+        # "auth_helper 退出码 1: "，排障无线索。
+        print(f"[auth_helper] info 失败: {e}", file=sys.stderr)
         _set_status(out_dir, state="error", message=str(e))
         return 1
     finally:
@@ -706,6 +723,8 @@ async def _cmd_qr(out_dir: Path, timeout: int) -> int:
             finally:
                 await ctx.close()
     except Exception as e:  # noqa: BLE001
+        # T01714：同 _cmd_info —— 异常必须可见于 stderr，供父进程记录
+        print(f"[auth_helper] qr 失败: {e}", file=sys.stderr)
         _set_status(out_dir, state="error", message=str(e))
         return 1
 
@@ -753,7 +772,7 @@ async def _fetch_userinfo_into(ctx, out_dir: Path) -> None:
                 uid = c["value"]
                 break
         nick = (info.get("nick") or "").strip()
-        if nick in ("登录", "登錄", "Login", "Sign in", "立即登录", "Hi! 你好", "Hi！你好", "你好", ""):
+        if nick in _PLACEHOLDER_NICKS or nick == "":
             nick = ""
         # 兜底：DOM 抓取失败时用 unb 后4位生成可读昵称
         if not nick and uid:

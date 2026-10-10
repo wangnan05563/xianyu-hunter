@@ -37,7 +37,9 @@ export interface SheetPreferences {
   /**
    * 循环替换开关：开启后，达到 maxSheets 上限时会自动淘汰最旧的非激活 sheet。
    * 关闭时，超限返回 { ok: false, reason: 'limit' } 由调用方处理。
-   * 默认 false（保守默认：升级后行为不变，用户主动开启）。
+   * 默认 true（T01724 修复：默认 false 时用户开满 5 个 sheet 后，
+   * useSheetSync 会把后续一切导航强制顶回激活 sheet 的路径——菜单点击无效、
+   * sheets 持久化后重启仍满栈，导航持续失效。循环替换带通知 + 撤销按钮，体验完整）。
    */
   circularReplaceEnabled: boolean
 }
@@ -50,7 +52,7 @@ export const DEFAULT_PREFERENCES: SheetPreferences = {
   doubleClickInterval: 350,
   thumbnailMode: false,
   thumbnailTooltipEnabled: true,
-  circularReplaceEnabled: false,
+  circularReplaceEnabled: true,
 }
 
 /**

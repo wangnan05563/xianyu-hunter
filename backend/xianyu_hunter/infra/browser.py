@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess as sp
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,27 @@ _EDGE_PATHS = [
 ]
 # CDP 调试端口
 _CDP_PORT = 9222
+
+
+def is_expired_cookie(cookie: dict, now: float | None = None) -> bool:
+    """判断单条 Cookie 是否已过期（session cookie 永不过期）
+
+    为什么需要：Chromium CookieMonster 对过期 Cookie 采用惰性回收，
+    context.cookies()/get_cookies() 可能返回「已过期但尚未被 GC 清掉」的条目；
+    而 add_cookies 注入 expires < now 的 Cookie 时 Chromium 会**直接丢弃**。
+    两侧都需要显式过滤，否则会出现：
+    - 注入侧：过期 Cookie 永远"注入后仍缺失"，触发无意义重试循环（T01717）；
+    - 回写侧：过期 Cookie 从浏览器内存"复活"回 JSON 档案，污染后续所有注入源。
+
+    expires <= 0 / 缺失 / 非法值均视为 session cookie（不过期）。
+    """
+    if now is None:
+        now = time.time()
+    try:
+        expires = float(cookie.get("expires", -1) or -1)
+    except (TypeError, ValueError):
+        return False
+    return expires > 0 and expires < now
 
 
 class BrowserManager:
@@ -459,6 +481,20 @@ class BrowserManager:
             return False
         if not cookies:
             return False
+        # T01717：Chromium 会直接丢弃 expires < now 的 Cookie，
+        # 不过滤会出现"注入后仍缺失"误报 + 显式重试也必然失败的死循环
+        expired_names = sorted(
+            {str(c.get("name") or "") for c in cookies if is_expired_cookie(c)}
+        )
+        if expired_names:
+            logger.warning(
+                "add_cookies: 跳过 {} 个已过期 Cookie（Chromium 拒收，注入无意义）: {}",
+                len(expired_names), expired_names,
+            )
+            cookies = [c for c in cookies if not is_expired_cookie(c)]
+            if not cookies:
+                logger.warning("add_cookies: 过滤后无有效 Cookie，跳过本次注入")
+                return False
         try:
             await self._context.add_cookies(cookies)
             injected = await self._context.cookies()

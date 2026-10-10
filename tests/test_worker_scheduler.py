@@ -97,7 +97,7 @@ class FakeBuyer:
         self.order_no = order_no
         self._lock = asyncio.Lock()
 
-    async def buy(self, task_id: str, item_id: str, expected_price: float) -> BuyResult:
+    async def buy(self, task_id: str, item_id: str, expected_price: float, dry_run: bool = False) -> BuyResult:
         async with self._lock:
             self.calls.append({"task_id": task_id, "item_id": item_id, "price": expected_price})
         order = OrderSnapshot(item_id=item_id, order_no=self.order_no, price=expected_price)

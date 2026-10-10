@@ -8,6 +8,9 @@ replacement injection before search/detail/buy flows rely on it.
 from __future__ import annotations
 
 import logging
+import time
+
+from xianyu_hunter.infra.browser import is_expired_cookie
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +179,26 @@ async def sync_browser_cookies_to_store_after_renew(container, log_prefix: str =
         cookies = await container.browser.get_cookies(["goofish.com", "taobao.com"])
         if not cookies:
             return
+        # T01717：Chromium 对过期 Cookie 惰性回收，get_cookies 可能返回
+        # 「已过期但尚未被 GC 清掉」的条目（实测过期 15 天的 unb 仍在内存）。
+        # 若不过滤：
+        #   1) 过期 Cookie 被回写档案 → add_cookies 注入被 Chromium 拒收 →
+        #      实时搜索永远报「unb 已注入浏览器但内存中无法确认」；
+        #   2) 覆盖写会把登录刚写入的新鲜档案整体回滚成浏览器的旧状态。
+        # 因此：过期 Cookie 不回写；且改用 merge（同名覆盖、其余保留），
+        # 续期只应更新 token 类 Cookie，不应冲掉登录写入的身份 Cookie。
+        expired_names = sorted(
+            {str(c.get("name") or "") for c in cookies if is_expired_cookie(c)}
+        )
+        if expired_names:
+            logger.warning(
+                "%s：过滤 %d 个已过期 Cookie 不回写（防止过期 Cookie 复活）: %s",
+                log_prefix, len(expired_names), expired_names,
+            )
+            cookies = [c for c in cookies if not is_expired_cookie(c)]
+            if not cookies:
+                logger.warning("%s：过滤后无可回写 Cookie，跳过本次回写", log_prefix)
+                return
         from xianyu_hunter.web.services.cookie_store import get_cookie_store
         # 多用户隔离：回写到最近活跃用户的 cookie 文件
         try:
@@ -183,7 +206,7 @@ async def sync_browser_cookies_to_store_after_renew(container, log_prefix: str =
             renew_user_id = get_user_manager().get_active_user_id()
         except Exception:
             renew_user_id = "default"
-        get_cookie_store().export_cookies(cookies, method="renew", user_id=renew_user_id)
+        get_cookie_store().merge_cookies(cookies, method="renew", user_id=renew_user_id)
         # 同步层状态：让 CookieRotator 反映续期后的真实状态
         from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
         sync_cookie_layers_from_json()

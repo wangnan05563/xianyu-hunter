@@ -142,7 +142,7 @@ async function buildCascadeHtml(
     const items = preview.relations
       .map((r) => `<li>${r.action === 'cascade' ? '🗑' : '✂'} ${r.description}</li>`)
       .join('')
-    return `<p style="color:#faad14;margin-bottom:4px">⚠ 关联影响：共 ${preview.total_affected} 条关联数据将被处理</p><ul style="margin:0;padding-left:20px;font-size:12px;color:#666">${items}</ul>`
+    return `<p style="color:#faad14;margin-bottom:4px">⚠ 关联影响：共 ${preview.total_affected} 条关联数据将被处理</p><ul style="margin:0;padding-left:20px;font-size:12px;color:var(--xh-text-secondary)">${items}</ul>`
   } catch {
     return '<p style="color:#999">级联预览加载失败</p>'
   }
@@ -390,7 +390,7 @@ export default function DatabaseAdmin() {
       content: (
         <div>
           <p>主键：<code>{formatCell(pkValue)}</code></p>
-          <div dangerouslySetInnerHTML={{ __html: cascadeHtml }} style={{ marginBottom: 12, padding: 8, background: '#fafafa', borderRadius: 6 }} />
+          <div dangerouslySetInnerHTML={{ __html: cascadeHtml }} style={{ marginBottom: 12, padding: 8, background: 'var(--xh-bg-spotlight)', borderRadius: 6 }} />
           <p>请输入 <b>{CONFIRM_TOKEN}</b> 以确认（区分大小写）：</p>
           <Input.Password
             placeholder={CONFIRM_TOKEN}
@@ -422,7 +422,7 @@ export default function DatabaseAdmin() {
       content: (
         <div>
           <p>将删除当前选中的 <b>{selectedRowKeys.length}</b> 行记录，操作不可恢复。</p>
-          <div dangerouslySetInnerHTML={{ __html: cascadeHtml }} style={{ marginBottom: 12, padding: 8, background: '#fafafa', borderRadius: 6 }} />
+          <div dangerouslySetInnerHTML={{ __html: cascadeHtml }} style={{ marginBottom: 12, padding: 8, background: 'var(--xh-bg-spotlight)', borderRadius: 6 }} />
           <p>请输入 <b>{CONFIRM_TOKEN}</b> 以确认（区分大小写）：</p>
           <Input.Password
             placeholder={CONFIRM_TOKEN}
@@ -610,7 +610,7 @@ export default function DatabaseAdmin() {
                 textAlign: 'left',
                 padding: '10px 16px',
                 cursor: 'pointer',
-                background: activeTable === t.name ? '#fff5e6' : 'transparent',
+                background: activeTable === t.name ? 'var(--xh-bg-warning)' : 'transparent',
                 borderLeft: activeTable === t.name ? '3px solid #FF6200' : '3px solid transparent',
                 border: 'none',
                 borderBottom: '1px solid var(--xh-border)',
