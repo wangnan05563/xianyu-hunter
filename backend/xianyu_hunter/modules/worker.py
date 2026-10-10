@@ -1023,12 +1023,22 @@ class TaskWorker:
             )
             return None
 
+        # FR-C3-1 演练模式：任务级 dry_run 开关下沉到 Buyer，
+        # 浏览器链路走到订单确认页即硬中止（FR-C3-2），不产生真实订单
+        dry_run = bool(getattr(self.task, "dry_run", False))
         buy_result = await self.buyer.buy(  # type: ignore[misc]
             task_id=self.task.id,
             item_id=detail.id,
             expected_price=detail.price,
+            dry_run=dry_run,
         )
         buy_results.append(buy_result)
+        if buy_result.outcome == BuyOutcome.DRY_RUN_STOPPED:
+            # 演练不计入 bought/failed 真实统计（PRD：演练与真实记录区分）
+            logger.info(
+                f"[Task {self.task.id}] 演练中止 {detail.id}：订单确认页已打开，未产生真实订单"
+            )
+            return None
         if buy_result.outcome == BuyOutcome.SUCCESS:
             stats.bought += 1
             self._last_buy_at = time.monotonic()

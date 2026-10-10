@@ -336,6 +336,8 @@ class Container:
             # 捡漏价格触发开关：DB 存 INTEGER(0/1)，bool() 转换
             notify_bargain_only=bool(raw.get("notify_bargain_only") or 0),
             auto_buy_bargain_only=bool(raw.get("auto_buy_bargain_only") or 0),
+            # 演练模式：迁移前旧行可能为 None，or 0 兜底
+            dry_run=bool(raw.get("dry_run") or 0),
             eval_threshold=raw.get("eval_threshold"),
             ai_prompt=raw.get("ai_prompt"),
             search_config=task_search_override,

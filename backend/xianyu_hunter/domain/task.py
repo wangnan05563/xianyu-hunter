@@ -67,6 +67,9 @@ class Task:
     # 为什么独立于 eval_threshold：eval_threshold 是高频使用的单字段，单独存储便于 SQL 查询与索引；
     # eval_config 容纳低频覆盖字段，dict 灵活扩展无需频繁改 schema
     eval_config: dict[str, Any] | None = None
+    # 演练模式（PRD FR-C3-1）：True 时抢单链路走到订单确认页即硬中止，不产生真实订单。
+    # 任务级配置：与 auto_buy_bargain_only 同层的独立开关，便于改完策略先演练再实盘
+    dry_run: bool = False
     status: TaskStatus = TaskStatus.RUNNING
     # 统一使用 UTC，与 infra/db_models._utcnow 保持一致
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

@@ -94,6 +94,7 @@ class Buyer:
         item_id: str,
         expected_price: float,
         page: Page | None = None,
+        dry_run: bool = False,
     ) -> BuyResult:
         """抢单入口
 
@@ -102,17 +103,20 @@ class Buyer:
             item_id: 目标商品 ID
             expected_price: 期望拍下价格（用于价格容差校验）
             page: 可选 Playwright page（测试注入用）
+            dry_run: 演练模式（PRD FR-C3-1/FR-C3-2）：走完整浏览器链路到订单确认页，
+                提交订单前硬中止，不产生真实订单、不写 orders 表
         """
         # 1+2. 幂等检查（内存 + DB）均在锁内执行，消除 TOCTOU 竞态
+        # 演练模式跳过幂等：演练可对同一商品反复执行（不产生订单，幂等记录不适用）
         key = (task_id, item_id)
 
         async with self._lock:
-            if key in self._task_item_set:
+            if not dry_run and key in self._task_item_set:
                 logger.info(f"[Buyer] 任务 {task_id} 内已下过 {item_id}，幂等跳过")
                 return BuyResult(outcome=BuyOutcome.SKIPPED_DUPLICATE, error="in-process duplicate")
 
             # DB 幂等：跨进程重启后仍能识别
-            existing = self.repo.find_order_by_task_item(task_id, item_id)
+            existing = None if dry_run else self.repo.find_order_by_task_item(task_id, item_id)
             if existing:
                 # set 语义用 LRUDict[key]=None 模拟（值无意义）
                 self._task_item_set[key] = None
@@ -148,12 +152,30 @@ class Buyer:
             # 4. 实际落单流程（90 秒总体超时：防止浏览器操作无限阻塞）
             try:
                 order = await asyncio.wait_for(
-                    self._do_buy(item_id, expected_price, page),
+                    self._do_buy(item_id, expected_price, page, dry_run=dry_run),
                     timeout=90.0,
                 )
+                # 演练中止：_do_buy 返回 None 表示已在中止点安全停下（FR-C3-2）。
+                # 不写 orders 表、不置幂等标记——演练可对同一商品重复执行
+                if dry_run:
+                    self._record_dry_run_event(task_id, item_id, expected_price)
+                    return BuyResult(
+                        outcome=BuyOutcome.DRY_RUN_STOPPED,
+                        order=OrderSnapshot(
+                            item_id=item_id,
+                            order_no="",
+                            price=expected_price,
+                            status=OrderStatus.PENDING_PAY,
+                        ),
+                        error="dry_run: 已到订单确认页，提交订单前硬中止（未产生真实订单）",
+                    )
                 # 补全 task_id 关联（_do_buy 不接收 task_id，在调用方补充）
                 order["task_id"] = task_id
             except BuyerError as e:
+                # 演练异常不写真实失败订单（orders 表只承载真实下单结果），仅记日志
+                if dry_run:
+                    logger.warning(f"[Buyer] 演练异常 task={task_id} item={item_id}: {e}")
+                    return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 异常: {e}")
                 # 记录失败订单（便于后续分析）+ 发布事件
                 self._save_failed_order(task_id, item_id, str(e))
                 self._publish_buy_failed(task_id, item_id, str(e))
@@ -163,6 +185,8 @@ class Buyer:
                 # 不走通用 Exception 分支：错误信息需对用户明确指出"超时"而非"未知异常"
                 msg = "浏览器自动化流程超时（90秒），请检查闲鱼登录状态后重试"
                 logger.warning(f"[Buyer] 落单超时 task={task_id} item={item_id}")
+                if dry_run:
+                    return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 超时: {msg}")
                 self._save_failed_order(task_id, item_id, msg)
                 self._publish_buy_failed(task_id, item_id, msg)
                 return BuyResult(outcome=BuyOutcome.FAILED, error=msg)
@@ -179,6 +203,9 @@ class Buyer:
                     })
                 except Exception:
                     pass
+                if dry_run:
+                    # 演练异常不写真实失败订单：orders 表只承载真实下单结果
+                    return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 异常: {e}")
                 self._save_failed_order(task_id, item_id, f"unexpected: {e}")
                 self._publish_buy_failed(task_id, item_id, str(e))
                 return BuyResult(outcome=BuyOutcome.FAILED, error=str(e))
@@ -198,6 +225,20 @@ class Buyer:
                 ),
             )
 
+    def _record_dry_run_event(self, task_id: str, item_id: str, expected_price: float) -> None:
+        """演练动作写入事件时间线（FR-C3-3 报告的数据源之一；失败不阻断演练）"""
+        try:
+            self.repo.save_event({
+                "type": "task.buy_dry_run",
+                "task_id": task_id,
+                "stage": "buy_dry_run",
+                "level": "info",
+                "message": f"演练中止：{item_id} 已到订单确认页，提交订单前硬停止（未产生真实订单）",
+                "payload": f'{{"item_id": "{item_id}", "expected_price": {expected_price}, "dry_run": true}}',
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Buyer] 演练事件写入失败（不影响演练结果）: %s", e)
+
     # ============== 浏览器操作 ==============
 
     async def _do_buy(
@@ -205,10 +246,13 @@ class Buyer:
         item_id: str,
         expected_price: float,
         page: Page | None = None,
-    ) -> dict:
+        dry_run: bool = False,
+    ) -> dict | None:
         """落单全流程：导航→点立即购买→点提交→提取订单号
 
-        返回: dict (含 id / order_no / price / status 等字段，可直接 upsert)
+        dry_run=True 时在订单确认页（提交订单前）硬中止并返回 None（FR-C3-2）。
+
+        返回: dict (含 id / order_no / price / status 等字段，可直接 upsert)；演练中止返回 None
         Raises: ButtonNotFoundError / OutOfStockError / PriceMismatchError
 
         重构说明：主流程下沉到 _execute_buy_flow，本方法仅负责 page 生命周期管理，
@@ -218,7 +262,7 @@ class Buyer:
         if own_page:
             page = await self._create_owned_page()
         try:
-            return await self._execute_buy_flow(page, item_id, expected_price)
+            return await self._execute_buy_flow(page, item_id, expected_price, dry_run=dry_run)
         finally:
             if own_page and page is not None:
                 await self._close_owned_page(page)
@@ -243,9 +287,13 @@ class Buyer:
             pass
 
     async def _execute_buy_flow(
-        self, page: Page, item_id: str, expected_price: float
-    ) -> dict:
-        """落单主流程：导航→点击立即购买→点击提交→提取订单号→价格校验"""
+        self, page: Page, item_id: str, expected_price: float, dry_run: bool = False
+    ) -> dict | None:
+        """落单主流程：导航→点击立即购买→点击提交→提取订单号→价格校验
+
+        dry_run=True 时在步骤 2.5（订单确认页已打开）后硬中止返回 None：
+        支付页打开前的最后安全中止点，后续步骤（提交订单/支付跳转）均不执行。
+        """
         # 1. 导航到详情页
         logger.info(f"[Buyer] 步骤1/4 导航详情页 item={item_id}")
         await self._navigate(page, item_id)
@@ -271,6 +319,13 @@ class Buyer:
         # 未登录时会跳转到登录页，需检测并给出友好错误
         logger.info(f"[Buyer] 步骤2.5/4 等待订单确认页 item={item_id}")
         await self._wait_for_order_page(page, item_id=item_id)
+
+        # FR-C3-2 硬中止点：订单确认页已打开，这是支付动作前的最后一步。
+        # 演练在此停止——后续「提交订单/支付跳转」步骤标记 skipped 不执行，
+        # 保证演练全程 0 真实订单（PRD 验收：订单接口调用断言）
+        if dry_run:
+            logger.info(f"[Buyer] 演练中止：订单确认页已打开，提交订单前硬停止 item={item_id}")
+            return None
 
         # 3. 等待并点击"提交订单/确认购买"
         logger.info(f"[Buyer] 步骤3/4 点击提交订单/确认购买 item={item_id}")

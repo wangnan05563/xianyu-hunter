@@ -76,6 +76,8 @@ class TaskRow(Base):
     # 自动下单触发开关：True=仅对价格≤捡漏价(P10)的商品执行自动下单
     # 与 notify_bargain_only 独立：通知与下单是两条触发链，可分别配置
     auto_buy_bargain_only: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # 演练模式（PRD FR-C3-1）：True 时抢单在支付页打开前硬中止，不产生真实订单
+    dry_run: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     ai_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     # nullable=True：None 表示沿用全局 eval.pass_score，任务级覆盖时才写入具体值
     eval_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -1044,6 +1046,15 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
             conn.commit()
     except Exception as e:
         logger.exception("迁移 tasks.auto_buy_bargain_only 失败: {}", e)
+
+    # 演练模式开关（PRD FR-C3-1）：与 auto_buy_bargain_only 同模式迁移
+    try:
+        _migrate_add_column(engine, "tasks", "dry_run", "INTEGER NOT NULL DEFAULT 0")
+        with engine.connect() as conn:
+            conn.execute(sa_text("UPDATE tasks SET dry_run=0 WHERE dry_run IS NULL"))
+            conn.commit()
+    except Exception as e:
+        logger.exception("迁移 tasks.dry_run 失败: {}", e)
 
     # 性能优化：补建 events / orders 表关键联合索引
     # 为什么需要：JMeter 压测（100 并发）显示 stats_today / business_kpi / trend 接口

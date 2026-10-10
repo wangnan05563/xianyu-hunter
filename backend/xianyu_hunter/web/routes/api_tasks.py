@@ -77,6 +77,8 @@ class TaskCreate(BaseModel):
     # 权威源字段：自动下单触发开关，启用后仅对价格≤捡漏价(P10)的商品执行自动下单
     # mode=notify 时无意义（仅通知模式不下单）；mode=auto/semi_auto/confirm 时生效
     auto_buy_bargain_only: bool = Field(False, description="权威源：仅对价格≤捡漏价的商品执行自动下单")
+    # 演练模式（PRD FR-C3-1）：True 时抢单在支付页打开前硬中止，不产生真实订单
+    dry_run: bool = Field(False, description="演练模式：抢单链路完整走一遍但下单前硬中止")
     # 任务级配置覆盖（JSON dict）：为空表示沿用全局配置
     # 为什么用 dict 而非结构化模型：任务级覆盖字段稀疏，dict 灵活且与前端表单直通；
     # 合并逻辑在 startup.py 中实现（任务级覆盖全局）
@@ -110,6 +112,8 @@ class TaskUpdate(BaseModel):
     # 权威源字段：与 TaskCreate 对齐，PATCH 三态语义（未传=不更新，传 bool=更新）
     notify_bargain_only: bool | None = Field(None, description="权威源：仅对价格≤捡漏价的商品触发通知")
     auto_buy_bargain_only: bool | None = Field(None, description="权威源：仅对价格≤捡漏价的商品执行自动下单")
+    # 演练模式：PATCH 三态语义（未传=不更新，传 bool=更新）
+    dry_run: bool | None = Field(None, description="演练模式：抢单链路完整走一遍但下单前硬中止")
     # 任务级配置覆盖：传 None 清除覆盖，传 dict 设置覆盖
     search_config: dict[str, Any] | None = None
     price_config: dict[str, Any] | None = None
@@ -193,6 +197,7 @@ def create_task(
         # 捡漏价格触发开关：bool→int 存储（与 use_cron 一致）
         "notify_bargain_only": 1 if body.notify_bargain_only else 0,
         "auto_buy_bargain_only": 1 if body.auto_buy_bargain_only else 0,
+        "dry_run": 1 if body.dry_run else 0,
         # 任务级配置覆盖：JSON 序列化存 DB（None 或空 dict 表示沿用全局）
         "search_config": json.dumps(body.search_config, ensure_ascii=False) if body.search_config else None,
         "price_config": json.dumps(body.price_config, ensure_ascii=False) if body.price_config else None,
@@ -272,10 +277,10 @@ def _drop_null_nullable_core_fields(updates: dict[str, Any]) -> None:
 def _convert_bool_fields_to_int(updates: dict[str, Any]) -> None:
     """bool 字段转 INTEGER 存储（DB schema 与 use_cron 一致用 0/1）
 
-    覆盖字段：use_cron / notify_bargain_only / auto_buy_bargain_only
-    为什么统一处理：3 个字段都是 bool→int 转换，提取避免重复 if
+    覆盖字段：use_cron / notify_bargain_only / auto_buy_bargain_only / dry_run
+    为什么统一处理：4 个字段都是 bool→int 转换，提取避免重复 if
     """
-    for field in ("use_cron", "notify_bargain_only", "auto_buy_bargain_only"):
+    for field in ("use_cron", "notify_bargain_only", "auto_buy_bargain_only", "dry_run"):
         if field in updates and updates[field] is not None:
             updates[field] = 1 if updates[field] else 0
 
@@ -306,6 +311,12 @@ def update_task(
     # 这解决了前端"清除覆盖"时 null 被跳过导致旧值保留的 bug
     updates = _normalize_task_updates(body.model_dump(exclude_unset=True))
     t.update(updates)
+    # _row_to_dict 会把 JSON 列反序列化为 list（exclude_words/search_filters 等），
+    # 而 upsert_task 直接绑定 dict 值到 SQLite 会报 "type 'list' is not supported"，
+    # 因此写回前必须重新序列化（既有缺陷，PATCH 空列表任务时必现）
+    for f in ("exclude_words", "search_filters", "notifier_channels"):
+        if isinstance(t.get(f), (list, dict)):
+            t[f] = json.dumps(t[f], ensure_ascii=False)
     container.repo.upsert_task(t)
     return {"ok": True, "task": t}
 

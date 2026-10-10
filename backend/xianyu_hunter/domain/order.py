@@ -35,6 +35,9 @@ class BuyOutcome(str, Enum):
     SUCCESS = "success"            # 落单成功（待支付）
     SKIPPED_DUPLICATE = "skipped_duplicate"  # 同任务内已下过单，幂等跳过
     FAILED = "failed"              # 落单失败（按钮找不到/库存不足/价格变动等）
+    # 演练中止（PRD FR-C3-2）：订单确认页已打开（支付页打开前）硬中止，
+    # 未创建真实订单。与 FAILED 区分：演练是预期行为，不应计入失败统计
+    DRY_RUN_STOPPED = "dry_run_stopped"
 
 
 @dataclass
