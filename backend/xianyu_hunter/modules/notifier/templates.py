@@ -224,6 +224,8 @@ def render(event: Event) -> tuple[str, str]:
     if event.type == EventType.BUY_SUCCEEDED:
         return _order_placed(event)
     if event.type == EventType.PRICE_DROPPED:
+        if (event.payload or {}).get("summary"):
+            return _price_dropped_summary(event)
         return _price_dropped(event)
     if event.type == EventType.TASK_ERROR:
         return _task_error(event)
@@ -268,6 +270,36 @@ def _price_dropped(event: Event) -> tuple[str, str]:
         body_lines.append(
             f"[📱 打开移动端商品页]({_get_web_base_url()}/xianyu/m/items/)"
         )
+    body_lines.append(f"\n<font color=\"#999999\">{SEP}_系统自动发送_</font>")
+    return head, "\n".join(line for line in body_lines if line)
+
+
+def _price_dropped_summary(event: Event) -> tuple[str, str]:
+    """降价汇总模板（PRD FR-F1-5）：单轮多条降价合并为一条推送
+
+    payload（price_watch._emit_drop_summary 构造）：
+    {summary: True, drops: [{item_title, item_id, new_price, prev_min_price, drop_pct}], count}
+    """
+    p = event.payload or {}
+    drops = p.get("drops") or []
+    count = p.get("count") or len(drops)
+    top = drops[0] if drops else {}
+    top_pct = f"{float(top.get('drop_pct', 0)) * 100:.1f}%" if top else "—"
+
+    head = f"[降价汇总] {count} 个商品降价（最大 {top_pct}）"
+    body_lines = [
+        f"# 📉 降价汇总  {count} 个商品",
+        f"最大降幅 <font color=\"#F5222D\">{top_pct}</font>，按降幅排序：",
+        "",
+    ]
+    for d in drops[:8]:
+        name = _format_title(d.get("item_title"), d.get("item_id"))
+        body_lines.append(
+            f"- {name}：<font color=\"#F5222D\">**{_format_price(d.get('new_price'))}**</font>"
+            f"（-{float(d.get('drop_pct', 0)) * 100:.1f}%）"
+        )
+    if count > len(drops[:8]):
+        body_lines.append(f"- …等共 {count} 条")
     body_lines.append(f"\n<font color=\"#999999\">{SEP}_系统自动发送_</font>")
     return head, "\n".join(line for line in body_lines if line)
 

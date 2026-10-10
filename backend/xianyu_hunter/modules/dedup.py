@@ -20,8 +20,11 @@ class ItemDedup:
     只返回当前任务尚未关联过的商品。
     """
 
-    def __init__(self, repo: Repository):
+    def __init__(self, repo: Repository, bus=None):
         self.repo = repo
+        # EventBus 引用：降价检测（price_watch）需要发布 PRICE_DROPPED 到通知渠道；
+        # None 时降级为仅写事件时间线（测试场景）
+        self.bus = bus
 
     def filter_new(self, items: list[ItemSummary], task_id: str) -> list[ItemSummary]:
         """过滤出当前任务尚未处理过的商品
@@ -61,13 +64,13 @@ class ItemDedup:
             for it in items
         ]
         written = self.repo.batch_upsert_items(dicts)
-        # 价格快照落库 + 降价检测（PRD FR-F1-1/FR-F1-3，source=collect）：
-        # observe_prices 内部完成「旧最低价基线 → 写快照（同值去重）→ 降价检测三路通知」，
+        # 价格快照落库 + 降价检测（PRD FR-F1-1/FR-F1-3，source=collect）。
+        # FR-F1-5 冷启动抑制由 observe_prices 内部自动判定（全批无快照历史即首轮建快照），
         # 任何异常不阻断商品落库主流程
         try:
             from xianyu_hunter.modules.price_watch import observe_prices
 
-            observe_prices(self.repo, None, dicts, "collect", task_id=task_id)
+            observe_prices(self.repo, self.bus, dicts, "collect", task_id=task_id)
         except Exception as e:  # noqa: BLE001
             import logging
             logging.getLogger(__name__).warning("价格快照/降价检测失败（不影响商品落库）: %s", e)

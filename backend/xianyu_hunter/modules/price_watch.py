@@ -104,11 +104,17 @@ def observe_prices(
     *,
     task_id: str | None = None,
     user_id: str | None = None,
+    suppress_notify: bool = False,
 ) -> list[dict]:
-    """批量观察（采集链路）：先整批取旧最低价 → 批量写快照 → 逐个检测降价
+    """批量观察（采集链路）：先整批取旧最低价 → 批量写快照 → 检测降价
+
+    降级保护（FR-F1-5）：
+    - suppress_notify=True 时只写快照不通知（批量采集首轮全量建快照场景，
+      调用方判定首轮后传入，避免冷启动轰炸）
+    - 单轮多条降价合并为一条汇总推送（同一任务一次推送汇总多条降价）
 
     Returns:
-        触发降价的商品信息列表
+        触发降价的商品信息列表（suppress_notify=True 时仍返回检测结果但不通知）
     """
     candidates = [
         (it["id"], float(it["price"]))
@@ -132,7 +138,7 @@ def observe_prices(
             continue
         drop_pct = (prev_min - price) / prev_min if prev_min > 0 else 0.0
         item = repo.get_item(cid, user_id=user_id) or {}
-        info = {
+        drops.append({
             "item_id": cid,
             "item_title": item.get("title") or "",
             "new_price": price,
@@ -140,10 +146,80 @@ def observe_prices(
             "drop_pct": round(drop_pct, 4),
             "source": source,
             "task_id": task_id or "",
-        }
-        drops.append(info)
-        _emit_drop_notifications(repo, bus, info, user_id=user_id)
+        })
+
+    if drops and not suppress_notify:
+        # 冷启动自动抑制（FR-F1-5 首轮跳过）：本批全部商品均无快照历史
+        # （prev_min 全 None）说明是首轮全量建快照，任何「下跌」都无从谈起，
+        # 不推送。部分商品有旧快照时（重新采集）跌价通知是有效的，正常触发
+        cold_start = all(prev_mins.get(cid) is None for cid, _ in candidates)
+        if cold_start:
+            logger.info(f"[price-watch] 首轮全量建快照（{len(candidates)} 个商品），抑制降价通知")
+        elif len(drops) == 1:
+            _emit_drop_notifications(repo, bus, drops[0], user_id=user_id)
+        else:
+            # FR-F1-5 合并推送：同一任务一轮内多条降价汇总为一条通知，
+            # 避免批量采集后推送风暴淹没用户
+            _emit_drop_summary(repo, bus, drops, user_id=user_id)
     return drops
+
+
+def _emit_drop_summary(
+    repo: Repository, bus, drops: list[dict], user_id: str | None = None
+) -> None:
+    """多条降价合并推送（FR-F1-5）：一条站内通知 + 一条渠道推送事件"""
+    import json as _json
+
+    task_id = drops[0].get("task_id") or ""
+    # 按降幅降序：最值得关注的排在最前
+    ordered = sorted(drops, key=lambda d: d["drop_pct"], reverse=True)
+    top = ordered[0]
+    total_drop = sum(d["drop_pct"] for d in drops)
+    summary_line = "；".join(
+        f"{d['item_title'] or d['item_id']} ¥{d['new_price']:.2f}（-{d['drop_pct'] * 100:.1f}%）"
+        for d in ordered[:5]
+    )
+    more = len(ordered) - 5
+    message_text = (
+        f"{len(drops)} 个商品降价，最大降幅 {top['drop_pct'] * 100:.1f}%：{summary_line}"
+        + (f" 等共 {len(drops)} 条" if more > 0 else "")
+    )
+    try:
+        event_row = {
+            "type": EventType.PRICE_DROPPED.value,
+            "task_id": task_id or None,
+            "stage": "price_drop",
+            "level": "info",
+            "message": message_text,
+            "payload": _json.dumps({"summary": True, "drops": ordered}, ensure_ascii=False),
+        }
+        if user_id:
+            event_row["user_id"] = user_id
+        repo.save_event(event_row)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[price-watch] 汇总事件写入失败: {e}")
+    try:
+        repo.add_notification(
+            level="warn",
+            category="price",
+            title=f"降价汇总：{len(drops)} 个商品降价（最大 {top['drop_pct'] * 100:.1f}%）",
+            message=message_text,
+            link="/m/items/",
+            dedup_key=f"price_drop_summary:{task_id}:{int(total_drop * 10000)}:{len(drops)}",
+            reset_read=True,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[price-watch] 汇总站内通知写入失败: {e}")
+    if bus is not None:
+        try:
+            bus.publish_nowait(Event(
+                type=EventType.PRICE_DROPPED,
+                task_id=task_id,
+                item_id=top["item_id"],
+                payload={"summary": True, "drops": ordered, "count": len(ordered)},
+            ))
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[price-watch] 汇总渠道推送发布失败: {e}")
 
 
 def _emit_drop_notifications(

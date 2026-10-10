@@ -463,7 +463,9 @@ def build_default_container(
             ),
         )
 
-    dedup = ItemDedup(repo=repo)
+    # dedup 接入 event_bus：降价检测（price_watch）在采集落库时需要发布
+    # PRICE_DROPPED 事件到 8 渠道通知（PRD FR-F1-3），无 bus 则只有事件时间线
+    dedup = ItemDedup(repo=repo, bus=bus)
     price = PriceStrategy(PriceConfig(
         min_price=None,
         max_price=None,

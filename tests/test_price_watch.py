@@ -9,6 +9,7 @@ import pytest
 
 from xianyu_hunter.infra.repository import Repository
 from xianyu_hunter.modules.price_watch import observe_price, observe_prices, get_drop_threshold
+from xianyu_hunter.domain.item import ItemSummary
 
 
 @pytest.fixture
@@ -117,3 +118,73 @@ def test_price_dropped_template_render():
     assert "降价" in title
     for token in ("¥80.00", "¥100.00", "20.0%", "goofish.com/item?id=i1", "m/items"):
         assert token in body, f"文案缺少 {token}"
+
+
+def test_batch_merge_summary_notification(repo, bus):
+    """FR-F1-5 合并推送：单轮多条降价合并为一条汇总通知与一次渠道推送"""
+    observe_prices(repo, bus, [
+        {"id": "i1", "price": 100.0}, {"id": "i2", "price": 200.0}, {"id": "i3", "price": 50.0},
+    ], "collect")
+    bus.publish_nowait.reset_mock()
+    # 单轮 3 个商品降价
+    drops = observe_prices(repo, bus, [
+        {"id": "i1", "price": 80.0}, {"id": "i2", "price": 150.0}, {"id": "i3", "price": 40.0},
+    ], "collect")
+    assert len(drops) == 3
+    # 渠道推送只发 1 条汇总事件（payload.summary=True）
+    assert bus.publish_nowait.call_count == 1
+    evt = bus.publish_nowait.call_args[0][0]
+    assert evt.payload.get("summary") is True
+    assert evt.payload.get("count") == 3
+    # 站内通知为 1 条汇总（非 3 条逐条）
+    notes = [n for n in repo.list_notifications(limit=50) if "降价汇总" in (n.get("title") or "")]
+    assert len(notes) == 1
+
+
+def test_first_round_suppress_notify(repo, bus):
+    """FR-F1-5 首轮跳过：suppress_notify=True 只建快照不推送"""
+    observe_prices(repo, bus, [
+        {"id": "i1", "price": 100.0}, {"id": "i2", "price": 80.0},
+    ], "collect", suppress_notify=True)
+    # 快照已建
+    assert repo.list_price_history("i1")
+    # 无任何降价通知（即使模拟价格下跌场景也不推送）
+    drops = observe_prices(repo, bus, [{"id": "i1", "price": 50.0}], "collect", suppress_notify=True)
+    assert drops  # 检测结果仍返回
+    assert bus.publish_nowait.called is False
+    notes = [n for n in repo.list_notifications(limit=50) if "降价" in (n.get("title") or "")]
+    assert notes == []
+
+
+def test_dedup_cold_start_auto_suppresses(repo, bus):
+    """FR-F1-5 冷启动抑制：全批商品均无快照历史时自动不推送（dedup 链路）"""
+    from xianyu_hunter.modules.dedup import ItemDedup
+
+    dedup = ItemDedup(repo=repo, bus=bus)
+    # 首轮全量建快照：即使「价格低」也不应有任何通知
+    dedup.save([
+        ItemSummary(id="i7", title="新商品A", price=100.0),
+        ItemSummary(id="i8", title="新商品B", price=30.0),
+    ], task_id="t7")
+    assert bus.publish_nowait.called is False
+    notes = [n for n in repo.list_notifications(limit=50) if "降价" in (n.get("title") or "")]
+    assert notes == []
+    # 第二轮（已有基线）跌价 → 正常触发
+    dedup.save([ItemSummary(id="i7", title="新商品A", price=60.0)], task_id="t7")
+    assert bus.publish_nowait.called is True
+
+
+def test_dedup_first_round_suppresses(repo, bus):
+    """dedup.save 首轮（任务无 item 关联）自动抑制降价通知"""
+    from xianyu_hunter.modules.dedup import ItemDedup
+
+    dedup = ItemDedup(repo=repo, bus=bus)
+    # 预置旧快照模拟「重新采集」场景：价格 100
+    repo.record_price_snapshot("i9", 100.0, "collect")
+    repo.upsert_item({"id": "i9", "title": "旧商品", "price": 100.0})
+    dedup.save([ItemSummary(id="i9", title="旧商品", price=100.0)], task_id="t9")
+    # 任务 t9 首轮建立 item 关联后再跌价 → 因首轮刚建立 suppress，本轮不推
+    bus.publish_nowait.reset_mock()
+    dedup.save([ItemSummary(id="i9", title="旧商品", price=50.0)], task_id="t9")
+    # 第二轮已非首轮（关联已存在），跌价触发通知
+    assert bus.publish_nowait.called is True
