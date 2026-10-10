@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { Avatar, Typography, Tag, Spin, theme, Empty, message, Popover } from 'antd'
+import { Avatar, Typography, Tag, Spin, theme, Empty, message, Popover, Drawer } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import {
   SwapOutlined,
@@ -9,10 +9,14 @@ import {
   ClockCircleOutlined,
   SafetyCertificateOutlined,
   ReloadOutlined,
+  InfoCircleOutlined,
+  ImportOutlined,
+  ThunderboltOutlined,
+  LoginOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { authApi } from '../../api'
-import type { CookieHealthReport } from '../../api/auth'
+import type { CookieHealthReport, UnifiedHealthReport, UnifiedHealthSource } from '../../api/auth'
 import type { AuthMe } from '../../api/types'
 import { useSheetStore } from '../../stores/sheetStore'
 import { storage } from '../../utils/storage'
@@ -48,12 +52,6 @@ export const computeDisplayName = (info: AuthMe): string => {
 // S3776 修复：renderHealthDetail 原 CC=17，拆分为多个小组件 + 查表映射降低复杂度
 // 每个子组件职责单一，主函数只剩组合逻辑
 
-// 健康状态图标映射：is_valid → 图标组件
-const HEALTH_STATUS_ICONS = {
-  valid: CheckCircleFilled,
-  invalid: ExclamationCircleFilled,
-} as const
-
 // 层级状态配置：label + 对应 health.layers 的 key
 const LAYER_CONFIGS: ReadonlyArray<{
   readonly label: string
@@ -76,28 +74,204 @@ const SECURITY_FLAG_CONFIGS: ReadonlyArray<{
 ]
 
 // 健康状态头部：图标 + 文案 + 完整性标签
-function HealthStatusHeader({
-  health,
+// 结论来源：统一健康端点 status（PRD FR-C1-5 面板展示统一结论），
+// legacy CookieHealthReport 仅承载明细字段
+const UNIFIED_STATUS_META = {
+  healthy: { text: '登录态正常', color: 'success' as const },
+  degraded: { text: '会话令牌待刷新', color: 'warning' as const },
+  invalid: { text: '登录态失效', color: 'error' as const },
+} as const
+
+// reason.issue 友好文案映射：原始 issue 码对用户无意义
+const ISSUE_LABELS: Record<string, string> = {
+  expired: '已过期',
+  missing: '缺失',
+  mtop_token_stale: '会话令牌待刷新（访问闲鱼后自动恢复）',
+  collector_session_invalid: '服务端会话已失效',
+  no_cookie_data: '无 Cookie 档案',
+}
+
+const ACTION_META: Record<string, { label: string; icon: React.ReactNode; tip: string }> = {
+  relogin: { label: '重新登录', icon: <LoginOutlined />, tip: '跳转登录页扫码重登录' },
+  import_json: { label: '导入登录态', icon: <ImportOutlined />, tip: '从浏览器导出 Cookie JSON 导入' },
+  restart_worker: { label: '重启服务', icon: <ThunderboltOutlined />, tip: '重启服务以重建 Worker 会话' },
+}
+
+// 统一结论头部：三态图标 + 文案 + 自动修复徽标
+function UnifiedHealthHeader({
+  unified,
   themeToken,
 }: {
-  readonly health: CookieHealthReport
+  readonly unified: UnifiedHealthReport
   readonly themeToken: ReturnType<typeof theme.useToken>['token']
 }) {
-  const StatusIcon = health.is_valid ? HEALTH_STATUS_ICONS.valid : HEALTH_STATUS_ICONS.invalid
-  const iconColor = health.is_valid ? themeToken.colorSuccess : themeToken.colorError
-  const statusText = health.is_valid ? 'Cookie 状态正常' : 'Cookie 异常'
-  const tagColor = health.is_valid ? 'success' : 'error'
-  const integrityText = health.integrity === 'complete' ? '完整' : '不完整'
-
+  const meta = UNIFIED_STATUS_META[unified.status]
+  const StatusIcon = unified.status === 'healthy' ? CheckCircleFilled : ExclamationCircleFilled
+  const iconColor = unified.status === 'healthy'
+    ? themeToken.colorSuccess
+    : unified.status === 'degraded' ? themeToken.colorWarning : themeToken.colorError
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
       <StatusIcon style={{ color: iconColor, fontSize: 16 }} />
-      <Text strong style={{ fontSize: 13 }}>
-        {statusText}
-      </Text>
-      <Tag color={tagColor} style={{ marginLeft: 'auto', fontSize: 11 }}>
-        {integrityText}
+      <Text strong style={{ fontSize: 13 }}>{meta.text}</Text>
+      {/* 自愈徽标：本轮检查触发了自动修复，让用户知道系统已自行恢复 */}
+      {unified.self_healed && (
+        <Tag color="processing" style={{ fontSize: 10, margin: 0 }}>已自动修复</Tag>
+      )}
+      <Tag color={meta.color} style={{ marginLeft: 'auto', fontSize: 11 }}>
+        {unified.status === 'healthy' ? '健康' : unified.status === 'degraded' ? '降级' : '失效'}
       </Tag>
+    </div>
+  )
+}
+
+// 原因列表：逐条展示哪个 Cookie / 哪个档案 / 什么问题（去重避免同源同因重复刷屏）
+function UnifiedReasonsList({
+  unified,
+  themeToken,
+}: {
+  readonly unified: UnifiedHealthReport
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}) {
+  const seen = new Set<string>()
+  const rows = unified.reasons.filter((r) => {
+    const key = `${r.source}|${r.cookie}|${r.issue}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  if (rows.length === 0) return null
+  return (
+    <div style={{
+      fontSize: 11, color: themeToken.colorTextSecondary,
+      marginBottom: 10, padding: '6px 8px',
+      background: themeToken.colorFillQuaternary,
+      borderRadius: 4,
+    }}>
+      {rows.map((r, i) => (
+        <div key={i}>
+          {r.cookie ? `${r.cookie} ` : ''}
+          {ISSUE_LABELS[r.issue] ?? r.issue}
+          {r.source !== 'none' && r.source !== 'collector' ? `（${r.source}）` : ''}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// 修复引导按钮（FR-C1-4）：invalid 时后端返回可执行动作，前端一键触发
+function HealthActionsRow({
+  unified,
+  themeToken,
+  onAction,
+}: {
+  readonly unified: UnifiedHealthReport
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+  readonly onAction: (action: string) => void
+}) {
+  if (unified.status !== 'invalid' || unified.actions.length === 0) return null
+  return (
+    <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+      {unified.actions.map((action) => {
+        const meta = ACTION_META[action]
+        if (!meta) return null
+        return (
+          <TipButton
+            key={action}
+            tip={meta.tip}
+            size="small"
+            block
+            icon={meta.icon}
+            onClick={() => onAction(action)}
+          >
+            {meta.label}
+          </TipButton>
+        )
+      })}
+    </div>
+  )
+}
+
+// 诊断详情抽屉：逐源展示档案评估明细（PRD FR-C1-5 诊断详情）
+function DiagnosisDrawer({
+  open,
+  unified,
+  onClose,
+  themeToken,
+}: {
+  readonly open: boolean
+  readonly unified: UnifiedHealthReport | null
+  readonly onClose: () => void
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}) {
+  return (
+    <Drawer
+      title="登录态诊断详情"
+      placement="right"
+      width={420}
+      open={open}
+      onClose={onClose}
+      styles={{ body: { padding: '12px 16px' } }}
+    >
+      {!unified || unified.sources.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无档案数据" />
+      ) : (
+        <>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+            结论依据（最新鲜数据源）：{unified.freshest_source ?? '无'}
+          </Text>
+          {unified.sources.map((s) => (
+            <SourceCard key={s.source} src={s} themeToken={themeToken} />
+          ))}
+        </>
+      )}
+    </Drawer>
+  )
+}
+
+// 单个数据源评估卡片
+function SourceCard({
+  src,
+  themeToken,
+}: {
+  readonly src: UnifiedHealthSource
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}) {
+  return (
+    <div style={{
+      background: themeToken.colorFillQuaternary,
+      borderRadius: 8, padding: '8px 12px', marginBottom: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <Text strong style={{ fontSize: 12 }}>{src.source}</Text>
+        <Tag color={src.fresh ? 'success' : 'default'} style={{ fontSize: 10, margin: 0 }}>
+          {src.fresh ? '有效' : '不可用'}
+        </Tag>
+        <Text type="secondary" style={{ fontSize: 10, marginLeft: 'auto' }}>
+          {src.cookie_count} 个 Cookie
+        </Text>
+      </div>
+      <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+        来源方式：{src.method}
+      </Text>
+      {src.identity_valid.length > 0 && (
+        <Text style={{ fontSize: 11, display: 'block', color: themeToken.colorSuccess }}>
+          ✓ 有效：{src.identity_valid.join('、')}
+        </Text>
+      )}
+      {src.identity_expired.length > 0 && (
+        <Text style={{ fontSize: 11, display: 'block', color: themeToken.colorError }}>
+          ✗ 已过期：{src.identity_expired.join('、')}
+        </Text>
+      )}
+      {src.identity_missing.length > 0 && (
+        <Text style={{ fontSize: 11, display: 'block', color: themeToken.colorWarning }}>
+          ✗ 缺失：{src.identity_missing.join('、')}
+        </Text>
+      )}
+      <Text type="secondary" style={{ fontSize: 11 }}>
+        会话令牌：{src.has_valid_m5tk ? '✓ 有效' : '✗ 无效'}
+      </Text>
     </div>
   )
 }
@@ -125,27 +299,6 @@ function NickSyncHint({
     }}>
       <ExclamationCircleFilled style={{ fontSize: 11 }} />
       <span>昵称未同步（浏览器抓取失败），当前显示账号名</span>
-    </div>
-  )
-}
-
-// 异常原因提示：仅在 is_valid=false 且有原因时显示
-function IntegrityReasonHint({
-  reason,
-  themeToken,
-}: {
-  readonly reason?: string
-  readonly themeToken: ReturnType<typeof theme.useToken>['token']
-}) {
-  if (!reason) return null
-  return (
-    <div style={{
-      fontSize: 11, color: themeToken.colorTextSecondary,
-      marginBottom: 10, padding: '6px 8px',
-      background: themeToken.colorFillQuaternary,
-      borderRadius: 4,
-    }}>
-      原因：{reason}
     </div>
   )
 }
@@ -211,10 +364,16 @@ function SecurityFlags({
   )
 }
 
-// 健康详情主渲染函数：组合各子组件，主逻辑只剩拼装
+// 健康详情主渲染函数：结论区消费统一端点，明细区保留 legacy 字段
 // 复杂度降低原因：条件判断分散到各子组件，主函数无分支嵌套
-const renderHealthDetail = (health: CookieHealthReport | null, themeToken: ReturnType<typeof theme.useToken>['token']) => {
-  if (!health) {
+const renderHealthDetail = (
+  unified: UnifiedHealthReport | null,
+  legacy: CookieHealthReport | null,
+  themeToken: ReturnType<typeof theme.useToken>['token'],
+  onAction: (action: string) => void,
+  onOpenDiagnosis: () => void,
+) => {
+  if (!unified) {
     return (
       <Empty
         image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -225,23 +384,34 @@ const renderHealthDetail = (health: CookieHealthReport | null, themeToken: Retur
   }
   return (
     <>
-      <HealthStatusHeader health={health} themeToken={themeToken} />
-      {/* S7735：正向条件更易读，避免取反 */}
-      <IntegrityReasonHint reason={health.is_valid ? undefined : health.integrity_reason} themeToken={themeToken} />
+      <UnifiedHealthHeader unified={unified} themeToken={themeToken} />
+      <UnifiedReasonsList unified={unified} themeToken={themeToken} />
+      <HealthActionsRow unified={unified} themeToken={themeToken} onAction={onAction} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
         <DetailRow
           icon={<ClockCircleOutlined style={{ color: themeToken.colorPrimary }} />}
           label="有效期"
-          value={health.expiry_human}
+          value={unified.expiry_human || legacy?.expiry_human || '未知'}
         />
         <DetailRow
           icon={<SafetyCertificateOutlined style={{ color: themeToken.colorPrimary }} />}
           label="Cookie 数"
-          value={`${health.cookie_count} 个`}
+          value={`${legacy?.cookie_count ?? unified.sources.reduce((n, s) => n + s.cookie_count, 0)} 个`}
         />
-        <HealthLayersList health={health} themeToken={themeToken} />
-        <SecurityFlags flags={health.security_flags} themeToken={themeToken} />
+        {legacy && <HealthLayersList health={legacy} themeToken={themeToken} />}
+        {legacy && <SecurityFlags flags={legacy.security_flags} themeToken={themeToken} />}
       </div>
+      {/* 诊断详情入口：抽屉逐源展示档案评估明细 */}
+      <TipButton
+        tip="查看各数据源逐项诊断明细"
+        type="text"
+        size="small"
+        block
+        icon={<InfoCircleOutlined />}
+        onClick={onOpenDiagnosis}
+      >
+        诊断详情
+      </TipButton>
     </>
   )
 }
@@ -253,6 +423,9 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
 
   const [open, setOpen] = useState(false)
   const [health, setHealth] = useState<CookieHealthReport | null>(null)
+  // 统一健康结论（PRD FR-C1-5）：面板展示的唯一结论来源
+  const [unified, setUnified] = useState<UnifiedHealthReport | null>(null)
+  const [diagnosisOpen, setDiagnosisOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   // 用户信息刷新中状态：与 health 的 loading 分开管理，避免互相干扰
@@ -272,21 +445,39 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
         try { await authApi.refreshMe() } catch { /* ignore */ }
         await new Promise(resolve => setTimeout(resolve, 1500))
       }
-      const tasks: [Promise<CookieHealthReport | null>, Promise<AuthMe | null>] = [
+      // 并行拉统一结论 + legacy 明细：结论来自统一端点（禁止各自下结论），
+      // legacy 仅承载分层/安全标记等明细字段；任一失败置 null 由渲染层兜底
+      const tasks: [Promise<UnifiedHealthReport | null>, Promise<CookieHealthReport | null>, Promise<AuthMe | null>] = [
+        authApi.getUnifiedHealth().catch(() => null),
         authApi.checkCookieHealth().catch(() => null),
         opts?.withUserInfo && onRefreshUserInfo ? onRefreshUserInfo() : Promise.resolve(null),
       ]
       // userData 由父组件通过 props 更新，这里无需 setState，故不解构第二个返回值
       // S3735 修复：原 `void userData` 用 void 操作符抑制未使用警告，删除 void 改为不解构
-      const [healthData] = await Promise.all(tasks)
-      if (healthData) setHealth(healthData)
+      const [unifiedData, legacyData] = await Promise.all(tasks)
+      setUnified(unifiedData)
+      if (legacyData) setHealth(legacyData)
     } catch {
+      setUnified(null)
       setHealth(null)
     } finally {
       setLoading(false)
       setRefreshingUser(false)
     }
   }, [onRefreshUserInfo])
+
+  // FR-C1-4 修复引导：一键触发后端返回的可执行动作
+  const handleHealthAction = useCallback((action: string) => {
+    if (action === 'restart_worker') {
+      // 服务重启属于用户手动操作：给出明确指引而非伪装成前端可完成
+      message.info('请在系统托盘或终端重启服务，重启后 Worker 将加载最新登录态')
+      return
+    }
+    // relogin / import_json：都跳登录页（登录页含扫码与导入通道，T01779 落地导入 Tab）
+    setOpen(false)
+    const currentPath = location.pathname + location.search
+    navigate(`/login?redirect=${encodeURIComponent(currentPath)}`)
+  }, [navigate, location])
 
   // Popover 打开时触发健康检查（不刷新 userInfo，避免每次悬浮都触发 1.5s 延迟）
   const handleOpenChange = useCallback((visible: boolean) => {
@@ -349,7 +540,9 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
     )
 
   // 健康状态面板内容：详情渲染提取为模块级 renderHealthDetail，主组件只剩 loading 三元
-  const healthDetailContent = renderHealthDetail(health, themeToken)
+  const healthDetailContent = renderHealthDetail(
+    unified, health, themeToken, handleHealthAction, () => setDiagnosisOpen(true),
+  )
   const healthContent = loading ? (
     <div style={{ textAlign: 'center', padding: '24px 0' }}>
       <Spin size="small" />
@@ -445,18 +638,19 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
   )
 
   return (
-    <Popover
-      content={content}
-      trigger="hover"
-      open={open}
-      onOpenChange={handleOpenChange}
-      placement="bottomRight"
-      // 鼠标移入面板时保持显示，避免用户想点按钮时面板消失
-      mouseEnterDelay={0.2}
-      mouseLeaveDelay={0.3}
-      // S1874：overlayStyle 已弃用，改用 styles.root
-      styles={{ root: { borderRadius: 8 } }}
-    >
+    <>
+      <Popover
+        content={content}
+        trigger="hover"
+        open={open}
+        onOpenChange={handleOpenChange}
+        placement="bottomRight"
+        // 鼠标移入面板时保持显示，避免用户想点按钮时面板消失
+        mouseEnterDelay={0.2}
+        mouseLeaveDelay={0.3}
+        // S1874：overlayStyle 已弃用，改用 styles.root
+        styles={{ root: { borderRadius: 8 } }}
+      >
       {/* S6819：原生 button 替代 div[role="button"]，键盘 Enter/Space 由浏览器原生触发 onClick */}
       <button
         type="button"
@@ -492,7 +686,15 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
           {displayName}
         </Text>
       </button>
-    </Popover>
+      </Popover>
+      {/* 诊断详情抽屉：挂在 Popover 外层，避免随悬浮面板关闭而销毁 */}
+      <DiagnosisDrawer
+        open={diagnosisOpen}
+        unified={unified}
+        onClose={() => setDiagnosisOpen(false)}
+        themeToken={themeToken}
+      />
+    </>
   )
 }
 

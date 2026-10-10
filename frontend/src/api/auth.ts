@@ -68,6 +68,42 @@ export type CookieHealthReport = {
   elapsed_ms: number
 }
 
+// 统一健康度报告（GET /api/auth/health/unified，PRD FR-C1-1/FR-C1-2）
+// 与 CookieHealthReport 的分工：本类型承载「唯一可信结论」，
+// CookieHealthReport 仅保留为明细字段（分层/安全标记）来源
+export type UnifiedHealthReason = {
+  source: string
+  cookie: string | null
+  issue: string
+}
+
+export type UnifiedHealthSource = {
+  source: string
+  method: string
+  exported_at: number
+  cookie_count: number
+  identity_valid: string[]
+  identity_expired: string[]
+  identity_missing: string[]
+  has_valid_m5tk: boolean
+  fresh: boolean
+}
+
+export type UnifiedHealthReport = {
+  ok: boolean
+  status: 'healthy' | 'degraded' | 'invalid'
+  reasons: UnifiedHealthReason[]
+  self_healed: boolean
+  actions: string[]
+  user_id: string
+  freshest_source: string | null
+  expiry_ts: number | null
+  expiry_human: string
+  sources: UnifiedHealthSource[]
+  heal?: Array<{ archive: string; fixed: string[] }>
+  elapsed_ms?: number
+}
+
 // 认证 API：管理当前登录态与闲鱼会话校验
 export const authApi = {
   getMe: () => client.get<AuthMe>('/api/auth/me').then((r) => r.data),
@@ -169,6 +205,11 @@ export const authApi = {
   // 供状态栏用户头像悬浮面板调用
   checkCookieHealth: () =>
     client.get<CookieHealthReport>('/api/auth/cookie/health').then((r) => r.data),
+
+  // 登录态健康度统一端点（跨档案 freshness 聚合，PRD FR-C1-1）
+  // 结论唯一来源：面板展示统一结论 + reasons + 修复引导，禁止再各自读档案下结论
+  getUnifiedHealth: () =>
+    client.get<UnifiedHealthReport>('/api/auth/health/unified').then((r) => r.data),
 
   // 退出登录：清除 cookies.json / SQLite Cookie / xh_token 认证 Cookie
   logout: () =>
