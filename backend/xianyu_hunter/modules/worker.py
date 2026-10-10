@@ -1034,7 +1034,27 @@ class TaskWorker:
         )
         buy_results.append(buy_result)
         if buy_result.outcome == BuyOutcome.DRY_RUN_STOPPED:
-            # 演练不计入 bought/failed 真实统计（PRD：演练与真实记录区分）
+            # 演练不计入 bought/failed 真实统计（PRD：演练与真实记录区分）；
+            # 报告事件补齐评估得分/价格判定（Buyer 侧事件只有链路耗时）
+            try:
+                import json as _json
+
+                self.repo.save_event({
+                    "type": "task.buy_dry_run",
+                    "task_id": self.task.id,
+                    "stage": "buy_dry_run",
+                    "level": "info",
+                    "message": f"演练报告 {detail.id}：评估分 {eval_result.score}，预期价 {detail.price}",
+                    "payload": _json.dumps({
+                        "item_id": detail.id,
+                        "eval_score": eval_result.score,
+                        "expected_price": detail.price,
+                        "timings": buy_result.dry_run_timings or {},
+                        "stop_reason": buy_result.error,
+                    }, ensure_ascii=False),
+                })
+            except Exception as e:  # noqa: BLE001
+                logger.debug("[Task {}] 演练报告事件写入失败: {}", self.task.id, e)
             logger.info(
                 f"[Task {self.task.id}] 演练中止 {detail.id}：订单确认页已打开，未产生真实订单"
             )

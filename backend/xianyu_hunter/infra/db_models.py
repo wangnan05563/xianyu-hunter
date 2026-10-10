@@ -197,6 +197,9 @@ class OrderRow(Base):
     order_no: Mapped[str | None] = mapped_column(String, nullable=True)
     price: Mapped[float] = mapped_column(Float, default=0.0)
     status: Mapped[str] = mapped_column(String, nullable=False)
+    # 记录类型（PRD FR-C3-3）：real=真实下单（默认），dry_run=演练报告。
+    # 前端抢单记录页按 type 红色徽标区分演练与真实记录
+    type: Mapped[str] = mapped_column(String, nullable=False, default="real", server_default="real")
     screenshot: Mapped[str | None] = mapped_column(String, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -1055,6 +1058,15 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
             conn.commit()
     except Exception as e:
         logger.exception("迁移 tasks.dry_run 失败: {}", e)
+
+    # 订单记录类型（PRD FR-C3-3）：演练报告与真实记录同表区分
+    try:
+        _migrate_add_column(engine, "orders", "type", "VARCHAR NOT NULL DEFAULT 'real'")
+        with engine.connect() as conn:
+            conn.execute(sa_text("UPDATE orders SET type='real' WHERE type IS NULL"))
+            conn.commit()
+    except Exception as e:
+        logger.exception("迁移 orders.type 失败: {}", e)
 
     # 性能优化：补建 events / orders 表关键联合索引
     # 为什么需要：JMeter 压测（100 并发）显示 stats_today / business_kpi / trend 接口

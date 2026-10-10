@@ -87,6 +87,8 @@ class Buyer:
         self._task_item_set: LRUDict[tuple[str, str], None] = LRUDict(maxsize=10000)
         # 上次落单时间（用于节流）
         self._last_buy_at: float = 0.0
+        # 最近一次演练的各段耗时（buy 持锁串行，实例属性暂存安全）
+        self._last_dry_run_timings: dict | None = None
 
     async def buy(
         self,
@@ -156,9 +158,12 @@ class Buyer:
                     timeout=90.0,
                 )
                 # 演练中止：_do_buy 返回 None 表示已在中止点安全停下（FR-C3-2）。
-                # 不写 orders 表、不置幂等标记——演练可对同一商品重复执行
+                # 不置幂等标记——演练可对同一商品重复执行；演练报告写 orders 表
+                # （type=dry_run，与真实记录同表区分，PRD FR-C3-3）
                 if dry_run:
-                    self._record_dry_run_event(task_id, item_id, expected_price)
+                    timings = self._last_dry_run_timings or {}
+                    self._record_dry_run_order(task_id, item_id, expected_price, timings)
+                    self._record_dry_run_event(task_id, item_id, expected_price, timings)
                     return BuyResult(
                         outcome=BuyOutcome.DRY_RUN_STOPPED,
                         order=OrderSnapshot(
@@ -168,6 +173,7 @@ class Buyer:
                             status=OrderStatus.PENDING_PAY,
                         ),
                         error="dry_run: 已到订单确认页，提交订单前硬中止（未产生真实订单）",
+                        dry_run_timings=timings,
                     )
                 # 补全 task_id 关联（_do_buy 不接收 task_id，在调用方补充）
                 order["task_id"] = task_id
@@ -225,16 +231,50 @@ class Buyer:
                 ),
             )
 
-    def _record_dry_run_event(self, task_id: str, item_id: str, expected_price: float) -> None:
-        """演练动作写入事件时间线（FR-C3-3 报告的数据源之一；失败不阻断演练）"""
+    def _record_dry_run_order(
+        self, task_id: str, item_id: str, expected_price: float, timings: dict
+    ) -> None:
+        """演练报告落抢单记录（PRD FR-C3-3，REQ-013）
+
+        与真实订单同表（orders），靠 type=dry_run 区分（前端红色徽标）。
+        status 用 dry_run 而非 pending_pay：演练没有真实订单号，语义上不是待支付。
+        写入失败不影响演练结果（事件时间线仍有记录）。
+        """
         try:
+            self.repo.upsert_order({
+                # 订单 ID 时间戳与 created_at 统一使用 UTC
+                "id": f"{item_id}:{_utcnow().strftime('%Y%m%d%H%M%S')}:dry:{uuid.uuid4().hex[:8]}",
+                "item_id": item_id,
+                "task_id": task_id,
+                "order_no": "",
+                "price": expected_price,
+                "status": "dry_run",
+                "type": "dry_run",
+                "error": "演练中止：已到订单确认页，提交订单前硬停止",
+                "created_at": _utcnow(),
+            })
+        except Exception:  # noqa: BLE001
+            logger.exception("[Buyer] 演练报告写入失败（不影响演练结果）")
+
+    def _record_dry_run_event(
+        self, task_id: str, item_id: str, expected_price: float, timings: dict
+    ) -> None:
+        """演练动作写入事件时间线（各段耗时入 payload 供报告展示；失败不阻断演练）"""
+        try:
+            import json as _json
+
             self.repo.save_event({
                 "type": "task.buy_dry_run",
                 "task_id": task_id,
                 "stage": "buy_dry_run",
                 "level": "info",
                 "message": f"演练中止：{item_id} 已到订单确认页，提交订单前硬停止（未产生真实订单）",
-                "payload": f'{{"item_id": "{item_id}", "expected_price": {expected_price}, "dry_run": true}}',
+                "payload": _json.dumps({
+                    "item_id": item_id,
+                    "expected_price": expected_price,
+                    "dry_run": True,
+                    "timings": timings,
+                }, ensure_ascii=False),
             })
         except Exception as e:  # noqa: BLE001
             logger.warning("[Buyer] 演练事件写入失败（不影响演练结果）: %s", e)
@@ -293,10 +333,20 @@ class Buyer:
 
         dry_run=True 时在步骤 2.5（订单确认页已打开）后硬中止返回 None：
         支付页打开前的最后安全中止点，后续步骤（提交订单/支付跳转）均不执行。
+        演练时各段耗时记录到 self._last_dry_run_timings（buy 持锁串行调用，无竞态）。
         """
+        timings: dict[str, float] = {}
+        flow_started = time.monotonic()
+
+        def _mark(stage: str, t0: float) -> None:
+            if dry_run:
+                timings[stage] = round(time.monotonic() - t0, 2)
+
         # 1. 导航到详情页
         logger.info(f"[Buyer] 步骤1/4 导航详情页 item={item_id}")
+        t0 = time.monotonic()
         await self._navigate(page, item_id)
+        _mark("navigate_sec", t0)
         try:
             logger.info(f"[Buyer] detail navigation completed item={item_id} url={page.url}")
         except Exception:
@@ -310,7 +360,9 @@ class Buyer:
 
         # 2. 点击"立即购买"
         logger.info(f"[Buyer] 步骤2/4 点击立即购买 item={item_id}")
+        t0 = time.monotonic()
         clicked = await self._click_buy_now(page, item_id=item_id)
+        _mark("click_buy_now_sec", t0)
         if not clicked:
             raise ButtonNotFoundError("未找到「立即购买」按钮")
 
@@ -318,12 +370,18 @@ class Buyer:
         # 为什么需要显式等待：不等待直接查找「提交订单」按钮会导致竞态失败
         # 未登录时会跳转到登录页，需检测并给出友好错误
         logger.info(f"[Buyer] 步骤2.5/4 等待订单确认页 item={item_id}")
+        t0 = time.monotonic()
         await self._wait_for_order_page(page, item_id=item_id)
+        _mark("wait_order_page_sec", t0)
 
         # FR-C3-2 硬中止点：订单确认页已打开，这是支付动作前的最后一步。
         # 演练在此停止——后续「提交订单/支付跳转」步骤标记 skipped 不执行，
         # 保证演练全程 0 真实订单（PRD 验收：订单接口调用断言）
         if dry_run:
+            timings["total_sec"] = round(time.monotonic() - flow_started, 2)
+            timings["submit_order_sec"] = None  # skipped：中止点之后的步骤不执行
+            # buy() 持锁串行调用本方法，实例属性暂存无竞态
+            self._last_dry_run_timings = timings
             logger.info(f"[Buyer] 演练中止：订单确认页已打开，提交订单前硬停止 item={item_id}")
             return None
 

@@ -45,15 +45,18 @@ class BuyResult:
     """buy() 调用结果
 
     Attributes:
-        outcome: SUCCESS / SKIPPED_DUPLICATE / FAILED
+        outcome: SUCCESS / SKIPPED_DUPLICATE / FAILED / DRY_RUN_STOPPED
         order: 落单成功时的订单快照（含 order_no / price / status）
-        error: 失败原因（仅 FAILED 时有值）
+        error: 失败原因（仅 FAILED 时有值）；演练中止时为中止说明
         screenshot: 失败时截屏路径（便于排查）
+        dry_run_timings: 演练各段耗时（秒）——导航/点击购买/等待确认页/总计
+            （FR-C3-3 演练报告数据源，仅 DRY_RUN_STOPPED 时有值）
     """
     outcome: BuyOutcome
     order: OrderSnapshot | None = None
     error: str = ""
     screenshot: str = ""
+    dry_run_timings: dict | None = None
 
 
 class BuyerError(Exception):
