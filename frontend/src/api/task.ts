@@ -24,6 +24,11 @@ export const taskApi = {
   control: (id: string, action: 'pause' | 'resume' | 'stop' | 'restart') =>
     client.post(`/api/tasks/${id}/control`, null, { params: { action } }).then((r) => r.data),
 
+  // 演练一次（PRD FR-C3-5）：立即触发一轮强制 dry_run 的全链路执行（后台运行）
+  // 同任务 60s 频率限制，后端 429 时返回可等待秒数
+  triggerDryRun: (id: string) =>
+    client.post<{ ok: boolean; message: string }>(`/api/tasks/${id}/dry-run`).then((r) => r.data),
+
   // 恢复前置校验：前端"启动/恢复"按钮点击前调用，判断 root_cause 是否消除
   // 返回 resume_blocked=true 时前端必须弹 Modal 阻断，避免"恢复→失效→暂停"无效循环
   precheck: (id: string) =>

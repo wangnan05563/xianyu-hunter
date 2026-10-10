@@ -36,6 +36,8 @@ const STATUS_TEXT: Record<string, string> = {
   failed: '已失败',
   // 后端 takeover_order 写入的状态是 takeover_pending（非 takeover）
   takeover_pending: '人工接管',
+  // 演练报告（PRD FR-C3-3）：红色徽标与真实记录区分
+  dry_run: '演练',
 }
 
 // ============== 利润计算器 ==============

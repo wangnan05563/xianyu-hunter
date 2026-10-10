@@ -41,6 +41,7 @@ import { authApi, statsApi } from '../../api'
 import type { TodayAlert, AuthMe } from '../../api/types'
 import { useTheme } from '../../contexts/ThemeContext'
 import UserMenu from './UserMenu'
+import DryRunBanner from './DryRunBanner'
 import { SheetWorkspace } from '../SheetWorkspace'
 import { useSheetStore } from '../../stores/sheetStore'
 import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
@@ -651,6 +652,8 @@ function LayoutContent({
           </div>
         </Header>
         <Content id="main-content" style={{ overflow: 'hidden', background: themeToken.colorBgLayout }}>
+          {/* 全局「演练中」横幅（FR-C3-1）：存在 dry_run 运行任务时常驻提示，防误认为真实抢单 */}
+          <DryRunBanner />
           {/* SheetWorkspace 接管内容区：sheet 标签栏 + 单激活 sheet 内容
               内部已含 ErrorBoundary + Suspense + 懒加载，无需外层包裹 */}
           <SheetWorkspace />

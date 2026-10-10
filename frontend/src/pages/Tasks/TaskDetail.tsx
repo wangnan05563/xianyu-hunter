@@ -6,7 +6,7 @@ import {
 } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined,
-  SearchOutlined, SyncOutlined, DeleteOutlined, PlusOutlined, EyeOutlined,
+  SearchOutlined, SyncOutlined, DeleteOutlined, PlusOutlined, EyeOutlined, ThunderboltOutlined,
 } from '@ant-design/icons'
 import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
@@ -303,6 +303,18 @@ export default function TaskDetail() {
       .catch(() => message.error('移除依赖失败'))
   }
 
+  // 演练一次（FR-C3-5）：立即触发一轮强制 dry_run 的全链路执行（后台运行）
+  // 429（频率限制）时展示后端返回的可等待秒数，而非笼统失败
+  const [dryRunLoading, setDryRunLoading] = useState(false)
+  const handleDryRun = () => {
+    if (!id) return
+    setDryRunLoading(true)
+    taskApi.triggerDryRun(id)
+      .then((r) => message.info(r.message || '演练已触发'))
+      .catch((err) => message.error(err?.response?.data?.detail || '演练触发失败'))
+      .finally(() => setTimeout(() => setDryRunLoading(false), 2000))
+  }
+
   const handleControl = async (action: 'pause' | 'resume' | 'stop' | 'restart') => {
     if (!id) return
     // restart/resume 前先 precheck：避免 Cookie 失效或冷却期内无效恢复
@@ -439,6 +451,7 @@ export default function TaskDetail() {
                 <TipButton tip="启动或重启该任务" type="primary" icon={<PlayCircleOutlined />} loading={actionLoading} onClick={() => handleControl('restart')} disabled={task.status === 'running'}>启动</TipButton>
                 <TipButton tip="暂停当前运行中的任务" icon={<PauseCircleOutlined />} loading={actionLoading} onClick={() => handleControl('pause')} disabled={task.status !== 'running'}>暂停</TipButton>
                 <TipButton tip="停止当前任务" danger icon={<StopOutlined />} loading={actionLoading} onClick={() => handleControl('stop')} disabled={task.status === 'stopped'}>停止</TipButton>
+                <TipButton tip="立即执行一轮演练（不产生真实订单，同任务 60 秒间隔）" icon={<ThunderboltOutlined />} loading={dryRunLoading} onClick={handleDryRun} disabled={task.status !== 'running'}>演练一次</TipButton>
                 <TipButton tip="编辑该任务配置" onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</TipButton>
               </Space>
 

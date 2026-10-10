@@ -13,4 +13,6 @@ export const ORDER_STATUS_CONFIG: Record<string, { color: string; label: string 
   cancelled: { color: 'default', label: '已取消' },
   // 后端 api_orders.takeover_order 实际写入的状态是 takeover_pending（非 takeover）
   takeover_pending: { color: 'blue', label: '人工接管' },
+  // 演练记录（PRD FR-C3-3）：orders.type=dry_run 的报告条目，红色徽标与真实记录区分
+  dry_run: { color: 'red', label: '演练' },
 }

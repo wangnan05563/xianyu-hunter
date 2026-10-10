@@ -1,7 +1,9 @@
 """任务 API - 增删改查、启停控制"""
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 import uuid
 from typing import Any
 
@@ -20,6 +22,14 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 # S1192: 提取重复的错误消息常量
 _TASK_NOT_FOUND = "任务不存在"
 _FORBIDDEN_TASK = "无权访问此任务"
+
+# ============== 演练入口频控（PRD FR-C3-5，REQ-015） ==============
+# 同任务两次演练最小间隔：演练与真实抢购共用浏览器会话，
+# 风控指纹一致，高频演练会触发风控（这是特性不是缺陷，PRD 已注明）
+_DRY_RUN_MIN_INTERVAL_SEC = 60.0
+# 模块级状态：进程内频控与并发互斥（单进程桌面端，无需分布式锁）
+_dry_run_last_triggered: dict[str, float] = {}
+_dry_run_running: set[str] = set()
 
 
 def _check_task_ownership(
@@ -580,6 +590,90 @@ async def control_task(
         "status": new_status,
         "note": scheduler_note,
     }
+
+
+# ============== FR-C3-5 演练一次（REQ-015） ==============
+
+async def _resolve_dry_run_worker(
+    container: Container, task_id: str, user_id: str
+):
+    """获取演练用的 TaskWorker
+
+    优先复用 scheduler 内存中的 worker（浏览器已就绪）；
+    纯 web 模式（collector=None 或任务未注册）构造一次性 worker，
+    此时 buyer 为 None（with_browser=False），演练只覆盖搜索/评估段。
+    """
+    if container.collector is not None:
+        handle = getattr(container.scheduler, "_workers", {}).get(task_id)
+        if handle is not None:
+            return handle.worker, True
+    raw = container.repo.get_task(task_id, user_id=user_id)
+    if not raw or raw.get("status") != "running":
+        return None, False
+    worker = container.build_worker_from_raw_task(raw)
+    return worker, False
+
+
+@router.post("/{task_id}/dry-run")
+async def trigger_dry_run(
+    task_id: str,
+    request: Request,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """演练一次：立即执行一轮强制 dry_run 的任务全链路（后台执行）
+
+    频率限制（FR-C3-5）：同任务 ≥60s 间隔防风控；同任务同时只允许一个演练。
+    演练结果写事件时间线（stage=buy_dry_run）+ 演练报告订单（orders.type=dry_run）。
+    """
+    _check_task_ownership(container, task_id, request)
+    user_id = getattr(request.state, "user_id", "default")
+
+    # 频控：触发时刻即记账，防止连续点击绕过等待窗口
+    now = time.monotonic()
+    last = _dry_run_last_triggered.get(task_id, 0.0)
+    wait_left = _DRY_RUN_MIN_INTERVAL_SEC - (now - last)
+    if wait_left > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"演练频率限制：同任务需间隔 {_DRY_RUN_MIN_INTERVAL_SEC:.0f} 秒，"
+                   f"请 {int(wait_left) + 1} 秒后再试",
+        )
+    if task_id in _dry_run_running:
+        raise HTTPException(status_code=409, detail="该任务已有演练正在执行，请稍候")
+
+    worker, from_scheduler = await _resolve_dry_run_worker(container, task_id, user_id)
+    if worker is None:
+        raise HTTPException(
+            status_code=400,
+            detail="任务未运行或浏览器未就绪，无法演练（请先启动任务）",
+        )
+
+    _dry_run_last_triggered[task_id] = now
+    _dry_run_running.add(task_id)
+
+    async def _run_dry_run() -> None:
+        # 临时覆盖 task.dry_run（无论任务配置如何，演练入口强制演练），
+        # 执行完恢复原值，避免污染常驻 worker 的任务配置
+        orig = worker.task.dry_run
+        worker.task.dry_run = True
+        try:
+            if from_scheduler:
+                # 与调度执行共用全局锁：避免演练与真实抢单并发开浏览器
+                async with container.scheduler._run_lock:
+                    await worker.run_once()
+            else:
+                await worker.run_once()
+            logger.info(f"[Task {task_id}] 演练一轮完成")
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"[Task {task_id}] 演练执行异常")
+        finally:
+            worker.task.dry_run = orig
+            _dry_run_running.discard(task_id)
+
+    asyncio.create_task(_run_dry_run())
+    note = "演练已触发：全链路（搜索→评估→抢单中止）后台执行中" if from_scheduler \
+        else "演练已触发（当前为 Web 模式，仅覆盖搜索/评估段，抢单段需启动浏览器）"
+    return {"ok": True, "id": task_id, "message": note}
 
 
 # ============== F-03 任务批量控制 ==============
