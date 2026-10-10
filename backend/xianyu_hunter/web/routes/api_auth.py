@@ -8,6 +8,7 @@
 - unified_login.py   → 统一登录 API（/login, /login/status, /login/cancel）【推荐】
 - browser_login.py   → Playwright 浏览器登录（/browser-login/*）【保留兼容旧版前端】
 - cookie_inject.py   → 手动 Cookie 注入（/cookie/*）
+- cookie_import.py   → 登录态 JSON 导入（/cookies/import）
 - browser_import.py  → 从系统浏览器导入 Cookie（/import-from-browser/*）
 
 共享工具：
@@ -21,6 +22,7 @@ from xianyu_hunter.web.routes.auth_query import router as auth_query_router
 from xianyu_hunter.web.routes.unified_login import router as unified_login_router
 from xianyu_hunter.web.routes.browser_login import router as browser_login_router
 from xianyu_hunter.web.routes.cookie_inject import router as cookie_inject_router
+from xianyu_hunter.web.routes.cookie_import import router as cookie_import_router
 from xianyu_hunter.web.routes.browser_import import router as browser_import_router
 from xianyu_hunter.web.routes.browser_import_cdp import router as browser_import_cdp_router
 
@@ -30,5 +32,6 @@ router.include_router(auth_query_router)
 router.include_router(unified_login_router)
 router.include_router(browser_login_router)
 router.include_router(cookie_inject_router)
+router.include_router(cookie_import_router)
 router.include_router(browser_import_router)
 router.include_router(browser_import_cdp_router)

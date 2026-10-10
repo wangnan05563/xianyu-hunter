@@ -25,6 +25,7 @@ PUBLIC_PREFIXES = (
     "/static/", "/healthz",
     "/api/auth/login", "/api/auth/verify",
     "/api/auth/cookie",          # 手动 Cookie 注入（未登录时也需要调用）
+    "/api/auth/cookies/import",  # 登录态 JSON 导入（未登录时也需要调用）
     "/api/auth/me",              # 登录状态检测（未登录时返回 logged_in=false）
     "/api/auth/restore-session",  # 会话恢复（免登录即可触发首启动重建会话）
     "/api/auth/verify-session",  # 会话有效性验证
