@@ -17,6 +17,38 @@ from xianyu_hunter.web.deps import get_container
 router = APIRouter(prefix="/api/items", tags=["items"])
 
 
+@router.get("/{item_id}/price-history")
+def item_price_history(
+    item_id: str,
+    request: Request,
+    days: int = Query(30, ge=1, le=90, description="回看天数（默认 30，PRD FR-F1-2）"),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """商品价格走势（PRD FR-F1-2）：近 N 天快照，时间升序
+
+    无历史时返回空 points，前端展示「暂无价格记录」。
+    性能：联合索引 (item_id, captured_at) 覆盖查询，3 万行规模 P95 < 500ms。
+    """
+    if not item_id:
+        raise HTTPException(status_code=400, detail="item_id 必填")
+    user_id = getattr(request.state, "user_id", None)
+    rows = container.repo.list_price_history(item_id, days=days, user_id=user_id)
+    min_price = container.repo.get_min_price(item_id, user_id=user_id)
+    return {
+        "item_id": item_id,
+        "days": days,
+        "min_price": min_price,
+        "points": [
+            {
+                "ts": r.get("captured_at"),
+                "price": r.get("price"),
+                "source": r.get("source"),
+            }
+            for r in rows
+        ],
+    }
+
+
 @router.get("/{item_id}/summary")
 def item_summary(
     item_id: str,

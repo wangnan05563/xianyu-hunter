@@ -162,6 +162,26 @@ class SellerRow(Base):
     last_eval: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+# 5.2.1 价格快照表（PRD FR-F1-1）
+# 采集/实时搜索/详情采集三条链路在商品落库时同步写快照（同值去重），
+# 供价格走势图与降价检测消费
+class PriceHistoryRow(Base):
+    __tablename__ = "price_history"
+    # 走势查询路径：按商品取近 30 天快照按时间排序——联合索引直接覆盖
+    __table_args__ = (
+        Index("ix_price_history_item_captured", "item_id", "captured_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[str] = mapped_column(String, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
+    # 快照来源：collect=搜索采集批量落库 / live_search=实时搜索 / detail=详情采集
+    source: Mapped[str] = mapped_column(String, nullable=False, default="collect")
+    # 多用户隔离：快照归属用户 ID，与 items.user_id 保持一致
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
+    captured_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+
 # 5.4 评估结果表
 class EvaluationRow(Base):
     __tablename__ = "evaluations"

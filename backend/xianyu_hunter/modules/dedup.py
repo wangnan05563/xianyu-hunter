@@ -60,4 +60,12 @@ class ItemDedup:
             }
             for it in items
         ]
-        return self.repo.batch_upsert_items(dicts)
+        written = self.repo.batch_upsert_items(dicts)
+        # 价格快照落库（PRD FR-F1-1，source=collect）：与商品落库同步执行。
+        # 同值去重在 record_price_snapshots 内部完成，失败不阻断商品落库主流程
+        try:
+            self.repo.record_price_snapshots(dicts, source="collect")
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning("价格快照批量写入失败（不影响商品落库）: %s", e)
+        return written

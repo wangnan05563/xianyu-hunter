@@ -34,6 +34,7 @@ from xianyu_hunter.infra.repo_links import TaskLinksMixin
 from xianyu_hunter.infra.repo_deps import TaskDepsMixin
 from xianyu_hunter.infra.repo_notifications import NotificationsMixin
 from xianyu_hunter.infra.repo_batch_refresh_history import BatchRefreshHistoryMixin
+from xianyu_hunter.infra.repo_price_history import PriceHistoryMixin
 
 
 class Repository(
@@ -49,6 +50,7 @@ class Repository(
     TaskDepsMixin,
     NotificationsMixin,
     BatchRefreshHistoryMixin,
+    PriceHistoryMixin,
 ):
     """SQLite 数据访问仓库（Mixin 组合模式）
 
