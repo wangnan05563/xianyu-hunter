@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type KeyboardEvent } from 'react'
 import { Card, Table, Tag, Select, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
 import { TipButton } from '@/components/TipButton'
+import PriceTrendChart from '@/components/PriceTrendChart'
 import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined, ThunderboltOutlined, ClockCircleOutlined, LoadingOutlined, CheckCircleOutlined, SettingOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import type { AxiosError } from 'axios'
@@ -622,7 +623,9 @@ export default function ItemList() {
         if (status === 440 || status === 403 || detail.includes('已过期') || detail.includes('不完整') || detail.includes('未刷新到实时搜索浏览器') || detail.includes('重新登录')) {
           setSessionExpired(true)
         } else if (status === 503 || detail.includes('浏览器不可用')) {
-          message.error('浏览器不可用，请稍后重试')
+          // 503 细分原因透传：可能是登录态同步失败（需重新登录/重启）或真·浏览器不可用，
+          // 后端 detail 已是人话（如「登录态 Cookie 同步失败…请重新登录闲鱼或重启服务」）
+          message.error(detail || '浏览器不可用，请稍后重试')
         } else if (detail.includes('系统正在执行后台搜索任务')) {
           // browser_lock 竞争：worker 持锁中，live 等待 20s 超时
           message.warning('系统正在执行后台搜索任务，请 30 秒后重试')
@@ -1051,6 +1054,13 @@ export default function ItemList() {
                 size="middle"
                 scroll={{ x: 1000 }}
                 rowClassName={(record) => highlightRows.has(record.link_key) ? 'xh-row-highlight' : ''}
+                /* 行展开：近 30 天价格走势（PRD FR-F1-2），懒加载仅在展开时请求 */
+                expandable={{
+                  expandedRowRender: (record: TaskLink) => (
+                    <PriceTrendChart itemId={record.link_key ?? ''} />
+                  ),
+                  rowExpandable: (record: TaskLink) => Boolean(record.link_key),
+                }}
               />
               {!liveMode && (
                 <div style={{ marginTop: 16, textAlign: 'right' }}>

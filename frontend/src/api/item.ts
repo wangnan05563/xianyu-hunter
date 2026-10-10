@@ -1,10 +1,20 @@
 import client from './client'
 import type { ItemSummary } from './types'
 
+// 价格走势快照点（GET /api/items/{id}/price-history，PRD FR-F1-2）
+export type PriceHistoryPoint = { ts: string; price: number; source: string }
+
 // 商品 API：提供商品摘要的单条与批量查询
 export const itemApi = {
   summary: (itemId: string) =>
     client.get<ItemSummary>(`/api/items/${itemId}/summary`).then((r) => r.data),
+
+  // 近 N 天价格走势（默认 30 天），无历史时 points 为空数组
+  priceHistory: (itemId: string, days: number = 30) =>
+    client.get<{ item_id: string; days: number; min_price: number | null; points: PriceHistoryPoint[] }>(
+      `/api/items/${itemId}/price-history`,
+      { params: { days } },
+    ).then((r) => r.data),
 
   batch: (ids: string[]) =>
     client.get<Record<string, ItemSummary>>('/api/items/batch', { params: { ids: ids.join(',') } }).then((r) => r.data),
