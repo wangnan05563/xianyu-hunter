@@ -14,6 +14,47 @@ from fastapi.testclient import TestClient
 from xianyu_hunter.web.app import create_app
 
 
+async def _fake_inject_ok(*args, **kwargs) -> bool:
+    return True
+
+
+async def _fake_inject_fail(*args, **kwargs) -> bool:
+    return False
+
+
+@pytest.fixture(autouse=True)
+def _isolate_external(monkeypatch, tmp_path):
+    """隔离归档/注入/会话等外部副作用
+
+    200 分支现在会真实写档案 + 触发 Worker 注入 + 签发会话，
+    测试必须全部 mock 掉，否则会污染开发机的 data 目录与 browser-data SQLite。
+    """
+    from unittest.mock import MagicMock
+
+    from xianyu_hunter.web.routes import cookie_import as ci
+    from xianyu_hunter.web.services import cookie_store as cs
+    from xianyu_hunter.web.services import cookie_runtime_sync as crs
+    from xianyu_hunter.web.services import session_starter
+    from xianyu_hunter.web.services import user_manager
+
+    # CookieStore 的 JSON 落到 tmp_path（与 test_cookie_store_multi_user 同一隔离模式）
+    monkeypatch.setattr(
+        cs, "Path", lambda *args: tmp_path / args[-1] if args else tmp_path)
+    store = cs.CookieStore()
+    store._cache = {}
+    # SQLite 同步写真实 browser-data，测试中直接短路
+    monkeypatch.setattr(cs.CookieStore, "_sync_to_sqlite", lambda self, cookies: True)
+    monkeypatch.setattr(ci, "get_cookie_store", lambda: store)
+
+    monkeypatch.setattr(ci, "_identify_user_from_cookies", lambda cookies: "user_a")
+    monkeypatch.setattr(crs, "inject_cookie_store_to_worker_browser", _fake_inject_ok)
+    monkeypatch.setattr(session_starter, "trigger_session_start", lambda: None)
+    um = MagicMock()
+    um.issue_session.return_value = "test-session-token"
+    monkeypatch.setattr(user_manager, "get_user_manager", lambda: um)
+    yield store
+
+
 @pytest.fixture
 def client():
     return TestClient(create_app())
@@ -164,3 +205,60 @@ def test_import_requires_no_auth(client):
     cookies = _valid_identity_cookies()
     resp = client.post("/api/auth/cookies/import", json=cookies)
     assert resp.status_code != 401
+
+
+# ============== 归档与 Worker 注入（FR-F2-3，REQ-018） ==============
+
+def test_import_archives_per_user_and_default(client, tmp_path):
+    """导入成功写入 per-user + default 双档案，method 标记 import"""
+    resp = client.post("/api/auth/cookies/import", json=_valid_identity_cookies())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["archived"] is True
+    assert data["user_id"] == "user_a"
+    # 双档案均落盘
+    assert (tmp_path / "cookies_user_a.json").exists()
+    assert (tmp_path / "cookies_default.json").exists()
+    import json
+    for fname in ("cookies_user_a.json", "cookies_default.json"):
+        archive = json.loads((tmp_path / fname).read_text(encoding="utf-8"))
+        assert archive["method"] == "import"
+        names = {c["name"] for c in archive["cookies"]}
+        assert {"cookie2", "sgcookie", "unb"} <= names
+
+
+def test_import_worker_inject_success(client):
+    """Worker 注入成功：worker_injected=True 且无引导文案"""
+    resp = client.post("/api/auth/cookies/import", json=_valid_identity_cookies())
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["worker_injected"] is True
+    assert "worker_hint" not in data
+
+
+def test_import_worker_inject_failure_returns_restart_hint(client, monkeypatch):
+    """Worker 注入失败（浏览器未启动）→ 不静默，返回重启服务引导"""
+    from xianyu_hunter.web.services import cookie_runtime_sync as crs
+
+    monkeypatch.setattr(crs, "inject_cookie_store_to_worker_browser", _fake_inject_fail)
+    resp = client.post("/api/auth/cookies/import", json=_valid_identity_cookies())
+    assert resp.status_code == 200
+    data = resp.json()
+    # 档案已落盘仍算导入成功，但必须明确告知 Worker 未生效
+    assert data["archived"] is True
+    assert data["worker_injected"] is False
+    assert "重启服务" in data["worker_hint"]
+
+
+def test_import_issues_session_token(client, monkeypatch):
+    """导入成功签发 session_token（导入即登录）"""
+    from unittest.mock import MagicMock
+
+    from xianyu_hunter.web.services import user_manager
+
+    um = MagicMock()
+    um.issue_session.return_value = "issued-token-123"
+    monkeypatch.setattr(user_manager, "get_user_manager", lambda: um)
+    resp = client.post("/api/auth/cookies/import", json=_valid_identity_cookies())
+    assert resp.status_code == 200
+    um.issue_session.assert_called_once_with("user_a")

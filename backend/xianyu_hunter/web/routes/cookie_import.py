@@ -6,7 +6,7 @@
 与 /api/auth/cookie（手动注入 name=value 字符串）的分工：
 - 本端点面向「从浏览器 DevTools / 扩展导出的 JSON」整档导入场景
 - 校验更严格：身份 Cookie（cookie2/sgcookie/unb）齐全性 + 过期条目过滤 + 测试数据拦截
-- 校验通过后的归档写入与 Worker 注入由多用户导入归档（T01774）扩展
+- 校验通过后按 unb 识别用户写入 per-user + default 双档案并触发 Worker 注入（FR-F2-3）
 """
 from __future__ import annotations
 
@@ -17,7 +17,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from xianyu_hunter.infra.browser import is_expired_cookie
-from xianyu_hunter.web.services.cookie_store import is_test_cookie
+from xianyu_hunter.web.routes.auth_helpers import make_auth_response
+from xianyu_hunter.web.services.cookie_store import get_cookie_store, is_test_cookie
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,77 @@ def _classify_cookie_entry(entry: dict, now: float) -> tuple[str, str]:
     return "accepted", ""
 
 
+def _identify_user_from_cookies(cookies: list[dict]) -> str:
+    """从导入的 Cookie 识别用户身份（PRD FR-F2-3：按 unb 识别写入 per-user 档案）
+
+    与 cookie_inject._identify_user_from_cookies 同一底层（user_manager.identify_or_create），
+    识别失败降级 default，保证导入链路不因识别异常中断。
+    """
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+
+        return get_user_manager().identify_or_create(cookies)
+    except Exception as e:
+        logger.warning("导入识别用户身份失败，降级到 default: %s", e)
+        return "default"
+
+
+async def _archive_and_inject(accepted_entries: list[dict], user_id: str) -> dict:
+    """校验通过后的归档写入与 Worker 注入（PRD FR-F2-3，REQ-018）
+
+    写入策略：
+    - per-user + default 双档案都用 merge_cookies（同名覆盖、其余保留），
+      覆盖写会丢掉 DevTools 导出没有的追踪/会话 cookie，导致详情页采集失败
+      （与 /api/auth/cookie 注入路径同一教训）
+
+    Returns:
+        {"archived": bool, "worker_injected": bool, "worker_hint": str | None}
+    """
+    store = get_cookie_store()
+    archived = store.merge_cookies(accepted_entries, method="import", user_id=user_id)
+    # default 档案是旧版单用户链路（健康面板兜底）与 SQLite 同步的载体，
+    # PRD 明确要求双档案，保证 per-user 隔离与旧链路兼容两不误
+    archived_default = store.merge_cookies(accepted_entries, method="import", user_id="default")
+    # merge_cookies 内部会更新缓存，但双档案写入后仍显式失效一次：
+    # 防止其他线程在 TTL 窗口内读到合并前的旧缓存
+    store.invalidate_cache(user_id)
+    store.invalidate_cache("default")
+
+    result = {
+        "archived": bool(archived or archived_default),
+        "user_id": user_id,
+        "worker_injected": False,
+        "worker_hint": None,
+    }
+    if not result["archived"]:
+        return result
+
+    # 同步 CookieRotator 层状态：避免导入后 /cookies/layers 仍显示失效
+    try:
+        from xianyu_hunter.modules.login_orchestrator import sync_cookie_layers_from_json
+
+        sync_cookie_layers_from_json()
+    except Exception as e:
+        logger.debug("登录态导入后同步层状态失败: %s", e)
+
+    # Worker 浏览器注入：失败不静默（PRD 验收：给出重启服务引导）。
+    # 浏览器未启动时 JSON 档案已落盘，下次启动 Worker 会自动加载，属可恢复场景
+    try:
+        from xianyu_hunter.web.services.cookie_runtime_sync import inject_cookie_store_to_worker_browser
+
+        result["worker_injected"] = await inject_cookie_store_to_worker_browser(
+            "登录态 JSON 导入", user_id=user_id,
+        )
+    except Exception as e:
+        logger.warning("登录态导入后注入 Worker 失败: %s", e)
+    if not result["worker_injected"]:
+        result["worker_hint"] = (
+            "Cookie 已写入档案，但 Worker 浏览器未运行，未能即时注入。"
+            "请重启服务（或启动监控任务）使新登录态生效。"
+        )
+    return result
+
+
 @router.post("/cookies/import")
 async def import_cookies(request: Request) -> JSONResponse:
     """导入 Cookie JSON 并返回逐条校验回执
@@ -109,6 +181,11 @@ async def import_cookies(request: Request) -> JSONResponse:
     - 测试数据条目 → 拒绝
     - 已过期条目 → 跳过（回执中说明）
     - 身份 Cookie（cookie2/sgcookie/unb）全缺失 → 400 + 明确文案
+
+    校验通过后（REQ-018）：
+    - 按 unb 识别用户，merge 写入 per-user + default 双档案
+    - 触发 Worker 浏览器注入，失败时返回「重启服务」引导（不静默）
+    - 签发 session_token，前端导入后即进入登录态
     """
     try:
         data = await request.json()
@@ -130,12 +207,14 @@ async def import_cookies(request: Request) -> JSONResponse:
     now = time.time()
     results: list[dict] = []
     accepted_names: list[str] = []
+    accepted_entries: list[dict] = []
     for entry in entries:
         name = str(entry.get("name") or "").strip()
         status, reason = _classify_cookie_entry(entry, now)
         results.append({"name": name, "status": status, "reason": reason})
         if status == "accepted":
             accepted_names.append(name)
+            accepted_entries.append(entry)
 
     accepted_set = set(accepted_names)
     identity_found = [c for c in _IDENTITY_COOKIES if c in accepted_set]
@@ -152,7 +231,19 @@ async def import_cookies(request: Request) -> JSONResponse:
         })
 
     accepted_count = len(accepted_names)
-    return JSONResponse(content={
+
+    # 校验通过 → 归档写入 + Worker 注入（FR-F2-3）。归档失败仍返回校验回执，
+    # 但 ok=False：导入的语义是「可用」，只校验不落盘对用户毫无意义
+    user_id = _identify_user_from_cookies(accepted_entries)
+    archive_info = await _archive_and_inject(accepted_entries, user_id)
+    if not archive_info["archived"]:
+        return JSONResponse(status_code=500, content={
+            "ok": False,
+            "error": "Cookie 校验通过但写入档案失败，请检查数据目录权限后重试",
+            "results": results,
+        })
+
+    result = {
         "ok": True,
         "total": len(entries),
         "accepted": accepted_names,
@@ -160,7 +251,29 @@ async def import_cookies(request: Request) -> JSONResponse:
         "identity_found": identity_found,
         "identity_missing": identity_missing,
         "results": results,
-        "message": f"校验通过：接受 {accepted_count} 条"
+        "user_id": user_id,
+        "archived": True,
+        "worker_injected": archive_info["worker_injected"],
+        "message": f"导入成功：接受 {accepted_count} 条"
                    f"（身份 Cookie: {', '.join(identity_found)}），"
                    f"跳过/拒绝 {len(entries) - accepted_count} 条",
-    })
+    }
+    if archive_info["worker_hint"]:
+        result["worker_hint"] = archive_info["worker_hint"]
+
+    # 导入即登录：自动启动会话管理并签发 session_token，
+    # 使前端导入后 /api/auth/me 立即识别登录态（与手动注入路径行为一致）
+    try:
+        from xianyu_hunter.web.services.session_starter import trigger_session_start
+
+        trigger_session_start()
+    except Exception as e:
+        logger.debug("导入后自动启动会话失败: %s", e)
+    session_token = None
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+
+        session_token = get_user_manager().issue_session(user_id)
+    except Exception as e:
+        logger.warning("导入后签发 session_token 失败，降级到全局 web_token: %s", e)
+    return make_auth_response(result, session_token=session_token)
