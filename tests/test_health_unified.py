@@ -34,11 +34,22 @@ def _full_cookies(m5tk_age: float = 0, cookie2_expires: float = _FUTURE) -> list
     ]
 
 
+async def _fake_inject_ok(*args, **kwargs) -> bool:
+    return True
+
+
+async def _fake_inject_fail(*args, **kwargs) -> bool:
+    return False
+
+
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
-    """隔离档案目录与浏览器/collector 依赖"""
+    """隔离档案目录与浏览器/collector/DB 依赖"""
+    from unittest.mock import MagicMock
+
     from xianyu_hunter.web.services import cookie_status as cs
     from xianyu_hunter.web.services import cookie_store as store_mod
+    from xianyu_hunter.web.services import cookie_runtime_sync as crs
 
     monkeypatch.setattr(
         store_mod, "Path", lambda *args: tmp_path / args[-1] if args else tmp_path)
@@ -47,6 +58,14 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(cs, "get_cookie_store", lambda: store)
     # last_login 兜底文件与 data 目录隔离到 tmp_path
     monkeypatch.setattr(cs, "get_data_dir", lambda: tmp_path)
+
+    # container：browser/collector 置 None（禁用浏览器源），repo 用 MagicMock 捕获事件
+    container = MagicMock()
+    container.browser = None
+    container.collector = None
+    monkeypatch.setattr("xianyu_hunter.web.deps.get_container", lambda: container)
+    # Worker 注入为外部副作用，测试中禁用
+    monkeypatch.setattr(crs, "inject_cookie_store_to_worker_browser", _fake_inject_ok)
     yield store
 
 
@@ -148,3 +167,81 @@ def test_sources_detail_exposed(client, tmp_path):
     assert set(src["identity_valid"]) == {"cookie2", "sgcookie", "unb"}
     assert src["has_valid_m5tk"] is True
     assert src["cookie_count"] == 4
+
+
+# ============== 自动自愈（FR-C1-3/FR-C1-4，REQ-003/004） ==============
+
+def test_self_heal_repairs_stale_per_user_from_default(client, tmp_path):
+    """T01717 验收场景：per-user 过期 + default 新鲜 → 自动修复 per-user 档案"""
+    stale = [
+        {"name": "cookie2", "value": "old-" + "a" * 36, "domain": ".goofish.com", "expires": _PAST},
+        {"name": "sgcookie", "value": "old-" + "s" * 34, "domain": ".goofish.com", "expires": _PAST},
+        {"name": "unb", "value": "111", "domain": ".goofish.com", "expires": -1},
+        {"name": "_m_h5_tk", "value": _m5tk_value(7200), "domain": ".goofish.com", "expires": -1},
+    ]
+    fresh = _full_cookies()
+    _write_archive(tmp_path, "user_a", stale, exported_at=_NOW - 100)
+    _write_archive(tmp_path, "default", fresh, exported_at=_NOW - 10)
+
+    resp = client.get("/api/auth/health/unified?user_id=user_a")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["self_healed"] is True
+    assert data["status"] == "healthy"
+
+    # per-user 档案已被修复：身份凭证与 default 一致，method 标记 self_heal
+    repaired = json.loads((tmp_path / "cookies_user_a.json").read_text(encoding="utf-8"))
+    by_name = {c["name"]: c for c in repaired["cookies"]}
+    fresh_by_name = {c["name"]: c for c in fresh}
+    assert by_name["cookie2"]["value"] == fresh_by_name["cookie2"]["value"]
+    assert "self_heal" in repaired["method"]
+
+
+def test_self_heal_event_written_to_timeline(client, tmp_path):
+    """自愈动作写入事件时间线（stage=cookie_self_heal）"""
+    from xianyu_hunter.web.deps import get_container
+
+    stale = [
+        {"name": "cookie2", "value": "old-" + "a" * 36, "domain": ".goofish.com", "expires": _PAST},
+        {"name": "sgcookie", "value": "old-" + "s" * 34, "domain": ".goofish.com", "expires": _PAST},
+        {"name": "unb", "value": "111", "domain": ".goofish.com", "expires": -1},
+        {"name": "_m_h5_tk", "value": _m5tk_value(7200), "domain": ".goofish.com", "expires": -1},
+    ]
+    _write_archive(tmp_path, "user_a", stale, exported_at=_NOW - 100)
+    _write_archive(tmp_path, "default", _full_cookies(), exported_at=_NOW - 10)
+
+    client.get("/api/auth/health/unified?user_id=user_a")
+    container = get_container()
+    saved = [c for c in container.repo.save_event.call_args_list
+             if c.args and c.args[0].get("stage") == "cookie_self_heal"]
+    assert saved, "自愈事件未写入时间线"
+    event = saved[0].args[0]
+    assert event["level"] == "info"
+    assert "cookie2" in event["payload"]  # fixed 列表含被修复的凭证名
+
+
+def test_invalid_returns_relogin_import_actions(client, tmp_path):
+    """全部档案身份过期且无有效 donor → invalid + relogin/import_json 引导"""
+    stale = [
+        {"name": "cookie2", "value": "a" * 40, "domain": ".goofish.com", "expires": _PAST},
+        {"name": "sgcookie", "value": "s" * 40, "domain": ".goofish.com", "expires": _PAST},
+        {"name": "unb", "value": "111", "domain": ".goofish.com", "expires": -1},
+        {"name": "_m_h5_tk", "value": _m5tk_value(7200), "domain": ".goofish.com", "expires": -1},
+    ]
+    _write_archive(tmp_path, "default", stale, _NOW - 60)
+    resp = client.get("/api/auth/health/unified")
+    data = resp.json()
+    assert data["status"] == "invalid"
+    assert data["actions"] == ["relogin", "import_json"]
+
+
+def test_no_heal_when_archives_consistent(client, tmp_path):
+    """档案一致健康 → 不触发自愈（self_healed=False，档案不被重写）"""
+    _write_archive(tmp_path, "default", _full_cookies(), _NOW - 60)
+    before = (tmp_path / "cookies_default.json").read_text(encoding="utf-8")
+    resp = client.get("/api/auth/health/unified")
+    data = resp.json()
+    assert data["status"] == "healthy"
+    assert data["self_healed"] is False
+    after = (tmp_path / "cookies_default.json").read_text(encoding="utf-8")
+    assert json.loads(before)["exported_at"] == json.loads(after)["exported_at"]

@@ -536,6 +536,148 @@ _UNIFIED_IDENTITY_COOKIES: tuple[str, ...] = ("cookie2", "sgcookie", "unb")
 # unb 导出时常写历史时间戳但登录态有效；_m_h5_tk/_enc 有效性由内嵌 timestamp 判定
 _EXPIRY_UNRELIABLE_COOKIES: frozenset[str] = frozenset({"_m_h5_tk", "_m_h5_tk_enc", "unb"})
 
+# 自愈只搬运「登录态必需」的 cookie（身份三件套 + MTOP 令牌）：
+# 追踪/业务 cookie（cna/t 等）不影响登录态结论，搬运会放大档案写入与风险面
+_SELF_HEAL_COOKIE_NAMES: frozenset[str] = frozenset(
+    {"cookie2", "sgcookie", "unb", "_m_h5_tk", "_m_h5_tk_enc", "lg2"})
+# PRD FR-C1-3 修复顺序：登录导出(浏览器内存) > last_login > default > per-user
+_SELF_HEAL_SOURCE_ORDER = {"browser": 0, "last_login_cookies.json": 1,
+                           "cookies_default.json": 2}
+
+
+def _cookie_entry_valid(cookie: dict) -> bool:
+    """判断单条 cookie 是否为「可搬运的有效值」（自愈 donor 准入）
+
+    与过期判定同口径：unb 存在即有效；_m_h5_tk 按内嵌 timestamp；其余按 expires。
+    过期条目严禁回写档案（T01717 教训：add_cookies 拒收过期值 → 重试死循环）。
+    """
+    name = cookie.get("name", "")
+    if not name or not cookie.get("value"):
+        return False
+    if name in _EXPIRY_UNRELIABLE_COOKIES:
+        if name == "_m_h5_tk":
+            from xianyu_hunter.modules.cookie_rotator import is_m5tk_expired
+
+            return not is_m5tk_expired(cookie.get("value", ""))
+        return True
+    from xianyu_hunter.infra.browser import is_expired_cookie
+
+    return not is_expired_cookie(cookie)
+
+
+def _pick_self_heal_entries(sources: list[dict]) -> dict[str, tuple[dict, str]]:
+    """按 PRD 修复顺序逐 Cookie 取第一个有效值，返回 {cookie名: (条目, 来源档案)}"""
+    ordered = sorted(
+        sources,
+        key=lambda e: _SELF_HEAL_SOURCE_ORDER.get(e["source"], 3),  # 3 = per-user 档案
+    )
+    picked: dict[str, tuple[dict, str]] = {}
+    for entry in ordered:
+        for c in entry["data"].get("cookies", []):
+            name = c.get("name", "")
+            if name not in _SELF_HEAL_COOKIE_NAMES or name in picked:
+                continue
+            if _cookie_entry_valid(c):
+                picked[name] = (c, entry["source"])
+    return picked
+
+
+def _record_self_heal_event(uid: str, repaired: list[dict], donors: dict[str, str]) -> None:
+    """自愈动作写入事件时间线（PRD FR-C1-3 验收：时间线有记录）"""
+    try:
+        import json as _json
+
+        from xianyu_hunter.web.deps import get_container
+
+        container = get_container()
+        if not getattr(container, "repo", None):
+            return
+        container.repo.save_event({
+            "stage": "cookie_self_heal",
+            "level": "info",
+            "message": "登录态自动自愈：" + "；".join(
+                f"修复 {r['archive']} 的 {','.join(r['fixed'])}" for r in repaired),
+            "payload": _json.dumps({
+                "user_id": uid,
+                "repaired": repaired,
+                "donors": donors,
+            }, ensure_ascii=False),
+            "user_id": uid,
+        })
+    except Exception as e:
+        # 时间线写入失败不阻断自愈本身：档案已修复，仅缺审计记录
+        logger.warning("自愈事件写入时间线失败: %s", e)
+
+
+def attempt_self_heal(store, uid: str, sources: list[dict], assessed: list[dict]) -> list[dict]:
+    """档案间身份 Cookie 不一致/过期时的自动合并修复（PRD FR-C1-3，REQ-003）
+
+    策略（PRD 开放问题 1 采纳项）：身份 Cookie 逐项取未过期者，整档 method 记 self_heal。
+    - donor 池：全部数据源按「登录导出 > last_login > default > per-user」排序逐 Cookie 取有效值
+    - 修复目标：存在过期/缺失会话凭证的落盘档案（per-user + default）
+    - 修复动作：merge_cookies 同名覆盖（method=self_heal）+ 事件时间线 + Worker 注入
+
+    Returns:
+        修复记录列表 [{"archive": ..., "fixed": [...]}]，空列表表示无需/无法修复。
+    """
+    picked = _pick_self_heal_entries(sources)
+    if not picked:
+        return []
+
+    repaired: list[dict] = []
+    donors: dict[str, str] = {}
+    for sid in dict.fromkeys([uid, "default"]):
+        data = store._read_json(user_id=sid)
+        if not data or not data.get("cookies"):
+            continue
+        arch = _assess_health_source({
+            "source": f"cookies_{sid}.json", "data": data,
+            "exported_at": data.get("exported_at", 0) or 0,
+        })
+        # 该档案实际「坏掉」的项：过期凭证 + 缺失凭证 + 失效令牌
+        broken = set(arch["identity_expired"]) | (
+            {"cookie2", "sgcookie"} & set(arch["identity_missing"]))
+        if not arch["has_valid_m5tk"]:
+            broken.add("_m_h5_tk")
+        # 只修 donor 能提供有效值的项，且值确实与档案当前值不同（避免无意义重写）
+        applicable = {
+            n for n in broken & set(picked)
+            if next(c for c in data["cookies"] if c.get("name") == n).get("value")
+            != picked[n][0].get("value")
+            or n in {x for x in arch["identity_missing"]}
+        }
+        if not applicable:
+            continue
+        if not store.merge_cookies(
+                [picked[n][0] for n in sorted(applicable)],
+                method="self_heal", user_id=sid):
+            logger.warning("自愈写档案失败 [%s]，跳过", sid)
+            continue
+        repaired.append({"archive": f"cookies_{sid}.json", "fixed": sorted(applicable)})
+        donors.update({n: picked[n][1] for n in applicable})
+        store.invalidate_cache(sid)
+
+    if repaired:
+        _record_self_heal_event(uid, repaired, donors)
+        # Worker 注入让实时搜索立即恢复（验收：60s 内自动修复）；
+        # 浏览器未运行时档案已落盘，属可恢复场景，失败不阻断
+        try:
+            import asyncio
+
+            from xianyu_hunter.web.services.cookie_runtime_sync import (
+                inject_cookie_store_to_worker_browser,
+            )
+
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(inject_cookie_store_to_worker_browser("登录态自愈", user_id=uid))
+            except RuntimeError:
+                # 无运行中事件循环（同步调用场景）：注入由下次 Worker 启动加载兜底
+                pass
+        except Exception as e:
+            logger.debug("自愈后注入 Worker 失败（档案已落盘，下次启动生效）: %s", e)
+    return repaired
+
 
 def _collect_health_sources(store, uid: str) -> list[dict]:
     """枚举全部落盘登录态档案源（FR-C1-1 聚合三处数据源的档案部分）
@@ -637,7 +779,7 @@ async def _browser_health_source() -> dict | None:
         return None
 
 
-async def evaluate_unified_health(user_id: str | None = None) -> dict:
+async def evaluate_unified_health(user_id: str | None = None, _allow_heal: bool = True) -> dict:
     """统一登录态健康度判定（PRD FR-C1-1 聚合端点 + FR-C1-2 诊断优先级）
 
     与 evaluate_cookie_status 的分工：
@@ -647,9 +789,12 @@ async def evaluate_unified_health(user_id: str | None = None) -> dict:
       但 default 新鲜时误报失效」（T01717 根因场景）——身份 Cookie 有效性以
       exported_at 最新且含有效身份 Cookie 的档案为准
 
+    自愈（FR-C1-3）：判定过程中发现档案间凭证不一致/过期且存在有效 donor 时，
+    自动合并修复并重新评估（_allow_heal=False 防递归）。
+
     Returns:
         {status: healthy|degraded|invalid, reasons: [{source, cookie, issue}],
-         self_healed, freshest_source, sources: [...]}
+         self_healed, actions, freshest_source, sources: [...]}
     """
     uid = user_id or "default"
     store = get_cookie_store()
@@ -679,6 +824,18 @@ async def evaluate_unified_health(user_id: str | None = None) -> dict:
     freshest = next((a for a in assessed if a["fresh"]), None)
     # collector 粘性标志读一次：多次调用虽是内存操作，但单次读取让分支语义更清晰
     collector_invalid = _is_collector_session_invalid()
+
+    # FR-C1-3 自动自愈：档案间凭证不一致/过期且存在有效 donor 时先修复再下结论。
+    # 面板轮询本端点即触发修复，满足「60s 内自动修复」验收；
+    # 重新评估禁止再自愈（_allow_heal=False）防止递归
+    heal_records: list[dict] = []
+    if _allow_heal and sources:
+        heal_records = attempt_self_heal(store, uid, sources, assessed)
+        if heal_records:
+            reassessed = await evaluate_unified_health(user_id, _allow_heal=False)
+            reassessed["self_healed"] = True
+            reassessed["heal"] = heal_records
+            return reassessed
 
     if freshest is None:
         status = "invalid"
@@ -715,12 +872,24 @@ async def evaluate_unified_health(user_id: str | None = None) -> dict:
             "issue": REASON_MTOP_TOKEN_STALE,
         })
 
+    # FR-C1-4 不可自愈引导：invalid 时给出可执行修复动作（前端一键触发）
+    actions: list[str] = []
+    if status == "invalid":
+        if collector_invalid and freshest is not None and freshest["fresh"]:
+            # 档案有效但实时采集侧确认会话失效 → 重启服务重建 Worker 会话
+            actions = ["restart_worker"]
+        else:
+            # 档案身份凭证无效 → 扫码重登录或导入 JSON（T01773 已提供导入端点）
+            actions = ["relogin", "import_json"]
+
     return {
         "ok": True,
         "status": status,
         "reasons": reasons,
-        # FR-C1-3 自动自愈由 M2（T01777）接入后置 True；当前恒 False
+        # FR-C1-3：发生自动修复时上面已提前 return（self_healed=True），此处恒 False
         "self_healed": False,
+        # 不可自愈时的修复引导（invalid 才有内容）
+        "actions": actions,
         "user_id": uid,
         "freshest_source": freshest["source"] if freshest else None,
         "expiry_ts": freshest["expiry_ts"] if freshest else None,
