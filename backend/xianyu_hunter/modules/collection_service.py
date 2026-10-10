@@ -650,18 +650,27 @@ class ItemCollectionService:
 
         if not (is_delisted and old_item):
             self.container.repo.upsert_item(merge_item_row(old_item, incoming))
-            # 价格快照落库（PRD FR-F1-1）：详情/实时刷新链路，同值去重内部完成。
+            # 价格快照落库 + 降价检测（PRD FR-F1-1/FR-F1-3）：详情/实时刷新链路。
+            # observe_price 内部完成「旧最低价基线 → 写快照（同值去重）→ 检测三路通知」；
             # source 映射：live=实时搜索/手动刷新 → live_search，其余 → detail
             if detail.price is not None:
                 try:
+                    from xianyu_hunter.modules.price_watch import observe_price
+
                     snapshot_source = "live_search" if source == "live" else "detail"
-                    self.container.repo.record_price_snapshot(
-                        item_id, detail.price, snapshot_source, user_id=user_id,
+                    observe_price(
+                        self.container.repo,
+                        getattr(self.container, "event_bus", None),
+                        item_id,
+                        detail.price,
+                        snapshot_source,
+                        task_id=effective_task_id or None,
+                        user_id=user_id,
                     )
                 except Exception as e:  # noqa: BLE001
                     import logging
                     logging.getLogger(__name__).warning(
-                        "价格快照写入失败（不影响详情落库）: %s", e,
+                        "价格快照/降价检测失败（不影响详情落库）: %s", e,
                     )
         if detail.is_sold:
             self.container.repo.mark_sold(item_id)

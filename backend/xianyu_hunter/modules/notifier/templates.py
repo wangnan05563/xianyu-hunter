@@ -223,12 +223,53 @@ def render(event: Event) -> tuple[str, str]:
         return _eval_passed(event)
     if event.type == EventType.BUY_SUCCEEDED:
         return _order_placed(event)
+    if event.type == EventType.PRICE_DROPPED:
+        return _price_dropped(event)
     if event.type == EventType.TASK_ERROR:
         return _task_error(event)
     if event.type == EventType.TUNNEL_STARTED:
         return _tunnel_started(event)
     # 未支持的事件：退化为通用提示
     return _generic(event)
+
+
+def _price_dropped(event: Event) -> tuple[str, str]:
+    """降价提醒模板（PRD FR-F1-4）：现价、历史最低、降幅、深链
+
+    payload（price_watch.observe_price 构造，扁平格式）：
+    item_title / item_id / new_price / prev_min_price / drop_pct / source
+    """
+    p = event.payload or {}
+    item_id = p.get("item_id") or event.item_id or ""
+    title = p.get("item_title", "")
+    new_price = _format_price(p.get("new_price"))
+    prev_min = _format_price(p.get("prev_min_price"))
+    drop_pct = p.get("drop_pct")
+    drop_str = f"{float(drop_pct) * 100:.1f}%" if isinstance(drop_pct, (int, float)) else "—"
+    source = p.get("source", "")
+
+    display_title = _format_title(title, item_id)
+    head = f"[降价] {display_title} {new_price}"
+    body_lines = [
+        f"# 📉 降价提醒  {display_title}",
+        f"\n现价 <font color=\"#F5222D\">**{new_price}**</font>"
+        f"（历史最低 {prev_min}，降幅 <font color=\"#F5222D\">{drop_str}</font>）",
+        f"**ID：** `{item_id}`" if item_id else "",
+        f"**来源：** {source}" if source else "",
+        "",
+        "捡漏窗口通常很短，建议尽快判断是否出手。",
+    ]
+    if item_id:
+        body_lines.append(
+            f"\n🔗 [<font color=\"#0088FF\">查看商品详情</font>]"
+            f"({GOOFISH_ITEM_URL.format(item_id=item_id)})"
+        )
+        # 移动端深链（PRD FR-F1-4）：/m/ 商品列表，手机推送点开直达
+        body_lines.append(
+            f"[📱 打开移动端商品页]({_get_web_base_url()}/xianyu/m/items/)"
+        )
+    body_lines.append(f"\n<font color=\"#999999\">{SEP}_系统自动发送_</font>")
+    return head, "\n".join(line for line in body_lines if line)
 
 
 def _extract_eval_payload(event: Event) -> dict:

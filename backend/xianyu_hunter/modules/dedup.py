@@ -61,11 +61,14 @@ class ItemDedup:
             for it in items
         ]
         written = self.repo.batch_upsert_items(dicts)
-        # 价格快照落库（PRD FR-F1-1，source=collect）：与商品落库同步执行。
-        # 同值去重在 record_price_snapshots 内部完成，失败不阻断商品落库主流程
+        # 价格快照落库 + 降价检测（PRD FR-F1-1/FR-F1-3，source=collect）：
+        # observe_prices 内部完成「旧最低价基线 → 写快照（同值去重）→ 降价检测三路通知」，
+        # 任何异常不阻断商品落库主流程
         try:
-            self.repo.record_price_snapshots(dicts, source="collect")
+            from xianyu_hunter.modules.price_watch import observe_prices
+
+            observe_prices(self.repo, None, dicts, "collect", task_id=task_id)
         except Exception as e:  # noqa: BLE001
             import logging
-            logging.getLogger(__name__).warning("价格快照批量写入失败（不影响商品落库）: %s", e)
+            logging.getLogger(__name__).warning("价格快照/降价检测失败（不影响商品落库）: %s", e)
         return written

@@ -38,6 +38,7 @@ logger = get_logger()
 DEFAULT_NOTIFY_EVENTS: set[EventType] = {
     EventType.EVAL_PASSED,
     EventType.BUY_SUCCEEDED,
+    EventType.PRICE_DROPPED,  # 降价提醒（PRD FR-F1-3，8 渠道复用 + 免打扰降级）
 }
 
 

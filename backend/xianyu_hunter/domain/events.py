@@ -24,6 +24,8 @@ class EventType(str, Enum):
     BUY_REQUESTED = "buy.requested"
     BUY_SUCCEEDED = "buy.succeeded"
     BUY_FAILED = "buy.failed"
+    # 价格（PRD FR-F1-3：降价即时提醒）
+    PRICE_DROPPED = "price.dropped"
     # 通知
     NOTIFY_SENT = "notify.sent"
     TUNNEL_STARTED = "tunnel.started"
@@ -69,6 +71,7 @@ EVENT_SEVERITY: dict[EventType, str] = {
     EventType.TASK_ERROR: "critical",     # 任务异常
     EventType.SYSTEM_ERROR: "critical",    # 系统级错误需立即告警
     EventType.BUY_FAILED: "important",    # 买失败但任务继续
+    EventType.PRICE_DROPPED: "important",  # 降价提醒需尽快触达（捡漏决策窗口短）
     EventType.EVAL_PASSED: "important",   # 评估通过 → 用户确认是否抢
     EventType.EVAL_REJECTED: "info",      # 评估拒绝（量大，淹没）
     EventType.EVAL_SCORED: "info",        # 评估打分（量大，仅参考）
