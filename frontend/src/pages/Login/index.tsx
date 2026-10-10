@@ -15,6 +15,7 @@ import {
   Divider,
   Progress,
   Modal,
+  Collapse,
   theme,
 } from 'antd'
 import {
@@ -33,7 +34,7 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { authApi } from '../../api'
-import type { LoginStatus, SavedCookieInfo } from '../../api/auth'
+import type { LoginStatus, SavedCookieInfo, CookieImportReceipt } from '../../api/auth'
 import TidalForagers from '../../components/TidalForagers'
 import { useTheme } from '../../contexts/ThemeContext'
 import { API_BASE } from '../../utils/apiBase'
@@ -647,6 +648,133 @@ function BrowserImportTab({
   )
 }
 
+// 回执条目图标与颜色：accepted / expired_skipped / rejected 三态
+const RECEIPT_STATUS_META: Record<string, { icon: string; color: string }> = {
+  accepted: { icon: '✓', color: 'green' },
+  expired_skipped: { icon: '⏱', color: 'orange' },
+  rejected: { icon: '✗', color: 'red' },
+}
+
+// S3776 修复：登录态 JSON 导入 Tab 提取为子组件（PRD FR-C2-4/FR-C2-5，REQ-019/020）
+// 面向「从浏览器 DevTools / 扩展导出的 Cookie JSON」整档导入场景，
+// 与「Cookie 注入」Tab（分字段 name=value）互补
+function JsonImportTab({
+  jsonText, importing, receipt,
+  onTextChange, onImport, onFileUpload, onClear,
+}: {
+  readonly jsonText: string
+  readonly importing: boolean
+  readonly receipt: CookieImportReceipt | null
+  readonly onTextChange: (text: string) => void
+  readonly onImport: () => void
+  readonly onFileUpload: (file: File) => boolean | Promise<boolean>
+  readonly onClear: () => void
+}) {
+  const { token: themeToken } = theme.useToken()
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Alert
+        type="info"
+        showIcon
+        message="粘贴从浏览器导出的 Cookie JSON"
+        description="适合扫码被风控卡住的场景：在已登录闲鱼的浏览器中导出 Cookie JSON，粘贴或上传即可完成登录。过期/残缺条目会被自动跳过并在回执中说明。"
+      />
+
+      {/* 内嵌帮助：如何从浏览器 DevTools 导出 Cookie（FR-C2-5，扩展未安装时的兜底路径） */}
+      <Collapse
+        ghost
+        size="small"
+        items={[{
+          key: 'devtools-help',
+          label: <span style={{ fontSize: 12 }}><QuestionCircleOutlined /> 如何从浏览器 DevTools 导出 Cookie JSON？</span>,
+          children: (
+            <ol style={{ margin: 0, paddingLeft: 20, fontSize: 12, lineHeight: 1.9 }}>
+              <li>在已登录闲鱼的浏览器中打开 <a href="https://www.goofish.com" target="_blank" rel="noopener noreferrer">闲鱼官网</a></li>
+              <li>按 <kbd>F12</kbd> 打开开发者工具 →「Application」（应用）标签</li>
+              <li>左侧「Storage」→「Cookies」→ 选择 <code>https://www.goofish.com</code></li>
+              <li>全选右侧 Cookie 列表（点击第一行后 Shift+点击最后一行）</li>
+              <li>安装 Cookie 导出扩展（如 Cookie-Editor / EditThisCookie）一键导出 JSON；或逐条复制 Name/Value 手工拼成 JSON 数组</li>
+              <li>粘贴到下方输入框或上传 .json 文件，点击「导入登录态」</li>
+            </ol>
+          ),
+        }]}
+      />
+
+      <TextArea
+        rows={8}
+        placeholder={'粘贴 Cookie JSON 数组或整档 JSON，例如：&#10;[{"name": "cookie2", "value": "...", "expires": -1}, ...]&#10;或 {"cookies": [...], "exported_at": ...}'}
+        value={jsonText}
+        onChange={(e) => onTextChange(e.target.value)}
+        style={{ fontFamily: 'monospace', fontSize: 11 }}
+        disabled={importing}
+        spellCheck={false}
+      />
+
+      {/* 操作按钮 */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <TipButton
+          tip="校验并导入 Cookie JSON（写入档案并注入 Worker）"
+          type="primary"
+          icon={<ImportOutlined />}
+          loading={importing}
+          onClick={onImport}
+          disabled={!jsonText.trim()}
+          style={{ background: '#FF6200', borderColor: '#FF6200' }}
+        >
+          导入登录态
+        </TipButton>
+        {jsonText && (
+          <TipButton tip="清空输入与回执" icon={<ClearOutlined />} onClick={onClear}>
+            清空
+          </TipButton>
+        )}
+        <Divider type="vertical" style={{ height: 24 }} />
+        <Upload accept=".json" maxCount={1} showUploadList={false} beforeUpload={onFileUpload}>
+          <TipButton tip="从 JSON 文件导入" icon={<UploadOutlined />} size="small" loading={importing}>
+            上传 JSON 文件
+          </TipButton>
+        </Upload>
+      </div>
+
+      {/* 逐 Cookie 校验回执（FR-F2-2）：导入后逐条展示接受/跳过/拒绝及原因 */}
+      {receipt && (
+        <div style={{
+          borderRadius: 8, padding: 12,
+          background: receipt.ok ? 'rgba(82, 196, 26, 0.06)' : 'rgba(255, 77, 79, 0.06)',
+          border: `1px solid ${receipt.ok ? '#b7eb8f' : '#ffa39e'}`,
+        }}>
+          <div style={{ marginBottom: 8 }}>
+            <Text strong style={{ fontSize: 12, color: receipt.ok ? themeToken.colorSuccess : themeToken.colorError }}>
+              {receipt.ok ? `导入成功：接受 ${receipt.accepted_count} / ${receipt.total} 条` : (receipt.error || '导入失败')}
+            </Text>
+          </div>
+          {receipt.results.map((r, i) => {
+            const meta = RECEIPT_STATUS_META[r.status] ?? { icon: '·', color: 'default' }
+            return (
+              <div key={`${r.name}-${i}`} style={{ fontSize: 11, lineHeight: 1.8 }}>
+                <Tag color={meta.color} style={{ fontSize: 10, margin: '0 6px 0 0', padding: '0 4px' }}>
+                  {meta.icon} {r.status}
+                </Tag>
+                <code style={{ fontSize: 11 }}>{r.name || '(无名条目)'}</code>
+                {r.reason && <Text type="secondary" style={{ fontSize: 11 }}> — {r.reason}</Text>}
+              </div>
+            )
+          })}
+          {/* Worker 未注入时的引导（后端契约：失败不静默） */}
+          {receipt.worker_hint && (
+            <Alert
+              type="warning"
+              showIcon
+              message={receipt.worker_hint}
+              style={{ marginTop: 8 }}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // 登录页面：独立于 MainLayout，提供多种登录方式
 export default function Login() {
   const navigate = useNavigate()
@@ -684,6 +812,11 @@ export default function Login() {
   } | null>(null)
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<string | null>(null)
+
+  // 登录态 JSON 导入 Tab 状态（FR-C2-4）
+  const [jsonText, setJsonText] = useState('')
+  const [jsonImporting, setJsonImporting] = useState(false)
+  const [jsonReceipt, setJsonReceipt] = useState<CookieImportReceipt | null>(null)
 
   // 浏览器窗口登录 Tab 状态
   const [loginStatus, setLoginStatus] = useState<LoginStatus | null>(null)
@@ -854,6 +987,56 @@ export default function Login() {
     return false
   }
 
+  // ===== 登录态 JSON 导入（FR-C2-4，REQ-019/020） =====
+  // 粘贴框与文件上传共用同一处理：解析 JSON → 调导入端点 → 展示逐条回执
+  const handleImportCookiesJson = async (raw: string) => {
+    const trimmed = raw.trim()
+    if (!trimmed) {
+      message.warning('请先粘贴 Cookie JSON 或上传 JSON 文件')
+      return
+    }
+    let payload: unknown
+    try {
+      payload = JSON.parse(trimmed)
+    } catch {
+      setJsonReceipt({ ok: false, error: '内容不是合法 JSON：请粘贴 Cookie JSON 数组或整档 JSON', total: 0, accepted: [], accepted_count: 0, identity_found: [], identity_missing: [], results: [] })
+      return
+    }
+    setJsonImporting(true)
+    try {
+      // 400（身份 Cookie 缺失）也会返回完整回执，axios 会 throw——
+      // 统一从 err.response.data 取回执，保证「过期/缺失逐条可见」
+      const receipt = await authApi.importCookiesJson(payload)
+      setJsonReceipt(receipt)
+      if (receipt.ok) {
+        message.success(receipt.message || '登录态导入成功')
+        onLoginSuccess()
+      } else {
+        message.error(receipt.error || '导入失败')
+      }
+    } catch (err: any) {
+      const data = err?.response?.data
+      if (data?.results) {
+        // 400 携带回执：逐条展示（FR-F2-2 明确文案）
+        setJsonReceipt(data as CookieImportReceipt)
+      } else {
+        setJsonReceipt({ ok: false, error: data?.error || '请求失败', total: 0, accepted: [], accepted_count: 0, identity_found: [], identity_missing: [], results: [] })
+      }
+      message.error(data?.error || '请求失败')
+    } finally {
+      setJsonImporting(false)
+    }
+  }
+
+  const handleJsonFileUpload = (file: File) => {
+    file.text().then((text) => {
+      setJsonText(text)
+      void handleImportCookiesJson(text)
+    }).catch(() => message.error('读取文件失败'))
+    // 阻止 Upload 组件的默认上传行为
+    return false
+  }
+
   // ===== 浏览器导入 =====
   // autoClose: 检测到文件锁定时自动关闭浏览器进程后重试
   const handleImportFromBrowser = async (browser: 'edge' | 'chrome', autoClose: boolean = false) => {
@@ -1013,6 +1196,23 @@ export default function Login() {
       ),
     },
     {
+      key: 'json-import',
+      label: (
+        <span style={{ fontWeight: 500 }}><ImportOutlined /> 导入登录态</span>
+      ),
+      children: (
+        <JsonImportTab
+          jsonText={jsonText}
+          importing={jsonImporting}
+          receipt={jsonReceipt}
+          onTextChange={(text) => { setJsonText(text); setJsonReceipt(null) }}
+          onImport={() => void handleImportCookiesJson(jsonText)}
+          onFileUpload={handleJsonFileUpload}
+          onClear={() => { setJsonText(''); setJsonReceipt(null) }}
+        />
+      ),
+    },
+    {
       key: 'browser-import',
       label: (
         <span style={{ fontWeight: 500 }}><ChromeOutlined /> 浏览器导入</span>
@@ -1128,6 +1328,9 @@ export default function Login() {
 
           <p><strong>方法三：浏览器导入（自动）</strong></p>
           <p>切换到「浏览器导入」标签页，系统会自动从 Edge/Chrome 提取 Cookie。</p>
+
+          <p><strong>方法四：导入登录态 JSON（扫码被风控时）</strong></p>
+          <p>切换到「导入登录态」标签页，按内嵌帮助从浏览器 DevTools 导出 Cookie JSON 后粘贴导入。过期/残缺条目会被自动跳过并逐条说明。</p>
 
           <Alert
             type="warning"

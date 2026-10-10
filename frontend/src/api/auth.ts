@@ -104,6 +104,24 @@ export type UnifiedHealthReport = {
   elapsed_ms?: number
 }
 
+// 登录态 JSON 导入回执（POST /api/auth/cookies/import，PRD FR-F2-2）
+// status 语义与后端 _classify_cookie_entry 对齐：accepted / expired_skipped / rejected
+export type CookieImportReceipt = {
+  ok: boolean
+  total: number
+  accepted: string[]
+  accepted_count: number
+  identity_found: string[]
+  identity_missing: string[]
+  results: Array<{ name: string; status: 'accepted' | 'expired_skipped' | 'rejected'; reason: string }>
+  user_id?: string
+  archived?: boolean
+  worker_injected?: boolean
+  worker_hint?: string
+  message?: string
+  error?: string
+}
+
 // 认证 API：管理当前登录态与闲鱼会话校验
 export const authApi = {
   getMe: () => client.get<AuthMe>('/api/auth/me').then((r) => r.data),
@@ -210,6 +228,11 @@ export const authApi = {
   // 结论唯一来源：面板展示统一结论 + reasons + 修复引导，禁止再各自读档案下结论
   getUnifiedHealth: () =>
     client.get<UnifiedHealthReport>('/api/auth/health/unified').then((r) => r.data),
+
+  // 登录态 JSON 导入（PRD FR-F2-1/FR-F2-2）：body 为 Cookie JSON 数组或整档 JSON
+  // 后端返回逐 Cookie 校验回执（接受/过期跳过/拒绝）+ 归档与 Worker 注入结果
+  importCookiesJson: (payload: unknown) =>
+    client.post<CookieImportReceipt>('/api/auth/cookies/import', payload).then((r) => r.data),
 
   // 退出登录：清除 cookies.json / SQLite Cookie / xh_token 认证 Cookie
   logout: () =>
