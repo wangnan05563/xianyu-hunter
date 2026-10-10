@@ -37,6 +37,11 @@ logger = get_logger()
 # collector 粘性标志导致的失效原因，供调用方识别并决定是否做注入恢复
 REASON_COLLECTOR_SESSION_INVALID = "collector_session_invalid"
 
+# 仅 MTOP 运行时令牌（_m_h5_tk/_m_h5_tk_enc）过期、但 identity 登录态 Cookie 仍存在时的原因。
+# 语义区别于 cookie_expired:*：登录态正常，令牌由系统访问闲鱼首页后自动恢复（通常数秒），
+# 前端应显示为警告（"会话令牌待刷新"）而非错误（"Cookie 异常"），避免初登用户误判登录失败。
+REASON_MTOP_TOKEN_STALE = "mtop_token_stale"
+
 
 @dataclass
 class CookieStatus:
@@ -427,7 +432,19 @@ async def _try_refresh_and_recheck(
     status = await _try_browser_fallback(uid)
     if status:
         return status
-    reason = "cookie_expired:_m_h5_tk" if m5tk_present else "no_session_token"
+    # 刷新与兜底都失败：区分「登录态仍在，仅运行时令牌待恢复」与「真正未登录」。
+    # 为什么：_m_h5_tk 是短时 MTOP 令牌（15-22 分钟 TTL），登录后首次健康检查若
+    # 首页刷新失败（如 DNS/网络抖动，见 2026-10-10 打包版日志 ERR_NAME_NOT_RESOLVED），
+    # 此处会立即命中；此时 identity 层 Cookie 仍在，报 cookie_expired:_m_h5_tk 会让
+    # 用户面板显示"Cookie 异常"误判为登录失败。归为 mtop_token_stale（警告级）。
+    if m5tk_present:
+        from xianyu_hunter.modules.cookie_rotator import LAYER_DEFINITIONS, CookieLayer
+
+        identity_cookies = LAYER_DEFINITIONS[CookieLayer.IDENTITY].cookies
+        has_identity = bool(identity_cookies & names)
+        reason = REASON_MTOP_TOKEN_STALE if has_identity else "cookie_expired:_m_h5_tk"
+    else:
+        reason = "no_session_token"
     return _make_invalid_status(uid, reason, data, cookies_list, names)
 
 
@@ -507,3 +524,210 @@ async def evaluate_cookie_status(user_id: str | None = None) -> CookieStatus:
         cookies_list,
         data,
     )
+
+
+# ============================================================
+# 统一健康度端点（PRD FR-C1-1 / FR-C1-2，REQ-001/002）
+# ============================================================
+
+# 身份 Cookie 三件套（PRD FR-C1-2）：登录态是否成立的判定基元
+_UNIFIED_IDENTITY_COOKIES: tuple[str, ...] = ("cookie2", "sgcookie", "unb")
+# expires 字段不可信名单（与 _find_expired_cookie 同一口径，防规则漂移）：
+# unb 导出时常写历史时间戳但登录态有效；_m_h5_tk/_enc 有效性由内嵌 timestamp 判定
+_EXPIRY_UNRELIABLE_COOKIES: frozenset[str] = frozenset({"_m_h5_tk", "_m_h5_tk_enc", "unb"})
+
+
+def _collect_health_sources(store, uid: str) -> list[dict]:
+    """枚举全部落盘登录态档案源（FR-C1-1 聚合三处数据源的档案部分）
+
+    覆盖：per-user 档案、default 档案、last_login 兜底文件。
+    浏览器内存源由 _browser_health_source 单独采集（异步）。
+    """
+    sources: list[dict] = []
+    # dict.fromkeys 去重保序：uid == "default" 时不重复读同一文件
+    for sid in dict.fromkeys([uid, "default"]):
+        data = store._read_json(user_id=sid)
+        if data and data.get("cookies"):
+            sources.append({
+                "source": f"cookies_{sid}.json",
+                "data": data,
+                "exported_at": data.get("exported_at", 0) or 0,
+            })
+    last_login = get_data_dir() / "last_login_cookies.json"
+    if last_login.exists():
+        try:
+            import json as _json
+
+            raw = _json.loads(last_login.read_text(encoding="utf-8"))
+            if isinstance(raw, list) and raw:
+                sources.append({
+                    "source": "last_login_cookies.json",
+                    "data": {"method": "last_login_fallback", "cookies": raw},
+                    "exported_at": 0,  # 列表格式无 exported_at，freshness 排序垫底
+                })
+        except (ValueError, OSError):
+            pass
+    return sources
+
+
+def _assess_health_source(entry: dict) -> dict:
+    """评估单个档案源的身份 Cookie 健康状况（FR-C1-2 判定基元）
+
+    返回结构化评估：哪些身份 Cookie 有效/过期/缺失、会话令牌是否有效。
+    reasons 聚合与 freshest 选择都依赖此结构。
+    """
+    cookies_list = entry["data"].get("cookies", [])
+    now = time.time()
+    by_name = {c.get("name"): c for c in cookies_list if c.get("name")}
+    identity_valid: list[str] = []
+    identity_expired: list[str] = []
+    identity_missing: list[str] = []
+    for name in _UNIFIED_IDENTITY_COOKIES:
+        if name not in by_name:
+            identity_missing.append(name)
+            continue
+        if name in _EXPIRY_UNRELIABLE_COOKIES:
+            # expires 不可信：存在即视为有效（unb 只做存在性检查）
+            identity_valid.append(name)
+            continue
+        expires = by_name[name].get("expires", -1)
+        if expires and expires > 0 and expires < now:
+            identity_expired.append(name)
+        else:
+            identity_valid.append(name)
+    return {
+        "source": entry["source"],
+        "method": entry["data"].get("method", "unknown"),
+        "exported_at": entry["exported_at"],
+        "cookie_count": len(cookies_list),
+        "identity_valid": identity_valid,
+        "identity_expired": identity_expired,
+        "identity_missing": identity_missing,
+        "has_valid_m5tk": _has_valid_m5tk_in_list(cookies_list),
+        # fresh 判定只看会话凭证（cookie2/sgcookie）：unb 仅是用户标识且 expires
+        # 不可信，单独存在不代表登录态可用——否则「cookie2/sgcookie 全过期」场景
+        # 会因 unb 存在而误判 fresh（PRD 验收要求该场景报 invalid）
+        "fresh": bool({"cookie2", "sgcookie"} & set(identity_valid)),
+        "expiry_ts": _compute_expiry_ts(cookies_list),
+    }
+
+
+async def _browser_health_source() -> dict | None:
+    """采集浏览器内存作为候选数据源（运行中浏览器的登录态最新鲜）
+
+    浏览器内存的登录态由真实页面会话维持，永远比落盘档案新鲜，
+    freshness 排序时以当前时间作为 exported_at，天然排在最前。
+    """
+    try:
+        from xianyu_hunter.web.deps import get_container
+
+        container = get_container()
+        if not container.browser or not getattr(container.browser, "_context", None):
+            return None
+        cookies = await container.browser.get_cookies()
+        if not cookies:
+            return None
+        return {
+            "source": "browser",
+            "data": {"method": "browser_memory", "cookies": cookies},
+            "exported_at": time.time(),
+        }
+    except Exception as e:
+        logger.debug("unified health: 浏览器内存源采集失败: %s", e)
+        return None
+
+
+async def evaluate_unified_health(user_id: str | None = None) -> dict:
+    """统一登录态健康度判定（PRD FR-C1-1 聚合端点 + FR-C1-2 诊断优先级）
+
+    与 evaluate_cookie_status 的分工：
+    - evaluate_cookie_status：单用户单档案链路判定（导航栏/反爬/抢单消费），
+      档案优先级是固定的 uid → last_login → default
+    - evaluate_unified_health：跨档案 freshness 聚合，解决「per-user 档案过期
+      但 default 新鲜时误报失效」（T01717 根因场景）——身份 Cookie 有效性以
+      exported_at 最新且含有效身份 Cookie 的档案为准
+
+    Returns:
+        {status: healthy|degraded|invalid, reasons: [{source, cookie, issue}],
+         self_healed, freshest_source, sources: [...]}
+    """
+    uid = user_id or "default"
+    store = get_cookie_store()
+    # 判定前失效缓存：健康检查要求读到最新落盘状态（导入/自愈刚写入）
+    store.invalidate_cache(uid)
+    store.invalidate_cache("default")
+
+    sources = _collect_health_sources(store, uid)
+    browser_src = await _browser_health_source()
+    if browser_src:
+        sources.append(browser_src)
+    # FR-C1-2：exported_at 最新优先；无 exported_at 的 last_login 垫底
+    assessed = sorted(
+        (_assess_health_source(s) for s in sources),
+        key=lambda a: a["exported_at"],
+        reverse=True,
+    )
+
+    # reasons 逐条记录：哪个 Cookie / 哪个档案 / 过期还是缺失（PRD 契约）
+    reasons: list[dict] = []
+    for a in assessed:
+        for name in a["identity_expired"]:
+            reasons.append({"source": a["source"], "cookie": name, "issue": "expired"})
+        for name in a["identity_missing"]:
+            reasons.append({"source": a["source"], "cookie": name, "issue": "missing"})
+
+    freshest = next((a for a in assessed if a["fresh"]), None)
+    # collector 粘性标志读一次：多次调用虽是内存操作，但单次读取让分支语义更清晰
+    collector_invalid = _is_collector_session_invalid()
+
+    if freshest is None:
+        status = "invalid"
+        if not reasons:
+            reasons.append({"source": "none", "cookie": None, "issue": "no_cookie_data"})
+    elif freshest["source"] == "browser" and freshest["has_valid_m5tk"] and collector_invalid:
+        # 浏览器内存实测有效但 collector 标志置位：标志为旧状态，
+        # 清除之（与 _browser_cookies_fallback 的清理行为一致）
+        try:
+            from xianyu_hunter.web.deps import get_container
+
+            container = get_container()
+            if container.collector:
+                container.collector.last_session_invalid = False
+        except Exception as e:
+            logger.debug("unified health: 清除 collector 标志失败: %s", e)
+        status = "healthy"
+    elif collector_invalid:
+        # 身份档案有效但实时采集侧已确认会话失效（RGV587/服务端注销）——
+        # 纯档案判定会误报有效，实时搜索实际不可用，必须报 invalid
+        status = "invalid"
+        reasons.append({
+            "source": "collector", "cookie": None,
+            "issue": REASON_COLLECTOR_SESSION_INVALID,
+        })
+    elif freshest["has_valid_m5tk"]:
+        status = "healthy"
+    else:
+        # 身份 Cookie 有效但 MTOP 运行时令牌缺失/过期：登录态在，
+        # 实时搜索暂不可用 → degraded（警告级而非错误级）
+        status = "degraded"
+        reasons.append({
+            "source": freshest["source"], "cookie": "_m_h5_tk",
+            "issue": REASON_MTOP_TOKEN_STALE,
+        })
+
+    return {
+        "ok": True,
+        "status": status,
+        "reasons": reasons,
+        # FR-C1-3 自动自愈由 M2（T01777）接入后置 True；当前恒 False
+        "self_healed": False,
+        "user_id": uid,
+        "freshest_source": freshest["source"] if freshest else None,
+        "expiry_ts": freshest["expiry_ts"] if freshest else None,
+        "expiry_human": _format_expiry(freshest["expiry_ts"] if freshest else None),
+        # sources 全量透出：供前端「诊断详情」抽屉（T01778）逐源展示
+        "sources": [
+            {k: v for k, v in a.items() if k != "expiry_ts"}
+            for a in assessed
+        ],
+    }

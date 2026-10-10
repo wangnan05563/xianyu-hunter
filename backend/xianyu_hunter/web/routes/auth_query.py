@@ -4,6 +4,7 @@
 - GET  /api/auth/me              当前登录用户信息（缓存）
 - GET  /api/auth/me/refresh      强制后台刷新（不等完成）
 - GET  /api/auth/cookie/health   轻量级 Cookie 健康检查（< 300ms，纯文件读取）
+- GET  /api/auth/health/unified  登录态健康度统一端点（跨档案 freshness 聚合）
 - POST /api/auth/logout          退出登录（清除 Cookie/会话/认证 token）
 """
 from __future__ import annotations
@@ -746,6 +747,29 @@ async def cookie_health(request: Request) -> JSONResponse:
     status = await evaluate_cookie_status(current_uid)
 
     payload = status.as_navbar_payload()
+    payload["elapsed_ms"] = int((time.time() - start_ts) * 1000)
+    return JSONResponse(content=payload)
+
+
+@router.get("/health/unified")
+async def health_unified(request: Request, user_id: str | None = None) -> JSONResponse:
+    """登录态健康度统一端点（PRD FR-C1-1/FR-C1-2，REQ-001/002）
+
+    聚合全部数据源（per-user / default / last_login / 浏览器内存 / collector 标志）
+    输出单一结论：status ∈ {healthy, degraded, invalid} + 逐条 reasons。
+
+    与 /cookie/health 的分工：/cookie/health 按固定优先级取单档案判定（导航栏轻量）；
+    本端点按 exported_at freshness 跨档案选源，解决「per-user 过期但 default 新鲜」
+    场景下两面板结论矛盾（T01717 根因）。各展示处应逐步迁移到本端点。
+
+    user_id query 参数：诊断场景显式指定目标用户（未带 token 时也可查指定档案）；
+    缺省按当前会话 token 解析。
+    """
+    start_ts = time.time()
+    current_uid = user_id or _resolve_current_user_id(request) or "default"
+
+    from xianyu_hunter.web.services.cookie_status import evaluate_unified_health
+    payload = await evaluate_unified_health(current_uid)
     payload["elapsed_ms"] = int((time.time() - start_ts) * 1000)
     return JSONResponse(content=payload)
 

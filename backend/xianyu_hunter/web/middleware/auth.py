@@ -27,6 +27,7 @@ PUBLIC_PREFIXES = (
     "/api/auth/cookie",          # 手动 Cookie 注入（未登录时也需要调用）
     "/api/auth/cookies/import",  # 登录态 JSON 导入（未登录时也需要调用）
     "/api/auth/me",              # 登录状态检测（未登录时返回 logged_in=false）
+    "/api/auth/health/unified",  # 登录态健康度统一端点（未登录时也需可读诊断结论，响应不含 Cookie 值）
     "/api/auth/restore-session",  # 会话恢复（免登录即可触发首启动重建会话）
     "/api/auth/verify-session",  # 会话有效性验证
     "/api/auth/import-from-browser",  # 从系统浏览器导入 Cookie（未登录时也需要调用）
