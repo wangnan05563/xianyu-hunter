@@ -1,4 +1,4 @@
-import { Layout, Menu, theme, Breadcrumb, Spin, Badge, Drawer, Collapse, List, Tag, Modal, Input } from 'antd'
+import { Layout, Menu, theme, Breadcrumb, Spin, Badge, Drawer, Collapse, List, Tag, Modal, Input, Alert, Button } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import {
   BellOutlined,
@@ -31,6 +31,7 @@ import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
 import { useMenuConfig, buildCommandItems } from '../../hooks/useMenuConfig'
 import type { CommandItem } from '../../hooks/useMenuConfig'
 import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
+import FirstScreenSkeleton from './FirstScreenSkeleton'
 import { buildBreadcrumbs } from './breadcrumb'
 import { G_PREFIX_MAP, G_PREFIX_HINT, shortcutHintForPath } from './shortcuts'
 import AccountSwitcher from './AccountSwitcher'
@@ -69,6 +70,8 @@ export default function MainLayout() {
   // 通知抽屉与今日告警
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [todayAlert, setTodayAlert] = useState<TodayAlert | null>(null)
+  // 告警拉取错误：抽屉要区分「加载中 / 失败可重试 / 真的没告警」，失败不再永远转圈（T02560 / 2.5-12）
+  const [alertError, setAlertError] = useState<string | null>(null)
   const alertCount = todayAlert
     ? todayAlert.alerts.counts.failed + todayAlert.alerts.counts.timeout + todayAlert.alerts.counts.low_eval
     : 0
@@ -85,16 +88,21 @@ export default function MainLayout() {
 
   // 动态菜单：从后端 /api/menu 拉取用户级菜单配置（MU5）
   // 模块级缓存 5min TTL，切换账号时由 AccountSwitcher 调用 invalidateMenuCache 失效
-  const { menus, menuItems: dynamicMenuItems, loading: menuLoading } = useMenuConfig()
+  const { menus, menuItems: dynamicMenuItems, loading: menuLoading, error: menuError, refresh: refreshMenus } = useMenuConfig()
 
   // 轮询调度器状态
   const fetchSchedulerStatus = useCallback(() => {
     statsApi.overview().then((data) => setSchedulerRunning(data.scheduler_running)).catch(() => setSchedulerRunning(null))
   }, [])
 
-  // 拉取今日告警
+  // 拉取今日告警：失败时记录错误文案，供抽屉渲染「加载失败 + 重试」
   const fetchTodayAlert = useCallback(() => {
-    statsApi.today().then(setTodayAlert).catch(() => {})
+    statsApi.today()
+      .then((data) => {
+        setTodayAlert(data)
+        setAlertError(null)
+      })
+      .catch((err: unknown) => setAlertError(err instanceof Error ? err.message : String(err)))
   }, [])
 
   useEffect(() => {
@@ -296,31 +304,19 @@ export default function MainLayout() {
 
   // 认证检查中：显示加载
   if (!authChecked) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <Spin size="large" tip="正在验证登录状态..."><div /></Spin>
-      </div>
-    )
+    return <FirstScreenSkeleton stage="auth" />
   }
 
-  // 未登录：显示跳转中状态（useEffect 会自动跳转到登录页）
+  // 未登录：显示骨架屏（useEffect 会自动跳转到登录页）
   if (!loggedIn) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <Spin size="large" tip="正在跳转到登录页..."><div /></Spin>
-      </div>
-    )
+    return <FirstScreenSkeleton stage="login" />
   }
 
   // 菜单加载中：等待菜单数据就绪后再渲染 LayoutContent
   // 为什么需要等待：openKeys 初始化依赖 autoOpenKeys，而 autoOpenKeys 依赖 menuItems
   // 如果菜单未加载就渲染，openKeys 会初始化为空，SubMenu 不会自动展开
   if (menuLoading && dynamicMenuItems.length === 0) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <Spin size="large" tip="正在加载菜单..."><div /></Spin>
-      </div>
-    )
+    return <FirstScreenSkeleton stage="menu" />
   }
 
   return (
@@ -346,6 +342,10 @@ export default function MainLayout() {
       setOpenKeys={handleOpenKeysChange}
       menuItems={dynamicMenuItems}
       commandItems={commandItems}
+      menuError={menuError}
+      onRetryMenu={refreshMenus}
+      alertError={alertError}
+      onRetryAlert={fetchTodayAlert}
       drawerOpen={drawerOpen}
       setDrawerOpen={setDrawerOpen}
       userInfo={userInfo}
@@ -379,6 +379,11 @@ interface LayoutContentProps {
   readonly menuItems: NonNullable<MenuProps['items']>
   // 命令面板项：由 MainLayout 用 buildCommandItems(menus) 派生后传入（T02556 单源）
   readonly commandItems: CommandItem[]
+  // 菜单与告警的失败态（T02560）：error 不再被丢弃，侧栏/抽屉内联展示并提供重试
+  readonly menuError: Error | null
+  readonly onRetryMenu: () => void
+  readonly alertError: string | null
+  readonly onRetryAlert: () => void
   readonly drawerOpen: boolean
   readonly setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
   readonly userInfo: AuthMe
@@ -391,6 +396,7 @@ function LayoutContent({
   schedulerRunning, todayAlert, alertCount,
   cmdOpen, setCmdOpen, cmdSearch, setCmdSearch, cmdActive, setCmdActive,
   breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems, commandItems,
+  menuError, onRetryMenu, alertError, onRetryAlert,
   drawerOpen, setDrawerOpen, userInfo, onRefreshUserInfo,
 }: LayoutContentProps) {
   // 必须在 ConfigProvider 内部调用，token 才会响应暗色算法
@@ -449,6 +455,20 @@ function LayoutContent({
             </div>
           )}
         </div>
+        {/* 菜单加载失败：内联提示 + 重试，不再静默空白（T02560 / 2.5-10） */}
+        {menuError !== null && menuItems.length === 0 && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ margin: '8px 12px' }}
+            message="菜单加载失败"
+            description={
+              <Button size="small" type="link" onClick={onRetryMenu} style={{ padding: 0 }}>
+                重试
+              </Button>
+            }
+          />
+        )}
         <Menu
           mode="inline"
           selectedKeys={[selectedKey]}
@@ -685,6 +705,15 @@ function LayoutContent({
               <Link to="/orders" onClick={() => setDrawerOpen(false)}>查看全部 →</Link>
             </div>
           </>
+        ) : alertError !== null ? (
+          // 拉取失败：给出错误态与重试，不再永远转圈（T02560 / 2.5-12）
+          <Alert
+            type="error"
+            showIcon
+            message="今日告警加载失败"
+            description={alertError}
+            action={<Button size="small" onClick={onRetryAlert}>重试</Button>}
+          />
         ) : (
           <Spin />
         )}
