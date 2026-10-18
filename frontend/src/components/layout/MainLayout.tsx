@@ -48,44 +48,13 @@ import { SheetWorkspace } from '../SheetWorkspace'
 import { useSheetStore } from '../../stores/sheetStore'
 import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
 import { useMenuConfig } from '../../hooks/useMenuConfig'
+import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
+import { buildBreadcrumbs } from './breadcrumb'
 import AccountSwitcher from './AccountSwitcher'
 import { GuideController } from '../../guides/GuideController'
 
 const { Header, Sider, Content } = Layout
 
-// 路由 → 面包屑映射
-const ROUTE_LABELS: Record<string, string> = {
-  '/': '仪表盘',
-  '/tasks': '任务管理',
-  '/tasks/new': '新建任务',
-  '/items': '商品列表',
-  '/orders': '抢单记录',
-  '/evaluations': '评估明细',
-  '/timeline': '事件时间线',
-  '/logs': '实时日志',
-  '/logs/errors': '错误日志',
-  '/config/price': '价格策略',
-  '/config/eval': '评估规则',
-  '/config/buyer': '抢单策略',
-  '/config/search': '搜索参数',
-  '/config/notifier': '通知渠道',
-  '/config/ai': 'AI 服务',
-  '/config/version': '配置版本',
-  '/maintenance': '系统清理',
-  '/maintenance/db': '数据库维护',
-  '/maintenance/vector': '向量数据库维护',
-  '/maintenance/tunnel': '内网穿透',
-  '/price-dashboard': '价格行情',
-  '/batch-refresh': '批量采集',
-  '/anticrawl': '反爬登录管理',
-  '/chatbot': '智能客服',
-  '/config/chatbot': '客服配置',
-  '/help': '帮助文档',
-  '/about': '关于',
-  '/export': '数据导出',
-  '/notifications': '通知中心',
-  '/menu-admin': '菜单管理',
-}
 
 // Command Palette 可搜索的命令列表（扁平化所有页面导航项）
 const COMMAND_ITEMS = [
@@ -175,7 +144,7 @@ export default function MainLayout() {
 
   // 动态菜单：从后端 /api/menu 拉取用户级菜单配置（MU5）
   // 模块级缓存 5min TTL，切换账号时由 AccountSwitcher 调用 invalidateMenuCache 失效
-  const { menuItems: dynamicMenuItems, loading: menuLoading } = useMenuConfig()
+  const { menus, menuItems: dynamicMenuItems, loading: menuLoading } = useMenuConfig()
 
   // 轮询调度器状态
   const fetchSchedulerStatus = useCallback(() => {
@@ -338,24 +307,30 @@ export default function MainLayout() {
     return keys
   }, [location.pathname, dynamicMenuItems])
 
-  // 受控 openKeys：仅首次挂载时按当前路由初始化，之后完全由用户手动控制
-  // 为什么不用 useEffect 联动 autoOpenKeys：sheet 切换/快捷键导航都会触发 URL 变化→
+  // 受控 openKeys：首屏按当前路由展开所属分组，用户手动开合后不再被路由联动
+  // 为什么不用 useEffect 全程联动 autoOpenKeys：sheet 切换/快捷键导航都会触发 URL 变化→
   // autoOpenKeys 重算，若联动更新 openKeys 会展开新分组 SubMenu，产生遮挡内容的动画
   // 用户期望：侧边栏 SubMenu 状态独立于路由，仅在用户主动点击时变化
-  const [openKeys, setOpenKeys] = useState<string[]>(autoOpenKeys)
+  const { openKeys, setOpenKeys: handleOpenKeysChange } = useOpenKeysOnDeepLink(
+    autoOpenKeys,
+    dynamicMenuItems.length > 0,
+  )
 
-  const breadcrumbItems = useMemo(() => {
-    const items = [{ title: <Link to="/"><HomeOutlined /> 首页</Link> }]
-    const path = location.pathname
-    if (path !== '/') {
-      const label = ROUTE_LABELS[path]
-        || ROUTE_LABELS[Object.keys(ROUTE_LABELS).find((k) => k !== '/' && path.startsWith(k)) || '']
-      if (label) {
-        items.push({ title: <span className="current">{label}</span> })
-      }
-    }
-    return items
-  }, [location.pathname])
+  // 面包屑：计算在 breadcrumb.ts 里（纯函数，可脱离 Router/antd 单测），此处只做渲染
+  const crumbs = useMemo(
+    () => buildBreadcrumbs(location.pathname, menus),
+    [location.pathname, menus],
+  )
+  const breadcrumbItems = useMemo(
+    () => crumbs.map((c, idx) => ({
+      title: c.href ? (
+        <Link to={c.href}>{idx === 0 ? <><HomeOutlined /> {c.label}</> : c.label}</Link>
+      ) : (
+        <span className={c.current ? 'current' : undefined}>{c.label}</span>
+      ),
+    })),
+    [crumbs],
+  )
 
   // 窗口尺寸变化时同步 Sider 收缩状态：F12 切换设备模拟器实时生效
   useEffect(() => {
@@ -424,7 +399,7 @@ export default function MainLayout() {
       breadcrumbItems={breadcrumbItems}
       selectedKey={selectedKey}
       openKeys={openKeys}
-      setOpenKeys={setOpenKeys}
+      setOpenKeys={handleOpenKeysChange}
       menuItems={dynamicMenuItems}
       drawerOpen={drawerOpen}
       setDrawerOpen={setDrawerOpen}
@@ -454,7 +429,8 @@ interface LayoutContentProps {
   readonly breadcrumbItems: { title: React.ReactNode }[]
   readonly selectedKey: string
   readonly openKeys: string[]
-  readonly setOpenKeys: React.Dispatch<React.SetStateAction<string[]>>
+  // 只接受「用户手动开合」的字符串数组入口：内部据此标记 touched，路由联动不再覆盖
+  readonly setOpenKeys: (keys: string[]) => void
   readonly menuItems: NonNullable<MenuProps['items']>
   readonly drawerOpen: boolean
   readonly setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
