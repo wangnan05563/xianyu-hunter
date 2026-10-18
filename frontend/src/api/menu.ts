@@ -34,7 +34,7 @@ export function menuLabelForPath(path: string): string | undefined {
   return labelByPath[path]
 }
 
-// 菜单分组中文标签：useMenuConfig 与 MenuAdmin 共享，避免重复定义导致漂移
+// 菜单分组中文标签：菜单载荷未到达时的兜底（权威源是 registry 的 groups 段，见下）
 // 后端 group 字段值与 menu_registry.yaml 对齐
 export const MENU_GROUP_LABELS: Record<string, string> = {
   overview: '总览',
@@ -44,6 +44,31 @@ export const MENU_GROUP_LABELS: Record<string, string> = {
   other: '其他',
   main: '主要功能',
   system: '系统',
+}
+
+// 分组元数据（FR-B-5 / N6）：GET /api/menu 的 groups 载荷结构
+export type MenuGroup = {
+  /** 分组键，对应 MenuItem.category（如 'data_view'） */
+  key: string
+  /** 分组显示名（如「数据查看」） */
+  label: string
+  /** 分组专用图标名，不再借用组内第一个菜单项的图标 */
+  icon: string
+}
+
+// 与文案索引同机制：useMenuConfig 拉到菜单时刷新，未到达时调用方回退 MENU_GROUP_LABELS
+let groupsByKey: Readonly<Record<string, MenuGroup>> = {}
+
+export function setMenuGroupIndex(groups: readonly MenuGroup[]): void {
+  const next: Record<string, MenuGroup> = {}
+  for (const g of groups) {
+    if (g.key) next[g.key] = g
+  }
+  groupsByKey = next
+}
+
+export function menuGroupByKey(key: string): MenuGroup | undefined {
+  return groupsByKey[key]
 }
 
 // 菜单项结构：对应后端 GET /api/menu 返回的 MenuItem
@@ -77,12 +102,25 @@ export type MenuItemUpdate = {
   sort_order?: number
 }
 
+// GET /api/menu 响应体：menus 是用户可见菜单，groups 是分组元数据（FR-B-5）
+export type MenuPayload = {
+  menus: MenuItem[]
+  groups: MenuGroup[]
+}
+
 // 菜单配置 API：管理用户级菜单配置（可见性/排序/别名）
 // 与后端 api_menu.py 契约对齐：GET/PUT/POST /api/menu
 export const menuApi = {
   // 获取当前用户菜单（已合并 registry 默认值 + 用户自定义）
   get: () =>
-    client.get<{ menus: MenuItem[] }>('/api/menu').then((r) => r.data.menus),
+    client.get<MenuPayload>('/api/menu').then((r) => r.data.menus),
+
+  // 获取菜单 + 分组元数据：侧栏构建与面包屑需要分组图标，走这条通道
+  getWithGroups: () =>
+    client.get<MenuPayload>('/api/menu').then((r) => ({
+      menus: r.data.menus ?? [],
+      groups: r.data.groups ?? [],
+    })),
 
   // 批量更新用户菜单配置（全量覆盖）：后端 MenuUpdateBody 的外层键是 menus
   update: (items: MenuItemUpdate[]) =>

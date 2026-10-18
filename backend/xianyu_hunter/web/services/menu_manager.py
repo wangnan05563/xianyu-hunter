@@ -93,6 +93,7 @@ class MenuManager:
         # get_menus 为只读且无副作用，无需持锁，依赖 SQLite 自身的并发控制
         self._lock = threading.RLock()
         self._registry: list[dict[str, Any]] = []
+        self._groups: list[dict[str, Any]] = []
         # get_menus 结果缓存：user_id → (timestamp, merged_list)
         # 为什么用 dict 而非 lru_cache：需要按 user_id 精细失效，lru_cache 不支持
         self._cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -135,7 +136,10 @@ class MenuManager:
             self._registry = []
             return
         self._registry = menus
-        logger.info("已加载菜单注册表: %d 项", len(self._registry))
+        # 分组元数据（FR-B-5）：与 menus 一样是 registry 单源的一部分，缺失时前端回退本地表
+        groups = data.get("groups", [])
+        self._groups = [g for g in groups if isinstance(g, dict) and g.get("key")] if isinstance(groups, list) else []
+        logger.info("已加载菜单注册表: %d 项 / %d 个分组", len(self._registry), len(self._groups))
 
     def _load_user_configs(self, user_id: str) -> dict[str, dict[str, Any]]:
         """读取用户级菜单覆盖
@@ -158,6 +162,16 @@ class MenuManager:
         return result
 
     # ---------- 公共 API ----------
+
+    def get_groups(self) -> list[dict[str, Any]]:
+        """分组元数据（key/label/icon）——随 GET /api/menu 下发（FR-B-5 / N6）
+
+        分组是所有用户共享的静态元数据，不进用户级合并与缓存。
+        """
+        return [
+            {"key": str(g.get("key", "")), "label": str(g.get("label", "")), "icon": str(g.get("icon", ""))}
+            for g in self._groups
+        ]
 
     def get_menus(self, user_id: str) -> list[dict[str, Any]]:
         """获取用户菜单（合并 registry 默认值 + 用户级覆盖）

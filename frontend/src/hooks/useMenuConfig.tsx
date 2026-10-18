@@ -36,9 +36,19 @@ import {
   AimOutlined,
   GlobalOutlined,
   QuestionCircleOutlined,
+  FundOutlined,
+  BarChartOutlined,
+  SlidersOutlined,
 } from '@ant-design/icons'
 // 合并 value 与 type 引入，避免 S3863 重复 import
-import { menuApi, MENU_GROUP_LABELS, setMenuLabelIndex, type MenuItem } from '../api/menu'
+import {
+  menuApi,
+  MENU_GROUP_LABELS,
+  setMenuLabelIndex,
+  setMenuGroupIndex,
+  type MenuItem,
+  type MenuGroup,
+} from '../api/menu'
 
 // 图标名 → Ant Design 图标组件映射
 // 为什么集中维护：后端返回字符串图标名（如 'DashboardOutlined'），前端需映射到实际组件
@@ -84,6 +94,10 @@ const iconMap: Record<string, IconComp> = {
   AimOutlined,
   GlobalOutlined,
   QuestionCircleOutlined,
+  // 分组专用图标（FR-B-5）：由 registry 的 groups.icon 指定，不与叶子项共用
+  FundOutlined,
+  BarChartOutlined,
+  SlidersOutlined,
 }
 
 // 分组中文标签：用于 SubMenu 标题
@@ -93,14 +107,14 @@ const iconMap: Record<string, IconComp> = {
 // Ant Design Menu items 类型：兼容 divider 与 SubMenu
 // 叶子节点单独定义：SubMenu 的 children 永远是叶子（不嵌套 SubMenu），
 // 这样 children 内访问 key 不需要额外类型守卫
-type AntMenuLeaf = { key: string; icon?: ReactNode; label: string }
+type AntMenuLeaf = { key: string; icon: ReactNode; label: string }
 type AntMenuItem =
   | (AntMenuLeaf & { children?: AntMenuLeaf[] })
   | { type: 'divider' }
 
 // 模块级缓存：跨组件实例共享，避免路由切换重复请求
 // 为什么不用 React Context：菜单数据全局共享且不频繁变化，模块级缓存更简单
-let menuCache: { menus: MenuItem[]; ts: number } | null = null
+let menuCache: { menus: MenuItem[]; groups: MenuGroup[]; ts: number } | null = null
 const CACHE_TTL_MS = 5 * 60 * 1000 // 5 分钟
 
 /**
@@ -120,22 +134,23 @@ export function invalidateMenuCache(): void {
  * 4. 仅渲染 visible=true 的项
  * 5. 按 sort_order 升序排列
  */
-export function buildMenuItems(menus: MenuItem[]): AntMenuItem[] {
+export function buildMenuItems(menus: MenuItem[], groups: MenuGroup[] = []): AntMenuItem[] {
+  const groupMeta = new Map<string, MenuGroup>(groups.map((g) => [g.key, g] as const))
   const visible = menus.filter((m) => m.visible)
   const main = visible.filter((m) => m.category !== 'system')
   const system = visible.filter((m) => m.category === 'system')
 
   // 主区域：按 category 字段分组（后端 category 即为分组键）
-  const groups = new Map<string, MenuItem[]>()
+  const byCategory = new Map<string, MenuItem[]>()
   for (const m of main) {
     const g = m.category || 'main'
-    if (!groups.has(g)) groups.set(g, [])
-    groups.get(g)!.push(m)
+    if (!byCategory.has(g)) byCategory.set(g, [])
+    byCategory.get(g)!.push(m)
   }
 
   // 按 group 内 sort_order 排序，group 间按首个元素的 sort_order 排序
   // S4043：先在独立语句中排序，再用于 map，避免原地 sort 副作用
-  const sortedGroups = Array.from(groups.entries())
+  const sortedGroups = Array.from(byCategory.entries())
     .map(([g, items]) => {
       const sortedItems = [...items].sort((a, b) => a.sort_order - b.sort_order)
       return {
@@ -150,24 +165,18 @@ export function buildMenuItems(menus: MenuItem[]): AntMenuItem[] {
   for (const { group, items } of sortedGroups) {
     // 单项 group 直接作为顶层项，避免单层 SubMenu 包裹
     if (items.length === 1) {
-      const item = items[0]
-      result.push({
-        key: item.path,
-        icon: renderIcon(item.icon),
-        label: item.label,
-      })
+      result.push(toLeaf(items[0]))
     } else {
       // 多项 group 渲染为 SubMenu
       const groupKey = `sub-${group}`
+      // 分组标题与图标以 registry 的 groups 为准（FR-B-5 / N6）：
+      // 此前图标取 items[0].icon，导致「数据查看」显示成任务管理图标、多个分组图标重复
+      const meta = groupMeta.get(group)
       result.push({
         key: groupKey,
-        icon: renderIcon(items[0].icon),
-        label: MENU_GROUP_LABELS[group] || group,
-        children: items.map((item) => ({
-          key: item.path,
-          icon: renderIcon(item.icon),
-          label: item.label,
-        })),
+        icon: renderIcon(meta?.icon || items[0].icon),
+        label: meta?.label || MENU_GROUP_LABELS[group] || group,
+        children: items.map(toLeaf),
       })
     }
   }
@@ -178,15 +187,16 @@ export function buildMenuItems(menus: MenuItem[]): AntMenuItem[] {
     // S4043：sort 移到独立语句，避免原地 sort 在 for 中造成副作用
     const sortedSystem = [...system].sort((a, b) => a.sort_order - b.sort_order)
     for (const item of sortedSystem) {
-      result.push({
-        key: item.path,
-        icon: renderIcon(item.icon),
-        label: item.label,
-      })
+      result.push(toLeaf(item))
     }
   }
 
   return result
+}
+
+// 叶子菜单项 → antd item：顶层单项、SubMenu children、system 区三处同构，抽公共函数
+function toLeaf(item: MenuItem): AntMenuLeaf {
+  return { key: item.path, icon: renderIcon(item.icon), label: item.label }
 }
 
 export type CommandItem = { key: string; label: string; icon: ReactNode }
@@ -200,9 +210,7 @@ export type CommandItem = { key: string; label: string; icon: ReactNode }
  * 菜单管理自身是后端锁定项，永远是恢复入口。
  */
 export function buildCommandItems(menus: MenuItem[]): CommandItem[] {
-  return menus
-    .filter((m) => m.visible && m.path)
-    .map((m) => ({ key: m.path, label: m.label, icon: renderIcon(m.icon) }))
+  return menus.filter((m) => m.visible && m.path).map(toLeaf)
 }
 
 // 渲染图标：未知图标名兜底到 AppstoreOutlined
@@ -222,33 +230,37 @@ function renderIcon(iconName: string): ReactNode {
  */
 export function useMenuConfig() {
   const [menus, setMenus] = useState<MenuItem[]>(menuCache?.menus ?? [])
+  const [groups, setGroups] = useState<MenuGroup[]>(menuCache?.groups ?? [])
   const [loading, setLoading] = useState<boolean>(!menuCache)
   const [error, setError] = useState<Error | null>(null)
 
-  // 写入菜单状态的同时刷新文案单源索引：标签栏、命令面板、面包屑都从这里取 label
-  const applyMenus = useCallback((list: MenuItem[]): void => {
+  // 写入菜单状态的同时刷新两个单源索引：
+  // 文案索引（标签栏、命令面板、面包屑取 label）与分组索引（SubMenu 取标题/图标）
+  const applyMenus = useCallback((list: MenuItem[], groupList: MenuGroup[]): void => {
     setMenuLabelIndex(list)
+    setMenuGroupIndex(groupList)
     setMenus(list)
+    setGroups(groupList)
   }, [])
 
   const fetchMenus = useCallback(async (force: boolean = false): Promise<void> => {
     // 缓存命中且未过期：直接使用，不发请求
     if (!force && menuCache && Date.now() - menuCache.ts < CACHE_TTL_MS) {
-      applyMenus(menuCache.menus)
+      applyMenus(menuCache.menus, menuCache.groups)
       setLoading(false)
       return
     }
     setLoading(true)
     setError(null)
     try {
-      const data = await menuApi.get()
-      menuCache = { menus: data, ts: Date.now() }
-      applyMenus(data)
+      const data = await menuApi.getWithGroups()
+      menuCache = { menus: data.menus, groups: data.groups, ts: Date.now() }
+      applyMenus(data.menus, data.groups)
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err))
       setError(e)
       // 失败时保留旧缓存数据（如有），避免菜单瞬间消失
-      if (menuCache) applyMenus(menuCache.menus)
+      if (menuCache) applyMenus(menuCache.menus, menuCache.groups)
     } finally {
       setLoading(false)
     }
@@ -263,8 +275,8 @@ export function useMenuConfig() {
     void fetchMenus(true)
   }, [fetchMenus])
 
-  // 预构建 antd Menu items 格式
-  const menuItems = buildMenuItems(menus)
+  // 预构建 antd Menu items 格式（分组标题与图标来自 registry 的 groups）
+  const menuItems = buildMenuItems(menus, groups)
 
-  return { menus, menuItems, loading, error, refresh }
+  return { menus, groups, menuItems, loading, error, refresh }
 }

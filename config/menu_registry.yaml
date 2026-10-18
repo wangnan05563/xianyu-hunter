@@ -4,6 +4,27 @@
 # 分组结构：overview/data_view/config/maintenance/other（与 docs/ 文档目录结构对齐）
 version: 1
 
+# 分组元数据（FR-B-5 / N6）：分组标题与分组图标也由此单源提供，随 GET /api/menu 下发。
+# 为什么需要：此前前端 SubMenu 的标题来自硬编码 MENU_GROUP_LABELS，图标直接取分组内
+# 第一个菜单项的图标（items[0].icon），导致「数据查看」用着任务管理的图标、
+# 四个分组图标互相重复。分组图标配独立值，不再借用叶子项图标。
+groups:
+  - key: overview
+    label: 总览
+    icon: FundOutlined
+  - key: data_view
+    label: 数据查看
+    icon: BarChartOutlined
+  - key: config
+    label: 配置管理
+    icon: SlidersOutlined
+  - key: maintenance
+    label: 系统维护
+    icon: ToolOutlined
+  - key: other
+    label: 其他
+    icon: AppstoreOutlined
+
 menus:
   # ========== 总览（overview）：仪表盘入口 ==========
   - key: dashboard

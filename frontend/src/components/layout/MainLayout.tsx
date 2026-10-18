@@ -32,6 +32,7 @@ import { useMenuConfig, buildCommandItems } from '../../hooks/useMenuConfig'
 import type { CommandItem } from '../../hooks/useMenuConfig'
 import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
 import { buildBreadcrumbs } from './breadcrumb'
+import { G_PREFIX_MAP, G_PREFIX_HINT, shortcutHintForPath } from './shortcuts'
 import AccountSwitcher from './AccountSwitcher'
 import { GuideController } from '../../guides/GuideController'
 
@@ -40,18 +41,7 @@ const { Header, Sider, Content } = Layout
 
 // Command Palette 导航项不再硬编码：由 /api/menu 派生（buildCommandItems），见 T02556 / FR-B-4
 
-// g+X 全局快捷键映射
-const G_PREFIX_MAP: Record<string, string> = {
-  d: '/',
-  t: '/tasks',
-  o: '/orders',
-  e: '/evaluations',
-  i: '/timeline',
-  c: '/config/price',
-  l: '/logs',
-  a: '/about',
-  m: '/chatbot',
-}
+// g+X 快捷键表与键位提示：单独成模块（shortcuts.ts），便于命令面板渲染提示与单测
 
 export default function MainLayout() {
   const location = useLocation()
@@ -413,6 +403,9 @@ function LayoutContent({
     return commandItems.filter((item) => item.label.toLowerCase().includes(kw))
   }, [cmdSearch, commandItems])
 
+  // 告警抽屉的三个空态文案同构，抽成函数避免同一段 JSX 重复（并消掉 `: <JSX>,` 形态）
+  const emptyHint = (text: string) => <div style={{ color: themeToken.colorTextSecondary }}>{text}</div>
+
   // 路由切换时重置外层 Content 的滚动位置到顶部
   // 修复：默认情况下外层 Content 的 scrollTop 不会随路由变化重置，
   // 从其他页面跳转过来时新页面会显示在错误的滚动位置（如 /chatbot 顶部被截断）。
@@ -636,7 +629,7 @@ function LayoutContent({
                         </List.Item>
                       )}
                     />
-                  ) : <div style={{ color: themeToken.colorTextSecondary }}>暂无失败订单</div>,
+                  ) : emptyHint('暂无失败订单'),
                 },
                 {
                   key: 'timeout',
@@ -660,7 +653,7 @@ function LayoutContent({
                         </List.Item>
                       )}
                     />
-                  ) : <div style={{ color: themeToken.colorTextSecondary }}>暂无超时订单</div>,
+                  ) : emptyHint('暂无超时订单'),
                 },
                 {
                   key: 'low_eval',
@@ -684,7 +677,7 @@ function LayoutContent({
                         </List.Item>
                       )}
                     />
-                  ) : <div style={{ color: themeToken.colorTextSecondary }}>暂无低分评估</div>,
+                  ) : emptyHint('暂无低分评估'),
                 },
               ]}
             />
@@ -736,7 +729,10 @@ function LayoutContent({
           {filteredCommands.length === 0 ? (
             <div style={{ textAlign: 'center', color: themeToken.colorTextSecondary, padding: 24 }}>无匹配命令</div>
           ) : (
-            filteredCommands.map((item, idx) => (
+            filteredCommands.map((item, idx) => {
+              // N4：面板每行右侧展示 g+X 键位，快捷键从「只有帮助文档里才知道」变成使用时可见
+              const hint = shortcutHintForPath(item.key)
+              return (
               <button
                 type="button"
                 key={item.key}
@@ -759,10 +755,28 @@ function LayoutContent({
               >
                 <span style={{ fontSize: 16, color: themeToken.colorTextSecondary }}>{item.icon}</span>
                 <span>{item.label}</span>
-                <span style={{ marginLeft: 'auto', fontSize: 12, color: themeToken.colorTextQuaternary }}>{item.key}</span>
+                <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {hint && (
+                    <span style={{ fontSize: 12, fontFamily: 'monospace', color: themeToken.colorTextSecondary }}>
+                      {hint}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 12, color: themeToken.colorTextQuaternary }}>{item.key}</span>
+                </span>
               </button>
-            ))
+              )
+            })
           )}
+        </div>
+        <div
+          style={{
+            borderTop: `1px solid ${themeToken.colorBorderSecondary}`,
+            padding: '8px 16px',
+            fontSize: 12,
+            color: themeToken.colorTextSecondary,
+          }}
+        >
+          {G_PREFIX_HINT}
         </div>
       </Modal>
 

@@ -1,4 +1,4 @@
-import { MENU_GROUP_LABELS } from '../../api/menu'
+import { MENU_GROUP_LABELS, menuGroupByKey } from '../../api/menu'
 import type { MenuItem } from '../../api/menu'
 import { findSheetMeta } from '../SheetWorkspace/sheetRegistry'
 
@@ -32,8 +32,9 @@ export function buildBreadcrumbs(pathname: string, menus: MenuItem[]): Crumb[] {
   }
 
   const out: Crumb[] = [root]
-  const group = MENU_GROUP_LABELS[hit.category]
-  if (group) out.push({ label: group })
+  // 分组名优先取 registry 的 groups.label（与侧栏 SubMenu 同源），兜底用内置中文表
+  const groupLabel = menuGroupByKey(hit.category)?.label ?? MENU_GROUP_LABELS[hit.category]
+  if (groupLabel) out.push({ label: groupLabel })
 
   if (pathname === hit.path) {
     return [...out, { label: hit.label, current: true }]

@@ -43,13 +43,15 @@ class MenuUpdateBody(BaseModel):
 def get_menu(request: Request) -> dict[str, Any]:
     """获取当前用户菜单
 
-    返回 {menus: [...]}，已按 sort_order 升序排列，仅包含 visible=True 的项。
+    返回 {menus: [...], groups: [...]}，menus 已按 sort_order 升序排列，仅包含 visible=True 的项。
     用户无配置时返回 registry 默认值。
+    groups 是分组元数据（key/label/icon，FR-B-5）：分组的中文名与图标此前只在前端硬编码，
+    与 registry 的 category 值各自维护会漂移；下发后前端 SubMenu 与面包屑都以 registry 为准。
     """
     user_id = getattr(request.state, "user_id", _DEFAULT_USER_ID)
     manager = get_menu_manager()
     menus = manager.get_menus(user_id)
-    return {"menus": menus}
+    return {"menus": menus, "groups": manager.get_groups()}
 
 
 @router.put("")

@@ -109,3 +109,18 @@ def test_menu_admin_cannot_be_hidden(menu_client):
     by_key = {m["key"]: m for m in manager.get_menus("default")}
     assert "menu_admin" in by_key, "菜单管理被隐藏后用户再也进不去，形成死锁"
     assert by_key["menu_admin"]["locked"] is True
+
+
+# T02558 / FR-B-5：分组标题与图标改为随 GET /api/menu 下发
+# 此前前端 SubMenu 图标取「组内第一个菜单项的图标」，多个分组图标雷同、名称靠内置表拼
+def test_get_menu_carries_group_meta(menu_client):
+    client, _ = menu_client
+    data = client.get("/api/menu").json()
+    groups = {g["key"]: g for g in data["groups"]}
+    assert len(groups) >= 5, f"分组定义缺失：{list(groups)}"
+    for key, g in groups.items():
+        assert g["label"], f"分组 {key} 缺少中文标题"
+        assert g["icon"], f"分组 {key} 缺少图标名"
+    # 每个菜单的 category 都要有对应分组，否则前端只能回退到内置常量表（第二份定义）
+    categories = {m["category"] for m in data["menus"] if m.get("category")}
+    assert categories <= set(groups), f"未定义分组的 category: {categories - set(groups)}"
