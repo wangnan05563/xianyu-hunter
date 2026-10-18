@@ -237,11 +237,14 @@ class MenuManager:
                     # 导致未在 SQL 中指定的 group_name/custom_label 被重置为默认值（空串）。
                     # ON CONFLICT DO UPDATE 仅更新指定列，保留 group_name/custom_label 既有值。
                     # 主键 (user_id, menu_key) 已在 db_models.UserMenuConfigRow 定义
+                    # group_name/custom_label 是 NOT NULL 列，裸 SQL 不走 ORM 的 Python 端默认值，
+                    # 必须显式给出空串，否则新建行直接触发 NOT NULL 约束失败（HTTP 500）
                     conn.execute(
                         sa_text(
                             "INSERT INTO user_menu_configs "
-                            "(user_id, menu_key, visible, sort_order, updated_at) "
-                            "VALUES (:uid, :key, :vis, :sort, :now) "
+                            "(user_id, menu_key, visible, sort_order, "
+                            "group_name, custom_label, updated_at) "
+                            "VALUES (:uid, :key, :vis, :sort, :grp, :lbl, :now) "
                             "ON CONFLICT(user_id, menu_key) DO UPDATE SET "
                             "visible=:vis, sort_order=:sort, updated_at=:now"
                         ),
@@ -250,6 +253,8 @@ class MenuManager:
                             "key": key,
                             "vis": visible,
                             "sort": sort_order,
+                            "grp": str(m.get("group_name") or ""),
+                            "lbl": str(m.get("custom_label") or ""),
                             "now": now,
                         },
                     )

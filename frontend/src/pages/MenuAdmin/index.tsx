@@ -117,7 +117,7 @@ export default function MenuAdmin() {
     const updates: MenuItemUpdate[] = rows
       .filter((r) => r.dirty)
       .map((r) => ({
-        menu_key: r.key,
+        key: r.key,
         visible: r.editVisible,
         sort_order: r.editSortOrder,
       }))

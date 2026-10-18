@@ -11,6 +11,7 @@ import type { GuideStep, GuidePlayMode } from './types'
 import { findMenuGuide } from './menuGuides'
 import { isGuideDone, markGuideDone } from './guideStorage'
 import { resolveTourTarget } from './target'
+import { openSheetWithNotification } from '@/components/SheetWorkspace/sheetNotifications'
 
 /** 自动播放时每步停留时长（毫秒） */
 const AUTO_PLAY_INTERVAL = 3000
@@ -164,7 +165,7 @@ export function GuideController() {
         ) : (
           <FloatButton
             icon={<CompassOutlined />}
-            href="#/help"
+            onClick={() => openSheetWithNotification('/help')}
             tooltip="查看使用说明与帮助文档"
           />
         )}
@@ -184,7 +185,7 @@ export function GuideController() {
         )}
         <FloatButton
           icon={<QuestionCircleOutlined />}
-          href="#/help"
+          onClick={() => openSheetWithNotification('/help')}
           tooltip="查看完整帮助文档"
         />
       </FloatButton.Group>

@@ -24,8 +24,17 @@ import { TipButton } from '@/components/TipButton'
  */
 export function openSheetWithNotification(path: string) {
   const result = useSheetStore.getState().openSheet(path)
-  if (result.replacedSheet) {
-    const { id, title } = result.replacedSheet
+  // 路径未注册（菜单项指向没有实现的页面）时必须出声，否则用户看到的是「点了没反应」
+  if (!result.ok && result.reason === 'not_found') {
+    notification.warning({
+      key: `sheet-not-found-${path}`,
+      message: '页面不存在',
+      description: `菜单指向的 ${path} 没有已实现的页面，请联系开发者或在「菜单管理」中隐藏该项`,
+      duration: 5,
+      placement: 'topRight',
+    })
+  }
+  if (result.replacedSheet) {    const { id, title } = result.replacedSheet
     const key = `sheet-replaced-${id}`
     notification.info({
       key,

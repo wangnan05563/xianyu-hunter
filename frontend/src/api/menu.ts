@@ -45,13 +45,13 @@ export type MenuItem = {
   category: MenuCategory
 }
 
-// PUT /api/menu 单项更新载荷：仅传可变字段，减少网络负载
+// PUT /api/menu 单项更新载荷：字段名与后端 api_menu.py MenuItemUpdate 逐字对齐
+// 后端只接受 key/visible/sort_order；group/custom_label 需先扩后端模型（决策门 D-11），
+// 未实现前不得出现在请求类型里，否则等于给用户一个写了也不生效的输入框
 export type MenuItemUpdate = {
-  menu_key: string
+  key: string
   visible?: boolean
   sort_order?: number
-  group?: string
-  custom_label?: string
 }
 
 // 菜单配置 API：管理用户级菜单配置（可见性/排序/别名）
@@ -61,9 +61,9 @@ export const menuApi = {
   get: () =>
     client.get<{ menus: MenuItem[] }>('/api/menu').then((r) => r.data.menus),
 
-  // 批量更新用户菜单配置（全量覆盖）
+  // 批量更新用户菜单配置（全量覆盖）：后端 MenuUpdateBody 的外层键是 menus
   update: (items: MenuItemUpdate[]) =>
-    client.put<{ ok: boolean }>('/api/menu', { items }).then((r) => r.data),
+    client.put<{ ok: boolean }>('/api/menu', { menus: items }).then((r) => r.data),
 
   // 重置为默认配置（删除 user_menu_configs 记录）
   reset: () =>

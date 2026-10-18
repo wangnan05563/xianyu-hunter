@@ -47,6 +47,12 @@ const MenuAdmin = lazyRetry(() => import('./pages/MenuAdmin'))
 const Notifications = lazyRetry(() => import('./pages/Notifications'))
 // 半自动模式确认抢单页：外部通知点击链接后到达，复用 manual-takeover 接口
 const ConfirmBuy = lazyRetry(() => import('./pages/ConfirmBuy'))
+// 价格行情看板 + 数据导出：menu_registry.yaml 已注册、sheetRegistry 已收录，
+// 此前缺 Route 导致 URL 落到兜底分支被静默送回首页（T02584/FR-A-2）
+const PriceDashboard = lazyRetry(() => import('./pages/PriceDashboard'))
+const Export = lazyRetry(() => import('./pages/Export'))
+// 未知路由的显式落点（替代静默 Navigate to="/"）
+const NotFound = lazyRetry(() => import('./pages/NotFound'))
 
 // 全局 fallback 加载组件：懒加载页面未就绪时展示
 function PageLoading() {
@@ -100,6 +106,8 @@ export default function App() {
             <Route path="orders" element={<LazyRoute><Orders /></LazyRoute>} />
             <Route path="evaluations" element={<LazyRoute><Evaluations /></LazyRoute>} />
             <Route path="timeline" element={<LazyRoute><Timeline /></LazyRoute>} />
+            <Route path="price-dashboard" element={<LazyRoute><PriceDashboard /></LazyRoute>} />
+            <Route path="export" element={<LazyRoute><Export /></LazyRoute>} />
             <Route path="logs" element={<LazyRoute><Logs /></LazyRoute>} />
             <Route path="logs/errors" element={<LazyRoute><ErrorLogs /></LazyRoute>} />
             <Route path="config/price" element={<LazyRoute><PriceStrategy /></LazyRoute>} />
@@ -127,10 +135,12 @@ export default function App() {
             {/* 帮助文档、关于：与其他菜单一致，在 SheetWorkspace 内显示 */}
             <Route path="help" element={<LazyRoute><Help /></LazyRoute>} />
             <Route path="about" element={<LazyRoute><About /></LazyRoute>} />
-            <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
           {/* 移动端路由组 */}
           <Route path="/m/*" element={<MobileRoutes />} />
+          {/* 未知路由：显式 404 落点。此前这里是嵌套兜底 <Navigate to="/" replace/>，
+              会把任何手敲/失效链接静默送回首页，用户无从判断是点错了还是程序坏了 */}
+          <Route path="*" element={<LazyRoute><NotFound /></LazyRoute>} />
         </Routes>
         {/* O-12-26 PWA 更新/离线就绪提示，放在 AntdApp 内以使用主题 notification */}
         <ReloadPrompt />
