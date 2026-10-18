@@ -230,14 +230,16 @@ function StandardTab({
     >
       {/* 图标 */}
       <span style={{ fontSize: 18, lineHeight: 1 }}>{sheet.icon}</span>
-      {/* 标题：纵向截断 */}
+      {/* 标题：纵向截断
+          maxHeight 原为 80，七个字（「向量数据库维护」）就被裁掉尾巴；
+          放宽到能容九字，更长的仍走省略号，完整标题由外层 title/Tooltip 兜住（评审 2.7 维度2） */}
       <span style={{
         fontSize: 11,
         writingMode: 'vertical-rl',
         textOverflow: 'ellipsis',
         overflow: 'hidden',
         whiteSpace: 'nowrap',
-        maxHeight: 80,
+        maxHeight: 112,
         letterSpacing: 1,
       }}>
         {sheet.title}

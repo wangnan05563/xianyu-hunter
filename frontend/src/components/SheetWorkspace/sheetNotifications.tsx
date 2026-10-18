@@ -39,11 +39,13 @@ export function openSheetWithNotification(path: string) {
     })
   }
   if (result.replacedSheet) {    const { id, title } = result.replacedSheet
+    const { maxSheets } = useSheetStore.getState().preferences
     const key = `sheet-replaced-${id}`
     notification.info({
       key,
       message: '已自动替换 sheet',
-      description: `最旧非激活 sheet「${title}」被自动淘汰，可点击右侧按钮恢复`,
+      // 把上限与常驻入口写进正文：5 秒 Toast 一过就没线索，用户需要知道去哪找回（FR-B-7）
+      description: `已达 ${maxSheets} 个上限，最旧非激活 sheet「${title}」被自动淘汰；可点右侧「撤销」恢复，或随时在「Sheet 偏好」的回收栈里查看`,
       duration: 5,
       placement: 'bottomRight',
       // 撤销按钮：点击后调用 restoreReplaced 从回收栈恢复被替换的 sheet

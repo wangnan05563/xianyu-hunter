@@ -9,6 +9,23 @@ import { taskApi } from '../../api'
 // 后端演练触发与报告均已异步落库，此处仅读任务配置
 const POLL_INTERVAL_MS = 60_000
 
+// 横幅一行放得下的任务名上限，超出即折叠
+const MAX_LISTED = 3
+
+/**
+ * 演练任务名折叠（评审 2.7 维度4）：
+ * 真机出现过「演练测试、演练测试、……（12 次）」占满两行、把结论挤到末尾的情况，
+ * 因此先按名去重，再在超过上限时折叠成「A、B、C 等 N 个任务」。
+ */
+export function summarizeDryRunTasks(names: string[]): string {
+  const total = names.length
+  const uniq = [...new Set(names)]
+  const head = uniq.slice(0, MAX_LISTED).join('、')
+  if (uniq.length > MAX_LISTED) return `${head} 等 ${total} 个任务`
+  if (total > uniq.length) return `${head}（共 ${total} 个任务）`
+  return head
+}
+
 export default function DryRunBanner() {
   const [dryRunTaskNames, setDryRunTaskNames] = useState<string[]>([])
 
@@ -40,9 +57,10 @@ export default function DryRunBanner() {
       type="warning"
       showIcon
       icon={<ThunderboltOutlined />}
-      message={`演练模式运行中：${dryRunTaskNames.join('、')}——抢单链路走到订单确认页即中止，不会产生真实订单`}
+      // 结论前置：先说「不会产生真实订单」，再列任务（评审 2.7 维度4）
+      message={`演练模式运行中·不产生真实订单（走到订单确认页即中止）：${summarizeDryRunTasks(dryRunTaskNames)}`}
       banner
-      style={{ borderRadius: 0 }}
+      style={{ borderRadius: 0, flex: '0 0 auto' }}
     />
   )
 }

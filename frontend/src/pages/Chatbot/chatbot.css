@@ -99,8 +99,11 @@
 /* ============ 根布局 ============ */
 .cb-root {
   display: flex;
-  height: calc(100dvh - 56px);
-  height: calc(100vh - 56px);
+  /* 高度交给所在的 .sheet-content-area（T02562：内容区已是「视口 − Header」的定高容器）。
+     原 calc(100vh - 56px) 里的 56 是旧 Header 高度，与现行 64 不符：
+     横幅/滚动链修正后会把输入框顶到折叠线以下，故改为填满容器并留最小高兜底。 */
+  height: 100%;
+  min-height: 420px;
   background: var(--cb-bg) !important;
   overflow: hidden;
   position: relative;

@@ -46,8 +46,9 @@ export function SheetContent({ sheet }: { readonly sheet?: SheetItem }) {
     <ErrorBoundary resetKeys={[sheet.path]}>
       <LazyErrorBoundary resetKey={sheet.path}>
         <Suspense fallback={<PageLoading />}>
-          {/* key 驱动重挂载：sheet 切换时触发淡入动画 */}
-          <div className="fade-in-up" key={sheet.id}>
+          {/* key 驱动重挂载：sheet 切换时触发淡入动画
+              sheet-page-mount 让页面能参与内容区的 flex 高度分配（见 sheet.css） */}
+          <div className="fade-in-up sheet-page-mount" key={sheet.id}>
             <Page />
           </div>
         </Suspense>

@@ -3,20 +3,36 @@
  * flex 比 grid 更直观，且 antd Layout 也是 flex 实现，保持一致性
  */
 
+/* SheetWorkspace 容器：高度交给父级（MainLayout 的 Content，flex 列）分配
+ * 为什么不再写 height:100%：横幅与它是同级子块，height:100% 会把它顶到父级满高，
+ * 横幅一出现就把页面底部裁掉约 40px（评审 2.7 维度3）
+ */
 .sheet-workspace {
   display: flex;
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0; /* 允许在 flex 列里收缩，否则内容溢出会把底部顶出去 */
   overflow: hidden;
 }
 
-/* 内容区：占据剩余空间，内部滚动 */
+/* 内容区：占据剩余空间，内部滚动
+ * 为什么同时是 flex 列：需要铺满高度的页面（如智能客服）用 height:100% 在
+ * auto 高度的包裹层上解析不出百分比，只能靠 flex 分配（T02562 / 2.7 维度3）
+ */
 .sheet-content-area {
   flex: 1;
   min-width: 0; /* 允许内容区收缩，避免 flex 溢出 */
   height: 100%;
   overflow: auto;
   position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 页面挂载层：吃掉内容区剩余高度；正文更长时照常撑开并由内容区滚动 */
+.sheet-page-mount {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* 标签栏进入动画：从右侧滑入

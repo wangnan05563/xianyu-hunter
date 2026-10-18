@@ -31,6 +31,7 @@ import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
 import { useMenuConfig, buildCommandItems } from '../../hooks/useMenuConfig'
 import type { CommandItem } from '../../hooks/useMenuConfig'
 import { useNotificationModel, bellBadgeTip, ALERT_JUMP_TARGETS } from '../../hooks/useNotificationModel'
+import { isNarrowViewport } from '../../hooks/breakpoints'
 import type { AlertKind, NotificationModel } from '../../hooks/useNotificationModel'
 import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
 import FirstScreenSkeleton from './FirstScreenSkeleton'
@@ -64,7 +65,7 @@ export default function MainLayout() {
     // 用 globalThis.window 而非裸 window 触发 S7764；直接与 undefined 比较（S7741），
     // SSR 构建期 globalThis.window 为 undefined，浏览器运行期必定有值
     if (globalThis.window === undefined) return false
-    return globalThis.window.innerWidth <= 768
+    return isNarrowViewport()
   })
 
   // 调度器运行状态（30秒轮询）
@@ -273,7 +274,7 @@ export default function MainLayout() {
   useEffect(() => {
     if (globalThis.window === undefined) return
     const handler = () => {
-      if (globalThis.window.innerWidth <= 768) setCollapsed(true)
+      if (isNarrowViewport()) setCollapsed(true)
     }
     globalThis.window.addEventListener('resize', handler)
     return () => globalThis.window.removeEventListener('resize', handler)
@@ -414,13 +415,14 @@ function LayoutContent({
     </List.Item>
   )
 
-  // 路由切换时重置外层 Content 的滚动位置到顶部
-  // 修复：默认情况下外层 Content 的 scrollTop 不会随路由变化重置，
+  // 路由/sheet 切换时把内容区滚回顶部
+  // 修复：默认情况下内容区的 scrollTop 不会随路由变化重置，
   // 从其他页面跳转过来时新页面会显示在错误的滚动位置（如 /chatbot 顶部被截断）。
   // 用 rAF 确保在 Outlet 渲染完成、DOM 高度更新后再重置，避免时序问题。
   useEffect(() => {
     const id = requestAnimationFrame(() => {
-      const el = document.getElementById('main-content')
+      // 真实滚动容器是 SheetWorkspace 的 .sheet-content-area；#main-content 是 overflow:hidden，滚它无效
+      const el = document.querySelector<HTMLElement>('.sheet-content-area')
       if (el) el.scrollTo({ top: 0, behavior: 'auto' })
     })
     return () => cancelAnimationFrame(id)
@@ -491,7 +493,9 @@ function LayoutContent({
           style={{ borderRight: 0 }}
         />
       </Sider>
-      <Layout>
+      {/* 内层 Layout 固定 100vh：原 minHeight 链条下 Content 会随正文长高，
+          导致底部滚不进视口、横幅出现时更是整块被裁（评审 2.7 维度3） */}
+      <Layout style={{ height: '100vh', overflow: 'hidden' }}>
         <Header
           style={{
             background: themeToken.colorBgContainer,
@@ -610,7 +614,8 @@ function LayoutContent({
             <UserMenu userInfo={userInfo} onRefreshUserInfo={onRefreshUserInfo} />
           </div>
         </Header>
-        <Content id="main-content" style={{ overflow: 'hidden', background: themeToken.colorBgLayout }}>
+        {/* flex 列：横幅按内容占高，SheetWorkspace 吃剩余高度——原 height:100% 会让横幅把底部裁掉约 40px */}
+        <Content id="main-content" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, background: themeToken.colorBgLayout }}>
           {/* 全局「演练中」横幅（FR-C3-1）：存在 dry_run 运行任务时常驻提示，防误认为真实抢单 */}
           <DryRunBanner />
           {/* SheetWorkspace 接管内容区：sheet 标签栏 + 单激活 sheet 内容
