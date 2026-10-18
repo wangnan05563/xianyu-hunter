@@ -1,6 +1,7 @@
 import { Card, Col, Row, List, Spin, Badge, Collapse, theme } from 'antd'
 import { WarningOutlined, ReloadOutlined } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
+import { openSheetWithNotification } from '@/components/SheetWorkspace/sheetNotifications'
 import type { TodayAlert } from '../../../api'
 
 interface AlertRadarProps {
@@ -55,9 +56,13 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
                     <List size="small" dataSource={alertData.alerts.failed_orders.slice(0, 5)}
                       renderItem={o => (
                         <List.Item style={{ padding: '4px 0' }}>
-                          <a href={`/orders?ref=${o.id}`} style={{ fontSize: 12, color: token.colorError }}>
+                          {/* 原为裸 <a href="/orders?ref=...">：整页刷新丢 sheet 状态，且 basename=/xianyu 下 404（评审 2.1-4） */}
+                          <TipButton type="link" size="small"
+                            style={{ fontSize: 12, padding: 0, height: 'auto', color: token.colorError }}
+                            onClick={() => openSheetWithNotification(`/orders?ref=${o.id}`)}
+                            tip={`在「抢单记录」中定位订单 #${o.id}`}>
                             {o.title || `订单 #${o.id}`} · ¥{o.amount || 0}
-                          </a>
+                          </TipButton>
                         </List.Item>
                       )} />
                   )}
@@ -73,9 +78,12 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
                     <List size="small" dataSource={alertData.alerts.timeout_pending.slice(0, 5)}
                       renderItem={o => (
                         <List.Item style={{ padding: '4px 0' }}>
-                          <a href={`/orders?ref=${o.id}`} style={{ fontSize: 12 }}>
+                          <TipButton type="link" size="small"
+                            style={{ fontSize: 12, padding: 0, height: 'auto' }}
+                            onClick={() => openSheetWithNotification(`/orders?ref=${o.id}`)}
+                            tip={`在「抢单记录」中定位订单 #${o.id}`}>
                             {o.title || `订单 #${o.id}`} · ¥{o.amount || 0} · {Math.floor((o.age_sec || 0) / 60)} 分钟前
-                          </a>
+                          </TipButton>
                         </List.Item>
                       )} />
                   )}

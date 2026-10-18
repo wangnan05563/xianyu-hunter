@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Modal, Empty } from 'antd'
+import { Modal, Empty, Segmented } from 'antd'
 import { ExpandOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
 import { TipButton } from '@/components/TipButton'
@@ -13,10 +13,27 @@ interface TrendModalProps {
   readonly trendData: TrendSeries | null
   readonly onClose: () => void
   readonly onRangeChange: (range: number) => void
+  readonly onMetricChange: (metric: string) => void
+}
+
+// 可切换的趋势指标：与后端 /api/stats/trend 的 metric 分发一一对应
+// （trend.py 的 _ORDER_STATUS_METRICS + events/orders/eval_score/success_rate）
+export const TREND_METRICS: Array<{ key: string; label: string }> = [
+  { key: 'events', label: '事件密度' },
+  { key: 'orders', label: '订单量' },
+  { key: 'orders_pending', label: '待支付订单' },
+  { key: 'orders_succeeded', label: '成功订单' },
+  { key: 'orders_failed', label: '失败订单' },
+  { key: 'eval_score', label: '评估分' },
+  { key: 'success_rate', label: '成功率' },
+]
+
+export function trendMetricLabel(metric: string): string {
+  return TREND_METRICS.find(m => m.key === metric)?.label ?? metric
 }
 
 export default function TrendModal({
-  trendOpen, trendMetric, trendRange, trendData, onClose, onRangeChange,
+  trendOpen, trendMetric, trendRange, trendData, onClose, onRangeChange, onMetricChange,
 }: TrendModalProps) {
   // 趋势大图 ECharts 配置
   const trendOption = useMemo(() => {
@@ -47,7 +64,9 @@ export default function TrendModal({
             if (trendMetric === 'eval_score') return s.value.toFixed(1)
             return Math.round(s.value).toString()
           })()
-          return `${s.ts}<br/>值: <b>${v}</b>${s.count ? ' · ' + s.count + ' 条' : ''}`
+          // 计数类指标 value 就是条数，再补一句「N 条」是重复信息（后端已改为桶内求和）
+          const isCountMetric = trendMetric !== 'eval_score' && trendMetric !== 'success_rate'
+          return `${s.ts}<br/>值: <b>${v}</b>${isCountMetric ? '' : (s.count ? ' · ' + s.count + ' 条' : '')}`
         },
       },
       xAxis: {
@@ -90,17 +109,21 @@ export default function TrendModal({
       title={
         <span>
           <ExpandOutlined style={{ marginRight: 8 }} />
-          {(() => {
-            // 标题随指标切换
-            if (trendMetric === 'events') return '事件密度趋势'
-            if (trendMetric === 'orders') return '订单量趋势'
-            if (trendMetric === 'eval_score') return '评估分趋势'
-            return '成功率趋势'
-          })()}
+          {trendMetricLabel(trendMetric)}趋势
         </span>
       }
       open={trendOpen} onCancel={onClose} footer={null} width={900}
       styles={{ body: { padding: '12px 24px' } }}>
+      <div style={{ marginBottom: 12 }}>
+        {/* 指标切换：原父级把 trendMetric 写死为 events，Modal 只能看一种指标；
+            与下方时间范围分成两行，避免 7 个指标 + 3 个范围挤在一行折行 */}
+        <Segmented
+          size="small"
+          options={TREND_METRICS.map(m => ({ label: m.label, value: m.key }))}
+          value={trendMetric}
+          onChange={(v) => onMetricChange(v as string)}
+        />
+      </div>
       <div style={{ marginBottom: 12, display: 'flex', gap: 8 }}>
         {[168, 720, 2160].map(h => (
           <TipButton key={h} size="small" type={trendRange === h ? 'primary' : 'default'} onClick={() => onRangeChange(h)} tip={h === 168 ? '查看近 7 天趋势' : h === 720 ? '查看近 30 天趋势' : '查看近 90 天趋势'}>

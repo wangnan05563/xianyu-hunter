@@ -348,6 +348,33 @@ def test_stats_trend_orders_metric(client: TestClient, tmp_repo: Repository) -> 
     assert total_count == 1
 
 
+def test_stats_trend_by_status_metrics_are_distinct(
+    client: TestClient, tmp_repo: Repository
+) -> None:
+    """按状态指标各自计数：三张 KPI 卡不再共用同一条 orders 曲线（评审 2.1-2）"""
+    now = _utcnow()
+    _seed_order(tmp_repo, "s1", "succeeded", created_at=now)
+    _seed_order(tmp_repo, "p1", "pending", created_at=now)
+    _seed_order(tmp_repo, "p2", "pending", created_at=now)
+    _seed_order(tmp_repo, "f1", "failed", created_at=now)
+
+    def _total(metric: str) -> tuple[float, int]:
+        resp = client.get("/api/stats/trend", params={"metric": metric}, headers=_auth_headers())
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["metric"] == metric
+        return (sum(s["value"] for s in data["series"]), sum(s["count"] for s in data["series"]))
+
+    # 计数类指标：value 是桶内条数之和（不再是恒为 1 的均值），与 count 同口径
+    assert _total("orders_pending") == (2.0, 2)
+    assert _total("orders_succeeded") == (1.0, 1)
+    assert _total("orders_failed") == (1.0, 1)
+    # 未知指标仍回空响应，不因新增指标而放宽
+    resp = client.get("/api/stats/trend", params={"metric": "orders_nope"}, headers=_auth_headers())
+    assert resp.status_code == 200
+    assert resp.json()["series"] == []
+
+
 def test_stats_trend_invalid_range_falls_back(client: TestClient) -> None:
     """非法 range_hours 回退到 24"""
     resp = client.get("/api/stats/trend", params={"range_hours": 48}, headers=_auth_headers())

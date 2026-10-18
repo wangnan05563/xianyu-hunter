@@ -2,8 +2,9 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Table, Tag, Select, Space, Spin, Statistic, Row, Col,
   message, Empty, Modal, Steps, Progress, Radio, InputNumber, Result,
-  Popconfirm,
+  Popconfirm, Alert,
 } from 'antd'
+import { useSearchParams } from 'react-router-dom'
 import {
   ReloadOutlined, ThunderboltOutlined, CheckOutlined, CloseOutlined,
   SmileOutlined, LoadingOutlined, DollarOutlined, SettingOutlined,
@@ -372,6 +373,16 @@ export default function Orders() {
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(false)
 
+  // 告警定位（评审 2.1-4）：异常雷达改为 SPA 跳转并带 ?ref=<订单 id>，
+  // 本页必须真的读取它，否则链接只是「跳过去自己找」。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const rawRef = searchParams.get('ref') ?? ''
+  // ref 来自 URL：订单 id 是字符串（OrderItem.id: string），放行字母数字与 _-: 这类安全字符，
+  // 排除引号/反斜杠/尖括号，既满足 data-row-key 选择器插值，也让脏链接静默降级为普通列表
+  const refId = /^[A-Za-z0-9_:.-]{1,64}$/.test(rawRef) ? rawRef : ''
+  // null=未定位 / true=在当前页找到 / false=当前页没有
+  const [refLocated, setRefLocated] = useState<boolean | null>(null)
+
   // 后端分页状态：page/pageSize 持久化，跨会话保留用户偏好
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = usePersistentState<number>('xh.orders.pageSize', 20, {
@@ -401,6 +412,7 @@ export default function Orders() {
         const list = res.items || []
         setItems(list)
         setTotal(res.total || res.count || 0)
+        setRefLocated(refId ? list.some(o => String(o.id) === refId) : null)
         // 后端 list_orders 不返回 stats，前端按当前页自行统计
         // 注意：分页后 stats 仅反映当前页数据，非全量统计
         setStats({
@@ -412,9 +424,24 @@ export default function Orders() {
       })
       .catch(() => message.error('加载订单失败'))
       .finally(() => setLoading(false))
-  }, [page, pageSize, statusFilter])
+  }, [page, pageSize, statusFilter, refId])
 
   useEffect(() => { load() }, [load])
+
+  // 定位命中后把该行滚到视野内：只滚动画像内的 tr，找不到就什么都不做
+  useEffect(() => {
+    if (refLocated !== true) return
+    const row = document.querySelector(`tr[data-row-key="${refId}"]`)
+    row?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [refLocated, refId])
+
+  // 清除定位：去掉 ref 参数，交回正常分页视图
+  const clearRef = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('ref')
+    setSearchParams(next, { replace: true })
+    setRefLocated(null)
+  }
 
   // 筛选条件变化时回到第一页，避免空页
   const onStatusChange = (v: string | undefined) => {
@@ -601,6 +628,13 @@ export default function Orders() {
         </Space>
 
         <Spin spinning={loading}>
+          {refId && refLocated === false && (
+            <Alert type="info" showIcon style={{ marginBottom: 12 }}
+              message={`要定位的订单 #${refId} 不在当前页`}
+              description="列表按创建时间倒序分页。可用上方状态筛选缩小范围，或清除定位回到正常列表。"
+              action={<TipButton size="small" onClick={clearRef} tip="清除 URL 中的 ref 定位参数，回到正常分页列表">清除定位</TipButton>}
+            />
+          )}
           {items.length === 0 ? (
             <Empty description="暂无订单记录" />
           ) : (
@@ -608,6 +642,7 @@ export default function Orders() {
               columns={visibleColumns}
               dataSource={items}
               rowKey="id"
+              rowClassName={(r) => (refId && String(r.id) === refId ? 'xh-row-highlight' : '')}
               size="middle"
               scroll={{ x: 1200 }}
               pagination={{

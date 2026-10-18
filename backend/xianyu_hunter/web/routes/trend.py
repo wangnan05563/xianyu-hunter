@@ -1,7 +1,7 @@
 """趋势数据 API - Dashboard sparkline 趋势
 
 端点：
-- GET /api/stats/trend     多指标趋势数据（事件/订单/评分/成功率）
+- GET /api/stats/trend     多指标趋势数据（事件/订单/按状态订单/评分/成功率）
 
 性能优化（P3-1）：
 - 路由改为 async def，避免占用 anyio worker thread
@@ -24,6 +24,17 @@ from xianyu_hunter.web.utils import to_datetime
 
 router = APIRouter(prefix="/api", tags=["stats-trend"])
 
+# 按订单状态细分的趋势指标：仪表盘 KPI 卡需要「待支付/成功/失败」各自的曲线，
+# 共用一条 orders 曲线会让同一形状出现在三个不同口径下（评审 2.1-2）
+_ORDER_STATUS_METRICS = {
+    "orders_pending": "pending",
+    "orders_succeeded": "succeeded",
+    "orders_failed": "failed",
+}
+
+# 走 orders 表取数的全部指标名
+_ORDERS_METRICS = ("orders", "success_rate", *_ORDER_STATUS_METRICS.keys())
+
 
 def _ensure_aware(d: datetime | None) -> datetime | None:
     """SQLite 存 naive datetime，cutoff 是 aware，比较前统一转 aware"""
@@ -38,12 +49,18 @@ def _build_trend_series(
     rows_with_ts: list[tuple[str, float]],
     range_hours: int,
     bucket_count: int = 24,
+    average: bool = False,
 ) -> list[dict[str, Any]]:
     """按时间桶聚合数据
 
     为什么不直接返回 raw rows：
     - dashboard 期望 "趋势" 视图（过去 24h 每小时一个点）
     - 用等宽时间桶聚合更适合 sparkline
+
+    average 的含义（评审 2.1-1/2.1-2 连带修复）：
+    - 计数类指标每行贡献 1.0，若仍按均值聚合，value 恒为 0 或 1 —— 「事件密度」
+      曲线只会画出一排等高的方块，趋势信息量为零。计数类改为桶内求和。
+    - 评分/成功率是比率型指标，必须取均值，否则一桶里 100 条会把百分比加成总和。
     """
     now = _utcnow()
     bucket_sec = (range_hours * 3600) // bucket_count
@@ -65,9 +82,13 @@ def _build_trend_series(
             buckets[idx]["value"] += float(val)
             buckets[idx]["count"] += 1
 
-    for b in buckets:
-        if b["count"] > 0:
-            b["value"] = round(b["value"] / b["count"], 2)
+    if average:
+        for b in buckets:
+            if b["count"] > 0:
+                b["value"] = round(b["value"] / b["count"], 2)
+    else:
+        for b in buckets:
+            b["value"] = round(b["value"], 2)
     return buckets
 
 
@@ -101,6 +122,20 @@ def _build_count_metric_rows(records: list[dict], cutoff) -> list[tuple]:
         d = _ensure_aware(to_datetime(r.get("created_at")))
         if d is not None and d >= cutoff:
             rows.append((r.get("created_at"), 1.0))
+    return rows
+
+
+def _build_status_count_rows(orders: list[dict], cutoff, status: str) -> list[tuple]:
+    """按订单状态过滤的计数指标
+
+    为什么要独立指标而不是复用 orders：仪表盘「待支付/成功/失败」三张卡此前共用
+    同一条 orders 曲线，同一条线出现在三个不同口径下会误导趋势判断（评审 2.1-2）。
+    """
+    rows: list[tuple] = []
+    for o in orders:
+        d = _ensure_aware(to_datetime(o.get("created_at")))
+        if d is not None and d >= cutoff and o.get("status") == status:
+            rows.append((o.get("created_at"), 1.0))
     return rows
 
 
@@ -140,6 +175,8 @@ def _build_trend_metric_rows(
         return _build_count_metric_rows(events, cutoff)
     if metric == "orders":
         return _build_count_metric_rows(orders, cutoff)
+    if metric in _ORDER_STATUS_METRICS:
+        return _build_status_count_rows(orders, cutoff, _ORDER_STATUS_METRICS[metric])
     if metric == "eval_score":
         return _build_eval_score_rows(events, cutoff)
     if metric == "success_rate":
@@ -158,7 +195,7 @@ def _load_trend_data(engine, container: Container, metric: str, task_id: str | N
     with engine.connect() as conn:
         if metric in ("events", "eval_score"):
             events = _load_trend_events(conn, container, task_id, cutoff)
-        elif metric in ("orders", "success_rate"):
+        elif metric in _ORDERS_METRICS:
             if task_id:
                 # OrderRow 有 task_id 列，原注释"无 task_id 字段"过时，但保留 skipped_reason 行为不变
                 skipped_reason = f"metric={metric} 暂不支持按 task_id 过滤（Order 模型无 task_id 字段）"
@@ -203,7 +240,11 @@ async def _compute_stats_trend(
         return {"metric": metric, "range_hours": range_hours, "task_id": task_id, "series": [],
                 "summary": {"min": 0, "max": 0, "avg": 0, "current": 0}, "skipped_reason": None}
 
-    series = _build_trend_series(rows, range_hours, bucket_count)
+    # 比率型指标取桶内均值，计数型指标取桶内总和（见 _build_trend_series 的 average 说明）
+    series = _build_trend_series(
+        rows, range_hours, bucket_count,
+        average=metric in ("eval_score", "success_rate"),
+    )
     values = [s["value"] for s in series]
     summary = {
         "min": round(min(values), 2) if values else 0,

@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback, type Dispatch, type SetStateA
 // 删除未使用的 theme 导入（S1128）
 import { Spin, Card, Col, Row, Alert, Space } from 'antd'
 import { useNavigate } from 'react-router-dom'
+import { LineChartOutlined } from '@ant-design/icons'
 import {
   taskApi, statsApi, priceApi,
   type RecentEvent, type KpiCard, type TrendSeries, type TodayAlert, type StatsOverview, type HistogramData, type EvalFunnelData,
@@ -56,8 +57,8 @@ export default function Dashboard() {
 
   // 趋势大图 Modal
   const [trendOpen, setTrendOpen] = useState(false)
-  // 值从不变化，改用 const 替代 useState，避免无谓的状态管理（S6754）
-  const trendMetric = 'events'
+  // 指标可切换（评审 2.1-1：Modal 此前无任何入口，且指标被写死为 events）
+  const [trendMetric, setTrendMetric] = useState('events')
   const [trendRange, setTrendRange] = useState(168)
   const [trendData, setTrendData] = useState<TrendSeries | null>(null)
 
@@ -95,12 +96,13 @@ export default function Dashboard() {
   }, [histoTaskId])
 
   const loadSparklines = useCallback(() => {
-    Promise.all([
-      statsApi.trend({ metric: 'events', range_hours: 24 }).catch(() => null),
-      statsApi.trend({ metric: 'orders', range_hours: 24 }).catch(() => null),
-    ]).then(([tasks, orders]) => {
-      // 移除不必要的类型断言：trend API 已返回 TrendSeries 类型（S4325）
-      setSparklines({ tasks, orders })
+    // 键名与 StatCardsSection 取用的口径一一对应：三张订单卡各自取按状态的趋势，
+    // 不再共用 orders 同一条线（评审 2.1-2）
+    const metrics = ['events', 'orders_pending', 'orders_succeeded', 'orders_failed'] as const
+    Promise.all(
+      metrics.map((metric) => statsApi.trend({ metric, range_hours: 24 }).catch(() => null)),
+    ).then((series) => {
+      setSparklines(Object.fromEntries(metrics.map((metric, i) => [metric, series[i]])))
     })
   }, [])
 
@@ -257,6 +259,13 @@ export default function Dashboard() {
           />
         )}
 
+        {/* 趋势大图入口（评审 2.1-1：setTrendOpen 全仓无调用点，168h 趋势整体形同虚设） */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <TipButton size="small" icon={<LineChartOutlined />} onClick={() => setTrendOpen(true)} tip="打开趋势大图，可切换指标与 7 / 30 / 90 天范围">
+            趋势大图
+          </TipButton>
+        </div>
+
         {/* 统计卡 + Sparkline */}
         <StatCardsSection overview={overview} sparklines={sparklines} onNavigate={navigate} />
 
@@ -300,8 +309,8 @@ export default function Dashboard() {
           onNavigate={navigate}
         />
 
-        {/* 可视化配置入口 */}
-        <Card style={{ marginTop: 16 }} title="可视化配置入口">
+        {/* 快捷入口（评审 2.1-3：原名「可视化配置入口」，但 11 项里含系统清理/反爬等非配置页，名实不符） */}
+        <Card style={{ marginTop: 16 }} title="快捷入口">
           <Row gutter={[16, 16]}>
             <Col xs={12} md={6}>
               <Card className="quick-entry-card" size="small" onClick={() => navigate('/tasks/new')}>
@@ -392,6 +401,7 @@ export default function Dashboard() {
         trendData={trendData}
         onClose={() => setTrendOpen(false)}
         onRangeChange={setTrendRange}
+        onMetricChange={setTrendMetric}
       />
     </div>
   )
