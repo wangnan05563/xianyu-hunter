@@ -32,6 +32,8 @@ import {
   QuestionCircleOutlined,
   CloudDownloadOutlined,
   MessageOutlined,
+  GlobalOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 import { useLocation, useNavigate, Link } from 'react-router-dom'
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
@@ -82,6 +84,7 @@ const ROUTE_LABELS: Record<string, string> = {
   '/about': '关于',
   '/export': '数据导出',
   '/notifications': '通知中心',
+  '/menu-admin': '菜单管理',
 }
 
 // Command Palette 可搜索的命令列表（扁平化所有页面导航项）
@@ -104,6 +107,8 @@ const COMMAND_ITEMS = [
   { key: '/config/version', label: '配置版本', icon: <HistoryOutlined /> },
   { key: '/maintenance', label: '系统清理', icon: <ClearOutlined /> },
   { key: '/maintenance/db', label: '数据库维护', icon: <DatabaseOutlined /> },
+  { key: '/maintenance/vector', label: '向量数据库维护', icon: <DatabaseOutlined /> },
+  { key: '/maintenance/tunnel', label: '内网穿透', icon: <GlobalOutlined /> },
   { key: '/batch-refresh', label: '批量采集', icon: <CloudDownloadOutlined /> },
   { key: '/anticrawl', label: '反爬登录管理', icon: <ExperimentOutlined /> },
   { key: '/chatbot', label: '智能客服对话', icon: <MessageOutlined /> },
@@ -112,6 +117,7 @@ const COMMAND_ITEMS = [
   { key: '/about', label: '关于', icon: <InfoCircleOutlined /> },
   { key: '/export', label: '数据导出', icon: <CloudDownloadOutlined /> },
   { key: '/notifications', label: '通知中心', icon: <BellOutlined /> },
+  { key: '/menu-admin', label: '菜单管理', icon: <SettingOutlined /> },
 ]
 
 // g+X 全局快捷键映射

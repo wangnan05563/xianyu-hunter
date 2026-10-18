@@ -173,6 +173,14 @@ menus:
     sort_order: 204
     default_visible: true
     category: maintenance
+  # 向量数据库维护页此前只有路由无入口（隐藏页），补进菜单与命令面板
+  - key: vector_admin
+    label: 向量数据库维护
+    icon: DatabaseOutlined
+    path: /maintenance/vector
+    sort_order: 205
+    default_visible: true
+    category: maintenance
 
   # ========== 其他（other）：辅助功能入口 ==========
   - key: chatbot
@@ -194,5 +202,21 @@ menus:
     icon: InfoCircleOutlined
     path: /about
     sort_order: 303
+    default_visible: true
+    category: other
+  # 帮助文档页此前只有路由无菜单入口（隐藏页），命令面板可达但左侧菜单看不到
+  - key: help
+    label: 帮助文档
+    icon: QuestionCircleOutlined
+    path: /help
+    sort_order: 304
+    default_visible: true
+    category: other
+  # 菜单管理页：用户级菜单可见性/排序配置，必须留在菜单内，否则用户隐藏菜单项后无从恢复
+  - key: menu_admin
+    label: 菜单管理
+    icon: SettingOutlined
+    path: /menu-admin
+    sort_order: 305
     default_visible: true
     category: other

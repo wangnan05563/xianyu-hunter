@@ -40,6 +40,10 @@ _REGISTRY_PATH = get_app_dir() / "config" / "menu_registry.yaml"
 # 为什么 60s：菜单变更频率极低（用户主动调整），60s 足以覆盖一次会话的连续刷新
 _CACHE_TTL = 60.0
 
+# 不允许用户隐藏的菜单 key：菜单管理页是唯一的菜单恢复入口，隐藏它会造成死锁
+# 前端据 GET /api/menu 的 locked 字段把可见性开关置灰并给出提示
+_ALWAYS_VISIBLE_KEYS = frozenset({"menu_admin"})
+
 
 def _utcnow() -> datetime:
     """返回当前 UTC 时间（datetime 对象）
@@ -190,12 +194,17 @@ class MenuManager:
                 "category": item.get("category", ""),
                 "visible": default_visible,
                 "sort_order": default_sort,
+                "locked": key in _ALWAYS_VISIBLE_KEYS,
             }
             uc = user_configs.get(key)
             if uc is not None:
                 # 用户级覆盖优先：仅覆盖 visible/sort_order 两个字段
                 merged_item["visible"] = uc["visible"]
                 merged_item["sort_order"] = uc["sort_order"]
+            # 菜单管理页自身不可隐藏：它是唯一的菜单恢复入口，
+            # 一旦被隐藏用户再也进不去，只能改数据库恢复
+            if key in _ALWAYS_VISIBLE_KEYS:
+                merged_item["visible"] = True
             merged.append(merged_item)
 
         # 排序在过滤前完成，保证 hidden 项不影响可见项的相对顺序
@@ -230,7 +239,8 @@ class MenuManager:
                     if not key or key not in valid_keys:
                         logger.warning("跳过未知 menu_key: %s", key)
                         continue
-                    visible = 1 if bool(m.get("visible", True)) else 0
+                    # 锁定项拒绝写入 visible=0：否则库里存的是一份「已隐藏但永远不会生效」的配置
+                    visible = 0 if (key not in _ALWAYS_VISIBLE_KEYS and not bool(m.get("visible", True))) else 1
                     sort_order = int(m.get("sort_order", 0))
                     # 使用 ON CONFLICT 而非 INSERT OR REPLACE：
                     # INSERT OR REPLACE 在 UNIQUE 冲突时会先删除整行再插入新行，

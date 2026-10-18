@@ -19,10 +19,11 @@ function renderList(onOpenLicenses = vi.fn()) {
 }
 
 describe('AboutMenuList', () => {
-  it('渲染已就绪的 3 个菜单项，占位外链不渲染', () => {
+  it('渲染已就绪的 4 个菜单项，占位外链不渲染', () => {
     const { container } = renderList()
     expect(screen.getByText(TEXTS.menu.licenses)).toBeInTheDocument()
     expect(screen.getByText(TEXTS.menu.help)).toBeInTheDocument()
+    expect(screen.getByText(TEXTS.menu.onboarding)).toBeInTheDocument()
     expect(screen.getByText(TEXTS.menu.api)).toBeInTheDocument()
     // 地址未就绪（example.com 占位）的条目不得出现在发布版
     expect(screen.queryByText(TEXTS.menu.terms)).not.toBeInTheDocument()
@@ -60,5 +61,12 @@ describe('AboutMenuList', () => {
     const apiLink = screen.getByText(TEXTS.menu.api).closest('a')
     // 部署子路径前缀（BASE_URL）：本地/测试为 /xianyu/，确保域名模式 /xianyu 下文档链接可达
     expect(apiLink).toHaveAttribute('href', `${API_BASE}api/docs`)
+  })
+
+  it('onboarding 项为 SPA 内链（引导页整页路由，不进 sheet）', () => {
+    renderList()
+    const link = screen.getByText(TEXTS.menu.onboarding).closest('a')
+    expect(link).not.toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('href', '/onboarding')
   })
 })

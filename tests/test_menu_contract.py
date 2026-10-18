@@ -84,3 +84,28 @@ def test_legacy_items_payload_is_rejected(menu_client):
         json={"items": [{"menu_key": "tasks", "visible": True, "sort_order": 3}]},
     )
     assert resp.status_code == 422
+
+
+# T02557 / 2.2：曾被注册表漏掉、只能靠手敲 URL 进入的隐藏页
+FORMERLY_HIDDEN = ("vector_admin", "help", "menu_admin")
+
+
+def test_hidden_pages_now_have_menu_entries(menu_client):
+    client, _ = menu_client
+    resp = client.get("/api/menu")
+    assert resp.status_code == 200
+    by_key = {m["key"]: m for m in resp.json()["menus"]}
+    for key in FORMERLY_HIDDEN:
+        assert key in by_key, f"{key} 未进入菜单，仍是隐藏页"
+        assert by_key[key]["path"], f"{key} 缺少 path"
+
+
+def test_menu_admin_cannot_be_hidden(menu_client):
+    """菜单管理是唯一恢复入口：请求隐藏它必须被后端拒绝写入，GET 仍返回可见"""
+    client, manager = menu_client
+    payload = {"menus": [{"key": "menu_admin", "visible": False, "sort_order": 305}]}
+    assert client.put("/api/menu", json=payload).status_code == 200
+
+    by_key = {m["key"]: m for m in manager.get_menus("default")}
+    assert "menu_admin" in by_key, "菜单管理被隐藏后用户再也进不去，形成死锁"
+    assert by_key["menu_admin"]["locked"] is True

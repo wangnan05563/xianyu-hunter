@@ -11,7 +11,7 @@ interface MenuItem {
   readonly external: boolean
 }
 
-// 8 个外部链接；按需求 §5.1 排序
+// 9 个条目：外链 + SPA 内链 + licenses（Modal 回调）；按需求 §5.1 排序
 const MENU_ITEMS: MenuItem[] = [
   { key: 'terms', label: TEXTS.menu.terms, href: 'https://example.com/terms', external: true },
   { key: 'privacy', label: TEXTS.menu.privacy, href: 'https://example.com/privacy', external: true },
@@ -19,6 +19,8 @@ const MENU_ITEMS: MenuItem[] = [
   { key: 'licenses', label: TEXTS.menu.licenses, href: '#licenses', external: false },
   // help 为 SPA 内链（保留 /help 路由作回流入口）
   { key: 'help', label: TEXTS.menu.help, href: '/help', external: false },
+  // 引导页是 MainLayout 之外的整页路由，不进 sheetRegistry，用内链整页跳转
+  { key: 'onboarding', label: TEXTS.menu.onboarding, href: '/onboarding', external: false },
   { key: 'api', label: TEXTS.menu.api, href: `${API_BASE}api/docs`, external: true },
   { key: 'contact', label: TEXTS.menu.contact, href: 'mailto:dev@example.com', external: true },
   { key: 'community', label: TEXTS.menu.community, href: 'https://example.com/community', external: true },
@@ -27,6 +29,8 @@ const MENU_ITEMS: MenuItem[] = [
 
 // 发布版不得把占位域名交给用户：地址未就绪的条目不渲染，填入真实地址即自动出现
 const PLACEHOLDER_HOST = 'example.com'
+// 走 <Link> 的 SPA 内链 key（其余 external:false 项各有自己的交互方式）
+const SPA_INTERNAL_KEYS = new Set(['help', 'onboarding'])
 const VISIBLE_ITEMS = MENU_ITEMS.filter((item) => !item.href.includes(PLACEHOLDER_HOST))
 
 interface AboutMenuListProps {
@@ -71,8 +75,8 @@ export function AboutMenuList({ onOpenLicenses }: AboutMenuListProps) {
       styles={{ body: { padding: 0 } }}
     >
       {VISIBLE_ITEMS.map((item, idx) => {
-        // help 为 SPA 内链，用 Link 组件避免整页刷新
-        const isInternal = !item.external && item.key === 'help'
+        // SPA 内链用 Link 组件避免整页刷新；licenses 走 Modal 回调
+        const isInternal = !item.external && SPA_INTERNAL_KEYS.has(item.key)
         // S6819：移除内层 div 的 role="button"，交互由外层 a/Link 承担
         // hover/click 放在外层交互元素上，避免内层 div 触发 S6847
         const hoverHandlers = {

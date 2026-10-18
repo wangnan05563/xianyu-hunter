@@ -12,6 +12,7 @@ import {
   message,
   Popconfirm,
   Tag,
+  Tooltip,
   theme,
 } from 'antd'
 import {
@@ -202,11 +203,15 @@ export default function MenuAdmin() {
         key: 'visible',
         width: 80,
         render: (visible: boolean, record: MenuRow) => (
-          <Switch
-            checked={visible}
-            onChange={(checked) => handleVisibleChange(record.key, checked)}
-            disabled={saving || resetting}
-          />
+          <Tooltip
+            title={record.locked ? '菜单管理是唯一的菜单恢复入口，不可隐藏' : undefined}
+          >
+            <Switch
+              checked={visible}
+              onChange={(checked) => handleVisibleChange(record.key, checked)}
+              disabled={saving || resetting || record.locked}
+            />
+          </Tooltip>
         ),
       },
       {

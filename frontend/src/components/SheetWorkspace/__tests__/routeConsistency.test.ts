@@ -40,3 +40,42 @@ describe('sheetRegistry ↔ App.tsx 路由表一致性', () => {
     expect(APP_SOURCE).not.toMatch(/<Route path="\*" element=\{<Navigate to="\/" replace \/>/)
   })
 })
+
+// 入口完整性守卫（T02557/2.2）：反向检查——页面已实现却没有菜单入口，就是「隐藏页面」。
+// 历史教训：向量库维护、菜单管理、帮助文档都有路由、有 sheet 注册，但菜单里点不到，
+// 只能靠命令面板或手敲 URL 进入，等价于功能不存在。
+// 允许表只收「参数化/整页路由」两类不该进左侧菜单的页面，新增项必须显式登记理由。
+const REGISTRY_SOURCE = readFileSync(
+  resolve(__dirname, '../../../../../config/menu_registry.yaml'),
+  'utf-8',
+)
+const REGISTRY_PATHS = new Set(
+  [...REGISTRY_SOURCE.matchAll(/^\s+path:\s*(\S+)\s*$/gm)].map((m) => m[1]),
+)
+const NO_MENU_ENTRY = new Set([
+  '/tasks/new', // 任务新建：从任务列表按钮进入，带表单上下文
+  '/tasks/:id', // 详情页：需 :id 参数
+  '/tasks/:id/edit', // 编辑页：需 :id 参数
+  '/confirm-buy', // 确认抢单：由通知回链带 item_id 打开
+])
+
+describe('sheetRegistry ↔ menu_registry.yaml 入口完整性', () => {
+  it('每个已实现页面都有菜单入口，或显式登记为免菜单页', () => {
+    const orphans = sheetRegistry
+      .map((s) => s.path)
+      .filter((p) => !REGISTRY_PATHS.has(p) && !NO_MENU_ENTRY.has(p))
+    expect(orphans).toEqual([])
+  })
+
+  it('菜单项指向的页面都已在 sheetRegistry 注册', () => {
+    const registered = new Set(sheetRegistry.map((s) => s.path))
+    const dead = [...REGISTRY_PATHS].filter((p) => !registered.has(p))
+    expect(dead).toEqual([])
+  })
+
+  it('历史隐藏页（向量库/菜单管理/帮助）均已补入口', () => {
+    for (const p of ['/maintenance/vector', '/menu-admin', '/help']) {
+      expect(REGISTRY_PATHS.has(p), `${p} 缺菜单入口`).toBe(true)
+    }
+  })
+})

@@ -41,6 +41,8 @@ export type MenuItem = {
   sort_order: number
   /** 是否可见 */
   visible: boolean
+  /** 锁定项（后端强制可见，如菜单管理自身）：UI 需置灰可见性开关 */
+  locked?: boolean
   /** 分组类别（对应 registry 的 group 字段） */
   category: MenuCategory
 }

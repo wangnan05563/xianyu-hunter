@@ -33,6 +33,7 @@ export const TEXTS = {
     privacy: '隐私条款',
     licenses: '开源软件声明',
     help: '帮助文档',
+    onboarding: '新手引导',
     api: 'API 文档',
     contact: '联系我们',
     community: '官方社区',
