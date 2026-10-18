@@ -87,7 +87,7 @@ menus:
     category: data_view
   - key: notifications
     label: 通知中心
-    icon: BellOutlined
+    icon: NotificationOutlined
     path: /notifications
     sort_order: 17
     default_visible: true

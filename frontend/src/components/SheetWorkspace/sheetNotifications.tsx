@@ -6,8 +6,12 @@ import { TipButton } from '@/components/TipButton'
  * 带通知的 openSheet 包装函数
  *
  * 调用 store.openSheet 后检查返回值：
- * - 若包含 replacedSheet（循环替换触发），发右上角 Notification + 「撤销」按钮
+ * - 若包含 replacedSheet（循环替换触发），发右下角 Notification + 「撤销」按钮
  * - 否则静默调用，与原 openSheet 行为一致
+ *
+ * 为什么用右下角而非右上角（T02561 / N19）：
+ * - 这两条通知是持续 5 秒的信息型提示，右上角会与 Header 右侧 7 个按钮 + 账号切换器 +
+ *   用户菜单整排叠在一起，用户点不到也被遮住；右下角没有常驻控件，不遮挡任何入口。
  *
  * 为什么要包装而非在 store 内部发通知：
  * - store 是纯逻辑层，不应依赖 antd message/notification（避免引入 UI 副作用）
@@ -31,7 +35,7 @@ export function openSheetWithNotification(path: string) {
       message: '页面不存在',
       description: `菜单指向的 ${path} 没有已实现的页面，请联系开发者或在「菜单管理」中隐藏该项`,
       duration: 5,
-      placement: 'topRight',
+      placement: 'bottomRight',
     })
   }
   if (result.replacedSheet) {    const { id, title } = result.replacedSheet
@@ -41,7 +45,7 @@ export function openSheetWithNotification(path: string) {
       message: '已自动替换 sheet',
       description: `最旧非激活 sheet「${title}」被自动淘汰，可点击右侧按钮恢复`,
       duration: 5,
-      placement: 'topRight',
+      placement: 'bottomRight',
       // 撤销按钮：点击后调用 restoreReplaced 从回收栈恢复被替换的 sheet
       btn: (
         <TipButton

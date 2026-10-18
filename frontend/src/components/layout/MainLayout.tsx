@@ -1,4 +1,4 @@
-import { Layout, Menu, theme, Breadcrumb, Spin, Badge, Drawer, Collapse, List, Tag, Modal, Input, Alert, Button } from 'antd'
+import { Layout, Menu, theme, Breadcrumb, Spin, Badge, Drawer, Collapse, List, Tag, Modal, Input, Alert, Button, Divider } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import {
   BellOutlined,
@@ -21,7 +21,7 @@ import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import type React from 'react'
 import type { MenuProps } from 'antd'
 import { authApi, statsApi } from '../../api'
-import type { TodayAlert, AuthMe } from '../../api/types'
+import type { AuthMe } from '../../api/types'
 import { useTheme } from '../../contexts/ThemeContext'
 import UserMenu from './UserMenu'
 import DryRunBanner from './DryRunBanner'
@@ -30,6 +30,8 @@ import { useSheetStore } from '../../stores/sheetStore'
 import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
 import { useMenuConfig, buildCommandItems } from '../../hooks/useMenuConfig'
 import type { CommandItem } from '../../hooks/useMenuConfig'
+import { useNotificationModel, bellBadgeTip, ALERT_JUMP_TARGETS } from '../../hooks/useNotificationModel'
+import type { AlertKind, NotificationModel } from '../../hooks/useNotificationModel'
 import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
 import FirstScreenSkeleton from './FirstScreenSkeleton'
 import { buildBreadcrumbs } from './breadcrumb'
@@ -67,14 +69,9 @@ export default function MainLayout() {
 
   // 调度器运行状态（30秒轮询）
   const [schedulerRunning, setSchedulerRunning] = useState<boolean | null>(null)
-  // 通知抽屉与今日告警
+  // 通知抽屉：告警与未读计数统一由 useNotificationModel 提供（T02561 / FR-B-1）
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [todayAlert, setTodayAlert] = useState<TodayAlert | null>(null)
-  // 告警拉取错误：抽屉要区分「加载中 / 失败可重试 / 真的没告警」，失败不再永远转圈（T02560 / 2.5-12）
-  const [alertError, setAlertError] = useState<string | null>(null)
-  const alertCount = todayAlert
-    ? todayAlert.alerts.counts.failed + todayAlert.alerts.counts.timeout + todayAlert.alerts.counts.low_eval
-    : 0
+  const notif = useNotificationModel({ enabled: loggedIn })
   // 用 ref 持有轮询定时器，避免组件卸载后仍触发 setState
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -95,27 +92,15 @@ export default function MainLayout() {
     statsApi.overview().then((data) => setSchedulerRunning(data.scheduler_running)).catch(() => setSchedulerRunning(null))
   }, [])
 
-  // 拉取今日告警：失败时记录错误文案，供抽屉渲染「加载失败 + 重试」
-  const fetchTodayAlert = useCallback(() => {
-    statsApi.today()
-      .then((data) => {
-        setTodayAlert(data)
-        setAlertError(null)
-      })
-      .catch((err: unknown) => setAlertError(err instanceof Error ? err.message : String(err)))
-  }, [])
-
   useEffect(() => {
     // 未登录时不启动轮询，避免 401 请求
     if (!loggedIn) return
     fetchSchedulerStatus()
-    fetchTodayAlert()
     pollRef.current = setInterval(() => {
       fetchSchedulerStatus()
-      fetchTodayAlert()
     }, 30_000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
-  }, [fetchSchedulerStatus, fetchTodayAlert, loggedIn])
+  }, [fetchSchedulerStatus, loggedIn])
 
   // 拉取用户信息：挂载时拉取一次；已登录但 nick/local_username 为空时轮询重试
   // 为什么需要重试：auth_helper 抓取 nick 异步进行，首次请求可能拿到 nick="" + logged_in=true
@@ -328,8 +313,7 @@ export default function MainLayout() {
       location={location}
       navigate={navigate}
       schedulerRunning={schedulerRunning}
-      todayAlert={todayAlert}
-      alertCount={alertCount}
+      notif={notif}
       cmdOpen={cmdOpen}
       setCmdOpen={setCmdOpen}
       cmdSearch={cmdSearch}
@@ -344,8 +328,6 @@ export default function MainLayout() {
       commandItems={commandItems}
       menuError={menuError}
       onRetryMenu={refreshMenus}
-      alertError={alertError}
-      onRetryAlert={fetchTodayAlert}
       drawerOpen={drawerOpen}
       setDrawerOpen={setDrawerOpen}
       userInfo={userInfo}
@@ -363,8 +345,8 @@ interface LayoutContentProps {
   readonly location: ReturnType<typeof useLocation>
   readonly navigate: ReturnType<typeof useNavigate>
   readonly schedulerRunning: boolean | null
-  readonly todayAlert: TodayAlert | null
-  readonly alertCount: number
+  // 通知与告警的统一模型（T02561）：抽屉、铃铛 badge 都从这一份读，不再各自计数
+  readonly notif: NotificationModel
   readonly cmdOpen: boolean
   readonly setCmdOpen: React.Dispatch<React.SetStateAction<boolean>>
   readonly cmdSearch: string
@@ -379,11 +361,9 @@ interface LayoutContentProps {
   readonly menuItems: NonNullable<MenuProps['items']>
   // 命令面板项：由 MainLayout 用 buildCommandItems(menus) 派生后传入（T02556 单源）
   readonly commandItems: CommandItem[]
-  // 菜单与告警的失败态（T02560）：error 不再被丢弃，侧栏/抽屉内联展示并提供重试
+  // 菜单失败态（T02560）：error 不再被丢弃，侧栏内联展示并提供重试
   readonly menuError: Error | null
   readonly onRetryMenu: () => void
-  readonly alertError: string | null
-  readonly onRetryAlert: () => void
   readonly drawerOpen: boolean
   readonly setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
   readonly userInfo: AuthMe
@@ -393,10 +373,10 @@ interface LayoutContentProps {
 
 function LayoutContent({
   isDark, onToggleTheme, collapsed, setCollapsed, location, navigate,
-  schedulerRunning, todayAlert, alertCount,
+  schedulerRunning, notif,
   cmdOpen, setCmdOpen, cmdSearch, setCmdSearch, cmdActive, setCmdActive,
   breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems, commandItems,
-  menuError, onRetryMenu, alertError, onRetryAlert,
+  menuError, onRetryMenu,
   drawerOpen, setDrawerOpen, userInfo, onRefreshUserInfo,
 }: LayoutContentProps) {
   // 必须在 ConfigProvider 内部调用，token 才会响应暗色算法
@@ -411,6 +391,28 @@ function LayoutContent({
 
   // 告警抽屉的三个空态文案同构，抽成函数避免同一段 JSX 重复（并消掉 `: <JSX>,` 形态）
   const emptyHint = (text: string) => <div style={{ color: themeToken.colorTextSecondary }}>{text}</div>
+
+  // 抽屉列表项按类跳转（N11）：失败/超时→抢单记录，低分→评估明细；三个面板同构，抽成一个渲染函数
+  const jumpToAlertTarget = (kind: AlertKind) => {
+    setDrawerOpen(false)
+    openSheetWithNotification(ALERT_JUMP_TARGETS[kind])
+  }
+  const alertItem = (kind: AlertKind, title: React.ReactNode, description: React.ReactNode) => (
+    <List.Item
+      onClick={() => jumpToAlertTarget(kind)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          jumpToAlertTarget(kind)
+        }
+      }}
+      tabIndex={0}
+      role="button"
+      style={{ cursor: 'pointer' }}
+    >
+      <List.Item.Meta title={<span>{title}</span>} description={description} />
+    </List.Item>
+  )
 
   // 路由切换时重置外层 Content 的滚动位置到顶部
   // 修复：默认情况下外层 Content 的 scrollTop 不会随路由变化重置，
@@ -551,10 +553,15 @@ function LayoutContent({
               />
             </TipButton>
 
-            {/* 通知铃铛：Badge 显示今日告警总数 */}
-            <Badge count={alertCount} size="small" offset={[-2, 2]}>
+            {/* 铃铛：数字优先是今日告警，无告警时退为未读通知（两套口径不相加，见 useNotificationModel） */}
+            <Badge
+              count={notif.bell.count}
+              size="small"
+              offset={[-2, 2]}
+              color={notif.bell.isAlert ? undefined : 'blue'}
+            >
               <TipButton
-                tip="打开今日告警通知"
+                tip={bellBadgeTip(notif.bell)}
                 type="text"
                 shape="circle"
                 size="small"
@@ -612,17 +619,20 @@ function LayoutContent({
         </Content>
       </Layout>
 
-      {/* 通知抽屉：展示今日告警分类列表 */}
+      {/* 通知抽屉：上半是今日告警，下半是通知中心入口——两套口径分开摆明，不再混成一个数（T02561） */}
       <Drawer
-        title="今日告警"
+        title="通知与告警"
         placement="right"
         onClose={() => setDrawerOpen(false)}
         open={drawerOpen}
         width={420}
         styles={{ body: { paddingTop: 12 } }}
       >
-        {todayAlert ? (
+        {notif.alerts ? (
           <>
+            <div style={{ fontSize: 13, color: themeToken.colorTextSecondary, marginBottom: 4 }}>
+              今日告警（{notif.alertCount} 条，按天归零）
+            </div>
             <Collapse
               defaultActiveKey={['failed', 'timeout', 'low_eval']}
               ghost
@@ -633,21 +643,14 @@ function LayoutContent({
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <WarningOutlined style={{ color: '#ff4d4f' }} />
                       失败订单
-                      <Tag color="red">{todayAlert.alerts.counts.failed}</Tag>
+                      <Tag color="red">{notif.alerts.alerts.counts.failed}</Tag>
                     </span>
                   ),
-                  children: todayAlert.alerts.failed_orders.length > 0 ? (
+                  children: notif.alerts.alerts.failed_orders.length > 0 ? (
                     <List
                       size="small"
-                      dataSource={todayAlert.alerts.failed_orders}
-                      renderItem={(o) => (
-                        <List.Item>
-                          <List.Item.Meta
-                            title={<span>#{o.id} {o.title}</span>}
-                            description={`¥${o.amount} · ${o.created_at}`}
-                          />
-                        </List.Item>
-                      )}
+                      dataSource={notif.alerts.alerts.failed_orders}
+                      renderItem={(o) => alertItem('failed', `#${o.id} ${o.title}`, `¥${o.amount} · ${o.created_at}`)}
                     />
                   ) : emptyHint('暂无失败订单'),
                 },
@@ -657,21 +660,14 @@ function LayoutContent({
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <ClockCircleOutlined style={{ color: '#faad14' }} />
                       待支付超时
-                      <Tag color="orange">{todayAlert.alerts.counts.timeout}</Tag>
+                      <Tag color="orange">{notif.alerts.alerts.counts.timeout}</Tag>
                     </span>
                   ),
-                  children: todayAlert.alerts.timeout_pending.length > 0 ? (
+                  children: notif.alerts.alerts.timeout_pending.length > 0 ? (
                     <List
                       size="small"
-                      dataSource={todayAlert.alerts.timeout_pending}
-                      renderItem={(o) => (
-                        <List.Item>
-                          <List.Item.Meta
-                            title={<span>#{o.id} {o.title}</span>}
-                            description={`¥${o.amount} · 超时 ${o.age_sec}s`}
-                          />
-                        </List.Item>
-                      )}
+                      dataSource={notif.alerts.alerts.timeout_pending}
+                      renderItem={(o) => alertItem('timeout', `#${o.id} ${o.title}`, `¥${o.amount} · 超时 ${o.age_sec}s`)}
                     />
                   ) : emptyHint('暂无超时订单'),
                 },
@@ -681,38 +677,36 @@ function LayoutContent({
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <StarOutlined style={{ color: '#722ed1' }} />
                       低分评估
-                      <Tag color="purple">{todayAlert.alerts.counts.low_eval}</Tag>
+                      <Tag color="purple">{notif.alerts.alerts.counts.low_eval}</Tag>
                     </span>
                   ),
-                  children: todayAlert.alerts.low_evaluations.length > 0 ? (
+                  children: notif.alerts.alerts.low_evaluations.length > 0 ? (
                     <List
                       size="small"
-                      dataSource={todayAlert.alerts.low_evaluations}
-                      renderItem={(e) => (
-                        <List.Item>
-                          <List.Item.Meta
-                            title={<span>{e.message}</span>}
-                            description={<span><Tag>{e.type}</Tag> 评分 {e.score} · {e.created_at}</span>}
-                          />
-                        </List.Item>
-                      )}
+                      dataSource={notif.alerts.alerts.low_evaluations}
+                      renderItem={(e) => alertItem('low_eval', e.message, <><Tag>{e.type}</Tag> 评分 {e.score} · {e.created_at}</>)}
                     />
                   ) : emptyHint('暂无低分评估'),
                 },
               ]}
             />
-            <div style={{ textAlign: 'center', marginTop: 16 }}>
-              <Link to="/orders" onClick={() => setDrawerOpen(false)}>查看全部 →</Link>
+            {/* 抽屉底部是通知中心入口：未读＝持久化通知，与上方「今日告警」分口径展示（T02561 / 2.9-1、2.9-2） */}
+            <Divider style={{ margin: '16px 0 12px' }} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ color: themeToken.colorTextSecondary, fontSize: 13 }}>
+                未读通知 {notif.unreadCount} 条 · 共 {notif.notifTotal} 条
+              </span>
+              <Link to="/notifications" onClick={() => setDrawerOpen(false)}>通知中心 →</Link>
             </div>
           </>
-        ) : alertError !== null ? (
+        ) : notif.alertError !== null ? (
           // 拉取失败：给出错误态与重试，不再永远转圈（T02560 / 2.5-12）
           <Alert
             type="error"
             showIcon
             message="今日告警加载失败"
-            description={alertError}
-            action={<Button size="small" onClick={onRetryAlert}>重试</Button>}
+            description={notif.alertError}
+            action={<Button size="small" onClick={notif.refreshAlerts}>重试</Button>}
           />
         ) : (
           <Spin />

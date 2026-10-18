@@ -39,6 +39,7 @@ import {
   FundOutlined,
   BarChartOutlined,
   SlidersOutlined,
+  NotificationOutlined,
 } from '@ant-design/icons'
 // 合并 value 与 type 引入，避免 S3863 重复 import
 import {
@@ -98,6 +99,8 @@ const iconMap: Record<string, IconComp> = {
   FundOutlined,
   BarChartOutlined,
   SlidersOutlined,
+  // 通知中心叶子图标：与 Header 铃铛（BellOutlined）区分，两者同屏不再撞图标（T02561 / 2.9-2）
+  NotificationOutlined,
 }
 
 // 分组中文标签：用于 SubMenu 标题

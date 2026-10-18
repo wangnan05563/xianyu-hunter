@@ -36,7 +36,8 @@ describe('首屏骨架屏（T02560）', () => {
     expect(LAYOUT_SOURCE).toContain('菜单加载失败')
     expect(LAYOUT_SOURCE).toContain('今日告警加载失败')
     expect(LAYOUT_SOURCE).toContain('onRetryMenu')
-    expect(LAYOUT_SOURCE).toContain('onRetryAlert')
+    // 告警重试入口自 T02561 起随计数口径一起收进 useNotificationModel（notif.refreshAlerts）
+    expect(LAYOUT_SOURCE).toContain('notif.refreshAlerts')
     // 曾经的形态：statsApi.today() 的 catch 是空的
     expect(LAYOUT_SOURCE).not.toContain('statsApi.today().then(setTodayAlert).catch(() => {})')
   })

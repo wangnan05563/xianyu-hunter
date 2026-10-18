@@ -162,7 +162,14 @@ class NotificationsMixin:
             result = conn.execute(stmt)
             return result.rowcount or 0
 
-    def get_notification(self, notif_id: int) -> dict | None:
+    def get_notification(self, notif_id: int, user_id: str | None = None) -> dict | None:
+        """按 id 取单条通知
+
+        user_id 不为 None 时附加 WHERE 过滤，与 mark/delete 同一口径（深度防御）。
+        """
         with self.engine.connect() as conn:
-            row = conn.execute(select(NotificationRow).where(NotificationRow.id == notif_id)).first()
+            stmt = select(NotificationRow).where(NotificationRow.id == notif_id)
+            if user_id is not None:
+                stmt = stmt.where(NotificationRow.user_id == user_id)
+            row = conn.execute(stmt).first()
             return self._row_to_dict(row) if row else None

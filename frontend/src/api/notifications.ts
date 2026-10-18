@@ -26,6 +26,13 @@ export interface NotificationListResponse {
 // 状态参数复用三个端点（list / count / clear），统一类型避免散落字符串
 export type NotificationStatus = 'unread' | 'read' | undefined
 
+// 全量计数：三个数字都由后端一次性算出，与列表筛选/分页无关（T02561 / 2.9-3）
+export interface NotificationCounts {
+  unread: number
+  read: number
+  total: number
+}
+
 export const notificationApi = {
   list: (params?: {
     status?: 'unread' | 'read'
@@ -36,8 +43,8 @@ export const notificationApi = {
       .get<NotificationListResponse>('/api/notifications', { params })
       .then((r) => r.data),
 
-  unreadCount: () =>
-    client.get<{ unread: number }>('/api/notifications/unread_count').then((r) => r.data),
+  counts: () =>
+    client.get<NotificationCounts>('/api/notifications/unread_count').then((r) => r.data),
 
   // 标记单条已读：后端幂等，已读不报错
   markRead: (id: number) =>

@@ -9,6 +9,7 @@ import {
   ReloadOutlined, CheckOutlined, CheckSquareOutlined, DeleteOutlined, ClearOutlined,
 } from '@ant-design/icons'
 import { notificationApi, type NotificationItem } from '../../api'
+import { invalidateNotificationCounts } from '../../hooks/useNotificationModel'
 
 // level 颜色与文案：与后端 _ALLOWED_LEVELS 对齐
 const LEVEL_COLOR: Record<NotificationItem['level'], string> = {
@@ -44,8 +45,9 @@ export default function Notifications() {
   const [filter, setFilter] = useState<FilterStatus>(parseStatus(searchParams.get('status')))
 
   const [items, setItems] = useState<NotificationItem[]>([])
-  const [total, setTotal] = useState(0)
+  // 三个计数一律来自后端全量口径：列表的 total 随筛选变化，拿它算已读会恒 0 或错算（2.9-3）
   const [unreadCount, setUnreadCount] = useState(0)
+  const [readCount, setReadCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
 
@@ -62,33 +64,44 @@ export default function Notifications() {
       .list({ status: filter === 'all' ? undefined : filter, limit: 100 })
       .then((res) => {
         setItems(res.items)
-        setTotal(res.total)
       })
       .catch(() => message.error('加载通知失败'))
       .finally(() => setLoading(false))
   }, [filter])
 
-  const loadUnread = useCallback(() => {
+  // 本页计数变化 = 全局未读变化：广播让 Header 铃铛立刻跟上，不等 30s 轮询（T02561 / badge 与已读联动）
+  const loadCounts = useCallback(() => {
     notificationApi
-      .unreadCount()
-      .then((res) => setUnreadCount(res.unread))
+      .counts()
+      .then((res) => {
+        setUnreadCount(res.unread)
+        setReadCount(res.read)
+        invalidateNotificationCounts()
+      })
       .catch(() => { /* 静默：未读数加载失败不阻塞列表 */ })
   }, [])
 
   useEffect(() => { loadList() }, [loadList])
-  useEffect(() => { loadUnread() }, [loadUnread])
+  useEffect(() => { loadCounts() }, [loadCounts])
 
   // 单条标记已读：乐观更新，失败回滚
   const handleMarkRead = async (item: NotificationItem) => {
     if (item.read_at) return
     setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, read_at: new Date().toISOString() } : it)))
     setUnreadCount((c) => Math.max(0, c - 1))
+    setReadCount((c) => c + 1)
     try {
       await notificationApi.markRead(item.id)
+      invalidateNotificationCounts()
+      // 「未读」筛选下这条已不属于当前视图，留着会让用户以为没点到（2.9-7）
+      if (filter === 'unread') {
+        setItems((prev) => prev.filter((it) => it.id !== item.id))
+      }
     } catch {
       message.error('标记已读失败')
       setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, read_at: null } : it)))
       setUnreadCount((c) => c + 1)
+      setReadCount((c) => Math.max(0, c - 1))
     }
   }
 
@@ -102,8 +115,9 @@ export default function Notifications() {
     try {
       const res = await notificationApi.markAllRead()
       message.success(`已标记 ${res.updated} 条为已读`)
-      setItems((prev) => prev.map((it) => (it.read_at ? it : { ...it, read_at: new Date().toISOString() })))
-      setUnreadCount(0)
+      // 筛选态下列表形状会变（未读筛选下应清空），交回后端重取，不在前端猜
+      loadList()
+      loadCounts()
     } catch {
       message.error('全部标记已读失败')
     } finally {
@@ -111,20 +125,24 @@ export default function Notifications() {
     }
   }
 
-  // 删除单条：乐观更新
+  // 删除单条：乐观更新（未读/已读两个计数各自减一，不靠 total 反算）
   const handleDelete = async (id: number) => {
     const prev = items
     const target = prev.find((it) => it.id === id)
+    const wasUnread = !!target && !target.read_at
     setItems((p) => p.filter((it) => it.id !== id))
-    setTotal((t) => Math.max(0, t - 1))
-    if (target && !target.read_at) setUnreadCount((c) => Math.max(0, c - 1))
+    const bump = (delta: number) => {
+      if (wasUnread) setUnreadCount((c) => Math.max(0, c + delta))
+      else setReadCount((c) => Math.max(0, c + delta))
+    }
+    bump(-1)
     try {
       await notificationApi.delete(id)
+      invalidateNotificationCounts()
     } catch {
       message.error('删除失败')
       setItems(prev)
-      setTotal((t) => t + 1)
-      if (target && !target.read_at) setUnreadCount((c) => c + 1)
+      bump(1)
     }
   }
 
@@ -135,14 +153,13 @@ export default function Notifications() {
       const res = await notificationApi.clear('read')
       message.success(`已清空 ${res.deleted} 条已读通知`)
       loadList()
+      loadCounts()
     } catch {
       message.error('清空失败')
     } finally {
       setActionLoading(false)
     }
   }
-
-  const readCount = total - unreadCount
 
   return (
     <div className="page-container">
@@ -192,7 +209,7 @@ export default function Notifications() {
         title={
           <Space>
             <span>通知列表</span>
-            <TipButton tip="刷新通知列表与未读数" icon={<ReloadOutlined />} onClick={() => { loadList(); loadUnread() }} size="small" />
+            <TipButton tip="刷新通知列表与计数" icon={<ReloadOutlined />} onClick={() => { loadList(); loadCounts() }} size="small" />
           </Space>
         }
         extra={

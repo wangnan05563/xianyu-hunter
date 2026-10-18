@@ -55,10 +55,19 @@ def unread_count(
     request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """未读数（给顶栏铃铛 badge 单独拉取，避免列表里再算）"""
+    """通知全量计数（未读 / 已读 / 总数）
+
+    为什么一个端点回三个数：铃铛 badge、告警抽屉、通知中心三处都要显示计数，
+    而通知中心页的「已读」原先用 `列表 total − unread` 现算，total 随筛选变化导致恒 0 或错算
+    （T02561 / 2.9-3）。三个数都由后端按全量口径算出，与任何列表筛选无关。
+    """
     # 多用户隔离：查询操作用 None
     user_id = getattr(request.state, "user_id", None)
-    return {"unread": container.repo.count_notifications(status="unread", user_id=user_id)}
+    return {
+        "unread": container.repo.count_notifications(status="unread", user_id=user_id),
+        "read": container.repo.count_notifications(status="read", user_id=user_id),
+        "total": container.repo.count_notifications(status=None, user_id=user_id),
+    }
 
 
 @router.post("")
