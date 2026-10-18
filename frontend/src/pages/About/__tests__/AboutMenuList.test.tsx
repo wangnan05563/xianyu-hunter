@@ -8,28 +8,29 @@ import { API_BASE } from '@/utils/apiBase'
 
 // MemoryRouter 包装：AboutMenuList 内部用 Link 渲染 help 项
 function renderList(onOpenLicenses = vi.fn()) {
-  render(
+  const result = render(
     <ConfigProvider>
       <MemoryRouter>
         <AboutMenuList onOpenLicenses={onOpenLicenses} />
       </MemoryRouter>
     </ConfigProvider>,
   )
-  return { onOpenLicenses }
+  return { ...result, onOpenLicenses }
 }
 
 describe('AboutMenuList', () => {
-  it('渲染全部 8 个菜单项', () => {
-    renderList()
-    // 按 i18n 文案逐项校验，确保 8 项都渲染
-    expect(screen.getByText(TEXTS.menu.terms)).toBeInTheDocument()
-    expect(screen.getByText(TEXTS.menu.privacy)).toBeInTheDocument()
+  it('渲染已就绪的 3 个菜单项，占位外链不渲染', () => {
+    const { container } = renderList()
     expect(screen.getByText(TEXTS.menu.licenses)).toBeInTheDocument()
     expect(screen.getByText(TEXTS.menu.help)).toBeInTheDocument()
     expect(screen.getByText(TEXTS.menu.api)).toBeInTheDocument()
-    expect(screen.getByText(TEXTS.menu.contact)).toBeInTheDocument()
-    expect(screen.getByText(TEXTS.menu.community)).toBeInTheDocument()
-    expect(screen.getByText(TEXTS.menu.report)).toBeInTheDocument()
+    // 地址未就绪（example.com 占位）的条目不得出现在发布版
+    expect(screen.queryByText(TEXTS.menu.terms)).not.toBeInTheDocument()
+    expect(screen.queryByText(TEXTS.menu.privacy)).not.toBeInTheDocument()
+    expect(screen.queryByText(TEXTS.menu.contact)).not.toBeInTheDocument()
+    expect(screen.queryByText(TEXTS.menu.community)).not.toBeInTheDocument()
+    expect(screen.queryByText(TEXTS.menu.report)).not.toBeInTheDocument()
+    expect(container.innerHTML).not.toContain('example.com')
   })
 
   it('点击 licenses 项触发 onOpenLicenses 回调', () => {
@@ -40,10 +41,9 @@ describe('AboutMenuList', () => {
 
   it('外部链接项使用 target=_blank 与 rel=noopener', () => {
     renderList()
-    // 用户协议为外部链接
-    const termsLink = screen.getByText(TEXTS.menu.terms).closest('a')
-    expect(termsLink).toHaveAttribute('target', '_blank')
-    expect(termsLink).toHaveAttribute('rel', 'noopener noreferrer')
+    const apiLink = screen.getByText(TEXTS.menu.api).closest('a')
+    expect(apiLink).toHaveAttribute('target', '_blank')
+    expect(apiLink).toHaveAttribute('rel', 'noopener noreferrer')
   })
 
   it('help 项为 SPA 内链（不打开新窗口）', () => {

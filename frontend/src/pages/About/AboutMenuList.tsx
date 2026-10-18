@@ -25,6 +25,10 @@ const MENU_ITEMS: MenuItem[] = [
   { key: 'report', label: TEXTS.menu.report, href: 'https://example.com/issues/new', external: true },
 ]
 
+// 发布版不得把占位域名交给用户：地址未就绪的条目不渲染，填入真实地址即自动出现
+const PLACEHOLDER_HOST = 'example.com'
+const VISIBLE_ITEMS = MENU_ITEMS.filter((item) => !item.href.includes(PLACEHOLDER_HOST))
+
 interface AboutMenuListProps {
   readonly onOpenLicenses: () => void
 }
@@ -47,7 +51,7 @@ export function AboutMenuList({ onOpenLicenses }: AboutMenuListProps) {
         justifyContent: 'space-between',
         padding: '14px 16px',
         cursor: 'pointer',
-        borderBottom: idx < MENU_ITEMS.length - 1 ? `1px solid ${token.colorBorderSecondary}` : 'none',
+        borderBottom: idx < VISIBLE_ITEMS.length - 1 ? `1px solid ${token.colorBorderSecondary}` : 'none',
         transition: 'background-color 120ms cubic-bezier(0.2, 0, 0, 1)',
       }}
     >
@@ -66,7 +70,7 @@ export function AboutMenuList({ onOpenLicenses }: AboutMenuListProps) {
       }}
       styles={{ body: { padding: 0 } }}
     >
-      {MENU_ITEMS.map((item, idx) => {
+      {VISIBLE_ITEMS.map((item, idx) => {
         // help 为 SPA 内链，用 Link 组件避免整页刷新
         const isInternal = !item.external && item.key === 'help'
         // S6819：移除内层 div 的 role="button"，交互由外层 a/Link 承担
