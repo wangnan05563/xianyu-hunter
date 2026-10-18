@@ -134,7 +134,7 @@ describe('SheetWorkspace', () => {
     act(() => {
       useSheetStore.getState().openSheet('/items')
     })
-    expect(screen.getByText('商品列表')).toBeInTheDocument()
+    expect(screen.getByText('商品中心')).toBeInTheDocument()
     // 当前激活 /items，点击关闭按钮（激活 tab 中的 danger button）
     const closeBtn = container.querySelector('.sheet-tab-active .ant-btn-dangerous') as HTMLElement
     expect(closeBtn).toBeTruthy()

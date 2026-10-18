@@ -13,6 +13,27 @@ export type MenuCategory =
   | 'main'
   | 'system'
 
+// 菜单文案单源索引（T02556 / FR-B-4）
+// 为什么需要它：菜单名有四处在用（侧栏、面包屑、命令面板、标签栏），历史上各维护一张常量表，
+// 结果同一个页面在四处叫法不同（/items 商品中心 vs 商品列表）。/api/menu 是唯一的权威源，
+// 其余三处都应从这份索引取 label，不再各自硬编码。
+// 由 useMenuConfig 在拉到菜单后写入；菜单尚未到达时索引为空，调用方回退到本地兜底标题
+// （兜底标题由 navSingleSource 测试锁住与 registry 一致，因此回退不会出现第二种叫法）。
+let labelByPath: Readonly<Record<string, string>> = {}
+
+export function setMenuLabelIndex(menus: readonly MenuItem[]): void {
+  const next: Record<string, string> = {}
+  for (const m of menus) {
+    if (m.path) next[m.path] = m.label
+  }
+  labelByPath = next
+}
+
+/** 取菜单权威标题：仅精确匹配菜单页，子页面（/tasks/:id）返回 undefined 由调用方兜底 */
+export function menuLabelForPath(path: string): string | undefined {
+  return labelByPath[path]
+}
+
 // 菜单分组中文标签：useMenuConfig 与 MenuAdmin 共享，避免重复定义导致漂移
 // 后端 group 字段值与 menu_registry.yaml 对齐
 export const MENU_GROUP_LABELS: Record<string, string> = {

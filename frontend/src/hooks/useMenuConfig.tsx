@@ -38,7 +38,7 @@ import {
   QuestionCircleOutlined,
 } from '@ant-design/icons'
 // 合并 value 与 type 引入，避免 S3863 重复 import
-import { menuApi, MENU_GROUP_LABELS, type MenuItem } from '../api/menu'
+import { menuApi, MENU_GROUP_LABELS, setMenuLabelIndex, type MenuItem } from '../api/menu'
 
 // 图标名 → Ant Design 图标组件映射
 // 为什么集中维护：后端返回字符串图标名（如 'DashboardOutlined'），前端需映射到实际组件
@@ -189,6 +189,22 @@ export function buildMenuItems(menus: MenuItem[]): AntMenuItem[] {
   return result
 }
 
+export type CommandItem = { key: string; label: string; icon: ReactNode }
+
+/**
+ * 命令面板（Ctrl+K）导航项：由 /api/menu 派生（T02556 / FR-B-4）
+ *
+ * 取代原先 MainLayout 里硬编码的 COMMAND_ITEMS 表——那张表与菜单 registry 各写一份 label，
+ * 同一页面在侧栏和面板里叫法不同（商品中心 / 商品列表），且新增页面必须改代码。
+ * 语义变化：用户在前端菜单管理里隐藏的页面不再出现在命令面板里，与侧栏保持一致；
+ * 菜单管理自身是后端锁定项，永远是恢复入口。
+ */
+export function buildCommandItems(menus: MenuItem[]): CommandItem[] {
+  return menus
+    .filter((m) => m.visible && m.path)
+    .map((m) => ({ key: m.path, label: m.label, icon: renderIcon(m.icon) }))
+}
+
 // 渲染图标：未知图标名兜底到 AppstoreOutlined
 function renderIcon(iconName: string): ReactNode {
   const Icon = iconMap[iconName] || AppstoreOutlined
@@ -209,10 +225,16 @@ export function useMenuConfig() {
   const [loading, setLoading] = useState<boolean>(!menuCache)
   const [error, setError] = useState<Error | null>(null)
 
+  // 写入菜单状态的同时刷新文案单源索引：标签栏、命令面板、面包屑都从这里取 label
+  const applyMenus = useCallback((list: MenuItem[]): void => {
+    setMenuLabelIndex(list)
+    setMenus(list)
+  }, [])
+
   const fetchMenus = useCallback(async (force: boolean = false): Promise<void> => {
     // 缓存命中且未过期：直接使用，不发请求
     if (!force && menuCache && Date.now() - menuCache.ts < CACHE_TTL_MS) {
-      setMenus(menuCache.menus)
+      applyMenus(menuCache.menus)
       setLoading(false)
       return
     }
@@ -221,16 +243,16 @@ export function useMenuConfig() {
     try {
       const data = await menuApi.get()
       menuCache = { menus: data, ts: Date.now() }
-      setMenus(data)
+      applyMenus(data)
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err))
       setError(e)
       // 失败时保留旧缓存数据（如有），避免菜单瞬间消失
-      if (menuCache) setMenus(menuCache.menus)
+      if (menuCache) applyMenus(menuCache.menus)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [applyMenus])
 
   useEffect(() => {
     void fetchMenus()

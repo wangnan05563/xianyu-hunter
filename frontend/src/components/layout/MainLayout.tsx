@@ -1,39 +1,20 @@
 import { Layout, Menu, theme, Breadcrumb, Spin, Badge, Drawer, Collapse, List, Tag, Modal, Input } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import {
-  DashboardOutlined,
-  UnorderedListOutlined,
-  ShoppingOutlined,
-  ThunderboltOutlined,
-  AuditOutlined,
-  FieldTimeOutlined,
-  FileTextOutlined,
-  DollarOutlined,
-  SafetyCertificateOutlined,
   BellOutlined,
-  HistoryOutlined,
+  FileTextOutlined,
   HomeOutlined,
   InfoCircleOutlined,
-  RobotOutlined,
   SearchOutlined,
-  AimOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  DatabaseOutlined,
-  ClearOutlined,
   WarningOutlined,
   ClockCircleOutlined,
   StarOutlined,
   MacCommandOutlined,
-  ExperimentOutlined,
   SunOutlined,
   MoonOutlined,
-  BugOutlined,
   QuestionCircleOutlined,
-  CloudDownloadOutlined,
-  MessageOutlined,
-  GlobalOutlined,
-  SettingOutlined,
 } from '@ant-design/icons'
 import { useLocation, useNavigate, Link } from 'react-router-dom'
 import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
@@ -47,7 +28,8 @@ import DryRunBanner from './DryRunBanner'
 import { SheetWorkspace } from '../SheetWorkspace'
 import { useSheetStore } from '../../stores/sheetStore'
 import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
-import { useMenuConfig } from '../../hooks/useMenuConfig'
+import { useMenuConfig, buildCommandItems } from '../../hooks/useMenuConfig'
+import type { CommandItem } from '../../hooks/useMenuConfig'
 import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
 import { buildBreadcrumbs } from './breadcrumb'
 import AccountSwitcher from './AccountSwitcher'
@@ -56,38 +38,7 @@ import { GuideController } from '../../guides/GuideController'
 const { Header, Sider, Content } = Layout
 
 
-// Command Palette 可搜索的命令列表（扁平化所有页面导航项）
-const COMMAND_ITEMS = [
-  { key: '/', label: '仪表盘', icon: <DashboardOutlined /> },
-  { key: '/tasks', label: '任务管理', icon: <UnorderedListOutlined /> },
-  { key: '/items', label: '商品列表', icon: <ShoppingOutlined /> },
-  { key: '/orders', label: '抢单记录', icon: <ThunderboltOutlined /> },
-  { key: '/evaluations', label: '评估明细', icon: <AuditOutlined /> },
-  { key: '/timeline', label: '事件时间线', icon: <FieldTimeOutlined /> },
-  { key: '/logs', label: '实时日志', icon: <FileTextOutlined /> },
-  { key: '/logs/errors', label: '错误日志', icon: <BugOutlined /> },
-  { key: '/price-dashboard', label: '价格行情', icon: <DollarOutlined /> },
-  { key: '/config/price', label: '价格策略', icon: <DollarOutlined /> },
-  { key: '/config/eval', label: '评估规则', icon: <SafetyCertificateOutlined /> },
-  { key: '/config/buyer', label: '抢单策略', icon: <AimOutlined /> },
-  { key: '/config/search', label: '搜索参数', icon: <SearchOutlined /> },
-  { key: '/config/notifier', label: '通知渠道', icon: <BellOutlined /> },
-  { key: '/config/ai', label: 'AI 服务', icon: <RobotOutlined /> },
-  { key: '/config/version', label: '配置版本', icon: <HistoryOutlined /> },
-  { key: '/maintenance', label: '系统清理', icon: <ClearOutlined /> },
-  { key: '/maintenance/db', label: '数据库维护', icon: <DatabaseOutlined /> },
-  { key: '/maintenance/vector', label: '向量数据库维护', icon: <DatabaseOutlined /> },
-  { key: '/maintenance/tunnel', label: '内网穿透', icon: <GlobalOutlined /> },
-  { key: '/batch-refresh', label: '批量采集', icon: <CloudDownloadOutlined /> },
-  { key: '/anticrawl', label: '反爬登录管理', icon: <ExperimentOutlined /> },
-  { key: '/chatbot', label: '智能客服对话', icon: <MessageOutlined /> },
-  { key: '/config/chatbot', label: '客服配置', icon: <MessageOutlined /> },
-  { key: '/help', label: '帮助文档', icon: <QuestionCircleOutlined /> },
-  { key: '/about', label: '关于', icon: <InfoCircleOutlined /> },
-  { key: '/export', label: '数据导出', icon: <CloudDownloadOutlined /> },
-  { key: '/notifications', label: '通知中心', icon: <BellOutlined /> },
-  { key: '/menu-admin', label: '菜单管理', icon: <SettingOutlined /> },
-]
+// Command Palette 导航项不再硬编码：由 /api/menu 派生（buildCommandItems），见 T02556 / FR-B-4
 
 // g+X 全局快捷键映射
 const G_PREFIX_MAP: Record<string, string> = {
@@ -316,6 +267,9 @@ export default function MainLayout() {
     dynamicMenuItems.length > 0,
   )
 
+  // 命令面板导航项：与侧栏同源（/api/menu），不再维护第二张硬编码表
+  const commandItems = useMemo(() => buildCommandItems(menus), [menus])
+
   // 面包屑：计算在 breadcrumb.ts 里（纯函数，可脱离 Router/antd 单测），此处只做渲染
   const crumbs = useMemo(
     () => buildBreadcrumbs(location.pathname, menus),
@@ -401,6 +355,7 @@ export default function MainLayout() {
       openKeys={openKeys}
       setOpenKeys={handleOpenKeysChange}
       menuItems={dynamicMenuItems}
+      commandItems={commandItems}
       drawerOpen={drawerOpen}
       setDrawerOpen={setDrawerOpen}
       userInfo={userInfo}
@@ -432,6 +387,8 @@ interface LayoutContentProps {
   // 只接受「用户手动开合」的字符串数组入口：内部据此标记 touched，路由联动不再覆盖
   readonly setOpenKeys: (keys: string[]) => void
   readonly menuItems: NonNullable<MenuProps['items']>
+  // 命令面板项：由 MainLayout 用 buildCommandItems(menus) 派生后传入（T02556 单源）
+  readonly commandItems: CommandItem[]
   readonly drawerOpen: boolean
   readonly setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>
   readonly userInfo: AuthMe
@@ -443,18 +400,18 @@ function LayoutContent({
   isDark, onToggleTheme, collapsed, setCollapsed, location, navigate,
   schedulerRunning, todayAlert, alertCount,
   cmdOpen, setCmdOpen, cmdSearch, setCmdSearch, cmdActive, setCmdActive,
-  breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems,
+  breadcrumbItems, selectedKey, openKeys, setOpenKeys, menuItems, commandItems,
   drawerOpen, setDrawerOpen, userInfo, onRefreshUserInfo,
 }: LayoutContentProps) {
   // 必须在 ConfigProvider 内部调用，token 才会响应暗色算法
   const { token: themeToken } = theme.useToken()
 
-  // Command Palette 模糊搜索过滤
+  // Command Palette 模糊搜索过滤（数据源为 /api/menu 派生的 commandItems）
   const filteredCommands = useMemo(() => {
-    if (!cmdSearch.trim()) return COMMAND_ITEMS
+    if (!cmdSearch.trim()) return commandItems
     const kw = cmdSearch.toLowerCase()
-    return COMMAND_ITEMS.filter((item) => item.label.toLowerCase().includes(kw))
-  }, [cmdSearch])
+    return commandItems.filter((item) => item.label.toLowerCase().includes(kw))
+  }, [cmdSearch, commandItems])
 
   // 路由切换时重置外层 Content 的滚动位置到顶部
   // 修复：默认情况下外层 Content 的 scrollTop 不会随路由变化重置，

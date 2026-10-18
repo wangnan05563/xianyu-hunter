@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { menuLabelForPath } from '../../api/menu'
 import {
   DashboardOutlined,
   UnorderedListOutlined,
@@ -44,9 +45,10 @@ export interface SheetMeta {
  * 为什么独立维护而非从 App.tsx 提取：
  * 1. App.tsx 用 JSX <Route> 声明，无法直接反射为数据结构
  * 2. 此表同时承载 icon/title 元数据，供标签栏、偏好、恢复时重建使用
- * 3. 与 MainLayout 的 ROUTE_LABELS/COMMAND_ITEMS 元数据保持一致，未来可合并
+ * 3. 本表是 path → 组件 的映射与「非菜单子页面」的命名兜底；菜单页标题一律以 /api/menu 为准
+ *    （见 findSheetMeta），不再另立 ROUTE_LABELS/COMMAND_ITEMS 这类重复文案表（T02556）
  *
- * 维护约定：新增路由时需同步 App.tsx + 此表 + MainLayout 菜单
+ * 维护约定：新增路由需同步 App.tsx + 此表；要进侧栏再在 config/menu_registry.yaml 注册
  */
 export const sheetRegistry: SheetMeta[] = [
   { path: '/', title: '仪表盘', icon: <DashboardOutlined />, component: lazyRetry(() => import('../../pages/Dashboard')) },
@@ -54,9 +56,9 @@ export const sheetRegistry: SheetMeta[] = [
   { path: '/tasks/new', title: '新建任务', icon: <UnorderedListOutlined />, component: lazyRetry(() => import('../../pages/Tasks/TaskEditor')) },
   { path: '/tasks/:id', title: '任务详情', icon: <UnorderedListOutlined />, component: lazyRetry(() => import('../../pages/Tasks/TaskDetail')) },
   { path: '/tasks/:id/edit', title: '编辑任务', icon: <UnorderedListOutlined />, component: lazyRetry(() => import('../../pages/Tasks/TaskEditor')) },
-  { path: '/items', title: '商品列表', icon: <ShoppingOutlined />, component: lazyRetry(() => import('../../pages/Items/ItemList')) },
+  { path: '/items', title: '商品中心', icon: <ShoppingOutlined />, component: lazyRetry(() => import('../../pages/Items/ItemList')) },
   { path: '/orders', title: '抢单记录', icon: <ThunderboltOutlined />, component: lazyRetry(() => import('../../pages/Orders/Orders')) },
-  { path: '/evaluations', title: '评估明细', icon: <AuditOutlined />, component: lazyRetry(() => import('../../pages/Evaluations/index')) },
+  { path: '/evaluations', title: '卖家评估', icon: <AuditOutlined />, component: lazyRetry(() => import('../../pages/Evaluations/index')) },
   { path: '/timeline', title: '事件时间线', icon: <FieldTimeOutlined />, component: lazyRetry(() => import('../../pages/Timeline')) },
   { path: '/logs', title: '实时日志', icon: <FileTextOutlined />, component: lazyRetry(() => import('../../pages/Logs/Logs')) },
   { path: '/logs/errors', title: '错误日志', icon: <BugOutlined />, component: lazyRetry(() => import('../../pages/Logs/ErrorLogs')) },
@@ -80,7 +82,7 @@ export const sheetRegistry: SheetMeta[] = [
   // 否则 SheetWorkspace 不识别该路径，会显示"未打开任何页面"
   { path: '/confirm-buy', title: '确认抢单', icon: <ThunderboltOutlined />, component: lazyRetry(() => import('../../pages/ConfirmBuy')) },
   { path: '/menu-admin', title: '菜单管理', icon: <SettingOutlined />, component: lazyRetry(() => import('../../pages/MenuAdmin')) },
-  { path: '/chatbot', title: '智能客服对话', icon: <MessageOutlined />, component: lazyRetry(() => import('../../pages/Chatbot')) },
+  { path: '/chatbot', title: '智能客服', icon: <MessageOutlined />, component: lazyRetry(() => import('../../pages/Chatbot')) },
   { path: '/about', title: '关于', icon: <InfoCircleOutlined />, component: lazyRetry(() => import('../../pages/About')) },
   { path: '/export', title: '数据导出', icon: <CloudDownloadOutlined />, component: lazyRetry(() => import('../../pages/Export')) },
   { path: '/help', title: '帮助文档', icon: <BlockOutlined />, component: lazyRetry(() => import('../../pages/Help')) },
@@ -101,13 +103,19 @@ function pathToRegex(pattern: string): RegExp {
  *
  * query string 处理：传入 path 可能含 ?xxx=yyy（如 /confirm-buy?item_id=aaa），
  * 必须先剥离再匹配，否则注册表中的 /confirm-buy 无法匹配
+ *
+ * title 单源（T02556 / FR-B-4）：菜单页的标题取自 /api/menu 的 label 索引，本表 title 只作
+ * 菜单尚未到达时的兜底与子页面（/tasks/:id 等非菜单页）的命名。
  */
 export function findSheetMeta(path: string): SheetMeta | undefined {
   // 剥离 query string 与 hash，仅保留 pathname 部分用于匹配
   const pathname = path.split('?')[0].split('#')[0]
   // 1. 精确匹配
   const exact = sheetRegistry.find((s) => s.path === pathname)
-  if (exact) return exact
+  if (exact) {
+    const menuLabel = menuLabelForPath(pathname)
+    return menuLabel ? { ...exact, title: menuLabel } : exact
+  }
   // 2. :param 通配匹配
   return sheetRegistry.find((s) => s.path.includes(':') && pathToRegex(s.path).test(pathname))
 }
