@@ -146,6 +146,10 @@ def get_order(
     o = container.repo.get_order(order_id, user_id=user_id)
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
+    # FR-G-2：详情端点同样附加 deadline/剩余秒（原先只有列表端点附加），
+    # 否则移动端订单详情页拿不到倒计时，只能显示一个「人工接管」标签
+    if o.get("status") == OrderStatus.TAKEOVER_PENDING.value:
+        _apply_takeover_deadline(o, _utcnow().replace(tzinfo=None))
     return o
 
 

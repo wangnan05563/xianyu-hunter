@@ -1,23 +1,29 @@
 // frontend/src/mobile/pages/Tasks/index.tsx
-import { Card, Switch, Tag, Spin, Empty, App } from 'antd'
+import { Card, Switch, Tag, Spin, Empty, App, Button } from 'antd'
+import { PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { useEffect, useState, useCallback } from 'react'
 import { taskApi } from '../../../api'
 import type { Task } from '../../../api/types'
 import PullToRefresh from '../../components/PullToRefresh'
+import FetchFailedHint from '../../../components/FetchFailedHint'
 
 export default function MobileTasks() {
   const navigate = useNavigate()
   const { message } = App.useApp()
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
+  // 请求失败与「真的没有任务」必须分开：原先 catch 吞掉后直接渲染空态（假回执）
+  const [loadFailed, setLoadFailed] = useState(false)
 
   const fetchTasks = useCallback(async () => {
     try {
       const data = await taskApi.list()
       setTasks(data.items)
+      setLoadFailed(false)
     } catch {
-      // 弱网下保留已有数据
+      // 弱网下保留已有数据，但把失败声明出来
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
@@ -45,8 +51,27 @@ export default function MobileTasks() {
 
   return (
     <PullToRefresh onRefresh={fetchTasks}>
+      {/* 入口行：新建任务路由 /m/tasks/new 一直存在但没有任何入口（FR-G-3「有路由无入口」） */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <span style={{ fontSize: 13, color: '#999' }}>共 {tasks.length} 个任务</span>
+        <Button
+          type="primary"
+          size="small"
+          icon={<PlusOutlined />}
+          onClick={() => navigate('/m/tasks/new')}
+        >
+          新建任务
+        </Button>
+      </div>
+      {loadFailed && tasks.length > 0 && (
+        <FetchFailedHint source="任务列表（下方为上次成功加载的数据）" onRetry={() => void fetchTasks()} />
+      )}
       {tasks.length === 0 ? (
-        <Empty description="暂无任务" />
+        loadFailed ? (
+          <FetchFailedHint source="任务列表" onRetry={() => void fetchTasks()} />
+        ) : (
+          <Empty description="暂无任务，点上方「新建任务」创建第一个" />
+        )
       ) : (
         tasks.map((task) => {
           // 卡片整体作为可聚焦链接：键盘 Enter 跳转，回车键同样可触发

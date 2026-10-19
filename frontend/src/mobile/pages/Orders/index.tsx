@@ -6,6 +6,8 @@ import { orderApi } from '../../../api'
 import type { OrderItem } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
 import PullToRefresh from '../../components/PullToRefresh'
+import FetchFailedHint from '../../../components/FetchFailedHint'
+import TakeoverCountdown from '../../components/TakeoverCountdown'
 
 // 状态中文映射
 const STATUS_LABELS: Record<string, string> = {
@@ -31,14 +33,17 @@ export default function MobileOrders() {
   const { message } = App.useApp()
   const [orders, setOrders] = useState<OrderItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined)
 
   const fetchOrders = useCallback(async () => {
     try {
       const data = await orderApi.list({ status: filterStatus })
       setOrders(data.items)
+      setLoadFailed(false)
     } catch {
-      // 弱网保留已有数据，不弹错误提示打断用户浏览
+      // 弱网保留已有数据，但必须显式声明失败：否则列表空态会被读成「真的没有订单」
+      setLoadFailed(true)
     } finally {
       setLoading(false)
     }
@@ -74,9 +79,17 @@ export default function MobileOrders() {
         ]}
       />
       {orders.length === 0 ? (
-        <Empty description="暂无订单" />
+        loadFailed ? (
+          <FetchFailedHint source="订单列表" onRetry={() => void fetchOrders()} />
+        ) : (
+          <Empty description="暂无订单" />
+        )
       ) : (
-        orders.map((order) => (
+        <>
+          {loadFailed && (
+            <FetchFailedHint source="订单列表" onRetry={() => void fetchOrders()} />
+          )}
+          {orders.map((order) => (
           <Card
             key={order.id}
             className="m-order-card"
@@ -96,9 +109,18 @@ export default function MobileOrders() {
               </div>
             </button>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Tag color={STATUS_COLORS[order.status]}>
-                {STATUS_LABELS[order.status] || order.status}
-              </Tag>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <Tag color={STATUS_COLORS[order.status]}>
+                  {STATUS_LABELS[order.status] || order.status}
+                </Tag>
+                {/* 人工接管：显示真实剩余时间（闲鱼待付款 30 分钟自动关闭） */}
+                {order.status === 'takeover_pending' && (
+                  <TakeoverCountdown
+                    deadline={order.takeover_deadline}
+                    remainingSec={order.takeover_remaining_sec}
+                  />
+                )}
+              </div>
               {/* 状态修改下拉：用户支付后标记为已成功 */}
               <Select
                 size="small"
@@ -113,7 +135,8 @@ export default function MobileOrders() {
               />
             </div>
           </Card>
-        ))
+          ))}
+        </>
       )}
     </PullToRefresh>
   )

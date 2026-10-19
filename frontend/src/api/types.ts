@@ -595,6 +595,10 @@ export interface StatsOverview {
   orders: { pending: number; succeeded: number; failed: number; total: number }
   events: { total: number }
   evaluation_count: number
+  // FR-G-1：真实「发现商品数 / 评估通过数 / 通知失败数」（口径与业务 KPI、评估漏斗同源）
+  // 声明为可选是为了兼容尚未下发该块的旧后端响应：缺失时前端必须显示「—」并说明原因，
+  // 绝不允许回退成 0 —— 那会把「没数据」伪装成「一切正常」。
+  metrics?: { items_discovered: number; eval_pass: number; notify_failed: number }
   db_size: string
   browser_dir: string
   scheduler_running: boolean

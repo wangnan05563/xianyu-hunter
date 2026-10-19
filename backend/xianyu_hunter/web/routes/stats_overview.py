@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select, text as sa_text
+from sqlalchemy import case, func, select, text as sa_text
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.domain.order import PENDING_STATUSES, OrderStatus
-from xianyu_hunter.infra.db_models import EventRow, EvaluationRow, _utcnow
+from xianyu_hunter.infra.db_models import EventRow, EvaluationRow, TaskLinkRow, _utcnow
+# 口径同源（FR-G-1）：通知事件的 stage 精确值与业务 KPI 卡共用同一常量，
+# 避免「仪表盘说没失败、KPI 卡说失败率 3%」这类两套字面值各说各话
+from xianyu_hunter.web.routes.business_kpi import _NOTIFY_STAGE
 from xianyu_hunter.web.cache import cached_ttl
 from xianyu_hunter.web.deps import get_container, _should_start_scheduler
 
@@ -106,11 +109,47 @@ def _query_eval_total(engine) -> int:
         return int(conn.execute(select(func.count()).select_from(EvaluationRow)).scalar() or 0)
 
 
+def _query_funnel_metrics(engine) -> tuple[int, int, int]:
+    """查询 5：真实商品数 / 评估通过数 / 通知失败数（FR-G-1 移动端 KPI 口径）
+
+    为什么需要这三个字段：`/api/stats` 原先只有 tasks / orders / events / evaluation_count，
+    移动端 KPI 卡拿不到「发现商品数」和「评估通过数」，只好贴错标签复用
+    `tasks.total`（任务数）和 `evaluation_count`（评估总次数），读者看到的是假数据。
+
+    口径与既有实现严格同源，不新造定义：
+    - items_discovered：business_kpi.py `_kpi_items_discovered`（DISTINCT link_key WHERE link_type='item'）
+      与 stats_eval_funnel.py 阶段1 `discovered` 同一表达式（漏斗那个带时间窗，这里取累计）
+    - eval_pass：stats_eval_funnel.py `eval_pass_expr`（risk_level == 'low'），
+      即业务 KPI「评估通过率」的分子
+    - notify_failed：business_kpi.py `_kpi_notify_failure_rate` 的分子
+      （stage=_NOTIFY_STAGE 且 level='err'），同样共用 stage 常量避免字面值漂移
+
+    P3-1 风格：独立 connection + CASE WHEN 一次聚合，配合 asyncio.gather 并发。
+    """
+    with engine.connect() as conn:
+        items_discovered = int(conn.execute(
+            select(func.count(func.distinct(TaskLinkRow.link_key)))
+            .where(TaskLinkRow.link_type == "item")
+        ).scalar() or 0)
+        eval_pass_expr = case((EvaluationRow.risk_level == "low", 1), else_=0)
+        notify_fail_expr = case(
+            ((EventRow.stage == _NOTIFY_STAGE) & (EventRow.level == "err"), 1),
+            else_=0,
+        )
+        eval_row = conn.execute(
+            select(func.sum(eval_pass_expr).label("matched")).select_from(EvaluationRow)
+        ).one()
+        notify_row = conn.execute(
+            select(func.sum(notify_fail_expr).label("matched")).select_from(EventRow)
+        ).one()
+    return items_discovered, int(eval_row.matched or 0), int(notify_row.matched or 0)
+
+
 @cached_ttl(300, key_fn=lambda container: "stats_overview")
 async def _overview(container: Container) -> dict[str, Any]:
     """总览统计（S-01 修复：用 SQL COUNT 替代拉全量数据计数）
 
-    性能优化：将原来 9 次 COUNT 查询合并为 4 次（tasks / orders / events / eval 各一次），
+    性能优化：将原来 9 次 COUNT 查询合并为条件聚合（tasks / orders / events / eval / funnel-metrics 各一次），
     用 CASE WHEN 条件聚合替代逐状态单独查询。
 
     为什么缓存 60s：总览卡片数据变化频率低（任务状态/订单状态分钟级变化），
@@ -121,15 +160,17 @@ async def _overview(container: Container) -> dict[str, Any]:
     """
     engine = container.repo.engine
 
-    # P3-1：4 个查询并发执行，每个独立 connection（SQLite WAL 支持并发读）
+    # P3-1：5 个查询并发执行，每个独立 connection（SQLite WAL 支持并发读）
     (task_total, task_running, task_paused, task_stopped), \
         (order_total, order_succeeded, order_failed, order_pending), \
         event_total, \
-        eval_total = await asyncio.gather(
+        eval_total, \
+        (items_discovered, eval_pass, notify_failed) = await asyncio.gather(
             asyncio.to_thread(_query_task_stats, engine),
             asyncio.to_thread(_query_order_stats, engine),
             asyncio.to_thread(_query_event_total, engine),
             asyncio.to_thread(_query_eval_total, engine),
+            asyncio.to_thread(_query_funnel_metrics, engine),
         )
 
     return {
@@ -149,6 +190,13 @@ async def _overview(container: Container) -> dict[str, Any]:
             "total": event_total,
         },
         "evaluation_count": eval_total,
+        # FR-G-1：真实商品/通过/通知失败计数。移动端与桌面 KPI 共用这一份，
+        # 不再用 tasks.total 冒充商品数、用 evaluation_count 冒充「评估通过」
+        "metrics": {
+            "items_discovered": items_discovered,
+            "eval_pass": eval_pass,
+            "notify_failed": notify_failed,
+        },
         # 系统状态：数据库大小 + 浏览器数据目录 + 调度器状态
         "db_size": _calc_db_size(container),
         "browser_dir": _get_browser_dir(container),

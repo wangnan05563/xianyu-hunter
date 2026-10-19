@@ -1,9 +1,11 @@
 // frontend/src/mobile/pages/Orders/OrderDetail.tsx
 import { Card, Descriptions, Spin, Button, Tag } from 'antd'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { orderApi } from '../../../api'
 import type { OrderItem } from '../../../api/types'
+import FetchFailedHint from '../../../components/FetchFailedHint'
+import TakeoverCountdown from '../../components/TakeoverCountdown'
 
 const STATUS_LABELS: Record<string, string> = {
   pending_pay: '待支付',
@@ -19,17 +21,30 @@ export default function MobileOrderDetail() {
   const navigate = useNavigate()
   const [order, setOrder] = useState<OrderItem | null>(null)
   const [loading, setLoading] = useState(true)
+  // 区分「请求失败」与「订单真的不存在」：原先两者都渲染「订单不存在」（假回执）
+  const [loadFailed, setLoadFailed] = useState(false)
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     if (!id) return
-    // 直连 GET /api/orders/{id}，避免 list+find 全量拉取
+    setLoading(true)
+    setLoadFailed(false)
     orderApi.get(id)
-      .then(setOrder)
-      .catch(() => setOrder(null))
+      .then((o) => setOrder(o))
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false))
   }, [id])
 
+  useEffect(() => { reload() }, [reload])
+
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+  if (loadFailed) {
+    return (
+      <div>
+        <Button onClick={() => navigate(-1)} style={{ marginBottom: 12 }}>← 返回</Button>
+        <FetchFailedHint source="订单详情" onRetry={reload} />
+      </div>
+    )
+  }
   if (!order) return <div>订单不存在</div>
 
   return (
@@ -44,6 +59,15 @@ export default function MobileOrderDetail() {
           <Descriptions.Item label="状态">
             <Tag>{STATUS_LABELS[order.status] || order.status}</Tag>
           </Descriptions.Item>
+          {/* 人工接管倒计时（FR-G-2）：详情端点本次已附加 deadline/剩余秒 */}
+          {order.status === 'takeover_pending' && (
+            <Descriptions.Item label="接管截止">
+              <TakeoverCountdown
+                deadline={order.takeover_deadline}
+                remainingSec={order.takeover_remaining_sec}
+              />
+            </Descriptions.Item>
+          )}
           <Descriptions.Item label="创建时间">{order.created_at}</Descriptions.Item>
         </Descriptions>
       </Card>
