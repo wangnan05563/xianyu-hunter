@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { TipButton } from '@/components/TipButton'
+import { confirmDanger } from '@/components/DangerSummary'
 import {
   Card,
   Row,
@@ -970,10 +971,27 @@ function SessionCardCol(props: {
             启动会话
           </TipButton>
           <TipButton
-            tip="停止会话管理与后台续期"
+            tip="停止会话管理与后台续期（Token 将不再自动续期）"
             danger
             icon={<StopOutlined />}
-            onClick={onStop}
+            onClick={() => {
+              // T02573：原来点一下就停。停掉的只是 _m_h5_tk 的后台续期循环，
+              // 身份 Cookie 与浏览器数据不受影响——文案必须按真实后果写，
+              // 不能套用「X 小时后要重新扫码」这种未经验证的说法
+              if (!session?.active) return
+              void confirmDanger({
+                title: '确认停止会话管理？',
+                action: '停止会话管理器与 _m_h5_tk 后台自动续期',
+                scope: '只停后台续期循环；不关闭浏览器、不删除 Cookie，'
+                  + '身份类 Cookie 与浏览器指纹数据保持不变',
+                count: session.token_age_sec == null
+                  ? null
+                  : `Token 已使用 ${Math.round(session.token_age_sec / 60)} 分钟`
+                    + (session.token_expired ? '，当前已过期' : '，当前仍在有效期内'),
+                recovery: '点「启动会话」即可恢复自动续期；若期间 Token 过期，'
+                  + '接口会命中风控并需要重新走一次登录流程',
+              }).then((ok: boolean) => { if (ok) onStop() })
+            }}
             loading={loadingSession}
             disabled={!session?.active}
           >

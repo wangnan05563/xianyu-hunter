@@ -27,8 +27,16 @@ import {
   type CleanupBody,
 } from '../../api'
 import { TipButton } from '@/components/TipButton'
+import { confirmDanger } from '@/components/DangerSummary'
 
 const { Text } = Typography
+
+// 缓存清理各 target 的真实删除范围（与后端 api_maintenance.cleanup_cache 分支一一对应）
+const CACHE_SCOPE: Record<string, string> = {
+  all: 'Python 字节码缓存（__pycache__）+ webview_data_* 浏览器数据目录',
+  browser_data: 'webview_data_* 浏览器数据目录',
+  temp: 'Python 字节码缓存（__pycache__）目录',
+}
 
 // 表单状态类型
 // CleanupBody 已从 API 层导入，此处无需重复定义
@@ -84,9 +92,29 @@ export default function Maintenance() {
 
   // 执行缓存清理
   const handleCleanupCache = async () => {
-    // 非预览模式需要用户确认，防止误操作导致数据丢失
-    if (!cacheForm.dry_run && !globalThis.confirm('确认清理缓存？此操作不可撤销。')) {
-      return
+    // 非预览模式必须走四要素确认（T02573）：原生 confirm 只能问「确认吗」，
+    // 无法回答「删的是什么、有多少、能不能恢复」
+    if (!cacheForm.dry_run) {
+      const c = status?.cache
+      const parts: string[] = []
+      if (cacheForm.target !== 'browser_data') {
+        parts.push(`__pycache__ 目录 ${c?.pycache_count ?? '未知'} 个（${c?.pycache_mb ?? '未知'} MB）`)
+      }
+      if (cacheForm.target !== 'temp') {
+        parts.push(`webview_data_* 目录 ${c?.browser_data_mb ?? '未知'} MB`)
+      }
+      const ok = await confirmDanger({
+        title: '确认清理缓存？',
+        action: `真实删除${CACHE_SCOPE[cacheForm.target] ?? '所选缓存'}`,
+        scope: '只删缓存目录；不包含 SQLite 数据库与日志文件，'
+          + '也不包含配置项 browser.user_data_dir 指向的 ./browser-data —— 闲鱼登录态实际保存在那里，本操作不会动它',
+        count: status ? parts.join('；') : null,
+        recovery: '不可恢复；__pycache__ 会在下次运行时自动重建，只会让首次运行稍慢。'
+          + (cacheForm.target !== 'temp' && (c?.browser_data_mb ?? 0) === 0
+            ? ' 当前 webview_data_* 统计为 0，本次不会删除任何浏览器数据。'
+            : ''),
+      })
+      if (!ok) return
     }
 
     setCacheLoading(true)
@@ -112,9 +140,30 @@ export default function Maintenance() {
 
   // 执行数据库清理
   const handleCleanupDatabase = async () => {
-    // 数据库操作风险较高，必须二次确认
-    if (!dbForm.dry_run && !globalThis.confirm('确认清理数据库？建议先备份数据。此操作不可撤销。')) {
-      return
+    // 数据库操作风险较高：确认框必须写清「按保留天数裁剪历史数据」这一真实语义与恢复成本
+    if (!dbForm.dry_run) {
+      const db = status?.db
+      const d = dbForm.days
+      // 各 target 的真实语义取自后端 cleanup_database 分支，vacuum 根本不删记录
+      const dbAction: Record<string, string> = {
+        all: `删除早于 ${d} 天的事件与未关联商品、清理已售商品关联，随后 VACUUM 压缩`,
+        old_events: `删除早于 ${d} 天的事件记录`,
+        old_items: `删除早于 ${d} 天且未关联任务的商品记录`,
+        sold_items: '删除已售商品的关联记录（该分支不看天数）',
+        vacuum: '执行 VACUUM 压缩数据库文件',
+      }
+      const ok = await confirmDanger({
+        title: '确认清理数据库？',
+        action: dbAction[dbForm.target ?? 'all'] ?? `清理数据库（${dbForm.target}）`,
+        scope: dbForm.target === 'vacuum'
+          ? '只重排数据库文件、回收空闲页；不删除任何业务记录，也不影响配置与浏览器登录态'
+          : '裁剪数据库历史记录；不影响配置文件与浏览器登录态。确切条数请先用「仅预览」跑一次，预览结果即本次将处理的范围',
+        count: db ? `当前库内 任务 ${db.tasks} / 商品 ${db.items} / 事件 ${db.events}（数据库 ${db.db_size_mb} MB）` : null,
+        recovery: dbForm.target === 'vacuum'
+          ? '压缩过程不可中断后回退，但记录不丢；数据库文件会变小，执行时间随库大小增长'
+          : '不可直接撤销；可回到「数据库维护」用导出备份回滚，前提是本操作执行前已有可用备份',
+      })
+      if (!ok) return
     }
 
     setDbLoading(true)
@@ -140,8 +189,28 @@ export default function Maintenance() {
 
   // 执行日志清理
   const handleCleanupLogs = async () => {
-    if (!logForm.dry_run && !globalThis.confirm('确认清理日志文件？此操作不可撤销。')) {
-      return
+    if (!logForm.dry_run) {
+      const lg = status?.logs
+      const d = logForm.days
+      // 后端匹配条件是 (old_logs/all 且 mtime 超期) OR (large_logs/all 且 >10MB)——
+      // 大文件分支不看时间，所以不能说「当日日志不会被删」
+      const logAction: Record<string, string> = {
+        old_logs: `删除修改时间早于 ${d} 天的日志文件`,
+        large_logs: '删除体积超过 10MB 的日志文件',
+        all: `删除「修改时间早于 ${d} 天」或「体积超过 10MB」的日志文件`,
+      }
+      const ok = await confirmDanger({
+        title: '确认清理日志文件？',
+        action: logAction[logForm.target ?? 'old_logs'] ?? '删除日志文件',
+        scope: '只删 logs/ 目录下的文本日志文件；不包含数据库里的事件记录与「错误日志」页的留存数据'
+          + (logForm.target === 'large_logs' || logForm.target === 'all'
+            ? '。注意：大文件分支不看修改时间，正在写入的当日日志只要超过 10MB 也会被删'
+            : ''),
+        count: lg ? `当前日志 ${lg.file_count} 个文件共 ${lg.total_size_mb} MB`
+          + (lg.oldest ? `（最早 ${lg.oldest}）` : '') : null,
+        recovery: '删除后历史日志无法找回；正在写入的当前日志文件若未被删除，只会因句柄占用继续追加',
+      })
+      if (!ok) return
     }
 
     setLogLoading(true)
@@ -269,7 +338,7 @@ export default function Maintenance() {
             }
           >
             <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 12 }}>
-              清理浏览器数据目录和 Python 缓存文件
+              清理 __pycache__ 与 webview_data_* 目录；不含配置里的浏览器用户数据目录（登录态所在）
             </Text>
 
             <div style={{ marginBottom: 12 }}>

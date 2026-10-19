@@ -30,6 +30,7 @@ import {
 import { tunnelApi, type TunnelStatus, type TunnelConfig, type TunnelDownloadError, type TunnelTailscaleAuthError } from '../../api'
 import { TUNNEL_PROVIDERS, TUNNEL_PROVIDER_OPTIONS } from './tunnelProviders'
 import { TipButton } from '@/components/TipButton'
+import { confirmDanger } from '@/components/DangerSummary'
 
 const { Text, Paragraph } = Typography
 
@@ -520,7 +521,16 @@ export default function Tunnel() {
         hostname: config?.hostname || '',
         cert_file: config?.cert_file || '',
       })
-      message.success(autoStart ? '配置已同步，正在启动隧道...' : '配置已保存，下次启动隧道时生效')
+      // T02573：后端 POST /config 在隧道运行中会重建服务并停掉旧隧道，
+      // 所以「下次启动生效」在运行态是假话——按是否运行中分叉文案
+      const wasRunning = status?.status === 'running'
+      if (autoStart) {
+        message.success('配置已同步，正在启动隧道...')
+      } else if (wasRunning) {
+        message.warning('配置已保存；当前隧道已断开，公网地址失效，需要手动重新启动隧道')
+      } else {
+        message.success('配置已保存，下次启动隧道时生效')
+      }
       await loadConfig()
       return true
     } catch (error: any) {
@@ -534,6 +544,22 @@ export default function Tunnel() {
   const isRunning = status?.status === 'running'
   const isCloudflare = formProvider === 'cloudflare'
   const isTailscale = formProvider === 'tailscale'
+
+  // 运行中保存＝立刻断线，必须先讲清后果再落刀（T02573 / 危险操作文案规范 B 档）
+  const handleSaveClick = async () => {
+    if (isRunning) {
+      const ok = await confirmDanger({
+        title: '隧道正在运行，确认保存配置？',
+        action: '用当前表单值覆盖隧道配置',
+        scope: '后端会以新配置重建隧道服务：现有隧道进程被停掉，公网地址立即失效，且不会自动按新配置重连',
+        count: `正在运行的隧道 1 条（${formProvider}，本地端口 ${formPort}）`,
+        recovery: '需手动点「启动隧道」重新拉起；未配置固定 named tunnel 时，重启后的公网地址会与当前地址不同，'
+          + '已分享出去的链接需要重新提供',
+      })
+      if (!ok) return
+    }
+    await handleSaveConfig()
+  }
 
   if (loading) {
     return (
@@ -823,10 +849,13 @@ export default function Tunnel() {
           </Row>
 
           <TipButton
-            tip="保存隧道配置（下次启动生效）"
+            tip={isRunning
+              ? '保存隧道配置（当前隧道会立即断开，需重新启动）'
+              : '保存隧道配置（下次启动生效）'}
             type="primary"
+            danger={isRunning}
             loading={savingConfig}
-            onClick={() => handleSaveConfig()}
+            onClick={() => void handleSaveClick()}
           >
             保存配置
           </TipButton>

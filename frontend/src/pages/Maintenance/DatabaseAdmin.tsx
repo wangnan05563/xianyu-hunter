@@ -126,6 +126,34 @@ function parseCSV(text: string): string[][] {
   return rows.filter((r) => r.length > 1 || (r.length === 1 && r[0] !== ''))
 }
 
+// 删除确认的业务摘要字段（T02573）：按各表真实存在的列取名，
+// 不假设 accounts 有 phone、proxies 有 host/port（那些列不存在，写了会永远显示不出来）
+const ROW_SUMMARY_FIELDS: [string, string][] = [
+  ['name', '名称'],
+  ['title', '标题'],
+  ['keyword', '关键词'],
+  ['nickname', '昵称'],
+  ['url', '地址'],
+  ['order_no', '订单号'],
+  ['item_id', '商品'],
+  ['price', '价格'],
+  ['note', '备注'],
+]
+
+/** 从行数据里挑最多 3 个非空业务字段拼成一句摘要，供删除确认框点名「删的是哪条」 */
+export function buildRowSummary(row?: Record<string, unknown>): string {
+  if (!row) return ''
+  const picked: string[] = []
+  for (const [field, label] of ROW_SUMMARY_FIELDS) {
+    if (picked.length >= 3) break
+    const v = row[field]
+    if (v == null || v === '') continue
+    const text = String(v).slice(0, 40)
+    picked.push(`${label} ${field === 'price' ? '¥' : ''}${text}`)
+  }
+  return picked.join(' · ')
+}
+
 // 构建级联影响预览 HTML：被 openDeleteConfirm 与 openBatchDeleteConfirm 共用
 // 为什么提取：两个函数原本各自重复 try/catch + if(relations.length>0) + for + 三元 icon 链，
 // 单函数复杂度 9+；提取后调用方仅剩单行 await，主函数复杂度降低 9
@@ -380,17 +408,26 @@ export default function DatabaseAdmin() {
   }
 
   // 弹窗：单行删除二次确认（含级联影响预览）
-  const openDeleteConfirm = async (pkValue: unknown) => {
+  const openDeleteConfirm = async (pkValue: unknown, row?: Record<string, unknown>) => {
     let tokenValue = ''
     // 级联预览 HTML 构建提取为模块级 buildCascadeHtml（消除 try/catch + if/for 嵌套）
     const cascadeHtml = await buildCascadeHtml(activeTable, [pkValue as string | number])
+    // T02573：确认框只显示主键等于没显示——用户判断不了删的是哪条业务记录，
+    // 这里按表取真实存在的业务字段做摘要（见 docs/standards/危险操作文案规范.md）
+    const summary = buildRowSummary(row)
     const modal = Modal.confirm({
       title: '确认删除该行？',
       icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
       content: (
         <div>
+          {summary && (
+            <p style={{ marginBottom: 6 }}>
+              <b>{summary}</b>
+            </p>
+          )}
           <p>主键：<code>{formatCell(pkValue)}</code></p>
           <div dangerouslySetInnerHTML={{ __html: cascadeHtml }} style={{ marginBottom: 12, padding: 8, background: 'var(--xh-bg-spotlight)', borderRadius: 6 }} />
+          <p style={{ marginBottom: 8 }}>恢复成本：删除后不可撤销，只能重新录入；请先在「导出」页留存备份。</p>
           <p>请输入 <b>{CONFIRM_TOKEN}</b> 以确认（区分大小写）：</p>
           <Input.Password
             placeholder={CONFIRM_TOKEN}
@@ -707,7 +744,7 @@ export default function DatabaseAdmin() {
                         >
                           编辑
                         </TipButton>
-                        <TipButton size="small" type="link" danger icon={<DeleteOutlined />} tip="删除该行（需输入确认码）" onClick={() => openDeleteConfirm(record[pkCol!.name])}>删除</TipButton>
+                        <TipButton size="small" type="link" danger icon={<DeleteOutlined />} tip="删除该行（需输入确认码）" onClick={() => openDeleteConfirm(record[pkCol!.name], record)}>删除</TipButton>
                       </Space>
                     ),
                   },

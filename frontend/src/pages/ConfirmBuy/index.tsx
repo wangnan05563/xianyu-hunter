@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Card, Result, Spin, Typography, Space, Tag, Alert, App } from 'antd'
-import { ThunderboltOutlined, ArrowLeftOutlined } from '@ant-design/icons'
+import { ThunderboltOutlined, ArrowLeftOutlined, ExclamationCircleOutlined } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
+import DangerSummary from '@/components/DangerSummary'
 import { itemApi, orderApi } from '../../api'
 import type { ItemSummary } from '../../api/types'
 
@@ -49,9 +50,9 @@ export default function ConfirmBuy() {
     return () => { cancelled = true }
   }, [itemId])
 
-  // 确认抢单：调用 manual-takeover 接口，复用既有抢单流程
+  // 实际提交抢单：调用 manual-takeover 接口，复用既有抢单流程
   // 该接口会校验 buyer 注入态、登录态、幂等性，返回抢单结果
-  const handleConfirm = async () => {
+  const submitTakeover = async () => {
     setSubmitting(true)
     try {
       const result = await orderApi.manualTakeover(itemId, taskId || undefined)
@@ -80,6 +81,29 @@ export default function ConfirmBuy() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  // 花钱且不可逆的动作必须有二次确认（T02573）：原页面点一下就直接下真实订单
+  const handleConfirm = () => {
+    modal.confirm({
+      title: '确认对该商品下单？',
+      icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+      width: 560,
+      content: (
+        <DangerSummary
+          action={`由浏览器自动化对商品 ${item?.item_id ?? itemId} 直接提交真实订单`}
+          scope='不走通知里的确认环节，点「确认抢单」后立即执行抢单流程；不会自动改价，也不会先做演练'
+          count={item
+            ? `1 笔订单；标价 ¥${item.price?.toFixed(2) ?? '—'}（标价/预期价，实际成交以下单页为准）`
+            : null}
+          recovery="本页面无法撤销；如需放弃，请在闲鱼 App 内取消这条待支付订单，或等待其超时自动关闭"
+        />
+      ),
+      okText: '确认抢单',
+      cancelText: '再想想',
+      okButtonProps: { danger: true },
+      onOk: () => submitTakeover(),
+    })
   }
 
   // 参数缺失：直接展示错误
@@ -192,7 +216,7 @@ export default function ConfirmBuy() {
 
       <Space>
         <TipButton
-          tip="创建待支付订单并提交抢单"
+          tip="提交真实订单（本页面无法撤销，需在闲鱼 App 内取消）"
           type="primary"
           size="large"
           icon={<ThunderboltOutlined />}
