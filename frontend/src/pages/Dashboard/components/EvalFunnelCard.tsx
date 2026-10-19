@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Card, Segmented, Empty, Spin, Statistic, Row, Col, Tooltip, theme } from 'antd'
 import { AimOutlined, CheckCircleOutlined, ThunderboltOutlined, FallOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
+import FetchFailedHint from '../../../components/FetchFailedHint'
 import type { EvalFunnelData } from '../../../api'
 
 interface EvalFunnelCardProps {
@@ -10,9 +11,11 @@ interface EvalFunnelCardProps {
   readonly loading: boolean
   readonly rangeDays: number
   readonly onRangeChange: (days: number) => void
+  readonly error?: boolean
+  readonly onRetry?: () => void
 }
 
-export default function EvalFunnelCard({ data, loading, rangeDays, onRangeChange }: EvalFunnelCardProps) {
+export default function EvalFunnelCard({ data, loading, rangeDays, onRangeChange, error, onRetry }: EvalFunnelCardProps) {
   const { token } = theme.useToken()
 
   // ECharts 漏斗图配置
@@ -72,6 +75,8 @@ export default function EvalFunnelCard({ data, loading, rangeDays, onRangeChange
       }
     >
       <Spin spinning={loading}>
+        {/* 失败态即使留有上一次成功数据也要显式声明：否则读者会把陈旧曲线当实时 */}
+        {error && <FetchFailedHint source="评估漏斗" onRetry={onRetry} />}
         {data && data.stages.length > 0 ? (
           <>
             {/* 漏斗图：占满宽度，高度固定避免阶段少时压扁 */}
@@ -127,7 +132,7 @@ export default function EvalFunnelCard({ data, loading, rangeDays, onRangeChange
               </Col>
             </Row>
           </>
-        ) : (
+        ) : error ? null : (
           <Empty description="暂无漏斗数据" />
         )}
       </Spin>

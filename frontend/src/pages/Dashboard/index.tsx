@@ -21,6 +21,38 @@ import { TipButton } from '@/components/TipButton'
 // SSE lastEventId 持久化 key：提取到模块级，供 handleSseAppEvent 与 connect 共享（S2004 提取避免嵌套过深）
 const SSE_LAST_EVENT_ID_KEY = 'xh.sse.lastEventId'
 
+// 各数据源的失败记账 key（T02586 假回执清零）：
+// 每个区块按自己的 key 记录「这次请求有没有成功」，失败既不写空数据也不静默。
+type DataSourceKey =
+  | 'overview' | 'kpi' | 'events' | 'histogram' | 'tasks' | 'alert' | 'funnel' | 'trend'
+  | 'spark:events' | 'spark:orders_pending' | 'spark:orders_succeeded' | 'spark:orders_failed'
+
+const SOURCE_LABELS: Record<DataSourceKey, string> = {
+  overview: '统计卡',
+  kpi: '业务 KPI',
+  events: '事件流',
+  histogram: '价格分布',
+  tasks: '任务列表（价格分布筛选）',
+  alert: '异常雷达',
+  funnel: '评估漏斗',
+  trend: '趋势大图',
+  'spark:events': '事件曲线',
+  'spark:orders_pending': '待支付曲线',
+  'spark:orders_succeeded': '成功曲线',
+  'spark:orders_failed': '失败曲线',
+}
+
+// sparkline 指标名与 StatCardsSection 取用的 key 一一对应：
+// 三张订单卡各自取按状态的趋势，不再共用 orders 同一条线（评审 2.1-2）
+const SPARK_METRICS = ['events', 'orders_pending', 'orders_succeeded', 'orders_failed'] as const
+
+/** 请求成功才返回数据，失败返回 null 并把该数据源标记为失败（调用方据此保留旧数据） */
+function settled<T>(r: PromiseSettledResult<T>, key: DataSourceKey, mark: (k: DataSourceKey, ok: boolean) => void): T | null {
+  const ok = r.status === 'fulfilled'
+  mark(key, ok)
+  return ok ? (r as PromiseFulfilledResult<T>).value : null
+}
+
 // 处理 app_event 事件：解析 SSE 数据并 prepend 到事件列表前 100 条
 // 为什么提取到模块级：原 useEffect → connect → addEventListener → setEvents(prev =>) 嵌套达 5 层，违反 S2004
 function handleSseAppEvent(
@@ -76,58 +108,88 @@ export default function Dashboard() {
   const [funnelRange, setFunnelRange] = useState(30)
 
   // ========== 数据加载 ==========
+  // 每个数据源单独记失败账（T02586 假回执清零）：原先所有请求 .catch(()=>null/[])
+  // 会把后端故障渲染成「全 0 / 暂无数据」的正常态，且覆盖掉上一次取到的好数据。
+  const [failedSources, setFailedSources] = useState<Partial<Record<DataSourceKey, boolean>>>({})
+  const markSource = useCallback((key: DataSourceKey, ok: boolean) => {
+    setFailedSources(prev => {
+      if (ok) {
+        if (!prev[key]) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      }
+      return prev[key] ? prev : { ...prev, [key]: true }
+    })
+  }, [])
+
   const loadOverview = useCallback(() => {
-    Promise.all([
-      statsApi.overview().catch(() => null),
-      statsApi.businessKpi(30).catch(() => ({ kpis: [], range_days: 30, generated_at: '' })),
-      statsApi.recentEvents(15).catch(() => ({ events: [] })),
-      priceApi.histogram({ bins: 20, task_id: histoTaskId === 'all' ? undefined : histoTaskId }).catch(() => null),
-      taskApi.list({ limit: 100 }).catch(() => ({ items: [], total: 0 })),
+    Promise.allSettled([
+      statsApi.overview(),
+      statsApi.businessKpi(30),
+      statsApi.recentEvents(15),
+      priceApi.histogram({ bins: 20, task_id: histoTaskId === 'all' ? undefined : histoTaskId }),
+      taskApi.list({ limit: 100 }),
     ]).then(([ov, kpi, ev, hist, tasks]) => {
-      // 移除不必要的类型断言：API 返回类型已明确，TS 可正确推断（S4325）
-      if (ov) setOverview(ov)
-      setKpiCards(kpi.kpis || [])
-      setEvents(ev.events || [])
-      setHistogram(hist)
-      const items = tasks.items || []
-      setHistoTasks(items.filter(t => t.status !== 'deleted'))
+      const o = settled(ov, 'overview', markSource)
+      if (o) setOverview(o)
+      const k = settled(kpi, 'kpi', markSource)
+      if (k) setKpiCards(k.kpis || [])
+      const e = settled(ev, 'events', markSource)
+      if (e) setEvents(e.events || [])
+      const h = settled(hist, 'histogram', markSource)
+      if (h) setHistogram(h)
+      const t = settled(tasks, 'tasks', markSource)
+      if (t) setHistoTasks((t.items || []).filter(item => item.status !== 'deleted'))
       setLoading(false)
     })
-  }, [histoTaskId])
+  }, [histoTaskId, markSource])
 
   const loadSparklines = useCallback(() => {
-    // 键名与 StatCardsSection 取用的口径一一对应：三张订单卡各自取按状态的趋势，
-    // 不再共用 orders 同一条线（评审 2.1-2）
-    const metrics = ['events', 'orders_pending', 'orders_succeeded', 'orders_failed'] as const
-    Promise.all(
-      metrics.map((metric) => statsApi.trend({ metric, range_hours: 24 }).catch(() => null)),
-    ).then((series) => {
-      setSparklines(Object.fromEntries(metrics.map((metric, i) => [metric, series[i]])))
+    Promise.allSettled(
+      SPARK_METRICS.map((metric) => statsApi.trend({ metric, range_hours: 24 })),
+    ).then((results) => {
+      const updates: Record<string, TrendSeries> = {}
+      SPARK_METRICS.forEach((metric, i) => {
+        const ok = results[i].status === 'fulfilled'
+        markSource(`spark:${metric}` as DataSourceKey, ok)
+        if (ok) updates[metric] = (results[i] as PromiseFulfilledResult<TrendSeries>).value
+      })
+      // 只覆盖成功的那几条，失败保留上一次曲线（配合曲线区的失败提示，不假装"没趋势"）
+      setSparklines(prev => ({ ...prev, ...updates }))
     })
-  }, [])
+  }, [markSource])
 
   const loadAlert = useCallback(async () => {
-    try { setAlertData(await statsApi.today()) } catch { /* 静默 */ }
-  }, [])
+    try {
+      setAlertData(await statsApi.today())
+      markSource('alert', true)
+    } catch {
+      markSource('alert', false)
+    }
+  }, [markSource])
 
   // O-08-26 评估漏斗：独立加载，受 funnelRange 控制
   const loadFunnel = useCallback(async () => {
     setFunnelLoading(true)
     try {
       setFunnelData(await statsApi.evalFunnel(funnelRange))
+      markSource('funnel', true)
     } catch {
-      setFunnelData(null)
+      markSource('funnel', false)
     } finally {
       setFunnelLoading(false)
     }
-  }, [funnelRange])
+  }, [funnelRange, markSource])
 
   const loadTrendData = useCallback(async () => {
     try {
-      const d = await statsApi.trend({ metric: trendMetric, range_hours: trendRange })
-      setTrendData(d)
-    } catch { setTrendData(null) }
-  }, [trendMetric, trendRange])
+      setTrendData(await statsApi.trend({ metric: trendMetric, range_hours: trendRange }))
+      markSource('trend', true)
+    } catch {
+      markSource('trend', false)
+    }
+  }, [trendMetric, trendRange, markSource])
 
   // 初始加载
   useEffect(() => {
@@ -140,7 +202,10 @@ export default function Dashboard() {
   // 轮询：KPI 每 5 分钟，其他每 1 分钟
   useEffect(() => {
     const kpiTimer = setInterval(() => {
-      statsApi.businessKpi(30).then(kpi => setKpiCards(kpi.kpis || [])).catch(() => {})
+      // 轮询失败同样记账：后台刷新失败要让顶栏错误态亮起来，而不是继续显示旧数字当现状
+      statsApi.businessKpi(30)
+        .then(kpi => { setKpiCards(kpi.kpis || []); markSource('kpi', true) })
+        .catch(() => markSource('kpi', false))
     }, 5 * 60 * 1000)
     const refreshTimer = setInterval(() => {
       loadOverview()
@@ -223,10 +288,42 @@ export default function Dashboard() {
 
   const handleToggleAlert = useCallback(() => setAlertOpen(o => !o), [])
 
+  // 失败账上的数据源（按声明顺序展示在顶栏错误态里）
+  const failedKeys = (Object.keys(SOURCE_LABELS) as DataSourceKey[]).filter(k => failedSources[k])
+
+  const retrySource = useCallback((key: DataSourceKey) => {
+    // 每个区块的重试只打自己那一路请求，避免一次点击全页重刷
+    if (key === 'kpi' || key === 'overview' || key === 'events' || key === 'histogram' || key === 'tasks') loadOverview()
+    else if (key.startsWith('spark:')) loadSparklines()
+    else if (key === 'alert') loadAlert()
+    else if (key === 'funnel') loadFunnel()
+    else if (key === 'trend') loadTrendData()
+  }, [loadOverview, loadSparklines, loadAlert, loadFunnel, loadTrendData])
+
   // ========== 渲染 ==========
   return (
     <div className="page-container">
       <Spin spinning={loading}>
+        {/* 后端故障必须先于任何数字表态（T02586 假回执清零）：
+            原先四处 .catch(()=>null) 把故障渲染成「全 0 正常态」，用户无从判断是没事发生还是没取到数据 */}
+        {failedKeys.length > 0 && (
+          <Alert
+            type="error"
+            message={`${failedKeys.length} 个数据源加载失败：${failedKeys.map(k => SOURCE_LABELS[k]).join('、')}`}
+            description="下列相关区块的数字与曲线不代表真实状态，请按各区块内的失败提示重试。"
+            showIcon
+            action={
+              <TipButton
+                size="small"
+                onClick={() => { loadOverview(); loadSparklines(); loadAlert(); loadFunnel(); if (trendOpen) loadTrendData() }}
+                tip="重新拉取全部数据源">
+                全部重试
+              </TipButton>
+            }
+            style={{ marginBottom: 16 }}
+          />
+        )}
+
         {/* 引导 Banner：无任务时显示欢迎引导 */}
         {overview?.tasks?.total === 0 && overview?.tasks?.running === 0 && (
           <Alert
@@ -267,23 +364,26 @@ export default function Dashboard() {
         </div>
 
         {/* 统计卡 + Sparkline */}
-        <StatCardsSection overview={overview} sparklines={sparklines} onNavigate={navigate} />
+        <StatCardsSection overview={overview} sparklines={sparklines} failed={failedSources} onNavigate={navigate} />
 
         {/* 业务 KPI 卡：米其林星级 + 涨跌 */}
-        <KpiSection kpiCards={kpiCards} />
+        <KpiSection kpiCards={kpiCards} error={!!failedSources.kpi} onRetry={() => retrySource('kpi')} />
 
         {/* O-08-26 评估漏斗 + 命中率/误报率 */}
         <EvalFunnelCard
           data={funnelData}
           loading={funnelLoading}
+          error={!!failedSources.funnel}
           rangeDays={funnelRange}
           onRangeChange={setFunnelRange}
+          onRetry={() => retrySource('funnel')}
         />
 
         {/* 异常雷达：折叠式 */}
         <AlertRadar
           alertData={alertData}
           alertOpen={alertOpen}
+          loadError={!!failedSources.alert}
           onToggle={handleToggleAlert}
           onReload={loadAlert}
         />
@@ -293,6 +393,9 @@ export default function Dashboard() {
           events={events}
           streamStatus={streamStatus}
           overview={overview}
+          error={!!failedSources.events}
+          overviewFailed={!!failedSources.overview}
+          onRetry={() => retrySource('events')}
           onNavigate={navigate}
         />
 
@@ -303,9 +406,12 @@ export default function Dashboard() {
           histoTasks={histoTasks}
           aiAnalysis={aiAnalysis}
           aiLoading={aiLoading}
+          error={!!failedSources.histogram}
+          tasksError={!!failedSources.tasks}
           onHistoTaskChange={handleHistoTaskChange}
           onAiAnalyze={handleAiAnalyze}
           onClearAiAnalysis={handleClearAiAnalysis}
+          onRetry={() => retrySource('histogram')}
           onNavigate={navigate}
         />
 
@@ -399,9 +505,11 @@ export default function Dashboard() {
         trendMetric={trendMetric}
         trendRange={trendRange}
         trendData={trendData}
+        error={!!failedSources.trend}
         onClose={() => setTrendOpen(false)}
         onRangeChange={setTrendRange}
         onMetricChange={setTrendMetric}
+        onRetry={() => retrySource('trend')}
       />
     </div>
   )

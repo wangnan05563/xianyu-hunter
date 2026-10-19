@@ -9,10 +9,14 @@ import { useNavigate } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { KpiCard } from '../../../api'
 import { kpiStar, kpiStarTip, fmtKpiValue, deltaText } from '../utils'
+import FetchFailedHint from '@/components/FetchFailedHint'
 
 interface KpiSectionProps {
   // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
   readonly kpiCards: KpiCard[]
+  // 取数失败必须留在页面上说清楚，不能整块不渲染（T02586 假回执清零）
+  readonly error?: boolean
+  readonly onRetry?: () => void
 }
 
 // S3776/S3358：提取趋势视觉计算到独立函数，降低 KpiSection map 回调的认知复杂度
@@ -50,18 +54,21 @@ function computeKpiTrend(
   return { trendPrefix, deltaTagColor, hasDelta }
 }
 
-export default function KpiSection({ kpiCards }: KpiSectionProps) {
+export default function KpiSection({ kpiCards, error, onRetry }: KpiSectionProps) {
   // 从 antd token 读取主题色，自动响应主题切换
   const { token } = theme.useToken()
   // hint_action 跳转用：分母为 0 等异常场景下点击链接直达配置页
   const navigate = useNavigate()
 
-  // 无 KPI 数据时不渲染整块卡片，避免空容器占用布局
-  if (kpiCards.length === 0) return null
+  // 无 KPI 数据时不渲染整块卡片，避免空容器占用布局；
+  // 但「取数失败」不等于没有数据，失败时这块必须留在页面上（T02586 假回执清零）
+  if (kpiCards.length === 0 && !error) return null
 
   return (
     <Card style={{ marginTop: 16 }} title={<span><RiseOutlined /> 业务 KPI（近 30 天）</span>}
-      extra={<span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>基于 {kpiCards[0]?.sample_size || 0} 条 · {kpiCards[0]?.range_days || 30} 天</span>}>
+      // 失败时不报「基于 0 条」：那是把接口故障说成样本量为零（T02586）
+      extra={error ? undefined : <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>基于 {kpiCards[0]?.sample_size || 0} 条 · {kpiCards[0]?.range_days || 30} 天</span>}>
+      {error && <FetchFailedHint source="业务 KPI" onRetry={onRetry} />}
       <Row gutter={[16, 16]}>
         {kpiCards.map((k) => {
           const stars = kpiStar(k)

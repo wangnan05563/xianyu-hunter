@@ -2,6 +2,7 @@ import { Card, Col, Row, List, Spin, Badge, Collapse, theme } from 'antd'
 import { WarningOutlined, ReloadOutlined } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
 import { openSheetWithNotification } from '@/components/SheetWorkspace/sheetNotifications'
+import FetchFailedHint from '@/components/FetchFailedHint'
 import type { TodayAlert } from '../../../api'
 
 interface AlertRadarProps {
@@ -10,11 +11,17 @@ interface AlertRadarProps {
   readonly alertOpen: boolean
   readonly onToggle: () => void
   readonly onReload: () => void
+  readonly loadError?: boolean
 }
 
-export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }: AlertRadarProps) {
+export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, loadError }: AlertRadarProps) {
   // 从 antd token 读取主题色，自动响应主题切换
   const { token } = theme.useToken()
+
+  // 接口失败时不能用 ?? 0 写成「今日 0 单 / 0 事件」，也不能用绿点 Badge 表示「无异常」
+  const alertCount = (alertData?.alerts?.counts?.failed ?? 0)
+    + (alertData?.alerts?.counts?.timeout ?? 0)
+    + (alertData?.alerts?.counts?.low_eval ?? 0)
 
   return (
     <Card style={{ marginTop: 16 }}
@@ -28,15 +35,17 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
           <WarningOutlined style={{ color: token.colorWarning, marginRight: 6 }} />
           异常雷达
           <Badge
-            count={(alertData?.alerts?.counts?.failed ?? 0) + (alertData?.alerts?.counts?.timeout ?? 0) + (alertData?.alerts?.counts?.low_eval ?? 0)}
+            count={loadError ? '?' : alertCount}
             size="small"
-            style={{ marginLeft: 8, backgroundColor: (alertData?.alerts?.counts?.failed ?? 0) > 0 ? token.colorError : token.colorWarning }}
+            style={{ marginLeft: 8, backgroundColor: loadError ? token.colorTextTertiary : (alertData?.alerts?.counts?.failed ?? 0) > 0 ? token.colorError : token.colorWarning }}
           />
         </button>
       }
       extra={
-        <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>
-          今日 {alertData?.today?.orders ?? 0} 单 / {alertData?.today?.events ?? 0} 事件
+        <span style={{ fontSize: 11, color: loadError ? token.colorError : 'var(--xh-text-tertiary)' }}>
+          {loadError
+            ? '预警接口失败，数字不代表今日真实状态'
+            : `今日 ${alertData?.today?.orders ?? 0} 单 / ${alertData?.today?.events ?? 0} 事件`}
           <TipButton type="text" size="small" icon={<ReloadOutlined />} onClick={onReload} style={{ marginLeft: 4 }} tip="重新拉取最新预警数据" />
         </span>
       }>
@@ -108,6 +117,8 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
                 </Card>
               </Col>
             </Row>
+          ) : loadError ? (
+            <FetchFailedHint source="异常雷达" onRetry={onReload} />
           ) : <Spin />,
         }]} />
     </Card>

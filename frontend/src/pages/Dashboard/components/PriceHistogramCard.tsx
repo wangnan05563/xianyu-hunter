@@ -3,6 +3,7 @@ import { Card, Select, Empty, Tag, Spin, Alert, theme } from 'antd'
 import { RobotOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
 import { TipButton } from '@/components/TipButton'
+import FetchFailedHint from '@/components/FetchFailedHint'
 import type { HistogramData } from '../../../api'
 
 interface PriceHistogramCardProps {
@@ -15,11 +16,15 @@ interface PriceHistogramCardProps {
   readonly onAiAnalyze: () => void
   readonly onClearAiAnalysis: () => void
   readonly onNavigate: (path: string) => void
+  readonly error?: boolean
+  readonly tasksError?: boolean
+  readonly onRetry?: () => void
 }
 
 export default function PriceHistogramCard({
   histogram, histoTaskId, histoTasks, aiAnalysis, aiLoading,
   onHistoTaskChange, onAiAnalyze, onClearAiAnalysis, onNavigate,
+  error, tasksError, onRetry,
 }: PriceHistogramCardProps) {
   // 在 ConfigProvider 内部读取 token，让 ECharts 跟随主题
   const { token } = theme.useToken()
@@ -143,7 +148,7 @@ export default function PriceHistogramCard({
             onChange={onHistoTaskChange}
             options={[{ value: 'all', label: '全部任务' }, ...histoTasks.map(t => ({ value: t.id, label: `${t.name || t.keyword || t.id}`.slice(0, 30) }))]}
           />
-          {histogram && (
+          {histogram && !error && (
             <span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>
               均价 ¥{histogram.summary.mean} · 中位 ¥{histogram.summary.median} · {histogram.summary.count} 件
               {histogram.summary.compare.diff_pct !== 0 && (
@@ -156,9 +161,16 @@ export default function PriceHistogramCard({
           <TipButton size="small" onClick={() => onNavigate('/items')} tip="进入商品列表页面">查看商品</TipButton>
         </div>
       }>
+      {/* 任务列表失败时下拉只剩「全部任务」，必须说明原因，否则用户以为真的只有一个任务 */}
+      {tasksError && (
+        <div style={{ fontSize: 12, color: token.colorError, marginBottom: 8 }}>
+          任务列表加载失败，筛选下拉的选项可能不完整
+        </div>
+      )}
+      {error && <FetchFailedHint source="价格分布" onRetry={onRetry} />}
       {histogramOption ? (
         <ReactECharts option={histogramOption} style={{ height: 340 }} notMerge={true} lazyUpdate={true} />
-      ) : (
+      ) : error ? null : (
         <Empty description="暂无价格数据" />
       )}
 

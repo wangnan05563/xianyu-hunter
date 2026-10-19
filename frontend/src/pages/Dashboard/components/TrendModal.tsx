@@ -3,6 +3,7 @@ import { Modal, Empty, Segmented } from 'antd'
 import { ExpandOutlined } from '@ant-design/icons'
 import ReactECharts from '../../../components/charts/EChart'
 import { TipButton } from '@/components/TipButton'
+import FetchFailedHint from '@/components/FetchFailedHint'
 import type { TrendSeries } from '../../../api'
 
 interface TrendModalProps {
@@ -14,6 +15,8 @@ interface TrendModalProps {
   readonly onClose: () => void
   readonly onRangeChange: (range: number) => void
   readonly onMetricChange: (metric: string) => void
+  readonly error?: boolean
+  readonly onRetry?: () => void
 }
 
 // 可切换的趋势指标：与后端 /api/stats/trend 的 metric 分发一一对应
@@ -34,6 +37,7 @@ export function trendMetricLabel(metric: string): string {
 
 export default function TrendModal({
   trendOpen, trendMetric, trendRange, trendData, onClose, onRangeChange, onMetricChange,
+  error, onRetry,
 }: TrendModalProps) {
   // 趋势大图 ECharts 配置
   const trendOption = useMemo(() => {
@@ -136,6 +140,7 @@ export default function TrendModal({
           </TipButton>
         ))}
       </div>
+      {error && <FetchFailedHint source="趋势数据" onRetry={onRetry} />}
       {trendOption ? (
         <>
           <ReactECharts option={trendOption} style={{ height: 320 }} />
@@ -148,7 +153,7 @@ export default function TrendModal({
             </div>
           )}
         </>
-      ) : (
+      ) : error ? null : (
         <Empty description="暂无趋势数据" />
       )}
     </Modal>

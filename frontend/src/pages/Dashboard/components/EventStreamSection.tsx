@@ -13,6 +13,7 @@ import type { RecentEvent, StatsOverview } from '../../../api'
 import { EVENT_COLOR } from '../../../constants/eventTypes'
 import { evTypeLabel, evMsg } from '../utils'
 import { TipButton } from '@/components/TipButton'
+import FetchFailedHint from '@/components/FetchFailedHint'
 
 interface EventStreamSectionProps {
   // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
@@ -20,11 +21,17 @@ interface EventStreamSectionProps {
   readonly streamStatus: string
   readonly overview: StatsOverview | null
   readonly onNavigate: (path: string) => void
+  readonly error?: boolean
+  readonly onRetry?: () => void
+  readonly overviewFailed?: boolean
 }
 
-export default function EventStreamSection({ events, streamStatus, overview, onNavigate }: EventStreamSectionProps) {
+export default function EventStreamSection({ events, streamStatus, overview, onNavigate, error, onRetry, overviewFailed }: EventStreamSectionProps) {
   // 从 antd token 读取主题色，自动响应主题切换
   const { token } = theme.useToken()
+
+  // 统计接口失败时不能用 ?? 0 兜底：那会把「没取到」显示成「真的是 0」
+  const num = (v: number | undefined) => (overviewFailed ? '—' : v ?? 0)
 
   return (
     <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
@@ -36,7 +43,9 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
               <TipButton size="small" onClick={() => onNavigate('/timeline')} tip="跳转事件时间线查看全部事件">查看全部</TipButton>
             </span>
           }>
-          {events.length === 0 ? (
+          {error ? (
+            <FetchFailedHint source="事件流" onRetry={onRetry} />
+          ) : events.length === 0 ? (
             <Empty description="暂无事件" />
           ) : (
             <List size="small" dataSource={events.slice(0, 50)}
@@ -65,19 +74,22 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
               {overview?.db_size || '—'}
             </Descriptions.Item>
             <Descriptions.Item label={<><ScheduleOutlined /> 调度器</>}>
-              <Tag color={overview?.scheduler_running ? 'green' : 'default'}>{overview?.scheduler_running ? '运行中' : '未启动'}</Tag>
+              {/* 失败态不能写成「未启动」：那是对故障的误判，不是对未知状态的如实表达 */}
+              {overviewFailed
+                ? <Tag>未知（统计接口失败）</Tag>
+                : <Tag color={overview?.scheduler_running ? 'green' : 'default'}>{overview?.scheduler_running ? '运行中' : '未启动'}</Tag>}
             </Descriptions.Item>
             <Descriptions.Item label={<><CloudServerOutlined /> 浏览器</>}>
               <span style={{ fontSize: 10, fontFamily: 'monospace', wordBreak: 'break-all' }}>{overview?.browser_dir || '—'}</span>
             </Descriptions.Item>
             <Descriptions.Item label={<><ShoppingOutlined /> 任务</>}>
-              {overview?.tasks?.total ?? 0}（{overview?.tasks?.running ?? 0} 运行中）
+              {num(overview?.tasks?.total)}（{num(overview?.tasks?.running)} 运行中）
             </Descriptions.Item>
             <Descriptions.Item label={<><ShoppingCartOutlined /> 订单</>}>
-              {overview?.orders?.total ?? 0}（{overview?.orders?.succeeded ?? 0} 成功 / {overview?.orders?.pending ?? 0} 待处理）
+              {num(overview?.orders?.total)}（{num(overview?.orders?.succeeded)} 成功 / {num(overview?.orders?.pending)} 待处理）
             </Descriptions.Item>
             <Descriptions.Item label={<><AuditOutlined /> 评估</>}>
-              {overview?.evaluation_count ?? 0} 条记录
+              {num(overview?.evaluation_count)} 条记录
             </Descriptions.Item>
             <Descriptions.Item label={<><HeartOutlined /> 心跳</>}>
               {overview?.ts ? new Date(overview.ts).toLocaleString('zh-CN') : '—'}
