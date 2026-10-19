@@ -56,6 +56,16 @@ export const notificationApi = {
   delete: (id: number) =>
     client.delete<{ ok: boolean; id: number; deleted: boolean }>(`/api/notifications/${id}`).then((r) => r.data),
 
+  // 批量删除（2.9-5 勾选删除）：deleted 可能小于 requested，
+  // 勾中的通知可能已在其他标签页被删；前端按 deleted 如实提示
+  deleteBatch: (ids: number[]) =>
+    client
+      .post<{ ok: boolean; deleted: number; requested: number }>(
+        '/api/notifications/batch-delete',
+        { ids },
+      )
+      .then((r) => r.data),
+
   // status=read 仅清已读；status 留空全清；后端拒绝其他值
   clear: (status?: 'unread' | 'read') =>
     client

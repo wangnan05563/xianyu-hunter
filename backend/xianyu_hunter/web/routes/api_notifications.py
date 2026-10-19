@@ -165,6 +165,42 @@ def delete_notification(
     return {"ok": True, "id": notif_id, "deleted": deleted}
 
 
+# 批量删除的单次上限：前端勾选分页最大 200，这里与列表 limit 同口径，
+# 避免一次 DELETE 传上万个 id 把 IN 子句撑爆（SQLite 变量上限默认 999）。
+_BATCH_DELETE_MAX = 200
+
+
+@router.post("/batch-delete")
+def batch_delete_notifications(
+    request: Request,
+    payload: dict[str, Any] = Body(..., description='{"ids": [1, 2, 3]}'),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """批量删除通知（通知中心「勾选后删除」）
+
+    为什么不复用 DELETE ""?（clear_notifications）：清空按 status 维度全量删除，
+    无法表达"只删我勾的这几条"；且清空是不可逆的批量操作，语义应与勾选删除分开。
+    deleted < requested 是正常的：勾中的 id 可能已被别人（其他标签页）删掉，
+    这里如实返回两个数，由前端提示"实际删除 N 条"而不是假装全部成功。
+    """
+    user_id = getattr(request.state, "user_id", "default")
+    raw_ids = payload.get("ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="ids 必须是非空数组")
+    if len(raw_ids) > _BATCH_DELETE_MAX:
+        raise HTTPException(
+            status_code=400, detail=f"单次最多删除 {_BATCH_DELETE_MAX} 条"
+        )
+    ids: list[int] = []
+    for item in raw_ids:
+        try:
+            ids.append(int(item))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="ids 必须是通知 id 数组")
+    deleted = container.repo.delete_notifications(ids, user_id=user_id)
+    return {"ok": True, "deleted": deleted, "requested": len(ids)}
+
+
 @router.delete("")
 def clear_notifications(
     request: Request,

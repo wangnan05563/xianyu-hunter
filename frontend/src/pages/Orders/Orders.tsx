@@ -2,16 +2,16 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Table, Tag, Select, Space, Spin, Statistic, Row, Col,
   message, Empty, Modal, Steps, Progress, Radio, InputNumber, Result,
-  Popconfirm, Alert,
+  Popconfirm, Alert, Tooltip,
 } from 'antd'
 import { useSearchParams } from 'react-router-dom'
 import {
   ReloadOutlined, ThunderboltOutlined, CheckOutlined, CloseOutlined,
   SmileOutlined, LoadingOutlined, DollarOutlined, SettingOutlined,
-  DeleteOutlined,
+  DeleteOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
-import { orderApi, type OrderItem } from '../../api'
+import { orderApi, type OrderItem, type OrderStats } from '../../api'
 import { ORDER_STATUS_CONFIG } from '../../constants/orderStatus'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
@@ -367,9 +367,26 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
 
 // ============== 主页面 ==============
 
+// 状态卡口径（评审 2.5-1）：数字来自后端全量 GROUP BY，与分页、状态筛选无关。
+// 用问号 Tooltip 显式说明，避免用户把四卡读成「当前页统计」。
+const STATS_SCOPE = '统计口径：当前账号全部抢单记录，不随分页与上方状态筛选变化'
+
+function StatTitle({ label }: { label: string }) {
+  return (
+    <Space size={4}>
+      {label}
+      <Tooltip title={STATS_SCOPE}>
+        <QuestionCircleOutlined style={{ color: 'var(--xh-text-secondary)' }} />
+      </Tooltip>
+    </Space>
+  )
+}
+
 export default function Orders() {
   const [items, setItems] = useState<OrderItem[]>([])
-  const [stats, setStats] = useState({ succeeded: 0, pending: 0, failed: 0, takeover: 0 })
+  const [stats, setStats] = useState<OrderStats>({
+    pending: 0, paid: 0, succeeded: 0, failed: 0, cancelled: 0, takeover: 0, total: 0,
+  })
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(false)
 
@@ -413,14 +430,10 @@ export default function Orders() {
         setItems(list)
         setTotal(res.total || res.count || 0)
         setRefLocated(refId ? list.some(o => String(o.id) === refId) : null)
-        // 后端 list_orders 不返回 stats，前端按当前页自行统计
-        // 注意：分页后 stats 仅反映当前页数据，非全量统计
-        setStats({
-          pending: list.filter(o => o.status === 'pending').length,
-          succeeded: list.filter(o => o.status === 'succeeded').length,
-          failed: list.filter(o => o.status === 'failed').length,
-          takeover: list.filter(o => o.status === 'takeover_pending').length,
-        })
+        // 评审 2.5-1 / REQ-036：四张状态卡改用后端 GROUP BY 全量计数。
+        // 原先按「当前页 items」filter，翻到第 2 页数字全变；且 pending 桶漏掉了
+        // 实际写入值 pending_pay，导致「待处理」常显示 0。
+        setStats(res.stats)
       })
       .catch(() => message.error('加载订单失败'))
       .finally(() => setLoading(false))
@@ -601,10 +614,10 @@ export default function Orders() {
   return (
     <div className="page-container">
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={6}><Card><Statistic title="待处理" value={stats.pending} valueStyle={{ color: '#faad14' }} /></Card></Col>
-        <Col span={6}><Card><Statistic title="已成功" value={stats.succeeded} valueStyle={{ color: '#52c41a' }} /></Card></Col>
-        <Col span={6}><Card><Statistic title="已失败" value={stats.failed} valueStyle={{ color: '#ff4d4f' }} /></Card></Col>
-        <Col span={6}><Card><Statistic title="人工接管" value={stats.takeover} valueStyle={{ color: '#1890ff' }} /></Card></Col>
+        <Col span={6}><Card><Statistic title={<StatTitle label="待处理" />} value={stats.pending} valueStyle={{ color: '#faad14' }} /></Card></Col>
+        <Col span={6}><Card><Statistic title={<StatTitle label="已成功" />} value={stats.succeeded} valueStyle={{ color: '#52c41a' }} /></Card></Col>
+        <Col span={6}><Card><Statistic title={<StatTitle label="已失败" />} value={stats.failed} valueStyle={{ color: '#ff4d4f' }} /></Card></Col>
+        <Col span={6}><Card><Statistic title={<StatTitle label="人工接管" />} value={stats.takeover} valueStyle={{ color: '#1890ff' }} suffix={<span style={{ fontSize: 12, color: 'var(--xh-text-secondary)' }}>&nbsp;/ 共 {stats.total}</span>} /></Card></Col>
       </Row>
 
       <Card>

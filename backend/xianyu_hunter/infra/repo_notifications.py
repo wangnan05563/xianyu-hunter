@@ -145,6 +145,22 @@ class NotificationsMixin:
             result = conn.execute(stmt)
             return (result.rowcount or 0) > 0
 
+    def delete_notifications(self, notif_ids: list[int], user_id: str | None = None) -> int:
+        """按 id 列表批量删除；返回实际删除条数
+
+        user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）；
+        传入的 id 含他人通知时那些行不会被删掉，调用方用 deleted<requested 判断。
+        """
+        if not notif_ids:
+            return 0
+        with self.engine.begin() as conn:
+            stmt = NotificationRow.__table__.delete().where(
+                NotificationRow.id.in_(notif_ids))
+            if user_id is not None:
+                stmt = stmt.where(NotificationRow.user_id == user_id)
+            result = conn.execute(stmt)
+            return result.rowcount or 0
+
     def clear_notifications(self, status: str | None = None, user_id: str | None = None) -> int:
         """清空通知；status=unread 只清未读，None 全清
 

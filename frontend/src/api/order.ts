@@ -11,15 +11,31 @@ export interface OrderListParams {
   item_id?: string
 }
 
+// 状态卡计数（评审 2.5-1 / REQ-036）：由后端 GROUP BY 全量派生，
+// 与列表同一账号范围，翻到第 2 页数字不再变化
+export interface OrderStats {
+  pending: number
+  paid: number
+  succeeded: number
+  failed: number
+  cancelled: number
+  takeover: number
+  total: number
+}
+
 // 订单 API：管理抢单记录与接管流程
 export const orderApi = {
-  // 后端 list_orders 返回 {items, count, total}，total 用于前端分页
+  // 后端 list_orders 返回 {items, count, total, stats, by_status}
+  // total 用于前端分页；stats/by_status 是全量口径（见 OrderStats）
   list: (params?: OrderListParams) =>
     client
-      .get<{ items: OrderItem[]; count: number; total: number }>(
-        '/api/orders',
-        { params },
-      )
+      .get<{
+        items: OrderItem[]
+        count: number
+        total: number
+        stats: OrderStats
+        by_status: Record<string, number>
+      }>('/api/orders', { params })
       .then((r) => r.data),
 
   // 详情直连：避免 OrderDetail 走 list+find 全量拉取

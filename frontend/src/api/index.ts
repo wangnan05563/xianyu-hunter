@@ -43,7 +43,7 @@ export type {
 export { maintenanceApi } from './maintenance'
 export { dbAdminApi } from './dbAdmin'
 export { orderApi } from './order'
-export type { OrderListParams } from './order'
+export type { OrderListParams, OrderStats } from './order'
 export { evalApi } from './evaluation'
 export type { OfficialCollectResult, BatchCollectResult } from './evaluation'
 export { timelineApi, logApi } from './event'

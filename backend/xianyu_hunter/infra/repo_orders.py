@@ -11,6 +11,21 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from xianyu_hunter.infra.db_models import OrderRow
 
 
+# 「待处理」在 orders.status 里有两个字面值：历史的 pending 与实际写入的 pending_pay
+# （见 domain/order.py OrderStatus.PENDING_PAY）。状态名归一是 T02585 的范围；
+# 在那之前按 pending 筛选必须同时命中两者，否则顶部「待处理 N」与筛选结果自相矛盾。
+_PENDING_LITERALS = ("pending", "pending_pay")
+
+
+def _status_condition(status: str | None):
+    """把状态筛选值翻译成 WHERE 条件；None 表示不过滤"""
+    if not status:
+        return None
+    if status in _PENDING_LITERALS:
+        return OrderRow.status.in_(_PENDING_LITERALS)
+    return OrderRow.status == status
+
+
 class OrdersMixin:
     """Orders 领域的 Repository 方法"""
 
@@ -40,8 +55,8 @@ class OrdersMixin:
     ) -> list[dict]:
         with self.engine.connect() as conn:
             stmt = select(OrderRow).order_by(OrderRow.created_at.desc())
-            if status:
-                stmt = stmt.where(OrderRow.status == status)
+            if (cond := _status_condition(status)) is not None:
+                stmt = stmt.where(cond)
             if task_id:
                 stmt = stmt.where(OrderRow.task_id == task_id)
             if item_id:
@@ -60,8 +75,8 @@ class OrdersMixin:
     ) -> int:
         with self.engine.connect() as conn:
             stmt = select(func.count(OrderRow.id))
-            if status:
-                stmt = stmt.where(OrderRow.status == status)
+            if (cond := _status_condition(status)) is not None:
+                stmt = stmt.where(cond)
             if task_id:
                 stmt = stmt.where(OrderRow.task_id == task_id)
             if item_id:
@@ -69,6 +84,28 @@ class OrdersMixin:
             if user_id is not None:
                 stmt = stmt.where(OrderRow.user_id == user_id)
             return conn.execute(stmt).scalar() or 0
+
+    def count_orders_by_status(
+        self,
+        task_id: str | None = None,
+        item_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, int]:
+        """按状态分组的**全量**计数（不受 status 筛选与分页影响）
+
+        给订单页四张统计卡用：卡的分子（某状态条数）与列表分母同源——
+        同 user_id / task_id / item_id 范围、同一次请求，而不是当前页 Python 端 filter。
+        返回原始状态字面值 → 计数；状态名归一由调用方负责。
+        """
+        with self.engine.connect() as conn:
+            stmt = select(OrderRow.status, func.count(OrderRow.id)).group_by(OrderRow.status)
+            if task_id:
+                stmt = stmt.where(OrderRow.task_id == task_id)
+            if item_id:
+                stmt = stmt.where(OrderRow.item_id == item_id)
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
+            return {str(status or ""): int(n) for status, n in conn.execute(stmt).all()}
 
     def delete_order_by_id(self, order_id: str, user_id: str | None = None) -> int:
         """user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）"""

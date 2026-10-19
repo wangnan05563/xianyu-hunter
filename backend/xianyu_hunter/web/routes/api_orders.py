@@ -102,7 +102,29 @@ def list_orders(
     # H-05 修复：通知扫描从 list_orders 移至按需端点，避免每次列表请求都触发全量扫描。
     # scan_and_notify 现在仅由 /api/notifications/scan 显式触发或定时任务调用，
     # 不再随订单列表请求自动执行（消除不必要的 DB 开销）。
-    return {"items": rows, "count": len(rows), "total": total}
+    by_status = container.repo.count_orders_by_status(
+        task_id=task_id, item_id=item_id, user_id=user_id)
+    return {"items": rows, "count": len(rows), "total": total,
+            "stats": _build_order_stats(by_status), "by_status": by_status}
+
+
+def _build_order_stats(by_status: dict[str, int]) -> dict[str, int]:
+    """订单页四张状态卡的全量计数（评审 2.5-1 / REQ-036 分母同源）
+
+    原先前端按「当前页 items」自行 filter，翻页数字就变；这里改用与列表同
+    user_id / task_id / item_id 范围的一次 GROUP BY 结果，分子分母同源。
+    pending 桶同时兼容 pending_pay（后端实际写入值）与历史 pending 字面值——
+    状态名归一是 T02585 的范围，本函数只读不写，不改枚举。
+    """
+    return {
+        "pending": by_status.get("pending_pay", 0) + by_status.get("pending", 0),
+        "paid": by_status.get("paid", 0),
+        "succeeded": by_status.get("succeeded", 0),
+        "failed": by_status.get("failed", 0),
+        "cancelled": by_status.get("cancelled", 0),
+        "takeover": by_status.get("takeover_pending", 0),
+        "total": sum(by_status.values()),
+    }
 
 
 @router.get("/{order_id}")
