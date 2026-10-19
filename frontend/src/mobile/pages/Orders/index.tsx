@@ -10,14 +10,20 @@ import PullToRefresh from '../../components/PullToRefresh'
 // 状态中文映射
 const STATUS_LABELS: Record<string, string> = {
   pending_pay: '待支付',
-  paid: '已成功',
+  succeeded: '已成功',
+  takeover_pending: '人工接管',
+  failed: '已失败',
   cancelled: '已取消',
+  dry_run: '演练',
 }
 
 const STATUS_COLORS: Record<string, string> = {
   pending_pay: 'orange',
-  paid: 'green',
+  succeeded: 'green',
+  takeover_pending: 'blue',
+  failed: 'red',
   cancelled: 'default',
+  dry_run: 'red',
 }
 
 export default function MobileOrders() {
@@ -63,7 +69,7 @@ export default function MobileOrders() {
         onChange={(v) => setFilterStatus(v)}
         options={[
           { value: 'pending_pay', label: '待支付' },
-          { value: 'paid', label: '已成功' },
+          { value: 'succeeded', label: '已成功' },
           { value: 'cancelled', label: '已取消' },
         ]}
       />
@@ -101,7 +107,7 @@ export default function MobileOrders() {
                 onChange={(v) => handleStatusChange(order.id, v)}
                 options={[
                   { value: 'pending_pay', label: '待支付' },
-                  { value: 'paid', label: '已成功' },
+                  { value: 'succeeded', label: '已成功' },
                   { value: 'cancelled', label: '已取消' },
                 ]}
               />

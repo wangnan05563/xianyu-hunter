@@ -1088,6 +1088,19 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     except Exception as e:
         logger.exception("迁移 orders.type 失败: {}", e)
 
+    # 状态口径归一（T02585）：历史库里「待支付」写成 pending，生产代码写入的是 pending_pay
+    # （见 domain/order.py OrderStatus）。读取侧别名合并会让「筛选」与「统计」各持一套口径，
+    # 因此一次性把旧值搬到规范值，之后仓储层只做精确匹配。
+    try:
+        with engine.begin() as conn:
+            r = conn.execute(sa_text(
+                "UPDATE orders SET status='pending_pay' WHERE status='pending'"
+            ))
+            if r.rowcount:
+                logger.info("orders.status 归一：{} 行 pending -> pending_pay", r.rowcount)
+    except Exception as e:
+        logger.exception("迁移 orders.status 旧值 pending 失败: {}", e)
+
     # 性能优化：补建 events / orders 表关键联合索引
     # 为什么需要：JMeter 压测（100 并发）显示 stats_today / business_kpi / trend 接口
     # 在 100 并发下平均响应 >1.8s，根因之一是缺少覆盖核心查询的联合索引。

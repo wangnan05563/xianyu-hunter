@@ -32,7 +32,8 @@ const COLUMN_DEFINITIONS: ColumnConfig[] = [
 
 // 保留组件特有的中文标签（与 Timeline 的简短标签不同，以维持原有显示效果）
 const STATUS_TEXT: Record<string, string> = {
-  pending: '待处理',
+  // 与后端 OrderStatus 同源：库里写的是 pending_pay，不是 pending
+  pending_pay: '待支付',
   succeeded: '已成功',
   failed: '已失败',
   // 后端 takeover_order 写入的状态是 takeover_pending（非 takeover）
@@ -385,7 +386,7 @@ function StatTitle({ label }: { label: string }) {
 export default function Orders() {
   const [items, setItems] = useState<OrderItem[]>([])
   const [stats, setStats] = useState<OrderStats>({
-    pending: 0, paid: 0, succeeded: 0, failed: 0, cancelled: 0, takeover: 0, total: 0,
+    pending: 0, succeeded: 0, failed: 0, cancelled: 0, takeover: 0, total: 0,
   })
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
   const [loading, setLoading] = useState(false)
@@ -580,15 +581,15 @@ export default function Orders() {
       title: '操作', key: 'action', width: 200, fixed: 'right' as const,
       render: (_: unknown, r: OrderItem) => (
         <Space size="small">
-          {(r.status === 'pending' || r.status === 'takeover_pending') && (
+          {(r.status === 'pending_pay' || r.status === 'takeover_pending') && (
             <TipButton
-              tip={r.status === 'pending' ? '接管此待处理订单' : '查看接管进度'}
+              tip={r.status === 'pending_pay' ? '接管此待支付订单' : '查看接管进度'}
               type="link"
               icon={<ThunderboltOutlined />}
               size="small"
               onClick={() => openTakeoverModal(r)}
             >
-              {r.status === 'pending' ? '接管' : '查看'}
+              {r.status === 'pending_pay' ? '接管' : '查看'}
             </TipButton>
           )}
           <Popconfirm
@@ -630,7 +631,7 @@ export default function Orders() {
             value={statusFilter}
             onChange={onStatusChange}
             options={[
-              { label: '待处理', value: 'pending' },
+              { label: '待支付', value: 'pending_pay' },
               { label: '已成功', value: 'succeeded' },
               { label: '已失败', value: 'failed' },
               { label: '人工接管', value: 'takeover_pending' },

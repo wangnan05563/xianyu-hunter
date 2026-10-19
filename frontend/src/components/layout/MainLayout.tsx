@@ -655,7 +655,7 @@ function LayoutContent({
                     <List
                       size="small"
                       dataSource={notif.alerts.alerts.failed_orders}
-                      renderItem={(o) => alertItem('failed', `#${o.id} ${o.title}`, `¥${o.amount} · ${o.created_at}`)}
+                      renderItem={(o) => alertItem('failed', `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · ${o.created_at}`)}
                     />
                   ) : emptyHint('暂无失败订单'),
                 },
@@ -672,7 +672,7 @@ function LayoutContent({
                     <List
                       size="small"
                       dataSource={notif.alerts.alerts.timeout_pending}
-                      renderItem={(o) => alertItem('timeout', `#${o.id} ${o.title}`, `¥${o.amount} · 超时 ${o.age_sec}s`)}
+                      renderItem={(o) => alertItem('timeout', `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · 超时 ${o.age_sec}s`)}
                     />
                   ) : emptyHint('暂无超时订单'),
                 },

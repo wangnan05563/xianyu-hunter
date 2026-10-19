@@ -131,7 +131,7 @@ class Buyer:
                         item_id=item_id,
                         order_no=existing.get("order_no", ""),
                         price=existing.get("price", 0.0),
-                        status=OrderStatus(existing.get("status", "pending_pay")),
+                        status=OrderStatus(existing.get("status", OrderStatus.PENDING_PAY.value)),
                     ),
                     error="db duplicate",
                 )

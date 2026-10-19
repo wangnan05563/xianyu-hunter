@@ -436,7 +436,6 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
         if (status) {
           const statusMap: Record<string, { color: string; label: string }> = {
             pending_pay: { color: 'orange', label: '待支付' },
-            paid: { color: 'blue', label: '已支付' },
             succeeded: { color: 'green', label: '已成功' },
             takeover_pending: { color: 'gold', label: '接管中' },
             cancelled: { color: 'default', label: '已取消' },

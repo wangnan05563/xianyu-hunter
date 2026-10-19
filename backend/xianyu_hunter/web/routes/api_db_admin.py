@@ -155,7 +155,7 @@ COLUMN_LABELS: dict[str, dict[str, str]] = {
         "seller_id": "卖家ID（FK→sellers.id，商品所属卖家）",
         "order_no": "闲鱼订单号（闲鱼平台的订单编号，下单成功后回填）",
         "price": "成交价格（元，实际下单金额）",
-        "status": "订单状态（pending=待确认/confirmed=已确认/paid=已支付/failed=失败/cancelled=已取消）",
+        "status": "订单状态（pending_pay=待支付/takeover_pending=人工接管/succeeded=已成功/failed=失败/cancelled=已取消/dry_run=演练）",
         "screenshot": "截图路径（下单/支付成功后的页面截图文件路径）",
         "error": "错误信息（下单失败时的错误描述，成功时为NULL）",
         "confirmed_at": "确认时间（UTC，用户确认下单的时间）",

@@ -14,8 +14,8 @@ export interface OrderListParams {
 // 状态卡计数（评审 2.5-1 / REQ-036）：由后端 GROUP BY 全量派生，
 // 与列表同一账号范围，翻到第 2 页数字不再变化
 export interface OrderStats {
+  // 桶名是展示聚合名；桶内字面值一律来自后端 OrderStatus（T02585）
   pending: number
-  paid: number
   succeeded: number
   failed: number
   cancelled: number

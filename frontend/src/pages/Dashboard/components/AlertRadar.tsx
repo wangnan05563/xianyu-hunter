@@ -61,7 +61,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
                             style={{ fontSize: 12, padding: 0, height: 'auto', color: token.colorError }}
                             onClick={() => openSheetWithNotification(`/orders?ref=${o.id}`)}
                             tip={`在「抢单记录」中定位订单 #${o.id}`}>
-                            {o.title || `订单 #${o.id}`} · ¥{o.amount || 0}
+                            订单 #{o.id} 商品 {o.item_id} · ¥{o.price}
                           </TipButton>
                         </List.Item>
                       )} />
@@ -82,7 +82,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload }:
                             style={{ fontSize: 12, padding: 0, height: 'auto' }}
                             onClick={() => openSheetWithNotification(`/orders?ref=${o.id}`)}
                             tip={`在「抢单记录」中定位订单 #${o.id}`}>
-                            {o.title || `订单 #${o.id}`} · ¥{o.amount || 0} · {Math.floor((o.age_sec || 0) / 60)} 分钟前
+                            订单 #{o.id} 商品 {o.item_id} · ¥{o.price} · {Math.floor((o.age_sec || 0) / 60)} 分钟前
                           </TipButton>
                         </List.Item>
                       )} />

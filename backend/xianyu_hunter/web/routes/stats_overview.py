@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, text as sa_text
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.order import PENDING_STATUSES, OrderStatus
 from xianyu_hunter.infra.db_models import EventRow, EvaluationRow, _utcnow
 from xianyu_hunter.web.cache import cached_ttl
 from xianyu_hunter.web.deps import get_container, _should_start_scheduler
@@ -70,15 +71,20 @@ def _query_order_stats(engine) -> tuple[int, int, int, int]:
 
     P3-1：独立 connection，配合 asyncio.gather 并发执行
     """
+    # 状态字面值取自 OrderStatus（T02585 口径同源）：原先这里写的是
+    # IN ('pending','submitting','paying')，三个字面值从未被写入，仪表盘「待处理」恒 0。
+    pending_in = ", ".join(f":pending_{i}" for i in range(len(PENDING_STATUSES)))
+    params = {f"pending_{i}": v for i, v in enumerate(PENDING_STATUSES)}
+    params["succeeded"], params["failed"] = OrderStatus.SUCCEEDED.value, OrderStatus.FAILED.value
     with engine.connect() as conn:
-        row = conn.execute(sa_text("""
+        row = conn.execute(sa_text(f"""
             SELECT
                 COUNT(*) AS total,
-                SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-                SUM(CASE WHEN status IN ('pending', 'submitting', 'paying') THEN 1 ELSE 0 END) AS pending
+                SUM(CASE WHEN status = :succeeded THEN 1 ELSE 0 END) AS succeeded,
+                SUM(CASE WHEN status = :failed THEN 1 ELSE 0 END) AS failed,
+                SUM(CASE WHEN status IN ({pending_in}) THEN 1 ELSE 0 END) AS pending
             FROM orders
-        """)).one()
+        """), params).one()
     return int(row.total or 0), int(row.succeeded or 0), int(row.failed or 0), int(row.pending or 0)
 
 

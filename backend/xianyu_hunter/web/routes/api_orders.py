@@ -8,10 +8,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.order import ORDER_STATUS_VALUES, PENDING_STATUSES, OrderStatus
 from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
+
+# 状态筛选白名单：由 OrderStatus 派生，枚举与校验只维护一处
+_STATUS_PATTERN = "^(" + "|".join(sorted(ORDER_STATUS_VALUES)) + ")$"
 
 # 人工接管超时：从 YAML 配置 buyer.takeover_timeout_min 读取，默认 30 分钟。
 # 为什么 30min：闲鱼"待付款"订单默认 30 分钟自动关闭，
@@ -68,7 +72,10 @@ def _apply_takeover_deadline(o: dict, now: datetime) -> None:
 @router.get("")
 def list_orders(
     request: Request,
-    status: str | None = None,
+    status: str | None = Query(
+        None, pattern=_STATUS_PATTERN,
+        description="订单状态筛选；白名单由 OrderStatus 派生，非法值直接 422 而非静默返回空列表",
+    ),
     limit: int = 100,
     page_num: int = Query(1, ge=1, description="页码（从1开始）"),
     page_size: int = Query(20, ge=1, le=200, description="每页条数"),
@@ -97,7 +104,7 @@ def list_orders(
     # 给 takeover_pending 订单附加"剩余倒计时秒数"，前端 modal 直接读 deadline。
     now = _utcnow().replace(tzinfo=None)
     for o in rows:
-        if o.get("status") == "takeover_pending":
+        if o.get("status") == OrderStatus.TAKEOVER_PENDING.value:
             _apply_takeover_deadline(o, now)
     # H-05 修复：通知扫描从 list_orders 移至按需端点，避免每次列表请求都触发全量扫描。
     # scan_and_notify 现在仅由 /api/notifications/scan 显式触发或定时任务调用，
@@ -113,16 +120,17 @@ def _build_order_stats(by_status: dict[str, int]) -> dict[str, int]:
 
     原先前端按「当前页 items」自行 filter，翻页数字就变；这里改用与列表同
     user_id / task_id / item_id 范围的一次 GROUP BY 结果，分子分母同源。
-    pending 桶同时兼容 pending_pay（后端实际写入值）与历史 pending 字面值——
-    状态名归一是 T02585 的范围，本函数只读不写，不改枚举。
+    桶名是「展示聚合名」（pending/takeover），桶里的字面值一律取 OrderStatus，
+    不再出现 pending / paid 这类从未被写入的死值。
     """
     return {
-        "pending": by_status.get("pending_pay", 0) + by_status.get("pending", 0),
-        "paid": by_status.get("paid", 0),
-        "succeeded": by_status.get("succeeded", 0),
-        "failed": by_status.get("failed", 0),
-        "cancelled": by_status.get("cancelled", 0),
-        "takeover": by_status.get("takeover_pending", 0),
+        # 「待支付」桶：与 OrderStatus.PENDING_PAY 同源，不再合并历史 pending
+        # （旧库残留由 db_models 启动迁移归一，T02585）
+        "pending": sum(by_status.get(s, 0) for s in PENDING_STATUSES),
+        "succeeded": by_status.get(OrderStatus.SUCCEEDED.value, 0),
+        "failed": by_status.get(OrderStatus.FAILED.value, 0),
+        "cancelled": by_status.get(OrderStatus.CANCELLED.value, 0),
+        "takeover": by_status.get(OrderStatus.TAKEOVER_PENDING.value, 0),
         "total": sum(by_status.values()),
     }
 
@@ -186,7 +194,7 @@ def takeover_order(
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
     current_status = o.get("status")
-    if current_status != "pending_pay":
+    if current_status != OrderStatus.PENDING_PAY.value:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -195,7 +203,7 @@ def takeover_order(
             ),
         )
     now = _utcnow()
-    o["status"] = "takeover_pending"
+    o["status"] = OrderStatus.TAKEOVER_PENDING.value
     # 写库用 datetime（SQLAlchemy DateTime 字段不接受 string），
     # 返回时再把字符串给前端，避免污染其他读取方。
     o["confirmed_at"] = now
@@ -205,7 +213,7 @@ def takeover_order(
     return {
         "ok": True,
         "id": order_id,
-        "status": "takeover_pending",
+        "status": OrderStatus.TAKEOVER_PENDING.value,
         "takeover_at": now.isoformat(timespec="seconds"),
         "takeover_deadline": deadline.isoformat(timespec="seconds"),
         "timeout_min": timeout_min,
@@ -227,18 +235,18 @@ def takeover_confirm(
     o = container.repo.get_order(order_id, user_id=user_id)
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
-    if o.get("status") != "takeover_pending":
+    if o.get("status") != OrderStatus.TAKEOVER_PENDING.value:
         raise HTTPException(
             status_code=409,
             detail=f"订单当前状态 {o.get('status')}，不能确认支付（仅 takeover_pending 可确认）",
         )
     now = _utcnow()
-    o["status"] = "succeeded"
+    o["status"] = OrderStatus.SUCCEEDED.value
     o["paid_at"] = now
     container.repo.upsert_order(o, user_id=user_id)
     # F-16：订单成功后触发下游依赖任务
     _trigger_dependent_tasks(container, o, user_id=user_id)
-    return {"ok": True, "id": order_id, "status": "succeeded", "paid_at": now.isoformat(timespec="seconds")}
+    return {"ok": True, "id": order_id, "status": OrderStatus.SUCCEEDED.value, "paid_at": now.isoformat(timespec="seconds")}
 
 
 @router.post("/{order_id}/takeover/cancel")
@@ -257,15 +265,15 @@ def takeover_cancel(
     o = container.repo.get_order(order_id, user_id=user_id)
     if not o:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
-    if o.get("status") != "takeover_pending":
+    if o.get("status") != OrderStatus.TAKEOVER_PENDING.value:
         raise HTTPException(
             status_code=409,
             detail=f"订单当前状态 {o.get('status')}，不能取消接管（仅 takeover_pending 可取消）",
         )
-    o["status"] = "pending_pay"
+    o["status"] = OrderStatus.PENDING_PAY.value
     o["confirmed_at"] = None
     container.repo.upsert_order(o, user_id=user_id)
-    return {"ok": True, "id": order_id, "status": "pending_pay"}
+    return {"ok": True, "id": order_id, "status": OrderStatus.PENDING_PAY.value}
 
 
 @router.patch("/{order_id}/status")
@@ -284,7 +292,10 @@ def update_order_status(
     """
     new_status = str(payload.get("status") or "").strip()
     # takeover_pending 是流程中间态，不允许手动设置（必须走 takeover 端点）
-    valid_statuses = {"pending_pay", "succeeded", "cancelled", "failed"}
+    valid_statuses = {
+        OrderStatus.PENDING_PAY.value, OrderStatus.SUCCEEDED.value,
+        OrderStatus.CANCELLED.value, OrderStatus.FAILED.value,
+    }
     if new_status not in valid_statuses:
         raise HTTPException(
             status_code=422,
@@ -303,12 +314,12 @@ def update_order_status(
 
     o["status"] = new_status
     # succeeded 时记录支付时间，与 takeover_confirm 行为一致
-    if new_status == "succeeded":
+    if new_status == OrderStatus.SUCCEEDED.value:
         o["paid_at"] = _utcnow()
     container.repo.upsert_order(o, user_id=user_id)
 
     # 状态变为 succeeded 时触发下游依赖任务（与 takeover_confirm 一致）
-    if new_status == "succeeded" and old_status != "succeeded":
+    if new_status == OrderStatus.SUCCEEDED.value and old_status != OrderStatus.SUCCEEDED.value:
         _trigger_dependent_tasks(container, o, user_id=user_id)
 
     return {"ok": True, "id": order_id, "old_status": old_status, "new_status": new_status, "changed": True}

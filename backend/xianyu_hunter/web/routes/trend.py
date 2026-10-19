@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.order import OrderStatus
 from xianyu_hunter.infra.db_models import EventRow, OrderRow, _utcnow
 from xianyu_hunter.web.cache import cached_ttl
 from xianyu_hunter.web.deps import get_container
@@ -27,9 +28,11 @@ router = APIRouter(prefix="/api", tags=["stats-trend"])
 # 按订单状态细分的趋势指标：仪表盘 KPI 卡需要「待支付/成功/失败」各自的曲线，
 # 共用一条 orders 曲线会让同一形状出现在三个不同口径下（评审 2.1-2）
 _ORDER_STATUS_METRICS = {
-    "orders_pending": "pending",
-    "orders_succeeded": "succeeded",
-    "orders_failed": "failed",
+    # 字面值来自 OrderStatus（T02585）：原先这里是 "pending"，
+    # 而库里写入的是 pending_pay，「待支付」曲线恒为 0。
+    "orders_pending": OrderStatus.PENDING_PAY.value,
+    "orders_succeeded": OrderStatus.SUCCEEDED.value,
+    "orders_failed": OrderStatus.FAILED.value,
 }
 
 # 走 orders 表取数的全部指标名

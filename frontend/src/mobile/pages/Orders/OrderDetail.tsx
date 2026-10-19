@@ -7,8 +7,11 @@ import type { OrderItem } from '../../../api/types'
 
 const STATUS_LABELS: Record<string, string> = {
   pending_pay: '待支付',
-  paid: '已成功',
+  succeeded: '已成功',
+  takeover_pending: '人工接管',
+  failed: '已失败',
   cancelled: '已取消',
+  dry_run: '演练',
 }
 
 export default function MobileOrderDetail() {

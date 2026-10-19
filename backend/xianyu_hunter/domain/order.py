@@ -7,10 +7,29 @@ from enum import Enum
 
 
 class OrderStatus(str, Enum):
-    PENDING_PAY = "pending_pay"  # 已拍下，待支付
-    PAID = "paid"                 # 已支付
-    CANCELLED = "cancelled"       # 已取消
-    FAILED = "failed"             # 失败（人工处理）
+    """orders.status 的唯一字面值来源（T02585 状态口径同源）
+
+    写入路径：buyer 落单写 PENDING_PAY（演练写 DRY_RUN）→ 人工接管写 TAKEOVER_PENDING
+    → 确认支付写 SUCCEEDED；CANCELLED / FAILED 为终态。
+    新增状态必须先加到这里，再同时改读写两端：散落的字符串会让统计卡片、
+    超时告警与筛选静默命中 0 行（原 PAID="paid" 与前端 pending、统计里的
+    submitting/paying 都属于从未被写入过的死字面值）。
+    """
+
+    PENDING_PAY = "pending_pay"      # 已拍下，待支付（唯一可被接管的起始态）
+    TAKEOVER_PENDING = "takeover_pending"  # 用户已点接管，等待在 App 内完成支付
+    SUCCEEDED = "succeeded"          # 接管确认后支付完成
+    CANCELLED = "cancelled"          # 已取消
+    FAILED = "failed"                # 失败（人工处理）
+    DRY_RUN = "dry_run"              # 演练报告条目（无真实订单号）
+
+
+# 「待支付」桶：语义上只有一个字面值，集中定义供统计与告警共用，
+# 避免每个查询各写一份 IN 列表
+PENDING_STATUSES: tuple[str, ...] = (OrderStatus.PENDING_PAY.value,)
+
+# 契约测试与文档用：完整合法取值集合
+ORDER_STATUS_VALUES: frozenset[str] = frozenset(s.value for s in OrderStatus)
 
 
 @dataclass

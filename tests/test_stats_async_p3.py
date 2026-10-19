@@ -181,7 +181,7 @@ def test_stats_overview_empty(client: TestClient) -> None:
 def test_stats_overview_with_data(client: TestClient, tmp_repo: Repository) -> None:
     """有数据：4 个 CASE WHEN 聚合并发执行，状态计数正确
 
-    场景：2 running + 1 paused + 1 stopped 任务；2 succeeded + 1 failed + 1 pending 订单；
+    场景：2 running + 1 paused + 1 stopped 任务；2 succeeded + 1 failed + 1 pending_pay 订单；
     3 事件；2 评估记录。
     验证 asyncio.gather 拿到的 4 个独立 connection 查询结果与串行一致。
     """
@@ -192,7 +192,7 @@ def test_stats_overview_with_data(client: TestClient, tmp_repo: Repository) -> N
     _seed_order(tmp_repo, "o1", "succeeded")
     _seed_order(tmp_repo, "o2", "succeeded")
     _seed_order(tmp_repo, "o3", "failed")
-    _seed_order(tmp_repo, "o4", "pending")
+    _seed_order(tmp_repo, "o4", "pending_pay")
     _seed_event(tmp_repo, stage="search")
     _seed_event(tmp_repo, stage="notify")
     _seed_event(tmp_repo, stage="eval")
@@ -354,8 +354,8 @@ def test_stats_trend_by_status_metrics_are_distinct(
     """按状态指标各自计数：三张 KPI 卡不再共用同一条 orders 曲线（评审 2.1-2）"""
     now = _utcnow()
     _seed_order(tmp_repo, "s1", "succeeded", created_at=now)
-    _seed_order(tmp_repo, "p1", "pending", created_at=now)
-    _seed_order(tmp_repo, "p2", "pending", created_at=now)
+    _seed_order(tmp_repo, "p1", "pending_pay", created_at=now)
+    _seed_order(tmp_repo, "p2", "pending_pay", created_at=now)
     _seed_order(tmp_repo, "f1", "failed", created_at=now)
 
     def _total(metric: str) -> tuple[float, int]:

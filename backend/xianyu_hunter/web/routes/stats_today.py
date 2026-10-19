@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, text as sa_text
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.order import PENDING_STATUSES
 from xianyu_hunter.infra.db_models import EventRow, OrderRow, _utcnow
 from xianyu_hunter.web.cache import cached_ttl
 from xianyu_hunter.web.deps import get_container
@@ -72,6 +73,9 @@ def _query_failed_orders(engine, container: Container, today_start) -> list[dict
 def _query_timeout_pending(engine, container: Container, today_start, timeout_cutoff, now) -> tuple[list[dict], int]:
     """查询 4：今日超时待支付订单
 
+    待支付口径取 PENDING_STATUSES（T02585）：原先写的是 pending/submitting/paying，
+    这三个字面值从未被写入过，导致超时告警列表恒空。
+
     性能优化（P0）：原实现先 SELECT 详情 LIMIT 20 再单独 COUNT 重复扫描相同 WHERE
     现用窗口函数 COUNT(*) OVER() 一次查询同时拿到详情 + 总数，省一次全表扫描
 
@@ -86,7 +90,7 @@ def _query_timeout_pending(engine, container: Container, today_start, timeout_cu
                 OrderRow,
                 func.count().over().label("total_count"),
             )
-            .where(OrderRow.status.in_(['pending', 'submitting', 'paying']))
+            .where(OrderRow.status.in_(PENDING_STATUSES))
             .where(OrderRow.created_at >= today_start)
             .where(OrderRow.created_at < timeout_cutoff)
             .order_by(OrderRow.created_at.asc()).limit(20)

@@ -6,7 +6,7 @@
    用户当作全局数读；且 pending 桶漏掉了后端实际写入的 pending_pay，「待处理」恒显示 0。
    现在统计来自 list 响应里的 stats/by_status（与列表同 user/task/item 范围的一次 GROUP BY）。
 2. 筛选「待处理」传的是 status=pending，而库里写的是 pending_pay → 命中 0 条，
-   与卡片数字自相矛盾。状态名归一是 T02585 的范围，这里先保证同源。
+   与卡片数字自相矛盾。T02585 已把字面值统一到 OrderStatus，本文件的断言随之更新。
 3. 通知中心勾选批量删除：只删勾中的、只删自己的；deleted<requested 要如实回传。
 
 按前端实际调用的端点打真实 FastAPI 应用（请求序列化、白名单校验、Repository
@@ -59,7 +59,7 @@ def test_stats_are_full_scope_and_stable_across_pages(api) -> None:
     client, repo = api
     _mk_order(repo, "o1", "pending_pay")
     _mk_order(repo, "o2", "pending_pay")
-    _mk_order(repo, "o3", "pending")          # 历史字面值，应与 pending_pay 同桶
+    _mk_order(repo, "o3", "takeover_pending")  # 接管中：与 pending_pay 分桶（T02585 归一后不再合并）
     _mk_order(repo, "o4", "succeeded")
     _mk_order(repo, "o5", "failed")
 
@@ -70,13 +70,13 @@ def test_stats_are_full_scope_and_stable_across_pages(api) -> None:
     assert p1["total"] == 5 and p2["total"] == 5
     # 关键：两页的 stats 完全相同，且不等于「本页条数」
     assert p1["stats"] == p2["stats"]
-    assert p1["stats"]["pending"] == 3
+    assert p1["stats"]["pending"] == 2
     assert p1["stats"]["succeeded"] == 1
     assert p1["stats"]["failed"] == 1
-    assert p1["stats"]["takeover"] == 0
+    assert p1["stats"]["takeover"] == 1
     assert p1["stats"]["total"] == 5
-    # by_status 是原始字面值，pending/pending_pay 未归一（归一由 _build_order_stats 负责）
-    assert p1["by_status"]["pending_pay"] == 2 and p1["by_status"]["pending"] == 1
+    # by_status 是原始字面值；T02585 起 stats 的桶直接按 OrderStatus 取值，不再做别名合并
+    assert p1["by_status"]["pending_pay"] == 2 and p1["by_status"]["takeover_pending"] == 1
 
 
 def test_stats_scoped_same_as_list_filters(api) -> None:
@@ -93,19 +93,24 @@ def test_stats_scoped_same_as_list_filters(api) -> None:
     assert scoped["stats"]["total"] == 2
 
 
-def test_pending_filter_hits_pending_pay_rows(api) -> None:
-    """筛选「待处理」(status=pending) 必须命中实际写入的 pending_pay，
-    否则顶部卡片显示 3 条、列表却空着 —— 同一份口径不能自相矛盾。"""
+def test_canonical_status_filter_hits_pending_pay_rows(api) -> None:
+    """筛选「待支付」(status=pending_pay) 必须命中实际写入的行，
+    否则顶部卡片显示 N 条、列表却空着 —— 同一份口径不能自相矛盾。
+
+    T02585 起 status 走 OrderStatus 派生的白名单：历史 pending 直接 422，
+    而不是静默返回空列表（旧行为靠 _PENDING_LITERALS 别名合并撑着）。"""
     client, repo = api
     _mk_order(repo, "o1", "pending_pay")
     _mk_order(repo, "o2", "pending_pay")
     _mk_order(repo, "o3", "succeeded")
 
-    res = client.get("/api/orders", params={"status": "pending"}).json()
+    res = client.get("/api/orders", params={"status": "pending_pay"}).json()
     assert res["total"] == 2
     assert sorted(o["id"] for o in res["items"]) == ["o1", "o2"]
     # 卡片待处理数与筛选命中数一致
     assert res["stats"]["pending"] == res["total"]
+
+    assert client.get("/api/orders", params={"status": "pending"}).status_code == 422
 
 
 # ---------------- 2. 通知：勾选批量删除 ----------------

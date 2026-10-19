@@ -637,8 +637,9 @@ export interface TrendSeries {
 export interface TodayAlert {
   today: { orders: number; events: number; succeeded: number; failed: number }
   alerts: {
-    failed_orders: Array<{ id: number; title: string; amount: number; created_at: string }>
-    timeout_pending: Array<{ id: number; title: string; amount: number; created_at: string; age_sec: number }>
+    // 真实载荷是整条订单（repo.list_orders 的 dict），不是自造的 title/amount 契约（T02585）
+    failed_orders: Array<{ id: string; item_id: string; price: number; status: string; created_at: string }>
+    timeout_pending: Array<{ id: string; item_id: string; price: number; status: string; created_at: string; age_sec: number }>
     low_evaluations: Array<{ id: number; message: string; type: string; created_at: string; score: number }>
     counts: { failed: number; timeout: number; low_eval: number }
   }

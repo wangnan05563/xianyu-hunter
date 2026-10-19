@@ -38,7 +38,7 @@ export default function TimelineList({
               if (isOrder) {
                 if (status === 'succeeded') dotColor = '#52c41a'
                 else if (status === 'failed') dotColor = '#ff4d4f'
-                else if (['pending', 'submitting', 'paying'].includes(status)) dotColor = '#faad14'
+                else if (['pending_pay', 'takeover_pending'].includes(status)) dotColor = '#faad14'
               } else if (level === 'error' || level === 'err' || eventType === 'order.failed') {
                 dotColor = '#ff4d4f'
               } else if (level === 'warning' || level === 'warn') {

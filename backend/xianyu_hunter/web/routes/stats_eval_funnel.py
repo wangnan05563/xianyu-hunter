@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import case, func, select as sa_select
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.order import OrderStatus
 from xianyu_hunter.infra.db_models import (
     EvaluationRow, OrderRow, TaskLinkRow, _utcnow,
 )
@@ -100,7 +101,7 @@ def _compute_eval_funnel(range_days: int, container: Container) -> dict[str, Any
         # 阶段4+5：抢单触发数 + 抢单成功数，CASE WHEN 一次聚合
         # status 取值含 paid/confirmed/succeeded/failed/pending/takeover_pending
         order_success_expr = case(
-            (OrderRow.status.in_(["paid", "confirmed", "succeeded"]), 1),
+            (OrderRow.status == OrderStatus.SUCCEEDED.value, 1),
             else_=0,
         )
         order_row = conn.execute(

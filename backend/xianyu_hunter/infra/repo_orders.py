@@ -8,32 +8,43 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from xianyu_hunter.domain.order import OrderStatus
 from xianyu_hunter.infra.db_models import OrderRow
 
 
-# 「待处理」在 orders.status 里有两个字面值：历史的 pending 与实际写入的 pending_pay
-# （见 domain/order.py OrderStatus.PENDING_PAY）。状态名归一是 T02585 的范围；
-# 在那之前按 pending 筛选必须同时命中两者，否则顶部「待处理 N」与筛选结果自相矛盾。
-_PENDING_LITERALS = ("pending", "pending_pay")
-
-
 def _status_condition(status: str | None):
-    """把状态筛选值翻译成 WHERE 条件；None 表示不过滤"""
+    """把状态筛选值翻译成 WHERE 条件；None 表示不过滤
+
+    T02585 起字面值与 OrderStatus 同源：不再为历史 pending 做别名合并
+    （旧库中的 pending 行由 db_models 启动迁移归一为 pending_pay）。
+    """
     if not status:
         return None
-    if status in _PENDING_LITERALS:
-        return OrderRow.status.in_(_PENDING_LITERALS)
     return OrderRow.status == status
 
 
 class OrdersMixin:
     """Orders 领域的 Repository 方法"""
 
-    def upsert_order(self, order: dict) -> None:
+    def upsert_order(self, order: dict, user_id: str | None = None) -> None:
+        """按 id upsert 订单
+
+        user_id 不为 None 时深度防御（与 upsert_eval_event 同语义）：
+        - 字典未显式带 user_id 时注入，INSERT 路径自动落列
+        - 冲突更新附加 WHERE，避免凭 id 覆盖他人订单
+        api_orders 的接管/确认/取消/改状态四处都按 (order_id, user_id) 先读再写，
+        这里补齐写入侧的同一道门。
+        """
+        if user_id is not None and "user_id" not in order:
+            order["user_id"] = user_id
         with self.engine.begin() as conn:
             stmt = sqlite_insert(OrderRow).values(**order)
             update_cols = {c: stmt.excluded[c] for c in order.keys() if c != "id"}
-            stmt = stmt.on_conflict_do_update(index_elements=["id"], set_=update_cols)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["id"],
+                set_=update_cols,
+                where=(OrderRow.user_id == user_id) if user_id is not None else None,
+            )
             conn.execute(stmt)
 
     def get_order(self, order_id: str, user_id: str | None = None) -> dict | None:
@@ -213,7 +224,7 @@ class OrdersMixin:
             # 先查询将要超时的订单（供返回）
             select_stmt = (
                 select(OrderRow)
-                .where(OrderRow.status == "takeover_pending")
+                .where(OrderRow.status == OrderStatus.TAKEOVER_PENDING.value)
                 .where(OrderRow.confirmed_at.is_not(None))
                 .where(OrderRow.confirmed_at < cutoff)
             )

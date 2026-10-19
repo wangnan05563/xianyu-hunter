@@ -6,7 +6,7 @@
 - 升级：超时订单从 5min → 15min → 30min 用不同 dedup_key，让用户能感受到"事情在变严重"
 
 当前实现：
-1. OrderTimeoutRule：扫 orders 表，发现 pending/submitting/paying 超过阈值就告警
+1. OrderTimeoutRule：扫 orders 表，发现待支付（pending_pay）超过阈值就告警
 2. AuthDownRule：检测登录态从"已登录" → "未登录"时告警（首次 + 重复提醒分级）
 
 调用入口：scan_and_notify() → 聚合所有规则
@@ -19,6 +19,7 @@ from typing import Any
 from loguru import logger
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.order import PENDING_STATUSES
 from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.web.utils import to_datetime
 
@@ -42,7 +43,7 @@ def scan_order_timeouts(container: Container) -> int:
     triggered = 0
     for o in orders:
         status = o.get("status")
-        if status not in ("pending", "submitting", "paying"):
+        if status not in PENDING_STATUSES:
             continue
         created_at = to_datetime(o.get("created_at"))
         if created_at is None:
