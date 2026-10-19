@@ -677,6 +677,31 @@ def count_links(
     return {"task_id": task_id, **container.repo.count_task_links(task_id)}
 
 
+@router.get("/{task_id}/links/facets")
+def list_link_facets(
+    task_id: str,
+    request: Request,
+    type: str = Query("item", description="维度来源类型，目前仅 item 有 region/brand"),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """地区/品牌候选项：该任务关联内容的全量 DISTINCT，不受当前筛选与分页影响
+
+    为什么需要：前端下拉原先从「当前页 items」提取选项，选中某地区后选项只剩该地区，
+    换地区必须先清空（自锁死），翻页后选项集还会变。
+    取值口径与 /links 的 region/brand 过滤一致（同为 display JSON 的 json_extract），
+    否则选项值与过滤条件对不上。
+    """
+    if type not in _VALID_TYPES:
+        raise HTTPException(status_code=400, detail=f"未知 type: {type}")
+    # 多用户隔离：查询操作用 None
+    user_id = getattr(request.state, "user_id", None)
+    if not container.repo.get_task(task_id, user_id=user_id):
+        raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
+    if type != "item":
+        return {"task_id": task_id, "regions": [], "brands": []}
+    return {"task_id": task_id, **container.repo.list_task_link_facets(task_id, user_id=user_id)}
+
+
 @router.post("/{task_id}/links", status_code=201)
 def create_link(
     task_id: str,

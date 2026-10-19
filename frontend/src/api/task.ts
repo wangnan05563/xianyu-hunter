@@ -175,6 +175,10 @@ export const taskLinkApi = {
   count: (taskId: string) =>
     client.get<{ item: number; seller: number; total: number }>(`/api/tasks/${taskId}/links/count`).then((r) => r.data),
 
+  // 地区/品牌候选项：后端 DISTINCT 全量，不随当前筛选/分页收缩（修复选完一个就只剩一个的自锁死）
+  facets: (taskId: string) =>
+    client.get<{ task_id: string; regions: string[]; brands: string[] }>(`/api/tasks/${taskId}/links/facets`).then((r) => r.data),
+
   // SSE 流式实时搜索：通过 fetch + ReadableStream 接收进度事件
   // onProgress 回调接收每个阶段的进度（checking_cache / searching / writing_db / done / error）
   // 返回最终 done 阶段的完整数据（与旧接口格式兼容）

@@ -175,6 +175,8 @@ export default function ItemList() {
   const [loading, setLoading] = useState(false)
   const [liveMode, setLiveMode] = useState(false)
   const [liveLoading, setLiveLoading] = useState(false)
+  // 地区/品牌候选项（后端 DISTINCT 全量）：DB 模式用，避免「选了地区后选项只剩该地区」的自锁死
+  const [facets, setFacets] = useState<{ regions: string[]; brands: string[] }>({ regions: [], brands: [] })
   const [search, setSearch] = useState('')
   const [viewMode, setViewMode] = usePersistentState<ViewMode>('xh.items.viewMode', 'card', {
     validator: (v): v is ViewMode => v === 'table' || v === 'card',
@@ -647,17 +649,38 @@ export default function ItemList() {
     }).catch((err) => message.error(errDetail(err) || '删除失败'))
   }, [selectedTask, loadItems])
 
-  // 过滤已下推到后端（keyword/region/brand 参数），前端直接使用 items
-  // 地区/品牌选项：实时模式下从原始全量结果提取，避免筛选后选项减少；
-  // DB 模式下从当前页 items 提取（跨页场景需用户清空筛选后重新选择）
-  const regionOptions = [...new Set(
-    (liveMode ? liveItemsRef.current : items)
-      .map((i) => i.display?.region).filter(Boolean)
-  )].sort((a, b) => String(a).localeCompare(String(b)))
-  const brandOptions = [...new Set(
-    (liveMode ? liveItemsRef.current : items)
-      .map((i) => i.display?.brand).filter(Boolean)
-  )].sort((a, b) => String(a).localeCompare(String(b)))
+  // 地区/品牌选项来源：
+  // - 实时模式：从本次实时搜索的原始全量结果提取（DB 里的 facets 不代表刚搜到的这批）
+  // - DB 模式：用后端 facets 接口的全量 DISTINCT；请求失败/尚无数据时回落到「当前页提取」，
+  //   保证旧后端或未拉到 facets 时下拉仍可用（宁缺勿空，行为不劣于修复前）
+  useEffect(() => {
+    if (liveMode || !selectedTask) {
+      setFacets({ regions: [], brands: [] })
+      return
+    }
+    let cancelled = false
+    taskLinkApi.facets(selectedTask)
+      .then((f) => { if (!cancelled) setFacets({ regions: f.regions ?? [], brands: f.brands ?? [] }) })
+      // facets 是增强项，失败静默回落当前页，不打断主流程
+      .catch(() => { if (!cancelled) setFacets({ regions: [], brands: [] }) })
+    return () => { cancelled = true }
+  }, [selectedTask, liveMode])
+
+  // React key 统一口径：link_key（商品 ID）在同一任务的关联列表内唯一；
+  // link_id 在实时搜索结果里恒为 0，直接拿来当 key 会同屏撞 key
+  const rowKeyOf = (i: TaskLink) => i.link_key || String(i.link_id)
+
+  const fromPage = (pick: (i: TaskLink) => string | undefined): string[] => {
+    const source = liveMode ? liveItemsRef.current : items
+    return [...new Set(source.map(pick).filter((v): v is string => Boolean(v)))].sort((a, b) => a.localeCompare(b))
+  }
+
+  const regionOptions = liveMode
+    ? fromPage((i) => i.display?.region)
+    : (facets.regions.length ? facets.regions : fromPage((i) => i.display?.region))
+  const brandOptions = liveMode
+    ? fromPage((i) => i.display?.brand)
+    : (facets.brands.length ? facets.brands : fromPage((i) => i.display?.brand))
 
   // ===== 列配置（拖拽排序 + 显示/隐藏，持久化到 localStorage） =====
   // 复用评估明细页的 useColumnConfig + ColumnSettingsModal，保持交互一致性
@@ -826,7 +849,9 @@ export default function ItemList() {
             <TipButton
               tip="前往登录页刷新闲鱼 Cookie"
               icon={<LoginOutlined />}
-              onClick={() => navigate(`/?redirect=${encodeURIComponent('/items')}`)}
+              // 与全局惯例一致（MainLayout/UserMenu 均跳 /login?redirect=）：
+              // 原先跳 `/?redirect=` 会落到仪表盘且 redirect 被忽略，用户被踢回起点
+              onClick={() => navigate(`/login?redirect=${encodeURIComponent('/items')}`)}
             >
               重新登录
             </TipButton>
@@ -1049,7 +1074,10 @@ export default function ItemList() {
                   <Table
                     columns={columns}
                     dataSource={items}
-                    rowKey="link_id"
+                    /* React key 用 link_key（商品 ID）：实时搜索结果的 link_id 恒为 0，
+                       用 link_id 会让同屏多行撞 key（React 复用错行），且与高亮判定
+                       （highlightRows.has(record.link_key)）口径不一致 */
+                    rowKey={rowKeyOf}
                 pagination={false}
                 size="middle"
                 scroll={{ x: 1000 }}
@@ -1085,7 +1113,7 @@ export default function ItemList() {
                 {items.map((item) => {
                   const d = item.display
                   return (
-                    <Col xs={12} sm={8} md={6} lg={4} xl={4} key={item.link_id}>
+                    <Col xs={12} sm={8} md={6} lg={4} xl={4} key={rowKeyOf(item)}>
                       <Tooltip
                         title={
                           <div style={{ maxWidth: 300 }}>

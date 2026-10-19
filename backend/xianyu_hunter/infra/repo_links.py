@@ -678,6 +678,40 @@ class TaskLinksMixin:
                     result["total"] += 1
             return result
 
+    def list_task_link_facets(
+        self,
+        task_id: str,
+        link_type: str = "item",
+        user_id: str | None = None,
+    ) -> dict[str, list[str]]:
+        """返回该任务关联内容出现过的全部地区/品牌（DISTINCT，不受当前筛选与分页影响）
+
+        为什么需要：前端地区/品牌下拉原先从「当前页 items」提取，选中一个地区后选项集
+        立刻只剩该地区，换地区必须先清空——自锁死；翻页后选项集还会变。
+        display 是 JSON 文本列，region/brand 用 json_extract 取值，与
+        _apply_search_filters_to_stmt 的过滤表达式保持同一口径（否则选项值与过滤值对不上）。
+
+        只按 task 全量取 DISTINCT：价格/发布天数/销售状态等任务级过滤条件**不**参与，
+        因为候选项的用途是「让用户能换着筛」，跟着当前筛选收缩就回到旧缺陷。
+        """
+        region_expr = func.json_extract(TaskLinkRow.display, "$.region")
+        brand_expr = func.json_extract(TaskLinkRow.display, "$.brand")
+        with self.engine.connect() as conn:
+            stmt = select(region_expr.label("region"), brand_expr.label("brand")).where(
+                (TaskLinkRow.task_id == task_id) & (TaskLinkRow.link_type == link_type)
+            )
+            if user_id is not None:
+                stmt = stmt.where(TaskLinkRow.user_id == user_id)
+            stmt = stmt.distinct()
+            regions: set[str] = set()
+            brands: set[str] = set()
+            for row in conn.execute(stmt):
+                if row.region:
+                    regions.add(str(row.region))
+                if row.brand:
+                    brands.add(str(row.brand))
+        return {"regions": sorted(regions), "brands": sorted(brands)}
+
     def delete_task_link(self, link_id: int, user_id: str | None = None) -> bool:
         """user_id 不为 None 时附加 WHERE 过滤，防止跨用户删除（深度防御）"""
         with self.engine.begin() as conn:
