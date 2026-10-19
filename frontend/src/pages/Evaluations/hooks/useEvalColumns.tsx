@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
-import { Tag, Space, Tooltip, Image } from 'antd'
+import { Tag, Space, Tooltip, Image, Popconfirm } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import {
   RobotOutlined, ThunderboltOutlined, CloudDownloadOutlined,
@@ -457,16 +457,43 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
           return <ActionPlaceholder text={`${ACTION_PLACEHOLDER_TEXT[placeholder]}${soldHint}`} />
         }
         const score = r.payload.score ?? 0
+        // 评审 2.4-1：手动抢单会调用浏览器自动化提交**真实订单**（真金白银），
+        // 原先一键直下、零确认（同产品删任务都要二次确认，风险不对称）。
+        // 与列表内其它危险操作统一用 Popconfirm，把价格/评分/后果写进确认文案，
+        // 让用户在点的那一下就知道自己花多少钱、为什么这单被推荐。
+        const price = r.payload.item_price
+        const evalTitle = r.payload.item_title || r.item_id
         return (
-          <TipButton
-            tip={`手动抢单（评分 ${score.toFixed(0)} ≥ ${autoBuyScore}）`}
-            size="small"
-            type="primary"
-            ghost
-            icon={<ThunderboltOutlined />}
-            loading={manualTaking[r.item_id]}
-            onClick={() => onManualTakeover(r)}
-          />
+          <Popconfirm
+            title="确认手动抢单？"
+            description={
+              <div style={{ maxWidth: 320 }}>
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {evalTitle}
+                </div>
+                <div>
+                  价格：{price == null ? '未知' : `¥${price}`}　评分：{score.toFixed(0)}（自动抢单阈值 {autoBuyScore}）
+                </div>
+                <div style={{ color: 'var(--xh-text-secondary)' }}>
+                  确认后由浏览器自动化直接提交真实订单（不走通知里的确认环节），请核对价格后再点。
+                </div>
+              </div>
+            }
+            okText="确认抢单"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            placement="topRight"
+            onConfirm={() => onManualTakeover(r)}
+          >
+            <TipButton
+              tip={`手动抢单（评分 ${score.toFixed(0)} ≥ ${autoBuyScore}），点击后需二次确认`}
+              size="small"
+              type="primary"
+              ghost
+              icon={<ThunderboltOutlined />}
+              loading={manualTaking[r.item_id]}
+            />
+          </Popconfirm>
         )
       },
     },

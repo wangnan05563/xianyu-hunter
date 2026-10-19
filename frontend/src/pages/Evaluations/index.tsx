@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Card, Table, Space, Spin, Input, Select, Slider, Row, Col,
   Empty, DatePicker, Alert, Progress, Checkbox, Tag, Statistic, InputNumber,
-  Tooltip,
+  Tooltip, Popconfirm,
 } from 'antd'
 import {
   ReloadOutlined, AimOutlined, SearchOutlined, UndoOutlined,
@@ -472,6 +472,14 @@ export default function Evaluations() {
     list.items.map((i) => i.payload?.brand).filter(Boolean)
   )].sort((a, b) => String(a).localeCompare(String(b)))
 
+  // 评审 2.4-2：重新评估原先静默一键触发全库重算，这里把「会重算什么范围」显式化。
+  // 范围口径与后端一致（routes/evaluations_recompute.py:361）：按 user_id + 可选 task_id
+  // 取 eval.* 事件重算，不受当前时间窗/价格筛选影响，故描述里不引用这两个筛选值。
+  const selectedTaskName = filters.tasks.find((t) => t.id === filters.taskId)?.name
+  const recomputeScope = filters.taskId
+    ? `任务「${selectedTaskName || filters.taskId}」下的历史评估记录`
+    : '当前账号全部历史评估记录（未选择任务）'
+
   const renderExpandedRow = (r: EvalItem) => (
     <ExpandedDetail
       r={r}
@@ -588,7 +596,36 @@ export default function Evaluations() {
           <TipButton type="primary" icon={<SearchOutlined />} onClick={onSearch} tip="按当前筛选条件查询评估记录">查询</TipButton>
           <TipButton icon={<UndoOutlined />} onClick={onReset} tip="重置全部筛选条件">重置</TipButton>
           <TipButton icon={<ReloadOutlined />} onClick={list.load} loading={list.loading} tip="重新加载评估列表数据">刷新</TipButton>
-          <TipButton icon={<RetweetOutlined />} onClick={batch.onRecompute} loading={batch.recomputing} tip="重新计算所有商品评估分值">重新评估</TipButton>
+          <Popconfirm
+            title="确认重新评估？"
+            description={(
+              <div style={{ maxWidth: 340 }}>
+                <div>重算范围：{recomputeScope}</div>
+                <div>
+                  将用当前评估规则重新打分并覆盖这些记录的评估结果，覆盖后无法恢复原分值。
+                </div>
+                <div>
+                  重算不受上方时间窗与价格筛选限制；不调用 AI、不产生接口费用，也不发送通知。
+                </div>
+                <div style={{ color: 'var(--xh-text-secondary)' }}>
+                  实际处理条数将在完成后提示。
+                </div>
+              </div>
+            )}
+            okText="确认重算"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            placement="bottomRight"
+            onConfirm={batch.onRecompute}
+          >
+            <TipButton
+              icon={<RetweetOutlined />}
+              loading={batch.recomputing}
+              tip="用当前规则重新计算评估分值，点击后需二次确认"
+            >
+              重新评估
+            </TipButton>
+          </Popconfirm>
           <TipButton icon={<RetweetOutlined />} onClick={batch.onBatchEvaluateUnevaluated} loading={batch.batchEvaluating} tip="对尚未评估的商品批量评估">批量评估未评估商品</TipButton>
           <TipButton icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)} tip="打开列显示与排序配置">列配置</TipButton>
           <ExportButton dataset="evaluations" params={{ task_id: filters.taskId || undefined }} />

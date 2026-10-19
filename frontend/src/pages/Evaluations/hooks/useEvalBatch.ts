@@ -95,10 +95,16 @@ export function useEvalBatch(
     setBatchProgress({ done: 0, total: ids.length })
 
     let done = 0
+    // 与官方采集批次同口径统计成功/失败：原先逐条 catch {} 吞错，
+    // 结束时仍报「共处理 N 项」，失败数完全不可见（评审 2.4-3）
+    let succeeded = 0
+    let failed = 0
     for (const id of ids) {
       try {
         await aiApi.evaluateCondition(id)
+        succeeded++
       } catch {
+        failed++
       }
       done++
       setBatchProgress({ done, total: ids.length })
@@ -106,7 +112,11 @@ export function useEvalBatch(
 
     setBatchAIEvaluating(false)
     setSelectedRowKeys([])
-    message.success(`批量评估完成，共处理 ${ids.length} 项`)
+    if (failed > 0) {
+      message.warning(`批量评估完成：成功 ${succeeded}，失败 ${failed}（共 ${ids.length}）`)
+    } else {
+      message.success(`批量评估完成：成功 ${succeeded}，失败 0（共 ${ids.length}）`)
+    }
     load()
   }, [items, selectedRowKeys, load])
 
