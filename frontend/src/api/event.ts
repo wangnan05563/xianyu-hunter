@@ -30,5 +30,16 @@ export const logApi = {
 
   // 导出 URL 直接交给浏览器下载，无需经过 axios
   // 必须带部署子路径前缀（API_BASE），否则域名模式 /xianyu 下落到根路径被代理拦截
-  exportUrl: (format: 'csv' | 'log') => `${API_BASE}api/logs/export?format=${format}`,
+  // filters 只作用于 format=csv：后端 format=log 走的是原始文件拼接，不吃任何筛选参数，
+  // 所以 LOG 按钮不拼参数、文案也要说清是「全部原始日志文件」
+  exportUrl: (
+    format: 'csv' | 'log',
+    filters?: { q?: string; level?: string; task_id?: string },
+  ) => {
+    const params = new URLSearchParams({ format })
+    if (filters?.q) params.set('q', filters.q)
+    if (filters?.level) params.set('level', filters.level)
+    if (filters?.task_id) params.set('task_id', filters.task_id)
+    return `${API_BASE}api/logs/export?${params.toString()}`
+  },
 }

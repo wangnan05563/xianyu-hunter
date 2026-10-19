@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from xianyu_hunter.domain.events import level_literals
 from xianyu_hunter.infra.db_models import _utcnow, EventRow
 
 
@@ -235,7 +236,11 @@ class EventsMixin:
                 EventRow.id.asc() if ascending else EventRow.created_at.desc()
             )
             if level:
-                stmt = stmt.where(EventRow.level == level)
+                # 别名组匹配（err/error、warn/warning）：表内字面值历史上不统一，
+                # 精确相等会让「筛 WARN」漏掉全部 warning 行
+                literals = level_literals(level)
+                if literals:
+                    stmt = stmt.where(EventRow.level.in_(literals))
             if task_id:
                 stmt = stmt.where(EventRow.task_id == task_id)
             if since_id is not None:
