@@ -130,6 +130,28 @@ def test_export_items_csv(client: TestClient, tmp_repo: Repository) -> None:
     assert "iPhone 13" in titles
 
 
+def test_export_rows_header_matches_body(client: TestClient, tmp_repo: Repository) -> None:
+    """X-Export-Rows 必须与 CSV 数据行数一致（T02587 / FR-C-2）
+
+    前端据此区分「0 行」与「有数据」：没有这个头，导出成功提示只能一律说「正在导出」，
+    筛选写错导致 0 行时也照样报成功。
+    """
+    _seed_data(tmp_repo)
+    resp = client.get("/api/export/items", headers=_auth_headers())
+    assert resp.status_code == 200
+    rows = list(csv.reader(io.StringIO(resp.content.decode("utf-8-sig"))))
+    assert resp.headers["x-export-rows"] == str(len(rows) - 1)
+
+    # 过滤到空结果：只剩表头，头里必须如实写 0
+    empty = client.get(
+        "/api/export/items", params={"task_id": "no-such-task"}, headers=_auth_headers()
+    )
+    assert empty.status_code == 200
+    empty_rows = list(csv.reader(io.StringIO(empty.content.decode("utf-8-sig"))))
+    assert len(empty_rows) == 1
+    assert empty.headers["x-export-rows"] == "0"
+
+
 def test_export_items_filter_by_task(client: TestClient, tmp_repo: Repository) -> None:
     """按 task_id 过滤商品"""
     _seed_data(tmp_repo)

@@ -90,7 +90,11 @@ def _build_csv_response(
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            # 行数回带给前端：0 行必须能被区分出来，否则「导出成功」是假回执（FR-C-2）
+            "X-Export-Rows": str(len(rows)),
+        },
     )
 
 

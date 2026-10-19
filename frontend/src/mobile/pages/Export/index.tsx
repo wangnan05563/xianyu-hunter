@@ -1,6 +1,6 @@
 // frontend/src/mobile/pages/Export/index.tsx
 // 移动端数据导出：支持 4 个数据集（items/evaluations/orders/events）的快速下载
-// 设计要点：点击即直跳 /api/export/{dataset} 浏览器原生处理 CSV 流式下载
+// 设计要点：下载走 axios blob + 隐藏 <a download>，HTTP 错误与 0 行结果都能反馈到 toast
 import { useEffect, useState, useCallback } from 'react'
 import { Card, Tag, Spin, App, Button, Radio, Space, DatePicker, theme, Alert } from 'antd'
 import { DownloadOutlined, FileTextOutlined } from '@ant-design/icons'
@@ -8,6 +8,7 @@ import { exportApi, type ExportDataset, type ExportDatasetInfo, type ExportParam
 import { taskApi } from '../../../api/task'
 import type { Task } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { notifyExportResult } from '../../../utils/exportFeedback'
 
 const { RangePicker } = DatePicker
 
@@ -61,27 +62,19 @@ export default function MobileExport() {
     return p
   }
 
-  // 触发下载：用 anchor + click 而非 location.href 直跳，避免移动端浏览器覆盖当前 SPA
-  const handleDownload = (): void => {
+  // 触发下载：axios blob + 隐藏 <a download>（T02587 / FR-C-2）
+  // 原实现把 URL 直接挂到 <a href> 上点击：HTTP 错误不可见、也拿不到行数，
+  // 0 行同样弹「已开始下载」
+  const handleDownload = async (): Promise<void> => {
     if (downloading) return
     setDownloading(true)
     try {
-      const url = exportApi.buildUrl(dataset, buildParams())
-      // 创建一个隐藏的 a 触发下载，保持 SPA 状态
-      const a = document.createElement('a')
-      a.href = url
-      // 后端会从 URL 参数 file_name 推断；如未提供则后端使用默认命名
-      a.style.display = 'none'
-      document.body.appendChild(a)
-      a.click()
-      // 立即移除：download 是异步的，但点击已触发
-      requestAnimationFrame(() => a.remove())
-      message.success('已开始下载')
+      const res = await exportApi.downloadFile(dataset, buildParams())
+      notifyExportResult(message, res, dataset)
     } catch (e) {
-      message.error(extractApiError(e, '下载失败'), 3)
+      message.error(e instanceof Error ? e.message : '下载失败', 3)
     } finally {
-      // 浏览器下载无回包，用定时器复位 downloading
-      setTimeout(() => setDownloading(false), 1500)
+      setDownloading(false)
     }
   }
 
@@ -164,7 +157,7 @@ export default function MobileExport() {
         block
         icon={<DownloadOutlined />}
         loading={downloading}
-        onClick={handleDownload}
+        onClick={() => void handleDownload()}
       >
         下载 {dataset}.csv
       </Button>

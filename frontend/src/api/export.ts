@@ -1,9 +1,10 @@
 // 数据导出 API 客户端
 // 对应后端 /api/export 端点，支持 items/evaluations/orders/events 4 个数据集
 //
-// 设计要点：
-// - 使用 URL 直跳而非 axios 下载：浏览器原生处理 CSV 流式响应更稳定，避免大文件 blob 内存占用
-// - 携带 xh_token cookie（同源请求，credentials 默认包含）
+// 设计要点（FR-C-2 导出失败态可见）：
+// - 下载走 axios blob + 隐藏 <a download>，不再用 location.href 直跳：
+//   直跳时 HTTP 4xx/5xx 会整页跳走且错误不可见，用户只看到「页面没了」
+// - 后端在 X-Export-Rows 回带行数，前端据此区分「0 行」与「有数据」
 import client from './client'
 
 export type ExportDataset = 'items' | 'evaluations' | 'orders' | 'events'
@@ -29,35 +30,77 @@ export interface ExportParams {
   limit?: number
 }
 
+export interface ExportResult {
+  /** 后端 X-Export-Rows 回带的行数；老后端未回带时为 null（此时不宣称具体行数） */
+  rows: number | null
+  filename: string
+}
+
+/** 从 Content-Disposition 取文件名，取不到时按同一命名规则兜底 */
+function parseFilename(disposition: string | undefined, dataset: ExportDataset): string {
+  const m = /filename="?([^";]+)"?/.exec(disposition ?? '')
+  if (m?.[1]) return m[1]
+  const ts = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')
+  return `xh-${dataset}-${ts}.csv`
+}
+
+/**
+ * 把 axios 错误翻成人话。
+ * responseType: 'blob' 时后端返回的错误体也是 Blob，必须异步读出才能拿到 detail，
+ * 否则用户只会看到「Request failed with status code 500」这种无信息量提示。
+ */
+async function toReadableError(err: unknown, dataset: ExportDataset): Promise<Error> {
+  const e = err as { response?: { status?: number; data?: unknown; headers?: Record<string, string> }; message?: string }
+  const status = e?.response?.status
+  if (!status) return new Error('导出请求失败：网络不可达或服务未响应')
+  const data = e.response?.data
+  if (data instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await data.text()) as { detail?: string }
+      if (parsed.detail) return new Error(`导出失败（${dataset}）：${parsed.detail}`)
+    } catch { /* 错误体不是 JSON，落到状态码提示 */ }
+  }
+  if (status === 401 || status === 403) return new Error(`导出失败（${dataset}）：登录态已失效或无权限，请重新登录`)
+  return new Error(`导出失败（${dataset}）：服务端返回 ${status}`)
+}
+
 export const exportApi = {
   /** 列出可导出的数据集及列定义 */
   listDatasets: (): Promise<{ datasets: ExportDatasetInfo[] }> =>
     client.get('/api/export').then((r) => r.data),
 
   /**
-   * 构造导出 URL（浏览器直跳下载）
-   *
-   * 为什么用 URL 直跳而非 axios blob 下载：
-   * 1. CSV 流式响应由浏览器原生处理，避免大文件 blob 占用 JS 堆内存
-   * 2. 自动触发浏览器下载 UI，无需手写 saveAs 逻辑
-   * 3. 同源请求会自动携带 xh_token cookie，无需额外 header
+   * 下载数据集为 CSV：axios 取 blob → 隐藏 <a download> 触发保存。
+   * 失败时抛出可读错误（HTTP 状态/后端 detail/网络不可达），页面不跳走。
    */
-  buildUrl: (dataset: ExportDataset, params: ExportParams = {}): string => {
-    const search = new URLSearchParams()
-    if (params.task_id) search.set('task_id', params.task_id)
-    if (params.start) search.set('start', params.start)
-    if (params.end) search.set('end', params.end)
-    if (params.status) search.set('status', params.status)
-    if (params.level) search.set('level', params.level)
-    if (params.limit) search.set('limit', String(params.limit))
-    const qs = search.toString()
-    // S4624：避免嵌套模板字面量，提取为独立变量
-    const querySuffix = qs ? `?${qs}` : ''
-    return `/api/export/${dataset}${querySuffix}`
-  },
-
-  /** 触发浏览器下载（同源直跳，cookie 自动携带） */
-  download: (dataset: ExportDataset, params: ExportParams = {}): void => {
-    globalThis.location.href = exportApi.buildUrl(dataset, params)
+  downloadFile: async (dataset: ExportDataset, params: ExportParams = {}): Promise<ExportResult> => {
+    let resp
+    try {
+      resp = await client.get<Blob>(`/api/export/${dataset}`, {
+        params,
+        responseType: 'blob',
+        // 导出可能几万行，30s 默认超时偏短
+        timeout: 120000,
+      })
+    } catch (err) {
+      throw await toReadableError(err, dataset)
+    }
+    const rowsHeader = resp.headers?.['x-export-rows']
+    const parsedRows = rowsHeader == null ? NaN : Number(rowsHeader)
+    const filename = parseFilename(resp.headers?.['content-disposition'], dataset)
+    const url = URL.createObjectURL(resp.data)
+    try {
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } finally {
+      // 交给浏览器接管下载后再释放，同步 revoke 会让部分浏览器拿到空文件
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+    }
+    return { rows: Number.isNaN(parsedRows) ? null : parsedRows, filename }
   },
 }

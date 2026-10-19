@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Dropdown, message } from 'antd'
 import { DownloadOutlined } from '@ant-design/icons'
 import type { MenuProps } from 'antd'
 import { exportApi, type ExportDataset, type ExportParams } from '../api'
+import { notifyExportResult } from '@/utils/exportFeedback'
 import { TipButton } from '@/components/TipButton'
 
 interface ExportButtonProps {
@@ -24,9 +26,8 @@ interface ExportButtonProps {
  *
  * 设计要点：
  * - 默认点击导出当前 dataset，下拉菜单可切换其他数据集
- * - 通过 exportApi.download() 触发浏览器原生下载，避免 blob 内存
- * - 同源请求自动携带 xh_token cookie，无需额外 header
- * - 导出前给用户即时反馈（message.success），避免点击无反应
+ * - 走 exportApi.downloadFile（axios blob + 隐藏 <a>）：HTTP 错误可见且不跳页
+ * - 提示按实际行数给口径，0 行只出 warning，不再一律「正在导出」
  */
 export function ExportButton({
   dataset,
@@ -35,12 +36,18 @@ export function ExportButton({
   size = 'small',
   withMenu = true,
 }: ExportButtonProps) {
-  const handleExport = (ds: ExportDataset) => {
+  const [busy, setBusy] = useState(false)
+
+  const handleExport = async (ds: ExportDataset) => {
+    if (busy) return
+    setBusy(true)
     try {
-      exportApi.download(ds, params)
-      message.success(`正在导出 ${ds} 数据...`)
-    } catch {
-      message.error('导出失败，请稍后重试')
+      const res = await exportApi.downloadFile(ds, params)
+      notifyExportResult(message, res, ds)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -51,7 +58,8 @@ export function ExportButton({
         tip={`导出 ${dataset} 为 CSV（Excel 友好）`}
         size={size}
         icon={<DownloadOutlined />}
-        onClick={() => handleExport(dataset)}
+        loading={busy}
+        onClick={() => void handleExport(dataset)}
       >
         {label}
       </TipButton>
@@ -68,14 +76,15 @@ export function ExportButton({
 
   const menu: MenuProps = {
     items: menuItems,
-    onClick: ({ key }) => handleExport(key as ExportDataset),
+    onClick: ({ key }) => void handleExport(key as ExportDataset),
   }
 
   return (
     <Dropdown.Button
       size={size}
       icon={<DownloadOutlined />}
-      onClick={() => handleExport(dataset)}
+      loading={busy}
+      onClick={() => void handleExport(dataset)}
       menu={menu}
     >
       {label}

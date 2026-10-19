@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Col, Row, Typography, Tag, Input, DatePicker, InputNumber, Space, Spin, Empty, message, theme } from 'antd'
+import { Card, Col, Row, Typography, Tag, Input, DatePicker, InputNumber, Space, Spin, Empty, Alert, message, theme } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import { DownloadOutlined, DatabaseOutlined } from '@ant-design/icons'
 import type { Dayjs } from 'dayjs'
 import { exportApi, type ExportDataset, type ExportDatasetInfo, type ExportParams } from '../../api'
+import { notifyExportResult } from '../../utils/exportFeedback'
 
 const { Paragraph, Text } = Typography
 const { RangePicker } = DatePicker
@@ -52,6 +53,9 @@ export default function Export() {
   const { token } = theme.useToken()
   const [datasets, setDatasets] = useState<ExportDatasetInfo[]>([])
   const [loading, setLoading] = useState(true)
+  // 列定义接口失败时改用内置兜底：必须显式声明，否则用户以为看到的是后端真实列
+  const [columnsFallback, setColumnsFallback] = useState(false)
+  const [busyDataset, setBusyDataset] = useState<ExportDataset | null>(null)
   // 每个数据集独立维护筛选条件，切换数据集时保留各自的输入
   const [filters, setFilters] = useState<Record<ExportDataset, FilterState>>({
     items: { ...DEFAULT_FILTER },
@@ -64,7 +68,8 @@ export default function Export() {
     exportApi.listDatasets()
       .then((res) => setDatasets(res.datasets || []))
       .catch(() => {
-        // 拉取失败时用静态列定义兜底，保证页面可用
+        // 拉取失败时用静态列定义兜底，保证页面可用；兜底状态单独记账并显式告知
+        setColumnsFallback(true)
         setDatasets([
           { key: 'items', columns: ['id', 'task_id', 'title', 'price', 'publish_time', 'region', 'seller_id', 'want_cnt', 'view_cnt', 'first_seen', 'last_seen'], description: '商品列表' },
           { key: 'evaluations', columns: ['id', 'item_id', 'seller_id', 'score', 'risk_level', 'dimension_scores', 'reject_reasons', 'created_at'], description: '评估记录' },
@@ -75,7 +80,8 @@ export default function Export() {
       .finally(() => setLoading(false))
   }, [])
 
-  const handleExport = (ds: ExportDataset) => {
+  const handleExport = async (ds: ExportDataset) => {
+    if (busyDataset) return
     const f = filters[ds]
     const params: ExportParams = { limit: f.limit }
     if (f.task_id.trim()) params.task_id = f.task_id.trim()
@@ -85,12 +91,14 @@ export default function Export() {
     }
     if (f.status.trim()) params.status = f.status.trim()
     if (f.level.trim()) params.level = f.level.trim()
+    setBusyDataset(ds)
     try {
-      exportApi.download(ds, params)
-      // download 是浏览器直跳，无法捕获响应回调，仅给"已触发"反馈
-      message.success(`正在导出 ${DATASET_DISPLAY[ds].title}...`)
-    } catch {
-      message.error('导出失败，请稍后重试')
+      const res = await exportApi.downloadFile(ds, params)
+      notifyExportResult(message, res, DATASET_DISPLAY[ds].title)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '导出失败，请稍后重试')
+    } finally {
+      setBusyDataset(null)
     }
   }
 
@@ -187,7 +195,8 @@ export default function Export() {
                   type="primary"
                   size="small"
                   icon={<DownloadOutlined />}
-                  onClick={() => handleExport(ds.key)}
+                  loading={busyDataset === ds.key}
+                  onClick={() => void handleExport(ds.key)}
                 >
                   导出 CSV
                 </TipButton>
@@ -197,7 +206,7 @@ export default function Export() {
         </Col>
       )
     })
-  }, [datasets, loading, filters, token])
+  }, [datasets, loading, filters, busyDataset, token])
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: 24 }}>
@@ -206,6 +215,15 @@ export default function Export() {
           将商品、评估、订单、事件数据导出为 CSV（Excel/Numbers 友好，含 UTF-8 BOM）。支持按任务 ID、时间范围、状态、等级筛选。
         </Paragraph>
       </div>
+      {columnsFallback && (
+        <Alert
+          type="warning"
+          showIcon
+          message="数据集列定义接口加载失败，下方展示的是前端内置列定义"
+          description="导出仍可发起，但列清单可能与后端实际字段存在差异。"
+          style={{ marginBottom: 16 }}
+        />
+      )}
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
           <Spin tip="加载数据集..." />
