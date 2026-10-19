@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { Table, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch, Dropdown } from 'antd'
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { Table, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch, Dropdown, Popconfirm } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined, MoreOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
@@ -75,61 +75,14 @@ export default function TaskList() {
     { validator: (v): v is 'table' | 'card' => v === 'table' || v === 'card' },
   )
 
-  // ---- 行内二次确认状态机 ----
-  // 结构：{ taskId: { action, label, hint, armed_at } }
-  const [armConfirm, setArmConfirm] = useState<Record<string, { action: string; label: string; hint: string; armed_at: number }>>({})
-  const armTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-
-  /** 装备确认：点击危险按钮后切换为"确认/取消" */
-  const doArmConfirm = (taskId: string, action: string, label: string, hint: string) => {
-    // 清除旧的定时器
-    if (armTimers.current[taskId]) clearTimeout(armTimers.current[taskId])
-    setArmConfirm((prev) => ({ ...prev, [taskId]: { action, label, hint, armed_at: Date.now() } }))
-    // 5秒未确认自动撤销
-    armTimers.current[taskId] = setTimeout(() => {
-      setArmConfirm((prev) => {
-        const next = { ...prev }
-        delete next[taskId]
-        return next
-      })
-      delete armTimers.current[taskId]
-    }, 5000)
-  }
-
-  /** 取消确认：恢复原按钮 */
-  const cancelArmConfirm = (taskId: string) => {
-    if (armTimers.current[taskId]) {
-      clearTimeout(armTimers.current[taskId])
-      delete armTimers.current[taskId]
-    }
-    setArmConfirm((prev) => {
-      const next = { ...prev }
-      delete next[taskId]
-      return next
-    })
-  }
-
-  /** 确认执行危险操作 */
-  const executeArmConfirm = async (taskId: string) => {
-    const arm = armConfirm[taskId]
-    if (!arm) return
-    // 清除定时器
-    if (armTimers.current[taskId]) {
-      clearTimeout(armTimers.current[taskId])
-      delete armTimers.current[taskId]
-    }
-    // 先清除确认状态，防止重复点击
-    setArmConfirm((prev) => {
-      const next = { ...prev }
-      delete next[taskId]
-      return next
-    })
+  // ---- 危险操作执行（评审 2.2-3：与 Orders/TaskDetail 统一为 Popconfirm，删除自研行内装备确认） ----
+  const runDangerAction = async (taskId: string, action: 'stop' | 'delete', label: string) => {
     try {
-      await taskApi[arm.action as 'stop' | 'delete'](taskId)
-      message.success('操作成功')
+      await taskApi[action](taskId)
+      message.success(`已${label}`)
       load()
     } catch {
-      message.error('操作失败')
+      message.error(`${label}失败`)
     }
   }
 
@@ -727,7 +680,7 @@ export default function TaskList() {
         </Space>
       ),
     },
-  ], [])
+  ], [linkTaskId])
 
   const columns = [
     {
@@ -822,21 +775,6 @@ export default function TaskList() {
       title: '操作',
       key: 'action',
       render: (_: unknown, record: Task) => {
-        const arm = armConfirm[record.id]
-        // 该行已进入确认状态，显示"确认"和"取消"
-        if (arm) {
-          return (
-            <Space size="small">
-              <TipButton tip="确认执行该危险操作" size="small" type="primary" danger onClick={() => executeArmConfirm(record.id)}>
-                确认{arm.label}
-              </TipButton>
-              <TipButton tip="取消本次危险操作确认" size="small" onClick={() => cancelArmConfirm(record.id)}>
-                取消
-              </TipButton>
-            </Space>
-          )
-        }
-        // 正常状态：显示所有操作按钮
         return (
           <Space size="small">
             <TipButton tip="编辑该任务" size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${record.id}/edit`)}>
@@ -851,11 +789,20 @@ export default function TaskList() {
                 启动
               </TipButton>
             )}
-            {/* 运行中或已暂停时显示停止按钮（危险操作，需行内确认） */}
+            {/* 停止/删除统一用 Popconfirm（评审 2.2-3），不再自研一套行内确认 */}
             {(record.status === 'running' || record.status === 'paused') && (
-              <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />} onClick={() => doArmConfirm(record.id, 'stop', '停止', '停止后任务将不再运行')}>
-                停止
-              </TipButton>
+              <Popconfirm
+                title="确认停止该任务？"
+                description="停止后任务将不再运行"
+                onConfirm={() => runDangerAction(record.id, 'stop', '停止')}
+                okText="停止"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+              >
+                <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />}>
+                  停止
+                </TipButton>
+              </Popconfirm>
             )}
             <TipButton tip="复制该任务为新任务" size="small" icon={<CopyOutlined />} onClick={() => cloneTask(record)}>
               复制
@@ -877,9 +824,18 @@ export default function TaskList() {
             >
               <TipButton tip="展开更多操作" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
             </Dropdown>
-            <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />} onClick={() => doArmConfirm(record.id, 'delete', '删除', '删除后不可恢复')}>
-              删除
-            </TipButton>
+            <Popconfirm
+              title="确认删除该任务？"
+              description="删除后不可恢复"
+              onConfirm={() => runDangerAction(record.id, 'delete', '删除')}
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+            >
+              <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />}>
+                删除
+              </TipButton>
+            </Popconfirm>
           </Space>
         )
       },
@@ -905,7 +861,7 @@ export default function TaskList() {
       <Space style={{ marginBottom: 16 }}>
         {/* 全部启动：放在状态筛选前作为视觉焦点，使用品牌色渐变提升可发现性 */}
         <TipButton
-          tip="一键启动所有非运行中的任务"
+          tip={`一键启动本页 ${tasks.length} 个任务中的非运行中项；共 ${total} 个任务，其他页需翻页后再启动`}
           type="primary"
           className="xh-btn-brand"
           icon={<ThunderboltOutlined />}
@@ -913,7 +869,7 @@ export default function TaskList() {
           onClick={handleStartAll}
           disabled={tasks.length === 0}
         >
-          全部启动
+          启动本页
         </TipButton>
         <Tooltip title="开启后，运行中的任务按各自采集周期自动触发实时搜索（串行队列，页面不可见时暂停）">
           <Space size={4}>
@@ -1009,7 +965,6 @@ export default function TaskList() {
         <Spin spinning={loading}>
           <Row gutter={[16, 16]}>
             {tasks.map((task) => {
-              const arm = armConfirm[task.id]
               // 状态条颜色
               const statusColor = statusColors[task.status] || '#d9d9d9'
               // 提取到变量避免 JSX 内嵌套三元（S3358）
@@ -1041,19 +996,20 @@ export default function TaskList() {
                       <Tag color={statusColors[task.status]}>{statusLabels[task.status] || task.status}</Tag>
                     </Space>
                     <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      {arm ? (
-                        <>
-                          <TipButton tip="确认执行该危险操作" size="small" type="primary" danger onClick={() => executeArmConfirm(task.id)}>
-                            确认{arm.label}
-                          </TipButton>
-                          <TipButton tip="取消本次危险操作确认" size="small" onClick={() => cancelArmConfirm(task.id)}>取消</TipButton>
-                        </>
-                      ) : (
-                        <>
+                      <>
                           <TipButton tip="编辑该任务" size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</TipButton>
                           {startPauseBtn}
                           {showStopBtn && (
-                            <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />} onClick={() => doArmConfirm(task.id, 'stop', '停止', '停止后任务将不再运行')}>停止</TipButton>
+                            <Popconfirm
+                              title="确认停止该任务？"
+                              description="停止后任务将不再运行"
+                              onConfirm={() => runDangerAction(task.id, 'stop', '停止')}
+                              okText="停止"
+                              cancelText="取消"
+                              okButtonProps={{ danger: true }}
+                            >
+                              <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />}>停止</TipButton>
+                            </Popconfirm>
                           )}
                           <TipButton tip="复制该任务为新任务" size="small" icon={<CopyOutlined />} onClick={() => cloneTask(task)}>复制</TipButton>
                           {/* 同步：与表格视图一致，"另存为模板"收起到更多下拉菜单 */}
@@ -1072,9 +1028,17 @@ export default function TaskList() {
                           >
                             <TipButton tip="展开更多操作" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
                           </Dropdown>
-                          <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />} onClick={() => doArmConfirm(task.id, 'delete', '删除', '删除后不可恢复')}>删除</TipButton>
+                          <Popconfirm
+                            title="确认删除该任务？"
+                            description="删除后不可恢复"
+                            onConfirm={() => runDangerAction(task.id, 'delete', '删除')}
+                            okText="删除"
+                            cancelText="取消"
+                            okButtonProps={{ danger: true }}
+                          >
+                            <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />}>删除</TipButton>
+                          </Popconfirm>
                         </>
-                      )}
                     </div>
                   </Card>
                 </Col>

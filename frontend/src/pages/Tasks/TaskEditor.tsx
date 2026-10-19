@@ -561,7 +561,13 @@ export default function TaskEditor() {
       {/* 主内容：非编辑模式，或编辑模式但既不在加载也无错误 */}
       {(!isEdit || (!loadingEditData && !loadError)) && (
         <>
-          <Steps current={current} items={steps} style={{ marginBottom: 24 }} />
+          {/* 评审 2.2-5：补 onChange 让步骤可点选跳步（此前 Steps 纯展示，用户只能一路「下一步」走到底） */}
+          <Steps
+            current={current}
+            items={steps}
+            onChange={(v) => setCurrent(v)}
+            style={{ marginBottom: 24 }}
+          />
 
       {/* Step 0: 基础信息 */}
       {current === 0 && (
@@ -1057,6 +1063,16 @@ export default function TaskEditor() {
           上一步
         </TipButton>
         <Space>
+          {/* 评审 2.2-4：核心路径原本最少 7 步，Step3/4/5 全是"沿用全局"仍强制经过；补一条快捷通道 */}
+          {current === 0 && !isEdit && (
+            <TipButton
+              tip="跳过后续步骤直接创建：价格/搜索/AI/反爬等全部沿用全局默认配置，创建后可随时编辑"
+              onClick={handleSubmit}
+              icon={<CheckCircleOutlined />}
+            >
+              直接创建
+            </TipButton>
+          )}
           {current < steps.length - 1 ? (
             <TipButton tip="进入下一步" type="primary" onClick={handleNext} icon={<ArrowRightOutlined />}>
               下一步
