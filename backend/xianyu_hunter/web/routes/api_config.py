@@ -207,7 +207,14 @@ def get_raw_yaml() -> dict[str, Any]:
 def preview_config(
     payload: dict[str, Any] = Body(...),
 ) -> dict[str, Any]:
-    """预览改动：返回 diff 列表 + 校验结果（不写盘）"""
+    """预览改动：返回 diff 列表 + 校验结果（不写盘）
+
+    FR-A-6（T02589）：new_yaml 是「合并后的整份配置」——即便 payload 传空，
+    它也会把磁盘上的全部凭据原样回吐，性质与 /raw、/export 相同，必须同口径脱敏。
+    diffs 仍保留真实旧值：预览弹窗要让用户看清「自己正在改的那一项」会被覆盖成什么，
+    这是逐字段改动、不是整份导出，不在 FR-A-6 的泄露面内。
+    前端当前不消费 new_yaml（grep frontend/src 无命中），脱敏不影响任何页面。
+    """
     current = _load_yaml()
     new = copy.deepcopy(current)
     _deep_merge(new, payload)
@@ -216,7 +223,7 @@ def preview_config(
     return {
         "diffs": diffs,
         "validation": validation,
-        "new_yaml": _dump_yaml(new) if validation["ok"] else None,
+        "new_yaml": _dump_yaml(_sanitize_dict(new)) if validation["ok"] else None,
     }
 
 
@@ -694,11 +701,20 @@ def _redact_recursive(d: dict) -> None:
 
 
 # /raw 和 /export 专用脱敏：保留末4位，便于用户辨识而不泄露完整凭证
+# FR-A-6（T02589）：补齐 ntfy 三键——ntfy_topic/ntfy_token 与 telegram_chat_id 同性质，
+# 原清单漏掉导致 /api/config/raw 与 /export 明文外泄；覆盖关系由
+# tests/test_sensitive_keys_coverage.py（FR-D-1）在 CI 锁住，新增凭据键不再靠人记。
 _SENSITIVE_KEYS = frozenset({
     "serverchan_send_key", "pushplus_token", "bark_key", "bark_server",
     "telegram_bot_token", "telegram_chat_id", "wecom_webhook",
     "dingtalk_webhook", "dingtalk_secret", "webhook_url",
     "openai_api_key",
+    "ntfy_server", "ntfy_topic", "ntfy_token",
+    # FR-D-1 覆盖审计（tests/test_sensitive_keys_coverage.py）跑出来的同类明文泄露：
+    # tunnel.cpolar_authtoken 是 cpolar 账号鉴权令牌，原本也不在清单里
+    "cpolar_authtoken",
+    # keyring 侧的凭据槽（当前 YAML 模型没有同名字段，命中即为脱敏，属防御性覆盖）
+    "webhook_token", "embedding_api_key",
 })
 
 

@@ -282,6 +282,23 @@ export default function BuyerStrategy() {
               </Paragraph>
             </div>
           </Col>
+          <Col span={8}>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}><strong>单日真实落单上限（次）</strong></div>
+              <InputNumber
+                min={0}
+                max={10000}
+                precision={0}
+                value={config.buyer.max_orders_per_day ?? 0}
+                onChange={(v) => update({ buyer: { ...config.buyer, max_orders_per_day: v ?? 0 } })}
+                style={{ width: '100%' }}
+              />
+              <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
+                0＝不限制（默认）。非 0 时在提交订单前拦截：按 UTC 自然日计数，与仪表盘「今日订单」同一口径；
+                只统计真实落单，演练（dry_run）不占额度。保存后即生效，无需重启。
+              </Paragraph>
+            </div>
+          </Col>
         </Row>
       </Card>
 
@@ -360,9 +377,17 @@ export default function BuyerStrategy() {
         <ul style={{ paddingLeft: 20, lineHeight: 2.2, margin: 0 }}>
           <li><Text>auto_buy_score ≥ 80 才启用 auto 模式</Text></li>
           <li>
-            <Text>单日抢单数量上限：在 </Text>
-            <code style={{ background: 'var(--xh-bg-code)', padding: '2px 6px', borderRadius: 3 }}>buyer_config.py</code>
-            <Text> 中配置（待 UI 化）</Text>
+            {/* FR-A-4（T02589）：原文案写着「在 buyer_config.py 中配置（待 UI 化）」，
+                但该字段与执行逻辑都不存在——属于虚假安全护栏。现指向上方真实可编辑项 */}
+            <Text>单日抢单数量上限：</Text>
+            {(config.buyer.max_orders_per_day ?? 0) > 0 ? (
+              <Text>
+                已启用，当前 <strong>{config.buyer.max_orders_per_day}</strong> 次/日
+                （UTC 自然日，仅计真实落单）
+              </Text>
+            ) : (
+              <Text type="warning">未设置（不限制）——可在上方「抢单运行时参数」设定</Text>
+            )}
           </li>
           <li><Text>支付前暂停：默认开启（在 Dashboard 可手动接管）</Text></li>
         </ul>

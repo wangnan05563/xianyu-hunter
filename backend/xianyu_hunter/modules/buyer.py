@@ -90,6 +90,20 @@ class Buyer:
         # 最近一次演练的各段耗时（buy 持锁串行，实例属性暂存安全）
         self._last_dry_run_timings: dict | None = None
 
+    def _daily_order_limit(self) -> int:
+        """单日真实落单上限（FR-A-4 / T02589），0＝不限制
+
+        每次调用实时读 YAML：用户在前端改完立即生效，无需重启
+        （与 api_orders._get_takeover_timeout_min 同一口径）。
+        读不到全局配置时回落到构造期快照 self.config.max_orders_per_day。
+        """
+        try:
+            from xianyu_hunter.infra.yaml_config import get_config
+            return int(get_config().buyer.max_orders_per_day)
+        except Exception:  # noqa: BLE001 - 配置读取异常不应阻断抢单主流程，但也不能当成「无护栏」
+            logger.warning("[Buyer] 读取 buyer.max_orders_per_day 失败，回落到实例配置快照")
+            return int(getattr(self.config, "max_orders_per_day", 0) or 0)
+
     async def buy(
         self,
         task_id: str,
@@ -135,6 +149,26 @@ class Buyer:
                     ),
                     error="db duplicate",
                 )
+
+            # 2.5 单日真实落单上限护栏（FR-A-4 / T02589）
+            # 演练（dry_run）不产生真实订单：既不占额度，也不受额度限制
+            if not dry_run:
+                limit = self._daily_order_limit()
+                if limit > 0:
+                    today_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                    used = self.repo.count_real_orders_since(today_start)
+                    if used >= limit:
+                        logger.warning(
+                            f"[Buyer] 单日抢单上限 {limit} 已用尽（今日已真实落单 {used} 次），"
+                            f"拦截 {item_id}"
+                        )
+                        return BuyResult(
+                            outcome=BuyOutcome.FAILED,
+                            error=(
+                                f"单日抢单上限 {limit} 已用尽（本 UTC 自然日已真实落单 {used} 次），"
+                                "本次被护栏拦截；可在「抢单策略 → 抢单运行时参数」调整"
+                            ),
+                        )
 
             # 3. 节流：两次落单间最小间隔
             wait = self.config.min_interval_between_orders - (time.monotonic() - self._last_buy_at)

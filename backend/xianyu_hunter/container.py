@@ -460,6 +460,9 @@ def build_default_container(
                 confirm_button_timeout=buyer_cfg.confirm_button_timeout,
                 price_tolerance=buyer_cfg.price_tolerance,
                 min_interval_between_orders=buyer_cfg.min_interval_between_orders,
+                # FR-A-4（T02589）：护栏值同时作为快照传入；Buyer 内还会实时读 YAML，
+                # 保证用户在前端改完立即生效（与 takeover_timeout_min 同口径）
+                max_orders_per_day=buyer_cfg.max_orders_per_day,
             ),
         )
 

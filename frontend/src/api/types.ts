@@ -103,6 +103,8 @@ export interface AppConfig {
     price_tolerance: number
     min_interval_between_orders: number
     takeover_timeout_min: number
+    // FR-A-4（T02589）：真实护栏，0＝不限制；按 UTC 自然日统计 type='real' 的落单数
+    max_orders_per_day: number
   }
   // 账号轮换调度器参数（对应后端 AccountRotatorConfig 模型）
   account_rotator: {

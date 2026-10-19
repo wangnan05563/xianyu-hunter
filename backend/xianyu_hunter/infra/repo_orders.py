@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -92,6 +94,23 @@ class OrdersMixin:
                 stmt = stmt.where(OrderRow.task_id == task_id)
             if item_id:
                 stmt = stmt.where(OrderRow.item_id == item_id)
+            if user_id is not None:
+                stmt = stmt.where(OrderRow.user_id == user_id)
+            return conn.execute(stmt).scalar() or 0
+
+    def count_real_orders_since(self, since: datetime, user_id: str | None = None) -> int:
+        """统计 since 之后的**真实落单**条数（单日上限护栏用，PRD FR-A-4 / T02589）
+
+        为什么排除 type='dry_run'：演练报告也写 orders 表（FR-C3-3），
+        若计入则每跑一次演练就吃掉一格真实配额，护栏会变成新的假限制。
+        口径与仪表盘「今日订单」同源：都用 db_models._utcnow() 的 UTC 自然日边界。
+        """
+        with self.engine.connect() as conn:
+            stmt = (
+                select(func.count(OrderRow.id))
+                .where(OrderRow.created_at >= since)
+                .where(OrderRow.type == "real")
+            )
             if user_id is not None:
                 stmt = stmt.where(OrderRow.user_id == user_id)
             return conn.execute(stmt).scalar() or 0
