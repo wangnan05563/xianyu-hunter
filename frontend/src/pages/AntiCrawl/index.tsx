@@ -30,7 +30,6 @@ import {
   ThunderboltOutlined,
   KeyOutlined,
   HeartOutlined,
-  ExclamationCircleOutlined,
   DownloadOutlined,
 } from '@ant-design/icons'
 import { anticrawlApi } from '../../api'
@@ -67,6 +66,143 @@ const WAF_LABELS: Record<string, string> = {
   clear: '正常',
   warning: '警告',
   blocked: '已熔断',
+}
+
+// ============== T02579（PRD 4.5-3 / 4.5-4 / 4.5-6）纯函数区 ==============
+// 全部提为模块级：便于单测直接断言文案，也让主组件 JSX 只负责摆放组件（S3776）
+
+// 4.5-4：后端层名是英文枚举（identity/session/tracking），直接拼进确认框标题就成了
+// 「确认失效 session 层？」这种只有读过代码才看得懂的话。中文化同时保留英文枚举名，
+// 因为审计日志与接口字段用的就是它。
+const LAYER_LABELS_CN: Record<string, string> = {
+  identity: '身份层',
+  session: '会话层',
+  tracking: '追踪层',
+}
+
+export const layerLabelCn = (layer: string): string => {
+  const cn = LAYER_LABELS_CN[layer]
+  return cn ? `${cn}（${layer}）` : layer
+}
+
+export type InvalidateLayerState = { valid?: boolean; cookie_count?: number }
+
+// 后果必须与后端一致：invalidate_cookie_layer 调 invalidate_layer(manual=True)，
+// 而 cookie_checker 的自动同步显式跳过 manual_invalidate 的层——所以主动失效不会被自愈，
+// 只能重新登录或重新提交该层 Cookie。旧的 Modal.confirm 只说「确认失效 session 层？」，
+// 把这个不可自愈的后果完全藏了起来。
+export function buildInvalidateLayerCopy(layer: string, state?: InvalidateLayerState) {
+  const cn = LAYER_LABELS_CN[layer] || layer
+  const isIdentity = layer === 'identity'
+  const count = state?.cookie_count ?? 0
+  return {
+    title: `确认失效${cn}？`,
+    action: `把${cn}标记为失效（manual_invalidate）`,
+    scope: isIdentity
+      ? `${cn}与其依赖的会话层（session 依赖 identity，会一并级联失效）；`
+        + '不删除 CookieStore 里已保存的 Cookie 明文，也不影响追踪层'
+      : `仅${cn}；不删除 CookieStore 里已保存的 Cookie 明文，不影响其他两层`,
+    count: `${cn}当前记录 ${count} 个 Cookie`,
+    recovery: '主动失效会打上「人工失效」标记，后台自动同步会跳过这一层，'
+      + '不会被自愈恢复；需要重新登录，或在「更新 Cookie」里重新提交该层 Cookie 才能恢复。'
+      + (isIdentity ? ' 因会话层已级联失效，恢复身份层后会话层也要重新续期一次。' : ''),
+  }
+}
+
+// 4.5-3：加载失败的原因要能读，而不是只剩 console.error
+export function describeAnticrawlError(error: unknown): string {
+  const status = (error as { response?: { status?: number } })?.response?.status
+  if (status === 401) return '未登录或登录已过期（401），请重新登录后重试'
+  if (status) return `接口返回 ${status}`
+  const msg = (error as { message?: string })?.message || ''
+  if (/timeout/i.test(msg)) return '请求超时，后端可能未就绪'
+  return msg || '请求失败'
+}
+
+export type AntiCrawlSectionKey = 'strategy' | 'session' | 'fingerprint' | 'freqStats' | 'cookieLayers'
+
+export const ANTI_CRAWL_SECTION_LABELS: Record<AntiCrawlSectionKey, string> = {
+  strategy: '登录策略评估',
+  session: '会话状态',
+  fingerprint: '指纹信息',
+  freqStats: '频率统计',
+  cookieLayers: 'Cookie 层状态',
+}
+
+// 顶部汇总条：把「哪几块没加载出来」一次说清，避免用户只看到半空的卡片矩阵
+export function buildAnticrawlErrorBanner(
+  errors: Partial<Record<AntiCrawlSectionKey, string>>,
+): { failedLabels: string[]; text: string } | null {
+  const keys = (Object.keys(errors) as AntiCrawlSectionKey[]).filter((k) => errors[k])
+  if (keys.length === 0) return null
+  const failedLabels = keys.map((k) => ANTI_CRAWL_SECTION_LABELS[k])
+  return {
+    failedLabels,
+    text: `${failedLabels.length} 项数据未能加载：${failedLabels.join('、')}。`
+      + '下方对应卡片显示为空白并不代表「没有数据」，请先点「重试失败项」。',
+  }
+}
+
+// 4.5-6：后端 _merge_existing_with_incoming 是「同名覆盖 value、其余保留、新名字按
+// .goofish.com 域写入」，而原文案只说「原子更新」——既没讲合并还是覆盖，
+// 「原子」在这里也没有跨层事务保证可依，属于说大话。
+export const COOKIE_MERGE_COPY = '提交后自动分类到身份层（identity）/ 会话层（session）/ 追踪层（tracking），'
+  + '并与现有 Cookie 合并：文本框里出现的同名项覆盖其值，未出现的项保持不变，'
+  + '新名字以 .goofish.com 域写入。'
+
+// 导入前脏文本确认：真实风险是「静默丢弃手改内容」，数量取两边的真实解析条数
+export function buildImportOverrideCopy(currentCount: number, incomingCount: number) {
+  return {
+    title: '导入会覆盖文本框当前内容？',
+    action: `用${currentCount > 0 ? '浏览器里的 ' : ''}Cookie 替换文本框内容`,
+    scope: '只改弹窗文本框，不写入后端；点「更新」才真正分层落库。'
+      + '你在文本框里手改的内容不会被合并保留',
+    count: currentCount > 0
+      ? `文本框现有 ${currentCount} 项 → 将被浏览器导入的 ${incomingCount} 项替换`
+      : `文本框为空 → 填入浏览器导入的 ${incomingCount} 项`,
+    recovery: '尚未写入后端，取消即可回到当前文本框；已手改的值若要保留，请取消后手动复制出来。',
+  }
+}
+
+// 4.5-3：卡片级失败/空态。原来 5 个 fetch* 只 console.error，接口 401/超时后
+// 卡片整块空白，与「后端确实没有数据」长得一模一样。
+// loading/hasData 的判断也收在这里，主组件 JSX 不必再堆条件表达式（S3776）
+function SectionLoadError(props: {
+  readonly label: string
+  readonly error?: string
+  readonly loading: boolean
+  readonly hasData: boolean
+  readonly onRetry: () => void
+}) {
+  const { label, error, loading, hasData, onRetry } = props
+  const showEmpty = !error && !loading && !hasData
+  if (!error && !showEmpty) return null
+  const isError = Boolean(error)
+  return (
+    <Alert
+      type={isError ? 'error' : 'warning'}
+      showIcon
+      style={{ marginBottom: 12 }}
+      message={isError ? `${label}未能加载` : `暂无${label}数据`}
+      description={
+        <Space direction="vertical" size={4}>
+          <Text style={{ fontSize: 12 }}>
+            {isError
+              ? `${error}——下方空白不代表真的没有数据`
+              : '接口没有返回内容，通常是所属模块尚未初始化或该项确实为空'}
+          </Text>
+          <TipButton
+            size="small"
+            icon={<ReloadOutlined />}
+            tip={`重新加载${label}`}
+            onClick={onRetry}
+          >
+            重试
+          </TipButton>
+        </Space>
+      }
+    />
+  )
 }
 
 // 把 cookie 字符串解析为对象：支持分号/换行分隔，值中可含 = 号
@@ -222,6 +358,8 @@ type AntiCrawlSetters = {
   setHealth: (s: HealthReport | null) => void
   setLoadingStrategy: (b: boolean) => void
   setLoadingLayers: (b: boolean) => void
+  // T02579 / 4.5-3：失败原因必须可见，成功时清掉旧错误，避免「重试成功后仍挂着红条」
+  setLoadError: (k: AntiCrawlSectionKey, msg: string | null) => void
 }
 
 // S3776 修复：5 个数据加载函数全部移出主组件，主组件仅保留 useCallback 薄壳
@@ -230,7 +368,9 @@ const fetchStrategy = async (setters: AntiCrawlSetters) => {
     setters.setLoadingStrategy(true)
     const data = await anticrawlApi.getStrategy()
     setters.setStrategy(data)
+    setters.setLoadError('strategy', null)
   } catch (error) {
+    setters.setLoadError('strategy', describeAnticrawlError(error))
     console.error('加载策略失败', error)
   } finally {
     setters.setLoadingStrategy(false)
@@ -241,7 +381,9 @@ const fetchSession = async (setters: AntiCrawlSetters) => {
   try {
     const data = await anticrawlApi.getSessionStatus()
     setters.setSession(data)
+    setters.setLoadError('session', null)
   } catch (error) {
+    setters.setLoadError('session', describeAnticrawlError(error))
     console.error('加载会话状态失败', error)
   }
 }
@@ -250,7 +392,9 @@ const fetchFingerprint = async (setters: AntiCrawlSetters) => {
   try {
     const data = await anticrawlApi.getFingerprint()
     setters.setFingerprint(data)
+    setters.setLoadError('fingerprint', null)
   } catch (error) {
+    setters.setLoadError('fingerprint', describeAnticrawlError(error))
     console.error('加载指纹信息失败', error)
   }
 }
@@ -259,7 +403,9 @@ const fetchFreqStats = async (setters: AntiCrawlSetters) => {
   try {
     const data = await anticrawlApi.getFreqStats()
     setters.setFreqStats(data)
+    setters.setLoadError('freqStats', null)
   } catch (error) {
+    setters.setLoadError('freqStats', describeAnticrawlError(error))
     console.error('加载频率统计失败', error)
   }
 }
@@ -269,7 +415,9 @@ const fetchCookieLayers = async (setters: AntiCrawlSetters) => {
     setters.setLoadingLayers(true)
     const data = await anticrawlApi.getCookieLayers()
     setters.setCookieLayers(data)
+    setters.setLoadError('cookieLayers', null)
   } catch (error) {
+    setters.setLoadError('cookieLayers', describeAnticrawlError(error))
     console.error('加载 Cookie 层状态失败', error)
   } finally {
     setters.setLoadingLayers(false)
@@ -287,6 +435,15 @@ const fetchAll = async (setters: AntiCrawlSetters) => {
   ])
 }
 
+// 4.5-3：按卡片单独重试（整页「刷新」会把已正常的块也重拉一遍，失败块却可能被忽略）
+const SECTION_FETCHERS: Record<AntiCrawlSectionKey, (s: AntiCrawlSetters) => Promise<void>> = {
+  strategy: fetchStrategy,
+  session: fetchSession,
+  fingerprint: fetchFingerprint,
+  freqStats: fetchFreqStats,
+  cookieLayers: fetchCookieLayers,
+}
+
 // S3776 修复：操作处理函数体提取到模块级，主组件仅保留 useCallback 薄壳
 // 8 个 handle* 函数各含 try/catch/finally + 条件分支，每函数 +3~5 复杂度
 type AntiCrawlActionsParams = {
@@ -294,8 +451,10 @@ type AntiCrawlActionsParams = {
   useCdp: boolean
   importBrowser: string
   cookieInput: string
+  cookieInputDirty: boolean
   setCookieModalOpen: (b: boolean) => void
   setCookieInput: (s: string) => void
+  setCookieInputDirty: (b: boolean) => void
   setPrefillHint: (s: string) => void
   setLoadingInit: (b: boolean) => void
   setLoadingSession: (b: boolean) => void
@@ -362,20 +521,20 @@ const runHealthCheck = async (params: AntiCrawlActionsParams) => {
   }
 }
 
-const runInvalidateLayer = (layer: string, params: AntiCrawlActionsParams) => {
-  Modal.confirm({
-    title: `确认失效 ${layer} 层？`,
-    icon: <ExclamationCircleOutlined />,
-    content: layer === 'identity' ? 'identity 层失效会级联导致 session 层失效' : undefined,
-    onOk: async () => {
-      try {
-        const result = await anticrawlApi.invalidateLayer(layer)
-        handleAsyncResult(result, `层 ${layer} 已失效`, '操作失败', () => fetchCookieLayers(params.setters))
-      } catch (error) {
-        message.error('操作失败')
-        console.error(error)
-      }
-    },
+const runInvalidateLayer = (layer: string, params: AntiCrawlActionsParams, state?: InvalidateLayerState) => {
+  // T02579 / 4.5-4：原来标题是「确认失效 session 层？」这种英文层名，content 只对 identity
+  // 说一句级联，最关键的后遗症（manual_invalidate 会被自动同步跳过＝不会自愈）完全没写。
+  const copy = buildInvalidateLayerCopy(layer, state)
+  void confirmDanger(copy).then(async (ok: boolean) => {
+    if (!ok) return
+    try {
+      const result = await anticrawlApi.invalidateLayer(layer)
+      handleAsyncResult(result, `${LAYER_LABELS_CN[layer] || layer}已标记失效`, '操作失败',
+        () => fetchCookieLayers(params.setters))
+    } catch (error) {
+      message.error('操作失败')
+      console.error(error)
+    }
   })
 }
 
@@ -383,6 +542,7 @@ const runOpenCookieModal = async (params: AntiCrawlActionsParams) => {
   params.setCookieModalOpen(true)
   params.setCookieInput('')
   params.setPrefillHint('')
+  params.setCookieInputDirty(false)
   params.setLoadingPrefill(true)
   try {
     const result = await anticrawlApi.getCurrentCookies()
@@ -405,9 +565,18 @@ const runImportFromBrowser = async (params: AntiCrawlActionsParams) => {
       logImportPreviewFailure(result)
       return
     }
+    const incomingCount = result.imported_count ?? Object.keys(result.cookies).length
+    // T02579 / 4.5-6：导入是整框替换，不是合并。用户在预填文本框里手改过内容时，
+    // 直接覆盖等于静默丢弃他的输入——必须先确认，并把两边真实条数摆出来。
+    if (params.cookieInputDirty) {
+      const currentCount = Object.keys(parseCookieInput(params.cookieInput)).length
+      const ok = await confirmDanger(buildImportOverrideCopy(currentCount, incomingCount))
+      if (!ok) return
+    }
     params.setCookieInput(cookiesToString(result.cookies))
+    params.setCookieInputDirty(false)
     params.setPrefillHint(
-      `从 ${params.importBrowser === 'edge' ? 'Edge' : 'Chrome'} 导入 ${result.imported_count ?? 0} 个 Cookie，可直接点「更新」`,
+      `从 ${params.importBrowser === 'edge' ? 'Edge' : 'Chrome'} 导入 ${incomingCount} 个 Cookie，可直接点「更新」`,
     )
     message.success(result.message || '已导入到文本框')
   } catch (error) {
@@ -431,6 +600,7 @@ const runUpdateCookies = async (params: AntiCrawlActionsParams) => {
       message.success(result.message || `已更新 ${result.written} 个 Cookie`)
       params.setCookieModalOpen(false)
       params.setCookieInput('')
+      params.setCookieInputDirty(false)
       await fetchCookieLayers(params.setters)
     } else {
       message.error(result.error || '更新失败')
@@ -459,6 +629,21 @@ export default function AntiCrawl() {
   const [loadingHealth, setLoadingHealth] = useState(false)
   const [loadingLayers, setLoadingLayers] = useState(false)
 
+  // T02579 / 4.5-3：每块数据各自的失败原因（成功即清）；页面不再靠「空白」表达失败
+  const [loadErrors, setLoadErrors] = useState<Partial<Record<AntiCrawlSectionKey, string>>>({})
+  const setLoadError = useCallback((k: AntiCrawlSectionKey, msg: string | null) => {
+    setLoadErrors((prev) => {
+      if (msg === null) {
+        if (!prev[k]) return prev
+        const next = { ...prev }
+        delete next[k]
+        return next
+      }
+      if (prev[k] === msg) return prev
+      return { ...prev, [k]: msg }
+    })
+  }, [])
+
   // CDP 模式开关（持久化：刷新后保持上次设置）
   const [useCdp, setUseCdp] = usePersistentState<boolean>('xh.anticrawl.useCdp', false, {
     validator: (v): v is boolean => typeof v === 'boolean',
@@ -467,6 +652,9 @@ export default function AntiCrawl() {
   // Cookie 更新弹窗
   const [cookieModalOpen, setCookieModalOpen] = useState(false)
   const [cookieInput, setCookieInput] = useState('')
+  // T02579 / 4.5-6：只有用户真的编辑过文本框才算脏——预填与导入写回都不算，
+  // 否则每次导入都会自我确认一次
+  const [cookieInputDirty, setCookieInputDirty] = useState(false)
   const [loadingUpdate, setLoadingUpdate] = useState(false)
   // 弹窗预填：从后端读 cookie 写入文本框的过程状态
   const [loadingPrefill, setLoadingPrefill] = useState(false)
@@ -481,15 +669,27 @@ export default function AntiCrawl() {
   // setters 对象一次性构造，避免每个 load 都重新创建闭包
   const setters: AntiCrawlSetters = {
     setStrategy, setSession, setFingerprint, setFreqStats, setCookieLayers, setHealth,
-    setLoadingStrategy, setLoadingLayers,
+    setLoadingStrategy, setLoadingLayers, setLoadError,
   }
 
-  // S1854 修复：loadStrategy/loadFingerprint 仅在 loadAll 内部经由 fetchAll 间接调用，
-  // 直接删除 useCallback 包装器，避免无用赋值。其余 load* 在 setInterval/JSX 中被直接引用
+  // S1854 修复：load* 保留 useCallback 薄壳；T02579 起 loadStrategy/loadFingerprint 也被
+  // 各卡片的「重试」直接引用，不再是无用赋值。其余 load* 在 setInterval/JSX 中被直接引用
   const loadSession = useCallback(() => fetchSession(setters), [])
   const loadFreqStats = useCallback(() => fetchFreqStats(setters), [])
   const loadCookieLayers = useCallback(() => fetchCookieLayers(setters), [])
   const loadAll = useCallback(() => fetchAll(setters), [])
+  const loadStrategy = useCallback(() => fetchStrategy(setters), [])
+  const loadFingerprint = useCallback(() => fetchFingerprint(setters), [])
+
+  // 4.5-3：单卡片重试 + 顶部「重试失败项」（只重拉失败的那几块）
+  const retrySection = useCallback((k: AntiCrawlSectionKey) => {
+    void SECTION_FETCHERS[k](setters)
+  }, [])
+  const retryFailedSections = useCallback(() => {
+    const failed = (Object.keys(loadErrors) as AntiCrawlSectionKey[]).filter((k) => loadErrors[k])
+    if (failed.length === 0) return
+    void Promise.all(failed.map((k) => SECTION_FETCHERS[k](setters)))
+  }, [loadErrors])
 
   useEffect(() => {
     loadAll()
@@ -517,8 +717,10 @@ export default function AntiCrawl() {
     useCdp,
     importBrowser,
     cookieInput,
+    cookieInputDirty,
     setCookieModalOpen,
     setCookieInput,
+    setCookieInputDirty,
     setPrefillHint,
     setLoadingInit,
     setLoadingSession,
@@ -533,12 +735,15 @@ export default function AntiCrawl() {
   const handleStartSession = () => runStartSession(actionsParams)
   const handleStopSession = () => runStopSession(actionsParams)
   const handleHealthCheck = () => runHealthCheck(actionsParams)
-  const handleInvalidateLayer = (layer: string) => runInvalidateLayer(layer, actionsParams)
+  const handleInvalidateLayer = (layer: string, state?: InvalidateLayerState) =>
+    runInvalidateLayer(layer, actionsParams, state)
   const openCookieModal = () => runOpenCookieModal(actionsParams)
   const handleImportFromBrowser = () => runImportFromBrowser(actionsParams)
   const handleUpdateCookies = () => runUpdateCookies(actionsParams)
 
   // ============== 渲染 ==============
+
+  const errorBanner = buildAnticrawlErrorBanner(loadErrors)
 
   return (
     <div style={{ padding: 24 }}>
@@ -547,6 +752,30 @@ export default function AntiCrawl() {
           刷新
         </TipButton>
       </Space>
+
+      {/* 4.5-3：汇总条——哪几块没加载出来先说清楚，再逐卡给重试入口 */}
+      {errorBanner && (
+        <Alert
+          type="error"
+          showIcon
+          closable={false}
+          style={{ marginBottom: 16 }}
+          message={`${errorBanner.failedLabels.length} 项数据未能加载`}
+          description={
+            <Space direction="vertical" size={4}>
+              <Text style={{ fontSize: 12 }}>{errorBanner.text}</Text>
+              <TipButton
+                size="small"
+                icon={<ReloadOutlined />}
+                tip="只重拉失败的这几块，不影响其余卡片"
+                onClick={retryFailedSections}
+              >
+                重试失败项
+              </TipButton>
+            </Space>
+          }
+        />
+      )}
 
       <Row gutter={[16, 16]}>
         {/* ============== 策略评估 ============== */}
@@ -565,6 +794,13 @@ export default function AntiCrawl() {
               </Space>
             }
           >
+            <SectionLoadError
+              label="登录策略评估"
+              error={loadErrors.strategy}
+              loading={loadingStrategy}
+              hasData={Boolean(strategy)}
+              onRetry={() => retrySection('strategy')}
+            />
             {strategy && (
               <>
                 <Alert
@@ -585,6 +821,15 @@ export default function AntiCrawl() {
                     </Space>
                   </Descriptions.Item>
                 </Descriptions>
+                {/* T02579 / 4.5-1：把「能不能点」说清楚。后端 /strategy/set 只写
+                    SessionStatus.strategy 这个展示字段（login_orchestrator 仅在
+                    get_session_status 里读它），登录路径实际由 LoginStrategySelector
+                    在初始化时评估选择——所以这里做成可点按钮等于给用户一个假开关，
+                    人工覆盖登录策略要等裁决 D-10 */}
+                <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+                  以上是协调器评估出的可选登录方式，实际用哪一种在「初始化协调器」时自动选定，
+                  本页不提供手动指定（人工覆盖登录策略待产品裁决 D-10）。
+                </Paragraph>
               </>
             )}
             <Divider style={{ margin: '12px 0' }} />
@@ -606,6 +851,8 @@ export default function AntiCrawl() {
         <SessionCardCol
           session={session}
           loadingSession={loadingSession}
+          sessionError={loadErrors.session}
+          onRetrySession={() => retrySection('session')}
           onStart={handleStartSession}
           onStop={handleStopSession}
         />
@@ -646,6 +893,13 @@ export default function AntiCrawl() {
               </Space>
             }
           >
+            <SectionLoadError
+              label="Cookie 层状态"
+              error={loadErrors.cookieLayers}
+              loading={loadingLayers}
+              hasData={Object.keys(cookieLayers?.layers ?? {}).length > 0}
+              onRetry={() => retrySection('cookieLayers')}
+            />
             {cookieLayers && (
               <Row gutter={[16, 16]}>
                 {Object.entries(cookieLayers.layers).map(([layer, state]) => (
@@ -655,7 +909,8 @@ export default function AntiCrawl() {
                         status={state.valid ? 'success' : 'default'}
                         text={
                           <Text strong style={{ fontSize: 14 }}>
-                            {layer}
+                            {/* 4.5-4：层名中文化（保留英文枚举名，审计日志与接口字段用的是它） */}
+                            {layerLabelCn(layer)}
                           </Text>
                         }
                       />
@@ -673,7 +928,7 @@ export default function AntiCrawl() {
                           danger
                           type="link"
                           icon={<StopOutlined />}
-                          onClick={() => handleInvalidateLayer(layer)}
+                          onClick={() => handleInvalidateLayer(layer, state)}
                           style={{ padding: '4px 0', fontSize: 12 }}
                         >
                           主动失效
@@ -710,6 +965,13 @@ export default function AntiCrawl() {
               </Space>
             }
           >
+            <SectionLoadError
+              label="指纹信息"
+              error={loadErrors.fingerprint}
+              loading={false}
+              hasData={Boolean(fingerprint)}
+              onRetry={() => retrySection('fingerprint')}
+            />
             {fingerprint?.profile ? (
               <Descriptions column={2} size="small" bordered>
                 <Descriptions.Item label="Profile" span={2}>
@@ -774,6 +1036,13 @@ export default function AntiCrawl() {
               />
             }
           >
+            <SectionLoadError
+              label="频率统计"
+              error={loadErrors.freqStats}
+              loading={false}
+              hasData={Boolean(freqStats)}
+              onRetry={() => retrySection('freqStats')}
+            />
             {freqStats && (
               <Row gutter={[16, 16]}>
                 <Col span={8}>
@@ -845,6 +1114,7 @@ export default function AntiCrawl() {
         onCancel={() => {
           setCookieModalOpen(false)
           setCookieInput('')
+          setCookieInputDirty(false)
           setPrefillHint('')
         }}
         confirmLoading={loadingUpdate}
@@ -854,7 +1124,10 @@ export default function AntiCrawl() {
       >
         <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
           系统已自动从 CookieStore 读取当前 Cookie 预填到下方文本框。
-          提交后会自动分类到 identity / session / tracking 三层并原子更新。
+          {/* 4.5-6：原文只说「原子更新」，既没讲合并还是覆盖（后端
+              _merge_existing_with_incoming 走的是同名覆盖、其余保留），
+              「原子」在这里也没有跨层事务保证——按真实语义重写 */}
+          {COOKIE_MERGE_COPY}
         </Paragraph>
 
         {/* 浏览器导入工具栏 */}
@@ -869,20 +1142,24 @@ export default function AntiCrawl() {
             ]}
           />
           <TipButton
-            tip="从浏览器导入 Cookie 覆盖文本框"
+            tip="从浏览器读取 Cookie 并整框替换文本框内容（不合并）"
             icon={<DownloadOutlined />}
             loading={loadingImport}
             onClick={handleImportFromBrowser}
             style={{ flex: 1 }}
           >
-            从浏览器导入（覆盖文本框）
+            从浏览器导入（替换文本框）
           </TipButton>
         </Space.Compact>
 
         <Spin spinning={loadingPrefill} tip="正在读取当前 Cookie...">
           <Input.TextArea
             value={cookieInput}
-            onChange={(e) => setCookieInput(e.target.value)}
+            onChange={(e) => {
+              setCookieInput(e.target.value)
+              // 只有用户编辑过才算脏：预填与导入写回不置脏，避免自我确认
+              setCookieInputDirty(true)
+            }}
             placeholder="_m_h5_tk=token_123; _m_h5_tk_enc=enc_123; unb=123456; ..."
             rows={8}
             style={{ fontFamily: 'monospace', fontSize: 12 }}
@@ -906,10 +1183,12 @@ export default function AntiCrawl() {
 function SessionCardCol(props: {
   readonly session: SessionStatus | null
   readonly loadingSession: boolean
+  readonly sessionError?: string
+  readonly onRetrySession: () => void
   readonly onStart: () => void
   readonly onStop: () => void
 }) {
-  const { session, loadingSession, onStart, onStop } = props
+  const { session, loadingSession, sessionError, onRetrySession, onStart, onStop } = props
   return (
     <Col xs={24} lg={12}>
       <Card
@@ -923,6 +1202,13 @@ function SessionCardCol(props: {
           </Space>
         }
       >
+        <SectionLoadError
+          label="会话状态"
+          error={sessionError}
+          loading={loadingSession}
+          hasData={Boolean(session)}
+          onRetry={onRetrySession}
+        />
         {session && !session.active && session.cookie_layers?.identity && (
           <Alert
             type="warning"
