@@ -267,8 +267,17 @@ def tunnel_config_save(body: TunnelConfigBody) -> JSONResponse:
     # 配置变更后重置 service 单例，下次 start 时按新配置创建 provider
     # 异步 stop 旧 service：Tailscale 等慢命令可能阻塞 10-30s，
     # 同步 stop 会导致前端 axios 超时报"配置保存失败"
+    # T02590 / FR-F-1：这段「重建服务 = 正在运行的隧道立刻断开」是保存的真实副作用，
+    # 回执文案必须与之一致。旧文案「下次启动隧道时生效」在运行态是假话——
+    # 用户以为不影响现网，实际公网地址当场失效。
     global _tunnel_service
+    was_running = False
     if _tunnel_service is not None:
+        try:
+            was_running = _tunnel_service.status() == "running"
+        except Exception:
+            # 状态探测失败按「不确定」处理：宁可提示可能断线，也不谎报「不影响当前隧道」
+            was_running = True
         old_service = _tunnel_service
         _tunnel_service = None
         import threading
@@ -280,7 +289,14 @@ def tunnel_config_save(body: TunnelConfigBody) -> JSONResponse:
                 logging.getLogger(__name__).warning(f"配置保存后停止旧隧道失败（忽略）: {e}")
         threading.Thread(target=_async_stop, daemon=True, name="tunnel-stop-on-config").start()
 
-    return JSONResponse({"ok": True, "message": "配置已保存，下次启动隧道时生效"})
+    message = (
+        "配置已保存；已按新配置重建隧道服务，当前隧道已断开、公网地址失效，需手动重新启动隧道"
+        if was_running
+        else "配置已保存，下次启动隧道时生效（当前无运行中的隧道）"
+    )
+    return JSONResponse(
+        {"ok": True, "message": message, "tunnel_was_running": was_running}
+    )
 
 
 # ---------- Cloudflare Named Tunnel 配置向导端点（需认证） ----------

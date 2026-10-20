@@ -24,6 +24,15 @@ export interface TunnelConfig {
   cert_file_configured: boolean
 }
 
+// POST /config 的回执（T02590 / FR-F-1）
+// 生效文案由后端给出，前端不再自行猜测「保存是否影响当前隧道」——后端在保存时会重建
+// 隧道服务并停掉旧进程，运行态保存等于当场断线，这句话只能由知道真相的一侧说。
+export interface TunnelConfigSaveResult {
+  ok: boolean
+  message: string
+  tunnel_was_running: boolean
+}
+
 export interface TunnelConfigBody {
   provider: string
   local_port: number
@@ -104,7 +113,7 @@ export const tunnelApi = {
     client.get<TunnelConfig>('/api/tunnel/config').then((r) => r.data),
 
   saveConfig: (body: TunnelConfigBody) =>
-    client.post<{ ok: boolean; message: string }>('/api/tunnel/config', body).then((r) => r.data),
+    client.post<TunnelConfigSaveResult>('/api/tunnel/config', body).then((r) => r.data),
 
   // Named Tunnel 配置向导
   // login 两阶段：start 启动子进程拿授权 URL，status 轮询 cert.pem 是否生成

@@ -88,6 +88,97 @@ function getCurrentStep(config: TunnelConfig): number {
   return 0
 }
 
+// ============ T02590 / PRD 4.6：表单脏检测与后端驱动文案（纯函数，便于单测） ============
+
+export interface TunnelFormState {
+  provider: string
+  local_port: number
+  cpolar_authtoken: string
+  binary_path: string
+  auto_start: boolean
+  tunnel_mode: 'quick' | 'named'
+}
+
+// 与 handleSaveConfig 提交字段一一对应；向导落库的字段（tunnel_name/tunnel_id/hostname 等）
+// 不在此列，因为它们在向导里即时保存、表单不承载编辑入口。
+export const TUNNEL_FORM_FIELD_LABELS: Record<keyof TunnelFormState, string> = {
+  provider: '穿透服务',
+  local_port: '本地端口',
+  cpolar_authtoken: 'Authtoken',
+  binary_path: '二进制路径',
+  auto_start: '开机自启动',
+  tunnel_mode: '隧道模式',
+}
+
+/**
+ * 列出「表单值与已保存配置不一致」的字段（4.6-2）。
+ *
+ * 旧实现只在 provider 变化时才先保存配置，其余字段（端口/模式/自启动/二进制路径）改了
+ * 直接点「启动隧道」，启动用的仍是旧配置——用户以为在跑刚设置的东西，实际跑的是上一次的。
+ * authtoken 只在非空时算脏（后端约定：空串=不修改）。
+ */
+export function tunnelDirtyFields(config: TunnelConfig | null, form: TunnelFormState): string[] {
+  if (config == null) return []
+  const dirty: string[] = []
+  if (form.provider !== config.provider) dirty.push(TUNNEL_FORM_FIELD_LABELS.provider)
+  if (form.local_port !== config.local_port) dirty.push(TUNNEL_FORM_FIELD_LABELS.local_port)
+  if (form.binary_path !== config.binary_path) dirty.push(TUNNEL_FORM_FIELD_LABELS.binary_path)
+  if (form.auto_start !== config.auto_start) dirty.push(TUNNEL_FORM_FIELD_LABELS.auto_start)
+  if (form.tunnel_mode !== config.tunnel_mode) dirty.push(TUNNEL_FORM_FIELD_LABELS.tunnel_mode)
+  if (form.cpolar_authtoken.trim() !== '') dirty.push(TUNNEL_FORM_FIELD_LABELS.cpolar_authtoken)
+  return dirty
+}
+
+/**
+ * 保存回执文案（4.6-1 后端侧）：以 `POST /config` 返回的 message 为准，
+ * 前端不再自行判断「保存是否断当前隧道」。回退分支只在后端未回传时启用，
+ * 且回退文案同样区分运行态，不写「下次启动生效」这种运行态假话。
+ */
+export function buildTunnelSaveCopy(
+  result: { message?: string; tunnel_was_running?: boolean } | null | undefined,
+  autoStart: boolean,
+  wasRunning: boolean,
+): { level: 'success' | 'warning'; text: string } {
+  if (autoStart) {
+    return { level: 'success', text: '配置已同步，正在启动隧道...' }
+  }
+  if (result?.message) {
+    return { level: result.tunnel_was_running ? 'warning' : 'success', text: result.message }
+  }
+  const running = result?.tunnel_was_running ?? wasRunning
+  return running
+    ? { level: 'warning', text: '配置已保存；当前隧道已断开，公网地址失效，需要手动重新启动隧道' }
+    : { level: 'success', text: '配置已保存，下次启动隧道时生效（当前无运行中的隧道）' }
+}
+
+/**
+ * 向导步骤 ②③ 被禁用时的原因说明（4.6-4）。
+ * 旧实现只有 `opacity:0.5`，鼠标点上去既不解释为什么不能点，也不说要点哪儿才能解锁。
+ */
+export function wizardLockedTips(config: TunnelConfig): { create: string; dns: string } {
+  return {
+    create: config.cert_file
+      ? '创建命名隧道（或重新创建）'
+      : '暂不可用：需先完成 ① 授权登录（拿到 cert.pem 后才能创建隧道）',
+    dns: config.tunnel_id
+      ? '配置 DNS 路由（CNAME 记录）'
+      : '暂不可用：需先完成 ② 创建隧道（拿到 tunnel_id 后才能绑定域名）',
+  }
+}
+
+/** 停止隧道的确认四要素文案（4.6-5：停止是破坏性操作，且地址会变） */
+export function buildTunnelStopCopy(provider: string, publicUrl: string | null) {
+  return {
+    title: '停止当前隧道？',
+    action: '停掉正在运行的隧道进程',
+    scope: `公网地址 ${publicUrl || '（未获取到）'}，本地端口转发到已保存的 local_port`,
+    count: '正在运行的隧道 1 条（' + provider + '）',
+    recovery: publicUrl
+      ? '隧道停止后该地址立即无法访问；重新启动会拿到新的随机地址（快速模式），已分享出去的链接需要重新提供。固定域名模式重启后地址不变。'
+      : '重新启动后需重新复制新的公网地址。',
+  }
+}
+
 // 执行 Cloudflare 登录流程。提取为模块级函数降低 NamedTunnelWizard 认知复杂度（S3776），
 // 通过 callbacks 注入状态 setter，避免直接依赖组件闭包
 async function doCloudflareLogin(handlers: {
@@ -227,6 +318,9 @@ function NamedTunnelWizard({
     loginButtonText = '重新授权'
   }
 
+  // 4.6-4：置灰步骤必须说清「被什么卡住」，而不是只降透明度
+  const lockedTips = wizardLockedTips(config)
+
   return (
     <Card
       title={
@@ -241,6 +335,20 @@ function NamedTunnelWizard({
       size="small"
       style={{ marginTop: 8 }}
     >
+      {/* 4.6-4：本页同时存在两套持久化模型，口径写在最显眼处而不是留给用户猜 */}
+      <Alert
+        type="warning"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="向导的每一步点了就直接写入配置，无需再点下方「保存配置」"
+        description={
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            上方「Provider 配置」表单是草稿态——改完必须点「保存配置」才落库；
+            本向导（授权 / 创建隧道 / 配置 DNS）是即时生效态——每完成一步立即持久化，
+            与表单的保存按钮互不相干。混用时的常见误解是「向导做完了还要点保存」，实际不需要。
+          </Text>
+        }
+      />
       <Steps
         current={currentStep}
         size="small"
@@ -317,7 +425,7 @@ function NamedTunnelWizard({
             </Col>
             <Col>
               <TipButton
-                tip="创建命名隧道（或重新创建）"
+                tip={lockedTips.create}
                 type={config.tunnel_id ? 'default' : 'primary'}
                 icon={createLoading ? <LoadingOutlined /> : undefined}
                 loading={createLoading}
@@ -358,7 +466,7 @@ function NamedTunnelWizard({
             </Col>
             <Col>
               <TipButton
-                tip="配置 DNS 路由（CNAME 记录）"
+                tip={lockedTips.dns}
                 type={config.hostname ? 'default' : 'primary'}
                 icon={dnsLoading ? <LoadingOutlined /> : undefined}
                 loading={dnsLoading}
@@ -388,7 +496,7 @@ export default function Tunnel() {
   const [stopping, setStopping] = useState(false)
   const [savingConfig, setSavingConfig] = useState(false)
 
-  // 配置表单（本地编辑态，保存后才生效）
+  // 配置表单（本地草稿态：点「保存配置」或「启动隧道」时才落库；固定域名向导是即时落库）
   const [formProvider, setFormProvider] = useState('cloudflare')
   const [formAuthtoken, setFormAuthtoken] = useState('')
   const [formPort, setFormPort] = useState(0)
@@ -403,13 +511,30 @@ export default function Tunnel() {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // 4.6-3：加载失败必须可见。旧实现只 console.error，配置加载失败（如 401）时
+  // 表单回落到默认 cloudflare、向导整块消失，页面却照常显示「○ 已停止」——
+  // 用户读到的是「隧道是停的」，真相是「我根本没读到你现在的状态」。
+  const [loadErrors, setLoadErrors] = useState<{ status: string | null; config: string | null }>({
+    status: null,
+    config: null,
+  })
+
+  const describeError = (error: any, fallback: string) => {
+    const data = error?.response?.data
+    const detail = typeof data === 'string' ? data : data?.detail
+    if (error?.response?.status === 401) return '未登录或登录已过期（401），请重新登录后重试'
+    return detail || fallback
+  }
+
   // 加载状态
   const loadStatus = useCallback(async () => {
     try {
       const data = await tunnelApi.getStatus()
       setStatus(data)
+      setLoadErrors((prev) => ({ ...prev, status: null }))
     } catch (error) {
       console.error('加载隧道状态失败', error)
+      setLoadErrors((prev) => ({ ...prev, status: describeError(error, '隧道状态加载失败') }))
     }
   }, [])
 
@@ -425,20 +550,24 @@ export default function Tunnel() {
       setFormTunnelMode(data.tunnel_mode)
       // authtoken 不回显明文，已配置时显示占位
       setFormAuthtoken('')
+      setLoadErrors((prev) => ({ ...prev, config: null }))
     } catch (error) {
       // 401 表示未登录，配置端点需认证
       console.error('加载隧道配置失败', error)
+      setLoadErrors((prev) => ({ ...prev, config: describeError(error, '隧道配置加载失败') }))
     }
   }, [])
 
+  const reloadAll = useCallback(async () => {
+    setLoading(true)
+    await Promise.all([loadStatus(), loadConfig()])
+    setLoading(false)
+  }, [loadStatus, loadConfig])
+
   // 初始加载
   useEffect(() => {
-    (async () => {
-      setLoading(true)
-      await Promise.all([loadStatus(), loadConfig()])
-      setLoading(false)
-    })()
-  }, [loadStatus, loadConfig])
+    void reloadAll()
+  }, [reloadAll])
 
   // 运行中时轮询状态（检测进程退出、URL 变化）
   useEffect(() => {
@@ -453,11 +582,22 @@ export default function Tunnel() {
     }
   }, [status?.status, loadStatus])
 
+  // 4.6-2：表单是否脏（任一字段与已保存配置不一致）
+  const dirtyFields = tunnelDirtyFields(config, {
+    provider: formProvider,
+    local_port: formPort,
+    cpolar_authtoken: formAuthtoken,
+    binary_path: formBinaryPath,
+    auto_start: formAutoStart,
+    tunnel_mode: formTunnelMode,
+  })
+
   // 启动隧道
   const handleStart = async () => {
-    // 表单中的 provider 与已保存不一致时，先同步配置再启动。
-    // 否则后端读到的仍是旧 provider，启动的还是 Cloudflare。
-    if (config && formProvider !== config.provider) {
+    // 4.6-2：任一字段脏都先落库再启动。
+    // 旧实现只在 provider 变化时同步配置，端口/隧道模式/自启动改了直接点启动，
+    // 跑起来的仍是上一次保存的配置——「我改的没生效」且界面上没有任何提示。
+    if (config && dirtyFields.length > 0) {
       const ok = await handleSaveConfig(true)
       if (!ok) return
     }
@@ -487,12 +627,24 @@ export default function Tunnel() {
   }
 
   // 停止隧道
+  // 4.6-5：停止是破坏性操作且地址会变（快速模式下重启即换 URL），
+  // 旧实现一键直接断，用户是在「试一下」的心态下把现网连接掐掉的。
   const handleStop = async () => {
+    // 运行中的 provider 以后端 status 为准，表单值只是草稿
+    const copy = buildTunnelStopCopy(status?.provider || formProvider, status?.public_url ?? null)
+    const confirmed = await confirmDanger({
+      title: copy.title,
+      action: copy.action,
+      scope: copy.scope,
+      count: copy.count,
+      recovery: copy.recovery,
+    })
+    if (!confirmed) return
     setStopping(true)
     try {
       const data = await tunnelApi.stop()
       setStatus(data)
-      message.success('隧道已关闭')
+      message.success('隧道已关闭，公网地址已失效')
     } catch (error: any) {
       message.error(error?.response?.data?.detail || '停止失败')
     } finally {
@@ -501,12 +653,12 @@ export default function Tunnel() {
   }
 
   // 保存配置
-  // auto_start=true 时表示启动隧道前的自动同步，文案要即时反馈；
-  // 手动点保存按钮时 next 启动才生效，文案应强调"下次启动生效"
+  // 生效语义由后端回执驱动（T02590 / 4.6-1）：后端在保存时会重建隧道服务，
+  // 运行态保存等于当场断线——这句话只能由知道真相的一侧说，前端不再自行猜测。
   const handleSaveConfig = async (autoStart = false): Promise<boolean> => {
     setSavingConfig(true)
     try {
-      await tunnelApi.saveConfig({
+      const result = await tunnelApi.saveConfig({
         provider: formProvider,
         local_port: formPort,
         // 空串表示不修改已有 authtoken
@@ -521,15 +673,12 @@ export default function Tunnel() {
         hostname: config?.hostname || '',
         cert_file: config?.cert_file || '',
       })
-      // T02573：后端 POST /config 在隧道运行中会重建服务并停掉旧隧道，
-      // 所以「下次启动生效」在运行态是假话——按是否运行中分叉文案
       const wasRunning = status?.status === 'running'
-      if (autoStart) {
-        message.success('配置已同步，正在启动隧道...')
-      } else if (wasRunning) {
-        message.warning('配置已保存；当前隧道已断开，公网地址失效，需要手动重新启动隧道')
+      const copy = buildTunnelSaveCopy(result, autoStart, wasRunning)
+      if (copy.level === 'warning') {
+        message.warning(copy.text)
       } else {
-        message.success('配置已保存，下次启动隧道时生效')
+        message.success(copy.text)
       }
       await loadConfig()
       return true
@@ -574,17 +723,54 @@ export default function Tunnel() {
   const displayProvider = status?.provider && status.status === 'running' ? status.provider : formProvider
   const isCloudflareDisplay = displayProvider === 'cloudflare'
 
+  // 保存按钮提示：配置没读到时不能假装能保存（点了会拿默认值覆盖真实配置）
+  let saveButtonTip = '保存隧道配置（下次启动生效）'
+  if (config == null) {
+    saveButtonTip = '配置未加载成功，暂时无法保存（请先点上方「重试」）'
+  } else if (isRunning) {
+    saveButtonTip = '保存隧道配置（当前隧道会立即断开，需重新启动）'
+  }
+
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      {/* 4.6-3：加载失败如实渲染并可重试，而不是让页面继续显示一个编出来的「已停止」 */}
+      {(loadErrors.status || loadErrors.config) && (
+        <Alert
+          type="error"
+          showIcon
+          message="隧道信息未能加载"
+          description={
+            <Space direction="vertical" size={4}>
+              {loadErrors.status && <Text>状态：{loadErrors.status}</Text>}
+              {loadErrors.config && (
+                <Text>配置：{loadErrors.config}（配置缺失时表单回落默认值、固定域名向导不会显示）</Text>
+              )}
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                恢复前请勿依据本页展示判断隧道真实状态；点击「重试」或重新登录后再看。
+              </Text>
+            </Space>
+          }
+          action={
+            <TipButton tip="重新加载隧道状态与配置" size="small" onClick={() => void reloadAll()}>
+              重试
+            </TipButton>
+          }
+        />
+      )}
+
       {/* 状态卡片 */}
       <Card>
         <Row align="middle" gutter={[16, 16]}>
           <Col flex="auto">
             <Space direction="vertical" size="small" style={{ width: '100%' }}>
               <Space>
-                <Tag color={isRunning ? 'green' : 'default'}>
-                  {isRunning ? '● 运行中' : '○ 已停止'}
-                </Tag>
+                {loadErrors.status ? (
+                  <Tag color="orange">状态未知（读取失败）</Tag>
+                ) : (
+                  <Tag color={isRunning ? 'green' : 'default'}>
+                    {isRunning ? '● 运行中' : '○ 已停止'}
+                  </Tag>
+                )}
                 <Tag icon={<CloudServerOutlined />}>
                   {TUNNEL_PROVIDERS[displayProvider]?.label || displayProvider}
                 </Tag>
@@ -603,7 +789,9 @@ export default function Tunnel() {
                   <Text type="success" strong>{status.public_url}</Text>
                 </Paragraph>
               ) : (
-                <Text type="secondary">隧道未启动，暂无公网地址</Text>
+                <Text type="secondary">
+                  {loadErrors.status ? '状态读取失败，暂无法确认公网地址' : '隧道未启动，暂无公网地址'}
+                </Text>
               )}
             </Space>
           </Col>
@@ -632,6 +820,7 @@ export default function Tunnel() {
               {status?.public_url && (
                 <TipButton
                   tip="在新窗口打开公网地址"
+                  aria-label="打开公网地址"
                   icon={<LinkOutlined />}
                   onClick={() => window.open(status.public_url!, '_blank')}
                 />
@@ -848,13 +1037,27 @@ export default function Tunnel() {
             </Col>
           </Row>
 
+          {/* 4.6-2：表单脏了要显式说，不能让「改了没生效」静默发生 */}
+          {config && dirtyFields.length > 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              message={`有 ${dirtyFields.length} 项未保存的修改：${dirtyFields.join('、')}`}
+              description={
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  当前运行中的隧道用的仍是已保存的配置。点「保存配置」立即落库；
+                  点「启动隧道」会先自动保存这些修改再启动。
+                </Text>
+              }
+            />
+          )}
+
           <TipButton
-            tip={isRunning
-              ? '保存隧道配置（当前隧道会立即断开，需重新启动）'
-              : '保存隧道配置（下次启动生效）'}
+            tip={saveButtonTip}
             type="primary"
             danger={isRunning}
             loading={savingConfig}
+            disabled={config == null}
             onClick={() => void handleSaveClick()}
           >
             保存配置
@@ -869,8 +1072,8 @@ export default function Tunnel() {
         message="使用说明"
         description={
           <Space direction="vertical" size="small">
-            <Text>1. 选择 Provider 和模式并保存配置</Text>
-            <Text>2. 固定域名模式：按向导完成授权 → 创建隧道 → 配置 DNS 三步</Text>
+            <Text>1. 选择 Provider 和模式并保存配置（表单改动需点「保存配置」才落库；点「启动隧道」会自动先保存）</Text>
+            <Text>2. 固定域名模式：按向导完成授权 → 创建隧道 → 配置 DNS 三步，向导每一步即时保存，无需再点「保存配置」</Text>
             <Text>3. 点击"启动隧道"，系统将检测或准备 Provider CLI 并建立公网连接</Text>
             <Text>4. 复制公网地址，在手机浏览器打开即可远程访问</Text>
             <Text>5. 隧道运行期间请勿关闭本程序</Text>
