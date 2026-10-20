@@ -277,10 +277,14 @@ def test_daily_summary_memory_only_when_no_file(reset_state) -> None:
 
 
 def test_daily_summary_date_is_today(reset_state) -> None:
-    """汇总日期应为今日（UTC）"""
+    """汇总日期应为今日——口径与实现同源（本地日，见 ai_usage._date_key_of 的决策注释）
+
+    原来这里写死 `datetime.now(timezone.utc)`，与实现的「本地时区分桶」不一致：
+    北京时间 00:00–07:59 之间两个口径的「今日」差一天，测试会必然失败。
+    改为读实现自己的日期键，既锁住决策，也不再随跑批时间飘。
+    """
     summary = get_daily_summary()
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    assert summary.date == today
+    assert summary.date == ai_usage._today_key()
 
 
 def test_daily_summary_loads_from_file_when_memory_empty(reset_state) -> None:
@@ -325,7 +329,7 @@ def test_get_recent_usage_includes_today(reset_state) -> None:
     record_usage("ep", "gpt-4o-mini", _make_response(100, 50))
     result = get_recent_usage(days=7)
     assert len(result) >= 1
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = ai_usage._today_key()  # 与实现同源的本地日期键
     today_entry = next(r for r in result if r["date"] == today)
     assert today_entry["total_calls"] == 1
     assert today_entry["total_input_tokens"] == 100
@@ -335,8 +339,8 @@ def test_get_recent_usage_includes_today(reset_state) -> None:
 def test_get_recent_usage_includes_history_from_file(reset_state) -> None:
     """应从文件加载历史日期数据"""
     # 写入一条昨日记录
-    yesterday = datetime.now(timezone.utc).timestamp() - 86400
-    yesterday_str = datetime.fromtimestamp(yesterday, tz=timezone.utc).strftime("%Y-%m-%d")
+    yesterday = time.time() - 86400
+    yesterday_str = ai_usage._date_key_of(yesterday)  # 分桶口径与实现一致（本地日）
     data = {"records": [{
         "timestamp": yesterday,
         "endpoint": "ep",
