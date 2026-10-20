@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react'
 import {
   Alert,
   Button,
+  Checkbox,
   Drawer,
   Form,
   Input,
@@ -31,10 +32,11 @@ import {
   TableOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
-import { dbAdminApi, type DbColumn, type DbTableInfo } from '../../api/dbAdmin'
+import { dbAdminApi, type CascadeRelation, type DbColumn, type DbTableInfo } from '../../api/dbAdmin'
 import { useSearch } from '../../hooks/useSearch'
 import { useSearchHistory } from '../../hooks/useSearchHistory'
 import { TipButton } from '@/components/TipButton'
+import DangerSummary from '@/components/DangerSummary'
 
 // 与后端约定的危险操作确认 token
 const CONFIRM_TOKEN = 'CONFIRM_DELETE'
@@ -154,26 +156,106 @@ export function buildRowSummary(row?: Record<string, unknown>): string {
   return picked.join(' · ')
 }
 
-// 构建级联影响预览 HTML：被 openDeleteConfirm 与 openBatchDeleteConfirm 共用
-// 为什么提取：两个函数原本各自重复 try/catch + if(relations.length>0) + for + 三元 icon 链，
-// 单函数复杂度 9+；提取后调用方仅剩单行 await，主函数复杂度降低 9
-async function buildCascadeHtml(
+// 级联影响预览的状态（T02576 / 4.2-5）
+// 旧实现把预览结果拼成 HTML 字符串塞进 dangerouslySetInnerHTML：
+// - 失败时只留一行灰字，「确认删除」按钮照常可提交（用户看不到影响就删）；
+// - 后端 description 里含表名等文本，走 innerHTML 是存储型 XSS 面（派生单 T02727）。
+// 改为结构化状态 + React 渲染：失败可重试，且失败期间确认按钮保持禁用。
+export type CascadeState =
+  | { status: 'loading' }
+  | { status: 'error'; detail: string }
+  | { status: 'empty' }
+  | { status: 'relations'; relations: CascadeRelation[]; total: number }
+
+export async function fetchCascadeState(
   table: string | null,
   keys: Array<string | number>,
-): Promise<string> {
-  if (!table) return '<p style="color:#999">加载中...</p>'
+): Promise<CascadeState> {
+  if (!table) return { status: 'error', detail: '未选中数据表' }
   try {
     const preview = await dbAdminApi.cascadePreview(table, keys)
-    if (preview.relations.length === 0) {
-      return '<p style="color:#52c41a">✓ 无关联数据，可安全删除</p>'
-    }
-    const items = preview.relations
-      .map((r) => `<li>${r.action === 'cascade' ? '🗑' : '✂'} ${r.description}</li>`)
-      .join('')
-    return `<p style="color:#faad14;margin-bottom:4px">⚠ 关联影响：共 ${preview.total_affected} 条关联数据将被处理</p><ul style="margin:0;padding-left:20px;font-size:12px;color:var(--xh-text-secondary)">${items}</ul>`
-  } catch {
-    return '<p style="color:#999">级联预览加载失败</p>'
+    if (preview.relations.length === 0) return { status: 'empty' }
+    return { status: 'relations', relations: preview.relations, total: preview.total_affected }
+  } catch (e: any) {
+    return { status: 'error', detail: e?.response?.data?.detail || e?.message || '未知错误' }
   }
+}
+
+/** 确认按钮解锁条件：确认码必须打对，且级联预览不能处于「加载中/失败」态 */
+export function isDeleteConfirmBlocked(token: string, cascade: CascadeState): boolean {
+  if (token !== CONFIRM_TOKEN) return true
+  return cascade.status === 'loading' || cascade.status === 'error'
+}
+
+/** 提交给后端的行数据（T02576 / 4.2-3）
+ *
+ * 三条口径：
+ * - 主键：update 模式绝不提交（后端不支持改主键，旧实现会静默丢弃后仍报「已更新」）；
+ * - 勾选「置为 NULL」的可空列：显式提交 null，这才是真正的清空；
+ * - 其余留空字段：不提交（保持原值），与旧行为一致，避免把 NOT NULL 列写空。
+ */
+export function buildSubmitValues(
+  columns: DbColumn[],
+  values: Record<string, unknown>,
+  nullFields: Set<string>,
+  mode: 'create' | 'update',
+): Record<string, unknown> {
+  const colByName = new Map(columns.map((c) => [c.name, c]))
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(values)) {
+    const col = colByName.get(k)
+    if (mode === 'update' && col?.primary_key) continue
+    if (nullFields.has(k) && col?.nullable && !col.primary_key) {
+      out[k] = null
+      continue
+    }
+    if (v === '' || v === undefined) continue
+    out[k] = v
+  }
+  return out
+}
+
+/** 把级联预览状态渲染成可见告警（不再用 innerHTML） */
+export function CascadeView({ state, onRetry }: { readonly state: CascadeState; readonly onRetry: () => void }) {
+  if (state.status === 'loading') {
+    return <Alert type="info" showIcon style={{ marginBottom: 12 }} message="级联影响预览加载中…" />
+  }
+  if (state.status === 'error') {
+    return (
+      <Alert
+        type="error"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="级联影响预览失败，删除已禁用"
+        description={(
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <span style={{ fontSize: 12 }}>{state.detail}</span>
+            <Button size="small" icon={<ReloadOutlined />} onClick={onRetry}>重试预览</Button>
+          </Space>
+        )}
+      />
+    )
+  }
+  if (state.status === 'empty') {
+    return <Alert type="success" showIcon style={{ marginBottom: 12 }} message="无关联数据，可安全删除" />
+  }
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ marginBottom: 12 }}
+      message={`关联影响：共 ${state.total} 条关联数据将被处理`}
+      description={(
+        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+          {state.relations.map((r) => (
+            <li key={`${r.table}.${r.fk}`}>
+              {r.action === 'cascade' ? '连同删除' : '仅解除关联'}：{r.description}
+            </li>
+          ))}
+        </ul>
+      )}
+    />
+  )
 }
 
 // 推断 antd 表单组件类型（动态表单渲染用）
@@ -190,12 +272,32 @@ function inferFormType(colType: string): 'text' | 'textarea' | 'number' | 'switc
 
 // 单元格编辑器：在 Modal 中根据列定义动态生成表单项
 // props 标记 readonly 防止组件内部意外修改父级传入数据（S6759）
-function ColumnFormFields({ columns, initial }: { readonly columns: DbColumn[]; readonly initial?: Record<string, unknown> }) {
+//
+// T02576 的两处名实对齐：
+// - update 模式下主键渲染为禁用输入并点名「主键不可修改」——旧注释写着禁用、控件却可编辑，
+//   用户改了主键点「更新」照样弹「已更新」（后端 continue 丢弃）；
+// - 可空列给出「置为 NULL」勾选框，勾选后输入禁用并显示将被清空——
+//   旧实现留空即不提交，用户没有任何办法把字段清空。
+function ColumnFormFields({
+  columns,
+  initial,
+  mode,
+  nullFields,
+  onToggleNull,
+}: {
+  readonly columns: DbColumn[];
+  readonly initial?: Record<string, unknown>;
+  readonly mode: 'create' | 'update';
+  readonly nullFields: Set<string>;
+  readonly onToggleNull: (name: string, checked: boolean) => void;
+}) {
   return (
     <>
       {columns.map((col) => {
         const formType = inferFormType(col.type)
-        // 主键在 update 时禁用编辑，insert 时允许手工指定（兼容 String 主键）
+        const pkLocked = col.primary_key && mode === 'update'
+        const clearing = nullFields.has(col.name) && !col.primary_key
+        const disabled = pkLocked || clearing
         const isInitialNull = initial?.[col.name] === null || initial?.[col.name] === undefined
         const label = (
           <Tooltip title={col.label || undefined}>
@@ -206,32 +308,43 @@ function ColumnFormFields({ columns, initial }: { readonly columns: DbColumn[]; 
             </Space>
           </Tooltip>
         )
+        const extra = pkLocked ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>主键不可修改（后端按主键定位行，改动不会被保存）</Text>
+        ) : mode === 'update' && col.nullable && !col.primary_key ? (
+          <Checkbox
+            checked={nullFields.has(col.name)}
+            onChange={(e) => onToggleNull(col.name, e.target.checked)}
+            style={{ fontSize: 12 }}
+          >
+            <span style={{ fontSize: 12 }}>置为 NULL（清空此字段）</span>
+          </Checkbox>
+        ) : undefined
         const initialValue = initial?.[col.name] ?? null
         if (formType === 'switch') {
           return (
-            <Form.Item key={col.name} name={col.name} label={label} valuePropName="checked" initialValue={!!initialValue}>
-              <Switch />
+            <Form.Item key={col.name} name={col.name} label={label} extra={extra} valuePropName="checked" initialValue={!!initialValue}>
+              <Switch disabled={disabled} />
             </Form.Item>
           )
         }
         if (formType === 'number') {
           return (
-            <Form.Item key={col.name} name={col.name} label={label} initialValue={isInitialNull ? null : Number(initialValue)}>
-              <InputNumber style={{ width: '100%' }} />
+            <Form.Item key={col.name} name={col.name} label={label} extra={extra} initialValue={isInitialNull ? null : Number(initialValue)}>
+              <InputNumber style={{ width: '100%' }} disabled={disabled} />
             </Form.Item>
           )
         }
         if (formType === 'textarea') {
           return (
-            <Form.Item key={col.name} name={col.name} label={label} initialValue={isInitialNull ? '' : toFormString(initialValue)}>
-              <TextArea rows={3} placeholder="JSON 字符串" />
+            <Form.Item key={col.name} name={col.name} label={label} extra={extra} initialValue={isInitialNull ? '' : toFormString(initialValue)}>
+              <TextArea rows={3} disabled={disabled} placeholder={clearing ? '提交后将被置为 NULL' : 'JSON 字符串'} />
             </Form.Item>
           )
         }
         // text / datetime 统一用 Input，由后端解析
         return (
-          <Form.Item key={col.name} name={col.name} label={label} initialValue={isInitialNull ? '' : toFormString(initialValue)}>
-            <Input placeholder={col.nullable ? '可空' : ''} />
+          <Form.Item key={col.name} name={col.name} label={label} extra={extra} initialValue={isInitialNull ? '' : toFormString(initialValue)}>
+            <Input disabled={disabled} placeholder={clearing ? '提交后将被置为 NULL' : (col.nullable ? '可空' : '')} />
           </Form.Item>
         )
       })}
@@ -264,10 +377,16 @@ export default function DatabaseAdmin() {
   const [auditDrawerOpen, setAuditDrawerOpen] = useState(false)
   // 编辑/新增弹窗
   const [editing, setEditing] = useState<{ mode: 'create' | 'update'; row?: Record<string, unknown> } | null>(null)
+  // 本次编辑里被勾选「置为 NULL」的可空列（T02576 / 4.2-3）
+  const [nullFields, setNullFields] = useState<Set<string>>(new Set())
   // 导入弹窗
   const [importOpen, setImportOpen] = useState(false)
-  // 审计日志内容
+  // 导出中的格式（T02576 / 4.2-2：全表导出可能几十秒，必须让用户看到「在进行中」）
+  const [exporting, setExporting] = useState<'csv' | 'json' | null>(null)
+  // 审计日志内容 + 加载态（T02576 / 4.2-5：抽屉先开后填，用户看到的是空表）
   const [auditLog, setAuditLog] = useState<{ items: Array<{ id: number; type: string; level: string; message: string; created_at: string }> }>({ items: [] })
+  const [auditLoading, setAuditLoading] = useState(false)
+
 
   // 加载表列表
   const loadTables = async () => {
@@ -353,6 +472,21 @@ export default function DatabaseAdmin() {
   // 主键列（用于行标识与编辑时的禁用）
   const pkCol = useMemo(() => columns.find((c) => c.primary_key), [columns])
 
+  // 当前表的行数（分母与后端 /tables 同源，用于导出按钮点名「全表 N 行」）
+  const allRowCount = useMemo(
+    () => tables.find((t) => t.name === activeTable)?.rows,
+    [tables, activeTable],
+  )
+
+  const toggleNullField = (name: string, checked: boolean) => {
+    setNullFields((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(name)
+      else next.delete(name)
+      return next
+    })
+  }
+
   // 动态列定义
   const tableColumns = useMemo(() => {
     return columns.map((col) => ({
@@ -407,76 +541,83 @@ export default function DatabaseAdmin() {
     }
   }
 
-  // 弹窗：单行删除二次确认（含级联影响预览）
-  const openDeleteConfirm = async (pkValue: unknown, row?: Record<string, unknown>) => {
+  // 删除二次确认弹窗（单行 / 批量共用一套门禁）
+  // T02576 / 4.2-5：级联预览失败时旧实现只留一行灰字，确认按钮照常可提交；
+  // 现在预览未成功（加载中或失败）确认按钮一直禁用，失败给出「重试预览」。
+  const openDeleteModal = (opts: {
+    readonly title: string;
+    readonly intro: string;
+    readonly keys: Array<string | number>;
+    readonly summary?: string;
+    readonly pkText?: string;
+    readonly onConfirm: () => Promise<void>;
+  }) => {
     let tokenValue = ''
-    // 级联预览 HTML 构建提取为模块级 buildCascadeHtml（消除 try/catch + if/for 嵌套）
-    const cascadeHtml = await buildCascadeHtml(activeTable, [pkValue as string | number])
-    // T02573：确认框只显示主键等于没显示——用户判断不了删的是哪条业务记录，
-    // 这里按表取真实存在的业务字段做摘要（见 docs/standards/危险操作文案规范.md）
-    const summary = buildRowSummary(row)
+    let cascade: CascadeState = { status: 'loading' }
+    const okProps = () => ({ danger: true, disabled: isDeleteConfirmBlocked(tokenValue, cascade) })
+    const buildContent = () => (
+      <div>
+        {opts.summary && (
+          <p style={{ marginBottom: 6 }}>
+            <b>{opts.summary}</b>
+          </p>
+        )}
+        <p style={{ marginBottom: 6 }}>{opts.intro}</p>
+        {opts.pkText && (
+          <p style={{ marginBottom: 6 }}>主键：<code>{opts.pkText}</code></p>
+        )}
+        <CascadeView state={cascade} onRetry={retry} />
+        <p style={{ marginBottom: 8 }}>恢复成本：删除后不可撤销，只能重新录入；请先在「导出」页留存备份。</p>
+        <p>请输入 <b>{CONFIRM_TOKEN}</b> 以确认（区分大小写）：</p>
+        <Input.Password
+          placeholder={CONFIRM_TOKEN}
+          onChange={(e) => {
+            tokenValue = e.target.value
+            modal.update({ okButtonProps: okProps() })
+          }}
+        />
+      </div>
+    )
+    async function retry(): Promise<void> {
+      cascade = { status: 'loading' }
+      modal.update({ content: buildContent(), okButtonProps: okProps() })
+      cascade = await fetchCascadeState(activeTable, opts.keys)
+      modal.update({ content: buildContent(), okButtonProps: okProps() })
+    }
     const modal = Modal.confirm({
-      title: '确认删除该行？',
+      title: opts.title,
       icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
-      content: (
-        <div>
-          {summary && (
-            <p style={{ marginBottom: 6 }}>
-              <b>{summary}</b>
-            </p>
-          )}
-          <p>主键：<code>{formatCell(pkValue)}</code></p>
-          <div dangerouslySetInnerHTML={{ __html: cascadeHtml }} style={{ marginBottom: 12, padding: 8, background: 'var(--xh-bg-spotlight)', borderRadius: 6 }} />
-          <p style={{ marginBottom: 8 }}>恢复成本：删除后不可撤销，只能重新录入；请先在「导出」页留存备份。</p>
-          <p>请输入 <b>{CONFIRM_TOKEN}</b> 以确认（区分大小写）：</p>
-          <Input.Password
-            placeholder={CONFIRM_TOKEN}
-            onChange={(e) => {
-              tokenValue = e.target.value
-              modal.update((prev) => ({
-                ...prev,
-                okButtonProps: { danger: true, disabled: tokenValue !== CONFIRM_TOKEN },
-              }))
-            }}
-          />
-        </div>
-      ),
+      width: 560,
+      content: buildContent(),
       okText: '确认删除',
       cancelText: '取消',
       okButtonProps: { danger: true, disabled: true },
-      onOk: () => handleDelete(pkValue),
+      onOk: () => opts.onConfirm(),
+    })
+    void retry()
+  }
+
+  // 弹窗：单行删除二次确认（含级联影响预览）
+  const openDeleteConfirm = (pkValue: unknown, row?: Record<string, unknown>) => {
+    openDeleteModal({
+      title: '确认删除该行？',
+      intro: `将从表 ${activeTable} 删除 1 行记录，操作不可恢复。`,
+      keys: [pkValue as string | number],
+      // T02573：确认框只显示主键等于没显示——用户判断不了删的是哪条业务记录，
+      // 这里按表取真实存在的业务字段做摘要（见 docs/standards/危险操作文案规范.md）
+      summary: buildRowSummary(row),
+      pkText: formatCell(pkValue),
+      onConfirm: () => handleDelete(pkValue),
     })
   }
 
   // 弹窗：批量删除二次确认（含级联影响预览）
-  const openBatchDeleteConfirm = async () => {
-    let tokenValue = ''
-    // 级联预览 HTML 构建复用 buildCascadeHtml（与 openDeleteConfirm 一致）
-    const cascadeHtml = await buildCascadeHtml(activeTable, selectedRowKeys.map(String))
-    const modal = Modal.confirm({
+  const openBatchDeleteConfirm = () => {
+    openDeleteModal({
       title: `确认批量删除 ${selectedRowKeys.length} 行？`,
-      icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
-      content: (
-        <div>
-          <p>将删除当前选中的 <b>{selectedRowKeys.length}</b> 行记录，操作不可恢复。</p>
-          <div dangerouslySetInnerHTML={{ __html: cascadeHtml }} style={{ marginBottom: 12, padding: 8, background: 'var(--xh-bg-spotlight)', borderRadius: 6 }} />
-          <p>请输入 <b>{CONFIRM_TOKEN}</b> 以确认（区分大小写）：</p>
-          <Input.Password
-            placeholder={CONFIRM_TOKEN}
-            onChange={(e) => {
-              tokenValue = e.target.value
-              modal.update((prev) => ({
-                ...prev,
-                okButtonProps: { danger: true, disabled: tokenValue !== CONFIRM_TOKEN },
-              }))
-            }}
-          />
-        </div>
-      ),
-      okText: '确认删除',
-      cancelText: '取消',
-      okButtonProps: { danger: true, disabled: true },
-      onOk: () => handleBatchDelete(),
+      intro: `将从表 ${activeTable} 删除当前选中的 ${selectedRowKeys.length} 行记录，操作不可恢复。`,
+      keys: selectedRowKeys.map(String),
+      onConfirm: handleBatchDelete,
     })
   }
 
@@ -486,19 +627,18 @@ export default function DatabaseAdmin() {
     if (!activeTable || !editing) return
     try {
       const values = await form.validateFields()
-      // 去除空字符串，让后端走 nullable 语义
-      const cleaned: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(values)) {
-        if (v === '' || v === undefined) continue
-        cleaned[k] = v
+      const payload = buildSubmitValues(columns, values, nullFields, editing.mode)
+      if (Object.keys(payload).length === 0) {
+        message.warning('没有需要提交的修改（留空的字段保持原值；要清空请勾选「置为 NULL」）')
+        return
       }
       if (editing.mode === 'create') {
-        await dbAdminApi.createRow(activeTable, cleaned)
+        await dbAdminApi.createRow(activeTable, payload)
         message.success('已新增')
       } else {
         const pkValue = editing.row?.[pkCol!.name] as string | number
-        await dbAdminApi.updateRow(activeTable, pkValue, cleaned)
-        message.success('已更新')
+        await dbAdminApi.updateRow(activeTable, pkValue, payload)
+        message.success(`已更新 ${Object.keys(payload).length} 个字段`)
       }
       setEditing(null)
       loadRows()
@@ -513,8 +653,11 @@ export default function DatabaseAdmin() {
   }
 
   // 导出（CSV/JSON）
+  // T02576 / 4.2-2：后端 /export 没有筛选参数，导出的是全表；旧按钮只写「导出当前表数据」，
+  // 用户以为导出的是搜索命中的行。现在按钮点名「全表 + 真实行数」，并给出 loading。
   const handleExport = async (format: 'csv' | 'json') => {
-    if (!activeTable) return
+    if (!activeTable || exporting) return
+    setExporting(format)
     try {
       const blob = await dbAdminApi.exportRows(activeTable, format)
       const url = URL.createObjectURL(blob)
@@ -523,14 +666,17 @@ export default function DatabaseAdmin() {
       a.download = `${activeTable}_${new Date().toISOString().slice(0, 19).replaceAll(':', '').replaceAll('T', '')}.${format}`
       a.click()
       URL.revokeObjectURL(url)
-      message.success('导出已开始')
+      message.success(`已导出 ${activeTable} 全表（${format.toUpperCase()}，${(allRowCount ?? 0).toLocaleString()} 行）`)
     } catch (e: any) {
       message.error(`导出失败: ${e?.response?.data?.detail || e?.message}`)
+    } finally {
+      setExporting(null)
     }
   }
 
-  // 加载审计日志
+  // 加载审计日志（抽屉里给 loading，不再「先开后填」）
   const loadAuditLog = async () => {
+    setAuditLoading(true)
     try {
       const data = await dbAdminApi.getAuditLog(200)
       setAuditLog({ items: data.items })
@@ -538,6 +684,8 @@ export default function DatabaseAdmin() {
       message.error('加载审计日志失败')
       // 记录异常对象，便于排查时定位根因（S2486）
       console.warn('加载审计日志失败:', e)
+    } finally {
+      setAuditLoading(false)
     }
   }
 
@@ -567,21 +715,46 @@ export default function DatabaseAdmin() {
       headers = all[0]
       rows = all.slice(1)
     }
+    // T02576 / 4.2-1：旧确认框写着「请选择冲突处理：」却只有一个动作（mode 恒为 insert），
+    // 是「界面承诺、后端没做」的假选择。现在按实际能力如实描述，并点名不可回滚的后果。
+    // 覆盖导入（INSERT OR REPLACE）是否开放属需求裁决 D-8，未裁决前不在 UI 提供入口。
     Modal.confirm({
-        title: '确认导入',
-        icon: <ExclamationCircleOutlined />,
+        title: '确认导入数据？',
+        icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+        width: 620,
         content: (
           <div>
-            <p>将向表 <b>{activeTable}</b> 导入 <b>{rows.length}</b> 行</p>
-            <p>请选择冲突处理：</p>
+            <DangerSummary
+              action={`向表 ${activeTable} 导入 ${rows.length} 行（逐行提交）`}
+              scope={`只新增记录；主键/唯一键已存在的行会被跳过，不覆盖现有数据。当前搜索条件不影响导入`}
+              count={`${rows.length} 行`}
+              recovery="已成功的行不会因后面某行失败而回滚；误导入只能按审计日志逐行删除。建议先「导出全表」留备份"
+            />
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginTop: 8 }}
+              message="冲突处理只有一种：跳过"
+              description="覆盖导入（INSERT OR REPLACE）会整行替换同主键记录，未提供的列被清成默认值，属破坏性操作，需求裁决（D-8）通过前界面不提供该入口。"
+            />
           </div>
         ),
-        okText: '跳过冲突',
+        okText: '导入（跳过冲突行）',
         cancelText: '取消',
+        okButtonProps: { danger: true },
         onOk: async () => {
           try {
             const result = await dbAdminApi.importRows(activeTable, rows, headers, 'insert')
-            message.success(`导入完成：${result.inserted} 成功，${result.skipped} 跳过，${result.errors.length} 错误`)
+            // error_count 是真实失败行数；errors 只是最多 20 条样例，不能拿它的长度当总数
+            if (result.error_count > 0) {
+              message.warning(
+                `导入部分完成：${result.inserted} 成功、${result.skipped} 跳过、${result.error_count} 失败` +
+                (result.errors.length > 0 ? `（样例：${result.errors[0]}）` : ''),
+                6,
+              )
+            } else {
+              message.success(`导入完成：${result.inserted} 成功，${result.skipped} 跳过`)
+            }
             setImportOpen(false)
             loadRows()
             loadTables()
@@ -673,7 +846,7 @@ export default function DatabaseAdmin() {
             <>
               {/* 工具栏 */}
               <Space style={{ marginBottom: 12 }} wrap>
-                <TipButton tip="新增一行记录" type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setEditing({ mode: 'create' }) }}>
+                <TipButton tip="新增一行记录" type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setNullFields(new Set()); setEditing({ mode: 'create' }) }}>
                   新增
                 </TipButton>
                 <TipButton tip="批量删除选中行（需确认）" danger icon={<DeleteOutlined />} disabled={selectedRowKeys.length === 0} onClick={openBatchDeleteConfirm}>
@@ -682,11 +855,23 @@ export default function DatabaseAdmin() {
                 <TipButton tip="打开数据导入弹窗" icon={<UploadOutlined />} onClick={() => setImportOpen(true)}>
                   导入
                 </TipButton>
-                <TipButton tip="导出当前表数据为 CSV" icon={<DownloadOutlined />} onClick={() => handleExport('csv')}>
-                  导出 CSV
+                <TipButton
+                  tip={`导出 ${activeTable} 全表为 CSV（Excel 友好）；搜索条件不会带入导出文件`}
+                  icon={<DownloadOutlined />}
+                  loading={exporting === 'csv'}
+                  disabled={!!exporting && exporting !== 'csv'}
+                  onClick={() => handleExport('csv')}
+                >
+                  导出全表 CSV（{allRowCount === undefined ? '行数加载中' : `${allRowCount.toLocaleString()} 行`}）
                 </TipButton>
-                <TipButton tip="导出当前表数据为 JSON" icon={<DownloadOutlined />} onClick={() => handleExport('json')}>
-                  导出 JSON
+                <TipButton
+                  tip={`导出 ${activeTable} 全表为 JSON；搜索条件不会带入导出文件`}
+                  icon={<DownloadOutlined />}
+                  loading={exporting === 'json'}
+                  disabled={!!exporting && exporting !== 'json'}
+                  onClick={() => handleExport('json')}
+                >
+                  导出全表 JSON
                 </TipButton>
                 <TipButton tip="查看当前表字段结构" icon={<TableOutlined />} onClick={() => setSchemaDrawerOpen(true)}>
                   查看表结构
@@ -702,6 +887,16 @@ export default function DatabaseAdmin() {
                 />
                 <TipButton tip="按关键词查询表数据" onClick={() => { setPage(1); doSearch() }}>查询</TipButton>
               </Space>
+              {/* T02576 / 4.2-2：搜索只作用于表格分页，导出走的是无筛选参数的全表接口——
+                  有搜索词时明说，避免用户以为导出的是命中的那几行 */}
+              {search.trim() !== '' && (
+                <div style={{ marginBottom: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    当前搜索「{search.trim()}」只影响表格显示（命中 {total.toLocaleString()} 行）；
+                    「导出全表」导出的是 {activeTable} 的全部 {(allRowCount ?? 0).toLocaleString()} 行，不含筛选。
+                  </Text>
+                </div>
+              )}
               {/* 搜索历史小药丸：点击复用历史关键词，避免重复输入 */}
               {history.length > 0 && (
                 <div style={{ marginBottom: 12, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
@@ -739,6 +934,7 @@ export default function DatabaseAdmin() {
                           onClick={() => {
                             form.resetFields()
                             form.setFieldsValue(record)
+                            setNullFields(new Set())
                             setEditing({ mode: 'update', row: record })
                           }}
                         >
@@ -793,7 +989,23 @@ export default function DatabaseAdmin() {
         destroyOnHidden
       >
         <Form form={form} layout="vertical" preserve={false}>
-          <ColumnFormFields columns={columns} initial={editing?.row} />
+          {/* T02576 / 4.2-3：旧实现静默丢弃留空字段且界面无任何说明，
+              这里把提交口径写在表单顶部（留空=不改，勾「置为 NULL」=清空，主键不可改） */}
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={editing?.mode === 'update'
+              ? '留空的字段保持原值不变；要清空可空字段请勾选「置为 NULL（清空此字段）」；主键不可修改。'
+              : '留空的字段不会写入（由数据库默认值决定）；主键可以手工指定（仅新增时）。'}
+          />
+          <ColumnFormFields
+            columns={columns}
+            initial={editing?.row}
+            mode={editing?.mode ?? 'create'}
+            nullFields={nullFields}
+            onToggleNull={toggleNullField}
+          />
         </Form>
       </Modal>
 
@@ -879,6 +1091,7 @@ export default function DatabaseAdmin() {
         <Table
           rowKey="id"
           size="small"
+          loading={auditLoading}
           dataSource={auditLog.items}
           pagination={{ pageSize: 20 }}
           columns={[

@@ -4,6 +4,7 @@ import type {
   DbRowListResponse,
   DbTablesResponse,
   DbAuditLogResponse,
+  CascadeRelation,
   CascadePreviewResponse,
 } from './types'
 
@@ -65,15 +66,19 @@ export const dbAdminApi = {
       .then((r) => r.data),
 
   // 导出（返回 blob，浏览器侧触发下载）
+  // 全表导出没有行数上限（events 等大表可达数万行），30s 默认超时会把「正在导出」
+  // 变成「导出失败: timeout」——这里的超时与后端实测耗时对齐（T02576）。
   exportRows: async (table: string, format: 'csv' | 'json') => {
     const res = await client.get(`/api/db-admin/tables/${table}/export`, {
       params: { format },
       responseType: 'blob',
+      timeout: 300000,
     })
     return res.data as Blob
   },
 
   // 导入（二维数组 + 表头）
+  // 单次最多 5000 行且逐行独立提交，耗时随行数线性增长，同样需要放宽超时。
   importRows: (
     table: string,
     rows: unknown[][],
@@ -81,9 +86,18 @@ export const dbAdminApi = {
     mode: 'insert' | 'replace' = 'insert',
   ) =>
     client
-      .post<{ ok: boolean; total: number; inserted: number; skipped: number; errors: string[] }>(
+      .post<{
+        ok: boolean;
+        total: number;
+        inserted: number;
+        skipped: number;
+        /** 真实失败行数（errors 只是最多 20 条样例） */
+        error_count: number;
+        errors: string[];
+      }>(
         `/api/db-admin/tables/${table}/import`,
         { rows, headers, mode, confirm_token: CONFIRM_TOKEN },
+        { timeout: 300000 },
       )
       .then((r) => r.data),
 
@@ -95,4 +109,4 @@ export const dbAdminApi = {
 // 重新导出类型便于前端页面 import
 // 用 `export type { ... } from` 转发可避免 isolatedModules 下
 // 「declares locally, but it is not exported」误报（import 的类型无法被 re-export）
-export type { DbColumn, DbTableInfo, CascadePreviewResponse } from './types'
+export type { DbColumn, DbTableInfo, CascadeRelation, CascadePreviewResponse } from './types'

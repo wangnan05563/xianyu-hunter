@@ -32,6 +32,7 @@ export default function MobileDatabaseAdmin() {
   const [rowsLoading, setRowsLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
+  const [exporting, setExporting] = useState<'csv' | 'json' | null>(null)
   const [detailRow, setDetailRow] = useState<Record<string, unknown> | null>(null)
 
   const loadTables = useCallback(async (): Promise<void> => {
@@ -66,9 +67,10 @@ export default function MobileDatabaseAdmin() {
   useEffect(() => { void loadTables() }, [loadTables])
   useEffect(() => { void loadRows() }, [loadRows])
 
-  // 导出当前表
+  // 导出当前表（T02576 / 4.2-2：全表导出可能几十秒，必须有 loading 且按钮点名「全表」）
   const exportTable = async (format: 'csv' | 'json'): Promise<void> => {
-    if (!selectedTable) return
+    if (!selectedTable || exporting) return
+    setExporting(format)
     try {
       const blob = await dbAdminApi.exportRows(selectedTable, format)
       const url = URL.createObjectURL(blob)
@@ -83,13 +85,18 @@ export default function MobileDatabaseAdmin() {
         a.remove()
         URL.revokeObjectURL(url)
       })
-      message.success('已导出')
+      message.success(`已导出 ${selectedTable} 全表（${format.toUpperCase()}）`, 3)
     } catch (e) {
       message.error(extractApiError(e, '导出失败'), 3)
+    } finally {
+      setExporting(null)
     }
   }
 
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+
+  // 全表行数与 /tables 同源（导出按钮的分母必须是全表，不是当前分页/筛选结果）
+  const fullTableRows = tables.find((t) => t.name === selectedTable)?.rows
 
   // 生成行 key：优先使用主键字段，避免直接使用数组索引作为 key（SonarQube S6479）
   // 数据库表通常有 id/_id/uuid 主键；若无则用行内容生成稳定 key，保证同表内唯一
@@ -184,11 +191,25 @@ export default function MobileDatabaseAdmin() {
           />
           {selectedTable && (
             <Space size={6} style={{ width: '100%' }}>
-              <Button size="small" icon={<DownloadOutlined />} onClick={() => void exportTable('csv')} style={{ flex: 1 }}>
-                CSV
+              <Button
+                size="small"
+                icon={<DownloadOutlined />}
+                loading={exporting === 'csv'}
+                disabled={!!exporting && exporting !== 'csv'}
+                onClick={() => void exportTable('csv')}
+                style={{ flex: 1 }}
+              >
+                导出全表 CSV{fullTableRows === undefined ? '' : `（${fullTableRows.toLocaleString()} 行）`}
               </Button>
-              <Button size="small" icon={<DownloadOutlined />} onClick={() => void exportTable('json')} style={{ flex: 1 }}>
-                JSON
+              <Button
+                size="small"
+                icon={<DownloadOutlined />}
+                loading={exporting === 'json'}
+                disabled={!!exporting && exporting !== 'json'}
+                onClick={() => void exportTable('json')}
+                style={{ flex: 1 }}
+              >
+                导出全表 JSON
               </Button>
               <Button size="small" type="text" icon={<ReloadOutlined />} onClick={() => void loadRows()} />
             </Space>

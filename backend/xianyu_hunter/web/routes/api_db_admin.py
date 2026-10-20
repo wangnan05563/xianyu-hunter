@@ -624,6 +624,37 @@ def create_row(
     return {"ok": True, "table": table}
 
 
+def _collect_update_values(
+    col_by_name: dict[str, dict[str, Any]],
+    pk_col: dict[str, Any],
+    pk_val: Any,
+    body_values: dict[str, Any],
+) -> dict[str, Any]:
+    """过滤出真正可更新的字段，并把「试图改主键」显式拒绝
+
+    历史缺陷（T02576 / PRD FR-H-1）：主键字段此前被 `continue` 静默丢弃，
+    接口照样返回 ok，前端照样弹「已更新」——用户以为改了主键，实际一个字节都没变。
+    现在：值与路径定位的主键一致 → 视为未修改（前端表单会带上原值）；
+    不一致 → 400 点名「主键不可修改」，不给假回执。
+    """
+    values: dict[str, Any] = {}
+    for k, v in body_values.items():
+        if k == pk_col["name"]:
+            parsed = _parse_value(v, pk_col["type"])
+            if parsed != pk_val:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"主键 {k} 不可修改：定位到的行是 {pk_val!r}，收到 {parsed!r}。"
+                        "需要换主键请「新增一行 + 删除原行」。"
+                    ),
+                )
+            continue
+        if k in col_by_name:
+            values[k] = _parse_value(v, col_by_name[k]["type"])
+    return values
+
+
 @router.patch("/tables/{table}/rows/{pk_value:path}")
 def update_row(
     table: str,
@@ -634,6 +665,7 @@ def update_row(
     """按主键更新一行：pk_value 通过路径传入（支持 String/Integer 主键）
 
     路径参数自动转 str（FastAPI 行为），在 _parse_value 时按列类型转换。
+    主键本身不可修改（见 _collect_update_values）；可空列传 null 即置 NULL。
     """
     _validate_table(table)
     cols = _get_columns(container, table)
@@ -643,14 +675,9 @@ def update_row(
         # 联合主键的表暂不支持在线编辑（场景少见且容易出错）
         raise HTTPException(status_code=400, detail="仅支持单主键表的更新")
     pk_col = pk_cols[0]
+    pk_val = _parse_value(pk_value, pk_col["type"])
 
-    # 过滤可更新字段（不更新主键本身）
-    values: dict[str, Any] = {}
-    for k, v in body.values.items():
-        if k == pk_col["name"]:
-            continue
-        if k in col_by_name:
-            values[k] = _parse_value(v, col_by_name[k]["type"])
+    values = _collect_update_values(col_by_name, pk_col, pk_val, body.values)
 
     if not values:
         raise HTTPException(status_code=400, detail="没有可更新字段")
@@ -660,7 +687,7 @@ def update_row(
 
     try:
         with container.repo.engine.begin() as conn:
-            result = conn.execute(text(sql), {**values, "pk": _parse_value(pk_value, pk_col["type"])})
+            result = conn.execute(text(sql), {**values, "pk": pk_val})
     except SQLAlchemyError as e:
         _log_audit(container, "update_failed", table, pk_value=pk_value, detail={"error": str(e)}, level="err")
         raise HTTPException(status_code=409, detail=f"更新失败: {e}")
@@ -766,6 +793,8 @@ def export_rows(
     """导出表数据：CSV 或 JSON（不限制行数上限，但单文件大小由 max_export 控制）
 
     CSV 用 UTF-8 BOM 头，Excel 打开不乱码；JSON 用 streaming 序列化避免大对象内存压力。
+    注意（T02576）：本接口没有筛选参数，导出的是全表 —— 界面上的搜索条件只作用于
+    rows 查询，导出按钮文案必须如实写「全表」，不能让用户以为导出了筛选结果。
     """
     _validate_table(table)
     cols = _get_columns(container, table)
@@ -915,6 +944,9 @@ def import_rows(
         "total": len(body.rows),
         "inserted": inserted,
         "skipped": skipped,
+        # T02576：errors 只是样例（最多 20 条），真实条数单独回带，
+        # 否则前端 `errors.length` 会把「50 行失败」显示成「20 错误」。
+        "error_count": len(errors),
         "errors": errors[:20],
     }
 
