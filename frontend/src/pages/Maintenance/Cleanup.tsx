@@ -9,6 +9,7 @@ import {
   Col,
   Statistic,
   Space,
+  Alert,
   message,
   Tag,
   Typography,
@@ -32,10 +33,12 @@ import { confirmDanger } from '@/components/DangerSummary'
 const { Text } = Typography
 
 // 缓存清理各 target 的真实删除范围（与后端 api_maintenance.cleanup_cache 分支一一对应）
+// FR-A-5（T02575）：browser_data 不再是 `webview_data_*`（全仓无写入方的幻影目录），
+// 而是配置 browser.user_data_dir 指向的真实浏览器资料目录——闲鱼登录态就在这里
 const CACHE_SCOPE: Record<string, string> = {
-  all: 'Python 字节码缓存（__pycache__）+ webview_data_* 浏览器数据目录',
-  browser_data: 'webview_data_* 浏览器数据目录',
-  temp: 'Python 字节码缓存（__pycache__）目录',
+  all: 'Python 字节码缓存（__pycache__）+ 浏览器用户数据目录（含闲鱼登录态）',
+  browser_data: '浏览器用户数据目录（含闲鱼登录 Cookie 与反爬指纹）',
+  pycache: 'Python 字节码缓存（__pycache__）目录',
 }
 
 // 表单状态类型
@@ -100,19 +103,28 @@ export default function Maintenance() {
       if (cacheForm.target !== 'browser_data') {
         parts.push(`__pycache__ 目录 ${c?.pycache_count ?? '未知'} 个（${c?.pycache_mb ?? '未知'} MB）`)
       }
-      if (cacheForm.target !== 'temp') {
-        parts.push(`webview_data_* 目录 ${c?.browser_data_mb ?? '未知'} MB`)
+      if (cacheForm.target !== 'pycache') {
+        parts.push(
+          `浏览器数据目录 ${c?.browser_data_files ?? '未知'} 个文件（${c?.browser_data_mb ?? '未知'} MB）`,
+        )
       }
+      // browser_data 分支现在真的会删登录态（FR-A-5）——后果必须写在确认框里
+      const dropsLogin = cacheForm.target !== 'pycache'
       const ok = await confirmDanger({
         title: '确认清理缓存？',
         action: `真实删除${CACHE_SCOPE[cacheForm.target] ?? '所选缓存'}`,
-        scope: '只删缓存目录；不包含 SQLite 数据库与日志文件，'
-          + '也不包含配置项 browser.user_data_dir 指向的 ./browser-data —— 闲鱼登录态实际保存在那里，本操作不会动它',
+        scope: dropsLogin
+          ? `将删除浏览器用户数据目录 ${c?.browser_data_path ?? '（以统计接口回带路径为准）'}，`
+            + '其中保存着闲鱼登录 Cookie 与反爬指纹；不包含 SQLite 数据库与日志文件'
+          : '只删 __pycache__ 字节码缓存；不包含数据库、日志，也不包含浏览器用户数据目录（登录态所在）',
         count: status ? parts.join('；') : null,
-        recovery: '不可恢复；__pycache__ 会在下次运行时自动重建，只会让首次运行稍慢。'
-          + (cacheForm.target !== 'temp' && (c?.browser_data_mb ?? 0) === 0
-            ? ' 当前 webview_data_* 统计为 0，本次不会删除任何浏览器数据。'
-            : ''),
+        recovery: dropsLogin
+          ? '不可恢复；删除后需重新扫码登录闲鱼。若浏览器正在占用该目录，'
+            + '本次会跳过删除并明确报错，不会只删掉半个目录'
+            + (dropsLogin && c && !c.browser_data_exists
+              ? '。当前未发现非空的浏览器数据目录，本次不会删除任何浏览器数据'
+              : '')
+          : '不可恢复；__pycache__ 会在下次运行时自动重建，只会让首次运行稍慢。',
       })
       if (!ok) return
     }
@@ -125,10 +137,18 @@ export default function Maintenance() {
         dry_run: cacheForm.dry_run,
       })
       setCacheResult(result)
-      // 实际执行后刷新状态以反映最新存储情况
-      if (!cacheForm.dry_run) {
-        await loadStatus()
-        message.success('缓存清理完成')
+      const count = result.cleaned?.length ?? 0
+      // 预览也必须给反馈，否则用户无法判断"没反应"还是"没有可清理内容"（4.1-5）
+      if (cacheForm.dry_run) {
+        message.info(count > 0 ? `预览完成：将处理 ${count} 项缓存` : '预览完成：无需要清理的缓存')
+        return
+      }
+      // 实际执行后刷新状态以反映最新存储情况（后端已同步让概览缓存失效，4.1-4）
+      await loadStatus()
+      if (result.errors?.length) {
+        message.error(`缓存清理未完成：${result.errors[0]}`)
+      } else {
+        message.success(count > 0 ? `缓存清理完成，共处理 ${count} 项` : '没有需要清理的缓存')
       }
     } catch (error) {
       setCacheResult({ errors: ['清理失败：' + String(error)] })
@@ -175,9 +195,20 @@ export default function Maintenance() {
         dry_run: dbForm.dry_run,
       })
       setDbResult(result)
-      if (!dbForm.dry_run) {
-        await loadStatus()
-        message.success('数据库清理完成')
+      if (dbForm.dry_run) {
+        const preview = result.total_deleted ?? 0
+        message.info(
+          preview > 0
+            ? `预览完成：预计删除 ${preview} 条记录（未写库）`
+            : '预览完成：当前保留天数内没有可删除的记录',
+        )
+        return
+      }
+      await loadStatus()
+      if (result.errors?.length) {
+        message.error(`数据库清理未完成：${result.errors[0]}`)
+      } else {
+        message.success(`数据库清理完成，共删除 ${result.total_deleted ?? 0} 条`)
       }
     } catch (error) {
       setDbResult({ errors: ['清理失败：' + String(error)] })
@@ -226,10 +257,21 @@ export default function Maintenance() {
       // 优先判断 dry_run（预览）分支：默认开启预览，肯定条件更直观
       const count = result.cleaned?.length ?? 0
       if (logForm.dry_run) {
-        message.info(count > 0 ? `预览完成：将处理 ${count} 项日志` : '预览完成：无需要清理的日志文件')
+        message.info(
+          count > 0
+            ? `预览完成：将处理 ${count} 项日志，预计释放 ${result.total_freed_mb ?? 0} MB（未删除）`
+            : '预览完成：无需要清理的日志文件',
+        )
+        return
+      }
+      await loadStatus()
+      if (result.errors?.length) {
+        message.error(`日志清理未完成：${result.errors[0]}`)
       } else {
-        await loadStatus()
-        message.success(count > 0 ? `日志清理完成，共处理 ${count} 项` : '没有需要清理的日志文件')
+        message.success(
+          count > 0 ? `日志清理完成，共处理 ${count} 项，释放 ${result.total_freed_mb ?? 0} MB`
+            : '没有需要清理的日志文件',
+        )
       }
     } catch (error) {
       setLogResult({ errors: ['清理失败：' + String(error)] })
@@ -242,14 +284,23 @@ export default function Maintenance() {
   // 渲染结果展示区域（成功信息和错误信息）
   const renderResult = (result: CleanupResult | null) => {
     if (!result) return null
-
+    // dry_run 时后端回带的是「预计量」，必须用预览措辞 + 中性色渲染。
+    // 旧实现按成功态渲染绿色「删除 0 条」——预览根本没写库，数字恒 0 却长得像执行结果（4.1-2）
+    const preview = result.dry_run === true
     return (
       <div style={{ marginTop: 12 }}>
         {result.cleaned?.length ? (
-          <div style={{ color: '#52c41a', marginBottom: 8 }}>
-            {result.count !== undefined && <div>完成 {result.count} 项</div>}
-            {result.total_deleted !== undefined && <div>删除 {result.total_deleted} 条</div>}
-            {result.total_freed_mb !== undefined && <div>释放 {result.total_freed_mb} MB</div>}
+          <div style={{ color: preview ? 'var(--xh-text-secondary)' : '#52c41a', marginBottom: 8 }}>
+            <div>{preview ? '预览结果（未删除任何内容）' : '执行完成'}</div>
+            {result.count !== undefined && (
+              <div>{preview ? `将处理 ${result.count} 项` : `完成 ${result.count} 项`}</div>
+            )}
+            {result.total_deleted !== undefined && (
+              <div>{preview ? `预计删除 ${result.total_deleted} 条` : `删除 ${result.total_deleted} 条`}</div>
+            )}
+            {result.total_freed_mb !== undefined && (
+              <div>{preview ? `预计释放 ${result.total_freed_mb} MB` : `释放 ${result.total_freed_mb} MB`}</div>
+            )}
             {result.cleaned.map((item) => (
               <Text key={item} type="secondary" style={{ fontSize: 12, display: 'block' }}>
                 {item}
@@ -319,7 +370,8 @@ export default function Maintenance() {
               valueStyle={{ color: '#FF6200' }}
             />
             <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
-              浏览器 {status?.cache?.browser_data_mb ?? 0}MB · Py缓存 {status?.cache?.pycache_count ?? 0}个/{status?.cache?.pycache_mb ?? 0}MB
+              浏览器 {status?.cache?.browser_data_mb ?? 0}MB/{status?.cache?.browser_data_files ?? 0} 个文件
+              · 编译缓存 {status?.cache?.pycache_count ?? 0} 个目录/{status?.cache?.pycache_mb ?? 0}MB
             </div>
           </Col>
         </Row>
@@ -338,7 +390,9 @@ export default function Maintenance() {
             }
           >
             <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 12 }}>
-              清理 __pycache__ 与 webview_data_* 目录；不含配置里的浏览器用户数据目录（登录态所在）
+              清理 Python 字节码缓存与浏览器用户数据目录
+              {status?.cache?.browser_data_path ? `（${status.cache.browser_data_path}）` : ''}
+              ——后者保存闲鱼登录 Cookie，删除后需重新扫码登录
             </Text>
 
             <div style={{ marginBottom: 12 }}>
@@ -351,8 +405,10 @@ export default function Maintenance() {
                 style={{ width: '100%' }}
                 options={[
                   { value: 'all', label: '全部缓存' },
-                  { value: 'browser_data', label: '浏览器数据' },
-                  { value: 'temp', label: '临时文件' },
+                  { value: 'browser_data', label: '浏览器数据（含登录态）' },
+                  // 4.1-3：旧标签「临时文件」名不副实——该分支实删 __pycache__，
+                  // 且从不删任何临时文件；名与实在此对齐
+                  { value: 'pycache', label: 'Python 编译缓存（__pycache__）' },
                 ]}
               />
             </div>
@@ -414,22 +470,37 @@ export default function Maintenance() {
               />
             </div>
 
-            <div style={{ marginBottom: 12 }}>
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
-                保留天数
-              </Text>
-              {/* addonAfter 已废弃，改用 Space.Compact 包装静态文本（antd v5） */}
-              <Space.Compact style={{ width: '100%' }}>
-                <InputNumber
-                  value={dbForm.days}
-                  onChange={(value) => setDbForm({ ...dbForm, days: value ?? 30 })}
-                  min={1}
-                  max={365}
-                  style={{ flex: 1 }}
-                />
-                <Button disabled>天</Button>
-              </Space.Compact>
-            </div>
+            {/* 4.1-5：保留天数只对受 cutoff 约束的分支有意义；
+                sold_items/vacuum 后端根本不读该参数，仍显示可编辑输入框＝假可配置 */}
+            {(dbForm.target === 'all' || dbForm.target === 'old_events' || dbForm.target === 'old_items') && (
+              <div style={{ marginBottom: 12 }}>
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                  保留天数
+                </Text>
+                {/* addonAfter 已废弃，改用 Space.Compact 包装静态文本（antd v5） */}
+                <Space.Compact style={{ width: '100%' }}>
+                  <InputNumber
+                    value={dbForm.days}
+                    onChange={(value) => setDbForm({ ...dbForm, days: value ?? 30 })}
+                    min={1}
+                    max={365}
+                    style={{ flex: 1 }}
+                  />
+                  <Button disabled>天</Button>
+                </Space.Compact>
+              </div>
+            )}
+
+            {/* VACUUM 是长耗时且阻塞写入的操作，不提前说明＝用户以为"卡住了"（4.1-5） */}
+            {(dbForm.target === 'vacuum' || dbForm.target === 'all') && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message="VACUUM 期间数据库写入受阻"
+                description="该操作会重排整个库文件，耗时随库体积增长；执行期间采集、抢单等写入可能等待或失败，建议在空闲时段进行。"
+              />
+            )}
 
             <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
               <Switch

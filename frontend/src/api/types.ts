@@ -773,7 +773,14 @@ export interface StorageStatus {
   }
   cache: {
     browser_data_mb: number
+    /** 真实浏览器用户数据目录里的文件数（FR-A-5 后可清理量的真实口径） */
+    browser_data_files: number
+    /** 目录存在且非空；false 时清理不会删除任何浏览器数据 */
+    browser_data_exists: boolean
+    /** 实际被清理的目录绝对路径，供确认框如实展示目标 */
+    browser_data_path?: string | null
     pycache_mb: number
+    /** __pycache__ 目录个数（清理按整目录删除，概览与确认框都按「目录 N 个」口径） */
     pycache_count: number
   }
 }
@@ -782,8 +789,12 @@ export interface CleanupResult {
   cleaned?: string[]
   errors?: string[]
   count?: number
+  /** dry_run=true 时为「预计删除」条数，false 时为实际删除条数（口径由后端 dry_run 决定） */
   total_deleted?: number
+  /** dry_run=true 时为「预计释放」MB，false 时为实际释放 MB */
   total_freed_mb?: number
+  /** 后端回带：本次是否为预览（仅扫描不删除） */
+  dry_run?: boolean
 }
 
 export interface CleanupBody {

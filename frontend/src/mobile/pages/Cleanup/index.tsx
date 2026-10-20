@@ -26,13 +26,20 @@ function mobileDangerCopy(
   const days = form.days
   if (target === 'cache') {
     const c = status?.cache
+    // FR-A-5（T02575）：browser_data 现在删的是真实浏览器资料目录，后果是掉登录态
+    const dropsLogin = form.target !== 'pycache'
     return {
-      action: `删除${form.target === 'temp' ? ' __pycache__ 字节码缓存'
-        : form.target === 'browser_data' ? ' webview_data_* 浏览器数据目录'
-          : ' __pycache__ 与 webview_data_* 目录'}`,
-      scope: '只删缓存目录；不包含数据库、日志，也不包含配置里的浏览器用户数据目录（登录态所在）',
-      count: c ? `__pycache__ ${c.pycache_count} 个（${c.pycache_mb} MB）；webview_data_* ${c.browser_data_mb} MB` : null,
-      recovery: '不可恢复；字节码会在下次运行自动重建，首次运行稍慢',
+      action: `删除${form.target === 'pycache' ? ' __pycache__ 字节码缓存'
+        : form.target === 'browser_data' ? ' 浏览器用户数据目录（含闲鱼登录 Cookie 与反爬指纹）'
+          : ' __pycache__ 与浏览器用户数据目录'}`,
+      scope: dropsLogin
+        ? `将删除 ${c?.browser_data_path ?? '浏览器用户数据目录'}；不包含数据库与日志文件`
+        : '只删 __pycache__ 字节码缓存；不包含数据库、日志与浏览器用户数据目录（登录态所在）',
+      count: c ? `__pycache__ 目录 ${c.pycache_count} 个（${c.pycache_mb} MB）；`
+        + `浏览器数据 ${c.browser_data_files} 个文件（${c.browser_data_mb} MB）` : null,
+      recovery: dropsLogin
+        ? '不可恢复；删除后需重新扫码登录闲鱼。浏览器正在占用该目录时会跳过删除并报错'
+        : '不可恢复；字节码会在下次运行自动重建，首次运行稍慢',
     }
   }
   if (target === 'database') {
@@ -73,8 +80,9 @@ function mobileDangerCopy(
 // 清理 target 选项：与桌面端 Maintenance 保持一致
 const CACHE_TARGETS = [
   { value: 'all', label: '全部缓存' },
-  { value: 'browser_data', label: '浏览器数据' },
-  { value: 'temp', label: '临时文件' },
+  { value: 'browser_data', label: '浏览器数据（含登录态）' },
+  // 4.1-3：旧标签「临时文件」名不副实——该分支实删 __pycache__，与桌面端同步改名
+  { value: 'pycache', label: 'Python 编译缓存（__pycache__）' },
 ]
 const DB_TARGETS = [
   { value: 'all', label: '全部清理' },
@@ -197,9 +205,13 @@ export default function MobileCleanup() {
       return <div style={{ color: '#ff4d4f', fontSize: 12, marginTop: 8 }}>{r.errors.join('；')}</div>
     }
     if (r.cleaned?.length) {
+      // 预览态回带的是"预计量"，措辞必须与执行态区分（4.1-2）
+      const preview = r.dry_run === true
       return (
         <div style={{ marginTop: 8, fontSize: 12, color: themeToken.colorTextSecondary }}>
-          共 {r.count ?? r.cleaned.length} 项 · 释放 {r.total_freed_mb ?? 0} MB
+          {preview ? '预览（未删除）：' : ''}共 {r.count ?? r.cleaned.length} 项
+          {r.total_deleted !== undefined && ` · ${preview ? '预计删除' : '删除'} ${r.total_deleted} 条`}
+          {r.total_freed_mb !== undefined && ` · ${preview ? '预计释放' : '释放'} ${r.total_freed_mb} MB`}
         </div>
       )
     }
@@ -282,7 +294,8 @@ export default function MobileCleanup() {
             options={DB_TARGETS}
             style={{ width: '100%' }}
           />
-          {dbForm.target !== 'vacuum' && (
+          {/* 4.1-5：sold_items 与 vacuum 两个分支后端都不读 days，显示可编辑输入框＝假可配置 */}
+          {dbForm.target !== 'vacuum' && dbForm.target !== 'sold_items' && (
             <div>
               <div style={{ fontSize: 12, color: themeToken.colorTextSecondary, marginBottom: 4 }}>
                 保留天数
