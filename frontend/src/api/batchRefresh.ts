@@ -143,6 +143,17 @@ export interface BatchRefreshHistoryStatsResult {
   count: number
 }
 
+// GET /api/batch-refresh/history/cleanup-preview 返回结构（清理前条数预览）
+export interface BatchRefreshHistoryCleanupPreview {
+  /** 预览的保留天数，0=清空全部 */
+  days: number
+  /** 时间边界（ISO8601）；days=0 时为 null（整表清空，无时间条件） */
+  cutoff: string | null
+  /** 将被删除的条数——与真正执行删除时的 WHERE 完全同源 */
+  matched: number
+  /** 统计范围：all_tables_rows（整表）/ user（当前用户 + 时间边界） */
+  scope: 'all_tables_rows' | 'user'
+}
 // DELETE /api/batch-refresh/history 返回结构
 export interface BatchRefreshHistoryCleanupResult {
   ok: boolean
@@ -199,6 +210,14 @@ export const batchRefreshApi = {
   deleteHistory: (historyId: number) =>
     client
       .delete<{ ok: boolean }>(`/api/batch-refresh/history/${historyId}`)
+      .then((r) => r.data),
+
+  // 清理前条数预览（T02578 / 4.4-3）：与 cleanupHistory 的真实删除条件同源
+  cleanupHistoryPreview: (days: number) =>
+    client
+      .get<BatchRefreshHistoryCleanupPreview>('/api/batch-refresh/history/cleanup-preview', {
+        params: { days },
+      })
       .then((r) => r.data),
 
   // 按天数清理过期历史（days=0 清空全部）

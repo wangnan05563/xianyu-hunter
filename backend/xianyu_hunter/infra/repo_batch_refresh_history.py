@@ -26,14 +26,21 @@ class BatchRefreshHistoryMixin:
             )
             return result.inserted_primary_key[0]
 
-    def get_batch_refresh_history(self, history_id: int) -> dict | None:
-        """按主键查询单条历史记录"""
+    def get_batch_refresh_history(
+        self, history_id: int, user_id: str | None = None
+    ) -> dict | None:
+        """按主键查询单条历史记录
+
+        user_id 不为 None 时加 `user_id ==` 过滤，与 get/update/delete 的隔离口径一致
+        （T02578 真机验收发现详情路由按 `user_id=` 传参调用，此前签名缺该参数 → TypeError 500）。
+        """
         with self.engine.connect() as conn:
-            row = conn.execute(
-                select(BatchRefreshHistoryRow).where(
-                    BatchRefreshHistoryRow.id == history_id
-                )
-            ).first()
+            stmt = select(BatchRefreshHistoryRow).where(
+                BatchRefreshHistoryRow.id == history_id
+            )
+            if user_id is not None:
+                stmt = stmt.where(BatchRefreshHistoryRow.user_id == user_id)
+            row = conn.execute(stmt).first()
             return RepositoryBase._row_to_dict(row) if row else None
 
     def update_batch_refresh_history(
@@ -124,6 +131,25 @@ class BatchRefreshHistoryMixin:
                 stmt = stmt.where(BatchRefreshHistoryRow.started_at >= start_dt)
             if end_dt:
                 stmt = stmt.where(BatchRefreshHistoryRow.started_at <= end_dt)
+            if user_id is not None:
+                stmt = stmt.where(BatchRefreshHistoryRow.user_id == user_id)
+            return int(conn.execute(stmt).scalar() or 0)
+
+    def count_batch_refresh_history_before(
+        self, cutoff: datetime | None, user_id: str | None = None
+    ) -> int:
+        """统计「将被 cleanup_old_batch_refresh_history 删除」的记录数（T02578 / 4.4-3）
+
+        与删除路径**逐字对齐**，供清理前的条数预览使用（分母同源）：
+        - cutoff=None → 不加时间条件，对应 `days=0` 的「清空全部」分支（整表 DELETE，无 user 过滤）
+        - `started_at < cutoff`（严格小于，与 DELETE 一致；不复用 count_batch_refresh_history
+          的 `<= end_dt`，否则边界那一秒的记录会「预览说 10 条、实际删 9 条」）
+        - user_id 不为 None 时加 `user_id ==` 过滤，与 DELETE 的同名条件一致
+        """
+        with self.engine.connect() as conn:
+            stmt = select(func.count(BatchRefreshHistoryRow.id))
+            if cutoff is not None:
+                stmt = stmt.where(BatchRefreshHistoryRow.started_at < cutoff)
             if user_id is not None:
                 stmt = stmt.where(BatchRefreshHistoryRow.user_id == user_id)
             return int(conn.execute(stmt).scalar() or 0)

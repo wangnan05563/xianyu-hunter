@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Alert,
   Button,
@@ -20,6 +20,7 @@ import {
   Tag,
   Typography,
   message,
+  notification,
 } from 'antd'
 import type { TableColumnsType, TableProps } from 'antd'
 import type { Dayjs } from 'dayjs'
@@ -124,6 +125,95 @@ function formatElapsed(ms: number | null | undefined): string {
   const m = Math.floor(sec / 60)
   const s = sec % 60
   return m > 0 ? `${m}分${s}秒` : `${s}秒`
+}
+
+// ===== T02578 批量采集收尾反馈：可单测的纯函数（4.4-1 / 4.4-3 / 4.4-5）=====
+
+/** 批次运行态（会跃迁到 idle 的前置状态） */
+const BATCH_ACTIVE_STATES = ['running', 'paused', 'stopping'] as const
+
+/**
+ * 「本批刚跑完」判定：上一帧是运行/暂停/停止，这一帧回到空闲。
+ * 首帧（prev 为 null/undefined）一律不报——否则一进页面就把上次遗留的 last_result
+ * 当成「刚完成的收尾」弹出来，是一种假回执。
+ */
+export function batchRunJustFinished(
+  prev: string | null | undefined,
+  next: string | null | undefined,
+): boolean {
+  const wasActive = prev != null && (BATCH_ACTIVE_STATES as readonly string[]).includes(prev)
+  return wasActive && next === 'idle'
+}
+
+/** 收尾通知文案：数字一律取自后端 last_result，拿不到就明说拿不到 */
+export function buildBatchFinishCopy(
+  result: { success: number; failed: number; skipped: number; stopped?: boolean } | null | undefined,
+  lastRunAt: string | null | undefined,
+): { level: 'success' | 'warning' | 'info'; message: string; description: string } {
+  const when = lastRunAt ? formatTime(lastRunAt) : '时间未回传'
+  if (!result) {
+    return {
+      level: 'info',
+      message: '批量采集已回到空闲',
+      description: `本轮结束时间 ${when}，但后端未回传统计（成功/失败/跳过条数未知）。可在下方「执行历史」按状态筛选核对。`,
+    }
+  }
+  const summary = `成功 ${result.success} · 失败 ${result.failed} · 跳过 ${result.skipped}`
+  const tail = result.stopped ? '（本批次被手动停止，未处理商品已持久化，下次触发从断点续传）' : ''
+  const level: 'success' | 'warning' = result.failed > 0 ? 'warning' : 'success'
+  return {
+    level,
+    message: result.failed > 0 ? `批量采集结束：${summary}` : `批量采集完成：${summary}`,
+    description: `最近一次批次记录于 ${when}${tail}。`,
+  }
+}
+
+/** 清理预览状态（按 days 维度缓存，避免每次打开 Popconfirm 都重复请求） */
+export type CleanupPreviewState = {
+  status: 'loading' | 'ready' | 'error'
+  matched?: number
+}
+
+/**
+ * 清理确认框的口径说明（4.4-3）：条数必须来自 /history/cleanup-preview——
+ * 它与真正 DELETE 的 WHERE 逐字同源，不能用当前筛选的 total 冒充「将被删除的条数」。
+ */
+export function cleanupPreviewDescription(
+  state: CleanupPreviewState | undefined,
+  days: number,
+): string {
+  if (!state || state.status === 'loading') return '正在统计将被删除的条数…'
+  if (state.status === 'error' || state.matched == null) {
+    return '条数统计失败：无法确认本次删除范围，请点「重试」后再确认'
+  }
+  const n = state.matched
+  if (n === 0) {
+    return days === 0 ? '当前没有可清空的执行历史（0 条）' : `当前没有 ${days} 天前的记录（0 条）`
+  }
+  return days === 0
+    ? `将删除全部 ${n} 条执行历史（整表清空，不区分用户），操作不可恢复`
+    : `将删除 ${days} 天前的 ${n} 条执行历史，操作不可恢复`
+}
+
+/** 控制按钮的悬浮提示按当前状态生成（4.4-5：禁用态不能再写动作描述） */
+export function controlButtonTips(flags: {
+  running: boolean
+  paused: boolean
+  stopping: boolean
+}): { pause: string; resume: string; stop: string } {
+  const { running, paused, stopping } = flags
+  const inProgress = running || paused || stopping
+  let pause = '当前空闲，无可暂停批次'
+  if (running) pause = '暂停当前批次，当前商品采集完成后生效'
+  else if (stopping) pause = '正在停止当前批次，无需再暂停'
+  else if (paused) pause = '批次已处于「已暂停」，无需再暂停'
+  let resume = '仅当批次处于「已暂停」时可继续'
+  if (paused) resume = '从断点继续当前批次'
+  else if (running) resume = '当前正在采集，无需继续'
+  const stop = inProgress
+    ? '停止当前批次并持久化未处理商品，下次触发从断点续传'
+    : '当前没有正在运行的批次，无需停止'
+  return { pause, resume, stop }
 }
 
 export default function BatchRefresh() {
@@ -248,6 +338,23 @@ function CurrentBatchPanel() {
       }
     }
   }, [status?.status, forceFastPoll])
+
+  // 4.4-1 收尾反馈：记录上一帧状态，运行/暂停/停止 → 空闲 时弹汇总通知
+  // 只在跃迁那一刻弹一次（轮询本身每 3s 一次，不加闸门会变成刷屏假回执）
+  const prevStatusRef = useRef<string | null>(null)
+  useEffect(() => {
+    const current = status?.status ?? null
+    if (batchRunJustFinished(prevStatusRef.current, current)) {
+      const copy = buildBatchFinishCopy(status?.last_result, status?.last_run_at)
+      notification[copy.level]({
+        message: copy.message,
+        description: copy.description,
+        duration: 6,
+        placement: 'bottomRight',
+      })
+    }
+    prevStatusRef.current = current
+  }, [status])
 
   // 组件卸载时清理 forceFastPoll 兜底定时器
   useEffect(() => {
@@ -374,6 +481,8 @@ function CurrentBatchPanel() {
   let triggerTooltipText = '立即触发一次批量采集'
   if (inProgress) triggerTooltipText = '已有批次在运行，请先停止'
   else if (unavailable) triggerTooltipText = '调度器未启动'
+  // 4.4-5：暂停/继续/停止的提示按当前状态生成，禁用态不再写「能做的动作」
+  const tips = controlButtonTips({ running, paused, stopping })
 
   return (
     <>
@@ -425,6 +534,26 @@ function CurrentBatchPanel() {
           showIcon
           message="正在停止当前批次"
           description="停止请求已发送，等待当前商品采集完成后停止。未处理的商品将持久化，下次触发时从断点续传。"
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
+      {/* 4.4-1 结果汇总面板：空闲态常驻，错过收尾通知也能看到同一份真实计数 */}
+      {!inProgress && status != null && (
+        <Alert
+          type={lastResult ? (lastResult.failed > 0 ? 'warning' : 'success') : 'info'}
+          showIcon
+          message={
+            lastResult
+              ? `最近一次批次汇总：成功 ${lastResult.success} · 失败 ${lastResult.failed} · 跳过 ${lastResult.skipped}${lastResult.stopped ? ' · 已手动停止' : ''}`
+              : '最近一次批次汇总：后端未回传统计'
+          }
+          description={
+            <span style={{ fontSize: 12 }}>
+              统计时间 {formatTime(status.last_run_at ?? null)}；这是后端记录的最近一次批次结果，
+              不一定是刚刚结束的一轮。失败明细可在下方「执行历史」里按状态=已失败筛选查看。
+            </span>
+          }
           style={{ marginBottom: 16 }}
         />
       )}
@@ -610,7 +739,7 @@ function CurrentBatchPanel() {
               <Row gutter={8}>
                 <Col span={12}>
                   <TipButton
-                    tip="暂停当前批次，采集完成后生效"
+                    tip={tips.pause}
                     block
                     icon={<PauseCircleOutlined />}
                     loading={controlling === 'pause'}
@@ -622,7 +751,7 @@ function CurrentBatchPanel() {
                 </Col>
                 <Col span={12}>
                   <TipButton
-                    tip="从断点继续批量采集"
+                    tip={tips.resume}
                     block
                     type="primary"
                     icon={<PlayCircleOutlined />}
@@ -635,7 +764,7 @@ function CurrentBatchPanel() {
                 </Col>
               </Row>
               <TipButton
-                tip="停止批次并持久化进度"
+                tip={tips.stop}
                 block
                 danger
                 icon={<StopOutlined />}
@@ -708,6 +837,11 @@ function HistoryPanel() {
   const [detail, setDetail] = useState<BatchRefreshHistoryItem | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
+  // 清理预览：按 days 缓存，Popconfirm 打开时拉取（4.4-3 分母同源）
+  const [cleanupPreview, setCleanupPreview] = useState<
+    Record<number, CleanupPreviewState>
+  >({})
+  const [cleaning, setCleaning] = useState<number | null>(null)
 
   // 筛选条件（持久化：刷新后保持上次筛选状态，与 ErrorLogs 页面风格一致）
   const [filterStatus, setFilterStatus] = usePersistentState<string | undefined>(
@@ -750,6 +884,10 @@ function HistoryPanel() {
     }
     return q
   }, [orderBy, orderDir, pageSize, page, filterStatus, filterSource, filterTaskId, filterDateRange])
+
+  // 4.4-4：是否有筛选条件生效——决定第一张卡的口径文案与顶部提示条是否出现
+  const filtersActive =
+    !!filterStatus || !!filterSource || !!filterTaskId.trim() || !!(filterDateRange?.[0] && filterDateRange?.[1])
 
   const loadList = useCallback(() => {
     setLoading(true)
@@ -805,15 +943,76 @@ function HistoryPanel() {
     }
   }
 
+  /**
+   * 拉取「将被删除的条数」预览。
+   * 走 /history/cleanup-preview：它与真正 DELETE 的 WHERE 同源（同一 user_id 过滤 +
+   * started_at < cutoff），因此不能用当前筛选的 total 代替——那是「筛出来的条数」，
+   * 与「会删掉的条数」不是一回事。
+   */
+  const loadCleanupPreview = async (days: number) => {
+    setCleanupPreview((prev) => ({ ...prev, [days]: { status: 'loading' } }))
+    try {
+      const res = await batchRefreshApi.cleanupHistoryPreview(days)
+      setCleanupPreview((prev) => ({ ...prev, [days]: { status: 'ready', matched: res.matched } }))
+    } catch {
+      setCleanupPreview((prev) => ({ ...prev, [days]: { status: 'error' } }))
+    }
+  }
+
   const handleCleanup = async (days: number) => {
+    setCleaning(days)
     try {
       const res = await batchRefreshApi.cleanupHistory(days)
       message.success(`已清理 ${res.deleted} 条记录`)
       setPage(1)
+      // 删除后计数已变，缓存必须作废，否则下次打开确认框还显示旧的「共 N 条」
+      setCleanupPreview((prev) => ({ ...prev, [days]: { status: 'loading' } }))
       loadList()
+      loadCleanupPreview(days)
     } catch (e) {
       message.error(extractApiError(e), 5)
+    } finally {
+      setCleaning(null)
     }
+  }
+
+  /**
+   * 清理类确认框统一渲染（4.4-3）：
+   * 打开即取预览条数 → description 如实告知范围与不可恢复 → 统计中/统计失败/0 条时禁用确认。
+   */
+  const renderCleanupPopconfirm = (
+    days: number,
+    title: string,
+    okText: string,
+    danger: boolean,
+    trigger: ReactNode,
+  ) => {
+    const state = cleanupPreview[days]
+    const canConfirm = state?.status === 'ready' && (state.matched ?? 0) > 0
+    return (
+      <Popconfirm
+        title={title}
+        description={
+          <>
+            <div>{cleanupPreviewDescription(state, days)}</div>
+            {state?.status === 'error' && (
+              <Button type="link" size="small" style={{ padding: 0 }} onClick={() => loadCleanupPreview(days)}>
+                重试
+              </Button>
+            )}
+          </>
+        }
+        onOpenChange={(open) => {
+          if (open && cleanupPreview[days]?.status !== 'ready') loadCleanupPreview(days)
+        }}
+        onConfirm={() => handleCleanup(days)}
+        okText={okText}
+        cancelText="取消"
+        okButtonProps={{ danger, disabled: !canConfirm, loading: cleaning === days }}
+      >
+        {trigger}
+      </Popconfirm>
+    )
   }
 
   // 表格列定义
@@ -959,12 +1158,22 @@ function HistoryPanel() {
 
   return (
     <>
+      {/* 4.4-4 统计口径：筛选生效时顶部说明「第一张卡是筛选命中数，后三张是全表累计」 */}
+      {filtersActive && (
+        <Alert
+          type="info"
+          showIcon
+          closable
+          message={<span style={{ fontSize: 12 }}>当前有筛选条件生效：「当前筛选结果数」按筛选统计，状态三张卡（已完成/已取消/已失败）始终是<b>全表累计</b>，两者口径不同不可直接相加。</span>}
+          style={{ marginBottom: 12 }}
+        />
+      )}
       {/* 概览卡片：按状态聚合统计 */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="总执行次数"
+              title={filtersActive ? '当前筛选结果数' : '执行记录总数'}
               value={total}
             />
           </Card>
@@ -972,7 +1181,7 @@ function HistoryPanel() {
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="已完成"
+              title="已完成（全表累计）"
               value={statusCounts['completed'] ?? 0}
               valueStyle={{ color: '#52c41a' }}
             />
@@ -981,7 +1190,7 @@ function HistoryPanel() {
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="已取消"
+              title="已取消（全表累计）"
               value={statusCounts['cancelled'] ?? 0}
               valueStyle={{ color: '#fa8c16' }}
             />
@@ -990,7 +1199,7 @@ function HistoryPanel() {
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="已失败"
+              title="已失败（全表累计）"
               value={statusCounts['failed'] ?? 0}
               valueStyle={{ color: '#ff4d4f' }}
             />
@@ -1056,23 +1265,20 @@ function HistoryPanel() {
           </Col>
           <Col flex="auto" style={{ textAlign: 'right' }}>
             <Space>
-              <Popconfirm
-                title="确认清理 30 天前的历史记录？"
-                onConfirm={() => handleCleanup(30)}
-                okText="清理"
-                cancelText="取消"
-              >
-                <TipButton tip="清理 30 天前的历史记录" icon={<DeleteOutlined />}>清理 30 天前</TipButton>
-              </Popconfirm>
-              <Popconfirm
-                title="确认清空全部历史记录？此操作不可恢复。"
-                onConfirm={() => handleCleanup(0)}
-                okText="清空"
-                okButtonProps={{ danger: true }}
-                cancelText="取消"
-              >
-                <TipButton tip="清空全部历史记录，不可恢复" danger icon={<DeleteOutlined />}>清空全部</TipButton>
-              </Popconfirm>
+              {renderCleanupPopconfirm(
+                30,
+                '确认清理 30 天前的执行历史？',
+                '清理',
+                true,
+                <TipButton tip="清理 30 天前的执行历史" icon={<DeleteOutlined />}>清理 30 天前</TipButton>,
+              )}
+              {renderCleanupPopconfirm(
+                0,
+                '确认清空全部执行历史？此操作不可恢复。',
+                '清空',
+                true,
+                <TipButton tip="清空全部执行历史，不可恢复" danger icon={<DeleteOutlined />}>清空全部</TipButton>,
+              )}
               <TipButton tip="重新加载执行历史列表" icon={<ReloadOutlined />} onClick={loadList} loading={loading}>
                 刷新
               </TipButton>

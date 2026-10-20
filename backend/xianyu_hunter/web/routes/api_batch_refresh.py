@@ -7,6 +7,7 @@
 - POST /api/batch-refresh/pause|resume|stop — 任务控制（立即返回，延迟生效）
 - GET  /api/batch-refresh/history — 分页查询执行历史（支持筛选/排序）
 - GET  /api/batch-refresh/history/stats — 按 task_id 聚合统计执行次数
+- GET  /api/batch-refresh/history/cleanup-preview — 清理前的「将被删除条数」预览（与 DELETE 同源）
 - GET  /api/batch-refresh/history/{history_id} — 单条历史详情
 - DELETE /api/batch-refresh/history/{history_id} — 删除单条历史
 - DELETE /api/batch-refresh/history — 按天数清理过期历史
@@ -17,6 +18,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -337,6 +339,39 @@ def get_history_stats(
     user_id = getattr(request.state, "user_id", None)
     stats = container.repo.count_batch_refresh_history_by_task(user_id=user_id)
     return {"items": stats, "count": len(stats)}
+
+
+@router.get("/history/cleanup-preview")
+def cleanup_history_preview(
+    request: Request,
+    days: int = Query(..., ge=0, le=3650, description="预览清理 N 天前的记录会命中多少条，0=全部"),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """清理前的条数预览（T02578 / 4.4-3）
+
+    必须与 `cleanup_history` 的真实删除条件逐字一致，否则会出现「预览 10 条、删掉 9 条」的
+    假数字（三期范围确认的分母同源口径）：
+    - days=0：DELETE 整表（不按 user 过滤）→ 预览也不按 user 过滤；
+    - days>0：`started_at < utcnow - days`（严格小于）且 `user_id == 写入侧 user`。
+    声明位置必须在 `/history/{history_id}` 之前，否则会被当成 history_id 解析并 422。
+    """
+    user_id = getattr(request.state, "user_id", "default")
+    if days == 0:
+        matched = container.repo.count_batch_refresh_history_before(None, user_id=None)
+        return {
+            "days": days,
+            "cutoff": None,
+            "matched": matched,
+            "scope": "all_tables_rows",
+        }
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    matched = container.repo.count_batch_refresh_history_before(cutoff, user_id=user_id)
+    return {
+        "days": days,
+        "cutoff": cutoff.isoformat(),
+        "matched": matched,
+        "scope": "user",
+    }
 
 
 @router.get("/history/{history_id}")
