@@ -68,7 +68,7 @@ export const MENU_GUIDES: MenuGuide[] = [
   {
     route: '/logs',
     steps: [
-      { selector: '.page-container', title: '实时日志', description: '通过 SSE 实时推送系统日志，按级别过滤并自动滚动，断线自动重连，适合运行时排查。' },
+      { selector: '.page-container', title: '实时日志', description: '通过 SSE 实时推送系统日志，按级别过滤；新日志追加在列表末尾，框内手动滚动查看（不自动跟随到底部），连接断开会提示并停止推送，需重新开启日志流。' },
     ],
   },
   {
@@ -188,7 +188,7 @@ export const MENU_GUIDES: MenuGuide[] = [
   {
     route: '/menu-admin',
     steps: [
-      { selector: '.page-container', title: '菜单管理', description: '拖拽排序、隐藏/显示侧边栏菜单项，配置按用户隔离保存，可一键重置。' },
+      { selector: '.page-container', title: '菜单管理', description: '在表格里编辑排序值调整侧边栏顺序、开关可见性，配置按用户隔离保存，可一键重置（排序通过编辑数值完成，页面不提供鼠标拖动）。' },
     ],
   },
 ]
