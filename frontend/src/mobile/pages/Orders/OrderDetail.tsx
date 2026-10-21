@@ -6,15 +6,10 @@ import { orderApi } from '../../../api'
 import type { OrderItem } from '../../../api/types'
 import FetchFailedHint from '../../../components/FetchFailedHint'
 import TakeoverCountdown from '../../components/TakeoverCountdown'
+import { ORDER_STATUS, orderStatusColor, orderStatusLabel } from '../../../constants/orderStatus'
 
-const STATUS_LABELS: Record<string, string> = {
-  pending_pay: '待支付',
-  succeeded: '已成功',
-  takeover_pending: '人工接管',
-  failed: '已失败',
-  cancelled: '已取消',
-  dry_run: '演练',
-}
+// 状态文案/颜色来自 constants/orderStatus（与后端 OrderStatus 同源，T02716）
+// 原先这里又写一份 STATUS_LABELS：新增状态只改常量表时，详情页会静默显示英文末段
 
 export default function MobileOrderDetail() {
   const { id } = useParams<{ id: string }>()
@@ -57,10 +52,10 @@ export default function MobileOrderDetail() {
           <Descriptions.Item label="卖家">{order.seller_id || '—'}</Descriptions.Item>
           <Descriptions.Item label="订单号">{order.order_no || '—'}</Descriptions.Item>
           <Descriptions.Item label="状态">
-            <Tag>{STATUS_LABELS[order.status] || order.status}</Tag>
+            <Tag color={orderStatusColor(order.status)}>{orderStatusLabel(order.status)}</Tag>
           </Descriptions.Item>
           {/* 人工接管倒计时（FR-G-2）：详情端点本次已附加 deadline/剩余秒 */}
-          {order.status === 'takeover_pending' && (
+          {order.status === ORDER_STATUS.TAKEOVER_PENDING && (
             <Descriptions.Item label="接管截止">
               <TakeoverCountdown
                 deadline={order.takeover_deadline}

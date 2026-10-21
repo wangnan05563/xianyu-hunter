@@ -12,7 +12,12 @@ import {
 } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
 import { orderApi, type OrderItem, type OrderStats } from '../../api'
-import { ORDER_STATUS_CONFIG } from '../../constants/orderStatus'
+import {
+  ORDER_STATUS,
+  orderStatusColor,
+  orderStatusLabel,
+  orderStatusOptions,
+} from '../../constants/orderStatus'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
@@ -31,17 +36,8 @@ const COLUMN_DEFINITIONS: ColumnConfig[] = [
   { key: 'action', label: '操作', locked: true },
 ]
 
-// 保留组件特有的中文标签（与 Timeline 的简短标签不同，以维持原有显示效果）
-const STATUS_TEXT: Record<string, string> = {
-  // 与后端 OrderStatus 同源：库里写的是 pending_pay，不是 pending
-  pending_pay: '待支付',
-  succeeded: '已成功',
-  failed: '已失败',
-  // 后端 takeover_order 写入的状态是 takeover_pending（非 takeover）
-  takeover_pending: '人工接管',
-  // 演练报告（PRD FR-C3-3）：红色徽标与真实记录区分
-  dry_run: '演练',
-}
+// 状态中文标签与颜色统一来自 constants/orderStatus（与后端 OrderStatus 同源，T02716）
+// 原先这里一份 STATUS_TEXT、移动端一份 STATUS_LABELS，两边都各自漏过值（桌面漏 cancelled）
 
 // ============== 利润计算器 ==============
 
@@ -569,7 +565,7 @@ export default function Orders() {
     },
     {
       title: '状态', dataIndex: 'status', key: 'status', width: 100,
-      render: (s: string) => <Tag color={ORDER_STATUS_CONFIG[s]?.color || 'default'}>{STATUS_TEXT[s] || s}</Tag>,
+      render: (s: string) => <Tag color={orderStatusColor(s)}>{orderStatusLabel(s)}</Tag>,
     },
     {
       title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 170,
@@ -594,15 +590,15 @@ export default function Orders() {
       title: '操作', key: 'action', width: 200, fixed: 'right' as const,
       render: (_: unknown, r: OrderItem) => (
         <Space size="small">
-          {(r.status === 'pending_pay' || r.status === 'takeover_pending') && (
+          {(r.status === ORDER_STATUS.PENDING_PAY || r.status === ORDER_STATUS.TAKEOVER_PENDING) && (
             <TipButton
-              tip={r.status === 'pending_pay' ? '接管此待支付订单' : '查看接管进度'}
+              tip={r.status === ORDER_STATUS.PENDING_PAY ? '接管此待支付订单' : '查看接管进度'}
               type="link"
               icon={<ThunderboltOutlined />}
               size="small"
               onClick={() => openTakeoverModal(r)}
             >
-              {r.status === 'pending_pay' ? '接管' : '查看'}
+              {r.status === ORDER_STATUS.PENDING_PAY ? '接管' : '查看'}
             </TipButton>
           )}
           <Popconfirm
@@ -643,12 +639,12 @@ export default function Orders() {
             placeholder="全部状态"
             value={statusFilter}
             onChange={onStatusChange}
-            options={[
-              { label: '待支付', value: 'pending_pay' },
-              { label: '已成功', value: 'succeeded' },
-              { label: '已失败', value: 'failed' },
-              { label: '人工接管', value: 'takeover_pending' },
-            ]}
+            options={orderStatusOptions([
+              ORDER_STATUS.PENDING_PAY,
+              ORDER_STATUS.SUCCEEDED,
+              ORDER_STATUS.FAILED,
+              ORDER_STATUS.TAKEOVER_PENDING,
+            ])}
           />
           <TipButton tip="重新加载订单列表" icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</TipButton>
           <TipButton tip="自定义表格显示列与顺序" icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)}>列配置</TipButton>

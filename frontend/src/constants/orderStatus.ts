@@ -34,3 +34,47 @@ export const ORDER_STATUS = {
 } as const
 
 export type OrderStatusValue = (typeof ORDER_STATUS)[keyof typeof ORDER_STATUS]
+
+/**
+ * 订单域的完整中文标签（T02716）。
+ *
+ * ORDER_STATUS_CONFIG.label 是时间轴用的两字短标签，列表/详情要显示「已成功」这类完整措辞。
+ * 之前这套措辞在桌面订单页和移动端订单页各写了一份（移动端还漏了 cancelled），
+ * 漏写的那个值会静默退化成英文末段。列表的可选项也从这里生成，
+ * 保证「能选到的状态」和「能读到的标签」永远是同一份映射。
+ */
+export const ORDER_STATUS_LABELS: Record<OrderStatusValue, string> = {
+  [ORDER_STATUS.PENDING_PAY]: '待支付',
+  [ORDER_STATUS.SUCCEEDED]: '已成功',
+  [ORDER_STATUS.FAILED]: '已失败',
+  [ORDER_STATUS.CANCELLED]: '已取消',
+  [ORDER_STATUS.TAKEOVER_PENDING]: '人工接管',
+  [ORDER_STATUS.DRY_RUN]: '演练',
+}
+
+/**
+ * 移动端订单页围绕用户决策的那几个状态（T02716）。
+ * 列表的状态筛选与行内「改状态」下拉共用这一份：两处本来就是同一组决策
+ * （待支付 / 支付完标记成功 / 放弃则取消），分成两份写就会一边加了另一边忘。
+ */
+export const ORDER_STATUS_USER_CHOICES: readonly OrderStatusValue[] = [
+  ORDER_STATUS.PENDING_PAY,
+  ORDER_STATUS.SUCCEEDED,
+  ORDER_STATUS.CANCELLED,
+]
+
+/** 生成 Select / Segmented 的选项，避免各页面再手写一遍 value/label 对 */
+export function orderStatusOptions(
+  values: readonly OrderStatusValue[],
+): { value: OrderStatusValue; label: string }[] {
+  return values.map((value) => ({ value, label: ORDER_STATUS_LABELS[value] }))
+}
+
+/** 兜底显示原文：库里若出现枚举外的值，宁可露出英文也不要伪装成某个已知状态 */
+export function orderStatusLabel(status: string): string {
+  return ORDER_STATUS_LABELS[status as OrderStatusValue] || status
+}
+
+export function orderStatusColor(status: string): string {
+  return ORDER_STATUS_CONFIG[status]?.color || 'default'
+}

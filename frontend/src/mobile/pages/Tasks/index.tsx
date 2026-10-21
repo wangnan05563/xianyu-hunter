@@ -7,6 +7,14 @@ import { taskApi } from '../../../api'
 import type { Task } from '../../../api/types'
 import PullToRefresh from '../../components/PullToRefresh'
 import FetchFailedHint from '../../../components/FetchFailedHint'
+import {
+  TASK_STATUS,
+  taskModeLabel,
+  taskStatusColor,
+  taskStatusLabel,
+} from '../../../constants/taskStatus'
+
+// 状态/模式文案与颜色来自 constants/taskStatus（与后端 domain/task.py 同源，T02716）
 
 export default function MobileTasks() {
   const navigate = useNavigate()
@@ -35,7 +43,7 @@ export default function MobileTasks() {
   // 用函数式 setTasks 精确回滚单个 task，避免闭包 prev 快照过期误回滚其他 task
   // （连续快速点击场景：第二次操作闭包里的 prev 已过期，整体 setTasks(prev) 会覆盖中间变化）
   const handleToggle = async (task: Task, checked: boolean) => {
-    const newStatus = checked ? 'running' : 'paused'
+    const newStatus = checked ? TASK_STATUS.RUNNING : TASK_STATUS.PAUSED
     setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: newStatus } : t))
     try {
       await taskApi.control(task.id, checked ? 'resume' : 'pause')
@@ -77,13 +85,7 @@ export default function MobileTasks() {
           // 卡片整体作为可聚焦链接：键盘 Enter 跳转，回车键同样可触发
           // 为什么用 role="link" 而非 <button>：卡片内嵌 <Switch> 按钮，
           // <button> 嵌套 <button> 违反 HTML 规范；用 role="link" + tabIndex 同样可达
-          // S3358：嵌套三元拆分为独立 if/else，提升可读性
-          let modeLabel = '确认'
-          if (task.mode === 'auto') {
-            modeLabel = '全自动'
-          } else if (task.mode === 'semi_auto') {
-            modeLabel = '半自动'
-          }
+          const modeLabel = taskModeLabel(task.mode)
           const goDetail = () => navigate(`/m/tasks/${task.id}`)
           const onKeyDown = (e: React.KeyboardEvent) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -107,15 +109,15 @@ export default function MobileTasks() {
                   <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{task.name}</div>
                   <div style={{ fontSize: 13, color: '#999' }}>{task.keyword}</div>
                   <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-                    <Tag color={task.status === 'running' ? 'green' : 'default'}>
-                      {task.status === 'running' ? '运行中' : '已暂停'}
+                    <Tag color={taskStatusColor(task.status)}>
+                      {taskStatusLabel(task.status)}
                     </Tag>
                     <Tag>{modeLabel}</Tag>
                   </div>
                 </div>
                 {/* 启停开关：阻止冒泡避免触发卡片点击；按钮仍可独立键盘操作 */}
                 <Switch
-                  checked={task.status === 'running'}
+                  checked={task.status === TASK_STATUS.RUNNING}
                   onChange={(checked, e) => { e.stopPropagation(); handleToggle(task, checked) }}
                   size="small"
                 />

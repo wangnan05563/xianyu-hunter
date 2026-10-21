@@ -5,21 +5,10 @@ import { useEffect, useState, useCallback } from 'react'
 import { taskApi } from '../../../api'
 import type { Task } from '../../../api/types'
 import FetchFailedHint from '../../../components/FetchFailedHint'
+import { taskModeLabel, taskStatusColor, taskStatusLabel } from '../../../constants/taskStatus'
 
-// 与任务列表页同一套文案（FR-G-3：同一个值在两个页面不能一个中文一个英文）
-const STATUS_LABELS: Record<string, string> = {
-  running: '运行中',
-  paused: '已暂停',
-  stopped: '已停止',
-  deleted: '已删除',
-}
-const MODE_LABELS: Record<string, string> = {
-  auto: '全自动',
-  semi_auto: '半自动',
-}
-// 与列表页一致：非 auto/semi_auto 的模式（如 keyword）统一显示「确认」
-const modeLabel = (mode?: string | null) => (mode ? MODE_LABELS[mode] || '确认' : '—')
-const statusLabel = (status?: string | null) => (status ? STATUS_LABELS[status] || status : '—')
+// 状态/模式文案与颜色来自 constants/taskStatus（与后端 domain/task.py 同源，T02716）：
+// 与任务列表页共用同一份映射，同一个值不可能再一个页面中文、另一个页面英文
 
 export default function MobileTaskDetail() {
   const { id } = useParams<{ id: string }>()
@@ -63,9 +52,9 @@ export default function MobileTaskDetail() {
           </Descriptions.Item>
           <Descriptions.Item label="排除词">{task.exclude_words || '无'}</Descriptions.Item>
           <Descriptions.Item label="地区">{task.region || '不限'}</Descriptions.Item>
-          <Descriptions.Item label="模式">{modeLabel(task.mode)}</Descriptions.Item>
+          <Descriptions.Item label="模式">{taskModeLabel(task.mode)}</Descriptions.Item>
           <Descriptions.Item label="状态">
-            <Tag color={task.status === 'running' ? 'green' : 'default'}>{statusLabel(task.status)}</Tag>
+            <Tag color={taskStatusColor(task.status)}>{taskStatusLabel(task.status)}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="Cron">{task.cron}</Descriptions.Item>
           <Descriptions.Item label="创建时间">{task.created_at}</Descriptions.Item>

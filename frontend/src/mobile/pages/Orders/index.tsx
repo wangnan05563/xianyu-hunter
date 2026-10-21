@@ -8,25 +8,16 @@ import { extractApiError } from '../../../utils/apiError'
 import PullToRefresh from '../../components/PullToRefresh'
 import FetchFailedHint from '../../../components/FetchFailedHint'
 import TakeoverCountdown from '../../components/TakeoverCountdown'
+import {
+  ORDER_STATUS,
+  ORDER_STATUS_USER_CHOICES,
+  orderStatusColor,
+  orderStatusLabel,
+  orderStatusOptions,
+} from '../../../constants/orderStatus'
 
-// 状态中文映射
-const STATUS_LABELS: Record<string, string> = {
-  pending_pay: '待支付',
-  succeeded: '已成功',
-  takeover_pending: '人工接管',
-  failed: '已失败',
-  cancelled: '已取消',
-  dry_run: '演练',
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  pending_pay: 'orange',
-  succeeded: 'green',
-  takeover_pending: 'blue',
-  failed: 'red',
-  cancelled: 'default',
-  dry_run: 'red',
-}
+// 状态文案与颜色全部来自 constants/orderStatus（与后端 domain/order.py OrderStatus 同源，T02716）
+// 原先这里另写一份 STATUS_LABELS/STATUS_COLORS，桌面端再写第三份：拼错或漏值不报错，只静默显示英文末段
 
 export default function MobileOrders() {
   const navigate = useNavigate()
@@ -72,11 +63,7 @@ export default function MobileOrders() {
         allowClear
         style={{ width: '100%', marginBottom: 12 }}
         onChange={(v) => setFilterStatus(v)}
-        options={[
-          { value: 'pending_pay', label: '待支付' },
-          { value: 'succeeded', label: '已成功' },
-          { value: 'cancelled', label: '已取消' },
-        ]}
+        options={orderStatusOptions(ORDER_STATUS_USER_CHOICES)}
       />
       {orders.length === 0 ? (
         loadFailed ? (
@@ -110,11 +97,11 @@ export default function MobileOrders() {
             </button>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <Tag color={STATUS_COLORS[order.status]}>
-                  {STATUS_LABELS[order.status] || order.status}
+                <Tag color={orderStatusColor(order.status)}>
+                  {orderStatusLabel(order.status)}
                 </Tag>
                 {/* 人工接管：显示真实剩余时间（闲鱼待付款 30 分钟自动关闭） */}
-                {order.status === 'takeover_pending' && (
+                {order.status === ORDER_STATUS.TAKEOVER_PENDING && (
                   <TakeoverCountdown
                     deadline={order.takeover_deadline}
                     remainingSec={order.takeover_remaining_sec}
@@ -127,11 +114,7 @@ export default function MobileOrders() {
                 value={order.status}
                 style={{ width: 100 }}
                 onChange={(v) => handleStatusChange(order.id, v)}
-                options={[
-                  { value: 'pending_pay', label: '待支付' },
-                  { value: 'succeeded', label: '已成功' },
-                  { value: 'cancelled', label: '已取消' },
-                ]}
+                options={orderStatusOptions(ORDER_STATUS_USER_CHOICES)}
               />
             </div>
           </Card>

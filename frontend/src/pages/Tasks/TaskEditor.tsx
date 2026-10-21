@@ -18,6 +18,7 @@ import type { Task } from '../../api/types'
 import { storage } from '../../utils/storage'
 import { useConfigStore, DiffChange } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
+import { TASK_MODE, isTaskMode } from '../../constants/taskStatus'
 
 // Diff 预览表格的共享 render 函数（3 个全局配置 Modal 重复使用，提取到模块级避免 S4144）
 // 按类型分别处理：对象/数组走 JSON 序列化，避免 String() 输出 '[object Object]'
@@ -72,10 +73,10 @@ const searchFilterOptions = [
 ]
 
 const modeOptions = [
-  { value: 'auto', label: '🤖 全自动', desc: '评估通过后自动抢单' },
-  { value: 'semi_auto', label: '⚡ 半自动', desc: '通知 + 自动抢单（需确认）' },
-  { value: 'confirm', label: '✋ 需确认', desc: '通知 + 人工确认抢单' },
-  { value: 'notify', label: '🔔 仅通知', desc: '只通知不抢单' },
+  { value: TASK_MODE.AUTO, label: '🤖 全自动', desc: '评估通过后自动抢单' },
+  { value: TASK_MODE.SEMI_AUTO, label: '⚡ 半自动', desc: '通知 + 自动抢单（需确认）' },
+  { value: TASK_MODE.CONFIRM, label: '✋ 需确认', desc: '通知 + 人工确认抢单' },
+  { value: TASK_MODE.NOTIFY, label: '🔔 仅通知', desc: '只通知不抢单' },
 ]
 
 // 闲鱼搜索排序方式（与后端 SearchConfig.sort_type 对齐）
@@ -113,7 +114,7 @@ const taskToFormData = (task: Task): TaskCreateBody => ({
   min_price: task.min_price,
   max_price: task.max_price,
   max_publish_days: task.max_publish_days,
-  mode: task.mode || 'confirm',
+  mode: task.mode || TASK_MODE.CONFIRM,
   region: task.region || '',
   exclude_words: safeParseStringArray(task.exclude_words),
   search_filters: safeParseStringArray(task.search_filters),
@@ -209,12 +210,12 @@ const detectRiskyConfig = (
   intervalSeconds: number,
 ): { level: 'warning' | 'danger'; message: string }[] => {
   const risks: { level: 'warning' | 'danger'; message: string }[] = []
-  if (formData.mode === 'auto') {
+  if (formData.mode === TASK_MODE.AUTO) {
     risks.push({ level: 'warning', message: '任务模式为「全自动」，评估通过后会自动抢单，请确认资金风险' })
   }
   // 评估阈值：任务级优先，回退全局
   const effectiveThreshold = formData.eval_threshold ?? globalConfig?.eval?.pass_score ?? 60
-  if (formData.mode === 'auto' && effectiveThreshold < 60) {
+  if (formData.mode === TASK_MODE.AUTO && effectiveThreshold < 60) {
     risks.push({ level: 'danger', message: `评估阈值 ${effectiveThreshold} 低于 60，自动模式下可能抢到低质量商品` })
   }
   // QPS：反检测参数为全局配置（非任务级），直接读全局
@@ -311,11 +312,9 @@ export default function TaskEditor() {
   const [globalConfig, setGlobalConfig] = useState<AppConfig | null>(null)
 
   // 用类型守卫替代 as 断言（S4325）：让 TypeScript 收窄 prefillMode 类型
-  // TaskCreateBody['mode'] 是 string | undefined，需独立定义不含 undefined 的字面量联合
-  type TaskMode = 'auto' | 'semi_auto' | 'confirm' | 'notify'
-  const isTaskMode = (v: string): v is TaskMode =>
-    v === 'auto' || v === 'semi_auto' || v === 'confirm' || v === 'notify'
-  const initialMode: TaskMode = isTaskMode(prefillMode) ? prefillMode : 'confirm'
+  // 取值集合来自 constants/taskStatus（与后端 domain/task.py TaskMode 同源，T02716），
+  // 这里不再自己列一遍字面量联合——后端加一个模式时，漏改这里不会报错，只会把合法模式当非法值回落
+  const initialMode = isTaskMode(prefillMode) ? prefillMode : TASK_MODE.CONFIRM
 
   // 表单状态（含任务级覆盖字段，null 表示沿用全局）
   const [formData, setFormData] = useState<TaskCreateBody>({
@@ -642,7 +641,7 @@ export default function TaskEditor() {
                 <div>
                   <div style={{ fontWeight: 600 }}>
                     自动下单触发开关
-                    {formData.mode === 'notify' && (
+                    {formData.mode === TASK_MODE.NOTIFY && (
                       <Tag color="default" style={{ marginLeft: 8, fontSize: 11 }}>仅通知模式不可用</Tag>
                     )}
                   </div>
@@ -653,7 +652,7 @@ export default function TaskEditor() {
                 <Switch
                   checked={Boolean(formData.auto_buy_bargain_only)}
                   onChange={(checked) => setFormData({ ...formData, auto_buy_bargain_only: checked })}
-                  disabled={formData.mode === 'notify'}
+                  disabled={formData.mode === TASK_MODE.NOTIFY}
                   checkedChildren="开"
                   unCheckedChildren="关"
                 />

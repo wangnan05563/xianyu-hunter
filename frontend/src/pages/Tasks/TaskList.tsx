@@ -3,7 +3,15 @@ import { Table, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Al
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined, MoreOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
-import { STATUS_COLOR as statusColors } from '../../constants/statusColors'
+import {
+  TASK_MODE,
+  TASK_STATUS,
+  isTaskMode,
+  taskModeLabel,
+  taskStatusColor,
+  taskStatusOptions,
+  taskStatusLabel,
+} from '../../constants/taskStatus'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useAutoLiveSearch } from '../../hooks/useAutoLiveSearch'
 import { TipButton } from '@/components/TipButton'
@@ -21,20 +29,6 @@ const clickableProps = (cb: () => void) => ({
     }
   },
 })
-
-const statusLabels: Record<string, string> = {
-  running: '运行中',
-  paused: '已暂停',
-  stopped: '已停止',
-  deleted: '已删除',
-}
-
-const modeLabels: Record<string, string> = {
-  auto: '全自动',
-  semi_auto: '半自动',
-  confirm: '需确认',
-  notify: '仅通知',
-}
 
 // 模板市场分类
 const tplCategories = ['全部', '相机', '游戏', '球鞋', '票务', '数码', '其他']
@@ -226,8 +220,7 @@ export default function TaskList() {
   // 将 AI 解析结果填入 TaskEditor，通过 URL search params 传递
   const applyAiResult = () => {
     if (!aiResult) return
-    const validModes = ['notify', 'confirm', 'auto', 'semi_auto']
-    const mode = validModes.includes(aiResult.mode) ? aiResult.mode : 'notify'
+    const mode = isTaskMode(aiResult.mode) ? aiResult.mode : TASK_MODE.NOTIFY
     const params = new URLSearchParams({
       keyword: aiResult.keyword,
       name: aiResult.name || aiResult.keyword,
@@ -272,8 +265,7 @@ export default function TaskList() {
   })
 
   const applyTemplate = (tpl: TaskTemplate) => {
-    const validModes = ['notify', 'confirm', 'auto', 'semi_auto']
-    const mode = validModes.includes(tpl.mode) ? tpl.mode : 'notify'
+    const mode = isTaskMode(tpl.mode) ? tpl.mode : TASK_MODE.NOTIFY
     const params = new URLSearchParams({
       keyword: tpl.keyword,
       name: tpl.name,
@@ -562,7 +554,7 @@ export default function TaskList() {
   // 一键启动所有任务（迁移自原仪表盘 TaskContentMenu.handleStartAll）
   // 为什么用 batchControl 而非逐个 control：减少网络请求，与现有批量操作一致
   const handleStartAll = useCallback(() => {
-    const toStart = tasks.filter((t) => t.status !== 'running')
+    const toStart = tasks.filter((t) => t.status !== TASK_STATUS.RUNNING)
     const skipped = tasks.length - toStart.length
 
     if (toStart.length === 0) {
@@ -705,13 +697,13 @@ export default function TaskList() {
       title: '模式',
       dataIndex: 'mode',
       key: 'mode',
-      render: (mode: string) => <Tag>{modeLabels[mode] || mode}</Tag>,
+      render: (mode: string) => <Tag>{taskModeLabel(mode)}</Tag>,
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      render: (status: string) => <Tag color={statusColors[status]}>{statusLabels[status] || status}</Tag>,
+      render: (status: string) => <Tag color={taskStatusColor(status)}>{taskStatusLabel(status)}</Tag>,
     },
     {
       title: '采集周期',
@@ -745,7 +737,7 @@ export default function TaskList() {
       width: 90,
       // 仅 running 任务参与倒计时；非 running 显示占位符
       render: (_: unknown, record: Task) => {
-        if (record.status !== 'running') return <span style={{ color: 'var(--xh-text-tertiary)' }}>—</span>
+        if (record.status !== TASK_STATUS.RUNNING) return <span style={{ color: 'var(--xh-text-tertiary)' }}>—</span>
         const remain = remainMap[record.id]
         if (remain == null) return <span style={{ color: 'var(--xh-text-tertiary)' }}>—</span>
         if (searchingIds.has(record.id)) {
@@ -780,7 +772,7 @@ export default function TaskList() {
             <TipButton tip="编辑该任务" size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${record.id}/edit`)}>
               编辑
             </TipButton>
-            {record.status === 'running' ? (
+            {record.status === TASK_STATUS.RUNNING ? (
               <TipButton tip="暂停该任务" size="small" icon={<PauseCircleOutlined />} onClick={() => handleAction(record.id, 'pause')}>
                 暂停
               </TipButton>
@@ -790,7 +782,7 @@ export default function TaskList() {
               </TipButton>
             )}
             {/* 停止/删除统一用 Popconfirm（评审 2.2-3），不再自研一套行内确认 */}
-            {(record.status === 'running' || record.status === 'paused') && (
+            {(record.status === TASK_STATUS.RUNNING || record.status === TASK_STATUS.PAUSED) && (
               <Popconfirm
                 title="确认停止该任务？"
                 description="停止后任务将不再运行"
@@ -894,11 +886,11 @@ export default function TaskList() {
           style={{ width: 120 }}
           allowClear
           placeholder="全部"
-          options={[
-            { value: 'running', label: '运行中' },
-            { value: 'paused', label: '已暂停' },
-            { value: 'stopped', label: '已停止' },
-          ]}
+          options={taskStatusOptions([
+            TASK_STATUS.RUNNING,
+            TASK_STATUS.PAUSED,
+            TASK_STATUS.STOPPED,
+          ])}
         />
         <Segmented
           value={viewMode}
@@ -966,10 +958,10 @@ export default function TaskList() {
           <Row gutter={[16, 16]}>
             {tasks.map((task) => {
               // 状态条颜色
-              const statusColor = statusColors[task.status] || '#d9d9d9'
+              const statusColor = taskStatusColor(task.status) || '#d9d9d9'
               // 提取到变量避免 JSX 内嵌套三元（S3358）
-              const isRunning = task.status === 'running'
-              const showStopBtn = isRunning || task.status === 'paused'
+              const isRunning = task.status === TASK_STATUS.RUNNING
+              const showStopBtn = isRunning || task.status === TASK_STATUS.PAUSED
               const startPauseBtn = isRunning ? (
                 <TipButton tip="暂停该任务" size="small" icon={<PauseCircleOutlined />} onClick={() => handleAction(task.id, 'pause')}>暂停</TipButton>
               ) : (
@@ -992,8 +984,8 @@ export default function TaskList() {
                       价格：¥{task.min_price ?? '不限'} ~ ¥{task.max_price ?? '不限'}
                     </div>
                     <Space size={4} wrap style={{ marginBottom: 8 }}>
-                      <Tag>{modeLabels[task.mode] || task.mode}</Tag>
-                      <Tag color={statusColors[task.status]}>{statusLabels[task.status] || task.status}</Tag>
+                      <Tag>{taskModeLabel(task.mode)}</Tag>
+                      <Tag color={taskStatusColor(task.status)}>{taskStatusLabel(task.status)}</Tag>
                     </Space>
                     <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                       <>
@@ -1293,7 +1285,7 @@ export default function TaskList() {
                 {(aiResult.min_price != null || aiResult.max_price != null) && (
                   <><span style={{ color: 'var(--xh-text-tertiary)' }}>价格区间：</span><span>¥{aiResult.min_price ?? '不限'} ~ ¥{aiResult.max_price ?? '不限'}</span></>
                 )}
-                {aiResult.mode && (<><span style={{ color: 'var(--xh-text-tertiary)' }}>执行模式：</span><span>{modeLabels[aiResult.mode] || aiResult.mode}</span></>)}
+                {aiResult.mode && (<><span style={{ color: 'var(--xh-text-tertiary)' }}>执行模式：</span><span>{taskModeLabel(aiResult.mode)}</span></>)}
               </div>
               {aiResult.reason && (
                 <div style={{ marginTop: 8, fontSize: 12, color: 'var(--xh-text-tertiary)', borderTop: '1px dashed var(--xh-border-secondary)', paddingTop: 6 }}>
@@ -1389,7 +1381,7 @@ export default function TaskList() {
                     {tpl.is_preset ? '📋 预置' : '🔒 私有'}
                   </Tag>
                   {tpl.category && <Tag style={{ fontSize: 11 }}>🏷 {tpl.category}</Tag>}
-                  <Tag style={{ fontSize: 11 }}>{modeLabels[tpl.mode] || tpl.mode}</Tag>
+                  <Tag style={{ fontSize: 11 }}>{taskModeLabel(tpl.mode)}</Tag>
                 </div>
                 {/* 私有模板显示删除按钮 */}
                 {!tpl.is_preset && (

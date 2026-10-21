@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { ORDER_STATUS, ORDER_STATUS_CONFIG } from '../orderStatus'
+import {
+  ORDER_STATUS,
+  ORDER_STATUS_CONFIG,
+  ORDER_STATUS_LABELS,
+  ORDER_STATUS_USER_CHOICES,
+  orderStatusOptions,
+} from '../orderStatus'
 
 // T02693：T02585 把订单状态收敛到后端 OrderStatus 之后，散落的裸串又长回来了一次
 // （trend / stats_today / business_kpi / buyer / repo_orders 各自写死 'succeeded'/'failed'/
@@ -18,6 +24,11 @@ const BACKEND_ORDER_DOMAIN = resolve(
 const CLEANED_FILES = [
   resolve(__dirname, '../../pages/Timeline/index.tsx'),
   resolve(__dirname, '../../pages/Timeline/components/TimelineList.tsx'),
+  // T02716：移动端订单页 + 桌面订单页 + 评估页的订单状态判断
+  resolve(__dirname, '../../pages/Orders/Orders.tsx'),
+  resolve(__dirname, '../../mobile/pages/Orders/index.tsx'),
+  resolve(__dirname, '../../mobile/pages/Orders/OrderDetail.tsx'),
+  resolve(__dirname, '../../pages/Evaluations/utils.ts'),
 ]
 
 /** 从后端 OrderStatus 抽取成员名 → 字面值（与 domain/order.py 的 `X = "y"` 行一一对应） */
@@ -56,8 +67,22 @@ describe('订单状态单一事实源（T02693）', () => {
     }
   })
 
-  it('已清理文件里禁止裸写状态字面串（防止再次漂移）', () => {
-    for (const path of CLEANED_FILES) {
+  it('标签表覆盖每个枚举值，可选项取自同一张表（T02716）', () => {
+    const backendValues = Object.values(parseBackendOrderStatus())
+    // Record<OrderStatusValue, string> 让 TS 保证覆盖，这里再对运行时值核一遍
+    expect(Object.keys(ORDER_STATUS_LABELS).sort()).toEqual([...backendValues].sort())
+    for (const value of ORDER_STATUS_USER_CHOICES) {
+      expect(ORDER_STATUS_LABELS[value], `可选项 ${value} 没有对应标签`).toBeTruthy()
+    }
+    // 可选项与标签必须来自同一份映射：value 就是枚举值、label 就是标签表里的同一个值
+    const options = orderStatusOptions(ORDER_STATUS_USER_CHOICES)
+    expect(options.map((o) => o.value)).toEqual([...ORDER_STATUS_USER_CHOICES])
+    expect(options.map((o) => o.label)).toEqual(
+      ORDER_STATUS_USER_CHOICES.map((v) => ORDER_STATUS_LABELS[v]),
+    )
+  })
+
+  it('已清理文件里禁止裸写状态字面串（防止再次漂移）', () => {    for (const path of CLEANED_FILES) {
       const src = readFileSync(path, 'utf-8')
       for (const value of Object.values(ORDER_STATUS)) {
         expect(

@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons'
 import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
-import { STATUS_COLOR } from '../../constants/statusColors'
+import { taskStatusColor } from '../../constants/taskStatus'
 import { TipButton } from '@/components/TipButton'
 
 // 过滤掉指定的上游依赖项（S2004 拆出避免函数嵌套过深）
@@ -457,7 +457,7 @@ export default function TaskDetail() {
 
               <Descriptions bordered column={2} size="small">
                 <Descriptions.Item label="任务ID">{task.id}</Descriptions.Item>
-                <Descriptions.Item label="状态"><Tag color={STATUS_COLOR[task.status] || 'default'}>{task.status}</Tag></Descriptions.Item>
+                <Descriptions.Item label="状态"><Tag color={taskStatusColor(task.status) || 'default'}>{task.status}</Tag></Descriptions.Item>
                 <Descriptions.Item label="关键词">{task.keyword}</Descriptions.Item>
                 <Descriptions.Item label="模式">{task.mode}</Descriptions.Item>
                 <Descriptions.Item label="价格区间">{task.min_price ? `¥${task.min_price}` : '不限'} - {task.max_price ? `¥${task.max_price}` : '不限'}</Descriptions.Item>

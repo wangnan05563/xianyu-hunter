@@ -1,4 +1,5 @@
 import type { EvalItem } from '../../api'
+import { ORDER_STATUS } from '../../constants/orderStatus'
 
 // 分布 API 返回的完整类型
 export interface DistResponse {
@@ -99,7 +100,7 @@ export function resolveActionDisplay(
   const orderStatus = r.payload?.order_status
   // 已有订单（非失败/取消）时不显示抢单按钮，避免重复下单
   // null/undefined 在真值判断中均被排除，无需 as 断言
-  if (orderStatus && orderStatus !== 'failed' && orderStatus !== 'cancelled') {
+  if (orderStatus && orderStatus !== ORDER_STATUS.FAILED && orderStatus !== ORDER_STATUS.CANCELLED) {
     return 'ordered'
   }
   // 已售商品不可抢：商品已下架/已被他人购得时下单必失败且可能产生脏数据
