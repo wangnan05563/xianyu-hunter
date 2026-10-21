@@ -128,6 +128,24 @@ def _compute_idle_gaps(buckets: list[dict[str, Any]], idle_gap_minutes: int) -> 
     return idle_gaps
 
 
+def _active_user_id_for_background_write() -> str:
+    """后台/无 request 上下文时，事件应归属的用户 ID（T02684）
+
+    与 cookie 读写用的是同一个口径（`get_active_user_id()`：最近活跃的
+    非 default 用户，取不到降级 "default"），因此不会出现
+    「日志归 A、cookie 归 B」两套真相。
+
+    延迟 import：user_manager 属 web 层，infra 顶层 import 会造成循环依赖。
+    任何异常都降级 "default"——日志归属错了可查，写入失败会直接吞掉事件。
+    """
+    try:
+        from xianyu_hunter.web.services.user_manager import get_user_manager
+
+        return get_user_manager().get_active_user_id() or "default"
+    except Exception:  # noqa: BLE001 - 后台写入路径不得因用户体系未就绪而失败
+        return "default"
+
+
 def _sync_score_value(event: dict) -> None:
     """从 payload JSON 中提取 score 同步写入 score_value 列（P1-3 优化）
 
@@ -170,6 +188,15 @@ class EventsMixin:
             rid = get_request_id()
             if rid:
                 event["request_id"] = rid
+        # T02684 多用户隔离（写侧）：调用方未指定归属时补「当前活跃用户」。
+        # 为什么在这里补而不是逐个改 12 处 save_event 调用点：
+        #   - EventRow.user_id NOT NULL 且有列默认值，散落调用点漏传时静默落成 "default"，
+        #     读侧一旦按用户过滤，非 default 用户的日志页会直接空掉（比泄露更难排查）；
+        #   - 单一入口保证「新增写入点默认就是归属正确的」，无需再来一次全站清点。
+        # 口径与 worker/scheduler 读 cookie 时用的 get_active_user_id() 完全一致
+        # （后台线程没有 request 上下文，取不到就降级 "default"，与旧行为兼容）。
+        if not event.get("user_id"):
+            event["user_id"] = _active_user_id_for_background_write()
         # P1-3：eval.scored 事件同步写入 score_value 列，避免 json_extract 全表扫描
         _sync_score_value(event)
         with self.engine.begin() as conn:
@@ -203,6 +230,10 @@ class EventsMixin:
         # 让 INSERT 路径自动写入 EventRow.user_id 列
         if user_id is not None and "user_id" not in event:
             event["user_id"] = user_id
+        # ⚠ 这里**不**套用 save_event 的活跃用户兜底：本方法的 DELETE 过滤条件
+        # 直接取自入参 user_id，若 INSERT 归属被改写而 DELETE 仍是旧值，
+        # idx_eval_scored_unique 局部唯一索引会让 INSERT 撞 IntegrityError。
+        # 评估事件的归属由调用方显式负责（evaluations_* 路由均传 request.state.user_id）。
         # P1-3：同步提取 score 到 score_value 列（仅 eval.scored 类型有效）
         _sync_score_value(event)
         with self.engine.begin() as conn:
@@ -318,10 +349,18 @@ class EventsMixin:
             )
             return rows, total
 
-    def get_event(self, event_id: int) -> dict | None:
-        """获取单条事件"""
+    def get_event(self, event_id: int, user_id: str | None = None) -> dict | None:
+        """获取单条事件
+
+        user_id 不为 None 时附加 WHERE 过滤（T02684 深度防御）：
+        跨用户查别人的行一律当作「不存在」，与 update_event_payload 的隔离语义一致，
+        避免 /api/logs/tag 用别人的 event_id 直接改到对方 payload。
+        """
         with self.engine.connect() as conn:
-            row = conn.execute(select(EventRow).where(EventRow.id == event_id)).first()
+            stmt = select(EventRow).where(EventRow.id == event_id)
+            if user_id is not None:
+                stmt = stmt.where(EventRow.user_id == user_id)
+            row = conn.execute(stmt).first()
             return self._row_to_dict(row) if row else None
 
     def get_eval_payload_by_item(self, item_id: str, user_id: str | None = None) -> dict | None:

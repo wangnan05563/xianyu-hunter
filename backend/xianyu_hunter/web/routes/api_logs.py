@@ -24,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from xianyu_hunter.container import Container
@@ -42,18 +42,47 @@ STDOUT_LOG_FILENAME = "run.stdout.log"
 STDERR_LOG_FILENAME = "run.stderr.log"
 
 
+def _reader_user_id(request: Request) -> str | None:
+    """日志读侧的用户归属（T02684）
+
+    口径（与写侧 `repo_events.save_event` 的归属规则配对，两侧必须同源，
+    否则要么日志页空掉、要么隔离失效）：
+
+    - 真实会话用户（session_token 校验通过）→ 返回其 user_id，严格只看自己的行；
+    - 没有 request.state.user_id（未走鉴权中间件的内部调用）→ None，不过滤；
+    - "default"＝WEB_TOKEN 管理令牌直通（auth.py 注释「向后兼容单用户模式」）
+      → None，不过滤。单用户安装里所有行本就属于 default，过滤与不过滤等价；
+      保留直通看全量的能力，避免把运维/排障路径堵死。
+
+    ⚠ 已知残留（不在本端点能力内，已建派生单）：
+    - error_logs 表**没有 user_id 列**（模型注释：单 token 认证体系下用
+      client_ip/user_agent 代替用户身份），因此 /api/error-logs/* 以及
+      /api/logs/request/{rid} 合并结果里的异常部分仍跨用户可见；
+    - 后台线程写入的事件按「最近活跃用户」归属，多账号并发时归属可能滞后。
+    """
+    uid = getattr(request.state, "user_id", None)
+    if not uid or uid == "default":
+        return None
+    return uid
+
+
 # ============== F-08 搜索/过滤 列表 ==============
 @router.get("")
 def list_logs(
+    request: Request,
     source: str = Query("file", pattern="^(file|db)$"),
     limit: int = Query(200, ge=1, le=2000),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """默认 file：读 run.stdout.log / run.stderr.log 尾部
     db：读 events 表（结构化，可被搜索接口进一步过滤）
+
+    多用户隔离（T02684）：source=db 走 events 表，按 _reader_user_id 过滤；
+    source=file 读的是进程自身 stdout/stderr 文件，不属于任何用户的数据集，
+    保持原样（内容为本机运行日志，本身已由鉴权网关保护）。
     """
     if source == "db":
-        rows = container.repo.list_events(limit=limit) or []
+        rows = container.repo.list_events(limit=limit, user_id=_reader_user_id(request)) or []
         return {"items": rows, "count": len(rows), "source": "db"}
     base = Path(os.getcwd())
     out: list[dict[str, Any]] = []
@@ -74,21 +103,25 @@ def _fetch_log_candidates(
     task_id: str | None,
     limit: int,
     since_id: int | None,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """拉取候选行：request_id 走索引查询，否则走 list_events 全量过滤
 
     request_id 优先级最高：单次请求触发的所有日志都通过此列关联，
     list_events_by_request 走索引性能优于全表扫描。
+
+    user_id（T02684）：两条仓储路径都透传，缺一侧就会让「按流水号查」成为隔离旁路。
     """
     if request_id:
         rows, _ = container.repo.list_events_by_request(
-            request_id=request_id, limit=min(limit * 10, 1000), offset=0
+            request_id=request_id, limit=min(limit * 10, 1000), offset=0, user_id=user_id
         )
         # 倒序输出便于人工查看最新记录
         return list(reversed(rows))
     # 用 db 自带过滤尽量减少 Python 侧扫描
     return container.repo.list_events(
-        level=level, task_id=task_id, limit=min(limit * 10, 1000), since_id=since_id, ascending=False
+        level=level, task_id=task_id, limit=min(limit * 10, 1000), since_id=since_id,
+        ascending=False, user_id=user_id,
     ) or []
 
 
@@ -143,6 +176,7 @@ def _compute_log_histograms(
 
 @router.get("/search")
 def search_logs(
+    request: Request,
     # 大小写都允许：前端 SPA 下拉用大写（ERROR/WARNING/INFO/DEBUG），
     # 旧版控制台/直接 API 调用可能用小写（err/warn/info/debug），
     # Python re 模块不支持 (?i) 顶层修饰符，Pydantic v2 同样不识别，
@@ -183,7 +217,10 @@ def search_logs(
     end_dt = parse_iso_datetime(end)
 
     # 1) 拉取候选行 + 2) Python 侧过滤
-    candidates = _fetch_log_candidates(container, request_id, level, task_id, limit, since_id)
+    candidates = _fetch_log_candidates(
+        container, request_id, level, task_id, limit, since_id,
+        user_id=_reader_user_id(request),
+    )
     candidates = _filter_log_candidates(candidates, q, tag, stage, start_dt, end_dt)
 
     # 3) 统计直方图（基于过滤后的结果）
@@ -206,6 +243,7 @@ def search_logs(
 
 @router.post("/tag")
 def tag_event(
+    request: Request,
     event_id: int = Query(..., ge=1, description="events 表主键 id"),
     tag: str = Body(..., embed=True, min_length=1, max_length=40,
                     description="标签名（仅字母数字_和-）"),
@@ -215,10 +253,14 @@ def tag_event(
 
     标签存在 events.payload JSON 字段的 `tags` 数组中（避免迁移）。
     重复打同一标签 = 幂等。
+
+    多用户隔离（T02684）：读写都带 user_id——别人的 event_id 在这里等于「不存在」，
+    且不能只挡读侧（update_event_payload 的 WHERE 也带 user_id 做深度防御）。
     """
     if not re.match(r"^[A-Za-z0-9_\-]+$", tag):
         raise HTTPException(status_code=400, detail="标签只能含字母、数字、_ 和 -")
-    ev = container.repo.get_event(event_id)
+    user_id = _reader_user_id(request)
+    ev = container.repo.get_event(event_id, user_id=user_id)
     if not ev:
         raise HTTPException(status_code=404, detail="事件不存在")
     payload = ev.get("payload")
@@ -233,21 +275,23 @@ def tag_event(
     if tag not in tags:
         tags.append(tag)
     p["tags"] = tags
-    container.repo.update_event_payload(event_id, json.dumps(p, ensure_ascii=False))
+    container.repo.update_event_payload(event_id, json.dumps(p, ensure_ascii=False), user_id=user_id)
     return {"ok": True, "event_id": event_id, "tags": tags}
 
 
 @router.delete("/tag")
 def untag_event(
+    request: Request,
     event_id: int = Query(..., ge=1, description="events 表主键 id"),
     tag: str = Query(..., min_length=1, max_length=40, description="要删除的标签名"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """删除某条事件的指定标签（F-08）
 
-    标签不存在时幂等返回成功。
+    标签不存在时幂等返回成功。多用户隔离口径与 tag_event 一致（T02684）。
     """
-    ev = container.repo.get_event(event_id)
+    user_id = _reader_user_id(request)
+    ev = container.repo.get_event(event_id, user_id=user_id)
     if not ev:
         raise HTTPException(status_code=404, detail="事件不存在")
     payload = ev.get("payload")
@@ -262,13 +306,14 @@ def untag_event(
     if tag in tags:
         tags.remove(tag)
     p["tags"] = tags
-    container.repo.update_event_payload(event_id, json.dumps(p, ensure_ascii=False))
+    container.repo.update_event_payload(event_id, json.dumps(p, ensure_ascii=False), user_id=user_id)
     return {"ok": True, "event_id": event_id, "tags": tags}
 
 
 # ============== F-08 导出（CSV） ==============
 @router.get("/export")
 def export_logs(
+    request: Request,
     format: str = Query("csv", pattern="^(csv|log)$"),
     q: str | None = Query(None),
     level: str | None = Query(
@@ -287,6 +332,9 @@ def export_logs(
 
     - format=csv：Excel/Numbers 友好（id, created_at, level, stage, task_id, item_id, message, payload, tags）
     - format=log：原始文本流（run.stdout.log / run.stderr.log 拼接）
+
+    多用户隔离（T02684）：csv 分支必须与 /search 同一 user_id 口径，
+    否则导出的 CSV 依旧含他人日志——读侧过滤得再严，导出旁路一漏就前功。
     """
     if format == "log":
         return _export_log_file()
@@ -296,7 +344,9 @@ def export_logs(
     # csv：复用 search 逻辑拉数据，再序列化
     start_dt = parse_iso_datetime(start)
     end_dt = parse_iso_datetime(end)
-    candidates = container.repo.list_events(level=level, task_id=task_id, limit=limit) or []
+    candidates = container.repo.list_events(
+        level=level, task_id=task_id, limit=limit, user_id=_reader_user_id(request)
+    ) or []
     if q:
         ql = q.lower()
         candidates = [e for e in candidates if ql in (e.get("message") or "").lower() or ql in payload_text(e.get("payload")).lower()]
@@ -472,6 +522,7 @@ async def stream_logs(
 # ============== 全链路追踪聚合查询端点 ==============
 @router.get("/request/{request_id}")
 def get_request_chain(
+    request: Request,
     request_id: str,
     limit: int = Query(1000, ge=1, le=5000, description="单表最大返回数"),
     container: Container = Depends(get_container),
@@ -490,14 +541,20 @@ def get_request_chain(
       └─ 异常日志（error_logs）
 
     request_id 必须符合 req-<17位数字>-<6位hex> 格式，否则返回 400。
+
+    多用户隔离（T02684）：events 分支按 _reader_user_id 过滤；
+    error_logs 分支**当前无列可过滤**（表无 user_id），已在响应里用
+    `error_logs_isolated=false` 明示，前端/调用方不会把「链路看起来完整」
+    误当成「整条链路都是本用户的」。
     """
     from xianyu_hunter.infra.request_context import is_valid_request_id
     if not is_valid_request_id(request_id):
         raise HTTPException(status_code=400, detail="request_id 格式不合法")
 
     # 分别从 events 和 error_logs 表查询
+    user_id = _reader_user_id(request)
     events, events_total = container.repo.list_events_by_request(
-        request_id=request_id, limit=limit, offset=0
+        request_id=request_id, limit=limit, offset=0, user_id=user_id
     )
     error_logs = container.repo.list_error_logs(
         request_id=request_id, limit=limit, offset=0
@@ -530,5 +587,7 @@ def get_request_chain(
         "total": len(chain),
         "events_total": events_total,
         "error_logs_total": len(error_logs),
+        # T02684：user_id=None 表示「管理令牌直通/单用户」，此时两表本就同范围可见
+        "error_logs_isolated": user_id is not None,
         "chain": chain,
     }
