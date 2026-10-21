@@ -11,6 +11,7 @@ import { TipButton } from '@/components/TipButton'
 import FetchFailedHint from '@/components/FetchFailedHint'
 import DataBlock from '@/components/DataBlock'
 import { useFailedSources } from '@/hooks/useFailedSources'
+import { formatDateTime } from '@/utils/timeFormat'
 import type { ChatbotConfig, KBStatus, KBVersion, FAQ, AuditLog } from './types'
 
 // 本页各路数据源（T02700 假回执清零）：原先统一 catch 成 null/[]，
@@ -471,7 +472,7 @@ export default function ChatbotConfigPage() {
                             }
                             description={
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                                {log.created_at} · 来源：{log.source}
+                                {formatDateTime(log.created_at)} · 来源：{log.source}
                               </Typography.Text>
                             }
                           />
@@ -522,7 +523,7 @@ export default function ChatbotConfigPage() {
                       else if (s === 'partial') color = 'orange'
                       return <Tag color={color}>{s}</Tag>
                     } },
-                    { title: '时间', dataIndex: 'created_at', key: 'created_at' },
+                    { title: '时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => formatDateTime(v) },
                     {
                       title: '操作', key: 'actions',
                       render: (_: unknown, record: KBVersion) => (
@@ -665,7 +666,7 @@ export default function ChatbotConfigPage() {
                     { title: '动作', dataIndex: 'action', key: 'action' },
                     { title: '目标', dataIndex: 'target', key: 'target', ellipsis: true },
                     { title: '来源', dataIndex: 'source', key: 'source' },
-                    { title: '时间', dataIndex: 'created_at', key: 'created_at' },
+                    { title: '时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => formatDateTime(v) },
                   ]}
                 />
               </>

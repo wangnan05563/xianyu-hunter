@@ -13,16 +13,28 @@ export function formatDateTime(value: string | null | undefined): string {
 }
 
 /**
- * 秒数 → 中文时长（最多两级单位，长任务不写「3600 秒」）
- * 用于「超时多久 / 已等待多久」这类相对时间，绝对时间请用 formatDateTime
+ * 秒数 → 时长（最多两级单位，长任务不写「3600 秒」）
+ * 用于「超时多久 / 已等待多久」这类相对时间，绝对时间请用 formatDateTime。
+ *
+ * `compact: true` 只是把单位换成 `1h 11m` 这种窄屏写法，算法与中文分支同源；
+ * 移动端 AntiCrawl 原先自己有一份 `formatDuration`（T02884 收掉），
+ * 两份实现会在 60 秒边界上给出不同答案。
  */
-export function formatDuration(sec: number | null | undefined): string {
+export function formatDuration(sec: number | null | undefined, opts?: { readonly compact?: boolean }): string {
   if (sec === null || sec === undefined || !Number.isFinite(sec) || sec < 0) return '—'
   const total = Math.floor(sec)
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
   const s = total % 60
+  if (opts?.compact) return compactParts(h, m, s)
   if (h > 0) return m > 0 ? `${h} 小时 ${m} 分` : `${h} 小时`
   if (m > 0) return s > 0 ? `${m} 分 ${s} 秒` : `${m} 分`
   return s > 0 ? `${s} 秒` : '不足 1 秒'
+}
+
+// 紧凑单位同样「最多两级」：h>0 就不带秒，与中文分支保持同一个取舍
+function compactParts(h: number, m: number, s: number): string {
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`
+  if (m > 0) return s > 0 ? `${m}m ${s}s` : `${m}m`
+  return s > 0 ? `${s}s` : '0s'
 }

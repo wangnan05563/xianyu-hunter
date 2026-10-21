@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { orderApi } from '../../../api'
 import type { OrderItem } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { formatDateTime } from '../../../utils/timeFormat'
 import PullToRefresh from '../../components/PullToRefresh'
 import FetchFailedHint from '../../../components/FetchFailedHint'
 import TakeoverCountdown from '../../components/TakeoverCountdown'
@@ -92,7 +93,7 @@ export default function MobileOrders() {
                 {order.item_id || '商品'}
               </div>
               <div style={{ fontSize: 13, color: '#999', marginBottom: 8 }}>
-                ¥{order.price} · {order.created_at}
+                ¥{order.price} · {formatDateTime(order.created_at)}
               </div>
             </button>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { orderApi } from '../../../api'
 import type { OrderItem } from '../../../api/types'
 import FetchFailedHint from '../../../components/FetchFailedHint'
+import { formatDateTime } from '../../../utils/timeFormat'
 import TakeoverCountdown from '../../components/TakeoverCountdown'
 import { ORDER_STATUS, orderStatusColor, orderStatusLabel } from '../../../constants/orderStatus'
 
@@ -63,7 +64,7 @@ export default function MobileOrderDetail() {
               />
             </Descriptions.Item>
           )}
-          <Descriptions.Item label="创建时间">{order.created_at}</Descriptions.Item>
+          <Descriptions.Item label="创建时间">{formatDateTime(order.created_at)}</Descriptions.Item>
         </Descriptions>
       </Card>
       {order.screenshot && (

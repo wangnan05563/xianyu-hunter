@@ -4,18 +4,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { anticrawlApi } from '../../../api'
 import type { SessionStatus, HealthReport } from '../../../api/anticrawl'
 import { extractApiError } from '../../../utils/apiError'
+import { formatDuration } from '../../../utils/timeFormat'
 import PullToRefresh from '../../components/PullToRefresh'
 
-// 秒数格式化为 "Xh Ym" / "Ym Zs"：避免引入 dayjs duration 增大 bundle
-const formatDuration = (sec: number | null | undefined): string => {
-  if (sec === null || sec === undefined || sec < 0) return '-'
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const s = Math.floor(sec % 60)
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m ${s}s`
-  return `${s}s`
-}
+// 时长口径取自 utils/timeFormat（T02884）：这里原先自己有一份 formatDuration，
+// 与共享实现只在单位字形上不同（1h 11m vs 1 小时 11 分），两份实现会在 60 秒边界上分叉。
+// 窄屏用 compact 选项，而不是再养一个 helper。
 
 // 提取到模块级：分支逻辑下沉以降低 MobileAntiCrawl 认知复杂度（S3776），并便于单独测试
 const getSessionLight = (
@@ -140,8 +134,8 @@ export default function MobileAntiCrawl() {
         </div>
         <Space direction="vertical" size={4} style={{ fontSize: 13, color: '#666' }}>
           <div>策略：{session?.strategy || '-'}</div>
-          <div>运行时长：{formatDuration(session?.uptime_sec)}</div>
-          <div>Token 寿命：{formatDuration(session?.token_age_sec)}</div>
+          <div>运行时长：{formatDuration(session?.uptime_sec, { compact: true })}</div>
+          <div>Token 寿命：{formatDuration(session?.token_age_sec, { compact: true })}</div>
         </Space>
       </Card>
 

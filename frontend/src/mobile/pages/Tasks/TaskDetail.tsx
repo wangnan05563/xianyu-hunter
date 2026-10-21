@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { taskApi } from '../../../api'
 import type { Task } from '../../../api/types'
 import FetchFailedHint from '../../../components/FetchFailedHint'
+import { formatDateTime } from '../../../utils/timeFormat'
 import { taskModeLabel, taskStatusColor, taskStatusLabel } from '../../../constants/taskStatus'
 
 // 状态/模式文案与颜色来自 constants/taskStatus（与后端 domain/task.py 同源，T02716）：
@@ -57,7 +58,7 @@ export default function MobileTaskDetail() {
             <Tag color={taskStatusColor(task.status)}>{taskStatusLabel(task.status)}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="Cron">{task.cron}</Descriptions.Item>
-          <Descriptions.Item label="创建时间">{task.created_at}</Descriptions.Item>
+          <Descriptions.Item label="创建时间">{formatDateTime(task.created_at)}</Descriptions.Item>
         </Descriptions>
       </Card>
       {/* 编辑入口：/m/tasks/:id/edit 路由早已存在但没有门（FR-G-3）；

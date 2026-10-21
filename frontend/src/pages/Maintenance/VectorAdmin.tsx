@@ -25,6 +25,7 @@ import {
   CameraOutlined,
   FileTextOutlined,
 } from '@ant-design/icons'
+import { formatDateTime } from '../../utils/timeFormat'
 import {
   vectorAdminApi,
   CONFIRM_TOKEN,
@@ -127,7 +128,7 @@ export default function VectorAdmin() {
       `从快照恢复？`,
       <div>
         <p>将用快照 <b>{snapshot.id}</b> 的内容覆盖当前集合，当前数据将丢失。</p>
-        <p>快照大小：{snapshot.size_display}　创建时间：{snapshot.created_at}</p>
+        <p>快照大小：{snapshot.size_display}　创建时间：{formatDateTime(snapshot.created_at)}</p>
       </div>,
       async () => {
         try {
@@ -256,7 +257,7 @@ export default function VectorAdmin() {
             <Statistic
               title="快照数"
               value={status?.snapshot_count ?? '-'}
-              suffix={status?.last_snapshot_at ? `（最近 ${status.last_snapshot_at.slice(5, 16)}）` : ''}
+              suffix={status?.last_snapshot_at ? `（最近 ${formatDateTime(status.last_snapshot_at)}）` : ''}
             />
           </Card>
         </Col>

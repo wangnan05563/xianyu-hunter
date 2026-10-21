@@ -33,6 +33,7 @@ import {
   DownloadOutlined,
 } from '@ant-design/icons'
 import { anticrawlApi } from '../../api'
+import { formatDuration } from '../../utils/timeFormat'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import type {
   StrategyEvaluation,
@@ -1236,7 +1237,7 @@ function SessionCardCol(props: {
             <Col span={8}>
               <Statistic
                 title="Token 年龄"
-                value={session.token_age_sec == null ? '-' : `${Math.floor(session.token_age_sec)}s`}
+                value={formatDuration(session.token_age_sec)}
                 valueStyle={{
                   color: session.token_expired ? '#ff4d4f' : '#52c41a',
                 }}
@@ -1272,7 +1273,7 @@ function SessionCardCol(props: {
                   + '身份类 Cookie 与浏览器指纹数据保持不变',
                 count: session.token_age_sec == null
                   ? null
-                  : `Token 已使用 ${Math.round(session.token_age_sec / 60)} 分钟`
+                  : `Token 已使用 ${formatDuration(session.token_age_sec)}`
                     + (session.token_expired ? '，当前已过期' : '，当前仍在有效期内'),
                 recovery: '点「启动会话」即可恢复自动续期；若期间 Token 过期，'
                   + '接口会命中风控并需要重新走一次登录流程',
