@@ -66,7 +66,9 @@ describe('抽屉列表项按类跳转（N11）', () => {
 
   it('抽屉项走统一的 alertItem 渲染，且带键盘可达性', () => {
     expect(LAYOUT_SOURCE).toContain('alertItem')
-    expect(LAYOUT_SOURCE).toContain('openSheetWithNotification(ALERT_JUMP_TARGETS[kind])')
+    // T02620：跳转升级为「路径 + 查询」构造函数（口径见 utils/alertDeepLink.ts 与
+    // utils/__tests__/alertDeepLink.test.ts），不再直接开静态路径常量
+    expect(LAYOUT_SOURCE).toContain('openSheetWithNotification(buildAlertJumpTarget(kind, item))')
     expect(LAYOUT_SOURCE).toContain('role="button"')
     // 三个面板都接上了跳转，不再只有其中一个能点
     for (const kind of ['failed', 'timeout', 'low_eval']) {

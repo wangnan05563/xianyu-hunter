@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Card, Table, Space, Spin, Input, Select, Slider, Row, Col,
   Empty, DatePicker, Alert, Progress, Checkbox, Tag, Statistic, InputNumber,
@@ -11,6 +12,7 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { taskApi, type EvalItem } from '../../api'
+import { parseEvalDeepLink } from '../../utils/alertDeepLink'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import EvalHeatmap from './components/EvalHeatmap'
@@ -382,6 +384,10 @@ function BatchSelectionAlert({
 }
 
 export default function Evaluations() {
+  // 告警深链（T02620）：抽屉的「低分评估」项跳过来带 ?item_id=<id>&score_max=<0-100>，
+  // 本页必须真的读取，否则链接只是「跳过来自己找」——与 Orders.tsx 读 ?ref= 同一族。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const deepLink = useMemo(() => parseEvalDeepLink(searchParams), [searchParams])
   const filters = useEvalFilters()
   const list = useEvalList({
     itemId: filters.itemId,
@@ -404,6 +410,39 @@ export default function Evaluations() {
   const batch = useEvalBatch(list.items, filters.taskId, list.load, dist.loadDist)
   const trend = useEvalTrend()
   const feedback = useEvalFeedback(list.setItems)
+
+  // 深链落地即套用筛选：只做一次（用户之后手动改筛选不再被 URL 覆盖）。
+  // 必须「先写筛选 state，再在下一轮渲染后 reload」两步走：useEvalList 通过
+  // filtersRef 读快照，同一轮里直接 load() 会拿到旧筛选条件（测试实测过一次）。
+  // reloadToken 就是「渲染已追平」的信号，清除定位与深链套用共用这条通道。
+  const deepLinkApplied = useRef(false)
+  const [reloadToken, setReloadToken] = useState(0)
+  useEffect(() => {
+    if (deepLinkApplied.current) return
+    if (!deepLink.itemId && deepLink.scoreMax == null) return
+    deepLinkApplied.current = true
+    if (deepLink.itemId) filters.setItemId(deepLink.itemId)
+    if (deepLink.scoreMax != null) filters.setScoreRange([0, deepLink.scoreMax])
+    setReloadToken((t) => t + 1)
+    // 依赖刻意留空：本效果只在挂载时消费一次 URL，重复执行会覆盖用户手动筛选
+  }, [])
+  useEffect(() => {
+    if (reloadToken === 0) return
+    list.setPage(1)
+    list.load()
+  }, [reloadToken])
+
+  // 清除深链：去掉 URL 里的 item_id/score_max，并把筛选复位后重新加载
+  const clearDeepLink = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('item_id')
+    next.delete('score_max')
+    setSearchParams(next, { replace: true })
+    filters.setItemId('')
+    filters.setScoreRange([0, 100])
+    deepLinkApplied.current = true
+    setReloadToken((t) => t + 1)
+  }
 
   const columns = useEvalColumns({
     autoBuyScore: dist.autoBuyScore,
@@ -492,6 +531,17 @@ export default function Evaluations() {
 
   return (
     <div className="page-container">
+      {/* 深链落地说明（T02620）：让用户知道当前视图是「告警带来的筛选」而非全量列表，
+          并提供一键回到正常筛选——与 Orders.tsx 的 ref 定位提示同构 */}
+      {(deepLink.itemId || deepLink.scoreMax != null) && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={`已按告警定位到商品 ${deepLink.itemId ?? '—'}${deepLink.scoreMax != null ? `（评分 ≤ ${deepLink.scoreMax}）` : ''}`}
+          action={<TipButton size="small" onClick={clearDeepLink} tip="清除告警深链参数，回到正常筛选视图">清除定位</TipButton>}
+        />
+      )}
       <Card style={{ marginBottom: 16 }}>
         <Space wrap size="middle">
           <span>商品ID：</span>

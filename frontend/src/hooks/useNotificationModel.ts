@@ -36,14 +36,15 @@ export function bellBadgeTip(badge: BellBadge): string {
     : `未读通知 ${badge.count} 条，点击查看`
 }
 
-/** 告警类 → 落地页：抽屉列表项按类跳转（N11） */
-export const ALERT_JUMP_TARGETS = {
-  failed: '/orders',
-  timeout: '/orders',
-  low_eval: '/evaluations',
-} as const
-
-export type AlertKind = keyof typeof ALERT_JUMP_TARGETS
+/**
+ * 告警类 → 落地页：抽屉列表项按类跳转（N11）。
+ *
+ * T02620 起基础路径与「路径+查询」构造函数一起搬到 `utils/alertDeepLink.ts`
+ * （那里是纯函数，能被 Orders/Evaluations 读取侧共用并单测）。
+ * 此处原样再导出，保持既有引用与守卫测试的导入路径不变。
+ */
+export { ALERT_JUMP_TARGETS } from '../utils/alertDeepLink'
+export type { AlertKind } from '../utils/alertDeepLink'
 
 export type NotificationModel = {
   readonly alerts: TodayAlert | null

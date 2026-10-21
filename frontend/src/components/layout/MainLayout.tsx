@@ -30,7 +30,9 @@ import { useSheetStore } from '../../stores/sheetStore'
 import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
 import { useMenuConfig, buildCommandItems } from '../../hooks/useMenuConfig'
 import type { CommandItem } from '../../hooks/useMenuConfig'
-import { useNotificationModel, bellBadgeTip, ALERT_JUMP_TARGETS } from '../../hooks/useNotificationModel'
+import { useNotificationModel, bellBadgeTip } from '../../hooks/useNotificationModel'
+import { buildAlertJumpTarget } from '../../utils/alertDeepLink'
+import type { AlertJumpItem } from '../../utils/alertDeepLink'
 import { isNarrowViewport } from '../../hooks/breakpoints'
 import type { AlertKind, NotificationModel } from '../../hooks/useNotificationModel'
 import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
@@ -394,17 +396,24 @@ function LayoutContent({
   const emptyHint = (text: string) => <div style={{ color: themeToken.colorTextSecondary }}>{text}</div>
 
   // 抽屉列表项按类跳转（N11）：失败/超时→抢单记录，低分→评估明细；三个面板同构，抽成一个渲染函数
-  const jumpToAlertTarget = (kind: AlertKind) => {
+  // T02620：跳转目标带上「本条告警」的查询参数（状态筛选 + 行定位），
+  // 落地页读取侧在 Orders.tsx / Evaluations 里，口径统一在 utils/alertDeepLink.ts
+  const jumpToAlertTarget = (kind: AlertKind, item?: AlertJumpItem) => {
     setDrawerOpen(false)
-    openSheetWithNotification(ALERT_JUMP_TARGETS[kind])
+    openSheetWithNotification(buildAlertJumpTarget(kind, item))
   }
-  const alertItem = (kind: AlertKind, title: React.ReactNode, description: React.ReactNode) => (
+  const alertItem = (
+    kind: AlertKind,
+    item: AlertJumpItem,
+    title: React.ReactNode,
+    description: React.ReactNode,
+  ) => (
     <List.Item
-      onClick={() => jumpToAlertTarget(kind)}
+      onClick={() => jumpToAlertTarget(kind, item)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          jumpToAlertTarget(kind)
+          jumpToAlertTarget(kind, item)
         }
       }}
       tabIndex={0}
@@ -655,7 +664,7 @@ function LayoutContent({
                     <List
                       size="small"
                       dataSource={notif.alerts.alerts.failed_orders}
-                      renderItem={(o) => alertItem('failed', `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · ${o.created_at}`)}
+                      renderItem={(o) => alertItem('failed', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · ${o.created_at}`)}
                     />
                   ) : emptyHint('暂无失败订单'),
                 },
@@ -672,7 +681,7 @@ function LayoutContent({
                     <List
                       size="small"
                       dataSource={notif.alerts.alerts.timeout_pending}
-                      renderItem={(o) => alertItem('timeout', `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · 超时 ${o.age_sec}s`)}
+                      renderItem={(o) => alertItem('timeout', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · 超时 ${o.age_sec}s`)}
                     />
                   ) : emptyHint('暂无超时订单'),
                 },
@@ -689,7 +698,7 @@ function LayoutContent({
                     <List
                       size="small"
                       dataSource={notif.alerts.alerts.low_evaluations}
-                      renderItem={(e) => alertItem('low_eval', e.message, <><Tag>{e.type}</Tag> 评分 {e.score} · {e.created_at}</>)}
+                      renderItem={(e) => alertItem('low_eval', e, e.message, <><Tag>{e.type}</Tag> 评分 {e.score_value ?? '—'} · {e.created_at}</>)}
                     />
                   ) : emptyHint('暂无低分评估'),
                 },

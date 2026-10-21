@@ -109,7 +109,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
                       renderItem={e => (
                         <List.Item style={{ padding: '4px 0' }}>
                           <span style={{ fontSize: 12 }}>
-                            {e.message || e.type} · score {e.score} · {(e.created_at || '').slice(5, 16)}
+                            {e.message || e.type} · score {e.score_value ?? '—'} · {(e.created_at || '').slice(5, 16)}
                           </span>
                         </List.Item>
                       )} />

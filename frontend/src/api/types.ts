@@ -646,7 +646,20 @@ export interface TodayAlert {
     // 真实载荷是整条订单（repo.list_orders 的 dict），不是自造的 title/amount 契约（T02585）
     failed_orders: Array<{ id: string; item_id: string; price: number; status: string; created_at: string }>
     timeout_pending: Array<{ id: string; item_id: string; price: number; status: string; created_at: string; age_sec: number }>
-    low_evaluations: Array<{ id: number; message: string; type: string; created_at: string; score: number }>
+    low_evaluations: Array<{
+      // T02620：字段口径改为与后端真实载荷一致（repo._row_to_dict 用的是 EventRow 列名）。
+      // 原先声明的 `score: number` 在响应里并不存在（实际列是 score_value，0–1 归一分），
+      // 抽屉/雷达的「评分 undefined」与深链取不到 item_id 都源于此。
+      id: number
+      message: string
+      type: string
+      created_at: string
+      score_value?: number | null
+      item_id?: string | null
+      task_id?: string | null
+      level?: string
+      stage?: string
+    }>
     counts: { failed: number; timeout: number; low_eval: number }
   }
   ts: string

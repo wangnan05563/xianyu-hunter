@@ -17,6 +17,7 @@ import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
 import { API_BASE } from '../../utils/apiBase'
+import { parseOrderStatusParam } from '../../utils/alertDeepLink'
 
 // 列配置元数据：key 必须与下方 columns 定义中的 key 完全一致
 const COLUMN_DEFINITIONS: ColumnConfig[] = [
@@ -388,18 +389,30 @@ export default function Orders() {
   const [stats, setStats] = useState<OrderStats>({
     pending: 0, succeeded: 0, failed: 0, cancelled: 0, takeover: 0, total: 0,
   })
-  const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined)
+  // URL 深链（T02620）：本页既读 ?ref=（行定位）也读 ?status=（状态筛选）。
+  // useSearchParams 必须早于 statusFilter 的初值使用，故 searchParams 上移。
+  const [searchParams, setSearchParams] = useSearchParams()
+  // 告警抽屉/雷达带 ?status=<OrderStatus> 过来时，落地即是筛好的异常子集；
+  // 非法值按「不筛选」降级（口径见 utils/alertDeepLink.parseOrderStatusParam）
+  const urlStatus = parseOrderStatusParam(searchParams.get('status'))
+  const [statusFilter, setStatusFilter] = useState<string | undefined>(urlStatus)
   const [loading, setLoading] = useState(false)
 
   // 告警定位（评审 2.1-4）：异常雷达改为 SPA 跳转并带 ?ref=<订单 id>，
   // 本页必须真的读取它，否则链接只是「跳过去自己找」。
-  const [searchParams, setSearchParams] = useSearchParams()
   const rawRef = searchParams.get('ref') ?? ''
   // ref 来自 URL：订单 id 是字符串（OrderItem.id: string），放行字母数字与 _-: 这类安全字符，
   // 排除引号/反斜杠/尖括号，既满足 data-row-key 选择器插值，也让脏链接静默降级为普通列表
   const refId = /^[A-Za-z0-9_:.-]{1,64}$/.test(rawRef) ? rawRef : ''
   // null=未定位 / true=在当前页找到 / false=当前页没有
   const [refLocated, setRefLocated] = useState<boolean | null>(null)
+
+  // 同一 sheet 内换了深链（例如又点了另一条告警）时，以 URL 为准重打筛选；
+  // 用户手动改下拉不会写 URL，因此不会与本效果互相覆盖
+  useEffect(() => {
+    setStatusFilter(urlStatus)
+    setPage(1)
+  }, [urlStatus])
 
   // 后端分页状态：page/pageSize 持久化，跨会话保留用户偏好
   const [page, setPage] = useState(1)
