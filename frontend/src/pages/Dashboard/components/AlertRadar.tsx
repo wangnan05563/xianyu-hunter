@@ -3,6 +3,8 @@ import { WarningOutlined, ReloadOutlined } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
 import { openSheetWithNotification } from '@/components/SheetWorkspace/sheetNotifications'
 import FetchFailedHint from '@/components/FetchFailedHint'
+import { formatDateTime, formatDuration } from '../../../utils/timeFormat'
+import { eventTypeLabel } from '../../../constants/eventTypes'
 import type { TodayAlert } from '../../../api'
 
 interface AlertRadarProps {
@@ -91,7 +93,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
                             style={{ fontSize: 12, padding: 0, height: 'auto' }}
                             onClick={() => openSheetWithNotification(`/orders?ref=${o.id}`)}
                             tip={`在「抢单记录」中定位订单 #${o.id}`}>
-                            订单 #{o.id} 商品 {o.item_id} · ¥{o.price} · {Math.floor((o.age_sec || 0) / 60)} 分钟前
+                            订单 #{o.id} 商品 {o.item_id} · ¥{o.price} · 超时 {formatDuration(o.age_sec)}
                           </TipButton>
                         </List.Item>
                       )} />
@@ -109,7 +111,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
                       renderItem={e => (
                         <List.Item style={{ padding: '4px 0' }}>
                           <span style={{ fontSize: 12 }}>
-                            {e.message || e.type} · score {e.score_value ?? '—'} · {(e.created_at || '').slice(5, 16)}
+                            {e.message || eventTypeLabel(e.type)} · score {e.score_value ?? '—'} · {formatDateTime(e.created_at)}
                           </span>
                         </List.Item>
                       )} />

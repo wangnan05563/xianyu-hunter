@@ -28,6 +28,8 @@ import DryRunBanner from './DryRunBanner'
 import { SheetWorkspace } from '../SheetWorkspace'
 import { useSheetStore } from '../../stores/sheetStore'
 import { openSheetWithNotification } from '../SheetWorkspace/sheetNotifications'
+import { formatDateTime, formatDuration } from '../../utils/timeFormat'
+import { eventTypeLabel } from '../../constants/eventTypes'
 import { useMenuConfig, buildCommandItems } from '../../hooks/useMenuConfig'
 import type { CommandItem } from '../../hooks/useMenuConfig'
 import { useNotificationModel, bellBadgeTip } from '../../hooks/useNotificationModel'
@@ -664,7 +666,7 @@ function LayoutContent({
                     <List
                       size="small"
                       dataSource={notif.alerts.alerts.failed_orders}
-                      renderItem={(o) => alertItem('failed', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · ${o.created_at}`)}
+                      renderItem={(o) => alertItem('failed', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · ${formatDateTime(o.created_at)}`)}
                     />
                   ) : emptyHint('暂无失败订单'),
                 },
@@ -681,7 +683,7 @@ function LayoutContent({
                     <List
                       size="small"
                       dataSource={notif.alerts.alerts.timeout_pending}
-                      renderItem={(o) => alertItem('timeout', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · 超时 ${o.age_sec}s`)}
+                      renderItem={(o) => alertItem('timeout', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · 超时 ${formatDuration(o.age_sec)}`)}
                     />
                   ) : emptyHint('暂无超时订单'),
                 },
@@ -698,7 +700,7 @@ function LayoutContent({
                     <List
                       size="small"
                       dataSource={notif.alerts.alerts.low_evaluations}
-                      renderItem={(e) => alertItem('low_eval', e, e.message, <><Tag>{e.type}</Tag> 评分 {e.score_value ?? '—'} · {e.created_at}</>)}
+                      renderItem={(e) => alertItem('low_eval', e, e.message, <><Tag>{eventTypeLabel(e.type)}</Tag> 评分 {e.score_value ?? '—'} · {formatDateTime(e.created_at)}</>)}
                     />
                   ) : emptyHint('暂无低分评估'),
                 },
