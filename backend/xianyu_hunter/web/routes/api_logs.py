@@ -29,7 +29,12 @@ from fastapi.responses import StreamingResponse
 
 from xianyu_hunter.container import Container
 from xianyu_hunter.web.deps import get_container
-from xianyu_hunter.web.utils import parse_iso_datetime, to_datetime, payload_text
+from xianyu_hunter.web.utils import (
+    parse_iso_datetime,
+    reader_user_id,
+    to_datetime,
+    payload_text,
+)
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
@@ -59,11 +64,11 @@ def _reader_user_id(request: Request) -> str | None:
       client_ip/user_agent 代替用户身份），因此 /api/error-logs/* 以及
       /api/logs/request/{rid} 合并结果里的异常部分仍跨用户可见；
     - 后台线程写入的事件按「最近活跃用户」归属，多账号并发时归属可能滞后。
+
+    T02618：判定逻辑收敛到 `web.utils.reader_user_id`（通知读写两侧也要同一口径），
+    这里保留同名薄封装只是为了不改动本文件 6 处调用点与既有断言。
     """
-    uid = getattr(request.state, "user_id", None)
-    if not uid or uid == "default":
-        return None
-    return uid
+    return reader_user_id(request)
 
 
 # ============== F-08 搜索/过滤 列表 ==============

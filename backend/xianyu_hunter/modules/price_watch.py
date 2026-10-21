@@ -210,6 +210,9 @@ def _emit_drop_summary(
             link="/m/items/",
             dedup_key=f"price_drop_summary:{task_id}:{int(total_drop * 10000)}:{len(drops)}",
             reset_read=True,
+            # 归属跟随盯盘任务所属用户（T02618）：None 时仓储兜底 default，
+            # 否则真实用户的降价提醒会全部落在 default 名下、他自己的通知中心空白
+            user_id=user_id,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[price-watch] 汇总站内通知写入失败: {e}")
@@ -264,6 +267,7 @@ def _emit_drop_notifications(
             link="/m/items/",
             dedup_key=f"price_drop:{item_id}:{info['new_price']:.2f}",
             reset_read=True,
+            user_id=user_id,  # 同上：归属跟随任务所属用户（T02618）
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[price-watch] 站内通知写入失败: {e}")

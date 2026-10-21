@@ -3,6 +3,22 @@
 与 /api/events/* 的分工：
 - /api/events/*：技术性事件流（SSE 推送 + 历史回溯），只读追加，不区分已读
 - /api/notifications：业务性通知（订单超时、登录态失效等），持久化、可读/可删
+
+多用户归属口径（T02618）——本文件 8 个端点一律用 `web.utils.owner_user_id(request)`：
+真实会话用户 → 该用户；WEB_TOKEN 直通与未过中间件的内部调用 → "default"。
+读写同函数是两条硬约束的交集：
+- 「看得见 = 改得动」：原先读侧兜 None（全量）、写侧兜 "default"（过滤），两套值
+  错开时列表能看见、点了标记已读/删除却 404，前端表现即「点了没反应」。
+- 「跨用户可见即越权」：tests/test_order_stats_and_notif_batch.py 的
+  test_batch_delete_is_user_scoped 明确锁住「直通身份也删不掉 other 用户的行」，
+  所以这里不能学日志侧（T02684 `reader_user_id`）放开为不过滤——
+  日志是只读场景，通知有改侧，放开读侧就会连带放开改侧或制造 404。
+通知行的 user_id 是 NOT NULL，owner_user_id 保证创建侧永远拿到非空值。
+
+⚠ 尚未收口的结构性残留（已建派生单）：`notifications` 表上是
+UNIQUE(dedup_key) 而非 UNIQUE(user_id, dedup_key)，跨用户的同名 dedup_key 会
+互相抢占同一行（先写者持有归属），所以"按用户隔离"目前只在常规 key 形态下成立
+（订单号/商品 ID 天然不撞）。
 """
 from __future__ import annotations
 
@@ -18,6 +34,7 @@ from xianyu_hunter.domain.notification import (
     NOTIFICATION_LEVEL_VALUES,
 )
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.utils import owner_user_id
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
@@ -45,8 +62,8 @@ def list_notifications(
     为什么不限制为只能看未读：用户可能想回看"我之前漏看什么"，
     走 status=read 即可；同时返回 total 字段，前端用于分页/计数展示。
     """
-    # 多用户隔离：查询操作用 None
-    user_id = getattr(request.state, "user_id", None)
+    # 多用户隔离：读侧与创建侧同源，统一走 web.utils.owner_user_id（T02618）
+    user_id = owner_user_id(request)
     rows = container.repo.list_notifications(status=status, limit=limit, offset=offset, user_id=user_id)
     total = container.repo.count_notifications(status=status, user_id=user_id)
     return {
@@ -68,10 +85,12 @@ def unread_count(
 
     为什么一个端点回三个数：铃铛 badge、告警抽屉、通知中心三处都要显示计数，
     而通知中心页的「已读」原先用 `列表 total − unread` 现算，total 随筛选变化导致恒 0 或错算
-    （T02561 / 2.9-3）。三个数都由后端按全量口径算出，与任何列表筛选无关。
+    （T02561 / 2.9-3）。三个数都由后端按"当前用户命名空间内的全量"算出，
+    与任何列表筛选（status/分页）无关——命名空间仍走 owner_user_id（T02618），
+    否则铃铛计数与列表页会各报一套。
     """
-    # 多用户隔离：查询操作用 None
-    user_id = getattr(request.state, "user_id", None)
+    # 多用户隔离：读侧与创建侧同源，统一走 web.utils.owner_user_id（T02618）
+    user_id = owner_user_id(request)
     return {
         "unread": container.repo.count_notifications(status="unread", user_id=user_id),
         "read": container.repo.count_notifications(status="read", user_id=user_id),
@@ -90,8 +109,8 @@ def create_notification(
     必填：level, category, title, message, dedup_key
     可选：link, reset_read
     """
-    # 多用户隔离：写入操作用 "default" 兜底
-    user_id = getattr(request.state, "user_id", "default")
+    # 多用户隔离：创建侧需要一个非空归属值 → web.utils.owner_user_id（T02618）
+    user_id = owner_user_id(request)
     level = (payload.get("level") or "info").lower()
     category = (payload.get("category") or "").lower()
     title = (payload.get("title") or "").strip()
@@ -145,8 +164,8 @@ def mark_read(
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """标记单条已读（幂等：已读的不报错）"""
-    # 多用户隔离：写入操作用 "default" 兜底
-    user_id = getattr(request.state, "user_id", "default")
+    # 多用户隔离：改侧与读侧必须同一口径（看得见 = 改得动），见 web.utils.owner_user_id
+    user_id = owner_user_id(request)
     existed = container.repo.get_notification(notif_id, user_id=user_id)
     if not existed:
         raise HTTPException(status_code=404, detail="通知不存在")
@@ -160,8 +179,8 @@ def mark_all_read(
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """全部标记已读（"打开通知中心"行为时使用）"""
-    # 多用户隔离：写入操作用 "default" 兜底
-    user_id = getattr(request.state, "user_id", "default")
+    # 多用户隔离：改侧与读侧必须同一口径（看得见 = 改得动），见 web.utils.owner_user_id
+    user_id = owner_user_id(request)
     updated = container.repo.mark_all_notifications_read(user_id=user_id)
     return {"ok": True, "updated": updated}
 
@@ -173,8 +192,8 @@ def delete_notification(
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """删除单条"""
-    # 多用户隔离：写入操作用 "default" 兜底
-    user_id = getattr(request.state, "user_id", "default")
+    # 多用户隔离：改侧与读侧必须同一口径（看得见 = 改得动），见 web.utils.owner_user_id
+    user_id = owner_user_id(request)
     existed = container.repo.get_notification(notif_id, user_id=user_id)
     if not existed:
         raise HTTPException(status_code=404, detail="通知不存在")
@@ -200,7 +219,7 @@ def batch_delete_notifications(
     deleted < requested 是正常的：勾中的 id 可能已被别人（其他标签页）删掉，
     这里如实返回两个数，由前端提示"实际删除 N 条"而不是假装全部成功。
     """
-    user_id = getattr(request.state, "user_id", "default")
+    user_id = owner_user_id(request)
     raw_ids = payload.get("ids")
     if not isinstance(raw_ids, list) or not raw_ids:
         raise HTTPException(status_code=400, detail="ids 必须是非空数组")
@@ -229,8 +248,8 @@ def clear_notifications(
     为什么不默认"清空 = 全清"：用户最常见操作是"清掉已读的腾出空间"，
     走 status=read 即可；status 留 None 仍然支持全清，但前端默认走 read。
     """
-    # 多用户隔离：写入操作用 "default" 兜底
-    user_id = getattr(request.state, "user_id", "default")
+    # 多用户隔离：改侧与读侧必须同一口径（看得见 = 改得动），见 web.utils.owner_user_id
+    user_id = owner_user_id(request)
     if status is not None and status not in ("unread", "read"):
         raise HTTPException(status_code=400, detail="status 必须是 unread / read")
     deleted = container.repo.clear_notifications(status=status, user_id=user_id)

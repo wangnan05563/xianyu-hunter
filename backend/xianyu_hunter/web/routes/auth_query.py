@@ -26,6 +26,7 @@ from xianyu_hunter.infra.yaml_config import get_config
 from xianyu_hunter.paths import get_browser_data_dir, get_data_dir
 from xianyu_hunter.web.deps import get_container
 from xianyu_hunter.web.services.auth_manager import get_auth_manager
+from xianyu_hunter.web.utils import owner_user_id
 from xianyu_hunter.web.routes.auth_helpers import make_auth_response
 from xianyu_hunter.web.services.notification_engine import scan_and_notify
 from xianyu_hunter.web.services.cookie_store import get_cookie_store, _GOOFISH_KEY_COOKIES as _KEY_COOKIES
@@ -358,7 +359,15 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
         result["nick_sync_error"] = str(refresh_status.get("error") or "")
 
     # 检测登录态掉线 → 生成业务通知（失败不影响主路径）
-    scan_and_notify(container, auth_state=result)
+    # user_id（T02618）：与 /api/notifications 读写侧同一口径（owner_user_id），
+    # 否则通知落到 A 的名下、A 的列表按自己的命名空间却查不到。
+    # /api/auth/* 可能在 PUBLIC_PREFIXES 里（中间件不注入 state.user_id），
+    # 此时回退到本地 token 解析，保证"谁掉线就通知谁"。
+    scan_and_notify(
+        container,
+        auth_state=result,
+        user_id=_resolve_current_user_id(request) or owner_user_id(request),
+    )
 
     # 已登录时确保浏览器持有 xh_token 认证 cookie
     if result.get("logged_in"):

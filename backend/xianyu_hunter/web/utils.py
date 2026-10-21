@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
 from xianyu_hunter.infra.db_models import TaskRow
+
+if TYPE_CHECKING:  # 仅供 reader_user_id / owner_user_id 的类型标注，避免 utils 依赖 web 框架
+    from fastapi import Request
 
 
 # 常见的 ISO 时间格式（按优先级尝试）
@@ -134,3 +137,46 @@ def filter_prices_by_task_range(
         p for p in prices
         if (lo is None or p >= lo) and (hi is None or p <= hi)
     ]
+
+
+# ==================== 多用户归属口径（T02618） ====================
+
+DEFAULT_USER_ID = "default"
+
+
+def reader_user_id(request: "Request") -> str | None:
+    """读侧与改侧共用的归属过滤值；返回 None 表示"不按用户过滤"。
+
+    值域与鉴权中间件 `BearerAuthMiddleware` 的注入规则严格配对（三种情况）：
+
+    - 真实会话用户（session_token 校验通过）→ 返回其 user_id：只看/只改自己的行；
+    - `"default"`（WEB_TOKEN 管理令牌直通，auth.py 注释的「向后兼容单用户模式」）
+      → None，不过滤：单用户安装里所有行本就属于 default，过滤与不过滤等价，
+      保留直通看全量的能力，避免把运维/排障路径堵死；
+    - `request.state.user_id` 缺失（未过中间件的内部调用）→ None，不过滤。
+
+    为什么读写两侧共用同一个函数：**「看得见 = 改得动」是不变量**。
+    原先读侧用 `getattr(..., None)`、写侧用 `getattr(..., "default")`，两套兜底
+    值一旦错开，就会出现「列表里看得见某条通知，点标记已读/删除却 404」——
+    前端表现为「点了没反应」（T02618 的原始症状）。
+    """
+    uid = getattr(request.state, "user_id", None)
+    if not uid or uid == DEFAULT_USER_ID:
+        return None
+    return uid
+
+
+def owner_user_id(request: "Request") -> str:
+    """非空的用户命名空间：真实会话用户 → 其 user_id，其余一律 `DEFAULT_USER_ID`。
+
+    通知域（T02618）的读、改、建三类端点**都用这一个函数**取 user_id，理由两条：
+    - `NotificationRow.user_id` 是 NOT NULL，读侧也不能传 None 下去；
+    - 直通身份必须继续待在自己的 default 命名空间里：
+      `tests/test_order_stats_and_notif_batch.py::test_batch_delete_is_user_scoped`
+      锁死了「WEB_TOKEN 直通也删不掉 other 用户的行」，所以通知不像日志（
+      `reader_user_id`）可以放开为不过滤——日志只有读侧，放开了不会制造
+      「看得见却改不动」的 404。
+
+    `EventRow.user_id` 同理（NOT NULL，显式 None 会撞约束——列 default 只兜「不传参」）。
+    """
+    return reader_user_id(request) or DEFAULT_USER_ID

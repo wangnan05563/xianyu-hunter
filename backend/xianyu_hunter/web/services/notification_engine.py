@@ -34,12 +34,17 @@ ORDER_TIMEOUT_RULES: list[tuple[int, str, str]] = [
 ]
 
 
-def scan_order_timeouts(container: Container) -> int:
+def scan_order_timeouts(container: Container, user_id: str | None = None) -> int:
     """扫描超时订单，按阈值生成/更新业务通知。
+
+    user_id（T02618）：扫描范围与通知归属同一个值——只扫这个用户的订单，
+    生成的通知也归他；None = 全库扫描且归属由仓储兜底 default。
+    与路由侧 `owner_user_id` 同源，否则「扫描按 A、通知落 default、列表按 A 过滤」
+    三方错位，A 永远看不到自己的超时提醒。
 
     Returns: 新增/刷新的通知数（仅统计本轮实际触发的）。
     """
-    orders = container.repo.list_orders(limit=200) or []
+    orders = container.repo.list_orders(limit=200, user_id=user_id) or []
     now = _utcnow()
     triggered = 0
     for o in orders:
@@ -73,17 +78,21 @@ def scan_order_timeouts(container: Container) -> int:
                     link=link,
                     dedup_key=dedup_key,
                     reset_read=True,
+                    user_id=user_id,
                 )
                 triggered += 1
                 break  # 一笔订单只触发最严重级别
     return triggered
 
 
-def _scan_auth_down(container: Container, auth_state: dict[str, Any]) -> int:
+def _scan_auth_down(
+    container: Container, auth_state: dict[str, Any], user_id: str | None = None
+) -> int:
     """登录态掉线告警（被动触发：auth_state 由调用方注入）
 
     auth_state 形如 {"logged_in": bool, "user_id": str|None, ...}
     触发条件：上次是已登录 + 这次是未登录 → 创建"登录态失效"通知
+    user_id（T02618）：通知归属；None 由仓储兜底 default。
     """
     if not auth_state or auth_state.get("logged_in"):
         return 0
@@ -124,6 +133,7 @@ def _scan_auth_down(container: Container, auth_state: dict[str, Any]) -> int:
         link=link,
         dedup_key=dedup_key,
         reset_read=True,
+        user_id=user_id,
     )
     return 1
 
@@ -131,22 +141,29 @@ def _scan_auth_down(container: Container, auth_state: dict[str, Any]) -> int:
 def scan_and_notify(
     container: Container,
     auth_state: dict[str, Any] | None = None,
+    user_id: str | None = None,
 ) -> dict[str, int]:
     """聚合入口：执行所有规则，返回各类触发数
 
     Args:
         auth_state: 当前请求的登录态（可选）。None 表示不检测登录掉线。
+        user_id: 本轮扫描与通知的归属用户（T02618），由请求侧传
+            `web.utils.owner_user_id(request)`——与 /api/notifications 读写侧同一个值，
+            语义是"范围 = 归属"：只扫这个用户名下的订单，生成的通知也归他。
+            原先既不传范围也不传归属，等于"用 A 的请求给全体订单生成归属 default 的
+            通知"，两头都不对：会话用户在自己的通知中心看不到本该属于他的提醒。
+            None 时由仓储层兜底 default（单用户安装的行为完全不变）。
     """
     stats: dict[str, int] = {}
     try:
-        stats["order_timeout"] = scan_order_timeouts(container)
+        stats["order_timeout"] = scan_order_timeouts(container, user_id=user_id)
     except Exception as e:  # noqa: BLE001
         # 通知规则失败不能让业务 API 跟着 500
         logger.warning(f"[notify] 订单超时扫描失败: {e}")
         stats["order_timeout"] = 0
     if auth_state is not None:
         try:
-            stats["auth_down"] = _scan_auth_down(container, auth_state)
+            stats["auth_down"] = _scan_auth_down(container, auth_state, user_id=user_id)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[notify] 登录态扫描失败: {e}")
             stats["auth_down"] = 0

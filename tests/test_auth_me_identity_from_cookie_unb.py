@@ -93,7 +93,7 @@ def _run_me(monkeypatch, tmp_path: Path) -> dict:
     monkeypatch.setattr(auth_query, "_check_cookies", lambda user_id="default": True)
     monkeypatch.setattr(auth_query, "get_data_dir", lambda: tmp_path)
     monkeypatch.setattr(auth_query, "get_auth_manager", lambda: _FakeAuthManager())
-    monkeypatch.setattr(auth_query, "scan_and_notify", lambda container, auth_state: None)
+    monkeypatch.setattr(auth_query, "scan_and_notify", lambda container, auth_state=None, user_id=None: None)
     monkeypatch.setattr(
         "xianyu_hunter.web.services.user_manager.get_user_manager",
         lambda: _FakeUserManager(),

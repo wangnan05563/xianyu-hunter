@@ -29,6 +29,12 @@ class NotificationsMixin:
         """创建或更新一条业务通知（同 dedup_key 视为同一业务事件）"""
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+        # NotificationRow.user_id 是 NOT NULL，而列 default 只兜"不传参"、不兜"显式传 None"
+        # ——调用方（price_watch / notification_engine）手里的 user_id 完全可能是 None
+        # （单用户安装、后台线程拿不到归属）。在唯一入口处归一，避免撞约束把通知整路吞掉
+        # （T02684 在 save_event 上踩过同一个坑）。
+        user_id = user_id or "default"
+
         with self.engine.begin() as conn:
             now = _utcnow()
             # INSERT 的 VALUES 中不能引用目标表本身的列（SQLite 限制，与 PostgreSQL 不同）。
