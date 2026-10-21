@@ -122,7 +122,7 @@ AIConfig (页面根组件，两个 Tab)
 
 | 区域                  | 交互行为                                                                                                                                                                          |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| AI 总开关二次确认     | 关闭时弹出 `globalThis.confirm` 确认框，防止误操作导致所有 AI 功能降级。                                                                                                          |
+| AI 总开关二次确认     | 关闭时弹出 `confirmDanger` 四要素确认框（动作/影响范围/数量/恢复成本，文案由 `pages/Config/AIConfig/dangerCopy.ts` 按后端真实门禁生成），防止误操作。原先的 `globalThis.confirm` 已下线（T02726）。                                                              |
 | AI 关闭遮罩           | `ai_enabled=false` 时 Tab 1 配置区域半透明 + 不可点击，覆盖"AI 功能已关闭"提示。Tab 2 Embedding 配置不受影响（独立于 AI 总开关）。                                                  |
 | LLM 预设切换          | 点击预设按钮调用 `applyPreset`：先 `aiApi.putConfig(patch)` 落库再更新本地状态，确保 UI 与后端一致。`message.success("已切换到 xxx 预设")`。                                          |
 | Embedding 预设切换    | 点击预设按钮调用 `applyEmbeddingPreset`：同样先 `putConfig` 落库再更新本地状态。                                                                                                  |
@@ -360,11 +360,11 @@ export const ENDPOINT_LABELS: Record<string, string> = {
 
 位置：`backend/xianyu_hunter/web/routes/api_ai.py` `_check_ai_enabled()` 函数
 
-- 所有 AI 端点（除 config GET/PUT）调用前先执行 `_check_ai_enabled()`。
+- 受门禁的 AI 端点：`/parse-task`、`/evaluate-condition`、`/test-connection`、`/deep-analyze`、`/seller-template-check`（除这些外的 `/config`、`/models`、`/test-embedding`、`/usage`、`/budget` 不做门禁）。
 - `ai_enabled=false` 时抛 HTTP 403，`detail="AI 功能已关闭，请在「AI 服务」配置页面开启"`。
-- 前端关闭时二次确认（`globalThis.confirm`），防止误操作。
-- 关闭后所有 AI 功能降级到规则模式（`_rule_parse` / `_rule_eval_condition` / `_rule_deep_analyze`），不消耗 token。
-- `seller_template_check` 本身就是纯规则，无需降级。
+- 前端关闭时二次确认（`confirmDanger` 四要素，T02726），防止误操作。
+- 门禁检查在规则回落**之前**，所以这 5 个端点在关闭时是直接报错，不会退回 `_rule_parse` / `_rule_eval_condition` / `_rule_deep_analyze`；真正「跳过 AI 沿用规则结果」的是 `modules/worker.py` 的自动评估与自动深度分析（前置条件含 `settings.ai_enabled`）。
+- Chatbot / RAG / Embedding / 价格趋势 AI 解读 不读取 `ai_enabled`，不受本开关影响。
 
 ### 7.2 配置存储与热更新
 

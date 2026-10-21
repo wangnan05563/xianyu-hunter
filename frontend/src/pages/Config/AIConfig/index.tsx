@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Card, Switch, Tag, message, Typography, Tabs } from 'antd'
 import { aiApi, type AIConfig as AIConfigData, type AIUsage } from '../../../api'
 import { extractApiError } from '../../../utils/apiError'
+import { confirmDanger } from '../../../components/DangerSummary'
+import { buildDisableAICopy } from './dangerCopy'
 import { PRESETS, EMBEDDING_PRESETS } from './constants'
 import ModelConfigForm, { type TestResult } from './components/ModelConfigForm'
 import EmbeddingConfigForm, { type EmbeddingTestResult } from './components/EmbeddingConfigForm'
@@ -91,9 +93,7 @@ export default function AIConfig() {
   const handleToggleAI = async (checked: boolean) => {
     // 关闭时二次确认，防止误操作导致所有 AI 功能降级
     if (!checked) {
-      const confirmed = globalThis.confirm(
-        '确定要关闭 AI 功能吗？\n\n关闭后所有 AI 评估、解析、分析将降级到规则模式，不消耗任何 token。\n可随时重新开启。'
-      )
+      const confirmed = await confirmDanger(buildDisableAICopy(config, usage.today))
       if (!confirmed) return
     }
 
@@ -262,7 +262,9 @@ export default function AIConfig() {
               </Tag>
             </h3>
             <p style={{ marginTop: 4, color: 'var(--xh-text-tertiary)', margin: '4px 0 0' }}>
-              关闭后所有 AI 功能将降级到规则模式，不消耗任何 token
+              关闭后 AI 建任务、AI 成色评估/深度分析与「测试连接」会直接返回「AI 功能已关闭」，
+              不再消耗 token；后台任务的自动评估会跳过 AI 沿用规则结果，
+              AI 对话助手与 Embedding 向量服务不受本开关影响
             </p>
           </div>
           <Switch
