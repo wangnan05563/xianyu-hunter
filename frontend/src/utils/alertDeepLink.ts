@@ -1,4 +1,4 @@
-import { ORDER_STATUS_CONFIG } from '../constants/orderStatus'
+import { ORDER_STATUS, ORDER_STATUS_CONFIG } from '../constants/orderStatus'
 
 /**
  * 告警深链（T02620）：抽屉/雷达的跳转从「页面级」升级为「页面 + 查询」
@@ -82,7 +82,7 @@ export function buildAlertJumpTarget(kind: AlertKind, item?: AlertJumpItem): str
   const base = ALERT_JUMP_TARGETS[kind]
   const params = new URLSearchParams()
   if (kind === 'failed' || kind === 'timeout') {
-    params.set('status', statusForAlert(item, kind === 'failed' ? 'failed' : 'pending_pay'))
+    params.set('status', statusForAlert(item, kind === 'failed' ? ORDER_STATUS.FAILED : ORDER_STATUS.PENDING_PAY))
     const ref = safeId(item?.id)
     if (ref) params.set('ref', ref)
   } else {

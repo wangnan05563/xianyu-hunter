@@ -14,3 +14,23 @@ export const ORDER_STATUS_CONFIG: Record<string, { color: string; label: string 
   // 演练记录（PRD FR-C3-3）：orders.type=dry_run 的报告条目，红色徽标与真实记录区分
   dry_run: { color: 'red', label: '演练' },
 }
+
+/**
+ * 订单状态字面值常量（T02693）。
+ *
+ * 为什么要再包一层：上面那张表带的是「颜色 + 文案」，判断状态时大家只能裸写
+ * 'succeeded'，而裸写一旦拼成后端从未写入过的值（pending / paid / submitting）不会报错，
+ * 只会让徽标、圆点配色和筛选静默失效——这正是 T02585 那批 bug 的形状。
+ * 键集合与 ORDER_STATUS_CONFIG 严格对齐，由 constants/__tests__/orderStatusSingleSource.test.ts
+ * 同时对照后端 domain/order.py 钉住。
+ */
+export const ORDER_STATUS = {
+  SUCCEEDED: 'succeeded',
+  PENDING_PAY: 'pending_pay',
+  FAILED: 'failed',
+  CANCELLED: 'cancelled',
+  TAKEOVER_PENDING: 'takeover_pending',
+  DRY_RUN: 'dry_run',
+} as const
+
+export type OrderStatusValue = (typeof ORDER_STATUS)[keyof typeof ORDER_STATUS]

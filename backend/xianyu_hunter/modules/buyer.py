@@ -282,7 +282,7 @@ class Buyer:
                 "task_id": task_id,
                 "order_no": "",
                 "price": expected_price,
-                "status": "dry_run",
+                "status": OrderStatus.DRY_RUN.value,
                 "type": "dry_run",
                 "error": "演练中止：已到订单确认页，提交订单前硬停止",
                 "created_at": _utcnow(),

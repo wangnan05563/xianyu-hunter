@@ -1091,11 +1091,16 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     # 状态口径归一（T02585）：历史库里「待支付」写成 pending，生产代码写入的是 pending_pay
     # （见 domain/order.py OrderStatus）。读取侧别名合并会让「筛选」与「统计」各持一套口径，
     # 因此一次性把旧值搬到规范值，之后仓储层只做精确匹配。
+    # 目标值走绑定参数而不是裸写 'pending_pay'：规范字面值只允许出现在 OrderStatus 里，
+    # 这样状态口径守卫（tests/test_order_status_source_of_truth.py）不需要给迁移开豁免。
     try:
+        from xianyu_hunter.domain.order import OrderStatus
+
         with engine.begin() as conn:
-            r = conn.execute(sa_text(
-                "UPDATE orders SET status='pending_pay' WHERE status='pending'"
-            ))
+            r = conn.execute(
+                sa_text("UPDATE orders SET status = :target WHERE status = :legacy"),
+                {"target": OrderStatus.PENDING_PAY.value, "legacy": "pending"},
+            )
             if r.rowcount:
                 logger.info("orders.status 归一：{} 行 pending -> pending_pay", r.rowcount)
     except Exception as e:

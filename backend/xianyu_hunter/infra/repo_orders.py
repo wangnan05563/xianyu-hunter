@@ -164,7 +164,7 @@ class OrdersMixin:
             if not row:
                 return None
             order = self._row_to_dict(row)
-            if order.get("status") == "failed":
+            if order.get("status") == OrderStatus.FAILED.value:
                 return None
             return order
 
@@ -199,7 +199,7 @@ class OrdersMixin:
                 iid = order.get("item_id")
                 if not iid or iid in result:
                     continue
-                if not include_failed and order.get("status") == "failed":
+                if not include_failed and order.get("status") == OrderStatus.FAILED.value:
                     continue
                 result[iid] = order
         return result
@@ -259,7 +259,7 @@ class OrdersMixin:
                 update(OrderRow)
                 .where(OrderRow.id.in_([o["id"] for o in expired_orders]))
                 .values(
-                    status="failed",
+                    status=OrderStatus.FAILED.value,
                     error=f"接管超时未支付（{timeout_minutes} 分钟）",
                     confirmed_at=None,
                 )
@@ -269,7 +269,7 @@ class OrdersMixin:
 
         # 同步内存中的字段，供调用方使用
         for o in expired_orders:
-            o["status"] = "failed"
+            o["status"] = OrderStatus.FAILED.value
             o["error"] = f"接管超时未支付（{timeout_minutes} 分钟）"
             o["confirmed_at"] = None
         return expired_orders

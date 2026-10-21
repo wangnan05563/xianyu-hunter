@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import case, func, select as sa_select
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.order import OrderStatus
 from xianyu_hunter.infra.db_models import _utcnow, EvaluationRow, OrderRow, EventRow, TaskLinkRow
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.web.cache import cached_ttl
@@ -147,7 +148,7 @@ def _kpi_order_success_rate(engine, cur_start, now, prev_start, prev_end) -> tup
     """
     with engine.connect() as conn:
         def _aggregate(start, end) -> tuple[int, int]:
-            matched_expr = case((OrderRow.status == "succeeded", 1), else_=0)
+            matched_expr = case((OrderRow.status == OrderStatus.SUCCEEDED.value, 1), else_=0)
             row = conn.execute(
                 sa_select(
                     func.sum(matched_expr).label("matched"),

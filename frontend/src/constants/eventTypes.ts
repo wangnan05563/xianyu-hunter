@@ -125,12 +125,19 @@ export const EVENT_TYPE_LABELS: Record<string, { label: string; color: string; i
   'eval.scored': { label: '商品评分', color: 'cyan', icon: createElement(InfoCircleOutlined) },
   'eval.passed': { label: '通过筛选', color: 'green', icon: createElement(CheckCircleOutlined) },
   'eval.rejected': { label: '已过滤', color: 'default', icon: createElement(CloseCircleOutlined) },
-  'order.created': { label: '创建订单', color: 'orange', icon: createElement(ShoppingOutlined) },
-  'order.paid': { label: '支付成功', color: 'green', icon: createElement(CheckCircleOutlined) },
-  'order.failed': { label: '订单失败', color: 'red', icon: createElement(CloseCircleOutlined) },
+  // 购买链路（T02693）：原先这里注册的是 order.created / order.paid / order.failed，
+  // 但后端 domain/events.py 从未定义过 order.* 事件类型，两张库里也是 0 行 —— 纯幽灵键。
+  // 真实落库形态是 notifier hub 写入的 event.type.value（buy.requested/buy.succeeded/buy.failed），
+  // 它们当时反而没注册，抢单事件在时间线上退化成灰色英文标签（同 T02619 的空白标签家族）。
+  // 文案与下方 EVENT_TYPE_OPTIONS 的订阅过滤项逐字对齐。
+  'buy.requested': { label: '请求购买', color: 'orange', icon: createElement(ShoppingOutlined) },
+  'buy.succeeded': { label: '购买成功', color: 'green', icon: createElement(CheckCircleOutlined) },
+  'buy.failed': { label: '购买失败', color: 'red', icon: createElement(CloseCircleOutlined) },
   dep_triggered: { label: '依赖激活', color: 'purple', icon: createElement(ThunderboltOutlined) },
   'maintenance.database': { label: '数据库维护', color: 'default', icon: createElement(InfoCircleOutlined) },
-  'cleanup.database': { label: '数据库清理', color: 'default', icon: createElement(InfoCircleOutlined) },
+  // 原先此处还注册过 'cleanup.database'：后端清理动作统一走 maintenance.<category>
+  // （见 api_maintenance 的 save_event），两张库 18363 + 232 行事件里 0 条 cleanup.*，
+  // 属同类幽灵键，随 order.* 一起摘掉（T02693）。
 }
 
 // ===== Timeline：日志严重度配置（含颜色与图标）=====

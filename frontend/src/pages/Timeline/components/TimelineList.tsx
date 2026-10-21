@@ -1,5 +1,6 @@
 import { Spin, Empty, Pagination } from 'antd'
 import type { TimelineEntry } from '../../../api'
+import { ORDER_STATUS } from '../../../constants/orderStatus'
 import TimelineItem from './TimelineItem'
 
 interface TimelineListProps {
@@ -36,14 +37,14 @@ export default function TimelineList({
               // 确定圆点颜色：订单按状态，事件按 level/类型
               let dotColor = '#1890ff'
               if (isOrder) {
-                if (status === 'succeeded') dotColor = '#52c41a'
-                else if (status === 'failed') dotColor = '#ff4d4f'
-                else if (['pending_pay', 'takeover_pending'].includes(status)) dotColor = '#faad14'
-              } else if (level === 'error' || level === 'err' || eventType === 'order.failed') {
+                if (status === ORDER_STATUS.SUCCEEDED) dotColor = '#52c41a'
+                else if (status === ORDER_STATUS.FAILED) dotColor = '#ff4d4f'
+                else if (status === ORDER_STATUS.PENDING_PAY || status === ORDER_STATUS.TAKEOVER_PENDING) dotColor = '#faad14'
+              } else if (level === 'error' || level === 'err' || eventType === 'buy.failed') {
                 dotColor = '#ff4d4f'
               } else if (level === 'warning' || level === 'warn') {
                 dotColor = '#faad14'
-              } else if (eventType.startsWith('eval.passed') || eventType === 'order.paid') {
+              } else if (eventType.startsWith('eval.passed') || eventType === 'buy.succeeded') {
                 dotColor = '#52c41a'
               }
 

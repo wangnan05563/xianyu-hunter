@@ -165,7 +165,7 @@ def _build_success_rate_rows(orders: list[dict], cutoff) -> list[tuple]:
         d = _ensure_aware(to_datetime(o.get("created_at")))
         if d is None or d < cutoff:
             continue
-        v = 1.0 if o.get("status") == "succeeded" else 0.0
+        v = 1.0 if o.get("status") == OrderStatus.SUCCEEDED.value else 0.0
         rows.append((o.get("created_at"), v))
     return rows
 

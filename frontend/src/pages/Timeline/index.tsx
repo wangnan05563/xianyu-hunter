@@ -7,6 +7,7 @@ import { timelineApi, taskApi, configApi, type TimelineEntry, type Task } from '
 import {
   EVENT_TYPE_OPTIONS, EVENT_TYPE_VALUES, ENUM_TO_DOT,
 } from '../../constants/eventTypes'
+import { ORDER_STATUS } from '../../constants/orderStatus'
 import TimelineFilter from './components/TimelineFilter'
 import TimelineList from './components/TimelineList'
 
@@ -110,8 +111,8 @@ export default function TimelinePage() {
 
   const orderCount = filteredItems.filter((i) => i._kind === 'order').length
   const eventCount = filteredItems.filter((i) => i._kind === 'event').length
-  const succeededCount = filteredItems.filter((i) => i._kind === 'order' && i.status === 'succeeded').length
-  const failedCount = filteredItems.filter((i) => i._kind === 'order' && i.status === 'failed').length
+  const succeededCount = filteredItems.filter((i) => i._kind === 'order' && i.status === ORDER_STATUS.SUCCEEDED).length
+  const failedCount = filteredItems.filter((i) => i._kind === 'order' && i.status === ORDER_STATUS.FAILED).length
 
   // 任务名映射：task_id → 可读名称
   const taskMap = new Map(tasks.map(t => [t.id, t.name || t.keyword || t.id]))

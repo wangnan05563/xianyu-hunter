@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, text as sa_text
 
 from xianyu_hunter.container import Container
-from xianyu_hunter.domain.order import PENDING_STATUSES
+from xianyu_hunter.domain.order import OrderStatus, PENDING_STATUSES
 from xianyu_hunter.infra.db_models import EventRow, OrderRow, _utcnow
 from xianyu_hunter.web.cache import cached_ttl
 from xianyu_hunter.web.deps import get_container
@@ -32,15 +32,21 @@ def _query_order_stats(engine, today_start) -> tuple[int, int, int]:
 
     P3-1：独立 connection，配合 asyncio.gather 并发执行
     """
+    # 状态字面值取 OrderStatus（与 stats_overview._query_order_stats 同一写法）：
+    # 原先 SQL 里裸写 'succeeded'/'failed'，字面值一改这里就静默少计数
     with engine.connect() as conn:
         row = conn.execute(sa_text("""
             SELECT
                 COUNT(*) AS total,
-                SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+                SUM(CASE WHEN status = :succeeded THEN 1 ELSE 0 END) AS succeeded,
+                SUM(CASE WHEN status = :failed THEN 1 ELSE 0 END) AS failed
             FROM orders
             WHERE created_at >= :today_start
-        """), {"today_start": today_start}).one()
+        """), {
+            "today_start": today_start,
+            "succeeded": OrderStatus.SUCCEEDED.value,
+            "failed": OrderStatus.FAILED.value,
+        }).one()
     return int(row.total or 0), int(row.succeeded or 0), int(row.failed or 0)
 
 
@@ -63,7 +69,7 @@ def _query_failed_orders(engine, container: Container, today_start) -> list[dict
     """
     with engine.connect() as conn:
         failed_rows = conn.execute(
-            select(OrderRow).where(OrderRow.status == 'failed')
+            select(OrderRow).where(OrderRow.status == OrderStatus.FAILED.value)
             .where(OrderRow.created_at >= today_start)
             .order_by(OrderRow.created_at.desc()).limit(20)
         ).all()
