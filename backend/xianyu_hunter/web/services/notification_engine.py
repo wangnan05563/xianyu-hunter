@@ -19,6 +19,7 @@ from typing import Any
 from loguru import logger
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.notification import NotificationCategory
 from xianyu_hunter.domain.order import PENDING_STATUSES
 from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.web.utils import to_datetime
@@ -66,7 +67,7 @@ def scan_order_timeouts(container: Container) -> int:
                 # reset_read=True：超时从 5min 升到 15min 时让用户重新看到
                 container.repo.add_notification(
                     level=level,
-                    category="order",
+                    category=NotificationCategory.ORDER.value,
                     title=title,
                     message=message,
                     link=link,
@@ -117,7 +118,7 @@ def _scan_auth_down(container: Container, auth_state: dict[str, Any]) -> int:
     link = "/dashboard#login"
     container.repo.add_notification(
         level="err",
-        category="auth",
+        category=NotificationCategory.AUTH.value,
         title=title,
         message=message,
         link=link,

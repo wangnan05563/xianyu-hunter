@@ -8,29 +8,18 @@ import {
 import {
   ReloadOutlined, CheckOutlined, CheckSquareOutlined, DeleteOutlined, ClearOutlined,
 } from '@ant-design/icons'
-import { notificationApi, type NotificationItem } from '../../api'
+import {
+  notificationApi,
+  NOTIFICATION_CATEGORY_LABEL,
+  NOTIFICATION_LEVEL_COLOR,
+  NOTIFICATION_LEVEL_LABEL,
+  type NotificationItem,
+} from '../../api'
 import { invalidateNotificationCounts } from '../../hooks/useNotificationModel'
 
-// level 颜色与文案：与后端 _ALLOWED_LEVELS 对齐
-const LEVEL_COLOR: Record<NotificationItem['level'], string> = {
-  info: 'blue',
-  warn: 'orange',
-  err: 'red',
-}
-const LEVEL_LABEL: Record<NotificationItem['level'], string> = {
-  info: '信息',
-  warn: '警告',
-  err: '错误',
-}
-
-// category 文案：与后端 _ALLOWED_CATEGORIES 对齐
-const CATEGORY_LABEL: Record<NotificationItem['category'], string> = {
-  order: '订单',
-  auth: '登录',
-  system: '系统',
-  config: '配置',
-  task: '任务',
-}
+// level / category 的取值与中文文案一律取自 api/notifications 的共享常量（T02619）：
+// 后端 domain/notification.py 是唯一事实源，桌面端与移动端共用同一张表，
+// 避免此前「桌面 auth=登录、移动 auth=认证」两套文案各自漂移。
 
 type FilterStatus = 'all' | 'unread' | 'read'
 
@@ -370,8 +359,8 @@ export default function Notifications() {
                     }
                     title={
                       <Space size="small" wrap>
-                        <Tag color={LEVEL_COLOR[item.level]}>{LEVEL_LABEL[item.level]}</Tag>
-                        <Tag>{CATEGORY_LABEL[item.category]}</Tag>
+                        <Tag color={NOTIFICATION_LEVEL_COLOR[item.level]}>{NOTIFICATION_LEVEL_LABEL[item.level]}</Tag>
+                        <Tag>{NOTIFICATION_CATEGORY_LABEL[item.category]}</Tag>
                         <span style={{ fontWeight: item.read_at ? 'normal' : 600 }}>{item.title}</span>
                         <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
                           {new Date(item.created_at).toLocaleString('zh-CN')}

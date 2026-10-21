@@ -362,7 +362,7 @@ class NotificationRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     level: Mapped[str] = mapped_column(String, nullable=False, default="info")  # info / warn / err
-    category: Mapped[str] = mapped_column(String, nullable=False)  # order / auth / system / config
+    category: Mapped[str] = mapped_column(String, nullable=False)  # 取值见 domain/notification.NotificationCategory（T02619）
     title: Mapped[str] = mapped_column(String, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     link: Mapped[str | None] = mapped_column(String, nullable=True)  # 点击跳转 URL

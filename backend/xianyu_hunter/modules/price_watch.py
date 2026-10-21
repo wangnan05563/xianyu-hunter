@@ -5,7 +5,9 @@ price_config.price_drop_threshold，默认 0%）即触发降价事件。
 
 通知三路（FR-F1-4）：
 1. 事件时间线：repo.save_event（stage=price_drop）
-2. 站内通知：repo.add_notification（category=price，dedup 防同价重复刷屏）
+2. 站内通知：repo.add_notification（category=NotificationCategory.PRICE，dedup 防同价重复刷屏）
+   —— 分类字面值取自 domain/notification（T02619）：写死 "price" 时它不在 API 白名单里，
+   前端通知中心渲染该条也取不到中文标签，只能显示空白。
 3. 8 渠道推送：EventBus 发布 PRICE_DROPPED → NotifierHub fan-out（免打扰降级由 hub 处理）
 
 检测时序关键点：必须在写入新快照【之前】取旧最低价，
@@ -16,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from xianyu_hunter.domain.events import Event, EventType
+from xianyu_hunter.domain.notification import NotificationCategory
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.infra.repository import Repository
 
@@ -201,7 +204,7 @@ def _emit_drop_summary(
     try:
         repo.add_notification(
             level="warn",
-            category="price",
+            category=NotificationCategory.PRICE.value,
             title=f"降价汇总：{len(drops)} 个商品降价（最大 {top['drop_pct'] * 100:.1f}%）",
             message=message_text,
             link="/m/items/",
@@ -254,7 +257,7 @@ def _emit_drop_notifications(
     try:
         repo.add_notification(
             level="warn",
-            category="price",
+            category=NotificationCategory.PRICE.value,
             title=f"降价提醒：{info['item_title'] or item_id}",
             message=f"现价 ¥{info['new_price']:.2f}（历史最低 ¥{info['prev_min_price']:.2f}，"
                     f"降幅 {info['drop_pct'] * 100:.1f}%），请尽快判断是否出手。",

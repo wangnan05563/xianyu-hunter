@@ -11,6 +11,12 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.notification import (
+    NOTIFICATION_CATEGORY_ORDER,
+    NOTIFICATION_CATEGORY_VALUES,
+    NOTIFICATION_LEVEL_ORDER,
+    NOTIFICATION_LEVEL_VALUES,
+)
 from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
@@ -19,8 +25,11 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 # 通知级别与"可创建"的业务场景白名单
 # 为什么不开放 category/level 任意写入：内部 API 也加白名单，防止误调用造出垃圾
 # （外部如果需要创建通知，调用 /api/notifications 即可，但需要带 dedup_key 表明业务意图）
-_ALLOWED_LEVELS = {"info", "warn", "err"}
-_ALLOWED_CATEGORIES = {"order", "auth", "system", "config", "task"}
+# 白名单不在此处手写枚举，而是取自 domain/notification（T02619）：
+# 原先这里是硬编码 5 个分类，唯独漏了 price_watch 真实写入的 price，
+# 导致「仓储能落库、API 会 400、前端标签渲染空白」三态不一致。
+_ALLOWED_LEVELS: frozenset[str] = NOTIFICATION_LEVEL_VALUES
+_ALLOWED_CATEGORIES: frozenset[str] = NOTIFICATION_CATEGORY_VALUES
 
 
 @router.get("")
@@ -92,10 +101,18 @@ def create_notification(
     reset_read = bool(payload.get("reset_read", True))
 
     # 入参校验：白名单 + 必填 → 防止脏数据
+    # 报错文案取 domain 的声明序（NOTIFICATION_*_ORDER）而不是 sorted(frozenset)：
+    # 字母序会把等级写成 "err/info/warn"，既不按严重度、每次看起来也像集合调试输出
     if level not in _ALLOWED_LEVELS:
-        raise HTTPException(status_code=400, detail=f"level 必须是 {_ALLOWED_LEVELS} 之一")
+        raise HTTPException(
+            status_code=400,
+            detail=f"level 必须是 {'/'.join(NOTIFICATION_LEVEL_ORDER)} 之一",
+        )
     if category not in _ALLOWED_CATEGORIES:
-        raise HTTPException(status_code=400, detail=f"category 必须是 {_ALLOWED_CATEGORIES} 之一")
+        raise HTTPException(
+            status_code=400,
+            detail=f"category 必须是 {'/'.join(NOTIFICATION_CATEGORY_ORDER)} 之一",
+        )
     if not title:
         raise HTTPException(status_code=400, detail="title 必填")
     if not message:

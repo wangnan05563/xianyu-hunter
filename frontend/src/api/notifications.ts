@@ -4,14 +4,44 @@ import client from './client'
 // read_at: null = 未读，非空 = 已读时间字符串
 export interface NotificationItem {
   id: number
-  level: 'info' | 'warn' | 'err'
-  category: 'order' | 'auth' | 'system' | 'config' | 'task'
+  level: NotificationLevel
+  category: NotificationCategory
   title: string
   message: string
   link?: string | null
   dedup_key: string
   read_at: string | null
   created_at: string
+}
+
+// 分类与等级的唯一口径在后端 domain/notification.py（T02619）。
+// 盯盘降价通知一直写的是 category='price'，但这里曾漏把它列进联合类型，
+// 桌面/移动两张标签表都取到 undefined，通知中心那条 Tag 直接显示空白。
+export type NotificationLevel = 'info' | 'warn' | 'err'
+export type NotificationCategory = 'order' | 'auth' | 'price' | 'task' | 'config' | 'system'
+
+// 中文标签：桌面端与移动端共用这一份（此前两张表把 auth 分别写成「登录」和「认证」）
+// 新增分类必须同时补这里的标签——TS 的 Record 联合类型会编译报错，不会静默漏。
+export const NOTIFICATION_CATEGORY_LABEL: Record<NotificationCategory, string> = {
+  order: '订单',
+  auth: '登录',
+  price: '盯盘',
+  task: '任务',
+  config: '配置',
+  system: '系统',
+}
+
+// level 颜色与文案：与后端 NOTIFICATION_LEVEL_VALUES 对齐
+export const NOTIFICATION_LEVEL_LABEL: Record<NotificationLevel, string> = {
+  info: '信息',
+  warn: '警告',
+  err: '错误',
+}
+
+export const NOTIFICATION_LEVEL_COLOR: Record<NotificationLevel, string> = {
+  info: 'blue',
+  warn: 'orange',
+  err: 'red',
 }
 
 export interface NotificationListResponse {

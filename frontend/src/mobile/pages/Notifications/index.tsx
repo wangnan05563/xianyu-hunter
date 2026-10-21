@@ -2,25 +2,19 @@
 import { Card, Tag, Spin, Empty, App, Select, Button, Popconfirm, Badge, Space } from 'antd'
 import { useCallback, useEffect, useState } from 'react'
 import { notificationApi } from '../../../api'
+import {
+  NOTIFICATION_CATEGORY_LABEL,
+  NOTIFICATION_LEVEL_COLOR,
+} from '../../../api/notifications'
 import type { NotificationItem, NotificationStatus } from '../../../api/notifications'
 import { extractApiError } from '../../../utils/apiError'
 import PullToRefresh from '../../components/PullToRefresh'
 
-// category 中文标签：与后端 NotificationRow.category 字段对齐
-const CATEGORY_LABELS: Record<NotificationItem['category'], string> = {
-  order: '订单',
-  auth: '认证',
-  system: '系统',
-  config: '配置',
-  task: '任务',
-}
-
-// level 颜色：与 antd Tag 颜色映射，severity 递增色阶加深
-const LEVEL_COLORS: Record<NotificationItem['level'], string> = {
-  info: 'blue',
-  warn: 'orange',
-  err: 'red',
-}
+// category / level 文案与颜色取自 api/notifications 共享常量（T02619）：
+// 与桌面端同一张表，后端 domain/notification.py 是唯一事实源
+// （原先这里自带一份 CATEGORY_LABELS，把 auth 翻成「认证」，与桌面端「登录」不一致）
+const CATEGORY_LABELS = NOTIFICATION_CATEGORY_LABEL
+const LEVEL_COLORS = NOTIFICATION_LEVEL_COLOR
 
 const LIST_LIMIT = 50
 

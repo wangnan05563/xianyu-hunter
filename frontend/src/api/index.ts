@@ -48,8 +48,20 @@ export { evalApi } from './evaluation'
 export type { OfficialCollectResult, BatchCollectResult } from './evaluation'
 export { timelineApi, logApi } from './event'
 export { errorLogApi } from './errorLogs'
-export { notificationApi } from './notifications'
-export type { NotificationItem, NotificationListResponse, NotificationStatus, NotificationCounts } from './notifications'
+export {
+  notificationApi,
+  NOTIFICATION_CATEGORY_LABEL,
+  NOTIFICATION_LEVEL_LABEL,
+  NOTIFICATION_LEVEL_COLOR,
+} from './notifications'
+export type {
+  NotificationItem,
+  NotificationListResponse,
+  NotificationStatus,
+  NotificationCounts,
+  NotificationLevel,
+  NotificationCategory,
+} from './notifications'
 export { itemApi } from './item'
 export { templateApi } from './template'
 export type { TaskTemplate, TemplateCreateBody } from './template'
