@@ -5,6 +5,7 @@ import { timelineApi } from '../../../api'
 import type { TimelineEntry } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
 import PullToRefresh from '../../components/PullToRefresh'
+import { eventTypeLabel } from '../../../constants/eventTypes'
 
 // 时间线精简版：聚合订单事件与系统事件为统一时间线
 // 移动端不提供筛选（精简版），仅展示最近 50 条
@@ -37,8 +38,9 @@ export default function MobileTimeline() {
         <Empty description="暂无时间线" />
       ) : (
         entries.map((entry, idx) => {
-          // Card 标题优先级：显式 title > 商品名 > 事件类型 > 通用兜底
-          const cardTitle = entry.title || entry.item_title || entry.type || '事件'
+          // Card 标题优先级：显式 title > 商品名 > 事件类型中文名 > 通用兜底
+          // 事件类型中文名取自 constants/eventTypes（T02842 单一事实源），此前直接落 DB 原文
+          const cardTitle = entry.title || entry.item_title || eventTypeLabel(entry.type) || '事件'
           // 时间格式化交给宿主 Intl，避免引入 dayjs 增大移动端 bundle
           const timeText = entry._ts ? new Date(entry._ts).toLocaleString('zh-CN') : ''
           // Tag 颜色：订单事件=绿色，level 字段优先于其他判定（warning/err 是系统级严重度）

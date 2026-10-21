@@ -10,7 +10,7 @@ import {
   HeartOutlined,
 } from '@ant-design/icons'
 import type { RecentEvent, StatsOverview } from '../../../api'
-import { EVENT_COLOR } from '../../../constants/eventTypes'
+import { eventTypeColor } from '../../../constants/eventTypes'
 import { evTypeLabel, evMsg } from '../utils'
 import { TipButton } from '@/components/TipButton'
 import FetchFailedHint from '@/components/FetchFailedHint'
@@ -53,7 +53,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
               renderItem={(e) => (
                 <List.Item style={{ padding: '4px 0' }}>
                   <List.Item.Meta
-                    avatar={<Tag color={EVENT_COLOR[e.type] || 'default'} style={{ fontSize: 10 }}>{evTypeLabel(e.type)}</Tag>}
+                    avatar={<Tag color={eventTypeColor(e.type)} style={{ fontSize: 10 }}>{evTypeLabel(e.type)}</Tag>}
                     title={<span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{new Date(e.created_at).toLocaleString('zh-CN')}</span>}
                     description={<span style={{ fontSize: 12 }}>{evMsg(e)}</span>}
                   />

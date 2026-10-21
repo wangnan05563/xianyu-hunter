@@ -1,4 +1,4 @@
-import { EVENT_TYPE_LABEL } from '../../constants/eventTypes'
+import { eventTypeMeta } from '../../constants/eventTypes'
 import type { KpiCard, RecentEvent } from '../../api'
 
 // ========== 常量：米其林星级阈值 ==========
@@ -61,14 +61,11 @@ export function deltaText(k: KpiCard): string {
   return `${k.delta_pct > 0 ? '+' : ''}${k.delta_pct.toFixed(1)}%`
 }
 
-// 事件类型标签：先精确匹配，再前缀匹配，最后取点分末段
+// 事件类型标签：先查单一事实源（含 db_admin.<action> 家族规则），取末段英文只是兜底
+// T02842 之前这里查的是另一张点分表，21 个键后端从未发出过，兜底反而成了常态
 export function evTypeLabel(type: string): string {
   if (!type) return '事件'
-  if (EVENT_TYPE_LABEL[type]) return EVENT_TYPE_LABEL[type]
-  for (const [key, label] of Object.entries(EVENT_TYPE_LABEL)) {
-    if (type.startsWith(key)) return label
-  }
-  return type.split('.').pop() || type
+  return eventTypeMeta(type)?.label || type.split('.').pop() || type
 }
 
 // 事件消息：优先用 message，其次从 payload 拼接关键字段

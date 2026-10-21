@@ -2,7 +2,7 @@ import { Tag, Tooltip, Descriptions } from 'antd'
 import type { TimelineEntry } from '../../../api'
 import { TipButton } from '@/components/TipButton'
 import {
-  EVENT_TYPE_LABELS, SEVERITY_CONFIG,
+  eventTypeMeta, SEVERITY_CONFIG,
 } from '../../../constants/eventTypes'
 import { ORDER_STATUS_CONFIG } from '../../../constants/orderStatus'
 import { RISK_LEVEL_CONFIG } from '../../../constants/riskLevels'
@@ -58,7 +58,7 @@ function EventDetail({ item, idx, isExpanded, onToggleExpand, taskMap }: EventDe
   const eventType = item.type || ''
   const level = (item.level || '').toLowerCase()
   const severity = SEVERITY_CONFIG[level] || SEVERITY_CONFIG.info
-  const typeInfo = EVENT_TYPE_LABELS[eventType]
+  const typeInfo = eventTypeMeta(eventType)
 
   return (
     <div style={{ padding: '4px 0' }}>
