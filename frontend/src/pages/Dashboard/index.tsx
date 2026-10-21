@@ -17,6 +17,7 @@ import EvalFunnelCard from './components/EvalFunnelCard'
 import TrendModal from './components/TrendModal'
 import { API_BASE } from '../../utils/apiBase'
 import { TipButton } from '@/components/TipButton'
+import { useFailedSources } from '../../hooks/useFailedSources'
 
 // SSE lastEventId 持久化 key：提取到模块级，供 handleSseAppEvent 与 connect 共享（S2004 提取避免嵌套过深）
 const SSE_LAST_EVENT_ID_KEY = 'xh.sse.lastEventId'
@@ -45,13 +46,6 @@ const SOURCE_LABELS: Record<DataSourceKey, string> = {
 // sparkline 指标名与 StatCardsSection 取用的 key 一一对应：
 // 三张订单卡各自取按状态的趋势，不再共用 orders 同一条线（评审 2.1-2）
 const SPARK_METRICS = ['events', 'orders_pending', 'orders_succeeded', 'orders_failed'] as const
-
-/** 请求成功才返回数据，失败返回 null 并把该数据源标记为失败（调用方据此保留旧数据） */
-function settled<T>(r: PromiseSettledResult<T>, key: DataSourceKey, mark: (k: DataSourceKey, ok: boolean) => void): T | null {
-  const ok = r.status === 'fulfilled'
-  mark(key, ok)
-  return ok ? (r as PromiseFulfilledResult<T>).value : null
-}
 
 // 处理 app_event 事件：解析 SSE 数据并 prepend 到事件列表前 100 条
 // 为什么提取到模块级：原 useEffect → connect → addEventListener → setEvents(prev =>) 嵌套达 5 层，违反 S2004
@@ -110,18 +104,8 @@ export default function Dashboard() {
   // ========== 数据加载 ==========
   // 每个数据源单独记失败账（T02586 假回执清零）：原先所有请求 .catch(()=>null/[])
   // 会把后端故障渲染成「全 0 / 暂无数据」的正常态，且覆盖掉上一次取到的好数据。
-  const [failedSources, setFailedSources] = useState<Partial<Record<DataSourceKey, boolean>>>({})
-  const markSource = useCallback((key: DataSourceKey, ok: boolean) => {
-    setFailedSources(prev => {
-      if (ok) {
-        if (!prev[key]) return prev
-        const next = { ...prev }
-        delete next[key]
-        return next
-      }
-      return prev[key] ? prev : { ...prev, [key]: true }
-    })
-  }, [])
+  // 账本实现与移动端共用 useFailedSources（T02700 抽取，避免两套逻辑各自漂移）。
+  const { failed: failedSources, mark: markSource, settle } = useFailedSources<DataSourceKey>()
 
   const loadOverview = useCallback(() => {
     Promise.allSettled([
@@ -131,19 +115,19 @@ export default function Dashboard() {
       priceApi.histogram({ bins: 20, task_id: histoTaskId === 'all' ? undefined : histoTaskId }),
       taskApi.list({ limit: 100 }),
     ]).then(([ov, kpi, ev, hist, tasks]) => {
-      const o = settled(ov, 'overview', markSource)
+      const o = settle(ov, 'overview')
       if (o) setOverview(o)
-      const k = settled(kpi, 'kpi', markSource)
+      const k = settle(kpi, 'kpi')
       if (k) setKpiCards(k.kpis || [])
-      const e = settled(ev, 'events', markSource)
+      const e = settle(ev, 'events')
       if (e) setEvents(e.events || [])
-      const h = settled(hist, 'histogram', markSource)
+      const h = settle(hist, 'histogram')
       if (h) setHistogram(h)
-      const t = settled(tasks, 'tasks', markSource)
+      const t = settle(tasks, 'tasks')
       if (t) setHistoTasks((t.items || []).filter(item => item.status !== 'deleted'))
       setLoading(false)
     })
-  }, [histoTaskId, markSource])
+  }, [histoTaskId, settle])
 
   const loadSparklines = useCallback(() => {
     Promise.allSettled(

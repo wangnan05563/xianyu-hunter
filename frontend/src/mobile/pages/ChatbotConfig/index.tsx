@@ -10,6 +10,17 @@ import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { chatbotApi } from '../../../pages/Chatbot/api'
 import type { ChatbotConfig, FAQ, WelcomeInfo } from '../../../pages/Chatbot/types'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 本页三路数据源的失败账（T02701）：任一失败只挂自己那条错误条，
+// 不能把「没取到」渲染成「未配置」或永久「加载中...」
+type ChatbotConfigSource = 'config' | 'welcome' | 'faq'
+const SOURCE_LABELS: Record<ChatbotConfigSource, string> = {
+  config: '智能客服配置',
+  welcome: '欢迎语',
+  faq: 'FAQ 列表',
+}
 
 // 提取到模块级别以避免在 Modal.confirm 的 onOk 回调内多层嵌套 setFaqs + filter 回调（S2004）
 const filterFaqById = (list: FAQ[], id: number | undefined): FAQ[] =>
@@ -25,25 +36,25 @@ export default function MobileChatbotConfig() {
   const [editingFaq, setEditingFaq] = useState<FAQ | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<FAQ>({ question: '', answer: '', category: '通用', enabled: true })
+  const { failed, settle } = useFailedSources<ChatbotConfigSource>()
 
   const loadAll = useCallback(async (): Promise<void> => {
     setLoading(true)
-    try {
-      // 错误隔离：任一失败不阻塞其他数据
-      const [cfg, wel, faqList] = await Promise.all([
-        chatbotApi.getConfig().catch(() => null),
-        chatbotApi.getWelcome().catch(() => null),
-        chatbotApi.listFAQ().catch(() => [] as FAQ[]),
-      ])
-      if (cfg) setConfig(cfg)
-      if (wel) setWelcome(wel)
-      setFaqs(faqList)
-    } catch (e) {
-      message.error(extractApiError(e, '加载配置失败'), 3)
-    } finally {
-      setLoading(false)
-    }
-  }, [message])
+    // 错误隔离：任一失败不阻塞其他数据，但必须记在失败账上（原先 catch 成 null/[] 
+    // 会把后端故障说成「未配置欢迎语」「FAQ 一条都没有」）
+    const [cfgRes, welRes, faqRes] = await Promise.allSettled([
+      chatbotApi.getConfig(),
+      chatbotApi.getWelcome(),
+      chatbotApi.listFAQ(),
+    ])
+    const cfg = settle(cfgRes, 'config')
+    if (cfg) setConfig(cfg)
+    const wel = settle(welRes, 'welcome')
+    if (wel) setWelcome(wel)
+    const faqList = settle(faqRes, 'faq')
+    if (faqList) setFaqs(faqList)
+    setLoading(false)
+  }, [settle])
 
   useEffect(() => { void loadAll() }, [loadAll])
 
@@ -124,12 +135,26 @@ export default function MobileChatbotConfig() {
     }
   }
 
-  if (loading || !config) {
+  if (loading) {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+  }
+
+  // 配置取不到就没有可编辑的对象：直接给错误态 + 重试，而不是永久转圈
+  if (!config) {
+    return (
+      <div style={{ padding: 12 }}>
+        <LoadFailedBar
+          source={SOURCE_LABELS.config}
+          note="拿不到配置就无法修改开关与 FAQ"
+          onRetry={() => void loadAll()}
+        />
+      </div>
+    )
   }
 
   return (
     <div>
+      {failed.faq && <LoadFailedBar source={SOURCE_LABELS.faq} onRetry={() => void loadAll()} />}
       {/* 启用开关 */}
       <Card size="small" style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -150,12 +175,18 @@ export default function MobileChatbotConfig() {
         title="欢迎语预览"
         extra={<Tag color="blue">仅展示</Tag>}
       >
-        {welcome ? (
+        {failed.welcome ? (
+          <LoadFailedBar
+            source={SOURCE_LABELS.welcome}
+            note="下面的内容不代表服务端状态"
+            onRetry={() => void loadAll()}
+          />
+        ) : welcome ? (
           <div style={{ fontSize: 14, padding: 12, background: themeToken.colorBgLayout, borderRadius: 6 }}>
             {welcome.message || '(未配置欢迎语)'}
           </div>
         ) : (
-          <div style={{ fontSize: 13, color: themeToken.colorTextTertiary }}>加载中...</div>
+          <div style={{ fontSize: 13, color: themeToken.colorTextTertiary }}>未取到欢迎语，请重试</div>
         )}
       </Card>
 
@@ -163,7 +194,7 @@ export default function MobileChatbotConfig() {
       <Card
         size="small"
         style={{ marginBottom: 12 }}
-        title={`FAQ 列表 (${faqs.length})`}
+        title={`FAQ 列表 (${failed.faq ? '数量未知' : faqs.length})`}
         extra={
           <Button
             size="small"
@@ -175,7 +206,7 @@ export default function MobileChatbotConfig() {
           </Button>
         }
       >
-        {faqs.length === 0 ? (
+        {failed.faq ? null : faqs.length === 0 ? (
           <Empty description="暂无 FAQ" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变布局语义，暂不迁移 */ />
         ) : (
           <List

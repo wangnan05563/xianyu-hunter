@@ -9,6 +9,12 @@ import { ReloadOutlined, SearchOutlined, DownloadOutlined, PauseCircleOutlined, 
 import { logApi, type LogEntry } from '../../../api'
 import { extractApiError } from '../../../utils/apiError'
 import { levelColor, normalizeLevel } from '../../../constants/logLevels'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 两个独立数据源：列表本身（首屏/切过滤）与后台自动刷新（轮询/回到前台）
+type LogsSource = 'logs' | 'poll'
+const SOURCE_LABELS: Record<LogsSource, string> = { logs: '日志列表', poll: '自动刷新' }
 
 // 轮询间隔：3s 比桌面端 5s 更紧凑，弥补没有 SSE 的实时性损失
 const POLL_INTERVAL_MS = 3000
@@ -30,6 +36,7 @@ export default function MobileLogs() {
   // ref 镜像：避免闭包陷阱（暂停按钮在回调里读到旧 pollingPaused）
   const pausedRef = useRef(false)
   pausedRef.current = pollingPaused
+  const { failed, mark } = useFailedSources<LogsSource>()
 
   // 拉取并搜索
   const fetchLogs = useCallback(async (): Promise<LogEntry[]> => {
@@ -42,36 +49,70 @@ export default function MobileLogs() {
     let cancelled = false
     setLoading(true)
     fetchLogs()
-      .then((items) => { if (!cancelled) setEntries(items) })
-      .catch((e) => message.error(extractApiError(e, '加载日志失败'), 3))
+      .then((items) => {
+        if (cancelled) return
+        setEntries(items)
+        mark('logs', true)
+      })
+      .catch((e) => {
+        if (cancelled) return
+        mark('logs', false)
+        message.error(extractApiError(e, '加载日志失败'), 3)
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [fetchLogs, message])
+  }, [fetchLogs, message, mark])
+
+  // 后台刷新（轮询 / 回到前台 / 失败条重试）：失败时保留旧数据，
+  // 但旧数据不等于最新数据，必须记账把「自动刷新失败」说出来（T02701）
+  const refreshInBackground = useCallback(async (): Promise<void> => {
+    try {
+      const items = await fetchLogs()
+      setEntries(items)
+      mark('poll', true)
+    } catch {
+      mark('poll', false)
+    }
+  }, [fetchLogs, mark])
 
   // 轮询：仅在 polling=true 且未暂停时每 3s 拉一次
   useEffect(() => {
     if (!polling || pollingPaused) return
+    // 轮询开启/恢复：上一轮的「自动刷新失败」不再适用，先销账
+    mark('poll', true)
     const id = setInterval(() => {
       // 暂停期间不更新 UI，避免视觉跳动
       if (pausedRef.current) return
-      fetchLogs()
-        .then((items) => setEntries(items))
-        .catch(() => { /* 静默：弱网保留旧数据 */ })
+      void refreshInBackground()
     }, POLL_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [polling, pollingPaused, fetchLogs])
+  }, [polling, pollingPaused, refreshInBackground, mark])
 
   // visibility 切换：隐藏时停止轮询，恢复时立即拉一次
   useEffect(() => {
     if (!polling) return
     const onVis = () => {
-      if (!document.hidden) {
-        fetchLogs().then(setEntries).catch(() => {})
-      }
+      if (!document.hidden) void refreshInBackground()
     }
     document.addEventListener('visibilitychange', onVis)
     return () => document.removeEventListener('visibilitychange', onVis)
-  }, [polling, fetchLogs])
+  }, [polling, refreshInBackground])
+
+  // 手动重试：清空失败账并重新拉列表
+  const reload = useCallback((): void => {
+    setLoading(true)
+    fetchLogs()
+      .then((items) => {
+        setEntries(items)
+        mark('logs', true)
+        mark('poll', true)
+      })
+      .catch((e) => {
+        mark('logs', false)
+        message.error(extractApiError(e, '加载失败'), 3)
+      })
+      .finally(() => setLoading(false))
+  }, [fetchLogs, mark, message])
 
   const togglePolling = (): void => {
     setPolling((v) => !v)
@@ -110,13 +151,7 @@ export default function MobileLogs() {
           <Button
             size="middle"
             icon={<ReloadOutlined />}
-            onClick={() => {
-              setLoading(true)
-              fetchLogs()
-                .then(setEntries)
-                .catch((e) => message.error(extractApiError(e, '加载失败'), 3))
-                .finally(() => setLoading(false))
-            }}
+            onClick={reload}
           >
             刷新
           </Button>
@@ -153,8 +188,25 @@ export default function MobileLogs() {
         </Space>
       </Space>
 
+      {/* 列表数据源失败：不能再用「暂无日志」空态冒充（T02701） */}
+      {failed.logs && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.logs}
+          note={entries.length > 0 ? '下面是上一次成功拉取的结果' : '本次一条都没取到'}
+          onRetry={reload}
+        />
+      )}
+      {/* 后台刷新失败：列表还在，但不代表最新状态 */}
+      {!failed.logs && failed.poll && polling && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.poll}
+          note="列表停留在上一次成功拉取的结果，可能已过期"
+          onRetry={() => void refreshInBackground()}
+        />
+      )}
+
       {entries.length === 0 ? (
-        <Empty description="暂无日志" />
+        failed.logs ? null : <Empty description="暂无日志" />
       ) : (
         entries.map((item, idx) => {
           // level 归一化后取色与展示：表内存小写缩写（err/warn/info/debug），

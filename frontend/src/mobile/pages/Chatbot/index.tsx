@@ -11,6 +11,12 @@ import { useSSEChat } from '../../../pages/Chatbot/hooks/useSSEChat'
 import { MarkdownContent } from '../../../pages/Chatbot/components/MarkdownContent'
 import type { Session, Message, SSEEvent, Source } from '../../../pages/Chatbot/types'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 欢迎语是独立数据源：失败时不能靠「没有欢迎语气泡」暗示一切正常（T02701）
+type ChatbotSource = 'welcome'
+const SOURCE_LABELS: Record<ChatbotSource, string> = { welcome: '欢迎语' }
 
 const { TextArea } = Input
 
@@ -161,6 +167,12 @@ export default function MobileChatbot() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { isStreaming, sendMessage, cancel } = useSSEChat()
+  const { failed, track } = useFailedSources<ChatbotSource>()
+
+  const loadWelcome = useCallback(async (): Promise<void> => {
+    const welcome = await track('welcome', chatbotApi.getWelcome())
+    if (welcome) setWelcomeMessage(welcome.message)
+  }, [track])
 
   // ============== 初始化：恢复最近会话或创建新会话 + 加载欢迎语 ==============
   // cancelled 标志防止卸载后 setState（F-REVIEW-ASYNC-RACE-GUARD）
@@ -168,10 +180,9 @@ export default function MobileChatbot() {
     let cancelled = false
     const init = async (): Promise<void> => {
       try {
-        // 欢迎语失败不阻断主流程，仅 UI 缺失
-        const welcome = await chatbotApi.getWelcome().catch(() => null)
+        // 欢迎语失败不阻断主流程，但要记账显示失败条（T02701）
+        await loadWelcome()
         if (cancelled) return
-        if (welcome) setWelcomeMessage(welcome.message)
 
         // 取最近 1 条会话作为当前会话，避免每次进入都新建
         const { items } = await chatbotApi.listSessions(1, 1)
@@ -195,7 +206,7 @@ export default function MobileChatbot() {
     }
     void init()
     return () => { cancelled = true }
-  }, [message])
+  }, [message, loadWelcome])
 
   // ============== 自动滚动到底部 ==============
   useEffect(() => {
@@ -435,6 +446,13 @@ export default function MobileChatbot() {
       {/* 消息列表（可滚动区域） */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
         {/* 欢迎语：仅 UI 展示，不入库；用 markdown 渲染，配置可支持加粗/链接 */}
+        {failed.welcome && (
+          <LoadFailedBar
+            source={SOURCE_LABELS.welcome}
+            note="下面的对话不受影响"
+            onRetry={() => void loadWelcome()}
+          />
+        )}
         {welcomeMessage && (
           <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
             <div

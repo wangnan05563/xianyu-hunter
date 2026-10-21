@@ -9,8 +9,17 @@ import { taskApi } from '../../../api/task'
 import type { Task } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
 import { notifyExportResult } from '../../../utils/exportFeedback'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 
 const { RangePicker } = DatePicker
+
+// 本页的数据源（T02701 失败账与错误条一一对应）
+type ExportSource = 'datasets' | 'tasks'
+const SOURCE_LABELS: Record<ExportSource, string> = {
+  datasets: '数据集定义',
+  tasks: '任务列表',
+}
 
 // 数据集描述：与后端 api_export 端点对齐
 const DATASET_DESC: Record<ExportDataset, string> = {
@@ -31,23 +40,22 @@ export default function MobileExport() {
   const [limit] = useState<number>(5000)
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(false)
+  const { failed, settle } = useFailedSources<ExportSource>()
 
   const loadInit = useCallback(async (): Promise<void> => {
     setLoading(true)
-    try {
-      // 并发拉取数据集定义 + 任务列表（供下拉）
-      const [ds, taskRes] = await Promise.all([
-        exportApi.listDatasets().catch(() => ({ datasets: [] as ExportDatasetInfo[] })),
-        taskApi.list({ limit: 100 }).catch(() => ({ items: [] as Task[], total: 0 })),
-      ])
-      setDatasets(ds.datasets)
-      setTasks(taskRes.items)
-    } catch (e) {
-      message.error(extractApiError(e, '加载失败'), 3)
-    } finally {
-      setLoading(false)
-    }
-  }, [message])
+    // 并发拉取数据集定义 + 任务列表，各自记账：
+    // 任一路失败只挂自己的错误条，并把「取不到」和「服务端确实没给」分开
+    const [dsRes, taskRes] = await Promise.allSettled([
+      exportApi.listDatasets(),
+      taskApi.list({ limit: 100 }),
+    ])
+    const ds = settle(dsRes, 'datasets')
+    if (ds) setDatasets(ds.datasets)
+    const taskList = settle(taskRes, 'tasks')
+    if (taskList) setTasks(taskList.items)
+    setLoading(false)
+  }, [settle])
 
   useEffect(() => { void loadInit() }, [loadInit])
 
@@ -82,6 +90,12 @@ export default function MobileExport() {
 
   return (
     <div>
+      {/* 数据集定义取不到时用的是本页内置的 4 个名字，必须明说，不能假装是服务端下发的 */}
+      {failed.datasets && (
+        <LoadFailedBar source={SOURCE_LABELS.datasets} note="以下选项是内置兜底列表，服务端真实列定义未知" onRetry={() => void loadInit()} />
+      )}
+      {failed.tasks && <LoadFailedBar source={SOURCE_LABELS.tasks} onRetry={() => void loadInit()} />}
+
       <Card size="small" style={{ marginBottom: 12 }}>
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <div style={{ fontSize: 13, color: themeToken.colorTextSecondary }}>

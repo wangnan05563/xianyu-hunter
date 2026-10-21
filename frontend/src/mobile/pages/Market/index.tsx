@@ -9,7 +9,16 @@ import { ReloadOutlined, DollarOutlined } from '@ant-design/icons'
 import { priceApi } from '../../../api/price'
 import { taskApi } from '../../../api/task'
 import type { Task, SoldPriceRange } from '../../../api/types'
-import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 本页的数据源，失败账与错误条一一对应
+type MarketSource = 'tasks' | 'sold' | 'category'
+const SOURCE_LABELS: Record<MarketSource, string> = {
+  tasks: '任务列表',
+  sold: '已售价格区间',
+  category: '分类均价',
+}
 
 // 范围选项（天）
 const RANGE_OPTIONS = [
@@ -27,25 +36,26 @@ export default function MobileMarket() {
   const [soldRange, setSoldRange] = useState<SoldPriceRange | null>(null)
   const [categories, setCategories] = useState<Array<{ name: string; keyword: string; count: number; mean: number; median: number; min: number; max: number; p10: number }>>([])
   const [loading, setLoading] = useState(true)
+  const { failed, settle, track } = useFailedSources<MarketSource>()
 
   const loadTasks = useCallback(async (): Promise<void> => {
-    try {
-      const res = await taskApi.list({ limit: 100 })
-      setTasks(res.items)
-    } catch (e) {
-      message.error(extractApiError(e, '加载任务失败'), 3)
-    }
-  }, [message])
+    // 失败时保留旧列表并记账，不把「取不到」渲染成「没有任务」
+    const res = await track('tasks', taskApi.list({ limit: 100 }))
+    if (res) setTasks(res.items)
+    else message.error('任务列表加载失败，下拉里的任务可能不完整', 3)
+  }, [message, track])
 
   const loadStats = useCallback(async (): Promise<void> => {
     setLoading(true)
-    try {
-      // 并发拉取已售区间 + 分类统计
-      const [sold, stats] = await Promise.all([
-        priceApi.soldRange({ task_id: taskId, range_days: rangeDays }).catch(() => null),
-        priceApi.categoryStats({ task_id: taskId, range_hours: rangeDays * 24 }).catch(() => ({ categories: [], total_count: 0 })),
-      ])
-      setSoldRange(sold)
+    // 两路并发、各自记账：任一路失败不影响另一路继续显示真实数据
+    const [soldRes, statsRes] = await Promise.allSettled([
+      priceApi.soldRange({ task_id: taskId, range_days: rangeDays }),
+      priceApi.categoryStats({ task_id: taskId, range_hours: rangeDays * 24 }),
+    ])
+    const sold = settle(soldRes, 'sold')
+    if (sold) setSoldRange(sold)
+    const stats = settle(statsRes, 'category')
+    if (stats) {
       // 仅保留前 5 个分类避免移动端长列表
       setCategories(
         stats.categories.slice(0, 5).map((c) => ({
@@ -59,12 +69,9 @@ export default function MobileMarket() {
           p10: c.p10,
         })),
       )
-    } catch (e) {
-      message.error(extractApiError(e, '加载行情失败'), 3)
-    } finally {
-      setLoading(false)
     }
-  }, [taskId, rangeDays, message])
+    setLoading(false)
+  }, [taskId, rangeDays, settle])
 
   useEffect(() => { void loadTasks() }, [loadTasks])
   useEffect(() => { void loadStats() }, [loadStats])
@@ -80,6 +87,11 @@ export default function MobileMarket() {
 
   return (
     <div>
+      {/* 失败账上的数据源各自挂一条错误条；取到 0 条才是空态 */}
+      {failed.sold && <LoadFailedBar source={SOURCE_LABELS.sold} onRetry={() => void loadStats()} />}
+      {failed.category && <LoadFailedBar source={SOURCE_LABELS.category} onRetry={() => void loadStats()} />}
+      {failed.tasks && <LoadFailedBar source={SOURCE_LABELS.tasks} onRetry={() => void loadTasks()} />}
+
       {/* 任务 + 范围过滤 */}
       <Space direction="vertical" size={8} style={{ width: '100%', marginBottom: 12 }}>
         <select
