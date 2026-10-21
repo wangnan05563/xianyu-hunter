@@ -8,7 +8,22 @@ import { chatbotApi } from './api'
 import { KBStatusCard } from './components/KBStatusCard'
 import { VectorAdminPanel } from './components/VectorAdminPanel'
 import { TipButton } from '@/components/TipButton'
+import FetchFailedHint from '@/components/FetchFailedHint'
+import DataBlock from '@/components/DataBlock'
+import { useFailedSources } from '@/hooks/useFailedSources'
 import type { ChatbotConfig, KBStatus, KBVersion, FAQ, AuditLog } from './types'
+
+// 本页各路数据源（T02700 假回执清零）：原先统一 catch 成 null/[]，
+// 后端故障会被说成「暂无重建记录 / 暂无 FAQ / 加载中...」。
+type ConfigSource = 'config' | 'kbStatus' | 'kbVersions' | 'faqs' | 'audit' | 'rebuild'
+const SOURCE_LABELS: Record<ConfigSource, string> = {
+  config: '客服配置',
+  kbStatus: '知识库状态',
+  kbVersions: '版本列表',
+  faqs: 'FAQ 列表',
+  audit: '审计日志',
+  rebuild: '重建记录',
+}
 
 // 按点分路径更新嵌套字段（如 'rag.top_k'），返回新对象保持不可变
 function setNestedField<T>(obj: T, path: string, value: unknown): T {
@@ -40,35 +55,42 @@ export default function ChatbotConfigPage() {
   const [loading, setLoading] = useState(false)
   const [faqModalOpen, setFaqModalOpen] = useState(false)
   const [editingFaq, setEditingFaq] = useState<FAQ | null>(null)
+  const { failed, mark, settle } = useFailedSources<ConfigSource>()
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (): Promise<void> => {
     setLoading(true)
-    // 错误隔离：每个请求独立 catch，单个失败不影响其他状态
-    // 否则 chatbot 模块未启用时 Promise.all 整体 reject，kbVersions 保持空，看起来"无重建记录"
-    const safe = <T,>(p: Promise<T>, fallback: T): Promise<T> =>
-      p.catch(() => fallback)
-
-    try {
-      const [cfg, status, versions, faqList, auditRes] = await Promise.all([
-        chatbotApi.getConfig().catch(() => null),
-        safe(chatbotApi.getKBStatus(), null),
-        safe(chatbotApi.listKBVersions(), [] as KBVersion[]),
-        safe(chatbotApi.listFAQ(), [] as FAQ[]),
-        safe(chatbotApi.listAuditLogs(1, 50), { items: [] as AuditLog[], total: 0 }),
-      ])
-      if (cfg) {
-        setConfig(cfg)
-      } else {
-        message.error('智能客服模块未启用或加载失败')
-      }
-      if (status) setKbStatus(status)
-      setKbVersions(versions)
-      setFaqs(faqList)
-      setAuditLogs(auditRes.items)
-    } finally {
-      setLoading(false)
+    // 错误隔离：allSettled 让单个失败不影响其他数据源（否则 chatbot 模块未启用时
+    // Promise.all 整体 reject，kbVersions 保持空，看起来"无重建记录"）。
+    // T02700：隔离不等于静默 —— 每一路失败都要上账，各区块据此显示错误态而不是空态。
+    const [cfgRes, statusRes, versionsRes, faqRes, auditRes] = await Promise.allSettled([
+      chatbotApi.getConfig(),
+      chatbotApi.getKBStatus(),
+      chatbotApi.listKBVersions(),
+      chatbotApi.listFAQ(),
+      chatbotApi.listAuditLogs(1, 50),
+    ])
+    const cfg = settle(cfgRes, 'config')
+    if (cfg) {
+      setConfig(cfg)
+    } else {
+      message.error('智能客服模块未启用或加载失败')
     }
-  }, [])
+    const status = settle(statusRes, 'kbStatus')
+    if (status) setKbStatus(status)
+    const versions = settle(versionsRes, 'kbVersions')
+    if (versions) setKbVersions(versions)
+    const faqList = settle(faqRes, 'faqs')
+    if (faqList) setFaqs(faqList)
+    const audit = settle(auditRes, 'audit')
+    // 重建记录与审计日志同源（pickRebuildLogs 从 audit 里筛），失败要一起上账
+    if (audit) {
+      setAuditLogs(audit.items)
+      mark('rebuild', true)
+    } else {
+      mark('rebuild', false)
+    }
+    setLoading(false)
+  }, [settle, mark])
 
   useEffect(() => {
     loadAll()
@@ -178,13 +200,27 @@ export default function ChatbotConfigPage() {
     try {
       const { items } = await chatbotApi.listAuditLogs(1, 50)
       setAuditLogs(items)
+      mark('audit', true)
+      mark('rebuild', true)
     } catch {
+      mark('audit', false)
+      mark('rebuild', false)
       message.error('加载审计日志失败')
     }
   }
 
-  if (loading || !config) {
-    return <Card loading={loading}>加载中...</Card>
+  if (loading) {
+    return <Card loading>加载中...</Card>
+  }
+
+  // 配置取不到就没有可编辑的对象：给错误态 + 重试，而不是永久「加载中...」（T02700）
+  if (!config) {
+    return (
+      <FetchFailedHint
+        source={SOURCE_LABELS.config}
+        onRetry={() => void loadAll()}
+      />
+    )
   }
 
   const rebuildLogs = pickRebuildLogs(auditLogs)
@@ -392,7 +428,15 @@ export default function ChatbotConfigPage() {
             label: '知识库管理',
             children: (
               <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-                {kbStatus && <KBStatusCard status={kbStatus} onRebuild={handleRebuild} />}
+                <DataBlock
+                  failed={!!failed.kbStatus}
+                  source={SOURCE_LABELS.kbStatus}
+                  count={kbStatus ? 1 : 0}
+                  emptyText="未取到知识库状态"
+                  onRetry={() => void loadAll()}
+                >
+                  {kbStatus && <KBStatusCard status={kbStatus} onRebuild={handleRebuild} />}
+                </DataBlock>
                 <Card
                   size="small"
                   title={
@@ -402,9 +446,13 @@ export default function ChatbotConfigPage() {
                     </Space>
                   }
                 >
-                  {rebuildLogs.length === 0 ? (
-                    <Typography.Text type="secondary">暂无重建记录</Typography.Text>
-                  ) : (
+                  <DataBlock
+                    failed={!!failed.rebuild}
+                    source={SOURCE_LABELS.rebuild}
+                    count={rebuildLogs.length}
+                    emptyText="暂无重建记录"
+                    onRetry={() => void loadAll()}
+                  >
                     <List
                       size="small"
                       dataSource={rebuildLogs}
@@ -430,7 +478,7 @@ export default function ChatbotConfigPage() {
                         </List.Item>
                       )}
                     />
-                  )}
+                  </DataBlock>
                 </Card>
                 <div>
                   <Typography.Text>定时自动更新</Typography.Text>
@@ -449,10 +497,19 @@ export default function ChatbotConfigPage() {
                     style={{ marginLeft: 16 }}
                   />
                 </div>
+                {failed.kbVersions && (
+                  <FetchFailedHint source={SOURCE_LABELS.kbVersions} onRetry={() => void loadAll()} />
+                )}
                 <Table
                   size="small"
                   rowKey="id"
                   dataSource={kbVersions}
+                  locale={{
+                    // 上方已有错误条时，表格里不能再挂「暂无版本记录」，否则空态与错误态互相打脸
+                    emptyText: failed.kbVersions
+                      ? <span style={{ color: 'var(--xh-text-tertiary)' }}>未取到版本记录（见上方错误提示）</span>
+                      : '暂无版本记录',
+                  }}
                   pagination={{ pageSize: 5 }}
                   columns={[
                     { title: '版本', dataIndex: 'id', key: 'id', render: (v: string) => <Tag>{v.slice(0, 8)}</Tag> },
@@ -499,10 +556,18 @@ export default function ChatbotConfigPage() {
                 >
                   新增 FAQ
                 </TipButton>
+                {failed.faqs && (
+                  <FetchFailedHint source={SOURCE_LABELS.faqs} onRetry={() => void loadAll()} />
+                )}
                 <Table
                   size="small"
                   rowKey="id"
                   dataSource={faqs}
+                  locale={{
+                    emptyText: failed.faqs
+                      ? <span style={{ color: 'var(--xh-text-tertiary)' }}>未取到 FAQ（见上方错误提示）</span>
+                      : '暂无 FAQ',
+                  }}
                   pagination={{ pageSize: 10 }}
                   columns={[
                     { title: '问题', dataIndex: 'question', key: 'question', ellipsis: true },
@@ -583,10 +648,18 @@ export default function ChatbotConfigPage() {
             children: (
               <>
                 <TipButton tip="刷新审计日志列表" style={{ marginBottom: 16 }} onClick={loadAuditLogs}>刷新</TipButton>
+                {failed.audit && (
+                  <FetchFailedHint source={SOURCE_LABELS.audit} onRetry={() => void loadAuditLogs()} />
+                )}
                 <Table
                   size="small"
                   rowKey="id"
                   dataSource={auditLogs}
+                  locale={{
+                    emptyText: failed.audit
+                      ? <span style={{ color: 'var(--xh-text-tertiary)' }}>未取到审计日志（见上方错误提示）</span>
+                      : '暂无审计日志',
+                  }}
                   pagination={{ pageSize: 20 }}
                   columns={[
                     { title: '动作', dataIndex: 'action', key: 'action' },

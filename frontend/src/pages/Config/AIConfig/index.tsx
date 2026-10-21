@@ -9,8 +9,16 @@ import ModelConfigForm, { type TestResult } from './components/ModelConfigForm'
 import EmbeddingConfigForm, { type EmbeddingTestResult } from './components/EmbeddingConfigForm'
 import UsageStats from './components/UsageStats'
 import BudgetSettings from './components/BudgetSettings'
+import FetchFailedHint from '../../../components/FetchFailedHint'
+import { useFailedSources } from '../../../hooks/useFailedSources'
 
 const { Text } = Typography
+
+// 两路数据源的失败账（T02700 假回执清零）：
+// 原先 config/usage 各自 catch 成 null，接口失败时表单显示空值、用量显示全 0，
+// 看上去像「没配模型、今天没花钱」，实际是没取到。
+type AIConfigSource = 'config' | 'usage'
+const SOURCE_LABELS: Record<AIConfigSource, string> = { config: 'AI 配置', usage: 'AI 用量' }
 
 export default function AIConfig() {
   // AI 配置状态
@@ -57,17 +65,10 @@ export default function AIConfig() {
   const [embTestResult, setEmbTestResult] = useState<EmbeddingTestResult | null>(null)
   const [saving, setSaving] = useState(false)
   const [configSaving, setConfigSaving] = useState(false)
+  const { failed, track } = useFailedSources<AIConfigSource>()
 
-  // 初始化加载配置和用量数据
-  useEffect(() => {
-    Promise.all([
-      aiApi.getConfig().catch(() => null),
-      // 用量加载失败时打日志而非静默回退默认零值，避免「仪表盘一直空白」却无任何线索
-      aiApi.getUsage().catch((e) => {
-        console.warn('[AIConfig] 用量数据加载失败，已回退默认零值：', e)
-        return null
-      }),
-    ]).then(([configData, usageData]) => {
+  const loadConfig = () => {
+    void track('config', aiApi.getConfig()).then((configData) => {
       if (configData) {
         setConfig({
           ai_enabled: configData.ai_enabled !== false,
@@ -83,17 +84,31 @@ export default function AIConfig() {
           embedding_dimensions: configData.embedding_dimensions ?? 0,
         })
       }
-      if (usageData) {
-        setUsage(usageData)
-      }
     })
+  }
+
+  const loadUsage = () => {
+    void track('usage', aiApi.getUsage()).then((usageData) => {
+      if (usageData) setUsage(usageData)
+    })
+  }
+
+  // 初始化加载配置和用量数据：两路各自记账，失败时页面显示错误态而不是空表单/全 0
+  useEffect(() => {
+    loadConfig()
+    loadUsage()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首屏加载一次
   }, [])
 
   // 切换 AI 开关（关闭时需二次确认）
   const handleToggleAI = async (checked: boolean) => {
     // 关闭时二次确认，防止误操作导致所有 AI 功能降级
     if (!checked) {
-      const confirmed = await confirmDanger(buildDisableAICopy(config, usage.today))
+      // 配置或用量没取到时，「受影响的模型 0 个 · 今日已调用 0 次」是假后果，
+      // 传 countsUnknown 让确认框改口为「未能预先统计」
+      const confirmed = await confirmDanger(
+        buildDisableAICopy(config, usage.today, !!failed.config || !!failed.usage)
+      )
       if (!confirmed) return
     }
 
@@ -134,6 +149,11 @@ export default function AIConfig() {
 
   // 显式保存表单：文本解析模型等输入不再依赖“测试连接”才能持久化
   const handleSaveConfig = async () => {
+    // 配置没读到时表单里是内置空值，此时保存等于用空值覆盖服务端真实配置
+    if (failed.config) {
+      message.error('AI 配置未读取成功，请先重试加载再保存，避免用空值覆盖现有配置')
+      return
+    }
     setConfigSaving(true)
     try {
       const saved = await aiApi.putConfig(config)
@@ -156,9 +176,8 @@ export default function AIConfig() {
       const data = await aiApi.testConnection()
       if (data.ok) {
         setTestResult({ success: true, text: `连接成功 (${data.model || ''})` })
-        // 测试成功后刷新用量数据
-        const freshUsage = await aiApi.getUsage()
-        if (freshUsage) setUsage(freshUsage)
+        // 测试成功后刷新用量数据（失败上账，由用量区的错误条提示）
+        loadUsage()
       } else {
         setTestResult({ success: false, text: data.detail || '连接失败' })
       }
@@ -233,9 +252,8 @@ export default function AIConfig() {
         rate_limit_per_min: usage.budget.rate_limit_per_min,
       })
       message.success('预算设置已保存')
-      // 刷新用量数据以获取最新预算状态
-      const freshUsage = await aiApi.getUsage()
-      if (freshUsage) setUsage(freshUsage)
+      // 刷新用量数据以获取最新预算状态（失败上账，由用量区的错误条提示）
+      loadUsage()
     } catch (e) {
       message.error(extractApiError(e), 5)
     } finally {
@@ -245,6 +263,14 @@ export default function AIConfig() {
 
   return (
     <div className="page-container">
+      {/* 配置没取到时，下面的开关/表单显示的是内置默认值，不代表服务端状态（T02700） */}
+      {failed.config && (
+        <FetchFailedHint
+          source={SOURCE_LABELS.config}
+          description="下面的开关与表单是内置默认值，不代表服务端真实配置；请重试后再操作"
+          onRetry={loadConfig}
+        />
+      )}
       {/* ====== 顶部：AI 功能总开关卡片 ====== */}
       <Card
         style={{
@@ -257,9 +283,13 @@ export default function AIConfig() {
           <div>
             <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
               AI 功能总开关
-              <Tag color={config.ai_enabled ? 'success' : 'error'}>
-                {config.ai_enabled ? '已开启' : '已关闭'}
-              </Tag>
+              {failed.config ? (
+                <Tag>状态未知</Tag>
+              ) : (
+                <Tag color={config.ai_enabled ? 'success' : 'error'}>
+                  {config.ai_enabled ? '已开启' : '已关闭'}
+                </Tag>
+              )}
             </h3>
             <p style={{ marginTop: 4, color: 'var(--xh-text-tertiary)', margin: '4px 0 0' }}>
               关闭后 AI 建任务、AI 成色评估/深度分析与「测试连接」会直接返回「AI 功能已关闭」，
@@ -272,6 +302,7 @@ export default function AIConfig() {
             onChange={handleToggleAI}
             checkedChildren="ON"
             unCheckedChildren="OFF"
+            disabled={!!failed.config}
             style={{ minWidth: 80 }}
           />
         </div>
@@ -348,16 +379,26 @@ export default function AIConfig() {
         />
       </div>{/* end 遮罩容器 */}
 
-      {/* ====== 用量仪表盘（始终可见）====== */}
-      <UsageStats usage={usage} />
-
-      {/* ====== 预算控制区 ====== */}
-      <BudgetSettings
-        budget={usage.budget}
-        onBudgetChange={updateBudget}
-        saving={saving}
-        onSave={handleSaveBudget}
-      />
+      {/* ====== 用量仪表盘 + 预算控制（始终可见）====== */}
+      {/* 用量没取到时不留下面的内置 0 值与默认预算上限：
+          「今日 0 次」会被读成「今天没花钱」，默认上限更会被当成当前配置而误保存（T02700） */}
+      {failed.usage ? (
+        <FetchFailedHint
+          source={SOURCE_LABELS.usage}
+          description="用量与预算接口未响应，为避免把内置默认值当成真实数据（或按它保存），本区块暂不展示。"
+          onRetry={loadUsage}
+        />
+      ) : (
+        <>
+          <UsageStats usage={usage} />
+          <BudgetSettings
+            budget={usage.budget}
+            onBudgetChange={updateBudget}
+            saving={saving}
+            onSave={handleSaveBudget}
+          />
+        </>
+      )}
     </div>
   )
 }

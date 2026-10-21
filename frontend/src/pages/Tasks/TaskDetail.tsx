@@ -12,6 +12,24 @@ import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
 import { taskStatusColor } from '../../constants/taskStatus'
 import { TipButton } from '@/components/TipButton'
+import FetchFailedHint from '@/components/FetchFailedHint'
+import DataBlock from '@/components/DataBlock'
+import { useFailedSources } from '@/hooks/useFailedSources'
+
+// 本页各路数据源（T02700 假回执清零）：原先统一 catch 成 null/[]，
+// 后端故障时要么显示「任务不存在」，要么显示「暂无××」空态 —— 都是假回执。
+type DetailSource =
+  | 'task' | 'runs' | 'deps' | 'dependents' | 'evals' | 'trendEval' | 'trendEvents' | 'links'
+const SOURCE_LABELS: Record<DetailSource, string> = {
+  task: '任务配置',
+  runs: '运行历史',
+  deps: '上游依赖',
+  dependents: '下游依赖',
+  evals: '评估记录',
+  trendEval: '评估分趋势',
+  trendEvents: '事件密度趋势',
+  links: '闲鱼内容关联',
+}
 
 // 过滤掉指定的上游依赖项（S2004 拆出避免函数嵌套过深）
 // 为什么提取：handleRemoveDep → .then → setDeps(prev =>) → filter(d =>) 嵌套达 5 层
@@ -35,13 +53,24 @@ const riskLevelToColor = (lvl: string): string => {
   return 'orange'
 }
 
-// 把 load 接口的 5 个返回值应用到对应 setter
+// 把 load 各路结果应用到对应 setter
 // 为什么提取：load 函数 .then 回调内 5 个 setX 调用，每个含 || [] 默认值，
 // 嵌套层级 1 让每个 || 翻倍计分，认知复杂度累计让 TaskDetail 主函数触发 S3776；
 // 提取到模块级后，主函数复杂度由 ~12 降至 1（仅剩 if (!id) return）
+// T02700：入参用 null 表示「这一路没取到」，此时保留上一次的数据而不覆盖成空列表，
+// 失败提示由各区块根据失败账渲染，二者共同把「没取到」与「取到 0 条」分开。
 type IdleGap = { from: string; to: string; duration_s: number }
+type TaskRunsResult = { runs?: TaskRun[]; idle_gaps?: IdleGap[] } | null
+type EvalListResult = { items?: EvalItem[] } | null
+interface LoadSlice {
+  readonly task: Task | null
+  readonly runs: TaskRunsResult
+  readonly deps: TaskDep[] | null
+  readonly dependents: TaskDep[] | null
+  readonly evals: EvalListResult
+}
 function applyLoadResult(
-  data: [unknown, unknown, unknown, unknown, unknown],
+  slice: LoadSlice,
   setters: {
     setTask: (t: Task | null) => void
     setRuns: (r: TaskRun[]) => void
@@ -52,30 +81,33 @@ function applyLoadResult(
     setLoading: (b: boolean) => void
   },
 ) {
-  const [t, r, d, dep, ev] = data
-  const rObj = r as { runs?: TaskRun[]; idle_gaps?: IdleGap[] } | null
-  setters.setTask(t as Task)
-  setters.setRuns(rObj?.runs || [])
-  setters.setIdleGaps(rObj?.idle_gaps || [])
-  setters.setDeps((d as TaskDep[]) || [])
-  setters.setDependents((dep as TaskDep[]) || [])
-  setters.setEvals((ev as { items?: EvalItem[] })?.items || [])
+  if (slice.task) setters.setTask(slice.task)
+  if (slice.runs) {
+    setters.setRuns(slice.runs.runs || [])
+    setters.setIdleGaps(slice.runs.idle_gaps || [])
+  }
+  if (slice.deps) setters.setDeps(slice.deps)
+  if (slice.dependents) setters.setDependents(slice.dependents)
+  if (slice.evals) setters.setEvals(slice.evals.items || [])
   setters.setLoading(false)
 }
 
-// 把 handleAddDep 内 Promise.all 的返回值应用到 setDeps/setDependents
+// 把 handleAddDep 内刷新依赖的结果应用到 setDeps/setDependents
 // 为什么提取：原 .then 嵌套 .then 回调内含 2 个 || []，嵌套层级让复杂度翻倍；
 // 提取后 handleAddDep 主流程仅剩单行调用
+interface DepsSlice {
+  readonly deps: TaskDep[] | null
+  readonly dependents: TaskDep[] | null
+}
 function applyDepsResult(
-  data: [unknown, unknown],
+  slice: DepsSlice,
   setters: {
     setDeps: (d: TaskDep[]) => void
     setDependents: (d: TaskDep[]) => void
   },
 ) {
-  const [d, dep] = data
-  setters.setDeps((d as TaskDep[]) || [])
-  setters.setDependents((dep as TaskDep[]) || [])
+  if (slice.deps) setters.setDeps(slice.deps)
+  if (slice.dependents) setters.setDependents(slice.dependents)
 }
 
 // S3776 修复：运行历史 ECharts option 构造提取为模块级函数
@@ -107,17 +139,27 @@ const formatWarnCount = (v: number) => (v > 0 ? <Tag color="orange">{v}</Tag> : 
 // && + 三元 + 嵌套 +2 复杂度，提取后主函数仅剩单行 <TrendSparkline/>
 function TrendSparkline({
   trend,
+  failed,
+  source,
+  onRetry,
   dataKey,
   lineColor,
   areaColor,
   yAxisMin,
 }: {
   readonly trend: TrendSeries | null
+  /** 本次趋势请求是否失败：失败要出错误态，不能和「没数据」共用 Empty */
+  readonly failed: boolean
+  readonly source: string
+  readonly onRetry?: () => void
   readonly dataKey: 'value' | 'count'
   readonly lineColor: string
   readonly areaColor: string
   readonly yAxisMin?: (value: { min: number }) => number
 }) {
+  if (failed) {
+    return <FetchFailedHint source={source} onRetry={onRetry} />
+  }
   if (!trend || trend.series.length === 0) {
     return <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
   }
@@ -180,32 +222,44 @@ export default function TaskDetail() {
   const [evalTrend, setEvalTrend] = useState<TrendSeries | null>(null)
   const [eventsTrend, setEventsTrend] = useState<TrendSeries | null>(null)
   const [trendLoading, setTrendLoading] = useState(false)
+  const { failed, settle, track } = useFailedSources<DetailSource>()
 
   const loadTrends = useCallback(() => {
     if (!id) return
     setTrendLoading(true)
-    Promise.all([
-      statsApi.trend({ metric: 'eval_score', task_id: id, range_hours: trendRange }).catch(() => null),
-      statsApi.trend({ metric: 'events', task_id: id, range_hours: trendRange }).catch(() => null),
+    Promise.allSettled([
+      statsApi.trend({ metric: 'eval_score', task_id: id, range_hours: trendRange }),
+      statsApi.trend({ metric: 'events', task_id: id, range_hours: trendRange }),
     ]).then(([ev, evs]) => {
-      // Promise.all 已推断出 TrendSeries | null，as 断言冗余（SonarQube S4325）
-      setEvalTrend(ev)
-      setEventsTrend(evs)
+      // 成功才覆盖，失败保留上一次曲线并在账上标红
+      const evalSeries = settle(ev, 'trendEval')
+      if (evalSeries) setEvalTrend(evalSeries)
+      const eventsSeries = settle(evs, 'trendEvents')
+      if (eventsSeries) setEventsTrend(eventsSeries)
     }).finally(() => setTrendLoading(false))
-  }, [id, trendRange])
+  }, [id, trendRange, settle])
 
   useEffect(() => { loadTrends() }, [loadTrends])
 
   const load = () => {
     if (!id) return
     setLoading(true)
-    Promise.all([
-      taskApi.get(id).catch(() => null),
-      taskDetailApi.runs(id, 168).catch(() => null),
-      taskDetailApi.deps(id).catch(() => null),
-      taskDetailApi.dependents(id).catch(() => null),
-      evalApi.list({ task_id: id, limit: 50 }).catch(() => null),
-    ]).then((data) => applyLoadResult(data, { setTask, setRuns, setIdleGaps, setDeps, setDependents, setEvals, setLoading }))
+    Promise.allSettled([
+      taskApi.get(id),
+      taskDetailApi.runs(id, 168),
+      taskDetailApi.deps(id),
+      taskDetailApi.dependents(id),
+      evalApi.list({ task_id: id, limit: 50 }),
+    ]).then(([t, r, d, dep, ev]) => applyLoadResult(
+      {
+        task: settle(t, 'task'),
+        runs: settle(r, 'runs'),
+        deps: settle(d, 'deps'),
+        dependents: settle(dep, 'dependents'),
+        evals: settle(ev, 'evals'),
+      },
+      { setTask, setRuns, setIdleGaps, setDeps, setDependents, setEvals, setLoading },
+    ))
   }
 
   // 加载闲鱼内容关联
@@ -213,14 +267,15 @@ export default function TaskDetail() {
     if (!id) return
     setLinkLoading(true)
     const offset = (linkPage - 1) * linkPageSize
-    taskLinkApi.list(id, { type: linkType, limit: linkPageSize, offset })
+    track('links', taskLinkApi.list(id, { type: linkType, limit: linkPageSize, offset }))
       .then((res) => {
+        if (!res) return message.error('加载链接失败')
         setLinks(res.items)
         setLinkTotal(res.total_for_type)
+        return undefined
       })
-      .catch(() => message.error('加载链接失败'))
       .finally(() => setLinkLoading(false))
-  }, [id, linkType, linkPage])
+  }, [id, linkType, linkPage, track])
 
   useEffect(() => { load() }, [id])
   useEffect(() => { loadLinks() }, [loadLinks])
@@ -281,11 +336,14 @@ export default function TaskDetail() {
       .then(() => {
         message.success('添加依赖成功')
         setAddDepTaskId(null)
-        // 刷新依赖列表：默认值与 || [] 处理统一收敛到 applyDepsResult
-        Promise.all([
-          taskDetailApi.deps(id).catch(() => null),
-          taskDetailApi.dependents(id).catch(() => null),
-        ]).then((data) => applyDepsResult(data, { setDeps, setDependents }))
+        // 刷新依赖列表：失败保留旧列表并在账上标红（原先 catch 成 [] 会说成「无依赖」）
+        Promise.allSettled([
+          taskDetailApi.deps(id),
+          taskDetailApi.dependents(id),
+        ]).then(([d, dep]) => applyDepsResult(
+          { deps: settle(d, 'deps'), dependents: settle(dep, 'dependents') },
+          { setDeps, setDependents },
+        ))
       })
       .catch(() => message.error('添加依赖失败'))
       .finally(() => setAddDepLoading(false))
@@ -497,6 +555,9 @@ export default function TaskDetail() {
                     {/* 趋势图渲染提取为模块级 TrendSparkline 组件（含空数据兜底） */}
                     <TrendSparkline
                       trend={evalTrend}
+                      failed={!!failed.trendEval}
+                      source={SOURCE_LABELS.trendEval}
+                      onRetry={loadTrends}
                       dataKey="value"
                       lineColor="#1890ff"
                       areaColor="rgba(24,144,255,0.1)"
@@ -507,6 +568,9 @@ export default function TaskDetail() {
                     <div style={{ textAlign: 'center', marginBottom: 4, color: 'var(--xh-text-secondary)', fontSize: 13 }}>事件密度趋势</div>
                     <TrendSparkline
                       trend={eventsTrend}
+                      failed={!!failed.trendEvents}
+                      source={SOURCE_LABELS.trendEvents}
+                      onRetry={loadTrends}
                       dataKey="count"
                       lineColor="#52c41a"
                       areaColor="rgba(82,196,26,0.1)"
@@ -520,13 +584,19 @@ export default function TaskDetail() {
               items={[
                 {
                   key: 'runs',
-                  label: `运行历史 (${runs.length})`,
+                  label: `运行历史 (${failed.runs ? '数量未知' : runs.length})`,
                   children: (
                     <Card>
-                      {runsOption && <ReactECharts option={runsOption} style={{ height: 280, marginBottom: 16 }} />}
-                      {runs.length === 0 ? <Empty description="暂无运行记录" /> : (
+                      <DataBlock
+                        failed={!!failed.runs}
+                        source={SOURCE_LABELS.runs}
+                        count={runs.length}
+                        emptyText="暂无运行记录"
+                        onRetry={load}
+                      >
+                        {runsOption && <ReactECharts option={runsOption} style={{ height: 280, marginBottom: 16 }} />}
                         <Table columns={runColumns} dataSource={runs} rowKey="start" size="small" pagination={{ pageSize: 10 }} />
-                      )}
+                      </DataBlock>
                       {idleGaps.length > 0 && (
                         <div style={{ marginTop: 16 }}>
                           <h4>空闲间隔（{idleGaps.length}）</h4>
@@ -542,18 +612,24 @@ export default function TaskDetail() {
                 },
                 {
                   key: 'evals',
-                  label: `评估记录 (${evals.length})`,
+                  label: `评估记录 (${failed.evals ? '数量未知' : evals.length})`,
                   children: (
                     <Card>
-                      {evals.length === 0 ? <Empty description="暂无评估记录" /> : (
+                      <DataBlock
+                        failed={!!failed.evals}
+                        source={SOURCE_LABELS.evals}
+                        count={evals.length}
+                        emptyText="暂无评估记录"
+                        onRetry={load}
+                      >
                         <Table columns={evalColumns} dataSource={evals} rowKey={(r) => `${r.item_id}-${r.created_at}`} size="small" pagination={{ pageSize: 10 }} />
-                      )}
+                      </DataBlock>
                     </Card>
                   ),
                 },
                 {
                   key: 'deps',
-                  label: `依赖关系 (上游${deps.length}/下游${dependents.length})`,
+                  label: `依赖关系 (上游${failed.deps ? '未知' : deps.length}/下游${failed.dependents ? '未知' : dependents.length})`,
                   children: (
                     <Row gutter={16}>
                       <Col span={12}>
@@ -596,7 +672,13 @@ export default function TaskDetail() {
                               </TipButton>
                             </div>
                           )}
-                          {deps.length === 0 ? <Empty description="无上游依赖" /> : (
+                          <DataBlock
+                            failed={!!failed.deps}
+                            source={SOURCE_LABELS.deps}
+                            count={deps.length}
+                            emptyText="无上游依赖"
+                            onRetry={load}
+                          >
                             <List
                               size="small"
                               dataSource={deps}
@@ -615,12 +697,18 @@ export default function TaskDetail() {
                                 </List.Item>
                               )}
                             />
-                          )}
+                          </DataBlock>
                         </Card>
                       </Col>
                       <Col span={12}>
                         <Card title="下游依赖（依赖本任务的任务）" size="small">
-                          {dependents.length === 0 ? <Empty description="无下游依赖" /> : (
+                          <DataBlock
+                            failed={!!failed.dependents}
+                            source={SOURCE_LABELS.dependents}
+                            count={dependents.length}
+                            emptyText="无下游依赖"
+                            onRetry={load}
+                          >
                             <List
                               size="small"
                               dataSource={dependents}
@@ -633,7 +721,7 @@ export default function TaskDetail() {
                                 </List.Item>
                               )}
                             />
-                          )}
+                          </DataBlock>
                         </Card>
                       </Col>
                     </Row>
@@ -641,7 +729,7 @@ export default function TaskDetail() {
                 },
                 {
                   key: 'links',
-                  label: '闲鱼内容关联',
+                  label: failed.links ? '闲鱼内容关联 (数量未知)' : `闲鱼内容关联 (${linkTotal})`,
                   children: (
                     <Card>
                       <Space style={{ marginBottom: 16 }} wrap>
@@ -674,27 +762,38 @@ export default function TaskDetail() {
                           刷新数据源
                         </TipButton>
                       </Space>
-                      <Table
-                        columns={linkColumns}
-                        dataSource={links}
-                        rowKey="link_id"
-                        size="small"
-                        loading={linkLoading}
-                        pagination={{
-                          current: linkPage,
-                          pageSize: linkPageSize,
-                          total: linkTotal,
-                          showSizeChanger: false,
-                          showTotal: (total) => `共 ${total} 条`,
-                          onChange: (page) => setLinkPage(page),
-                        }}
-                      />
+                      <DataBlock
+                        failed={!!failed.links}
+                        source={SOURCE_LABELS.links}
+                        count={links.length}
+                        emptyText="暂无关联内容"
+                        onRetry={loadLinks}
+                      >
+                        <Table
+                          columns={linkColumns}
+                          dataSource={links}
+                          rowKey="link_id"
+                          size="small"
+                          loading={linkLoading}
+                          pagination={{
+                            current: linkPage,
+                            pageSize: linkPageSize,
+                            total: linkTotal,
+                            showSizeChanger: false,
+                            showTotal: (total) => `共 ${total} 条`,
+                            onChange: (page) => setLinkPage(page),
+                          }}
+                        />
+                      </DataBlock>
                     </Card>
                   ),
                 },
               ]}
             />
           </>
+        ) : failed.task ? (
+          // 接口失败时不能说「任务不存在」——那是把后端故障说成数据问题
+          <FetchFailedHint source={SOURCE_LABELS.task} onRetry={load} />
         ) : (
           <Empty description="任务不存在" />
         )}

@@ -46,7 +46,16 @@ export function countConfiguredModels(config: AIModelFields): string {
   return `受影响的模型 ${named.length} 个（${joinNames(named)}）`
 }
 
-export function buildDisableAICopy(config: AIModelFields, today: AITodayUsage): DangerCopy {
+/**
+ * @param countsUnknown 配置或用量接口没取到时传 true：
+ *   此时 config.model / today 都是兜底空值，写进「数量」会说成「0 个模型、今日 0 次」，
+ *   等于把接口故障冒充成统计结果（T02700 与 T02726 的交叉点），故留 null 走 COUNT_UNKNOWN。
+ */
+export function buildDisableAICopy(
+  config: AIModelFields,
+  today: AITodayUsage,
+  countsUnknown = false,
+): DangerCopy {
   const calls = today?.total_calls ?? 0
   const tokens = today?.total_tokens ?? 0
   return {
@@ -58,7 +67,9 @@ export function buildDisableAICopy(config: AIModelFields, today: AITodayUsage): 
       '后台任务的自动评估/深度分析则跳过 AI，沿用规则评估结果。' +
       `不包含：${joinNames([...AI_GATE_EXCLUDED])}（后端无此开关判断），` +
       '以及 API Key、模型配置与历史评估结果。',
-    count: `${countConfiguredModels(config)} · 今日已调用 ${calls} 次、${tokens} tokens`,
+    count: countsUnknown
+      ? null
+      : `${countConfiguredModels(config)} · 今日已调用 ${calls} 次、${tokens} tokens`,
     recovery:
       '再点一次开关即恢复，配置与历史结果不受影响；关闭期间不会新增 token 消耗，' +
       '但已经消耗的 token 不可退。',

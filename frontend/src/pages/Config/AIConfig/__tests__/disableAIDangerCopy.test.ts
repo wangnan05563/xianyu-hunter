@@ -83,6 +83,16 @@ describe('未配置模型时数量不得伪装成完整', () => {
     expect(copy.count).not.toContain('undefined')
     expect(copy.count).toContain('今日已调用 0 次')
   })
+
+  // T02700 交叉缺陷：配置或用量请求失败时，页面里躺着的是内置默认值，
+  // 此时「0 个模型 / 今日 0 次」是把「没取到」说成「没有」，确认框必须改口
+  it('countsUnknown=true 时数量留空，交给「未能预先统计」而不是 0', () => {
+    const copy = buildDisableAICopy(CONFIG, TODAY, true)
+    expect(copy.count).toBeNull()
+    expect(missingDangerFields(copy)).toEqual([])
+    // 取到数据时仍要给出具体数量，别把 countsUnknown 当成默认状态
+    expect(buildDisableAICopy(CONFIG, TODAY).count).toContain('受影响的模型 2 个')
+  })
 })
 
 describe('文案与后端源码逐条对齐（新增漂移会被拒）', () => {

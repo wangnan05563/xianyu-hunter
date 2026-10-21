@@ -20,8 +20,18 @@ import type { CookieHealthReport, UnifiedHealthReport, UnifiedHealthSource } fro
 import type { AuthMe } from '../../api/types'
 import { useSheetStore } from '../../stores/sheetStore'
 import { storage } from '../../utils/storage'
+import FetchFailedHint from '../FetchFailedHint'
+import { useFailedSources } from '../../hooks/useFailedSources'
 
 const { Text } = Typography
+
+// 健康面板的两路数据源（T02700 假回执清零）：
+// 统一结论决定面板头部结论，legacy 只承载分层/安全标记明细，两者失败后果不同，分开记账
+type HealthSource = 'unified' | 'legacy'
+const SOURCE_LABELS: Record<HealthSource, string> = {
+  unified: '登录态健康检查',
+  legacy: 'Cookie 明细',
+}
 
 interface UserMenuProps {
   readonly userInfo: AuthMe
@@ -196,11 +206,15 @@ function HealthActionsRow({
 function DiagnosisDrawer({
   open,
   unified,
+  failed,
+  onRetry,
   onClose,
   themeToken,
 }: {
   readonly open: boolean
   readonly unified: UnifiedHealthReport | null
+  readonly failed: boolean
+  readonly onRetry: () => void
   readonly onClose: () => void
   readonly themeToken: ReturnType<typeof theme.useToken>['token']
 }) {
@@ -213,7 +227,10 @@ function DiagnosisDrawer({
       onClose={onClose}
       styles={{ body: { padding: '12px 16px' } }}
     >
-      {!unified || unified.sources.length === 0 ? (
+      {/* 「没取到」与「取到但确实没有档案」是两回事：前者给重试，后者才是空态（T02700） */}
+      {!unified || failed ? (
+        <FetchFailedHint source={SOURCE_LABELS.unified} onRetry={onRetry} />
+      ) : unified.sources.length === 0 ? (
         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无档案数据" />
       ) : (
         <>
@@ -372,16 +389,15 @@ const renderHealthDetail = (
   themeToken: ReturnType<typeof theme.useToken>['token'],
   onAction: (action: string) => void,
   onOpenDiagnosis: () => void,
+  failed: { readonly unified?: boolean; readonly legacy?: boolean },
+  onRetry: () => void,
 ) => {
-  if (!unified) {
-    return (
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="无法获取 Cookie 状态"
-        style={{ padding: '16px 0' }}
-      />
-    )
+  // 登录态结论是「现状陈述」，过期数据会被读成「现在也正常」，因此刷新失败时只给错误态，不铺旧结论
+  if (!unified || failed.unified) {
+    // 检查请求失败是错误态而不是空态：带重试入口，避免「无法获取」被看成「没有 Cookie」
+    return <FetchFailedHint source={SOURCE_LABELS.unified} onRetry={onRetry} />
   }
+  const detail = failed.legacy ? null : legacy
   return (
     <>
       <UnifiedHealthHeader unified={unified} themeToken={themeToken} />
@@ -391,15 +407,20 @@ const renderHealthDetail = (
         <DetailRow
           icon={<ClockCircleOutlined style={{ color: themeToken.colorPrimary }} />}
           label="有效期"
-          value={unified.expiry_human || legacy?.expiry_human || '未知'}
+          value={unified.expiry_human || detail?.expiry_human || '未知'}
         />
         <DetailRow
           icon={<SafetyCertificateOutlined style={{ color: themeToken.colorPrimary }} />}
           label="Cookie 数"
-          value={`${legacy?.cookie_count ?? unified.sources.reduce((n, s) => n + s.cookie_count, 0)} 个`}
+          value={`${detail?.cookie_count ?? unified.sources.reduce((n, s) => n + s.cookie_count, 0)} 个`}
         />
-        {legacy && <HealthLayersList health={legacy} themeToken={themeToken} />}
-        {legacy && <SecurityFlags flags={legacy.security_flags} themeToken={themeToken} />}
+        {failed.legacy && (
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {SOURCE_LABELS.legacy}本次未取到，分层与安全标记无法展示
+          </Text>
+        )}
+        {detail && <HealthLayersList health={detail} themeToken={themeToken} />}
+        {detail && <SecurityFlags flags={detail.security_flags} themeToken={themeToken} />}
       </div>
       {/* 诊断详情入口：抽屉逐源展示档案评估明细 */}
       <TipButton
@@ -430,6 +451,7 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
   const [loggingOut, setLoggingOut] = useState(false)
   // 用户信息刷新中状态：与 health 的 loading 分开管理，避免互相干扰
   const [refreshingUser, setRefreshingUser] = useState(false)
+  const { failed, mark, settle } = useFailedSources<HealthSource>()
 
   // 健康检查 + 用户信息刷新：调用方决定是否同时刷新 userInfo
   // 为什么合并到一个函数：Popover 打开时只需 health（轻量，<300ms）；
@@ -446,25 +468,26 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
         await new Promise(resolve => setTimeout(resolve, 1500))
       }
       // 并行拉统一结论 + legacy 明细：结论来自统一端点（禁止各自下结论），
-      // legacy 仅承载分层/安全标记等明细字段；任一失败置 null 由渲染层兜底
-      const tasks: [Promise<UnifiedHealthReport | null>, Promise<CookieHealthReport | null>, Promise<AuthMe | null>] = [
-        authApi.getUnifiedHealth().catch(() => null),
-        authApi.checkCookieHealth().catch(() => null),
+      // legacy 仅承载分层/安全标记等明细字段；两路各自记账，
+      // 失败时保留上一次成功数据并在面板上显式声明（T02700 假回执清零）
+      const results = await Promise.allSettled([
+        authApi.getUnifiedHealth(),
+        authApi.checkCookieHealth(),
         opts?.withUserInfo && onRefreshUserInfo ? onRefreshUserInfo() : Promise.resolve(null),
-      ]
-      // userData 由父组件通过 props 更新，这里无需 setState，故不解构第二个返回值
-      // S3735 修复：原 `void userData` 用 void 操作符抑制未使用警告，删除 void 改为不解构
-      const [unifiedData, legacyData] = await Promise.all(tasks)
-      setUnified(unifiedData)
+      ])
+      const unifiedData = settle(results[0] as PromiseSettledResult<UnifiedHealthReport>, 'unified')
+      const legacyData = settle(results[1] as PromiseSettledResult<CookieHealthReport>, 'legacy')
+      if (unifiedData) setUnified(unifiedData)
       if (legacyData) setHealth(legacyData)
     } catch {
-      setUnified(null)
-      setHealth(null)
+      // 兜底：预检阶段的异常也要上账，否则面板停留在旧结论却显示为正常
+      mark('unified', false)
+      mark('legacy', false)
     } finally {
       setLoading(false)
       setRefreshingUser(false)
     }
-  }, [onRefreshUserInfo])
+  }, [onRefreshUserInfo, settle, mark])
 
   // FR-C1-4 修复引导：一键触发后端返回的可执行动作
   const handleHealthAction = useCallback((action: string) => {
@@ -540,8 +563,10 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
     )
 
   // 健康状态面板内容：详情渲染提取为模块级 renderHealthDetail，主组件只剩 loading 三元
+  const retryHealth = () => { fetchHealth().catch(() => undefined) }
   const healthDetailContent = renderHealthDetail(
     unified, health, themeToken, handleHealthAction, () => setDiagnosisOpen(true),
+    failed, retryHealth,
   )
   const healthContent = loading ? (
     <div style={{ textAlign: 'center', padding: '24px 0' }}>
@@ -691,6 +716,8 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
       <DiagnosisDrawer
         open={diagnosisOpen}
         unified={unified}
+        failed={!!failed.unified}
+        onRetry={retryHealth}
         onClose={() => setDiagnosisOpen(false)}
         themeToken={themeToken}
       />

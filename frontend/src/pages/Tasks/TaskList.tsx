@@ -402,15 +402,29 @@ export default function TaskList() {
     // 暂停/恢复直接执行
     // 批量恢复前先 precheck：任一任务被阻断则提示用户，避免批量恢复导致连锁失效
     if (action === 'resume') {
-      try {
-        const results = await Promise.all(ids.map((id) => taskApi.precheck(id).catch(() => null)))
-        const blocked = results.find((r) => r?.resume_blocked)
-        if (blocked) {
-          showPrecheckBlocked(blocked)
-          return
-        }
-      } catch {
-        // precheck 全部失败时不阻断批量操作，按原逻辑继续
+      // T02700：原先把请求失败 catch 成 null 后直接放行，等于把「预检没做完」当成
+      // 「预检没问题」。失败要摊开说清，由用户决定是否盲操作。
+      const settledResults = await Promise.allSettled(ids.map((id) => taskApi.precheck(id)))
+      const checked = settledResults.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []))
+      const blocked = checked.find((r) => r?.resume_blocked)
+      if (blocked) {
+        showPrecheckBlocked(blocked)
+        return
+      }
+      const unchecked = ids.length - checked.length
+      if (unchecked > 0) {
+        const proceed = await new Promise<boolean>((resolve) => {
+          Modal.confirm({
+            title: '预检未完成，是否仍要批量恢复',
+            content: `${unchecked}/${ids.length} 个任务的预检请求失败，无法确认是否被阻断。`
+              + '继续恢复可能踩到连锁失效（如浏览器登录态、Cookie 门禁未通过）。',
+            okText: '仍然恢复',
+            cancelText: '先取消',
+            onOk: () => resolve(true),
+            onCancel: () => resolve(false),
+          })
+        })
+        if (!proceed) return
       }
     }
     taskApi.batchControl(ids, action).then(() => {
