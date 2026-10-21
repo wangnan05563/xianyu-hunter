@@ -5,6 +5,8 @@ import { openSheetWithNotification } from '@/components/SheetWorkspace/sheetNoti
 import FetchFailedHint from '@/components/FetchFailedHint'
 import { formatDateTime, formatDuration } from '../../../utils/timeFormat'
 import { eventTypeLabel } from '../../../constants/eventTypes'
+import { buildAlertJumpTarget } from '../../../utils/alertDeepLink'
+import type { AlertJumpItem, AlertKind } from '../../../utils/alertDeepLink'
 import type { TodayAlert } from '../../../api'
 
 interface AlertRadarProps {
@@ -16,9 +18,34 @@ interface AlertRadarProps {
   readonly loadError?: boolean
 }
 
+type LowEval = TodayAlert['alerts']['low_evaluations'][number]
+
+// 低分评估条目原先是纯文本，跟另两栏不同构（T02828）。
+// 只有拿到 item_id 才给链接：落到评估明细页却没有筛选条件，等于把用户丢进全量列表。
+function LowEvalItem({ e, onJump }: {
+  readonly e: LowEval
+  readonly onJump: (item: LowEval) => void
+}) {
+  const text = `${e.message || eventTypeLabel(e.type)} · score ${e.score_value ?? '—'} · ${formatDateTime(e.created_at)}`
+  if (!e.item_id) return <span style={{ fontSize: 12 }}>{text}</span>
+  return (
+    <TipButton type="link" size="small"
+      style={{ fontSize: 12, padding: 0, height: 'auto' }}
+      onClick={() => onJump(e)}
+      tip={`在「评估明细」中定位商品 ${e.item_id}（落地已按评分上限筛选）`}>
+      {text}
+    </TipButton>
+  )
+}
+
 export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, loadError }: AlertRadarProps) {
   // 从 antd token 读取主题色，自动响应主题切换
   const { token } = theme.useToken()
+
+  // T02828：逐条跳转统一走 buildAlertJumpTarget，与告警抽屉（MainLayout）共用同一份参数口径。
+  // 原来这里写死 `/orders?ref=${o.id}`：落地是全量列表，用户还得自己找那一条。
+  const jump = (kind: AlertKind, item: AlertJumpItem) =>
+    openSheetWithNotification(buildAlertJumpTarget(kind, item))
 
   // 接口失败时不能用 ?? 0 写成「今日 0 单 / 0 事件」，也不能用绿点 Badge 表示「无异常」
   const alertCount = (alertData?.alerts?.counts?.failed ?? 0)
@@ -70,8 +97,8 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
                           {/* 原为裸 <a href="/orders?ref=...">：整页刷新丢 sheet 状态，且 basename=/xianyu 下 404（评审 2.1-4） */}
                           <TipButton type="link" size="small"
                             style={{ fontSize: 12, padding: 0, height: 'auto', color: token.colorError }}
-                            onClick={() => openSheetWithNotification(`/orders?ref=${o.id}`)}
-                            tip={`在「抢单记录」中定位订单 #${o.id}`}>
+                            onClick={() => jump('failed', o)}
+                            tip={`在「抢单记录」中定位订单 #${o.id}（落地已按失败状态筛选）`}>
                             订单 #{o.id} 商品 {o.item_id} · ¥{o.price}
                           </TipButton>
                         </List.Item>
@@ -91,8 +118,8 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
                         <List.Item style={{ padding: '4px 0' }}>
                           <TipButton type="link" size="small"
                             style={{ fontSize: 12, padding: 0, height: 'auto' }}
-                            onClick={() => openSheetWithNotification(`/orders?ref=${o.id}`)}
-                            tip={`在「抢单记录」中定位订单 #${o.id}`}>
+                            onClick={() => jump('timeout', o)}
+                            tip={`在「抢单记录」中定位订单 #${o.id}（落地已按待支付状态筛选）`}>
                             订单 #{o.id} 商品 {o.item_id} · ¥{o.price} · 超时 {formatDuration(o.age_sec)}
                           </TipButton>
                         </List.Item>
@@ -110,9 +137,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
                     <List size="small" dataSource={alertData.alerts.low_evaluations.slice(0, 5)}
                       renderItem={e => (
                         <List.Item style={{ padding: '4px 0' }}>
-                          <span style={{ fontSize: 12 }}>
-                            {e.message || eventTypeLabel(e.type)} · score {e.score_value ?? '—'} · {formatDateTime(e.created_at)}
-                          </span>
+                          <LowEvalItem e={e} onJump={(item) => jump('low_eval', item)} />
                         </List.Item>
                       )} />
                   )}
