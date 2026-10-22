@@ -4,15 +4,20 @@ import { useSearchParams } from 'react-router-dom'
 import { Card, Space, Spin, Input, Select, Tag, Empty, message, Row, Col, Statistic, List } from 'antd'
 import { ReloadOutlined, SearchOutlined, DownloadOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ClearOutlined } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
+import FetchFailedHint from '@/components/FetchFailedHint'
 import { logApi, type LogEntry } from '../../api'
 import { countLevels, levelColor, normalizeLevel } from '../../constants/logLevels'
 import { API_BASE } from '../../utils/apiBase'
+import { extractApiError } from '../../utils/apiError'
 
 export default function Logs() {
   const [rawLogs, setRawLogs] = useState<Array<{ source: string; level: string; lines: string[] }>>([])
   const [searchResults, setSearchResults] = useState<LogEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [searchLoading, setSearchLoading] = useState(false)
+  // 失败态与空态分开：取到 0 条是「暂无日志」，没取到要说明原因并可重试（T02682）
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   // 从 URL 恢复搜索条件
   const [query, setQuery] = useState(searchParams.get('query') || '')
@@ -42,8 +47,12 @@ export default function Logs() {
   const loadRaw = useCallback(() => {
     setLoading(true)
     logApi.list({ limit: 200, source: 'file' })
-      .then((res) => setRawLogs(res.items || []))
-      .catch(() => message.error('加载日志失败'))
+      .then((res) => { setRawLogs(res.items || []); setLoadError(null) })
+      .catch((e) => {
+        const msg = extractApiError(e, '加载日志失败')
+        setLoadError(msg)
+        message.error(msg)
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -53,9 +62,14 @@ export default function Logs() {
       .then((res) => {
         const items = res.items || []
         setSearchResults(items)
+        setSearchError(null)
         message.success(`找到 ${items.length} 条匹配`)
       })
-      .catch(() => message.error('搜索失败'))
+      .catch((e) => {
+        const msg = extractApiError(e, '搜索失败')
+        setSearchError(msg)
+        message.error(msg)
+      })
       .finally(() => setSearchLoading(false))
   }, [query, level, taskId])
 
@@ -273,6 +287,14 @@ export default function Logs() {
               <TipButton tip="导出全部原始日志文件（run.stdout/stderr，不受筛选条件影响）" icon={<DownloadOutlined />} href={logApi.exportUrl('log')} target="_blank">导出LOG</TipButton>
             </Space>
 
+            {searchError && (
+              <FetchFailedHint
+                source="搜索结果"
+                description={`${searchError}${searchResults.length > 0 ? ' · 下方仍是上一次成功搜索的结果' : ' · 本次没有取到任何结果'}`}
+                onRetry={search}
+              />
+            )}
+
             {/* 级别分布统计条 + Top stage 标签，仅在有搜索结果时显示 */}
             {searchResults.length > 0 && (
               <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -293,7 +315,8 @@ export default function Logs() {
 
             <Spin spinning={searchLoading}>
               {searchResults.length === 0 ? (
-                <Empty description="输入条件后搜索" />
+                // 失败时由上方 FetchFailedHint 说明原因，不能再显示「输入条件后搜索」
+                searchError ? null : <Empty description="输入条件后搜索" />
               ) : (
                 <List
                   size="small"
@@ -342,6 +365,14 @@ export default function Logs() {
               )
             }
           >
+            {/* 原始日志加载失败：不能再用「暂无日志」空态冒充（T02682） */}
+            {loadError && !streamActive && (
+              <FetchFailedHint
+                source="日志"
+                description={`${loadError}${allLines.length > 0 ? ' · 下方仍是上一次成功加载的内容' : ' · 本次一条日志都没取到'}`}
+                onRetry={loadRaw}
+              />
+            )}
             <Spin spinning={loading}>
               <div style={{ maxHeight: 500, overflow: 'auto', fontFamily: 'Consolas, Monaco, monospace', fontSize: 12, background: 'var(--xh-bg-spotlight)', padding: 8 }}>
                 {(() => {
@@ -368,7 +399,7 @@ export default function Logs() {
                     )
                   }
                   if (allLines.length === 0) {
-                    return <Empty description="暂无日志" />
+                    return loadError ? null : <Empty description="暂无日志" />
                   }
                   return allLines.slice(-200).map((l, i) => (
                     <div key={`${i}-${l.source}-${l.line}`} style={{ padding: '2px 0' }}>
