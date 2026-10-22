@@ -24,6 +24,7 @@ import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
 import { API_BASE } from '../../utils/apiBase'
 import { parseOrderStatusParam } from '../../utils/alertDeepLink'
+import ItemSummaryCell from './ItemSummaryCell'
 
 // 列配置元数据：key 必须与下方 columns 定义中的 key 完全一致
 const COLUMN_DEFINITIONS: ColumnConfig[] = [
@@ -564,7 +565,8 @@ export default function Orders() {
 
   const columns = [
     { title: 'ID', dataIndex: 'id', key: 'id', width: 70 },
-    { title: '商品ID', dataIndex: 'item_id', key: 'item_id', width: 180, ellipsis: true },
+    // T02674：点 ID 弹商品快照（Popover，见 ItemSummaryCell），不再是纯文本
+    { title: '商品ID', dataIndex: 'item_id', key: 'item_id', width: 180, ellipsis: true, render: (v: string) => <ItemSummaryCell itemId={v} /> },
     {
       title: '金额', dataIndex: 'price', key: 'price', width: 100,
       sorter: (a: OrderItem, b: OrderItem) => a.price - b.price,
