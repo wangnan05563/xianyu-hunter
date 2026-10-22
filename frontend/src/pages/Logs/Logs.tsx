@@ -18,7 +18,10 @@ export default function Logs() {
   const [query, setQuery] = useState(searchParams.get('query') || '')
   const [level, setLevel] = useState<string | undefined>(searchParams.get('level') || undefined)
   const [taskId, setTaskId] = useState<string | undefined>(searchParams.get('task_id') || undefined)
-  const [streaming, setStreaming] = useState(false)
+  // 实时流四态：未开启 / 连接中 / 已连接 / 已断开。
+  // 断线不能退回「未开启」——那会让用户以为是自己关掉的，且已收到的日志看起来像停更了
+  const [streamState, setStreamState] = useState<'idle' | 'connecting' | 'connected' | 'disconnected'>('idle')
+  const streamActive = streamState !== 'idle'
   const [streamLogs, setStreamLogs] = useState<string[]>([])
   const [paused, setPaused] = useState(false)
   // 用 ref 跟踪暂停状态，避免 SSE 闭包中读到过时的 state
@@ -66,7 +69,19 @@ export default function Logs() {
     const token = localStorage.getItem('xh_token') || ''
     const url = `${API_BASE}api/events/stream?token=${encodeURIComponent(token)}`
     const es = new EventSource(url)
+    // 首帧/onopen 之前不算连上：此前弹「已开启」会在令牌失效或服务不可达时
+    // 与随后的「连接断开」自相矛盾（T02681）
+    const markConnected = () => {
+      if (eventSourceRef.current !== es) return
+      setStreamState((s) => (s === 'disconnected' ? s : 'connected'))
+    }
+    es.onopen = () => {
+      if (eventSourceRef.current !== es) return
+      setStreamState('connected')
+      message.success('实时日志流已连接')
+    }
     es.addEventListener('app_event', (ev) => {
+      markConnected()
       try {
         const data = JSON.parse(ev.data) as LogEntry
         const line = data.message ? `[${data.level || 'info'}] ${data.message}` : ev.data
@@ -87,21 +102,31 @@ export default function Logs() {
       }
     })
     es.onerror = () => {
-      message.warning('日志流连接断开')
-      stopStream()
+      if (eventSourceRef.current !== es) return
+      // 断流：只关连接，不清 streamLogs / 暂停缓冲。保留下来的日志要明确标为「已断开」，
+      // 用户可一键重连继续追加（T02680）
+      es.close()
+      eventSourceRef.current = null
+      setStreamState('disconnected')
+      message.warning('日志流连接断开，已保留断线前收到的日志')
     }
     eventSourceRef.current = es
-    setStreaming(true)
-    message.success('已开启实时日志流')
+    setStreamState('connecting')
   }
 
   const stopStream = () => {
     eventSourceRef.current?.close()
     eventSourceRef.current = null
-    setStreaming(false)
+    setStreamState('idle')
     setPaused(false)
     pausedRef.current = false
     pausedBufferRef.current = []
+  }
+
+  // 断线重连：EventSource 已被 close，直接重新建连；已收到的日志继续保留
+  const reconnectStream = () => {
+    if (eventSourceRef.current) return
+    startStream()
   }
 
   // 暂停：停止追加到显示列表，但继续接收并缓存
@@ -153,25 +178,26 @@ export default function Logs() {
         <Col span={6}><Card><Statistic title="日志条数" value={allLines.length} /></Card></Col>
         <Col span={6}><Card><Statistic title="搜索结果" value={searchResults.length} /></Card></Col>
         <Col span={6}><Card><Statistic title="实时流" value={streamLogs.length} valueStyle={{ color: (() => {
-          // 流式状态色：未启动灰；启动但暂停橙；运行绿
-          if (!streaming) return 'var(--xh-text-tertiary)'
-          if (paused) return '#faad14'
-          return '#52c41a'
+          // 流式状态色：未启动灰；连接中蓝；断开红；运行绿（暂停不改变连接状态）
+          if (streamState === 'idle') return 'var(--xh-text-tertiary)'
+          if (streamState === 'connecting') return '#1677ff'
+          if (streamState === 'disconnected') return '#ff4d4f'
+          return paused ? '#faad14' : '#52c41a'
         })() }} /></Card></Col>
         <Col span={6}>
           <Card>
             <Space direction="vertical" style={{ width: '100%' }}>
               <TipButton
-                tip={streaming ? '停止并关闭实时日志流' : '开启实时日志流推送'}
+                tip={streamActive ? '停止并关闭实时日志流' : '开启实时日志流推送'}
                 type="primary"
-                danger={streaming}
-                icon={streaming ? <StopOutlined /> : <PlayCircleOutlined />}
-                onClick={streaming ? stopStream : startStream}
+                danger={streamActive}
+                icon={streamActive ? <StopOutlined /> : <PlayCircleOutlined />}
+                onClick={streamActive ? stopStream : startStream}
                 block
               >
-                {streaming ? '停止实时流' : '开启实时流'}
+                {streamState === 'idle' ? '开启实时流' : streamState === 'disconnected' ? '退出实时流' : '停止实时流'}
               </TipButton>
-              {streaming && (
+              {streamActive && (
                 <Space style={{ width: '100%' }}>
                   <TipButton
                     tip={paused ? '恢复实时日志追加' : '暂停实时日志追加'}
@@ -296,18 +322,50 @@ export default function Logs() {
         {/* 原始日志 / 实时流 */}
         <Col span={12}>
           <Card
-            title={streaming ? '实时日志流' : '原始日志'}
-            extra={<TipButton tip="重新加载原始日志" icon={<ReloadOutlined />} onClick={loadRaw} loading={loading} size="small">刷新</TipButton>}
+            title={streamActive ? '实时日志流' : '原始日志'}
+            extra={
+              streamState === 'idle' ? (
+                <TipButton tip="重新加载原始日志" icon={<ReloadOutlined />} onClick={loadRaw} loading={loading} size="small">刷新</TipButton>
+              ) : (
+                <Space size={8}>
+                  {streamState === 'connecting' && <Tag color="processing">连接中</Tag>}
+                  {streamState === 'connected' && <Tag color="success">已连接</Tag>}
+                  {streamState === 'disconnected' && (
+                    <>
+                      <Tag color="error">连接已断开</Tag>
+                      <TipButton size="small" onClick={reconnectStream} tip="重新建立实时日志流，已收到的日志会保留">
+                        重新连接
+                      </TipButton>
+                    </>
+                  )}
+                </Space>
+              )
+            }
           >
             <Spin spinning={loading}>
               <div style={{ maxHeight: 500, overflow: 'auto', fontFamily: 'Consolas, Monaco, monospace', fontSize: 12, background: 'var(--xh-bg-spotlight)', padding: 8 }}>
                 {(() => {
                   // 实时流 / DB 静态日志的两种渲染路径
-                  if (streaming) {
+                  if (streamActive) {
                     if (streamLogs.length === 0) {
-                      return <Empty description="等待日志推送..." />
+                      return (
+                        <Empty
+                          description={
+                            streamState === 'connecting'
+                              ? '正在连接日志流…'
+                              : streamState === 'disconnected'
+                                ? '连接已断开，断线前未收到日志'
+                                : '等待日志推送...'
+                          }
+                        />
+                      )
                     }
-                    return streamLogs.map((l, i) => <div key={`${i}-${l}`} style={{ padding: '2px 0' }}>{l}</div>)
+                    // 断线后保留已收到的日志但灰显：内容仍在、已不再更新
+                    return (
+                      <div data-testid="stream-logs" style={{ opacity: streamState === 'disconnected' ? 0.55 : 1 }}>
+                        {streamLogs.map((l, i) => <div key={`${i}-${l}`} style={{ padding: '2px 0' }}>{l}</div>)}
+                      </div>
+                    )
                   }
                   if (allLines.length === 0) {
                     return <Empty description="暂无日志" />
