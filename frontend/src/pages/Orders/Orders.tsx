@@ -337,6 +337,20 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
             ]}
           />
 
+          {/* T02675：倒计时归零不再只甩一个红字——说明超时后会发生什么。
+              后端 confirm/cancel 只校验状态不校验 deadline（超时窗口内仍接受），
+              超时清理调度器稍后会把过期单转为 failed；届时确认会收到 409，
+              原因经 T02676 的透传直出。按钮保持可点，语义交给这段说明。 */}
+          {remaining <= 0 && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="接管已超时"
+              description="支付截止时间已过，系统稍后会自动把这条订单转为失败单。若你确实已在闲鱼完成支付，仍可点「确认完成」（风险自负：商品可能已被平台自动关闭）；若未支付，建议点「取消接管」。"
+            />
+          )}
+
           <div style={{ textAlign: 'right' }}>
             <Space>
               <TipButton tip="取消接管并保留订单为待处理" danger icon={<CloseOutlined />} loading={loading} onClick={handleCancel}>
