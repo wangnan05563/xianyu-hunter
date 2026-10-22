@@ -34,6 +34,8 @@ import {
   UploadOutlined,
 } from '@ant-design/icons'
 import { dbAdminApi, type CascadeRelation, type DbColumn, type DbTableInfo } from '../../api/dbAdmin'
+import { notifyExportResult, triggerBlobDownload } from '../../utils/exportFeedback'
+import { extractApiError } from '../../utils/apiError'
 import { useSearch } from '../../hooks/useSearch'
 import { useSearchHistory } from '../../hooks/useSearchHistory'
 import { TipButton } from '@/components/TipButton'
@@ -660,16 +662,11 @@ export default function DatabaseAdmin() {
     if (!activeTable || exporting) return
     setExporting(format)
     try {
-      const blob = await dbAdminApi.exportRows(activeTable, format)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${activeTable}_${new Date().toISOString().slice(0, 19).replaceAll(':', '').replaceAll('T', '')}.${format}`
-      a.click()
-      URL.revokeObjectURL(url)
-      message.success(`已导出 ${activeTable} 全表（${format.toUpperCase()}，${(allRowCount ?? 0).toLocaleString()} 行）`)
-    } catch (e: any) {
-      message.error(`导出失败: ${e?.response?.data?.detail || e?.message}`)
+      const { blob, rows, filename } = await dbAdminApi.exportRows(activeTable, format)
+      triggerBlobDownload(blob, filename)
+      notifyExportResult(message, { rows, filename }, `${activeTable} 全表（${format.toUpperCase()}）`)
+    } catch (e) {
+      message.error(extractApiError(e, '导出失败'))
     } finally {
       setExporting(null)
     }

@@ -1,4 +1,5 @@
 import client from './client'
+import { filenameFromHeaders, readExportError, rowsFromHeaders } from '../utils/exportFeedback'
 import type {
   DbSchema,
   DbRowListResponse,
@@ -11,6 +12,14 @@ import type {
 // 数据库维护 API：业务表在线 CRUD（系统维护 → 数据库维护）
 // 所有危险操作（删除/批量删除/导入）必须传 confirm_token=CONFIRM_DELETE
 export const CONFIRM_TOKEN = 'CONFIRM_DELETE'
+
+/** 数据库表导出结果：blob 交页面触发下载，行数/文件名来自响应头 */
+export interface DbExportResult {
+  blob: Blob
+  /** 后端 X-Export-Rows 回带的真实行数；老后端未回带时为 null */
+  rows: number | null
+  filename: string
+}
 
 export const dbAdminApi = {
   // 列出表白名单及行数（侧边栏数据）
@@ -65,16 +74,26 @@ export const dbAdminApi = {
       .post<CascadePreviewResponse>(`/api/db-admin/tables/${table}/cascade-preview`, { ids })
       .then((r) => r.data),
 
-  // 导出（返回 blob，浏览器侧触发下载）
+  // 导出（返回 blob + 行数/文件名，浏览器侧触发下载）
   // 全表导出没有行数上限（events 等大表可达数万行），30s 默认超时会把「正在导出」
   // 变成「导出失败: timeout」——这里的超时与后端实测耗时对齐（T02576）。
-  exportRows: async (table: string, format: 'csv' | 'json') => {
-    const res = await client.get(`/api/db-admin/tables/${table}/export`, {
-      params: { format },
-      responseType: 'blob',
-      timeout: 300000,
-    })
-    return res.data as Blob
+  // 失败时抛可读错误（T02707：blob 错误体必须解析出 detail，不能只显示状态码）。
+  exportRows: async (table: string, format: 'csv' | 'json'): Promise<DbExportResult> => {
+    let res
+    try {
+      res = await client.get(`/api/db-admin/tables/${table}/export`, {
+        params: { format },
+        responseType: 'blob',
+        timeout: 300000,
+      })
+    } catch (err) {
+      throw await readExportError(err, `数据表 ${table}`)
+    }
+    return {
+      blob: res.data as Blob,
+      rows: rowsFromHeaders(res.headers),
+      filename: filenameFromHeaders(res.headers, `${table}.${format}`),
+    }
   },
 
   // 导入（二维数组 + 表头）

@@ -9,6 +9,7 @@ import { ReloadOutlined, DownloadOutlined } from '@ant-design/icons'
 import { dbAdminApi } from '../../../api/dbAdmin'
 import type { DbTableInfo, DbRowListResponse } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { notifyExportResult, triggerBlobDownload } from '../../../utils/exportFeedback'
 
 const PAGE_SIZE = 20
 
@@ -72,20 +73,9 @@ export default function MobileDatabaseAdmin() {
     if (!selectedTable || exporting) return
     setExporting(format)
     try {
-      const blob = await dbAdminApi.exportRows(selectedTable, format)
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${selectedTable}.${format}`
-      a.style.display = 'none'
-      document.body.appendChild(a)
-      a.click()
-      requestAnimationFrame(() => {
-        // 使用 child.remove() 替代 parentNode.removeChild()，更现代且无需父节点引用（SonarQube S7762）
-        a.remove()
-        URL.revokeObjectURL(url)
-      })
-      message.success(`已导出 ${selectedTable} 全表（${format.toUpperCase()}）`, 3)
+      const { blob, rows, filename } = await dbAdminApi.exportRows(selectedTable, format)
+      triggerBlobDownload(blob, filename)
+      notifyExportResult(message, { rows, filename }, `${selectedTable} 全表（${format.toUpperCase()}）`)
     } catch (e) {
       message.error(extractApiError(e, '导出失败'), 3)
     } finally {

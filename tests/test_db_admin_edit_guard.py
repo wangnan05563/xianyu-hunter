@@ -205,6 +205,18 @@ def test_export_csv_contains_every_row(container, engine):
     assert len(data_lines) == total == 5
 
 
+def test_export_reports_real_row_count(container, engine):
+    """X-Export-Rows 回带真实行数（T02707）：前端据此区分 0 行与正常导出"""
+    for fmt in ("csv", "json"):
+        resp = admin.export_rows("tasks", format=fmt, container=container)
+        assert resp.headers["x-export-rows"] == "1"
+
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM tasks"))
+    resp = admin.export_rows("tasks", format="csv", container=container)
+    assert resp.headers["x-export-rows"] == "0"
+
+
 def test_unknown_table_is_rejected_before_any_scan(container):
     with pytest.raises(HTTPException) as ei:
         admin.export_rows("sqlite_master", format="csv", container=container)

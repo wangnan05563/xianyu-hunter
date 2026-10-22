@@ -819,7 +819,11 @@ def export_rows(
         return StreamingResponse(
             json_iter(),
             media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                # 与 /api/export 同口径回带真实行数，前端才能区分「0 行」与正常导出（T02707）
+                "X-Export-Rows": str(len(rows)),
+            },
         )
 
     # CSV
@@ -838,7 +842,10 @@ def export_rows(
     return StreamingResponse(
         csv_iter(),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Export-Rows": str(len(rows)),
+        },
     )
 
 
