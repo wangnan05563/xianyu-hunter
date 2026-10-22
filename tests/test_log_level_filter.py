@@ -145,6 +145,22 @@ def test_search_rejects_out_of_enum_level(api) -> None:
     assert client.get("/api/logs/search", params={"level": "fatal"}).status_code == 422
 
 
+def test_search_total_estimate_counts_all_matches_before_paging(api) -> None:
+    """total_estimate 是命中总数，不是当页条数（T02678）。
+
+    原先先切片再 len()，total_estimate 恒等于 count，前端无法区分「共 N 条」与
+    「已展示 M 条」，截断提示也就永远不会出现。
+    """
+    client, repo = api
+    for i in range(5):
+        _mk_event(repo, level="info", message=f"I{i}")
+
+    body = client.get("/api/logs/search", params={"limit": 2}).json()
+    assert len(body["items"]) == 2
+    assert body["count"] == 2
+    assert body["total_estimate"] == 5
+
+
 # ---------------- 4. 导出端点：与页面筛选拼合一致 ----------------
 
 def test_export_csv_honors_filters(api) -> None:

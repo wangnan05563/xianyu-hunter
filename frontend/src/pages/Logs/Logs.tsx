@@ -18,6 +18,8 @@ export default function Logs() {
   // 失败态与空态分开：取到 0 条是「暂无日志」，没取到要说明原因并可重试（T02682）
   const [loadError, setLoadError] = useState<string | null>(null)
   const [searchError, setSearchError] = useState<string | null>(null)
+  // 命中总数（后端 total_estimate）与当页 items 是两回事：口径必须分开显示（T02678）
+  const [totalEstimate, setTotalEstimate] = useState(0)
   const [searchParams, setSearchParams] = useSearchParams()
   // 从 URL 恢复搜索条件
   const [query, setQuery] = useState(searchParams.get('query') || '')
@@ -61,9 +63,12 @@ export default function Logs() {
     logApi.search({ q: query, level, task_id: taskId, limit: 100 })
       .then((res) => {
         const items = res.items || []
+        const total = typeof res.total_estimate === 'number' ? res.total_estimate : items.length
         setSearchResults(items)
+        setTotalEstimate(total)
         setSearchError(null)
-        message.success(`找到 ${items.length} 条匹配`)
+        // 截断时先说总数：用当页条数冒充总数会让用户以为只匹配了这么多
+        message.success(total > items.length ? `共 ${total} 条，已展示 ${items.length} 条` : `找到 ${items.length} 条匹配`)
       })
       .catch((e) => {
         const msg = extractApiError(e, '搜索失败')
@@ -297,20 +302,28 @@ export default function Logs() {
 
             {/* 级别分布统计条 + Top stage 标签，仅在有搜索结果时显示 */}
             {searchResults.length > 0 && (
-              <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>级别分布：</span>
-                {Object.entries(levelDistribution).map(([lv, count]) => (
-                  <Tag key={lv} color={levelColor(lv)}>{lv} {count}</Tag>
-                ))}
-                {topStages.length > 0 && (
-                  <>
-                    <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginLeft: 8 }}>Top标签：</span>
-                    {topStages.map(([stage, count]) => (
-                      <Tag key={stage}>{stage} ({count})</Tag>
-                    ))}
-                  </>
-                )}
-              </div>
+              <>
+                <div data-testid="search-total" style={{ marginBottom: 8, fontSize: 12, color: 'var(--xh-text-secondary)' }}>
+                  共 {totalEstimate} 条，已展示 {searchResults.length} 条
+                  {totalEstimate > searchResults.length && (
+                    <span style={{ color: '#faad14' }}> · 结果已截断，请缩小筛选范围</span>
+                  )}
+                </div>
+                <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>级别分布（基于已展示 {searchResults.length} 条）：</span>
+                  {Object.entries(levelDistribution).map(([lv, count]) => (
+                    <Tag key={lv} color={levelColor(lv)}>{lv} {count}</Tag>
+                  ))}
+                  {topStages.length > 0 && (
+                    <>
+                      <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginLeft: 8 }}>Top标签（基于已展示 {searchResults.length} 条）：</span>
+                      {topStages.map(([stage, count]) => (
+                        <Tag key={stage}>{stage} ({count})</Tag>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </>
             )}
 
             <Spin spinning={searchLoading}>

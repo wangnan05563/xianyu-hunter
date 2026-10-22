@@ -206,7 +206,7 @@ def search_logs(
 
     返回结构：
     - items: 命中行（按 created_at desc）
-    - total: 当前查询条件下命中总数（粗略，扫描 limit=1000）
+    - total_estimate: 当前查询条件下命中总数（粗略，最多扫描 limit*10 且不超过 1000 条候选）
     - matched_tags: 命中的标签直方图（top 10）
     - matched_levels: 命中的等级直方图
 
@@ -232,11 +232,14 @@ def search_logs(
     lvl_counter, tag_counter = _compute_log_histograms(candidates)
 
     # 4) 分页 + 返回
+    # 总数必须在切片前取：先切片再 len() 会让 total_estimate 退化成当页条数，
+    # 前端「共 N 条，已展示 M 条」就永远相等，截断提示也永远不会出现（T02678）
+    total_estimate = len(candidates)
     candidates = candidates[offset: offset + limit]
     return {
         "items": candidates,
         "count": len(candidates),
-        "total_estimate": len(candidates),  # 简化：与 count 同值；前端用 hasMore 翻页
+        "total_estimate": total_estimate,
         "matched_levels": dict(sorted(lvl_counter.items(), key=lambda x: -x[1])),
         "matched_tags": dict(sorted(tag_counter.items(), key=lambda x: -x[1])[:10]),
     }
