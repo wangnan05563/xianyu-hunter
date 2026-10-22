@@ -34,8 +34,10 @@ describe('任务管理：全部启动文案与向导快捷通道（评审 2.2-2/
     expect(list).toMatch(/tip=\{`一键启动本页/)
   })
 
-  it('Step1 提供直接创建，Steps 支持点选跳步', () => {
+  it('Step1 提供直接创建，Steps 跳步走前置校验（T02653）', () => {
     expect(editor).toContain('直接创建')
-    expect(editor).toMatch(/<Steps[\s\S]*?onChange=\{\(v\) => setCurrent\(v\)\}/)
+    expect(editor).toMatch(/<Steps[\s\S]*?onChange=\{handleStepJump\}/)
+    // 快捷通道不做逐步校验，直接走 handleSubmit(false)
+    expect(editor).toContain('onClick={() => handleSubmit(false)}')
   })
 })

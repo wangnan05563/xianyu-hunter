@@ -21,6 +21,14 @@ import { extractApiError } from '../../utils/apiError'
 import { TASK_MODE, isTaskMode } from '../../constants/taskStatus'
 import FetchFailedHint from '../../components/FetchFailedHint'
 import { useFailedSources } from '../../hooks/useFailedSources'
+import {
+  FIELD_ANCHORS,
+  STEP_TITLES,
+  validateStep,
+  validateStepsBetween,
+  type StepError,
+  type WizardValues,
+} from './taskWizardValidation'
 
 // 本页独立请求的数据源（T02899）。
 // 全局配置喂的是「全局当前值：×」这类参考值与风险探测：原先四处 catch 一律吞成空块，
@@ -308,6 +316,8 @@ export default function TaskEditor() {
   const [searchParams] = useSearchParams()
   const isEdit = !!id
   const [current, setCurrent] = useState(0)
+  // 字段级校验错误（key=field），下一步/跳步被拦时在对应 Form.Item 上红字提示
+  const [stepErrors, setStepErrors] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [loadingEditData, setLoadingEditData] = useState(false)
   const [form] = Form.useForm()
@@ -405,6 +415,11 @@ export default function TaskEditor() {
     setDraftRestored(false)
   }
 
+  // 字段改动后清掉旧红字：下一次点「下一步/跳步/提交」会重新校验
+  useEffect(() => {
+    setStepErrors({})
+  }, [formData, cron, useCron, intervalSeconds])
+
   // 编辑模式：加载现有任务数据
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -439,12 +454,51 @@ export default function TaskEditor() {
     { title: '调度与确认', desc: 'Cron 与提交' },
   ]
 
+  // 各步校验（T02653）：下一步 / 跳步 / 提交三处共用同一套规则
+  const wizardValues: WizardValues = {
+    keyword: formData.keyword,
+    min_price: formData.min_price ?? null,
+    max_price: formData.max_price ?? null,
+    max_publish_days: formData.max_publish_days ?? null,
+    eval_threshold: formData.eval_threshold ?? null,
+    ai_prompt: formData.ai_prompt ?? null,
+    useCron,
+    cron,
+    intervalSeconds,
+  }
+
+  const showStepErrors = (errors: StepError[]) => {
+    setStepErrors(Object.fromEntries(errors.map((e) => [e.field, e.message])))
+    const first = errors[0]
+    message.warning(`${STEP_TITLES[first.step]}：${first.message}`)
+    const anchor = FIELD_ANCHORS[first.field]
+    if (anchor) {
+      // 跳步被拦时把用户带回第一个出错的步骤，并滚动到该字段
+      setCurrent(first.step)
+      setTimeout(() => document.getElementById(anchor)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 0)
+    }
+    return first
+  }
+
   const handleNext = () => {
-    if (current === 0 && !formData.keyword) {
-      message.warning('请输入关键词')
+    const errors = validateStep(current, wizardValues)
+    if (errors.length > 0) {
+      showStepErrors(errors)
       return
     }
+    setStepErrors({})
     setCurrent(current + 1)
+  }
+
+  const handleStepJump = (target: number) => {
+    // 向后跳：目标步之前的所有步都要通过，避免非法参数到最后一步才爆
+    const errors = target > current ? validateStepsBetween(current, target, wizardValues) : []
+    if (errors.length > 0) {
+      showStepErrors(errors)
+      return
+    }
+    setStepErrors({})
+    setCurrent(target)
   }
 
   // ============== 任务级覆盖字段更新辅助函数 ==============
@@ -468,7 +522,15 @@ export default function TaskEditor() {
     setFormData({ ...formData, search_config: Object.keys(current).length > 0 ? current : null })
   }
 
-  const handleSubmit = () => {
+  // validateAllSteps=false 供「直接创建」快捷通道使用：沿用全局默认，不做逐步校验
+  const handleSubmit = (validateAllSteps = true) => {
+    if (validateAllSteps) {
+      const errors = validateStepsBetween(0, steps.length, wizardValues)
+      if (errors.length > 0) {
+        showStepErrors(errors)
+        return
+      }
+    }
     if (!formData.keyword) {
       message.warning('关键词不能为空')
       return
@@ -588,7 +650,7 @@ export default function TaskEditor() {
           <Steps
             current={current}
             items={steps}
-            onChange={(v) => setCurrent(v)}
+            onChange={handleStepJump}
             style={{ marginBottom: 24 }}
           />
 
@@ -604,7 +666,13 @@ export default function TaskEditor() {
       {current === 0 && (
         <Card title="Step 1 · 基础信息">
           <Form layout="vertical" form={form}>
-            <Form.Item label="关键词（必填）" required>
+            <Form.Item
+              id="wizard-field-keyword"
+              label="关键词（必填）"
+              required
+              validateStatus={stepErrors.keyword ? 'error' : undefined}
+              help={stepErrors.keyword}
+            >
               <Input
                 placeholder="例：索尼 A7M4 / iPhone 15 Pro 256G"
                 value={formData.keyword}
@@ -705,7 +773,12 @@ export default function TaskEditor() {
       {current === 1 && (
         <Card title="Step 2 · 价格与过滤">
           <Form layout="vertical">
-            <Form.Item label="价格区间（双滑块）">
+            <Form.Item
+              id="wizard-field-price"
+              label="价格区间（双滑块）"
+              validateStatus={stepErrors.min_price ? 'error' : undefined}
+              help={stepErrors.min_price}
+            >
               <PriceRangeSlider
                 min={formData.min_price ?? null}
                 max={formData.max_price ?? null}
@@ -713,7 +786,12 @@ export default function TaskEditor() {
               />
             </Form.Item>
 
-            <Form.Item label="最大发布天数（仅展示最近 N 天的商品）">
+            <Form.Item
+              id="wizard-field-max-publish-days"
+              label="最大发布天数（仅展示最近 N 天的商品）"
+              validateStatus={stepErrors.max_publish_days ? 'error' : undefined}
+              help={stepErrors.max_publish_days}
+            >
               <Slider
                 min={1}
                 max={30}
@@ -894,6 +972,7 @@ export default function TaskEditor() {
           globalConfig={globalConfig}
           effectiveEvalThreshold={effective.evalThreshold}
           onOpenGlobalConfig={() => setEvalModalOpen(true)}
+          errors={stepErrors}
         />
       )}
 
@@ -988,13 +1067,22 @@ export default function TaskEditor() {
 
             {/* S7735：交换分支改为肯定形式 useCron ? Cron : 固定间隔 */}
             {useCron ? (
-              <Form.Item label="Cron 表达式（可视化编辑器）" tooltip="启用 Cron 模式后按表达式调度，忽略固定间隔">
+              <Form.Item
+                id="wizard-field-cron"
+                label="Cron 表达式（可视化编辑器）"
+                tooltip="启用 Cron 模式后按表达式调度，忽略固定间隔"
+                validateStatus={stepErrors.cron ? 'error' : undefined}
+                help={stepErrors.cron}
+              >
                 <CronEditor value={cron} onChange={setCron} />
               </Form.Item>
             ) : (
               <Form.Item
+                id="wizard-field-interval"
                 label="执行间隔（秒）"
                 tooltip="过短易触发反爬，过长可能错过抢单窗口。建议 60-300 秒"
+                validateStatus={stepErrors.interval_seconds ? 'error' : undefined}
+                help={stepErrors.interval_seconds}
               >
                 <Space.Compact style={{ width: 200 }}>
                   <InputNumber
@@ -1098,7 +1186,7 @@ export default function TaskEditor() {
           {current === 0 && !isEdit && (
             <TipButton
               tip="跳过后续步骤直接创建：价格/搜索/AI/反爬等全部沿用全局默认配置，创建后可随时编辑"
-              onClick={handleSubmit}
+              onClick={() => handleSubmit(false)}
               icon={<CheckCircleOutlined />}
             >
               直接创建
@@ -1109,7 +1197,7 @@ export default function TaskEditor() {
               下一步
             </TipButton>
           ) : (
-            <TipButton tip="提交创建或保存任务" type="primary" loading={loading} onClick={handleSubmit} icon={<CheckCircleOutlined />}>
+            <TipButton tip="提交创建或保存任务" type="primary" loading={loading} onClick={() => handleSubmit()} icon={<CheckCircleOutlined />}>
               {isEdit ? '保存修改' : '创建任务'}
             </TipButton>
           )}
@@ -1150,8 +1238,9 @@ function Step3AIEval(props: {
   readonly globalConfig: AppConfig | null
   readonly effectiveEvalThreshold: number
   readonly onOpenGlobalConfig: () => void
+  readonly errors: Record<string, string>
 }) {
-  const { formData, setFormData, globalConfig, effectiveEvalThreshold, onOpenGlobalConfig } = props
+  const { formData, setFormData, globalConfig, effectiveEvalThreshold, onOpenGlobalConfig, errors } = props
   return (
     <Card
       title={
@@ -1181,8 +1270,11 @@ function Step3AIEval(props: {
 
       <Form layout="vertical">
         <Form.Item
+          id="wizard-field-eval-threshold"
           label="评估通过阈值（eval_threshold）"
-          help={`≥ 此分数视为通过，触发通知/抢单。全局当前值：${globalConfig?.eval?.pass_score ?? 60}`}
+          validateStatus={errors.eval_threshold ? 'error' : undefined}
+          help={errors.eval_threshold
+            ?? `≥ 此分数视为通过，触发通知/抢单。全局当前值：${globalConfig?.eval?.pass_score ?? 60}`}
         >
           <Slider
             min={0}
@@ -1220,8 +1312,10 @@ function Step3AIEval(props: {
         <Divider />
 
         <Form.Item
+          id="wizard-field-ai-prompt"
           label="AI 评估提示词（ai_prompt）"
-          help="自定义 AI 评估时的额外指令，留空则使用系统默认提示词"
+          validateStatus={errors.ai_prompt ? 'error' : undefined}
+          help={errors.ai_prompt ?? '自定义 AI 评估时的额外指令，留空则使用系统默认提示词'}
         >
           <Input.TextArea
             rows={4}
