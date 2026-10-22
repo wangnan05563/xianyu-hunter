@@ -818,6 +818,54 @@ def list_evaluations(
     return {"items": paged, "count": len(paged), "total": total}
 
 
+@router.get("/brands")
+def list_evaluation_brands(
+    request: Request,  # NOSONAR
+    task_id: str | None = Query(None, description="任务 ID 模糊匹配（与列表同口径）"),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """评估记录的品牌候选（DISTINCT，不受分页与其他筛选影响）
+
+    品牌不在 events 表里，也不在 items 表里（items 无 brand 列）：以当前账号的
+    eval.scored 事件为范围，再用 task_links.display 补全，口径与列表 enrich 一致。
+    只按 task_id 收缩——价格/评分/销售状态不参与，否则选完品牌后候选会跟着列表
+    收缩，换品牌必须先清空（评审 2.4-8，商品页同类缺陷已在 T02566 修复）。
+    """
+    user_id = getattr(request.state, "user_id", None)
+    rows, _ = container.repo.list_events_by_type_prefix(
+        type_prefix=_EVAL_TYPE_PREFIX, user_id=user_id,
+    )
+    item_ids: set[str] = set()
+    payload_brands: dict[str, str] = {}
+    for r in rows:
+        if str(r.get("type", "")) != _EVAL_SCORED_TYPE:
+            continue
+        payload = r.get("payload") or {}
+        if _match_task_id_filter(payload, r, task_id):
+            continue
+        iid = str(payload.get("item_id") or r.get("item_id") or "")
+        if not iid:
+            continue
+        item_ids.add(iid)
+        if payload.get("brand"):
+            payload_brands[iid] = str(payload["brand"])
+    link_map = (
+        container.repo.list_link_displays_by_keys(
+            sorted(item_ids), link_type="item", user_id=user_id,
+        ) if item_ids else {}
+    )
+    brands: set[str] = set()
+    for iid in item_ids:
+        link = link_map.get(iid) or {}
+        if link:
+            # 与列表 enrich 同序：display 品牌先过归一化，标题解释不了就会被清空
+            link, _ = normalize_display_fields(link)
+        brand = link.get("brand") or payload_brands.get(iid)
+        if brand:
+            brands.add(str(brand))
+    return {"brands": sorted(brands)}
+
+
 def _enrich_bargain_and_profit(evals: list[dict], container: Container) -> None:
     """为评估记录注入 bargain_price、avg_price 和 estimated_profit 字段
 

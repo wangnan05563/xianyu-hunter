@@ -70,6 +70,12 @@ export const evalApi = {
     include_out_of_range?: boolean
   }) => client.get<{ items: EvalItem[]; count: number; total: number }>('/api/evaluations', { params }).then((r) => r.data),
 
+  // 品牌候选：全量 DISTINCT，不受分页/价格/销售状态收缩（T02662）
+  brandFacets: (taskId?: string) =>
+    client.get<{ brands: string[] }>('/api/evaluations/brands', {
+      params: taskId ? { task_id: taskId } : undefined,
+    }).then((r) => r.data.brands || []),
+
   distribution: (params: {
     range_hours?: number
     price_bin_count?: number

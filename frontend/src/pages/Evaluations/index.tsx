@@ -11,7 +11,7 @@ import {
   RobotOutlined, CloudDownloadOutlined, QuestionCircleOutlined, LoginOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-import { taskApi, type EvalItem } from '../../api'
+import { taskApi, evalApi, type EvalItem } from '../../api'
 import { parseEvalDeepLink, evalDeepLinkMatchesFilters } from '../../utils/alertDeepLink'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig } from '../../hooks/useColumnConfig'
@@ -525,9 +525,21 @@ export default function Evaluations() {
   const visibleColumns = applyColumnConfig(adaptedColumns)
   const scrollX = panelCollapsed ? 2180 : SCROLL_X
 
-  const brandOptions = [...new Set(
+  // 品牌候选优先用后端全量 DISTINCT；请求失败静默回落当页提取（与商品页同口径，T02662）
+  const [brandFacets, setBrandFacets] = useState<string[]>([])
+  useEffect(() => {
+    let cancelled = false
+    evalApi.brandFacets(filters.taskId || undefined)
+      .then((brands) => { if (!cancelled) setBrandFacets(brands) })
+      .catch(() => { if (!cancelled) setBrandFacets([]) })
+    return () => { cancelled = true }
+  }, [filters.taskId])
+
+  const pageBrands = [...new Set(
     list.items.map((i) => i.payload?.brand).filter(Boolean)
-  )].sort((a, b) => String(a).localeCompare(String(b)))
+  )].map(String)
+  const brandOptions = (brandFacets.length ? brandFacets : pageBrands)
+    .sort((a, b) => a.localeCompare(b))
 
   // 评审 2.4-2：重新评估原先静默一键触发全库重算，这里把「会重算什么范围」显式化。
   // 范围口径与后端一致（routes/evaluations_recompute.py:361）：按 user_id + 可选 task_id
