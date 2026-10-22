@@ -55,9 +55,14 @@ export function taskStatusOptions(
   return values.map((value) => ({ value, label: TASK_STATUS_CONFIG[value].label }))
 }
 
-/** 未知值兜底显示原文，而不是猜一个中文标签——猜出来的标签会把「不可识别」伪装成「已识别」 */
+/**
+ * 未知值不猜中文标签（会把「不可识别」伪装成「已识别」），但也不能只甩英文码：
+ * 显式标出「未知」并保留原始码，用户与排查者都能看懂。
+ */
+const unknownLabel = (raw: string) => `未知（原始码 ${raw}）`
+
 export const taskStatusLabel = (status?: string | null) =>
-  status ? TASK_STATUS_CONFIG[status as TaskStatusValue]?.label || status : '—'
+  status ? TASK_STATUS_CONFIG[status as TaskStatusValue]?.label || unknownLabel(status) : '—'
 
 export const taskStatusColor = (status?: string | null) =>
   status ? TASK_STATUS_CONFIG[status as TaskStatusValue]?.color : undefined
@@ -70,4 +75,4 @@ export function taskModeOptions(
 }
 
 export const taskModeLabel = (mode?: string | null) =>
-  mode ? TASK_MODE_LABELS[mode as TaskModeValue] || mode : '—'
+  mode ? TASK_MODE_LABELS[mode as TaskModeValue] || unknownLabel(mode) : '—'

@@ -11,7 +11,8 @@ import {
 } from '@ant-design/icons'
 import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
-import { TASK_STATUS, taskStatusColor } from '../../constants/taskStatus'
+import { TASK_STATUS, taskModeLabel, taskStatusColor, taskStatusLabel } from '../../constants/taskStatus'
+import JsonListField from '../../components/JsonListField'
 import { TipButton } from '@/components/TipButton'
 import FetchFailedHint from '@/components/FetchFailedHint'
 import DataBlock from '@/components/DataBlock'
@@ -516,15 +517,15 @@ export default function TaskDetail() {
 
               <Descriptions bordered column={2} size="small">
                 <Descriptions.Item label="任务ID">{task.id}</Descriptions.Item>
-                <Descriptions.Item label="状态"><Tag color={taskStatusColor(task.status) || 'default'}>{task.status}</Tag></Descriptions.Item>
+                <Descriptions.Item label="状态"><Tag color={taskStatusColor(task.status) || 'default'}>{taskStatusLabel(task.status)}</Tag></Descriptions.Item>
                 <Descriptions.Item label="关键词">{task.keyword}</Descriptions.Item>
-                <Descriptions.Item label="模式">{task.mode}</Descriptions.Item>
+                <Descriptions.Item label="模式">{taskModeLabel(task.mode)}</Descriptions.Item>
                 <Descriptions.Item label="价格区间">{task.min_price ? `¥${task.min_price}` : '不限'} - {task.max_price ? `¥${task.max_price}` : '不限'}</Descriptions.Item>
                 <Descriptions.Item label="地域">{task.region || '不限'}</Descriptions.Item>
                 <Descriptions.Item label="Cron 表达式"><code>{task.cron}</code></Descriptions.Item>
                 <Descriptions.Item label="最大发布天数">{task.max_publish_days || '不限'}</Descriptions.Item>
-                <Descriptions.Item label="排除词">{task.exclude_words || '无'}</Descriptions.Item>
-                <Descriptions.Item label="搜索过滤">{task.search_filters || '无'}</Descriptions.Item>
+                <Descriptions.Item label="排除词"><JsonListField raw={task.exclude_words} /></Descriptions.Item>
+                <Descriptions.Item label="搜索过滤"><JsonListField raw={task.search_filters} /></Descriptions.Item>
                 <Descriptions.Item label="创建时间">{formatDateTime(task.created_at)}</Descriptions.Item>
                 <Descriptions.Item label="更新时间">{formatDateTime(task.updated_at)}</Descriptions.Item>
               </Descriptions>

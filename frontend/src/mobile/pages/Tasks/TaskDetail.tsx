@@ -7,6 +7,7 @@ import type { Task } from '../../../api/types'
 import FetchFailedHint from '../../../components/FetchFailedHint'
 import { formatDateTime } from '../../../utils/timeFormat'
 import { taskModeLabel, taskStatusColor, taskStatusLabel } from '../../../constants/taskStatus'
+import JsonListField from '../../../components/JsonListField'
 
 // 状态/模式文案与颜色来自 constants/taskStatus（与后端 domain/task.py 同源，T02716）：
 // 与任务列表页共用同一份映射，同一个值不可能再一个页面中文、另一个页面英文
@@ -51,7 +52,7 @@ export default function MobileTaskDetail() {
           <Descriptions.Item label="价格区间">
             ¥{task.min_price ?? 0} ~ ¥{task.max_price ?? '不限'}
           </Descriptions.Item>
-          <Descriptions.Item label="排除词">{task.exclude_words || '无'}</Descriptions.Item>
+          <Descriptions.Item label="排除词"><JsonListField raw={task.exclude_words} /></Descriptions.Item>
           <Descriptions.Item label="地区">{task.region || '不限'}</Descriptions.Item>
           <Descriptions.Item label="模式">{taskModeLabel(task.mode)}</Descriptions.Item>
           <Descriptions.Item label="状态">
