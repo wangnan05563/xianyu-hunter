@@ -7,6 +7,7 @@ import {
   evalScoreMaxFromAlert,
   parseEvalDeepLink,
   parseOrderStatusParam,
+  evalDeepLinkMatchesFilters,
 } from '../alertDeepLink'
 
 // 告警深链守卫（T02620）：抽屉/雷达的跳转必须带上「本条告警」的查询参数，
@@ -140,5 +141,53 @@ describe('写侧与读侧必须同口径（静态守卫）', () => {
     const TYPES_SOURCE = readFileSync(resolve(__dirname, '../../api/types.ts'), 'utf-8')
     expect(TYPES_SOURCE).toContain('score_value?: number | null')
     expect(TYPES_SOURCE).not.toContain('created_at: string; score: number }>')
+  })
+})
+
+// T02831：深链参数是「当前筛选」的真实描述吗？提示条的文案要按这个答案分两支，
+// 于是把判定抽成纯函数逐个钉住——渲染级用例里评分区间是 Slider，jsdom 下拖不动，
+// 少钉一支就等于对另一半参数继续谎报。
+describe('评估深链与当前筛选的一致性判定（T02831）', () => {
+  const cur = (itemId: string, range: [number, number]) => ({ itemId, scoreRange: range })
+
+  it('两项都与筛选一致 → 一致', () => {
+    expect(evalDeepLinkMatchesFilters(
+      { itemId: 'ITEM-9', scoreMax: 42 }, cur('ITEM-9', [0, 42]))).toBe(true)
+  })
+
+  it('商品ID 被手动改掉 → 不一致', () => {
+    expect(evalDeepLinkMatchesFilters(
+      { itemId: 'ITEM-9', scoreMax: 42 }, cur('OTHER', [0, 42]))).toBe(false)
+  })
+
+  it('评分区间被手动改掉 → 不一致（左端点不再是 0 也算）', () => {
+    expect(evalDeepLinkMatchesFilters(
+      { itemId: 'ITEM-9', scoreMax: 42 }, cur('ITEM-9', [0, 41]))).toBe(false)
+    expect(evalDeepLinkMatchesFilters(
+      { itemId: 'ITEM-9', scoreMax: 42 }, cur('ITEM-9', [10, 42]))).toBe(false)
+  })
+
+  it('链接里没带的那一项不构成矛盾', () => {
+    expect(evalDeepLinkMatchesFilters({ scoreMax: 42 }, cur('', [0, 42]))).toBe(true)
+    expect(evalDeepLinkMatchesFilters({ itemId: 'ITEM-9' }, cur('ITEM-9', [0, 100]))).toBe(true)
+  })
+
+  it('脏链接（两项都没解析出来）不参与判定，由调用方先判可见性', () => {
+    expect(evalDeepLinkMatchesFilters({}, cur('任意', [0, 100]))).toBe(true)
+  })
+
+  it('评估页确实把这个判定接在提示条上，而不是只存在于常量里', () => {
+    const EVALS = readFileSync(resolve(__dirname, '../../pages/Evaluations/index.tsx'), 'utf-8')
+    // 按调用点切片再验：整份文件里 useEvalList 的 props 也写着
+    // `scoreRange: filters.scoreRange`，全局 toContain 会被它蒙过去
+    const from = EVALS.indexOf('evalDeepLinkMatchesFilters(deepLink, {')
+    expect(from, '页面不再调用一致性判定').toBeGreaterThan(-1)
+    const call = EVALS.slice(from, EVALS.indexOf('})', from))
+    expect(call).toContain('itemId: filters.itemId')
+    expect(call).toContain('scoreRange: filters.scoreRange')
+    expect(EVALS).toContain("type={deepLinkMatchesFilters ? 'info' : 'warning'}")
+    expect(EVALS).toContain('已被手动筛选覆盖')
+    // 提示条必须等首帧套用之后才出，否则每次点深链都会闪一下「已被覆盖」
+    expect(EVALS).toContain('deepLinkApplied.current')
   })
 })

@@ -123,3 +123,26 @@ describe('告警深链落到评估明细', () => {
     expect(screen.queryByText(/已按告警定位到商品/)).toBeNull()
   })
 })
+
+// T02831：提示条描述的是「URL 参数 = 当前筛选」这句话。用户手动改筛选之后这句就不成立了，
+// 继续显示「已按告警定位到商品 ITEM-9」就是替一个已经不存在的筛选态背书。
+describe('手动改筛选后定位提示不再谎报（T02831）', () => {
+  it('把商品ID 改成别的值后，提示条降级为「已被手动筛选覆盖」', async () => {
+    renderAt('/evaluations?item_id=ITEM-9&score_max=42')
+    // 先确认落地时是「已定位」文案，再改——否则两条用例都能靠「从来不显示」蒙过去
+    expect(await screen.findByText(/已按告警定位到商品 ITEM-9/)).toBeTruthy()
+
+    fireEvent.change(screen.getByPlaceholderText('模糊匹配'), { target: { value: 'OTHER-1' } })
+
+    await waitFor(() => expect(screen.queryByText(/已按告警定位到商品/)).toBeNull())
+    expect(screen.getByText(/已被手动筛选覆盖/)).toBeTruthy()
+    // 参数不自动清：清掉会把用户点进来的那条线索抹了，降级文案还留着差在哪
+    expect(screen.getByText(/ITEM-9/)).toBeTruthy()
+  })
+
+  it('只带 score_max 的链接不因商品ID 空值误判为不一致', async () => {
+    renderAt('/evaluations?score_max=42')
+    expect(await screen.findByText(/已按告警定位到商品/)).toBeTruthy()
+    expect(screen.queryByText(/已被手动筛选覆盖/)).toBeNull()
+  })
+})

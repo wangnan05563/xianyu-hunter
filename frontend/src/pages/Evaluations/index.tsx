@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { taskApi, type EvalItem } from '../../api'
-import { parseEvalDeepLink } from '../../utils/alertDeepLink'
+import { parseEvalDeepLink, evalDeepLinkMatchesFilters } from '../../utils/alertDeepLink'
 import { usePersistentState } from '../../hooks/usePersistentState'
 import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
 import EvalHeatmap from './components/EvalHeatmap'
@@ -454,6 +454,17 @@ export default function Evaluations() {
     setReloadToken((t) => t + 1)
   }
 
+  // 深链参数是否仍然是当前筛选的真实描述（T02831），判定在 utils/alertDeepLink 里，
+  // 好让「只带 score_max」「商品ID 被改掉」这些分支能被单元测试逐个钉住。
+  // 首帧筛选还没套用（套用要等下一轮渲染），故 deepLinkApplied 之前不出提示条，
+  // 免得把「马上要套用」闪成「已被覆盖」。
+  const deepLinkVisible =
+    (!!deepLink.itemId || deepLink.scoreMax != null) && deepLinkApplied.current
+  const deepLinkMatchesFilters = evalDeepLinkMatchesFilters(deepLink, {
+    itemId: filters.itemId,
+    scoreRange: filters.scoreRange,
+  })
+
   const columns = useEvalColumns({
     autoBuyScore: dist.autoBuyScore,
     passScore: dist.passScore,
@@ -549,13 +560,18 @@ export default function Evaluations() {
   return (
     <div className="page-container">
       {/* 深链落地说明（T02620）：让用户知道当前视图是「告警带来的筛选」而非全量列表，
-          并提供一键回到正常筛选——与 Orders.tsx 的 ref 定位提示同构 */}
-      {(deepLink.itemId || deepLink.scoreMax != null) && (
+          并提供一键回到正常筛选——与 Orders.tsx 的 ref 定位提示同构。
+          T02831：这条提示描述的是「URL 参数 = 当前筛选」，用户手动改过筛选之后参数就不再是
+          当前视图的真实描述，所以按是否仍一致分两种文案；不自动清参数——清掉会把用户
+          点进来的那条线索直接抹掉，降级文案至少还说明差在哪。 */}
+      {deepLinkVisible && (
         <Alert
-          type="info"
+          type={deepLinkMatchesFilters ? 'info' : 'warning'}
           showIcon
           style={{ marginBottom: 12 }}
-          message={`已按告警定位到商品 ${deepLink.itemId ?? '—'}${deepLink.scoreMax != null ? `（评分 ≤ ${deepLink.scoreMax}）` : ''}`}
+          message={deepLinkMatchesFilters
+            ? `已按告警定位到商品 ${deepLink.itemId ?? '—'}${deepLink.scoreMax != null ? `（评分 ≤ ${deepLink.scoreMax}）` : ''}`
+            : `链接里的告警定位条件（商品 ${deepLink.itemId ?? '—'}${deepLink.scoreMax != null ? ` / 评分 ≤ ${deepLink.scoreMax}` : ''}）已被手动筛选覆盖，下方列表按当前筛选条件展示`}
           action={<TipButton size="small" onClick={clearDeepLink} tip="清除告警深链参数，回到正常筛选视图">清除定位</TipButton>}
         />
       )}

@@ -403,8 +403,9 @@ export default function Orders() {
   // null=未定位 / true=在当前页找到 / false=当前页没有
   const [refLocated, setRefLocated] = useState<boolean | null>(null)
 
-  // 同一 sheet 内换了深链（例如又点了另一条告警）时，以 URL 为准重打筛选；
-  // 用户手动改下拉不会写 URL，因此不会与本效果互相覆盖
+  // 同一 sheet 内换了深链（例如又点了另一条告警）时，以 URL 为准重打筛选。
+  // 手动改下拉现在也回写 URL（T02831），于是本效果收到的是同一个值：
+  // setStatusFilter 幂等、setPage(1) 与 onStatusChange 里的复位一致，不会来回打架。
   useEffect(() => {
     setStatusFilter(urlStatus)
     setPage(1)
@@ -466,10 +467,16 @@ export default function Orders() {
     setRefLocated(null)
   }
 
-  // 筛选条件变化时回到第一页，避免空页
+  // 筛选条件变化时回到第一页，避免空页；并把筛选态回写 URL（T02831）。
+  // 不回写的后果：从告警带 ?status=failed 进来后手动改成「全部」，页面上是全部、
+  // URL 还是 failed，刷新就被打回「已失败」——可见筛选态与链接各说各话。
   const onStatusChange = (v: string | undefined) => {
     setStatusFilter(v)
     setPage(1)
+    const next = new URLSearchParams(searchParams)
+    if (v) next.set('status', v)
+    else next.delete('status')
+    setSearchParams(next, { replace: true })
   }
 
   // 删除订单

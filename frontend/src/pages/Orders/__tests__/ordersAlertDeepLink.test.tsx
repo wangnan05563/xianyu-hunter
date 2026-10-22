@@ -7,8 +7,15 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import userEvent from '@testing-library/user-event'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import type { OrderItem } from '../../../api/types'
+
+// 把当前 location.search 打进 DOM，用于断言「筛选变更有没有回写 URL」
+function LocationProbe() {
+  const { search } = useLocation()
+  return <span data-testid="location">{search}</span>
+}
 
 class FakeEventSource {
   constructor(public url: string) {}
@@ -86,5 +93,77 @@ describe('?status= 驱动状态筛选', () => {
     renderAt('/orders')
     await waitFor(() => expect(listMock).toHaveBeenCalled())
     expect(listMock.mock.calls[0][0].status).toBeUndefined()
+  })
+})
+
+// T02831：T02620 只做了「URL → 筛选」的读端。手动把下拉改成别的值之后 URL 不动，
+// 于是页面上是「全部」、链接还是 failed，刷新就被重新打回「已失败」；
+// 带 ?ref= 进来时更要紧——回写不能顺手把 ref 参数擦了，否则定位提示当场消失。
+// 从「状态筛选：」这个标签往上找到包含下拉的那一层：antd Space 会把每个子节点
+// 包进独立的 .ant-space-item，标签的父节点里并没有下拉；落地时若带着 ?status=failed，
+// 占位符「全部状态」也不在 DOM 里，按占位符找会自己把自己绊倒
+function statusSelectRoot(): HTMLElement {
+  let node: HTMLElement | null = screen.getByText('状态筛选：').parentElement
+  while (node && !node.querySelector('.ant-select')) node = node.parentElement
+  const root = node?.querySelector('.ant-select') as HTMLElement | null
+  if (!root) throw new Error('未找到状态筛选下拉')
+  return root
+}
+
+describe('手动改状态筛选会回写 URL（T02831）', () => {
+  function renderWithLocation(entry: string) {
+    return render(
+      <MemoryRouter initialEntries={[entry]}>
+        <Orders />
+        <LocationProbe />
+      </MemoryRouter>,
+    )
+  }
+
+  it('选「已成功」后 URL 跟上 status=succeeded，且 ref 参数保留', async () => {
+    renderWithLocation('/orders?status=failed&ref=o1')
+    // 等下拉把「已失败」渲染出来再操作：默认 mock 返回的是 failed 单，
+    // 页面上没有「接管」按钮，用按钮等挂载会把两条用例拖成超时假失败
+    await waitFor(() => expect(
+      document.querySelector('.ant-select-selection-item')?.getAttribute('title'))
+      .toBe('已失败'))
+
+    const selectEl = statusSelectRoot().querySelector('.ant-select-selector') as HTMLElement
+    await userEvent.click(selectEl)
+    const option = await waitFor(() => {
+      const found = Array.from(document.querySelectorAll('.ant-select-item-option'))
+        .filter((n) => n.textContent?.includes('已成功'))
+      if (!found.length) throw new Error('下拉未出现「已成功」选项')
+      return found[0] as HTMLElement
+    })
+    await userEvent.click(option)
+
+    const probe = screen.getByTestId('location')
+    await waitFor(() => expect(probe.textContent).toContain('status=succeeded'))
+    expect(probe.textContent).toContain('ref=o1')
+    // 请求侧也必须跟着改，否则「URL 写了但列表还是旧的」是另一种假回执
+    await waitFor(() => {
+      const last = listMock.mock.calls.at(-1)?.[0] as Record<string, unknown> | undefined
+      expect(last?.status).toBe('succeeded')
+    })
+  })
+
+  it('点 allowClear 清空筛选时删除 status 键，不留下 status=undefined', async () => {
+    renderWithLocation('/orders?status=failed&ref=o1')
+    // 等下拉把「已失败」渲染出来再操作：默认 mock 返回的是 failed 单，
+    // 页面上没有「接管」按钮，用按钮等挂载会把两条用例拖成超时假失败
+    await waitFor(() => expect(
+      document.querySelector('.ant-select-selection-item')?.getAttribute('title'))
+      .toBe('已失败'))
+
+    const selectRoot = statusSelectRoot()
+    await userEvent.hover(selectRoot)
+    const clear = selectRoot.querySelector('.ant-select-clear') as HTMLElement
+    expect(clear, 'allowClear 的清除按钮未出现').toBeTruthy()
+    await userEvent.click(clear)
+
+    const probe = screen.getByTestId('location')
+    await waitFor(() => expect(probe.textContent).not.toContain('status='))
+    expect(probe.textContent).toContain('ref=o1')
   })
 })

@@ -127,3 +127,19 @@ export function parseEvalDeepLink(sp: Pick<URLSearchParams, 'get'>): EvalDeepLin
   if (scoreMax !== undefined) out.scoreMax = scoreMax
   return out
 }
+
+/**
+ * 深链参数是否仍然是「当前筛选」的真实描述（T02831）。
+ * 落地之后用户手动改过商品ID 或评分区间，链接里的那两个值就不再代表页面上的筛选态，
+ * 提示条继续写「已按告警定位到…」就是替一个已不存在的条件背书。
+ * 链接里没带的那一项按「不构成矛盾」处理：只带 score_max 的链接不该因为商品ID 是空的
+ * 就判成不一致。
+ */
+export function evalDeepLinkMatchesFilters(
+  dl: EvalDeepLink,
+  cur: { itemId: string; scoreRange: [number, number] },
+): boolean {
+  if (dl.itemId && cur.itemId !== dl.itemId) return false
+  if (dl.scoreMax != null && (cur.scoreRange[0] !== 0 || cur.scoreRange[1] !== dl.scoreMax)) return false
+  return true
+}
