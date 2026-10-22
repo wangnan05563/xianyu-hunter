@@ -104,6 +104,14 @@ function ProfitCalculator({ amount }: { readonly amount: number }) {
 
 type TakeoverPhase = 'confirm' | 'progress' | 'done'
 
+// T02676：接管链路失败透传后端 detail（登录态失效/风控/超时…），
+// 只展示不改写、不做子串判定（后端语义不进前端逻辑，T02660 风险区）；
+// 无 detail 或非字符串时给通用兜底文案
+function takeoverErrMsg(err: unknown, fallback: string): string {
+  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  return typeof detail === 'string' && detail ? detail : fallback
+}
+
 interface TakeoverModalProps {
   readonly open: boolean
   readonly order: OrderItem | null
@@ -190,8 +198,8 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
         startCountdown(result.takeover_deadline)
       }
       onSuccess()
-    } catch {
-      message.error('接管失败')
+    } catch (err) {
+      message.error(takeoverErrMsg(err, '接管失败'))
     } finally {
       setLoading(false)
     }
@@ -212,8 +220,8 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
       setPhase('done')
       startAutoClose()
       onSuccess()
-    } catch {
-      message.error('确认失败')
+    } catch (err) {
+      message.error(takeoverErrMsg(err, '确认失败'))
     } finally {
       setLoading(false)
     }
@@ -232,8 +240,8 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
       }
       onClose()
       onSuccess()
-    } catch {
-      message.error('取消失败')
+    } catch (err) {
+      message.error(takeoverErrMsg(err, '取消失败'))
     } finally {
       setLoading(false)
     }
@@ -705,7 +713,7 @@ export default function Orders() {
             />
           )}
           {items.length === 0 ? (
-            <Empty description="暂无订单记录" />
+            <Empty description="暂无抢单记录" />
           ) : (
             <Table
               columns={visibleColumns}
