@@ -18,6 +18,7 @@ import TrendModal from './components/TrendModal'
 import { API_BASE } from '../../utils/apiBase'
 import { TipButton } from '@/components/TipButton'
 import { useFailedSources } from '../../hooks/useFailedSources'
+import { TASK_STATUS } from '../../constants/taskStatus'
 
 // SSE lastEventId 持久化 key：提取到模块级，供 handleSseAppEvent 与 connect 共享（S2004 提取避免嵌套过深）
 const SSE_LAST_EVENT_ID_KEY = 'xh.sse.lastEventId'
@@ -124,7 +125,7 @@ export default function Dashboard() {
       const h = settle(hist, 'histogram')
       if (h) setHistogram(h)
       const t = settle(tasks, 'tasks')
-      if (t) setHistoTasks((t.items || []).filter(item => item.status !== 'deleted'))
+      if (t) setHistoTasks((t.items || []).filter(item => item.status !== TASK_STATUS.DELETED))
       setLoading(false)
     })
   }, [histoTaskId, settle])

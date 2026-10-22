@@ -8,6 +8,14 @@ import {
   ORDER_STATUS_USER_CHOICES,
   orderStatusOptions,
 } from '../orderStatus'
+import {
+  FOREIGN_VOCAB,
+  codeLines,
+  exists,
+  scanStatusLiteralPositions,
+  srcOf,
+  vocabFor,
+} from './statusLiteralScan'
 
 // T02693：T02585 把订单状态收敛到后端 OrderStatus 之后，散落的裸串又长回来了一次
 // （trend / stats_today / business_kpi / buyer / repo_orders 各自写死 'succeeded'/'failed'/
@@ -82,13 +90,13 @@ describe('订单状态单一事实源（T02693）', () => {
     )
   })
 
-  it('已清理文件里禁止裸写状态字面串（防止再次漂移）', () => {    for (const path of CLEANED_FILES) {
-      const src = readFileSync(path, 'utf-8')
+  it('已清理文件里禁止裸写状态字面串（防止再次漂移）', () => {
+    for (const path of CLEANED_FILES) {
+      // 注释不计，判据与任务守卫共用（statusLiteralScan.codeLines）
+      const lines = codeLines(readFileSync(path, 'utf-8'))
       for (const value of Object.values(ORDER_STATUS)) {
-        expect(
-          src,
-          `${path} 裸写了 '${value}'，应改用 ORDER_STATUS 常量`,
-        ).not.toMatch(new RegExp(`['"\`]${value}['"\`]`))
+        const offender = lines.find((line) => new RegExp(`['"\`]${value}['"\`]`).test(line))
+        expect(offender, `${path} 裸写了 '${value}'，应改用 ORDER_STATUS 常量`).toBeUndefined()
       }
     }
   })
@@ -96,5 +104,56 @@ describe('订单状态单一事实源（T02693）', () => {
   it('告警深链兜底值走常量表（与后端告警查询口径同源）', () => {
     const src = readFileSync(resolve(__dirname, '../../utils/alertDeepLink.ts'), 'utf-8')
     expect(src).toMatch(/import\s*\{[^}]*ORDER_STATUS[^}]*\}\s*from\s*'\.\.\/constants\/orderStatus'/)
+  })
+})
+
+// T02850：后端增删一个 OrderStatus 取值时的期望行为：
+//   · 常量表/配置表/标签表 → 前三条断言直接红，必须一起补；
+//   · 已清理文件（CLEANED_FILES）→ 不随取值增减而红（它们引用常量）；
+//   · 外来词表文件（FOREIGN_VOCAB）→ 不随订单域新增取值而红，除非有人在那个文件的状态位置上
+//     真写了新订单取值（第 2 条规则拦这个），登记里的词若已消失则第 3 条红；
+//   · 下面这三处**故意**不在扫描位置上：`key: 'succeeded'`（统计卡 id）、`defaultActiveKey={['failed', …]}`
+//     （告警抽屉页签）、`jump('failed', o)`（雷达跳转 kind）。它们是各自域的标识符，
+//     与订单状态比较无关；扫描只认 status/state/mode 位置与选项 value，所以不会误伤，
+//     也不给它们登记（登记了反而变成「以后可以裸写」的通行证）。
+describe('订单域字面值的全站扫描与外来词表登记（T02850）', () => {
+  const ORDER_VALUES: readonly string[] = Object.values(ORDER_STATUS)
+
+  it('全站把订单取值写在状态/模式位置上的，必须已被收口或已登记词表', () => {
+    const cleanedRel = new Set(
+      CLEANED_FILES.map((p) => p.slice(resolve(__dirname, '../..').length + 1).replace(/\\/g, '/')),
+    )
+    const unregistered = scanStatusLiteralPositions(ORDER_VALUES).filter((h) => {
+      if (cleanedRel.has(h.file)) return false
+      return vocabFor(h.file)?.values.includes(h.value) !== true
+    })
+    expect(
+      unregistered,
+      `新出现的裸写（既不在 CLEANED_FILES 也不在外来词表登记里）：\n${unregistered
+        .map((h) => `${h.file}:${h.line}: ${h.text}`).join('\n')}`,
+    ).toEqual([])
+  })
+
+  it('订单域的外来词表点确实存在且各自属于别的域（不是把守卫关掉）', () => {
+    const relevant = ['pages/Maintenance/Tunnel.tsx', 'pages/Chatbot/index.tsx',
+      'components/layout/UserMenu.tsx', 'pages/Maintenance/BatchRefresh.tsx']
+    for (const rel of relevant) {
+      const v = FOREIGN_VOCAB.find((f) => f.file === rel)
+      expect(v, `${rel} 的外来词表登记丢失`).toBeTruthy()
+      expect(exists(rel), `${rel} 已不在仓库里，登记要删`).toBe(true)
+      expect(v!.domain, `${rel} 的登记没写清属于哪个域`).toMatch(/隧道|消息|昵称|批量刷新/)
+      // 登记里的每个词都要还能在那个文件里找到，否则登记过期（该词已经不再裸写）
+      for (const value of v!.values) {
+        expect(srcOf(rel), `${rel} 已不再出现 '${value}'，登记应删除`).toContain(`'${value}'`)
+      }
+    }
+  })
+
+  it('统计卡与告警页签的 id 不在扫描位置上，别把它们误登记成外来词表', () => {
+    for (const rel of ['pages/Dashboard/components/StatCardsSection.tsx',
+      'components/layout/MainLayout.tsx',
+      'pages/Dashboard/components/AlertRadar.tsx']) {
+      expect(FOREIGN_VOCAB.some((f) => f.file === rel), `${rel} 不该出现在外来词表登记里`).toBe(false)
+    }
   })
 })

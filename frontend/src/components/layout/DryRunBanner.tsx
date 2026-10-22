@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Alert } from 'antd'
 import { ThunderboltOutlined } from '@ant-design/icons'
 import { taskApi } from '../../api'
+import { TASK_STATUS } from '../../constants/taskStatus'
 
 // 轮询间隔 60s：横幅只做状态提示，不需要实时性；
 // 后端演练触发与报告均已异步落库，此处仅读任务配置
@@ -37,7 +38,7 @@ export default function DryRunBanner() {
           if (cancelled) return
           const names = res.items
             .filter((t) => (t as { dry_run?: number | boolean }).dry_run
-              && t.status === 'running')
+              && t.status === TASK_STATUS.RUNNING)
             .map((t) => t.name)
           setDryRunTaskNames(names)
         })

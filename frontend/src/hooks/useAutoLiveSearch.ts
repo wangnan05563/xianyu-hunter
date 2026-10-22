@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { TASK_STATUS } from '../constants/taskStatus'
 import { taskLinkApi } from '../api'
 import type { Task } from '../api/types'
 
@@ -80,7 +81,7 @@ export function useAutoLiveSearch({
       if (!enabled) return {}
       const next: Record<string, number> = {}
       tasks.forEach((t) => {
-        if (t.status === 'running') {
+        if (t.status === TASK_STATUS.RUNNING) {
           // 仅初始化未在 remainMap 中的任务，避免覆盖进行中的倒计时
           // enabled=false→true 时 prev 为空，所有 running 任务都会重新初始化
           next[t.id] = prev[t.id] ?? (t.interval_seconds ?? 60)
@@ -175,7 +176,7 @@ export function useAutoLiveSearch({
   const resumeAll = useCallback(() => {
     const next: Record<string, number> = {}
     tasksRef.current.forEach((t) => {
-      if (t.status === 'running') next[t.id] = t.interval_seconds ?? 60
+      if (t.status === TASK_STATUS.RUNNING) next[t.id] = t.interval_seconds ?? 60
     })
     setRemainMap(next)
   }, [])

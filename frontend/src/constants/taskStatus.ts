@@ -62,5 +62,12 @@ export const taskStatusLabel = (status?: string | null) =>
 export const taskStatusColor = (status?: string | null) =>
   status ? TASK_STATUS_CONFIG[status as TaskStatusValue]?.color : undefined
 
+/** 生成模式选项：与 taskStatusOptions 同形，避免各页面再手写 value/label 对 */
+export function taskModeOptions(
+  values: readonly TaskModeValue[],
+): { value: TaskModeValue; label: string }[] {
+  return values.map((value) => ({ value, label: TASK_MODE_LABELS[value] }))
+}
+
 export const taskModeLabel = (mode?: string | null) =>
   mode ? TASK_MODE_LABELS[mode as TaskModeValue] || mode : '—'

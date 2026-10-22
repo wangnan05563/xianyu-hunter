@@ -24,6 +24,7 @@ import {
   PlayCircleOutlined,
 } from '@ant-design/icons'
 import { authApi, taskApi } from '../../api'
+import { TASK_MODE, taskModeOptions, type TaskModeValue } from '../../constants/taskStatus'
 import type { TaskCreateBody } from '../../api/types'
 
 const { Text, Paragraph } = Typography
@@ -37,7 +38,7 @@ export default function Onboarding() {
   const [keyword, setKeyword] = useState('')
   const [minPrice, setMinPrice] = useState<number | null>(null)
   const [maxPrice, setMaxPrice] = useState<number | null>(null)
-  const [mode, setMode] = useState<string>('notify')
+  const [mode, setMode] = useState<TaskModeValue>(TASK_MODE.NOTIFY)
   const [submitting, setSubmitting] = useState(false)
 
   // 复制 CLI 命令到剪贴板
@@ -170,11 +171,7 @@ export default function Onboarding() {
               value={mode}
               onChange={setMode}
               style={{ width: '100%', marginTop: 4 }}
-              options={[
-                { value: 'notify', label: '仅通知' },
-                { value: 'confirm', label: '确认后执行' },
-                { value: 'auto', label: '自动执行' },
-              ]}
+              options={taskModeOptions([TASK_MODE.NOTIFY, TASK_MODE.CONFIRM, TASK_MODE.AUTO])}
             />
           </div>
           <TipButton

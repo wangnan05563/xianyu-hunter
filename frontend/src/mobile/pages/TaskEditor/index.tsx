@@ -1,6 +1,7 @@
 // frontend/src/mobile/pages/TaskEditor/index.tsx
 import { Card, Form, Input, InputNumber, Button, Select, Spin, App, Space } from 'antd'
 import { useNavigate, useParams } from 'react-router-dom'
+import { TASK_MODE, isTaskMode, type TaskModeValue } from '../../../constants/taskStatus'
 import { useEffect, useState } from 'react'
 import { taskApi } from '../../../api'
 import type { Task, TaskCreateBody } from '../../../api/types'
@@ -24,6 +25,10 @@ export default function MobileTaskEditor() {
   const [form] = Form.useForm<TaskCreateBody>()
   const [loading, setLoading] = useState(isEdit)
   const [saving, setSaving] = useState(false)
+  // mode 不在表单里（移动端没有模式选择控件），单独用 state 承载详情返回的原值：
+  // antd 的 onFinish 只回传**已注册字段**，靠 values.mode 取值会永远是兜底值，
+  // 于是「编辑一个 auto 任务保存后变成 notify（只通知不抢单）」——把执行模式静默改掉。
+  const [mode, setMode] = useState<TaskModeValue>(TASK_MODE.NOTIFY)
 
   useEffect(() => {
     if (!id) return
@@ -32,13 +37,13 @@ export default function MobileTaskEditor() {
     taskApi.get(id)
       .then((task: Task) => {
         if (cancelled) return
+        setMode(isTaskMode(task.mode) ? task.mode : TASK_MODE.NOTIFY)
         form.setFieldsValue({
           keyword: task.keyword || '',
           name: task.name || '',
           min_price: task.min_price,
           max_price: task.max_price,
           max_publish_days: task.max_publish_days,
-          mode: task.mode || 'keyword',
           region: task.region,
           exclude_words: safeParseStringArray(task.exclude_words),
         })
@@ -60,7 +65,7 @@ export default function MobileTaskEditor() {
         min_price: values.min_price ?? null,
         max_price: values.max_price ?? null,
         max_publish_days: values.max_publish_days ?? null,
-        mode: values.mode || 'keyword',
+        mode,
         region: values.region ?? null,
         exclude_words: values.exclude_words ?? [],
       }
@@ -88,7 +93,6 @@ export default function MobileTaskEditor() {
         layout="vertical"
         onFinish={handleFinish}
         initialValues={{
-          mode: 'keyword',
           exclude_words: [],
         }}
       >

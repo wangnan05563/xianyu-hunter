@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons'
 import ReactECharts, { type EChartOption } from '../../components/charts/EChart'
 import { taskApi, taskDetailApi, taskLinkApi, evalApi, statsApi, type Task, type TaskRun, type TaskDep, type EvalItem, type TaskLink, type TrendSeries } from '../../api'
-import { taskStatusColor } from '../../constants/taskStatus'
+import { TASK_STATUS, taskStatusColor } from '../../constants/taskStatus'
 import { TipButton } from '@/components/TipButton'
 import FetchFailedHint from '@/components/FetchFailedHint'
 import DataBlock from '@/components/DataBlock'
@@ -507,10 +507,10 @@ export default function TaskDetail() {
           <>
             <Card title={`任务详情：${task.name}`} style={{ marginBottom: 16 }}>
               <Space style={{ marginBottom: 16 }}>
-                <TipButton tip="启动或重启该任务" type="primary" icon={<PlayCircleOutlined />} loading={actionLoading} onClick={() => handleControl('restart')} disabled={task.status === 'running'}>启动</TipButton>
-                <TipButton tip="暂停当前运行中的任务" icon={<PauseCircleOutlined />} loading={actionLoading} onClick={() => handleControl('pause')} disabled={task.status !== 'running'}>暂停</TipButton>
-                <TipButton tip="停止当前任务" danger icon={<StopOutlined />} loading={actionLoading} onClick={() => handleControl('stop')} disabled={task.status === 'stopped'}>停止</TipButton>
-                <TipButton tip="立即执行一轮演练（不产生真实订单，同任务 60 秒间隔）" icon={<ThunderboltOutlined />} loading={dryRunLoading} onClick={handleDryRun} disabled={task.status !== 'running'}>演练一次</TipButton>
+                <TipButton tip="启动或重启该任务" type="primary" icon={<PlayCircleOutlined />} loading={actionLoading} onClick={() => handleControl('restart')} disabled={task.status === TASK_STATUS.RUNNING}>启动</TipButton>
+                <TipButton tip="暂停当前运行中的任务" icon={<PauseCircleOutlined />} loading={actionLoading} onClick={() => handleControl('pause')} disabled={task.status !== TASK_STATUS.RUNNING}>暂停</TipButton>
+                <TipButton tip="停止当前任务" danger icon={<StopOutlined />} loading={actionLoading} onClick={() => handleControl('stop')} disabled={task.status === TASK_STATUS.STOPPED}>停止</TipButton>
+                <TipButton tip="立即执行一轮演练（不产生真实订单，同任务 60 秒间隔）" icon={<ThunderboltOutlined />} loading={dryRunLoading} onClick={handleDryRun} disabled={task.status !== TASK_STATUS.RUNNING}>演练一次</TipButton>
                 <TipButton tip="编辑该任务配置" onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</TipButton>
               </Space>
 
