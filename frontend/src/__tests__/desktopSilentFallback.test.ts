@@ -99,3 +99,62 @@ describe('桌面端静默兜底归零（T02700）', () => {
     expect(page).toContain('disabled={!!failed.config}')
   })
 })
+
+// T02900：Chatbot 配置页「任一区块重试 → 重加载整页」的守门。
+// 按调用点计数，不是「文件里出现过局部重试就算过」
+describe('Chatbot 配置页的重试只重取失败那一路（T02900）', () => {
+  const rel = 'pages/Chatbot/Config.tsx'
+  const src = read(rel)
+  const code = src
+    .split(/\r?\n/)
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join('\n')
+
+  it('loadAll() 只剩首屏一处调用', () => {
+    const calls = code.match(/\bloadAll\(\)/g) ?? []
+    expect(calls.length, '整取又回到了失败重试路径上，会重加载整页、重置其它区块').toBe(1)
+  })
+
+  it('每处 onRetry 都只重取自己那一路', () => {
+    const retryLines = code.split('\n').filter((l) => l.includes('onRetry={'))
+    expect(retryLines.length, '本页的失败重试入口数量变了，核对后更新本条').toBe(6)
+    for (const l of retryLines) {
+      expect(l, 'onRetry 又指向 loadAll()：一处失败重取五路，会重置页签与其它区块').not.toContain('loadAll')
+      // 局部取数两种合法写法：reload('具体源')，或该区块专用的 loader（审计日志分页第 6 处）
+      expect(l, 'onRetry 必须走 reload(具体源) 或本区块专用的局部 loader').toMatch(
+        /reload\('([a-zA-Z]+)'\)|loadAuditLogs\(\)/,
+      )
+    }
+    // 逐处配对：区块标的是哪个源，重试就必须只取那个源。
+    // 只断言「五路都能重试」的话，接错源（版本区块去重取 FAQ，版本永远刷不出来）照样全绿
+    const pairs: string[] = []
+    for (const m of code.matchAll(/source=\{SOURCE_LABELS\.(\w+)\}([^>]*?)onRetry=\{\(\) => void ([^}]+)/gs)) {
+      const label = m[1]
+      const call = m[3]
+      const arg = call.match(/reload\('(\w+)'\)/)?.[1]
+      const ok = arg === label || (label === 'audit' && call.startsWith('loadAuditLogs'))
+      if (!ok) pairs.push(`区块 ${label} 的重试实际调的是 ${call}`)
+    }
+    expect(pairs, '重试接错了源，失败的那一路永远刷不出来：\n' + pairs.join('\n')).toEqual([])
+    const matched = [...code.matchAll(/source=\{SOURCE_LABELS\.(\w+)\}[^>]*?onRetry=/gs)].length
+    expect(matched, '能配对上 SOURCE_LABELS 的重试入口少了（多半是某处写法改了）').toBe(6)
+  })
+
+  it('局部重试不碰整页 loading，也不重取别的源', () => {
+    const from = src.indexOf('const reload = useCallback')
+    expect(from, 'reload helper 不见了').toBeGreaterThan(-1)
+    const end = src.indexOf('useEffect(() => {', from)
+    const body = src.slice(from, end)
+    expect(body.length, 'reload 函数体解析为空，多半是写法改了').toBeGreaterThan(0)
+    expect(body, 'reload 里又 setLoading：整页骨架屏会把页签与其它区块一起打回').not.toContain('setLoading(')
+    // 局部重试只应命中自己那一路的接口：出现两路以上就是在重加载整页
+    const fetches = body.match(/chatbotApi\.[a-zA-Z]+\(/g) ?? []
+    expect(fetches.length, 'reload 的分支写法变了，核对后更新本条').toBe(5)
+    expect(new Set(fetches).size, 'reload 一条分支里混进了别的源').toBe(5)
+  })
+
+  it('reload 的调用点逐个钉住（5 处重试 + 2 处刷新）', () => {
+    const calls = code.match(/\breload\(/g) ?? []
+    expect(calls.length, '局部重试的位点数量变了，核对后更新本条').toBe(7)
+  })
+})

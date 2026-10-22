@@ -93,6 +93,50 @@ export default function ChatbotConfigPage() {
     setLoading(false)
   }, [settle, mark])
 
+  // T02900：区块级重试。原先每个失败区块的「重试」都指向 loadAll()，一处失败要把五路一起重取：
+  // setLoading(true) 让整页骨架屏闪一遍，活动页签之外的区块被顺手重置，
+  // 而 getConfig() 成功时又会把正在编辑的表单覆盖回后端值。
+  // 这里只重取失败的那一路：不碰 loading，除重试 config 之外不碰表单。
+  const reload = useCallback(async (...sources: ConfigSource[]): Promise<void> => {
+    await Promise.all(sources.map(async (source) => {
+      switch (source) {
+        case 'config': {
+          const r = await Promise.allSettled([chatbotApi.getConfig()])
+          const latest = settle(r[0], 'config')
+          if (latest) setConfig(latest)
+          break
+        }
+        case 'kbStatus': {
+          const r = await Promise.allSettled([chatbotApi.getKBStatus()])
+          const status = settle(r[0], 'kbStatus')
+          if (status) setKbStatus(status)
+          break
+        }
+        case 'kbVersions': {
+          const r = await Promise.allSettled([chatbotApi.listKBVersions()])
+          const versions = settle(r[0], 'kbVersions')
+          if (versions) setKbVersions(versions)
+          break
+        }
+        case 'faqs': {
+          const r = await Promise.allSettled([chatbotApi.listFAQ()])
+          const faqList = settle(r[0], 'faqs')
+          if (faqList) setFaqs(faqList)
+          break
+        }
+        case 'audit':
+        case 'rebuild': {
+          // 重建记录与审计日志同源，重取一次两头都要消账（口径同 loadAll）
+          const r = await Promise.allSettled([chatbotApi.listAuditLogs(1, 50)])
+          const audit = settle(r[0], 'audit')
+          if (audit) setAuditLogs(audit.items)
+          mark('rebuild', !!audit)
+          break
+        }
+      }
+    }))
+  }, [settle, mark])
+
   useEffect(() => {
     loadAll()
   }, [loadAll])
@@ -107,14 +151,14 @@ export default function ChatbotConfigPage() {
         setKbStatus(status)
         if (!status.building) {
           // 构建结束：停止轮询并整体刷新（拿到新版本列表和审计日志）
-          loadAll()
+          reload('kbStatus', 'kbVersions', 'audit')
         }
       } catch {
         // 静默失败，下次轮询继续
       }
     }, 2000)
     return () => clearInterval(timer)
-  }, [kbStatus?.building, loadAll])
+  }, [kbStatus?.building, reload])
 
   // 按 key 防抖的 PUT 定时器（H-6/7/8 修复：Slider/Input 高频 onChange 避免洪水 PUT）
   const updateTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -166,7 +210,7 @@ export default function ChatbotConfigPage() {
         try {
           await chatbotApi.rollbackKB(versionId)
           message.success('回滚成功')
-          loadAll()
+          reload('kbStatus', 'kbVersions', 'audit')
         } catch {
           message.error('回滚失败')
         }
@@ -219,7 +263,7 @@ export default function ChatbotConfigPage() {
     return (
       <FetchFailedHint
         source={SOURCE_LABELS.config}
-        onRetry={() => void loadAll()}
+        onRetry={() => void reload('config')}
       />
     )
   }
@@ -434,7 +478,7 @@ export default function ChatbotConfigPage() {
                   source={SOURCE_LABELS.kbStatus}
                   count={kbStatus ? 1 : 0}
                   emptyText="未取到知识库状态"
-                  onRetry={() => void loadAll()}
+                  onRetry={() => void reload('kbStatus')}
                 >
                   {kbStatus && <KBStatusCard status={kbStatus} onRebuild={handleRebuild} />}
                 </DataBlock>
@@ -452,7 +496,7 @@ export default function ChatbotConfigPage() {
                     source={SOURCE_LABELS.rebuild}
                     count={rebuildLogs.length}
                     emptyText="暂无重建记录"
-                    onRetry={() => void loadAll()}
+                    onRetry={() => void reload('rebuild')}
                   >
                     <List
                       size="small"
@@ -499,7 +543,7 @@ export default function ChatbotConfigPage() {
                   />
                 </div>
                 {failed.kbVersions && (
-                  <FetchFailedHint source={SOURCE_LABELS.kbVersions} onRetry={() => void loadAll()} />
+                  <FetchFailedHint source={SOURCE_LABELS.kbVersions} onRetry={() => void reload('kbVersions')} />
                 )}
                 <Table
                   size="small"
@@ -558,7 +602,7 @@ export default function ChatbotConfigPage() {
                   新增 FAQ
                 </TipButton>
                 {failed.faqs && (
-                  <FetchFailedHint source={SOURCE_LABELS.faqs} onRetry={() => void loadAll()} />
+                  <FetchFailedHint source={SOURCE_LABELS.faqs} onRetry={() => void reload('faqs')} />
                 )}
                 <Table
                   size="small"
