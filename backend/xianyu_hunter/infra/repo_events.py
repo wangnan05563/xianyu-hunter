@@ -181,6 +181,15 @@ class EventsMixin:
     """Events 领域的 Repository 方法"""
 
     def save_event(self, event: dict) -> int:
+        # T02883：type 没有可推断的默认值，缺失必须报错而不是静默落 NULL。
+        # EventRow.type 是 nullable，漏写不报数据库错，代价是行还在但时间线只能显示通用「事件」，
+        # 订阅过滤（按 type 精确匹配）把整行筛掉 —— 比抛错更难排查。
+        # 对比：request_id / user_id 有 ContextVar 与活跃用户可推断，所以那里是补默认值。
+        if not event.get("type"):
+            raise ValueError(
+                f"save_event 缺少 type（stage={event.get('stage')}）："
+                "事件类型必须显式指定，落 NULL 会让时间线标签与订阅过滤双双失效"
+            )
         # 自动注入 request_id：调用方未显式指定时从 ContextVar 读取
         # 确保同一请求触发的所有事件都被关联到同一流水号
         if "request_id" not in event or not event.get("request_id"):
@@ -225,7 +234,13 @@ class EventsMixin:
         """
         task_id = event.get("task_id")
         item_id = event.get("item_id")
-        event_type = event.get("type", "eval.scored")
+        # T02883：兜底值必须同时落到 INSERT 上。原先 `event.get("type", "eval.scored")`
+        # 只喂给 DELETE 过滤，INSERT 走原始 event 字典 —— 调用方漏写（或写成空串）时
+        # 行以 type=NULL 落库：时间线看不出类型、按 type 的订阅过滤整行筛掉，
+        # 而 idx_eval_scored_unique 是 WHERE type='eval.scored' 的部分索引，NULL 行不受它约束
+        # → 去重也一起失效（同一个坑的两种症状）。
+        event_type = event.get("type") or "eval.scored"
+        event["type"] = event_type
         # 调用方通过 user_id 关键字传入时，统一注入 event 字典，
         # 让 INSERT 路径自动写入 EventRow.user_id 列
         if user_id is not None and "user_id" not in event:

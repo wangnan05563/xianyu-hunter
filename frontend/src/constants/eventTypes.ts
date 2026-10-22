@@ -31,6 +31,8 @@ export const EVENT_TYPE_META: Record<string, EventTypeMeta> = {
   'task.stopped': { label: '任务停止', color: 'default', icon: createElement(CloseCircleOutlined) },
   'task.paused': { label: '任务暂停', color: 'orange', icon: createElement(ExclamationCircleOutlined) },
   'task.error': { label: '任务异常', color: 'red', icon: createElement(CloseCircleOutlined) },
+  // T02883：依赖链激活原先 type=NULL，时间线标签只能兜底成通用「事件」
+  'task.dep_triggered': { label: '依赖链激活', color: 'blue', icon: createElement(ThunderboltOutlined) },
   // worker.py 写死字面串，不在 EventType 枚举里（两张库里 16314 + 219 行的主力类型）
   'task.search_done': { label: '搜索完成', color: 'blue', icon: createElement(InfoCircleOutlined) },
   'task.buy_dry_run': { label: '演练下单', color: 'purple', icon: createElement(ShoppingOutlined) },
@@ -56,6 +58,7 @@ export const EVENT_TYPE_META: Record<string, EventTypeMeta> = {
   // 认证
   'login.expired': { label: '登录过期', color: 'red', icon: createElement(ExclamationCircleOutlined) },
   'auth.expired': { label: '会话过期', color: 'red', icon: createElement(ExclamationCircleOutlined) },
+  'auth.cookie_self_heal': { label: '登录态自愈', color: 'green', icon: createElement(ToolOutlined) },
   // 系统
   'system.error': { label: '系统错误', color: 'red', icon: createElement(CloseCircleOutlined) },
   // 维护（api_maintenance._log_cleanup_action 写 f"maintenance.{category}"）
@@ -128,6 +131,9 @@ const SUBSCRIBABLE_EVENTS: readonly SubscribableEventType[] = [
   { value: 'waf.blocked', severity: 'critical' },
   { value: 'login.expired', severity: 'critical' },
   { value: 'auth.expired', severity: 'critical' },
+  // T02883：补上 type 之后这两路才谈得上订阅过滤（NULL 行会被按 type 的过滤整体筛掉）
+  { value: 'auth.cookie_self_heal', severity: 'important' },
+  { value: 'task.dep_triggered', severity: 'info' },
   { value: 'task.started', severity: 'info' },
   { value: 'task.stopped', severity: 'info' },
   { value: 'task.paused', severity: 'info' },
@@ -171,6 +177,8 @@ export const ENUM_TO_DOT: Record<string, string> = {
   WAF_TRIGGERED: 'waf.triggered',
   WAF_BLOCKED: 'waf.blocked',
   LOGIN_EXPIRED: 'login.expired',
+  TASK_DEP_TRIGGERED: 'task.dep_triggered',
+  AUTH_COOKIE_SELF_HEAL: 'auth.cookie_self_heal',
   AUTH_EXPIRED: 'auth.expired',
   TASK_STARTED: 'task.started',
   TASK_STOPPED: 'task.stopped',

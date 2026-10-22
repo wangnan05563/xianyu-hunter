@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from xianyu_hunter.container import Container
+from xianyu_hunter.domain.events import EventType
 from xianyu_hunter.domain.order import ORDER_STATUS_VALUES, PENDING_STATUSES, OrderStatus
 from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.web.deps import get_container
@@ -373,6 +374,7 @@ def _trigger_dependent_tasks(container: Container, order: dict, user_id: str | N
         container.repo.update_task_status(downstream_task_id, "running", user_id=user_id or "default")
         # 记录事件，方便追溯"谁触发了谁"
         container.repo.save_event({
+            "type": EventType.TASK_DEP_TRIGGERED.value,
             "task_id": downstream_task_id,
             "stage": "dep_triggered",
             "level": "info",

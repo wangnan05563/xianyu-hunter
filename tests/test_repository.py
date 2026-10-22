@@ -72,6 +72,7 @@ def test_event_save_and_list(tmp_repo: Repository) -> None:
     """事件写入与按级别过滤"""
     for i, lvl in enumerate(["INFO", "WARN", "ERROR", "INFO"]):
         tmp_repo.save_event({
+            "type": "task.search_done",
             "task_id": "t1",
             "stage": "search",
             "level": lvl,

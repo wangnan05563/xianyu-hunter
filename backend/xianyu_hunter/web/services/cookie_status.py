@@ -25,6 +25,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from xianyu_hunter.domain.events import EventType
 from xianyu_hunter.infra.logger import get_logger
 from xianyu_hunter.paths import get_data_dir
 from xianyu_hunter.web.services.cookie_store import (
@@ -593,6 +594,7 @@ def _record_self_heal_event(uid: str, repaired: list[dict], donors: dict[str, st
         if not getattr(container, "repo", None):
             return
         container.repo.save_event({
+            "type": EventType.AUTH_COOKIE_SELF_HEAL.value,
             "stage": "cookie_self_heal",
             "level": "info",
             "message": "登录态自动自愈：" + "；".join(

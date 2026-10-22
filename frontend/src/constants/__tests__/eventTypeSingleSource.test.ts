@@ -119,12 +119,32 @@ describe('Dashboard 幽灵表已并入单一事实源（T02842）', () => {
     }
   })
 
-  it('dep_triggered 不再是事件类型（后端只写 stage，type 留空）', () => {
-    // scheduler.py:390 / api_orders.py:377 的 save_event 行没有 "type" 键，
-    // EventRow.type nullable → 落库是 type=NULL + stage=dep_triggered，两张库 0 行。
-    // 表里曾按 "type=dep_triggered" 注册过，属同类幽灵；修后端那条写路径另开单。
+  it('dep_triggered 仍不是事件类型，但 task.dep_triggered 必须注册（T02883）', () => {
+    // 原先 scheduler.py:390 / api_orders.py:375 / cookie_status.py:595 三处 save_event
+    // 只写 stage、type 留 NULL（nullable 不报错），时间线标签退化成通用「事件」。
+    // T02883 补上 type 后，裸 stage 词依然不接受：它是 stage 不是类型，注册进来就又是幽灵键。
     expect(EVENT_TYPE_META['dep_triggered']).toBeUndefined()
     expect(eventTypeMeta('dep_triggered')).toBeUndefined()
+    expect(EVENT_TYPE_META['task.dep_triggered'], '依赖链激活没注册，标签会退化').toBeTruthy()
+    expect(eventTypeMeta('auth.cookie_self_heal'), '登录态自愈没注册').toBeTruthy()
+    // 中文名逐字钉住：文案在别处再写一份就是 T02842 收掉的老病
+    expect(eventTypeLabel('task.dep_triggered')).toBe('依赖链激活')
+    expect(eventTypeLabel('auth.cookie_self_heal')).toBe('登录态自愈')
+  })
+
+  it('两个新类型可订阅、订阅设置的大写枚举名也能映射过来（T02883）', () => {
+    // 补 type 的意义在于「用户能筛到它」。这三个位置（后端枚举值 / 前端订阅项 / 大写枚举名映射）
+    // 任一处漏了都不报错：前者让本用例红，后两处只有运行时才看得出来，所以逐名配对钉死。
+    const backendEnum = parseBackendEventTypeEnum()
+    const optionLabel = new Map(EVENT_TYPE_OPTIONS.map((o) => [o.value, o.label]))
+    for (const [enumName, dot, label] of [
+      ['TASK_DEP_TRIGGERED', 'task.dep_triggered', '依赖链激活'],
+      ['AUTH_COOKIE_SELF_HEAL', 'auth.cookie_self_heal', '登录态自愈'],
+    ] as const) {
+      expect(backendEnum[enumName], `后端 EventType.${enumName} 不在了或改了字面值`).toBe(dot)
+      expect(ENUM_TO_DOT[enumName], `${enumName} 没有点分映射，通知订阅会静默丢掉这个类型`).toBe(dot)
+      expect(optionLabel.get(dot), `${dot} 不在订阅过滤项里，用户筛不到这类事件`).toBe(label)
+    }
   })
 
   it('下划线格式键一律不接受（DB 里 type 只有点分形态）', () => {

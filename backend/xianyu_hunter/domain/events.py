@@ -14,6 +14,8 @@ class EventType(str, Enum):
     TASK_PAUSED = "task.paused"
     TASK_ERROR = "task.error"
     TASK_SEARCH_DONE = "task.search_done"
+    # T02883：依赖链激活原先只写 stage="dep_triggered"、type 留 NULL，前端标签退化成「事件」且被订阅过滤筛掉
+    TASK_DEP_TRIGGERED = "task.dep_triggered"
     # 商品与评估
     ITEM_DISCOVERED = "item.discovered"
     ITEM_FOUND = "item.found"  # 旧枚举兼容
@@ -35,6 +37,8 @@ class EventType(str, Enum):
     # 认证
     LOGIN_EXPIRED = "login.expired"
     AUTH_EXPIRED = "auth.expired"
+    # T02883：登录态自愈事件同样补上类型（原先只有 stage="cookie_self_heal"）
+    AUTH_COOKIE_SELF_HEAL = "auth.cookie_self_heal"
     # 系统
     SYSTEM_ERROR = "system.error"
     # 维护（DB 实际存储的事件类型）
@@ -69,6 +73,8 @@ EVENT_SEVERITY: dict[EventType, str] = {
     EventType.LOGIN_EXPIRED: "critical",  # 登录过期需立即重扫
     EventType.AUTH_EXPIRED: "important",  # 会话过期，可延迟但需尽快处理
     EventType.TASK_ERROR: "critical",     # 任务异常
+    EventType.TASK_DEP_TRIGGERED: "info",   # 依赖链激活属常规流转
+    EventType.AUTH_COOKIE_SELF_HEAL: "important",  # 自愈换了哪份 cookie 需让用户知道
     EventType.SYSTEM_ERROR: "critical",    # 系统级错误需立即告警
     EventType.BUY_FAILED: "important",    # 买失败但任务继续
     EventType.PRICE_DROPPED: "important",  # 降价提醒需尽快触达（捡漏决策窗口短）

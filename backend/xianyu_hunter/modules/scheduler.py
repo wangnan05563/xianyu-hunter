@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from xianyu_hunter.domain.events import EventType
 from xianyu_hunter.domain.task import Task, TaskStatus
 from xianyu_hunter.infra.logger import get_logger
 
@@ -388,6 +389,7 @@ class TaskScheduler:
 
             self._repo.update_task_status(downstream_id, "running")
             self._repo.save_event({
+                "type": EventType.TASK_DEP_TRIGGERED.value,
                 "task_id": downstream_id,
                 "stage": "dep_triggered",
                 "level": "info",
