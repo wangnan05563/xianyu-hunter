@@ -146,12 +146,19 @@ const SUBSCRIBABLE_EVENTS: readonly SubscribableEventType[] = [
   { value: 'maintenance.cache', severity: 'info' },
 ]
 
-// 可订阅值必须都在 EVENT_TYPE_META 里：这里直接抛而不是静默回落，
-// 否则漏注册会先炸成一个看不懂的 TypeError（或更糟——显示英文末段没人管）
-function subscribableLabel(value: string): string {
+// 可订阅值必须都在 EVENT_TYPE_META 里。
+// T02925：原先这里直接 throw，而本函数被下面的 EVENT_TYPE_OPTIONS 在模块顶层调用 ——
+// 也就是 throw 发生在 **import 期**：一个标签漏注册会让整条 eventTypes import 链崩掉，
+// 时间线、日志、通知订阅设置、移动端卡片标题一起白屏（守卫有效，但失败面是全站）。
+// 响度改由用例承担（eventTypeSingleSource「订阅过滤项的文案取自同一张表」会红），
+// 运行时回落成原始 type —— 与 eventTypeLabel() 对未注册类型的既有口径一致。
+// 导出只为让「降级路径」可被用例覆盖：这条分支在两张表对齐时走不到，
+// 不导出的话把它改坏（回落成空串）也没有用例会红（T02925 探针 P4）。
+export function subscribableLabel(value: string): string {
   const meta = EVENT_TYPE_META[value]
-  if (!meta) throw new Error(`可订阅事件类型 ${value} 未在 EVENT_TYPE_META 注册标签`)
-  return meta.label
+  if (meta) return meta.label
+  console.warn(`[eventTypes] 可订阅事件类型 ${value} 未在 EVENT_TYPE_META 注册标签`)
+  return value
 }
 
 export const EVENT_TYPE_OPTIONS: { value: string; label: string; severity: string }[] =
@@ -177,8 +184,6 @@ export const ENUM_TO_DOT: Record<string, string> = {
   WAF_TRIGGERED: 'waf.triggered',
   WAF_BLOCKED: 'waf.blocked',
   LOGIN_EXPIRED: 'login.expired',
-  TASK_DEP_TRIGGERED: 'task.dep_triggered',
-  AUTH_COOKIE_SELF_HEAL: 'auth.cookie_self_heal',
   AUTH_EXPIRED: 'auth.expired',
   TASK_STARTED: 'task.started',
   TASK_STOPPED: 'task.stopped',
