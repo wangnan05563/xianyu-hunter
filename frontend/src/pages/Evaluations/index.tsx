@@ -14,7 +14,8 @@ import dayjs from 'dayjs'
 import { taskApi, type EvalItem } from '../../api'
 import { parseEvalDeepLink, evalDeepLinkMatchesFilters } from '../../utils/alertDeepLink'
 import { usePersistentState } from '../../hooks/usePersistentState'
-import { useColumnConfig, type ColumnConfig } from '../../hooks/useColumnConfig'
+import { useColumnConfig } from '../../hooks/useColumnConfig'
+import { COLUMN_DEFINITIONS } from './columnDefinitions'
 import EvalHeatmap from './components/EvalHeatmap'
 import ResultBarChart from './components/ResultBarChart'
 import PriceHistogram from './components/PriceHistogram'
@@ -55,28 +56,6 @@ const COLLAPSED_COLUMN_OVERRIDES: Record<string, Record<string, unknown>> = {
   publish: { responsive: undefined },
   condition_tags: { width: 180 },
 }
-
-const COLUMN_DEFINITIONS: ColumnConfig[] = [
-  { key: 'task_id', label: '任务ID' },
-  { key: 'thumb', label: '图片' },
-  { key: 'title', label: '标题', locked: true },
-  { key: 'price', label: '价格' },
-  { key: 'estimated_profit', label: '预估盈利' },
-  { key: 'seller', label: '卖家' },
-  { key: 'region', label: '地区' },
-  { key: 'brand', label: '品牌' },
-  { key: 'want', label: '想要' },
-  { key: 'view', label: '浏览' },
-  { key: 'publish', label: '发布时间' },
-  { key: 'is_sold', label: '状态' },
-  { key: 'condition', label: '成色' },
-  { key: 'condition_tags', label: '成色标签' },
-  { key: 'score', label: '评分', locked: true },
-  { key: 'risk', label: '风险' },
-  { key: 'ai', label: 'AI' },
-  { key: 'collect', label: '官方采集' },
-  { key: 'feedback', label: '反馈' },
-]
 
 function ExpandedDetail({ r, trendCache, trendLoading, trendError, loadSellerTrend }: {
   readonly r: EvalItem

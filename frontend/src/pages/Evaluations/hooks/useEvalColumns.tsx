@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import type { EvalItem } from '../../../api'
 import { RISK_LEVEL_CONFIG } from '../../../constants/riskLevels'
+import { orderStatusColor, orderStatusLabel } from '../../../constants/orderStatus'
 import { isDataInsufficient, getInsufficientReason, resolveActionDisplay, type ActionPlaceholderType } from '../utils'
 
 const ACTION_PLACEHOLDER_TEXT: Record<Exclude<ActionPlaceholderType, null>, string> = {
@@ -428,15 +429,9 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
       render: (_: unknown, r: EvalItem) => {
         const status = r.payload?.order_status
         if (status) {
-          const statusMap: Record<string, { color: string; label: string }> = {
-            pending_pay: { color: 'orange', label: '待支付' },
-            succeeded: { color: 'green', label: '已成功' },
-            takeover_pending: { color: 'gold', label: '接管中' },
-            cancelled: { color: 'default', label: '已取消' },
-            failed: { color: 'red', label: '失败' },
-          }
-          const cfg = statusMap[status] || { color: 'default', label: status }
-          return <Tag color={cfg.color}>{cfg.label}</Tag>
+          // 文案/颜色统一取 constants/orderStatus：本列原先自带第三份 statusMap，
+          // 漏了 dry_run，演练单会直接露出英文码（T02650 登记列时一并收口）
+          return <Tag color={orderStatusColor(status)}>{orderStatusLabel(status)}</Tag>
         }
         return <span style={{ color: 'var(--xh-text-quaternary)' }}>—</span>
       },
