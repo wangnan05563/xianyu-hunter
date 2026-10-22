@@ -4,6 +4,7 @@ import { Tooltip, theme, Badge } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import { CloseOutlined, MinusOutlined, SettingOutlined, SwapOutlined } from '@ant-design/icons'
 import type { SheetItem, SheetPreferences } from '../../stores/sheetStore'
+import { formatShortDateTime } from '../../utils/timeFormat'
 
 interface SheetTabsProps {
   readonly sheets: SheetItem[]
@@ -15,16 +16,7 @@ interface SheetTabsProps {
   readonly onOpenPreferences: () => void
 }
 
-/** 格式化时间戳为可读字符串 */
-function formatOpenedAt(ts: number): string {
-  try {
-    const d = new Date(ts)
-    const pad = (n: number) => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-  } catch {
-    return '—'
-  }
-}
+const formatOpenedAt = (ts: number): string => formatShortDateTime(ts, 'date-time')
 
 interface TabItemProps {
   readonly sheet: SheetItem

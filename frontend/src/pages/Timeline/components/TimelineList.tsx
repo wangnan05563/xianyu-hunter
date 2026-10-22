@@ -1,6 +1,7 @@
 import { Spin, Empty, Pagination } from 'antd'
 import type { TimelineEntry } from '../../../api'
 import { ORDER_STATUS } from '../../../constants/orderStatus'
+import { formatShortDateTime } from '../../../utils/timeFormat'
 import TimelineItem from './TimelineItem'
 
 interface TimelineListProps {
@@ -76,10 +77,7 @@ export default function TimelineList({
                     lineHeight: '20px',
                     paddingTop: 2,
                   }}>
-                    {new Date(item._ts).toLocaleString('zh-CN', {
-                      month: '2-digit', day: '2-digit',
-                      hour: '2-digit', minute: '2-digit', second: '2-digit',
-                    })}
+                    {formatShortDateTime(item._ts, 'month-day-time')}
                   </div>
 
                   {/* 圆点 */}

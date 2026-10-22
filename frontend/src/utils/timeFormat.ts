@@ -10,18 +10,86 @@
  * （Evaluations/Items 的 formatLocalTime、评估明细列的 formatPublishTime），
  * 判空口径一致、只是没处可放，收到这里；要「空值显示占位符」请用 formatDateTime
  */
-export function tryFormatDateTime(value: string | number | null | undefined): string | null {
-  if (value === null || value === undefined || value === '') return null
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleString('zh-CN')
+export function tryFormatDateTime(value: TimeInput | Date): string | null {
+  const d = parseTime(value)
+  return d === null ? null : d.toLocaleString('zh-CN')
 }
 
 /** ISO 时间 → 本地可读时间；与 pages/Orders 表格列同一口径，空值给「—」而不是 1970 年 */
-export function formatDateTime(value: string | number | null | undefined): string {
+export function formatDateTime(value: TimeInput | Date): string {
   const text = tryFormatDateTime(value)
   if (text) return text
-  return value === null || value === undefined || value === '' ? '—' : String(value)
+  return isBlank(value) ? '—' : String(value)
+}
+
+/**
+ * 缩写档位（T02901 第三波 / T02905）：窄展示位（图表轴、时间线行、页签标题）放不下整时间戳，
+ * 但缩写同样需要空值与 Invalid Date 护栏——`Intl.DateTimeFormat().format(NaN)` 是直接抛
+ * RangeError 的，各处自己写 Intl 时没人兜这一层。
+ *
+ * 站内原本有五种缩写长相各自实现：
+ * `10-19 05:40`（图上）、`05:40`（任务趋势轴）、`2026-10-19 05:40`（页签，手工 pad）、
+ * `2026-10-19`（关于页发布日，手工 pad）、以及 `formatDateTime(x).slice(5, 16)`
+ * （先落地整时间戳再按字符位切，locale 数据一改就切歪）。这里收到一份预设表，
+ * 分隔符与位数交给宿主 Intl，与 formatDateTime 保持同一个 locale 来源。
+ */
+const SHORT_FORMATS = {
+  date: { year: 'numeric', month: '2-digit', day: '2-digit' },
+  /** 图表轴上跨天展示：只有月日 */
+  'month-day': { month: '2-digit', day: '2-digit' },
+  'month-day-time': { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' },
+  'date-time': {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  },
+  time: { hour: '2-digit', minute: '2-digit' },
+} as const
+
+export type ShortTimeScope = keyof typeof SHORT_FORMATS
+
+// 每个档位一个 formatter：Intl.DateTimeFormat 构造成本不低，图表每帧都新建会抖
+const shortFormatters = new Map<ShortTimeScope, Intl.DateTimeFormat>()
+
+function shortFormatter(scope: ShortTimeScope): Intl.DateTimeFormat {
+  let f = shortFormatters.get(scope)
+  if (!f) {
+    f = new Intl.DateTimeFormat('zh-CN', SHORT_FORMATS[scope])
+    shortFormatters.set(scope, f)
+  }
+  return f
+}
+
+/** 缩写版：解不出或空值给 null（调用方据此隐藏整行，与 tryFormatDateTime 同口径） */
+export function tryFormatShortDateTime(
+  value: TimeInput | Date,
+  scope: ShortTimeScope,
+): string | null {
+  const d = parseTime(value)
+  return d === null ? null : shortFormatter(scope).format(d)
+}
+
+/** 缩写版：空值给「—」，脏值原样回显（与 formatDateTime 同一取舍） */
+export function formatShortDateTime(value: TimeInput | Date, scope: ShortTimeScope): string {
+  const text = tryFormatShortDateTime(value, scope)
+  if (text) return text
+  return isBlank(value) ? '—' : String(value)
+}
+
+type TimeInput = string | number | null | undefined
+
+function isBlank(value: TimeInput | Date): boolean {
+  return value === null || value === undefined || value === ''
+}
+
+/** 唯一的判空/判 Invalid Date 入口：两种形状共用，避免「整时间戳有护栏、缩写没有」 */
+function parseTime(value: TimeInput | Date): Date | null {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
+  if (isBlank(value)) return null
+  const d = new Date(value as string | number)
+  return Number.isNaN(d.getTime()) ? null : d
 }
 
 /**

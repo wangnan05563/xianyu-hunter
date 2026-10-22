@@ -2,7 +2,13 @@
 // 移动端 AntiCrawl 原先自养一份 `Xh Ym`，与共享实现边界不同（60 秒它写 `1m 0s`、
 // 0 秒它写 `0s`），两份实现会在同一个数字上给出两种答案。这里钉住两级单位与边界值一致。
 import { describe, it, expect } from 'vitest'
-import { formatDateTime, formatDuration, tryFormatDateTime } from '../timeFormat'
+import {
+  formatDateTime,
+  formatDuration,
+  formatShortDateTime,
+  tryFormatDateTime,
+  tryFormatShortDateTime,
+} from '../timeFormat'
 
 describe('formatDuration 中文/紧凑两种单位同源（T02884）', () => {
   it.each([
@@ -77,5 +83,62 @@ describe('tryFormatDateTime（T02901 可空口径）', () => {
   it('formatDateTime 与它同源：同一个空值分别得到占位符与 null', () => {
     expect(tryFormatDateTime('')).toBeNull()
     expect(formatDateTime('')).toBe('—')
+  })
+})
+
+// T02905：缩写档位（图表轴/时间线行/页签标题）此前有五种各自实现，
+// 其中 `Intl.DateTimeFormat().format(Invalid Date)` 是直接抛 RangeError 的，
+// 页面里那份从来没兜这一层——收进 helper 后判空口径与 formatDateTime 共用一个 parseTime
+describe('formatShortDateTime 缩写档位（T02905）', () => {
+  const TS = '2026-03-09T05:04:03'
+
+  it('五个档位各给一种形状，且互不越界', () => {
+    expect(formatShortDateTime(TS, 'time')).toMatch(/^\d{2}:\d{2}$/)
+    expect(formatShortDateTime(TS, 'month-day')).toMatch(/^\d{2}[\/-]\d{2}$/)
+    expect(formatShortDateTime(TS, 'month-day-time')).toMatch(/^\d{2}[\/-]\d{2}\s\d{2}:\d{2}$/)
+    expect(formatShortDateTime(TS, 'date')).toMatch(/^\d{4}[\/-]\d{2}[\/-]\d{2}$/)
+    expect(formatShortDateTime(TS, 'date-time')).toMatch(/^\d{4}[\/-]\d{2}[\/-]\d{2}\s\d{2}:\d{2}$/)
+  })
+
+  it('缩写不带秒（带秒的是整时间戳，两档不能混）', () => {
+    for (const scope of ['date', 'month-day', 'month-day-time', 'date-time', 'time'] as const) {
+      expect(formatShortDateTime(TS, scope), scope).not.toMatch(/:\d{2}:\d{2}/)
+    }
+  })
+
+  it('跨日用 month-day-time，不会把两天的 05:04 画成同一个点', () => {
+    const a = formatShortDateTime('2026-03-09T05:04:03', 'month-day-time')
+    const b = formatShortDateTime('2026-03-10T05:04:03', 'month-day-time')
+    expect(a).not.toBe(b)
+    // 同一档位下只到时的写法确实会把两天折叠成同一标签——这是档位分工，不是 bug
+    expect(formatShortDateTime('2026-03-09T05:04:03', 'time')).toBe(
+      formatShortDateTime('2026-03-10T05:04:03', 'time'),
+    )
+  })
+
+  it('零点念 00:00，不念 24:00', () => {
+    expect(formatShortDateTime('2026-03-09T00:00:00', 'time')).toBe('00:00')
+  })
+
+  it('空值与脏值不抛（宿主 Intl 遇到 Invalid Date 会 RangeError），口径与整时间戳一致', () => {
+    for (const v of [null, undefined, '', 'not-a-date']) {
+      expect(tryFormatShortDateTime(v, 'month-day-time'), String(v)).toBeNull()
+    }
+    expect(formatShortDateTime('', 'date')).toBe('—')
+    expect(formatShortDateTime('not-a-date', 'date')).toBe('not-a-date')
+    expect(() => formatShortDateTime('not-a-date', 'time')).not.toThrow()
+  })
+
+  it('毫秒数与 Date 实例都接得住（页签用毫秒，相对时间 helper 已经算好 Date）', () => {
+    expect(formatShortDateTime(1760000000000, 'date-time')).toMatch(/\d{2}:\d{2}$/)
+    const d = new Date('2026-03-09T05:04:03')
+    expect(formatShortDateTime(d, 'month-day-time')).toBe(
+      formatShortDateTime('2026-03-09T05:04:03', 'month-day-time'),
+    )
+    expect(tryFormatShortDateTime(new Date('nope'), 'time')).toBeNull()
+  })
+
+  it('同一档位重复取到同一个 formatter（图表每帧新建 formatter 会抖）', () => {
+    expect(formatShortDateTime(TS, 'month-day-time')).toBe(formatShortDateTime(TS, 'month-day-time'))
   })
 })

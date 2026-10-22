@@ -191,36 +191,36 @@ describe('全站时间口径同源（T02901）', () => {
   // 只带 hour12 的写法与不带选项完全等价（zh-CN 默认就是 24 小时制），
   // 它绕过了上一条 needle 的字面量匹配，实际是一个整时间戳
   const LOCALE_CALL_H12 = [LOCALE_CALL.slice(0, LOCALE_CALL.length - 1), ", { hour12: false })"].join('')
+  // 只到日期或只到时间的内联 Intl：缩写形状曾经的三条旁路（EvalRules/ItemList/移动端关于页）
+  const LOCALE_DATE_CALL = ['toLocale', "Date", "String('"].join('')
+  const LOCALE_TIME_CALL = ['toLocale', "Time", "String('"].join('')
   const sharedFile = resolve(SRC_ROOT, 'utils', 'timeFormat.ts')
 
   it('除共享 helper 外，不得再内联 Intl 格式化（空值/脏值护栏会跟着丢）', () => {
+    // T02905 起去掉 `.slice(` 豁免：那条豁免原本是给图表轴的（先落地再切位），
+    // 缩写档位进 helper 之后轴标签也有正规写法了，留着它等于允许「切 ISO 位」这套第四口径回潮
+    const needles = [LOCALE_CALL, LOCALE_CALL_H12, LOCALE_DATE_CALL, LOCALE_TIME_CALL]
     const offenders: string[] = []
     for (const p of walk(SRC_ROOT)) {
       if (p === sharedFile) continue
       readFileSync(p, 'utf-8').split(/\r?\n/).forEach((line, i) => {
-        // 图表 x 轴要在 Intl 结果上切位缩写，那是唯一允许的下游用法
-        if (line.includes(LOCALE_CALL) && !/\.slice\(/.test(line)) {
+        if (needles.some((n) => line.includes(n))) {
           offenders.push(`${p.replace(SRC_ROOT, '')}:${i + 1}: ${line.trim()}`)
         }
-        if (line.includes(LOCALE_CALL_H12)) offenders.push(`${p.replace(SRC_ROOT, '')}:${i + 1}: ${line.trim()}`)
       })
     }
     expect(
       offenders,
-      `内联 Intl 与 formatDateTime 会在空值上分叉（Invalid Date vs 「—」），请改 utils/timeFormat：\n${offenders.join('\n')}`,
+      `内联 Intl 与 formatDateTime 会在空值上分叉（Intl 遇到 Invalid Date 直接抛 RangeError），请改 utils/timeFormat：\n${offenders.join('\n')}`,
     ).toEqual([])
   })
 
-  it('带字段选项的 Intl 是有意缩写（坐标轴/时间线），只能出现在清单里这几处', () => {
-    // 缩写形状（月日时分）与整时间戳是两种需求，本单只统一后者；
-    // 前者要不要收进共享 helper（formatShort 之类）属第三波，先钉住现状不许扩散
-    const ALLOWED = [
-      'components/PriceTrendChart.tsx',
-      'pages/Tasks/TaskDetail.tsx',
-      'pages/Timeline/components/TimelineList.tsx',
-      // 相对时间 helper 超过一周后退回的「MM-DD HH:mm」绝对兜底
-      'pages/Timeline/utils.ts',
-    ]
+  it('带字段选项的 Intl 只允许出现在共享 helper 里（T02905 把清单清空）', () => {
+    // T02901 留的 ALLOWED 清单（4 个文件）把当时的现状钉住了，但没有收口：
+    // 缩写形状此后又各自长出了 `toLocaleTimeString`（EvalRules/ItemList）、
+    // `toLocaleDateString`（移动端关于页）、`padStart` 手工拼串（SheetTabs/BrandCard）三种写法，
+    // 都不在旧清单的字面量射程里。本单起清单为空，缩写只能来自 utils/timeFormat。
+    const ALLOWED: string[] = []
     const hits: string[] = []
     for (const p of walk(SRC_ROOT)) {
       if (p === sharedFile) continue
@@ -232,7 +232,7 @@ describe('全站时间口径同源（T02901）', () => {
         }
       })
     }
-    expect(hits, `新的缩写形状要先进清单再落地，否则会出现第四套时间长相：\n${hits.join('\n')}`).toEqual([])
+    expect(hits, `缩写档位要加进 utils/timeFormat 的 SHORT_FORMATS，别在页面里自己写：\n${hits.join('\n')}`).toEqual([])
   })
 
   it('不得再出现行内秒→分/时折算（倒计时与统计值都要走 formatDuration）', () => {
@@ -265,5 +265,139 @@ describe('全站时间口径同源（T02901）', () => {
       'mobile/components/TakeoverCountdown.tsx', 'pages/Maintenance/BatchRefresh.tsx']) {
       expect(files, `${rel} 是倒计时/耗时展示，应当带 withSeconds`).toContain('/' + rel)
     }
+  })
+
+  it('不得对共享 helper 的结果再切字符位（那是第四套口径的来源）', () => {
+    // TaskDetail 的 runs 轴原本写 formatDateTime(r.start).slice(5, 16)：
+    // 位切依赖 locale 数据的字面形状，宿主 ICU 一变（2026/10/19 vs 2026-10-19）就切歪
+    const callName = ['format', '(?:Short)?DateTime'].join('')
+    const sliceRe = new RegExp(`${callName}\\([^)\\n]*\\)\\s*\\.slice\\(`, 'g')
+    const offenders: string[] = []
+    for (const p of walk(SRC_ROOT)) {
+      // 注释行不参与扫描：helper 自己的文档就在引用这行旧写法，算命中等于把守卫写成「不许解释 bug」
+      const code = readFileSync(p, 'utf-8')
+        .split(/\r?\n/)
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join('\n')
+      for (const m of code.matchAll(sliceRe)) {
+        offenders.push(`${p.replace(SRC_ROOT, '')}: ${m[0]}`)
+      }
+    }
+    expect(offenders, `缩写请用 formatShortDateTime 的档位：\n${offenders.join('\n')}`).toEqual([])
+  })
+})
+
+describe('缩写档位只有一份表（T02905）', () => {
+  const sharedFile = resolve(SRC_ROOT, 'utils', 'timeFormat.ts')
+  const helper = readFileSync(sharedFile, 'utf-8')
+
+  /** 每个位点期望的档位与次数（逐个调用点核对，不用「文件里出现过一次就算过」） */
+  const EXPECTED: Record<string, Record<string, number>> = {
+    // 图数据与 tooltip coord 必须同形，否则 markPoint 落不到点上
+    'components/PriceTrendChart.tsx': { 'month-day-time': 2 },
+    'pages/Tasks/TaskDetail.tsx': { 'month-day-time': 1, time: 1 },
+    'pages/Timeline/components/TimelineList.tsx': { 'month-day-time': 1 },
+    'pages/Timeline/utils.ts': { 'month-day-time': 1 },
+    'components/SheetWorkspace/SheetTabs.tsx': { 'date-time': 1 },
+    'pages/About/BrandCard.tsx': { date: 1 },
+    'mobile/pages/About/index.tsx': { date: 1 },
+    'pages/Config/EvalRules.tsx': { time: 2 },
+    'pages/Items/ItemList.tsx': { time: 1 },
+    // 一个调用点按区间选档位，两个档位各出现一次
+    'pages/Dashboard/components/TrendModal.tsx': { 'month-day': 1, time: 1 },
+  }
+
+  it('每个位点的档位与调用数逐条核对', () => {
+    for (const [rel, scopes] of Object.entries(EXPECTED)) {
+      const src = read(rel)
+      expect(src, `${rel} 没引共享 helper`).toMatch(/utils\/timeFormat/)
+      for (const [scope, count] of Object.entries(scopes)) {
+        const hits = (src.match(new RegExp(`'${scope}'`, 'g')) ?? []).length
+        expect(hits, `${rel} 的 '${scope}' 档位出现 ${hits} 次，期望 ${count} 次`).toBe(count)
+      }
+    }
+  })
+
+  it('每个缩写调用点都带档位（漏档位会静默走错形状）', () => {
+    const scopes = Object.keys(EXPECTED).flatMap((rel) => Object.keys(EXPECTED[rel]))
+    const callName = ['formatShort', 'DateTime('].join('')
+    const offenders: string[] = []
+    for (const p of walk(SRC_ROOT)) {
+      if (p === sharedFile) continue
+      const src = readFileSync(p, 'utf-8')
+      let at = -1
+      while ((at = src.indexOf(callName, at + 1)) >= 0) {
+        const after = src.slice(at, at + 200)
+        if (!scopes.some((s) => after.includes(`'${s}'`))) {
+          offenders.push(`${p.replace(SRC_ROOT, '')}: ${after.split(/\r?\n/)[0].trim()}`)
+        }
+      }
+    }
+    expect(offenders, `调用点缺档位：\n${offenders.join('\n')}`).toEqual([])
+  })
+
+  it('档位表与调用点双向闭合（没有死档位，也没有表外档位）', () => {
+    const table = helper.slice(helper.indexOf('const SHORT_FORMATS'))
+    const declared = [...table.matchAll(/^\s{2}'?([a-z-]+)'?:\s*\{/gm)].map((m) => m[1])
+    expect(declared.length, '档位表解析为空，多半是写法改了').toBeGreaterThan(0)
+    const used = new Set(Object.keys(EXPECTED).flatMap((rel) => Object.keys(EXPECTED[rel])))
+    for (const d of declared) {
+      expect(used.has(d), `档位 ${d} 没有任何调用点，是死档位`).toBe(true)
+    }
+    for (const u of used) {
+      expect(declared, `调用点用了档位表里没有的档位 ${u}`).toContain(u)
+    }
+  })
+
+  it('共享 helper 里整时间戳与缩写各只有一个 Intl 出口', () => {
+    expect((helper.match(/toLocaleString/g) ?? []).length).toBe(1)
+    expect((helper.match(/new Intl\.DateTimeFormat\(/g) ?? []).length).toBe(1)
+  })
+
+  // 手工拼日期串（getFullYear/padStart）的豁免落成可校验数据，
+  // 写法沿用 T02850 的外来词表：登记词消失即红
+  const FOREIGN_VOCAB: Record<string, { readonly why: string; readonly words: readonly string[] }> = {
+    'pages/About/index.tsx': {
+      why: '页脚版权年份，不是某个事件的时间戳',
+      words: ['getFullYear()'],
+    },
+    'pages/Chatbot/components/ChatbotOnboarding.tsx': {
+      why: '按时段挑问候语，产出的是档位不是时间',
+      words: ['getHours()'],
+    },
+  }
+  const HANDMADE = ['getFullYear()', 'getMonth()', 'getHours()', ['padStart', "(2, '0')"].join('')]
+
+  it('手工拼日期串只允许出现在登记过的外来词位点', () => {
+    const offenders: string[] = []
+    for (const p of walk(SRC_ROOT)) {
+      if (p === sharedFile) continue
+      const rel = p.replace(SRC_ROOT, '').replace(/\\/g, '/').slice(1)
+      const src = readFileSync(p, 'utf-8')
+      const allowed = FOREIGN_VOCAB[rel]?.words ?? []
+      for (const w of HANDMADE) {
+        if (src.includes(w) && !allowed.includes(w)) offenders.push(`${rel}: ${w}`)
+      }
+    }
+    expect(
+      offenders,
+      `拼串绕开 Intl，空值/脏值护栏与 locale 口径都会分叉；请走 formatShortDateTime：\n${offenders.join('\n')}`,
+    ).toEqual([])
+  })
+
+  it('登记的外来词仍然真实存在（豁免清单不许只增不减地腐烂）', () => {
+    for (const [rel, vocab] of Object.entries(FOREIGN_VOCAB)) {
+      expect(existsSync(resolve(SRC_ROOT, rel)), `${rel} 已不在仓库里，请核对清单`).toBe(true)
+      for (const w of vocab.words) {
+        expect(read(rel), `${rel} 里的 '${w}' 已消失（${vocab.why}），把它从豁免表删掉`).toContain(w)
+      }
+    }
+  })
+
+  it('趋势弹窗不再把后端 ISO 串直接端给用户（T02884 A 类同族）', () => {
+    const src = read('pages/Dashboard/components/TrendModal.tsx')
+    expect(src, 'tooltip 又回到裸 ISO').not.toMatch(/\$\{s\.ts\}/)
+    expect(src).toContain('${formatDateTime(s.ts)}')
+    expect(src, '轴标签又在切 ISO').not.toMatch(/split\('T'\)/)
   })
 })

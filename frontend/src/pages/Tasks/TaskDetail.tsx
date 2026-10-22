@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { formatDateTime, formatDuration } from '../../utils/timeFormat'
+import { formatDateTime, formatDuration, formatShortDateTime } from '../../utils/timeFormat'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Card, Descriptions, Tag, Button, Space, Spin, Row, Col, Table, Empty, message, Tabs, List,
@@ -118,7 +118,7 @@ function buildRunsOption(runs: TaskRun[]): EChartOption | null {
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['事件数', '命中数', '错误数'] },
-    xAxis: { type: 'category', data: runs.map((r) => formatDateTime(r.start).slice(5, 16)) },
+    xAxis: { type: 'category', data: runs.map((r) => formatShortDateTime(r.start, 'month-day-time')) },
     yAxis: { type: 'value' },
     series: [
       { name: '事件数', type: 'bar', data: runs.map((r) => r.event_count), itemStyle: { color: '#1890ff' } },
@@ -172,7 +172,7 @@ function TrendSparkline({
         grid: { left: 40, right: 10, top: 10, bottom: 24 },
         xAxis: {
           type: 'category',
-          data: trend.series.map((p) => new Date(p.ts).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' })),
+          data: trend.series.map((p) => formatShortDateTime(p.ts, 'time')),
           show: true,
           axisLabel: { fontSize: 10 },
         },

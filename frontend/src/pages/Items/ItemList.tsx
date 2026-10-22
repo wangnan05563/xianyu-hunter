@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type KeyboardEvent } from 'react'
-import { formatDateTime } from '../../utils/timeFormat'
+import { formatDateTime, formatShortDateTime } from '../../utils/timeFormat'
 import { Card, Table, Tag, Select, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import PriceTrendChart from '@/components/PriceTrendChart'
@@ -1030,7 +1030,7 @@ export default function ItemList() {
                     <>
                       <CheckCircleOutlined style={{ color: '#52c41a' }} />
                       <span className="xh-refresh-indicator__text">
-                        {liveMode ? '实时' : 'DB'}已更新于 {new Date(lastRefreshAt).toLocaleTimeString('zh-CN')}
+                        {liveMode ? '实时' : 'DB'}已更新于 {formatShortDateTime(lastRefreshAt, 'time')}
                       </span>
                       {countdownSec !== null && countdownSec > 0 && (
                         <span className="xh-refresh-indicator__countdown">

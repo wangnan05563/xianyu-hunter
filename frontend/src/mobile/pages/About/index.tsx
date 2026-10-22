@@ -9,6 +9,7 @@ import { ReloadOutlined, CheckCircleOutlined, InfoCircleOutlined } from '@ant-de
 import { aboutApi } from '../../../api'
 import type { AboutInfo, UpdateCheckResult } from '../../../api/about'
 import { extractApiError } from '../../../utils/apiError'
+import { formatShortDateTime } from '../../../utils/timeFormat'
 
 export default function MobileAbout() {
   const { message } = App.useApp()
@@ -97,7 +98,7 @@ export default function MobileAbout() {
                       <div>当前：v{update.current}</div>
                       {update.published_at && (
                         <div style={{ fontSize: 11 }}>
-                          发布于 {new Date(update.published_at).toLocaleDateString('zh-CN')}
+                          发布于 {formatShortDateTime(update.published_at, 'date')}
                         </div>
                       )}
                       <Button

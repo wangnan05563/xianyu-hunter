@@ -11,18 +11,7 @@ import {
 } from '@ant-design/icons'
 import type { UpdateState, UpdateDownload } from './useUpdateChecker'
 import { TEXTS } from './i18n'
-
-// 格式化 ISO 发布时间为本地可读日期（YYYY-MM-DD）
-// 失败时回退原值，避免 UI 因后端格式异常而崩溃
-function formatPublishDate(iso: string): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+import { formatShortDateTime } from '../../utils/timeFormat'
 
 // 计算下载百分比（total 为 0 时显示不确定进度）
 function downloadPercent(download: UpdateDownload): number {
@@ -108,7 +97,7 @@ function UpdateButton({
         <TipButton
           tip={
             state.publishedAt
-              ? `${TEXTS.updatePublishedOn} ${formatPublishDate(state.publishedAt)}`
+              ? `${TEXTS.updatePublishedOn} ${formatShortDateTime(state.publishedAt, 'date')}`
               : TEXTS.updateNewer
           }
           type="primary"

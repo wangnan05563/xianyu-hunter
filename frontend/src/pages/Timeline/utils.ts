@@ -1,4 +1,5 @@
 import type { TimelineEntry } from '../../api'
+import { formatShortDateTime } from '../../utils/timeFormat'
 
 // 解析 payload 为可读信息
 // payload 可能是字符串（旧数据）或对象，统一规整为 Record<string, unknown>
@@ -23,5 +24,5 @@ export function formatRelativeTime(ts: string): string {
   if (diff < 3600000) return `${Math.floor(diff / 60000)} 分钟前`
   if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
   if (diff < 604800000) return `${Math.floor(diff / 86400000)} 天前`
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return formatShortDateTime(d, 'month-day-time')
 }

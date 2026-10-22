@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Empty, Spin } from 'antd'
 import ReactECharts from '@/components/charts/EChart'
 import { itemApi, type PriceHistoryPoint } from '../api/item'
+import { formatShortDateTime } from '../utils/timeFormat'
 
 // 快照来源中文标签（与后端 price_history.source 枚举对齐）
 const SOURCE_LABELS: Record<string, string> = {
@@ -59,7 +60,7 @@ export default function PriceTrendChart({ itemId }: { readonly itemId: string })
           grid: { left: 60, right: 20, top: 30, bottom: 50 },
           xAxis: {
             type: 'category',
-            data: points.map((p) => new Date(p.ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })),
+            data: points.map((p) => formatShortDateTime(p.ts, 'month-day-time')),
             axisLabel: { fontSize: 10 },
           },
           yAxis: { type: 'value', scale: true, axisLabel: { fontSize: 10 } },
@@ -75,7 +76,7 @@ export default function PriceTrendChart({ itemId }: { readonly itemId: string })
             // 降价点：红色大标记突出显示
             markPoint: dropIndices.length > 0 ? {
               data: dropIndices.map((i) => ({
-                coord: [new Date(points[i].ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }), points[i].price],
+                coord: [formatShortDateTime(points[i].ts, 'month-day-time'), points[i].price],
                 value: '降',
                 itemStyle: { color: '#ff4d4f' },
               })),

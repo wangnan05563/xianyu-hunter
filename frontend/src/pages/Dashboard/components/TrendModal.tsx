@@ -5,6 +5,7 @@ import ReactECharts from '../../../components/charts/EChart'
 import { TipButton } from '@/components/TipButton'
 import FetchFailedHint from '@/components/FetchFailedHint'
 import type { TrendSeries } from '../../../api'
+import { formatDateTime, formatShortDateTime } from '../../../utils/timeFormat'
 
 interface TrendModalProps {
   // 标记 readonly 以表达「父级传入后子组件不应修改」的契约（SonarQube S6759）
@@ -70,16 +71,16 @@ export default function TrendModal({
           })()
           // 计数类指标 value 就是条数，再补一句「N 条」是重复信息（后端已改为桶内求和）
           const isCountMetric = trendMetric !== 'eval_score' && trendMetric !== 'success_rate'
-          return `${s.ts}<br/>值: <b>${v}</b>${isCountMetric ? '' : (s.count ? ' · ' + s.count + ' 条' : '')}`
+          return `${formatDateTime(s.ts)}<br/>值: <b>${v}</b>${isCountMetric ? '' : (s.count ? ' · ' + s.count + ' 条' : '')}`
         },
       },
       xAxis: {
         type: 'category',
-        data: series.map(s => {
-          const parts = s.ts.split('T')
-          // 长周期显示月-日，短周期显示时:分
-          return trendRange >= 720 ? (parts[0] || '').slice(5) : (parts[1] || '').slice(0, 5)
-        }),
+        data: series.map(s =>
+          // 长周期显示月-日，短周期显示时:分。缩写走共享 helper：
+          // 直接切 ISO 位拿到的是后端 UTC 分桶，与全站其它时间点（按本地展示）差一个时区偏移
+          formatShortDateTime(s.ts, trendRange >= 720 ? 'month-day' : 'time'),
+        ),
         axisLabel: { color: '#8c8c8c', fontSize: 10, interval: Math.max(0, Math.floor(series.length / 8) - 1) },
       },
       yAxis: {

@@ -16,6 +16,7 @@ import type { DiffChange } from '../../stores/configStore'
 import { evalApi } from '../../api'
 import TagEditor from '../../components/editors/TagEditor'
 import { useAutoRefresh } from '../../hooks/useAutoRefresh'
+import { formatShortDateTime } from '../../utils/timeFormat'
 import { DiffPreviewModal } from '../../components/DiffPreviewModal'
 
 // 热力图坐标数据：从 distData.buckets 二维数组计算 ECharts 所需 [x, y, value] 列表与轴标签
@@ -183,10 +184,10 @@ export default function EvalRules() {
   })
   // 预格式化时间字符串，避免 JSX 内嵌套三元
   const statsLastRefreshStr = statsLastRefresh
-    ? new Date(statsLastRefresh).toLocaleTimeString('zh-CN')
+    ? formatShortDateTime(statsLastRefresh, 'time')
     : '-'
   const statsNextRefreshStr = statsNextRefresh
-    ? new Date(statsNextRefresh).toLocaleTimeString('zh-CN')
+    ? formatShortDateTime(statsNextRefresh, 'time')
     : null
 
   // 首次加载 + 开关切换时立即加载（useAutoRefresh 的 deps 已会触发，此处兜底保证首次进入也拉一次）
