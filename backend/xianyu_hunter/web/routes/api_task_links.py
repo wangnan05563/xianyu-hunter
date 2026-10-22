@@ -34,6 +34,7 @@ from xianyu_hunter.web.services.search_services import (
     TaskLinkSearchService,
 )
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.middleware.exception_handler import CodedHTTPException
 
 logger = get_logger()
 
@@ -306,18 +307,21 @@ def _raise_live_cookie_errors(missing: list[str], expired: list[str], stale: lis
     """
     if expired:
         logger.warning("实时搜索：关键 Cookie 已过期 {}，需重新登录闲鱼", expired)
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=440,
+            code="cookie_expired",
             detail=f"闲鱼登录 Cookie 已过期（{', '.join(expired)}），实时搜索不可用，请重新登录闲鱼",
         )
     if stale:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=440,
+            code="cookie_stale",
             detail=f"闲鱼登录 Cookie 未刷新到实时搜索浏览器（{', '.join(stale)}），请重新登录闲鱼",
         )
     if missing:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=403,
+            code="cookie_missing",
             detail=f"闲鱼登录 Cookie 不完整（缺少 {', '.join(missing)}），实时搜索不可用，请重新登录闲鱼",
         )
 
@@ -386,14 +390,14 @@ async def _ensure_live_search_cookies(container: Container, user_id: str = "defa
                         f"实时搜索暂不可用，请重新登录闲鱼或重启服务"
                     )
                     logger.warning(msg)
-                else:
-                    # ensure_alive 失败 / add_cookies 异常：浏览器真的不可用
-                    msg = (
-                        f"实时搜索：浏览器不可用（{missing_label} 读取失败），"
-                        f"请稍后重试或重启服务"
-                    )
-                    logger.warning(msg)
-                raise HTTPException(status_code=503, detail=msg)
+                    raise CodedHTTPException(status_code=503, code="cookie_sync_failed", detail=msg)
+                # ensure_alive 失败 / add_cookies 异常：浏览器真的不可用
+                msg = (
+                    f"实时搜索：浏览器不可用（{missing_label} 读取失败），"
+                    f"请稍后重试或重启服务"
+                )
+                logger.warning(msg)
+                raise CodedHTTPException(status_code=503, code="browser_unavailable", detail=msg)
         _raise_live_cookie_errors(missing, expired, stale)
 
     _maybe_reset_m5tk_refresh(container, cookies_injected)
@@ -905,13 +909,15 @@ async def refresh_links(
     if not task:
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     if not container.collector:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=503,
+            code="scheduler_off",
             detail="实时搜索需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动",
         )
     if not container.browser:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=503,
+            code="browser_unavailable",
             detail="浏览器实例未初始化，请重启服务",
         )
     await _ensure_live_search_cookies(container, user_id=user_id)
@@ -1389,7 +1395,12 @@ async def _check_live_cookies_safely(
         return None
     except HTTPException as e:
         _clear_live_inflight(task_id, inflight_event)
-        return {"stage": "error", "detail": e.detail, "status": e.status_code}
+        event: dict[str, Any] = {"stage": "error", "detail": e.detail, "status": e.status_code}
+        # SSE 通道同样透传结构化错误码，前端分支不依赖中文文案
+        code = getattr(e, "code", None)
+        if isinstance(code, str) and code:
+            event["code"] = code
+        return event
     except Exception as e:
         logger.exception("live_links cookie 检查异常 task={}: {}", task_id, e)
         _clear_live_inflight(task_id, inflight_event)
@@ -1552,13 +1563,15 @@ async def live_links(
     if not task:
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     if not container.collector:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=503,
+            code="scheduler_off",
             detail="实时搜索需要浏览器实例，请以 XH_WITH_SCHEDULER=1 模式启动",
         )
     if not container.browser:
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=503,
+            code="browser_unavailable",
             detail="浏览器实例未初始化，请重启服务",
         )
 

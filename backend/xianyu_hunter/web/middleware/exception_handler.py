@@ -18,6 +18,22 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
 
+
+class CodedHTTPException(HTTPException):
+    """带结构化错误码的 HTTPException，响应体为 {"detail": 人话文案, "code": 机器码}
+
+    为什么需要：前端此前只能对中文 detail 做子串匹配来判断登录态，
+    后端一改文案分支就静默失效。code 与文案解耦，detail 仍保留人话供展示。
+    由 http_exception_handler 统一输出，路由无需感知序列化细节。
+    """
+
+    def __init__(
+        self, status_code: int, detail: str, code: str, headers: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(status_code=status_code, detail=detail, headers=headers)
+        self.code = code
+
+
 # 敏感请求头：记录日志时需脱敏，避免 token/cookie 写入持久化日志
 _SENSITIVE_HEADERS = {"authorization", "cookie", "xh_token", "set-cookie"}
 
@@ -94,7 +110,8 @@ def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse
     """处理 HTTPException，保持原有 detail 格式
 
     各路由主动抛出的 HTTPException（如 404/400/401）走此通道，
-    响应体保持 {"detail": ...} 结构，与现有前端契约一致。
+    响应体保持 {"detail": ...} 结构，与现有前端契约一致；
+    CodedHTTPException 额外附带顶层 code，供前端按机器码分支。
 
     为什么用 sync 而非 async：函数体内无 await，FastAPI 的 add_exception_handler
     对 sync/async 处理器均兼容（sync 会在 threadpool 执行），避免 S7503 误报。
@@ -113,9 +130,18 @@ def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse
         )
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content=_http_exception_content(exc),
         headers=exc.headers,
     )
+
+
+def _http_exception_content(exc: HTTPException) -> dict[str, Any]:
+    """组装 HTTPException 响应体：默认 {"detail": ...}，CodedHTTPException 追加 code"""
+    content: dict[str, Any] = {"detail": exc.detail}
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        content["code"] = code
+    return content
 
 
 def register_exception_handlers(app: Any) -> None:

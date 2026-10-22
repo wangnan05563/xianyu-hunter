@@ -20,6 +20,7 @@ import { useSearchHistory } from '../../hooks/useSearchHistory'
 import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
 import { ExportButton } from '../../components/ExportButton'
 import { API_BASE } from '../../utils/apiBase'
+import { classifyLiveSearchError } from './liveSearchError'
 
 // 相对时间插件：用于 updated_at 列渲染"3分钟前"等格式
 // dayjs 默认不包含 fromNow()，需 extend 插件并切换中文 locale
@@ -619,20 +620,18 @@ export default function ItemList() {
       .catch((err) => {
         clearTimeout(progressTimer)
         message.destroy('live-search')
-        const detail = errDetail(err)
-        const status = (err as { response?: { status?: number } })?.response?.status
-        // 按 HTTP 状态码分支：后端 _raise_live_cookie_errors 抛出的具体业务错误
-        // 440: cookie 过期或陈旧；403: cookie 缺失；503: 浏览器不可用
-        if (status === 440 || status === 403 || detail.includes('已过期') || detail.includes('不完整') || detail.includes('未刷新到实时搜索浏览器') || detail.includes('重新登录')) {
+        // 优先按后端结构化 code 分支（T02660）；旧后端只有中文 detail，分类器内保留子串回落
+        const { kind, detail } = classifyLiveSearchError(err)
+        if (kind === 'session_expired') {
           setSessionExpired(true)
-        } else if (status === 503 || detail.includes('浏览器不可用')) {
-          // 503 细分原因透传：可能是登录态同步失败（需重新登录/重启）或真·浏览器不可用，
-          // 后端 detail 已是人话（如「登录态 Cookie 同步失败…请重新登录闲鱼或重启服务」）
+        } else if (kind === 'browser_unavailable') {
+          // 503 细分原因透传：登录态 Cookie 同步失败已被归类为 session_expired，
+          // 这里只剩浏览器不可用 / 调度器未开启，提示即可，不引导重新登录
           message.error(detail || '浏览器不可用，请稍后重试')
-        } else if (detail.includes('系统正在执行后台搜索任务')) {
-          // browser_lock 竞争：worker 持锁中，live 等待 20s 超时
+        } else if (kind === 'browser_lock') {
+          // browser_lock 竞争：worker 持锁中，live 等待超时
           message.warning('系统正在执行后台搜索任务，请 30 秒后重试')
-        } else if ((err as { code?: string })?.code === 'ECONNABORTED' || detail.includes('timeout')) {
+        } else if (kind === 'timeout') {
           message.error('搜索超时，闲鱼页面加载缓慢或会话已失效，请稍后重试')
         } else {
           message.error(detail || '实时搜索失败')

@@ -33,6 +33,16 @@ describe('商品列表 React key', () => {
   })
 })
 
+describe('实时搜索错误分支（T02660）', () => {
+  it('按结构化 code 的分类结果分支，不再直接匹配中文子串', () => {
+    expect(page).toMatch(/classifyLiveSearchError\(err\)/)
+    expect(page).not.toMatch(/detail\.includes\('已过期'\)/)
+  })
+  it('SSE 错误事件透传 code', () => {
+    expect(api).toMatch(/makeHttpError\(data\.status \|\| 502, \{ detail: data\.detail, code: data\.code \}\)/)
+  })
+})
+
 describe('地区/品牌候选项来源', () => {
   it('调用后端 facets 接口取全量 DISTINCT', () => {
     expect(page).toMatch(/taskLinkApi\.facets\(selectedTask\)/)

@@ -83,6 +83,8 @@ export interface LiveProgress {
   stage: 'checking_cache' | 'checking_cookies' | 'waiting_inflight' | 'acquiring_lock' | 'waiting_lock' | 'searching' | 'refreshing_token' | 'searching_retry' | 'filtering' | 'writing_db' | 'done' | 'error'
   detail?: string
   status?: number
+  // 结构化错误码（如 cookie_expired / browser_unavailable），前端按码分支，避免依赖中文文案
+  code?: string
   count?: number
   // waiting_lock 阶段携带已等待秒数，前端用于拼接文案
   elapsed_sec?: number
@@ -154,7 +156,7 @@ const dispatchSSEEvent = (
   if (data.stage === 'error') {
     return {
       finalData: null,
-      shouldThrow: makeHttpError(data.status || 502, { detail: data.detail }),
+      shouldThrow: makeHttpError(data.status || 502, { detail: data.detail, code: data.code }),
     }
   }
   // 其他阶段：仅回调 onProgress 推送进度
