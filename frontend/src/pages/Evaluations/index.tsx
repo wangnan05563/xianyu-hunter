@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import {
   Card, Table, Space, Spin, Input, Select, Slider, Row, Col,
   Empty, DatePicker, Alert, Progress, Checkbox, Tag, Statistic, InputNumber,
@@ -8,7 +8,7 @@ import {
 import {
   ReloadOutlined, AimOutlined, SearchOutlined, UndoOutlined,
   RetweetOutlined, SettingOutlined, LeftOutlined, RightOutlined,
-  RobotOutlined, CloudDownloadOutlined, QuestionCircleOutlined,
+  RobotOutlined, CloudDownloadOutlined, QuestionCircleOutlined, LoginOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { taskApi, type EvalItem } from '../../api'
@@ -386,6 +386,7 @@ export default function Evaluations() {
   // 告警深链（T02620）：抽屉的「低分评估」项跳过来带 ?item_id=<id>&score_max=<0-100>，
   // 本页必须真的读取，否则链接只是「跳过来自己找」——与 Orders.tsx 读 ?ref= 同一族。
   const [searchParams, setSearchParams] = useSearchParams()
+  const navigate = useNavigate()
   const deepLink = useMemo(() => parseEvalDeepLink(searchParams), [searchParams])
   const filters = useEvalFilters()
   const list = useEvalList({
@@ -725,7 +726,23 @@ export default function Evaluations() {
           showIcon
           style={{ marginBottom: 16 }}
           message={`有 ${dist.dist.insufficient_count} 条评估记录因卖家信息缺失仅基于价格评估`}
-          description="建议在 Dashboard 页面重新登录闲鱼后，点击上方「重新评估」按钮获取完整评估结果。"
+          description={(
+            <div>
+              <div>建议先在 Dashboard 页面重新登录闲鱼，登录成功后再回来点上方「重新评估」获取完整结果。</div>
+              <div style={{ color: 'var(--xh-text-secondary)' }}>
+                重新评估只按当前规则重算分值：不调用 AI、不产生接口费用，也不发送通知。
+              </div>
+            </div>
+          )}
+          action={(
+            <TipButton
+              icon={<LoginOutlined />}
+              tip="前往登录页刷新闲鱼登录态，登录后回到评估明细"
+              onClick={() => navigate(`/login?redirect=${encodeURIComponent('/evaluations')}`)}
+            >
+              前往登录
+            </TipButton>
+          )}
         />
       )}
 
