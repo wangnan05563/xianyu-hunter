@@ -1,7 +1,17 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { message } from 'antd'
 import { evalApi } from '../../../api'
+import { useFailedSources } from '../../../hooks/useFailedSources'
 import type { DistResponse } from '../utils'
+
+// 分布图这一路请求的数据源声明（T02899）。
+// 原先把 reject 吞成空块：失败后 dist 恒为 null，主页面的统计卡与热力图整块不渲染，
+// 用户看不出「没取到」和「近 7 天没有评估记录」的区别。
+type EvalDistSource = 'dist'
+
+const SOURCE_LABELS: Record<EvalDistSource, string> = {
+  dist: '评估分布',
+}
 
 /**
  * 分布图数据 Hook
@@ -11,6 +21,8 @@ import type { DistResponse } from '../utils'
  */
 export interface EvalDistState {
   dist: DistResponse | null
+  distFailed: boolean
+  distSourceLabel: string
   distRange: number
   distLoading: boolean
   passScore: number
@@ -43,6 +55,7 @@ export function useEvalDist(
   const [dist, setDist] = useState<DistResponse | null>(null)
   const [distRange, setDistRange] = useState(168)
   const [distLoading, setDistLoading] = useState(false)
+  const { isFailed, track } = useFailedSources<EvalDistSource>()
 
   const passScore = dist?.thresholds?.pass_score ?? 60
   const autoBuyScore = dist?.thresholds?.auto_buy_score ?? 80
@@ -78,11 +91,10 @@ export function useEvalDist(
     if (f.priceRange[0] != null) params.min_price = f.priceRange[0]
     if (f.priceRange[1] != null) params.max_price = f.priceRange[1]
     if (f.includeOutOfRange) params.include_out_of_range = true
-    evalApi.distribution(params)
-      .then((res) => setDist(res as DistResponse))
-      .catch(() => {})
+    void track('dist', evalApi.distribution(params))
+      .then((res) => { if (res) setDist(res as DistResponse) })
       .finally(() => setDistLoading(false))
-  }, [distRange])
+  }, [distRange, track])
 
   // loadDist 内部用 filtersRef.current 读取最新筛选，但函数引用仅依赖 distRange
   // 因此显式订阅 taskId/价格范围/超范围切换，确保任务切换时统计栏同步刷新
@@ -109,6 +121,8 @@ export function useEvalDist(
 
   return {
     dist,
+    distFailed: isFailed('dist'),
+    distSourceLabel: SOURCE_LABELS.dist,
     distRange,
     distLoading,
     passScore,

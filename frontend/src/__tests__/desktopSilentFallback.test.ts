@@ -8,7 +8,7 @@
 // 注意：ban 的是「把请求结果替换成空值」的兜底，fetchHealth().catch(() => undefined)
 // 这种「函数本身不会 reject、只用于抑制 floating promise」的写法不在禁用范围。
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const SRC_ROOT = resolve(__dirname, '..')
@@ -32,6 +32,13 @@ const CLEANED = [
   'pages/Chatbot/Config.tsx',
   'pages/Config/AIConfig/index.tsx',
   'components/layout/UserMenu.tsx',
+  // T02899：空块 catch(() => {}) 的 6 个文件（needle 里 'catch(() => ' + '{})' 已覆盖这种写法）
+  'pages/Timeline/index.tsx',
+  'pages/Config/EvalRules.tsx',
+  'pages/Evaluations/hooks/useEvalDist.ts',
+  'pages/Evaluations/index.tsx',
+  'pages/Login/index.tsx',
+  'pages/Tasks/TaskEditor.tsx',
 ]
 
 describe('桌面端静默兜底归零（T02700）', () => {
@@ -156,5 +163,142 @@ describe('Chatbot 配置页的重试只重取失败那一路（T02900）', () =>
   it('reload 的调用点逐个钉住（5 处重试 + 2 处刷新）', () => {
     const calls = code.match(/\breload\(/g) ?? []
     expect(calls.length, '局部重试的位点数量变了，核对后更新本条').toBe(7)
+  })
+})
+
+// T02899：桌面端「空块 catch」清零。CLEANED 只管到逐个登记过的文件，
+// 这一节管全站：src/pages 下再写出一个吞掉 reject 的空块就会在这里红，
+// 而不是又攒出一张需要人 remember 的清单。
+describe('桌面端空块 catch 全站清零（T02899）', () => {
+  const EMPTY_BLOCK = ['catch(() => ', '{})'].join('')
+
+  function walk(dir: string): string[] {
+    return readdirSync(join(SRC_ROOT, dir), { withFileTypes: true }).flatMap((e) => {
+      const rel = `${dir}/${e.name}`
+      if (e.isDirectory()) return e.name === '__tests__' ? [] : walk(rel)
+      return /\.(ts|tsx)$/.test(e.name) ? [rel] : []
+    })
+  }
+
+  it('src/pages 下不存在吞掉 reject 的空块 catch', () => {
+    const offenders: string[] = []
+    for (const rel of walk('pages')) {
+      read(rel).split(/\r?\n/).forEach((line, i) => {
+        // 注释里提这个写法是在解释历史行为，不算违规
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
+        if (line.includes(EMPTY_BLOCK)) offenders.push(`${rel}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(
+      offenders,
+      `接口失败被吞成空块，请用 useFailedSources 记账 + FetchFailedHint/DataBlock：\n${offenders.join('\n')}`,
+    ).toEqual([])
+  })
+
+  // 只记账不接展示位 = 空转；只写展示位但账恒 false = 也是空转。两边都要在
+  const LEDGERED: Record<string, string> = {
+    'pages/Timeline/index.tsx': 'FetchFailedHint',
+    'pages/Config/EvalRules.tsx': 'DataBlock',
+    'pages/Evaluations/index.tsx': 'FetchFailedHint',
+    'pages/Evaluations/hooks/useEvalDist.ts': 'distFailed',
+    'pages/Login/index.tsx': 'FetchFailedHint',
+    'pages/Tasks/TaskEditor.tsx': 'FetchFailedHint',
+  }
+  Object.entries(LEDGERED).forEach(([rel, marker]) => {
+    it(`${rel} 的失败账与展示位成对存在（${marker}）`, () => {
+      const src = read(rel)
+      expect(src, `${rel} 应使用共用的 useFailedSources`).toContain('useFailedSources<')
+      expect(src, `${rel} 只在 import 里提了 hook，没有真的读账`).toContain('isFailed(')
+      expect(src, `${rel} 记了账但没有失败展示位（用户仍会看到空态冒充成功）`).toContain(marker)
+      expect(src, `${rel} 又出现了吞掉 reject 的空块`).not.toContain(EMPTY_BLOCK)
+    })
+  })
+
+  it('TaskEditor 的提交守卫把「加载中」与「加载失败」分开说', () => {
+    const src = read('pages/Tasks/TaskEditor.tsx')
+    // 恒报「加载中」会让用户在永久失败前一直等；两条文案都得在，且由账本决定走哪条
+    expect(src).toContain("isFailed('globalConfig')")
+    expect(src).toContain('全局配置加载失败')
+    expect(src).toContain('全局配置加载中，请稍候再提交')
+  })
+
+  it('Evaluations 的两路（任务列表 / 分布）各自接了展示位', () => {
+    const src = read('pages/Evaluations/index.tsx')
+    expect(src).toContain("isFailed('tasks')")
+    expect(src).toContain('dist.distFailed')
+    // 分布那一路的账在 hook 里，页面只读 hook 的出口，不再自己起一份账
+    expect(src).not.toContain("type EvaluationsSource = 'tasks' | 'dist'")
+  })
+
+  // 声明位 ↔ 调用位配对：上面那些「文件里出现过 isFailed( 」级别的断言会被
+  // failed={false} / distFailed: false 这种恒假写法蒙过去，这里按数据源逐个核对真实读账点
+  const SOURCE_READS: Record<string, string[]> = {
+    'pages/Timeline/index.tsx': ["isFailed('tasks')"],
+    'pages/Config/EvalRules.tsx': ["failed={isFailed('dist')}"],
+    'pages/Evaluations/index.tsx': ["isFailed('tasks')", 'dist.distFailed &&'],
+    'pages/Evaluations/hooks/useEvalDist.ts': ["distFailed: isFailed('dist')"],
+    'pages/Login/index.tsx': ["isFailed('cookieState')", "isFailed('browserStatus')"],
+    'pages/Tasks/TaskEditor.tsx': ["isFailed('globalConfig')"],
+  }
+  Object.entries(SOURCE_READS).forEach(([rel, reads]) => {
+    const src = read(rel)
+    reads.forEach((needle) => {
+      it(`${rel} 的展示位真的读的是 ${needle}`, () => {
+        expect(src, `${needle} 不在这段渲染里，失败态恒不出现`).toContain(needle)
+      })
+    })
+  })
+
+  // 上面那些是「字符串在不在」，这一条管「写出来的错误条有没有被账本接住」：
+  // 每个 <FetchFailedHint 前面必须有一个含 Failed 的布尔判断。
+  // 少了这道断言，把守卫改成 {false && (} 就只剩 import 里那个组件名，静态检查照样全绿。
+  const HINT_FILES = [
+    'pages/Timeline/index.tsx',
+    'pages/Evaluations/index.tsx',
+    'pages/Login/index.tsx',
+    'pages/Tasks/TaskEditor.tsx',
+  ]
+  HINT_FILES.forEach((rel) => {
+    const src = read(rel)
+    it(`${rel} 的每个错误条都由失败账接住`, () => {
+      const sites = (src.match(/<FetchFailedHint/g) ?? []).length
+      expect(sites, `${rel} 没有错误展示位了`).toBeGreaterThan(0)
+      const guarded = (src.match(/\{[^{}]*Failed[^{}]*&&\s*\(/g) ?? []).length
+      expect(guarded, `${rel} 有 ${sites - guarded} 个错误条没有挂在失败账上（恒假或写死的条件）`)
+        .toBeGreaterThanOrEqual(sites)
+    })
+  })
+
+  // 账键与中文名必须同源：接错源时，真失败不出错误条、错误条一出现又指着别的数据源
+  const LABEL_KEYS_FILES = [
+    'pages/Timeline/index.tsx',
+    'pages/Config/EvalRules.tsx',
+    'pages/Evaluations/index.tsx',
+    'pages/Login/index.tsx',
+    'pages/Tasks/TaskEditor.tsx',
+  ]
+  LABEL_KEYS_FILES.forEach((rel) => {
+    const src = read(rel)
+    it(`${rel} 的 isFailed 键与 SOURCE_LABELS 键逐个对上`, () => {
+      const pairs = [...src.matchAll(/isFailed\('(\w+)'\)[\s\S]{0,160}?SOURCE_LABELS\.(\w+)/g)]
+      expect(pairs.length, `${rel} 的账本与中文名没配对上`).toBeGreaterThan(0)
+      const wrong = pairs.filter((m) => m[1] !== m[2]).map((m) => `账读 ${m[1]}，名字取 ${m[2]}`)
+      expect(wrong, `${rel} 接错了源：\n${wrong.join('\n')}`).toEqual([])
+    })
+  })
+
+  // 重试必须只重取自己那一路：接错 loader 时，失败的那条永远刷不出来
+  const RETRY_PAIRS: Array<[string, RegExp]> = [
+    ['pages/Timeline/index.tsx', /isFailed\('tasks'\)[\s\S]{0,220}?onRetry=\{loadTasks\}/],
+    ['pages/Evaluations/index.tsx', /isFailed\('tasks'\)[\s\S]{0,220}?onRetry=\{loadTasks\}/],
+    ['pages/Evaluations/index.tsx', /dist\.distFailed && \([\s\S]{0,240}?onRetry=\{dist\.loadDist\}/],
+    ['pages/Tasks/TaskEditor.tsx', /isFailed\('globalConfig'\)[\s\S]{0,220}?onRetry=\{loadGlobalConfig\}/],
+    ['pages/Config/EvalRules.tsx', /isFailed\('dist'\)[\s\S]{0,240}?onRetry=\{loadDist\}/],
+    ['pages/Login/index.tsx', /statusFailed=\{isFailed\('browserStatus'\)\}[\s\S]{0,200}?onRefreshStatus=\{\(\) => \{[\s\S]{0,40}?loadBrowserStatus\(\)/],
+  ]
+  RETRY_PAIRS.forEach(([rel, re]) => {
+    it(`${rel} 的重试入口指向该数据源自己的 loader`, () => {
+      expect(read(rel), `重试没指向该源的 loader：${re}`).toMatch(re)
+    })
   })
 })

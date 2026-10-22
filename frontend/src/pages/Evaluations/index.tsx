@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
   Card, Table, Space, Spin, Input, Select, Slider, Row, Col,
@@ -26,6 +26,8 @@ import { AIEvalModal } from './components/AIEvalModal'
 import { DeepAnalyzeModal } from './components/DeepAnalyzeModal'
 import { CollectResultModal } from './components/CollectResultModal'
 import { TipButton } from '@/components/TipButton'
+import FetchFailedHint from '../../components/FetchFailedHint'
+import { useFailedSources } from '../../hooks/useFailedSources'
 
 import { useEvalFilters, type ResultCategory } from './hooks/useEvalFilters'
 import { useEvalList } from './hooks/useEvalList'
@@ -383,6 +385,14 @@ function BatchSelectionAlert({
   )
 }
 
+// 本页独立请求的数据源（T02899）：任务列表喂筛选下拉，
+// 原先把 reject 吞成空块后，「没有任务」与「后端挂了」是同一个画面。
+type EvaluationsSource = 'tasks'
+
+const SOURCE_LABELS: Record<EvaluationsSource, string> = {
+  tasks: '任务列表',
+}
+
 export default function Evaluations() {
   // 告警深链（T02620）：抽屉的「低分评估」项跳过来带 ?item_id=<id>&score_max=<0-100>，
   // 本页必须真的读取，否则链接只是「跳过来自己找」——与 Orders.tsx 读 ?ref= 同一族。
@@ -473,11 +483,18 @@ export default function Evaluations() {
     { validator: (v): v is boolean => typeof v === 'boolean' },
   )
 
+  const { isFailed, track } = useFailedSources<EvaluationsSource>()
+
+  // track 内部 mark 是稳定引用，这里不依赖 filters（它的对象每次渲染都换，进了依赖会自触发无限请求）
+  const loadTasks = useCallback(() => {
+    void track('tasks', taskApi.list({ limit: 200 })).then((res) => {
+      if (res) filters.setTasks(res.items || [])
+    })
+  }, [track]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
-    taskApi.list({ limit: 200 }).then((res) => {
-      filters.setTasks(res.items || [])
-    }).catch(() => {})
-  }, [])
+    loadTasks()
+  }, [loadTasks])
 
   const onSearch = () => {
     if (list.page === 1) {
@@ -681,6 +698,21 @@ export default function Evaluations() {
           <ExportButton dataset="evaluations" params={{ task_id: filters.taskId || undefined }} />
         </Space>
       </Card>
+
+      {isFailed('tasks') && (
+        <FetchFailedHint
+          source={SOURCE_LABELS.tasks}
+          onRetry={loadTasks}
+          description="任务下拉的选项取自该接口。失败时列表仍是上次取到的数据，但按任务筛选暂时用不了。"
+        />
+      )}
+      {dist.distFailed && (
+        <FetchFailedHint
+          source={dist.distSourceLabel}
+          onRetry={dist.loadDist}
+          description="下方分布统计卡与阈值面板整块取不到数据——这是「没取到」，不是「近 7 天没有评估记录」。"
+        />
+      )}
 
       {dist.dist && dist.dist.insufficient_count > 0 && (
         <Alert

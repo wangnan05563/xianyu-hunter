@@ -10,8 +10,18 @@ import {
 import { ORDER_STATUS } from '../../constants/orderStatus'
 import TimelineFilter from './components/TimelineFilter'
 import TimelineList from './components/TimelineList'
+import FetchFailedHint from '../../components/FetchFailedHint'
+import { useFailedSources } from '../../hooks/useFailedSources'
 
 const PAGE_SIZE = 30
+
+// 本页独立请求的数据源（T02899）：任务列表喂给「任务筛选」下拉，
+// 原先把 reject 吞成空块后，下拉只剩「全部任务」，与「账号下确实没有任务」是同一个画面。
+type TimelineSource = 'tasks'
+
+const SOURCE_LABELS: Record<TimelineSource, string> = {
+  tasks: '任务列表',
+}
 
 export default function TimelinePage() {
   const [items, setItems] = useState<TimelineEntry[]>([])
@@ -25,9 +35,17 @@ export default function TimelinePage() {
   // 事件类型过滤：空数组 = 不过滤（显示全部）
   const [eventTypeFilter, setEventTypeFilter] = useState<string[]>([])
 
+  const { isFailed, track } = useFailedSources<TimelineSource>()
+
+  const loadTasks = useCallback(() => {
+    void track('tasks', taskApi.list({ limit: 200 })).then((res) => {
+      if (res) setTasks(res.items || [])
+    })
+  }, [track])
+
   useEffect(() => {
-    taskApi.list({ limit: 200 }).then((res) => setTasks(res.items || [])).catch(() => {})
-  }, [])
+    loadTasks()
+  }, [loadTasks])
 
   // 从通知配置同步事件订阅规则到过滤条件
   // 三段式判断，避免"配置映射出无效类型"导致所有事件被过滤掉的回归：
@@ -153,6 +171,13 @@ export default function TimelinePage() {
       </Row>
 
       <Card>
+        {isFailed('tasks') && (
+          <FetchFailedHint
+            source={SOURCE_LABELS.tasks}
+            onRetry={loadTasks}
+            description="任务下拉的选项取自该接口。失败时下方时间线仍是上次取到的数据，但按任务筛选暂时用不了。"
+          />
+        )}
         <TimelineFilter
           types={types}
           taskId={taskId}

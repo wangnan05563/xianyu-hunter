@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { formatDuration } from '../../utils/timeFormat'
 import { TipButton } from '@/components/TipButton'
+import FetchFailedHint from '../../components/FetchFailedHint'
+import { useFailedSources } from '../../hooks/useFailedSources'
 import {
   Card,
   Input,
@@ -323,9 +325,21 @@ function BrowserLoginTab({
 
 // S3776 修复：Cookie 注入 Tab 提取为子组件
 // 原主函数 tabItems 内含 ~10 处条件判断（&&/?:），提取后主函数复杂度降 ~10
+// 本页独立请求的数据源（T02899）。
+// cookieState 覆盖「已保存 Cookie 摘要 + 回填用的具体 Cookie 值」这一组请求：
+// 两路都只喂显示（已保存 N 个 Cookie / 输入框回填），失败原先一律吞成空块，
+// 于是「取不到」与「还没保存过 Cookie」在同一个 Tab 里长一样。
+type LoginSource = 'cookieState' | 'browserStatus'
+
+const SOURCE_LABELS: Record<LoginSource, string> = {
+  cookieState: '已保存 Cookie 状态',
+  browserStatus: '浏览器导入状态',
+}
+
 function CookieInjectTab({
   cookieFields, setCookieFields, injecting, autoFilling, autoFillResult,
   pasteText, parseResult, cookieInfo,
+  cookieFailed, cookieSource, onRetryCookieState,
   onInject, onAutoFill, onClear, onParsePaste, onPaste, onFileUpload,
 }: {
   readonly cookieFields: Record<string, string>
@@ -336,6 +350,9 @@ function CookieInjectTab({
   readonly pasteText: string
   readonly parseResult: { total: number; matched: string[]; missing: string[] } | null
   readonly cookieInfo: SavedCookieInfo | null
+  readonly cookieFailed: boolean
+  readonly cookieSource: string
+  readonly onRetryCookieState: () => void
   readonly onInject: () => void
   readonly onAutoFill: () => void
   readonly onClear: () => void
@@ -372,6 +389,14 @@ function CookieInjectTab({
           </TipButton>
         )}
       </div>
+
+      {cookieFailed && (
+        <FetchFailedHint
+          source={cookieSource}
+          onRetry={onRetryCookieState}
+          description="「已保存 N 个 Cookie」与输入框里的回填值此刻都取不到——这不是「还没保存过 Cookie」。"
+        />
+      )}
 
       {/* 已有 Cookie 状态提示 */}
       {cookieInfo?.has_cookies && (
@@ -511,6 +536,7 @@ function CookieInjectTab({
 // 原主函数 tabItems 内含 2 处 IIFE + 多处条件判断，提取后用 browserTagColor/browserTagText 替代 IIFE
 function BrowserImportTab({
   browserStatus, importing, importResult,
+  statusFailed, statusSource,
   onImport, onOpenBrowser, onRefreshStatus, onClearImportResult,
 }: {
   readonly browserStatus: {
@@ -519,6 +545,8 @@ function BrowserImportTab({
   } | null
   readonly importing: boolean
   readonly importResult: string | null
+  readonly statusFailed: boolean
+  readonly statusSource: string
   readonly onImport: (browser: 'edge' | 'chrome', autoClose?: boolean) => void
   readonly onOpenBrowser: () => void
   readonly onRefreshStatus: () => void
@@ -533,6 +561,14 @@ function BrowserImportTab({
         description="如果你已在 Edge 或 Chrome 中登录过闲鱼，可以直接导入 Cookie，无需重新扫码"
         style={{ marginBottom: 8 }}
       />
+
+      {statusFailed && (
+        <FetchFailedHint
+          source={statusSource}
+          onRetry={onRefreshStatus}
+          description="Edge/Chrome 的检测标签没取到，两个导入按钮因此一直是禁用状态——这不代表浏览器里没登录过。"
+        />
+      )}
 
       {/* 浏览器状态检测 */}
       {browserStatus && (
@@ -829,20 +865,15 @@ export default function Login() {
   const pollRef = useRef(pollTimer)
   pollRef.current = pollTimer
 
-  // 页面加载时检查当前登录态 + 填充已保存的 Cookie 值
-  useEffect(() => {
-    // 不再因已登录而跳转 — 用户点击「登录管理」就是为了管理 Cookie
-    authApi.getMe().then(() => {
-      // 仅记录状态，不跳转
-    }).catch(() => {})
-      .finally(() => setCheckingAuth(false))
+  const { isFailed, track } = useFailedSources<LoginSource>()
 
-    // 并行获取：Cookie 摘要、浏览器状态、以及已保存的具体 Cookie 值（用于返显）
-    authApi.getSavedCookieInfo().then(setCookieInfo).catch(() => {})
-    authApi.getBrowserImportStatus().then(setBrowserStatus).catch(() => {})
-
-    // 自动获取已保存的 cookie 值填充到输入框（让用户看到当前值）
-    fetch(`${API_BASE}api/auth/cookie/fetch-keys?keys=_m_h5_tk,cookie2,sgcookie,unb`, { credentials: 'include' })
+  // 已保存 Cookie 的两路请求（摘要 + 回填用的具体值）共用一个失败账：
+  // 任一失败，Tab 里「已保存 N 个 Cookie」与输入框的回填值就都不可信
+  const loadCookieState = () => {
+    void track('cookieState', authApi.getSavedCookieInfo()).then((res) => {
+      if (res) setCookieInfo(res)
+    })
+    void track('cookieState', fetch(`${API_BASE}api/auth/cookie/fetch-keys?keys=_m_h5_tk,cookie2,sgcookie,unb`, { credentials: 'include' })
       .then((r) => r.json())
       .then((data) => {
         if (data.ok && data.cookies) {
@@ -850,9 +881,29 @@ export default function Login() {
           const { updated, filled } = applyCookiesToFields(data.cookies, cookieFields)
           if (filled > 0) setCookieFields(updated)
         }
-      })
-      .catch(() => {})
-  }, [])
+      }))
+  }
+
+  const loadBrowserStatus = () => {
+    void track('browserStatus', authApi.getBrowserImportStatus()).then((res) => {
+      if (res) setBrowserStatus(res)
+    })
+  }
+
+  // 页面加载时检查当前登录态 + 填充已保存的 Cookie 值
+  useEffect(() => {
+    // 不再因已登录而跳转 — 用户点击「登录管理」就是为了管理 Cookie
+    // getMe 的结果不渲染到任何地方，401 就是本页的正常态「未登录」，因此不进失败账；
+    // catch(() => undefined) 只用于抑制 floating promise（与 desktopSilentFallback 的豁免口径一致）
+    authApi.getMe().then(() => {
+      // 仅记录状态，不跳转
+    }).catch(() => undefined)
+      .finally(() => setCheckingAuth(false))
+
+    // 并行获取：Cookie 摘要/回填值、浏览器状态
+    loadCookieState()
+    loadBrowserStatus()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 清理轮询定时器
   useEffect(() => {
@@ -1187,6 +1238,9 @@ export default function Login() {
           pasteText={pasteText}
           parseResult={parseResult}
           cookieInfo={cookieInfo}
+          cookieFailed={isFailed('cookieState')}
+          cookieSource={SOURCE_LABELS.cookieState}
+          onRetryCookieState={loadCookieState}
           onInject={handleInjectCookie}
           onAutoFill={handleAutoFillFromBrowser}
           onClear={handleClearCookies}
@@ -1225,8 +1279,10 @@ export default function Login() {
           importResult={importResult}
           onImport={handleImportFromBrowser}
           onOpenBrowser={handleOpenBrowser}
+          statusFailed={isFailed('browserStatus')}
+          statusSource={SOURCE_LABELS.browserStatus}
           onRefreshStatus={() => {
-            authApi.getBrowserImportStatus().then(setBrowserStatus).catch(() => {})
+            loadBrowserStatus()
             message.info('已刷新浏览器状态')
           }}
           onClearImportResult={() => setImportResult(null)}

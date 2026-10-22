@@ -18,6 +18,8 @@ import TagEditor from '../../components/editors/TagEditor'
 import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import { formatShortDateTime } from '../../utils/timeFormat'
 import { DiffPreviewModal } from '../../components/DiffPreviewModal'
+import DataBlock from '../../components/DataBlock'
+import { useFailedSources } from '../../hooks/useFailedSources'
 
 // 热力图坐标数据：从 distData.buckets 二维数组计算 ECharts 所需 [x, y, value] 列表与轴标签
 // 为什么提取：原实现包含 4 层嵌套（if + 3 个 for/forEach），留在组件内会让 EvalRules 复杂度超限
@@ -130,6 +132,14 @@ const priceRangeGradientRules = [
   { range: '> 800', label: '高于任务上限', score: '-25 / -50', color: 'red' },
 ]
 
+// 本页独立请求的数据源（T02899）：分布热力图原先把 reject 吞成空块后落进
+// <Empty description="暂无评估分布数据" />，接口故障被说成「近 7 天没有评估」。
+type EvalRulesSource = 'dist'
+
+const SOURCE_LABELS: Record<EvalRulesSource, string> = {
+  dist: '评估分布',
+}
+
 export default function EvalRules() {
   const { config, load, hasChanges, reset, update, previewSave, confirmSave, getFieldOriginal, revertField } = useConfigStore()
   const [distData, setDistData] = useState<{
@@ -138,6 +148,7 @@ export default function EvalRules() {
     total: number
   } | null>(null)
   const [distLoading, setDistLoading] = useState(false)
+  const { isFailed, track } = useFailedSources<EvalRulesSource>()
   // Diff 预览
   const [diffModalOpen, setDiffModalOpen] = useState(false)
   const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
@@ -200,12 +211,12 @@ export default function EvalRules() {
     loadDist()
   }, [load])
 
-  // 加载真实评估分布数据
+  // 加载真实评估分布数据：失败只记账并保留上一次取到的数据，不冲成空热力图
   const loadDist = () => {
     setDistLoading(true)
-    evalApi.distribution({ range_hours: 168, price_bin_count: 5, score_bin_count: 5 })
-      .then((res) => setDistData(res))
-      .catch(() => {})
+    void track('dist',
+      evalApi.distribution({ range_hours: 168, price_bin_count: 5, score_bin_count: 5 }))
+      .then((res) => { if (res) setDistData(res) })
       .finally(() => setDistLoading(false))
   }
 
@@ -727,6 +738,13 @@ export default function EvalRules() {
             </Card>
 
             <Card title="评估分布热力图（价格 × 评分）" style={{ marginBottom: 16 }}>
+              <DataBlock
+                failed={isFailed('dist')}
+                source={SOURCE_LABELS.dist}
+                count={distData ? distData.total : 0}
+                emptyText="暂无评估分布数据"
+                onRetry={loadDist}
+              >
               <Spin spinning={distLoading}>
                 {heatmapOption ? (
                   <>
@@ -739,6 +757,7 @@ export default function EvalRules() {
                   <Empty description="暂无评估分布数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                 )}
               </Spin>
+              </DataBlock>
             </Card>
 
             <Card title="职业关键词（标签编辑器 + 拖拽排序）">

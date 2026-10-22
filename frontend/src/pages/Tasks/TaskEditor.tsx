@@ -19,6 +19,18 @@ import { storage } from '../../utils/storage'
 import { useConfigStore, DiffChange } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
 import { TASK_MODE, isTaskMode } from '../../constants/taskStatus'
+import FetchFailedHint from '../../components/FetchFailedHint'
+import { useFailedSources } from '../../hooks/useFailedSources'
+
+// 本页独立请求的数据源（T02899）。
+// 全局配置喂的是「全局当前值：×」这类参考值与风险探测：原先四处 catch 一律吞成空块，
+// 取不到时页面把内置默认值（qps=1、pass_score=60…）当成全局当前值显示，
+// 而提交处又恒报「全局配置加载中」——用户等下去也永远提交不了。
+type TaskEditorSource = 'globalConfig'
+
+const SOURCE_LABELS: Record<TaskEditorSource, string> = {
+  globalConfig: '全局配置',
+}
 
 // Diff 预览表格的共享 render 函数（3 个全局配置 Modal 重复使用，提取到模块级避免 S4144）
 // 按类型分别处理：对象/数组走 JSON 序列化，避免 String() 输出 '[object Object]'
@@ -310,6 +322,14 @@ export default function TaskEditor() {
   // 全局配置：用于显示"当前全局值"参考 + 全局快捷入口 Modal 编辑
   // 加载一次即可，TaskEditor 生命周期内全局配置不会变（保存全局配置后会刷新）
   const [globalConfig, setGlobalConfig] = useState<AppConfig | null>(null)
+  const { isFailed, track } = useFailedSources<TaskEditorSource>()
+
+  // 取全局配置：失败时保留上一次的值并把该源记在账上（失败态由 FetchFailedHint 承接）
+  const loadGlobalConfig = () => {
+    void track('globalConfig', configApi.get()).then((res) => {
+      if (res) setGlobalConfig(res)
+    })
+  }
 
   // 用类型守卫替代 as 断言（S4325）：让 TypeScript 收窄 prefillMode 类型
   // 取值集合来自 constants/taskStatus（与后端 domain/task.py TaskMode 同源，T02716），
@@ -360,8 +380,8 @@ export default function TaskEditor() {
 
   // 加载全局配置（用于参考值显示 + 全局快捷入口 Modal）
   useEffect(() => {
-    configApi.get().then(setGlobalConfig).catch(() => {})
-  }, [])
+    loadGlobalConfig()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 新建模式下首次加载恢复草稿
   useEffect(() => {
@@ -456,7 +476,11 @@ export default function TaskEditor() {
     // globalConfig 异步加载未完成时禁止提交：detectRiskyConfig 依赖全局配置值，
     // 未加载时用默认值（如 qps=1）会漏报高风险配置
     if (!globalConfig) {
-      message.warning('全局配置加载中，请稍候再提交')
+      message.warning(
+        isFailed('globalConfig')
+          ? '全局配置加载失败，风险探测拿不到全局值；请点上方「重试」后再提交'
+          : '全局配置加载中，请稍候再提交',
+      )
       return
     }
     const risks = detectRiskyConfig(formData, globalConfig, useCron, intervalSeconds)
@@ -567,6 +591,14 @@ export default function TaskEditor() {
             onChange={(v) => setCurrent(v)}
             style={{ marginBottom: 24 }}
           />
+
+          {isFailed('globalConfig') && (
+            <FetchFailedHint
+              source={SOURCE_LABELS.globalConfig}
+              onRetry={loadGlobalConfig}
+              description="各步里「全局当前值：×」是内置默认值而不是你的真实配置，风险探测（QPS/阈值）也因此不可信。"
+            />
+          )}
 
       {/* Step 0: 基础信息 */}
       {current === 0 && (
@@ -1089,7 +1121,7 @@ export default function TaskEditor() {
       {/* 全局 AI 评估配置快捷入口 Modal */}
       <GlobalEvalConfigModal open={evalModalOpen} onClose={() => setEvalModalOpen(false)} onSaved={() => {
         // 保存后重新加载全局配置，确保概览显示最新值
-        configApi.get().then(setGlobalConfig).catch(() => {})
+        loadGlobalConfig()
       }} />
 
       {/* 全局批量采集配置快捷入口 Modal */}
@@ -1097,12 +1129,12 @@ export default function TaskEditor() {
 
       {/* 全局反检测配置快捷入口 Modal */}
       <GlobalAntidetectConfigModal open={antidetectModalOpen} onClose={() => setAntidetectModalOpen(false)} onSaved={() => {
-        configApi.get().then(setGlobalConfig).catch(() => {})
+        loadGlobalConfig()
       }} />
 
       {/* 全局搜索配置快捷入口 Modal：与其他步骤一致，避免 navigate 跳转导致编辑上下文丢失 */}
       <GlobalSearchConfigModal open={searchConfigModalOpen} onClose={() => setSearchConfigModalOpen(false)} onSaved={() => {
-        configApi.get().then(setGlobalConfig).catch(() => {})
+        loadGlobalConfig()
       }} />
     </div>
   )
