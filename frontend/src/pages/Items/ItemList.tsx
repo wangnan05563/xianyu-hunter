@@ -794,7 +794,10 @@ export default function ItemList() {
             col.render = (_d: TaskLink['display'], record: TaskLink) => {
               if (!record.updated_at) return '—'
               const t = dayjs(record.updated_at)
-              return <Tooltip title={t.format('YYYY-MM-DD HH:mm:ss')}>{t.fromNow()}</Tooltip>
+              // 绝对时间走共享 helper：dayjs 的字面量格式串会把展示绑到库自己的固定形状上，
+              // 与站内其余整时间戳（按宿主 Intl 出）在浏览器 ICU 下会分叉。
+              // 相对时间 fromNow() 是有意保留的（本列的定位就是「新鲜度」）
+              return <Tooltip title={formatDateTime(record.updated_at)}>{t.fromNow()}</Tooltip>
             }
           } else {
             col.sorter = (a: TaskLink, b: TaskLink) => {

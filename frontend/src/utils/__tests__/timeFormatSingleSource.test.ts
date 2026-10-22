@@ -401,3 +401,77 @@ describe('缩写档位只有一份表（T02905）', () => {
     expect(src, '轴标签又在切 ISO').not.toMatch(/split\('T'\)/)
   })
 })
+
+// T02911：dayjs 是时间展示来源里的第三个库（在 Intl 家族与手工拼串之外）。
+// 上面的 needle 全是 Intl / 拼串形状，`.format('YYYY-MM-DD HH:mm:ss')` 一条都不匹配，
+// 所以这一族从来没进过射程。守卫按「写法」扫带日期 token 的字面量格式串，
+// 并把合法用途（提交给后端的参数、落库的配置值）落成 文件 → 格式串 → 次数 的可校验数据：
+// 多一处（新位点没登记）红，少一处（登记词已消失）也红。
+describe('dayjs 的字面量格式串不许出现在展示位（T02911）', () => {
+  const TOKEN_RE = /\.format\('([YMDHms:\-T ]+)'\)/g
+
+  const PARAM_USE: Record<string, { readonly why: string; readonly tokens: Record<string, number> }> = {
+    'pages/Evaluations/hooks/useEvalList.ts': {
+      why: 'start_time / end_time 是查询参数，不是给用户看的时间',
+      tokens: { 'YYYY-MM-DD': 2 },
+    },
+    'pages/Export/index.tsx': {
+      why: '导出请求体的时间边界，由后端解析',
+      tokens: { 'YYYY-MM-DDTHH:mm:ss': 2 },
+    },
+    'pages/Config/NotifierChannels/index.tsx': {
+      why: '免打扰时段的配置值，落库给后端读',
+      tokens: { 'HH:mm': 2 },
+    },
+  }
+
+  // walk() 已排除 __tests__，这里的字面量不会自伤；注释行再挡一道
+  function scan(): Record<string, Record<string, number>> {
+    const found: Record<string, Record<string, number>> = {}
+    for (const p of walk(SRC_ROOT)) {
+      const rel = p.replace(SRC_ROOT, '').replace(/\\/g, '/').slice(1)
+      for (const line of readFileSync(p, 'utf-8').split(/\r?\n/)) {
+        if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue
+        for (const m of line.matchAll(TOKEN_RE)) {
+          const tokens = found[rel] ?? (found[rel] = {})
+          tokens[m[1]] = (tokens[m[1]] ?? 0) + 1
+        }
+      }
+    }
+    return found
+  }
+
+  it('带日期格式串的 .format() 只出现在登记过的参数位点', () => {
+    const offenders: string[] = []
+    for (const [rel, tokens] of Object.entries(scan())) {
+      const allowed = PARAM_USE[rel]?.tokens
+      for (const [tok, n] of Object.entries(tokens)) {
+        if (!allowed || allowed[tok] !== n) {
+          offenders.push(`${rel}: .format('${tok}') × ${n}${allowed ? `（登记为 ${allowed[tok] ?? 0}）` : '（未登记）'}`)
+        }
+      }
+    }
+    expect(
+      offenders,
+      `dayjs 的字面量格式串把展示绑到库自己的固定形状，与站内其它时间点（按宿主 Intl 出）在浏览器 ICU 下会分叉；` +
+        `展示请走 formatDateTime / formatShortDateTime，确属参数或配置则登记进 PARAM_USE：\n${offenders.join('\n')}`,
+    ).toEqual([])
+  })
+
+  it('登记的参数位点仍然真实存在（豁免表不许只增不减地腐烂）', () => {
+    const found = scan()
+    for (const [rel, entry] of Object.entries(PARAM_USE)) {
+      for (const [tok, n] of Object.entries(entry.tokens)) {
+        expect(found[rel]?.[tok], `${rel} 里的 '${tok}' 数量对不上（${entry.why}），核对后更新豁免表`).toBe(n)
+      }
+    }
+  })
+
+  it('商品列表 updated_at 的绝对时间走 helper，相对时间保持有意豁免', () => {
+    const src = read('pages/Items/ItemList.tsx')
+    expect(src, 'updated_at 列的 tooltip 又回到 dayjs 的字面量格式串').not.toMatch(TOKEN_RE)
+    expect(src).toContain('formatDateTime(record.updated_at)')
+    // fromNow()（「3 分钟前」）是本列的定位，T02695 起就在射程外；钉住它别被同源清扫顺手删掉
+    expect(src, 'updated_at 列的相对时间被顺手删掉了').toContain('{t.fromNow()}')
+  })
+})
