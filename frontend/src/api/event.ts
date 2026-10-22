@@ -17,7 +17,7 @@ export const logApi = {
       (r) => r.data,
     ),
 
-  search: (params: { q?: string; level?: string; tag?: string; task_id?: string; start?: string; limit?: number; offset?: number }) =>
+  search: (params: { q?: string; level?: string; tag?: string; task_id?: string; start?: string; end?: string; limit?: number; offset?: number }) =>
     client
       .get<{
         items: LogEntry[]
@@ -34,12 +34,14 @@ export const logApi = {
   // 所以 LOG 按钮不拼参数、文案也要说清是「全部原始日志文件」
   exportUrl: (
     format: 'csv' | 'log',
-    filters?: { q?: string; level?: string; task_id?: string },
+    filters?: { q?: string; level?: string; task_id?: string; start?: string; end?: string },
   ) => {
     const params = new URLSearchParams({ format })
     if (filters?.q) params.set('q', filters.q)
     if (filters?.level) params.set('level', filters.level)
     if (filters?.task_id) params.set('task_id', filters.task_id)
+    if (filters?.start) params.set('start', filters.start)
+    if (filters?.end) params.set('end', filters.end)
     return `${API_BASE}api/logs/export?${params.toString()}`
   },
 }

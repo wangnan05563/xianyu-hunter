@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { formatDateTime } from '../../utils/timeFormat'
 import { useSearchParams } from 'react-router-dom'
-import { Card, Space, Spin, Input, Select, Tag, Empty, message, Row, Col, Statistic, List } from 'antd'
+import { Card, Space, Spin, Input, Select, Tag, Empty, message, Row, Col, Statistic, List, DatePicker } from 'antd'
+import dayjs, { type Dayjs } from 'dayjs'
 import { ReloadOutlined, SearchOutlined, DownloadOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ClearOutlined } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
 import FetchFailedHint from '@/components/FetchFailedHint'
@@ -9,6 +10,20 @@ import { logApi, type LogEntry } from '../../api'
 import { countLevels, levelColor, normalizeLevel } from '../../constants/logLevels'
 import { API_BASE } from '../../utils/apiBase'
 import { extractApiError } from '../../utils/apiError'
+
+const { RangePicker } = DatePicker
+// 与后端 parse_iso_datetime 对齐的本地时间格式（不带时区）
+const RANGE_FORMAT = 'YYYY-MM-DDTHH:mm:ss'
+type RangeValue = [Dayjs | null, Dayjs | null] | null
+
+// URL 里的 start/end 可能被手改坏：非法值当未设置，不能让整页日期选择器崩掉
+function parseRangeValue(start: string | null, end: string | null): RangeValue {
+  const s = start ? dayjs(start) : null
+  const e = end ? dayjs(end) : null
+  const sv = s?.isValid() ? s : null
+  const ev = e?.isValid() ? e : null
+  return sv || ev ? [sv, ev] : null
+}
 
 export default function Logs() {
   const [rawLogs, setRawLogs] = useState<Array<{ source: string; level: string; lines: string[] }>>([])
@@ -25,6 +40,11 @@ export default function Logs() {
   const [query, setQuery] = useState(searchParams.get('query') || '')
   const [level, setLevel] = useState<string | undefined>(searchParams.get('level') || undefined)
   const [taskId, setTaskId] = useState<string | undefined>(searchParams.get('task_id') || undefined)
+  // 时间范围：后端 /api/logs/search 与 /export 都支持 start/end，此前前端没有入口（T02679）
+  const [range, setRange] = useState<RangeValue>(() =>
+    parseRangeValue(searchParams.get('start'), searchParams.get('end')))
+  const startIso = range?.[0]?.isValid() ? range[0].format(RANGE_FORMAT) : undefined
+  const endIso = range?.[1]?.isValid() ? range[1].format(RANGE_FORMAT) : undefined
   // 实时流四态：未开启 / 连接中 / 已连接 / 已断开。
   // 断线不能退回「未开启」——那会让用户以为是自己关掉的，且已收到的日志看起来像停更了
   const [streamState, setStreamState] = useState<'idle' | 'connecting' | 'connected' | 'disconnected'>('idle')
@@ -43,8 +63,10 @@ export default function Logs() {
     if (query) params.set('query', query)
     if (level) params.set('level', level)
     if (taskId) params.set('task_id', taskId)
+    if (startIso) params.set('start', startIso)
+    if (endIso) params.set('end', endIso)
     setSearchParams(params, { replace: true })
-  }, [query, level, taskId, setSearchParams])
+  }, [query, level, taskId, startIso, endIso, setSearchParams])
 
   const loadRaw = useCallback(() => {
     setLoading(true)
@@ -60,7 +82,7 @@ export default function Logs() {
 
   const search = useCallback(() => {
     setSearchLoading(true)
-    logApi.search({ q: query, level, task_id: taskId, limit: 100 })
+    logApi.search({ q: query, level, task_id: taskId, start: startIso, end: endIso, limit: 100 })
       .then((res) => {
         const items = res.items || []
         const total = typeof res.total_estimate === 'number' ? res.total_estimate : items.length
@@ -76,7 +98,7 @@ export default function Logs() {
         message.error(msg)
       })
       .finally(() => setSearchLoading(false))
-  }, [query, level, taskId])
+  }, [query, level, taskId, startIso, endIso])
 
   useEffect(() => { loadRaw() }, [loadRaw])
 
@@ -278,12 +300,20 @@ export default function Logs() {
                 onChange={(e) => setTaskId(e.target.value)}
                 allowClear
               />
-              <TipButton tip="按关键词/级别/任务搜索日志" type="primary" icon={<SearchOutlined />} onClick={search} loading={searchLoading}>搜索</TipButton>
+              <RangePicker
+                showTime
+                allowClear
+                style={{ width: 330 }}
+                value={range}
+                onChange={(v) => setRange(v as RangeValue)}
+                placeholder={['开始时间', '结束时间']}
+              />
+              <TipButton tip="按关键词/级别/任务/时间范围搜索日志" type="primary" icon={<SearchOutlined />} onClick={search} loading={searchLoading}>搜索</TipButton>
               {/* 导出 CSV 拼当前筛选参数，口径与所见一致；后端默认上限 1000 条，写进提示避免「导出全部」误解 */}
               <TipButton
-                tip="按当前筛选条件（关键词/级别/任务ID）导出 CSV，最多 1000 条"
+                tip="按当前筛选条件（关键词/级别/任务ID/时间范围）导出 CSV，最多 1000 条"
                 icon={<DownloadOutlined />}
-                href={logApi.exportUrl('csv', { q: query, level, task_id: taskId })}
+                href={logApi.exportUrl('csv', { q: query, level, task_id: taskId, start: startIso, end: endIso })}
                 target="_blank"
               >
                 导出CSV
@@ -291,6 +321,13 @@ export default function Logs() {
               {/* format=log 走后端原始文件拼接，不吃筛选参数，文案只能声明「全部原始日志文件」 */}
               <TipButton tip="导出全部原始日志文件（run.stdout/stderr，不受筛选条件影响）" icon={<DownloadOutlined />} href={logApi.exportUrl('log')} target="_blank">导出LOG</TipButton>
             </Space>
+
+            {/* 当前生效的时间范围：搜索与 CSV 导出共用，避免用户忘了筛选还开着一段时间 */}
+            {startIso && (
+              <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--xh-text-secondary)' }}>
+                当前时间范围：{startIso.replace('T', ' ')} ~ {endIso ? endIso.replace('T', ' ') : '不限'}
+              </div>
+            )}
 
             {searchError && (
               <FetchFailedHint
