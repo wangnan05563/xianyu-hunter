@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { formatDateTime } from '../../utils/timeFormat'
 import {
   Card,
   Timeline,
@@ -261,7 +262,7 @@ export default function VersionManager() {
           <Card>
             <Statistic
               title="最近备份"
-              value={backups[0] ? new Date(backups[0].ts).toLocaleString('zh-CN') : '无'}
+              value={backups[0] ? formatDateTime(backups[0].ts) : '无'}
             />
           </Card>
         </Col>
@@ -308,7 +309,7 @@ export default function VersionManager() {
                           <Tag color={globalIndex === 0 ? 'green' : 'default'}>
                             {globalIndex === 0 ? '最新' : `v${backups.length - globalIndex}`}
                           </Tag>
-                          <strong>{new Date(backup.ts).toLocaleString('zh-CN')}</strong>
+                          <strong>{formatDateTime(backup.ts)}</strong>
                           <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>{formatSize(backup.size)}</span>
                         </Space>
                       </div>
@@ -388,7 +389,7 @@ export default function VersionManager() {
                 <Statistic title="文件名" value={selectedBackup.filename} valueStyle={{ fontSize: 12 }} />
               </Col>
               <Col span={12}>
-                <Statistic title="备份时间" value={new Date(selectedBackup.ts).toLocaleString('zh-CN')} />
+                <Statistic title="备份时间" value={formatDateTime(selectedBackup.ts)} />
               </Col>
             </Row>
             <Row gutter={16} style={{ marginTop: 16 }}>

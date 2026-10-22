@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { formatDateTime, formatDuration } from '../../utils/timeFormat'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Card, Descriptions, Tag, Button, Space, Spin, Row, Col, Table, Empty, message, Tabs, List,
@@ -117,7 +118,7 @@ function buildRunsOption(runs: TaskRun[]): EChartOption | null {
   return {
     tooltip: { trigger: 'axis' },
     legend: { data: ['事件数', '命中数', '错误数'] },
-    xAxis: { type: 'category', data: runs.map((r) => new Date(r.start).toLocaleString('zh-CN').slice(5, 16)) },
+    xAxis: { type: 'category', data: runs.map((r) => formatDateTime(r.start).slice(5, 16)) },
     yAxis: { type: 'value' },
     series: [
       { name: '事件数', type: 'bar', data: runs.map((r) => r.event_count), itemStyle: { color: '#1890ff' } },
@@ -130,7 +131,7 @@ function buildRunsOption(runs: TaskRun[]): EChartOption | null {
 
 // S3776 修复：运行历史列内的三元渲染提取为模块级辅助函数
 // 原 runColumns 内 3 个三元（结束时间/错误数/警告数）让主函数复杂度累加
-const formatRunEnd = (t: string | null): string => (t ? new Date(t).toLocaleString('zh-CN') : '运行中')
+const formatRunEnd = (t: string | null): string => (t ? formatDateTime(t) : '运行中')
 const formatErrCount = (v: number) => (v > 0 ? <Tag color="red">{v}</Tag> : v)
 const formatWarnCount = (v: number) => (v > 0 ? <Tag color="orange">{v}</Tag> : v)
 
@@ -426,12 +427,12 @@ export default function TaskDetail() {
     },
     {
       title: '时间', dataIndex: 'created_at', key: 'created_at', width: 170,
-      render: (t: string) => new Date(t).toLocaleString('zh-CN'),
+      render: (t: string) => formatDateTime(t),
     },
   ]
 
   const runColumns = [
-    { title: '开始', dataIndex: 'start', key: 'start', render: (t: string) => new Date(t).toLocaleString('zh-CN') },
+    { title: '开始', dataIndex: 'start', key: 'start', render: (t: string) => formatDateTime(t) },
     // 三元渲染提取为模块级 formatRunEnd/formatErrCount/formatWarnCount（避免主函数复杂度累加）
     { title: '结束', dataIndex: 'end', key: 'end', render: formatRunEnd },
     { title: '时长(秒)', dataIndex: 'duration_s', key: 'duration_s', width: 100 },
@@ -462,7 +463,7 @@ export default function TaskDetail() {
     },
     {
       title: '发布时间', key: 'publish_time', width: 170,
-      render: (_: unknown, r: TaskLink) => r.display?.publish_time ? new Date(r.display.publish_time).toLocaleString('zh-CN') : '—',
+      render: (_: unknown, r: TaskLink) => r.display?.publish_time ? formatDateTime(r.display.publish_time) : '—',
     },
     {
       title: '来源', key: 'source', width: 80,
@@ -524,8 +525,8 @@ export default function TaskDetail() {
                 <Descriptions.Item label="最大发布天数">{task.max_publish_days || '不限'}</Descriptions.Item>
                 <Descriptions.Item label="排除词">{task.exclude_words || '无'}</Descriptions.Item>
                 <Descriptions.Item label="搜索过滤">{task.search_filters || '无'}</Descriptions.Item>
-                <Descriptions.Item label="创建时间">{new Date(task.created_at).toLocaleString('zh-CN')}</Descriptions.Item>
-                <Descriptions.Item label="更新时间">{new Date(task.updated_at).toLocaleString('zh-CN')}</Descriptions.Item>
+                <Descriptions.Item label="创建时间">{formatDateTime(task.created_at)}</Descriptions.Item>
+                <Descriptions.Item label="更新时间">{formatDateTime(task.updated_at)}</Descriptions.Item>
               </Descriptions>
             </Card>
 
@@ -602,7 +603,7 @@ export default function TaskDetail() {
                           <h4>空闲间隔（{idleGaps.length}）</h4>
                           {idleGaps.slice(0, 5).map((g) => (
                             <div key={`${g.from}-${g.to}`} style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
-                              {new Date(g.from).toLocaleString('zh-CN')} → {new Date(g.to).toLocaleString('zh-CN')}（{Math.floor(g.duration_s / 60)}分钟）
+                              {formatDateTime(g.from)} → {formatDateTime(g.to)}（{formatDuration(g.duration_s)}）
                             </div>
                           ))}
                         </div>

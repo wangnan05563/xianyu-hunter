@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
+import { tryFormatDateTime as formatPublishTime } from '../../../utils/timeFormat'
 import { Tag, Space, Tooltip, Image, Popconfirm } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import {
@@ -49,13 +50,6 @@ function FeedbackButton({
       style={active ? { background: color, borderColor: color } : { color }}
     />
   )
-}
-
-function formatPublishTime(raw: string | number | null | undefined): string | null {
-  if (raw === null || raw === undefined || raw === '') return null
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleString('zh-CN', { hour12: false })
 }
 
 function ThumbCell({ url, title }: { readonly url?: string | null; readonly title?: string | null }) {

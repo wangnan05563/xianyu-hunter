@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, type ReactNode } from 'react'
+import { formatDateTime } from '../../utils/timeFormat'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { TipButton } from '@/components/TipButton'
 import {
@@ -363,7 +364,7 @@ export default function Notifications() {
                         <Tag>{NOTIFICATION_CATEGORY_LABEL[item.category]}</Tag>
                         <span style={{ fontWeight: item.read_at ? 'normal' : 600 }}>{item.title}</span>
                         <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
-                          {new Date(item.created_at).toLocaleString('zh-CN')}
+                          {formatDateTime(item.created_at)}
                         </span>
                       </Space>
                     }

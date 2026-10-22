@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { formatDateTime } from '../../utils/timeFormat'
 import { useSearchParams } from 'react-router-dom'
 import { Card, Space, Spin, Input, Select, Tag, Empty, message, Row, Col, Statistic, List } from 'antd'
 import { ReloadOutlined, SearchOutlined, DownloadOutlined, PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ClearOutlined } from '@ant-design/icons'
@@ -278,7 +279,7 @@ export default function Logs() {
                       <div style={{ width: '100%' }}>
                         <Space size="small">
                           <Tag color={levelColor(item.level)}>{normalizeLevel(item.level)}</Tag>
-                          <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>{new Date(item.created_at).toLocaleString('zh-CN')}</span>
+                          <span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>{formatDateTime(item.created_at)}</span>
                           {item.stage && <Tag>{item.stage}</Tag>}
                           {item.task_id && <Tag color="blue">{item.task_id.slice(0, 8)}</Tag>}
                         </Space>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { formatDateTime } from '../../../utils/timeFormat'
 import {
   Card, Table, Button, Input, Tag, Space, Typography, Popconfirm,
   message, Statistic, Row, Col, Modal,
@@ -169,7 +170,7 @@ export function VectorAdminPanel() {
               render: (m: boolean) => <Tag color={m ? 'blue' : 'default'}>{m ? '手动' : '自动'}</Tag>,
             },
             { title: '大小', dataIndex: 'size_display', key: 'size_display' },
-            { title: '创建时间', dataIndex: 'created_at', key: 'created_at' },
+            { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => formatDateTime(v) },
             {
               title: '操作',
               key: 'actions',
@@ -235,7 +236,7 @@ export function VectorAdminPanel() {
             { title: '动作', dataIndex: 'action', key: 'action', render: (v: string) => <Tag>{v}</Tag> },
             { title: '目标', dataIndex: 'target', key: 'target', ellipsis: true },
             { title: '来源', dataIndex: 'source', key: 'source' },
-            { title: '时间', dataIndex: 'created_at', key: 'created_at' },
+            { title: '时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => formatDateTime(v) },
           ]}
         />
       </Card>

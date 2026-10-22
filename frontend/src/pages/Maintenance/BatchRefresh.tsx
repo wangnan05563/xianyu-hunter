@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { formatDateTime as formatTime, formatDuration } from '../../utils/timeFormat'
 import {
   Alert,
   Button,
@@ -103,28 +104,15 @@ function renderTriggerSourceTag(source: BatchRefreshTriggerSource) {
   )
 }
 
-// ISO 时间字符串 → 本地可读时间
-function formatTime(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  try {
-    return new Date(iso).toLocaleString('zh-CN', { hour12: false })
-  } catch {
-    return iso
-  }
-}
-
 // Statistic formatter 用：渲染上次执行时间，提取到顶层避免组件内嵌套子组件（SonarQube S6478）
 function renderLastRunTimeText(time: string) {
   return <Text style={{ fontSize: 14 }}>{time}</Text>
 }
 
-// 毫秒 → 可读时长（如 "1分23秒"）
+// 毫秒 → 可读时长：单位词表与算法都交给 formatDuration，这里只做毫秒→秒的换算
 function formatElapsed(ms: number | null | undefined): string {
-  if (!ms || ms < 0) return '—'
-  const sec = Math.floor(ms / 1000)
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return m > 0 ? `${m}分${s}秒` : `${s}秒`
+  if (ms == null || ms < 0) return '—'
+  return formatDuration(Math.floor(ms / 1000), { withSeconds: true })
 }
 
 // ===== T02578 批量采集收尾反馈：可单测的纯函数（4.4-1 / 4.4-3 / 4.4-5）=====

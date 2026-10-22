@@ -1,5 +1,6 @@
 // frontend/src/mobile/pages/Timeline/index.tsx
 import { Card, Tag, Spin, Empty, App } from 'antd'
+import { formatDateTime } from '../../../utils/timeFormat'
 import { useEffect, useState, useCallback } from 'react'
 import { timelineApi } from '../../../api'
 import type { TimelineEntry } from '../../../api/types'
@@ -42,7 +43,7 @@ export default function MobileTimeline() {
           // 事件类型中文名取自 constants/eventTypes（T02842 单一事实源），此前直接落 DB 原文
           const cardTitle = entry.title || entry.item_title || eventTypeLabel(entry.type) || '事件'
           // 时间格式化交给宿主 Intl，避免引入 dayjs 增大移动端 bundle
-          const timeText = entry._ts ? new Date(entry._ts).toLocaleString('zh-CN') : ''
+          const timeText = entry._ts ? formatDateTime(entry._ts) : ''
           // Tag 颜色：订单事件=绿色，level 字段优先于其他判定（warning/err 是系统级严重度）
           let tagColor = 'blue'
           let tagText = '事件'

@@ -1,4 +1,5 @@
 import { Modal, Row, Col, Card, Statistic, Tag, Image, Space } from 'antd'
+import { formatDateTime } from '../../../utils/timeFormat'
 import { TipButton } from '@/components/TipButton'
 import { GlobalOutlined } from '@ant-design/icons'
 import type { OfficialCollectResult } from '../../../api'
@@ -167,7 +168,7 @@ export function CollectResultModal({ open, result, onCancel }: CollectResultModa
           </Card>
 
           <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', textAlign: 'center' }}>
-            数据来源：闲鱼官方页面采集 · 采集时间：{new Date().toLocaleString('zh-CN', { hour12: false })}
+            数据来源：闲鱼官方页面采集 · 采集时间：{formatDateTime(Date.now())}
           </div>
         </div>
       )}

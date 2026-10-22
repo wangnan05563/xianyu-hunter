@@ -309,7 +309,7 @@ export default function VectorAdmin() {
                       ),
                     },
                     { title: '大小', dataIndex: 'size_display', key: 'size_display', width: 100 },
-                    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180 },
+                    { title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 180, render: (v: string) => formatDateTime(v) },
                     {
                       title: '操作',
                       key: 'actions',
@@ -409,7 +409,7 @@ export default function VectorAdmin() {
           dataSource={auditLogs}
           pagination={{ pageSize: 20 }}
           columns={[
-            { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 160 },
+            { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 160, render: (v: string) => formatDateTime(v) },
             {
               title: '操作',
               dataIndex: 'action',

@@ -2,6 +2,7 @@
 // 移动端实时日志：用轮询代替桌面端 SSE（更稳，省去 EventSource token 携带复杂度）
 // 关键简化：每 3s 拉一次最新日志，按级别/关键词过滤；点击行展开详情抽屉
 import { useCallback, useEffect, useState, useRef } from 'react'
+import { formatDateTime as tsFmt } from '../../../utils/timeFormat'
 import {
   Card, Tag, Spin, App, Input, Select, Button, Drawer, Space, Empty, theme,
 } from 'antd'
@@ -20,8 +21,6 @@ const SOURCE_LABELS: Record<LogsSource, string> = { logs: '日志列表', poll: 
 const POLL_INTERVAL_MS = 3000
 // 单次拉取上限：避免一次返回过多渲染卡顿
 const FETCH_LIMIT = 100
-// 详情抽屉时间戳格式
-const tsFmt = (iso: string): string => new Date(iso).toLocaleString('zh-CN')
 
 export default function MobileLogs() {
   const { message } = App.useApp()

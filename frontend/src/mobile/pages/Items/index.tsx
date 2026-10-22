@@ -1,19 +1,12 @@
 // frontend/src/mobile/pages/Items/index.tsx
 import { Card, Select, Tag, Spin, Empty, Image, App } from 'antd'
+import { tryFormatDateTime as formatLocalTime } from '../../../utils/timeFormat'
 import { PictureOutlined } from '@ant-design/icons'
 import { useEffect, useState, useCallback, type ReactNode } from 'react'
 import { taskApi, taskLinkApi } from '../../../api'
 import type { Task, TaskLink } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
 import PullToRefresh from '../../components/PullToRefresh'
-
-// 时间本地化：后端返回 ISO 字符串，移动端按本地时区展示更直观
-function formatLocalTime(raw?: string): string | null {
-  if (!raw) return null
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleString('zh-CN', { hour12: false })
-}
 
 // 缩略图：闲鱼图床常有防盗链，加载失败时降级到占位图标
 // 不直接用 antd Image fallback 属性：自定义占位风格更贴合移动端卡片

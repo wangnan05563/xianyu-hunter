@@ -2,6 +2,7 @@
 // 移动端批量采集：状态卡 + 控制按钮 + 配置编辑 + 历史列表
 // 设计要点：保留 trigger/pause/resume/stop 四控制 + interval_minutes 热更新
 import { useEffect, useState, useCallback } from 'react'
+import { formatDateTime } from '../../../utils/timeFormat'
 import {
   Card, Tag, Spin, App, Button, Space, theme, InputNumber, Switch, Descriptions,
 } from 'antd'
@@ -106,7 +107,7 @@ export default function MobileBatchRefresh() {
         {status?.last_result && (
           <Descriptions column={1} size="small" style={{ marginTop: 8 }}>
             <Descriptions.Item label="上次执行">
-              {status.last_run_at ? new Date(status.last_run_at).toLocaleString('zh-CN') : '-'}
+              {status.last_run_at ? formatDateTime(status.last_run_at) : '-'}
             </Descriptions.Item>
             <Descriptions.Item label="成功/失败/跳过">
               {status.last_result.success} / {status.last_result.failed} / {status.last_result.skipped}
@@ -214,7 +215,7 @@ export default function MobileBatchRefresh() {
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <Tag color="blue">{change.item_id.slice(0, 12)}</Tag>
                   <span style={{ color: themeToken.colorTextTertiary }}>
-                    {new Date(change.timestamp).toLocaleString('zh-CN')}
+                    {formatDateTime(change.timestamp)}
                   </span>
                 </div>
                 <div style={{ marginTop: 2, color: themeToken.colorTextSecondary }}>

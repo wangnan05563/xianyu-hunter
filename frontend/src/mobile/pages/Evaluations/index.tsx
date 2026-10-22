@@ -1,5 +1,6 @@
 // frontend/src/mobile/pages/Evaluations/index.tsx
 import { Card, Select, Tag, Spin, Empty, Progress, App } from 'antd'
+import { tryFormatDateTime as formatLocalTime } from '../../../utils/timeFormat'
 import { useEffect, useState, useCallback } from 'react'
 import { evalApi } from '../../../api'
 import type { EvalItem } from '../../../api/types'
@@ -15,14 +16,6 @@ function getRiskColor(risk: string): string {
 
 function getRiskLabel(risk: string): string {
   return RISK_LEVEL_CONFIG[risk]?.label ?? risk
-}
-
-// 时间本地化：后端返回 ISO 字符串，移动端按本地时区展示更直观
-function formatLocalTime(raw?: string): string | null {
-  if (!raw) return null
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleString('zh-CN', { hour12: false })
 }
 
 // 状态筛选下拉项：与后端 result_category 取值严格对齐

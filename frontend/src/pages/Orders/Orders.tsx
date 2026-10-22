@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { formatDateTime, formatDuration } from '../../utils/timeFormat'
 import {
   Card, Table, Tag, Select, Space, Spin, Statistic, Row, Col,
   message, Empty, Modal, Steps, Progress, Radio, InputNumber, Result,
@@ -251,7 +252,6 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
 
   if (!order) return null
 
-  const formatTime = (sec: number) => `${Math.floor(sec / 60)}分${sec % 60}秒`
   const progressPct = totalSec.current > 0 ? Math.round(((totalSec.current - remaining) / totalSec.current) * 100) : 0
   // S3358：用 if/else 替代嵌套三元
   let phaseTitle = '接管完成'
@@ -274,7 +274,7 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
             <div style={{ marginBottom: 4, color: 'var(--xh-text-secondary)' }}>订单信息</div>
             <div>商品ID：{order.item_id}</div>
             <div>金额：<span style={{ color: '#f5222d', fontWeight: 600 }}>¥{order.price.toFixed(2)}</span></div>
-            <div>创建时间：{new Date(order.created_at).toLocaleString('zh-CN')}</div>
+            <div>创建时间：{formatDateTime(order.created_at)}</div>
           </div>
 
           <div style={{ marginBottom: 16, padding: 12, background: 'var(--xh-bg-info)', borderRadius: 6, border: '1px solid var(--xh-border-info)' }}>
@@ -307,7 +307,7 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
         <div>
           <div style={{ textAlign: 'center', marginBottom: 16 }}>
             <div style={{ fontSize: 28, fontWeight: 700, color: remaining > 0 ? '#faad14' : '#ff4d4f' }}>
-              {remaining > 0 ? formatTime(remaining) : '已超时'}
+              {remaining > 0 ? formatDuration(remaining, { withSeconds: true }) : '已超时'}
             </div>
             <Progress
               percent={progressPct}
@@ -569,11 +569,11 @@ export default function Orders() {
     },
     {
       title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 170,
-      render: (t: string) => new Date(t).toLocaleString('zh-CN'),
+      render: (t: string) => formatDateTime(t),
     },
     {
       title: '确认时间', dataIndex: 'confirmed_at', key: 'confirmed_at', width: 170,
-      render: (t: string | null) => t ? new Date(t).toLocaleString('zh-CN') : '—',
+      render: (t: string | null) => formatDateTime(t),
     },
     {
       title: '接管截止', dataIndex: 'takeover_deadline', key: 'takeover_deadline', width: 170,
@@ -581,9 +581,9 @@ export default function Orders() {
         if (!t) return '—'
         const remain = r.takeover_remaining_sec
         if (remain !== null && remain !== undefined && remain > 0) {
-          return <Tag color="orange">{Math.floor(remain / 60)}分{remain % 60}秒</Tag>
+          return <Tag color="orange">{formatDuration(remain, { withSeconds: true })}</Tag>
         }
-        return new Date(t).toLocaleString('zh-CN')
+        return formatDateTime(t)
       },
     },
     {

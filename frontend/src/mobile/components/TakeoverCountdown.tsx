@@ -11,6 +11,7 @@
 // 并按后端语义把无时区标记的串当 UTC 处理（后端 _utcnow().replace(tzinfo=None)）。
 import { useEffect, useMemo, useState } from 'react'
 import { Tag } from 'antd'
+import { formatDuration } from '../../utils/timeFormat'
 
 interface TakeoverCountdownProps {
   readonly deadline?: string | null
@@ -22,12 +23,6 @@ function parseDeadline(s: string): number | null {
   const hasTz = s.endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(s)
   const t = Date.parse(hasTz ? s : `${s}Z`)
   return Number.isNaN(t) ? null : t
-}
-
-function formatRemain(sec: number): string {
-  const m = Math.floor(sec / 60)
-  const s = sec % 60
-  return m > 0 ? `${m}分${s}秒` : `${s}秒`
 }
 
 export default function TakeoverCountdown({ deadline, remainingSec }: TakeoverCountdownProps) {
@@ -59,5 +54,5 @@ export default function TakeoverCountdown({ deadline, remainingSec }: TakeoverCo
   if (remain <= 0) return <Tag color="red">接管已超时</Tag>
   // 5 分钟内转橙色再转红色：与桌面「接管截止」列同一意图（临近要看得见）
   const color = remain <= 300 ? 'red' : 'blue'
-  return <Tag color={color}>剩 {formatRemain(remain)}</Tag>
+  return <Tag color={color}>剩 {formatDuration(remain, { withSeconds: true })}</Tag>
 }

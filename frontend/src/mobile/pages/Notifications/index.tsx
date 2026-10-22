@@ -1,5 +1,6 @@
 // frontend/src/mobile/pages/Notifications/index.tsx
 import { Card, Tag, Spin, Empty, App, Select, Button, Popconfirm, Badge, Space } from 'antd'
+import { formatDateTime } from '../../../utils/timeFormat'
 import { useCallback, useEffect, useState } from 'react'
 import { notificationApi } from '../../../api'
 import {
@@ -118,7 +119,7 @@ export default function MobileNotifications() {
                   <div style={{ fontSize: 13, color: '#666', marginBottom: 8 }}>{item.message}</div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 12, color: '#999' }}>
-                      {new Date(item.created_at).toLocaleString('zh-CN')}
+                      {formatDateTime(item.created_at)}
                     </span>
                     <Space size="small">
                       {/* 仅未读显示标记已读按钮，避免冗余操作 */}

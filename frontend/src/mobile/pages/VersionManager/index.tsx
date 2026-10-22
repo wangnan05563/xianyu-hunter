@@ -2,6 +2,7 @@
 // 移动端配置版本：备份列表 + 回滚 + 导出/导入
 // 关键简化：去掉桌面端 diff 预览，保留列表 + 回滚 + 导出
 import { useEffect, useState, useCallback } from 'react'
+import { formatDateTime as tsFmt } from '../../../utils/timeFormat'
 import {
   Card, Tag, Spin, App, Button, Space, Empty, theme, Popconfirm, Alert,
 } from 'antd'
@@ -9,8 +10,6 @@ import { ReloadOutlined, RollbackOutlined, DownloadOutlined } from '@ant-design/
 import { configApi } from '../../../api/config'
 import type { BackupItem } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
-
-const tsFmt = (iso: string): string => new Date(iso).toLocaleString('zh-CN')
 
 export default function MobileVersionManager() {
   const { message } = App.useApp()

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { formatDateTime } from '../../utils/timeFormat'
 import { Input, Space, Tag, Typography } from 'antd'
 import { cronApi } from '../../api'
 
@@ -83,7 +84,7 @@ export default function CronEditor({ value, onChange }: CronEditorProps) {
             <Text strong style={{ fontSize: 12, color: '#52c41a' }}>✓ 表达式有效，未来 5 次触发：</Text>
             <ol style={{ margin: '8px 0 0 20px', fontSize: 12, color: '#52c41a' }}>
               {nextRuns.map((t) => (
-                <li key={t}>{new Date(t).toLocaleString('zh-CN')}</li>
+                <li key={t}>{formatDateTime(t)}</li>
               ))}
             </ol>
           </div>

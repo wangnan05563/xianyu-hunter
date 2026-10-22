@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type KeyboardEvent } from 'react'
+import { formatDateTime } from '../../utils/timeFormat'
 import { Card, Table, Tag, Select, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import PriceTrendChart from '@/components/PriceTrendChart'
@@ -803,7 +804,7 @@ export default function ItemList() {
             }
             // 发布时间列只显示时间，不再回退渲染 seller_credit，
             // 避免"卖家"列与"发布时间"列错位显示同一字段
-            col.render = (d: TaskLink['display']) => d?.publish_time ? new Date(d.publish_time).toLocaleString('zh-CN') : '—'
+            col.render = (d: TaskLink['display']) => d?.publish_time ? formatDateTime(d.publish_time) : '—'
           }
           break
         case 'status':
@@ -1125,7 +1126,7 @@ export default function ItemList() {
                             </div>
                             {d?.publish_time && (
                               <div style={{ color: 'var(--xh-text-tertiary)', fontSize: 12 }}>
-                                发布: {new Date(d.publish_time).toLocaleString('zh-CN')}
+                                发布: {formatDateTime(d.publish_time)}
                               </div>
                             )}
                           </div>

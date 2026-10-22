@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
+import { formatDateTime as fmtTime } from '../../utils/timeFormat'
 import {
   Card, Space, Input, Select, List, Tag, Empty, Spin, message,
   Tabs, Descriptions, Typography, Row, Col, Statistic, Popconfirm, Checkbox,
@@ -239,15 +240,6 @@ export default function ErrorLogs() {
   const handleAiFormatChange = (fmt: 'json' | 'markdown') => {
     setAiFormat(fmt)
     if (selectedId) loadAiContext(selectedId, fmt)
-  }
-
-  // 格式化时间
-  const fmtTime = (ts: string) => {
-    try {
-      return new Date(ts).toLocaleString('zh-CN')
-    } catch {
-      return ts
-    }
   }
 
   // Tab 内容构建

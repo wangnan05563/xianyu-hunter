@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { formatDuration } from '../../utils/timeFormat'
 import { TipButton } from '@/components/TipButton'
 import {
   Card,
@@ -268,7 +269,7 @@ function BrowserLoginTab({
               </div>
               {loginStatus && loginStatus.elapsed > 0 && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  已用时 {Math.floor(loginStatus.elapsed / 60)}分{Math.floor(loginStatus.elapsed % 60)}秒
+                  已用时 {formatDuration(loginStatus.elapsed, { withSeconds: true })}
                 </Text>
               )}
               {loginStatus && (loginStatus.phase || loginStatus.child_elapsed != null) && (

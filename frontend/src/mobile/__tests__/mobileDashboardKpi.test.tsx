@@ -96,9 +96,16 @@ describe('移动端 KPI 口径（FR-G-1）', () => {
 })
 
 describe('接管倒计时（FR-G-2）', () => {
+  // 单位词表交给 utils/timeFormat 的 formatDuration（T02901）：中文单位带空格、整分也念秒，
+  // 倒计时经过整分那一秒才不会看着像停了
   it('有剩余秒数时按分秒显示', () => {
     render(<TakeoverCountdown remainingSec={125} deadline={null} />)
-    expect(screen.getByText('剩 2分5秒')).toBeInTheDocument()
+    expect(screen.getByText('剩 2 分 5 秒')).toBeInTheDocument()
+  })
+
+  it('整分那一秒仍然念秒', () => {
+    render(<TakeoverCountdown remainingSec={600} deadline={null} />)
+    expect(screen.getByText('剩 10 分 0 秒')).toBeInTheDocument()
   })
 
   it('剩余 0 显示已超时而不是剩 0 秒', () => {
@@ -115,6 +122,6 @@ describe('接管倒计时（FR-G-2）', () => {
     const future = new Date(Date.now() + 10 * 60 * 1000)
     const iso = `${future.toISOString().slice(0, 19)}`
     render(<TakeoverCountdown deadline={iso} />)
-    expect(screen.getByText(/剩 \d+分\d+秒/)).toBeInTheDocument()
+    expect(screen.getByText(/剩 \d+ 分 \d+ 秒/)).toBeInTheDocument()
   })
 })

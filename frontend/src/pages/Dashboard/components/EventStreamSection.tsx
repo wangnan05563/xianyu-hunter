@@ -1,4 +1,5 @@
 import { Card, Col, Row, List, Tag, Empty, Badge, Descriptions, theme } from 'antd'
+import { formatDateTime } from '../../../utils/timeFormat'
 import {
   SettingOutlined,
   DatabaseOutlined,
@@ -54,7 +55,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
                 <List.Item style={{ padding: '4px 0' }}>
                   <List.Item.Meta
                     avatar={<Tag color={eventTypeColor(e.type)} style={{ fontSize: 10 }}>{evTypeLabel(e.type)}</Tag>}
-                    title={<span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{new Date(e.created_at).toLocaleString('zh-CN')}</span>}
+                    title={<span style={{ fontSize: 11, color: 'var(--xh-text-tertiary)' }}>{formatDateTime(e.created_at)}</span>}
                     description={<span style={{ fontSize: 12 }}>{evMsg(e)}</span>}
                   />
                 </List.Item>
@@ -92,7 +93,7 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
               {num(overview?.evaluation_count)} 条记录
             </Descriptions.Item>
             <Descriptions.Item label={<><HeartOutlined /> 心跳</>}>
-              {overview?.ts ? new Date(overview.ts).toLocaleString('zh-CN') : '—'}
+              {overview?.ts ? formatDateTime(overview.ts) : '—'}
             </Descriptions.Item>
           </Descriptions>
           <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>

@@ -2,6 +2,7 @@
 // 移动端错误日志：按状态/级别/类型过滤 + 列表 + AI 上下文详情
 // 关键简化：去掉桌面端批量操作/状态流转工作流，保留新单条查看 + AI 诊断入口
 import { useEffect, useState, useCallback } from 'react'
+import { formatDateTime } from '../../../utils/timeFormat'
 import {
   Card, Tag, Spin, App, Select, Button, Drawer, Space, Empty, theme, Alert, Modal,
 } from 'antd'
@@ -141,7 +142,7 @@ export default function MobileErrorLogs() {
               <Tag color={STATUS_COLORS[item.status]}>{item.status}</Tag>
               <Tag color={TYPE_COLORS[item.error_type] || 'default'}>{item.error_type}</Tag>
               <span style={{ fontSize: 11, color: themeToken.colorTextTertiary, marginLeft: 'auto' }}>
-                {new Date(item.created_at).toLocaleString('zh-CN')}
+                {formatDateTime(item.created_at)}
               </span>
             </div>
             <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>{item.error_message}</div>
@@ -170,7 +171,7 @@ export default function MobileErrorLogs() {
             </div>
             <div>
               <strong>时间：</strong>
-              {new Date(detail.created_at).toLocaleString('zh-CN')}
+              {formatDateTime(detail.created_at)}
             </div>
             <div>
               <strong>错误：</strong>

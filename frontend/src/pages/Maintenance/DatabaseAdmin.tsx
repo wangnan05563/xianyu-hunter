@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
+import { formatDateTime } from '../../utils/timeFormat'
 import {
   Alert,
   Button,
@@ -1095,7 +1096,7 @@ export default function DatabaseAdmin() {
           dataSource={auditLog.items}
           pagination={{ pageSize: 20 }}
           columns={[
-            { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 160 },
+            { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 160, render: (v: string) => formatDateTime(v) },
             {
               title: '操作',
               dataIndex: 'type',
