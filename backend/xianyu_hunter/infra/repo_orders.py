@@ -75,6 +75,7 @@ class OrdersMixin:
         user_id: str | None = None,
         sort_by: str = "created_at",
         sort_dir: str = "desc",
+        order_type: str | None = None,
     ) -> list[dict]:
         with self.engine.connect() as conn:
             col = self._SORT_COLUMNS.get(sort_by, self._SORT_COLUMNS["created_at"])()
@@ -82,6 +83,9 @@ class OrdersMixin:
             stmt = select(OrderRow).order_by(order)
             if (cond := _status_condition(status)) is not None:
                 stmt = stmt.where(cond)
+            # T02673：type=dry_run/real 筛选（演练单与真实单分看）；白名单在路由层
+            if order_type:
+                stmt = stmt.where(OrderRow.type == order_type)
             if task_id:
                 stmt = stmt.where(OrderRow.task_id == task_id)
             if item_id:
@@ -97,11 +101,14 @@ class OrdersMixin:
         task_id: str | None = None,
         item_id: str | None = None,
         user_id: str | None = None,
+        order_type: str | None = None,
     ) -> int:
         with self.engine.connect() as conn:
             stmt = select(func.count(OrderRow.id))
             if (cond := _status_condition(status)) is not None:
                 stmt = stmt.where(cond)
+            if order_type:
+                stmt = stmt.where(OrderRow.type == order_type)
             if task_id:
                 stmt = stmt.where(OrderRow.task_id == task_id)
             if item_id:

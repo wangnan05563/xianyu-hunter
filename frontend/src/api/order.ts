@@ -12,6 +12,8 @@ export interface OrderListParams {
   // T02677：服务端排序（后端白名单 created_at|confirmed_at|price，非法值 422）
   sort_by?: 'created_at' | 'confirmed_at' | 'price'
   sort_dir?: 'asc' | 'desc'
+  // T02673：演练单筛选走 type 列（real|dry_run），与 status 白名单分立
+  type?: 'real' | 'dry_run'
 }
 
 // 状态卡计数（评审 2.5-1 / REQ-036）：由后端 GROUP BY 全量派生，

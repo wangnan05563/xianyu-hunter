@@ -394,6 +394,10 @@ export default function Orders() {
   // 非法值按「不筛选」降级（口径见 utils/alertDeepLink.parseOrderStatusParam）
   const urlStatus = parseOrderStatusParam(searchParams.get('status'))
   const [statusFilter, setStatusFilter] = useState<string | undefined>(urlStatus)
+  // T02673：「演练单」选项不是订单状态，走独立的 type 参数（real|dry_run），
+  // 不挤占 ?status= 白名单——否则深链白名单会拒绝 dry_run、刷新即丢筛选。
+  // 初值由下方 urlType effect 在挂载时从 URL 同步
+  const [typeFilter, setTypeFilter] = useState<'dry_run' | undefined>(undefined)
   const [loading, setLoading] = useState(false)
 
   // 告警定位（评审 2.1-4）：异常雷达改为 SPA 跳转并带 ?ref=<订单 id>，
@@ -412,6 +416,14 @@ export default function Orders() {
     setStatusFilter(urlStatus)
     setPage(1)
   }, [urlStatus])
+
+  // 同一 sheet 内换了深链（?type=dry_run）时以 URL 为准；与 onStatusChange 写回的值
+  // 幂等，不会来回打架（同 urlStatus 的处理）
+  const urlType = searchParams.get('type') === 'dry_run' ? 'dry_run' : undefined
+  useEffect(() => {
+    setTypeFilter(urlType)
+    setPage(1)
+  }, [urlType])
 
   // 后端分页状态：page/pageSize 持久化，跨会话保留用户偏好
   const [page, setPage] = useState(1)
@@ -442,7 +454,7 @@ export default function Orders() {
 
   const load = useCallback(() => {
     setLoading(true)
-    orderApi.list({ page_num: page, page_size: pageSize, status: statusFilter, sort_by: sortBy, sort_dir: sortDir })
+    orderApi.list({ page_num: page, page_size: pageSize, status: statusFilter, type: typeFilter, sort_by: sortBy, sort_dir: sortDir })
       .then((res) => {
         const list = res.items || []
         setItems(list)
@@ -455,7 +467,7 @@ export default function Orders() {
       })
       .catch(() => message.error('加载订单失败'))
       .finally(() => setLoading(false))
-  }, [page, pageSize, statusFilter, refId, sortBy, sortDir])
+  }, [page, pageSize, statusFilter, typeFilter, refId, sortBy, sortDir])
 
   useEffect(() => { load() }, [load])
 
@@ -478,11 +490,21 @@ export default function Orders() {
   // 不回写的后果：从告警带 ?status=failed 进来后手动改成「全部」，页面上是全部、
   // URL 还是 failed，刷新就被打回「已失败」——可见筛选态与链接各说各话。
   const onStatusChange = (v: string | undefined) => {
-    setStatusFilter(v)
     setPage(1)
     const next = new URLSearchParams(searchParams)
-    if (v) next.set('status', v)
-    else next.delete('status')
+    if (v === 'dry_run') {
+      // 演练单选项：两个筛选态互斥（一个下拉同时表达），URL 写 type 参数
+      setTypeFilter('dry_run')
+      setStatusFilter(undefined)
+      next.delete('status')
+      next.set('type', 'dry_run')
+    } else {
+      setTypeFilter(undefined)
+      setStatusFilter(v)
+      next.delete('type')
+      if (v) next.set('status', v)
+      else next.delete('status')
+    }
     setSearchParams(next, { replace: true })
   }
 
@@ -656,14 +678,19 @@ export default function Orders() {
             style={{ width: 150 }}
             allowClear
             placeholder="全部状态"
-            value={statusFilter}
+            value={statusFilter ?? typeFilter}
             onChange={onStatusChange}
-            options={orderStatusOptions([
-              ORDER_STATUS.PENDING_PAY,
-              ORDER_STATUS.SUCCEEDED,
-              ORDER_STATUS.FAILED,
-              ORDER_STATUS.TAKEOVER_PENDING,
-            ])}
+            options={[
+              ...orderStatusOptions([
+                ORDER_STATUS.PENDING_PAY,
+                ORDER_STATUS.SUCCEEDED,
+                ORDER_STATUS.FAILED,
+                ORDER_STATUS.TAKEOVER_PENDING,
+              ]),
+              // T02673：演练记录与真实记录混排，高频用户无法只看/排除演练单；
+              // 该项走 type=dry_run 参数，不是订单状态
+              { label: '演练单', value: 'dry_run' },
+            ]}
           />
           <TipButton tip="重新加载订单列表" icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</TipButton>
           <TipButton tip="自定义表格显示列与顺序" icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)}>列配置</TipButton>

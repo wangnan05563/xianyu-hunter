@@ -89,6 +89,9 @@ def list_orders(
         description="排序列（白名单）",
     ),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$", description="排序方向"),
+    # T02673：演练单筛选走 type 列（real|dry_run），不挤占 status 白名单——
+    # dry_run 不是订单状态，混进 ?status= 会被深链白名单拒绝、刷新即丢
+    type: str | None = Query(None, pattern="^(real|dry_run)$", description="订单类型筛选"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     # 后端分页：page_num/page_size 优先于 limit（limit 为旧版兼容参数）
@@ -106,9 +109,10 @@ def list_orders(
     rows = container.repo.list_orders(
         status=status, limit=actual_limit, offset=offset,
         task_id=task_id, item_id=item_id, user_id=user_id,
-        sort_by=sort_by, sort_dir=sort_dir,
+        sort_by=sort_by, sort_dir=sort_dir, order_type=type,
     )
-    total = container.repo.count_orders(status=status, task_id=task_id, item_id=item_id, user_id=user_id)
+    total = container.repo.count_orders(
+        status=status, task_id=task_id, item_id=item_id, user_id=user_id, order_type=type)
 
     # 给 takeover_pending 订单附加"剩余倒计时秒数"，前端 modal 直接读 deadline。
     now = _utcnow().replace(tzinfo=None)
