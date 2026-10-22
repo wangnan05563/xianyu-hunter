@@ -185,3 +185,36 @@ def invalidate_stats_cache() -> None:
     """手动失效所有 stats 缓存（用于写入操作后强制刷新）"""
     with _cache_lock:
         _cache_store.clear()
+
+
+def invalidate_cache_prefixes(*prefixes: str) -> int:
+    """按 key_fn 生成的前缀失效缓存，返回删除条数
+
+    key 结构为 (func.__qualname__, key_fn 结果) 或 (qualname, args, kwargs)；
+    仅匹配第二段为字符串且命中前缀的项（即显式 key_fn 的缓存），
+    无 key_fn 的旧式 key 不会被误删。
+    """
+    if not prefixes:
+        return 0
+    with _cache_lock:
+        doomed = [
+            key for key in _cache_store
+            if len(key) == 2 and isinstance(key[1], str) and key[1].startswith(prefixes)
+        ]
+        for key in doomed:
+            _cache_store.pop(key, None)
+    return len(doomed)
+
+
+# 订单写操作影响的统计缓存（均为 300s TTL）：
+# trend 曲线 / 今日异常雷达（含 alerts 与今日计数）/ 总览卡 / 业务 KPI（含订单成功率）
+_ORDER_STATS_CACHE_PREFIXES = ("trend:", "stats_today", "stats_overview", "kpi:")
+
+
+def invalidate_order_stats_cache() -> int:
+    """订单写操作成功后失效相关统计缓存
+
+    为什么不用 invalidate_stats_cache 全清：会把 eval_funnel / maintenance 等
+    与订单无关的缓存一并打掉，高频写反而放大读库压力。
+    """
+    return invalidate_cache_prefixes(*_ORDER_STATS_CACHE_PREFIXES)

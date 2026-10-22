@@ -11,6 +11,7 @@ from xianyu_hunter.container import Container
 from xianyu_hunter.domain.events import EventType
 from xianyu_hunter.domain.order import ORDER_STATUS_VALUES, PENDING_STATUSES, OrderStatus
 from xianyu_hunter.infra.db_models import _utcnow
+from xianyu_hunter.web.cache import invalidate_order_stats_cache
 from xianyu_hunter.web.deps import get_container
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
@@ -184,6 +185,7 @@ def delete_order(
     deleted = container.repo.delete_order_by_id(order_id, user_id=user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=_ORDER_NOT_FOUND)
+    invalidate_order_stats_cache()
     return {"ok": True, "id": order_id, "deleted": deleted}
 
 
@@ -225,6 +227,7 @@ def takeover_order(
     # 返回时再把字符串给前端，避免污染其他读取方。
     o["confirmed_at"] = now
     container.repo.upsert_order(o, user_id=user_id)
+    invalidate_order_stats_cache()
     timeout_min = _get_takeover_timeout_min()
     deadline = now + timedelta(minutes=timeout_min)
     return {
@@ -263,6 +266,7 @@ def takeover_confirm(
     container.repo.upsert_order(o, user_id=user_id)
     # F-16：订单成功后触发下游依赖任务
     _trigger_dependent_tasks(container, o, user_id=user_id)
+    invalidate_order_stats_cache()
     return {"ok": True, "id": order_id, "status": OrderStatus.SUCCEEDED.value, "paid_at": now.isoformat(timespec="seconds")}
 
 
@@ -290,6 +294,7 @@ def takeover_cancel(
     o["status"] = OrderStatus.PENDING_PAY.value
     o["confirmed_at"] = None
     container.repo.upsert_order(o, user_id=user_id)
+    invalidate_order_stats_cache()
     return {"ok": True, "id": order_id, "status": OrderStatus.PENDING_PAY.value}
 
 
@@ -339,6 +344,7 @@ def update_order_status(
     if new_status == OrderStatus.SUCCEEDED.value and old_status != OrderStatus.SUCCEEDED.value:
         _trigger_dependent_tasks(container, o, user_id=user_id)
 
+    invalidate_order_stats_cache()
     return {"ok": True, "id": order_id, "old_status": old_status, "new_status": new_status, "changed": True}
 
 
@@ -681,4 +687,6 @@ async def manual_takeover(
         if acquired_browser_lock:
             container.browser_lock.release()
 
+    # buy() 成功或失败都会写订单行（失败单由 _save_failed_order 落库），统一失效
+    invalidate_order_stats_cache()
     return _format_takeover_result(result)
