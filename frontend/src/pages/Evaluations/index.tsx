@@ -184,7 +184,7 @@ function ExpandedDetail({ r, trendCache, trendLoading, trendError, loadSellerTre
 function AnalysisPanel({
   panelCollapsed, onExpand, dist, distRange, distLoading, onDistRangeChange,
   passScore, autoBuyScore, thresholdTarget, onThresholdTargetChange, fetchSuggestion, suggestion,
-  thresholdValue, onThresholdValueChange, thresholdPassCount, thresholdPassRate, itemsCount,
+  thresholdValue, onThresholdValueChange, thresholdPassCount, thresholdPassRate, pageItemsCount, totalCount,
   targetPassRate, onTargetPassRateChange, autoSuggestedThreshold,
 }: {
   readonly panelCollapsed: boolean
@@ -203,7 +203,10 @@ function AnalysisPanel({
   readonly onThresholdValueChange: (v: number) => void
   readonly thresholdPassCount: number
   readonly thresholdPassRate: number
-  readonly itemsCount: number
+  /** 当前页条数：通过数/通过率/建议阈值都只按这一页样本计算 */
+  readonly pageItemsCount: number
+  /** 当前筛选下的全量条数（分页接口 total），仅用于说明口径 */
+  readonly totalCount: number
   readonly targetPassRate: number
   readonly onTargetPassRateChange: (v: number) => void
   readonly autoSuggestedThreshold: number
@@ -238,16 +241,23 @@ function AnalysisPanel({
           marks={{ 0: '0', 60: '60', 80: '80', 100: '100' }} />
         <Row gutter={16} style={{ marginTop: 12 }}>
           <Col span={8}>
-            <Statistic title="通过率" value={thresholdPassRate.toFixed(1)} suffix="%"
+            <Statistic title="本页通过率" value={thresholdPassRate.toFixed(1)} suffix="%"
               valueStyle={{ color: thresholdPassRate >= 60 ? '#52c41a' : '#ff4d4f' }} />
           </Col>
           <Col span={8}>
-            <Statistic title="通过数" value={thresholdPassCount} valueStyle={{ color: '#1890ff' }} />
+            <Statistic title="本页通过数" value={thresholdPassCount} valueStyle={{ color: '#1890ff' }} />
           </Col>
           <Col span={8}>
-            <Statistic title="总数" value={itemsCount} />
+            <Statistic title="本页总数" value={pageItemsCount} />
           </Col>
         </Row>
+        {/* 三项同为本页口径：若只把「总数」换成全量 total，通过数/通过率仍是本页，
+            三个数会互相除不通。这里统一标「本页」，并单独说明筛选后全量有多少条。 */}
+        <div style={{ marginTop: 8, fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
+          {totalCount > pageItemsCount
+            ? `当前筛选共 ${totalCount} 条，以上只统计本页 ${pageItemsCount} 条，翻页后数值会变`
+            : `以上按当前 ${pageItemsCount} 条评估统计`}
+        </div>
         <div style={{ marginTop: 20, paddingTop: 12, borderTop: '1px solid #f0f0f0' }}>
           <div style={{ marginBottom: 8 }}>
             目标通过率：<b style={{ color: '#faad14' }}>{targetPassRate}%</b>
@@ -255,7 +265,7 @@ function AnalysisPanel({
           <Slider value={targetPassRate} onChange={onTargetPassRateChange} min={10} max={100} step={5}
             marks={{ 10: '10%', 50: '50%', 70: '70%', 100: '100%' }} />
           <div style={{ marginTop: 8, padding: 12, background: 'rgba(250, 140, 22, 0.08)', borderRadius: 4 }}>
-            <div>建议阈值：<b style={{ color: '#fa8c16' }}>{autoSuggestedThreshold.toFixed(1)}</b> 分</div>
+            <div>建议阈值：<b style={{ color: '#fa8c16' }}>{autoSuggestedThreshold.toFixed(1)}</b> 分<span style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>（按本页样本估算）</span></div>
             <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
               即评分 ≥ {autoSuggestedThreshold.toFixed(1)} 时，约 {targetPassRate}% 的评估可通过
             </div>
@@ -805,7 +815,8 @@ export default function Evaluations() {
             onThresholdValueChange={dist.setThresholdValue}
             thresholdPassCount={dist.thresholdPassCount}
             thresholdPassRate={dist.thresholdPassRate}
-            itemsCount={list.items.length}
+            pageItemsCount={list.items.length}
+            totalCount={list.total}
             targetPassRate={dist.targetPassRate}
             onTargetPassRateChange={dist.setTargetPassRate}
             autoSuggestedThreshold={dist.autoSuggestedThreshold}
