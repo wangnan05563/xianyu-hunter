@@ -57,6 +57,14 @@ class OrdersMixin:
             row = conn.execute(stmt).first()
             return self._row_to_dict(row) if row else None
 
+    # 排序白名单（T02677）：只接受映射表里的列对象，绝不把用户输入拼进 SQL。
+    # confirmed_at 允许 NULL（未确认的行）——SQLite 里 NULL 在 asc 排最前、desc 排最后。
+    _SORT_COLUMNS = {
+        "created_at": lambda: OrderRow.created_at,
+        "confirmed_at": lambda: OrderRow.confirmed_at,
+        "price": lambda: OrderRow.price,
+    }
+
     def list_orders(
         self,
         status: str | None = None,
@@ -65,9 +73,13 @@ class OrdersMixin:
         task_id: str | None = None,
         item_id: str | None = None,
         user_id: str | None = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "desc",
     ) -> list[dict]:
         with self.engine.connect() as conn:
-            stmt = select(OrderRow).order_by(OrderRow.created_at.desc())
+            col = self._SORT_COLUMNS.get(sort_by, self._SORT_COLUMNS["created_at"])()
+            order = col.asc() if sort_dir == "asc" else col.desc()
+            stmt = select(OrderRow).order_by(order)
             if (cond := _status_condition(status)) is not None:
                 stmt = stmt.where(cond)
             if task_id:

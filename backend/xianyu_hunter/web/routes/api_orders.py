@@ -82,6 +82,13 @@ def list_orders(
     page_size: int = Query(20, ge=1, le=200, description="每页条数"),
     task_id: str | None = Query(None, description="任务 ID 精确匹配"),
     item_id: str | None = Query(None, description="商品 ID 精确匹配"),
+    # T02677：排序参数走白名单（pattern 422），非法值不静默降级——
+    # 与 status 同一口径；列名→列对象的映射在 repo 侧，SQL 不拼接用户输入
+    sort_by: str = Query(
+        "created_at", pattern="^(created_at|confirmed_at|price)$",
+        description="排序列（白名单）",
+    ),
+    sort_dir: str = Query("desc", pattern="^(asc|desc)$", description="排序方向"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     # 后端分页：page_num/page_size 优先于 limit（limit 为旧版兼容参数）
@@ -99,6 +106,7 @@ def list_orders(
     rows = container.repo.list_orders(
         status=status, limit=actual_limit, offset=offset,
         task_id=task_id, item_id=item_id, user_id=user_id,
+        sort_by=sort_by, sort_dir=sort_dir,
     )
     total = container.repo.count_orders(status=status, task_id=task_id, item_id=item_id, user_id=user_id)
 

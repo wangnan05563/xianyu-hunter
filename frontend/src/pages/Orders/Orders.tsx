@@ -5,6 +5,7 @@ import {
   message, Empty, Modal, Steps, Progress, Radio, InputNumber, Result,
   Popconfirm, Alert, Tooltip,
 } from 'antd'
+import type { SortOrder } from 'antd/es/table/interface'
 import { useSearchParams } from 'react-router-dom'
 import {
   ReloadOutlined, ThunderboltOutlined, CheckOutlined, CloseOutlined,
@@ -419,6 +420,11 @@ export default function Orders() {
   })
   const [total, setTotal] = useState(0)
 
+  // T02677：服务端排序。默认 created_at desc 与后端原固定行为一致；
+  // 金额列原先只有「当前页内排序」的本地 sorter，翻页后顺序就乱，一并并入服务端排序
+  const [sortBy, setSortBy] = useState<'created_at' | 'confirmed_at' | 'price'>('created_at')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
   // 列配置
   const [columnConfigOpen, setColumnConfigOpen] = useState(false)
   const {
@@ -436,7 +442,7 @@ export default function Orders() {
 
   const load = useCallback(() => {
     setLoading(true)
-    orderApi.list({ page_num: page, page_size: pageSize, status: statusFilter })
+    orderApi.list({ page_num: page, page_size: pageSize, status: statusFilter, sort_by: sortBy, sort_dir: sortDir })
       .then((res) => {
         const list = res.items || []
         setItems(list)
@@ -449,7 +455,7 @@ export default function Orders() {
       })
       .catch(() => message.error('加载订单失败'))
       .finally(() => setLoading(false))
-  }, [page, pageSize, statusFilter, refId])
+  }, [page, pageSize, statusFilter, refId, sortBy, sortDir])
 
   useEffect(() => { load() }, [load])
 
@@ -568,8 +574,9 @@ export default function Orders() {
     // T02674：点 ID 弹商品快照（Popover，见 ItemSummaryCell），不再是纯文本
     { title: '商品ID', dataIndex: 'item_id', key: 'item_id', width: 180, ellipsis: true, render: (v: string) => <ItemSummaryCell itemId={v} /> },
     {
+      // T02677：sorter 交服务端（sort_by=price），不再是仅当前页的本地排序
       title: '金额', dataIndex: 'price', key: 'price', width: 100,
-      sorter: (a: OrderItem, b: OrderItem) => a.price - b.price,
+      sorter: true,
       render: (v: number) => <span style={{ color: '#f5222d', fontWeight: 600 }}>¥{v.toFixed(2)}</span>,
     },
     {
@@ -577,11 +584,14 @@ export default function Orders() {
       render: (s: string) => <Tag color={orderStatusColor(s)}>{orderStatusLabel(s)}</Tag>,
     },
     {
+      // T02677：创建/确认时间列补排序（服务端全量排序），接管场景找最新待接管单不再翻页人肉找
       title: '创建时间', dataIndex: 'created_at', key: 'created_at', width: 170,
+      sorter: true, sortDirections: ['ascend', 'descend'] as SortOrder[],
       render: (t: string) => formatDateTime(t),
     },
     {
       title: '确认时间', dataIndex: 'confirmed_at', key: 'confirmed_at', width: 170,
+      sorter: true, sortDirections: ['ascend', 'descend'] as SortOrder[],
       render: (t: string | null) => formatDateTime(t),
     },
     {
@@ -685,8 +695,25 @@ export default function Orders() {
                 showQuickJumper: true,
                 pageSizeOptions: ['10', '20', '50', '100'],
                 showLessItems: true,
-                onChange: (p, ps) => { setPage(p); setPageSize(ps) },
                 showTotal: (t) => `共 ${t} 条`,
+              }}
+              onChange={(p, _filters, sorter) => {
+                // T02677：排序变更走服务端重查，且回到第 1 页（与筛选变更同一习惯，
+                // 否则排完序还停在原页码，看到的是新顺序里的「中间段」）。
+                // 非受控 sorter 在纯翻页/改 pageSize 时也会把当前排序一并上报，
+                // 所以只在「排序真的变了」时才走排序分支，否则改 pageSize 会莫名跳回第 1 页
+                const s = Array.isArray(sorter) ? sorter[0] : sorter
+                const f = s && s.field ? String(s.field) : null
+                const d = s?.order === 'ascend' ? 'asc' : s?.order === 'descend' ? 'desc' : null
+                if (f && d && (f !== sortBy || d !== sortDir) &&
+                    (f === 'created_at' || f === 'confirmed_at' || f === 'price')) {
+                  setSortBy(f)
+                  setSortDir(d)
+                  setPage(1)
+                  return
+                }
+                setPage(p.current ?? 1)
+                setPageSize(p.pageSize ?? 20)
               }}
             />
           )}
