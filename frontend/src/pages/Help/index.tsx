@@ -33,6 +33,8 @@ import {
 import type React from 'react'
 import { useTheme } from '../../contexts/ThemeContext'
 import { API_BASE } from '../../utils/apiBase'
+import { TASK_MODE, TASK_MODE_VALUES, TASK_MODE_LABELS, TASK_MODE_HINTS } from '../../constants/taskStatus'
+import type { TaskModeValue } from '../../constants/taskStatus'
 
 const { Sider, Content } = Layout
 const { Title, Paragraph, Text } = Typography
@@ -100,6 +102,29 @@ const note = (title: string, content: React.ReactNode, type: 'info' | 'warning' 
   title,
   content: <Alert type={type} showIcon message={content} style={{ marginTop: 0 }} />,
 })
+
+// 执行模式说明单源化（T02648）：名称与「要我做什么」读 constants/taskStatus，
+// 帮助文档原先写「确认后执行 / 自动执行」，向导与任务列表同一档叫「需确认 / 全自动」，
+// 三处各写一遍必然漂移，故这里只保留配色这类纯展示信息。
+const MODE_TAG_COLORS: Record<TaskModeValue, string> = {
+  [TASK_MODE.NOTIFY]: 'blue',
+  [TASK_MODE.SEMI_AUTO]: 'purple',
+  [TASK_MODE.CONFIRM]: 'orange',
+  [TASK_MODE.AUTO]: 'green',
+}
+
+const ExecutionModeNote = () => (
+  <>
+    执行模式说明：
+    {TASK_MODE_VALUES.map((mode) => (
+      <span key={mode} style={{ display: 'block', marginTop: 4 }}>
+        <Tag color={MODE_TAG_COLORS[mode]}>{mode}</Tag>
+        {TASK_MODE_LABELS[mode]}——{TASK_MODE_HINTS[mode]}
+      </span>
+    ))}
+    <span style={{ display: 'block', marginTop: 4 }}>高频任务（&lt;60 秒）有封号风险。</span>
+  </>
+)
 
 // ============ 完整文档内容 ============
 // 章节排序与 menu_registry.yaml category 一致：overview → data_view → config → maintenance → other
@@ -191,7 +216,7 @@ const DOC_SECTIONS: DocSection[] = [
         ['eval_threshold', '70', '任务级评估阈值（None 沿用全局）'],
       ]),
       scenario('使用场景', <>监控特定商品捡漏：如设置 <Text code>keyword=iPhone 15</Text>、价格 1500-2500、模式 auto，系统会自动搜索、评估并抢单。</>),
-      note('注意事项', <>执行模式说明：<Tag color="blue">notify</Tag>仅通知 <Tag color="orange">confirm</Tag>确认后执行 <Tag color="green">auto</Tag>自动抢单 <Tag color="purple">semi_auto</Tag>半自动。高频任务（&lt;60秒）有封号风险。</>, 'warning'),
+      note('注意事项', <ExecutionModeNote />, 'warning'),
     ],
   },
   {

@@ -18,7 +18,8 @@ import type { Task } from '../../api/types'
 import { storage } from '../../utils/storage'
 import { useConfigStore, DiffChange } from '../../stores/configStore'
 import { extractApiError } from '../../utils/apiError'
-import { TASK_MODE, isTaskMode } from '../../constants/taskStatus'
+import { TASK_MODE, TASK_MODE_VALUES, TASK_MODE_LABELS, TASK_MODE_HINTS, isTaskMode } from '../../constants/taskStatus'
+import type { TaskModeValue } from '../../constants/taskStatus'
 import FetchFailedHint from '../../components/FetchFailedHint'
 import { useFailedSources } from '../../hooks/useFailedSources'
 import {
@@ -92,12 +93,21 @@ const searchFilterOptions = [
   { value: 'resale', label: '🔄 转卖', desc: '转卖商品' },
 ]
 
-const modeOptions = [
-  { value: TASK_MODE.AUTO, label: '🤖 全自动', desc: '评估通过后自动抢单' },
-  { value: TASK_MODE.SEMI_AUTO, label: '⚡ 半自动', desc: '通知 + 自动抢单（需确认）' },
-  { value: TASK_MODE.CONFIRM, label: '✋ 需确认', desc: '通知 + 人工确认抢单' },
-  { value: TASK_MODE.NOTIFY, label: '🔔 仅通知', desc: '只通知不抢单' },
-]
+// 模式卡的名称与说明都取自 constants/taskStatus 的同一份表（T02648）：
+// 原先四行各写一遍 desc，semi_auto 与 confirm 两句都含「通知…确认…抢单」，
+// 新用户看不出差别（实际后端只有 auto 会自动拍下，semi_auto 靠通知回链、confirm 靠手动下单）。
+const MODE_ICONS: Record<TaskModeValue, string> = {
+  [TASK_MODE.AUTO]: '🤖',
+  [TASK_MODE.SEMI_AUTO]: '⚡',
+  [TASK_MODE.CONFIRM]: '✋',
+  [TASK_MODE.NOTIFY]: '🔔',
+}
+
+const modeOptions = TASK_MODE_VALUES.map((value) => ({
+  value,
+  label: `${MODE_ICONS[value]} ${TASK_MODE_LABELS[value]}`,
+  desc: TASK_MODE_HINTS[value],
+}))
 
 // 闲鱼搜索排序方式（与后端 SearchConfig.sort_type 对齐）
 const sortTypeOptions = [

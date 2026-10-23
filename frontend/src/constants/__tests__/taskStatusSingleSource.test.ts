@@ -4,6 +4,8 @@ import { resolve } from 'node:path'
 import {
   TASK_MODE,
   TASK_MODE_LABELS,
+  TASK_MODE_HINTS,
+  TASK_MODE_VALUES,
   TASK_STATUS,
   TASK_STATUS_CONFIG,
   taskModeOptions,
@@ -130,6 +132,38 @@ describe('任务状态/模式单一事实源（T02716）', () => {
         expect(offender, `${path} 裸写了 '${value}'，应改用 TASK_STATUS / TASK_MODE 常量`).toBeUndefined()
       }
     }
+  })
+})
+
+// T02648：四档执行模式的「这一档要我做什么」必须有单源，且彼此可区分。
+// 原向导三张模式卡里 semi_auto 写「通知 + 自动抢单（需确认）」、confirm 写「通知 + 人工确认抢单」，
+// 两句都含「通知…确认…抢单」，新用户看不出差别（真实差别只有：auto 会自己拍下、
+// 只有 semi_auto 的通知里带「确认抢单」回链）。
+describe('执行模式说明单源化（T02648）', () => {
+  it('每个模式都有说明，四句两两不同', () => {
+    expect(Object.keys(TASK_MODE_HINTS).sort()).toEqual([...TASK_MODE_VALUES].sort())
+    const hints = TASK_MODE_VALUES.map((v) => TASK_MODE_HINTS[v])
+    expect(new Set(hints).size).toBe(hints.length)
+  })
+
+  it('说明点出「在哪儿点」，且「通知 + …抢单」这种同义句式不得复活', () => {
+    expect(TASK_MODE_HINTS[TASK_MODE.SEMI_AUTO]).toContain('确认抢单')
+    expect(TASK_MODE_HINTS[TASK_MODE.CONFIRM]).toContain('评估记录')
+    expect(TASK_MODE_HINTS[TASK_MODE.NOTIFY]).not.toBe(TASK_MODE_HINTS[TASK_MODE.CONFIRM])
+    for (const hint of Object.values(TASK_MODE_HINTS)) {
+      expect(hint).not.toMatch(/通知 \+ .*抢单/)
+    }
+  })
+
+  it('向导模式卡与帮助文档读同一份说明，不再各写一遍中文', () => {
+    const editor = srcOf('pages/Tasks/TaskEditor.tsx')
+    expect(editor).toMatch(/TASK_MODE_VALUES\.map/)
+    expect(editor).toContain('TASK_MODE_HINTS[value]')
+    expect(editor).not.toContain("label: '🤖 全自动'")
+    // 注释里允许复述旧文案（解释为什么改），扫描只看代码行
+    const help = codeLines(srcOf('pages/Help/index.tsx')).join('\n')
+    expect(help).toContain('TASK_MODE_HINTS[mode]')
+    expect(help).not.toContain('确认后执行')
   })
 })
 

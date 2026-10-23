@@ -48,6 +48,26 @@ export const TASK_MODE_LABELS: Record<TaskModeValue, string> = {
   [TASK_MODE.NOTIFY]: '仅通知',
 }
 
+/**
+ * 模式 → 「这一档到底要我做什么」的一句话说明。
+ *
+ * 口径来自后端，不是形容词：worker `_should_buy()` 只对 AUTO 返回 True，
+ * SEMI_AUTO / CONFIRM / NOTIFY 都不在 Worker 侧拍下；三者的可见差别只有
+ * notifier/templates.py 给 semi_auto 单独渲染「确认抢单」回链（跳 /confirm-buy）。
+ * CONFIRM 与 NOTIFY 想下单都要用户自己到「评估记录」批量抢单或打开「确认抢单」页
+ * 触发 manual-takeover（该接口并不按 mode 拦），所以档位说的是「默认_expectation_」，
+ * 不是权限；描述只讲谁在哪一步点，不承诺系统拦死。
+ *
+ * 向导三张模式卡原先写「通知 + 自动抢单（需确认）」/「通知 + 人工确认抢单」，
+ * 两句都含「通知…确认…抢单」，新用户据此无法判断自己要去哪儿点（评审 2.2-6 / T02648）。
+ */
+export const TASK_MODE_HINTS: Record<TaskModeValue, string> = {
+  [TASK_MODE.AUTO]: '系统评估通过后直接拍下，全程不用我点',
+  [TASK_MODE.SEMI_AUTO]: '系统不自动拍下：通知里带「确认抢单」链接，点开在确认抢单页按一下即下单',
+  [TASK_MODE.CONFIRM]: '系统不自动拍下，通知里也没有链接：要我自己到「评估记录」或「确认抢单」页发起下单',
+  [TASK_MODE.NOTIFY]: '只推送商品信息，系统与我都不预期下单（想下单同「需确认」那样手动发起）',
+}
+
 /** 生成筛选项：可选状态与标签共用同一份映射，避免各页面再手写 value/label 对 */
 export function taskStatusOptions(
   values: readonly TaskStatusValue[],
