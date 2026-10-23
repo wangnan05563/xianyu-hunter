@@ -47,6 +47,19 @@ export function countConfiguredModels(config: AIModelFields): string {
 }
 
 /**
+ * 窄屏卡片用的一句话提示。刻意由上面的常量派生：
+ * 「关闭后所有 AI 功能停用」这句话在本项目里是假的（后端开关不覆盖 AI_GATE_EXCLUDED），
+ * 桌面端 T02726 已经删掉过它，别让移动端再手写一份。
+ */
+export const GATE_HINT = `关闭后 AI 建任务与 AI 评估停用；不含${joinNames([...AI_GATE_EXCLUDED])}`
+
+export interface DisableAICopyOptions {
+  /** 移动端总开关只改本页表单，要点「保存」才落库。不写清这一步，
+   * 「热更新生效」会被读成开关一切就生效（T02892）。 */
+  deferredSave?: boolean
+}
+
+/**
  * @param countsUnknown 配置或用量接口没取到时传 true：
  *   此时 config.model / today 都是兜底空值，写进「数量」会说成「0 个模型、今日 0 次」，
  *   等于把接口故障冒充成统计结果（T02700 与 T02726 的交叉点），故留 null 走 COUNT_UNKNOWN。
@@ -55,23 +68,31 @@ export function buildDisableAICopy(
   config: AIModelFields,
   today: AITodayUsage,
   countsUnknown = false,
+  opts: DisableAICopyOptions = {},
 ): DangerCopy {
   const calls = today?.total_calls ?? 0
   const tokens = today?.total_tokens ?? 0
+  const action = opts.deferredSave
+    ? '先把「启用 AI 服务」开关切到关闭，再点本页「保存」才会写入' +
+      '（settings.ai_enabled = false，热更新生效，无需重启）'
+    : '把 AI 功能总开关切到关闭（settings.ai_enabled = false，热更新生效，无需重启）'
   return {
     title: '确认关闭 AI 功能总开关？',
-    action: '把 AI 功能总开关切到关闭（settings.ai_enabled = false，热更新生效，无需重启）',
+    action,
     scope:
       `受影响：${joinNames([...AI_GATE_AFFECTED])}——后端在调用 LLM 前先检查开关，` +
       '这些操作会直接返回「AI 功能已关闭」的 403 错误，不会自动改用规则模式；' +
       '后台任务的自动评估/深度分析则跳过 AI，沿用规则评估结果。' +
       `不包含：${joinNames([...AI_GATE_EXCLUDED])}（后端无此开关判断），` +
-      '以及 API Key、模型配置与历史评估结果。',
+      '以及 API Key、模型配置与历史评估结果。' +
+      (opts.deferredSave ? '取消本确认框则本页表单不变；只切开关而不点保存，后端配置也不会变。' : ''),
     count: countsUnknown
       ? null
       : `${countConfiguredModels(config)} · 今日已调用 ${calls} 次、${tokens} tokens`,
-    recovery:
-      '再点一次开关即恢复，配置与历史结果不受影响；关闭期间不会新增 token 消耗，' +
-      '但已经消耗的 token 不可退。',
+    recovery: opts.deferredSave
+      ? '再点一次开关并保存即恢复，配置与历史结果不受影响；关闭期间不会新增 token 消耗，' +
+        '但已经消耗的 token 不可退。'
+      : '再点一次开关即恢复，配置与历史结果不受影响；关闭期间不会新增 token 消耗，' +
+        '但已经消耗的 token 不可退。',
   }
 }

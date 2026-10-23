@@ -9,6 +9,8 @@ import { SaveOutlined, ReloadOutlined, ApiOutlined } from '@ant-design/icons'
 import { aiApi } from '../../../api'
 import type { AIConfig, AIUsage } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { confirmDanger } from '../../../components/DangerSummary'
+import { GATE_HINT, buildDisableAICopy } from '../../../pages/Config/AIConfig/dangerCopy'
 
 export default function MobileAIConfig() {
   const { message } = App.useApp()
@@ -42,6 +44,20 @@ export default function MobileAIConfig() {
   }, [message])
 
   useEffect(() => { void load() }, [load])
+
+  // 移动端的总开关不即时生效：它只改本页 form，真正落库是下面的「保存」。
+  // 所以关闭必须当场确认，否则误点后一次保存就把整份 AI 配置一起写下去（T02892）。
+  const handleToggleAI = async (checked: boolean): Promise<void> => {
+    if (!form) return
+    if (!checked) {
+      // 用量接口失败时 usage 为 null：此时「今日已调用 0 次」是假后果，传 countsUnknown
+      const confirmed = await confirmDanger(
+        buildDisableAICopy(form, usage?.today ?? {}, !usage, { deferredSave: true })
+      )
+      if (!confirmed) return
+    }
+    setForm({ ...form, ai_enabled: checked })
+  }
 
   const save = async (): Promise<void> => {
     if (!form) return
@@ -126,12 +142,12 @@ export default function MobileAIConfig() {
           <div>
             <div style={{ fontWeight: 600 }}>启用 AI 服务</div>
             <div style={{ fontSize: 12, color: themeToken.colorTextSecondary }}>
-              关闭后所有 AI 评估功能停用
+              {GATE_HINT}
             </div>
           </div>
           <Switch
             checked={form.ai_enabled}
-            onChange={(v) => setForm({ ...form, ai_enabled: v })}
+            onChange={(v) => { void handleToggleAI(v) }}
           />
         </div>
       </Card>

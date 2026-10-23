@@ -11,6 +11,7 @@ import { missingDangerFields } from '@/components/DangerSummary'
 import {
   AI_GATE_AFFECTED,
   AI_GATE_EXCLUDED,
+  GATE_HINT,
   buildDisableAICopy,
   countConfiguredModels,
 } from '../dangerCopy'
@@ -92,6 +93,27 @@ describe('未配置模型时数量不得伪装成完整', () => {
     expect(missingDangerFields(copy)).toEqual([])
     // 取到数据时仍要给出具体数量，别把 countsUnknown 当成默认状态
     expect(buildDisableAICopy(CONFIG, TODAY).count).toContain('受影响的模型 2 个')
+  })
+})
+
+describe('deferredSave：移动端开关只改本页表单（T02892）', () => {
+  it('动作与恢复成本必须写明「再点保存才生效」，桌面端措辞不受污染', () => {
+    const copy = buildDisableAICopy(CONFIG, TODAY, false, { deferredSave: true })
+    expect(copy.action).toContain('保存')
+    expect(copy.scope).toContain('不点保存')
+    expect(copy.recovery).toContain('并保存')
+    expect(missingDangerFields(copy)).toEqual([])
+    // 桌面端切换即生效，不能带上只对移动端成立的话
+    const desktop = buildDisableAICopy(CONFIG, TODAY)
+    expect(desktop.action).not.toContain('保存')
+    expect(desktop.scope).not.toContain('不点保存')
+  })
+
+  it('窄屏卡片提示由「不包含」清单派生，不再承诺「所有 AI 功能」', () => {
+    for (const excluded of AI_GATE_EXCLUDED) {
+      expect(GATE_HINT, `${excluded} 应出现在卡片提示里`).toContain(excluded)
+    }
+    expect(GATE_HINT).not.toContain('所有 AI')
   })
 })
 
