@@ -10,6 +10,7 @@ import { aiApi } from '../../../api'
 import type { AIConfig, AIUsage } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
 import { confirmDanger } from '../../../components/DangerSummary'
+import { invalidateAIEnabled } from '../../../hooks/useAIEnabled'
 import { GATE_HINT, buildDisableAICopy } from '../../../pages/Config/AIConfig/dangerCopy'
 
 export default function MobileAIConfig() {
@@ -64,6 +65,7 @@ export default function MobileAIConfig() {
     setSaving(true)
     try {
       await aiApi.putConfig(form)
+      invalidateAIEnabled(form.ai_enabled)
       message.success('已保存')
     } catch (e) {
       message.error(extractApiError(e, '保存失败'), 3)

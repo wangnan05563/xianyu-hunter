@@ -12,6 +12,7 @@ import type { EvalItem } from '../../../api'
 import { RISK_LEVEL_CONFIG } from '../../../constants/riskLevels'
 import { orderStatusColor, orderStatusLabel } from '../../../constants/orderStatus'
 import { isDataInsufficient, getInsufficientReason, resolveActionDisplay, type ActionPlaceholderType } from '../utils'
+import { AI_GATE_OFF_TIP, useAIEnabled } from '../../../hooks/useAIEnabled'
 
 const ACTION_PLACEHOLDER_TEXT: Record<Exclude<ActionPlaceholderType, null>, string> = {
   ordered: '已下单',
@@ -103,6 +104,9 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
     autoBuyScore, passScore, collecting, feedbackSubmitting, manualTaking,
     onAIEval, onDeepAnalyze, onCollectOfficial, onFeedback, onManualTakeover, onTitleClick,
   } = params
+  // 总开关关闭时 AI 列直接置灰：后端会 403，但让用户先看清是开关的问题，
+  // 而不是点一次拿一个抽屉里的红字（T02890）
+  const aiOff = useAIEnabled().enabled === false
 
   return useMemo(() => [
     {
@@ -381,18 +385,18 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
       render: (_: unknown, r: EvalItem) => (
         <Space size={4}>
           <TipButton
-            tip="AI 成色评估"
+            tip={aiOff ? AI_GATE_OFF_TIP : 'AI 成色评估'}
             size="small"
             icon={<RobotOutlined />}
             onClick={() => onAIEval(r.item_id)}
-            disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
+            disabled={aiOff || (isDataInsufficient(r) && (r.payload.score ?? 0) < 60)}
           />
           <TipButton
-            tip="深度鉴伪（盗图/损坏/一致性/模板）"
+            tip={aiOff ? AI_GATE_OFF_TIP : '深度鉴伪（盗图/损坏/一致性/模板）'}
             size="small"
             icon={<ThunderboltOutlined />}
             onClick={() => onDeepAnalyze(r.item_id)}
-            disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
+            disabled={aiOff || (isDataInsufficient(r) && (r.payload.score ?? 0) < 60)}
           />
         </Space>
       ),
@@ -488,5 +492,6 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
   ], [
     autoBuyScore, passScore, collecting, feedbackSubmitting, manualTaking,
     onAIEval, onDeepAnalyze, onCollectOfficial, onFeedback, onManualTakeover, onTitleClick,
+    aiOff,
   ])
 }

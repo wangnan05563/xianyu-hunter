@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { message } from 'antd'
 import { aiApi, type AIConditionResult, type DeepAnalyzeResult } from '../../../api'
+import { AI_DISABLED_FALLBACK, extractApiError, isAiDisabledError } from '../../../utils/apiError'
 
 /**
  * AI 评估 Hook
@@ -42,8 +43,9 @@ export function useEvalAI(): EvalAIState {
     const error = err as { response?: { status?: number; data?: { detail?: string } } }
     const status = error?.response?.status
     const detail = error?.response?.data?.detail
-    if (status === 403) {
-      message.error('AI 功能未开启，请在配置页面开启')
+    // AI 关闭由 apiError 的单一判定入口识别（带机器码），不再把任意 403 说成「AI 未开启」
+    if (isAiDisabledError(err)) {
+      message.error(extractApiError(err, AI_DISABLED_FALLBACK))
     } else if (status === 404) {
       message.error('商品不存在于数据库中')
     } else if (status === 422) {

@@ -681,19 +681,15 @@ sequenceDiagram
 
 **FR-1.1** AI 总开关（`ai_enabled` 字段）
 - 默认关闭，用户首次配置后手动开启
-- 关闭时所有 AI 端点（除 config GET/PUT）调用前先执行 `_check_ai_enabled()`
-- `ai_enabled=false` 时抛 HTTP 403，`detail="AI 功能已关闭，请在「AI 服务」配置页面开启"`
-- 前端关闭时二次确认（`globalGlobal.confirm`），防止误操作
-- 关闭后所有 AI 功能降级到规则模式（不消耗 token）：
-  - `parse_task` → `_rule_parse`
-  - `evaluate_condition` → `_rule_eval_condition`
-  - `deep_analyze` → `_rule_deep_analyze`
-  - `seller_template_check` 本身就是纯规则，不受影响
+- 关闭时受门禁的 5 个推理端点（`/parse-task`、`/evaluate-condition`、`/test-connection`、`/deep-analyze`、`/seller-template-check`）调用前先执行 `_check_ai_enabled()`；`/config`、`/models`、`/test-embedding`、`/usage`、`/budget` 不做门禁
+- `ai_enabled=false` 时抛 HTTP 403，`detail="AI 功能已关闭，请在「AI 服务」配置页面开启"`，并带机器码 `code="ai_disabled"`（前端判定入口：`utils/apiError.ts` 的 `isAiDisabledError()`）
+- 前端关闭时二次确认（`confirmDanger` 四要素，T02726），防止误操作
+- **门禁在规则回落之前**：上述端点在关闭时直接返回 403，不会退回 `_rule_parse` / `_rule_eval_condition` / `_rule_deep_analyze`。真正「跳过 AI、沿用规则结果」的是 `modules/worker.py` 的自动评估与自动深度分析（前置条件含 `settings.ai_enabled`）。Chatbot / RAG / Embedding / 价格趋势 AI 解读不读取 `ai_enabled`，不受本开关影响（见 T02891 裁决）。
 
 **FR-1.2** 前端 AI 总开关 Card：
 - 标题 + 状态 Tag（success=已开启 / error=已关闭）
 - Switch 组件
-- 关闭时弹出 `globalGlobal.confirm("关闭后将降级到规则模式，确定关闭？")`
+- 关闭时弹出 `confirmDanger` 四要素确认（文案单一来源 `pages/Config/AIConfig/dangerCopy.ts`；移动端因「先切开关再点保存才写入」，确认文案带延迟落库提示 `deferredSave`）
 - 关闭后 Tab 1 配置区域半透明遮罩 + 不可点击
 - Tab 2 Embedding 配置不受影响（独立于 AI 总开关）
 
@@ -1502,7 +1498,7 @@ export const ENDPOINT_LABELS: Record<string, string> = {
 - **SR-8.1.2**：`/api/ai/*` **不加入认证白名单**（与 `/api/auth/cookie` 等不同）
 - **SR-8.1.3**：401 响应必须返回 JSON `{"detail": "Unauthorized"}`（遵循 project_memory 硬约束）
 - **SR-8.1.4**：AI 配置全局共享（不按 user_id 隔离），所有用户共用同一套配置
-- **SR-8.1.5**：AI 总开关检查（`_check_ai_enabled`）抛 403 "AI 功能已关闭，请在「AI 服务」配置页面开启"
+- **SR-8.1.5**：AI 总开关检查（`_check_ai_enabled`）抛 403 `detail="AI 功能已关闭，请在「AI 服务」配置页面开启"` + `code="ai_disabled"`
 
 ### 8.2 API Key 安全
 
@@ -1826,7 +1822,7 @@ data/
 |------|--------|----------|----------|
 | AC-1 | 菜单入口 | 侧边栏"配置管理"分组下显示"AI 服务"，点击进入 `/config/ai` | UI 检查 |
 | AC-2 | AI 总开关 | Switch 关闭时弹出二次确认；关闭后 Tab 1 半透明遮罩 | UI 操作 |
-| AC-3 | AI 关闭降级 | 关闭后所有 AI 端点返回 403；降级到规则模式 | 后端单测 |
+| AC-3 | AI 关闭拦截 | 关闭后 5 个受门禁推理端点返回 403 `code=ai_disabled`（门禁在规则回落之前，不自动降级）；worker 自动评估/深度分析跳过 AI | 后端单测 |
 | AC-4 | LLM 预设切换 | 点击 8 个预设按钮自动填充 base_url/model/vision_model；先落库再更新 UI | UI 操作 |
 | AC-5 | Embedding 预设切换 | 点击 5 个预设按钮自动填充字段；先落库再更新 UI | UI 操作 |
 | AC-6 | API Key 脱敏 | `GET /api/ai/config` 返回 `****xxxx` | 后端单测 |

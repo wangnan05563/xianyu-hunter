@@ -11,6 +11,7 @@ import UsageStats from './components/UsageStats'
 import BudgetSettings from './components/BudgetSettings'
 import FetchFailedHint from '../../../components/FetchFailedHint'
 import { useFailedSources } from '../../../hooks/useFailedSources'
+import { invalidateAIEnabled } from '../../../hooks/useAIEnabled'
 
 const { Text } = Typography
 
@@ -115,6 +116,8 @@ export default function AIConfig() {
     try {
       await aiApi.putConfig({ ai_enabled: checked })
       setConfig((prev) => ({ ...prev, ai_enabled: checked }))
+      // 让「智能建任务」「AI 成色评估」等入口的置灰跟着真实配置走
+      invalidateAIEnabled(checked)
       message.success(checked ? 'AI 功能已开启' : 'AI 功能已关闭')
     } catch {
       message.error('操作失败')

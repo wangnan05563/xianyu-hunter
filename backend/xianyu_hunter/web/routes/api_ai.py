@@ -27,6 +27,7 @@ from xianyu_hunter.container import Container
 from xianyu_hunter.infra.ai_usage import check_budget, record_usage
 from xianyu_hunter.infra.db_models import _utcnow
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.middleware.exception_handler import CodedHTTPException
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -37,6 +38,9 @@ HTTP_TIMEOUT_SEC = 25.0
 CHAT_COMPLETIONS_PATH = "/chat/completions"
 AUTH_BEARER_PREFIX = "Bearer "
 CONTENT_TYPE_JSON = "application/json"
+
+# AI 总开关关闭时 403 的机器码，前端 src/utils/apiError.ts 按此单一入口判定
+AI_DISABLED_CODE = "ai_disabled"
 
 AI_PRESET_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
@@ -88,13 +92,17 @@ def _is_vision_capable(model_name: str | None) -> bool:
 
 
 def _check_ai_enabled() -> None:
-    """AI 全局开关检查：关闭时抛出 403，阻止所有 AI 调用"""
+    """AI 全局开关检查：关闭时抛出 403，阻止所有 AI 调用
+
+    带 code=ai_disabled：前端需要「按机器码分支一次」而不是各页面 grep 中文文案，
+    detail 文案保持一字不变（老前端/老后端任一侧都还能按原样展示）。
+    """
     settings = get_settings()
     if not settings.ai_enabled:
-        from fastapi import HTTPException
-        raise HTTPException(
+        raise CodedHTTPException(
             status_code=403,
             detail="AI 功能已关闭，请在「AI 服务」配置页面开启",
+            code=AI_DISABLED_CODE,
         )
 
 
