@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { Table, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch, Dropdown, Popconfirm } from 'antd'
+import { Table, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch, Dropdown, Popconfirm, Pagination } from 'antd'
+import type { TablePaginationConfig } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined, MoreOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
@@ -848,6 +849,30 @@ export default function TaskList() {
     },
   ]
 
+  // 分页器单源（T02649）：表格视图与卡片视图共用同一份 current/total/pageSize 与同一个 onChange。
+  // 原先卡片视图只有「上一页 / 第 N 页 / 下一页」，切视图后既看不到总条数也改不了每页条数。
+  // 批量操作仍只作用当前页（「启动本页」），这里不扩成跨页批量。
+  const handlePageChange = (p: number, ps: number) => {
+    // S7735：避免取反条件，改为正向判断
+    // 切换 pageSize 时重置到第1页
+    if (ps === pageSize) {
+      setPage(p)
+    } else {
+      setPageSize(ps)
+      setPage(1)
+    }
+  }
+
+  const paginationConfig: TablePaginationConfig = {
+    current: page,
+    total,
+    pageSize,
+    onChange: handlePageChange,
+    showSizeChanger: true,
+    pageSizeOptions: [20, 50, 100],
+    showTotal: (t) => `共 ${t} 条`,
+  }
+
   return (
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
@@ -947,24 +972,7 @@ export default function TaskList() {
             selectedRowKeys,
             onChange: setSelectedRowKeys,
           }}
-          pagination={{
-            current: page,
-            total,
-            pageSize,
-            onChange: (p, ps) => {
-              // S7735：避免取反条件，改为正向判断
-              // 切换 pageSize 时重置到第1页
-              if (ps === pageSize) {
-                setPage(p)
-              } else {
-                setPageSize(ps)
-                setPage(1)
-              }
-            },
-            showSizeChanger: true,
-            pageSizeOptions: [20, 50, 100],
-            showTotal: (t) => `共 ${t} 条`,
-          }}
+          pagination={paginationConfig}
         />
       ) : (
         /* 卡片视图 */
@@ -1051,13 +1059,10 @@ export default function TaskList() {
               )
             })}
           </Row>
-          {tasks.length > 0 && (
+          {/* 判据用 total 而不是 tasks.length：翻到超出范围的空页时也得留下退路（表格视图同样如此） */}
+          {total > 0 && (
             <div style={{ textAlign: 'center', marginTop: 16 }}>
-              <Space>
-                <TipButton tip="返回上一页" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</TipButton>
-                <span>{page} / {Math.max(1, Math.ceil(total / pageSize))}</span>
-                <TipButton tip="前往下一页" disabled={page >= Math.ceil(total / pageSize)} onClick={() => setPage(page + 1)}>下一页</TipButton>
-              </Space>
+              <Pagination {...paginationConfig} size="small" />
             </div>
           )}
         </Spin>
