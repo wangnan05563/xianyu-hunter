@@ -1,7 +1,7 @@
 """Tasks 领域数据访问 - 任务 CRUD
 
 提供：
-- upsert_task / get_task / list_tasks / list_tasks_with_last_seen / count_tasks / update_task_status
+- upsert_task / get_task / list_tasks / list_tasks_with_last_seen / list_task_options / count_tasks / update_task_status
 """
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from xianyu_hunter.infra.db_models import _utcnow, ItemRow, TaskRow
+
+# 下拉候选的硬上限：id+name 三列极轻，放宽到千级仍远小于列表接口的 200 上限
+TASK_OPTIONS_LIMIT = 1000
 
 
 class TasksMixin:
@@ -83,6 +86,19 @@ class TasksMixin:
                     d["last_seen_at"] = d["last_seen_at"].isoformat()
                 out.append(d)
             return out
+
+    def list_task_options(self, user_id: str | None = None, limit: int = TASK_OPTIONS_LIMIT) -> list[dict]:
+        """任务下拉候选：只取 id / name / keyword。
+
+        与 list_tasks 的区别是刻意不 JOIN items、不返回 config 大字段，
+        因此调用方可以把它当「全量候选」用，而不必受列表分页的 limit 牵连。
+        """
+        with self.engine.connect() as conn:
+            stmt = select(TaskRow.id, TaskRow.name, TaskRow.keyword).where(TaskRow.status != "deleted")
+            if user_id is not None:
+                stmt = stmt.where(TaskRow.user_id == user_id)
+            stmt = stmt.order_by(desc(TaskRow.created_at)).limit(max(1, limit))
+            return [{"id": r.id, "name": r.name, "keyword": r.keyword} for r in conn.execute(stmt)]
 
     def count_tasks(self, status: str | None = None, user_id: str | None = None) -> int:
         """统计任务数（带 status 过滤）。不传 status = 排除已删除"""

@@ -3,7 +3,7 @@ import { Table, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Al
 import type { TablePaginationConfig } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined, MoreOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
-import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
+import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskOption, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
 import {
   TASK_MODE,
   TASK_STATUS,
@@ -87,6 +87,7 @@ export default function TaskList() {
   // ---- 闲鱼内容关联面板状态 ----
   const [linkPanelOpen, setLinkPanelOpen] = useState(false)
   const [linkTaskId, setLinkTaskId] = useState<string>('')
+  const [linkTaskOptions, setLinkTaskOptions] = useState<TaskOption[]>([])
   const [linkSearch, setLinkSearch] = useState('')
   const [linkType, setLinkType] = useState<string>('item')
   const [linkItems, setLinkItems] = useState<TaskLink[]>([])
@@ -454,6 +455,22 @@ export default function TaskList() {
   }, [linkTaskId, linkType, linkPage, linkPageSize])
 
   useEffect(() => { loadLinks() }, [loadLinks])
+
+  // 面板任务下拉的候选独立拉全量（T02654）：tasks 只有当前页，
+  // 直接当候选用会让分页范围外的任务选不到，其关联也就无从删除。
+  const refreshLinkTaskOptions = useCallback(() => {
+    taskApi.options()
+      .then((res) => setLinkTaskOptions(res.items || []))
+      .catch(() => {
+        // 候选接口失败时保持上一次列表：面板仍可选已加载任务、手动添加关联
+      })
+  }, [])
+
+  // 依赖 tasks：新建/重命名/删除后都会走 load()，候选列表跟着刷新，
+  // 避免出现「列表里有、下拉里没有」的第二个数据源
+  useEffect(() => {
+    if (linkPanelOpen) refreshLinkTaskOptions()
+  }, [linkPanelOpen, refreshLinkTaskOptions, tasks])
 
   // 跨任务搜索过滤（useMemo 避免每次渲染重新计算）
   const filteredLinkItems = useMemo(() => linkItems.filter((item) => {
@@ -1088,7 +1105,7 @@ export default function TaskList() {
                     style={{ minWidth: 200 }}
                     showSearch
                     optionFilterProp="label"
-                    options={tasks.map((t) => ({ value: t.id, label: t.name || t.keyword }))}
+                    options={linkTaskOptions.map((t) => ({ value: t.id, label: t.name || t.keyword }))}
                   />
                   <Input.Search
                     placeholder="按 key 或标题搜索"

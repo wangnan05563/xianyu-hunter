@@ -188,6 +188,14 @@ export interface TaskEvalOverride {
   auto_collect_max_per_run?: number
 }
 
+// GET /api/tasks/options 的返回项：只有下拉需要的三个轻字段。
+// 单列出来而不是复用 Task，是为了让「选择器候选」与「列表分页」在类型层就是两回事。
+export interface TaskOption {
+  id: string
+  name: string
+  keyword: string
+}
+
 export interface Task {
   id: string
   name: string

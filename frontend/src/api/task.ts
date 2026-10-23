@@ -1,6 +1,6 @@
 import client from './client'
 import { API_BASE } from '../utils/apiBase'
-import type { Task, TaskCreateBody, TaskRun, TaskDep, TaskLink, FieldMap, TaskPrecheckResult } from './types'
+import type { Task, TaskOption, TaskCreateBody, TaskRun, TaskDep, TaskLink, FieldMap, TaskPrecheckResult } from './types'
 
 // 任务 API：负责任务的 CRUD 与运行控制
 // start/pause/resume/stop 统一委托 control 端点，避免后端多次实现相似逻辑
@@ -10,6 +10,11 @@ export const taskApi = {
       '/api/tasks',
       { params },
     ).then((r) => r.data),
+
+  // 下拉候选（T02654）：list 的 limit 被后端压到 200，且每项带 config 大字段；
+  // 需要「全量任务」当选项时必须走这个轻接口，否则选不到分页范围外的任务
+  options: () =>
+    client.get<{ items: TaskOption[]; count: number }>('/api/tasks/options').then((r) => r.data),
 
   get: (id: string) => client.get<Task>(`/api/tasks/${id}`).then((r) => r.data),
 

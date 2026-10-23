@@ -169,6 +169,24 @@ def list_tasks(
     }
 
 
+@router.get("/options")
+def list_task_options(
+    request: Request,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """任务下拉候选（id + name + keyword），供「与列表分页解耦」的选择器使用。
+
+    为什么单独开一个端点而不是让前端把 list_tasks 的 limit 调大：
+    list_tasks 的 limit 有 200 上限（要带 config 大字段 + JOIN items 聚合 last_seen），
+    而下拉只需要三个轻字段，可以给到 repo 层的 TASK_OPTIONS_LIMIT。
+    多用户隔离与 list_tasks 完全一致：同样按 request.state.user_id 过滤。
+    必须声明在 /{task_id} 之前，否则 "options" 会被当成 task_id 匹配掉。
+    """
+    user_id = getattr(request.state, "user_id", "default")
+    rows = container.repo.list_task_options(user_id=user_id)
+    return {"items": rows, "count": len(rows)}
+
+
 @router.post("")
 def create_task(
     body: TaskCreate,
