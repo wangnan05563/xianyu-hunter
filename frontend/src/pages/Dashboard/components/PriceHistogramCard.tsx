@@ -158,7 +158,7 @@ export default function PriceHistogramCard({
               )}
             </span>
           )}
-          <TipButton size="small" onClick={() => onNavigate('/items')} tip="进入商品列表页面">查看商品</TipButton>
+          <TipButton size="small" onClick={() => onNavigate('/items')} tip="进入商品中心页面">查看商品</TipButton>
         </div>
       }>
       {/* 任务列表失败时下拉只剩「全部任务」，必须说明原因，否则用户以为真的只有一个任务 */}

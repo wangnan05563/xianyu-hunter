@@ -38,7 +38,7 @@ export const MENU_GUIDES: MenuGuide[] = [
   {
     route: '/tasks/:id',
     steps: [
-      { selector: '.page-container', title: '任务详情', description: '查看任务运行状态、采集商品、抢单记录，并可嵌入「商品列表」Tab 管理与导出商品。' },
+      { selector: '.page-container', title: '任务详情', description: '查看任务运行状态、采集商品、抢单记录，并在「闲鱼内容关联」Tab 管理该任务的商品/卖家链接。' },
     ],
   },
   {

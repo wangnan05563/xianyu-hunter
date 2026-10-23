@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -5,6 +6,7 @@ import { setMenuLabelIndex } from '../../../api/menu'
 import type { MenuItem } from '../../../api/menu'
 import { sheetRegistry, findSheetMeta } from '../sheetRegistry'
 import { buildCommandItems } from '../../../hooks/useMenuConfig'
+import { MENU_GUIDES } from '../../../guides/menuGuides'
 
 // 导航文案单一事实源守卫（T02556 / FR-B-4）
 // 背景：同一个页面曾在侧栏、面包屑、命令面板、标签栏四处各有叫法
@@ -17,6 +19,11 @@ const REGISTRY_SOURCE = readFileSync(
   'utf-8',
 )
 const LAYOUT_SOURCE = readFileSync(resolve(__dirname, '../../layout/MainLayout.tsx'), 'utf-8')
+const HELP_SOURCE = readFileSync(resolve(__dirname, '../../../pages/Help/index.tsx'), 'utf-8')
+const PRICE_HISTOGRAM_SOURCE = readFileSync(
+  resolve(__dirname, '../../../pages/Dashboard/components/PriceHistogramCard.tsx'),
+  'utf-8',
+)
 
 function parseRegistryLabels(): Map<string, string> {
   const map = new Map<string, string>()
@@ -91,5 +98,34 @@ describe('导航文案单一事实源（T02556 / FR-B-4）', () => {
   it('用户隐藏的菜单项同样不出现在命令面板', () => {
     const hidden = menuItem('chatbot', '智能客服', '/chatbot')
     expect(buildCommandItems([{ ...hidden, visible: false }])).toEqual([])
+  })
+
+  // 评审 2.3-1：页面名在侧栏/标签栏/帮助/引导/仪表盘入口之间不得再分裂出「商品列表」
+  describe('/items 命名单一事实源（T02657）', () => {
+    const helpItemsBlock = HELP_SOURCE.slice(
+      HELP_SOURCE.indexOf("id: 'items'"),
+      HELP_SOURCE.indexOf("id: 'evaluations'"),
+    )
+
+    it('帮助文档的商品模块标题与菜单一致', () => {
+      expect(helpItemsBlock).toContain("title: '商品中心'")
+      expect(helpItemsBlock).not.toContain('商品列表')
+    })
+
+    it('全站引导里 /items 的标题与菜单一致', () => {
+      const guide = MENU_GUIDES.find((g) => g.route === '/items')
+      expect(guide?.steps[0]?.title).toBe('商品中心')
+    })
+
+    it('任务详情引导与帮助不再宣称内嵌「商品列表」页签', () => {
+      const taskGuide = MENU_GUIDES.find((g) => g.route === '/tasks/:id')
+      expect(taskGuide?.steps[0]?.description).not.toContain('商品列表')
+      expect(helpItemsBlock).not.toContain('商品列表')
+    })
+
+    it('仪表盘价格直方图的入口提示使用商品中心', () => {
+      expect(PRICE_HISTOGRAM_SOURCE).toContain("onNavigate('/items')")
+      expect(PRICE_HISTOGRAM_SOURCE).not.toContain('商品列表')
+    })
   })
 })
