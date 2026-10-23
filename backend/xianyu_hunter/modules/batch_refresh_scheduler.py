@@ -77,6 +77,57 @@ class _BatchCounters:
     processed: int = 0
 
 
+def load_resumable_progress(repo: Any) -> dict[str, Any] | None:
+    """读取可续传的进度记录（纯读）
+
+    查找 status in (paused, running) 的最近一条（进程异常退出后可能残留 running，
+    一并视为可续传）。与 `select_batch_items` 一起被触发前预估和真实执行共用；
+    本函数刻意不清理记录，清理是执行路径的副作用（见 `_prepare_batch_items`）。
+    """
+    with repo.engine.connect() as conn:
+        stmt = (
+            select(BatchRefreshProgressRow)
+            .where(BatchRefreshProgressRow.status.in_(("paused", "running")))
+            .order_by(BatchRefreshProgressRow.created_at.desc())
+            .limit(1)
+        )
+        row = conn.execute(stmt).first()
+        if row is None:
+            return None
+        try:
+            pending_ids = json.loads(row.pending_item_ids)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return {
+            "task_id": row.task_id,
+            "pending_item_ids": pending_ids,
+            "total": row.total,
+            "processed": row.processed,
+        }
+
+
+def select_batch_items(
+    repo: Any, cfg: Any, resumed: dict[str, Any] | None
+) -> tuple[list[dict], int, int]:
+    """选出本批要处理的商品（纯读：不同步 Cookie、不写进度）
+
+    触发前预估与真实执行共用这一个函数，保证「预告会跑多少」与历史里的 total_items
+    同源（T02578 的分母同源口径；两边各写一份查询必然漂移）。
+    注意 `list_unsold_items` 调用处不传 user_id——执行路径即如此，预估必须原样复用。
+
+    Returns:
+        (items, processed, total)：续传时 processed 为已处理数，total 为该批原始总数。
+    """
+    if resumed:
+        pending_ids = resumed["pending_item_ids"]
+        items = repo.list_items_by_ids(pending_ids)
+        # 暂停期间可能已被其他流程标记为已售
+        items = [it for it in items if not it.get("is_sold")]
+        return items, resumed["processed"], resumed["total"]
+    items = repo.list_unsold_items(limit=cfg.max_items_per_run)
+    return items, 0, len(items)
+
+
 class BatchRefreshScheduler:
     """批量采集调度器
 
@@ -473,31 +524,22 @@ class BatchRefreshScheduler:
         Returns:
             (items, processed, total)：items 为待处理列表，processed 为已处理数（续传时非 0），total 为总数。
         """
-        resumed = self._load_resumable_progress()
+        resumed = load_resumable_progress(self._container.repo)
+        if resumed is None:
+            # 只有真跑批次才注入 Cookie：浏览器同步是副作用，预估路径不碰
+            await self._sync_cookie_before_batch(task_id, started_at)
+        items, processed, total = select_batch_items(
+            self._container.repo, self._config, resumed
+        )
         if resumed:
-            # 从持久化的 pending_item_ids 恢复
-            pending_ids = resumed["pending_item_ids"]
-            items = self._container.repo.list_items_by_ids(pending_ids)
-            # 过滤掉已售的（暂停期间可能已被其他流程标记为已售）
-            items = [it for it in items if not it.get("is_sold")]
-            processed = resumed["processed"]
-            total = resumed["total"]
             logger.info(
                 f"[BatchRefresh#{task_id}] 从断点续传: 已处理 {processed}/{total}, "
                 f"剩余 {len(items)} 个未售商品"
             )
-            # 清理旧的进度记录
+            # 清理旧的进度记录（副作用留在执行路径）
             self._clear_progress()
-            return items, processed, total
-
-        # 新批次：先同步 Cookie，再拉取在售商品
-        await self._sync_cookie_before_batch(task_id, started_at)
-        items = self._container.repo.list_unsold_items(
-            limit=self._config.max_items_per_run
-        )
-        processed = 0
-        total = len(items)
-        logger.info(f"[BatchRefresh#{task_id}] 开始采集 {total} 个商品")
+        else:
+            logger.info(f"[BatchRefresh#{task_id}] 开始采集 {total} 个商品")
         return items, processed, total
 
     async def _sync_cookie_before_batch(
@@ -764,34 +806,6 @@ class BatchRefreshScheduler:
             # 清理状态，避免下次批次创建历史时 _current_history_id 残留
             self._current_history_id = None
             self._current_errors = []
-
-    def _load_resumable_progress(self) -> dict | None:
-        """加载可续传的进度记录
-
-        查找 status=paused 的最近一条记录（进程异常退出后可能残留 running 状态，
-        一并视为可续传）。
-        """
-        engine = self._container.repo.engine
-        with engine.connect() as conn:
-            stmt = (
-                select(BatchRefreshProgressRow)
-                .where(BatchRefreshProgressRow.status.in_(("paused", "running")))
-                .order_by(BatchRefreshProgressRow.created_at.desc())
-                .limit(1)
-            )
-            row = conn.execute(stmt).first()
-            if row is None:
-                return None
-            try:
-                pending_ids = json.loads(row.pending_item_ids)
-            except (json.JSONDecodeError, TypeError):
-                return None
-            return {
-                "task_id": row.task_id,
-                "pending_item_ids": pending_ids,
-                "total": row.total,
-                "processed": row.processed,
-            }
 
     def _save_progress(
         self,

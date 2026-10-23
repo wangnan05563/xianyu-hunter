@@ -43,6 +43,7 @@ import {
   type BatchRefreshHistoryStatus,
   type BatchRefreshStatus,
   type BatchRefreshTriggerSource,
+  type BatchRefreshTriggerPreview,
 } from '../../api'
 import { extractApiError } from '../../utils/apiError'
 import { usePersistentState } from '../../hooks/usePersistentState'
@@ -183,6 +184,31 @@ export function cleanupPreviewDescription(
     : `将删除 ${days} 天前的 ${n} 条执行历史，操作不可恢复`
 }
 
+/** 触发前预估状态（T02771 / 4.4-2）：每次打开确认框都重新取，条数是活的 */
+export type TriggerPreviewState = {
+  status: 'loading' | 'ready' | 'error'
+  data?: BatchRefreshTriggerPreview
+}
+
+/**
+ * 触发确认框的口径说明（4.4-2）：条数来自 /trigger-preview，它与 `_prepare_batch_items`
+ * 共用 `select_batch_items()`——不能拿商品表 count 或 history total 冒充。
+ * 统计失败时绝不显示「0 个」：那会让用户以为本批没东西可跑。
+ */
+export function triggerPreviewDescription(state: TriggerPreviewState | undefined): string {
+  if (!state || state.status === 'loading') return '正在统计本批将处理的商品数…'
+  if (state.status === 'error' || !state.data) {
+    return '本批范围统计失败：无法确认会跑多少商品，请点「重试」后再确认'
+  }
+  const { pending, limit, at_limit, resumed, resumed_processed, resumed_total } = state.data
+  if (resumed) {
+    return `从断点续传：原批次共 ${resumed_total} 个（已处理 ${resumed_processed} 个），本批将把剩余 ${pending} 个跑完`
+  }
+  if (pending === 0) return '本批无待处理商品（当前没有在售商品），确认不会启动浏览器'
+  const cap = at_limit ? `（已达单次上限 ${limit}，本轮只跑这些）` : `（单次上限 ${limit}）`
+  return `本批将采集 ${pending} 个在售商品${cap}`
+}
+
 /** 控制按钮的悬浮提示按当前状态生成（4.4-5：禁用态不能再写动作描述） */
 export function controlButtonTips(flags: {
   running: boolean
@@ -238,6 +264,8 @@ function CurrentBatchPanel() {
   const [status, setStatus] = useState<BatchRefreshStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [triggering, setTriggering] = useState(false)
+  // 触发前预估：每次打开确认框重新取（4.4-2，条数是活的，不能缓存）
+  const [triggerPreview, setTriggerPreview] = useState<TriggerPreviewState | undefined>()
   const [controlling, setControlling] = useState<'pause' | 'resume' | 'stop' | null>(null)
   const [saving, setSaving] = useState(false)
   // 自动刷新开关：开启后根据状态动态调整轮询间隔
@@ -367,6 +395,21 @@ function CurrentBatchPanel() {
       forceFastPollTimerRef.current = null
     }, 30000)
   }, [])
+
+  const loadTriggerPreview = async () => {
+    setTriggerPreview({ status: 'loading' })
+    try {
+      const data = await batchRefreshApi.triggerPreview()
+      setTriggerPreview({ status: 'ready', data })
+    } catch {
+      // 不降级成 0：统计失败必须让用户重试，而不是让他以为本批没东西可跑
+      setTriggerPreview({ status: 'error' })
+    }
+  }
+
+  const previewReady = triggerPreview?.status === 'ready' && triggerPreview.data != null
+  const previewEmpty = previewReady && (triggerPreview?.data?.pending ?? 0) === 0
+  const canConfirmTrigger = previewReady && !previewEmpty
 
   const handleTrigger = async () => {
     setTriggering(true)
@@ -708,19 +751,39 @@ function CurrentBatchPanel() {
               手动触发或控制当前批次。暂停/停止请求立即响应（&lt;500ms），实际生效在当前商品采集完成后。
             </Paragraph>
 
-            {/* 触发按钮：仅空闲态可用 */}
-            <TipButton
-              tip={triggerTooltipText}
-              type="primary"
-              icon={<PlayCircleOutlined />}
-              loading={triggering}
-              disabled={unavailable || inProgress}
-              onClick={handleTrigger}
-              block
-              style={{ marginBottom: 12 }}
+            {/* 触发按钮：仅空闲态可用；确认框先展示本批范围（4.4-2） */}
+            <Popconfirm
+              title="触发批量采集"
+              description={
+                <>
+                  <div>{triggerPreviewDescription(triggerPreview)}</div>
+                  {triggerPreview?.status === 'error' && (
+                    <Button type="link" size="small" style={{ padding: 0 }} onClick={() => void loadTriggerPreview()}>
+                      重试
+                    </Button>
+                  )}
+                </>
+              }
+              onOpenChange={(open) => {
+                if (open) void loadTriggerPreview()
+              }}
+              onConfirm={handleTrigger}
+              okText={previewEmpty ? '本批无待处理商品' : '开始采集'}
+              cancelText="取消"
+              okButtonProps={{ disabled: !canConfirmTrigger, loading: triggering }}
             >
-              立即触发批量采集
-            </TipButton>
+              <TipButton
+                tip={triggerTooltipText}
+                type="primary"
+                icon={<PlayCircleOutlined />}
+                loading={triggering}
+                disabled={unavailable || inProgress}
+                block
+                style={{ marginBottom: 12 }}
+              >
+                立即触发批量采集
+              </TipButton>
+            </Popconfirm>
 
             {/* 控制按钮组：暂停/继续/停止 */}
             <Space style={{ width: '100%' }} direction="vertical">

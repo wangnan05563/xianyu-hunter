@@ -3,6 +3,7 @@
 提供以下端点：
 - GET  /api/batch-refresh/status — 当前状态、上次执行时间、结果统计、变更日志
 - POST /api/batch-refresh/trigger — 手动触发一次批量采集，返回任务 ID
+- GET  /api/batch-refresh/trigger-preview — 手动触发前的「本批将处理多少」预估（与执行同源）
 - PATCH /api/batch-refresh/config — 运行时热更新配置（interval_minutes、enabled）
 - POST /api/batch-refresh/pause|resume|stop — 任务控制（立即返回，延迟生效）
 - GET  /api/batch-refresh/history — 分页查询执行历史（支持筛选/排序）
@@ -99,6 +100,39 @@ def trigger_batch() -> dict[str, Any]:
             detail="已有批量采集任务正在运行，请稍后重试",
         )
     return {"ok": True, "task_id": task_id}
+
+
+@router.get("/trigger-preview")
+def trigger_preview(container: Container = Depends(get_container)) -> dict[str, Any]:
+    """手动触发前的范围预估（PRD 4.4-2）
+
+    与 `_prepare_batch_items` 逐字同源：同一个 `select_batch_items()` 取数、同一个
+    `max_items_per_run` 裁剪、同一份断点续传判定。本端点只读——不同步 Cookie、不清进度，
+    所以调度器未启动时也能给出预估（`/trigger` 此时会 503）。
+
+    `at_limit` 而不是「候选总数」：没有与 `list_unsold_items` 同源的 count 查询，
+    拿 `count(*)` 或历史 `total` 顶替就是 T02578 明令禁止的假数字；`at_limit=true`
+    只陈述「已顶到上限、可能还有」这一事实。
+    """
+    from xianyu_hunter.infra.yaml_config import get_config
+    from xianyu_hunter.modules.batch_refresh_scheduler import (
+        load_resumable_progress,
+        select_batch_items,
+    )
+
+    cfg = get_config().batch_refresh
+    resumed = load_resumable_progress(container.repo)
+    items, processed, total = select_batch_items(container.repo, cfg, resumed)
+    pending = len(items)
+    return {
+        "pending": pending,
+        "limit": cfg.max_items_per_run,
+        # 续传分支不受 max_items_per_run 裁剪，此时「已达上限」不是本批变少的原因
+        "at_limit": resumed is None and pending >= cfg.max_items_per_run,
+        "resumed": resumed is not None,
+        "resumed_processed": processed,
+        "resumed_total": total,
+    }
 
 
 @router.patch("/config")

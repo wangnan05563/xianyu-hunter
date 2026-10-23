@@ -10,8 +10,9 @@ import {
   PlayCircleOutlined, PauseCircleOutlined, StopOutlined, ReloadOutlined, CloudDownloadOutlined,
 } from '@ant-design/icons'
 import { batchRefreshApi } from '../../../api'
-import type { BatchRefreshStatus, BatchRefreshChangeLogEntry } from '../../../api/batchRefresh'
+import type { BatchRefreshStatus, BatchRefreshChangeLogEntry, BatchRefreshTriggerPreview } from '../../../api/batchRefresh'
 import { extractApiError } from '../../../utils/apiError'
+import { confirmDanger } from '../../../components/DangerSummary'
 
 const STATUS_COLORS: Record<string, string> = {
   idle: 'default',
@@ -60,6 +61,33 @@ export default function MobileBatchRefresh() {
     } finally {
       setActioning(false)
     }
+  }
+
+  // 触发前先取范围预估再四要素确认（T02771 / PRD 4.4-2）：
+  // 移动端原来点一下就真跑一批，既看不到本批多大，也看不到是否接着断点续传。
+  // 预估失败绝不降级成「0 个」直接放行——那等于把未知当无事发生。
+  const triggerWithConfirm = async (): Promise<void> => {
+    let preview: BatchRefreshTriggerPreview
+    try {
+      preview = await batchRefreshApi.triggerPreview()
+    } catch (e) {
+      message.error(extractApiError(e, '本批范围统计失败，请稍后重试'), 3)
+      return
+    }
+    if (preview.pending === 0) {
+      message.info('本批无待处理商品（当前没有在售商品），未触发采集', 3)
+      return
+    }
+    const ok = await confirmDanger({
+      title: preview.resumed ? '确认续跑未完成的批次？' : '确认触发批量采集？',
+      action: '立即开始一轮批量采集，逐个访问商品详情页',
+      scope: preview.resumed
+        ? `接着上次中断的批次跑剩下的 ${preview.pending} 个商品（原批次共 ${preview.resumed_total} 个，已处理 ${preview.resumed_processed} 个）`
+        : `本批覆盖 ${preview.pending} 个在售商品，单次上限 ${preview.limit}${preview.at_limit ? '（已达上限，本轮只跑这些）' : ''}`,
+      count: `${preview.pending} 个商品`,
+      recovery: '触发后可在本页暂停或停止；停止时未处理的商品会持久化，下次触发从断点续传',
+    })
+    if (ok) await doAction('trigger')
   }
 
   // 保存配置热更新
@@ -124,7 +152,7 @@ export default function MobileBatchRefresh() {
               type="primary"
               icon={<CloudDownloadOutlined />}
               loading={actioning}
-              onClick={() => void doAction('trigger')}
+              onClick={() => void triggerWithConfirm()}
               style={{ flex: 1 }}
             >
               触发采集

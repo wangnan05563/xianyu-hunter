@@ -160,6 +160,18 @@ export interface BatchRefreshHistoryCleanupResult {
   deleted: number
 }
 
+// GET /api/batch-refresh/trigger-preview 返回结构（T02771 / PRD 4.4-2）
+// pending=本批实际会处理的条数；at_limit 只陈述「已顶到上限、可能还有」，
+// 不提供候选总数（后端没有与 list_unsold_items 同源的 count 查询）
+export interface BatchRefreshTriggerPreview {
+  pending: number
+  limit: number
+  at_limit: boolean
+  resumed: boolean
+  resumed_processed: number
+  resumed_total: number
+}
+
 export const batchRefreshApi = {
   // 查询当前状态、上次执行结果和最近变更日志
   getStatus: () =>
@@ -169,6 +181,12 @@ export const batchRefreshApi = {
   // 调度器未启动返回 503，已有批次在运行返回 409
   trigger: () =>
     client.post<BatchRefreshTriggerResult>('/api/batch-refresh/trigger').then((r) => r.data),
+
+  // 手动触发前的范围预估：与 trigger 的执行取数同源（只读，不同步 Cookie）
+  triggerPreview: () =>
+    client
+      .get<BatchRefreshTriggerPreview>('/api/batch-refresh/trigger-preview')
+      .then((r) => r.data),
 
   // 运行时热更新配置：interval_minutes 修改后立即 reschedule
   patchConfig: (body: BatchRefreshConfigPatch) =>

@@ -73,6 +73,7 @@ export type {
   BatchRefreshConfigPatch,
   BatchRefreshConfigResult,
   BatchRefreshTriggerResult,
+  BatchRefreshTriggerPreview,
   BatchRefreshControlResult,
   BatchRefreshChangeLogEntry,
   BatchRefreshProgress,
