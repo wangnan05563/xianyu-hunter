@@ -27,6 +27,7 @@ import { AIEvalModal } from './components/AIEvalModal'
 import { DeepAnalyzeModal } from './components/DeepAnalyzeModal'
 import { CollectResultModal } from './components/CollectResultModal'
 import { TipButton } from '@/components/TipButton'
+import { AI_GATE_OFF_TIP, useAIEnabled } from '@/hooks/useAIEnabled'
 import FetchFailedHint from '../../components/FetchFailedHint'
 import { useFailedSources } from '../../hooks/useFailedSources'
 
@@ -342,6 +343,8 @@ function BatchSelectionAlert({
   readonly onBatchCollectOfficial: () => void
   readonly onClearSelection: () => void
 }) {
+  // 必须在 selectedCount 早退之前调用（规则 1：Hook 不得有条件调用）
+  const aiOff = useAIEnabled().enabled === false
   if (selectedCount === 0) return null
   // 进度数据选择：批量采集进行中显示采集进度，否则显示 AI 评估进度
   const progress = batchCollecting ? batchCollectProgress : batchProgress
@@ -354,7 +357,7 @@ function BatchSelectionAlert({
       message={
         <Space>
           <span>已选择 <b>{selectedCount}</b> 项</span>
-          <TipButton type="primary" size="small" icon={<RobotOutlined />} loading={batchAIEvaluating} onClick={onBatchAIEval} tip="对选中商品批量执行 AI 成色评估">
+          <TipButton type="primary" size="small" icon={<RobotOutlined />} loading={batchAIEvaluating} onClick={onBatchAIEval} tip={aiOff ? AI_GATE_OFF_TIP : '对选中商品批量执行 AI 成色评估'} disabled={aiOff}>
             批量 AI 评估 ({selectedCount} 项)
           </TipButton>
           <TipButton size="small" icon={<CloudDownloadOutlined />} loading={batchCollecting} onClick={onBatchCollectOfficial} tip="对选中商品批量访问官方页面采集">

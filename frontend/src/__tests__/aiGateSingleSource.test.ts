@@ -10,6 +10,7 @@ const FE = resolve(__dirname, '../..')
 const read = (rel: string) => readFileSync(resolve(FE, rel), 'utf-8').replace(/\r\n/g, '\n')
 
 const COLUMNS = read('src/pages/Evaluations/hooks/useEvalColumns.tsx')
+const EVAL_PAGE = read('src/pages/Evaluations/index.tsx')
 const TASKLIST = read('src/pages/Tasks/TaskList.tsx')
 const EVAL_AI = read('src/pages/Evaluations/hooks/useEvalAI.ts')
 const API_ERROR = read('src/utils/apiError.ts')
@@ -52,6 +53,28 @@ describe('评估列表 AI 列：只有 AI 按钮被开关置灰', () => {
 
   it('非 AI 的「收官方凭证」入口不得被开关连带置灰', () => {
     expect(elementSlice(COLUMNS, 'tip="访问闲鱼官方页面采集完整数据并重新评估"')).not.toContain('aiOff')
+  })
+})
+
+describe('批量 AI 评估：逐条打 /evaluate-condition，关开关时必须整批拦住', () => {
+  it('批量按钮挂 aiOff，否则一批发 N 个 403 toast', () => {
+    expect(EVAL_PAGE).toContain("import { AI_GATE_OFF_TIP, useAIEnabled } from '@/hooks/useAIEnabled'")
+    const slice = elementSlice(EVAL_PAGE, 'onClick={onBatchAIEval}')
+    expect(slice).toContain("tip={aiOff ? AI_GATE_OFF_TIP : '对选中商品批量执行 AI 成色评估'}")
+    expect(slice).toContain('disabled={aiOff}')
+  })
+
+  it('同排的批量官方采集与取消选择不得被连带置灰', () => {
+    expect(elementSlice(EVAL_PAGE, 'tip="对选中商品批量访问官方页面采集"')).not.toContain('aiOff')
+    expect(elementSlice(EVAL_PAGE, 'tip="取消已选中的商品"')).not.toContain('aiOff')
+  })
+
+  it('useAIEnabled 必须早于 selectedCount 早退（否则条件调用 Hook）', () => {
+    const hookAt = EVAL_PAGE.indexOf('const aiOff = useAIEnabled()')
+    const earlyReturnAt = EVAL_PAGE.indexOf('if (selectedCount === 0) return null')
+    expect(hookAt).toBeGreaterThan(-1)
+    expect(earlyReturnAt).toBeGreaterThan(-1)
+    expect(hookAt).toBeLessThan(earlyReturnAt)
   })
 })
 
