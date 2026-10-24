@@ -43,11 +43,16 @@ class PriceHistoryMixin:
             return 0
 
         item_ids = [cid for cid, _ in candidates]
-        latest = self._latest_prices(item_ids)
+        latest = self._latest_prices(item_ids, user_id=user_id)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         # 同值去重：与最新快照价相同（浮点容差 1e-6）则跳过
         rows = [
-            {"item_id": cid, "price": price, "source": source, "captured_at": now}
+            {
+                "item_id": cid, "price": price, "source": source, "captured_at": now,
+                # user_id 不传时交给列默认值（'default'）；显式 None 会撞 NOT NULL。
+                # 写入侧必须落归属，否则降价检测按 user_id 读不到自己的历史价（T02815）。
+                **({"user_id": user_id} if user_id is not None else {}),
+            }
             for cid, price in candidates
             if cid not in latest or abs(latest[cid] - price) > 1e-6
         ]
@@ -67,22 +72,31 @@ class PriceHistoryMixin:
         """
         if not isinstance(price, (int, float)):
             return False
-        latest = self._latest_prices([item_id])
+        latest = self._latest_prices([item_id], user_id=user_id)
         if item_id in latest and abs(latest[item_id] - float(price)) <= 1e-6:
             return False
+        row = {
+            "item_id": item_id, "price": float(price), "source": source,
+            "captured_at": datetime.now(timezone.utc).replace(tzinfo=None),
+        }
+        if user_id is not None:
+            row["user_id"] = user_id
         with self.engine.begin() as conn:
-            conn.execute(sqlite_insert(PriceHistoryRow).values(
-                item_id=item_id, price=float(price), source=source,
-                captured_at=datetime.now(timezone.utc).replace(tzinfo=None),
-            ))
+            conn.execute(sqlite_insert(PriceHistoryRow).values(**row))
         return True
 
-    def _latest_prices(self, item_ids: list[str]) -> dict[str, float]:
-        """查询每个商品当前最新的快照价（一次查询覆盖整批）"""
+    def _latest_prices(
+        self, item_ids: list[str], user_id: str | None = None
+    ) -> dict[str, float]:
+        """查询每个商品当前最新的快照价（一次查询覆盖整批）
+
+        user_id 不为 None 时只看该用户自己的快照：同一商品可能被多个账号采集，
+        跨用户取「最新价」会让同值去重把本用户的快照吞掉，进而读不到自己的降价基线。
+        """
         if not item_ids:
             return {}
         with self.engine.connect() as conn:
-            rows = conn.execute(
+            stmt = (
                 select(
                     PriceHistoryRow.item_id,
                     PriceHistoryRow.price,
@@ -90,7 +104,10 @@ class PriceHistoryMixin:
                 )
                 .where(PriceHistoryRow.item_id.in_(item_ids))
                 .group_by(PriceHistoryRow.item_id)
-            ).fetchall()
+            )
+            if user_id is not None:
+                stmt = stmt.where(PriceHistoryRow.user_id == user_id)
+            rows = conn.execute(stmt).fetchall()
         # 注意：max(captured_at) 与配对 price 在极端同秒写入时可能不严格配对，
         # 但价格快照精度到秒级足够；若需严格可改窗口函数（当前规模无必要）
         return {item_id: float(price) for item_id, price, _ in rows}

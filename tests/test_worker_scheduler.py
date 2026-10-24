@@ -52,19 +52,26 @@ class FakeCollector:
 class FakeDedup:
     """默认全部新；可通过 existing 控制
 
-    签名与真实 ItemDedup 一致（filter_new/save 均为同步方法，均接受 task_id），
+    签名与真实 ItemDedup 一致（filter_new/save 均为同步方法，均接受 task_id/user_id），
     避免 worker.py 同步调用时报 'coroutine has no len()' 或 'unexpected keyword argument'
     """
     def __init__(self, existing: set[str] | None = None):
         self.existing = existing or set()
         self.saved: list[str] = []
+        self.saved_user_ids: list[str | None] = []
 
     def filter_new(self, items: list[ItemSummary], task_id: str | None = None) -> list[ItemSummary]:
         return [i for i in items if i.id not in self.existing]
 
-    def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:
+    def save(
+        self,
+        items: list[ItemSummary],
+        task_id: str | None = None,
+        user_id: str | None = None,
+    ) -> int:
         self.existing.update(i.id for i in items)
         self.saved.extend(i.id for i in items)
+        self.saved_user_ids.append(user_id)
         return len(items)
 
 
@@ -812,3 +819,13 @@ async def test_real_evaluator_score_risk_consistency_in_worker_flow() -> None:
     assert risk_below != RiskLevel.LOW
     result_below = EvalResult(score=auto_buy_score - 1, risk_level=risk_below)
     assert result_below.should_auto_buy(config_auto_buy) is False
+
+
+def test_finalize_run_forwards_active_user_to_dedup(monkeypatch) -> None:
+    """T02815：采集收尾保存商品时把后台活跃用户传给 dedup.save，降价通知才能跟随用户"""
+    from xianyu_hunter.modules import worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "_active_user_id_for_background_write", lambda: "alice")
+    worker = _build_worker_with_score(score=50, risk=RiskLevel.LOW, mode=TaskMode.CONFIRM)
+    worker._finalize_run(worker_mod.RunStats(), [make_item(0)])
+    assert worker.dedup.saved_user_ids == ["alice"]

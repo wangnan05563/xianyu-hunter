@@ -188,3 +188,19 @@ def test_dedup_first_round_suppresses(repo, bus):
     dedup.save([ItemSummary(id="i9", title="旧商品", price=50.0)], task_id="t9")
     # 第二轮已非首轮（关联已存在），跌价触发通知
     assert bus.publish_nowait.called is True
+
+
+def test_dedup_save_threads_user_id_to_drop_notification(repo, bus):
+    """T02815：采集链路 dedup.save 透传 user_id → 降价通知归属发起用户，而非 default"""
+    from xianyu_hunter.modules.dedup import ItemDedup
+
+    dedup = ItemDedup(repo=repo, bus=bus)
+    dedup.save([ItemSummary(id="iu1", title="商品U", price=100.0)], task_id="tu1", user_id="alice")
+    bus.publish_nowait.reset_mock()
+    dedup.save([ItemSummary(id="iu1", title="商品U", price=60.0)], task_id="tu1", user_id="alice")
+
+    mine = repo.list_notifications(user_id="alice")
+    assert [r["dedup_key"] for r in mine] == ["price_drop:iu1:60.00"]
+    assert repo.list_notifications(user_id="default") == []
+    # 事件时间线同样按 alice 归属
+    assert repo.list_events(limit=10, user_id="alice")

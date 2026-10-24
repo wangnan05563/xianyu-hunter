@@ -39,12 +39,21 @@ class ItemDedup:
         existing = self.repo.get_existing_task_link_keys(task_id, "item", ids)
         return [it for it in items if it.id not in existing]
 
-    def save(self, items: list[ItemSummary], task_id: str | None = None) -> int:
+    def save(
+        self,
+        items: list[ItemSummary],
+        task_id: str | None = None,
+        user_id: str | None = None,
+    ) -> int:
         """批量保存到 items 表（单次事务批量 upsert）
 
         task_id 用于关联商品到具体任务，使得前端可按任务查询商品列表。
         注意：items 表的 task_id 在 upsert 时会被覆盖为最后采集的任务，
         但 task_links 表的 UNIQUE 约束保证任务级关联不被重复写入。
+
+        user_id 透传给降价检测（T02815）：采集 worker 在后台拿到的归属必须一路
+        送到 add_notification，否则降价通知全落 default，真实用户看不到自己的提醒。
+        None 时由仓储层兜底 default（与事件写入同口径）。
         """
         if not items:
             return 0
@@ -70,7 +79,7 @@ class ItemDedup:
         try:
             from xianyu_hunter.modules.price_watch import observe_prices
 
-            observe_prices(self.repo, self.bus, dicts, "collect", task_id=task_id)
+            observe_prices(self.repo, self.bus, dicts, "collect", task_id=task_id, user_id=user_id)
         except Exception as e:  # noqa: BLE001
             import logging
             logging.getLogger(__name__).warning("价格快照/降价检测失败（不影响商品落库）: %s", e)

@@ -62,6 +62,20 @@ def test_list_price_history_order_and_days(repo):
     assert rows[1]["price"] == 90.0
 
 
+def test_price_snapshots_are_per_user(repo):
+    """T02815：快照写入必须落 user_id，否则按用户读不到自己的降价基线"""
+    assert repo.record_price_snapshot("iu", 100.0, "collect", user_id="alice") is True
+    # 同商品同价：bob 不能被 alice 的快照去重吞掉
+    assert repo.record_price_snapshot("iu", 100.0, "collect", user_id="bob") is True
+    assert len(repo.list_price_history("iu", user_id="alice")) == 1
+    assert len(repo.list_price_history("iu", user_id="bob")) == 1
+    assert repo.get_min_price("iu", user_id="alice") == 100.0
+    assert repo.get_min_price("iu", user_id="bob") == 100.0
+    # 批量写入同样按用户去重
+    assert repo.record_price_snapshots(
+        [{"id": "iu", "price": 100.0}], source="collect", user_id="bob") == 0
+
+
 def test_dedup_save_writes_collect_snapshots(repo, monkeypatch):
     """采集链路集成：dedup.save 同步写 source=collect 快照"""
     dedup = ItemDedup(repo)

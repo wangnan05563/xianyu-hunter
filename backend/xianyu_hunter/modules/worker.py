@@ -26,6 +26,7 @@ from xianyu_hunter.domain.task import Task, TaskConfig, TaskMode
 from xianyu_hunter.config import get_settings
 from xianyu_hunter.infra.event_bus import EventBus
 from xianyu_hunter.infra.logger import get_logger
+from xianyu_hunter.infra.repo_events import _active_user_id_for_background_write
 from xianyu_hunter.infra.repo_links import task_keyword_matches_title
 from xianyu_hunter.infra.yaml_config import EvalConfig, get_config
 from xianyu_hunter.modules.buyer import Buyer
@@ -1087,7 +1088,13 @@ class TaskWorker:
         # 确保商品持久化到 items 表（去重 + 关联查询依赖此数据）
         if new_items:
             try:
-                self.dedup.save(new_items, task_id=self.task.id)
+                # 归属取后台写入口径（与 save_event 同一 helper，T02684）：worker 不在
+                # request 上下文里，get_active_user_id() 是唯一可信来源；拿不到降级 default
+                self.dedup.save(
+                    new_items,
+                    task_id=self.task.id,
+                    user_id=_active_user_id_for_background_write(),
+                )
             except Exception as e:
                 logger.warning("[Task {}] 持久化 items 失败: {}", self.task.id, e)
         # 兜底：如果 try 块因异常未执行 _save_task_links，在 finally 中补调用
