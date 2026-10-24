@@ -393,6 +393,42 @@ function TakeoverModal({ open, order, onClose, onSuccess }: TakeoverModalProps) 
 // 用问号 Tooltip 显式说明，避免用户把四卡读成「当前页统计」。
 const STATS_SCOPE = '统计口径：当前账号全部抢单记录，不随分页与上方状态筛选变化'
 
+// 跨页定位（T02641）：200 是后端 page_size 上限，25 页即前 5000 条；
+// 上限只防「深链指向历史深处」时无限翻页，超出后把选择权交回用户（筛选/清除定位）
+const REF_SCAN_PAGE_SIZE = 200
+const REF_SCAN_MAX_PAGES = 25
+const REF_SCAN_MAX_ROWS = REF_SCAN_PAGE_SIZE * REF_SCAN_MAX_PAGES
+
+// 深链定位的提示文案：'' 表示还在自动翻页查找（原来的「不在当前页」提示保持不变）
+function refAlertText(refId: string, reason: '' | 'missing' | 'filtered' | 'unreachable') {
+  if (reason === 'missing') {
+    return {
+      type: 'error' as const,
+      message: `订单 #${refId} 不存在或无权查看`,
+      description: '链接里的订单可能已被删除，或不属于当前账号。',
+    }
+  }
+  if (reason === 'filtered') {
+    return {
+      type: 'warning' as const,
+      message: `订单 #${refId} 被当前筛选条件挡住`,
+      description: '该订单存在，但不符合当前的状态/类型筛选，不会出现在结果里。清除筛选后会继续定位到它所在的页。',
+    }
+  }
+  if (reason === 'unreachable') {
+    return {
+      type: 'warning' as const,
+      message: `未能自动定位到订单 #${refId}`,
+      description: `已按当前排序自动翻页查找前 ${REF_SCAN_MAX_ROWS} 条：目标不在其中，或列表在定位期间发生变化。可用状态筛选缩小范围，或清除定位。`,
+    }
+  }
+  return {
+    type: 'info' as const,
+    message: `要定位的订单 #${refId} 不在当前页`,
+    description: '正在按当前筛选与排序自动翻页查找；也可用上方状态筛选缩小范围，或清除定位回到正常列表。',
+  }
+}
+
 function StatTitle({ label }: { label: string }) {
   return (
     <Space size={4}>
@@ -430,6 +466,10 @@ export default function Orders() {
   const refId = /^[A-Za-z0-9_:.-]{1,64}$/.test(rawRef) ? rawRef : ''
   // null=未定位 / true=在当前页找到 / false=当前页没有
   const [refLocated, setRefLocated] = useState<boolean | null>(null)
+  // 跨页定位的结论：''=尚在查找 / missing=订单不存在或越权 / filtered=被筛选挡住 /
+  // unreachable=扫描范围内没找到（或排序结果不稳定）
+  const [refUnreachable, setRefUnreachable] = useState<'' | 'missing' | 'filtered' | 'unreachable'>('')
+  const locateScanKey = useRef('')
 
   // 同一 sheet 内换了深链（例如又点了另一条告警）时，以 URL 为准重打筛选。
   // 手动改下拉现在也回写 URL（T02831），于是本效果收到的是同一个值：
@@ -493,6 +533,74 @@ export default function Orders() {
 
   useEffect(() => { load() }, [load])
 
+  // 新深链落地时清掉上一条 ref 的定位结论；同一 ref 换筛选由扫描键另行触发
+  useEffect(() => {
+    setRefUnreachable('')
+    locateScanKey.current = ''
+  }, [refId])
+
+  // T02641：命中判定原先只在当前页做过——目标订单在第 2 页之后时，用户落地看到的
+  // 仍是「不在当前页」。未命中时补一次跨页定位：
+  // 1) 按 id 单查，确认订单存在（404=已删除/越权），并识别是否被状态/类型筛选挡住；
+  // 2) 用与当前列表完全相同的筛选与排序，按 200 条/页扫描，把扫描下标换算成用户
+  //    当前 pageSize 下的页码；
+  // 3) setPage 后由既有 load → refLocated=true → 高亮 + scrollIntoView 完成落地。
+  useEffect(() => {
+    // loading 期间不扫：换 ref/换筛选时 refLocated 还是上一条的结果，等新列表落地再判断
+    if (!refId || refLocated !== false || loading) return
+    // 同一次「订单 + 筛选 + 排序 + 每页条数」只扫一遍：跳页后 refLocated 会重新变 false，
+    // 不拦会让 setPage 触发的 load 反过来再扫一轮
+    const key = [refId, statusFilter, typeFilter, sortBy, sortDir, pageSize].join('|')
+    if (locateScanKey.current === key) return
+    locateScanKey.current = key
+    let alive = true
+    setRefUnreachable('')
+
+    const locate = async () => {
+      let target: OrderItem
+      try {
+        target = await orderApi.get(refId)
+      } catch {
+        if (alive) setRefUnreachable('missing')
+        return
+      }
+      if (!alive) return
+      // status/type 是列表仅有的两组筛选：订单本身不满足时，扫多少页都不会出现，
+      // 直接说明原因并给「清除筛选」，不让用户盲目翻页
+      if ((statusFilter && target.status !== statusFilter) ||
+          (typeFilter && (target.type ?? 'real') !== typeFilter)) {
+        setRefUnreachable('filtered')
+        return
+      }
+
+      let scanned = 0
+      for (let p = 1; p <= REF_SCAN_MAX_PAGES; p++) {
+        const res = await orderApi.list({
+          page_num: p, page_size: REF_SCAN_PAGE_SIZE,
+          status: statusFilter, type: typeFilter,
+          sort_by: sortBy, sort_dir: sortDir,
+        })
+        if (!alive) return
+        const list = res.items || []
+        const idx = list.findIndex((o) => String(o.id) === refId)
+        if (idx >= 0) {
+          const targetPage = Math.floor(((p - 1) * REF_SCAN_PAGE_SIZE + idx) / pageSize) + 1
+          // 页码与当前页相同说明列表在扫描期间变过（新单插入/删除），不跳以免原地循环
+          if (targetPage === page) setRefUnreachable('unreachable')
+          else setPage(targetPage)
+          return
+        }
+        scanned += list.length
+        if (!list.length || list.length < REF_SCAN_PAGE_SIZE ||
+            scanned >= (res.total ?? res.count ?? 0)) break
+      }
+      setRefUnreachable('unreachable')
+    }
+
+    locate().catch(() => { if (alive) setRefUnreachable('unreachable') })
+    return () => { alive = false }
+  }, [refId, refLocated, loading, statusFilter, typeFilter, sortBy, sortDir, pageSize, page])
+
   // 定位命中后把该行滚到视野内：只滚动画像内的 tr，找不到就什么都不做
   useEffect(() => {
     if (refLocated !== true) return
@@ -506,6 +614,14 @@ export default function Orders() {
     next.delete('ref')
     setSearchParams(next, { replace: true })
     setRefLocated(null)
+  }
+
+  // 只清筛选、保留 ref：urlStatus/urlType 的 effect 会把状态同步回去并触发重新定位
+  const clearFiltersForRef = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('status')
+    next.delete('type')
+    setSearchParams(next, { replace: true })
   }
 
   // 筛选条件变化时回到第一页，避免空页；并把筛选态回写 URL（T02831）。
@@ -684,6 +800,8 @@ export default function Orders() {
   // 应用列配置：按用户自定义顺序重排 + 过滤隐藏列
   const visibleColumns = applyColumnConfig(columns)
 
+  const refAlert = refId && refLocated === false ? refAlertText(refId, refUnreachable) : null
+
   return (
     <div className="page-container">
       <Row gutter={16} style={{ marginBottom: 16 }}>
@@ -719,11 +837,18 @@ export default function Orders() {
         </Space>
 
         <Spin spinning={loading}>
-          {refId && refLocated === false && (
-            <Alert type="info" showIcon style={{ marginBottom: 12 }}
-              message={`要定位的订单 #${refId} 不在当前页`}
-              description="列表按创建时间倒序分页。可用上方状态筛选缩小范围，或清除定位回到正常列表。"
-              action={<TipButton size="small" onClick={clearRef} tip="清除 URL 中的 ref 定位参数，回到正常分页列表">清除定位</TipButton>}
+          {refAlert && (
+            <Alert type={refAlert.type} showIcon style={{ marginBottom: 12 }}
+              message={refAlert.message}
+              description={refAlert.description}
+              action={
+                <Space size="small">
+                  {refUnreachable === 'filtered' && (
+                    <TipButton size="small" onClick={clearFiltersForRef} tip="去掉 status/type 筛选参数，保留 ref 继续定位">清除筛选</TipButton>
+                  )}
+                  <TipButton size="small" onClick={clearRef} tip="清除 URL 中的 ref 定位参数，回到正常分页列表">清除定位</TipButton>
+                </Space>
+              }
             />
           )}
           {items.length === 0 ? (

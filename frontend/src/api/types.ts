@@ -588,6 +588,8 @@ export interface OrderItem {
   order_no?: string | null
   price: number
   status: string
+  // real|dry_run：列表/详情接口原样返回该列（T02673），深链定位时用于判断是否被类型筛选挡住
+  type?: string | null
   screenshot?: string | null
   error?: string | null
   created_at: string

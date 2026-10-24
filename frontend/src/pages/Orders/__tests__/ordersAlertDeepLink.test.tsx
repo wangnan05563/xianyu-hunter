@@ -23,12 +23,12 @@ class FakeEventSource {
   close() {}
 }
 
-const { listMock } = vi.hoisted(() => ({ listMock: vi.fn() }))
+const { listMock, getMock } = vi.hoisted(() => ({ listMock: vi.fn(), getMock: vi.fn() }))
 
 vi.mock('../../../api', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>()
   const orderApi = (actual as { orderApi: Record<string, unknown> }).orderApi
-  return { ...actual, orderApi: { ...orderApi, list: listMock } }
+  return { ...actual, orderApi: { ...orderApi, list: listMock, get: getMock } }
 })
 
 import Orders from '../Orders'
@@ -44,16 +44,21 @@ function order(id: string, status: string): OrderItem {
   }
 }
 
+let scrollSpy: ReturnType<typeof vi.fn>
+
 beforeAll(() => {
   vi.stubGlobal('EventSource', FakeEventSource)
   // jsdom 没实现 scrollIntoView：命中 ref 定位后本页会滚动该行，缺省实现会抛未捕获异常
-  Element.prototype.scrollIntoView = () => {}
+  scrollSpy = vi.fn()
+  Element.prototype.scrollIntoView = scrollSpy
 })
 afterAll(() => { vi.unstubAllGlobals() })
 
 beforeEach(() => {
   localStorage.clear()
+  scrollSpy.mockClear()
   listMock.mockReset()
+  getMock.mockReset()
   listMock.mockResolvedValue({
     items: [order('o1', 'failed')], count: 1, total: 1, stats: STATS, by_status: { failed: 1 },
   })
@@ -165,5 +170,121 @@ describe('手动改状态筛选会回写 URL（T02831）', () => {
     const probe = screen.getByTestId('location')
     await waitFor(() => expect(probe.textContent).not.toContain('status='))
     expect(probe.textContent).toContain('ref=o1')
+  })
+})
+
+// T02641：命中判定原先只在当前页做过，目标订单在第 2 页之后时落到页面上仍是「不在当前页」。
+// 这里用「按 page_num/page_size 切片的假后端」把翻页链路也纳入断言范围。
+const ALL_60 = Array.from({ length: 60 }, (_, i) => `o${i + 1}`)
+
+function pageResponse(ids: string[], total: number) {
+  return {
+    items: ids.map((id) => order(id, 'failed')),
+    count: ids.length,
+    total,
+    stats: STATS,
+    by_status: ids.length ? { failed: total } : {},
+  }
+}
+
+function pagedList(all: string[]) {
+  return (params?: { page_num?: number; page_size?: number }) => {
+    const pn = params?.page_num ?? 1
+    const ps = params?.page_size ?? 20
+    return Promise.resolve(pageResponse(all.slice((pn - 1) * ps, pn * ps), all.length))
+  }
+}
+
+describe('?ref= 跨页定位（T02641）', () => {
+  it('目标订单在第 3 页：按同一筛选与排序扫描后跳页、高亮并滚动', async () => {
+    listMock.mockImplementation(pagedList(ALL_60))
+    getMock.mockResolvedValue({ ...order('o50', 'failed'), type: 'real' })
+
+    renderAt('/orders?ref=o50')
+
+    await waitFor(() => expect(
+      document.querySelector('tr.xh-row-highlight')?.getAttribute('data-row-key')).toBe('o50'))
+
+    // 单查确认订单存在，扫描沿用当前排序，并用后端允许的最大页长减少请求数
+    expect(getMock).toHaveBeenCalledWith('o50')
+    const calls = listMock.mock.calls.map((c) => c[0])
+    expect(calls.some((p) => p.page_size === 200 && p.page_num === 1
+      && p.sort_by === 'created_at' && p.sort_dir === 'desc')).toBe(true)
+    // o50 在 200 条一页的第 50 位 → 按用户当前 pageSize=20 换算应落到第 3 页
+    expect(calls.at(-1)).toMatchObject({ page_num: 3, page_size: 20 })
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled())
+    expect(screen.queryByText(/不在当前页/)).toBeNull()
+  })
+
+  it('目标订单在扫描的第 2 个 200 条分块：页码要叠加分块偏移', async () => {
+    const ALL_260 = Array.from({ length: 260 }, (_, i) => `o${i + 1}`)
+    listMock.mockImplementation(pagedList(ALL_260))
+    getMock.mockResolvedValue({ ...order('o250', 'failed'), type: 'real' })
+
+    renderAt('/orders?ref=o250')
+
+    await waitFor(() => expect(
+      document.querySelector('tr.xh-row-highlight')?.getAttribute('data-row-key')).toBe('o250'))
+
+    const calls = listMock.mock.calls.map((c) => c[0])
+    expect(calls.some((p) => p.page_size === 200 && p.page_num === 2)).toBe(true)
+    // 扫描第 2 块的第 50 位 = 全局第 250 位，按 20 条一页是第 13 页（漏掉分块偏移会算成第 3 页）
+    expect(calls.at(-1)).toMatchObject({ page_num: 13, page_size: 20 })
+  })
+
+  it('订单被状态筛选挡住：不扫页，直接说明原因；清除筛选后继续定位', async () => {
+    listMock.mockImplementation((params?: { status?: string }) => {
+      if (params?.status === 'succeeded') return Promise.resolve(pageResponse(['s1'], 1))
+      return Promise.resolve(pageResponse(ALL_60.slice(0, 20), ALL_60.length))
+    })
+    getMock.mockResolvedValue({ ...order('o1', 'failed'), type: 'real' })
+
+    render(
+      <MemoryRouter initialEntries={['/orders?status=succeeded&ref=o1']}>
+        <Orders />
+        <LocationProbe />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText(/被当前筛选条件挡住/)).toBeTruthy())
+    // 订单本身不满足筛选，扫多少页都不可能出现在结果里——不该再发扫描请求
+    expect(listMock.mock.calls.some((c) => c[0].page_size === 200)).toBe(false)
+
+    await userEvent.click(screen.getByText('清除筛选'))
+
+    // 清筛选但保留 ref：URL 回到全量视图，全量首页含该订单 → 直接高亮
+    await waitFor(() => {
+      const probe = screen.getByTestId('location')
+      expect(probe.textContent).not.toContain('status=')
+      expect(probe.textContent).toContain('ref=o1')
+    })
+    await waitFor(() => expect(
+      document.querySelector('tr.xh-row-highlight')?.getAttribute('data-row-key')).toBe('o1'))
+  })
+
+  it('订单不存在或越权：单查失败即提示，不再扫页', async () => {
+    getMock.mockRejectedValue(new Error('Request failed with status code 404'))
+
+    renderAt('/orders?ref=ghost')
+
+    await waitFor(() => expect(screen.getByText(/不存在或无权查看/)).toBeTruthy())
+    expect(listMock.mock.calls.some((c) => c[0].page_size === 200)).toBe(false)
+  })
+
+  it('订单存在但不在扫描范围内：提示未能自动定位，并保留清除定位', async () => {
+    listMock.mockImplementation(pagedList(ALL_60))
+    getMock.mockResolvedValue({ ...order('o999', 'failed'), type: 'real' })
+
+    renderAt('/orders?ref=o999')
+
+    await waitFor(() => expect(screen.getByText(/未能自动定位到订单/)).toBeTruthy())
+    expect(screen.getByText('清除定位')).toBeTruthy()
+  })
+
+  it('脏 ref 被白名单拒绝：不发起单查，按普通列表渲染', async () => {
+    renderAt('/orders?ref=%3Cscript%3E')
+
+    await waitFor(() => expect(listMock).toHaveBeenCalled())
+    expect(getMock).not.toHaveBeenCalled()
   })
 })
