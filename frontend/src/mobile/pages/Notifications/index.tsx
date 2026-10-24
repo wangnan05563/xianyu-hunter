@@ -17,34 +17,66 @@ import PullToRefresh from '../../components/PullToRefresh'
 const CATEGORY_LABELS = NOTIFICATION_CATEGORY_LABEL
 const LEVEL_COLORS = NOTIFICATION_LEVEL_COLOR
 
-const LIST_LIMIT = 50
+// 与桌面通知中心同口径（T02621）：一页 20 条，靠后端 total 决定还能不能继续加载。
+// 原先是「一次拉满就完」的单发请求，拉到的条数即全部，超出部分在移动端翻不到。
+export const PAGE_SIZE = 20
+// 重取时保留「已加载窗口」的上限：后端 list 的 limit 有 `le=200` 校验，
+// 超限值会被 422 打回、刷新静默失败，所以前端不能假装能一次取完。
+export const MAX_WINDOW = 200
+
+/** 重取时的 limit：既不小于首屏一页，也不超过后端上限 */
+export const reloadWindowLimit = (loaded: number) =>
+  Math.min(Math.max(loaded, PAGE_SIZE), MAX_WINDOW)
 
 export default function MobileNotifications() {
   const { message } = App.useApp()
   const [items, setItems] = useState<NotificationItem[]>([])
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [filterStatus, setFilterStatus] = useState<NotificationStatus>(undefined)
 
-  const fetchList = useCallback(async () => {
-    try {
-      const data = await notificationApi.list({ status: filterStatus, limit: LIST_LIMIT })
-      setItems(data.items)
-    } catch (e) {
-      // 弱网保留已有数据，仅提示用户
-      message.error(extractApiError(e, '加载通知失败'), 3)
-    } finally {
-      setLoading(false)
-    }
-  }, [filterStatus, message])
+  // offset/limit 由调用方显式传入，不进 useCallback 依赖：
+  // 依赖里带上 items.length 会让回调每次加载后换身份，首屏 effect 于是自激重跑。
+  const load = useCallback(
+    async (offset: number, limit: number) => {
+      try {
+        const data = await notificationApi.list({ status: filterStatus, limit, offset })
+        setTotal(data.total)
+        setItems((prev) => (offset === 0 ? data.items : [...prev, ...data.items]))
+      } catch (e) {
+        // 弱网保留已有数据，仅提示用户
+        message.error(extractApiError(e, '加载通知失败'), 3)
+      } finally {
+        setLoading(false)
+        setLoadingMore(false)
+      }
+    },
+    [filterStatus, message],
+  )
 
-  useEffect(() => { fetchList() }, [fetchList])
+  useEffect(() => {
+    load(0, PAGE_SIZE)
+  }, [load])
+
+  // 下拉刷新 / 单条操作后的重取：保持已加载的条数，别把用户翻到的第 3 页甩回第 1 页
+  const refreshKeepingWindow = () => load(0, reloadWindowLimit(items.length))
+
+  const hasMore = items.length < total
+
+  // 追加下一页：已加载条数即下一页的 offset
+  const handleLoadMore = async () => {
+    if (loadingMore) return
+    setLoadingMore(true)
+    await load(items.length, PAGE_SIZE)
+  }
 
   // 标记单条已读：成功后重新拉取保证计数与列表状态一致
   const handleMarkRead = async (id: number) => {
     try {
       await notificationApi.markRead(id)
       message.success('已标记已读')
-      fetchList()
+      refreshKeepingWindow()
     } catch (e) {
       message.error(extractApiError(e, '标记已读失败'), 3)
     }
@@ -55,7 +87,7 @@ export default function MobileNotifications() {
     try {
       await notificationApi.markAllRead()
       message.success('全部已读')
-      fetchList()
+      refreshKeepingWindow()
     } catch (e) {
       message.error(extractApiError(e, '操作失败'), 3)
     }
@@ -66,7 +98,7 @@ export default function MobileNotifications() {
     try {
       await notificationApi.delete(id)
       message.success('已删除')
-      fetchList()
+      refreshKeepingWindow()
     } catch (e) {
       message.error(extractApiError(e, '删除失败'), 3)
     }
@@ -75,7 +107,7 @@ export default function MobileNotifications() {
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
   return (
-    <PullToRefresh onRefresh={fetchList}>
+    <PullToRefresh onRefresh={refreshKeepingWindow}>
       {/* 状态筛选 + 全部已读：单行紧凑布局 */}
       <Space style={{ width: '100%', marginBottom: 12 }} direction="horizontal">
         <Select
@@ -143,6 +175,30 @@ export default function MobileNotifications() {
             </Card>
           )
         })
+      )}
+
+      {/* 分页尾部：移动端用「加载更多」追加，而不是桌面的页码控件（T02973） */}
+      {items.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            padding: '4px 2px 12px',
+          }}
+        >
+          <span style={{ fontSize: 12, color: '#999' }}>
+            已加载 {items.length} / 共 {total} 条
+          </span>
+          {hasMore ? (
+            <Button size="small" loading={loadingMore} onClick={handleLoadMore}>
+              加载更多
+            </Button>
+          ) : (
+            <span style={{ fontSize: 12, color: '#999' }}>没有更多了</span>
+          )}
+        </div>
       )}
     </PullToRefresh>
   )
