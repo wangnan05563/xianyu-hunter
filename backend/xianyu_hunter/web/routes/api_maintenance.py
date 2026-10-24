@@ -19,6 +19,7 @@ from xianyu_hunter.paths import (
     get_data_dir,
     get_log_dir,
     get_project_root,
+    is_frozen,
 )
 from xianyu_hunter.web.cache import cached_ttl, invalidate_stats_cache
 from xianyu_hunter.web.deps import get_container
@@ -243,6 +244,9 @@ def maintenance_status(
     # FR-A-5（T02575）：browser_data 改统真实目录（原 webview_data_* 全仓无写入方，
     # 恒为 0）；temp_files 原取 /tmp/xianyu_*，Windows 上路径不存在、恒为 0，且没有
     # 任何清理分支会删它——"看起来可清理却永远清不掉"，一并移除
+    # pycache_applicable（T02739）：打包版是 PyInstaller 单文件布局，磁盘上没有源码树，
+    # get_project_root() 只能落在 _MEIPASS 解压目录或 exe 同级目录，扫描恒为 0。
+    # 回带「不适用」而不是让界面展示一个永远清不掉的按钮。
     cache_stats: dict[str, Any] = {
         "browser_data_mb": 0,
         "browser_data_files": 0,
@@ -250,6 +254,7 @@ def maintenance_status(
         "browser_data_path": None,
         "pycache_mb": 0,
         "pycache_count": 0,
+        "pycache_applicable": not is_frozen(),
     }
     try:
         # 浏览器数据目录（登录态所在，路径回带给前端如实展示）
@@ -261,14 +266,15 @@ def maintenance_status(
         # Python __pycache__ 目录（与 cleanup_cache 的清理范围同一函数、同一根目录）
         # 口径：pycache_count 是「缓存目录数」——前端概览与确认框都按「__pycache__ 目录 N 个」
         # 措辞，清理动作也是整目录删除，因此按目录计数才对得上（T02575）
-        pycache_total = 0
-        pycache_count = 0
-        for p in _iter_pycache_dirs():
-            size, _files = _walk_dir(p)
-            pycache_count += 1
-            pycache_total += size
-        cache_stats["pycache_mb"] = round(pycache_total / 1024 / 1024, 2)
-        cache_stats["pycache_count"] = pycache_count
+        if cache_stats["pycache_applicable"]:
+            pycache_total = 0
+            pycache_count = 0
+            for p in _iter_pycache_dirs():
+                size, _files = _walk_dir(p)
+                pycache_count += 1
+                pycache_total += size
+            cache_stats["pycache_mb"] = round(pycache_total / 1024 / 1024, 2)
+            cache_stats["pycache_count"] = pycache_count
     except Exception:
         pass
 
@@ -316,7 +322,7 @@ def _cleanup_browser_data(dry_run: bool, cleaned: list, errors: list) -> None:
     )
 
 
-def _cleanup_pycache(dry_run: bool, cleaned: list, errors: list) -> None:
+def _cleanup_pycache(dry_run: bool, cleaned: list, errors: list, *, explicit: bool) -> None:
     """清理 Python __pycache__ 缓存（仅项目源码目录）
 
     排除 .venv 等第三方依赖目录（由 _iter_pycache_dirs 处理），
@@ -325,7 +331,16 @@ def _cleanup_pycache(dry_run: bool, cleaned: list, errors: list) -> None:
     旧实现用 `shutil.rmtree(p, ignore_errors=True)` 后无条件追加「已删除 {p}」：
     被占用/无权限的目录删不掉，回执却说删掉了。现在走 _remove_tree，
     失败明细进 errors，只有确实删净的目录才计入 cleaned（T02575）。
+
+    T02739：打包版没有源码树，这一档恒为 0。显式选中时如实报「不适用」；
+    随「全部缓存」一起请求时跳过——此时该档只剩浏览器数据（前端已同步改名）。
     """
+    if is_frozen():
+        if explicit:
+            errors.append(
+                "打包版没有源码目录，Python 字节码缓存（__pycache__）不适用，本次未删除任何文件"
+            )
+        return
     try:
         for p in _iter_pycache_dirs():
             if dry_run:
@@ -375,7 +390,7 @@ def cleanup_cache(
         if target in ("browser_data", "all"):
             _cleanup_browser_data(req.dry_run, cleaned, errors)
         if target in ("pycache", "all"):
-            _cleanup_pycache(req.dry_run, cleaned, errors)
+            _cleanup_pycache(req.dry_run, cleaned, errors, explicit=target == "pycache")
 
     # 记录操作日志
     _log_cleanup_action("cache", target, cleaned, errors, container)

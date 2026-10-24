@@ -803,6 +803,8 @@ export interface StorageStatus {
     pycache_mb: number
     /** __pycache__ 目录个数（清理按整目录删除，概览与确认框都按「目录 N 个」口径） */
     pycache_count: number
+    /** 打包版没有源码树，__pycache__ 一项恒为 0：false 时前端须置灰并标「不适用」（T02739） */
+    pycache_applicable: boolean
   }
 }
 

@@ -380,6 +380,51 @@ def test_status_pycache_count_is_not_hardcoded_zero(scan_tree, profile_dir):
     assert status["cache"]["pycache_mb"] > 0
 
 
+# ============== 打包版：「Python 编译缓存」不适用（T02739） ==============
+def test_dev_build_keeps_pycache_applicable(scan_tree, profile_dir):
+    """开发模式必须照常可用，别把「不适用」判定写成一刀切"""
+    status = api_maintenance.maintenance_status.__wrapped__(container=_StubContainer())
+    assert status["cache"]["pycache_applicable"] is True
+    assert status["cache"]["pycache_count"] == 2
+
+
+def test_frozen_build_marks_pycache_inapplicable_and_skips_scan(scan_tree, profile_dir, monkeypatch):
+    """打包版没有源码树：status 回带不适用，且不再白扫一遍
+
+    用 scan_tree 真造出 2 个 __pycache__——若实现仍在打包版扫描，count 会是 2，
+    断言立即暴露「只是把界面文案改了、后端还在假装有东西可清」。
+    """
+    monkeypatch.setattr(api_maintenance, "is_frozen", lambda: True)
+    status = api_maintenance.maintenance_status.__wrapped__(container=_StubContainer())
+    cache = status["cache"]
+    assert cache["pycache_applicable"] is False
+    assert cache["pycache_count"] == 0 and cache["pycache_mb"] == 0
+    # 不适用只作用于字节码缓存这一档，浏览器数据仍要如实统计
+    assert cache["browser_data_path"] == str(profile_dir)
+
+
+def test_frozen_build_explicit_pycache_cleanup_fails_loudly(scan_tree, monkeypatch):
+    """显式请求 pycache 时不能回「已清理 0 项」的成功回执，必须说明不适用"""
+    monkeypatch.setattr(api_maintenance, "is_frozen", lambda: True)
+    run = api_maintenance.cleanup_cache(
+        CleanupRequest(target="pycache", dry_run=False), container=_StubContainer(),
+    )
+    assert run["count"] == 0 and run["errors"], "打包版这一档没有任何可删对象，不能报成功"
+    assert "不适用" in run["errors"][0]
+    assert (scan_tree / "pkg" / "__pycache__").exists()
+
+
+def test_frozen_build_all_still_cleans_browser_data_quietly(profile_dir, monkeypatch):
+    """打包版「全部缓存」只剩浏览器数据：该删的要删，且不该为不适用档报错"""
+    monkeypatch.setattr(api_maintenance, "is_frozen", lambda: True)
+    run = api_maintenance.cleanup_cache(
+        CleanupRequest(target="all", dry_run=False), container=_StubContainer(),
+    )
+    assert run["errors"] == [], "全部缓存里跳过不适用档不算失败"
+    assert run["count"] == 1 and "已删除" in run["cleaned"][0]
+    assert not profile_dir.exists()
+
+
 def test_dir_stats_missing_dir_is_zero_and_survives_unreadable(tmp_path):
     """目录不存在 → (0.0, 0)；单个子目录不可读也不能让整次统计炸掉"""
     assert api_maintenance._dir_stats(tmp_path / "nope") == (0.0, 0)

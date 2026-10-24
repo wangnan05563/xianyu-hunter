@@ -10,6 +10,7 @@ import { maintenanceApi } from '../../../api/maintenance'
 import type { StorageStatus, CleanupResult, CleanupBody } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
 import DangerSummary, { type DangerCopy } from '@/components/DangerSummary'
+import { PYCACHE_NOT_APPLICABLE_HINT, cacheTargetOptions } from '@/utils/cacheTargets'
 
 // 各清理模块的真实动作（T02573：确认框按「动作/影响范围/数量/恢复成本」四要素写）
 const TARGET_ACTION: Record<'cache' | 'database' | 'logs', string> = {
@@ -28,15 +29,20 @@ function mobileDangerCopy(
     const c = status?.cache
     // FR-A-5（T02575）：browser_data 现在删的是真实浏览器资料目录，后果是掉登录态
     const dropsLogin = form.target !== 'pycache'
+    // T02739：打包版没有源码树，确认框不能还承诺清掉一份不存在的 __pycache__
+    const pycacheApplicable = c?.pycache_applicable !== false
     return {
       action: `删除${form.target === 'pycache' ? ' __pycache__ 字节码缓存'
         : form.target === 'browser_data' ? ' 浏览器用户数据目录（含闲鱼登录 Cookie 与反爬指纹）'
-          : ' __pycache__ 与浏览器用户数据目录'}`,
+          : pycacheApplicable ? ' __pycache__ 与浏览器用户数据目录'
+            : ' 浏览器用户数据目录（含闲鱼登录 Cookie 与反爬指纹）'}`,
       scope: dropsLogin
         ? `将删除 ${c?.browser_data_path ?? '浏览器用户数据目录'}；不包含数据库与日志文件`
         : '只删 __pycache__ 字节码缓存；不包含数据库、日志与浏览器用户数据目录（登录态所在）',
-      count: c ? `__pycache__ 目录 ${c.pycache_count} 个（${c.pycache_mb} MB）；`
-        + `浏览器数据 ${c.browser_data_files} 个文件（${c.browser_data_mb} MB）` : null,
+      count: c
+        ? (pycacheApplicable ? `__pycache__ 目录 ${c.pycache_count} 个（${c.pycache_mb} MB）；` : '')
+          + `浏览器数据 ${c.browser_data_files} 个文件（${c.browser_data_mb} MB）`
+        : null,
       recovery: dropsLogin
         ? '不可恢复；删除后需重新扫码登录闲鱼。浏览器正在占用该目录时会跳过删除并报错'
         : '不可恢复；字节码会在下次运行自动重建，首次运行稍慢',
@@ -77,13 +83,7 @@ function mobileDangerCopy(
   }
 }
 
-// 清理 target 选项：与桌面端 Maintenance 保持一致
-const CACHE_TARGETS = [
-  { value: 'all', label: '全部缓存' },
-  { value: 'browser_data', label: '浏览器数据（含登录态）' },
-  // 4.1-3：旧标签「临时文件」名不副实——该分支实删 __pycache__，与桌面端同步改名
-  { value: 'pycache', label: 'Python 编译缓存（__pycache__）' },
-]
+// 缓存清理选项由 utils/cacheTargets 统一生成（与桌面端同一份措辞 + 同一套「不适用」置灰）
 const DB_TARGETS = [
   { value: 'all', label: '全部清理' },
   { value: 'old_events', label: '旧事件记录' },
@@ -129,6 +129,9 @@ export default function MobileCleanup() {
   }, [message])
 
   useEffect(() => { void loadStatus() }, [loadStatus])
+
+  // T02739：打包版没有源码树，__pycache__ 恒为 0 → 置灰并标「不适用」
+  const pycacheApplicable = status?.cache?.pycache_applicable !== false
 
   // 实际执行后刷新状态
   const cleanup = async (
@@ -269,9 +272,14 @@ export default function MobileCleanup() {
           <Select
             value={cacheForm.target}
             onChange={(v) => setCacheForm({ ...cacheForm, target: v })}
-            options={CACHE_TARGETS}
+            options={cacheTargetOptions(pycacheApplicable)}
             style={{ width: '100%' }}
           />
+          {!pycacheApplicable && (
+            <span style={{ fontSize: 11, color: themeToken.colorTextTertiary }}>
+              {PYCACHE_NOT_APPLICABLE_HINT}
+            </span>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Switch
               checked={cacheForm.dry_run}

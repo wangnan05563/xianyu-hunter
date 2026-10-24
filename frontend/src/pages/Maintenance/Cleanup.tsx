@@ -29,6 +29,7 @@ import {
 } from '../../api'
 import { TipButton } from '@/components/TipButton'
 import { confirmDanger } from '@/components/DangerSummary'
+import { PYCACHE_NOT_APPLICABLE_HINT, cacheTargetOptions } from '@/utils/cacheTargets'
 
 const { Text } = Typography
 
@@ -93,6 +94,9 @@ export default function Maintenance() {
     }
   }
 
+  // 打包版没有源码树，__pycache__ 恒为 0：置灰并标「不适用」（T02739）
+  const pycacheApplicable = status?.cache?.pycache_applicable !== false
+
   // 执行缓存清理
   const handleCleanupCache = async () => {
     // 非预览模式必须走四要素确认（T02573）：原生 confirm 只能问「确认吗」，
@@ -100,7 +104,7 @@ export default function Maintenance() {
     if (!cacheForm.dry_run) {
       const c = status?.cache
       const parts: string[] = []
-      if (cacheForm.target !== 'browser_data') {
+      if (cacheForm.target !== 'browser_data' && pycacheApplicable) {
         parts.push(`__pycache__ 目录 ${c?.pycache_count ?? '未知'} 个（${c?.pycache_mb ?? '未知'} MB）`)
       }
       if (cacheForm.target !== 'pycache') {
@@ -110,9 +114,13 @@ export default function Maintenance() {
       }
       // browser_data 分支现在真的会删登录态（FR-A-5）——后果必须写在确认框里
       const dropsLogin = cacheForm.target !== 'pycache'
+      // 打包版「全部缓存」真实删的只有浏览器数据，确认框不能还写着 __pycache__
+      const scopeText = !pycacheApplicable && cacheForm.target === 'all'
+        ? '浏览器用户数据目录（含闲鱼登录态）'
+        : CACHE_SCOPE[cacheForm.target] ?? '所选缓存'
       const ok = await confirmDanger({
         title: '确认清理缓存？',
-        action: `真实删除${CACHE_SCOPE[cacheForm.target] ?? '所选缓存'}`,
+        action: `真实删除${scopeText}`,
         scope: dropsLogin
           ? `将删除浏览器用户数据目录 ${c?.browser_data_path ?? '（以统计接口回带路径为准）'}，`
             + '其中保存着闲鱼登录 Cookie 与反爬指纹；不包含 SQLite 数据库与日志文件'
@@ -371,7 +379,9 @@ export default function Maintenance() {
             />
             <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
               浏览器 {status?.cache?.browser_data_mb ?? 0}MB/{status?.cache?.browser_data_files ?? 0} 个文件
-              · 编译缓存 {status?.cache?.pycache_count ?? 0} 个目录/{status?.cache?.pycache_mb ?? 0}MB
+              · 编译缓存 {pycacheApplicable
+                ? `${status?.cache?.pycache_count ?? 0} 个目录/${status?.cache?.pycache_mb ?? 0}MB`
+                : '不适用（打包版无源码字节码缓存）'}
             </div>
           </Col>
         </Row>
@@ -390,27 +400,32 @@ export default function Maintenance() {
             }
           >
             <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 12 }}>
-              清理 Python 字节码缓存与浏览器用户数据目录
+              {pycacheApplicable
+                ? '清理 Python 字节码缓存与浏览器用户数据目录'
+                : '清理浏览器用户数据目录'}
               {status?.cache?.browser_data_path ? `（${status.cache.browser_data_path}）` : ''}
-              ——后者保存闲鱼登录 Cookie，删除后需重新扫码登录
+              {pycacheApplicable
+                ? '——后者保存闲鱼登录 Cookie，删除后需重新扫码登录'
+                : '——其中保存闲鱼登录 Cookie，删除后需重新扫码登录'}
             </Text>
 
             <div style={{ marginBottom: 12 }}>
               <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
                 清理范围
               </Text>
+              {/* 4.1-3：旧标签「临时文件」名不副实——该分支实删 __pycache__，
+                  且从不删任何临时文件；名与实在此对齐（选项表与移动端共用） */}
               <Select
                 value={cacheForm.target}
                 onChange={(value) => setCacheForm({ ...cacheForm, target: value })}
                 style={{ width: '100%' }}
-                options={[
-                  { value: 'all', label: '全部缓存' },
-                  { value: 'browser_data', label: '浏览器数据（含登录态）' },
-                  // 4.1-3：旧标签「临时文件」名不副实——该分支实删 __pycache__，
-                  // 且从不删任何临时文件；名与实在此对齐
-                  { value: 'pycache', label: 'Python 编译缓存（__pycache__）' },
-                ]}
+                options={cacheTargetOptions(pycacheApplicable)}
               />
+              {!pycacheApplicable && (
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }}>
+                  {PYCACHE_NOT_APPLICABLE_HINT}
+                </Text>
+              )}
             </div>
 
             <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
