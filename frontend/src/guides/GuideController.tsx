@@ -11,6 +11,7 @@ import type { GuideStep, GuidePlayMode } from './types'
 import { findMenuGuide } from './menuGuides'
 import { isGuideDone, markGuideDone } from './guideStorage'
 import { resolveTourTarget } from './target'
+import { isPageRenderedForGuide } from './autoOpenGate'
 import { openSheetWithNotification } from '@/components/SheetWorkspace/sheetNotifications'
 
 /** 自动播放时每步停留时长（毫秒） */
@@ -89,10 +90,10 @@ export function GuideController() {
       return
     }
     if (isGuideDone(location.pathname)) return
-    // 延迟一帧等待页面渲染完成，确保 .page-container 等目标元素已挂载
+    // 延迟一帧等待页面渲染完成，再按「激活 sheet 内容根是否已有子节点」放行
     const id = requestAnimationFrame(() => {
       // 再次确认：rAF 期间路由可能已切换
-      if (document.querySelector('.page-container') === null) return
+      if (!isPageRenderedForGuide()) return
       openGuide()
     })
     return () => cancelAnimationFrame(id)

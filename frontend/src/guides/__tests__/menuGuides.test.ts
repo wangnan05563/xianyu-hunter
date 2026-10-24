@@ -35,8 +35,10 @@ describe('menuGuides 配置完整性', () => {
     expect(GUIDE_ROUTES).toEqual(MENU_GUIDES.map((g) => g.route))
   })
 
-  it('所有页面首选步骤使用 .page-container 作为页面总览高亮目标', () => {
-    // 约定：第一个步骤用于覆盖主体容器，确保至少有一个稳定可高亮目标
+  it('所有页面首选步骤以 .page-container 作为锚点（尽力而为，不是硬门）', () => {
+    // 约定：第一个步骤尽量覆盖主体容器。注意 7 条 route 的页面压根没有该节点
+    // （见 menuGuides.ts 头部与 guideAutoOpenGate.test.tsx），此时 GuideController
+    // 照样弹出，步骤由 resolveTourTarget 降级为居中气泡——不得再把它当自动弹出的门。
     for (const g of MENU_GUIDES) {
       expect(
         g.steps[0].selector,

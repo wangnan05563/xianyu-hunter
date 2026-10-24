@@ -4,11 +4,13 @@
  * 为什么独立文件维护而非散落各页面：引导步骤与菜单结构绑定，
  * 集中一处便于维护、测试遍历校验、常驻按钮按 route 查表。
  *
- * 选择器约定：
- * - 所有业务页面统一使用 .page-container 作为主体容器（已由 22 个页面验证），
- *   故每个引导流程第一条务必覆盖该容器，保证至少有一个可高亮目标。
- * - 深层区块（如 .quick-entry-card）仅在确认存在时使用；GuideController 对
- *   selector 找不到的元素做容错降级（居中展示），不会导致崩溃。
+ * 选择器约定（T02631 校正过一次事实）：
+ * - `.page-container` 并非全站统一存在：/anticrawl、/chatbot、/config/chatbot、/export、
+ *   /maintenance/tunnel、/menu-admin、/price-dashboard 这 7 条 route 的页面根节点不带它。
+ * - 所以「首条用 .page-container」只是尽力而为的锚点，不是硬门：selector 查不到时
+ *   GuideController 经 resolveTourTarget 降级为居中气泡，引导照常弹出。
+ *   它曾经被当成自动弹出的前置门，导致这 7 条首访永远不弹。
+ * - 深层区块（如 .quick-entry-card）仅在确认存在时使用。
  *
  * 文案来源：与 pages/Help 文档的模块说明保持一致，避免文档与引导措辞漂移。
  */
