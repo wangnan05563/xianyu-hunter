@@ -118,8 +118,13 @@ describe('源码级名实一致（防止退回假承诺）', () => {
     expect(page).toContain('冲突处理只有一种：跳过')
   })
 
-  it('删除确认不再用 dangerouslySetInnerHTML', () => {
-    expect(page).not.toContain('dangerouslySetInnerHTML')
+  it('删除确认不再把预览拼成 HTML（整类 sink，而不只是 dangerouslySetInnerHTML）', () => {
+    // T02727：级联预览的表名/列名来自 SQLite，可从本页直接编辑，属于存储型 XSS 面。
+    // 挡住 JSX 的 dangerouslySetInnerHTML 还不够：改写成 ref.innerHTML = / insertAdjacentHTML
+    // 同样会把后端文本当标记执行，所以按「HTML sink 类别」逐一禁。
+    for (const sink of ['dangerouslySetInnerHTML', '__html:', '.innerHTML', 'insertAdjacentHTML', 'document.write']) {
+      expect(page, `DatabaseAdmin.tsx 代码里出现了 HTML sink：${sink}`).not.toContain(sink)
+    }
   })
 
   it('导出按钮点名全表，且带 loading', () => {
