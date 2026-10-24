@@ -4,7 +4,7 @@
 - /api/events/*：技术性事件流（SSE 推送 + 历史回溯），只读追加，不区分已读
 - /api/notifications：业务性通知（订单超时、登录态失效等），持久化、可读/可删
 
-多用户归属口径（T02618）——本文件 8 个端点一律用 `web.utils.owner_user_id(request)`：
+多用户归属口径（T02618）——本文件每个端点一律用 `web.utils.owner_user_id(request)`：
 真实会话用户 → 该用户；WEB_TOKEN 直通与未过中间件的内部调用 → "default"。
 读写同函数是两条硬约束的交集：
 - 「看得见 = 改得动」：原先读侧兜 None（全量）、写侧兜 "default"（过滤），两套值
@@ -201,9 +201,27 @@ def delete_notification(
     return {"ok": True, "id": notif_id, "deleted": deleted}
 
 
-# 批量删除的单次上限：前端勾选分页最大 200，这里与列表 limit 同口径，
-# 避免一次 DELETE 传上万个 id 把 IN 子句撑爆（SQLite 变量上限默认 999）。
-_BATCH_DELETE_MAX = 200
+# 批量操作的单次上限：前端勾选分页最大 200，这里与列表 limit 同口径，
+# 避免一次 IN 传上万个 id 把子句撑爆（SQLite 变量上限默认 999）。
+_BATCH_MAX = 200
+
+
+def _parse_batch_ids(payload: dict[str, Any]) -> list[int]:
+    """批量端点共用的 ids 校验（删除与标记已读同口径）"""
+    raw_ids = payload.get("ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="ids 必须是非空数组")
+    if len(raw_ids) > _BATCH_MAX:
+        raise HTTPException(
+            status_code=400, detail=f"单次最多处理 {_BATCH_MAX} 条"
+        )
+    ids: list[int] = []
+    for item in raw_ids:
+        try:
+            ids.append(int(item))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="ids 必须是通知 id 数组")
+    return ids
 
 
 @router.post("/batch-delete")
@@ -220,21 +238,26 @@ def batch_delete_notifications(
     这里如实返回两个数，由前端提示"实际删除 N 条"而不是假装全部成功。
     """
     user_id = owner_user_id(request)
-    raw_ids = payload.get("ids")
-    if not isinstance(raw_ids, list) or not raw_ids:
-        raise HTTPException(status_code=400, detail="ids 必须是非空数组")
-    if len(raw_ids) > _BATCH_DELETE_MAX:
-        raise HTTPException(
-            status_code=400, detail=f"单次最多删除 {_BATCH_DELETE_MAX} 条"
-        )
-    ids: list[int] = []
-    for item in raw_ids:
-        try:
-            ids.append(int(item))
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="ids 必须是通知 id 数组")
+    ids = _parse_batch_ids(payload)
     deleted = container.repo.delete_notifications(ids, user_id=user_id)
     return {"ok": True, "deleted": deleted, "requested": len(ids)}
+
+
+@router.post("/batch-read")
+def batch_read_notifications(
+    request: Request,
+    payload: dict[str, Any] = Body(..., description='{"ids": [1, 2, 3]}'),
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    """批量标记已读（通知中心「勾选后标记已读」）
+
+    updated 只数"本次真正从未读变已读"的行：勾中但本来已读、或已被删/属于他人的 id
+    不计入，前端据此提示"已标记 N 条，M 条已读或不存在"，不假装全成功。
+    """
+    user_id = owner_user_id(request)
+    ids = _parse_batch_ids(payload)
+    updated = container.repo.mark_notifications_read(ids, user_id=user_id)
+    return {"ok": True, "updated": updated, "requested": len(ids)}
 
 
 @router.delete("")

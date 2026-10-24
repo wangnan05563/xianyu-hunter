@@ -86,6 +86,16 @@ export const notificationApi = {
   delete: (id: number) =>
     client.delete<{ ok: boolean; id: number; deleted: boolean }>(`/api/notifications/${id}`).then((r) => r.data),
 
+  // 批量标记已读（2.9-5 勾选）：updated 只数本次真正从未读变已读的行，
+  // 勾中但本来已读/已不存在的不计入，前端按 updated 如实提示
+  markReadBatch: (ids: number[]) =>
+    client
+      .post<{ ok: boolean; updated: number; requested: number }>(
+        '/api/notifications/batch-read',
+        { ids },
+      )
+      .then((r) => r.data),
+
   // 批量删除（2.9-5 勾选删除）：deleted 可能小于 requested，
   // 勾中的通知可能已在其他标签页被删；前端按 deleted 如实提示
   deleteBatch: (ids: number[]) =>

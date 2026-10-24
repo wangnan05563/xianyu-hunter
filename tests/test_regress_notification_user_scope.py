@@ -2,7 +2,7 @@
 
 原缺陷（工单 T02618 / 母单 T02561 2.6 通知模型统一）：
 - 读侧（list / unread_count）用 `getattr(request.state, "user_id", None)`，
-- 写侧（POST / read / delete / batch-delete / clear）用 `getattr(..., "default")`。
+- 写侧（POST / read / delete / batch-delete / batch-read / clear）用 `getattr(..., "default")`。
 
 两套兜底值一错开，"能看见的行"和"能改动的行"就不是同一批：前端表现为
 「点了标记已读/删除没反应」（404）。另一头，通知引擎与盯盘降价写入从不带
@@ -10,7 +10,7 @@ user_id，全部落 default，真实会话用户登录后通知中心是空的�
 
 本文件把四件事钉成断言：
 1. `web.utils.reader_user_id` / `owner_user_id` 两个口径函数本身的值域；
-2. 通知路由 8 个端点**全部**取同一个身份值（owner_user_id）：
+2. 通知路由的每个端点**全部**取同一个身份值（owner_user_id）：
    「看得见 = 改得动」+「直通也删不掉他人的行」两条锁的交集；
 3. 后台/引擎写入把归属带给通知（订单超时规则、掉线规则、盯盘降价汇总），
    扫描范围与通知归属同一个值；
@@ -398,7 +398,10 @@ def test_routes_use_shared_helpers_not_bare_getattr():
     src = API_NOTIFICATIONS.read_text(encoding="utf-8")
     assert 'getattr(request.state, "user_id"' not in src
     assert "getattr(request.state" not in src
-    assert src.count("user_id = owner_user_id(request)") == 8, "8 个端点各取一次身份"
+    # 端点数从装饰器现算而不是写死：新增端点若漏取身份，这里照样报红
+    # （T02621 加 batch-read 时写死的 8 就变成了假失败）
+    endpoints = sum(src.count(f"@router.{m}") for m in ("get", "post", "put", "patch", "delete"))
+    assert src.count("user_id = owner_user_id(request)") == endpoints, "每个端点各取一次身份"
     assert "reader_user_id(" not in src, "通知侧不得放开为不过滤（有改侧）"
 
 

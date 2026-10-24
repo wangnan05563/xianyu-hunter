@@ -139,6 +139,26 @@ class NotificationsMixin:
             result = conn.execute(stmt)
             return result.rowcount or 0
 
+    def mark_notifications_read(self, notif_ids: list[int], user_id: str | None = None) -> int:
+        """按 id 列表批量标记已读；只动未读行，返回实际更新条数
+
+        已读的行不会被重复更新，调用方用 updated<requested 判断
+        「本来已读或不存在」的条数；user_id 过滤与单条改侧同口径。
+        """
+        if not notif_ids:
+            return 0
+        with self.engine.begin() as conn:
+            stmt = (
+                NotificationRow.__table__.update()
+                .where(NotificationRow.id.in_(notif_ids))
+                .where(NotificationRow.read_at.is_(None))
+                .values(read_at=_utcnow())
+            )
+            if user_id is not None:
+                stmt = stmt.where(NotificationRow.user_id == user_id)
+            result = conn.execute(stmt)
+            return result.rowcount or 0
+
     def delete_notification(self, notif_id: int, user_id: str | None = None) -> bool:
         """删除单条通知
 

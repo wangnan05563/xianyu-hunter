@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { TipButton } from '@/components/TipButton'
 import {
   Card, Space, Tag, Empty, Spin, message, Row, Col, Statistic,
-  List, Popconfirm, Checkbox,
+  List, Popconfirm, Checkbox, Pagination,
 } from 'antd'
 import {
   ReloadOutlined, CheckOutlined, CheckSquareOutlined, DeleteOutlined, ClearOutlined,
@@ -24,16 +24,28 @@ import { invalidateNotificationCounts } from '../../hooks/useNotificationModel'
 
 type FilterStatus = 'all' | 'unread' | 'read'
 
+const PAGE_SIZE = 20
+
 // URL 查询参数 ↔ FilterStatus 映射：刷新页面可恢复筛选状态
 function parseStatus(value: string | null): FilterStatus {
   if (value === 'unread' || value === 'read') return value
   return 'all'
 }
 
+// 页码同样进 URL：刷新/分享后停在同一页，而不是静默回第一页
+function parsePage(value: string | null): number {
+  const n = Number(value)
+  return Number.isInteger(n) && n > 0 ? n : 1
+}
+
 export default function Notifications() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [filter, setFilter] = useState<FilterStatus>(parseStatus(searchParams.get('status')))
+  // 分页：后端早已支持 limit/offset，旧实现写死 limit:100 且不显示页码，
+  // 超过 100 条的通知永远看不到（2.9-4）
+  const [page, setPage] = useState(parsePage(searchParams.get('page')))
+  const [total, setTotal] = useState(0)
 
   const [items, setItems] = useState<NotificationItem[]>([])
   // 勾选批量删除（评审 2.9-5）：只保存当前可见列表里的 id，重取列表即清空
@@ -44,24 +56,30 @@ export default function Notifications() {
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
 
-  // 筛选条件变更同步到 URL，便于刷新/分享恢复
+  // 筛选条件与页码同步到 URL，便于刷新/分享恢复
   useEffect(() => {
     const params = new URLSearchParams()
     if (filter !== 'all') params.set('status', filter)
+    if (page > 1) params.set('page', String(page))
     setSearchParams(params, { replace: true })
-  }, [filter, setSearchParams])
+  }, [filter, page, setSearchParams])
 
   const loadList = useCallback(() => {
     setLoading(true)
     notificationApi
-      .list({ status: filter === 'all' ? undefined : filter, limit: 100 })
+      .list({
+        status: filter === 'all' ? undefined : filter,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      })
       .then((res) => {
         setItems(res.items)
+        setTotal(res.total)
         setSelectedIds([])
       })
       .catch(() => message.error('加载通知失败'))
       .finally(() => setLoading(false))
-  }, [filter])
+  }, [filter, page])
 
   // 本页计数变化 = 全局未读变化：广播让 Header 铃铛立刻跟上，不等 30s 轮询（T02561 / badge 与已读联动）
   const loadCounts = useCallback(() => {
@@ -77,6 +95,12 @@ export default function Notifications() {
 
   useEffect(() => { loadList() }, [loadList])
   useEffect(() => { loadCounts() }, [loadCounts])
+
+  // 删光当前页后 offset 会越过末页：回退到真实末页，避免停在空白页
+  useEffect(() => {
+    if (loading || total === 0 || items.length > 0 || page === 1) return
+    setPage(Math.max(1, Math.ceil(total / PAGE_SIZE)))
+  }, [loading, total, items.length, page])
 
   // 单条标记已读：乐观更新，失败回滚
   const handleMarkRead = async (item: NotificationItem) => {
@@ -163,6 +187,47 @@ export default function Notifications() {
   const allSelected = items.length > 0 && items.every((it) => selectedIds.includes(it.id))
   const toggleSelectAll = () => {
     setSelectedIds(allSelected ? [] : items.map((it) => it.id))
+  }
+
+  // 只对勾中的未读项发批量已读：已读项本来就不会被更新，先过滤少打无用 id
+  const selectedUnreadIds = items
+    .filter((it) => !it.read_at && selectedIds.includes(it.id))
+    .map((it) => it.id)
+
+  // 批量标记已读（评审 2.9-5）：乐观更新 + 失败回滚，与单条标记已读同口径
+  const handleBatchRead = async () => {
+    if (selectedUnreadIds.length === 0) return
+    const snapshot = items
+    const count = selectedUnreadIds.length
+    setItems((prev) => (
+      filter === 'unread'
+        ? prev.filter((it) => !selectedUnreadIds.includes(it.id))
+        : prev.map((it) => (
+          selectedUnreadIds.includes(it.id) ? { ...it, read_at: new Date().toISOString() } : it
+        ))
+    ))
+    setUnreadCount((c) => Math.max(0, c - count))
+    setReadCount((c) => c + count)
+    setActionLoading(true)
+    try {
+      const res = await notificationApi.markReadBatch(selectedUnreadIds)
+      const rest = count - res.updated
+      message.success(
+        rest > 0
+          ? `已标记 ${res.updated} 条为已读，${rest} 条已读或不存在`
+          : `已标记 ${res.updated} 条为已读`,
+      )
+      setSelectedIds([])
+      loadList()
+      loadCounts()
+    } catch {
+      message.error('批量标记已读失败')
+      setItems(snapshot)
+      setUnreadCount((c) => c + count)
+      setReadCount((c) => Math.max(0, c - count))
+    } finally {
+      setActionLoading(false)
+    }
   }
 
   // 批量删除（评审 2.9-5）：不走乐观更新——删除后每条对未读/已读计数影响不同，
@@ -263,6 +328,17 @@ export default function Notifications() {
                 全选
               </Checkbox>
             )}
+            {selectedUnreadIds.length > 0 && (
+              <TipButton
+                tip="把勾选的通知标记为已读"
+                size="small"
+                icon={<CheckOutlined />}
+                loading={actionLoading}
+                onClick={handleBatchRead}
+              >
+                标记选中已读 {selectedUnreadIds.length}
+              </TipButton>
+            )}
             {selectedIds.length > 0 && (
               <Popconfirm
                 title={`确认删除选中的 ${selectedIds.length} 条通知？`}
@@ -295,7 +371,7 @@ export default function Notifications() {
                   tip={filterTip}
                   size="small"
                   type={filter === s ? 'primary' : 'default'}
-                  onClick={() => setFilter(s)}
+                  onClick={() => { setFilter(s); setPage(1) }}
                 >
                   {label}
                 </TipButton>
@@ -389,6 +465,18 @@ export default function Notifications() {
                 )
               }}
             />
+          )}
+          {total > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+              <Pagination
+                current={page}
+                pageSize={PAGE_SIZE}
+                total={total}
+                showSizeChanger={false}
+                showTotal={(t) => `共 ${t} 条`}
+                onChange={setPage}
+              />
+            </div>
           )}
         </Spin>
       </Card>
