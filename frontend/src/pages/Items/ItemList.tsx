@@ -1,6 +1,6 @@
-import { useEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type KeyboardEvent } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { formatDateTime, formatShortDateTime } from '../../utils/timeFormat'
-import { Card, Table, Tag, Select, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber } from 'antd'
+import { Card, Table, Tag, Select, Input, Space, Spin, Tooltip, message, Pagination, Empty, Segmented, Row, Col, Alert, Switch, InputNumber, Typography } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import PriceTrendChart from '@/components/PriceTrendChart'
 import { ReloadOutlined, SearchOutlined, DeleteOutlined, LinkOutlined, AppstoreOutlined, UnorderedListOutlined, LoginOutlined, ThunderboltOutlined, ClockCircleOutlined, LoadingOutlined, CheckCircleOutlined, SettingOutlined } from '@ant-design/icons'
@@ -27,7 +27,7 @@ import { classifyLiveSearchError } from './liveSearchError'
 dayjs.extend(relativeTime)
 dayjs.locale('zh-cn')
 
-// 点击商品链接的采集逻辑已移入组件内 handleTitleClick，
+// 商品采集逻辑已移入组件内 handleRefreshItem，
 // 以便访问 message 和 loadItems 实现采集后刷新列表
 
 type ViewMode = 'table' | 'card'
@@ -328,7 +328,7 @@ export default function ItemList() {
   }, [selectedTask])
 
   // 实时模式：用采集结果直接更新 liveItemsRef 中匹配项并重新过滤
-  // 拆为独立子函数以降低 handleTitleClick 认知复杂度（S3776）
+  // 拆为独立子函数以降低 handleRefreshItem 认知复杂度（S3776）
   // 为什么不用 silentLiveRefresh：重新搜索会返回搜索 API 数据，
   // 覆盖详情页采集到的最新字段（价格/标题/品牌等），导致只有图片更新
   const applyRefreshToLiveItem = useCallback(
@@ -352,17 +352,11 @@ export default function ItemList() {
     [],
   )
 
-  // 点击标题超链接：异步触发后端采集（更新 brand/price/is_sold 等字段），
-  // 同时打开闲鱼原帖。采集完成后刷新列表展示最新数据。
-  // 参照评估明细页 onTitleClick 的交互模式：loading 提示 + 成功/失败反馈
-  // 接受 MouseEvent | KeyboardEvent：anchor 同时绑定 onClick 和 onKeyDown（Enter/Space），
-  // 键盘事件同样需要 preventDefault 阻止默认行为（如空格滚动页面）
-  const handleTitleClick = (e: MouseEvent | KeyboardEvent, itemId: string | undefined, url: string | undefined) => {
-    e.preventDefault()
-    if (!itemId) {
-      if (url) globalThis.open(url, '_blank', 'noopener,noreferrer')
-      return
-    }
+  // 点击采集按钮：只触发后端采集（更新 brand/price/is_sold 等字段），不打开原帖。
+  // 原帖入口拆到标题链接，一个控件只承担一个语义（T02658）：
+  // 原实现一个无样式的 button 同时「真实采集 + 新开原帖」，用户看不出会发请求。
+  const handleRefreshItem = useCallback((itemId: string | undefined) => {
+    if (!itemId) return
     const shortId = itemId.slice(0, 8)
     const hide = message.loading(`正在采集 ${shortId}...`, 0)
     // 传入 task_id：items 表无记录时后端用其回填 task_links.display
@@ -383,10 +377,7 @@ export default function ItemList() {
         const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
         message.error(detail || `采集失败：${shortId}...，请稍后重试`)
       })
-    if (url) {
-      globalThis.open(url, '_blank', 'noopener,noreferrer')
-    }
-  }
+  }, [selectedTask, applyRefreshToLiveItem, loadItems])
 
   const { lastRefreshAt, refreshing, nextRefreshAt, triggerRefresh } = useAutoRefresh({
     enabled: autoRefreshEnabled,
@@ -733,20 +724,12 @@ export default function ItemList() {
           col.render = (d: TaskLink['display']) => d?.thumb_url ? <LazyImage src={d.thumb_url} referrerPolicy="no-referrer" width={60} height={60} style={{ borderRadius: 6 }} /> : '—'
           break
         case 'link':
-          col.render = (d: TaskLink['display'], record: TaskLink) => (
-            <Tooltip title={d?.url ? '点击采集更新商品信息并打开原帖' : ''}>
-              {d?.url ? (
-                <button
-                  type="button"
-                  aria-label={`采集更新商品：${d?.title || ''}`}
-                  onClick={(e) => handleTitleClick(e, record.link_key ?? '', d.url)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleTitleClick(e, record.link_key ?? '', d.url) }}
-                  style={{ cursor: 'pointer', background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit' }}
-                >{d?.title || '—'}</button>
-              ) : (
-                d?.title || '—'
-              )}
-            </Tooltip>
+          // 标题只负责「打开原帖」：链接色 + hover 下划线（Typography.Link），
+          // 采集改为操作列的独立按钮，避免一个控件两个语义（T02658）
+          col.render = (d: TaskLink['display']) => (
+            d?.url
+              ? <Typography.Link href={d.url} target="_blank" rel="noopener noreferrer">{d?.title || '—'}</Typography.Link>
+              : (d?.title || '—')
           )
           break
         case 'price':
@@ -825,14 +808,17 @@ export default function ItemList() {
     visibleCols.push({
       title: '操作',
       key: 'action',
-      width: 80,
+      width: 96,
       render: (_: unknown, record: TaskLink) => (
-        <TipButton tip="删除此商品关联（不可恢复）" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.link_id)} size="small" disabled={!record.link_id || liveMode} />
+        <Space size={0}>
+          <TipButton tip="采集更新商品信息（不打开原帖）" type="link" icon={<ReloadOutlined />} onClick={() => handleRefreshItem(record.link_key ?? undefined)} size="small" disabled={!record.link_key} />
+          <TipButton tip="删除此商品关联（不可恢复）" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.link_id)} size="small" disabled={!record.link_id || liveMode} />
+        </Space>
       ),
     })
 
     return visibleCols
-  }, [fieldMap, liveMode, handleDelete, applyColumnConfig])
+  }, [fieldMap, liveMode, handleDelete, handleRefreshItem, applyColumnConfig])
 
   // 提取嵌套模板字符串为变量：避免在模板字符串内再嵌套模板字符串，提升可读性
   // 同时区分实时模式与 DB 模式下的轮询间隔展示文案
@@ -1161,19 +1147,32 @@ export default function ItemList() {
                           </div>
                         }
                         actions={[
+                          // 打开原帖：原生链接，只做导航（T02658 拆开双重副作用）
                           d?.url ? (
-                            <button
-                              key="link"
-                              type="button"
-                              aria-label={`采集更新商品：${d?.title || ''}`}
-                              onClick={(e) => handleTitleClick(e, item.link_key ?? '', d.url)}
-                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleTitleClick(e, item.link_key ?? '', d.url) }}
-                              title="采集更新并打开原帖"
-                              style={{ cursor: 'pointer', background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit' }}
+                            <a
+                              key="open"
+                              href={d.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              aria-label={`打开原帖：${d?.title || ''}`}
+                              title="打开原帖"
+                              style={{ color: 'inherit' }}
                             >
                               <LinkOutlined />
-                            </button>
+                            </a>
                           ) : <span key="nolink" style={{ color: '#d9d9d9' }}><LinkOutlined /></span>,
+                          // 采集更新：只发采集请求，不打开新窗口
+                          <button
+                            key="refresh"
+                            type="button"
+                            aria-label={`采集更新商品：${d?.title || ''}`}
+                            title="采集更新商品信息（不打开原帖）"
+                            onClick={() => handleRefreshItem(item.link_key ?? undefined)}
+                            disabled={!item.link_key}
+                            style={{ cursor: item.link_key ? 'pointer' : 'not-allowed', background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit' }}
+                          >
+                            <ReloadOutlined />
+                          </button>,
                           <DeleteOutlined key="delete" onClick={() => handleDelete(item.link_id)} style={{ color: item.link_id ? '#ff4d4f' : '#d9d9d9' }} />,
                         ]}
                       >

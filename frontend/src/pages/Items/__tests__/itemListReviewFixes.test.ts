@@ -53,3 +53,32 @@ describe('地区/品牌候选项来源', () => {
     expect(page).toMatch(/facets\.brands\.length \? facets\.brands : fromPage/)
   })
 })
+
+// T02658（评审 2.3-5）：标题列原来是一个去样式 button，点一下同时「真实采集 + 新开原帖」，
+// 两个副作用都不可发现。现在标题只开原帖，采集移到独立按钮。
+describe('商品标题与采集职责拆分（T02658）', () => {
+  const linkCase = page.slice(page.indexOf("case 'link':"), page.indexOf("case 'price':"))
+
+  it('表格标题是纯链接（Typography.Link + href），不再挂采集 handler', () => {
+    expect(linkCase).toContain('<Typography.Link href={d.url}')
+    expect(linkCase).not.toContain('handleRefreshItem')
+    expect(linkCase).not.toContain('<button')
+  })
+
+  it('采集是操作列独立按钮，handler 不再打开新窗口', () => {
+    expect(page).toContain('tip="采集更新商品信息（不打开原帖）"')
+    expect(page).toMatch(/handleRefreshItem\(record\.link_key/)
+    const fn = page.slice(
+      page.indexOf('const handleRefreshItem'),
+      page.indexOf('}, [selectedTask, applyRefreshToLiveItem, loadItems])'),
+    )
+    expect(fn).not.toContain('globalThis.open')
+    expect(page).not.toContain('globalThis.open')
+  })
+
+  it('卡片视图同样拆成「打开原帖」链接与独立采集按钮', () => {
+    expect(page).toContain('aria-label={`打开原帖：')
+    expect(page).toContain('title="采集更新商品信息（不打开原帖）"')
+    expect(page).not.toContain('采集更新并打开原帖')
+  })
+})
