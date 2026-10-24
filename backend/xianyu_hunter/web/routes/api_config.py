@@ -217,7 +217,7 @@ def preview_config(
     """
     current = _load_yaml()
     new = copy.deepcopy(current)
-    _deep_merge(new, payload)
+    _deep_merge(new, _payload_without_masks(payload))
     diffs = _diff(current, new)
     validation = _validate(new)
     return {
@@ -234,7 +234,7 @@ def save_config(
     """保存配置（带多版本备份）。支持 dry_run 模式。"""
     current = _load_yaml()
     new = copy.deepcopy(current)
-    _deep_merge(new, body.payload)
+    _deep_merge(new, _payload_without_masks(body.payload))
     validation = _validate(new)
     if not validation["ok"]:
         raise HTTPException(status_code=400, detail={
@@ -674,6 +674,36 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
 _REDACT_KEYS = frozenset({
     "cookie", "cookies", "session_id",
 })
+
+# GET 侧的占位值，必须与 _redact_recursive 写入的字面量一致
+_REDACT_PLACEHOLDER = "***"
+
+
+def _strip_masked_credentials(node: dict[str, Any], prefix: str = "") -> list[str]:
+    """就地剔除「值等于脱敏占位」的敏感键，返回被剔除的键路径
+
+    为什么拦在写侧：前端保存时把整份（已脱敏的）config 原样回传，
+    `***` 的语义是「我没动这一项」，不是「把 *** 写进配置」；
+    一旦模型里出现同名字符串字段，一次普通保存就会摧毁磁盘上的真凭据（T02733）。
+    """
+    stripped: list[str] = []
+    for k in list(node.keys()):
+        v = node[k]
+        if isinstance(v, dict):
+            stripped.extend(_strip_masked_credentials(v, f"{prefix}{k}."))
+        elif k in _REDACT_KEYS and v == _REDACT_PLACEHOLDER:
+            del node[k]
+            stripped.append(f"{prefix}{k}")
+    return stripped
+
+
+def _payload_without_masks(payload: dict[str, Any]) -> dict[str, Any]:
+    """preview/save 共用：掩码值不进 _deep_merge，磁盘与 diff 都保持原值"""
+    out = copy.deepcopy(payload)
+    stripped = _strip_masked_credentials(out)
+    if stripped:
+        logger.warning(f"配置请求携带脱敏占位，已按「未修改」处理：{', '.join(stripped)}")
+    return out
 
 
 def _redact(data: dict[str, Any]) -> dict[str, Any]:

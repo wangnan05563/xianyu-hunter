@@ -140,3 +140,79 @@ def api_config_source_module():
 
     return module
 
+
+# ==================== T02733：掩码回写护栏（写侧） ====================
+# GET /api/config 把 _REDACT_KEYS 命中的非空字符串换成 "***"，前端保存时又把整份
+# 回传过去。护栏要钉住的语义是：`***` = 「我没改这一项」，不是「把 *** 写进配置」。
+_DISK_SENTINEL = {
+    "search": {"keyword": "旧关键词", "cookie": "REAL-SECRET-COOKIE", "min_price": 10}
+}
+
+
+def _save(monkeypatch, tmp_path, payload: dict, disk: dict):
+    import yaml
+
+    from xianyu_hunter.web.routes import api_config
+
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        yaml.safe_dump(disk, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(api_config, "CONFIG_FILE", cfg_file)
+    monkeypatch.setattr(api_config, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(api_config, "reload_config", lambda *a, **k: None)
+
+    body = api_config.ConfigSaveBody(payload=payload, dry_run=False)
+    out = api_config.save_config(body)
+    return out, yaml.safe_load(cfg_file.read_text(encoding="utf-8"))
+
+
+def test_masked_cookie_is_not_written_to_disk(monkeypatch, tmp_path):
+    """payload 带回显的 *** 时：同批次的真实改动照常落盘，凭据保持磁盘原值"""
+    out, on_disk = _save(
+        monkeypatch, tmp_path,
+        payload={"search": {"keyword": "新关键词", "cookie": "***"}},
+        disk=copy_dict(_DISK_SENTINEL),
+    )
+    assert out["ok"] is True
+    assert on_disk["search"]["cookie"] == "REAL-SECRET-COOKIE"
+    assert on_disk["search"]["keyword"] == "新关键词"
+    assert on_disk["search"]["min_price"] == 10
+    # 掩码项不得出现在 diff（否则用户会看到「我要把它改成 ***」）
+    assert not [d for d in out["diffs"] if "cookie" in d["path"]]
+
+
+def test_masked_value_produces_no_preview_diff(monkeypatch):
+    from xianyu_hunter.web.routes import api_config
+
+    monkeypatch.setattr(api_config, "_load_yaml", lambda: copy_dict(_DISK_SENTINEL))
+    out = api_config.preview_config({"search": {"cookie": "***", "min_price": 20}})
+    paths = [d["path"] for d in out["diffs"]]
+    assert paths == ["search.min_price"], f"预览只该报真实改动：{paths}"
+
+
+def test_placeholder_literal_matches_redact():
+    """护栏认的是 GET 侧写的字面量：两边换口径必须同时改，否则护栏静默失效"""
+    from xianyu_hunter.web.routes import api_config
+
+    assert api_config._REDACT_PLACEHOLDER == api_config._redact(
+        {"cookie": "REAL-SECRET-COOKIE"}
+    )["cookie"]
+
+
+def test_non_placeholder_cookie_still_writes(monkeypatch, tmp_path):
+    """护栏只挡占位符：用户真的粘贴新 cookie 时必须照常写入"""
+    out, on_disk = _save(
+        monkeypatch, tmp_path,
+        payload={"search": {"cookie": "brand-new-value"}},
+        disk=copy_dict(_DISK_SENTINEL),
+    )
+    assert out["ok"] is True
+    assert on_disk["search"]["cookie"] == "brand-new-value"
+
+
+def copy_dict(data: dict) -> dict:
+    import copy
+
+    return copy.deepcopy(data)
+
