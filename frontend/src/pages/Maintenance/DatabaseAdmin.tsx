@@ -190,6 +190,20 @@ export function isDeleteConfirmBlocked(token: string, cascade: CascadeState): bo
   return cascade.status === 'loading' || cascade.status === 'error'
 }
 
+/**
+ * 删除确认的「影响范围」文案（T02725）：必须说清波及几行、是否含级联子记录。
+ * 级联预览是异步的，统计未完成/失败时不能假装范围已知——那正是旧批量删除缺的一项。
+ */
+export function cascadeScopeText(table: string, rowCount: number, cascade: CascadeState): string {
+  const base = `表 ${table} 的 ${rowCount} 行记录`
+  if (cascade.status === 'loading') return `${base}；级联影响统计中，统计完成前无法确认`
+  if (cascade.status === 'error') return `${base}；级联影响未能统计，删除已禁用`
+  if (cascade.status === 'empty') return `${base}，无级联子记录`
+  const cascaded = cascade.relations.filter((r) => r.action === 'cascade').length
+  const unlinked = cascade.relations.length - cascaded
+  return `${base}，并处理 ${cascade.total} 条关联数据（${cascaded} 类表连同删除、${unlinked} 类表仅解除关联）`
+}
+
 /** 提交给后端的行数据（T02576 / 4.2-3）
  *
  * 三条口径：
@@ -549,7 +563,8 @@ export default function DatabaseAdmin() {
   // 现在预览未成功（加载中或失败）确认按钮一直禁用，失败给出「重试预览」。
   const openDeleteModal = (opts: {
     readonly title: string;
-    readonly intro: string;
+    readonly action: string;
+    readonly rowCount: number;
     readonly keys: Array<string | number>;
     readonly summary?: string;
     readonly pkText?: string;
@@ -560,17 +575,22 @@ export default function DatabaseAdmin() {
     const okProps = () => ({ danger: true, disabled: isDeleteConfirmBlocked(tokenValue, cascade) })
     const buildContent = () => (
       <div>
+        {/* T02725：单行/批量统一用四要素渲染，不再各自写一句「操作不可恢复」 */}
+        <DangerSummary
+          action={opts.action}
+          scope={cascadeScopeText(activeTable ?? '当前表', opts.rowCount, cascade)}
+          count={opts.rowCount}
+          recovery="删除后不可撤销，只能重新录入；请先在「导出」页留存备份。"
+        />
         {opts.summary && (
           <p style={{ marginBottom: 6 }}>
             <b>{opts.summary}</b>
           </p>
         )}
-        <p style={{ marginBottom: 6 }}>{opts.intro}</p>
         {opts.pkText && (
           <p style={{ marginBottom: 6 }}>主键：<code>{opts.pkText}</code></p>
         )}
         <CascadeView state={cascade} onRetry={retry} />
-        <p style={{ marginBottom: 8 }}>恢复成本：删除后不可撤销，只能重新录入；请先在「导出」页留存备份。</p>
         <p>请输入 <b>{CONFIRM_TOKEN}</b> 以确认（区分大小写）：</p>
         <Input.Password
           placeholder={CONFIRM_TOKEN}
@@ -604,7 +624,8 @@ export default function DatabaseAdmin() {
   const openDeleteConfirm = (pkValue: unknown, row?: Record<string, unknown>) => {
     openDeleteModal({
       title: '确认删除该行？',
-      intro: `将从表 ${activeTable} 删除 1 行记录，操作不可恢复。`,
+      action: `删除表 ${activeTable} 中的 1 行记录`,
+      rowCount: 1,
       keys: [pkValue as string | number],
       // T02573：确认框只显示主键等于没显示——用户判断不了删的是哪条业务记录，
       // 这里按表取真实存在的业务字段做摘要（见 docs/standards/危险操作文案规范.md）
@@ -618,7 +639,8 @@ export default function DatabaseAdmin() {
   const openBatchDeleteConfirm = () => {
     openDeleteModal({
       title: `确认批量删除 ${selectedRowKeys.length} 行？`,
-      intro: `将从表 ${activeTable} 删除当前选中的 ${selectedRowKeys.length} 行记录，操作不可恢复。`,
+      action: `批量删除表 ${activeTable} 中选中的 ${selectedRowKeys.length} 行记录`,
+      rowCount: selectedRowKeys.length,
       keys: selectedRowKeys.map(String),
       onConfirm: handleBatchDelete,
     })

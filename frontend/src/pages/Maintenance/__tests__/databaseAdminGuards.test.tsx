@@ -10,6 +10,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import {
   CascadeView,
   buildSubmitValues,
+  cascadeScopeText,
   isDeleteConfirmBlocked,
   type CascadeState,
 } from '../DatabaseAdmin'
@@ -103,6 +104,30 @@ describe('CascadeView：预览结果不再走 innerHTML', () => {
   })
 })
 
+describe('删除确认四要素（T02725）', () => {
+  it('影响范围写清行数、级联条数与处理方式', () => {
+    expect(cascadeScopeText('tasks', 3, { status: 'empty' })).toBe('表 tasks 的 3 行记录，无级联子记录')
+    const scope = cascadeScopeText('tasks', 2, {
+      status: 'relations',
+      total: 7,
+      relations: [
+        { table: 'items', fk: 'task_id', action: 'cascade', count: 5, description: '商品 5 条' },
+        { table: 'events', fk: 'task_id', action: 'cascade', count: 1, description: '事件 1 条' },
+        { table: 'logs', fk: 'task_id', action: 'set_null', count: 1, description: '日志 1 条' },
+      ],
+    })
+    expect(scope).toContain('表 tasks 的 2 行记录')
+    expect(scope).toContain('7 条关联数据')
+    expect(scope).toContain('2 类表连同删除')
+    expect(scope).toContain('1 类表仅解除关联')
+  })
+
+  it('级联统计中/失败时明说范围未知，不假装已经算清', () => {
+    expect(cascadeScopeText('tasks', 1, { status: 'loading' })).toContain('统计完成前无法确认')
+    expect(cascadeScopeText('tasks', 1, { status: 'error', detail: 'x' })).toContain('删除已禁用')
+  })
+})
+
 describe('源码级名实一致（防止退回假承诺）', () => {
   // 注释里允许保留一次历史说明（解释当初为什么错），所以断言只针对代码本体：
   // 剥掉块注释与整行注释后再比，口径与 tests/test_maintenance_cleanup.py 的
@@ -141,6 +166,15 @@ describe('源码级名实一致（防止退回假承诺）', () => {
 
   it('审计日志抽屉有 loading，不再先开后填', () => {
     expect(page).toContain('loading={auditLoading}')
+  })
+
+  it('单行/批量删除共用 DangerSummary 四要素，批量数量取真实选中数（T02725）', () => {
+    expect(page).toContain('<DangerSummary')
+    expect(page).toMatch(/count=\{opts\.rowCount\}/)
+    expect(page).toMatch(/rowCount: selectedRowKeys\.length/)
+    expect(page).toContain('批量删除表 ${activeTable} 中选中的 ${selectedRowKeys.length} 行记录')
+    // 旧确认框只有一句「将从表 X 删除…操作不可恢复」，缺动作/影响范围
+    expect(page).not.toContain('将从表 ${activeTable} 删除')
   })
 
   it('移动端导出同样点名全表并给 loading（T02576 桌面/移动同口径）', () => {
