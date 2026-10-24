@@ -128,4 +128,26 @@ describe('导航文案单一事实源（T02556 / FR-B-4）', () => {
       expect(PRICE_HISTOGRAM_SOURCE).not.toContain('商品列表')
     })
   })
+
+  // 评审 2.4-4：本页评估对象是商品，「卖家评估」名不副实；全站统一为「评估明细」
+  describe('/evaluations 命名单一事实源（T02665）', () => {
+    const helpEvalBlock = HELP_SOURCE.slice(
+      HELP_SOURCE.indexOf("id: 'evaluations'"),
+      HELP_SOURCE.indexOf("id: 'orders'"),
+    )
+
+    it('侧栏/menu registry 使用「评估明细」', () => {
+      expect(parseRegistryLabels().get('/evaluations')).toBe('评估明细')
+    })
+
+    it('帮助文档的评估模块标题与菜单一致', () => {
+      expect(helpEvalBlock).toContain("title: '评估明细'")
+      expect(helpEvalBlock).not.toContain("'卖家评估'")
+    })
+
+    it('全站引导里 /evaluations 的标题与菜单一致', () => {
+      const guide = MENU_GUIDES.find((g) => g.route === '/evaluations')
+      expect(guide?.steps[0]?.title).toBe('评估明细')
+    })
+  })
 })

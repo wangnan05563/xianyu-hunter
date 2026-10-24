@@ -51,7 +51,7 @@ menus:
     default_visible: true
     category: data_view
   - key: evaluations
-    label: 卖家评估
+    label: 评估明细
     icon: AuditOutlined
     path: /evaluations
     sort_order: 12

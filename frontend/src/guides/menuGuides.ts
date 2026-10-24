@@ -56,7 +56,7 @@ export const MENU_GUIDES: MenuGuide[] = [
   {
     route: '/evaluations',
     steps: [
-      { selector: '.page-container', title: '卖家评估', description: '从职业度、信用、纠纷、价格异动 4 维评估卖家，综合评分决定是否抢单；支持 AI 多模态深度分析。' },
+      { selector: '.page-container', title: '评估明细', description: '从职业度、信用、纠纷、价格异动 4 维评估卖家，综合评分决定是否抢单；支持 AI 多模态深度分析。' },
     ],
   },
   {
