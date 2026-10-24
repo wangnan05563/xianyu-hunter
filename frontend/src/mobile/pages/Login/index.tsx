@@ -1,9 +1,11 @@
 // frontend/src/mobile/pages/Login/index.tsx
 import { Card, Button, Spin, Input, App, Tag, Space } from 'antd'
 import { useEffect, useState, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { authApi } from '../../../api'
 import type { CookieInjectResult, BrowserImportStatus } from '../../../api/auth'
 import { extractApiError } from '../../../utils/apiError'
+import { mobileLoginRedirect } from '../../../utils/authRedirect'
 
 // 处理导入结果统一返回的成功/失败提示
 // 为什么提取：浏览器导入与 Cookie 注入返回结构一致，复用同一逻辑
@@ -140,6 +142,9 @@ function BrowserImportContent({
 
 export default function MobileLogin() {
   const { message } = App.useApp()
+  const [searchParams] = useSearchParams()
+  // 401 跳转带的 redirect 只接受站内移动端路径；桌面/外站/登录页自身一律回移动端首页
+  const redirectTo = mobileLoginRedirect(searchParams.get('redirect'), globalThis.location.origin)
   const [browserStatus, setBrowserStatus] = useState<BrowserImportStatus | null>(null)
   const [loadingStatus, setLoadingStatus] = useState(true)
   const [importing, setImporting] = useState(false)
@@ -161,14 +166,14 @@ export default function MobileLogin() {
 
   useEffect(() => { void fetchBrowserStatus() }, [fetchBrowserStatus])
 
-  // 导入成功统一处理：展示后端 message，延迟跳转移动端首页
+  // 导入成功统一处理：展示后端 message，延迟回到 redirectTo（默认移动端首页）
   // 延迟 1s 让用户看到成功提示再跳转
   const handleImportSuccess = useCallback((result: CookieInjectResult) => {
     message.success(result.message || '导入成功')
     setTimeout(() => {
-      globalThis.location.href = '/xianyu/m/'
+      globalThis.location.href = redirectTo
     }, 1000)
-  }, [message])
+  }, [message, redirectTo])
 
   // 单浏览器导入：auto_close=true 让后端处理文件锁
   // 为什么用 true：闲鱼进程常驻导致 SQLite 锁，自动关闭可显著提升成功率

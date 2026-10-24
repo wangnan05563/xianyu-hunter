@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios'
 import { API_BASE } from '../utils/apiBase'
+import { authLoginPath, isAuthLoginPath } from '../utils/authRedirect'
 
 // Axios 实例：自动携带认证凭证
 // baseURL 必须带上 SPA 部署子路径（/xianyu/），否则域名模式下 /api/* 落到根路径被代理拦截
@@ -35,18 +36,20 @@ client.interceptors.response.use(
     if (isAuthUnauthorized) {
       localStorage.removeItem('xh_token')
       // 避免在登录页本身触发跳转（防止死循环）
-      // 路径匹配必须用 /xianyu/login：SPA 挂载在 /xianyu/ 下（vite base + BrowserRouter basename）
-      const currentPath = globalThis.location.pathname + globalThis.location.search
-      const isLoginPage = currentPath.startsWith('/xianyu/login')
+      // 路径匹配必须带 /xianyu 前缀：SPA 挂载在 /xianyu/ 下（vite base + BrowserRouter basename）
+      const { pathname } = globalThis.location
+      const currentPath = pathname + globalThis.location.search
+      // T02717：移动端（/xianyu/m/*）401 回移动端登录页，不再甩到桌面版
+      const isLoginPage = isAuthLoginPath(pathname)
       if (!isLoginPage && !isRedirecting) {
         isRedirecting = true
         // 保存当前路径，登录后跳转回来
         const redirect = encodeURIComponent(currentPath)
         // 使用 replace 避免在历史记录中留下当前页面，
         // 防止用户后退回到已失效的认证态页面
-        // 必须用 /xianyu/login：浏览器原生跳转不走 react-router，
-        // 不会自动补 basename 前缀，直接用 /login 会被后端返回 404
-        globalThis.location.replace(`/xianyu/login?redirect=${redirect}`)
+        // 浏览器原生跳转不走 react-router，不会自动补 basename 前缀，
+        // 所以登录路径必须由 authLoginPath 给出完整 /xianyu 前缀
+        globalThis.location.replace(`${authLoginPath(pathname)}?redirect=${redirect}`)
       }
     }
     return Promise.reject(error)

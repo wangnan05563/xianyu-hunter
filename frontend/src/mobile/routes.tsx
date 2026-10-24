@@ -36,6 +36,8 @@ const MobileVersionManager = lazyRetry(() => import('./pages/VersionManager'))
 const MobileDatabaseAdmin = lazyRetry(() => import('./pages/DatabaseAdmin'))
 const MobileBatchRefresh = lazyRetry(() => import('./pages/BatchRefresh'))
 const MobileAbout = lazyRetry(() => import('./pages/About'))
+// T02717：移动端登录页（Cookie 导入）。此前组件已实现但无路由，401 只能落到桌面登录页
+const MobileLogin = lazyRetry(() => import('./pages/Login'))
 
 function MobilePageLoading() {
   return (
@@ -56,6 +58,8 @@ function MobileRoute({ children }: { readonly children: ReactNode }) {
 export default function MobileRoutes() {
   return (
     <Routes>
+      {/* 登录页不套 MobileLayout：未登录时底部 TabBar 没有可用页面 */}
+      <Route path="login" element={<MobileRoute><MobileLogin /></MobileRoute>} />
       {/* descendant Routes 看到的 pathname 是去掉父路由 /m 前缀后的剩余路径
           例如 URL /m/tasks → descendant pathname = "/tasks"
           所以根路由用 path="/" 匹配剩余路径，子路由用相对路径 tasks/orders 等 */}
