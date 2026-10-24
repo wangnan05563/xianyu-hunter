@@ -20,6 +20,29 @@ function codeOf(src: string): string {
     .join('\n')
 }
 
+/**
+ * 找出 offset 所在的最近一层「组件内顶层声明」：缩进 ≤ 2 的 `const foo = …` / `function foo(…)`
+ * / `useEffect(…)`。缩进 ≥ 4 的 `const next = …` 是函数体内局部变量，不能当边界
+ * （否则 onStatusChange 会被从中间切断）。
+ */
+function enclosingFunctionLabel(code: string, offset: number): string | null {
+  const lines = code.split('\n')
+  const starts: { label: string; pos: number }[] = []
+  let pos = 0
+  for (const line of lines) {
+    const named = line.match(/^ {0,2}(?:export\s+)?(?:const|function)\s+([A-Za-z0-9_]+)/)
+    if (named) starts.push({ label: named[1], pos })
+    else if (/^ {2}useEffect\(/.test(line)) starts.push({ label: 'useEffect', pos })
+    pos += line.length + 1
+  }
+  let found: string | null = null
+  for (let i = 0; i < starts.length; i++) {
+    const end = i + 1 < starts.length ? starts[i + 1].pos : code.length
+    if (offset >= starts[i].pos && offset < end) found = starts[i].label
+  }
+  return found
+}
+
 // 读端与写端成对：页面里用 parse*Param(searchParams.get(KEY)) 读过的键，
 // 必须同时存在 set(KEY…) 与 delete(KEY…) —— 只 set 不 delete 的话，
 // 「清空筛选」这个动作永远写不回 URL，刷新还是被筛回来。
@@ -50,11 +73,34 @@ describe('深链筛选参数读写成对（T02831）', () => {
 
   it('Orders 状态筛选只有一个写入口，绕开它的写法即漏写', () => {
     const code = codeOf(read('pages/Orders/Orders.tsx'))
-    const setters = (code.match(/setStatusFilter\(/g) ?? []).length
-    // 挂载后只有两处：URL 效果里以链接为准 + onStatusChange 里跟随用户动作
-    expect(setters, '状态筛选的写入口多了：新增那处必须同样回写 URL').toBe(2)
-    // 两处里只有 onStatusChange 负责用户动作，另一处以链接为准
-    expect(code).toContain('const onStatusChange')
+    // 不能数 setStatusFilter( 的出现次数：T02673 的「演练单」是同一个下拉的第二分支，
+    // 一次用户动作会连写 type 与 status 两个 state（两端互斥），出现次数随分支增加而涨。
+    // 真正的不变量是「落点所在的函数」只有两个：
+    //   · useEffect（URL → 状态，以链接为准，不回写，否则会自己写自己）；
+    //   · onStatusChange（用户动作 → 状态 + 回写 URL）。
+    // 新增第三个函数里写 status 即视为绕开写入口。
+    const owners = new Set<string | null>()
+    for (const m of code.matchAll(/setStatusFilter\(/g)) {
+      owners.add(enclosingFunctionLabel(code, m.index ?? 0))
+    }
+    expect([...owners].sort(), '状态筛选的写入口变了：新增落点必须同样回写 URL').toEqual([
+      'onStatusChange',
+      'useEffect',
+    ])
+
+    // onStatusChange 是唯一的用户动作写入口：它必须同时把 type/status 两套参数写回 URL，
+    // 两个分支共用同一个 setSearchParams 快照（dry_run 分支删 status、普通分支删 type）
+    const start = code.indexOf('const onStatusChange')
+    const end = code.indexOf('const handleDelete', start)
+    const writer = code.slice(start, end)
+    expect(writer.length, 'onStatusChange 解析为空').toBeGreaterThan(0)
+    expect(writer).toContain('setSearchParams(next, { replace: true })')
+    expect(writer, '演练单分支没删 status').toContain("next.delete('status')")
+    expect(writer, '普通分支没写 status').toContain("next.set('status', v)")
+    expect(writer, '普通分支没删 type，切回真实单后仍被演练单筛住').toContain("next.delete('type')")
+    expect(writer, '演练单分支没写 type').toContain("next.set('type', 'dry_run')")
+    // 这里不再数 setStatusFilter 的次数：一个用户动作可能写多个互斥 state（T02673 的演练单），
+    // 次数随分支增加而涨。落点归属由上面的 owners 断言守，函数内只守 URL 写回。
   })
 
   it('评估页的定位提示按「参数是否仍等于当前筛选」分文案', () => {
