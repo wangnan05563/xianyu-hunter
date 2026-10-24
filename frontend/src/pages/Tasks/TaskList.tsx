@@ -17,6 +17,7 @@ import { usePersistentState } from '../../hooks/usePersistentState'
 import { useAutoLiveSearch } from '../../hooks/useAutoLiveSearch'
 import { AI_GATE_OFF_TIP, useAIEnabled } from '../../hooks/useAIEnabled'
 import { AI_DISABLED_FALLBACK, extractApiError, isAiDisabledError } from '../../utils/apiError'
+import { taskSilence } from '../../utils/taskSilence'
 import { TipButton } from '@/components/TipButton'
 
 // 让 Tag/span 等非原生交互元素获得键盘可访问性（S6848：onClick 需配合键盘事件）
@@ -372,15 +373,21 @@ export default function TaskList() {
 
   // ============== 沉默状态计算 ==============
 
+  // T02652：按最近一次采集命中判定，编辑任务不再把长期零命中的任务刷成「活跃」
   const getSilenceTag = (task: Task) => {
-    // created_at 和 updated_at 相同时视为从未更新
-    if (!task.updated_at || task.updated_at === task.created_at) {
+    const silence = taskSilence(task)
+    if (silence.level === 'unknown') {
       return <Tag color="default">无活动</Tag>
     }
-    const daysSinceUpdate = (Date.now() - new Date(task.updated_at).getTime()) / (1000 * 60 * 60 * 24)
-    if (daysSinceUpdate > 30) return <Tag color="red">沉默30d+</Tag>
-    if (daysSinceUpdate > 7) return <Tag color="orange">沉默7d+</Tag>
-    return <Tag color="green">活跃</Tag>
+    const tip = silence.basis === 'created'
+      ? '尚无采集命中记录，暂按创建时间判定；编辑任务不影响该状态'
+      : '按最近一次采集命中时间判定，编辑任务不影响该状态'
+    const tag = silence.level === 'silent30'
+      ? <Tag color="red">沉默30d+</Tag>
+      : silence.level === 'silent7'
+        ? <Tag color="orange">沉默7d+</Tag>
+        : <Tag color="green">活跃</Tag>
+    return <Tooltip title={tip}>{tag}</Tooltip>
   }
 
   // ============== 批量操作 ==============

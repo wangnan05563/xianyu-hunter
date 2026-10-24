@@ -234,6 +234,9 @@ export interface Task {
   status: string
   created_at: string
   updated_at: string
+  // 最近一次采集命中时间（list_tasks_with_last_seen 的 max(items.last_seen) 聚合）
+  // 仅列表接口返回；详情/创建接口没有该字段，故可选。T02652 的「沉默」按它判定
+  last_seen_at?: string | null
 }
 
 export interface TaskCreateBody {
