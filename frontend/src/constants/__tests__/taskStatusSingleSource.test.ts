@@ -247,3 +247,71 @@ describe('任务域字面值的全站扫描与外来词表登记（T02850）', (
     )
   })
 })
+
+// T02908：后端给 TaskMode 增删一个取值时，TASK_MODE_VALUES 会自动跟着变，
+// 但**页面下拉列表**不会——某个页面只列了子集，编译和测试都不会红，
+// 用户在新页面上就是看不到新档位。这里把「调用点清单 + 全枚举/有意子集」钉住：
+//   · 传 TASK_MODE_VALUES → 视为全枚举，后端新增值自动覆盖；
+//   · 传数组 → 必须在调用点上方写明「有意子集：<理由>」，否则红；
+//   · 新增调用点必须同步本文件的清单，让「新页面列了几档」成为一次显式决定。
+const MODE_CALL_RE = /taskModeOptions\(\s*(\[[\s\S]*?\]|TASK_MODE_VALUES)\s*\)/g
+const SUBSET_MARKER = '有意子集'
+
+function scanTaskModeOptionsCalls(): { file: string; index: number; line: number; arg: string }[] {
+  const out: { file: string; index: number; line: number; arg: string }[] = []
+  for (const rel of listSrcFiles()) {
+    const src = srcOf(rel)
+    if (!src.includes('taskModeOptions(')) continue
+    for (const m of src.matchAll(MODE_CALL_RE)) {
+      const index = m.index ?? 0
+      out.push({
+        file: rel,
+        index,
+        line: src.slice(0, index).split(/\r?\n/).length,
+        arg: m[1],
+      })
+    }
+  }
+  return out
+}
+
+describe('taskModeOptions 调用点的覆盖度（T02908）', () => {
+  const calls = scanTaskModeOptionsCalls()
+
+  it('调用点清单与已审计的页面一致（新增页面要在这里登记）', () => {
+    expect(calls.map((c) => c.file).sort()).toEqual([
+      'mobile/pages/TaskEditor/index.tsx',
+      'pages/Onboarding/index.tsx',
+    ])
+  })
+
+  it('每个调用点要么给全枚举，要么声明「有意子集」并写理由', () => {
+    for (const call of calls) {
+      const where = `${call.file}:${call.line}`
+      if (call.arg === 'TASK_MODE_VALUES') continue
+      // 子集只许引用常量成员：手写 value/label 对会绕开标签表单源
+      expect(call.arg, `${where} 的 taskModeOptions 入参只能用 TASK_MODE.* 常量`).toMatch(
+        /^\[\s*TASK_MODE\.[A-Z_]+(\s*,\s*TASK_MODE\.[A-Z_]+)*\s*,?\s*\]$/,
+      )
+      expect(call.arg, `${where} 传了空数组，等于不渲染任何选项`).toMatch(/TASK_MODE\./)
+      // 注释可能写 2-3 行、中间还隔着 <Select> 的属性；按「调用点前 400 字符」找最近一条声明
+      const src = srcOf(call.file)
+      const marker = src
+        .slice(Math.max(0, call.index - 400), call.index)
+        .split(/\r?\n/)
+        .filter((l) => l.includes(SUBSET_MARKER))
+        .pop()
+      expect(
+        marker,
+        `${where} 只列了部分模式，需在上方注明「有意子集：<理由>」；否则请改传 TASK_MODE_VALUES`,
+      ).toBeTruthy()
+      expect(marker, `${where} 的「有意子集」缺理由`).toMatch(/有意子集[:：]\s*\S{4,}/)
+    }
+  })
+
+  it('移动端任务编辑器必须给全四档（否则用户仍然改不到半自动/全自动）', () => {
+    const mobile = calls.filter((c) => c.file === 'mobile/pages/TaskEditor/index.tsx')
+    expect(mobile.length).toBe(1)
+    expect(mobile[0].arg).toBe('TASK_MODE_VALUES')
+  })
+})

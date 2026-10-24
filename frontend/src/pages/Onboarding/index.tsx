@@ -167,6 +167,8 @@ export default function Onboarding() {
           </div>
           <div>
             <Text strong>执行模式</Text>
+            {/* 有意子集：向导面向首次使用，只留「不抢单 / 手动下单 / 直接拍下」三档。
+                半自动要在通知里点回链，属于进阶用法；完整四档见任务编辑器的模式卡。 */}
             <Select
               value={mode}
               onChange={setMode}

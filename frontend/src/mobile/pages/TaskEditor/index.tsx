@@ -1,11 +1,28 @@
 // frontend/src/mobile/pages/TaskEditor/index.tsx
-import { Card, Form, Input, InputNumber, Button, Select, Spin, App, Space } from 'antd'
+import { Card, Form, Input, InputNumber, Button, Select, Spin, App, Space, Segmented, Typography } from 'antd'
 import { useNavigate, useParams } from 'react-router-dom'
-import { TASK_MODE, isTaskMode, type TaskModeValue } from '../../../constants/taskStatus'
+import {
+  TASK_MODE,
+  TASK_MODE_HINTS,
+  TASK_MODE_VALUES,
+  isTaskMode,
+  taskModeOptions,
+  type TaskModeValue,
+} from '../../../constants/taskStatus'
 import { useEffect, useState } from 'react'
 import { taskApi } from '../../../api'
 import type { Task, TaskCreateBody } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+
+const { Text } = Typography
+
+// 会产生真实订单的档位：auto 由系统评估通过后直接拍下，semi_auto 的通知里带「确认抢单」回链（点一下即下单）。
+// 移动端表单窄，风险只留一句；档位说明仍复用 constants 的 TASK_MODE_HINTS，不另写一份中文。
+const ORDER_PRODUCING_MODES: ReadonlySet<TaskModeValue> = new Set<TaskModeValue>([
+  TASK_MODE.AUTO,
+  TASK_MODE.SEMI_AUTO,
+])
+const MODE_RISK_HINT = '此模式会产生真实订单，请确认后再保存'
 
 // 安全解析字符串数组字段：后端 Task.exclude_words 是 JSON 字符串，需还原为数组供 Select tags 模式回显
 const safeParseStringArray = (v: unknown): string[] => {
@@ -25,8 +42,8 @@ export default function MobileTaskEditor() {
   const [form] = Form.useForm<TaskCreateBody>()
   const [loading, setLoading] = useState(isEdit)
   const [saving, setSaving] = useState(false)
-  // mode 不在表单里（移动端没有模式选择控件），单独用 state 承载详情返回的原值：
-  // antd 的 onFinish 只回传**已注册字段**，靠 values.mode 取值会永远是兜底值，
+  // mode 用 state 承载、不注册成表单字段：编辑态的原值要等详情返回才知道，而 Form 的 initialValues
+  // 只在挂载时生效；antd 的 onFinish 又只回传**已注册字段**，靠 values.mode 取值会永远是兜底值，
   // 于是「编辑一个 auto 任务保存后变成 notify（只通知不抢单）」——把执行模式静默改掉。
   const [mode, setMode] = useState<TaskModeValue>(TASK_MODE.NOTIFY)
 
@@ -106,6 +123,28 @@ export default function MobileTaskEditor() {
 
         <Form.Item name="name" label="任务名">
           <Input placeholder="任务名（可选，留空用关键词）" />
+        </Form.Item>
+
+        {/* 执行模式：此前移动端只有 state 没有控件 —— 只能建「仅通知」任务，也改不了已有任务的模式 */}
+        <Form.Item label="执行模式">
+          <Segmented
+            block
+            value={mode}
+            onChange={(v) => {
+              // Segmented 的 onChange 参数是 string | number，走 isTaskMode 收窄，不硬转
+              const next = String(v)
+              if (isTaskMode(next)) setMode(next)
+            }}
+            options={taskModeOptions(TASK_MODE_VALUES)}
+          />
+          <div style={{ marginTop: 6 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>{TASK_MODE_HINTS[mode]}</Text>
+            {ORDER_PRODUCING_MODES.has(mode) && (
+              <div>
+                <Text type="warning" style={{ fontSize: 12 }}>{MODE_RISK_HINT}</Text>
+              </div>
+            )}
+          </div>
         </Form.Item>
 
         {/* 价格区间：双列布局节省移动端垂直空间 */}
