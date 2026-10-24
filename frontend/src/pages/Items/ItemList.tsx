@@ -21,6 +21,7 @@ import ColumnSettingsModal from '../Evaluations/components/ColumnSettingsModal'
 import { ExportButton } from '../../components/ExportButton'
 import { API_BASE } from '../../utils/apiBase'
 import { classifyLiveSearchError } from './liveSearchError'
+import { LIVE_MODE_NOTICE, EXIT_LIVE_MODE_LABEL, EXIT_LIVE_MODE_TIP, facetTip, deleteTip } from './liveModeCopy'
 
 // 相对时间插件：用于 updated_at 列渲染"3分钟前"等格式
 // dayjs 默认不包含 fromNow()，需 extend 插件并切换中文 locale
@@ -177,6 +178,12 @@ export default function ItemList() {
   const [loading, setLoading] = useState(false)
   const [liveMode, setLiveMode] = useState(false)
   const [liveLoading, setLiveLoading] = useState(false)
+  // 实时模式说明条：进入时讲清「不分页 / 不能删 / 未入库」，关掉后本次实时不再反复弹；
+  // 退出实时模式时复位，下一次进入仍值得解释一次（T02659）
+  const [liveNoticeDismissed, setLiveNoticeDismissed] = useState(false)
+  useEffect(() => {
+    if (!liveMode) setLiveNoticeDismissed(false)
+  }, [liveMode])
   // 地区/品牌候选项（后端 DISTINCT 全量）：DB 模式用，避免「选了地区后选项只剩该地区」的自锁死
   const [facets, setFacets] = useState<{ regions: string[]; brands: string[] }>({ regions: [], brands: [] })
   const [search, setSearch] = useState('')
@@ -812,7 +819,17 @@ export default function ItemList() {
       render: (_: unknown, record: TaskLink) => (
         <Space size={0}>
           <TipButton tip="采集更新商品信息（不打开原帖）" type="link" icon={<ReloadOutlined />} onClick={() => handleRefreshItem(record.link_key ?? undefined)} size="small" disabled={!record.link_key} />
-          <TipButton tip="删除此商品关联（不可恢复）" type="link" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.link_id)} size="small" disabled={!record.link_id || liveMode} />
+          {/* 禁用态也要说清原因：TipButton 在 disabled 时会包一层 span，
+              所以这里的 tip 在实时模式下真的能被 hover/长按看到（T02659） */}
+          <TipButton
+            tip={deleteTip({ liveMode, hasLinkId: Boolean(record.link_id) })}
+            type="link"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => handleDelete(record.link_id)}
+            size="small"
+            disabled={!record.link_id || liveMode}
+          />
         </Space>
       ),
     })
@@ -886,22 +903,28 @@ export default function ItemList() {
             onChange={(e) => { setSearch(e.target.value); setPage(1) }}
             allowClear
           />
-          <Select
-            placeholder="筛选地区"
-            style={{ width: 140 }}
-            allowClear
-            value={regionFilter}
-            onChange={(v) => { setRegionFilter(v); setPage(1) }}
-            options={regionOptions.map((r) => ({ label: r, value: r }))}
-          />
-          <Select
-            placeholder="筛选品牌"
-            style={{ width: 140 }}
-            allowClear
-            value={brandFilter}
-            onChange={(v) => { setBrandFilter(v); setPage(1) }}
-            options={brandOptions.map((b) => ({ label: b, value: b }))}
-          />
+          {/* 地区/品牌候选的口径随模式变化（实时＝本次结果提取，DB＝后端 facets 全量 DISTINCT），
+              原先两种模式共用同一句无提示的下拉，用户在实时模式下会以为候选是全库的（T02659） */}
+          <Tooltip title={facetTip(liveMode, 'region')}>
+            <Select
+              placeholder="筛选地区"
+              style={{ width: 140 }}
+              allowClear
+              value={regionFilter}
+              onChange={(v) => { setRegionFilter(v); setPage(1) }}
+              options={regionOptions.map((r) => ({ label: r, value: r }))}
+            />
+          </Tooltip>
+          <Tooltip title={facetTip(liveMode, 'brand')}>
+            <Select
+              placeholder="筛选品牌"
+              style={{ width: 140 }}
+              allowClear
+              value={brandFilter}
+              onChange={(v) => { setBrandFilter(v); setPage(1) }}
+              options={brandOptions.map((b) => ({ label: b, value: b }))}
+            />
+          </Tooltip>
           {/* 状态筛选：固定三档选项，与地区/品牌筛选并列排放 */}
           <Select
             placeholder="状态筛选"
@@ -994,6 +1017,29 @@ export default function ItemList() {
       </Card>
 
       <Card style={{ position: 'relative' }}>
+        {/* 实时模式一次性说明（T02659）：分页器消失与删除置灰都是有意设计，
+            但页面此前没有任何解释，用户第一反应是「功能坏了」。
+            文案不写「改用刷新落库」：实时模式下「刷新」只做又一次实时搜索（handleRefresh 里
+            `if (liveMode) { loadLive(); return }`），根本不写库——要给用户的出口是退出实时模式。 */}
+        {liveMode && !liveNoticeDismissed && (
+          <Alert
+            type="info"
+            showIcon
+            closable
+            onClose={() => setLiveNoticeDismissed(true)}
+            message={<span style={{ fontSize: 12 }}>{LIVE_MODE_NOTICE}</span>}
+            action={
+              <TipButton
+                tip={EXIT_LIVE_MODE_TIP}
+                size="small"
+                onClick={() => setLiveMode(false)}
+              >
+                {EXIT_LIVE_MODE_LABEL}
+              </TipButton>
+            }
+            style={{ marginBottom: 12, borderRadius: 8 }}
+          />
+        )}
         {/* 实时更新指示器：自动刷新启用时始终显示
             DB 模式和实时模式都显示轮询状态和倒计时 */}
         {autoRefreshEnabled && selectedTask && (
