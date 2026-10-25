@@ -103,6 +103,131 @@ describe('分组标题与图标单源（FR-B-5 / N6）', () => {
   })
 })
 
+describe('分组形状与可见项数解耦（T02607）', () => {
+  afterEach(() => {
+    setMenuGroupIndex([])
+    setMenuLabelIndex([])
+  })
+
+  const groups: MenuGroup[] = [
+    { key: 'overview', label: '总览', icon: 'FundOutlined' },
+    { key: 'data_view', label: '数据查看', icon: 'BarChartOutlined' },
+  ]
+  const dashboard: MenuItem = {
+    key: 'dashboard',
+    label: '仪表盘',
+    path: '/',
+    icon: 'DashboardOutlined',
+    sort_order: 1,
+    visible: true,
+    category: 'overview',
+  }
+  const dataViewItems: MenuItem[] = [
+    leaf('tasks', '任务管理', '/tasks', 'UnorderedListOutlined', 10),
+    leaf('items', '商品中心', '/items', 'ShoppingOutlined', 11),
+    leaf('orders', '抢单记录', '/orders', 'ThunderboltOutlined', 12),
+  ]
+
+  it('登记分组只剩 1 个可见项时仍是 SubMenu，组标题与组图标不消失', () => {
+    const items = buildMenuItems([dashboard, ...dataViewItems], groups)
+    const overview = items.find((i) => (i as { key?: string }).key === 'sub-overview') as
+      | { key: string; label: string; icon: unknown; children: unknown[] }
+      | undefined
+    expect(overview).toBeDefined()
+    expect(overview?.label).toBe('总览')
+    expect(overview?.children).toHaveLength(1)
+    expect(overview?.children[0]).toMatchObject({ key: '/', label: '仪表盘' })
+    expect(iconClass(overview?.icon)).toContain('anticon-fund')
+  })
+
+  it('隐藏同组其他项后形状不翻转：可见项从 3 变 1，组还是那个组', () => {
+    const before = buildMenuItems(dataViewItems, groups)
+    const after = buildMenuItems(
+      [
+        dataViewItems[0],
+        { ...dataViewItems[1], visible: false },
+        { ...dataViewItems[2], visible: false },
+      ],
+      groups,
+    )
+    expect(before[0]).toMatchObject({ key: 'sub-data_view', label: '数据查看' })
+    expect(after[0]).toMatchObject({ key: 'sub-data_view', label: '数据查看' })
+    expect((before[0] as { children: unknown[] }).children).toHaveLength(3)
+    expect((after[0] as { children: unknown[] }).children).toHaveLength(1)
+    expect(after).toHaveLength(1)
+  })
+
+  it('未登记分组的单项（category 为空）仍作为顶层单项，不包一层空壳 SubMenu', () => {
+    const orphan: MenuItem = { ...dashboard, key: 'bookmark', path: '/timeline', category: '' }
+    const items = buildMenuItems([orphan], groups)
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ key: '/timeline', label: '仪表盘' })
+    expect((items[0] as { children?: unknown[] }).children).toBeUndefined()
+  })
+
+  it('登记口径不依赖后端 groups 是否下发：旧响应（无 groups）下单项 overview 依旧成组', () => {
+    const items = buildMenuItems([dashboard, ...dataViewItems])
+    expect(items.some((i) => (i as { key?: string }).key === 'sub-overview')).toBe(true)
+  })
+
+  it('后端新增的自定义分组键（不在内置表里）同样按 groups 成组、按 groups 取名', () => {
+    const custom: MenuGroup[] = [{ key: 'reports', label: '报表', icon: 'FileTextOutlined' }]
+    const one: MenuItem = { ...dashboard, key: 'export', path: '/export', category: 'reports' }
+    const items = buildMenuItems([one], custom)
+    expect(items[0]).toMatchObject({ key: 'sub-reports', label: '报表' })
+    expect((items[0] as { children: unknown[] }).children).toHaveLength(1)
+  })
+
+  it('真实 registry：每个登记分组都成组，overview 只有 1 项也不再退化为顶层单项', () => {
+    const menusSection = REGISTRY_SOURCE.slice(REGISTRY_SOURCE.indexOf('\nmenus:') + 1)
+    const parsed: MenuItem[] = []
+    for (const block of menusSection.split(/\n(?=\s*-\s*key:)/)) {
+      const key = block.match(/^\s*-\s*key:\s*(\S+)/m)?.[1]
+      const path = block.match(/\n\s+path:\s*(\S+)/)?.[1]
+      if (!key || !path) continue
+      parsed.push({
+        key,
+        label: block.match(/\n\s+label:\s*(.+)$/m)?.[1].trim() || key,
+        path,
+        icon: block.match(/\n\s+icon:\s*(\S+)/)?.[1] || '',
+        sort_order: Number(block.match(/\n\s+sort_order:\s*(\d+)/)?.[1] ?? 0),
+        visible: (block.match(/\n\s+default_visible:\s*(\S+)/)?.[1] ?? 'true') !== 'false',
+        category: block.match(/\n\s+category:\s*(\S+)/)?.[1] || '',
+      })
+    }
+    const groups: MenuGroup[] = [...REGISTRY_SOURCE.matchAll(/^  - key: (\S+)\n\s+label: (.+)$/gm)].map(
+      (m) => ({ key: m[1], label: m[2].trim(), icon: '' }),
+    )
+    expect(parsed.length).toBeGreaterThan(10)
+
+    const built = buildMenuItems(parsed, groups)
+    const subKeys = built
+      .filter((i) => Array.isArray((i as { children?: unknown[] }).children))
+      .map((i) => (i as { key: string }).key)
+    // 每个「有可见项」的登记分组都必须以 SubMenu 出现
+    const expectedSubs = groups
+      .filter((g) => parsed.some((m) => m.visible && m.category === g.key))
+      .map((g) => `sub-${g.key}`)
+    expect(subKeys).toEqual(expect.arrayContaining(expectedSubs))
+    expect(subKeys).toContain('sub-overview')
+    // overview 在 registry 里只有仪表盘一项——这正是本单修的退化点
+    const overview = built.find((i) => (i as { key?: string }).key === 'sub-overview') as {
+      label: string
+      children: unknown[]
+    }
+    expect(overview.label).toBe('总览')
+    expect(overview.children).toHaveLength(1)
+    // 顶层只允许「不属于任何登记分组」的项（含 system 区）；登记分组的项不许裸放顶层
+    const catByPath = new Map(parsed.map((m) => [m.path, m.category] as const))
+    const registered = new Set(groups.map((g) => g.key))
+    const topLevelLeaves = built
+      .filter((i) => !('type' in i) && !Array.isArray((i as { children?: unknown[] }).children))
+      .map((i) => (i as { key: string }).key)
+    const offending = topLevelLeaves.filter((path) => registered.has(catByPath.get(path) || ''))
+    expect(offending).toEqual([])
+  })
+})
+
 describe('g+X 键位与面板提示（N4）', () => {
   it('键位按 PRD 重排：i 指向商品中心、m 指向事件时间线', () => {
     expect(G_PREFIX_MAP.i).toBe('/items')

@@ -131,11 +131,12 @@ export function invalidateMenuCache(): void {
  * 根据 MenuItem 列表构建 Ant Design Menu items
  *
  * 渲染策略：
- * 1. 按 group 字段分组（如 'data_view'/'config'），每组渲染为 SubMenu
- * 2. 无 group 字段的菜单项作为顶层项
- * 3. system 类别的菜单项放在最底部，用 divider 分隔
- * 4. 仅渲染 visible=true 的项
- * 5. 按 sort_order 升序排列
+ * 1. 按 category 字段分组（如 'data_view'/'config'），登记过的分组渲染为 SubMenu
+ * 2. 分组形状与组内可见项数解耦：属于登记分组的项即使只剩 1 个可见项仍是 SubMenu（T02607）
+ * 3. 不属于任何分组的项（category 为空）作为顶层项
+ * 4. system 类别的菜单项放在最底部，用 divider 分隔
+ * 5. 仅渲染 visible=true 的项
+ * 6. 按 sort_order 升序排列
  */
 export function buildMenuItems(menus: MenuItem[], groups: MenuGroup[] = []): AntMenuItem[] {
   const groupMeta = new Map<string, MenuGroup>(groups.map((g) => [g.key, g] as const))
@@ -166,11 +167,13 @@ export function buildMenuItems(menus: MenuItem[], groups: MenuGroup[] = []): Ant
 
   const result: AntMenuItem[] = []
   for (const { group, items } of sortedGroups) {
-    // 单项 group 直接作为顶层项，避免单层 SubMenu 包裹
-    if (items.length === 1) {
+    // T02607：分组形状只看「这个 category 是不是登记过的分组」，不看组内可见项数。
+    // 此前只有 1 个可见项就退化成顶层单项，用户在菜单管理里隐藏同组其他项时，
+    // 侧栏会在「分组 / 单项」之间翻转，组标题与组图标（FR-B-5 的 registry 元数据）整体消失。
+    // 'main' 是 category 为空时使用的合成桶，不属于登记分组，保持顶层单项。
+    if (items.length === 1 && !isRegisteredGroup(group, groupMeta)) {
       result.push(toLeaf(items[0]))
     } else {
-      // 多项 group 渲染为 SubMenu
       const groupKey = `sub-${group}`
       // 分组标题与图标以 registry 的 groups 为准（FR-B-5 / N6）：
       // 此前图标取 items[0].icon，导致「数据查看」显示成任务管理图标、多个分组图标重复
@@ -200,6 +203,12 @@ export function buildMenuItems(menus: MenuItem[], groups: MenuGroup[] = []): Ant
 // 叶子菜单项 → antd item：顶层单项、SubMenu children、system 区三处同构，抽公共函数
 function toLeaf(item: MenuItem): AntMenuLeaf {
   return { key: item.path, icon: renderIcon(item.icon), label: item.label }
+}
+
+// 该分组键是否真实登记过：随后端 groups 下发，或命中前端内置分组表（旧响应没有 groups）
+// 'main' 是 category 为空时的合成桶，不算登记分组
+function isRegisteredGroup(group: string, groupMeta: Map<string, MenuGroup>): boolean {
+  return group !== 'main' && (groupMeta.has(group) || group in MENU_GROUP_LABELS)
 }
 
 export type CommandItem = { key: string; label: string; icon: ReactNode }
