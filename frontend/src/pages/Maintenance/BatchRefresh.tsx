@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { formatDateTime as formatTime, formatDuration } from '../../utils/timeFormat'
 import {
   Alert,
+  App,
   Button,
   Card,
   Col,
@@ -881,6 +882,9 @@ function CurrentBatchPanel() {
 // ============== Tab 2: 执行历史 ==============
 
 function HistoryPanel() {
+  // 删除确认走 App 上下文的 modal（T02975）：操作列 fixed:'right' 是 sticky 单元格，
+  // Popconfirm 的 trigger 在横向滚动时反复重算位置（同 T02671 的因果链）
+  const { modal } = App.useApp()
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<BatchRefreshHistoryItem[]>([])
   const [total, setTotal] = useState(0)
@@ -1147,20 +1151,25 @@ function HistoryPanel() {
           >
             详情
           </TipButton>
-          <Popconfirm
-            title="确认删除此条历史记录？"
-            onConfirm={() => handleDelete(r.id)}
-            okText="删除"
-            cancelText="取消"
+          <TipButton
+            tip="删除该条历史记录，操作不可恢复"
+            type="link"
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={() => modal.confirm({
+              title: '确认删除此条历史记录？',
+              okText: '删除',
+              cancelText: '取消',
+              onOk: () => handleDelete(r.id),
+            })}
           >
-            <TipButton tip="删除该条历史记录，操作不可恢复" type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </TipButton>
-          </Popconfirm>
+            删除
+          </TipButton>
         </Space>
       ),
     },
-  ], [])
+  ], [modal])
 
   // antd Table 排序变化 → 同步到 state 并重新加载
   const handleTableChange: TableProps<BatchRefreshHistoryItem>['onChange'] = (

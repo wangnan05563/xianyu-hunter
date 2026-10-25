@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { formatDateTime, formatDuration } from '../../utils/timeFormat'
 import {
-  Card, Table, Tag, Select, Space, Spin, Statistic, Row, Col,
+  App, Card, Table, Tag, Select, Space, Spin, Statistic, Row, Col,
   message, Empty, Modal, Steps, Progress, Radio, InputNumber, Result,
-  Popconfirm, Alert, Tooltip,
+  Alert, Tooltip,
 } from 'antd'
 import type { SortOrder } from 'antd/es/table/interface'
 import { useSearchParams } from 'react-router-dom'
@@ -441,6 +441,9 @@ function StatTitle({ label }: { label: string }) {
 }
 
 export default function Orders() {
+  // 删除确认走 App 上下文的 modal（T02975）：操作列 fixed:'right' 是 sticky 单元格，
+  // Popconfirm 的 trigger 会在横向滚动时反复重算位置，确认框跟着闪（同 T02671 因果链）
+  const { modal } = App.useApp()
   const [items, setItems] = useState<OrderItem[]>([])
   const [stats, setStats] = useState<OrderStats>({
     pending: 0, succeeded: 0, failed: 0, cancelled: 0, takeover: 0, total: 0,
@@ -780,18 +783,23 @@ export default function Orders() {
               {r.status === ORDER_STATUS.PENDING_PAY ? '接管' : '查看'}
             </TipButton>
           )}
-          <Popconfirm
-            title="确认删除此订单？"
-            description="删除后不可恢复"
-            onConfirm={() => handleDelete(r.id)}
-            okText="删除"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
+          <TipButton
+            tip="删除此订单（不可恢复）"
+            type="link"
+            danger
+            icon={<DeleteOutlined />}
+            size="small"
+            onClick={() => modal.confirm({
+              title: '确认删除此订单？',
+              content: '删除后不可恢复',
+              okText: '删除',
+              cancelText: '取消',
+              okButtonProps: { danger: true },
+              onOk: () => handleDelete(r.id),
+            })}
           >
-            <TipButton tip="删除此订单（不可恢复）" type="link" danger icon={<DeleteOutlined />} size="small">
-              删除
-            </TipButton>
-          </Popconfirm>
+            删除
+          </TipButton>
         </Space>
       ),
     },
