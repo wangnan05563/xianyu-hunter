@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { tryFormatDateTime as formatPublishTime } from '../../../utils/timeFormat'
-import { Tag, Space, Tooltip, Image, Popconfirm } from 'antd'
+import { App, Tag, Space, Tooltip, Image } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import {
   RobotOutlined, ThunderboltOutlined, CloudDownloadOutlined,
@@ -107,6 +107,8 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
   // 总开关关闭时 AI 列直接置灰：后端会 403，但让用户先看清是开关的问题，
   // 而不是点一次拿一个抽屉里的红字（T02890）
   const aiOff = useAIEnabled().enabled === false
+  // 抢单确认走 App 上下文的 modal（T02671）：随主题走、且不挂在固定列单元格里定位
+  const { modal } = App.useApp()
 
   return useMemo(() => [
     {
@@ -451,47 +453,51 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
         const score = r.payload.score ?? 0
         // 评审 2.4-1：手动抢单会调用浏览器自动化提交**真实订单**（真金白银），
         // 原先一键直下、零确认（同产品删任务都要二次确认，风险不对称）。
-        // 与列表内其它危险操作统一用 Popconfirm，把价格/评分/后果写进确认文案，
-        // 让用户在点的那一下就知道自己花多少钱、为什么这单被推荐。
+        // 确认文案必须把价格/评分/后果写进去，让用户在点的那一下就知道自己花多少钱、
+        // 为什么这单被推荐；载体是 modal.confirm（见下方 T02671 说明），与工具栏上
+        // 仍在用 Popconfirm 的「重新评估」不同——那一处不在固定列里，没有定位问题。
         const price = r.payload.item_price
         const evalTitle = r.payload.item_title || r.item_id
-        return (
-          <Popconfirm
-            title="确认手动抢单？"
-            description={
-              <div style={{ maxWidth: 320 }}>
-                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {evalTitle}
-                </div>
-                <div>
-                  价格：{price == null ? '未知' : `¥${price}`}　评分：{score.toFixed(0)}（自动抢单阈值 {autoBuyScore}）
-                </div>
-                <div style={{ color: 'var(--xh-text-secondary)' }}>
-                  确认后由浏览器自动化直接提交真实订单（不走通知里的确认环节），请核对价格后再点。
-                </div>
+        // T02671：确认弹层从 Popconfirm 改为 modal.confirm。
+        // 原先浮层锚在 fixed:'right' 单元格里，大表 + 横向滚动时 Trigger 每次滚动都重算位置，
+        // 用户看到确认框闪烁，Playwright 普通 click 直接 element is not stable。
+        // Modal 居中挂载、不跟触发点定位，抖动与自动化阻塞一并消失；确认语义与四要素文案不变。
+        const confirmTakeover = () => modal.confirm({
+          title: '确认手动抢单？',
+          content: (
+            <div style={{ maxWidth: 360 }}>
+              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {evalTitle}
               </div>
-            }
-            okText="确认抢单"
-            okButtonProps={{ danger: true }}
-            cancelText="取消"
-            placement="topRight"
-            onConfirm={() => onManualTakeover(r)}
-          >
-            <TipButton
-              tip={`手动抢单（评分 ${score.toFixed(0)} ≥ ${autoBuyScore}），点击后需二次确认`}
-              size="small"
-              type="primary"
-              ghost
-              icon={<ThunderboltOutlined />}
-              loading={manualTaking[r.item_id]}
-            />
-          </Popconfirm>
+              <div>
+                价格：{price == null ? '未知' : `¥${price}`}　评分：{score.toFixed(0)}（自动抢单阈值 {autoBuyScore}）
+              </div>
+              <div style={{ color: 'var(--xh-text-secondary)' }}>
+                确认后由浏览器自动化直接提交真实订单（不走通知里的确认环节），请核对价格后再点。
+              </div>
+            </div>
+          ),
+          okText: '确认抢单',
+          okButtonProps: { danger: true },
+          cancelText: '取消',
+          onOk: () => onManualTakeover(r),
+        })
+        return (
+          <TipButton
+            tip={`手动抢单（评分 ${score.toFixed(0)} ≥ ${autoBuyScore}），点击后需二次确认`}
+            size="small"
+            type="primary"
+            ghost
+            icon={<ThunderboltOutlined />}
+            loading={manualTaking[r.item_id]}
+            onClick={confirmTakeover}
+          />
         )
       },
     },
   ], [
     autoBuyScore, passScore, collecting, feedbackSubmitting, manualTaking,
     onAIEval, onDeepAnalyze, onCollectOfficial, onFeedback, onManualTakeover, onTitleClick,
-    aiOff,
+    aiOff, modal,
   ])
 }
