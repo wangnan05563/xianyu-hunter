@@ -12,6 +12,7 @@ stack_trace / request_headers 等可能含敏感信息的字段也会被处理�
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from xianyu_hunter.modules.chatbot.tools.base import BaseTool, ToolResult
@@ -60,6 +61,7 @@ class GetErrorLogsTool(BaseTool):
         self,
         limit: int = 10,
         task_id: str | None = None,
+        caller_user_id: str | None = None,
         **_: Any,
     ) -> ToolResult:
         # 限制 limit 上限避免响应过大；负数/0 兜底为默认值
@@ -70,10 +72,17 @@ class GetErrorLogsTool(BaseTool):
         # error_logs 表无 task_id 字段，task_id 过滤通过 request_path 模糊匹配实现
         # 注意 list_error_logs 的 request_path 参数本身即做 LIKE 匹配
         request_path = task_id if task_id else None
+        # caller_user_id 由 ToolRegistry 从会话身份注入（LLM 参数同名键会被丢弃）：
+        # None 表示管理令牌直通/单用户，仍按原口径看全量
         logs = self._repo.list_error_logs(
             request_path=request_path,
             limit=limit,
+            user_id=caller_user_id,
         )
+        # 行里的 timestamp / created_at 是 datetime，而 ToolResult 随后会被
+        # json.dumps 序列化（回填 LLM 消息 + SSE tool_result 事件）；不转成
+        # 字符串的话，工具只要查到任意一行就会抛 TypeError
+        logs = json.loads(json.dumps(logs, ensure_ascii=False, default=str))
 
         return ToolResult(
             success=True,

@@ -101,6 +101,7 @@ class Agent:
         history: list[dict],
         images: list[str] | None = None,
         model: str | None = None,
+        caller_user_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """AGENT 多步推理主循环
 
@@ -109,10 +110,13 @@ class Agent:
 
         model：请求级模型覆盖，覆盖 config.llm.model 仅本次对话生效；
         None 时使用配置模型。
+        caller_user_id：服务端注入的会话身份，透传给工具做数据归属过滤。
         """
         try:
             async with asyncio.timeout(self._config.tool_total_timeout_sec):
-                async for event in self._run_loop(query, context, history, images, model):
+                async for event in self._run_loop(
+                    query, context, history, images, model, caller_user_id=caller_user_id,
+                ):
                     yield event
         except asyncio.TimeoutError:
             # M-3 修复：提取消息变量复用，避免字符串重复构造且未来修改只需改一处
@@ -136,6 +140,7 @@ class Agent:
         history: list[dict],
         images: list[str] | None = None,
         model: str | None = None,
+        caller_user_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """单轮工具调用循环
 
@@ -181,7 +186,12 @@ class Agent:
                         data={"tool": tool_name, "args": args},
                     )
 
-                    result = await self._tools.call(tool_name, **args)
+                    # 身份只来自服务端注入：LLM 参数里同名字段一律丢弃，
+                    # 否则模型可以伪造 caller_user_id 读到别人的数据
+                    args.pop("caller_user_id", None)
+                    result = await self._tools.call(
+                        tool_name, caller_user_id=caller_user_id, **args,
+                    )
 
                     yield AgentEvent(
                         type="tool_result",

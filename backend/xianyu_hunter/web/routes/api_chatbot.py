@@ -22,6 +22,7 @@ from xianyu_hunter.modules.chatbot.sanitizer import (
     sanitize_session_for_copy as _sanitize_session_for_copy,
 )
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.utils import reader_user_id
 from xianyu_hunter.web.services.search_services import (
     ChatbotSessionSearchParams,
     ChatbotSessionSearchService,
@@ -133,6 +134,9 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
     """
     chatbot = _get_chatbot_or_403()
     orchestrator = chatbot["orchestrator"]
+    # 会话身份透传到工具层（T02984）：工具的数据归属只能由服务端注入，
+    # default 直通返回 None = 不过滤，与读侧 list_error_logs 口径一致
+    user_id = reader_user_id(request)
 
     async def event_generator():
         try:
@@ -142,6 +146,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 enable_tools=req.enable_tools,
                 images=req.images,
                 model=req.model,
+                user_id=user_id,
             ):
                 # 每个事件前检查断开，避免向已关闭连接写数据
                 if await request.is_disconnected():

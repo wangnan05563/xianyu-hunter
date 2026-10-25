@@ -103,6 +103,7 @@ class ChatbotOrchestrator:
         enable_tools: bool | None = None,
         images: list[str] | None = None,
         model: str | None = None,
+        user_id: str | None = None,
     ) -> AsyncIterator[SSEEvent]:
         """编排对话流程，流式返回 SSE 事件
 
@@ -113,6 +114,8 @@ class ChatbotOrchestrator:
             session_id: 会话 ID；None 表示首次对话，内部创建新会话
             message: 用户消息（已由 API 层校验长度 1-2000）
             enable_tools: 是否启用工具；None 表示用 config 默认值
+            user_id: 会话身份（`reader_user_id(request)`），透传给工具做数据归属过滤；
+                None 表示管理令牌直通/单用户，工具仍看全量
 
         Yields:
             SSEEvent: 按 SSE 协议顺序产生的事件流
@@ -188,7 +191,7 @@ class ChatbotOrchestrator:
             # 闭包工厂模式：提取 flow 事件跟踪逻辑，避免 if/else 两分支重复 async for + 状态更新
             flow_tracker, flow_state = self._make_flow_state_tracker()
             flow = (
-                self._run_agent_flow(message, context, images, model)
+                self._run_agent_flow(message, context, images, model, user_id=user_id)
                 if self._should_trigger_agent(intent, enable_tools)
                 else self._run_rag_flow(message, context, images, model)
             )
@@ -470,7 +473,7 @@ class ChatbotOrchestrator:
 
     async def _run_agent_flow(
         self, query: str, context: Context, images: list[str] | None = None,
-        model: str | None = None,
+        model: str | None = None, user_id: str | None = None,
     ) -> AsyncIterator[SSEEvent]:
         """Agent 多步工具调用流程
 
@@ -513,7 +516,9 @@ class ChatbotOrchestrator:
         }
 
         try:
-            async for agent_event in self._agent.run(query, context_str, history, images, model):
+            async for agent_event in self._agent.run(
+                query, context_str, history, images, model, caller_user_id=user_id,
+            ):
                 handler = event_handlers.get(agent_event.type)
                 if not handler:
                     continue

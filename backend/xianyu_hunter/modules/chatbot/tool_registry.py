@@ -88,8 +88,17 @@ class ToolRegistry:
             if "read" in tool.permissions
         ]
 
-    async def call(self, name: str, **kwargs: Any) -> ToolResult:
+    async def call(
+        self,
+        name: str,
+        caller_user_id: str | None = None,
+        **kwargs: Any,
+    ) -> ToolResult:
         """统一工具调用入口
+
+        `caller_user_id` 是**服务端注入**的会话身份（由 chat 路由经编排器/Agent 透传），
+        只用于工具的数据归属过滤；None 表示管理令牌直通（不过滤）。
+        身份不能来自 LLM 生成的参数——Agent 侧会丢弃同名的模型参数。
 
         超时控制：用 asyncio.timeout(tool.timeout_sec) 强制单工具超时，
         超时返回 ToolResult(success=False, error="Tool timeout")。
@@ -106,7 +115,7 @@ class ToolRegistry:
         try:
             # 用工具自身的 timeout_sec 控制单次调用上限
             async with asyncio.timeout(tool.timeout_sec):
-                result = await tool.execute(**kwargs)
+                result = await tool.execute(caller_user_id=caller_user_id, **kwargs)
         except asyncio.TimeoutError:
             logger.warning(
                 f"工具 {name} 执行超时（>{tool.timeout_sec}s）"
