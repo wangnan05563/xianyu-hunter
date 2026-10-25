@@ -53,6 +53,17 @@ describe('移动端静默兜底归零（T02701）', () => {
     'pages/ChatbotConfig/index.tsx',
     'pages/Chatbot/index.tsx',
     'pages/Logs/index.tsx',
+    // T02718：列表/状态页接入显式失败态（config 表单页另立单）
+    'pages/Items/index.tsx',
+    'pages/Evaluations/index.tsx',
+    'pages/Timeline/index.tsx',
+    'pages/AntiCrawl/index.tsx',
+    'pages/Notifications/index.tsx',
+    'pages/ErrorLogs/index.tsx',
+    'pages/DatabaseAdmin/index.tsx',
+    'pages/VersionManager/index.tsx',
+    'pages/Cleanup/index.tsx',
+    'pages/BatchRefresh/index.tsx',
   ]
 
   converted.forEach((rel) => {

@@ -10,8 +10,17 @@ import { dbAdminApi } from '../../../api/dbAdmin'
 import type { DbTableInfo, DbRowListResponse } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
 import { notifyExportResult, triggerBlobDownload } from '../../../utils/exportFeedback'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 
 const PAGE_SIZE = 20
+
+// 数据源（T02718）：表列表/表数据各自记账，失败时不能渲染成空下拉与「暂无数据」
+type DatabaseAdminSource = 'tables' | 'rows'
+const SOURCE_LABELS: Record<DatabaseAdminSource, string> = {
+  tables: '数据表列表',
+  rows: '表数据',
+}
 
 // 单元格值格式化：null/undefined → ''；对象/数组 → JSON 字符串；字符串原样返回；其他走 String()。
 // 提取为独立函数避免 JSX 中嵌套三元（SonarQube S3358），并通过显式 if-链
@@ -35,18 +44,21 @@ export default function MobileDatabaseAdmin() {
   const [search, setSearch] = useState('')
   const [exporting, setExporting] = useState<'csv' | 'json' | null>(null)
   const [detailRow, setDetailRow] = useState<Record<string, unknown> | null>(null)
+  const { failed, mark } = useFailedSources<DatabaseAdminSource>()
 
   const loadTables = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
       const data = await dbAdminApi.listTables()
       setTables(data.tables)
+      mark('tables', true)
     } catch (e) {
+      mark('tables', false)
       message.error(extractApiError(e, '加载表列表失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   const loadRows = useCallback(async (): Promise<void> => {
     if (!selectedTable) return
@@ -58,12 +70,14 @@ export default function MobileDatabaseAdmin() {
         search: search || undefined,
       })
       setRows(data)
+      mark('rows', true)
     } catch (e) {
+      mark('rows', false)
       message.error(extractApiError(e, '加载数据失败'), 3)
     } finally {
       setRowsLoading(false)
     }
-  }, [selectedTable, page, search, message])
+  }, [selectedTable, page, search, message, mark])
 
   useEffect(() => { void loadTables() }, [loadTables])
   useEffect(() => { void loadRows() }, [loadRows])
@@ -87,6 +101,8 @@ export default function MobileDatabaseAdmin() {
 
   // 全表行数与 /tables 同源（导出按钮的分母必须是全表，不是当前分页/筛选结果）
   const fullTableRows = tables.find((t) => t.name === selectedTable)?.rows
+  // 行数标签：取不到时显示 —，不留一个转圈的「...」假装还在加载
+  const rowsTagText = rows ? `${rows.total} 行` : (failed.rows ? '—' : '...')
 
   // 生成行 key：优先使用主键字段，避免直接使用数组索引作为 key（SonarQube S6479）
   // 数据库表通常有 id/_id/uuid 主键；若无则用行内容生成稳定 key，保证同表内唯一
@@ -105,6 +121,7 @@ export default function MobileDatabaseAdmin() {
       return <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
     }
     if (!rows || rows.rows.length === 0) {
+      if (failed.rows) return null
       // imageStyle 在 antd 5.x 仍可用且无替代 API，暂不迁移（SonarQube S1874）
       return <Empty description="暂无数据" imageStyle={{ height: 60 }} /> /* NOSONAR */
     }
@@ -166,6 +183,13 @@ export default function MobileDatabaseAdmin() {
 
   return (
     <div>
+      {failed.tables && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.tables}
+          note="下拉为空不代表真的没有表"
+          onRetry={() => void loadTables()}
+        />
+      )}
       {/* 表选择 */}
       <Card size="small" style={{ marginBottom: 10 }} title="数据表">
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -214,10 +238,17 @@ export default function MobileDatabaseAdmin() {
           title={`${selectedTable} 数据`}
           extra={
             <Tag color="blue">
-              {rows ? `${rows.total} 行` : '...'}
+              {rowsTagText}
             </Tag>
           }
         >
+          {failed.rows && (
+            <LoadFailedBar
+              source={SOURCE_LABELS.rows}
+              note="下方行数、分页与列表都不代表真实数据"
+              onRetry={() => void loadRows()}
+            />
+          )}
           {renderRowsContent()}
         </Card>
       )}

@@ -10,6 +10,15 @@ import { ReloadOutlined, RollbackOutlined, DownloadOutlined } from '@ant-design/
 import { configApi } from '../../../api/config'
 import type { BackupItem } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02718）：版本号与备份列表分开记账——取不到版本不能显示成 v0
+type VersionManagerSource = 'version' | 'backups'
+const SOURCE_LABELS: Record<VersionManagerSource, string> = {
+  version: '当前版本',
+  backups: '备份列表',
+}
 
 export default function MobileVersionManager() {
   const { message } = App.useApp()
@@ -18,22 +27,21 @@ export default function MobileVersionManager() {
   const [version, setVersion] = useState<number>(0)
   const [loading, setLoading] = useState(true)
   const [rollingBack, setRollingBack] = useState(false)
+  const { failed, settle } = useFailedSources<VersionManagerSource>()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
-    try {
-      const [ver, bk] = await Promise.all([
-        configApi.getVersion(),
-        configApi.listBackups(),
-      ])
-      setVersion(ver.version)
-      setBackups(bk.backups)
-    } catch (e) {
-      message.error(extractApiError(e, '加载失败'), 3)
-    } finally {
-      setLoading(false)
-    }
-  }, [message])
+    // 两路各自记账：备份列表挂了不该把版本号也判成未知，反之亦然
+    const [verRes, bkRes] = await Promise.allSettled([
+      configApi.getVersion(),
+      configApi.listBackups(),
+    ])
+    const ver = settle(verRes, 'version')
+    if (ver) setVersion(ver.version)
+    const bk = settle(bkRes, 'backups')
+    if (bk) setBackups(bk.backups)
+    setLoading(false)
+  }, [settle])
 
   useEffect(() => { void load() }, [load])
 
@@ -88,11 +96,27 @@ export default function MobileVersionManager() {
 
   return (
     <div>
+      {failed.version && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.version}
+          note="版本号未知，不能当成 v0"
+          onRetry={() => void load()}
+        />
+      )}
+      {failed.backups && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.backups}
+          note="下方为空不代表真的没有备份"
+          onRetry={() => void load()}
+        />
+      )}
       <Card size="small" style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div style={{ fontSize: 12, color: themeToken.colorTextSecondary }}>当前版本</div>
-            <div style={{ fontSize: 24, fontWeight: 600, color: '#E20613' }}>v{version}</div>
+            <div style={{ fontSize: 24, fontWeight: 600, color: '#E20613' }}>
+              {failed.version ? '—' : `v${version}`}
+            </div>
           </div>
           <Space direction="vertical" size={6}>
             <Button
@@ -136,7 +160,9 @@ export default function MobileVersionManager() {
         }
       >
         {backups.length === 0 ? (
-          <Empty description="暂无备份" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变 Empty 自带图标的布局语义，暂不迁移 */ />
+          failed.backups ? null : (
+            <Empty description="暂无备份" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变 Empty 自带图标的布局语义，暂不迁移 */ />
+          )
         ) : (
           <Space direction="vertical" size={6} style={{ width: '100%' }}>
             {backups.map((bk) => (

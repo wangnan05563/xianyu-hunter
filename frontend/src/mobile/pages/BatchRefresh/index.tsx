@@ -13,6 +13,15 @@ import { batchRefreshApi } from '../../../api'
 import type { BatchRefreshStatus, BatchRefreshChangeLogEntry, BatchRefreshTriggerPreview } from '../../../api/batchRefresh'
 import { extractApiError } from '../../../utils/apiError'
 import { confirmDanger } from '../../../components/DangerSummary'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02718）：状态取不到时不能显示 CURRENT=IDLE，
+// 也要挡住「用默认值 60 分钟 / 启用」保存配置把真实配置覆盖掉
+type BatchRefreshSource = 'status'
+const SOURCE_LABELS: Record<BatchRefreshSource, string> = {
+  status: '调度状态',
+}
 
 const STATUS_COLORS: Record<string, string> = {
   idle: 'default',
@@ -31,6 +40,7 @@ export default function MobileBatchRefresh() {
   const [editingInterval, setEditingInterval] = useState<number>(60)
   const [editingEnabled, setEditingEnabled] = useState<boolean>(true)
   const [savingConfig, setSavingConfig] = useState(false)
+  const { failed, mark } = useFailedSources<BatchRefreshSource>()
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -38,12 +48,14 @@ export default function MobileBatchRefresh() {
       setStatus(data)
       setEditingInterval(data.interval_minutes)
       setEditingEnabled(data.enabled)
+      mark('status', true)
     } catch (e) {
+      mark('status', false)
       message.error(extractApiError(e, '加载状态失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { void load() }, [load])
 
@@ -117,6 +129,13 @@ export default function MobileBatchRefresh() {
 
   return (
     <div>
+      {failed.status && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.status}
+          note="当前状态未知，下方操作与保存配置已禁用，避免用默认值覆盖真实配置"
+          onRetry={() => void load()}
+        />
+      )}
       {/* 状态卡 */}
       <Card size="small" style={{ marginBottom: 10 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -126,7 +145,7 @@ export default function MobileBatchRefresh() {
               color={STATUS_COLORS[currentStatus] || 'default'}
               style={{ fontSize: 14, padding: '4px 12px', marginTop: 4 }}
             >
-              {currentStatus.toUpperCase()}
+              {status ? currentStatus.toUpperCase() : '状态未知'}
             </Tag>
           </div>
           <Button type="text" icon={<ReloadOutlined />} onClick={() => void load()} />
@@ -151,6 +170,7 @@ export default function MobileBatchRefresh() {
             <Button
               type="primary"
               icon={<CloudDownloadOutlined />}
+              disabled={!status}
               loading={actioning}
               onClick={() => void triggerWithConfirm()}
               style={{ flex: 1 }}
@@ -161,6 +181,7 @@ export default function MobileBatchRefresh() {
           {isRunning && (
             <Button
               icon={<PauseCircleOutlined />}
+              disabled={!status}
               loading={actioning}
               onClick={() => void doAction('pause')}
               style={{ flex: 1 }}
@@ -172,6 +193,7 @@ export default function MobileBatchRefresh() {
             <Button
               type="primary"
               icon={<PlayCircleOutlined />}
+              disabled={!status}
               loading={actioning}
               onClick={() => void doAction('resume')}
               style={{ flex: 1 }}
@@ -183,6 +205,7 @@ export default function MobileBatchRefresh() {
             <Button
               danger
               icon={<StopOutlined />}
+              disabled={!status}
               loading={actioning}
               onClick={() => void doAction('stop')}
               style={{ flex: 1 }}
@@ -219,6 +242,7 @@ export default function MobileBatchRefresh() {
           <Button
             type="primary"
             block
+            disabled={!status}
             loading={savingConfig}
             onClick={saveConfig}
           >

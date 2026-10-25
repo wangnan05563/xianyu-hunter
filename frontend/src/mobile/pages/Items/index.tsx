@@ -6,6 +6,8 @@ import { useEffect, useState, useCallback, type ReactNode } from 'react'
 import { taskApi, taskLinkApi } from '../../../api'
 import type { Task, TaskLink } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 import PullToRefresh from '../../components/PullToRefresh'
 
 // 缩略图：闲鱼图床常有防盗链，加载失败时降级到占位图标
@@ -46,6 +48,13 @@ function Thumb({ url, title }: { readonly url?: string; readonly title: string }
   )
 }
 
+// 数据源（T02718）：任务下拉为空与商品列表为空都要能区分「接口挂了」
+type ItemsSource = 'tasks' | 'items'
+const SOURCE_LABELS: Record<ItemsSource, string> = {
+  tasks: '任务列表',
+  items: '商品列表',
+}
+
 export default function MobileItems() {
   const { message } = App.useApp()
   const [tasks, setTasks] = useState<Task[]>([])
@@ -53,6 +62,7 @@ export default function MobileItems() {
   const [items, setItems] = useState<TaskLink[]>([])
   const [loading, setLoading] = useState(true)
   const [itemsLoading, setItemsLoading] = useState(false)
+  const { failed, mark } = useFailedSources<ItemsSource>()
 
   // 首次进入只加载任务列表，让用户选择任务后才请求商品
   // 避免无选中任务时请求 links 接口报 422
@@ -60,13 +70,15 @@ export default function MobileItems() {
     try {
       const data = await taskApi.list()
       setTasks(data.items)
+      mark('tasks', true)
     } catch (e) {
-      // 静默失败：弱网下保留已有数据不打断用户；仅打 warn 便于排查
+      // 弱网保留已有数据；显式记账，避免空下拉被当成「真的没有任务」
+      mark('tasks', false)
       console.warn(extractApiError(e, '加载任务列表失败'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [mark])
 
   useEffect(() => { fetchTasks() }, [fetchTasks])
 
@@ -80,13 +92,15 @@ export default function MobileItems() {
     try {
       const data = await taskLinkApi.list(selectedTaskId, { type: 'item', limit: 50 })
       setItems(data.items)
+      mark('items', true)
     } catch (e) {
-      // 弱网下保留已有数据，仅提示
+      // 弱网下保留已有数据，但把失败声明出来
+      mark('items', false)
       message.error(extractApiError(e, '加载商品失败'), 3)
     } finally {
       setItemsLoading(false)
     }
-  }, [selectedTaskId, message])
+  }, [selectedTaskId, message, mark])
 
   useEffect(() => {
     if (selectedTaskId) fetchItems()
@@ -109,7 +123,7 @@ export default function MobileItems() {
         return <div style={{ textAlign: 'center', padding: 24 }}><Spin /></div>
       }
       if (items.length === 0) {
-        return <Empty description="暂无商品" />
+        return failed.items ? null : <Empty description="暂无商品" />
       }
       return items.map((item) => {
         // 移动端不做详情页，仅给提示，避免无效跳转
@@ -168,6 +182,19 @@ export default function MobileItems() {
 
   return (
     <PullToRefresh onRefresh={selectedTaskId ? fetchItems : fetchTasks}>
+      {failed.tasks && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.tasks}
+          note="下拉选项可能为空，不代表真的没有任务"
+          onRetry={() => void fetchTasks()}
+        />
+      )}
+      {selectedTaskId && failed.items && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.items}
+          onRetry={() => void fetchItems()}
+        />
+      )}
       <Select
         placeholder="选择任务"
         allowClear

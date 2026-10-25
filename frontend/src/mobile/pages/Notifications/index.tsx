@@ -9,6 +9,8 @@ import {
 } from '../../../api/notifications'
 import type { NotificationItem, NotificationStatus } from '../../../api/notifications'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 import PullToRefresh from '../../components/PullToRefresh'
 
 // category / level 文案与颜色取自 api/notifications 共享常量（T02619）：
@@ -28,6 +30,12 @@ export const MAX_WINDOW = 200
 export const reloadWindowLimit = (loaded: number) =>
   Math.min(Math.max(loaded, PAGE_SIZE), MAX_WINDOW)
 
+// 数据源（T02718）：加载失败时「暂无通知」与「取到 0 条」必须可区分
+type NotificationsSource = 'list'
+const SOURCE_LABELS: Record<NotificationsSource, string> = {
+  list: '通知列表',
+}
+
 export default function MobileNotifications() {
   const { message } = App.useApp()
   const [items, setItems] = useState<NotificationItem[]>([])
@@ -35,6 +43,7 @@ export default function MobileNotifications() {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [filterStatus, setFilterStatus] = useState<NotificationStatus>(undefined)
+  const { failed, mark } = useFailedSources<NotificationsSource>()
 
   // offset/limit 由调用方显式传入，不进 useCallback 依赖：
   // 依赖里带上 items.length 会让回调每次加载后换身份，首屏 effect 于是自激重跑。
@@ -44,15 +53,17 @@ export default function MobileNotifications() {
         const data = await notificationApi.list({ status: filterStatus, limit, offset })
         setTotal(data.total)
         setItems((prev) => (offset === 0 ? data.items : [...prev, ...data.items]))
+        mark('list', true)
       } catch (e) {
-        // 弱网保留已有数据，仅提示用户
+        // 弱网保留已有数据，但把失败声明出来
+        mark('list', false)
         message.error(extractApiError(e, '加载通知失败'), 3)
       } finally {
         setLoading(false)
         setLoadingMore(false)
       }
     },
-    [filterStatus, message],
+    [filterStatus, message, mark],
   )
 
   useEffect(() => {
@@ -108,6 +119,13 @@ export default function MobileNotifications() {
 
   return (
     <PullToRefresh onRefresh={refreshKeepingWindow}>
+      {failed.list && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.list}
+          note="下方条数与「没有更多了」都不可信"
+          onRetry={refreshKeepingWindow}
+        />
+      )}
       {/* 状态筛选 + 全部已读：单行紧凑布局 */}
       <Space style={{ width: '100%', marginBottom: 12 }} direction="horizontal">
         <Select
@@ -124,7 +142,7 @@ export default function MobileNotifications() {
       </Space>
 
       {items.length === 0 ? (
-        <Empty description="暂无通知" />
+        failed.list ? null : <Empty description="暂无通知" />
       ) : (
         items.map((item) => {
           const unread = item.read_at === null

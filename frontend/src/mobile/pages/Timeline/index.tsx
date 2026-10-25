@@ -5,6 +5,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { timelineApi } from '../../../api'
 import type { TimelineEntry } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 import PullToRefresh from '../../components/PullToRefresh'
 import { eventTypeLabel } from '../../../constants/eventTypes'
 
@@ -12,22 +14,31 @@ import { eventTypeLabel } from '../../../constants/eventTypes'
 // 移动端不提供筛选（精简版），仅展示最近 50 条
 const TIMELINE_LIMIT = 50
 
+// 数据源（T02718）：接口失败不能让「暂无时间线」冒充成功
+type TimelineSource = 'timeline'
+const SOURCE_LABELS: Record<TimelineSource, string> = {
+  timeline: '时间线',
+}
+
 export default function MobileTimeline() {
   const { message } = App.useApp()
   const [entries, setEntries] = useState<TimelineEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const { failed, mark } = useFailedSources<TimelineSource>()
 
   const fetchTimeline = useCallback(async () => {
     try {
       const data = await timelineApi.list({ limit: TIMELINE_LIMIT })
       setEntries(data.items)
+      mark('timeline', true)
     } catch (e) {
-      // 弱网保留已有数据，仅提示用户
+      // 弱网保留已有数据，但把失败声明出来
+      mark('timeline', false)
       message.error(extractApiError(e, '加载时间线失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { fetchTimeline() }, [fetchTimeline])
 
@@ -35,8 +46,15 @@ export default function MobileTimeline() {
 
   return (
     <PullToRefresh onRefresh={fetchTimeline}>
+      {failed.timeline && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.timeline}
+          note="下方若无内容，不代表真的没有事件"
+          onRetry={() => void fetchTimeline()}
+        />
+      )}
       {entries.length === 0 ? (
-        <Empty description="暂无时间线" />
+        failed.timeline ? null : <Empty description="暂无时间线" />
       ) : (
         entries.map((entry, idx) => {
           // Card 标题优先级：显式 title > 商品名 > 事件类型中文名 > 通用兜底

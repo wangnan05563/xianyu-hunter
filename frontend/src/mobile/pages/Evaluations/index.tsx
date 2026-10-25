@@ -6,6 +6,8 @@ import { evalApi } from '../../../api'
 import type { EvalItem } from '../../../api/types'
 import { RISK_LEVEL_CONFIG } from '../../../constants/riskLevels'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 import PullToRefresh from '../../components/PullToRefresh'
 
 // 风险等级 Tag 颜色映射：low/medium/high 对应绿/橙/红
@@ -35,12 +37,19 @@ const FILTER_OPTIONS = [
   { value: 'insufficient', label: '数据不足' },
 ]
 
+// 数据源（T02718）：失败要显式成错误态，不能靠空列表冒充「取到 0 条」
+type EvaluationsSource = 'evals'
+const SOURCE_LABELS: Record<EvaluationsSource, string> = {
+  evals: '评估列表',
+}
+
 export default function MobileEvaluations() {
   const { message } = App.useApp()
   const [evals, setEvals] = useState<EvalItem[]>([])
   const [loading, setLoading] = useState(true)
   // 内部用 'all' 表示全部，请求时转换为 undefined
   const [filterValue, setFilterValue] = useState<string>('all')
+  const { failed, mark } = useFailedSources<EvaluationsSource>()
 
   const fetchEvals = useCallback(async () => {
     // 'all' 不传给后端，让接口返回所有分类
@@ -48,13 +57,15 @@ export default function MobileEvaluations() {
     try {
       const data = await evalApi.list({ limit: 50, result_category: resultCategory })
       setEvals(data.items)
+      mark('evals', true)
     } catch (e) {
-      // 弱网下保留已有数据，仅提示
+      // 弱网下保留已有数据，但把失败声明出来
+      mark('evals', false)
       message.error(extractApiError(e, '加载评估列表失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [filterValue, message])
+  }, [filterValue, message, mark])
 
   useEffect(() => { fetchEvals() }, [fetchEvals])
 
@@ -68,6 +79,13 @@ export default function MobileEvaluations() {
 
   return (
     <PullToRefresh onRefresh={fetchEvals}>
+      {failed.evals && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.evals}
+          note="下方若无内容，不代表真的没有评估记录"
+          onRetry={() => void fetchEvals()}
+        />
+      )}
       <Select
         value={filterValue}
         style={{ width: '100%', marginBottom: 12 }}
@@ -75,7 +93,7 @@ export default function MobileEvaluations() {
         options={FILTER_OPTIONS}
       />
       {evals.length === 0 ? (
-        <Empty description="暂无评估记录" />
+        failed.evals ? null : <Empty description="暂无评估记录" />
       ) : (
         evals.map((item) => {
           const title = item.payload.item_title || item.item_id

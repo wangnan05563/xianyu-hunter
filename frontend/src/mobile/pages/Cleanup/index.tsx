@@ -11,6 +11,8 @@ import type { StorageStatus, CleanupResult, CleanupBody } from '../../../api/typ
 import { extractApiError } from '../../../utils/apiError'
 import DangerSummary, { type DangerCopy } from '@/components/DangerSummary'
 import { PYCACHE_NOT_APPLICABLE_HINT, cacheTargetOptions } from '@/utils/cacheTargets'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 
 // 各清理模块的真实动作（T02573：确认框按「动作/影响范围/数量/恢复成本」四要素写）
 const TARGET_ACTION: Record<'cache' | 'database' | 'logs', string> = {
@@ -97,11 +99,18 @@ const LOG_TARGETS = [
   { value: 'all', label: '全部清理' },
 ]
 
+// 数据源（T02718）：状态取不到时三张卡会显示 0 MB，必须声明成未知而不是「很干净」
+type CleanupSource = 'status'
+const SOURCE_LABELS: Record<CleanupSource, string> = {
+  status: '存储状态',
+}
+
 export default function MobileCleanup() {
   const { message } = App.useApp()
   const { token: themeToken } = theme.useToken()
   const [status, setStatus] = useState<StorageStatus | null>(null)
   const [loading, setLoading] = useState(true)
+  const { failed, mark } = useFailedSources<CleanupSource>()
 
   // 三个模块的独立表单 + 加载/结果状态（互不干扰）
   const [cacheForm, setCacheForm] = useState<CleanupBody>({ target: 'all', dry_run: true })
@@ -121,12 +130,14 @@ export default function MobileCleanup() {
     try {
       const data = await maintenanceApi.getStorageStatus()
       setStatus(data)
+      mark('status', true)
     } catch (e) {
+      mark('status', false)
       message.error(extractApiError(e, '加载状态失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { void loadStatus() }, [loadStatus])
 
@@ -227,6 +238,13 @@ export default function MobileCleanup() {
 
   return (
     <div>
+      {failed.status && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.status}
+          note="下方容量显示为 —，不代表是 0"
+          onRetry={() => void loadStatus()}
+        />
+      )}
       {/* 存储状态卡 */}
       <Card
         size="small"
@@ -242,7 +260,7 @@ export default function MobileCleanup() {
           <Col span={8}>
             <Statistic
               title={<span style={{ fontSize: 11 }}>数据库</span>}
-              value={status?.db?.db_size_mb ?? 0}
+              value={failed.status ? '—' : (status?.db?.db_size_mb ?? 0)}
               suffix={<span style={{ fontSize: 10 }}>MB</span>}
               valueStyle={{ fontSize: 18, color: '#FF6200' }}
             />
@@ -250,7 +268,7 @@ export default function MobileCleanup() {
           <Col span={8}>
             <Statistic
               title={<span style={{ fontSize: 11 }}>日志</span>}
-              value={status?.logs?.total_size_mb ?? 0}
+              value={failed.status ? '—' : (status?.logs?.total_size_mb ?? 0)}
               suffix={<span style={{ fontSize: 10 }}>MB</span>}
               valueStyle={{ fontSize: 18, color: '#FF6200' }}
             />
@@ -258,7 +276,7 @@ export default function MobileCleanup() {
           <Col span={8}>
             <Statistic
               title={<span style={{ fontSize: 11 }}>缓存</span>}
-              value={((status?.cache?.browser_data_mb ?? 0) + (status?.cache?.pycache_mb ?? 0)).toFixed(1)}
+              value={failed.status ? '—' : ((status?.cache?.browser_data_mb ?? 0) + (status?.cache?.pycache_mb ?? 0)).toFixed(1)}
               suffix={<span style={{ fontSize: 10 }}>MB</span>}
               valueStyle={{ fontSize: 18, color: '#FF6200' }}
             />

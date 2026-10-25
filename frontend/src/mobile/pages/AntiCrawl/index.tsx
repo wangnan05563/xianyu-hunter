@@ -5,6 +5,8 @@ import { anticrawlApi } from '../../../api'
 import type { SessionStatus, HealthReport } from '../../../api/anticrawl'
 import { extractApiError } from '../../../utils/apiError'
 import { formatDuration } from '../../../utils/timeFormat'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 import PullToRefresh from '../../components/PullToRefresh'
 
 // 时长口径取自 utils/timeFormat（T02884）：这里原先自己有一份 formatDuration，
@@ -34,6 +36,13 @@ const getScoreColor = (
   return themeToken.colorError
 }
 
+// 数据源（T02718）：会话与健康分开记账，失败时不能渲染成「未激活 / 全红叉」
+type AntiCrawlSource = 'session' | 'health'
+const SOURCE_LABELS: Record<AntiCrawlSource, string> = {
+  session: '会话状态',
+  health: '健康报告',
+}
+
 export default function MobileAntiCrawl() {
   const { message } = App.useApp()
   const { token: themeToken } = theme.useToken()
@@ -41,23 +50,21 @@ export default function MobileAntiCrawl() {
   const [health, setHealth] = useState<HealthReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
+  const { failed, settle } = useFailedSources<AntiCrawlSource>()
 
   const fetchAll = useCallback(async () => {
-    try {
-      // 并发拉取会话状态与健康报告，减少串行延迟
-      const [s, h] = await Promise.all([
-        anticrawlApi.getSessionStatus(),
-        anticrawlApi.checkHealth(),
-      ])
-      setSession(s)
-      setHealth(h)
-    } catch (e) {
-      // 弱网保留已有数据
-      message.error(extractApiError(e, '加载反爬状态失败'), 3)
-    } finally {
-      setLoading(false)
-    }
-  }, [message])
+    // 两路各自记账：任一路失败只挂自己的错误条，
+    // 且不能把「取不到会话」显示成「未激活」、「取不到健康」显示成一排红叉
+    const [sRes, hRes] = await Promise.allSettled([
+      anticrawlApi.getSessionStatus(),
+      anticrawlApi.checkHealth(),
+    ])
+    const s = settle(sRes, 'session')
+    if (s) setSession(s)
+    const h = settle(hRes, 'health')
+    if (h) setHealth(h)
+    setLoading(false)
+  }, [settle])
 
   // 30s 定时轮询 + visibility 暂停：页面不可见时停止轮询，恢复时立即拉取并重启定时器
   useEffect(() => {
@@ -103,7 +110,11 @@ export default function MobileAntiCrawl() {
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
   // 状态灯颜色：active 优先，其次 token_expired 用橙色提示 token 失效但会话未结束
-  const { color: lightColor, text: lightText } = getSessionLight(session, themeToken)
+  const { color: computedLightColor, text: computedLightText } = getSessionLight(session, themeToken)
+  // 取不到会话时不能显示「未激活」——那是把未知当成了确定结论
+  const sessionUnknown = failed.session && session === null
+  const lightColor = sessionUnknown ? themeToken.colorTextDisabled : computedLightColor
+  const lightText = sessionUnknown ? '状态未知' : computedLightText
 
   // 健康分颜色档位：绿/橙/红，给用户直观等级感
   const healthScore = health?.score ?? session?.health_score ?? null
@@ -111,6 +122,20 @@ export default function MobileAntiCrawl() {
 
   return (
     <PullToRefresh onRefresh={fetchAll}>
+      {failed.session && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.session}
+          note="会话是否运行未知，下方内容不作数"
+          onRetry={() => void fetchAll()}
+        />
+      )}
+      {failed.health && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.health}
+          note="健康分与 Cookie/API 检查结果未知"
+          onRetry={() => void fetchAll()}
+        />
+      )}
       {/* 会话状态卡 */}
       <Card
         title="会话状态"
@@ -141,26 +166,33 @@ export default function MobileAntiCrawl() {
 
       {/* 健康报告卡 */}
       <Card title="健康报告" size="small" style={{ marginBottom: 12 }}>
-        {healthScore !== null && (
-          <div style={{ textAlign: 'center', marginBottom: 12 }}>
-            <div style={{ fontSize: 36, fontWeight: 600, color: scoreColor, lineHeight: 1.2 }}>
-              {healthScore}
-            </div>
-            <Progress percent={healthScore} showInfo={false} strokeColor={scoreColor} />
-          </div>
+        {failed.health && !health ? (
+          // 取不到健康数据时不能把 null 当成三项检查全失败
+          <div style={{ fontSize: 13, color: themeToken.colorTextDisabled }}>健康数据不可用</div>
+        ) : (
+          <>
+            {healthScore !== null && (
+              <div style={{ textAlign: 'center', marginBottom: 12 }}>
+                <div style={{ fontSize: 36, fontWeight: 600, color: scoreColor, lineHeight: 1.2 }}>
+                  {healthScore}
+                </div>
+                <Progress percent={healthScore} showInfo={false} strokeColor={scoreColor} />
+              </div>
+            )}
+            <Space wrap size={8} style={{ marginBottom: 8 }}>
+              <Tag color={health?.cookie_valid ? 'green' : 'red'}>
+                Cookie {health?.cookie_valid ? '✓' : '✗'}
+              </Tag>
+              <Tag color={health?.api_reachable ? 'green' : 'red'}>
+                API {health?.api_reachable ? '✓' : '✗'}
+              </Tag>
+              <Tag color={health?.page_accessible ? 'green' : 'red'}>
+                页面 {health?.page_accessible ? '✓' : '✗'}
+              </Tag>
+              <Tag color="blue">WAF {health?.waf_status || '-'}</Tag>
+            </Space>
+          </>
         )}
-        <Space wrap size={8} style={{ marginBottom: 8 }}>
-          <Tag color={health?.cookie_valid ? 'green' : 'red'}>
-            Cookie {health?.cookie_valid ? '✓' : '✗'}
-          </Tag>
-          <Tag color={health?.api_reachable ? 'green' : 'red'}>
-            API {health?.api_reachable ? '✓' : '✗'}
-          </Tag>
-          <Tag color={health?.page_accessible ? 'green' : 'red'}>
-            页面 {health?.page_accessible ? '✓' : '✗'}
-          </Tag>
-          <Tag color="blue">WAF {health?.waf_status || '-'}</Tag>
-        </Space>
         {/* needs_attention 时用 Alert 强提示，普通文本仅作建议展示 */}
         {health?.needs_attention && (
           <Alert
@@ -186,7 +218,9 @@ export default function MobileAntiCrawl() {
             ))}
           </Space>
         ) : (
-          <div style={{ fontSize: 13, color: themeToken.colorTextDisabled }}>暂无 Cookie 层数据</div>
+          <div style={{ fontSize: 13, color: themeToken.colorTextDisabled }}>
+            {failed.session ? '会话数据不可用' : '暂无 Cookie 层数据'}
+          </div>
         )}
       </Card>
     </PullToRefresh>

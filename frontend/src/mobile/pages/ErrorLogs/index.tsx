@@ -10,6 +10,8 @@ import { ReloadOutlined, RobotOutlined, CheckCircleOutlined } from '@ant-design/
 import { errorLogApi } from '../../../api/errorLogs'
 import type { ErrorLog } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
 
 // 错误类型颜色档
 const TYPE_COLORS: Record<string, string> = {
@@ -31,6 +33,12 @@ const STATUS_COLORS: Record<ErrorLog['status'], string> = {
 
 const LIST_LIMIT = 50
 
+// 数据源（T02718）：失败时状态计数会全 0，必须显式说明而不是当成「没有错误」
+type ErrorLogsSource = 'list'
+const SOURCE_LABELS: Record<ErrorLogsSource, string> = {
+  list: '错误日志',
+}
+
 export default function MobileErrorLogs() {
   const { message } = App.useApp()
   const { token: themeToken } = theme.useToken()
@@ -43,6 +51,7 @@ export default function MobileErrorLogs() {
   const [aiContextMd, setAiContextMd] = useState('')
   const [aiContextOpen, setAiContextOpen] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
+  const { failed, mark } = useFailedSources<ErrorLogsSource>()
 
   const fetchList = useCallback(async (): Promise<void> => {
     setLoading(true)
@@ -54,12 +63,14 @@ export default function MobileErrorLogs() {
       })
       setItems(data.items)
       setCounts(data.status_counts || {})
+      mark('list', true)
     } catch (e) {
+      mark('list', false)
       message.error(extractApiError(e, '加载错误日志失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [statusFilter, typeFilter, message])
+  }, [statusFilter, typeFilter, message, mark])
 
   useEffect(() => { void fetchList() }, [fetchList])
 
@@ -93,6 +104,13 @@ export default function MobileErrorLogs() {
 
   return (
     <div>
+      {failed.list && (
+        <LoadFailedBar
+          source={SOURCE_LABELS.list}
+          note="下方状态计数与列表都不代表真实情况"
+          onRetry={() => void fetchList()}
+        />
+      )}
       {/* 状态计数横条：一目了然问题严重程度 */}
       <Space size={6} style={{ width: '100%', marginBottom: 8, flexWrap: 'wrap' }}>
         <Tag color="red">新 {counts.new ?? 0}</Tag>
@@ -129,7 +147,7 @@ export default function MobileErrorLogs() {
       </Space>
 
       {items.length === 0 ? (
-        <Empty description="暂无错误日志" />
+        failed.list ? null : <Empty description="暂无错误日志" />
       ) : (
         items.map((item) => (
           <Card
