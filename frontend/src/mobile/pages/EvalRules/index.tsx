@@ -9,6 +9,14 @@ import { SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { configApi } from '../../../api/config'
 import type { AppConfig } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02978）：配置取不到时必须显式失败，不能停在 Spin 或拿初值冒充
+type EvalRulesSource = 'config'
+const SOURCE_LABELS: Record<EvalRulesSource, string> = {
+  config: '评估规则配置',
+}
 
 type EvalConfig = AppConfig['eval']
 
@@ -18,18 +26,21 @@ export default function MobileEvalRules() {
   const [form, setForm] = useState<EvalConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const { failed, mark } = useFailedSources<EvalRulesSource>()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
       const cfg = await configApi.get()
       setForm(cfg.eval)
+      mark('config', true)
     } catch (e) {
+      mark('config', false)
       message.error(extractApiError(e, '加载失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { void load() }, [load])
 
@@ -52,12 +63,25 @@ export default function MobileEvalRules() {
     }
   }
 
-  if (loading || !form) {
+  const failedBar = failed.config ? (
+    <LoadFailedBar
+      source={SOURCE_LABELS.config}
+      note="当前显示的不是已生效规则"
+      onRetry={() => void load()}
+    />
+  ) : null
+
+  if (loading && !form) {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+  }
+
+  if (!form) {
+    return <div style={{ padding: '8px 0' }}>{failedBar}</div>
   }
 
   return (
     <div>
+      {failedBar}
       <Alert
         type="info"
         showIcon

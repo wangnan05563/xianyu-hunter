@@ -9,6 +9,15 @@ import { EditOutlined, CheckCircleOutlined } from '@ant-design/icons'
 import { configApi } from '../../../api/config'
 import { defaultChannels, type ChannelDef } from '../../../pages/Config/NotifierChannels/constants'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02978）：渠道启停与凭据都来自同一次 configApi.get()；
+// 取不到时不能渲染 defaultChannels 的默认启停态冒充真实配置
+type NotifierSource = 'config'
+const SOURCE_LABELS: Record<NotifierSource, string> = {
+  config: '通知渠道配置',
+}
 
 export default function MobileNotifierChannels() {
   const { message } = App.useApp()
@@ -21,6 +30,7 @@ export default function MobileNotifierChannels() {
   const [formValues, setFormValues] = useState<Record<string, string>>({})
   const [testing, setTesting] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const { failed, mark } = useFailedSources<NotifierSource>()
 
   // 加载配置：分别拉取结构化 + 凭据字段
   const loadAll = useCallback(async (): Promise<void> => {
@@ -47,12 +57,14 @@ export default function MobileNotifierChannels() {
       creds.dingtalk_secret = cfg.dingtalk_secret
       creds.webhook_url = cfg.webhook_url
       setConfig(creds)
+      mark('config', true)
     } catch (e) {
+      mark('config', false)
       message.error(extractApiError(e, '加载失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { void loadAll() }, [loadAll])
 
@@ -125,12 +137,26 @@ export default function MobileNotifierChannels() {
     }
   }
 
-  if (loading || !config) {
+  const failedBar = failed.config ? (
+    <LoadFailedBar
+      source={SOURCE_LABELS.config}
+      note="渠道启停与凭据均未读取，无法安全编辑"
+      onRetry={() => void loadAll()}
+    />
+  ) : null
+
+  if (loading && !config) {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+  }
+
+  // 没取到真实启停/凭据时不渲染列表：defaultChannels 的默认值会被当成已配置
+  if (!config) {
+    return <div style={{ padding: '8px 0' }}>{failedBar}</div>
   }
 
   return (
     <div>
+      {failedBar}
       <div style={{ fontSize: 12, color: themeToken.colorTextSecondary, marginBottom: 8 }}>
         启用渠道并填写凭据，点击测试可验证配置
       </div>

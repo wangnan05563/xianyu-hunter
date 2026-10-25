@@ -10,6 +10,15 @@ import { aboutApi } from '../../../api'
 import type { AboutInfo, UpdateCheckResult } from '../../../api/about'
 import { extractApiError } from '../../../utils/apiError'
 import { formatShortDateTime } from '../../../utils/timeFormat'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02978）：关于页信息取不到时必须显式失败，不能停在 Spin；
+// checkUpdate 是用户动作，不算数据源
+type AboutSource = 'info'
+const SOURCE_LABELS: Record<AboutSource, string> = {
+  info: '系统信息',
+}
 
 export default function MobileAbout() {
   const { message } = App.useApp()
@@ -18,18 +27,21 @@ export default function MobileAbout() {
   const [update, setUpdate] = useState<UpdateCheckResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [checking, setChecking] = useState(false)
+  const { failed, mark } = useFailedSources<AboutSource>()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
       const data = await aboutApi.get()
       setInfo(data)
+      mark('info', true)
     } catch (e) {
+      mark('info', false)
       message.error(extractApiError(e, '加载失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { void load() }, [load])
 
@@ -50,12 +62,25 @@ export default function MobileAbout() {
     }
   }
 
-  if (loading || !info) {
+  const failedBar = failed.info ? (
+    <LoadFailedBar
+      source={SOURCE_LABELS.info}
+      note="版本与构建信息不可用"
+      onRetry={() => void load()}
+    />
+  ) : null
+
+  if (loading && !info) {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+  }
+
+  if (!info) {
+    return <div style={{ padding: '8px 0' }}>{failedBar}</div>
   }
 
   return (
     <div>
+      {failedBar}
       {/* 产品信息 */}
       <Card size="small" style={{ marginBottom: 12 }}>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>

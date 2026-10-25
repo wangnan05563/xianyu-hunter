@@ -9,6 +9,14 @@ import {
 import { SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { configApi } from '../../../api/config'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02978）：配置取不到时必须显式失败，不能停在 Spin 或拿初值冒充
+type BuyConfigSource = 'config'
+const SOURCE_LABELS: Record<BuyConfigSource, string> = {
+  config: '抢单阈值配置',
+}
 
 type EvalConfig = Pick<import('../../../api/types').AppConfig['eval'], 'pass_score' | 'auto_buy_score'>
 
@@ -18,18 +26,21 @@ export default function MobileBuyConfig() {
   const [form, setForm] = useState<EvalConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const { failed, mark } = useFailedSources<BuyConfigSource>()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
       const cfg = await configApi.get()
       setForm({ pass_score: cfg.eval.pass_score, auto_buy_score: cfg.eval.auto_buy_score })
+      mark('config', true)
     } catch (e) {
+      mark('config', false)
       message.error(extractApiError(e, '加载失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { void load() }, [load])
 
@@ -54,12 +65,25 @@ export default function MobileBuyConfig() {
     }
   }
 
-  if (loading || !form) {
+  const failedBar = failed.config ? (
+    <LoadFailedBar
+      source={SOURCE_LABELS.config}
+      note="当前显示的不是已生效阈值"
+      onRetry={() => void load()}
+    />
+  ) : null
+
+  if (loading && !form) {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+  }
+
+  if (!form) {
+    return <div style={{ padding: '8px 0' }}>{failedBar}</div>
   }
 
   return (
     <div>
+      {failedBar}
       <Alert
         type="info"
         showIcon

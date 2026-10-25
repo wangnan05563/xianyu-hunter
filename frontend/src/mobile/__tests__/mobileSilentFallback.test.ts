@@ -64,13 +64,22 @@ describe('移动端静默兜底归零（T02701）', () => {
     'pages/VersionManager/index.tsx',
     'pages/Cleanup/index.tsx',
     'pages/BatchRefresh/index.tsx',
+    // T02978：配置/表单页三态（加载中 / 失败可重试 / 成功），不再永久 Spin
+    'pages/PriceStrategy/index.tsx',
+    'pages/BuyConfig/index.tsx',
+    'pages/SearchConfig/index.tsx',
+    'pages/AIConfig/index.tsx',
+    'pages/EvalRules/index.tsx',
+    'pages/NotifierChannels/index.tsx',
+    'pages/About/index.tsx',
   ]
 
   converted.forEach((rel) => {
     it(`${rel} 用共用的失败账 + 窄屏失败条`, () => {
       const src = readFileSync(join(MOBILE_ROOT, rel), 'utf-8')
-      expect(src, `${rel} 应使用 useFailedSources 记账`).toContain('useFailedSources')
-      expect(src, `${rel} 应渲染 LoadFailedBar`).toContain('LoadFailedBar')
+      // 只断言出现名字会被 import 行蒙混过关：必须落到调用点与 JSX 上
+      expect(src, `${rel} 应调用 useFailedSources 记账（仅 import 不算）`).toMatch(/useFailedSources[<(]/)
+      expect(src, `${rel} 应渲染 <LoadFailedBar />（仅 import 不算）`).toContain('<LoadFailedBar')
     })
 
     it(`${rel} 声明的每个数据源都有对应的失败态`, () => {

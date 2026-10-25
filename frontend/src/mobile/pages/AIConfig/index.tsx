@@ -12,6 +12,15 @@ import { extractApiError } from '../../../utils/apiError'
 import { confirmDanger } from '../../../components/DangerSummary'
 import { invalidateAIEnabled } from '../../../hooks/useAIEnabled'
 import { GATE_HINT, buildDisableAICopy } from '../../../pages/Config/AIConfig/dangerCopy'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02978）：配置与用量各算一路；用量失败时卡片要显示「—」而不是消失
+type AIConfigSource = 'config' | 'usage'
+const SOURCE_LABELS: Record<AIConfigSource, string> = {
+  config: 'AI 配置',
+  usage: '用量统计',
+}
 
 export default function MobileAIConfig() {
   const { message } = App.useApp()
@@ -22,27 +31,29 @@ export default function MobileAIConfig() {
   const [saving, setSaving] = useState(false)
   const [testingLLM, setTestingLLM] = useState(false)
   const [testingEmb, setTestingEmb] = useState(false)
+  const { failed, mark, settle } = useFailedSources<AIConfigSource>()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
-      const [cfg, use] = await Promise.all([
+      const [cfgRes, usageRes] = await Promise.allSettled([
         aiApi.getConfig(),
-        // 用量加载失败时打日志而非静默回退 null，避免「今日用量」卡片
-        // 凭空消失却无任何线索（与桌面端 AIConfig 保持一致的诊断行为）。
-        aiApi.getUsage().catch((e) => {
-          console.warn('[MobileAIConfig] 用量数据加载失败，已隐藏卡片：', e)
-          return null
-        }),
+        aiApi.getUsage(),
       ])
-      setForm(cfg)
+      if (cfgRes.status === 'fulfilled') {
+        setForm(cfgRes.value)
+        mark('config', true)
+      } else {
+        mark('config', false)
+        message.error(extractApiError(cfgRes.reason, '加载失败'), 3)
+      }
+      // 用量失败只上账，不把「今日已调用 0 次」当成事实
+      const use = settle(usageRes, 'usage')
       if (use) setUsage(use)
-    } catch (e) {
-      message.error(extractApiError(e, '加载失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark, settle])
 
   useEffect(() => { void load() }, [load])
 
@@ -51,9 +62,9 @@ export default function MobileAIConfig() {
   const handleToggleAI = async (checked: boolean): Promise<void> => {
     if (!form) return
     if (!checked) {
-      // 用量接口失败时 usage 为 null：此时「今日已调用 0 次」是假后果，传 countsUnknown
+      // 用量接口失败时 usage 可能为空/过期：此时「今日已调用 0 次」是假后果，传 countsUnknown
       const confirmed = await confirmDanger(
-        buildDisableAICopy(form, usage?.today ?? {}, !usage, { deferredSave: true })
+        buildDisableAICopy(form, usage?.today ?? {}, !usage || failed.usage, { deferredSave: true })
       )
       if (!confirmed) return
     }
@@ -110,28 +121,59 @@ export default function MobileAIConfig() {
     }
   }
 
-  if (loading || !form) {
+  const configFailedBar = failed.config ? (
+    <LoadFailedBar
+      source={SOURCE_LABELS.config}
+      note="当前显示的不是已生效配置"
+      onRetry={() => void load()}
+    />
+  ) : null
+  const usageFailedBar = failed.usage ? (
+    <LoadFailedBar
+      source={SOURCE_LABELS.usage}
+      note="调用次数与费用显示为 —，不代表是 0"
+      onRetry={() => void load()}
+    />
+  ) : null
+
+  if (loading && !form) {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
   }
 
+  if (!form) {
+    return <div style={{ padding: '8px 0' }}>{configFailedBar}</div>
+  }
+
+  const usageView = failed.usage ? null : usage
+
   return (
     <div>
-      {/* 用量统计 */}
-      {usage && (
+      {configFailedBar}
+      {usageFailedBar}
+      {/* 用量统计：失败时保留卡片但把数字换成 —，不能凭空消失 */}
+      {(usageView || failed.usage) && (
         <Card size="small" style={{ marginBottom: 10 }} title="今日用量">
           <Descriptions column={2} size="small">
-            <Descriptions.Item label="调用次数">{usage.today.total_calls}</Descriptions.Item>
-            <Descriptions.Item label="Token 数">{usage.today.total_tokens}</Descriptions.Item>
-            <Descriptions.Item label="费用(¥)">{usage.today.total_cost_cny.toFixed(2)}</Descriptions.Item>
-            <Descriptions.Item label="费用($)">${usage.today.total_cost_usd.toFixed(4)}</Descriptions.Item>
+            <Descriptions.Item label="调用次数">
+              {usageView ? usageView.today.total_calls : '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Token 数">
+              {usageView ? usageView.today.total_tokens : '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="费用(¥)">
+              {usageView ? usageView.today.total_cost_cny.toFixed(2) : '—'}
+            </Descriptions.Item>
+            <Descriptions.Item label="费用($)">
+              {usageView ? `$${usageView.today.total_cost_usd.toFixed(4)}` : '—'}
+            </Descriptions.Item>
           </Descriptions>
-          {usage.budget.daily_token_limit > 0 && (
+          {usageView && usageView.budget.daily_token_limit > 0 && (
             <div style={{ marginTop: 8 }}>
-              <Tag color={usage.budget.token_usage_pct > 80 ? 'red' : 'green'}>
-                Token {usage.budget.token_usage_pct}%
+              <Tag color={usageView.budget.token_usage_pct > 80 ? 'red' : 'green'}>
+                Token {usageView.budget.token_usage_pct}%
               </Tag>
-              <Tag color={usage.budget.cost_usage_pct > 80 ? 'red' : 'green'}>
-                费用 {usage.budget.cost_usage_pct}%
+              <Tag color={usageView.budget.cost_usage_pct > 80 ? 'red' : 'green'}>
+                费用 {usageView.budget.cost_usage_pct}%
               </Tag>
             </div>
           )}

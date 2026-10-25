@@ -9,6 +9,14 @@ import { SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { configApi } from '../../../api/config'
 import type { AppConfig } from '../../../api/types'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02978）：配置取不到时必须显式失败，不能停在 Spin 或拿初值冒充
+type SearchConfigSource = 'config'
+const SOURCE_LABELS: Record<SearchConfigSource, string> = {
+  config: '搜索参数配置',
+}
 
 type SearchConfig = AppConfig['search']
 
@@ -26,18 +34,21 @@ export default function MobileSearchConfig() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [tagInput, setTagInput] = useState('')
+  const { failed, mark } = useFailedSources<SearchConfigSource>()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
       const cfg = await configApi.get()
       setForm(cfg.search)
+      mark('config', true)
     } catch (e) {
+      mark('config', false)
       message.error(extractApiError(e, '加载失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { void load() }, [load])
 
@@ -71,12 +82,25 @@ export default function MobileSearchConfig() {
     setForm({ ...form, filter_tags: form.filter_tags.filter((t) => t !== tag) })
   }
 
-  if (loading || !form) {
+  const failedBar = failed.config ? (
+    <LoadFailedBar
+      source={SOURCE_LABELS.config}
+      note="当前显示的不是已生效参数"
+      onRetry={() => void load()}
+    />
+  ) : null
+
+  if (loading && !form) {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+  }
+
+  if (!form) {
+    return <div style={{ padding: '8px 0' }}>{failedBar}</div>
   }
 
   return (
     <div>
+      {failedBar}
       <Alert
         type="info"
         showIcon

@@ -8,6 +8,14 @@ import {
 import { SaveOutlined, ReloadOutlined } from '@ant-design/icons'
 import { configApi } from '../../../api/config'
 import { extractApiError } from '../../../utils/apiError'
+import { useFailedSources } from '../../../hooks/useFailedSources'
+import LoadFailedBar from '../../components/LoadFailedBar'
+
+// 数据源（T02978）：配置取不到时必须显式失败，不能停在 Spin 或拿初值冒充
+type PriceStrategySource = 'config'
+const SOURCE_LABELS: Record<PriceStrategySource, string> = {
+  config: '价格策略配置',
+}
 
 // 价格策略单条配置项类型（与 AppConfig.price_strategy 对齐）
 interface PriceStrategy {
@@ -27,18 +35,21 @@ export default function MobilePriceStrategy() {
   const [form, setForm] = useState<PriceStrategy | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const { failed, mark } = useFailedSources<PriceStrategySource>()
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true)
     try {
       const cfg = await configApi.get()
       setForm(cfg.price_strategy)
+      mark('config', true)
     } catch (e) {
+      mark('config', false)
       message.error(extractApiError(e, '加载失败'), 3)
     } finally {
       setLoading(false)
     }
-  }, [message])
+  }, [message, mark])
 
   useEffect(() => { void load() }, [load])
 
@@ -57,12 +68,26 @@ export default function MobilePriceStrategy() {
     }
   }
 
-  if (loading || !form) {
+  const failedBar = failed.config ? (
+    <LoadFailedBar
+      source={SOURCE_LABELS.config}
+      note="当前显示的不是已生效配置"
+      onRetry={() => void load()}
+    />
+  ) : null
+
+  if (loading && !form) {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
+  }
+
+  // 一次都没取到：只给错误态与重试，不渲染任何表单（初值会被误当成真实配置）
+  if (!form) {
+    return <div style={{ padding: '8px 0' }}>{failedBar}</div>
   }
 
   return (
     <div>
+      {failedBar}
       <Alert
         type="info"
         showIcon
