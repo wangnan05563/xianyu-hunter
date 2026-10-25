@@ -36,6 +36,8 @@ import { useNotificationModel, bellBadgeTip } from '../../hooks/useNotificationM
 import { buildAlertJumpTarget } from '../../utils/alertDeepLink'
 import type { AlertJumpItem } from '../../utils/alertDeepLink'
 import { isNarrowViewport } from '../../hooks/breakpoints'
+import { collapseByUser, collapseOnResize, initialCollapseState } from './sidebarCollapse'
+import type { SidebarCollapseState } from './sidebarCollapse'
 import type { AlertKind, NotificationModel } from '../../hooks/useNotificationModel'
 import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
 import FirstScreenSkeleton from './FirstScreenSkeleton'
@@ -65,12 +67,21 @@ export default function MainLayout() {
   const [userInfo, setUserInfo] = useState<AuthMe>({ logged_in: false })
   // 侧边栏收缩状态
   // 窄屏（<=768px）下默认收起 Sider，避免桌面端布局在 F12 设备模拟器下被压成竖条
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
+  // T02632：状态里带「这次收起是不是窗口窄自动造成的」，宽回来时只撤销自动的那次
+  const [collapse, setCollapse] = useState<SidebarCollapseState>(() => {
     // 用 globalThis.window 而非裸 window 触发 S7764；直接与 undefined 比较（S7741），
     // SSR 构建期 globalThis.window 为 undefined，浏览器运行期必定有值
-    if (globalThis.window === undefined) return false
-    return isNarrowViewport()
+    if (globalThis.window === undefined) return initialCollapseState(false)
+    return initialCollapseState(isNarrowViewport())
   })
+  const collapsed = collapse.collapsed
+  // 用户主动开合（展开按钮 / antd Sider 触发器）：显式意图优先，之后的跨断点不再自动展开
+  const setCollapsed: React.Dispatch<React.SetStateAction<boolean>> = useCallback((next) => {
+    setCollapse((prev) => {
+      const value = typeof next === 'function' ? next(prev.collapsed) : next
+      return collapseByUser(prev, value)
+    })
+  }, [])
 
   // 调度器运行状态（30秒轮询）
   const [schedulerRunning, setSchedulerRunning] = useState<boolean | null>(null)
@@ -275,11 +286,11 @@ export default function MainLayout() {
   )
 
   // 窗口尺寸变化时同步 Sider 收缩状态：F12 切换设备模拟器实时生效
+  // T02632 条目 1：进入窄档自动收起，跨出窄档对称展开——但只撤销「自动收起的那一次」，
+  // 用户在期间自己开合过（collapseByUser 清掉了标记）就不再替他改
   useEffect(() => {
     if (globalThis.window === undefined) return
-    const handler = () => {
-      if (isNarrowViewport()) setCollapsed(true)
-    }
+    const handler = () => setCollapse((prev) => collapseOnResize(prev, isNarrowViewport()))
     globalThis.window.addEventListener('resize', handler)
     return () => globalThis.window.removeEventListener('resize', handler)
   }, [])

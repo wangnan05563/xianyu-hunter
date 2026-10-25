@@ -4,6 +4,7 @@ import { Tooltip, theme, Badge } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import { CloseOutlined, MinusOutlined, SettingOutlined, SwapOutlined } from '@ant-design/icons'
 import type { SheetItem, SheetPreferences } from '../../stores/sheetStore'
+import { NarrowSheetHint } from './NarrowSheetHint'
 import { formatShortDateTime } from '../../utils/timeFormat'
 
 interface SheetTabsProps {
@@ -343,6 +344,13 @@ export function SheetTabs({
       ))}
       {/* 底部偏好设置入口 */}
       <div style={{ marginTop: 'auto' }}>
+        {/* T02632 条目 2：桌面窄窗 + 标签接近上限时的一次性缩略模式引导，紧挨它指路的偏好入口 */}
+        <NarrowSheetHint
+          sheetCount={sheets.length}
+          maxSheets={preferences.maxSheets}
+          thumbnailMode={preferences.thumbnailMode}
+          onOpenPreferences={onOpenPreferences}
+        />
         <TipButton
           tip={preferences.thumbnailMode ? summary : '打开 Sheet 偏好设置'}
           type="text"

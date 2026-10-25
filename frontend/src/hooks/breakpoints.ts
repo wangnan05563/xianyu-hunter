@@ -12,9 +12,23 @@
  */
 export const NARROW_MAX_PX = 768
 
+/** 桌面窄窗上界：与 antd `breakpoint="lg"`（991.98px）同档，标签栏仍在但空间吃紧 */
+export const NARROW_DESKTOP_MAX_PX = 992
+
 /** 窄屏判定：与 CSS `max-width: 768px` 同口径（含 768 本身） */
 export function isNarrowViewport(): boolean {
   return globalThis.window.innerWidth <= NARROW_MAX_PX
+}
+
+/**
+ * 桌面窄窗判定：宽度 ∈ (NARROW_MAX_PX, NARROW_DESKTOP_MAX_PX]
+ *
+ * 为什么单独一档：≤768 由 `useIsMobile` 走移动端外壳（标签栏根本不渲染，
+ * 「切缩略模式」无对象）；这一档是「桌面外壳 + 标签栏还在 + 横向空间吃紧」，
+ * 缩略模式只在这里有意义（T02632 条目 2 的引导提示作用域）。
+ */
+export function isNarrowDesktopViewport(width: number = globalThis.window.innerWidth): boolean {
+  return width > NARROW_MAX_PX && width <= NARROW_DESKTOP_MAX_PX
 }
 
 /** useIsMobile 用的是「严格小于 768」，即 max-width: 767px */
