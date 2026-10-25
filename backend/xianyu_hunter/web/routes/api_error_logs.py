@@ -15,7 +15,7 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -25,7 +25,7 @@ from xianyu_hunter.web.services.search_services import (
     ErrorLogSearchParams,
     ErrorLogSearchService,
 )
-from xianyu_hunter.web.utils import parse_iso_datetime
+from xianyu_hunter.web.utils import parse_iso_datetime, reader_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ def _parse_json_fields(item: dict) -> dict:
 
 @router.get("")
 def list_error_logs(
+    request: Request,
     status: str | None = Query(None, pattern="^(new|resolved|ignored)$"),
     error_type: str | None = Query(None, description="异常类型（模糊匹配）"),
     request_path: str | None = Query(None, description="请求路径（模糊匹配）"),
@@ -69,7 +70,12 @@ def list_error_logs(
     offset: int = Query(0, ge=0),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """列出错误日志，支持多维度过滤"""
+    """列出错误日志，支持多维度过滤
+
+    多用户隔离（T02800）：user_id 与 /api/logs 同一口径（reader_user_id）——
+    真实会话只看自己的行，管理令牌直通/单用户不过滤。
+    """
+    uid = reader_user_id(request)
     start_dt = parse_iso_datetime(start) if start else None
     end_dt = parse_iso_datetime(end) if end else None
 
@@ -78,11 +84,11 @@ def list_error_logs(
     result = service.search(ErrorLogSearchParams(
         status=status, error_type=error_type, request_path=request_path,
         request_id=request_id, start_dt=start_dt, end_dt=end_dt,
-        limit=limit, offset=offset,
+        limit=limit, offset=offset, user_id=uid,
     ))
     items = [_parse_json_fields(item) for item in result["items"]]
-    # status_counts 是全局状态分布，不依赖当前过滤条件，单独调用 repo 获取
-    status_counts = container.repo.count_error_logs_by_status()
+    # status_counts 是当前用户范围内的状态分布（与列表同一命名空间）
+    status_counts = container.repo.count_error_logs_by_status(user_id=uid)
     return {
         "items": items,
         "count": len(items),
@@ -92,11 +98,12 @@ def list_error_logs(
 
 @router.get("/{error_log_id}")
 def get_error_log(
+    request: Request,
     error_log_id: int,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """获取单条错误日志详情"""
-    item = container.repo.get_error_log(error_log_id)
+    """获取单条错误日志详情（别人的 id 在这里等于不存在）"""
+    item = container.repo.get_error_log(error_log_id, user_id=reader_user_id(request))
     if not item:
         raise HTTPException(status_code=404, detail=ERROR_LOG_NOT_FOUND_MSG)
     return _parse_json_fields(item)
@@ -104,6 +111,7 @@ def get_error_log(
 
 @router.post("/batch")
 def batch_action(
+    request: Request,
     payload: BatchActionRequest,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -114,18 +122,20 @@ def batch_action(
     """
     ids = payload.ids
     action = payload.action
+    uid = reader_user_id(request)
     # 批量删除/状态变更是高危操作，记录操作类型与影响范围便于事后审计追溯
     logger.info("error_logs batch action=%s count=%d", action, len(ids))
     if action == "delete":
-        affected = container.repo.batch_delete_error_logs(ids)
+        affected = container.repo.batch_delete_error_logs(ids, user_id=uid)
     else:
         # action 与 status 字段值一一对应（resolve/ignore/new）
-        affected = container.repo.batch_update_error_log_status(ids, action)
+        affected = container.repo.batch_update_error_log_status(ids, action, user_id=uid)
     return {"affected": affected, "status": "ok"}
 
 
 @router.get("/{error_log_id}/ai-context")
 def get_ai_context(
+    request: Request,
     error_log_id: int,
     format: str = Query("json", pattern="^(json|markdown)$"),
     container: Container = Depends(get_container),
@@ -134,7 +144,7 @@ def get_ai_context(
 
     JSON 格式可直接作为 AI 系统输入；Markdown 格式可直接粘贴给 AI 对话
     """
-    item = container.repo.get_error_log(error_log_id)
+    item = container.repo.get_error_log(error_log_id, user_id=reader_user_id(request))
     if not item:
         raise HTTPException(status_code=404, detail=ERROR_LOG_NOT_FOUND_MSG)
 
@@ -148,12 +158,15 @@ def get_ai_context(
 
 @router.patch("/{error_log_id}/status")
 def update_status(
+    request: Request,
     error_log_id: int,
     status: str = Query(..., pattern="^(new|resolved|ignored)$"),
     container: Container = Depends(get_container),
 ) -> dict[str, str]:
     """更新错误日志状态"""
-    success = container.repo.update_error_log_status(error_log_id, status)
+    success = container.repo.update_error_log_status(
+        error_log_id, status, user_id=reader_user_id(request)
+    )
     if not success:
         raise HTTPException(status_code=404, detail=ERROR_LOG_NOT_FOUND_MSG)
     return {"status": "ok"}
@@ -161,11 +174,12 @@ def update_status(
 
 @router.delete("/{error_log_id}")
 def delete_error_log(
+    request: Request,
     error_log_id: int,
     container: Container = Depends(get_container),
 ) -> dict[str, str]:
     """删除单条错误日志"""
-    success = container.repo.delete_error_log(error_log_id)
+    success = container.repo.delete_error_log(error_log_id, user_id=reader_user_id(request))
     if not success:
         raise HTTPException(status_code=404, detail=ERROR_LOG_NOT_FOUND_MSG)
     return {"status": "ok"}
@@ -173,10 +187,11 @@ def delete_error_log(
 
 @router.post("/cleanup")
 def cleanup_error_logs(
+    request: Request,
     days: int = Query(30, ge=1, le=365),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """批量清理指定天数前的已解决/已忽略错误日志"""
-    deleted = container.repo.cleanup_old_error_logs(days=days)
+    """批量清理指定天数前的已解决/已忽略错误日志（只清当前用户命名空间）"""
+    deleted = container.repo.cleanup_old_error_logs(days=days, user_id=reader_user_id(request))
     return {"deleted": deleted, "status": "ok"}
 

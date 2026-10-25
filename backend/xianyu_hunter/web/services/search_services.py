@@ -80,6 +80,7 @@ class ErrorLogSearchParams(SearchParams):
         end_dt=None,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ):
         super().__init__(q=q, limit=limit, offset=offset)
         self.status = status
@@ -88,6 +89,8 @@ class ErrorLogSearchParams(SearchParams):
         self.request_id = request_id
         self.start_dt = start_dt
         self.end_dt = end_dt
+        # T02800：多用户隔离口径，None 表示不过滤（管理令牌直通/单用户）
+        self.user_id = user_id
 
 
 class ErrorLogSearchService(SearchService):
@@ -114,6 +117,7 @@ class ErrorLogSearchService(SearchService):
             end_dt=params.end_dt,
             limit=params.limit,
             offset=params.offset,
+            user_id=params.user_id,
         )
         return rows, len(rows)
 

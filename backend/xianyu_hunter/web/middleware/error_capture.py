@@ -157,6 +157,7 @@ def _save_error_log(
     server_env: dict,
     timestamp: datetime,
     request_id: str | None = None,
+    user_id: str | None = None,
 ) -> int | None:
     """构建完整错误日志记录并写入数据库
 
@@ -206,6 +207,10 @@ def _save_error_log(
         # 显式传参确保 request_id 不丢失
         if request_id:
             error_log["request_id"] = request_id
+        # 多用户隔离（T02800）：HTTP 请求内异常带上请求身份；
+        # 后台异常（capture_background_error）没有 user_id，由 save_error_log 兜底活跃用户
+        if user_id:
+            error_log["user_id"] = user_id
         return container.repo.save_error_log(error_log)
     except Exception as e:
         # 错误日志写入本身失败时，仅记录到 loguru，不抛出
@@ -255,6 +260,8 @@ def capture_request_error(request: Any, exc: Exception) -> int | None:
         server_env=server_env,
         timestamp=timestamp,
         request_id=request_id,
+        # 鉴权中间件写入的身份；直通/未注入时为 None，由仓储层降级活跃用户
+        user_id=getattr(request.state, "user_id", None),
     )
 
 

@@ -550,10 +550,10 @@ def get_request_chain(
 
     request_id 必须符合 req-<17位数字>-<6位hex> 格式，否则返回 400。
 
-    多用户隔离（T02684）：events 分支按 _reader_user_id 过滤；
-    error_logs 分支**当前无列可过滤**（表无 user_id），已在响应里用
-    `error_logs_isolated=false` 明示，前端/调用方不会把「链路看起来完整」
-    误当成「整条链路都是本用户的」。
+    多用户隔离（T02684 → T02800）：events 与 error_logs 两个分支都按
+    `_reader_user_id` 过滤（error_logs 已补 user_id 列，历史行迁移为 default）；
+    `error_logs_isolated` 仍然表示「本次响应是否按用户过滤过异常分支」——
+    None（管理令牌直通/单用户）时为 false，此时两表本就同范围可见。
     """
     from xianyu_hunter.infra.request_context import is_valid_request_id
     if not is_valid_request_id(request_id):
@@ -565,7 +565,7 @@ def get_request_chain(
         request_id=request_id, limit=limit, offset=0, user_id=user_id
     )
     error_logs = container.repo.list_error_logs(
-        request_id=request_id, limit=limit, offset=0
+        request_id=request_id, limit=limit, offset=0, user_id=user_id
     )
 
     # 标记来源表，便于前端区分日志类型

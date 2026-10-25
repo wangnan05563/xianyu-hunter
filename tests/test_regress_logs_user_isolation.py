@@ -222,6 +222,7 @@ def test_request_chain_filters_events_and_flags_error_logs(shim, repo) -> None:
         "error_type": "ValueError",
         "error_message": "bob-error",
         "request_id": R_ID,
+        "user_id": "bob",
     })
 
     res = api_logs.get_request_chain(request=_request("alice"), request_id=R_ID,
@@ -229,15 +230,17 @@ def test_request_chain_filters_events_and_flags_error_logs(shim, repo) -> None:
     evs = [c for c in res["chain"] if c.get("_source") == "event"]
     assert [e["message"] for e in evs] == ["alice-chain"]
     assert res["events_total"] == 1
-    # error_logs 表没有 user_id 列 → 响应必须显式承认这部分未隔离
+    # T02800：error_logs 已带 user_id，异常分支也按用户过滤，标志位表示「本次响应确实过滤过」
     assert res["error_logs_isolated"] is True
-    assert [c for c in res["chain"] if c.get("_source") == "error_log"]
+    assert [c for c in res["chain"] if c.get("_source") == "error_log"] == []
 
     as_default = api_logs.get_request_chain(request=_request("default"), request_id=R_ID,
                                             limit=100, container=shim)
     assert as_default["error_logs_isolated"] is False
     assert sorted(c["message"] for c in as_default["chain"] if c.get("_source") == "event") == [
         "alice-chain", "bob-chain"]
+    assert [c["error_message"] for c in as_default["chain"]
+            if c.get("_source") == "error_log"] == ["bob-error"]
 
 
 def test_request_chain_rejects_invalid_request_id(shim) -> None:

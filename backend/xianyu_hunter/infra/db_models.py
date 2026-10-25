@@ -282,6 +282,10 @@ class ErrorLogRow(Base):
     # 与 events.request_id 同名，便于聚合查询端点统一检索两表
     request_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
+    # 多用户隔离（T02800）：异常日志归属用户，与 events.user_id 同口径；
+    # 历史行由迁移统一回填 'default'（当时只有单用户部署，归属本就无歧义）
+    user_id: Mapped[str] = mapped_column(String, nullable=False, default="default", server_default="default")
+
     # 来源标识（单 token 认证体系下用请求来源代替用户身份）
     client_ip: Mapped[str | None] = mapped_column(String, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -296,6 +300,11 @@ class ErrorLogRow(Base):
     # 状态管理：new / resolved / ignored
     status: Mapped[str] = mapped_column(String, nullable=False, default="new", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    # 列表查询固定是「用户 + 时间倒序」，联合索引避免回表过滤
+    __table_args__ = (
+        Index("ix_error_logs_user_timestamp", "user_id", "timestamp"),
+    )
 
 
 # 5.7 任务-内容关联（支持 Items / Sellers / URL）
@@ -1005,6 +1014,14 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     _migrate_add_column(engine, "error_logs", "request_id", "TEXT")
     _migrate_create_index(engine, "events", "ix_events_request_id", "request_id")
     _migrate_create_index(engine, "error_logs", "ix_error_logs_request_id", "request_id")
+
+    # T02800：error_logs 补 user_id（多用户隔离，读侧此前无列可过滤）
+    # 历史行统一归 'default'：迁移前的部署是单 token/单用户，归属无歧义
+    _migrate_add_column(engine, "error_logs", "user_id", "TEXT NOT NULL DEFAULT 'default'")
+    with engine.connect() as conn:
+        conn.execute(sa_text("UPDATE error_logs SET user_id='default' WHERE user_id IS NULL OR user_id=''"))
+        conn.commit()
+    _migrate_create_index(engine, "error_logs", "ix_error_logs_user_timestamp", "user_id, timestamp")
 
     # MU2：多用户数据隔离 - 为 9 个业务表添加 user_id 字段
     # 为什么需要：原设计仅 tasks 表有 user_id，items/evaluations/orders 等关联表

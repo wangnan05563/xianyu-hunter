@@ -26,6 +26,12 @@ class ErrorLogsMixin:
             rid = get_request_id()
             if rid:
                 error_log["request_id"] = rid
+        # 多用户隔离（T02800）：未显式归属时补当前活跃用户（HTTP 路径由
+        # error_capture 从 request.state.user_id 显式传入，这里只兜后台/直调场景）。
+        # 与 events 的写侧兜底同源，避免两表出现两套归属口径。
+        if not error_log.get("user_id"):
+            from xianyu_hunter.infra.repo_events import _active_user_id_for_background_write
+            error_log["user_id"] = _active_user_id_for_background_write()
         with self.engine.begin() as conn:
             result = conn.execute(ErrorLogRow.__table__.insert().values(**error_log))
             return result.inserted_primary_key[0]
@@ -40,10 +46,16 @@ class ErrorLogsMixin:
         end_dt: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
+        user_id: str | None = None,
     ) -> list[dict]:
-        """列出错误日志，支持多维度过滤"""
+        """列出错误日志，支持多维度过滤
+
+        user_id 为 None 表示不按用户过滤（管理令牌直通/单用户，口径同 events）。
+        """
         with self.engine.connect() as conn:
             stmt = select(ErrorLogRow).order_by(ErrorLogRow.timestamp.desc())
+            if user_id is not None:
+                stmt = stmt.where(ErrorLogRow.user_id == user_id)
             if status:
                 stmt = stmt.where(ErrorLogRow.status == status)
             if error_type:
@@ -61,33 +73,42 @@ class ErrorLogsMixin:
             stmt = stmt.limit(limit).offset(offset)
             return [RepositoryBase._row_to_dict(r) for r in conn.execute(stmt).all()]
 
-    def get_error_log(self, error_log_id: int) -> dict | None:
-        """获取单条错误日志"""
+    def get_error_log(self, error_log_id: int, user_id: str | None = None) -> dict | None:
+        """获取单条错误日志（user_id 非空时，别人的 id 等同于不存在）"""
         with self.engine.connect() as conn:
-            row = conn.execute(
-                select(ErrorLogRow).where(ErrorLogRow.id == error_log_id)
-            ).first()
+            stmt = select(ErrorLogRow).where(ErrorLogRow.id == error_log_id)
+            if user_id is not None:
+                stmt = stmt.where(ErrorLogRow.user_id == user_id)
+            row = conn.execute(stmt).first()
             return RepositoryBase._row_to_dict(row) if row else None
 
-    def update_error_log_status(self, error_log_id: int, status: str) -> bool:
+    def update_error_log_status(
+        self, error_log_id: int, status: str, user_id: str | None = None
+    ) -> bool:
         """更新错误日志状态（new/resolved/ignored）"""
         with self.engine.begin() as conn:
-            result = conn.execute(
+            stmt = (
                 ErrorLogRow.__table__.update()
                 .where(ErrorLogRow.id == error_log_id)
                 .values(status=status)
             )
+            if user_id is not None:
+                stmt = stmt.where(ErrorLogRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount > 0
 
-    def delete_error_log(self, error_log_id: int) -> bool:
+    def delete_error_log(self, error_log_id: int, user_id: str | None = None) -> bool:
         """删除单条错误日志"""
         with self.engine.begin() as conn:
-            result = conn.execute(
-                ErrorLogRow.__table__.delete().where(ErrorLogRow.id == error_log_id)
-            )
+            stmt = ErrorLogRow.__table__.delete().where(ErrorLogRow.id == error_log_id)
+            if user_id is not None:
+                stmt = stmt.where(ErrorLogRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount > 0
 
-    def batch_update_error_log_status(self, ids: list[int], status: str) -> int:
+    def batch_update_error_log_status(
+        self, ids: list[int], status: str, user_id: str | None = None
+    ) -> int:
         """批量更新错误日志状态
 
         统一一次事务处理，避免循环单条更新产生的多次事务开销
@@ -95,42 +116,50 @@ class ErrorLogsMixin:
         if not ids:
             return 0
         with self.engine.begin() as conn:
-            result = conn.execute(
+            stmt = (
                 ErrorLogRow.__table__.update()
                 .where(ErrorLogRow.id.in_(ids))
                 .values(status=status)
             )
+            if user_id is not None:
+                stmt = stmt.where(ErrorLogRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount
 
-    def batch_delete_error_logs(self, ids: list[int]) -> int:
+    def batch_delete_error_logs(self, ids: list[int], user_id: str | None = None) -> int:
         """批量删除错误日志"""
         if not ids:
             return 0
         with self.engine.begin() as conn:
-            result = conn.execute(
-                ErrorLogRow.__table__.delete().where(ErrorLogRow.id.in_(ids))
-            )
+            stmt = ErrorLogRow.__table__.delete().where(ErrorLogRow.id.in_(ids))
+            if user_id is not None:
+                stmt = stmt.where(ErrorLogRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount
 
-    def count_error_logs_by_status(self) -> dict[str, int]:
-        """按状态统计错误日志数量"""
+    def count_error_logs_by_status(self, user_id: str | None = None) -> dict[str, int]:
+        """按状态统计错误日志数量（user_id 非空时只统计该用户）"""
         with self.engine.connect() as conn:
-            rows = conn.execute(
+            stmt = (
                 select(ErrorLogRow.status, func.count(ErrorLogRow.id))
                 .group_by(ErrorLogRow.status)
-            ).all()
+            )
+            if user_id is not None:
+                stmt = stmt.where(ErrorLogRow.user_id == user_id)
+            rows = conn.execute(stmt).all()
             return {row[0]: row[1] for row in rows}
 
-    def cleanup_old_error_logs(self, days: int = 30) -> int:
+    def cleanup_old_error_logs(self, days: int = 30, user_id: str | None = None) -> int:
         """清理指定天数前的已解决/已忽略错误日志"""
         # S6903: 使用时区感知的 UTC 时间，避免 datetime.utcnow() 返回 naive datetime
         # 导致与数据库中 tz-aware 时间戳比较时出现隐式时区错位
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         with self.engine.begin() as conn:
-            result = conn.execute(
-                ErrorLogRow.__table__.delete().where(
-                    ErrorLogRow.timestamp < cutoff,
-                    ErrorLogRow.status.in_(["resolved", "ignored"]),
-                )
+            stmt = ErrorLogRow.__table__.delete().where(
+                ErrorLogRow.timestamp < cutoff,
+                ErrorLogRow.status.in_(["resolved", "ignored"]),
             )
+            if user_id is not None:
+                stmt = stmt.where(ErrorLogRow.user_id == user_id)
+            result = conn.execute(stmt)
             return result.rowcount
