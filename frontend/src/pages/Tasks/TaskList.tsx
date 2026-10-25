@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { Table, Space, Tag, Modal, message, Input, Spin, Empty, Card, Select, Alert, Collapse, Tabs, Form, Tooltip, Segmented, Row, Col, Switch, Dropdown, Popconfirm, Pagination } from 'antd'
-import type { TablePaginationConfig } from 'antd'
+import type { MenuProps, TablePaginationConfig } from 'antd'
 import { PlusOutlined, EditOutlined, PlayCircleOutlined, PauseCircleOutlined, ThunderboltOutlined, AppstoreOutlined, DeleteOutlined, CopyOutlined, StopOutlined, ClearOutlined, LinkOutlined, ReloadOutlined, EyeOutlined, MinusCircleOutlined, MoreOutlined, SaveOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { taskApi, aiApi, templateApi, taskLinkApi, configApi, Task, TaskOption, TaskTemplate, AIParseTaskResult, TaskLink, LiveProgress, LiveFilterSummary, TaskPrecheckResult } from '../../api'
@@ -85,6 +85,46 @@ export default function TaskList() {
     } catch {
       message.error(`${label}失败`)
     }
+  }
+
+  // T02651：表格操作列收纳后，停止/删除挂在「更多」菜单项上——菜单项里挂不住
+  // Popconfirm（弹层会跟着菜单一起销毁），改用与本文件其它危险入口一致的 Modal.confirm。
+  // 确认框必须带上任务名：菜单项脱离了行上下文，只写「删除该任务」用户无法核对对象。
+  const confirmRowDanger = (record: Task, action: 'stop' | 'delete', label: string, consequence: string) => {
+    Modal.confirm({
+      title: `确认${label}该任务？`,
+      content: `${record.name}——${consequence}`,
+      okText: label,
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => runDangerAction(record.id, action, label),
+    })
+  }
+
+  // 表格行「更多」菜单：复制/另存为模板为低频常规操作，停止/删除为危险项（danger 色 + 分隔线）
+  const buildRowMoreItems = (record: Task): MenuProps['items'] => {
+    const items: MenuProps['items'] = [
+      { key: 'copy', label: '复制为新任务', icon: <CopyOutlined />, onClick: () => cloneTask(record) },
+      { key: 'template', label: '另存为模板', icon: <SaveOutlined />, onClick: () => { void saveAsTemplate(record) } },
+    ]
+    const dangerous: MenuProps['items'] = []
+    if (record.status === TASK_STATUS.RUNNING || record.status === TASK_STATUS.PAUSED) {
+      dangerous.push({
+        key: 'stop',
+        label: '停止任务',
+        icon: <StopOutlined />,
+        danger: true,
+        onClick: () => confirmRowDanger(record, 'stop', '停止', '停止后任务将不再运行'),
+      })
+    }
+    dangerous.push({
+      key: 'delete',
+      label: '删除任务',
+      icon: <DeleteOutlined />,
+      danger: true,
+      onClick: () => confirmRowDanger(record, 'delete', '删除', '删除后不可恢复'),
+    })
+    return [...items, { type: 'divider' }, ...dangerous]
   }
 
   // ---- 关联数状态 ----
@@ -758,24 +798,27 @@ export default function TaskList() {
       key: 'interval',
       width: 110,
       // 只读列：点击跳转 TaskEditor 修改，避免在列表行内直接编辑造成误操作
+      // T02651：这一列一直可点，但除了 cursor:pointer 没有任何可点击暗示（无链接色、
+      // 无 hover 态、tooltip 也不提），用户不知道能点。现在补链接色 + hover 下划线，
+      // 并把 tooltip 换成动作说明。
       render: (_: unknown, record: Task) => {
+        const jumpToEditor = clickableProps(() => navigate(`/tasks/${record.id}/edit`))
         // use_cron=true 显示 cron 表达式，否则显示秒数
         if (record.use_cron) {
           return (
-            <Tooltip title={record.cron}>
-              <Tag style={{ cursor: 'pointer' }} {...clickableProps(() => navigate(`/tasks/${record.id}/edit`))}>
+            <Tooltip title={`点击编辑采集周期 · cron: ${record.cron}`}>
+              <Tag className="xh-clickable-tag" {...jumpToEditor}>
                 📅 {record.cron}
               </Tag>
             </Tooltip>
           )
         }
         return (
-          <Tag
-            style={{ cursor: 'pointer' }}
-            {...clickableProps(() => navigate(`/tasks/${record.id}/edit`))}
-          >
-            ⏱ {record.interval_seconds ?? 60}秒
-          </Tag>
+          <Tooltip title="点击编辑采集周期">
+            <Tag className="xh-clickable-tag" {...jumpToEditor}>
+              ⏱ {record.interval_seconds ?? 60}秒
+            </Tag>
+          </Tooltip>
         )
       },
     },
@@ -814,6 +857,14 @@ export default function TaskList() {
     {
       title: '操作',
       key: 'action',
+      // T02651：原先 6 个元素常驻（编辑 / 启动·暂停 / 停止 / 复制 / 更多 / 删除），
+      // 叠上 9 列数据后即使 scroll.x='max-content' 也偏挤，窄屏要横向滚动才点到删除。
+      // 只保留高频动作常驻，其余（复制 / 另存为模板 / 停止 / 删除）收进同一个「更多」菜单。
+      // 真机实测（1440/768 两档）补上第二条：仅收纳还不够——本表列合计 1524px，
+      // 1440 档可用宽度只有 1112px，操作列不固定时整列落在 x=1621（视口之外），
+      // 删除仍要横向滚动才点得到。按 Orders/Evaluations 的既有做法钉右。
+      width: 148,
+      fixed: 'right' as const,
       render: (_: unknown, record: Task) => {
         return (
           <Space size="small">
@@ -829,53 +880,9 @@ export default function TaskList() {
                 启动
               </TipButton>
             )}
-            {/* 停止/删除统一用 Popconfirm（评审 2.2-3），不再自研一套行内确认 */}
-            {(record.status === TASK_STATUS.RUNNING || record.status === TASK_STATUS.PAUSED) && (
-              <Popconfirm
-                title="确认停止该任务？"
-                description="停止后任务将不再运行"
-                onConfirm={() => runDangerAction(record.id, 'stop', '停止')}
-                okText="停止"
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-              >
-                <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />}>
-                  停止
-                </TipButton>
-              </Popconfirm>
-            )}
-            <TipButton tip="复制该任务为新任务" size="small" icon={<CopyOutlined />} onClick={() => cloneTask(record)}>
-              复制
-            </TipButton>
-            {/* "另存为模板"是低频操作，移入更多下拉菜单以压缩操作列宽度，避免超出页面可视区 */}
-            <Dropdown
-              trigger={['click']}
-              menu={{
-                items: [
-                  {
-                    key: 'saveAsTemplate',
-                    label: '另存为模板',
-                    icon: <SaveOutlined />,
-                    // void 操作符显式丢弃 Promise，符合 S6544 期望的 void 返回类型
-                    onClick: () => { void saveAsTemplate(record) },
-                  },
-                ],
-              }}
-            >
-              <TipButton tip="展开更多操作" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+            <Dropdown trigger={['click']} menu={{ items: buildRowMoreItems(record) }}>
+              <TipButton tip="展开更多操作（复制 / 另存为模板 / 停止 / 删除）" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
             </Dropdown>
-            <Popconfirm
-              title="确认删除该任务？"
-              description="删除后不可恢复"
-              onConfirm={() => runDangerAction(record.id, 'delete', '删除')}
-              okText="删除"
-              cancelText="取消"
-              okButtonProps={{ danger: true }}
-            >
-              <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />}>
-                删除
-              </TipButton>
-            </Popconfirm>
           </Space>
         )
       },

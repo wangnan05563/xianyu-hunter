@@ -362,6 +362,26 @@ body {
   animation: xh-highlight-pulse 0.6s ease;
 }
 
+/* 可点击跳转的 Tag（T02651）：表格里「点击可编辑」的标签此前只有 cursor:pointer，
+   没有任何链接暗示。这里给出与同表 type="link" 单元格一致的链接色 + hover 下划线，
+   焦点态同样可见（键盘 Enter/空格 也能触发）。 */
+.xh-clickable-tag {
+  color: #1677ff;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.xh-clickable-tag:hover,
+.xh-clickable-tag:focus-visible {
+  color: #4096ff;
+  text-decoration: underline;
+}
+
+[data-theme="dark"] .xh-clickable-tag {
+  color: #4096ff;
+}
+
 /* 暗色主题下高亮行适配：使用深色底色 + 绿色边框，避免亮色背景刺眼 */
 [data-theme="dark"] .xh-row-highlight {
   background-color: rgba(82, 196, 26, 0.12) !important;
