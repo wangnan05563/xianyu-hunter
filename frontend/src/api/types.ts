@@ -805,12 +805,27 @@ export interface StorageStatus {
     browser_data_exists: boolean
     /** 实际被清理的目录绝对路径，供确认框如实展示目标 */
     browser_data_path?: string | null
+    /** 增量统计进度（T02738）；state=scanning 时上面的 MB/文件数只是已扫部分 */
+    browser_data_scan?: CacheScan | null
     pycache_mb: number
     /** __pycache__ 目录个数（清理按整目录删除，概览与确认框都按「目录 N 个」口径） */
     pycache_count: number
     /** 打包版没有源码树，__pycache__ 一项恒为 0：false 时前端须置灰并标「不适用」（T02739） */
     pycache_applicable: boolean
   }
+}
+
+/** 浏览器数据目录的分批统计进度（T02738，GET /api/maintenance/cache-scan） */
+export interface CacheScan {
+  path: string | null
+  /** done=已完成；scanning=仍在后台分批遍历；unavailable=目录解析失败 */
+  state: 'done' | 'scanning' | 'unavailable'
+  /** 已扫部分的体积/文件数；state=scanning 时不是终值 */
+  mb: number
+  files: number
+  /** 已遍历的目录项数（含子目录本身），用于「统计中 N 项」 */
+  scanned_entries: number
+  elapsed_sec: number
 }
 
 export interface CleanupResult {
@@ -823,6 +838,9 @@ export interface CleanupResult {
   total_freed_mb?: number
   /** 后端回带：本次是否为预览（仅扫描不删除） */
   dry_run?: boolean
+  /** 预览时缓存统计尚未扫完：本次没有任何可评估条目，前端应轮询 cache-scan（T02738） */
+  pending?: boolean
+  scan?: CacheScan | null
 }
 
 export interface CleanupBody {

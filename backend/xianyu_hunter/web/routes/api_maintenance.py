@@ -23,10 +23,22 @@ from xianyu_hunter.paths import (
 )
 from xianyu_hunter.web.cache import cached_ttl, invalidate_stats_cache
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.services.cache_scan import CacheScanService
 from xianyu_hunter.web.utils import owner_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
+
+# 大目录扫描的时间预算（T02738）
+# 浏览器 profile 实测 2073 文件 / 426MB，磁盘争用下单次全量遍历 449.5s。
+# 请求路径里只推进一小片，剩下的交给 /cache-scan 轮询续跑，保证秒级回包。
+STATUS_SCAN_BUDGET_SEC = 0.5
+PREVIEW_SCAN_BUDGET_SEC = 0.5
+POLL_SCAN_BUDGET_SEC = 1.0
+# 轮询单次上限：预算是客户端可传参数，不能让一次请求退化成新的全量遍历
+MAX_POLL_SCAN_BUDGET_SEC = 2.0
+
+_cache_scan = CacheScanService()
 
 
 class CleanupRequest(BaseModel):
@@ -253,6 +265,9 @@ def maintenance_status(
         "browser_data_files": 0,
         "browser_data_exists": False,
         "browser_data_path": None,
+        # 增量统计进度（T02738）：state=scanning 时上面的 MB/文件数只是已扫部分，
+        # 前端须显示「统计中 N 项」并轮询 /cache-scan，不能把半量当终值
+        "browser_data_scan": None,
         "pycache_mb": 0,
         "pycache_count": 0,
         "pycache_applicable": not is_frozen(),
@@ -263,7 +278,11 @@ def maintenance_status(
         if bd is not None:
             cache_stats["browser_data_path"] = str(bd)
             cache_stats["browser_data_exists"] = bd.exists() and any(bd.iterdir())
-            cache_stats["browser_data_mb"], cache_stats["browser_data_files"] = _dir_stats(bd)
+            # 只按预算推进一片；未扫完时 status 仍然秒回，剩余进度由前端轮询补齐
+            scan = _cache_scan.snapshot(bd, budget=STATUS_SCAN_BUDGET_SEC)
+            cache_stats["browser_data_scan"] = scan
+            cache_stats["browser_data_mb"] = scan["mb"]
+            cache_stats["browser_data_files"] = scan["files"]
         # Python __pycache__ 目录（与 cleanup_cache 的清理范围同一函数、同一根目录）
         # 口径：pycache_count 是「缓存目录数」——前端概览与确认框都按「__pycache__ 目录 N 个」
         # 措辞，清理动作也是整目录删除，因此按目录计数才对得上（T02575）
@@ -282,28 +301,64 @@ def maintenance_status(
     return {"db": db_stats, "logs": log_stats, "cache": cache_stats}
 
 
+@router.get("/cache-scan")
+def cache_scan_progress(budget: float = POLL_SCAN_BUDGET_SEC) -> dict[str, Any]:
+    """推进并查询浏览器数据目录的增量统计（T02738）
+
+    与 /status 不同，这里不带响应缓存：每次请求都真实推进一小片并回带进度，
+    前端轮询到 state=done 即停。预算有上限，客户端传再大也不会退化成全量遍历。
+    被 abort 的请求最多浪费一个预算片；进度留在进程内，重复点击不会叠加重扫。
+    """
+    profile = _browser_data_dir()
+    if profile is None:
+        return {
+            "path": None, "state": "unavailable",
+            "mb": 0, "files": 0, "scanned_entries": 0, "elapsed_sec": 0,
+        }
+    scan = _cache_scan.snapshot(
+        profile, budget=max(0.0, min(budget, MAX_POLL_SCAN_BUDGET_SEC)),
+    )
+    if scan["state"] == "done":
+        # /status 可能仍缓存着「统计中」快照（落库时 scan 还没跑完），
+        # 完成瞬间失效一次，下一次概览才能拿到终值
+        invalidate_stats_cache()
+    return scan
+
+
 # ============== 缓存清理 ==============
-def _cleanup_browser_data(dry_run: bool, cleaned: list, errors: list) -> None:
+def _cleanup_browser_data(
+    dry_run: bool, cleaned: list, errors: list,
+) -> dict[str, Any] | None:
     """清理真实浏览器用户数据目录（配置 browser.user_data_dir）
 
     该目录存的是闲鱼登录 Cookie 与反检测指纹，删除后必须重新扫码登录——
     因此预览与执行两态都要把这一后果写进回执（FR-A-5 / T02575）。
     dry_run 只统计不删除；目录不存在时不追加任何"已清理"条目，避免空转报成功。
+
+    返回 None＝预览已完成（或无法定位目录），返回快照 dict＝统计尚未扫完（T02738）：
+    预览不再在请求线程里等全量遍历，调用方据此回带 pending，由前端轮询 /cache-scan。
+    真实删除仍同步统计——它本来就允许长耗时（900s 超时），且确认框里的数字必须准确。
     """
     profile = _browser_data_dir()
     if profile is None:
         errors.append("未能定位浏览器用户数据目录（browser.user_data_dir 解析失败），本次未删除任何文件")
-        return
-    mb, nfiles = _dir_stats(profile)
+        return None
+    if dry_run:
+        scan = _cache_scan.snapshot(profile, budget=PREVIEW_SCAN_BUDGET_SEC)
+        if scan["state"] != "done":
+            return scan
+        mb, nfiles = scan["mb"], scan["files"]
+    else:
+        mb, nfiles = _dir_stats(profile)
     if not profile.exists() or nfiles == 0:
-        return
+        return None
 
     if dry_run:
         cleaned.append(
             f"[预览] 将删除 {profile}（{nfiles} 个文件 / {mb} MB）"
             "——闲鱼登录 Cookie 与浏览器指纹就在该目录，删除后需重新扫码登录"
         )
-        return
+        return None
 
     busy = _browser_profile_busy(profile)
     if busy:
@@ -311,16 +366,19 @@ def _cleanup_browser_data(dry_run: bool, cleaned: list, errors: list) -> None:
             f"浏览器数据目录正被占用（{busy}），已跳过删除；"
             "请先关闭使用该目录的浏览器窗口或停止采集/登录任务后重试"
         )
-        return
+        return None
 
     failures = _remove_tree(profile)
+    # 删除后统计必须归零：预览期间扫出的数字已不再代表磁盘现状
+    _cache_scan.invalidate(profile)
     if failures:
         errors.extend(f"浏览器数据删除失败: {f}" for f in failures[:5])
-        return
+        return None
     cleaned.append(
         f"已删除 {profile.name}（{nfiles} 个文件 / {mb} MB）；"
         "闲鱼登录态已清除，下次采集前需重新扫码登录"
     )
+    return None
 
 
 def _cleanup_pycache(dry_run: bool, cleaned: list, errors: list, *, explicit: bool) -> None:
@@ -381,6 +439,7 @@ def cleanup_cache(
     target = _CACHE_TARGET_ALIASES.get(raw_target, raw_target)
     cleaned = []
     errors = []
+    scan: dict[str, Any] | None = None
 
     if target not in _CACHE_TARGETS:
         # 未知 target 旧实现是"什么都不删、返回 count=0 的成功回执"，用户看到
@@ -390,9 +449,23 @@ def cleanup_cache(
         )
     else:
         if target in ("browser_data", "all"):
-            _cleanup_browser_data(req.dry_run, cleaned, errors)
+            scan = _cleanup_browser_data(req.dry_run, cleaned, errors)
         if target in ("pycache", "all"):
             _cleanup_pycache(req.dry_run, cleaned, errors, explicit=target == "pycache")
+
+    # 统计未扫完：本次预览并未真正评估出条目，不写审计（否则每次预览都记一条
+    # 「0 项完成」）；前端改去轮询 /cache-scan，扫完后再发一次预览
+    if req.dry_run and scan is not None:
+        return {
+            "target": target,
+            "requested_target": raw_target,
+            "dry_run": True,
+            "cleaned": cleaned,
+            "errors": errors,
+            "count": len(cleaned),
+            "pending": True,
+            "scan": scan,
+        }
 
     # 记录操作日志
     _log_cleanup_action("cache", target, cleaned, errors, container, user_id=owner_user_id(request))
@@ -409,6 +482,8 @@ def cleanup_cache(
         "cleaned": cleaned,
         "errors": errors,
         "count": len(cleaned),
+        "pending": False,
+        "scan": scan,
     }
 
 

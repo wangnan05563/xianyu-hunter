@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Card,
   Select,
@@ -26,6 +26,7 @@ import {
   type StorageStatus,
   type CleanupResult,
   type CleanupBody,
+  type CacheScan,
 } from '../../api'
 import { TipButton } from '@/components/TipButton'
 import { confirmDanger } from '@/components/DangerSummary'
@@ -75,6 +76,14 @@ export default function Maintenance() {
   const [dbResult, setDbResult] = useState<CleanupResult | null>(null)
   const [logResult, setLogResult] = useState<CleanupResult | null>(null)
 
+  // 浏览器数据目录的增量统计（T02738）：/status 先带回「统计中」，这里接手轮询续跑。
+  // null 时退回 status 里的快照，两者以最新一次服务端结果为准。
+  const [scan, setScan] = useState<CacheScan | null>(null)
+  // 预览因统计未完成被挡回时记下请求体，扫完后自动补发一次同参数的预览
+  const pendingPreviewRef = useRef<CleanupBody | null>(null)
+  const activeScan = scan ?? status?.cache?.browser_data_scan ?? null
+  const cacheScanning = activeScan?.state === 'scanning'
+
   // 页面加载时获取存储状态
   useEffect(() => {
     loadStatus()
@@ -86,6 +95,8 @@ export default function Maintenance() {
       setLoading(true)
       const data = await maintenanceApi.getStorageStatus()
       setStatus(data)
+      // 概览已是服务端最新口径，本地轮询结果作废（否则旧的 scanning 会盖住新终值）
+      setScan(null)
     } catch (error) {
       message.error('加载存储状态失败')
       console.error('加载状态失败', error)
@@ -97,27 +108,33 @@ export default function Maintenance() {
   // 打包版没有源码树，__pycache__ 恒为 0：置灰并标「不适用」（T02739）
   const pycacheApplicable = status?.cache?.pycache_applicable !== false
 
-  // 执行缓存清理
-  const handleCleanupCache = async () => {
+  // 执行缓存清理（override 供「统计完成后自动补发预览」使用）
+  const handleCleanupCache = async (override?: CleanupBody) => {
+    const body = override ?? { target: cacheForm.target, dry_run: cacheForm.dry_run }
     // 非预览模式必须走四要素确认（T02573）：原生 confirm 只能问「确认吗」，
     // 无法回答「删的是什么、有多少、能不能恢复」
-    if (!cacheForm.dry_run) {
+    if (!body.dry_run) {
+      // 统计未完成时「有多少」只能给半量，等于四要素失真（T02738）
+      if (body.target !== 'pycache' && cacheScanning) {
+        message.warning('浏览器数据仍在统计中，完成后才能给出准确的删除量，请稍候再执行')
+        return
+      }
       const c = status?.cache
       const parts: string[] = []
-      if (cacheForm.target !== 'browser_data' && pycacheApplicable) {
+      if (body.target !== 'browser_data' && pycacheApplicable) {
         parts.push(`__pycache__ 目录 ${c?.pycache_count ?? '未知'} 个（${c?.pycache_mb ?? '未知'} MB）`)
       }
-      if (cacheForm.target !== 'pycache') {
+      if (body.target !== 'pycache') {
         parts.push(
           `浏览器数据目录 ${c?.browser_data_files ?? '未知'} 个文件（${c?.browser_data_mb ?? '未知'} MB）`,
         )
       }
       // browser_data 分支现在真的会删登录态（FR-A-5）——后果必须写在确认框里
-      const dropsLogin = cacheForm.target !== 'pycache'
+      const dropsLogin = body.target !== 'pycache'
       // 打包版「全部缓存」真实删的只有浏览器数据，确认框不能还写着 __pycache__
-      const scopeText = !pycacheApplicable && cacheForm.target === 'all'
+      const scopeText = !pycacheApplicable && body.target === 'all'
         ? '浏览器用户数据目录（含闲鱼登录态）'
-        : CACHE_SCOPE[cacheForm.target] ?? '所选缓存'
+        : CACHE_SCOPE[body.target] ?? '所选缓存'
       const ok = await confirmDanger({
         title: '确认清理缓存？',
         action: `真实删除${scopeText}`,
@@ -140,18 +157,26 @@ export default function Maintenance() {
     setCacheLoading(true)
     setCacheResult(null)
     try {
-      const result = await maintenanceApi.cleanup('cache', {
-        target: cacheForm.target,
-        dry_run: cacheForm.dry_run,
-      })
+      const result = await maintenanceApi.cleanup('cache', body)
       setCacheResult(result)
+      // 统计未完成：后端尚未评估出任何条目。记下请求体，扫完后自动补发同参数预览（T02738）
+      if (result.pending) {
+        pendingPreviewRef.current = body
+        setScan(result.scan ?? null)
+        message.info(
+          `浏览器数据统计中（已遍历 ${result.scan?.scanned_entries ?? 0} 项），完成后自动展示预览结果`,
+        )
+        return
+      }
       const count = result.cleaned?.length ?? 0
       // 预览也必须给反馈，否则用户无法判断"没反应"还是"没有可清理内容"（4.1-5）
-      if (cacheForm.dry_run) {
+      if (body.dry_run) {
         message.info(count > 0 ? `预览完成：将处理 ${count} 项缓存` : '预览完成：无需要清理的缓存')
         return
       }
       // 实际执行后刷新状态以反映最新存储情况（后端已同步让概览缓存失效，4.1-4）
+      pendingPreviewRef.current = null
+      setScan(null)
       await loadStatus()
       if (result.errors?.length) {
         message.error(`缓存清理未完成：${result.errors[0]}`)
@@ -165,6 +190,33 @@ export default function Maintenance() {
       setCacheLoading(false)
     }
   }
+
+  // 统计未完成时轮询续跑：每次请求推进一小片，扫完刷新概览或自动补发预览（T02738）
+  useEffect(() => {
+    if (!cacheScanning) return
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      try {
+        const next = await maintenanceApi.getCacheScan()
+        if (cancelled) return
+        setScan(next)
+        if (next.state === 'scanning') return
+        const pendingBody = pendingPreviewRef.current
+        pendingPreviewRef.current = null
+        if (pendingBody) {
+          await handleCleanupCache({ ...pendingBody, dry_run: true })
+        } else {
+          await loadStatus()
+        }
+      } catch {
+        // 轮询偶发失败不弹错：进度仍在后端，用户再点预览即可接上
+      }
+    }, 1200)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [cacheScanning, scan])
 
   // 执行数据库清理
   const handleCleanupDatabase = async () => {
@@ -371,14 +423,24 @@ export default function Maintenance() {
 
           {/* 缓存统计 */}
           <Col span={8}>
-            <Statistic
-              title="缓存"
-              value={((status?.cache?.browser_data_mb ?? 0) + (status?.cache?.pycache_mb ?? 0)).toFixed(2)}
-              suffix="MB"
-              valueStyle={{ color: '#FF6200' }}
-            />
+            {cacheScanning ? (
+              <Statistic
+                title="缓存"
+                value="统计中"
+                valueStyle={{ color: '#FF6200' }}
+              />
+            ) : (
+              <Statistic
+                title="缓存"
+                value={((status?.cache?.browser_data_mb ?? 0) + (status?.cache?.pycache_mb ?? 0)).toFixed(2)}
+                suffix="MB"
+                valueStyle={{ color: '#FF6200' }}
+              />
+            )}
             <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
-              浏览器 {status?.cache?.browser_data_mb ?? 0}MB/{status?.cache?.browser_data_files ?? 0} 个文件
+              {cacheScanning
+                ? `浏览器数据统计中（已遍历 ${activeScan?.scanned_entries ?? 0} 项）`
+                : `浏览器 ${status?.cache?.browser_data_mb ?? 0}MB/${status?.cache?.browser_data_files ?? 0} 个文件`}
               · 编译缓存 {pycacheApplicable
                 ? `${status?.cache?.pycache_count ?? 0} 个目录/${status?.cache?.pycache_mb ?? 0}MB`
                 : '不适用（打包版无源码字节码缓存）'}
@@ -408,6 +470,17 @@ export default function Maintenance() {
                 ? '——后者保存闲鱼登录 Cookie，删除后需重新扫码登录'
                 : '——其中保存闲鱼登录 Cookie，删除后需重新扫码登录'}
             </Text>
+
+            {/* 大目录在后台分批统计（T02738）：先给进度，不把请求拖成空白等待 */}
+            {cacheScanning && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={`浏览器数据统计中：已遍历 ${activeScan?.scanned_entries ?? 0} 项`}
+                description="统计在后台分批进行、秒级回传进度；完成后自动刷新，无需重复点击。统计完成前不能执行真实删除。"
+              />
+            )}
 
             <div style={{ marginBottom: 12 }}>
               <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
@@ -443,7 +516,7 @@ export default function Maintenance() {
               icon={<DeleteOutlined />}
               block
               loading={cacheLoading}
-              onClick={handleCleanupCache}
+              onClick={() => { void handleCleanupCache() }}
               style={{ backgroundColor: cacheForm.dry_run ? undefined : '#ff4d4f' }}
             >
               清理缓存
