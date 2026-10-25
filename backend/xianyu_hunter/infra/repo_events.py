@@ -15,6 +15,10 @@ from sqlalchemy import func, select
 
 from xianyu_hunter.domain.events import level_literals
 from xianyu_hunter.infra.db_models import _utcnow, EventRow
+from xianyu_hunter.infra.lru import LRUDict
+
+# task_id → 归属用户 的内存缓存容量：任务归属创建后不变，命中后无需再查
+_TASK_OWNER_CACHE_MAX = 2000
 
 
 def _parse_event_time(value: Any) -> datetime:
@@ -180,6 +184,34 @@ def _sync_score_value(event: dict) -> None:
 class EventsMixin:
     """Events 领域的 Repository 方法"""
 
+    def _task_owner_user_id(self, task_id: str) -> str | None:
+        """按 task_id 反查任务归属用户（T02801）
+
+        后台线程（worker / scheduler / notifier）写事件时都得知道「这条属于谁」，
+        但它们没有 request 上下文。原先统一取 `get_active_user_id()`（最后活跃用户），
+        多账号同时跑任务时会把甲的事件写到乙名下：甲看不到自己的日志，乙的列表混入他人记录。
+
+        优先反查 tasks.user_id 才是事实来源；这里带 LRU 缓存，避免每条日志一次 SELECT。
+        缓存按 Repository 实例持有（而不是模块级），防止测试或换库时跨实例串味；
+        任务归属创建后不变，因此命中后无需失效。
+        查不到 / 查询异常返回 None，由调用方降级——归属错了日志还可追查，写入失败会直接丢事件。
+        """
+        cache: LRUDict[str, str] | None = getattr(self, "_task_owner_cache", None)
+        if cache is None:
+            cache = LRUDict(maxsize=_TASK_OWNER_CACHE_MAX)
+            self._task_owner_cache = cache
+        owner = cache.get(task_id)
+        if owner:
+            return owner
+        try:
+            task = self.get_task(task_id)
+        except Exception:  # noqa: BLE001 - 归属查询失败只降级，不得阻断事件落库
+            return None
+        owner = (task or {}).get("user_id")
+        if owner:
+            cache[task_id] = owner
+        return owner
+
     def save_event(self, event: dict) -> int:
         # T02883：type 没有可推断的默认值，缺失必须报错而不是静默落 NULL。
         # EventRow.type 是 nullable，漏写不报数据库错，代价是行还在但时间线只能显示通用「事件」，
@@ -197,15 +229,20 @@ class EventsMixin:
             rid = get_request_id()
             if rid:
                 event["request_id"] = rid
-        # T02684 多用户隔离（写侧）：调用方未指定归属时补「当前活跃用户」。
-        # 为什么在这里补而不是逐个改 12 处 save_event 调用点：
+        # 多用户隔离（写侧）：调用方未指定归属时的取值顺序（T02684 → T02801）
+        #   1. 事件带 task_id → 反查 tasks.user_id（事实来源，带缓存）；
+        #   2. 否则/查不到 → 当前活跃用户（旧口径，单用户部署下等价）；
+        #   3. 仍取不到 → "default"。
+        # 为什么集中在单一入口而不是逐个改 12 处调用点：
         #   - EventRow.user_id NOT NULL 且有列默认值，散落调用点漏传时静默落成 "default"，
         #     读侧一旦按用户过滤，非 default 用户的日志页会直接空掉（比泄露更难排查）；
         #   - 单一入口保证「新增写入点默认就是归属正确的」，无需再来一次全站清点。
-        # 口径与 worker/scheduler 读 cookie 时用的 get_active_user_id() 完全一致
-        # （后台线程没有 request 上下文，取不到就降级 "default"，与旧行为兼容）。
+        # 为什么不再只用活跃用户近似（T02801）：调度器启动时加载所有用户的任务
+        # （startup.list_tasks() 不带过滤），多账号并发下「最后活跃」会把 A 的日志写到 B 名下。
         if not event.get("user_id"):
-            event["user_id"] = _active_user_id_for_background_write()
+            task_id = event.get("task_id")
+            owner = self._task_owner_user_id(task_id) if task_id else None
+            event["user_id"] = owner or _active_user_id_for_background_write()
         # P1-3：eval.scored 事件同步写入 score_value 列，避免 json_extract 全表扫描
         _sync_score_value(event)
         with self.engine.begin() as conn:
