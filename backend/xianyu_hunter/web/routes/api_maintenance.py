@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from xianyu_hunter.container import Container
@@ -23,6 +23,7 @@ from xianyu_hunter.paths import (
 )
 from xianyu_hunter.web.cache import cached_ttl, invalidate_stats_cache
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.utils import owner_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
@@ -366,6 +367,7 @@ _CACHE_TARGET_ALIASES = {"temp": "pycache"}
 @router.post("/cache")
 def cleanup_cache(
     req: CleanupRequest,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """清理缓存数据（浏览器用户数据目录、Python 字节码缓存）
@@ -393,7 +395,7 @@ def cleanup_cache(
             _cleanup_pycache(req.dry_run, cleaned, errors, explicit=target == "pycache")
 
     # 记录操作日志
-    _log_cleanup_action("cache", target, cleaned, errors, container)
+    _log_cleanup_action("cache", target, cleaned, errors, container, user_id=owner_user_id(request))
 
     if not req.dry_run and not errors:
         # 状态接口有 60s TTL（stale-while-revalidate 更会让旧值一直回吐），
@@ -518,6 +520,7 @@ _DB_TARGETS = ("old_events", "old_items", "sold_items", "vacuum", "all")
 @router.post("/database")
 def cleanup_database(
     req: CleanupRequest,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """清理数据库冗余数据
@@ -544,7 +547,7 @@ def cleanup_database(
         errors.append(
             f"未知的清理范围：{target}（可选 {' / '.join(_DB_TARGETS)}），本次未删除任何记录"
         )
-        _log_cleanup_action("database", target, cleaned, errors, container)
+        _log_cleanup_action("database", target, cleaned, errors, container, user_id=owner_user_id(request))
         return {
             "target": target, "days": days, "dry_run": req.dry_run,
             "cleaned": cleaned, "errors": errors, "total_deleted": 0,
@@ -578,7 +581,7 @@ def cleanup_database(
         errors.append(f"数据库清理失败: {e}")
         logger.exception("数据库清理失败")
 
-    _log_cleanup_action("database", target, cleaned, errors, container)
+    _log_cleanup_action("database", target, cleaned, errors, container, user_id=owner_user_id(request))
 
     if not req.dry_run and not errors:
         # 真实写库后概览统计（任务/商品/事件行数、库体积）必须立刻反映新值（4.1-4）
@@ -601,6 +604,7 @@ _LOG_TARGETS = ("old_logs", "large_logs", "all")
 @router.post("/logs")
 def cleanup_logs(
     req: CleanupRequest,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """清理日志文件
@@ -670,7 +674,7 @@ def cleanup_logs(
     except Exception as e:
         errors.append(f"日志清理失败: {e}")
 
-    _log_cleanup_action("logs", target, cleaned, errors, container)
+    _log_cleanup_action("logs", target, cleaned, errors, container, user_id=owner_user_id(request))
 
     if not req.dry_run and not errors:
         invalidate_stats_cache()
@@ -685,12 +689,19 @@ def cleanup_logs(
     }
 
 
-def _log_cleanup_action(category: str, target: str, cleaned: list, errors: list, container: Container) -> None:
-    """将清理操作记录到 events 表，供审计追踪"""
+def _log_cleanup_action(
+    category: str, target: str, cleaned: list, errors: list, container: Container, *, user_id: str,
+) -> None:
+    """将清理操作记录到 events 表，供审计追踪
+
+    `user_id` 必传（T02981）：清理事件没有 task_id 可反查，走活跃用户兜底会让
+    多账号并发下的操作记到别人名下。调用点一律传 `owner_user_id(request)`。
+    """
     try:
         container.repo.save_event({
             "type": f"maintenance.{category}",
             "task_id": None,
+            "user_id": user_id,
             "stage": "cleanup",
             "level": "err" if errors else "info",
             "message": f"清理{category}({target}): {len(cleaned)} 项完成" + (f", {len(errors)} 错误" if errors else ""),

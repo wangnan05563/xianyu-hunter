@@ -33,6 +33,7 @@ from xianyu_hunter.web.services.search_services import (
     DbAdminSearchParams,
     DbAdminSearchService,
 )
+from xianyu_hunter.web.utils import owner_user_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/db-admin", tags=["db-admin"])
@@ -436,6 +437,7 @@ def _log_audit(
     action: str,
     table: str,
     *,
+    user_id: str,
     pk_value: Any = None,
     detail: dict[str, Any] | None = None,
     level: str = "info",
@@ -443,11 +445,16 @@ def _log_audit(
     """审计日志：所有 DML 操作写入 events 表
 
     失败不抛异常（审计日志不应阻塞主流程），由调用方根据业务需要再处理。
+
+    `user_id` 必传（T02981）：审计事件没有 task_id 可反查，走活跃用户兜底会让
+    多账号并发下的操作记到别人名下。调用点一律传 `owner_user_id(request)`，
+    与读侧/通知域同一口径（直通令牌落 default 命名空间）。
     """
     try:
         container.repo.save_event({
             "type": f"db_admin.{action}",
             "task_id": None,
+            "user_id": user_id,
             "stage": "db_admin",
             "level": level,
             "message": f"db_admin.{action} {table}" + (f" pk={pk_value}" if pk_value is not None else ""),
@@ -588,6 +595,7 @@ def list_rows(
 def create_row(
     table: str,
     body: WriteRowBody,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """新增一行：values 中需包含所有 NOT NULL 列（无默认值时）
@@ -617,10 +625,10 @@ def create_row(
             conn.execute(text(sql), values)
     except SQLAlchemyError as e:
         # 唯一约束冲突、外键冲突等都返回 409，提示用户修正数据
-        _log_audit(container, "create_failed", table, detail={"error": str(e), "values": values}, level="err")
+        _log_audit(container, "create_failed", table, user_id=owner_user_id(request), detail={"error": str(e), "values": values}, level="err")
         raise HTTPException(status_code=409, detail=f"写入失败: {e}")
 
-    _log_audit(container, "create", table, detail={"values": values})
+    _log_audit(container, "create", table, user_id=owner_user_id(request), detail={"values": values})
     return {"ok": True, "table": table}
 
 
@@ -660,6 +668,7 @@ def update_row(
     table: str,
     pk_value: str,
     body: WriteRowBody,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """按主键更新一行：pk_value 通过路径传入（支持 String/Integer 主键）
@@ -689,13 +698,13 @@ def update_row(
         with container.repo.engine.begin() as conn:
             result = conn.execute(text(sql), {**values, "pk": pk_val})
     except SQLAlchemyError as e:
-        _log_audit(container, "update_failed", table, pk_value=pk_value, detail={"error": str(e)}, level="err")
+        _log_audit(container, "update_failed", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"error": str(e)}, level="err")
         raise HTTPException(status_code=409, detail=f"更新失败: {e}")
 
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail=f"主键 {pk_value} 不存在")
 
-    _log_audit(container, "update", table, pk_value=pk_value, detail={"values": values})
+    _log_audit(container, "update", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"values": values})
     return {"ok": True, "affected": result.rowcount}
 
 
@@ -703,6 +712,7 @@ def update_row(
 def delete_row(
     table: str,
     pk_value: str,
+    request: Request,
     confirm_token: str = Query(..., description="必须为 CONFIRM_DELETE"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
@@ -732,13 +742,13 @@ def delete_row(
             # 再删主表记录
             result = conn.execute(text(f"DELETE FROM {table} WHERE {pk_col['name']} = :pk"), {"pk": pk_val})
     except SQLAlchemyError as e:
-        _log_audit(container, "delete_failed", table, pk_value=pk_value, detail={"error": str(e)}, level="err")
+        _log_audit(container, "delete_failed", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"error": str(e)}, level="err")
         raise HTTPException(status_code=409, detail=f"删除失败: {e}")
 
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail=f"主键 {pk_value} 不存在")
 
-    _log_audit(container, "delete", table, pk_value=pk_value, detail={"cascade": cascade_affected}, level="warn")
+    _log_audit(container, "delete", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"cascade": cascade_affected}, level="warn")
     return {"ok": True, "affected": result.rowcount, "cascade": cascade_affected}
 
 
@@ -746,6 +756,7 @@ def delete_row(
 def batch_delete_rows(
     table: str,
     body: BatchDeleteBody,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """批量删除（含级联处理）：上限 1000 行/次"""
@@ -775,10 +786,10 @@ def batch_delete_rows(
             )
             result = conn.execute(stmt, {"ids": converted})
     except SQLAlchemyError as e:
-        _log_audit(container, "batch_delete_failed", table, detail={"error": str(e), "count": len(converted)}, level="err")
+        _log_audit(container, "batch_delete_failed", table, user_id=owner_user_id(request), detail={"error": str(e), "count": len(converted)}, level="err")
         raise HTTPException(status_code=409, detail=f"批量删除失败: {e}")
 
-    _log_audit(container, "batch_delete", table, detail={"requested": len(converted), "affected": result.rowcount, "cascade": cascade_affected}, level="warn")
+    _log_audit(container, "batch_delete", table, user_id=owner_user_id(request), detail={"requested": len(converted), "affected": result.rowcount, "cascade": cascade_affected}, level="warn")
     return {"ok": True, "requested": len(converted), "affected": result.rowcount, "cascade": cascade_affected}
 
 
@@ -914,6 +925,7 @@ def _execute_single_import(
 def import_rows(
     table: str,
     body: ImportBody,
+    request: Request,
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     """导入：rows 为二维数组，headers 缺省时按 schema 列顺序
@@ -943,6 +955,7 @@ def import_rows(
 
     _log_audit(
         container, "import", table,
+        user_id=owner_user_id(request),
         detail={"mode": body.mode, "total": len(body.rows), "inserted": inserted, "skipped": skipped, "errors": len(errors)},
         level="warn" if errors else "info",
     )

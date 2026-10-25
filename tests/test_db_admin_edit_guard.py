@@ -24,6 +24,7 @@ from sqlalchemy import create_engine, text
 
 from xianyu_hunter.web.routes import api_db_admin as admin
 from xianyu_hunter.web.routes.api_db_admin import ImportBody, WriteRowBody
+from types import SimpleNamespace
 
 
 # ============== 夹具：临时 SQLite + 白名单内的最小 tasks 表 ==============
@@ -37,6 +38,11 @@ CREATE TABLE tasks (
     region TEXT
 )
 """
+
+
+def _request(user_id: str = "default"):
+    """直调端点时顶替 FastAPI 注入的 Request（真实请求里由鉴权中间件写 state.user_id）"""
+    return SimpleNamespace(state=SimpleNamespace(user_id=user_id))
 
 
 @pytest.fixture
@@ -80,7 +86,7 @@ def _row(engine, pk: str = "t1") -> tuple:
 def test_pk_change_is_rejected_with_named_consequence(container, engine):
     """把主键改成别的值必须 400，且文案点名「不可修改」与替代做法——不许再回 ok"""
     with pytest.raises(HTTPException) as ei:
-        admin.update_row("tasks", "t1", WriteRowBody(values={"id": "t9", "name": "新名"}), container=container)
+        admin.update_row("tasks", "t1", WriteRowBody(values={"id": "t9", "name": "新名"}), request=_request(), container=container)
     assert ei.value.status_code == 400
     detail = ei.value.detail
     assert "主键" in detail and "不可修改" in detail
@@ -90,7 +96,7 @@ def test_pk_change_is_rejected_with_named_consequence(container, engine):
 
 def test_same_pk_in_payload_is_treated_as_unchanged(container, engine):
     """前端表单会带上主键原值：与路径一致时按"未修改主键"处理，其余字段照常更新"""
-    result = admin.update_row("tasks", "t1", WriteRowBody(values={"id": "t1", "name": "新名"}), container=container)
+    result = admin.update_row("tasks", "t1", WriteRowBody(values={"id": "t1", "name": "新名"}), request=_request(), container=container)
     assert result["ok"] is True and result["affected"] == 1
     assert _row(engine)[0] == "新名"
 
@@ -98,7 +104,7 @@ def test_same_pk_in_payload_is_treated_as_unchanged(container, engine):
 def test_only_pk_in_payload_fails_loudly(container):
     """除了主键什么都没改 → 明确「没有可更新字段」，而不是"更新成功 0 个字段\""""
     with pytest.raises(HTTPException) as ei:
-        admin.update_row("tasks", "t1", WriteRowBody(values={"id": "t1"}), container=container)
+        admin.update_row("tasks", "t1", WriteRowBody(values={"id": "t1"}), request=_request(), container=container)
     assert ei.value.status_code == 400
     assert "没有可更新字段" in ei.value.detail
 
@@ -106,7 +112,7 @@ def test_only_pk_in_payload_fails_loudly(container):
 def test_rejected_update_writes_no_success_audit(container):
     """假回执的另一半：被拒绝的写入不得留下 db_admin.update 审计（否则日志看起来成功了）"""
     with pytest.raises(HTTPException):
-        admin.update_row("tasks", "t1", WriteRowBody(values={"id": "t9"}), container=container)
+        admin.update_row("tasks", "t1", WriteRowBody(values={"id": "t9"}), request=_request(), container=container)
     actions = [a["type"] for a in container.repo.audits]
     assert "db_admin.update" not in actions
 
@@ -114,7 +120,7 @@ def test_rejected_update_writes_no_success_audit(container):
 # ============== 4.2-3：可空列真的能置 NULL ==============
 
 def test_explicit_null_clears_nullable_column(container, engine):
-    admin.update_row("tasks", "t1", WriteRowBody(values={"keyword": None, "region": None}), container=container)
+    admin.update_row("tasks", "t1", WriteRowBody(values={"keyword": None, "region": None}), request=_request(), container=container)
     row = _row(engine)
     assert row[1] is None and row[3] is None
     # 未被点名的列保持原值（前端"留空=不改"的口径由此成立）
@@ -124,7 +130,7 @@ def test_explicit_null_clears_nullable_column(container, engine):
 def test_null_on_not_null_column_is_not_swallowed(container):
     """NOT NULL 列传 null 必须报错（409），不能静默改成空串或当作未提交"""
     with pytest.raises(HTTPException) as ei:
-        admin.update_row("tasks", "t1", WriteRowBody(values={"name": None}), container=container)
+        admin.update_row("tasks", "t1", WriteRowBody(values={"name": None}), request=_request(), container=container)
     assert ei.value.status_code == 409
 
 
@@ -141,7 +147,7 @@ def test_schema_exposes_nullable_flag_for_ui_checkbox(container):
 def _import(container, rows, headers, mode="insert"):
     return admin.import_rows(
         "tasks", ImportBody(rows=rows, headers=headers, mode=mode, confirm_token=admin.CONFIRM_TOKEN),
-        container=container,
+        request=_request(), container=container,
     )
 
 
@@ -232,14 +238,14 @@ def test_update_rejects_multi_pk_table(container, engine, monkeypatch):
         conn.execute(text("INSERT INTO task_deps VALUES ('1','2')"))
     monkeypatch.setattr(admin, "ALLOWED_TABLES", tuple(admin.ALLOWED_TABLES) + ("task_deps",))
     with pytest.raises(HTTPException) as ei:
-        admin.update_row("task_deps", "1", WriteRowBody(values={"b": "9"}), container=container)
+        admin.update_row("task_deps", "1", WriteRowBody(values={"b": "9"}), request=_request(), container=container)
     assert "仅支持单主键表" in ei.value.detail
 
 
 def test_value_conversion_error_is_surfaced(container):
     """类型转换失败要说清楚是哪一列，避免用户把「更新失败」当成后端坏了"""
     with pytest.raises(HTTPException) as ei:
-        admin.update_row("tasks", "t1", WriteRowBody(values={"min_price": "abc"}), container=container)
+        admin.update_row("tasks", "t1", WriteRowBody(values={"min_price": "abc"}), request=_request(), container=container)
     assert ei.value.status_code == 400
     assert "字段类型转换失败" in ei.value.detail
 

@@ -41,6 +41,11 @@ class _StubContainer:
         self.repo = _StubRepo(engine)
 
 
+def _request(user_id: str = "default"):
+    """直调端点时顶替 FastAPI 注入的 Request（真实请求里由鉴权中间件写 state.user_id）"""
+    return SimpleNamespace(state=SimpleNamespace(user_id=user_id))
+
+
 @pytest.fixture
 def profile_dir(tmp_path, monkeypatch):
     """把浏览器资料目录指到临时目录，并造出可统计的内容（体积需能让 MB 保留 2 位不为 0）"""
@@ -107,7 +112,7 @@ def test_status_reports_real_profile_and_drops_dead_temp_stat(profile_dir, monke
 def test_cleanup_cache_real_run_removes_configured_profile(profile_dir):
     """执行态真的删掉登录目录，且回执写清「删除后需重新扫码登录」"""
     result = api_maintenance.cleanup_cache(
-        CleanupRequest(target="browser_data", dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="browser_data", dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert result["errors"] == []
     assert not profile_dir.exists()
@@ -117,7 +122,7 @@ def test_cleanup_cache_real_run_removes_configured_profile(profile_dir):
 def test_cleanup_cache_preview_keeps_profile(profile_dir):
     """预览态一条都不能少删"""
     result = api_maintenance.cleanup_cache(
-        CleanupRequest(target="browser_data", dry_run=True), container=_StubContainer(),
+        CleanupRequest(target="browser_data", dry_run=True), request=_request(), container=_StubContainer(),
     )
     assert profile_dir.exists() and (profile_dir / "Local State").exists()
     assert result["dry_run"] is True
@@ -128,7 +133,7 @@ def test_missing_profile_is_not_reported_as_cleaned(tmp_path, monkeypatch):
     """目录不存在时不能追加"已删除"条目——空转报成功就是假回执"""
     monkeypatch.setattr(api_maintenance, "_browser_data_dir", lambda: tmp_path / "never-existed")
     result = api_maintenance.cleanup_cache(
-        CleanupRequest(target="browser_data", dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="browser_data", dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert result["cleaned"] == [] and result["count"] == 0
 
@@ -137,7 +142,7 @@ def test_busy_profile_is_skipped_with_error(profile_dir, monkeypatch):
     """浏览器占用资料目录时拒绝删除（否则会留下半坏的 profile）并显式报错"""
     monkeypatch.setattr(api_maintenance, "_browser_profile_busy", lambda _p: "PID 4321")
     result = api_maintenance.cleanup_cache(
-        CleanupRequest(target="browser_data", dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="browser_data", dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert profile_dir.exists(), "占用中却删了一半＝登录态损坏"
     assert result["cleaned"] == []
@@ -150,7 +155,7 @@ def test_temp_alias_maps_to_pycache(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(api_maintenance, "_iter_pycache_dirs", lambda *a, **k: calls.append("pycache") or [])
     result = api_maintenance.cleanup_cache(
-        CleanupRequest(target="temp", dry_run=True), container=_StubContainer(),
+        CleanupRequest(target="temp", dry_run=True), request=_request(), container=_StubContainer(),
     )
     assert result["target"] == "pycache" and result["requested_target"] == "temp"
     assert result["errors"] == [] and calls == ["pycache"]
@@ -159,7 +164,7 @@ def test_temp_alias_maps_to_pycache(monkeypatch):
 def test_unknown_target_fails_loudly(profile_dir):
     """未知 target 旧实现"什么都不删、返回成功"，现在必须点名报错"""
     result = api_maintenance.cleanup_cache(
-        CleanupRequest(target="webview_data", dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="webview_data", dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert result["count"] == 0 and profile_dir.exists()
     assert "未知的清理范围" in result["errors"][0]
@@ -229,7 +234,7 @@ def db_container():
 
 def test_database_preview_projects_counts_without_deleting(db_container):
     result = api_maintenance.cleanup_database(
-        CleanupRequest(target="all", days=30, dry_run=True), container=db_container,
+        CleanupRequest(target="all", days=30, dry_run=True), request=_request(), container=db_container,
     )
     assert result["dry_run"] is True
     assert result["total_deleted"] == 5, "预览必须回带预计条数（3 事件 + 1 商品 + 1 已售关联）"
@@ -240,7 +245,7 @@ def test_database_preview_projects_counts_without_deleting(db_container):
 
 def test_database_real_run_deletes_and_reports(db_container):
     result = api_maintenance.cleanup_database(
-        CleanupRequest(target="old_events", days=30, dry_run=False), container=db_container,
+        CleanupRequest(target="old_events", days=30, dry_run=False), request=_request(), container=db_container,
     )
     assert result["total_deleted"] == 3
     with db_container.repo.engine.connect() as conn:
@@ -262,7 +267,7 @@ def log_dir(tmp_path, monkeypatch):
 
 def test_logs_preview_projects_freed_mb(log_dir):
     result = api_maintenance.cleanup_logs(
-        CleanupRequest(target="old_logs", days=7, dry_run=True), container=_StubContainer(),
+        CleanupRequest(target="old_logs", days=7, dry_run=True), request=_request(), container=_StubContainer(),
     )
     assert result["total_freed_mb"] > 0, "预览态旧实现恒返回 0，前端只能显示「释放 0 MB」"
     assert log_dir / "app.2020-01-01.log" in list(log_dir.iterdir())
@@ -274,7 +279,7 @@ def test_real_cleanup_invalidates_status_cache(log_dir):
         web_cache.time.monotonic(), {"stale": True},
     )
     result = api_maintenance.cleanup_logs(
-        CleanupRequest(target="old_logs", days=7, dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="old_logs", days=7, dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert result["cleaned"] and not result["errors"]
     assert not list(log_dir.iterdir())
@@ -287,7 +292,7 @@ def test_preview_does_not_invalidate_cache(log_dir):
         web_cache.time.monotonic(), {"keep": True},
     )
     api_maintenance.cleanup_logs(
-        CleanupRequest(target="old_logs", days=7, dry_run=True), container=_StubContainer(),
+        CleanupRequest(target="old_logs", days=7, dry_run=True), request=_request(), container=_StubContainer(),
     )
     assert web_cache._cache_store
     web_cache._cache_store.clear()
@@ -345,14 +350,14 @@ def test_pycache_scan_finds_source_dirs_and_skips_excluded(scan_tree):
 def test_pycache_cleanup_preview_and_real_run_hit_real_dirs(scan_tree):
     """清理缓存（pycache）预览要列出目录、执行要真删——不能只给「已清理 0 项」的漂亮回执"""
     preview = api_maintenance.cleanup_cache(
-        CleanupRequest(target="pycache", dry_run=True), container=_StubContainer(),
+        CleanupRequest(target="pycache", dry_run=True), request=_request(), container=_StubContainer(),
     )
     assert preview["dry_run"] is True and preview["count"] == 2
     assert all(c.startswith("[预览]") for c in preview["cleaned"])
     assert (scan_tree / "pkg" / "__pycache__").exists(), "预览不得删除任何东西"
 
     run = api_maintenance.cleanup_cache(
-        CleanupRequest(target="pycache", dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="pycache", dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert run["errors"] == [] and run["count"] == 2
     assert not (scan_tree / "pkg" / "__pycache__").exists()
@@ -367,7 +372,7 @@ def test_pycache_real_run_reports_locked_dir_instead_of_fake_success(scan_tree, 
 
     monkeypatch.setattr(api_maintenance.shutil, "rmtree", _boom)
     run = api_maintenance.cleanup_cache(
-        CleanupRequest(target="pycache", dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="pycache", dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert run["cleaned"] == [] and run["errors"], "被占用却报已清理＝假回执"
     assert (scan_tree / "pkg" / "__pycache__").exists()
@@ -407,7 +412,7 @@ def test_frozen_build_explicit_pycache_cleanup_fails_loudly(scan_tree, monkeypat
     """显式请求 pycache 时不能回「已清理 0 项」的成功回执，必须说明不适用"""
     monkeypatch.setattr(api_maintenance, "is_frozen", lambda: True)
     run = api_maintenance.cleanup_cache(
-        CleanupRequest(target="pycache", dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="pycache", dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert run["count"] == 0 and run["errors"], "打包版这一档没有任何可删对象，不能报成功"
     assert "不适用" in run["errors"][0]
@@ -418,7 +423,7 @@ def test_frozen_build_all_still_cleans_browser_data_quietly(profile_dir, monkeyp
     """打包版「全部缓存」只剩浏览器数据：该删的要删，且不该为不适用档报错"""
     monkeypatch.setattr(api_maintenance, "is_frozen", lambda: True)
     run = api_maintenance.cleanup_cache(
-        CleanupRequest(target="all", dry_run=False), container=_StubContainer(),
+        CleanupRequest(target="all", dry_run=False), request=_request(), container=_StubContainer(),
     )
     assert run["errors"] == [], "全部缓存里跳过不适用档不算失败"
     assert run["count"] == 1 and "已删除" in run["cleaned"][0]
