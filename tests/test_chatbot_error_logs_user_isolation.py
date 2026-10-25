@@ -15,6 +15,7 @@ chat 路由 → orchestrator → Agent → ToolRegistry → GetErrorLogsTool。
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -82,6 +83,24 @@ def test_llm_supplied_user_id_is_ignored(repo, registry):
     )
 
     assert _paths(result) == ["/api/tasks/alice-1"]
+
+
+def test_tool_results_are_json_serializable(repo, registry):
+    """仓储行里的 datetime 必须在注册表统一转字符串
+
+    结果既回填 LLM 消息也进 SSE tool_result，两处都要 json.dumps；
+    T02984 实测：不转换时 get_task_status 查到任务就抛 TypeError。
+    """
+    repo.upsert_task({
+        "id": "t1", "name": "n", "keyword": "kw", "cron": "*/5 * * * *",
+        "status": "active", "user_id": "default",
+        "min_price": None, "max_price": None, "notifier_channels": None,
+    })
+
+    result = asyncio.run(registry.call("get_task_status", task_id="t1"))
+
+    assert result.success is True
+    json.dumps(result.to_dict(), ensure_ascii=False)
 
 
 def _fake_agent(registry) -> Agent:

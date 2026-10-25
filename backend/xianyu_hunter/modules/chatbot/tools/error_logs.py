@@ -12,7 +12,6 @@ stack_trace / request_headers 等可能含敏感信息的字段也会被处理�
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from xianyu_hunter.modules.chatbot.tools.base import BaseTool, ToolResult
@@ -79,10 +78,6 @@ class GetErrorLogsTool(BaseTool):
             limit=limit,
             user_id=caller_user_id,
         )
-        # 行里的 timestamp / created_at 是 datetime，而 ToolResult 随后会被
-        # json.dumps 序列化（回填 LLM 消息 + SSE tool_result 事件）；不转成
-        # 字符串的话，工具只要查到任意一行就会抛 TypeError
-        logs = json.loads(json.dumps(logs, ensure_ascii=False, default=str))
 
         return ToolResult(
             success=True,

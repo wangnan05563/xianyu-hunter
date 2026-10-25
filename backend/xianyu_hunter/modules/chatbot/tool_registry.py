@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from loguru import logger
@@ -139,11 +140,21 @@ class ToolRegistry:
         if isinstance(result, ToolResult) and result.data is not None:
             result = ToolResult(
                 success=result.success,
-                data=self._filter_sensitive(result.data),
+                data=self._json_safe(self._filter_sensitive(result.data)),
                 error=result.error,
                 duration_ms=result.duration_ms,
             )
         return result
+
+    @staticmethod
+    def _json_safe(data: dict) -> dict:
+        """把结果收敛成可 JSON 序列化的形态
+
+        工具常直接返回仓储行，timestamp / created_at 是 datetime；这些结果随后
+        既回填 LLM 消息也进 SSE tool_result 事件，都要 json.dumps。不在这里统一
+        转换的话，工具只要查到数据就会抛 TypeError（T02984 实测）。
+        """
+        return json.loads(json.dumps(data, ensure_ascii=False, default=str))
 
     def _filter_sensitive(self, data: dict) -> dict:
         """递归过滤工具返回数据中的敏感字段
