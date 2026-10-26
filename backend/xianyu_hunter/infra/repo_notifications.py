@@ -26,7 +26,7 @@ class NotificationsMixin:
         reset_read: bool = True,
         user_id: str = "default",
     ) -> dict:
-        """创建或更新一条业务通知（同 dedup_key 视为同一业务事件）"""
+        """创建或更新一条业务通知（同一用户内同 dedup_key 视为同一业务事件）"""
         from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
         # NotificationRow.user_id 是 NOT NULL，而列 default 只兜"不传参"、不兜"显式传 None"
@@ -48,7 +48,9 @@ class NotificationsMixin:
                 user_id=user_id,
             )
             stmt = stmt.on_conflict_do_update(
-                index_elements=["dedup_key"],
+                # 去重范围是「同一用户内的同一业务事件」（T02814）：约束为
+                # UNIQUE(user_id, dedup_key)，两个用户触发同一 dedup_key 各占一行
+                index_elements=["user_id", "dedup_key"],
                 set_={
                     "level": stmt.excluded.level,
                     "category": stmt.excluded.category,
@@ -59,12 +61,16 @@ class NotificationsMixin:
                     # reset_read=False → 保留原值（引用现有行的 read_at）
                     "read_at": None if reset_read else NotificationRow.read_at,
                     "created_at": stmt.excluded.created_at,
-                    # 不更新 user_id：避免不同用户触发同 dedup_key 时归属权被覆盖
+                    # 冲突键里已含 user_id，同行必然同用户，user_id 不需要也不应该被改写
                 },
             )
             conn.execute(stmt)
+            # 读取也要带 user_id：只按 dedup_key 查会拿到别的用户那行（T02814）
             row = conn.execute(
-                select(NotificationRow).where(NotificationRow.dedup_key == dedup_key)
+                select(NotificationRow).where(
+                    NotificationRow.dedup_key == dedup_key,
+                    NotificationRow.user_id == user_id,
+                )
             ).first()
         return self._row_to_dict(row) if row else {}
 

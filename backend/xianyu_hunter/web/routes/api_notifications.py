@@ -15,10 +15,9 @@
   日志是只读场景，通知有改侧，放开读侧就会连带放开改侧或制造 404。
 通知行的 user_id 是 NOT NULL，owner_user_id 保证创建侧永远拿到非空值。
 
-⚠ 尚未收口的结构性残留（已建派生单）：`notifications` 表上是
-UNIQUE(dedup_key) 而非 UNIQUE(user_id, dedup_key)，跨用户的同名 dedup_key 会
-互相抢占同一行（先写者持有归属），所以"按用户隔离"目前只在常规 key 形态下成立
-（订单号/商品 ID 天然不撞）。
+去重范围是「同一用户内的同一业务事件」：`notifications` 表约束为
+UNIQUE(user_id, dedup_key)（T02814），两个用户触发同一 dedup_key 各占一行，
+后写者不会抢占先写者的归属。旧库由 `init_db` 里的表重建迁移换掉全局唯一约束。
 """
 from __future__ import annotations
 

@@ -362,11 +362,14 @@ class TaskDepRow(Base):
 # - notifications：业务性提醒（订单超时待支付、登录态失效、配置回滚），低频、
 #   持久化、区分已读/未读、支持点击跳转
 # dedup_key：同业务事件去重（避免同一订单超时被反复告警），升级阈值时换 key
-# UNIQUE(dedup_key)：同 dedup_key 只保留最新一条
+# UNIQUE(user_id, dedup_key)：去重只在同一用户内生效（T02814）
+# 为什么不是 UNIQUE(dedup_key)：dedup_key 由业务事件本身生成（订单号/商品 ID），
+# 两个用户触发同一事件时全局唯一会让后写者命中先写者的行——后写者的通知在自己列表里
+# 看不到、文案还会覆掉前一个人的。init_db 里有表重建迁移把旧库的全局唯一约束换掉。
 class NotificationRow(Base):
     __tablename__ = "notifications"
     __table_args__ = (
-        UniqueConstraint("dedup_key", name="uq_notification_dedup"),
+        UniqueConstraint("user_id", "dedup_key", name="uq_notification_dedup"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -968,6 +971,9 @@ def init_db(db_path: str = "data/xianyu.db") -> None:
     # items(first_seen)：清理旧商品、列表按首次发现时间排序的覆盖索引
     # （task_links(link_type) 已由 ix_task_links_type_key 的左前缀覆盖，无需重复建）
     _migrate_create_index(engine, "events", "ix_events_created_type", "created_at, type")
+    # T02814：通知去重从全局唯一改为人内唯一。必须放在所有 notifications 索引创建之前——
+    # 重建中断时同名索引可能还挂在 notifications_old 上，先收尾再建索引才不会撞名。
+    _migrate_notifications_dedup_per_user(engine)
     _migrate_create_index(engine, "notifications", "ix_notifications_user_read", "user_id, read_at")
     _migrate_create_index(engine, "items", "ix_items_first_seen", "first_seen")
 
@@ -1244,5 +1250,117 @@ def _migrate_make_column_nullable(engine: Engine, table: str, column: str) -> No
             logger.error(f"{table} 表恢复失败，请手动检查: {recover_err}")
             raise RuntimeError(
                 f"数据库迁移失败且无法恢复：{table} 表可能丢失。"
+                f"迁移错误: {e}; 恢复错误: {recover_err}"
+            ) from recover_err
+
+
+_NOTIFICATION_INDEXES = (
+    ("ix_notifications_created_at", "created_at"),
+    ("idx_notifications_user", "user_id"),
+    ("ix_notifications_user_read", "user_id, read_at"),
+)
+
+
+def _migrate_notifications_dedup_per_user(engine: Engine) -> None:
+    """把通知表旧的 UNIQUE(dedup_key) 换成 UNIQUE(user_id, dedup_key)（T02814）
+
+    为什么必须重建：SQLite 不支持 ALTER/DROP 表级 UNIQUE 约束，只能
+    rename → 按 ORM 定义建新表 → 复制列交集 → drop 旧表。
+
+    为什么每一步都做成幂等：pysqlite 对 DDL 是隐式提交的，engine.begin()
+    回滚不了已经执行的 RENAME/CREATE。中途失败会留下 notifications 与
+    notifications_old 并存的状态，下次启动必须能接着收尾，不能把旧表的行丢掉。
+
+    检测：建表语句归一空白后仍含单列 `UNIQUE (dedup_key)`
+    （联合唯一写作 `UNIQUE (user_id, dedup_key)`，不会误判）；或存在
+    notifications_old（上次重建中断的残留）。
+    回填：旧库里同一 dedup_key 只可能有一行（约束保证），复制过去天然满足新约束。
+    """
+    orm_table = Base.metadata.tables.get("notifications")
+    if orm_table is None:
+        logger.error("ORM 中未找到 notifications 表定义，跳过迁移")
+        return
+
+    with engine.connect() as conn:
+        tables = {
+            r[0] for r in conn.execute(sa_text(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )).all()
+        }
+        ddl = ""
+        if "notifications" in tables:
+            row = conn.execute(sa_text(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'"
+            )).first()
+            ddl = re.sub(r"\s+", " ", (row[0] if row else "")).upper().replace("UNIQUE(", "UNIQUE (")
+
+    needs_rebuild = "UNIQUE (DEDUP_KEY)" in ddl
+    leftover = "notifications_old" in tables
+    if not needs_rebuild and not leftover:
+        return
+
+    if needs_rebuild:
+        logger.warning("检测到 notifications 仍是 UNIQUE(dedup_key)，将重建表以改为 (user_id, dedup_key)")
+    if leftover:
+        logger.warning("检测到上次重建遗留的 notifications_old，继续收尾复制")
+
+    from sqlalchemy.exc import SQLAlchemyError
+    try:
+        if needs_rebuild and not leftover:
+            with engine.begin() as conn:
+                conn.execute(sa_text("ALTER TABLE notifications RENAME TO notifications_old"))
+
+        with engine.begin() as conn:
+            # 旧表上的索引跟随 RENAME 保留了原索引名（索引名全库唯一），不释放的话
+            # 建新表时会撞 "index ix_notifications_user_read already exists"
+            for idx_row in conn.execute(sa_text("PRAGMA index_list(notifications_old)")).all():
+                idx_name = str(idx_row[1])
+                if not idx_name.startswith("sqlite_autoindex"):
+                    conn.execute(sa_text(f'DROP INDEX IF EXISTS "{idx_name}"'))
+            orm_table.create(conn, checkfirst=True)
+            old_cols = {
+                c[1] for c in conn.execute(sa_text("PRAGMA table_info(notifications_old)")).all()
+            }
+            common_cols = [c for c in orm_table.columns if c.name in old_cols]
+            col_list = ", ".join(f'"{c.name}"' for c in common_cols)
+            # OR IGNORE：上次中断可能已复制过一部分，按主键去重，重复执行安全
+            conn.execute(sa_text(
+                f"INSERT OR IGNORE INTO notifications ({col_list}) "
+                f"SELECT {col_list} FROM notifications_old"
+            ))
+            missing = int(conn.execute(sa_text(
+                "SELECT COUNT(*) FROM notifications_old o WHERE NOT EXISTS "
+                "(SELECT 1 FROM notifications n WHERE n.id = o.id)"
+            )).scalar() or 0)
+            if missing:
+                # 宁可留在「新旧表并存」也不删旧表：调用方还有机会人工核对
+                logger.error(
+                    f"notifications 复制后仍有 {missing} 行未迁移，保留 notifications_old 不删除"
+                )
+                return
+            conn.execute(sa_text("DROP TABLE notifications_old"))
+
+        for name, cols in _NOTIFICATION_INDEXES:
+            _migrate_create_index(engine, "notifications", name, cols)
+        logger.info("notifications 去重约束已迁移为 UNIQUE(user_id, dedup_key)")
+    except SQLAlchemyError as e:
+        logger.error(f"notifications 去重约束迁移失败: {e}")
+        # 新表还没建出来、旧表还在：改名回去，至少保证旧代码能继续跑
+        try:
+            with engine.connect() as conn:
+                has_new = conn.execute(sa_text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='notifications'"
+                )).first()
+                has_old = conn.execute(sa_text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='notifications_old'"
+                )).first()
+                if not has_new and has_old:
+                    conn.execute(sa_text("ALTER TABLE notifications_old RENAME TO notifications"))
+                    conn.commit()
+                    logger.warning("notifications 表已从 notifications_old 恢复")
+        except Exception as recover_err:
+            logger.error(f"notifications 表恢复失败，请手动检查: {recover_err}")
+            raise RuntimeError(
+                f"数据库迁移失败且无法恢复：notifications 表可能丢失。"
                 f"迁移错误: {e}; 恢复错误: {recover_err}"
             ) from recover_err
