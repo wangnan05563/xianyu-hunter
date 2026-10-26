@@ -42,8 +42,13 @@ class FakeRepo:
         self.since_calls.append(since)
         return self.used_today
 
-    def upsert_order(self, order):
+    def upsert_order(self, order, user_id=None):
+        if user_id is not None and "user_id" not in order:
+            order["user_id"] = user_id
         self.orders.append(order)
+
+    def get_task(self, task_id, user_id=None):
+        return None
 
     def save_event(self, event):
         self.events.append(event)

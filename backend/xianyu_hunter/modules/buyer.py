@@ -38,6 +38,13 @@ from xianyu_hunter.domain.order import (
 )
 from xianyu_hunter.domain.urls import build_item_url
 from xianyu_hunter.infra.logger import get_logger
+
+
+def _order_owner_user_id(repo, task_id: str) -> str | None:
+    """订单归属按 task_id 反查（T02832）：自动抢单写入要落到任务所有者名下"""
+    task = repo.get_task(task_id)
+    return (task or {}).get("user_id") or None
+
 from xianyu_hunter.infra.repository import Repository
 from xianyu_hunter.infra.selectors import SelectorRepo
 from xianyu_hunter.modules.buyer_config import BuyerConfig
@@ -251,7 +258,8 @@ class Buyer:
                 return BuyResult(outcome=BuyOutcome.FAILED, error=str(e))
 
             # 5. 持久化 + 发布事件
-            self.repo.upsert_order(order)
+            # T02832：归属按 task_id 反查，自动抢单的订单必须落在任务所有者名下
+            self.repo.upsert_order(order, user_id=_order_owner_user_id(self.repo, task_id))
             self._task_item_set[key] = None
             self._last_buy_at = time.monotonic()
             self._publish_buy_succeeded(task_id, item_id, order)
@@ -286,7 +294,7 @@ class Buyer:
                 "type": "dry_run",
                 "error": "演练中止：已到订单确认页，提交订单前硬停止",
                 "created_at": _utcnow(),
-            })
+            }, user_id=_order_owner_user_id(self.repo, task_id))
         except Exception:  # noqa: BLE001
             logger.exception("[Buyer] 演练报告写入失败（不影响演练结果）")
 
@@ -1174,7 +1182,7 @@ class Buyer:
                 "status": OrderStatus.FAILED.value,
                 "error": error[:500],
                 "created_at": _utcnow(),
-            })
+            }, user_id=_order_owner_user_id(self.repo, task_id))
         except Exception:  # noqa: BLE001
             logger.exception("[Buyer] 持久化失败订单失败")
 
@@ -1182,8 +1190,7 @@ class Buyer:
         if not self.bus:
             return
         # 多用户隔离：通过 task_id 反查 user_id，确保只查到本任务所属用户的商品
-        task = self.repo.get_task(task_id)
-        user_id = task.get("user_id") if task else None
+        user_id = _order_owner_user_id(self.repo, task_id)
         item = self.repo.get_item(item_id, user_id=user_id) or {}
         self.bus.publish_nowait(
             Event(

@@ -27,7 +27,9 @@ class FakeRepo:
     def find_order_by_task_item(self, task_id, item_id):
         return self._db_orders.get((task_id, item_id))
 
-    def upsert_order(self, order):
+    def upsert_order(self, order, user_id=None):
+        if user_id is not None and "user_id" not in order:
+            order["user_id"] = user_id
         self.orders.append(order)
 
     def get_task(self, task_id):

@@ -229,8 +229,10 @@ class FakeRepository:
                 return o
         return None
 
-    def upsert_order(self, order: dict) -> None:
-        # 简化：直接 append
+    def upsert_order(self, order: dict, user_id: str | None = None) -> None:
+        # 对齐真实 Repository：user_id 非 None 时注入归属（T02832 抢单写入按 task_id 反查）
+        if user_id is not None and "user_id" not in order:
+            order["user_id"] = user_id
         self.orders.append(dict(order))
 
     # 真实 Repository.get_item 带 user_id 参数做多用户隔离，fake 必须对齐签名，避免传入时 TypeError
@@ -553,3 +555,53 @@ async def test_throttle_between_orders() -> None:
     elapsed = time.monotonic() - t0
     # 第二次应至少等 0.3s
     assert elapsed >= 0.28, f"节流未生效，elapsed={elapsed}"
+
+
+# ============== T02832：订单归属按 task_id 反查 ==============
+
+
+@pytest.mark.asyncio
+async def test_buy_success_order_carries_task_owner() -> None:
+    """自动抢单成功：订单必须落在任务所有者名下，而不是仓库层默认命名空间"""
+    scenario = _BuyScenario(actual_price=1999.0)
+    buyer, repo, browser, _ = make_buyer(scenario)
+    repo.tasks["t1"] = {"id": "t1", "user_id": "alice"}
+
+    await buyer.buy(task_id="t1", item_id="i1", expected_price=1999.0, page=browser.page)
+
+    assert repo.orders[0]["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_buy_failed_order_carries_task_owner() -> None:
+    """失败订单同样按任务归属，否则用户在失败列表里看不到自己任务的失败单"""
+    scenario = _BuyScenario(buy_button_missing=True)
+    buyer, repo, browser, _ = make_buyer(scenario)
+    repo.tasks["t1"] = {"id": "t1", "user_id": "alice"}
+
+    await buyer.buy(task_id="t1", item_id="i1", expected_price=1999.0, page=browser.page)
+
+    assert repo.orders[0]["status"] == "failed"
+    assert repo.orders[0]["user_id"] == "alice"
+
+
+def test_dry_run_order_carries_task_owner() -> None:
+    """演练报告写 orders 表，归属同样跟任务走"""
+    buyer, repo, _, _ = make_buyer(_BuyScenario())
+    repo.tasks["t1"] = {"id": "t1", "user_id": "alice"}
+
+    buyer._record_dry_run_order("t1", "i1", 1999.0, {})
+
+    assert repo.orders[0]["type"] == "dry_run"
+    assert repo.orders[0]["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_buy_owner_missing_keeps_none() -> None:
+    """任务查不到（已删/离线）时不伪造归属，保持 upsert_order(user_id=None) 的默认语义"""
+    scenario = _BuyScenario(actual_price=1999.0)
+    buyer, repo, browser, _ = make_buyer(scenario)
+
+    await buyer.buy(task_id="t1", item_id="i1", expected_price=1999.0, page=browser.page)
+
+    assert "user_id" not in repo.orders[0]

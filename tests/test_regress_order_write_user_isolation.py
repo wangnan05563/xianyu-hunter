@@ -135,10 +135,11 @@ def test_insert_path_stamps_user_id_when_caller_passes_dict_without_it(repo) -> 
 
 # ==================== 2. user_id=None：系统写入路径不能被过滤误伤 ====================
 def test_none_user_id_updates_any_users_row(repo) -> None:
-    """调度器/抢单（modules/buyer.py 三处）调用 `upsert_order(order)` 不带 user_id。
+    """仓库层兜底：`upsert_order(order)` 不带 user_id 时不加 WHERE 过滤、不注入归属。
 
-    此时必须**不加** WHERE 过滤：这些写入点不认识「当前请求身份」，
-    一旦给它兜个 default，自动抢单对已有订单行的状态回写会静默失效。
+    自动抢单已改为按 task_id 反查后显式传 user_id（T02832），这条语义留给
+    不认识「当前请求身份」的其他系统调用方；一旦给它兜个 default，
+    对已有订单行的状态回写会静默失效。
     """
     _mk_order(repo, "o1", BOB, status="pending_pay")
     row = repo.get_order("o1")
@@ -152,11 +153,10 @@ def test_none_user_id_updates_any_users_row(repo) -> None:
 
 
 def test_none_user_id_new_row_lands_in_default_namespace(repo) -> None:
-    """如实记录系统写入的归属：不带 user_id 建新行 → 落列 default（列的 server_default 兜住）
+    """仓库层兜底语义：不带 user_id 建新行 → 落列 default（列的 server_default 兜住）
 
-    这条不是「期望行为」而是现状：自动抢单产生的订单归 default，
-    真实 session 用户（alice）在订单列表看不到自己任务抢到的单。
-    要不要按任务归属改写，属另一单的口径裁决，本文件先把它钉成可见事实。
+    自动抢单/失败单/演练报告已改为按 task_id 反查归属（T02832 裁决 A），
+    不再依赖这条默认；剩余的系统级写入若拿不到归属，仍落 default。
     """
     repo.upsert_order({"id": "sys1", "item_id": "i1", "status": "pending_pay"})
 
