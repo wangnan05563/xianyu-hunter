@@ -1,0 +1,45 @@
+{
+  "project": {
+    "name": "XianyuHunter",
+    "repo": "wangnan05563/xianyu-hunter"
+  },
+  "runtime": {
+    "python_candidates": [
+      "%USERPROFILE%\\.workbuddy\\binaries\\python\\versions\\3.13.12\\python.exe",
+      "python",
+      "python3"
+    ]
+  },
+  "build_pipeline": {
+    "steps": [
+      {
+        "name": "Bump build version (pyproject + __init__)",
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"__SCRIPTS__\\update-build-version.ps1\"",
+        "on_fail": "stop"
+      },
+      {
+        "name": "Build EXE (PyInstaller) + Inno Setup installer",
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"__SCRIPTS__\\build-exe.ps1\"",
+        "on_fail": "stop"
+      }
+    ]
+  },
+  "github_release": {
+    "enabled": true,
+    "repo": "wangnan05563/xianyu-hunter",
+    "asset": {
+      "dir": "release",
+      "glob": "XianyuHunter-Setup-v*.exe",
+      "exclude_patterns": ["arm64", ".blockmap"]
+    },
+    "notes": {
+      "path_template": "release-notes-<VER>.md",
+      "auto_generate": true,
+      "auto_generate_git_log": "--no-merges --oneline -20"
+    },
+    "publish_script": "scripts\\publish-release.py",
+    "dry_run": false,
+    "draft": false,
+    "prerelease": false
+  }
+}
