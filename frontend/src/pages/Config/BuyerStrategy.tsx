@@ -294,7 +294,7 @@ export default function BuyerStrategy() {
                 style={{ width: '100%' }}
               />
               <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 4, marginBottom: 0 }}>
-                0＝不限制（默认）。非 0 时在提交订单前拦截：按 UTC 自然日计数，与仪表盘「今日订单」同一口径；
+                0＝不限制（默认）。非 0 时在提交订单前拦截：按 UTC 自然日计数、所有账号合计，与仪表盘「今日订单」同一口径；
                 只统计真实落单，演练（dry_run）不占额度。保存后即生效，无需重启。
               </Paragraph>
             </div>
@@ -383,7 +383,7 @@ export default function BuyerStrategy() {
             {(config.buyer.max_orders_per_day ?? 0) > 0 ? (
               <Text>
                 已启用，当前 <strong>{config.buyer.max_orders_per_day}</strong> 次/日
-                （UTC 自然日，仅计真实落单）
+                （UTC 自然日，所有账号合计，仅计真实落单）
               </Text>
             ) : (
               <Text type="warning">未设置（不限制）——可在上方「抢单运行时参数」设定</Text>

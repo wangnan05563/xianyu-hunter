@@ -513,7 +513,7 @@ class BuyerRuntimeConfig(BaseModel):
     # 不给未经同意的刹车（PRD §8 决策 2）；非 0 时在 Buyer.buy() 落单前硬拦。
     max_orders_per_day: int = Field(
         0, ge=0, le=10000,
-        description="UTC 自然日内最多真实落单次数，0＝不限制（不计演练 dry_run 记录）",
+        description="UTC 自然日内所有账号合计的最多真实落单次数，0＝不限制（不计演练 dry_run 记录）",
     )
     # 人工接管超时：闲鱼"待付款"订单默认 30 分钟自动关闭，
     # 留足时间给用户切到 App 完成支付，又不至于无限等待
