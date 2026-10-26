@@ -1,6 +1,7 @@
 import { Spin, Empty, Pagination } from 'antd'
 import type { TimelineEntry } from '../../../api'
 import { ORDER_STATUS } from '../../../constants/orderStatus'
+import { LOG_LEVEL } from '../../../constants/logLevels'
 import { formatShortDateTime } from '../../../utils/timeFormat'
 import TimelineItem from './TimelineItem'
 
@@ -41,9 +42,9 @@ export default function TimelineList({
                 if (status === ORDER_STATUS.SUCCEEDED) dotColor = '#52c41a'
                 else if (status === ORDER_STATUS.FAILED) dotColor = '#ff4d4f'
                 else if (status === ORDER_STATUS.PENDING_PAY || status === ORDER_STATUS.TAKEOVER_PENDING) dotColor = '#faad14'
-              } else if (level === 'error' || level === 'err' || eventType === 'buy.failed') {
+              } else if (level === LOG_LEVEL.ERROR || eventType === 'buy.failed') {
                 dotColor = '#ff4d4f'
-              } else if (level === 'warning' || level === 'warn') {
+              } else if (level === LOG_LEVEL.WARNING) {
                 dotColor = '#faad14'
               } else if (eventType.startsWith('eval.passed') || eventType === 'buy.succeeded') {
                 dotColor = '#52c41a'
@@ -52,8 +53,8 @@ export default function TimelineList({
               const dotIcon = (() => {
                 // 订单类固定购物车图标；其余按日志级别选 emoji
                 if (isOrder) return '🛒'
-                if (level === 'error' || level === 'err') return '🔴'
-                if (level === 'warning' || level === 'warn') return '🟠'
+                if (level === LOG_LEVEL.ERROR) return '🔴'
+                if (level === LOG_LEVEL.WARNING) return '🟠'
                 return '📌'
               })()
 

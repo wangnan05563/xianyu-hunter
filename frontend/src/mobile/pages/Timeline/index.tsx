@@ -9,6 +9,7 @@ import { useFailedSources } from '../../../hooks/useFailedSources'
 import LoadFailedBar from '../../components/LoadFailedBar'
 import PullToRefresh from '../../components/PullToRefresh'
 import { eventTypeLabel } from '../../../constants/eventTypes'
+import { LOG_LEVEL } from '../../../constants/logLevels'
 
 // 时间线精简版：聚合订单事件与系统事件为统一时间线
 // 移动端不提供筛选（精简版），仅展示最近 50 条
@@ -62,16 +63,17 @@ export default function MobileTimeline() {
           const cardTitle = entry.title || entry.item_title || eventTypeLabel(entry.type) || '事件'
           // 时间格式化交给宿主 Intl，避免引入 dayjs 增大移动端 bundle
           const timeText = entry._ts ? formatDateTime(entry._ts) : ''
-          // Tag 颜色：订单事件=绿色，level 字段优先于其他判定（warning/err 是系统级严重度）
+          // Tag 颜色：订单事件=绿色，level 字段优先于其他判定（level 自 T02683 起为小写全词）
+          const level = (entry.level || '').toLowerCase()
           let tagColor = 'blue'
           let tagText = '事件'
           if (entry._kind === 'order') {
             tagColor = 'green'
             tagText = '订单'
-          } else if (entry.level === 'warn') {
+          } else if (level === LOG_LEVEL.WARNING) {
             tagColor = 'orange'
             tagText = '警告'
-          } else if (entry.level === 'err') {
+          } else if (level === LOG_LEVEL.ERROR) {
             tagColor = 'red'
             tagText = '错误'
           }

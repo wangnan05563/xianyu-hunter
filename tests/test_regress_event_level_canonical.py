@@ -77,3 +77,32 @@ def test_histogram_counts_canonical_words() -> None:
         {"level": "info", "stage": "notify"},
     ]
     assert _count_event_levels(events) == (1, 1, 1)
+
+
+# 时间轴是 events.level 的读侧：移动端曾只认 warn/err，归一后严重度整段失效
+TIMELINE_LEVEL_FILES = (
+    "frontend/src/pages/Timeline/components/TimelineList.tsx",
+    "frontend/src/pages/Timeline/components/TimelineItem.tsx",
+    "frontend/src/mobile/pages/Timeline/index.tsx",
+)
+
+
+def _frontend_code_lines(rel: str) -> str:
+    return "\n".join(
+        line
+        for line in (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith(("//", "*", "/*"))
+    )
+
+
+def test_frontend_timeline_reads_canonical_levels() -> None:
+    for rel in TIMELINE_LEVEL_FILES:
+        code = _frontend_code_lines(rel)
+        assert not re.search(r"level\s*===?\s*[\"'](warn|err)[\"']", code), (
+            f"{rel} 仍在按旧缩写判断严重度"
+        )
+    severity = _frontend_code_lines("frontend/src/constants/eventTypes.ts")
+    assert not re.search(r"^\s*(warn|err)\s*:", severity, re.M), (
+        "SEVERITY_CONFIG 又长回了 warn/err 别名键"
+    )
+

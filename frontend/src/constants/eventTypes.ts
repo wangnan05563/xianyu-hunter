@@ -199,8 +199,6 @@ export const ENUM_TO_DOT: Record<string, string> = {
 // ===== Timeline：日志严重度配置（含颜色与图标）=====
 export const SEVERITY_CONFIG: Record<string, { color: string; icon: ReactNode }> = {
   error: { color: 'red', icon: createElement(CloseCircleOutlined) },
-  err: { color: 'red', icon: createElement(CloseCircleOutlined) },
   warning: { color: 'orange', icon: createElement(ExclamationCircleOutlined) },
-  warn: { color: 'orange', icon: createElement(ExclamationCircleOutlined) },
   info: { color: 'blue', icon: createElement(InfoCircleOutlined) },
 }
