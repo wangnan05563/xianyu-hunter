@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -34,6 +34,46 @@ def _get_takeover_timeout_min() -> int:
 
 # S1192: 提取重复的错误消息常量
 _ORDER_NOT_FOUND = "订单不存在"
+
+# 裸日期串长度（YYYY-MM-DD）；短串按「整天」补齐边界用
+_DATE_ONLY_LEN = 10
+
+
+def _parse_order_time_bound(value: str, *, field: str, is_end: bool) -> datetime:
+    """把订单列表的日期参数解析成 UTC 边界（T02829 ①，口径中立部分）
+
+    为什么这里不认「今天」：全应用「今日」按本地日还是 UTC 日属 T02734 未裁决的
+    产品口径。本参数只收调用方算好的时间点，裁决完只需改前端发哪一天，
+    后端语义不用跟着翻（带时区的 ISO 串按自身时区换算到 UTC，裸日期按 UTC 日界）。
+
+    无法解析直接 422：静默丢弃会让「筛选没生效」和「本来就没数据」在 UI 上分不开
+    ——与 status / sort_by / type 的白名单口径同一规则。
+    """
+    raw = value.strip()
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        raise HTTPException(422, f"{field} 时间格式无法解析：{value}") from None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    else:
+        # created_at 由 _utcnow 写入，库里的裸时间即 UTC 墙钟
+        dt = dt.replace(tzinfo=timezone.utc)
+    # 裸日期当终点时应覆盖整天，否则当天 00:00 之后的记录全被切掉
+    if is_end and len(raw) == _DATE_ONLY_LEN:
+        dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return dt
+
+
+def _parse_order_time_range(
+    start_time: str | None, end_time: str | None
+) -> tuple[datetime | None, datetime | None]:
+    return (
+        None if start_time is None else _parse_order_time_bound(
+            start_time, field="start_time", is_end=False),
+        None if end_time is None else _parse_order_time_bound(
+            end_time, field="end_time", is_end=True),
+    )
 
 
 def _parse_takeover_ts(ts: Any) -> datetime | None:
@@ -93,6 +133,12 @@ def list_orders(
     # T02673：演练单筛选走 type 列（real|dry_run），不挤占 status 白名单——
     # dry_run 不是订单状态，混进 ?status= 会被深链白名单拒绝、刷新即丢
     type: str | None = Query(None, pattern="^(real|dry_run)$", description="订单类型筛选"),
+    # T02829 ①：日期区间参数（评估列表早有 start_time/end_time，订单列表补齐同名同语义）。
+    # 语义是「调用方给边界」而非「后端猜今天」，全应用「今日」口径（T02734）裁决后只改发值的一侧
+    start_time: str | None = Query(
+        None, description="创建时间下界（ISO 日期或时间；裸日期按 UTC 日 00:00 起）"),
+    end_time: str | None = Query(
+        None, description="创建时间上界（裸日期覆盖到当天 23:59:59）"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
     # 后端分页：page_num/page_size 优先于 limit（limit 为旧版兼容参数）
@@ -105,15 +151,19 @@ def list_orders(
         offset = 0
         actual_limit = limit
 
+    created_after, created_before = _parse_order_time_range(start_time, end_time)
+
     # 多用户隔离：仅查询当前账号的订单
     user_id = getattr(request.state, "user_id", None)
     rows = container.repo.list_orders(
         status=status, limit=actual_limit, offset=offset,
         task_id=task_id, item_id=item_id, user_id=user_id,
         sort_by=sort_by, sort_dir=sort_dir, order_type=type,
+        created_after=created_after, created_before=created_before,
     )
     total = container.repo.count_orders(
-        status=status, task_id=task_id, item_id=item_id, user_id=user_id, order_type=type)
+        status=status, task_id=task_id, item_id=item_id, user_id=user_id, order_type=type,
+        created_after=created_after, created_before=created_before)
 
     # 给 takeover_pending 订单附加"剩余倒计时秒数"，前端 modal 直接读 deadline。
     now = _utcnow().replace(tzinfo=None)

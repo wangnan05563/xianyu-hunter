@@ -76,6 +76,8 @@ class OrdersMixin:
         sort_by: str = "created_at",
         sort_dir: str = "desc",
         order_type: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
     ) -> list[dict]:
         with self.engine.connect() as conn:
             col = self._SORT_COLUMNS.get(sort_by, self._SORT_COLUMNS["created_at"])()
@@ -92,6 +94,10 @@ class OrdersMixin:
                 stmt = stmt.where(OrderRow.item_id == item_id)
             if user_id is not None:
                 stmt = stmt.where(OrderRow.user_id == user_id)
+            if created_after is not None:
+                stmt = stmt.where(OrderRow.created_at >= created_after)
+            if created_before is not None:
+                stmt = stmt.where(OrderRow.created_at <= created_before)
             stmt = stmt.limit(limit).offset(offset)
             return [self._row_to_dict(r) for r in conn.execute(stmt).all()]
 
@@ -102,6 +108,8 @@ class OrdersMixin:
         item_id: str | None = None,
         user_id: str | None = None,
         order_type: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
     ) -> int:
         with self.engine.connect() as conn:
             stmt = select(func.count(OrderRow.id))
@@ -115,6 +123,10 @@ class OrdersMixin:
                 stmt = stmt.where(OrderRow.item_id == item_id)
             if user_id is not None:
                 stmt = stmt.where(OrderRow.user_id == user_id)
+            if created_after is not None:
+                stmt = stmt.where(OrderRow.created_at >= created_after)
+            if created_before is not None:
+                stmt = stmt.where(OrderRow.created_at <= created_before)
             return conn.execute(stmt).scalar() or 0
 
     def count_real_orders_since(self, since: datetime, user_id: str | None = None) -> int:
