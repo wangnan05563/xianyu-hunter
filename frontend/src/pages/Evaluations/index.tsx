@@ -14,6 +14,7 @@ import dayjs from 'dayjs'
 import { taskApi, evalApi, type EvalItem } from '../../api'
 import { parseEvalDeepLink, evalDeepLinkMatchesFilters } from '../../utils/alertDeepLink'
 import { usePersistentState } from '../../hooks/usePersistentState'
+import { useDebouncedAction } from '../../hooks/useDebouncedAction'
 import { useColumnConfig } from '../../hooks/useColumnConfig'
 import { COLUMN_DEFINITIONS } from './columnDefinitions'
 import EvalHeatmap from './components/EvalHeatmap'
@@ -495,7 +496,20 @@ export default function Evaluations() {
     }
   }
 
+  // T02669：筛选时机统一——非文本控件改完 300ms 后自动查，文本框仍走回车/失焦，
+  // 「查询」按钮保留为立即执行（取消尚未到点的自动查询，马上查一次）。
+  const autoSearch = useDebouncedAction(onSearch)
+
+  // 商品ID 是文本框：只在「确实改过」时查询，否则单纯点进去又点出来也会发一次请求
+  const itemIdAtLastQuery = useRef(filters.itemId)
+  const queryItemId = () => {
+    if (filters.itemId === itemIdAtLastQuery.current) return
+    itemIdAtLastQuery.current = filters.itemId
+    autoSearch.flush()
+  }
+
   const onReset = () => {
+    autoSearch.cancel()
     filters.reset()
     if (list.page === 1) {
       list.load()
@@ -573,14 +587,15 @@ export default function Evaluations() {
           <Input
             placeholder="模糊匹配" allowClear style={{ width: 160 }}
             value={filters.itemId} onChange={(e) => filters.setItemId(e.target.value)}
-            onPressEnter={onSearch}
+            onPressEnter={queryItemId}
+            onBlur={queryItemId}
           />
           <span>任务ID：</span>
           <Select
             placeholder="选择任务" allowClear showSearch
             style={{ width: 260 }}
             value={filters.taskId || undefined}
-            onChange={(v) => { filters.setTaskId(v || ''); list.setPage(1); setTimeout(list.load, 0) }}
+            onChange={(v) => { filters.setTaskId(v || ''); autoSearch.schedule() }}
             onClear={() => filters.setTaskId('')}
             filterOption={(input, option) =>
               (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
@@ -595,12 +610,12 @@ export default function Evaluations() {
           <Slider
             range style={{ width: 200 }}
             value={filters.scoreRange}
-            onChange={(v) => filters.setScoreRange(v as [number, number])}
+            onChange={(v) => { filters.setScoreRange(v as [number, number]); autoSearch.schedule() }}
           />
           <span>时间范围：</span>
           <RangePicker
             value={filters.dateRange as [dayjs.Dayjs, dayjs.Dayjs] | null}
-            onChange={(v) => filters.setDateRange(v ? [v[0]?.toISOString() ?? '', v[1]?.toISOString() ?? ''] : null)}
+            onChange={(v) => { filters.setDateRange(v ? [v[0]?.toISOString() ?? '', v[1]?.toISOString() ?? ''] : null); autoSearch.schedule() }}
           />
           <span>品牌：</span>
           <Select
@@ -609,7 +624,7 @@ export default function Evaluations() {
             showSearch
             style={{ width: 160 }}
             value={filters.brandFilter}
-            onChange={(v) => { filters.setBrandFilter(v || ''); list.setPage(1); setTimeout(list.load, 0) }}
+            onChange={(v) => { filters.setBrandFilter(v || ''); autoSearch.schedule() }}
             onClear={() => filters.setBrandFilter('')}
             filterOption={(input, option) =>
               (option?.label as string ?? '').toLowerCase().includes(input.toLowerCase())
@@ -623,7 +638,7 @@ export default function Evaluations() {
             style={{ width: 100 }}
             allowClear
             value={filters.soldFilter}
-            onChange={(v) => { filters.setSoldFilter(v || 'all'); list.setPage(1); setTimeout(list.load, 0) }}
+            onChange={(v) => { filters.setSoldFilter(v || 'all'); autoSearch.schedule() }}
             options={[
               { label: '全部', value: 'all' },
               { label: '在售', value: 'onsale' },
@@ -637,6 +652,7 @@ export default function Evaluations() {
                 <div>1. 价格区间：商品价格需在 [最低, 最高] 范围内</div>
                 <div>2. 低于市场参考价：选中任务后，按任务 market_ratio 配置过滤掉价格高于「同任务商品中位数 × market_ratio」的商品（样本数 ≥ 3 才生效）</div>
                 <div style={{ marginTop: 4, color: '#aaa' }}>提示：勾选「显示超范围」可跳过市场参考价过滤，用于审计历史商品</div>
+                <div style={{ marginTop: 4, color: '#aaa' }}>改完条件约 300ms 后自动查询；商品ID 要回车或移出输入框才生效，「查询」按钮随时可立即执行</div>
               </div>
             }
           >
@@ -650,7 +666,7 @@ export default function Evaluations() {
             min={0}
             style={{ width: 90 }}
             value={filters.priceRange[0]}
-            onChange={(v) => filters.setPriceRange([v ?? null, filters.priceRange[1]])}
+            onChange={(v) => { filters.setPriceRange([v ?? null, filters.priceRange[1]]); autoSearch.schedule() }}
           />
           <span>-</span>
           <InputNumber
@@ -658,17 +674,17 @@ export default function Evaluations() {
             min={0}
             style={{ width: 90 }}
             value={filters.priceRange[1]}
-            onChange={(v) => filters.setPriceRange([filters.priceRange[0], v ?? null])}
+            onChange={(v) => { filters.setPriceRange([filters.priceRange[0], v ?? null]); autoSearch.schedule() }}
           />
           <Tooltip title="开启后显示超出任务价格范围的历史商品（审计用）">
             <Checkbox
               checked={filters.includeOutOfRange}
-              onChange={(e) => { filters.setIncludeOutOfRange(e.target.checked); list.setPage(1); setTimeout(list.load, 0) }}
+              onChange={(e) => { filters.setIncludeOutOfRange(e.target.checked); autoSearch.schedule() }}
             >
               显示超范围
             </Checkbox>
           </Tooltip>
-          <TipButton type="primary" icon={<SearchOutlined />} onClick={onSearch} tip="按当前筛选条件查询评估记录">查询</TipButton>
+          <TipButton type="primary" icon={<SearchOutlined />} onClick={autoSearch.flush} tip="立即按当前筛选条件查询（改完条件约 300ms 后也会自动查一次）">查询</TipButton>
           <TipButton icon={<UndoOutlined />} onClick={onReset} tip="重置全部筛选条件">重置</TipButton>
           <TipButton icon={<ReloadOutlined />} onClick={list.load} loading={list.loading} tip="重新加载评估列表数据">刷新</TipButton>
           <Popconfirm
