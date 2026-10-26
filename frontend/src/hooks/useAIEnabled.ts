@@ -37,8 +37,9 @@ export function invalidateAIEnabled(next?: boolean): void {
 /**
  * AI 功能总开关当前是否开启。
  *
- * `enabled === false` 才代表确定关闭；`null` 是「还没读到/读失败」，
- * 此时入口保持可点，真正的关闭仍由后端 403（apiError.isAiDisabledError）兜住。
+ * `enabled === false` 才代表确定关闭；`null` 是「还没读到/读失败」，此时不做任何提示。
+ * 关闭不再意味着入口不可用：推理端点会退回规则解析（T02947 裁决 A），这里只用来改提示。
+ * 仍在跑的旧打包版后端可能依旧返回 403，由 apiError.isAiDisabledError 兜住。
  */
 export function useAIEnabled(): { enabled: boolean | null; refresh: () => void } {
   const [enabled, setEnabled] = useState<boolean | null>(cached)
@@ -53,5 +54,5 @@ export function useAIEnabled(): { enabled: boolean | null; refresh: () => void }
   return { enabled, refresh: () => void load() }
 }
 
-/** 入口置灰时统一使用的提示文案，与后端 detail 指向同一个开关 */
-export const AI_GATE_OFF_TIP = 'AI 功能已关闭，请到「配置-AI 服务」页面开启'
+/** 入口提示：开关关闭时这些功能退回规则解析，仍然可点（T02947 裁决 A） */
+export const AI_GATE_OFF_TIP = 'AI 已关闭：该功能退回规则解析，结果不是 AI 判断（可在「配置-AI 服务」开启）'

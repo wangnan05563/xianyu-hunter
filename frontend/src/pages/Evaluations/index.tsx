@@ -345,7 +345,7 @@ function BatchSelectionAlert({
       message={
         <Space>
           <span>已选择 <b>{selectedCount}</b> 项</span>
-          <TipButton type="primary" size="small" icon={<RobotOutlined />} loading={batchAIEvaluating} onClick={onBatchAIEval} tip={aiOff ? AI_GATE_OFF_TIP : '对选中商品批量执行 AI 成色评估'} disabled={aiOff}>
+          <TipButton type="primary" size="small" icon={<RobotOutlined />} loading={batchAIEvaluating} onClick={onBatchAIEval} tip={aiOff ? AI_GATE_OFF_TIP : '对选中商品批量执行 AI 成色评估'}>
             批量 AI 评估 ({selectedCount} 项)
           </TipButton>
           <TipButton size="small" icon={<CloudDownloadOutlined />} loading={batchCollecting} onClick={onBatchCollectOfficial} tip="对选中商品批量访问官方页面采集">

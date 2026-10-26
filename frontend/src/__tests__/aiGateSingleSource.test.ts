@@ -1,7 +1,8 @@
 // @vitest-environment node
 // T02890 源码契约：门禁必须「接在对的对象上」，而不是只要出现过 disabled 就绿灯。
-// 按按钮逐个切片断言：AI 相关入口被 aiOff 置灰；非 AI 的人工入口不受影响。
-// 切片止于该元素自己的闭合，否则同名 props 会被邻居蒙过去（整份文件 toContain 同理）。
+// T02947 裁决 A 之后口径反转：AI 入口在开关关闭时**不再置灰**（后端退回规则解析），
+// 提示必须换成「结果非 AI」；非 AI 的人工入口则任何时候都不该被 aiOff 连上。
+// 按按钮逐个切片断言，切片止于该元素自己的闭合，否则同名 props 会被邻居蒙过去。
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
@@ -28,40 +29,41 @@ function elementSlice(src: string, marker: string): string {
   return tail.slice(0, Math.min(...ends))
 }
 
-describe('评估列表 AI 列：只有 AI 按钮被开关置灰', () => {
+describe('评估列表 AI 列：开关关闭时仍可点，但提示必须换成「结果非 AI」', () => {
   it('aiOff 取 useAIEnabled 的确定关闭态', () => {
     expect(COLUMNS).toContain("import { AI_GATE_OFF_TIP, useAIEnabled } from '../../../hooks/useAIEnabled'")
     expect(COLUMNS).toContain('const aiOff = useAIEnabled().enabled === false')
   })
 
-  it('AI 成色评估按钮：置灰与提示都由 aiOff 驱动', () => {
+  it('AI 成色评估按钮：提示由 aiOff 驱动，disabled 里不得再出现 aiOff', () => {
     const slice = elementSlice(COLUMNS, "tip={aiOff ? AI_GATE_OFF_TIP : 'AI 成色评估'}")
     expect(slice).toContain('onClick={() => onAIEval(r.item_id)}')
-    expect(slice).toContain('disabled={aiOff || (isDataInsufficient(r) && (r.payload.score ?? 0) < 60)}')
+    expect(slice).toContain('disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}')
+    expect(slice).not.toMatch(/disabled=\{[^}]*aiOff/)
   })
 
-  it('深度鉴伪按钮同样挂 aiOff（漏一个就是只灰一半）', () => {
+  it('深度鉴伪按钮同样只改提示（漏一个就是只灰一半）', () => {
     const slice = elementSlice(COLUMNS, "tip={aiOff ? AI_GATE_OFF_TIP : '深度鉴伪（盗图/损坏/一致性/模板）'}")
     expect(slice).toContain('onClick={() => onDeepAnalyze(r.item_id)}')
-    expect(slice).toContain('disabled={aiOff || (isDataInsufficient(r) && (r.payload.score ?? 0) < 60)}')
+    expect(slice).not.toMatch(/disabled=\{[^}]*aiOff/)
   })
 
-  it('aiOff 进入 useMemo 依赖，否则开关变化不重算列', () => {
+  it('aiOff 进入 useMemo 依赖，否则开关变化不重算提示', () => {
     const deps = COLUMNS.slice(COLUMNS.indexOf('], ['), COLUMNS.indexOf('])', COLUMNS.indexOf('], [')))
     expect(deps).toContain('aiOff')
   })
 
-  it('非 AI 的「收官方凭证」入口不得被开关连带置灰', () => {
+  it('非 AI 的「收官方凭证」入口不得被开关连带影响', () => {
     expect(elementSlice(COLUMNS, 'tip="访问闲鱼官方页面采集完整数据并重新评估"')).not.toContain('aiOff')
   })
 })
 
-describe('批量 AI 评估：逐条打 /evaluate-condition，关开关时必须整批拦住', () => {
-  it('批量按钮挂 aiOff，否则一批发 N 个 403 toast', () => {
+describe('批量 AI 评估：逐条打 /evaluate-condition，关闭时走规则而不是整批拦住', () => {
+  it('批量按钮只改提示，不再 disabled={aiOff}', () => {
     expect(EVAL_PAGE).toContain("import { AI_GATE_OFF_TIP, useAIEnabled } from '@/hooks/useAIEnabled'")
     const slice = elementSlice(EVAL_PAGE, 'onClick={onBatchAIEval}')
     expect(slice).toContain("tip={aiOff ? AI_GATE_OFF_TIP : '对选中商品批量执行 AI 成色评估'}")
-    expect(slice).toContain('disabled={aiOff}')
+    expect(slice).not.toContain('disabled={aiOff}')
   })
 
   it('同排的批量官方采集与取消选择不得被连带置灰', () => {
@@ -78,12 +80,19 @@ describe('批量 AI 评估：逐条打 /evaluate-condition，关开关时必须�
   })
 })
 
-describe('任务列表：智能建任务入口在开关关闭时置灰', () => {
-  it('入口按钮与弹窗内解析按钮都挂 aiOff，且提示指向开关', () => {
+describe('任务列表：智能建任务在开关关闭时改为规则解析，入口不再置灰', () => {
+  it('入口按钮与弹窗内解析按钮都只改提示，不带 disabled={aiOff}', () => {
     expect(TASKLIST).toContain("import { AI_GATE_OFF_TIP, useAIEnabled } from '../../hooks/useAIEnabled'")
     expect(TASKLIST).toContain('const aiOff = useAIEnabled().enabled === false')
-    expect(elementSlice(TASKLIST, "tip={aiOff ? AI_GATE_OFF_TIP : '用一句话 AI 智能创建任务'}")).toContain('disabled={aiOff}')
-    expect(elementSlice(TASKLIST, "tip={aiOff ? AI_GATE_OFF_TIP : '让 AI 解析需求并创建任务'}")).toContain('disabled={aiOff}')
+    expect(elementSlice(TASKLIST, "tip={aiOff ? AI_GATE_OFF_TIP : '用一句话 AI 智能创建任务'}")).not.toContain('disabled={aiOff}')
+    expect(elementSlice(TASKLIST, "tip={aiOff ? AI_GATE_OFF_TIP : '让 AI 解析需求并创建任务'}")).not.toContain('disabled={aiOff}')
+  })
+
+  it('提示文案必须说清「结果非 AI」，不能只说「已关闭」', () => {
+    const HOOK = read('src/hooks/useAIEnabled.ts')
+    const tip = HOOK.slice(HOOK.indexOf('export const AI_GATE_OFF_TIP'))
+    expect(tip.slice(0, 300)).toContain('规则')
+    expect(tip.slice(0, 300)).toContain('不是 AI')
   })
 
   it('模板市场等非 AI 入口不受开关影响', () => {

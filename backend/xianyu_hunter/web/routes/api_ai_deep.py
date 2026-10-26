@@ -27,7 +27,7 @@ from xianyu_hunter.config import get_settings
 from xianyu_hunter.container import Container
 from xianyu_hunter.infra.ai_usage import check_budget, record_usage
 from xianyu_hunter.web.deps import get_container
-from xianyu_hunter.web.routes.api_ai import _check_ai_enabled, _is_vision_capable
+from xianyu_hunter.web.routes.api_ai import _ai_enabled, _is_vision_capable
 
 router = APIRouter(prefix="/api/ai", tags=["ai-deep"])
 
@@ -589,8 +589,11 @@ async def _run_deep_analyze(
     image_urls: list,
     seller_items: list[dict[str, Any]],
     item_id: str,
+    allow_llm: bool,
 ) -> tuple[dict[str, Any], str]:
-    """执行深度分析：有 Key 走 LLM Vision，无 Key 或失败降级规则模拟
+    """执行深度分析：有 Key 走 LLM Vision，无 Key 或总开关关闭时降级规则模拟
+
+    allow_llm=False 时跳过 LLM，直接进规则分支——调用方必须显式表态。
 
     返回 (raw_result, source)：source 标识 'llm' 或 'rule' 供归一化区分。
     """
@@ -598,7 +601,7 @@ async def _run_deep_analyze(
     used_source = "llm"
     raw_result: dict[str, Any] | None = None
 
-    if settings.openai_api_key:
+    if allow_llm and settings.openai_api_key:
         try:
             raw_result = await _call_llm_deep_analyze(
                 title, description, price, image_urls, seller_items
@@ -652,9 +655,9 @@ async def deep_analyze(
     3. consistency: 描述与图片一致性
     4. template: 文案模板化检测
 
-    有 LLM Key 走 Vision 深度分析，无 Key 走规则模拟。
+    有 LLM Key 且总开关开启走 Vision 深度分析，否则走规则模拟。
     """
-    _check_ai_enabled()
+    allow_llm = _ai_enabled()
     # 1. 获取商品信息
     user_id = getattr(request.state, "user_id", None)
     item = container.repo.get_item(body.item_id, user_id=user_id)
@@ -671,7 +674,8 @@ async def deep_analyze(
 
     # 3. 调用 LLM 或规则模拟
     raw_result, used_source = await _run_deep_analyze(
-        title, description, price, image_urls, seller_items, body.item_id
+        title, description, price, image_urls, seller_items, body.item_id,
+        allow_llm=allow_llm,
     )
 
     # 4. 归一化结果
@@ -783,8 +787,9 @@ def seller_template_check(
     """P1-4 卖家文案模板化检测（贩子识别）
 
     分析卖家多个商品的描述相似度，识别是否为贩子（批量发帖、共用模板文案）。
+
+    本端点全程是词频/相似度统计，一次都不调 LLM，所以不受 AI 总开关约束（T02947 裁决 A）。
     """
-    _check_ai_enabled()
     # 1. 获取卖家商品列表
     try:
         items = container.repo.list_items_by_seller(body.seller_id, limit=body.sample_size)

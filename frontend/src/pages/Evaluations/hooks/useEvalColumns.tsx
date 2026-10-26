@@ -104,8 +104,8 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
     autoBuyScore, passScore, collecting, feedbackSubmitting, manualTaking,
     onAIEval, onDeepAnalyze, onCollectOfficial, onFeedback, onManualTakeover, onTitleClick,
   } = params
-  // 总开关关闭时 AI 列直接置灰：后端会 403，但让用户先看清是开关的问题，
-  // 而不是点一次拿一个抽屉里的红字（T02890）
+  // 总开关关闭时 AI 列仍可点：后端会退回规则解析（T02947 裁决 A），
+  // 提示先讲清「结果非 AI」，比点一次拿一个抽屉里的红字好
   const aiOff = useAIEnabled().enabled === false
   // 抢单确认走 App 上下文的 modal（T02671）：随主题走、且不挂在固定列单元格里定位
   const { modal } = App.useApp()
@@ -391,14 +391,14 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
             size="small"
             icon={<RobotOutlined />}
             onClick={() => onAIEval(r.item_id)}
-            disabled={aiOff || (isDataInsufficient(r) && (r.payload.score ?? 0) < 60)}
+            disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
           />
           <TipButton
             tip={aiOff ? AI_GATE_OFF_TIP : '深度鉴伪（盗图/损坏/一致性/模板）'}
             size="small"
             icon={<ThunderboltOutlined />}
             onClick={() => onDeepAnalyze(r.item_id)}
-            disabled={aiOff || (isDataInsufficient(r) && (r.payload.score ?? 0) < 60)}
+            disabled={isDataInsufficient(r) && (r.payload.score ?? 0) < 60}
           />
         </Space>
       ),

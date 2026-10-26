@@ -684,7 +684,7 @@ sequenceDiagram
 - 关闭时受门禁的 5 个推理端点（`/parse-task`、`/evaluate-condition`、`/test-connection`、`/deep-analyze`、`/seller-template-check`）调用前先执行 `_check_ai_enabled()`；`/config`、`/models`、`/test-embedding`、`/usage`、`/budget` 不做门禁
 - `ai_enabled=false` 时抛 HTTP 403，`detail="AI 功能已关闭，请在「AI 服务」配置页面开启"`，并带机器码 `code="ai_disabled"`（前端判定入口：`utils/apiError.ts` 的 `isAiDisabledError()`）
 - 前端关闭时二次确认（`confirmDanger` 四要素，T02726），防止误操作
-- **门禁在规则回落之前**：上述端点在关闭时直接返回 403，不会退回 `_rule_parse` / `_rule_eval_condition` / `_rule_deep_analyze`。真正「跳过 AI、沿用规则结果」的是 `modules/worker.py` 的自动评估与自动深度分析（前置条件含 `settings.ai_enabled`）。Chatbot / RAG / Embedding / 价格趋势 AI 解读不读取 `ai_enabled`，不受本开关影响（见 T02891 裁决）。
+- **关闭后的行为（T02947 裁决 A）**：上述三个推理端点在 `ai_enabled=false` 时不请求 LLM，直接退回 `_rule_parse` / `_rule_eval_condition` / `_rule_deep_analyze`，结果标 `source="rule"`；`test-connection` 仍返回 403 `code=ai_disabled`（无规则形态）；`seller-template-check` 为纯词频统计，不受开关约束。`modules/worker.py` 的自动评估与自动深度分析同样跳过 AI（前置条件含 `settings.ai_enabled`）。Chatbot / RAG / Embedding / 价格趋势 AI 解读不读取 `ai_enabled`，不受本开关影响（见 T02891 裁决）。
 
 **FR-1.2** 前端 AI 总开关 Card：
 - 标题 + 状态 Tag（success=已开启 / error=已关闭）
@@ -1498,7 +1498,7 @@ export const ENDPOINT_LABELS: Record<string, string> = {
 - **SR-8.1.2**：`/api/ai/*` **不加入认证白名单**（与 `/api/auth/cookie` 等不同）
 - **SR-8.1.3**：401 响应必须返回 JSON `{"detail": "Unauthorized"}`（遵循 project_memory 硬约束）
 - **SR-8.1.4**：AI 配置全局共享（不按 user_id 隔离），所有用户共用同一套配置
-- **SR-8.1.5**：AI 总开关检查（`_check_ai_enabled`）抛 403 `detail="AI 功能已关闭，请在「AI 服务」配置页面开启"` + `code="ai_disabled"`
+- **SR-8.1.5**：`test-connection` 的 AI 总开关硬门禁（`_check_ai_enabled`）抛 403 `detail="AI 功能已关闭，请在「AI 服务」配置页面开启"` + `code="ai_disabled"`；其余推理端点关闭时退回规则解析（T02947 裁决 A）
 
 ### 8.2 API Key 安全
 
@@ -1822,7 +1822,7 @@ data/
 |------|--------|----------|----------|
 | AC-1 | 菜单入口 | 侧边栏"配置管理"分组下显示"AI 服务"，点击进入 `/config/ai` | UI 检查 |
 | AC-2 | AI 总开关 | Switch 关闭时弹出二次确认；关闭后 Tab 1 半透明遮罩 | UI 操作 |
-| AC-3 | AI 关闭拦截 | 关闭后 5 个受门禁推理端点返回 403 `code=ai_disabled`（门禁在规则回落之前，不自动降级）；worker 自动评估/深度分析跳过 AI | 后端单测 |
+| AC-3 | AI 关闭行为 | 关闭后 3 个推理端点（parse-task / evaluate-condition / deep-analyze）退回规则解析并标 `source="rule"`；test-connection 仍 403 `code=ai_disabled`；worker 自动评估/深度分析跳过 AI | 后端单测 |
 | AC-4 | LLM 预设切换 | 点击 8 个预设按钮自动填充 base_url/model/vision_model；先落库再更新 UI | UI 操作 |
 | AC-5 | Embedding 预设切换 | 点击 5 个预设按钮自动填充字段；先落库再更新 UI | UI 操作 |
 | AC-6 | API Key 脱敏 | `GET /api/ai/config` 返回 `****xxxx` | 后端单测 |

@@ -91,8 +91,19 @@ def _is_vision_capable(model_name: str | None) -> bool:
     return any(kw in name for kw in _VISION_CAPABLE_KEYWORDS)
 
 
+def _ai_enabled() -> bool:
+    """AI 总开关是否开启：开启才允许真正调用 LLM
+
+    T02947 裁决 A：推理端点（parse-task / evaluate-condition / deep-analyze）在开关关闭时
+    不再 403，而是落到已有的规则回落分支，响应里 source="rule"。
+    """
+    return bool(get_settings().ai_enabled)
+
+
 def _check_ai_enabled() -> None:
-    """AI 全局开关检查：关闭时抛出 403，阻止所有 AI 调用
+    """AI 总开关硬门禁：关闭时抛 403，只留给「没有规则形态」的端点
+
+    现在只剩 test-connection 用它：测一个已被关掉的开关没有意义，返回规则结果反而误导。
 
     带 code=ai_disabled：前端需要「按机器码分支一次」而不是各页面 grep 中文文案，
     detail 文案保持一字不变（老前端/老后端任一侧都还能按原样展示）。
@@ -445,11 +456,12 @@ def parse_task(body: ParseTaskBody) -> dict[str, Any]:
     text = body.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="文本不能为空")
-    _check_ai_enabled()
 
-    # 1. 试 LLM，失败则降级
+    # 1. 试 LLM，失败或总开关关闭则降级到规则解析
     settings = get_settings()
-    parsed, used_source = _try_parse_with_llm(text, settings)
+    parsed, used_source = (
+        _try_parse_with_llm(text, settings) if _ai_enabled() else (None, "rule")
+    )
     if parsed is None:
         parsed = _rule_parse(text)
         used_source = "rule"
@@ -1000,8 +1012,12 @@ async def _run_condition_eval(
     image_urls: list,
     price_range: dict[str, Any] | None,
     item_id: str,
+    allow_llm: bool,
 ) -> tuple[dict[str, Any], str]:
     """执行成色评估：有 Key 走 LLM Vision，无 Key 或失败降级规则模拟
+
+    allow_llm=False（AI 总开关关闭）时跳过 LLM，直接进规则模拟分支——
+    调用方必须显式表态，不给「忘了判开关」留默认值。
 
     返回 (raw_result, source)：source 标识是 'llm' 还是 'rule'，
     供后续归一化和缓存区分数据来源。
@@ -1010,7 +1026,7 @@ async def _run_condition_eval(
     used_source = "llm"
     raw_result: dict[str, Any] | None = None
 
-    if settings.openai_api_key:
+    if allow_llm and settings.openai_api_key:
         try:
             raw_result = await _call_llm_vision(
                 title, description, price, image_urls, price_range
@@ -1088,12 +1104,12 @@ async def evaluate_condition(
     流程：
     1. 从 items 表获取商品信息（标题/描述/价格/图片URL）
     2. 检查是否有缓存的评估结果
-    3. 调用 LLM Vision API 分析商品图片 + 描述（有 Key 时）
-       或走规则模拟评估（无 Key 时）
+    3. 调用 LLM Vision API 分析商品图片 + 描述（有 Key 且总开关开启时）
+       或走规则模拟评估（无 Key / 总开关关闭时）
     4. 缓存评估结果到 evaluations 表
     5. 返回评估结果：推荐/不推荐 + 理由 + 成色评分
     """
-    _check_ai_enabled()
+    allow_llm = _ai_enabled()
     # 1. 获取商品信息（含 payload 回退）
     user_id = getattr(request.state, "user_id", None)
     item = _get_item_with_payload_fallback(container, body.item_id, user_id=user_id)
@@ -1116,7 +1132,8 @@ async def evaluate_condition(
 
     # 3. 调用 LLM Vision 或规则模拟
     raw_result, used_source = await _run_condition_eval(
-        title, description, price, image_urls, price_range, body.item_id
+        title, description, price, image_urls, price_range, body.item_id,
+        allow_llm=allow_llm,
     )
 
     # 4. 归一化结果

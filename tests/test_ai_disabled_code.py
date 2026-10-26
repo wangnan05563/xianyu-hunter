@@ -43,11 +43,72 @@ def test_response_body_shape(gate):
     }
 
 
-def test_gate_is_shared_by_deep_routes():
-    """deep-analyze 复用同一个门禁，机器码自然跟着走，不必两处维护"""
+def test_gate_is_not_reachable_from_deep_routes():
+    """T02947 裁决 A：deep 路由不再引用硬门禁，只共享 `_ai_enabled()` 这个开关读取
+
+    `_check_ai_enabled` 若被重新 import 回 api_ai_deep，说明有人又把
+    deep-analyze / seller-template-check 改回了硬失败。
+    """
     from xianyu_hunter.web.routes import api_ai_deep
 
-    assert api_ai_deep._check_ai_enabled is api_ai._check_ai_enabled
+    assert not hasattr(api_ai_deep, "_check_ai_enabled")
+    assert api_ai_deep._ai_enabled is api_ai._ai_enabled
+
+
+def test_ai_enabled_reflects_the_switch(monkeypatch):
+    for value, expected in ((True, True), (False, False)):
+        monkeypatch.setattr(api_ai, "get_settings", lambda v=value: SimpleNamespace(ai_enabled=v))
+        assert api_ai._ai_enabled() is expected
+
+
+def test_parse_task_falls_back_to_rule_when_switch_off(monkeypatch):
+    """开关关闭时 parse-task 不再 403：一次都不碰 LLM，结果标注 source=rule"""
+    monkeypatch.setattr(api_ai, "get_settings", lambda: SimpleNamespace(ai_enabled=False))
+    llm_calls: list[int] = []
+
+    def _no_llm(*args, **kwargs):
+        llm_calls.append(1)
+        return {}, "llm"
+
+    monkeypatch.setattr(api_ai, "_try_parse_with_llm", _no_llm)
+    result = api_ai.parse_task(api_ai.ParseTaskBody(text="iPhone 13 128G 银色"))
+    assert llm_calls == []
+    assert result["source"] == "rule"
+    assert result["keyword"]
+
+
+def test_eval_helpers_force_rule_branch_when_switch_off(monkeypatch):
+    """成色评估/深度分析：allow_llm=False 时即使配了 Key 也不发起 LLM 调用
+
+    有 Key 却关掉开关是最容易漏的场景——门禁必须落在调用点，而不只是入口 raise。
+    """
+    import asyncio
+    from xianyu_hunter.web.routes import api_ai_deep
+
+    settings = SimpleNamespace(ai_enabled=False, openai_api_key="sk-test")
+    monkeypatch.setattr(api_ai, "_call_llm_vision", _boom)
+    monkeypatch.setattr(api_ai_deep, "_call_llm_deep_analyze", _boom)
+
+    _, source = asyncio.run(api_ai._run_condition_eval(
+        "索尼 A7M4", "九成新，箱说全", 8000.0, [], None, "item-1", allow_llm=False))
+    assert source == "rule"
+
+    _, deep_source = asyncio.run(api_ai_deep._run_deep_analyze(
+        "索尼 A7M4", "九成新，箱说全", 8000.0, [], [], "item-1", allow_llm=False))
+    assert deep_source == "rule"
+
+
+async def _boom(*args, **kwargs):  # 被调用即失败：规则分支不该碰 LLM
+    raise AssertionError("LLM 被调用，说明开关未生效")
+
+
+def test_test_connection_still_hard_fails(monkeypatch):
+    """test-connection 没有规则形态，关闭时仍必须 403 + 机器码"""
+    monkeypatch.setattr(api_ai, "get_settings", lambda: SimpleNamespace(ai_enabled=False))
+    with pytest.raises(HTTPException) as exc:
+        api_ai.test_ai_connection()
+    assert exc.value.status_code == 403
+    assert _http_exception_content(exc.value)["code"] == api_ai.AI_DISABLED_CODE
 
 
 def test_plain_403_has_no_code(monkeypatch):

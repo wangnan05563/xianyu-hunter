@@ -1,8 +1,8 @@
 // T02726：AI 总开关关闭是全站最后一处原生 globalThis.confirm。
 // 换成 confirmDanger 后，四要素文案必须与后端真实行为对齐——
 // 「关闭后所有 AI 功能降级到规则模式」这句话在本项目里是假的：
-// 四个推理接口在规则回落之前就被 _check_ai_enabled() 拦成 403，
-// 只有 worker 的自动评估路径才是真降级；chatbot/Embedding 根本没有这个开关。
+// T02947 裁决 A 之后，三个推理接口在开关关闭时确实退回规则解析，
+// 但只有那三个；chatbot/Embedding/价格解读根本没有这个开关，test-connection 仍硬失败。
 // 文案会随代码漂移，所以这里用后端源码当事实源做双向断言，而不是断言一句漂亮话。
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
@@ -118,35 +118,38 @@ describe('deferredSave：移动端开关只改本页表单（T02892）', () => {
 })
 
 describe('文案与后端源码逐条对齐（新增漂移会被拒）', () => {
-  it('每个「受影响」调用点都能找到 _check_ai_enabled() 拦在规则回落之前', () => {
+  /** 从 @router 装饰器切到下一个端点/分节头为止（不能按 `def ` 切，
+   *  紧跟着的那行就是本端点自己的 def） */
+  const endpointBody = (src: string, marker: string) => {
+    const start = src.indexOf(marker)
+    expect(start, `接口已不存在：${marker}`).toBeGreaterThan(-1)
+    const rest = src.slice(start + marker.length)
+    const end = rest.search(/\n(?=@router\.|# =)/)
+    return end === -1 ? rest : rest.slice(0, end)
+  }
+
+  it('推理端点改用 _ai_enabled() 分支，硬门禁只剩 test-connection（T02947 裁决 A）', () => {
     const src = aiRoutes()
     const deep = deepRoutes()
-    // parse-task / evaluate-condition / test-connection 在 api_ai.py，
-    // deep-analyze 在 api_ai_deep.py；四者各有一次门禁调用
-    for (const marker of ['@router.post("/parse-task")', '@router.post("/evaluate-condition")', '@router.post("/test-connection")']) {
-      expect(src, `接口已不存在：${marker}`).toContain(marker)
-    }
     expect(deep).toContain('@router.post("/deep-analyze")')
-    const callSites = (s: string) => s.match(/^\s+_check_ai_enabled\(\)$/gm) ?? []
-    expect(callSites(src)).toHaveLength(3)
-    expect(callSites(deep)).toHaveLength(2)
+    // raise 型门禁只允许 test-connection 一处；deep 文件里一处都不该留
+    expect((src.match(/^\s+_check_ai_enabled\(\)$/gm) ?? [])).toHaveLength(1)
+    expect((deep.match(/^\s+_check_ai_enabled\(\)$/gm) ?? [])).toHaveLength(0)
+    // 三个推理端点各自判开关，漏一个就是「关着还在烧 token」
+    expect(endpointBody(src, '@router.post("/parse-task")')).toContain('_ai_enabled()')
+    expect(endpointBody(src, '@router.post("/evaluate-condition")')).toContain('_ai_enabled()')
+    expect(endpointBody(deep, '@router.post("/deep-analyze")')).toContain('_ai_enabled()')
+    // seller-template-check 全程零 LLM，门禁必须摘掉（T02891 孤儿端点同一条证据）
+    expect(endpointBody(deep, '@router.post("/seller-template-check")')).not.toContain('_ai_enabled()')
   })
 
-  it('门禁在规则回落之前抛错，所以受影响接口是「失败」而非「降级」', () => {
+  it('开关关闭时 parse-task 走得到 _rule_parse，test-connection 仍硬失败', () => {
     const src = aiRoutes()
-    const gateStart = src.indexOf('def _check_ai_enabled')
-    expect(gateStart, '_check_ai_enabled 定义找不到').toBeGreaterThan(-1)
-    const gateEnd = src.indexOf('\ndef ', gateStart + 1)
-    const gate = src.slice(gateStart, gateEnd === -1 ? undefined : gateEnd)
-    expect(gate).toContain('403')
-
-    const parseStart = src.indexOf('@router.post("/parse-task")')
-    expect(parseStart, 'parse-task 已不存在').toBeGreaterThan(-1)
-    const gateAt = src.indexOf('_check_ai_enabled()', parseStart)
-    const ruleAt = src.indexOf('_rule_parse(', gateAt)
-    // 检查点在规则回落之前 → 关闭时根本走不到 _rule_parse
-    expect(gateAt).toBeGreaterThan(parseStart)
-    expect(ruleAt).toBeGreaterThan(gateAt)
+    const parse = endpointBody(src, '@router.post("/parse-task")')
+    expect(parse).not.toContain('_check_ai_enabled()')
+    expect(parse).toContain('_rule_parse(')
+    // 唯一保留 403 的端点：测一个已关掉的开关没有意义
+    expect(endpointBody(src, '@router.post("/test-connection")')).toContain('_check_ai_enabled()')
   })
 
   it('worker 的自动评估/深度分析确实是「跳过 AI」的真降级', () => {

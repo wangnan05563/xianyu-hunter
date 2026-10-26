@@ -363,9 +363,9 @@ export const ENDPOINT_LABELS: Record<string, string> = {
 - 受门禁的 AI 端点：`/parse-task`、`/evaluate-condition`、`/test-connection`、`/deep-analyze`、`/seller-template-check`（除这些外的 `/config`、`/models`、`/test-embedding`、`/usage`、`/budget` 不做门禁）。
 - `ai_enabled=false` 时抛 HTTP 403，`detail="AI 功能已关闭，请在「AI 服务」配置页面开启"`，并带机器码 `code="ai_disabled"`（`CodedHTTPException`，响应体 `{"detail": 人话, "code": 机器码}`）。
 - 前端按机器码判定只有一个入口：`frontend/src/utils/apiError.ts` 的 `isAiDisabledError()`（`code === "ai_disabled"`，或 detail 含「AI 功能已关闭」以兼容旧打包版后端）。
-- 开关关闭时前端把受门禁的两个入口置灰：任务列表「AI 智能建任务」与评估页「AI 成色评估 / 深度鉴伪」；状态来自 `hooks/useAIEnabled.ts` 的模块级缓存，配置页保存后调 `invalidateAIEnabled()` 立即刷新。读取 `/api/ai/usage` 失败时按 fail-open 处理（不置灰，仍由后端 403 给出人话）。
+- 开关关闭时前端不置灰，只把这 4 处 tip 换成 `AI_GATE_OFF_TIP`（说明「退回规则解析、结果非 AI」）：任务列表「AI 智能建任务 / 开始解析」与评估页「AI 成色评估 / 深度鉴伪」；状态来自 `hooks/useAIEnabled.ts` 的模块级缓存，配置页保存后调 `invalidateAIEnabled()` 立即刷新。读取 `/api/ai/config` 失败时按 fail-open 处理（保持原提示，仍由后端行为给出人话）。
 - 前端关闭时二次确认（`confirmDanger` 四要素，T02726），防止误操作。
-- 门禁检查在规则回落**之前**，所以这 5 个端点在关闭时是直接报错，不会退回 `_rule_parse` / `_rule_eval_condition` / `_rule_deep_analyze`；真正「跳过 AI 沿用规则结果」的是 `modules/worker.py` 的自动评估与自动深度分析（前置条件含 `settings.ai_enabled`）。
+- 门禁口径（T02947 裁决 A）：`parse-task` / `evaluate-condition` / `deep-analyze` 改为 `_ai_enabled()` 条件分支——关闭时不请求 LLM，直接退回 `_rule_parse` / `_rule_eval_condition` / `_rule_deep_analyze`，响应里 `source="rule"`；`test-connection` 保留 `_check_ai_enabled()` 硬 403（没有规则形态）；`seller-template-check` 全程词频统计、零 LLM，不设门禁。`modules/worker.py` 的自动评估与自动深度分析同样前置判断 `settings.ai_enabled`。
 - Chatbot / RAG / Embedding / 价格趋势 AI 解读 不读取 `ai_enabled`，不受本开关影响。
 
 ### 7.2 配置存储与热更新

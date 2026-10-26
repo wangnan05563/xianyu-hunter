@@ -54,8 +54,8 @@ export default function TaskList() {
   const [aiParsing, setAiParsing] = useState(false)
   const [aiResult, setAiResult] = useState<AIParseTaskResult | null>(null)
   const [aiError, setAiError] = useState('')
-  // 总开关关闭时「智能建任务」入口置灰并说明原因（T02890）；读不到配置时保持可点，
-  // 真被关闭时后端 403 仍会给出诚实文案
+  // 总开关关闭时「智能建任务」仍然可点：后端会退回规则解析（T02947 裁决 A），
+  // 这里只把提示换成「结果非 AI」，读不到配置时保持原提示
   const aiOff = useAIEnabled().enabled === false
 
   // ---- 模板市场状态 ----
@@ -917,7 +917,7 @@ export default function TaskList() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <TipButton tip={aiOff ? AI_GATE_OFF_TIP : '用一句话 AI 智能创建任务'} icon={<ThunderboltOutlined />} onClick={openAiParse} disabled={aiOff}>
+          <TipButton tip={aiOff ? AI_GATE_OFF_TIP : '用一句话 AI 智能创建任务'} icon={<ThunderboltOutlined />} onClick={openAiParse}>
             智能建任务
           </TipButton>
           <TipButton tip="打开任务模板市场" icon={<AppstoreOutlined />} onClick={openTemplateMarket}>
@@ -1364,7 +1364,7 @@ export default function TaskList() {
               用此结果继续 →
             </TipButton>
           ) : (
-            <TipButton tip={aiOff ? AI_GATE_OFF_TIP : '让 AI 解析需求并创建任务'} type="primary" loading={aiParsing} onClick={doAiParse} icon={<ThunderboltOutlined />} disabled={aiOff}>
+            <TipButton tip={aiOff ? AI_GATE_OFF_TIP : '让 AI 解析需求并创建任务'} type="primary" loading={aiParsing} onClick={doAiParse} icon={<ThunderboltOutlined />}>
               开始解析
             </TipButton>
           )}
