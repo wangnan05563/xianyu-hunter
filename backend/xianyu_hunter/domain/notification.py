@@ -30,6 +30,11 @@ class NotificationCategory(str, Enum):
 
     成员顺序 = 通知中心里标签的展示顺序（订单/登录/盯盘 是用户常看到的，
     任务/配置/系统 为 API 侧保留分类，当前无内置写入方）。
+
+    「无内置写入方」的确切含义（T02812 裁决 A）：后端没有任何模块会写
+    task/config/system，它们只作为 `POST /api/notifications` 的白名单值存在，
+    供手工/运维脚本按需创建通知。不要因为没有生产者就把它们当死代码删掉——
+    删掉会让历史行与外部调用方的 category 变成白名单外取值。
     """
 
     ORDER = "order"

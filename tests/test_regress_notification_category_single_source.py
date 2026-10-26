@@ -182,6 +182,62 @@ def test_domain_enum_members_match_whitelist():
         assert getattr(NotificationCategory, member).label
 
 
+DOC_SRS = ROOT / "docs" / "02-数据查看" / "通知中心-需求规格.md"
+DOC_DESIGN = ROOT / "docs" / "02-数据查看" / "通知中心-详细设计.md"
+
+
+def test_reserved_categories_have_no_writer_in_backend():
+    """T02812 裁决 A：task/config/system 保留为白名单分类，且后端确无生产者
+
+    真有人给它们加了写入点，这条会红——届时按 domain/notification.py 的流程同步：
+    枚举注释、api_notifications 白名单说明、两份文档的分类表与「内置写入方」列。
+    """
+    writer_files = [
+        path for path in BACKEND.rglob("*.py")
+        if "add_notification(" in path.read_text(encoding="utf-8")
+    ]
+    written: set[str] = set()
+    for path in writer_files:
+        for node, _fname in _category_keyword_nodes(path):
+            value = _resolve_category_value(node)
+            if value is not None:  # api_notifications 的透传写法 category=category 解不出来，属预期
+                written.add(value)
+    assert written == {"order", "auth", "price"}, (
+        f"通知写入方集合变了：{sorted(written)}；"
+        "新增/删除分类请同步 domain 注释、白名单说明与两份文档"
+    )
+
+
+def _doc_category_table(path: Path, heading: str) -> list[str]:
+    """截取文档里某个标题到下一个同级标题之间的分类表行"""
+    import re
+
+    src = path.read_text(encoding="utf-8")
+    start = src.find(heading)
+    assert start > -1, f"{path.name} 找不到章节：{heading}"
+    rest = src[start + len(heading):]
+    end = rest.find("\n### ")
+    block = rest if end == -1 else rest[:end]
+    return [ln for ln in block.splitlines() if re.match(r"^\|\s*`[a-z]+`", ln)]
+
+
+def test_docs_list_every_category_and_mark_the_reserved_ones():
+    """文档曾长期停在「5 分类」且漏掉真实写入的 price（T02812 裁决 A 要求写明用途）"""
+    import re
+
+    from xianyu_hunter.domain.notification import NOTIFICATION_CATEGORY_VALUES
+
+    for path, heading in ((DOC_SRS, "**FR-5.1**"), (DOC_DESIGN, "### 6.3")):
+        rows = _doc_category_table(path, heading)
+        values = {re.match(r"^\|\s*`([a-z]+)`", ln).group(1) for ln in rows}
+        assert values == set(NOTIFICATION_CATEGORY_VALUES), (
+            f"{path.name} 的分类表与枚举不一致：表内 {sorted(values)} / 枚举 {sorted(NOTIFICATION_CATEGORY_VALUES)}"
+        )
+        for reserved in ("task", "config", "system"):
+            row = next(ln for ln in rows if ln.startswith(f"| `{reserved}`"))
+            assert "无" in row, f"{path.name} 未标明 {reserved} 没有内置写入方"
+
+
 # ============== API 冒烟 ==============
 def test_post_price_category_accepted_and_persisted(api):
     """修复前：category=price 走 API 会被 400 拒掉。现在应当创建成功并原样落库"""

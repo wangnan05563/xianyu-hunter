@@ -44,6 +44,11 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 # 白名单不在此处手写枚举，而是取自 domain/notification（T02619）：
 # 原先这里是硬编码 5 个分类，唯独漏了 price_watch 真实写入的 price，
 # 导致「仓储能落库、API 会 400、前端标签渲染空白」三态不一致。
+#
+# 六个分类的用途（T02812 裁决 A：保留 task/config/system 但写明它们没有写入点）：
+# - order / auth / price：notification_engine 与 price_watch 会真实写入，通知中心日常可见；
+# - task / config / system：仅供手工调用本接口时使用（例如运维脚本标记一次配置变更），
+#   后端**没有任何生产者**——不要当成死代码删掉，它们是白名单契约的一部分。
 _ALLOWED_LEVELS: frozenset[str] = NOTIFICATION_LEVEL_VALUES
 _ALLOWED_CATEGORIES: frozenset[str] = NOTIFICATION_CATEGORY_VALUES
 
