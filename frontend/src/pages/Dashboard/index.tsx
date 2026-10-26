@@ -1,13 +1,14 @@
 import { useEffect, useState, useRef, useCallback, type Dispatch, type SetStateAction } from 'react'
 // 删除未使用的 theme 导入（S1128）
-import { Spin, Card, Col, Row, Alert, Space } from 'antd'
+import { Spin, Card, Col, Row, Alert, Space, Dropdown } from 'antd'
 import { useNavigate } from 'react-router-dom'
-import { LineChartOutlined } from '@ant-design/icons'
+import { DownOutlined, LineChartOutlined } from '@ant-design/icons'
 import {
   taskApi, statsApi, priceApi,
   type RecentEvent, type KpiCard, type TrendSeries, type TodayAlert, type StatsOverview, type HistogramData, type EvalFunnelData,
 } from '../../api'
 import { QuickEntryIcon } from '../../components/icons/GeometricIcons'
+import { moreQuickEntries, visibleQuickEntries } from './quickEntries'
 import StatCardsSection from './components/StatCardsSection'
 import KpiSection from './components/KpiSection'
 import AlertRadar from './components/AlertRadar'
@@ -400,86 +401,35 @@ export default function Dashboard() {
           onNavigate={navigate}
         />
 
-        {/* 快捷入口（评审 2.1-3：原名「可视化配置入口」，但 11 项里含系统清理/反爬等非配置页，名实不符） */}
-        <Card style={{ marginTop: 16 }} title="快捷入口">
+        {/* 快捷入口（评审 2.1-3：原名「可视化配置入口」，但 11 项里含系统清理/反爬等非配置页，名实不符）
+            T02640 裁决：保持现有顺序，前 6 项直接可见，其余收进右上角「更多」下拉，不删任何入口 */}
+        <Card
+          style={{ marginTop: 16 }}
+          title="快捷入口"
+          extra={(
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: moreQuickEntries().map((e) => ({ key: e.path, label: e.title })),
+                onClick: ({ key }) => navigate(key),
+              }}
+            >
+              <TipButton type="link" size="small" tip="其余入口仍可从这里、侧栏或命令面板到达">
+                更多 <DownOutlined />
+              </TipButton>
+            </Dropdown>
+          )}
+        >
           <Row gutter={[16, 16]}>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/tasks/new')}>
-                <QuickEntryIcon type="task" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>任务创建</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>向导式配置</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/price')}>
-                <QuickEntryIcon type="price" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>价格策略</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>滑块 + 预览</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/eval')}>
-                <QuickEntryIcon type="eval" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>评估规则</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>雷达图可视化</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/notifier')}>
-                <QuickEntryIcon type="notifier" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>通知渠道</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>拖拽排序</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/ai')}>
-                <QuickEntryIcon type="ai" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>AI 服务</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>模型与深度分析</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/buyer')}>
-                <QuickEntryIcon type="buyer" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>抢单策略</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>极速抢占配置</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/search')}>
-                <QuickEntryIcon type="search" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>搜索参数</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>筛选与过滤</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/config/version')}>
-                <QuickEntryIcon type="version" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>配置版本</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>版本回滚管理</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/maintenance')}>
-                <QuickEntryIcon type="cleanup" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>系统清理</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>缓存与日志维护</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/maintenance/db')}>
-                <QuickEntryIcon type="dbAdmin" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>数据库维护</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>业务表在线管理</div>
-              </Card>
-            </Col>
-            <Col xs={12} md={6}>
-              <Card className="quick-entry-card" size="small" onClick={() => navigate('/anticrawl')}>
-                <QuickEntryIcon type="antiCrawl" size={48} />
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>反爬登录管理</div>
-                <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>策略与会话监控</div>
-              </Card>
-            </Col>
+            {visibleQuickEntries().map((e) => (
+              <Col xs={12} md={6} key={e.path}>
+                <Card className="quick-entry-card" size="small" onClick={() => navigate(e.path)}>
+                  <QuickEntryIcon type={e.icon} size={48} />
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{e.title}</div>
+                  <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>{e.desc}</div>
+                </Card>
+              </Col>
+            ))}
           </Row>
         </Card>
       </Spin>

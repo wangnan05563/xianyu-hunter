@@ -21,7 +21,7 @@ export const MENU_GUIDES: MenuGuide[] = [
     route: '/',
     steps: [
       { selector: '.page-container', title: '仪表盘', description: '系统总览入口，集中展示关键指标、告警、事件流与价格分布，日常运维首选首页。' },
-      { selector: '.quick-entry-card', title: '快捷入口', description: '卡片墙统一直达高频配置页（任务、价格、评估、通知等），避免在侧边栏逐级查找。', placement: 'top' },
+      { selector: '.quick-entry-card', title: '快捷入口', description: '卡片墙直达 6 个高频配置页（任务、价格、评估、通知等），其余入口收在右上角「更多」下拉，不必在侧边栏逐级查找。', placement: 'top' },
     ],
   },
   {
