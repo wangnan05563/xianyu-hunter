@@ -9,7 +9,7 @@ import {
 import { ReloadOutlined, SearchOutlined, DownloadOutlined, PauseCircleOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons'
 import { logApi, type LogEntry } from '../../../api'
 import { extractApiError } from '../../../utils/apiError'
-import { levelColor, normalizeLevel } from '../../../constants/logLevels'
+import { levelColor, LOG_LEVEL, normalizeLevel } from '../../../constants/logLevels'
 import { useFailedSources } from '../../../hooks/useFailedSources'
 import LoadFailedBar from '../../components/LoadFailedBar'
 
@@ -141,10 +141,10 @@ export default function MobileLogs() {
             value={level}
             onChange={(v) => setLevel(v)}
             options={[
-              { value: 'err', label: 'ERROR' },
-              { value: 'warn', label: 'WARN' },
-              { value: 'info', label: 'INFO' },
-              { value: 'debug', label: 'DEBUG' },
+              { value: LOG_LEVEL.ERROR, label: 'ERROR' },
+              { value: LOG_LEVEL.WARNING, label: 'WARNING' },
+              { value: LOG_LEVEL.INFO, label: 'INFO' },
+              { value: LOG_LEVEL.DEBUG, label: 'DEBUG' },
             ]}
           />
           <Button
@@ -208,8 +208,8 @@ export default function MobileLogs() {
         failed.logs ? null : <Empty description="暂无日志" />
       ) : (
         entries.map((item, idx) => {
-          // level 归一化后取色与展示：表内存小写缩写（err/warn/info/debug），
-          // 直接大写会得到 ERR/WARN，落在颜色表键外 → Tag 恒灰
+          // level 归一化后取色与展示：后端已统一写小写全词（error/warning/info/debug），
+          // 展示层只是转大写；未知值原样大写，配色回退灰色
           const lvKey = normalizeLevel(item.level || 'info')
           const color = levelColor(item.level)
           return (

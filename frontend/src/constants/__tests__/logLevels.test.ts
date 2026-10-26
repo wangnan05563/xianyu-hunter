@@ -1,28 +1,24 @@
 /**
- * 日志级别归一化单测（T02569 / REQ-037 / 评审 2.7-1、2.7-2）
+ * 日志级别归一化单测（T02569 读侧 → T02683 归一后）
  *
- * 回归点：后端 events.level 存小写缩写（实测库内 info / err / warning 并存，另有代码路径写 error），
- * 前端原先直接 `level.toUpperCase()` 后查大写键表 —— `err` 变成 `ERR`，既不在颜色表键内
- * （级别 Tag 恒灰），也不在分布桶内（有错误日志时 ERROR 恒显示 0）。
- * 按要求必须同时覆盖 err 与 error 两种写法。
+ * events.level 自 T02683 起统一为小写全词，别名表已删除；
+ * 前端只做大小写归一，展示与配色仍用大写键。
  */
 import { describe, it, expect } from 'vitest'
 import { countLevels, levelColor, normalizeLevel } from '../logLevels'
 
 describe('normalizeLevel', () => {
-  it('缩写与全称两种写法归一到同一规范键', () => {
-    expect(normalizeLevel('err')).toBe('ERROR')
+  it('规范小写全词归一到大写键', () => {
     expect(normalizeLevel('error')).toBe('ERROR')
-    expect(normalizeLevel('ERROR')).toBe('ERROR')
-    expect(normalizeLevel('warn')).toBe('WARNING')
     expect(normalizeLevel('warning')).toBe('WARNING')
     expect(normalizeLevel('info')).toBe('INFO')
     expect(normalizeLevel('debug')).toBe('DEBUG')
     expect(normalizeLevel('trace')).toBe('TRACE')
+    expect(normalizeLevel('ERROR')).toBe('ERROR')
   })
 
   it('大小写与首尾空格不影响结果，空值返回空串', () => {
-    expect(normalizeLevel('  Err ')).toBe('ERROR')
+    expect(normalizeLevel('  Error ')).toBe('ERROR')
     expect(normalizeLevel('InFo')).toBe('INFO')
     expect(normalizeLevel(undefined)).toBe('')
     expect(normalizeLevel(null)).toBe('')
@@ -32,15 +28,19 @@ describe('normalizeLevel', () => {
   it('未知字面值原样大写返回，不吞掉也不误并', () => {
     expect(normalizeLevel('critical')).toBe('CRITICAL')
   })
+
+  it('旧缩写不再被合并（T02683 后库里不会再有）', () => {
+    expect(normalizeLevel('err')).toBe('ERR')
+    expect(normalizeLevel('warn')).toBe('WARN')
+  })
 })
 
 describe('levelColor', () => {
-  it('小写缩写取到与全称相同的颜色', () => {
-    expect(levelColor('err')).toBe('red')
+  it('规范级别取到对应颜色', () => {
     expect(levelColor('error')).toBe('red')
-    expect(levelColor('warn')).toBe('orange')
     expect(levelColor('warning')).toBe('orange')
     expect(levelColor('info')).toBe('blue')
+    expect(levelColor('debug')).toBe('default')
   })
 
   it('未知级别与空值回退 default（灰色），不再依赖调用方兜底', () => {
@@ -50,21 +50,20 @@ describe('levelColor', () => {
 })
 
 describe('countLevels', () => {
-  it('err 与 error 合并计入 ERROR，warn 与 warning 合并计入 WARNING', () => {
+  it('按规范级别累加', () => {
     const dist = countLevels([
-      { level: 'err' },
       { level: 'error' },
       { level: 'warning' },
-      { level: 'warn' },
       { level: 'info' },
+      { level: 'warning' },
     ])
-    expect(dist.ERROR).toBe(2)
+    expect(dist.ERROR).toBe(1)
     expect(dist.WARNING).toBe(2)
     expect(dist.INFO).toBe(1)
   })
 
   it('四个主级别即使没有数据也保持 0 占位，口径与旧版一致', () => {
-    const dist = countLevels([{ level: 'err' }])
+    const dist = countLevels([{ level: 'error' }])
     expect(Object.keys(dist).slice(0, 4)).toEqual(['ERROR', 'WARNING', 'INFO', 'DEBUG'])
     expect(dist.WARNING).toBe(0)
     expect(dist.DEBUG).toBe(0)

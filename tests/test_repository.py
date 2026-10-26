@@ -70,7 +70,7 @@ def test_item_dedup(tmp_repo: Repository) -> None:
 
 def test_event_save_and_list(tmp_repo: Repository) -> None:
     """事件写入与按级别过滤"""
-    for i, lvl in enumerate(["INFO", "WARN", "ERROR", "INFO"]):
+    for i, lvl in enumerate(["info", "warning", "error", "info"]):
         tmp_repo.save_event({
             "type": "task.search_done",
             "task_id": "t1",

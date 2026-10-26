@@ -2,7 +2,7 @@
  * 实时日志页：级别归一化展示 + 停止/暂停图标 + 导出拼筛选（T02569 / REQ-037、038、039）
  *
  * 三条回归：
- * 1. 搜索结果里 `err` 与 `error` 两种写法都必须计入 ERROR 桶，且级别 Tag 不再恒灰；
+ * 1. 规范级别（error/warning/info）都计入对应桶，级别 Tag 不恒灰（T02683 后库内只此一种写法）；
  * 2. 主开关「停止实时流」用 StopOutlined，与内层「暂停」的 PauseCircleOutlined 区分开；
  * 3. 导出 CSV 的链接必须带上当前筛选参数（关键词/级别/任务 ID），导出 LOG 是全量原始文件、不拼参数。
  */
@@ -22,9 +22,9 @@ vi.mock('../../../api', async (importOriginal) => {
 
 import Logs from '../Logs'
 
-// 后端 events.level 实际写入的字面值（小写缩写 + 个别全称）
+// 后端 events.level 归一后的规范值（小写全词）
 const SEARCH_ITEMS: LogEntry[] = [
-  { id: '1', created_at: '2026-10-19T10:00:00', level: 'err', message: '数据库连接失败', stage: 'db' },
+  { id: '1', created_at: '2026-10-19T10:00:00', level: 'error', message: '数据库连接失败', stage: 'db' },
   { id: '2', created_at: '2026-10-19T10:00:01', level: 'error', message: '采集异常' },
   { id: '3', created_at: '2026-10-19T10:00:02', level: 'warning', message: '价格偏离预警' },
   { id: '4', created_at: '2026-10-19T10:00:03', level: 'info', message: '开始搜索' },
@@ -59,19 +59,19 @@ beforeEach(() => {
 })
 
 describe('级别归一化展示（REQ-037）', () => {
-  it('err 与 error 合并计入 ERROR，Tag 取到红色而非恒灰', async () => {
+  it('规范级别计入对应桶，Tag 取到红色而非恒灰', async () => {
     const user = userEvent.setup()
     renderLogs()
     await user.click(await screen.findByRole('button', { name: /搜索/ }))
 
-    // 分布条：两个 err/error 行合并为 ERROR 2，warning 计入 WARNING 1
+    // 分布条：两个 error 行计入 ERROR 2，warning 计入 WARNING 1
     expect(await screen.findByText('ERROR 2')).toBeTruthy()
     expect(screen.getByText('WARNING 1')).toBeTruthy()
     expect(screen.getByText('INFO 1')).toBeTruthy()
     expect(screen.getByText('DEBUG 0')).toBeTruthy()
     expect(screen.getByText('ERROR 2')).toHaveClass('ant-tag-red')
 
-    // 结果行：原先 `err` 查不到颜色 → 恒灰；现在按规范键取色并显示统一名称
+    // 结果行：统一按规范键取色并显示统一名称
     // 限定在结果列表内取，原始日志面板那行本身就写全称 ERROR，不参与本条断言
     const list = (await screen.findByText('数据库连接失败')).closest('.ant-list') as HTMLElement
     const rowTags = within(list).getAllByText('ERROR')
@@ -111,12 +111,12 @@ describe('停止与暂停图标区分（REQ-038）', () => {
 
 describe('导出参数拼合（REQ-039）', () => {
   it('CSV 导出链接带当前筛选条件，LOG 导出保持全量文件', () => {
-    renderLogs('/logs?query=timeout&level=err&task_id=t-9')
+    renderLogs('/logs?query=timeout&level=error&task_id=t-9')
     const csv = screen.getByText('导出CSV').closest('a')
     const log = screen.getByText('导出LOG').closest('a')
     expect(csv?.getAttribute('href')).toContain('format=csv')
     expect(csv?.getAttribute('href')).toContain('q=timeout')
-    expect(csv?.getAttribute('href')).toContain('level=err')
+    expect(csv?.getAttribute('href')).toContain('level=error')
     expect(csv?.getAttribute('href')).toContain('task_id=t-9')
     expect(log?.getAttribute('href')).not.toContain('q=')
     expect(log?.getAttribute('href')).not.toContain('task_id=')

@@ -778,7 +778,7 @@ def _log_cleanup_action(
             "task_id": None,
             "user_id": user_id,
             "stage": "cleanup",
-            "level": "err" if errors else "info",
+            "level": "error" if errors else "info",
             "message": f"清理{category}({target}): {len(cleaned)} 项完成" + (f", {len(errors)} 错误" if errors else ""),
             "payload": json.dumps({
                 "category": category,

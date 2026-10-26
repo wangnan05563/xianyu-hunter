@@ -914,12 +914,30 @@ def create_sqlite_engine(db_path: str = "data/xianyu.db"):
     return engine
 
 
+def _normalize_event_levels(engine: Engine) -> None:
+    """把 events.level 历史写法归一到小写全词（T02683）
+
+    别名表删除后读侧只认 info/warning/error/debug/trace，若不改写旧行，
+    存量 warn/err 与大写行会在任何级别筛选下消失。幂等：第二次执行改 0 行。
+    """
+    with engine.begin() as conn:
+        conn.execute(sa_text(
+            "UPDATE events SET level = CASE lower(trim(level)) "
+            "WHEN 'warn' THEN 'warning' "
+            "WHEN 'err' THEN 'error' "
+            "ELSE lower(trim(level)) END "
+            "WHERE lower(trim(level)) IN "
+            "('warn','err','info','warning','error','debug','trace')"
+        ))
+
+
 def init_db(db_path: str = "data/xianyu.db") -> None:
     """初始化数据库（创建所有表 + 增量迁移缺失列/索引）"""
     engine = create_sqlite_engine(db_path)
     Base.metadata.create_all(engine)
     # 增量迁移：为已有表添加 ORM 中新增但数据库中缺失的列
     _migrate_add_column(engine, "events", "type", "TEXT")
+    _normalize_event_levels(engine)
     _migrate_add_column(engine, "tasks", "max_publish_days", "INTEGER")
     # 调度模式字段：修复前端 cron 配置断层（之前 use_cron 始终为 False，所有任务走 60s interval）
     _migrate_add_column(engine, "tasks", "use_cron", "INTEGER")

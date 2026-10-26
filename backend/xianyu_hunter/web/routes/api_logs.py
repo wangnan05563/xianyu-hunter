@@ -182,14 +182,13 @@ def _compute_log_histograms(
 @router.get("/search")
 def search_logs(
     request: Request,
-    # 大小写都允许：前端 SPA 下拉用大写（ERROR/WARNING/INFO/DEBUG），
-    # 旧版控制台/直接 API 调用可能用小写（err/warn/info/debug），
-    # Python re 模块不支持 (?i) 顶层修饰符，Pydantic v2 同样不识别，
-    # 这里用显式枚举，函数入口再归一化为小写匹配 DB 中的值。
+    # 大小写都允许：前端 SPA 下拉传规范小写全词（error/warning/info/debug），
+    # 直接 API 调用可能传大写；旧缩写 err/warn 不再接受（T02683 归一），
+    # 避免别名继续扩散。Python re 不支持 (?i) 顶层修饰符，这里显式枚举。
     q: str | None = Query(None, description="关键字（大小写不敏感子串匹配 message/payload）"),
     level: str | None = Query(
         None,
-        pattern=r"^(info|INFO|debug|DEBUG|err|ERR|error|ERROR|warn|WARN|warning|WARNING|trace|TRACE)$",
+        pattern=r"^(info|INFO|debug|DEBUG|error|ERROR|warning|WARNING|trace|TRACE)$",
     ),
     tag: str | None = Query(None, description="标签名（payload.tags 含该标签）"),
     task_id: str | None = Query(None, description="按 task_id 过滤"),
@@ -213,8 +212,8 @@ def search_logs(
     request_id 参数：精确匹配流水号，用于检索同链路所有关联日志。
     传入 request_id 时优先走 list_events_by_request 索引查询，性能优于全表扫描。
     """
-    # 归一化 level 大小写：events 表中 level 统一存小写（"info"/"warn"/"err"），
-    # 前端 SPA 下拉传大写（ERROR/WARNING/INFO/DEBUG），这里统一转小写
+    # 归一化 level 大小写：events.level 统一存小写全词（info/warning/error），
+    # 前端 SPA 下拉传小写规范值，直接 API 调用可能传大写，这里统一转小写
     if level:
         level = level.lower()
     # 解析时间范围参数
@@ -326,7 +325,7 @@ def export_logs(
     q: str | None = Query(None),
     level: str | None = Query(
         None,
-        pattern=r"^(info|INFO|debug|DEBUG|err|ERR|error|ERROR|warn|WARN|warning|WARNING|trace|TRACE)$",
+        pattern=r"^(info|INFO|debug|DEBUG|error|ERROR|warning|WARNING|trace|TRACE)$",
     ),
     tag: str | None = Query(None),
     task_id: str | None = Query(None),

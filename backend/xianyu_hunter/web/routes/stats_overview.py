@@ -122,7 +122,7 @@ def _query_funnel_metrics(engine) -> tuple[int, int, int]:
     - eval_pass：stats_eval_funnel.py `eval_pass_expr`（risk_level == 'low'），
       即业务 KPI「评估通过率」的分子
     - notify_failed：business_kpi.py `_kpi_notify_failure_rate` 的分子
-      （stage=_NOTIFY_STAGE 且 level='err'），同样共用 stage 常量避免字面值漂移
+      （stage=_NOTIFY_STAGE 且 level='error'），同样共用 stage 常量避免字面值漂移
 
     P3-1 风格：独立 connection + CASE WHEN 一次聚合，配合 asyncio.gather 并发。
     """
@@ -133,7 +133,7 @@ def _query_funnel_metrics(engine) -> tuple[int, int, int]:
         ).scalar() or 0)
         eval_pass_expr = case((EvaluationRow.risk_level == "low", 1), else_=0)
         notify_fail_expr = case(
-            ((EventRow.stage == _NOTIFY_STAGE) & (EventRow.level == "err"), 1),
+            ((EventRow.stage == _NOTIFY_STAGE) & (EventRow.level == "error"), 1),
             else_=0,
         )
         eval_row = conn.execute(

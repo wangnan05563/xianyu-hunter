@@ -1,8 +1,8 @@
 // 日志级别归一化与配色（单点口径）
 //
-// 为什么要归一：后端 events.level 存小写缩写，实测库里就有 info / err / warning 三种字面值；
-// 而前端筛选下拉与展示用全称大写。直接 `level.toUpperCase()` 后 `err` 变成 `ERR`，
-// 既不在颜色表键内（级别 Tag 恒灰），也不在分布桶内（有错误日志时 ERROR 恒显示 0）。
+// events.level 自 T02683 起统一为小写全词（info / warning / error / debug / trace），
+// 后端启动迁移会把历史 warn / err / 大写行改写干净。前端展示与配色仍用大写键，
+// 所以这里只做大小写归一，不再维护缩写别名表。
 // 所有取色与计数一律走本文件的 normalizeLevel / levelColor / countLevels，不要再直接索引颜色表。
 
 /** 规范级别 → Tag 配色 */
@@ -14,21 +14,18 @@ export const LEVEL_COLOR: Record<string, string> = {
   TRACE: 'default',
 }
 
-/** 后端/历史写入的各种写法 → 规范大写键 */
-const LEVEL_ALIASES: Record<string, string> = {
-  ERR: 'ERROR',
-  ERROR: 'ERROR',
-  WARN: 'WARNING',
-  WARNING: 'WARNING',
-  INFO: 'INFO',
-  DEBUG: 'DEBUG',
-  TRACE: 'TRACE',
-}
+/** 规范级别取值（小写全词，与后端 events.level 同源）；筛选项一律引用这里，别写字面值 */
+export const LOG_LEVEL = {
+  ERROR: 'error',
+  WARNING: 'warning',
+  INFO: 'info',
+  DEBUG: 'debug',
+  TRACE: 'trace',
+} as const
 
 /** 原始级别字面值 → 规范大写键；未知字面值原样大写返回（配色自然回退 default） */
 export function normalizeLevel(raw?: string | null): string {
-  const upper = (raw ?? '').trim().toUpperCase()
-  return LEVEL_ALIASES[upper] ?? upper
+  return (raw ?? '').trim().toUpperCase()
 }
 
 /** 级别 Tag 配色 */

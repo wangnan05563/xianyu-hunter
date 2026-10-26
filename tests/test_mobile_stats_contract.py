@@ -113,9 +113,9 @@ def test_stats_metrics_are_real_counts_not_proxies(client: TestClient, tmp_repo:
     tmp_repo.save_event({"type": "notify.sent", "task_id": "t1", "item_id": "i2",
                          "stage": "notify", "level": "info", "message": "ok", "payload": "{}"})
     tmp_repo.save_event({"type": "notify.failed", "task_id": "t1", "item_id": "i3",
-                         "stage": "notify", "level": "err", "message": "推送失败", "payload": "{}"})
+                         "stage": "notify", "level": "error", "message": "推送失败", "payload": "{}"})
     tmp_repo.save_event({"type": "eval.failed", "task_id": "t1", "item_id": "i3",
-                         "stage": "eval", "level": "err", "message": "评估异常", "payload": "{}"})
+                         "stage": "eval", "level": "error", "message": "评估异常", "payload": "{}"})
     # 订单失败 1 条：用来证明「通知失败」不再拿 orders.failed 冒充
     tmp_repo.upsert_order({"id": "o1", "task_id": "t1", "item_id": "i1",
                            "price": 10.0, "status": "failed"})
@@ -124,7 +124,7 @@ def test_stats_metrics_are_real_counts_not_proxies(client: TestClient, tmp_repo:
     m = data["metrics"]
     assert m["items_discovered"] == 3, "发现商品数应为 DISTINCT item 关联数（3），不是任务数（2）"
     assert m["eval_pass"] == 2, "评估通过数应为 risk_level='low' 的条数（2），不是评估总数（4）"
-    assert m["notify_failed"] == 1, "通知失败数应为 stage=notify 且 level=err（1），不是订单失败数（1 巧合）"
+    assert m["notify_failed"] == 1, "通知失败数应为 stage=notify 且 level=error（1），不是订单失败数（1 巧合）"
     # 显式钉住「不等于被冒充字段」——orders.failed 恰好也是 1，改用不等式会误判，
     # 因此这里断言字段存在且与 tasks.total / evaluation_count 不同源
     assert m["items_discovered"] != data["tasks"]["total"]

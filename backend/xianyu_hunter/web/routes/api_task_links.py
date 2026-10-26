@@ -1921,19 +1921,19 @@ def _build_live_item_detail(item_id: str, display: dict) -> Any:
 def _resolve_eval_event_level(is_passed: bool, risk_level: Any) -> str:
     """根据评估结果决定 events 表事件 level
 
-    为什么独立：level 判断含嵌套 if/elif/else + 二次 if 覆盖（UNKNOWN 强制改 warn），
+    为什么独立：level 判断含嵌套 if/elif/else + 二次 if 覆盖（UNKNOWN 强制改 warning），
     集中维护避免与 upsert_eval_event 写入逻辑耦合，且便于单元测试覆盖所有分支。
     """
     from xianyu_hunter.domain.evaluation import RiskLevel
     if is_passed:
         level = "info"
     elif risk_level != RiskLevel.EXTREME:
-        level = "warn"
+        level = "warning"
     else:
-        level = "err"
-    # UNKNOWN 风险等级强制改 warn：数据不足时不应显示 error 级别
+        level = "error"
+    # UNKNOWN 风险等级强制改 warning：数据不足时不应显示 error 级别
     if risk_level == RiskLevel.UNKNOWN:
-        level = "warn"
+        level = "warning"
     return level
 
 

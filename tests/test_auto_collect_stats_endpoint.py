@@ -107,7 +107,7 @@ def _seed_failure(repo: Repository, item_id: str, error: str, *, created_at=None
         "task_id": "t1",
         "item_id": item_id,
         "stage": "collect",
-        "level": "warn",
+        "level": "warning",
         "message": f"自动官方采集失败 {item_id}: {error[:200]}",
         "payload": json.dumps({
             "task_id": "t1",

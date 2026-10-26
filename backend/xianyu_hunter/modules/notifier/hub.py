@@ -190,7 +190,7 @@ class NotifierHub:
             try:
                 failed_channels = [r.channel for r in results if not r.success]
                 is_any_failed = bool(failed_channels)
-                level = "err" if is_any_failed else "info"
+                level = "error" if is_any_failed else "info"
                 message = f"{event.type.value} → {ok}/{len(results)} 渠道成功"
                 if is_any_failed:
                     message += f"，失败渠道: {','.join(failed_channels)}"

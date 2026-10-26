@@ -169,7 +169,7 @@ COLUMN_LABELS: dict[str, dict[str, str]] = {
         "task_id": "关联任务ID（FK→tasks.id，事件所属任务，NULL=全局事件）",
         "item_id": "关联商品ID（FK→items.id，事件关联的商品，NULL=非商品事件）",
         "stage": "执行阶段（如crawl/eval/order/notify，标识事件发生在哪个处理阶段）",
-        "level": "日志级别（debug/info/warn/err，反映事件严重程度）",
+        "level": "日志级别（debug/info/warning/error，反映事件严重程度）",
         "message": "事件消息（人类可读的事件描述文本）",
         "payload": "事件详情（JSON，结构化的附加数据，如错误堆栈、配置快照等）",
         "created_at": "事件时间（UTC，事件发生的时间戳，核心排序字段）",
@@ -625,7 +625,7 @@ def create_row(
             conn.execute(text(sql), values)
     except SQLAlchemyError as e:
         # 唯一约束冲突、外键冲突等都返回 409，提示用户修正数据
-        _log_audit(container, "create_failed", table, user_id=owner_user_id(request), detail={"error": str(e), "values": values}, level="err")
+        _log_audit(container, "create_failed", table, user_id=owner_user_id(request), detail={"error": str(e), "values": values}, level="error")
         raise HTTPException(status_code=409, detail=f"写入失败: {e}")
 
     _log_audit(container, "create", table, user_id=owner_user_id(request), detail={"values": values})
@@ -698,7 +698,7 @@ def update_row(
         with container.repo.engine.begin() as conn:
             result = conn.execute(text(sql), {**values, "pk": pk_val})
     except SQLAlchemyError as e:
-        _log_audit(container, "update_failed", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"error": str(e)}, level="err")
+        _log_audit(container, "update_failed", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"error": str(e)}, level="error")
         raise HTTPException(status_code=409, detail=f"更新失败: {e}")
 
     if result.rowcount == 0:
@@ -742,13 +742,13 @@ def delete_row(
             # 再删主表记录
             result = conn.execute(text(f"DELETE FROM {table} WHERE {pk_col['name']} = :pk"), {"pk": pk_val})
     except SQLAlchemyError as e:
-        _log_audit(container, "delete_failed", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"error": str(e)}, level="err")
+        _log_audit(container, "delete_failed", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"error": str(e)}, level="error")
         raise HTTPException(status_code=409, detail=f"删除失败: {e}")
 
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail=f"主键 {pk_value} 不存在")
 
-    _log_audit(container, "delete", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"cascade": cascade_affected}, level="warn")
+    _log_audit(container, "delete", table, user_id=owner_user_id(request), pk_value=pk_value, detail={"cascade": cascade_affected}, level="warning")
     return {"ok": True, "affected": result.rowcount, "cascade": cascade_affected}
 
 
@@ -786,10 +786,10 @@ def batch_delete_rows(
             )
             result = conn.execute(stmt, {"ids": converted})
     except SQLAlchemyError as e:
-        _log_audit(container, "batch_delete_failed", table, user_id=owner_user_id(request), detail={"error": str(e), "count": len(converted)}, level="err")
+        _log_audit(container, "batch_delete_failed", table, user_id=owner_user_id(request), detail={"error": str(e), "count": len(converted)}, level="error")
         raise HTTPException(status_code=409, detail=f"批量删除失败: {e}")
 
-    _log_audit(container, "batch_delete", table, user_id=owner_user_id(request), detail={"requested": len(converted), "affected": result.rowcount, "cascade": cascade_affected}, level="warn")
+    _log_audit(container, "batch_delete", table, user_id=owner_user_id(request), detail={"requested": len(converted), "affected": result.rowcount, "cascade": cascade_affected}, level="warning")
     return {"ok": True, "requested": len(converted), "affected": result.rowcount, "cascade": cascade_affected}
 
 
@@ -957,7 +957,7 @@ def import_rows(
         container, "import", table,
         user_id=owner_user_id(request),
         detail={"mode": body.mode, "total": len(body.rows), "inserted": inserted, "skipped": skipped, "errors": len(errors)},
-        level="warn" if errors else "info",
+        level="warning" if errors else "info",
     )
     return {
         "ok": True,

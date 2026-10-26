@@ -141,35 +141,3 @@ class Event:
         # 未显式指定 severity 时从 type 推导，确保免打扰决策可用
         if not self.severity:
             self.severity = severity_of(self.type)
-
-
-# ============== events.level 读取侧别名 ==============
-# 表内 level 的写法历史上并不统一：实测开发库同时有 info / err / warning 三种字面值，
-# 另有代码路径与既有测试写全称大写（ERROR/WARN）。级别枚举归一是独立范围（与订单状态
-# T02585 同类），在那之前按级别筛选必须按别名组匹配，否则「筛 ERROR」漏掉 error 行、
-# 「筛 WARN」漏掉全部 warning 行——搜索结果、级别分布与导出 CSV 三处一起少数据。
-_LEVEL_ALIASES: dict[str, tuple[str, ...]] = {
-    "err": ("err", "error"),
-    "error": ("err", "error"),
-    "warn": ("warn", "warning"),
-    "warning": ("warn", "warning"),
-    "info": ("info",),
-    "debug": ("debug",),
-    "trace": ("trace",),
-}
-
-
-def level_literals(level: str | None) -> tuple[str, ...]:
-    """把一个级别筛选值展开成它在表内可能出现的全部字面值
-
-    空值返回空元组（调用方据此不加过滤分支）；未知字面值原样返回，保持「精确匹配」
-    语义，不放大成「不过滤」。每种写法同时给出小写与大写两形——SQLite 的字符串比较
-    默认大小写敏感，而库里两种写法都出现过。
-    """
-    normalized = (level or "").strip().lower()
-    if not normalized:
-        return ()
-    literals: list[str] = []
-    for spelling in _LEVEL_ALIASES.get(normalized, (normalized,)):
-        literals.extend((spelling, spelling.upper()))
-    return tuple(literals)

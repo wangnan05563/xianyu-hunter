@@ -1,22 +1,15 @@
-"""日志级别筛选别名（T02569 / REQ-037、REQ-039 / 评审 2.7-1、2.7-2、2.7-4）
+"""日志级别筛选（T02569 读侧 → T02683 归一后）
 
-钉住两件只有真数据才会暴露的问题：
-
-1. 库里 events.level 的字面值历史上并不统一：实测开发库同时存在
-   `info`(15173) / `err`(30) / `warning`(4)，另有代码路径写 `error`。
-   原先 list_events 用 `level == :level` 精确匹配，前端下拉传 `warn`
-   就一条 warning 也查不到，传 `err` 查不到写成 error 的行——
-   搜索结果、级别分布、导出 CSV 三处一起少数据。
-2. 导出 CSV 现在与页面同源：exportUrl 拼上 q/level/task_id，
-   后端必须真的按这些参数过滤（评审前是固定 URL 导全量，文案却写「导出当前日志」）。
-
-级别写入侧的枚举归一是独立范围（与订单状态 T02585 同类），
-本测试钉的是读取侧互认；归一落地后这些别名桶应随之删除。
+T02683 裁决「小写全词」：events.level 写侧只写 info / warning / error / debug / trace，
+启动时 init_db 把历史 warn/err/大写行幂等改写。别名表已删除，读侧只认规范值，
+本文件钉住归一后的真实行为，防止别名以任何形式回流。
 
 按前端实际调用的端点打真实 FastAPI 应用（请求序列化、白名单校验、Repository
 写入、回读全链路为真），只把数据库换成临时 SQLite，不使用 Mock 替身。
 """
 from __future__ import annotations
+
+import sqlite3
 
 import pytest
 
@@ -57,85 +50,89 @@ def _mk_event(repo, *, level: str, message: str, task_id: str = "t1") -> int:
     })
 
 
-# ---------------- 1. 领域层：别名展开 ----------------
+# ---------------- 1. 别名表已删除 ----------------
 
-def test_level_literals_expands_aliases() -> None:
-    from xianyu_hunter.domain.events import level_literals
+def test_alias_table_is_gone() -> None:
+    import xianyu_hunter.domain.events as events
 
-    # 每种写法同时给出小写/大写两形（SQLite 字符串比较大小写敏感，库里两种都出现过）
-    assert set(level_literals("err")) == {"err", "ERR", "error", "ERROR"}
-    assert set(level_literals("error")) == {"err", "ERR", "error", "ERROR"}
-    assert set(level_literals("warn")) == {"warn", "WARN", "warning", "WARNING"}
-    assert set(level_literals("WARN")) == {"warn", "WARN", "warning", "WARNING"}
-    assert set(level_literals("info")) == {"info", "INFO"}
-    assert set(level_literals("debug")) == {"debug", "DEBUG"}
+    assert not hasattr(events, "level_literals")
+    assert not hasattr(events, "_LEVEL_ALIASES")
 
 
-def test_level_literals_empty_and_unknown() -> None:
-    from xianyu_hunter.domain.events import level_literals
+# ---------------- 2. 仓储层：只看规范值 ----------------
 
-    # 空值 → 空元组（调用方据此不加过滤分支）
-    assert level_literals(None) == ()
-    assert level_literals("  ") == ()
-    # 未知字面值原样给出大小写两形，保持精确匹配语义，不放大成「不过滤」
-    assert set(level_literals("Critical")) == {"critical", "CRITICAL"}
-
-
-# ---------------- 2. 仓储层：按别名组匹配 ----------------
-
-def test_list_events_matches_both_spellings(api) -> None:
+def test_list_events_filters_by_canonical_level(api) -> None:
     _, repo = api
-    _mk_event(repo, level="err", message="缩写写法")
-    _mk_event(repo, level="error", message="全称写法")
-    _mk_event(repo, level="warning", message="全称警告")
-    _mk_event(repo, level="warn", message="缩写警告")
+    _mk_event(repo, level="error", message="错误")
+    _mk_event(repo, level="warning", message="警告")
     _mk_event(repo, level="info", message="信息")
 
-    errors = {e["message"] for e in repo.list_events(level="err", limit=50)}
-    assert errors == {"缩写写法", "全称写法"}
-
-    warns = {e["message"] for e in repo.list_events(level="warn", limit=50)}
-    assert warns == {"全称警告", "缩写警告"}
-
-    # 反向：以全称筛选也必须命中缩写行
-    assert {e["message"] for e in repo.list_events(level="error", limit=50)} == {"缩写写法", "全称写法"}
-
-    # 其余级别不受影响
+    assert {e["message"] for e in repo.list_events(level="error", limit=50)} == {"错误"}
+    assert {e["message"] for e in repo.list_events(level="warning", limit=50)} == {"警告"}
     assert {e["message"] for e in repo.list_events(level="info", limit=50)} == {"信息"}
+    # 调用方传大写由仓储统一转小写，不算别名
+    assert {e["message"] for e in repo.list_events(level="ERROR", limit=50)} == {"错误"}
 
 
-def test_list_events_keeps_uppercase_rows_visible(api) -> None:
-    """大小写两形都要命中：既有 tests/test_repository.py::test_event_save_and_list 写的是大写级别
-
-    改成只认小写会让「历史上写过大写字面值的库」一条查不到，属回归。
-    """
+def test_list_events_unknown_level_stays_exact(api) -> None:
     _, repo = api
-    _mk_event(repo, level="ERROR", message="大写历史行")
-    _mk_event(repo, level="WARN", message="大写警告行")
-
-    assert {e["message"] for e in repo.list_events(level="err", limit=50)} == {"大写历史行"}
-    assert {e["message"] for e in repo.list_events(level="warn", limit=50)} == {"大写警告行"}
-    # 调用方直接传大写（绕过路由归一）同样可用
-    assert {e["message"] for e in repo.list_events(level="ERROR", limit=50)} == {"大写历史行"}
+    _mk_event(repo, level="critical", message="未知级别")
+    assert {e["message"] for e in repo.list_events(level="critical", limit=50)} == {"未知级别"}
+    # 未知值不能被放大成「不过滤」
+    assert repo.list_events(level="fatal", limit=50) == []
 
 
-# ---------------- 3. 搜索端点：筛选与分布同源 ----------------
+# ---------------- 3. 启动迁移：历史写法归位 ----------------
 
-def test_search_endpoint_filters_by_alias_group(api) -> None:
+def test_init_db_normalizes_legacy_level_rows(tmp_path) -> None:
+    from xianyu_hunter.infra.db_models import init_db
+
+    db = tmp_path / "legacy_levels.db"
+    init_db(str(db))
+
+    con = sqlite3.connect(db)
+    for lvl in ("warn", "WARN", "err", "ERR", "ERROR", "WARNING", "INFO", "trace"):
+        con.execute(
+            "INSERT INTO events (type, stage, level, message, created_at) "
+            "VALUES ('system.test', 'test', ?, ?, '2026-01-01 00:00:00')",
+            (lvl, lvl),
+        )
+    con.commit()
+    con.close()
+
+    init_db(str(db))
+
+    con = sqlite3.connect(db)
+    rows = dict(con.execute("SELECT message, level FROM events").fetchall())
+    con.close()
+
+    assert rows == {
+        "warn": "warning",
+        "WARN": "warning",
+        "err": "error",
+        "ERR": "error",
+        "ERROR": "error",
+        "WARNING": "warning",
+        "INFO": "info",
+        "trace": "trace",
+    }
+
+
+# ---------------- 4. 搜索端点：筛选与分布同源 ----------------
+
+def test_search_endpoint_filters_by_canonical_level(api) -> None:
     client, repo = api
-    _mk_event(repo, level="err", message="E1")
-    _mk_event(repo, level="error", message="E2")
+    _mk_event(repo, level="error", message="E1")
     _mk_event(repo, level="warning", message="W1")
     _mk_event(repo, level="info", message="I1")
 
-    res = client.get("/api/logs/search", params={"level": "err", "limit": 50})
+    res = client.get("/api/logs/search", params={"level": "error", "limit": 50})
     assert res.status_code == 200
     body = res.json()
-    assert {i["message"] for i in body["items"]} == {"E1", "E2"}
-    assert body["matched_levels"].get("err") == 1
-    assert body["matched_levels"].get("error") == 1
+    assert {i["message"] for i in body["items"]} == {"E1"}
+    assert body["matched_levels"] == {"error": 1}
 
-    res = client.get("/api/logs/search", params={"level": "warn", "limit": 50})
+    res = client.get("/api/logs/search", params={"level": "WARNING", "limit": 50})
     assert {i["message"] for i in res.json()["items"]} == {"W1"}
 
 
@@ -143,6 +140,9 @@ def test_search_rejects_out_of_enum_level(api) -> None:
     client, _ = api
     # 入参白名单不变：归一化不等于放开任意值
     assert client.get("/api/logs/search", params={"level": "fatal"}).status_code == 422
+    # 旧缩写不再接受：宁可 422，也不静默返回空结果
+    assert client.get("/api/logs/search", params={"level": "err"}).status_code == 422
+    assert client.get("/api/logs/search", params={"level": "warn"}).status_code == 422
 
 
 def test_search_total_estimate_counts_all_matches_before_paging(api) -> None:
@@ -161,20 +161,18 @@ def test_search_total_estimate_counts_all_matches_before_paging(api) -> None:
     assert body["total_estimate"] == 5
 
 
-# ---------------- 4. 导出端点：与页面筛选拼合一致 ----------------
+# ---------------- 5. 导出端点：与页面筛选拼合一致 ----------------
 
 def test_export_csv_honors_filters(api) -> None:
     client, repo = api
-    _mk_event(repo, level="err", message="要导出", task_id="tA")
-    _mk_event(repo, level="error", message="也要导出", task_id="tA")
+    _mk_event(repo, level="error", message="要导出", task_id="tA")
     _mk_event(repo, level="info", message="级别不符", task_id="tA")
-    _mk_event(repo, level="err", message="任务不符", task_id="tB")
+    _mk_event(repo, level="error", message="任务不符", task_id="tB")
 
-    res = client.get("/api/logs/export", params={"format": "csv", "level": "err", "task_id": "tA"})
+    res = client.get("/api/logs/export", params={"format": "csv", "level": "error", "task_id": "tA"})
     assert res.status_code == 200
     text = res.text
     assert "要导出" in text
-    assert "也要导出" in text
     assert "级别不符" not in text
     assert "任务不符" not in text
     assert res.headers["content-disposition"].startswith("attachment; filename=")
@@ -182,12 +180,10 @@ def test_export_csv_honors_filters(api) -> None:
 
 def test_export_csv_keyword_filter_combined_with_level(api) -> None:
     client, repo = api
-    _mk_event(repo, level="warn", message="价格偏离")
-    _mk_event(repo, level="warning", message="价格偏离-第二次")
+    _mk_event(repo, level="warning", message="价格偏离")
     _mk_event(repo, level="warning", message="无关内容")
 
-    res = client.get("/api/logs/export", params={"format": "csv", "level": "warn", "q": "价格偏离"})
+    res = client.get("/api/logs/export", params={"format": "csv", "level": "warning", "q": "价格偏离"})
     text = res.text
     assert "价格偏离" in text
-    assert "价格偏离-第二次" in text
     assert "无关内容" not in text

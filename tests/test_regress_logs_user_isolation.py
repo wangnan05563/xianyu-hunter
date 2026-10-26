@@ -107,23 +107,23 @@ def test_list_logs_db_management_token_sees_all(shim, repo) -> None:
 
 # ==================== 2. /api/logs/search ====================
 def test_search_logs_filters_by_user(shim, repo) -> None:
-    _mk_event(repo, "alice", "订单支付成功", level="err")
+    _mk_event(repo, "alice", "订单支付成功", level="error")
     _mk_event(repo, "alice", "搜索完成", level="info")
-    _mk_event(repo, "bob", "订单支付成功", level="err")
+    _mk_event(repo, "bob", "订单支付成功", level="error")
 
     # 带等级过滤：DB 侧按 level 粗筛 + 按 user 过滤，两条条件都不能少
-    res = api_logs.search_logs(request=_request("alice"), q=None, level="ERR", tag=None,
+    res = api_logs.search_logs(request=_request("alice"), q=None, level="ERROR", tag=None,
                                task_id=None, stage=None, request_id=None, start=None,
                                end=None, since_id=None, limit=50, offset=0, container=shim)
     assert _msgs(res["items"]) == ["订单支付成功"]
-    assert res["matched_levels"] == {"err": 1}
+    assert res["matched_levels"] == {"error": 1}
 
     # 不带等级过滤：bob 的同名行仍然不能出现
     res_all = api_logs.search_logs(request=_request("alice"), q=None, level=None, tag=None,
                                    task_id=None, stage=None, request_id=None, start=None,
                                    end=None, since_id=None, limit=50, offset=0, container=shim)
     assert sorted(_msgs(res_all["items"])) == ["搜索完成", "订单支付成功"]
-    assert res_all["matched_levels"] == {"err": 1, "info": 1}
+    assert res_all["matched_levels"] == {"error": 1, "info": 1}
 
 
 def test_search_logs_keyword_does_not_leak_other_users(shim, repo) -> None:
@@ -189,7 +189,7 @@ def test_export_logs_csv_for_token_session_still_all(shim, repo) -> None:
 def test_tag_other_users_event_is_404_and_payload_untouched(shim, repo) -> None:
     from fastapi import HTTPException
 
-    bob_id = _mk_event(repo, "bob", "bob-row", level="err")
+    bob_id = _mk_event(repo, "bob", "bob-row", level="error")
 
     with pytest.raises(HTTPException) as exc:
         api_logs.tag_event(request=_request("alice"), event_id=bob_id, tag="mine", container=shim)

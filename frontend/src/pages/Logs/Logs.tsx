@@ -7,7 +7,7 @@ import { ReloadOutlined, SearchOutlined, DownloadOutlined, PlayCircleOutlined, P
 import { TipButton } from '@/components/TipButton'
 import FetchFailedHint from '@/components/FetchFailedHint'
 import { logApi, type LogEntry } from '../../api'
-import { countLevels, levelColor, normalizeLevel } from '../../constants/logLevels'
+import { countLevels, levelColor, LOG_LEVEL, normalizeLevel } from '../../constants/logLevels'
 import { API_BASE } from '../../utils/apiBase'
 import { extractApiError } from '../../utils/apiError'
 
@@ -287,10 +287,10 @@ export default function Logs() {
                 value={level}
                 onChange={(v) => setLevel(v)}
                 options={[
-                  { label: 'ERROR', value: 'err' },
-                  { label: 'WARNING', value: 'warn' },
-                  { label: 'INFO', value: 'info' },
-                  { label: 'DEBUG', value: 'debug' },
+                  { label: 'ERROR', value: LOG_LEVEL.ERROR },
+                  { label: 'WARNING', value: LOG_LEVEL.WARNING },
+                  { label: 'INFO', value: LOG_LEVEL.INFO },
+                  { label: 'DEBUG', value: LOG_LEVEL.DEBUG },
                 ]}
               />
               <Input

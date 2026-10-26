@@ -1010,11 +1010,11 @@ class ItemCollectionService:
         if eval_result.is_passed:
             level = "info"
         elif eval_result.risk_level != RiskLevel.EXTREME:
-            level = "warn"
+            level = "warning"
         else:
-            level = "err"
+            level = "error"
         if eval_result.risk_level == RiskLevel.UNKNOWN:
-            level = "warn"
+            level = "warning"
 
         payload = {
             "task_id": task_id,

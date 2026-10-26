@@ -747,11 +747,11 @@ class TaskWorker:
             if eval_result.is_passed:
                 level = "info"
             elif eval_result.risk_level == RiskLevel.EXTREME:
-                level = "err"
+                level = "error"
             else:
-                level = "warn"
+                level = "warning"
             if eval_result.risk_level == RiskLevel.UNKNOWN:
-                level = "warn"  # 数据不足用 warn 级别，避免误报为错误
+                level = "warning"  # 数据不足用 warning 级别，避免误报为错误
             self.repo.upsert_eval_event({
                 "type": _EVAL_SCORED_EVENT,
                 "task_id": self.task.id,

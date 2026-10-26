@@ -68,15 +68,15 @@ def make_price_strategy_getter(container: Container, log_prefix: str = "eval"):
 def determine_eval_level(eval_result) -> str:
     """根据评估结果确定事件日志级别
 
-    与 worker.py 保持一致：通过=info，极端风险=err，其他=warn；UNKNOWN 兜底为 warn"""
+    与 worker.py 保持一致：通过=info，极端风险=error，其他=warning；UNKNOWN 兜底为 warning"""
     if eval_result.is_passed:
         level = "info"
     elif eval_result.risk_level != RiskLevel.EXTREME:
-        level = "warn"
+        level = "warning"
     else:
-        level = "err"
+        level = "error"
     if eval_result.risk_level == RiskLevel.UNKNOWN:
-        level = "warn"
+        level = "warning"
     return level
 
 

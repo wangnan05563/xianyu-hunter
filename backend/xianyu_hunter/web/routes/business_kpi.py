@@ -181,7 +181,7 @@ def _kpi_notify_failure_rate(engine, cur_start, now, prev_start, prev_end) -> tu
         def _aggregate(start, end) -> tuple[int, int]:
             # P2-1：精确匹配 stage='notify' 走联合索引，替代 LIKE '%notify%' 全表扫描
             fail_expr = case(
-                ((EventRow.stage == _NOTIFY_STAGE) & (EventRow.level == "err"), 1),
+                ((EventRow.stage == _NOTIFY_STAGE) & (EventRow.level == "error"), 1),
                 else_=0,
             )
             notify_expr = case(

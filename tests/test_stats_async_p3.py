@@ -247,7 +247,7 @@ def test_business_kpi_with_data(client: TestClient, tmp_repo: Repository) -> Non
     # KPI3: 1 succeeded + 1 total → 100%
     _seed_order(tmp_repo, "o1", "succeeded", created_at=now)
     # KPI4: 1 notify 失败 + 1 notify 总数 → 100%
-    _seed_event(tmp_repo, stage="notify", level="err", created_at=now)
+    _seed_event(tmp_repo, stage="notify", level="error", created_at=now)
 
     resp = client.get("/api/stats/business-kpi", headers=_auth_headers())
     assert resp.status_code == 200, resp.text

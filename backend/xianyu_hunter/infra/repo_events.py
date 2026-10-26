@@ -13,7 +13,6 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from xianyu_hunter.domain.events import level_literals
 from xianyu_hunter.infra.db_models import _utcnow, EventRow
 from xianyu_hunter.infra.lru import LRUDict
 
@@ -89,7 +88,7 @@ _HIT_STAGES = {"hit", "eval", "score", "match", "found"}
 
 
 def _count_event_levels(events: list[dict]) -> tuple[int, int, int]:
-    """统计事件列表中的 hit/err/warn 计数，返回 (hit_count, err_count, warn_count)
+    """统计事件列表中的 hit/error/warning 计数，返回 (hit_count, err_count, warn_count)
 
     独立出 _aggregate_bucket 的循环以降低其认知复杂度（S3776）。
     """
@@ -99,9 +98,9 @@ def _count_event_levels(events: list[dict]) -> tuple[int, int, int]:
     for ev in events:
         level = (ev.get("level") or "").lower()
         stage = (ev.get("stage") or "").lower()
-        if level == "err":
+        if level == "error":
             err_count += 1
-        elif level == "warn":
+        elif level == "warning":
             warn_count += 1
         if level == "info" and any(kw in stage for kw in _HIT_STAGES):
             hit_count += 1
@@ -319,11 +318,9 @@ class EventsMixin:
                 EventRow.id.asc() if ascending else EventRow.created_at.desc()
             )
             if level:
-                # 别名组匹配（err/error、warn/warning）：表内字面值历史上不统一，
-                # 精确相等会让「筛 WARN」漏掉全部 warning 行
-                literals = level_literals(level)
-                if literals:
-                    stmt = stmt.where(EventRow.level.in_(literals))
+                # T02683：写侧已归一到小写全词，init_db 也把历史行改写干净，
+                # 这里只做大小写归一，不再做别名展开
+                stmt = stmt.where(EventRow.level == level.strip().lower())
             if task_id:
                 stmt = stmt.where(EventRow.task_id == task_id)
             if since_id is not None:
