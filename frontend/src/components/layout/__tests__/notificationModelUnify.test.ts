@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   ALERT_JUMP_TARGETS,
+  bellBadgeLabel,
   bellBadgeTip,
   computeBellBadge,
 } from '../../../hooks/useNotificationModel'
@@ -48,6 +49,15 @@ describe('铃铛单一数字口径（2.9-1）', () => {
     expect(bellBadgeTip(computeBellBadge(2, 7))).toContain('今日告警 2 条')
     expect(bellBadgeTip(computeBellBadge(0, 7))).toContain('未读通知 7 条')
     expect(bellBadgeTip(computeBellBadge(0, 0))).toContain('通知抽屉')
+  })
+
+  // T02672 裁决 A：保留「告警优先」口径，但把口径写进可见文案——
+  // 数字旁边的文字必须能单独说明这个数是告警还是未读，不依赖 hover。
+  it('数字旁的可见文案写出口径，无需 hover 也能分清告警与未读', () => {
+    expect(bellBadgeLabel(computeBellBadge(2, 7))).toBe('告警 2')
+    expect(bellBadgeLabel(computeBellBadge(0, 7))).toBe('未读 7')
+    expect(bellBadgeLabel(computeBellBadge(0, 0))).toBe('')
+    expect(LAYOUT_SOURCE).toContain('bellBadgeLabel(notif.bell)')
   })
 })
 

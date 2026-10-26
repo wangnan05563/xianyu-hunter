@@ -32,7 +32,7 @@ import { formatDateTime, formatDuration } from '../../utils/timeFormat'
 import { eventTypeLabel } from '../../constants/eventTypes'
 import { useMenuConfig, buildCommandItems } from '../../hooks/useMenuConfig'
 import type { CommandItem } from '../../hooks/useMenuConfig'
-import { useNotificationModel, bellBadgeTip } from '../../hooks/useNotificationModel'
+import { useNotificationModel, bellBadgeLabel, bellBadgeTip } from '../../hooks/useNotificationModel'
 import { buildAlertJumpTarget } from '../../utils/alertDeepLink'
 import type { AlertJumpItem } from '../../utils/alertDeepLink'
 import { isNarrowViewport } from '../../hooks/breakpoints'
@@ -579,23 +579,42 @@ function LayoutContent({
               />
             </TipButton>
 
-            {/* 铃铛：数字优先是今日告警，无告警时退为未读通知（两套口径不相加，见 useNotificationModel） */}
-            <Badge
-              count={notif.bell.count}
-              size="small"
-              offset={[-2, 2]}
-              color={notif.bell.isAlert ? undefined : 'blue'}
-            >
-              <TipButton
-                tip={bellBadgeTip(notif.bell)}
-                type="text"
-                shape="circle"
+            {/* 铃铛：数字优先是今日告警，无告警时退为未读通知（两套口径不相加，见 useNotificationModel）。
+                T02672：口径不再只藏在 tooltip 里——数字旁边直接写「告警 / 未读」，同一位置换含义时也看得懂。 */}
+            <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+              <Badge
+                count={notif.bell.count}
                 size="small"
-                icon={<BellOutlined />}
-                style={{ fontSize: 16, width: 28, height: 28 }}
-                onClick={() => setDrawerOpen(true)}
-              />
-            </Badge>
+                offset={[-2, 2]}
+                color={notif.bell.isAlert ? undefined : 'blue'}
+              >
+                <TipButton
+                  tip={bellBadgeTip(notif.bell)}
+                  type="text"
+                  shape="circle"
+                  size="small"
+                  icon={<BellOutlined />}
+                  style={{ fontSize: 16, width: 28, height: 28 }}
+                  onClick={() => setDrawerOpen(true)}
+                />
+              </Badge>
+              {notif.bell.count > 0 && (
+                <TipButton
+                  tip={bellBadgeTip(notif.bell)}
+                  type="text"
+                  size="small"
+                  style={{
+                    fontSize: 12,
+                    height: 22,
+                    padding: '0 4px',
+                    color: notif.bell.isAlert ? '#ff4d4f' : '#1677ff',
+                  }}
+                  onClick={() => setDrawerOpen(true)}
+                >
+                  {bellBadgeLabel(notif.bell)}
+                </TipButton>
+              )}
+            </span>
 
             {/* 主题切换按钮 */}
             <TipButton

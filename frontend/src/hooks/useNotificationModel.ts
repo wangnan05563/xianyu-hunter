@@ -37,6 +37,16 @@ export function bellBadgeTip(badge: BellBadge): string {
 }
 
 /**
+ * 铃铛数字旁的口径标签（T02672）：同一个位置会随有无告警换口径，
+ * 只靠 hover 才看得到的 tooltip 不足以说明「这个数字是什么」，所以直接写在数字旁边。
+ * 无数字时返回空串，不占位。
+ */
+export function bellBadgeLabel(badge: BellBadge): string {
+  if (badge.count <= 0) return ''
+  return badge.isAlert ? `告警 ${badge.count}` : `未读 ${badge.count}`
+}
+
+/**
  * 告警类 → 落地页：抽屉列表项按类跳转（N11）。
  *
  * T02620 起基础路径与「路径+查询」构造函数一起搬到 `utils/alertDeepLink.ts`
