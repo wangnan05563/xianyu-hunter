@@ -3,13 +3,14 @@
 // 但「总数」用的是全量口吻的短标签，用户会当成整个任务的数据。
 // 修法：三项统一标「本页」，另用分页接口 total 说明筛选后全量有多少条。
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
-const { listMock, distMock, taskListMock } = vi.hoisted(() => ({
+const { listMock, distMock, taskListMock, suggestMock } = vi.hoisted(() => ({
   listMock: vi.fn(),
   distMock: vi.fn(),
   taskListMock: vi.fn(),
+  suggestMock: vi.fn(),
 }))
 
 vi.mock('../../../api', async (importOriginal) => {
@@ -22,7 +23,7 @@ vi.mock('../../../api', async (importOriginal) => {
       ...evalApi,
       list: listMock,
       distribution: distMock,
-      thresholdSuggestion: vi.fn(),
+      thresholdSuggestion: suggestMock,
       sellerTrend: vi.fn().mockResolvedValue({ points: [] }),
     },
     taskApi: { ...taskApi, list: taskListMock },
@@ -62,6 +63,7 @@ beforeEach(() => {
   listMock.mockReset()
   distMock.mockReset()
   taskListMock.mockReset()
+  suggestMock.mockReset()
   distMock.mockResolvedValue(DIST)
   taskListMock.mockResolvedValue({ items: [], count: 0, total: 0 })
 })
@@ -104,5 +106,27 @@ describe('阈值通过率计算器的统计口径（评审 2.4-7）', () => {
     expect(statText('本页通过率')).toContain('66.7')
     expect(statText('本页通过数')).toContain('2')
     expect(statText('本页总数')).toContain('3')
+  })
+})
+
+// T02667 裁决：保留后端全量口径（evalApi.thresholdSuggestion），删除按本页样本另算一套建议阈值的旧卡。
+describe('建议阈值只有一份来源（评审 2.4-6）', () => {
+  it('页面上只有一处「目标通过率 + 建议阈值」，不会出现第二个可能不同的结果', async () => {
+    mockList(57)
+    renderPage()
+    await waitFor(() => expect(screen.getByText(/目标通过率：/)).toBeInTheDocument())
+    expect(screen.getAllByText(/目标通过率：/)).toHaveLength(1)
+    expect(screen.queryByText(/按本页样本估算/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/的评估可通过/)).not.toBeInTheDocument()
+  })
+
+  it('建议阈值来自后端全量接口，样本数标明是全部评估', async () => {
+    suggestMock.mockResolvedValue({ suggested_threshold: 73, current_pass_rate: 0.62 })
+    mockList(57)
+    renderPage()
+    await waitFor(() => expect(screen.getByText('计算建议阈值')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('计算建议阈值'))
+    await waitFor(() => expect(screen.getByText('73')).toBeInTheDocument())
+    expect(screen.getByText('样本数：0（全部评估）')).toBeInTheDocument()
   })
 })

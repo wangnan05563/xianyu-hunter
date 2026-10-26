@@ -35,11 +35,8 @@ export interface EvalDistState {
   fetchSuggestion: () => void
   thresholdValue: number
   setThresholdValue: (v: number) => void
-  targetPassRate: number
-  setTargetPassRate: (v: number) => void
   thresholdPassCount: number
   thresholdPassRate: number
-  autoSuggestedThreshold: number
 }
 
 interface DistFilterSnapshot {
@@ -64,7 +61,6 @@ export function useEvalDist(
   const [suggestion, setSuggestion] = useState<{ suggested_threshold: number; current_pass_rate: number } | null>(null)
 
   const [thresholdValue, setThresholdValue] = useState(60)
-  const [targetPassRate, setTargetPassRate] = useState(70)
 
   // 解构出原始值字段，便于在 useEffect 依赖数组中精确订阅筛选变化
   // 若直接将 filters 整体放入依赖数组会因对象引用每次渲染都变化导致无限刷新
@@ -111,14 +107,6 @@ export function useEvalDist(
   const thresholdPassCount = items.filter(item => (item.payload.score ?? 0) >= thresholdValue).length
   const thresholdPassRate = items.length > 0 ? (thresholdPassCount / items.length * 100) : 0
 
-  const computeSuggestedThreshold = (targetRate: number): number => {
-    if (items.length === 0) return 0
-    const sortedScores = items.map(item => item.payload.score ?? 0).sort((a, b) => b - a)
-    const targetCount = Math.ceil(items.length * targetRate / 100)
-    return sortedScores[Math.min(targetCount - 1, sortedScores.length - 1)] ?? 0
-  }
-  const autoSuggestedThreshold = computeSuggestedThreshold(targetPassRate)
-
   return {
     dist,
     distFailed: isFailed('dist'),
@@ -135,10 +123,7 @@ export function useEvalDist(
     fetchSuggestion,
     thresholdValue,
     setThresholdValue,
-    targetPassRate,
-    setTargetPassRate,
     thresholdPassCount,
     thresholdPassRate,
-    autoSuggestedThreshold,
   }
 }
