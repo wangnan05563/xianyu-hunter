@@ -39,6 +39,11 @@ export const FOREIGN_VOCAB: readonly ForeignVocab[] = [
     values: ['running', 'failed'],
   },
   {
+    file: 'pages/Orders/ItemSummaryCell.tsx',
+    domain: '商品快照 Popover 的本地请求态（idle/loading/ready/failed），不是订单状态',
+    values: ['failed'],
+  },
+  {
     file: 'pages/Maintenance/DatabaseAdmin.tsx',
     domain: '级联预览的请求态（loading/ready/error），不是任务状态',
     values: ['error'],

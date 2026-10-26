@@ -458,7 +458,7 @@ export default function Orders() {
   // T02673：「演练单」选项不是订单状态，走独立的 type 参数（real|dry_run），
   // 不挤占 ?status= 白名单——否则深链白名单会拒绝 dry_run、刷新即丢筛选。
   // 初值由下方 urlType effect 在挂载时从 URL 同步
-  const [typeFilter, setTypeFilter] = useState<'dry_run' | undefined>(undefined)
+  const [typeFilter, setTypeFilter] = useState<typeof ORDER_STATUS.DRY_RUN | undefined>(undefined)
   const [loading, setLoading] = useState(false)
 
   // 告警定位（评审 2.1-4）：异常雷达改为 SPA 跳转并带 ?ref=<订单 id>，
@@ -484,7 +484,7 @@ export default function Orders() {
 
   // 同一 sheet 内换了深链（?type=dry_run）时以 URL 为准；与 onStatusChange 写回的值
   // 幂等，不会来回打架（同 urlStatus 的处理）
-  const urlType = searchParams.get('type') === 'dry_run' ? 'dry_run' : undefined
+  const urlType = searchParams.get('type') === ORDER_STATUS.DRY_RUN ? ORDER_STATUS.DRY_RUN : undefined
   useEffect(() => {
     setTypeFilter(urlType)
     setPage(1)
@@ -633,12 +633,12 @@ export default function Orders() {
   const onStatusChange = (v: string | undefined) => {
     setPage(1)
     const next = new URLSearchParams(searchParams)
-    if (v === 'dry_run') {
+    if (v === ORDER_STATUS.DRY_RUN) {
       // 演练单选项：两个筛选态互斥（一个下拉同时表达），URL 写 type 参数
-      setTypeFilter('dry_run')
+      setTypeFilter(ORDER_STATUS.DRY_RUN)
       setStatusFilter(undefined)
       next.delete('status')
-      next.set('type', 'dry_run')
+      next.set('type', ORDER_STATUS.DRY_RUN)
     } else {
       setTypeFilter(undefined)
       setStatusFilter(v)
@@ -837,7 +837,7 @@ export default function Orders() {
               ]),
               // T02673：演练记录与真实记录混排，高频用户无法只看/排除演练单；
               // 该项走 type=dry_run 参数，不是订单状态
-              { label: '演练单', value: 'dry_run' },
+              { label: '演练单', value: ORDER_STATUS.DRY_RUN },
             ]}
           />
           <TipButton tip="重新加载订单列表" icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</TipButton>
