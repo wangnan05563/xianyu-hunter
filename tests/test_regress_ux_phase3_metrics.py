@@ -124,7 +124,8 @@ def _implemented_routes() -> set[str]:
 def test_every_visible_menu_path_has_an_implemented_route() -> None:
     paths = _menu_paths_from_registry()
     routes = _implemented_routes()
-    assert len(paths) >= 29, f"registry 解析异常：只取到 {len(paths)} 条带 path 的菜单"
+    # 下限只用于证明 registry 仍可解析；T02577 D-9 删掉 vector_admin 独立入口后为 28
+    assert len(paths) >= 28, f"registry 解析异常：只取到 {len(paths)} 条带 path 的菜单"
     missing = sorted({p for p in paths if p not in routes})
     # 原症状专项：这两条曾被 `*` 兜底送回首页
     assert "/price-dashboard" in routes and "/export" in routes
