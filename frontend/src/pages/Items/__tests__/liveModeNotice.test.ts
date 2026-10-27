@@ -55,9 +55,12 @@ describe('地区/品牌候选的 tooltip 与实际取数一致', () => {
     expect(facetTip(true, 'region')).not.toContain('全量')
   })
 
-  it('数据库模式：候选来自 facets 全量去重，不只当前页', () => {
-    expect(facetTip(false, 'region')).toContain('后端 facets 的全量去重')
-    expect(facetTip(false, 'brand')).toContain('不只当前页')
+  it('数据库模式：候选按当前筛选收缩，但本维度自身不参与（否则选一个就只剩一个）', () => {
+    expect(facetTip(false, 'region')).toContain('关键词、销售状态与任务的价格/发布天数收缩')
+    expect(facetTip(false, 'region')).toContain('地区本身不参与')
+    expect(facetTip(false, 'brand')).toContain('品牌本身不参与')
+    // 现场配置（max_publish_days=1）下候选真的会被筛空，文案不能反过来承诺「一定选得到」
+    expect(facetTip(false, 'region')).toContain('甚至空着')
   })
 })
 

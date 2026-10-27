@@ -182,9 +182,15 @@ export const taskLinkApi = {
   count: (taskId: string) =>
     client.get<{ item: number; seller: number; total: number }>(`/api/tasks/${taskId}/links/count`).then((r) => r.data),
 
-  // 地区/品牌候选项：后端 DISTINCT 全量，不随当前筛选/分页收缩（修复选完一个就只剩一个的自锁死）
-  facets: (taskId: string) =>
-    client.get<{ task_id: string; regions: string[]; brands: string[] }>(`/api/tasks/${taskId}/links/facets`).then((r) => r.data),
+  // 地区/品牌候选项：后端 DISTINCT，随当前筛选收缩（T02661 裁决「方案1」，选了就有）
+  // 只传 keyword / sold_filter：地区与品牌本身不参与收缩，否则选完一个就只剩那一个
+  facets: (
+    taskId: string,
+    params?: { keyword?: string; sold_filter?: 'all' | 'onsale' | 'sold' },
+  ) =>
+    client
+      .get<{ task_id: string; regions: string[]; brands: string[] }>(`/api/tasks/${taskId}/links/facets`, { params })
+      .then((r) => r.data),
 
   // SSE 流式实时搜索：通过 fetch + ReadableStream 接收进度事件
   // onProgress 回调接收每个阶段的进度（checking_cache / searching / writing_db / done / error）

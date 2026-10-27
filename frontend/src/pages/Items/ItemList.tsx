@@ -649,7 +649,8 @@ export default function ItemList() {
 
   // 地区/品牌选项来源：
   // - 实时模式：从本次实时搜索的原始全量结果提取（DB 里的 facets 不代表刚搜到的这批）
-  // - DB 模式：用后端 facets 接口的全量 DISTINCT；请求失败/尚无数据时回落到「当前页提取」，
+  // - DB 模式：用后端 facets 接口按当前筛选收缩后的 DISTINCT（T02661 裁决「方案1」，
+  //   候选选了就有；region/brand 本身不进收缩）；请求失败/尚无数据时回落到「当前页提取」，
   //   保证旧后端或未拉到 facets 时下拉仍可用（宁缺勿空，行为不劣于修复前）
   useEffect(() => {
     if (liveMode || !selectedTask) {
@@ -657,12 +658,16 @@ export default function ItemList() {
       return
     }
     let cancelled = false
-    taskLinkApi.facets(selectedTask)
+    // 与列表同一组条件（价格/发布天数在任务配置里，后端自己取），所以依赖也和列表一致
+    taskLinkApi.facets(selectedTask, {
+      keyword: search || undefined,
+      sold_filter: soldFilter === 'all' ? undefined : soldFilter,
+    })
       .then((f) => { if (!cancelled) setFacets({ regions: f.regions ?? [], brands: f.brands ?? [] }) })
       // facets 是增强项，失败静默回落当前页，不打断主流程
       .catch(() => { if (!cancelled) setFacets({ regions: [], brands: [] }) })
     return () => { cancelled = true }
-  }, [selectedTask, liveMode])
+  }, [selectedTask, liveMode, search, soldFilter])
 
   // React key 统一口径：link_key（商品 ID）在同一任务的关联列表内唯一；
   // link_id 在实时搜索结果里恒为 0，直接拿来当 key 会同屏撞 key

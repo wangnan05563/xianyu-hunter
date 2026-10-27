@@ -44,9 +44,19 @@ describe('实时搜索错误分支（T02660）', () => {
 })
 
 describe('地区/品牌候选项来源', () => {
-  it('调用后端 facets 接口取全量 DISTINCT', () => {
-    expect(page).toMatch(/taskLinkApi\.facets\(selectedTask\)/)
-    expect(api).toMatch(/`\/api\/tasks\/\$\{taskId\}\/links\/facets`/)
+  it('调后端 facets，并把当前关键词/销售状态一起传过去（T02661 裁决「方案1」）', () => {
+    expect(page).toMatch(
+      /taskLinkApi\.facets\(selectedTask, \{\s*\n\s*keyword: search \|\| undefined,\s*\n\s*sold_filter: soldFilter === 'all' \? undefined : soldFilter,\s*\n\s*\}\)/,
+    )
+    expect(api).toMatch(/`\/api\/tasks\/\$\{taskId\}\/links\/facets`, \{ params \}/)
+  })
+  it('region/brand 不得进 facets 请求：候选不能被自己收缩掉（T02566 的自锁死）', () => {
+    const at = page.indexOf('taskLinkApi.facets(')
+    const call = page.slice(at, at + 400)
+    expect(call).not.toMatch(/region:/)
+    expect(call).not.toMatch(/brand:/)
+    // 收缩条件变了就得重取，否则候选停留在旧筛选下（选了必空）；region/brand 不进依赖
+    expect(page).toMatch(/\}, \[selectedTask, liveMode, search, soldFilter\]\)/)
   })
   it('DB 模式优先用 facets，空则回落当前页提取（旧后端可用）', () => {
     expect(page).toMatch(/facets\.regions\.length \? facets\.regions : fromPage/)

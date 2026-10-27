@@ -686,24 +686,34 @@ def list_link_facets(
     task_id: str,
     request: Request,
     type: str = Query("item", description="维度来源类型，目前仅 item 有 region/brand"),
+    keyword: str | None = Query(None, description="标题关键词模糊匹配，与 /links 同义；参与候选收缩"),
+    sold_filter: str = Query("all", pattern="^(all|onsale|sold)$", description="销售状态，与 /links 一致；参与候选收缩"),
     container: Container = Depends(get_container),
 ) -> dict[str, Any]:
-    """地区/品牌候选项：该任务关联内容的全量 DISTINCT，不受当前筛选与分页影响
+    """地区/品牌候选项：按当前筛选收缩后的 DISTINCT（T02661 裁决「方案1」）
 
-    为什么需要：前端下拉原先从「当前页 items」提取选项，选中某地区后选项只剩该地区，
-    换地区必须先清空（自锁死），翻页后选项集还会变。
+    为什么需要：前端下拉原先从「当前页 items」提取选项，翻页后选项集还会变。
     取值口径与 /links 的 region/brand 过滤一致（同为 display JSON 的 json_extract），
     否则选项值与过滤条件对不上。
+
+    收缩条件与 /links 同源：keyword、sold_filter，外加任务配置里的价格区间与发布天数
+    （这两项不是本页筛选，但列表本来就在按它们过滤，候选必须跟上，否则选了必空）。
+    region/brand 自己不参与收缩（本端点连这两个参数都不收）：否则「选了一个地区后
+    候选只剩该地区」的自锁死会立刻复现，那正是 T02566 修掉的东西。
     """
     if type not in _VALID_TYPES:
         raise HTTPException(status_code=400, detail=f"未知 type: {type}")
     # 多用户隔离：查询操作用 None
     user_id = getattr(request.state, "user_id", None)
-    if not container.repo.get_task(task_id, user_id=user_id):
+    # 存在性校验顺带把 task 字典拿到手（价格/发布天数就藏在这里），与 /links 同一做法
+    task = container.repo.get_task(task_id, user_id=user_id)
+    if not task:
         raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND)
     if type != "item":
         return {"task_id": task_id, "regions": [], "brands": []}
-    return {"task_id": task_id, **container.repo.list_task_link_facets(task_id, user_id=user_id)}
+    return {"task_id": task_id, **container.repo.list_task_link_facets(
+        task_id, user_id=user_id, search_keyword=keyword, sold_filter=sold_filter, task=task,
+    )}
 
 
 @router.post("/{task_id}/links", status_code=201)

@@ -1,8 +1,11 @@
-"""GET /api/tasks/{id}/links/facets 测试（T02566 §2.3-3）
+"""GET /api/tasks/{id}/links/facets 测试（T02566 §2.3-3 + T02661 裁决「方案1」）
 
 回归点：商品列表页的地区/品牌下拉原先由前端从「当前页 items」提取，
-选中一个地区后选项集只剩该地区（换地区必须先清空，自锁死），翻页后选项集还会变。
-facets 接口返回该任务 item 行的全量 DISTINCT，不受分页与当前筛选影响。
+翻页后选项集还会变；facets 接口把 DISTINCT 放到后端一次取全。
+
+T02661 之后口径改成「候选与列表同源收缩」：关键词 / 销售状态 / 价格区间 / 发布天数
+都跟着列表走（选了就有），只有 region/brand 本身留在收缩之外（否则又回到
+「选了一个地区后候选只剩该地区」的自锁死）。
 """
 from __future__ import annotations
 
@@ -84,11 +87,12 @@ def test_facets_returns_full_distinct_across_pages(client: TestClient, tmp_repo:
     assert set(data["brands"]) == {"三星", "金士顿"}, data["brands"]
 
 
-def test_facets_not_shrunk_by_current_filter(client: TestClient, tmp_repo: Repository) -> None:
-    """核心修复点：选了地区后仍能选到别的地区（旧实现在前端只剩当前筛选项）
+def test_facets_not_shrunk_by_region_or_brand(client: TestClient, tmp_repo: Repository) -> None:
+    """核心修复点（T02566）：选了地区后仍能选到别的地区
 
-    facets 只按 task 全量取 DISTINCT，不接当前 keyword/region/brand，
-    因此「先筛武汉再换上海」不需要先清空。
+    「方案1」收缩的是列表那套条件（关键词/销售状态/价格/发布天数），
+    region/brand 本身必须留在收缩之外——否则「先筛武汉再换上海」又得先清空，
+    自锁死立刻复现。端点连这两个参数都不收，多传了也只是被忽略。
     """
     _seed_task(tmp_repo)
     _seed(tmp_repo, "i1", region="武汉", brand="金士顿")
@@ -98,9 +102,81 @@ def test_facets_not_shrunk_by_current_filter(client: TestClient, tmp_repo: Repos
     listed = client.get("/api/tasks/t1/links", params={"type": "item", "region": "武汉"},
                         headers=_auth_headers()).json()
     assert {i["link_key"] for i in listed["items"]} == {"i1"}
-    # 但候选项仍是全量：上海依旧可选
-    facets = client.get("/api/tasks/t1/links/facets", headers=_auth_headers()).json()
+    # 候选项不受 region/brand 影响：上海依旧可选（旧后端多传的参数会被 FastAPI 忽略）
+    facets = client.get("/api/tasks/t1/links/facets",
+                        params={"region": "武汉", "brand": "金士顿"},
+                        headers=_auth_headers()).json()
     assert "上海" in facets["regions"], facets["regions"]
+    assert "三星" in facets["brands"], facets["brands"]
+
+
+def test_facets_shrink_with_keyword_and_sold_filter(client: TestClient, tmp_repo: Repository) -> None:
+    """方案1 的正面断言：候选与列表同源收缩，「选了就有」
+
+    同一批数据：不带筛选时 4 个地区全在；带上 keyword=金士顿 后只剩两行，
+    候选就必须只剩那两行的地区——而不是继续列出筛完根本看不到的地区。
+    """
+    _seed_task(tmp_repo)
+    _seed(tmp_repo, "i1", region="武汉", brand="金士顿")
+    _seed(tmp_repo, "i2", region="上海", brand="三星")
+    _seed(tmp_repo, "i3", region="广州", brand="金士顿")
+
+    full = client.get("/api/tasks/t1/links/facets", headers=_auth_headers()).json()
+    assert set(full["regions"]) == {"武汉", "上海", "广州"}, full["regions"]
+
+    shrunk = client.get("/api/tasks/t1/links/facets", params={"keyword": "i3"},
+                        headers=_auth_headers()).json()
+    assert shrunk["regions"] == ["广州"], shrunk
+    assert shrunk["brands"] == ["金士顿"], shrunk
+
+    # 与列表口径逐字对齐：同样的 keyword 过滤下，列表命中的地区集合 == 候选集合
+    listed = client.get("/api/tasks/t1/links", params={"type": "item", "keyword": "i3"},
+                        headers=_auth_headers()).json()
+    assert {i["display"]["region"] for i in listed["items"]} == set(shrunk["regions"]), listed
+
+    # sold=sold 时现场没有已入库的已售行，候选应当为空（空是真的空，不是接口没接上）
+    empty = client.get("/api/tasks/t1/links/facets", params={"sold_filter": "sold"},
+                       headers=_auth_headers()).json()
+    assert empty == {"task_id": "t1", "regions": [], "brands": []}, empty
+
+
+def test_facets_shrink_with_task_price_and_publish_days(client: TestClient, tmp_repo: Repository) -> None:
+    """价格区间与发布天数不是本页筛选，但列表一直在按它们过滤——候选必须跟上
+
+    这正是 T02661 里「29 个候选全是死项」的成因：不跟上的话下拉列出一堆
+    点了必空的选项，用户只会以为是数据没有这个地区。
+    """
+    repo = tmp_repo
+    repo.upsert_task({"id": "t1", "name": "测试任务", "keyword": "DDR4",
+                      "min_price": 500.0, "max_price": 2000.0})
+    # 两行都带 publish_time：不写的话发布天数过滤对 NULL 一律放行（兼容旧数据），
+    # 这里要测的正是「条件把行筛掉」而不是「字段缺失」
+    repo.upsert_task_link(task_id="t1", link_type="item", link_key="i1",
+                          display={"title": "DDR4 内存 i1", "price": 100.0,
+                                   "region": "武汉", "brand": "金士顿",
+                                   "publish_time": "2020-01-01T00:00:00+00:00"}, source="auto")
+    repo.upsert_task_link(task_id="t1", link_type="item", link_key="i2",
+                          display={"title": "DDR4 内存 i2", "price": 800.0,
+                                   "region": "上海", "brand": "三星",
+                                   "publish_time": "2020-01-01T00:00:00+00:00"}, source="auto")
+
+    facets = client.get("/api/tasks/t1/links/facets", headers=_auth_headers()).json()
+    assert facets["regions"] == ["上海"], facets
+    assert facets["brands"] == ["三星"], facets
+
+    listed = client.get("/api/tasks/t1/links", params={"type": "item"},
+                        headers=_auth_headers()).json()
+    assert {i["link_key"] for i in listed["items"]} == {"i2"}, listed
+
+    # 再把发布天数收到 0 天：唯一的幸存者也被筛掉，候选与列表同时为空
+    # （空候选是方案1 的已知代价，不是 bug——见工单回传里的「重述后果」）
+    repo.upsert_task({"id": "t1", "name": "测试任务", "keyword": "DDR4",
+                      "min_price": 500.0, "max_price": 2000.0, "max_publish_days": 0})
+    shrunk = client.get("/api/tasks/t1/links/facets", headers=_auth_headers()).json()
+    assert shrunk == {"task_id": "t1", "regions": [], "brands": []}, shrunk
+    listed_after = client.get("/api/tasks/t1/links", params={"type": "item"},
+                              headers=_auth_headers()).json()
+    assert listed_after["items"] == [], listed_after
 
 
 def test_facets_ignores_seller_rows(client: TestClient, tmp_repo: Repository) -> None:

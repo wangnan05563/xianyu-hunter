@@ -22,13 +22,14 @@ export const EXIT_LIVE_MODE_TIP = '退回数据库模式：恢复分页与删除
 /**
  * 地区/品牌下拉的候选口径说明。
  * 与 regionOptions/brandOptions 的取数来源逐字对齐：
- * 实时模式 = 本次搜索原始结果提取；DB 模式 = 后端 facets 全量 DISTINCT（空则回落当前页）。
+ * 实时模式 = 本次搜索原始结果提取；DB 模式 = 后端 facets 按当前筛选收缩后的 DISTINCT
+ * （T02661 裁决「方案1」：候选跟着关键词/销售状态/价格/发布天数收缩，本维度自身不收缩）。
  */
 export function facetTip(liveMode: boolean, kind: 'region' | 'brand'): string {
   const field = kind === 'region' ? '地区' : '品牌'
   return liveMode
     ? `实时模式：候选取自本次搜索结果的${field}，没入库的那批不在其中`
-    : `数据库模式：候选来自后端 facets 的全量去重，不只当前页`
+    : `数据库模式：候选按当前关键词、销售状态与任务的价格/发布天数收缩（${field}本身不参与，换${field}不必先清空）；筛得严时这里可能只剩几项甚至空着，那是条件筛掉的`
 }
 
 /**

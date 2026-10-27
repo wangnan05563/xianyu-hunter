@@ -683,29 +683,58 @@ class TaskLinksMixin:
         task_id: str,
         link_type: str = "item",
         user_id: str | None = None,
+        search_keyword: str | None = None,
+        sold_filter: str = "all",
+        task: dict | None = None,
     ) -> dict[str, list[str]]:
-        """返回该任务关联内容出现过的全部地区/品牌（DISTINCT，不受当前筛选与分页影响）
+        """地区/品牌候选：与列表同源的过滤条件收缩之后再取 DISTINCT（T02661 裁决「方案1」）
 
-        为什么需要：前端地区/品牌下拉原先从「当前页 items」提取，选中一个地区后选项集
-        立刻只剩该地区，换地区必须先清空——自锁死；翻页后选项集还会变。
+        为什么需要：前端地区/品牌下拉原先从「当前页 items」提取，翻页后选项集还会变。
         display 是 JSON 文本列，region/brand 用 json_extract 取值，与
         _apply_search_filters_to_stmt 的过滤表达式保持同一口径（否则选项值与过滤值对不上）。
 
-        只按 task 全量取 DISTINCT：价格/发布天数/销售状态等任务级过滤条件**不**参与，
-        因为候选项的用途是「让用户能换着筛」，跟着当前筛选收缩就回到旧缺陷。
+        口径（裁决「方案1」= 候选永远「选了就有」）：关键词、销售状态、价格区间、发布天数
+        四项与列表走同一批下推方法 + 同一个 Python 关键词匹配，不再各写一套表达式；
+        region/brand 本身**必须**留在收缩之外——那正是 T02566 修掉的「选了一个地区后
+        候选只剩该地区」的自锁死，所以这里连参数都不收。
         """
         region_expr = func.json_extract(TaskLinkRow.display, "$.region")
         brand_expr = func.json_extract(TaskLinkRow.display, "$.brand")
+        # task.keyword 的匹配只看这两个字段，取出来即可，不必把整行 display 拉回来
+        title_expr = func.json_extract(TaskLinkRow.display, "$.title")
+        item_title_expr = func.json_extract(TaskLinkRow.display, "$.item_title")
         with self.engine.connect() as conn:
-            stmt = select(region_expr.label("region"), brand_expr.label("brand")).where(
+            if task is None:
+                task_stmt = select(TaskRow).where(TaskRow.id == task_id)
+                if user_id is not None:
+                    task_stmt = task_stmt.where(TaskRow.user_id == user_id)
+                task_row = conn.execute(task_stmt).first()
+                task = self._row_to_dict(task_row) if task_row else None
+            stmt = select(
+                region_expr.label("region"),
+                brand_expr.label("brand"),
+                title_expr.label("title"),
+                item_title_expr.label("item_title"),
+            ).where(
                 (TaskLinkRow.task_id == task_id) & (TaskLinkRow.link_type == link_type)
             )
             if user_id is not None:
                 stmt = stmt.where(TaskLinkRow.user_id == user_id)
+            stmt = self._apply_sold_filter_to_stmt(stmt, sold_filter)
+            stmt = self._apply_price_filter_to_stmt(stmt, task)
+            # region/brand 传 None：这两个维度是候选本身，不能被自己收缩掉
+            stmt = self._apply_search_filters_to_stmt(stmt, search_keyword, None, None)
+            stmt = self._apply_publish_days_filter_to_stmt(stmt, task)
             stmt = stmt.distinct()
             regions: set[str] = set()
             brands: set[str] = set()
             for row in conn.execute(stmt):
+                # 与 list_and_count_task_links 调同一个方法：任务关键词的中文语义
+                # 没法下推 SQL，只在 Python 匹配一次，两处口径才不会分叉
+                if not self._task_link_matches_task(
+                    {"display": {"title": row.title, "item_title": row.item_title}}, task
+                ):
+                    continue
                 if row.region:
                     regions.add(str(row.region))
                 if row.brand:
