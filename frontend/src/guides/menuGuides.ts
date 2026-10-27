@@ -152,12 +152,6 @@ export const MENU_GUIDES: MenuGuide[] = [
     ],
   },
   {
-    route: '/maintenance/vector',
-    steps: [
-      { selector: '.page-container', title: '向量数据库维护', description: '管理 ChromaDB 快照、清理过期文档并监控重建进度，保障智能客服知识库可用。' },
-    ],
-  },
-  {
     route: '/maintenance/tunnel',
     steps: [
       { selector: '.page-container', title: '内网穿透', description: '将本地 Web 控制台暴露到外网/局域网，支持 Cloudflare、cpolar、Tailscale。' },

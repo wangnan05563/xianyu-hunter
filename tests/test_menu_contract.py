@@ -87,7 +87,8 @@ def test_legacy_items_payload_is_rejected(menu_client):
 
 
 # T02557 / 2.2：曾被注册表漏掉、只能靠手敲 URL 进入的隐藏页
-FORMERLY_HIDDEN = ("vector_admin", "help", "menu_admin")
+# （vector_admin 已按 T02577 D-9 收敛到「客服配置 › 向量库维护」Tab，见下方专测）
+FORMERLY_HIDDEN = ("help", "menu_admin")
 
 
 def test_hidden_pages_now_have_menu_entries(menu_client):
@@ -98,6 +99,14 @@ def test_hidden_pages_now_have_menu_entries(menu_client):
     for key in FORMERLY_HIDDEN:
         assert key in by_key, f"{key} 未进入菜单，仍是隐藏页"
         assert by_key[key]["path"], f"{key} 缺少 path"
+
+
+def test_vector_admin_entry_folded_into_chatbot_config(menu_client):
+    """T02577 D-9：独立页已删，菜单里不得再留第二个向量库维护入口"""
+    client, _ = menu_client
+    by_key = {m["key"]: m for m in client.get("/api/menu").json()["menus"]}
+    assert "vector_admin" not in by_key, "向量库维护独立入口应已删除，避免同一功能两个入口"
+    assert by_key["chatbot_config"]["path"] == "/config/chatbot"
 
 
 def test_menu_admin_cannot_be_hidden(menu_client):

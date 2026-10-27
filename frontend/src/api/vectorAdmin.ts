@@ -1,8 +1,8 @@
 import client from './client'
 
-// 向量数据库维护 API：ChromaDB 快照/清理/监控（系统维护 → 向量数据库维护）
+// 向量数据库维护 API：ChromaDB 快照/清理/监控（入口在「客服配置 › 向量库维护」Tab）
 // 危险操作（恢复/删除快照/清空/按来源删除）需 confirm_token=CONFIRM_DELETE
-export const CONFIRM_TOKEN = 'CONFIRM_DELETE'
+const CONFIRM_TOKEN = 'CONFIRM_DELETE'
 
 export interface VectorStatus {
   collection_name: string

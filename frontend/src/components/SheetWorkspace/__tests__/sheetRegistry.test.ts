@@ -25,7 +25,6 @@ describe('sheetRegistry', () => {
       '/config/chatbot',
       '/maintenance',
       '/maintenance/db',
-      '/maintenance/vector',
       '/batch-refresh',
       '/anticrawl',
       '/chatbot',

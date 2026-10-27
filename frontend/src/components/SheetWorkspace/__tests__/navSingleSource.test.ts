@@ -53,7 +53,8 @@ describe('导航文案单一事实源（T02556 / FR-B-4）', () => {
   it('menu_registry.yaml 的每个菜单页，sheetRegistry 兜底标题与 label 一致', () => {
     const labels = parseRegistryLabels()
     // registry 条目数骤降说明解析失效（YAML 结构被改动），先让守卫本身可信
-    expect(labels.size).toBeGreaterThanOrEqual(29)
+    // 29 → 28：T02577 D-9 删掉了 vector_admin 独立入口，入口并入客服配置 Tab
+    expect(labels.size).toBeGreaterThanOrEqual(28)
     const drifted: string[] = []
     for (const s of sheetRegistry) {
       const label = labels.get(s.path)

@@ -73,8 +73,9 @@ describe('sheetRegistry ↔ menu_registry.yaml 入口完整性', () => {
     expect(dead).toEqual([])
   })
 
-  it('历史隐藏页（向量库/菜单管理/帮助）均已补入口', () => {
-    for (const p of ['/maintenance/vector', '/menu-admin', '/help']) {
+  it('历史隐藏页（菜单管理/帮助）均已补入口', () => {
+    // 向量库维护已按 T02577 D-9 收敛到「客服配置 › 向量库维护」Tab，不再有独立页
+    for (const p of ['/menu-admin', '/help']) {
       expect(REGISTRY_PATHS.has(p), `${p} 缺菜单入口`).toBe(true)
     }
   })

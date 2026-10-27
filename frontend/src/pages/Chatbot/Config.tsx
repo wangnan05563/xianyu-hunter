@@ -273,6 +273,8 @@ export default function ChatbotConfigPage() {
   return (
     <Card title="智能客服配置">
       <Tabs
+        // 旧入口 /maintenance/vector 会带 ?tab=vector-admin 跳过来（T02577 D-9）
+        defaultActiveKey={new URLSearchParams(globalThis.location?.search ?? '').get('tab') ?? 'basic'}
         items={[
           {
             key: 'basic',

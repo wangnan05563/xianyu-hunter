@@ -194,14 +194,7 @@ menus:
     sort_order: 204
     default_visible: true
     category: maintenance
-  # 向量数据库维护页此前只有路由无入口（隐藏页），补进菜单与命令面板
-  - key: vector_admin
-    label: 向量数据库维护
-    icon: DatabaseOutlined
-    path: /maintenance/vector
-    sort_order: 205
-    default_visible: true
-    category: maintenance
+  # 向量库维护无独立页：入口在「客服配置 › 向量库维护」Tab（T02577 D-9 裁决）
 
   # ========== 其他（other）：辅助功能入口 ==========
   - key: chatbot

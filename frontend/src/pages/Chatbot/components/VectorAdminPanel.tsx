@@ -1,19 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
 import { formatDateTime } from '../../../utils/timeFormat'
 import {
-  Card, Table, Button, Input, Tag, Space, Typography, Popconfirm,
+  Card, Table, Input, Tag, Space, Typography,
   message, Statistic, Row, Col, Modal,
 } from 'antd'
 import {
   ReloadOutlined, CameraOutlined, RollbackOutlined, DeleteOutlined,
-  WarningOutlined, FileSearchOutlined,
+  FileSearchOutlined,
 } from '@ant-design/icons'
 import { vectorAdminApi } from '../../../api/vectorAdmin'
 import type { VectorStatus, VectorSnapshot, VectorAuditLog } from '../../../api/vectorAdmin'
 import { TipButton } from '@/components/TipButton'
+import { confirmDanger, COUNT_UNKNOWN } from '@/components/DangerSummary'
 
 // 向量库维护面板：状态总览 + 快照管理 + 数据清理 + 审计日志
-// 危险操作（恢复/删除快照/清空/按来源删除）通过 Popconfirm 二次确认，
+// 危险操作（恢复/删除快照/清空/按来源删除）统一走 confirmDanger 四要素文案
+// （T02577 D-9 裁决：只保留本面板一套入口，确认强度对齐 C 档），
 // 后端要求 confirm_token=CONFIRM_DELETE，已封装在 vectorAdminApi 内部
 export function VectorAdminPanel() {
   const [status, setStatus] = useState<VectorStatus | null>(null)
@@ -63,20 +65,36 @@ export function VectorAdminPanel() {
     }
   }
 
-  const handleRestoreSnapshot = async (snapshotId: string) => {
+  const handleRestoreSnapshot = async (snapshot: VectorSnapshot) => {
+    const ok = await confirmDanger({
+      title: `从快照 ${snapshot.id} 恢复？`,
+      action: '用该快照的内容覆盖当前向量集合',
+      scope: `集合 ${status?.collection_name ?? '（未知）'} 的全部片段；快照文件本身保留`,
+      count: status?.chunk_count ?? null,
+      recovery: `被覆盖后再写入的新片段无法找回；需要时可用同一快照 ${snapshot.id} 再次恢复`,
+    })
+    if (!ok) return
     try {
-      await vectorAdminApi.restoreSnapshot(snapshotId)
-      message.success(`已从快照 ${snapshotId} 恢复`)
+      await vectorAdminApi.restoreSnapshot(snapshot.id)
+      message.success(`已从快照 ${snapshot.id} 恢复`)
       loadAll()
     } catch {
       message.error('恢复失败')
     }
   }
 
-  const handleDeleteSnapshot = async (snapshotId: string) => {
+  const handleDeleteSnapshot = async (snapshot: VectorSnapshot) => {
+    const ok = await confirmDanger({
+      title: `删除快照 ${snapshot.id}？`,
+      action: '删除该快照文件',
+      scope: '仅删除快照文件，不影响当前集合数据',
+      count: 1,
+      recovery: '快照文件删除后不可恢复（当前集合数据不受影响）',
+    })
+    if (!ok) return
     try {
-      await vectorAdminApi.deleteSnapshot(snapshotId)
-      message.success(`快照 ${snapshotId} 已删除`)
+      await vectorAdminApi.deleteSnapshot(snapshot.id)
+      message.success(`快照 ${snapshot.id} 已删除`)
       loadAll()
     } catch {
       message.error('删除快照失败')
@@ -84,6 +102,14 @@ export function VectorAdminPanel() {
   }
 
   const handleCleanupAll = async () => {
+    const ok = await confirmDanger({
+      title: `清空集合 ${status?.collection_name ?? ''}？`,
+      action: '删除集合内全部片段',
+      scope: `集合 ${status?.collection_name ?? '（未知）'} 的全部向量片段；快照与原始文档不受影响`,
+      count: status?.chunk_count ?? null,
+      recovery: '不可恢复；建议先创建快照，之后可从快照恢复',
+    })
+    if (!ok) return
     try {
       const res = await vectorAdminApi.cleanupAll()
       message.success(`已清空集合，删除 ${res.cleared} 条片段`)
@@ -98,8 +124,17 @@ export function VectorAdminPanel() {
       message.warning('请输入来源文件路径')
       return
     }
+    const sourceFile = cleanupSourceFile.trim()
+    const ok = await confirmDanger({
+      title: '按来源文件删除片段？',
+      action: `删除来源为 ${sourceFile} 的全部片段`,
+      scope: `source_file=${sourceFile} 的片段；其他来源与原始文档不受影响`,
+      count: COUNT_UNKNOWN,
+      recovery: '不可恢复；需要时只能重新导入该来源文档',
+    })
+    if (!ok) return
     try {
-      const res = await vectorAdminApi.cleanupBySource(cleanupSourceFile.trim())
+      const res = await vectorAdminApi.cleanupBySource(sourceFile)
       message.success(`已删除 ${res.deleted} 条片段`)
       setCleanupSourceOpen(false)
       setCleanupSourceFile('')
@@ -176,28 +211,23 @@ export function VectorAdminPanel() {
               key: 'actions',
               render: (_: unknown, record: VectorSnapshot) => (
                 <Space>
-                  <Popconfirm
-                    title="恢复快照"
-                    description="当前集合数据将被覆盖，确认恢复？"
-                    icon={<WarningOutlined style={{ color: '#ff4d4f' }} />}
-                    onConfirm={() => handleRestoreSnapshot(record.id)}
-                    okText="恢复"
-                    cancelText="取消"
-                    okButtonProps={{ danger: true }}
+                  <TipButton
+                    size="small"
+                    tip="用该快照覆盖当前集合数据"
+                    icon={<RollbackOutlined />}
+                    onClick={() => handleRestoreSnapshot(record)}
                   >
-                    <TipButton size="small" tip="用该快照覆盖当前集合数据" icon={<RollbackOutlined />}>恢复</TipButton>
-                  </Popconfirm>
-                  <Popconfirm
-                    title="删除快照"
-                    description="仅删除快照文件，不影响当前集合数据"
-                    icon={<WarningOutlined style={{ color: '#ff4d4f' }} />}
-                    onConfirm={() => handleDeleteSnapshot(record.id)}
-                    okText="删除"
-                    cancelText="取消"
-                    okButtonProps={{ danger: true }}
+                    恢复
+                  </TipButton>
+                  <TipButton
+                    size="small"
+                    tip="删除该快照文件，不影响当前集合"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => handleDeleteSnapshot(record)}
                   >
-                    <TipButton size="small" tip="删除该快照文件，不影响当前集合" danger icon={<DeleteOutlined />}>删除</TipButton>
-                  </Popconfirm>
+                    删除
+                  </TipButton>
                 </Space>
               ),
             },
@@ -208,17 +238,7 @@ export function VectorAdminPanel() {
       {/* 数据清理 */}
       <Card title="数据清理" extra={<Typography.Text type="secondary">危险操作，需二次确认</Typography.Text>}>
         <Space>
-          <Popconfirm
-            title="清空集合"
-            description="将删除所有片段，通常在全量重建前调用。确认清空？"
-            icon={<WarningOutlined style={{ color: '#ff4d4f' }} />}
-            onConfirm={handleCleanupAll}
-            okText="清空"
-            cancelText="取消"
-            okButtonProps={{ danger: true }}
-          >
-            <TipButton tip="删除集合内全部片段（危险操作）" danger icon={<DeleteOutlined />}>清空集合</TipButton>
-          </Popconfirm>
+          <TipButton tip="删除集合内全部片段（危险操作）" danger icon={<DeleteOutlined />} onClick={handleCleanupAll}>清空集合</TipButton>
           <TipButton tip="按来源文件删除其全部片段" icon={<FileSearchOutlined />} onClick={() => setCleanupSourceOpen(true)}>
             按来源文件删除
           </TipButton>

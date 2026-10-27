@@ -17,7 +17,6 @@ const ALERT_FILES = [
   'mobile/pages/Orders/index.tsx',
   'mobile/pages/Orders/OrderDetail.tsx',
   'mobile/pages/Tasks/TaskDetail.tsx',
-  'pages/Maintenance/VectorAdmin.tsx',
   'pages/Chatbot/Config.tsx',
   // T02884 B 类：裸秒 / 手工折算时长
   'pages/AntiCrawl/index.tsx',
@@ -31,7 +30,6 @@ const CLEANED_FILES = [
   'mobile/pages/Orders/index.tsx',
   'mobile/pages/Orders/OrderDetail.tsx',
   'mobile/pages/Tasks/TaskDetail.tsx',
-  'pages/Maintenance/VectorAdmin.tsx',
   'pages/Chatbot/Config.tsx',
   // T02884 B 类：裸秒 / 手工折算时长
   'pages/AntiCrawl/index.tsx',

@@ -28,7 +28,6 @@ const VersionManager = lazyRetry(() => import('./pages/Config/VersionManager'))
 const AIConfig = lazyRetry(() => import('./pages/Config/AIConfig'))
 const Maintenance = lazyRetry(() => import('./pages/Maintenance/Cleanup'))
 const DatabaseAdmin = lazyRetry(() => import('./pages/Maintenance/DatabaseAdmin'))
-const VectorAdmin = lazyRetry(() => import('./pages/Maintenance/VectorAdmin'))
 const BatchRefresh = lazyRetry(() => import('./pages/Maintenance/BatchRefresh'))
 const Tunnel = lazyRetry(() => import('./pages/Maintenance/Tunnel'))
 const SearchConfig = lazyRetry(() => import('./pages/Config/SearchConfig'))
@@ -119,7 +118,8 @@ export default function App() {
             <Route path="config/buyer" element={<LazyRoute><BuyerStrategy /></LazyRoute>} />
             <Route path="maintenance" element={<LazyRoute><Maintenance /></LazyRoute>} />
             <Route path="maintenance/db" element={<LazyRoute><DatabaseAdmin /></LazyRoute>} />
-            <Route path="maintenance/vector" element={<LazyRoute><VectorAdmin /></LazyRoute>} />
+            {/* 向量库维护已收敛到「客服配置 › 向量库维护」Tab（T02577 D-9 裁决），旧链接跳到该页 */}
+            <Route path="maintenance/vector" element={<Navigate to="/config/chatbot?tab=vector-admin" replace />} />
             <Route path="maintenance/tunnel" element={<LazyRoute><Tunnel /></LazyRoute>} />
             <Route path="batch-refresh" element={<LazyRoute><BatchRefresh /></LazyRoute>} />
             <Route path="anticrawl" element={<LazyRoute><AntiCrawl /></LazyRoute>} />
