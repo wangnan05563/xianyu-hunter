@@ -61,6 +61,7 @@ class TaskCreate(BaseModel):
     max_price: float | None = None
     # 仅展示最近 N 天内发布的商品（None 表示不过滤）
     max_publish_days: int | None = None
+    # T02963 裁决：建任务的默认值只在这里定义（domain 已改必填），取最保守的 notify
     mode: str = "notify"
     region: str | None = None
     exclude_words: list[str] = []

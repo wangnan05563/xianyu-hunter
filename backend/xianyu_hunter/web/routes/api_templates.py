@@ -30,6 +30,7 @@ class TemplateCreate(BaseModel):
     keyword: str = Field(..., min_length=1, max_length=80)
     min_price: float | None = None
     max_price: float | None = None
+    # 与 TaskCreate 同口径（T02963 裁决：默认 notify，不自动下单）
     mode: str = "notify"
     icon: str = "\U0001F4CB"
     category: str = "其他"

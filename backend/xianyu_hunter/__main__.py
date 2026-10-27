@@ -66,7 +66,7 @@ def add(
     name: str = typer.Option("", help="任务名称（默认 = keyword）"),
     min_price: float = typer.Option(None, help="价格下限"),
     max_price: float = typer.Option(None, help="价格上限"),
-    mode: str = typer.Option("confirm", help="执行模式: auto/semi_auto/confirm/notify"),
+    mode: str = typer.Option("notify", help="执行模式: auto/semi_auto/confirm/notify（默认 notify，与 API 契约一致，T02963）"),
     task_id: str = typer.Option("", help="任务 ID（默认自动生成）"),
 ) -> None:
     """新增监控任务"""

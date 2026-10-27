@@ -67,7 +67,8 @@ class TaskRow(Base):
     use_cron: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # 固定间隔调度模式下的循环间隔（秒），仅 use_cron=0 时生效
     interval_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=60.0)
-    mode: Mapped[str] = mapped_column(String, nullable=False, default="confirm")
+    # T02963 裁决：入库兜底同样取 notify（与 API 契约一致），避免第三份默认值
+    mode: Mapped[str] = mapped_column(String, nullable=False, default="notify")
     notifier_channels: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
     # 通知触发开关：True=仅对价格≤捡漏价(P10)的商品触发通知
     # 为什么用 Boolean 而非 JSON：单一布尔开关，独立列便于 SQL 过滤与索引；

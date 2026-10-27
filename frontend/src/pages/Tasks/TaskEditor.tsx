@@ -354,7 +354,9 @@ export default function TaskEditor() {
   // 用类型守卫替代 as 断言（S4325）：让 TypeScript 收窄 prefillMode 类型
   // 取值集合来自 constants/taskStatus（与后端 domain/task.py TaskMode 同源，T02716），
   // 这里不再自己列一遍字面量联合——后端加一个模式时，漏改这里不会报错，只会把合法模式当非法值回落
-  const initialMode = isTaskMode(prefillMode) ? prefillMode : TASK_MODE.CONFIRM
+  // T02963 裁决：新建任务的默认模式与 API 契约统一取 notify（不自动下单）；
+  // 编辑回填仍走 taskToFormData 的 CONFIRM 兜底，两者语义不同，不要合并
+  const initialMode = isTaskMode(prefillMode) ? prefillMode : TASK_MODE.NOTIFY
 
   // 表单状态（含任务级覆盖字段，null 表示沿用全局）
   const [formData, setFormData] = useState<TaskCreateBody>({

@@ -23,7 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from xianyu_hunter.config import Settings
-from xianyu_hunter.domain.task import Task
+from xianyu_hunter.domain.task import Task, TaskMode
 from xianyu_hunter.infra.repository import Repository
 from xianyu_hunter.modules.scheduler import TaskScheduler
 from xianyu_hunter.web.app import app
@@ -53,7 +53,8 @@ def _make_scheduler_with_task(task_id: str) -> tuple[TaskScheduler, MagicMock, M
     worker = MagicMock()
     worker.run_once = AsyncMock(return_value=MagicMock(should_pause=False))
 
-    task = Task(id=task_id, name="test", keyword="kw")
+    # mode 现为必填（T02963：默认值只归 API 契约）；本用例只关心调度注册，沿用旧默认 CONFIRM
+    task = Task(id=task_id, name="test", keyword="kw", mode=TaskMode.CONFIRM)
     # register 内部只是 async with lock + 字典赋值，asyncio.run 同步执行即可
     asyncio.run(scheduler.register(task, worker))
 

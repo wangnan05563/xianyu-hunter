@@ -11,8 +11,8 @@ class TaskMode(str, Enum):
     """任务执行模式"""
     AUTO = "auto"            # 全自动直接拍
     SEMI_AUTO = "semi_auto"  # 推送确认后拍
-    CONFIRM = "confirm"      # 仅推送不拍（默认最保守）
-    NOTIFY_ONLY = "notify"   # 仅推送
+    CONFIRM = "confirm"      # 仅推送不拍
+    NOTIFY_ONLY = "notify"   # 仅推送（建任务的默认值，见 api_tasks.TaskCreate）
 
 
 class TaskStatus(str, Enum):
@@ -29,6 +29,10 @@ class Task:
     id: str
     name: str
     keyword: str
+    # T02963 裁决：默认值只归 API 契约（TaskCreate.mode = "notify"），domain 改必填。
+    # 之前这里默认 CONFIRM，与 API 的 notify 构成「不写 mode 建任务」两种行为；
+    # 去掉默认后任何新调用方都必须显式表态，不会再静默落到某条隐藏分支。
+    mode: TaskMode
     min_price: float | None = None
     max_price: float | None = None
     # 仅展示最近 N 天内发布的商品（None 表示不过滤）
@@ -44,7 +48,6 @@ class Task:
     use_cron: bool = False
     # 固定间隔调度模式下的循环间隔（秒），仅 use_cron=False 时生效
     interval_seconds: float = 60.0
-    mode: TaskMode = TaskMode.CONFIRM
     notifier_channels: list[str] = field(default_factory=lambda: ["serverchan"])
     # 通知触发开关：True=仅对价格≤捡漏价(P10)的商品触发通知
     # mode 优先级矩阵：mode=notify 时此开关仍生效（仅通知模式本身就只通知）

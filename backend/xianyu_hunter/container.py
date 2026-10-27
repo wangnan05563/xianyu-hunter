@@ -327,7 +327,9 @@ class Container:
             max_price=raw.get("max_price"),
             exclude_words=raw.get("exclude_words") or [],
             region=raw.get("region"),
-            mode=TaskMode(raw.get("mode", "confirm")),
+            # T02963 裁决：默认值统一到 notify（不自动下单）；旧行 mode 列为 NOT NULL，
+            # 这里的兜底只覆盖手写 raw dict 的调用方
+            mode=TaskMode(raw.get("mode") or TaskMode.NOTIFY_ONLY.value),
             search_filters=raw.get("search_filters") or [],
             # 用 or 防御 NULL：迁移后的旧行可能为 None
             cron=raw.get("cron") or "*/1 * * * *",

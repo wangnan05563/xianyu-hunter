@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import inspect
 
 from xianyu_hunter.config import Settings
+from xianyu_hunter.domain.task import TaskMode
 from xianyu_hunter.infra.db_models import init_db
 from xianyu_hunter.infra.repository import Repository
 from xianyu_hunter.web.app import app
@@ -76,18 +77,18 @@ class TestTaskDomainFields:
 
     def test_task_has_use_cron_field(self):
         from xianyu_hunter.domain.task import Task
-        task = Task(id="t1", name="test", keyword="kw", use_cron=True)
+        task = Task(id="t1", name="test", keyword="kw", use_cron=True, mode=TaskMode.CONFIRM)
         assert task.use_cron is True
 
     def test_task_has_interval_seconds_field(self):
         from xianyu_hunter.domain.task import Task
-        task = Task(id="t1", name="test", keyword="kw", interval_seconds=120.0)
+        task = Task(id="t1", name="test", keyword="kw", interval_seconds=120.0, mode=TaskMode.CONFIRM)
         assert task.interval_seconds == 120.0
 
     def test_task_defaults(self):
-        """Task 默认值：use_cron=False, interval_seconds=60.0"""
+        """Task 默认值：use_cron=False, interval_seconds=60.0（mode 自 T02963 起必填）"""
         from xianyu_hunter.domain.task import Task
-        task = Task(id="t1", name="test", keyword="kw")
+        task = Task(id="t1", name="test", keyword="kw", mode=TaskMode.CONFIRM)
         assert task.use_cron is False
         assert task.interval_seconds == 60.0
 
@@ -337,7 +338,7 @@ class TestTaskConfigFromTaskFields:
 
         task = Task(
             id="t1", name="test", keyword="kw",
-            use_cron=True, interval_seconds=300.0,
+            use_cron=True, interval_seconds=300.0, mode=TaskMode.CONFIRM,
         )
         # 模拟 startup.py 的构造逻辑
         config = TaskConfig(
@@ -351,7 +352,7 @@ class TestTaskConfigFromTaskFields:
         """TaskConfig 与 Task 的默认值一致"""
         from xianyu_hunter.domain.task import Task, TaskConfig
 
-        task = Task(id="t1", name="test", keyword="kw")
+        task = Task(id="t1", name="test", keyword="kw", mode=TaskMode.CONFIRM)
         config = TaskConfig()
         assert task.use_cron == config.use_cron
         assert task.interval_seconds == config.interval_seconds
