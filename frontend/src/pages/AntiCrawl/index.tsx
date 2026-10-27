@@ -825,11 +825,11 @@ export default function AntiCrawl() {
                 {/* T02579 / 4.5-1：把「能不能点」说清楚。后端 /strategy/set 只写
                     SessionStatus.strategy 这个展示字段（login_orchestrator 仅在
                     get_session_status 里读它），登录路径实际由 LoginStrategySelector
-                    在初始化时评估选择——所以这里做成可点按钮等于给用户一个假开关，
-                    人工覆盖登录策略要等裁决 D-10 */}
+                    在初始化时评估选择——所以这里做成可点按钮等于给用户一个假开关。
+                    D-10 已裁决「不开放人工覆盖」，文案从「待裁决」改为终态说明 */}
                 <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
                   以上是协调器评估出的可选登录方式，实际用哪一种在「初始化协调器」时自动选定，
-                  本页不提供手动指定（人工覆盖登录策略待产品裁决 D-10）。
+                  本页不提供手动指定（人工覆盖登录策略已按 D-10 裁决不开放）。
                 </Paragraph>
               </>
             )}
