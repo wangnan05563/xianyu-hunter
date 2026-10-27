@@ -107,3 +107,52 @@ async def test_save_empty(dedup: ItemDedup) -> None:
     """空 save 返回 0"""
     n = dedup.save([])
     assert n == 0
+
+
+# ============== T02968 裁决 B：items 写侧归属（首采者持有） ==============
+
+
+def test_save_attributes_new_items_to_user(dedup, tmp_repo) -> None:
+    dedup.save([make_item("own-1")], task_id="t1", user_id="alice")
+    assert tmp_repo.get_item("own-1", user_id="alice") is not None
+    assert tmp_repo.get_item("own-1", user_id="default") is None
+
+
+def test_save_without_user_leaves_key_absent(dedup, monkeypatch) -> None:
+    """无归属时不写 user_id 键：显式 None 会撞 NOT NULL，交给列默认值落 default"""
+    captured: dict[str, list[dict]] = {}
+
+    def fake_batch(items: list[dict]) -> int:
+        captured["items"] = items
+        return len(items)
+
+    monkeypatch.setattr(dedup.repo, "batch_upsert_items", fake_batch)
+    dedup.save([make_item("own-2")], task_id="t1")
+    assert "user_id" not in captured["items"][0]
+
+
+def test_first_collector_keeps_ownership(dedup, tmp_repo) -> None:
+    """B：后采者能看到商品内容，但不能把归属改到自己名下"""
+    dedup.save([make_item("own-3")], task_id="t1", user_id="alice")
+    dedup.save([make_item("own-3", price=88.0)], task_id="t2", user_id="bob")
+    alice_row = tmp_repo.get_item("own-3", user_id="alice")
+    assert alice_row is not None and alice_row["price"] == 88.0
+    assert tmp_repo.get_item("own-3", user_id="bob") is None
+
+
+def test_upsert_item_does_not_steal_ownership(tmp_repo) -> None:
+    """手工/详情采集走 upsert_item，同样不能让 user_id 进 ON CONFLICT 更新集"""
+    tmp_repo.upsert_item({"id": "own-4", "title": "t", "price": 10.0, "user_id": "alice"})
+    tmp_repo.upsert_item({"id": "own-4", "title": "t2", "price": 9.0, "user_id": "bob"})
+    row = tmp_repo.get_item("own-4")
+    assert row is not None and row["user_id"] == "alice" and row["price"] == 9.0
+
+
+def test_collection_row_carries_user_id_only_when_known() -> None:
+    from xianyu_hunter.domain.item import ItemDetail
+    from xianyu_hunter.modules.collection_service import ItemCollectionService
+
+    svc = ItemCollectionService(object())
+    detail = ItemDetail(id="own-5", title="t", price=1.0)
+    assert svc._item_row_from_detail("own-5", detail, "t1", user_id="alice")["user_id"] == "alice"
+    assert "user_id" not in svc._item_row_from_detail("own-5", detail, "t1")

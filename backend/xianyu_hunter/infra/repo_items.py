@@ -38,7 +38,11 @@ class ItemsMixin:
         with self.engine.begin() as conn:
             stmt = sqlite_insert(ItemRow).values(**item)
             update_cols = {
-                c: stmt.excluded[c] for c in item.keys() if c not in ("id", "first_seen")
+                c: stmt.excluded[c]
+                for c in item.keys()
+                # user_id 只在 INSERT 生效：T02968 裁决 B「首采者持有」，
+                # 后采者不能把已有商品改到自己名下（与 add_notification 同口径）
+                if c not in ("id", "first_seen", "user_id")
             }
             stmt = stmt.on_conflict_do_update(index_elements=["id"], set_=update_cols)
             conn.execute(stmt)
@@ -56,7 +60,9 @@ class ItemsMixin:
         sample = items[0]
         update_cols = {
             c: sqlite_insert(ItemRow).excluded[c]
-            for c in sample.keys() if c not in ("id", "first_seen")
+            for c in sample.keys()
+            # user_id 不进更新集：T02968 裁决 B（首采者持有），见 upsert_item 注释
+            if c not in ("id", "first_seen", "user_id")
         }
         with self.engine.begin() as conn:
             stmt = sqlite_insert(ItemRow).values(items)

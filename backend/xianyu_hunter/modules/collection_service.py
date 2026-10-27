@@ -644,7 +644,7 @@ class ItemCollectionService:
         """持久化 detail 采集结果：upsert item、标记售出、同步 display"""
         old_item = existing_item if existing_item is not None else (self.container.repo.get_item(item_id, user_id=user_id) or {})
         effective_task_id = str(old_item.get("task_id") or task_id or "")
-        incoming = self._item_row_from_detail(item_id, detail, effective_task_id)
+        incoming = self._item_row_from_detail(item_id, detail, effective_task_id, user_id=user_id)
         is_delisted = bool(detail.is_sold and not detail.title)
         changed_fields = self.diff_fields(old_item, incoming)
 
@@ -837,7 +837,7 @@ class ItemCollectionService:
         """
         old_item = existing_item if existing_item is not None else (self.container.repo.get_item(item_id, user_id=user_id) or {})
         effective_task_id = self._resolve_task_id(item_id, task_id, old_item)
-        incoming = self._item_row_from_detail(item_id, detail, effective_task_id)
+        incoming = self._item_row_from_detail(item_id, detail, effective_task_id, user_id=user_id)
         changed_fields = self.diff_fields(old_item, incoming)
 
         self.container.repo.upsert_item(merge_item_row(old_item, incoming))
@@ -934,7 +934,13 @@ class ItemCollectionService:
             logger.warning("官方采集价格门禁检查失败 item_id={}: {}", item_id, e)
             return False
 
-    def _item_row_from_detail(self, item_id: str, detail: ItemDetail, task_id: str) -> dict[str, Any]:
+    def _item_row_from_detail(
+        self,
+        item_id: str,
+        detail: ItemDetail,
+        task_id: str,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
         return {
             "id": item_id,
             "task_id": task_id,
@@ -949,6 +955,9 @@ class ItemCollectionService:
             "thumb_url": detail.thumb_url or "",
             "publish_time": detail.publish_time,
             "is_sold": 1 if detail.is_sold else 0,
+            # T02968 裁决 B：手工/详情采集也是 items 写侧，归属随行入库；
+            # None 时不写键（NOT NULL 列，显式 None 会撞约束），由列默认值落 default
+            **({"user_id": user_id} if user_id else {}),
         }
 
     def _update_data_source(self, item_id: str, source: str) -> None:

@@ -69,6 +69,11 @@ class ItemDedup:
                 "view_cnt": it.view_cnt,
                 "publish_time": it.publish_time,
                 "thumb_url": it.thumb_url,
+                # T02968 裁决 B（首采者持有）：归属随行入库，仓储层不把 user_id 放进
+                # ON CONFLICT 更新集，已有归属不会被后来的采集改写。
+                # user_id 为 None 时不写这个键——列是 NOT NULL，显式 None 会撞约束，
+                # 让列默认值把行归到 default 桶（与事件写入同口径）。
+                **({"user_id": user_id} if user_id else {}),
             }
             for it in items
         ]
