@@ -171,12 +171,26 @@ def test_import_skips_conflict_and_counts_it(container, engine):
     assert _row(engine)[0] == "原名"  # 冲突行没被覆盖
 
 
-def test_import_mode_validation_stays_two_valued(container):
-    """mode 只认 insert/replace；replace 是否开放属需求裁决 D-8，接口层不得默认启用"""
+def test_import_mode_validation_rejects_replace_per_d8(container):
+    """D-8 裁决（2026-10-27，A 不开放）：replace 直接 400，不再有 INSERT OR REPLACE 路径。
+
+    保留这一条是为了钉住「破坏性分支已被删除」——若将来有人把 mode 白名单放宽，
+    这里会红，而不是等用户在界面上发现「导入把既有行覆盖了」。
+    """
     assert admin.ImportBody(rows=[["x"]]).mode == "insert"
     with pytest.raises(HTTPException) as ei:
+        admin._validate_import_body(ImportBody(rows=[["x"]], mode="replace", confirm_token=admin.CONFIRM_TOKEN))
+    assert "D-8" in ei.value.detail
+    with pytest.raises(HTTPException) as ei2:
         admin._validate_import_body(ImportBody(rows=[["x"]], mode="upsert", confirm_token=admin.CONFIRM_TOKEN))
-    assert "mode" in ei.value.detail
+    assert "D-8" in ei2.value.detail
+
+
+def test_import_build_sql_never_emits_or_replace():
+    """SQL 构造层只产出 plain INSERT：即使有人绕过校验，也没有覆盖语句可生成。"""
+    sql = admin._build_insert_sql("tasks", {"id": 1, "name": "x"})
+    assert sql.startswith("INSERT INTO tasks")
+    assert "OR REPLACE" not in sql.upper()
 
 
 # ============== 4.2-2：导出确实是"全表" ==============

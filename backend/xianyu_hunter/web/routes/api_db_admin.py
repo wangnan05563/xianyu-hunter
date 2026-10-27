@@ -482,10 +482,14 @@ class BatchDeleteBody(BaseModel):
 
 
 class ImportBody(BaseModel):
-    """导入请求：rows 为二维数组（首行为表头，与 schema 列名对应），mode=insert/replace"""
+    """导入请求：rows 为二维数组（首行为表头，与 schema 列名对应）
+
+    mode 只保留在契约里用于**显式拒绝**：D-8 裁决不开放覆盖导入，传 replace 直接 400，
+    而不是靠删字段让它被 pydantic 静默忽略后降级成 insert——那样调用方会以为覆盖成功。
+    """
     rows: list[list[Any]]
     headers: list[str] | None = None  # 可选：自定义列名映射，缺省按列顺序
-    mode: str = "insert"  # insert 表示跳过主键冲突，replace 表示按主键替换
+    mode: str = "insert"
     confirm_token: str = ""
 
 
@@ -868,9 +872,11 @@ def _validate_import_body(body: ImportBody) -> None:
         raise HTTPException(status_code=400, detail="rows 不能为空")
     if len(body.rows) > MAX_IMPORT_ROWS:
         raise HTTPException(status_code=400, detail=f"单次最多导入 {MAX_IMPORT_ROWS} 行")
-    if body.mode not in ("insert", "replace"):
-        raise HTTPException(status_code=400, detail="mode 必须为 insert 或 replace")
-
+    if body.mode != "insert":
+        raise HTTPException(
+            status_code=400,
+            detail="覆盖导入（mode=replace）已按 D-8 裁决关闭；如需覆盖请先删除目标行再导入",
+        )
 
 def _resolve_import_headers(body: ImportBody, cols: list[dict]) -> tuple[list[str], dict[str, dict]]:
     """解析 headers 缺省值并校验列名合法性，返回 (headers, col_by_name)"""
@@ -883,12 +889,14 @@ def _resolve_import_headers(body: ImportBody, cols: list[dict]) -> tuple[list[st
     return headers, col_by_name
 
 
-def _build_insert_sql(table: str, mode: str, values: dict[str, Any]) -> str:
-    """根据 mode 选择 INSERT 或 INSERT OR REPLACE，避免在主循环内分支"""
+def _build_insert_sql(table: str, values: dict[str, Any]) -> str:
+    """构造 INSERT 语句。
+
+    D-8 裁决关闭了覆盖导入，`INSERT OR REPLACE` 分支已删除：主键冲突统一按 skipped 计数，
+    不再有任何路径会覆盖既有行。
+    """
     cols_list = list(values.keys())
     placeholders = ", ".join(f":{c}" for c in cols_list)
-    if mode == "replace":
-        return f"INSERT OR REPLACE INTO {table} ({', '.join(cols_list)}) VALUES ({placeholders})"
     return f"INSERT INTO {table} ({', '.join(cols_list)}) VALUES ({placeholders})"
 
 
@@ -899,7 +907,7 @@ def _is_unique_constraint_error(e: SQLAlchemyError) -> bool:
 
 
 def _execute_single_import(
-    container: Container, table: str, mode: str,
+    container: Container, table: str,
     raw_row: list, headers: list[str], col_by_name: dict[str, dict], idx: int,
 ) -> tuple[bool, bool, str | None]:
     """执行单行导入，返回 (inserted, skipped, error_msg)
@@ -909,7 +917,7 @@ def _execute_single_import(
     if len(raw_row) != len(headers):
         return False, False, f"第 {idx} 行列数不匹配"
     values = {h: _parse_value(v, col_by_name[h]["type"]) for h, v in zip(headers, raw_row)}
-    sql = _build_insert_sql(table, mode, values)
+    sql = _build_insert_sql(table, values)
     try:
         with container.repo.engine.begin() as conn:
             conn.execute(text(sql), values)
@@ -932,7 +940,7 @@ def import_rows(
 
     限制：
     - 单次最多 MAX_IMPORT_ROWS 行
-    - mode=insert 遇主键冲突跳过；mode=replace 走 INSERT OR REPLACE
+    - 主键冲突一律 skipped，**不覆盖**（D-8 裁决关闭覆盖导入，mode 非 insert 直接 400）
     - 需要 confirm_token（导入可能产生大量数据）
     """
     _validate_table(table)
@@ -945,7 +953,7 @@ def import_rows(
     skipped = 0
     errors: list[str] = []
     for idx, raw_row in enumerate(body.rows, start=1):
-        ok, skip, err = _execute_single_import(container, table, body.mode, raw_row, headers, col_by_name, idx)
+        ok, skip, err = _execute_single_import(container, table, raw_row, headers, col_by_name, idx)
         if ok:
             inserted += 1
         elif skip:

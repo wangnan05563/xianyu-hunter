@@ -98,11 +98,12 @@ export const dbAdminApi = {
 
   // 导入（二维数组 + 表头）
   // 单次最多 5000 行且逐行独立提交，耗时随行数线性增长，同样需要放宽超时。
+  // mode 只有 insert：覆盖导入按 D-8 裁决关闭，后端对 replace 直接 400（T02749）。
   importRows: (
     table: string,
     rows: unknown[][],
     headers?: string[],
-    mode: 'insert' | 'replace' = 'insert',
+    mode: 'insert' = 'insert',
   ) =>
     client
       .post<{
