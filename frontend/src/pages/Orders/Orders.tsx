@@ -455,6 +455,12 @@ export default function Orders() {
   // 非法值按「不筛选」降级（口径见 utils/alertDeepLink.parseOrderStatusParam）
   const urlStatus = parseOrderStatusParam(searchParams.get('status'))
   const [statusFilter, setStatusFilter] = useState<string | undefined>(urlStatus)
+  // T02829 ③：告警深链带的「今日」窗口（YYYY-MM-DD，UTC 日界）。
+  // 只认 YYYY-MM-DD 形状：别的形状直接忽略，交给后端 422 会让整页报错
+  const urlStartTime = (() => {
+    const raw = searchParams.get('start_time') ?? ''
+    return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : ''
+  })()
   // T02673：「演练单」选项不是订单状态，走独立的 type 参数（real|dry_run），
   // 不挤占 ?status= 白名单——否则深链白名单会拒绝 dry_run、刷新即丢筛选。
   // 初值由下方 urlType effect 在挂载时从 URL 同步
@@ -519,7 +525,7 @@ export default function Orders() {
 
   const load = useCallback(() => {
     setLoading(true)
-    orderApi.list({ page_num: page, page_size: pageSize, status: statusFilter, type: typeFilter, sort_by: sortBy, sort_dir: sortDir })
+    orderApi.list({ page_num: page, page_size: pageSize, status: statusFilter, type: typeFilter, sort_by: sortBy, sort_dir: sortDir, start_time: urlStartTime || undefined })
       .then((res) => {
         const list = res.items || []
         setItems(list)
@@ -532,7 +538,7 @@ export default function Orders() {
       })
       .catch(() => message.error('加载订单失败'))
       .finally(() => setLoading(false))
-  }, [page, pageSize, statusFilter, typeFilter, refId, sortBy, sortDir])
+  }, [page, pageSize, statusFilter, typeFilter, refId, sortBy, sortDir, urlStartTime])
 
   useEffect(() => { load() }, [load])
 
@@ -619,12 +625,22 @@ export default function Orders() {
     setRefLocated(null)
   }
 
-  // 只清筛选、保留 ref：urlStatus/urlType 的 effect 会把状态同步回去并触发重新定位
+  // 只清筛选、保留 ref：urlStatus/urlType 的 effect 会把状态同步回去并触发重新定位。
+  // 日期窗口也算筛选：留着它同样会让今天之外的订单扫不到，故一并清掉
   const clearFiltersForRef = () => {
     const next = new URLSearchParams(searchParams)
     next.delete('status')
     next.delete('type')
+    next.delete('start_time')
     setSearchParams(next, { replace: true })
+  }
+
+  // T02829 ③：清掉深链带来的「今日（UTC）」窗口，回到不限日期的列表
+  const clearDateFilter = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('start_time')
+    setSearchParams(next, { replace: true })
+    setPage(1)
   }
 
   // 筛选条件变化时回到第一页，避免空页；并把筛选态回写 URL（T02831）。
@@ -842,6 +858,13 @@ export default function Orders() {
           />
           <TipButton tip="重新加载订单列表" icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</TipButton>
           <TipButton tip="自定义表格显示列与顺序" icon={<SettingOutlined />} onClick={() => setColumnConfigOpen(true)}>列配置</TipButton>
+          {urlStartTime && (
+            <Tooltip title={`告警深链带的「今日」窗口：创建时间 ≥ ${urlStartTime}（UTC 日界），北京时间即当日 08:00 起`}>
+              <Tag closable onClose={clearDateFilter} color="blue" data-testid="orders-date-filter-tag">
+                今日（UTC {urlStartTime}）
+              </Tag>
+            </Tooltip>
+          )}
         </Space>
 
         <Spin spinning={loading}>

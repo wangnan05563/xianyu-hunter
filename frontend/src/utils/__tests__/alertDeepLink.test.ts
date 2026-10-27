@@ -8,7 +8,11 @@ import {
   parseEvalDeepLink,
   parseOrderStatusParam,
   evalDeepLinkMatchesFilters,
+  utcTodayDateKey,
 } from '../alertDeepLink'
+
+// 「今日」窗口固定用 UTC 2026-10-27 断言，避免用例随跑测当天漂移
+const NOW = new Date('2026-10-27T01:30:00Z')
 
 // 告警深链守卫（T02620）：抽屉/雷达的跳转必须带上「本条告警」的查询参数，
 // 且落地页要真的读取这些参数——写侧与读侧的参数名口径由本文件钉住。
@@ -17,29 +21,32 @@ const ORDERS_SOURCE = readFileSync(resolve(__dirname, '../../pages/Orders/Orders
 const EVALS_SOURCE = readFileSync(resolve(__dirname, '../../pages/Evaluations/index.tsx'), 'utf-8')
 
 describe('buildAlertJumpTarget：写侧（抽屉/雷达跳转）', () => {
-  it('失败订单：带 status=failed 与 ref=<订单 id>', () => {
-    expect(buildAlertJumpTarget('failed', { id: 'ORD-1', status: 'failed' }))
-      .toBe('/orders?status=failed&ref=ORD-1')
+  it('失败订单：带 status=failed、今日窗口与 ref=<订单 id>', () => {
+    expect(buildAlertJumpTarget('failed', { id: 'ORD-1', status: 'failed' }, NOW))
+      .toBe('/orders?status=failed&start_time=2026-10-27&ref=ORD-1')
   })
 
   it('待支付超时：状态兜底用 pending_pay（后端超时口径），不是 takeover_pending', () => {
     // 依据：stats_today._query_timeout_pending 的 WHERE 是 domain/order.PENDING_STATUSES
     // ＝ ('pending_pay',)。写成 takeover_pending 会让落地页筛出空列表，比不筛更糟。
-    expect(buildAlertJumpTarget('timeout', { id: 'ORD-2', status: 'pending_pay' }))
-      .toBe('/orders?status=pending_pay&ref=ORD-2')
-    expect(buildAlertJumpTarget('timeout', { id: 'ORD-2' })).toBe('/orders?status=pending_pay&ref=ORD-2')
+    expect(buildAlertJumpTarget('timeout', { id: 'ORD-2', status: 'pending_pay' }, NOW))
+      .toBe('/orders?status=pending_pay&start_time=2026-10-27&ref=ORD-2')
+    expect(buildAlertJumpTarget('timeout', { id: 'ORD-2' }, NOW))
+      .toBe('/orders?status=pending_pay&start_time=2026-10-27&ref=ORD-2')
   })
 
   it('条目自带合法 status 时以条目为准（告警口径变化时不写死）', () => {
-    expect(buildAlertJumpTarget('failed', { id: 'X', status: 'cancelled' }))
-      .toBe('/orders?status=cancelled&ref=X')
+    expect(buildAlertJumpTarget('failed', { id: 'X', status: 'cancelled' }, NOW))
+      .toBe('/orders?status=cancelled&start_time=2026-10-27&ref=X')
   })
 
   it('脏 id / 脏 status 一律降级：宁可少带参数，也不拼出坏链接', () => {
-    expect(buildAlertJumpTarget('failed', { id: '"><script>' })).toBe('/orders?status=failed')
-    expect(buildAlertJumpTarget('failed', { id: 'ok1', status: 'not_a_status' }))
-      .toBe('/orders?status=failed&ref=ok1')
-    expect(buildAlertJumpTarget('failed', undefined)).toBe('/orders?status=failed')
+    expect(buildAlertJumpTarget('failed', { id: '"><script>' }, NOW))
+      .toBe('/orders?status=failed&start_time=2026-10-27')
+    expect(buildAlertJumpTarget('failed', { id: 'ok1', status: 'not_a_status' }, NOW))
+      .toBe('/orders?status=failed&start_time=2026-10-27&ref=ok1')
+    expect(buildAlertJumpTarget('failed', undefined, NOW))
+      .toBe('/orders?status=failed&start_time=2026-10-27')
   })
 
   it('低分评估：带 item_id 定位，并把 0-1 归一分换算成评估分口径的 score_max', () => {
@@ -61,8 +68,26 @@ describe('buildAlertJumpTarget：写侧（抽屉/雷达跳转）', () => {
   })
 })
 
-describe('evalScoreMaxFromAlert：换算与边界', () => {
-  it('四舍五入到整数百分比', () => {
+describe('「今日」窗口：按 UTC 取日期（T02734 裁决 A / T02829 ②③）', () => {
+  it('UTC 当天任意时刻都落在同一个 UTC 日期键', () => {
+    expect(utcTodayDateKey(new Date('2026-10-27T00:00:00Z'))).toBe('2026-10-27')
+    expect(utcTodayDateKey(new Date('2026-10-27T23:59:59Z'))).toBe('2026-10-27')
+  })
+
+  it('北京时间已到次日 07:30、UTC 还在前一天时，必须发 UTC 那天（发错就会筛出空列表）', () => {
+    // 2026-10-26T23:30Z ＝ 北京时间 2026-10-27 07:30。告警数据是 stats_today 按 UTC 零点筛的，
+    // 深链若按本地日期发 2026-10-27，落地页会去查一个 UTC 上还没开始的日子
+    expect(buildAlertJumpTarget('failed', { id: 'ORD-3' }, new Date('2026-10-26T23:30:00Z')))
+      .toBe('/orders?status=failed&start_time=2026-10-26&ref=ORD-3')
+  })
+
+  it('读侧真的把 start_time 发给后端，并把「今日」窗口显示出来', () => {
+    expect(ORDERS_SOURCE).toContain('start_time: urlStartTime || undefined')
+    expect(ORDERS_SOURCE).toContain('orders-date-filter-tag')
+  })
+})
+
+describe('evalScoreMaxFromAlert：换算与边界', () => {  it('四舍五入到整数百分比', () => {
     expect(evalScoreMaxFromAlert(0.5)).toBe('50')
     expect(evalScoreMaxFromAlert(0.333)).toBe('33')
   })

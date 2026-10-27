@@ -59,6 +59,18 @@ export function evalScoreMaxFromAlert(scoreValue: number | null | undefined): st
 }
 
 /**
+ * 「今日」的日期键（T02734 裁决 A：今日 = UTC 自然日）。
+ *
+ * 必须按 UTC 取年月日：告警数据本身由 `stats_today` 按 UTC 零点筛出，
+ * 深链若发本地日期，会在北京时间 00:00–08:00 之间指向**次日**（UTC 还没到那天），
+ * 落地页筛出空列表——比不筛更糟。后端对裸日期按 UTC 日界解析（api_orders
+ * `_parse_order_time_bound`），所以这里只发 YYYY-MM-DD，不带时区偏移。
+ */
+export function utcTodayDateKey(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10)
+}
+
+/**
  * 取该告警条目真正落在筛选上的状态值。
  *
  * 优先用条目自带的 `status`（它就是后端写进 orders 表的那个字面值），
@@ -78,11 +90,14 @@ function statusForAlert(item: AlertJumpItem | undefined, fallback: string): stri
  * （订单在第 2 页之后，见 T02641），用户落到的也是已经筛好的异常子集，
  * 而不是整张全量列表——这正是本单要消掉的「跳到页面却看不出异常」。
  */
-export function buildAlertJumpTarget(kind: AlertKind, item?: AlertJumpItem): string {
+export function buildAlertJumpTarget(kind: AlertKind, item?: AlertJumpItem, now: Date = new Date()): string {
   const base = ALERT_JUMP_TARGETS[kind]
   const params = new URLSearchParams()
   if (kind === 'failed' || kind === 'timeout') {
     params.set('status', statusForAlert(item, kind === 'failed' ? ORDER_STATUS.FAILED : ORDER_STATUS.PENDING_PAY))
+    // T02829 ②：告警列表本身就是「今日（UTC）」窗口，深链把这个窗口原样带给落地页，
+    // 否则用户看到的是「status=failed 的全部历史」，与雷达上的数字对不上
+    params.set('start_time', utcTodayDateKey(now))
     const ref = safeId(item?.id)
     if (ref) params.set('ref', ref)
   } else {

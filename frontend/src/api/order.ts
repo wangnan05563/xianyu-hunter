@@ -14,6 +14,9 @@ export interface OrderListParams {
   sort_dir?: 'asc' | 'desc'
   // T02673：演练单筛选走 type 列（real|dry_run），与 status 白名单分立
   type?: 'real' | 'dry_run'
+  // T02829：创建时间区间（ISO 日期或时间；裸日期按 UTC 日界解析，非法值 422）
+  start_time?: string
+  end_time?: string
 }
 
 // 状态卡计数（评审 2.5-1 / REQ-036）：由后端 GROUP BY 全量派生，
