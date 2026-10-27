@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Layout, List, Input, Typography, Tag, Popconfirm, Empty, Spin, Upload, Select, message, Modal } from 'antd'
+import { Layout, List, Input, Typography, Tag, Popconfirm, Empty, Spin, Upload, Select, message, Modal, Alert } from 'antd'
 import {
   PlusOutlined,
   UserOutlined,
@@ -19,6 +19,7 @@ import {
 import { useSSEChat } from './hooks/useSSEChat'
 import { useModelList } from './hooks/useModelList'
 import { useSearch } from '../../hooks/useSearch'
+import { AI_CHAT_DEGRADE_NOTE, AI_CHAT_DEGRADE_TITLE, useAIEnabled } from '../../hooks/useAIEnabled'
 import { useSearchHistory } from '../../hooks/useSearchHistory'
 import { chatbotApi } from './api'
 import { AssistantMessage } from './components/AssistantMessage'
@@ -461,6 +462,9 @@ export default function ChatbotPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const { isStreaming, sendMessage, cancel } = useSSEChat()
+  // T02891 裁决 A：对话助手整体纳入 AI 总开关（后端 /api/chatbot/chat 关闭时返回 403）。
+  // enabled===null 是「还没读到」，此时不表态，避免把读取失败说成开关已关。
+  const { enabled: aiEnabled } = useAIEnabled()
   // 模型列表：下拉展示 / 自动刷新 / localStorage 记忆（需求 2/3/5/6）
   const modelList = useModelList()
 
@@ -1024,6 +1028,15 @@ export default function ChatbotPage() {
         {mainContentBody}
 
         {/* S3776 修复：输入区抽取为 ChatInputArea 组件 */}
+        {aiEnabled === false && (
+          <Alert
+            type="info"
+            showIcon
+            message={AI_CHAT_DEGRADE_TITLE}
+            description={AI_CHAT_DEGRADE_NOTE}
+            style={{ marginBottom: 8 }}
+          />
+        )}
         {currentSession && (
           <ChatInputArea
             currentSession={currentSession}

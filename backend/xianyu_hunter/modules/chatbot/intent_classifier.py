@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import httpx
 from loguru import logger
 
-from xianyu_hunter.config import get_settings
+from xianyu_hunter.config import get_settings, is_ai_disabled
 from xianyu_hunter.infra.yaml_config import ChatbotConfig
 
 
@@ -161,6 +161,14 @@ class IntentClassifier:
         让 RAG/AGENT 兜底处理（避免因分类器故障导致无法回答）。
         调用前 check_budget，调用后 record_usage（endpoint=chatbot_intent）。
         """
+        # T02891 裁决 A：总开关关闭时不打 LLM。能走到这里说明规则预筛没判定，
+        # 于是沿用「保守放行」那条既有的腿——分类器不该成为关掉 AI 后唯一还能花钱的地方。
+        if is_ai_disabled():
+            return IntentResult(
+                in_scope=True, confidence=0.5, used_llm=False,
+                reason="AI 总开关已关闭，保守放行", suggested_action="rag",
+            )
+
         if self._http is None:
             return IntentResult(
                 in_scope=True, confidence=0.5, used_llm=False,

@@ -1,8 +1,8 @@
 // T02726：AI 总开关关闭是全站最后一处原生 globalThis.confirm。
 // 换成 confirmDanger 后，四要素文案必须与后端真实行为对齐——
-// 「关闭后所有 AI 功能降级到规则模式」这句话在本项目里是假的：
-// T02947 裁决 A 之后，三个推理接口在开关关闭时确实退回规则解析，
-// 但只有那三个；chatbot/Embedding/价格解读根本没有这个开关，test-connection 仍硬失败。
+// T02947 裁决 A 之后，三个推理接口在开关关闭时确实退回规则解析；
+// T02891 裁决 A（全量纳管）之后，chatbot/RAG/Agent/远程 Embedding/价格解读也各自判开关，
+// 「不包含」清单只剩真正不产生 token 费用的本地能力。
 // 文案会随代码漂移，所以这里用后端源码当事实源做双向断言，而不是断言一句漂亮话。
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'node:fs'
@@ -11,6 +11,7 @@ import { missingDangerFields } from '@/components/DangerSummary'
 import {
   AI_GATE_AFFECTED,
   AI_GATE_EXCLUDED,
+  AI_GATE_HARD_FAIL,
   GATE_HINT,
   buildDisableAICopy,
   countConfiguredModels,
@@ -115,6 +116,18 @@ describe('deferredSave：移动端开关只改本页表单（T02892）', () => {
     }
     expect(GATE_HINT).not.toContain('所有 AI')
   })
+
+  it('硬失败清单只有两处，且不含对话入口（AC-18 要的是降级，不是死路）', () => {
+    const copy = buildDisableAICopy(CONFIG, TODAY)
+    expect(AI_GATE_HARD_FAIL).toHaveLength(2)
+    expect(AI_GATE_HARD_FAIL.join(' ')).not.toContain('对话')
+    for (const hard of AI_GATE_HARD_FAIL) {
+      expect(copy.scope, `${hard} 未在「仍会直接报错」里说明`).toContain(hard)
+    }
+    // 对话的关闭态必须说成「降级」，窄屏卡片与桌面端四要素同口径
+    expect(GATE_HINT).toContain('对话退成常见问题与检索片段')
+    expect(copy.scope).toContain('推理入口退回规则引擎')
+  })
 })
 
 describe('文案与后端源码逐条对齐（新增漂移会被拒）', () => {
@@ -128,12 +141,13 @@ describe('文案与后端源码逐条对齐（新增漂移会被拒）', () => {
     return end === -1 ? rest : rest.slice(0, end)
   }
 
-  it('推理端点改用 _ai_enabled() 分支，硬门禁只剩 test-connection（T02947 裁决 A）', () => {
+  it('推理端点改用 _ai_enabled() 分支，raise 型门禁只剩 test-connection 与远程 test-embedding', () => {
     const src = aiRoutes()
     const deep = deepRoutes()
     expect(deep).toContain('@router.post("/deep-analyze")')
-    // raise 型门禁只允许 test-connection 一处；deep 文件里一处都不该留
-    expect((src.match(/^\s+_check_ai_enabled\(\)$/gm) ?? [])).toHaveLength(1)
+    // test-connection 一直是 raise 型；test-embedding 由 T02891 裁决 A 补上（只在远程配置下触发）
+    // → raise 点固定为 2 处，deep 文件里一处都不该留
+    expect((src.match(/^\s+_check_ai_enabled\(\)$/gm) ?? [])).toHaveLength(2)
     expect((deep.match(/^\s+_check_ai_enabled\(\)$/gm) ?? [])).toHaveLength(0)
     // 三个推理端点各自判开关，漏一个就是「关着还在烧 token」
     expect(endpointBody(src, '@router.post("/parse-task")')).toContain('_ai_enabled()')
@@ -158,17 +172,44 @@ describe('文案与后端源码逐条对齐（新增漂移会被拒）', () => {
     expect(src).toContain('settings.ai_enabled and eval_cfg.ai_auto_deep_analyze')
   })
 
-  it('「不包含」列出的能力里没有任何 ai_enabled 判断', () => {
-    const ungated = [
+  it('T02891 裁决 A 后：原先不受控的调用点必须逐个判开关', () => {
+    // 模块层用统一判据 config.is_ai_disabled()（每次重读，开关是热更新的）；
+    // 路由层直接读 settings.ai_enabled 再抛带 code 的 403
+    const gated: Array<[string, string]> = [
+      ['modules/chatbot/agent.py', 'is_ai_disabled()'],
+      ['modules/chatbot/rag_engine.py', 'is_ai_disabled()'],
+      ['modules/chatbot/embedding_service.py', 'is_ai_disabled()'],
+      ['modules/chatbot/intent_classifier.py', 'is_ai_disabled()'],
+      ['web/routes/api_kb.py', 'ai_enabled'],
+      ['web/routes/price_histogram.py', 'ai_enabled'],
+    ]
+    for (const [rel, marker] of gated) {
+      expect(read(rel), `${rel} 缺 AI 总开关判断（应包含 ${marker}）`).toContain(marker)
+    }
+  })
+
+  it('对话入口不设门禁：AC-18 要的是降级，不是死路', () => {
+    // 智能客服需求 AC-18「关闭 AI 开关后，对话降级为 FAQ + 检索片段」——
+    // 在 /api/chatbot/chat 上加 403 会让这条验收标准失效，付费出口已在各调用点判开关闭合。
+    expect(read('web/routes/api_chatbot.py')).not.toContain('ai_enabled')
+    expect(read('modules/chatbot/orchestrator.py')).toContain('_fallback_after_llm_failure')
+  })
+
+  it('判据只有一个出处：模块不得各自读 settings.ai_enabled', () => {
+    for (const rel of [
       'modules/chatbot/agent.py',
       'modules/chatbot/rag_engine.py',
       'modules/chatbot/embedding_service.py',
-      'web/routes/api_chatbot.py',
-      'web/routes/api_vector_admin.py',
-      'web/routes/price_histogram.py',
-    ]
-    for (const rel of ungated) {
-      expect(read(rel), `${rel} 现在受 ai_enabled 影响，文案需同步`).not.toContain('ai_enabled')
+      'modules/chatbot/intent_classifier.py',
+    ]) {
+      const src = read(rel)
+      expect(src, `${rel} 应改走 config.is_ai_disabled()`).toContain('is_ai_disabled')
+      expect(src, `${rel} 不应自己拼开关条件`).not.toContain('settings.ai_enabled')
     }
+    expect(read('config.py')).toContain('def is_ai_disabled()')
+  })
+
+  it('向量库维护端点不调模型，没有开关判断才是正确状态', () => {
+    expect(read('web/routes/api_vector_admin.py')).not.toContain('ai_enabled')
   })
 })

@@ -352,6 +352,14 @@ def prices_analyze(
     import httpx
 
     settings = get_settings()
+    # T02891 裁决 A：价格趋势 AI 解读纳入总开关。
+    # 此前这里只判 API Key 和预算，关掉总开关照样打 /chat/completions。
+    # 直方图本体（GET /prices/histogram）是纯 SQL，不受开关影响，仍然可看。
+    if not settings.ai_enabled:
+        return {
+            "analysis": "AI 功能总开关已关闭，价格解读不可用；价格直方图与分位统计仍可正常查看。",
+            "source": "error",
+        }
     if not settings.openai_api_key:
         return {"analysis": "未配置 AI 服务密钥，无法生成分析。请在「AI 服务」配置页面设置 API Key。", "source": "error"}
 

@@ -12,6 +12,7 @@ import { MarkdownContent } from '../../../pages/Chatbot/components/MarkdownConte
 import type { Session, Message, SSEEvent, Source } from '../../../pages/Chatbot/types'
 import { extractApiError } from '../../../utils/apiError'
 import { useFailedSources } from '../../../hooks/useFailedSources'
+import { AI_CHAT_DEGRADE_SHORT, useAIEnabled } from '../../../hooks/useAIEnabled'
 import LoadFailedBar from '../../components/LoadFailedBar'
 
 // 欢迎语是独立数据源：失败时不能靠「没有欢迎语气泡」暗示一切正常（T02701）
@@ -168,6 +169,7 @@ export default function MobileChatbot() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const { isStreaming, sendMessage, cancel } = useSSEChat()
   const { failed, track } = useFailedSources<ChatbotSource>()
+  const { enabled: aiEnabled } = useAIEnabled()
 
   const loadWelcome = useCallback(async (): Promise<void> => {
     const welcome = await track('welcome', chatbotApi.getWelcome())
@@ -472,6 +474,12 @@ export default function MobileChatbot() {
         {renderStreaming()}
         <div ref={messagesEndRef} />
       </div>
+
+      {aiEnabled === false && (
+        <div style={{ padding: '6px 12px', fontSize: 12, color: '#8c8c8c', borderTop: '1px solid #f0f0f0' }}>
+          {AI_CHAT_DEGRADE_SHORT}
+        </div>
+      )}
 
       {/* 底部输入区（固定） */}
       <div

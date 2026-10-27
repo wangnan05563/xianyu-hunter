@@ -36,7 +36,7 @@
 **一句话说明**：管理 AI 总开关 + LLM 双后端配置 + Embedding 双后端配置 + 8 个 LLM 预设 + 5 个 Embedding 预设 + ModelConfigForm + EmbeddingConfigForm + UsageStats + BudgetSettings，通过 `/api/ai/*` 系列接口实现配置热更新、连接测试、用量统计、预算控制、深度分析与卖家模板化检测。
 
 **核心价值**：
-- AI 总开关（关闭时二次确认），关闭后所有 AI 功能降级到规则模式（不消耗 token）。
+- AI 总开关（关闭时二次确认），关闭后所有会真实产生 token 的调用点不再请求 LLM/Embedding；有规则形态的退回规则结果，没有规则形态的直接拦下（详见 7.1）。
 - **LLM 双后端**：8 个 AI 提供商预设（openai/deepseek/zhipu/moonshot/qwen/ernie/doubao/ollama），兼容 OpenAI / DeepSeek / 智谱 / Moonshot / 通义千问 / 文心一言 / 豆包 / Ollama。
 - **Embedding 双后端**：本地 `sentence-transformers`（BAAI/bge-small-zh-v1.5，512 维，~95MB）或远程 OpenAI 兼容 `/v1/embeddings`，3 种模式（local / inherit / remote）。
 - API Key 通过 `keyring` 加密存储，配置走 `.env` + 内存单例。
@@ -360,13 +360,27 @@ export const ENDPOINT_LABELS: Record<string, string> = {
 
 位置：`backend/xianyu_hunter/web/routes/api_ai.py` `_check_ai_enabled()` 函数
 
-- 受门禁的 AI 端点：`/parse-task`、`/evaluate-condition`、`/test-connection`、`/deep-analyze`、`/seller-template-check`（除这些外的 `/config`、`/models`、`/test-embedding`、`/usage`、`/budget` 不做门禁）。
+- 受门禁的 AI 端点（`/api/ai/*` 内部）：`/parse-task`、`/evaluate-condition`、`/test-connection`、`/deep-analyze`（`/test-embedding` 仅在远程后端时门禁）；`/config`、`/models`、`/usage`、`/budget` 是配置与统计读写、`/seller-template-check` 是纯规则，都不做门禁。开关的作用域不止于本路由，跨模块的完整纳管清单见下文「纳管范围（T02891）」。
 - `ai_enabled=false` 时抛 HTTP 403，`detail="AI 功能已关闭，请在「AI 服务」配置页面开启"`，并带机器码 `code="ai_disabled"`（`CodedHTTPException`，响应体 `{"detail": 人话, "code": 机器码}`）。
 - 前端按机器码判定只有一个入口：`frontend/src/utils/apiError.ts` 的 `isAiDisabledError()`（`code === "ai_disabled"`，或 detail 含「AI 功能已关闭」以兼容旧打包版后端）。
 - 开关关闭时前端不置灰，只把这 4 处 tip 换成 `AI_GATE_OFF_TIP`（说明「退回规则解析、结果非 AI」）：任务列表「AI 智能建任务 / 开始解析」与评估页「AI 成色评估 / 深度鉴伪」；状态来自 `hooks/useAIEnabled.ts` 的模块级缓存，配置页保存后调 `invalidateAIEnabled()` 立即刷新。读取 `/api/ai/config` 失败时按 fail-open 处理（保持原提示，仍由后端行为给出人话）。
 - 前端关闭时二次确认（`confirmDanger` 四要素，T02726），防止误操作。
 - 门禁口径（T02947 裁决 A）：`parse-task` / `evaluate-condition` / `deep-analyze` 改为 `_ai_enabled()` 条件分支——关闭时不请求 LLM，直接退回 `_rule_parse` / `_rule_eval_condition` / `_rule_deep_analyze`，响应里 `source="rule"`；`test-connection` 保留 `_check_ai_enabled()` 硬 403（没有规则形态）；`seller-template-check` 全程词频统计、零 LLM，不设门禁。`modules/worker.py` 的自动评估与自动深度分析同样前置判断 `settings.ai_enabled`。
-- Chatbot / RAG / Embedding / 价格趋势 AI 解读 不读取 `ai_enabled`，不受本开关影响。
+- 纳管范围（T02891 裁决 A）：开关的语义是「不再为 AI 花钱」，所以判据落在**会真实产生 token 的调用点**，`/api/ai/*` 以外的出口也纳入。统一判据是 `xianyu_hunter.config.is_ai_disabled()`（单一来源，每次调用重读配置——开关是热更新的，构造期快照会让关闭之后的调用继续漏网）：
+
+| 调用点 | 位置 | 关闭后的行为 |
+| ------ | ---- | ------------ |
+| 意图分类 | `modules/chatbot/intent_classifier.py` `_llm_classify` | 软降级：保守放行（`used_llm=false`），交给下游 FAQ/RAG 兜底 |
+| RAG 主回答 | `modules/chatbot/rag_engine.py` `generate` | 抛 `RuntimeError`，由 Orchestrator 转片段级降级（答案不含 AI 生成正文） |
+| 推荐追问 | `modules/chatbot/rag_engine.py` `generate_follow_ups` | 返回空列表——追问是锦上添花，不能把已生成的主回答拖成错误 |
+| Agent 工具决策 | `modules/chatbot/agent.py` `_call_llm` | 抛 `RuntimeError`，SSE 侧收到 error 事件 |
+| 远程 Embedding | `modules/chatbot/embedding_service.py` `_call_embedding` / `embed_batch` | 抛 `RuntimeError`；批量腿整体快速失败，不逐条重试（否则一万片段要白等约 3.75h 退避） |
+| 价格趋势 AI 解读 | `web/routes/price_histogram.py` `prices_analyze` | 返回 `source="error"` + 指向「直方图仍可看」的文案 |
+| 对话入口 | `web/routes/api_chatbot.py` `chat` | **不设端点级门禁**：智能客服需求 AC-18 要求「关闭 AI 开关后，对话降级为 FAQ + 检索片段」，orchestrator 的降级链（LLM→片段→转人工）已能零成本兑现；在这里 403 会把一条本该降级的对话变成死路 |
+| 知识库重建 | `web/routes/api_kb.py` `rebuild_kb` | 远程 embedding 时硬 403，本地放行。必须拦在接单前：rebuild 是 202 + 后台任务，放行后异常只落审计日志，用户先看到 `building`、最后得到一个 0 向量空库 |
+| Embedding 测连接 | `web/routes/api_ai.py` `test_embedding_connection` | 远程后端硬 403，本地照常测（与 T02890 同理：返回假成功比报错更坏） |
+
+  明确**不**纳入的：本地 Embedding 后端（不产生 token 费用）、ChromaDB 本地向量检索与知识库读写（不调 LLM）。关掉开关把它们一起停掉只会让检索静默变空，省不到钱。前端 `dangerCopy.ts` 的 `AI_GATE_AFFECTED` / `AI_GATE_HARD_FAIL` / `AI_GATE_EXCLUDED` 三张清单与上表同源，由 `__tests__/disableAIDangerCopy.test.ts` 逐文件断言。
 
 ### 7.2 配置存储与热更新
 
@@ -668,7 +682,8 @@ class LocalEmbeddingBackend:
 | --------------------------------------------------------- | --------- | ------------------------------------------------------------ |
 | `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_VISION_CAPABLE_KEYWORDS` | Vision 关键字白名单元组（10 个关键字）            |
 | `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_is_vision_capable(model_name)` | Vision 能力检测共享函数（被 api_ai_deep 复用）    |
-| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_check_ai_enabled()` | AI 开关检查（403）                                     |
+| `backend/xianyu_hunter/config.py`                  | `is_ai_disabled()` | AI 总开关单一判据（T02891，每次重读配置；chatbot 模块只用它，不再各自散判 `settings.ai_enabled`） |
+| `backend/xianyu_hunter/web/routes/api_ai.py`                  | `_check_ai_enabled()` | AI 开关硬 403（现仅 `test-connection` 与远程 `test-embedding`）                     |
 | `backend/xianyu_hunter/web/routes/api_ai.py`                  | `HTTP_TIMEOUT_SEC=25.0` | parse_task 超时                                        |
 | `backend/xianyu_hunter/web/routes/api_ai.py`                  | `VISION_TIMEOUT_SEC=60.0` | evaluate_condition 超时                                |
 | `backend/xianyu_hunter/web/routes/api_ai.py`                  | `ParseTaskBody` | Pydantic 请求模型（text 1-2000）                          |
@@ -730,7 +745,7 @@ class LocalEmbeddingBackend:
 **A**：安全。LLM API Key 与 Embedding API Key 都通过 keyring 加密存储，不写入 .env 明文。`GET /api/ai/config` 返回时仅保留末 4 位（`****xxxx`）。前端回传 `****` 开头视为未修改，跳过更新；空字符串清除 keyring。
 
 ### Q4：AI 关闭后会影响什么？
-**A**：所有 AI 功能降级到规则模式，不消耗任何 token。包括：自然语言解析走 `_rule_parse`、成色评估走 `_rule_eval_condition`、深度分析走 `_rule_deep_analyze`。`seller_template_check` 本身就是纯规则，不受影响。用量仪表盘仍可见历史数据。可随时重新开启。Tab 2 Embedding 配置独立于 AI 总开关。
+**A**：所有会真实产生 token 的调用都不再发出，但退回形态分两类（完整清单见 7.1「纳管范围」）：有规则形态的降级——自然语言解析走 `_rule_parse`、成色评估走 `_rule_eval_condition`、深度分析走 `_rule_deep_analyze`、意图分类保守放行、推荐追问返回空；没有规则形态的拦下——对话助手入口 403、知识库重建（远程 embedding）403、远程 Embedding 与 Embedding 测连接报错。`seller_template_check` 本身就是纯规则，不受影响。本地 Embedding 与本地向量检索不花钱，照常可用。用量仪表盘仍可见历史数据，可随时重新开启。
 
 ### Q5：Vision 能力是怎么检测的？
 **A**：通过 `_is_vision_capable(model_name)` 共享函数判断（位于 `api_ai.py`，被 `api_ai_deep.py` 复用）。模型名（小写）包含 `_VISION_CAPABLE_KEYWORDS` 中任一关键字（`vision` / `gpt-4o` / `gpt-4-vision` / `qvq` / `qwen-vl` / `glm-4v` / `claude-3` / `opus` / `sonnet` / `haiku`）即视为支持 Vision。纯文本模型（如 `deepseek-chat`）会跳过图片传入，避免 400 报错。

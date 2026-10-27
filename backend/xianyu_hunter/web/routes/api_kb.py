@@ -16,7 +16,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from loguru import logger
 
+from xianyu_hunter.config import get_settings
 from xianyu_hunter.web.deps import get_container
+from xianyu_hunter.web.middleware.exception_handler import CodedHTTPException
+from xianyu_hunter.web.routes.api_ai import AI_DISABLED_CODE
 
 router = APIRouter(prefix="/api/chatbot", tags=["chatbot-kb"])
 
@@ -56,6 +59,18 @@ async def rebuild_kb() -> dict[str, Any]:
     前端通过 /kb/status 轮询拿到的是真实版本，避免返回不一致的假 ID。
     """
     chatbot = _get_chatbot_or_403()
+    # T02891 裁决 A：重建要逐条向量化。远程 embedding 在开关关闭时会被 EmbeddingService
+    # 拒绝，构建会「照常完成但产出 0 向量」，把可用知识库刷成空壳——必须在接单前就拦下来，
+    # 而不是等后台任务的异常落进审计日志（用户已经看到 building 了）。
+    # 本地 embedding 不产生 token 费用，开关关着也允许重建。
+    settings = get_settings()
+    embedding_base_url = (settings.embedding_base_url or "").strip()
+    if not settings.ai_enabled and embedding_base_url.lower() not in ("", "local"):
+        raise CodedHTTPException(
+            status_code=403,
+            detail="AI 功能已关闭，请在「AI 服务」配置页面开启",
+            code=AI_DISABLED_CODE,
+        )
     kb_manager = chatbot["kb_manager"]
     repo = chatbot["repo"]
 

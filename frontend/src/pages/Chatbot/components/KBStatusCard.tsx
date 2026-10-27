@@ -3,6 +3,7 @@ import { ReloadOutlined } from '@ant-design/icons'
 import { useState } from 'react'
 import type { KBStatus } from '../types'
 import { TipButton } from '@/components/TipButton'
+import { extractApiError } from '@/utils/apiError'
 
 interface Props {
   readonly status: KBStatus
@@ -22,8 +23,11 @@ export function KBStatusCard({ status, onRebuild }: Props) {
         try {
           await onRebuild(false)
           message.success('知识库重建已启动')
-        } catch {
-          message.error('重建启动失败')
+        } catch (err) {
+          // T02891 裁决 A：远程 embedding 且总开关关闭时后端返回带 code 的 403。
+          // 写死「重建启动失败」会把「去开开关」这个可执行动作降级成一次普通故障，
+          // 所以优先转述后端 detail（extractApiError 内部已处理 ai_disabled 兜底文案）。
+          message.error(extractApiError(err, '重建启动失败'))
         } finally {
           setBuilding(false)
         }

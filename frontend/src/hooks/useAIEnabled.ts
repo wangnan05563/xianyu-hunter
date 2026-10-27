@@ -56,3 +56,13 @@ export function useAIEnabled(): { enabled: boolean | null; refresh: () => void }
 
 /** 入口提示：开关关闭时这些功能退回规则解析，仍然可点（T02947 裁决 A） */
 export const AI_GATE_OFF_TIP = 'AI 已关闭：该功能退回规则解析，结果不是 AI 判断（可在「配置-AI 服务」开启）'
+
+/**
+ * 对话页提示（T02891 裁决 A）：入口不拦、回答降级——桌面端用 TITLE+NOTE，窄屏用 SHORT。
+ * 三处文案同源，别让「不可用」这种说法再被手写出来（AC-18 要的是 FAQ + 检索片段，不是死路）。
+ */
+export const AI_CHAT_DEGRADE_TITLE = 'AI 功能总开关已关闭，回答不再由 AI 生成'
+export const AI_CHAT_DEGRADE_NOTE =
+  '仍可对话：命中常见问题时按常见问题回复，其余情况返回知识库检索片段或提示转人工，不产生 token。' +
+  '远程向量后端在关闭期间不可用。到「配置 - AI 服务」打开开关即可恢复 AI 生成。'
+export const AI_CHAT_DEGRADE_SHORT = 'AI 总开关已关闭：回答来自常见问题与知识库片段，不由 AI 生成'

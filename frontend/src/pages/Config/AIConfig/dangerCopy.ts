@@ -9,7 +9,12 @@
 // - seller-template-check 全程是词频统计，压根不调 LLM，所以不受本开关约束。
 // - worker.py 的自动评估与深度分析用 settings.ai_enabled 作前置条件，关闭时跳过 AI、
 //   保留规则评估结果——与上面三个推理端点同一条口径。
-// - chatbot / RAG / Embedding / 价格趋势 AI 解读 全仓没有 ai_enabled 判断，不受本开关影响。
+// - T02891 裁决 A（全量纳管）之后，chatbot / RAG / Agent / 远程 Embedding /
+//   价格趋势解读也各自判开关，判据统一走 config.is_ai_disabled()。门禁落在付费出口本身：
+//   对话入口 /api/chatbot/chat 不拦——智能客服需求 AC-18 要求「关闭 AI 开关后对话降级为
+//   FAQ + 检索片段」，orchestrator 的降级链已能零成本兑现它，端点 403 反而把降级变成死路。
+// - 仍然不受约束的只有「不产生 token 费用」的那两类：本地 Embedding 后端与本地
+//   ChromaDB 检索（见 AI_GATE_EXCLUDED）。把它们一起关掉省不到钱，只会让检索静默变空。
 import type { DangerCopy } from '@/components/DangerSummary'
 
 export interface AIModelFields {
@@ -22,23 +27,28 @@ export interface AITodayUsage {
   readonly total_tokens?: number | null
 }
 
-/** 关闭后退回规则解析的推理入口，逐条来自后端 `_ai_enabled()` 的判断点 */
+/** 受开关约束的调用点，逐条来自后端真实的判开关位置 */
 export const AI_GATE_AFFECTED = [
   '任务页 AI 建任务（/api/ai/parse-task → 规则解析）',
   '评估页 AI 成色评估与批量评估（/api/ai/evaluate-condition → 规则模拟）',
   '评估页 AI 深度分析（/api/ai/deep-analyze → 规则模拟）',
+  '对话助手意图分类（LLM 兜底 → 规则预筛后保守放行）',
+  '对话助手回答生成与推荐追问（不打 LLM；入口仍可发消息，命中常见问题按 FAQ 答，否则退成「只列检索片段」或提示转人工）',
+  '对话助手工具决策（Agent 调 LLM 前判断；意图不再建议 agent 时本就不会触发）',
+  '远程 Embedding 向量化（含批量重建的逐条向量化）',
+  '价格趋势 AI 解读（/api/prices/analyze；直方图本体是纯 SQL，不受影响）',
 ] as const
 
-/** 仍然硬失败的入口：它没有「规则形态」，关闭时只能报错（T02947 裁决 A 明确保留） */
+/** 仍然硬失败的入口：它没有「规则形态」，关闭时只能报错（T02947 裁决 A 保留，T02891 裁决 A 扩充） */
 export const AI_GATE_HARD_FAIL = [
   '本页「测试连接」（/api/ai/test-connection，仍返回 403）',
+  '本页「测试 Embedding 连接」与知识库重建（远程 embedding 配置下返回 403）',
 ] as const
 
-/** 明确「不包含」：这些 AI 能力不走这个开关 */
+/** 明确「不包含」：这些能力不产生 token 费用，关掉开关也照跑 */
 export const AI_GATE_EXCLUDED = [
-  'AI 对话助手与知识库检索',
-  'Embedding 向量服务',
-  '价格趋势 AI 解读',
+  '本地 Embedding 后端（不产生 token 费用）',
+  '本地向量库检索与知识库读写（ChromaDB 本地，不调 LLM）',
 ] as const
 
 function joinNames(names: string[]): string {
@@ -55,10 +65,11 @@ export function countConfiguredModels(config: AIModelFields): string {
 
 /**
  * 窄屏卡片用的一句话提示。刻意由上面的常量派生：
- * 「关闭后所有 AI 功能停用」这句话在本项目里是假的（后端开关不覆盖 AI_GATE_EXCLUDED），
- * 桌面端 T02726 已经删掉过它，别让移动端再手写一份。
+ * 「关闭后所有 AI 功能停用」这句话在 T02891 落地之前是假的（开关不覆盖 chatbot/Embedding），
+ * 落地之后也不能反过来写成「对话助手会被拦下」——它是降级成 FAQ/检索片段，不是不可用。
+ * 桌面端 T02726 已经删掉过那句承诺，别让移动端再手写一份。
  */
-export const GATE_HINT = `关闭后 AI 建任务与 AI 评估退回规则解析（结果非 AI）；不含${joinNames([...AI_GATE_EXCLUDED])}`
+export const GATE_HINT = `关闭后 AI 建任务与 AI 评估退回规则解析（结果非 AI），对话退成常见问题与检索片段，远程向量化会被直接拦下；不含${joinNames([...AI_GATE_EXCLUDED])}`
 
 export interface DisableAICopyOptions {
   /** 移动端总开关只改本页表单，要点「保存」才落库。不写清这一步，
@@ -87,11 +98,11 @@ export function buildDisableAICopy(
     title: '确认关闭 AI 功能总开关？',
     action,
     scope:
-      `受影响：${joinNames([...AI_GATE_AFFECTED])}——后端在调用 LLM 前先检查开关，` +
-      '关闭时这些操作不再请求模型，而是退回规则引擎给出结果（仍可点、仍可保存，但来源标记为「规则」而非 AI）；' +
-      `${joinNames([...AI_GATE_HARD_FAIL])}；` +
+      `受影响：${joinNames([...AI_GATE_AFFECTED])}——后端在发起调用前先检查开关，` +
+      '关闭时这些操作不再请求模型：推理入口退回规则引擎给出结果（仍可点、仍可保存，但来源标记为「规则」而非 AI）。' +
+      `其中仍会直接报错的：${joinNames([...AI_GATE_HARD_FAIL])}；` +
       '后台任务的自动评估/深度分析同样跳过 AI，沿用规则评估结果。' +
-      `不包含：${joinNames([...AI_GATE_EXCLUDED])}（后端无此开关判断），` +
+      `不包含：${joinNames([...AI_GATE_EXCLUDED])}（不产生 token 费用，关掉开关照跑），` +
       '以及 API Key、模型配置与历史评估结果。' +
       (opts.deferredSave ? '取消本确认框则本页表单不变；只切开关而不点保存，后端配置也不会变。' : ''),
     count: countsUnknown

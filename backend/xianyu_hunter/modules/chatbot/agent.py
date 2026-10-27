@@ -23,6 +23,7 @@ from typing import Any, AsyncIterator
 import httpx
 from loguru import logger
 
+from xianyu_hunter.config import is_ai_disabled
 from xianyu_hunter.modules.chatbot.tool_registry import ToolRegistry
 from xianyu_hunter.infra.yaml_config import ChatbotAgentConfig, ChatbotLLMConfig
 
@@ -244,6 +245,12 @@ class Agent:
         - 预算超限：抛 RuntimeError 由上层 run 捕获转 error 事件
         - 网络/超时：抛出由上层捕获
         """
+        # T02891 裁决 A：总开关关闭时不打 LLM。
+        # 这里抛错而不是返回空——run() 已把异常转成 error 事件，Orchestrator 据此降级到
+        # 「只给检索片段」的兜底回答，与预算超限走同一条腿。
+        if is_ai_disabled():
+            raise RuntimeError("AGENT LLM 已被 AI 总开关关闭")
+
         # 预算检查
         if self._ai_usage is not None:
             budget_ok, reason = self._ai_usage.check_budget()

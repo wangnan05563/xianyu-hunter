@@ -109,8 +109,14 @@ describe('移动端 AI 总开关的关闭确认（T02892）', () => {
 
   it('卡片说明不再手写「所有 AI 评估功能停用」这句假后果', async () => {
     await renderPage()
-    expect(document.body.textContent).not.toContain('关闭后所有 AI 评估功能停用')
-    expect(document.body.textContent).toContain('不含AI 对话助手与知识库检索')
+    const hint = document.body.textContent ?? ''
+    expect(hint).not.toContain('关闭后所有 AI 评估功能停用')
+    // T02891 裁决 A（全量纳管）之后，对话助手已被纳管：旧口径「不含 AI 对话助手与知识库检索」
+    // 是假的，必须消失；不产生的只有本地 Embedding 与本地向量库检索。
+    expect(hint).not.toContain('不含AI 对话助手与知识库检索')
+    expect(hint).toContain('不含本地 Embedding 后端')
+    // 对话的关闭态是降级（FAQ / 检索片段），不是报错
+    expect(hint).toContain('对话退成常见问题与检索片段')
   })
 
   it('取消确认框：表单不变，随后保存仍是 ai_enabled=true', async () => {

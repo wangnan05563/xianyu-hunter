@@ -81,7 +81,7 @@
 
 #### 1.3.1 包含范围（In-Scope）
 
-- AI 总开关（关闭时二次确认，降级到规则模式）
+- AI 总开关（关闭时二次确认，降级到规则模式；没有规则形态的调用点直接拦下）
 - LLM 配置（`GET/PUT /api/ai/config`）：8 个 LLM 预设、base_url / api_key / model / vision_model
 - Embedding 配置（同上）：5 个 Embedding 预设、双后端（本地 sentence-transformers + 远程 OpenAI 兼容）
 - LLM 连接测试（`POST /api/ai/test-connection`，15s 超时）

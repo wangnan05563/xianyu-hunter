@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator
 import httpx
 from loguru import logger
 
+from xianyu_hunter.config import is_ai_disabled
 from xianyu_hunter.modules.chatbot.embedding_service import EmbeddingService
 from xianyu_hunter.modules.chatbot.vector_store import VectorStore
 from xianyu_hunter.infra.yaml_config import ChatbotLLMConfig, ChatbotRAGConfig
@@ -262,6 +263,11 @@ class RAGEngine:
             "stream": True,
         }
 
+        # T02891 裁决 A：总开关关闭时不打 LLM。抛错由 Orchestrator 接住，
+        # 降级成「只列检索片段、不做生成」的兜底回答（_fallback_to_rag_fragments）。
+        if is_ai_disabled():
+            raise RuntimeError("RAG LLM 已被 AI 总开关关闭")
+
         # 预算检查：避免超额调用导致费用失控
         if self._ai_usage is not None:
             budget_ok, reason = self._ai_usage.check_budget()
@@ -478,6 +484,11 @@ class RAGEngine:
         - 可以传入完整 answer 供 LLM 参考，生成更相关的问题
         - 失败可静默降级，不影响已生成的主回答
         """
+        # T02891 裁决 A：开关关闭时不生成推荐追问。判据放在最前面，别先拼好 prompt 再拒——
+        # 这里本来就靠「返回空」降级，追问是锦上添花，不该因为关掉 AI 把主回答一起拖成错误。
+        if is_ai_disabled():
+            return []
+
         # 预算检查：与 generate 保持一致，超限时静默降级（follow_ups 是附加功能，不应抛异常）
         if self._ai_usage is not None:
             budget_ok, reason = self._ai_usage.check_budget()

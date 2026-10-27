@@ -1494,6 +1494,11 @@ def test_embedding_connection() -> dict[str, Any]:
     """
     settings = get_settings()
     base_url = (settings.embedding_base_url or "").strip()
+    # T02891 裁决 A：远程 embedding 纳入总开关，与 test-connection 同一条理由硬 403
+    # （测一个已经关掉的端点没有意义，返回「连通」会把关掉伪装成可用）。
+    # 本地模式（base_url 为空或 local）不产生 token 费用，仍可测试。
+    if not settings.ai_enabled and base_url.lower() not in ("", "local"):
+        _check_ai_enabled()
     # 与 container.py 的 fallback 逻辑保持一致：settings 优先，空时读 cfg.kb
     # 避免硬编码 "text-embedding-3-small" 导致本地模式加载错误模型
     from xianyu_hunter.infra.yaml_config import get_config

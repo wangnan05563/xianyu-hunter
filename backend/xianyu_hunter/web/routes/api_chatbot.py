@@ -133,6 +133,10 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
     客户端断开时停止迭代，orchestrator 协程由 GC 回收。
     """
     chatbot = _get_chatbot_or_403()
+    # T02891 裁决 A：对话助手纳入总开关，但门禁不在本端点——智能客服需求 AC-18 明确要求
+    # 「关闭 AI 开关后，对话降级为 FAQ + 检索片段」，而 orchestrator 的降级链（LLM→片段→转人工）
+    # 已经能零成本地兑现它。在这里 403 会把一条本该降级的对话变成一条死路。
+    # 真正的付费出口在模块内各自判开关：intent / rag generate / follow_ups / agent / 远程 embedding。
     orchestrator = chatbot["orchestrator"]
     # 会话身份透传到工具层（T02984）：工具的数据归属只能由服务端注入，
     # default 直通返回 None = 不过滤，与读侧 list_error_logs 口径一致

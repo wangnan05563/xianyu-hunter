@@ -27,7 +27,7 @@ from typing import Any, Callable
 import httpx
 from loguru import logger
 
-from xianyu_hunter.config import get_settings
+from xianyu_hunter.config import get_settings, is_ai_disabled
 
 
 class EmbeddingService:
@@ -181,6 +181,12 @@ class EmbeddingService:
 
         if self._is_local:
             return await self._embed_batch_local(texts, progress_cb=progress_cb)
+
+        # T02891 裁决 A：批量远程向量化在开关关闭时整体快速失败。
+        # 必须挡在这里而不是靠 _call_embedding 逐条抛：远程腿对每条文本重试 3 次
+        # （退避 0.5/1/2s），一万片段的重建会白等 10000×3.5s 才最终失败。
+        if is_ai_disabled():
+            raise RuntimeError("远程 Embedding 批量调用已被 AI 总开关关闭")
 
         # 远程模式：单条并发 + 重试
         # 用 dict 保存成功结果，按原始 idx 聚合，最后按顺序输出
@@ -373,6 +379,10 @@ class EmbeddingService:
 
         调用前 check_budget，调用后 record_usage（endpoint=chatbot_embedding）。
         异常向上抛出由调用方处理：embed 走 logger 兜底，embed_batch 走重试逻辑。
+
+        T02891 裁决 A 的边界：开关约束的是「会真实计费的远程调用」。
+        本地 sentence-transformers / ONNX 推理不产生 token 费用，因此不受开关影响——
+        把它一起关掉只会让知识库检索静默变空，既省不到钱，也骗了用户。
         """
         # 预算检查：避免超额调用导致费用失控
         budget_ok, reason = self._ai_usage.check_budget()
@@ -381,6 +391,11 @@ class EmbeddingService:
 
         if self._is_local:
             return await self._call_local(text)
+
+        # T02891 裁决 A：远程 embedding 纳入总开关
+        if is_ai_disabled():
+            raise RuntimeError("远程 Embedding 调用已被 AI 总开关关闭")
+
         return await self._call_remote(text)
 
     def _estimate_local_tokens(self, text: str) -> int:

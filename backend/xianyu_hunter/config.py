@@ -92,6 +92,18 @@ def get_settings() -> Settings:
     return s
 
 
+def is_ai_disabled() -> bool:
+    """AI 功能总开关是否已关闭（T02891 裁决 A：全量纳管的统一判据）
+
+    判定权只放在这一处：此前只有 api_ai / api_ai_deep / worker 读 ai_enabled，
+    chatbot、RAG、远程 Embedding、价格趋势解读四处零判断，
+    于是「关闭总开关」之后仍在打付费端点。
+
+    每次调用都重读 settings：开关是热更新的，构造期快照会让关闭之后的调用继续漏网。
+    """
+    return not bool(get_settings().ai_enabled)
+
+
 def _load_secrets_from_keyring(s: Settings) -> None:
     """从 keyring 加载敏感字段，覆盖 .env 中的值
 
