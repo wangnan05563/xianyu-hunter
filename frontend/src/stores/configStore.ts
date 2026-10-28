@@ -1,5 +1,10 @@
 import { create } from 'zustand'
 import { AppConfig, configApi } from '../api'
+import {
+  applyDrafts,
+  collectChangedPaths,
+  filterChangedPaths,
+} from './configDirty'
 
 // Diff 变更项（后端 dry_run 返回格式）
 export interface DiffChange {
@@ -21,6 +26,10 @@ interface ConfigState {
   reset: () => void
   save: () => Promise<void>
   hasChanges: () => boolean
+  /** 与 original 相比有变化的点号路径（数组整体记一条，不拆下标） */
+  changedPaths: () => string[]
+  /** 只返回落在 scope（当前页可写配置段）内的变更路径 */
+  dirtyPathsInScope: (scope: readonly string[]) => string[]
   // Diff 预览：dry_run 模式只返回变更不实际保存
   previewSave: () => Promise<DiffChange[]>
   // 确认保存：实际写入并更新 original
@@ -37,12 +46,16 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   error: null,
   original: null,
 
+  // 切页 mount、TaskEditor 打开都会触发 load()；把未保存的草稿合并回去，
+  // 否则一次载入就把草稿（本页的、别页的）一起抹掉（T02572 跨页污染）。
   load: async () => {
     set({ loading: true, error: null })
     try {
-      const config = await configApi.get()
+      const fresh = await configApi.get()
+      const { config: draft, original } = get()
+      const nextConfig = draft && original ? applyDrafts(fresh, draft, original) : fresh
       // 深拷贝作为原始值（structuredClone 性能更好且保留 Date 等类型，SonarQube S7784）
-      set({ config, original: structuredClone(config), loading: false })
+      set({ config: nextConfig, original: structuredClone(fresh), loading: false })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '加载配置失败'
       set({ error: msg, loading: false })
@@ -80,6 +93,18 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     const { config, original } = get()
     if (!config || !original) return false
     return JSON.stringify(config) !== JSON.stringify(original)
+  },
+
+  changedPaths: () => {
+    const { config, original } = get()
+    if (!config || !original) return []
+    return collectChangedPaths(config, original).sort()
+  },
+
+  dirtyPathsInScope: (scope) => {
+    const { config, original } = get()
+    if (!config || !original) return []
+    return filterChangedPaths(collectChangedPaths(config, original), scope)
   },
 
   previewSave: async () => {

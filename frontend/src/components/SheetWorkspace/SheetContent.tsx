@@ -1,9 +1,15 @@
-import { Suspense } from 'react'
-import { Spin, Empty } from 'antd'
+import { Suspense, useMemo } from 'react'
+import { Alert, Spin, Empty } from 'antd'
 import { ErrorBoundary } from '../ErrorBoundary'
 import { LazyErrorBoundary } from '../../utils/lazyRetry'
 import { findSheetMeta } from './sheetRegistry'
 import type { SheetItem } from '../../stores/sheetStore'
+import { useConfigStore } from '../../stores/configStore'
+import {
+  collectChangedPaths,
+  filterChangedPaths,
+  scopeForPath,
+} from '../../stores/configDirty'
 
 /**
  * 单个 sheet 内容渲染区
@@ -28,6 +34,27 @@ function NotFoundSheet({ path }: { readonly path: string }) {
   )
 }
 
+/** 未保存黄条：只统计这一页自己那几段配置（T02572 项 3） */
+function SheetDirtyBanner({ path }: { readonly path: string }) {
+  const config = useConfigStore((s) => s.config)
+  const original = useConfigStore((s) => s.original)
+  const count = useMemo(() => {
+    const scope = scopeForPath(path)
+    if (!scope || !config || !original) return 0
+    return filterChangedPaths(collectChangedPaths(config, original), scope).length
+  }, [path, config, original])
+  if (count === 0) return null
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      banner
+      message={`本页有 ${count} 项改动尚未保存：切换标签页会保留草稿，关闭标签页会丢弃`}
+      style={{ marginBottom: 8 }}
+    />
+  )
+}
+
 export function SheetContent({ sheet }: { readonly sheet?: SheetItem }) {
   // 无 sheet 或激活 sheet 已最小化：显示空状态
   if (!sheet || sheet.minimized) {
@@ -49,6 +76,7 @@ export function SheetContent({ sheet }: { readonly sheet?: SheetItem }) {
           {/* key 驱动重挂载：sheet 切换时触发淡入动画
               sheet-page-mount 让页面能参与内容区的 flex 高度分配（见 sheet.css） */}
           <div className="fade-in-up sheet-page-mount" key={sheet.id}>
+            <SheetDirtyBanner path={sheet.path} />
             <Page />
           </div>
         </Suspense>

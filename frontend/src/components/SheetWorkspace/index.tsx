@@ -6,6 +6,13 @@ import { SheetPreferences } from './SheetPreferences'
 import { useSheetSync } from '../../hooks/useSheetSync'
 import { useIsMobile } from '../../hooks/useIsMobile'
 import { useSheetStore } from '../../stores/sheetStore'
+import { useConfigStore } from '../../stores/configStore'
+import {
+  collectChangedPaths,
+  filterChangedPaths,
+  scopeForPath,
+} from '../../stores/configDirty'
+import { confirmDanger } from '../DangerSummary'
 import './sheet.css'
 
 /**
@@ -30,6 +37,9 @@ export function SheetWorkspace() {
   const setMobileMode = useSheetStore((s) => s.setMobileMode)
   const setNavigator = useSheetStore((s) => s.setNavigator)
 
+  const config = useConfigStore((s) => s.config)
+  const original = useConfigStore((s) => s.original)
+
   const [prefOpen, setPrefOpen] = useState(false)
 
   // 注入 navigate 到 store（栈→URL 同步通道）
@@ -48,13 +58,39 @@ export function SheetWorkspace() {
 
   const activeSheet = sheets.find((s) => s.id === activeId)
 
-  // 关闭按钮行为：根据偏好选择最小化（保留状态）或真正关闭
+  // 关闭按钮行为：根据偏好选择最小化（保留状态）或真正关闭。
+  // 脏判断只认该 sheet 自己那段配置：全局快照级脏会把别页的改动算到这一页头上（T02572 项 2）。
   const handleClose = (id: string) => {
-    if (preferences.minimizeInsteadOfClose) {
-      minimizeSheet(id)
-    } else {
-      closeSheet(id)
+    const target = sheets.find((s) => s.id === id)
+    const scope = target ? scopeForPath(target.path) : null
+    const dirty = scope && config && original
+      ? filterChangedPaths(collectChangedPaths(config, original), scope)
+      : []
+    const apply = () => {
+      if (preferences.minimizeInsteadOfClose) {
+        minimizeSheet(id)
+      } else {
+        closeSheet(id)
+      }
     }
+    if (!target || dirty.length === 0) {
+      apply()
+      return
+    }
+    const keepDraft = preferences.minimizeInsteadOfClose
+    void confirmDanger({
+      title: `「${target.title}」有未保存的改动`,
+      action: keepDraft ? '把该页最小化' : '放弃该页未保存的配置改动并关闭标签页',
+      scope: keepDraft
+        ? '只收起这一页；草稿仍留在配置里，重新打开该页可继续编辑'
+        : '只影响这一页的改动；其他标签页的草稿与已保存的配置不受影响',
+      count: `${dirty.length} 项`,
+      recovery: keepDraft
+        ? '改动未保存到服务端，浏览器刷新或退出后丢失'
+        : '关闭后草稿不可恢复，需重新编辑并保存',
+    }).then((ok) => {
+      if (ok) apply()
+    })
   }
 
   return (

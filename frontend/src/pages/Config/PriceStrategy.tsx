@@ -43,6 +43,12 @@ const defaultConfig: PriceStrategyConfig = {
 export default function PriceStrategy() {
   const { config, load, update, hasChanges, reset, previewSave, confirmSave, getFieldOriginal } = useConfigStore()
   const [strategy, setStrategy] = useState<PriceStrategyConfig>(defaultConfig)
+  // 本地态只是编辑缓冲：改动即刻写回 store 草稿，
+  // 否则拖滑块时 hasChanges() 恒 false、关闭确认也看不见它（T02572 项 1）
+  const updateStrategy = (next: PriceStrategyConfig) => {
+    setStrategy(next)
+    update({ price_strategy: next })
+  }
   const [histogram, setHistogram] = useState<{ bins: string[]; counts: number[]; prices: number[] } | null>(null)
   const [previewing, setPreviewing] = useState(false)
   const chartRef = useRef<EChartRef>(null)
@@ -232,14 +238,14 @@ export default function PriceStrategy() {
                 <Space>
                   <Switch
                     checked={strategy.enabled_max}
-                    onChange={(v) => setStrategy({ ...strategy, enabled_max: v })}
+                    onChange={(v) => updateStrategy({ ...strategy, enabled_max: v })}
                   />
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     <PriceCeilingIcon size={20} />
                     硬性上限
                   </span>
                   {strategy.max_price !== getFieldOriginal('price_strategy.max_price') && (
-                    <TipButton tip="恢复最高价原始值" size="small" type="link" onClick={() => setStrategy({ ...strategy, max_price: getFieldOriginal('price_strategy.max_price') as number })} style={{ padding: 0, fontSize: 12 }}>
+                    <TipButton tip="恢复最高价原始值" size="small" type="link" onClick={() => updateStrategy({ ...strategy, max_price: getFieldOriginal('price_strategy.max_price') as number })} style={{ padding: 0, fontSize: 12 }}>
                       <RevertIcon size={12} />
                     </TipButton>
                   )}
@@ -252,14 +258,14 @@ export default function PriceStrategy() {
                   max={50000}
                   step={100}
                   value={strategy.max_price}
-                  onChange={(v) => setStrategy({ ...strategy, max_price: v })}
+                  onChange={(v) => updateStrategy({ ...strategy, max_price: v })}
                   marks={{ 0: '¥0', 10000: '¥1万', 30000: '¥3万', 50000: '¥5万' }}
                   tooltip={{ formatter: (v) => `¥${v}` }}
                 />
                 <InputNumber
                   prefix="¥"
                   value={strategy.max_price}
-                  onChange={(v) => setStrategy({ ...strategy, max_price: v || 0 })}
+                  onChange={(v) => updateStrategy({ ...strategy, max_price: v || 0 })}
                   style={{ width: '100%' }}
                 />
                 <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
@@ -276,14 +282,14 @@ export default function PriceStrategy() {
                 <Space>
                   <Switch
                     checked={strategy.enabled_min}
-                    onChange={(v) => setStrategy({ ...strategy, enabled_min: v })}
+                    onChange={(v) => updateStrategy({ ...strategy, enabled_min: v })}
                   />
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     <PriceFloorIcon size={20} />
                     硬性下限（防 1 元引流）
                   </span>
                   {strategy.min_price !== getFieldOriginal('price_strategy.min_price') && (
-                    <TipButton tip="恢复最低价原始值" size="small" type="link" onClick={() => setStrategy({ ...strategy, min_price: getFieldOriginal('price_strategy.min_price') as number })} style={{ padding: 0, fontSize: 12 }}>
+                    <TipButton tip="恢复最低价原始值" size="small" type="link" onClick={() => updateStrategy({ ...strategy, min_price: getFieldOriginal('price_strategy.min_price') as number })} style={{ padding: 0, fontSize: 12 }}>
                       <RevertIcon size={12} />
                     </TipButton>
                   )}
@@ -296,14 +302,14 @@ export default function PriceStrategy() {
                   max={5000}
                   step={10}
                   value={strategy.min_price}
-                  onChange={(v) => setStrategy({ ...strategy, min_price: v })}
+                  onChange={(v) => updateStrategy({ ...strategy, min_price: v })}
                   marks={{ 0: '¥0', 100: '¥100', 500: '¥500', 2000: '¥2000', 5000: '¥5000' }}
                   tooltip={{ formatter: (v) => `¥${v}` }}
                 />
                 <InputNumber
                   prefix="¥"
                   value={strategy.min_price}
-                  onChange={(v) => setStrategy({ ...strategy, min_price: v || 0 })}
+                  onChange={(v) => updateStrategy({ ...strategy, min_price: v || 0 })}
                   style={{ width: '100%' }}
                 />
                 <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)', marginTop: 4 }}>
@@ -320,14 +326,14 @@ export default function PriceStrategy() {
                 <Space>
                   <Switch
                     checked={strategy.enabled_market_ratio}
-                    onChange={(v) => setStrategy({ ...strategy, enabled_market_ratio: v })}
+                    onChange={(v) => updateStrategy({ ...strategy, enabled_market_ratio: v })}
                   />
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     <MarketRatioIcon size={20} />
                     低于市场参考价
                   </span>
                   {strategy.market_ratio !== getFieldOriginal('price_strategy.market_ratio') && (
-                    <TipButton tip="恢复市场价比例原始值" size="small" type="link" onClick={() => setStrategy({ ...strategy, market_ratio: getFieldOriginal('price_strategy.market_ratio') as number })} style={{ padding: 0, fontSize: 12 }}>
+                    <TipButton tip="恢复市场价比例原始值" size="small" type="link" onClick={() => updateStrategy({ ...strategy, market_ratio: getFieldOriginal('price_strategy.market_ratio') as number })} style={{ padding: 0, fontSize: 12 }}>
                       <RevertIcon size={12} />
                     </TipButton>
                   )}
@@ -340,7 +346,7 @@ export default function PriceStrategy() {
                   max={1}
                   step={0.05}
                   value={strategy.market_ratio}
-                  onChange={(v) => setStrategy({ ...strategy, market_ratio: v })}
+                  onChange={(v) => updateStrategy({ ...strategy, market_ratio: v })}
                   marks={{ 0.3: '30%', 0.5: '50%', 0.7: '70%', 1: '100%' }}
                   tooltip={{ formatter: (v) => `${((v ?? 0) * 100).toFixed(0)}%` }}
                 />
@@ -357,14 +363,14 @@ export default function PriceStrategy() {
                 <Space>
                   <Switch
                     checked={strategy.enabled_top_n}
-                    onChange={(v) => setStrategy({ ...strategy, enabled_top_n: v })}
+                    onChange={(v) => updateStrategy({ ...strategy, enabled_top_n: v })}
                   />
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                     <TopNIcon size={20} />
                     同类低价 TopN
                   </span>
                   {strategy.top_n !== getFieldOriginal('price_strategy.top_n') && (
-                    <TipButton tip="恢复 TopN 原始值" size="small" type="link" onClick={() => setStrategy({ ...strategy, top_n: getFieldOriginal('price_strategy.top_n') as number })} style={{ padding: 0, fontSize: 12 }}>
+                    <TipButton tip="恢复 TopN 原始值" size="small" type="link" onClick={() => updateStrategy({ ...strategy, top_n: getFieldOriginal('price_strategy.top_n') as number })} style={{ padding: 0, fontSize: 12 }}>
                       <RevertIcon size={12} />
                     </TipButton>
                   )}
@@ -376,7 +382,7 @@ export default function PriceStrategy() {
                   min={1}
                   max={20}
                   value={strategy.top_n}
-                  onChange={(v) => setStrategy({ ...strategy, top_n: v })}
+                  onChange={(v) => updateStrategy({ ...strategy, top_n: v })}
                   marks={{ 1: 'Top1', 5: 'Top5', 10: 'Top10', 20: 'Top20' }}
                 />
                 <div style={{ fontSize: 12, color: 'var(--xh-text-tertiary)' }}>
