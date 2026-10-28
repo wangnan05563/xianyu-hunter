@@ -1,0 +1,98 @@
+{
+  "version": "0.4.20261018.1",
+  "generated_at": "2026-10-28T04:19:26+00:00",
+  "env": {
+    "platform": "Windows-10-10.0.19045-SP0",
+    "python": "3.12.13",
+    "browser": "156.0.8078.73",
+    "channel": "chrome",
+    "device_scale_factor": 1,
+    "locale": "zh-CN",
+    "timezone": "Asia/Shanghai",
+    "color_scheme": "light",
+    "reduced_motion": "reduce",
+    "animations": "disabled",
+    "frozen_time": "2026-01-01T08:00:00+08:00",
+    "viewports": [
+      {
+        "name": "desktop",
+        "width": 1440,
+        "height": 900
+      },
+      {
+        "name": "mobile",
+        "width": 390,
+        "height": 844
+      },
+      {
+        "name": "tall",
+        "width": 1440,
+        "height": 2000
+      }
+    ]
+  },
+  "fixtures": true,
+  "url": "http://127.0.0.1:8123",
+  "shots": {
+    "dashboard__desktop.png": {
+      "sha256": "295279379ff632b16987ecea121903cfa8812f7c8b6b335040c5eaf5233b574e",
+      "bytes": 83365
+    },
+    "tasks__desktop.png": {
+      "sha256": "e019a7fe6784005ba18401db0f6ef4ccb6963a8cab0d87aac8976ec6f7b792a0",
+      "bytes": 66999
+    },
+    "items__desktop.png": {
+      "sha256": "f65b8e14def264123114874943526d37dd01b338918099872e4a4012cbd9f9a8",
+      "bytes": 63099
+    },
+    "evaluations__desktop.png": {
+      "sha256": "d63c02d44c95c2be1fa2c139a7110a9395ab670ddeca54874e02da76dfefeb5d",
+      "bytes": 89024
+    },
+    "config_price__desktop.png": {
+      "sha256": "048817da6c5541ba79ce0bf56c41d4ff0c4a2beaf1537684152ad82eee1d88dd",
+      "bytes": 104359
+    },
+    "dashboard_mobile__mobile.png": {
+      "sha256": "72262c4ce9cc4f72c0c73b10f5f1133af7ba588513e241aac5f8760dcbb29b89",
+      "bytes": 30714
+    },
+    "tasks_mobile__mobile.png": {
+      "sha256": "26aa5f29e34158c1c8b63935f657f69669ef494668dc011b507c088d45e6aa4b",
+      "bytes": 17239
+    },
+    "items_mobile__mobile.png": {
+      "sha256": "7bd702b39ba4264c354db1d49a50a15183004b3a5c93509961ff9d9598d05906",
+      "bytes": 15580
+    },
+    "evaluations_mobile__mobile.png": {
+      "sha256": "63a9aa7bd80517b3bc0be7287e51a47a44377ebefbd96ac434da9bc0d5b01abf",
+      "bytes": 15445
+    },
+    "config_price_mobile__mobile.png": {
+      "sha256": "9426505a9b0fbf40b0a9d049bcdcbd8c01b0069963f994989592f287db9d689f",
+      "bytes": 36236
+    },
+    "dashboard_tall__tall.png": {
+      "sha256": "8fa97831aaed02ba765848e3d5d2f998f4f87049f7bf7453cab13995f6bb854a",
+      "bytes": 141362
+    },
+    "tasks_tall__tall.png": {
+      "sha256": "82178fdb4444eb11f682d050806c684b9501f52850cfca57f708455f4702f689",
+      "bytes": 74428
+    },
+    "items_tall__tall.png": {
+      "sha256": "408fd4dc270b1f111c59a7d1dda42c322f21713fdd1bb746bfcaa8e5c6b91104",
+      "bytes": 70471
+    },
+    "evaluations_tall__tall.png": {
+      "sha256": "5114c7e942d5cd6dd6e06b6c00c8939927dfc681dba926f5d99dbb0febb0ee71",
+      "bytes": 120253
+    },
+    "config_price_tall__tall.png": {
+      "sha256": "bb29b8459f8cdcea9cf23437b373e86f793fe8011e7c295efd421b430c09adbd",
+      "bytes": 120069
+    }
+  }
+}

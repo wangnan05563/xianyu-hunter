@@ -1,0 +1,122 @@
+[
+  {
+    "name": "dashboard",
+    "path": "/xianyu/",
+    "route": "/",
+    "viewport": "desktop",
+    "anchor": ".ant-card-head-title:has-text(\"业务 KPI\")",
+    "expect_text": "业务 KPI（近 30 天）"
+  },
+  {
+    "name": "tasks",
+    "path": "/xianyu/tasks",
+    "route": "/tasks",
+    "viewport": "desktop",
+    "anchor": ".ant-table-thead th:has-text(\"关键词\")",
+    "expect_url": "/xianyu/tasks"
+  },
+  {
+    "name": "items",
+    "path": "/xianyu/items",
+    "route": "/items",
+    "viewport": "desktop",
+    "anchor": ".ant-btn:has-text(\"导出 CSV\")",
+    "expect_text": "请先选择任务",
+    "expect_url": "/xianyu/items"
+  },
+  {
+    "name": "evaluations",
+    "path": "/xianyu/evaluations",
+    "route": "/evaluations",
+    "viewport": "desktop",
+    "anchor": ".ant-card-head-title:has-text(\"评估分布热力图\")",
+    "expect_url": "/xianyu/evaluations"
+  },
+  {
+    "name": "config_price",
+    "path": "/xianyu/config/price",
+    "route": "/config/price",
+    "viewport": "desktop",
+    "anchor": ".ant-card-head-title:has-text(\"策略配置\")",
+    "expect_text": "捡漏价格分位数",
+    "expect_url": "/xianyu/config/price"
+  },
+  {
+    "name": "dashboard_tall",
+    "path": "/xianyu/",
+    "route": "/",
+    "viewport": "tall",
+    "anchor": ".ant-card-head-title:has-text(\"业务 KPI\")",
+    "expect_text": "业务 KPI（近 30 天）"
+  },
+  {
+    "name": "tasks_tall",
+    "path": "/xianyu/tasks",
+    "route": "/tasks",
+    "viewport": "tall",
+    "anchor": ".ant-table-thead th:has-text(\"关键词\")",
+    "expect_url": "/xianyu/tasks"
+  },
+  {
+    "name": "items_tall",
+    "path": "/xianyu/items",
+    "route": "/items",
+    "viewport": "tall",
+    "anchor": ".ant-btn:has-text(\"导出 CSV\")",
+    "expect_text": "请先选择任务",
+    "expect_url": "/xianyu/items"
+  },
+  {
+    "name": "evaluations_tall",
+    "path": "/xianyu/evaluations",
+    "route": "/evaluations",
+    "viewport": "tall",
+    "anchor": ".ant-card-head-title:has-text(\"评估分布热力图\")",
+    "expect_url": "/xianyu/evaluations"
+  },
+  {
+    "name": "config_price_tall",
+    "path": "/xianyu/config/price",
+    "route": "/config/price",
+    "viewport": "tall",
+    "anchor": ".ant-card-head-title:has-text(\"策略配置\")",
+    "expect_text": "捡漏价格分位数",
+    "expect_url": "/xianyu/config/price"
+  },
+  {
+    "name": "dashboard_mobile",
+    "path": "/xianyu/m/",
+    "viewport": "mobile",
+    "anchor": ".ant-card-head-title:has-text(\"今日告警\")",
+    "expect_text": "配置与系统"
+  },
+  {
+    "name": "tasks_mobile",
+    "path": "/xianyu/m/tasks/",
+    "viewport": "mobile",
+    "anchor": ".ant-btn:has-text(\"新建任务\")",
+    "expect_url": "/xianyu/m/tasks"
+  },
+  {
+    "name": "items_mobile",
+    "path": "/xianyu/m/items/",
+    "viewport": "mobile",
+    "expect_text": "请选择任务",
+    "expect_url": "/xianyu/m/items"
+  },
+  {
+    "name": "evaluations_mobile",
+    "path": "/xianyu/m/evaluations/",
+    "viewport": "mobile",
+    "expect_text": "暂无评估记录",
+    "expect_url": "/xianyu/m/evaluations"
+  },
+  {
+    "name": "config_price_mobile",
+    "path": "/xianyu/m/price-strategy/",
+    "viewport": "mobile",
+    "anchor": ".ant-card-head-title:has-text(\"价格上限\")",
+    "expect_text": "当前生效",
+    "expect_url": "/xianyu/m/price-strategy"
+  }
+]
