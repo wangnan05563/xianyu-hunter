@@ -23,8 +23,8 @@ const MENU_ITEMS: MenuItem[] = [
   { key: 'onboarding', label: TEXTS.menu.onboarding, href: '/onboarding', external: false },
   { key: 'api', label: TEXTS.menu.api, href: `${API_BASE}api/docs`, external: true },
   { key: 'contact', label: TEXTS.menu.contact, href: 'mailto:dev@example.com', external: true },
-  { key: 'community', label: TEXTS.menu.community, href: 'https://example.com/community', external: true },
-  { key: 'report', label: TEXTS.menu.report, href: 'https://example.com/issues/new', external: true },
+  { key: 'community', label: TEXTS.menu.community, href: 'https://github.com/wangnan05563/xianyu-hunter', external: true },
+  { key: 'report', label: TEXTS.menu.report, href: 'https://github.com/wangnan05563/xianyu-hunter/issues/new', external: true },
 ]
 
 // 发布版不得把占位域名交给用户：地址未就绪的条目不渲染，填入真实地址即自动出现

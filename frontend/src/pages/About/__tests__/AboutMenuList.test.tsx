@@ -19,18 +19,18 @@ function renderList(onOpenLicenses = vi.fn()) {
 }
 
 describe('AboutMenuList', () => {
-  it('渲染已就绪的 4 个菜单项，占位外链不渲染', () => {
+  it('渲染已就绪的 6 个菜单项，占位外链不渲染', () => {
     const { container } = renderList()
     expect(screen.getByText(TEXTS.menu.licenses)).toBeInTheDocument()
     expect(screen.getByText(TEXTS.menu.help)).toBeInTheDocument()
     expect(screen.getByText(TEXTS.menu.onboarding)).toBeInTheDocument()
     expect(screen.getByText(TEXTS.menu.api)).toBeInTheDocument()
+    expect(screen.getByText(TEXTS.menu.community)).toBeInTheDocument()
+    expect(screen.getByText(TEXTS.menu.report)).toBeInTheDocument()
     // 地址未就绪（example.com 占位）的条目不得出现在发布版
     expect(screen.queryByText(TEXTS.menu.terms)).not.toBeInTheDocument()
     expect(screen.queryByText(TEXTS.menu.privacy)).not.toBeInTheDocument()
     expect(screen.queryByText(TEXTS.menu.contact)).not.toBeInTheDocument()
-    expect(screen.queryByText(TEXTS.menu.community)).not.toBeInTheDocument()
-    expect(screen.queryByText(TEXTS.menu.report)).not.toBeInTheDocument()
     expect(container.innerHTML).not.toContain('example.com')
   })
 
@@ -54,6 +54,17 @@ describe('AboutMenuList', () => {
     expect(helpLink).not.toHaveAttribute('target', '_blank')
     // href 应指向 /help
     expect(helpLink).toHaveAttribute('href', '/help')
+  })
+
+  it('社区与上报问题项指向公开仓真实地址（非占位）', () => {
+    renderList()
+    const community = screen.getByText(TEXTS.menu.community).closest('a')
+    expect(community).toHaveAttribute('href', 'https://github.com/wangnan05563/xianyu-hunter')
+    expect(community).toHaveAttribute('target', '_blank')
+    const report = screen.getByText(TEXTS.menu.report).closest('a')
+    expect(report).toHaveAttribute('href', 'https://github.com/wangnan05563/xianyu-hunter/issues/new')
+    expect(report).toHaveAttribute('target', '_blank')
+    expect(report).toHaveAttribute('rel', 'noopener noreferrer')
   })
 
   it('api 项 href 指向 API_BASE + api/docs', () => {
