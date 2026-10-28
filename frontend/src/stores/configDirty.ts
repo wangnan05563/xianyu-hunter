@@ -3,9 +3,35 @@ import type { AppConfig } from '../api'
 /** 每个配置页可写的顶层配置段（点号键）。新增配置页必须在此登记。 */
 export const SCOPE_PRICE = ['price_strategy', 'bargain_price'] as const
 export const SCOPE_EVAL = ['eval'] as const
-export const SCOPE_NOTIFIER = ['notifier'] as const
+/**
+ * 通知页除了 notifier 段，还直接写 13 个顶层凭据键（ChannelCard 的 fields[].key
+ * 经 updateChannelField 原样作为 update() 的顶层键）。这份清单由
+ * configScopeCoversWrites.test.ts 与 NotifierChannels/constants.ts 对锁，
+ * 漏登记不会静默丢数据——页段提交只发登记过的段。
+ */
+export const SCOPE_NOTIFIER = [
+  'notifier',
+  'serverchan_send_key',
+  'pushplus_token',
+  'bark_server',
+  'bark_key',
+  'telegram_bot_token',
+  'telegram_chat_id',
+  'wecom_webhook',
+  'dingtalk_webhook',
+  'dingtalk_secret',
+  'webhook_url',
+  'ntfy_server',
+  'ntfy_topic',
+  'ntfy_token',
+] as const
 export const SCOPE_SEARCH = ['antidetect', 'search', 'task_scheduler', 'waf'] as const
-export const SCOPE_BUYER = ['buyer'] as const
+/**
+ * 抢单页除 buyer 外还写 eval.auto_buy_score / eval.pass_score 与 account_rotator
+ * （分数阈值、轮转冷却都在这一页）。eval 与「评估规则」页重叠是共享 config
+ * 的既成事实：两边任一页的 eval 草稿都会被另一页的保存带上盘。
+ */
+export const SCOPE_BUYER = ['buyer', 'eval', 'account_rotator'] as const
 
 /** 路由 -> 配置段：关闭确认与未保存黄条按这个边界判断"这一页脏不脏" */
 export const CONFIG_SCOPE_BY_ROUTE: Readonly<Record<string, readonly string[]>> = {
@@ -93,4 +119,56 @@ export function applyDrafts(
     setAtPath(next, path, getAtPath(draft, path))
   }
   return next as unknown as AppConfig
+}
+
+/** 以 base 为底，把 scope 里的每个顶层段换成 src 的值（src 没有该段则删掉） */
+function withSegments(
+  base: AppConfig,
+  src: AppConfig,
+  scope: readonly string[],
+): Record<string, unknown> {
+  const next = structuredClone(base) as unknown as Record<string, unknown>
+  for (const seg of scope) {
+    setAtPath(next, seg, getAtPath(src, seg))
+  }
+  return next
+}
+
+/**
+ * 按页段构造提交体：只带「这一页写过、且确实和 original 不同」的顶层段。
+ * 后端 `POST /api/config/save` 是 deepcopy(current) + 深合并，部分载荷即可，
+ * 所以未提交的其他页草稿只留在浏览器内存里，不会被这一页的保存顺带写盘。
+ * 已知落差：删掉某个键/段在这里和整份提交时都落不了地（深合并只写出现的键），
+ * 需要删除语义时走配置导入或版本回滚。
+ */
+export function scopedSubmitPayload(
+  config: AppConfig,
+  original: AppConfig,
+  scope: readonly string[],
+): Partial<AppConfig> {
+  const payload: Record<string, unknown> = {}
+  for (const seg of scope) {
+    if (JSON.stringify(getAtPath(config, seg)) !== JSON.stringify(getAtPath(original, seg))) {
+      payload[seg] = structuredClone(getAtPath(config, seg))
+    }
+  }
+  return payload as unknown as Partial<AppConfig>
+}
+
+/** 保存成功后刷新 original：本页段认草稿，别页草稿继续按脏算 */
+export function markScopeSaved(
+  original: AppConfig,
+  config: AppConfig,
+  scope: readonly string[],
+): AppConfig {
+  return withSegments(original, config, scope) as unknown as AppConfig
+}
+
+/** 只回滚本页段，别页草稿不动（T02571 页段化的「重置」） */
+export function revertScope(
+  config: AppConfig,
+  original: AppConfig,
+  scope: readonly string[],
+): AppConfig {
+  return withSegments(config, original, scope) as unknown as AppConfig
 }

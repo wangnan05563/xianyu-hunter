@@ -18,6 +18,7 @@ import { DndContext, closestCenter, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import dayjs from 'dayjs'
 import { useConfigStore } from '../../../stores/configStore'
+import { SCOPE_NOTIFIER } from '../../../stores/configDirty'
 import { extractApiError } from '../../../utils/apiError'
 import type { DiffChange } from '../../../stores/configStore'
 import api from '../../../api/client'
@@ -31,7 +32,7 @@ import { DiffPreviewModal } from '../../../components/DiffPreviewModal'
 type SortMode = 'category' | 'custom'
 
 export default function NotifierChannels() {
-  const { config, load, hasChanges, reset, update, previewSave, confirmSave } = useConfigStore()
+  const { config, load, dirtyPathsInScope, reset, update, previewSave, confirmSave } = useConfigStore()
   const [channels, setChannels] = useState<ChannelDef[]>(defaultChannels)
   const [channelOrder, setChannelOrder] = useState<string[]>(defaultChannels.map((c) => c.key))
   const [subscribedEvents, setSubscribedEvents] = useState<string[]>(
@@ -121,7 +122,7 @@ export default function NotifierChannels() {
   const handleSave = async () => {
     try {
       setLoading(true)
-      const changes = await previewSave()
+      const changes = await previewSave(SCOPE_NOTIFIER)
       if (changes.length === 0) {
         message.info('配置未变更')
         return
@@ -138,7 +139,7 @@ export default function NotifierChannels() {
   const handleConfirmSave = async () => {
     try {
       setLoading(true)
-      await confirmSave()
+      await confirmSave(SCOPE_NOTIFIER)
       setDiffModalOpen(false)
       message.success('通知配置已保存')
     } catch (e) {
@@ -223,7 +224,12 @@ export default function NotifierChannels() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <TipButton tip="放弃未保存的修改并重置" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton
+            tip="放弃本页未保存的修改并重置"
+            icon={<UndoOutlined />}
+            onClick={() => reset(SCOPE_NOTIFIER)}
+            disabled={dirtyPathsInScope(SCOPE_NOTIFIER).length === 0}
+          >
             重置
           </TipButton>
           <TipButton tip="保存通知渠道配置" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={loading}>

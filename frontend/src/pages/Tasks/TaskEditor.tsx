@@ -1529,7 +1529,7 @@ function GlobalEvalConfigModal({ open, onClose, onSaved }: { readonly open: bool
         width={720}
         footer={[
           <TipButton tip="关闭弹窗" key="cancel" onClick={onClose}>取消</TipButton>,
-          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</TipButton>,
+          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={() => reset()} disabled={!hasChanges()}>重置</TipButton>,
           <TipButton tip="保存配置" key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</TipButton>,
         ]}
       >
@@ -1682,7 +1682,7 @@ function GlobalBatchRefreshModal({ open, onClose }: { readonly open: boolean; re
         width={600}
         footer={[
           <TipButton tip="关闭弹窗" key="cancel" onClick={onClose}>取消</TipButton>,
-          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</TipButton>,
+          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={() => reset()} disabled={!hasChanges()}>重置</TipButton>,
           <TipButton tip="保存配置" key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</TipButton>,
         ]}
       >
@@ -1819,7 +1819,7 @@ function GlobalAntidetectConfigModal({ open, onClose, onSaved }: { readonly open
         width={600}
         footer={[
           <TipButton tip="关闭弹窗" key="cancel" onClick={onClose}>取消</TipButton>,
-          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</TipButton>,
+          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={() => reset()} disabled={!hasChanges()}>重置</TipButton>,
           <TipButton tip="保存配置" key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => previewConfigSave({ setSaving, previewSave, setDiffChanges, setDiffModalOpen })}>保存</TipButton>,
         ]}
       >
@@ -2000,7 +2000,7 @@ function GlobalSearchConfigModal({ open, onClose, onSaved }: { readonly open: bo
         width={720}
         footer={[
           <TipButton tip="关闭弹窗" key="cancel" onClick={onClose}>取消</TipButton>,
-          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>重置</TipButton>,
+          <TipButton tip="重置为初始配置" key="reset" icon={<UndoOutlined />} onClick={() => reset()} disabled={!hasChanges()}>重置</TipButton>,
           <TipButton tip="保存配置" key="save" type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</TipButton>,
         ]}
       >

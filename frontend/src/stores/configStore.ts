@@ -4,6 +4,9 @@ import {
   applyDrafts,
   collectChangedPaths,
   filterChangedPaths,
+  markScopeSaved,
+  revertScope,
+  scopedSubmitPayload,
 } from './configDirty'
 
 // Diff 变更项（后端 dry_run 返回格式）
@@ -23,21 +26,38 @@ interface ConfigState {
 
   load: () => Promise<void>
   update: (patch: Partial<AppConfig>) => void
-  reset: () => void
+  /** 传 scope 只回滚本页段（T02571 页段提交）；不传保持整份重置 */
+  reset: (scope?: readonly string[]) => void
   save: () => Promise<void>
   hasChanges: () => boolean
   /** 与 original 相比有变化的点号路径（数组整体记一条，不拆下标） */
   changedPaths: () => string[]
   /** 只返回落在 scope（当前页可写配置段）内的变更路径 */
   dirtyPathsInScope: (scope: readonly string[]) => string[]
-  // Diff 预览：dry_run 模式只返回变更不实际保存
-  previewSave: () => Promise<DiffChange[]>
-  // 确认保存：实际写入并更新 original
-  confirmSave: () => Promise<void>
+  // Diff 预览：dry_run 模式只返回变更不实际保存。传 scope 时只提交本页段
+  previewSave: (scope?: readonly string[]) => Promise<DiffChange[]>
+  // 确认保存：实际写入并更新 original。传 scope 时只提交本页段，
+  // 且只把本页段的 original 认作已保存，别页草稿继续算脏
+  confirmSave: (scope?: readonly string[]) => Promise<void>
   // 字段级回滚：根据路径获取原始值
   getFieldOriginal: (path: string) => unknown
   // 字段级回滚：将指定路径恢复为原始值
   revertField: (path: string) => void
+}
+
+/**
+ * 提交体：传 scope 就只带本页写过的那几个顶层段（T02571「保存按页段提交」），
+ * 段内无变化则整段不进载荷；返回 null 表示这次没有要提交的内容。
+ * 不传 scope 保持整份提交（TaskEditor 等全局配置入口）。
+ */
+function submitPayload(
+  config: AppConfig,
+  original: AppConfig | null,
+  scope?: readonly string[],
+): Partial<AppConfig> | null {
+  if (!scope || !original) return config
+  const payload = scopedSubmitPayload(config, original, scope)
+  return Object.keys(payload).length > 0 ? payload : null
 }
 
 export const useConfigStore = create<ConfigState>((set, get) => ({
@@ -68,11 +88,15 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     set({ config: { ...config, ...patch } })
   },
 
-  reset: () => {
-    const { original } = get()
-    if (original) {
+  reset: (scope) => {
+    const { config, original } = get()
+    if (!original) return
+    if (!scope) {
       set({ config: structuredClone(original) })
+      return
     }
+    if (!config) return
+    set({ config: revertScope(config, original, scope) })
   },
 
   save: async () => {
@@ -107,10 +131,12 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     return filterChangedPaths(collectChangedPaths(config, original), scope)
   },
 
-  previewSave: async () => {
-    const { config } = get()
+  previewSave: async (scope) => {
+    const { config, original } = get()
     if (!config) return []
-    const res = await configApi.save(config, true)
+    const payload = submitPayload(config, original, scope)
+    if (payload === null) return []
+    const res = await configApi.save(payload, true)
     // 后端返回 { diffs: [{path, op, old, new}] }，op 取值 'add'|'modify'|'remove'
     // 前端 DiffChange 期望 {path, op, old_value, new_value}，op 取值 'add'|'modify'|'delete'
     // 在此做一次字段映射，避免每个配置页都要适配后端格式
@@ -128,13 +154,19 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
     }))
   },
 
-  confirmSave: async () => {
-    const { config } = get()
-    if (!config) return
+  confirmSave: async (scope) => {
+    const { config, original } = get()
+    if (!config || !original) return
+    const payload = submitPayload(config, original, scope)
+    if (payload === null) return
     set({ loading: true, error: null })
     try {
-      await configApi.save(config, false)
-      set({ original: structuredClone(config), loading: false })
+      await configApi.save(payload, false)
+      // 页段提交只认本页段为已保存；别页草稿与 original 仍然不同，继续算脏
+      const nextOriginal = scope
+        ? markScopeSaved(original, config, scope)
+        : structuredClone(config)
+      set({ original: nextOriginal, loading: false })
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '保存配置失败'
       set({ error: msg, loading: false })

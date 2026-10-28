@@ -17,6 +17,7 @@ import {
 import { SaveOutlined, UndoOutlined } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
 import { useConfigStore } from '../../stores/configStore'
+import { SCOPE_SEARCH } from '../../stores/configDirty'
 import { extractApiError } from '../../utils/apiError'
 import type { DiffChange } from '../../stores/configStore'
 import TagEditor from '../../components/editors/TagEditor'
@@ -55,7 +56,7 @@ const PAGE_SIZE_OPTIONS = [
  * 控制闲鱼搜索行为：间隔、排序、过滤、超时、重试等
  */
 export default function SearchConfig() {
-  const { config, load, hasChanges, reset, update, previewSave, confirmSave } = useConfigStore()
+  const { config, load, dirtyPathsInScope, reset, update, previewSave, confirmSave } = useConfigStore()
   // Diff 预览
   const [diffModalOpen, setDiffModalOpen] = useState(false)
   const [diffChanges, setDiffChanges] = useState<DiffChange[]>([])
@@ -149,7 +150,7 @@ export default function SearchConfig() {
         },
       })
       setSaving(true)
-      const changes = await previewSave()
+      const changes = await previewSave(SCOPE_SEARCH)
       if (changes.length === 0) {
         message.info('配置未变更')
         return
@@ -166,7 +167,7 @@ export default function SearchConfig() {
   const handleConfirmSave = async () => {
     try {
       setSaving(true)
-      await confirmSave()
+      await confirmSave(SCOPE_SEARCH)
       setDiffModalOpen(false)
       message.success('搜索参数配置已保存')
     } catch (e) {
@@ -181,7 +182,12 @@ export default function SearchConfig() {
       {/* 页面标题 + 操作按钮 */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 16 }}>
         <Space>
-          <TipButton tip="放弃未保存的修改并重置" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton
+            tip="放弃本页未保存的修改并重置"
+            icon={<UndoOutlined />}
+            onClick={() => reset(SCOPE_SEARCH)}
+            disabled={dirtyPathsInScope(SCOPE_SEARCH).length === 0}
+          >
             重置
           </TipButton>
           <TipButton tip="保存搜索参数配置" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>

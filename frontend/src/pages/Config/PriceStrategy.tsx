@@ -4,6 +4,7 @@ import { TipButton } from '@/components/TipButton'
 import { SaveOutlined, ExperimentOutlined } from '@ant-design/icons'
 import ReactECharts, { type EChartRef } from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
+import { SCOPE_PRICE } from '../../stores/configDirty'
 import { extractApiError } from '../../utils/apiError'
 import type { DiffChange } from '../../stores/configStore'
 import { priceApi } from '../../api'
@@ -41,10 +42,10 @@ const defaultConfig: PriceStrategyConfig = {
 }
 
 export default function PriceStrategy() {
-  const { config, load, update, hasChanges, reset, previewSave, confirmSave, getFieldOriginal } = useConfigStore()
+  const { config, load, update, dirtyPathsInScope, reset, previewSave, confirmSave, getFieldOriginal } = useConfigStore()
   const [strategy, setStrategy] = useState<PriceStrategyConfig>(defaultConfig)
   // 本地态只是编辑缓冲：改动即刻写回 store 草稿，
-  // 否则拖滑块时 hasChanges() 恒 false、关闭确认也看不见它（T02572 项 1）
+  // 否则拖滑块时脏检测恒为 0、关闭确认也看不见它（T02572 项 1）
   const updateStrategy = (next: PriceStrategyConfig) => {
     setStrategy(next)
     update({ price_strategy: next })
@@ -96,7 +97,7 @@ export default function PriceStrategy() {
         update({ bargain_price: { ...config.bargain_price } })
       }
       setSaving(true)
-      const changes = await previewSave()
+      const changes = await previewSave(SCOPE_PRICE)
       if (changes.length === 0) {
         message.info('配置未变更')
         return
@@ -113,7 +114,7 @@ export default function PriceStrategy() {
   const handleConfirmSave = async () => {
     try {
       setSaving(true)
-      await confirmSave()
+      await confirmSave(SCOPE_PRICE)
       setDiffModalOpen(false)
       message.success('价格策略已保存')
     } catch (e) {
@@ -196,7 +197,12 @@ export default function PriceStrategy() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <TipButton tip="放弃未保存的修改并重置" icon={<RevertIcon size={16} />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton
+            tip="放弃本页未保存的修改并重置"
+            icon={<RevertIcon size={16} />}
+            onClick={() => reset(SCOPE_PRICE)}
+            disabled={dirtyPathsInScope(SCOPE_PRICE).length === 0}
+          >
             重置
           </TipButton>
           <TipButton tip="保存价格策略配置" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>

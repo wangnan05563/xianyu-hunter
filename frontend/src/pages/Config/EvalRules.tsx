@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons'
 import ReactECharts from '../../components/charts/EChart'
 import { useConfigStore } from '../../stores/configStore'
+import { SCOPE_EVAL } from '../../stores/configDirty'
 import { extractApiError } from '../../utils/apiError'
 import type { DiffChange } from '../../stores/configStore'
 import { evalApi } from '../../api'
@@ -141,7 +142,7 @@ const SOURCE_LABELS: Record<EvalRulesSource, string> = {
 }
 
 export default function EvalRules() {
-  const { config, load, hasChanges, reset, update, previewSave, confirmSave, getFieldOriginal, revertField } = useConfigStore()
+  const { config, load, dirtyPathsInScope, reset, update, previewSave, confirmSave, getFieldOriginal, revertField } = useConfigStore()
   const [distData, setDistData] = useState<{
     buckets: Array<Array<{ count: number; pass: number; auto: number; fail: number }>>
     price_range: [number, number]
@@ -320,7 +321,7 @@ export default function EvalRules() {
     }
     try {
       setSaving(true)
-      const changes = await previewSave()
+      const changes = await previewSave(SCOPE_EVAL)
       if (changes.length === 0) {
         message.info('配置未变更')
         return
@@ -337,7 +338,7 @@ export default function EvalRules() {
   const handleConfirmSave = async () => {
     try {
       setSaving(true)
-      await confirmSave()
+      await confirmSave(SCOPE_EVAL)
       setDiffModalOpen(false)
       message.success('评估规则已保存')
     } catch (e) {
@@ -351,7 +352,12 @@ export default function EvalRules() {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
         <Space>
-          <TipButton tip="放弃未保存的修改并重置" icon={<UndoOutlined />} onClick={reset} disabled={!hasChanges()}>
+          <TipButton
+            tip="放弃本页未保存的修改并重置"
+            icon={<UndoOutlined />}
+            onClick={() => reset(SCOPE_EVAL)}
+            disabled={dirtyPathsInScope(SCOPE_EVAL).length === 0}
+          >
             重置
           </TipButton>
           <TipButton tip="保存评估规则配置" type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
