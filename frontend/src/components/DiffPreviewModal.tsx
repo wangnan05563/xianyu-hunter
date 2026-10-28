@@ -2,7 +2,7 @@ import { type CSSProperties } from 'react'
 import { Modal, Table, Tag } from 'antd'
 import { TipButton } from '@/components/TipButton'
 import type { DiffChange } from '../stores/configStore'
-import { useConfigStore } from '../stores/configStore'
+import type { AppConfig } from '../api'
 import { ParamCalculatorPanel } from './ParamCalculator'
 
 // 单元格样式：长 JSON 字符串可换行（wordBreak 防单 token 撑爆列宽）
@@ -24,6 +24,8 @@ interface DiffPreviewModalProps {
   // 组件内部不应修改 props：加 readonly 防止意外赋值，符合 React 单向数据流
   readonly open: boolean
   readonly diffChanges: DiffChange[]
+  // D-6：config 由调用方注入，组件不再直连 store
+  readonly config: AppConfig | null
   readonly loading: boolean
   readonly onCancel: () => void
   readonly onConfirm: () => void
@@ -72,20 +74,18 @@ function flattenConfig(obj: Record<string, unknown>, prefix = ''): Record<string
  * - 单元格用 <code> + whiteSpace: pre-wrap 展示对象/数组，保持可读性
  * - 路径列固定宽度，操作列固定 90px，剩余空间留给原值/新值列
  *
- * 集成参数计算器：弹窗打开时自动校验当前 configStore 中的待保存配置，
- * 在用户确认提交前展示分级建议。校验在 ParamCalculatorPanel 内部完成，
- * 通过 useConfigStore 获取当前 config，无需各配置页面单独传入。
+ * 集成参数计算器：弹窗打开时自动校验**调用方传入的**待保存配置，
+ * 在用户确认提交前展示分级建议。校验在 ParamCalculatorPanel 内部完成。
+ * config 走 props（D-6 解耦）：组件不读 store，可复用到非 configStore 场景。
  */
 export function DiffPreviewModal({
   open,
   diffChanges,
+  config,
   loading,
   onCancel,
   onConfirm,
 }: DiffPreviewModalProps) {
-  // 从 configStore 获取当前待保存的配置（用户修改后、未提交前的状态）
-  // 为什么在这里取：所有配置页共享此组件，统一获取避免每个页面单独传入
-  const config = useConfigStore((s) => s.config)
 
   // 展平嵌套配置为扁平 dict，传给参数计算器做规则校验
   // 为什么用 config 而非 diffChanges：config 是完整待保存状态，规则可基于完整配置做交叉校验

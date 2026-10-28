@@ -425,6 +425,7 @@ export default function NotifierChannels() {
       <DiffPreviewModal
         open={diffModalOpen}
         diffChanges={diffChanges}
+        config={config}
         loading={loading}
         onCancel={() => setDiffModalOpen(false)}
         onConfirm={handleConfirmSave}

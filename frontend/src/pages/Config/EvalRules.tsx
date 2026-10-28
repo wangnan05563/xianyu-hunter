@@ -782,6 +782,7 @@ export default function EvalRules() {
       <DiffPreviewModal
         open={diffModalOpen}
         diffChanges={diffChanges}
+        config={config}
         loading={saving}
         onCancel={() => setDiffModalOpen(false)}
         onConfirm={handleConfirmSave}
