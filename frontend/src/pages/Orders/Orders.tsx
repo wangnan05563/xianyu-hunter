@@ -13,7 +13,7 @@ import {
   DeleteOutlined, QuestionCircleOutlined,
 } from '@ant-design/icons'
 import { TipButton } from '@/components/TipButton'
-import { orderApi, type OrderItem, type OrderStats } from '../../api'
+import { orderApi, type OrderItem, type OrderListParams, type OrderStats } from '../../api'
 import {
   ORDER_STATUS,
   orderStatusColor,
@@ -429,7 +429,7 @@ function refAlertText(refId: string, reason: '' | 'missing' | 'filtered' | 'unre
   }
 }
 
-function StatTitle({ label }: { label: string }) {
+function StatTitle({ label }: { readonly label: string }) {
   return (
     <Space size={4}>
       {label}
@@ -438,6 +438,66 @@ function StatTitle({ label }: { label: string }) {
       </Tooltip>
     </Space>
   )
+}
+
+// S3776：ref 定位的分支判断抽到模块级，locate 只保留流程
+function isOrderFilteredOut(
+  target: OrderItem,
+  statusFilter: string | undefined,
+  typeFilter: string | undefined,
+): boolean {
+  if (statusFilter && target.status !== statusFilter) return true
+  if (typeFilter && (target.type ?? 'real') !== typeFilter) return true
+  return false
+}
+
+function shouldStopRefScan(pageList: OrderItem[], scanned: number, total: number): boolean {
+  if (!pageList.length) return true
+  if (pageList.length < REF_SCAN_PAGE_SIZE) return true
+  return scanned >= total
+}
+
+// S3358：antd 排序方向的三元链改为 if 分支
+function toSortDir(order: string | null | undefined): 'asc' | 'desc' | null {
+  if (order === 'ascend') return 'asc'
+  if (order === 'descend') return 'desc'
+  return null
+}
+
+/** 跨页扫描定位的结果：命中页码 / 扫完未命中 / 扫描期间组件已卸载 */
+type RefScanResult =
+  | { kind: 'page'; page: number }
+  | { kind: 'unreachable' }
+  | { kind: 'aborted' }
+
+// S3776：跨页扫描从 locate 里提出，命中下标按当前 pageSize 换算成页码
+async function scanPagesForRef(
+  refId: string,
+  query: Pick<OrderListParams, 'status' | 'type' | 'sort_by' | 'sort_dir'>,
+  pageSize: number,
+  currentPage: number,
+  isAlive: () => boolean,
+): Promise<RefScanResult> {
+  let scanned = 0
+  for (let p = 1; p <= REF_SCAN_MAX_PAGES; p++) {
+    const res = await orderApi.list({
+      page_num: p, page_size: REF_SCAN_PAGE_SIZE,
+      status: query.status, type: query.type,
+      sort_by: query.sort_by, sort_dir: query.sort_dir,
+    })
+    if (!isAlive()) return { kind: 'aborted' }
+    const list = res.items || []
+    const idx = list.findIndex((o) => String(o.id) === refId)
+    if (idx >= 0) {
+      const targetPage = Math.floor(((p - 1) * REF_SCAN_PAGE_SIZE + idx) / pageSize) + 1
+      // 页码与当前页相同说明列表在扫描期间变过（新单插入/删除），不跳以免原地循环
+      if (targetPage === currentPage) return { kind: 'unreachable' }
+      return { kind: 'page', page: targetPage }
+    }
+    scanned += list.length
+    if (shouldStopRefScan(list, scanned, res.total ?? res.count ?? 0)) break
+  }
+  return { kind: 'unreachable' }
 }
 
 export default function Orders() {
@@ -576,34 +636,21 @@ export default function Orders() {
       if (!alive) return
       // status/type 是列表仅有的两组筛选：订单本身不满足时，扫多少页都不会出现，
       // 直接说明原因并给「清除筛选」，不让用户盲目翻页
-      if ((statusFilter && target.status !== statusFilter) ||
-          (typeFilter && (target.type ?? 'real') !== typeFilter)) {
+      if (isOrderFilteredOut(target, statusFilter, typeFilter)) {
         setRefUnreachable('filtered')
         return
       }
 
-      let scanned = 0
-      for (let p = 1; p <= REF_SCAN_MAX_PAGES; p++) {
-        const res = await orderApi.list({
-          page_num: p, page_size: REF_SCAN_PAGE_SIZE,
-          status: statusFilter, type: typeFilter,
-          sort_by: sortBy, sort_dir: sortDir,
-        })
-        if (!alive) return
-        const list = res.items || []
-        const idx = list.findIndex((o) => String(o.id) === refId)
-        if (idx >= 0) {
-          const targetPage = Math.floor(((p - 1) * REF_SCAN_PAGE_SIZE + idx) / pageSize) + 1
-          // 页码与当前页相同说明列表在扫描期间变过（新单插入/删除），不跳以免原地循环
-          if (targetPage === page) setRefUnreachable('unreachable')
-          else setPage(targetPage)
-          return
-        }
-        scanned += list.length
-        if (!list.length || list.length < REF_SCAN_PAGE_SIZE ||
-            scanned >= (res.total ?? res.count ?? 0)) break
-      }
-      setRefUnreachable('unreachable')
+      const hit = await scanPagesForRef(
+        refId,
+        { status: statusFilter, type: typeFilter, sort_by: sortBy, sort_dir: sortDir },
+        pageSize,
+        page,
+        () => alive,
+      )
+      if (hit.kind === 'aborted') return
+      if (hit.kind === 'page') setPage(hit.page)
+      else setRefUnreachable('unreachable')
     }
 
     locate().catch(() => { if (alive) setRefUnreachable('unreachable') })
@@ -908,8 +955,8 @@ export default function Orders() {
                 // 非受控 sorter 在纯翻页/改 pageSize 时也会把当前排序一并上报，
                 // 所以只在「排序真的变了」时才走排序分支，否则改 pageSize 会莫名跳回第 1 页
                 const s = Array.isArray(sorter) ? sorter[0] : sorter
-                const f = s && s.field ? String(s.field) : null
-                const d = s?.order === 'ascend' ? 'asc' : s?.order === 'descend' ? 'desc' : null
+                const f = s?.field ? String(s.field) : null
+                const d = toSortDir(s?.order)
                 if (f && d && (f !== sortBy || d !== sortDir) &&
                     (f === 'created_at' || f === 'confirmed_at' || f === 'price')) {
                   setSortBy(f)

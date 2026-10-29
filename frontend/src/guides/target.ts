@@ -39,7 +39,8 @@ export function resolveTourTarget(selector?: string): TourStepProps['target'] {
   if (!selector) return undefined
   return (() => {
     const el = document.querySelector(selector)
-    if (!el || !el.isConnected) return null
+    // S6582：!el || !el.isConnected 等价于 !el?.isConnected（el 为 null 时取反仍为 true）
+    if (!el?.isConnected) return null
     const rect = el.getBoundingClientRect()
     // 尚无布局（0 尺寸）时按无目标处理，避免用 0 rect 算出越界坐标
     if (!rect.width || !rect.height) return null

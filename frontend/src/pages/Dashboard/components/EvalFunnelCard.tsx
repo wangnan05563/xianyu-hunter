@@ -77,7 +77,7 @@ export default function EvalFunnelCard({ data, loading, rangeDays, onRangeChange
       <Spin spinning={loading}>
         {/* 失败态即使留有上一次成功数据也要显式声明：否则读者会把陈旧曲线当实时 */}
         {error && <FetchFailedHint source="评估漏斗" onRetry={onRetry} />}
-        {data && data.stages.length > 0 ? (
+        {data && data.stages.length > 0 && (
           <>
             {/* 漏斗图：占满宽度，高度固定避免阶段少时压扁 */}
             <div style={{ height: 320 }}>
@@ -132,7 +132,8 @@ export default function EvalFunnelCard({ data, loading, rangeDays, onRangeChange
               </Col>
             </Row>
           </>
-        ) : error ? null : (
+        )}
+        {!error && (!data || data.stages.length === 0) && (
           <Empty description="暂无漏斗数据" />
         )}
       </Spin>

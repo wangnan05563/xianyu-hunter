@@ -51,6 +51,12 @@ function star(v: number | undefined, isGood: (n: number) => boolean, isOk: (n: n
   return 1
 }
 
+/** 通知失败星级：无数据 0 星；0 条失败 5 星；其余 1 星（用 if 收敛，避免嵌套三元） */
+function notifyStar(v: number | undefined): number {
+  if (v == null) return 0
+  return v === 0 ? 5 : 1
+}
+
 // 移动端仪表盘：KPI 星级卡片 + 今日告警摘要 + 工具/配置入口
 // KPI 口径（FR-G-1）：一律取 /api/stats 的真实字段，不再用 tasks.total 冒充商品数、
 // 用 evaluation_count 冒充「评估通过」、用 orders.failed 冒充「通知失败」
@@ -126,7 +132,7 @@ export default function MobileDashboard() {
       label: '通知失败',
       value: notifyFailed,
       sub: notifyFailed === 0 ? '推送全部成功' : undefined,
-      star: notifyFailed == null ? 0 : notifyFailed === 0 ? 5 : 1,
+      star: notifyStar(notifyFailed),
     },
   ]
 
@@ -153,7 +159,7 @@ export default function MobileDashboard() {
                   letterSpacing: '-0.5px',
                 }}
               >
-                {kpi.value == null ? '—' : kpi.value}
+                {kpi.value ?? '—'}
               </div>
               {kpi.sub && <div style={{ fontSize: 11, color: '#bbb' }}>{kpi.sub}</div>}
             </div>

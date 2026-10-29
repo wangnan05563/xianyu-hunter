@@ -388,120 +388,15 @@ class KBManager:
         # 避免版本状态卡在 building 永远不被改写（前端按钮一直灰显的根因之一）
         try:
             try:
-                total_snippets = len(snippets)
-                self._set_progress(
-                    "embedding", 40,
-                    f"向量化 {total_snippets} 个片段中..."
-                )
-
-                # 进度回调：把向量化子进度映射到 40% → 70% 区间
-                # 写入阶段保留 70% 之后，避免进度条最后卡在中间值
-                def _on_embed_progress(done: int, total: int) -> None:
-                    if total <= 0:
-                        return
-                    # 40 + (done/total) * 30，向上取整避免前端看到「进度倒退」
-                    percent = 40 + int(done * 30 / total)
-                    self._set_progress(
-                        "embedding", percent,
-                        f"向量化中 {done}/{total}",
-                    )
-
-                embeddings, failed_indices = await self._embedding.embed_batch(
-                    [s.content for s in snippets],
-                    progress_cb=_on_embed_progress,
-                )
-                # embed_batch 返回 (成功向量紧凑列表, 失败索引列表)；空输入时返回 (None, [])
-                if embeddings is None:
-                    embeddings = []
-
-                total = len(snippets)
-                failed_count = len(failed_indices)
-                fail_rate = failed_count / total if total > 0 else 0.0
-
-                # 失败率 >50%：状态 failed，回滚（避免写入质量过低的知识库）
-                if fail_rate > self._FAILED_FAIL_RATE:
-                    logger.error(
-                        f"Embedding 失败率 {fail_rate:.1%} > 50%，终止构建并回滚"
-                    )
-                    await self._rollback_build(
-                        snapshot_path=snapshot_path,
-                        version_id=version_id,
-                        error=RuntimeError(
-                            f"embedding 失败率 {fail_rate:.1%} 超过 50% 阈值"
-                        ),
-                    )
-                    return self._repo_to_version(self._repo.get_kb_version(version_id))
-
-                self._set_progress(
-                    "writing", 70,
-                    f"写入向量库（{total - failed_count}/{total} 片段）"
-                )
-                # 全量重建：清空集合后写入全部；
-                # 增量合并：先删变更/移除文件的旧片段再 upsert 新片段，保留未变文件的向量
-                if full_rebuild:
-                    await self._vector_store.clear_collection()
-                else:
-                    for src in (sources_to_replace or set()):
-                        await self._vector_store.delete_by_source(src)
-                chunks_with_vectors: list[dict] = []
-                failed_set = set(failed_indices)
-                vec_idx = 0
-                for i, snippet in enumerate(snippets):
-                    if i in failed_set:
-                        continue
-                    if vec_idx >= len(embeddings):
-                        # 防御性：embeddings 数量与预期不符时停止
-                        break
-                    chunks_with_vectors.append({
-                        "id": f"{version_id}_{i}",
-                        "content": snippet.content,
-                        "source_file": snippet.source_file,
-                        "section_path": snippet.section_path,
-                        "line_start": snippet.line_start,
-                        "line_end": snippet.line_end,
-                        "doc_type": snippet.doc_type,
-                        "embedding": embeddings[vec_idx],
-                    })
-                    vec_idx += 1
-
-                upserted = await self._vector_store.upsert(chunks_with_vectors)
-                # 增量合并后总片段数 = 集合实际数量（未变片段 + 新写片段）
-                final_chunk_count = (
-                    upserted
-                    if full_rebuild
-                    else await self._vector_store.count()
-                )
-
-                # 状态判定：>50% 已回滚；>10% partial；其他 success
-                if fail_rate > self._PARTIAL_FAIL_RATE:
-                    status = "partial"
-                else:
-                    status = "success"
-
-                self._set_progress("finalizing", 90, "更新版本状态")
-                duration = time.monotonic() - start_ts
-                self._repo.update_kb_version_status(
+                return await self._run_build_stage2(
+                    snippets,
                     version_id=version_id,
-                    status=status,
-                    chunk_count=final_chunk_count,
-                    failed_chunk_count=failed_count,
-                    build_duration_sec=duration,
-                    error_message=None,
+                    snapshot_path=snapshot_path,
+                    build_type=build_type,
+                    start_ts=start_ts,
+                    sources_to_replace=sources_to_replace,
+                    full_rebuild=full_rebuild,
                 )
-
-                # 清理旧快照（保留 snapshot_max_keep 个）
-                self._cleanup_old_snapshots()
-
-                self._set_progress(
-                    "done", 100,
-                    f"构建完成: {final_chunk_count} 片段，状态 {status}"
-                )
-                logger.info(
-                    f"知识库构建完成: version={version_id} type={build_type} "
-                    f"status={status} chunks={final_chunk_count} failed={failed_count} "
-                    f"duration={duration:.2f}s"
-                )
-                return self._repo_to_version(self._repo.get_kb_version(version_id))
             except Exception as e:
                 logger.exception("阶段2（写入 ChromaDB）失败，开始回滚")
                 await self._rollback_build(
@@ -513,12 +408,162 @@ class KBManager:
         finally:
             # 兜底：无论成功失败，确保进度状态离开「活跃中间态」，
             # 避免进程崩溃后 _progress 残留 embedding/writing 等中间值
-            current = self._progress.get("phase", "idle")
-            if current in ("scanning", "snapshotting", "embedding", "writing", "finalizing"):
-                logger.warning(
-                    f"构建流程异常退出时进度仍为 {current}，强制归位为 idle"
-                )
-                self._set_progress("idle", 0, "")
+            self._reset_progress_after_build()
+
+    def _reset_progress_after_build(self) -> None:
+        """构建退出兜底：进度仍停在活跃中间态时强制归位 idle"""
+        current = self._progress.get("phase", "idle")
+        if current in ("scanning", "snapshotting", "embedding", "writing", "finalizing"):
+            logger.warning(
+                f"构建流程异常退出时进度仍为 {current}，强制归位为 idle"
+            )
+            self._set_progress("idle", 0, "")
+
+    async def _run_build_stage2(
+        self,
+        snippets: list[DocSnippet],
+        *,
+        version_id: str,
+        snapshot_path: str,
+        build_type: str,
+        start_ts: float,
+        sources_to_replace: set[str] | None,
+        full_rebuild: bool,
+    ) -> KBVersion:
+        """阶段2：向量化 → 清空/增量删除 → 写入 → 更新版本状态"""
+        total_snippets = len(snippets)
+        self._set_progress(
+            "embedding", 40,
+            f"向量化 {total_snippets} 个片段中..."
+        )
+
+        embeddings, failed_indices = await self._embedding.embed_batch(
+            [s.content for s in snippets],
+            progress_cb=self._on_embed_progress,
+        )
+        # embed_batch 返回 (成功向量紧凑列表, 失败索引列表)；空输入时返回 (None, [])
+        if embeddings is None:
+            embeddings = []
+
+        total = len(snippets)
+        failed_count = len(failed_indices)
+        fail_rate = failed_count / total if total > 0 else 0.0
+
+        # 失败率 >50%：状态 failed，回滚（避免写入质量过低的知识库）
+        if fail_rate > self._FAILED_FAIL_RATE:
+            logger.error(
+                f"Embedding 失败率 {fail_rate:.1%} > 50%，终止构建并回滚"
+            )
+            await self._rollback_build(
+                snapshot_path=snapshot_path,
+                version_id=version_id,
+                error=RuntimeError(
+                    f"embedding 失败率 {fail_rate:.1%} 超过 50% 阈值"
+                ),
+            )
+            return self._repo_to_version(self._repo.get_kb_version(version_id))
+
+        self._set_progress(
+            "writing", 70,
+            f"写入向量库（{total - failed_count}/{total} 片段）"
+        )
+        chunks_with_vectors = await self._build_chunks_with_vectors(
+            snippets, embeddings, failed_indices, version_id,
+            sources_to_replace=sources_to_replace, full_rebuild=full_rebuild,
+        )
+
+        upserted = await self._vector_store.upsert(chunks_with_vectors)
+        # 增量合并后的总片段数取集合实际数量（未变片段与新写片段之和）
+        final_chunk_count = (
+            upserted
+            if full_rebuild
+            else await self._vector_store.count()
+        )
+
+        # 状态判定：>50% 已回滚；>10% partial；其他 success
+        if fail_rate > self._PARTIAL_FAIL_RATE:
+            status = "partial"
+        else:
+            status = "success"
+
+        self._set_progress("finalizing", 90, "更新版本状态")
+        duration = time.monotonic() - start_ts
+        self._repo.update_kb_version_status(
+            version_id=version_id,
+            status=status,
+            chunk_count=final_chunk_count,
+            failed_chunk_count=failed_count,
+            build_duration_sec=duration,
+            error_message=None,
+        )
+
+        # 清理旧快照（保留 snapshot_max_keep 个）
+        self._cleanup_old_snapshots()
+
+        self._set_progress(
+            "done", 100,
+            f"构建完成: {final_chunk_count} 片段，状态 {status}"
+        )
+        logger.info(
+            f"知识库构建完成: version={version_id} type={build_type} "
+            f"status={status} chunks={final_chunk_count} failed={failed_count} "
+            f"duration={duration:.2f}s"
+        )
+        return self._repo_to_version(self._repo.get_kb_version(version_id))
+
+    async def _build_chunks_with_vectors(
+        self,
+        snippets: list[DocSnippet],
+        embeddings: list[list[float]],
+        failed_indices: list[int],
+        version_id: str,
+        *,
+        sources_to_replace: set[str] | None,
+        full_rebuild: bool,
+    ) -> list[dict]:
+        """清空/增量删除旧片段后，按失败索引与向量数量装配待写入的 chunk 列表"""
+        # 全量重建：清空集合后写入全部；
+        # 增量合并：先删变更/移除文件的旧片段再 upsert 新片段，保留未变文件的向量
+        if full_rebuild:
+            await self._vector_store.clear_collection()
+        else:
+            for src in (sources_to_replace or set()):
+                await self._vector_store.delete_by_source(src)
+        chunks_with_vectors: list[dict] = []
+        failed_set = set(failed_indices)
+        vec_idx = 0
+        for i, snippet in enumerate(snippets):
+            if i in failed_set:
+                continue
+            if vec_idx >= len(embeddings):
+                # 防御性：embeddings 数量与预期不符时停止
+                break
+            chunks_with_vectors.append({
+                "id": f"{version_id}_{i}",
+                "content": snippet.content,
+                "source_file": snippet.source_file,
+                "section_path": snippet.section_path,
+                "line_start": snippet.line_start,
+                "line_end": snippet.line_end,
+                "doc_type": snippet.doc_type,
+                "embedding": embeddings[vec_idx],
+            })
+            vec_idx += 1
+        return chunks_with_vectors
+
+    def _on_embed_progress(self, done: int, total: int) -> None:
+        """进度回调：把向量化子进度映射到 40% → 70% 区间
+
+        写入阶段保留 70% 之后，避免进度条最后卡在中间值。
+        """
+        if total <= 0:
+            return
+        # 40 + (done/total) * 30，向上取整避免前端看到「进度倒退」
+        percent = 40 + int(done * 30 / total)
+        self._set_progress(
+            "embedding", percent,
+            f"向量化中 {done}/{total}",
+        )
 
     # ==================== 内部方法：扫描与分块 ====================
 

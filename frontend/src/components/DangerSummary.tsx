@@ -8,15 +8,15 @@ const { Text } = Typography
 
 export interface DangerCopy {
   /** 确认框标题，例如「确认清理缓存？」；缺省用通用标题 */
-  title?: string
+  readonly title?: string
   /** ① 动作：要做的是什么（动词 + 对象），不允许只写「此操作」 */
-  action: string
+  readonly action: string
   /** ② 影响范围：波及哪些数据/资源，并明确「不包含」什么 */
-  scope: string
+  readonly scope: string
   /** ③ 数量：真实统计值；拿不到时传 null/''，会渲染成显式「未能预先统计」而不是省略 */
-  count?: string | number | null
+  readonly count?: string | number | null
   /** ④ 恢复成本：怎么撤销/回滚，或为什么不可恢复 */
-  recovery: string
+  readonly recovery: string
 }
 
 /** 数量拿不到时的固定话术——宁可明说不知道，也不给出看起来完整的假数字 */

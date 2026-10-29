@@ -35,6 +35,38 @@ interface ModelConfigFormProps {
   readonly onTestConnection: () => void
 }
 
+// S6478：下拉面板内容提到模块顶层（普通渲染函数），不再在组件内定义组件
+function renderModelOptionsPanel(
+  loading: boolean,
+  options: AIModelInfo[],
+  onSelect: (model: string) => void,
+) {
+  if (loading) {
+    return (
+      <div style={{ padding: 12, textAlign: 'center' }}>
+        <Spin size="small" />
+      </div>
+    )
+  }
+  return (
+    <Menu
+      style={{
+        border: '1px solid rgba(5, 5, 5, 0.06)',
+        borderRadius: 8,
+        boxShadow: '0 6px 16px 0 rgba(0,0,0,0.08), 0 3px 6px -4px rgba(0,0,0,0.12)',
+      }}
+      items={
+        options.length
+          ? options.map((m) => ({ key: m.id, label: m.id }))
+          : [{ key: '__empty__', label: '未获取到模型，请检查 Base URL / API Key', disabled: true }]
+      }
+      onClick={({ key }) => {
+        if (key !== '__empty__') onSelect(key)
+      }}
+    />
+  )
+}
+
 export default function ModelConfigForm({
   config,
   onConfigChange,
@@ -95,28 +127,10 @@ export default function ModelConfigForm({
         if (next) void fetchModels(target)
       },
       dropdownRender: () =>
-        loading ? (
-          <div style={{ padding: 12, textAlign: 'center' }}>
-            <Spin size="small" />
-          </div>
-        ) : (
-          <Menu
-            style={{
-              border: '1px solid rgba(5, 5, 5, 0.06)',
-              borderRadius: 8,
-              boxShadow: '0 6px 16px 0 rgba(0,0,0,0.08), 0 3px 6px -4px rgba(0,0,0,0.12)',
-            }}
-            items={
-              options.length
-                ? options.map((m) => ({ key: m.id, label: m.id }))
-                : [{ key: '__empty__', label: '未获取到模型，请检查 Base URL / API Key', disabled: true }]
-            }
-            onClick={({ key }) => {
-              if (key !== '__empty__') onConfigChange({ [target]: key } as Partial<AIConfigData>)
-              setOpen(false)
-            }}
-          />
-        ),
+        renderModelOptionsPanel(loading, options, (key) => {
+          onConfigChange({ [target]: key } as Partial<AIConfigData>)
+          setOpen(false)
+        }),
     }
   }
 

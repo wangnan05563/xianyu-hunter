@@ -69,7 +69,11 @@ export const TipButton = ({ tip, title, children, ...rest }: TipButtonProps) => 
       // 禁用态：事件绑定到外层 span（disabled button 自身不接收事件），仅保留长按看提示的能力
       return (
         <Tooltip title={tip} open={open} trigger={[]} placement="top">
-          <span
+          {/* S6848/S1082：这一层只是「给 disabled 子按钮看提示」的悬停/长按表面，
+              真正的交互元素是里面的 <button disabled>。给它 role="button" 会造成按钮套按钮
+              （读屏与 RTL 的 getByRole('button') 会命中两个同名元素），键盘用户也拿不到
+              任何动作，反而更差，所以保持 span 语义、用 NOSONAR 记录这次例外。 */}
+          <span /* NOSONAR - S6819/S6848/S1082：非交互容器，内层就是 disabled 的 <button>，授予 button 角色会造成角色嵌套 */
             className="xh-tipbtn-disabled-wrap"
             style={wrapStyle}
             onTouchStart={() => {

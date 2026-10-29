@@ -39,7 +39,7 @@ export interface ExportResult {
 
 /** 后端没回带文件名时按同一命名规则兜底 */
 function defaultFilename(dataset: ExportDataset): string {
-  const ts = new Date().toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-')
+  const ts = new Date().toISOString().slice(0, 19).replaceAll(/[-:]/g, '').replace('T', '-')
   return `xh-${dataset}-${ts}.csv`
 }
 

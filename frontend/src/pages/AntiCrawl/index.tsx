@@ -673,14 +673,12 @@ export default function AntiCrawl() {
     setLoadingStrategy, setLoadingLayers, setLoadError,
   }
 
-  // S1854 修复：load* 保留 useCallback 薄壳；T02579 起 loadStrategy/loadFingerprint 也被
-  // 各卡片的「重试」直接引用，不再是无用赋值。其余 load* 在 setInterval/JSX 中被直接引用
+  // S1854：load* 保留 useCallback 薄壳。loadStrategy/loadFingerprint 已无任何引用
+  // （各卡片重试与顶部重试统一走 SECTION_FETCHERS），故不再声明这两个赋值
   const loadSession = useCallback(() => fetchSession(setters), [])
   const loadFreqStats = useCallback(() => fetchFreqStats(setters), [])
   const loadCookieLayers = useCallback(() => fetchCookieLayers(setters), [])
   const loadAll = useCallback(() => fetchAll(setters), [])
-  const loadStrategy = useCallback(() => fetchStrategy(setters), [])
-  const loadFingerprint = useCallback(() => fetchFingerprint(setters), [])
 
   // 4.5-3：单卡片重试 + 顶部「重试失败项」（只重拉失败的那几块）
   const retrySection = useCallback((k: AntiCrawlSectionKey) => {
@@ -1177,6 +1175,14 @@ export default function AntiCrawl() {
   )
 }
 
+// S3358：把「Token 已使用 X（当前已过期/仍在有效期内）」的嵌套三元抽成纯函数
+function formatTokenUsageCount(session: SessionStatus): string | null {
+  if (session.token_age_sec == null) return null
+  let suffix = '，当前仍在有效期内'
+  if (session.token_expired) suffix = '，当前已过期'
+  return `Token 已使用 ${formatDuration(session.token_age_sec)}${suffix}`
+}
+
 // S3776 修复：会话管理 Card 提取为独立子组件
 // 为什么提取：原主组件 JSX 内的 6 个条件渲染（session?.active / session&&!session.active&&... /
 // session&& / session.active? / token_age_sec==null? / token_expired?）全部贡献主组件复杂度，
@@ -1271,10 +1277,7 @@ function SessionCardCol(props: {
                 action: '停止会话管理器与 _m_h5_tk 后台自动续期',
                 scope: '只停后台续期循环；不关闭浏览器、不删除 Cookie，'
                   + '身份类 Cookie 与浏览器指纹数据保持不变',
-                count: session.token_age_sec == null
-                  ? null
-                  : `Token 已使用 ${formatDuration(session.token_age_sec)}`
-                    + (session.token_expired ? '，当前已过期' : '，当前仍在有效期内'),
+                count: formatTokenUsageCount(session),
                 recovery: '点「启动会话」即可恢复自动续期；若期间 Token 过期，'
                   + '接口会命中风控并需要重新走一次登录流程',
               }).then((ok: boolean) => { if (ok) onStop() })

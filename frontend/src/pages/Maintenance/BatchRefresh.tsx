@@ -261,6 +261,28 @@ export default function BatchRefresh() {
 
 // ============== Tab 1: 当前执行 ==============
 
+// S3358：汇总 Alert 的 type 用分支函数推导，避免三元套三元
+function resolveResultAlertType(lastResult: BatchRefreshStatus['last_result'] | undefined): 'warning' | 'success' | 'info' {
+  if (!lastResult) return 'info'
+  if (lastResult.failed > 0) return 'warning'
+  return 'success'
+}
+
+// S3358：汇总文案里的「已手动停止」后缀与兜底文案拆成独立函数
+function formatLastResultSummary(lastResult: BatchRefreshStatus['last_result'] | undefined): string {
+  if (!lastResult) return '最近一次批次汇总：后端未回传统计'
+  let stoppedSuffix = ''
+  if (lastResult.stopped) stoppedSuffix = ' · 已手动停止'
+  const base = `最近一次批次汇总：成功 ${lastResult.success} · 失败 ${lastResult.failed} · 跳过 ${lastResult.skipped}`
+  return `${base}${stoppedSuffix}`
+}
+
+// S3776：进度百分比抽成纯函数，主组件不再保留条件表达式
+function calcProgressPercent(progress: BatchRefreshStatus['progress'] | undefined): number {
+  if (!progress || progress.total <= 0) return 0
+  return Math.round((progress.current / progress.total) * 100)
+}
+
 function CurrentBatchPanel() {
   const [status, setStatus] = useState<BatchRefreshStatus | null>(null)
   const [loading, setLoading] = useState(false)
@@ -500,9 +522,7 @@ function CurrentBatchPanel() {
   const inProgress = running || paused || stopping
   const lastResult = status?.last_result
   const progress = status?.progress
-  const percent = progress && progress.total > 0
-    ? Math.round((progress.current / progress.total) * 100)
-    : 0
+  const percent = calcProgressPercent(progress)
 
   // 拆分嵌套三元为独立变量，提升可读性（SonarQube S3358）
   const stoppedSuffix = lastResult?.stopped ? ' · 已停止' : ''
@@ -573,13 +593,9 @@ function CurrentBatchPanel() {
       {/* 4.4-1 结果汇总面板：空闲态常驻，错过收尾通知也能看到同一份真实计数 */}
       {!inProgress && status != null && (
         <Alert
-          type={lastResult ? (lastResult.failed > 0 ? 'warning' : 'success') : 'info'}
+          type={resolveResultAlertType(lastResult)}
           showIcon
-          message={
-            lastResult
-              ? `最近一次批次汇总：成功 ${lastResult.success} · 失败 ${lastResult.failed} · 跳过 ${lastResult.skipped}${lastResult.stopped ? ' · 已手动停止' : ''}`
-              : '最近一次批次汇总：后端未回传统计'
-          }
+          message={formatLastResultSummary(lastResult)}
           description={
             <span style={{ fontSize: 12 }}>
               统计时间 {formatTime(status.last_run_at ?? null)}；这是后端记录的最近一次批次结果，
@@ -881,6 +897,20 @@ function CurrentBatchPanel() {
 
 // ============== Tab 2: 执行历史 ==============
 
+// S2004：删除确认弹层提到模块级，避免 render→onClick→onOk 三层闭包嵌套
+function confirmDeleteHistory(
+  modal: ReturnType<typeof App.useApp>['modal'],
+  record: BatchRefreshHistoryItem,
+  onDelete: (id: number) => void | Promise<void>,
+) {
+  modal.confirm({
+    title: '确认删除此条历史记录？',
+    okText: '删除',
+    cancelText: '取消',
+    onOk: () => onDelete(record.id),
+  })
+}
+
 function HistoryPanel() {
   // 删除确认走 App 上下文的 modal（T02975）：操作列 fixed:'right' 是 sticky 单元格，
   // Popconfirm 的 trigger 在横向滚动时反复重算位置（同 T02671 的因果链）
@@ -1157,12 +1187,7 @@ function HistoryPanel() {
             size="small"
             danger
             icon={<DeleteOutlined />}
-            onClick={() => modal.confirm({
-              title: '确认删除此条历史记录？',
-              okText: '删除',
-              cancelText: '取消',
-              onOk: () => handleDelete(r.id),
-            })}
+            onClick={() => confirmDeleteHistory(modal, r, handleDelete)}
           >
             删除
           </TipButton>

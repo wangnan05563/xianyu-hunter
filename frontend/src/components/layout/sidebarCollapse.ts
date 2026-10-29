@@ -28,7 +28,12 @@ export function collapseOnResize(prev: SidebarCollapseState, narrow: boolean): S
   return prev.autoCollapsed ? { collapsed: false, autoCollapsed: false } : prev
 }
 
-/** 用户主动开合：显式意图优先，清掉自动收起标记 */
-export function collapseByUser(prev: SidebarCollapseState, collapsed: boolean): SidebarCollapseState {
-  return prev.collapsed === collapsed ? prev : { collapsed, autoCollapsed: false }
+/** 用户主动收起：显式意图优先，清掉自动收起标记（S2301：与展开拆成两个具名函数） */
+export function collapseByUser(prev: SidebarCollapseState): SidebarCollapseState {
+  return prev.collapsed ? prev : { collapsed: true, autoCollapsed: false }
+}
+
+/** 用户主动展开：显式意图优先，清掉自动收起标记（S2301：与收起拆成两个具名函数） */
+export function expandByUser(prev: SidebarCollapseState): SidebarCollapseState {
+  return prev.collapsed ? { collapsed: false, autoCollapsed: false } : prev
 }

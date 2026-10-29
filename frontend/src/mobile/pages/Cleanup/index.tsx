@@ -14,75 +14,104 @@ import { PYCACHE_NOT_APPLICABLE_HINT, cacheTargetOptions } from '@/utils/cacheTa
 import { useFailedSources } from '../../../hooks/useFailedSources'
 import LoadFailedBar from '../../components/LoadFailedBar'
 
+// 清理对象（S4323：原先 'cache' | 'database' | 'logs' 在四处重复，收敛成一个别名）
+type CleanupTarget = 'cache' | 'database' | 'logs'
+
 // 各清理模块的真实动作（T02573：确认框按「动作/影响范围/数量/恢复成本」四要素写）
-const TARGET_ACTION: Record<'cache' | 'database' | 'logs', string> = {
+const TARGET_ACTION: Record<CleanupTarget, string> = {
   cache: '清理缓存',
   database: '清理数据库历史数据',
   logs: '清理日志文件',
 }
 
-function mobileDangerCopy(
-  target: 'cache' | 'database' | 'logs',
-  form: CleanupBody,
-  status: StorageStatus | null,
-): DangerCopy {
-  const days = form.days
-  if (target === 'cache') {
-    const c = status?.cache
-    // FR-A-5（T02575）：browser_data 现在删的是真实浏览器资料目录，后果是掉登录态
-    const dropsLogin = form.target !== 'pycache'
-    // T02739：打包版没有源码树，确认框不能还承诺清掉一份不存在的 __pycache__
-    const pycacheApplicable = c?.pycache_applicable !== false
-    return {
-      action: `删除${form.target === 'pycache' ? ' __pycache__ 字节码缓存'
-        : form.target === 'browser_data' ? ' 浏览器用户数据目录（含闲鱼登录 Cookie 与反爬指纹）'
-          : pycacheApplicable ? ' __pycache__ 与浏览器用户数据目录'
-            : ' 浏览器用户数据目录（含闲鱼登录 Cookie 与反爬指纹）'}`,
-      scope: dropsLogin
-        ? `将删除 ${c?.browser_data_path ?? '浏览器用户数据目录'}；不包含数据库与日志文件`
-        : '只删 __pycache__ 字节码缓存；不包含数据库、日志与浏览器用户数据目录（登录态所在）',
-      count: c
-        ? (pycacheApplicable ? `__pycache__ 目录 ${c.pycache_count} 个（${c.pycache_mb} MB）；` : '')
-          + `浏览器数据 ${c.browser_data_files} 个文件（${c.browser_data_mb} MB）`
-        : null,
-      recovery: dropsLogin
-        ? '不可恢复；删除后需重新扫码登录闲鱼。浏览器正在占用该目录时会跳过删除并报错'
-        : '不可恢复；字节码会在下次运行自动重建，首次运行稍慢',
-    }
+// 缓存清理的确认文案：目标后缀用 if 收敛，金额/目录数量按预览数据处理
+function cacheDangerCopy(form: CleanupBody, status: StorageStatus | null): DangerCopy {
+  const c = status?.cache
+  // FR-A-5（T02575）：browser_data 现在删的是真实浏览器资料目录，后果是掉登录态
+  const dropsLogin = form.target !== 'pycache'
+  // T02739：打包版没有源码树，确认框不能还承诺清掉一份不存在的 __pycache__
+  const pycacheApplicable = c?.pycache_applicable !== false
+  const browserDataText = ' 浏览器用户数据目录（含闲鱼登录 Cookie 与反爬指纹）'
+  let targetSuffix = browserDataText
+  if (form.target === 'pycache') {
+    targetSuffix = ' __pycache__ 字节码缓存'
+  } else if (form.target !== 'browser_data' && pycacheApplicable) {
+    targetSuffix = ' __pycache__ 与浏览器用户数据目录'
   }
-  if (target === 'database') {
-    const db = status?.db
-    const d = days
-    const action: Record<string, string> = {
-      all: `删除早于 ${d} 天的事件与未关联商品、清理已售商品关联，随后 VACUUM 压缩`,
-      old_events: `删除早于 ${d} 天的事件记录`,
-      old_items: `删除早于 ${d} 天且未关联任务的商品记录`,
-      sold_items: '删除已售商品的关联记录（该分支不看天数）',
-      vacuum: '执行 VACUUM 压缩数据库文件',
-    }
-    const isVacuum = form.target === 'vacuum'
-    return {
-      action: action[form.target] ?? '清理数据库历史数据',
-      scope: isVacuum
-        ? '只重排数据库文件、回收空闲页；不删除任何业务记录'
-        : '裁剪数据库历史记录；不影响配置与浏览器登录态。确切条数请先用「预览」确认',
-      count: db ? `当前库内 任务 ${db.tasks} / 商品 ${db.items} / 事件 ${db.events}` : null,
-      recovery: isVacuum
-        ? '记录不会丢，但压缩过程无法中途恢复原文件；执行时间随库大小增长'
-        : '不可恢复；只能在「数据库维护」用导出备份回滚，前提是先有备份',
-    }
+  let count: string | null = null
+  if (c) {
+    const pycachePart = pycacheApplicable
+      ? `__pycache__ 目录 ${c.pycache_count} 个（${c.pycache_mb} MB）；`
+      : ''
+    count = pycachePart + `浏览器数据 ${c.browser_data_files} 个文件（${c.browser_data_mb} MB）`
+  }
+  return {
+    action: `删除${targetSuffix}`,
+    scope: dropsLogin
+      ? `将删除 ${c?.browser_data_path ?? '浏览器用户数据目录'}；不包含数据库与日志文件`
+      : '只删 __pycache__ 字节码缓存；不包含数据库、日志与浏览器用户数据目录（登录态所在）',
+    count,
+    recovery: dropsLogin
+      ? '不可恢复；删除后需重新扫码登录闲鱼。浏览器正在占用该目录时会跳过删除并报错'
+      : '不可恢复；字节码会在下次运行自动重建，首次运行稍慢',
+  }
+}
+
+// 数据库清理的确认文案
+function databaseDangerCopy(form: CleanupBody, status: StorageStatus | null): DangerCopy {
+  const db = status?.db
+  const d = form.days
+  const action: Record<string, string> = {
+    all: `删除早于 ${d} 天的事件与未关联商品、清理已售商品关联，随后 VACUUM 压缩`,
+    old_events: `删除早于 ${d} 天的事件记录`,
+    old_items: `删除早于 ${d} 天且未关联任务的商品记录`,
+    sold_items: '删除已售商品的关联记录（该分支不看天数）',
+    vacuum: '执行 VACUUM 压缩数据库文件',
+  }
+  const isVacuum = form.target === 'vacuum'
+  return {
+    action: action[form.target] ?? '清理数据库历史数据',
+    scope: isVacuum
+      ? '只重排数据库文件、回收空闲页；不删除任何业务记录'
+      : '裁剪数据库历史记录；不影响配置与浏览器登录态。确切条数请先用「预览」确认',
+    count: db ? `当前库内 任务 ${db.tasks} / 商品 ${db.items} / 事件 ${db.events}` : null,
+    recovery: isVacuum
+      ? '记录不会丢，但压缩过程无法中途恢复原文件；执行时间随库大小增长'
+      : '不可恢复；只能在「数据库维护」用导出备份回滚，前提是先有备份',
+  }
+}
+
+// 日志清理的确认文案：动作文案用 if 收敛，scope 再拼「大文件不看时间」的提示
+function logsDangerCopy(form: CleanupBody, status: StorageStatus | null): DangerCopy {
+  const days = form.days
+  const bigFile = form.target === 'large_logs' || form.target === 'all'
+  let action: string
+  if (form.target === 'large_logs') {
+    action = '删除体积超过 10MB 的日志文件'
+  } else if (form.target === 'all') {
+    action = `删除「早于 ${days} 天」或「超过 10MB」的日志文件`
+  } else {
+    action = `删除修改时间早于 ${days ?? '—'} 天的日志文件`
   }
   const lg = status?.logs
-  const bigFile = form.target === 'large_logs' || form.target === 'all'
   return {
-    action: form.target === 'large_logs' ? '删除体积超过 10MB 的日志文件'
-      : form.target === 'all' ? `删除「早于 ${days} 天」或「超过 10MB」的日志文件`
-        : `删除修改时间早于 ${days ?? '—'} 天的日志文件`,
+    action,
     scope: '只删 logs/ 下的历史文本日志；不包含数据库事件记录'
       + (bigFile ? '。注意：大文件分支不看修改时间，当日日志只要超过 10MB 也会被删' : ''),
     count: lg ? `当前日志 ${lg.file_count} 个共 ${lg.total_size_mb} MB` : null,
     recovery: '删除后历史日志找不回，只能依赖数据库事件与「错误日志」页的留存数据',
   }
+}
+
+// 按清理对象分派（S3776：把三个分支体拆成具名小函数，主函数只剩两次判断）
+function mobileDangerCopy(
+  target: CleanupTarget,
+  form: CleanupBody,
+  status: StorageStatus | null,
+): DangerCopy {
+  if (target === 'cache') return cacheDangerCopy(form, status)
+  if (target === 'database') return databaseDangerCopy(form, status)
+  return logsDangerCopy(form, status)
 }
 
 // 缓存清理选项由 utils/cacheTargets 统一生成（与桌面端同一份措辞 + 同一套「不适用」置灰）
@@ -146,7 +175,7 @@ export default function MobileCleanup() {
 
   // 实际执行后刷新状态
   const cleanup = async (
-    target: 'cache' | 'database' | 'logs',
+    target: CleanupTarget,
     body: CleanupBody,
     setLoading_: (v: boolean) => void,
     setResult: (r: CleanupResult | null) => void,
@@ -173,7 +202,7 @@ export default function MobileCleanup() {
 
   // 实际执行按钮（带 Popconfirm 二次确认）
   const renderExecuteButton = (
-    target: 'cache' | 'database' | 'logs',
+    target: CleanupTarget,
     form: CleanupBody,
     loading: boolean,
     setLoading_: (v: boolean) => void,

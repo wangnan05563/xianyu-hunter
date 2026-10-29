@@ -291,16 +291,18 @@ def _reset_cache_for_test() -> None:
     _cache["fetched_at"] = 0.0
 
 
-# ---------------------------------------------------------------------------
-# 一键下载安装更新
-# ---------------------------------------------------------------------------
-# 下载状态存放目录：data/updates/ （与上一版构建产物目录一致）
+# 一键下载安装更新：下载状态记录、后台下载任务与安装启动入口
+# 下载状态存放在 data 目录下的 updates 子目录（与上一版构建产物目录一致）
 _UPDATES_DIR = get_data_dir() / "updates"
 
-# 内存下载任务表：{download_url: DownloadTask}
+# 内存下载任务表：键为 download_url，值为对应的 DownloadTask 记录
 # 为什么用内存表而非 DB：下载是短生命周期后台任务，进程内记录足够；
 # 进程重启后未完成的下载丢弃，由前端重新发起（断点续传非首版目标）
 _download_tasks: dict[str, dict[str, Any]] = {}
+
+# 后台下载任务的强引用集合：asyncio 只对 task 持弱引用，局部变量出栈后若无人引用，
+# task 可能被 GC 导致下载中途被取消；任务结束后通过 done_callback 自动移出集合
+_background_tasks: set[asyncio.Task[Any]] = set()
 
 
 def _updates_dir() -> Path:
@@ -366,17 +368,24 @@ async def _run_download(url: str, task: dict[str, Any]) -> None:
         if os.path.exists(dest) and dest.stat().st_size > 0:
             dest.unlink()
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=30.0)) as client:
+        # httpx 0.28 起 Timeout 必须给默认值或给全四项，只写 connect/read 会直接
+        # ValueError（改前这条下载路径一进就炸，只是没有测试覆盖到真实客户端）
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
             async with client.stream("GET", url, headers=headers) as resp:
                 resp.raise_for_status()
                 total = int(resp.headers.get("content-length", "0") or 0)
                 task["total"] = total
                 done = 0
-                with open(dest, "wb") as f:
+                # 文件的打开与写入都放到线程池执行，避免同步磁盘 IO 阻塞事件循环；
+                # 仍是边下边写（不做全量入内存），关闭放在 finally 保证异常路径一致
+                file_handle = await asyncio.to_thread(open, dest, "wb")
+                try:
                     async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
-                        f.write(chunk)
+                        await asyncio.to_thread(file_handle.write, chunk)
                         done += len(chunk)
                         task["bytes_downloaded"] = done
+                finally:
+                    file_handle.close()
         task["status"] = "done"
         task["bytes_downloaded"] = done
         task["path"] = str(dest)
@@ -407,7 +416,10 @@ async def update_download(download_url: str = "", latest: str = "") -> dict[str,
     if task is None:
         task = {"status": "pending", "total": 0, "bytes_downloaded": 0, "latest": latest}
         _download_tasks[url] = task
-        asyncio.create_task(_run_download(url, task))
+        download_task = asyncio.create_task(_run_download(url, task))
+        # 持有强引用，防止 task 被 GC 后下载中途消失；完成后自动移出集合
+        _background_tasks.add(download_task)
+        download_task.add_done_callback(_background_tasks.discard)
 
     return {
         "ok": True,
@@ -448,7 +460,9 @@ async def update_install(download_url: str = Body(default="", embed=True)) -> di
         #   /SP-               跳过"是否确认安装"提示
         #   /NORESTART         安装完成后不强制重启系统
         # 安装程序自身会触发 UAC 提权弹窗，无需本进程提前提权
-        subprocess.Popen(
+        # Popen 只负责启动，不等待安装结束；放线程池执行以免阻塞事件循环
+        await asyncio.to_thread(
+            subprocess.Popen,
             [setup_path, "/VERYSILENT", "/SP-", "/NORESTART", "/SUPPRESSMSGBOXES"],
             close_fds=True,
         )

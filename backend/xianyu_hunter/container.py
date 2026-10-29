@@ -142,6 +142,75 @@ def _resolve_subscribed_events(config_events: list[str] | None) -> set[EventType
     return subscribed_events
 
 
+def _build_task_from_raw(
+    raw: dict,
+    search_override: dict | None,
+    price_override: dict | None,
+    eval_override: dict | None,
+) -> Task:
+    """从 DB raw task dict 构造 Task 领域对象（None 字段沿用缺省值）"""
+    return Task(
+        id=raw["id"],
+        name=raw.get("name", raw["id"]),
+        keyword=raw["keyword"],
+        min_price=raw.get("min_price"),
+        max_price=raw.get("max_price"),
+        exclude_words=raw.get("exclude_words") or [],
+        region=raw.get("region"),
+        # T02963 裁决：默认值统一到 notify（不自动下单）；旧行 mode 列为 NOT NULL，
+        # 这里的兜底只覆盖手写 raw dict 的调用方
+        mode=TaskMode(raw.get("mode") or TaskMode.NOTIFY_ONLY.value),
+        search_filters=raw.get("search_filters") or [],
+        # 用 or 防御 NULL：迁移后的旧行可能为 None
+        cron=raw.get("cron") or "*/1 * * * *",
+        use_cron=bool(raw.get("use_cron") or 0),
+        interval_seconds=float(raw.get("interval_seconds") or 60.0),
+        # 捡漏价格触发开关：DB 存 INTEGER(0/1)，bool() 转换
+        notify_bargain_only=bool(raw.get("notify_bargain_only") or 0),
+        auto_buy_bargain_only=bool(raw.get("auto_buy_bargain_only") or 0),
+        # 演练模式：迁移前旧行可能为 None，or 0 兜底
+        dry_run=bool(raw.get("dry_run") or 0),
+        eval_threshold=raw.get("eval_threshold"),
+        ai_prompt=raw.get("ai_prompt"),
+        search_config=search_override,
+        price_config=price_override,
+        eval_config=eval_override,
+    )
+
+
+def _merge_task_search_config(
+    search_cfg: Any, override: dict | None
+) -> dict[str, Any]:
+    """合并任务级 search_config 覆盖到全局 search 配置（键不存在时沿用全局）"""
+    effective_search: dict[str, Any] = {
+        "page_size": search_cfg.page_size,
+        "sort_type": search_cfg.sort_type,
+        "timeout": search_cfg.timeout,
+        "regions": search_cfg.regions,
+        "filter_tags": search_cfg.filter_tags,
+        "max_pages": search_cfg.max_pages,
+    }
+    if override:
+        for k in effective_search:
+            if k in override:
+                effective_search[k] = override[k]
+    return effective_search
+
+
+def _official_collect_partial(container: Any):
+    """构造官方采集回调 partial；延迟导入避免循环依赖（startup → app → container）
+
+    partial 绑定 container：worker 调用 fn(item_id, task_id) 时实际执行
+    _call_official_collect(container, item_id, task_id)。无法导入时返回 None。
+    """
+    try:
+        from functools import partial
+        from xianyu_hunter.web.startup import _call_official_collect
+        return partial(_call_official_collect, container)
+    except ImportError:
+        return None
+
+
 class PriorityBrowserLock:
     """优先级浏览器锁
 
@@ -319,51 +388,15 @@ class Container:
         task_price_override = _parse_json_field(raw.get("price_config"), "price_config")
         task_eval_override = _parse_json_field(raw.get("eval_config"), "eval_config")
 
-        task = Task(
-            id=raw["id"],
-            name=raw.get("name", raw["id"]),
-            keyword=raw["keyword"],
-            min_price=raw.get("min_price"),
-            max_price=raw.get("max_price"),
-            exclude_words=raw.get("exclude_words") or [],
-            region=raw.get("region"),
-            # T02963 裁决：默认值统一到 notify（不自动下单）；旧行 mode 列为 NOT NULL，
-            # 这里的兜底只覆盖手写 raw dict 的调用方
-            mode=TaskMode(raw.get("mode") or TaskMode.NOTIFY_ONLY.value),
-            search_filters=raw.get("search_filters") or [],
-            # 用 or 防御 NULL：迁移后的旧行可能为 None
-            cron=raw.get("cron") or "*/1 * * * *",
-            use_cron=bool(raw.get("use_cron") or 0),
-            interval_seconds=float(raw.get("interval_seconds") or 60.0),
-            # 捡漏价格触发开关：DB 存 INTEGER(0/1)，bool() 转换
-            notify_bargain_only=bool(raw.get("notify_bargain_only") or 0),
-            auto_buy_bargain_only=bool(raw.get("auto_buy_bargain_only") or 0),
-            # 演练模式：迁移前旧行可能为 None，or 0 兜底
-            dry_run=bool(raw.get("dry_run") or 0),
-            eval_threshold=raw.get("eval_threshold"),
-            ai_prompt=raw.get("ai_prompt"),
-            search_config=task_search_override,
-            price_config=task_price_override,
-            eval_config=task_eval_override,
+        task = _build_task_from_raw(
+            raw, task_search_override, task_price_override, task_eval_override
         )
 
         # 复用公共方法构造任务级价格策略，避免逻辑重复
         worker_price_strategy = self.build_task_price_strategy(raw)
 
         # 合并任务级搜索参数覆盖
-        search_cfg = self.config.search
-        effective_search = {
-            "page_size": search_cfg.page_size,
-            "sort_type": search_cfg.sort_type,
-            "timeout": search_cfg.timeout,
-            "regions": search_cfg.regions,
-            "filter_tags": search_cfg.filter_tags,
-            "max_pages": search_cfg.max_pages,
-        }
-        if task_search_override:
-            for k in effective_search:
-                if k in task_search_override:
-                    effective_search[k] = task_search_override[k]
+        effective_search = _merge_task_search_config(self.config.search, task_search_override)
         task_config = TaskConfig(
             search_page_size=effective_search["page_size"],
             search_sort_type=effective_search["sort_type"],
@@ -376,14 +409,7 @@ class Container:
         )
 
         # P1: 注入官方采集回调，延迟导入避免循环依赖（startup → app → container）
-        # partial 绑定 container：worker 调用 fn(item_id, task_id) 时实际执行
-        # _call_official_collect(self, item_id, task_id)
-        try:
-            from functools import partial
-            from xianyu_hunter.web.startup import _call_official_collect
-            official_collect_fn = partial(_call_official_collect, self)
-        except ImportError:
-            official_collect_fn = None
+        official_collect_fn = _official_collect_partial(self)
 
         return TaskWorker(
             task=task,

@@ -275,6 +275,53 @@ def _build_auth_me_result(has_cookie: bool, info: dict, valid_nick: str) -> dict
     }
 
 
+def _resolve_effective_uid(
+    current_uid: str | None, has_cookie: bool, cookie_user_id: str, info: dict,
+) -> str:
+    """解析用于同步昵称/展示的权威 user_id
+
+    优先级：会话 user_id > Cookie 文件 unb > userinfo 缓存 user_id。
+    无有效会话（current_uid 为空，如会话被 web_token 降级）时若返回空，
+    _sync_nick_to_users_table 会提前返回空，导致 users 表昵称不同步、
+    local_username 退化为裸 user_id，前端 UserMenu 直接显示"未登录"。
+    """
+    if current_uid:
+        return current_uid
+    from_cookies = _uid_from_cookies(get_cookie_store(), cookie_user_id) if has_cookie else ""
+    return from_cookies or info.get("user_id", "")
+
+
+def _resolve_display_name_source(
+    custom_alias: str, nickname: str, valid_nick: str, account_name: str,
+) -> str:
+    """展示名来源：供前端区分「闲鱼昵称」与「账号名兜底」
+
+    顺序：自定义别名 > users.nickname > userinfo 有效 nick > Cookie 账号名 > user_id。
+    """
+    if custom_alias:
+        return "custom_alias"
+    if nickname:
+        return "users_nickname"
+    if valid_nick:
+        return "userinfo_nick"
+    if account_name:
+        return "cookie_account"
+    return "user_id"
+
+
+def _read_nick_refresh_status(am) -> tuple[str, dict]:
+    """读取 userinfo 后台刷新状态，返回 (state, 原始状态 dict)
+
+    userinfo 刷新可观测：auth_helper 启动失败时前端要显示「昵称未同步」而非静默空值。
+    为什么做 isinstance 兜底：/me 的 AuthManager 在部分场景会被替换成桩对象，
+    刷新状态拿不到时降级为 never，不能让整个 /me 因此 500。
+    """
+    refresh_status = am.get_refresh_status() if hasattr(am, "get_refresh_status") else None
+    if not isinstance(refresh_status, dict):
+        refresh_status = {}
+    return str(refresh_status.get("state") or "never"), refresh_status
+
+
 @router.get("/me")
 def auth_me(request: Request, container: Container = Depends(get_container)):
     """返回当前登录用户信息（昵称/头像/user_id/local_username）
@@ -307,9 +354,9 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
 
     # 身份校正：会话 user_id 缺失（xh_token 过期/被 Secure 策略丢弃）时，
     # userinfo 缓存里的降级 user_id 在 users 表无记录，昵称同步与展示全部失效
-    effective_uid = current_uid or (
-        _uid_from_cookies(get_cookie_store(), cookie_user_id) if has_cookie else ""
-    ) or info.get("user_id", "")
+    effective_uid = _resolve_effective_uid(
+        current_uid, has_cookie, cookie_user_id, info
+    )
     if has_cookie and effective_uid and effective_uid != result.get("user_id"):
         result["user_id"] = effective_uid
 
@@ -336,24 +383,14 @@ def auth_me(request: Request, container: Container = Depends(get_container)):
     result["nickname"] = nickname
     result["custom_alias"] = custom_alias
     # 展示名来源：供前端区分「闲鱼昵称」与「账号名兜底」，避免把账号名标成闲鱼昵称
-    if custom_alias:
-        result["display_name_source"] = "custom_alias"
-    elif nickname:
-        result["display_name_source"] = "users_nickname"
-    elif valid_nick:
-        result["display_name_source"] = "userinfo_nick"
-    elif account_name:
-        result["display_name_source"] = "cookie_account"
-    else:
-        result["display_name_source"] = "user_id"
+    result["display_name_source"] = _resolve_display_name_source(
+        custom_alias, nickname, valid_nick, account_name
+    )
 
     # userinfo 刷新可观测：auth_helper 启动失败时前端要显示「昵称未同步」而非静默空值
     # 为什么做 isinstance 兜底：/me 的 AuthManager 在部分场景会被替换成桩对象，
     # 刷新状态拿不到时降级为 never，不能让整个 /me 因此 500
-    refresh_status = am.get_refresh_status() if hasattr(am, "get_refresh_status") else None
-    if not isinstance(refresh_status, dict):
-        refresh_status = {}
-    refresh_state = str(refresh_status.get("state") or "never")
+    refresh_state, refresh_status = _read_nick_refresh_status(am)
     result["nick_sync_state"] = refresh_state
     if refresh_state == "failed":
         result["nick_sync_error"] = str(refresh_status.get("error") or "")

@@ -152,6 +152,82 @@ export default function MobileChatbotConfig() {
     )
   }
 
+  // 欢迎语预览（失败 / 有数据 / 空三态）：用 if 提前 return，避免 JSX 里嵌套三元
+  const renderWelcomePreview = () => {
+    if (failed.welcome) {
+      return (
+        <LoadFailedBar
+          source={SOURCE_LABELS.welcome}
+          note="下面的内容不代表服务端状态"
+          onRetry={() => void loadAll()}
+        />
+      )
+    }
+    if (welcome) {
+      return (
+        <div style={{ fontSize: 14, padding: 12, background: themeToken.colorBgLayout, borderRadius: 6 }}>
+          {welcome.message || '(未配置欢迎语)'}
+        </div>
+      )
+    }
+    return <div style={{ fontSize: 13, color: themeToken.colorTextTertiary }}>未取到欢迎语，请重试</div>
+  }
+
+  // FAQ 列表（失败 / 空 / 有数据三态）：同上，用 if 提前 return
+  const renderFaqList = () => {
+    if (failed.faq) return null
+    if (faqs.length === 0) {
+      return <Empty description="暂无 FAQ" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变布局语义，暂不迁移 */ />
+    }
+    return (
+      <List
+        size="small"
+        dataSource={faqs}
+        renderItem={(faq) => (
+          <List.Item
+            key={faq.id}
+            actions={[
+              <Button
+                key="edit"
+                size="small"
+                type="text"
+                icon={<EditOutlined />}
+                onClick={() => openModal(faq)}
+              />,
+              <Button
+                key="del"
+                size="small"
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => deleteFaq(faq)}
+              />,
+            ]}
+          >
+            <List.Item.Meta
+              title={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 14 }}>{faq.question}</span>
+                  <Tag color="default" style={{ fontSize: 10 }}>{faq.category}</Tag>
+                </div>
+              }
+              description={
+                <div style={{ fontSize: 12, color: themeToken.colorTextSecondary }}>
+                  {faq.answer}
+                </div>
+              }
+            />
+            <Switch
+              size="small"
+              checked={faq.enabled}
+              onChange={(v) => void toggleFaq(faq, v)}
+            />
+          </List.Item>
+        )}
+      />
+    )
+  }
+
   return (
     <div>
       {failed.faq && <LoadFailedBar source={SOURCE_LABELS.faq} onRetry={() => void loadAll()} />}
@@ -175,19 +251,7 @@ export default function MobileChatbotConfig() {
         title="欢迎语预览"
         extra={<Tag color="blue">仅展示</Tag>}
       >
-        {failed.welcome ? (
-          <LoadFailedBar
-            source={SOURCE_LABELS.welcome}
-            note="下面的内容不代表服务端状态"
-            onRetry={() => void loadAll()}
-          />
-        ) : welcome ? (
-          <div style={{ fontSize: 14, padding: 12, background: themeToken.colorBgLayout, borderRadius: 6 }}>
-            {welcome.message || '(未配置欢迎语)'}
-          </div>
-        ) : (
-          <div style={{ fontSize: 13, color: themeToken.colorTextTertiary }}>未取到欢迎语，请重试</div>
-        )}
+        {renderWelcomePreview()}
       </Card>
 
       {/* FAQ 列表 */}
@@ -206,55 +270,7 @@ export default function MobileChatbotConfig() {
           </Button>
         }
       >
-        {failed.faq ? null : faqs.length === 0 ? (
-          <Empty description="暂无 FAQ" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变布局语义，暂不迁移 */ />
-        ) : (
-          <List
-            size="small"
-            dataSource={faqs}
-            renderItem={(faq) => (
-              <List.Item
-                key={faq.id}
-                actions={[
-                  <Button
-                    key="edit"
-                    size="small"
-                    type="text"
-                    icon={<EditOutlined />}
-                    onClick={() => openModal(faq)}
-                  />,
-                  <Button
-                    key="del"
-                    size="small"
-                    type="text"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => deleteFaq(faq)}
-                  />,
-                ]}
-              >
-                <List.Item.Meta
-                  title={
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: 14 }}>{faq.question}</span>
-                      <Tag color="default" style={{ fontSize: 10 }}>{faq.category}</Tag>
-                    </div>
-                  }
-                  description={
-                    <div style={{ fontSize: 12, color: themeToken.colorTextSecondary }}>
-                      {faq.answer}
-                    </div>
-                  }
-                />
-                <Switch
-                  size="small"
-                  checked={faq.enabled}
-                  onChange={(v) => void toggleFaq(faq, v)}
-                />
-              </List.Item>
-            )}
-          />
-        )}
+        {renderFaqList()}
       </Card>
 
       {/* 编辑/新增 Modal */}

@@ -27,6 +27,23 @@ export function summarizeDryRunTasks(names: string[]): string {
   return head
 }
 
+/** 列表项里判定「演练中」所需的最小字段（Task 类型未声明 dry_run，此处按可选字段收窄） */
+type DryRunListedTask = {
+  readonly dry_run?: number | boolean
+  readonly status: string
+  readonly name: string
+}
+
+/**
+ * 挑出「演练模式 + 正在运行」的任务名。
+ * S2004：原来内联在 useEffect → then 回调里，叠加 filter/map 回调超过 4 层，提到模块级。
+ */
+function pickRunningDryRunNames(items: readonly DryRunListedTask[]): string[] {
+  return items
+    .filter((t) => t.dry_run && t.status === TASK_STATUS.RUNNING)
+    .map((t) => t.name)
+}
+
 export default function DryRunBanner() {
   const [dryRunTaskNames, setDryRunTaskNames] = useState<string[]>([])
 
@@ -36,11 +53,7 @@ export default function DryRunBanner() {
       taskApi.list({ limit: 200 })
         .then((res) => {
           if (cancelled) return
-          const names = res.items
-            .filter((t) => (t as { dry_run?: number | boolean }).dry_run
-              && t.status === TASK_STATUS.RUNNING)
-            .map((t) => t.name)
-          setDryRunTaskNames(names)
+          setDryRunTaskNames(pickRunningDryRunNames(res.items))
         })
         .catch(() => { /* 拉取失败保持现状，不打扰用户 */ })
     }

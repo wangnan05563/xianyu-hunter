@@ -122,6 +122,9 @@ export default function MobileLogs() {
     return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
   }
 
+  // 空态：拉取失败时不能显示「暂无」，两种状态分开放，避免 JSX 里嵌套三元
+  const emptyState = failed.logs ? null : <Empty description="暂无日志" />
+
   return (
     <div>
       {/* 过滤栏 + 轮询控制 */}
@@ -205,7 +208,7 @@ export default function MobileLogs() {
       )}
 
       {entries.length === 0 ? (
-        failed.logs ? null : <Empty description="暂无日志" />
+        emptyState
       ) : (
         entries.map((item, idx) => {
           // level 归一化后取色与展示：后端已统一写小写全词（error/warning/info/debug），

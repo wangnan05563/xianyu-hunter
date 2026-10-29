@@ -18,7 +18,7 @@ export const FIRST_SCREEN_STAGE_LABELS: Record<FirstScreenStage, string> = {
  * 三段 Spin 高度都是 100vh 居中的一个小转圈，切换时整屏闪三次且没有任何结构预告。
  * 这里一次渲染出与真实外壳同构的骨架（Header + Sider + Content），只在底部保留阶段文案。
  */
-export default function FirstScreenSkeleton({ stage }: { stage: FirstScreenStage }) {
+export default function FirstScreenSkeleton({ stage }: { readonly stage: FirstScreenStage }) {
   return (
     <Layout style={{ minHeight: '100vh' }} role="status" aria-live="polite">
       <Header style={{ height: 56, lineHeight: '56px', padding: '0 24px', background: '#fff' }}>

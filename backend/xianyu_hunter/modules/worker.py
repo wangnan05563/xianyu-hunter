@@ -1003,14 +1003,8 @@ class TaskWorker:
             )
             return None
         # 自动下单触发开关过滤：价格 > P10 时跳过抢单
-        if getattr(self.task, "auto_buy_bargain_only", False):
-            bargain = self._get_task_bargain_price()
-            if bargain is not None and detail.price is not None and detail.price > bargain:
-                logger.info(
-                    "[Task {}] {} 价格 {} > 捡漏价 {}，auto_buy_bargain_only 开关过滤跳过抢单",
-                    self.task.id, detail.id, detail.price, bargain,
-                )
-                return None
+        if self._bargain_filter_skips(detail):
+            return None
         # buyer 未注入时跳过落单：with_browser=False 模式下 container.buyer 为 None，
         # 或浏览器启动失败后 Buyer 仍可能未就绪。此时不应抛出 AttributeError 中断流程
         if self.buyer is None:
@@ -1037,28 +1031,7 @@ class TaskWorker:
         if buy_result.outcome == BuyOutcome.DRY_RUN_STOPPED:
             # 演练不计入 bought/failed 真实统计（PRD：演练与真实记录区分）；
             # 报告事件补齐评估得分/价格判定（Buyer 侧事件只有链路耗时）
-            try:
-                import json as _json
-
-                self.repo.save_event({
-                    "type": "task.buy_dry_run",
-                    "task_id": self.task.id,
-                    "stage": "buy_dry_run",
-                    "level": "info",
-                    "message": f"演练报告 {detail.id}：评估分 {eval_result.score}，预期价 {detail.price}",
-                    "payload": _json.dumps({
-                        "item_id": detail.id,
-                        "eval_score": eval_result.score,
-                        "expected_price": detail.price,
-                        "timings": buy_result.dry_run_timings or {},
-                        "stop_reason": buy_result.error,
-                    }, ensure_ascii=False),
-                })
-            except Exception as e:  # noqa: BLE001
-                logger.debug("[Task {}] 演练报告事件写入失败: {}", self.task.id, e)
-            logger.info(
-                f"[Task {self.task.id}] 演练中止 {detail.id}：订单确认页已打开，未产生真实订单"
-            )
+            self._report_dry_run_buy(detail, eval_result, buy_result)
             return None
         if buy_result.outcome == BuyOutcome.SUCCESS:
             stats.bought += 1
@@ -1071,6 +1044,49 @@ class TaskWorker:
         else:
             stats.failed += 1
         return None
+
+    def _bargain_filter_skips(self, detail: Any) -> bool:
+        """auto_buy_bargain_only 开关过滤：启用且价格高于捡漏价 P10 时返回 True"""
+        if not getattr(self.task, "auto_buy_bargain_only", False):
+            return False
+        bargain = self._get_task_bargain_price()
+        is_over_bargain = (
+            bargain is not None and detail.price is not None and detail.price > bargain
+        )
+        if not is_over_bargain:
+            return False
+        logger.info(
+            "[Task {}] {} 价格 {} > 捡漏价 {}，auto_buy_bargain_only 开关过滤跳过抢单",
+            self.task.id, detail.id, detail.price, bargain,
+        )
+        return True
+
+    def _report_dry_run_buy(
+        self, detail: Any, eval_result: EvalResult, buy_result: BuyResult
+    ) -> None:
+        """演练报告事件：补齐评估得分/价格判定（Buyer 侧事件只有链路耗时）"""
+        try:
+            import json as _json
+
+            self.repo.save_event({
+                "type": "task.buy_dry_run",
+                "task_id": self.task.id,
+                "stage": "buy_dry_run",
+                "level": "info",
+                "message": f"演练报告 {detail.id}：评估分 {eval_result.score}，预期价 {detail.price}",
+                "payload": _json.dumps({
+                    "item_id": detail.id,
+                    "eval_score": eval_result.score,
+                    "expected_price": detail.price,
+                    "timings": buy_result.dry_run_timings or {},
+                    "stop_reason": buy_result.error,
+                }, ensure_ascii=False),
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[Task {}] 演练报告事件写入失败: {}", self.task.id, e)
+        logger.info(
+            f"[Task {self.task.id}] 演练中止 {detail.id}：订单确认页已打开，未产生真实订单"
+        )
 
     async def _close_shared_pages(self, shared_pages: dict) -> None:
         """关闭复用的详情页和卖家页，避免页面泄漏"""

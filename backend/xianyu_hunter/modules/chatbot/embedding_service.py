@@ -188,6 +188,14 @@ class EmbeddingService:
         if is_ai_disabled():
             raise RuntimeError("远程 Embedding 批量调用已被 AI 总开关关闭")
 
+        return await self._embed_batch_remote(texts, progress_cb=progress_cb)
+
+    async def _embed_batch_remote(
+        self,
+        texts: list[str],
+        progress_cb: Callable[[int, int], None] | None = None,
+    ) -> tuple[list[list[float]], list[int]]:
+        """远程模式批量向量化：每条独立并发 + 重试 3 次，按原始顺序聚合结果"""
         # 远程模式：单条并发 + 重试
         # 用 dict 保存成功结果，按原始 idx 聚合，最后按顺序输出
         results: dict[int, list[float]] = {}

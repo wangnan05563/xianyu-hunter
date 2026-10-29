@@ -654,24 +654,9 @@ class ItemCollectionService:
             # observe_price 内部完成「旧最低价基线 → 写快照（同值去重）→ 检测三路通知」；
             # source 映射：live=实时搜索/手动刷新 → live_search，其余 → detail
             if detail.price is not None:
-                try:
-                    from xianyu_hunter.modules.price_watch import observe_price
-
-                    snapshot_source = "live_search" if source == "live" else "detail"
-                    observe_price(
-                        self.container.repo,
-                        getattr(self.container, "event_bus", None),
-                        item_id,
-                        detail.price,
-                        snapshot_source,
-                        task_id=effective_task_id or None,
-                        user_id=user_id,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "价格快照/降价检测失败（不影响详情落库）: %s", e,
-                    )
+                self._record_detail_price_snapshot(
+                    item_id, detail.price, source, effective_task_id, user_id
+                )
         if detail.is_sold:
             self.container.repo.mark_sold(item_id)
         if effective_task_id and not is_delisted:
@@ -691,6 +676,34 @@ class ItemCollectionService:
             detail=detail,
             changed_fields=changed_fields,
         )
+
+    def _record_detail_price_snapshot(
+        self,
+        item_id: str,
+        price: float,
+        source: str,
+        effective_task_id: str,
+        user_id: str | None,
+    ) -> None:
+        """详情链路写价格快照并检测降价；失败不影响详情落库"""
+        try:
+            from xianyu_hunter.modules.price_watch import observe_price
+
+            snapshot_source = "live_search" if source == "live" else "detail"
+            observe_price(
+                self.container.repo,
+                getattr(self.container, "event_bus", None),
+                item_id,
+                price,
+                snapshot_source,
+                task_id=effective_task_id or None,
+                user_id=user_id,
+            )
+        except Exception as e:  # noqa: BLE001
+            import logging
+            logging.getLogger(__name__).warning(
+                "价格快照/降价检测失败（不影响详情落库）: %s", e,
+            )
 
     async def _sync_detail_cookies(self) -> None:
         try:

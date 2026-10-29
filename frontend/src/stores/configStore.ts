@@ -122,7 +122,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   changedPaths: () => {
     const { config, original } = get()
     if (!config || !original) return []
-    return collectChangedPaths(config, original).sort()
+    return collectChangedPaths(config, original).sort((a, b) => a.localeCompare(b))
   },
 
   dirtyPathsInScope: (scope) => {

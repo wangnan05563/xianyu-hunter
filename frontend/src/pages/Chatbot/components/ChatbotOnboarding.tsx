@@ -89,30 +89,36 @@ export default function ChatbotOnboarding({ onQuestionClick, onDismiss }: Props)
     ? personalizeWelcome(welcome.message, false)
     : '有什么可以帮您的？'
 
-  // 常见问题区：提取为独立变量消除嵌套三元 (typescript:S3358)
-  const faqSection = loading ? (
-    <Skeleton active paragraph={{ rows: 2 }} title={false} />
-  ) : faqs.length === 0 ? (
-    <Empty
-      image={Empty.PRESENTED_IMAGE_SIMPLE}
-      description="暂无常见问题"
-      style={{ margin: '24px 0', color: 'var(--cb-text-tertiary)' }}
-    />
-  ) : (
-    <div className="cb-faq-grid">
-      {faqs.map((faq) => (
-        <button
-          type="button"
-          key={faq.id}
-          className="cb-faq-card"
-          onClick={() => onQuestionClick(faq.question)}
-        >
-          <span className="cb-faq-question">{faq.question}</span>
-          <ArrowRightOutlined className="cb-faq-arrow" />
-        </button>
-      ))}
-    </div>
-  )
+  // 常见问题区：拆成带 if 提前 return 的渲染函数，消除嵌套三元 (typescript:S3358)
+  const renderFaqSection = () => {
+    if (loading) {
+      return <Skeleton active paragraph={{ rows: 2 }} title={false} />
+    }
+    if (faqs.length === 0) {
+      return (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="暂无常见问题"
+          style={{ margin: '24px 0', color: 'var(--cb-text-tertiary)' }}
+        />
+      )
+    }
+    return (
+      <div className="cb-faq-grid">
+        {faqs.map((faq) => (
+          <button
+            type="button"
+            key={faq.id}
+            className="cb-faq-card"
+            onClick={() => onQuestionClick(faq.question)}
+          >
+            <span className="cb-faq-question">{faq.question}</span>
+            <ArrowRightOutlined className="cb-faq-arrow" />
+          </button>
+        ))}
+      </div>
+    )
+  }
   return (
     <div className="cb-onboarding">
       <TipButton
@@ -146,7 +152,7 @@ export default function ChatbotOnboarding({ onQuestionClick, onDismiss }: Props)
         {/* 常见问题快捷入口 */}
         <div className="cb-onboarding-section">
           <div className="cb-onboarding-section-title">常见问题</div>
-          {faqSection}
+          {renderFaqSection()}
         </div>
 
         {/* 使用提示 */}

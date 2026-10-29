@@ -134,48 +134,14 @@ class Buyer:
         key = (task_id, item_id)
 
         async with self._lock:
-            if not dry_run and key in self._task_item_set:
-                logger.info(f"[Buyer] 任务 {task_id} 内已下过 {item_id}，幂等跳过")
-                return BuyResult(outcome=BuyOutcome.SKIPPED_DUPLICATE, error="in-process duplicate")
-
-            # DB 幂等：跨进程重启后仍能识别
-            existing = None if dry_run else self.repo.find_order_by_task_item(task_id, item_id)
-            if existing:
-                # set 语义用 LRUDict[key]=None 模拟（值无意义）
-                self._task_item_set[key] = None
-                logger.info(
-                    f"[Buyer] DB 已存在订单 {existing.get('id')}，幂等跳过"
-                )
-                return BuyResult(
-                    outcome=BuyOutcome.SKIPPED_DUPLICATE,
-                    order=OrderSnapshot(
-                        item_id=item_id,
-                        order_no=existing.get("order_no", ""),
-                        price=existing.get("price", 0.0),
-                        status=OrderStatus(existing.get("status", OrderStatus.PENDING_PAY.value)),
-                    ),
-                    error="db duplicate",
-                )
+            duplicate = self._check_duplicate(task_id, item_id, key, dry_run)
+            if duplicate is not None:
+                return duplicate
 
             # 2.5 单日真实落单上限护栏（FR-A-4 / T02589）
-            # 演练（dry_run）不产生真实订单：既不占额度，也不受额度限制
-            if not dry_run:
-                limit = self._daily_order_limit()
-                if limit > 0:
-                    today_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-                    used = self.repo.count_real_orders_since(today_start)
-                    if used >= limit:
-                        logger.warning(
-                            f"[Buyer] 单日抢单上限 {limit} 已用尽（今日已真实落单 {used} 次），"
-                            f"拦截 {item_id}"
-                        )
-                        return BuyResult(
-                            outcome=BuyOutcome.FAILED,
-                            error=(
-                                f"单日抢单上限 {limit} 已用尽（本 UTC 自然日已真实落单 {used} 次），"
-                                "本次被护栏拦截；可在「抢单策略 → 抢单运行时参数」调整"
-                            ),
-                        )
+            limit_hit = self._check_daily_limit(item_id, dry_run)
+            if limit_hit is not None:
+                return limit_hit
 
             # 3. 节流：两次落单间最小间隔
             wait = self.config.min_interval_between_orders - (time.monotonic() - self._last_buy_at)
@@ -183,79 +149,14 @@ class Buyer:
                 await asyncio.sleep(wait)
 
             # 频率伪装统计：记录落单请求，但不引入额外延迟
-            # 抢单是秒级竞争，LOGIN 类型 5-60s 延迟会导致抢单失败，故仅记录统计
-            # try-except 防止 orchestrator 初始化异常影响抢单主流程
-            try:
-                from xianyu_hunter.modules.login_orchestrator import get_orchestrator
-                from xianyu_hunter.modules.freq_disguise import ActionType
-                get_orchestrator().record_freq_request(ActionType.LOGIN)
-            except Exception:  # noqa: BLE001
-                logger.warning("[Buyer] record_freq_request 失败，忽略不影响抢单")
+            self._record_freq_request()
 
             # 4. 实际落单流程（90 秒总体超时：防止浏览器操作无限阻塞）
-            try:
-                order = await asyncio.wait_for(
-                    self._do_buy(item_id, expected_price, page, dry_run=dry_run),
-                    timeout=90.0,
-                )
-                # 演练中止：_do_buy 返回 None 表示已在中止点安全停下（FR-C3-2）。
-                # 不置幂等标记——演练可对同一商品重复执行；演练报告写 orders 表
-                # （type=dry_run，与真实记录同表区分，PRD FR-C3-3）
-                if dry_run:
-                    timings = self._last_dry_run_timings or {}
-                    self._record_dry_run_order(task_id, item_id, expected_price, timings)
-                    self._record_dry_run_event(task_id, item_id, expected_price, timings)
-                    return BuyResult(
-                        outcome=BuyOutcome.DRY_RUN_STOPPED,
-                        order=OrderSnapshot(
-                            item_id=item_id,
-                            order_no="",
-                            price=expected_price,
-                            status=OrderStatus.PENDING_PAY,
-                        ),
-                        error="dry_run: 已到订单确认页，提交订单前硬中止（未产生真实订单）",
-                        dry_run_timings=timings,
-                    )
-                # 补全 task_id 关联（_do_buy 不接收 task_id，在调用方补充）
-                order["task_id"] = task_id
-            except BuyerError as e:
-                # 演练异常不写真实失败订单（orders 表只承载真实下单结果），仅记日志
-                if dry_run:
-                    logger.warning(f"[Buyer] 演练异常 task={task_id} item={item_id}: {e}")
-                    return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 异常: {e}")
-                # 记录失败订单（便于后续分析）+ 发布事件
-                self._save_failed_order(task_id, item_id, str(e))
-                self._publish_buy_failed(task_id, item_id, str(e))
-                return BuyResult(outcome=BuyOutcome.FAILED, error=str(e))
-            except asyncio.TimeoutError:
-                # 90 秒总体超时：通常意味着闲鱼页面加载异常或会话失效（RGV587_ERROR）
-                # 不走通用 Exception 分支：错误信息需对用户明确指出"超时"而非"未知异常"
-                msg = "浏览器自动化流程超时（90秒），请检查闲鱼登录状态后重试"
-                logger.warning(f"[Buyer] 落单超时 task={task_id} item={item_id}")
-                if dry_run:
-                    return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 超时: {msg}")
-                self._save_failed_order(task_id, item_id, msg)
-                self._publish_buy_failed(task_id, item_id, msg)
-                return BuyResult(outcome=BuyOutcome.FAILED, error=msg)
-            except Exception as e:  # noqa: BLE001
-                logger.exception("[Buyer] 落单未预期异常")
-                # 捕获到 error_logs 表，抢单异常是高优先级业务错误，需要可视化追踪
-                try:
-                    from xianyu_hunter.web.middleware.error_capture import capture_background_error
-                    capture_background_error(e, context={
-                        "source": "buyer._do_buy",
-                        "task_id": task_id,
-                        "item_id": item_id,
-                        "expected_price": expected_price,
-                    })
-                except Exception:
-                    pass
-                if dry_run:
-                    # 演练异常不写真实失败订单：orders 表只承载真实下单结果
-                    return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 异常: {e}")
-                self._save_failed_order(task_id, item_id, f"unexpected: {e}")
-                self._publish_buy_failed(task_id, item_id, str(e))
-                return BuyResult(outcome=BuyOutcome.FAILED, error=str(e))
+            order, early_result = await self._run_buy_attempt(
+                task_id, item_id, expected_price, page, dry_run
+            )
+            if early_result is not None:
+                return early_result
 
             # 5. 持久化 + 发布事件
             # T02832：归属按 task_id 反查，自动抢单的订单必须落在任务所有者名下
@@ -273,8 +174,198 @@ class Buyer:
                 ),
             )
 
+    def _check_duplicate(
+        self,
+        task_id: str,
+        item_id: str,
+        key: tuple[str, str],
+        dry_run: bool,
+    ) -> BuyResult | None:
+        """内存 + DB 双重幂等检查（调用方已持锁，消除 TOCTOU 竞态）
+
+        演练模式跳过幂等：演练可对同一商品反复执行（不产生订单，幂等记录不适用）。
+        """
+        if not dry_run and key in self._task_item_set:
+            logger.info(f"[Buyer] 任务 {task_id} 内已下过 {item_id}，幂等跳过")
+            return BuyResult(outcome=BuyOutcome.SKIPPED_DUPLICATE, error="in-process duplicate")
+
+        # DB 幂等：跨进程重启后仍能识别
+        existing = None if dry_run else self.repo.find_order_by_task_item(task_id, item_id)
+        if not existing:
+            return None
+        # set 语义用 LRUDict[key]=None 模拟（值无意义）
+        self._task_item_set[key] = None
+        logger.info(
+            f"[Buyer] DB 已存在订单 {existing.get('id')}，幂等跳过"
+        )
+        return BuyResult(
+            outcome=BuyOutcome.SKIPPED_DUPLICATE,
+            order=OrderSnapshot(
+                item_id=item_id,
+                order_no=existing.get("order_no", ""),
+                price=existing.get("price", 0.0),
+                status=OrderStatus(existing.get("status", OrderStatus.PENDING_PAY.value)),
+            ),
+            error="db duplicate",
+        )
+
+    def _check_daily_limit(self, item_id: str, dry_run: bool) -> BuyResult | None:
+        """单日真实落单上限护栏（FR-A-4 / T02589）
+
+        演练（dry_run）不产生真实订单：既不占额度，也不受额度限制。
+        """
+        if not dry_run:
+            limit = self._daily_order_limit()
+            if limit > 0:
+                today_start = _utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                used = self.repo.count_real_orders_since(today_start)
+                if used >= limit:
+                    logger.warning(
+                        f"[Buyer] 单日抢单上限 {limit} 已用尽（今日已真实落单 {used} 次），"
+                        f"拦截 {item_id}"
+                    )
+                    return BuyResult(
+                        outcome=BuyOutcome.FAILED,
+                        error=(
+                            f"单日抢单上限 {limit} 已用尽（本 UTC 自然日已真实落单 {used} 次），"
+                            "本次被护栏拦截；可在「抢单策略 → 抢单运行时参数」调整"
+                        ),
+                    )
+        return None
+
+    def _record_freq_request(self) -> None:
+        """频率伪装统计：记录落单请求，但不引入额外延迟
+
+        抢单是秒级竞争，LOGIN 类型 5-60s 延迟会导致抢单失败，故仅记录统计；
+        try-except 防止 orchestrator 初始化异常影响抢单主流程。
+        """
+        try:
+            from xianyu_hunter.modules.login_orchestrator import get_orchestrator
+            from xianyu_hunter.modules.freq_disguise import ActionType
+            get_orchestrator().record_freq_request(ActionType.LOGIN)
+        except Exception:  # noqa: BLE001
+            logger.warning("[Buyer] record_freq_request 失败，忽略不影响抢单")
+
+    async def _run_buy_attempt(
+        self,
+        task_id: str,
+        item_id: str,
+        expected_price: float,
+        page: Page | None,
+        dry_run: bool,
+    ) -> tuple[dict | None, BuyResult | None]:
+        """执行落单流程并归一异常
+
+        Returns:
+            (order, None) 表示待持久化的订单；order 为 None 时第二个元素是
+            应直接返回给调用方的 BuyResult（演练中止或各类失败）。
+        """
+        try:
+            order = await asyncio.wait_for(
+                self._do_buy(item_id, expected_price, page, dry_run=dry_run),
+                timeout=90.0,
+            )
+        except BuyerError as e:
+            return None, self._handle_buyer_error(task_id, item_id, e, dry_run)
+        except asyncio.TimeoutError:
+            return None, self._handle_buy_timeout(task_id, item_id, dry_run)
+        except Exception as e:  # noqa: BLE001
+            return None, self._handle_unexpected_error(
+                task_id, item_id, expected_price, e, dry_run
+            )
+
+        # 演练中止：_do_buy 返回 None 表示已在中止点安全停下（FR-C3-2）。
+        # 不置幂等标记——演练可对同一商品重复执行；演练报告写 orders 表
+        # （type=dry_run，与真实记录同表区分，PRD FR-C3-3）
+        if dry_run:
+            return None, self._finish_dry_run(task_id, item_id, expected_price)
+        # 补全 task_id 关联（_do_buy 不接收 task_id，在调用方补充）
+        # 留在同一层 try 内：_do_buy 万一返回非订单对象，仍走「未预期异常」归一，
+        # 而不是把 TypeError 抛给调用方（与重构前一致）
+        try:
+            order["task_id"] = task_id
+        except Exception as e:  # noqa: BLE001
+            return None, self._handle_unexpected_error(
+                task_id, item_id, expected_price, e, dry_run
+            )
+        return order, None
+
+    def _finish_dry_run(
+        self, task_id: str, item_id: str, expected_price: float
+    ) -> BuyResult:
+        """演练中止收尾：写演练报告与事件，返回 DRY_RUN_STOPPED 结果"""
+        timings = self._last_dry_run_timings or {}
+        self._record_dry_run_order(task_id, item_id, expected_price, timings)
+        self._record_dry_run_event(task_id, item_id, expected_price, timings)
+        return BuyResult(
+            outcome=BuyOutcome.DRY_RUN_STOPPED,
+            order=OrderSnapshot(
+                item_id=item_id,
+                order_no="",
+                price=expected_price,
+                status=OrderStatus.PENDING_PAY,
+            ),
+            error="dry_run: 已到订单确认页，提交订单前硬中止（未产生真实订单）",
+            dry_run_timings=timings,
+        )
+
+    def _handle_buyer_error(
+        self, task_id: str, item_id: str, error: BuyerError, dry_run: bool
+    ) -> BuyResult:
+        """可控抢单异常：演练仅记日志，真实链路记录失败订单并发布事件"""
+        # 演练异常不写真实失败订单（orders 表只承载真实下单结果），仅记日志
+        if dry_run:
+            logger.warning(f"[Buyer] 演练异常 task={task_id} item={item_id}: {error}")
+            return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 异常: {error}")
+        # 记录失败订单（便于后续分析）+ 发布事件
+        self._save_failed_order(task_id, item_id, str(error))
+        self._publish_buy_failed(task_id, item_id, str(error))
+        return BuyResult(outcome=BuyOutcome.FAILED, error=str(error))
+
+    def _handle_buy_timeout(
+        self, task_id: str, item_id: str, dry_run: bool
+    ) -> BuyResult:
+        """90 秒总体超时：通常意味着闲鱼页面加载异常或会话失效（RGV587_ERROR）"""
+        # 不走通用 Exception 分支：错误信息需对用户明确指出"超时"而非"未知异常"
+        msg = "浏览器自动化流程超时（90秒），请检查闲鱼登录状态后重试"
+        logger.warning(f"[Buyer] 落单超时 task={task_id} item={item_id}")
+        if dry_run:
+            return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 超时: {msg}")
+        self._save_failed_order(task_id, item_id, msg)
+        self._publish_buy_failed(task_id, item_id, msg)
+        return BuyResult(outcome=BuyOutcome.FAILED, error=msg)
+
+    def _handle_unexpected_error(
+        self,
+        task_id: str,
+        item_id: str,
+        expected_price: float,
+        error: Exception,
+        dry_run: bool,
+    ) -> BuyResult:
+        """未预期异常：记录 error_logs（高优先级业务错误需可视化追踪）后归一为 FAILED"""
+        logger.exception("[Buyer] 落单未预期异常")
+        # 捕获到 error_logs 表，抢单异常是高优先级业务错误，需要可视化追踪
+        try:
+            from xianyu_hunter.web.middleware.error_capture import capture_background_error
+            capture_background_error(error, context={
+                "source": "buyer._do_buy",
+                "task_id": task_id,
+                "item_id": item_id,
+                "expected_price": expected_price,
+            })
+        except Exception:
+            pass
+        if dry_run:
+            # 演练异常不写真实失败订单：orders 表只承载真实下单结果
+            return BuyResult(outcome=BuyOutcome.FAILED, error=f"dry_run 异常: {error}")
+        self._save_failed_order(task_id, item_id, f"unexpected: {error}")
+        self._publish_buy_failed(task_id, item_id, str(error))
+        return BuyResult(outcome=BuyOutcome.FAILED, error=str(error))
+
     def _record_dry_run_order(
-        self, task_id: str, item_id: str, expected_price: float, timings: dict
+        self, task_id: str, item_id: str, expected_price: float,
+        timings: dict,  # NOSONAR - 测试与调用点按四参约定传 timings，签名不能删
     ) -> None:
         """演练报告落抢单记录（PRD FR-C3-3，REQ-013）
 

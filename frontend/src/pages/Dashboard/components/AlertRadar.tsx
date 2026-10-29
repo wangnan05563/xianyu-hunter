@@ -38,6 +38,15 @@ function LowEvalItem({ e, onJump }: {
   )
 }
 
+type AlertToken = ReturnType<typeof theme.useToken>['token']
+
+// S3358：Badge 颜色按「接口失败优先 → 有失败单 → 警示色」推导，消除嵌套三元
+function resolveBadgeColor(loadError: boolean, failedCount: number, token: AlertToken): string {
+  if (loadError) return token.colorTextTertiary
+  if (failedCount > 0) return token.colorError
+  return token.colorWarning
+}
+
 export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, loadError }: AlertRadarProps) {
   // 从 antd token 读取主题色，自动响应主题切换
   const { token } = theme.useToken()
@@ -51,6 +60,12 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
   const alertCount = (alertData?.alerts?.counts?.failed ?? 0)
     + (alertData?.alerts?.counts?.timeout ?? 0)
     + (alertData?.alerts?.counts?.low_eval ?? 0)
+
+  const failedCount = alertData?.alerts?.counts?.failed ?? 0
+  // S3358：无数据时的兜底单独算好，避免在 children 里再套一层三元
+  const noDataBody = loadError
+    ? <FetchFailedHint source="异常雷达" onRetry={onReload} />
+    : <Spin />
 
   return (
     <Card style={{ marginTop: 16 }}
@@ -66,7 +81,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
           <Badge
             count={loadError ? '?' : alertCount}
             size="small"
-            style={{ marginLeft: 8, backgroundColor: loadError ? token.colorTextTertiary : (alertData?.alerts?.counts?.failed ?? 0) > 0 ? token.colorError : token.colorWarning }}
+            style={{ marginLeft: 8, backgroundColor: resolveBadgeColor(Boolean(loadError), failedCount, token) }}
           />
         </button>
       }
@@ -144,9 +159,7 @@ export default function AlertRadar({ alertData, alertOpen, onToggle, onReload, l
                 </Card>
               </Col>
             </Row>
-          ) : loadError ? (
-            <FetchFailedHint source="异常雷达" onRetry={onReload} />
-          ) : <Spin />,
+          ) : noDataBody,
         }]} />
     </Card>
   )

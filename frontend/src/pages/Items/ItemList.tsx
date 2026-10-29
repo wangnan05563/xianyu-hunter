@@ -161,6 +161,11 @@ function applyRefreshToDisplay(
   return d
 }
 
+// S6478：行展开内容改为模块级渲染函数，避免在组件内定义返回 JSX 的函数
+function renderPriceTrendRow(record: TaskLink) {
+  return <PriceTrendChart itemId={record.link_key ?? ''} />
+}
+
 export default function ItemList() {
   const navigate = useNavigate()
   // 搜索历史：商品标题关键词持久化到 localStorage，供快速复用
@@ -675,15 +680,16 @@ export default function ItemList() {
 
   const fromPage = (pick: (i: TaskLink) => string | undefined): string[] => {
     const source = liveMode ? liveItemsRef.current : items
-    return [...new Set(source.map(pick).filter((v): v is string => Boolean(v)))].sort((a, b) => a.localeCompare(b))
+    return [...new Set(source.map(pick).filter((v): v is string => typeof v === 'string' && v !== ''))].sort((a, b) => a.localeCompare(b))
   }
 
-  const regionOptions = liveMode
-    ? fromPage((i) => i.display?.region)
-    : (facets.regions.length ? facets.regions : fromPage((i) => i.display?.region))
-  const brandOptions = liveMode
-    ? fromPage((i) => i.display?.brand)
-    : (facets.brands.length ? facets.brands : fromPage((i) => i.display?.brand))
+  // S3358：接口候选的回落分支留在原处，liveMode 的覆盖改成 if，消除三元套三元
+  let regionOptions = facets.regions.length ? facets.regions : fromPage((i) => i.display?.region)
+  let brandOptions = facets.brands.length ? facets.brands : fromPage((i) => i.display?.brand)
+  if (liveMode) {
+    regionOptions = fromPage((i) => i.display?.region)
+    brandOptions = fromPage((i) => i.display?.brand)
+  }
 
   // ===== 列配置（拖拽排序 + 显示/隐藏，持久化到 localStorage） =====
   // 复用评估明细页的 useColumnConfig + ColumnSettingsModal，保持交互一致性
@@ -1124,9 +1130,7 @@ export default function ItemList() {
                 rowClassName={(record) => highlightRows.has(record.link_key) ? 'xh-row-highlight' : ''}
                 /* 行展开：近 30 天价格走势（PRD FR-F1-2），懒加载仅在展开时请求 */
                 expandable={{
-                  expandedRowRender: (record: TaskLink) => (
-                    <PriceTrendChart itemId={record.link_key ?? ''} />
-                  ),
+                  expandedRowRender: renderPriceTrendRow,
                   rowExpandable: (record: TaskLink) => Boolean(record.link_key),
                 }}
               />

@@ -321,6 +321,36 @@ function EmptyIllustration() {
   )
 }
 
+// S6478/S6848/S1082/S6819：下拉底部「刷新模型列表」提到模块顶层，
+// 并改用原生 <button type="button">（Enter/Space 由浏览器原生触发），
+// 版式由 .cb-model-dropdown-footer 在 chatbot.css 里重置默认外观
+function ModelDropdownFooter({ refreshing, onRefresh }: {
+  readonly refreshing: boolean
+  readonly onRefresh: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="cb-model-dropdown-footer"
+      // 阻止 mousedown 冒泡，避免点击刷新时下拉被关闭
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={onRefresh}
+    >
+      <SyncOutlined spin={refreshing} /> 刷新模型列表
+    </button>
+  )
+}
+
+// 下拉面板内容：菜单 + 刷新入口（普通函数返回元素，避免在组件内再定义组件）
+function renderModelDropdown(menu: React.ReactElement, refreshing: boolean, onRefresh: () => void) {
+  return (
+    <div>
+      {menu}
+      <ModelDropdownFooter refreshing={refreshing} onRefresh={onRefresh} />
+    </div>
+  )
+}
+
 export default function ChatbotPage() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [currentSession, setCurrentSession] = useState<Session | null>(null)
@@ -1003,19 +1033,7 @@ export default function ChatbotPage() {
                   '暂无可用模型'
                 )
               }
-              dropdownRender={(menu) => (
-                <div>
-                  {menu}
-                  <div
-                    className="cb-model-dropdown-footer"
-                    // 阻止 mousedown 冒泡，避免点击刷新时下拉被关闭
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={modelList.refresh}
-                  >
-                    <SyncOutlined spin={modelList.refreshing} /> 刷新模型列表
-                  </div>
-                </div>
-              )}
+              popupRender={(menu) => renderModelDropdown(menu, modelList.refreshing, modelList.refresh)}
             />
             {modelList.error && modelList.models.length > 0 && (
               <span className="cb-model-error cb-model-error-inline" title={modelList.error}>

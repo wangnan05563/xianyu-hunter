@@ -56,6 +56,13 @@ export default function MobileOrders() {
 
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
+  // 空态：请求失败时给重试入口，成功但无数据才说「暂无」，避免 JSX 里嵌套三元
+  const emptyState = loadFailed ? (
+    <FetchFailedHint source="订单列表" onRetry={() => void fetchOrders()} />
+  ) : (
+    <Empty description="暂无订单" />
+  )
+
   return (
     <PullToRefresh onRefresh={fetchOrders}>
       {/* 状态筛选 */}
@@ -67,11 +74,7 @@ export default function MobileOrders() {
         options={orderStatusOptions(ORDER_STATUS_USER_CHOICES)}
       />
       {orders.length === 0 ? (
-        loadFailed ? (
-          <FetchFailedHint source="订单列表" onRetry={() => void fetchOrders()} />
-        ) : (
-          <Empty description="暂无订单" />
-        )
+        emptyState
       ) : (
         <>
           {loadFailed && (

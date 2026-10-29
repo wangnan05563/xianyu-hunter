@@ -78,8 +78,8 @@ def observe_price(
 
     threshold = get_drop_threshold(repo, task_id)
     # 严格小于阈值线才触发：同价（写快照时已去重）与微涨都不算降价，
-    # 容差 1e-9 抵御浮点误差
-    if not (float(price) < prev_min * (1 - threshold) - 1e-9):
+    # 容差 1e-9 抵御浮点误差；因此「大于等于阈值线」即不触发
+    if float(price) >= prev_min * (1 - threshold) - 1e-9:
         return None
 
     drop_pct = (prev_min - float(price)) / prev_min if prev_min > 0 else 0.0
@@ -119,11 +119,7 @@ def observe_prices(
     Returns:
         触发降价的商品信息列表（suppress_notify=True 时仍返回检测结果但不通知）
     """
-    candidates = [
-        (it["id"], float(it["price"]))
-        for it in items
-        if it.get("id") and isinstance(it.get("price"), (int, float)) and it["price"] > 0
-    ]
+    candidates = _collect_candidates(items)
     if not candidates:
         return []
     threshold = get_drop_threshold(repo, task_id)
@@ -135,36 +131,79 @@ def observe_prices(
 
     drops: list[dict] = []
     for cid, price in candidates:
-        prev_min = prev_mins.get(cid)
-        # 与单条路径同口径：严格跌破阈值线才触发（同价已被快照去重）
-        if prev_min is None or not (price < prev_min * (1 - threshold) - 1e-9):
-            continue
-        drop_pct = (prev_min - price) / prev_min if prev_min > 0 else 0.0
-        item = repo.get_item(cid, user_id=user_id) or {}
-        drops.append({
-            "item_id": cid,
-            "item_title": item.get("title") or "",
-            "new_price": price,
-            "prev_min_price": float(prev_min),
-            "drop_pct": round(drop_pct, 4),
-            "source": source,
-            "task_id": task_id or "",
-        })
+        drop = _build_drop(
+            repo, cid, price, prev_mins.get(cid), threshold, source, task_id, user_id
+        )
+        if drop is not None:
+            drops.append(drop)
 
-    if drops and not suppress_notify:
-        # 冷启动自动抑制（FR-F1-5 首轮跳过）：本批全部商品均无快照历史
-        # （prev_min 全 None）说明是首轮全量建快照，任何「下跌」都无从谈起，
-        # 不推送。部分商品有旧快照时（重新采集）跌价通知是有效的，正常触发
-        cold_start = all(prev_mins.get(cid) is None for cid, _ in candidates)
-        if cold_start:
-            logger.info(f"[price-watch] 首轮全量建快照（{len(candidates)} 个商品），抑制降价通知")
-        elif len(drops) == 1:
-            _emit_drop_notifications(repo, bus, drops[0], user_id=user_id)
-        else:
-            # FR-F1-5 合并推送：同一任务一轮内多条降价汇总为一条通知，
-            # 避免批量采集后推送风暴淹没用户
-            _emit_drop_summary(repo, bus, drops, user_id=user_id)
+    _notify_batch_drops(repo, bus, drops, candidates, prev_mins, suppress_notify, user_id)
     return drops
+
+
+def _collect_candidates(items: list[dict]) -> list[tuple[str, float]]:
+    """从采集结果筛出可参与比价的商品：有 ID、价格为数值且大于 0"""
+    return [
+        (it["id"], float(it["price"]))
+        for it in items
+        if it.get("id") and isinstance(it.get("price"), (int, float)) and it["price"] > 0
+    ]
+
+
+def _build_drop(
+    repo: Repository,
+    item_id: str,
+    price: float,
+    prev_min: float | None,
+    threshold: float,
+    source: str,
+    task_id: str | None,
+    user_id: str | None,
+) -> dict | None:
+    """单条降价判定：严格跌破阈值线才返回降价信息，否则返回 None
+
+    与单条路径同口径：同价已被快照去重，只有 price 严格小于
+    prev_min × (1 - threshold) - 1e-9 才算降价。
+    """
+    if prev_min is None or price >= prev_min * (1 - threshold) - 1e-9:
+        return None
+    drop_pct = (prev_min - price) / prev_min if prev_min > 0 else 0.0
+    item = repo.get_item(item_id, user_id=user_id) or {}
+    return {
+        "item_id": item_id,
+        "item_title": item.get("title") or "",
+        "new_price": price,
+        "prev_min_price": float(prev_min),
+        "drop_pct": round(drop_pct, 4),
+        "source": source,
+        "task_id": task_id or "",
+    }
+
+
+def _notify_batch_drops(
+    repo: Repository,
+    bus,
+    drops: list[dict],
+    candidates: list[tuple[str, float]],
+    prev_mins: dict[str, float | None],
+    suppress_notify: bool,
+    user_id: str | None,
+) -> None:
+    """批量降价通知：冷启动抑制 + 单条直推 / 多条汇总"""
+    if not drops or suppress_notify:
+        return
+    # 冷启动自动抑制（FR-F1-5 首轮跳过）：本批全部商品均无快照历史
+    # （prev_min 全 None）说明是首轮全量建快照，任何「下跌」都无从谈起，
+    # 不推送。部分商品有旧快照时（重新采集）跌价通知是有效的，正常触发
+    cold_start = all(prev_mins.get(cid) is None for cid, _ in candidates)
+    if cold_start:
+        logger.info(f"[price-watch] 首轮全量建快照（{len(candidates)} 个商品），抑制降价通知")
+    elif len(drops) == 1:
+        _emit_drop_notifications(repo, bus, drops[0], user_id=user_id)
+    else:
+        # FR-F1-5 合并推送：同一任务一轮内多条降价汇总为一条通知，
+        # 避免批量采集后推送风暴淹没用户
+        _emit_drop_summary(repo, bus, drops, user_id=user_id)
 
 
 def _emit_drop_summary(

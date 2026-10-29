@@ -94,6 +94,11 @@ export default function MobileVersionManager() {
 
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
+  // 空态：拉取失败时不能显示「暂无备份」，两种状态分开放，避免 JSX 里嵌套三元
+  const emptyBackups = failed.backups ? null : (
+    <Empty description="暂无备份" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变 Empty 自带图标的布局语义，暂不迁移 */ />
+  )
+
   return (
     <div>
       {failed.version && (
@@ -160,9 +165,7 @@ export default function MobileVersionManager() {
         }
       >
         {backups.length === 0 ? (
-          failed.backups ? null : (
-            <Empty description="暂无备份" imageStyle={{ height: 60 }} /* NOSONAR - imageStyle 在 antd 5.x 仍可用，迁移到 styles.body 会改变 Empty 自带图标的布局语义，暂不迁移 */ />
-          )
+          emptyBackups
         ) : (
           <Space direction="vertical" size={6} style={{ width: '100%' }}>
             {backups.map((bk) => (

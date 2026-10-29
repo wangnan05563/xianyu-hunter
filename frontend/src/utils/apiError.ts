@@ -54,7 +54,7 @@ export const AI_DISABLED_FALLBACK = 'AI 功能已关闭，请到「配置-AI 服
  */
 export function isAiDisabledError(e: unknown): boolean {
   const resp = (e as { response?: { status?: number; data?: unknown } } | undefined)?.response
-  if (!resp || resp.status !== 403) return false
+  if (resp?.status !== 403) return false
   const data = resp.data
   if (typeof data !== 'object' || data === null) return false
   const body = data as Record<string, unknown>

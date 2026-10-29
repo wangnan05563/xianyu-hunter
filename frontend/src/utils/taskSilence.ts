@@ -46,6 +46,8 @@ export function taskSilence(
 
   // 未来时间（时钟漂移）按 0 天处理，避免出现负数天
   const days = Math.max(0, (now - base) / DAY_MS)
-  const level: TaskSilenceLevel = days > 30 ? 'silent30' : days > 7 ? 'silent7' : 'active'
+  let level: TaskSilenceLevel = 'active'
+  if (days > 30) level = 'silent30'
+  else if (days > 7) level = 'silent7'
   return { level, days, basis: hasHit ? 'hit' : 'created' }
 }

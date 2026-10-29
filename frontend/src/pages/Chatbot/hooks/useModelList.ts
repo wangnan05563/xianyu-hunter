@@ -54,14 +54,14 @@ export interface UseModelListResult {
 // 解析默认选中模型：localStorage 优先 → AI 配置 model → 列表首个
 // 提取为模块级纯函数便于首屏与"已选模型失效"两种场景复用
 async function resolveDefaultModel(res: AIListModelsResult): Promise<string | undefined> {
-  const ids = res.models.map((m) => m.id)
+  const ids = new Set(res.models.map((m) => m.id))
   const saved = readSavedModel()
-  if (saved && ids.includes(saved)) {
+  if (saved && ids.has(saved)) {
     return saved
   }
   try {
     const cfg = await aiApi.getConfig()
-    if (cfg?.model && ids.includes(cfg.model)) {
+    if (cfg?.model && ids.has(cfg.model)) {
       return cfg.model
     }
   } catch {

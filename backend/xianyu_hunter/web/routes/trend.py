@@ -48,6 +48,36 @@ def _ensure_aware(d: datetime | None) -> datetime | None:
     return d
 
 
+def _resolve_bucket_index(
+    now: datetime,
+    d: datetime | None,
+    range_hours: int,
+    bucket_sec: int,
+    bucket_count: int,
+) -> int | None:
+    """计算一条记录应落入的时间桶下标；时间戳缺失或超出范围返回 None"""
+    if d is None:
+        return None
+    delta_sec = (now - d).total_seconds()
+    if delta_sec < 0 or delta_sec > range_hours * 3600:
+        return None
+    idx = (bucket_count - 1) - int(delta_sec // bucket_sec)
+    if 0 <= idx < bucket_count:
+        return idx
+    return None
+
+
+def _finalize_bucket_values(buckets: list[dict[str, Any]], average: bool) -> None:
+    """收尾：比率型指标取桶内均值，计数型指标取桶内总和，统一保留两位小数"""
+    if average:
+        for b in buckets:
+            if b["count"] > 0:
+                b["value"] = round(b["value"] / b["count"], 2)
+        return
+    for b in buckets:
+        b["value"] = round(b["value"], 2)
+
+
 def _build_trend_series(
     rows_with_ts: list[tuple[str, float]],
     range_hours: int,
@@ -75,23 +105,13 @@ def _build_trend_series(
 
     for ts, val in rows_with_ts:
         d = _ensure_aware(to_datetime(ts))
-        if d is None:
+        idx = _resolve_bucket_index(now, d, range_hours, bucket_sec, bucket_count)
+        if idx is None:
             continue
-        delta_sec = (now - d).total_seconds()
-        if delta_sec < 0 or delta_sec > range_hours * 3600:
-            continue
-        idx = (bucket_count - 1) - int(delta_sec // bucket_sec)
-        if 0 <= idx < bucket_count:
-            buckets[idx]["value"] += float(val)
-            buckets[idx]["count"] += 1
+        buckets[idx]["value"] += float(val)
+        buckets[idx]["count"] += 1
 
-    if average:
-        for b in buckets:
-            if b["count"] > 0:
-                b["value"] = round(b["value"] / b["count"], 2)
-    else:
-        for b in buckets:
-            b["value"] = round(b["value"], 2)
+    _finalize_bucket_values(buckets, average)
     return buckets
 
 

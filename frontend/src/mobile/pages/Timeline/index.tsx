@@ -45,6 +45,9 @@ export default function MobileTimeline() {
 
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
+  // 空态：拉取失败时不能显示「暂无」，两种状态分开放，避免 JSX 里嵌套三元
+  const emptyState = failed.timeline ? null : <Empty description="暂无时间线" />
+
   return (
     <PullToRefresh onRefresh={fetchTimeline}>
       {failed.timeline && (
@@ -55,7 +58,7 @@ export default function MobileTimeline() {
         />
       )}
       {entries.length === 0 ? (
-        failed.timeline ? null : <Empty description="暂无时间线" />
+        emptyState
       ) : (
         entries.map((entry, idx) => {
           // Card 标题优先级：显式 title > 商品名 > 事件类型中文名 > 通用兜底

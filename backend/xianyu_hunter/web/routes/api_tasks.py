@@ -30,6 +30,9 @@ _DRY_RUN_MIN_INTERVAL_SEC = 60.0
 # 模块级状态：进程内频控与并发互斥（单进程桌面端，无需分布式锁）
 _dry_run_last_triggered: dict[str, float] = {}
 _dry_run_running: set[str] = set()
+# 演练后台任务的强引用集合：asyncio 只对 task 持弱引用，局部变量出栈后若无人引用，
+# task 可能被 GC 导致演练被中途取消；任务结束后通过 done_callback 自动移出集合
+_dry_run_tasks: set[asyncio.Task[Any]] = set()
 
 
 def _check_task_ownership(
@@ -626,7 +629,8 @@ async def _resolve_dry_run_worker(
         handle = getattr(container.scheduler, "_workers", {}).get(task_id)
         if handle is not None:
             return handle.worker, True
-    raw = container.repo.get_task(task_id, user_id=user_id)
+    # DB 读取放到线程池，避免同步 SQLite IO 阻塞事件循环（保持本函数 async 语义）
+    raw = await asyncio.to_thread(container.repo.get_task, task_id, user_id=user_id)
     if not raw or raw.get("status") != "running":
         return None, False
     worker = container.build_worker_from_raw_task(raw)
@@ -661,6 +665,10 @@ async def trigger_dry_run(
         raise HTTPException(status_code=409, detail="该任务已有演练正在执行，请稍候")
 
     worker, from_scheduler = await _resolve_dry_run_worker(container, task_id, user_id)
+    # worker 解析期间可能有并发请求穿过上面的互斥检查，这里复核一次，
+    # 保持「同任务同时只允许一个演练」的原子性不变
+    if task_id in _dry_run_running:
+        raise HTTPException(status_code=409, detail="该任务已有演练正在执行，请稍候")
     if worker is None:
         raise HTTPException(
             status_code=400,
@@ -683,13 +691,16 @@ async def trigger_dry_run(
             else:
                 await worker.run_once()
             logger.info(f"[Task {task_id}] 演练一轮完成")
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception(f"[Task {task_id}] 演练执行异常")
         finally:
             worker.task.dry_run = orig
             _dry_run_running.discard(task_id)
 
-    asyncio.create_task(_run_dry_run())
+    dry_run_task = asyncio.create_task(_run_dry_run())
+    # 持有强引用，防止 task 被 GC 后演练中途消失；完成后自动移出集合
+    _dry_run_tasks.add(dry_run_task)
+    dry_run_task.add_done_callback(_dry_run_tasks.discard)
     note = "演练已触发：全链路（搜索→评估→抢单中止）后台执行中" if from_scheduler \
         else "演练已触发（当前为 Web 模式，仅覆盖搜索/评估段，抢单段需启动浏览器）"
     return {"ok": True, "id": task_id, "message": note}

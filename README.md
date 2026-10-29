@@ -1,9 +1,11 @@
 # XianyuHunter
 
-![backend tests](https://img.shields.io/badge/backend%20tests-1864%20passed-brightgreen)
-![frontend tests](https://img.shields.io/badge/frontend%20tests-286%20passed-brightgreen)
+![项目预览](assets/github-social-preview.png)
+
+![backend tests](https://img.shields.io/badge/backend%20tests-2249%20passed-brightgreen)
+![frontend tests](https://img.shields.io/badge/frontend%20tests-1183%20passed-brightgreen)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
-![fastapi](https://img.shields.io/badge/FastAPI-0.110%2B-009485)
+![fastapi](https://img.shields.io/badge/FastAPI-0.136-009485)
 ![react](https://img.shields.io/badge/React-18.3-61dafb)
 ![platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -11,8 +13,8 @@
 闲鱼（[goofish.com](https://www.goofish.com)）自动捡漏与抢单系统（个人辅助）。
 
 通过浏览器自动化监控关键词商品，经过增量去重与多维卖家评估后，按策略自动下单或推送通知；
-配套一套 React 单页控制台，可在浏览器中管理任务、查看商品与订单、调整配置，并内置基于
-RAG 的智能客服。
+配套一套 React 单页控制台（桌面端 + 移动端 PWA），可在浏览器中管理任务、查看商品与订单、
+调整配置，并内置基于 RAG 的智能客服。
 
 > ⚠️ **风险免责（必读）**：本工具通过浏览器自动化访问闲鱼，**可能违反平台用户协议并导致账号封禁/限制**。
 > 请仅用于个人研究学习，保持低频使用、单一账号、对自己经手的商品负责。
@@ -22,18 +24,20 @@ RAG 的智能客服。
 
 **核心链路**
 
-- 关键词搜索 + 价格区间过滤
+- 关键词搜索 + 多维价格策略：上限 / 下限（防 1 元引流）/ 市场参考价比例 / 同类低价 TopN，四档可独立开关
 - 增量去重（已抓取过的商品不再重复评估）
 - 卖方多维评估（职业度 / 信用 / 纠纷 / 价格异动）
 - 自动下单，带价格容差校验
 - 多任务调度：按 `interval_seconds` 循环，支持 start / pause / resume / stop
 - 四种执行模式：`auto` / `semi_auto` / `confirm` / `notify`
+- 批量刷新：定时回刷在售商品详情，识别已售状态并补全字段
 
 **风控与稳定性**
 
 - 反爬对抗：QPS 限速、类人操作间隔、浏览器指纹伪装、请求频率伪装、代理池
 - 风控（WAF）感知：检测到拦截后主动暂停，避免账号进一步受限
 - Cookie 分层轮换与健康管理：登录态自动续期、运行时令牌刷新、健康状态评估
+- 风控事件与登录失效均进入事件总线，可在控制台告警并推送
 
 **多账号**
 
@@ -42,15 +46,19 @@ RAG 的智能客服。
 
 **通知**
 
-- 三渠道推送：Server酱 / PushPlus / Bark
+- 八渠道推送：Server酱 / PushPlus / Bark / Telegram / 企业微信 / 钉钉 / 自定义 Webhook / ntfy
 - 多渠道并发推送 + 指数退避重试
+- 免打扰时段（支持跨午夜、仅推送 critical、仅周末）与按事件类型订阅
+- 控制台通知中心 + 告警深链（点击通知直达对应商品 / 订单 / 任务）
 
-**Web 控制台（React SPA，支持 PWA 安装）**
+**Web 控制台（React SPA，桌面端 + 移动端双套界面，支持 PWA 安装）**
 
-- 仪表盘、商品查看、订单、评估明细、时间线、价格行情、日志
-- 任务管理、配置管理、系统维护、菜单管理、导出、帮助、关于
+- 桌面端：仪表盘、商品、订单、评估明细、时间线、价格行情、通知中心、日志
+- 移动端：独立页面一套（任务、商品、订单、行情、通知、配置、日志等），适配窄屏单手操作
+- 任务管理、配置管理、反爬设置、系统维护、菜单管理、导出、帮助、关于
 - 实时搜索 / 批量采集（依赖后端浏览器实例）
-- 智能客服：基于 RAG 的知识库问答（本地向量库 + 中文 Embedding）
+- 智能客服：RAG 知识库问答（本地向量库 + 中文 Embedding），含意图分类、FAQ 匹配与转人工
+- 鉴权：`WEB_TOKEN` 管理令牌 + 多用户会话令牌，数据按用户隔离
 
 **远程访问与交付**
 
@@ -61,18 +69,18 @@ RAG 的智能客服。
 
 | 层次 | 技术 |
 |------|------|
-| 后端 | Python 3.10+ · FastAPI · Uvicorn · Typer · Pydantic v2 · SQLAlchemy 2.0 / SQLite · APScheduler · loguru |
-| 浏览器自动化 | Playwright（Chromium） |
+| 后端 | Python 3.10+ · FastAPI 0.136 · Uvicorn · Typer · Pydantic v2 · SQLAlchemy 2.0 / SQLite · APScheduler · loguru |
+| 浏览器自动化 | Playwright 1.60（Chromium） |
 | 数据 / 安全 | Keyring（Windows DPAPI）· cryptography（Chrome Cookie 解密）· tenacity（重试） |
-| 智能客服 | ChromaDB + sentence-transformers（本地中文 Embedding） |
-| 前端 | React 18 · TypeScript · Vite 5 · Ant Design 5 · ECharts · Zustand · React Router 6 · PWA |
+| 智能客服 | ChromaDB + sentence-transformers（中文 Embedding：bge-small-zh-v1.5，支持 ONNX 导出） |
+| 前端 | React 18.3 · TypeScript 5.5 · Vite 5 · Ant Design 5 · ECharts 5 · Zustand · React Router 6 · PWA |
 
 ## 安装
 
 ```powershell
 # 克隆仓库
-git clone <this-repo> xianyu_hunter
-cd xianyu_hunter
+git clone https://github.com/wangnan05563/xianyu-hunter.git
+cd xianyu-hunter
 
 # 创建并激活虚拟环境
 python -m venv .venv
@@ -95,44 +103,67 @@ npm run build
 
 ## 快速开始
 
-### 1. 配置推送 Key
+### 1. 初始化配置
 
-推送 Key 不写入 `config.yaml`，而是加密保存到系统 keyring（Windows DPAPI），
-运行时由 `secrets.get_secret()` 解密。
+`config/config.yaml` 含本地凭据、不纳入版本控制，首次使用从模板复制：
 
 ```powershell
-# 复制环境变量模板
-copy .env.example .env
-# 编辑 .env 填入 SCT_KEY / PUSHPLUS_TOKEN / BARK_KEY（按需）
+copy config\config.example.yaml config\config.yaml
 ```
 
-> 💡 也可在 Web 控制台设置页交互式写入。
+推送 Key 不进入版本库：可在 Web 控制台设置页保存到本机 `config/config.yaml`
+（该文件已 gitignore），也可写入 `.env`。敏感字段在运行时优先取系统 keyring
+（Windows DPAPI）中的加密副本，keyring 不可用时降级到 `data/.secrets.json`。
+
+```powershell
+copy .env.example .env
+# 按需填写 SERVERCHAN_KEY / PUSHPLUS_TOKEN / BARK_KEY 等
+```
+
+> 💡 首次启动若缺少 `WEB_TOKEN`，程序会自动生成并写入 `.env`。
 
 ### 2. 编辑配置
 
-`config/config.yaml` 是默认配置（运行时也可在 Web 控制台修改）：
+`config/config.yaml` 是主配置（运行时也可在 Web 控制台修改）：
 
 ```yaml
 antidetect:
-  qps: 1.5                # 限速：每秒最多 1.5 个请求
-  min_delay_ms: 1500      # 页面操作最小间隔
-  max_delay_ms: 5000
-  fail_pause_threshold: 5 # 连续失败 N 次暂停 5 分钟
-  fail_window_sec: 300
+  qps: 6                  # 限速：每秒最多 6 个请求
+  min_delay_ms: 10000     # 页面操作最小间隔
+  max_delay_ms: 15000
+  fail_pause_threshold: 3 # 连续失败 N 次暂停
+  fail_window_sec: 3600
 
 notifier:
+  default_channels: [serverchan]
   channels:
     serverchan: true
     pushplus: false
     bark: false
-  default_channels: [serverchan]
+  quiet_hours:
+    enabled: false
+    start: '23:00'
+    end: 07:00
+
+price_strategy:
+  enabled_max: true
+  max_price: 800
+  enabled_min: true
+  min_price: 100
+  enabled_market_ratio: true
+  market_ratio: 0.8
+  enabled_top_n: true
+  top_n: 5
 ```
 
 `config/eval.yaml` 控制卖家评估阈值与权重。
 
+> ⚠️ 限速与间隔默认值偏保守，请勿为了"抢得快"下调，这是账号安全的主要闸门。
+
 ### 3. 首次登录
 
-首次使用需登录闲鱼，登录态持久化到 `data/browser-data/`，下次启动自动恢复。
+首次使用需登录闲鱼，登录态持久化到 `data/browser-data/`（打包版为
+`%APPDATA%\XianyuHunter\browser-data\`），下次启动自动恢复。
 
 ```powershell
 python -m xianyu_hunter login
@@ -173,8 +204,8 @@ python -m xianyu_hunter config-show
 |------|------|
 | `auto` | 评估通过 → 立即自动抢单 |
 | `semi_auto` | 评估通过 → 推送通知 → 人工确认后下单 |
-| `confirm` | 评估通过 → 推送通知 → 不自动抢单（默认，保守） |
-| `notify` | 仅推送，不评估、不抢单 |
+| `confirm` | 评估通过 → 推送通知 → 不自动抢单（保守） |
+| `notify` | 仅推送，不评估、不抢单（默认） |
 
 ### 5. 启动 Web 控制台
 
@@ -200,12 +231,12 @@ python -m xianyu_hunter web
 
 | 文件 | 说明 |
 |------|------|
-| `config/config.yaml` | 主配置（反爬限速 / 推送渠道等，运行时可被控制台修改） |
+| `config/config.yaml` | 主配置（反爬限速 / 推送渠道 / 价格策略 / 免打扰等），本地副本、gitignore |
 | `config/eval.yaml` | 卖家评估阈值与权重 |
 | `config/menu_registry.yaml` | 控制台菜单注册表 |
 | `config/param_rules.yaml` | 参数校验规则 |
 | `config/*.example.yaml` | 配置模板（供新部署参考） |
-| `.env` | 环境变量（推送 Key 等，从 `.env.example` 复制） |
+| `.env` | 环境变量（推送 Key、`WEB_TOKEN`、日志级别等，从 `.env.example` 复制） |
 
 ## 架构
 
@@ -213,12 +244,12 @@ python -m xianyu_hunter web
 CLI / Web (FastAPI)
    └─→ Container (DI)
         ├─ BrowserManager          ← Playwright + stealth
-        ├─ AntiDetect              ← QPS + 类人行为 + 指纹/频率伪装
+        ├─ AntiDetect              ← QPS + 类人行为 + 指纹/频率伪装 + 代理池
         ├─ Repository              ← SQLite
         ├─ EventBus                ← asyncio.Queue
         ├─ Collector               ← 搜索 / 详情 / 卖家
         ├─ Dedup                   ← 增量去重
-        ├─ PriceStrategy           ← 价格过滤
+        ├─ PriceStrategy           ← 多维价格过滤
         ├─ Evaluator               ← 多维评估
         ├─ Buyer                   ← 自动下单
         ├─ NotifierHub             ← 多渠道推送
@@ -232,7 +263,8 @@ CLI / Web (FastAPI)
 
 数据流：`搜索 → 去重 → 详情 → 价格 → 评估 → 下单 / 通知`。
 
-事件由 `EventBus` 解耦：Buyer 发布 `BUY_SUCCEEDED`，NotifierHub 订阅并消费。
+事件由 `EventBus` 解耦：Buyer 发布 `BUY_SUCCEEDED`，NotifierHub 订阅并按「事件订阅 + 免打扰」
+决定是否推送。
 
 ## 目录结构
 
@@ -248,16 +280,17 @@ CLI / Web (FastAPI)
 │   ├── config.py               # 配置加载（pydantic-settings）
 │   └── container.py            # 依赖注入容器
 ├── frontend/                   # React + TypeScript 前端（Vite）
-│   ├── src/                    # 前端源码（api / components / pages / stores）
+│   ├── src/pages/              # 桌面端页面
+│   ├── src/mobile/             # 移动端页面与布局
 │   └── public/                 # 静态资源与 PWA 图标
 ├── config/                     # 配置文件（config / eval / menu_registry / param_rules）
 ├── tests/                      # 后端测试（pytest）
-├── scripts/                    # 启动 / 构建 / 部署脚本（.bat / .ps1 / .py）
-├── docs/                       # 项目文档（需求 / 设计 / 迭代记录）
+├── scripts/                    # 启动 / 构建 / 部署 / 发布脚本（.bat / .ps1 / .py）
+├── docs/                       # 项目文档（需求 / 设计 / 迭代记录 / 维护报告）
 ├── assets/                     # 品牌资源（应用图标 / GitHub 社交预览图）
 ├── data/                       # 运行时数据（SQLite / 浏览器档案 / 日志，gitignore）
 ├── pyproject.toml              # Python 项目配置
-├── requirements.txt            # Python 依赖
+├── requirements.txt            # Python 依赖（锁定版本）
 └── installer.iss               # Inno Setup 安装包脚本
 ```
 
@@ -270,7 +303,7 @@ $env:PYTHONPATH = "backend"
 python -m pytest tests/ -v
 ```
 
-当前后端测试：**1864** 个用例，全部通过（约 8–9 分钟，含覆盖率统计）。
+当前后端测试：**2249 passed, 3 skipped**（共 2252 个用例，含覆盖率统计）。
 
 前端：
 
@@ -279,13 +312,20 @@ cd frontend
 npm run test      # vitest run
 ```
 
-当前前端测试：**286** 个用例（30 个测试文件）。
+当前前端测试：**1183 passed**（137 个测试文件）。低配机器上默认 5s 单测超时预算可能触发
+少数用例超时（无断言失败），可放宽：
+
+```powershell
+npx vitest run --testTimeout=30000
+```
 
 ## 数据与日志
 
+开发模式数据落在仓库内 `data/`，PyInstaller 打包后落在 `%APPDATA%\XianyuHunter\`：
+
 | 路径 | 说明 |
 |------|------|
-| `data/xianyu.db` | SQLite（任务 / 商品 / 卖家 / 评估 / 订单 / 事件） |
+| `data/xianyu.db` | SQLite（任务 / 商品 / 卖家 / 评估 / 订单 / 事件 / 通知） |
 | `data/browser-data/` | 浏览器 user data dir（登录态） |
 | `data/logs/*.log` | loguru 滚动日志 |
 | `data/screenshots/` | 失败截图（如有） |
@@ -319,7 +359,7 @@ scripts\构建打包.bat
 
 ## 贡献
 
-欢迎提交 Issue 与 Pull Request。提交前请确保：
+欢迎在 [Issues](https://github.com/wangnan05563/xianyu-hunter/issues) 反馈问题、提交 Pull Request。提交前请确保：
 
 1. 后端测试通过：`python -m pytest tests/`
 2. 前端测试通过：`cd frontend && npm run test`

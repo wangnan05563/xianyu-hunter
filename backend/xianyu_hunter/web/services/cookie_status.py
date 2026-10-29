@@ -43,6 +43,9 @@ REASON_COLLECTOR_SESSION_INVALID = "collector_session_invalid"
 # 前端应显示为警告（"会话令牌待刷新"）而非错误（"Cookie 异常"），避免初登用户误判登录失败。
 REASON_MTOP_TOKEN_STALE = "mtop_token_stale"
 
+# 登录子进程/浏览器导入遗留的公共 Cookie 文件名（多用户隔离目录之外的兜底源）
+_LAST_LOGIN_COOKIES_FILE = "last_login_cookies.json"
+
 
 @dataclass
 class CookieStatus:
@@ -122,7 +125,7 @@ def _load_cookie_data_for_health(store, user_id: str) -> tuple[dict | None, list
         return data, data["cookies"]
 
     # 2. 登录子进程/浏览器导入遗留的公共 Cookie 文件（列表格式）
-    last_login = get_data_dir() / "last_login_cookies.json"
+    last_login = get_data_dir() / _LAST_LOGIN_COOKIES_FILE
     if last_login.exists():
         try:
             import json as _json
@@ -542,7 +545,7 @@ _EXPIRY_UNRELIABLE_COOKIES: frozenset[str] = frozenset({"_m_h5_tk", "_m_h5_tk_en
 _SELF_HEAL_COOKIE_NAMES: frozenset[str] = frozenset(
     {"cookie2", "sgcookie", "unb", "_m_h5_tk", "_m_h5_tk_enc", "lg2"})
 # PRD FR-C1-3 修复顺序：登录导出(浏览器内存) > last_login > default > per-user
-_SELF_HEAL_SOURCE_ORDER = {"browser": 0, "last_login_cookies.json": 1,
+_SELF_HEAL_SOURCE_ORDER = {"browser": 0, _LAST_LOGIN_COOKIES_FILE: 1,
                            "cookies_default.json": 2}
 
 
@@ -611,7 +614,73 @@ def _record_self_heal_event(uid: str, repaired: list[dict], donors: dict[str, st
         logger.warning("自愈事件写入时间线失败: %s", e)
 
 
-def attempt_self_heal(store, uid: str, sources: list[dict], assessed: list[dict]) -> list[dict]:
+def _broken_identity_names(arch: dict) -> set[str]:
+    """档案实际「坏掉」的身份项：过期凭证 + 缺失凭证 + 失效令牌"""
+    broken = set(arch["identity_expired"]) | (
+        {"cookie2", "sgcookie"} & set(arch["identity_missing"]))
+    if not arch["has_valid_m5tk"]:
+        broken.add("_m_h5_tk")
+    return broken
+
+
+def _applicable_self_heal_names(
+    data: dict, picked: dict[str, tuple[dict, str]], arch: dict,
+) -> set[str]:
+    """只修 donor 能提供有效值的项，且值确实与档案当前值不同（避免无意义重写）"""
+    missing = set(arch["identity_missing"])
+    applicable: set[str] = set()
+    for name in _broken_identity_names(arch) & set(picked):
+        current = next(c for c in data["cookies"] if c.get("name") == name).get("value")
+        if current != picked[name][0].get("value") or name in missing:
+            applicable.add(name)
+    return applicable
+
+
+def _heal_one_archive(
+    store, sid: str, picked: dict[str, tuple[dict, str]],
+    repaired: list[dict], donors: dict[str, str],
+) -> None:
+    """修复单个落盘档案（无数据/无可修项/写入失败时直接跳过）"""
+    data = store._read_json(user_id=sid)
+    if not data or not data.get("cookies"):
+        return
+    arch = _assess_health_source({
+        "source": f"cookies_{sid}.json", "data": data,
+        "exported_at": data.get("exported_at", 0) or 0,
+    })
+    applicable = _applicable_self_heal_names(data, picked, arch)
+    if not applicable:
+        return
+    if not store.merge_cookies(
+            [picked[n][0] for n in sorted(applicable)],
+            method="self_heal", user_id=sid):
+        logger.warning("自愈写档案失败 [%s]，跳过", sid)
+        return
+    repaired.append({"archive": f"cookies_{sid}.json", "fixed": sorted(applicable)})
+    donors.update({n: picked[n][1] for n in applicable})
+    store.invalidate_cache(sid)
+
+
+def _inject_after_self_heal(uid: str) -> None:
+    """自愈后把新档案注入 Worker 浏览器（失败不阻断，档案已落盘）"""
+    try:
+        import asyncio
+
+        from xianyu_hunter.web.services.cookie_runtime_sync import (
+            inject_cookie_store_to_worker_browser,
+        )
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(inject_cookie_store_to_worker_browser("登录态自愈", user_id=uid))
+        except RuntimeError:
+            # 无运行中事件循环（同步调用场景）：注入由下次 Worker 启动加载兜底
+            pass
+    except Exception as e:
+        logger.debug("自愈后注入 Worker 失败（档案已落盘，下次启动生效）: %s", e)
+
+
+def attempt_self_heal(store, uid: str, sources: list[dict]) -> list[dict]:
     """档案间身份 Cookie 不一致/过期时的自动合并修复（PRD FR-C1-3，REQ-003）
 
     策略（PRD 开放问题 1 采纳项）：身份 Cookie 逐项取未过期者，整档 method 记 self_heal。
@@ -629,55 +698,13 @@ def attempt_self_heal(store, uid: str, sources: list[dict], assessed: list[dict]
     repaired: list[dict] = []
     donors: dict[str, str] = {}
     for sid in dict.fromkeys([uid, "default"]):
-        data = store._read_json(user_id=sid)
-        if not data or not data.get("cookies"):
-            continue
-        arch = _assess_health_source({
-            "source": f"cookies_{sid}.json", "data": data,
-            "exported_at": data.get("exported_at", 0) or 0,
-        })
-        # 该档案实际「坏掉」的项：过期凭证 + 缺失凭证 + 失效令牌
-        broken = set(arch["identity_expired"]) | (
-            {"cookie2", "sgcookie"} & set(arch["identity_missing"]))
-        if not arch["has_valid_m5tk"]:
-            broken.add("_m_h5_tk")
-        # 只修 donor 能提供有效值的项，且值确实与档案当前值不同（避免无意义重写）
-        applicable = {
-            n for n in broken & set(picked)
-            if next(c for c in data["cookies"] if c.get("name") == n).get("value")
-            != picked[n][0].get("value")
-            or n in {x for x in arch["identity_missing"]}
-        }
-        if not applicable:
-            continue
-        if not store.merge_cookies(
-                [picked[n][0] for n in sorted(applicable)],
-                method="self_heal", user_id=sid):
-            logger.warning("自愈写档案失败 [%s]，跳过", sid)
-            continue
-        repaired.append({"archive": f"cookies_{sid}.json", "fixed": sorted(applicable)})
-        donors.update({n: picked[n][1] for n in applicable})
-        store.invalidate_cache(sid)
+        _heal_one_archive(store, sid, picked, repaired, donors)
 
     if repaired:
         _record_self_heal_event(uid, repaired, donors)
         # Worker 注入让实时搜索立即恢复（验收：60s 内自动修复）；
         # 浏览器未运行时档案已落盘，属可恢复场景，失败不阻断
-        try:
-            import asyncio
-
-            from xianyu_hunter.web.services.cookie_runtime_sync import (
-                inject_cookie_store_to_worker_browser,
-            )
-
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(inject_cookie_store_to_worker_browser("登录态自愈", user_id=uid))
-            except RuntimeError:
-                # 无运行中事件循环（同步调用场景）：注入由下次 Worker 启动加载兜底
-                pass
-        except Exception as e:
-            logger.debug("自愈后注入 Worker 失败（档案已落盘，下次启动生效）: %s", e)
+        _inject_after_self_heal(uid)
     return repaired
 
 
@@ -697,7 +724,7 @@ def _collect_health_sources(store, uid: str) -> list[dict]:
                 "data": data,
                 "exported_at": data.get("exported_at", 0) or 0,
             })
-    last_login = get_data_dir() / "last_login_cookies.json"
+    last_login = get_data_dir() / _LAST_LOGIN_COOKIES_FILE
     if last_login.exists():
         try:
             import json as _json
@@ -705,7 +732,7 @@ def _collect_health_sources(store, uid: str) -> list[dict]:
             raw = _json.loads(last_login.read_text(encoding="utf-8"))
             if isinstance(raw, list) and raw:
                 sources.append({
-                    "source": "last_login_cookies.json",
+                    "source": _LAST_LOGIN_COOKIES_FILE,
                     "data": {"method": "last_login_fallback", "cookies": raw},
                     "exported_at": 0,  # 列表格式无 exported_at，freshness 排序垫底
                 })
@@ -781,6 +808,74 @@ async def _browser_health_source() -> dict | None:
         return None
 
 
+def _collect_health_reasons(assessed: list[dict]) -> list[dict]:
+    """reasons 逐条记录：哪个 Cookie / 哪个档案 / 过期还是缺失（PRD 契约）"""
+    reasons: list[dict] = []
+    for a in assessed:
+        for name in a["identity_expired"]:
+            reasons.append({"source": a["source"], "cookie": name, "issue": "expired"})
+        for name in a["identity_missing"]:
+            reasons.append({"source": a["source"], "cookie": name, "issue": "missing"})
+    return reasons
+
+
+def _clear_stale_collector_flag() -> None:
+    """清除 collector 粘性标志（浏览器内存实测有效时的旧状态回收）"""
+    try:
+        from xianyu_hunter.web.deps import get_container
+
+        container = get_container()
+        if container.collector:
+            container.collector.last_session_invalid = False
+    except Exception as e:
+        logger.debug("unified health: 清除 collector 标志失败: %s", e)
+
+
+def _decide_unified_status(
+    freshest: dict | None, collector_invalid: bool, reasons: list[dict],
+) -> str:
+    """判定 healthy/degraded/invalid，并把补充原因追加到 reasons（顺序与历史一致）"""
+    if freshest is None:
+        if not reasons:
+            reasons.append({"source": "none", "cookie": None, "issue": "no_cookie_data"})
+        return "invalid"
+    if freshest["source"] == "browser" and freshest["has_valid_m5tk"] and collector_invalid:
+        # 浏览器内存实测有效但 collector 标志置位：标志为旧状态，
+        # 清除之（与 _browser_cookies_fallback 的清理行为一致）
+        _clear_stale_collector_flag()
+        return "healthy"
+    if collector_invalid:
+        # 身份档案有效但实时采集侧已确认会话失效（RGV587/服务端注销）——
+        # 纯档案判定会误报有效，实时搜索实际不可用，必须报 invalid
+        reasons.append({
+            "source": "collector", "cookie": None,
+            "issue": REASON_COLLECTOR_SESSION_INVALID,
+        })
+        return "invalid"
+    if freshest["has_valid_m5tk"]:
+        return "healthy"
+    # 身份 Cookie 有效但 MTOP 运行时令牌缺失/过期：登录态在，
+    # 实时搜索暂不可用 → degraded（警告级而非错误级）
+    reasons.append({
+        "source": freshest["source"], "cookie": "_m_h5_tk",
+        "issue": REASON_MTOP_TOKEN_STALE,
+    })
+    return "degraded"
+
+
+def _decide_unified_actions(
+    status: str, collector_invalid: bool, freshest: dict | None,
+) -> list[str]:
+    """FR-C1-4 不可自愈引导：invalid 时给出可执行修复动作（前端一键触发）"""
+    if status != "invalid":
+        return []
+    if collector_invalid and freshest is not None and freshest["fresh"]:
+        # 档案有效但实时采集侧确认会话失效 → 重启服务重建 Worker 会话
+        return ["restart_worker"]
+    # 档案身份凭证无效 → 扫码重登录或导入 JSON（T01773 已提供导入端点）
+    return ["relogin", "import_json"]
+
+
 async def evaluate_unified_health(user_id: str | None = None, _allow_heal: bool = True) -> dict:
     """统一登录态健康度判定（PRD FR-C1-1 聚合端点 + FR-C1-2 诊断优先级）
 
@@ -815,14 +910,7 @@ async def evaluate_unified_health(user_id: str | None = None, _allow_heal: bool 
         reverse=True,
     )
 
-    # reasons 逐条记录：哪个 Cookie / 哪个档案 / 过期还是缺失（PRD 契约）
-    reasons: list[dict] = []
-    for a in assessed:
-        for name in a["identity_expired"]:
-            reasons.append({"source": a["source"], "cookie": name, "issue": "expired"})
-        for name in a["identity_missing"]:
-            reasons.append({"source": a["source"], "cookie": name, "issue": "missing"})
-
+    reasons = _collect_health_reasons(assessed)
     freshest = next((a for a in assessed if a["fresh"]), None)
     # collector 粘性标志读一次：多次调用虽是内存操作，但单次读取让分支语义更清晰
     collector_invalid = _is_collector_session_invalid()
@@ -830,59 +918,16 @@ async def evaluate_unified_health(user_id: str | None = None, _allow_heal: bool 
     # FR-C1-3 自动自愈：档案间凭证不一致/过期且存在有效 donor 时先修复再下结论。
     # 面板轮询本端点即触发修复，满足「60s 内自动修复」验收；
     # 重新评估禁止再自愈（_allow_heal=False）防止递归
-    heal_records: list[dict] = []
     if _allow_heal and sources:
-        heal_records = attempt_self_heal(store, uid, sources, assessed)
+        heal_records = attempt_self_heal(store, uid, sources)
         if heal_records:
             reassessed = await evaluate_unified_health(user_id, _allow_heal=False)
             reassessed["self_healed"] = True
             reassessed["heal"] = heal_records
             return reassessed
 
-    if freshest is None:
-        status = "invalid"
-        if not reasons:
-            reasons.append({"source": "none", "cookie": None, "issue": "no_cookie_data"})
-    elif freshest["source"] == "browser" and freshest["has_valid_m5tk"] and collector_invalid:
-        # 浏览器内存实测有效但 collector 标志置位：标志为旧状态，
-        # 清除之（与 _browser_cookies_fallback 的清理行为一致）
-        try:
-            from xianyu_hunter.web.deps import get_container
-
-            container = get_container()
-            if container.collector:
-                container.collector.last_session_invalid = False
-        except Exception as e:
-            logger.debug("unified health: 清除 collector 标志失败: %s", e)
-        status = "healthy"
-    elif collector_invalid:
-        # 身份档案有效但实时采集侧已确认会话失效（RGV587/服务端注销）——
-        # 纯档案判定会误报有效，实时搜索实际不可用，必须报 invalid
-        status = "invalid"
-        reasons.append({
-            "source": "collector", "cookie": None,
-            "issue": REASON_COLLECTOR_SESSION_INVALID,
-        })
-    elif freshest["has_valid_m5tk"]:
-        status = "healthy"
-    else:
-        # 身份 Cookie 有效但 MTOP 运行时令牌缺失/过期：登录态在，
-        # 实时搜索暂不可用 → degraded（警告级而非错误级）
-        status = "degraded"
-        reasons.append({
-            "source": freshest["source"], "cookie": "_m_h5_tk",
-            "issue": REASON_MTOP_TOKEN_STALE,
-        })
-
-    # FR-C1-4 不可自愈引导：invalid 时给出可执行修复动作（前端一键触发）
-    actions: list[str] = []
-    if status == "invalid":
-        if collector_invalid and freshest is not None and freshest["fresh"]:
-            # 档案有效但实时采集侧确认会话失效 → 重启服务重建 Worker 会话
-            actions = ["restart_worker"]
-        else:
-            # 档案身份凭证无效 → 扫码重登录或导入 JSON（T01773 已提供导入端点）
-            actions = ["relogin", "import_json"]
+    status = _decide_unified_status(freshest, collector_invalid, reasons)
+    actions = _decide_unified_actions(status, collector_invalid, freshest)
 
     return {
         "ok": True,

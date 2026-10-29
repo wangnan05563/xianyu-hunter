@@ -31,6 +31,87 @@ interface BrandCardProps {
   readonly onInstall: () => void
 }
 
+// newer 态携带 latest/publishedAt，单独取出该分支类型供渲染函数使用
+type NewerState = Extract<UpdateState, { kind: 'newer' }>
+
+interface NewerStateProps {
+  readonly state: NewerState
+  readonly download: UpdateDownload
+  readonly onUpdate: () => void
+  readonly onInstall: () => void
+}
+
+// S3776：把 newer 态的三个子分支拆成独立函数，避免全部堆在 UpdateButton 的 switch 里
+// 下载进行中/已完成：进度条 + 安装按钮，不可重复点击
+function renderDownloadProgress({ download, onInstall }: NewerStateProps) {
+  const installing = download.installing
+  const done = download.status === 'done'
+  const buttonText = done ? TEXTS.updateInstallConfirm : TEXTS.updateDownloadProgress
+  const percent = done ? 100 : downloadPercent(download)
+  const strokeColor = done ? '#52c41a' : undefined
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ width: 120 }}>
+        <Progress
+          percent={percent}
+          size="small"
+          showInfo={done}
+          strokeColor={strokeColor}
+        />
+      </div>
+      <TipButton
+        tip={buttonText}
+        type={done ? 'primary' : 'default'}
+        icon={done ? <ThunderboltOutlined /> : <DownloadOutlined />}
+        loading={installing}
+        disabled={!done}
+        onClick={onInstall}
+      >
+        {buttonText}
+      </TipButton>
+    </div>
+  )
+}
+
+// 下载出错：显示错误 + 重试下载按钮
+function renderDownloadError({ download, onUpdate }: NewerStateProps) {
+  const tipText = download.message || '下载失败，点击重试'
+  return (
+    <TipButton tip={tipText} danger icon={<WarningFilled />} onClick={onUpdate}>
+      {download.message || '下载失败，重试'}
+    </TipButton>
+  )
+}
+
+// 空闲：展示「立即更新」主按钮
+function renderIdleNewer({ state, onUpdate }: NewerStateProps) {
+  let tip: string = TEXTS.updateNewer
+  if (state.publishedAt) {
+    tip = `${TEXTS.updatePublishedOn} ${formatShortDateTime(state.publishedAt, 'date')}`
+  }
+  return (
+    <TipButton
+      tip={tip}
+      type="primary"
+      icon={<ArrowUpOutlined />}
+      onClick={onUpdate}
+    >
+      {TEXTS.updateInstallNow} ({state.latest})
+    </TipButton>
+  )
+}
+
+function renderNewerState(props: NewerStateProps) {
+  const { download } = props
+  if (download.status === 'downloading' || download.status === 'done') {
+    return renderDownloadProgress(props)
+  }
+  if (download.status === 'error') {
+    return renderDownloadError(props)
+  }
+  return renderIdleNewer(props)
+}
+
 // 五态更新按钮：根据状态机（idle/loading/latest/newer/error）渲染；
 // newrer 态细分为「立即更新 / 下载进度 / 安装」三阶段
 function UpdateButton({
@@ -56,58 +137,8 @@ function UpdateButton({
           {TEXTS.updateLatest}
         </TipButton>
       )
-    case 'newer': {
-      // 下载进行中：展示进度，不可重复点击
-      if (download.status === 'downloading' || download.status === 'done') {
-        const installing = download.installing
-        const done = download.status === 'done'
-        return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ width: 120 }}>
-              <Progress
-                percent={done ? 100 : downloadPercent(download)}
-                size="small"
-                showInfo={done}
-                strokeColor={done ? '#52c41a' : undefined}
-              />
-            </div>
-            <TipButton
-              tip={done ? TEXTS.updateInstallConfirm : TEXTS.updateDownloadProgress}
-              type={done ? 'primary' : 'default'}
-              icon={done ? <ThunderboltOutlined /> : <DownloadOutlined />}
-              loading={installing}
-              disabled={!done}
-              onClick={onInstall}
-            >
-              {done ? TEXTS.updateInstallConfirm : TEXTS.updateDownloadProgress}
-            </TipButton>
-          </div>
-        )
-      }
-      // 下载出错：显示错误 + 重试下载按钮
-      if (download.status === 'error') {
-        return (
-          <TipButton tip={download.message || '下载失败，点击重试'} danger icon={<WarningFilled />} onClick={onUpdate}>
-            {download.message || '下载失败，重试'}
-          </TipButton>
-        )
-      }
-      // 空闲：展示「立即更新」主按钮
-      return (
-        <TipButton
-          tip={
-            state.publishedAt
-              ? `${TEXTS.updatePublishedOn} ${formatShortDateTime(state.publishedAt, 'date')}`
-              : TEXTS.updateNewer
-          }
-          type="primary"
-          icon={<ArrowUpOutlined />}
-          onClick={onUpdate}
-        >
-          {TEXTS.updateInstallNow} ({state.latest})
-        </TipButton>
-      )
-    }
+    case 'newer':
+      return renderNewerState({ state, download, onUpdate, onInstall })
     case 'error':
       return (
         <TipButton

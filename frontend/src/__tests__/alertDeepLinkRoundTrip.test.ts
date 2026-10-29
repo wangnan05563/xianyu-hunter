@@ -67,7 +67,8 @@ describe('深链筛选参数读写成对（T02831）', () => {
     const code = codeOf(read('pages/Orders/Orders.tsx'))
     const writes = (code.match(/setSearchParams\(/g) ?? []).length
     const clones = (code.match(/new URLSearchParams\(searchParams\)/g) ?? []).length
-    expect(writes, 'setSearchParams 调用点数量变了，核对后更新本条').toBe(2)
+    // 4 处 = 状态筛选 / 清除定位 / 清除筛选保留 ref / 日期窗口（T02829）；新增写入口时同步本条
+    expect(writes, 'setSearchParams 调用点数量变了，核对后更新本条').toBe(4)
     expect(clones, '有一处 URL 改写没从当前 searchParams 克隆，会把 ref/status 擦了').toBe(writes)
   })
 
@@ -98,7 +99,8 @@ describe('深链筛选参数读写成对（T02831）', () => {
     expect(writer, '演练单分支没删 status').toContain("next.delete('status')")
     expect(writer, '普通分支没写 status').toContain("next.set('status', v)")
     expect(writer, '普通分支没删 type，切回真实单后仍被演练单筛住').toContain("next.delete('type')")
-    expect(writer, '演练单分支没写 type').toContain("next.set('type', 'dry_run')")
+    // 字面量必须取自 ORDER_STATUS（T02585 单一来源），不得硬写 'dry_run'
+    expect(writer, '演练单分支没写 type').toContain("next.set('type', ORDER_STATUS.DRY_RUN)")
     // 这里不再数 setStatusFilter 的次数：一个用户动作可能写多个互斥 state（T02673 的演练单），
     // 次数随分支增加而涨。落点归属由上面的 owners 断言守，函数内只守 URL 写回。
   })

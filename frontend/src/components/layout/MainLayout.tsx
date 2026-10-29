@@ -2,7 +2,6 @@ import { Layout, Menu, theme, Breadcrumb, Spin, Badge, Drawer, Collapse, List, T
 import { TipButton } from '@/components/TipButton'
 import {
   BellOutlined,
-  FileTextOutlined,
   HomeOutlined,
   InfoCircleOutlined,
   SearchOutlined,
@@ -36,7 +35,7 @@ import { useNotificationModel, bellBadgeLabel, bellBadgeTip } from '../../hooks/
 import { buildAlertJumpTarget } from '../../utils/alertDeepLink'
 import type { AlertJumpItem } from '../../utils/alertDeepLink'
 import { isNarrowViewport } from '../../hooks/breakpoints'
-import { collapseByUser, collapseOnResize, initialCollapseState } from './sidebarCollapse'
+import { collapseByUser, collapseOnResize, expandByUser, initialCollapseState } from './sidebarCollapse'
 import type { SidebarCollapseState } from './sidebarCollapse'
 import type { AlertKind, NotificationModel } from '../../hooks/useNotificationModel'
 import { useOpenKeysOnDeepLink } from '../../hooks/useOpenKeysOnDeepLink'
@@ -79,7 +78,7 @@ export default function MainLayout() {
   const setCollapsed: React.Dispatch<React.SetStateAction<boolean>> = useCallback((next) => {
     setCollapse((prev) => {
       const value = typeof next === 'function' ? next(prev.collapsed) : next
-      return collapseByUser(prev, value)
+      return value ? collapseByUser(prev) : expandByUser(prev)
     })
   }, [])
 
@@ -387,6 +386,156 @@ interface LayoutContentProps {
   readonly onRefreshUserInfo?: () => Promise<AuthMe | null>
 }
 
+/** 调度器状态指示灯文案：null = 还没拿到状态（S3358：嵌套三元改为提前 return） */
+function schedulerTip(running: boolean | null): string {
+  if (running === null) return '加载中…'
+  if (running) return '调度器运行中'
+  return '调度器已停止'
+}
+
+/** 品牌区：收缩时只显示 logo 圆标（纯展示，提取后 LayoutContent 少几处分支） */
+function SidebarBrand({ collapsed }: { readonly collapsed: boolean }) {
+  return (
+    <div className="brand-area" style={{ justifyContent: collapsed ? 'center' : undefined, padding: collapsed ? '16px 0' : undefined }}>
+      <div className="brand-logo" style={{ fontSize: collapsed ? 24 : undefined }}>闲</div>
+      {!collapsed && (
+        <div className="brand-text">
+          <span className="brand-name">闲鱼猎人</span>
+          <span className="brand-tagline">智能监控 · 自动抢单</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface NotificationDrawerBodyProps {
+  readonly notif: NotificationModel
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+  readonly onJump: (kind: AlertKind, item: AlertJumpItem) => void
+  readonly onRetry: () => void
+  readonly onClose: () => void
+}
+
+/**
+ * 通知抽屉内容（今日告警 + 通知中心入口）。
+ * 从 LayoutContent 的 JSX 里提取：原「告警/错误/转圈」三层嵌套三元改为提前 return（S3358/S7735）。
+ */
+function NotificationDrawerBody({ notif, themeToken, onJump, onRetry, onClose }: NotificationDrawerBodyProps) {
+  // 告警抽屉的三个空态文案同构，抽成函数避免同一段 JSX 重复（并消掉 `: <JSX>,` 形态）
+  const emptyHint = (text: string) => <div style={{ color: themeToken.colorTextSecondary }}>{text}</div>
+  // 抽屉列表项按类跳转（N11）：失败/超时→抢单记录，低分→评估明细；三个面板同构，抽成一个渲染函数
+  const alertItem = (
+    kind: AlertKind,
+    item: AlertJumpItem,
+    title: React.ReactNode,
+    description: React.ReactNode,
+  ) => (
+    <List.Item
+      onClick={() => onJump(kind, item)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onJump(kind, item)
+        }
+      }}
+      tabIndex={0}
+      role="button"
+      style={{ cursor: 'pointer' }}
+    >
+      <List.Item.Meta title={<span>{title}</span>} description={description} />
+    </List.Item>
+  )
+
+  const alerts = notif.alerts
+  if (alerts === null) {
+    // 拉取失败：给出错误态与重试，不再永远转圈（T02560 / 2.5-12）
+    if (notif.alertError !== null) {
+      return (
+        <Alert
+          type="error"
+          showIcon
+          message="今日告警加载失败"
+          description={notif.alertError}
+          action={<Button size="small" onClick={onRetry}>重试</Button>}
+        />
+      )
+    }
+    return <Spin />
+  }
+  return (
+    <>
+      <div style={{ fontSize: 13, color: themeToken.colorTextSecondary, marginBottom: 4 }}>
+        今日告警（{notif.alertCount} 条，按天归零）
+      </div>
+      <Collapse
+        defaultActiveKey={['failed', 'timeout', 'low_eval']}
+        ghost
+        items={[
+          {
+            key: 'failed',
+            label: (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <WarningOutlined style={{ color: '#ff4d4f' }} />
+                失败订单
+                <Tag color="red">{alerts.alerts.counts.failed}</Tag>
+              </span>
+            ),
+            children: alerts.alerts.failed_orders.length > 0 ? (
+              <List
+                size="small"
+                dataSource={alerts.alerts.failed_orders}
+                renderItem={(o) => alertItem('failed', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · ${formatDateTime(o.created_at)}`)}
+              />
+            ) : emptyHint('暂无失败订单'),
+          },
+          {
+            key: 'timeout',
+            label: (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <ClockCircleOutlined style={{ color: '#faad14' }} />
+                待支付超时
+                <Tag color="orange">{alerts.alerts.counts.timeout}</Tag>
+              </span>
+            ),
+            children: alerts.alerts.timeout_pending.length > 0 ? (
+              <List
+                size="small"
+                dataSource={alerts.alerts.timeout_pending}
+                renderItem={(o) => alertItem('timeout', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · 超时 ${formatDuration(o.age_sec)}`)}
+              />
+            ) : emptyHint('暂无超时订单'),
+          },
+          {
+            key: 'low_eval',
+            label: (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <StarOutlined style={{ color: '#722ed1' }} />
+                低分评估
+                <Tag color="purple">{alerts.alerts.counts.low_eval}</Tag>
+              </span>
+            ),
+            children: alerts.alerts.low_evaluations.length > 0 ? (
+              <List
+                size="small"
+                dataSource={alerts.alerts.low_evaluations}
+                renderItem={(e) => alertItem('low_eval', e, e.message, <><Tag>{eventTypeLabel(e.type)}</Tag> 评分 {e.score_value ?? '—'} · {formatDateTime(e.created_at)}</>)}
+              />
+            ) : emptyHint('暂无低分评估'),
+          },
+        ]}
+      />
+      {/* 抽屉底部是通知中心入口：未读＝持久化通知，与上方「今日告警」分口径展示（T02561 / 2.9-1、2.9-2） */}
+      <Divider style={{ margin: '16px 0 12px' }} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span style={{ color: themeToken.colorTextSecondary, fontSize: 13 }}>
+          未读通知 {notif.unreadCount} 条 · 共 {notif.notifTotal} 条
+        </span>
+        <Link to="/notifications" onClick={onClose}>通知中心 →</Link>
+      </div>
+    </>
+  )
+}
+
 function LayoutContent({
   isDark, onToggleTheme, collapsed, setCollapsed, location, navigate,
   schedulerRunning, notif,
@@ -405,9 +554,6 @@ function LayoutContent({
     return commandItems.filter((item) => item.label.toLowerCase().includes(kw))
   }, [cmdSearch, commandItems])
 
-  // 告警抽屉的三个空态文案同构，抽成函数避免同一段 JSX 重复（并消掉 `: <JSX>,` 形态）
-  const emptyHint = (text: string) => <div style={{ color: themeToken.colorTextSecondary }}>{text}</div>
-
   // 抽屉列表项按类跳转（N11）：失败/超时→抢单记录，低分→评估明细；三个面板同构，抽成一个渲染函数
   // T02620：跳转目标带上「本条告警」的查询参数（状态筛选 + 行定位），
   // 落地页读取侧在 Orders.tsx / Evaluations 里，口径统一在 utils/alertDeepLink.ts
@@ -415,27 +561,6 @@ function LayoutContent({
     setDrawerOpen(false)
     openSheetWithNotification(buildAlertJumpTarget(kind, item))
   }
-  const alertItem = (
-    kind: AlertKind,
-    item: AlertJumpItem,
-    title: React.ReactNode,
-    description: React.ReactNode,
-  ) => (
-    <List.Item
-      onClick={() => jumpToAlertTarget(kind, item)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          jumpToAlertTarget(kind, item)
-        }
-      }}
-      tabIndex={0}
-      role="button"
-      style={{ cursor: 'pointer' }}
-    >
-      <List.Item.Meta title={<span>{title}</span>} description={description} />
-    </List.Item>
-  )
 
   // 路由/sheet 切换时把内容区滚回顶部
   // 修复：默认情况下内容区的 scrollTop 不会随路由变化重置，
@@ -472,15 +597,7 @@ function LayoutContent({
         }}
       >
         {/* 品牌区：收缩时只显示 logo 圆标 */}
-        <div className="brand-area" style={{ justifyContent: collapsed ? 'center' : undefined, padding: collapsed ? '16px 0' : undefined }}>
-          <div className="brand-logo" style={{ fontSize: collapsed ? 24 : undefined }}>闲</div>
-          {!collapsed && (
-            <div className="brand-text">
-              <span className="brand-name">闲鱼猎人</span>
-              <span className="brand-tagline">智能监控 · 自动抢单</span>
-            </div>
-          )}
-        </div>
+        <SidebarBrand collapsed={collapsed} />
         {/* 菜单加载失败：内联提示 + 重试，不再静默空白（T02560 / 2.5-10） */}
         {menuError !== null && menuItems.length === 0 && (
           <Alert
@@ -557,7 +674,7 @@ function LayoutContent({
             />
             {/* 调度器状态指示灯：绿色=运行中，红色=已停止 */}
             <TipButton
-              tip={schedulerRunning === null ? '加载中…' : schedulerRunning ? '调度器运行中' : '调度器已停止'}
+              tip={schedulerTip(schedulerRunning)}
               type="text"
               shape="circle"
               size="small"
@@ -674,89 +791,14 @@ function LayoutContent({
         width={420}
         styles={{ body: { paddingTop: 12 } }}
       >
-        {notif.alerts ? (
-          <>
-            <div style={{ fontSize: 13, color: themeToken.colorTextSecondary, marginBottom: 4 }}>
-              今日告警（{notif.alertCount} 条，按天归零）
-            </div>
-            <Collapse
-              defaultActiveKey={['failed', 'timeout', 'low_eval']}
-              ghost
-              items={[
-                {
-                  key: 'failed',
-                  label: (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <WarningOutlined style={{ color: '#ff4d4f' }} />
-                      失败订单
-                      <Tag color="red">{notif.alerts.alerts.counts.failed}</Tag>
-                    </span>
-                  ),
-                  children: notif.alerts.alerts.failed_orders.length > 0 ? (
-                    <List
-                      size="small"
-                      dataSource={notif.alerts.alerts.failed_orders}
-                      renderItem={(o) => alertItem('failed', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · ${formatDateTime(o.created_at)}`)}
-                    />
-                  ) : emptyHint('暂无失败订单'),
-                },
-                {
-                  key: 'timeout',
-                  label: (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <ClockCircleOutlined style={{ color: '#faad14' }} />
-                      待支付超时
-                      <Tag color="orange">{notif.alerts.alerts.counts.timeout}</Tag>
-                    </span>
-                  ),
-                  children: notif.alerts.alerts.timeout_pending.length > 0 ? (
-                    <List
-                      size="small"
-                      dataSource={notif.alerts.alerts.timeout_pending}
-                      renderItem={(o) => alertItem('timeout', o, `#${o.id} 商品 ${o.item_id}`, `¥${o.price} · 超时 ${formatDuration(o.age_sec)}`)}
-                    />
-                  ) : emptyHint('暂无超时订单'),
-                },
-                {
-                  key: 'low_eval',
-                  label: (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <StarOutlined style={{ color: '#722ed1' }} />
-                      低分评估
-                      <Tag color="purple">{notif.alerts.alerts.counts.low_eval}</Tag>
-                    </span>
-                  ),
-                  children: notif.alerts.alerts.low_evaluations.length > 0 ? (
-                    <List
-                      size="small"
-                      dataSource={notif.alerts.alerts.low_evaluations}
-                      renderItem={(e) => alertItem('low_eval', e, e.message, <><Tag>{eventTypeLabel(e.type)}</Tag> 评分 {e.score_value ?? '—'} · {formatDateTime(e.created_at)}</>)}
-                    />
-                  ) : emptyHint('暂无低分评估'),
-                },
-              ]}
-            />
-            {/* 抽屉底部是通知中心入口：未读＝持久化通知，与上方「今日告警」分口径展示（T02561 / 2.9-1、2.9-2） */}
-            <Divider style={{ margin: '16px 0 12px' }} />
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ color: themeToken.colorTextSecondary, fontSize: 13 }}>
-                未读通知 {notif.unreadCount} 条 · 共 {notif.notifTotal} 条
-              </span>
-              <Link to="/notifications" onClick={() => setDrawerOpen(false)}>通知中心 →</Link>
-            </div>
-          </>
-        ) : notif.alertError !== null ? (
-          // 拉取失败：给出错误态与重试，不再永远转圈（T02560 / 2.5-12）
-          <Alert
-            type="error"
-            showIcon
-            message="今日告警加载失败"
-            description={notif.alertError}
-            action={<Button size="small" onClick={notif.refreshAlerts}>重试</Button>}
-          />
-        ) : (
-          <Spin />
-        )}
+        {/* 内容抽成模块级 NotificationDrawerBody：原嵌套三元拆成提前 return（S3358/S7735） */}
+        <NotificationDrawerBody
+          notif={notif}
+          themeToken={themeToken}
+          onJump={jumpToAlertTarget}
+          onRetry={notif.refreshAlerts}
+          onClose={() => setDrawerOpen(false)}
+        />
       </Drawer>
 
       {/* Command Palette：Ctrl+K 打开，模糊搜索导航命令 */}

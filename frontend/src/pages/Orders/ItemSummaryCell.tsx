@@ -8,7 +8,7 @@ import { itemApi, type ItemSummary } from '../../api'
 
 type Load = 'idle' | 'loading' | 'ready' | 'failed'
 
-export default function ItemSummaryCell({ itemId }: { itemId: string }) {
+export default function ItemSummaryCell({ itemId }: { readonly itemId: string }) {
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<Load>('idle')
   const [summary, setSummary] = useState<ItemSummary | null>(null)

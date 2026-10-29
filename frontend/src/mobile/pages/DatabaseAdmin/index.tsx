@@ -101,8 +101,13 @@ export default function MobileDatabaseAdmin() {
 
   // 全表行数与 /tables 同源（导出按钮的分母必须是全表，不是当前分页/筛选结果）
   const fullTableRows = tables.find((t) => t.name === selectedTable)?.rows
-  // 行数标签：取不到时显示 —，不留一个转圈的「...」假装还在加载
-  const rowsTagText = rows ? `${rows.total} 行` : (failed.rows ? '—' : '...')
+  // 行数标签：取不到时显示 —，不留一个转圈的「...」假装还在加载；用 if 赋值避免嵌套三元
+  let rowsTagText = '...'
+  if (rows) {
+    rowsTagText = `${rows.total} 行`
+  } else if (failed.rows) {
+    rowsTagText = '—'
+  }
 
   // 生成行 key：优先使用主键字段，避免直接使用数组索引作为 key（SonarQube S6479）
   // 数据库表通常有 id/_id/uuid 主键；若无则用行内容生成稳定 key，保证同表内唯一

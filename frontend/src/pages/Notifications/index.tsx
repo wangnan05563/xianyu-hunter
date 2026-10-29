@@ -364,7 +364,9 @@ export default function Notifications() {
               let label = '已读'
               if (s === 'all') label = '全部'
               else if (s === 'unread') label = '未读'
-              const filterTip = s === 'all' ? '显示全部通知' : s === 'unread' ? '仅显示未读通知' : '仅显示已读通知'
+              let filterTip = '仅显示已读通知'
+              if (s === 'all') filterTip = '显示全部通知'
+              else if (s === 'unread') filterTip = '仅显示未读通知'
               return (
                 <TipButton
                   key={s}

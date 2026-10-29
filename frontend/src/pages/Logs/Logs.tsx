@@ -25,6 +25,23 @@ function parseRangeValue(start: string | null, end: string | null): RangeValue {
   return sv || ev ? [sv, ev] : null
 }
 
+// 实时流四态
+type StreamState = 'idle' | 'connecting' | 'connected' | 'disconnected'
+
+// S3358：按钮文案按状态分支返回，避免 JSX 里三元套三元
+function streamToggleLabel(state: StreamState): string {
+  if (state === 'idle') return '开启实时流'
+  if (state === 'disconnected') return '退出实时流'
+  return '停止实时流'
+}
+
+// S3358：空态描述同理，用 if 拆分
+function streamEmptyText(state: StreamState): string {
+  if (state === 'connecting') return '正在连接日志流…'
+  if (state === 'disconnected') return '连接已断开，断线前未收到日志'
+  return '等待日志推送...'
+}
+
 export default function Logs() {
   const [rawLogs, setRawLogs] = useState<Array<{ source: string; level: string; lines: string[] }>>([])
   const [searchResults, setSearchResults] = useState<LogEntry[]>([])
@@ -47,7 +64,7 @@ export default function Logs() {
   const endIso = range?.[1]?.isValid() ? range[1].format(RANGE_FORMAT) : undefined
   // 实时流四态：未开启 / 连接中 / 已连接 / 已断开。
   // 断线不能退回「未开启」——那会让用户以为是自己关掉的，且已收到的日志看起来像停更了
-  const [streamState, setStreamState] = useState<'idle' | 'connecting' | 'connected' | 'disconnected'>('idle')
+  const [streamState, setStreamState] = useState<StreamState>('idle')
   const streamActive = streamState !== 'idle'
   const [streamLogs, setStreamLogs] = useState<string[]>([])
   const [paused, setPaused] = useState(false)
@@ -236,7 +253,7 @@ export default function Logs() {
                 onClick={streamActive ? stopStream : startStream}
                 block
               >
-                {streamState === 'idle' ? '开启实时流' : streamState === 'disconnected' ? '退出实时流' : '停止实时流'}
+                {streamToggleLabel(streamState)}
               </TipButton>
               {streamActive && (
                 <Space style={{ width: '100%' }}>
@@ -364,10 +381,9 @@ export default function Logs() {
             )}
 
             <Spin spinning={searchLoading}>
-              {searchResults.length === 0 ? (
-                // 失败时由上方 FetchFailedHint 说明原因，不能再显示「输入条件后搜索」
-                searchError ? null : <Empty description="输入条件后搜索" />
-              ) : (
+              {/* 失败时由上方 FetchFailedHint 说明原因，不能再显示「输入条件后搜索」 */}
+              {searchResults.length === 0 && !searchError && <Empty description="输入条件后搜索" />}
+              {searchResults.length > 0 && (
                 <List
                   size="small"
                   bordered
@@ -431,13 +447,7 @@ export default function Logs() {
                     if (streamLogs.length === 0) {
                       return (
                         <Empty
-                          description={
-                            streamState === 'connecting'
-                              ? '正在连接日志流…'
-                              : streamState === 'disconnected'
-                                ? '连接已断开，断线前未收到日志'
-                                : '等待日志推送...'
-                          }
+                          description={streamEmptyText(streamState)}
                         />
                       )
                     }

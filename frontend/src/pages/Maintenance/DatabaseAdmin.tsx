@@ -145,6 +145,12 @@ const ROW_SUMMARY_FIELDS: [string, string][] = [
   ['note', '备注'],
 ]
 
+/** 行摘要文本：对象显式 JSON 化（避免 [object Object]），标量仍等同 String(v) */
+function cellText(v: unknown): string {
+  if (v !== null && typeof v === 'object') return JSON.stringify(v).slice(0, 40)
+  return String(v).slice(0, 40)
+}
+
 /** 从行数据里挑最多 3 个非空业务字段拼成一句摘要，供删除确认框点名「删的是哪条」 */
 export function buildRowSummary(row?: Record<string, unknown>): string {
   if (!row) return ''
@@ -153,7 +159,7 @@ export function buildRowSummary(row?: Record<string, unknown>): string {
     if (picked.length >= 3) break
     const v = row[field]
     if (v == null || v === '') continue
-    const text = String(v).slice(0, 40)
+    const text = cellText(v)
     picked.push(`${label} ${field === 'price' ? '¥' : ''}${text}`)
   }
   return picked.join(' · ')
@@ -287,6 +293,38 @@ function inferFormType(colType: string): 'text' | 'textarea' | 'number' | 'switc
   return 'text'
 }
 
+// S3358：列尾注（主键锁定 / 置为 NULL）用 if 提前 return，替代两层三元
+function renderColumnExtra(
+  col: DbColumn,
+  mode: 'create' | 'update',
+  nullFields: Set<string>,
+  onToggleNull: (name: string, checked: boolean) => void,
+): React.ReactNode {
+  const pkLocked = col.primary_key && mode === 'update'
+  if (pkLocked) {
+    return <Text type="secondary" style={{ fontSize: 11 }}>主键不可修改（后端按主键定位行，改动不会被保存）</Text>
+  }
+  if (mode === 'update' && col.nullable && !col.primary_key) {
+    return (
+      <Checkbox
+        checked={nullFields.has(col.name)}
+        onChange={(e) => onToggleNull(col.name, e.target.checked)}
+        style={{ fontSize: 12 }}
+      >
+        <span style={{ fontSize: 12 }}>置为 NULL（清空此字段）</span>
+      </Checkbox>
+    )
+  }
+  return undefined
+}
+
+// S3358：输入框占位文案抽成函数，消除 clearing/nullable 的嵌套三元
+function columnInputPlaceholder(clearing: boolean, nullable: boolean | undefined): string {
+  if (clearing) return '提交后将被置为 NULL'
+  if (nullable) return '可空'
+  return ''
+}
+
 // 单元格编辑器：在 Modal 中根据列定义动态生成表单项
 // props 标记 readonly 防止组件内部意外修改父级传入数据（S6759）
 //
@@ -325,17 +363,7 @@ function ColumnFormFields({
             </Space>
           </Tooltip>
         )
-        const extra = pkLocked ? (
-          <Text type="secondary" style={{ fontSize: 11 }}>主键不可修改（后端按主键定位行，改动不会被保存）</Text>
-        ) : mode === 'update' && col.nullable && !col.primary_key ? (
-          <Checkbox
-            checked={nullFields.has(col.name)}
-            onChange={(e) => onToggleNull(col.name, e.target.checked)}
-            style={{ fontSize: 12 }}
-          >
-            <span style={{ fontSize: 12 }}>置为 NULL（清空此字段）</span>
-          </Checkbox>
-        ) : undefined
+        const extra = renderColumnExtra(col, mode, nullFields, onToggleNull)
         const initialValue = initial?.[col.name] ?? null
         if (formType === 'switch') {
           return (
@@ -361,7 +389,7 @@ function ColumnFormFields({
         // text / datetime 统一用 Input，由后端解析
         return (
           <Form.Item key={col.name} name={col.name} label={label} extra={extra} initialValue={isInitialNull ? '' : toFormString(initialValue)}>
-            <Input disabled={disabled} placeholder={clearing ? '提交后将被置为 NULL' : (col.nullable ? '可空' : '')} />
+            <Input disabled={disabled} placeholder={columnInputPlaceholder(clearing, col.nullable)} />
           </Form.Item>
         )
       })}

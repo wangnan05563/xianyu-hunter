@@ -437,6 +437,38 @@ def _trigger_session_start() -> None:
     trigger_session_start()
 
 
+def _load_last_login_cookies() -> dict | None:
+    """读取公共导出 last_login_cookies.json，返回 {"cookies": [...]} 或 None
+
+    auth_helper/browser_login 的公共导出路径。文件不存在、解析失败（JSONDecodeError/
+    OSError）或内容不是非空列表时返回 None，调用方保留原有 data 不变。
+    """
+    last_login = get_data_dir() / "last_login_cookies.json"
+    if not last_login.exists():
+        return None
+    try:
+        raw = json.loads(last_login.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if isinstance(raw, list) and raw:
+        return {"cookies": raw}
+    return None
+
+
+def _read_login_cookie_data(store) -> dict | None:
+    """读取登录子进程写入的 Cookie：优先 default 文件，竞态时回退公共导出
+
+    为什么回退：子进程先写 success 状态、后异步导出 Cookie，default 文件可能
+    还没生成；此时按 last_login_cookies.json 兜底，不回退会让多用户接入降级为
+    单用户模式（xh_token 回落 web_token，/me 识别不到真实 user_id）。
+    返回 None 表示两处都没有可用 Cookie。
+    """
+    data = store._read_json("default")
+    if data and data.get("cookies"):
+        return data
+    return _load_last_login_cookies()
+
+
 def _finalize_multi_user_login() -> str | None:
     """登录成功后完成多用户接入：识别用户 + 签发会话 + 按用户存储 Cookie
 
@@ -464,24 +496,10 @@ def _finalize_multi_user_login() -> str | None:
         store = get_cookie_store()
         store.invalidate_cache("default")
         # 登录子进程写入 default 文件，这里读取它做用户识别
-        data = store._read_json("default")
+        data = _read_login_cookie_data(store)
         if not data or not data.get("cookies"):
-            # 竞态兜底：登录子进程可能尚未把 Cookie 导出到 default 文件
-            # （子进程先写 success 状态、后异步导出），此时回退读取公共
-            # last_login_cookies.json（auth_helper/browser_login 的公共导出路径）。
-            # 不回退会导致多用户接入失败降级为单用户模式：xh_token 回落
-            # web_token，/me 识别不到真实 user_id，前端显示"未登录"/"默"字。
-            last_login = get_data_dir() / "last_login_cookies.json"
-            if last_login.exists():
-                try:
-                    raw = json.loads(last_login.read_text(encoding="utf-8"))
-                    if isinstance(raw, list) and raw:
-                        data = {"cookies": raw}
-                except (json.JSONDecodeError, OSError):
-                    data = None
-            if not data or not data.get("cookies"):
-                logger.warning("多用户接入失败：default 文件与 last_login 均无 Cookie 数据")
-                return None
+            logger.warning("多用户接入失败：default 文件与 last_login 均无 Cookie 数据")
+            return None
 
         cookies = data["cookies"]
         mgr = get_user_manager()

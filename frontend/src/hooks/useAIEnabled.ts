@@ -13,13 +13,12 @@ function publish(value: boolean | null): void {
 }
 
 function load(): Promise<void> {
-  if (!inflight) {
-    inflight = aiApi.getConfig()
-      .then((cfg) => publish(cfg.ai_enabled !== false))
-      // 读取失败保持 null（未知），不把它当成「已关闭」而把功能锁死
-      .catch(() => publish(cached))
-      .finally(() => { inflight = null })
-  }
+  // S6606：inflight 只有 null / Promise 两态，??= 与原来的 if (!inflight) 赋值等价
+  inflight ??= aiApi.getConfig()
+    .then((cfg) => publish(cfg.ai_enabled !== false))
+    // 读取失败保持 null（未知），不把它当成「已关闭」而把功能锁死
+    .catch(() => publish(cached))
+    .finally(() => { inflight = null })
   return inflight
 }
 

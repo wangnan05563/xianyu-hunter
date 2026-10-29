@@ -8,11 +8,11 @@ import AccountSwitcher from '../components/AccountSwitcher'
 // 五个 Tab 根路径：与 TabBar 的 key 一致
 // 非 Tab 根路径（详情页 / 工具页 / 配置页）都需要返回出口 —— 这些页面此前
 // 只能靠点品牌 Logo 回仪表盘，二级页普遍缺返回（FR-G-3 返回一致性）
-const TAB_ROOTS = ['/m', '/m/', '/m/tasks/', '/m/orders/', '/m/notifications/', '/m/chatbot/']
+const TAB_ROOTS = new Set(['/m', '/m/', '/m/tasks/', '/m/orders/', '/m/notifications/', '/m/chatbot/'])
 
 function isTabRoot(pathname: string): boolean {
   const withSlash = pathname.endsWith('/') ? pathname : `${pathname}/`
-  return TAB_ROOTS.includes(pathname) || TAB_ROOTS.includes(withSlash)
+  return TAB_ROOTS.has(pathname) || TAB_ROOTS.has(withSlash)
 }
 
 // 顶部状态栏：返回 + 品牌 + 调度器状态灯 + 通知铃铛 + 账号切换

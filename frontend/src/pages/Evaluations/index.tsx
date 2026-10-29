@@ -373,6 +373,24 @@ const SOURCE_LABELS: Record<EvaluationsSource, string> = {
   tasks: '任务列表',
 }
 
+// S3776：深链提示的可见性判定提到模块级，主组件不再内联复合布尔表达式
+function isDeepLinkVisible(itemId: string | undefined, scoreMax: number | undefined, applied: boolean): boolean {
+  return Boolean(itemId || scoreMax != null) && applied
+}
+
+// S3358/S4624/S7735：文案用 if 分支拼装，避免嵌套三元与嵌套模板字符串
+function buildDeepLinkMessage(itemId: string | undefined, scoreMax: number | undefined, matches: boolean): string {
+  const idText = itemId ?? '—'
+  if (matches) {
+    if (scoreMax == null) return `已按告警定位到商品 ${idText}`
+    return `已按告警定位到商品 ${idText}（评分 ≤ ${scoreMax}）`
+  }
+  if (scoreMax == null) {
+    return `链接里的告警定位条件（商品 ${idText}）已被手动筛选覆盖，下方列表按当前筛选条件展示`
+  }
+  return `链接里的告警定位条件（商品 ${idText} / 评分 ≤ ${scoreMax}）已被手动筛选覆盖，下方列表按当前筛选条件展示`
+}
+
 export default function Evaluations() {
   // 告警深链（T02620）：抽屉的「低分评估」项跳过来带 ?item_id=<id>&score_max=<0-100>，
   // 本页必须真的读取，否则链接只是「跳过来自己找」——与 Orders.tsx 读 ?ref= 同一族。
@@ -439,8 +457,7 @@ export default function Evaluations() {
   // 好让「只带 score_max」「商品ID 被改掉」这些分支能被单元测试逐个钉住。
   // 首帧筛选还没套用（套用要等下一轮渲染），故 deepLinkApplied 之前不出提示条，
   // 免得把「马上要套用」闪成「已被覆盖」。
-  const deepLinkVisible =
-    (!!deepLink.itemId || deepLink.scoreMax != null) && deepLinkApplied.current
+  const deepLinkVisible = isDeepLinkVisible(deepLink.itemId, deepLink.scoreMax, deepLinkApplied.current)
   const deepLinkMatchesFilters = evalDeepLinkMatchesFilters(deepLink, {
     itemId: filters.itemId,
     scoreRange: filters.scoreRange,
@@ -575,9 +592,7 @@ export default function Evaluations() {
           type={deepLinkMatchesFilters ? 'info' : 'warning'}
           showIcon
           style={{ marginBottom: 12 }}
-          message={deepLinkMatchesFilters
-            ? `已按告警定位到商品 ${deepLink.itemId ?? '—'}${deepLink.scoreMax != null ? `（评分 ≤ ${deepLink.scoreMax}）` : ''}`
-            : `链接里的告警定位条件（商品 ${deepLink.itemId ?? '—'}${deepLink.scoreMax != null ? ` / 评分 ≤ ${deepLink.scoreMax}` : ''}）已被手动筛选覆盖，下方列表按当前筛选条件展示`}
+          message={buildDeepLinkMessage(deepLink.itemId, deepLink.scoreMax, deepLinkMatchesFilters)}
           action={<TipButton size="small" onClick={clearDeepLink} tip="清除告警深链参数，回到正常筛选视图">清除定位</TipButton>}
         />
       )}

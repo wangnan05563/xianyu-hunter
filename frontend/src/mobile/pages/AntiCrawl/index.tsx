@@ -36,6 +36,161 @@ const getScoreColor = (
   return themeToken.colorError
 }
 
+// 30s 定时轮询 + visibility 暂停：页面不可见时停止轮询，恢复时立即拉取并重启定时器
+// 抽成模块级 hook，页面组件只保留一次调用（S3776：分支从页面组件里移出）
+function useVisibilityPoll(refresh: () => void, intervalMs: number): void {
+  useEffect(() => {
+    let id: ReturnType<typeof setInterval> | null = null
+    const start = () => {
+      refresh()
+      id = setInterval(refresh, intervalMs)
+    }
+    const stop = () => {
+      if (id) { clearInterval(id); id = null }
+    }
+    const onVisibility = () => {
+      if (document.hidden) stop()
+      else start()
+    }
+    start()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [refresh, intervalMs])
+}
+
+type SessionCardProps = {
+  readonly session: SessionStatus | null
+  readonly lightColor: string
+  readonly lightText: string
+  readonly actionLoading: boolean
+  readonly onToggle: (start: boolean) => void
+}
+
+// 会话状态卡：纯展示，启停按钮回传意图给页面组件
+function SessionCard({ session, lightColor, lightText, actionLoading, onToggle }: SessionCardProps) {
+  return (
+    <Card
+      title="会话状态"
+      size="small"
+      style={{ marginBottom: 12 }}
+      extra={
+        <Button
+          size="small"
+          loading={actionLoading}
+          danger={session?.active === true}
+          type={session?.active ? 'default' : 'primary'}
+          onClick={() => onToggle(!session?.active)}
+        >
+          {session?.active ? '停止会话' : '启动会话'}
+        </Button>
+      }
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ width: 10, height: 10, borderRadius: '50%', background: lightColor, display: 'inline-block' }} />
+        <strong>{lightText}</strong>
+      </div>
+      <Space direction="vertical" size={4} style={{ fontSize: 13, color: '#666' }}>
+        <div>策略：{session?.strategy || '-'}</div>
+        <div>运行时长：{formatDuration(session?.uptime_sec, { compact: true })}</div>
+        <div>Token 寿命：{formatDuration(session?.token_age_sec, { compact: true })}</div>
+      </Space>
+    </Card>
+  )
+}
+
+type HealthCheckTagProps = {
+  readonly label: string
+  readonly ok: boolean | undefined
+}
+
+// 单项检查标签（Cookie / API / 页面）：通过绿勾、失败红叉
+function HealthCheckTag({ label, ok }: HealthCheckTagProps) {
+  return (
+    <Tag color={ok ? 'green' : 'red'}>
+      {label} {ok ? '✓' : '✗'}
+    </Tag>
+  )
+}
+
+type HealthCardProps = {
+  readonly health: HealthReport | null
+  readonly healthScore: number | null
+  readonly scoreColor: string
+  readonly failed: boolean | undefined
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}
+
+// 健康报告卡：健康分 + Cookie/API/页面三项检查 + 建议
+function HealthCard({ health, healthScore, scoreColor, failed, themeToken }: HealthCardProps) {
+  return (
+    <Card title="健康报告" size="small" style={{ marginBottom: 12 }}>
+      {failed && !health ? (
+        // 取不到健康数据时不能把 null 当成三项检查全失败
+        <div style={{ fontSize: 13, color: themeToken.colorTextDisabled }}>健康数据不可用</div>
+      ) : (
+        <>
+          {healthScore !== null && (
+            <div style={{ textAlign: 'center', marginBottom: 12 }}>
+              <div style={{ fontSize: 36, fontWeight: 600, color: scoreColor, lineHeight: 1.2 }}>
+                {healthScore}
+              </div>
+              <Progress percent={healthScore} showInfo={false} strokeColor={scoreColor} />
+            </div>
+          )}
+          <Space wrap size={8} style={{ marginBottom: 8 }}>
+            <HealthCheckTag label="Cookie" ok={health?.cookie_valid} />
+            <HealthCheckTag label="API" ok={health?.api_reachable} />
+            <HealthCheckTag label="页面" ok={health?.page_accessible} />
+            <Tag color="blue">WAF {health?.waf_status || '-'}</Tag>
+          </Space>
+        </>
+      )}
+      {/* needs_attention 时用 Alert 强提示，普通文本仅作建议展示 */}
+      {health?.needs_attention && (
+        <Alert
+          type="warning"
+          showIcon
+          message={health.action || '需要关注'}
+          style={{ marginTop: 8 }}
+        />
+      )}
+      {!health?.needs_attention && health?.action && (
+        <div style={{ fontSize: 13, color: '#666', marginTop: 4 }}>{health.action}</div>
+      )}
+    </Card>
+  )
+}
+
+type CookieLayersCardProps = {
+  readonly session: SessionStatus | null
+  readonly failed: boolean | undefined
+  readonly themeToken: ReturnType<typeof theme.useToken>['token']
+}
+
+// Cookie 层状态卡
+function CookieLayersCard({ session, failed, themeToken }: CookieLayersCardProps) {
+  return (
+    <Card title="Cookie 层状态" size="small">
+      {session?.cookie_layers && Object.keys(session.cookie_layers).length > 0 ? (
+        <Space wrap size={8}>
+          {Object.entries(session.cookie_layers).map(([layer, valid]) => (
+            <Tag key={layer} color={valid ? 'green' : 'red'}>
+              {layer}: {valid ? '✓' : '✗'}
+            </Tag>
+          ))}
+        </Space>
+      ) : (
+        <div style={{ fontSize: 13, color: themeToken.colorTextDisabled }}>
+          {failed ? '会话数据不可用' : '暂无 Cookie 层数据'}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 // 数据源（T02718）：会话与健康分开记账，失败时不能渲染成「未激活 / 全红叉」
 type AntiCrawlSource = 'session' | 'health'
 const SOURCE_LABELS: Record<AntiCrawlSource, string> = {
@@ -67,26 +222,7 @@ export default function MobileAntiCrawl() {
   }, [settle])
 
   // 30s 定时轮询 + visibility 暂停：页面不可见时停止轮询，恢复时立即拉取并重启定时器
-  useEffect(() => {
-    let id: ReturnType<typeof setInterval> | null = null
-    const start = () => {
-      fetchAll()
-      id = setInterval(fetchAll, 30_000)
-    }
-    const stop = () => {
-      if (id) { clearInterval(id); id = null }
-    }
-    const onVisibility = () => {
-      if (document.hidden) stop()
-      else start()
-    }
-    start()
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => {
-      stop()
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [fetchAll])
+  useVisibilityPoll(fetchAll, 30_000)
 
   // 启停会话：完成后再拉一次最新状态，确保 UI 与后端一致
   const handleToggleSession = async (start: boolean) => {
@@ -137,92 +273,25 @@ export default function MobileAntiCrawl() {
         />
       )}
       {/* 会话状态卡 */}
-      <Card
-        title="会话状态"
-        size="small"
-        style={{ marginBottom: 12 }}
-        extra={
-          <Button
-            size="small"
-            loading={actionLoading}
-            danger={session?.active === true}
-            type={session?.active ? 'default' : 'primary'}
-            onClick={() => handleToggleSession(!session?.active)}
-          >
-            {session?.active ? '停止会话' : '启动会话'}
-          </Button>
-        }
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: lightColor, display: 'inline-block' }} />
-          <strong>{lightText}</strong>
-        </div>
-        <Space direction="vertical" size={4} style={{ fontSize: 13, color: '#666' }}>
-          <div>策略：{session?.strategy || '-'}</div>
-          <div>运行时长：{formatDuration(session?.uptime_sec, { compact: true })}</div>
-          <div>Token 寿命：{formatDuration(session?.token_age_sec, { compact: true })}</div>
-        </Space>
-      </Card>
+      <SessionCard
+        session={session}
+        lightColor={lightColor}
+        lightText={lightText}
+        actionLoading={actionLoading}
+        onToggle={handleToggleSession}
+      />
 
       {/* 健康报告卡 */}
-      <Card title="健康报告" size="small" style={{ marginBottom: 12 }}>
-        {failed.health && !health ? (
-          // 取不到健康数据时不能把 null 当成三项检查全失败
-          <div style={{ fontSize: 13, color: themeToken.colorTextDisabled }}>健康数据不可用</div>
-        ) : (
-          <>
-            {healthScore !== null && (
-              <div style={{ textAlign: 'center', marginBottom: 12 }}>
-                <div style={{ fontSize: 36, fontWeight: 600, color: scoreColor, lineHeight: 1.2 }}>
-                  {healthScore}
-                </div>
-                <Progress percent={healthScore} showInfo={false} strokeColor={scoreColor} />
-              </div>
-            )}
-            <Space wrap size={8} style={{ marginBottom: 8 }}>
-              <Tag color={health?.cookie_valid ? 'green' : 'red'}>
-                Cookie {health?.cookie_valid ? '✓' : '✗'}
-              </Tag>
-              <Tag color={health?.api_reachable ? 'green' : 'red'}>
-                API {health?.api_reachable ? '✓' : '✗'}
-              </Tag>
-              <Tag color={health?.page_accessible ? 'green' : 'red'}>
-                页面 {health?.page_accessible ? '✓' : '✗'}
-              </Tag>
-              <Tag color="blue">WAF {health?.waf_status || '-'}</Tag>
-            </Space>
-          </>
-        )}
-        {/* needs_attention 时用 Alert 强提示，普通文本仅作建议展示 */}
-        {health?.needs_attention && (
-          <Alert
-            type="warning"
-            showIcon
-            message={health.action || '需要关注'}
-            style={{ marginTop: 8 }}
-          />
-        )}
-        {!health?.needs_attention && health?.action && (
-          <div style={{ fontSize: 13, color: '#666', marginTop: 4 }}>{health.action}</div>
-        )}
-      </Card>
+      <HealthCard
+        health={health}
+        healthScore={healthScore}
+        scoreColor={scoreColor}
+        failed={failed.health}
+        themeToken={themeToken}
+      />
 
       {/* Cookie 层状态卡 */}
-      <Card title="Cookie 层状态" size="small">
-        {session?.cookie_layers && Object.keys(session.cookie_layers).length > 0 ? (
-          <Space wrap size={8}>
-            {Object.entries(session.cookie_layers).map(([layer, valid]) => (
-              <Tag key={layer} color={valid ? 'green' : 'red'}>
-                {layer}: {valid ? '✓' : '✗'}
-              </Tag>
-            ))}
-          </Space>
-        ) : (
-          <div style={{ fontSize: 13, color: themeToken.colorTextDisabled }}>
-            {failed.session ? '会话数据不可用' : '暂无 Cookie 层数据'}
-          </div>
-        )}
-      </Card>
+      <CookieLayersCard session={session} failed={failed.session} themeToken={themeToken} />
     </PullToRefresh>
   )
 }

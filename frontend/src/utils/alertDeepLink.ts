@@ -116,7 +116,9 @@ export function buildAlertJumpTarget(kind: AlertKind, item?: AlertJumpItem, now:
  */
 export function parseOrderStatusParam(raw: string | null | undefined): string | undefined {
   if (!raw) return undefined
-  return Object.prototype.hasOwnProperty.call(ORDER_STATUS_CONFIG, raw) ? raw : undefined
+  // 用 hasOwnProperty 而不是 `raw in`：后者会把 toString/constructor 这些原型键也算命中。
+  // 不用 Object.hasOwn 是因为 tsconfig 的 lib 是 ES2021，那个 API 的类型不存在。
+  return Object.prototype.hasOwnProperty.call(ORDER_STATUS_CONFIG, raw) ? raw : undefined  // NOSONAR - lib 为 ES2021，Object.hasOwn 不可用；换 `in` 会放进原型键
 }
 
 /** 评估明细页读取的深链参数 */

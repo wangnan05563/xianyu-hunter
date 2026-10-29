@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { formatDateTime, formatDuration, formatShortDateTime } from '../../utils/timeFormat'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
-  Card, Descriptions, Tag, Button, Space, Spin, Row, Col, Table, Empty, message, Tabs, List,
+  Card, Descriptions, Tag, Space, Spin, Row, Col, Table, Empty, message, Tabs, List,
   Select, Popconfirm, Radio, Modal,
 } from 'antd'
 import {
@@ -135,6 +135,42 @@ function buildRunsOption(runs: TaskRun[]): EChartOption | null {
 const formatRunEnd = (t: string | null): string => (t ? formatDateTime(t) : '运行中')
 const formatErrCount = (v: number) => (v > 0 ? <Tag color="red">{v}</Tag> : v)
 const formatWarnCount = (v: number) => (v > 0 ? <Tag color="orange">{v}</Tag> : v)
+
+// S3776 修复：价格区间两个三元提取为模块级纯函数
+// 原 JSX 内 `task.min_price ? ¥x : '不限'` 出现两次，每处三元都计入主函数复杂度
+function formatPriceRange(minPrice?: number | null, maxPrice?: number | null): string {
+  let minText = '不限'
+  if (minPrice) minText = `¥${minPrice}`
+  let maxText = '不限'
+  if (maxPrice) maxText = `¥${maxPrice}`
+  return `${minText} - ${maxText}`
+}
+
+// S3776 修复：关联内容列内的价格/发布时间三元提取为模块级渲染函数
+function renderLinkPrice(r: TaskLink): string {
+  if (typeof r.display?.price !== 'number') return '—'
+  return `¥${r.display.price}`
+}
+function renderLinkPublishTime(r: TaskLink): string {
+  if (!r.display?.publish_time) return '—'
+  return formatDateTime(r.display.publish_time)
+}
+
+// S3776 修复：Tab 标题里的 `failed ? '数量未知' : n` 三元提取为模块级函数
+function tabCountLabel(failed: boolean, count: number): string {
+  if (failed) return '数量未知'
+  return String(count)
+}
+function shortCountLabel(failed: boolean, count: number): string {
+  if (failed) return '未知'
+  return String(count)
+}
+
+// 任务主体缺省渲染：接口失败不能说「任务不存在」（S3358 拆出嵌套三元）
+function renderMissingTask(taskFailed: boolean, onRetry: () => void) {
+  if (taskFailed) return <FetchFailedHint source={SOURCE_LABELS.task} onRetry={onRetry} />
+  return <Empty description="任务不存在" />
+}
 
 // S3776 修复：趋势 sparkline 提取为独立组件
 // 原 JSX 内两段 `trend && trend.series.length > 0 ? <ReactECharts/> : <Empty/>` 各贡献
@@ -452,7 +488,7 @@ export default function TaskDetail() {
     {
       title: '价格', key: 'price', width: 100,
       // 用肯定条件 typeof === 'number' 替代 != null，更直观（SonarQube S7735）
-      render: (_: unknown, r: TaskLink) => typeof r.display?.price === 'number' ? `¥${r.display.price}` : '—',
+      render: (_: unknown, r: TaskLink) => renderLinkPrice(r),
     },
     {
       title: '卖家昵称', key: 'seller_nick', width: 120, ellipsis: true,
@@ -464,7 +500,7 @@ export default function TaskDetail() {
     },
     {
       title: '发布时间', key: 'publish_time', width: 170,
-      render: (_: unknown, r: TaskLink) => r.display?.publish_time ? formatDateTime(r.display.publish_time) : '—',
+      render: (_: unknown, r: TaskLink) => renderLinkPublishTime(r),
     },
     {
       title: '来源', key: 'source', width: 80,
@@ -520,7 +556,7 @@ export default function TaskDetail() {
                 <Descriptions.Item label="状态"><Tag color={taskStatusColor(task.status) || 'default'}>{taskStatusLabel(task.status)}</Tag></Descriptions.Item>
                 <Descriptions.Item label="关键词">{task.keyword}</Descriptions.Item>
                 <Descriptions.Item label="模式">{taskModeLabel(task.mode)}</Descriptions.Item>
-                <Descriptions.Item label="价格区间">{task.min_price ? `¥${task.min_price}` : '不限'} - {task.max_price ? `¥${task.max_price}` : '不限'}</Descriptions.Item>
+                <Descriptions.Item label="价格区间">{formatPriceRange(task.min_price, task.max_price)}</Descriptions.Item>
                 <Descriptions.Item label="地域">{task.region || '不限'}</Descriptions.Item>
                 <Descriptions.Item label="Cron 表达式"><code>{task.cron}</code></Descriptions.Item>
                 <Descriptions.Item label="最大发布天数">{task.max_publish_days || '不限'}</Descriptions.Item>
@@ -586,7 +622,7 @@ export default function TaskDetail() {
               items={[
                 {
                   key: 'runs',
-                  label: `运行历史 (${failed.runs ? '数量未知' : runs.length})`,
+                  label: `运行历史 (${tabCountLabel(!!failed.runs, runs.length)})`,
                   children: (
                     <Card>
                       <DataBlock
@@ -614,7 +650,7 @@ export default function TaskDetail() {
                 },
                 {
                   key: 'evals',
-                  label: `评估记录 (${failed.evals ? '数量未知' : evals.length})`,
+                  label: `评估记录 (${tabCountLabel(!!failed.evals, evals.length)})`,
                   children: (
                     <Card>
                       <DataBlock
@@ -631,7 +667,7 @@ export default function TaskDetail() {
                 },
                 {
                   key: 'deps',
-                  label: `依赖关系 (上游${failed.deps ? '未知' : deps.length}/下游${failed.dependents ? '未知' : dependents.length})`,
+                  label: `依赖关系 (上游${shortCountLabel(!!failed.deps, deps.length)}/下游${shortCountLabel(!!failed.dependents, dependents.length)})`,
                   children: (
                     <Row gutter={16}>
                       <Col span={12}>
@@ -731,7 +767,7 @@ export default function TaskDetail() {
                 },
                 {
                   key: 'links',
-                  label: failed.links ? '闲鱼内容关联 (数量未知)' : `闲鱼内容关联 (${linkTotal})`,
+                  label: `闲鱼内容关联 (${tabCountLabel(!!failed.links, linkTotal)})`,
                   children: (
                     <Card>
                       <Space style={{ marginBottom: 16 }} wrap>
@@ -793,11 +829,9 @@ export default function TaskDetail() {
               ]}
             />
           </>
-        ) : failed.task ? (
-          // 接口失败时不能说「任务不存在」——那是把后端故障说成数据问题
-          <FetchFailedHint source={SOURCE_LABELS.task} onRetry={load} />
         ) : (
-          <Empty description="任务不存在" />
+          // 接口失败时不能说「任务不存在」——那是把后端故障说成数据问题
+          renderMissingTask(!!failed.task, load)
         )}
       </Spin>
     </div>

@@ -6,7 +6,7 @@ import { sheetRegistry } from '../../components/SheetWorkspace/sheetRegistry'
 // 静默跳转会让用户以为点错了菜单或程序坏了，并丢掉「访问过不存在页面」这一事实
 export default function NotFound() {
   const navigate = useNavigate()
-  const known = sheetRegistry.map((s) => s.path).sort()
+  const known = sheetRegistry.map((s) => s.path).sort((a, b) => a.localeCompare(b))
 
   return (
     <Result

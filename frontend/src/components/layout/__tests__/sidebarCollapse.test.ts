@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { collapseByUser, collapseOnResize, initialCollapseState } from '../sidebarCollapse'
+import { collapseByUser, collapseOnResize, expandByUser, initialCollapseState } from '../sidebarCollapse'
 import { NARROW_DESKTOP_MAX_PX, NARROW_MAX_PX, isNarrowDesktopViewport } from '../../../hooks/breakpoints'
 
 // 源码守卫：resize 监听必须走 collapseOnResize 这个决策，且旧的「只收不放」不能回来。
@@ -31,13 +31,13 @@ describe('侧栏收起的对称恢复（条目 1）', () => {
   })
 
   it('用户自己收起后拉宽：不擅自展开（显式意图优先）', () => {
-    const userCollapsed = collapseByUser(initialCollapseState(false), true)
+    const userCollapsed = collapseByUser(initialCollapseState(false))
     expect(collapseOnResize(userCollapsed, false)).toEqual({ collapsed: true, autoCollapsed: false })
   })
 
   it('用户手动展开过：反复跨断点仍回到他选的那一面', () => {
     let state = collapseOnResize(initialCollapseState(false), true) // 系统收起
-    state = collapseByUser(state, false) // 用户手动展开（仍在窄窗）
+    state = expandByUser(state) // 用户手动展开（仍在窄窗）
     expect(state.autoCollapsed).toBe(false)
     const widened = collapseOnResize(state, false) // 拉宽：用户本就展开，保持
     expect(widened).toEqual({ collapsed: false, autoCollapsed: false })
@@ -48,7 +48,7 @@ describe('侧栏收起的对称恢复（条目 1）', () => {
   })
 
   it('已经收起时再变窄不重复打标记（避免把用户自己收起的记成系统的）', () => {
-    const state = collapseByUser(initialCollapseState(false), true)
+    const state = collapseByUser(initialCollapseState(false))
     expect(collapseOnResize(state, true)).toBe(state)
   })
 })

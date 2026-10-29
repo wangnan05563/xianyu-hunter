@@ -60,19 +60,23 @@ describe('Orders 删除确认（T02975）', () => {
 describe('BatchRefresh 执行历史删除确认（T02975）', () => {
   // 历史表操作列：从 key: 'actions' 到该 useMemo 之后的排序处理段
   const historyCol = () => sliceRaw(batchRaw, "key: 'actions'", '// antd Table 排序变化', 'BatchRefresh 历史操作列')
+  // 确认体在模块级 confirmDeleteHistory（S2004 提取，操作列只留调用点）
+  const confirmFn = () => sliceRaw(batchRaw, 'function confirmDeleteHistory(', '\nfunction HistoryPanel(', 'BatchRefresh 删除确认体')
 
   it('固定右列不再挂 Popconfirm，改用 App 的 modal.confirm', () => {
     const col = historyCol()
     expect(col).not.toContain('<Popconfirm')
-    expect(col).toContain('modal.confirm(')
-    expect(col).toContain('onOk: () => handleDelete(r.id)')
+    expect(col).toContain('confirmDeleteHistory(modal, r, handleDelete)')
+    const fn = confirmFn()
+    expect(fn).toContain('modal.confirm(')
+    expect(fn).toContain('onOk: () => onDelete(record.id)')
   })
 
   it('确认文案与原 Popconfirm 一致（标题/删除/取消）', () => {
-    const col = historyCol()
-    expect(col).toContain("title: '确认删除此条历史记录？'")
-    expect(col).toContain("okText: '删除'")
-    expect(col).toContain("cancelText: '取消'")
+    const fn = confirmFn()
+    expect(fn).toContain("title: '确认删除此条历史记录？'")
+    expect(fn).toContain("okText: '删除'")
+    expect(fn).toContain("cancelText: '取消'")
   })
 
   it('modal 进了 useMemo 依赖——漏了它会闭包持住旧 holder', () => {

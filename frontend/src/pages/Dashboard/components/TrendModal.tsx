@@ -36,6 +36,13 @@ export function trendMetricLabel(metric: string): string {
   return TREND_METRICS.find(m => m.key === metric)?.label ?? metric
 }
 
+// S3358：时间范围提示文案抽成独立函数，避免三元里再套三元
+function rangeTip(hours: number): string {
+  if (hours === 168) return '查看近 7 天趋势'
+  if (hours === 720) return '查看近 30 天趋势'
+  return '查看近 90 天趋势'
+}
+
 export default function TrendModal({
   trendOpen, trendMetric, trendRange, trendData, onClose, onRangeChange, onMetricChange,
   error, onRetry,
@@ -71,7 +78,10 @@ export default function TrendModal({
           })()
           // 计数类指标 value 就是条数，再补一句「N 条」是重复信息（后端已改为桶内求和）
           const isCountMetric = trendMetric !== 'eval_score' && trendMetric !== 'success_rate'
-          return `${formatDateTime(s.ts)}<br/>值: <b>${v}</b>${isCountMetric ? '' : (s.count ? ' · ' + s.count + ' 条' : '')}`
+          // S3358：嵌套三元拆成独立判断；s.count 为 0/undefined 时不追加（与原真值语义一致）
+          let countSuffix = ''
+          if (!isCountMetric && s.count) countSuffix = ' · ' + s.count + ' 条'
+          return `${formatDateTime(s.ts)}<br/>值: <b>${v}</b>${countSuffix}`
         },
       },
       xAxis: {
@@ -126,12 +136,12 @@ export default function TrendModal({
           size="small"
           options={TREND_METRICS.map(m => ({ label: m.label, value: m.key }))}
           value={trendMetric}
-          onChange={(v) => onMetricChange(v as string)}
+          onChange={(v) => onMetricChange(v)}
         />
       </div>
       <div style={{ marginBottom: 12, display: 'flex', gap: 8 }}>
         {[168, 720, 2160].map(h => (
-          <TipButton key={h} size="small" type={trendRange === h ? 'primary' : 'default'} onClick={() => onRangeChange(h)} tip={h === 168 ? '查看近 7 天趋势' : h === 720 ? '查看近 30 天趋势' : '查看近 90 天趋势'}>
+          <TipButton key={h} size="small" type={trendRange === h ? 'primary' : 'default'} onClick={() => onRangeChange(h)} tip={rangeTip(h)}>
             {(() => {
               // 时间范围文案
               if (h === 168) return '7 天'
@@ -142,7 +152,7 @@ export default function TrendModal({
         ))}
       </div>
       {error && <FetchFailedHint source="趋势数据" onRetry={onRetry} />}
-      {trendOption ? (
+      {trendOption && (
         <>
           <ReactECharts option={trendOption} style={{ height: 320 }} />
           {trendData?.summary && (
@@ -154,7 +164,8 @@ export default function TrendModal({
             </div>
           )}
         </>
-      ) : error ? null : (
+      )}
+      {!trendOption && !error && (
         <Empty description="暂无趋势数据" />
       )}
     </Modal>

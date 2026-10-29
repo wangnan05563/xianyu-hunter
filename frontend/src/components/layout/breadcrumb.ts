@@ -41,6 +41,9 @@ export function buildBreadcrumbs(pathname: string, menus: MenuItem[]): Crumb[] {
   }
   out.push({ label: hit.label, href: hit.path })
   const tail = findSheetMeta(pathname)
-  const tailLabel = tail?.title ?? pathname.split('/').filter(Boolean).pop() ?? pathname
+  // S7750：tsconfig lib 为 ES2021（无 findLast / at），改为按下标取最后一段，语义与 filter(...).pop() 一致
+  const segments = pathname.split('/').filter(Boolean)
+  const lastSegment = segments.length > 0 ? segments[segments.length - 1] : pathname
+  const tailLabel = tail?.title ?? lastSegment
   return [...out, { label: tailLabel, current: true }]
 }

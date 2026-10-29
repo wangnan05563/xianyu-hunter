@@ -57,6 +57,13 @@ export default function MobileTasks() {
 
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
+  // 空态：请求失败时给重试入口，成功但无数据才说「暂无」，避免 JSX 里嵌套三元
+  const emptyState = loadFailed ? (
+    <FetchFailedHint source="任务列表" onRetry={() => void fetchTasks()} />
+  ) : (
+    <Empty description="暂无任务，点上方「新建任务」创建第一个" />
+  )
+
   return (
     <PullToRefresh onRefresh={fetchTasks}>
       {/* 入口行：新建任务路由 /m/tasks/new 一直存在但没有任何入口（FR-G-3「有路由无入口」） */}
@@ -75,11 +82,7 @@ export default function MobileTasks() {
         <FetchFailedHint source="任务列表（下方为上次成功加载的数据）" onRetry={() => void fetchTasks()} />
       )}
       {tasks.length === 0 ? (
-        loadFailed ? (
-          <FetchFailedHint source="任务列表" onRetry={() => void fetchTasks()} />
-        ) : (
-          <Empty description="暂无任务，点上方「新建任务」创建第一个" />
-        )
+        emptyState
       ) : (
         tasks.map((task) => {
           // 卡片整体作为可聚焦链接：键盘 Enter 跳转，回车键同样可触发

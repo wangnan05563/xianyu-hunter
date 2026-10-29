@@ -77,6 +77,9 @@ export default function MobileEvaluations() {
     )
   }
 
+  // 空态：拉取失败时显示错误条而不是「暂无」，两种状态分开放，避免 JSX 里嵌套三元
+  const emptyState = failed.evals ? null : <Empty description="暂无评估记录" />
+
   return (
     <PullToRefresh onRefresh={fetchEvals}>
       {failed.evals && (
@@ -93,7 +96,7 @@ export default function MobileEvaluations() {
         options={FILTER_OPTIONS}
       />
       {evals.length === 0 ? (
-        failed.evals ? null : <Empty description="暂无评估记录" />
+        emptyState
       ) : (
         evals.map((item) => {
           const title = item.payload.item_title || item.item_id

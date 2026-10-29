@@ -90,12 +90,18 @@ export default function MobileBatchRefresh() {
       message.info('本批无待处理商品（当前没有在售商品），未触发采集', 3)
       return
     }
+    // 先用 if 收敛「续跑 / 新批次」两套文案，避免确认框里出现嵌套三元
+    let scope: string
+    if (preview.resumed) {
+      scope = `接着上次中断的批次跑剩下的 ${preview.pending} 个商品（原批次共 ${preview.resumed_total} 个，已处理 ${preview.resumed_processed} 个）`
+    } else {
+      const atLimitHint = preview.at_limit ? '（已达上限，本轮只跑这些）' : ''
+      scope = `本批覆盖 ${preview.pending} 个在售商品，单次上限 ${preview.limit}${atLimitHint}`
+    }
     const ok = await confirmDanger({
       title: preview.resumed ? '确认续跑未完成的批次？' : '确认触发批量采集？',
       action: '立即开始一轮批量采集，逐个访问商品详情页',
-      scope: preview.resumed
-        ? `接着上次中断的批次跑剩下的 ${preview.pending} 个商品（原批次共 ${preview.resumed_total} 个，已处理 ${preview.resumed_processed} 个）`
-        : `本批覆盖 ${preview.pending} 个在售商品，单次上限 ${preview.limit}${preview.at_limit ? '（已达上限，本轮只跑这些）' : ''}`,
+      scope,
       count: `${preview.pending} 个商品`,
       recovery: '触发后可在本页暂停或停止；停止时未处理的商品会持久化，下次触发从断点续传',
     })

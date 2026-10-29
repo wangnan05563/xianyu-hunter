@@ -11,13 +11,13 @@ type Parsed =
 
 function parse(raw: unknown): Parsed {
   if (Array.isArray(raw)) {
-    return { kind: 'array', items: raw.map((v) => String(v)) }
+    return { kind: 'array', items: raw.map(String) }
   }
   if (typeof raw !== 'string' || !raw.trim()) return { kind: 'empty' }
   try {
     const value: unknown = JSON.parse(raw)
     if (Array.isArray(value)) {
-      return { kind: 'array', items: value.map((v) => String(v)) }
+      return { kind: 'array', items: value.map(String) }
     }
     return { kind: 'json', text: JSON.stringify(value, null, 2) }
   } catch {
@@ -25,7 +25,7 @@ function parse(raw: unknown): Parsed {
   }
 }
 
-export default function JsonListField({ raw, emptyText = '无' }: { raw: unknown; emptyText?: string }) {
+export default function JsonListField({ raw, emptyText = '无' }: { readonly raw: unknown; readonly emptyText?: string }) {
   const parsed = parse(raw)
   if (parsed.kind === 'empty' || (parsed.kind === 'array' && parsed.items.length === 0)) {
     return <>{emptyText}</>

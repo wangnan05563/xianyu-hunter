@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import {
   Card,
-  Button,
   Space,
   Tag,
   Typography,
@@ -488,6 +487,13 @@ function NamedTunnelWizard({
   )
 }
 
+// S3776：保存按钮提示抽成模块级函数，主组件不再保留 if/else-if 分支
+function resolveSaveButtonTip(config: TunnelConfig | null, isRunning: boolean): string {
+  if (config == null) return '配置未加载成功，暂时无法保存（请先点上方「重试」）'
+  if (isRunning) return '保存隧道配置（当前隧道会立即断开，需重新启动）'
+  return '保存隧道配置（下次启动生效）'
+}
+
 export default function Tunnel() {
   const [status, setStatus] = useState<TunnelStatus | null>(null)
   const [config, setConfig] = useState<TunnelConfig | null>(null)
@@ -724,12 +730,7 @@ export default function Tunnel() {
   const isCloudflareDisplay = displayProvider === 'cloudflare'
 
   // 保存按钮提示：配置没读到时不能假装能保存（点了会拿默认值覆盖真实配置）
-  let saveButtonTip = '保存隧道配置（下次启动生效）'
-  if (config == null) {
-    saveButtonTip = '配置未加载成功，暂时无法保存（请先点上方「重试」）'
-  } else if (isRunning) {
-    saveButtonTip = '保存隧道配置（当前隧道会立即断开，需重新启动）'
-  }
+  const saveButtonTip = resolveSaveButtonTip(config, isRunning)
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>

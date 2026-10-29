@@ -46,6 +46,79 @@ const CACHE_SCOPE: Record<string, string> = {
 // 表单状态类型
 // CleanupBody 已从 API 层导入，此处无需重复定义
 
+interface CacheConfirmText {
+  action: string
+  scope: string
+  count: string | null
+  recovery: string
+}
+
+// S3776/S3358：缓存清理确认框文案抽成模块级纯函数，用 if 分支替代嵌套三元
+function buildCacheConfirmText(
+  body: CleanupBody,
+  status: StorageStatus | null,
+  pycacheApplicable: boolean,
+): CacheConfirmText {
+  const c = status?.cache
+  const parts: string[] = []
+  if (body.target !== 'browser_data' && pycacheApplicable) {
+    parts.push(`__pycache__ 目录 ${c?.pycache_count ?? '未知'} 个（${c?.pycache_mb ?? '未知'} MB）`)
+  }
+  if (body.target !== 'pycache') {
+    parts.push(
+      `浏览器数据目录 ${c?.browser_data_files ?? '未知'} 个文件（${c?.browser_data_mb ?? '未知'} MB）`,
+    )
+  }
+  // 打包版「全部缓存」真实删的只有浏览器数据，确认框不能还写着 __pycache__
+  let scopeText = CACHE_SCOPE[body.target] ?? '所选缓存'
+  if (!pycacheApplicable && body.target === 'all') {
+    scopeText = '浏览器用户数据目录（含闲鱼登录态）'
+  }
+  // browser_data 分支现在真的会删登录态（FR-A-5）——后果必须写在确认框里
+  const dropsLogin = body.target !== 'pycache'
+  let scope = '只删 __pycache__ 字节码缓存；不包含数据库、日志，也不包含浏览器用户数据目录（登录态所在）'
+  let recovery = '不可恢复；__pycache__ 会在下次运行时自动重建，只会让首次运行稍慢。'
+  if (dropsLogin) {
+    scope = `将删除浏览器用户数据目录 ${c?.browser_data_path ?? '（以统计接口回带路径为准）'}，`
+      + '其中保存着闲鱼登录 Cookie 与反爬指纹；不包含 SQLite 数据库与日志文件'
+    recovery = '不可恢复；删除后需重新扫码登录闲鱼。若浏览器正在占用该目录，'
+      + '本次会跳过删除并明确报错，不会只删掉半个目录'
+    if (c && !c.browser_data_exists) {
+      recovery += '。当前未发现非空的浏览器数据目录，本次不会删除任何浏览器数据'
+    }
+  }
+  return {
+    action: `真实删除${scopeText}`,
+    scope,
+    count: status ? parts.join('；') : null,
+    recovery,
+  }
+}
+
+// S3358：日志清理确认框的 scope/count 文案独立成纯函数，避免三元里再套三元
+function buildLogsConfirmText(
+  target: string | undefined,
+  days: number | undefined,
+  lg: StorageStatus['logs'] | undefined,
+): { action: string; scope: string; count: string | null } {
+  const logAction: Record<string, string> = {
+    old_logs: `删除修改时间早于 ${days} 天的日志文件`,
+    large_logs: '删除体积超过 10MB 的日志文件',
+    all: `删除「修改时间早于 ${days} 天」或「体积超过 10MB」的日志文件`,
+  }
+  let scope = '只删 logs/ 目录下的文本日志文件；不包含数据库里的事件记录与「错误日志」页的留存数据'
+  if (target === 'large_logs' || target === 'all') {
+    scope += '。注意：大文件分支不看修改时间，正在写入的当日日志只要超过 10MB 也会被删'
+  }
+  let count: string | null = null
+  if (lg) {
+    let oldestSuffix = ''
+    if (lg.oldest) oldestSuffix = `（最早 ${lg.oldest}）`
+    count = `当前日志 ${lg.file_count} 个文件共 ${lg.total_size_mb} MB${oldestSuffix}`
+  }
+  return { action: logAction[target ?? 'old_logs'] ?? '删除日志文件', scope, count }
+}
+
 export default function Maintenance() {
   // 存储状态数据
   const [status, setStatus] = useState<StorageStatus | null>(null)
@@ -119,37 +192,10 @@ export default function Maintenance() {
         message.warning('浏览器数据仍在统计中，完成后才能给出准确的删除量，请稍候再执行')
         return
       }
-      const c = status?.cache
-      const parts: string[] = []
-      if (body.target !== 'browser_data' && pycacheApplicable) {
-        parts.push(`__pycache__ 目录 ${c?.pycache_count ?? '未知'} 个（${c?.pycache_mb ?? '未知'} MB）`)
-      }
-      if (body.target !== 'pycache') {
-        parts.push(
-          `浏览器数据目录 ${c?.browser_data_files ?? '未知'} 个文件（${c?.browser_data_mb ?? '未知'} MB）`,
-        )
-      }
-      // browser_data 分支现在真的会删登录态（FR-A-5）——后果必须写在确认框里
-      const dropsLogin = body.target !== 'pycache'
-      // 打包版「全部缓存」真实删的只有浏览器数据，确认框不能还写着 __pycache__
-      const scopeText = !pycacheApplicable && body.target === 'all'
-        ? '浏览器用户数据目录（含闲鱼登录态）'
-        : CACHE_SCOPE[body.target] ?? '所选缓存'
+      const confirmText = buildCacheConfirmText(body, status, pycacheApplicable)
       const ok = await confirmDanger({
         title: '确认清理缓存？',
-        action: `真实删除${scopeText}`,
-        scope: dropsLogin
-          ? `将删除浏览器用户数据目录 ${c?.browser_data_path ?? '（以统计接口回带路径为准）'}，`
-            + '其中保存着闲鱼登录 Cookie 与反爬指纹；不包含 SQLite 数据库与日志文件'
-          : '只删 __pycache__ 字节码缓存；不包含数据库、日志，也不包含浏览器用户数据目录（登录态所在）',
-        count: status ? parts.join('；') : null,
-        recovery: dropsLogin
-          ? '不可恢复；删除后需重新扫码登录闲鱼。若浏览器正在占用该目录，'
-            + '本次会跳过删除并明确报错，不会只删掉半个目录'
-            + (dropsLogin && c && !c.browser_data_exists
-              ? '。当前未发现非空的浏览器数据目录，本次不会删除任何浏览器数据'
-              : '')
-          : '不可恢复；__pycache__ 会在下次运行时自动重建，只会让首次运行稍慢。',
+        ...confirmText,
       })
       if (!ok) return
     }
@@ -281,24 +327,11 @@ export default function Maintenance() {
   // 执行日志清理
   const handleCleanupLogs = async () => {
     if (!logForm.dry_run) {
-      const lg = status?.logs
-      const d = logForm.days
       // 后端匹配条件是 (old_logs/all 且 mtime 超期) OR (large_logs/all 且 >10MB)——
       // 大文件分支不看时间，所以不能说「当日日志不会被删」
-      const logAction: Record<string, string> = {
-        old_logs: `删除修改时间早于 ${d} 天的日志文件`,
-        large_logs: '删除体积超过 10MB 的日志文件',
-        all: `删除「修改时间早于 ${d} 天」或「体积超过 10MB」的日志文件`,
-      }
       const ok = await confirmDanger({
         title: '确认清理日志文件？',
-        action: logAction[logForm.target ?? 'old_logs'] ?? '删除日志文件',
-        scope: '只删 logs/ 目录下的文本日志文件；不包含数据库里的事件记录与「错误日志」页的留存数据'
-          + (logForm.target === 'large_logs' || logForm.target === 'all'
-            ? '。注意：大文件分支不看修改时间，正在写入的当日日志只要超过 10MB 也会被删'
-            : ''),
-        count: lg ? `当前日志 ${lg.file_count} 个文件共 ${lg.total_size_mb} MB`
-          + (lg.oldest ? `（最早 ${lg.oldest}）` : '') : null,
+        ...buildLogsConfirmText(logForm.target, logForm.days, status?.logs),
         recovery: '删除后历史日志无法找回；正在写入的当前日志文件若未被删除，只会因句柄占用继续追加',
       })
       if (!ok) return

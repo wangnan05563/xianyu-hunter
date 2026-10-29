@@ -168,9 +168,10 @@ export default function PriceHistogramCard({
         </div>
       )}
       {error && <FetchFailedHint source="价格分布" onRetry={onRetry} />}
-      {histogramOption ? (
+      {histogramOption && (
         <ReactECharts option={histogramOption} style={{ height: 340 }} notMerge={true} lazyUpdate={true} />
-      ) : error ? null : (
+      )}
+      {!histogramOption && !error && (
         <Empty description="暂无价格数据" />
       )}
 

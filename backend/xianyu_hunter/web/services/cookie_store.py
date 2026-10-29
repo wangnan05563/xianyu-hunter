@@ -178,15 +178,13 @@ class CookieStore:
                     return False, "cookie_expired:_m_h5_tk"
                 continue
 
-            # _m_h5_tk_enc 同 _m_h5_tk：内嵌 token，无法用 expires 判断过期
-            if name == "_m_h5_tk_enc":
-                continue
-
+            # 以下两类跳过 expires 校验：
+            # _m_h5_tk_enc 同 _m_h5_tk：内嵌 token，无法用 expires 判断过期；
             # unb：纯用户唯一ID标识（identity 层 ttl=session），扫码登录/本地持久化
             # 导出时 expires 会被写成过去的绝对时间戳（实际登录态有效），据此误判会
             # 报 cookie_expired:unb。真正登录态由 cookie2/_m_h5_tk 判定，unb 只做
             # 存在性检查。与 cookie_status._find_expired_cookie 保持同一跳过名单。
-            if name == "unb":
+            if name in ("_m_h5_tk_enc", "unb"):
                 continue
 
             expires = c.get("expires", -1)

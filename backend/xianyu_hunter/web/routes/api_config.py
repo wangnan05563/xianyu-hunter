@@ -687,7 +687,7 @@ def _strip_masked_credentials(node: dict[str, Any], prefix: str = "") -> list[st
     一旦模型里出现同名字符串字段，一次普通保存就会摧毁磁盘上的真凭据（T02733）。
     """
     stripped: list[str] = []
-    for k in list(node.keys()):
+    for k in list(node.keys()):  # NOSONAR - 保留 list() 是为了快照迭代，去掉会在迭代中被修改
         v = node[k]
         if isinstance(v, dict):
             stripped.extend(_strip_masked_credentials(v, f"{prefix}{k}."))

@@ -54,7 +54,9 @@ export default function PriceTrendChart({ itemId }: { readonly itemId: string })
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const p = (params as any[])[0]
               const src = SOURCE_LABELS[points[p.dataIndex]?.source] || points[p.dataIndex]?.source || ''
-              return `${p.axisValue}<br/>¥${Number(p.value).toFixed(2)}${src ? `（${src}）` : ''}`
+              // S4624：内层模板先算成变量，避免模板字符串里再嵌模板字符串
+              const srcSuffix = src ? `（${src}）` : ''
+              return `${p.axisValue}<br/>¥${Number(p.value).toFixed(2)}${srcSuffix}`
             },
           },
           grid: { left: 60, right: 20, top: 30, bottom: 50 },
@@ -83,12 +85,13 @@ export default function PriceTrendChart({ itemId }: { readonly itemId: string })
               symbolSize: 34,
               label: { fontSize: 10 },
             } : undefined,
-            markLine: minPrice != null ? {
+            // S7735：条件改成正向（minPrice 为 null 时不画最低价线）
+            markLine: minPrice === null ? undefined : {
               silent: true,
               symbol: 'none',
               data: [{ yAxis: minPrice, label: { formatter: `最低 ¥${minPrice.toFixed(2)}`, fontSize: 10 } }],
               lineStyle: { color: '#faad14', type: 'dashed' },
-            } : undefined,
+            },
           }],
         }}
         style={{ height: 240 }}

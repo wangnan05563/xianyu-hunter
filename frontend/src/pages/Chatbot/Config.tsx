@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
-  Tabs, Switch, InputNumber, Input, Button, Slider, Radio, Table, Modal,
+  Tabs, Switch, InputNumber, Input, Slider, Radio, Table, Modal,
   Card, Tag, message, Space, Typography, List,
 } from 'antd'
 import { PlusOutlined, DeleteOutlined, RollbackOutlined, HistoryOutlined } from '@ant-design/icons'

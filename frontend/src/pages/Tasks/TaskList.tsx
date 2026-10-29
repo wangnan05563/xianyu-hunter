@@ -422,11 +422,10 @@ export default function TaskList() {
     const tip = silence.basis === 'created'
       ? '尚无采集命中记录，暂按创建时间判定；编辑任务不影响该状态'
       : '按最近一次采集命中时间判定，编辑任务不影响该状态'
-    const tag = silence.level === 'silent30'
-      ? <Tag color="red">沉默30d+</Tag>
-      : silence.level === 'silent7'
-        ? <Tag color="orange">沉默7d+</Tag>
-        : <Tag color="green">活跃</Tag>
+    // S3358：嵌套三元拆成 let + if，等级互斥故结果与原分支一致
+    let tag = <Tag color="green">活跃</Tag>
+    if (silence.level === 'silent30') tag = <Tag color="red">沉默30d+</Tag>
+    if (silence.level === 'silent7') tag = <Tag color="orange">沉默7d+</Tag>
     return <Tooltip title={tip}>{tag}</Tooltip>
   }
 
@@ -1050,49 +1049,47 @@ export default function TaskList() {
                       <Tag color={taskStatusColor(task.status)}>{taskStatusLabel(task.status)}</Tag>
                     </Space>
                     <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      <>
-                          <TipButton tip="编辑该任务" size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</TipButton>
-                          {startPauseBtn}
-                          {showStopBtn && (
-                            <Popconfirm
-                              title="确认停止该任务？"
-                              description="停止后任务将不再运行"
-                              onConfirm={() => runDangerAction(task.id, 'stop', '停止')}
-                              okText="停止"
-                              cancelText="取消"
-                              okButtonProps={{ danger: true }}
-                            >
-                              <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />}>停止</TipButton>
-                            </Popconfirm>
-                          )}
-                          <TipButton tip="复制该任务为新任务" size="small" icon={<CopyOutlined />} onClick={() => cloneTask(task)}>复制</TipButton>
-                          {/* 同步：与表格视图一致，"另存为模板"收起到更多下拉菜单 */}
-                          <Dropdown
-                            trigger={['click']}
-                            menu={{
-                              items: [
-                                {
-                                  key: 'saveAsTemplate',
-                                  label: '另存为模板',
-                                  icon: <SaveOutlined />,
-                                  onClick: () => { void saveAsTemplate(task) },
-                                },
-                              ],
-                            }}
-                          >
-                            <TipButton tip="展开更多操作" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
-                          </Dropdown>
-                          <Popconfirm
-                            title="确认删除该任务？"
-                            description="删除后不可恢复"
-                            onConfirm={() => runDangerAction(task.id, 'delete', '删除')}
-                            okText="删除"
-                            cancelText="取消"
-                            okButtonProps={{ danger: true }}
-                          >
-                            <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />}>删除</TipButton>
-                          </Popconfirm>
-                        </>
+                      <TipButton tip="编辑该任务" size="small" icon={<EditOutlined />} onClick={() => navigate(`/tasks/${task.id}/edit`)}>编辑</TipButton>
+                      {startPauseBtn}
+                      {showStopBtn && (
+                        <Popconfirm
+                          title="确认停止该任务？"
+                          description="停止后任务将不再运行"
+                          onConfirm={() => runDangerAction(task.id, 'stop', '停止')}
+                          okText="停止"
+                          cancelText="取消"
+                          okButtonProps={{ danger: true }}
+                        >
+                          <TipButton tip="停止该任务（需二次确认）" size="small" danger icon={<StopOutlined />}>停止</TipButton>
+                        </Popconfirm>
+                      )}
+                      <TipButton tip="复制该任务为新任务" size="small" icon={<CopyOutlined />} onClick={() => cloneTask(task)}>复制</TipButton>
+                      {/* 同步：与表格视图一致，"另存为模板"收起到更多下拉菜单 */}
+                      <Dropdown
+                        trigger={['click']}
+                        menu={{
+                          items: [
+                            {
+                              key: 'saveAsTemplate',
+                              label: '另存为模板',
+                              icon: <SaveOutlined />,
+                              onClick: () => { void saveAsTemplate(task) },
+                            },
+                          ],
+                        }}
+                      >
+                        <TipButton tip="展开更多操作" size="small" icon={<MoreOutlined />} aria-label="更多操作" />
+                      </Dropdown>
+                      <Popconfirm
+                        title="确认删除该任务？"
+                        description="删除后不可恢复"
+                        onConfirm={() => runDangerAction(task.id, 'delete', '删除')}
+                        okText="删除"
+                        cancelText="取消"
+                        okButtonProps={{ danger: true }}
+                      >
+                        <TipButton tip="删除该任务（需二次确认）" size="small" danger icon={<DeleteOutlined />}>删除</TipButton>
+                      </Popconfirm>
                     </div>
                   </Card>
                 </Col>

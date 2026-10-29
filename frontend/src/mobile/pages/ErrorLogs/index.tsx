@@ -102,6 +102,9 @@ export default function MobileErrorLogs() {
 
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
+  // 空态：拉取失败时显示错误条而不是「暂无」，两种状态分开放，避免 JSX 里嵌套三元
+  const emptyState = failed.list ? null : <Empty description="暂无错误日志" />
+
   return (
     <div>
       {failed.list && (
@@ -147,7 +150,7 @@ export default function MobileErrorLogs() {
       </Space>
 
       {items.length === 0 ? (
-        failed.list ? null : <Empty description="暂无错误日志" />
+        emptyState
       ) : (
         items.map((item) => (
           <Card

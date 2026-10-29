@@ -269,10 +269,7 @@ class RAGEngine:
             raise RuntimeError("RAG LLM 已被 AI 总开关关闭")
 
         # 预算检查：避免超额调用导致费用失控
-        if self._ai_usage is not None:
-            budget_ok, reason = self._ai_usage.check_budget()
-            if not budget_ok:
-                raise RuntimeError(f"LLM 预算超限: {reason}")
+        self._ensure_llm_budget()
 
         first_token_received = False
         # 累积完整响应用于 record_usage（流式响应 usage 字段需 stream_options 才返回，
@@ -337,6 +334,14 @@ class RAGEngine:
 
         # 正常路径记录用量（流式响应通常无 usage 字段，用估算值）
         self._record_llm_usage(messages, collected_output)
+
+    def _ensure_llm_budget(self) -> None:
+        """调用前预算检查：用量服务未注入时跳过，超限抛 RuntimeError 走降级链"""
+        if self._ai_usage is None:
+            return
+        budget_ok, reason = self._ai_usage.check_budget()
+        if not budget_ok:
+            raise RuntimeError(f"LLM 预算超限: {reason}")
 
     def _record_llm_usage(
         self, messages: list[dict], collected_output: list[str]

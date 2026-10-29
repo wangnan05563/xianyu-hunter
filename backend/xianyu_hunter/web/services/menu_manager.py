@@ -215,8 +215,8 @@ class MenuManager:
                 # 用户级覆盖优先：仅覆盖 visible/sort_order 两个字段
                 merged_item["visible"] = uc["visible"]
                 merged_item["sort_order"] = uc["sort_order"]
-            # 菜单管理页自身不可隐藏：它是唯一的菜单恢复入口，
-            # 一旦被隐藏用户再也进不去，只能改数据库恢复
+            # menu_admin 是唯一的菜单恢复入口，一旦被隐藏用户再也进不去，
+            # 只能改数据库恢复，因此这里必须再次强制它保持可见
             if key in _ALWAYS_VISIBLE_KEYS:
                 merged_item["visible"] = True
             merged.append(merged_item)

@@ -85,6 +85,43 @@ function ThumbCell({ url, title }: { readonly url?: string | null; readonly titl
   )
 }
 
+type AppModalApi = ReturnType<typeof App.useApp>['modal']
+
+// S2004：手动抢单确认逻辑提到模块级，避免 render→confirmTakeover→onOk 三层闭包叠加。
+// 载体必须是 modal.confirm 而不是 Popconfirm（T02671）：手动抢单会提交**真实订单**，
+// 确认文案要写清价格/评分/后果；而浮层若锚在 fixed:'right' 单元格里，大表横向滚动时
+// Trigger 会反复重算位置——用户看到闪烁，Playwright 普通 click 直接 element is not stable。
+function openTakeoverConfirm(
+  modal: AppModalApi,
+  r: EvalItem,
+  autoBuyScore: number,
+  onManualTakeover: (r: EvalItem) => Promise<void>,
+) {
+  const score = r.payload.score ?? 0
+  const price = r.payload.item_price
+  const evalTitle = r.payload.item_title || r.item_id
+  modal.confirm({
+    title: '确认手动抢单？',
+    content: (
+      <div style={{ maxWidth: 360 }}>
+        <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {evalTitle}
+        </div>
+        <div>
+          价格：{price == null ? '未知' : `¥${price}`}　评分：{score.toFixed(0)}（自动抢单阈值 {autoBuyScore}）
+        </div>
+        <div style={{ color: 'var(--xh-text-secondary)' }}>
+          确认后由浏览器自动化直接提交真实订单（不走通知里的确认环节），请核对价格后再点。
+        </div>
+      </div>
+    ),
+    okText: '确认抢单',
+    okButtonProps: { danger: true },
+    cancelText: '取消',
+    onOk: () => onManualTakeover(r),
+  })
+}
+
 interface UseEvalColumnsParams {
   autoBuyScore: number
   passScore: number
@@ -451,37 +488,8 @@ export function useEvalColumns(params: UseEvalColumnsParams) {
           return <ActionPlaceholder text={`${ACTION_PLACEHOLDER_TEXT[placeholder]}${soldHint}`} />
         }
         const score = r.payload.score ?? 0
-        // 评审 2.4-1：手动抢单会调用浏览器自动化提交**真实订单**（真金白银），
-        // 原先一键直下、零确认（同产品删任务都要二次确认，风险不对称）。
-        // 确认文案必须把价格/评分/后果写进去，让用户在点的那一下就知道自己花多少钱、
-        // 为什么这单被推荐；载体是 modal.confirm（见下方 T02671 说明），与工具栏上
-        // 仍在用 Popconfirm 的「重新评估」不同——那一处不在固定列里，没有定位问题。
-        const price = r.payload.item_price
-        const evalTitle = r.payload.item_title || r.item_id
-        // T02671：确认弹层从 Popconfirm 改为 modal.confirm。
-        // 原先浮层锚在 fixed:'right' 单元格里，大表 + 横向滚动时 Trigger 每次滚动都重算位置，
-        // 用户看到确认框闪烁，Playwright 普通 click 直接 element is not stable。
-        // Modal 居中挂载、不跟触发点定位，抖动与自动化阻塞一并消失；确认语义与四要素文案不变。
-        const confirmTakeover = () => modal.confirm({
-          title: '确认手动抢单？',
-          content: (
-            <div style={{ maxWidth: 360 }}>
-              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {evalTitle}
-              </div>
-              <div>
-                价格：{price == null ? '未知' : `¥${price}`}　评分：{score.toFixed(0)}（自动抢单阈值 {autoBuyScore}）
-              </div>
-              <div style={{ color: 'var(--xh-text-secondary)' }}>
-                确认后由浏览器自动化直接提交真实订单（不走通知里的确认环节），请核对价格后再点。
-              </div>
-            </div>
-          ),
-          okText: '确认抢单',
-          okButtonProps: { danger: true },
-          cancelText: '取消',
-          onOk: () => onManualTakeover(r),
-        })
+        // 按钮只负责打开确认，下单在 openTakeoverConfirm 的 onOk 里
+        const confirmTakeover = () => openTakeoverConfirm(modal, r, autoBuyScore, onManualTakeover)
         return (
           <TipButton
             tip={`手动抢单（评分 ${score.toFixed(0)} ≥ ${autoBuyScore}），点击后需二次确认`}

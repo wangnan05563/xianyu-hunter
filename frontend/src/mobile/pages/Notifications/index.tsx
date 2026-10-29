@@ -117,6 +117,9 @@ export default function MobileNotifications() {
 
   if (loading) return <div style={{ textAlign: 'center', padding: 48 }}><Spin /></div>
 
+  // 空态：拉取失败时不能显示「暂无」，两种状态分开放，避免 JSX 里嵌套三元
+  const emptyState = failed.list ? null : <Empty description="暂无通知" />
+
   return (
     <PullToRefresh onRefresh={refreshKeepingWindow}>
       {failed.list && (
@@ -142,7 +145,7 @@ export default function MobileNotifications() {
       </Space>
 
       {items.length === 0 ? (
-        failed.list ? null : <Empty description="暂无通知" />
+        emptyState
       ) : (
         items.map((item) => {
           const unread = item.read_at === null

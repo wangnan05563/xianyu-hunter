@@ -161,6 +161,33 @@ def _dir_stats(path: Path) -> tuple[float, int]:
     return round(size / 1024 / 1024, 2), count
 
 
+def _cmdline_uses_user_data_dir(cmdline: list | None, target: str) -> bool:
+    """判断进程命令行里是否带 `--user-data-dir=<target>`（大小写/尾部分隔符不敏感）
+
+    target 由调用方预先处理成小写、去掉尾部分隔符的形式。
+    """
+    for part in cmdline or []:
+        p = str(part).lower()
+        if p.startswith("--user-data-dir=") and \
+                p.split("=", 1)[1].rstrip("\\/").lower() == target:
+            return True
+    return False
+
+
+def _busy_pid_from_psutil(psutil_mod, target: str) -> str | None:
+    """遍历进程表，返回占用 target 目录的进程描述；无匹配返回 None
+
+    单个进程读不到 cmdline（进程已退出/无权限）时跳过，不影响整体扫描。
+    """
+    for proc in psutil_mod.process_iter(["cmdline"]):
+        try:
+            if _cmdline_uses_user_data_dir(proc.info.get("cmdline"), target):
+                return f"PID {proc.info.get('pid')}"
+        except Exception:  # noqa: BLE001 - 单个进程不可读不影响整体扫描
+            continue
+    return None
+
+
 def _browser_profile_busy(profile: Path) -> str | None:
     """检测浏览器用户数据目录是否正被浏览器进程占用
 
@@ -176,17 +203,7 @@ def _browser_profile_busy(profile: Path) -> str | None:
     except ImportError:
         psutil = None
     if psutil is not None:
-        target = str(profile).rstrip("\\/").lower()
-        for proc in psutil.process_iter(["cmdline"]):
-            try:
-                for part in (proc.info.get("cmdline") or []):
-                    p = str(part).lower()
-                    if p.startswith("--user-data-dir=") and \
-                            p.split("=", 1)[1].rstrip("\\/").lower() == target:
-                        return f"PID {proc.info.get('pid')}"
-            except Exception:  # noqa: BLE001 - 单个进程不可读不影响整体扫描
-                continue
-        return None
+        return _busy_pid_from_psutil(psutil, str(profile).rstrip("\\/").lower())
     # 无 psutil 的退化判定：Chromium 单实例锁
     return "SingletonLock 存在" if (profile / "SingletonLock").exists() else None
 
@@ -676,6 +693,52 @@ def cleanup_database(
 _LOG_TARGETS = ("old_logs", "large_logs", "all")
 
 
+def _matches_log_cleanup_rule(
+    target: str, mtime: datetime, size_mb: float, cutoff: datetime,
+) -> bool:
+    """判断单个日志文件是否命中清理规则（old_logs 按时间、large_logs 按体积）"""
+    if target in ("old_logs", "all") and mtime < cutoff:
+        return True
+    return target in ("large_logs", "all") and size_mb > 10
+
+
+def _unlink_log_file(f: Path) -> str | None:
+    """删除单个日志文件；成功返回 None，失败返回错误文案（不抛出）
+
+    正在写入的日志在 Windows 上会被句柄占用；删除失败必须显式报错，
+    不能既不算 cleaned 也不告诉用户为什么"清理了却没释放"。
+    """
+    try:
+        f.unlink()
+    except OSError as e:
+        return f"删除 {f.name} 失败: {type(e).__name__}: {e}"
+    return None
+
+
+def _handle_log_file(
+    f: Path, target: str, cutoff: datetime, dry_run: bool,
+    cleaned: list, errors: list,
+) -> float:
+    """按清理规则处理单个日志文件，返回本次（或预览下预计）释放的 MB
+
+    未命中规则返回 0.0；删除失败时把原因写进 errors 并返回 0.0（不计入释放量）。
+    """
+    mtime = datetime.fromtimestamp(f.stat().st_mtime)
+    size_mb = f.stat().st_size / 1024 / 1024
+    if not _matches_log_cleanup_rule(target, mtime, size_mb, cutoff):
+        return 0.0
+    if dry_run:
+        # 预览也要汇总预计释放量，否则前端只能显示"释放 0 MB"（4.1-2）
+        cleaned.append(f"[预览] 将删除 {f.name} ({round(size_mb, 2)}MB, {mtime.strftime('%Y-%m-%d')})")
+        return size_mb
+    failure = _unlink_log_file(f)
+    if failure is not None:
+        errors.append(failure)
+        return 0.0
+    cleaned.append(f"已删除 {f.name} ({round(size_mb, 2)}MB)")
+    return size_mb
+
+
 @router.post("/logs")
 def cleanup_logs(
     req: CleanupRequest,
@@ -722,30 +785,9 @@ def cleanup_logs(
         for f in log_dir.glob("*.log*"):
             if not f.is_file():
                 continue
-            mtime = datetime.fromtimestamp(f.stat().st_mtime)
-            size_mb = f.stat().st_size / 1024 / 1024
-
-            # S1871: 两个分支都设置 should_delete=True，合并条件简化逻辑
-            should_delete = (
-                (target in ("old_logs", "all") and mtime < cutoff)
-                or (target in ("large_logs", "all") and size_mb > 10)
+            total_freed_mb += _handle_log_file(
+                f, target, cutoff, req.dry_run, cleaned, errors,
             )
-
-            if should_delete:
-                if req.dry_run:
-                    # 预览也要汇总预计释放量，否则前端只能显示"释放 0 MB"（4.1-2）
-                    total_freed_mb += size_mb
-                    cleaned.append(f"[预览] 将删除 {f.name} ({round(size_mb, 2)}MB, {mtime.strftime('%Y-%m-%d')})")
-                else:
-                    try:
-                        f.unlink()
-                    except OSError as e:
-                        # 正在写入的日志在 Windows 上会被句柄占用；删除失败必须显式
-                        # 报错，不能既不算 cleaned 也不告诉用户为什么"清理了却没释放"
-                        errors.append(f"删除 {f.name} 失败: {type(e).__name__}: {e}")
-                        continue
-                    total_freed_mb += size_mb
-                    cleaned.append(f"已删除 {f.name} ({round(size_mb, 2)}MB)")
     except Exception as e:
         errors.append(f"日志清理失败: {e}")
 

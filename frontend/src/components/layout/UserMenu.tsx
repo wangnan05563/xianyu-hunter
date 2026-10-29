@@ -86,10 +86,27 @@ const SECURITY_FLAG_CONFIGS: ReadonlyArray<{
 // 健康状态头部：图标 + 文案 + 完整性标签
 // 结论来源：统一健康端点 status（PRD FR-C1-5 面板展示统一结论），
 // legacy CookieHealthReport 仅承载明细字段
+// S3358：图标、标签文案、图标色都收进这张表，组件里不再写嵌套三元
 const UNIFIED_STATUS_META = {
-  healthy: { text: '登录态正常', color: 'success' as const },
-  degraded: { text: '会话令牌待刷新', color: 'warning' as const },
-  invalid: { text: '登录态失效', color: 'error' as const },
+  healthy: {
+    text: '登录态正常', color: 'success' as const, tagText: '健康',
+    icon: CheckCircleFilled, tone: 'success' as const,
+  },
+  degraded: {
+    text: '会话令牌待刷新', color: 'warning' as const, tagText: '降级',
+    icon: ExclamationCircleFilled, tone: 'warning' as const,
+  },
+  invalid: {
+    text: '登录态失效', color: 'error' as const, tagText: '失效',
+    icon: ExclamationCircleFilled, tone: 'error' as const,
+  },
+} as const
+
+// 图标语义色 → 主题 token 字段（查表取值，避免再写一层三元）
+const STATUS_TONE_TOKEN = {
+  success: 'colorSuccess',
+  warning: 'colorWarning',
+  error: 'colorError',
 } as const
 
 // reason.issue 友好文案映射：原始 issue 码对用户无意义
@@ -116,10 +133,8 @@ function UnifiedHealthHeader({
   readonly themeToken: ReturnType<typeof theme.useToken>['token']
 }) {
   const meta = UNIFIED_STATUS_META[unified.status]
-  const StatusIcon = unified.status === 'healthy' ? CheckCircleFilled : ExclamationCircleFilled
-  const iconColor = unified.status === 'healthy'
-    ? themeToken.colorSuccess
-    : unified.status === 'degraded' ? themeToken.colorWarning : themeToken.colorError
+  const StatusIcon = meta.icon
+  const iconColor = themeToken[STATUS_TONE_TOKEN[meta.tone]]
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
       <StatusIcon style={{ color: iconColor, fontSize: 16 }} />
@@ -129,10 +144,15 @@ function UnifiedHealthHeader({
         <Tag color="processing" style={{ fontSize: 10, margin: 0 }}>已自动修复</Tag>
       )}
       <Tag color={meta.color} style={{ marginLeft: 'auto', fontSize: 11 }}>
-        {unified.status === 'healthy' ? '健康' : unified.status === 'degraded' ? '降级' : '失效'}
+        {meta.tagText}
       </Tag>
     </div>
   )
+}
+
+/** 单个原因行的稳定标识：同源同因去重键，同时用作列表 key（S6479：不再用数组下标） */
+function reasonRowKey(r: UnifiedHealthReport['reasons'][number]): string {
+  return `${r.source}|${r.cookie}|${r.issue}`
 }
 
 // 原因列表：逐条展示哪个 Cookie / 哪个档案 / 什么问题（去重避免同源同因重复刷屏）
@@ -145,7 +165,7 @@ function UnifiedReasonsList({
 }) {
   const seen = new Set<string>()
   const rows = unified.reasons.filter((r) => {
-    const key = `${r.source}|${r.cookie}|${r.issue}`
+    const key = reasonRowKey(r)
     if (seen.has(key)) return false
     seen.add(key)
     return true
@@ -158,8 +178,8 @@ function UnifiedReasonsList({
       background: themeToken.colorFillQuaternary,
       borderRadius: 4,
     }}>
-      {rows.map((r, i) => (
-        <div key={i}>
+      {rows.map((r) => (
+        <div key={reasonRowKey(r)}>
           {r.cookie ? `${r.cookie} ` : ''}
           {ISSUE_LABELS[r.issue] ?? r.issue}
           {r.source !== 'none' && r.source !== 'collector' ? `（${r.source}）` : ''}
@@ -218,6 +238,25 @@ function DiagnosisDrawer({
   readonly onClose: () => void
   readonly themeToken: ReturnType<typeof theme.useToken>['token']
 }) {
+  // S3358：原来的三层嵌套三元改为 if/else 提前决定内容
+  // 「没取到」与「取到但确实没有档案」是两回事：前者给重试，后者才是空态（T02700）
+  let body: React.ReactNode
+  if (!unified || failed) {
+    body = <FetchFailedHint source={SOURCE_LABELS.unified} onRetry={onRetry} />
+  } else if (unified.sources.length === 0) {
+    body = <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无档案数据" />
+  } else {
+    body = (
+      <>
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+          结论依据（最新鲜数据源）：{unified.freshest_source ?? '无'}
+        </Text>
+        {unified.sources.map((s) => (
+          <SourceCard key={s.source} src={s} themeToken={themeToken} />
+        ))}
+      </>
+    )
+  }
   return (
     <Drawer
       title="登录态诊断详情"
@@ -227,21 +266,7 @@ function DiagnosisDrawer({
       onClose={onClose}
       styles={{ body: { padding: '12px 16px' } }}
     >
-      {/* 「没取到」与「取到但确实没有档案」是两回事：前者给重试，后者才是空态（T02700） */}
-      {!unified || failed ? (
-        <FetchFailedHint source={SOURCE_LABELS.unified} onRetry={onRetry} />
-      ) : unified.sources.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="无档案数据" />
-      ) : (
-        <>
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-            结论依据（最新鲜数据源）：{unified.freshest_source ?? '无'}
-          </Text>
-          {unified.sources.map((s) => (
-            <SourceCard key={s.source} src={s} themeToken={themeToken} />
-          ))}
-        </>
-      )}
+      {body}
     </Drawer>
   )
 }
@@ -475,8 +500,9 @@ export default function UserMenu({ userInfo, onRefreshUserInfo }: UserMenuProps)
         authApi.checkCookieHealth(),
         opts?.withUserInfo && onRefreshUserInfo ? onRefreshUserInfo() : Promise.resolve(null),
       ])
-      const unifiedData = settle(results[0] as PromiseSettledResult<UnifiedHealthReport>, 'unified')
-      const legacyData = settle(results[1] as PromiseSettledResult<CookieHealthReport>, 'legacy')
+      // S4325：allSettled 的元组已按 Promise.allSettled 入参推断出精确类型，断言多余
+      const unifiedData = settle(results[0], 'unified')
+      const legacyData = settle(results[1], 'legacy')
       if (unifiedData) setUnified(unifiedData)
       if (legacyData) setHealth(legacyData)
     } catch {

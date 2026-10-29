@@ -818,6 +818,33 @@ def list_evaluations(
     return {"items": paged, "count": len(paged), "total": total}
 
 
+def _brand_candidate_payload(r: dict, task_id: str | None) -> tuple[dict, str]:
+    """返回品牌候选的 (payload, item_id)；不合格的记录 item_id 为空串
+
+    只展示 eval.scored 评估事件，排除 eval.passed 等通知事件。
+    为什么不用 startswith("eval.")：NotifierHub 推送钉钉时会写入 type="eval.passed"、
+    payload=None、stage="notify" 的记录（hub.py 第 196-204 行），这些通知事件
+    没有评分数据，混入品牌候选会产出无意义项。
+    """
+    if str(r.get("type", "")) != _EVAL_SCORED_TYPE:
+        return {}, ""
+    payload = r.get("payload") or {}
+    if _match_task_id_filter(payload, r, task_id):
+        return {}, ""
+    return payload, str(payload.get("item_id") or r.get("item_id") or "")
+
+
+def _resolve_item_brand(
+    iid: str, link_map: dict[str, dict], payload_brands: dict[str, str],
+) -> Any:
+    """单个商品的品牌：display 品牌优先（先过归一化），回退事件 payload 里的品牌"""
+    link = link_map.get(iid) or {}
+    if link:
+        # 与列表 enrich 同序：display 品牌先过归一化，标题解释不了就会被清空
+        link, _ = normalize_display_fields(link)
+    return link.get("brand") or payload_brands.get(iid)
+
+
 @router.get("/brands")
 def list_evaluation_brands(
     request: Request,  # NOSONAR
@@ -838,12 +865,7 @@ def list_evaluation_brands(
     item_ids: set[str] = set()
     payload_brands: dict[str, str] = {}
     for r in rows:
-        if str(r.get("type", "")) != _EVAL_SCORED_TYPE:
-            continue
-        payload = r.get("payload") or {}
-        if _match_task_id_filter(payload, r, task_id):
-            continue
-        iid = str(payload.get("item_id") or r.get("item_id") or "")
+        payload, iid = _brand_candidate_payload(r, task_id)
         if not iid:
             continue
         item_ids.add(iid)
@@ -856,11 +878,7 @@ def list_evaluation_brands(
     )
     brands: set[str] = set()
     for iid in item_ids:
-        link = link_map.get(iid) or {}
-        if link:
-            # 与列表 enrich 同序：display 品牌先过归一化，标题解释不了就会被清空
-            link, _ = normalize_display_fields(link)
-        brand = link.get("brand") or payload_brands.get(iid)
+        brand = _resolve_item_brand(iid, link_map, payload_brands)
         if brand:
             brands.add(str(brand))
     return {"brands": sorted(brands)}

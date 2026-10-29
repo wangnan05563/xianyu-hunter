@@ -278,6 +278,31 @@ const getPageTitle = (isEdit: boolean, prefillKeyword: string): string => {
   return '新增任务（向导）'
 }
 
+// S3776 修复：JSX 属性里的三元提取为模块级函数
+// 为什么提取：主组件内 5 处 `validateStatus={err ? 'error' : undefined}` 各计 +1 复杂度
+function fieldStatus(error?: string): 'error' | undefined {
+  if (error) return 'error'
+  return undefined
+}
+
+// 搜索结果覆盖标签：有任务级配置就是「任务级覆盖」，否则「沿用全局」
+function overrideTagLabel(hasOverride: boolean): string {
+  if (hasOverride) return '任务级覆盖'
+  return '沿用全局'
+}
+
+// 全局 QPS 标签色：超过 5 次/秒视为高风险（与 detectRiskyConfig 同一阈值）
+function qpsTagColor(qps: number): string {
+  if (qps > 5) return 'red'
+  return 'green'
+}
+
+// 风险等级色：danger 红、其余橙
+function riskLevelColor(level: 'warning' | 'danger'): string {
+  if (level === 'danger') return '#ff4d4f'
+  return '#faad14'
+}
+
 // S3776 修复：构造提交用的 TaskCreateBody，提取避免主函数内联 +5 复杂度
 const buildTaskSubmitBody = (
   formData: TaskCreateBody,
@@ -682,7 +707,7 @@ export default function TaskEditor() {
               id="wizard-field-keyword"
               label="关键词（必填）"
               required
-              validateStatus={stepErrors.keyword ? 'error' : undefined}
+              validateStatus={fieldStatus(stepErrors.keyword)}
               help={stepErrors.keyword}
             >
               <Input
@@ -788,7 +813,7 @@ export default function TaskEditor() {
             <Form.Item
               id="wizard-field-price"
               label="价格区间（双滑块）"
-              validateStatus={stepErrors.min_price ? 'error' : undefined}
+              validateStatus={fieldStatus(stepErrors.min_price)}
               help={stepErrors.min_price}
             >
               <PriceRangeSlider
@@ -801,7 +826,7 @@ export default function TaskEditor() {
             <Form.Item
               id="wizard-field-max-publish-days"
               label="最大发布天数（仅展示最近 N 天的商品）"
-              validateStatus={stepErrors.max_publish_days ? 'error' : undefined}
+              validateStatus={fieldStatus(stepErrors.max_publish_days)}
               help={stepErrors.max_publish_days}
             >
               <Slider
@@ -873,7 +898,7 @@ export default function TaskEditor() {
             <Space>
               <span>Step 3 · 搜索参数</span>
               <Tag color={formData.search_config ? 'blue' : 'default'}>
-                {formData.search_config ? '任务级覆盖' : '沿用全局'}
+                {overrideTagLabel(!!formData.search_config)}
               </Tag>
             </Space>
           }
@@ -1020,7 +1045,7 @@ export default function TaskEditor() {
             <Space direction="vertical" style={{ width: '100%' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>每秒请求上限（qps）</span>
-                <Tag color={(globalConfig?.antidetect?.qps ?? 1) > 5 ? 'red' : 'green'}>
+                <Tag color={qpsTagColor(globalConfig?.antidetect?.qps ?? 1)}>
                   {globalConfig?.antidetect?.qps ?? 1} 次/秒
                 </Tag>
               </div>
@@ -1083,7 +1108,7 @@ export default function TaskEditor() {
                 id="wizard-field-cron"
                 label="Cron 表达式（可视化编辑器）"
                 tooltip="启用 Cron 模式后按表达式调度，忽略固定间隔"
-                validateStatus={stepErrors.cron ? 'error' : undefined}
+                validateStatus={fieldStatus(stepErrors.cron)}
                 help={stepErrors.cron}
               >
                 <CronEditor value={cron} onChange={setCron} />
@@ -1093,7 +1118,7 @@ export default function TaskEditor() {
                 id="wizard-field-interval"
                 label="执行间隔（秒）"
                 tooltip="过短易触发反爬，过长可能错过抢单窗口。建议 60-300 秒"
-                validateStatus={stepErrors.interval_seconds ? 'error' : undefined}
+                validateStatus={fieldStatus(stepErrors.interval_seconds)}
                 help={stepErrors.interval_seconds}
               >
                 <Space.Compact style={{ width: 200 }}>
@@ -1125,7 +1150,7 @@ export default function TaskEditor() {
                 description={
                   <ul style={{ margin: 0, paddingLeft: 20 }}>
                     {risks.map((r, i) => (
-                      <li key={`${r.level}-${i}`} style={{ color: r.level === 'danger' ? '#ff4d4f' : '#faad14', fontSize: 13 }}>
+                      <li key={`${r.level}-${i}`} style={{ color: riskLevelColor(r.level), fontSize: 13 }}>
                         {r.message}
                       </li>
                     ))}

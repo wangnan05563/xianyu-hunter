@@ -44,11 +44,9 @@ export default function EventStreamSection({ events, streamStatus, overview, onN
               <TipButton size="small" onClick={() => onNavigate('/timeline')} tip="跳转事件时间线查看全部事件">查看全部</TipButton>
             </span>
           }>
-          {error ? (
-            <FetchFailedHint source="事件流" onRetry={onRetry} />
-          ) : events.length === 0 ? (
-            <Empty description="暂无事件" />
-          ) : (
+          {error && <FetchFailedHint source="事件流" onRetry={onRetry} />}
+          {!error && events.length === 0 && <Empty description="暂无事件" />}
+          {!error && events.length > 0 && (
             <List size="small" dataSource={events.slice(0, 50)}
               style={{ maxHeight: 360, overflow: 'auto' }}
               renderItem={(e) => (

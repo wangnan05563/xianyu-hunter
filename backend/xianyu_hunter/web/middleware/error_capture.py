@@ -149,6 +149,31 @@ def _build_ai_context_md(
     return "\n".join(lines)
 
 
+def _resolve_error_container():
+    """复用 Web 进程的 Container 单例（如果已初始化），否则构建临时实例"""
+    from xianyu_hunter.container import build_default_container
+    try:
+        from xianyu_hunter.web.deps import get_container
+        return get_container()
+    except Exception:
+        return build_default_container(with_browser=False)
+
+
+def _request_fields_for_log(request_info: dict | None) -> dict[str, Any]:
+    """构建 error_logs 的请求相关字段；无请求上下文（后台异常）时全为 None"""
+    info = request_info or {}
+    params = info.get("params")
+    headers = info.get("headers")
+    return {
+        "request_method": info.get("method"),
+        "request_path": info.get("path"),
+        "request_params": json.dumps(params, ensure_ascii=False) if params else None,
+        "request_headers": json.dumps(headers, ensure_ascii=False) if headers else None,
+        "client_ip": info.get("client_ip"),
+        "user_agent": info.get("user_agent"),
+    }
+
+
 def _save_error_log(
     error_type: str,
     error_message: str,
@@ -167,13 +192,7 @@ def _save_error_log(
     未传入时 save_error_log 会自动从 ContextVar 读取作为兜底。
     """
     try:
-        from xianyu_hunter.container import build_default_container
-        # 复用 Web 进程的 Container 单例（如果已初始化），否则构建临时实例
-        try:
-            from xianyu_hunter.web.deps import get_container
-            container = get_container()
-        except Exception:
-            container = build_default_container(with_browser=False)
+        container = _resolve_error_container()
 
         ts_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
         # 将 request_id 注入 request_info，使 AI 诊断上下文报告中可见
@@ -191,12 +210,7 @@ def _save_error_log(
             "error_type": error_type,
             "error_message": error_message,
             "stack_trace": stack_trace,
-            "request_method": request_info.get("method") if request_info else None,
-            "request_path": request_info.get("path") if request_info else None,
-            "request_params": json.dumps(request_info.get("params"), ensure_ascii=False) if request_info and request_info.get("params") else None,
-            "request_headers": json.dumps(request_info.get("headers"), ensure_ascii=False) if request_info and request_info.get("headers") else None,
-            "client_ip": request_info.get("client_ip") if request_info else None,
-            "user_agent": request_info.get("user_agent") if request_info else None,
+            **_request_fields_for_log(request_info),
             "server_env": json.dumps(server_env, ensure_ascii=False),
             "ai_context_json": ai_json,
             "ai_context_md": ai_md,
