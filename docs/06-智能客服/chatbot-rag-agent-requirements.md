@@ -147,10 +147,10 @@
 |------|------|------|
 | 需求文档 v1.0 | [docs/requirements.md](file:///d:/code/otherProjects/17_xianyu/docs/requirements.md) | 系统整体需求基线 |
 | 概要设计文档 v2.0 | [docs/概要设计文档.md](file:///d:/code/otherProjects/17_xianyu/docs/概要设计文档.md) | 36 个 API 路由、11 张数据表、技术选型 |
-| 技术设计说明书 | [docs/design.md](file:///d:/code/otherProjects/17_xianyu/docs/design.md) | 分层架构、Evaluator 设计、状态机 |
+| 技术设计说明书 | [../概要设计文档.md](file:///d:/code/otherProjects/17_xianyu/../概要设计文档.md) | 分层架构、Evaluator 设计、状态机 |
 | 优化需求 v2.0 | [docs/optimization-requirements-2026-06-27.md](file:///d:/code/otherProjects/17_xianyu/docs/optimization-requirements-2026-06-27.md) | O-01~O-20 优化项、Sprint L-N 路线 |
 | 功能盘点与可视化方案 | [docs/功能盘点与可视化方案.md](file:///d:/code/otherProjects/17_xianyu/docs/功能盘点与可视化方案.md) | 46 个配置点盘点 |
-| 米其林设计系统 | [docs/michelin-design-system.md](file:///d:/code/otherProjects/17_xianyu/docs/michelin-design-system.md) | UI 设计规范、色彩字体系统 |
+| 米其林设计系统 | [docs/](file:///d:/code/otherProjects/17_xianyu/docs/) | UI 设计规范、色彩字体系统 |
 | 部署指南 | [docs/deployment.md](file:///d:/code/otherProjects/17_xianyu/docs/deployment.md) | 原生/Windows 部署 |
 | 现有 AI 接口 | [backend/xianyu_hunter/web/routes/api_ai.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/web/routes/api_ai.py) | OpenAI 兼容调用（httpx 直调，无 `_call_llm` 函数，复用其调用模式） |
 | AI 用量统计 | [backend/xianyu_hunter/infra/ai_usage.py](file:///d:/code/otherProjects/17_xianyu/backend/xianyu_hunter/infra/ai_usage.py) | `check_budget` / `record_usage` 复用；新增 endpoint 命名规范见 §8.3 |
@@ -499,9 +499,9 @@ sequenceDiagram
 | 来源类型 | 路径 | 处理方式 |
 |----------|------|----------|
 | 模块需求文档 | `docs/requirements.md`、`docs/optimization-requirements-2026-06-27.md`、`docs/requirement-review.md` | 按 H2/H3 标题切片 |
-| 系统设计文档 | `docs/design.md`、`docs/概要设计文档.md`、`docs/directory-structure.md`、`docs/deployment.md` | 按 H2/H3 标题切片 |
+| 系统设计文档 | `../概要设计文档.md`、`docs/概要设计文档.md`、`../目录结构.md`、`docs/deployment.md` | 按 H2/H3 标题切片 |
 | 代码逻辑说明 | `backend/xianyu_hunter/**/*.py` 的模块 docstring + 关键函数 docstring | 按模块/函数切片 |
-| 操作使用手册 | `docs/michelin-design-system.md`、`docs/功能盘点与可视化方案.md`、`docs/ux-review-2026-06.md`、现有 [Help/index.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Help/index.tsx) 的 DOC_SECTIONS 数据 | 按 H2/H3 标题切片 |
+| 操作使用手册 | `docs/`、`docs/功能盘点与可视化方案.md`、`docs/ux-review-2026-06.md`、现有 [Help/index.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/pages/Help/index.tsx) 的 DOC_SECTIONS 数据 | 按 H2/H3 标题切片 |
 
 **FR-4.2.2 文档切片策略**
 - 按 Markdown 标题层级（H2/H3）切分为语义完整的片段
@@ -560,7 +560,7 @@ sequenceDiagram
     [1] 来源：docs/requirements.md §4.9
     内容：...
 
-    [2] 来源：docs/design.md §4.4
+    [2] 来源：../概要设计文档.md §4.4
     内容：...
     ```
 - **截断策略**（context 总长度限制 8000 字符）：
@@ -1482,7 +1482,7 @@ frontend/src/
 └──────────┴──────────────────────────────────────────┘
 ```
 
-**设计规范**：遵循 [米其林设计系统](file:///d:/code/otherProjects/17_xianyu/docs/michelin-design-system.md)
+**设计规范**：遵循 [米其林设计系统](file:///d:/code/otherProjects/17_xianyu/docs/)
 - 色彩（亮色主题）：主色 `--michelin-red: #E20613`，客服气泡使用 `--guide-cream: #F5F0E8`，用户气泡使用 `--michelin-red` 轻度变体
 - 色彩（暗色主题，遵循 [ThemeContext.tsx](file:///d:/code/otherProjects/17_xianyu/frontend/src/contexts/ThemeContext.tsx)）：客服气泡 `#2A2A2A`，用户气泡 `#4A1A1A`，文字 `#E0E0E0`
 - 字体：正文 Inter / 中文 Noto Serif SC / 代码 JetBrains Mono

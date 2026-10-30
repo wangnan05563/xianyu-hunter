@@ -1235,7 +1235,11 @@ def _filter_live_by_publish_days(
     if max_publish_days is None:
         return filtered
     from datetime import datetime as _dt
-    _now = _dt.now()
+    from datetime import timezone as _tz
+    # 必须用 aware now：collector 产出的 publish_time 是 UTC aware，
+    # 朴素 datetime.now() 与之相减抛 TypeError 并被下面的 except 吞掉，
+    # 导致该过滤对真实数据静默失效（与 repo_links 的 DB 侧过滤口径不一致）
+    _now = _dt.now(_tz.utc)
     _filtered = []
     publish_days_skipped = 0
     _filtered_out = filter_summary["filtered_out"]
@@ -1246,6 +1250,8 @@ def _filter_live_by_publish_days(
             continue
         try:
             pub_dt = _dt.fromisoformat(str(pub).replace("Z", "+00:00"))
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=_tz.utc)
             if (_now - pub_dt).days > max_publish_days:
                 publish_days_skipped += 1
                 if len(_filtered_out) < 50:

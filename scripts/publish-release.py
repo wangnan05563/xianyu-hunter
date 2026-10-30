@@ -321,7 +321,7 @@ def main():
         print("  （设置 GH_DRY_RUN=0 或清除该变量后重跑即可真正发布）")
         return
 
-    if len(TOKEN) < (os.environ.get("GH_TOKEN_MIN_LEN", "20")):
+    if len(TOKEN) < int(os.environ.get("GH_TOKEN_MIN_LEN", "20")):
         sys.exit("GH_TOKEN 缺失（环境变量 / .env / git 凭据库均无 github.com 凭证）")
 
     st, resp = api(f"/repos/{REPO}/releases", {

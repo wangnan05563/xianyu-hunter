@@ -56,7 +56,7 @@
 
 ## 5. 视觉规范（已演进至米其林风格）
 
-当前视觉规范详见 `docs/michelin-design-system.md`：
+当前视觉规范详见 `docs/`：
 - 主色：米其林红 `#E20613`
 - 评级色：星标金 `#C9A961`
 - Display 字体：Cormorant Garamond

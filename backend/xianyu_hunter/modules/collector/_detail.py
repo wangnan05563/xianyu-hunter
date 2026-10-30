@@ -1311,7 +1311,7 @@ class DetailMixin:
         self._cache_fallback_profile(result, seller_id, cache_key)
 
         logger.info(
-            "[SellerProfile降级] seller_id=%s nick=%s credit=%s on_sale=%s sold=%s 数据质量=%s",
+            "[SellerProfile降级] seller_id={} nick={} credit={} on_sale={} sold={} 数据质量={}",
             seller_id, nick, credit_score, on_sale_count, sold_count,
             "partial" if has_basic_info else "insufficient"
         )

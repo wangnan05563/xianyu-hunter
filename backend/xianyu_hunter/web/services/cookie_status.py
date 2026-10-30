@@ -630,7 +630,10 @@ def _applicable_self_heal_names(
     missing = set(arch["identity_missing"])
     applicable: set[str] = set()
     for name in _broken_identity_names(arch) & set(picked):
-        current = next(c for c in data["cookies"] if c.get("name") == name).get("value")
+        # `_m_h5_tk` 会因「无有效值」进入 broken，但档案里可能根本没有这一项
+        current = next(
+            (c for c in data["cookies"] if c.get("name") == name), {}
+        ).get("value")
         if current != picked[name][0].get("value") or name in missing:
             applicable.add(name)
     return applicable

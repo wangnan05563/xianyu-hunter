@@ -57,7 +57,7 @@
 
 ### 1.2 项目背景
 
-闲鱼猎人（XianyuHunter）是一个闲鱼自动捡漏与抢单工具，已具备任务管理、商品采集、AI 评估、自动下单、多渠道通知、智能客服等完整能力（详见 [requirements.md](../requirements.md)、[design.md](../design.md) 与 [概要设计文档.md](../概要设计文档.md)）。
+闲鱼猎人（XianyuHunter）是一个闲鱼自动捡漏与抢单工具，已具备任务管理、商品采集、AI 评估、自动下单、多渠道通知、智能客服等完整能力（详见 [requirements.md](../requirements.md)、[概要设计文档.md](../概要设计文档.md) 与 [概要设计文档.md](../概要设计文档.md)）。
 
 随着系统功能扩展，**AI 服务相关的核心能力分散在多个模块（api_ai / api_ai_deep / local_embedding / api_prompts / price_dashboard / ai_usage）**，缺乏统一的配置入口，导致以下痛点：
 
@@ -212,9 +212,9 @@
 |------|------|------|
 | 需求文档 v1.0 | [../requirements.md](../requirements.md) | 系统整体需求基线 |
 | 概要设计文档 v2.0 | [概要设计文档.md](../概要设计文档.md) | 36 个 API 路由、11 张数据表、技术选型 |
-| 技术设计说明书 | [../design.md](../design.md) | 分层架构、Evaluator 设计、状态机 |
+| 技术设计说明书 | [../概要设计文档.md](../概要设计文档.md) | 分层架构、Evaluator 设计、状态机 |
 | AI 服务 详细设计 v2.0 | [AI服务-详细设计.md](AI服务-详细设计.md) | 本模块技术设计、代码位置、FAQ |
-| 米其林设计系统 | [../standards/michelin-design-system.md](../standards/michelin-design-system.md) | UI 设计规范、色彩字体系统 |
+| 米其林设计系统 | [../standards/](../standards/) | UI 设计规范、色彩字体系统 |
 | 任务管理 SRS | [../02-数据查看/任务管理-需求规格.md](../02-数据查看/任务管理-需求规格.md) | SRS 模板参考（12 章节完整版） |
 | 反爬登录管理 SRS | [../04-系统维护/反爬登录管理-需求规格.md](../04-系统维护/反爬登录管理-需求规格.md) | SRS 模板参考 |
 | 智能客服 SRS | [../06-智能客服/智能客服-需求规格.md](../06-智能客服/智能客服-需求规格.md) | SRS 模板参考 |
