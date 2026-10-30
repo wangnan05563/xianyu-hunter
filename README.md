@@ -20,6 +20,32 @@
 > 请仅用于个人研究学习，保持低频使用、单一账号、对自己经手的商品负责。
 > 开发者不对因使用本工具造成的任何损失（账号封禁、财产损失、纠纷等）承担责任。
 
+## 界面预览
+
+控制台为桌面端 + 移动端两套界面、同一后端。以下截图取自实际运行实例
+（示例数据，昵称 / 订单号 / Webhook / 令牌等敏感信息已打码）：
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/product-shots/01-tasks.png" alt="任务管理"><br><sub>任务管理：关键词、价格区间、执行模式与启停</sub></td>
+    <td width="50%"><img src="docs/assets/product-shots/02-items.png" alt="商品库"><br><sub>商品库：去重后的候选池，按任务 / 价格 / 时间筛选</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/product-shots/03-evaluations.png" alt="评估明细"><br><sub>评估明细：四项评分 + 价格分布热力图</sub></td>
+    <td width="50%"><img src="docs/assets/product-shots/05-orders.png" alt="抢单记录"><br><sub>抢单记录：订单状态流转与失败原因</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/product-shots/05b-confirm-buy.png" alt="购买确认"><br><sub>购买确认：下单前再校验一次价格容差</sub></td>
+    <td width="50%"><img src="docs/assets/product-shots/06b-notifications.png" alt="通知中心"><br><sub>通知中心：告警深链直达商品、订单与任务</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/product-shots/07-mobile-dashboard.png" alt="移动端仪表盘"><br><sub>移动端（可装 PWA）：出门在外也能看任务、收通知、改配置</sub></td>
+    <td width="50%"><img src="docs/assets/product-shots/08-chatbot.png" alt="智能客服"><br><sub>智能客服：本地 RAG 知识库问答</sub></td>
+  </tr>
+</table>
+
+> 完整配图与逐图说明（含打码要求）见 [`docs/XianyuHunter-产品介绍.docx`](docs/XianyuHunter-产品介绍.docx)。
+
 ## 特性
 
 **核心链路**
@@ -65,6 +91,24 @@
 - 内网穿透隧道集成（cloudflared / cpolar），便于外网访问本地控制台
 - Windows 桌面打包：PyInstaller 生成单目录 EXE + Inno Setup 安装包 + 系统托盘
 
+## 应用场景
+
+| 场景 | 传统做法 | 用 XianyuHunter |
+|------|----------|-----------------|
+| 热门机型 / 限量款 | 反复刷搜索页，靠运气碰上 | 关键词 + 价格区间常驻监控，上架即推送 |
+| 卖家真假难辨 | 点进主页逐条翻评价与历史 | 四项评分与明细直接给出，低于阈值自动跳过 |
+| 价格心里没底 | 跨平台比价、问朋友 | 价格行情与同类低价 TopN，结合市场参考价判断 |
+| 上班 / 外出无法盯盘 | 只能事后翻聊天记录 | 手机 PWA 收通知，八渠道任选，随时暂停与恢复 |
+
+## 设计取向
+
+- **本地优先**：商品、卖家、订单、日志都在本机 SQLite，推送密钥由系统 keyring（Windows DPAPI）加密保管，不依赖云端账号
+- **开源可审计**：后端 Python + FastAPI，前端 React + TypeScript，浏览器自动化 Playwright，MIT 许可
+- **参数可调**：限速、操作间隔、评估阈值、价格策略、通知渠道、免打扰均可调，配置文件与控制台双入口
+- **过程可观测**：事件总线解耦「发现 → 评估 → 下单 → 通知」，时间线可回放每一次决策
+- **双端一致**：同一套后端同时服务桌面端与移动端，移动端可添加到主屏幕
+- **交付省心**：一条脚本完成前端构建、PyInstaller 打包与 Inno Setup 安装包，可选常驻系统托盘
+
 ## 技术栈
 
 | 层次 | 技术 |
@@ -74,6 +118,16 @@
 | 数据 / 安全 | Keyring（Windows DPAPI）· cryptography（Chrome Cookie 解密）· tenacity（重试） |
 | 智能客服 | ChromaDB + sentence-transformers（中文 Embedding：bge-small-zh-v1.5，支持 ONNX 导出） |
 | 前端 | React 18.3 · TypeScript 5.5 · Vite 5 · Ant Design 5 · ECharts 5 · Zustand · React Router 6 · PWA |
+
+## 系统要求
+
+| 项目 | 要求 |
+|------|------|
+| 操作系统 | Windows 10 / 11 64 位（登录态加密依赖 DPAPI；桌面打包同为 Windows） |
+| 运行环境 | 源码运行需 Python 3.10+；打包版免安装 Python |
+| 磁盘空间 | 建议预留 1 GB 以上（含 Playwright Chromium 与依赖） |
+| 网络 | 可正常访问 goofish.com；使用内网穿透时需额外放通隧道端口 |
+| 浏览器 | 无需自备浏览器，程序使用内置 Playwright Chromium |
 
 ## 安装
 
@@ -340,6 +394,32 @@ scripts\构建打包.bat
 产物为 Windows 单目录 EXE（`release/xianyu-hunter/`）与 Inno Setup 安装包。
 安装包可选启用系统托盘（依赖 `pystray` + `pillow`）。
 
+## 常见问题
+
+**需要电脑一直开着吗？**
+
+需要。程序在本机运行，电脑休眠或断网时监控会停止；移动端用于远程查看与操作控制台。
+
+**会不会导致账号被限制？**
+
+存在风险，见 [风险与免责](#风险与免责)。默认参数低频保守，检测到风控会主动暂停；建议单账号、低频率使用。
+
+**抢单一定能成功吗？**
+
+不保证。详情页「立即购买」的窗口通常不足 30 秒，对网络与响应延迟敏感；建议先用 `confirm` 或 `semi_auto` 模式观察。
+
+**推送渠道怎么选？**
+
+国内手机推荐 Server酱、PushPlus 或 Bark；团队协作可用企业微信、钉钉或自定义 Webhook；自建服务可选 ntfy。
+
+**数据会被上传吗？**
+
+不会。商品、订单、日志保存在本地数据库，密钥保存在系统 keyring，不经过任何第三方服务器。
+
+**智能客服需要联网吗？**
+
+知识库与向量检索在本机完成；接入在线大模型时按你配置的服务商调用，关闭 AI 总开关即完全走本地规则。
+
 ## 已知限制
 
 1. **不支持云控验证码**：首次登录需人工；运行时若触发滑块会失败，并由风控模块暂停
@@ -364,6 +444,8 @@ scripts\构建打包.bat
 1. 后端测试通过：`python -m pytest tests/`
 2. 前端测试通过：`cd frontend && npm run test`
 3. 前端类型检查与构建无错误：`cd frontend && npm run build`
+
+如果你也在二手平台蹲过心仪的东西，欢迎 Star 与提 Issue，一起把「捡漏」这件事做得更省心。
 
 ## 许可证
 

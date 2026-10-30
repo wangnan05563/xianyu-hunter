@@ -96,6 +96,8 @@ scripts/.screenshots/
 # 视觉基线门禁（T02796）的基线图必须入库，上面的 *.png 会连它一起挡掉，这里反向放行。
 # 能生效是因为没有规则忽略它的父目录：`tests/visual/` 含斜杠 → 根锚定，不匹配 frontend/tests/visual/。
 !frontend/tests/visual/**/*.png
+# README 与产品介绍文档引用的界面截图（T03676）同样需要随仓分发，否则 GitHub 上显示为破图。
+!docs/assets/product-shots/*.png
 
 # ---------- 临时文件 ----------
 *.tmp
