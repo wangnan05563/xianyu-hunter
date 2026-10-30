@@ -1,0 +1,3012 @@
+[
+ {
+  "name": "GET /api/tasks",
+  "path": "/api/tasks",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks",
+  "params": {
+   "status": "all",
+   "limit": "20",
+   "offset": "0"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tasks",
+  "path": "/api/tasks",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/tasks",
+  "body": {
+   "keyword": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/options",
+  "path": "/api/tasks/options",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/options",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45",
+  "path": "/api/tasks/t0134ee45",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/{task_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PATCH /api/tasks/t0134ee45",
+  "path": "/api/tasks/t0134ee45",
+  "method": "PATCH",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/tasks/{task_id}",
+  "body": {
+   "name": "perf",
+   "keyword": "perf",
+   "min_price": 1.0,
+   "max_price": 1.0,
+   "max_publish_days": 1,
+   "mode": "perf",
+   "status": "all",
+   "region": "perf",
+   "search_filters": [
+    "perf"
+   ],
+   "exclude_words": [
+    "perf"
+   ],
+   "cron": "perf",
+   "use_cron": true
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/tasks/t0134ee45",
+  "path": "/api/tasks/t0134ee45",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/tasks/{task_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45/runs",
+  "path": "/api/tasks/t0134ee45/runs",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "启停真实采集任务，会拉起浏览器实例并访问闲鱼",
+  "tpl": "/api/tasks/{task_id}/runs",
+  "params": {
+   "range_hours": "168"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45/precheck",
+  "path": "/api/tasks/t0134ee45/precheck",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/{task_id}/precheck",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tasks/t0134ee45/control",
+  "path": "/api/tasks/t0134ee45/control",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/tasks/{task_id}/control",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tasks/t0134ee45/dry-run",
+  "path": "/api/tasks/t0134ee45/dry-run",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/tasks/{task_id}/dry-run",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tasks/batch-control",
+  "path": "/api/tasks/batch-control",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/tasks/batch-control",
+  "body": {
+   "task_ids": [
+    "perf"
+   ],
+   "action": "list"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tasks/t0134ee45/deps",
+  "path": "/api/tasks/t0134ee45/deps",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/tasks/{task_id}/deps",
+  "body": {
+   "depends_on": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/tasks/t0134ee45/deps",
+  "path": "/api/tasks/t0134ee45/deps",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/tasks/{task_id}/deps",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45/deps",
+  "path": "/api/tasks/t0134ee45/deps",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/{task_id}/deps",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45/dependents",
+  "path": "/api/tasks/t0134ee45/dependents",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/{task_id}/dependents",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45/links",
+  "path": "/api/tasks/t0134ee45/links",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/{task_id}/links",
+  "params": {
+   "limit": "20",
+   "offset": "0",
+   "keyword": "perf",
+   "sold_filter": "all"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tasks/t0134ee45/links",
+  "path": "/api/tasks/t0134ee45/links",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/tasks/{task_id}/links",
+  "body": {
+   "link_type": "perf",
+   "link_key": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45/links/count",
+  "path": "/api/tasks/t0134ee45/links/count",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/{task_id}/links/count",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45/links/facets",
+  "path": "/api/tasks/t0134ee45/links/facets",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/{task_id}/links/facets",
+  "params": {
+   "type": "item",
+   "keyword": "perf",
+   "sold_filter": "all"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/tasks/t0134ee45/links/999999",
+  "path": "/api/tasks/t0134ee45/links/999999",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/tasks/{task_id}/links/{link_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tasks/t0134ee45/links/refresh",
+  "path": "/api/tasks/t0134ee45/links/refresh",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "沙箱关闭调度器，采集器不可用，稳定返回 503，属环境口径而非容量缺陷",
+  "tpl": "/api/tasks/{task_id}/links/refresh",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/t0134ee45/links/live",
+  "path": "/api/tasks/t0134ee45/links/live",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/{task_id}/links/live",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/links/lookup",
+  "path": "/api/tasks/links/lookup",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/links/lookup",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tasks/links/search",
+  "path": "/api/tasks/links/search",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/tasks/links/search",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tasks/links/auto-migrate",
+  "path": "/api/tasks/links/auto-migrate",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "全表迁移类批处理（基线 1.4s/次），重复执行会改数据，不进负载轮",
+  "tpl": "/api/tasks/links/auto-migrate",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/config",
+  "path": "/api/config",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/config",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/config/raw",
+  "path": "/api/config/raw",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/config/raw",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/config/preview",
+  "path": "/api/config/preview",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/config/preview",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/config/save",
+  "path": "/api/config/save",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/config/save",
+  "body": {
+   "payload": {}
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/config/backups",
+  "path": "/api/config/backups",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/config/backups",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/config/share",
+  "path": "/api/config/share",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/config/share",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/config/export",
+  "path": "/api/config/export",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/config/export",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/config/import",
+  "path": "/api/config/import",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/config/import",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/config/version",
+  "path": "/api/config/version",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/config/version",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/config/rollback",
+  "path": "/api/config/rollback",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/config/rollback",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/config/restore-backup",
+  "path": "/api/config/restore-backup",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/config/restore-backup",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/stats",
+  "path": "/api/stats",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/stats",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/events/recent",
+  "path": "/api/events/recent",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/events/recent",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/stats/today",
+  "path": "/api/stats/today",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/stats/today",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/timeline",
+  "path": "/api/timeline",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/timeline",
+  "params": {
+   "types": "orders,events",
+   "task_id": "t0134ee45",
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/events/stream",
+  "path": "/api/events/stream",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "SSE/长连接，请求级吞吐口径不适用",
+  "tpl": "/api/events/stream",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/prices/histogram",
+  "path": "/api/prices/histogram",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/prices/histogram",
+  "params": {
+   "bins": "20",
+   "task_id": "t0134ee45"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/prices/analyze",
+  "path": "/api/prices/analyze",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/prices/analyze",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/stats/trend",
+  "path": "/api/stats/trend",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/stats/trend",
+  "params": {
+   "metric": "events",
+   "range_hours": "168",
+   "task_id": "t0134ee45"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/stats/business-kpi",
+  "path": "/api/stats/business-kpi",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/stats/business-kpi",
+  "params": {
+   "range_days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/stats/seller-price-trend",
+  "path": "/api/stats/seller-price-trend",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/stats/seller-price-trend",
+  "params": {
+   "seller_id": "SEED_SELLER",
+   "range_days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/stats/eval-funnel",
+  "path": "/api/stats/eval-funnel",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/stats/eval-funnel",
+  "params": {
+   "range_days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/stats/price-trend",
+  "path": "/api/stats/price-trend",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/stats/price-trend",
+  "params": {
+   "task_id": "t0134ee45"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/logs",
+  "path": "/api/logs",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "日志读取为本地查询，是核心读放大点",
+  "tpl": "/api/logs",
+  "params": {
+   "source": "file",
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/logs/search",
+  "path": "/api/logs/search",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "日志读取为本地查询，是核心读放大点",
+  "tpl": "/api/logs/search",
+  "params": {
+   "level": "all",
+   "task_id": "t0134ee45",
+   "request_id": "req-perf",
+   "limit": "20",
+   "offset": "0"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/logs/tag",
+  "path": "/api/logs/tag",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/logs/tag",
+  "body": {
+   "tag": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/logs/tag",
+  "path": "/api/logs/tag",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/logs/tag",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/logs/export",
+  "path": "/api/logs/export",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "日志读取为本地查询，是核心读放大点",
+  "tpl": "/api/logs/export",
+  "params": {
+   "format": "json",
+   "level": "all",
+   "task_id": "t0134ee45",
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/logs/stream",
+  "path": "/api/logs/stream",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "SSE/长连接，请求级吞吐口径不适用",
+  "tpl": "/api/logs/stream",
+  "params": {
+   "request_id": "req-perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/logs/request/req-perf",
+  "path": "/api/logs/request/req-perf",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "日志读取为本地查询，是核心读放大点",
+  "tpl": "/api/logs/request/{request_id}",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/orders",
+  "path": "/api/orders",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地抢单记录查询",
+  "tpl": "/api/orders",
+  "params": {
+   "status": "all",
+   "limit": "20",
+   "page_num": "1",
+   "page_size": "20",
+   "task_id": "t0134ee45",
+   "item_id": "1000915580797",
+   "sort_by": "created_at",
+   "sort_dir": "desc"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/orders/1",
+  "path": "/api/orders/1",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地抢单记录查询",
+  "tpl": "/api/orders/{order_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/orders/1",
+  "path": "/api/orders/1",
+  "method": "DELETE",
+  "tier": "blocked",
+  "reason": "抢单/确认下单会向闲鱼真实下单，任何环境均禁止自动化压测",
+  "tpl": "/api/orders/{order_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/orders/1/takeover",
+  "path": "/api/orders/1/takeover",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "抢单/确认下单会向闲鱼真实下单，任何环境均禁止自动化压测",
+  "tpl": "/api/orders/{order_id}/takeover",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/orders/1/takeover/confirm",
+  "path": "/api/orders/1/takeover/confirm",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "抢单/确认下单会向闲鱼真实下单，任何环境均禁止自动化压测",
+  "tpl": "/api/orders/{order_id}/takeover/confirm",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/orders/1/takeover/cancel",
+  "path": "/api/orders/1/takeover/cancel",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "抢单/确认下单会向闲鱼真实下单，任何环境均禁止自动化压测",
+  "tpl": "/api/orders/{order_id}/takeover/cancel",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PATCH /api/orders/1/status",
+  "path": "/api/orders/1/status",
+  "method": "PATCH",
+  "tier": "blocked",
+  "reason": "抢单/确认下单会向闲鱼真实下单，任何环境均禁止自动化压测",
+  "tpl": "/api/orders/{order_id}/status",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/orders/manual-takeover",
+  "path": "/api/orders/manual-takeover",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "抢单/确认下单会向闲鱼真实下单，任何环境均禁止自动化压测",
+  "tpl": "/api/orders/manual-takeover",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations",
+  "path": "/api/evaluations",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations",
+  "params": {
+   "limit": "20",
+   "offset": "0",
+   "page_num": "1",
+   "page_size": "20",
+   "item_id": "1000915580797",
+   "task_id": "t0134ee45",
+   "sold_filter": "all",
+   "include_out_of_range": "False"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations/brands",
+  "path": "/api/evaluations/brands",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations/brands",
+  "params": {
+   "task_id": "t0134ee45"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations/latest/1000915580797",
+  "path": "/api/evaluations/latest/1000915580797",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations/latest/{item_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations/auto-collect-stats",
+  "path": "/api/evaluations/auto-collect-stats",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations/auto-collect-stats",
+  "params": {
+   "range_hours": "168"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations/distribution",
+  "path": "/api/evaluations/distribution",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations/distribution",
+  "params": {
+   "range_hours": "168",
+   "price_bin_count": "10",
+   "score_bin_count": "10",
+   "task_id": "t0134ee45",
+   "include_out_of_range": "False"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations/threshold-suggestion",
+  "path": "/api/evaluations/threshold-suggestion",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations/threshold-suggestion",
+  "params": {
+   "target_pass_rate": "0.7"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations/seller-price-trend",
+  "path": "/api/evaluations/seller-price-trend",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations/seller-price-trend",
+  "params": {
+   "seller_id": "SEED_SELLER",
+   "range_days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations/1000915580797/seller-trend",
+  "path": "/api/evaluations/1000915580797/seller-trend",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations/{item_id}/seller-trend",
+  "params": {
+   "range_days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/evaluations/feedback/stats",
+  "path": "/api/evaluations/feedback/stats",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/evaluations/feedback/stats",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/evaluations/1000915580797/feedback",
+  "path": "/api/evaluations/1000915580797/feedback",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/evaluations/{item_id}/feedback",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/evaluations/recompute",
+  "path": "/api/evaluations/recompute",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/evaluations/recompute",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/evaluations/batch-evaluate-unevaluated",
+  "path": "/api/evaluations/batch-evaluate-unevaluated",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/evaluations/batch-evaluate-unevaluated",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/evaluations/batch-collect-official",
+  "path": "/api/evaluations/batch-collect-official",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "同上：采集器未运行返回 503；且真实触发会出网抓取",
+  "tpl": "/api/evaluations/batch-collect-official",
+  "body": {
+   "item_ids": [
+    "perf"
+   ]
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/evaluations/1000915580797/collect-official",
+  "path": "/api/evaluations/1000915580797/collect-official",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "触发对闲鱼官方销量接口的真实抓取",
+  "tpl": "/api/evaluations/{item_id}/collect-official",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/me",
+  "path": "/api/auth/me",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地令牌校验",
+  "tpl": "/api/auth/me",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/me/refresh",
+  "path": "/api/auth/me/refresh",
+  "method": "POST",
+  "tier": "load_read",
+  "reason": "本地令牌校验",
+  "tpl": "/api/auth/me/refresh",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/verify-session",
+  "path": "/api/auth/verify-session",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "登录态写操作会改动真实会话",
+  "tpl": "/api/auth/verify-session",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/cookie/health",
+  "path": "/api/auth/cookie/health",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/cookie/health",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/health/unified",
+  "path": "/api/auth/health/unified",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "登录态查询为本地读取",
+  "tpl": "/api/auth/health/unified",
+  "params": {
+   "user_id": "default"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/logout",
+  "path": "/api/auth/logout",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "登录态写操作会改动真实会话",
+  "tpl": "/api/auth/logout",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/login",
+  "path": "/api/auth/login",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "登录态写操作会改动真实会话",
+  "tpl": "/api/auth/login",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/login/status",
+  "path": "/api/auth/login/status",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "登录态查询为本地读取",
+  "tpl": "/api/auth/login/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/login/cancel",
+  "path": "/api/auth/login/cancel",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "登录态写操作会改动真实会话",
+  "tpl": "/api/auth/login/cancel",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/restore-session",
+  "path": "/api/auth/restore-session",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "登录态查询为本地读取",
+  "tpl": "/api/auth/restore-session",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/browser-login",
+  "path": "/api/auth/browser-login",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/browser-login",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/browser-login/status",
+  "path": "/api/auth/browser-login/status",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/browser-login/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/browser-login/cancel",
+  "path": "/api/auth/browser-login/cancel",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/browser-login/cancel",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/cookie",
+  "path": "/api/auth/cookie",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/cookie",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/cookie/domains",
+  "path": "/api/auth/cookie/domains",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/cookie/domains",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/cookie/file",
+  "path": "/api/auth/cookie/file",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/cookie/file",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/cookie/path",
+  "path": "/api/auth/cookie/path",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/cookie/path",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/cookie/saved",
+  "path": "/api/auth/cookie/saved",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/cookie/saved",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/cookie/fetch-keys",
+  "path": "/api/auth/cookie/fetch-keys",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/cookie/fetch-keys",
+  "params": {
+   "keys": "cookie"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/cookies/import",
+  "path": "/api/auth/cookies/import",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/cookies/import",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/import-from-browser",
+  "path": "/api/auth/import-from-browser",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/import-from-browser",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/import-from-browser/open",
+  "path": "/api/auth/import-from-browser/open",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/import-from-browser/open",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/import-from-browser/auto",
+  "path": "/api/auth/import-from-browser/auto",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/import-from-browser/auto",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/import-from-browser/status",
+  "path": "/api/auth/import-from-browser/status",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/import-from-browser/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/import-from-browser/cdp",
+  "path": "/api/auth/import-from-browser/cdp",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/import-from-browser/cdp",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/accounts",
+  "path": "/api/auth/accounts",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "登录态查询为本地读取",
+  "tpl": "/api/auth/accounts",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/switch",
+  "path": "/api/auth/switch",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "登录态写操作会改动真实会话",
+  "tpl": "/api/auth/switch",
+  "body": {
+   "target_user_id": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/auth/session-events",
+  "path": "/api/auth/session-events",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态",
+  "tpl": "/api/auth/session-events",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/anticrawl/strategy",
+  "path": "/api/anticrawl/strategy",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "反爬统计读取",
+  "tpl": "/api/anticrawl/strategy",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/anticrawl/initialize",
+  "path": "/api/anticrawl/initialize",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证",
+  "tpl": "/api/anticrawl/initialize",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/anticrawl/session/status",
+  "path": "/api/anticrawl/session/status",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "反爬统计读取",
+  "tpl": "/api/anticrawl/session/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/anticrawl/session/start",
+  "path": "/api/anticrawl/session/start",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证",
+  "tpl": "/api/anticrawl/session/start",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/anticrawl/session/stop",
+  "path": "/api/anticrawl/session/stop",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证",
+  "tpl": "/api/anticrawl/session/stop",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/anticrawl/health",
+  "path": "/api/anticrawl/health",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "反爬统计读取",
+  "tpl": "/api/anticrawl/health",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/anticrawl/fingerprint",
+  "path": "/api/anticrawl/fingerprint",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "反爬统计读取",
+  "tpl": "/api/anticrawl/fingerprint",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/anticrawl/freq/stats",
+  "path": "/api/anticrawl/freq/stats",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "反爬统计读取",
+  "tpl": "/api/anticrawl/freq/stats",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/anticrawl/freq/delay",
+  "path": "/api/anticrawl/freq/delay",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "反爬统计读取",
+  "tpl": "/api/anticrawl/freq/delay",
+  "params": {
+   "action": "list"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/anticrawl/cookies/current",
+  "path": "/api/anticrawl/cookies/current",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "反爬统计读取",
+  "tpl": "/api/anticrawl/cookies/current",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/anticrawl/cookies/import-from-browser/preview",
+  "path": "/api/anticrawl/cookies/import-from-browser/preview",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证",
+  "tpl": "/api/anticrawl/cookies/import-from-browser/preview",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/anticrawl/cookies/update",
+  "path": "/api/anticrawl/cookies/update",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证",
+  "tpl": "/api/anticrawl/cookies/update",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/anticrawl/cookies/layers",
+  "path": "/api/anticrawl/cookies/layers",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "反爬统计读取",
+  "tpl": "/api/anticrawl/cookies/layers",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/anticrawl/cookies/invalidate",
+  "path": "/api/anticrawl/cookies/invalidate",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证",
+  "tpl": "/api/anticrawl/cookies/invalidate",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/anticrawl/strategy/set",
+  "path": "/api/anticrawl/strategy/set",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证",
+  "tpl": "/api/anticrawl/strategy/set",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/notifications",
+  "path": "/api/notifications",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "通知列表本地读取",
+  "tpl": "/api/notifications",
+  "params": {
+   "status": "all",
+   "limit": "20",
+   "offset": "0"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/notifications",
+  "path": "/api/notifications",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/notifications",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/notifications",
+  "path": "/api/notifications",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/notifications",
+  "params": {
+   "status": "all"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/notifications/unread_count",
+  "path": "/api/notifications/unread_count",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "通知列表本地读取",
+  "tpl": "/api/notifications/unread_count",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/notifications/1/read",
+  "path": "/api/notifications/1/read",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/notifications/{notif_id}/read",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/notifications/read_all",
+  "path": "/api/notifications/read_all",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/notifications/read_all",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/notifications/1",
+  "path": "/api/notifications/1",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/notifications/{notif_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/notifications/batch-delete",
+  "path": "/api/notifications/batch-delete",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/notifications/batch-delete",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/notifications/batch-read",
+  "path": "/api/notifications/batch-read",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/notifications/batch-read",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/items/1000915580797/price-history",
+  "path": "/api/items/1000915580797/price-history",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/items/{item_id}/price-history",
+  "params": {
+   "days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/items/1000915580797/summary",
+  "path": "/api/items/1000915580797/summary",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/items/{item_id}/summary",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/items/batch",
+  "path": "/api/items/batch",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/items/batch",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/items/1000915580797/refresh",
+  "path": "/api/items/1000915580797/refresh",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "触发对单个商品的真实抓取",
+  "tpl": "/api/items/{item_id}/refresh",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/ai/parse-task",
+  "path": "/api/ai/parse-task",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/parse-task",
+  "body": {
+   "text": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/ai/evaluate-condition",
+  "path": "/api/ai/evaluate-condition",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/evaluate-condition",
+  "body": {
+   "item_id": "1000915580797"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/ai/config",
+  "path": "/api/ai/config",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/config",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/ai/config",
+  "path": "/api/ai/config",
+  "method": "PUT",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/config",
+  "body": {
+   "ai_enabled": true,
+   "base_url": "perf",
+   "api_key": "perf",
+   "model": "perf",
+   "vision_model": "perf",
+   "preset_id": "openai",
+   "embedding_base_url": "perf",
+   "embedding_api_key": "perf",
+   "embedding_model": "perf",
+   "embedding_dimensions": 1
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/ai/models",
+  "path": "/api/ai/models",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/models",
+  "body": {
+   "base_url": "perf",
+   "api_key": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/ai/test-connection",
+  "path": "/api/ai/test-connection",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/test-connection",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/ai/test-embedding",
+  "path": "/api/ai/test-embedding",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/test-embedding",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/ai/usage",
+  "path": "/api/ai/usage",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/usage",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/ai/budget",
+  "path": "/api/ai/budget",
+  "method": "PUT",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/budget",
+  "body": {
+   "daily_token_limit": 1,
+   "daily_cost_limit_usd": 1.0,
+   "rate_limit_per_min": 1
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/ai/deep-analyze",
+  "path": "/api/ai/deep-analyze",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/deep-analyze",
+  "body": {
+   "item_id": "1000915580797"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/ai/seller-template-check",
+  "path": "/api/ai/seller-template-check",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配",
+  "tpl": "/api/ai/seller-template-check",
+  "body": {
+   "seller_id": "SEED_SELLER"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/accounts",
+  "path": "/api/accounts",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "账号列表本地读取",
+  "tpl": "/api/accounts",
+  "params": {
+   "status": "all"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/accounts",
+  "path": "/api/accounts",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "账号增删改涉及真实 Cookie 素材",
+  "tpl": "/api/accounts",
+  "body": {
+   "name": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/accounts/stats",
+  "path": "/api/accounts/stats",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "账号列表本地读取",
+  "tpl": "/api/accounts/stats",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/accounts/999999",
+  "path": "/api/accounts/999999",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "账号列表本地读取",
+  "tpl": "/api/accounts/{account_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/accounts/999999",
+  "path": "/api/accounts/999999",
+  "method": "PUT",
+  "tier": "blocked",
+  "reason": "账号增删改涉及真实 Cookie 素材",
+  "tpl": "/api/accounts/{account_id}",
+  "body": {
+   "nickname": "perf",
+   "cookies": [
+    {}
+   ],
+   "status": "all",
+   "note": "perf-test"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/accounts/999999",
+  "path": "/api/accounts/999999",
+  "method": "DELETE",
+  "tier": "blocked",
+  "reason": "账号增删改涉及真实 Cookie 素材",
+  "tpl": "/api/accounts/{account_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/accounts/acquire",
+  "path": "/api/accounts/acquire",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "账号增删改涉及真实 Cookie 素材",
+  "tpl": "/api/accounts/acquire",
+  "body": {
+   "preferred_name": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/accounts/999999/report-success",
+  "path": "/api/accounts/999999/report-success",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "会改动账号健康状态，单发验证",
+  "tpl": "/api/accounts/{account_id}/report-success",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/accounts/999999/report-fail",
+  "path": "/api/accounts/999999/report-fail",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "会改动账号健康状态，单发验证",
+  "tpl": "/api/accounts/{account_id}/report-fail",
+  "body": {
+   "cooldown_sec": 1
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/proxies",
+  "path": "/api/proxies",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/proxies",
+  "params": {
+   "status": "all"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/proxies",
+  "path": "/api/proxies",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/proxies",
+  "body": {
+   "url": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/proxies/stats",
+  "path": "/api/proxies/stats",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/proxies/stats",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/proxies/999999",
+  "path": "/api/proxies/999999",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/proxies/{proxy_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/proxies/999999",
+  "path": "/api/proxies/999999",
+  "method": "PUT",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/proxies/{proxy_id}",
+  "body": {
+   "url": "perf",
+   "status": "all",
+   "note": "perf-test"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/proxies/999999",
+  "path": "/api/proxies/999999",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/proxies/{proxy_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/proxies/acquire",
+  "path": "/api/proxies/acquire",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/proxies/acquire",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/proxies/999999/report-success",
+  "path": "/api/proxies/999999/report-success",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/proxies/{proxy_id}/report-success",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/proxies/999999/report-fail",
+  "path": "/api/proxies/999999/report-fail",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/proxies/{proxy_id}/report-fail",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/proxies/999999/check",
+  "path": "/api/proxies/999999/check",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/proxies/{proxy_id}/check",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/proxies/check-all",
+  "path": "/api/proxies/check-all",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/proxies/check-all",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/notifier/quiet-hours",
+  "path": "/api/notifier/quiet-hours",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "渠道配置读取",
+  "tpl": "/api/notifier/quiet-hours",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/notifier/quiet-hours",
+  "path": "/api/notifier/quiet-hours",
+  "method": "PUT",
+  "tier": "probe_single",
+  "reason": "渠道配置写操作单发验证",
+  "tpl": "/api/notifier/quiet-hours",
+  "body": {
+   "enabled": false,
+   "start": "23:00",
+   "end": "07:00",
+   "critical_only": true,
+   "weekend_only": false
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/notifier/quiet-hours/reset",
+  "path": "/api/notifier/quiet-hours/reset",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "渠道配置写操作单发验证",
+  "tpl": "/api/notifier/quiet-hours/reset",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/notifier/test",
+  "path": "/api/notifier/test",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "向真实推送渠道（钉钉/Server酱/Telegram）发消息",
+  "tpl": "/api/notifier/test",
+  "body": {
+   "channel": "dingtalk"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/templates",
+  "path": "/api/templates",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/templates",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/templates",
+  "path": "/api/templates",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/templates",
+  "body": {
+   "name": "perf",
+   "keyword": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/templates/1",
+  "path": "/api/templates/1",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/templates/{template_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/export/items",
+  "path": "/api/export/items",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "导出为只读聚合，可入负载轮",
+  "tpl": "/api/export/{dataset}",
+  "params": {
+   "task_id": "t0134ee45",
+   "status": "all",
+   "level": "all",
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/export",
+  "path": "/api/export",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "导出为只读聚合，可入负载轮",
+  "tpl": "/api/export",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/prompts",
+  "path": "/api/prompts",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/prompts",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/prompts/1",
+  "path": "/api/prompts/1",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/prompts/{key}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/prompts/1",
+  "path": "/api/prompts/1",
+  "method": "PUT",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/prompts/{key}",
+  "body": {
+   "content": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/prompts/1/reset",
+  "path": "/api/prompts/1/reset",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/prompts/{key}/reset",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/preferences",
+  "path": "/api/preferences",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/preferences",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/preferences",
+  "path": "/api/preferences",
+  "method": "PUT",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/preferences",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/preferences/1",
+  "path": "/api/preferences/1",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/preferences/{key}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/cron/validate",
+  "path": "/api/cron/validate",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/cron/validate",
+  "body": {
+   "cron": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/cron/examples",
+  "path": "/api/cron/examples",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/cron/examples",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/param-calculator/validate-task",
+  "path": "/api/param-calculator/validate-task",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/param-calculator/validate-task",
+  "body": {
+   "scenario": "task_create",
+   "fields": {}
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/param-calculator/validate-config",
+  "path": "/api/param-calculator/validate-config",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/param-calculator/validate-config",
+  "body": {
+   "fields": {}
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/param-calculator/rules",
+  "path": "/api/param-calculator/rules",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/param-calculator/rules",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/param-calculator/reload",
+  "path": "/api/param-calculator/reload",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/param-calculator/reload",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/prices/category-stats",
+  "path": "/api/prices/category-stats",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/prices/category-stats",
+  "params": {
+   "task_id": "t0134ee45"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/prices/category-comparison",
+  "path": "/api/prices/category-comparison",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/prices/category-comparison",
+  "params": {
+   "sort_by": "mean",
+   "order": "asc",
+   "limit": "20",
+   "range_days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/prices/sold-range",
+  "path": "/api/prices/sold-range",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/prices/sold-range",
+  "params": {
+   "task_id": "t0134ee45",
+   "range_days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/prices/bargain-eval",
+  "path": "/api/prices/bargain-eval",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "兜底：其余 GET 纳入负载轮",
+  "tpl": "/api/prices/bargain-eval",
+  "params": {
+   "task_id": "t0134ee45",
+   "range_days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/maintenance/status",
+  "path": "/api/maintenance/status",
+  "method": "GET",
+  "tier": "probe_single",
+  "reason": "单请求耗时 >60s（客户端超时判 000），留在负载轮会把整轮 TPS 稀释成假瓶颈；改为单发计量并单列",
+  "tpl": "/api/maintenance/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/maintenance/cache-scan",
+  "path": "/api/maintenance/cache-scan",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "维护概览读取",
+  "tpl": "/api/maintenance/cache-scan",
+  "params": {
+   "budget": "1.0"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/maintenance/cache",
+  "path": "/api/maintenance/cache",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "维护动作单发验证",
+  "tpl": "/api/maintenance/cache",
+  "body": {
+   "target": "",
+   "days": "30",
+   "dry_run": false
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/maintenance/database",
+  "path": "/api/maintenance/database",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "维护动作单发验证",
+  "tpl": "/api/maintenance/database",
+  "body": {
+   "target": "",
+   "days": "30",
+   "dry_run": false
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/maintenance/logs",
+  "path": "/api/maintenance/logs",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "维护动作单发验证",
+  "tpl": "/api/maintenance/logs",
+  "body": {
+   "target": "",
+   "days": "30",
+   "dry_run": false
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/db-admin/tables",
+  "path": "/api/db-admin/tables",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "库表元信息/行读取",
+  "tpl": "/api/db-admin/tables",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/db-admin/tables/items/schema",
+  "path": "/api/db-admin/tables/items/schema",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "库表元信息/行读取",
+  "tpl": "/api/db-admin/tables/{table}/schema",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/db-admin/tables/items/cascade-preview",
+  "path": "/api/db-admin/tables/items/cascade-preview",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "批量导入/级联删除属破坏性动作，单发验证",
+  "tpl": "/api/db-admin/tables/{table}/cascade-preview",
+  "body": {
+   "ids": [
+    "perf"
+   ]
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/db-admin/tables/items/rows",
+  "path": "/api/db-admin/tables/items/rows",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "库表元信息/行读取",
+  "tpl": "/api/db-admin/tables/{table}/rows",
+  "params": {
+   "limit": "20",
+   "offset": "0",
+   "order_by": "id",
+   "search": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/db-admin/tables/items/rows",
+  "path": "/api/db-admin/tables/items/rows",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "库管理写操作单发验证，不进负载轮",
+  "tpl": "/api/db-admin/tables/{table}/rows",
+  "body": {
+   "values": {}
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PATCH /api/db-admin/tables/items/rows/PERF-NONEXISTENT-ROW",
+  "path": "/api/db-admin/tables/items/rows/PERF-NONEXISTENT-ROW",
+  "method": "PATCH",
+  "tier": "probe_single",
+  "reason": "库管理写操作单发验证，不进负载轮",
+  "tpl": "/api/db-admin/tables/{table}/rows/{pk_value}",
+  "body": {
+   "values": {}
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/db-admin/tables/items/rows/PERF-NONEXISTENT-ROW",
+  "path": "/api/db-admin/tables/items/rows/PERF-NONEXISTENT-ROW",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "真实删除行，单发验证（沙箱副本库）",
+  "tpl": "/api/db-admin/tables/{table}/rows/{pk_value}",
+  "params": {
+   "confirm_token": "PERF_CONFIRM"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/db-admin/tables/items/rows/batch-delete",
+  "path": "/api/db-admin/tables/items/rows/batch-delete",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "批量导入/级联删除属破坏性动作，单发验证",
+  "tpl": "/api/db-admin/tables/{table}/rows/batch-delete",
+  "body": {
+   "ids": [
+    "perf"
+   ],
+   "confirm_token": "PERF_CONFIRM"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/db-admin/tables/items/export",
+  "path": "/api/db-admin/tables/items/export",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "库表元信息/行读取",
+  "tpl": "/api/db-admin/tables/{table}/export",
+  "params": {
+   "format": "json"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/db-admin/tables/items/import",
+  "path": "/api/db-admin/tables/items/import",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "批量导入/级联删除属破坏性动作，单发验证",
+  "tpl": "/api/db-admin/tables/{table}/import",
+  "body": {
+   "rows": [
+    [
+     "perf"
+    ]
+   ]
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/db-admin/audit-log",
+  "path": "/api/db-admin/audit-log",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "库表元信息/行读取",
+  "tpl": "/api/db-admin/audit-log",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/vector-admin/status",
+  "path": "/api/vector-admin/status",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "向量库元信息读取",
+  "tpl": "/api/vector-admin/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/vector-admin/snapshots",
+  "path": "/api/vector-admin/snapshots",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "向量库元信息读取",
+  "tpl": "/api/vector-admin/snapshots",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/vector-admin/snapshots",
+  "path": "/api/vector-admin/snapshots",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库",
+  "tpl": "/api/vector-admin/snapshots",
+  "body": {
+   "label": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/vector-admin/snapshots/1/restore",
+  "path": "/api/vector-admin/snapshots/1/restore",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库",
+  "tpl": "/api/vector-admin/snapshots/{snapshot_id}/restore",
+  "body": {
+   "confirm_token": "PERF_CONFIRM"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/vector-admin/snapshots/1",
+  "path": "/api/vector-admin/snapshots/1",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库",
+  "tpl": "/api/vector-admin/snapshots/{snapshot_id}",
+  "params": {
+   "confirm_token": "PERF_CONFIRM"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/vector-admin/cleanup/all",
+  "path": "/api/vector-admin/cleanup/all",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库",
+  "tpl": "/api/vector-admin/cleanup/all",
+  "body": {
+   "confirm_token": "PERF_CONFIRM"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/vector-admin/cleanup/by-source",
+  "path": "/api/vector-admin/cleanup/by-source",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库",
+  "tpl": "/api/vector-admin/cleanup/by-source",
+  "body": {
+   "source_file": "perf",
+   "confirm_token": "PERF_CONFIRM"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/vector-admin/audit-log",
+  "path": "/api/vector-admin/audit-log",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "向量库元信息读取",
+  "tpl": "/api/vector-admin/audit-log",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/error-logs",
+  "path": "/api/error-logs",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "日志读取为本地查询，是核心读放大点",
+  "tpl": "/api/error-logs",
+  "params": {
+   "status": "all",
+   "request_id": "req-perf",
+   "limit": "20",
+   "offset": "0"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/error-logs/999999",
+  "path": "/api/error-logs/999999",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "日志读取为本地查询，是核心读放大点",
+  "tpl": "/api/error-logs/{error_log_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/error-logs/999999",
+  "path": "/api/error-logs/999999",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "日志删除单发验证",
+  "tpl": "/api/error-logs/{error_log_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/error-logs/batch",
+  "path": "/api/error-logs/batch",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "日志删除单发验证",
+  "tpl": "/api/error-logs/batch",
+  "body": {
+   "ids": [
+    1
+   ],
+   "action": "list"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/error-logs/999999/ai-context",
+  "path": "/api/error-logs/999999/ai-context",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "日志读取为本地查询，是核心读放大点",
+  "tpl": "/api/error-logs/{error_log_id}/ai-context",
+  "params": {
+   "format": "json"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PATCH /api/error-logs/999999/status",
+  "path": "/api/error-logs/999999/status",
+  "method": "PATCH",
+  "tier": "probe_single",
+  "reason": "日志状态写/上下文导出，单发验证",
+  "tpl": "/api/error-logs/{error_log_id}/status",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/error-logs/cleanup",
+  "path": "/api/error-logs/cleanup",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "日志删除单发验证",
+  "tpl": "/api/error-logs/cleanup",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/batch-refresh/status",
+  "path": "/api/batch-refresh/status",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "采集历史本地读取",
+  "tpl": "/api/batch-refresh/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/batch-refresh/trigger",
+  "path": "/api/batch-refresh/trigger",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "触发对闲鱼真实站点的批量采集，会造成平台侧反爬与真实流量",
+  "tpl": "/api/batch-refresh/trigger",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/batch-refresh/trigger-preview",
+  "path": "/api/batch-refresh/trigger-preview",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "触发对闲鱼真实站点的批量采集，会造成平台侧反爬与真实流量",
+  "tpl": "/api/batch-refresh/trigger-preview",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PATCH /api/batch-refresh/config",
+  "path": "/api/batch-refresh/config",
+  "method": "PATCH",
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证",
+  "tpl": "/api/batch-refresh/config",
+  "body": {
+   "interval_minutes": 1,
+   "enabled": true,
+   "batch_size": 1,
+   "max_items_per_run": 1,
+   "history_retention_days": 1
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/batch-refresh/pause",
+  "path": "/api/batch-refresh/pause",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证",
+  "tpl": "/api/batch-refresh/pause",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/batch-refresh/resume",
+  "path": "/api/batch-refresh/resume",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证",
+  "tpl": "/api/batch-refresh/resume",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/batch-refresh/stop",
+  "path": "/api/batch-refresh/stop",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证",
+  "tpl": "/api/batch-refresh/stop",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/batch-refresh/history",
+  "path": "/api/batch-refresh/history",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "采集历史本地读取",
+  "tpl": "/api/batch-refresh/history",
+  "params": {
+   "task_id": "t0134ee45",
+   "status": "all",
+   "order_by": "id",
+   "order_dir": "desc",
+   "limit": "20",
+   "offset": "0"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/batch-refresh/history",
+  "path": "/api/batch-refresh/history",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证",
+  "tpl": "/api/batch-refresh/history",
+  "params": {
+   "days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/batch-refresh/history/stats",
+  "path": "/api/batch-refresh/history/stats",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "采集历史本地读取",
+  "tpl": "/api/batch-refresh/history/stats",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/batch-refresh/history/cleanup-preview",
+  "path": "/api/batch-refresh/history/cleanup-preview",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "采集历史本地读取",
+  "tpl": "/api/batch-refresh/history/cleanup-preview",
+  "params": {
+   "days": "30"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/batch-refresh/history/999999",
+  "path": "/api/batch-refresh/history/999999",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "采集历史本地读取",
+  "tpl": "/api/batch-refresh/history/{history_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/batch-refresh/history/999999",
+  "path": "/api/batch-refresh/history/999999",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证",
+  "tpl": "/api/batch-refresh/history/{history_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tunnel/status",
+  "path": "/api/tunnel/status",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tunnel/start",
+  "path": "/api/tunnel/start",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/start",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tunnel/stop",
+  "path": "/api/tunnel/stop",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/stop",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tunnel/config",
+  "path": "/api/tunnel/config",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/config",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tunnel/config",
+  "path": "/api/tunnel/config",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/config",
+  "body": {
+   "provider": "cloudflare",
+   "local_port": 0,
+   "cpolar_authtoken": "",
+   "binary_path": "",
+   "auto_start": false,
+   "tunnel_mode": "quick",
+   "tunnel_name": "",
+   "tunnel_id": "",
+   "credentials_file": "",
+   "hostname": "",
+   "cert_file": ""
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tunnel/cloudflare/login",
+  "path": "/api/tunnel/cloudflare/login",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/cloudflare/login",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/tunnel/cloudflare/login/status",
+  "path": "/api/tunnel/cloudflare/login/status",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/cloudflare/login/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tunnel/cloudflare/create",
+  "path": "/api/tunnel/cloudflare/create",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/cloudflare/create",
+  "body": {
+   "tunnel_name": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/tunnel/cloudflare/route-dns",
+  "path": "/api/tunnel/cloudflare/route-dns",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止",
+  "tpl": "/api/tunnel/cloudflare/route-dns",
+  "body": {
+   "tunnel_name_or_id": "perf",
+   "hostname": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/menu",
+  "path": "/api/menu",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "读接口全部纳入负载轮",
+  "tpl": "/api/menu",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/menu",
+  "path": "/api/menu",
+  "method": "PUT",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/menu",
+  "body": {
+   "menus": [
+    "perf"
+   ]
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/menu/reset",
+  "path": "/api/menu/reset",
+  "method": "POST",
+  "tier": "load_write",
+  "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）",
+  "tpl": "/api/menu/reset",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/chat",
+  "path": "/api/chatbot/chat",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "对话回复调用外部大模型（RAG+Agent），计费且非本地瓶颈",
+  "tpl": "/api/chatbot/chat",
+  "body": {
+   "message": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/sessions",
+  "path": "/api/chatbot/sessions",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "会话列表为本地库查询",
+  "tpl": "/api/chatbot/sessions",
+  "params": {
+   "limit": "20",
+   "offset": "0",
+   "status": "all",
+   "keyword": "perf",
+   "favorite_only": "False"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/sessions",
+  "path": "/api/chatbot/sessions",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/chatbot/sessions",
+  "body": {
+   "title": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/sessions/1",
+  "path": "/api/chatbot/sessions/1",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "会话列表为本地库查询",
+  "tpl": "/api/chatbot/sessions/{session_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/chatbot/sessions/1",
+  "path": "/api/chatbot/sessions/1",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/chatbot/sessions/{session_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PATCH /api/chatbot/sessions/1/title",
+  "path": "/api/chatbot/sessions/1/title",
+  "method": "PATCH",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/chatbot/sessions/{session_id}/title",
+  "body": {
+   "title": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PATCH /api/chatbot/sessions/1/favorite",
+  "path": "/api/chatbot/sessions/1/favorite",
+  "method": "PATCH",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/chatbot/sessions/{session_id}/favorite",
+  "body": {
+   "is_favorite": true
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/sessions/1/end",
+  "path": "/api/chatbot/sessions/1/end",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/chatbot/sessions/{session_id}/end",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/sessions/1/messages",
+  "path": "/api/chatbot/sessions/1/messages",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "会话列表为本地库查询",
+  "tpl": "/api/chatbot/sessions/{session_id}/messages",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/messages/1/recall",
+  "path": "/api/chatbot/messages/1/recall",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "对话回复调用外部大模型（RAG+Agent），计费且非本地瓶颈",
+  "tpl": "/api/chatbot/messages/{message_id}/recall",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/escalation/trigger",
+  "path": "/api/chatbot/escalation/trigger",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "对话回复调用外部大模型（RAG+Agent），计费且非本地瓶颈",
+  "tpl": "/api/chatbot/escalation/trigger",
+  "body": {
+   "session_id": "1"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/messages/1/feedback",
+  "path": "/api/chatbot/messages/1/feedback",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "对话回复调用外部大模型（RAG+Agent），计费且非本地瓶颈",
+  "tpl": "/api/chatbot/messages/{message_id}/feedback",
+  "body": {
+   "rating": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/feedback/recent",
+  "path": "/api/chatbot/feedback/recent",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地读取",
+  "tpl": "/api/chatbot/feedback/recent",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/escalation/1/export",
+  "path": "/api/chatbot/escalation/1/export",
+  "method": "GET",
+  "tier": "blocked",
+  "reason": "对话回复调用外部大模型（RAG+Agent），计费且非本地瓶颈",
+  "tpl": "/api/chatbot/escalation/{session_id}/export",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/kb/rebuild",
+  "path": "/api/chatbot/kb/rebuild",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "触发向量库重建，加载 embedding 模型（GB 级），属离线批处理",
+  "tpl": "/api/chatbot/kb/rebuild",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/kb/status",
+  "path": "/api/chatbot/kb/status",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地读取",
+  "tpl": "/api/chatbot/kb/status",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/kb/versions",
+  "path": "/api/chatbot/kb/versions",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地读取",
+  "tpl": "/api/chatbot/kb/versions",
+  "params": {
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/kb/rollback/1",
+  "path": "/api/chatbot/kb/rollback/1",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "触发向量库重建，加载 embedding 模型（GB 级），属离线批处理",
+  "tpl": "/api/chatbot/kb/rollback/{version_id}",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/config",
+  "path": "/api/chatbot/config",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地读取",
+  "tpl": "/api/chatbot/config",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "PUT /api/chatbot/config",
+  "path": "/api/chatbot/config",
+  "method": "PUT",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/chatbot/config",
+  "body": {
+   "key": "perf",
+   "value": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/audit-logs",
+  "path": "/api/chatbot/audit-logs",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地读取",
+  "tpl": "/api/chatbot/audit-logs",
+  "params": {
+   "action": "list",
+   "limit": "20"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/faq",
+  "path": "/api/chatbot/faq",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地读取",
+  "tpl": "/api/chatbot/faq",
+  "params": {
+   "active_only": "False"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/chatbot/faq",
+  "path": "/api/chatbot/faq",
+  "method": "POST",
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证",
+  "tpl": "/api/chatbot/faq",
+  "body": {
+   "question": "perf",
+   "answer": "perf"
+  },
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "DELETE /api/chatbot/faq/1",
+  "path": "/api/chatbot/faq/1",
+  "method": "DELETE",
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证",
+  "tpl": "/api/chatbot/faq/{faq_id}",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "GET /api/chatbot/welcome",
+  "path": "/api/chatbot/welcome",
+  "method": "GET",
+  "tier": "load_read",
+  "reason": "本地读取",
+  "tpl": "/api/chatbot/welcome",
+  "assert_code": "200|201|204|400|404|409|422"
+ },
+ {
+  "name": "POST /api/auth/verify",
+  "path": "/api/auth/verify",
+  "method": "POST",
+  "tier": "blocked",
+  "reason": "登录态写操作会改动真实会话",
+  "tpl": "/api/auth/verify",
+  "body": {},
+  "assert_code": "200|201|204|400|404|409|422"
+ }
+]

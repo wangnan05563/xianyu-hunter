@@ -1,0 +1,1421 @@
+mode: python_replay
+sandbox:
+  enabled: true
+  cwd: D:\tmp\xh-perf\sandbox
+  startup_cmd: ''
+  pkg: ''
+  port: 8011
+  health_path: /healthz
+  health_retries: 60
+  port_kill_retries: 0
+  require_new_instance: false
+  env_overrides: {}
+  preflight:
+    enabled: true
+    rate_limit_burst: 120
+    burst_path: /healthz
+    abort_on_rate_limit: true
+    login_warmup: false
+    login_url: ''
+    login_method: POST
+    login_body: ''
+    login_max_retries: 0
+  min_output_lines: 20
+  process_match:
+    mode: pid_file
+    pid_file: D:\tmp\xh-perf\sut.pid
+    name: ''
+    cmd_substr: ''
+  lifecycle:
+    never_global_kill: true
+    kill_tree: false
+    kill_retries: 3
+    kill_wait_ms: 500
+resource_monitor:
+  enabled: true
+  match:
+    mode: pid_file
+    pid_file: D:\tmp\xh-perf\sut.pid
+    name: ''
+    cmd_substr: ''
+  sample_interval_sec: 2
+  duration_samples: 0
+  metrics:
+  - rss_mb
+  - private_mb
+  - cpu_percent
+  - handles
+  - threads
+  output_csv: D:\tmp\xh-perf\output\sut_resource.csv
+  alert:
+    enabled: true
+    max_rss_mb: 1800
+    on_exceed: warn
+target:
+  base_url: http://127.0.0.1:8011
+  default_timeout_sec: 60
+  ramp_stagger: true
+  fixed_headers:
+    Accept: application/json
+  auth:
+    type: bearer
+    header_name: Authorization
+    token_source: file
+    token_env: WEB_TOKEN
+    token_file: D:\tmp\xh-perf\token.txt
+    token_literal: ''
+    cookie_name: xh_token
+    udv_names:
+    - WEB_TOKEN
+    - web_token
+scenarios:
+  enabled: true
+  output_jmx_dir: jmeter
+  default_protocol: http
+  default_method: GET
+  fixtures: {}
+  thread_profiles:
+    single:
+      threads: 1
+      ramp: 1
+      duration: 300
+    w_single:
+      threads: 1
+      ramp: 1
+      duration: 180
+    step:
+      threads: 4
+      ramp: 5
+      duration: 60
+    soak:
+      threads: 12
+      ramp: 30
+      duration: 3600
+  list:
+  - name: reads_heavy
+    profile: single
+    samplers:
+    - name: GET /api/config/export
+      path: /api/config/export
+      method: GET
+    - name: GET /api/stats
+      path: /api/stats
+      method: GET
+    - name: GET /api/stats/today
+      path: /api/stats/today
+      method: GET
+    - name: GET /api/timeline
+      path: /api/timeline
+      method: GET
+      params:
+        types: orders,events
+        task_id: t0134ee45
+        limit: '20'
+    - name: GET /api/prices/histogram
+      path: /api/prices/histogram
+      method: GET
+      params:
+        bins: '20'
+        task_id: t0134ee45
+    - name: GET /api/stats/trend
+      path: /api/stats/trend
+      method: GET
+      params:
+        metric: events
+        range_hours: '168'
+        task_id: t0134ee45
+    - name: GET /api/stats/business-kpi
+      path: /api/stats/business-kpi
+      method: GET
+      params:
+        range_days: '30'
+    - name: GET /api/stats/seller-price-trend
+      path: /api/stats/seller-price-trend
+      method: GET
+      params:
+        seller_id: SEED_SELLER
+        range_days: '30'
+    - name: GET /api/stats/eval-funnel
+      path: /api/stats/eval-funnel
+      method: GET
+      params:
+        range_days: '30'
+    - name: GET /api/stats/price-trend
+      path: /api/stats/price-trend
+      method: GET
+      params:
+        task_id: t0134ee45
+    - name: GET /api/logs
+      path: /api/logs
+      method: GET
+      params:
+        source: file
+        limit: '20'
+    - name: GET /api/logs/search
+      path: /api/logs/search
+      method: GET
+      params:
+        level: all
+        task_id: t0134ee45
+        request_id: req-perf
+        limit: '20'
+        offset: '0'
+    - name: GET /api/logs/export
+      path: /api/logs/export
+      method: GET
+      params:
+        format: json
+        level: all
+        task_id: t0134ee45
+        limit: '20'
+    - name: GET /api/logs/request/req-perf
+      path: /api/logs/request/req-perf
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/evaluations
+      path: /api/evaluations
+      method: GET
+      params:
+        limit: '20'
+        offset: '0'
+        page_num: '1'
+        page_size: '20'
+        item_id: '1000915580797'
+        task_id: t0134ee45
+        sold_filter: all
+        include_out_of_range: 'False'
+    - name: GET /api/evaluations/brands
+      path: /api/evaluations/brands
+      method: GET
+      params:
+        task_id: t0134ee45
+    - name: GET /api/evaluations/latest/1000915580797
+      path: /api/evaluations/latest/1000915580797
+      method: GET
+    - name: GET /api/evaluations/auto-collect-stats
+      path: /api/evaluations/auto-collect-stats
+      method: GET
+      params:
+        range_hours: '168'
+    - name: GET /api/evaluations/distribution
+      path: /api/evaluations/distribution
+      method: GET
+      params:
+        range_hours: '168'
+        price_bin_count: '10'
+        score_bin_count: '10'
+        task_id: t0134ee45
+        include_out_of_range: 'False'
+    - name: GET /api/evaluations/threshold-suggestion
+      path: /api/evaluations/threshold-suggestion
+      method: GET
+      params:
+        target_pass_rate: '0.7'
+    - name: GET /api/evaluations/seller-price-trend
+      path: /api/evaluations/seller-price-trend
+      method: GET
+      params:
+        seller_id: SEED_SELLER
+        range_days: '30'
+    - name: GET /api/evaluations/1000915580797/seller-trend
+      path: /api/evaluations/1000915580797/seller-trend
+      method: GET
+      params:
+        range_days: '30'
+    - name: GET /api/evaluations/feedback/stats
+      path: /api/evaluations/feedback/stats
+      method: GET
+    - name: GET /api/anticrawl/freq/stats
+      path: /api/anticrawl/freq/stats
+      method: GET
+    - name: GET /api/notifications
+      path: /api/notifications
+      method: GET
+      params:
+        status: all
+        limit: '20'
+        offset: '0'
+    - name: GET /api/notifications/unread_count
+      path: /api/notifications/unread_count
+      method: GET
+    - name: GET /api/items/1000915580797/price-history
+      path: /api/items/1000915580797/price-history
+      method: GET
+      params:
+        days: '30'
+    - name: GET /api/items/1000915580797/summary
+      path: /api/items/1000915580797/summary
+      method: GET
+    - name: GET /api/items/batch
+      path: /api/items/batch
+      method: GET
+    - name: GET /api/accounts/stats
+      path: /api/accounts/stats
+      method: GET
+    - name: GET /api/proxies/stats
+      path: /api/proxies/stats
+      method: GET
+    - name: GET /api/export/items
+      path: /api/export/items
+      method: GET
+      params:
+        task_id: t0134ee45
+        status: all
+        level: all
+        limit: '20'
+    - name: GET /api/export
+      path: /api/export
+      method: GET
+    - name: GET /api/prices/category-stats
+      path: /api/prices/category-stats
+      method: GET
+      params:
+        task_id: t0134ee45
+    - name: GET /api/prices/category-comparison
+      path: /api/prices/category-comparison
+      method: GET
+      params:
+        sort_by: mean
+        order: asc
+        limit: '20'
+        range_days: '30'
+    - name: GET /api/prices/sold-range
+      path: /api/prices/sold-range
+      method: GET
+      params:
+        task_id: t0134ee45
+        range_days: '30'
+    - name: GET /api/prices/bargain-eval
+      path: /api/prices/bargain-eval
+      method: GET
+      params:
+        task_id: t0134ee45
+        range_days: '30'
+    - name: GET /api/db-admin/tables/items/schema
+      path: /api/db-admin/tables/items/schema
+      method: GET
+    - name: GET /api/db-admin/tables/items/rows
+      path: /api/db-admin/tables/items/rows
+      method: GET
+      params:
+        limit: '20'
+        offset: '0'
+        order_by: id
+        search: perf
+    - name: GET /api/db-admin/tables/items/export
+      path: /api/db-admin/tables/items/export
+      method: GET
+      params:
+        format: json
+    - name: GET /api/error-logs
+      path: /api/error-logs
+      method: GET
+      params:
+        status: all
+        request_id: req-perf
+        limit: '20'
+        offset: '0'
+    - name: GET /api/error-logs/999999
+      path: /api/error-logs/999999
+      method: GET
+    - name: GET /api/error-logs/999999/ai-context
+      path: /api/error-logs/999999/ai-context
+      method: GET
+      params:
+        format: json
+    - name: GET /api/batch-refresh/history/stats
+      path: /api/batch-refresh/history/stats
+      method: GET
+    - name: GET /api/chatbot/audit-logs
+      path: /api/chatbot/audit-logs
+      method: GET
+      params:
+        action: list
+        limit: '20'
+  - name: reads_light
+    profile: single
+    samplers:
+    - name: GET /api/tasks
+      path: /api/tasks
+      method: GET
+      params:
+        status: all
+        limit: '20'
+        offset: '0'
+    - name: GET /api/tasks/options
+      path: /api/tasks/options
+      method: GET
+    - name: GET /api/tasks/t0134ee45
+      path: /api/tasks/t0134ee45
+      method: GET
+    - name: GET /api/tasks/t0134ee45/precheck
+      path: /api/tasks/t0134ee45/precheck
+      method: GET
+    - name: GET /api/tasks/t0134ee45/deps
+      path: /api/tasks/t0134ee45/deps
+      method: GET
+    - name: GET /api/tasks/t0134ee45/dependents
+      path: /api/tasks/t0134ee45/dependents
+      method: GET
+    - name: GET /api/tasks/t0134ee45/links
+      path: /api/tasks/t0134ee45/links
+      method: GET
+      params:
+        limit: '20'
+        offset: '0'
+        keyword: perf
+        sold_filter: all
+    - name: GET /api/tasks/t0134ee45/links/count
+      path: /api/tasks/t0134ee45/links/count
+      method: GET
+    - name: GET /api/tasks/t0134ee45/links/facets
+      path: /api/tasks/t0134ee45/links/facets
+      method: GET
+      params:
+        type: item
+        keyword: perf
+        sold_filter: all
+    - name: GET /api/tasks/t0134ee45/links/live
+      path: /api/tasks/t0134ee45/links/live
+      method: GET
+    - name: GET /api/tasks/links/lookup
+      path: /api/tasks/links/lookup
+      method: GET
+    - name: GET /api/tasks/links/search
+      path: /api/tasks/links/search
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/config
+      path: /api/config
+      method: GET
+    - name: GET /api/config/raw
+      path: /api/config/raw
+      method: GET
+    - name: GET /api/config/backups
+      path: /api/config/backups
+      method: GET
+    - name: GET /api/config/share
+      path: /api/config/share
+      method: GET
+    - name: GET /api/config/version
+      path: /api/config/version
+      method: GET
+    - name: GET /api/events/recent
+      path: /api/events/recent
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/orders
+      path: /api/orders
+      method: GET
+      params:
+        status: all
+        limit: '20'
+        page_num: '1'
+        page_size: '20'
+        task_id: t0134ee45
+        item_id: '1000915580797'
+        sort_by: created_at
+        sort_dir: desc
+    - name: GET /api/orders/1
+      path: /api/orders/1
+      method: GET
+    - name: GET /api/auth/me
+      path: /api/auth/me
+      method: GET
+    - name: POST /api/auth/me/refresh
+      path: /api/auth/me/refresh
+      method: POST
+      body: '{}'
+    - name: GET /api/auth/health/unified
+      path: /api/auth/health/unified
+      method: GET
+      params:
+        user_id: default
+    - name: GET /api/auth/login/status
+      path: /api/auth/login/status
+      method: GET
+    - name: GET /api/auth/restore-session
+      path: /api/auth/restore-session
+      method: GET
+    - name: GET /api/auth/accounts
+      path: /api/auth/accounts
+      method: GET
+    - name: GET /api/anticrawl/strategy
+      path: /api/anticrawl/strategy
+      method: GET
+    - name: GET /api/anticrawl/session/status
+      path: /api/anticrawl/session/status
+      method: GET
+    - name: GET /api/anticrawl/health
+      path: /api/anticrawl/health
+      method: GET
+    - name: GET /api/anticrawl/fingerprint
+      path: /api/anticrawl/fingerprint
+      method: GET
+    - name: GET /api/anticrawl/freq/delay
+      path: /api/anticrawl/freq/delay
+      method: GET
+      params:
+        action: list
+    - name: GET /api/anticrawl/cookies/current
+      path: /api/anticrawl/cookies/current
+      method: GET
+    - name: GET /api/anticrawl/cookies/layers
+      path: /api/anticrawl/cookies/layers
+      method: GET
+    - name: GET /api/accounts
+      path: /api/accounts
+      method: GET
+      params:
+        status: all
+    - name: GET /api/accounts/999999
+      path: /api/accounts/999999
+      method: GET
+    - name: GET /api/proxies
+      path: /api/proxies
+      method: GET
+      params:
+        status: all
+    - name: GET /api/proxies/999999
+      path: /api/proxies/999999
+      method: GET
+    - name: GET /api/notifier/quiet-hours
+      path: /api/notifier/quiet-hours
+      method: GET
+    - name: GET /api/templates
+      path: /api/templates
+      method: GET
+    - name: GET /api/prompts
+      path: /api/prompts
+      method: GET
+    - name: GET /api/prompts/1
+      path: /api/prompts/1
+      method: GET
+    - name: GET /api/preferences
+      path: /api/preferences
+      method: GET
+    - name: GET /api/cron/examples
+      path: /api/cron/examples
+      method: GET
+    - name: GET /api/param-calculator/rules
+      path: /api/param-calculator/rules
+      method: GET
+    - name: GET /api/maintenance/cache-scan
+      path: /api/maintenance/cache-scan
+      method: GET
+      params:
+        budget: '1.0'
+    - name: GET /api/db-admin/tables
+      path: /api/db-admin/tables
+      method: GET
+    - name: GET /api/db-admin/audit-log
+      path: /api/db-admin/audit-log
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/vector-admin/status
+      path: /api/vector-admin/status
+      method: GET
+    - name: GET /api/vector-admin/snapshots
+      path: /api/vector-admin/snapshots
+      method: GET
+    - name: GET /api/vector-admin/audit-log
+      path: /api/vector-admin/audit-log
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/batch-refresh/status
+      path: /api/batch-refresh/status
+      method: GET
+    - name: GET /api/batch-refresh/history
+      path: /api/batch-refresh/history
+      method: GET
+      params:
+        task_id: t0134ee45
+        status: all
+        order_by: id
+        order_dir: desc
+        limit: '20'
+        offset: '0'
+    - name: GET /api/batch-refresh/history/cleanup-preview
+      path: /api/batch-refresh/history/cleanup-preview
+      method: GET
+      params:
+        days: '30'
+    - name: GET /api/batch-refresh/history/999999
+      path: /api/batch-refresh/history/999999
+      method: GET
+    - name: GET /api/menu
+      path: /api/menu
+      method: GET
+    - name: GET /api/chatbot/sessions
+      path: /api/chatbot/sessions
+      method: GET
+      params:
+        limit: '20'
+        offset: '0'
+        status: all
+        keyword: perf
+        favorite_only: 'False'
+    - name: GET /api/chatbot/sessions/1
+      path: /api/chatbot/sessions/1
+      method: GET
+    - name: GET /api/chatbot/sessions/1/messages
+      path: /api/chatbot/sessions/1/messages
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/chatbot/feedback/recent
+      path: /api/chatbot/feedback/recent
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/chatbot/kb/status
+      path: /api/chatbot/kb/status
+      method: GET
+    - name: GET /api/chatbot/kb/versions
+      path: /api/chatbot/kb/versions
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/chatbot/config
+      path: /api/chatbot/config
+      method: GET
+    - name: GET /api/chatbot/faq
+      path: /api/chatbot/faq
+      method: GET
+      params:
+        active_only: 'False'
+    - name: GET /api/chatbot/welcome
+      path: /api/chatbot/welcome
+      method: GET
+  - name: writes_idem
+    profile: w_single
+    samplers:
+    - name: POST /api/tasks
+      path: /api/tasks
+      method: POST
+      body: '{"keyword": "perf"}'
+    - name: PATCH /api/tasks/t0134ee45
+      path: /api/tasks/t0134ee45
+      method: PATCH
+      body: '{"name": "perf", "keyword": "perf", "min_price": 1.0, "max_price": 1.0, "max_publish_days": 1, "mode": "perf", "status": "all", "region": "perf", "search_filters": ["perf"], "exclude_words":
+        ["perf"], "cron": "perf", "use_cron": true}'
+    - name: POST /api/tasks/t0134ee45/control
+      path: /api/tasks/t0134ee45/control
+      method: POST
+      body: '{}'
+    - name: POST /api/tasks/t0134ee45/dry-run
+      path: /api/tasks/t0134ee45/dry-run
+      method: POST
+      body: '{}'
+    - name: POST /api/tasks/batch-control
+      path: /api/tasks/batch-control
+      method: POST
+      body: '{"task_ids": ["perf"], "action": "list"}'
+    - name: POST /api/tasks/t0134ee45/deps
+      path: /api/tasks/t0134ee45/deps
+      method: POST
+      body: '{"depends_on": "perf"}'
+    - name: POST /api/tasks/t0134ee45/links
+      path: /api/tasks/t0134ee45/links
+      method: POST
+      body: '{"link_type": "perf", "link_key": "perf"}'
+    - name: POST /api/config/preview
+      path: /api/config/preview
+      method: POST
+      body: '{}'
+    - name: POST /api/config/save
+      path: /api/config/save
+      method: POST
+      body: '{"payload": {}}'
+    - name: POST /api/config/import
+      path: /api/config/import
+      method: POST
+      body: '{}'
+    - name: POST /api/config/rollback
+      path: /api/config/rollback
+      method: POST
+      body: '{}'
+    - name: POST /api/config/restore-backup
+      path: /api/config/restore-backup
+      method: POST
+      body: '{}'
+    - name: POST /api/evaluations/1000915580797/feedback
+      path: /api/evaluations/1000915580797/feedback
+      method: POST
+      body: '{}'
+    - name: POST /api/evaluations/recompute
+      path: /api/evaluations/recompute
+      method: POST
+      body: '{}'
+    - name: POST /api/evaluations/batch-evaluate-unevaluated
+      path: /api/evaluations/batch-evaluate-unevaluated
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications
+      path: /api/notifications
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications/1/read
+      path: /api/notifications/1/read
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications/read_all
+      path: /api/notifications/read_all
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications/batch-delete
+      path: /api/notifications/batch-delete
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications/batch-read
+      path: /api/notifications/batch-read
+      method: POST
+      body: '{}'
+    - name: POST /api/templates
+      path: /api/templates
+      method: POST
+      body: '{"name": "perf", "keyword": "perf"}'
+    - name: PUT /api/prompts/1
+      path: /api/prompts/1
+      method: PUT
+      body: '{"content": "perf"}'
+    - name: POST /api/prompts/1/reset
+      path: /api/prompts/1/reset
+      method: POST
+      body: '{}'
+    - name: PUT /api/preferences
+      path: /api/preferences
+      method: PUT
+      body: '{}'
+    - name: PUT /api/menu
+      path: /api/menu
+      method: PUT
+      body: '{"menus": ["perf"]}'
+    - name: POST /api/menu/reset
+      path: /api/menu/reset
+      method: POST
+      body: '{}'
+  - name: mixed_biz
+    profile: soak
+    samplers:
+    - name: GET /api/config/export
+      path: /api/config/export
+      method: GET
+    - name: GET /api/stats
+      path: /api/stats
+      method: GET
+    - name: GET /api/stats/today
+      path: /api/stats/today
+      method: GET
+    - name: GET /api/timeline
+      path: /api/timeline
+      method: GET
+      params:
+        types: orders,events
+        task_id: t0134ee45
+        limit: '20'
+    - name: GET /api/prices/histogram
+      path: /api/prices/histogram
+      method: GET
+      params:
+        bins: '20'
+        task_id: t0134ee45
+    - name: GET /api/stats/trend
+      path: /api/stats/trend
+      method: GET
+      params:
+        metric: events
+        range_hours: '168'
+        task_id: t0134ee45
+    - name: GET /api/stats/business-kpi
+      path: /api/stats/business-kpi
+      method: GET
+      params:
+        range_days: '30'
+    - name: GET /api/stats/seller-price-trend
+      path: /api/stats/seller-price-trend
+      method: GET
+      params:
+        seller_id: SEED_SELLER
+        range_days: '30'
+    - name: GET /api/stats/eval-funnel
+      path: /api/stats/eval-funnel
+      method: GET
+      params:
+        range_days: '30'
+    - name: GET /api/stats/price-trend
+      path: /api/stats/price-trend
+      method: GET
+      params:
+        task_id: t0134ee45
+    - name: GET /api/logs
+      path: /api/logs
+      method: GET
+      params:
+        source: file
+        limit: '20'
+    - name: GET /api/logs/search
+      path: /api/logs/search
+      method: GET
+      params:
+        level: all
+        task_id: t0134ee45
+        request_id: req-perf
+        limit: '20'
+        offset: '0'
+    - name: GET /api/logs/export
+      path: /api/logs/export
+      method: GET
+      params:
+        format: json
+        level: all
+        task_id: t0134ee45
+        limit: '20'
+    - name: GET /api/logs/request/req-perf
+      path: /api/logs/request/req-perf
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/evaluations
+      path: /api/evaluations
+      method: GET
+      params:
+        limit: '20'
+        offset: '0'
+        page_num: '1'
+        page_size: '20'
+        item_id: '1000915580797'
+        task_id: t0134ee45
+        sold_filter: all
+        include_out_of_range: 'False'
+    - name: GET /api/evaluations/brands
+      path: /api/evaluations/brands
+      method: GET
+      params:
+        task_id: t0134ee45
+    - name: GET /api/evaluations/latest/1000915580797
+      path: /api/evaluations/latest/1000915580797
+      method: GET
+    - name: GET /api/evaluations/auto-collect-stats
+      path: /api/evaluations/auto-collect-stats
+      method: GET
+      params:
+        range_hours: '168'
+    - name: GET /api/evaluations/distribution
+      path: /api/evaluations/distribution
+      method: GET
+      params:
+        range_hours: '168'
+        price_bin_count: '10'
+        score_bin_count: '10'
+        task_id: t0134ee45
+        include_out_of_range: 'False'
+    - name: GET /api/evaluations/threshold-suggestion
+      path: /api/evaluations/threshold-suggestion
+      method: GET
+      params:
+        target_pass_rate: '0.7'
+    - name: GET /api/evaluations/seller-price-trend
+      path: /api/evaluations/seller-price-trend
+      method: GET
+      params:
+        seller_id: SEED_SELLER
+        range_days: '30'
+    - name: GET /api/evaluations/1000915580797/seller-trend
+      path: /api/evaluations/1000915580797/seller-trend
+      method: GET
+      params:
+        range_days: '30'
+    - name: GET /api/evaluations/feedback/stats
+      path: /api/evaluations/feedback/stats
+      method: GET
+    - name: GET /api/anticrawl/freq/stats
+      path: /api/anticrawl/freq/stats
+      method: GET
+    - name: GET /api/notifications
+      path: /api/notifications
+      method: GET
+      params:
+        status: all
+        limit: '20'
+        offset: '0'
+    - name: GET /api/notifications/unread_count
+      path: /api/notifications/unread_count
+      method: GET
+    - name: GET /api/items/1000915580797/price-history
+      path: /api/items/1000915580797/price-history
+      method: GET
+      params:
+        days: '30'
+    - name: GET /api/items/1000915580797/summary
+      path: /api/items/1000915580797/summary
+      method: GET
+    - name: GET /api/items/batch
+      path: /api/items/batch
+      method: GET
+    - name: GET /api/accounts/stats
+      path: /api/accounts/stats
+      method: GET
+    - name: GET /api/proxies/stats
+      path: /api/proxies/stats
+      method: GET
+    - name: GET /api/export/items
+      path: /api/export/items
+      method: GET
+      params:
+        task_id: t0134ee45
+        status: all
+        level: all
+        limit: '20'
+    - name: GET /api/export
+      path: /api/export
+      method: GET
+    - name: GET /api/prices/category-stats
+      path: /api/prices/category-stats
+      method: GET
+      params:
+        task_id: t0134ee45
+    - name: GET /api/prices/category-comparison
+      path: /api/prices/category-comparison
+      method: GET
+      params:
+        sort_by: mean
+        order: asc
+        limit: '20'
+        range_days: '30'
+    - name: GET /api/prices/sold-range
+      path: /api/prices/sold-range
+      method: GET
+      params:
+        task_id: t0134ee45
+        range_days: '30'
+    - name: GET /api/prices/bargain-eval
+      path: /api/prices/bargain-eval
+      method: GET
+      params:
+        task_id: t0134ee45
+        range_days: '30'
+    - name: GET /api/db-admin/tables/items/schema
+      path: /api/db-admin/tables/items/schema
+      method: GET
+    - name: GET /api/db-admin/tables/items/rows
+      path: /api/db-admin/tables/items/rows
+      method: GET
+      params:
+        limit: '20'
+        offset: '0'
+        order_by: id
+        search: perf
+    - name: GET /api/db-admin/tables/items/export
+      path: /api/db-admin/tables/items/export
+      method: GET
+      params:
+        format: json
+    - name: GET /api/error-logs
+      path: /api/error-logs
+      method: GET
+      params:
+        status: all
+        request_id: req-perf
+        limit: '20'
+        offset: '0'
+    - name: GET /api/error-logs/999999
+      path: /api/error-logs/999999
+      method: GET
+    - name: GET /api/error-logs/999999/ai-context
+      path: /api/error-logs/999999/ai-context
+      method: GET
+      params:
+        format: json
+    - name: GET /api/batch-refresh/history/stats
+      path: /api/batch-refresh/history/stats
+      method: GET
+    - name: GET /api/chatbot/audit-logs
+      path: /api/chatbot/audit-logs
+      method: GET
+      params:
+        action: list
+        limit: '20'
+    - name: GET /api/tasks
+      path: /api/tasks
+      method: GET
+      params:
+        status: all
+        limit: '20'
+        offset: '0'
+    - name: GET /api/tasks/options
+      path: /api/tasks/options
+      method: GET
+    - name: GET /api/tasks/t0134ee45
+      path: /api/tasks/t0134ee45
+      method: GET
+    - name: GET /api/tasks/t0134ee45/precheck
+      path: /api/tasks/t0134ee45/precheck
+      method: GET
+    - name: GET /api/tasks/t0134ee45/deps
+      path: /api/tasks/t0134ee45/deps
+      method: GET
+    - name: GET /api/tasks/t0134ee45/dependents
+      path: /api/tasks/t0134ee45/dependents
+      method: GET
+    - name: GET /api/tasks/t0134ee45/links
+      path: /api/tasks/t0134ee45/links
+      method: GET
+      params:
+        limit: '20'
+        offset: '0'
+        keyword: perf
+        sold_filter: all
+    - name: GET /api/tasks/t0134ee45/links/count
+      path: /api/tasks/t0134ee45/links/count
+      method: GET
+    - name: GET /api/tasks/t0134ee45/links/facets
+      path: /api/tasks/t0134ee45/links/facets
+      method: GET
+      params:
+        type: item
+        keyword: perf
+        sold_filter: all
+    - name: GET /api/tasks/t0134ee45/links/live
+      path: /api/tasks/t0134ee45/links/live
+      method: GET
+    - name: GET /api/tasks/links/lookup
+      path: /api/tasks/links/lookup
+      method: GET
+    - name: GET /api/tasks/links/search
+      path: /api/tasks/links/search
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/config
+      path: /api/config
+      method: GET
+    - name: GET /api/config/raw
+      path: /api/config/raw
+      method: GET
+    - name: GET /api/config/backups
+      path: /api/config/backups
+      method: GET
+    - name: GET /api/config/share
+      path: /api/config/share
+      method: GET
+    - name: GET /api/config/version
+      path: /api/config/version
+      method: GET
+    - name: GET /api/events/recent
+      path: /api/events/recent
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/orders
+      path: /api/orders
+      method: GET
+      params:
+        status: all
+        limit: '20'
+        page_num: '1'
+        page_size: '20'
+        task_id: t0134ee45
+        item_id: '1000915580797'
+        sort_by: created_at
+        sort_dir: desc
+    - name: GET /api/orders/1
+      path: /api/orders/1
+      method: GET
+    - name: GET /api/auth/me
+      path: /api/auth/me
+      method: GET
+    - name: POST /api/auth/me/refresh
+      path: /api/auth/me/refresh
+      method: POST
+      body: '{}'
+    - name: GET /api/auth/health/unified
+      path: /api/auth/health/unified
+      method: GET
+      params:
+        user_id: default
+    - name: GET /api/auth/login/status
+      path: /api/auth/login/status
+      method: GET
+    - name: GET /api/auth/restore-session
+      path: /api/auth/restore-session
+      method: GET
+    - name: GET /api/auth/accounts
+      path: /api/auth/accounts
+      method: GET
+    - name: GET /api/anticrawl/strategy
+      path: /api/anticrawl/strategy
+      method: GET
+    - name: GET /api/anticrawl/session/status
+      path: /api/anticrawl/session/status
+      method: GET
+    - name: GET /api/anticrawl/health
+      path: /api/anticrawl/health
+      method: GET
+    - name: GET /api/anticrawl/fingerprint
+      path: /api/anticrawl/fingerprint
+      method: GET
+    - name: GET /api/anticrawl/freq/delay
+      path: /api/anticrawl/freq/delay
+      method: GET
+      params:
+        action: list
+    - name: GET /api/anticrawl/cookies/current
+      path: /api/anticrawl/cookies/current
+      method: GET
+    - name: GET /api/anticrawl/cookies/layers
+      path: /api/anticrawl/cookies/layers
+      method: GET
+    - name: GET /api/accounts
+      path: /api/accounts
+      method: GET
+      params:
+        status: all
+    - name: GET /api/accounts/999999
+      path: /api/accounts/999999
+      method: GET
+    - name: GET /api/proxies
+      path: /api/proxies
+      method: GET
+      params:
+        status: all
+    - name: GET /api/proxies/999999
+      path: /api/proxies/999999
+      method: GET
+    - name: GET /api/notifier/quiet-hours
+      path: /api/notifier/quiet-hours
+      method: GET
+    - name: GET /api/templates
+      path: /api/templates
+      method: GET
+    - name: GET /api/prompts
+      path: /api/prompts
+      method: GET
+    - name: GET /api/prompts/1
+      path: /api/prompts/1
+      method: GET
+    - name: GET /api/preferences
+      path: /api/preferences
+      method: GET
+    - name: GET /api/cron/examples
+      path: /api/cron/examples
+      method: GET
+    - name: GET /api/param-calculator/rules
+      path: /api/param-calculator/rules
+      method: GET
+    - name: GET /api/maintenance/cache-scan
+      path: /api/maintenance/cache-scan
+      method: GET
+      params:
+        budget: '1.0'
+    - name: GET /api/db-admin/tables
+      path: /api/db-admin/tables
+      method: GET
+    - name: GET /api/db-admin/audit-log
+      path: /api/db-admin/audit-log
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/vector-admin/status
+      path: /api/vector-admin/status
+      method: GET
+    - name: GET /api/vector-admin/snapshots
+      path: /api/vector-admin/snapshots
+      method: GET
+    - name: GET /api/vector-admin/audit-log
+      path: /api/vector-admin/audit-log
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/batch-refresh/status
+      path: /api/batch-refresh/status
+      method: GET
+    - name: GET /api/batch-refresh/history
+      path: /api/batch-refresh/history
+      method: GET
+      params:
+        task_id: t0134ee45
+        status: all
+        order_by: id
+        order_dir: desc
+        limit: '20'
+        offset: '0'
+    - name: GET /api/batch-refresh/history/cleanup-preview
+      path: /api/batch-refresh/history/cleanup-preview
+      method: GET
+      params:
+        days: '30'
+    - name: GET /api/batch-refresh/history/999999
+      path: /api/batch-refresh/history/999999
+      method: GET
+    - name: GET /api/menu
+      path: /api/menu
+      method: GET
+    - name: GET /api/chatbot/sessions
+      path: /api/chatbot/sessions
+      method: GET
+      params:
+        limit: '20'
+        offset: '0'
+        status: all
+        keyword: perf
+        favorite_only: 'False'
+    - name: GET /api/chatbot/sessions/1
+      path: /api/chatbot/sessions/1
+      method: GET
+    - name: GET /api/chatbot/sessions/1/messages
+      path: /api/chatbot/sessions/1/messages
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/chatbot/feedback/recent
+      path: /api/chatbot/feedback/recent
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/chatbot/kb/status
+      path: /api/chatbot/kb/status
+      method: GET
+    - name: GET /api/chatbot/kb/versions
+      path: /api/chatbot/kb/versions
+      method: GET
+      params:
+        limit: '20'
+    - name: GET /api/chatbot/config
+      path: /api/chatbot/config
+      method: GET
+    - name: GET /api/chatbot/faq
+      path: /api/chatbot/faq
+      method: GET
+      params:
+        active_only: 'False'
+    - name: GET /api/chatbot/welcome
+      path: /api/chatbot/welcome
+      method: GET
+    - name: POST /api/tasks
+      path: /api/tasks
+      method: POST
+      body: '{"keyword": "perf"}'
+    - name: PATCH /api/tasks/t0134ee45
+      path: /api/tasks/t0134ee45
+      method: PATCH
+      body: '{"name": "perf", "keyword": "perf", "min_price": 1.0, "max_price": 1.0, "max_publish_days": 1, "mode": "perf", "status": "all", "region": "perf", "search_filters": ["perf"], "exclude_words":
+        ["perf"], "cron": "perf", "use_cron": true}'
+    - name: POST /api/tasks/t0134ee45/control
+      path: /api/tasks/t0134ee45/control
+      method: POST
+      body: '{}'
+    - name: POST /api/tasks/t0134ee45/dry-run
+      path: /api/tasks/t0134ee45/dry-run
+      method: POST
+      body: '{}'
+    - name: POST /api/tasks/batch-control
+      path: /api/tasks/batch-control
+      method: POST
+      body: '{"task_ids": ["perf"], "action": "list"}'
+    - name: POST /api/tasks/t0134ee45/deps
+      path: /api/tasks/t0134ee45/deps
+      method: POST
+      body: '{"depends_on": "perf"}'
+    - name: POST /api/tasks/t0134ee45/links
+      path: /api/tasks/t0134ee45/links
+      method: POST
+      body: '{"link_type": "perf", "link_key": "perf"}'
+    - name: POST /api/config/preview
+      path: /api/config/preview
+      method: POST
+      body: '{}'
+    - name: POST /api/config/save
+      path: /api/config/save
+      method: POST
+      body: '{"payload": {}}'
+    - name: POST /api/config/import
+      path: /api/config/import
+      method: POST
+      body: '{}'
+    - name: POST /api/config/rollback
+      path: /api/config/rollback
+      method: POST
+      body: '{}'
+    - name: POST /api/config/restore-backup
+      path: /api/config/restore-backup
+      method: POST
+      body: '{}'
+    - name: POST /api/evaluations/1000915580797/feedback
+      path: /api/evaluations/1000915580797/feedback
+      method: POST
+      body: '{}'
+    - name: POST /api/evaluations/recompute
+      path: /api/evaluations/recompute
+      method: POST
+      body: '{}'
+    - name: POST /api/evaluations/batch-evaluate-unevaluated
+      path: /api/evaluations/batch-evaluate-unevaluated
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications
+      path: /api/notifications
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications/1/read
+      path: /api/notifications/1/read
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications/read_all
+      path: /api/notifications/read_all
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications/batch-delete
+      path: /api/notifications/batch-delete
+      method: POST
+      body: '{}'
+    - name: POST /api/notifications/batch-read
+      path: /api/notifications/batch-read
+      method: POST
+      body: '{}'
+    - name: POST /api/templates
+      path: /api/templates
+      method: POST
+      body: '{"name": "perf", "keyword": "perf"}'
+    - name: PUT /api/prompts/1
+      path: /api/prompts/1
+      method: PUT
+      body: '{"content": "perf"}'
+    - name: POST /api/prompts/1/reset
+      path: /api/prompts/1/reset
+      method: POST
+      body: '{}'
+    - name: PUT /api/preferences
+      path: /api/preferences
+      method: PUT
+      body: '{}'
+    - name: PUT /api/menu
+      path: /api/menu
+      method: PUT
+      body: '{"menus": ["perf"]}'
+    - name: POST /api/menu/reset
+      path: /api/menu/reset
+      method: POST
+      body: '{}'
+phases:
+- name: baseline_heavy
+  jmx: jmeter/reads_heavy.jmx
+  enabled: true
+  threads_override: 1
+  duration_override: 300
+- name: baseline_light
+  jmx: jmeter/reads_light.jmx
+  enabled: true
+  threads_override: 1
+  duration_override: 300
+- name: baseline_write
+  jmx: jmeter/writes_idem.jmx
+  enabled: true
+  threads_override: 1
+  duration_override: 180
+- name: stress_heavy_t2
+  jmx: jmeter/reads_heavy.jmx
+  enabled: true
+  threads_override: 2
+  duration_override: 60
+- name: stress_heavy_t4
+  jmx: jmeter/reads_heavy.jmx
+  enabled: true
+  threads_override: 4
+  duration_override: 60
+- name: stress_heavy_t8
+  jmx: jmeter/reads_heavy.jmx
+  enabled: true
+  threads_override: 8
+  duration_override: 60
+- name: stress_heavy_t16
+  jmx: jmeter/reads_heavy.jmx
+  enabled: true
+  threads_override: 16
+  duration_override: 60
+- name: stress_heavy_t32
+  jmx: jmeter/reads_heavy.jmx
+  enabled: true
+  threads_override: 32
+  duration_override: 60
+- name: stress_heavy_t64
+  jmx: jmeter/reads_heavy.jmx
+  enabled: true
+  threads_override: 64
+  duration_override: 60
+- name: stress_light_t16
+  jmx: jmeter/reads_light.jmx
+  enabled: true
+  threads_override: 16
+  duration_override: 60
+- name: stress_light_t48
+  jmx: jmeter/reads_light.jmx
+  enabled: true
+  threads_override: 48
+  duration_override: 60
+- name: stress_light_t96
+  jmx: jmeter/reads_light.jmx
+  enabled: true
+  threads_override: 96
+  duration_override: 60
+- name: stress_write_t4
+  jmx: jmeter/writes_idem.jmx
+  enabled: true
+  threads_override: 4
+  duration_override: 60
+- name: stress_write_t8
+  jmx: jmeter/writes_idem.jmx
+  enabled: true
+  threads_override: 8
+  duration_override: 60
+- name: stress_write_t16
+  jmx: jmeter/writes_idem.jmx
+  enabled: true
+  threads_override: 16
+  duration_override: 60
+- name: soak_mixed
+  jmx: jmeter/mixed_biz.jmx
+  enabled: true
+  threads_override: 12
+  duration_override: 3600
+defect_rules:
+  defect_codes:
+  - '000'
+  - '405'
+  defect_prefixes:
+  - '5'
+  expected_codes:
+  - '404'
+  - '422'
+  assertion_mismatch_is_defect: false
+comparison:
+  enabled: false
+  baseline_jtl: ''
+  key_endpoints: []
+  baseline_integrity:
+    enforce_same_endpoints: true
+    doc_fallback_allowed: true
+report:
+  formats:
+  - markdown
+  output_dir: D:\tmp\xh-perf\output
+  percentiles:
+  - 50
+  - 90
+  - 95
+  - 99
+  endpoint_table: true
+  group_label_prefixes: []
+results:
+  output_dir: D:\tmp\xh-perf\output
+  format: csv
+  keep_count: 40
+logging:
+  level: INFO
+  file: D:\tmp\xh-perf\output\perf.log
+  verbose: false

@@ -1,0 +1,649 @@
+[
+ {
+  "label": "DELETE /api/tasks/t0134ee45",
+  "method": "DELETE",
+  "path": "/api/tasks/t0134ee45",
+  "code": "200",
+  "ms": 1149.7,
+  "bytes": 107,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "DELETE /api/tasks/t0134ee45/deps",
+  "method": "DELETE",
+  "path": "/api/tasks/t0134ee45/deps",
+  "code": "422",
+  "ms": 12.2,
+  "bytes": 82,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "DELETE /api/tasks/t0134ee45/links/999999",
+  "method": "DELETE",
+  "path": "/api/tasks/t0134ee45/links/999999",
+  "code": "404",
+  "ms": 18.8,
+  "bytes": 28,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "POST /api/prices/analyze",
+  "method": "POST",
+  "path": "/api/prices/analyze",
+  "code": "200",
+  "ms": 659.8,
+  "bytes": 85,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/logs/tag",
+  "method": "POST",
+  "path": "/api/logs/tag",
+  "code": "422",
+  "ms": 16.5,
+  "bytes": 94,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "DELETE /api/logs/tag",
+  "method": "DELETE",
+  "path": "/api/logs/tag",
+  "code": "422",
+  "ms": 9.8,
+  "bytes": 171,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "POST /api/anticrawl/initialize",
+  "method": "POST",
+  "path": "/api/anticrawl/initialize",
+  "code": "200",
+  "ms": 11.8,
+  "bytes": 271,
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证"
+ },
+ {
+  "label": "POST /api/anticrawl/session/start",
+  "method": "POST",
+  "path": "/api/anticrawl/session/start",
+  "code": "200",
+  "ms": 15.7,
+  "bytes": 94,
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证"
+ },
+ {
+  "label": "POST /api/anticrawl/session/stop",
+  "method": "POST",
+  "path": "/api/anticrawl/session/stop",
+  "code": "200",
+  "ms": 13.0,
+  "bytes": 45,
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证"
+ },
+ {
+  "label": "POST /api/anticrawl/cookies/import-from-browser/preview",
+  "method": "POST",
+  "path": "/api/anticrawl/cookies/import-from-browser/preview",
+  "code": "200",
+  "ms": 6854.6,
+  "bytes": 400,
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证"
+ },
+ {
+  "label": "POST /api/anticrawl/cookies/update",
+  "method": "POST",
+  "path": "/api/anticrawl/cookies/update",
+  "code": "200",
+  "ms": 14.0,
+  "bytes": 37,
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证"
+ },
+ {
+  "label": "POST /api/anticrawl/cookies/invalidate",
+  "method": "POST",
+  "path": "/api/anticrawl/cookies/invalidate",
+  "code": "200",
+  "ms": 13.0,
+  "bytes": 89,
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证"
+ },
+ {
+  "label": "POST /api/anticrawl/strategy/set",
+  "method": "POST",
+  "path": "/api/anticrawl/strategy/set",
+  "code": "200",
+  "ms": 11.9,
+  "bytes": 138,
+  "tier": "probe_single",
+  "reason": "反爬策略写操作单发验证"
+ },
+ {
+  "label": "DELETE /api/notifications",
+  "method": "DELETE",
+  "path": "/api/notifications",
+  "code": "400",
+  "ms": 9.9,
+  "bytes": 43,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "DELETE /api/notifications/1",
+  "method": "DELETE",
+  "path": "/api/notifications/1",
+  "code": "404",
+  "ms": 20.2,
+  "bytes": 28,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "POST /api/accounts/999999/report-success",
+  "method": "POST",
+  "path": "/api/accounts/999999/report-success",
+  "code": "404",
+  "ms": 15.6,
+  "bytes": 36,
+  "tier": "probe_single",
+  "reason": "会改动账号健康状态，单发验证"
+ },
+ {
+  "label": "POST /api/accounts/999999/report-fail",
+  "method": "POST",
+  "path": "/api/accounts/999999/report-fail",
+  "code": "404",
+  "ms": 13.1,
+  "bytes": 36,
+  "tier": "probe_single",
+  "reason": "会改动账号健康状态，单发验证"
+ },
+ {
+  "label": "POST /api/proxies",
+  "method": "POST",
+  "path": "/api/proxies",
+  "code": "400",
+  "ms": 11.5,
+  "bytes": 73,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "PUT /api/proxies/999999",
+  "method": "PUT",
+  "path": "/api/proxies/999999",
+  "code": "404",
+  "ms": 16.6,
+  "bytes": 36,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "DELETE /api/proxies/999999",
+  "method": "DELETE",
+  "path": "/api/proxies/999999",
+  "code": "404",
+  "ms": 8.7,
+  "bytes": 36,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "POST /api/proxies/acquire",
+  "method": "POST",
+  "path": "/api/proxies/acquire",
+  "code": "404",
+  "ms": 18.4,
+  "bytes": 28,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/proxies/999999/report-success",
+  "method": "POST",
+  "path": "/api/proxies/999999/report-success",
+  "code": "404",
+  "ms": 13.3,
+  "bytes": 36,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/proxies/999999/report-fail",
+  "method": "POST",
+  "path": "/api/proxies/999999/report-fail",
+  "code": "404",
+  "ms": 13.9,
+  "bytes": 36,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/proxies/999999/check",
+  "method": "POST",
+  "path": "/api/proxies/999999/check",
+  "code": "404",
+  "ms": 19.4,
+  "bytes": 36,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/proxies/check-all",
+  "method": "POST",
+  "path": "/api/proxies/check-all",
+  "code": "200",
+  "ms": 11.9,
+  "bytes": 24,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "PUT /api/notifier/quiet-hours",
+  "method": "PUT",
+  "path": "/api/notifier/quiet-hours",
+  "code": "200",
+  "ms": 201.0,
+  "bytes": 131,
+  "tier": "probe_single",
+  "reason": "渠道配置写操作单发验证"
+ },
+ {
+  "label": "POST /api/notifier/quiet-hours/reset",
+  "method": "POST",
+  "path": "/api/notifier/quiet-hours/reset",
+  "code": "200",
+  "ms": 11.8,
+  "bytes": 32,
+  "tier": "probe_single",
+  "reason": "渠道配置写操作单发验证"
+ },
+ {
+  "label": "DELETE /api/templates/1",
+  "method": "DELETE",
+  "path": "/api/templates/1",
+  "code": "404",
+  "ms": 32.5,
+  "bytes": 28,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "DELETE /api/preferences/1",
+  "method": "DELETE",
+  "path": "/api/preferences/1",
+  "code": "200",
+  "ms": 14.1,
+  "bytes": 11,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "POST /api/cron/validate",
+  "method": "POST",
+  "path": "/api/cron/validate",
+  "code": "200",
+  "ms": 11.9,
+  "bytes": 127,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/param-calculator/validate-task",
+  "method": "POST",
+  "path": "/api/param-calculator/validate-task",
+  "code": "200",
+  "ms": 56.0,
+  "bytes": 297,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/param-calculator/validate-config",
+  "method": "POST",
+  "path": "/api/param-calculator/validate-config",
+  "code": "200",
+  "ms": 8.6,
+  "bytes": 124,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/param-calculator/reload",
+  "method": "POST",
+  "path": "/api/param-calculator/reload",
+  "code": "200",
+  "ms": 10.6,
+  "bytes": 45,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/maintenance/cache",
+  "code": "000",
+  "ms": 60014.2,
+  "err": "TimeoutError:timed out",
+  "tier": "probe_single"
+ },
+ {
+  "label": "POST /api/maintenance/database",
+  "method": "POST",
+  "path": "/api/maintenance/database",
+  "code": "200",
+  "ms": 5141.2,
+  "bytes": 246,
+  "tier": "probe_single",
+  "reason": "维护动作单发验证"
+ },
+ {
+  "label": "POST /api/maintenance/logs",
+  "method": "POST",
+  "path": "/api/maintenance/logs",
+  "code": "200",
+  "ms": 160.1,
+  "bytes": 93,
+  "tier": "probe_single",
+  "reason": "维护动作单发验证"
+ },
+ {
+  "label": "POST /api/db-admin/tables/items/cascade-preview",
+  "method": "POST",
+  "path": "/api/db-admin/tables/items/cascade-preview",
+  "code": "200",
+  "ms": 83.1,
+  "bytes": 438,
+  "tier": "probe_single",
+  "reason": "批量导入/级联删除属破坏性动作，单发验证"
+ },
+ {
+  "label": "POST /api/db-admin/tables/items/rows",
+  "method": "POST",
+  "path": "/api/db-admin/tables/items/rows",
+  "code": "400",
+  "ms": 16.7,
+  "bytes": 32,
+  "tier": "probe_single",
+  "reason": "库管理写操作单发验证，不进负载轮"
+ },
+ {
+  "label": "PATCH /api/db-admin/tables/items/rows/PERF-NONEXISTENT-ROW",
+  "method": "PATCH",
+  "path": "/api/db-admin/tables/items/rows/PERF-NONEXISTENT-ROW",
+  "code": "400",
+  "ms": 34.9,
+  "bytes": 34,
+  "tier": "probe_single",
+  "reason": "库管理写操作单发验证，不进负载轮"
+ },
+ {
+  "label": "DELETE /api/db-admin/tables/items/rows/PERF-NONEXISTENT-ROW",
+  "method": "DELETE",
+  "path": "/api/db-admin/tables/items/rows/PERF-NONEXISTENT-ROW",
+  "code": "400",
+  "ms": 21.0,
+  "bytes": 48,
+  "tier": "probe_single",
+  "reason": "真实删除行，单发验证（沙箱副本库）"
+ },
+ {
+  "label": "POST /api/db-admin/tables/items/rows/batch-delete",
+  "method": "POST",
+  "path": "/api/db-admin/tables/items/rows/batch-delete",
+  "code": "400",
+  "ms": 18.4,
+  "bytes": 48,
+  "tier": "probe_single",
+  "reason": "批量导入/级联删除属破坏性动作，单发验证"
+ },
+ {
+  "label": "POST /api/db-admin/tables/items/import",
+  "method": "POST",
+  "path": "/api/db-admin/tables/items/import",
+  "code": "400",
+  "ms": 13.4,
+  "bytes": 48,
+  "tier": "probe_single",
+  "reason": "批量导入/级联删除属破坏性动作，单发验证"
+ },
+ {
+  "label": "POST /api/vector-admin/snapshots",
+  "method": "POST",
+  "path": "/api/vector-admin/snapshots",
+  "code": "200",
+  "ms": 53.0,
+  "bytes": 55,
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库"
+ },
+ {
+  "label": "POST /api/vector-admin/snapshots/1/restore",
+  "method": "POST",
+  "path": "/api/vector-admin/snapshots/1/restore",
+  "code": "400",
+  "ms": 9.3,
+  "bytes": 48,
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库"
+ },
+ {
+  "label": "DELETE /api/vector-admin/snapshots/1",
+  "method": "DELETE",
+  "path": "/api/vector-admin/snapshots/1",
+  "code": "400",
+  "ms": 14.5,
+  "bytes": 48,
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库"
+ },
+ {
+  "label": "POST /api/vector-admin/cleanup/all",
+  "method": "POST",
+  "path": "/api/vector-admin/cleanup/all",
+  "code": "400",
+  "ms": 10.9,
+  "bytes": 48,
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库"
+ },
+ {
+  "label": "POST /api/vector-admin/cleanup/by-source",
+  "method": "POST",
+  "path": "/api/vector-admin/cleanup/by-source",
+  "code": "400",
+  "ms": 16.4,
+  "bytes": 48,
+  "tier": "probe_single",
+  "reason": "单发验证，避免重复改动向量库"
+ },
+ {
+  "label": "DELETE /api/error-logs/999999",
+  "method": "DELETE",
+  "path": "/api/error-logs/999999",
+  "code": "404",
+  "ms": 32.3,
+  "bytes": 34,
+  "tier": "probe_single",
+  "reason": "日志删除单发验证"
+ },
+ {
+  "label": "POST /api/error-logs/batch",
+  "method": "POST",
+  "path": "/api/error-logs/batch",
+  "code": "422",
+  "ms": 9.5,
+  "bytes": 208,
+  "tier": "probe_single",
+  "reason": "日志删除单发验证"
+ },
+ {
+  "label": "PATCH /api/error-logs/999999/status",
+  "method": "PATCH",
+  "path": "/api/error-logs/999999/status",
+  "code": "422",
+  "ms": 58.2,
+  "bytes": 92,
+  "tier": "probe_single",
+  "reason": "日志状态写/上下文导出，单发验证"
+ },
+ {
+  "label": "POST /api/error-logs/cleanup",
+  "method": "POST",
+  "path": "/api/error-logs/cleanup",
+  "code": "200",
+  "ms": 35.4,
+  "bytes": 28,
+  "tier": "probe_single",
+  "reason": "日志删除单发验证"
+ },
+ {
+  "label": "PATCH /api/batch-refresh/config",
+  "method": "PATCH",
+  "path": "/api/batch-refresh/config",
+  "code": "200",
+  "ms": 205.9,
+  "bytes": 111,
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证"
+ },
+ {
+  "label": "POST /api/batch-refresh/pause",
+  "method": "POST",
+  "path": "/api/batch-refresh/pause",
+  "code": "503",
+  "ms": 40.5,
+  "bytes": 103,
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证"
+ },
+ {
+  "label": "POST /api/batch-refresh/resume",
+  "method": "POST",
+  "path": "/api/batch-refresh/resume",
+  "code": "503",
+  "ms": 11.6,
+  "bytes": 43,
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证"
+ },
+ {
+  "label": "POST /api/batch-refresh/stop",
+  "method": "POST",
+  "path": "/api/batch-refresh/stop",
+  "code": "503",
+  "ms": 84.0,
+  "bytes": 43,
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证"
+ },
+ {
+  "label": "DELETE /api/batch-refresh/history",
+  "method": "DELETE",
+  "path": "/api/batch-refresh/history",
+  "code": "200",
+  "ms": 20.0,
+  "bytes": 23,
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证"
+ },
+ {
+  "label": "DELETE /api/batch-refresh/history/999999",
+  "method": "DELETE",
+  "path": "/api/batch-refresh/history/999999",
+  "code": "404",
+  "ms": 21.8,
+  "bytes": 34,
+  "tier": "probe_single",
+  "reason": "采集任务状态写操作，单发验证"
+ },
+ {
+  "label": "POST /api/chatbot/sessions",
+  "method": "POST",
+  "path": "/api/chatbot/sessions",
+  "code": "201",
+  "ms": 17.5,
+  "bytes": 276,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "DELETE /api/chatbot/sessions/1",
+  "method": "DELETE",
+  "path": "/api/chatbot/sessions/1",
+  "code": "404",
+  "ms": 14.7,
+  "bytes": 67,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ },
+ {
+  "label": "PATCH /api/chatbot/sessions/1/title",
+  "method": "PATCH",
+  "path": "/api/chatbot/sessions/1/title",
+  "code": "404",
+  "ms": 16.2,
+  "bytes": 67,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "PATCH /api/chatbot/sessions/1/favorite",
+  "method": "PATCH",
+  "path": "/api/chatbot/sessions/1/favorite",
+  "code": "404",
+  "ms": 34.3,
+  "bytes": 67,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/chatbot/sessions/1/end",
+  "method": "POST",
+  "path": "/api/chatbot/sessions/1/end",
+  "code": "404",
+  "ms": 20.5,
+  "bytes": 67,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "PUT /api/chatbot/config",
+  "method": "PUT",
+  "path": "/api/chatbot/config",
+  "code": "500",
+  "ms": 2644.2,
+  "bytes": 102,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "POST /api/chatbot/faq",
+  "method": "POST",
+  "path": "/api/chatbot/faq",
+  "code": "201",
+  "ms": 29.3,
+  "bytes": 215,
+  "tier": "probe_single",
+  "reason": "兜底：其余写接口单发验证"
+ },
+ {
+  "label": "DELETE /api/chatbot/faq/1",
+  "method": "DELETE",
+  "path": "/api/chatbot/faq/1",
+  "code": "200",
+  "ms": 26.7,
+  "bytes": 18,
+  "tier": "probe_single",
+  "reason": "兜底：删除类单发验证"
+ }
+]

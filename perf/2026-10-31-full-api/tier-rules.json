@@ -1,0 +1,380 @@
+{
+ "_comment": "端点分层规则（数据，非代码）。按数组顺序求首个匹配：pattern 为 path 正则。tier 取值 load_read / load_write / probe_single / blocked。blocked 端点不压测，仅在覆盖矩阵中说明原因。",
+ "seeds": {
+  "item_id": "1000915580797",
+  "id": "1000915580797",
+  "task_id": "t0134ee45",
+  "seller_id": "SEED_SELLER",
+  "table": "items",
+  "pk_value": "PERF-NONEXISTENT-ROW",
+  "dataset": "items",
+  "session_id": "1",
+  "message_id": "1",
+  "faq_id": "1",
+  "version_id": "1",
+  "error_log_id": "999999",
+  "history_id": "999999",
+  "account_id": "999999",
+  "request_id": "req-perf",
+  "proxy_id": "999999",
+  "link_id": "999999",
+  "dep_id": "999999",
+  "prompt_id": "1",
+  "template_id": "1",
+  "channel": "dingtalk",
+  "action": "list",
+  "format": "json",
+  "keys": "cookie",
+  "user_id": "default",
+  "limit": "20",
+  "offset": "0",
+  "page_num": "1",
+  "page_size": "20",
+  "days": "30",
+  "range_days": "30",
+  "range_hours": "168",
+  "bins": "20",
+  "price_bin_count": "10",
+  "score_bin_count": "10",
+  "hours": "24",
+  "top_n": "10",
+  "n": "10",
+  "count": "10",
+  "order_by": "id",
+  "order_dir": "desc",
+  "status": "all",
+  "level": "all",
+  "keyword": "perf",
+  "search": "perf",
+  "feedback": "up",
+  "note": "perf-test",
+  "confirm_token": "PERF_CONFIRM",
+  "size": "20",
+  "interval_sec": "5"
+ },
+ "rules": [
+  {
+   "pattern": "^/api/maintenance/status",
+   "method": "GET",
+   "tier": "probe_single",
+   "reason": "单请求耗时 >60s（客户端超时判 000），留在负载轮会把整轮 TPS 稀释成假瓶颈；改为单发计量并单列"
+  },
+  {
+   "pattern": "^/api/tasks/\\{task_id\\}/links/refresh",
+   "method": "POST",
+   "tier": "blocked",
+   "reason": "沙箱关闭调度器，采集器不可用，稳定返回 503，属环境口径而非容量缺陷"
+  },
+  {
+   "pattern": "^/api/evaluations/batch-collect-official",
+   "method": "POST",
+   "tier": "blocked",
+   "reason": "同上：采集器未运行返回 503；且真实触发会出网抓取"
+  },
+  {
+   "pattern": "^/api/tasks/links/auto-migrate",
+   "method": "POST",
+   "tier": "probe_single",
+   "reason": "全表迁移类批处理（基线 1.4s/次），重复执行会改数据，不进负载轮"
+  },
+  {
+   "pattern": "/stream$",
+   "method": "GET",
+   "tier": "blocked",
+   "reason": "SSE/长连接，请求级吞吐口径不适用"
+  },
+  {
+   "pattern": "^/api/tunnel",
+   "tier": "blocked",
+   "reason": "启动内网穿透会对外暴露本机端口，属生产安全事故，压测期禁止"
+  },
+  {
+   "pattern": "^/api/orders",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "本地抢单记录查询"
+  },
+  {
+   "pattern": "^/api/orders",
+   "tier": "blocked",
+   "reason": "抢单/确认下单会向闲鱼真实下单，任何环境均禁止自动化压测"
+  },
+  {
+   "pattern": "^/api/ai(-deep)?$",
+   "tier": "blocked",
+   "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配"
+  },
+  {
+   "pattern": "^/api/ai/",
+   "tier": "blocked",
+   "reason": "调用外部大模型接口，产生真实费用且延迟受第三方支配"
+  },
+  {
+   "pattern": "^/api/ai-deep/",
+   "tier": "blocked",
+   "reason": "多模态深度分析调用外部大模型，耗时数十秒且计费"
+  },
+  {
+   "pattern": "^/api/chatbot/sessions",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "会话列表为本地库查询"
+  },
+  {
+   "pattern": "^/api/chatbot/(chat|messages|respond|reply|escalation)",
+   "tier": "blocked",
+   "reason": "对话回复调用外部大模型（RAG+Agent），计费且非本地瓶颈"
+  },
+  {
+   "pattern": "^/api/chatbot/kb/(reindex|rebuild|import|rollback|sync)",
+   "tier": "blocked",
+   "reason": "触发向量库重建，加载 embedding 模型（GB 级），属离线批处理"
+  },
+  {
+   "pattern": "^/api/chatbot",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "本地读取"
+  },
+  {
+   "pattern": "^/api/vector-admin/(rebuild|reindex|import|build)",
+   "tier": "blocked",
+   "reason": "全量向量重建，加载 embedding 模型，属离线批处理"
+  },
+  {
+   "pattern": "^/api/vector-admin",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "向量库元信息读取"
+  },
+  {
+   "pattern": "^/api/vector-admin",
+   "tier": "probe_single",
+   "reason": "单发验证，避免重复改动向量库"
+  },
+  {
+   "pattern": "^/api/batch-refresh/(start|run|trigger|collect)",
+   "tier": "blocked",
+   "reason": "触发对闲鱼真实站点的批量采集，会造成平台侧反爬与真实流量"
+  },
+  {
+   "pattern": "^/api/batch-refresh",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "采集历史本地读取"
+  },
+  {
+   "pattern": "^/api/batch-refresh/history/cleanup-preview",
+   "tier": "load_read",
+   "reason": "清理预览只算不删"
+  },
+  {
+   "pattern": "^/api/batch-refresh",
+   "tier": "probe_single",
+   "reason": "采集任务状态写操作，单发验证"
+  },
+  {
+   "pattern": "^/api/items/\\{item_id\\}/refresh",
+   "tier": "blocked",
+   "reason": "触发对单个商品的真实抓取"
+  },
+  {
+   "pattern": "^/api/evaluations/\\{item_id\\}/collect-official",
+   "tier": "blocked",
+   "reason": "触发对闲鱼官方销量接口的真实抓取"
+  },
+  {
+   "pattern": "^/api/tasks/\\{task_id\\}/(start|stop|run|trigger)",
+   "tier": "blocked",
+   "reason": "启停真实采集任务，会拉起浏览器实例并访问闲鱼"
+  },
+  {
+   "pattern": "^/api/tasks/\\{task_id\\}/cookies",
+   "tier": "blocked",
+   "reason": "读写真实登录 Cookie"
+  },
+  {
+   "pattern": "^/api/auth/(qr|browser|cookie|session|import)",
+   "tier": "blocked",
+   "reason": "真实登录链路（扫码/浏览器导入/Cookie 注入），触碰真实账号态"
+  },
+  {
+   "pattern": "^/api/auth/me",
+   "tier": "load_read",
+   "reason": "本地令牌校验"
+  },
+  {
+   "pattern": "^/api/auth",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "登录态查询为本地读取"
+  },
+  {
+   "pattern": "^/api/auth",
+   "tier": "blocked",
+   "reason": "登录态写操作会改动真实会话"
+  },
+  {
+   "pattern": "^/api/about/check-update",
+   "tier": "blocked",
+   "reason": "出网访问 GitHub Release，延迟由外部决定"
+  },
+  {
+   "pattern": "^/api/about",
+   "tier": "load_read",
+   "reason": "本地版本信息"
+  },
+  {
+   "pattern": "^/api/maintenance/(cleanup|vacuum|reindex|rotate|wipe|reset)",
+   "tier": "probe_single",
+   "reason": "维护类写操作会改动数据体积，沙箱内单发验证，不进负载轮"
+  },
+  {
+   "pattern": "^/api/maintenance",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "维护概览读取"
+  },
+  {
+   "pattern": "^/api/maintenance",
+   "tier": "probe_single",
+   "reason": "维护动作单发验证"
+  },
+  {
+   "pattern": "^/api/db-admin",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "库表元信息/行读取"
+  },
+  {
+   "pattern": "^/api/db-admin/tables/\\{table\\}/rows/\\{pk_value\\}",
+   "method": "DELETE",
+   "tier": "probe_single",
+   "reason": "真实删除行，单发验证（沙箱副本库）"
+  },
+  {
+   "pattern": "^/api/db-admin/tables/\\{table\\}/(import|cascade-preview|rows/batch-delete)",
+   "tier": "probe_single",
+   "reason": "批量导入/级联删除属破坏性动作，单发验证"
+  },
+  {
+   "pattern": "^/api/db-admin",
+   "tier": "probe_single",
+   "reason": "库管理写操作单发验证，不进负载轮"
+  },
+  {
+   "pattern": "^/api/export",
+   "tier": "load_read",
+   "reason": "导出为只读聚合，可入负载轮"
+  },
+  {
+   "pattern": "^/api/events/stream",
+   "tier": "blocked",
+   "reason": "SSE 长连接，回放引擎不支持，且不反映请求级吞吐"
+  },
+  {
+   "pattern": "^/api/notifications/stream",
+   "tier": "blocked",
+   "reason": "SSE 长连接，回放引擎不支持"
+  },
+  {
+   "pattern": "^/api/notifications",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "通知列表本地读取"
+  },
+  {
+   "pattern": "^/api/notifier/test",
+   "tier": "blocked",
+   "reason": "向真实推送渠道（钉钉/Server酱/Telegram）发消息"
+  },
+  {
+   "pattern": "^/api/notifier",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "渠道配置读取"
+  },
+  {
+   "pattern": "^/api/notifier",
+   "tier": "probe_single",
+   "reason": "渠道配置写操作单发验证"
+  },
+  {
+   "pattern": "^/api/anticrawl/(reset|clear|ban)",
+   "tier": "probe_single",
+   "reason": "反爬状态重置，单发验证"
+  },
+  {
+   "pattern": "^/api/anticrawl",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "反爬统计读取"
+  },
+  {
+   "pattern": "^/api/anticrawl",
+   "tier": "probe_single",
+   "reason": "反爬策略写操作单发验证"
+  },
+  {
+   "pattern": "^/api/accounts",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "账号列表本地读取"
+  },
+  {
+   "pattern": "^/api/accounts/\\{account_id\\}/report-(fail|success)",
+   "tier": "probe_single",
+   "reason": "会改动账号健康状态，单发验证"
+  },
+  {
+   "pattern": "^/api/accounts",
+   "tier": "blocked",
+   "reason": "账号增删改涉及真实 Cookie 素材"
+  },
+  {
+   "pattern": "^/api/(logs|error-logs)",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "日志读取为本地查询，是核心读放大点"
+  },
+  {
+   "pattern": "^/api/error-logs/\\{error_log_id\\}/(status|ai-context)",
+   "tier": "probe_single",
+   "reason": "日志状态写/上下文导出，单发验证"
+  },
+  {
+   "pattern": "^/api/error-logs",
+   "tier": "probe_single",
+   "reason": "日志删除单发验证"
+  },
+  {
+   "pattern": "^/api/(stats|timeline|trend|price-dashboard|price-trend|seller-trend|evaluations|items|tasks|task-links|task-deps|config|preferences|prompts|templates|cron|menu|param-calculator|kb)",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "读接口全部纳入负载轮"
+  },
+  {
+   "pattern": "^/api/(tasks|prompts|templates|preferences|config|task-links|task-deps|evaluations|items|notifications|menu)",
+   "method": "(POST|PUT|PATCH)",
+   "tier": "load_write",
+   "reason": "幂等/低代价写接口纳入写负载轮（沙箱独立库）"
+  },
+  {
+   "pattern": "^/api/",
+   "method": "GET",
+   "tier": "load_read",
+   "reason": "兜底：其余 GET 纳入负载轮"
+  },
+  {
+   "pattern": "^/api/",
+   "method": "(DELETE)",
+   "tier": "probe_single",
+   "reason": "兜底：删除类单发验证"
+  },
+  {
+   "pattern": "^/api/",
+   "tier": "probe_single",
+   "reason": "兜底：其余写接口单发验证"
+  }
+ ]
+}

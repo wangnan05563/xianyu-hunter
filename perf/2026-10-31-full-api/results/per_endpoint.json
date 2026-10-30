@@ -1,0 +1,2675 @@
+[
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/accounts/stats",
+  "n": 286,
+  "avg": 20.0,
+  "p50": 11.1,
+  "p95": 32.7,
+  "p99": 185.9,
+  "max": 728.0,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/anticrawl/freq/stats",
+  "n": 286,
+  "avg": 17.5,
+  "p50": 7.0,
+  "p95": 37.5,
+  "p99": 304.1,
+  "max": 380.4,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/batch-refresh/history/stats",
+  "n": 286,
+  "avg": 19.5,
+  "p50": 13.0,
+  "p95": 28.7,
+  "p99": 246.0,
+  "max": 401.6,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/chatbot/audit-logs",
+  "n": 286,
+  "avg": 16.6,
+  "p50": 10.3,
+  "p95": 24.4,
+  "p99": 139.6,
+  "max": 421.4,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/config/export",
+  "n": 286,
+  "avg": 107.5,
+  "p50": 83.4,
+  "p95": 184.3,
+  "p99": 467.4,
+  "max": 1602.6,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/db-admin/tables/items/export",
+  "n": 286,
+  "avg": 35.0,
+  "p50": 27.4,
+  "p95": 77.1,
+  "p99": 157.9,
+  "max": 343.9,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/db-admin/tables/items/rows",
+  "n": 286,
+  "avg": 34.2,
+  "p50": 27.4,
+  "p95": 61.2,
+  "p99": 157.6,
+  "max": 433.3,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/db-admin/tables/items/schema",
+  "n": 286,
+  "avg": 19.7,
+  "p50": 10.9,
+  "p95": 31.5,
+  "p99": 311.3,
+  "max": 409.0,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/error-logs",
+  "n": 286,
+  "avg": 17.7,
+  "p50": 10.5,
+  "p95": 44.5,
+  "p99": 152.4,
+  "max": 354.8,
+  "codes": {
+   "422": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/error-logs/999999",
+  "n": 286,
+  "avg": 15.0,
+  "p50": 9.6,
+  "p95": 35.3,
+  "p99": 126.6,
+  "max": 348.8,
+  "codes": {
+   "404": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/error-logs/999999/ai-context",
+  "n": 286,
+  "avg": 15.2,
+  "p50": 10.2,
+  "p95": 22.3,
+  "p99": 161.6,
+  "max": 381.1,
+  "codes": {
+   "404": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations",
+  "n": 286,
+  "avg": 19.8,
+  "p50": 15.4,
+  "p95": 28.1,
+  "p99": 122.1,
+  "max": 321.4,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations/1000915580797/seller-trend",
+  "n": 286,
+  "avg": 22.3,
+  "p50": 12.4,
+  "p95": 99.7,
+  "p99": 157.8,
+  "max": 355.1,
+  "codes": {
+   "404": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations/auto-collect-stats",
+  "n": 286,
+  "avg": 21.7,
+  "p50": 11.9,
+  "p95": 32.0,
+  "p99": 232.8,
+  "max": 733.8,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations/brands",
+  "n": 286,
+  "avg": 16.4,
+  "p50": 13.7,
+  "p95": 29.0,
+  "p99": 74.4,
+  "max": 154.8,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations/distribution",
+  "n": 286,
+  "avg": 27.1,
+  "p50": 14.8,
+  "p95": 44.2,
+  "p99": 396.0,
+  "max": 643.4,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations/feedback/stats",
+  "n": 286,
+  "avg": 20.5,
+  "p50": 14.1,
+  "p95": 33.1,
+  "p99": 139.6,
+  "max": 392.7,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations/latest/1000915580797",
+  "n": 286,
+  "avg": 18.4,
+  "p50": 9.6,
+  "p95": 30.7,
+  "p99": 226.0,
+  "max": 510.8,
+  "codes": {
+   "404": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations/seller-price-trend",
+  "n": 286,
+  "avg": 14.8,
+  "p50": 9.8,
+  "p95": 30.1,
+  "p99": 128.5,
+  "max": 310.3,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/evaluations/threshold-suggestion",
+  "n": 286,
+  "avg": 26.3,
+  "p50": 13.7,
+  "p95": 92.8,
+  "p99": 312.4,
+  "max": 529.8,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/export",
+  "n": 286,
+  "avg": 16.2,
+  "p50": 8.1,
+  "p95": 32.0,
+  "p99": 281.1,
+  "max": 389.4,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/export/items",
+  "n": 286,
+  "avg": 14.9,
+  "p50": 11.8,
+  "p95": 24.7,
+  "p99": 82.4,
+  "max": 161.2,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/items/1000915580797/price-history",
+  "n": 286,
+  "avg": 21.3,
+  "p50": 11.2,
+  "p95": 48.3,
+  "p99": 231.8,
+  "max": 661.1,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/items/1000915580797/summary",
+  "n": 286,
+  "avg": 14.3,
+  "p50": 9.3,
+  "p95": 29.7,
+  "p99": 103.6,
+  "max": 358.1,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/items/batch",
+  "n": 286,
+  "avg": 17.9,
+  "p50": 8.6,
+  "p95": 46.8,
+  "p99": 311.6,
+  "max": 412.7,
+  "codes": {
+   "422": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/logs",
+  "n": 286,
+  "avg": 91.3,
+  "p50": 57.9,
+  "p95": 246.9,
+  "p99": 389.9,
+  "max": 468.8,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/logs/export",
+  "n": 286,
+  "avg": 15.0,
+  "p50": 8.2,
+  "p95": 23.5,
+  "p99": 176.5,
+  "max": 518.8,
+  "codes": {
+   "422": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/logs/request/req-perf",
+  "n": 286,
+  "avg": 18.5,
+  "p50": 7.9,
+  "p95": 32.8,
+  "p99": 293.7,
+  "max": 723.4,
+  "codes": {
+   "400": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/logs/search",
+  "n": 286,
+  "avg": 12.4,
+  "p50": 8.7,
+  "p95": 19.5,
+  "p99": 108.5,
+  "max": 316.8,
+  "codes": {
+   "422": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/logs/stream",
+  "n": 286,
+  "avg": 36.6,
+  "p50": 14.9,
+  "p95": 131.4,
+  "p99": 201.9,
+  "max": 766.4,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/notifications",
+  "n": 286,
+  "avg": 15.4,
+  "p50": 11.0,
+  "p95": 24.4,
+  "p99": 147.2,
+  "max": 272.2,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/notifications/unread_count",
+  "n": 286,
+  "avg": 16.5,
+  "p50": 11.3,
+  "p95": 30.9,
+  "p99": 127.8,
+  "max": 296.6,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/prices/bargain-eval",
+  "n": 286,
+  "avg": 15.8,
+  "p50": 9.0,
+  "p95": 25.3,
+  "p99": 126.0,
+  "max": 635.0,
+  "codes": {
+   "422": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/prices/category-comparison",
+  "n": 286,
+  "avg": 29.9,
+  "p50": 19.7,
+  "p95": 49.8,
+  "p99": 250.4,
+  "max": 508.3,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/prices/category-stats",
+  "n": 286,
+  "avg": 13.6,
+  "p50": 11.2,
+  "p95": 27.6,
+  "p99": 45.8,
+  "max": 153.6,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/prices/histogram",
+  "n": 286,
+  "avg": 19.3,
+  "p50": 7.2,
+  "p95": 34.3,
+  "p99": 262.7,
+  "max": 1390.2,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/prices/sold-range",
+  "n": 286,
+  "avg": 18.5,
+  "p50": 12.6,
+  "p95": 32.8,
+  "p99": 106.1,
+  "max": 468.0,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/proxies/stats",
+  "n": 286,
+  "avg": 12.4,
+  "p50": 8.6,
+  "p95": 28.2,
+  "p99": 82.5,
+  "max": 191.0,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/stats",
+  "n": 286,
+  "avg": 15.4,
+  "p50": 6.0,
+  "p95": 31.2,
+  "p99": 347.4,
+  "max": 422.2,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/stats/business-kpi",
+  "n": 286,
+  "avg": 18.9,
+  "p50": 6.0,
+  "p95": 46.4,
+  "p99": 348.6,
+  "max": 610.9,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/stats/eval-funnel",
+  "n": 286,
+  "avg": 12.9,
+  "p50": 8.1,
+  "p95": 24.9,
+  "p99": 96.0,
+  "max": 286.8,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/stats/price-trend",
+  "n": 286,
+  "avg": 16.5,
+  "p50": 10.0,
+  "p95": 25.3,
+  "p99": 230.0,
+  "max": 297.6,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/stats/seller-price-trend",
+  "n": 286,
+  "avg": 16.7,
+  "p50": 9.6,
+  "p95": 31.9,
+  "p99": 220.4,
+  "max": 395.0,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/stats/today",
+  "n": 286,
+  "avg": 12.8,
+  "p50": 5.8,
+  "p95": 17.7,
+  "p99": 160.1,
+  "max": 482.6,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/stats/trend",
+  "n": 286,
+  "avg": 9.3,
+  "p50": 6.3,
+  "p95": 17.7,
+  "p99": 70.8,
+  "max": 130.9,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_heavy",
+  "label": "GET /api/timeline",
+  "n": 286,
+  "avg": 36.3,
+  "p50": 21.4,
+  "p95": 84.8,
+  "p99": 364.9,
+  "max": 675.4,
+  "codes": {
+   "200": 286
+  },
+  "knee": ">",
+  "peak_tps": 0,
+  "peak_at": 0,
+  "ladder_cells": []
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/accounts",
+  "n": 55,
+  "avg": 14.7,
+  "p50": 10.3,
+  "p95": 38.0,
+  "p99": 67.2,
+  "max": 83.9,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "423.4(0.9)",
+   "2130.0(0.8)",
+   "3981.1(0.3)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/accounts/999999",
+  "n": 55,
+  "avg": 13.8,
+  "p50": 9.7,
+  "p95": 25.3,
+  "p99": 67.3,
+  "max": 144.7,
+  "codes": {
+   "404": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "727.1(0.9)",
+   "1933.3(0.8)",
+   "3043.6(0.2)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/anticrawl/cookies/current",
+  "n": 55,
+  "avg": 24.1,
+  "p50": 19.9,
+  "p95": 52.0,
+  "p99": 60.3,
+  "max": 67.7,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "547.3(0.9)",
+   "2113.0(0.8)",
+   "3532.0(0.4)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/anticrawl/cookies/layers",
+  "n": 55,
+  "avg": 33.8,
+  "p50": 30.3,
+  "p95": 85.4,
+  "p99": 89.1,
+  "max": 93.0,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "386.2(0.9)",
+   "1772.0(0.8)",
+   "2609.1(0.4)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/anticrawl/fingerprint",
+  "n": 55,
+  "avg": 9.0,
+  "p50": 7.5,
+  "p95": 13.2,
+  "p99": 25.4,
+  "max": 48.2,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "480.4(0.9)",
+   "2005.3(0.8)",
+   "2978.5(0.9)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/anticrawl/freq/delay",
+  "n": 55,
+  "avg": 7.4,
+  "p50": 7.1,
+  "p95": 11.9,
+  "p99": 13.6,
+  "max": 14.7,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "638.1(0.9)",
+   "1575.5(0.8)",
+   "3126.3(0.5)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/anticrawl/health",
+  "n": 55,
+  "avg": 85.9,
+  "p50": 75.8,
+  "p95": 213.1,
+  "p99": 249.5,
+  "max": 284.1,
+  "codes": {
+   "200": 55
+  },
+  "knee": "48",
+  "peak_tps": 1.2,
+  "peak_at": 96,
+  "ladder_cells": [
+   "616.6(0.9)",
+   "1715.3(0.8)",
+   "2488.9(1.2)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/anticrawl/session/status",
+  "n": 55,
+  "avg": 25.6,
+  "p50": 21.6,
+  "p95": 47.9,
+  "p99": 59.0,
+  "max": 84.7,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "924.2(0.9)",
+   "1332.9(0.8)",
+   "2965.5(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/anticrawl/strategy",
+  "n": 56,
+  "avg": 1094.7,
+  "p50": 1073.5,
+  "p95": 1211.4,
+  "p99": 1216.8,
+  "max": 1372.5,
+  "codes": {
+   "200": 56
+  },
+  "knee": ">",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "1427.5(0.9)",
+   "3220.7(0.8)",
+   "3694.5(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/auth/accounts",
+  "n": 56,
+  "avg": 9.4,
+  "p50": 8.1,
+  "p95": 13.4,
+  "p99": 32.4,
+  "max": 33.5,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "278.3(0.9)",
+   "1919.9(0.8)",
+   "2867.9(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/auth/health/unified",
+  "n": 56,
+  "avg": 49.6,
+  "p50": 39.0,
+  "p95": 114.6,
+  "p99": 129.9,
+  "max": 155.9,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "722.2(0.9)",
+   "1487.7(0.8)",
+   "2934.5(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/auth/login/status",
+  "n": 56,
+  "avg": 7.5,
+  "p50": 5.0,
+  "p95": 16.7,
+  "p99": 20.5,
+  "max": 81.8,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "488.6(0.9)",
+   "1175.0(0.8)",
+   "2762.2(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/auth/me",
+  "n": 56,
+  "avg": 152.6,
+  "p50": 85.6,
+  "p95": 394.7,
+  "p99": 492.7,
+  "max": 548.5,
+  "codes": {
+   "200": 56
+  },
+  "knee": "48",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "941.1(0.9)",
+   "2134.3(0.8)",
+   "3282.0(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/auth/restore-session",
+  "n": 56,
+  "avg": 34.3,
+  "p50": 25.3,
+  "p95": 79.9,
+  "p99": 86.2,
+  "max": 130.3,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "469.6(0.9)",
+   "1977.5(0.8)",
+   "3080.6(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/batch-refresh/history",
+  "n": 55,
+  "avg": 10.6,
+  "p50": 9.2,
+  "p95": 15.3,
+  "p99": 33.1,
+  "max": 47.2,
+  "codes": {
+   "422": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "555.7(0.8)",
+   "3557.8(0.3)",
+   "3088.5(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/batch-refresh/history/999999",
+  "n": 55,
+  "avg": 10.2,
+  "p50": 9.8,
+  "p95": 12.9,
+  "p99": 16.9,
+  "max": 28.1,
+  "codes": {
+   "404": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "414.4(0.8)",
+   "1901.0(0.2)",
+   "758.0(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/batch-refresh/history/cleanup-preview",
+  "n": 55,
+  "avg": 12.8,
+  "p50": 9.8,
+  "p95": 24.7,
+  "p99": 37.9,
+  "max": 92.7,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "342.1(0.8)",
+   "2163.0(0.2)",
+   "981.1(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/batch-refresh/status",
+  "n": 55,
+  "avg": 8.9,
+  "p50": 7.4,
+  "p95": 16.0,
+  "p99": 23.6,
+  "max": 28.8,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "484.1(0.8)",
+   "1714.9(0.3)",
+   "1978.4(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/config",
+  "n": 55,
+  "avg": 14.4,
+  "p50": 11.3,
+  "p95": 35.0,
+  "p99": 47.5,
+  "max": 50.0,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "298.4(0.8)",
+   "3649.8(0.1)",
+   "-"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/faq",
+  "n": 55,
+  "avg": 20.5,
+  "p50": 10.8,
+  "p95": 80.9,
+  "p99": 116.1,
+  "max": 147.1,
+  "codes": {
+   "200": 55
+  },
+  "knee": "48",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "311.3(0.8)",
+   "3625.6(0.1)",
+   "-"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/feedback/recent",
+  "n": 55,
+  "avg": 12.3,
+  "p50": 9.9,
+  "p95": 32.6,
+  "p99": 41.8,
+  "max": 48.3,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "364.8(0.8)",
+   "3560.4(0.1)",
+   "-"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/kb/status",
+  "n": 55,
+  "avg": 12.5,
+  "p50": 11.2,
+  "p95": 18.1,
+  "p99": 25.9,
+  "max": 43.2,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "384.5(0.8)",
+   "2137.3(0.1)",
+   "-"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/kb/versions",
+  "n": 55,
+  "avg": 16.1,
+  "p50": 14.0,
+  "p95": 27.5,
+  "p99": 35.8,
+  "max": 45.9,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "443.7(0.8)",
+   "1884.2(0.1)",
+   "-"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/sessions",
+  "n": 55,
+  "avg": 15.1,
+  "p50": 8.9,
+  "p95": 28.0,
+  "p99": 125.1,
+  "max": 173.6,
+  "codes": {
+   "422": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "208.7(0.8)",
+   "3614.3(0.2)",
+   "1466.5(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/sessions/1",
+  "n": 55,
+  "avg": 11.2,
+  "p50": 9.8,
+  "p95": 17.5,
+  "p99": 23.6,
+  "max": 44.4,
+  "codes": {
+   "404": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "467.2(0.8)",
+   "1918.0(0.1)",
+   "2431.2(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/sessions/1/messages",
+  "n": 55,
+  "avg": 13.6,
+  "p50": 10.9,
+  "p95": 21.5,
+  "p99": 29.5,
+  "max": 103.7,
+  "codes": {
+   "404": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "306.0(0.8)",
+   "1271.6(0.1)",
+   "1336.2(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/chatbot/welcome",
+  "n": 55,
+  "avg": 20.0,
+  "p50": 11.4,
+  "p95": 29.9,
+  "p99": 105.0,
+  "max": 223.6,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "286.4(0.8)",
+   "1837.1(0.1)",
+   "-"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/config",
+  "n": 56,
+  "avg": 12.8,
+  "p50": 9.3,
+  "p95": 34.1,
+  "p99": 61.9,
+  "max": 73.1,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "906.1(1.1)",
+   "1815.2(0.8)",
+   "4107.8(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/config/backups",
+  "n": 56,
+  "avg": 20.5,
+  "p50": 13.9,
+  "p95": 44.8,
+  "p99": 53.9,
+  "max": 67.2,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "563.6(1.0)",
+   "1868.4(0.8)",
+   "4171.3(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/config/raw",
+  "n": 56,
+  "avg": 132.4,
+  "p50": 126.3,
+  "p95": 204.0,
+  "p99": 243.5,
+  "max": 303.0,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "965.0(1.0)",
+   "1973.8(0.8)",
+   "4438.7(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/config/share",
+  "n": 56,
+  "avg": 104.7,
+  "p50": 92.2,
+  "p95": 193.3,
+  "p99": 204.4,
+  "max": 297.4,
+  "codes": {
+   "200": 56
+  },
+  "knee": "48",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "710.6(1.0)",
+   "1856.1(0.8)",
+   "4230.6(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/config/version",
+  "n": 56,
+  "avg": 27.8,
+  "p50": 24.0,
+  "p95": 53.5,
+  "p99": 84.8,
+  "max": 96.0,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "443.7(0.9)",
+   "1765.8(0.8)",
+   "4126.3(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/cron/examples",
+  "n": 55,
+  "avg": 8.3,
+  "p50": 7.3,
+  "p95": 16.4,
+  "p99": 21.3,
+  "max": 27.4,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "462.7(0.9)",
+   "1880.8(0.8)",
+   "3995.3(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/db-admin/audit-log",
+  "n": 55,
+  "avg": 13.0,
+  "p50": 11.8,
+  "p95": 17.9,
+  "p99": 24.0,
+  "max": 45.4,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "1648.1(0.8)",
+   "2030.2(0.6)",
+   "2091.4(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/db-admin/tables",
+  "n": 55,
+  "avg": 17.9,
+  "p50": 11.3,
+  "p95": 33.8,
+  "p99": 73.4,
+  "max": 256.8,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "1659.9(0.8)",
+   "2015.9(0.6)",
+   "2689.5(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/events/recent",
+  "n": 56,
+  "avg": 13.1,
+  "p50": 11.1,
+  "p95": 23.3,
+  "p99": 42.1,
+  "max": 61.5,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "540.7(0.9)",
+   "1639.4(0.8)",
+   "4121.6(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/maintenance/cache-scan",
+  "n": 55,
+  "avg": 94.1,
+  "p50": 84.8,
+  "p95": 181.4,
+  "p99": 260.1,
+  "max": 278.6,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "886.9(0.8)",
+   "4472.0(0.8)",
+   "2779.7(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/menu",
+  "n": 55,
+  "avg": 9.5,
+  "p50": 8.8,
+  "p95": 13.4,
+  "p99": 18.1,
+  "max": 31.1,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "368.1(0.8)",
+   "3446.7(0.2)",
+   "1088.9(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/notifier/quiet-hours",
+  "n": 55,
+  "avg": 8.4,
+  "p50": 7.8,
+  "p95": 12.3,
+  "p99": 13.8,
+  "max": 22.6,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "800.0(0.9)",
+   "1915.8(0.8)",
+   "2646.4(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/orders",
+  "n": 56,
+  "avg": 9.7,
+  "p50": 7.7,
+  "p95": 21.9,
+  "p99": 26.1,
+  "max": 32.0,
+  "codes": {
+   "422": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "584.0(0.9)",
+   "1456.5(0.8)",
+   "4135.4(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/orders/1",
+  "n": 56,
+  "avg": 10.6,
+  "p50": 9.3,
+  "p95": 15.8,
+  "p99": 24.3,
+  "max": 47.9,
+  "codes": {
+   "404": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "451.3(0.9)",
+   "1978.3(0.8)",
+   "3603.3(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/param-calculator/rules",
+  "n": 55,
+  "avg": 9.7,
+  "p50": 7.3,
+  "p95": 27.1,
+  "p99": 34.9,
+  "max": 37.7,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "337.2(0.9)",
+   "2118.3(0.8)",
+   "2394.4(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/preferences",
+  "n": 55,
+  "avg": 8.2,
+  "p50": 7.3,
+  "p95": 11.8,
+  "p99": 13.2,
+  "max": 13.4,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "513.9(0.9)",
+   "1906.5(0.8)",
+   "3950.5(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/prompts",
+  "n": 55,
+  "avg": 117.9,
+  "p50": 104.2,
+  "p95": 273.5,
+  "p99": 283.8,
+  "max": 342.3,
+  "codes": {
+   "200": 55
+  },
+  "knee": "48",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "886.4(0.9)",
+   "2129.4(0.8)",
+   "3897.2(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/prompts/1",
+  "n": 55,
+  "avg": 10.2,
+  "p50": 7.4,
+  "p95": 20.0,
+  "p99": 27.4,
+  "max": 99.3,
+  "codes": {
+   "404": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "479.6(0.9)",
+   "1810.4(0.8)",
+   "2928.8(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/proxies",
+  "n": 55,
+  "avg": 11.3,
+  "p50": 10.2,
+  "p95": 16.8,
+  "p99": 28.2,
+  "max": 47.4,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "727.1(0.9)",
+   "1928.0(0.8)",
+   "3690.9(0.2)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/proxies/999999",
+  "n": 55,
+  "avg": 9.7,
+  "p50": 9.2,
+  "p95": 12.5,
+  "p99": 13.5,
+  "max": 22.0,
+  "codes": {
+   "404": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "590.7(0.9)",
+   "2113.0(0.8)",
+   "3625.2(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks",
+  "n": 56,
+  "avg": 16.8,
+  "p50": 13.3,
+  "p95": 26.9,
+  "p99": 79.6,
+  "max": 97.1,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "494.8(1.1)",
+   "1106.2(0.9)",
+   "1699.0(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/links/lookup",
+  "n": 56,
+  "avg": 8.8,
+  "p50": 7.1,
+  "p95": 13.4,
+  "p99": 31.5,
+  "max": 32.8,
+  "codes": {
+   "422": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "529.5(1.1)",
+   "1511.6(0.8)",
+   "3790.3(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/links/search",
+  "n": 56,
+  "avg": 10.7,
+  "p50": 8.4,
+  "p95": 18.5,
+  "p99": 47.6,
+  "max": 49.3,
+  "codes": {
+   "422": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "370.0(1.1)",
+   "1882.0(0.8)",
+   "3920.9(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/options",
+  "n": 56,
+  "avg": 19.8,
+  "p50": 16.4,
+  "p95": 31.8,
+  "p99": 36.1,
+  "max": 126.4,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "669.1(1.1)",
+   "1111.4(0.9)",
+   "1890.2(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/t0134ee45",
+  "n": 56,
+  "avg": 13.4,
+  "p50": 9.5,
+  "p95": 23.2,
+  "p99": 31.4,
+  "max": 150.3,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "464.4(1.1)",
+   "1169.6(0.9)",
+   "1646.5(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/t0134ee45/dependents",
+  "n": 56,
+  "avg": 13.6,
+  "p50": 9.9,
+  "p95": 26.4,
+  "p99": 64.9,
+  "max": 108.8,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "483.2(1.1)",
+   "1119.6(0.8)",
+   "1681.6(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/t0134ee45/deps",
+  "n": 56,
+  "avg": 18.8,
+  "p50": 9.9,
+  "p95": 62.4,
+  "p99": 110.5,
+  "max": 147.1,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "463.7(1.1)",
+   "1031.1(0.8)",
+   "1401.2(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/t0134ee45/links",
+  "n": 56,
+  "avg": 15.7,
+  "p50": 12.4,
+  "p95": 24.5,
+  "p99": 66.2,
+  "max": 87.7,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "495.3(1.1)",
+   "1064.5(0.8)",
+   "1738.0(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/t0134ee45/links/count",
+  "n": 56,
+  "avg": 15.1,
+  "p50": 11.6,
+  "p95": 30.7,
+  "p99": 43.1,
+  "max": 103.6,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "393.2(1.1)",
+   "1851.6(0.8)",
+   "1699.6(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/t0134ee45/links/facets",
+  "n": 56,
+  "avg": 21.7,
+  "p50": 13.8,
+  "p95": 52.6,
+  "p99": 125.3,
+  "max": 195.2,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "454.8(1.1)",
+   "1432.0(0.8)",
+   "2077.0(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/t0134ee45/links/live",
+  "n": 56,
+  "avg": 9.3,
+  "p50": 8.9,
+  "p95": 14.2,
+  "p99": 15.1,
+  "max": 18.1,
+  "codes": {
+   "503": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "348.1(1.1)",
+   "1403.9(0.8)",
+   "2407.7(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/tasks/t0134ee45/precheck",
+  "n": 56,
+  "avg": 13.2,
+  "p50": 9.3,
+  "p95": 34.5,
+  "p99": 41.7,
+  "max": 100.6,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "480.2(1.1)",
+   "1026.8(0.8)",
+   "1718.0(1.6)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/templates",
+  "n": 55,
+  "avg": 115.8,
+  "p50": 111.5,
+  "p95": 204.6,
+  "p99": 276.9,
+  "max": 278.3,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.9,
+  "peak_at": 16,
+  "ladder_cells": [
+   "895.7(0.9)",
+   "2040.5(0.8)",
+   "3007.2(0.1)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/vector-admin/audit-log",
+  "n": 55,
+  "avg": 13.0,
+  "p50": 11.8,
+  "p95": 18.3,
+  "p99": 26.2,
+  "max": 49.2,
+  "codes": {
+   "200": 55
+  },
+  "knee": "16",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "525.0(0.8)",
+   "1837.3(0.3)",
+   "2182.3(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/vector-admin/snapshots",
+  "n": 55,
+  "avg": 233.8,
+  "p50": 152.3,
+  "p95": 630.2,
+  "p99": 667.9,
+  "max": 733.7,
+  "codes": {
+   "200": 55
+  },
+  "knee": "48",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "1229.7(0.8)",
+   "4536.7(0.4)",
+   "1642.7(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "GET /api/vector-admin/status",
+  "n": 55,
+  "avg": 303.1,
+  "p50": 217.3,
+  "p95": 812.6,
+  "p99": 969.2,
+  "max": 1142.5,
+  "codes": {
+   "200": 55
+  },
+  "knee": "48",
+  "peak_tps": 0.8,
+  "peak_at": 16,
+  "ladder_cells": [
+   "1595.6(0.8)",
+   "3483.4(0.6)",
+   "2273.1(0.0)"
+  ]
+ },
+ {
+  "group": "reads_light",
+  "label": "POST /api/auth/me/refresh",
+  "n": 56,
+  "avg": 17.9,
+  "p50": 12.9,
+  "p95": 42.2,
+  "p99": 58.8,
+  "max": 87.9,
+  "codes": {
+   "200": 56
+  },
+  "knee": "16",
+  "peak_tps": 1.6,
+  "peak_at": 96,
+  "ladder_cells": [
+   "463.7(0.9)",
+   "2061.3(0.8)",
+   "2516.4(1.6)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "PATCH /api/tasks/t0134ee45",
+  "n": 230,
+  "avg": 10.1,
+  "p50": 9.4,
+  "p95": 14.9,
+  "p99": 26.5,
+  "max": 34.0,
+  "codes": {
+   "400": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "134.4(2.2)",
+   "233.2(2.6)",
+   "689.2(2.1)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/config/import",
+  "n": 230,
+  "avg": 8.6,
+  "p50": 7.6,
+  "p95": 12.5,
+  "p99": 30.7,
+  "max": 56.0,
+  "codes": {
+   "400": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "91.3(2.2)",
+   "210.4(2.6)",
+   "472.9(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/config/preview",
+  "n": 230,
+  "avg": 151.0,
+  "p50": 142.4,
+  "p95": 243.4,
+  "p99": 345.9,
+  "max": 587.3,
+  "codes": {
+   "200": 230
+  },
+  "knee": ">",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "465.4(2.2)",
+   "590.5(2.6)",
+   "808.6(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/config/restore-backup",
+  "n": 230,
+  "avg": 29.6,
+  "p50": 29.7,
+  "p95": 49.8,
+  "p99": 73.0,
+  "max": 211.7,
+  "codes": {
+   "404": 230
+  },
+  "knee": "8",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "129.3(2.2)",
+   "202.5(2.6)",
+   "605.8(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/config/rollback",
+  "n": 230,
+  "avg": 29.6,
+  "p50": 29.8,
+  "p95": 52.2,
+  "p99": 88.4,
+  "max": 115.4,
+  "codes": {
+   "404": 230
+  },
+  "knee": "16",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "121.4(2.2)",
+   "199.4(2.6)",
+   "534.3(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/config/save",
+  "n": 230,
+  "avg": 115.0,
+  "p50": 106.0,
+  "p95": 186.2,
+  "p99": 316.0,
+  "max": 498.5,
+  "codes": {
+   "200": 230
+  },
+  "knee": ">",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "357.1(2.2)",
+   "459.3(2.6)",
+   "726.7(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/evaluations/1000915580797/feedback",
+  "n": 230,
+  "avg": 10.2,
+  "p50": 7.3,
+  "p95": 14.6,
+  "p99": 111.0,
+  "max": 172.2,
+  "codes": {
+   "422": 229,
+   "000": 1
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "114.6(2.2)",
+   "167.1(2.6)",
+   "413.1(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/evaluations/batch-evaluate-unevaluated",
+  "n": 230,
+  "avg": 17.4,
+  "p50": 15.3,
+  "p95": 26.7,
+  "p99": 48.7,
+  "max": 207.2,
+  "codes": {
+   "200": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "177.3(2.2)",
+   "297.5(2.5)",
+   "510.2(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/evaluations/recompute",
+  "n": 230,
+  "avg": 16.4,
+  "p50": 13.9,
+  "p95": 23.1,
+  "p99": 89.5,
+  "max": 208.6,
+  "codes": {
+   "200": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "140.0(2.2)",
+   "213.2(2.6)",
+   "527.2(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/menu/reset",
+  "n": 229,
+  "avg": 9.3,
+  "p50": 8.6,
+  "p95": 12.5,
+  "p99": 23.7,
+  "max": 46.8,
+  "codes": {
+   "200": 229
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "109.4(2.2)",
+   "185.2(2.5)",
+   "433.7(1.9)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/notifications",
+  "n": 230,
+  "avg": 11.2,
+  "p50": 9.3,
+  "p95": 22.1,
+  "p99": 57.8,
+  "max": 83.5,
+  "codes": {
+   "400": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "133.6(2.2)",
+   "189.1(2.5)",
+   "603.3(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/notifications/1/read",
+  "n": 230,
+  "avg": 13.3,
+  "p50": 9.1,
+  "p95": 29.1,
+  "p99": 90.6,
+  "max": 331.4,
+  "codes": {
+   "404": 230
+  },
+  "knee": "8",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "112.5(2.2)",
+   "164.3(2.5)",
+   "515.3(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/notifications/batch-delete",
+  "n": 230,
+  "avg": 11.2,
+  "p50": 8.5,
+  "p95": 17.1,
+  "p99": 45.3,
+  "max": 281.4,
+  "codes": {
+   "400": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "130.7(2.2)",
+   "261.2(2.5)",
+   "600.2(1.9)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/notifications/batch-read",
+  "n": 230,
+  "avg": 10.7,
+  "p50": 9.2,
+  "p95": 17.1,
+  "p99": 51.3,
+  "max": 80.4,
+  "codes": {
+   "400": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "142.7(2.2)",
+   "314.1(2.5)",
+   "567.4(1.9)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/notifications/read_all",
+  "n": 230,
+  "avg": 29.2,
+  "p50": 8.8,
+  "p95": 17.4,
+  "p99": 38.5,
+  "max": 4387.0,
+  "codes": {
+   "200": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "134.8(2.2)",
+   "215.0(2.5)",
+   "546.4(1.9)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/prompts/1/reset",
+  "n": 229,
+  "avg": 8.2,
+  "p50": 7.2,
+  "p95": 11.9,
+  "p99": 27.8,
+  "max": 31.4,
+  "codes": {
+   "404": 229
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "78.6(2.2)",
+   "174.3(2.5)",
+   "476.5(1.9)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/tasks",
+  "n": 230,
+  "avg": 18.7,
+  "p50": 13.2,
+  "p95": 18.2,
+  "p99": 26.7,
+  "max": 1148.3,
+  "codes": {
+   "200": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "183.1(2.2)",
+   "354.7(2.6)",
+   "601.9(2.1)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/tasks/batch-control",
+  "n": 230,
+  "avg": 8.5,
+  "p50": 7.7,
+  "p95": 11.8,
+  "p99": 27.6,
+  "max": 51.8,
+  "codes": {
+   "400": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "107.5(2.2)",
+   "198.3(2.6)",
+   "670.5(2.1)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/tasks/t0134ee45/control",
+  "n": 230,
+  "avg": 8.6,
+  "p50": 8.1,
+  "p95": 11.9,
+  "p99": 25.1,
+  "max": 28.1,
+  "codes": {
+   "200": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "54.3(2.2)",
+   "181.0(2.6)",
+   "370.6(2.1)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/tasks/t0134ee45/deps",
+  "n": 230,
+  "avg": 12.6,
+  "p50": 11.2,
+  "p95": 22.9,
+  "p99": 39.9,
+  "max": 60.4,
+  "codes": {
+   "404": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "134.7(2.2)",
+   "274.4(2.6)",
+   "681.0(2.1)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/tasks/t0134ee45/dry-run",
+  "n": 230,
+  "avg": 11.8,
+  "p50": 9.7,
+  "p95": 20.4,
+  "p99": 34.6,
+  "max": 192.4,
+  "codes": {
+   "400": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "127.8(2.2)",
+   "223.5(2.6)",
+   "452.3(2.1)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/tasks/t0134ee45/links",
+  "n": 230,
+  "avg": 9.4,
+  "p50": 8.0,
+  "p95": 17.7,
+  "p99": 32.4,
+  "max": 60.8,
+  "codes": {
+   "400": 230
+  },
+  "knee": "4",
+  "peak_tps": 2.6,
+  "peak_at": 8,
+  "ladder_cells": [
+   "117.6(2.2)",
+   "290.1(2.6)",
+   "614.2(2.0)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "POST /api/templates",
+  "n": 230,
+  "avg": 200.9,
+  "p50": 195.7,
+  "p95": 332.0,
+  "p99": 401.0,
+  "max": 417.3,
+  "codes": {
+   "200": 230
+  },
+  "knee": ">",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "509.5(2.2)",
+   "777.1(2.5)",
+   "904.0(1.9)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "PUT /api/menu",
+  "n": 229,
+  "avg": 10.1,
+  "p50": 8.9,
+  "p95": 13.5,
+  "p99": 31.0,
+  "max": 120.6,
+  "codes": {
+   "422": 229
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "84.5(2.2)",
+   "161.2(2.5)",
+   "468.4(1.9)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "PUT /api/preferences",
+  "n": 229,
+  "avg": 9.7,
+  "p50": 8.6,
+  "p95": 18.4,
+  "p99": 27.1,
+  "max": 42.0,
+  "codes": {
+   "200": 229
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "103.0(2.2)",
+   "200.5(2.5)",
+   "569.9(1.9)"
+  ]
+ },
+ {
+  "group": "writes_idem",
+  "label": "PUT /api/prompts/1",
+  "n": 229,
+  "avg": 9.1,
+  "p50": 8.5,
+  "p95": 11.9,
+  "p99": 23.9,
+  "max": 37.8,
+  "codes": {
+   "404": 229
+  },
+  "knee": "4",
+  "peak_tps": 2.5,
+  "peak_at": 8,
+  "ladder_cells": [
+   "94.0(2.2)",
+   "293.1(2.5)",
+   "483.5(1.9)"
+  ]
+ }
+]
