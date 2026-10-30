@@ -6,7 +6,9 @@
   - 阶段 TPS = 阶段样本数 / 配置时长（秒）
 """
 import csv
+import gzip
 import json
+import os
 import statistics
 import time
 from collections import defaultdict
@@ -14,8 +16,9 @@ from pathlib import Path
 
 import yaml
 
-PERF = Path(r"D:\tmp\xh-perf")
-OUT = PERF / "output"
+# 默认就地读取本目录（归档后可直接复算）；跑压测时用 XH_PERF_DIR 指向临时工作区
+PERF = Path(os.environ.get("XH_PERF_DIR") or Path(__file__).resolve().parent)
+OUT = next(p for p in (PERF / "output", PERF / "results") if p.exists())
 CFG = yaml.safe_load((PERF / "jmeter-config.yml").read_text(encoding="utf-8"))
 PHASES = {p["name"]: p for p in CFG["phases"]}
 DEFECT = set(CFG["defect_rules"]["defect_codes"])
@@ -34,11 +37,22 @@ def is_defect(code):
     return code in DEFECT or code.startswith("5")
 
 
+def read_jsonl(stem: str):
+    """按 `<stem>.jsonl` → `<stem>.jsonl.gz` 顺序读取原始样本行。
+
+    压测工作区是未压缩的，仓库归档是 gzip 的；两者都支持才能就地复算。
+    """
+    for name in (f"{stem}.jsonl", f"{stem}.jsonl.gz"):
+        p = OUT / name
+        if p.exists():
+            opener = gzip.open(p, "rt") if p.suffix == ".gz" else p.open(encoding="utf-8")
+            with opener as f:
+                return [line for line in f if line.strip()]
+    return []
+
+
 def load(phase):
-    p = OUT / f"{phase}.jsonl"
-    if not p.exists():
-        return []
-    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
+    return [json.loads(x) for x in read_jsonl(phase)]
 
 
 def engine_wall_times():
@@ -163,10 +177,9 @@ def main():
     (OUT / "endpoint_table.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # ---- 稳定性长跑：分窗退化 + 资源趋势 ----
-    soak = OUT / "soak_mixed.jsonl"
-    if soak.exists():
+    rows = load("soak_mixed")
+    if rows:
         # jsonl 无时间戳，用文件读取顺序按等长分窗近似
-        rows = [json.loads(x) for x in soak.read_text(encoding="utf-8").splitlines() if x.strip()]
         W = 6
         soak_dur = result.get("soak_mixed", {}).get("dur") or 1800
         size = len(rows) // W
@@ -186,10 +199,14 @@ def main():
     if mon.exists():
         with open(mon, encoding="utf-8") as f:
             rr = list(csv.DictReader(f))
+        # SUT 被定向关停后采样器还会续写若干行（rss=0）。它们不是被测进程的资源水位，
+        # 计入会稀释 CPU 均值、并把 min/last 变成 0，因此只按存活样本统计。
+        alive = [x for x in rr
+                 if x.get("rss_mb") not in (None, "", "nan") and float(x["rss_mb"]) > 0]
         def num(k):
-            return [float(x[k]) for x in rr if x.get(k) not in (None, "", "nan")]
+            return [float(x[k]) for x in alive if x.get(k) not in (None, "", "nan")]
         rss, prv, cpu, hd, th = num("rss_mb"), num("private_mb"), num("cpu_percent"), num("handles"), num("threads")
-        res = {"samples": len(rr),
+        res = {"samples_raw": len(rr), "samples": len(alive),
                "rss": {"first": rss[0] if rss else 0, "last": rss[-1] if rss else 0,
                         "min": min(rss) if rss else 0, "max": max(rss) if rss else 0},
                "private": {"first": prv[0] if prv else 0, "last": prv[-1] if prv else 0,

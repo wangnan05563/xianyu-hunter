@@ -1,0 +1,157 @@
+[sandbox] 外部 SUT 模式：不启动进程，仅按 process_match 定向关停
+
+=== running phase: baseline_write ===
+{
+  "phase": "baseline_write",
+  "jmx": "jmeter/writes_idem.jmx",
+  "threads": 1,
+  "duration": 180,
+  "wall_sec": 181.9,
+  "samplers": 26,
+  "total": 5975,
+  "errors": 3677,
+  "error_rate": 61.54,
+  "p50_ms": 9.99,
+  "p95_ms": 148.67,
+  "p99_ms": 253.64,
+  "out": "D:\\tmp\\xh-perf\\output\\baseline_write.jsonl"
+}
+
+=== running phase: baseline_light ===
+{
+  "phase": "baseline_light",
+  "jmx": "jmeter/reads_light.jmx",
+  "threads": 1,
+  "duration": 180,
+  "wall_sec": 181.6,
+  "samplers": 64,
+  "total": 3547,
+  "errors": 720,
+  "error_rate": 20.299,
+  "p50_ms": 11.14,
+  "p95_ms": 180.57,
+  "p99_ms": 1065.38,
+  "out": "D:\\tmp\\xh-perf\\output\\baseline_light.jsonl"
+}
+
+=== running phase: stress_light_t16 ===
+{
+  "phase": "stress_light_t16",
+  "jmx": "jmeter/reads_light.jmx",
+  "threads": 16,
+  "duration": 60,
+  "wall_sec": 60.8,
+  "samplers": 64,
+  "total": 3530,
+  "errors": 713,
+  "error_rate": 20.198,
+  "p50_ms": 190.98,
+  "p95_ms": 782.74,
+  "p99_ms": 1275.45,
+  "out": "D:\\tmp\\xh-perf\\output\\stress_light_t16.jsonl"
+}
+
+=== running phase: stress_light_t48 ===
+{
+  "phase": "stress_light_t48",
+  "jmx": "jmeter/reads_light.jmx",
+  "threads": 48,
+  "duration": 60,
+  "wall_sec": 60.7,
+  "samplers": 64,
+  "total": 2507,
+  "errors": 449,
+  "error_rate": 17.91,
+  "p50_ms": 1008.01,
+  "p95_ms": 2063.96,
+  "p99_ms": 3566.51,
+  "out": "D:\\tmp\\xh-perf\\output\\stress_light_t48.jsonl"
+}
+
+=== running phase: stress_light_t96 ===
+{
+  "phase": "stress_light_t96",
+  "jmx": "jmeter/reads_light.jmx",
+  "threads": 96,
+  "duration": 60,
+  "wall_sec": 61.3,
+  "samplers": 64,
+  "total": 3027,
+  "errors": 513,
+  "error_rate": 16.947,
+  "p50_ms": 1651.6,
+  "p95_ms": 3893.25,
+  "p99_ms": 4296.86,
+  "out": "D:\\tmp\\xh-perf\\output\\stress_light_t96.jsonl"
+}
+
+=== running phase: stress_write_t4 ===
+{
+  "phase": "stress_write_t4",
+  "jmx": "jmeter/writes_idem.jmx",
+  "threads": 4,
+  "duration": 60,
+  "wall_sec": 61.5,
+  "samplers": 26,
+  "total": 3523,
+  "errors": 2168,
+  "error_rate": 61.538,
+  "p50_ms": 33.04,
+  "p95_ms": 259.29,
+  "p99_ms": 441.6,
+  "out": "D:\\tmp\\xh-perf\\output\\stress_write_t4.jsonl"
+}
+
+=== running phase: stress_write_t8 ===
+{
+  "phase": "stress_write_t8",
+  "jmx": "jmeter/writes_idem.jmx",
+  "threads": 8,
+  "duration": 60,
+  "wall_sec": 60.9,
+  "samplers": 26,
+  "total": 4042,
+  "errors": 2488,
+  "error_rate": 61.554,
+  "p50_ms": 67.99,
+  "p95_ms": 378.57,
+  "p99_ms": 577.31,
+  "out": "D:\\tmp\\xh-perf\\output\\stress_write_t8.jsonl"
+}
+
+=== running phase: stress_write_t16 ===
+{
+  "phase": "stress_write_t16",
+  "jmx": "jmeter/writes_idem.jmx",
+  "threads": 16,
+  "duration": 60,
+  "wall_sec": 61.1,
+  "samplers": 26,
+  "total": 3170,
+  "errors": 1954,
+  "error_rate": 61.64,
+  "p50_ms": 253.8,
+  "p95_ms": 635.77,
+  "p99_ms": 816.01,
+  "out": "D:\\tmp\\xh-perf\\output\\stress_write_t16.jsonl"
+}
+
+=== running phase: soak_mixed ===
+{
+  "phase": "soak_mixed",
+  "jmx": "jmeter/mixed_biz.jmx",
+  "threads": 12,
+  "duration": 1800,
+  "wall_sec": 1801.4,
+  "samplers": 135,
+  "total": 107324,
+  "errors": 30965,
+  "error_rate": 28.852,
+  "p50_ms": 141.32,
+  "p95_ms": 544.52,
+  "p99_ms": 1164.55,
+  "out": "D:\\tmp\\xh-perf\\output\\soak_mixed.jsonl"
+}
+[sandbox] 定向关停外部 SUT pid=[45488]
+[sandbox] 已定向终止 SUT pid=45488 (tree=False)
+V2_EXIT=0

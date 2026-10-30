@@ -12,8 +12,13 @@ XianyuHunter 全量 `/api/*`（272 端点）系统化性能测试的一次完整
 | `tier-rules.json` / `build_scenarios.py` / `emit_config.py` | 端点分层规则与场景/配置生成（换业务 = 改 JSON，不改引擎代码） |
 | `endpoint-coverage.json` | 272 端点的分层归属与逐条 `reason`（哪些为什么不压、为什么不出击） |
 | `setup_sandbox.py` / `coverage_probe.py` / `aggregate.py` / `patch_and_v2.py` | 沙箱搭建、覆盖率探针、结果聚合、口径修正 |
-| `results/` | 10 个阶段的逐请求原始样本（`.jsonl.gz`）、聚合 JSON、阶梯/接口/长跑表、SUT 资源采样 CSV、单发探针 |
+| `soak_trend.py` | 长跑资源趋势判定（按窗口算斜率/分段，区分「缓存增长」与「真泄漏」；只统计 SUT 存活样本） |
+| `results/` | 10 个阶段的逐请求原始样本（`.jsonl.gz`）、聚合 JSON、阶梯/接口/长跑表、SUT 资源采样 CSV、单发探针、`engine_v2.log`（各阶段实测墙钟，聚合吞吐的分母来源） |
 
 执行方式：`jmeter-performance-test` 技能，`mode: python_replay`（本机无 Java/JMeter，自动回退等价回放引擎）；被测实例为隔离沙箱（端口 8011 + SQLite backup 副本库 + 调度器关闭），生产数据未被触碰。
 
 安全说明：配置里只留 `token_file` / `token_env` 的**引用路径**，令牌明文存在于临时目录并已随目录删除；复跑前需重新注入（环境变量 `WEB_TOKEN` 或指向你自己的 token 文件）。
+
+就地复算 vs 重跑负载：
+- `aggregate.py`、`soak_trend.py` **在本目录就地运行**（默认读本目录 `results/`，含 gzip 样本与 `engine_v2.log`；无需临时工作区）。
+- `setup_sandbox.py` / `emit_config.py` / `build_scenarios.py` / `coverage_probe.py` / `patch_and_v2.py` 与 `jmeter-config*.yml` 保留的是**当时的实跑取值**，指向临时工作区 `D:\tmp\xh-perf`（已删除）。要重新压测需先按同名约定重建该工作区（沙箱副本 + token + 独立 data），或改这些脚本/配置里的路径。`XH_PERF_DIR` 只对 `aggregate.py` 生效。

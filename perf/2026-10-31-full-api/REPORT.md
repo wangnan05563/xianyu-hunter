@@ -42,7 +42,7 @@
 | 轻组 `reads_light` | 64 | 180s | 3 547 | 19.5 | 50.9 | 11.1 | 180.6 | 1065.4 | 1372.5 | 1.58% | 18.72% |
 | 写组 `writes_idem` | 26 | 180s | 5 975 | 32.8 | 30.0 | 10.0 | 148.7 | 253.6 | 4387.0 | 0.02% | 61.52% |
 
-资源基线（空载→满载全周期 2111 个采样点，2s 间隔）：RSS `180.9 MB → 峰值 414.5 MB`，私有内存峰值 `617.7 MB`，句柄 `482 → 峰值 858`，CPU `平均 55.4% / 峰值 269.1%`（多核折算，单进程受 GIL 支配）。磁盘侧：SQLite 主库 + `-wal`，写阶梯期间 WAL  checkpoint 持续回收，未观察到数据库文件无界增长。
+资源基线（SUT 存活期 2 085 个有效采样 / 原始 2 132 行，2 s 间隔；关停后的 rss=0 行已剔除，见 §6.8）：RSS `180.9 MB → 峰值 414.5 MB`，私有内存峰值 `617.7 MB`，句柄 `482 → 峰值 858`，CPU `平均 56.1% / 峰值 269.1%`（多核折算，单进程受 GIL 支配）。磁盘侧：SQLite 主库 + `-wal`，写阶梯期间 WAL  checkpoint 持续回收，未观察到数据库文件无界增长。
 
 **基线结论**：绝大多数接口在单用户下 P95 低于 200 ms，符合本地工具体验；但有 4 个接口在**零并发**下就已经很慢（见 §4 表 A），属于固有成本而非容量问题。
 
@@ -109,10 +109,10 @@
 
 判定：
 - **无吞吐/延迟退化**：TPS 六窗恒为 59.6（12 并发 × avg 200 ms 的理论值 60，说明客户端无空转），P95 在第 6 窗反而最优（398.6 ms），末窗相对首窗改善 27% —— 曲线在 30 分钟尺度上平稳。
-- **内存**：RSS 按 8 段均值为 `203 → 218 → 312 → 322 → 333 → 358 → 373 → 350 MB`，前 4 段是预热爬升，后 3 段进入平台且末段回落，**未见单调上升**；私有内存峰值 617.7 MB（约 RSS 的 1.5 倍，含 SQLite 页缓存 `cache_size=-20000` ≈ 20 MB/连接 × 连接数）。
-- **连接/句柄**：句柄数 `482 → 858 → 630`，负载停止后回落，**未见连接泄漏**；未出现 `database is locked`（服务端日志中该关键字命中 0 次）。
+- **内存**：长跑窗口（末 1 800 s 存活样本）内 RSS 由 `346.8 → 378.4 MB` 六段递增，线性拟合斜率 **+75.9 MB/h**；但增势在后半程趋平（第 4/5/6 段 `374.5 / 373.4 / 378.4`，波动 < 5 MB），且负载停止后未回落（终止时仍 375.6 MB）。全程 8 段为 `203 → 217 → 311 → 322 → 332 → 357 → 372 → 377 MB`（前 4 段是预热爬升），峰值 414.5 MB 出现在长跑窗口内；私有内存峰值 617.7 MB（约 RSS 的 1.5 倍，含 SQLite 页缓存 `cache_size=-20000` ≈ 20 MB/连接 × 连接数）。**判读：形态更像「无容量上限的进程内缓存 + 分配器 arena 预热」（见 B4），但在 30 min 尺度上与慢泄漏不可区分 —— 这是本次唯一未能定论的稳定性风险。**
+- **连接/句柄**：长跑窗口内句柄恒处 `627~631`（斜率 +7.2/h，无爬升），峰值 858 出现在压力阶段的高并发档、随后回落；负载停止后未缩回空载的 482，说明句柄稳定但不主动收缩 —— **未见连接泄漏证据**；未出现 `database is locked`（服务端日志中该关键字命中 0 次）。
 - **残余缺陷**：30 分钟内 795 次 503 **全部**来自 `GET /api/tasks/{id}/links/live`（100% 失败），根因是沙箱关闭调度器后采集器不可用；另有 4 次 `000` 超时（分布在 4 个写接口，单发，属长尾抖动）。扣除该项后，本轮真实缺陷率为 0.00%。
-- **未达成项**：目标要求 ≥4 h。本次执行 30 min（会话预算限制），已把耐久长跑的参数留存在 `jmeter-config-v2.yml`（把 `soak_mixed.duration_override` 改为 `14400` 即可原样复跑 4 h），本报告不将 30 min 结果外推为 4 h 结论。
+- **未达成项**：目标要求 ≥4 h。本次执行 30 min（会话预算限制），已把耐久长跑的参数留存在 `jmeter-config-v2.yml`（把 `soak_mixed.duration_override` 改为 `14400` 即可原样复跑 4 h），本报告不将 30 min 结果外推为 4 h 结论。**该缺口不只是时长问题**：B8 的内存爬升在 30 min 尺度上无法与慢泄漏区分，4 h 复跑是排除它的必要证据。
 
 ## 5. 瓶颈定位（测量 + 源码双向对齐）
 
@@ -132,13 +132,14 @@
 
 | # | 瓶颈 | 证据 | 根因 |
 |---|---|---|---|
-| B1 | **吞吐封顶 ~80 rps 且与并发无关**（重组 4 并发即到顶） | §3.1：TPS 43.9→81.2→79.7→73.7，缺陷率恒 0 | 单进程 Uvicorn + Python GIL：CPU avg 55%、峰值 269% 说明多核未用满，但同步 handler 全挤在 anyio 线程池。`__main__.py:280-284` 的 `--workers` 默认 **1**，且 `__main__.py:309-312` 注释自陈「已实测单 worker 51 → 多 worker 80 req/s，生产建议纯 Web 多 worker + 独立调度进程」——本次沙箱正是默认单 worker |
+| B1 | **吞吐封顶 ~80 rps 且与并发无关**（重组 4 并发即到顶） | §3.1：TPS 43.9→81.2→79.7→73.7，缺陷率恒 0 | 单进程 Uvicorn + Python GIL：CPU avg 56%、峰值 269% 说明多核未用满，但同步 handler 全挤在 anyio 线程池。`__main__.py:280-284` 的 `--workers` 默认 **1**，且 `__main__.py:309-312` 注释自陈「已实测单 worker 51 → 多 worker 80 req/s，生产建议纯 Web 多 worker + 独立调度进程」——本次沙箱正是默认单 worker |
 | B2 | **高并发尾延迟爆炸 + 超时** | 轻组 96 并发 P99 4296.9 ms、缺陷率 3.17%；v1 轮 `maintenance/status` 出现 P95 60 033 ms（= 客户端 60 s 超时判 000）而单发仅 1.6 s | 慢同步接口与快接口**共享 anyio 线程池（默认 40 token，代码未覆写）**；`CacheScanService` 进程级 `RLock`（`services/cache_scan.py:52,66`）把 `/cache-scan` 与 `/maintenance/status` 串行化，一个全树遍历就能让后续请求排队 → 排队即超时 |
 | B3 | **缓存无单飞（击穿）** | 长跑 12 并发下 avg 200 ms，而单用户仅 50 ms；`stats` 类接口 300 s TTL 到期时并发全量重算 | `web/cache.py:62-79`：冷/过期 miss 无 `single-flight`，N 个并发请求各自重算同一聚合（只有 `stale_while_revalidate` 分支有 `_refreshing` 标志）；缓存字典无容量上限/淘汰，`invalidate_stats_cache()` 为全清 |
 | B4 | **重活放在请求路径上** | `GET /api/evaluations` 每请求全量拉 `eval.*` 事件（`limit=50000`）+ JSON 解析 + Python 侧过滤/分页/中位数；`/api/logs/search` 取 1000 条事件再 Python 子串过滤；`/api/export` 最多 5 万行全内存拼 CSV | `evaluations_list.py:676`、`repo_events.py:333-365`（另发一次 COUNT）、`api_logs.py:127-162`、`api_export.py:76-98`；`compute_market_stats_batch`（`evaluations_list.py:69-80`）在缓存 miss 时**按 task_id 逐个**跑 `_compute_sold_range`（N+1） |
 | B5 | **写侧 8 并发饱和** | §3.3：TPS 66.4（8 并发，峰值）→ 51.9（16 并发，−22%） | SQLite WAL 单写者；连接池 20 但 `busy_timeout=10000` 会把写冲突变成「等待」而非报错，因此表现为吞吐回落而不是 5xx —— 与技能判据「饱和非逻辑回归」一致 |
 | B6 | **无索引的过滤列** | 代码核对（`db_models.py` 的 `Index(...)` 与 `init_db` 的 `_migrate_create_index`）后确认下列被查询列**无索引**：`items.price`（`stats_price_trend.py:49-51` 区间过滤）、`evaluations.risk_level`（`stats_overview.py:134-141` 全表 `SUM(CASE)`）、`price_history.user_id`（`repo_price_history.py:126,137` 过滤但该表不在 `_MU2_TABLES`）、`orders.type`（`repo_orders.py:90`）、`task_links.updated_at`（`price_dashboard.py:421`）、`events.level` / 单独 `events.stage`；`error_logs.error_type/request_path` 用 `%LIKE%` 前后通配（`repo_error_logs.py:63-65`，索引不可用） | 数据量小时不明显，本轮 items 774/evaluations·events 数万，全表扫已是百毫秒级；随采集累积会线性恶化 |
 | B7 | **503 语义污染可观测性** | 30 min 内 795 次 503 全部来自 `links/live`（100%） | 依赖（采集器）不可用时直接 5xx。它既是本次缺陷率的全部来源，也说明生产中该状态会淹没真实故障信号 |
+| B8 | **长跑内存呈爬升形态，但 30 min 不足以定论泄漏** | 长跑窗口 RSS `346.8 → 378.4 MB`（拟合 +75.9 MB/h），后半程趋平、负载停止后不回落；句柄同期恒定（627~631） | 与「进程内缓存字典无容量上限/淘汰 + `invalidate_stats_cache()` 全清」（`web/cache.py:139-146/184-186`）以及分配器 arena 预热一致；若是真泄漏，句柄也应上涨，而它没有。**排除需 ≥4 h 复跑**（见 §4 未达成项与 OPTIMIZATIONS B4） |
 
 ### 表 C：必须与「服务缺陷」区分开的环境/工具口径
 
@@ -157,6 +158,7 @@
 5. v1 轮重组阶梯（2/4/8/16 并发）的**逐请求原始样本**在修正分层时被清理，因此 `results/agg_phases.json` 中不含这四档，只有本文件 §3.1 抄录的汇总数字（当时按配置时长 60 s 计算，与该轮引擎实测墙钟一致）。v2 轮 10 个阶段的原始样本全部留存。
 6. 写压测在沙箱副本库留下了种子数据（约 230 次任务创建等）。副本已随临时目录删除，生产库未被写入。
 7. **口径修正（复核时发现并已改正）**：首版聚合器按 v1 配置的时长去除 v2 轮的样本数（`baseline_light` 用 300 s、`soak_mixed` 用 3600 s），而这两阶段实跑 180 s / 1800 s，导致吞吐被系统性低估一半（曾误报 11.8 / 29.8）。现 `aggregate.py` 改为从引擎日志取每阶段**实测墙钟秒数**，本文件与 `results/*` 均为修正后数字；百分位、缺陷率、4xx 率不受影响。
+8. **口径修正之二（资源采样）**：`sut_resource.csv` 末尾有 47 行是 SUT 被定向关停之后写入的（`rss_mb=0`），首版把这些 0 值行一并计入统计，于是得出「末段 RSS 回落到 350 MB、CPU 均值 55.4%、2 111 点」——其中「回落」是 0 值稀释造成的**假象**，且当时被当作「无泄漏」的证据。现 `aggregate.py` 只统计存活样本（2 085 行，原始 2 132 行），得到 RSS 不回落、长跑窗口内 +75.9 MB/h 的爬升形态，据此把该风险改判为「未定论」（见 §4 与 B8），并把缓存容量上限（OPTIMIZATIONS B4）从低优先级提为中优先级。
 
 ## 7. 可追溯性
 
@@ -170,7 +172,10 @@
 | `endpoint-coverage.json` | 272 端点的分层、真实响应码原因、`reason` 逐条可查 |
 | `results/*.jsonl.gz` | 10 个阶段的逐请求原始样本（gzip-9） |
 | `results/agg_phases.json` | 每阶段 × 每接口的样本数/TPS/P50/P90/P95/P99/最大/缺陷率/4xx/状态码分布 |
-| `results/ladder_table.md` `endpoint_table.md` `soak_table.md` `resource_summary.json` `probe_probe_single.json` `sut_resource.csv` | 阶梯表 / 136 接口全量表 / 长跑分窗 / 资源采样（2111 点）/ 67 端点单发探针 |
+| `results/engine_v2.log` | v2 轮引擎逐阶段日志（含每阶段**实测墙钟 `wall_sec`**，是 `aggregate.py` 计算吞吐的分母来源；见 §6.7） |
+| `results/ladder_table.md` `endpoint_table.md` `soak_table.md` `resource_summary.json` `probe_probe_single.json` `sut_resource.csv` | 阶梯表 / 136 接口全量表 / 长跑分窗 / 资源采样（原始 2 132 行，存活 2 085 行）/ 67 端点单发探针 |
 | `setup_sandbox.py` `coverage_probe.py` `aggregate.py` `patch_and_v2.py` | 复现所需的环境搭建、探针、聚合、口径修正脚本 |
+| `soak_trend.py` | §6.8 判定所用的资源趋势脚本（窗口斜率 + 分段，只统计存活样本；直接读归档即可复现 §4 的内存/句柄结论） |
 
 复现：`python setup_sandbox.py` → 启动沙箱实例并写 `sut.pid` → `python emit_config.py` → `gen_jmx.py --config jmeter-config.yml` → `python_replay_engine.py --config jmeter-config-v2.yml --all` → `python aggregate.py`。
+若只重算聚合而不重跑负载：把 `results/*.jsonl.gz` 解回 `results/`（文件名须为 `<phase>.jsonl`）并保留 `results/engine_v2.log` —— `aggregate.py` 的吞吐分母取自该日志的实测墙钟，缺失时会退回配置时长（这正是 §6.7 记录过的坑）。

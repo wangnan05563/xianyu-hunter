@@ -66,6 +66,10 @@ config/config.yaml
 *.log
 *.out
 *.err
+# 例外：性能测试留档的引擎逐阶段日志（aggregate.py 的吞吐分母取自其中的实测墙钟，
+# 见 perf/2026-10-31-full-api/REPORT.md §6.7/§7）。只放开 engine_*.log ——
+# SUT 运行日志（sut.log 等）可能含明文令牌，必须保持忽略。
+!perf/**/engine_*.log
 # 运行时日志目录：必须写绝对路径，不能用裸 logs/
 # 原因：本仓 core.ignorecase=true（Windows），裸 logs/ 会连带命中前端页面目录
 # frontend/src/pages/Logs 与 frontend/src/mobile/pages/Logs，
