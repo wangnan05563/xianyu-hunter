@@ -38,6 +38,10 @@
   - 验证：`import xianyu_hunter` 退出码 0，二次稳定性检查（10s）无新文件
   - 注意事项：`Remove-Item -LiteralPath` 对含 `;()` 等特殊字符的 PowerShell 误重定向文件返回 SUCCESS 但实际未删除，必须用 `[System.IO.File]::Delete($path)` 兜底
 
+### Fixed
+
+- **进程内 TTL 缓存的并发击穿（single-flight）**：`web/cache.py` 的冷/过期 miss 路径没有任何合并，TTL 到期的瞬间 N 个并发请求各自重算同一份聚合 —— 全量 API 性能测试实测「单用户 avg 50 ms 的接口，12 并发长跑变 200.5 ms」，重算还占住 anyio 默认 40 token 线程池，把 8.4 ms 级廉价接口在 96 并发拖到 2 s 以上。现按 key 登记在途重算：抢到 lead 的调用执行并写缓存，其余等待同一结果（同步用 `Event`、协程用同循环内的 `Future`，跨事件循环不合并）；`bypass_cache=True` 保持不读缓存、不并入他人在途重算的原语义；异常不入缓存并原样传给跟随者。回归见 `tests/test_cache_single_flight.py`（9 例，含变异验证）。证据与量化预期：`perf/2026-10-31-full-api/OPTIMIZATIONS.md` B1（本文档所有压测数字仍是修复前基线，待复跑）。
+
 ## [0.4.0] - 2026-07-06
 
 ## [0.3.1] - 2026-07-05

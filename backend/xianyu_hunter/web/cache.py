@@ -8,11 +8,13 @@
 - 进程内 dict + 单调时钟时间戳，无外部依赖（不引入 Redis 增加运维复杂度）
 - 线程安全：FastAPI 默认同步路由用 anyio worker thread 池，dict 读写需加锁
 - 主动过期：缓存项带 TTL，过期自动忽略（不主动清理，下次写入覆盖）
+- 击穿合并（single-flight）：同一 key 的并发 miss 只重算一次，其余等待同一结果
 - 可选跳过缓存：bypass_cache=True 强制刷新（管理员手动刷新场景）
 - 同步/异步双支持：P3 改造后 stats 接口改 async def，装饰器自动识别协程函数
 """
 from __future__ import annotations
 
+import asyncio
 import functools
 import inspect
 import threading
@@ -28,6 +30,22 @@ _cache_store: dict[tuple, tuple[float, Any]] = {}
 _cache_lock = threading.RLock()
 # stale-while-revalidate：记录正在进行后台刷新的 key，避免重复刷新（惊群）
 _refreshing: set[tuple] = set()
+# 击穿合并：正在进行中的重算。同步/异步各一套——协程与 asyncio.Future 不跨事件循环，
+# 线程等待用 Event，协程等待用 Future，不能共用一个等待原语。
+_flights: dict[tuple, "_Flight"] = {}
+# (注册时所在的事件循环, 该循环内的 Future) —— 记录循环是为了拒绝跨循环合并
+_AFlight = tuple["asyncio.AbstractEventLoop", "asyncio.Future"]
+_flights_async: dict[tuple, _AFlight] = {}
+
+
+class _Flight:
+    """一次正在进行的重算的共享结果，outcome 为 ("ok"|"err"|"gone", payload)。"""
+
+    __slots__ = ("event", "outcome")
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.outcome: tuple[str, Any] | None = None
 
 
 def _make_async_wrapper(func, ttl_seconds: int, key_fn, stale_while_revalidate: bool = False):
@@ -47,7 +65,11 @@ def _make_async_wrapper(func, ttl_seconds: int, key_fn, stale_while_revalidate: 
                 if stale is not None:
                     _maybe_refresh_stale_async(cache_key, func, args, kwargs)
                     return stale
+            return await _single_flight_async(
+                cache_key, lambda: func(*args, **kwargs), ttl_seconds
+            )
 
+        # 强制刷新：既不读缓存也不并入他人在途的重算，重算后写回
         result = await func(*args, **kwargs)
         _set_cache(cache_key, result)
         return result
@@ -73,7 +95,9 @@ def _make_sync_wrapper(func, ttl_seconds: int, key_fn, stale_while_revalidate: b
                 if stale is not None:
                     _maybe_refresh_stale(cache_key, func, args, kwargs)
                     return stale
+            return _single_flight(cache_key, lambda: func(*args, **kwargs), ttl_seconds)
 
+        # 强制刷新：既不读缓存也不并入他人在途的重算，重算后写回
         result = func(*args, **kwargs)
         _set_cache(cache_key, result)
         return result
@@ -127,6 +151,110 @@ def _set_cache(cache_key: tuple, value: Any) -> None:
         _cache_store[cache_key] = (time.monotonic(), value)
 
 
+def _single_flight(cache_key: tuple, compute: Callable[[], Any], ttl_seconds: int) -> Any:
+    """同一 key 的并发 miss 只重算一次（缓存击穿合并，线程版）。
+
+    抢到 lead 的调用执行 compute 并写缓存，其余调用等同一结果；lead 被中断
+    （KeyboardInterrupt/SystemExit）时跟随者重新竞争，不继承其中断。
+    compute 抛出的普通异常原样传给所有跟随者——不缓存错误结果，下一个请求仍是全新重算。
+    """
+    while True:
+        with _cache_lock:
+            # 锁内复查：上一个 lead 可能刚好发布完（它先写缓存、再摘掉 flight）
+            hit, value = _try_get_cache(cache_key, ttl_seconds)
+            if hit:
+                return value
+            flight = _flights.get(cache_key)
+            if flight is None:
+                flight = _Flight()
+                _flights[cache_key] = flight
+                leading = True
+            else:
+                leading = False
+
+        if not leading:
+            flight.event.wait()
+            kind, payload = flight.outcome or ("gone", None)
+            if kind == "ok":
+                return payload
+            if kind == "err":
+                raise payload
+            continue
+
+        try:
+            result = compute()
+        except (KeyboardInterrupt, SystemExit):
+            _end_flight(cache_key, flight, ("gone", None))
+            raise
+        except BaseException as exc:
+            _end_flight(cache_key, flight, ("err", exc))
+            raise
+        _set_cache(cache_key, result)
+        _end_flight(cache_key, flight, ("ok", result))
+        return result
+
+
+async def _single_flight_async(
+    cache_key: tuple, coro_factory: Callable[[], Any], ttl_seconds: int
+) -> Any:
+    """同一 key 的并发 miss 只重算一次（缓存击穿合并，协程版）。
+
+    结果经 Future 以 ("ok"|"err"|"gone", payload) 载荷传递而非 set_exception：
+    无人取用的 Future 异常会打「exception was never retrieved」日志，且跟随者
+    不该继承 lead 的取消。lead 与跟随者必须在同一事件循环，否则不合并、各自重算。
+    """
+    loop = asyncio.get_running_loop()
+    while True:
+        with _cache_lock:
+            hit, value = _try_get_cache(cache_key, ttl_seconds)
+            if hit:
+                return value
+            flight = _flights_async.get(cache_key)
+            if flight is not None and flight[0] is loop:
+                leading = False
+            else:
+                flight = (loop, loop.create_future())
+                _flights_async[cache_key] = flight
+                leading = True
+
+        if not leading:
+            kind, payload = await flight[1]
+            if kind == "ok":
+                return payload
+            if kind == "err":
+                raise payload
+            continue
+
+        try:
+            result = await coro_factory()
+        except (asyncio.CancelledError, KeyboardInterrupt, SystemExit):
+            _end_async_flight(cache_key, flight, ("gone", None))
+            raise
+        except BaseException as exc:
+            _end_async_flight(cache_key, flight, ("err", exc))
+            raise
+        _set_cache(cache_key, result)
+        _end_async_flight(cache_key, flight, ("ok", result))
+        return result
+
+
+def _end_flight(cache_key: tuple, flight: _Flight, outcome: tuple[str, Any]) -> None:
+    """先摘走在途标记（新到达者据此改走缓存命中），再唤醒等待同一结果的调用。"""
+    with _cache_lock:
+        if _flights.get(cache_key) is flight:
+            _flights.pop(cache_key, None)
+    flight.outcome = outcome
+    flight.event.set()
+
+
+def _end_async_flight(cache_key: tuple, flight: _AFlight, outcome: tuple[str, Any]) -> None:
+    with _cache_lock:
+        if _flights_async.get(cache_key) is flight:
+            _flights_async.pop(cache_key, None)
+    if not flight[1].done():
+        flight[1].set_result(outcome)
+
+
 def _try_get_stale(cache_key: tuple) -> Any | None:
     """返回缓存值（不论是否过期），无则返回 None。供 stale-while-revalidate 使用。"""
     with _cache_lock:
@@ -155,8 +283,6 @@ def _maybe_refresh_stale(cache_key: tuple, func, args, kwargs) -> None:
 
 def _maybe_refresh_stale_async(cache_key: tuple, func, args, kwargs) -> None:
     """异步函数：在独立线程中用新事件循环运行协程刷新缓存。"""
-    import asyncio
-
     with _cache_lock:
         if cache_key in _refreshing:
             return

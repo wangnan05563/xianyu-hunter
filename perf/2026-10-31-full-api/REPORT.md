@@ -134,12 +134,13 @@
 |---|---|---|---|
 | B1 | **吞吐封顶 ~80 rps 且与并发无关**（重组 4 并发即到顶） | §3.1：TPS 43.9→81.2→79.7→73.7，缺陷率恒 0 | 单进程 Uvicorn + Python GIL：CPU avg 56%、峰值 269% 说明多核未用满，但同步 handler 全挤在 anyio 线程池。`__main__.py:280-284` 的 `--workers` 默认 **1**，且 `__main__.py:309-312` 注释自陈「已实测单 worker 51 → 多 worker 80 req/s，生产建议纯 Web 多 worker + 独立调度进程」——本次沙箱正是默认单 worker |
 | B2 | **高并发尾延迟爆炸 + 超时** | 轻组 96 并发 P99 4296.9 ms、缺陷率 3.17%；v1 轮 `maintenance/status` 出现 P95 60 033 ms（= 客户端 60 s 超时判 000）而单发仅 1.6 s | 慢同步接口与快接口**共享 anyio 线程池（默认 40 token，代码未覆写）**；`CacheScanService` 进程级 `RLock`（`services/cache_scan.py:52,66`）把 `/cache-scan` 与 `/maintenance/status` 串行化，一个全树遍历就能让后续请求排队 → 排队即超时 |
-| B3 | **缓存无单飞（击穿）** | 长跑 12 并发下 avg 200 ms，而单用户仅 50 ms；`stats` 类接口 300 s TTL 到期时并发全量重算 | `web/cache.py:62-79`：冷/过期 miss 无 `single-flight`，N 个并发请求各自重算同一聚合（只有 `stale_while_revalidate` 分支有 `_refreshing` 标志）；缓存字典无容量上限/淘汰，`invalidate_stats_cache()` 为全清 |
+| B3 | **缓存无单飞（击穿）** | 长跑 12 并发下 avg 200 ms，而单用户仅 50 ms；`stats` 类接口 300 s TTL 到期时并发全量重算 | 被测实例（测时版本）的 `web/cache.py` 中 `_make_sync_wrapper` / `_make_async_wrapper` 冷/过期 miss 无 `single-flight`，N 个并发请求各自重算同一聚合（只有 `stale_while_revalidate` 分支有 `_refreshing` 标志）；缓存字典 `_cache_store` 无容量上限/淘汰，`invalidate_stats_cache()` 为全清。**本条已于 2026-10-31 按 OPTIMIZATIONS B1 落地修复，故本文所有数字均为「修复前」基线** |
 | B4 | **重活放在请求路径上** | `GET /api/evaluations` 每请求全量拉 `eval.*` 事件（`limit=50000`）+ JSON 解析 + Python 侧过滤/分页/中位数；`/api/logs/search` 取 1000 条事件再 Python 子串过滤；`/api/export` 最多 5 万行全内存拼 CSV | `evaluations_list.py:676`、`repo_events.py:333-365`（另发一次 COUNT）、`api_logs.py:127-162`、`api_export.py:76-98`；`compute_market_stats_batch`（`evaluations_list.py:69-80`）在缓存 miss 时**按 task_id 逐个**跑 `_compute_sold_range`（N+1） |
 | B5 | **写侧 8 并发饱和** | §3.3：TPS 66.4（8 并发，峰值）→ 51.9（16 并发，−22%） | SQLite WAL 单写者；连接池 20 但 `busy_timeout=10000` 会把写冲突变成「等待」而非报错，因此表现为吞吐回落而不是 5xx —— 与技能判据「饱和非逻辑回归」一致 |
 | B6 | **无索引的过滤列** | 代码核对（`db_models.py` 的 `Index(...)` 与 `init_db` 的 `_migrate_create_index`）后确认下列被查询列**无索引**：`items.price`（`stats_price_trend.py:49-51` 区间过滤）、`evaluations.risk_level`（`stats_overview.py:134-141` 全表 `SUM(CASE)`）、`price_history.user_id`（`repo_price_history.py:126,137` 过滤但该表不在 `_MU2_TABLES`）、`orders.type`（`repo_orders.py:90`）、`task_links.updated_at`（`price_dashboard.py:421`）、`events.level` / 单独 `events.stage`；`error_logs.error_type/request_path` 用 `%LIKE%` 前后通配（`repo_error_logs.py:63-65`，索引不可用） | 数据量小时不明显，本轮 items 774/evaluations·events 数万，全表扫已是百毫秒级；随采集累积会线性恶化 |
 | B7 | **503 语义污染可观测性** | 30 min 内 795 次 503 全部来自 `links/live`（100%） | 依赖（采集器）不可用时直接 5xx。它既是本次缺陷率的全部来源，也说明生产中该状态会淹没真实故障信号 |
-| B8 | **长跑内存呈爬升形态，但 30 min 不足以定论泄漏** | 长跑窗口 RSS `346.8 → 378.4 MB`（拟合 +75.9 MB/h），后半程趋平、负载停止后不回落；句柄同期恒定（627~631） | 与「进程内缓存字典无容量上限/淘汰 + `invalidate_stats_cache()` 全清」（`web/cache.py:139-146/184-186`）以及分配器 arena 预热一致；若是真泄漏，句柄也应上涨，而它没有。**排除需 ≥4 h 复跑**（见 §4 未达成项与 OPTIMIZATIONS B4） |
+| B8 | **长跑内存呈爬升形态，但 30 min 不足以定论泄漏** | 长跑窗口 RSS `346.8 → 378.4 MB`（拟合 +75.9 MB/h），后半程趋平、负载停止后不回落；句柄同期恒定（627~631） | 与「进程内缓存 `_cache_store` 无容量上限/淘汰 + `invalidate_stats_cache()` 全清」（`web/cache.py`）以及分配器 arena 预热一致；若是真泄漏，句柄也应上涨，而它没有。**排除需 ≥4 h 复跑**（见 §4 未达成项与 OPTIMIZATIONS B4） |
+| B9 | **`stale_while_revalidate` 的「后台刷新」并未在后台**（来源：B1 落地时的实现复核 + 专项探针，**非负载观测**） | 探针（重算人为 0.6 s、TTL 1 s）：过期后首次调用墙钟 `0.602 s` 且返回**旧值**，第二次才 `0.000 s` 拿到新值；异步分支 6 次调用恒返回同一旧值、底层重算次数恒为 1 | `_maybe_refresh_stale` docstring 承诺守护线程刷新，函数体却在请求线程内直接重算后才返回旧值；`_maybe_refresh_stale_async` 在已运行的事件循环里 `asyncio.run(...)` → `RuntimeError` 被 `except Exception: pass` 吞掉，缓存从此不再刷新。全仓现仅 `api_maintenance.py:235`（同步 `def`）在用，故本轮只表现为「过期请求付全款」；异步那条是给下一个 SWR 端点挖的坑。详见 OPTIMIZATIONS B5 与 `swr_probe.py` |
 
 ### 表 C：必须与「服务缺陷」区分开的环境/工具口径
 
@@ -176,6 +177,7 @@
 | `results/ladder_table.md` `endpoint_table.md` `soak_table.md` `resource_summary.json` `probe_probe_single.json` `sut_resource.csv` | 阶梯表 / 136 接口全量表 / 长跑分窗 / 资源采样（原始 2 132 行，存活 2 085 行）/ 67 端点单发探针 |
 | `setup_sandbox.py` `coverage_probe.py` `aggregate.py` `patch_and_v2.py` | 复现所需的环境搭建、探针、聚合、口径修正脚本 |
 | `soak_trend.py` | §6.8 判定所用的资源趋势脚本（窗口斜率 + 分段，只统计存活样本；直接读归档即可复现 §4 的内存/句柄结论） |
+| `swr_probe.py` | 表 B B9 的取证探针（同步 + SWR 的过期调用被重算阻塞；异步 + SWR 值被冻结）。B1 落地时的实现复核产物，非负载测量 |
 
 复现：`python setup_sandbox.py` → 启动沙箱实例并写 `sut.pid` → `python emit_config.py` → `gen_jmx.py --config jmeter-config.yml` → `python_replay_engine.py --config jmeter-config-v2.yml --all` → `python aggregate.py`。
 若只重算聚合而不重跑负载：把 `results/*.jsonl.gz` 解回 `results/`（文件名须为 `<phase>.jsonl`）并保留 `results/engine_v2.log` —— `aggregate.py` 的吞吐分母取自该日志的实测墙钟，缺失时会退回配置时长（这正是 §6.7 记录过的坑）。

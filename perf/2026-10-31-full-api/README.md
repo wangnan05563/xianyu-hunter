@@ -13,6 +13,7 @@ XianyuHunter 全量 `/api/*`（272 端点）系统化性能测试的一次完整
 | `endpoint-coverage.json` | 272 端点的分层归属与逐条 `reason`（哪些为什么不压、为什么不出击） |
 | `setup_sandbox.py` / `coverage_probe.py` / `aggregate.py` / `patch_and_v2.py` | 沙箱搭建、覆盖率探针、结果聚合、口径修正 |
 | `soak_trend.py` | 长跑资源趋势判定（按窗口算斜率/分段，区分「缓存增长」与「真泄漏」；只统计 SUT 存活样本） |
+| `swr_probe.py` | B5 取证探针：证明 `stale_while_revalidate` 的刷新实际发生在请求线程里（异步分支静默失效）。只读、不落库、不发请求 |
 | `results/` | 10 个阶段的逐请求原始样本（`.jsonl.gz`）、聚合 JSON、阶梯/接口/长跑表、SUT 资源采样 CSV、单发探针、`engine_v2.log`（各阶段实测墙钟，聚合吞吐的分母来源） |
 
 执行方式：`jmeter-performance-test` 技能，`mode: python_replay`（本机无 Java/JMeter，自动回退等价回放引擎）；被测实例为隔离沙箱（端口 8011 + SQLite backup 副本库 + 调度器关闭），生产数据未被触碰。

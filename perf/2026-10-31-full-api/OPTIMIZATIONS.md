@@ -8,7 +8,8 @@
 
 | 编号 | 优化项 | 优先级 | 关键指标预期变化 | 成本 |
 |---|---|---|---|---|
-| B1 | 缓存单飞（single-flight） | **高** | 长跑混合场景 avg 200.5 → ≤80 ms；长跑整体 P95 544.5 → ≤250 ms | 低（`web/cache.py` 约 20 行） |
+| B1 | 缓存单飞（single-flight） | **高** | 长跑混合场景 avg 200.5 → ≤80 ms；长跑整体 P95 544.5 → ≤250 ms | 低（`web/cache.py` 约 20 行）✅ **已落地** |
+| B5 | SWR「后台刷新」实为同步 + 异步分支静默失效 | **高** | `maintenance/status` 过期后首次调用 ≈1.6 s → ≈0；消除 SWR 冻结隐患 | 低 |
 | C2 | `/api/auth/me` 去重复文件解析 | **高** | avg 152.6 → ≤50 ms（长跑 414.3 → ≤120 ms） | 低 |
 | C4 | 反爬策略探测降本 + 缓存 | **高** | avg 1 094.7 → ≤30 ms；96 并发 2 511.8 → ≤100 ms | 低 |
 | D1 | 慢同步接口独立线程池 | **高** | 48/96 并发轻组 P95 2 064/3 893 → ≤1 000 ms；缺陷率 2.03/3.17% → <0.5% | 中 |
@@ -68,13 +69,16 @@
 ## B. 缓存策略调整
 
 ### B1. 给进程内 TTL 缓存加单飞（single-flight） — 优先级 **高**（本条为全场最大杠杆）
-**具体优化内容**：`backend/xianyu_hunter/web/cache.py:59-79` 的 `_make_sync_wrapper` 在冷/过期 miss 时直接 `result = func(...)`（`:77`），**没有 per-key 锁与双重检查**；只有 `stale_while_revalidate` 分支（`:71-75`）有后台刷新标志。补：`_locks.setdefault(key, Lock())` + 取锁后二次查缓存，未取到锁的请求等待而非重算；并为 `invalidate_stats_cache()` 增加按维度（user/task）失效而非整表清空。
+**具体优化内容**：测时版本的 `backend/xianyu_hunter/web/cache.py` 中 `_make_sync_wrapper` 在冷/过期 miss 时直接 `result = func(...)`，**没有 per-key 锁与双重检查**；只有 `stale_while_revalidate` 分支有后台刷新标志。补：per-key 在途表 + 取锁后二次查缓存，未抢到 lead 的请求等待而非重算；并为 `invalidate_stats_cache()` 增加按维度（user/task）失效而非整表清空。
+
 **证据**：① `reads_heavy` 基线 avg **22.7 ms**（单用户，缓存基本命中）→ 同一 135 接口混合场景在 12 并发长跑 avg **200.5 ms**，放大 8.8×；② 同族评估/统计接口长跑均值集中在 165~200 ms 一个窄带（`evaluations/*` 167~196、`notifications*` 170~218、`export*` 134~288），**这是「大家都在等同一份重算」的特征，而不是各自计算不同东西**；③ `startup.py:799-828` 只预热 4 个 key，300 s TTL 到期后首波并发必然击穿。
 **量化预期收益**：混合场景 avg **200.5 → ≤80 ms**（-60%），P95 **544.5 → ≤250 ms**，P99 **1 164.5 → ≤450 ms**；`reads_light` 96 并发 P95 3 893.2 预计降至 **≤1 200 ms**（与 D1 叠加后更低）。
 **验证方式**：长跑复跑 + 在服务端计数 `func` 实际执行次数（单飞生效应看到重算次数 ≈ 接口数 × 时长/TTL，而非 ≈ 请求数）。
 
+**落地状态（2026-10-31）**：✅ 单飞部分已实现 —— `web/cache.py` 新增 `_single_flight` / `_single_flight_async`（per-key 在途表 + 锁内双重检查；同步用 `threading.Event`、异步用同循环内的 `Future`，跨事件循环不合并），同步/异步两个包装器的 miss 路径都改为经单飞，`bypass_cache=True` 保持「不读缓存、不并入他人在途重算」的原语义。回归测试 `tests/test_cache_single_flight.py`（9 例）锁定「同 key 并发只重算一次」「不同 key 不互相合并」「异常不入缓存且传给跟随者」「TTL 到期后重算」「bypass 仍强制刷新」；变异验证（把两个入口退化成各自重算）后其中 2 例如期失败。**未落**：`invalidate_stats_cache()` 的按维度失效（仍整表清空）留待与 A2/B4 一并处理。
+
 ### B2. 把「零并发就慢」的接口纳入 TTL 缓存 — 优先级 **高**
-**具体优化内容**：对以下未缓存的只读接口加 `@cached_ttl`（TTL 30~120 s，配 `stale_while_revalidate=True`）：`GET /api/anticrawl/strategy`、`GET /api/vector-admin/snapshots`、`GET /api/config/raw`、`GET /api/config/share`、`GET /api/maintenance/cache-scan`。
+**具体优化内容**：对以下未缓存的只读接口加 `@cached_ttl`（TTL 30~120 s）：`GET /api/anticrawl/strategy`、`GET /api/vector-admin/snapshots`、`GET /api/config/raw`、`GET /api/config/share`、`GET /api/maintenance/cache-scan`。（⚠️ 原建议里的 `stale_while_revalidate=True` **不要**再加：见 B5，它当前既不能让请求变快，对 `async def` 还会静默冻结缓存 —— 应先修 B5，或只给同步 `def` 接口配 TTL 而不带 SWR。）
 **证据**：基线（1 并发）分别 1 094.7 / 233.8 / 132.4 / 104.7 / 94.1 ms，长跑 12 并发 1 300.7 / 450.7 / 334.4 / 292.7 / 287.7 ms；96 并发 2 511.8 / 1 328.3 / 3 236.2 / 2 950.2 / 1 822.8 ms。这些接口的结果秒级内稳定，重复计算无业务价值。
 **量化预期收益**：命中后回到地板级 10~20 ms；`reads_light` 基线 avg **50.9 → ≤25 ms**，96 并发 P95 **3 893.2 → ≤1 500 ms**。
 **验证方式**：selftest 后同一 JMX 复跑；抽查 TTL 内两次请求的响应体一致性。
@@ -90,6 +94,15 @@
 **证据**：只统计 SUT 存活样本后，长跑 30 min 窗口内 RSS 六段为 `346.8 → 354.7 → 368.5 → 374.5 → 373.4 → 378.4 MB`（拟合 **+75.9 MB/h**），全程 8 段 `203 → 217 → 311 → 322 → 332 → 357 → 372 → 377 MB`，峰值 **414.5 MB**、私有内存峰值 **617.7 MB**，且**负载停止后不回落**（终止时仍 375.6 MB）。同期句柄恒定（`627~631`），因此不像连接/FD 泄漏；最可解释的来源就是这份无上限的进程内缓存（叠加 SQLite 页缓存与分配器 arena）。**在 30 min 尺度上仍无法与慢泄漏区分** —— 本条既是优化，也是将问题变为可判定的手段。
 **量化预期收益**：RSS 峰值 **414.5 → ≤350 MB**，长跑窗口斜率 **+75.9 MB/h → ≈0**（有上限后应收敛为平台）；把「内存增长是缓存还是泄漏」从不可归因变成可判定。
 **验证方式**：4 h 长跑（见 §E4 与 CONCLUSION 的未达成项）分段对比 RSS 斜率 —— 若加限制后斜率归零即确认原因为缓存，若仍爬升则为泄漏，需转 `tracemalloc` 定位。
+
+### B5. `stale_while_revalidate` 的「后台刷新」其实是同步的，异步分支还会静默失效 — 优先级 **高**（B1 落地后新暴露，非负载测量得出）
+**具体优化内容**：`web/cache.py` 的 `_maybe_refresh_stale` docstring 写「启动守护线程异步刷新」，函数体却直接在请求线程里 `func(*args, **kwargs)`（`cache.py:274`）—— 快路径因此变成「先跑完整重算，再把**旧值**返回给这个请求」。`_maybe_refresh_stale_async` 更糟：它在已运行的事件循环里调 `asyncio.run(...)`（`:293`），必然抛 `RuntimeError` 并被 `except Exception: pass` 吞掉（还留下一条 `coroutine was never awaited` 警告），于是走 SWR 的协程接口**过期后再也不会被刷新**。修法：同步分支改成真正起守护线程（或复用 B1 的单飞 + 一个「仅一个线程去重算」的分支），异步分支改成 `loop.create_task(...)` 而非 `asyncio.run`。
+**证据**（专项探针 `swr_probe.py`，非负载观测；被测函数人为设为重算耗时 0.6 s、TTL 1 s）：
+- 同步 + SWR：冷路径 `0.600 s` → 过期后首次调用 `0.602 s` 且返回**旧值 1**（承诺的 ≈0 未兑现）；再调用一次才 `0.000 s / 2`。即 `/api/maintenance/status` 每 60 s 窗口后的那一个请求付全款、还给客户端过期数据。
+- 异步 + SWR：过期后连续 6 次调用全部返回 `1`，底层重算次数恒为 `1` —— 值被冻结。
+- 现网影响面：全仓只有 `api_maintenance.py:235`（同步 `def`）在用 SWR，所以**当前只表现为「过期请求被阻塞」，冻结那条尚未被触发**；但它是给下一个吃 `stale_while_revalidate` 的 `async def` 端点挖好的坑，也正是 B2 原建议里要鼓励的用法。
+**量化预期收益**：`/api/maintenance/status` 过期后首次调用 **1 600 ms（表 A 实测冷路径）→ ≈0**（返回旧值、刷新在后台），并把「SWR 用一次就静默失效」这一类潜在事故清零。
+**验证方式**：`swr_probe.py` 改造为断言测试（过期调用墙钟 ≤ 20 ms 且随后能看到新值）；再对 `maintenance/status` 单发两轮，比较 TTL 边界处是否有阻塞。
 
 ---
 
