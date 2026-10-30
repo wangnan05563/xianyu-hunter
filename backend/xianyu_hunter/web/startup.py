@@ -116,7 +116,7 @@ def _probe_once() -> None:
                 is_valid, _ = store.validate_cookies_with_expiry(user_id=uid)
                 um.set_user_status(uid, "active" if is_valid else "expired")
             except Exception:
-                logger.warning("Cookie 探测失败 user_id=%s", uid, exc_info=True)
+                logger.warning("Cookie 探测失败 user_id={}", uid, exc_info=True)
 
     except Exception:
         logger.debug("Cookie 探测异常忽略", exc_info=True)
@@ -145,7 +145,7 @@ def start_cookie_health_probe(_container: Any) -> None:
     from loguru import logger
 
     _cookie_health_probe_task = asyncio.create_task(_probe_loop())
-    logger.info("Cookie 健康探测任务已启动，间隔 %ds", _PROBE_INTERVAL_SEC)
+    logger.info("Cookie 健康探测任务已启动，间隔 {}s", _PROBE_INTERVAL_SEC)
 
 
 def start_batch_refresh_scheduler(container: Any) -> None:

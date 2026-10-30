@@ -169,7 +169,7 @@ def clean_dirty_seller_nick(payload: dict) -> None:
 
     # 调试日志：记录脏数据清洗情况（生产环境可通过日志级别控制）
     logger.info(
-        "Cleaned dirty seller_nick: type=%s, original=%r, new_nick=%r, region=%r, credit=%r, publish_text=%r, override=%r",
+        "Cleaned dirty seller_nick: type={}, original={!r}, new_nick={!r}, region={!r}, credit={!r}, publish_text={!r}, override={!r}",
         pollution_type, nick, payload.get("seller_nick"),
         payload.get("region"), payload.get("seller_credit"),
         payload.get("publish_time_text"), payload.get("condition_label_override"),

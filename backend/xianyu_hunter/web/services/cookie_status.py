@@ -185,7 +185,7 @@ async def _try_refresh_m5tk_from_browser(store, user_id: str) -> bool:
             return False
         return store.update_cookie_values(updates, user_id=user_id)
     except Exception as e:
-        logger.debug("从浏览器内存刷新 _m_h5_tk 回写 JSON 失败: %s", e)
+        logger.debug("从浏览器内存刷新 _m_h5_tk 回写 JSON 失败: {}", e)
         return False
 
 
@@ -203,7 +203,7 @@ def _is_collector_session_invalid() -> bool:
         if container.collector and getattr(container.collector, "last_session_invalid", False):
             return True
     except Exception as e:
-        logger.debug("读取 collector 会话失效标志失败: %s", e)
+        logger.debug("读取 collector 会话失效标志失败: {}", e)
     return False
 
 
@@ -266,7 +266,7 @@ async def _browser_cookies_fallback() -> tuple[bool, list[dict] | None]:
 
         return True, cookies
     except Exception as e:
-        logger.debug("浏览器内存兜底检查失败: %s", e)
+        logger.debug("浏览器内存兜底检查失败: {}", e)
         return False, None
 
 
@@ -611,7 +611,7 @@ def _record_self_heal_event(uid: str, repaired: list[dict], donors: dict[str, st
         })
     except Exception as e:
         # 时间线写入失败不阻断自愈本身：档案已修复，仅缺审计记录
-        logger.warning("自愈事件写入时间线失败: %s", e)
+        logger.warning("自愈事件写入时间线失败: {}", e)
 
 
 def _broken_identity_names(arch: dict) -> set[str]:
@@ -657,7 +657,7 @@ def _heal_one_archive(
     if not store.merge_cookies(
             [picked[n][0] for n in sorted(applicable)],
             method="self_heal", user_id=sid):
-        logger.warning("自愈写档案失败 [%s]，跳过", sid)
+        logger.warning("自愈写档案失败 [{}]，跳过", sid)
         return
     repaired.append({"archive": f"cookies_{sid}.json", "fixed": sorted(applicable)})
     donors.update({n: picked[n][1] for n in applicable})
@@ -680,7 +680,7 @@ def _inject_after_self_heal(uid: str) -> None:
             # 无运行中事件循环（同步调用场景）：注入由下次 Worker 启动加载兜底
             pass
     except Exception as e:
-        logger.debug("自愈后注入 Worker 失败（档案已落盘，下次启动生效）: %s", e)
+        logger.debug("自愈后注入 Worker 失败（档案已落盘，下次启动生效）: {}", e)
 
 
 def attempt_self_heal(store, uid: str, sources: list[dict]) -> list[dict]:
@@ -807,7 +807,7 @@ async def _browser_health_source() -> dict | None:
             "exported_at": time.time(),
         }
     except Exception as e:
-        logger.debug("unified health: 浏览器内存源采集失败: %s", e)
+        logger.debug("unified health: 浏览器内存源采集失败: {}", e)
         return None
 
 
@@ -831,7 +831,7 @@ def _clear_stale_collector_flag() -> None:
         if container.collector:
             container.collector.last_session_invalid = False
     except Exception as e:
-        logger.debug("unified health: 清除 collector 标志失败: %s", e)
+        logger.debug("unified health: 清除 collector 标志失败: {}", e)
 
 
 def _decide_unified_status(

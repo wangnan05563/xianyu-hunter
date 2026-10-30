@@ -385,7 +385,7 @@ class CookieRotator:
                     dep_state = self._layer_states.get(layer_def.depends_on)
                     if dep_state and not dep_state.valid:
                         logger.warning(
-                            "Cookie 层 %s 跳过恢复：依赖层 %s 仍处于失效状态, reason=%s",
+                            "Cookie 层 {} 跳过恢复：依赖层 {} 仍处于失效状态, reason={}",
                             layer.value, layer_def.depends_on.value, reason or "functional_fallback",
                         )
                         continue

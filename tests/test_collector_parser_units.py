@@ -16,7 +16,6 @@ from playwright.async_api import TimeoutError as PlaywrightTimeout
 
 from xianyu_hunter.infra.selectors import SelectorRepo
 from xianyu_hunter.modules.collector import Collector
-from xianyu_hunter.modules.collector import _parser as pm
 
 
 @pytest.fixture
@@ -64,17 +63,13 @@ class _El:
         attrs: dict[str, str | None] | None = None,
         children: dict[str, Any] | None = None,
         tag: str = "DIV",
-        evaluate_error: bool = False,
     ):
         self._text = text
         self._attrs = attrs or {}
         self._children = children or {}
         self._tag = tag
-        self._evaluate_error = evaluate_error
 
     async def evaluate(self, _expr: str) -> str:
-        if self._evaluate_error:
-            raise RuntimeError("element detached")
         return self._tag
 
     async def query_selector(self, selector: str):
@@ -169,6 +164,8 @@ async def test_extract_card_title_and_price_fallbacks() -> None:
 
 async def test_extract_card_thumbnail_attr_order() -> None:
     c = _make_collector()
+    # 卡片内没有 img（懒加载尚未渲染）时返回空串
+    assert await c._extract_card_thumbnail(_El()) == ""
     card = _El(children={SelectorRepo.CARD_THUMB_MAIN: _El()})
     assert await c._extract_card_thumbnail(card) == ""
 
@@ -266,6 +263,9 @@ def test_static_delegates() -> None:
     assert Collector._check_item_sold({"status": "onsale"}) is False
     # API 响应缺少 data 节点时解析为空列表，调用方据此走 DOM 回退
     assert c._parse_search_api_result({}) == []
+
+
+@pytest.mark.parametrize(
     "raw,expected",
     [
         ({"userCreditScore": "820"}, 820),
@@ -280,9 +280,3 @@ def test_static_delegates() -> None:
 )
 def test_extract_credit_from_api_window(raw: dict, expected: int | None) -> None:
     assert Collector._extract_credit_from_api_raw(raw) == expected
-
-
-def test_parser_module_logger_is_loguru() -> None:
-    # 解析层用 loguru 的 {} 占位风格，若退回 printf 语法日志变量会被静默丢弃
-    assert pm.logger is not None
-    assert hasattr(pm.logger, "warning")

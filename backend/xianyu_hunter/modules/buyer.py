@@ -410,7 +410,7 @@ class Buyer:
                 }, ensure_ascii=False),
             })
         except Exception as e:  # noqa: BLE001
-            logger.warning("[Buyer] 演练事件写入失败（不影响演练结果）: %s", e)
+            logger.warning("[Buyer] 演练事件写入失败（不影响演练结果）: {}", e)
 
     # ============== 浏览器操作 ==============
 
